@@ -1,0 +1,10 @@
+# 镜像只需要 acp/ 与 bridge/ 两个包 —— 其余一律别进构建上下文。
+# ★ .venv 与 node_modules 尤其要排除：几百 MB 的上下文传输会让每次构建
+#   都慢得像卡住，而且 .env 进上下文等于把凭据送进镜像层。
+*
+!acp/
+!bridge/
+**/__pycache__/
+**/*.pyc
+.venv/
+.env

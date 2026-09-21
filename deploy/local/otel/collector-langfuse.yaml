@@ -1,0 +1,66 @@
+# collector.yaml + Langfuse。由 `docker compose --profile langfuse up` 挂载。
+#
+# ★ 为什么是**两份文件**而不是一份带开关的：Collector 的配置不支持条件
+#   pipeline，用环境变量拼出来的话「现在到底导到哪里」要靠脑内求值。
+#   两份显式文件可以直接 diff、直接 grep —— 与这个仓库「明确优于聪明」
+#   的取向一致。代价是基线那几段要同步改两处，可接受。
+#
+# ★ Langfuse 不替代 Jaeger，是分流（§01）：
+#   Langfuse 擅长 LLM 维度（按会话看提示词、评估打分、成本归因），
+#   但它**不是 APM** —— Pod 冷启动慢、NAS 抖动、WS 断连在它那里看不出来。
+#   用一个后端硬扛两类问题，最后两类都查不好。
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  attributes/strip-content:
+    actions:
+      - {key: gen_ai.input.messages, action: delete}
+      - {key: gen_ai.output.messages, action: delete}
+      - {key: gen_ai.prompt, action: delete}
+      - {key: gen_ai.completion, action: delete}
+
+  resource:
+    attributes:
+      - {key: deployment.environment, value: local, action: upsert}
+
+  batch:
+    timeout: 2s
+
+exporters:
+  otlp_grpc/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
+
+  # 接入方式照 Langfuse 官方文档核对过，不是凭记忆写的：
+  #   · 端点是 /api/public/otel（自托管 >= v3.22.0）
+  #   · Basic Auth，AUTH_STRING = base64("pk-lf-…:sk-lf-…")
+  #   · 还要带 x-langfuse-ingestion-version 头 —— 少了会被拒
+  otlp_http/langfuse:
+    endpoint: http://langfuse-web:3000/api/public/otel
+    headers:
+      # base64("pk-lf-atlas-local-dev:sk-lf-atlas-local-dev")，与
+      # docker-compose.yml 里 LANGFUSE_INIT_PROJECT_*_KEY 对应。
+      # 本机固定值，所以写死；真部署时换成 ${env:LANGFUSE_AUTH}。
+      Authorization: "Basic cGstbGYtYXRsYXMtbG9jYWwtZGV2OnNrLWxmLWF0bGFzLWxvY2FsLWRldg=="
+      x-langfuse-ingestion-version: "4"
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [attributes/strip-content, resource, batch]
+      # ★ 全量进 Jaeger，同一份也进 Langfuse。本轮不按 span 类型拆 ——
+      #   拆的前提是先有足够多的 gen_ai span 来判断怎么拆才对。
+      exporters: [otlp_grpc/jaeger, otlp_http/langfuse]
+
+  telemetry:
+    logs:
+      level: info

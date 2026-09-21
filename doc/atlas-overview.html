@@ -1,0 +1,695 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Atlas · 项目概览与系统架构</title>
+<style>
+  :root {
+      --bg:#f8fafc; --bg-soft:#ffffff; --grid:#e2e8f0;
+      --text:#0f172a; --text-muted:#64748b; --text-dim:#94a3b8; --text-faint:#64748b;
+      --panel:#ffffff; --panel-solid:#ffffff; --panel-border:#e2e8f0;
+      --rule:#e2e8f0; --accent:#059669; --accent-2:#0891b2;
+      --arrow:#94a3b8; --arrow-emphasis:#059669; --mask:#ffffff;
+      --frontend-fill:rgba(34,211,238,.15);  --frontend-stroke:#0891b2;
+      --backend-fill:rgba(52,211,153,.18);   --backend-stroke:#059669;
+      --database-fill:rgba(167,139,250,.2);  --database-stroke:#7c3aed;
+      --cloud-fill:rgba(251,191,36,.18);     --cloud-stroke:#d97706;
+      --security-fill:rgba(251,113,133,.15); --security-stroke:#e11d48;
+      --messagebus-fill:rgba(251,146,60,.15);--messagebus-stroke:#ea580c;
+      --external-fill:rgba(148,163,184,.18); --external-stroke:#64748b;
+}
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+      --bg:#020617; --bg-soft:#0b1220; --grid:#1e293b;
+      --text:#ffffff; --text-muted:#94a3b8; --text-dim:#475569; --text-faint:#7d8da1;
+      --panel:rgba(15,23,42,.5); --panel-solid:#0f172a; --panel-border:#1e293b;
+      --rule:#1e293b; --accent:#34d399; --accent-2:#22d3ee;
+      --arrow:#64748b; --arrow-emphasis:#34d399; --mask:#0f172a;
+      --frontend-fill:rgba(8,51,68,.4);    --frontend-stroke:#22d3ee;
+      --backend-fill:rgba(6,78,59,.4);     --backend-stroke:#34d399;
+      --database-fill:rgba(76,29,149,.4);  --database-stroke:#a78bfa;
+      --cloud-fill:rgba(120,53,15,.3);     --cloud-stroke:#fbbf24;
+      --security-fill:rgba(136,19,55,.4);  --security-stroke:#fb7185;
+      --messagebus-fill:rgba(251,146,60,.3); --messagebus-stroke:#fb923c;
+      --external-fill:rgba(30,41,59,.5);   --external-stroke:#94a3b8;
+} }
+  :root[data-theme="dark"] {
+      --bg:#020617; --bg-soft:#0b1220; --grid:#1e293b;
+      --text:#ffffff; --text-muted:#94a3b8; --text-dim:#475569; --text-faint:#7d8da1;
+      --panel:rgba(15,23,42,.5); --panel-solid:#0f172a; --panel-border:#1e293b;
+      --rule:#1e293b; --accent:#34d399; --accent-2:#22d3ee;
+      --arrow:#64748b; --arrow-emphasis:#34d399; --mask:#0f172a;
+      --frontend-fill:rgba(8,51,68,.4);    --frontend-stroke:#22d3ee;
+      --backend-fill:rgba(6,78,59,.4);     --backend-stroke:#34d399;
+      --database-fill:rgba(76,29,149,.4);  --database-stroke:#a78bfa;
+      --cloud-fill:rgba(120,53,15,.3);     --cloud-stroke:#fbbf24;
+      --security-fill:rgba(136,19,55,.4);  --security-stroke:#fb7185;
+      --messagebus-fill:rgba(251,146,60,.3); --messagebus-stroke:#fb923c;
+      --external-fill:rgba(30,41,59,.5);   --external-stroke:#94a3b8;
+}
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif; font-size:15px; line-height:1.75;
+    transition:background .2s ease, color .2s ease;
+  }
+  code, .mono, .chip, .eyebrow { font-family:'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono CJK SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', monospace; }
+  code { font-size:.86em; padding:.08em .34em; border-radius:4px;
+    background:color-mix(in srgb, var(--text) 8%, transparent); }
+  b { color:var(--text); font-weight:600; }
+  i { font-style:normal; color:var(--text-muted); }
+
+  .wrap { max-width:1180px; margin:0 auto; padding:0 28px 96px; }
+
+  /* ---- header ---- */
+  header { border-bottom:1px solid var(--rule); margin-bottom:56px;
+    padding:44px 0 30px; }
+  .brandline { display:flex; align-items:baseline; gap:14px; flex-wrap:wrap; }
+  .dot { width:10px; height:10px; border-radius:50%; background:var(--accent);
+    flex:none; align-self:center; }
+  h1 { font-family:'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono CJK SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', monospace; font-size:32px; letter-spacing:.02em; margin:0;
+    font-weight:700; }
+  .tagline { color:var(--text-muted); font-size:15px; margin:14px 0 0; max-width:70ch; }
+  .chips { display:flex; flex-wrap:wrap; gap:8px; margin-top:22px; }
+  .chip { font-size:11.5px; letter-spacing:.03em; color:var(--text-muted);
+    border:1px solid var(--panel-border); border-radius:999px; padding:3px 10px;
+    background:var(--panel); }
+  #theme { position:fixed; top:18px; right:18px; z-index:9;
+    font-family:'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono CJK SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', monospace; font-size:12px; cursor:pointer;
+    color:var(--text-muted); background:var(--panel-solid);
+    border:1px solid var(--panel-border); border-radius:8px; padding:7px 12px; }
+  #theme:hover { color:var(--text); }
+
+  /* ---- section ---- */
+  section { margin-bottom:72px; scroll-margin-top:24px; }
+  .eyebrow { font-size:11.5px; letter-spacing:.16em; color:var(--accent);
+    text-transform:uppercase; margin:0 0 10px; }
+  h2 { font-family:'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono CJK SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', monospace; font-size:21px; margin:0 0 22px; font-weight:600;
+    padding-bottom:14px; border-bottom:1px solid var(--rule); }
+  p { max-width:78ch; }
+  .lede { font-size:16px; }
+
+  /* ---- grids ---- */
+  .grid { display:grid; gap:16px; margin-top:24px;
+    grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); }
+  .grid-3 { grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); }
+  .card { background:var(--panel); border:1px solid var(--panel-border);
+    border-radius:12px; padding:20px 22px; }
+  .card h3 { font-family:'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono CJK SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', monospace; font-size:14px; margin:0 0 12px; font-weight:600;
+    color:var(--text); letter-spacing:.01em; }
+  .card ul { margin:0; padding-left:1.1em; }
+  .card li { margin:6px 0; color:var(--text-muted); font-size:14px; line-height:1.7; }
+  .card li b { color:var(--text); }
+  .rule-card h3 { color:var(--accent); }
+  .rule-card p { margin:0; color:var(--text-muted); font-size:14px; }
+
+  /* ---- figure ---- */
+  .pathbar { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 14px; }
+  .pathbar button { font-family:'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono CJK SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', monospace; font-size:12px; cursor:pointer;
+    color:var(--text-muted); background:var(--panel); border:1px solid var(--panel-border);
+    border-radius:999px; padding:6px 14px; transition:color .15s, border-color .15s; }
+  .pathbar button:hover { color:var(--text); }
+  .pathbar button[aria-pressed="true"] { color:var(--accent);
+    border-color:color-mix(in srgb, var(--accent) 45%, transparent);
+    background:color-mix(in srgb, var(--accent) 9%, transparent); }
+  .pathbar .swatch { display:inline-block; width:8px; height:8px; border-radius:2px;
+    margin-right:7px; vertical-align:1px; }
+  .sw-call { background:var(--arrow-emphasis); }
+  .sw-event { background:var(--database-stroke); }
+  figure { margin:0; border:1px solid var(--panel-border); border-radius:14px;
+    background:var(--panel); padding:10px; overflow-x:auto; }
+  figcaption { margin-top:18px; color:var(--text-muted); font-size:13.5px; }
+
+  /* ---- highlights ---- */
+  ol.highlights { list-style:none; counter-reset:hl; margin:24px 0 0; padding:0; }
+  li.hl { counter-increment:hl; position:relative; padding:0 0 0 58px;
+    margin-bottom:30px; }
+  li.hl::before { content:counter(hl, decimal-leading-zero); position:absolute;
+    left:0; top:1px; font-family:'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono CJK SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', monospace; font-size:13px; color:var(--accent);
+    border:1px solid var(--panel-border); border-radius:8px; padding:3px 8px;
+    background:var(--panel); }
+  li.hl h3 { font-size:16px; margin:0 0 6px; font-weight:600; }
+  li.hl p { margin:0; color:var(--text-muted); font-size:14.5px; }
+
+  /* ---- table ---- */
+  .layers { width:100%; border-collapse:collapse; margin-top:24px; font-size:14px; }
+  .layers th, .layers td { text-align:left; padding:12px 14px;
+    border-bottom:1px solid var(--rule); vertical-align:top; }
+  .layers th { font-family:'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono CJK SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', monospace; font-size:12px; letter-spacing:.05em;
+    color:var(--text-muted); font-weight:600; text-transform:uppercase; }
+  .layers td:first-child { font-family:'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono CJK SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', monospace; white-space:nowrap; color:var(--text); }
+  .layers td:nth-child(2) { color:var(--text-muted); }
+  .layers td:last-child { color:var(--text-muted); }
+
+  footer { border-top:1px solid var(--rule); padding-top:24px; color:var(--text-dim);
+    font-size:13px; }
+  footer code { color:var(--text-muted); }
+
+  @media (max-width:640px) {
+    .wrap { padding:0 18px 64px; }
+    h1 { font-size:25px; }
+    li.hl { padding-left:0; }
+    li.hl::before { position:static; display:inline-block; margin-bottom:8px; }
+  }
+
+    .arch-svg { width:100%; min-width:900px; display:block; font-family:'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono CJK SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', monospace; }
+    .arch-svg .c-grid       { stroke:var(--grid); fill:none; }
+    .arch-svg .c-mask       { fill:var(--mask); stroke:none; }
+    .arch-svg .c-region     { fill:rgba(251,191,36,.05); stroke:var(--cloud-stroke); stroke-dasharray:8,4; }
+    .arch-svg .c-frontend   { fill:var(--frontend-fill);   stroke:var(--frontend-stroke); }
+    .arch-svg .c-backend    { fill:var(--backend-fill);    stroke:var(--backend-stroke); }
+    .arch-svg .c-database   { fill:var(--database-fill);   stroke:var(--database-stroke); }
+    .arch-svg .c-cloud      { fill:var(--cloud-fill);      stroke:var(--cloud-stroke); }
+    .arch-svg .c-messagebus { fill:var(--messagebus-fill); stroke:var(--messagebus-stroke); }
+    .arch-svg .c-external   { fill:var(--external-fill);   stroke:var(--external-stroke); }
+    .arch-svg .t-primary    { fill:var(--text); }
+    .arch-svg .t-muted      { fill:var(--text-muted); }
+    .arch-svg .t-frontend   { fill:var(--frontend-stroke); }
+    .arch-svg .t-backend    { fill:var(--backend-stroke); }
+    .arch-svg .t-cloud      { fill:var(--cloud-stroke); }
+    .arch-svg .t-messagebus { fill:var(--messagebus-stroke); }
+    .arch-svg .t-external   { fill:var(--external-stroke); }
+    .arch-svg .a-default    { stroke:var(--arrow); fill:none; }
+    .arch-svg .a-emphasis   { stroke:var(--arrow-emphasis); fill:none; }
+    .arch-svg .a-dashed     { stroke:var(--database-stroke); fill:none; stroke-dasharray:4,4; }
+    .arch-svg .m-default    { fill:var(--arrow); }
+    .arch-svg .m-emphasis   { fill:var(--arrow-emphasis); }
+    .arch-svg .m-security   { fill:var(--security-stroke); }
+    .arch-svg .m-dashed     { fill:var(--database-stroke); }
+    .arch-svg .semantic-sigil { fill:none; stroke:currentColor; stroke-width:1.35;
+      stroke-linecap:round; stroke-linejoin:round; opacity:.76; pointer-events:none; }
+    .arch-svg .semantic-sigil > * { vector-effect:non-scaling-stroke; }
+    .arch-svg .semantic-sigil .sigil-fill { fill:currentColor; stroke:none; }
+    .arch-svg .s-frontend   { color:var(--frontend-stroke); }
+    .arch-svg .s-backend    { color:var(--backend-stroke); }
+    .arch-svg .s-database   { color:var(--database-stroke); }
+    .arch-svg .s-cloud      { color:var(--cloud-stroke); }
+    .arch-svg .s-messagebus { color:var(--messagebus-stroke); }
+    .arch-svg .s-external   { color:var(--external-stroke); }
+    .arch-svg[data-path] [data-node-id],
+    .arch-svg[data-path] [data-edge-id] { opacity:.11; transition:opacity .22s ease; }
+    .arch-svg[data-path] [data-path-match] { opacity:1; }
+    .arch-svg[data-path] path[data-path-match] { stroke-width:2.6; }
+
+</style>
+</head>
+<body>
+<button id="theme" type="button">◐ 主题</button>
+<div class="wrap">
+
+<header>
+  <div class="brandline"><span class="dot"></span><h1>Atlas</h1></div>
+  <div class="chips"><span class="chip">Python 3.13</span>
+<span class="chip">FastAPI</span>
+<span class="chip">SQLAlchemy async</span>
+<span class="chip">Postgres 16</span>
+<span class="chip">Redis 7</span>
+<span class="chip">Next.js 15</span>
+<span class="chip">Ant Design 5</span>
+<span class="chip">LangGraph</span>
+<span class="chip">litellm</span>
+<span class="chip">Docker</span></div>
+</header>
+
+<section id="overview">
+  <p class="eyebrow">01 / Overview</p>
+  <h2>项目概括</h2>
+  <p class="lede">Atlas 做两件事：<b>智能体管理</b>（配置模型、提示词、工具、子智能体、运行限制，
+  并可直接试跑）与<b>多轮对话</b>（带完整运行轨迹的会话工作台）。
+  它不满足于「给一个最终答案」—— 一次对话 run 的执行过程本身就是产品的一部分：
+  待办清单的更新、每一次工具调用的入参与结果、子智能体的委派边界、token 消耗、
+  产生的文件，都会按发生顺序流到前端。</p>
+
+  <div class="grid">
+    <article class="card"><h3>功能亮点</h3><ul>
+      <li><b>过程可见、可回放</b> —— 待办清单、每次工具调用的入参与结果、子智能体的委派边界、
+      文件产物、token 消耗，按严格有序的事件流实时呈现；刷新页面、切后台、开多个标签页都能从断点续上。</li>
+      <li><b>高风险操作要人点头</b> —— Shell 命令与编码任务默认进审批，弹窗展示完整参数；
+      拒绝不会让整轮白跑，而是作为工具结果回给智能体，它可以换个方案继续。</li>
+      <li><b>命令与代码跑在隔离容器里</b> —— Shell 沙箱按会话起容器、默认无网络、非 root；
+      编码任务另起一次性容器，两者共用同一个工作区卷，改完的文件立刻能被看到。</li>
+      <li><b>配置即版本</b> —— 保存就产生一份配置快照，任何一条历史会话都能回答
+      「当时用的是哪份配置」，也可以回滚；草稿不用保存就能直接试跑。</li>
+      <li><b>长会话不会突然失忆</b> —— 接近上下文上限时自动摘要压缩，并明确告诉用户「这里压缩过」，
+      而原始消息一条都不会丢。</li>
+    </ul></article>
+
+  </div>
+
+</section>
+
+<section id="architecture">
+  <p class="eyebrow">02 / Architecture</p>
+  <h2>系统架构</h2>
+  <div class="pathbar" id="pathbar">
+    <button type="button" data-path="all" aria-pressed="true">全部</button>
+    <button type="button" data-path="call" aria-pressed="false"><i class="swatch sw-call"></i>调用链路</button>
+    <button type="button" data-path="event" aria-pressed="false"><i class="swatch sw-event"></i>事件回显链路</button>
+  </div>
+  <figure><svg class="arch-svg" viewBox="0 0 1770 692" role="img" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="showcase">
+        <title id="archify-diagram-title">Atlas 架构总览</title>
+        <desc id="archify-diagram-description">A architecture diagram generated by Archify.</desc>
+        <!-- Definitions -->
+        <defs>
+          <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-default" />
+          </marker>
+          <marker id="arrowhead-emphasis" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-emphasis" />
+          </marker>
+          <marker id="arrowhead-security" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-security" />
+          </marker>
+          <marker id="arrowhead-dashed" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-dashed" />
+          </marker>
+          <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+            <path d="M 40 0 L 0 0 0 40" class="c-grid" stroke-width="0.5"/>
+          </pattern>
+        </defs>
+
+        <!-- Background Grid -->
+        <rect width="100%" height="100%" fill="url(#grid)" />
+
+        <!-- Boundaries (behind everything) -->
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="region" data-composition-frame-id="0" x="350" y="160" width="970" height="310" rx="12" class="c-region" stroke-width="1"/>
+        <text x="358" y="178" class="t-cloud" font-size="9" font-weight="600">server · atlas_server（FastAPI）—— 路由 / 编排 / 持久化 / 凭据</text>
+
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="region" data-composition-frame-id="1" x="1490" y="160" width="270" height="310" rx="12" class="c-region" stroke-width="1"/>
+        <text x="1498" y="178" class="t-cloud" font-size="9" font-weight="600">engine · atlas_engine（纯库 · 零凭据）</text>
+
+        <!-- Connection paths (before components for correct z-order) -->
+        <path data-edge-from="web" data-edge-to="api" data-edge-label="HTTP · SSE" data-edge-key="0" data-edge-id="web-api" data-composition-points="220,240;380,240" d="M 220 240 L 380 240" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="api" data-edge-to="services" data-edge-label="创建 run · 订阅事件" data-edge-key="1" data-edge-id="api-services" data-composition-points="570,240;730,240" d="M 570 240 L 730 240" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="services" data-edge-to="executor" data-edge-label="submit → 202" data-edge-key="2" data-edge-id="services-executor" data-composition-points="930,233;1090,233" d="M 930 233 L 1090 233" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="executor" data-edge-to="engine" data-edge-label="runner.run(spec, hooks)" data-edge-key="3" data-edge-id="executor-engine" data-composition-points="1290,247;1520,247" d="M 1290 247 L 1520 247" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="engine" data-edge-to="executor" data-edge-label="AsyncIterator[TraceEvent]" data-edge-key="4" data-edge-id="engine-executor" data-composition-points="1520,233;1290,233" d="M 1520 233 L 1290 233" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="engine" data-edge-to="kernel" data-edge-label="create_deep_agent(...)" data-edge-key="5" data-edge-id="engine-kernel" data-composition-points="1625,290;1625,350" d="M 1625 290 L 1625 350" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="kernel" data-edge-to="llm" data-edge-label="模型调用（stream）" data-edge-key="6" data-edge-id="kernel-llm" data-composition-points="1625,450;1625,520" d="M 1625 450 L 1625 520" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="executor" data-edge-to="relay" data-edge-label="publish 事件" data-edge-key="7" data-edge-id="executor-relay" data-composition-points="1190,290;1190,350" d="M 1190 290 L 1190 350" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="relay" data-edge-to="redis" data-edge-label="XADD / XREAD BLOCK" data-edge-key="8" data-edge-id="relay-redis" data-composition-points="1190,450;1190,520" d="M 1190 450 L 1190 520" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="services" data-edge-to="redis" data-edge-label="SETNX · BLPOP" data-edge-key="9" data-edge-id="services-redis" data-composition-points="930,247;1010,247;1010,566;1090,566" d="M 930 247 L 1002 247 Q 1010 247 1010 255 L 1010 558 Q 1010 566 1018 566 L 1090 566" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="services" data-edge-to="pg" data-edge-label="repositories/ · SQLAlchemy async" data-edge-key="10" data-edge-id="services-pg" data-composition-points="830,290;830,520" d="M 830 290 L 830 520" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="services" data-edge-to="ext" data-edge-label="extra_tools 注入" data-edge-key="11" data-edge-id="services-ext" data-composition-points="830,190;830,128" d="M 830 190 L 830 128" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="executor" data-edge-to="docker" data-edge-label="docker CLI + subprocess" data-edge-key="12" data-edge-id="executor-docker" data-composition-points="1190,190;1190,128" d="M 1190 190 L 1190 128" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+
+        <!-- Components -->
+        <g id="node-web" data-node-id="web" data-node-label="web · Next.js" tabindex="0" role="button" aria-label="Focus web · Next.js, 会话工作台 · Agent 编辑器, Architecture component" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="会话工作台 · Agent 编辑器" data-node-tag="只认 TraceEvent + REST 契约" data-node-context="Architecture component">
+          <title>web · Next.js · 会话工作台 · Agent 编辑器 · Architecture component · 只认 TraceEvent + REST 契约</title>
+          <rect x="40" y="190" width="180" height="100" rx="6" class="c-mask"/>
+          <rect x="40" y="190" width="180" height="100" rx="6" class="c-frontend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(46 196) scale(0.6875)">
+            <rect x="2" y="3" width="12" height="10" rx="2"/>
+            <path d="M2 6.5h12"/>
+            <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
+            <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
+          </g>
+          <text data-detail-anchor x="130" y="238" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">web · Next.js</text>
+        <text data-detail="context" x="130" y="254" class="t-muted" font-size="9" text-anchor="middle">会话工作台 · Agent 编辑器</text>
+        <text data-detail="fine" x="130" y="282" class="t-frontend" font-size="7" text-anchor="middle">只认 TraceEvent + REST 契约</text>
+        </g>
+
+        <g id="node-api" data-node-id="api" data-node-label="api/v1" tabindex="0" role="button" aria-label="Focus api/v1, agents · threads · runs · meta, server · atlas_server（FastAPI）—— 路由 / 编排 / 持久化 / 凭据" aria-pressed="false" data-node-kind="backend" data-node-sublabel="agents · threads · runs · meta" data-node-tag="SSE 事件流端点" data-node-context="server · atlas_server（FastAPI）—— 路由 / 编排 / 持久化 / 凭据">
+          <title>api/v1 · agents · threads · runs · meta · server · atlas_server（FastAPI）—— 路由 / 编排 / 持久化 / 凭据 · SSE 事件流端点</title>
+          <rect x="380" y="190" width="190" height="100" rx="6" class="c-mask"/>
+          <rect x="380" y="190" width="190" height="100" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(386 196) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-detail-anchor x="475" y="238" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">api/v1</text>
+        <text data-detail="context" x="475" y="254" class="t-muted" font-size="9" text-anchor="middle">agents · threads · runs · meta</text>
+        <text data-detail="fine" x="475" y="282" class="t-backend" font-size="7" text-anchor="middle">SSE 事件流端点</text>
+        </g>
+
+        <g id="node-services" data-node-id="services" data-node-label="services/" tabindex="0" role="button" aria-label="Focus services/, run · thread · approval · compaction, server · atlas_server（FastAPI）—— 路由 / 编排 / 持久化 / 凭据" aria-pressed="false" data-node-kind="backend" data-node-sublabel="run · thread · approval · compaction" data-node-tag="幂等 · 会话串行锁" data-node-context="server · atlas_server（FastAPI）—— 路由 / 编排 / 持久化 / 凭据">
+          <title>services/ · run · thread · approval · compaction · server · atlas_server（FastAPI）—— 路由 / 编排 / 持久化 / 凭据 · 幂等 · 会话串行锁</title>
+          <rect x="730" y="190" width="200" height="100" rx="6" class="c-mask"/>
+          <rect x="730" y="190" width="200" height="100" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(736 196) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-detail-anchor x="830" y="238" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">services/</text>
+        <text data-detail="context" x="830" y="254" class="t-muted" font-size="8.8" text-anchor="middle">run · thread · approval · compaction</text>
+        <text data-detail="fine" x="830" y="282" class="t-backend" font-size="7" text-anchor="middle">幂等 · 会话串行锁</text>
+        </g>
+
+        <g id="node-executor" data-node-id="executor" data-node-label="executor/" tabindex="0" role="button" aria-label="Focus executor/, InProcessExecutor · HookAssembly, server · atlas_server（FastAPI）—— 路由 / 编排 / 持久化 / 凭据" aria-pressed="false" data-node-kind="backend" data-node-sublabel="InProcessExecutor · HookAssembly" data-node-tag="后台 asyncio.Task" data-node-context="server · atlas_server（FastAPI）—— 路由 / 编排 / 持久化 / 凭据">
+          <title>executor/ · InProcessExecutor · HookAssembly · server · atlas_server（FastAPI）—— 路由 / 编排 / 持久化 / 凭据 · 后台 asyncio.Task</title>
+          <rect x="1090" y="190" width="200" height="100" rx="6" class="c-mask"/>
+          <rect x="1090" y="190" width="200" height="100" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(1096 196) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-detail-anchor x="1190" y="238" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">executor/</text>
+        <text data-detail="context" x="1190" y="254" class="t-muted" font-size="9" text-anchor="middle">InProcessExecutor · HookAssembly</text>
+        <text data-detail="fine" x="1190" y="282" class="t-backend" font-size="7" text-anchor="middle">后台 asyncio.Task</text>
+        </g>
+
+        <g id="node-relay" data-node-id="relay" data-node-label="stream/relay.py" tabindex="0" role="button" aria-label="Focus stream/relay.py, 事件中继 · 取消位 · 会话锁, server · atlas_server（FastAPI）—— 路由 / 编排 / 持久化 / 凭据" aria-pressed="false" data-node-kind="messagebus" data-node-sublabel="事件中继 · 取消位 · 会话锁" data-node-context="server · atlas_server（FastAPI）—— 路由 / 编排 / 持久化 / 凭据">
+          <title>stream/relay.py · 事件中继 · 取消位 · 会话锁 · server · atlas_server（FastAPI）—— 路由 / 编排 / 持久化 / 凭据</title>
+          <rect x="1090" y="350" width="200" height="100" rx="6" class="c-mask"/>
+          <rect x="1090" y="350" width="200" height="100" rx="6" class="c-messagebus" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="messagebus" class="semantic-sigil s-messagebus" transform="translate(1096 356) scale(0.6875)">
+            <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11"/>
+            <circle cx="5" cy="4.5" r="1" class="sigil-fill"/>
+            <circle cx="10.5" cy="8" r="1" class="sigil-fill"/>
+            <circle cx="7" cy="11.5" r="1" class="sigil-fill"/>
+          </g>
+          <text data-detail-anchor x="1190" y="398" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">stream/relay.py</text>
+        <text data-detail="context" x="1190" y="414" class="t-muted" font-size="9" text-anchor="middle">事件中继 · 取消位 · 会话锁</text>
+        </g>
+
+        <g id="node-engine" data-node-id="engine" data-node-label="engine · atlas_engine" tabindex="0" role="button" aria-label="Focus engine · atlas_engine, runner.run() · translator · events, engine · atlas_engine（纯库 · 零凭据）" aria-pressed="false" data-node-kind="backend" data-node-sublabel="runner.run() · translator · events" data-node-tag="纯库：无 FastAPI / DB / 凭据" data-node-context="engine · atlas_engine（纯库 · 零凭据）">
+          <title>engine · atlas_engine · runner.run() · translator · events · engine · atlas_engine（纯库 · 零凭据） · 纯库：无 FastAPI / DB / 凭据</title>
+          <rect x="1520" y="190" width="210" height="100" rx="6" class="c-mask"/>
+          <rect x="1520" y="190" width="210" height="100" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(1526 196) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-detail-anchor x="1625" y="238" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">engine · atlas_engine</text>
+        <text data-detail="context" x="1625" y="254" class="t-muted" font-size="9" text-anchor="middle">runner.run() · translator · events</text>
+        <text data-detail="fine" x="1625" y="282" class="t-backend" font-size="7" text-anchor="middle">纯库：无 FastAPI / DB / 凭据</text>
+        </g>
+
+        <g id="node-kernel" data-node-id="kernel" data-node-label="kernel/" tabindex="0" role="button" aria-label="Focus kernel/, graph · middleware · backends, engine · atlas_engine（纯库 · 零凭据）" aria-pressed="false" data-node-kind="backend" data-node-sublabel="graph · middleware · backends" data-node-context="engine · atlas_engine（纯库 · 零凭据）">
+          <title>kernel/ · graph · middleware · backends · engine · atlas_engine（纯库 · 零凭据）</title>
+          <rect x="1520" y="350" width="210" height="100" rx="6" class="c-mask"/>
+          <rect x="1520" y="350" width="210" height="100" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(1526 356) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-detail-anchor x="1625" y="398" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">kernel/</text>
+        <text data-detail="context" x="1625" y="414" class="t-muted" font-size="9" text-anchor="middle">graph · middleware · backends</text>
+        </g>
+
+        <g id="node-ext" data-node-id="ext" data-node-label="WebSearchAPI · MCP Server" tabindex="0" role="button" aria-label="Focus WebSearchAPI · MCP Server, web_search · 远程 HTTP/SSE 传输, Architecture component" aria-pressed="false" data-node-kind="external" data-node-sublabel="web_search · 远程 HTTP/SSE 传输" data-node-context="Architecture component">
+          <title>WebSearchAPI · MCP Server · web_search · 远程 HTTP/SSE 传输 · Architecture component</title>
+          <rect x="730" y="40" width="200" height="88" rx="6" class="c-mask"/>
+          <rect x="730" y="40" width="200" height="88" rx="6" class="c-external" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(736 46) scale(0.6875)">
+            <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
+            <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
+          </g>
+          <text data-detail-anchor x="830" y="82" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">WebSearchAPI · MCP Server</text>
+        <text data-detail="context" x="830" y="98" class="t-muted" font-size="9" text-anchor="middle">web_search · 远程 HTTP/SSE 传输</text>
+        </g>
+
+        <g id="node-docker" data-node-id="docker" data-node-label="Docker / K8s 容器" tabindex="0" role="button" aria-label="Focus Docker / K8s 容器, atlas-sandbox · atlas-coder, Architecture component" aria-pressed="false" data-node-kind="cloud" data-node-sublabel="atlas-sandbox · atlas-coder" data-node-context="Architecture component">
+          <title>Docker / K8s 容器 · atlas-sandbox · atlas-coder · Architecture component</title>
+          <rect x="1090" y="40" width="200" height="88" rx="6" class="c-mask"/>
+          <rect x="1090" y="40" width="200" height="88" rx="6" class="c-cloud" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="cloud" class="semantic-sigil s-cloud" transform="translate(1096 46) scale(0.6875)">
+            <path d="M4.3 12.5h7.3a2.4 2.4 0 0 0 .2-4.8 4 4 0 0 0-7.5-1.3A3.1 3.1 0 0 0 4.3 12.5Z"/>
+          </g>
+          <text data-detail-anchor x="1190" y="82" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Docker / K8s 容器</text>
+        <text data-detail="context" x="1190" y="98" class="t-muted" font-size="9" text-anchor="middle">atlas-sandbox · atlas-coder</text>
+        </g>
+
+        <g id="node-llm" data-node-id="llm" data-node-label="litellm 网关" tabindex="0" role="button" aria-label="Focus litellm 网关, POST /v1/messages（Anthropic 协议）, Architecture component" aria-pressed="false" data-node-kind="external" data-node-sublabel="POST /v1/messages（Anthropic 协议）" data-node-tag="opus-5 / sonnet-5 / haiku-4-5" data-node-context="Architecture component">
+          <title>litellm 网关 · POST /v1/messages（Anthropic 协议） · Architecture component · opus-5 / sonnet-5 / haiku-4-5</title>
+          <rect x="1520" y="520" width="210" height="92" rx="6" class="c-mask"/>
+          <rect x="1520" y="520" width="210" height="92" rx="6" class="c-external" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(1526 526) scale(0.6875)">
+            <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
+            <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
+          </g>
+          <text data-detail-anchor x="1625" y="564" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">litellm 网关</text>
+        <text data-detail="context" x="1625" y="580" class="t-muted" font-size="9" text-anchor="middle">POST /v1/messages（Anthropic 协议）</text>
+        <text data-detail="fine" x="1625" y="604" class="t-external" font-size="7" text-anchor="middle">opus-5 / sonnet-5 / haiku-4-5</text>
+        </g>
+
+        <g id="node-pg" data-node-id="pg" data-node-label="Postgres 16" tabindex="0" role="button" aria-label="Focus Postgres 16, agent · thread · message · run · run_event, Architecture component" aria-pressed="false" data-node-kind="database" data-node-sublabel="agent · thread · message · run · run_event" data-node-context="Architecture component">
+          <title>Postgres 16 · agent · thread · message · run · run_event · Architecture component</title>
+          <rect x="730" y="520" width="200" height="92" rx="6" class="c-mask"/>
+          <rect x="730" y="520" width="200" height="92" rx="6" class="c-database" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(736 526) scale(0.6875)">
+            <ellipse cx="8" cy="4" rx="5" ry="2"/>
+            <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
+          </g>
+          <text data-detail-anchor x="830" y="564" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Postgres 16</text>
+        <text data-detail="context" x="830" y="580" class="t-muted" font-size="7.6" text-anchor="middle">agent · thread · message · run · run_event</text>
+        </g>
+
+        <g id="node-redis" data-node-id="redis" data-node-label="Redis 7" tabindex="0" role="button" aria-label="Focus Redis 7, run:events · run:lock · run:cancel, Architecture component" aria-pressed="false" data-node-kind="database" data-node-sublabel="run:events · run:lock · run:cancel" data-node-context="Architecture component">
+          <title>Redis 7 · run:events · run:lock · run:cancel · Architecture component</title>
+          <rect x="1090" y="520" width="200" height="92" rx="6" class="c-mask"/>
+          <rect x="1090" y="520" width="200" height="92" rx="6" class="c-database" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(1096 526) scale(0.6875)">
+            <ellipse cx="8" cy="4" rx="5" ry="2"/>
+            <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
+          </g>
+          <text data-detail-anchor x="1190" y="564" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Redis 7</text>
+        <text data-detail="context" x="1190" y="580" class="t-muted" font-size="9" text-anchor="middle">run:events · run:lock · run:cancel</text>
+        </g>
+
+        <!-- Connection labels -->
+        <g data-detail="context" data-edge-from="web" data-edge-to="api" data-edge-label="HTTP · SSE" data-edge-key="0" data-edge-id="web-api">
+          <rect x="271" y="220" width="58" height="14" rx="3" class="c-mask"/>
+          <text x="300" y="230" class="t-backend" font-size="8" text-anchor="middle">HTTP · SSE</text>
+        </g>
+        <g data-detail="context" data-edge-from="api" data-edge-to="services" data-edge-label="创建 run · 订阅事件" data-edge-key="1" data-edge-id="api-services">
+          <rect x="599.4" y="220" width="101.2" height="14" rx="3" class="c-mask"/>
+          <text x="650" y="230" class="t-muted" font-size="8" text-anchor="middle">创建 run · 订阅事件</text>
+        </g>
+        <g data-detail="context" data-edge-from="services" data-edge-to="executor" data-edge-label="submit → 202" data-edge-key="2" data-edge-id="services-executor">
+          <rect x="976.2" y="213" width="67.6" height="14" rx="3" class="c-mask"/>
+          <text x="1010" y="223" class="t-backend" font-size="8" text-anchor="middle">submit → 202</text>
+        </g>
+        <g data-detail="context" data-edge-from="executor" data-edge-to="engine" data-edge-label="runner.run(spec, hooks)" data-edge-key="3" data-edge-id="executor-engine">
+          <rect x="1344.8" y="265" width="120.39999999999999" height="14" rx="3" class="c-mask"/>
+          <text x="1405" y="275" class="t-backend" font-size="8" text-anchor="middle">runner.run(spec, hooks)</text>
+        </g>
+        <g data-detail="context" data-edge-from="engine" data-edge-to="executor" data-edge-label="AsyncIterator[TraceEvent]" data-edge-key="4" data-edge-id="engine-executor">
+          <rect x="1340" y="175" width="130" height="14" rx="3" class="c-mask"/>
+          <text x="1405" y="185" class="t-messagebus" font-size="8" text-anchor="middle">AsyncIterator[TraceEvent]</text>
+        </g>
+        <g data-detail="context" data-edge-from="engine" data-edge-to="kernel" data-edge-label="create_deep_agent(...)" data-edge-key="5" data-edge-id="engine-kernel">
+          <rect x="1567.2" y="315" width="115.6" height="14" rx="3" class="c-mask"/>
+          <text x="1625" y="325" class="t-muted" font-size="8" text-anchor="middle">create_deep_agent(...)</text>
+        </g>
+        <g data-detail="context" data-edge-from="kernel" data-edge-to="llm" data-edge-label="模型调用（stream）" data-edge-key="6" data-edge-id="kernel-llm">
+          <rect x="1576.8" y="498" width="96.39999999999999" height="14" rx="3" class="c-mask"/>
+          <text x="1625" y="508" class="t-muted" font-size="8" text-anchor="middle">模型调用（stream）</text>
+        </g>
+        <g data-detail="context" data-edge-from="executor" data-edge-to="relay" data-edge-label="publish 事件" data-edge-key="7" data-edge-id="executor-relay">
+          <rect x="1156.2" y="315" width="67.6" height="14" rx="3" class="c-mask"/>
+          <text x="1190" y="325" class="t-muted" font-size="8" text-anchor="middle">publish 事件</text>
+        </g>
+        <g data-detail="context" data-edge-from="relay" data-edge-to="redis" data-edge-label="XADD / XREAD BLOCK" data-edge-key="8" data-edge-id="relay-redis">
+          <rect x="1141.8" y="498" width="96.39999999999999" height="14" rx="3" class="c-mask"/>
+          <text x="1190" y="508" class="t-muted" font-size="8" text-anchor="middle">XADD / XREAD BLOCK</text>
+        </g>
+        <g data-detail="context" data-edge-from="services" data-edge-to="redis" data-edge-label="SETNX · BLPOP" data-edge-key="9" data-edge-id="services-redis">
+          <rect x="973.8" y="386.5" width="72.4" height="14" rx="3" class="c-mask"/>
+          <text x="1010" y="396.5" class="t-muted" font-size="8" text-anchor="middle">SETNX · BLPOP</text>
+        </g>
+        <g data-detail="context" data-edge-from="services" data-edge-to="pg" data-edge-label="repositories/ · SQLAlchemy async" data-edge-key="10" data-edge-id="services-pg">
+          <rect x="748.2" y="350" width="163.6" height="14" rx="3" class="c-mask"/>
+          <text x="830" y="360" class="t-muted" font-size="8" text-anchor="middle">repositories/ · SQLAlchemy async</text>
+        </g>
+        <g data-detail="context" data-edge-from="services" data-edge-to="ext" data-edge-label="extra_tools 注入" data-edge-key="11" data-edge-id="services-ext">
+          <rect x="786.6" y="170" width="86.8" height="14" rx="3" class="c-mask"/>
+          <text x="830" y="180" class="t-muted" font-size="8" text-anchor="middle">extra_tools 注入</text>
+        </g>
+        <g data-detail="context" data-edge-from="executor" data-edge-to="docker" data-edge-label="docker CLI + subprocess" data-edge-key="12" data-edge-id="executor-docker">
+          <rect x="1129.8" y="170" width="120.39999999999999" height="14" rx="3" class="c-mask"/>
+          <text x="1190" y="180" class="t-muted" font-size="8" text-anchor="middle">docker CLI + subprocess</text>
+        </g>
+
+        <!-- Legend -->
+        <g data-legend data-legend-bridge>
+          <text x="40" y="656" class="t-primary" font-size="12" font-weight="650">Legend</text>
+          <g data-legend-semantic-kind="frontend" data-legend-kind="frontend" data-legend-label="Frontend" data-legend-x="40" data-legend-baseline="676" data-legend-width="83">
+            <rect x="40" y="667" width="16" height="10" rx="2.5" class="c-frontend" stroke-width="1"/>
+            <text x="62" y="676" class="t-muted" font-size="10" font-weight="500">Frontend</text>
+          </g>
+          <g data-legend-semantic-kind="backend" data-legend-kind="backend" data-legend-label="Backend" data-legend-x="145" data-legend-baseline="676" data-legend-width="78">
+            <rect x="145" y="667" width="16" height="10" rx="2.5" class="c-backend" stroke-width="1"/>
+            <text x="167" y="676" class="t-muted" font-size="10" font-weight="500">Backend</text>
+          </g>
+          <g data-legend-semantic-kind="database" data-legend-kind="database" data-legend-label="Database" data-legend-x="245" data-legend-baseline="676" data-legend-width="83">
+            <rect x="245" y="667" width="16" height="10" rx="2.5" class="c-database" stroke-width="1"/>
+            <text x="267" y="676" class="t-muted" font-size="10" font-weight="500">Database</text>
+          </g>
+          <g data-legend-semantic-kind="cloud" data-legend-kind="cloud" data-legend-label="Cloud" data-legend-x="350" data-legend-baseline="676" data-legend-width="68">
+            <rect x="350" y="667" width="16" height="10" rx="2.5" class="c-cloud" stroke-width="1"/>
+            <text x="372" y="676" class="t-muted" font-size="10" font-weight="500">Cloud</text>
+          </g>
+          <g data-legend-semantic-kind="messagebus" data-legend-kind="messagebus" data-legend-label="Message bus" data-legend-x="440" data-legend-baseline="676" data-legend-width="98">
+            <rect x="440" y="667" width="16" height="10" rx="2.5" class="c-messagebus" stroke-width="1"/>
+            <text x="462" y="676" class="t-muted" font-size="10" font-weight="500">Message bus</text>
+          </g>
+          <g data-legend-semantic-kind="external" data-legend-kind="external" data-legend-label="External" data-legend-x="560" data-legend-baseline="676" data-legend-width="83">
+            <rect x="560" y="667" width="16" height="10" rx="2.5" class="c-external" stroke-width="1"/>
+            <text x="582" y="676" class="t-muted" font-size="10" font-weight="500">External</text>
+          </g>
+        </g>
+      </svg></figure>
+  <figcaption>两个虚线框是这张图的主命题：<b>server</b> 持有凭据、数据库与编排；
+  <b>engine</b> 零凭据、纯函数式地产出事件。上方按钮可单独点亮两条链路 ——
+  <b>调用链路</b>：web → api/v1 → services → executor → engine → kernel → 模型网关；
+  <b>事件回显链路</b>：engine <code>AsyncIterator[TraceEvent]</code> → executor → relay
+  <code>XADD</code> → Redis Stream → SSE 回推浏览器。
+  <code>web ↔ api/v1</code> 那条边两条链路都占：去程是 HTTP，回程是 SSE。</figcaption>
+
+  <table class="layers">
+    <thead><tr><th>层</th><th>职责</th><th>关键约定</th></tr></thead>
+    <tbody>
+      <tr><td>web</td><td>会话工作台 · Agent 编辑器 · 事件归约与渲染</td>
+        <td>只认 TraceEvent 契约与 REST 契约，不感知内核</td></tr>
+      <tr><td>server</td><td>路由 / 编排 / 持久化 / 凭据注入 / 后台执行</td>
+        <td><code>repositories/</code> 是唯一接触 Postgres 的地方</td></tr>
+      <tr><td>engine</td><td>AgentSpec → 编译 → 执行 → 产出 TraceEvent</td>
+        <td>唯一对外入口 <code>runner.run()</code>；模型、hooks、clock 全由调用方注入</td></tr>
+      <tr><td>kernel</td><td>模型 ↔ 工具 ↔ 子智能体的执行循环</td>
+        <td>自有代码，可按项目需要直接裁剪与改造</td></tr>
+    </tbody>
+  </table>
+
+  <div class="grid">
+    <article class="card"><h3>一次 run 的骨架</h3><ul>
+      <li><code>POST /threads/{id}/runs</code> 幂等校验 + 会话串行锁，落库后立刻返回 <code>202 {run_id}</code></li>
+      <li>executor 在后台 asyncio.Task 里自建 session 与 Redis 连接，跑 <code>engine.run()</code></li>
+      <li>事件经 <code>relay</code> <code>XADD</code> 进 Redis Stream，SSE 侧 <code>XRANGE</code> 补发 + <code>XREAD BLOCK</code> 续推</li>
+      <li>终态先落库（助手消息 / run 状态 / 事件归档 / 文件），再发布 <code>run.finished</code></li>
+    </ul></article>
+    <article class="card"><h3>三层边界</h3><ul>
+      <li>web 只认 TraceEvent 契约与 REST 契约</li>
+      <li>server 独占凭据、持久化与编排</li>
+      <li>engine 无 FastAPI / DB session / HTTP，可脱离数据库单测</li>
+      <li>依赖方向由 import-linter 契约在 CI 上强制</li>
+    </ul></article>
+  </div>
+</section>
+
+<section id="kernel">
+  <p class="eyebrow">03 / Kernel</p>
+  <h2>内核架构</h2>
+  <p class="lede"><code>kernel/</code> 是 engine 之下的执行内核，
+  它把「模型 ↔ 工具 ↔ 子智能体」这个循环装配成一张图，
+  engine 只负责把 <code>AgentSpec</code> 翻译成装配参数。</p>
+
+  <div class="grid">
+    <article class="card"><h3>graph.py · 图装配</h3><ul>
+      <li>唯一入口 <code>create_deep_agent(model, system_prompt, tools, filesystem_tools, backend, middleware, subagents)</code></li>
+      <li>产出模型 ↔ 工具 ↔ 子智能体的执行循环，engine 侧 <code>agent.py</code> 是它唯一的调用者</li>
+      <li><code>skills / memory / permissions / checkpointer / store</code> 等参数从不传，对应分支结构性不激活</li>
+    </ul></article>
+    <article class="card"><h3>middleware/ · 能力叠放</h3><ul>
+      <li><code>filesystem</code> —— <code>ls / read / write / edit / glob / grep / execute</code>，兼大结果外置与权限挂点，最大的一件</li>
+      <li><code>subagents</code> —— <code>task</code> 委派的本体</li>
+      <li><code>summarization</code> —— 只装在子智能体栈；主图走 engine 自己的 <code>CompactionMiddleware</code>，不会双重压缩</li>
+      <li><code>patch_tool_calls</code> 修复被截断的 tool call · <code>prompt_caching</code> 注入 cache_control</li>
+    </ul></article>
+    <article class="card"><h3>backends/ · 文件与执行后端</h3><ul>
+      <li><code>state</code> —— 默认虚拟文件系统，不落磁盘</li>
+      <li><code>sandbox</code> —— 容器执行的基类，server 的 <code>DockerSandbox</code> 继承它</li>
+      <li><code>protocol</code> —— 后端协议与响应类型，server 直接 import 这一层</li>
+      <li><code>composite</code> —— 多后端按路径路由，为将来的深度路径映射留的载体</li>
+    </ul></article>
+  </div>
+
+</section>
+
+<section id="features">
+  <p class="eyebrow">04 / Features</p>
+  <h2>核心功能</h2>
+  <div class="grid">
+<article class="card "><h3>智能体管理与版本</h3><ul><li>创建 / 编辑 / 启用 / 归档，列表支持搜索与按模型筛选</li>
+<li><b>保存即产生新版本</b>：<code>PATCH</code> 新建 <code>agent_version</code> 并切换指针，不做原地更新</li>
+<li>版本列表可回滚；<code>DELETE</code> 是归档语义，历史会话仍可解释</li>
+<li>草稿试跑 <code>dry-run</code>：带未保存的 spec 直接跑，不落 thread</li></ul></article>
+<article class="card "><h3>多轮对话</h3><ul><li>thread / message 两层，<b>message 永远保存完整原文</b></li>
+<li>首轮自动生成会话标题（haiku），<code>title_source</code> 区分 generated / manual / fallback</li>
+<li>历史轨迹回放：从 <code>run_event</code> 表读，不走 SSE</li>
+<li>会话虚拟文件列表，中间产物可下载</li></ul></article>
+<article class="card "><h3>实时运行轨迹</h3><ul><li><code>TraceEvent</code> 契约共 23 种事件类型，当前产出 20 种</li>
+<li>SSE + <code>Last-Event-ID</code>，游标是 <code>seq</code>（单 run 内从 1 严格递增、无空洞）</li>
+<li>Redis Stream 做实时通道（TTL 24h），超期从 <code>run_event</code> 表回放</li>
+<li>前端按 seq 去重补齐，刷新页面 / 切后台 / 多标签页都能续上</li></ul></article>
+<article class="card "><h3>工具体系</h3><ul><li><code>write_todos</code> 待办清单 · <code>task</code> 子智能体委派</li>
+<li>虚拟文件系统：<code>ls / read_file / write_file / edit_file / glob / grep</code></li>
+<li><code>web_search</code> 裸搜索 API —— 搜几次、搜什么由模型自己决定</li>
+<li>MCP 接入：仅 HTTP/SSE 远程传输，凭据用 ENV 占位符，不落库</li>
+<li><code>execute</code>（沙箱 Shell）· <code>coding_task</code>（容器化编码智能体）</li></ul></article>
+<article class="card "><h3>人工确认（HITL）</h3><ul><li>高风险工具默认进 <code>require_approval_for</code>，弹窗展示完整参数</li>
+<li>engine 侧 <code>await</code> 一个接缝，server 用 <b>Redis BLPOP</b> 等人点头</li>
+<li><code>approval</code> 表留审计：谁、什么时候、批了还是拒了</li>
+<li><b>拒绝不终止 run</b>：拒绝作为工具结果回给 agent，它可以换方案继续</li></ul></article>
+<article class="card "><h3>隔离执行</h3><ul><li>Shell 沙箱按会话起容器（懒创建、闲置回收），文件在会话内持续存在</li>
+<li><code>--network none</code> · 非 root · <code>--cap-drop ALL</code> · 只读根 + tmpfs · 512m / 1cpu / 256pids</li>
+<li><code>coding_task</code> 每任务一个一次性容器，跑完即弃</li>
+<li>两者共用 <code>atlas-ws-{thread}</code> 卷：编码智能体改的文件，Shell 立刻能看到</li>
+<li><code>WorkerBackend</code> 抽象后端，Docker 先行，K8s 是第二个实现</li></ul></article>
+<article class="card "><h3>上下文与运行限制</h3><ul><li>接近上下文窗口时<b>自动摘要压缩</b>，并以 <code>context.compacted</code> 事件让用户看见</li>
+<li>压缩只改「模型视角」，<code>message</code> 表原文不动</li>
+<li>步数 / 超时 / token 上限 / 并发 / 递归深度，全部可配置且真实生效</li>
+<li>取消位 <code>run:cancel</code>、幂等键 <code>Idempotency-Key</code>、会话串行锁（同一会话同时只跑一个 run）</li></ul></article>
+<article class="card "><h3>模型接入</h3><ul><li>经 litellm 网关走 Anthropic 原生 <code>/v1/messages</code>，不走 OpenAI 协议路径</li>
+<li><code>model_catalog</code> 维护<b>能力矩阵</b>而非单价：上下文窗口、thinking、effort、temperature、缓存</li>
+<li>巡检不可用的模型标 <code>is_available=false</code>，编辑器里直接禁选</li></ul></article>
+  </div>
+</section>
+
+<footer>
+  架构图由 <code>atlas-architecture.archify.json</code> 渲染（archify · showcase 校验 9/9）。
+  详细设计见 <code>docs/backend-design.md</code>、<code>docs/message-flow.md</code>、
+  <code>docs/trace-event.md</code>、<code>docs/hitl.md</code>、<code>docs/sandbox.md</code>、
+  <code>docs/coding-worker.md</code>、<code>docs/kernel-audit.md</code>。
+</footer>
+
+</div>
+<script>
+  (function () {
+    var PATHS = {
+      call:  { nodes:['web','api','services','executor','engine','kernel','llm'],
+               edges:['web-api','api-services','services-executor','executor-engine','engine-kernel','kernel-llm'] },
+      event: { nodes:['web','api','executor','relay','redis','engine'],
+               edges:['engine-executor','executor-relay','relay-redis','web-api'] }
+    };
+    var svg = document.querySelector('.arch-svg');
+    var bar = document.getElementById('pathbar');
+    if (!svg || !bar) return;
+    function apply(key) {
+      svg.querySelectorAll('[data-path-match]').forEach(function (el) {
+        el.removeAttribute('data-path-match');
+      });
+      if (key === 'all') { svg.removeAttribute('data-path'); return; }
+      var p = PATHS[key];
+      p.nodes.forEach(function (id) {
+        svg.querySelectorAll('[data-node-id="' + id + '"]').forEach(function (el) {
+          el.setAttribute('data-path-match', '');
+        });
+      });
+      p.edges.forEach(function (id) {
+        svg.querySelectorAll('[data-edge-id="' + id + '"]').forEach(function (el) {
+          el.setAttribute('data-path-match', '');
+        });
+      });
+      svg.setAttribute('data-path', key);
+    }
+    bar.addEventListener('click', function (e) {
+      var btn = e.target.closest('button[data-path]');
+      if (!btn) return;
+      bar.querySelectorAll('button').forEach(function (b) {
+        b.setAttribute('aria-pressed', String(b === btn));
+      });
+      apply(btn.getAttribute('data-path'));
+    });
+  })();
+  (function () {
+    var btn = document.getElementById('theme');
+    var root = document.documentElement;
+    btn.addEventListener('click', function () {
+      var cur = root.getAttribute('data-theme');
+      if (!cur) {
+        cur = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      }
+      root.setAttribute('data-theme', cur === 'dark' ? 'light' : 'dark');
+    });
+  })();
+</script>
+</body>
+</html>

@@ -1,0 +1,18 @@
+# app 镜像的构建上下文白名单。
+#
+# ★ 单独一份而不是放宽仓库根的 .dockerignore：那份是给 bridge 镜像写的，
+#   刻意只放行 acp/ 与 bridge/。放宽它会让每次构建会话 Pod 镜像都多传
+#   一遍 engine/ 与 server/ 的源码 —— 而 bridge 一个字节都用不到。
+#   BuildKit 会优先用 <Dockerfile 路径>.dockerignore，各镜像各管各的。
+#
+# ★ .venv / node_modules / .env 必须排除：前两者是几百 MB 的无用传输，
+#   .env 进上下文等于把凭据送进镜像层。
+*
+!acp/
+!engine/
+!cluster/
+!server/
+**/__pycache__/
+**/*.pyc
+.venv/
+.env

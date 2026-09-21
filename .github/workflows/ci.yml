@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: atlas
+          POSTGRES_PASSWORD: atlas
+          POSTGRES_DB: atlas
+        ports: ["5433:5432"]
+        options: >-
+          --health-cmd "pg_isready -U atlas -d atlas"
+          --health-interval 3s --health-timeout 3s --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ["6380:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 3s --health-timeout 3s --health-retries 20
+
+    env:
+      DATABASE_URL: postgresql+asyncpg://atlas:atlas@localhost:5433/atlas
+      REDIS_URL: redis://localhost:6380/0
+      LITELLM_BASE_URL: https://apijp.techstz.com
+      # CI 不带真 key：/models 巡检会失败并降级为 gateway_reachable=false，
+      # 这正是我们要测的降级路径（§13.2 不允许静默降级）。
+      LITELLM_KEY: sk-ci-placeholder
+      DEFAULT_USER_ID: 00000000-0000-0000-0000-000000000001
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Sync (locked)
+        run: uv sync --all-packages --locked
+
+      - name: Lint
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+
+      # ★ 依赖单向的硬约束。engine import server/db 就红（文档 §2.1）
+      - name: Architecture contracts
+        run: uv run lint-imports
+
+      - name: Migrate
+        run: cd server && uv run alembic upgrade head
+
+      - name: Test
+        run: uv run pytest -q

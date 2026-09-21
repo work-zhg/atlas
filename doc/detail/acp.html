@@ -1,0 +1,671 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>acp Agent 详细设计 · AI Platform</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  .tree{background:var(--card);border:1px solid var(--border-soft);border-radius:var(--radius);
+        padding:var(--s3);overflow-x:auto;margin:0 0 var(--s3);font-family:var(--mono);
+        font-size:12.5px;line-height:1.75;white-space:pre;color:#CBD5E1}
+  .tree b{color:#F8FAFC;font-weight:600}
+  .tree i{color:#7A88A0;font-style:normal}
+  .tree s{color:#7DD3FC;text-decoration:none}
+  .tree u{color:#FDE68A;text-decoration:none}
+  .tag{font-family:var(--mono);font-size:10.5px;padding:1px 7px;border-radius:99px;border:1px solid;white-space:nowrap}
+  .tag.new{color:var(--warn);border-color:rgba(245,158,11,.45)}
+  .tag.keep{color:var(--accent);border-color:rgba(34,197,94,.45)}
+  .step{border-left:2px solid var(--border);padding-left:var(--s3);margin:var(--s4) 0}
+  .step h4{margin-top:0;color:var(--accent);font-family:var(--mono);font-size:12px;letter-spacing:.1em}
+</style>
+</head>
+<body>
+
+<nav class="sitenav">
+  <a class="brand" href="../">AI&nbsp;<b>Platform</b>&nbsp;/ 详细设计</a>
+  <div class="links">
+    <a href="../">概要设计</a>
+    <a href="./">详设目录</a>
+    <a href="native.html">native Agent</a>
+    <a href="structure.html">目录与包结构</a>
+    <a href="kernel.html">kernel 分析</a>
+    <a href="filesystem.html">文件系统改造</a>
+    <a href="subagent.html">Subagent 重设计</a>
+    <a class="on" href="acp.html">acp Agent</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+<nav class="toc" aria-label="目录">
+  <div class="eyebrow">本页</div>
+  <ol>
+    <li><a href="#s1">定位与范围</a></li>
+    <li><a href="#s2">复用面：acp run 也是普通 run</a></li>
+    <li><a href="#s3">包规划</a></li>
+    <li><a href="#s4">类规划</a></li>
+    <li><a href="#s5">线协议与能力位</a></li>
+    <li><a href="#s6">事件翻译表</a></li>
+    <li><a href="#s7">审批回路</a></li>
+    <li><a href="#s8">时序：Pod 供给与配对</a></li>
+    <li><a href="#s9">时序：一轮 prompt</a></li>
+    <li><a href="#s10">时序：恢复、lost 与取消</a></li>
+    <li><a href="#s11">数据模型与配置增量</a></li>
+    <li><a href="#s12">落地顺序</a></li>
+    <li><a href="#s13">风险与不做的事</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<header class="hero">
+  <p class="kicker">Detailed Design · acp Agent</p>
+  <h1>acp Agent 详细设计</h1>
+  <p class="lede">把 <a href="../runtime.html">执行环境概设</a>的 Bridge/Pod 链路落到 atlas 的现有骨架上。核心判断：<b>acp 的 run 也是普通 run</b> —— 会话、锁、事件、审批、子会话全部复用，整个 acp 只新增一个 <code>AgentRuntime</code> 实现和一个 Pod 内进程。</p>
+  <div class="meta">
+    <span>AgentRuntime 分岔</span><span>Bridge 独立部署物</span><span>atlas_acp 共享线协议</span><span>caps: declared → probed</span>
+  </div>
+</header>
+
+<!-- ══════════════ 1 ══ -->
+<section id="s1">
+  <h2><span class="num">01</span>定位与范围</h2>
+
+  <p>native 已定型（<a href="subagent.html">子会话</a>、<a href="filesystem.html">文件系统</a>、装配收进 server），接缝不会再跟着变 —— 概设里「等 native 定型后再写」的前提现在成立了。本文把三份概设的决定翻译成代码结构：</p>
+
+  <table>
+    <thead><tr><th>已有决定</th><th>出处</th><th>本文做什么</th></tr></thead>
+    <tbody>
+      <tr><td>Server ⇆ WS ⇆ Bridge ⇆ stdio ⇆ adapter ⇆ CLI 四层链路；驱动模式</td><td><a href="../runtime.html">执行环境 §01–03</a></td><td>Bridge 与 server 侧集成的包/类设计</td></tr>
+      <tr><td>每 Pod 一份凭证、WS 握手校验、会话绑定</td><td><a href="../runtime.html">执行环境 §09</a></td><td>配对的具体流程与时序</td></tr>
+      <tr><td><code>type=acp</code> + <code>cli_type</code>；caps 分 declared 与 probed</td><td><a href="../agent.html">Agent 管理 §07</a></td><td>spec 扩展与探测落库的时机</td></tr>
+      <tr><td>子会话 = thread；<code>external_session_id</code> 列已建；恢复失败标 <code>lost</code></td><td><a href="subagent.html">Subagent §04</a></td><td>AcpRuntime 对子会话原样生效</td></tr>
+      <tr><td>workspace/skills 双挂载点、subPath 参数化</td><td><a href="filesystem.html">文件系统 §05</a></td><td>Pod 模板渲染的输入</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout warn">
+    <span class="label">不在本文范围</span>
+    <p>K8s 模板管理组件的完整实现（配额、节点亲和、多集群）单独成篇 —— 本文只定 <code>PodManager</code> 的协议面；配置平面（Java）怎么存 <code>cli_type</code> 与镜像版本不在此；CLI 自身的行为（Claude Code 的权限模式、MCP 装载）以 <a href="../runtime.html">执行环境 §06–07</a> 为准。</p>
+  </div>
+</section>
+
+<!-- ══════════════ 2 ══ -->
+<section id="s2">
+  <h2><span class="num">02</span>复用面：acp run 也是普通 run</h2>
+
+  <p>这是整篇详设最重要的一句话。atlas 现在的执行链路是：</p>
+
+  <pre><code>load_for_execution → _prepare → mark_running     <span class="tok-c">← 与 agent 类型无关</span>
+┌─────────────────────────────────────────────┐
+│ assembly.build → build_graph → runner.run    │  <span class="tok-c">← 只有这一段是 native 特有的</span>
+└─────────────────────────────────────────────┘
+收事件 → persist → archive → 释放会话锁          <span class="tok-c">← 与 agent 类型无关</span></code></pre>
+
+  <p>acp 的分岔点就是中间那一段。把它抽成协议，acp 只是第二个实现：</p>
+
+  <pre><code><span class="tok-c"># server/executor/runtime.py —— server 内部的缝，不进 contracts</span>
+<span class="tok-k">class</span> <span class="tok-d">AgentRuntime</span>(<span class="tok-t">Protocol</span>):
+    <span class="tok-s">"""在一个已就绪的 run 上执行一轮，产出事件流直到终态。"""</span>
+    <span class="tok-k">def</span> <span class="tok-d">run_turn</span>(self, prepared: PreparedRun, *, run_id: UUID) -&gt; <span class="tok-t">AsyncIterator</span>[TraceEvent]: ...
+
+<span class="tok-k">class</span> <span class="tok-d">NativeRuntime</span>:   <span class="tok-c"># 现状代码原样搬入：build_graph + runner.run</span>
+<span class="tok-k">class</span> <span class="tok-d">AcpRuntime</span>:      <span class="tok-c"># 本文主角：ensure pod → ensure session → prompt → 翻译事件</span></code></pre>
+
+  <div class="callout rule">
+    <span class="label">这个对称性买到了什么</span>
+    <ul style="margin-bottom:0">
+      <li><b>子会话零改动</b> —— 委派链路（task → DelegationProtocol → 子会话 → 子 run）不感知子 run 用哪个 runtime。acp 子智能体 = 子会话的 spec.kind 是 acp，仅此而已</li>
+      <li><b>会话串行锁、幂等、SSE 回放、孤儿回收原样生效</b> —— 它们都挂在 run 的生命周期上，不挂在执行方式上</li>
+      <li><b>前端一行不改</b> —— 事件契约（TraceEvent）不变。<a href="structure.html">包结构设计</a>那句「acp 接进来后 web 一行都不该改，否则是 translate 没翻译干净」在这里成为验收标准</li>
+    </ul>
+  </div>
+
+  <p>两类 run 的差异被压缩成一张表：</p>
+
+  <table>
+    <thead><tr><th></th><th>NativeRuntime</th><th>AcpRuntime</th></tr></thead>
+    <tbody>
+      <tr><td>模型上下文在哪</td><td>message 表重建，压缩归平台</td><td>CLI 进程内，压缩归 CLI</td></tr>
+      <tr><td>历史恢复</td><td>每轮从 message 表重建</td><td><code>loadSession(external_session_id)</code>，能力位决定</td></tr>
+      <tr><td>工具</td><td>平台装配（filesystem/sandbox/MCP…）</td><td>CLI 自带 + MCP 列表下发</td></tr>
+      <tr><td>审批</td><td>ApprovalMiddleware 拦 <code>require_approval_for</code></td><td>ACP <code>request_permission</code> 回路（§07）</td></tr>
+      <tr><td>执行体</td><td>本进程协程</td><td>Pod（Bridge + adapter + CLI）</td></tr>
+      <tr><td>timeout / 取消</td><td>runner 的 asyncio.timeout + CancelToken</td><td>同一个 CancelToken → <code>session/cancel</code></td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ══════════════ 3 ══ -->
+<section id="s3">
+  <h2><span class="num">03</span>包规划</h2>
+
+  <p>关键的结构性事实：<b>Bridge 跑在 Pod 里，是独立部署物</b>（进 Pod 镜像，随 Pod 生灭），它和 server 必须说同一种线协议。共享的那部分抽成零重依赖的小包，两边分别依赖：</p>
+
+  <div class="tree">atlas/
+├── <b>acp/</b>                    src/<u>atlas_acp</u>/        <span class="tag new">新包</span> <i>线协议 —— server 与 bridge 共享，零重依赖（仅 pydantic）</i>
+│   ├── wire.py             <i>JSON-RPC 2.0 帧、方法名常量、错误码、请求-响应关联 id</i>
+│   ├── types.py            <i>initialize / session·new / session·load / session·prompt /</i>
+│   │                       <i>session·cancel 的请求与响应模型</i>
+│   ├── updates.py          <i>session/update 通知的判别联合（§06 的左列）</i>
+│   └── caps.py             <i>AgentCaps：loadSession · sessionCapabilities.resume · fs.* · terminal</i>
+│
+├── <b>bridge/</b>                 src/<u>atlas_bridge</u>/     <span class="tag new">新部署物</span> <i>Pod 内进程，依赖 atlas_acp，不认识 atlas_server</i>
+│   ├── main.py             <i>入口：读 Secret 凭证与会话绑定 → 拉起 adapter → 起 WS 服务</i>
+│   ├── ws.py               <i>WS 端点：握手校验（每 Pod 一份 token）· 单活跃 prompt 门 · 心跳</i>
+│   ├── adapter.py          <i>stdio 子进程管理：拉起、JSON-RPC 读写循环、崩溃上报</i>
+│   ├── permission.py       <i>request_permission → 原样转交 server（★ 默认转交，绝不自动 allow）</i>
+│   └── lifecycle.py        <i>优雅终止三步：拒新请求 → 当前 run 标中断并上报 → 刷 OTel span</i>
+│
+├── server/  atlas_server/
+│   ├── <b>acp/</b>                                     <span class="tag new">新增</span> <i>server 侧集成，依赖 atlas_acp</i>
+│   │   ├── channel.py      <i>到 Pod 的 WS 客户端：请求-响应关联、断线语义、超时</i>
+│   │   ├── pairing.py      <i>凭证签发：随机 token → K8s Secret；随 Pod 生灭（§08）</i>
+│   │   ├── runtime.py      <i>AcpRuntime —— AgentRuntime 的 acp 实现（§09/§10 的编排）</i>
+│   │   └── translate.py    <i>session/update → TraceEvent（★ 纯函数，进纯层守卫）</i>
+│   ├── providers/
+│   │   └── cluster.py                               <span class="tag new">新增</span> <i>cluster 服务的 HTTP 客户端 —— server **不碰 K8s**</i>
+│   └── executor/
+│       ├── runtime.py                               <span class="tag new">新增</span> <i>AgentRuntime 协议 + 按 spec.kind 分发</i>
+│       ├── runner.py                                <span class="tag keep">改名收编</span> <i>NativeRuntime（现执行循环原样包装）</i>
+│       └── inprocess.py                             <span class="tag keep">微改</span> <i>中段改调 runtime.run_turn，前后段不动</i>
+
+<b>cluster/</b>                    src/<u>atlas_cluster</u>/   <span class="tag new">新服务</span> <i>K8s 模板与 Pod 生命周期的唯一所有者</i>
+├── schemas.py              <i>与 server 的 API 契约（纯 pydantic —— server 只许认它）</i>
+├── template.py             <i>manifest 渲染：镜像、workspace/skills 双挂载点、挂载器 sidecar、Secret 注入、非 root/根只读/cap-drop</i>
+├── manager.py              <i>ensure（幂等）/ release / reap(live) + 租户配额</i>
+├── backend.py              <i>ClusterBackend 协议 + 内存实现（本机无集群也能测主体）</i>
+├── k8s.py                  <i>真集群实现，kubernetes-asyncio 为**可选**依赖</i>
+└── api.py                  <i>四个端点：ensure / release / reap / health</i>
+</div>
+
+  <h3>三条包边界，各有守卫</h3>
+
+  <table>
+    <thead><tr><th>边界</th><th>规则</th><th>为什么</th></tr></thead>
+    <tbody>
+      <tr><td><code>atlas_acp</code></td><td>零重依赖（仅 pydantic），不认识 atlas_server / atlas_engine</td><td>bridge 镜像要装它 —— 拖进 sqlalchemy 就把整个 server 依赖树带进了 Pod</td></tr>
+      <tr><td><code>atlas_bridge</code></td><td>只依赖 atlas_acp；<b>禁止 import atlas_server</b></td><td>Bridge 与 server 的唯一接口是 WS 上的线协议。代码级共享会让「升级 server 必须同步升级全部在跑的 Pod」</td></tr>
+      <tr><td><code>acp/translate.py</code></td><td>进 server 纯计算层 contract（与 domain / build / runner 同列）</td><td>翻译是纯函数：一条 update 进、零或多条 TraceEvent 出 —— 它必须能脱离 WS 和 DB 单测，§06 的表就是它的测试用例</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout warn">
+    <span class="label">为什么 Bridge 不用 Node（adapter 是 npm 包）</span>
+    <p>adapter（如 <code>@zed-industries/claude-code-acp</code>）确实是 Node 生态，但 Bridge 与 adapter 之间是 <b>stdio 上的 JSON-RPC</b>，语言无关。Bridge 用 Python 换来的是与 server 共享 <code>atlas_acp</code> 的类型定义 —— 线协议两端用同一份模型解析，漂移在类型层就被抓住。Pod 镜像里 Node 只为 adapter 存在。</p>
+  </div>
+</section>
+
+<!-- ══════════════ 4 ══ -->
+<section id="s4">
+  <h2><span class="num">04</span>类规划</h2>
+
+  <h3>spec 扩展：kind 与 cli</h3>
+
+  <pre><code><span class="tok-c"># domain/spec.py</span>
+AgentKind = <span class="tok-t">Literal</span>[<span class="tok-s">"native"</span>, <span class="tok-s">"acp"</span>]
+
+<span class="tok-k">@dataclass</span>(frozen=<span class="tok-k">True</span>)
+<span class="tok-k">class</span> <span class="tok-d">CliSpec</span>:
+    <span class="tok-s">"""acp agent 的 CLI 形态。★ cli_type 换了 = 换整组探测能力（Agent 管理 §07），</span>
+<span class="tok-s">    所以它进版本快照且不可改 —— 要换就建新 agent。"""</span>
+    cli_type: <span class="tok-t">str</span>            <span class="tok-c"># "claude-code" / "codex" …</span>
+    adapter: <span class="tok-t">str</span>             <span class="tok-c"># adapter 启动命令（进 Pod 模板）</span>
+    image: <span class="tok-t">str</span>               <span class="tok-c"># Pod 镜像（含 CLI + adapter + bridge 的版本组合）</span>
+
+<span class="tok-k">@dataclass</span>(frozen=<span class="tok-k">True</span>)
+<span class="tok-k">class</span> <span class="tok-d">AgentSpec</span>:
+    ...
+    kind: AgentKind = <span class="tok-s">"native"</span>     <span class="tok-c"># ★ 有默认值 —— 历史快照反序列化照常（快照纪律）</span>
+    cli: CliSpec | <span class="tok-k">None</span> = <span class="tok-k">None</span>     <span class="tok-c"># kind="acp" 时必填，validate() 里互相校验</span></code></pre>
+
+  <p><code>spec.validate()</code> 增加两条：<code>kind="acp"</code> 必须带 <code>cli</code>；acp 的 <code>tool_names</code> 只允许 <code>mcp:*</code>（CLI 自带其余工具，平台内置工具对它没有意义 —— 勾了就是配置错误，报出来而不是静默忽略）。</p>
+
+  <h3>server 侧的类与职责</h3>
+
+  <table>
+    <thead><tr><th>类</th><th>住址</th><th>职责（一行）</th><th>刻意不做</th></tr></thead>
+    <tbody>
+      <tr><td><code>AgentRuntime</code></td><td>executor/runtime.py</td><td>协议：<code>run_turn(prepared, run_id) → AsyncIterator[TraceEvent]</code>；按 <code>spec.kind</code> 分发</td><td>不做重试 —— 失败是 run.failed 事件，重试语义归用户</td></tr>
+      <tr><td><code>AcpRuntime</code></td><td>acp/runtime.py</td><td>一轮的编排：ensure pod → ensure session → prompt → 翻译流 → 终态映射</td><td>不落库 —— 事件由 inprocess 的既有 persist 段收走</td></tr>
+      <tr><td><code>AcpChannel</code></td><td>acp/channel.py</td><td>一条到 Bridge 的 WS：发请求、按 id 关联响应、把 notification 交给回调、心跳</td><td>不理解 ACP 语义 —— 只搬帧，方法级语义在 runtime</td></tr>
+      <tr><td><code>PairingService</code></td><td>acp/pairing.py</td><td>造 Pod 时生成随机 token 写进 Secret；连接时放进 WS header；轮换=重建 Pod</td><td>不做长期令牌 —— 凭证随 Pod 生灭（执行环境 §09）</td></tr>
+      <tr><td><code>translate()</code></td><td>acp/translate.py</td><td>纯函数：(update, seq工厂) → list[TraceEvent]，§06 的表</td><td>不吞未知 kind —— 未知类型翻成 warning 日志 + 忽略，但计数暴露成指标</td></tr>
+      <tr><td><code>PodManager</code></td><td><b>cluster</b>/manager.py</td><td><code>ensure(req) → PodInfo</code>：查 label 复用或按模板新建；<code>reap(live)</code> 兜孤儿</td><td>不管 Bridge 协议 —— 只管 K8s 对象与配额</td></tr>
+      <tr><td>模板渲染</td><td><b>cluster</b>/template.py</td><td>manifest：镜像、<b>workspace/skills 两个挂载点来自不同 thread</b>、挂载器 sidecar、Secret 注入、非 root/根只读/cap-drop</td><td>不硬编码路径 —— 挂载点参数化是子会话共享工作区的前提（<a href="subagent.html">Subagent §03</a>）。落地形式随挂载模式变（fuse 用 rclone remote，csi 用 subPath），<b>语义必须一致</b>（见 <a href="#s12">§12 步骤 5</a>）</td></tr>
+      <tr><td><code>ClusterPods</code></td><td>server/providers/cluster.py</td><td>cluster 服务的 HTTP 客户端，实现 <code>PodProvider</code></td><td>不拼 manifest、不认识 K8s —— 「Pod 长什么样」只有一个答案</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout warn">
+    <span class="label">修正：Pod 生命周期是**独立服务**，不是 server 的一个包</span>
+    <p>本文初稿把它放在 <code>server/providers/pods/</code>。实施时提成了独立的 <code>cluster</code> 服务，理由是初稿自己写过的那句：<b>模板、创建、回收、卷分配、配额这些逻辑不是 acp 独有的</b> —— native 的 sandbox Pod 将来要一模一样的东西。放在 server 里会让「谁拥有 Pod 生命周期」有两个答案。</p>
+    <p style="margin-bottom:0">还有一条初稿没写到的：cluster 是全仓<b>唯一需要 K8s 写权限</b>的进程。独立之后那份 RBAC 只发给它一个，而不是发给整个 API 服务。</p>
+  </div>
+
+  <div class="callout rule">
+    <span class="label">PodManager 沿用 SandboxManager 的三条纪律</span>
+    <p>① 状态从 K8s label 派生，不建 pod 表 —— 两处真相必然漂移，label（<code>atlas/thread-id</code>）是唯一账本；② 闲置 TTL 停不删，下次 acquire 快速恢复；③ 启动时 <code>reap</code> 扫孤儿（label 存在但 thread 已删）。这三条在 DockerSandbox 上已验证过一轮。</p>
+  </div>
+
+  <h3>Bridge 侧的类</h3>
+
+  <pre><code>BridgeServer      <span class="tok-c"># ws.py —— 握手校验 token + thread_id 绑定；单活跃 prompt：</span>
+                  <span class="tok-c">#   第二个 prompt 直接拒绝（4409），不排队 —— 排队会让会话锁的</span>
+                  <span class="tok-c">#   超时语义变得不可解释（执行环境 §03）</span>
+AdapterProcess    <span class="tok-c"># adapter.py —— stdio 拉起 adapter；崩溃 → 上报 bridge.adapter_crashed</span>
+                  <span class="tok-c">#   通知后退出进程（★ 让 Pod 重启策略接管，不在进程内自愈 ——</span>
+                  <span class="tok-c">#   自愈会掩盖崩溃频率，且半死的 adapter 状态无法验证）</span>
+PermissionRelay   <span class="tok-c"># permission.py —— request_permission 原样转交 server，等待决定回传。</span>
+                  <span class="tok-c">#   ★ 默认转交。任何"自动 allow"的捷径都等于把文件写入与命令执行</span>
+                  <span class="tok-c">#   的权限交给模型（执行环境 §02 的红线）</span></code></pre>
+</section>
+
+<!-- ══════════════ 5 ══ -->
+<section id="s5">
+  <h2><span class="num">05</span>线协议与能力位</h2>
+
+  <p>WS 上跑的就是 ACP 的 JSON-RPC，Bridge 对 server 是透明管道加三件本地事务（鉴权、单活跃 prompt、优雅终止）。方法面收敛为五个 + 两类通知：</p>
+
+  <table>
+    <thead><tr><th>方向</th><th>方法</th><th>用途</th></tr></thead>
+    <tbody>
+      <tr><td>server → bridge</td><td><code>initialize</code></td><td>握手后第一件事。回 <code>AgentCaps</code>：<code>loadSession</code>、<code>sessionCapabilities.resume</code>、<code>fs.*</code>、<code>terminal</code></td></tr>
+      <tr><td>server → bridge</td><td><code>session/new</code></td><td>建 CLI 会话，<code>cwd=/workspace</code>、MCP 列表随参传入 —— <b>不落盘</b>（执行环境 §07：落盘文件在 Pod 重建时产生不可复现差异）</td></tr>
+      <tr><td>server → bridge</td><td><code>session/load</code></td><td>恢复 <code>external_session_id</code>。仅当 caps 允许时调用</td></tr>
+      <tr><td>server → bridge</td><td><code>session/prompt</code></td><td>一轮。终了回 <code>StopReason</code>：<code>end_turn / max_tokens / max_turn_requests / refusal / cancelled</code></td></tr>
+      <tr><td>server → bridge</td><td><code>session/cancel</code></td><td>取消当前轮（notification，不等响应）</td></tr>
+      <tr><td>bridge → server</td><td><code>session/update</code></td><td>流式通知：§06 的全部输入</td></tr>
+      <tr><td>bridge → server</td><td><code>session/request_permission</code></td><td>审批回路（§07）。★ 这是 bridge → server 方向唯一的<b>请求</b>（要等响应）</td></tr>
+    </tbody>
+  </table>
+
+  <h3>caps：declared → probed，两次落库</h3>
+
+  <pre><code>发布时（配置平面）   caps_declared ← 按 cli_type 的<b>经验表</b>推导（编辑器展示用）
+首次连接（运行时）   caps_probed   ← initialize 的<b>实测响应</b>，落 agent_version 关联表
+                     ★ 两者不一致 ⇒ 显式事件 caps.mismatch —— 比如 declared 说能
+                       resume、probed 说不能：这决定 §10 里 lost 的触发路径</code></pre>
+
+  <div class="callout warn">
+    <span class="label">resume 是能力位，不是假设</span>
+    <p>Claude Code 的 adapter 可能声明 <code>loadSession</code>，Codex 的可能不声明 —— 同为 acp 类型，一个能无损恢复，另一个每次冷启动。<a href="subagent.html">Subagent §04</a> 已把降级路径定死：不支持时<b>标 <code>lost</code> 再新建</b>，绝不静默新建 —— 用户以为在继续上次，CLI 实际从零开始，是最坏的失败形态。</p>
+  </div>
+</section>
+
+<!-- ══════════════ 6 ══ -->
+<section id="s6">
+  <h2><span class="num">06</span>事件翻译表</h2>
+
+  <p><code>translate.py</code> 是 acp 与前端之间唯一的语义换算点。验收标准（来自<a href="structure.html">包结构设计</a>）：<b>web 一行不改</b> —— 如果前端需要为 acp 加分支，说明这张表没翻干净，该改的是这里。</p>
+
+  <table>
+    <thead><tr><th>session/update 类型</th><th>→ TraceEvent</th><th>换算说明</th></tr></thead>
+    <tbody>
+      <tr><td><code>agent_message_chunk</code></td><td><code>message.delta</code></td><td>正文流。收束后由 runtime 拼 <code>message.completed</code>（CLI 不发「完成」信号，以 prompt 响应返回为界）</td></tr>
+      <tr><td><code>agent_thought_chunk</code></td><td><code>message.delta</code>（thinking 块）</td><td>与 native 的 thinking 同形态，前端已会渲染</td></tr>
+      <tr><td><code>tool_call</code></td><td><code>tool.started</code></td><td><code>toolCallId</code> 原样带过去 —— 与 <code>tool_call_update</code> 配对的键</td></tr>
+      <tr><td><code>tool_call_update</code>（completed / failed）</td><td><code>tool.completed / tool.failed</code></td><td>输出截断规则与 native 一致（大结果不进事件流）</td></tr>
+      <tr><td><code>plan</code></td><td><code>todos.updated</code></td><td>ACP 的 plan 条目 → 平台 todo 形态（全量快照语义一致）</td></tr>
+      <tr><td>（prompt 响应）<code>StopReason</code></td><td><code>run.finished / run.failed / run.cancelled</code></td><td><code>end_turn→finished</code>；<code>refusal→failed(model_refused)</code>；<code>cancelled→cancelled</code>；<code>max_*→finished + stop_reason 附加字段</code>（撞上限不是失败 —— 这正是 subagent 设计里「stop_reason 用附加字段」那条改进）</td></tr>
+      <tr><td>（bridge 自报）<code>bridge.adapter_crashed</code></td><td><code>run.failed(runtime_crashed)</code></td><td>adapter 崩溃是故障不是拒答，retryable=true</td></tr>
+      <tr><td>usage（响应附带）</td><td><code>usage.updated</code></td><td>CLI 报多少记多少；<b>记在本 run 行上</b>，与 native 同一套账</td></tr>
+      <tr><td>未知 kind</td><td>（无事件）</td><td>警告日志 + 计数指标。★ 不翻成 error —— 协议演进时旧 server 遇到新 update 不该把 run 弄失败</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout rule">
+    <span class="label">文件产物：不经事件流，经 OSS 前缀</span>
+    <p>CLI 写的文件落在 <code>/workspace</code>（挂的就是会话 OSS 前缀），<code>file.written</code> 事件由 runtime 在轮末对比前缀清单补发 —— 与 native 沙箱模式同款语义。不要试图从 <code>tool_call</code> 参数里猜文件路径：CLI 的工具形态是黑盒，猜错比不发更糟。</p>
+  </div>
+</section>
+
+<!-- ══════════════ 7 ══ -->
+<section id="s7">
+  <h2><span class="num">07</span>审批回路</h2>
+
+  <p>native 的审批在 ApprovalMiddleware；acp 的审批是 ACP 的一等公民 <code>request_permission</code>。两条路在 server 汇入<b>同一张 Approval 表、同一个前端弹窗</b>：</p>
+
+  <pre><code>CLI 要动危险东西
+  → adapter 发 session/request_permission（带 toolCall 与选项列表）
+  → Bridge <b>原样转交</b>（红线：默认转交，绝不自动 allow —— 执行环境 §02）
+  → AcpRuntime 落 Approval 行 + 发 approval.required 事件（含「请求来自哪个 agent」）
+  → 用户在前端决定 → RedisApprovalGate 唤醒 → 决定沿原路回 CLI
+  → 超时 = 拒（approval_timeout_s 与 native 共用同一配置）</code></pre>
+
+  <table>
+    <thead><tr><th>差异点</th><th>处理</th></tr></thead>
+    <tbody>
+      <tr><td>ACP 的决定是<b>选项列表</b>（allow_once / allow_always / reject…），平台是二元（approve/reject）</td><td>v1 只映射 <code>allow_once / reject_once</code>。★ 不透传 allow_always —— 「永远允许」是全局策略，必须过权限管理那一篇，不能从一次弹窗里溜进来</td></tr>
+      <tr><td>native 由 <code>require_approval_for</code> 白名单触发；acp 由 CLI 自己判断触发</td><td>照实展示来源差异即可。acp 的 Pod 本身是隔离的（无横向网络、只读根、前缀限定凭证），审批是第二道闸不是唯一一道</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ══════════════ 8 ══ -->
+<section id="s8">
+  <h2><span class="num">08</span>时序：Pod 供给与配对</h2>
+
+  <figure>
+<svg viewBox="0 0 830 470" role="img" aria-labelledby="acp1-t acp1-d">
+<title id="acp1-t">Pod 供给与配对</title>
+<desc id="acp1-d">AcpRuntime 请求 PodManager 确保 Pod 存在。PairingService 生成随机 token 写入 K8s Secret，PodManager 按模板建 Pod（workspace 与 skills 两个 subPath 来自不同 thread）。Bridge 启动后读 Secret 并拉起 adapter。Server 发起 WS 握手，header 携带 token 与 thread_id，Bridge 校验通过才接受。随后 initialize 探测能力位，probed caps 落库，与 declared 不一致时发显式事件。</desc>
+<defs>
+<marker id="pa" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#7A88A0"/></marker>
+<marker id="pg" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#22C55E"/></marker>
+</defs>
+<rect x="10" y="14" width="140" height="30" rx="7" fill="#131A2E" stroke="#38BDF8" stroke-opacity=".7"/>
+<text x="80" y="34" text-anchor="middle" fill="#F8FAFC" font-size="11.5" font-family="IBM Plex Sans">AcpRuntime</text>
+<line x1="80" y1="44" x2="80" y2="452" stroke="#334155" stroke-dasharray="4 4"/>
+<rect x="190" y="14" width="140" height="30" rx="7" fill="#131A2E" stroke="#334155"/>
+<text x="260" y="34" text-anchor="middle" fill="#F8FAFC" font-size="11.5" font-family="IBM Plex Sans">PodManager</text>
+<line x1="260" y1="44" x2="260" y2="452" stroke="#334155" stroke-dasharray="4 4"/>
+<rect x="370" y="14" width="140" height="30" rx="7" fill="#131A2E" stroke="#334155"/>
+<text x="440" y="34" text-anchor="middle" fill="#F8FAFC" font-size="11.5" font-family="IBM Plex Sans">K8s API</text>
+<line x1="440" y1="44" x2="440" y2="452" stroke="#334155" stroke-dasharray="4 4"/>
+<rect x="550" y="14" width="130" height="30" rx="7" fill="#131A2E" stroke="#F59E0B" stroke-opacity=".6"/>
+<text x="615" y="34" text-anchor="middle" fill="#F8FAFC" font-size="11.5" font-family="IBM Plex Sans">Bridge (Pod)</text>
+<line x1="615" y1="44" x2="615" y2="452" stroke="#334155" stroke-dasharray="4 4"/>
+<rect x="712" y="14" width="108" height="30" rx="7" fill="#131A2E" stroke="#334155"/>
+<text x="766" y="34" text-anchor="middle" fill="#F8FAFC" font-size="11.5" font-family="IBM Plex Sans">adapter/CLI</text>
+<line x1="766" y1="44" x2="766" y2="452" stroke="#334155" stroke-dasharray="4 4"/>
+
+<line x1="80" y1="72" x2="260" y2="72" stroke="#7A88A0" marker-end="url(#pa)"/>
+<text x="90" y="66" fill="#CBD5E1" font-size="11" font-family="IBM Plex Mono">ensure(thread)</text>
+<line x1="260" y1="102" x2="440" y2="102" stroke="#7A88A0" marker-end="url(#pa)"/>
+<text x="270" y="96" fill="#CBD5E1" font-size="11" font-family="IBM Plex Mono">Secret{token} ← PairingService 随机生成</text>
+<line x1="260" y1="140" x2="440" y2="140" stroke="#7A88A0" marker-end="url(#pa)"/>
+<text x="270" y="126" fill="#CBD5E1" font-size="11" font-family="IBM Plex Mono">create Pod（模板渲染）</text>
+<text x="270" y="156" fill="#7DD3FC" font-size="10" font-family="IBM Plex Mono">/workspace ← {user}/{workspace_thread_id}/workspace</text>
+<text x="270" y="171" fill="#7DD3FC" font-size="10" font-family="IBM Plex Mono">/skills    ← {user}/{thread_id}/skills（只读）</text>
+<line x1="440" y1="196" x2="615" y2="196" stroke="#7A88A0" marker-end="url(#pa)"/>
+<text x="450" y="190" fill="#CBD5E1" font-size="11" font-family="IBM Plex Mono">Pod 调度 · Bridge 启动</text>
+<line x1="615" y1="224" x2="766" y2="224" stroke="#7A88A0" marker-end="url(#pa)"/>
+<text x="622" y="218" fill="#CBD5E1" font-size="11" font-family="IBM Plex Mono">stdio 拉起 adapter</text>
+
+<rect x="66" y="248" width="700" height="26" rx="5" fill="#241B0C" stroke="#F59E0B" stroke-opacity=".5"/>
+<text x="76" y="265" fill="#FDE68A" font-size="10.5" font-family="IBM Plex Mono">配对：WS 握手 header 带 token + thread_id —— Bridge 校验不过直接拒绝握手（K8s 网络是平的，「在集群里」不是边界）</text>
+
+<line x1="80" y1="298" x2="615" y2="298" stroke="#7A88A0" marker-end="url(#pa)"/>
+<text x="90" y="292" fill="#CBD5E1" font-size="11" font-family="IBM Plex Mono">WS connect（Authorization: token · X-Thread-Id）</text>
+<line x1="615" y1="322" x2="80" y2="322" stroke="#22C55E" marker-end="url(#pg)"/>
+<text x="90" y="338" fill="#86EFAC" font-size="11" font-family="IBM Plex Mono">101 Switching Protocols</text>
+
+<line x1="80" y1="366" x2="615" y2="366" stroke="#7A88A0" marker-end="url(#pa)"/>
+<text x="90" y="360" fill="#CBD5E1" font-size="11" font-family="IBM Plex Mono">initialize</text>
+<line x1="615" y1="392" x2="80" y2="392" stroke="#22C55E" marker-end="url(#pg)"/>
+<text x="90" y="408" fill="#86EFAC" font-size="11" font-family="IBM Plex Mono">AgentCaps{loadSession, resume, …} → caps_probed 落库</text>
+<rect x="66" y="420" width="560" height="24" rx="5" fill="#101728" stroke="#38BDF8" stroke-opacity=".4"/>
+<text x="76" y="436" fill="#7DD3FC" font-size="10.5" font-family="IBM Plex Mono">probed ≠ declared ⇒ caps.mismatch 事件（显式，不静默收窄能力）</text>
+</svg>
+    <figcaption>凭证随 Pod 生灭：token 只存在于这个 Pod 的 Secret 与 server 内存，轮换 = 重建 Pod。</figcaption>
+  </figure>
+</section>
+
+<!-- ══════════════ 9 ══ -->
+<section id="s9">
+  <h2><span class="num">09</span>时序：一轮 prompt（含审批）</h2>
+
+  <figure>
+<svg viewBox="0 0 830 560" role="img" aria-labelledby="acp2-t acp2-d">
+<title id="acp2-t">一轮 prompt 的完整链路</title>
+<desc id="acp2-d">执行器按 spec.kind 选中 AcpRuntime。runtime 确保 Pod 与 CLI 会话就绪后发 session/prompt，Bridge 驱动 CLI 执行。执行期间 session/update 流经 translate 变成 TraceEvent 进入既有的事件链路；CLI 请求权限时经 request_permission 走平台 Approval 表与前端弹窗，决定原路返回。prompt 响应携带 StopReason，映射成终态事件，随后 runtime 对比工作区前缀补发 file.written。</desc>
+<defs>
+<marker id="qa" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#7A88A0"/></marker>
+<marker id="qg" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#22C55E"/></marker>
+<marker id="qy" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#F59E0B"/></marker>
+</defs>
+<rect x="10" y="14" width="132" height="30" rx="7" fill="#131A2E" stroke="#334155"/>
+<text x="76" y="34" text-anchor="middle" fill="#F8FAFC" font-size="11.5" font-family="IBM Plex Sans">inprocess 执行器</text>
+<line x1="76" y1="44" x2="76" y2="544" stroke="#334155" stroke-dasharray="4 4"/>
+<rect x="180" y="14" width="132" height="30" rx="7" fill="#131A2E" stroke="#38BDF8" stroke-opacity=".7"/>
+<text x="246" y="34" text-anchor="middle" fill="#F8FAFC" font-size="11.5" font-family="IBM Plex Sans">AcpRuntime</text>
+<line x1="246" y1="44" x2="246" y2="544" stroke="#334155" stroke-dasharray="4 4"/>
+<rect x="350" y="14" width="132" height="30" rx="7" fill="#131A2E" stroke="#334155"/>
+<text x="416" y="34" text-anchor="middle" fill="#F8FAFC" font-size="11.5" font-family="IBM Plex Sans">translate（纯）</text>
+<line x1="416" y1="44" x2="416" y2="544" stroke="#334155" stroke-dasharray="4 4"/>
+<rect x="520" y="14" width="130" height="30" rx="7" fill="#131A2E" stroke="#F59E0B" stroke-opacity=".6"/>
+<text x="585" y="34" text-anchor="middle" fill="#F8FAFC" font-size="11.5" font-family="IBM Plex Sans">Bridge + CLI</text>
+<line x1="585" y1="44" x2="585" y2="544" stroke="#334155" stroke-dasharray="4 4"/>
+<rect x="692" y="14" width="128" height="30" rx="7" fill="#131A2E" stroke="#334155"/>
+<text x="756" y="34" text-anchor="middle" fill="#F8FAFC" font-size="11.5" font-family="IBM Plex Sans">用户（审批）</text>
+<line x1="756" y1="44" x2="756" y2="544" stroke="#334155" stroke-dasharray="4 4"/>
+
+<line x1="76" y1="70" x2="246" y2="70" stroke="#7A88A0" marker-end="url(#qa)"/>
+<text x="86" y="64" fill="#CBD5E1" font-size="11" font-family="IBM Plex Mono">runtime.run_turn(prepared, run_id)  ← spec.kind=="acp"</text>
+<line x1="246" y1="98" x2="585" y2="98" stroke="#7A88A0" marker-end="url(#qa)"/>
+<text x="256" y="92" fill="#CBD5E1" font-size="11" font-family="IBM Plex Mono">ensure pod + ensure session（§08 / §10）</text>
+<line x1="246" y1="128" x2="585" y2="128" stroke="#7A88A0" marker-end="url(#qa)"/>
+<text x="256" y="122" fill="#CBD5E1" font-size="11" font-family="IBM Plex Mono">session/prompt（本轮任务书）</text>
+
+<rect x="232" y="146" width="420" height="20" rx="5" fill="#0D1220" stroke="#263449"/>
+<text x="242" y="160" fill="#7A88A0" font-size="10" font-family="IBM Plex Mono">—— 执行期间：session/update 流 ——</text>
+
+<line x1="585" y1="188" x2="246" y2="188" stroke="#F59E0B" marker-end="url(#qy)"/>
+<text x="256" y="182" fill="#FDE68A" font-size="11" font-family="IBM Plex Mono">agent_message_chunk / tool_call / plan …</text>
+<line x1="246" y1="212" x2="416" y2="212" stroke="#7A88A0" marker-end="url(#qa)"/>
+<text x="256" y="206" fill="#CBD5E1" font-size="11" font-family="IBM Plex Mono">translate(update)</text>
+<line x1="416" y1="236" x2="76" y2="236" stroke="#22C55E" marker-end="url(#qg)"/>
+<text x="86" y="252" fill="#86EFAC" font-size="11" font-family="IBM Plex Mono">TraceEvent（message.delta / tool.* / todos.updated）→ 既有 relay/persist</text>
+
+<rect x="62" y="270" width="704" height="24" rx="5" fill="#241B0C" stroke="#F59E0B" stroke-opacity=".5"/>
+<text x="72" y="286" fill="#FDE68A" font-size="10.5" font-family="IBM Plex Mono">审批回路 —— bridge → server 方向唯一需要等响应的请求</text>
+
+<line x1="585" y1="316" x2="246" y2="316" stroke="#F59E0B" marker-end="url(#qy)"/>
+<text x="256" y="310" fill="#FDE68A" font-size="11" font-family="IBM Plex Mono">session/request_permission(toolCall, 选项)</text>
+<line x1="246" y1="342" x2="756" y2="342" stroke="#7A88A0" marker-end="url(#qa)"/>
+<text x="256" y="336" fill="#CBD5E1" font-size="11" font-family="IBM Plex Mono">Approval 行 + approval.required 事件（标注来源 agent）</text>
+<line x1="756" y1="368" x2="246" y2="368" stroke="#22C55E" marker-end="url(#qg)"/>
+<text x="300" y="384" fill="#86EFAC" font-size="11" font-family="IBM Plex Mono">决定（approve/reject · 超时=拒）</text>
+<line x1="246" y1="396" x2="585" y2="396" stroke="#7A88A0" marker-end="url(#qa)"/>
+<text x="256" y="390" fill="#CBD5E1" font-size="11" font-family="IBM Plex Mono">决定原路回 CLI（allow_once / reject_once）</text>
+
+<line x1="585" y1="440" x2="246" y2="440" stroke="#22C55E" marker-end="url(#qg)"/>
+<text x="256" y="434" fill="#86EFAC" font-size="11" font-family="IBM Plex Mono">prompt 响应：StopReason + usage</text>
+<line x1="246" y1="468" x2="76" y2="468" stroke="#22C55E" marker-end="url(#qg)"/>
+<text x="86" y="484" fill="#86EFAC" font-size="11" font-family="IBM Plex Mono">message.completed · usage.updated · run.finished（stop_reason 附加字段）</text>
+<rect x="62" y="500" width="620" height="24" rx="5" fill="#101728" stroke="#38BDF8" stroke-opacity=".4"/>
+<text x="72" y="516" fill="#7DD3FC" font-size="10.5" font-family="IBM Plex Mono">轮末：对比 workspace 前缀清单 → 补发 file.written（不从 tool_call 里猜路径）</text>
+</svg>
+    <figcaption>执行器前后段（load/prepare 与 persist/锁释放）与 native 完全共用 —— 图里只画了分岔的中段。</figcaption>
+  </figure>
+</section>
+
+<!-- ══════════════ 10 ══ -->
+<section id="s10">
+  <h2><span class="num">10</span>时序：恢复、lost 与取消</h2>
+
+  <figure>
+<svg viewBox="0 0 830 420" role="img" aria-labelledby="acp3-t acp3-d">
+<title id="acp3-t">会话恢复的两条路与取消</title>
+<desc id="acp3-d">第二轮开始时，若 thread 已有 external_session_id 且探测到的能力位允许恢复，则 session/load 恢复 CLI 会话；能力位不允许时把会话显式标为 lost 并发事件，然后 session/new 新建，新的 external_session_id 覆盖落库。取消路径：用户取消经 CancelToken 传导为 session/cancel 通知，CLI 停止后 prompt 响应带 StopReason=cancelled，映射为 run.cancelled。</desc>
+<defs>
+<marker id="ra" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#7A88A0"/></marker>
+<marker id="rg" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#22C55E"/></marker>
+<marker id="rr" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#EF4444"/></marker>
+</defs>
+<rect x="10" y="14" width="150" height="30" rx="7" fill="#131A2E" stroke="#38BDF8" stroke-opacity=".7"/>
+<text x="85" y="34" text-anchor="middle" fill="#F8FAFC" font-size="11.5" font-family="IBM Plex Sans">AcpRuntime</text>
+<line x1="85" y1="44" x2="85" y2="404" stroke="#334155" stroke-dasharray="4 4"/>
+<rect x="230" y="14" width="150" height="30" rx="7" fill="#131A2E" stroke="#334155"/>
+<text x="305" y="34" text-anchor="middle" fill="#F8FAFC" font-size="11.5" font-family="IBM Plex Sans">thread 表</text>
+<line x1="305" y1="44" x2="305" y2="404" stroke="#334155" stroke-dasharray="4 4"/>
+<rect x="450" y="14" width="150" height="30" rx="7" fill="#131A2E" stroke="#F59E0B" stroke-opacity=".6"/>
+<text x="525" y="34" text-anchor="middle" fill="#F8FAFC" font-size="11.5" font-family="IBM Plex Sans">Bridge + CLI</text>
+<line x1="525" y1="44" x2="525" y2="404" stroke="#334155" stroke-dasharray="4 4"/>
+<rect x="660" y="14" width="150" height="30" rx="7" fill="#131A2E" stroke="#334155"/>
+<text x="735" y="34" text-anchor="middle" fill="#F8FAFC" font-size="11.5" font-family="IBM Plex Sans">事件流</text>
+<line x1="735" y1="44" x2="735" y2="404" stroke="#334155" stroke-dasharray="4 4"/>
+
+<rect x="70" y="60" width="560" height="20" rx="5" fill="#0D1220" stroke="#263449"/>
+<text x="80" y="74" fill="#7A88A0" font-size="10" font-family="IBM Plex Mono">恢复路径 —— external_session_id 非空 且 caps_probed.resume</text>
+<line x1="85" y1="102" x2="525" y2="102" stroke="#7A88A0" marker-end="url(#ra)"/>
+<text x="95" y="96" fill="#CBD5E1" font-size="11" font-family="IBM Plex Mono">session/load(external_session_id)</text>
+<line x1="525" y1="128" x2="85" y2="128" stroke="#22C55E" marker-end="url(#rg)"/>
+<text x="95" y="144" fill="#86EFAC" font-size="11" font-family="IBM Plex Mono">CLI 记得上次改过什么 —— 直接 prompt</text>
+
+<rect x="70" y="168" width="640" height="20" rx="5" fill="#0D1220" stroke="#263449"/>
+<text x="80" y="182" fill="#7A88A0" font-size="10" font-family="IBM Plex Mono">降级路径 —— caps 不允许（或 load 失败）：显式 lost，绝不静默新建</text>
+<line x1="85" y1="210" x2="735" y2="210" stroke="#EF4444" marker-end="url(#rr)"/>
+<text x="95" y="204" fill="#FCA5A5" font-size="11" font-family="IBM Plex Mono">session.lost 事件（用户看得见「上下文丢了」）</text>
+<line x1="85" y1="238" x2="525" y2="238" stroke="#7A88A0" marker-end="url(#ra)"/>
+<text x="95" y="232" fill="#CBD5E1" font-size="11" font-family="IBM Plex Mono">session/new(cwd=/workspace, MCP 列表)</text>
+<line x1="85" y1="266" x2="305" y2="266" stroke="#7A88A0" marker-end="url(#ra)"/>
+<text x="95" y="260" fill="#CBD5E1" font-size="11" font-family="IBM Plex Mono">UPDATE external_session_id = 新 id</text>
+
+<rect x="70" y="296" width="500" height="20" rx="5" fill="#0D1220" stroke="#263449"/>
+<text x="80" y="310" fill="#7A88A0" font-size="10" font-family="IBM Plex Mono">取消路径 —— 与 native 共用同一个 CancelToken</text>
+<line x1="85" y1="328" x2="525" y2="328" stroke="#7A88A0" marker-end="url(#ra)"/>
+<text x="95" y="322" fill="#CBD5E1" font-size="11" font-family="IBM Plex Mono">cancel.is_cancelled() → session/cancel（notification）</text>
+<line x1="525" y1="356" x2="85" y2="356" stroke="#22C55E" marker-end="url(#rg)"/>
+<text x="95" y="372" fill="#86EFAC" font-size="11" font-family="IBM Plex Mono">prompt 响应 StopReason=cancelled → run.cancelled</text>
+<rect x="70" y="384" width="640" height="0" fill="none"/>
+</svg>
+    <figcaption>子会话同样走这三条路 —— <code>external_session_id</code> 就建在 thread 上（迁移 0007），子会话也是 thread。</figcaption>
+  </figure>
+
+  <div class="callout danger">
+    <span class="label">WS 断线 ≠ 会话丢失</span>
+    <p>断线分两种，处置完全不同：<b>连接层断</b>（网络抖动、server 重启）—— Pod 还在、CLI 会话还在，重连 + <code>session/load</code> 即可，什么都不丢；<b>Pod 层没</b>（节点故障、OOMKill、闲置回收后镜像升级）—— CLI 进程状态没了，但状态目录在 NAS（执行环境 §04 选 NAS 而不是「退出前 sync」的原因正是这些不给机会同步的死法），新 Pod 挂同一卷后 <code>session/load</code> 仍可恢复。只有 caps 不支持 resume 或状态目录真损坏时才落到 <code>lost</code>。</p>
+  </div>
+</section>
+
+<!-- ══════════════ 11 ══ -->
+<section id="s11">
+  <h2><span class="num">11</span>数据模型与配置增量</h2>
+
+  <pre><code><span class="tok-c"># 迁移 0008_acp.py —— 增量很小，这正是「acp run 也是普通 run」的证据</span>
+op.add_column(<span class="tok-s">"run"</span>, sa.Column(<span class="tok-s">"stop_reason"</span>, sa.String(<span class="tok-n">32</span>), nullable=<span class="tok-k">True</span>))
+<span class="tok-c">#   ★ native 也用它（end_turn / max_steps…）——「撞上限」与「真失败」分得开，</span>
+<span class="tok-c">#     这是 subagent 设计里欠着的那条低成本改进，随本期一起还</span>
+
+<span class="tok-c"># agent_version 增 caps_probed JSON（首连 initialize 的实测结果，§05）</span>
+op.add_column(<span class="tok-s">"agent_version"</span>, sa.Column(<span class="tok-s">"caps_probed"</span>, JSONType, nullable=<span class="tok-k">True</span>))
+
+<span class="tok-c"># thread.external_session_id 已存在（迁移 0007）—— 本期开始写它</span></code></pre>
+
+  <pre><code><span class="tok-c"># config.py 增量</span>
+acp_ws_connect_timeout_s: <span class="tok-t">int</span> = <span class="tok-n">10</span>      <span class="tok-c"># 握手超时（Pod 刚调度时会慢）</span>
+acp_prompt_idle_timeout_s: <span class="tok-t">int</span> = <span class="tok-n">120</span>    <span class="tok-c"># 两条 update 之间的最大静默 —— CLI 卡死的探测器；</span>
+                                        <span class="tok-c"># 整轮上限仍归 spec.limits.timeout_s（与 native 同源）</span>
+pod_namespace: <span class="tok-t">str</span> = <span class="tok-s">"atlas-sessions"</span>
+pod_idle_ttl_s: <span class="tok-t">int</span> = <span class="tok-n">1800</span>              <span class="tok-c"># 与 sandbox_idle_ttl_s 同语义：停不删</span>
+pod_quota_per_tenant: <span class="tok-t">int</span> = <span class="tok-n">10</span>          <span class="tok-c"># 执行环境 §09：没有配额，一个租户能占满集群</span></code></pre>
+
+  <div class="callout rule">
+    <span class="label">不加 pod 表</span>
+    <p>Pod 状态从 K8s label 派生（<code>atlas/thread-id</code>、<code>atlas/user-id</code>），与 SandboxManager 用 Docker label 同一纪律：两处真相必然漂移，账本只留一处。「哪个会话有 Pod」查 K8s，「Pod 该不该活着」对照 thread 表 —— reap 的输入就是这两个集合的差。</p>
+  </div>
+</section>
+
+<!-- ══════════════ 12 ══ -->
+<section id="s12">
+  <h2><span class="num">12</span>落地顺序</h2>
+
+  <div class="step">
+    <h4>步骤 1 · atlas_acp 线协议包 + translate 纯函数</h4>
+    <p>不碰任何执行链路。<b>验证</b>：§06 的表逐行成为 translate 的单测；未知 kind 不产事件但计数。</p>
+  </div>
+  <div class="step">
+    <h4>步骤 2 · AgentRuntime 接缝 + NativeRuntime 收编</h4>
+    <p>executor/runtime.py 落地，inprocess 中段改调 <code>runtime.run_turn</code>。纯重构，acp 还不存在。<b>验证</b>：全量套件基线不变 —— 这一步的回归风险最高（动执行器主路径），单独合入。</p>
+  </div>
+  <div class="step">
+    <h4>步骤 3 · Bridge + 本地假 adapter 联调</h4>
+    <p>bridge 进程 + 一个脚本化假 adapter（按剧本回 update 流），不需要 K8s：docker 起 bridge，server 直连。<b>验证</b>：配对拒绝无 token 的握手；单活跃 prompt 第二个请求 4409；假 adapter 崩溃 → run.failed(runtime_crashed)。</p>
+  </div>
+  <div class="step">
+    <h4>步骤 4 · AcpRuntime 端到端（仍用假 adapter）</h4>
+    <p>spec.kind=acp 的 agent 全链路：prompt → update 流 → SSE → 前端。<b>验证标准就是那句话：web 一行不改</b>。加审批回路：request_permission → 弹窗 → 决定回传。</p>
+  </div>
+  <div class="step">
+    <h4>步骤 5 · PodManager + 真 CLI</h4>
+    <p>K8s 模板、配对 Secret、真 Claude Code adapter。<b>验证</b>：执行环境 §12 的待验证清单（resume 真实可用性、状态目录 NAS 恢复、优雅终止三步）。</p>
+    <p><b>网络取开放策略</b>：不加 NetworkPolicy —— adapter 本来就要出网（拉依赖、调模型网关、访问用户给的 API），限制入口只会把一类正常需求变成难查的超时。因此<b>入口的唯一闸门是握手上的 per-Pod token</b>，不是网络位置：K8s 的网络是平的，"在集群里"从来不是安全边界。</p>
+    <div class="callout warn" style="margin:10px 0 0">
+      <span class="label">修正：真集群 + 真对象存储跑通后的五处返工</span>
+      <p>本节与 §04、§08 写的 Pod 模型，在对着 k3s 与真 GCS 跑通之前有五处是错的。它们的共同点是<b>内存后端全都测不出来</b> —— 那个后端只把 manifest 当字典存起来，既不校验字段，也没有"启动"这个概念。</p>
+      <ol>
+        <li><b>双 subPath 挂不了 FUSE。</b>subPath 是 kubelet 在容器启动时做的 bind mount，<b>不跟随</b>之后在卷里建立的 FUSE 挂载 —— 主容器看到的会一直是空目录，而且不报错。现在改成两个共享卷 + 两个挂载器 sidecar，挂载语义（workspace 挂父会话、skills 挂自己且只读）不变，只是落点从 subPath 换到了 rclone 的 remote 路径。</li>
+        <li><b>挂载凭据根本没传。</b>CSI 卷只写了 bucket 与 path，没有任何 <code>nodePublishSecretRef</code>；也就是说这条路在任何真集群上都不可能挂成功。</li>
+        <li><b>Pod 地址指向一个不存在的 Service。</b><code>_url</code> 返回 <code>ws://&lt;pod&gt;.&lt;ns&gt;:8900</code>，注释写着"由 cluster 侧的 Service 兜底"，而那个 Service 从来没有被创建过。现在直接用 Pod IP。</li>
+        <li><b><code>ensure</code> 不等 Pod 就绪。</b>它在 Pod 还处于 ContainerCreating 时就把 URL 与 token 交给 server，而 AcpChannel 的连接超时只有 10s 且不重试 —— <b>每个新会话的第一轮必然失败</b>，报的还是"连不上 bridge"，一个看起来像网络问题的调度问题。</li>
+        <li><b>只写 <code>runAsNonRoot</code> 会让 Pod 起不来。</b>没有具体 <code>runAsUser</code> 时，kubelet 无法在启动前判定镜像是否 root，除非镜像自己在 USER 里写了<b>数字</b> UID，否则一律 <code>CreateContainerConfigError</code>。这等于把"镜像必须声明数字 USER"变成一条不成文要求，而违反它的表现是 Pod 根本起不来。</li>
+      </ol>
+      <p>另有两处只在真跑时才会暴露：rclone 默认拒绝挂到"已是挂载点"的目录上（需 <code>--allow-non-empty</code>，否则整个 Pod 卡在 Init:CrashLoopBackOff）；Pod 的 Ready 在没有 readinessProbe 时只代表"容器进程起来了"，而 bridge 还要拉起 adapter 才会 bind 端口 —— 那几秒是个<b>稳定复现</b>的竞态。</p>
+      <p style="margin-bottom:0">这批问题与上一轮 InMemoryBackend 掩盖三个 K8s bug、moto 掩盖 GCS 校验和 bug 是同一件事的第三次重演：<b>模拟器测的是"我以为的协议"，真服务测的是协议本身</b>。</p>
+    </div>
+    <div class="callout warn" style="margin:10px 0 0">
+      <span class="label">接真 Claude Code CLI：又两处，其中一处是整个方案的地基</span>
+      <p>假 adapter 按剧本回话，它<b>不调模型、不写状态、不实现 resume</b>。换成真 <code>@zed-industries/claude-code-acp</code>（模型走 DeepSeek 的 Anthropic 兼容端点）之后：</p>
+      <ol>
+        <li><b>模板没有 adapter 的凭据通路。</b>它只注入 <code>ATLAS_*</code>，于是真 CLI 拿不到任何模型配置，<code>session/new</code> 直接失败。现在按 <code>cli_type</code> 注入（claude-code ⇒ <code>ANTHROPIC_BASE_URL</code> / <code>ANTHROPIC_MODEL</code> / <code>ANTHROPIC_SMALL_FAST_MODEL</code>，凭据走 Secret）。小模型也要一起指过去 —— 不指的话 CLI 会去找端点上不存在的 haiku，失败发生在生成标题这类旁路上，很难联想到模型配置。</li>
+        <li><b>CLI 的状态目录必须持久化，否则 resume 是假的。</b>Claude Code 把会话记录写成 <code>~/.claude/projects/&lt;cwd-slug&gt;/&lt;sessionId&gt;.jsonl</code>。HOME 放 emptyDir 的话，resume 只在 Pod 活着时成立 —— 而 Pod 会被闲置回收，于是表现成<b>悄悄失忆</b>：恢复"成功"了，但上一轮不见了。现在多挂一个 <code>/state</code>（会话自己的 <code>system/cli-home</code> 前缀）。所幸那是纯 JSONL 而不是 SQLite，挂在对象存储上没有文件锁问题。</li>
+      </ol>
+      <p><b>已验证</b>：<code>session/load</code> 恢复上一轮上下文 —— 同一个 Pod 内（含另起一个 adapter 进程）CLI 确实记得上一轮的暗号。</p>
+      <div class="callout" style="margin:10px 0 0">
+        <span class="label">跨 Pod 重建的 resume：通了，但踩到一条值得记住的坑</span>
+        <p>删掉 Pod、重建、<code>session/load</code> 同一个 sessionId —— CLI 记得上一轮的暗号，恢复的依据只可能是桶里那份 HOME。这是 <a href="#s1">§01</a> 那句"第二次委派时 CLI 记得上次改过什么"第一次真正被证明。</p>
+        <p>但它一开始<b>三次里挂两次</b>，真因是：<b>对象存在 ≠ 已经持久化</b>。rclone 会先把一个不完整的版本传上去（实测 139 字节），随后才用完整的覆盖（2124 字节）。撞在中间那段时间重建，新 Pod 拿到的是个截断的会话记录，而 <code>--resume</code> 读它会让 CLI 子进程直接退出 —— adapter 报的是 <code>Query closed before response received</code>，一句完全看不出"文件是半截的"的话。</p>
+        <p style="margin-bottom:0"><b>排查时我差点得出错误结论</b>：在<b>另一次</b>运行里量到文件是完整的，就以为截断已被排除，转而去怀疑 FUSE。跨运行拼观测在这种时灵时不灵的问题上不成立 —— 每一条证据都得来自同一次失败。</p>
+      </div>
+      <div class="callout ok" style="margin:10px 0 0">
+        <span class="label">镜像已构建，最后一块替身拆掉了</span>
+        <p><code>docker/bridge/Dockerfile</code> 把 node、adapter 与 bridge 打进一个镜像（Python 3.14 + Node 24，同一个 Debian trixie 基础 —— 跨版本拷 node 会缺 <code>libatomic</code>，而它的表现是容器起来之后 adapter 才报"找不到共享库"，离根因很远）。<b>判据是 Pod spec 里一个 <code>hostPath</code> 都没有</b>：还挂着的话，跑的就仍然是宿主上那份 node 与 CLI，依赖、入口点、数字 UID 全都绕过去了。这条判据本身也有测试钉着。</p>
+        <p>构建走 <code>make bridge-image</code>（BuildKit 独立二进制 → OCI 归档 → <code>ctr import</code>）。这套环境里没有 docker 守护进程，而镜像是本地构建的、registry 上不存在，所以 Pod 必须靠 import 而不是 pull。</p>
+        <p style="margin-bottom:0"><b>顺带修掉一个假阳性</b>：判断"镜像在不在"原先用的是 <code>crictl images -q &lt;ref&gt;</code> —— 它<b>根本不过滤</b>，给个不存在的名字也照样列出所有镜像。拿它当判据，只要节点上有任意镜像就会判成"生产镜像已就绪"，于是测试会声称自己跑的是生产镜像、实际跑的是 hostPath 那套。这种假阳性比直接失败坏得多：它让"没验过"看起来像"验过了"。改用 <code>crictl inspecti</code>。</p>
+      </div>
+      <p style="margin-bottom:0"><b>另一个已知窗口</b>：rclone 的回写有延迟（<code>--vfs-write-back</code>，已从默认 5s 收到 1s）。文件关闭到真正上传之间数据只在容器本地，这期间 Pod 被<b>突然</b>杀掉会丢掉最后一轮的记录，而丢法是静默的。实测还看到对象会先以<b>不完整</b>的大小出现、随后才被完整覆盖 —— 所以"对象已存在"不能当作"已经持久化"来用。</p>
+    </div>
+  </div>
+  <div class="step">
+    <h4>步骤 6 · acp 子智能体</h4>
+    <p>native 主 agent 委派给 <code>kind=acp</code> 的子智能体（「让 Claude Code 去改这三个文件」）。<b>验证</b>：第二次委派 CLI 记得上次改过什么；不支持 resume 的 CLI 标 <code>lost</code>。</p>
+    <div class="callout warn" style="margin:10px 0 0">
+      <span class="label">修正：不是「零新增」</span>
+      <p>初稿说这一步机制上零新增。实施时发现两处必须补：</p>
+      <ul>
+        <li><code>build_graph</code> 只被 NativeRuntime 调用 ⇒ <b>acp agent 永远拿不到 <code>task</code> 工具</b>，它配的 <code>subagents</code> 会被静默忽略。现在 validate 直接拒（<a href="#s13">§13.2</a> 不许「配了却不生效」）</li>
+        <li><code>spec_for_subagent</code> 原先硬编码 <code>kind=parent.kind</code> ⇒ native 父只能产出 native 子，<b>acp 子智能体根本造不出来</b>。<code>SubAgentSpec</code> 因此加了自己的 <code>kind</code> / <code>cli</code></li>
+      </ul>
+      <p style="margin-bottom:0">补完之后<b>委派链路本身确实一行未改</b> —— 子会话也是 thread，AcpRuntime 对它原样生效。<a href="#s2">§02</a> 那条对称性成立，只是它保证的是「链路不用改」，不是「什么都不用加」。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════ 13 ══ -->
+<section id="s13">
+  <h2><span class="num">13</span>风险与不做的事</h2>
+
+  <table>
+    <thead><tr><th>风险</th><th>表现</th><th>处置</th></tr></thead>
+    <tbody>
+      <tr><td>adapter 行为漂移</td><td>CLI/adapter 升级后 update 形态变化，翻译静默丢事件</td><td>未知 kind 计数指标 + 告警；Pod 镜像钉版本（cli/adapter/bridge 三件套一起发版）</td></tr>
+      <tr><td>resume 实测不可用</td><td>declared 说能、连上发现不能，或 load 成功但上下文残缺</td><td>caps.mismatch 显式事件；lost 是可见状态。<b>不要退回自研 Bridge</b> —— 会连带失去 request_permission 标准回路（执行环境 §11）</td></tr>
+      <tr><td>Pod 供给延迟</td><td>首轮 prompt 等 Pod 调度 + 镜像拉取，可达分钟级</td><td>会话创建即预热 Pod（与技能拷贝同时机 —— 用户对「新建会话」的等待容忍度更高）；镜像预拉节点</td></tr>
+      <tr><td>WS 长连接被中间件断</td><td>LB/网关空闲超时悄悄断连，表现为随机的「CLI 没反应」</td><td>应用层心跳（channel 与 bridge 双向）；断连即重连 + session/load，且发 debug 事件留痕</td></tr>
+    </tbody>
+  </table>
+
+  <table>
+    <thead><tr><th>不做</th><th>理由</th></tr></thead>
+    <tbody>
+      <tr><td><b>镜像模式</b>（CLI 状态双向同步回平台）</td><td>概设期已裁定只做驱动模式。message 表存的是「平台视角的对话」，CLI 内部上下文归 CLI</td></tr>
+      <tr><td><b>自研 Bridge 协议</b></td><td>审批、恢复、枚举、清理在 ACP 里是标准语义；换 CLI 只要对方有合规 adapter</td></tr>
+      <tr><td><b>Bridge 自动批准任何权限</b></td><td>红线。写死自动 allow = 前端审批卡片成摆设，文件写入与命令执行的权限实际交给模型</td></tr>
+      <tr><td><b>allow_always 透传</b></td><td>「永远允许」是全局策略，归权限管理篇，不能从一次弹窗溜进来</td></tr>
+      <tr><td><b>pod 状态表</b></td><td>K8s label 是唯一账本（§11）</td></tr>
+      <tr><td><b>acp agent 用平台内置工具</b></td><td>CLI 自带文件/命令工具，平台工具对它没有意义；能控的只有 MCP 列表与审批闸门（Agent 管理 §05）</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<footer>
+  <p>相关文档：<a href="../runtime.html">执行环境概设</a>（Bridge/Pod 链路与安全）· <a href="../agent.html">Agent 管理设计</a>（type/cli_type 与能力推导）· <a href="subagent.html">Subagent 重设计</a>（子会话与 external_session_id）· <a href="structure.html">目录与包结构</a>。</p>
+</footer>
+
+</main>
+</div>
+</body>
+</html>

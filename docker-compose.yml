@@ -1,0 +1,241 @@
+# 本地开发依赖服务。非标端口，避免与 brew 的 postgresql@16 / redis 冲突。
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: atlas-pg
+    environment:
+      POSTGRES_USER: atlas
+      POSTGRES_PASSWORD: atlas
+      POSTGRES_DB: atlas
+    ports: ["5433:5432"]
+    volumes: ["atlas-pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U atlas -d atlas"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    container_name: atlas-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports: ["6380:6379"]
+    volumes: ["atlas-redisdata:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # 本机的 S3 服务。阿里云 OSS / GCS 与它是同一套 S3 API，服务端不区分 ——
+  # 换真对象存储时改的只是 .env 里的 OSS_* 几个值。
+  #
+  # ★ 镜像只在 quay.io：minio/minio 已从 Docker Hub 下架，照着老教程
+  #   docker pull minio/minio 会得到 "repository does not exist"。
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    container_name: atlas-minio
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: atlas
+      MINIO_ROOT_PASSWORD: atlas-local-dev
+    ports: ["9000:9000", "9001:9001"]  # 9000 = S3 API，9001 = 控制台
+    volumes: ["atlas-miniodata:/data"]
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # 一次性建桶，建完即退。mc 就在 minio 镜像里，不必多引一个镜像。
+  minio-init:
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    container_name: atlas-minio-init
+    depends_on:
+      minio: {condition: service_healthy}
+    entrypoint: ["/bin/sh", "-c"]
+    # ★ 必须是**单元素数组**：command 写成字符串时 compose 会按 shell 词法拆成
+    #   多个参数，sh -c 只认第一个当脚本，剩下的成了 $0/$1 —— mc 会以「无参数」
+    #   被调用，打一屏 usage 就退出。
+    command:
+      - >-
+        mc alias set atlas http://minio:9000 atlas atlas-local-dev &&
+        mc mb --ignore-existing atlas/atlas-dev
+    restart: "no"
+
+  # 记忆的向量库（记忆设计 §03）。Mem0 的默认后端，qdrant-client 本来
+  # 就是 mem0ai 的必要依赖，不必再引第三方。
+  #
+  # ★ 它跟着 make up 起，而不是挂 profile —— 记忆的开关在 server 侧
+  #   （MEMORY_ENABLED，默认关）。把开关放两处只会让「到底开没开」有两个
+  #   答案。Qdrant 空跑的代价很小。
+  qdrant:
+    image: qdrant/qdrant:v1.19.1
+    container_name: atlas-qdrant
+    ports: ["6333:6333"]  # 6333 HTTP（含 UI /dashboard）
+    volumes: ["atlas-qdrantdata:/qdrant/storage"]
+    healthcheck:
+      # ★ 镜像里没有 curl/wget，用 qdrant 自带的二进制探活
+      test: ["CMD", "/qdrant/qdrant", "--version"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # ── 遥测（可观测性设计 §02）───────────────────────────────────────
+  #
+  # Collector 是唯一的收口点：脱敏、富化、分流都在它这里做。server 只往
+  # 它发 OTLP，不知道下游是 Jaeger 还是 Langfuse —— 所以「要不要 Langfuse」
+  # 是换一份配置的事，代码一行不用改。
+  #
+  # ★ 用 core 版而不是 contrib：本仓的配置只用到 otlp 收发与
+  #   attributes/resource/batch，全在 core 里。contrib 有 500MB+，
+  #   为没用到的组件付这个代价不值。将来脱敏要用 redaction/transform
+  #   时再换镜像，是一行的事。
+  otel-collector:
+    image: otel/opentelemetry-collector:0.160.0
+    container_name: atlas-otel-collector
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      # ★ 换配置就是换下游。默认只导 Jaeger；要加 Langfuse：
+      #     OTEL_COLLECTOR_CONFIG=collector-langfuse.yaml \
+      #       docker compose --profile langfuse up -d
+      #   server 一行不用改 —— 这就是分流架构的回报。
+      - ./deploy/local/otel/${OTEL_COLLECTOR_CONFIG:-collector.yaml}:/etc/otelcol/config.yaml:ro
+    ports: ["4317:4317", "4318:4318"]  # 4317 gRPC / 4318 HTTP
+    depends_on: [jaeger]
+
+  # ★ Jaeger v2 本身就是 OTel Collector 的一个发行版，原生收 OTLP ——
+  #   不需要 v1 (all-in-one) 时代的 COLLECTOR_OTLP_ENABLED=true。
+  jaeger:
+    image: jaegertracing/jaeger:2.21.0
+    container_name: atlas-jaeger
+    ports:
+      - "16686:16686"  # UI
+    # 内部 4317 给 Collector 用，不往宿主发布 —— 唯一入口是 Collector（§02）
+
+  # ── Langfuse（可选）────────────────────────────────────────────────
+  #
+  # ★ 挂 profile，所以 `make up` **不会**启动它 —— 这是「开关而不是必要依赖」
+  #   的第一层。第二层在 Collector：换成 collector-langfuse.yaml，traces
+  #   pipeline 才多一个 exporter。server 进程自始至终不知道它存在（§02）。
+  #
+  #       docker compose --profile langfuse up -d
+  #
+  # ★ 与 Jaeger 是分流不是二选一（§01）：Langfuse 擅长 LLM 维度（按会话看
+  #   提示词、评估打分、成本归因），但**不是 APM** —— Pod 冷启动慢、NAS
+  #   抖动、WS 断连在它那里看不出来。
+  #
+  # ★ 组件构成照官方 docker-compose.yml 核对，不是凭记忆写的。三处容易错：
+  #   ① **worker 不可省**。v3 把摄取拆成 web + worker，只起 web 的话
+  #      OTLP 请求会被接收（200），但永远不会被处理 —— UI 上一条 trace 都
+  #      没有，且不报错。
+  #   ② Redis 用 REDIS_HOST/PORT/AUTH 三个变量，不是连接串。
+  #   ③ ClickHouse 要两个地址：CLICKHOUSE_URL 走 8123 HTTP，
+  #      CLICKHOUSE_MIGRATION_URL 走 9000 原生协议。
+  #
+  # ★ 复用本仓已有的 postgres（独立 database）与 minio（同桶不同前缀），
+  #   只额外起 clickhouse 与它自己的 redis —— 我们的 redis 没设密码，而
+  #   Langfuse 必须给 REDIS_AUTH，与其对付这个不匹配，不如给它一个独立的。
+
+  langfuse-init-db:
+    image: postgres:16-alpine
+    container_name: atlas-langfuse-initdb
+    profiles: [langfuse]
+    depends_on:
+      postgres: {condition: service_healthy}
+    entrypoint: ["/bin/sh", "-c"]
+    # 与 minio-init 同款幂等写法（单元素数组，见上面那条注释）
+    command:
+      - >-
+        psql "postgresql://atlas:atlas@postgres:5432/atlas"
+        -tc "SELECT 1 FROM pg_database WHERE datname='langfuse'" | grep -q 1 ||
+        psql "postgresql://atlas:atlas@postgres:5432/atlas" -c "CREATE DATABASE langfuse"
+    restart: "no"
+
+  langfuse-clickhouse:
+    image: clickhouse/clickhouse-server:25.8
+    container_name: atlas-langfuse-ch
+    profiles: [langfuse]
+    environment:
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: clickhouse
+      CLICKHOUSE_DB: default
+    volumes: ["atlas-langfuse-ch:/var/lib/clickhouse"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- localhost:8123/ping || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  langfuse-redis:
+    image: redis:7-alpine
+    container_name: atlas-langfuse-redis
+    profiles: [langfuse]
+    command: ["redis-server", "--requirepass", "langfuse"]
+
+  langfuse-worker:
+    image: langfuse/langfuse-worker:3
+    container_name: atlas-langfuse-worker
+    profiles: [langfuse]
+    depends_on:
+      langfuse-clickhouse: {condition: service_healthy}
+      postgres: {condition: service_healthy}
+      minio: {condition: service_healthy}
+    environment: &langfuse-env
+      DATABASE_URL: postgresql://atlas:atlas@postgres:5432/langfuse
+      SALT: atlas-local-dev-salt
+      ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
+      TELEMETRY_ENABLED: "false"
+      CLICKHOUSE_URL: http://langfuse-clickhouse:8123
+      CLICKHOUSE_MIGRATION_URL: clickhouse://langfuse-clickhouse:9000
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: clickhouse
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      REDIS_HOST: langfuse-redis
+      REDIS_PORT: "6379"
+      REDIS_AUTH: langfuse
+      # 同一个桶、不同前缀 —— 不必再建一个桶
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: atlas-dev
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: langfuse-events/
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: us-east-1
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: atlas
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: atlas-local-dev
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: atlas-dev
+      LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: langfuse-media/
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://minio:9000
+      LANGFUSE_S3_MEDIA_UPLOAD_REGION: us-east-1
+      LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: atlas
+      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: atlas-local-dev
+      LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+
+  langfuse-web:
+    image: langfuse/langfuse:3
+    container_name: atlas-langfuse-web
+    profiles: [langfuse]
+    depends_on: [langfuse-worker]
+    ports: ["3001:3000"]  # 3000 被前端占着
+    environment:
+      <<: *langfuse-env
+      NEXTAUTH_URL: http://localhost:3001
+      NEXTAUTH_SECRET: atlas-local-dev-secret
+      # ★ 声明式初始化：省掉「打开 UI 注册账号、建项目、复制 key」那一串
+      #   手工步骤，而且 key 是**固定值** —— Collector 的配置因此可以写死，
+      #   不用每次重建都回来改一遍。
+      LANGFUSE_INIT_ORG_ID: atlas
+      LANGFUSE_INIT_ORG_NAME: Atlas
+      LANGFUSE_INIT_PROJECT_ID: atlas-local
+      LANGFUSE_INIT_PROJECT_NAME: Atlas Local
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: pk-lf-atlas-local-dev
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: sk-lf-atlas-local-dev
+      LANGFUSE_INIT_USER_EMAIL: dev@atlas.local
+      LANGFUSE_INIT_USER_NAME: dev
+      LANGFUSE_INIT_USER_PASSWORD: atlas-local-dev
+
+volumes:
+  atlas-pgdata:
+  atlas-redisdata:
+  atlas-miniodata:
+  atlas-qdrantdata:
+  atlas-langfuse-ch:

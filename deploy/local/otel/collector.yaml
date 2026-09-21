@@ -1,0 +1,57 @@
+# OpenTelemetry Collector —— 遥测的唯一收口点（可观测性设计 §02）。
+#
+# ★ 为什么非要它，而不是让 server 直连 Jaeger：
+#   ① 脱敏只在这里做。散在各来源里实现等于每份都要维护、每份都可能漏，
+#      而新增来源默认是不设防的（§08）。
+#   ② 分流不是转发。以后要加 Langfuse，只是多一个 exporter —— server
+#      一行代码都不用改。这正是「Langfuse 是开关而不是依赖」的落地方式。
+#
+# 这份是**不带 Langfuse**的基线。带 Langfuse 的见 collector-langfuse.yaml。
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  # ★ 内容兜底：本轮 server 侧根本不产生这几个属性（otel_capture_content
+  #   默认 false），这里删一遍是给**以后接进来的来源**兜底 —— CLI 的
+  #   OTEL_LOG_USER_PROMPTS、网关的 span，都可能带原文。
+  #   这些内容里有用户的私有代码与 .env 里的密钥，一旦进了遥测管道，
+  #   留存期与访问控制就跟业务数据脱钩了（§08）。
+  attributes/strip-content:
+    actions:
+      - {key: gen_ai.input.messages, action: delete}
+      - {key: gen_ai.output.messages, action: delete}
+      - {key: gen_ai.prompt, action: delete}
+      - {key: gen_ai.completion, action: delete}
+
+  # 富化：来源侧只知道自己的标识，平台维度由 Collector 补齐（§02）。
+  resource:
+    attributes:
+      - {key: deployment.environment, value: local, action: upsert}
+
+  batch:
+    timeout: 2s
+
+exporters:
+  # ★ Jaeger v2 就是一个 OTel Collector 的发行版，原生收 OTLP ——
+  #   不需要 v1 时代的 COLLECTOR_OTLP_ENABLED。
+  otlp_grpc/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [attributes/strip-content, resource, batch]
+      exporters: [otlp_grpc/jaeger]
+
+  telemetry:
+    logs:
+      level: info

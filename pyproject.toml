@@ -1,0 +1,188 @@
+[project]
+name = "atlas"
+version = "0.1.0"
+description = "Atlas — agent platform (workspace root)"
+requires-python = ">=3.13"
+dependencies = ["atlas-acp", "atlas-bridge", "atlas-cluster", "atlas-engine", "atlas-server"]
+
+# Workspace root is a container, not an installable package.
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["acp", "bridge", "cluster", "engine", "server"]
+
+[tool.uv.sources]
+atlas-acp = { workspace = true }
+atlas-bridge = { workspace = true }
+atlas-cluster = { workspace = true }
+atlas-engine = { workspace = true }
+atlas-server = { workspace = true }
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3",
+  "pytest-asyncio>=0.24",
+  "import-linter>=2.1",
+  "ruff>=0.8",
+  "httpx>=0.27",
+  "moto>=5.0",
+]
+# mypy 暂不纳入 dev group：本机网络下 13MB wheel 反复下载超时，
+# 且 CI 步骤未调用它。需要类型检查时单独 `uv tool install mypy`。
+
+# ---------------------------------------------------------------------------
+# ★ 依赖单向的硬约束（文档 §2.1）。engine 一旦 import server/db/web 就 CI 红。
+# ---------------------------------------------------------------------------
+[tool.importlinter]
+root_packages = ["atlas_acp", "atlas_bridge", "atlas_cluster", "atlas_engine", "atlas_server"]
+# forbidden_modules 里有第三方包（fastapi/sqlalchemy/...），必须打开这个开关
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "engine 不得依赖 server / web / DB / HTTP 框架"
+type = "forbidden"
+source_modules = ["atlas_engine"]
+forbidden_modules = [
+  "atlas_server",
+  "fastapi",
+  "sqlalchemy",
+  "alembic",
+  "redis",
+  "uvicorn",
+  "pydantic_settings",
+]
+
+[[tool.importlinter.contracts]]
+name = "分层：server -> engine 单向"
+type = "layers"
+layers = ["atlas_server", "atlas_engine"]
+
+# layers contract 把 atlas_engine 当一个节点，拦不住「server 穿过外层直捅
+# kernel 内部」。kernel 是仍在持续重写的内部层，模块路径随时可能变、不是
+# 公共契约 —— server 需要的协议与结果类型一律走 atlas_engine.contracts
+# （那里的 re-export 才是承诺面）。
+# 运行时兜底见 tests/test_engine_purity.py。
+# 协议与错误分类学定义在 contracts（最底层），kernel 反向依赖它 —— 但只许
+# 依赖它。运行时同款守卫（正则扫 import 语句）见 tests/test_engine_purity.py。
+#
+# 历史注：engine 外层（spec / events / runner / model_factory …）已整体搬进
+# server —— kernel 的方向守卫禁止它们被 kernel 认识之后，消费者只剩 server
+# 自己，「共享词汇」的前提不复存在。atlas_engine 从此 = kernel + contracts。
+# 曾经的「server 禁 import kernel」contract 随 agent.py 防腐层一起撤销。
+
+# atlas_acp 会被装进 **Pod 镜像**（bridge 依赖它）。它必须能脱离整个 atlas
+# 依赖树独立安装 —— 拖进 atlas_server 就等于把 sqlalchemy/fastapi 塞进每个
+# 会话 Pod。运行时同款守卫见 tests/test_acp_wire.py 的子进程 import 探测。
+[[tool.importlinter.contracts]]
+name = "atlas_acp 是叶子：不依赖本仓任何其它包，也不碰重依赖"
+type = "forbidden"
+source_modules = ["atlas_acp"]
+forbidden_modules = [
+  "atlas_engine",
+  "atlas_server",
+  "sqlalchemy",
+  "fastapi",
+  "redis",
+  "langchain",
+  "langchain_core",
+  "langgraph",
+  "boto3",
+]
+
+# bridge 跑在 Pod 里，是独立部署物。它与 server 的唯一接口是 WS 上的线协议
+# （atlas_acp）—— 代码级共享会让「升级 server 必须同步升级全部在跑的 Pod」，
+# 而 Pod 在跑时没法原地升级。运行时同款守卫见 tests/test_bridge_boundary.py。
+[[tool.importlinter.contracts]]
+name = "bridge 只认 atlas_acp，不认识 server"
+type = "forbidden"
+source_modules = ["atlas_bridge"]
+forbidden_modules = [
+  "atlas_server",
+  "atlas_engine",
+  "sqlalchemy",
+  "fastapi",
+  "redis",
+  "langchain",
+  "langgraph",
+  "boto3",
+]
+
+# server 只许认 cluster 的 **API 契约**（schemas），不许碰它的内部。
+# 碰了就等于 server 侧也长出一份 K8s 知识 —— 而「Pod 生命周期归谁」
+# 必须只有一个答案（acp 详设 §03 的同款论证）。
+[[tool.importlinter.contracts]]
+name = "server 只认 cluster 的 schemas"
+type = "forbidden"
+source_modules = ["atlas_server"]
+forbidden_modules = [
+  "atlas_cluster.api",
+  "atlas_cluster.backend",
+  "atlas_cluster.k8s",
+  "atlas_cluster.manager",
+  "atlas_cluster.template",
+  "atlas_cluster.pairing",
+]
+
+# cluster 是叶子服务：它不认识 server，也不认识 agent 执行的任何东西。
+# 反向依赖会让「建 Pod」这件事与「跑一轮」缠在一起。
+[[tool.importlinter.contracts]]
+name = "cluster 不认识 server / engine / bridge"
+type = "forbidden"
+source_modules = ["atlas_cluster"]
+forbidden_modules = ["atlas_server", "atlas_engine", "atlas_bridge", "sqlalchemy", "redis"]
+
+# server 里的纯计算层：装配（build）、执行循环（runner）、词汇（spec/events/
+# translator/tool_registry）不许碰基础设施 —— 「run 一轮」必须继续可以用
+# 假模型脱离 DB/Redis 测试。IO 归 assembly / services / repositories。
+[[tool.importlinter.contracts]]
+name = "server 纯计算层不得依赖基础设施"
+type = "forbidden"
+source_modules = [
+  "atlas_server.domain",
+  "atlas_server.executor.runner",
+  "atlas_server.executor.build",
+  # translate 是纯函数：一条 update 进、零或多条事件意图出。它必须能脱离
+  # WS 与 DB 单测 —— §06 的表就是它的测试用例（acp 详设 §03）。
+  "atlas_server.acp.translate",
+]
+forbidden_modules = ["sqlalchemy", "fastapi", "redis", "alembic", "pydantic_settings"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+extend-exclude = [
+  "server/migrations/versions",
+  "docs",          # 别去动设计文档里的示例代码块
+  "prototype",
+  "design-system",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+# 本项目注释与文档字符串使用中文（见 ~/.claude/CLAUDE.md），
+# 全角标点是有意的，不是"易混淆字符"。
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+# kernel/ 纳入检查以捕获真问题（F/B/SIM 等），
+# 但不为继承来的风格大改。裁剪推进时可逐步收紧这里。
+[tool.ruff.lint.per-file-ignores]
+"engine/src/atlas_engine/kernel/**" = ["E501", "RUF100", "UP", "B", "SIM", "RUF012"]
+
+# ★ formatter 没有 per-file-ignores，是全有或全无 —— 只能在这里整体排除。
+#   不排除的话 `ruff format` 会重排 kernel 下 31 个文件，与上面
+#   "不为继承来的风格大改" 的决定自相矛盾，且淹没真正的改动。
+#   裁剪到某个模块时，可把该模块从这里移出并单独格式化。
+[tool.ruff.format]
+exclude = ["engine/src/atlas_engine/kernel/**"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.mypy]
+python_version = "3.13"
+strict = false
+warn_unused_ignores = true
+exclude = ["engine/src/atlas_engine/vendor", "server/migrations/versions"]

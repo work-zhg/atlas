@@ -1,0 +1,79 @@
+# cluster 服务：K8s 模板与会话 Pod 生命周期的唯一所有者。
+#
+# ★ 凭据（对象存储 HMAC、模型 API key）不在本文件里 —— 由
+#   deploy/local/apply.sh 从 .env 读出来建成 Secret atlas-cluster-creds。
+#   写进 manifest 等于写进 git。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atlas-cluster
+  namespace: atlas-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: atlas-cluster}
+  template:
+    metadata:
+      labels: {app: atlas-cluster}
+    spec:
+      # ★ 刻意**不**设 enableServiceLinks: false。
+      #
+      #   K8s 会为同 namespace 的每个 Service 注入一组遗留环境变量，Service
+      #   叫 atlas-cluster 就会注入 ATLAS_CLUSTER_PORT=tcp://<ip>:8010 ——
+      #   与 ClusterSettings 的 env 前缀撞名。入口已经能识别并忽略这种值
+      #   （__main__.py 的 _port），所以这里保持注入**开着**：这套部署因此
+      #   顺带成了那个修复的回归检查。关掉的话，哪天修复被改回去也看不出来。
+      serviceAccountName: atlas-cluster
+      containers:
+        - name: cluster
+          image: atlas-app:dev
+          # ★ 本地构建的镜像，registry 上没有。tag 不是 latest，所以默认
+          #   就是 IfNotPresent；写出来是为了别人改 tag 时不会踩到
+          #   「:latest ⇒ 默认 Always ⇒ 拉不到」这个坑。
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "atlas_cluster"]
+          ports: [{containerPort: 8010, name: http}]
+          env:
+            # ★ 必须显式给 —— 入口在没有它时直接 exit 2，而不是默默用内存
+            #   后端（那样每一轮 acp 都会超时，且日志上看不出原因）。
+            - {name: ATLAS_CLUSTER_BACKEND, value: kubernetes}
+            - {name: ATLAS_CLUSTER_NAMESPACE, value: atlas-sessions}
+            - {name: ATLAS_CLUSTER_WORKSPACE_MOUNT, value: fuse}
+            # 对象存储 = 宿主 docker compose 里的 MinIO。
+            # ★ __HOST_IP__ 由 apply.sh 换成宿主的 LAN IP，**不要**用
+            #   host.docker.internal：Docker Desktop 把它转发到宿主的
+            #   loopback，于是绑在 127.0.0.1 上的本机服务会盖住 compose
+            #   发布在 *:port 上的那个（5433 上的两个 Postgres 就是这么
+            #   撞的，表现为 role "atlas" does not exist）。
+            - {name: ATLAS_CLUSTER_OSS_ENDPOINT, value: "http://__HOST_IP__:9000"}
+            - {name: ATLAS_CLUSTER_OSS_BUCKET, value: atlas-dev}
+            - {name: ATLAS_CLUSTER_OSS_REGION, value: us-east-1}
+            # ★ provider 要写 Minio，不是默认的 GCS —— rclone 按它决定绕开
+            #   哪些厂商怪癖（GCS 那套会让 MinIO 的分块上传报错）。
+            - {name: ATLAS_CLUSTER_OSS_PROVIDER, value: Minio}
+            # ★ 钉版本号而不是 :latest。:latest 的默认拉取策略是 Always，
+            #   而这个镜像同样是本地 tag 的，节点拉不到。
+            - {name: ATLAS_CLUSTER_MOUNTER_IMAGE, value: "rclone/rclone:1.75.1"}
+            - {name: ATLAS_CLUSTER_MODEL_NAME, value: deepseek-chat}
+            - name: ATLAS_CLUSTER_OSS_ACCESS_KEY_ID
+              valueFrom: {secretKeyRef: {name: atlas-cluster-creds, key: oss_access_key_id}}
+            - name: ATLAS_CLUSTER_OSS_SECRET_ACCESS_KEY
+              valueFrom: {secretKeyRef: {name: atlas-cluster-creds, key: oss_secret_access_key}}
+            - name: ATLAS_CLUSTER_MODEL_BASE_URL
+              valueFrom: {secretKeyRef: {name: atlas-cluster-creds, key: model_base_url}}
+            - name: ATLAS_CLUSTER_MODEL_API_KEY
+              valueFrom: {secretKeyRef: {name: atlas-cluster-creds, key: model_api_key}}
+          readinessProbe:
+            httpGet: {path: /health, port: 8010}
+            periodSeconds: 3
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: atlas-cluster
+  namespace: atlas-system
+spec:
+  selector: {app: atlas-cluster}
+  ports: [{port: 8010, targetPort: 8010}]

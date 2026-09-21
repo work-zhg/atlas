@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>native Agent 设计 · AI Platform</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="sitenav">
+  <a class="brand" href="./">AI&nbsp;<b>Platform</b>&nbsp;/ 设计文档</a>
+  <div class="links">
+    <a href="./">目录</a>
+    <a href="detail/">详细设计</a>
+    <a href="architecture.html">系统架构</a>
+    <a href="agent.html">Agent 管理</a>
+    <a href="skill.html">技能管理</a>
+    <a href="mcp.html">MCP 管理</a>
+    <a href="permission.html">权限管理</a>
+    <a href="execution.html">执行环境</a>
+    <a href="session.html">会话管理</a>
+    <a class="on" href="native.html">native Agent</a>
+    <a href="runtime.html">运行时链路</a>
+    <a href="local.html">本地部署</a>
+    <a href="memory.html">记忆</a>
+    <a href="observability.html">可观测性</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+<nav class="toc" aria-label="目录">
+  <div class="eyebrow">本页</div>
+  <ol>
+    <li><a href="#s1">定位与边界</a></li>
+    <li><a href="#s2">执行模型</a></li>
+    <li><a href="#s3">Sandbox：会话级 Pod</a></li>
+    <li><a href="#s4">Pod 目录结构</a></li>
+    <li><a href="#s5">技能的双路下发</a></li>
+    <li><a href="#s6">Subagent</a></li>
+    <li><a href="#s7">委派给 acp subagent</a></li>
+    <li><a href="#s8">重跑语义与 sandbox 状态</a></li>
+    <li><a href="#s9">生命周期与降级</a></li>
+    <li><a href="#s10">待验证清单</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<header class="hero">
+  <p class="kicker">Native Agent</p>
+  <h1>native Agent 设计</h1>
+  <p class="lede">用 LangChain 的 <code>create_agent</code> 在 Server 进程内编排，<b>Message 是唯一事实源</b>；执行环境是一个会话级的 Kubernetes Pod；可以把子任务委派给 subagent，包括 <code>acp</code> 类型的 Agent。</p>
+  <div class="meta">
+    <span>create_agent</span><span>Message 事实源</span><span>会话级 Sandbox</span><span>Subagent</span>
+  </div>
+</header>
+
+<div class="callout warn">
+  <span class="label">这份设计改变了「顾问」这个称呼的含义</span>
+  <p>早先文档里把 <code>native</code> 简称为「顾问」，暗示它只出谋划策、不动手。<b>加上 sandbox 与 subagent 之后，这个称呼不再准确</b> —— native Agent 能写文件、跑命令、委派任务，能力不比 <code>acp</code> 少，只是编排权在我们手里。</p>
+  <p>后文一律用 <code>native</code>，不用「顾问」。<a href="agent.html#s2">Agent 管理 §02</a> 里那组角色别名建议一并淡化。</p>
+</div>
+
+<!-- ───────────────────────── 1 ───────────────────────── -->
+<section id="s1">
+<h2><span class="num">01</span>定位与边界</h2>
+
+<p><code>native</code> 与 <code>acp</code> 的区别不在能力多少，而在<b>编排权在谁手里</b>：</p>
+
+<table>
+  <thead><tr><th style="width:150px"></th><th style="width:270px"><code>native</code></th><th><code>acp</code></th></tr></thead>
+  <tbody>
+    <tr><td><b>编排</b></td><td class="yes">我们写的图（<code>create_agent</code>）</td><td>成品 CLI 内部</td></tr>
+    <tr><td><b>上下文</b></td><td class="yes">Message 表，每轮重建</td><td>CLI 进程内</td></tr>
+    <tr><td><b>工具集</b></td><td class="yes">完全由我们装配</td><td>CLI 自带 + MCP</td></tr>
+    <tr><td><b>执行环境</b></td><td>会话级 Sandbox Pod</td><td>会话级 CLI Pod</td></tr>
+    <tr><td><b>提示词</b></td><td class="yes">我们控制</td><td>CLI 的，我们只能附加</td></tr>
+    <tr><td><b>能否 regenerate</b></td><td class="yes">能（但见 <a href="#s8">§08</a>）</td><td class="no">不能</td></tr>
+  </tbody>
+</table>
+
+<div class="callout rule">
+  <span class="label">选 native 还是 acp</span>
+  <p><b>要精细控制 agent 行为，选 <code>native</code>：</b>提示词、工具集、中间件、记忆注入、委派策略都在我们手里，能针对场景调优。</p>
+  <p><b>要立刻获得一个成熟编码 agent 的全部能力，选 <code>acp</code>：</b>Claude Code 在代码理解与多步编辑上的积累，短期内自己写是追不上的。</p>
+  <p>两者不是替代关系。典型用法是 <code>native</code> 做业务编排，把重型编码任务委派给 <code>acp</code> subagent（<a href="#s7">§07</a>）。</p>
+</div>
+</section>
+
+<!-- ───────────────────────── 2 ───────────────────────── -->
+<section id="s2">
+<h2><span class="num">02</span>执行模型</h2>
+
+<figure>
+<svg viewBox="0 0 900 520" role="img" aria-labelledby="figN-t figN-d" font-family="var(--sans)">
+  <title id="figN-t">native Agent 执行拓扑</title>
+  <desc id="figN-d">Message 账本与 Server 进程内的 native agent 双向交互：每轮重建输入、结束时固化。agent 的工具分三类：内置工具、sandbox 工具、委派工具。sandbox 工具作用于会话级的 Sandbox Pod；委派工具派生 subagent，subagent 可以是 native 或 acp 类型。</desc>
+  <defs>
+    <marker id="arN" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#94A3B8"/>
+    </marker>
+    <marker id="arNb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#38BDF8"/>
+    </marker>
+  </defs>
+
+  <rect x="330" y="16" width="240" height="60" rx="8" fill="#0E1223" stroke="#22C55E" stroke-opacity=".55"/>
+  <text x="450" y="42" text-anchor="middle" fill="#F8FAFC" font-size="13" font-weight="600">Message 账本</text>
+  <text x="450" y="62" text-anchor="middle" fill="#22C55E" font-size="10">唯一事实源</text>
+
+  <line x1="450" y1="76" x2="450" y2="116" stroke="#22C55E" stroke-width="2" marker-start="url(#arN)" marker-end="url(#arN)"/>
+  <text x="462" y="100" fill="#22C55E" font-size="9.5" font-family="monospace">每轮重建 / 固化</text>
+
+  <rect x="180" y="116" width="540" height="130" rx="10" fill="#0E1223" stroke="#38BDF8" stroke-opacity=".55"/>
+  <text x="450" y="142" text-anchor="middle" fill="#38BDF8" font-size="13" font-weight="600">Server 进程内 · create_agent</text>
+  <text x="450" y="158" text-anchor="middle" fill="#64748B" font-size="9.5">无 checkpointer · 无状态图</text>
+
+  <rect x="200" y="170" width="500" height="62" rx="8" fill="#0B0F1E" stroke="#232B3D"/>
+  <text x="216" y="188" fill="#94A3B8" font-size="10">工具集</text>
+  <rect x="216" y="194" width="150" height="28" rx="6" fill="#131A2E" stroke="#334155"/>
+  <text x="291" y="212" text-anchor="middle" fill="#CBD5E1" font-size="10.5">内置工具</text>
+  <rect x="376" y="194" width="150" height="28" rx="6" fill="#131A2E" stroke="#F59E0B" stroke-opacity=".5"/>
+  <text x="451" y="212" text-anchor="middle" fill="#F59E0B" font-size="10.5">sandbox 工具</text>
+  <rect x="536" y="194" width="148" height="28" rx="6" fill="#131A2E" stroke="#A78BFA" stroke-opacity=".5"/>
+  <text x="610" y="212" text-anchor="middle" fill="#A78BFA" font-size="10.5">委派工具</text>
+
+  <line x1="214" y1="246" x2="214" y2="308" stroke="#F59E0B" stroke-width="1.5" marker-end="url(#arNb)"/>
+  <text x="226" y="282" fill="#F59E0B" font-size="9.5" font-family="monospace">exec / 文件</text>
+  <line x1="678" y1="246" x2="678" y2="308" stroke="#A78BFA" stroke-width="1.5" marker-end="url(#arNb)"/>
+  <text x="690" y="282" fill="#A78BFA" font-size="9.5" font-family="monospace">delegate</text>
+
+  <rect x="24" y="308" width="380" height="186" rx="10" fill="#0E1223" stroke="#F59E0B" stroke-opacity=".55"/>
+  <text x="214" y="334" text-anchor="middle" fill="#F59E0B" font-size="13" font-weight="600">Sandbox Pod</text>
+  <text x="214" y="352" text-anchor="middle" fill="#64748B" font-size="9.5">一个会话一个，非一次 Run 一个</text>
+  <line x1="44" y1="364" x2="384" y2="364" stroke="#232B3D"/>
+  <text x="44" y="386" fill="#94A3B8" font-size="10.5" font-family="monospace">/home/agent/workspace   rw · OSS</text>
+  <text x="44" y="406" fill="#94A3B8" font-size="10.5" font-family="monospace">/home/agent/skills      ro · 技能卷</text>
+  <text x="44" y="426" fill="#94A3B8" font-size="10.5" font-family="monospace">/home/agent/.cache      rw · emptyDir</text>
+  <text x="44" y="452" fill="#22C55E" font-size="10">跨 Run 持久 —— 上一轮的文件下一轮还在</text>
+  <text x="44" y="474" fill="#EF4444" font-size="10">有状态 → regenerate 语义受影响（§08）</text>
+
+  <rect x="460" y="308" width="416" height="186" rx="10" fill="#0E1223" stroke="#A78BFA" stroke-opacity=".55"/>
+  <text x="668" y="334" text-anchor="middle" fill="#A78BFA" font-size="13" font-weight="600">Subagent 执行</text>
+  <text x="668" y="352" text-anchor="middle" fill="#64748B" font-size="9.5">父 Run 内的一次工具调用，不建独立 Session</text>
+
+  <rect x="478" y="366" width="186" height="110" rx="8" fill="#0B0F1E" stroke="#38BDF8" stroke-opacity=".5"/>
+  <text x="571" y="390" text-anchor="middle" fill="#38BDF8" font-size="11.5" font-weight="600">native subagent</text>
+  <text x="571" y="412" text-anchor="middle" fill="#94A3B8" font-size="10">进程内另起一个图</text>
+  <text x="571" y="432" text-anchor="middle" fill="#94A3B8" font-size="10">共用父会话 Sandbox</text>
+  <text x="571" y="456" text-anchor="middle" fill="#22C55E" font-size="10">成本低</text>
+
+  <rect x="676" y="366" width="186" height="110" rx="8" fill="#0B0F1E" stroke="#A78BFA" stroke-opacity=".5"/>
+  <text x="769" y="390" text-anchor="middle" fill="#A78BFA" font-size="11.5" font-weight="600">acp subagent</text>
+  <text x="769" y="412" text-anchor="middle" fill="#94A3B8" font-size="10">起独立 CLI Pod</text>
+  <text x="769" y="432" text-anchor="middle" fill="#94A3B8" font-size="10">审批需穿回用户</text>
+  <text x="769" y="456" text-anchor="middle" fill="#F59E0B" font-size="10">一次冷启动的代价</text>
+</svg>
+<figcaption><b>agent 逻辑在 Server 进程里，Pod 只是执行环境。</b>这是与 <code>acp</code> 最大的结构差异 —— <code>acp</code> 的 Pod 里跑着完整的 agent（Bridge + adapter + CLI），<code>native</code> 的 Pod 里只有一个沙箱守护进程，决策全在 Server。</figcaption>
+</figure>
+
+<h3>构造与执行</h3>
+<pre><code><span class="tok-k">from</span> langchain.agents <span class="tok-k">import</span> create_agent
+
+agent = create_agent(
+    model=model,                      <span class="tok-c"># 指向 Higress</span>
+    tools=builtin + sandbox + delegate,
+    system_prompt=prompt,
+    middleware=[MemoryMiddleware(), SkillIndexMiddleware(), …],
+    <span class="tok-c"># checkpointer 省略 → 无状态图，Message 表是唯一事实源</span>
+)
+
+<span class="tok-c"># 每轮：从 Message 表重建输入</span>
+history = <span class="tok-k">await</span> messages.load(session_id)
+history.append(HumanMessage(content=user_input))
+
+<span class="tok-k">async for</span> mode, chunk <span class="tok-k">in</span> agent.astream(
+    {<span class="tok-s">"messages"</span>: history}, stream_mode=[<span class="tok-s">"messages"</span>, <span class="tok-s">"updates"</span>]):
+    <span class="tok-k">await</span> events.publish(run_id, translate(mode, chunk))</code></pre>
+
+<p>不传 <code>thread_id</code> —— 无 checkpointer 时它没有意义。完整论证见<a href="session.html#s5">会话管理 §05</a>，包括「为什么不存 checkpoint」与由此带来的 <code>interrupt()</code> 不可用。</p>
+</section>
+
+<!-- ───────────────────────── 3 ───────────────────────── -->
+<section id="s3">
+<h2><span class="num">03</span>Sandbox：会话级 Pod</h2>
+
+<div class="callout rule">
+  <span class="label">Pod 的模板与生命周期归执行环境管理组件</span>
+  <p>创建、就绪、回收、卷分配、配额与 <code>acp</code> Pod 共用同一套机制，见<a href="execution.html">执行环境管理设计</a>。本节只讲 <code>native</code> sandbox 特有的部分：与 Server 的交互方式、目录语义、按需创建。</p>
+</div>
+
+<div class="callout rule">
+  <span class="label">一个会话一个 Pod，不是一次 Run 一个</span>
+  <p>Run 级的 Pod 看起来更干净（每轮环境全新），但代价不可接受：</p>
+  <ul style="margin-bottom:0">
+    <li><b>每轮都付冷启动</b> —— 镜像拉取 + 挂卷，用户每说一句话都要等几秒到几十秒</li>
+    <li><b>工作目录失去连续性</b> —— 上一轮创建的文件下一轮就没了，多步任务根本没法做</li>
+    <li><b>与 <code>acp</code> 的模型不一致</b> —— 那边已经是会话级 Pod（<a href="runtime.html#s9">运行时链路 §09</a>），两套生命周期会让调度与回收逻辑翻倍</li>
+  </ul>
+</div>
+
+<h3>Server 与 Pod 的交互</h3>
+<p>Pod 里跑一个<b>轻量 sandbox 守护进程</b>，Server 通过它执行命令与读写文件 —— 而不是直接用 K8s 的 exec API。</p>
+
+<table>
+  <thead><tr><th style="width:190px"></th><th style="width:230px">K8s exec API</th><th>自有守护进程（推荐）</th></tr></thead>
+  <tbody>
+    <tr><td><b>流式输出</b></td><td class="maybe">可以但接口原始</td><td class="yes">按需设计</td></tr>
+    <tr><td><b>超时与取消</b></td><td class="no">要自己包</td><td class="yes">原生支持</td></tr>
+    <tr><td><b>文件操作</b></td><td class="no">只能靠 <code>cat</code> / <code>tar</code> 拼</td><td class="yes">直接 API</td></tr>
+    <tr><td><b>并发与资源</b></td><td class="no">不可控</td><td class="yes">可限并发、可记账</td></tr>
+    <tr><td><b>依赖</b></td><td>需要 API Server 权限</td><td class="yes">只需 Pod 网络可达</td></tr>
+  </tbody>
+</table>
+
+<p>连接方式与 <code>acp</code> 一致：Server 主动连 Pod（云上），或 Pod 内 Bridge 外拨（本地部署形态）。接入控制沿用 <a href="runtime.html#s9">运行时链路 §09</a> —— <b>K8s 默认网络是平的，Pod 端点必须认证</b>。</p>
+
+<h3>资源与隔离</h3>
+<ul>
+  <li><b>按会话隔离</b> —— 一个 Pod 只服务一个会话，凭证与工作区天然不跨会话</li>
+  <li><b>网络策略</b> —— 默认禁止出站，需要访问外网的工具经 Higress 或显式放行；<b>沙箱能跑任意命令，出站不设限等于给了一条旁路</b></li>
+  <li><b>资源上限</b> —— CPU / 内存 / 磁盘都要设，且 OOMKill 要与其他退出原因分开监测（<a href="observability.html#s7">可观测性 §07</a>）</li>
+  <li><b>idle 回收</b> —— 与 <code>acp</code> 同样的 TTL 策略，会话置 <code>cold</code>，下次提交时重建</li>
+</ul>
+</section>
+
+<!-- ───────────────────────── 4 ───────────────────────── -->
+<section id="s4">
+<h2><span class="num">04</span>Pod 目录结构</h2>
+
+<pre><code>/home/agent/                          <span class="tok-c"># HOME，固定</span>
+├── workspace/                        <span class="tok-w">← OSS 卷（rw，per-session）· cwd</span>
+│   ├── inputs/                       <span class="tok-c"># 用户上传的文件</span>
+│   ├── outputs/                      <span class="tok-c"># 产出，可下载 / 可展示</span>
+│   └── …                             <span class="tok-c"># agent 自由使用的临时区</span>
+│
+├── skills/                           <span class="tok-n">← 技能只读卷（ro）· 见 §05</span>
+│   └── &lt;skill-name&gt;/
+│       ├── scripts/                  <span class="tok-w"># 模型会真的执行这些</span>
+│       ├── references/
+│       └── data/
+│
+├── .cache/                           <span class="tok-c"># emptyDir，pip / npm 缓存，不持久</span>
+└── .config/                          <span class="tok-c"># ConfigMap 投射，工具配置</span></code></pre>
+
+<h3>三类存储，三种性质</h3>
+<table>
+  <thead><tr><th style="width:190px">路径</th><th style="width:150px">存储</th><th>为什么</th></tr></thead>
+  <tbody>
+    <tr><td><code>workspace/</code></td><td><b>OSS</b>（rw）</td><td>产出要长期留存、要能下载、要跨 Pod 重建存活</td></tr>
+    <tr><td><code>skills/</code></td><td><b>只读卷</b></td><td>全局共享、读多写零；<b>按 Agent 区分技能集时用独立卷</b>，别在大卷里 subPath 挑</td></tr>
+    <tr><td><code>.cache/</code></td><td><code>emptyDir</code></td><td>纯加速，丢了无所谓；<b>放 OSS 只会拖慢</b></td></tr>
+  </tbody>
+</table>
+
+<div class="callout warn">
+  <span class="label">inputs / outputs 的划分不是装饰</span>
+  <p><code>outputs/</code> 是<b>契约位置</b>：前端从这里取可下载的产物，<code>present_files</code> 之类的工具也只认这里。如果让 agent 把产出随手放在 <code>workspace/</code> 根下，前端就得靠猜或者靠模型自己说路径 —— 后者不可靠。</p>
+  <p>提示词里要明确写清这个约定，并在工具描述里重复一次。<b>目录约定只有被模型稳定遵守才有价值。</b></p>
+</div>
+
+<div class="callout rule">
+  <span class="label">workspace 用 OSS，别把 .cache 也放上去</span>
+  <p><a href="runtime.html#s4">运行时链路 §04</a> 论证过：对象存储的追加写是「下载整个对象 → 改 → 整体上传」。<code>pip install</code> 这类操作会产生成千上万个小文件，放在 OSS 挂载上会慢到不可用。</p>
+  <p><code>workspace/</code> 是低频写的产出，适合 OSS；<code>.cache/</code> 是高频小文件，必须用 <code>emptyDir</code>。<b>丢了缓存只是下次慢一点，把它放错地方是每次都慢。</b></p>
+</div>
+</section>
+
+<!-- ───────────────────────── 5 ───────────────────────── -->
+<section id="s5">
+<h2><span class="num">05</span>技能的双路下发</h2>
+
+<div class="callout danger">
+  <span class="label">技能不能只进提示词 —— 它的脚本要能跑</span>
+  <p><a href="skill.html#s7">技能管理 §07</a> 说 <code>native</code> 的技能是「进程内装载」，<b>这不完整</b>。实测一个真实技能的 <code>SKILL.md</code> 里直接写着：</p>
+  <pre style="margin:10px 0"><code>python "…/skills/ui-ux-pro-max/scripts/search.py" "&lt;query&gt;" --domain &lt;domain&gt;</code></pre>
+  <p>模型会照做。所以技能的 <code>scripts/</code>、<code>references/</code>、<code>data/</code> <b>必须在 sandbox 里存在且可访问</b>，否则技能一用就报错。</p>
+</div>
+
+<h3>两条路，各送各的</h3>
+<table>
+  <thead><tr><th style="width:190px">技能的组成</th><th style="width:190px">送到哪</th><th>为什么</th></tr></thead>
+  <tbody>
+    <tr><td><code>frontmatter</code>（name + description）</td><td>提示词索引</td><td>模型选择技能的唯一依据，常驻上下文</td></tr>
+    <tr><td><code>SKILL.md</code> 正文</td><td>提示词（命中后）</td><td>指令内容，由我们构造进上下文</td></tr>
+    <tr><td><code>scripts/</code> <code>references/</code> <code>data/</code></td><td class="yes"><b>Sandbox Pod 的 <code>skills/</code> 卷</b></td><td>模型要执行它们、要读它们</td></tr>
+  </tbody>
+</table>
+
+<h3>路径必须对得上</h3>
+<p>提示词里的技能指令会写绝对路径。<b>Pod 内的技能挂载点必须与提示词里声明的一致</b>，否则模型按提示词去执行就会找不到文件。</p>
+
+<pre><code>提示词里注入：  技能根目录 = /home/agent/skills/&lt;name&gt;
+Pod 挂载点：    /home/agent/skills/&lt;name&gt;/     ← 必须一致</code></pre>
+
+<p>由于技能来源不同（平台内置、租户上传）而写法可能不统一，<b>装配时应当把技能内容里的路径占位符统一替换成实际挂载路径</b>，而不是指望每个技能作者都写对。</p>
+
+<div class="callout warn">
+  <span class="label">技能脚本跑在 sandbox 里，是有副作用的执行</span>
+  <p>技能的脚本能做的事和任何命令一样多。<a href="skill.html#s5">技能管理 §05</a> 要求「含脚本的技能必须人工审查」，在 <code>native</code> 这里的具体含义是：<b>那段脚本会在我们的 Pod 里、用我们的网络与配额运行</b>。</p>
+  <p>网络策略（<a href="#s3">§03</a>）是第二道防线 —— 即使审查漏了，默认禁止出站也能挡住数据外传。</p>
+</div>
+</section>
+
+<!-- ───────────────────────── 6 ───────────────────────── -->
+<section id="s6">
+<h2><span class="num">06</span>Subagent</h2>
+
+<p><code>native</code> Agent 可以把子任务委派给另一个 Agent。<b>委派是父 Run 内的一次工具调用，不建独立 Session。</b></p>
+
+<h3>为什么不建独立 Session</h3>
+<table>
+  <thead><tr><th style="width:190px"></th><th style="width:230px">作为工具调用（选定）</th><th>作为独立 Session</th></tr></thead>
+  <tbody>
+    <tr><td><b>用户心智</b></td><td class="yes">父 agent 干活的一部分</td><td class="no">会话列表被子会话污染</td></tr>
+    <tr><td><b>归属</b></td><td class="yes">产出回到父 Run 的 Message</td><td>要额外设计关联与回流</td></tr>
+    <tr><td><b>可追溯</b></td><td>事件流可折叠展示</td><td class="yes">完整但过重</td></tr>
+    <tr><td><b>实现成本</b></td><td class="yes">低</td><td class="no">高</td></tr>
+  </tbody>
+</table>
+
+<h3>对象归属</h3>
+<pre><code>父 Run
+├─ Message(assistant)          <span class="tok-c">「我来委派一个子任务」</span>
+├─ <span class="tok-w">tool_call: delegate</span>         <span class="tok-c">工具调用，subagent 执行</span>
+│   └─ Event 子流              <span class="tok-s">← 可折叠展示，带 parent_tool_call_id</span>
+│       ├─ subagent.started
+│       ├─ message.delta …     <span class="tok-c">子 agent 的过程</span>
+│       └─ subagent.ended
+├─ Message(tool)               <span class="tok-c">子任务结论，作为工具结果</span>
+└─ Message(assistant)          <span class="tok-c">父 agent 基于结论继续</span></code></pre>
+
+<div class="callout rule">
+  <span class="label">只有结论进 Message，过程留在 Event</span>
+  <p>子 agent 可能跑很多轮、调很多工具。<b>把这些全塞进父会话的 Message 账本，会让父 agent 的下一轮上下文被子任务的细节淹没</b> —— 而它只需要知道结论。</p>
+  <p>所以：过程作为 Event 子流（可展开查看，随 Run 一起被清理），<b>只有最终结论固化成一条 tool Message</b>。这和 <a href="session.html#s2">会话管理 §02</a> 的 Message / Event 分层是同一条原则。</p>
+</div>
+
+<h3>约束</h3>
+<ul>
+  <li><b>递归深度上限</b> —— subagent 还能再委派的话，要设硬上限（建议 2 层），否则一次提问可能引爆成几十个 Pod</li>
+  <li><b>并发上限</b> —— 父 agent 一次可能想派多个子任务，要限并发，且计入会话与租户配额</li>
+  <li><b>可委派的 Agent 白名单</b> —— 在父 Agent 定义里声明能派给谁，而不是让模型自由选任意 <code>agent_id</code>；<b>否则提示词注入可以诱导它去调用一个权限更大的 Agent</b></li>
+  <li><b>超时</b> —— 子任务必须有独立超时，且超时后父 agent 要能得到明确的失败结果而非一直等</li>
+</ul>
+</section>
+
+<!-- ───────────────────────── 7 ───────────────────────── -->
+<section id="s7">
+<h2><span class="num">07</span>委派给 acp subagent</h2>
+
+<p>这是这套设计里最有价值的组合：<b><code>native</code> 做业务编排，把重型编码任务交给 <code>acp</code></b>。业务逻辑由我们精细控制，编码能力直接用成品 CLI 的。</p>
+
+<h3>与 native subagent 的差异</h3>
+<table>
+  <thead><tr><th style="width:170px"></th><th style="width:230px">native subagent</th><th>acp subagent</th></tr></thead>
+  <tbody>
+    <tr><td><b>执行位置</b></td><td>Server 进程内另起一个图</td><td class="maybe">独立的 CLI Pod</td></tr>
+    <tr><td><b>Sandbox</b></td><td class="yes">共用父会话的 Pod</td><td class="no">自己的工作区，需显式传递文件</td></tr>
+    <tr><td><b>启动成本</b></td><td class="yes">接近零</td><td class="no">一次 Pod 冷启动</td></tr>
+    <tr><td><b>审批</b></td><td>无（工具由我们装配）</td><td class="no"><b>需一路穿回用户</b></td></tr>
+    <tr><td><b>适用</b></td><td>轻量子任务、并行检索</td><td>多步编码、仓库级改动</td></tr>
+  </tbody>
+</table>
+
+<div class="callout danger">
+  <span class="label">审批链路变长了，必须确保能穿回用户</span>
+  <p><code>acp</code> subagent 会发 <code>session/request_permission</code>，这条请求要经过：</p>
+  <pre style="margin:10px 0"><code>CLI → adapter → Bridge → Server → <span class="tok-w">父 Run</span> → SSE → 用户
+                                    ↑ 必须正确路由到发起委派的那个会话</code></pre>
+  <p>关键是<b>路由</b>：请求带的是子执行的标识，要能映射回父会话的 SSE 流。做错了的表现是<b>审批请求消失、子任务静默超时</b> —— 而用户只看到「卡住了」。</p>
+  <p>对应地，父 Run 在等待子任务审批期间的状态要如实反映：这段时间属于「等人」，不是「系统慢」（<a href="observability.html#s4">可观测性 §04</a>）。</p>
+</div>
+
+<h3>工作区不共享，要显式传递</h3>
+<p><code>acp</code> subagent 有自己的 Pod 与工作区，<b>看不到父会话 sandbox 里的文件</b>。所以委派时要明确传递输入、回收产出：</p>
+
+<pre><code>delegate(agent=<span class="tok-s">"code-assistant-claude"</span>,
+         task=<span class="tok-s">"…任务描述…"</span>,
+         inputs=[<span class="tok-s">"workspace/spec.md"</span>],      <span class="tok-c"># 复制进子 Pod</span>
+         outputs=[<span class="tok-s">"src/**"</span>])                 <span class="tok-c"># 完成后取回父 workspace</span></code></pre>
+
+<p>如果两边都挂同一个 OSS 前缀看起来能省掉复制，但那会让两个 Agent 并发写同一份数据 —— <b>宁可复制，也不要共享可写卷</b>。</p>
+
+<h3>与「任务移交」的区别</h3>
+<p><a href="architecture.html#s9">系统架构 §09</a> 说明本期不做顾问到助理的<b>会话移交</b>。委派不是移交：</p>
+<ul>
+  <li><b>移交</b> —— 会话的归属从 A 换成 B，需要上下文传递与产出回流的完整设计</li>
+  <li><b>委派</b> —— 会话始终属于父 Agent，子 Agent 只是被调用一次的执行单元</li>
+</ul>
+<p>委派可以做，因为它的边界清晰：一次调用、一个结论、不改变会话归属。</p>
+</section>
+
+<!-- ───────────────────────── 8 ───────────────────────── -->
+<section id="s8">
+<h2><span class="num">08</span>重跑语义与 sandbox 状态</h2>
+
+<div class="callout danger">
+  <span class="label">regenerate 的前提在有 sandbox 之后不再成立</span>
+  <p><a href="agent.html#s7">Agent 管理 §07</a> 推导出 <code>native</code> 支持 <code>regenerate</code>，依据是「上下文由服务端持有，每轮重建输入」。这一条仍然成立 —— <b>但它只保证输入相同，不保证环境相同</b>。</p>
+  <p>有了会话级 sandbox，情况变成：</p>
+  <pre style="margin:10px 0"><code>第一次跑：  空目录 → agent 创建 report.md → 完成
+regenerate：<span class="tok-w">report.md 已存在</span> → agent 看到的环境与第一次不同</code></pre>
+  <p>所以 regenerate 不是「重来一次」，而是<b>「在已被上一次修改过的环境上再跑一次」</b>。结果可能与第一次不同，也可能重复执行副作用（再发一次请求、再提交一次）。</p>
+</div>
+
+<h3>三种处理，我推荐第一种</h3>
+<table>
+  <thead><tr><th style="width:190px">方案</th><th style="width:130px">代价</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr>
+      <td class="yes"><b>接受并明确告知</b></td><td class="yes">低</td>
+      <td>UI 上说明「重新生成不会撤销已做的改动」。用户自己判断是否可接受 —— 多数场景下重跑一次生成文档、重算一次分析都是无害的</td>
+    </tr>
+    <tr>
+      <td><b>sandbox 快照回滚</b></td><td class="no">高</td>
+      <td>每轮前打快照，regenerate 时回滚。实现复杂（OSS 卷的快照语义、大文件成本），且对已发出的外部请求无效</td>
+    </tr>
+    <tr>
+      <td><b>有 sandbox 就关掉 regenerate</b></td><td class="maybe">中</td>
+      <td>最安全，但把 <code>native</code> 最有价值的能力之一关掉了，而多数场景其实用不着回滚</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout rule">
+  <span class="label">诚实地说明，比悄悄降级或过度保护都好</span>
+  <p>用户点「重新生成」时的预期是「换个答案」，不是「撤销刚才做的事」。<b>只要 UI 说清楚这一点，方案一就是对的</b> —— 它保留了能力，也没有骗人。</p>
+  <p>反过来，如果因为担心而默默把 regenerate 关掉，用户会疑惑为什么这个 Agent 没有重试按钮；如果不说明就允许重跑，用户会惊讶于文件被改了两次。<b>两种沉默都比一句说明差。</b></p>
+</div>
+
+<h3>编辑历史同理，且更严重</h3>
+<p>编辑历史会重放<b>该轮之后的所有轮次</b>，在有 sandbox 时意味着一连串操作被重新执行。建议：<b>编辑历史只允许编辑最后一轮</b>，或者在编辑跨越了含 sandbox 操作的轮次时给出更强的警告。</p>
+</section>
+
+<!-- ───────────────────────── 9 ───────────────────────── -->
+<section id="s9">
+<h2><span class="num">09</span>生命周期与降级</h2>
+
+<h3>Pod 生命周期</h3>
+<pre><code>首个需要 sandbox 的工具调用 → 按需创建 Pod
+                               <span class="tok-c">（纯对话的会话不该白占一个 Pod）</span>
+会话活跃                      → Pod 保持
+idle 超时                     → 销毁 Pod，会话置 cold；<span class="tok-s">workspace 在 OSS 上，无损</span>
+下次需要 sandbox              → 重建 Pod，挂回同一 OSS 前缀
+会话删除                      → 销毁 Pod + 按保留策略处理 workspace</code></pre>
+
+<div class="callout rule">
+  <span class="label">按需创建，不是建会话就起 Pod</span>
+  <p><code>native</code> 的很多会话可能<b>全程用不到 sandbox</b>（纯咨询、纯检索）。建会话就起 Pod 会把成本浪费在这些会话上。</p>
+  <p>第一次调用 sandbox 工具时再创建，代价是那一次工具调用会慢几秒 —— 可以在提示词里让模型知道「首次使用沙箱会有启动延迟」，或在 UI 上给出状态提示。</p>
+</div>
+
+<h3>Sandbox 不可用时的降级</h3>
+<table>
+  <thead><tr><th style="width:190px">情况</th><th>行为</th></tr></thead>
+  <tbody>
+    <tr><td>Pod 创建失败</td><td>sandbox 工具返回<b>明确的错误</b>给模型，让它知道沙箱不可用并调整策略 —— 而不是让整个 Run 失败</td></tr>
+    <tr><td>Pod 中途消失</td><td>当前工具调用失败；下次调用触发重建；<b>提示模型「环境已重置」</b></td></tr>
+    <tr><td>命令超时</td><td>杀掉进程，返回超时错误与已产生的输出</td></tr>
+    <tr><td>OOMKill</td><td>与普通失败区分上报（<a href="observability.html#s9">可观测性 §09</a>），重建后可继续</td></tr>
+  </tbody>
+</table>
+
+<p>共同原则：<b>让模型知道发生了什么，而不是让 Run 直接失败</b>。模型通常能在沙箱不可用时换一种方式回答，或者明确告诉用户做不了 —— 这两种都比一个技术错误强。</p>
+</section>
+
+<!-- ───────────────────────── 10 ──────────────────────── -->
+<section id="s10">
+<h2><span class="num">10</span>待验证清单</h2>
+
+<table>
+  <thead><tr><th style="width:60px">#</th><th style="width:250px">验证项</th><th>影响</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><b>1</b></td>
+      <td><b>Pod 冷启动的实际耗时</b> —— 镜像拉取、挂卷、守护进程就绪各占多少</td>
+      <td class="no">决定 <a href="#s9">§09</a> 的「按需创建」是否可接受，以及要不要预热池</td>
+    </tr>
+    <tr>
+      <td><b>2</b></td>
+      <td>技能脚本在 sandbox 里的实际可用性 —— 依赖（Python 版本、第三方包）是否齐全</td>
+      <td class="no">决定 <a href="#s5">§05</a> 的技能卷是否还要带运行时依赖，或镜像要预装什么</td>
+    </tr>
+    <tr>
+      <td><b>3</b></td>
+      <td><code>acp</code> subagent 的审批路由 —— 请求能否正确穿回父会话的 SSE 流</td>
+      <td class="no"><a href="#s7">§07</a> 的核心风险，做错了表现为静默超时</td>
+    </tr>
+    <tr>
+      <td><b>4</b></td>
+      <td>OSS 挂载在 <code>workspace/</code> 上的实际写入性能 —— 中等数量文件的读写延迟</td>
+      <td class="maybe">决定 <a href="#s4">§04</a> 的存储划分是否要再细分</td>
+    </tr>
+    <tr>
+      <td><b>5</b></td>
+      <td>委派的实际效果 —— <code>native</code> 能否稳定地把任务描述清楚，使 <code>acp</code> subagent 产出可用结果</td>
+      <td class="maybe">决定 <a href="#s7">§07</a> 的组合是否真的比直接用 <code>acp</code> 更好</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>建议的实现顺序</h3>
+<ol class="body">
+  <li><b>先做无 sandbox 的 native</b> —— <code>create_agent</code> + Message 事实源 + 只读工具，验证对象模型与事件流。这是整套抽象最小的可验证切片。</li>
+  <li><b>再加 sandbox</b> —— Pod 生命周期、目录结构、按需创建；此时 <a href="#s8">§08</a> 的重跑语义说明要同期上线。</li>
+  <li><b>然后是技能的双路下发</b> —— 需要 sandbox 先能跑。</li>
+  <li><b>最后做 subagent</b> —— 先 native subagent（成本低、无审批链路），再 <code>acp</code> subagent。</li>
+</ol>
+</section>
+
+<footer>
+  <p>相关文档：<a href="session.html#s5">会话管理 §05</a>（无 checkpoint 的执行模型）· <a href="agent.html">Agent 管理设计</a>（定义与能力推导）· <a href="skill.html">技能管理设计</a> · <a href="runtime.html">运行时链路设计</a>（<code>acp</code> 的 Pod 形态）。</p>
+</footer>
+
+</main>
+</div>
+</body>
+</html>

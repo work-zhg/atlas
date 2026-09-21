@@ -1,0 +1,816 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>会话管理设计 · AI Platform</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="sitenav">
+  <a class="brand" href="./">AI&nbsp;<b>Platform</b>&nbsp;/ 设计文档</a>
+  <div class="links">
+    <a href="./">目录</a>
+    <a href="detail/">详细设计</a>
+    <a href="architecture.html">系统架构</a>
+    <a href="agent.html">Agent 管理</a>
+    <a href="skill.html">技能管理</a>
+    <a href="mcp.html">MCP 管理</a>
+    <a href="permission.html">权限管理</a>
+    <a href="execution.html">执行环境</a>
+    <a class="on" href="session.html">会话管理</a>
+    <a href="native.html">native Agent</a>
+    <a href="runtime.html">运行时链路</a>
+    <a href="local.html">本地部署</a>
+    <a href="memory.html">记忆</a>
+    <a href="observability.html">可观测性</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+<nav class="toc" aria-label="目录">
+  <div class="eyebrow">本页</div>
+  <ol>
+    <li><a href="#s1">角色分工：顾问与助理</a></li>
+    <li><a href="#s2">术语与对象模型</a></li>
+    <li><a href="#s3">对象层次与作用域</a></li>
+    <li><a href="#s4">能力矩阵</a></li>
+    <li><a href="#s5">顾问的执行</a></li>
+    <li><a href="#s6">助理的执行</a></li>
+    <li><a href="#s7">数据模型</a></li>
+    <li><a href="#s8">Message / Event 保留</a></li>
+    <li><a href="#s9">Run 状态机</a></li>
+    <li><a href="#s10">传输层与接口契约</a></li>
+    <li><a href="#s11">Event 目录与固化清单</a></li>
+    <li><a href="#s12">交互时序</a></li>
+    <li><a href="#s13">关键约束与陷阱</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<header class="hero">
+  <p class="kicker">Session Management</p>
+  <h1>会话管理设计</h1>
+  <p class="lede">Session / Run / Message / Event 四个对象，一套状态机，两类 Agent。顾问出谋划策，助理实际干活 —— 它们共享对象模型，但能力边界必须显式暴露而非抹平。</p>
+  <div class="meta">
+    <span>Agent</span><span>Session</span><span>Run</span><span>Message</span><span>Event</span>
+  </div>
+</header>
+
+<!-- ───────────────────────── 1 ───────────────────────── -->
+<section id="s1">
+<h2><span class="num">01</span>角色分工：顾问与助理</h2>
+
+<div class="grid2">
+  <div class="panel native">
+    <h4>顾问</h4>
+    <p class="role"><code>type = native</code> · Server 进程内 · 上下文在服务端</p>
+    <ul>
+      <li>分析、方案、评审、答疑</li>
+      <li>工具集<b>限只读</b></li>
+      <li>产出即 Message 本身</li>
+      <li>无 checkpoint，Message 是唯一事实源</li>
+      <li>重跑安全</li>
+    </ul>
+  </div>
+  <div class="panel acp">
+    <h4>助理</h4>
+    <p class="role"><code>type = acp</code> · Pod 内经 ACP · 上下文在 CLI 进程</p>
+    <ul>
+      <li>写代码、改文件、跑命令</li>
+      <li>工具集<b>完整，含写操作</b></li>
+      <li>产出是 OSS 文件 + Message 摘要</li>
+      <li>上下文在 CLI 进程内</li>
+      <li>重跑危险，每个危险动作需审批</li>
+    </ul>
+  </div>
+</div>
+
+<div class="callout rule">
+  <span class="label">一条分界线推导出全部不对称</span>
+  <p><b>上下文由谁持有。</b>本文后面每一处两类 Agent 不一致的地方，都能回溯到这一条：</p>
+  <ul style="margin-top:8px;margin-bottom:0">
+    <li>顾问可以 regenerate / 编辑历史 —— 因为输入是我们每轮重建的，截断改写即可</li>
+    <li>顾问不需要 Run 内挂起 —— 因为无 checkpoint，<code>interrupt()</code> 用不了</li>
+    <li>顾问可以不存 checkpoint —— 因为不需要精确恢复到中断点</li>
+    <li>助理的上下文动不了 —— 因为它在别人的进程里</li>
+  </ul>
+</div>
+
+<div class="callout warn">
+  <span class="label">配置顾问工具时要考虑重跑语义</span>
+  <p>顾问支持 <code>regenerate</code> 与编辑历史，意味着<b>同一轮可能被重跑多次</b>，该轮的工具调用会重新执行。给它配工具时要清楚这一点 —— 前端那个重试按钮在用户看来是无害的。</p>
+</div>
+</section>
+
+<!-- ───────────────────────── 2 ───────────────────────── -->
+<section id="s2">
+<h2><span class="num">02</span>术语与对象模型</h2>
+
+<table>
+  <thead><tr><th style="width:110px">对象</th><th style="width:120px">作用域</th><th>定义</th><th style="width:110px">生命周期</th></tr></thead>
+  <tbody>
+    <tr><td><code>Agent</code></td><td>全局配置</td><td>智能体定义。<code>type</code> 取 <code>native</code>（进程内）或 <code>acp</code>（经 ACP 驱动 CLI）。<b><code>capabilities</code> 的所有者</b>。</td><td>配置态 · 带版本</td></tr>
+    <tr><td><code>Session</code></td><td>—</td><td>一个会话。引用一个 Agent 版本，持有工作区、模型配置、认证上下文，以及对 <code>acp</code> 类型而言的 Pod 健康状态（<code>state</code>）。<b>不存 capabilities</b>。</td><td>永久</td></tr>
+    <tr><td><code>Run</code></td><td>Session</td><td>会话里的<b>一条对话</b>：一次用户提交 → Agent 干完活 → 停下来。Session 内<b>串行</b>，同时只允许一个活跃 Run。</td><td>永久（元数据）</td></tr>
+    <tr><td><code>Message</code></td><td>Session</td><td>会话内容账本。<code>user</code> / <code>assistant</code> / <code>tool</code> / <code>system</code>。<b>展示的唯一真相</b>，对顾问而言<b>也是执行的唯一输入源</b>。</td><td>永久</td></tr>
+    <tr><td><code>Event</code></td><td>Run</td><td>由 chunk 转成的过程流：增量文本、思考、工具中间态、审批请求。<b>只保留最后一个 Run 的</b>。</td><td>随下一个 Run 开始而清理</td></tr>
+  </tbody>
+</table>
+
+<div class="callout rule">
+  <span class="label">核心分层</span>
+  <p><b>Message 是「会话内容」，Event 是「它怎么产生的」。</b>Run 结束后 Message 即为真相，Event 可以丢弃 —— 前提是所有需要保留的语义都已固化进 Message 或 Run 元数据（见 <a href="#s11">§11</a>）。</p>
+</div>
+</section>
+
+<!-- ───────────────────────── 3 ───────────────────────── -->
+<section id="s3">
+<h2><span class="num">03</span>对象层次与作用域</h2>
+
+<figure>
+<svg viewBox="0 0 900 560" role="img" aria-labelledby="figB-t figB-d" font-family="var(--sans)">
+  <title id="figB-t">对象层次图</title>
+  <desc id="figB-d">Agent 持有 capabilities。Session 引用 Agent 版本，之下分为两支：Message 列表为 session 作用域且永久保留；Run 列表为 session 作用域，Run 之下的 Event 为 run 作用域且只保留最后一个 Run。</desc>
+  <defs>
+    <marker id="arB" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#475569"/>
+    </marker>
+    <marker id="arB2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#38BDF8"/>
+    </marker>
+  </defs>
+
+  <!-- Agent -->
+  <rect x="620" y="16" width="260" height="104" rx="8" fill="#0E1223" stroke="#38BDF8" stroke-opacity=".5"/>
+  <text x="640" y="44" fill="#F8FAFC" font-size="15" font-weight="600">Agent</text>
+  <text x="640" y="66" fill="#38BDF8" font-size="10.5">capabilities 的唯一所有者</text>
+  <text x="640" y="90" fill="#94A3B8" font-size="11" font-family="monospace">agent_id · version</text>
+  <text x="640" y="110" fill="#94A3B8" font-size="11" font-family="monospace">type · capabilities{…}</text>
+
+  <!-- Session -->
+  <rect x="310" y="16" width="280" height="104" rx="8" fill="#0E1223" stroke="#334155"/>
+  <text x="330" y="44" fill="#F8FAFC" font-size="15" font-weight="600">Session</text>
+  <text x="330" y="68" fill="#94A3B8" font-size="11" font-family="monospace">session_id</text>
+  <text x="330" y="88" fill="#94A3B8" font-size="11" font-family="monospace">agent_id · agent_version</text>
+  <text x="330" y="108" fill="#94A3B8" font-size="11" font-family="monospace">state: active | cold | lost</text>
+  <line x1="590" y1="68" x2="620" y2="68" stroke="#38BDF8" stroke-width="1.5" marker-end="url(#arB2)"/>
+  <text x="605" y="58" text-anchor="middle" fill="#64748B" font-size="10" font-family="monospace">N : 1</text>
+
+  <!-- connectors -->
+  <path d="M450 120 L450 150 M200 150 L700 150" fill="none" stroke="#475569" stroke-width="1.5"/>
+  <line x1="200" y1="150" x2="200" y2="196" stroke="#475569" stroke-width="1.5" marker-end="url(#arB)"/>
+  <line x1="700" y1="150" x2="700" y2="196" stroke="#475569" stroke-width="1.5" marker-end="url(#arB)"/>
+  <text x="212" y="176" fill="#64748B" font-size="10" font-family="monospace">1 : N</text>
+  <text x="712" y="176" fill="#64748B" font-size="10" font-family="monospace">1 : N</text>
+
+  <!-- Message -->
+  <rect x="60" y="196" width="280" height="194" rx="8" fill="#0E1223" stroke="#22C55E" stroke-opacity=".5"/>
+  <text x="80" y="226" fill="#F8FAFC" font-size="15" font-weight="600">Message</text>
+  <text x="80" y="247" fill="#22C55E" font-size="11">session 作用域 · 永久保留</text>
+  <line x1="80" y1="259" x2="320" y2="259" stroke="#232B3D"/>
+  <text x="80" y="282" fill="#94A3B8" font-size="11" font-family="monospace">seq        session 内单调</text>
+  <text x="80" y="304" fill="#94A3B8" font-size="11" font-family="monospace">run_id     nullable</text>
+  <text x="80" y="326" fill="#94A3B8" font-size="11" font-family="monospace">role       user|assistant</text>
+  <text x="80" y="346" fill="#94A3B8" font-size="11" font-family="monospace">           |tool|system</text>
+  <text x="80" y="370" fill="#94A3B8" font-size="11" font-family="monospace">content    / tool_call</text>
+
+  <!-- Run -->
+  <rect x="560" y="196" width="280" height="194" rx="8" fill="#0E1223" stroke="#334155"/>
+  <text x="580" y="226" fill="#F8FAFC" font-size="15" font-weight="600">Run</text>
+  <text x="580" y="247" fill="#94A3B8" font-size="11">session 内串行 · 一次提交</text>
+  <line x1="580" y1="259" x2="820" y2="259" stroke="#232B3D"/>
+  <text x="580" y="282" fill="#94A3B8" font-size="11" font-family="monospace">run_id     客户端生成</text>
+  <text x="580" y="304" fill="#94A3B8" font-size="11" font-family="monospace">index · status</text>
+  <text x="580" y="326" fill="#94A3B8" font-size="11" font-family="monospace">stop_reason · usage</text>
+  <text x="580" y="348" fill="#94A3B8" font-size="11" font-family="monospace">tool_call_count</text>
+  <text x="580" y="370" fill="#94A3B8" font-size="11" font-family="monospace">first_seq · last_seq</text>
+
+  <line x1="700" y1="390" x2="700" y2="424" stroke="#475569" stroke-width="1.5" marker-end="url(#arB)"/>
+  <text x="712" y="412" fill="#64748B" font-size="10" font-family="monospace">1 : N</text>
+
+  <!-- Event -->
+  <rect x="560" y="424" width="280" height="112" rx="8" fill="#0E1223" stroke="#F59E0B" stroke-opacity=".5"/>
+  <text x="580" y="452" fill="#F8FAFC" font-size="15" font-weight="600">Event</text>
+  <text x="580" y="473" fill="#F59E0B" font-size="11">run 作用域 · 仅最后一个 Run</text>
+  <line x1="580" y1="485" x2="820" y2="485" stroke="#232B3D"/>
+  <text x="580" y="508" fill="#94A3B8" font-size="11" font-family="monospace">seq · run_id NOT NULL</text>
+  <text x="580" y="528" fill="#94A3B8" font-size="11" font-family="monospace">type · payload</text>
+
+  <!-- note -->
+  <rect x="60" y="424" width="280" height="112" rx="8" fill="#0B0F1E" stroke="#232B3D" stroke-dasharray="4 3"/>
+  <text x="80" y="452" fill="#F8FAFC" font-size="12" font-weight="600">seq 为何是 session 级</text>
+  <text x="80" y="476" fill="#94A3B8" font-size="10.5">· 断线补洞只需单一游标</text>
+  <text x="80" y="496" fill="#94A3B8" font-size="10.5">· 容纳 run_id = null 的系统消息</text>
+  <text x="80" y="516" fill="#94A3B8" font-size="10.5">· 保留跨 Run 的相对顺序</text>
+</svg>
+<figcaption><b><code>capabilities</code> 归 Agent，<code>state</code> 归 Session。</b>前者是「这个智能体能做什么」（静态、随 Agent 版本变化），后者是「这个会话现在什么状况」（动态）。Session 只存 <code>agent_id + agent_version</code>，不复制 capabilities。<br><br><b><code>run_id</code> 表示因果归属，不是「写入时正好哪个 Run 在跑」。</b>Run 内处理逻辑产生的 → 带 <code>run_id</code>；Session 生命周期产生的（Pod 回收、会话丢失、认证过期）→ <code>run_id</code> 为 <code>null</code>，以 <code>system</code> 角色的 Message 承载。允许向已 <code>completed</code> 的 Run 追加会破坏其 <code>usage</code> / <code>last_seq</code> 的不可变性。</figcaption>
+</figure>
+</section>
+
+<!-- ───────────────────────── 4 ───────────────────────── -->
+<section id="s4">
+<h2><span class="num">04</span>能力矩阵</h2>
+
+<p><b>前端只读 capability 决定按钮的显示与禁用，禁止出现 <code>if (agent.type === 'assistant')</code>。</b>「实现机制」一列说明能力从何而来 —— 顾问的编辑类能力不再来自 checkpoint 回放，而来自<b>重构输入</b>。</p>
+
+<table>
+  <thead><tr><th style="width:190px">能力</th><th style="width:90px">顾问</th><th style="width:90px">助理</th><th>实现机制</th></tr></thead>
+  <tbody>
+    <tr><td><code>multi_turn</code></td><td class="yes">✓</td><td class="yes">✓</td><td>顾问每轮重传完整 Message 列表；助理靠 CLI 自身上下文</td></tr>
+    <tr><td><code>stream</code></td><td class="yes">✓</td><td class="yes">✓</td><td>两者都投影成同一套 Event</td></tr>
+    <tr><td><code>cancel</code></td><td class="yes">✓</td><td class="yes">✓</td><td>顾问中止 astream；助理发 <code>session/cancel</code></td></tr>
+    <tr><td><code>rollback_on_cancel</code></td><td class="yes">✓</td><td class="no">✗</td><td>顾问删除本轮 Message 即可；助理的已执行动作与半截上下文都留着</td></tr>
+    <tr><td><code>regenerate</code></td><td class="yes">✓</td><td class="no">✗</td><td><b>截断 Message 重构输入</b> —— 上下文本就是我们每轮重建的</td></tr>
+    <tr><td><code>edit_history</code></td><td class="yes">✓</td><td class="no">✗</td><td>改 Message 表后重构输入</td></tr>
+    <tr><td><code>branch</code></td><td class="yes">✓</td><td class="no">✗</td><td>复制 Message 子集到新 Session</td></tr>
+    <tr><td><code>compact</code></td><td class="yes">✓</td><td class="no">✗</td><td>服务端压缩 Message 列表；助理的压缩由 CLI 自管</td></tr>
+    <tr><td><code>in_run_input</code></td><td class="no">✗</td><td class="yes">✓</td><td><b>Run 内挂起等待输入</b>。顾问无 checkpoint 故不可用，见 <a href="#s5">§05</a></td></tr>
+    <tr><td><code>resume_mid_run</code></td><td class="no">✗</td><td class="no">✗</td><td><b>两者都不支持</b>：顾问无 checkpoint，助理状态在进程内</td></tr>
+    <tr><td><code>resume_session</code></td><td class="yes">✓</td><td class="maybe">native ｜ replay ｜ none</td><td>顾问的 Message 在库里，进程重启无影响；助理取决于 <code>loadSession</code></td></tr>
+    <tr><td><code>needs_approval</code></td><td class="no">✗</td><td class="yes">✓</td><td>顾问无危险动作</td></tr>
+  </tbody>
+</table>
+
+<div class="callout warn">
+  <span class="label">上线前必须先验证</span>
+  <p>对每个要接入的 CLI，实测 <code>initialize</code> 返回的 <code>agentCapabilities.loadSession</code>。<b>这一个布尔值决定助理的整套恢复策略</b>：为 true 走原生续接；为 false 只能重放（有损、重复计费、可能重复执行已做过的动作）或直接放弃上下文。</p>
+</div>
+
+<h3>capabilities 的所有权与投影</h3>
+<ul>
+  <li><code>agents</code> 表持有 capabilities，<b>Session 不复制一份</b>，只存 <code>agent_id + agent_version</code>。</li>
+  <li>会话快照 <code>GET /sessions/{sid}</code> 里<b>投影</b>出 capabilities —— 为前端省一次往返的传输优化，不是所有权转移。</li>
+  <li>Agent 定义变更会改变 capabilities；存量会话通过 <code>agent_version</code> <b>钉住</b>快照时那一版，避免会话中途能力集漂移。</li>
+</ul>
+
+<div class="callout warn">
+  <span class="label">助理的 capabilities 有两层</span>
+  <p>顾问的 capabilities 是纯静态声明。但助理的部分字段<b>只有握手后才知道</b> —— <code>resume_session</code> 取决于 <code>initialize</code> 响应，要真正连上 CLI 才读得到，且随 Pod 上的 CLI 版本变化。</p>
+  <p>所以 Agent 上分开存 <b>declared</b>（配置里写的）与 <b>probed</b>（首次握手探测到的，带时间戳）。probed 覆盖 declared；尚未探测时下发保守值（<code>resume_session: "none"</code>），而不是乐观假设 —— 猜错的代价是用户以为上下文还在。</p>
+</div>
+</section>
+
+<!-- ───────────────────────── 5 ───────────────────────── -->
+<section id="s5">
+<h2><span class="num">05</span>顾问的执行</h2>
+
+<p>用 LangChain 的 <code>create_agent</code> 构造，<b>不传 <code>checkpointer</code></b>。每轮从 Message 表读取完整历史作为输入，跑完把新增部分固化回 Message 表。</p>
+
+<h3>构造</h3>
+<pre><code><span class="tok-k">from</span> langchain.agents <span class="tok-k">import</span> create_agent
+
+advisor = create_agent(
+    model=model,
+    tools=tools,                   <span class="tok-c"># 注意重跑语义：regenerate 会再执行一遍</span>
+    system_prompt=ADVISOR_PROMPT,
+    middleware=[...],
+    name=<span class="tok-s">"advisor"</span>,
+    <span class="tok-c"># checkpointer 省略 → 无状态图</span>
+    <span class="tok-c"># Message 表是唯一事实源，不需要第二份</span>
+)</code></pre>
+
+<h3>执行一轮</h3>
+<pre><code><span class="tok-c"># 1. 从 Message 表构造输入 —— 这是唯一的上下文来源</span>
+history = <span class="tok-k">await</span> messages.load(session_id)
+history.append(HumanMessage(content=user_input))
+
+<span class="tok-c"># 2. 流式执行，chunk 转成 Event 推 SSE</span>
+<span class="tok-k">async for</span> mode, chunk <span class="tok-k">in</span> advisor.astream(
+    {<span class="tok-s">"messages"</span>: history},
+    stream_mode=[<span class="tok-s">"messages"</span>, <span class="tok-s">"updates"</span>],
+):
+    <span class="tok-k">await</span> events.publish(run_id, translate(mode, chunk))
+
+<span class="tok-c"># 3. 固化：超出输入长度的部分即本轮新增</span>
+<span class="tok-k">await</span> messages.append(session_id, run_id, final_state[<span class="tok-s">"messages"</span>][<span class="tok-k">len</span>(history):])</code></pre>
+
+<p>注意<b>不传 <code>thread_id</code></b> —— 无 checkpointer 时它没有意义。<code>run_id</code> 通过 config 传递，仅用于 OTel 关联，不用于状态寻址。</p>
+
+<h3>为什么这样更好</h3>
+<table>
+  <thead><tr><th style="width:230px"></th><th>checkpoint 方案</th><th>Message 方案</th></tr></thead>
+  <tbody>
+    <tr><td><b>真相源</b></td><td>两份（checkpoint + Message），需对齐规则</td><td class="yes">一份</td></tr>
+    <tr><td><b>对齐失败表现</b></td><td class="no">静默降级，不报错</td><td class="yes">不存在该失败模式</td></tr>
+    <tr><td><b>regenerate</b></td><td>回放到某个 checkpoint 再分叉</td><td class="yes">截断列表重新调用</td></tr>
+    <tr><td><b>编辑历史</b></td><td>需要改写检查点谱系</td><td class="yes">改一行记录</td></tr>
+    <tr><td><b>Run 中断续跑</b></td><td class="yes">支持</td><td class="no">不支持，整轮重来</td></tr>
+  </tbody>
+</table>
+
+<p>把编辑类能力建立在「重构输入」而非「checkpoint 回放」之上，实现更简单也更可控 —— checkpoint 的谱系、分叉与增量重放本身就是一类难对付的 bug 来源。<b>实质损失只有中断续跑一项。</b></p>
+
+<div class="callout danger">
+  <span class="label">连带后果：顾问不能在 Run 内挂起</span>
+  <p>LangGraph 的 <code>interrupt()</code> 明确要求 checkpointer —— 它靠持久化图状态来实现恢复。不存 checkpoint 就<b>无法用 interrupt 做追问</b>。</p>
+  <p>因此顾问的追问必须是 <b>「结束本轮 + 开新轮」</b>：Agent 提出问题作为本轮最终输出，<code>stop_reason = need_clarification</code>，Run 正常 <code>completed</code>；用户的回答作为下一轮的 human message。而助理的审批是 <b>Run 内挂起</b>（<code>waiting_input</code>），因为 CLI 进程还活着在等。</p>
+  <p>这个不对称由 <code>in_run_input</code> capability 暴露给前端。<b>它恰好和产品语义自洽</b>：顾问的追问本就该长得像「它问了我一个问题」（一条消息），助理的审批本就该长得像「它要做一件事，请批准」（一张操作卡片）。这两者在 UI 上本来就不该一样。</p>
+</div>
+
+<h3>成本：上下文随轮次线性增长</h3>
+<p>每轮重传完整历史，token 成本随会话长度增长。这一点 checkpoint 方案并不更优（LangGraph 的 checkpoint 同样保存完整消息列表），所以不算本方案的额外代价 —— 但<b>仍然必须实现 <code>compact</code></b>：服务端压缩 Message 列表并写入一条 <code>system</code> 摘要消息，后续轮次从摘要点之后重构输入。</p>
+
+<h3>可选优化：把中断损失降到轮内</h3>
+<p>一轮内如果 Agent 调了多个工具后崩溃，默认整轮重来。若把工具调用与结果<b>实时固化</b>成 Message（而非等 Run 结束批量写），重来时它们作为已有上下文传入，模型通常会跳过已完成的步骤。</p>
+<div class="callout warn">
+  <span class="label">这是启发式而非保证</span>
+  <p>它依赖模型「看到自己已经调过这些工具」后的行为，不是机制保证 —— 模型完全可能重新调用一遍。对只读工具而言重复调用无害，所以对顾问可以接受；<b>但不要把它当作 <code>resume_mid_run</code> 对外宣称</b>，能力矩阵里这一项仍然是 ✗。</p>
+</div>
+</section>
+
+<!-- ───────────────────────── 6 ───────────────────────── -->
+<section id="s6">
+<h2><span class="num">06</span>助理的执行</h2>
+
+<p>Server 经 WebSocket 把 prompt 下发给 Pod 内的 Bridge，Bridge 作为 ACP client 驱动 CLI，并把 <code>session/update</code> 分流成两条线：实时推 Event，Run 结束时固化 Message。</p>
+
+<table>
+  <thead><tr><th style="width:230px">ACP session/update</th><th style="width:230px">Event</th><th>Message 固化</th></tr></thead>
+  <tbody>
+    <tr><td><code>agent_message_chunk</code></td><td><code>message.delta</code></td><td class="yes">assistant Message —— 必须</td></tr>
+    <tr><td><code>agent_thought_chunk</code></td><td><code>thought.delta</code></td><td>—</td></tr>
+    <tr><td><code>tool_call</code></td><td><code>tool_call.started</code></td><td rowspan="2" class="yes">tool Message —— 必须</td></tr>
+    <tr><td><code>tool_call_update</code></td><td><code>tool_call.updated/ended</code></td></tr>
+    <tr><td><code>plan</code></td><td><code>plan.updated</code></td><td class="maybe">可选</td></tr>
+    <tr><td><code>session/request_permission</code></td><td><code>request.pending</code></td><td class="yes">system Message（审计）</td></tr>
+    <tr><td><code>session/prompt</code> 返回 <code>stopReason</code></td><td><code>run.ended</code></td><td class="yes">Run 元数据</td></tr>
+  </tbody>
+</table>
+
+<div class="callout warn">
+  <span class="label">不要把 CLI 的输出全当 trace</span>
+  <p><code>agent_message_chunk</code> <b>必须走 Message 固化路径</b>。若助理的所有输出都只当作过程 trace，历史记录里这类会话会是空白的，只剩用户发的问题。</p>
+</div>
+
+<h3>Pod 即会话</h3>
+<ul>
+  <li><b>不需要 sticky 路由</b> —— 会话与 Pod 一一对应，Server 维护 <code>session_id → pod</code> 映射并直连该 Pod 的 WebSocket 端点。Server 自身因此可无状态扩容。</li>
+  <li><b>idle 缩容</b> —— 无活动超时后销毁 Pod，会话置 <code>cold</code>；下次提交时重新调度。</li>
+  <li><b>OSS 让重建对文件无损</b> —— 但<b>上下文不在 OSS 上</b>，它随 Pod 消失。能否恢复只取决于 <code>loadSession</code>。别把「文件还在」误当成「上下文还在」。</li>
+  <li><b>凭证隔离天然成立</b> —— Pod 边界即隔离边界。</li>
+  <li><b>会话 ID 分层</b> —— 客户端只见持久的 <code>session_id</code>；<code>bridge_ref = {pod, acp_session_id}</code> 易失，随 Pod 重建更换。</li>
+</ul>
+
+<h3>会话健康状态必须可见</h3>
+<table>
+  <thead><tr><th style="width:120px">state</th><th>含义</th><th>前端表现</th></tr></thead>
+  <tbody>
+    <tr><td><code class="yes">active</code></td><td>Pod 存活，上下文完整</td><td>正常</td></tr>
+    <tr><td><code class="maybe">cold</code></td><td>Pod 已回收，下次提交时重建</td><td><code>resume_session=native</code> 时无感；<code>replay</code> 时提示有损</td></tr>
+    <tr><td><code class="no">lost</code></td><td>无法恢复，上下文已丢</td><td>消息流中插入分隔线：「会话已重启，此前上下文未保留」</td></tr>
+  </tbody>
+</table>
+<p>不要让它静默。用户最恨的是「我明明刚说过」而 Agent 完全不记得。</p>
+</section>
+
+<!-- ───────────────────────── 7 ───────────────────────── -->
+<section id="s7">
+<h2><span class="num">07</span>数据模型</h2>
+
+<pre><code><span class="tok-c">-- 智能体定义。capabilities 的唯一所有者，按版本不可变</span>
+<span class="tok-k">CREATE TABLE</span> agents (
+  agent_id         <span class="tok-n">TEXT</span>        <span class="tok-k">NOT NULL</span>,
+  version          <span class="tok-n">INT</span>         <span class="tok-k">NOT NULL</span>,
+  type             <span class="tok-n">TEXT</span>        <span class="tok-k">NOT NULL</span>,   <span class="tok-c">-- native | acp</span>
+  launch           <span class="tok-n">JSONB</span>,                  <span class="tok-c">-- acp: 镜像 / command / args / env</span>
+  caps_declared    <span class="tok-n">JSONB</span>       <span class="tok-k">NOT NULL</span>,
+  caps_probed      <span class="tok-n">JSONB</span>,                  <span class="tok-c">-- acp: initialize 握手探测，覆盖 declared</span>
+  probed_at        <span class="tok-n">TIMESTAMPTZ</span>,
+  <span class="tok-k">PRIMARY KEY</span> (agent_id, version)
+);
+
+<span class="tok-c">-- 会话。只引用 Agent 版本，不复制 capabilities</span>
+<span class="tok-k">CREATE TABLE</span> sessions (
+  session_id     <span class="tok-n">TEXT</span>        <span class="tok-k">PRIMARY KEY</span>,
+  agent_id       <span class="tok-n">TEXT</span>        <span class="tok-k">NOT NULL</span>,
+  agent_version  <span class="tok-n">INT</span>         <span class="tok-k">NOT NULL</span>,   <span class="tok-c">-- 钉住，避免能力集中途漂移</span>
+  state          <span class="tok-n">TEXT</span>        <span class="tok-k">NOT NULL</span>,   <span class="tok-c">-- active | cold | lost</span>
+  workspace_uri  <span class="tok-n">TEXT</span>,                   <span class="tok-c">-- acp: OSS 前缀</span>
+  model          <span class="tok-n">TEXT</span>,
+  bridge_ref     <span class="tok-n">JSONB</span>,                  <span class="tok-c">-- {pod, acp_session_id} 易失，可为空</span>
+  next_seq       <span class="tok-n">BIGINT</span>      <span class="tok-k">NOT NULL DEFAULT</span> 1,
+  created_at     <span class="tok-n">TIMESTAMPTZ</span> <span class="tok-k">NOT NULL</span>,
+  <span class="tok-k">FOREIGN KEY</span> (agent_id, agent_version) <span class="tok-k">REFERENCES</span> agents (agent_id, version)
+);
+
+<span class="tok-c">-- 一条对话。session 内串行；run_id 由客户端生成，天然幂等键</span>
+<span class="tok-k">CREATE TABLE</span> runs (
+  run_id          <span class="tok-n">TEXT</span>        <span class="tok-k">PRIMARY KEY</span>,
+  session_id      <span class="tok-n">TEXT</span>        <span class="tok-k">NOT NULL REFERENCES</span> sessions,
+  idx             <span class="tok-n">INT</span>         <span class="tok-k">NOT NULL</span>,
+  status          <span class="tok-n">TEXT</span>        <span class="tok-k">NOT NULL</span>,   <span class="tok-c">-- queued|running|waiting_input|…</span>
+  stop_reason     <span class="tok-n">TEXT</span>,                   <span class="tok-c">-- end_turn | need_clarification | error | …</span>
+  usage           <span class="tok-n">JSONB</span>,
+  tool_call_count <span class="tok-n">INT</span>         <span class="tok-k">NOT NULL DEFAULT</span> 0,
+  first_seq       <span class="tok-n">BIGINT</span>,
+  last_seq        <span class="tok-n">BIGINT</span>,
+  started_at      <span class="tok-n">TIMESTAMPTZ</span>,
+  ended_at        <span class="tok-n">TIMESTAMPTZ</span>
+);
+<span class="tok-c">-- session 内同时只允许一个活跃 Run</span>
+<span class="tok-k">CREATE UNIQUE INDEX</span> uq_run_active <span class="tok-k">ON</span> runs (session_id)
+  <span class="tok-k">WHERE</span> status <span class="tok-k">IN</span> (<span class="tok-s">'queued'</span>, <span class="tok-s">'running'</span>, <span class="tok-s">'waiting_input'</span>);
+
+<span class="tok-c">-- 会话内容账本。展示的唯一真相，也是 native 类型执行的唯一输入源</span>
+<span class="tok-k">CREATE TABLE</span> messages (
+  session_id <span class="tok-n">TEXT</span>        <span class="tok-k">NOT NULL</span>,
+  seq        <span class="tok-n">BIGINT</span>      <span class="tok-k">NOT NULL</span>,   <span class="tok-c">-- session 内单调，全局排序真相</span>
+  run_id     <span class="tok-n">TEXT</span>        <span class="tok-w">NULL</span>,       <span class="tok-c">-- system 类消息不隶属任何 Run</span>
+  role       <span class="tok-n">TEXT</span>        <span class="tok-k">NOT NULL</span>,
+  kind       <span class="tok-n">TEXT</span>,                      <span class="tok-c">-- session_restarted / permission_decision / compaction …</span>
+  content    <span class="tok-n">JSONB</span>       <span class="tok-k">NOT NULL</span>,
+  created_at <span class="tok-n">TIMESTAMPTZ</span> <span class="tok-k">NOT NULL</span>,
+  <span class="tok-k">PRIMARY KEY</span> (session_id, seq)
+);
+
+<span class="tok-c">-- 过程流。与 messages 共用 session 级 seq；随下一个 Run 开始被清理</span>
+<span class="tok-k">CREATE TABLE</span> events (
+  session_id <span class="tok-n">TEXT</span>        <span class="tok-k">NOT NULL</span>,
+  seq        <span class="tok-n">BIGINT</span>      <span class="tok-k">NOT NULL</span>,
+  run_id     <span class="tok-n">TEXT</span>        <span class="tok-k">NOT NULL</span>,
+  type       <span class="tok-n">TEXT</span>        <span class="tok-k">NOT NULL</span>,
+  payload    <span class="tok-n">JSONB</span>       <span class="tok-k">NOT NULL</span>,
+  created_at <span class="tok-n">TIMESTAMPTZ</span> <span class="tok-k">NOT NULL</span>,
+  <span class="tok-k">PRIMARY KEY</span> (session_id, seq)
+);
+<span class="tok-k">CREATE INDEX</span> ix_events_run <span class="tok-k">ON</span> events (session_id, run_id, seq);</code></pre>
+
+<div class="callout rule">
+  <span class="label">序列分配</span>
+  <p><code>messages</code> 与 <code>events</code> <b>共用同一条 session 级 seq</b>，由 <code>sessions.next_seq</code> 串行分配。前端把两者混流按 seq 追加即得正确顺序，无需任何客户端合并逻辑。<code>uq_run_active</code> 保证写入天然串行，seq 分配不需要额外的跨 Run 并发控制 —— 两个约束互相支撑。</p>
+</div>
+</section>
+
+<!-- ───────────────────────── 8 ───────────────────────── -->
+<section id="s8">
+<h2><span class="num">08</span>Message / Event 保留策略</h2>
+
+<figure>
+<svg viewBox="0 0 900 300" role="img" aria-labelledby="figC-t figC-d" font-family="var(--sans)">
+  <title id="figC-t">保留策略时间轴</title>
+  <desc id="figC-d">四个连续的 Run。Message 车道在全部 Run 上都有保留；Event 车道只有最后一个 Run 保留，之前的 Run 其 Event 已被清理。</desc>
+  <defs>
+    <marker id="arC" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#22C55E"/>
+    </marker>
+  </defs>
+
+  <text x="20" y="100" fill="#F8FAFC" font-size="14" font-weight="600">Message</text>
+  <text x="20" y="120" fill="#22C55E" font-size="10.5">永久保留</text>
+  <text x="20" y="206" fill="#F8FAFC" font-size="14" font-weight="600">Event</text>
+  <text x="20" y="226" fill="#F59E0B" font-size="10.5">仅最后一个 Run</text>
+
+  <g font-size="11" font-family="monospace">
+    <text x="252" y="44" text-anchor="middle" fill="#64748B">Run #5</text>
+    <text x="432" y="44" text-anchor="middle" fill="#64748B">Run #6</text>
+    <text x="612" y="44" text-anchor="middle" fill="#64748B">Run #7</text>
+    <text x="792" y="44" text-anchor="middle" fill="#22C55E">Run #8 · 当前</text>
+  </g>
+
+  <g>
+    <rect x="170" y="62" width="165" height="72" rx="6" fill="#0E1223" stroke="#22C55E" stroke-opacity=".45"/>
+    <rect x="350" y="62" width="165" height="72" rx="6" fill="#0E1223" stroke="#22C55E" stroke-opacity=".45"/>
+    <rect x="530" y="62" width="165" height="72" rx="6" fill="#0E1223" stroke="#22C55E" stroke-opacity=".45"/>
+    <rect x="710" y="62" width="165" height="72" rx="6" fill="#0E1223" stroke="#22C55E" stroke-opacity=".45"/>
+  </g>
+  <g fill="#22C55E" fill-opacity=".75">
+    <rect x="186" y="78" width="80" height="9" rx="4"/><rect x="186" y="94" width="130" height="9" rx="4"/><rect x="186" y="110" width="105" height="9" rx="4"/>
+    <rect x="366" y="78" width="95" height="9" rx="4"/><rect x="366" y="94" width="120" height="9" rx="4"/><rect x="366" y="110" width="70" height="9" rx="4"/>
+    <rect x="546" y="78" width="75" height="9" rx="4"/><rect x="546" y="94" width="128" height="9" rx="4"/><rect x="546" y="110" width="112" height="9" rx="4"/>
+    <rect x="726" y="78" width="100" height="9" rx="4"/><rect x="726" y="94" width="126" height="9" rx="4"/><rect x="726" y="110" width="88" height="9" rx="4"/>
+  </g>
+
+  <g>
+    <rect x="170" y="168" width="165" height="72" rx="6" fill="#0B0F1E" stroke="#232B3D" stroke-dasharray="4 3"/>
+    <rect x="350" y="168" width="165" height="72" rx="6" fill="#0B0F1E" stroke="#232B3D" stroke-dasharray="4 3"/>
+    <rect x="530" y="168" width="165" height="72" rx="6" fill="#0B0F1E" stroke="#232B3D" stroke-dasharray="4 3"/>
+    <rect x="710" y="168" width="165" height="72" rx="6" fill="#0E1223" stroke="#F59E0B" stroke-opacity=".6"/>
+  </g>
+  <g font-size="11" fill="#475569" text-anchor="middle">
+    <text x="252" y="209">已清理</text><text x="432" y="209">已清理</text><text x="612" y="209">已清理</text>
+  </g>
+  <g fill="#F59E0B" fill-opacity=".8">
+    <rect x="726" y="182" width="3" height="44" rx="1.5"/><rect x="734" y="190" width="3" height="36" rx="1.5"/>
+    <rect x="742" y="178" width="3" height="48" rx="1.5"/><rect x="750" y="194" width="3" height="32" rx="1.5"/>
+    <rect x="758" y="184" width="3" height="42" rx="1.5"/><rect x="766" y="188" width="3" height="38" rx="1.5"/>
+    <rect x="774" y="180" width="3" height="46" rx="1.5"/><rect x="782" y="196" width="3" height="30" rx="1.5"/>
+    <rect x="790" y="186" width="3" height="40" rx="1.5"/><rect x="798" y="192" width="3" height="34" rx="1.5"/>
+    <rect x="806" y="182" width="3" height="44" rx="1.5"/><rect x="814" y="190" width="3" height="36" rx="1.5"/>
+    <rect x="822" y="178" width="3" height="48" rx="1.5"/><rect x="830" y="194" width="3" height="32" rx="1.5"/>
+    <rect x="838" y="186" width="3" height="40" rx="1.5"/><rect x="846" y="184" width="3" height="42" rx="1.5"/>
+  </g>
+
+  <line x1="792" y1="268" x2="792" y2="244" stroke="#22C55E" stroke-width="1.5" marker-end="url(#arC)"/>
+  <text x="782" y="282" text-anchor="end" fill="#22C55E" font-size="11">前端订阅 SSE 的唯一 Run</text>
+  <text x="170" y="282" fill="#64748B" font-size="11">历史 Run 只渲染 Message + Run 元数据摘要</text>
+</svg>
+<figcaption><b>清理时机：Event 保留到下一个 Run 开始，而非当前 Run 结束。</b>否则会出现「刷新前看得到工具详情、刷新后看不到」的割裂。实现上用 <b>TTL + 保留最近 N 个 Run（N=1 或 2）</b>而非硬性即时删除 —— 多端场景下一个用户正在查看上一个 Run 的详情、另一个用户发起了新 Run，即时删除会让前者页面内容凭空消失。</figcaption>
+</figure>
+
+<h3>历史 Run 的降级渲染</h3>
+<p>Event 被清理后，历史 Run 不该退化成一堆裸消息。<code>runs</code> 表的元数据足够渲染有意义的摘要：</p>
+<pre><code>Run #6  ·  调用 12 个工具  ·  耗时 3m21s  ·  12.9k in / 881 out  ·  end_turn
+        └─ 展开 → 固化下来的 tool Message 列表（名称 · 参数摘要 · 结果摘要 · 审批决定）</code></pre>
+</section>
+
+<!-- ───────────────────────── 9 ───────────────────────── -->
+<section id="s9">
+<h2><span class="num">09</span>Run 状态机</h2>
+
+<figure>
+<svg viewBox="0 0 700 300" role="img" aria-labelledby="figD-t figD-d" font-family="var(--sans)">
+  <title id="figD-t">Run 状态机</title>
+  <desc id="figD-d">queued 进入 running；running 与 waiting_input 之间双向流转，但 waiting_input 仅助理可用；running 可终结为 completed、failed 或 cancelled。</desc>
+  <defs>
+    <marker id="arD" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#94A3B8"/>
+    </marker>
+  </defs>
+
+  <rect x="30" y="150" width="120" height="50" rx="8" fill="#0E1223" stroke="#334155"/>
+  <text x="90" y="180" text-anchor="middle" fill="#F8FAFC" font-size="12.5" font-family="monospace">queued</text>
+
+  <rect x="200" y="150" width="120" height="50" rx="8" fill="#0E1223" stroke="#38BDF8" stroke-opacity=".6"/>
+  <text x="260" y="180" text-anchor="middle" fill="#F8FAFC" font-size="12.5" font-family="monospace">running</text>
+
+  <rect x="200" y="46" width="120" height="56" rx="8" fill="#0E1223" stroke="#F59E0B" stroke-opacity=".65"/>
+  <text x="260" y="70" text-anchor="middle" fill="#F8FAFC" font-size="12" font-family="monospace">waiting</text>
+  <text x="260" y="86" text-anchor="middle" fill="#F8FAFC" font-size="12" font-family="monospace">_input</text>
+  <rect x="330" y="46" width="66" height="20" rx="10" fill="#1A1E2F" stroke="#F59E0B" stroke-opacity=".5"/>
+  <text x="363" y="60" text-anchor="middle" fill="#F59E0B" font-size="10">仅助理</text>
+
+  <line x1="150" y1="175" x2="200" y2="175" stroke="#94A3B8" stroke-width="1.5" marker-end="url(#arD)"/>
+  <line x1="260" y1="150" x2="260" y2="102" stroke="#F59E0B" stroke-width="1.5" marker-start="url(#arD)" marker-end="url(#arD)"/>
+  <text x="192" y="126" text-anchor="end" fill="#F59E0B" font-size="10" font-family="monospace">request.pending / respond</text>
+
+  <rect x="470" y="74" width="180" height="48" rx="8" fill="#0E1223" stroke="#22C55E" stroke-opacity=".6"/>
+  <text x="560" y="103" text-anchor="middle" fill="#22C55E" font-size="12.5" font-family="monospace">completed</text>
+  <rect x="470" y="151" width="180" height="48" rx="8" fill="#0E1223" stroke="#EF4444" stroke-opacity=".6"/>
+  <text x="560" y="180" text-anchor="middle" fill="#EF4444" font-size="12.5" font-family="monospace">failed</text>
+  <rect x="470" y="228" width="180" height="48" rx="8" fill="#0E1223" stroke="#475569"/>
+  <text x="560" y="257" text-anchor="middle" fill="#94A3B8" font-size="12.5" font-family="monospace">cancelled</text>
+
+  <path d="M320 175 C 400 175 400 98 470 98" fill="none" stroke="#94A3B8" stroke-width="1.5" marker-end="url(#arD)"/>
+  <line x1="320" y1="175" x2="470" y2="175" stroke="#94A3B8" stroke-width="1.5" marker-end="url(#arD)"/>
+  <path d="M320 175 C 400 175 400 252 470 252" fill="none" stroke="#94A3B8" stroke-width="1.5" marker-end="url(#arD)"/>
+  <text x="398" y="80" text-anchor="middle" fill="#64748B" font-size="9.5" font-family="monospace">end_turn</text>
+  <text x="398" y="130" text-anchor="middle" fill="#64748B" font-size="9.5" font-family="monospace">need_clarification</text>
+  <text x="395" y="167" text-anchor="middle" fill="#64748B" font-size="9.5" font-family="monospace">error</text>
+  <text x="398" y="272" text-anchor="middle" fill="#64748B" font-size="9.5" font-family="monospace">cancel</text>
+</svg>
+<figcaption><b><code>waiting_input</code> 只对助理存在。</b>助理审批期间 Run 保持存活，<code>request.pending</code> 与 <code>request.resolved</code> 携带<b>同一个 <code>run_id</code></b> —— 「这一轮里它问了我 3 次」在数据上是自然表达的。<br><br><b>顾问的追问走 <code>completed</code> + <code>stop_reason = need_clarification</code></b>，用户的回答是下一个 Run。这不是妥协的结果，而是无 checkpoint 的必然（<code>interrupt()</code> 要求 checkpointer）—— 并且恰好符合产品语义：顾问的追问本就是一条消息，不是一张待批准的操作卡片。前端通过 <code>in_run_input</code> capability 区分两种渲染。</figcaption>
+</figure>
+</section>
+
+<!-- ───────────────────────── 10 ──────────────────────── -->
+<section id="s10">
+<h2><span class="num">10</span>传输层与接口契约</h2>
+
+<h3>选型：SSE 下行 + REST 上行</h3>
+<p>审批看似需要双向连接，实际是「事件下行 + REST 上行」：服务端推 <code>request.pending</code>，前端用一个普通 POST 回复。审批频率是分钟级的，不值得为它引入 WebSocket 的连接管理、重连、心跳以及代理层的麻烦。用 <code>POST</code> + <code>fetch</code> 流式读取，而非 <code>EventSource</code>（后者既不能带自定义 header 也不能带 body）。</p>
+
+<h3>端点</h3>
+<div class="panel" style="margin-bottom:var(--s3)">
+  <div class="ep"><span class="verb post">POST</span><span class="path">/sessions</span><span class="desc">创建会话，指定 <code>agent_ref</code>；返回 capabilities</span></div>
+  <div class="ep"><span class="verb get">GET</span><span class="path">/sessions/{sid}</span><span class="desc">元数据 · capabilities · state · <b>active_run</b> · <b>pending_requests[]</b></span></div>
+  <div class="ep"><span class="verb del">DEL</span><span class="path">/sessions/{sid}</span><span class="desc">关闭会话；助理须一路传到调度层销毁 Pod</span></div>
+  <div class="ep"><span class="verb get">GET</span><span class="path">/sessions/{sid}/messages?before_seq=&amp;limit=</span><span class="desc">会话内容分页，向前翻历史</span></div>
+  <div class="ep"><span class="verb post">POST</span><span class="path">/sessions/{sid}/runs</span><span class="desc">提交并开流（SSE）。body 含客户端生成的 <code>run_id</code></span></div>
+  <div class="ep"><span class="verb get">GET</span><span class="path">/sessions/{sid}/runs/{rid}/join</span><span class="desc">重连观察（SSE）。<b>只读，断开不得触发取消</b></span></div>
+  <div class="ep"><span class="verb get">GET</span><span class="path">/sessions/{sid}/runs/{rid}/events?after_seq=</span><span class="desc">断线补洞 / 冷启动回放</span></div>
+  <div class="ep"><span class="verb post">POST</span><span class="path">/sessions/{sid}/runs/{rid}/cancel</span><span class="desc">返回实际发生了什么，见下</span></div>
+  <div class="ep"><span class="verb post">POST</span><span class="path">/sessions/{sid}/requests/{qid}/respond</span><span class="desc">审批应答（仅助理）。<b>幂等</b></span></div>
+  <div class="ep"><span class="verb post">POST</span><span class="path">/sessions/{sid}/compact</span><span class="desc">压缩 Message 列表（仅顾问）</span></div>
+</div>
+
+<h3>会话快照：重连的关键</h3>
+<pre><code><span class="tok-k">GET</span> /sessions/sess_01H8Z…
+{
+  <span class="tok-s">"session_id"</span>: <span class="tok-s">"sess_01H8Z…"</span>,
+  <span class="tok-s">"agent_ref"</span>: { <span class="tok-s">"id"</span>: <span class="tok-s">"claude_code"</span>, <span class="tok-s">"version"</span>: 3, <span class="tok-s">"type"</span>: <span class="tok-s">"acp"</span> },
+  <span class="tok-s">"state"</span>: <span class="tok-s">"active"</span>,          <span class="tok-c">// 会话自身的动态状态</span>
+
+  <span class="tok-c">// ↓ 投影自 agents(claude_code, v3)，不存在 sessions 表里。</span>
+  <span class="tok-c">//   放在这里只为省一次往返；所有权仍归 Agent。</span>
+  <span class="tok-s">"capabilities"</span>: {
+    <span class="tok-s">"cancel"</span>: <span class="tok-k">true</span>,  <span class="tok-s">"regenerate"</span>: <span class="tok-k">false</span>, <span class="tok-s">"edit_history"</span>: <span class="tok-k">false</span>,
+    <span class="tok-s">"branch"</span>: <span class="tok-k">false</span>, <span class="tok-s">"compact"</span>: <span class="tok-k">false</span>,   <span class="tok-s">"rollback_on_cancel"</span>: <span class="tok-k">false</span>,
+    <span class="tok-s">"in_run_input"</span>: <span class="tok-k">true</span>,  <span class="tok-s">"needs_approval"</span>: <span class="tok-k">true</span>,
+    <span class="tok-s">"resume_mid_run"</span>: <span class="tok-k">false</span>, <span class="tok-s">"resume_session"</span>: <span class="tok-s">"replay"</span>
+  },
+  <span class="tok-s">"active_run"</span>: { <span class="tok-s">"run_id"</span>: <span class="tok-s">"run_8"</span>, <span class="tok-s">"status"</span>: <span class="tok-s">"waiting_input"</span>, <span class="tok-s">"last_seq"</span>: 166 },
+  <span class="tok-w">"pending_requests"</span>: [ { <span class="tok-s">"request_id"</span>: <span class="tok-s">"req_abc"</span>, <span class="tok-s">"kind"</span>: <span class="tok-s">"permission"</span>, … } ],
+  <span class="tok-s">"last_seq"</span>: 166
+}</code></pre>
+
+<div class="callout danger">
+  <span class="label">最常见的漏</span>
+  <p><b><code>pending_requests[]</code> 必须出现在会话快照里。</b>否则用户刷新页面后审批弹窗消失，CLI 进程仍在阻塞等待，会话永久卡死且无法自愈。</p>
+</div>
+
+<h3>提交一个 Run</h3>
+<pre><code><span class="tok-k">POST</span> /sessions/{sid}/runs
+{ <span class="tok-s">"run_id"</span>: <span class="tok-s">"run_01J…"</span>,          <span class="tok-c">// 客户端生成 = 幂等键</span>
+  <span class="tok-s">"content"</span>: [ { <span class="tok-s">"type"</span>: <span class="tok-s">"text"</span>, <span class="tok-s">"text"</span>: <span class="tok-s">"…"</span> } ] }
+
+<span class="tok-c">// 200 → text/event-stream</span>
+<span class="tok-c">// 409 → { error: "run_active", active_run_id: "run_8" }   前端据此禁用输入框</span></code></pre>
+<p>客户端生成 <code>run_id</code>，网络超时重发时服务端按同一 ID 返回既有 Run 而非新建一轮。对助理尤其重要 —— 重复提交意味着 CLI 真的会把活干两遍，可能是两次文件写入。</p>
+
+<h3>取消：返回实际发生了什么</h3>
+<pre><code><span class="tok-k">POST</span> /sessions/{sid}/runs/{rid}/cancel
+<span class="tok-c">// 顾问</span>  → { <span class="tok-s">"cancelled"</span>: <span class="tok-k">true</span>, <span class="tok-s">"rolled_back"</span>: <span class="tok-k">true</span>,  <span class="tok-s">"side_effects_retained"</span>: <span class="tok-k">false</span> }
+<span class="tok-c">// 助理</span>  → { <span class="tok-s">"cancelled"</span>: <span class="tok-k">true</span>, <span class="tok-s">"rolled_back"</span>: <span class="tok-k">false</span>, <span class="tok-s">"side_effects_retained"</span>: <span class="tok-k">true</span> }</code></pre>
+<p>前端据此决定是把这一轮从流里抹掉，还是保留并标记为「已中断」。</p>
+
+<h3>SSE 帧格式</h3>
+<pre><code>event: message.delta
+data: {"seq":141,"run_id":"run_8","payload":{"role":"assistant","text":"正在读取 "}}
+
+event: request.pending
+data: {"seq":142,"run_id":"run_8","payload":{"request_id":"req_abc",…}}
+
+event: run.ended
+data: {"seq":167,"run_id":"run_8","payload":{"stop_reason":"end_turn","usage":{…}}}</code></pre>
+</section>
+
+<!-- ───────────────────────── 11 ──────────────────────── -->
+<section id="s11">
+<h2><span class="num">11</span>Event 目录与固化清单</h2>
+
+<div class="callout rule">
+  <span class="label">固化规则</span>
+  <p><b>Event 可以被清理，当且仅当它承载的语义已经固化进 Message 或 Run 元数据。</b>这条规则漏掉不会报错，只会在三个月后有人问「为什么看不到上次的操作记录」时才暴露。把清单做成集中定义的显式契约并用测试卡住，不要散落在各个 handler 里。</p>
+</div>
+
+<table>
+  <thead><tr><th style="width:180px">Event type</th><th style="width:90px">顾问</th><th style="width:90px">助理</th><th>固化去向</th></tr></thead>
+  <tbody>
+    <tr><td><code>run.started</code></td><td class="yes">✓</td><td class="yes">✓</td><td><code>runs.started_at</code></td></tr>
+    <tr><td><code>message.delta</code></td><td class="yes">✓</td><td class="yes">✓</td><td><b>assistant Message</b> —— 必须</td></tr>
+    <tr><td><code>thought.delta</code></td><td class="yes">✓</td><td class="yes">✓</td><td>— 可丢</td></tr>
+    <tr><td><code>tool_call.started</code></td><td class="yes">✓</td><td class="yes">✓</td><td rowspan="3"><b>tool Message</b><br>名称 · 参数摘要 · 状态 · 结果摘要</td></tr>
+    <tr><td><code>tool_call.updated</code></td><td class="yes">✓</td><td class="yes">✓</td></tr>
+    <tr><td><code>tool_call.ended</code></td><td class="yes">✓</td><td class="yes">✓</td></tr>
+    <tr><td><code>request.pending</code></td><td class="no">✗</td><td class="yes">✓</td><td rowspan="2"><b>system Message</b><br><code>kind=permission_decision</code>（审计）</td></tr>
+    <tr><td><code>request.resolved</code></td><td class="no">✗</td><td class="yes">✓</td></tr>
+    <tr><td><code>plan.updated</code></td><td class="maybe">可选</td><td class="yes">✓</td><td>可选 → <code>runs.plan</code></td></tr>
+    <tr><td><code>workspace.changed</code></td><td class="no">✗</td><td class="yes">✓</td><td><b>workspace_changes</b>（顾问无写操作）</td></tr>
+    <tr><td><code>error</code></td><td class="yes">✓</td><td class="yes">✓</td><td><code>runs.stop_reason</code> + system Message</td></tr>
+    <tr><td><code>run.ended</code></td><td class="yes">✓</td><td class="yes">✓</td><td><code>runs.stop_reason · usage · ended_at</code></td></tr>
+    <tr><td><code>session.status_changed</code></td><td class="no">✗</td><td class="yes">✓</td><td><b>system Message</b> <code>run_id = null</code></td></tr>
+  </tbody>
+</table>
+
+<h3>最容易漏的两项</h3>
+<ul>
+  <li><b>工具调用</b> —— 用户回溯时最想知道的就是「上次助理到底改了哪些文件」。这个信息若只在 Event 里，一个新 Run 就冲掉了。</li>
+  <li><b>审批记录</b> —— 「谁在什么时候批准了写入 <code>src/main.py</code>」是审计信息，不是过程信息。合规场景下绝不能随 Event 蒸发。</li>
+</ul>
+
+<h3>审批回路的四条硬约束（仅助理）</h3>
+<ol class="body">
+  <li><b>幂等</b> —— 同一 <code>request_id</code> 重复应答返回第一次的结果，不报错。用户双击、网络重试都会撞上。</li>
+  <li><b>超时兜底</b> —— CLI 进程正阻塞等待，无人应答就永久挂住并占用 Pod。到期按 <code>default_on_timeout</code>（默认拒绝）自动处理并发 <code>request.resolved</code>。</li>
+  <li><b>多端竞争</b> —— 先应答者赢，其余客户端收到 <code>request.resolved</code> 自动关闭弹窗。</li>
+  <li><b>重连可见</b> —— 见 <a href="#s10">§10</a> 的 <code>pending_requests[]</code>。</li>
+</ol>
+
+<p><code>allow_always</code> 的作用域要注意：ACP 会话级的「总是允许」随会话消失，而用户的心理预期通常是持久的。<b>建议由服务端自己存这个偏好</b>（per session 或 per user × tool），下次自动应答，而不是透传给 CLI。</p>
+</section>
+
+<!-- ───────────────────────── 12 ──────────────────────── -->
+<section id="s12">
+<h2><span class="num">12</span>交互时序</h2>
+
+<figure>
+<svg viewBox="0 0 900 620" role="img" aria-labelledby="figE-t figE-d" font-family="var(--sans)">
+  <title id="figE-t">助理一次 Run 的完整时序</title>
+  <desc id="figE-d">前端提交 Run，Server 经 WebSocket 转发给 Pod 内的 Bridge，Bridge 驱动 CLI 流式返回增量并发起审批请求，前端应答后继续执行工具并结束，Server 最后把过程固化为 Message。</desc>
+  <defs>
+    <marker id="arE" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#94A3B8"/>
+    </marker>
+  </defs>
+
+  <rect x="34" y="258" width="832" height="162" rx="8" fill="#F59E0B" fill-opacity=".055" stroke="#F59E0B" stroke-opacity=".25" stroke-dasharray="5 4"/>
+  <text x="48" y="278" fill="#F59E0B" font-size="11" font-weight="600">审批回路 · 人在回路 · 仅助理</text>
+
+  <rect x="50" y="16" width="160" height="44" rx="8" fill="#0E1223" stroke="#334155"/>
+  <text x="130" y="44" text-anchor="middle" fill="#F8FAFC" font-size="13" font-weight="600">前端</text>
+  <rect x="370" y="16" width="160" height="44" rx="8" fill="#0E1223" stroke="#22C55E" stroke-opacity=".5"/>
+  <text x="450" y="44" text-anchor="middle" fill="#F8FAFC" font-size="13" font-weight="600">Server</text>
+  <rect x="690" y="16" width="180" height="44" rx="8" fill="#0E1223" stroke="#A78BFA" stroke-opacity=".5"/>
+  <text x="780" y="40" text-anchor="middle" fill="#F8FAFC" font-size="13" font-weight="600">Pod</text>
+  <text x="780" y="54" text-anchor="middle" fill="#94A3B8" font-size="9.5">Bridge → CLI</text>
+
+  <g stroke="#232B3D" stroke-width="1.5" stroke-dasharray="4 5">
+    <line x1="130" y1="60" x2="130" y2="548"/>
+    <line x1="450" y1="60" x2="450" y2="548"/>
+    <line x1="780" y1="60" x2="780" y2="548"/>
+  </g>
+
+  <g font-size="10.5" font-family="monospace">
+    <line x1="130" y1="100" x2="450" y2="100" stroke="#94A3B8" stroke-width="1.5" marker-end="url(#arE)"/>
+    <text x="290" y="92" text-anchor="middle" fill="#22C55E">POST /runs  { run_id, content }</text>
+    <line x1="450" y1="132" x2="130" y2="132" stroke="#94A3B8" stroke-width="1.5" marker-end="url(#arE)"/>
+    <text x="290" y="124" text-anchor="middle" fill="#38BDF8">SSE  run.started</text>
+    <line x1="450" y1="166" x2="780" y2="166" stroke="#A78BFA" stroke-width="1.5" marker-end="url(#arE)"/>
+    <text x="615" y="158" text-anchor="middle" fill="#A78BFA">WS  prompt(run)</text>
+    <line x1="780" y1="206" x2="450" y2="206" stroke="#A78BFA" stroke-width="1.5" marker-end="url(#arE)"/>
+    <text x="615" y="198" text-anchor="middle" fill="#A78BFA">WS  chunk × N</text>
+    <line x1="450" y1="238" x2="130" y2="238" stroke="#94A3B8" stroke-width="1.5" marker-end="url(#arE)"/>
+    <text x="290" y="230" text-anchor="middle" fill="#38BDF8">SSE  message.delta × N</text>
+
+    <line x1="780" y1="300" x2="450" y2="300" stroke="#F59E0B" stroke-width="1.5" marker-end="url(#arE)"/>
+    <text x="615" y="292" text-anchor="middle" fill="#F59E0B">WS  request_permission</text>
+    <line x1="450" y1="332" x2="130" y2="332" stroke="#F59E0B" stroke-width="1.5" marker-end="url(#arE)"/>
+    <text x="290" y="324" text-anchor="middle" fill="#F59E0B">SSE  request.pending</text>
+    <text x="290" y="348" text-anchor="middle" fill="#64748B" font-size="9.5">run.status = waiting_input</text>
+    <line x1="130" y1="376" x2="450" y2="376" stroke="#F59E0B" stroke-width="1.5" marker-end="url(#arE)"/>
+    <text x="290" y="368" text-anchor="middle" fill="#22C55E">POST /requests/{qid}/respond</text>
+    <line x1="450" y1="404" x2="780" y2="404" stroke="#F59E0B" stroke-width="1.5" marker-end="url(#arE)"/>
+    <text x="615" y="396" text-anchor="middle" fill="#F59E0B">WS  allow_once</text>
+
+    <line x1="780" y1="446" x2="450" y2="446" stroke="#A78BFA" stroke-width="1.5" marker-end="url(#arE)"/>
+    <text x="615" y="438" text-anchor="middle" fill="#A78BFA">WS  tool_call.ended + chunk</text>
+    <line x1="450" y1="478" x2="130" y2="478" stroke="#94A3B8" stroke-width="1.5" marker-end="url(#arE)"/>
+    <text x="290" y="470" text-anchor="middle" fill="#38BDF8">SSE  tool_call.ended · message.delta</text>
+    <line x1="780" y1="514" x2="450" y2="514" stroke="#A78BFA" stroke-width="1.5" marker-end="url(#arE)"/>
+    <text x="615" y="506" text-anchor="middle" fill="#A78BFA">WS  stopReason = end_turn</text>
+    <line x1="450" y1="544" x2="130" y2="544" stroke="#22C55E" stroke-width="1.5" marker-end="url(#arE)"/>
+    <text x="290" y="536" text-anchor="middle" fill="#22C55E">SSE  run.ended</text>
+  </g>
+
+  <rect x="290" y="566" width="576" height="40" rx="8" fill="#0E1223" stroke="#22C55E" stroke-opacity=".45"/>
+  <text x="308" y="591" fill="#22C55E" font-size="11" font-weight="600">固化 →</text>
+  <text x="364" y="591" fill="#94A3B8" font-size="11">assistant Message · tool Message · 审批记录 · Run 元数据（永久）</text>
+</svg>
+<figcaption><b>Server 是唯一的协议翻译层。</b>顾问的时序是这张图去掉 Pod 一侧与整个审批带 —— Server 直接在进程内跑 <code>astream</code>，其余完全相同。前端全程只消费一种帧格式。</figcaption>
+</figure>
+
+<h3>重连的三步</h3>
+<pre><code>1.  GET  /sessions/{sid}                    → capabilities · state · active_run · pending_requests
+2.  GET  /sessions/{sid}/messages?before_seq=…   → 渲染历史（含已清理 Event 的 Run）
+3.  active_run 存在？
+    ├─ 是 → GET /runs/{rid}/events?after_seq=<span class="tok-w">{本地 last_seq}</span>   补洞
+    │        GET /runs/{rid}/join                                 续订
+    └─ 否 → 结束，仅渲染 Message</code></pre>
+</section>
+
+<!-- ───────────────────────── 13 ──────────────────────── -->
+<section id="s13">
+<h2><span class="num">13</span>关键约束与陷阱</h2>
+
+<div class="callout rule">
+  <span class="label">约束 01</span>
+  <p><b>Message 表是展示的唯一真相，对顾问而言也是执行的唯一输入源。</b>不存 checkpoint 就不存在第二份真相，也就不需要任何跨源对齐规则 —— 那类规则一旦对不上是静默降级而非报错，是最难排查的一类缺陷。代价是顾问的 Run 中断后只能整轮重来。</p>
+</div>
+
+<div class="callout rule">
+  <span class="label">约束 02</span>
+  <p><b>Session 内同时只允许一个活跃 Run。</b>ACP 的一个 session 同一时刻只能有一个活跃 prompt，顾问也应施加同样约束。提交时若已有活跃 Run，返回 <code>409</code> + 当前 <code>run_id</code>，前端禁用输入框。<b>不要做排队</b> —— 用户排队时看到的上下文，与 Agent 真正处理到那一轮时的上下文可能已经不同。</p>
+</div>
+
+<div class="callout danger">
+  <span class="label">陷阱 01 · 顾问专属</span>
+  <p><b>顾问的同一轮可能被重跑多次。</b><code>regenerate</code> 与编辑历史都会重新执行该轮的工具调用 —— 配置工具时要考虑这一点，前端那个重试按钮在用户看来是无害的。</p>
+</div>
+
+<div class="callout danger">
+  <span class="label">陷阱 02 · 助理专属</span>
+  <p><b>Message 表 ≠ CLI 的上下文。</b>Message 表是「你观察到的记录」，CLI 内部状态是「它真正记得的」。两者会漂移：CLI 自己做了 compaction、<code>loadSession</code> 失败重建、它自己写了持久化记忆文件。<b>对助理而言 Message 表是展示账本，不是可以拿来重建上下文的真相</b> —— 除非明确走 replay 路径并接受有损。顾问恰好相反：Message 表就是全部。</p>
+</div>
+
+<div class="callout danger">
+  <span class="label">陷阱 03</span>
+  <p><b>Event 清理必须晚于「下一个 Run 开始」，且留宽限期。</b>即时删除会在多端场景下让正在查看上一个 Run 详情的用户页面内容凭空消失。用 TTL + 保留最近 N 个 Run，异步清理。<b>固化清单必须先于清理逻辑上线</b> —— 顺序反了就会丢数据，而且丢得无声无息。</p>
+</div>
+
+<div class="callout warn">
+  <span class="label">陷阱 04</span>
+  <p><b>删除会话要真正回收 Pod。</b><code>DELETE /sessions/{sid}</code> 必须一路传到调度层销毁 Pod，而不只是关掉 WebSocket。同时服务端要有定时任务兜底回收 idle 会话 —— 否则幽灵会话会一直占着 Pod 配额烧钱。OSS 上的工作区文件是否随会话删除一并清理，是独立的保留策略决定，须显式定义而非默认继承 Pod 的生命周期。</p>
+</div>
+
+<h3>落地优先级</h3>
+<ol class="body">
+  <li><b>先实测 <code>loadSession</code></b> —— 一个布尔值决定助理的恢复策略，别在不确定的前提上设计。</li>
+  <li><b>先把顾问跑通</b> —— 无 checkpoint、无 Pod、无审批，是整套抽象最小可验证的切片；它跑对了，对象模型与事件流就立住了。</li>
+  <li><b>固化清单先于清理逻辑上线</b> —— 顺序反了会丢数据。</li>
+  <li><b>capability flags 而非统一接口</b> —— 一旦出现第一个按 <code>agent.type</code> 分支的前端组件，后面就收不住了。</li>
+  <li><b>接受助理是有状态的</b> —— Pod 生命周期、idle 回收、重启断上下文，提前设计进去。</li>
+</ol>
+</section>
+
+<footer>
+  <p>相关文档：<a href="architecture.html">系统架构设计</a> —— 部署拓扑、组件职责、协议选型、可观测性与存储。</p>
+</footer>
+
+</main>
+</div>
+</body>
+</html>

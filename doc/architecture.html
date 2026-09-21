@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>系统架构设计 · AI Platform</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="sitenav">
+  <a class="brand" href="./">AI&nbsp;<b>Platform</b>&nbsp;/ 设计文档</a>
+  <div class="links">
+    <a href="./">目录</a>
+    <a href="detail/">详细设计</a>
+    <a class="on" href="architecture.html">系统架构</a>
+    <a href="agent.html">Agent 管理</a>
+    <a href="skill.html">技能管理</a>
+    <a href="mcp.html">MCP 管理</a>
+    <a href="permission.html">权限管理</a>
+    <a href="execution.html">执行环境</a>
+    <a href="session.html">会话管理</a>
+    <a href="native.html">native Agent</a>
+    <a href="runtime.html">运行时链路</a>
+    <a href="local.html">本地部署</a>
+    <a href="memory.html">记忆</a>
+    <a href="observability.html">可观测性</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+<nav class="toc" aria-label="目录">
+  <div class="eyebrow">本页</div>
+  <ol>
+    <li><a href="#s1">设计目标与边界</a></li>
+    <li><a href="#s2">系统架构</a></li>
+    <li><a href="#s3">组件职责</a></li>
+    <li><a href="#s4">两类 Agent 的部署形态</a></li>
+    <li><a href="#s5">协议选型</a></li>
+    <li><a href="#s6">出站收口：Higress</a></li>
+    <li><a href="#s7">可观测性</a></li>
+    <li><a href="#s8">存储与持久化</a></li>
+    <li><a href="#s9">架构决策与代价</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<header class="hero">
+  <p class="kicker">Architecture</p>
+  <h1>系统架构设计</h1>
+  <p class="lede">一套服务端抽象同时承载两类 Agent：进程内的<b>顾问</b>（出谋划策）与运行在 Kubernetes Pod 中的<b>助理</b>（实际干活）。前端只面对一套对象模型和一套事件流。</p>
+  <div class="meta">
+    <span>Client</span><span>Server</span><span>Higress</span><span>Mem0</span><span>K8s Pod</span><span>OSS</span><span>OTel · Langfuse</span>
+  </div>
+</header>
+
+<!-- ───────────────────────── 1 ───────────────────────── -->
+<section id="s1">
+<h2><span class="num">01</span>设计目标与边界</h2>
+
+<p>平台要在同一套会话抽象下跑两种性质完全不同的 Agent。它们的差异不在模型，而在<b>上下文由谁持有</b>：</p>
+
+<div class="grid2">
+  <div class="panel native">
+    <h4>顾问 · <code>native</code></h4>
+    <p class="role">内置 Agent，进程内执行</p>
+    <ul>
+      <li>出谋划策：分析、方案、评审、答疑</li>
+      <li><b>工具集限只读</b>，不写文件、不执行命令</li>
+      <li>产出即 Message 本身</li>
+      <li>重跑安全 → 可 regenerate / 可编辑历史</li>
+    </ul>
+  </div>
+  <div class="panel acp">
+    <h4>助理 · <code>acp</code></h4>
+    <p class="role">外部 CLI，Pod 内经 ACP 驱动</p>
+    <ul>
+      <li>实际干活：写代码、改文件、跑命令</li>
+      <li>每个危险动作需<b>人工审批</b>（ACP <code>request_permission</code>）</li>
+      <li>产出是 OSS 上的文件 + Message 摘要</li>
+      <li>重跑危险 → 不可 regenerate</li>
+    </ul>
+  </div>
+</div>
+
+<div class="callout rule">
+  <span class="label">这条分界线决定了整份设计</span>
+  <p>后文几乎每一处不对称 —— 能力矩阵、审批回路、状态机、持久化策略 —— 都能回溯到「上下文由谁持有」这一条。<b>它不是策略选择，是机制事实。</b>把它当成实现细节去抹平，会得到一个两边都不好用的抽象。</p>
+</div>
+
+<h3>不在本文范围</h3>
+<ul>
+  <li>Session / Run / Message / Event 的对象模型与接口契约 —— 见<a href="session.html">会话管理设计</a></li>
+  <li>Server → Bridge → CLI 的链路实现、K8s 与存储细节 —— 见<a href="runtime.html">运行时链路设计</a></li>
+  <li>顾问与助理之间的任务移交 —— <b>本期明确不做</b>，见 <a href="#s9">§09</a></li>
+  <li>模型选型、提示词工程、技能内容本身</li>
+</ul>
+</section>
+
+<!-- ───────────────────────── 2 ───────────────────────── -->
+<section id="s2">
+<h2><span class="num">02</span>系统架构</h2>
+
+<figure>
+<svg viewBox="0 0 960 720" role="img" aria-labelledby="figZ-t figZ-d" font-family="var(--sans)">
+  <title id="figZ-t">系统架构图</title>
+  <desc id="figZ-d">Client（Web 与 App）经 REST 与 SSE 连接 Server。Server 包含 Agent 管理、会话管理、MCP 管理、记忆管理、技能管理与可观测性六个模块。向下：遥测按 OpenTelemetry GenAI 语义约定经 Collector 汇入 Langfuse；LLM 调用与 MCP 调用统一经 Higress 网关，分别到达模型服务与 MCP Servers；记忆读写到 Mem0；并经 WebSocket 连接 Kubernetes Pod。每个 Pod 内含 Bridge 服务与 CLI 进程，二者以 ACP over stdio 通信，Pod 挂载 OSS 持久化会话产出文件。</desc>
+  <defs>
+    <marker id="arZ" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#94A3B8"/>
+    </marker>
+    <marker id="arZv" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#A78BFA"/>
+    </marker>
+    <marker id="arZb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#38BDF8"/>
+    </marker>
+  </defs>
+
+  <!-- Client -->
+  <rect x="330" y="16" width="300" height="84" rx="8" fill="#0E1223" stroke="#334155"/>
+  <text x="480" y="38" text-anchor="middle" fill="#F8FAFC" font-size="14" font-weight="600">Client</text>
+  <rect x="352" y="48" width="124" height="30" rx="6" fill="#131A2E" stroke="#334155"/>
+  <text x="414" y="68" text-anchor="middle" fill="#CBD5E1" font-size="12">Web</text>
+  <rect x="484" y="48" width="124" height="30" rx="6" fill="#131A2E" stroke="#334155"/>
+  <text x="546" y="68" text-anchor="middle" fill="#CBD5E1" font-size="12">App</text>
+
+  <line x1="460" y1="100" x2="460" y2="136" stroke="#94A3B8" stroke-width="1.5" marker-end="url(#arZ)"/>
+  <text x="452" y="122" text-anchor="end" fill="#22C55E" font-size="10" font-family="monospace">REST</text>
+  <line x1="500" y1="136" x2="500" y2="100" stroke="#94A3B8" stroke-width="1.5" marker-end="url(#arZ)"/>
+  <text x="508" y="122" fill="#38BDF8" font-size="10" font-family="monospace">SSE</text>
+
+  <!-- Server -->
+  <rect x="40" y="136" width="880" height="150" rx="10" fill="#0E1223" stroke="#22C55E" stroke-opacity=".55"/>
+  <text x="60" y="166" fill="#F8FAFC" font-size="15" font-weight="600">Server</text>
+  <text x="128" y="166" fill="#94A3B8" font-size="11">统一抽象层 · 协议翻译 · Session / Run / Message / Event</text>
+
+  <g font-size="11.5">
+    <rect x="60"  y="198" width="111" height="68" rx="7" fill="#131A2E" stroke="#334155"/>
+    <text x="115" y="228" text-anchor="middle" fill="#F8FAFC">Agent</text>
+    <text x="115" y="246" text-anchor="middle" fill="#F8FAFC">管理</text>
+    <rect x="181" y="198" width="111" height="68" rx="7" fill="#131A2E" stroke="#334155"/>
+    <text x="236" y="228" text-anchor="middle" fill="#F8FAFC">会话</text>
+    <text x="236" y="246" text-anchor="middle" fill="#F8FAFC">管理</text>
+    <rect x="302" y="198" width="111" height="68" rx="7" fill="#131A2E" stroke="#334155"/>
+    <text x="357" y="228" text-anchor="middle" fill="#F8FAFC">MCP</text>
+    <text x="357" y="246" text-anchor="middle" fill="#F8FAFC">管理</text>
+    <rect x="423" y="198" width="111" height="68" rx="7" fill="#131A2E" stroke="#334155"/>
+    <text x="478" y="228" text-anchor="middle" fill="#F8FAFC">记忆</text>
+    <text x="478" y="246" text-anchor="middle" fill="#F8FAFC">管理</text>
+    <rect x="544" y="198" width="111" height="68" rx="7" fill="#131A2E" stroke="#334155"/>
+    <text x="599" y="228" text-anchor="middle" fill="#F8FAFC">技能</text>
+    <text x="599" y="246" text-anchor="middle" fill="#F8FAFC">管理</text>
+    <rect x="665" y="198" width="111" height="68" rx="7" fill="#131A2E" stroke="#F59E0B" stroke-opacity=".55"/>
+    <text x="720" y="228" text-anchor="middle" fill="#F59E0B">执行环境</text>
+    <text x="720" y="246" text-anchor="middle" fill="#F59E0B">管理</text>
+    <rect x="786" y="198" width="111" height="68" rx="7" fill="#131A2E" stroke="#334155"/>
+    <text x="841" y="237" text-anchor="middle" fill="#F8FAFC">可观测性</text>
+  </g>
+
+  <!-- downlinks -->
+  <line x1="130" y1="286" x2="130" y2="356" stroke="#94A3B8" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#arZ)"/>
+  <text x="140" y="326" fill="#64748B" font-size="10" font-family="monospace">OTLP</text>
+  <line x1="375" y1="286" x2="375" y2="356" stroke="#38BDF8" stroke-width="2" marker-end="url(#arZb)"/>
+  <text x="385" y="326" fill="#38BDF8" font-size="10" font-family="monospace">LLM · MCP</text>
+  <line x1="595" y1="286" x2="595" y2="356" stroke="#94A3B8" stroke-width="1.5" marker-end="url(#arZ)"/>
+  <text x="605" y="326" fill="#64748B" font-size="10" font-family="monospace">记忆读写</text>
+  <line x1="805" y1="286" x2="805" y2="330" stroke="#A78BFA" stroke-width="2" marker-end="url(#arZv)"/>
+  <text x="815" y="312" fill="#A78BFA" font-size="10" font-family="monospace">WebSocket</text>
+
+  <!-- 可观测性 -->
+  <rect x="40" y="356" width="180" height="80" rx="8" fill="#0E1223" stroke="#334155"/>
+  <text x="130" y="382" text-anchor="middle" fill="#F8FAFC" font-size="12.5" font-weight="600">OpenTelemetry</text>
+  <text x="130" y="401" text-anchor="middle" fill="#94A3B8" font-size="10">GenAI 语义约定</text>
+  <text x="130" y="420" text-anchor="middle" fill="#94A3B8" font-size="10">Collector</text>
+  <line x1="130" y1="436" x2="130" y2="490" stroke="#94A3B8" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#arZ)"/>
+  <rect x="40" y="490" width="180" height="66" rx="8" fill="#0E1223" stroke="#334155"/>
+  <text x="130" y="518" text-anchor="middle" fill="#F8FAFC" font-size="13" font-weight="600">Langfuse</text>
+  <text x="130" y="538" text-anchor="middle" fill="#94A3B8" font-size="10.5">LLM 可观测后端</text>
+
+  <!-- Higress -->
+  <rect x="250" y="356" width="250" height="80" rx="8" fill="#0E1223" stroke="#38BDF8" stroke-opacity=".6"/>
+  <text x="375" y="380" text-anchor="middle" fill="#F8FAFC" font-size="14" font-weight="600">Higress</text>
+  <rect x="266" y="392" width="105" height="28" rx="6" fill="#131A2E" stroke="#38BDF8" stroke-opacity=".4"/>
+  <text x="318" y="411" text-anchor="middle" fill="#38BDF8" font-size="10.5">LLM 网关</text>
+  <rect x="379" y="392" width="105" height="28" rx="6" fill="#131A2E" stroke="#38BDF8" stroke-opacity=".4"/>
+  <text x="431" y="411" text-anchor="middle" fill="#38BDF8" font-size="10.5">MCP 网关</text>
+
+  <line x1="307" y1="436" x2="307" y2="490" stroke="#38BDF8" stroke-width="1.5" marker-end="url(#arZb)"/>
+  <line x1="442" y1="436" x2="442" y2="490" stroke="#38BDF8" stroke-width="1.5" marker-end="url(#arZb)"/>
+  <rect x="250" y="490" width="115" height="66" rx="8" fill="#0E1223" stroke="#334155"/>
+  <text x="307" y="518" text-anchor="middle" fill="#F8FAFC" font-size="13" font-weight="600">LLM</text>
+  <text x="307" y="538" text-anchor="middle" fill="#94A3B8" font-size="10.5">模型服务</text>
+  <rect x="385" y="490" width="115" height="66" rx="8" fill="#0E1223" stroke="#334155" stroke-dasharray="4 3"/>
+  <text x="442" y="516" text-anchor="middle" fill="#CBD5E1" font-size="11.5">MCP Servers</text>
+  <text x="442" y="536" text-anchor="middle" fill="#94A3B8" font-size="9.5">stdio · http · sse</text>
+
+  <!-- Mem0 -->
+  <rect x="530" y="356" width="130" height="80" rx="8" fill="#0E1223" stroke="#334155"/>
+  <text x="595" y="392" text-anchor="middle" fill="#F8FAFC" font-size="13.5" font-weight="600">Mem0</text>
+  <text x="595" y="414" text-anchor="middle" fill="#94A3B8" font-size="10.5">长期记忆</text>
+
+  <!-- K8s -->
+  <rect x="690" y="330" width="230" height="240" rx="10" fill="#0B0F1E" stroke="#A78BFA" stroke-opacity=".45" stroke-dasharray="6 4"/>
+  <text x="706" y="356" fill="#A78BFA" font-size="12.5" font-weight="600">Kubernetes</text>
+
+  <rect x="706" y="372" width="198" height="180" rx="8" fill="#0E1223" stroke="#A78BFA" stroke-opacity=".6"/>
+  <text x="805" y="394" text-anchor="middle" fill="#F8FAFC" font-size="11.5" font-weight="600">Pod · 每会话一个</text>
+
+  <rect x="718" y="404" width="174" height="46" rx="6" fill="#131A2E" stroke="#334155"/>
+  <text x="805" y="424" text-anchor="middle" fill="#F8FAFC" font-size="11.5">Bridge 服务</text>
+  <text x="805" y="440" text-anchor="middle" fill="#94A3B8" font-size="9">ACP client · WS 端点</text>
+
+  <line x1="805" y1="450" x2="805" y2="478" stroke="#A78BFA" stroke-width="1.5" marker-end="url(#arZv)"/>
+  <text x="813" y="468" fill="#A78BFA" font-size="8.5" font-family="monospace">ACP/stdio</text>
+
+  <rect x="718" y="478" width="174" height="46" rx="6" fill="#131A2E" stroke="#334155"/>
+  <text x="805" y="498" text-anchor="middle" fill="#F8FAFC" font-size="11.5">CLI 进程</text>
+  <text x="805" y="514" text-anchor="middle" fill="#94A3B8" font-size="9">Claude Code · Codex …</text>
+
+  <!-- OSS -->
+  <line x1="805" y1="570" x2="805" y2="630" stroke="#94A3B8" stroke-width="1.5" marker-end="url(#arZ)"/>
+  <text x="813" y="606" fill="#64748B" font-size="9.5" font-family="monospace">挂载 · 持久化产出</text>
+  <rect x="705" y="630" width="200" height="62" rx="8" fill="#0E1223" stroke="#334155"/>
+  <text x="805" y="658" text-anchor="middle" fill="#F8FAFC" font-size="13.5" font-weight="600">OSS</text>
+  <text x="805" y="678" text-anchor="middle" fill="#94A3B8" font-size="10.5">会话工作区文件</text>
+</svg>
+<figcaption><b>顾问不在图上单独出现 —— 它就跑在 Server 进程里。</b>这是两类 Agent 最直观的部署差异：顾问是 Server 的一段代码（<code>create_agent</code> 构造的图，见<a href="session.html#s5">会话管理 §05</a>），助理是一个独立 Pod。图中 Server 到 Higress 的那条线，顾问与助理的 LLM 调用都走它。</figcaption>
+</figure>
+</section>
+
+<!-- ───────────────────────── 3 ───────────────────────── -->
+<section id="s3">
+<h2><span class="num">03</span>组件职责</h2>
+
+<table>
+  <thead><tr><th style="width:150px">组件</th><th style="width:110px">形态</th><th>职责</th></tr></thead>
+  <tbody>
+    <tr><td><b>Client</b></td><td>Web / App</td><td>唯一的用户界面。只消费一套对象模型与一套事件流，通过 <code>capabilities</code> 感知能力边界，不感知 Agent 实现差异。</td></tr>
+    <tr><td><b>Agent 管理</b></td><td>Server 模块</td><td>Agent 定义与版本、<code>capabilities</code> 的<b>唯一所有者</b>、工具与 MCP 装配、发布校验。见<a href="agent.html">Agent 管理设计</a>。</td></tr>
+    <tr><td><b>会话管理</b></td><td>Server 模块</td><td>Session / Run 状态机、Message 账本、Event 流、审批回路、幂等准入与并发控制。核心，见<a href="session.html">会话管理设计</a>。</td></tr>
+    <tr><td><b>MCP 管理</b></td><td>Server 模块</td><td>MCP Server 注册与启停、工具发现与缓存、按 Agent 下发工具子集。调用本身经 Higress。</td></tr>
+    <tr><td><b>记忆管理</b></td><td>Server 模块</td><td>记忆的抽取、写入与召回策略；Mem0 的调用方与上下文注入点。</td></tr>
+    <tr><td><b>技能管理</b></td><td>Server 模块</td><td>技能包的安装、校验、按 Agent 启用。顾问与助理的技能集可以不同。</td></tr>
+    <tr><td><b>执行环境管理</b></td><td>Server 模块</td><td><b>Pod 模板与生命周期</b>。为 <code>acp</code> Pod、<code>native</code> sandbox Pod、本地设备提供统一的执行环境抽象：模板渲染、创建与回收、卷编排、配额与连接注册。见<a href="execution.html">执行环境管理设计</a>。</td></tr>
+    <tr><td><b>可观测性</b></td><td>Server 模块</td><td>按 OTel GenAI 语义约定产生 span 与指标，经 OTLP 导出。见 <a href="#s7">§07</a>。</td></tr>
+    <tr><td><b>Higress</b></td><td>网关</td><td><b>双职责</b>：LLM 网关 + MCP 网关。所有出站调用的收口点。见 <a href="#s6">§06</a>。</td></tr>
+    <tr><td><b>Mem0</b></td><td>外部服务</td><td>长期记忆存储与检索。</td></tr>
+    <tr><td><b>Bridge</b></td><td>Pod 内进程</td><td>ACP client + WebSocket 端点。把 ACP 的 <code>session/update</code> 翻译成平台 Event，把平台指令翻译成 ACP 请求。</td></tr>
+    <tr><td><b>CLI 进程</b></td><td>Pod 内进程</td><td>Claude Code / Codex 等 ACP-compatible CLI。真正干活的那个。</td></tr>
+    <tr><td><b>OSS</b></td><td>对象存储</td><td>会话工作区。Pod 挂载，销毁重建后文件仍在。</td></tr>
+  </tbody>
+</table>
+</section>
+
+<!-- ───────────────────────── 4 ───────────────────────── -->
+<section id="s4">
+<h2><span class="num">04</span>两类 Agent 的部署形态</h2>
+
+<table>
+  <thead><tr><th style="width:170px"></th><th style="width:270px">顾问 · <code>native</code></th><th>助理 · <code>acp</code></th></tr></thead>
+  <tbody>
+    <tr><td><b>执行位置</b></td><td>Server 进程内</td><td>独立 Kubernetes Pod</td></tr>
+    <tr><td><b>构造方式</b></td><td><code>create_agent(...)</code> 编译出的图</td><td>调度 Pod，Bridge 起 CLI 子进程</td></tr>
+    <tr><td><b>与 Server 的连接</b></td><td>函数调用</td><td>WebSocket</td></tr>
+    <tr><td><b>启动成本</b></td><td>接近零</td><td>镜像拉取 + CLI 初始化 + OSS 挂载</td></tr>
+    <tr><td><b>状态归属</b></td><td>无常驻状态，Message 表即全部</td><td>上下文在 CLI 进程内，Server 只有句柄</td></tr>
+    <tr><td><b>工作区</b></td><td>无</td><td>OSS 挂载卷</td></tr>
+    <tr><td><b>凭证</b></td><td>Server 统一持有</td><td>Pod 级隔离，天然按会话分离</td></tr>
+    <tr><td><b>水平扩容</b></td><td>随 Server 无状态扩容</td><td>随 Pod 调度，Server 维护 <code>session → pod</code> 映射</td></tr>
+    <tr><td><b>空闲回收</b></td><td>不适用</td><td>idle TTL 销毁 Pod，会话置 <code>cold</code></td></tr>
+  </tbody>
+</table>
+
+<div class="callout warn">
+  <span class="label">Pod-per-session 的代价</span>
+  <p>换来了凭证隔离与调度简化，代价是<b>冷启动延迟</b>与<b>常驻成本</b>。会话数量大且多数空闲时，缩容 TTL 与预热池的取舍需要实测数据来定，不要凭感觉设。这也是为什么低成本、高频次的咨询类交互应当走顾问而不是助理 —— 不只是能力问题，也是成本问题。</p>
+</div>
+</section>
+
+<!-- ───────────────────────── 5 ───────────────────────── -->
+<section id="s5">
+<h2><span class="num">05</span>协议选型</h2>
+
+<table>
+  <thead><tr><th style="width:190px">连接</th><th style="width:150px">协议</th><th>理由</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>Client ↔ Server</td><td><b>SSE + REST</b></td>
+      <td>事件下行用 SSE，指令上行用 REST。审批与追问是分钟级低频交互，不值得为它引入 WebSocket 的连接管理、心跳与代理层兼容负担。用 <code>POST</code> + <code>fetch</code> 流式读取而非 <code>EventSource</code>（后者不能带 header 与 body）。</td>
+    </tr>
+    <tr>
+      <td>Server ↔ Pod</td><td><b>WebSocket</b></td>
+      <td>高频双向：Bridge 持续上报 <code>session/update</code>，Server 下发 prompt、审批结果与取消。两端都是自有服务，无代理层兼容负担。</td>
+    </tr>
+    <tr>
+      <td>Bridge ↔ CLI</td><td><b>ACP over stdio</b></td>
+      <td>由 CLI 侧决定，不是我们的选择。Bridge 作为 ACP client 实现反向请求（<code>request_permission</code>、<code>fs/*</code>）。</td>
+    </tr>
+    <tr>
+      <td>Server → Higress</td><td>HTTP</td>
+      <td>LLM 与 MCP 调用统一收口。</td>
+    </tr>
+    <tr>
+      <td>Server → Collector</td><td>OTLP</td>
+      <td>旁路遥测，不在主调用链上。</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout danger">
+  <span class="label">SSE 的缓冲陷阱</span>
+  <p>Client ↔ Server 这一跳的 SSE <b>必须在反向代理处关闭 buffering 与压缩</b>，否则流式输出会成段卡顿 —— 表现为「转半天圈然后一整段蹦出来」，很容易被误判为模型慢。Server ↔ Pod 走 WebSocket，不受此影响。</p>
+</div>
+</section>
+
+<!-- ───────────────────────── 6 ───────────────────────── -->
+<section id="s6">
+<h2><span class="num">06</span>出站收口：Higress</h2>
+
+<p>Higress 同时是 <b>LLM 网关</b>与 <b>MCP 网关</b>。所有出站流量 —— 顾问的模型调用、助理的模型调用（如果 CLI 也配置走网关）、以及全部 MCP 工具调用 —— 都经过它。</p>
+
+<h3>收口买到了什么</h3>
+<ul>
+  <li><b>鉴权与密钥托管</b> —— 模型密钥不散落在 Server 与各 Pod 的环境变量里</li>
+  <li><b>限流与配额</b> —— 按租户、按 Agent、按会话的用量控制只实现一次</li>
+  <li><b>成本核算</b> —— token 计量在网关侧统一采集，不依赖各调用方自觉上报</li>
+  <li><b>故障转移</b> —— 模型降级与多供应商切换对上层透明</li>
+  <li><b>出站审计</b> —— 合规场景下「什么数据发给了哪个外部模型」有单一审计点</li>
+</ul>
+
+<div class="callout warn">
+  <span class="label">代价：它是出站单点</span>
+  <p>网关故障会<b>同时</b>掐断推理与工具两条链路。因此它的可用性等级必须按两条链路中要求最高的那条来定，不能因为它叫「网关」就按基础设施的默认等级对待。多副本、健康检查、以及「网关不可用时是否允许直连降级」都要在上线前有明确答案 —— 而后者一旦允许，上面列的五项收益会在降级期间同时失效，这个取舍要写进预案而不是临场决定。</p>
+</div>
+</section>
+
+<!-- ───────────────────────── 7 ───────────────────────── -->
+<section id="s7">
+<h2><span class="num">07</span>可观测性</h2>
+
+<p>采集标准用 <b>OpenTelemetry GenAI 语义约定</b>，后端用 <b>Langfuse</b>。</p>
+
+<h3>为什么是语义约定而不是自定义字段</h3>
+<p>遥测在四个地方产生：Server（会话与 Run 的编排）、Higress（模型与工具调用的实际出站）、Bridge（ACP 翻译与生命周期）、以及 <b>Claude Code 自身</b>。<b>只有共用同一套语义约定，这四处的 span 才能拼成一条完整调用链。</b></p>
+
+<div class="callout rule">
+  <span class="label">CLI 内部不是黑盒</span>
+  <p>实测确认 Claude Code <b>原生支持标准 OTel 导出</b>（<code>CLAUDE_CODE_ENABLE_TELEMETRY</code> 配合完整的 <code>OTEL_EXPORTER_OTLP_*</code> 环境变量），可以配置成上报到我们自己的 Collector —— 工具执行耗时、审批等待时长、上下文压缩事件、token 与成本都能拿到。</p>
+  <p>所以「它为什么改了这个文件」这类问题在助理侧是可追查的，而不是只剩「进去了」和「出来了」。接入方式、具体能拿到哪些指标、以及关联维度上的错配，见<a href="observability.html#s5">可观测性设计 §05</a>。</p>
+</div>
+
+<h3>关联维度</h3>
+<p>四层 span 用同一组 ID 串联，它们正好是会话管理里已有的对象主键，不用另造：</p>
+<pre><code>session_id   贯穿整个会话
+run_id       贯穿一轮对话
+message_seq  定位到具体一条消息</code></pre>
+
+<p>Bridge 在把 ACP <code>session/update</code> 翻译成平台 Event 的同时，应按同一语义约定产生 span 并携带这组 ID。架构图中未画出 Pod → Collector 的线（避免与 K8s 块交叉），但它是必需的。</p>
+
+<p>完整的采集架构、trace 结构、指标清单、隐私分档与告警策略，见<a href="observability.html">可观测性设计</a>。</p>
+</section>
+
+<!-- ───────────────────────── 8 ───────────────────────── -->
+<section id="s8">
+<h2><span class="num">08</span>存储与持久化</h2>
+
+<table>
+  <thead><tr><th style="width:170px">数据</th><th style="width:150px">存储</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td><b>Message</b></td><td>数据库</td><td>会话内容账本，<b>展示的唯一真相</b>，永久保留</td></tr>
+    <tr><td><b>Session / Run / Agent</b></td><td>数据库</td><td>状态机与元数据</td></tr>
+    <tr><td><b>Event</b></td><td>数据库</td><td>过程流，只保留最后一个 Run，可 TTL 清理</td></tr>
+    <tr><td><b>会话工作区文件</b></td><td>OSS</td><td>助理的产出。Pod 挂载，销毁重建后仍在</td></tr>
+    <tr><td><b>长期记忆</b></td><td>Mem0</td><td>跨会话的用户与领域记忆</td></tr>
+    <tr><td><b>Checkpoint</b></td><td><span class="no">不存</span></td><td>顾问不落 checkpoint，见下</td></tr>
+  </tbody>
+</table>
+
+<div class="callout rule">
+  <span class="label">顾问不存 checkpoint</span>
+  <p>Message 已经是完整的会话内容，checkpoint 会成为<b>冗余的第二份真相</b> —— 而两份真相就需要对齐规则，对不上时是静默降级而非报错。顾问的上下文本就每轮重建，因此不需要「精确恢复到中断点」这项 checkpoint 的核心价值。<code>create_agent</code> 不传 <code>checkpointer</code> 即为无状态，每轮传入完整 Message 列表，与这个模型天然契合。</p>
+  <p>实质损失只有一项：<b>一轮跑到一半中断后无法续跑，只能整轮重来。</b>连带后果是顾问的追问不能在 Run 内挂起 —— 详见<a href="session.html#s5">会话管理 §05</a>。</p>
+</div>
+
+<h3>OSS 上的文件不等于上下文</h3>
+<p>Pod 销毁重建后 OSS 上的产出文件仍在，但<b>会话上下文不在 OSS 上</b> —— 它在 CLI 进程内存里，随 Pod 一起消失。能否恢复只取决于 CLI 是否实现 ACP 的 <code>loadSession</code>。把「文件还在」误当成「上下文还在」，会导致产品上给用户错误的预期。</p>
+</section>
+
+<!-- ───────────────────────── 9 ───────────────────────── -->
+<section id="s9">
+<h2><span class="num">09</span>架构决策与代价</h2>
+
+<table>
+  <thead><tr><th style="width:230px">决策</th><th style="width:270px">买到了</th><th>代价</th></tr></thead>
+  <tbody>
+    <tr><td>顾问 / 助理角色分离</td><td>能力、审批、成本三条线都有清晰依据</td><td>两类 Agent 的 UI 语义不完全一致，需 capability 驱动</td></tr>
+    <tr><td>顾问不存 checkpoint</td><td>单一真相源，无双源对齐问题</td><td>Run 中断后整轮重来</td></tr>
+    <tr><td>Pod-per-session</td><td>凭证隔离、无需 sticky 路由</td><td>冷启动延迟与常驻成本</td></tr>
+    <tr><td>Higress 双职责收口</td><td>鉴权限流成本审计只实现一次</td><td>出站单点，可用性要求被拉高</td></tr>
+    <tr><td>Client 用 SSE 而非 WS</td><td>代理友好、实现简单</td><td>反向代理必须正确配置缓冲</td></tr>
+    <tr><td>OTel 语义约定</td><td>三层链路可拼接</td><td>Bridge 必须配合上报，否则链路断在最关键处</td></tr>
+  </tbody>
+</table>
+
+<h3>已排除的范围</h3>
+<div class="callout rule">
+  <span class="label">不做任务移交</span>
+  <p><b>一个 Session 只绑定一个 Agent，本期不实现顾问到助理的移交。</b>跨角色协作由用户手工完成 —— 从顾问会话复制方案，到助理会话发起新任务。</p>
+  <p>这保持了 Session 与 Agent 的严格一对一，两边的能力矩阵因此各自成立，不需要引入 <code>parent_session_id</code>、上下文传递格式、产出回流这一整套概念。移交机制需要先有真实用例才能定得对，过早设计只会得到一个没人用的抽象。</p>
+</div>
+</section>
+
+<footer>
+  <p>相关文档：<a href="session.html">会话管理设计</a> —— Session / Run / Message / Event 的对象模型、状态机与接口契约。</p>
+</footer>
+
+</main>
+</div>
+</body>
+</html>

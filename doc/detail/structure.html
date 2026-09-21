@@ -1,0 +1,702 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>目录与包结构设计 · AI Platform</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  .tree{background:var(--card);border:1px solid var(--border-soft);border-radius:var(--radius);
+        padding:var(--s3);overflow-x:auto;margin:0 0 var(--s3);font-family:var(--mono);
+        font-size:12.5px;line-height:1.75;white-space:pre;color:#CBD5E1}
+  .tree b{color:#F8FAFC;font-weight:600}
+  .tree i{color:#7A88A0;font-style:normal}
+  .tree u{color:#FDE68A;text-decoration:none}
+  .tree s{color:#7DD3FC;text-decoration:none}
+  .tree em{color:#F59E0B;font-style:normal}
+  .tag{font-family:var(--mono);font-size:10.5px;padding:1px 7px;border-radius:99px;border:1px solid;white-space:nowrap}
+  .tag.new{color:var(--warn);border-color:rgba(245,158,11,.45)}
+  .tag.move{color:var(--native);border-color:rgba(56,189,248,.45)}
+  .tag.keep{color:var(--accent);border-color:rgba(34,197,94,.45)}
+  .tag.later{color:#7A88A0;border-color:var(--border)}
+  .tag.java{color:#F0ABFC;border-color:rgba(240,171,252,.45)}
+  .step{border-left:2px solid var(--border);padding-left:var(--s3);margin:var(--s4) 0}
+  .step h4{margin-top:0;color:var(--accent);font-family:var(--mono);font-size:12px;letter-spacing:.1em}
+  .plane{border:1px solid var(--border);border-radius:var(--radius);padding:var(--s2) var(--s3);margin-bottom:var(--s2)}
+  .plane.cfg{border-left:3px solid #F0ABFC}
+  .plane.rt{border-left:3px solid var(--accent)}
+  .plane h4{margin:0 0 6px;font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase}
+  .plane.cfg h4{color:#F0ABFC} .plane.rt h4{color:var(--accent)}
+  .plane p{margin:0;font-size:13.5px;color:var(--muted-fg)}
+</style>
+</head>
+<body>
+
+<nav class="sitenav">
+  <a class="brand" href="../">AI&nbsp;<b>Platform</b>&nbsp;/ 详细设计</a>
+  <div class="links">
+    <a href="../">概要设计</a>
+    <a href="./">详设目录</a>
+    <a href="native.html">native Agent</a>
+    <a class="on" href="structure.html">目录与包结构</a>
+    <a href="kernel.html">kernel 分析</a>
+    <a href="filesystem.html">文件系统改造</a>
+    <a href="subagent.html">Subagent 重设计</a>
+    <a href="acp.html">acp Agent</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+<nav class="toc" aria-label="目录">
+  <div class="eyebrow">本页</div>
+  <ol>
+    <li><a href="#s1">两个平面</a></li>
+    <li><a href="#s2">边界怎么划</a></li>
+    <li><a href="#s3">Agent 配置为什么不拆</a></li>
+    <li><a href="#s4">不可变契约与缓存</a></li>
+    <li><a href="#s5">顶层：仓库与包</a></li>
+    <li><a href="#s6">contracts 与跨语言契约</a></li>
+    <li><a href="#s7">kernel：自有代码，可裁剪</a></li>
+    <li><a href="#s8">server 内部</a></li>
+    <li><a href="#s9">配置平面（Java）</a></li>
+    <li><a href="#s10">web：三个方案</a></li>
+    <li><a href="#s11">tests 与部署</a></li>
+    <li><a href="#s12">落地顺序</a></li>
+    <li><a href="#s13">什么时候不该拆</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<header class="hero">
+  <p class="kicker">Detailed Design · Structure</p>
+  <h1>目录与包结构设计</h1>
+  <p class="lede">系统分成两个平面：<b>配置平面</b>（Java）拥有技能、MCP 注册表、K8s 模板与身份体系；<b>运行时平面</b>（Python）拥有 session、run、事件流与执行环境。<b>智能体配置与版本留在 Python</b> —— 它是装配说明，不是内容资产。Python 以 API 只读消费其余配置。</p>
+  <div class="meta">
+    <span>基线 atlas 7b1a991</span><span>Python 5 包 + Java 配置服务</span><span>纯搬迁优先</span><span>从零历史处开刀</span>
+  </div>
+</header>
+
+<!-- ═══════════════════════ 1 ═══ -->
+<section id="s1">
+  <h2><span class="num">01</span>两个平面</h2>
+
+  <div class="plane cfg">
+    <h4>配置平面 · Java</h4>
+    <p>技能 · MCP 注册表 · K8s 模板 · 用户 / 权限 / 审计 / 配额。<b>内容资产的所有者</b> —— 有独立于任何 agent 的生命周期：创作、审核、发版、下架。</p>
+  </div>
+  <div class="plane rt">
+    <h4>运行时平面 · Python</h4>
+    <p><b>智能体配置与版本</b> · session · run · message · event · 审批 · 沙箱 · 压缩 · 记忆读写。既是内容资产的<b>消费者</b>（按版本号只读拉取），也是装配说明的<b>所有者</b>。</p>
+  </div>
+
+  <h3>这条线为什么成立</h3>
+  <p>核心论证是<b>技能不该归 agent 应用管</b>：技能是有独立生命周期的资产，消费者不止一个 —— native agent 用它，acp 的 Claude Code 直接挂载它的目录，人也会直接读它。让 agent 应用当 owner 是错位。</p>
+  <p>同理成立于 MCP 注册表（多个 agent 共享、运维在管）与 K8s 模板（<a href="#s11">改一个资源限额不该触发 Python 包的构建</a>）。</p>
+
+  <div class="callout rule">
+    <span class="label">为什么运行时那一半必须留在 Python</span>
+    <p>一次 run 里 Python 要写 <code>message</code> / <code>run</code> 状态与用量 / <code>run_event</code> / <code>run_file</code> / <code>thread.summary</code> / <code>thread.title</code> / <code>approval</code>。这些不是"配置的副产品"，它们是运行时自己的事实。而且 atlas 有一条明确的顺序保证 —— <b>终止事件先落库再发布</b>，否则客户端收到 <code>run.finished</code> 后立刻查会读到 <code>status=running</code>。跨服务之后这是个分布式协调问题；留在一侧它只是两行代码的顺序。</p>
+  </div>
+
+  <h3>沿用 atlas 已经对的部分</h3>
+  <p>运行时平面内部，atlas 现有的三包分层不动：依赖单向、<code>repositories/</code> 是唯一接触 DB 的地方、engine 能脱离数据库单测 —— 而且不靠自觉，靠 <code>import-linter</code> 契约。</p>
+</section>
+
+<!-- ═══════════════════════ 2 ═══ -->
+<section id="s2">
+  <h2><span class="num">02</span>边界怎么划</h2>
+
+  <p>四类配置对运行时的耦合度<b>不一样</b>，不能当成一个平面统一处理。前三类拆出去，第四类留下：</p>
+
+  <table>
+    <thead><tr><th style="width:120px">资产</th><th style="width:100px">独立性</th><th style="width:170px">Python 的角色</th><th>耦合点</th></tr></thead>
+    <tbody>
+      <tr><td><b>技能</b></td><td>完全独立</td><td>只读消费</td><td>无 —— 只认 <code>(slug, version)</code> 与投送路径 <code>/skills/&lt;slug&gt;/</code></td></tr>
+      <tr><td><b>K8s 模板</b></td><td>完全独立</td><td>只读消费</td><td>无 —— 只认 template id</td></tr>
+      <tr><td><b>MCP 注册表</b></td><td>基本独立</td><td>只读 + 运行时连接</td><td><b>凭据解析必须留在 Python</b></td></tr>
+      <tr><td><b>Agent 配置</b></td><td><b>不拆</b></td><td><b>所有者</b></td><td>模型门禁 · 工具目录 · 审批目标 · <b>两条真实外键</b>（见 <a href="#s3">§03</a>）</td></tr>
+    </tbody>
+  </table>
+
+  <h3>MCP 的那个口子：凭据</h3>
+  <p>atlas 现在的纪律是：配置里<b>只存 <code>${ENV}</code> 占位符</b>，真值在发起连接的那个进程的环境变量里。拆分后保持这条 —— Java 存的永远是占位符，解析发生在 Python。</p>
+
+  <div class="callout rule">
+    <span class="label">这让隔离反而更彻底</span>
+    <p>配置服务<b>从来看不到真凭据</b>。它被拖库也拖不到 MCP 的 token —— 那些只存在于运行时进程的环境变量里。原本是个"口子"，实际上是这套拆分白拿的一个好处。</p>
+  </div>
+
+  <pre><code><span class="tok-c"># 配置服务返回的 MCP server 定义（Java → Python）</span>
+{
+  <span class="tok-s">"name"</span>: <span class="tok-s">"calc"</span>,
+  <span class="tok-s">"url"</span>: <span class="tok-s">"https://mcp.internal/calc"</span>,
+  <span class="tok-s">"transport"</span>: <span class="tok-s">"streamable_http"</span>,
+  <span class="tok-s">"headers"</span>: { <span class="tok-s">"Authorization"</span>: <span class="tok-s">"Bearer ${CALC_TOKEN}"</span> }   <span class="tok-c">← 占位符,不是真值</span>
+}</code></pre>
+  <p>Python 侧 <code>resolve_env_refs()</code> 原样保留：环境变量不存在时<b>明确报错</b>，不能当空串 —— 否则会用空 token 去连，服务端返回 401，报错指向"认证失败"而不是"你没配这个环境变量"。</p>
+</section>
+
+<!-- ═══════════════════════ 3 ═══ -->
+<section id="s3">
+  <h2><span class="num">03</span>Agent 配置为什么不拆</h2>
+
+  <p>技能、MCP、模板是<b>内容</b>；agent spec 是<b>装配说明</b> —— 它说的是"把哪个模型、哪些工具、哪些技能、什么限额装配成一个可执行的图"。装配说明属于装配者。</p>
+
+  <h3>决定性的理由：两条真实外键</h3>
+
+  <pre><code><span class="tok-c"># server/src/atlas_server/db/models.py —— 现存的引用完整性</span>
+
+<span class="tok-k">class</span> <span class="tok-t">Thread</span>:
+    agent_id: Mapped[UUID] = mapped_column(UUIDType, ForeignKey(<span class="tok-s">"agent.id"</span>), ...)
+
+<span class="tok-k">class</span> <span class="tok-t">Run</span>:
+    agent_version_id: Mapped[UUID | <span class="tok-k">None</span>] = mapped_column(
+        UUIDType, ForeignKey(<span class="tok-s">"agent_version.id"</span>), ...)</code></pre>
+
+  <p>把 <code>agent</code> / <code>agent_version</code> 搬到另一个服务，这两条外键只有两种下场：</p>
+  <ul>
+    <li><b>降级成软引用</b> —— 于是"删掉一个 agent 会不会让历史会话变成孤儿"从数据库保证的事，变成一条要靠代码自觉维护的约定。而 atlas 全部可复现性承诺（<code>run.agent_version_id</code> 能回答"当时用的哪份配置"）就建立在这条引用上。</li>
+    <li><b>保留但跨库</b> —— 做不到。</li>
+  </ul>
+
+  <div class="callout rule">
+    <span class="label">技能为什么不受这个约束</span>
+    <p>因为技能引用<b>不是外键</b>，是 spec 里的 <code>(slug, version)</code> 值对 —— 本来就是软引用，而且它<b>必须</b>是软引用：spec 是版本快照，存 id 在执行时解引用的话，技能一改所有历史 run 的含义就跟着变（这一点在 <a href="native.html#s4">native 详设 §04</a> 论证过）。同一个设计判断，在 agent 上给出相反的结论。</p>
+  </div>
+
+  <h3>连带的三个好处</h3>
+  <table>
+    <thead><tr><th style="width:190px"></th><th>不拆之后</th></tr></thead>
+    <tbody>
+      <tr><td><b>不需要内部 API</b></td><td><code>spec-schema</code> / <code>spec/validate</code> 全部取消。校验回到 atlas 现在的样子 —— 保存时 <code>spec.validate()</code>，实测门禁只有一份实现且从没离开过它产生的地方</td></tr>
+      <tr><td><b>调用方向单一</b></td><td>只剩 <b>Python → Java 的只读拉取</b>。没有反向同步调用，也就没有循环依赖的可能</td></tr>
+      <tr><td><b>快照纪律不跨语言</b></td><td>「spec 新字段必须有默认值」仍由 <code>tests/guards/test_spec_snapshots.py</code> 一处守着，写入方与读取方是同一个进程</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Java 仍然拥有它该拥有的：授权</h3>
+  <p>"谁能编辑哪个 agent"是 iam 的问题，不是存储的问题。BFF 形态下 Java 先做授权判定，再把请求转给 Python 的 <code>/v1/agents</code>：</p>
+
+  <pre><code>浏览器 → Java console
+           ├─ 授权判定（iam）· 审计留痕（audit）
+           └─ 代理 → Python /v1/agents/*   <span class="tok-c">← 存储与校验在这里</span></code></pre>
+
+  <div class="callout danger">
+    <span class="label">网络层必须配合</span>
+    <p>Python 的 <code>/v1/agents</code> <b>不能从浏览器直接可达</b>，否则 Java 那道授权门形同虚设。运行时服务只暴露给 Java 与内部网络；对外的入口只有一个。这条是部署约束，不是代码能保证的 —— 要写进 <code>deploy/</code> 的网络策略里。</p>
+  </div>
+
+  <h3>一处新增的跨平面调用：保存时解析技能版本</h3>
+  <pre><code><span class="tok-c"># services/agent.py —— 保存 agent 时把 skills 里的 version=None 钉死</span>
+
+<span class="tok-k">async</span> <span class="tok-k">def</span> <span class="tok-f">_pin_skill_versions</span>(<span class="tok-k">self</span>, spec: AgentSpecIn) -> AgentSpecIn:
+    <span class="tok-s">"""version=None → 配置平面当前的版本号。
+
+    ★ 顺带做存在性校验：引用了不存在或未发布的技能，**保存时就 400**。
+      配置平面不可用时保存会失败 —— 这是可接受的：无法确认技能存在
+      就写进快照，等于允许一份指向空气的配置进库。
+    """</span>
+    <span class="tok-k">if</span> <span class="tok-k">not</span> spec.skills:
+        <span class="tok-k">return</span> spec
+    resolved = <span class="tok-k">await</span> <span class="tok-k">self</span>._configplane.skills.resolve(spec.skills)
+    <span class="tok-k">return</span> spec.model_copy(update={<span class="tok-s">"skills"</span>: resolved})</code></pre>
+</section>
+
+<!-- ═══════════════════════ 4 ═══ -->
+<section id="s4">
+  <h2><span class="num">04</span>不可变契约与缓存</h2>
+
+  <div class="callout danger">
+    <span class="label">对配置平面的硬约束</span>
+    <p>已发布的 <code>agent_version</code> / <code>skill_version</code> 行，<b>内容永不原地修改</b>。要改就发新版本。</p>
+  </div>
+
+  <p>这不是洁癖，是 atlas 全部可复现性承诺的地基：<code>run.agent_version_id</code> 必须能回答"当时用的哪份配置"。如果配置服务允许编辑已发布版本，所有历史 run 的含义会静默改变 —— 而 run 行还指着同一个 id，看起来一切正常。</p>
+
+  <h3>它顺带把硬依赖变成软依赖</h3>
+  <p>版本不可变 ⇒ Python 可以按 version id <b>永久缓存</b>解析结果，无需失效策略。于是：</p>
+
+  <table>
+    <thead><tr><th style="width:180px">配置服务状态</th><th>运行时表现</th></tr></thead>
+    <tbody>
+      <tr><td>正常</td><td>一切正常</td></tr>
+      <tr><td><b>不可用</b></td><td>命中缓存的 agent / 技能<b>照常跑</b>；只有首次用到的新版本会失败，错误明确指向配置平面</td></tr>
+      <tr><td>返回了与缓存不同的同版本内容</td><td>缓存优先 + 告警 —— 这说明对方破了不可变契约，应当被发现而不是被跟随</td></tr>
+    </tbody>
+  </table>
+
+  <pre><code><span class="tok-c"># server/src/atlas_server/configplane/cache.py</span>
+
+<span class="tok-k">class</span> <span class="tok-t">VersionCache</span>:
+    <span class="tok-s">"""按 (资产类型, id, version) 缓存。
+
+    ★ 永不失效 —— 依据是配置平面的不可变契约，不是猜测。
+      这一点必须在代码里写明：将来有人想加 TTL 时，他要先推翻那条契约。
+
+    ★ 内容指纹不一致时**用缓存并告警**，不静默跟随新内容：
+      跟随 = 帮对方把「破了不可变契约」这件事藏起来。
+    """</span>
+
+    <span class="tok-k">async</span> <span class="tok-k">def</span> <span class="tok-f">get</span>(<span class="tok-k">self</span>, kind: <span class="tok-t">str</span>, id_: <span class="tok-t">str</span>, version: <span class="tok-t">int</span>, fetch) -> Any:
+        ...</code></pre>
+
+  <p>磁盘落地：进程重启不该让全部会话重新拉配置。缓存写到本地 <code>var/cache/configplane/</code>，内容寻址（key 含 digest），可以随时删。</p>
+</section>
+
+<!-- ═══════════════════════ 5 ═══ -->
+<section id="s5">
+  <h2><span class="num">05</span>顶层：仓库与包</h2>
+
+  <div class="tree"><em>两个仓库，两种语言，没有共享数据库</em>
+
+<b>atlas/</b>                                      <i>运行时平面 · Python</i>
+├── <b>contracts/</b>  src/<u>atlas_contracts</u>/   <span class="tag new">新增</span> <i>零重依赖的执行侧契约</i>
+├── <b>engine/</b>     src/<u>atlas_engine</u>/      <span class="tag keep">收窄</span> <i>native 执行引擎（LangGraph）</i>
+├── <b>acp/</b>        src/<u>atlas_acp</u>/         <span class="tag later">下一期</span> <i>Server 侧 ACP 客户端</i>
+├── <b>bridge/</b>     src/<u>atlas_bridge</u>/      <span class="tag later">下一期</span> <i>Pod 内守护进程</i>
+├── <b>server/</b>     src/<u>atlas_server</u>/      <span class="tag keep">保留</span> <i>编排 · 运行时持久化 · API</i>
+├── <b>web/</b>                                  <i>对话工作台（见 §10）</i>
+├── <b>deploy/</b>                               <span class="tag new">新增</span>
+└── <b>tests/</b>                                <span class="tag move">分组</span>
+
+<b>atlas-config/</b>                               <i>配置平面 · Java</i> <span class="tag java">新仓库</span>
+├── skill/ · mcp/ · k8stemplate/                <i>三个内容资产域</i>
+├── iam/ · audit/ · quota/                      <i>身份 · 审计 · 配额</i>
+└── console/                                    <i>管理控制台 + 智能体编辑器（代理到 Python）</i></div>
+
+  <figure>
+    <svg viewBox="0 0 820 400" role="img" aria-labelledby="pl-t pl-d">
+      <title id="pl-t">两个平面的依赖与调用方向</title>
+      <desc id="pl-d">配置平面（Java）拥有技能、MCP、K8s 模板三类内容资产以及身份权限审计；运行时平面（Python）拥有智能体配置与版本，并在 run 开始时只读拉取配置资产、永久缓存。跨平面的同步调用只有 Python 到 Java 一个方向。Python 内部 server 依赖 engine 与 acp，三者共享 contracts。两个平面不共享数据库。</desc>
+      <defs>
+        <marker id="a3" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+          <path d="M0,0 L9,4.5 L0,9 z" fill="#475569"/>
+        </marker>
+        <marker id="a4" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+          <path d="M0,0 L9,4.5 L0,9 z" fill="#F0ABFC"/>
+        </marker>
+      </defs>
+
+      <rect x="18" y="18" width="330" height="240" rx="10" fill="none" stroke="#F0ABFC" stroke-opacity=".35" stroke-dasharray="6 4"/>
+      <text x="34" y="42" fill="#F0ABFC" font-size="11.5" font-family="JetBrains Mono">配置平面 · Java</text>
+
+      <rect x="40" y="58" width="280" height="38" rx="7" fill="#0E1223" stroke="#334155"/>
+      <text x="180" y="82" text-anchor="middle" fill="#F8FAFC" font-size="12" font-family="IBM Plex Sans">技能 + 版本（含审核流）</text>
+      <rect x="40" y="108" width="130" height="38" rx="7" fill="#0E1223" stroke="#334155"/>
+      <text x="105" y="132" text-anchor="middle" fill="#F8FAFC" font-size="12" font-family="IBM Plex Sans">MCP 注册表</text>
+      <rect x="190" y="108" width="130" height="38" rx="7" fill="#0E1223" stroke="#334155"/>
+      <text x="255" y="132" text-anchor="middle" fill="#F8FAFC" font-size="12" font-family="IBM Plex Sans">K8s 模板</text>
+      <rect x="40" y="158" width="280" height="38" rx="7" fill="#131A2E" stroke="#334155"/>
+      <text x="180" y="182" text-anchor="middle" fill="#94A3B8" font-size="12" font-family="IBM Plex Sans">身份 · 权限 · 审计 · 配额</text>
+      <rect x="40" y="208" width="280" height="34" rx="7" fill="#131A2E" stroke="#475569"/>
+      <text x="180" y="230" text-anchor="middle" fill="#94A3B8" font-size="11.5" font-family="JetBrains Mono">config DB</text>
+
+      <rect x="462" y="18" width="340" height="300" rx="10" fill="none" stroke="#22C55E" stroke-opacity=".35" stroke-dasharray="6 4"/>
+      <text x="478" y="42" fill="#22C55E" font-size="11.5" font-family="JetBrains Mono">运行时平面 · Python</text>
+
+      <rect x="484" y="58" width="296" height="38" rx="7" fill="#0E1223" stroke="#334155"/>
+      <text x="606" y="82" text-anchor="middle" fill="#F8FAFC" font-size="12" font-family="JetBrains Mono">server</text>
+      <text x="700" y="82" text-anchor="middle" fill="#7A88A0" font-size="10.5" font-family="IBM Plex Sans">+ agent 配置</text>
+      <rect x="484" y="112" width="140" height="38" rx="7" fill="#0E1223" stroke="#38BDF8" stroke-opacity=".5"/>
+      <text x="554" y="136" text-anchor="middle" fill="#F8FAFC" font-size="12" font-family="JetBrains Mono">engine</text>
+      <rect x="640" y="112" width="140" height="38" rx="7" fill="#0E1223" stroke="#A78BFA" stroke-opacity=".5"/>
+      <text x="710" y="136" text-anchor="middle" fill="#F8FAFC" font-size="12" font-family="JetBrains Mono">acp</text>
+      <rect x="484" y="166" width="296" height="38" rx="7" fill="#131A2E" stroke="#22C55E" stroke-opacity=".55"/>
+      <text x="632" y="190" text-anchor="middle" fill="#F8FAFC" font-size="12" font-family="JetBrains Mono">contracts</text>
+      <line x1="554" y1="96" x2="554" y2="108" stroke="#475569" stroke-width="1.5" marker-end="url(#a3)"/>
+      <line x1="710" y1="96" x2="710" y2="108" stroke="#475569" stroke-width="1.5" marker-end="url(#a3)"/>
+      <line x1="554" y1="150" x2="554" y2="162" stroke="#475569" stroke-width="1.5" marker-end="url(#a3)"/>
+      <line x1="710" y1="150" x2="710" y2="162" stroke="#475569" stroke-width="1.5" marker-end="url(#a3)"/>
+      <rect x="484" y="222" width="140" height="34" rx="7" fill="#131A2E" stroke="#475569"/>
+      <text x="554" y="244" text-anchor="middle" fill="#94A3B8" font-size="11.5" font-family="JetBrains Mono">runtime DB</text>
+      <rect x="640" y="222" width="140" height="34" rx="7" fill="#131A2E" stroke="#475569"/>
+      <text x="710" y="244" text-anchor="middle" fill="#94A3B8" font-size="11.5" font-family="JetBrains Mono">Redis</text>
+      <rect x="484" y="272" width="296" height="34" rx="7" fill="#131A2E" stroke="#475569"/>
+      <text x="632" y="294" text-anchor="middle" fill="#94A3B8" font-size="11.5" font-family="JetBrains Mono">var/cache/configplane/</text>
+
+      <path d="M348 92 L410 92 L410 74 L478 74" fill="none" stroke="#475569" stroke-width="1.8" marker-end="url(#a3)"/>
+      <text x="413" y="40" text-anchor="middle" fill="#22C55E" font-size="10.5" font-family="IBM Plex Sans">只有这一个方向</text>
+      <text x="413" y="112" text-anchor="middle" fill="#7A88A0" font-size="10.5" font-family="IBM Plex Sans">run 开始 / agent 保存时</text>
+      <text x="413" y="126" text-anchor="middle" fill="#7A88A0" font-size="10.5" font-family="IBM Plex Sans">按版本只读拉取</text>
+
+      <path d="M180 242 L180 340 L632 340 L632 310" fill="none" stroke="#EF4444" stroke-width="1.4" stroke-dasharray="4 4"/>
+      <text x="406" y="360" text-anchor="middle" fill="#EF4444" font-size="11" font-family="IBM Plex Sans">✗ 不共享数据库 —— 两边各自迁移，各自事务</text>
+      <line x1="386" y1="332" x2="426" y2="348" stroke="#EF4444" stroke-width="1.8"/>
+      <line x1="426" y1="332" x2="386" y2="348" stroke="#EF4444" stroke-width="1.8"/>
+    </svg>
+    <figcaption><b>跨平面的同步调用只有一个方向</b>：Python 按版本号只读拉取，有永久缓存兜底。没有反向调用 —— 智能体配置留在 Python 之后，Java 不需要理解 spec 的任何字段。红叉标的是必须避免的耦合：共享数据库会让迁移失去单一 owner，而且把接口耦合换成了更紧的 schema 耦合。</figcaption>
+  </figure>
+
+  <div class="callout warn">
+    <span class="label">配额是唯一的反向数据流，但它不该是同步调用</span>
+    <p>Java 的 <code>quota/</code> 需要 run 的 token 用量。<b>不要</b>为此加一个 Java → Python 的查询接口 —— 那会把刚刚拿到的单向调用图破掉。用量是<b>运营数据</b>不是配置数据：run 收尾时投递一条用量事件（消息队列），或 Java 定时批量拉取归档。两种都不进 run 的关键路径，也不产生同步依赖。</p>
+  </div>
+</section>
+
+<!-- ═══════════════════════ 6 ═══ -->
+<section id="s6">
+  <h2><span class="num">06</span>contracts 与跨语言契约</h2>
+
+  <div class="callout rule">
+    <span class="label">修正：contracts 仍然只是 Python 包</span>
+    <p>讨论时我提过"contracts 可能要双语实现"。想清楚之后<b>不需要</b> —— 因为 Java 把 <code>spec</code> 当不透明 blob 处理，它不需要理解 <code>LimitSpec</code> 的任何字段。跨语言的契约是<b>两份 OpenAPI 文档</b>，不是一个共享的类型包。这个结论更好：少一个需要双边同步的东西。</p>
+  </div>
+
+  <h3>atlas_contracts：执行侧的共享契约</h3>
+  <p>纳入判据不变：<b>native 与 acp 两条执行路径都要用，且前端也认。</b></p>
+
+  <div class="tree"><b>contracts/</b>
+├── pyproject.toml            <i>依赖只有 pydantic</i>
+└── src/<u>atlas_contracts</u>/
+    ├── <s>events.py</s>              <i>TraceEvent · EventType · TERMINAL_EVENTS · to_sse()</i>
+    ├── <s>errors.py</s>              <i>error_kind 取值集合 · retryable 语义</i>
+    ├── <s>capabilities.py</s>        <i>Capabilities · capabilities_for()</i>
+    └── <s>limits.py</s>              <i>LimitSpec</i></div>
+
+  <p>消费方是 <code>engine</code> / <code>acp</code> / <code>bridge</code> / <code>server</code>。bridge 跑在 Pod 里和 CLI 打包在一起 —— 它不能为了一个 <code>TraceEvent</code> 类拖进 <code>langgraph + langchain + langsmith</code>。这是 contracts 独立的<b>部署约束</b>理由，不是整洁诉求。</p>
+
+  <h3>跨平面契约：一份 OpenAPI</h3>
+  <p>智能体配置不拆之后，跨语言的契约只剩<b>一份、一个方向</b>：</p>
+  <table>
+    <thead><tr><th style="width:170px">文档</th><th style="width:110px">谁定义</th><th style="width:110px">谁消费</th><th>内容</th></tr></thead>
+    <tbody>
+      <tr><td><code>config-plane.yaml</code></td><td>Java</td><td>Python</td><td>按版本读取技能内容 / MCP 定义 / K8s 模板；解析技能当前版本号</td></tr>
+    </tbody>
+  </table>
+
+  <pre><code><span class="tok-c"># atlas/contracts/openapi/config-plane.yaml</span>
+<span class="tok-c">#   由 Java 侧生成后**复制**进运行时仓库。</span>
+<span class="tok-c">#</span>
+<span class="tok-c"># ★ 复制而不是运行时拉取：生成客户端代码需要它在构建期就存在，</span>
+<span class="tok-c">#   且要能对 diff 做 review —— 配置平面改了返回结构，</span>
+<span class="tok-c">#   应当在这个仓库的 PR 里被看见，而不是某天 run 起来才发现。</span></code></pre>
+
+  <div class="callout rule">
+    <span class="label">快照纪律仍然是单语言的</span>
+    <p>「<b>spec 新字段必须有默认值</b>，否则历史快照反序列化全部失败」—— 这条由 <code>tests/guards/test_spec_snapshots.py</code> 一处守着就够了，因为 spec 的写入方与读取方是同一个进程。这是智能体配置不拆换来的最实在的一条好处：<b>最容易被破坏、后果最隐蔽的那条纪律，没有跨语言。</b></p>
+  </div>
+</section>
+
+<!-- ═══════════════════════ 7 ═══ -->
+<section id="s7">
+  <h2><span class="num">07</span>kernel：自有代码，可裁剪</h2>
+
+  <div class="callout rule">
+    <span class="label">定性变了</span>
+    <p>kernel 按需裁剪与扩展、不会被整体替换 —— 那它就<b>是自有代码</b>。这个定性决定了怎么对待它：不需要任何"版本对账"机制，需要的是<b>正常的代码质量要求</b>与<b>一条安全的裁剪路径</b>。</p>
+  </div>
+
+  <h3>因此撤销：VENDOR.md 与 drift 测试</h3>
+  <p>我在上一版里设计过 <code>kernel/VENDOR.md</code> + <code>test_vendor_drift.py</code>，守的是"同步外部改动时把本地修改弄丢了"。<b>kernel 是自有代码，这个失败模式不存在</b> —— 保留它只会变成一个为了显得严谨而存在的测试，以及一份没人会读的清单。撤掉。</p>
+  <p>值得保留的只有一份<b>来源说明</b>，几行就够：代码出自哪个项目、哪个版本、为什么 fork。它是给两年后的人看的，不是给 CI 看的。</p>
+
+  <h3>裁剪的真实收益不是行数</h3>
+  <p>26411 行、53 个模块。裁掉几千行本身不值钱，值钱的是这两样：</p>
+  <ul>
+    <li><b>缩小升级验证面。</b><code>engine/pyproject.toml</code> 把 <code>langchain==1.3.*</code> / <code>langgraph==1.2.*</code> 钉死了，理由写得很清楚 —— kernel 与这两个包深度同构。将来必须升的时候，kernel 里每一个贴着它们结构写的模块都是一个验证点。<b>用不到的模块不该参与这场验证。</b></li>
+    <li><b>减少读代码时的干扰。</b>找一个中间件时，不该在四个永远不会被装配的 profile 之间翻。</li>
+  </ul>
+
+  <h3>候选清单（已做可达性核对）</h3>
+  <p>逐模块的功能说明、类设计与完整评估见 <a href="kernel.html">kernel 包分析</a>。</p>
+  <table>
+    <thead><tr><th style="width:230px">模块</th><th style="width:70px">行数</th><th>判定</th></tr></thead>
+    <tbody>
+      <tr><td><code>profiles/harness/_nvidia_nemotron_3_ultra.py</code></td><td>1826</td><td>engine 只面向 <code>claude-*</code> 四个模型（<code>spec.py</code> 的门禁集合即全集）</td></tr>
+      <tr><td><code>middleware/rubric.py</code></td><td>1024</td><td><b>仅经 barrel <code>__init__.py</code> 可达</b>，<code>graph.py</code> 不 import</td></tr>
+      <tr><td><code>backends/context_hub.py</code></td><td>706</td><td>同上，仅经 <code>backends/__init__.py</code></td></tr>
+      <tr><td><code>middleware/_video.py</code></td><td>404</td><td><code>filesystem.py</code> 里 <code>try:</code> 包裹；<code>av</code> + <code>pillow</code> 未引入，分支恒不成立</td></tr>
+      <tr><td><code>backends/local_shell.py</code></td><td>364</td><td>仅经 barrel；沙箱走 <code>DockerSandbox</code></td></tr>
+      <tr><td><code>profiles/provider/_openrouter.py</code> 等 4 个</td><td>296</td><td>provider 侧同理，只用 Anthropic 协议网关</td></tr>
+      <tr><td><code>backends/langsmith.py</code></td><td>353</td><td><b>先别动</b> —— <code>middleware/subagents.py</code> 真的 import 它，只有连带删掉 rubric / context_hub 之后才可能变成孤立</td></tr>
+    </tbody>
+  </table>
+  <p>清晰候选合计约 <b>4600 行、17%</b>。</p>
+
+  <div class="callout danger">
+    <span class="label">别用 import 图判定死代码</span>
+    <p><code>__init__.py</code> 的 barrel 导出会让<b>一切都"可达"</b> —— 直接跑一遍可达性分析，53 个模块里 50 个是"活的"，结论毫无用处。</p>
+    <p>判据必须是<b>功能可达</b>：从 <code>create_deep_agent()</code> 出发，沿着真正参与装配的 import 走。上表就是这么核的 —— "仅经 barrel 可达"正是死代码的特征。</p>
+  </div>
+
+  <h3>安全的裁剪路径：两步走</h3>
+  <ol class="body">
+    <li><b>先从 barrel 摘掉，不删文件。</b>把模块从 <code>middleware/__init__.py</code> / <code>backends/__init__.py</code> 的导出里去掉，跑全量测试。这一步可逆，且能立刻暴露"其实有人在用"。</li>
+    <li><b>观察一个迭代后再删文件。</b>没有任何东西回来找它，再物理删除并同步 profile 的 <code>register()</code> 调用。</li>
+  </ol>
+  <p>profiles 的裁剪要动 <code>profiles/_builtin_profiles.py</code> 里的注册调用，删文件不改注册会直接 ImportError —— 这一处不能只做第一步。</p>
+
+  <h3>质量要求逐步收紧</h3>
+  <p>atlas 现在的 ruff 配置已经为此留了口子，而且注释里写明了打算：</p>
+  <pre><code><span class="tok-c"># kernel/ 纳入检查以捕获真问题（F/B/SIM 等），</span>
+<span class="tok-c"># 但不为继承来的风格大改。裁剪推进时可逐步收紧这里。</span>
+[tool.ruff.lint.per-file-ignores]
+<span class="tok-s">"engine/src/atlas_engine/kernel/**"</span> = [<span class="tok-s">"E501"</span>, <span class="tok-s">"RUF100"</span>, <span class="tok-s">"UP"</span>, <span class="tok-s">"B"</span>, <span class="tok-s">"SIM"</span>, <span class="tok-s">"RUF012"</span>]
+
+<span class="tok-c"># ★ formatter 没有 per-file-ignores，是全有或全无。</span>
+<span class="tok-c">#   裁剪到某个模块时，可把该模块从这里移出并单独格式化。</span>
+[tool.ruff.format]
+exclude = [<span class="tok-s">"engine/src/atlas_engine/kernel/**"</span>]</code></pre>
+  <p>随裁剪推进，把已经改造过的子目录从这两处移出。<b>顺序是先裁后收紧</b> —— 反过来做的话，格式化会先把要删的几千行重排一遍，淹没真正的改动。</p>
+
+  <div class="tree"><b>engine/</b>
+└── src/<u>atlas_engine</u>/
+    ├── <b>kernel/</b>                       <i>自有代码 · 53 → 约 45 模块</i>
+    │   ├── <s>ORIGIN.md</s>                 <span class="tag new">新增</span> <i>几行来源说明,取代 VENDOR.md</i>
+    │   └── graph.py · backends/ · middleware/ · profiles/
+    ├── spec.py · agent.py · runner.py · hooks.py · tool_registry.py
+    ├── capabilities.py                  <span class="tag move">→ contracts</span>
+    ├── translator · compactor · approval · limits · model_factory · compat · gateway
+    └── <s>telemetry.py</s>                  <span class="tag new">新增</span> <i>GenAI 语义约定 span</i></div>
+
+  <h3>不动的：spec.py 不拆</h3>
+  <p>一共 166 行，拆完每个文件不到 60 行。拆分信号：<b>模型能力门禁覆盖超过 5 个模型，或需要按 provider 分组时</b>，把那几个 frozenset 移到 <code>spec/model_gates.py</code>。</p>
+</section>
+
+<!-- ═══════════════════════ 8 ═══ -->
+<section id="s8">
+  <h2><span class="num">08</span>server 内部</h2>
+
+  <div class="tree"><b>server/</b>
+├── migrations/versions/                 <span class="tag keep">平铺</span> <i>只剩运行时的表</i>
+└── src/<u>atlas_server</u>/
+    ├── <b>api/v1/</b>                        <i>仅经 Java BFF 可达,不对浏览器直接开放</i>
+    │   └── <b>agents</b> · threads · runs · meta · <s>memories</s>   <i>skills/mcp 迁走</i>
+    ├── <b>schemas/</b>                       <i>agent · thread · run · meta · memory</i>
+    ├── <b>services/</b>                      <i>★ 有表、有 repo 的域</i>
+    │   └── <b>agent</b> · thread · run · approval · meta · memory
+    ├── <b><s>configplane/</s></b>                   <span class="tag new">新增</span> <i>配置平面客户端 —— 只读消费</i>
+    │   ├── client.py                    <i>HTTP · 重试 · 超时 · 鉴权</i>
+    │   ├── cache.py                     <i>VersionCache：按不可变契约永久缓存</i>
+    │   ├── skills.py                    <i>(slug, version) → ResolvedSkill · 解析当前版本号</i>
+    │   ├── mcp.py                       <i>server 定义（占位符原样带回）</i>
+    │   ├── templates.py                 <i>template id → K8s 模板</i>
+    │   └── fake.py                      <i>★ 离线测试用，见 §11</i>
+    ├── <b>providers/</b>                     <span class="tag new">新增</span> <i>被 assembly 组装的能力，无自有表</i>
+    │   ├── sandbox/base.py · docker.py · <s>k8s.py</s>
+    │   ├── coder.py · search.py · titler.py · summarizer.py
+    │   └── mcp_tools.py                 <i>拿 configplane 的定义,解析凭据,加载 BaseTool</i>
+    ├── <b>repositories/</b>                  <span class="tag keep">平铺</span> <i>唯一接触 DB 的地方</i>
+    │   └── <b>agent</b> · thread · run · approval · model_catalog
+    ├── <b>executor/</b>
+    │   ├── base.py · inprocess.py · <s>acp.py</s>
+    │   └── <b><s>assembly/</s></b>                  <i>__init__ 只留组装顺序</i>
+    │       └── tools · skills · memory · sandbox · compaction
+    ├── <b>db/</b> · <b>stream/</b>
+    └── config · deps · errors · identity · pagination · redisx</div>
+
+  <h3>三个目录，三种性质</h3>
+  <table>
+    <thead><tr><th style="width:130px"></th><th>services/</th><th>configplane/</th><th>providers/</th></tr></thead>
+    <tbody>
+      <tr><td>数据在哪</td><td>本地 DB</td><td><b>配置平面</b></td><td>外部基础设施</td></tr>
+      <tr><td>读写</td><td>读写</td><td><b>只读</b></td><td>调用</td></tr>
+      <tr><td>被谁用</td><td><code>api/v1/</code></td><td><code>services/agent</code> · <code>executor/</code></td><td><code>executor/assembly/</code></td></tr>
+      <tr><td>失败语义</td><td>HTTP 4xx/5xx</td><td>缓存兜底，未命中则 <code>run.failed</code></td><td><code>run.failed</code></td></tr>
+      <tr><td>有 Protocol</td><td>否</td><td>是（便于 fake）</td><td>是（可替换实现）</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout warn">
+    <span class="label">configplane 与 providers 为什么不合并</span>
+    <p>两者都是"对外部说话"，看着该合并。但失败语义不同：configplane 有<b>不可变契约撑起的缓存</b>，所以它的不可用是可降级的；providers 大多不可缓存（沙箱要真起容器、搜索要真发请求），不可用就是硬失败。把可降级的和不可降级的混在一起，降级策略就没有统一的落点。</p>
+  </div>
+
+  <h3>DB：少两张没建过的表，其余不变</h3>
+  <pre><code>保留   agent · agent_version   <span class="tok-c">← 不拆（§03）：thread/run 对它有真实外键</span>
+       thread · message · run · run_event · run_file · approval
+       model_catalog          <span class="tok-c">← 实测数据,编辑器与压缩共用</span>
+       app_user*
+
+不建   skill · skill_version   <span class="tok-c">← 从一开始就建在配置平面</span>
+       mcp_server
+
+* app_user 降级为「运行时侧的用户投影」：只存 id 与显示名，
+  权威身份在配置平面的 iam。记忆按 user 隔离要的就是这个 id，
+  而 agent.created_by / thread.created_by 的外键也还指着它。</code></pre>
+</section>
+
+<!-- ═══════════════════════ 9 ═══ -->
+<section id="s9">
+  <h2><span class="num">09</span>配置平面（Java）</h2>
+
+  <p>不假装了解你们的 Java 工程约定，这里只给<b>域划分与两条必须遵守的契约</b>，包名与框架按你们现有规范落。</p>
+
+  <div class="tree"><b>atlas-config/</b>
+├── <b>skill/</b>          <i>Skill · SkillVersion · 正文 + 附件 · 审核流</i>
+│   └── ★ 已发布版本内容不可变
+├── <b>mcp/</b>            <i>McpServer 注册表 · 工具目录探测与缓存</i>
+│   └── ★ headers 只存 ${ENV} 占位符,永不存真值
+├── <b>k8stemplate/</b>    <i>Pod 模板 · 资源档位 · 镜像版本</i>
+├── <b>iam/</b>            <i>用户 · 组织 · 角色 · 授权矩阵</i>
+├── <b>audit/</b>          <i>谁在什么时候改了哪份配置</i>
+├── <b>quota/</b>          <i>配额与计费口径</i>
+└── <b>console/</b>        <i>管理控制台前端</i></div>
+
+  <h3>对配置平面的两条硬契约</h3>
+  <ol class="body">
+    <li><b>已发布版本不可变。</b>要改就发新版本。这撑起运行时的永久缓存，也撑起 run 的可复现性。</li>
+    <li><b>不越界管智能体配置。</b><code>console/</code> 里的智能体编辑器是<b>代理</b>：授权判定与审计留痕在 Java，读写落到 Python 的 <code>/v1/agents</code>。不要在 Java 侧缓存或复刻 spec 的结构 —— 那会让工具列表、模型门禁出现第二份事实源。</li>
+  </ol>
+
+  <h3>技能审核这件事归这里</h3>
+  <p>概要设计里说过：技能是<b>可执行的内容</b>而非配置 —— 含给模型的指令，也含真正会跑的脚本，所以审查按代码审查来做。这套审核流（提交、评审、发布、下架）天然属于资产的 owner，也就是配置平面。运行时只消费<b>已发布</b>的版本。</p>
+  <p>结构性的好处：运行时<b>拿不到</b>草稿态技能，误用不可能发生 —— 不是靠字段判断，是靠 API 根本不返回。</p>
+</section>
+
+<!-- ═══════════════════════ 10 ═══ -->
+<section id="s10">
+  <h2><span class="num">10</span>web：三个方案</h2>
+
+  <p>浏览器现在面对两个后端。这是个真实的分叉，三种解法：</p>
+
+  <table>
+    <thead><tr><th style="width:130px">方案</th><th>形态</th><th>代价</th></tr></thead>
+    <tbody>
+      <tr><td><b>A · 两个前端</b></td><td>对话工作台（Python）+ 管理控制台（Java），各自独立</td><td>两套登录态、两套设计系统，用户要在两个地址间跳</td></tr>
+      <tr><td><b>B · Java 做 BFF</b><br>（推荐）</td><td>浏览器只连 Java；配置类请求本地处理，对话与 SSE 透传到 Python</td><td>SSE 透传有坑（见下）；Java 多一层路由</td></tr>
+      <tr><td><b>C · 单前端连双后端</b></td><td>一个 SPA，按路径分别请求两个域名</td><td>两套 CORS、两套鉴权头，登录态同步是自己发明的</td></tr>
+    </tbody>
+  </table>
+
+  <p><b>推荐 B。</b>它给出单一鉴权面与单一审计点 —— 而这正是把 iam / audit 放进配置平面的初衷。C 的问题在于"登录态同步"会变成一段自研逻辑，而那是最不该自研的东西。</p>
+
+  <div class="callout danger">
+    <span class="label">B 方案的 SSE 透传必须做对三件事</span>
+    <ul style="margin-bottom:0">
+      <li><b>不缓冲。</b>任何响应缓冲都会让流式输出变成"等半天一次性出现"。Spring 侧要用响应式栈或显式关闭缓冲，Nginx 那层也要 <code>proxy_buffering off</code>。</li>
+      <li><b><code>Last-Event-ID</code> 原样转发。</b>atlas 的断线重连靠它做游标补发。透传时丢了这个头，重连会从头开始或直接断在中间。</li>
+      <li><b>超时要长于最长 run。</b>审批等待可达 600s、编码委派 1800s —— 网关默认的 60s 读超时会在半途切断连接。</li>
+    </ul>
+  </div>
+
+  <p>运行时仓库的 <code>web/</code> 在 B 方案下收窄为<b>对话工作台</b>，管理模块迁到 Java 的 console：</p>
+  <div class="tree"><b>web/src/</b>                        <i>对话工作台</i>
+├── app/chat/[[...threadId]]/
+├── features/chat/               <i>ChatWorkbench · MessageStream · TraceInspector …</i>
+├── api/ · components/
+└── lib/                         <i>events · sse · run-reducer · http · format</i></div>
+
+  <div class="callout warn">
+    <span class="label">lib/events.ts 的特殊地位不变</span>
+    <p>它是 <code>TraceEvent</code> 契约在前端的实现，<b>native 与 acp 共用</b>。acp 接进来后一行都不该改 —— 如果发现要为 acp 加分支，说明 <code>acp/translate.py</code> 没把事件翻译干净，该改的是后端。这条值得写进文件头注释。</p>
+  </div>
+</section>
+
+<!-- ═══════════════════════ 11 ═══ -->
+<section id="s11">
+  <h2><span class="num">11</span>tests 与部署</h2>
+
+  <div class="tree"><b>tests/</b>
+├── conftest.py · fakes.py
+├── <b><s>guards/</s></b>                          <span class="tag new">新增</span> <i>★ 红了不是功能坏,是纪律破了</i>
+│   ├── test_engine_purity.py        <i>engine 不得 import DB/Web 框架</i>
+│   ├── test_spec_snapshots.py       <i>spec 新字段必须有默认值</i>
+│   ├── <s>test_contracts_weight.py</s>     <i>contracts 的依赖集合不得增长</i>
+│   └── <s>test_openapi_drift.py</s>        <i>提交的 config-plane.yaml 与生成的客户端一致</i>
+├── <b>engine/</b>                          <i>无 DB · 无网络 · 无配置平面</i>
+├── <b>server/</b>                          <i>需 Postgres + Redis + FakeConfigPlane</i>
+└── <b>live/</b>                            <i>真实网关与真实配置平面,会计费</i></div>
+
+  <div class="callout rule">
+    <span class="label">FakeConfigPlane 不是可选项</span>
+    <p>atlas 现在能做到「engine 脱离数据库单测」。配置平面接进来之后，同样的承诺要扩展成<b>脱离数据库<u>和</u>配置服务</b> —— 否则跑一次单测要先起一个 JVM。</p>
+    <p>所以 <code>configplane/</code> 里的每个模块都要有 Protocol，<code>fake.py</code> 给出内存实现（直接喂 <code>ResolvedSkill</code> 对象）。验收标准很具体：<b><code>make test-engine</code> 在只有 Python 的机器上跑通。</b></p>
+  </div>
+
+  <div class="tree"><b>deploy/</b>
+├── <b>images/</b>
+│   ├── sandbox/Dockerfile           <i>native 沙箱（/workspace 卷 · /skills tmpfs）</i>
+│   ├── coder/Dockerfile             <span class="tag move">自 docker/atlas-coder/</span>
+│   └── <s>bridge/Dockerfile</s>            <i>bridge + CLI</i>
+├── <b>k8s/</b>
+│   └── helm/                        <i>模板本身已迁到配置平面 —— 这里只剩部署清单</i>
+└── <b>compose/</b>
+    ├── dev.yml                      <i>Postgres :5433 · Redis :6380</i>
+    └── full.yml                     <i>加 collector / Langfuse / 配置平面</i></div>
+
+  <p>注意 <code>deploy/k8s/templates/</code> 在 v1 设计里是本地目录，现在<b>迁到配置平面</b>了 —— 这正是我当时写「模板是数据不是代码，运维要能改而不用发版」的逻辑终点。放进配置服务比放进 git 更彻底地兑现了那句话。</p>
+</section>
+
+<!-- ═══════════════════════ 12 ═══ -->
+<section id="s12">
+  <h2><span class="num">12</span>落地顺序</h2>
+
+  <div class="callout rule">
+    <span class="label">原则：从没有历史包袱的地方验证边界</span>
+    <p>技能、MCP、K8s 模板在 atlas 里<b>根本还不存在</b>（都是详设里的新增）。直接建在配置平面，迁移成本为零，而且它们恰好是边界最清晰的三个。智能体配置不拆之后，这套拆分<b>不涉及任何存量数据迁移</b> —— 风险大幅下降。</p>
+  </div>
+
+  <div class="step">
+    <h4>步骤 1 · 运行时侧的纯搬迁（不涉及 Java）</h4>
+    <p>建 <code>contracts/</code> 包；<code>services/</code> 分出 <code>providers/</code>；<code>assembly.py</code> 拆子包；<code>tests/</code> 分组 + guards。四步全是移动文件 + 改 import。</p>
+    <p><b>验证</b>：每一步之后 <code>make check</code> 绿；<code>make test-engine</code> 在没起 Postgres 的机器上跑通。</p>
+  </div>
+
+  <div class="step">
+    <h4>步骤 2 · kernel 裁剪第一轮</h4>
+    <p>按 <a href="#s7">§07</a> 的两步法：先从 barrel 摘掉 <code>rubric</code> / <code>context_hub</code> / <code>local_shell</code>，跑全量测试；profiles 的裁剪连同 <code>_builtin_profiles.py</code> 的注册一起改。写 <code>ORIGIN.md</code>。</p>
+    <p><b>验证</b>：<code>make test</code> 绿；<code>make serve</code> 起得来且能跑通一次真实对话（profile 注册出问题只会在运行时暴露）。</p>
+    <p><b>可以与步骤 1 并行</b> —— 两者不碰同一批文件。</p>
+  </div>
+
+  <div class="step">
+    <h4>步骤 3 · 配置平面立项：技能优先</h4>
+    <p>Java 侧实现 <code>skill/</code> 域（版本不可变 + 审核流）与 <code>config-plane.yaml</code>。Python 侧建 <code>configplane/</code>（client + cache + skills + fake），<code>AgentSpecIn.skills</code> 与 <code>_pin_skill_versions</code> 接上。</p>
+    <p><b>验证</b>：native agent 能用上配置平面发布的技能，双路投送（沙箱 / StateBackend）都通；<b>停掉 Java 服务后，已跑过的会话仍能继续</b>（永久缓存生效）。</p>
+  </div>
+
+  <div class="step">
+    <h4>步骤 4 · MCP 与 K8s 模板</h4>
+    <p>同样直接建在配置平面。MCP 注意占位符纪律：Java 永不接触真凭据。</p>
+  </div>
+
+  <div class="step">
+    <h4>步骤 5 · Java console 接管入口</h4>
+    <p>iam / audit 落地；智能体编辑器以代理形态接上 Python 的 <code>/v1/agents</code>；SSE 透传按 <a href="#s10">§10</a> 的三条做对。网络策略收紧：运行时服务不再对浏览器直接可达。</p>
+    <p><b>验证</b>：绕过 Java 直接请求 Python 的 <code>/v1/agents</code> 应当被网络层拒绝 —— 这是授权门是否真实存在的唯一检验。</p>
+  </div>
+
+  <div class="step">
+    <h4>步骤 6 · acp / bridge</h4>
+    <p>下一期。结构位已留好。</p>
+  </div>
+</section>
+
+<!-- ═══════════════════════ 13 ═══ -->
+<section id="s13">
+  <h2><span class="num">13</span>什么时候不该拆</h2>
+
+  <table>
+    <thead><tr><th style="width:250px">想过但不做</th><th>理由</th><th style="width:140px">重新考虑的信号</th></tr></thead>
+    <tbody>
+      <tr><td><b>把 session / run 也划进配置平面</b></td><td>一次 run 要写 7 类数据，且有"终止事件先落库再发布"的顺序保证。跨服务之后它变成分布式协调问题</td><td>永不</td></tr>
+      <tr><td><b>把 agent / agent_version 迁到配置平面</b></td><td><code>thread.agent_id</code> 与 <code>run.agent_version_id</code> 是<b>真实外键</b>。迁走只能降级成软引用，而 run 的可复现性正建立在这条引用上。且 agent spec 是装配说明不是内容资产</td><td>永不</td></tr>
+      <tr><td><b>Java 重新实现模型能力门禁</b></td><td>那是对网关的实测结论。两份实现必然漂移，表现是"编辑器让我存了，跑起来 400"</td><td>永不 —— agent 不拆之后这个问题根本不出现</td></tr>
+      <tr><td><b>两个平面共享数据库</b></td><td>迁移失去单一 owner，事务跨不过去，而且等于把接口耦合换成了 schema 耦合（更紧）</td><td>永不</td></tr>
+      <tr><td><b>contracts 做成双语包</b></td><td>Java 根本不碰 spec。跨语言契约只有一份 OpenAPI、一个方向</td><td>永不</td></tr>
+      <tr><td><b>给 kernel 做版本对账机制</b><br>（VENDOR.md + drift 测试）</td><td>kernel 是自有代码，"同步时丢改动"这个失败模式不存在。保留只会变成为了显得严谨而存在的测试</td><td>某天 kernel 改为跟随某个外部基线时</td></tr>
+      <tr><td><b>靠 import 图判定 kernel 死代码</b></td><td>barrel <code>__init__.py</code> 让一切"可达" —— 53 个模块里 50 个是"活的"，结论没用。判据必须是从 <code>create_deep_agent()</code> 出发的功能可达</td><td>永不</td></tr>
+      <tr><td><b>configplane 与 providers 合并</b></td><td>失败语义不同：前者有不可变契约撑起的缓存可降级，后者不可用就是硬失败</td><td>缓存策略被推翻时</td></tr>
+      <tr><td><b>server 改成域内聚</b></td><td>拆掉技能与 MCP 之后 server 只剩 6 个域，分层样板的重复成本更划不来</td><td>域数超过 10 个</td></tr>
+      <tr><td><b><code>repositories/</code> 按域分子包</b></td><td>平铺本身是纪律的体现：想加 DB 访问只有这一个目录可去</td><td>单个 repository 超 400 行</td></tr>
+      <tr><td><b>给 memory 造表以对齐其他域</b></td><td>数据在 Mem0 里。为目录对称造数据结构是把形式放在事实之上</td><td>需要本地索引"哪条记忆来自哪个 thread"时</td></tr>
+      <tr><td><b>acp 与 bridge 合成一个包</b></td><td>两个进程、两处部署、两种镜像体积约束</td><td>永不</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout rule">
+    <span class="label">判据</span>
+    <p>拆分要能回答两个问题才做：<b>拆完之后哪条依赖边变短了？哪条纪律有了新的执行点？</b>两个都答不上来的拆分，只是把同样多的代码摊进更多目录。</p>
+    <p>这套平面拆分两个都答得上：依赖边 —— 技能资产不再被 agent 应用挟持，它的消费者可以是任何人；纪律执行点 —— 「已发布版本不可变」有了明确的 owner，而它恰好是 run 可复现性的地基。</p>
+    <p>反过来，智能体配置不拆也是同一个判据的结论：拆了没有哪条依赖边变短（<code>thread</code>/<code>run</code> 仍要指着它），却会让一条 DB 保证的引用完整性降级成代码自觉。<b>同一把尺子，两个方向的答案。</b></p>
+  </div>
+</section>
+
+</main>
+</div>
+
+</body>
+</html>

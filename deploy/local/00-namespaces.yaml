@@ -1,0 +1,14 @@
+# 本机 K8s（Docker Desktop）上的 acp 全链路验证。
+#
+# ★ 两个 namespace 而不是一个：cluster 的 Role 只覆盖 atlas-sessions，
+#   它对自己所在的 atlas-system 没有任何写权限 —— 「唯一持有 K8s 写权限
+#   的进程」这句话要在 RBAC 上成立，而不只是在文档里。
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: atlas-system
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: atlas-sessions

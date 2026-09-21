@@ -1,0 +1,12 @@
+# pnpm 11 的设置已从 package.json 的 "pnpm" 字段迁到这里（v11 起前者不再被读取）。
+#
+# allowBuilds：v11 把"未决的原生构建许可"变成硬错误 ERR_PNPM_IGNORED_BUILDS，
+# 且它发生在**依赖状态检查**阶段 —— 于是 `pnpm dev` / `pnpm build` 等所有脚本
+# 都会被连坐失败，报错还指向 pnpm 内部栈，很难看出根因。必须显式表态。
+#
+# sharp 是 next/image 生产图片优化的依赖。Console 用的是内联 SVG 图标，
+# 其实用不到，但放行比将来 next build 时才发现缺失省事。
+allowBuilds:
+  # tsx 的底层，仅在跑 scripts/ 下的验证脚本时用到
+  esbuild: true
+  sharp: true

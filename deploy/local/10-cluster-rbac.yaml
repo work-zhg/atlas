@@ -1,0 +1,40 @@
+# cluster 的 K8s 权限。
+#
+# ★ 只给 pods 与 secrets，且只在 atlas-sessions 里。k8s.py 用到的 API 就是
+#   CoreV1 的这两类（list/create/delete/read pod、apply/delete/read secret），
+#   多给一类就多一寸可以被误用的面。
+#
+# ★ server 没有 ServiceAccount 绑定任何 Role —— 它压根不该碰 K8s。
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: atlas-cluster
+  namespace: atlas-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: atlas-cluster
+  namespace: atlas-sessions
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    # patch：apply_secret 对已存在的 Secret 走更新，不是每次重建
+    verbs: ["get", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: atlas-cluster
+  namespace: atlas-sessions
+subjects:
+  - kind: ServiceAccount
+    name: atlas-cluster
+    namespace: atlas-system
+roleRef:
+  kind: Role
+  name: atlas-cluster
+  apiGroup: rbac.authorization.k8s.io

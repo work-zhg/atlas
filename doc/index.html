@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Platform · 设计文档</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="sitenav">
+  <a class="brand" href="./">AI&nbsp;<b>Platform</b>&nbsp;/ 设计文档</a>
+  <div class="links">
+    <a class="on" href="./">目录</a>
+    <a href="detail/">详细设计</a>
+    <a href="architecture.html">系统架构</a>
+    <a href="agent.html">Agent 管理</a>
+    <a href="skill.html">技能管理</a>
+    <a href="mcp.html">MCP 管理</a>
+    <a href="permission.html">权限管理</a>
+    <a href="execution.html">执行环境</a>
+    <a href="session.html">会话管理</a>
+    <a href="native.html">native Agent</a>
+    <a href="runtime.html">运行时链路</a>
+    <a href="local.html">本地部署</a>
+    <a href="memory.html">记忆</a>
+    <a href="observability.html">可观测性</a>
+  </div>
+</nav>
+
+<div class="wrap solo">
+<main>
+
+<header class="hero">
+  <p class="kicker">Design Docs</p>
+  <h1>AI Platform 设计文档</h1>
+  <p class="lede">一套服务端抽象同时承载两类 Agent：进程内的<b>顾问</b>负责出谋划策，经 ACP 驱动 CLI 的<b>助理</b>负责实际干活 —— 助理可以跑在 Kubernetes Pod 里，也可以跑在用户自己的电脑上。前端只面对一套对象模型和一套事件流。</p>
+</header>
+
+<a class="doccard" href="prototype/" style="display:block;border-color:rgba(34,197,94,.45);margin-bottom:var(--s4)">
+  <div class="n">交互原型</div>
+  <div class="t">AI Platform · 可点击原型</div>
+  <p class="d">把这些设计变成可操作的界面：智能体管理（配置 / 对话管理 / 会话详情）、技能管理、MCP 管理、用户记忆管理、可观测性看板。<b>会话页可切换 native / acp，观察能力差异如何驱动界面。</b></p>
+  <div class="k">5 个管理模块 · 10 个界面 · 图表经调色板验证</div>
+</a>
+
+<a class="doccard" href="detail/" style="display:block;border-color:rgba(56,189,248,.45);margin-bottom:var(--s4)">
+  <div class="n">详细设计</div>
+  <div class="t">落地到代码：atlas 上的 native Agent</div>
+  <p class="d">概要设计说应该长什么样，详设说在现有代码上怎么落地。载体是 <code>atlas</code> —— 一个已跑起来的 LangGraph 多智能体平台。<b>含一处概要设计的自我修正</b>：<code>needs_approval</code> 不该由 type 推导。</p>
+  <div class="k">native Agent 详设 · 目录与包结构设计</div>
+</a>
+
+<div class="cards">
+  <a class="doccard" href="architecture.html">
+    <div class="n">01</div>
+    <div class="t">系统架构设计</div>
+    <p class="d">部署拓扑与组件职责。Client、Server 六模块、Higress 双职责网关、Mem0、K8s Pod、OSS，以及 OpenTelemetry + Langfuse 的可观测链路。</p>
+    <div class="k">架构图 · 协议选型 · 存储 · 决策与代价</div>
+  </a>
+  <a class="doccard" href="agent.html">
+    <div class="n">02</div>
+    <div class="t">Agent 管理设计</div>
+    <p class="d">Agent 定义的版本化、工具与 MCP 装配、能力推导与生命周期。<code>capabilities</code> 的唯一所有者 —— 它是算出来的结论，不是手填的配置。</p>
+    <div class="k">版本不可变 · 能力派生 · 装配 · 灰度</div>
+  </a>
+  <a class="doccard" href="skill.html">
+    <div class="n">03</div>
+    <div class="t">技能管理设计</div>
+    <p class="d">技能的增删改查、版本化与 Agent 关联。核心判断：技能是<b>可执行的内容</b>而非配置 —— 含给模型的指令，也含真正会跑的脚本，所以审查按代码审查来做。</p>
+    <div class="k">版本不可变 · 安全审查 · 引用与下发 · 描述质量</div>
+  </a>
+  <a class="doccard" href="mcp.html">
+    <div class="n">04</div>
+    <div class="t">MCP 管理设计</div>
+    <p class="d">MCP server 的注册、凭证作用域、工具发现与变更检测，以及两类 Agent 如何配置它们。所有调用统一经 Higress 收口。</p>
+    <div class="k">注册表 · 收口 · 凭证 · 工具指纹 · 注入面</div>
+  </a>
+  <a class="doccard" href="permission.html">
+    <div class="n">05</div>
+    <div class="t">权限管理设计</div>
+    <p class="d">Agent / MCP / 技能三类资源的授权模型。核心是 MCP —— 它的权限是 <b>Agent 配置 ∩ 用户授权</b>，因为「能不能用」和「能看到什么」是两个正交的问题。</p>
+    <div class="k">三层可见性 · 访问权 × 数据权 · 委派不提权</div>
+  </a>
+  <a class="doccard" href="execution.html">
+    <div class="n">06</div>
+    <div class="t">执行环境管理设计</div>
+    <p class="d">Pod 模板与生命周期的归属组件。为 <code>acp</code> CLI Pod、<code>native</code> sandbox Pod、本地设备提供同一套抽象：模板渲染、创建与回收、卷编排、配额与连接注册。</p>
+    <div class="k">模板 · 生命周期 · 卷编排 · 配额 · 连接注册</div>
+  </a>
+  <a class="doccard" href="session.html">
+    <div class="n">07</div>
+    <div class="t">会话管理设计</div>
+    <p class="d">Session / Run / Message / Event 四个对象，一套状态机，两类 Agent 的能力边界。顾问用 <code>create_agent</code> 无状态执行，助理经 Bridge 驱动 CLI。</p>
+    <div class="k">对象模型 · 能力矩阵 · 接口契约 · 固化清单</div>
+  </a>
+  <a class="doccard" href="native.html">
+    <div class="n">08</div>
+    <div class="t">native Agent 设计</div>
+    <p class="d">LangChain <code>create_agent</code> 编排，Message 为事实源；执行环境是会话级 Sandbox Pod；可把子任务委派给 subagent，包括 <code>acp</code> 类型。</p>
+    <div class="k">create_agent · Sandbox · 目录结构 · Subagent</div>
+  </a>
+  <a class="doccard" href="runtime.html">
+    <div class="n">09</div>
+    <div class="t">运行时链路设计</div>
+    <p class="d">Server → Bridge → CLI 这条链路。K8s 管理、三层 Session 对应、存储分层与 Pod 内目录布局，以及 Claude Code 的配置注入与技能挂载。</p>
+    <div class="k">Bridge · 目录设计 · OSS / NAS · MCP · Skills</div>
+  </a>
+  <a class="doccard" href="local.html">
+    <div class="n">10</div>
+    <div class="t">本地部署设计</div>
+    <p class="d">助理跑在用户自己的电脑上。ACP 链路与云上完全一致，差异集中在连接反转、工作区归属、凭证与信任边界。本期只做驱动模式。</p>
+    <div class="k">连接反转 · 租约 · 授权 · 治理缺口</div>
+  </a>
+  <a class="doccard" href="memory.html">
+    <div class="n">11</div>
+    <div class="t">记忆设计</div>
+    <p class="d">用 Mem0 承载跨会话记忆。写入对两类 Agent 完全统一 —— 都从 Message 账本抽取；读取必然分叉 —— 顾问在进程内注入，助理只能经 MCP 工具与提示词。</p>
+    <div class="k">抽取 · 注入 · MCP 记忆服务 · 作用域隔离</div>
+  </a>
+  <a class="doccard" href="observability.html">
+    <div class="n">12</div>
+    <div class="t">可观测性设计</div>
+    <p class="d">按 OTel GenAI 语义约定采集，Collector 分流到 Langfuse 与通用后端。目标是让一次 Run 在 Server、Higress、Bridge、CLI 四层上拼成同一条可追查的链路。</p>
+    <div class="k">语义约定 · Trace 结构 · 指标 · 隐私分档 · 成本归因</div>
+  </a>
+</div>
+
+<section id="core">
+<h2><span class="num">—</span>贯穿全部文档的三条主线</h2>
+
+<div class="callout rule">
+  <span class="label">主线 01 · 角色分工</span>
+  <p><b>上下文由谁持有。</b><code>native</code> 在服务端每轮重建，<code>acp</code> 在 CLI 进程内。这条分界线推导出了全部不对称 —— 能力矩阵、审批回路、状态机、持久化策略。它不是策略选择，是机制事实；把它当实现细节抹平，会得到一个两边都不好用的抽象。</p>
+</div>
+
+<div class="callout rule">
+  <span class="label">主线 02 · 单一真相源</span>
+  <p><b>Message 是会话内容的唯一真相，Event 只是它的产生过程。</b>顾问因此不存 checkpoint —— 没有第二份真相，也就没有跨源对齐规则，而那类规则对不上时是静默降级，是最难排查的一类缺陷。代价是 Run 中断后整轮重来。助理侧同理：Message 一律由 ACP <code>session/update</code> 固化而来，云上与本地走同一条路径，不解析 CLI 的内部文件格式。</p>
+</div>
+
+<div class="callout rule">
+  <span class="label">主线 03 · 能力显式化</span>
+  <p><b>差异不可抹平，只能显式暴露。</b><code>capabilities</code> 归 Agent 所有，随会话快照投影下发；前端只读 capability 决定按钮的显示与禁用。一旦出现第一个按 <code>agent.type</code> 分支的前端组件，后面就收不住了。</p>
+</div>
+</section>
+
+<section id="terms">
+<h2><span class="num">—</span>术语速查</h2>
+<table>
+  <thead><tr><th style="width:130px">对象</th><th style="width:130px">作用域</th><th>一句话</th></tr></thead>
+  <tbody>
+    <tr><td><code>Agent</code></td><td>全局配置</td><td>智能体定义，<code>capabilities</code> 的所有者。<code>type</code> 取 <code>native</code> 或 <code>acp</code></td></tr>
+    <tr><td><code>Session</code></td><td>—</td><td>一个会话，引用一个 Agent 版本</td></tr>
+    <tr><td><code>Run</code></td><td>Session</td><td>会话里的一条对话，session 内串行</td></tr>
+    <tr><td><code>Message</code></td><td>Session</td><td>会话内容账本，永久保留</td></tr>
+    <tr><td><code>Event</code></td><td>Run</td><td>chunk 转成的过程流，只留最后一个 Run</td></tr>
+  </tbody>
+</table>
+</section>
+
+<footer>
+  <p>设计阶段文档，随讨论持续变更。本期范围内<b>不做顾问与助理的任务移交</b>，一个 Session 只绑定一个 Agent（见<a href="architecture.html#s9">系统架构 §09</a>）。链路实现前需先完成的验证项见<a href="runtime.html#s12">运行时链路 §12</a>。</p>
+</footer>
+
+</main>
+</div>
+</body>
+</html>

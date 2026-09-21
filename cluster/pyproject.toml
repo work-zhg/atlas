@@ -1,0 +1,29 @@
+[project]
+name = "atlas-cluster"
+version = "0.1.0"
+description = "Atlas cluster service — owns K8s templates and session Pod lifecycle."
+requires-python = ">=3.13"
+
+# ★ 为什么独立成服务而不是 server 的一个包：
+#   模板、创建、回收、卷分配、配额这些逻辑**不是 acp 独有的** —— 将来
+#   native 的 sandbox Pod 要一模一样的东西（执行环境 §09）。放在 server 里
+#   会让「谁拥有 Pod 生命周期」有两个答案；独立之后它是唯一答案，
+#   且能单独扩容、单独给 RBAC（它是全仓唯一持有 K8s 写权限的进程）。
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.32",
+  "pydantic>=2.9",
+]
+
+# K8s 客户端是**可选依赖**：不装就只有 InMemoryBackend 可用（本机开发与
+# CI 正是这么跑的）。KubernetesBackend 在构造时懒 import 并明确报错 ——
+# 宁可起不来，也不要起来一个连不上集群却假装正常的服务。
+[project.optional-dependencies]
+k8s = ["kubernetes-asyncio>=32.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/atlas_cluster"]

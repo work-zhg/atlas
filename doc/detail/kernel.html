@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kernel 包分析 · AI Platform</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  .tree{background:var(--card);border:1px solid var(--border-soft);border-radius:var(--radius);
+        padding:var(--s3);overflow-x:auto;margin:0 0 var(--s3);font-family:var(--mono);
+        font-size:12.5px;line-height:1.75;white-space:pre;color:#CBD5E1}
+  .tree b{color:#F8FAFC;font-weight:600}
+  .tree i{color:#7A88A0;font-style:normal}
+  .tree s{color:#7DD3FC;text-decoration:none}
+  .tree u{color:#FDE68A;text-decoration:none}
+  .act{font-family:var(--mono);font-size:10.5px;padding:2px 8px;border-radius:99px;border:1px solid;white-space:nowrap;display:inline-block}
+  .act.keep{color:var(--accent);border-color:rgba(34,197,94,.45)}
+  .act.trim{color:var(--danger);border-color:rgba(239,68,68,.45)}
+  .act.mod{color:var(--warn);border-color:rgba(245,158,11,.45)}
+  .act.on{color:var(--native);border-color:rgba(56,189,248,.45)}
+  .act.watch{color:#7A88A0;border-color:var(--border)}
+  .mod{border:1px solid var(--border-soft);border-radius:var(--radius);background:var(--card);
+       padding:var(--s2) var(--s3);margin-bottom:var(--s2)}
+  .mod .hd{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:6px}
+  .mod .nm{font-family:var(--mono);font-size:13.5px;color:#F8FAFC;font-weight:600}
+  .mod .ln{font-family:var(--mono);font-size:11px;color:#7A88A0}
+  .mod p{margin:0 0 6px;font-size:13.5px}
+  .mod p:last-child{margin-bottom:0}
+  .mod ul{margin:4px 0 0;font-size:13px}
+  .lay{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;
+       color:var(--muted-fg);margin:var(--s4) 0 var(--s2);padding-bottom:6px;border-bottom:1px solid var(--border-soft)}
+</style>
+</head>
+<body>
+
+<nav class="sitenav">
+  <a class="brand" href="../">AI&nbsp;<b>Platform</b>&nbsp;/ 详细设计</a>
+  <div class="links">
+    <a href="../">概要设计</a>
+    <a href="./">详设目录</a>
+    <a href="native.html">native Agent</a>
+    <a href="structure.html">目录与包结构</a>
+    <a class="on" href="kernel.html">kernel 分析</a>
+    <a href="filesystem.html">文件系统改造</a>
+    <a href="subagent.html">Subagent 重设计</a>
+    <a href="acp.html">acp Agent</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+<nav class="toc" aria-label="目录">
+  <div class="eyebrow">本页</div>
+  <ol>
+    <li><a href="#s1">全景</a></li>
+    <li><a href="#s2">装配中心：create_deep_agent</a></li>
+    <li><a href="#s3">Backend 层</a></li>
+    <li><a href="#s4">Middleware 层</a></li>
+    <li><a href="#s5">Profiles：两套档案</a></li>
+    <li><a href="#s6">Atlas 已改动的四处</a></li>
+    <li><a href="#s7">用到 / 休眠 / 死代码</a></li>
+    <li><a href="#s8">评估清单</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<header class="hero">
+  <p class="kicker">Detailed Design · kernel</p>
+  <h1>kernel 包分析</h1>
+  <p class="lede">53 个模块、26411 行。这份分析把它拆成<b>五层</b>逐一说明功能与类设计，标出 Atlas 已改动的四处、实际用到的部分、休眠但有价值的能力，以及确定的死代码 —— 最后给一张可以逐行打钩的评估清单。</p>
+  <div class="meta">
+    <span>53 模块 / 26411 行</span><span>Atlas 直接 import 4 个符号</span><span>已改动 4 处</span><span>建议裁剪 ~4600 行</span>
+  </div>
+</header>
+
+<!-- ══════════════ 1 ══ -->
+<section id="s1">
+  <h2><span class="num">01</span>全景</h2>
+
+  <p>kernel 是一个 <b>LangChain/LangGraph 之上的 agent 组装框架</b>。它不发明执行循环 —— 循环来自 <code>langchain.agents</code>；它提供的是<b>一套可插拔的能力层</b>，用中间件的形式叠加到那个循环上。</p>
+
+  <div class="tree"><b>kernel/</b>  53 模块 · 26411 行
+│
+├── <b>graph.py</b>                 963   <i>★ 装配中心：create_deep_agent()</i>
+│
+├── <b>backends/</b>              8834   <i>「文件存在哪」的抽象 —— 一套协议，七个实现</i>
+│   ├── protocol.py          954   <i>BackendProtocol / SandboxBackendProtocol + 13 个结果类型</i>
+│   ├── sandbox.py          1824   <i>BaseSandbox：把全部文件操作委托给 execute()</i>
+│   ├── filesystem.py       1542   <i>FilesystemBackend：真实盘</i>
+│   ├── utils.py            1037   <i>glob 编译 · 行号格式化 · 内容清洗</i>
+│   ├── composite.py         956   <i>按路径前缀路由到不同 backend</i>
+│   ├── store.py             710   <i>LangGraph BaseStore 适配（跨 thread 持久）</i>
+│   ├── context_hub.py       706   <i>LangSmith Hub 仓库存文件</i>
+│   ├── local_shell.py       364   <i>本机无限制 shell</i>
+│   ├── state.py             365   <i>StateBackend：存在 graph state 里（默认）</i>
+│   └── langsmith.py         353   <i>LangSmith 托管沙箱</i>
+│
+├── <b>middleware/</b>          11113   <i>能力层 —— 每个是一个可叠加的切面</i>
+│   ├── filesystem.py       3527   <i>8 个文件工具 + 权限 + 大结果外置 + 多模态清洗</i>
+│   ├── summarization.py    2169   <i>自动压缩 + 手动压缩工具 + 溢出兜底</i>
+│   ├── skills.py           1053   <i>Agent Skills 规范：渐进披露</i>
+│   ├── rubric.py           1024   <i>自评迭代</i>
+│   ├── async_subagents.py   935   <i>远程子智能体（LangGraph Platform）</i>
+│   ├── subagents.py         742   <i>task 工具 · 同进程子智能体</i>
+│   ├── memory.py            412   <i>AGENTS.md 静态上下文</i>
+│   ├── _video.py            404   <i>视频抽帧</i>
+│   └── _fs_interrupt · _message_eviction · _overflow_clip · _prompt_caching
+│       _state · _tool_exclusion · _utils · patch_tool_calls · permissions
+│
+├── <b>profiles/</b>            4383   <i>按模型定制行为的两套档案系统</i>
+│   ├── harness/harness_profiles.py  1327  <i>HarnessProfile：提示词/工具/中间件的按模型覆盖</i>
+│   ├── harness/_nvidia_nemotron_3_ultra.py 1826 <i>单个模型的 11 个修补中间件</i>
+│   ├── harness/_anthropic_*.py       160  <i>haiku 4.5 / sonnet 4.6 / opus 4.7</i>
+│   ├── provider/provider_profiles.py 457  <i>ProviderProfile：模型构造参数</i>
+│   └── provider/_openai · _nvidia · _openrouter
+│
+└── <b>_*</b>                     863   <i>内部工具：模型解析 · 工具改写 · 版本 · 消息 reducer</i></div>
+
+  <div class="callout rule">
+    <span class="label">一句话概括各层</span>
+    <p><b>backends</b> 回答"文件存在哪、命令在哪执行"；<b>middleware</b> 回答"模型能看到什么工具、上下文怎么管"；<b>profiles</b> 回答"换个模型要不要改行为"；<b>graph.py</b> 把三者按固定顺序装配成一张图。</p>
+  </div>
+</section>
+
+<!-- ══════════════ 2 ══ -->
+<section id="s2">
+  <h2><span class="num">02</span>装配中心：create_deep_agent</h2>
+
+  <p>理解 kernel 的钥匙是这个函数的<b>中间件叠加顺序</b>。列表顺序即包裹顺序，从外到内：</p>
+
+  <pre><code><span class="tok-c"># graph.py 主 agent 栈（约 835–900 行）</span>
+
+deepagent_middleware = []
+
+<span class="tok-n">1</span>  <span class="tok-k">if</span> skills:      SkillsMiddleware(backend, sources=skills)
+<span class="tok-n">2</span>                  FilesystemMiddleware(backend, tools=filesystem_tools,
+                                       _permissions=permissions)      <span class="tok-c">← 必备脚手架</span>
+<span class="tok-n">3</span>  <span class="tok-k">if</span> subagents:   SubAgentMiddleware(backend, subagents, state_schema)  <span class="tok-c">← 必备脚手架</span>
+<span class="tok-n">4</span>                  create_summarization_middleware(model, backend)
+<span class="tok-n">5</span>                  PatchToolCallsMiddleware()
+<span class="tok-n">6</span>  <span class="tok-k">if</span> async_sub:   AsyncSubAgentMiddleware(async_subagents)
+   ──────────────────────────────── 以上是「核心栈」
+<span class="tok-n">7</span>                  profile.materialize_extra_middleware()      <span class="tok-c">← 按模型注入</span>
+<span class="tok-n">8</span>                  append_prompt_caching_middleware(...)
+<span class="tok-n">9</span>  <span class="tok-k">if</span> memory:      MemoryMiddleware(backend, sources=memory, add_cache_control=True)
+<span class="tok-n">10</span> <span class="tok-k">if</span> interrupt:   HumanInTheLoopMiddleware(interrupt_on=...)
+   ──────────────────────────────── 最后按 profile 剔除被排除项
+                    _apply_excluded_middleware(...)</code></pre>
+
+  <h3>三个顺序是有语义的，不能随手调</h3>
+  <ul>
+    <li><b>profile 中间件在 8/9 之前</b> —— 注释写明理由：memory 会改系统提示词，放在 prompt caching 之后才不会让 Anthropic 的缓存前缀每轮失效。</li>
+    <li><b>memory 在 prompt caching 之后</b> —— 同上，它是"每轮都可能变"的部分。<a href="native.html#s5">native 详设</a>里我把 Mem0 记忆拼在 system_prompt <b>末尾</b>，理由完全一致。</li>
+    <li><b>_ToolExclusionMiddleware 最后跑</b> —— 所有注入工具的中间件跑完之后再剔除，否则剔不干净。</li>
+  </ul>
+
+  <h3>两个不可剔除的脚手架</h3>
+  <pre><code>_REQUIRED_MIDDLEWARE = (
+    (FilesystemMiddleware, ()),   <span class="tok-c"># 背后是全部文件工具 + permissions 安全保证</span>
+    (SubAgentMiddleware,  ()),    <span class="tok-c"># 背后是 task 工具的 handler</span>
+)</code></pre>
+  <p><code>HarnessProfile.excluded_middleware</code> 试图排除它们时<b>直接 ValueError</b>，而不是继续跑一个悄悄退化的 agent。这条设计和 Atlas 自己的 §13.2「不静默降级」是同一条纪律。</p>
+
+  <div class="callout warn">
+    <span class="label">这解释了 Atlas 的一处写法</span>
+    <p><code>filesystem_allowlist()</code> 返回空表时，<code>FilesystemMiddleware</code> <b>仍然装上</b>，只是不给模型任何文件工具。不是可以省略却没省 —— 是<b>结构上不允许省略</b>。</p>
+  </div>
+
+  <h3>子智能体有自己的一套栈</h3>
+  <pre><code><span class="tok-c"># 每个 SubAgent 的默认栈（graph.py 约 672–690 行）</span>
+FilesystemMiddleware(backend, tools=filesystem_tools, _permissions=继承或自有)
+create_summarization_middleware(subagent_model, backend)
+PatchToolCallsMiddleware()
+<span class="tok-k">if</span> spec[<span class="tok-s">"skills"</span>]: SkillsMiddleware(backend, sources=...)
++ 子智能体自己模型的 profile 中间件
++ prompt caching</code></pre>
+  <p>关键点：子智能体<b>共享同一个 backend</b>，但可以有自己的 permissions、skills、model、middleware。调用方在 <code>spec["middleware"]</code> 里给了自己的 <code>FilesystemMiddleware</code> 时会<b>替换</b>默认那个 —— Atlas 正是靠这个语义给子智能体单独的文件工具白名单。</p>
+
+  <h3>SubAgent 的配置面</h3>
+  <pre><code><span class="tok-k">class</span> <span class="tok-t">SubAgent</span>(TypedDict):
+    name, description, system_prompt          <span class="tok-c"># 必填</span>
+    tools, model, middleware                  <span class="tok-c"># Atlas 用到</span>
+    skills: <span class="tok-t">list</span>[<span class="tok-t">str</span>]                       <span class="tok-c">← 休眠：子智能体可有独立技能集</span>
+    permissions: <span class="tok-t">list</span>[FilesystemPermission] <span class="tok-c">← 休眠：按路径的细粒度权限</span>
+    interrupt_on: <span class="tok-t">dict</span>[<span class="tok-t">str</span>, ...]            <span class="tok-c">← 休眠：子图内的 HITL</span>
+    response_format                           <span class="tok-c">← 休眠：结构化返回</span>
+
+<span class="tok-k">class</span> <span class="tok-t">CompiledSubAgent</span>(TypedDict):
+    name, description, runnable               <span class="tok-c">← 休眠：直接塞一个编译好的图</span></code></pre>
+  <p><code>CompiledSubAgent</code> 值得记一笔：它接受任意 <code>Runnable</code>。<b>acp 子智能体如果要做，这是接入点</b> —— 把 ACP 会话包成一个 Runnable 即可，不必改 kernel。</p>
+</section>
+
+<!-- ══════════════ 3 ══ -->
+<section id="s3">
+  <h2><span class="num">03</span>Backend 层</h2>
+
+  <p>一套协议，七个实现。<b>这是 kernel 设计最干净的一层</b>。</p>
+
+  <pre><code><span class="tok-k">class</span> <span class="tok-t">BackendProtocol</span>(abc.ABC):
+    ls · read · grep · glob · write · edit · delete
+    upload_files · download_files
+    <span class="tok-c"># 每个都有 a 前缀的异步版本，共 18 个方法</span>
+
+<span class="tok-k">class</span> <span class="tok-t">SandboxBackendProtocol</span>(BackendProtocol):
+    id · execute · aexecute        <span class="tok-c"># 多出「能跑命令」这件事</span></code></pre>
+
+  <div class="lay">七个实现</div>
+  <div class="mod">
+    <div class="hd"><span class="nm">StateBackend</span><span class="ln">365 行</span><span class="act keep">Atlas 在用（默认）</span></div>
+    <p>文件存在 graph state 的 <code>files</code> 字典里，随 run 结束消失。没配 backend 时的默认值。</p>
+    <p><b>与技能投送相关</b>：<a href="native.html#s4">native 详设</a>里"无沙箱时把技能塞进 <code>invoke(files=...)</code>"这条路，吃的就是它。</p>
+  </div>
+  <div class="mod">
+    <div class="hd"><span class="nm">BaseSandbox</span><span class="ln">1824 行</span><span class="act mod">Atlas 继承 · 建议改造</span></div>
+    <p>抽象方法只有四个：<code>execute</code> / <code>id</code> / <code>upload_files</code> / <code>download_files</code>。<b>其余 13 个文件操作全部由它用 <code>execute()</code> 实现</b> —— <code>read</code> 是往沙箱里塞一段 Python 脚本跑，<code>grep</code> 是 <code>grep -F</code>，<code>ls</code> 是 <code>os.scandir</code> 脚本。</p>
+    <p>还提供 <code>execute_with_offload()</code>：大输出直接在沙箱内落盘，只把路径回给模型。</p>
+  </div>
+  <div class="mod">
+    <div class="hd"><span class="nm">CompositeBackend</span><span class="ln">956 行</span><span class="act on">建议启用</span></div>
+    <p>按<b>路径前缀</b>把操作路由到不同 backend：</p>
+    <pre style="margin:8px 0 0"><code>CompositeBackend(
+    default=sandbox,
+    routes={<span class="tok-s">"/skills/"</span>: readonly_skills_backend},
+)</code></pre>
+    <p>详见 <a href="#s8">§08</a> —— 这正好解技能投送的一个痛点。</p>
+  </div>
+  <div class="mod">
+    <div class="hd"><span class="nm">FilesystemBackend</span><span class="ln">1542 行</span><span class="act watch">未用</span></div>
+    <p>直接读写宿主机真实盘。Atlas 走容器隔离，不用它。<b>但别删</b> —— <code>CompositeBackend</code> 的只读路由若要挂本地目录会用到。</p>
+  </div>
+  <div class="mod">
+    <div class="hd"><span class="nm">StoreBackend</span><span class="ln">710 行</span><span class="act watch">未用</span></div>
+    <p>适配 LangGraph 的 <code>BaseStore</code>，跨 thread 持久。Atlas 的跨会话持久是 OSS/卷 + Mem0，两条路不冲突但也不互补。暂时留着，成本低。</p>
+  </div>
+  <div class="mod">
+    <div class="hd"><span class="nm">ContextHubBackend</span><span class="ln">706 行</span><span class="act trim">建议裁剪</span></div>
+    <p>把文件存进 LangSmith Hub 的 agent 仓库。内部实现了一套 <code>_MutationQueue</code> 做写入合并与持久性等待 —— 相当重的东西，绑死 LangSmith。</p>
+  </div>
+  <div class="mod">
+    <div class="hd"><span class="nm">LangSmithSandbox</span><span class="ln">353 行</span><span class="act trim">连带裁剪</span></div>
+    <p>LangSmith 托管沙箱。Atlas 用 Docker/K8s 自建。</p>
+  </div>
+  <div class="mod">
+    <div class="hd"><span class="nm">LocalShellBackend</span><span class="ln">364 行</span><span class="act trim">建议裁剪</span></div>
+    <p><code>FilesystemBackend + 无限制本机 shell</code>。在一个讲究隔离的平台里，这是个<b>反向能力</b> —— 留着只会成为某天有人图省事绕过沙箱的入口。</p>
+  </div>
+
+  <div class="callout danger">
+    <span class="label">改造点：热路径全走 docker exec</span>
+    <p>Atlas 的 <code>DockerSandbox</code> 只覆盖了 <code>execute</code> / <code>write</code> / <code>upload_files</code> / <code>download_files</code> / <code>id</code>。于是 <code>ls</code> · <code>read</code> · <code>edit</code> · <code>delete</code> · <code>grep</code> · <code>glob</code> <b>每次调用都是一次 <code>docker exec</code></b>（代码注释自己估的是 ~50–150ms）。</p>
+    <p>单看不算贵。但两件事会放大它：<b>①</b> 模型读文件是高频动作，一轮里十几次很常见；<b>②</b> 换 K8s 之后，每次 exec 是一个带协议升级的 API 调用，代价比本机 docker exec 高一个量级。</p>
+    <p>改造方向：在 <code>K8sSandbox</code> 上覆盖 <code>read</code> / <code>ls</code> / <code>grep</code>，走一条常驻通道（agent sidecar 或长连接 exec），而不是每次新建。<b>这不是 kernel 的问题，是实现子类的优化空间</b> —— 协议本身允许覆盖，正是为此留的。</p>
+  </div>
+</section>
+
+<!-- ══════════════ 4 ══ -->
+<section id="s4">
+  <h2><span class="num">04</span>Middleware 层</h2>
+
+  <div class="mod">
+    <div class="hd"><span class="nm">FilesystemMiddleware</span><span class="ln">3527 行 · 最大</span><span class="act keep">核心，必备脚手架</span></div>
+    <p>它大是因为塞了五件事：</p>
+    <ul>
+      <li><b>8 个文件工具</b>：ls / read_file / write_file / edit_file / delete / glob / grep / execute，各自带 pydantic 入参 schema</li>
+      <li><b>权限执行</b>：<code>FilesystemPermission</code> 按 glob 匹配路径，过滤 ls/glob/grep 的结果，拦截 write/edit/delete</li>
+      <li><b>大结果外置</b>：工具结果超 20000 token、HumanMessage 超 50000 token 时写到 backend 文件，消息里只留路径</li>
+      <li><b>多模态清洗</b>：模型不支持的 content block 换成占位符，避免网关 400</li>
+      <li><b>视频抽帧</b>：<code>read_file</code> 对视频文件抽帧（依赖未装时该分支恒不成立）</li>
+    </ul>
+    <p>构造参数里有几个 Atlas 没调过但值得知道的：<code>tool_token_limit_before_evict=20000</code>、<code>grep_max_count=1000</code>、<code>max_execute_timeout=3600</code>。</p>
+  </div>
+
+  <div class="mod">
+    <div class="hd"><span class="nm">FilesystemPermission</span><span class="ln">在 filesystem.py 内</span><span class="act on">建议启用</span></div>
+    <p>声明式的路径级权限规则。配套的 <code>_fs_interrupt.py</code> 能<b>把权限规则自动翻译成 HITL 配置</b>（<code>_build_interrupt_on_from_permissions</code>），接到 <code>HumanInTheLoopMiddleware</code>。</p>
+    <p>Atlas 现在的审批是<b>按工具名</b>粗粒度（<code>require_approval_for = ["execute", "coding_task"]</code>）。kernel 这套是<b>按路径 glob</b>：可以做到"写 <code>/workspace/**</code> 免批，写 <code>/skills/**</code> 一律拒绝"。详见 <a href="#s8">§08</a>。</p>
+  </div>
+
+  <div class="mod">
+    <div class="hd"><span class="nm">summarization</span><span class="ln">2169 行</span><span class="act keep">Atlas 在用（自动那半）</span></div>
+    <p>两个中间件：</p>
+    <ul>
+      <li><code>_DeepAgentsSummarizationMiddleware</code> —— 自动压缩。相比 LangChain 原版多三件事：<b>被逐出的消息先追加到 backend 的 <code>/conversation_history/{session}.md</code></b>（原版直接丢弃，无恢复路径）；压缩前先截断老消息里的大 <code>write_file</code> 参数，常常就够用不必真压；<b>provider 超预算报错时兜底压缩再重试</b>。</li>
+      <li><code>SummarizationToolMiddleware</code> —— 提供 <code>compact_conversation</code> 工具，<b>让模型自己决定何时压缩</b>。Atlas 未启用。</li>
+    </ul>
+  </div>
+
+  <div class="mod">
+    <div class="hd"><span class="nm">SkillsMiddleware</span><span class="ln">1053 行</span><span class="act keep">Atlas 待接入</span></div>
+    <p>Agent Skills 规范的实现：从 backend 的若干 <code>sources</code> 路径扫 <code>SKILL.md</code>，解析 YAML frontmatter，把 <b>name + description 列表</b>注入系统提示词，正文由模型按需 <code>read_file</code> —— 这就是"渐进披露"。</p>
+    <p>硬上限：技能文件 10MB、名称 64 字符、描述 1024 字符、加载警告最多 20 条。后两个正是 <a href="native.html#s4">native 详设</a>里 <code>Skill.description</code> 设成 <code>String(1024)</code> 的来源。</p>
+    <p>多个 source 按顺序加载，<b>同名后者覆盖前者</b> —— 可以做 base → user → project 的分层。</p>
+  </div>
+
+  <div class="mod">
+    <div class="hd"><span class="nm">SubAgentMiddleware</span><span class="ln">742 行</span><span class="act keep">核心，必备脚手架</span></div>
+    <p>提供 <code>task</code> 工具。每个子智能体在<b>独立上下文</b>里跑，只把最终结论回给主 agent。</p>
+    <p>工具描述里有 <code>{available_agents}</code> 占位符 —— 被替换成子智能体名称与描述列表。<b>这是模型判断"何时委派给谁"的唯一依据</b>，也是 Atlas 的 <code>SubAgentSpec.description</code> 会影响行为的原因。</p>
+  </div>
+
+  <div class="mod">
+    <div class="hd"><span class="nm">AsyncSubAgentMiddleware</span><span class="ln">935 行</span><span class="act watch">易被误认</span></div>
+    <p>提供 5 个工具（start / check / update / cancel / list async task）做<b>非阻塞</b>委派，主 agent 发起后继续干别的，稍后回来取结果。</p>
+    <div class="callout danger" style="margin:10px 0 0">
+      <span class="label">别把它当成 ACP 的现成方案</span>
+      <p>它 <code>from langgraph_sdk import get_client</code>，连的是 <b>LangGraph Platform 部署的图</b>（认 <code>graph_id</code>）。文档里的 "Agent Protocol" 指的是 LangGraph 的那个，<b>不是 ACP（Agent Client Protocol）</b>。两者同名不同物。</p>
+      <p>acp 子智能体真要做，接入点是 <code>CompiledSubAgent</code>（塞一个 Runnable），不是这里。</p>
+    </div>
+  </div>
+
+  <div class="mod">
+    <div class="hd"><span class="nm">MemoryMiddleware</span><span class="ln">412 行</span><span class="act watch">同名陷阱</span></div>
+    <p>加载 <b>AGENTS.md 规范</b>的静态上下文文件，每轮全量进提示词，并在 Anthropic 模型上打 cache_control 断点。</p>
+    <p><b>与 Mem0 长期记忆不是一回事</b> —— 这条已经写进 <a href="native.html#s5">native 详设 §05</a>。两者可共存，但别复用 <code>create_deep_agent(memory=)</code> 这个参数。</p>
+  </div>
+
+  <div class="mod">
+    <div class="hd"><span class="nm">PatchToolCallsMiddleware</span><span class="ln">46 行</span><span class="act keep">小而关键</span></div>
+    <p>修补消息历史里的<b>悬空工具调用</b>——有 tool_call 却没有对应 ToolMessage。这种情况在取消、超时、压缩截断之后很容易出现，不补的话下一轮请求会被网关拒。</p>
+  </div>
+
+  <div class="mod">
+    <div class="hd"><span class="nm">RubricMiddleware</span><span class="ln">1024 行</span><span class="act trim">建议裁剪</span></div>
+    <p>自评迭代：跑一个 grader 子智能体，按结构化 rubric 打分，不达标就打回重做。</p>
+    <p>能力本身有意思，但它<b>与 Atlas 的成本模型冲突</b>：每次迭代多一次完整的 grader 调用，而 Atlas 的 <code>max_total_tokens</code> 是明确的刹车。要做质量门禁，用 Atlas 已有的审批或外部评测更可控。<b>且它仅经 barrel <code>__init__.py</code> 可达，<code>graph.py</code> 根本不 import。</b></p>
+  </div>
+
+  <div class="mod">
+    <div class="hd"><span class="nm">辅助模块</span><span class="ln">共约 750 行</span><span class="act keep">保留</span></div>
+    <ul>
+      <li><code>_message_eviction</code> / <code>_overflow_clip</code> —— 大内容的 head+tail 预览与读侧裁剪，被 filesystem 与 summarization 共用</li>
+      <li><code>_prompt_caching</code> —— 按 provider 追加缓存中间件</li>
+      <li><code>_tool_exclusion</code> —— 最后一道工具过滤</li>
+      <li><code>_fs_interrupt</code> —— 权限规则 → HITL 配置的翻译器</li>
+      <li><code>permissions.py</code> —— 7 行，只是向后兼容的 re-export</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ══════════════ 5 ══ -->
+<section id="s5">
+  <h2><span class="num">05</span>Profiles：两套档案</h2>
+
+  <p>这是 kernel 里 Atlas <b>完全没用</b>的一层，但它恰好是"按模型定制行为"的官方扩展点。</p>
+
+  <h3>HarnessProfile —— 改 agent 行为</h3>
+  <pre><code><span class="tok-d">@dataclass</span>
+<span class="tok-k">class</span> <span class="tok-t">HarnessProfile</span>:
+    base_system_prompt: <span class="tok-t">str</span> | <span class="tok-k">None</span>              <span class="tok-c"># 替换基础提示词</span>
+    system_prompt_suffix: <span class="tok-t">str</span> | <span class="tok-k">None</span>            <span class="tok-c"># 追加后缀</span>
+    tool_description_overrides: Mapping[<span class="tok-t">str</span>, <span class="tok-t">str</span>]  <span class="tok-c"># 改工具描述</span>
+    excluded_tools: <span class="tok-t">frozenset</span>[<span class="tok-t">str</span>]                <span class="tok-c"># 对该模型隐藏某些工具</span>
+    excluded_middleware: <span class="tok-t">frozenset</span>[...]             <span class="tok-c"># 剔除中间件（脚手架除外）</span>
+    extra_middleware: Sequence | Callable            <span class="tok-c"># 追加修补中间件</span>
+    general_purpose_subagent: ... | <span class="tok-k">None</span>            <span class="tok-c"># 调整默认子智能体</span></code></pre>
+
+  <p>按模型 key 注册，<code>create_deep_agent</code> 里用 <code>_harness_profile_for_model(model, spec)</code> 解析。内置档案：</p>
+  <table>
+    <thead><tr><th style="width:250px">档案</th><th style="width:80px">行数</th><th>内容</th></tr></thead>
+    <tbody>
+      <tr><td>anthropic haiku-4-5 / sonnet-4-6 / opus-4-7</td><td>52–56</td><td>提示词微调，各 50 来行</td></tr>
+      <tr><td><code>_nvidia_nemotron_3_ultra</code></td><td><b>1826</b></td><td><b>11 个修补中间件</b>：修文本形态的工具调用、清理 <code>&lt;think&gt;</code> 块、429 重试、追问纪律、实体解析守卫、最终答案守卫……</td></tr>
+      <tr><td><code>_openai_codex</code></td><td>88</td><td>Codex 适配</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout warn">
+    <span class="label">Nemotron 那 1826 行是这层存在的理由</span>
+    <p>它在说一件事：<b>弱一点的模型需要大量外挂修补才能跑 agent 循环</b> —— 工具调用发成纯文本要解析回来、思考标签要清理、会重复追问要打回。这是很有价值的工程情报。</p>
+    <p>但对 Atlas 没用：它只面向 <code>claude-opus-5</code> / <code>sonnet-5</code> / <code>fable-5</code> / <code>haiku-4-5</code> 四个模型，全部经 Anthropic 协议网关。这 1826 行是<b>单笔最大的裁剪项</b>。</p>
+  </div>
+
+  <h3>ProviderProfile —— 改模型构造</h3>
+  <p>457 行，管的是"按 provider 决定怎么构造 chat model"（额外 header、参数改名等）。Atlas 有自己的 <code>model_factory.py</code> + <code>compat.py</code> 做同一件事，且已经承载了实测门禁。<b>两套并存但互不感知</b> —— 见 <a href="#s8">§08</a> 的评估。</p>
+</section>
+
+<!-- ══════════════ 6 ══ -->
+<section id="s6">
+  <h2><span class="num">06</span>Atlas 已改动的四处</h2>
+
+  <p>全仓只有四处带 <code>★ Atlas 改动</code> 标记，都集中在一个主题上：<b>把工具门禁做实</b>。</p>
+
+  <table>
+    <thead><tr><th style="width:230px">位置</th><th>改了什么</th><th>为什么</th></tr></thead>
+    <tbody>
+      <tr><td><code>graph.py</code> · 签名</td><td>加 <code>filesystem_tools</code> 白名单参数，贯通主 agent / 子智能体默认栈 / general-purpose 三处</td><td>原本三处都默认注册全部文件工具（含 execute），造成两个门禁缺口</td></tr>
+      <tr><td><code>graph.py</code> · 子智能体栈</td><td>默认栈的 <code>FilesystemMiddleware</code> 也吃白名单</td><td>否则未勾 filesystem 的子智能体照样能 write_file</td></tr>
+      <tr><td><code>graph.py</code> · general-purpose</td><td>不再无条件注入 general-purpose 子智能体</td><td>会让主 agent 能委派一个平台从没配置过的子智能体</td></tr>
+      <tr><td><code>middleware/filesystem.py</code></td><td>空白名单 = 完全关闭文件工具，并<b>连带关掉大结果外置</b></td><td>原校验要求 <code>read_file</code> 恒在；零工具时外置出去的内容模型读不回来，留着是个只写不读的黑洞</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout rule">
+    <span class="label">这四处改动的共同点</span>
+    <p>原本的默认是<b>「注册后运行时报错」</b>，Atlas 改成<b>「对模型结构性不存在」</b>。差别在于：前者模型看得见、调用后才失败，每次尝试烧一轮 token；后者模型根本不知道有这个工具。</p>
+    <p>这个思路值得作为后续改造 kernel 的<b>统一口径</b>。</p>
+  </div>
+</section>
+
+<!-- ══════════════ 7 ══ -->
+<section id="s7">
+  <h2><span class="num">07</span>用到 / 休眠 / 死代码</h2>
+
+  <h3>Atlas 直接 import 的只有 4 个符号</h3>
+  <pre><code><span class="tok-k">from</span> atlas_engine.kernel.graph <span class="tok-k">import</span> create_deep_agent
+<span class="tok-k">from</span> atlas_engine.kernel.middleware.filesystem <span class="tok-k">import</span> FilesystemMiddleware
+<span class="tok-k">from</span> atlas_engine.kernel.middleware.subagents <span class="tok-k">import</span> SubAgentMiddleware
+<span class="tok-k">from</span> atlas_engine.kernel.backends.sandbox <span class="tok-k">import</span> BaseSandbox
+<span class="tok-c"># 外加 backends.protocol 的三个结果类型（ExecuteResponse / File*Response）</span></code></pre>
+  <p>接触面极小 —— 这对裁剪是好消息：改动 kernel 内部很难波及 Atlas 自有代码。</p>
+
+  <h3>三类归档</h3>
+  <table>
+    <thead><tr><th style="width:110px">类别</th><th>内容</th></tr></thead>
+    <tbody>
+      <tr><td><b>在用</b></td><td>graph · filesystem · subagents · summarization · patch_tool_calls · sandbox · state · protocol · utils · _message_eviction · _overflow_clip · _prompt_caching · _tool_exclusion · _models · _tools · _messages_reducer</td></tr>
+      <tr><td><b>休眠<br>（有价值）</b></td><td><code>CompositeBackend</code> · <code>FilesystemPermission</code> + <code>_fs_interrupt</code> · <code>SkillsMiddleware</code>（待接） · <code>SummarizationToolMiddleware</code> · <code>execute_with_offload</code> · <code>CompiledSubAgent</code> · <code>HarnessProfile</code> · <code>StoreBackend</code> · <code>FilesystemBackend</code></td></tr>
+      <tr><td><b>死代码</b></td><td><code>rubric</code> · <code>context_hub</code> · <code>local_shell</code> · <code>langsmith</code> · <code>_video</code> · nemotron / codex 档案 · provider 档案四件套</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout danger">
+    <span class="label">判定死代码不能用 import 图</span>
+    <p>barrel <code>__init__.py</code> 的导出让<b>一切都"可达"</b>——直接跑可达性分析，53 个模块里 50 个是"活的"，结论毫无用处。</p>
+    <p>上表的判据是<b>功能可达</b>：从 <code>create_deep_agent()</code> 出发，沿真正参与装配的 import 走。"仅经 barrel 可达"正是死代码的特征 —— <code>rubric</code> / <code>context_hub</code> / <code>local_shell</code> 三个都是这样。</p>
+  </div>
+</section>
+
+<!-- ══════════════ 8 ══ -->
+<section id="s8">
+  <h2><span class="num">08</span>评估清单</h2>
+
+  <p>按建议动作分四组。<b>裁剪</b>与<b>保留</b>基本没有争议；<b>启用</b>与<b>改造</b>是需要你判断的部分，每条都写了收益与代价。</p>
+
+  <div class="lay">建议启用 · 需要判断</div>
+
+  <div class="mod">
+    <div class="hd"><span class="nm">① CompositeBackend 做 /skills 与 /workspace 分离</span><span class="act on">启用</span></div>
+    <p><b>解什么问题</b>：<a href="native.html#s4">native 详设</a>里技能物化到容器 <code>/skills/</code>，需要 <code>SkillMaterializer</code> 做写入、幂等判断、以及 agent 改版后清理残留旧技能 —— 那段清理逻辑是自己写的兜底。</p>
+    <p><b>换成路由之后</b>：</p>
+    <pre style="margin:8px 0"><code>backend = CompositeBackend(
+    default=docker_sandbox,                      <span class="tok-c"># /workspace 等</span>
+    routes={<span class="tok-s">"/skills/"</span>: StateBackend()},          <span class="tok-c"># 技能走 state，run 级天然隔离</span>
+)</code></pre>
+    <p>技能内容随 run 注入 state，<b>run 结束自动消失</b> —— 不需要物化、不需要幂等判断、不需要清理残留。而 <code>execute</code>（bash）仍然作用于真实容器。</p>
+    <p><b>代价</b>：技能文件对 <code>execute</code> 里跑的脚本<b>不可见</b>（它们在 state 里不在容器盘上）。而 <a href="../skill.html">技能管理设计</a>明确说过技能可能含"真正会跑的脚本"（<code>python scripts/search.py</code> 那类）。</p>
+    <p><b>所以结论是二选一，取决于技能形态</b>：纯提示词类技能 → 路由方案更干净；含可执行脚本的技能 → 仍需物化进容器。<b>建议两条都留</b>：按技能的 <code>resources</code> 是否为空自动选路。这个判断可以做在 <code>SkillService</code> 里，不必改 kernel。</p>
+  </div>
+
+  <div class="mod">
+    <div class="hd"><span class="nm">② FilesystemPermission：路径级权限 + 自动 HITL</span><span class="act on">启用</span></div>
+    <p><b>现状</b>：Atlas 的审批粒度是工具名 —— <code>require_approval_for = ["execute", "coding_task"]</code>。一旦勾了 bash，<b>每条命令</b>都要人点头。</p>
+    <p><b>kernel 提供的</b>：按路径 glob 的规则，且 <code>_build_interrupt_on_from_permissions()</code> 能把规则<b>自动翻译成 HITL 配置</b>。可以表达"写 <code>/workspace/**</code> 直接放行，写 <code>/skills/**</code> 一律拒绝，删任何东西都要批"。</p>
+    <p><b>收益</b>：审批疲劳会真实降低 —— 现在的粗粒度会让用户对每条命令都点"允许"，点到最后就不看了，审批的意义也就没了。</p>
+    <p><b>代价</b>：这是一个新的配置维度，要进 <code>AgentSpec</code>、进编辑器 UI、进 spec 快照纪律。而且 <code>_permissions</code> 参数本身标了私有（注释说"可能将来移到 backend 层"），<b>接口有变动风险</b>。</p>
+    <p><b>建议</b>：值得做，但<b>不要急</b> —— 先把技能与记忆落地。真要做时，把它包在 Atlas 自己的 spec 字段后面，不要让编辑器直接暴露 kernel 的 <code>FilesystemPermission</code> 结构。</p>
+  </div>
+
+  <div class="mod">
+    <div class="hd"><span class="nm">③ execute_with_offload：大输出不进上下文</span><span class="act on">启用 · 成本最低</span></div>
+    <p>沙箱内直接把大输出落盘，只回路径。Atlas 现在的兜底是 <code>OUTPUT_LIMIT_BYTES = 100_000</code> 硬截断 —— <b>截断是丢信息</b>，外置是不丢。</p>
+    <p>一条 <code>pytest</code> 的完整输出、一次大构建的日志，截断之后模型看到的是半截，而报错往往在末尾。</p>
+    <p><b>代价极低</b>：<code>BaseSandbox</code> 已经实现好了，Atlas 只需在 <code>DockerSandbox</code> 上确认 offload 路径可写。<b>这条我建议直接做。</b></p>
+  </div>
+
+  <div class="mod">
+    <div class="hd"><span class="nm">④ SummarizationToolMiddleware：模型主动压缩</span><span class="act watch">可选</span></div>
+    <p>给模型一个 <code>compact_conversation</code> 工具，让它在自己觉得该收敛时压缩。</p>
+    <p><b>收益有限</b>：Atlas 的自动压缩（<code>trigger_ratio=0.75</code>）已经覆盖了主要场景，而模型主动压缩的时机判断未必比阈值更好。<b>倾向不做</b>，除非观察到"自动压缩总是太晚"的实际案例。</p>
+  </div>
+
+  <div class="lay">建议改造 · 需要判断</div>
+
+  <div class="mod">
+    <div class="hd"><span class="nm">⑤ K8sSandbox 覆盖文件操作热路径</span><span class="act mod">改造</span></div>
+    <p>见 <a href="#s3">§03</a> 的论证：<code>ls</code>/<code>read</code>/<code>grep</code>/<code>glob</code> 每次一个 exec，换 K8s 后代价升一个量级。</p>
+    <p><b>但先量一量再改</b> —— 一轮对话里文件操作的真实次数是多少？如果个位数，这个优化不值得先做。<a href="../observability.html">可观测性</a>落地后能直接回答这个问题。<b>建议：先埋点，后优化。</b></p>
+  </div>
+
+  <div class="mod">
+    <div class="hd"><span class="nm">⑥ HarnessProfile vs Atlas 自有的模型适配</span><span class="act mod">值得收敛</span></div>
+    <p><b>现在有两套做同一件事的机制</b>：kernel 的 <code>HarnessProfile</code> / <code>ProviderProfile</code>，与 Atlas 的 <code>spec.py</code> 门禁 + <code>model_factory.py</code> + <code>compat.py</code>。两者互不感知。</p>
+    <p>具体的重叠：Atlas 的 <code>_SANDBOX_HINT</code>（有 backend 时往 system_prompt 拼一段路径引导）其实正是 <code>HarnessProfile.system_prompt_suffix</code> 的用途。</p>
+    <p><b>两个方向，我倾向后者</b>：</p>
+    <ul>
+      <li><b>用 kernel 的</b> —— 把 Atlas 的适配搬进 profile。顺了 kernel 的设计，但把实测门禁（Atlas 最有价值的资产之一）埋进一个继承来的框架里。</li>
+      <li><b>裁掉 kernel 的</b> —— profiles 层只留 <code>HarnessProfile</code> 骨架（<code>graph.py</code> 依赖它），删掉全部内置档案注册。Atlas 的适配留在自己手里，<b>门禁仍在 <code>spec.py</code> 这个显眼的地方</b>。</li>
+    </ul>
+    <p>理由：那些 frozenset 是对网关的实测结论，会随模型更新而变，放在<b>一眼能找到</b>的地方比放在框架扩展点里重要。</p>
+  </div>
+
+  <div class="lay">建议裁剪 · 争议小</div>
+  <table>
+    <thead><tr><th style="width:250px">模块</th><th style="width:70px">行数</th><th>判据</th></tr></thead>
+    <tbody>
+      <tr><td><code>profiles/harness/_nvidia_nemotron_3_ultra</code></td><td>1826</td><td>只面向 claude-* 四个模型</td></tr>
+      <tr><td><code>middleware/rubric</code></td><td>1024</td><td>仅经 barrel 可达；与 token 刹车的成本模型冲突</td></tr>
+      <tr><td><code>backends/context_hub</code></td><td>706</td><td>仅经 barrel 可达；绑死 LangSmith</td></tr>
+      <tr><td><code>middleware/_video</code></td><td>404</td><td>av + pillow 未引入，分支恒不成立</td></tr>
+      <tr><td><code>backends/local_shell</code></td><td>364</td><td>无限制本机 shell —— 在讲隔离的平台里是反向能力</td></tr>
+      <tr><td><code>backends/langsmith</code></td><td>353</td><td>连带；但需先删 rubric / context_hub 才孤立</td></tr>
+      <tr><td><code>profiles/provider/*</code> + <code>_openai_codex</code></td><td>384</td><td>只走 Anthropic 协议网关</td></tr>
+    </tbody>
+  </table>
+  <p>合计约 <b>5000 行 · 19%</b>。裁剪收益不是行数，是<b>缩小 langchain/langgraph 升级时的验证面</b> —— <code>engine/pyproject.toml</code> 把 <code>langchain==1.3.*</code> / <code>langgraph==1.2.*</code> 钉死了，理由就是这些包 minor 版本间会改内部 API。</p>
+
+  <div class="callout warn">
+    <span class="label">裁剪两步法</span>
+    <p><b>① 先从 barrel 摘掉，不删文件。</b>从 <code>middleware/__init__.py</code> / <code>backends/__init__.py</code> 的导出里去掉，跑全量测试 —— 可逆，且能立刻暴露"其实有人在用"。<b>② 观察一个迭代再删文件。</b></p>
+    <p>profiles 例外：删文件必须同时改 <code>_builtin_profiles.py</code> 的 <code>register()</code> 调用，否则直接 ImportError。这一处不能只做第一步。</p>
+  </div>
+
+  <div class="lay">建议保留不动</div>
+  <p><code>graph.py</code> · <code>filesystem</code> · <code>subagents</code> · <code>summarization</code> · <code>skills</code> · <code>patch_tool_calls</code> · <code>sandbox</code> · <code>state</code> · <code>composite</code> · <code>protocol</code> · <code>utils</code> · 全部 <code>_*</code> 辅助模块 · <code>harness_profiles.py</code> 骨架。</p>
+  <p><code>StoreBackend</code> 与 <code>FilesystemBackend</code> 也建议留着：现在没用，但 <code>CompositeBackend</code> 的路由若要挂真实目录或跨 thread 存储会立刻用上，而它们不拖额外依赖。</p>
+
+  <div class="callout rule">
+    <span class="label">如果只做一件事</span>
+    <p>做 <b>③ execute_with_offload</b> —— 代价接近零（<code>BaseSandbox</code> 已实现），收益是命令输出不再被硬截断。现在 <code>OUTPUT_LIMIT_BYTES = 100_000</code> 的截断会把报错最常出现的末尾切掉。</p>
+    <p>如果做两件，第二件是<b>裁掉 nemotron 那 1826 行</b> —— 单笔最大、零风险、且它是"这份 fork 里有大量与我们无关的东西"最直观的证据。</p>
+  </div>
+</section>
+
+</main>
+</div>
+
+</body>
+</html>

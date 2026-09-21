@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>权限管理设计 · AI Platform</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="sitenav">
+  <a class="brand" href="./">AI&nbsp;<b>Platform</b>&nbsp;/ 设计文档</a>
+  <div class="links">
+    <a href="./">目录</a>
+    <a href="detail/">详细设计</a>
+    <a href="architecture.html">系统架构</a>
+    <a href="agent.html">Agent 管理</a>
+    <a href="skill.html">技能管理</a>
+    <a href="mcp.html">MCP 管理</a>
+    <a class="on" href="permission.html">权限管理</a>
+    <a href="execution.html">执行环境</a>
+    <a href="session.html">会话管理</a>
+    <a href="native.html">native Agent</a>
+    <a href="runtime.html">运行时链路</a>
+    <a href="local.html">本地部署</a>
+    <a href="memory.html">记忆</a>
+    <a href="observability.html">可观测性</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+<nav class="toc" aria-label="目录">
+  <div class="eyebrow">本页</div>
+  <ol>
+    <li><a href="#s1">三类资源，三种性质</a></li>
+    <li><a href="#s2">三层可见性</a></li>
+    <li><a href="#s3">Agent 权限</a></li>
+    <li><a href="#s4">MCP：两个正交的问题</a></li>
+    <li><a href="#s5">凭证作用域决定严格程度</a></li>
+    <li><a href="#s6">技能不做独立授权</a></li>
+    <li><a href="#s7">有效工具集的计算</a></li>
+    <li><a href="#s8">校验点</a></li>
+    <li><a href="#s9">委派不提权</a></li>
+    <li><a href="#s10">审计</a></li>
+    <li><a href="#s11">待验证清单</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<header class="hero">
+  <p class="kicker">Permissions</p>
+  <h1>权限管理设计</h1>
+  <p class="lede">Agent、MCP、技能三类资源的授权模型。核心问题是 MCP —— <b>它的权限既不是授予 Agent，也不是授予个人，而是两者的交集</b>，因为「能不能用」和「能看到什么」是两个正交的问题。</p>
+  <div class="meta">
+    <span>三层可见性</span><span>访问权 × 数据权</span><span>交集</span><span>委派不提权</span>
+  </div>
+</header>
+
+<!-- ───────────────────────── 1 ───────────────────────── -->
+<section id="s1">
+<h2><span class="num">01</span>三类资源，三种性质</h2>
+
+<p>Agent、MCP、技能都需要管控，但它们的权限性质完全不同，套同一套模型会得到一个既繁琐又漏洞百出的设计。</p>
+
+<table>
+  <thead><tr><th style="width:130px">资源</th><th style="width:230px">权限回答什么</th><th>授予给谁</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><b>Agent</b></td>
+      <td>能不能用它建会话</td>
+      <td class="yes"><b>人</b>（经角色/组）</td>
+    </tr>
+    <tr>
+      <td><b>MCP</b></td>
+      <td>① 能不能用这个 server<br>② 用它能访问到什么数据</td>
+      <td class="maybe"><b>Agent 配置 ∩ 用户授权</b><br>见 <a href="#s4">§04</a></td>
+    </tr>
+    <tr>
+      <td><b>技能</b></td>
+      <td>—</td>
+      <td class="no"><b>不做独立授权</b>，随 Agent 走<br>见 <a href="#s6">§06</a></td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout rule">
+  <span class="label">判断依据：这个资源本身会不会触达外部数据</span>
+  <p><b>Agent</b> 是入口，控制「谁能发起」就够了。<b>技能</b> 是方法论，不提供新的执行能力（<a href="mcp.html#s1">MCP 管理 §01</a>）。<b>只有 MCP 会真的去够外部系统里的数据</b> —— 所以只有它需要两个维度。</p>
+</div>
+</section>
+
+<!-- ───────────────────────── 2 ───────────────────────── -->
+<section id="s2">
+<h2><span class="num">02</span>三层可见性</h2>
+
+<p>所有资源都经过同样的三层收敛。这一层解决的是「有什么可用」，不是「这个人能不能用」。</p>
+
+<pre><code>① 平台提供    平台定义的 Agent / 内置技能 / 平台 MCP server
+      ↓ 租户管理员选择
+② 租户启用    本租户实际开放的子集 + 租户自建的资源
+      ↓ 角色授权
+③ 用户授予    这个用户被允许使用的子集
+
+<span class="tok-s">有效资源 = ① ∩ ② ∩ ③</span></code></pre>
+
+<div class="callout warn">
+  <span class="label">三层是收敛，不是覆盖</span>
+  <p>下层只能<b>收窄</b>上层，不能放宽。租户管理员不能启用平台没提供的 Agent，也不能给用户授予租户未启用的 MCP。</p>
+  <p>这条听起来显然，但实现上容易出错 —— 常见的错法是把「用户授权」做成独立的白名单表，然后忘了与租户启用状态做交集。<b>结果是租户下线了某个 server，已被单独授权的用户还在用。</b></p>
+</div>
+
+<h3>租户自建资源的命名空间</h3>
+<p>租户可以自建技能（<a href="skill.html#s10">技能管理 §10</a>）与 MCP server。它们的标识必须带租户前缀，否则两个租户各有一个 <code>code-review</code> 或 <code>github</code>，解析时就会撞车。</p>
+</section>
+
+<!-- ───────────────────────── 3 ───────────────────────── -->
+<section id="s3">
+<h2><span class="num">03</span>Agent 权限</h2>
+
+<p>Agent 的权限最简单：<b>能不能用它建会话</b>。授予对象是人，经角色实现。</p>
+
+<pre><code><span class="tok-k">CREATE TABLE</span> role_agents (
+  tenant_id  <span class="tok-n">TEXT</span> <span class="tok-k">NOT NULL</span>,
+  role_id    <span class="tok-n">TEXT</span> <span class="tok-k">NOT NULL</span>,
+  agent_id   <span class="tok-n">TEXT</span> <span class="tok-k">NOT NULL</span>,
+  <span class="tok-k">PRIMARY KEY</span> (tenant_id, role_id, agent_id)
+);</code></pre>
+
+<h3>校验发生在建会话时</h3>
+<pre><code><span class="tok-k">POST</span> /sessions  { agent_id: <span class="tok-s">"code-assistant-claude"</span> }
+   ↓
+校验：该 agent 在本租户已启用？用户的角色被授予了它？
+   ↓ 否 → <span class="tok-w">403</span>，且不要在错误里泄露该 agent 是否存在
+   ↓ 是 → 建会话，钉住 agent_version</code></pre>
+
+<div class="callout rule">
+  <span class="label">会话建立后不再复查 Agent 权限</span>
+  <p>权限在建会话时校验一次，之后该会话一直有效 —— 即使用户的角色后来被收回。</p>
+  <p>理由是<b>一致性</b>：会话已经钉住了 <code>agent_version</code>（<a href="agent.html#s4">Agent 管理 §04</a>），中途因权限变更而让会话不可用，用户会遇到「聊到一半突然报错」。要立即断开的场景（离职、安全事件），应当走<b>显式的会话终止</b>，而不是依赖下一次隐式校验。</p>
+  <p><b>但 MCP 权限不同</b> —— 它每轮都要复查，见 <a href="#s8">§08</a>。</p>
+</div>
+</section>
+
+<!-- ───────────────────────── 4 ───────────────────────── -->
+<section id="s4">
+<h2><span class="num">04</span>MCP：两个正交的问题</h2>
+
+<div class="callout danger">
+  <span class="label">「MCP 权限授予 Agent 还是个人」这个问法本身混了两件事</span>
+  <p>拆开之后答案就清楚了：</p>
+  <table style="margin:12px 0 0">
+    <thead><tr><th style="width:130px"></th><th style="width:210px">回答什么</th><th>由谁决定</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>访问权</b></td><td>能不能用这个 server</td>
+        <td class="maybe"><b>Agent 配置 ∩ 用户授权</b></td>
+      </tr>
+      <tr>
+        <td><b>数据权</b></td><td>用它能看到哪些数据</td>
+        <td class="maybe">由 <code>credential_scope</code> 决定（<a href="#s5">§05</a>）</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<h3>访问权为什么必须取交集</h3>
+
+<table>
+  <thead><tr><th style="width:190px">只看一边</th><th>会出什么问题</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><b>只授予 Agent</b><br><span style="color:var(--dim);font-size:12px">Agent 配了就能用</span></td>
+      <td class="no">用户只要能用某个配了敏感 server 的 Agent，就能通过它越权。<b>Agent 成了提权通道</b> —— 而 Agent 的配置是管理员做的，他未必考虑过每个使用者的权限</td>
+    </tr>
+    <tr>
+      <td><b>只授予个人</b><br><span style="color:var(--dim);font-size:12px">用户有权就能用</span></td>
+      <td class="no">Agent 的能力边界变得不确定。一个为「查文档」设计的 Agent，会因为某个用户恰好有数据库权限而突然能查库 —— <b>Agent 的行为不再由它的定义决定</b></td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout rule">
+  <span class="label">两边各自表达不同的意图</span>
+  <p><b>Agent 配置 = 能力边界</b>：这个 Agent 设计上该用哪些工具。它由 Agent 定义者决定，是产品设计的一部分。</p>
+  <p><b>用户授权 = 行使边界</b>：这个人有没有资格触达这些系统。它由组织的权限体系决定，与 Agent 无关。</p>
+  <p>两者是<b>正交的意图</b>，所以必须都满足：<code>有效 server = Agent.mcp_servers ∩ 用户被授予的 server</code>。</p>
+</div>
+
+<h3>后果：同一个 Agent，不同用户的工具集不同</h3>
+<p>这是交集模型的直接结果，也是它<b>唯一需要产品上处理的代价</b>：用户 A 和用户 B 用同一个 Agent 问同样的问题，可能得到不同答案，因为 A 能调 GitHub 而 B 不能。</p>
+
+<div class="callout warn">
+  <span class="label">必须让用户知道，否则就是「时灵时不灵」</span>
+  <p>如果不告知，用户 B 只会觉得这个 Agent 有时候能查代码有时候不能。<b>能力缺失必须归因</b>：</p>
+  <ul style="margin-bottom:0">
+    <li>会话界面上标出「本 Agent 的部分工具因权限未启用」，并给出申请入口</li>
+    <li>模型侧也要知道 —— 否则它会尝试调用一个不存在的工具，或者编造做不到的理由</li>
+  </ul>
+</div>
+</section>
+
+<!-- ───────────────────────── 5 ───────────────────────── -->
+<section id="s5">
+<h2><span class="num">05</span>凭证作用域决定严格程度</h2>
+
+<figure>
+<svg viewBox="0 0 900 410" role="img" aria-labelledby="figQ-t figQ-d" font-family="var(--sans)">
+  <title id="figQ-t">有效 MCP 权限的推导</title>
+  <desc id="figQ-d">平台提供、租户启用、用户授予三层取交集得到有效 server 集合；每个 server 的数据权则由凭证作用域决定：platform 凭证下访问权是唯一防线，user 凭证下 OAuth 本身就是权限边界。</desc>
+  <defs>
+    <marker id="arQ" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#94A3B8"/>
+    </marker>
+  </defs>
+
+  <rect x="24" y="24" width="260" height="66" rx="8" fill="#0E1223" stroke="#334155"/>
+  <text x="154" y="50" text-anchor="middle" fill="#F8FAFC" font-size="12.5" font-weight="600">① 平台提供</text>
+  <text x="154" y="70" text-anchor="middle" fill="#64748B" font-size="9.5">平台注册的 server</text>
+
+  <rect x="320" y="24" width="260" height="66" rx="8" fill="#0E1223" stroke="#334155"/>
+  <text x="450" y="50" text-anchor="middle" fill="#F8FAFC" font-size="12.5" font-weight="600">② Agent 配置</text>
+  <text x="450" y="70" text-anchor="middle" fill="#64748B" font-size="9.5">能力边界</text>
+
+  <rect x="616" y="24" width="260" height="66" rx="8" fill="#0E1223" stroke="#334155"/>
+  <text x="746" y="50" text-anchor="middle" fill="#F8FAFC" font-size="12.5" font-weight="600">③ 用户授权</text>
+  <text x="746" y="70" text-anchor="middle" fill="#64748B" font-size="9.5">行使边界</text>
+
+  <path d="M154 90 C 154 120 300 120 380 146" fill="none" stroke="#94A3B8" stroke-width="1.4" marker-end="url(#arQ)"/>
+  <line x1="450" y1="90" x2="450" y2="146" stroke="#94A3B8" stroke-width="1.4" marker-end="url(#arQ)"/>
+  <path d="M746 90 C 746 120 600 120 520 146" fill="none" stroke="#94A3B8" stroke-width="1.4" marker-end="url(#arQ)"/>
+
+  <rect x="290" y="146" width="320" height="60" rx="8" fill="#0E1223" stroke="#22C55E" stroke-opacity=".6"/>
+  <text x="450" y="172" text-anchor="middle" fill="#22C55E" font-size="13" font-weight="600">有效 server 集合 = ① ∩ ② ∩ ③</text>
+  <text x="450" y="192" text-anchor="middle" fill="#64748B" font-size="9.5">访问权 —— 解决「能不能用」</text>
+
+  <path d="M450 206 L450 238 M240 238 L660 238" fill="none" stroke="#94A3B8" stroke-width="1.4"/>
+  <line x1="240" y1="238" x2="240" y2="272" stroke="#94A3B8" stroke-width="1.4" marker-end="url(#arQ)"/>
+  <line x1="660" y1="238" x2="660" y2="272" stroke="#94A3B8" stroke-width="1.4" marker-end="url(#arQ)"/>
+  <text x="450" y="232" text-anchor="middle" fill="#64748B" font-size="9.5">每个 server 再看数据权</text>
+
+  <rect x="80" y="272" width="320" height="110" rx="8" fill="#0E1223" stroke="#EF4444" stroke-opacity=".5"/>
+  <text x="240" y="298" text-anchor="middle" fill="#EF4444" font-size="12.5" font-weight="600">credential_scope = platform</text>
+  <line x1="100" y1="310" x2="380" y2="310" stroke="#232B3D"/>
+  <text x="240" y="332" text-anchor="middle" fill="#F8FAFC" font-size="11">所有用户共享同一套数据权</text>
+  <text x="240" y="354" text-anchor="middle" fill="#EF4444" font-size="10.5">访问权是唯一防线 → 必须严控</text>
+  <text x="240" y="372" text-anchor="middle" fill="#64748B" font-size="9.5">适合：对所有人相同的数据</text>
+
+  <rect x="500" y="272" width="320" height="110" rx="8" fill="#0E1223" stroke="#22C55E" stroke-opacity=".5"/>
+  <text x="660" y="298" text-anchor="middle" fill="#22C55E" font-size="12.5" font-weight="600">credential_scope = user</text>
+  <line x1="520" y1="310" x2="800" y2="310" stroke="#232B3D"/>
+  <text x="660" y="332" text-anchor="middle" fill="#F8FAFC" font-size="11">各用户用自己的 OAuth 凭证</text>
+  <text x="660" y="354" text-anchor="middle" fill="#22C55E" font-size="10.5">OAuth 本身就是边界 → 可宽松</text>
+  <text x="660" y="372" text-anchor="middle" fill="#64748B" font-size="9.5">适合：因用户而异的数据</text>
+</svg>
+<figcaption><b>访问权与数据权是串联的两道关，但严格程度可以互补。</b><code>platform</code> 凭证下，一旦放行就能看到平台 token 能看的一切，访问权是唯一防线；<code>user</code> 凭证下，OAuth 授权范围已经限定了数据，访问权可以只做「这个 Agent 该不该用它」的判断。</figcaption>
+</figure>
+
+<div class="callout rule">
+  <span class="label">一条实用规则</span>
+  <p><b><code>platform</code> 作用域的 server，访问权必须严格控制；<code>user</code> 作用域的，访问权可以宽松。</b></p>
+  <p>这不是偷懒 —— 而是因为 <code>user</code> 作用域下<b>越权在结构上不可能发生</b>：用户没授权就调不通，授权了也只能看到 OAuth 允许的范围。多加一层访问权控制只是在做重复的事。</p>
+  <p>反过来，<code>platform</code> 作用域下访问权一旦放行，就没有第二道关了。<a href="mcp.html#s6">MCP 管理 §06</a> 的判断标准在这里再强调一次：<b>这个 server 访问的数据是否因用户而异？是的话就该用 <code>user</code> 作用域，而不是靠访问权去补。</b></p>
+</div>
+</section>
+
+<!-- ───────────────────────── 6 ───────────────────────── -->
+<section id="s6">
+<h2><span class="num">06</span>技能不做独立授权</h2>
+
+<div class="callout rule">
+  <span class="label">技能随 Agent 走，不单独授予用户</span>
+  <p>用户能不能用某个技能 = 他能不能用挂了这个技能的 Agent。<b>不设技能级的用户授权。</b></p>
+</div>
+
+<h3>三条理由</h3>
+<ul>
+  <li><b>技能不提供新的执行能力</b> —— 它是「怎么做」的指引，真正的能力来自工具与 MCP。控制了那两处，技能层再加一道是重复的。</li>
+  <li><b>模型自主选择，授权难以生效</b> —— 技能是模型按 description 自己挑的（<a href="skill.html#s8">技能管理 §08</a>）。在模型选择的那一刻做权限判断，要么把没权限的技能从索引里摘掉（那等于按用户改变 Agent 行为），要么选中后再拒绝（模型会困惑并重试）。两种都不好。</li>
+  <li><b>会让「Agent 对不同用户表现不同」的复杂度进一步上升</b> —— MCP 的交集模型已经引入了这个代价（<a href="#s4">§04</a>），再叠一层技能维度，同一个 Agent 的实际行为将变得难以预测与支持。</li>
+</ul>
+
+<div class="callout warn">
+  <span class="label">真需要区分时，拆成两个 Agent</span>
+  <p>如果某个技能涉及敏感操作（比如「发布到生产环境」），正确做法是<b>把它拆到一个单独的 Agent</b>，用 Agent 权限控制谁能用 —— 而不是在技能层做授权。</p>
+  <p>这样 Agent 的能力边界仍然由它的定义完整决定，权限模型也不需要多一个维度。<b>多一个 Agent 的成本，远低于让技能层也变得因人而异。</b></p>
+</div>
+
+<h3>技能仍然需要的两种管控</h3>
+<table>
+  <thead><tr><th style="width:170px">管控</th><th>性质</th></tr></thead>
+  <tbody>
+    <tr><td><b>租户可见性</b></td><td>资源归属，不是用户授权。租户自建的技能只对本租户可见（<a href="skill.html#s10">技能管理 §10</a>）</td></tr>
+    <tr><td><b>安全审查</b></td><td>内容管控，不是权限。技能含可执行脚本，审查按代码审查做（<a href="skill.html#s5">技能管理 §05</a>）</td></tr>
+  </tbody>
+</table>
+</section>
+
+<!-- ───────────────────────── 7 ───────────────────────── -->
+<section id="s7">
+<h2><span class="num">07</span>有效工具集的计算</h2>
+
+<pre><code><span class="tok-k">def</span> effective_mcp_servers(agent, session):
+    configured = <span class="tok-k">set</span>(agent.mcp_servers)              <span class="tok-c"># 能力边界</span>
+    tenant_ok  = enabled_for_tenant(session.tenant_id)   <span class="tok-c"># 租户启用</span>
+    user_ok    = granted_to_user(session.user_id)        <span class="tok-c"># 行使边界</span>
+
+    servers = configured & tenant_ok & user_ok
+
+    <span class="tok-c"># user 作用域的 server，还要检查该用户是否已完成 OAuth</span>
+    <span class="tok-k">return</span> [s <span class="tok-k">for</span> s <span class="tok-k">in</span> servers
+            <span class="tok-k">if</span> s.credential_scope == <span class="tok-s">"platform"</span>
+            <span class="tok-k">or</span> has_valid_credential(session.user_id, s)]</code></pre>
+
+<h3>被过滤掉的工具，怎么告诉模型</h3>
+<table>
+  <thead><tr><th style="width:170px">方式</th><th style="width:150px">安全性</th><th>体验</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><b>完全过滤</b><br><span style="color:var(--dim);font-size:12px">工具不出现在定义里</span></td>
+      <td class="yes">不暴露存在性</td>
+      <td class="no">模型不知道有这回事，只会说「我做不到」，用户不知道是能力问题还是权限问题</td>
+    </tr>
+    <tr>
+      <td><b>保留但拒绝</b><br><span style="color:var(--dim);font-size:12px">调用时返回权限错误</span></td>
+      <td class="no">暴露了工具存在</td>
+      <td class="yes">模型能说「这需要 GitHub 授权，请到设置里连接」</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout rule">
+  <span class="label">按 server 的敏感度选，不是全局二选一</span>
+  <p><b>未授权（OAuth 没连）</b>→ 保留并明确报错。用户本来就该知道这个能力存在，只是需要授权。</p>
+  <p><b>无权限（角色未授予）</b>→ 完全过滤。这种情况下「有这个工具但你不能用」本身就是不该泄露的信息 —— 尤其当 server 名字能透露内部系统的存在时。</p>
+  <p>区分依据是<b>「不知道它存在」会不会造成困惑</b>：前者会（用户自己能解决），后者不会（本来就不该他用）。</p>
+</div>
+</section>
+
+<!-- ───────────────────────── 8 ───────────────────────── -->
+<section id="s8">
+<h2><span class="num">08</span>校验点</h2>
+
+<table>
+  <thead><tr><th style="width:170px">时机</th><th style="width:170px">校验什么</th><th>为什么在这里</th></tr></thead>
+  <tbody>
+    <tr><td><b>建会话时</b></td><td>Agent 权限</td><td>一次性，之后不复查（<a href="#s3">§03</a>）</td></tr>
+    <tr><td><b>每轮装配时</b></td><td class="yes">MCP 有效集合</td><td>权限变更要能<b>当轮生效</b></td></tr>
+    <tr><td><b>网关调用时</b></td><td class="yes">再校验一次</td><td>纵深防御，见下</td></tr>
+  </tbody>
+</table>
+
+<div class="callout warn">
+  <span class="label">MCP 权限必须每轮复查，与 Agent 不同</span>
+  <p>Agent 权限在建会话后不再复查（为了会话一致性），但 <b>MCP 权限每轮都要重算</b>。理由是两者的风险不对称：</p>
+  <ul style="margin-bottom:0">
+    <li>Agent 权限被收回，最坏是这个人继续用一个他不该用的 Agent 聊天</li>
+    <li><b>MCP 权限被收回，意味着他还能继续读不该读的数据</b></li>
+  </ul>
+  <p>对 <code>native</code> 每轮重新装配工具集是天然的（每轮都在构造 agent）。对 <code>acp</code> 麻烦一些 —— <code>mcpServers</code> 是建会话时传入的快照（<a href="mcp.html#s5">MCP 管理 §05</a>），所以<b>撤销必须在网关侧生效</b>，见下。</p>
+</div>
+
+<h3>网关是最后一道，也是 acp 唯一的一道</h3>
+<p>Higress 在每次 MCP 调用时用 <code>session-scoped-token</code> 解析身份，再校验一次访问权。这既是纵深防御，也是 <code>acp</code> 类型撤销权限的唯一手段 —— 因为它的工具列表在会话开始时就固定了，改注册表或改 Agent 配置都影响不到进行中的会话。</p>
+
+<div class="callout danger">
+  <span class="label">身份只能由网关从令牌解析</span>
+  <p>与记忆服务同一条规则（<a href="memory.html#s9">记忆 §09</a>）：<b><code>user_id</code> 绝不能出现在工具参数或请求体里</b>，网关解析后强制覆盖，收到的同名字段一律丢弃。</p>
+  <p>否则模型在处理不可信文本（代码仓库、网页、工具输出）时可能被诱导指定他人身份 —— 而权限检查会老老实实按那个身份放行。</p>
+</div>
+</section>
+
+<!-- ───────────────────────── 9 ───────────────────────── -->
+<section id="s9">
+<h2><span class="num">09</span>委派不提权</h2>
+
+<div class="callout danger">
+  <span class="label">subagent 用发起用户的权限，不是被委派 Agent 的权限</span>
+  <p><code>native</code> Agent 可以把任务委派给其他 Agent，包括 <code>acp</code> 类型（<a href="native.html#s7">native Agent §07</a>）。如果 subagent 按<b>它自己的</b>配置获得权限，委派就成了一条提权路径：</p>
+  <pre style="margin:10px 0"><code>用户 U 无 github 权限
+  → 用 Agent A（无 github）建会话
+  → A 委派给 Agent B（配了 github）
+  → <span class="tok-w">B 读到了 U 无权访问的数据</span></code></pre>
+  <p>而这条路径<b>模型可以自己发起</b>，甚至可能被提示词注入诱导。</p>
+</div>
+
+<h3>规则</h3>
+<pre><code>subagent 的有效权限 = <span class="tok-s">发起会话的用户</span>的权限
+                     ∩ subagent 自身 Agent 配置
+                     <span class="tok-w">∩ 父 Agent 的可委派白名单</span></code></pre>
+
+<ul>
+  <li><b>用户权限不变</b> —— 委派链条再长，能触达的数据始终不超过发起人的权限</li>
+  <li><b>可委派白名单</b> —— 在父 Agent 定义里声明能派给谁（<a href="native.html#s6">native Agent §06</a>），<b>不让模型自由选任意 <code>agent_id</code></b></li>
+  <li><b>递归同样受限</b> —— subagent 再委派时规则一样，且受深度上限约束</li>
+</ul>
+
+<div class="callout warn">
+  <span class="label">用户凭证要能传递到 subagent</span>
+  <p><code>user</code> 作用域的 MCP server 需要该用户的 OAuth 凭证。subagent（尤其是跑在独立 Pod 里的 <code>acp</code> subagent）调用时，网关要能从它的 <code>session-scoped-token</code> 解析出<b>同一个发起用户</b>。</p>
+  <p>所以委派时签发的令牌必须<b>携带原始用户身份</b>，而不是重新以「系统」身份签发。这一点做错了，表现是 subagent 的 <code>user</code> 作用域工具全部调不通 —— 或者更糟，以平台身份调通了。</p>
+</div>
+</section>
+
+<!-- ───────────────────────── 10 ──────────────────────── -->
+<section id="s10">
+<h2><span class="num">10</span>审计</h2>
+
+<h3>要留痕的三类事件</h3>
+<table>
+  <thead><tr><th style="width:170px">事件</th><th>记录什么</th></tr></thead>
+  <tbody>
+    <tr><td><b>授权变更</b></td><td>谁在什么时候给谁授予/收回了什么。这是权限体系里最需要回溯的东西</td></tr>
+    <tr><td><b>拒绝</b></td><td class="yes"><b>被拒绝的访问尤其要记</b> —— 大量拒绝可能是配置错误，也可能是探测行为</td></tr>
+    <tr><td><b>实际调用</b></td><td>谁、经哪个 Agent、调了哪个 server 的哪个工具。经 Higress 统一采集</td></tr>
+  </tbody>
+</table>
+
+<div class="callout rule">
+  <span class="label">审计要能回答「这个数据是怎么被访问的」</span>
+  <p>出了数据泄露事件时，需要追的链路是：<b>哪个用户 → 哪个会话 → 哪个 Agent → （可能经过哪个 subagent）→ 哪个 MCP server → 什么数据</b>。</p>
+  <p>这条链路上每一环都要有记录，且能用 <code>session_id</code> / <code>run_id</code> 串起来（<a href="observability.html#s6">可观测性 §06</a>）。<b>缺任何一环，事后都说不清楚。</b>尤其是委派 —— 如果不记录 subagent 是被谁派出去的，链路就断在中间。</p>
+</div>
+
+<h3>与可观测性的分工</h3>
+<p>审计日志与遥测<b>不是同一套数据</b>：遥测可采样、可设 TTL、为排查性能而生；审计必须全量、长期保留、为追责而生。</p>
+<p>实现上可以共用采集管道（都经 Collector），但<b>存储与保留策略必须分开</b>。把审计记录混在会被采样丢弃的 trace 里，是个到用时才会发现的错误。</p>
+</section>
+
+<!-- ───────────────────────── 11 ──────────────────────── -->
+<section id="s11">
+<h2><span class="num">11</span>待验证清单</h2>
+
+<table>
+  <thead><tr><th style="width:60px">#</th><th style="width:250px">验证项</th><th>影响</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><b>1</b></td>
+      <td><b>Higress 能否在每次 MCP 调用时做访问权校验</b> —— 而不只是转发</td>
+      <td class="no">这是 <code>acp</code> 撤销权限的唯一手段（<a href="#s8">§08</a>），做不到就无法在会话中途收回权限</td>
+    </tr>
+    <tr>
+      <td><b>2</b></td>
+      <td>委派时的令牌签发 —— 能否携带原始用户身份并被网关正确解析</td>
+      <td class="no"><a href="#s9">§09</a> 的核心，做错了会导致提权或功能不可用</td>
+    </tr>
+    <tr>
+      <td><b>3</b></td>
+      <td>每轮重算有效工具集的开销 —— 权限查询是否会拖慢装配</td>
+      <td class="maybe">决定是否需要带失效的权限缓存</td>
+    </tr>
+    <tr>
+      <td><b>4</b></td>
+      <td>「部分工具不可用」的提示对模型行为的影响 —— 会不会导致它反复尝试或胡乱解释</td>
+      <td class="maybe">决定 <a href="#s7">§07</a> 的告知方式与措辞</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>建议的实现顺序</h3>
+<ol class="body">
+  <li><b>先做 Agent 权限 + 三层可见性</b> —— 最简单，且是所有资源的公共基础。</li>
+  <li><b>再做 MCP 访问权的交集计算</b> —— <code>native</code> 侧先跑通，因为它每轮装配天然支持。</li>
+  <li><b>然后是网关侧校验</b> —— <code>acp</code> 的权限撤销依赖它，且必须先完成 §11 第 1 项验证。</li>
+  <li><b>委派的权限传递最后</b> —— 在 subagent 功能上线之前完成即可，但<b>不能晚于它</b>。</li>
+</ol>
+</section>
+
+<footer>
+  <p>相关文档：<a href="agent.html">Agent 管理设计</a> · <a href="mcp.html">MCP 管理设计</a>（凭证作用域）· <a href="skill.html">技能管理设计</a> · <a href="native.html#s7">native Agent §07</a>（委派）· <a href="memory.html#s9">记忆 §09</a>（同一条身份规则）。</p>
+</footer>
+
+</main>
+</div>
+</body>
+</html>

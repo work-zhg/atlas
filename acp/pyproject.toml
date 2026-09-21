@@ -1,0 +1,22 @@
+[project]
+name = "atlas-acp"
+version = "0.1.0"
+description = "Atlas ACP wire protocol — shared by server and the in-Pod bridge."
+requires-python = ">=3.13"
+
+# ★ 零重依赖是硬约束，不是偏好。
+#
+#   本包会被装进 **Pod 镜像**（bridge 依赖它）。多一个依赖就是每个会话 Pod
+#   多拉一层字节、多一个 CVE 面。尤其不许出现 sqlalchemy / fastapi / langchain
+#   —— 那会把整个 server 依赖树拖进 Pod。
+#
+#   守卫：import-linter 的「atlas_acp 不得依赖任何本仓其它包」contract
+#   + tests/test_acp_wire.py 的子进程 import 探测。
+dependencies = ["pydantic>=2.9"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/atlas_acp"]

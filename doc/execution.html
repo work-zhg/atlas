@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>执行环境管理设计 · AI Platform</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="sitenav">
+  <a class="brand" href="./">AI&nbsp;<b>Platform</b>&nbsp;/ 设计文档</a>
+  <div class="links">
+    <a href="./">目录</a>
+    <a href="detail/">详细设计</a>
+    <a href="architecture.html">系统架构</a>
+    <a href="agent.html">Agent 管理</a>
+    <a href="skill.html">技能管理</a>
+    <a href="mcp.html">MCP 管理</a>
+    <a href="permission.html">权限管理</a>
+    <a class="on" href="execution.html">执行环境</a>
+    <a href="session.html">会话管理</a>
+    <a href="native.html">native Agent</a>
+    <a href="runtime.html">运行时链路</a>
+    <a href="local.html">本地部署</a>
+    <a href="memory.html">记忆</a>
+    <a href="observability.html">可观测性</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+<nav class="toc" aria-label="目录">
+  <div class="eyebrow">本页</div>
+  <ol>
+    <li><a href="#s1">定位与边界</a></li>
+    <li><a href="#s2">三类执行环境，一套抽象</a></li>
+    <li><a href="#s3">模板管理</a></li>
+    <li><a href="#s4">渲染：模板 + launch</a></li>
+    <li><a href="#s5">生命周期状态机</a></li>
+    <li><a href="#s6">卷编排</a></li>
+    <li><a href="#s7">调度与配额</a></li>
+    <li><a href="#s8">连接注册表</a></li>
+    <li><a href="#s9">故障处理</a></li>
+    <li><a href="#s10">本地设备的特殊性</a></li>
+    <li><a href="#s11">待验证清单</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<header class="hero">
+  <p class="kicker">Execution Environment</p>
+  <h1>执行环境管理设计</h1>
+  <p class="lede">Pod 模板与生命周期的归属组件。它为三类执行环境 —— <code>acp</code> 的 CLI Pod、<code>native</code> 的 sandbox Pod、用户的本地设备 —— 提供<b>同一套抽象</b>，让上层只需要问「这个会话在哪执行、准备好了没有」。</p>
+  <div class="meta">
+    <span>模板</span><span>生命周期</span><span>卷编排</span><span>配额</span><span>连接注册</span>
+  </div>
+</header>
+
+<!-- ───────────────────────── 1 ───────────────────────── -->
+<section id="s1">
+<h2><span class="num">01</span>定位与边界</h2>
+
+<div class="callout rule">
+  <span class="label">这个组件解决的是「归属」问题</span>
+  <p>Pod 的创建、回收、目录结构、卷挂载，此前散落在<a href="runtime.html#s9">运行时链路 §09</a>（<code>acp</code> 的 K8s 管理）与 <a href="native.html#s3">native Agent §03</a>（sandbox Pod）两处 —— <b>描述了该怎么做，却没有组件拥有它</b>。</p>
+  <p>结果是两套几乎相同的生命周期逻辑会被分别实现：一套在 <code>acp</code> 链路里，一套在 <code>native</code> 链路里。而它们要处理的问题完全一样：模板、配额、就绪探测、idle 回收、卷分配、异常重建。</p>
+</div>
+
+<h3>职责</h3>
+<ul>
+  <li><b>模板管理</b> —— 各类执行环境的 Pod 骨架：镜像基线、资源、探针、安全上下文、网络策略</li>
+  <li><b>生命周期</b> —— 创建、就绪、健康、空闲回收、销毁、异常重建</li>
+  <li><b>卷编排</b> —— 按会话分配 OSS / NAS 前缀并挂载</li>
+  <li><b>调度与配额</b> —— 租户上限、并发控制、优先级、预热池</li>
+  <li><b>连接注册</b> —— <code>session → 执行位置</code> 的唯一真相</li>
+</ul>
+
+<h3>不在本文范围</h3>
+<ul>
+  <li>Pod 内部的进程与协议 —— <code>acp</code> 见<a href="runtime.html">运行时链路</a>，<code>native</code> 见 <a href="native.html">native Agent</a></li>
+  <li>具体的目录结构语义 —— 本文只管挂载，语义归各自的文档</li>
+  <li>设备配对与信任 —— 见<a href="local.html#s3">本地部署 §03</a></li>
+</ul>
+</section>
+
+<!-- ───────────────────────── 2 ───────────────────────── -->
+<section id="s2">
+<h2><span class="num">02</span>三类执行环境，一套抽象</h2>
+
+<figure>
+<svg viewBox="0 0 900 430" role="img" aria-labelledby="figE-t figE-d" font-family="var(--sans)">
+  <title id="figE-t">执行环境的模板渲染与三类目标</title>
+  <desc id="figE-d">模板库与 Agent 定义里的 launch 配置合并渲染成 Pod spec，作用于 acp CLI Pod 与 native sandbox Pod；本地设备不适用模板，由设备侧自行提供环境。</desc>
+  <defs>
+    <marker id="arE" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#94A3B8"/>
+    </marker>
+    <marker id="arEd" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#475569"/>
+    </marker>
+  </defs>
+
+  <rect x="80" y="24" width="270" height="66" rx="8" fill="#0E1223" stroke="#F59E0B" stroke-opacity=".55"/>
+  <text x="215" y="50" text-anchor="middle" fill="#F59E0B" font-size="12.5" font-weight="600">模板库</text>
+  <text x="215" y="70" text-anchor="middle" fill="#64748B" font-size="9.5">安全基线 · 资源 · 探针 · 卷结构</text>
+
+  <rect x="550" y="24" width="270" height="66" rx="8" fill="#0E1223" stroke="#38BDF8" stroke-opacity=".55"/>
+  <text x="685" y="50" text-anchor="middle" fill="#38BDF8" font-size="12.5" font-weight="600">agent.launch</text>
+  <text x="685" y="70" text-anchor="middle" fill="#64748B" font-size="9.5">镜像 · command · args · env</text>
+
+  <path d="M215 90 C 215 118 360 118 400 140" fill="none" stroke="#94A3B8" stroke-width="1.4" marker-end="url(#arE)"/>
+  <path d="M685 90 C 685 118 540 118 500 140" fill="none" stroke="#94A3B8" stroke-width="1.4" marker-end="url(#arE)"/>
+
+  <rect x="320" y="140" width="260" height="60" rx="8" fill="#0E1223" stroke="#22C55E" stroke-opacity=".6"/>
+  <text x="450" y="166" text-anchor="middle" fill="#22C55E" font-size="13" font-weight="600">渲染 → Pod spec</text>
+  <text x="450" y="186" text-anchor="middle" fill="#64748B" font-size="9.5">平台管基线，Agent 管业务</text>
+
+  <path d="M450 200 L450 232 M154 232 L450 232" fill="none" stroke="#94A3B8" stroke-width="1.4"/>
+  <line x1="154" y1="232" x2="154" y2="264" stroke="#94A3B8" stroke-width="1.4" marker-end="url(#arE)"/>
+  <line x1="450" y1="232" x2="450" y2="264" stroke="#94A3B8" stroke-width="1.4" marker-end="url(#arE)"/>
+  <path d="M580 170 C 700 170 746 200 746 260" fill="none" stroke="#475569" stroke-width="1.4" stroke-dasharray="4 4" marker-end="url(#arEd)"/>
+  <text x="700" y="212" fill="#64748B" font-size="9">不适用模板</text>
+
+  <rect x="24" y="264" width="260" height="128" rx="8" fill="#0E1223" stroke="#A78BFA" stroke-opacity=".55"/>
+  <text x="154" y="290" text-anchor="middle" fill="#A78BFA" font-size="12.5" font-weight="600">acp · CLI Pod</text>
+  <line x1="44" y1="302" x2="264" y2="302" stroke="#232B3D"/>
+  <text x="154" y="324" text-anchor="middle" fill="#F8FAFC" font-size="10.5">Bridge + adapter + CLI</text>
+  <text x="154" y="344" text-anchor="middle" fill="#94A3B8" font-size="10">工作区 OSS · 状态 NAS</text>
+  <text x="154" y="366" text-anchor="middle" fill="#64748B" font-size="9.5">会话级 · idle 回收</text>
+
+  <rect x="320" y="264" width="260" height="128" rx="8" fill="#0E1223" stroke="#F59E0B" stroke-opacity=".55"/>
+  <text x="450" y="290" text-anchor="middle" fill="#F59E0B" font-size="12.5" font-weight="600">native · sandbox Pod</text>
+  <line x1="340" y1="302" x2="560" y2="302" stroke="#232B3D"/>
+  <text x="450" y="324" text-anchor="middle" fill="#F8FAFC" font-size="10.5">sandbox 守护进程</text>
+  <text x="450" y="344" text-anchor="middle" fill="#94A3B8" font-size="10">工作区 OSS · 技能只读卷</text>
+  <text x="450" y="366" text-anchor="middle" fill="#22C55E" font-size="9.5">会话级 · <b>按需创建</b></text>
+
+  <rect x="616" y="264" width="260" height="128" rx="8" fill="#0B0F1E" stroke="#334155" stroke-dasharray="5 4"/>
+  <text x="746" y="290" text-anchor="middle" fill="#CBD5E1" font-size="12.5" font-weight="600">本地设备</text>
+  <line x1="636" y1="302" x2="856" y2="302" stroke="#232B3D"/>
+  <text x="746" y="324" text-anchor="middle" fill="#94A3B8" font-size="10.5">用户机器上的 Bridge</text>
+  <text x="746" y="344" text-anchor="middle" fill="#94A3B8" font-size="10">环境由用户提供</text>
+  <text x="746" y="366" text-anchor="middle" fill="#EF4444" font-size="9.5">不可信 · 见 §10</text>
+</svg>
+<figcaption><b>三类环境共享生命周期与连接抽象，只在「怎么把它准备好」这一步分叉。</b>前两类由我们渲染 Pod spec 并创建；本地设备我们只能等它连上来。但对上层而言，它们都是<b>一个可以执行、可以就绪、可以失联的 Runtime</b>。</figcaption>
+</figure>
+
+<h3>Runtime 对象</h3>
+<pre><code><span class="tok-k">CREATE TABLE</span> runtimes (
+  runtime_id    <span class="tok-n">TEXT</span>        <span class="tok-k">PRIMARY KEY</span>,
+  session_id    <span class="tok-n">TEXT</span>        <span class="tok-k">NOT NULL</span>,
+  kind          <span class="tok-n">TEXT</span>        <span class="tok-k">NOT NULL</span>,   <span class="tok-w">-- acp_pod | native_sandbox | device</span>
+  state         <span class="tok-n">TEXT</span>        <span class="tok-k">NOT NULL</span>,   <span class="tok-c">-- §05</span>
+
+  <span class="tok-c">-- Pod 类（kind != device）</span>
+  template_id   <span class="tok-n">TEXT</span>,
+  template_ver  <span class="tok-n">INT</span>,
+  pod_name      <span class="tok-n">TEXT</span>,
+  node          <span class="tok-n">TEXT</span>,
+
+  <span class="tok-c">-- device 类</span>
+  device_id     <span class="tok-n">TEXT</span>,
+
+  <span class="tok-c">-- 通用</span>
+  endpoint      <span class="tok-n">TEXT</span>,                   <span class="tok-c">-- 连接地址或连接句柄</span>
+  volumes       <span class="tok-n">JSONB</span>,                  <span class="tok-c">-- 已分配的 OSS / NAS 前缀（§06）</span>
+  created_at    <span class="tok-n">TIMESTAMPTZ</span> <span class="tok-k">NOT NULL</span>,
+  ready_at      <span class="tok-n">TIMESTAMPTZ</span>,
+  last_active   <span class="tok-n">TIMESTAMPTZ</span>,
+  terminated_at <span class="tok-n">TIMESTAMPTZ</span>
+);
+
+<span class="tok-c">-- 一个会话同时只有一个活跃 runtime</span>
+<span class="tok-k">CREATE UNIQUE INDEX</span> uq_runtime_active <span class="tok-k">ON</span> runtimes (session_id)
+  <span class="tok-k">WHERE</span> state <span class="tok-k">NOT IN</span> (<span class="tok-s">'terminated'</span>, <span class="tok-s">'failed'</span>);</code></pre>
+
+<p><code>runtimes</code> 是 <a href="local.html#s2">本地部署 §02</a> 说的「连接注册表」的落地 —— 它把 <code>session → Pod</code> 与 <code>session → 设备连接</code> 收敛成同一张表，见 <a href="#s8">§08</a>。</p>
+</section>
+
+<!-- ───────────────────────── 3 ───────────────────────── -->
+<section id="s3">
+<h2><span class="num">03</span>模板管理</h2>
+
+<p>模板是某类执行环境的<b>通用骨架</b>。它回答的不是「跑什么」，而是「在什么条件下跑」。</p>
+
+<pre><code><span class="tok-k">CREATE TABLE</span> runtime_templates (
+  template_id   <span class="tok-n">TEXT</span>        <span class="tok-k">NOT NULL</span>,
+  version       <span class="tok-n">INT</span>         <span class="tok-k">NOT NULL</span>,
+  kind          <span class="tok-n">TEXT</span>        <span class="tok-k">NOT NULL</span>,   <span class="tok-c">-- acp_pod | native_sandbox</span>
+  cli_type      <span class="tok-n">TEXT</span>,                   <span class="tok-c">-- acp_pod: claude-code | codex …</span>
+
+  base_image    <span class="tok-n">TEXT</span>,                   <span class="tok-c">-- 基础镜像（可被 launch 覆盖）</span>
+  resources     <span class="tok-n">JSONB</span>       <span class="tok-k">NOT NULL</span>,   <span class="tok-c">-- requests / limits</span>
+  probes        <span class="tok-n">JSONB</span>       <span class="tok-k">NOT NULL</span>,   <span class="tok-c">-- 就绪与存活探针</span>
+  volumes       <span class="tok-n">JSONB</span>       <span class="tok-k">NOT NULL</span>,   <span class="tok-c">-- 卷结构与挂载点</span>
+  security      <span class="tok-n">JSONB</span>       <span class="tok-k">NOT NULL</span>,   <span class="tok-w">-- securityContext：非 root、只读根文件系统…</span>
+  network       <span class="tok-n">JSONB</span>       <span class="tok-k">NOT NULL</span>,   <span class="tok-w">-- NetworkPolicy：默认禁止出站</span>
+  grace_period  <span class="tok-n">INT</span>         <span class="tok-k">NOT NULL</span>,   <span class="tok-c">-- terminationGracePeriodSeconds</span>
+  idle_ttl      <span class="tok-n">INT</span>         <span class="tok-k">NOT NULL</span>,
+
+  created_by    <span class="tok-n">TEXT</span>        <span class="tok-k">NOT NULL</span>,
+  created_at    <span class="tok-n">TIMESTAMPTZ</span> <span class="tok-k">NOT NULL</span>,
+  <span class="tok-k">PRIMARY KEY</span> (template_id, version)
+);</code></pre>
+
+<div class="callout rule">
+  <span class="label">模板管安全基线，Agent 管业务</span>
+  <p>这条分工决定了谁能改什么：</p>
+  <table style="margin:12px 0 0">
+    <thead><tr><th style="width:170px"></th><th style="width:210px">模板（平台运维）</th><th>agent.launch（Agent 定义者）</th></tr></thead>
+    <tbody>
+      <tr><td><b>内容</b></td><td>探针、安全上下文、网络策略、资源上限、卷结构</td><td>镜像、command、args、env</td></tr>
+      <tr><td><b>改动影响</b></td><td>全部同类 Pod</td><td>仅该 Agent</td></tr>
+      <tr><td><b>谁负责</b></td><td>平台安全与运维</td><td>Agent 定义者</td></tr>
+    </tbody>
+  </table>
+  <p style="margin-top:12px">如果让 Agent 定义者能改 <code>securityContext</code> 或 <code>NetworkPolicy</code>，安全基线就形同虚设 —— <b>任何一个 Agent 的定义失误都会变成集群级的风险</b>。</p>
+</div>
+
+<h3>模板不被会话钉住</h3>
+<div class="callout warn">
+  <span class="label">与 Agent 版本的处理方式刻意不同</span>
+  <p><code>sessions.agent_version</code> 钉住 Agent 版本，因为 Agent 决定<b>行为</b>，用户能感知；而模板决定<b>运行条件</b>，用户感知不到，且更新通常是安全修复。</p>
+  <p>所以模板变更<b>不影响运行中的 Pod</b>（它已经创建了），但<b>下次重建时立即采用新版本</b>，不需要等 Agent 发版。<code>runtimes.template_ver</code> 记录实际用的版本，仅供审计与排查。</p>
+  <p>反过来如果钉住，一次安全基线更新就要等所有 Agent 逐个发版才能铺开 —— 那正是安全修复最不能接受的节奏。</p>
+</div>
+</section>
+
+<!-- ───────────────────────── 4 ───────────────────────── -->
+<section id="s4">
+<h2><span class="num">04</span>渲染：模板 + launch</h2>
+
+<pre><code><span class="tok-k">def</span> render_pod_spec(session, agent, template):
+    spec = template.to_pod_spec()
+
+    <span class="tok-c"># Agent 侧只能填这几处</span>
+    spec.image    = agent.launch.image  <span class="tok-k">or</span> template.base_image
+    spec.command  = agent.launch.command
+    spec.args     = agent.launch.args
+    spec.env     += render_env(agent.launch.env, session)
+
+    <span class="tok-c"># 会话相关，由本组件填</span>
+    spec.volumes  = allocate_volumes(session)           <span class="tok-c"># §06</span>
+    spec.labels   = { session_id, agent_id, tenant_id } <span class="tok-c"># 运维定位</span>
+    spec.env     += [
+        AGENT_ENDPOINT_TOKEN,         <span class="tok-c"># 接入控制（runtime §09）</span>
+        OTEL_EXPORTER_OTLP_ENDPOINT,  <span class="tok-c"># 可观测性（observability §05）</span>
+        OTEL_RESOURCE_ATTRIBUTES,     <span class="tok-c"># platform.session_id=…</span>
+    ]
+    <span class="tok-k">return</span> spec</code></pre>
+
+<div class="callout danger">
+  <span class="label">launch 里的字段必须校验，不能直接展开</span>
+  <p><code>agent.launch</code> 是 Agent 定义的一部分，虽然由管理员填写，但<b>它不该有能力覆盖模板的安全字段</b>。渲染时要：</p>
+  <ul style="margin-bottom:0">
+    <li><b>白名单字段</b> —— 只取 <code>image</code> / <code>command</code> / <code>args</code> / <code>env</code>，其余一律忽略</li>
+    <li><b>镜像来源校验</b> —— 只允许可信仓库，防止指向任意外部镜像</li>
+    <li><b>env 键名过滤</b> —— 禁止覆盖平台注入的键（令牌、OTel 配置），否则可以关掉遥测或伪造身份</li>
+  </ul>
+</div>
+
+<p>校验发生在 <b>Agent 发布时</b>（<a href="agent.html#s4">Agent 管理 §04</a> 的「三个时刻」），渲染时只是再确认一次 —— 但两处都要做，因为模板可能在 Agent 发布之后变更。</p>
+</section>
+
+<!-- ───────────────────────── 5 ───────────────────────── -->
+<section id="s5">
+<h2><span class="num">05</span>生命周期状态机</h2>
+
+<pre><code>            ┌─────────────────────────────────┐
+            ↓                                 │
+none ──→ provisioning ──→ ready ──→ active ⇄ idle
+            │                │         │       │
+            ↓                ↓         │       ↓ TTL 到期
+         failed          failed        └──→ terminating ──→ terminated</code></pre>
+
+<table>
+  <thead><tr><th style="width:150px">状态</th><th style="width:230px">含义</th><th>会话侧对应</th></tr></thead>
+  <tbody>
+    <tr><td><code>none</code></td><td>尚未创建</td><td><code>cold</code></td></tr>
+    <tr><td><code>provisioning</code></td><td>调度中、拉镜像、挂卷</td><td><code>starting</code></td></tr>
+    <tr><td><code>ready</code></td><td>探针通过，可接受连接</td><td rowspan="2"><code>active</code></td></tr>
+    <tr><td><code>active</code></td><td>有活跃 Run</td></tr>
+    <tr><td><code>idle</code></td><td>已就绪但无活跃 Run，计时中</td><td><code>active</code></td></tr>
+    <tr><td><code>terminating</code></td><td>优雅关闭中</td><td><code>cold</code></td></tr>
+    <tr><td><code>terminated</code></td><td>已销毁，卷保留</td><td><code>cold</code></td></tr>
+    <tr><td class="no"><code>failed</code></td><td>无法创建或不可恢复</td><td><code>cold</code> 或 <code>lost</code></td></tr>
+  </tbody>
+</table>
+
+<div class="callout rule">
+  <span class="label">runtime 消失 ≠ 会话丢失</span>
+  <p><code>terminated</code> 时会话是 <code>cold</code> 而不是 <code>lost</code> —— 因为<b>卷还在</b>（<a href="#s6">§06</a>），重建后工作区无损。</p>
+  <p>只有<b>卷也没了、或 CLI 侧的会话状态无法恢复</b>时才是 <code>lost</code>。这个区分很重要：<code>cold</code> 对用户应当完全透明（<a href="runtime.html#s10">运行时链路 §10</a>），<code>lost</code> 必须明确告知。把两者混为一谈，会导致每次 idle 回收都给用户弹一次「会话已重启」。</p>
+</div>
+
+<h3>创建时机：两类不同</h3>
+<table>
+  <thead><tr><th style="width:190px"></th><th style="width:210px">创建时机</th><th>理由</th></tr></thead>
+  <tbody>
+    <tr><td><code>acp_pod</code></td><td>会话首个 Run 提交时</td><td>CLI 就是 agent 本身，没它什么都做不了</td></tr>
+    <tr><td><code>native_sandbox</code></td><td class="yes"><b>首次调用 sandbox 工具时</b></td><td>很多 <code>native</code> 会话全程用不到沙箱（<a href="native.html#s9">native Agent §09</a>），建会话就起是浪费</td></tr>
+  </tbody>
+</table>
+
+<h3>就绪判定要验到底</h3>
+<p>探针只检查端口在监听是不够的（<a href="runtime.html#s9">运行时链路 §09</a>）。<b>ready 的含义是「现在把流量打进来不会失败」</b>，所以要覆盖：进程可用、认证有效、卷可写、依赖目录非空。</p>
+<p><b>宁可 Pod 起不来，也不要起来一个坏的</b> —— 前者是一次明确的失败，后者是用户提交后卡住再报错。</p>
+</section>
+
+<!-- ───────────────────────── 6 ───────────────────────── -->
+<section id="s6">
+<h2><span class="num">06</span>卷编排</h2>
+
+<p>卷的<b>分配</b>归本组件，卷里的<b>目录语义</b>归各自的文档（<a href="runtime.html#s5">运行时链路 §05</a>、<a href="native.html#s4">native Agent §04</a>）。</p>
+
+<table>
+  <thead><tr><th style="width:170px">卷</th><th style="width:150px">存储</th><th>分配规则</th></tr></thead>
+  <tbody>
+    <tr><td><b>工作区</b></td><td>OSS</td><td><code>oss://&lt;bucket&gt;/tenants/&lt;t&gt;/sessions/&lt;s&gt;/</code></td></tr>
+    <tr><td><b>CLI 状态</b><br><span style="color:var(--dim);font-size:12px">仅 acp</span></td><td>NAS</td><td><code>nas://&lt;fs&gt;/tenants/&lt;t&gt;/sessions/&lt;s&gt;/claude/</code></td></tr>
+    <tr><td><b>技能</b></td><td>只读卷</td><td>按 Agent 的技能集合选择对应卷</td></tr>
+    <tr><td><b>缓存</b></td><td><code>emptyDir</code></td><td>不分配，随 Pod 生灭</td></tr>
+  </tbody>
+</table>
+
+<div class="callout warn">
+  <span class="label">挂载凭证只授予该会话的前缀</span>
+  <p>Pod 拿到的存储凭证必须<b>只能访问本会话的前缀</b>，不是整个 bucket。这样即使 Pod 被攻破（尤其是跑着任意命令的 sandbox），也读不到其他会话的数据。</p>
+  <p>这是 Pod-per-session 隔离模型在存储侧的落实 —— <b>隔离了计算却共享存储凭证，等于没隔离</b>。</p>
+</div>
+
+<h3>卷的生命周期长于 Pod</h3>
+<pre><code>Pod terminated  → 卷<span class="tok-s">保留</span>（会话 cold，重建后无损）
+会话 deleted    → 按保留策略处理：立即删 / 归档 / 保留 N 天</code></pre>
+
+<p>会话删除时工作区怎么处理是<b>独立的产品决策</b>，不能默认继承 Pod 的生命周期（<a href="local.html#s9">本地部署</a>与 <a href="runtime.html#s12">运行时链路</a>都提过这点）。用户可能删了会话但还想要产出文件。</p>
+</section>
+
+<!-- ───────────────────────── 7 ───────────────────────── -->
+<section id="s7">
+<h2><span class="num">07</span>调度与配额</h2>
+
+<h3>配额的三个层次</h3>
+<table>
+  <thead><tr><th style="width:170px">层次</th><th>防什么</th></tr></thead>
+  <tbody>
+    <tr><td><b>租户级 Pod 数</b></td><td>一个租户的批量会话把集群占满</td></tr>
+    <tr><td><b>用户级并发会话</b></td><td>单个用户开几十个会话，每个占一个 Pod</td></tr>
+    <tr><td><b>集群总量</b></td><td>兜底，超过就拒绝新建而不是让调度器排队</td></tr>
+  </tbody>
+</table>
+
+<div class="callout rule">
+  <span class="label">配额耗尽要立即拒绝，不要排队</span>
+  <p>K8s 调度器在资源不足时会让 Pod 处于 <code>Pending</code>，而用户那边看到的是「一直在准备环境」。<b>与其让他等一个可能永远不来的 Pod，不如立刻告诉他配额满了。</b></p>
+  <p>所以本组件要<b>在提交给 K8s 之前</b>做配额检查，而不是依赖 ResourceQuota 的拒绝 —— 后者的错误信息也无法转达给用户。</p>
+</div>
+
+<h3>冷启动与预热池</h3>
+<p>冷启动是这套架构最直接的体验成本（<a href="native.html#s10">native Agent §10</a> 与 <a href="runtime.html#s12">运行时链路 §12</a> 都把它列为待实测项）。</p>
+
+<table>
+  <thead><tr><th style="width:170px">手段</th><th style="width:130px">效果</th><th>代价</th></tr></thead>
+  <tbody>
+    <tr><td><b>镜像预拉</b></td><td class="yes">显著</td><td>低，节点上常驻镜像层</td></tr>
+    <tr><td><b>预热池</b></td><td class="yes">最显著</td><td class="no">空闲 Pod 持续占资源</td></tr>
+    <tr><td><b>延长 idle TTL</b></td><td class="maybe">中</td><td>回收变慢，占用上升</td></tr>
+  </tbody>
+</table>
+
+<div class="callout warn">
+  <span class="label">预热池只对同质 Pod 有效</span>
+  <p>预热的前提是<b>提前知道要建什么</b>。<code>native</code> 的 sandbox Pod 高度同质（同一个基础镜像），预热效果好；<code>acp</code> 的 Pod 因 <code>cli_type</code> 与 <code>launch</code> 而异，要为每种组合各留一个池，成本迅速上升。</p>
+  <p>建议：<b>先给 <code>native_sandbox</code> 做预热池</b>，<code>acp</code> 侧靠镜像预拉 + 合理 TTL。等有数据表明某个 <code>cli_type</code> 的使用频次足够高，再单独为它开池。</p>
+</div>
+</section>
+
+<!-- ───────────────────────── 8 ───────────────────────── -->
+<section id="s8">
+<h2><span class="num">08</span>连接注册表</h2>
+
+<div class="callout rule">
+  <span class="label">session → 执行位置 的唯一真相</span>
+  <p><a href="local.html#s2">本地部署 §02</a> 要求把 <code>session → Pod</code> 与 <code>session → 设备连接</code> 收敛成同一抽象，理由是<b>不要按 Pod 名硬编码查找</b>，否则本地场景要另写一套。</p>
+  <p><code>runtimes</code> 表就是这个抽象。上层（会话管理、Run 调度）只问一件事：<b>这个会话的 runtime 在哪、就绪了没有</b>，不关心它是 Pod 还是一台笔记本。</p>
+</div>
+
+<pre><code><span class="tok-k">async def</span> ensure_runtime(session) -> Runtime:
+    rt = get_active_runtime(session.session_id)
+    <span class="tok-k">if</span> rt <span class="tok-k">and</span> rt.state <span class="tok-k">in</span> (<span class="tok-s">"ready"</span>, <span class="tok-s">"active"</span>, <span class="tok-s">"idle"</span>):
+        <span class="tok-k">return</span> rt
+
+    <span class="tok-k">if</span> session.runtime_kind == <span class="tok-s">"device"</span>:
+        <span class="tok-k">return await</span> wait_device_online(session.device_id)   <span class="tok-c"># 不创建，只等</span>
+    <span class="tok-k">return await</span> provision_pod(session)                      <span class="tok-c"># 创建</span></code></pre>
+
+<h3>Server 无状态，注册表有状态</h3>
+<p>把映射放在共享存储里（而非 Server 进程内存），Server 才能无状态水平扩容：任何副本都能查到某会话的 runtime 并连上去。</p>
+<p>对 <code>device</code> 类还要多一层：设备连接是<b>某个 Server 副本持有的长连接</b>，所以注册表要记 <code>bridge_instance</code>，让请求能路由到持有该连接的副本。<b>这是本地场景唯一残留的粘性</b>（<a href="local.html#s2">本地部署 §02</a>）。</p>
+</section>
+
+<!-- ───────────────────────── 9 ───────────────────────── -->
+<section id="s9">
+<h2><span class="num">09</span>故障处理</h2>
+
+<table>
+  <thead><tr><th style="width:190px">故障</th><th style="width:150px">状态转移</th><th>处理</th></tr></thead>
+  <tbody>
+    <tr><td>镜像拉取失败</td><td><code>provisioning → failed</code></td><td>不重试（多半是配置错），告警并返回明确错误</td></tr>
+    <tr><td>探针长时间不通过</td><td><code>provisioning → failed</code></td><td>销毁重建一次；再失败则放弃</td></tr>
+    <tr><td>Pod 被驱逐 / 节点故障</td><td><code>* → none</code></td><td class="yes">会话置 <code>cold</code>，下次需要时重建，卷无损</td></tr>
+    <tr><td class="no">OOMKill</td><td><code>active → none</code></td><td><b>与其他退出分开统计</b>；重建可继续，但反复 OOM 说明规格不足或需要压缩上下文</td></tr>
+    <tr><td>存储不可用</td><td><code>* → failed</code></td><td>不要降级为「无卷启动」—— 那会让 agent 以为工作区是空的而重做一遍</td></tr>
+  </tbody>
+</table>
+
+<div class="callout danger">
+  <span class="label">不要在卷挂载失败时降级启动</span>
+  <p>一个看似合理的容错是「卷挂不上就先起来，让用户能聊天」。<b>但对有工作区的会话，这是最糟的选择</b> —— agent 看到空目录，会以为之前的工作从未发生，然后重新做一遍，覆盖掉 OSS 上还在的文件（等卷恢复后）。</p>
+  <p><b>宁可明确失败。</b>「环境暂时不可用，请稍后重试」比「悄悄丢失工作成果」好得多。</p>
+</div>
+
+<h3>优雅终止</h3>
+<p><code>terminationGracePeriodSeconds</code> 要留够：拒绝新请求、把当前 Run 标记为中断并上报、刷完 OTel span。</p>
+<p>但<b>不要把数据持久性依赖在这段时间里</b> —— 节点故障与抢占不给这个窗口（<a href="runtime.html#s4">运行时链路 §04</a>）。持久性靠卷，不靠优雅关闭。</p>
+</section>
+
+<!-- ───────────────────────── 10 ──────────────────────── -->
+<section id="s10">
+<h2><span class="num">10</span>本地设备的特殊性</h2>
+
+<p>本地设备在 <code>runtimes</code> 表里是一等公民，但它的几乎每个操作语义都不同：</p>
+
+<table>
+  <thead><tr><th style="width:170px">操作</th><th style="width:230px">Pod</th><th>本地设备</th></tr></thead>
+  <tbody>
+    <tr><td><b>创建</b></td><td>渲染 spec 并提交给 K8s</td><td class="maybe"><b>不创建，只等它连上来</b></td></tr>
+    <tr><td><b>模板</b></td><td>决定运行条件</td><td class="no">不适用 —— 环境是用户的</td></tr>
+    <tr><td><b>资源限制</b></td><td>我们设定</td><td class="no">管不了</td></tr>
+    <tr><td><b>卷</b></td><td>我们挂载</td><td class="no">用户授权的本地目录</td></tr>
+    <tr><td><b>回收</b></td><td>删除 Pod</td><td>关闭 adapter 进程</td></tr>
+    <tr><td><b>信任</b></td><td>我们控制</td><td class="no"><b>不可信输入</b></td></tr>
+  </tbody>
+</table>
+
+<div class="callout warn">
+  <span class="label">离线设备要立即拒绝，不要等</span>
+  <p>Pod 创建失败可以重试，但<b>设备离线是等不来的</b> —— 用户的笔记本可能合着盖子。对离线设备发起的 Run 应当<b>立即拒绝并说明设备离线</b>，而不是排队等待（<a href="local.html#s2">本地部署 §02</a>）。</p>
+  <p>这是 <code>ensure_runtime()</code> 里 <code>device</code> 分支与 Pod 分支最实质的差别：一个是<b>创建</b>，另一个只是<b>确认</b>。</p>
+</div>
+
+<h3>共用的部分</h3>
+<p>尽管差异很多，这些仍然共用：状态机（<a href="#s5">§05</a>）、连接注册（<a href="#s8">§08</a>）、idle 回收的触发逻辑、以及对上层的接口。<b>这正是把三类环境放进同一个抽象的价值</b> —— 会话管理与 Run 调度完全不需要知道执行位置的种类。</p>
+</section>
+
+<!-- ───────────────────────── 11 ──────────────────────── -->
+<section id="s11">
+<h2><span class="num">11</span>待验证清单</h2>
+
+<table>
+  <thead><tr><th style="width:60px">#</th><th style="width:250px">验证项</th><th>影响</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><b>1</b></td>
+      <td><b>冷启动各阶段耗时</b> —— 调度、拉镜像、挂卷、探针就绪各占多少</td>
+      <td class="no">决定 <a href="#s7">§07</a> 要不要做预热池，以及做在哪一类上</td>
+    </tr>
+    <tr>
+      <td><b>2</b></td>
+      <td>OSS / NAS 的 CSI 驱动在大量并发挂载下的表现</td>
+      <td class="no">卷挂载是冷启动的主要不确定项，也是失败率最高的一环</td>
+    </tr>
+    <tr>
+      <td><b>3</b></td>
+      <td>会话级存储凭证的粒度 —— 能否只授予单个前缀而非整个 bucket</td>
+      <td class="no"><a href="#s6">§06</a> 隔离的实现基础，做不到就要换存储方案</td>
+    </tr>
+    <tr>
+      <td><b>4</b></td>
+      <td>模板变更的灰度方式 —— 安全基线更新如何在不影响存量会话的前提下铺开</td>
+      <td class="maybe">决定 <a href="#s3">§03</a> 的「不钉住」策略是否需要补充灰度机制</td>
+    </tr>
+    <tr>
+      <td><b>5</b></td>
+      <td>预热池的实际命中率 —— 预热的规格与真实请求的匹配程度</td>
+      <td class="maybe">决定预热池的成本是否划算</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>建议的实现顺序</h3>
+<ol class="body">
+  <li><b>先做 <code>native_sandbox</code> 的完整生命周期</b> —— 它最同质、最可控，是验证模板与状态机的最佳切片。</li>
+  <li><b>再接 <code>acp_pod</code></b> —— 复用同一套逻辑，主要增量是 <code>cli_type</code> 维度的模板与 NAS 卷。</li>
+  <li><b>然后是配额与预热</b> —— 在有真实负载数据之后再调，提前优化没有依据。</li>
+  <li><b><code>device</code> 类最后</b> —— 它与 Pod 的差异最大，且依赖本地部署的设备配对先完成。</li>
+</ol>
+</section>
+
+<footer>
+  <p>相关文档：<a href="runtime.html#s9">运行时链路 §09</a>（<code>acp</code> Pod 的 K8s 细节）· <a href="native.html#s3">native Agent §03</a>（sandbox Pod）· <a href="local.html#s2">本地部署 §02</a>（设备连接）· <a href="agent.html">Agent 管理设计</a>（<code>launch</code> 配置）。</p>
+</footer>
+
+</main>
+</div>
+</body>
+</html>

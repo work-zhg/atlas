@@ -1,0 +1,51 @@
+[project]
+name = "atlas-engine"
+version = "0.1.0"
+description = "Atlas engine — pure library. No FastAPI, no DB session, no HTTP server."
+requires-python = ">=3.13"
+
+dependencies = [
+  "pydantic>=2.9",
+  "httpx>=0.27",
+  # ModelFactory 返回 LangChain BaseChatModel —— kernel 建图要的就是这个类型。
+  # ★ P4 升到 1.x：kernel 要求 langchain-core>=1.5.0、
+  #   langchain-anthropic>=1.5.4，0.3.* 与之不兼容（主版本级差距）。
+  #   版本钉死，见文档 §4.7 / 风险 R1。
+  "langchain-core==1.5.*",
+  "langchain-anthropic==1.5.*",
+  # ★ kernel/ 所需的运行时依赖。全部钉死。
+  #
+  #   钉死的理由**不是**「kernel 用了这两个包的私有 API」—— 实测过一遍：
+  #   kernel 用到的 25 个 langchain/langgraph 符号里 21 个在各自模块的 __all__
+  #   里（含 DeltaChannel、ToolCallRequest、CompiledStateGraph 这几个看着可疑
+  #   的），剩下 4 个是类型变量 ContextT / ResponseT / PrivateStateAttr /
+  #   StateT_co，它们变动最多让类型检查报错，不会运行时崩。
+  #   公共面的兼容性风险是普通水平，别把这行注释读成「随时会炸」。
+  #
+  #   真正的理由是 kernel 与这两个包**深度同构** —— 执行循环、中间件基类、
+  #   状态 reducer 全部来自它们，kernel 只是在那套结构上叠能力层。结构级的
+  #   不兼容真实发生过：langchain-core 0.3.* → 1.5.* 是断裂升级（文档 §4.7 /
+  #   风险 R1）。钉死换的是「升级只在明确要升的时候发生」，
+  #   不是在防某个具体符号。
+  "langchain==1.3.*",
+  "langgraph==1.2.*",
+  "langsmith>=0.10.9",
+  "wcmatch>=11.0",
+  "packaging>=23.2",
+]
+
+# kernel/ 的可选依赖**未引入**，对应功能不可用：
+#   langchain-google-genai（filesystem 的 Gemini 分支）、av + pillow（video）
+# kernel 对这三个都是 try: 包裹，缺了不影响 import。
+#
+# ★ pillow 现在会出现在环境里 —— 它是 server 那边 fastembed（记忆的
+#   embedder）的传递依赖，不是我们为 kernel 装的。video 分支要 av +
+#   pillow 两个都有，而 av 仍然不在，所以那个分支照旧不可用。
+#   守卫见 tests/test_kernel.py::test_optional_deps_remain_absent。
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/atlas_engine"]

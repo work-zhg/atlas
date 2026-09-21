@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>记忆设计 · AI Platform</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="sitenav">
+  <a class="brand" href="./">AI&nbsp;<b>Platform</b>&nbsp;/ 设计文档</a>
+  <div class="links">
+    <a href="./">目录</a>
+    <a href="detail/">详细设计</a>
+    <a href="architecture.html">系统架构</a>
+    <a href="agent.html">Agent 管理</a>
+    <a href="skill.html">技能管理</a>
+    <a href="mcp.html">MCP 管理</a>
+    <a href="permission.html">权限管理</a>
+    <a href="execution.html">执行环境</a>
+    <a href="session.html">会话管理</a>
+    <a href="native.html">native Agent</a>
+    <a href="runtime.html">运行时链路</a>
+    <a href="local.html">本地部署</a>
+    <a class="on" href="memory.html">记忆</a>
+    <a href="observability.html">可观测性</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+<nav class="toc" aria-label="目录">
+  <div class="eyebrow">本页</div>
+  <ol>
+    <li><a href="#s1">定位与边界</a></li>
+    <li><a href="#s2">数据流</a></li>
+    <li><a href="#s3">作用域映射</a></li>
+    <li><a href="#s4">写入：两类 Agent 统一</a></li>
+    <li><a href="#s5">为什么不给模型写工具</a></li>
+    <li><a href="#s6">读取：顾问</a></li>
+    <li><a href="#s7">读取：助理</a></li>
+    <li><a href="#s8">两条读取路径的不对称</a></li>
+    <li><a href="#s9">隔离与安全</a></li>
+    <li><a href="#s10">记忆管理</a></li>
+    <li><a href="#s11">降级与成本</a></li>
+    <li><a href="#s12">待验证清单</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<header class="hero">
+  <p class="kicker">Memory</p>
+  <h1>记忆设计</h1>
+  <p class="lede">用 Mem0 承载跨会话记忆，<b>只按人划分作用域</b>。写入对两类 Agent 完全统一 —— 都从 Message 账本抽取；读取则必然分叉 —— 顾问在进程内注入，助理只能经 MCP 工具与提示词。跨用户的 Agent 知识走 RAG，不在本文范围。</p>
+  <div class="meta">
+    <span>Mem0</span><span>抽取</span><span>注入</span><span>MCP 记忆服务</span><span>作用域</span>
+  </div>
+</header>
+
+<div class="callout warn">
+  <span class="label">本文的事实基础</span>
+  <p>Mem0 的方法签名与参数取自 <code>mem0ai</code> <b>2.0.20</b> 的实际代码（已下载核对）。注意 2.0 的 <code>search()</code> 用 <code>filters</code> 字典而非早期版本的 <code>user_id</code> 关键字 —— 参照旧文档写会跑不通。</p>
+</div>
+
+<!-- ───────────────────────── 1 ───────────────────────── -->
+<section id="s1">
+<h2><span class="num">01</span>定位与边界</h2>
+
+<p>记忆是<b>跨会话</b>的、关于用户与其工作的<b>结构化事实</b>。它和另外两样东西容易混淆，必须划清：</p>
+
+<table>
+  <thead><tr><th style="width:150px"></th><th style="width:210px">是什么</th><th>不是记忆的原因</th></tr></thead>
+  <tbody>
+    <tr><td><b>Message 账本</b></td><td>会话内容的完整记录</td><td>会话内的原始流水，不跨会话、不去重、不提炼</td></tr>
+    <tr><td><b>记忆</b></td><td>提炼后的持久事实</td><td>—</td></tr>
+    <tr><td><b>Agent 知识</b><br><span style="color:var(--dim);font-size:12px">RAG，本期不做</span></td><td>服务所有用户的领域知识</td><td><b>跨用户</b>，信任模型完全不同，见下</td></tr>
+  </tbody>
+</table>
+
+<p>典型的记忆条目：「用户的包管理器偏好是 pnpm」「这个仓库的测试命令是 <code>make test</code>」「用户不喜欢回答里带表情符号」。它们的共同点是 —— <b>下次会话里不说也应该成立</b>。</p>
+
+<div class="callout rule">
+  <span class="label">一条判断标准</span>
+  <p>如果一条信息只在当前会话里有意义，它属于 Message，不属于记忆。<b>记忆的价值在于用户不必重复自己</b>；把会话细节当记忆存，只会让检索被噪声淹没，并在下次会话里注入一堆不相干的上下文。</p>
+</div>
+
+<h3>为什么 Agent 知识不走记忆</h3>
+
+<p>一个很自然的诉求是：让 Agent 也积累知识 —— 用户 A 问过的产品问题，用户 B 再问时直接答得上来。<b>这条路本期明确不走记忆实现</b>，因为它和用户记忆的信任模型不是一回事：</p>
+
+<table>
+  <thead><tr><th style="width:150px"></th><th style="width:230px">用户记忆</th><th>Agent 知识</th></tr></thead>
+  <tbody>
+    <tr><td><b>作用范围</b></td><td>仅该用户</td><td class="no">所有用户</td></tr>
+    <tr><td><b>写入来源</b></td><td>该用户自己的对话</td><td class="no">任意用户的对话</td></tr>
+    <tr><td><b>记错的后果</b></td><td class="maybe">只影响他本人，且他能自己发现并纠正</td><td class="no"><b>所有人拿到错误答案，且没人知道错在哪</b></td></tr>
+    <tr><td><b>可否自动抽取</b></td><td class="yes">可以</td><td class="no">不可以</td></tr>
+  </tbody>
+</table>
+
+<div class="callout danger">
+  <span class="label">自动把任意用户说的话变成服务所有人的知识，是一个跨用户投毒面</span>
+  <p>攻击不需要任何技术手段：用户 B 在正常对话里陈述一个错误事实 → 被抽取进 Agent 知识 → 用户 A 之后问同样的问题，拿到那个错误答案。在对外的客服类场景里，这直接变成对外输出错误信息。</p>
+  <p>用户记忆记错了只坑他自己，而且他多半能当场发现；<b>Agent 知识记错了坑所有人，而且没有任何一方处在能发现的位置上。</b>这不是同一个量级的风险，因此也不该用同一套自动化机制。</p>
+</div>
+
+<div class="callout rule">
+  <span class="label">Agent 知识的正确形态：RAG + 提炼 + 事实核查</span>
+  <p>它应当是<b>经过总结提炼、且通过事实核查的数据</b>，来源受控、入库有审、可溯源可撤回 —— 本质上是一条内容生产流水线，不是一个从对话里自动长出来的副产品。</p>
+  <p>因此它归 RAG / 知识库，走独立的设计与独立的写入通道，<b>与本文描述的记忆系统不共用作用域、不共用抽取器</b>。本期不做。</p>
+</div>
+</section>
+
+<!-- ───────────────────────── 2 ───────────────────────── -->
+<section id="s2">
+<h2><span class="num">02</span>数据流</h2>
+
+<figure>
+<svg viewBox="0 0 900 560" role="img" aria-labelledby="figM-t figM-d" font-family="var(--sans)">
+  <title id="figM-t">记忆读写数据流</title>
+  <desc id="figM-d">Message 账本在 Run 完成后异步进入抽取器，由 Mem0 提炼为记忆。读取时分两路：顾问经中间件在每轮注入，助理经 Higress 上的 MCP 记忆服务按需检索，并在会话开始时注入一次基础记忆。</desc>
+  <defs>
+    <marker id="arM" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#94A3B8"/>
+    </marker>
+    <marker id="arMg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#22C55E"/>
+    </marker>
+    <marker id="arMb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#38BDF8"/>
+    </marker>
+  </defs>
+
+  <!-- write path -->
+  <rect x="330" y="16" width="240" height="56" rx="8" fill="#0E1223" stroke="#22C55E" stroke-opacity=".5"/>
+  <text x="450" y="40" text-anchor="middle" fill="#F8FAFC" font-size="13" font-weight="600">Message 账本</text>
+  <text x="450" y="60" text-anchor="middle" fill="#94A3B8" font-size="10">两类 Agent 共用</text>
+
+  <line x1="450" y1="72" x2="450" y2="112" stroke="#22C55E" stroke-width="2" marker-end="url(#arMg)"/>
+  <text x="462" y="97" fill="#22C55E" font-size="9.5" font-family="monospace">Run 完成后异步</text>
+
+  <rect x="330" y="112" width="240" height="64" rx="8" fill="#0E1223" stroke="#22C55E" stroke-opacity=".5"/>
+  <text x="450" y="136" text-anchor="middle" fill="#F8FAFC" font-size="12.5">抽取器</text>
+  <text x="450" y="156" text-anchor="middle" fill="#94A3B8" font-size="10" font-family="monospace">add(infer=True)</text>
+  <text x="450" y="170" text-anchor="middle" fill="#64748B" font-size="9">经 Higress 调模型</text>
+
+  <line x1="450" y1="176" x2="450" y2="216" stroke="#22C55E" stroke-width="2" marker-end="url(#arMg)"/>
+
+  <rect x="330" y="216" width="240" height="76" rx="8" fill="#0E1223" stroke="#F59E0B" stroke-opacity=".6"/>
+  <text x="450" y="244" text-anchor="middle" fill="#F8FAFC" font-size="15" font-weight="600">Mem0</text>
+  <text x="450" y="266" text-anchor="middle" fill="#94A3B8" font-size="10">提炼 · 去重 · 更新</text>
+  <text x="450" y="283" text-anchor="middle" fill="#64748B" font-size="9">user_id 作用域</text>
+
+  <!-- split -->
+  <path d="M450 292 L450 314 M170 314 L730 314" fill="none" stroke="#38BDF8" stroke-width="1.5"/>
+  <line x1="170" y1="314" x2="170" y2="372" stroke="#38BDF8" stroke-width="1.5" marker-end="url(#arMb)"/>
+  <line x1="730" y1="314" x2="730" y2="352" stroke="#38BDF8" stroke-width="1.5" marker-end="url(#arMb)"/>
+  <text x="450" y="308" text-anchor="middle" fill="#38BDF8" font-size="10" font-family="monospace">search(query, filters)</text>
+
+  <!-- advisor -->
+  <rect x="50" y="372" width="240" height="118" rx="8" fill="#0E1223" stroke="#38BDF8" stroke-opacity=".55"/>
+  <text x="170" y="398" text-anchor="middle" fill="#38BDF8" font-size="13" font-weight="600">顾问 · native</text>
+  <line x1="70" y1="410" x2="270" y2="410" stroke="#232B3D"/>
+  <text x="170" y="430" text-anchor="middle" fill="#F8FAFC" font-size="11">中间件注入</text>
+  <text x="170" y="449" text-anchor="middle" fill="#94A3B8" font-size="9.5">每轮检索 · 不进 Message</text>
+  <text x="170" y="470" text-anchor="middle" fill="#F8FAFC" font-size="11">+ 只读检索工具</text>
+
+  <!-- higress -->
+  <rect x="620" y="352" width="220" height="48" rx="8" fill="#0E1223" stroke="#38BDF8" stroke-opacity=".5"/>
+  <text x="730" y="372" text-anchor="middle" fill="#38BDF8" font-size="12" font-weight="600">Higress · MCP 网关</text>
+  <text x="730" y="390" text-anchor="middle" fill="#64748B" font-size="9">注入 user 身份，模型不可指定</text>
+
+  <line x1="730" y1="400" x2="730" y2="428" stroke="#38BDF8" stroke-width="1.5" marker-end="url(#arMb)"/>
+
+  <rect x="610" y="428" width="240" height="106" rx="8" fill="#0E1223" stroke="#A78BFA" stroke-opacity=".55"/>
+  <text x="730" y="454" text-anchor="middle" fill="#A78BFA" font-size="13" font-weight="600">助理 · acp</text>
+  <line x1="630" y1="466" x2="830" y2="466" stroke="#232B3D"/>
+  <text x="730" y="486" text-anchor="middle" fill="#F8FAFC" font-size="11">MCP 记忆服务（按需）</text>
+  <text x="730" y="506" text-anchor="middle" fill="#F8FAFC" font-size="11">+ 会话开始注入一次</text>
+  <text x="730" y="524" text-anchor="middle" fill="#94A3B8" font-size="9.5">经 session/prompt · 可见且累积</text>
+</svg>
+<figcaption><b>写入一条路，读取两条路。</b>写入统一从 Message 账本抽取 —— 因为两类 Agent 都把内容固化到同一个账本（<a href="session.html#s2">会话管理 §02</a>），抽取器根本不需要知道是谁产生的。读取必须分叉，因为顾问跑在我们进程内、助理跑在别人的进程里，能注入的位置完全不同。</figcaption>
+</figure>
+</section>
+
+<!-- ───────────────────────── 3 ───────────────────────── -->
+<section id="s3">
+<h2><span class="num">03</span>作用域映射</h2>
+
+<p>Mem0 的 <code>add()</code> 与 <code>search()</code> 用三个 ID 划分作用域，<b>至少要有一个</b>。我们的映射：</p>
+
+<table>
+  <thead><tr><th style="width:140px">Mem0 参数</th><th style="width:190px">我们填什么</th><th>语义</th></tr></thead>
+  <tbody>
+    <tr><td><code>user_id</code></td><td class="yes">平台用户 ID</td><td><b>主作用域</b>。跨会话、跨 Agent、跨项目的用户级事实</td></tr>
+    <tr><td><code>agent_id</code></td><td class="no">不使用</td><td><b>明确排除</b>。跨用户的 agent 知识走 RAG，不走记忆，理由见 <a href="#s1">§01</a></td></tr>
+    <tr><td><code>run_id</code></td><td class="no">不使用</td><td>Mem0 的 run 是一次运行，与我们的 Run 语义不同，且记忆不该按轮次隔离</td></tr>
+    <tr><td><code>metadata</code></td><td class="yes"><code>{workspace, source_session, source_run}</code></td><td>项目隔离与溯源，靠 <code>filters</code> 过滤</td></tr>
+  </tbody>
+</table>
+
+<h3>项目级隔离靠 metadata，不靠 run_id</h3>
+<p>用户在 A 仓库的约定不该泄漏到 B 仓库。Mem0 2.0 的 <code>search(filters=...)</code> 支持 metadata 过滤，所以：</p>
+
+<pre><code><span class="tok-c"># 写入时标记来源</span>
+mem.add(messages, user_id=<span class="tok-s">"u_123"</span>,
+        metadata={<span class="tok-s">"workspace"</span>: <span class="tok-s">"repo/deer-flow"</span>,
+                  <span class="tok-s">"source_session"</span>: <span class="tok-s">"sess_…"</span>, <span class="tok-s">"source_run"</span>: <span class="tok-s">"run_…"</span>})
+
+<span class="tok-c"># 检索时两层：用户级 + 当前项目级</span>
+mem.search(query, filters={<span class="tok-s">"user_id"</span>: <span class="tok-s">"u_123"</span>}, top_k=<span class="tok-n">5</span>)
+mem.search(query, filters={<span class="tok-s">"user_id"</span>: <span class="tok-s">"u_123"</span>,
+                           <span class="tok-s">"workspace"</span>: <span class="tok-s">"repo/deer-flow"</span>}, top_k=<span class="tok-n">5</span>)</code></pre>
+
+<div class="callout rule">
+  <span class="label">记忆跨 Agent 共享，这是刻意的</span>
+  <p>用户告诉顾问「我用 pnpm」，助理下次动手时<b>应该</b>知道。它们是同一个用户的两个助手，不是两个互不通气的系统。</p>
+  <p>所以唯一的实体作用域是 <code>user_id</code>：<b>记忆只按人划分，不按 Agent 划分。</b>检索规则因此只有一条 —— 用当前用户去查，不需要 <code>OR</code>、不需要合并多次查询、不需要哨兵值。</p>
+</div>
+
+<div class="callout warn">
+  <span class="label">顺带避开了 Mem0 的一个限制</span>
+  <p>如果真要做「用户维度 ∪ Agent 维度」的检索，<b>单次 <code>search()</code> 做不到</b>。代码里对顶层 filters 有硬校验：</p>
+  <pre style="margin:10px 0"><code><span class="tok-k">if not any</span>(key <span class="tok-k">in</span> effective_filters <span class="tok-k">for</span> key <span class="tok-k">in</span> (<span class="tok-s">"user_id"</span>,<span class="tok-s">"agent_id"</span>,<span class="tok-s">"run_id"</span>)):
+    <span class="tok-k">raise</span> ValueError(<span class="tok-s">"filters must contain at least one of: …"</span>)</code></pre>
+  <p>顶层必须有实体 ID，而它与 <code>OR</code> 之间是 AND 关系 —— <code>{"OR":[{"user_id":…},{"agent_id":…}]}</code> 直接报错，<code>{"user_id":…, "OR":[…]}</code> 又退化成纯 user 过滤。只能查两次再在应用层合并。<b>单一作用域让这个问题不存在。</b></p>
+</div>
+
+<h3>metadata 的溯源字段不是装饰</h3>
+<p><code>source_session</code> / <code>source_run</code> 让每条记忆能回指到它的出处。用户问「你怎么知道我用 pnpm」时要答得出来，记忆出错时也要能定位是哪次对话引入的。<b>没有溯源的记忆没法审计，也没法修</b>。</p>
+</section>
+
+<!-- ───────────────────────── 4 ───────────────────────── -->
+<section id="s4">
+<h2><span class="num">04</span>写入：两类 Agent 统一</h2>
+
+<div class="callout rule">
+  <span class="label">抽取器不需要知道是谁产生的内容</span>
+  <p>顾问和助理都把内容固化进同一个 Message 账本。记忆抽取是 <b>Message 的下游消费者</b>，因此写入路径对两类 Agent 完全一致 —— 不需要两套实现，也不会有两套口径。</p>
+</div>
+
+<h3>触发与流程</h3>
+<pre><code>Run 置 completed
+   ↓ <span class="tok-w">异步入队</span>（绝不阻塞会话）
+取出该 Run 的 Message
+   ↓ 过滤（见下）
+mem.add(messages=[{<span class="tok-s">"role"</span>:…, <span class="tok-s">"content"</span>:…}, …],
+        user_id=<span class="tok-s">&lt;平台用户&gt;</span>,
+        metadata={<span class="tok-s">"workspace"</span>:…, <span class="tok-s">"source_session"</span>:…, <span class="tok-s">"source_run"</span>:…},
+        infer=<span class="tok-n">True</span>)
+   ↓ Mem0 内部：LLM 提炼事实 → 与既有记忆比对 → 新增 / 更新 / 忽略</code></pre>
+
+<h3>喂什么给抽取器</h3>
+<table>
+  <thead><tr><th style="width:190px">Message 类型</th><th style="width:100px">送入</th><th>理由</th></tr></thead>
+  <tbody>
+    <tr><td><code>user</code></td><td class="yes">是</td><td>用户的偏好、约束、指令主要在这里</td></tr>
+    <tr><td><code>assistant</code> 正文</td><td class="yes">是</td><td>结论与达成的共识</td></tr>
+    <tr><td><code>tool</code> 调用与结果</td><td class="no">否</td><td>体量大、噪声高，绝大多数是过程细节</td></tr>
+    <tr><td><code>system</code>（审批、会话事件）</td><td class="no">否</td><td>运维信息，不是关于用户的事实</td></tr>
+  </tbody>
+</table>
+
+<div class="callout warn">
+  <span class="label">工具结果里确实可能有有价值的事实</span>
+  <p>比如助理跑了一次 <code>make test</code> 发现测试命令是什么。但工具输出的体量通常是对话正文的几十倍，全量送进去会让抽取成本暴涨、且提炼质量下降。</p>
+  <p><b>先全部排除，观察漏掉了什么再补</b> —— 补的方式应当是让助理在正文里显式陈述（「这个仓库的测试命令是 X」），而不是把原始工具输出灌进抽取器。这样既保留了事实，又保住了信噪比。</p>
+</div>
+
+<h3>无实质内容的 Run 跳过</h3>
+<p>纯工具执行、一句「好的」、以及被取消的 Run，都不值得花一次抽取的 LLM 调用。<b>入队前先做一次廉价过滤</b>（正文字数下限、<code>stop_reason</code> 不是 <code>cancelled</code>），否则记忆服务的成本会随会话量线性增长而收益极低。</p>
+</section>
+
+<!-- ───────────────────────── 5 ───────────────────────── -->
+<section id="s5">
+<h2><span class="num">05</span>为什么不给模型写工具</h2>
+
+<p>一个自然的想法是给 Agent 一个 <code>remember()</code> 工具，让它自己判断什么值得记。<b>我们不这么做</b>，对两类 Agent 都是。</p>
+
+<div class="callout danger">
+  <span class="label">对顾问：regenerate 会导致重复写入</span>
+  <p>写记忆<b>改变的是跨会话的持久状态</b>。而顾问支持 <code>regenerate</code> 与编辑历史（<a href="session.html#s4">会话管理 §04</a>）—— 同一轮可能被重跑多次，每次都会再写一遍记忆。</p>
+  <p>给顾问一个写记忆的工具，<code>regenerate</code> 就变成了「重复写入记忆」，而它在 UI 上仍然是个看起来安全的重试按钮。这正是 <a href="session.html#s13">§13 陷阱 01</a> 描述的塌方。</p>
+</div>
+
+<h3>对助理：技术上可以，但不该</h3>
+<ul>
+  <li><b>口径会分裂</b> —— 两类 Agent 用不同机制写记忆，提炼标准、去重策略、质量水平都会不一致，而它们写进的是同一个用户的记忆库。</li>
+  <li><b>模型的自判不稳定</b> —— 「这值得记吗」是个没有客观标准的判断，同一个模型在不同上下文下会给出不同答案，结果是记忆库里塞满随机的琐事。</li>
+  <li><b>Mem0 的价值正在抽取</b> —— 它内置的提炼、与既有记忆比对、增量更新，比模型临时起意调一次工具要可靠。绕过它等于只把 Mem0 当键值存储用。</li>
+</ul>
+
+<div class="callout rule">
+  <span class="label">显式的「记住这个」也不需要写工具</span>
+  <p>用户说「记住我喜欢用 pnpm」时，这句话<b>本身就在 Message 账本里</b>，抽取器会看到并提炼出来。服务端抽取天然覆盖了这个场景，不需要额外通道。</p>
+</div>
+</section>
+
+<!-- ───────────────────────── 6 ───────────────────────── -->
+<section id="s6">
+<h2><span class="num">06</span>读取：顾问</h2>
+
+<p>顾问跑在我们自己的进程里，<code>create_agent</code> 构造，<b>每轮从 Message 表重建输入</b>（<a href="session.html#s5">会话管理 §05</a>）。这给了记忆注入最好的位置。</p>
+
+<h3>主路径：中间件注入</h3>
+<pre><code><span class="tok-k">class</span> <span class="tok-n">MemoryMiddleware</span>(AgentMiddleware):
+    <span class="tok-k">async def</span> awrap_model_call(self, request, handler):
+        hits = <span class="tok-k">await</span> mem.search(
+            query=<span class="tok-s">&lt;本轮用户输入&gt;</span>,
+            filters={<span class="tok-s">"user_id"</span>: ctx.user_id, <span class="tok-s">"workspace"</span>: ctx.workspace},
+            top_k=<span class="tok-n">5</span>, threshold=<span class="tok-n">0.3</span>,
+        )
+        <span class="tok-c"># 作为隐藏上下文拼进本次模型请求</span>
+        request = inject_context(request, render(hits))
+        <span class="tok-k">return await</span> handler(request)</code></pre>
+
+<div class="callout rule">
+  <span class="label">注入发生在模型请求层，不进 graph state</span>
+  <p>三个后果，都是我们想要的：</p>
+  <ul style="margin-bottom:0">
+    <li><b>不污染 Message 账本</b> —— 记忆不是对话内容，不该出现在会话记录里，也不该被下一轮的抽取器当成用户说的话再提炼一遍（否则记忆会自我强化）</li>
+    <li><b>每轮按当前问题重新检索</b> —— 顾问无状态重建输入，正好每轮注入最相关的那几条，而不是把会话开始时的快照一直带着</li>
+    <li><b><code>regenerate</code> 行为一致</b> —— 重跑时重新检索，不会因为上次注入的内容残留在历史里而产生偏差</li>
+  </ul>
+</div>
+
+<h3>辅路径：只读检索工具</h3>
+<p>再给顾问一个 <code>search_memory</code> 工具，用于注入没覆盖到的深挖场景（用户问「我之前跟你说过什么偏好」）。</p>
+<p><b>只有 search，没有 add / update / delete</b> —— 纯读取，重跑多少次都不改变任何状态，可以安全地挂进顾问的工具集。</p>
+</section>
+
+<!-- ───────────────────────── 7 ───────────────────────── -->
+<section id="s7">
+<h2><span class="num">07</span>读取：助理</h2>
+
+<p>助理跑在别人的进程里（ACP adapter + CLI），我们无法在它的模型请求层做任何事。能用的只有两个口子，都来自 ACP 协议本身。</p>
+
+<h3>主路径：MCP 记忆服务</h3>
+<p>把 Mem0 包成一个 MCP server，在 <code>session/new</code> 的 <code>mcpServers</code> 里传入（<a href="runtime.html#s7">运行时链路 §07</a>），指向 Higress：</p>
+
+<pre><code>mcp_servers = [
+  { <span class="tok-s">"type"</span>: <span class="tok-s">"http"</span>, <span class="tok-s">"name"</span>: <span class="tok-s">"memory"</span>,
+    <span class="tok-s">"url"</span>: <span class="tok-s">"https://higress.internal/mcp/memory"</span>,
+    <span class="tok-s">"headers"</span>: [
+      { <span class="tok-s">"name"</span>: <span class="tok-s">"Authorization"</span>, <span class="tok-s">"value"</span>: <span class="tok-s">"Bearer &lt;session-scoped-token&gt;"</span> }
+    ] },
+  …
+]</code></pre>
+
+<p>CLI 于是原生拥有 <code>search_memory</code> 工具，需要时自己调。工具集同样<b>只给 search</b>。</p>
+
+<h3>辅路径：会话开始时注入一次</h3>
+<p><code>session/prompt</code> 的 <code>prompt</code> 是 content block 数组，可以在首轮前置一段基础记忆（用户偏好、项目约定）。</p>
+
+<div class="callout danger">
+  <span class="label">这个注入是可见且累积的，只能做一次</span>
+  <p>与顾问不同，助理的上下文<b>由 CLI 自己持有并持续累积</b>。经 <code>session/prompt</code> 注入的内容会永久留在它的对话历史里：</p>
+  <ul>
+    <li>每轮都注入 → 记忆条目在 CLI 上下文里反复堆积，token 成本随轮次增长，且旧的注入无法撤回</li>
+    <li>注入内容<b>可见</b> —— 会进入 CLI 的 transcript，也会回流成 Message，用户在界面上看得到</li>
+  </ul>
+  <p>所以策略必须是：<b>会话开始注入一次少量高置信度记忆，之后一律靠 MCP 工具按需拉取。</b></p>
+</div>
+
+<h3>注入内容要标记清楚</h3>
+<p>既然它可见并会成为 Message，就应当以明确的形式呈现（例如一个标注为「来自记忆」的前置块），而不是伪装成用户说的话。<b>否则用户会看到自己「说」了从没说过的话</b>，而抽取器下一轮也可能把它当新事实再提炼一遍。</p>
+</section>
+
+<!-- ───────────────────────── 8 ───────────────────────── -->
+<section id="s8">
+<h2><span class="num">08</span>两条读取路径的不对称</h2>
+
+<table>
+  <thead><tr><th style="width:170px"></th><th style="width:270px">顾问</th><th>助理</th></tr></thead>
+  <tbody>
+    <tr><td><b>注入位置</b></td><td>模型请求层（中间件）</td><td class="maybe">对话内容层（<code>session/prompt</code>）</td></tr>
+    <tr><td><b>可见性</b></td><td class="yes">不可见，不进账本</td><td class="no">可见，会成为 Message</td></tr>
+    <tr><td><b>频率</b></td><td class="yes">每轮，按当前问题检索</td><td class="maybe">会话开始一次</td></tr>
+    <tr><td><b>累积</b></td><td class="yes">否，每轮重建</td><td class="no">是，永久留在 CLI 上下文</td></tr>
+    <tr><td><b>时效</b></td><td class="yes">始终最新</td><td class="no">会话开始时的快照</td></tr>
+    <tr><td><b>可撤回</b></td><td class="yes">是</td><td class="no">否</td></tr>
+    <tr><td><b>按需检索</b></td><td>只读工具</td><td>MCP 记忆服务</td></tr>
+  </tbody>
+</table>
+
+<div class="callout warn">
+  <span class="label">不要试图抹平这个差异</span>
+  <p>这不是实现偷懒，而是两类 Agent 执行位置的必然结果：<b>顾问的上下文由我们每轮重建，助理的上下文由 CLI 自己持有。</b>强行让顾问也走「会话开始注入一次」会白白浪费它的优势；强行让助理每轮注入则会污染上下文且不可撤回。</p>
+  <p>能抹平的是<b>效果</b>：助理靠 MCP 工具补上时效性，顾问靠中间件保证覆盖率。两条路殊途，但用户感受到的都是「它记得我」。</p>
+</div>
+
+<h3>长会话里助理的记忆会过时</h3>
+<p>助理的注入是会话开始的快照。一个跑了几小时的会话，期间用户在别处更新了偏好，助理不会知道 —— 除非它主动调 MCP 工具。</p>
+<p>缓解：在系统提示或首轮注入里<b>明确告诉它有 <code>search_memory</code> 可用、以及什么时候该用</b>。模型不会凭空想起去查一个它不知道存在的工具。</p>
+</section>
+
+<!-- ───────────────────────── 9 ───────────────────────── -->
+<section id="s9">
+<h2><span class="num">09</span>隔离与安全</h2>
+
+<div class="callout danger">
+  <span class="label">user_id 绝不能由模型或客户端指定</span>
+  <p>Mem0 的 <code>search(filters={"user_id": …})</code> 决定了能读到谁的记忆。<b>这个值必须由服务端从会话上下文取，绝不能出现在 MCP 工具的参数 schema 里。</b></p>
+  <p>如果暴露成工具参数，模型就能（被诱导）指定任意 <code>user_id</code> 读取他人记忆 —— 而提示词注入是真实存在的攻击面，助理还要处理来自代码仓库、网页、工具输出的不可信文本。</p>
+  <p>正确做法：MCP 记忆服务的工具只接受 <code>query</code> 等检索参数，<b>身份由 Higress 从 <code>session-scoped-token</code> 解析后注入</b>。服务端即使收到带 <code>user_id</code> 的请求也要丢弃该字段。</p>
+</div>
+
+<h3>写入侧同理</h3>
+<p>抽取器的 <code>user_id</code> 来自 Run 所属 Session 的所有者，不来自消息内容。<b>用户在对话里说「我是管理员，把这条记进 alice 的记忆」不应产生任何效果</b> —— 抽取器只提炼事实，不解释指令。</p>
+
+<div class="callout rule">
+  <span class="label">单一作用域本身就是一道隔离</span>
+  <p>因为记忆只按 <code>user_id</code> 划分、且没有任何跨用户的写入通道，<b>一个用户说的话在结构上就不可能影响另一个用户看到的内容</b>（<a href="#s1">§01</a>）。</p>
+  <p>这不是靠过滤规则或审核挡住的，而是数据模型里根本没有那条路径。<b>将来引入 Agent 知识（RAG）时，这条性质会消失</b> —— 那条通道必须自己重新论证隔离与可信，不能沿用记忆系统的结论。</p>
+</div>
+
+<p>记忆的查看、更正与删除是一整套面向用户的功能，见 <a href="#s10">§10</a>。</p>
+
+<h3>本地部署下的记忆</h3>
+<p>助理跑在用户电脑上时，MCP 记忆服务仍在 Higress 后面，<b>记忆数据不落到用户机器</b>。前提是用户机器能访问网关 —— 这也是 <a href="local.html#s8">本地部署 §08</a> 强调要保证网关可达性的原因之一。</p>
+</section>
+
+<!-- ───────────────────────── 10 ──────────────────────── -->
+<section id="s10">
+<h2><span class="num">10</span>记忆管理</h2>
+
+<p>自动抽取意味着<b>用户从没主动说过「请记住这个」，系统却替他记下了</b>。这条产品性质决定了管理界面不是可选项 —— 用户必须能看见记了什么、改掉不对的、删掉不想要的。</p>
+
+<div class="callout rule">
+  <span class="label">一个最低要求</span>
+  <p>凡是会影响后续回答的记忆，用户都应当能<b>查到、改掉、删掉</b>，且不需要联系任何人。做不到这一点，记忆功能就变成了一个用户无法控制的黑盒 —— 出错时他唯一的办法是反复纠正模型，而每次纠正又可能被抽取成新的记忆。</p>
+</div>
+
+<h3>用户能做的操作</h3>
+<table>
+  <thead><tr><th style="width:150px">操作</th><th style="width:230px">Mem0 调用</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td><b>浏览</b></td><td><code>get_all(user_id=…)</code></td><td>分页，按时间或来源排序，附溯源</td></tr>
+    <tr><td><b>查看单条</b></td><td><code>get(memory_id)</code> + <code>history(memory_id)</code></td><td>含变更史与来源会话链接</td></tr>
+    <tr><td><b>更正</b></td><td><code>update(memory_id, data)</code></td><td>用户改写内容，见下「更正 vs 删除」</td></tr>
+    <tr><td><b>删除单条</b></td><td><code>delete(memory_id)</code></td><td>最常用的操作</td></tr>
+    <tr><td><b>按来源批删</b></td><td><code>get_all</code> + 按 <code>metadata</code> 过滤后逐条 <code>delete</code></td><td>「删掉这次会话产生的全部记忆」「删掉这个项目的」</td></tr>
+    <tr><td><b>全部清除</b></td><td><code>delete_all(user_id=…)</code></td><td>需二次确认</td></tr>
+    <tr><td><b>导出</b></td><td><code>get_all</code> 序列化</td><td>合规要求，也便于用户自查</td></tr>
+    <tr><td><b>暂停写入</b></td><td>平台侧开关</td><td>保留已有记忆但不再新增，见下</td></tr>
+  </tbody>
+</table>
+
+<h3>接口</h3>
+<div class="panel" style="margin-bottom:var(--s3)">
+  <div class="ep"><span class="verb get">GET</span><span class="path">/memories?before=&amp;limit=&amp;workspace=&amp;source_session=</span><span class="desc">分页浏览，支持按项目与来源会话过滤</span></div>
+  <div class="ep"><span class="verb get">GET</span><span class="path">/memories/{id}</span><span class="desc">单条详情 + 变更史 + 溯源</span></div>
+  <div class="ep"><span class="verb post">PATCH</span><span class="path">/memories/{id}</span><span class="desc">更正内容</span></div>
+  <div class="ep"><span class="verb del">DEL</span><span class="path">/memories/{id}</span><span class="desc">删除单条</span></div>
+  <div class="ep"><span class="verb post">POST</span><span class="path">/memories/bulk-delete</span><span class="desc">按 <code>source_session</code> / <code>workspace</code> / 全部批量删除</span></div>
+  <div class="ep"><span class="verb get">GET</span><span class="path">/memories/export</span><span class="desc">导出</span></div>
+  <div class="ep"><span class="verb post">PUT</span><span class="path">/settings/memory</span><span class="desc">开关：是否继续抽取写入</span></div>
+</div>
+
+<p>全部端点的 <code>user_id</code> 由服务端会话决定，不接受参数传入 —— 与 <a href="#s9">§09</a> 同一条规则。</p>
+
+<div class="callout danger">
+  <span class="label">这些端点绝不能暴露给模型</span>
+  <p>管理操作是<b>用户的权利，不是 Agent 的能力</b>。不要把 <code>delete</code> / <code>update</code> 做成工具挂给任何 Agent —— 对顾问它会随 <code>regenerate</code> 重复执行（<a href="#s5">§05</a>），对助理它意味着模型可以在处理不可信文本时被诱导删除用户数据。</p>
+</div>
+
+<h3>删除的生效时机：两类 Agent 不一样</h3>
+
+<p>这是<b>最容易被忽略、却最影响用户信任</b>的一处。删除操作在 Mem0 里是即时的，但「用户不再看到它的影响」取决于记忆已经流到了哪里：</p>
+
+<table>
+  <thead><tr><th style="width:170px"></th><th style="width:250px">顾问</th><th>助理</th></tr></thead>
+  <tbody>
+    <tr><td><b>注入方式</b></td><td>每轮重新检索</td><td>会话开始注入一次，之后累积在 CLI 上下文</td></tr>
+    <tr><td><b>删除后</b></td><td class="yes">下一轮立即不再出现</td><td class="no"><b>当前会话内仍然存在，撤不回</b></td></tr>
+    <tr><td><b>新会话</b></td><td class="yes">不受影响</td><td class="yes">不受影响</td></tr>
+  </tbody>
+</table>
+
+<div class="callout danger">
+  <span class="label">助理的已注入记忆删不掉，必须如实告知</span>
+  <p><a href="#s7">§07</a> 说过：经 <code>session/prompt</code> 注入的内容会永久留在 CLI 的对话历史里，我们没有任何手段把它取出来。所以用户删除一条记忆后，<b>正在进行的助理会话仍可能引用它</b>。</p>
+  <p>不能假装删除是彻底的。UI 上应当：</p>
+  <ul style="margin-bottom:0">
+    <li>删除成功后提示「新会话不再使用这条记忆；正在进行的 N 个助理会话可能仍会引用它」</li>
+    <li>提供一个「同时结束受影响的活跃会话」选项，让想彻底断干净的用户能做到</li>
+  </ul>
+  <p>用户删除记忆往往是因为它错了或敏感，此时说「已删除」而实际上它还在被使用，是会真正伤害信任的那种不诚实。</p>
+</div>
+
+<h3>更正 vs 删除</h3>
+<p>用户改主意时有两条路径，都要支持：</p>
+<ul>
+  <li><b>隐式更正</b> —— 用户在对话里说「我现在改用 bun 了」。抽取器的 <code>add(infer=True)</code> 内部会与既有记忆比对并更新，这条路是自动的。</li>
+  <li><b>显式更正</b> —— 用户在管理界面直接改写，走 <code>update(memory_id, data)</code>。</li>
+</ul>
+<p>两者的区别在于<b>置信度</b>：显式更正是用户的明确表态，不应再被后续的自动抽取轻易推翻。建议给用户编辑过的记忆打上标记，让抽取器对它们更保守 —— 否则用户改了一次，下次对话又被自动改回去，体验会很糟。</p>
+
+<h3>暂停优于删除</h3>
+<p>「记忆功能让我不舒服」这个诉求，很多时候的正解不是删光，而是<b>停止继续记</b>。提供一个简单的开关（保留已有、不再新增），比只给「全部清除」更贴合真实需要，也避免用户为了止损而丢掉有用的记忆。</p>
+
+<h3>删除要真删</h3>
+<div class="callout warn">
+  <span class="label">需要验证的点</span>
+  <p><code>delete()</code> 是否真的把向量与内容从后端清除，还是仅标记为不可见？<code>history(memory_id)</code> 在删除后是否仍保留内容？如果变更史里还留着被删的文本，那「删除」在合规意义上并不成立。</p>
+  <p>这取决于 Mem0 的实现与所选向量库，列入 <a href="#s12">§12</a> 验证清单。<b>在确认之前，不要对用户承诺「彻底删除」。</b></p>
+</div>
+</section>
+
+<!-- ───────────────────────── 11 ──────────────────────── -->
+<section id="s11">
+<h2><span class="num">11</span>降级与成本</h2>
+
+<div class="callout rule">
+  <span class="label">记忆服务绝不能成为会话的硬依赖</span>
+  <p>Mem0 不可用时的行为必须是<b>安静降级</b>，而不是让用户发不出消息：</p>
+  <table style="margin:10px 0 0">
+    <thead><tr><th style="width:150px">环节</th><th>失败时</th></tr></thead>
+    <tbody>
+      <tr><td>检索（注入）</td><td>注入空记忆，正常继续；记录告警</td></tr>
+      <tr><td>检索（工具调用）</td><td>工具返回明确的错误信息，让模型知道记忆暂不可用</td></tr>
+      <tr><td>抽取（写入）</td><td>留在队列里重试；重试耗尽后落死信，<b>不影响会话</b></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<h3>成本</h3>
+<ul>
+  <li><b>抽取</b> —— <code>infer=True</code> 每次 <code>add()</code> 一次 LLM 调用。经 Higress 走，纳入统一成本核算（<a href="architecture.html#s6">系统架构 §06</a>）。靠 <a href="#s4">§04</a> 的入队前过滤控制总量。</li>
+  <li><b>检索</b> —— 顾问每轮一次向量检索。开销小，但要设 <code>threshold</code> 与 <code>top_k</code> 上限，避免注入大段低相关内容挤占上下文。</li>
+  <li><b>注入的 token</b> —— 顾问每轮注入的内容计入模型输入。<code>top_k=5</code> 且做长度截断，不要让记忆无声无息地吃掉上下文预算。</li>
+</ul>
+
+<h3>可观测</h3>
+<p>按 <a href="architecture.html#s7">OTel GenAI 语义约定</a>上报：抽取耗时与产出条数、检索命中数与得分分布、注入的 token 量。<b>命中数长期为零说明作用域或阈值配错了</b> —— 这类问题不报错，只是默默地什么都不记得。</p>
+</section>
+
+<!-- ───────────────────────── 11 ──────────────────────── -->
+<section id="s12">
+<h2><span class="num">12</span>待验证清单</h2>
+
+<table>
+  <thead><tr><th style="width:60px">#</th><th style="width:250px">验证项</th><th>影响</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><b>1</b></td>
+      <td><b>抽取质量</b> —— 用真实对话样本跑 <code>add(infer=True)</code>，人工评估提炼出的事实是否准确、是否有幻觉</td>
+      <td class="no">决定能否开启自动注入；提炼出错误事实并每轮注入，比没有记忆更糟</td>
+    </tr>
+    <tr>
+      <td><b>2</b></td>
+      <td>去重与更新行为 —— 同一事实多次出现、以及事实变更（pnpm → bun）时 Mem0 的实际处理</td>
+      <td class="no">决定要不要在抽取器外面再加一层收敛</td>
+    </tr>
+    <tr>
+      <td><b>3</b></td>
+      <td><code>search(filters=…)</code> 的 metadata 过滤与高级操作符行为，以及 <code>threshold</code> 的实际分布</td>
+      <td class="maybe">决定 <a href="#s3">§03</a> 的项目隔离方案是否成立</td>
+    </tr>
+    <tr>
+      <td><b>4</b></td>
+      <td>自托管 <code>Memory</code> 还是托管 <code>MemoryClient</code>；向量库选型与运维成本</td>
+      <td class="maybe">决定部署形态与数据归属</td>
+    </tr>
+    <tr>
+      <td><b>5</b></td>
+      <td>Mem0 内部调模型能否指向 Higress（自定义 LLM 配置）</td>
+      <td class="maybe">决定抽取的成本核算与出站审计能否收口</td>
+    </tr>
+    <tr>
+      <td><b>6</b></td>
+      <td>MCP 记忆服务在 Higress 上的身份注入方式 —— 能否可靠地从令牌解析 <code>user_id</code> 并强制覆盖</td>
+      <td class="no">这是 <a href="#s9">§09</a> 隔离的实现基础，做不到就不能上线</td>
+    </tr>
+    <tr>
+      <td><b>7</b></td>
+      <td><b><code>delete()</code> 是否真删</b> —— 向量与原文是否从后端清除，抑或仅标记不可见；<code>history()</code> 在删除后是否仍保留内容</td>
+      <td class="no">决定能否对用户承诺「彻底删除」（<a href="#s10">§10</a>）</td>
+    </tr>
+    <tr>
+      <td><b>8</b></td>
+      <td><code>update()</code> 后的记忆是否会被后续 <code>add(infer=True)</code> 自动改回</td>
+      <td class="maybe">决定「用户显式更正」要不要额外的保护标记</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout danger">
+  <span class="label">第 1 项决定整个功能的净收益方向</span>
+  <p>记忆功能有个不对称的风险：<b>记对了是锦上添花，记错了是持续伤害</b>。一条被错误提炼的「事实」会在之后每一轮被注入，让模型反复基于错误前提作答，而用户往往不知道问题出在哪。</p>
+  <p>所以上线顺序建议：<b>先只做检索工具（模型按需拉取、用户可见），观察一段时间的抽取质量，再开启自动注入。</b>工具调用是模型的主动选择且结果可见，出错时影响面远小于无声注入。</p>
+</div>
+
+<h3>建议的上线顺序</h3>
+<ol class="body">
+  <li><b>先打通写入与存储</b> —— 抽取器 + Mem0，但不向任何 Agent 暴露，纯观察提炼质量。</li>
+  <li><b>再开检索工具</b> —— 顾问的只读工具 + 助理的 MCP 记忆服务。模型主动调用，结果可见可评估。</li>
+  <li><b>最后开自动注入</b> —— 质量达标后，先顾问（可撤回、每轮重建）再助理（累积、不可撤回）。</li>
+  <li><b><a href="#s10">§10</a> 的管理界面与检索工具同期上线</b> —— 至少要有浏览与删除单条。记忆一旦开始影响回答，用户就需要能查能删；等出问题再补，中间那段时间是没法交代的。</li>
+</ol>
+</section>
+
+<footer>
+  <p>相关文档：<a href="architecture.html">系统架构设计</a> · <a href="session.html">会话管理设计</a> · <a href="runtime.html">运行时链路设计</a> · <a href="local.html">本地部署设计</a>。</p>
+</footer>
+
+</main>
+</div>
+</body>
+</html>

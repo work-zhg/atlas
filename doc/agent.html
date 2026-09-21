@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent 管理设计 · AI Platform</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="sitenav">
+  <a class="brand" href="./">AI&nbsp;<b>Platform</b>&nbsp;/ 设计文档</a>
+  <div class="links">
+    <a href="./">目录</a>
+    <a href="detail/">详细设计</a>
+    <a href="architecture.html">系统架构</a>
+    <a class="on" href="agent.html">Agent 管理</a>
+    <a href="skill.html">技能管理</a>
+    <a href="mcp.html">MCP 管理</a>
+    <a href="permission.html">权限管理</a>
+    <a href="execution.html">执行环境</a>
+    <a href="session.html">会话管理</a>
+    <a href="native.html">native Agent</a>
+    <a href="runtime.html">运行时链路</a>
+    <a href="local.html">本地部署</a>
+    <a href="memory.html">记忆</a>
+    <a href="observability.html">可观测性</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+<nav class="toc" aria-label="目录">
+  <div class="eyebrow">本页</div>
+  <ol>
+    <li><a href="#s1">定位与边界</a></li>
+    <li><a href="#s2">定义模型</a></li>
+    <li><a href="#s3">版本化：什么进版本</a></li>
+    <li><a href="#s4">三个时刻</a></li>
+    <li><a href="#s5">工具与 MCP 装配</a></li>
+    <li><a href="#s6">MCP 引用的稳定性</a></li>
+    <li><a href="#s7">capabilities 是派生的</a></li>
+    <li><a href="#s8">技能与模型</a></li>
+    <li><a href="#s9">生命周期与灰度</a></li>
+    <li><a href="#s10">权限</a></li>
+    <li><a href="#s11">待验证清单</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<header class="hero">
+  <p class="kicker">Agent Management</p>
+  <h1>Agent 管理设计</h1>
+  <p class="lede">Agent 定义的版本化、工具集装配、能力推导与生命周期。这个模块是 <code>capabilities</code> 的<b>唯一所有者</b> —— 前端据此决定显示哪些按钮，所以它必须是算出来的结论，而不是手填的配置。</p>
+  <div class="meta">
+    <span>版本不可变</span><span>能力派生</span><span>装配</span><span>灰度</span>
+  </div>
+</header>
+
+<!-- ───────────────────────── 1 ───────────────────────── -->
+<section id="s1">
+<h2><span class="num">01</span>定位与边界</h2>
+
+<p>Agent 管理回答三个问题：<b>这个智能体是什么</b>（定义）、<b>它能做什么</b>（能力）、<b>它变了之后存量会话怎么办</b>（版本）。</p>
+
+<div class="callout rule">
+  <span class="label">一条分界线推导出全部能力差异</span>
+  <p><b>上下文由谁持有。</b>这是 <code>native</code> 与 <code>acp</code> 唯一的本质区别，也是整份设计里所有不对称的来源：</p>
+  <table style="margin:12px 0 0">
+    <thead><tr><th style="width:110px"></th><th style="width:240px">上下文在哪</th><th>直接后果</th></tr></thead>
+    <tbody>
+      <tr><td><code>native</code></td><td>服务端的 Message 表，<b>每轮重建输入</b></td><td>可截断、可改写、可复制 → 编辑类能力全部成立</td></tr>
+      <tr><td><code>acp</code></td><td>CLI 进程内，服务端只有句柄</td><td>动不了它 → 编辑类能力全部不成立</td></tr>
+    </tbody>
+  </table>
+  <p style="margin-top:12px">这不是策略选择，是<b>机制事实</b>。把它当实现细节抹平，只会得到一个两边都不好用的抽象。</p>
+</div>
+
+<h3>不在本文范围</h3>
+<ul>
+  <li>Session / Run 的对象模型 —— 见<a href="session.html">会话管理</a></li>
+  <li>Agent 实际执行的链路 —— 见<a href="runtime.html">运行时链路</a></li>
+  <li>技能内容本身的编写与评审 —— 本文只管「哪个 Agent 挂哪些技能」</li>
+  <li>MCP server 的注册、启停与安全审查 —— 本文只管「哪个 Agent 引用哪些 server」</li>
+  <li>用户自建 Agent —— <b>本期不做</b>，见 <a href="#s10">§10</a></li>
+</ul>
+</section>
+
+<!-- ───────────────────────── 2 ───────────────────────── -->
+<section id="s2">
+<h2><span class="num">02</span>定义模型</h2>
+
+<pre><code><span class="tok-k">CREATE TABLE</span> agents (
+  agent_id         <span class="tok-n">TEXT</span>        <span class="tok-k">NOT NULL</span>,
+  version          <span class="tok-n">INT</span>         <span class="tok-k">NOT NULL</span>,
+  status           <span class="tok-n">TEXT</span>        <span class="tok-k">NOT NULL</span>,   <span class="tok-c">-- draft | published | deprecated</span>
+
+  <span class="tok-c">-- 展示</span>
+  name             <span class="tok-n">TEXT</span>        <span class="tok-k">NOT NULL</span>,
+  description      <span class="tok-n">TEXT</span>,
+  icon             <span class="tok-n">TEXT</span>,
+
+  <span class="tok-c">-- 行为（改动即需新版本，见 §03）</span>
+  type             <span class="tok-n">TEXT</span>        <span class="tok-k">NOT NULL</span>,   <span class="tok-w">-- native | acp —— 创建后不可改</span>
+  cli_type         <span class="tok-n">TEXT</span>,                   <span class="tok-w">-- acp: claude-code | codex | … 不可改（§07）</span>
+  system_prompt    <span class="tok-n">TEXT</span>,
+  tools            <span class="tok-n">JSONB</span>       <span class="tok-k">NOT NULL</span>,   <span class="tok-c">-- 内置工具名列表</span>
+  mcp_servers      <span class="tok-n">JSONB</span>,                  <span class="tok-c">-- 启用的 MCP server 引用</span>
+  skills           <span class="tok-n">JSONB</span>,                  <span class="tok-c">-- 技能集合</span>
+
+  <span class="tok-c">-- 运行时装配</span>
+  launch           <span class="tok-n">JSONB</span>,                  <span class="tok-c">-- acp: 镜像 / command / args / env</span>
+  model_default    <span class="tok-n">TEXT</span>,                   <span class="tok-c">-- 默认模型，会话可覆盖（§08）</span>
+
+  <span class="tok-c">-- 能力（派生，非手填，见 §07）</span>
+  caps_declared    <span class="tok-n">JSONB</span>       <span class="tok-k">NOT NULL</span>,
+  caps_probed      <span class="tok-n">JSONB</span>,                  <span class="tok-c">-- acp: initialize 探测，覆盖 declared</span>
+  probed_at        <span class="tok-n">TIMESTAMPTZ</span>,
+
+  <span class="tok-c">-- 审计</span>
+  created_by       <span class="tok-n">TEXT</span>        <span class="tok-k">NOT NULL</span>,
+  created_at       <span class="tok-n">TIMESTAMPTZ</span> <span class="tok-k">NOT NULL</span>,
+  published_at     <span class="tok-n">TIMESTAMPTZ</span>,
+
+  <span class="tok-k">PRIMARY KEY</span> (agent_id, version)
+);
+
+<span class="tok-c">-- 一个 agent 同时只能有一个 draft</span>
+<span class="tok-k">CREATE UNIQUE INDEX</span> uq_agent_draft <span class="tok-k">ON</span> agents (agent_id)
+  <span class="tok-k">WHERE</span> status = <span class="tok-s">'draft'</span>;</code></pre>
+
+<div class="callout danger">
+  <span class="label">type 与 cli_type 创建后不可修改</span>
+  <p>不是「改了要发新版本」，而是<b>根本不能改</b>。</p>
+  <p><code>native</code> 与 <code>acp</code> 的执行路径、上下文归属、能力集、运行时装配方式全都不同 —— 把一个 <code>native</code> 改成 <code>acp</code>，等于换了个完全不同的东西，而存量会话还引用着它的 <code>agent_id</code>。<code>cli_type</code> 同理：换 CLI 会换掉整组探测能力（<a href="#s7">§07</a>）。</p>
+  <p>要换机制或换 CLI，<b>建一个新的 <code>agent_id</code></b>。这比允许修改再去处理一堆边界情况简单得多，代价只是多一个标识符。</p>
+</div>
+
+<div class="callout rule">
+  <span class="label">draft 可变，published 不可变</span>
+  <p>版本一旦 <code>published</code> 就<b>永不修改</b> —— 因为 <code>sessions.agent_version</code> 指着它，改了等于篡改存量会话的历史行为，而且会话的 <code>capabilities</code> 快照会与实际不符。</p>
+  <p>但调提示词在开发期是高频动作，每改一个字就发一版不现实。所以留一个 <code>draft</code>：可反复修改、<b>不能被任何 Session 引用</b>、只能通过「试用」入口验证（<a href="#s9">§09</a>）。满意了再发布成新版本。</p>
+</div>
+
+<h3>顾问与助理是称呼，不是字段</h3>
+<p>文档里常说的「顾问」与「助理」，指的是两种典型用法，<b>数据模型里只有 <code>type</code></b>：</p>
+<pre><code>顾问  ≈ type = native   进程内执行，出谋划策
+助理  ≈ type = acp      经 ACP 驱动 CLI，实际干活</code></pre>
+<p>之所以不把角色做成字段，是因为它推导不出任何东西 —— 真正决定能力的是 <code>type</code>（<a href="#s7">§07</a>）。多一个字段只会多一处可能与实际不符的地方。</p>
+</section>
+
+<!-- ───────────────────────── 3 ───────────────────────── -->
+<section id="s3">
+<h2><span class="num">03</span>版本化：什么进版本</h2>
+
+<p>这是这份设计里最需要想清楚的一条划分。划错了，要么版本爆炸（改个图标都发版），要么存量会话行为被悄悄改变。</p>
+
+<div class="callout rule">
+  <span class="label">判断标准</span>
+  <p><b>能改变 Agent 行为的进版本；只影响展示或单次执行的不进。</b></p>
+</div>
+
+<table>
+  <thead><tr><th style="width:190px">字段</th><th style="width:110px">进版本</th><th>理由</th></tr></thead>
+  <tbody>
+    <tr><td><code>type</code> / <code>cli_type</code></td><td class="no">不可改</td><td><b>根本不能修改</b>，要换就建新的 agent_id（<a href="#s2">§02</a>）</td></tr>
+    <tr><td><code>system_prompt</code></td><td class="yes">是</td><td>行为的主要决定因素</td></tr>
+    <tr><td><code>tools</code></td><td class="yes">是</td><td>能力边界</td></tr>
+    <tr><td><code>mcp_servers</code></td><td class="yes">是</td><td>同上</td></tr>
+    <tr><td><code>skills</code></td><td class="yes">是</td><td>影响行为；<b>但技能内容本身另有版本</b>，见下</td></tr>
+    <tr><td><code>launch</code></td><td class="yes">是</td><td>镜像版本变化会改变 CLI 行为</td></tr>
+    <tr><td><code>model_default</code></td><td class="no">否</td><td>见下</td></tr>
+    <tr><td><code>name</code> / <code>description</code> / <code>icon</code></td><td class="no">否</td><td>纯展示，改了不影响任何已发生的事</td></tr>
+    <tr><td><code>caps_*</code></td><td class="no">否</td><td>派生值，不是配置（<a href="#s7">§07</a>）</td></tr>
+  </tbody>
+</table>
+
+<h3>为什么 model 不进版本</h3>
+<p>把模型选择做成版本维度会很难受：同一个 Agent 想试三个模型就要三个版本，而它们的提示词、工具、技能完全一样 —— 版本号失去了「行为变更」的含义。</p>
+<p>所以 <code>model_default</code> 只是默认值，<b>会话创建时可覆盖</b>，实际使用的模型记在 <code>sessions.model</code> 上。想固定某个 Agent 只能用某模型，那是策略问题，用配置约束而不是版本。</p>
+
+<div class="callout warn">
+  <span class="label">技能是个双层版本问题</span>
+  <p>Agent 版本记的是「挂了哪些技能」，但<b>技能内容本身会独立更新</b>。于是同一个 Agent 版本，在技能更新前后的实际行为可能不同 —— 版本不可变的承诺出现了缺口。</p>
+  <p>两种处理，看对确定性的要求：</p>
+  <ul style="margin-bottom:0">
+    <li><b>引用技能版本</b>（严格）—— <code>skills</code> 里存 <code>name@version</code>，完全可复现，代价是技能更新要逐个 Agent 发版</li>
+    <li><b>引用技能名</b>（宽松）—— 技能更新自动生效，代价是 Agent 版本不再完全决定行为</li>
+  </ul>
+  <p style="margin-top:10px">建议<b>宽松起步、为关键 Agent 提供固定版本的选项</b>。技能更新通常是修正与增强，强制逐个发版会让技能迭代寸步难行。但这个取舍要写在文档里，别让人以为「版本号一样行为就一样」。</p>
+</div>
+</section>
+
+<!-- ───────────────────────── 4 ───────────────────────── -->
+<section id="s4">
+<h2><span class="num">04</span>三个时刻</h2>
+
+<p>Agent 定义从写下到真正跑起来，经过三个时刻。<b>把每件事放在正确的时刻做，是这个模块设计的主要内容</b> —— 校验放晚了就成了运行时事故，解析放早了就无法响应配置变更。</p>
+
+<figure>
+<svg viewBox="0 0 900 420" role="img" aria-labelledby="figA-t figA-d" font-family="var(--sans)">
+  <title id="figA-t">Agent 定义的三个时刻</title>
+  <desc id="figA-d">发布时冻结版本并做全部静态校验；创建会话时解析最新已发布版本、钉住版本号并投影能力；运行时装配工具集、渲染 MCP 配置并注入技能。</desc>
+  <defs>
+    <marker id="arA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#94A3B8"/>
+    </marker>
+  </defs>
+
+  <rect x="24" y="40" width="262" height="212" rx="10" fill="#0E1223" stroke="#22C55E" stroke-opacity=".55"/>
+  <text x="44" y="70" fill="#22C55E" font-size="11" font-family="monospace">① 发布时</text>
+  <text x="44" y="94" fill="#F8FAFC" font-size="14" font-weight="600">版本冻结</text>
+  <line x1="44" y1="106" x2="266" y2="106" stroke="#232B3D"/>
+  <text x="44" y="130" fill="#94A3B8" font-size="11">· 工具 / MCP 存在性</text>
+  <text x="44" y="152" fill="#94A3B8" font-size="11">· 技能可解析</text>
+  <text x="44" y="174" fill="#94A3B8" font-size="11">· 提示词长度上限</text>
+  <text x="44" y="196" fill="#94A3B8" font-size="11">· 记录 MCP 工具指纹</text>
+  <text x="44" y="218" fill="#94A3B8" font-size="11">· 推导 caps_declared</text>
+  <text x="44" y="240" fill="#F59E0B" font-size="10.5">此后该版本永不修改</text>
+
+  <line x1="286" y1="146" x2="336" y2="146" stroke="#94A3B8" stroke-width="1.5" marker-end="url(#arA)"/>
+
+  <rect x="336" y="40" width="262" height="212" rx="10" fill="#0E1223" stroke="#38BDF8" stroke-opacity=".55"/>
+  <text x="356" y="70" fill="#38BDF8" font-size="11" font-family="monospace">② 建会话时</text>
+  <text x="356" y="94" fill="#F8FAFC" font-size="14" font-weight="600">解析与钉住</text>
+  <line x1="356" y1="106" x2="578" y2="106" stroke="#232B3D"/>
+  <text x="356" y="130" fill="#94A3B8" font-size="11">· 解析最新 published</text>
+  <text x="356" y="152" fill="#94A3B8" font-size="11">· 写入 sessions.agent_version</text>
+  <text x="356" y="174" fill="#94A3B8" font-size="11">· 投影 capabilities 给前端</text>
+  <text x="356" y="196" fill="#94A3B8" font-size="11">· 应用 model 覆盖</text>
+  <text x="356" y="218" fill="#F59E0B" font-size="10.5">此后该会话认定这一版</text>
+
+  <line x1="598" y1="146" x2="648" y2="146" stroke="#94A3B8" stroke-width="1.5" marker-end="url(#arA)"/>
+
+  <rect x="648" y="40" width="228" height="212" rx="10" fill="#0E1223" stroke="#A78BFA" stroke-opacity=".55"/>
+  <text x="668" y="70" fill="#A78BFA" font-size="11" font-family="monospace">③ 运行时</text>
+  <text x="668" y="94" fill="#F8FAFC" font-size="14" font-weight="600">装配</text>
+  <line x1="668" y1="106" x2="856" y2="106" stroke="#232B3D"/>
+  <text x="668" y="130" fill="#94A3B8" font-size="11">· 构造工具集</text>
+  <text x="668" y="152" fill="#94A3B8" font-size="11">· 渲染 mcpServers</text>
+  <text x="668" y="174" fill="#94A3B8" font-size="11">  （指向 Higress）</text>
+  <text x="668" y="196" fill="#94A3B8" font-size="11">· 挂载 / 下发技能</text>
+  <text x="668" y="218" fill="#94A3B8" font-size="11">· 探测 caps_probed</text>
+
+  <rect x="24" y="286" width="852" height="106" rx="8" fill="#0B0F1E" stroke="#232B3D"/>
+  <text x="44" y="312" fill="#F8FAFC" font-size="12" font-weight="600">为什么校验必须在①而不是③</text>
+  <text x="44" y="338" fill="#94A3B8" font-size="11">运行时才发现「引用的工具不存在」，意味着这个 Agent 已经被发布、被用户选中、会话已经建立 ——</text>
+  <text x="44" y="358" fill="#94A3B8" font-size="11">此时只剩「让会话失败」一个选项，而用户完全不知道为什么。</text>
+  <text x="44" y="380" fill="#22C55E" font-size="11">→ 发布时拒绝，是唯一能给出清晰错误、且不伤害任何用户的时机。</text>
+</svg>
+<figcaption><b>能静态判定的一律在发布时判定。</b>这个模块的价值很大程度上就是「把问题挡在发布这一关」—— 越往后越难处理，到了运行时就只剩「失败」这一个选项，而失败的代价由用户承担。</figcaption>
+</figure>
+</section>
+
+<!-- ───────────────────────── 5 ───────────────────────── -->
+<section id="s5">
+<h2><span class="num">05</span>工具与 MCP 装配</h2>
+
+<h3>两类 Agent 的工具来源不同</h3>
+<table>
+  <thead><tr><th style="width:150px"></th><th style="width:250px"><code>native</code></th><th><code>acp</code></th></tr></thead>
+  <tbody>
+    <tr><td><b>主要工具</b></td><td>平台内置工具（<code>tools</code> 列表）</td><td>CLI 自带（文件读写、命令执行）</td></tr>
+    <tr><td><b>我们能控制的</b></td><td>全部</td><td>只有 MCP server 列表与粗粒度闸门</td></tr>
+    <tr><td><b>装配时机</b></td><td><code>create_agent(tools=…)</code></td><td><code>session/new</code> 的 <code>mcpServers</code></td></tr>
+  </tbody>
+</table>
+
+<h3>发布时校验</h3>
+<pre><code><span class="tok-k">for</span> t <span class="tok-k">in</span> agent.tools:
+    <span class="tok-k">if</span> t <span class="tok-k">not in</span> tool_registry:
+        <span class="tok-k">raise</span> PublishRejected(<span class="tok-s">f"未知工具：{t}"</span>)
+
+<span class="tok-k">for</span> s <span class="tok-k">in</span> agent.mcp_servers:
+    <span class="tok-k">if</span> s <span class="tok-k">not in</span> mcp_registry <span class="tok-k">or not</span> mcp_registry[s].enabled:
+        <span class="tok-k">raise</span> PublishRejected(<span class="tok-s">f"MCP server 不可用：{s}"</span>)
+    record_tool_fingerprint(agent, s)      <span class="tok-c"># 见 §06</span>
+
+<span class="tok-k">if</span> agent.type == <span class="tok-s">"acp"</span>:
+    <span class="tok-k">assert</span> agent.cli_type <span class="tok-k">and</span> agent.launch
+<span class="tok-k">else</span>:
+    <span class="tok-k">assert</span> agent.cli_type <span class="tok-k">is</span> <span class="tok-n">None</span> <span class="tok-k">and</span> agent.launch <span class="tok-k">is</span> <span class="tok-n">None</span></code></pre>
+
+<h3>MCP 配置指向 Higress</h3>
+<p>运行时渲染 <code>mcpServers</code> 时，每个 server 表达为指向 Higress MCP 网关的 HTTP 端点（<a href="runtime.html#s7">运行时链路 §07</a>），而不是直连。这样 <code>acp</code> 类型的工具调用也纳入统一的鉴权、限流、配额与出站审计。</p>
+
+<div class="callout warn">
+  <span class="label">闸门不能替代审批</span>
+  <p><code>allowedTools</code> 之类的静态白名单决定「能不能调」，ACP 的 <code>request_permission</code> 决定「这一次准不准」。<b>把审批省掉只留白名单，等于把逐次确认降级成一次性授权</b>（<a href="runtime.html#s2">运行时链路 §2.6</a>）。</p>
+</div>
+</section>
+
+<!-- ───────────────────────── 6 ───────────────────────── -->
+<section id="s6">
+<h2><span class="num">06</span>MCP 引用的稳定性</h2>
+
+<div class="callout warn">
+  <span class="label">MCP server 的工具列表会变，而 Agent 版本管不住它</span>
+  <p><a href="#s3">§03</a> 承诺「同一个 Agent 版本行为一致」。但 <code>mcp_servers</code> 里存的是 server 的<b>引用</b>，它提供哪些工具是连上去之后才知道的 —— server 升级后多了或少了工具，同一个 Agent 版本看到的工具集就变了。</p>
+  <p>这和技能的双层版本问题（<a href="#s3">§03</a>）是同一类缺口，但更隐蔽：技能更新至少是我们自己发起的，MCP server 可能是第三方在维护。</p>
+</div>
+
+<h3>处理：记录工具指纹</h3>
+<p>发布时把每个引用的 MCP server 的<b>工具名集合哈希</b>记进 Agent 版本：</p>
+
+<pre><code>mcp_servers = [
+  { <span class="tok-s">"name"</span>: <span class="tok-s">"github"</span>,
+    <span class="tok-s">"tool_fingerprint"</span>: <span class="tok-s">"sha256:a3f…"</span>,   <span class="tok-c">// 发布时快照</span>
+    <span class="tok-s">"fingerprint_at"</span>: <span class="tok-s">"2026-09-18T…"</span> }
+]</code></pre>
+
+<ul>
+  <li><b>指纹变化时告警</b>，并把依赖它的 Agent 标为待复核 —— 不是自动拦截，因为多数变化是无害的新增</li>
+  <li><b>记进可观测性</b>，让「某个 Agent 最近行为变了」能追到 MCP server 升级这个原因</li>
+  <li>对确定性要求高的 Agent，可以选择<b>指纹不匹配就拒绝启动会话</b></li>
+</ul>
+
+<p>这不是安全机制，是<b>可复现性机制</b>：目的是让「同一个版本表现不同」这件事可被发现、可被解释，而不是悄无声息。</p>
+</section>
+
+<!-- ───────────────────────── 7 ───────────────────────── -->
+<section id="s7">
+<h2><span class="num">07</span>capabilities 是派生的</h2>
+
+<div class="callout rule">
+  <span class="label">不是手填的配置，是计算出来的结论</span>
+  <p><code>capabilities</code> 决定前端显示哪些按钮（<a href="session.html#s4">会话管理 §04</a>）。如果它是管理界面上的一组勾选框，就必然会和实际能力脱节 —— 有人勾了 <code>regenerate</code> 但 Agent 是 <code>acp</code>，前端就会显示一个点了会失败的按钮。</p>
+  <p><b>它应当由 <code>type</code> 与探测结果推导，管理界面只读展示。</b></p>
+</div>
+
+<h3>推导规则</h3>
+<p>全部来自 <a href="#s1">§01</a> 那条分界线 —— <b>上下文由谁持有</b>：</p>
+
+<table>
+  <thead><tr><th style="width:190px">能力</th><th style="width:170px">取值</th><th>依据</th></tr></thead>
+  <tbody>
+    <tr><td><code>regenerate</code><br><code>edit_history</code><br><code>branch</code><br><code>compact</code><br><code>rollback_on_cancel</code></td><td><code>type == native</code></td><td>服务端持有上下文，每轮重建输入 → 截断、改写、复制、压缩都只是改输入</td></tr>
+    <tr><td><code>in_run_input</code></td><td><code>type == acp</code></td><td>Run 进行中插入<b>自由文本</b>。native 的 Run 内交互是结构化决策，不是对话</td></tr>
+    <tr><td><code>needs_approval</code></td><td><b>由 spec 决定</b><br><code>bool(require_approval_for)</code></td><td>★ 与 type 正交 —— 两类 Agent 都能做 Run 内审批，见下方修正</td></tr>
+    <tr><td><code>resume_mid_run</code></td><td>恒为 <code>False</code></td><td>两类都不支持</td></tr>
+    <tr><td><code>resume_session</code></td><td>native: <code>True</code><br>acp: <b>探测</b></td><td>native 的 Message 在库里；acp 取决于 adapter 能力位</td></tr>
+  </tbody>
+</table>
+
+<pre><code>is_native = (type == <span class="tok-s">"native"</span>)
+
+caps.regenerate         = is_native
+caps.edit_history       = is_native
+caps.branch             = is_native
+caps.compact            = is_native
+caps.rollback_on_cancel = is_native
+caps.in_run_input       = <span class="tok-k">not</span> is_native
+caps.needs_approval     = <span class="tok-k">bool</span>(spec.limits.require_approval_for)   <span class="tok-c">← 由 spec 决定</span>
+caps.resume_mid_run     = <span class="tok-n">False</span>
+caps.resume_session     = <span class="tok-n">True</span> <span class="tok-k">if</span> is_native <span class="tok-k">else</span> <span class="tok-w">probe()</span></code></pre>
+
+<p>除 <code>needs_approval</code> 与 <code>resume_session</code> 外，全部由 <code>type</code> 一个字段决定 —— 这正是把角色做成字段没有意义的原因（<a href="#s2">§02</a>）。</p>
+
+<div class="callout warn">
+  <span class="label">修正 · 来自 atlas 的落地</span>
+  <p>本节原先写的是 <code>caps.needs_approval = not is_native</code>，理由是「native 无 checkpoint，挂不住」。<b>在 atlas 上落地时被证伪</b>：它的 native agent 有完整的 Run 内审批 —— 中间件在图内挂起、拒绝作为工具结果回给模型继续跑，<code>bash</code> 与编码委派还是<b>强制</b>入审批列表，写在 schema 层。</p>
+  <p>病根是把两件事塞进了一个能力位。「Run 内能否挂起等人」两类都能；「挂起时接受什么」才是 type 推导的 —— native 接受<b>结构化决策</b>（允许一次 / 总是允许 / 拒绝），acp 还能接受<b>自由文本</b>。前者归 <code>needs_approval</code> 且由 spec 决定，后者归 <code>in_run_input</code> 且由 type 决定。完整论证见<a href="detail/native.html#s2">详细设计 §02</a>。</p>
+</div>
+
+<h3>capabilities 与具体 CLI 强相关</h3>
+
+<div class="callout danger">
+  <span class="label">Claude Code 和 Codex 的能力集大概率不同</span>
+  <p><code>caps_probed</code> 来自 ACP <code>initialize</code> 的响应，而<b>那是每个 adapter 各自实现的</b>。Claude Code 的 adapter 可能声明 <code>sessionCapabilities.resume</code>，Codex 的可能不声明 —— 于是同样是 <code>acp</code> 类型，一个能无损恢复会话，另一个每次冷启动都丢上下文。</p>
+  <p>这个差异<b>用户是能感知到的</b>（一个刷新后接着聊，一个提示「会话已重启」），所以它必须在 Agent 这一层就区分开。</p>
+</div>
+
+<h3>处理：不同 CLI = 不同 agent_id</h3>
+<p>这一点其实已经由现有模型保证了 —— <code>launch</code> 配置不同就是不同的 Agent 定义。<code>cli_type</code> 字段只是把它<b>显式化、可查询</b>：</p>
+
+<pre><code>agent_id = <span class="tok-s">"code-assistant-claude"</span>
+  type     = <span class="tok-s">"acp"</span>
+  cli_type = <span class="tok-s">"claude-code"</span>
+  launch   = { adapter: <span class="tok-s">"@zed-industries/claude-agent-acp"</span>, … }
+  caps_probed = { resume_session: <span class="tok-s">"native"</span>, … }     <span class="tok-c">← 探测所得</span>
+
+agent_id = <span class="tok-s">"code-assistant-codex"</span>
+  type     = <span class="tok-s">"acp"</span>
+  cli_type = <span class="tok-s">"codex"</span>
+  launch   = { adapter: <span class="tok-s">"codex-acp"</span>, … }
+  caps_probed = { resume_session: <span class="tok-s">"none"</span>, … }         <span class="tok-c">← 可能不同</span></code></pre>
+
+<div class="callout warn">
+  <span class="label">不要做成「一个 Agent，运行时选 CLI」</span>
+  <p>看起来更灵活，实际会坏在两处：</p>
+  <ul style="margin-bottom:0">
+    <li><b>capabilities 无法在建会话时确定</b> —— 而 <a href="session.html#s4">会话管理 §04</a> 要求它随会话快照投影给前端，前端据此决定按钮。选 CLI 之后能力才知道，就意味着按钮要在会话开始后才能渲染。</li>
+    <li><b><code>sessions.agent_version</code> 钉不住行为</b> —— 同一个版本在不同 CLI 上表现不同，版本不可变的承诺失效。</li>
+  </ul>
+  <p style="margin-top:10px">用户想选「用 Claude Code 还是 Codex」，那就<b>在 Agent 列表里给他两个可选项</b>，而不是在一个 Agent 内部开关。多一个 agent_id 的成本，远低于把不确定性引入能力契约。</p>
+</div>
+
+<h3>declared 与 probed</h3>
+<p><code>acp</code> 的 <code>resume_session</code> 取决于 adapter 声明的 <code>sessionCapabilities.resume</code> 与 <code>agentCapabilities.loadSession</code>，<b>要真正连上才知道</b>（<a href="runtime.html#s3">运行时链路 §03</a>）。</p>
+
+<pre><code>caps_declared   发布时按 type 推导的保守值
+caps_probed     首次 initialize 握手后写回，覆盖 declared
+probed_at       探测时间
+
+<span class="tok-w">未探测时对外一律下发保守值（resume_session = "none"）</span></code></pre>
+
+<div class="callout warn">
+  <span class="label">探测结果会过期</span>
+  <p>adapter 升级、镜像更新、本地设备上装了不同版本的 CLI —— 都会让 <code>caps_probed</code> 与实际不符。</p>
+  <p>所以探测结果要<b>绑定到具体的 <code>launch</code> 配置</b>（镜像摘要或命令+版本），配置变了就作废重探。本地部署下同一 Agent 在不同设备上的探测结果甚至可能不同，<b>此时应取最保守的那个对外下发</b> —— 宁可少声明一项能力，也不要让用户点了按钮才发现不支持。</p>
+</div>
+</section>
+
+<!-- ───────────────────────── 8 ───────────────────────── -->
+<section id="s8">
+<h2><span class="num">08</span>技能与模型</h2>
+
+<h3>技能绑定</h3>
+<p>Agent 定义里的 <code>skills</code> 决定它能看到哪些技能。两类的下发方式完全不同：</p>
+
+<table>
+  <thead><tr><th style="width:150px"></th><th style="width:250px"><code>native</code></th><th><code>acp</code></th></tr></thead>
+  <tbody>
+    <tr><td><b>下发方式</b></td><td>进程内直接装载</td><td>卷挂载或 <code>--plugin-dir</code>（<a href="runtime.html#s8">§08</a>）</td></tr>
+    <tr><td><b>生效时机</b></td><td>下一轮</td><td>Pod / 进程启动时</td></tr>
+    <tr><td><b>在途会话</b></td><td>不受影响（版本已钉住）</td><td>不受影响</td></tr>
+  </tbody>
+</table>
+
+<div class="callout warn">
+  <span class="label">按 Agent 下发不同技能集，别用同一个卷挑挑拣拣</span>
+  <p><a href="runtime.html#s8">运行时链路 §08</a> 已提过：在一个大卷里用 subPath 挑技能，会让「这个 Agent 到底能看到哪些技能」散落在部署模板里。<b>能力边界应当是可查询的配置，不是挂载表的副产品。</b></p>
+</div>
+
+<h3>模型</h3>
+<pre><code>agents.model_default    <span class="tok-c">Agent 的默认模型</span>
+      ↓ 会话创建时可覆盖
+sessions.model          <span class="tok-c">该会话实际使用的模型</span>
+      ↓ 运行时
+指向 Higress 的 LLM 网关，而非模型厂商</code></pre>
+
+<p>所有模型调用经 Higress（<a href="architecture.html#s6">系统架构 §06</a>），所以 Agent 定义里填的是<b>网关侧的模型标识</b>，不是厂商的原始模型名。换供应商、做降级转移对 Agent 定义透明。</p>
+
+<div class="callout warn">
+  <span class="label">acp 的模型可能不受我们控制</span>
+  <p><code>native</code> 的模型由 <code>create_agent(model=…)</code> 直接决定。但 <code>acp</code> 跑在 CLI 里，模型能否由我们指定<b>取决于 adapter 暴露了什么</b>（ACP 的 <code>session/set_config_option</code> 或 <code>modes</code>）—— 这是 <a href="runtime.html#s12">运行时链路 §12</a> 的验证项。</p>
+  <p>若不可控，<code>model_default</code> 对 <code>acp</code> 就只是记录性字段，实际模型由 CLI 自身配置决定。<b>此时管理界面不该显示成可选项</b>，否则用户改了没反应，且无从得知为什么。</p>
+</div>
+</section>
+
+<!-- ───────────────────────── 9 ───────────────────────── -->
+<section id="s9">
+<h2><span class="num">09</span>生命周期与灰度</h2>
+
+<pre><code>draft ──发布（全量校验）──→ published ──发新版──→ published(v+1)
+  ↑                             │                      │
+  └────── 从某版本派生 ──────────┘                      │
+                                ↓                      ↓
+                          deprecated ←────────── 不再作为新会话的默认
+                                ↓
+                          存量会话仍可继续（版本已钉住）</code></pre>
+
+<h3>版本升级不影响在途会话</h3>
+<p>这是 <code>sessions.agent_version</code> 钉住版本带来的直接好处：发布 v2 时，所有引用 v1 的会话<b>继续按 v1 的定义运行</b>，提示词、工具、能力集都不变。</p>
+<p>新建会话默认解析<b>最新的 published 版本</b>。用户不会看到「聊着聊着 Agent 性格变了」，这在提示词频繁迭代的阶段尤其重要。</p>
+
+<h3>灰度</h3>
+<table>
+  <thead><tr><th style="width:170px">方式</th><th>适用</th></tr></thead>
+  <tbody>
+    <tr><td><b>试用 draft</b></td><td>开发者自测。指定用户可用 draft 建会话，<b>这类会话应当标记出来</b>，避免混进正常数据与评估样本</td></tr>
+    <tr><td><b>按用户灰度</b></td><td>新版本先对部分用户生效，其余仍解析旧版本</td></tr>
+    <tr><td><b>回滚</b></td><td>把上一版重新标为最新 published。<b>不要删除问题版本</b> —— 引用它的存量会话需要它继续存在</td></tr>
+  </tbody>
+</table>
+
+<div class="callout danger">
+  <span class="label">deprecated 不等于可删除</span>
+  <p>只要还有 Session 引用某个版本，它的定义就必须保留 —— 否则会话无法恢复、<code>capabilities</code> 无法解析、审计无法回溯「当时它是怎么配置的」。</p>
+  <p><code>deprecated</code> 的语义是<b>「不再作为新会话的默认」</b>，不是「删掉」。真正的清理要等到引用它的会话全部结束或归档，而那通常是很久以后的事。<b>Agent 定义是审计证据，不是可以随手清理的缓存。</b></p>
+</div>
+</section>
+
+<!-- ───────────────────────── 10 ──────────────────────── -->
+<section id="s10">
+<h2><span class="num">10</span>权限</h2>
+
+<table>
+  <thead><tr><th style="width:170px">角色</th><th>能做什么</th></tr></thead>
+  <tbody>
+    <tr><td><b>平台管理员</b></td><td>定义与发布 Agent、管理工具注册表与 MCP server 注册表</td></tr>
+    <tr><td><b>租户管理员</b></td><td>在平台提供的 Agent 中选择本租户启用哪些；调整非行为字段</td></tr>
+    <tr><td><b>普通用户</b></td><td>选择已启用的 Agent 建会话；会话级覆盖模型（若允许）</td></tr>
+  </tbody>
+</table>
+
+<div class="callout rule">
+  <span class="label">本期不做用户自建 Agent</span>
+  <p>用户自建意味着任意组合提示词、工具与 MCP server，而这些组合的行为边界需要一套完整的工具授权模型才能说清 —— 那是独立的一块设计。</p>
+  <p><b>先把平台定义的 Agent 跑稳。</b>在只有少数几个 Agent 的阶段，自建带来的灵活性远不如它带来的不确定性多。</p>
+</div>
+
+<h3>审计</h3>
+<p>发布是一次<b>会影响所有用户的变更</b>，必须留痕：谁在什么时候发布了哪个版本、改了什么（与上一版的 diff）、校验结果如何。出问题时第一个要查的就是「最近发了什么版」。</p>
+</section>
+
+<!-- ───────────────────────── 11 ──────────────────────── -->
+<section id="s11">
+<h2><span class="num">11</span>待验证清单</h2>
+
+<table>
+  <thead><tr><th style="width:60px">#</th><th style="width:250px">验证项</th><th>影响</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><b>1</b></td>
+      <td>MCP server 的工具列表能否稳定取到（用于指纹），以及升级后变化是否可靠检出</td>
+      <td class="maybe">决定 <a href="#s6">§06</a> 的可复现性机制能否自动化，还是只能靠人工复查</td>
+    </tr>
+    <tr>
+      <td><b>2</b></td>
+      <td><code>acp</code> 的模型能否经 ACP 的 <code>set_config_option</code> / <code>modes</code> 指定</td>
+      <td class="maybe">决定 <code>model_default</code> 对 <code>acp</code> 是可配项还是记录项（<a href="#s8">§08</a>）</td>
+    </tr>
+    <tr>
+      <td><b>3</b></td>
+      <td>同一 Agent 在不同设备/镜像上的 <code>caps_probed</code> 差异幅度</td>
+      <td class="maybe">决定「取最保守值」是否够用，还是要按设备分别下发</td>
+    </tr>
+    <tr>
+      <td><b>4</b></td>
+      <td>技能引用版本 vs 引用名的实际影响 —— 技能更新后 Agent 行为变化有多大</td>
+      <td class="maybe">决定 <a href="#s3">§03</a> 的宽松策略是否可接受</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>建议的实现顺序</h3>
+<ol class="body">
+  <li><b>先做定义 + 版本 + 发布校验</b> —— 版本不可变是下游一切承诺的地基。</li>
+  <li><b>再做 capabilities 推导</b> —— 前端依赖它，且它是纯计算，没有外部依赖。</li>
+  <li><b>然后是探测回写</b> —— 需要运行时链路先能跑通 <code>initialize</code>。</li>
+  <li><b>灰度与回滚最后</b> —— 在只有少数几个平台定义的 Agent 时，手工切换最新版本已经够用。</li>
+</ol>
+</section>
+
+<footer>
+  <p>相关文档：<a href="architecture.html">系统架构设计</a> · <a href="session.html">会话管理设计</a> · <a href="runtime.html">运行时链路设计</a> · <a href="local.html">本地部署设计</a> · <a href="memory.html">记忆设计</a> · <a href="observability.html">可观测性设计</a>。</p>
+</footer>
+
+</main>
+</div>
+</body>
+</html>

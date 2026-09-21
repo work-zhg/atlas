@@ -1,0 +1,1099 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Subagent 重新设计 · AI Platform</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  .tree{background:var(--card);border:1px solid var(--border-soft);border-radius:var(--radius);
+        padding:var(--s3);overflow-x:auto;margin:0 0 var(--s3);font-family:var(--mono);
+        font-size:12.5px;line-height:1.75;white-space:pre;color:#CBD5E1}
+  .tree b{color:#F8FAFC;font-weight:600}
+  .tree i{color:#7A88A0;font-style:normal}
+  .tree s{color:#7DD3FC;text-decoration:none}
+  .tree u{color:#FDE68A;text-decoration:none}
+  .tag{font-family:var(--mono);font-size:10.5px;padding:1px 7px;border-radius:99px;border:1px solid;white-space:nowrap}
+  .tag.new{color:var(--warn);border-color:rgba(245,158,11,.45)}
+  .tag.keep{color:var(--accent);border-color:rgba(34,197,94,.45)}
+  .tag.mod{color:var(--native);border-color:rgba(56,189,248,.45)}
+  .step{border-left:2px solid var(--border);padding-left:var(--s3);margin:var(--s4) 0}
+  .step h4{margin-top:0;color:var(--accent);font-family:var(--mono);font-size:12px;letter-spacing:.1em}
+</style>
+</head>
+<body>
+
+<nav class="sitenav">
+  <a class="brand" href="../">AI&nbsp;<b>Platform</b>&nbsp;/ 详细设计</a>
+  <div class="links">
+    <a href="../">概要设计</a>
+    <a href="./">详设目录</a>
+    <a href="native.html">native Agent</a>
+    <a href="structure.html">目录与包结构</a>
+    <a href="kernel.html">kernel 分析</a>
+    <a href="filesystem.html">文件系统改造</a>
+    <a class="on" href="subagent.html">Subagent 重设计</a>
+      <a href="acp.html">acp Agent</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+<nav class="toc" aria-label="目录">
+  <div class="eyebrow">本页</div>
+  <ol>
+    <li><a href="#s1">诉求改变了什么</a></li>
+    <li><a href="#s2">核心决定：子会话是 thread</a></li>
+    <li><a href="#s3">三条边界</a></li>
+    <li><a href="#s4">恢复：两条路</a></li>
+    <li><a href="#s5">流程时序</a></li>
+    <li><a href="#s6">执行：子 run 与准入</a></li>
+    <li><a href="#s7">并行的结构性约束</a></li>
+    <li><a href="#s8">上下文增长</a></li>
+    <li><a href="#s9">代码机制：hook 与 delegate</a></li>
+    <li><a href="#s10">前端：子智能体的过程展示</a></li>
+    <li><a href="#s11">与 deer-flow 相反的选择</a></li>
+    <li><a href="#s12">数据模型与改动</a></li>
+    <li><a href="#s13">落地顺序</a></li>
+    <li><a href="#s14">风险与不做的事</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<header class="hero">
+  <p class="kicker">Detailed Design · Subagent</p>
+  <h1>Subagent 重新设计</h1>
+  <p class="lede">从「每次委派都从零开始」改成「<b>子智能体持有自己的会话</b>」。第二次委派给同一个子智能体时恢复上次的上下文，任务因此有连续性 —— 而 ACP 的 <code>loadSession</code> 正好需要这样一个可寻址的会话。</p>
+  <div class="meta">
+    <span>子会话 = thread</span><span>工作区读共享 · 写隔离</span><span>技能独立前缀</span><span>Pod 挂载参数化</span>
+  </div>
+</header>
+
+<!-- ══════════════ 1 ══ -->
+<section id="s1">
+  <h2><span class="num">01</span>诉求改变了什么</h2>
+
+  <table>
+    <thead><tr><th style="width:150px"></th><th>现在（一次性）</th><th>改造后（会话级）</th></tr></thead>
+    <tbody>
+      <tr><td><b>第二次委派</b></td><td>从空上下文开始，只有任务书</td><td><b>恢复上次的会话</b></td></tr>
+      <tr><td><b>上下文</b></td><td>`[HumanMessage(description)]` 一条</td><td>子会话的完整历史</td></tr>
+      <tr><td><b>ACP 恢复</b></td><td>做不到 —— 没有可寻址的会话</td><td><code>loadSession(sessionId)</code></td></tr>
+      <tr><td><b>技能</b></td><td>无（kernel 支持，atlas 没接）</td><td>子智能体有自己的一套</td></tr>
+      <tr><td><b>并行</b></td><td>随便并 —— 无状态</td><td><b>同名必须串行</b></td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout rule">
+    <span class="label">这是个方向性的改变，不是加功能</span>
+    <p>「独立上下文」这四个字的含义变了：从<b>每次都空</b>变成<b>与主线程分开、但自身连续</b>。收益是不用反复交代背景，代价是上下文会增长、并行会冲突、上次的错误认知会带到下次。§11 逐条列了这些。</p>
+  </div>
+
+  <h3>驱动它的是 ACP</h3>
+  <p>native 子智能体干的是「读几个文件做个分析」—— 一次性完全够用。真正需要连续性的是 <b>acp 助理</b>：</p>
+  <pre><code>第 1 次委派：「把 auth 模块迁到新 token 格式」
+            → CLI 起来，读代码，改了 12 个文件，跑测试，3 个失败
+
+第 2 次委派：「那三个失败的用例修一下」
+            ┌ 一次性模型：CLI 重新起，空上下文 —— 它不知道「那三个」是哪三个，
+            │            也不知道刚才改过什么，只能重新读一遍代码
+            └ 会话级模型：loadSession → CLI 记得自己改了什么、为什么失败</code></pre>
+  <p>一次性模型下，用户只能把上一轮的结论复制进任务书 —— 而那正是 CLI 已经知道、却被丢掉的东西。</p>
+</section>
+
+<!-- ══════════════ 2 ══ -->
+<section id="s2">
+  <h2><span class="num">02</span>核心决定：子会话是 thread，不是 run</h2>
+
+  <p>「子智能体有自己的会话」落到数据模型上有两个候选，选哪个决定了后面所有事：</p>
+
+  <table>
+    <thead><tr><th style="width:190px">候选</th><th>问题</th></tr></thead>
+    <tbody>
+      <tr><td>子会话 = 一串关联的 <b>run</b></td><td>run 是「一轮对话」，没有跨轮的身份。要表达连续性得靠 <code>parent_run_id</code> 串成链，而「第二次委派恢复哪条链」没有自然的键</td></tr>
+      <tr><td><b>子会话 = thread</b></td><td>—— 选这个</td></tr>
+    </tbody>
+  </table>
+
+  <p><code>thread</code> 本来就是「一段有历史的对话」：有 message 序列、有摘要边界、有压缩计数、有标题。子智能体需要的正是这些。</p>
+
+  <pre><code><span class="tok-c"># thread 加两列</span>
+parent_thread_id: UUID | <span class="tok-k">None</span>   <span class="tok-c"># NULL = 用户会话；非空 = 某个会话的子智能体会话</span>
+subagent_name:    <span class="tok-t">str</span> | <span class="tok-k">None</span>    <span class="tok-c"># 与 parent 组成唯一键</span>
+
+<span class="tok-c"># 恢复的查找键就是它</span>
+UNIQUE (parent_thread_id, subagent_name)</code></pre>
+
+  <div class="callout rule">
+    <span class="label">为什么这个键是对的</span>
+    <p>「下次再委派到<b>这个 subagent</b> 时恢复」—— 恢复的依据就是<b>哪个父会话</b> + <b>哪个子智能体</b>。不需要发明新的标识：两者都是已有的东西。</p>
+  </div>
+
+  <h3>三层关系</h3>
+  <div class="tree">用户会话 thread A                         parent_thread_id = NULL
+  │
+  ├─ run #1 ─ run #2 ─ run #3 …            用户与主 agent 的对话轮次
+  │
+  ├─ 子会话 thread A/researcher             parent=A, subagent_name=researcher
+  │    └─ run ─ run …                      每次委派一个 run
+  │
+  └─ 子会话 thread A/coder                  parent=A, subagent_name=coder
+       └─ run ─ run …
+
+★ 子会话的 message 与主线程**完全分开** —— 这就是「独立上下文」的持久化形态。
+  主 agent 看到的只有每次委派的最终结论（ToolMessage）。</div>
+</section>
+
+<!-- ══════════════ 3 ══ -->
+<section id="s3">
+  <h2><span class="num">03</span>三条边界</h2>
+
+  <p>「隔离」这个词要拆开说 —— 三样东西的隔离程度不同，混为一谈会做错。</p>
+
+  <table>
+    <thead><tr><th style="width:120px"></th><th style="width:150px">隔离程度</th><th>理由</th></tr></thead>
+    <tbody>
+      <tr><td><b>上下文</b></td><td><b>完全隔离</b></td><td>子会话有自己的 message 序列。委派的价值之一就是不让子任务的中间过程污染主对话</td></tr>
+      <tr><td><b>工作区</b></td><td><b>读共享，写隔离</b></td><td>委派常常就是「帮我处理这批文件」，产物要互相看得见；但并行的子智能体不能互相覆盖</td></tr>
+      <tr><td><b>技能</b></td><td><b>完全隔离</b><br>（独立前缀）</td><td>技能是能力配置，跟 agent 走</td></tr>
+    </tbody>
+  </table>
+
+  <h3>OSS 布局：三个平级前缀</h3>
+  <pre><code>{bucket}/{user_id}/{thread_id}/workspace/    <span class="tok-c">← 可被子智能体共享挂载</span>
+{bucket}/{user_id}/{thread_id}/skills/       <span class="tok-c">← 恒为自己的</span>
+{bucket}/{user_id}/{thread_id}/system/       <span class="tok-c">← 恒为自己的（压缩归档、大结果外置）</span></code></pre>
+
+  <div class="callout danger">
+    <span class="label">★ 技能必须与 workspace 平级，不能放在它里面</span>
+    <p><b>因为 workspace 是共享挂载的。</b>子智能体的 Pod 挂的是主 agent 的 workspace —— 技能若住在里面，挂载时会连主 agent 的技能一起带上。</p>
+    <p>早先设想用 <code>workspace/.skills/&lt;agent-name&gt;/</code> 分目录解决，那只是<b>约定</b>：子智能体照样读得到、改得动别人那份。平级前缀是<b>结构性</b>的 —— 挂载根本带不上。</p>
+  </div>
+
+  <h3>三个前缀，两种 thread 来源</h3>
+  <pre><code><span class="tok-c"># 主 agent（会话 A）</span>
+workspace → {user}/{A}/workspace      skills → {user}/{A}/skills
+
+<span class="tok-c"># 子智能体 coder（子会话 B，父是 A）</span>
+workspace → {user}/<b>{A}</b>/workspace      <span class="tok-c">← 父的</span>
+skills    → {user}/<b>{B}</b>/skills         <span class="tok-c">← 自己的</span>
+system    → {user}/<b>{B}</b>/system         <span class="tok-c">← 自己的</span></code></pre>
+
+  <div class="callout rule">
+    <span class="label">所以 Pod 的挂载必须参数化</span>
+    <p>不能由「Pod 属于哪个会话」一个参数派生全部挂载。<b>Pod 模板要接两个 thread id</b>：</p>
+    <pre style="margin:10px 0 0"><code>/workspace ← subPath {user}/{<b>workspace_thread_id</b>}/workspace
+/skills    ← subPath {user}/{<b>thread_id</b>}/skills</code></pre>
+    <p><code>workspace_thread_id</code> 对主 agent 等于自己，对子智能体等于父会话。这条是 <a href="filesystem.html#s5">文件系统改造 §05</a> 里 Pod 模板参数化的直接来源。</p>
+  </div>
+
+  <h3>写隔离：靠挂载，不靠约定</h3>
+  <p>工作区共享读之后，<b>并行的子智能体会并发写同一份数据</b>。而 OSS 没有文件锁、写是整对象 PUT —— 后写的完整覆盖先写的，没有任何提示。</p>
+
+  <pre><code><span class="tok-c"># 共享区只读挂载，自己的写入区嵌套在内层且可写</span>
+volumeMounts:
+  - mountPath: /workspace
+    subPath:   {user}/{workspace_thread_id}/workspace
+    readOnly:  <b>true</b>
+  - mountPath: /workspace/.agents/coder          <span class="tok-c">← 嵌套，内层可写</span>
+    subPath:   {user}/{workspace_thread_id}/workspace/.agents/coder
+    readOnly:  <b>false</b></code></pre>
+
+  <p>挂载点彼此独立，内层可写不受外层 <code>readOnly</code> 影响。于是：</p>
+  <ul>
+    <li><b>读</b> —— 子智能体看得见父与兄弟的全部产物</li>
+    <li><b>写</b> —— 只能写自己那块，<b>内核层面拦住</b>，不是提示词</li>
+    <li><b>交付</b> —— 父读 <code>.agents/coder/</code> 取产物；<b>合并进主工作区由父决定</b>，这正是委派该有的语义</li>
+  </ul>
+
+  <div class="callout warn">
+    <span class="label">native 子智能体同理，且 execute 管不住</span>
+    <p><code>FilesystemPermission</code> 能对文件工具做同样的事，但<b>对 <code>execute</code> 完全不生效</b> —— <code>_create_execute_tool</code> 里零个权限检查（<a href="kernel.html#s4">kernel 分析 §04</a>）。所以配了 bash 的子智能体，写入隔离<b>只能在挂载层做</b>。</p>
+    <p>两条路殊途同归：结构性的写隔离必须靠挂载。</p>
+  </div>
+
+  <p><code>.agents/</code> 与技能一样点开头 —— <code>search("")</code> 默认跳过（<a href="filesystem.html#s4">§04</a>），主 agent 列工作区时不会被子智能体的中间产物淹没。</p>
+
+  <h3>子智能体的技能从哪来</h3>
+  <pre><code><span class="tok-d">@dataclass(frozen=True)</span>
+<span class="tok-k">class</span> <span class="tok-t">SubAgentSpec</span>:
+    name: <span class="tok-t">str</span>
+    description: <span class="tok-t">str</span>
+    system_prompt: <span class="tok-t">str</span>
+    model: ModelSpec
+    tool_names: <span class="tok-t">tuple</span>[<span class="tok-t">str</span>, ...] = ()
+    <span class="tok-c">#: ★ 新增。与主 agent 的 skills 同构：(slug, version) 钉死。</span>
+    skills: <span class="tok-t">tuple</span>[SkillRefSpec, ...] = ()</code></pre>
+  <p>子会话创建时按<b>自己的</b> <code>thread_id</code> 拷进 <code>{user}/{B}/skills/</code>。同一个技能被主 agent 和子智能体同时引用时拷两份 —— 冗余可接受，换来的是各自改动互不影响。</p>
+</section>
+
+<!-- ══════════════ 4 ══ -->
+<section id="s4">
+  <h2><span class="num">04</span>恢复：两条路</h2>
+
+  <p>子会话存在 ⇒ 恢复。但 native 与 acp 的恢复机制完全不同 —— 这正是 <code>type</code> 这个字段存在的意义。</p>
+
+  <h3>native：历史从 message 表重建</h3>
+  <pre><code><span class="tok-c"># 与主 agent 完全同一条路径（inprocess.py::_prepare）</span>
+rows = <span class="tok-k">await</span> RunRepository(session).history(sub_thread.id, after=sub_thread.summary_upto)
+history = [_to_lc(m) <span class="tok-k">for</span> m <span class="tok-k">in</span> rows]
+<span class="tok-k">if</span> sub_thread.summary:
+    history.insert(<span class="tok-n">0</span>, AIMessage(content=SUMMARY_PREFIX + sub_thread.summary))</code></pre>
+  <p>没有新机制 —— 子会话就是个 thread，Message 为事实源这条纪律原样适用。<b>压缩、摘要边界、标题生成全部复用</b>。</p>
+
+  <h3>acp：loadSession</h3>
+  <pre><code><span class="tok-c"># thread 再加一列：CLI 侧的会话标识</span>
+external_session_id: <span class="tok-t">str</span> | <span class="tok-k">None</span>
+
+<span class="tok-c"># 委派时</span>
+<span class="tok-k">if</span> sub_thread.external_session_id <span class="tok-k">and</span> caps.resume_session:
+    <span class="tok-k">await</span> bridge.load_session(sub_thread.external_session_id)   <span class="tok-c"># ACP loadSession</span>
+<span class="tok-k">else</span>:
+    sid = <span class="tok-k">await</span> bridge.new_session(cwd=<span class="tok-s">"/workspace"</span>)          <span class="tok-c"># ACP newSession</span>
+    sub_thread.external_session_id = sid</code></pre>
+
+  <div class="callout warn">
+    <span class="label">恢复是能力位，不是假设</span>
+    <p><code>loadSession</code> 是 ACP 里 <b>adapter 可选声明</b>的能力。Claude Code 的 adapter 可能有，Codex 的可能没有 —— <a href="../agent.html">Agent 管理</a>里 <code>caps.resume_session</code> 走握手探测，正是为此。</p>
+    <p>不支持时降级为新建会话，并且<b>必须让用户看见</b>：子会话的状态标成 <code>lost</code>，而不是假装恢复了。原型里那条 codex 的 <code>lost</code> 状态就是这个场景。</p>
+  </div>
+
+  <h3>什么时候不该恢复</h3>
+  <pre><code><span class="tok-k">class</span> <span class="tok-t">TaskToolSchema</span>(BaseModel):
+    description: <span class="tok-t">str</span>
+    subagent_type: <span class="tok-t">str</span>
+    <span class="tok-c">#: ★ 显式要一个干净的开始。默认恢复 —— 连续性是本次改造的目的。</span>
+    fresh: <span class="tok-t">bool</span> = <span class="tok-k">False</span></code></pre>
+  <p>用途是「上一轮把它带偏了，重来」。<code>fresh=True</code> 时归档旧子会话（<code>status='archived'</code>）并新建一个，而不是删 —— 历史不该因为一次重来就消失。</p>
+</section>
+
+<!-- ══════════════ 5 ══ -->
+<section id="s5">
+  <h2><span class="num">05</span>流程时序</h2>
+
+  <h3>首次委派</h3>
+  <figure>
+<svg viewBox="0 0 830 548" role="img" aria-labelledby="seq1-t seq1-d">
+<title id="seq1-t">首次委派的完整链路</title>
+<desc id="seq1-d">主 run 调 task 工具，SubagentService 查不到已有子会话于是新建 thread B，按 B 拷贝技能，建一条 parent_run_id 指回发起者的 run，交给执行器。Pod 的 workspace 挂父会话 A 的前缀、skills 挂自己 B 的前缀。子 run 有独立的事件流与审批，完成后最终文本作为 ToolMessage 回到主 run。</desc>
+<defs>
+<marker id="sa" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#7A88A0"/></marker>
+<marker id="sg" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#22C55E"/></marker>
+<marker id="sr" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#EF4444"/></marker>
+</defs>
+<rect x="10" y="14" width="132" height="30" rx="7" fill="#131A2E" stroke="#38BDF8" stroke-opacity=".7"/>
+<text x="76" y="34" text-anchor="middle" fill="#F8FAFC" font-size="11.5" font-family="IBM Plex Sans">主 run（会话 A）</text>
+<line x1="76" y1="44" x2="76" y2="532" stroke="#334155" stroke-dasharray="4 4"/>
+<rect x="178" y="14" width="132" height="30" rx="7" fill="#131A2E" stroke="#334155" stroke-opacity=".7"/>
+<text x="244" y="34" text-anchor="middle" fill="#F8FAFC" font-size="11.5" font-family="IBM Plex Sans">task 工具</text>
+<line x1="244" y1="44" x2="244" y2="532" stroke="#334155" stroke-dasharray="4 4"/>
+<rect x="346" y="14" width="132" height="30" rx="7" fill="#131A2E" stroke="#334155" stroke-opacity=".7"/>
+<text x="412" y="34" text-anchor="middle" fill="#F8FAFC" font-size="11.5" font-family="IBM Plex Sans">SubagentService</text>
+<line x1="412" y1="44" x2="412" y2="532" stroke="#334155" stroke-dasharray="4 4"/>
+<rect x="514" y="14" width="132" height="30" rx="7" fill="#131A2E" stroke="#475569" stroke-opacity=".7"/>
+<text x="580" y="34" text-anchor="middle" fill="#F8FAFC" font-size="11.5" font-family="IBM Plex Sans">thread / run 表</text>
+<line x1="580" y1="44" x2="580" y2="532" stroke="#334155" stroke-dasharray="4 4"/>
+<rect x="682" y="14" width="132" height="30" rx="7" fill="#131A2E" stroke="#A78BFA" stroke-opacity=".7"/>
+<text x="748" y="34" text-anchor="middle" fill="#F8FAFC" font-size="11.5" font-family="IBM Plex Sans">子 run + Pod</text>
+<line x1="748" y1="44" x2="748" y2="532" stroke="#334155" stroke-dasharray="4 4"/>
+<rect x="674" y="296" width="148" height="108" rx="6" fill="#A78BFA" fill-opacity=".07" stroke="#A78BFA" stroke-opacity=".35" stroke-dasharray="4 3"/>
+<text x="684" y="311" fill="#A78BFA" font-size="10.5" font-family="JetBrains Mono">父在 await —— 但子 run 有自己的 run_id</text>
+<line x1="80" y1="86" x2="237" y2="86" stroke="#7A88A0" stroke-width="1.6" marker-end="url(#sa)"/>
+<text x="160" y="79" text-anchor="middle" fill="#CBD5E1" font-size="11" font-family="IBM Plex Sans">task(&quot;修那三个用例&quot;, &quot;coder&quot;)</text>
+<line x1="248" y1="118" x2="405" y2="118" stroke="#7A88A0" stroke-width="1.6" marker-end="url(#sa)"/>
+<text x="328" y="111" text-anchor="middle" fill="#CBD5E1" font-size="11" font-family="IBM Plex Sans">delegate(desc, name, fresh=False)</text>
+<line x1="416" y1="150" x2="573" y2="150" stroke="#7A88A0" stroke-width="1.6" marker-end="url(#sa)"/>
+<text x="496" y="143" text-anchor="middle" fill="#CBD5E1" font-size="11" font-family="IBM Plex Sans">SELECT (parent=A, name=coder)</text>
+<line x1="576" y1="182" x2="419" y2="182" stroke="#7A88A0" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#sa)"/>
+<text x="496" y="175" text-anchor="middle" fill="#CBD5E1" font-size="11" font-family="IBM Plex Sans">∅ 未命中</text>
+<line x1="416" y1="214" x2="573" y2="214" stroke="#22C55E" stroke-width="1.6" marker-end="url(#sg)"/>
+<text x="496" y="207" text-anchor="middle" fill="#22C55E" font-size="11" font-family="IBM Plex Sans">INSERT thread B  (parent=A, name=coder)</text>
+<path d="M412 246 L450 246 L450 261 L417 261" fill="none" stroke="#22C55E" stroke-width="1.5" marker-end="url(#sg)"/>
+<text x="458" y="252" fill="#22C55E" font-size="11" font-family="IBM Plex Sans">拷技能 → {user}/{B}/skills/</text>
+<line x1="416" y1="284" x2="573" y2="284" stroke="#22C55E" stroke-width="1.6" marker-end="url(#sg)"/>
+<text x="496" y="277" text-anchor="middle" fill="#22C55E" font-size="11" font-family="IBM Plex Sans">INSERT run (thread=B, parent_run_id=R)</text>
+<line x1="416" y1="316" x2="741" y2="316" stroke="#7A88A0" stroke-width="1.6" marker-end="url(#sa)"/>
+<text x="580" y="309" text-anchor="middle" fill="#CBD5E1" font-size="11" font-family="IBM Plex Sans">executor.submit()</text>
+<path d="M748 348 L786 348 L786 363 L753 363" fill="none" stroke="#7A88A0" stroke-width="1.5" marker-end="url(#sa)"/>
+<text x="794" y="354" fill="#CBD5E1" font-size="11" font-family="IBM Plex Sans">起 Pod：workspace={user}/{A}  skills={user}/{B}</text>
+<path d="M748 386 L786 386 L786 401 L753 401" fill="none" stroke="#7A88A0" stroke-width="1.5" marker-end="url(#sa)"/>
+<text x="794" y="392" fill="#CBD5E1" font-size="11" font-family="IBM Plex Sans">执行 —— 独立事件流、独立审批</text>
+<line x1="744" y1="424" x2="419" y2="424" stroke="#7A88A0" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#sa)"/>
+<text x="580" y="417" text-anchor="middle" fill="#CBD5E1" font-size="11" font-family="IBM Plex Sans">终态 + 最终文本</text>
+<line x1="408" y1="456" x2="251" y2="456" stroke="#7A88A0" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#sa)"/>
+<text x="328" y="449" text-anchor="middle" fill="#CBD5E1" font-size="11" font-family="IBM Plex Sans">result</text>
+<line x1="240" y1="488" x2="83" y2="488" stroke="#7A88A0" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#sa)"/>
+<text x="160" y="481" text-anchor="middle" fill="#CBD5E1" font-size="11" font-family="IBM Plex Sans">ToolMessage</text>
+</svg>
+    <figcaption>三处关键：<b>拷技能按子会话 B</b>、<b>run 的 <code>parent_run_id</code> 指回发起者</b>、<b>Pod 的两个挂载点来自不同 thread</b>。父在 <code>await</code>，但子 run 有自己的 <code>run_id</code> —— 事件流、审批、取消都是独立可寻址的。</figcaption>
+  </figure>
+
+  <p>只有第 5–7 步是新建路径。第二次委派时这三步被一次 <code>SELECT</code> 命中替代，其余完全相同 —— 这正是「子会话 = thread」带来的对称性。</p>
+
+  <h3>第二次委派：两条恢复路径</h3>
+  <figure>
+<svg viewBox="0 0 662 388" role="img" aria-labelledby="seq2-t seq2-d">
+<title id="seq2-t">第二次委派：两条恢复路径</title>
+<desc id="seq2-d">查到已有子会话后按 agent 类型分岔。native 从自己的 message 表重建历史并回填摘要；acp 用保存的 external_session_id 调 loadSession。adapter 未声明该能力时不静默新建，而是把子会话标成 lost 让用户看见。</desc>
+<defs>
+<marker id="sa" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#7A88A0"/></marker>
+<marker id="sg" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#22C55E"/></marker>
+<marker id="sr" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#EF4444"/></marker>
+</defs>
+<rect x="10" y="14" width="132" height="30" rx="7" fill="#131A2E" stroke="#334155" stroke-opacity=".7"/>
+<text x="76" y="34" text-anchor="middle" fill="#F8FAFC" font-size="11.5" font-family="IBM Plex Sans">SubagentService</text>
+<line x1="76" y1="44" x2="76" y2="372" stroke="#334155" stroke-dasharray="4 4"/>
+<rect x="178" y="14" width="132" height="30" rx="7" fill="#131A2E" stroke="#475569" stroke-opacity=".7"/>
+<text x="244" y="34" text-anchor="middle" fill="#F8FAFC" font-size="11.5" font-family="IBM Plex Sans">thread 表</text>
+<line x1="244" y1="44" x2="244" y2="372" stroke="#334155" stroke-dasharray="4 4"/>
+<rect x="346" y="14" width="132" height="30" rx="7" fill="#131A2E" stroke="#A78BFA" stroke-opacity=".7"/>
+<text x="412" y="34" text-anchor="middle" fill="#F8FAFC" font-size="11.5" font-family="IBM Plex Sans">native 子 run</text>
+<line x1="412" y1="44" x2="412" y2="372" stroke="#334155" stroke-dasharray="4 4"/>
+<rect x="514" y="14" width="132" height="30" rx="7" fill="#131A2E" stroke="#A78BFA" stroke-opacity=".7"/>
+<text x="580" y="34" text-anchor="middle" fill="#F8FAFC" font-size="11.5" font-family="IBM Plex Sans">acp bridge / CLI</text>
+<line x1="580" y1="44" x2="580" y2="372" stroke="#334155" stroke-dasharray="4 4"/>
+<rect x="338" y="148" width="148" height="48" rx="6" fill="#38BDF8" fill-opacity=".07" stroke="#38BDF8" stroke-opacity=".35" stroke-dasharray="4 3"/>
+<text x="348" y="163" fill="#38BDF8" font-size="10.5" font-family="JetBrains Mono">native：机制与主 agent 完全相同</text>
+<rect x="506" y="212" width="148" height="112" rx="6" fill="#A78BFA" fill-opacity=".07" stroke="#A78BFA" stroke-opacity=".35" stroke-dasharray="4 3"/>
+<text x="516" y="227" fill="#A78BFA" font-size="10.5" font-family="JetBrains Mono">acp：能力位由握手探测，不能假设</text>
+<line x1="80" y1="86" x2="237" y2="86" stroke="#7A88A0" stroke-width="1.6" marker-end="url(#sa)"/>
+<text x="160" y="79" text-anchor="middle" fill="#CBD5E1" font-size="11" font-family="IBM Plex Sans">SELECT (parent=A, name=coder)</text>
+<line x1="240" y1="118" x2="83" y2="118" stroke="#7A88A0" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#sa)"/>
+<text x="160" y="111" text-anchor="middle" fill="#CBD5E1" font-size="11" font-family="IBM Plex Sans">命中 thread B</text>
+<line x1="80" y1="150" x2="405" y2="150" stroke="#7A88A0" stroke-width="1.6" marker-end="url(#sa)"/>
+<text x="244" y="143" text-anchor="middle" fill="#CBD5E1" font-size="11" font-family="IBM Plex Sans">起 run（native）</text>
+<path d="M412 182 L450 182 L450 197 L417 197" fill="none" stroke="#22C55E" stroke-width="1.5" marker-end="url(#sg)"/>
+<text x="458" y="188" fill="#22C55E" font-size="11" font-family="IBM Plex Sans">从 message 表重建历史 + 摘要回填</text>
+<line x1="80" y1="220" x2="573" y2="220" stroke="#7A88A0" stroke-width="1.6" marker-end="url(#sa)"/>
+<text x="328" y="213" text-anchor="middle" fill="#CBD5E1" font-size="11" font-family="IBM Plex Sans">loadSession(external_session_id)</text>
+<line x1="576" y1="252" x2="83" y2="252" stroke="#EF4444" stroke-width="1.6" marker-end="url(#sr)"/>
+<text x="328" y="245" text-anchor="middle" fill="#EF4444" font-size="11" font-family="IBM Plex Sans">unsupported —— adapter 未声明</text>
+<line x1="80" y1="284" x2="237" y2="284" stroke="#EF4444" stroke-width="1.6" marker-end="url(#sr)"/>
+<text x="160" y="277" text-anchor="middle" fill="#EF4444" font-size="11" font-family="IBM Plex Sans">标 lost + newSession</text>
+<line x1="80" y1="316" x2="573" y2="316" stroke="#7A88A0" stroke-width="1.6" marker-end="url(#sa)"/>
+<text x="328" y="309" text-anchor="middle" fill="#CBD5E1" font-size="11" font-family="IBM Plex Sans">newSession(cwd=&quot;/workspace&quot;)</text>
+</svg>
+    <figcaption><b>native 的恢复没有新机制</b> —— 从自己的 message 表重建历史、回填摘要，与主 agent 走完全同一条代码路径。<b>acp 的恢复是能力位不是假设</b>：<code>loadSession</code> 由 adapter 声明，不支持时把子会话标成 <code>lost</code> 让用户看见，而不是静默新建一个空会话。</figcaption>
+  </figure>
+
+  <div class="callout warn">
+    <span class="label">静默新建是最坏的失败形态</span>
+    <p>用户以为「接着上次继续」，CLI 实际从零开始 —— 它会重新读一遍代码、重新问一遍已经回答过的问题，而事件流上看不出任何异常。所以 <code>lost</code> 必须是一个<b>可见的状态</b>，不是一条日志。</p>
+  </div>
+
+  <h3>并行与同名冲突</h3>
+  <figure>
+<svg viewBox="0 0 662 292" role="img" aria-labelledby="seq3-t seq3-d">
+<title id="seq3-t">并行委派与同名冲突</title>
+<desc id="seq3-d">一轮里委派给不同子智能体可以并行，各自是独立的子会话。委派给同一个子智能体会撞上会话串行锁，所以工具层在同一轮内直接拒绝重名，并给出可操作的替代方案，而不是让模型等到超时。</desc>
+<defs>
+<marker id="sa" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#7A88A0"/></marker>
+<marker id="sg" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#22C55E"/></marker>
+<marker id="sr" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#EF4444"/></marker>
+</defs>
+<rect x="10" y="14" width="132" height="30" rx="7" fill="#131A2E" stroke="#38BDF8" stroke-opacity=".7"/>
+<text x="76" y="34" text-anchor="middle" fill="#F8FAFC" font-size="11.5" font-family="IBM Plex Sans">主 run</text>
+<line x1="76" y1="44" x2="76" y2="276" stroke="#334155" stroke-dasharray="4 4"/>
+<rect x="178" y="14" width="132" height="30" rx="7" fill="#131A2E" stroke="#334155" stroke-opacity=".7"/>
+<text x="244" y="34" text-anchor="middle" fill="#F8FAFC" font-size="11.5" font-family="IBM Plex Sans">task 工具</text>
+<line x1="244" y1="44" x2="244" y2="276" stroke="#334155" stroke-dasharray="4 4"/>
+<rect x="346" y="14" width="132" height="30" rx="7" fill="#131A2E" stroke="#A78BFA" stroke-opacity=".7"/>
+<text x="412" y="34" text-anchor="middle" fill="#F8FAFC" font-size="11.5" font-family="IBM Plex Sans">researcher 子会话</text>
+<line x1="412" y1="44" x2="412" y2="276" stroke="#334155" stroke-dasharray="4 4"/>
+<rect x="514" y="14" width="132" height="30" rx="7" fill="#131A2E" stroke="#A78BFA" stroke-opacity=".7"/>
+<text x="580" y="34" text-anchor="middle" fill="#F8FAFC" font-size="11.5" font-family="IBM Plex Sans">coder 子会话</text>
+<line x1="580" y1="44" x2="580" y2="276" stroke="#334155" stroke-dasharray="4 4"/>
+<rect x="338" y="110" width="316" height="76" rx="6" fill="#22C55E" fill-opacity=".07" stroke="#22C55E" stroke-opacity=".35" stroke-dasharray="4 3"/>
+<text x="348" y="125" fill="#22C55E" font-size="10.5" font-family="JetBrains Mono">不同子智能体 = 不同 thread，互不争锁</text>
+<rect x="170" y="206" width="148" height="52" rx="6" fill="#EF4444" fill-opacity=".07" stroke="#EF4444" stroke-opacity=".35" stroke-dasharray="4 3"/>
+<text x="180" y="221" fill="#EF4444" font-size="10.5" font-family="JetBrains Mono">重名在工具层拦住，不等锁超时</text>
+<line x1="80" y1="86" x2="237" y2="86" stroke="#7A88A0" stroke-width="1.6" marker-end="url(#sa)"/>
+<text x="160" y="79" text-anchor="middle" fill="#CBD5E1" font-size="11" font-family="IBM Plex Sans">task(…, &quot;researcher&quot;)  +  task(…, &quot;coder&quot;)</text>
+<line x1="248" y1="118" x2="405" y2="118" stroke="#22C55E" stroke-width="1.6" marker-end="url(#sg)"/>
+<text x="328" y="111" text-anchor="middle" fill="#22C55E" font-size="11" font-family="IBM Plex Sans">子 run（子会话 A/researcher）</text>
+<line x1="248" y1="150" x2="573" y2="150" stroke="#22C55E" stroke-width="1.6" marker-end="url(#sg)"/>
+<text x="412" y="143" text-anchor="middle" fill="#22C55E" font-size="11" font-family="IBM Plex Sans">子 run（子会话 A/coder）</text>
+<line x1="80" y1="182" x2="237" y2="182" stroke="#7A88A0" stroke-width="1.6" marker-end="url(#sa)"/>
+<text x="160" y="175" text-anchor="middle" fill="#CBD5E1" font-size="11" font-family="IBM Plex Sans">task(…, &quot;researcher&quot;)  ← 同一轮第二次</text>
+<line x1="240" y1="214" x2="83" y2="214" stroke="#EF4444" stroke-width="1.6" marker-end="url(#sr)"/>
+<text x="160" y="207" text-anchor="middle" fill="#EF4444" font-size="11" font-family="IBM Plex Sans">拒绝：同名委派必须串行</text>
+</svg>
+    <figcaption>不同子智能体 = 不同 thread，<b>互不争锁</b>，可以真并行。同名委派会撞上会话串行锁 —— 但不能让模型等到超时才知道，所以工具层在同一轮内直接拒绝，并给出可操作的替代方案（合并成一次，或改派给别的子智能体）。</figcaption>
+  </figure>
+
+  <p>这条约束不是新发明的规则：<b>子会话也是 thread，会话串行锁原样适用</b>。工具层的拦截只是把一个必然发生的冲突提前到调用时暴露。</p>
+</section>
+
+<!-- ══════════════ 6 ══ -->
+<section id="s6">
+  <h2><span class="num">06</span>执行：子 run 与准入</h2>
+
+  <p>子会话有了之后，「一次委派」自然就是<b>子会话上的一个 run</b>：</p>
+
+  <pre><code>task(description, subagent_type)
+   ↓ 解析/创建子会话 thread（父 + name 唯一）
+   ↓ 在 run 表建行：thread_id = 子会话, parent_run_id = 发起者
+   ↓ executor.submit() —— 走与普通 run **完全一样**的链路
+   ↓ 父 await 它到终态
+   ↓ 取最终文本作为 ToolMessage</code></pre>
+
+  <div class="callout rule">
+    <span class="label">这样白拿到四样东西</span>
+    <ul style="margin-bottom:0">
+      <li><b>事件流</b> —— 子 run 有自己的 <code>run_id</code>，前端能完整展开。现在子智能体的内部步骤是 <code>depth=1</code> 的受限视图</li>
+      <li><b>审批</b> —— <code>Approval</code> 表本来就是 run 级的，子 run 的审批天然可寻址</li>
+      <li><b>取消</b> —— 走已有的 <code>RedisCancelToken</code>，父取消时级联</li>
+      <li><b>孤儿回收</b> —— <code>reap_orphans</code> 天然覆盖。执行体在表里可见，不是藏在内存 registry 里</li>
+    </ul>
+  </div>
+
+  <h3>父仍然等</h3>
+  <p>委派的语义就是「我需要这个结论才能继续」。<a href="#s11">§11</a> 说明了 deer-flow 在同样的问题上也是等的 —— 它那套隔离执行体买的是故障隔离，不是让模型能同时干别的。</p>
+
+  <h3>准入控制：全局，不是每 run</h3>
+  <pre><code><span class="tok-c"># 子 run 的准入与普通 run 分开计</span>
+subagent_max_running: <span class="tok-t">int</span> = <span class="tok-n">3</span>     <span class="tok-c"># 全进程同时执行的子 run</span>
+subagent_max_per_run: <span class="tok-t">int</span> = <span class="tok-n">6</span>     <span class="tok-c"># 单个父 run 累计委派次数</span></code></pre>
+  <p>第二个数防的是一种绕过：长 run 在每个规划点发起一批「合法尺寸」的委派，累计起来远超并发限制。deer-flow 用持久委派账本挡这个，我们查 <code>run</code> 表里 <code>parent_run_id = 当前 run</code> 的行数即可 —— 不用新表。</p>
+
+  <div class="callout warn">
+    <span class="label">acp 子智能体吃 Pod，准入必须是全局的</span>
+    <p>Pod 是有限资源。按 run 各自限流的话，10 个并发会话每个委派 2 个 acp 子智能体 = 20 个 Pod。全进程一个闸是必须的。</p>
+  </div>
+
+  <h3>三条派生规则</h3>
+  <pre><code><span class="tok-n">1</span>  parent_thread_id IS NOT NULL ⇒ 该 thread 不出现在用户的会话列表
+<span class="tok-n">2</span>  子 run 不争父会话的串行锁 —— 它是父 run 的一部分
+<span class="tok-n">3</span>  子会话**内部**仍然串行 —— 见 §07</code></pre>
+</section>
+
+<!-- ══════════════ 7 ══ -->
+<section id="s7">
+  <h2><span class="num">07</span>并行的结构性约束</h2>
+
+  <div class="callout danger">
+    <span class="label">同一个子智能体不能并行委派</span>
+    <p>一次性模型下子智能体无状态，随便并。<b>会话级模型下它有状态</b> —— 同一轮里对 <code>researcher</code> 发两个 <code>task</code>，两者都要恢复同一个子会话，写回时互相覆盖。</p>
+  </div>
+
+  <p>这条约束不用新发明：<b>子会话也是 thread，会话串行锁原样适用</b>。第二个并发委派会撞到 <code>ThreadLocked</code>。</p>
+
+  <p>但不能让模型撞了才知道。两层处理：</p>
+
+  <pre><code><span class="tok-n">1</span> 工具层：同一轮里出现重复的 subagent_type，第二个直接返回可操作的错误
+     「researcher 已在本轮中被委派。子智能体持有会话，同名委派必须串行 ——
+       把两个子任务合并成一次，或改派给不同的子智能体。」
+
+<span class="tok-n">2</span> 提示词层：task 的工具描述写明这条，并给出可行的并行形态
+     「并行委派只能给**不同的**子智能体。」</code></pre>
+
+  <h3>这反而让并行的语义更清楚</h3>
+  <table>
+    <thead><tr><th style="width:230px">形态</th><th>可否并行</th></tr></thead>
+    <tbody>
+      <tr><td>researcher + coder + reviewer</td><td class="yes">可以 —— 三个不同的子会话</td></tr>
+      <tr><td>researcher × 3（三个子任务）</td><td class="no">不可以 —— 同一个子会话</td></tr>
+    </tbody>
+  </table>
+  <p>deer-flow 那条「可变状态重叠 ⇒ 硬否决并行」的经验规则，在这里变成了<b>结构性约束</b>：不是靠提示词劝阻，是锁会拦住。</p>
+</section>
+
+<!-- ══════════════ 8 ══ -->
+<section id="s8">
+  <h2><span class="num">08</span>上下文增长</h2>
+
+  <p>连续性的代价是上下文只增不减。第 10 次委派给 <code>coder</code> 时，它的会话里已经有 9 轮历史。</p>
+
+  <h3>native：压缩机制原样复用</h3>
+  <p>子会话是 thread，<code>thread.summary</code> / <code>summary_upto</code> / <code>compact_count</code> 三列都在，<code>CompactionMiddleware</code> 直接可用。<b>一行新代码都不用写</b> —— 这是「子会话 = thread」这个选择最实在的回报。</p>
+
+  <div class="callout warn">
+    <span class="label">但压缩配置该独立</span>
+    <p>子智能体的会话性质与主会话不同：它是「一个专项任务的连续记录」，而主会话是「用户与顾问的往来」。主会话的 <code>trigger_ratio=0.75</code> 未必适合。</p>
+    <p>建议 <code>SubAgentSpec</code> 加一个可选的 <code>compaction</code>，缺省继承主 agent 的 —— 与 <code>model</code> 的处理方式一致。</p>
+  </div>
+
+  <h3>acp：压缩归 CLI</h3>
+  <p>上下文在 CLI 进程内，Claude Code 有自己的压缩。平台侧<b>不介入</b>，只在 <code>caps.compact</code> 上标明这一点（<a href="../agent.html">Agent 管理</a>的能力推导：<code>compact = is_native and spec.compaction.enabled</code>）。</p>
+
+  <h3>一个必须给出的出口</h3>
+  <p>会话越长，恢复越贵、越容易被旧结论带偏。<code>fresh=True</code>（<a href="#s4">§04</a>）是模型可用的出口；界面上也要能看到子会话的轮次与 token 累计，让用户能主动重置。</p>
+</section>
+
+<!-- ══════════════ 9 ══ -->
+<section id="s9">
+  <h2><span class="num">09</span>代码机制：hook 与 delegate</h2>
+
+  <p>前面几节说的是「应该怎样」。这一节说代码里<b>实际是怎么接起来的</b> —— 一次 <code>task</code> 调用从主图出发，经过哪几个对象，最后变成子会话上的一个 run。</p>
+
+  <div class="callout rule">
+    <span class="label">一句话</span>
+    <p>engine 只认识<b>一个回调</b>，server 是它唯一的实现。engine 不知道「子会话是一行 thread」，server 不知道「图是怎么跑的」—— 这条缝就是 <code>Delegate</code>。</p>
+  </div>
+
+  <h3>注入链路：能力从哪来，到哪去</h3>
+
+  <p>装配曾经分两层：server 的 HookAssembly 收集能力对象装进 <code>RunHooks</code>，engine 的 <code>build_agent</code>（防腐层）再把 spec+hooks 排成中间件栈。kernel 永久内化之后防腐失去对象，两层合一：<b>装配策略整体收进 server（build.py），engine 只剩词汇（spec/events）与执行循环（runner）</b>。RunHooks 随之溶解 —— 能力对象直接进中间件构造，runner 只留 cancel / clock / titler 三个自己消费的注入点。</p>
+
+  <div class="tree">HookAssembly.build()            <i>server —— IO 的收集：连对象存储、起沙箱、建 Redis 门禁</i>
+  └─ <b>build_graph(spec, model, …)</b>   <i>server/executor/build.py —— 装配策略与顺序的唯一住所</i>
+       filesystem = OssFilesystem(…)
+       sandbox    = DockerSandbox(…)
+       approvals  = RedisApprovalGate(…)
+       compactor  = CompactionMiddleware(…)     <i>kernel/middleware —— 全部中间件的家</i>
+       <s>subagents  = SubagentService(…)</s>            <u>★ DelegationProtocol 的实现</u>
+       └─ create_deep_agent(…, subagent_delegate=…)
+            └─ SubAgentMiddleware → <b>task 工具</b> → <b>await gateway.delegate(brief, name, fresh=…)</b>
+                    │
+                    ▼
+runner.run(spec, run_id, <b>graph</b>, input, history, cancel/clock/titler)   <i>server/executor —— 执行循环与事件推导</i></div>
+
+  <div class="callout danger">
+    <span class="label">委派是唯一形态 —— 其余三种子智能体实现已整体删除</span>
+    <p>曾经并存四种执行形态，现在只剩委派一种。删掉的三种与理由：</p>
+    <table>
+      <thead><tr><th>形态</th><th>为什么删</th></tr></thead>
+      <tbody>
+        <tr><td><b>图内 SubAgent</b>（编译子图、主图协程里 ainvoke）</td><td>每次委派从空上下文开始，且需要一套<b>平行的</b>治理装配（子图审批 / 子图步数刹车 / 子图白名单）—— 与子 run 天然继承的同一批守卫重复，两份语义必然漂移</td></tr>
+        <tr><td><b>CompiledSubAgent</b>（调用方自带 runnable）</td><td>同上，且状态合并的两层黑名单（_EXCLUDED_STATE_KEYS / private_state_keys）只为它存在</td></tr>
+        <tr><td><b>AsyncSubAgent</b>（langgraph_sdk → LangSmith 部署）</td><td>Atlas 不用 LangSmith。将来的远程形态是 acp 子智能体 —— 它走的正是委派这条路（子会话 + AgentRuntime），不需要第二种远程机制</td></tr>
+      </tbody>
+    </table>
+    <p style="margin-bottom:0">连带删除：general-purpose 自动补齐、<code>GeneralPurposeSubagentProfile</code> 配置面、kernel 的 async_subagents 模块。<code>SubAgentMiddleware</code> 的 delegate 参数从可选变为<b>必填</b>；配了子智能体不注入受理方，engine 的 <code>build_agent</code> 直接 <code>InvalidSpec</code>。多一种执行形态就多一套要维护的治理语义 —— 而那些守卫在「子 run 是普通 run」的模型下是免费继承的。</p>
+  </div>
+
+  <h3>DelegationProtocol：三个标量进，一段文本出</h3>
+
+  <pre><code><span class="tok-c"># 定义在 atlas_engine.contracts（架构最底层）—— kernel 与 server 都向下依赖它</span>
+<span class="tok-k">class</span> <span class="tok-d">DelegationProtocol</span>(<span class="tok-t">Protocol</span>):
+    <span class="tok-k">async def</span> <span class="tok-d">delegate</span>(self, task: <span class="tok-t">str</span>, name: <span class="tok-t">str</span>, *, fresh: <span class="tok-t">bool</span> = <span class="tok-k">False</span>) -&gt; <span class="tok-t">str</span>: ...
+<span class="tok-c">#                          ↑任务书      ↑子智能体名        ↑重开一轮       ↑最终文本</span></code></pre>
+
+  <p>与 <code>FilesystemProtocol</code> / <code>SandboxProtocol</code> 并列的第三个能力协议。<b>刻意一个对象管全部子智能体</b>，不是每个子智能体一个 handle：准入、同轮去重、并行约束都是跨智能体的关切，拆成 per-agent 对象就没有地方放它们了；名录的权威也不在协议上 —— 有哪些子智能体由 spec（版本快照）回答，协议只负责执行。</p>
+
+  <p>形状是刻意压到最小的。三个参数全是标量、返回值是纯文本 —— 这意味着：</p>
+
+  <table>
+    <thead><tr><th>约束</th><th>换来什么</th></tr></thead>
+    <tbody>
+      <tr><td>不传图状态进去</td><td>子会话的输入<b>只有任务书那一段文本</b>。「独立上下文」因此是结构性的，不靠调用方自觉过滤 —— 图内那条路要用 <code>_EXCLUDED_STATE_KEYS</code> + <code>private_state_keys</code> 两层黑名单才做到同一件事</td></tr>
+      <tr><td>不返回 <code>Command</code></td><td>子会话的状态<b>不合并回主图</b>。主线程只看见结论，这正是委派该有的语义（<a href="#s2">§02</a>）</td></tr>
+      <tr><td>不传 DB 句柄 / thread id</td><td>engine 保持对数据库无知。<code>tests/test_engine_purity.py</code> 那条「engine 不许 import sqlalchemy」的守卫不用开口子</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout danger">
+    <span class="label">注入 delegate 时，子智能体图<b>完全不编译</b></span>
+    <p>这一点容易被当成性能优化，其实是正确性问题。子智能体的配置会在<b>子 run 里重新装配一遍</b>（下面的 <code>spec_for_subagent</code>）。若同时还在主图里编译一份，「这个子智能体到底用哪个模型、哪些中间件」就有了两个答案，而它们会随代码演进悄悄分叉。</p>
+    <p>所以 <code>create_deep_agent</code> 在委派模式下跳过整个 per-spec 装配循环，只取 <code>name</code> / <code>description</code> 去拼 <code>task</code> 的描述。顺带也<b>不补 general-purpose 子智能体</b> —— 它在 server 的 <code>AgentSpec</code> 里没有对应配置，委派过去必然失败，而模型看得见它就会去试。</p>
+  </div>
+
+  <h3>spec_for_subagent：对称性的来源</h3>
+
+  <p>「子会话 = thread」这个决定的全部回报，兑现在这一个函数上：</p>
+
+  <pre><code><span class="tok-k">def</span> <span class="tok-d">spec_for_subagent</span>(parent: AgentSpec, name: <span class="tok-t">str</span>) -&gt; AgentSpec:
+    sub = parent.subagent(name)          <span class="tok-c"># 找不到 ⇒ InvalidSpec，不回落</span>
+    <span class="tok-k">return</span> AgentSpec(
+        slug   = <span class="tok-s">f"{parent.slug}/{sub.name}"</span>,   <span class="tok-c"># 日志里一眼看出是谁的哪个</span>
+        model  = sub.model,
+        tool_names = sub.tool_names,
+        skills = <b>sub.skills</b>,                     <span class="tok-c"># ★ 技能跟着子智能体走</span>
+        subagents = <b>()</b>,                          <span class="tok-c"># ★ 深度封顶，保险一</span>
+        limits = replace(parent.limits, <b>max_subagent_depth=0</b>),  <span class="tok-c"># 保险二</span>
+        compaction = sub.compaction <span class="tok-k">or</span> parent.compaction,
+    )</code></pre>
+
+  <p>它返回的是一份<b>完整的 AgentSpec</b>，不是半个配置对象。于是执行器不需要为子 run 开任何分支 —— <code>_prepare()</code> 里只是换了一份 spec：</p>
+
+  <pre><code><span class="tok-c"># server/executor/inprocess.py::_prepare</span>
+spec = _spec_from_version(version, slug=slug, name=name)
+<span class="tok-k">if</span> thread.subagent_name:                      <span class="tok-c"># ← 全部的分支就这两行</span>
+    spec = spec_for_subagent(spec, thread.subagent_name)</code></pre>
+
+  <div class="callout rule">
+    <span class="label">这两行之后的一切都是免费的</span>
+    <p>历史从 message 表重建、摘要回填、压缩中间件、步数刹车、工具并发熔断、审批门禁、取消令牌、用量入账、事件归档、孤儿回收 —— 子 run 走的是<b>同一段代码</b>。<a href="#s2">§02</a> 里「子会话 = thread 而不是 run」的论证，落地之后就是这两行。</p>
+  </div>
+
+  <h3>SubagentService：一次委派的完整代码路径</h3>
+
+  <p>它是 <code>Delegate</code> 唯一的实现，也是整个系统里唯一知道「子会话是一行 thread」的地方。生命周期绑定<b>一次父 run</b>，不是进程级单例 —— 因为 <code>_inflight</code> 记的是「本轮已经派给谁了」，而「同一轮」正是一个 run。</p>
+
+  <pre><code><span class="tok-k">async def</span> <span class="tok-d">delegate</span>(brief, name, fresh):
+    sub = spec.subagent(name)                       <span class="tok-c"># ① 名字不存在 → 可操作的错误</span>
+
+    <span class="tok-k">if</span> persistent <span class="tok-k">and</span> name <span class="tok-k">in</span> _inflight:            <span class="tok-c"># ② 同轮重名 → 拒，不等锁超时</span>
+        <span class="tok-k">raise</span> DelegationRejected(…)
+    _inflight.add(name)                             <span class="tok-c">#    ★ 占位必须在任何 await 之前</span>
+
+    <span class="tok-k">await</span> _check_admission(name)                     <span class="tok-c"># ③ 全局并发 + 本 run 累计</span>
+
+    thread_id = <span class="tok-k">await</span> _resolve_thread(sub, fresh)   <span class="tok-c"># ④ 命中已有 = 恢复；否则新建 + 投技能</span>
+    <span class="tok-k">if not</span> <span class="tok-k">await</span> relay.acquire_thread_lock(thread_id, owner=run_id):
+        <span class="tok-k">raise</span> DelegationRejected(…)                 <span class="tok-c"># ⑤ 子会话也是 thread，串行锁原样适用</span>
+
+    <span class="tok-k">await</span> runs.create(thread_id=子会话, <b>parent_run_id=发起者</b>)
+    <span class="tok-k">await</span> threads.add_message(子会话, role=<span class="tok-s">"user"</span>, content=brief)   <span class="tok-c"># ⑥ 任务书入 message 表</span>
+    <span class="tok-k">await</span> executor.submit(child_run_id)              <span class="tok-c"># ⑦ 与用户发起的 run 同一条链路</span>
+
+    <span class="tok-k">return await</span> _await_result(…)                   <span class="tok-c"># ⑧ 轮询终态 + 级联取消</span></code></pre>
+
+  <p>第 ⑥ 步值得单独说：任务书<b>写进子会话的 message 表</b>，而不是作为参数直接丢给图。原因是 Atlas 没有 checkpointer，历史每轮从 message 表重建 —— 任务书不落表的话，第二次委派时重建出来的历史里会缺掉「上次让它干什么」，只剩它自己的回答。</p>
+
+  <h3>两个只有跑真实链路才会暴露的坑</h3>
+
+  <div class="callout danger">
+    <span class="label">坑一：子 run 继承了父 run 的流式上下文</span>
+    <p>委派让 <code>executor.submit()</code> 第一次可能在<b>另一个 run 的执行上下文里</b>被调用。而 <code>asyncio.create_task</code> 默认<b>拷贝当前 contextvars</b>，langgraph 的流式输出与 langsmith 的追踪都挂在 contextvar 上。</p>
+    <p>后果：子 run 的 token 被写进<b>父 run 的</b>流通道，子 run 自己一个 <code>message.delta</code> 都不产出，落库的 assistant 消息是<b>空的</b>。而 run 状态一路 <code>succeeded</code>、模型确实被调用过、日志里毫无异常 —— 排查起来极费劲。</p>
+    <pre style="margin:10px 0 0"><code>asyncio.create_task(self._guarded(run_id), <b>context=contextvars.Context()</b>)</code></pre>
+    <p style="margin-bottom:0">语义上这也正是对的：子 run 是<b>独立可寻址的执行</b>，不该继承发起者的任何环境。</p>
+  </div>
+
+  <div class="callout danger">
+    <span class="label">坑二：同轮重名的拦截被一个 await 击穿</span>
+    <p>模型在一个 turn 里发两个 <code>task</code> 是<b>并发执行</b>的。原先的顺序是「查 <code>_inflight</code> → <code>await</code> 准入查询 → 加入 <code>_inflight</code>」—— 两个协程都能在对方占位前通过检查，于是同名委派照样起了两个子 run，拦截形同虚设。</p>
+    <p style="margin-bottom:0">修法是把占位提到<b>任何 await 之前</b>。单线程事件循环里，检查与占位之间没有 await 就没有交错点。这类 check-then-act 竞态在 asyncio 里格外隐蔽：代码看着是同步的。</p>
+  </div>
+
+  <h3>错误怎么回到模型</h3>
+
+  <p><code>DelegationRejected</code> 的消息是<b>给模型看的</b>，所以每条都必须可操作 —— 说清原因，并给出下一步：</p>
+
+  <pre><code><span class="tok-s">"coder 已在本轮中被委派。子智能体持有会话，同名委派必须串行 ——</span>
+<span class="tok-s"> 把两个子任务合并成一次，或改派给不同的子智能体。"</span>
+
+<span class="tok-s">"当前已有 3 个子智能体在执行（上限 3）。稍后重试，或先自己处理一部分。"</span></code></pre>
+
+  <p>kernel 侧的 <code>task</code> 工具把异常接成<b>工具错误文本</b>，不让它冒泡：</p>
+
+  <pre><code><span class="tok-k">try</span>:
+    <span class="tok-k">return await</span> delegate(brief, name, fresh)
+<span class="tok-k">except</span> <span class="tok-t">Exception</span> <span class="tok-k">as</span> exc:
+    <span class="tok-k">return</span> <span class="tok-s">f"委派给 {name} 失败：{exc}"</span></code></pre>
+
+  <div class="callout warn">
+    <span class="label">为什么不冒泡</span>
+    <p>撞并发上限、同轮重名都是<b>可恢复的局部问题</b>：主 agent 能改派、把两个子任务合并、或者干脆自己动手。让它冒泡等于把一次局部问题升级成整个 run 失败 —— 用户看到的是「这轮对话崩了」，而实际上只是委派排队了。</p>
+  </div>
+
+  <h3>task 的描述也必须改</h3>
+
+  <p>kernel 默认那份描述写着 <code>Each invocation is stateless</code> —— 会话级模型下这句<b>恰好说反了</b>。说反的代价很具体：模型会把上一轮的全部背景重新抄进任务书（白付 token），或者以为并行委派同一个子智能体是安全的（会撞会话串行锁）。所以委派模式用另一份描述，三句话是必须的：</p>
+
+  <pre><code>- Each subagent <b>remembers your previous delegations to it</b>.
+- Parallel delegation only works across <b>different</b> subagents.
+- Pass <b>fresh=true</b> to discard its session and start over.</code></pre>
+
+  <h3>代码落点</h3>
+
+  <div class="tree">engine/
+├── spec.py                   <s>SubAgentSpec += skills / session_mode / compaction</s>
+│                             <s>spec_for_subagent()</s>
+├── contracts/                <u>新建 —— 能力协议层（三协议 + 结果类型 + 读窗口参考实现）。</u>
+│                             <u>协议**定义**在此，不是 re-export：kernel 已深度改造、</u>
+│                             <u>也不会被整体替换，为替换场景留抽象是白付税。方向纪律双守卫：</u>
+│                             <u>server 禁入 kernel；kernel 对宿主只许 import contracts</u>
+├── hooks.py / agent.py       <u>已删除 —— RunHooks 溶解，装配收进 server/executor/build.py</u>
+│                             <u>外层其余模块（spec / events / runner / model_factory…）随后整体</u>
+│                             <u>迁入 server：atlas_engine 从此 = kernel + contracts</u>
+├── agent.py                  <s>delegate 非空时不解析子模型，只传 name/description</s>
+└── kernel/
+    ├── graph.py              <s>create_deep_agent(subagent_delegate=…)</s>
+    └── middleware/subagents.py
+                              <s>_build_delegating_task_tool()</s>
+                              <s>TaskToolSchema += fresh</s>
+                              <s>SESSION_TASK_TOOL_DESCRIPTION</s>
+
+server/
+├── services/subagent.py      <u>新建 —— Delegate 的唯一实现</u>
+├── executor/
+│   ├── assembly.py           <s>构造 delegate；workspace 挂父会话前缀</s>
+│   └── inprocess.py          <s>子会话 spec 派生；★ 全新 contextvars.Context</s>
+├── repositories/
+│   ├── thread.py             <s>find_subagent / archive_subagent / 列表排除子会话</s>
+│   └── run.py                <s>parent_run_id；准入的两个计数</s>
+├── db/models.py              <s>Thread 三列 + workspace_thread_id 派生属性</s>
+│                             <s>Run.parent_run_id</s>
+└── config.py                 <s>subagent_max_running / max_per_run / poll_interval_s</s></div>
+</section>
+
+<!-- ══════════════ 10 ══ -->
+<section id="s10">
+  <h2><span class="num">10</span>前端：子智能体的过程展示</h2>
+
+  <p>改造之前，子智能体的内部步骤是主 run 事件流里一串 <code>depth=1</code> 的事件 —— 一个<b>受限视图</b>：能看到它调了哪些工具，看不到它的用量、审批、取消，也没有任何可寻址的东西能让用户点进去。</p>
+
+  <p>改造之后子 run 有自己的 <code>run_id</code>，于是前端<b>不需要为子智能体写一套新组件</b>：主 run 的事件流组件原样复用在子 run 上。这是「子 run」白拿到的第五样东西。</p>
+
+  <div class="callout warn">
+    <span class="label">本节尚未实施</span>
+    <p><a href="#s9">§09</a> 描述的是<b>已落地</b>的代码；本节是前端那一侧的设计，<code>web/</code> 目前一行未动。其中 <a href="#s10-gap">拿不到 child_run_id</a> 那个缺口必须先在后端补上，前端才有东西可接 —— 它排在 <a href="#s13">§13</a> 的落地顺序里。</p>
+  </div>
+
+  <h3>目标形态</h3>
+
+  <figure>
+<svg viewBox="0 0 840 470" role="img" aria-labelledby="ui-t ui-d">
+<title id="ui-t">会话详情页上子智能体过程的展示形态</title>
+<desc id="ui-d">左侧是主会话时间线：用户消息、助理消息，中间是一张可展开的委派卡片。卡片头显示子智能体名、这是第几次委派、终态、用量与步数；展开后是子 run 自己的完整事件流，用的是与主 run 相同的组件，其中一条审批事件明确标注来自 coder。右侧是子智能体面板，列出每个子智能体的累计轮次与 token，并提供「新开一轮」按钮触发 fresh。底部提示删除本会话会一并删除两个子会话。</desc>
+<defs>
+<linearGradient id="uihd" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1B2338"/><stop offset="1" stop-color="#131A2E"/></linearGradient>
+</defs>
+
+<!-- 外框 -->
+<rect x="8" y="8" width="824" height="454" rx="10" fill="#0D1220" stroke="#334155"/>
+<rect x="8" y="8" width="824" height="30" rx="10" fill="url(#uihd)"/>
+<rect x="8" y="30" width="824" height="8" fill="#131A2E"/>
+<text x="24" y="28" fill="#F8FAFC" font-size="12" font-family="IBM Plex Sans">会话 · 把 auth 模块迁到新 token 格式</text>
+<line x1="8" y1="38" x2="832" y2="38" stroke="#334155"/>
+<line x1="566" y1="38" x2="566" y2="462" stroke="#334155"/>
+
+<!-- ── 左：时间线 ── -->
+<text x="26" y="60" fill="#7A88A0" font-size="10" font-family="IBM Plex Mono" letter-spacing="1">对话时间线</text>
+
+<rect x="26" y="70" width="516" height="30" rx="7" fill="#131A2E" stroke="#334155"/>
+<text x="38" y="89" fill="#7DD3FC" font-size="10.5" font-family="IBM Plex Mono">用户</text>
+<text x="76" y="89" fill="#CBD5E1" font-size="11.5" font-family="IBM Plex Sans">那三个失败的用例修一下</text>
+
+<rect x="26" y="108" width="516" height="30" rx="7" fill="#131A2E" stroke="#334155"/>
+<text x="38" y="127" fill="#22C55E" font-size="10.5" font-family="IBM Plex Mono">助理</text>
+<text x="76" y="127" fill="#CBD5E1" font-size="11.5" font-family="IBM Plex Sans">交给 coder —— 它记得上次改了什么。</text>
+
+<!-- 委派卡片（展开态） -->
+<rect x="26" y="146" width="516" height="216" rx="8" fill="#101728" stroke="#38BDF8" stroke-opacity=".55"/>
+<text x="40" y="169" fill="#38BDF8" font-size="11" font-family="IBM Plex Mono">▾</text>
+<text x="58" y="169" fill="#F8FAFC" font-size="12" font-family="IBM Plex Sans" font-weight="600">coder</text>
+<text x="104" y="169" fill="#7A88A0" font-size="10.5" font-family="IBM Plex Mono">第 2 次委派</text>
+<rect x="184" y="158" width="62" height="16" rx="8" fill="#12241A" stroke="#22C55E" stroke-opacity=".5"/>
+<text x="215" y="170" text-anchor="middle" fill="#22C55E" font-size="9.5" font-family="IBM Plex Mono">succeeded</text>
+<text x="258" y="169" fill="#7A88A0" font-size="10.5" font-family="IBM Plex Mono">12.4k tok · 8 步</text>
+<rect x="446" y="156" width="82" height="20" rx="5" fill="#131A2E" stroke="#334155"/>
+<text x="487" y="170" text-anchor="middle" fill="#CBD5E1" font-size="10" font-family="IBM Plex Sans">打开子会话</text>
+<line x1="40" y1="184" x2="528" y2="184" stroke="#263449"/>
+
+<!-- 子 run 事件流 -->
+<text x="52" y="204" fill="#7A88A0" font-size="10" font-family="IBM Plex Mono">run.started</text>
+<text x="176" y="204" fill="#94A3B8" font-size="10" font-family="IBM Plex Mono">model=claude-haiku-4-5 · agent=coder</text>
+
+<text x="52" y="224" fill="#7A88A0" font-size="10" font-family="IBM Plex Mono">tool.started</text>
+<text x="176" y="224" fill="#94A3B8" font-size="10" font-family="IBM Plex Mono">read_file  tests/test_token.py</text>
+
+<text x="52" y="244" fill="#7A88A0" font-size="10" font-family="IBM Plex Mono">tool.completed</text>
+<text x="176" y="244" fill="#94A3B8" font-size="10" font-family="IBM Plex Mono">128 行</text>
+
+<rect x="44" y="254" width="484" height="26" rx="5" fill="#241B0C" stroke="#F59E0B" stroke-opacity=".5"/>
+<text x="52" y="271" fill="#FDE68A" font-size="10" font-family="IBM Plex Mono">approval</text>
+<text x="176" y="271" fill="#FDE68A" font-size="10" font-family="IBM Plex Mono">execute · 待确认 —— 请求来自 coder</text>
+
+<text x="52" y="300" fill="#7A88A0" font-size="10" font-family="IBM Plex Mono">tool.completed</text>
+<text x="176" y="300" fill="#94A3B8" font-size="10" font-family="IBM Plex Mono">execute  pytest -k token  →  3 passed</text>
+
+<text x="52" y="320" fill="#7A88A0" font-size="10" font-family="IBM Plex Mono">message.completed</text>
+<text x="176" y="320" fill="#94A3B8" font-size="10" font-family="IBM Plex Mono">三处都改好了，失败原因是 …</text>
+
+<text x="52" y="340" fill="#7A88A0" font-size="10" font-family="IBM Plex Mono">run.finished</text>
+<text x="176" y="340" fill="#94A3B8" font-size="10" font-family="IBM Plex Mono">12.4k tok</text>
+
+<rect x="26" y="372" width="516" height="30" rx="7" fill="#131A2E" stroke="#334155"/>
+<text x="38" y="391" fill="#22C55E" font-size="10.5" font-family="IBM Plex Mono">助理</text>
+<text x="76" y="391" fill="#CBD5E1" font-size="11.5" font-family="IBM Plex Sans">三个用例都过了，原因是 token 解析顺序。</text>
+
+<!-- ── 右：子智能体面板 ── -->
+<text x="586" y="60" fill="#7A88A0" font-size="10" font-family="IBM Plex Mono" letter-spacing="1">子智能体</text>
+
+<rect x="584" y="70" width="232" height="72" rx="8" fill="#131A2E" stroke="#38BDF8" stroke-opacity=".45"/>
+<text x="598" y="90" fill="#F8FAFC" font-size="11.5" font-family="IBM Plex Sans" font-weight="600">coder</text>
+<rect x="644" y="79" width="54" height="15" rx="7" fill="#101B2C" stroke="#38BDF8" stroke-opacity=".45"/>
+<text x="671" y="90" text-anchor="middle" fill="#7DD3FC" font-size="9" font-family="IBM Plex Mono">persistent</text>
+<text x="598" y="110" fill="#94A3B8" font-size="10" font-family="IBM Plex Mono">3 轮 · 42.1k tok · 12 个文件</text>
+<rect x="598" y="118" width="70" height="18" rx="5" fill="#1B1206" stroke="#F59E0B" stroke-opacity=".45"/>
+<text x="633" y="131" text-anchor="middle" fill="#FDE68A" font-size="9.5" font-family="IBM Plex Sans">重开一轮</text>
+<text x="676" y="131" fill="#7A88A0" font-size="9.5" font-family="IBM Plex Mono">fresh=true</text>
+
+<rect x="584" y="152" width="232" height="58" rx="8" fill="#131A2E" stroke="#334155"/>
+<text x="598" y="172" fill="#F8FAFC" font-size="11.5" font-family="IBM Plex Sans" font-weight="600">researcher</text>
+<rect x="672" y="161" width="52" height="15" rx="7" fill="#1A1526" stroke="#7A88A0" stroke-opacity=".45"/>
+<text x="698" y="172" text-anchor="middle" fill="#A8B3C7" font-size="9" font-family="IBM Plex Mono">ephemeral</text>
+<text x="598" y="192" fill="#94A3B8" font-size="10" font-family="IBM Plex Mono">每次新建 · 本轮 2 个并行</text>
+
+<line x1="584" y1="230" x2="816" y2="230" stroke="#263449"/>
+<text x="586" y="252" fill="#7A88A0" font-size="10" font-family="IBM Plex Mono" letter-spacing="1">删除本会话</text>
+<rect x="584" y="262" width="232" height="52" rx="8" fill="#1C1013" stroke="#EF4444" stroke-opacity=".45"/>
+<text x="598" y="282" fill="#FCA5A5" font-size="10.5" font-family="IBM Plex Sans">将一并删除 2 个子会话</text>
+<text x="598" y="300" fill="#94A3B8" font-size="10" font-family="IBM Plex Mono">含 5 个 run 与全部轨迹</text>
+</svg>
+    <figcaption>子智能体的过程不再是一串受限事件，而是一个可展开、可寻址、可打开的子 run。</figcaption>
+  </figure>
+
+  <h3>四个展示面，各自的数据来源</h3>
+
+  <table>
+    <thead><tr><th>展示面</th><th>数据来源</th><th>为什么要有</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>委派卡片（折叠态）</b><br>名字 · 第几次 · 终态 · 用量</td>
+        <td>主 run 事件流的 <code>subagent.started</code> / <code>subagent.finished</code></td>
+        <td>不展开时也要能一眼判断「这次委派值不值」—— 用量是模型代替用户花的钱</td>
+      </tr>
+      <tr>
+        <td><b>委派卡片（展开态）</b><br>子 run 的完整事件流</td>
+        <td><code>GET /v1/runs/{child_run_id}/events</code></td>
+        <td>与主 run <b>同一个 SSE 端点、同一个组件</b>。子智能体不再是黑盒</td>
+      </tr>
+      <tr>
+        <td><b>子智能体面板</b><br>累计轮次 / token / 会话模式</td>
+        <td><code>GET /v1/threads/{id}</code> 的子会话列表</td>
+        <td>会话级模型下上下文只增不减（<a href="#s8">§08</a>）。用户要能看出「它该重置了」</td>
+      </tr>
+      <tr>
+        <td><b>删除确认</b><br>会一并删掉几个子会话</td>
+        <td><code>ThreadOut.subagent_thread_count</code></td>
+        <td>父会话的删除会级联带走子会话的 message / run / run_event（<a href="#s12">§12</a>），影响面比改造前大得多</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3 id="s10-gap">一个必须先补的缺口：拿不到 child_run_id</h3>
+
+  <div class="callout danger">
+    <span class="label"><code>subagent_run_id</code> 这个字段名现在是骗人的</span>
+    <p>事件里的 <code>subagent_run_id</code> 装的是 <b><code>tool_call_id</code></b>，不是子 run 的 id。它当初被选中，是因为在图内执行模型下「子 run」根本不存在，而 <code>tool_call_id</code> 是唯一能把 <code>started</code> / <code>finished</code> 可靠配对的键。</p>
+    <p style="margin-bottom:0">现在子 run 真的存在了，这个名字会直接把前端带沟里：拿它去请求 <code>/v1/runs/{id}/events</code> 必然 404，而字段名看起来完全正确。</p>
+  </div>
+
+  <p>三种补法，选第三种：</p>
+
+  <table>
+    <thead><tr><th>方案</th><th>问题</th></tr></thead>
+    <tbody>
+      <tr><td><code>Delegate</code> 改成返回 <code>(文本, child_run_id)</code></td><td>ToolMessage 的内容形态被一个展示需求污染。engine 的契约不该为前端让路</td></tr>
+      <tr><td>SubagentService 自己往父 run 的流里插一条事件</td><td><code>seq</code> 由 engine 的事件工厂单调发放，旁路发布会撞号 —— 而 SSE 断线续传（<code>Last-Event-ID</code>）完全依赖 seq 的单调性</td></tr>
+      <tr><td><b>把 tool_call_id 落到子 run 行上，前端按需查</b> —— 选这个</td><td>一列 + 一个只读端点，事件流一个字节都不用改</td></tr>
+    </tbody>
+  </table>
+
+  <pre><code><span class="tok-c"># 迁移 0008：把委派与它的子 run 对起来</span>
+run.parent_tool_call_id: <span class="tok-t">str</span> | <span class="tok-k">None</span>       <span class="tok-c"># Delegate 多收一个参数传进来</span>
+
+<span class="tok-c"># 新端点：一次父 run 的全部委派</span>
+GET /v1/runs/{run_id}/subruns
+→ [{ <span class="tok-s">"run_id"</span>, <span class="tok-s">"thread_id"</span>, <span class="tok-s">"subagent_name"</span>,
+     <span class="tok-s">"parent_tool_call_id"</span>,          <span class="tok-c"># ← 与 subagent.started 精确配对</span>
+     <span class="tok-s">"status"</span>, <span class="tok-s">"total_tokens"</span>, <span class="tok-s">"step_count"</span> }]</code></pre>
+
+  <p>前端的用法因此很直：收到 <code>subagent.started</code> 先用 <code>tool_call_id</code> 把卡片占位画出来；用户点展开时才拉 <code>/subruns</code> 换到真正的 <code>child_run_id</code>，再订阅它的 SSE。<b>不展开就不拉</b> —— 大多数委派用户并不会去看。</p>
+
+  <div class="callout rule">
+    <span class="label">顺带把字段名改掉</span>
+    <p><code>subagent_run_id</code> → <code>tool_call_id</code>。它本来就是 tool_call_id，叫对名字之后，「为什么它不是个 run id」这个问题就不会再被问第二次。这是个破坏性的事件字段改名，要与前端同一批发布。</p>
+  </div>
+
+  <h3>审批：必须标明是谁在请求</h3>
+
+  <div class="callout warn">
+    <span class="label">子 run 的审批弹窗不能长得和主 agent 的一样</span>
+    <p><code>Approval</code> 表本来就是 run 级的，所以子 run 的审批天然可寻址 —— 这是免费的。但<b>展示不能免费</b>：用户看到一个「即将执行 <code>rm -rf build/</code>，是否批准」的弹窗时，「这是主 agent 要干的，还是我三层任务书之外的某个子智能体要干的」是完全不同的两件事。</p>
+    <p style="margin-bottom:0">弹窗必须带上来源：<b>请求来自子智能体 <code>coder</code></b>，并能一键跳到它的子 run 事件流看上下文。</p>
+  </div>
+
+  <h3>不做的三件事</h3>
+
+  <table>
+    <thead><tr><th>不做</th><th>理由</th></tr></thead>
+    <tbody>
+      <tr><td><b>子会话进侧边栏的会话列表</b></td><td>它是父会话的一部分，不是用户的一段独立对话。列表接口已在 SQL 层排除（<code>parent_thread_id IS NULL</code>）—— 前端不该有机会绕过</td></tr>
+      <tr><td><b>子 run 的事件默认展开</b></td><td>委派的价值之一正是「中间过程不污染主对话」。默认展开等于把这个价值退回去</td></tr>
+      <tr><td><b>实时订阅所有在跑的子 run</b></td><td>一个父 run 最多 6 次委派，全订等于 7 条 SSE。用户看的是折叠态的终态摘要，展开的那一个再订就够</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ══════════════ 11 ══ -->
+<section id="s11">
+  <h2><span class="num">11</span>与 deer-flow 相反的选择</h2>
+
+  <p>deer-flow 的子智能体是<b>严格一次性</b>的：每个 task run 拿到一个全新的 <code>ThreadState</code>。这是个深思熟虑的选择，不是疏漏。所以这里要说清楚我们为什么反着来。</p>
+
+  <table>
+    <thead><tr><th style="width:150px"></th><th>deer-flow（一次性）</th><th>本设计（会话级）</th></tr></thead>
+    <tbody>
+      <tr><td>第二次委派</td><td>全新上下文</td><td>恢复</td></tr>
+      <tr><td>并行</td><td>随便并（无状态）</td><td>同名串行</td></tr>
+      <tr><td>重试</td><td>干净 —— 重试看不到上次的失败</td><td>会看到上次的痕迹</td></tr>
+      <tr><td>污染风险</td><td>无</td><td>上次的错误认知会带到下次</td></tr>
+      <tr><td>ACP 恢复</td><td>做不到</td><td>这是驱动因素</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout rule">
+    <span class="label">分歧的根源：子智能体干的活不一样</span>
+    <p>deer-flow 的子智能体是 <code>general-purpose</code> / <code>bash</code> 这类<b>通用执行体</b> —— 一次性是对的，因为每个任务彼此无关，无状态换来可并行、可重试、无污染。</p>
+    <p>我们的 acp 子智能体是<b>带着 CLI 的助理</b>，它在同一个代码库上连续工作。「把 auth 模块迁完」和「修那三个失败用例」是同一件事的两个阶段 —— 丢掉中间状态意味着每次重新读一遍代码。</p>
+  </div>
+
+  <h3>因此保留一次性作为选项，而不是删掉它</h3>
+  <pre><code><span class="tok-c"># SubAgentSpec 加一个模式位</span>
+session_mode: Literal[<span class="tok-s">"persistent"</span>, <span class="tok-s">"ephemeral"</span>] = <span class="tok-s">"persistent"</span></code></pre>
+  <p><code>ephemeral</code> 的子智能体每次新建子会话、跑完归档 —— 于是<b>可以并行</b>（每次一个新 thread，不撞锁）。适合「并行调研五个选项」这类任务。</p>
+  <p>两种模式共用同一套机制，差别只在「委派时查不查已有子会话」。</p>
+</section>
+
+<!-- ══════════════ 12 ══ -->
+<section id="s12">
+  <h2><span class="num">12</span>数据模型与改动</h2>
+
+  <h3>迁移</h3>
+  <pre><code><span class="tok-c"># 0007_subagent_sessions.py</span>
+
+op.add_column(<span class="tok-s">"thread"</span>, sa.Column(<span class="tok-s">"parent_thread_id"</span>, UUID_COL, nullable=<span class="tok-k">True</span>))
+op.add_column(<span class="tok-s">"thread"</span>, sa.Column(<span class="tok-s">"subagent_name"</span>, sa.String(<span class="tok-n">64</span>), nullable=<span class="tok-k">True</span>))
+op.add_column(<span class="tok-s">"thread"</span>, sa.Column(<span class="tok-s">"external_session_id"</span>, sa.String(<span class="tok-n">128</span>), nullable=<span class="tok-k">True</span>))
+op.create_foreign_key(<span class="tok-s">"fk_thread_parent"</span>, <span class="tok-s">"thread"</span>, <span class="tok-s">"thread"</span>,
+                     [<span class="tok-s">"parent_thread_id"</span>], [<span class="tok-s">"id"</span>], ondelete=<span class="tok-s">"CASCADE"</span>)
+
+<span class="tok-c"># ★ 恢复的查找键。ephemeral 模式的子会话归档后置空 subagent_name，</span>
+<span class="tok-c">#   否则同一个 ephemeral 子智能体的第二次委派会撞唯一约束。</span>
+op.create_index(<span class="tok-s">"ux_thread_subagent"</span>, <span class="tok-s">"thread"</span>,
+                [<span class="tok-s">"parent_thread_id"</span>, <span class="tok-s">"subagent_name"</span>], unique=<span class="tok-k">True</span>,
+                postgresql_where=sa.text(<span class="tok-s">"subagent_name IS NOT NULL"</span>))
+
+op.add_column(<span class="tok-s">"run"</span>, sa.Column(<span class="tok-s">"parent_run_id"</span>, UUID_COL, nullable=<span class="tok-k">True</span>))
+op.create_foreign_key(<span class="tok-s">"fk_run_parent"</span>, <span class="tok-s">"run"</span>, <span class="tok-s">"run"</span>, [<span class="tok-s">"parent_run_id"</span>], [<span class="tok-s">"id"</span>])</code></pre>
+
+  <div class="callout warn">
+    <span class="label">workspace 归属不入库，是派生的</span>
+    <p><code>workspace_thread_id = parent_thread_id or id</code> —— 一行推导，不需要第四列。加列反而会引入不一致的可能（两处都能改，而它们必须永远相等）。</p>
+  </div>
+
+  <div class="callout warn">
+    <span class="label">CASCADE 的方向要想清楚</span>
+    <p><code>ondelete="CASCADE"</code>：删父会话时子会话一起走。这是对的 —— 子会话脱离父会话没有意义。但它同时会级联删掉子会话的 message 与 run，<b>包括 run_event</b>。删一个会话的影响面因此变大了，界面上的删除确认要说清楚。</p>
+  </div>
+
+  <h3>改动清单</h3>
+  <div class="tree"><b>engine/</b>
+├── spec.py              <i>SubAgentSpec 加 skills / session_mode / compaction</i>
+├── agent.py             <i>_subagent_dict 的技能路径按 agent 名字算</i>
+└── hooks.py             <i>子智能体的 SkillRef 列表随 RunHooks 注入</i>
+
+<b>kernel/middleware/subagents.py</b>
+├── TaskToolSchema       <i>加 fresh: bool = False</i>
+├── _build_task_tool     <i>不再 await 子图 —— 改为委托给注入的 delegate 回调</i>
+└── <i>★ 这是本设计对 kernel 改动最大的一处：子智能体的执行从「图内直接跑」
+      变成「交给 server 起一个子 run」。kernel 只保留工具形态与结果整形。</i>
+
+<b>server/</b>
+├── db/models.py                      <i>Thread 三列 + Run.parent_run_id</i>
+├── repositories/thread.py            <i>resolve_subagent_thread(parent, name, fresh)</i>
+├── services/subagent.py   <span class="tag new">新建</span>   <i>委派编排：解析会话 → 建 run → 等终态</i>
+├── executor/assembly/skills.py       <i>按 _lead / &lt;name&gt; 分别构造 SkillRef</i>
+├── providers/filesystem/oss.py       <i>构造签名改为 user_id / thread_id /
+│                                        workspace_thread_id；_to_key 做 /skills 路由</i>
+├── providers/filesystem/skill_copy.py <i>拷进自己的 {user}/{thread}/skills/</i>
+├── providers/sandbox/               <i>★ Pod 模板参数化：workspace 与 skills
+│                                        两个挂载点的 subPath 来自不同 thread</i>
+└── config.py                         <i>subagent.max_running / max_per_run</i>
+
+<b>web/</b>
+└── <i>会话详情页：子会话作为可展开的分支，显示轮次与 token 累计</i></div>
+
+  <div class="callout danger">
+    <span class="label">最大的一处改动在 kernel</span>
+    <p>现在 <code>_build_task_tool</code> 里是 <code>await subagent.ainvoke(...)</code> —— 子图在主图的协程里跑。改造后它要变成「调用注入的 <code>delegate</code> 回调」，由 server 起子 run。</p>
+    <p>这符合 engine 的既有纪律：<b>engine 不认识数据库</b>。它不该知道「子会话是一行 thread」。所以 <code>RunHooks</code> 加一个 <code>delegate: Callable[[str, str, bool], Awaitable[str]]</code>，engine 只管调用。</p>
+  </div>
+</section>
+
+<!-- ══════════════ 13 ══ -->
+<section id="s13">
+  <h2><span class="num">13</span>落地顺序</h2>
+
+  <div class="step">
+    <h4>步骤 1 · 子智能体技能 <span class="tag keep">已落地</span></h4>
+    <p><code>SubAgentSpec.skills</code> + 按<b>子会话自己的 thread 前缀</b>投送。与步骤 2 一并实施（子会话存在之后「按 agent 分目录」这层约定就不需要了 —— 前缀本身就分开了）。</p>
+    <p><b>验证</b>：主 agent 与子智能体各配一个技能，子智能体的提示词里只出现自己那个；两者的 SKILL.md 落在<b>不同的 thread 前缀</b>下；改子智能体的那份不影响主 agent。</p>
+  </div>
+
+  <div class="step">
+    <h4>步骤 2 · 子会话与子 run（native 先行）<span class="tag keep">已落地</span></h4>
+    <p>迁移 0007 + <code>ThreadRepository.find_subagent</code> + <code>services/subagent.py</code> + kernel 的 <code>delegate</code> 回调 + <code>spec_for_subagent</code>。机制见 <a href="#s9">§09</a>。</p>
+    <p><b>验证</b>：同一会话里连续委派两次，第二次的子 run 历史里能看到第一次的对话；主线程的 message 表<b>不含</b>子智能体的任何消息；子会话不出现在会话列表。</p>
+  </div>
+
+  <div class="step">
+    <h4>步骤 3 · 并行约束与准入 <span class="tag keep">已落地</span></h4>
+    <p>同轮重名拒绝 + 提示词说明 + <code>max_running</code> / <code>max_per_run</code>。</p>
+    <p><b>验证</b>：一轮里对同一个子智能体发两个 <code>task</code>，第二个拿到可操作的错误而不是超时；对不同子智能体的并行照常。</p>
+  </div>
+
+  <div class="step">
+    <h4>步骤 4 · ephemeral 模式 <span class="tag keep">已落地</span></h4>
+    <p><code>session_mode</code>。实施时改了一处：<b>不靠「归档后置空 <code>subagent_name</code>」</b> —— 那只解决顺序委派，并行的两条 active 行照样撞唯一键，而且置空之后执行器就没法再派生这个子会话的 spec 了。</p>
+    <p>改成：一次性子会话<b>以 <code>status=&#39;ephemeral&#39;</code> 出生</b>。查找键的部分唯一索引带 <code>status = &#39;active&#39;</code> 条件，<code>find_subagent</code> 也只认 active —— 于是它既不被「恢复」命中、也不占键，<code>subagent_name</code> 可以照常保留。没加列。</p>
+    <p><b>验证</b>：<code>ephemeral</code> 的子智能体可以并行三份而不撞锁。</p>
+  </div>
+
+  <div class="step">
+    <h4>步骤 5 · 前端展示 <span class="tag new">待做</span></h4>
+    <p>先补后端那个缺口：<code>run.parent_tool_call_id</code> + <code>GET /v1/runs/{id}/subruns</code> + 事件字段改名 <code>subagent_run_id</code> → <code>tool_call_id</code>（<a href="#s10-gap">§10</a>）。然后才是委派卡片、子智能体面板、审批来源标注。</p>
+    <p><b>验证</b>：展开一次委派能看到子 run 的完整事件流；审批弹窗写明请求来自哪个子智能体；子智能体面板的轮次与 token 能让用户判断该不该重置。</p>
+  </div>
+
+  <div class="step">
+    <h4>步骤 6 · acp 恢复 <span class="tag new">待做</span></h4>
+    <p><code>external_session_id</code> + <code>loadSession</code> + 能力探测失败时降级为 <code>lost</code>。属于 acp 详设那一期。</p>
+    <p><b>验证</b>：第二次委派时 CLI 记得上次改过什么；adapter 不支持 <code>loadSession</code> 时状态明确标 <code>lost</code>，而不是静默新建。</p>
+  </div>
+
+  <div class="callout rule">
+    <span class="label">实施回顾：步骤 1 最终没有单独合入</span>
+    <p>原计划让它先走 —— 它不碰执行模型，纯粹是技能投送多一个维度。实际做下来它<b>依赖步骤 2</b>：「子智能体的技能落在不同的 thread 前缀下」这条验收标准，在子会话不存在时根本没有第二个 thread 可用。图内执行模型下只能退回成 <code>workspace/.skills/&lt;name&gt;/</code> 这类<b>约定</b>，而 <a href="#s3">§03</a> 花了整节论证约定不够。于是两步一起合。</p>
+    <p style="margin-bottom:0">步骤 2 确实是重心与风险所在：它同时动数据模型、kernel 的工具实现、和执行链路。两个真实的坑都在这一步（<a href="#s9">§09</a>），且都只有跑真实链路才暴露 —— 静态检查与单测全绿。</p>
+  </div>
+</section>
+
+<!-- ══════════════ 14 ══ -->
+<section id="s14">
+  <h2><span class="num">14</span>风险与不做的事</h2>
+
+  <h3>三个真实风险</h3>
+  <table>
+    <thead><tr><th style="width:170px">风险</th><th>表现</th><th>处置</th></tr></thead>
+    <tbody>
+      <tr><td><b>状态污染</b></td><td>上一轮把子智能体带偏了，之后每一轮都在错误前提上继续</td><td><code>fresh=True</code>；界面显示子会话轮次让用户能主动重置</td></tr>
+      <tr><td><b>重试语义变了</b></td><td>一次性模型下重试是干净的；现在重试会看到上次失败的痕迹</td><td>不一定是坏事（知道试过什么），但要在文档里写明差异，别让人以为重试等于重来</td></tr>
+      <tr><td><b>删除影响面变大</b></td><td>删一个会话会级联删掉所有子会话的 message / run / run_event</td><td>删除确认要显示子会话数量与总轮次</td></tr>
+    </tbody>
+  </table>
+
+  <h3>明确不做</h3>
+  <table>
+    <thead><tr><th style="width:230px">不做</th><th>理由</th><th style="width:130px">重新考虑的信号</th></tr></thead>
+    <tbody>
+      <tr><td><b>非阻塞委派</b></td><td>需要跨轮传句柄（无 checkpointer，得落表）、结果回来的通知机制、以及<b>改会话串行锁</b>。而委派的语义就是「我需要这个结论」</td><td>量到 <code>task</code> 的 P95 超过 60s</td></tr>
+      <tr><td><b>子会话完全独立的工作区</b></td><td>产物就得靠返回值搬运，而返回值是一段文本。<b>读共享 + 写隔离</b>（<a href="#s3">§03</a>）比两个极端都好：读得到，写不乱</td><td>永不 —— 真要更严就收紧挂载，不是切前缀</td></tr>
+      <tr><td><b>子智能体再委派</b></td><td>深度仍然结构性封顶在 1。会话级模型下嵌套会让「哪个会话恢复哪个」变成一棵要遍历的树</td><td>永不</td></tr>
+      <tr><td><b>照搬 deer-flow 的隔离事件循环</b></td><td>它买的是故障隔离，而「子 run」已经天然具备：独立 run_id、独立取消令牌、<code>reap_orphans</code> 覆盖</td><td>永不</td></tr>
+      <tr><td><b>验收标准与凭据核验</b><br>（deer-flow 的 1826 行）</td><td>价值高但与本次改造正交，且体量大。<b>单独立项</b></td><td>子智能体的产出开始不可信时</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout rule">
+    <span class="label">三条可以先摘的低成本改进</span>
+    <p>与本设计无关，来自 <a href="kernel.html">deer-flow 的对照</a>，改动都很小：</p>
+    <ul style="margin-bottom:0">
+      <li><b>委派成本论证进 <code>task</code> 的工具描述</b> —— 零成本，直接减少无谓委派</li>
+      <li><b><code>stop_reason</code> 用附加字段</b> —— 现在 <code>subagent.finished</code> 只有 <code>failed</code> 布尔，<b>「撞上限」与「真失败」分不开</b></li>
+      <li><b>turn budget 按中间件链深度换算</b> —— <code>StepLimitMiddleware(max_steps)</code> 数的是步，而每个中间件钩子编译一个节点；子智能体装了三层中间件，实际可用步数比配置的少，这个偏差现在是隐性的</li>
+    </ul>
+  </div>
+</section>
+
+</main>
+</div>
+
+</body>
+</html>

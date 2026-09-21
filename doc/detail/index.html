@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>详细设计 · AI Platform</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<nav class="sitenav">
+  <a class="brand" href="../">AI&nbsp;<b>Platform</b>&nbsp;/ 详细设计</a>
+  <div class="links">
+    <a href="../">概要设计</a>
+    <a class="on" href="./">详细设计</a>
+    <a href="native.html">native Agent</a>
+    <a href="structure.html">目录与包结构</a>
+    <a href="kernel.html">kernel 分析</a>
+    <a href="filesystem.html">文件系统改造</a>
+    <a href="subagent.html">Subagent 重设计</a>
+    <a href="../prototype/">交互原型</a>
+  </div>
+</nav>
+
+<div class="wrap solo">
+<main>
+
+<header class="hero">
+  <p class="kicker">Detailed Design</p>
+  <h1>详细设计</h1>
+  <p class="lede">概要设计说的是<b>应该长什么样</b>，这里说的是<b>在现有代码上怎么落地</b>：类怎么设计、流程怎么走、哪些文件要动、哪些是新建。载体是 <code>/root/workspace/atlas</code> —— 一个已经跑起来的 LangGraph 多智能体平台。</p>
+  <div class="meta">
+    <span>载体 atlas</span><span>Python 3.13 · FastAPI · LangGraph</span><span>engine / server / web 三层</span>
+  </div>
+</header>
+
+<section id="ctx">
+  <h2><span class="num">00</span>为什么先做 native</h2>
+  <p>概要设计里两类 Agent 共享同一套对象模型：Agent / Session / Run / Message / Event。atlas 已经把这套模型的 native 半边实现到了可用状态 —— 有版本快照、有事件契约、有审批、有沙箱、有压缩。</p>
+  <p>所以落地顺序是清楚的：<b>先把 native 补齐到概要设计的完整形态，再接 acp。</b>反过来做的话，acp 会被迫在一套还没定型的抽象上对接，接缝定不住。</p>
+
+  <div class="callout rule">
+    <span class="label">这份详设回答什么</span>
+    <p>atlas 现有代码里，哪些与概要设计一致（不动）、哪些命名或语义不同（对齐）、哪些完全没有（新建）。每一条都落到类、函数、迁移和文件路径。</p>
+  </div>
+</section>
+
+<section id="docs">
+  <h2><span class="num">01</span>文档</h2>
+
+  <div class="cards">
+    <a class="doccard" href="native.html">
+      <div class="n">01</div>
+      <div class="t">native Agent 详细设计</div>
+      <p class="d">对照 atlas 现状的落地方案。<b>一处概要设计的自我修正</b>（<code>needs_approval</code> 不该由 type 推导）、技能的双路投送、Mem0 接入点、MCP 从环境变量到数据库、执行环境的接缝抽象，以及分五阶段的改动清单。</p>
+      <div class="k">类设计 · 流程 · 迁移 · 文件级清单</div>
+    </a>
+    <a class="doccard" href="structure.html">
+      <div class="n">02</div>
+      <div class="t">目录与包结构设计</div>
+      <p class="d">系统分成<b>配置平面（Java）</b>与<b>运行时平面（Python）</b>：技能、MCP、K8s 模板是有独立生命周期的内容资产；<b>智能体配置留在 Python</b> —— 它是装配说明，且 <code>thread</code> / <code>run</code> 对它有真实外键。含 kernel 的裁剪清单（已做功能可达性核对，约 4600 行）。</p>
+      <div class="k">两个平面 · 单向调用 · 不可变契约 · kernel 裁剪 · 十一处否决</div>
+    </a>
+    <a class="doccard" href="kernel.html">
+      <div class="n">03</div>
+      <div class="t">kernel 包分析</div>
+      <p class="d">53 模块 / 26411 行拆成五层逐一说明：装配中心的中间件叠加顺序、Backend 协议的七个实现、Middleware 的能力清单、两套 Profile 档案。标出 Atlas 已改动的四处、休眠但有价值的能力、以及 ~5000 行死代码。<b>末尾是可逐行打钩的评估清单。</b></p>
+      <div class="k">功能 · 类设计 · 启用/改造/裁剪建议</div>
+    </a>
+    <a class="doccard" href="filesystem.html">
+      <div class="n">04</div>
+      <div class="t">文件系统与沙箱改造</div>
+      <p class="d">中间件与协议各拆成 filesystem / sandbox 两半，事实源<b>从容器内盘换成 OSS</b>，工作区经 FUSE 挂进沙箱。<b>技能并入同一条路径</b> —— 会话创建时拷进 <code>.skills/</code>，读走 filesystem、执行走 sandbox，可执行技能自动成立。含一处安全关键发现：FUSE 必须挂在沙箱容器之外。</p>
+      <div class="k">两个协议 · OSS 布局 · 技能三层级 · 一致性 · 逐文件清单</div>
+    </a>
+    <a class="doccard" href="subagent.html">
+      <div class="n">05</div>
+      <div class="t">Subagent 重新设计</div>
+      <p class="d">从「每次委派都从零开始」改成<b>子智能体持有自己的会话</b> —— 第二次委派时恢复上下文，而 ACP 的 <code>loadSession</code> 正需要一个可寻址的会话。核心决定：<b>子会话是 thread 不是 run</b>，于是压缩、摘要、恢复全部复用。含与 deer-flow 相反选择的诚实对照。</p>
+      <div class="k">三条边界 · 两种恢复 · hook 与 delegate · 前端展示 · 同名串行</div>
+    </a>
+    <a class="doccard" href="acp.html">
+      <div class="n">06</div>
+      <div class="t">acp Agent 详细设计</div>
+      <p class="d">把执行环境概设的 Bridge/Pod 链路落到 atlas 骨架上。核心判断：<b>acp 的 run 也是普通 run</b> —— 分岔只在 <code>AgentRuntime</code>。含 atlas_acp 线协议包、Bridge 独立部署物、事件翻译表、配对/一轮 prompt/恢复三张时序图。</p>
+      <div class="k">AgentRuntime · 线协议共享包 · 审批回路 · lost 降级 · 落地六步</div>
+    </a>
+  </div>
+
+  <h3>待写</h3>
+  <ul>
+    <li><b>执行环境详细设计</b> —— K8s 模板管理与 Pod 生命周期组件。本期只在 native 详设里定下 <code>SandboxProvider</code> 协议接缝，实现留到这一篇。</li>
+    <li><b>配置平面（Java）详细设计</b> —— 四个资产域的表结构、审核流、不可变版本的实现。本篇只给域划分与两条硬契约。</li>
+    <li><b>权限详细设计</b> —— atlas 现在明确不做鉴权。native 期只做<b>身份贯通</b>（记忆按人隔离的前提），权限矩阵单独成篇。</li>
+  </ul>
+</section>
+
+<section id="read">
+  <h2><span class="num">02</span>配合概要设计阅读</h2>
+  <p>详设不重复概要设计的论证。遇到"为什么是这样"的问题，回到对应的概要文档：</p>
+  <div class="cards">
+    <a class="doccard" href="../agent.html">
+      <div class="n">概要</div><div class="t">Agent 管理</div>
+      <p class="d"><code>type</code> 不可变、capabilities 由 type 推导的原始论证。详设里对它做了一处修正。</p>
+    </a>
+    <a class="doccard" href="../skill.html">
+      <div class="n">概要</div><div class="t">技能管理</div>
+      <p class="d">技能是可执行内容而非配置。详设把"双路投送"变成了 atlas 里的一个具体分叉。</p>
+    </a>
+    <a class="doccard" href="../memory.html">
+      <div class="n">概要</div><div class="t">记忆</div>
+      <p class="d">为什么只按 user 维度检索、agent 维度的知识为什么走 RAG 而不是 Mem0 自动提取。</p>
+    </a>
+    <a class="doccard" href="../native.html">
+      <div class="n">概要</div><div class="t">native Agent</div>
+      <p class="d">Message 为事实源、不存 checkpoint、sandbox 按会话不按 run 的原始设计。</p>
+    </a>
+  </div>
+</section>
+
+</main>
+</div>
+
+</body>
+</html>

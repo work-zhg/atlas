@@ -1,0 +1,820 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>运行时链路设计 · AI Platform</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="sitenav">
+  <a class="brand" href="./">AI&nbsp;<b>Platform</b>&nbsp;/ 设计文档</a>
+  <div class="links">
+    <a href="./">目录</a>
+    <a href="detail/">详细设计</a>
+    <a href="architecture.html">系统架构</a>
+    <a href="agent.html">Agent 管理</a>
+    <a href="skill.html">技能管理</a>
+    <a href="mcp.html">MCP 管理</a>
+    <a href="permission.html">权限管理</a>
+    <a href="execution.html">执行环境</a>
+    <a href="session.html">会话管理</a>
+    <a href="native.html">native Agent</a>
+    <a class="on" href="runtime.html">运行时链路</a>
+    <a href="local.html">本地部署</a>
+    <a href="memory.html">记忆</a>
+    <a href="observability.html">可观测性</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+<nav class="toc" aria-label="目录">
+  <div class="eyebrow">本页</div>
+  <ol>
+    <li><a href="#s1">链路总览</a></li>
+    <li><a href="#s2">ACP 协议</a></li>
+    <li><a href="#s3">三层 Session 映射</a></li>
+    <li><a href="#s4">存储分层与挂盘</a></li>
+    <li><a href="#s5">Pod 内目录设计</a></li>
+    <li><a href="#s6">Claude Code 配置注入</a></li>
+    <li><a href="#s7">MCP 配置</a></li>
+    <li><a href="#s8">技能目录挂载</a></li>
+    <li><a href="#s9">K8s 管理</a></li>
+    <li><a href="#s10">启动与恢复时序</a></li>
+    <li><a href="#s11">CLI 适配层</a></li>
+    <li><a href="#s12">待验证清单</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<header class="hero">
+  <p class="kicker">Runtime Chain</p>
+  <h1>运行时链路设计</h1>
+  <p class="lede">Server → Bridge → CLI 这条链路的功能设计：K8s 管理、三层 Session 对应、存储挂盘与目录布局，以及 Claude Code 的配置注入。首个适配目标是 Claude Code，结构上预留 Codex。</p>
+  <div class="meta">
+    <span>Bridge</span><span>Claude Code</span><span>Kubernetes</span><span>OSS</span><span>NAS</span><span>MCP</span><span>Skills</span>
+  </div>
+</header>
+
+<div class="callout warn">
+  <span class="label">本文的事实基础</span>
+  <p>下文两类事实已在真实环境中核对：<b>Claude Code 的目录布局与命令行开关</b>（<code>~/.claude</code> 实际结构、<code>~/.claude.json</code> 键名、<code>claude --help</code> 输出），以及 <b>ACP 协议的 schema</b>（<code>agent-client-protocol</code> 0.12.1，已下载并逐字段核对请求/响应模型）。</p>
+  <p><b>未经实测的是具体 adapter 的行为</b> —— 它声明哪些可选能力、<code>session/load</code> 的实际语义如何。这些决定了若干设计能否成立，集中列在 <a href="#s12">§12</a>。</p>
+</div>
+
+<!-- ───────────────────────── 1 ───────────────────────── -->
+<section id="s1">
+<h2><span class="num">01</span>链路总览</h2>
+
+<figure>
+<svg viewBox="0 0 900 560" role="img" aria-labelledby="figR-t figR-d" font-family="var(--sans)">
+  <title id="figR-t">Pod 内部结构与存储挂载</title>
+  <desc id="figR-d">Server 经 WebSocket 连接 Pod 内的 Bridge 服务，Bridge 以 stdio 驱动 Claude Code CLI 子进程。Pod 挂载四类卷：会话工作区来自 OSS，Claude 状态目录来自 NAS，技能目录为只读卷，凭证与配置来自 Secret 与 ConfigMap。</desc>
+  <defs>
+    <marker id="arR" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#94A3B8"/>
+    </marker>
+    <marker id="arRv" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#A78BFA"/>
+    </marker>
+  </defs>
+
+  <!-- Server -->
+  <rect x="24" y="180" width="140" height="80" rx="8" fill="#0E1223" stroke="#22C55E" stroke-opacity=".55"/>
+  <text x="94" y="212" text-anchor="middle" fill="#F8FAFC" font-size="14" font-weight="600">Server</text>
+  <text x="94" y="234" text-anchor="middle" fill="#94A3B8" font-size="10.5">会话管理</text>
+
+  <line x1="164" y1="220" x2="228" y2="220" stroke="#A78BFA" stroke-width="2" marker-end="url(#arRv)"/>
+  <text x="196" y="210" text-anchor="middle" fill="#A78BFA" font-size="9.5" font-family="monospace">WS</text>
+
+  <!-- Pod -->
+  <rect x="228" y="40" width="330" height="360" rx="10" fill="#0B0F1E" stroke="#A78BFA" stroke-opacity=".45" stroke-dasharray="6 4"/>
+  <text x="246" y="66" fill="#A78BFA" font-size="12.5" font-weight="600">Pod · session_id</text>
+  <text x="246" y="84" fill="#64748B" font-size="10">labels: session / agent / tenant</text>
+
+  <rect x="248" y="100" width="290" height="76" rx="8" fill="#0E1223" stroke="#A78BFA" stroke-opacity=".6"/>
+  <text x="393" y="126" text-anchor="middle" fill="#F8FAFC" font-size="13" font-weight="600">Bridge 服务</text>
+  <text x="393" y="146" text-anchor="middle" fill="#94A3B8" font-size="10">WS 端点 · 协议翻译 · 生命周期</text>
+  <text x="393" y="164" text-anchor="middle" fill="#94A3B8" font-size="10">OTel span 上报</text>
+
+  <line x1="393" y1="176" x2="393" y2="212" stroke="#A78BFA" stroke-width="1.5" marker-end="url(#arRv)"/>
+  <text x="403" y="198" fill="#A78BFA" font-size="9" font-family="monospace">ACP / stdio</text>
+
+  <rect x="248" y="212" width="290" height="76" rx="8" fill="#0E1223" stroke="#334155"/>
+  <text x="393" y="238" text-anchor="middle" fill="#F8FAFC" font-size="13" font-weight="600">ACP adapter + Claude Code</text>
+  <text x="393" y="258" text-anchor="middle" fill="#94A3B8" font-size="10">cwd = /home/agent/workspace</text>
+  <text x="393" y="276" text-anchor="middle" fill="#94A3B8" font-size="10">sessionId 由 agent 生成</text>
+
+  <rect x="248" y="306" width="290" height="76" rx="8" fill="#0B0F1E" stroke="#232B3D"/>
+  <text x="264" y="330" fill="#CBD5E1" font-size="11" font-weight="600">挂载点</text>
+  <text x="264" y="350" fill="#94A3B8" font-size="10" font-family="monospace">/home/agent/workspace   ← OSS</text>
+  <text x="264" y="368" fill="#94A3B8" font-size="10" font-family="monospace">/home/agent/.claude     ← NAS</text>
+
+  <!-- volumes -->
+  <rect x="612" y="40" width="264" height="58" rx="8" fill="#0E1223" stroke="#22C55E" stroke-opacity=".5"/>
+  <text x="630" y="64" fill="#22C55E" font-size="12" font-weight="600">OSS · 会话工作区</text>
+  <text x="630" y="84" fill="#94A3B8" font-size="10">rw · 产出文件 · 大文件低频写</text>
+
+  <rect x="612" y="114" width="264" height="58" rx="8" fill="#0E1223" stroke="#F59E0B" stroke-opacity=".5"/>
+  <text x="630" y="138" fill="#F59E0B" font-size="12" font-weight="600">NAS · Claude 状态</text>
+  <text x="630" y="158" fill="#94A3B8" font-size="10">rw · transcript JSONL 追加写</text>
+
+  <rect x="612" y="188" width="264" height="58" rx="8" fill="#0E1223" stroke="#38BDF8" stroke-opacity=".5"/>
+  <text x="630" y="212" fill="#38BDF8" font-size="12" font-weight="600">技能卷</text>
+  <text x="630" y="232" fill="#94A3B8" font-size="10">ro · 全局共享 · subPath 嵌套</text>
+
+  <rect x="612" y="262" width="264" height="58" rx="8" fill="#0E1223" stroke="#334155"/>
+  <text x="630" y="286" fill="#CBD5E1" font-size="12" font-weight="600">Secret / ConfigMap</text>
+  <text x="630" y="306" fill="#94A3B8" font-size="10">ro · 凭证 · settings · mcp.json</text>
+
+  <g stroke="#94A3B8" stroke-width="1.3" fill="none">
+    <path d="M558 340 C 585 340 585 69 612 69" marker-end="url(#arR)"/>
+    <path d="M558 344 C 588 344 588 143 612 143" marker-end="url(#arR)"/>
+    <path d="M558 348 C 591 348 591 217 612 217" marker-end="url(#arR)"/>
+    <path d="M558 352 C 594 352 594 291 612 291" marker-end="url(#arR)"/>
+  </g>
+
+  <!-- footnote -->
+  <rect x="24" y="430" width="852" height="106" rx="8" fill="#0E1223" stroke="#232B3D"/>
+  <text x="44" y="456" fill="#F8FAFC" font-size="12" font-weight="600">为什么 Claude 状态目录不放 OSS</text>
+  <text x="44" y="480" fill="#94A3B8" font-size="11">Claude Code 把会话逐条追加写入 projects/&lt;escaped-cwd&gt;/&lt;uuid&gt;.jsonl。ossfs 这类对象存储 FUSE 的追加写</text>
+  <text x="44" y="500" fill="#94A3B8" font-size="11">实为「下载整个对象 → 修改 → 整体上传」，在一次长会话里会被放大成上千次全量重写。</text>
+  <text x="44" y="522" fill="#F59E0B" font-size="11">→ 状态目录用文件存储（NAS / CPFS / PVC），产出文件用 OSS。这是两种负载，不该共用一种存储。</text>
+</svg>
+<figcaption><b>一个 Session 一个 Pod。</b>Bridge 持有 WebSocket 端点，作为 <b>ACP client</b> 驱动 adapter，adapter 再启动并管理 Claude Code 进程 —— 所以 Pod 内实际是三层，但第三层对我们是黑盒（<a href="#s3">§03</a>）。四类卷各自解决一个问题，其中<b>存储分层是这份设计里最容易做错的一处</b> —— 详见 <a href="#s4">§04</a>。</figcaption>
+</figure>
+</section>
+
+<!-- ───────────────────────── 2 ───────────────────────── -->
+<section id="s2">
+<h2><span class="num">02</span>ACP 协议</h2>
+
+<p>Bridge 作为 <b>ACP client</b>，由 adapter 负责启动并驱动 CLI 进程。本节是这条链路的协议契约，字段与枚举均取自 <code>agent-client-protocol</code> <b>0.12.1</b> 的 schema。</p>
+
+<h3>2.1 传输与连接模型</h3>
+<p>ACP 是 <b>双向 JSON-RPC</b>，跑在 <b>stdio 父子管道</b>上：client 把 agent 作为子进程拉起，双方通过它的 stdin/stdout 通信。</p>
+
+<pre><code><span class="tok-k">async def</span> spawn_agent_process(to_client, command, *args, env, cwd, ...):
+    <span class="tok-c">"""Spawn an ACP agent subprocess and return a ClientSideConnection to it."""</span></code></pre>
+
+<div class="callout rule">
+  <span class="label">这个传输模型有三个决定性推论</span>
+  <ul style="margin-bottom:0">
+    <li><b>只有 spawn 方能通信</b> —— 没有监听端口，没有第三方 attach 的入口。Bridge 只能和它自己拉起的 adapter 对话。</li>
+    <li><b>无法观察外部进程</b> —— 用户自己在终端起的 <code>claude</code> 不是 ACP agent（<code>claude</code> 本身不说 ACP，要靠 adapter 包一层；且交互式 TUI 占用着同一对 fd）。这条路彻底封死。</li>
+    <li><b>进程即会话边界</b> —— adapter 进程退出，这条 ACP 连接上的一切随之消失；会话能否续上取决于 agent 侧的持久化与 <a href="#s3">§03</a> 的恢复方法。</li>
+  </ul>
+</div>
+
+<h3>2.2 方法总览</h3>
+
+<h4>Client → Agent（Bridge 调 adapter）</h4>
+<table>
+  <thead><tr><th style="width:210px">方法</th><th style="width:230px">作用</th><th>能力门</th></tr></thead>
+  <tbody>
+    <tr><td><code>initialize</code></td><td>版本协商、能力交换</td><td class="yes">基线，必须先调</td></tr>
+    <tr><td><code>authenticate</code> / <code>logout</code></td><td>认证 / 登出</td><td><code>agentCapabilities.auth</code></td></tr>
+    <tr><td><code>session/new</code></td><td>创建会话</td><td class="yes">基线</td></tr>
+    <tr><td><code>session/prompt</code></td><td>发送用户消息</td><td class="yes">基线</td></tr>
+    <tr><td><code>session/cancel</code></td><td>中断（<b>通知，无响应</b>）</td><td class="yes">基线</td></tr>
+    <tr><td><code>session/resume</code></td><td>恢复会话，<b>不重放</b></td><td><code>sessionCapabilities.resume</code></td></tr>
+    <tr><td><code>session/load</code></td><td>恢复会话<b>并重放历史</b></td><td><code>agentCapabilities.loadSession</code></td></tr>
+    <tr><td><code>session/fork</code></td><td>从既有会话派生新会话</td><td><code>sessionCapabilities.fork</code></td></tr>
+    <tr><td><code>session/list</code></td><td>枚举会话（<code>cwd</code> 可选、游标分页）</td><td><code>sessionCapabilities.list</code></td></tr>
+    <tr><td><code>session/close</code></td><td>关闭<b>活动</b>会话（保留历史）</td><td>已稳定</td></tr>
+    <tr><td><code>session/delete</code></td><td>从历史中<b>删除</b></td><td><code>sessionCapabilities.delete</code></td></tr>
+    <tr><td><code>session/set_mode</code></td><td>切换 agent 运行模式</td><td>响应 <code>modes</code> 时可用</td></tr>
+    <tr><td><code>session/set_config_option</code></td><td>设置会话配置项</td><td>响应 <code>configOptions</code> 时可用</td></tr>
+  </tbody>
+</table>
+
+<h4>Agent → Client（adapter 反向调 Bridge）</h4>
+<table>
+  <thead><tr><th style="width:210px">方法</th><th style="width:230px">作用</th><th>Bridge 是否必须实现</th></tr></thead>
+  <tbody>
+    <tr><td><code>session/update</code></td><td><b>流式进度通知（核心）</b></td><td class="yes">必须</td></tr>
+    <tr><td><code>session/request_permission</code></td><td>请求审批工具调用</td><td class="yes">必须</td></tr>
+    <tr><td><code>fs/read_text_file</code><br><code>fs/write_text_file</code></td><td>让 client 代为读写文件</td><td class="maybe">取决于我们声明</td></tr>
+    <tr><td><code>terminal/create · output<br>wait_for_exit · kill · release</code></td><td>让 client 代为管理终端</td><td class="maybe">取决于我们声明</td></tr>
+    <tr><td><code>elicitation/create</code><br><code>elicitation/complete</code></td><td>向用户索取结构化输入（表单式提问）</td><td class="maybe">取决于我们声明</td></tr>
+  </tbody>
+</table>
+
+<div class="callout warn">
+  <span class="label">声明即承诺</span>
+  <p>反向方法是否会被调用，由 <b>我们在 <code>initialize</code> 里声明的 <code>ClientCapabilities</code> 决定</b>。声明了就必须真正实现 —— agent 会依赖它。默认值都是关闭的（<code>fs.readTextFile=false</code>、<code>fs.writeTextFile=false</code>、<code>terminal=false</code>），<b>先全关，按需逐个打开</b>，每打开一个都要想清楚它在 Pod / 用户机器上意味着什么权限。</p>
+</div>
+
+<h3>2.3 能力协商</h3>
+<p><code>initialize</code> 必须最先调用，双方交换能力。<b>agent 返回的能力位要写回 <code>agents.caps_probed</code></b>（<a href="session.html#s4">会话管理 §04</a> 的 declared / probed 两层）。</p>
+
+<pre><code><span class="tok-c"># Agent 声明（我们读）</span>
+AgentCapabilities:
+  loadSession: bool = <span class="tok-w">False</span>          <span class="tok-c"># 默认关！</span>
+  promptCapabilities / mcpCapabilities / auth
+  sessionCapabilities:
+    list · delete · fork · <span class="tok-s">resume</span> · additionalDirectories
+
+<span class="tok-c"># Client 声明（我们写）</span>
+ClientCapabilities:
+  fs: { readTextFile: <span class="tok-w">False</span>, writeTextFile: <span class="tok-w">False</span> }
+  terminal: <span class="tok-w">False</span>
+  session: { configOptions } · plan · auth</code></pre>
+
+<h3>2.4 会话生命周期</h3>
+<pre><code>session/new(cwd, mcpServers[, additionalDirectories])
+    → NewSessionResponse { <span class="tok-s">sessionId</span>, modes?, configOptions? }
+      <span class="tok-w">↑ ID 由 agent 生成，客户端不能指定</span>
+
+session/resume(sessionId, cwd, mcpServers)   <span class="tok-s">← 首选：不重放</span>
+session/load  (sessionId, cwd, mcpServers)   <span class="tok-c">← 退路：重放历史，需去重</span>
+session/fork  (sessionId, cwd, mcpServers)   <span class="tok-c">→ ForkSessionResponse（新 ID）</span>
+session/list  ([cwd], [cursor])              <span class="tok-c">→ SessionInfo[] + nextCursor</span>
+session/close (sessionId)                    <span class="tok-c">← 移交/停用时让 agent 收尾</span>
+session/delete(sessionId)                    <span class="tok-c">← 删历史</span></code></pre>
+
+<div class="callout rule">
+  <span class="label">恢复优先用 session/resume</span>
+  <p>我们自己持有完整的 Message 账本，<b>不需要 agent 把历史再吐一遍</b>。<code>session/load</code> 的重放带来两笔额外成本：流量与延迟，以及与已有 Message 做去重 —— 而去重逻辑正是最容易产生静默 bug 的地方。</p>
+  <pre style="margin:10px 0 0"><code>sessionCapabilities.resume     → session/resume   <span class="tok-s">首选</span>
+agentCapabilities.loadSession  → session/load     <span class="tok-c">退路</span>
+两者皆无                        → session/new + 置 lost</code></pre>
+</div>
+
+<h3>2.5 一轮对话</h3>
+<pre><code>Bridge → session/prompt(sessionId, prompt[])
+Agent  → session/update × N        <span class="tok-c">（通知，见下表）</span>
+Agent  → session/request_permission  <span class="tok-c">（可能穿插，需应答）</span>
+Bridge → PromptResponse { <span class="tok-s">stopReason</span>, usage? }</code></pre>
+
+<p><code>session/update</code> 的 13 种变体（<code>sessionUpdate</code> 字段判别）：</p>
+<table>
+  <thead><tr><th style="width:230px">变体</th><th>用途</th><th style="width:170px">平台 Event</th></tr></thead>
+  <tbody>
+    <tr><td><code>agent_message_chunk</code></td><td>正文增量</td><td><code>message.delta</code></td></tr>
+    <tr><td><code>agent_thought_chunk</code></td><td>思考增量</td><td><code>thought.delta</code></td></tr>
+    <tr><td><code>user_message_chunk</code></td><td>回显用户消息</td><td>忽略（我们已有）</td></tr>
+    <tr><td><code>tool_call</code></td><td>工具调用开始</td><td><code>tool_call.started</code></td></tr>
+    <tr><td><code>tool_call_update</code></td><td>状态变化</td><td><code>tool_call.updated/ended</code></td></tr>
+    <tr><td><code>plan</code> · <code>plan_update</code> · <code>plan_removed</code></td><td>计划增删改</td><td><code>plan.updated</code></td></tr>
+    <tr><td><code>usage_update</code></td><td>用量增量</td><td>累加进 <code>runs.usage</code></td></tr>
+    <tr><td><code>current_mode_update</code></td><td>运行模式变化</td><td>会话状态</td></tr>
+    <tr><td><code>config_option_update</code></td><td>配置项变化</td><td>会话状态</td></tr>
+    <tr><td><code>available_commands_update</code></td><td>可用命令变化</td><td>可选</td></tr>
+    <tr><td><code>session_info_update</code></td><td>会话元信息（标题等）</td><td>会话标题</td></tr>
+  </tbody>
+</table>
+
+<p><code>ToolCallStatus</code>：<code>pending</code> / <code>in_progress</code> / <code>completed</code> / <code>failed</code>。</p>
+<p><code>StopReason</code>：<code>end_turn</code> / <code>max_tokens</code> / <code>max_turn_requests</code> / <code>refusal</code> / <code>cancelled</code> —— 直接落进 <code>runs.stop_reason</code>。注意 <code>max_turn_requests</code> 和 <code>refusal</code> 都不是错误，前端不该显示成失败。</p>
+
+<h3>2.6 审批回路</h3>
+<pre><code>Agent  → session/request_permission(sessionId, toolCall, options[])
+Bridge → 翻译成平台 request.pending 事件 → 网页端
+用户   → POST /requests/{qid}/respond
+Bridge → RequestPermissionResponse { outcome: selected(optionId) | cancelled }</code></pre>
+
+<p><code>PermissionOptionKind</code>：<code>allow_once</code> / <code>allow_always</code> / <code>reject_once</code> / <code>reject_always</code>。</p>
+
+<div class="callout danger">
+  <span class="label">默认必须是「转交用户」</span>
+  <p>Bridge 实现 <code>request_permission</code> 时，默认行为是转交，<b>不是自动选 allow</b>。一旦为了省事在 Bridge 里写死自动批准，前端那套审批卡片就成了摆设，任意文件写入与命令执行的权限实际上交给了模型。同理，adapter 若暴露「跳过所有权限检查」的开关，不要开。</p>
+  <p><code>allow_always</code> 的作用域是 agent 会话级，随会话消失，而用户的心理预期通常是持久的。<b>建议由平台自己存这个偏好</b>（per session 或 per user × tool）并在下次自动应答，而不是透传给 agent。</p>
+</div>
+
+<h3>2.7 取消</h3>
+<p><code>session/cancel</code> 是<b>通知，没有响应</b>。发出后 agent 会中止当前轮，<b>进行中的 <code>session/prompt</code> 以 <code>stopReason = cancelled</code> 正常返回</b> —— 不要把它当作错误处理，也不要在收到 cancel 确认前就认为轮次已结束。</p>
+<p>已执行的工具副作用不会回滚，这正是 <a href="session.html#s4">会话管理 §04</a> 里助理的 <code>rollback_on_cancel = false</code> 的由来。</p>
+
+<h3>2.8 这套选择放弃了什么</h3>
+<ul>
+  <li><b>不能指定 session ID</b> —— ID 由 agent 生成并返回，见 <a href="#s3">§03</a>。</li>
+  <li><b>不能直接控制 CLI 启动参数</b> —— 模型、权限模式等是否可配，取决于 adapter 暴露的 <code>modes</code> 与 <code>configOptions</code>。</li>
+  <li><b>transcript 文件名不可预测</b> —— 看不到 CLI 内部的 session UUID；目录仍可预测（cwd 固定）。</li>
+  <li><b>多一层进程与一个上游依赖</b> —— adapter 的成熟度成为链路可靠性的一部分。</li>
+</ul>
+<p>换来的是：审批、恢复、枚举、清理都有标准语义，且换 CLI 时只要对方有合规 adapter，Bridge 以上几乎零改动。</p>
+</section>
+
+<!-- ───────────────────────── 3 ───────────────────────── -->
+<section id="s3">
+<h2><span class="num">03</span>三层 Session 映射</h2>
+
+<div class="callout danger">
+  <span class="label">ACP 不允许客户端指定 session ID</span>
+  <p>核对 schema 的结论，这一点没有回旋余地：</p>
+  <pre style="margin:12px 0 0"><code><span class="tok-k">class</span> <span class="tok-n">NewSessionRequest</span>:
+    cwd: <span class="tok-n">str</span>                          <span class="tok-c"># 必填</span>
+    mcp_servers: <span class="tok-n">list</span>[...]              <span class="tok-c"># 必填</span>
+    additional_directories: <span class="tok-n">list</span>[<span class="tok-n">str</span>] | <span class="tok-k">None</span>
+    field_meta: <span class="tok-n">dict</span> | <span class="tok-k">None</span>              <span class="tok-c"># _meta 扩展位</span>
+    <span class="tok-w"># ← 没有 sessionId 字段</span>
+
+<span class="tok-k">class</span> <span class="tok-n">NewSessionResponse</span>:
+    session_id: <span class="tok-n">str</span>                   <span class="tok-s"># ← agent 生成并返回</span>
+    modes / config_options ...</code></pre>
+  <p style="margin-top:12px"><b>ID 由 agent 在建会话时生成，客户端只能接收并持久化。</b>类型是裸 <code>str</code>，没有格式约束 —— 不要假设它是 UUID。</p>
+</div>
+
+<h3>三层映射</h3>
+<table>
+  <thead><tr><th style="width:170px">层</th><th style="width:200px">标识</th><th style="width:110px">谁生成</th><th>性质</th></tr></thead>
+  <tbody>
+    <tr><td><b>平台会话</b></td><td><code>session_id</code></td><td>我们</td><td>持久，落库，客户端唯一可见</td></tr>
+    <tr><td><b>ACP 会话</b></td><td><code>acp_session_id</code></td><td><b>agent</b></td><td>agent 侧持久，<b>我们必须存下来</b></td></tr>
+    <tr><td><b>CLI 会话</b></td><td>Claude Code session UUID</td><td>adapter 内部</td><td><b>我们不可见</b>，由 adapter 维护与 ACP ID 的对应</td></tr>
+  </tbody>
+</table>
+
+<p>第三层对我们是黑盒 —— 这是选方案 A 的直接代价，但也意味着<b>那一层的对应关系由 adapter 负责，不是我们的问题</b>。我们只需守住前两层的对应。</p>
+
+<h3>ID 必须在第一个 prompt 之前落库</h3>
+<pre><code>1.  conn.new_session(cwd=<span class="tok-s">"/home/agent/workspace"</span>, mcp_servers=[...])
+2.  → NewSessionResponse(session_id=<span class="tok-s">"…"</span>)
+3.  <span class="tok-s">立即持久化</span>：sessions.bridge_ref = {pod, acp_session_id}
+4.  才发第一个 conn.prompt(...)</code></pre>
+
+<div class="callout warn">
+  <span class="label">第 2 步与第 3 步之间有个孤儿窗口</span>
+  <p>如果 Pod 在拿到 ID 之后、写库之前崩溃，agent 侧已经建了会话而我们不知道它的 ID —— 状态卷上留下一份永远认领不回来的数据。窗口很短，但会话量大了就会遇到。</p>
+  <p><b>靠 <code>session/list</code> 兜底。</b>它支持按 <code>cwd</code> 过滤，返回 <code>SessionInfo{sessionId, cwd, title, updatedAt}</code>。因为我们<b>固定 cwd 且一个 Pod 一个会话</b>（<a href="#s5">§05</a>），该 cwd 下正常最多只有一个会话 —— 于是列表结果是可判定的：</p>
+  <ul style="margin-bottom:0">
+    <li>列出 1 个且与库里一致 → 正常</li>
+    <li>列出 1 个而库里为空 → <b>孤儿</b>，认领（写回库）或 <code>session/delete</code> 清掉</li>
+    <li>列出 0 个而库里有 ID → agent 侧状态已丢，置 <code>lost</code></li>
+  </ul>
+</div>
+
+<p>固定 cwd 在方案 A 下因此有了一层新价值：它不只是让 transcript 目录可预测，更是<b>让 <code>session/list</code> 的结果可判定</b>。若 cwd 随会话变化，这个对账手段就废了。</p>
+
+<h3>恢复：resume 优先，load 退路</h3>
+<pre><code><span class="tok-c"># 首选 —— 不重放，我们本就持有完整 Message 账本</span>
+conn.resume_session(
+    session_id=<span class="tok-s">&lt;库里存的 acp_session_id&gt;</span>,
+    cwd=<span class="tok-s">"/home/agent/workspace"</span>,          <span class="tok-c"># 必须与建会话时一致</span>
+    mcp_servers=[...],                    <span class="tok-c"># 重新传入，可与当初不同</span>
+)
+
+<span class="tok-c"># 退路 —— 会重放历史，需与已有 Message 去重</span>
+conn.load_session(session_id=..., cwd=..., mcp_servers=[...])</code></pre>
+
+<div class="callout danger">
+  <span class="label">两个能力位默认都是关的</span>
+  <p><code>AgentCapabilities.load_session</code> 在 schema 里默认 <code>False</code>；<code>sessionCapabilities.resume</code> 默认 <code>None</code>（即不支持）。agent 必须显式声明。<b>会话恢复因此是「取决于上游」的能力问题</b>，这是选 ACP 相比自研 Bridge 最实质的损失。</p>
+  <p>所以 <a href="session.html#s4">会话管理 §04</a> 的 <code>resume_session</code> 必须走 declared / probed 两层：握手拿到能力位之前，对外一律下发保守值 <code>none</code>。<b>这是上线前第一个要实测的事</b>（<a href="#s12">§12</a> 第 1 项）。</p>
+</div>
+
+<h3>清理与对账</h3>
+<ul>
+  <li><b><code>session/delete</code></b> —— 删除平台会话时一并清掉 agent 侧状态，避免状态卷上堆积无主数据。同样是可选能力，不支持时退化为直接删卷。</li>
+  <li><b><code>session/list</code></b> —— 除孤儿检测外，也是运维排查入口：<code>SessionInfo.updatedAt</code> 可用于识别长期不活跃但仍占着存储的会话。</li>
+</ul>
+
+<h3>_meta 可以带关联提示，但不能依赖</h3>
+<p><code>NewSessionRequest</code> 有 <code>_meta</code> 扩展位，可以塞进 <code>platform_session_id</code>。若 adapter 在 <code>SessionInfo._meta</code> 里回传，孤儿对账会更直接。</p>
+<p>但协议明文写着实现<b>不得对这些键的值做任何假设</b> —— 也就是说对方完全可以忽略甚至丢弃它。<b>把它当作锦上添花，真正的兜底仍是固定 cwd + <code>session/list</code>。</b></p>
+
+<h3>Run 与 prompt 的对应</h3>
+<p>一个平台 Run = 一次 <code>session/prompt</code>，<code>stop_reason</code> 取自其返回值。<a href="session.html#s13">会话管理 §13</a> 的「Session 内 Run 串行」在这里落地为：Bridge 同时只允许一个活跃 prompt，第二个请求直接拒绝而非排队。</p>
+</section>
+
+<!-- ───────────────────────── 4 ───────────────────────── -->
+<section id="s4">
+<h2><span class="num">04</span>存储分层与挂盘</h2>
+
+<div class="callout danger">
+  <span class="label">最容易做错的一处</span>
+  <p><b>不要把 Claude Code 的状态目录挂在 OSS 上。</b>Claude Code 把会话<b>逐条追加</b>写入 <code>~/.claude/projects/&lt;escaped-cwd&gt;/&lt;uuid&gt;.jsonl</code>。对象存储没有真正的追加语义，ossfs 这类 FUSE 的追加写实际是「下载整个对象 → 修改 → 整体上传」。一次长会话的 transcript 会长到数 MB（实测单文件 1.4MB 并持续增长），每轮对话都全量重写一次，延迟与费用都不可接受，并发写还可能丢数据。</p>
+</div>
+
+<table>
+  <thead><tr><th style="width:190px">数据</th><th style="width:150px">存储</th><th style="width:100px">模式</th><th>理由</th></tr></thead>
+  <tbody>
+    <tr><td>会话产出文件</td><td><b>OSS</b></td><td>rw</td><td>大文件、低频写、需长期留存与外部访问</td></tr>
+    <tr><td>Claude Code 状态</td><td><b>NAS / CPFS / PVC</b></td><td>rw</td><td>小文件高频追加写，需要 POSIX 语义</td></tr>
+    <tr><td>技能包</td><td>只读卷或镜像</td><td>ro</td><td>全局共享、读多写零</td></tr>
+    <tr><td>凭证</td><td>K8s Secret</td><td>ro</td><td>不落盘到持久卷</td></tr>
+    <tr><td>注入配置</td><td>ConfigMap / initContainer</td><td>ro</td><td>每次启动按会话渲染</td></tr>
+  </tbody>
+</table>
+
+<h3>OSS 前缀与卷的划分</h3>
+<pre><code>oss://&lt;bucket&gt;/tenants/&lt;tenant_id&gt;/sessions/&lt;session_id&gt;/     ← 挂到 /home/agent/workspace
+nas://&lt;fs&gt;/tenants/&lt;tenant_id&gt;/sessions/&lt;session_id&gt;/claude/  ← 挂到 /home/agent/.claude</code></pre>
+
+<p>两者都按 <code>tenant_id/session_id</code> 隔离。挂载凭证只授予该前缀的权限，Pod 即使被攻破也读不到其他会话的数据 —— 这是 Pod-per-session 隔离模型的存储侧落实。</p>
+
+<h3>如果只想用一种存储</h3>
+<p>全部用 NAS 也是自洽的，代价是产出文件失去对象存储的成本与外部访问优势（生成预签名 URL 给前端下载会变麻烦）。<b>反过来全用 OSS 则不可行</b>，原因见上。若因成本必须压到一种，选 NAS。</p>
+
+<div class="callout warn">
+  <span class="label">不要用「退出前 sync 到 OSS」来省掉 NAS</span>
+  <p>看起来可以：状态目录用 <code>emptyDir</code>，Pod 终止前同步到 OSS。但 Pod 的终止路径不止优雅关闭一种 —— 节点故障、OOMKill、抢占式回收都不给你同步的机会，而这些恰恰是最需要恢复的场景。<b>把持久性建立在「进程有机会执行清理代码」之上，是不可靠的。</b></p>
+</div>
+</section>
+
+<!-- ───────────────────────── 5 ───────────────────────── -->
+<section id="s5">
+<h2><span class="num">05</span>Pod 内目录设计</h2>
+
+<pre><code>/home/agent/                              <span class="tok-c"># HOME，固定</span>
+├── .claude/                              <span class="tok-w">← NAS 卷（rw，per-session）</span>
+│   ├── .credentials.json                 <span class="tok-c"># Secret 投射（ro）或改用 env</span>
+│   ├── settings.json                     <span class="tok-c"># ConfigMap 投射（ro）</span>
+│   ├── projects/
+│   │   └── -home-agent-workspace/        <span class="tok-s"># 目录可预测（cwd 固定）</span>
+│   │       └── &lt;CLI 内部 UUID&gt;.jsonl     <span class="tok-w"># 文件名不可预测（见下）</span>
+│   ├── skills/                           <span class="tok-n">← 技能只读卷（ro，subPath 嵌套）</span>
+│   ├── plugins/
+│   ├── history.jsonl
+│   └── shell-snapshots/  file-history/  todos/ …
+│
+├── .claude.json                          <span class="tok-c"># initContainer 清理残留 MCP 配置 + 预置信任标记</span>
+│
+└── workspace/                            <span class="tok-w">← OSS 卷（rw，per-session）· cwd</span>
+    ├── CLAUDE.md                         <span class="tok-c"># 可由 Server 注入项目级指引</span>
+    ├── .mcp.json                         <span class="tok-c"># initContainer 清理，避免与 ACP 参数叠加</span>
+    └── …产出文件</code></pre>
+
+<h3>cwd 必须固定</h3>
+<p>Claude Code 按<b>工作目录</b>组织 transcript，目录名规则是把绝对路径里的 <code>/</code> 全部替换成 <code>-</code>（已实测核对：<code>/root/workspace/deer-flow</code> → <code>-root-workspace-deer-flow</code>）。</p>
+
+<p>把 cwd 固定为 <code>/home/agent/workspace</code>，transcript <b>目录</b>就恒为：</p>
+<pre><code>~/.claude/projects/-home-agent-workspace/</code></pre>
+
+<p>方案 A 下我们看不到 CLI 内部的 session UUID，所以<b>文件名不可预测</b>。但因为一个 Pod 一个会话，这个目录下正常只有一个 <code>.jsonl</code> 文件 —— 目录级可预测对备份、排查、清理已经够用。</p>
+
+<div class="callout rule">
+  <span class="label">固定 cwd 在方案 A 下承担了双重作用</span>
+  <p>其一是状态位置确定：不必依赖运行时变量就能定位 transcript。</p>
+  <p>其二更关键 —— <b>它让 <code>session/list(cwd=…)</code> 的结果可判定</b>，这是 <a href="#s3">§03</a> 孤儿会话对账的基础。若让每个会话用不同的工作目录（比如按项目名），这个兜底手段就失效了。会话之间的隔离已经由「一个 Pod 一套卷」保证，不需要再靠目录名区分。</p>
+</div>
+
+<h3>嵌套挂载</h3>
+<p><code>~/.claude</code> 整体是可写 NAS 卷，而 <code>~/.claude/skills</code> 要是只读技能卷 —— 这是在一个卷的子目录上再挂另一个卷，K8s 支持，但要注意<b>挂载顺序</b>：父卷先挂，子卷后挂，否则子卷会被父卷盖住。用 <code>volumeMounts</code> 的声明顺序控制，并在就绪探针里验证 <code>~/.claude/skills</code> 非空。</p>
+</section>
+
+<!-- ───────────────────────── 6 ───────────────────────── -->
+<section id="s6">
+<h2><span class="num">06</span>Claude Code 配置注入</h2>
+
+<p>方案 A 下配置分三条通道，<b>优先级依次降低</b>：能走 ACP 参数的最好，其次环境变量，最后才是落盘文件。ACP 参数每次建会话显式传入，行为完全确定；落盘文件是有状态的，会在 Pod 重建、版本升级、卷复用时产生难以复现的差异。</p>
+
+<table>
+  <thead><tr><th style="width:200px">配置项</th><th style="width:230px">通道</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td>工作目录</td><td class="yes"><code>session/new → cwd</code></td><td>固定 <code>/home/agent/workspace</code></td></tr>
+    <tr><td>MCP 服务器</td><td class="yes"><code>session/new → mcpServers</code></td><td>见 <a href="#s7">§07</a>，指向 Higress</td></tr>
+    <tr><td>额外可访问目录</td><td class="yes"><code>session/new → additionalDirectories</code></td><td>默认空，扩大范围需显式决策</td></tr>
+    <tr><td>会话标识</td><td class="no">不可指定</td><td>agent 返回，见 <a href="#s3">§03</a></td></tr>
+    <tr><td>模型</td><td class="maybe"><code>session/set_config_option</code> 或 env</td><td><b>取决于 adapter 暴露什么</b>，待验证</td></tr>
+    <tr><td>权限策略</td><td class="yes"><code>session/request_permission</code> 回调</td><td>决定权在客户端，见下</td></tr>
+    <tr><td>认证</td><td>Secret → env</td><td><code>ANTHROPIC_API_KEY</code> 指向 Higress</td></tr>
+    <tr><td>Claude 设置</td><td>文件 <code>~/.claude/settings.json</code></td><td>adapter 启动的 CLI 会读，见下</td></tr>
+    <tr><td>技能</td><td>文件 <code>~/.claude/skills/</code></td><td>见 <a href="#s8">§08</a></td></tr>
+  </tbody>
+</table>
+
+<div class="callout rule">
+  <span class="label">权限决定权在客户端，这正是选方案 A 的主要理由</span>
+  <p>ACP 的 <code>session/request_permission</code> 是 <b>agent → client</b> 的反向请求：CLI 要做危险动作时，agent 把选项列表交给客户端，<b>由 Bridge 决定</b>。Bridge 把它翻译成平台的 <code>request.pending</code> 事件一路推到用户面前，再把用户的选择原样返回。</p>
+  <p>自研 Bridge 时这条回路的机制需要自己摸索并验证；协议里它是一等公民，语义明确。<b>助理角色的整个安全模型建立在这条回路上</b>（<a href="session.html#s11">会话管理 §11</a>），它有没有标准机制，是 A / B 之间最重要的差别。</p>
+</div>
+
+<div class="callout danger">
+  <span class="label">不要让 Bridge 自动批准</span>
+  <p>Bridge 侧实现 <code>request_permission</code> 时，默认必须是「转交用户」而不是「自动选 allow」。一旦为了省事在 Bridge 里写死自动批准，前端那套审批卡片就成了摆设，而任意文件写入与命令执行的权限实际上交给了模型。</p>
+  <p>同理，如果 adapter 提供了「跳过所有权限检查」的开关（Claude Code 自身有 <code>--dangerously-skip-permissions</code>），<b>不要开</b>。</p>
+</div>
+
+<h3>仍然要落盘的部分</h3>
+<p>adapter 启动的仍是标准 <code>claude</code> 进程，它照常读取 <code>~/.claude/</code>。所以这些还是文件：</p>
+<ul>
+  <li><code>~/.claude/settings.json</code> —— 模型、主题、env 等。经 ConfigMap 只读投射。</li>
+  <li><code>~/.claude/skills/</code> —— 技能，见 <a href="#s8">§08</a>。</li>
+  <li><code>~/.claude/projects/</code> —— transcript，必须持久化（<a href="#s4">§04</a>）。</li>
+</ul>
+
+<div class="callout warn">
+  <span class="label">MCP 配置文件要清掉，避免与 ACP 参数打架</span>
+  <p>Claude Code 自身有 <code>--strict-mcp-config</code> 可以一刀切断其他 MCP 来源，但这个开关握在 adapter 手里，我们无法保证它被启用。<code>session/new</code> 传入的 <code>mcpServers</code> 究竟是替代还是叠加，是 <a href="#s12">§12</a> 第 3 项。</p>
+  <p>因此 initContainer 应当<b>主动清理</b>状态卷上可能残留的 MCP 配置：<code>~/.claude.json</code> 里的 <code>projects[&lt;cwd&gt;].mcpServers</code>、以及 workspace 下的 <code>.mcp.json</code>。否则卷复用时，上一次会话遗留的服务器可能与本次 ACP 参数传入的叠加，表现为「用户看到了不该有的工具」—— 这类问题排查起来很费时间，因为配置来源不在代码里。</p>
+</div>
+
+<h3>信任对话框</h3>
+<p>实测 <code>claude --help</code> 说明：<i>「The workspace trust dialog is skipped when Claude is run in non-interactive mode (via -p, or when stdout is not a TTY)」</i>。adapter 通过管道驱动 CLI，stdout 不是 TTY，<b>对话框会自动跳过</b>。</p>
+<p>保险起见仍可在 initContainer 里预置 <code>~/.claude.json</code> 的 <code>projects["/home/agent/workspace"].hasTrustDialogAccepted = true</code>，成本极低。若哪天 Pod 卡在启动且无任何输出，这是第一个该查的地方。</p>
+
+<h3>认证与多租户</h3>
+<ul>
+  <li><b>API Key</b> —— 经 Secret 注入 <code>ANTHROPIC_API_KEY</code>，指向 Higress 的 LLM 网关而非模型厂商。最简单，也让助理的模型调用纳入统一治理。</li>
+  <li><b>OAuth 凭证</b> —— <code>~/.claude/.credentials.json</code>。注意它<b>不应写进 per-session 的状态卷</b>，否则凭证会随会话状态一起长期留存、备份、迁移。用 Secret 以只读方式投射到该路径。</li>
+</ul>
+<p>Pod-per-session 让凭证隔离天然成立：每个 Pod 只拿到本会话该用的那一份。</p>
+
+<h3>信任对话框</h3>
+<p>实测 <code>claude --help</code> 说明：<i>「The workspace trust dialog is skipped when Claude is run in non-interactive mode (via -p, or when stdout is not a TTY)」</i>。Bridge 通过管道驱动 CLI，stdout 本就不是 TTY，<b>信任对话框会自动跳过</b>。</p>
+<p>保险起见仍可在 <code>~/.claude.json</code> 预置 <code>projects["/home/agent/workspace"].hasTrustDialogAccepted = true</code>，成本极低。若哪天 Pod 卡在启动且无任何输出，这是第一个该查的地方。</p>
+
+<h3>认证与多租户</h3>
+<ul>
+  <li><b>API Key</b> —— 经 Secret 注入 <code>ANTHROPIC_API_KEY</code>。最简单，且与 Higress 的 LLM 网关天然配合（密钥指向网关而非模型厂商）。</li>
+  <li><b>OAuth 凭证</b> —— <code>~/.claude/.credentials.json</code>。注意它<b>不应写进 per-session 的 NAS 卷</b>，否则凭证会随会话状态一起长期留存、备份、迁移。用 Secret 以只读方式投射到该路径。</li>
+</ul>
+<p>Pod-per-session 让凭证隔离天然成立：每个 Pod 只拿到本会话该用的那一份，不存在跨用户读取 CLI 本地状态的问题。</p>
+</section>
+
+<!-- ───────────────────────── 7 ───────────────────────── -->
+<section id="s7">
+<h2><span class="num">07</span>MCP 配置</h2>
+
+<p>方案 A 下 MCP 配置<b>随 <code>session/new</code> 参数传入</b>，不落盘。ACP 支持四种传输：<code>http</code>、<code>sse</code>、<code>acp</code>、<code>stdio</code>。我们统一用 <code>http</code> 指向 Higress。</p>
+
+<div class="callout rule">
+  <span class="label">配置随会话传入，而不是写进文件</span>
+  <p>这是方案 A 的一项实在收益：CLI 看到的工具集由 Server 在建会话时决定，不需要渲染配置文件、不需要考虑文件何时被读取、也不会在卷复用时受上一次会话影响 —— 前提是清掉了残留的文件配置（<a href="#s6">§06</a>）。</p>
+</div>
+
+<h3>指向 Higress，而不是直连</h3>
+<p>注意 ACP 的 <code>headers</code> 是 <code>{name, value}</code> 对象<b>数组</b>，不是 JSON 对象 —— 与 Claude Code 自己的 <code>.mcp.json</code> 格式不同，转换时容易写错：</p>
+
+<pre><code>mcp_servers = [
+  {
+    <span class="tok-s">"type"</span>: <span class="tok-s">"http"</span>,
+    <span class="tok-s">"name"</span>: <span class="tok-s">"github"</span>,
+    <span class="tok-s">"url"</span>:  <span class="tok-s">"https://higress.internal/mcp/github"</span>,
+    <span class="tok-s">"headers"</span>: [                                  <span class="tok-w">← 数组，不是对象</span>
+      { <span class="tok-s">"name"</span>: <span class="tok-s">"Authorization"</span>, <span class="tok-s">"value"</span>: <span class="tok-s">"Bearer &lt;session-scoped-token&gt;"</span> },
+      { <span class="tok-s">"name"</span>: <span class="tok-s">"X-Session-Id"</span>,  <span class="tok-s">"value"</span>: <span class="tok-s">"&lt;session_id&gt;"</span> }
+    ]
+  }
+]</code></pre>
+
+<p>这样 CLI 发起的工具调用也进入网关，与顾问的调用共享同一套鉴权、限流、配额、成本核算与出站审计（<a href="architecture.html#s6">系统架构 §06</a>）。<b>否则助理会成为一条绕过所有治理的旁路</b> —— 而它恰恰是副作用最大的那一类调用。</p>
+
+<div class="callout warn">
+  <span class="label">令牌随会话作用域，且要能失效</span>
+  <p><code>session-scoped-token</code> 应当只对本会话有效、随会话结束失效、并带有效期。它被写进 Pod 内的 ConfigMap 文件，虽然有 Pod 隔离，但仍应按「可能泄漏」来设计生命周期 —— 长期有效的全局令牌落到几百个 Pod 的文件系统上，是个不必要的暴露面。</p>
+</div>
+</section>
+
+<!-- ───────────────────────── 8 ───────────────────────── -->
+<section id="s8">
+<h2><span class="num">08</span>技能目录挂载</h2>
+
+<p>Claude Code 的个人技能位于 <code>~/.claude/skills/&lt;name&gt;/SKILL.md</code>（已实测核对该布局）。技能包的特点是<b>全局共享、只读、体积可观、更新频率低于会话频率</b>。</p>
+
+<table>
+  <thead><tr><th style="width:200px">方案</th><th style="width:130px">热更新</th><th style="width:130px">冷启动</th><th>适用</th></tr></thead>
+  <tbody>
+    <tr><td>打进镜像</td><td class="no">需重建镜像</td><td class="yes">最快</td><td>技能稳定、随版本发布</td></tr>
+    <tr><td><b>只读卷（推荐）</b></td><td class="yes">更新卷即可</td><td class="maybe">首次挂载有开销</td><td>技能独立于镜像迭代</td></tr>
+    <tr><td><code>--plugin-dir</code></td><td class="yes">按会话指定</td><td class="yes">快</td><td>按 Agent 下发不同技能子集</td></tr>
+  </tbody>
+</table>
+
+<p>推荐<b>只读卷挂到 <code>~/.claude/skills</code></b>，配合 <a href="#s5">§05</a> 的嵌套挂载。技能管理模块更新卷内容后，新起的 Pod 自动获得新版本，已运行的会话不受影响 —— 这个「不影响在途会话」的性质是对的，技能在会话中途变化会让模型行为出现无法解释的跳变。</p>
+
+<div class="callout warn">
+  <span class="label">按 Agent 下发技能子集时不要用同一个卷</span>
+  <p>如果不同 Agent 要挂不同技能集合，别在一个大卷里用 subPath 挑挑拣拣 —— 那会让「这个 Agent 到底能看到哪些技能」散落在部署模板里。改用 <code>--plugin-dir</code> 按会话显式指定，或为每个技能集合准备独立的卷。<b>能力边界应该是可查询的配置，不是挂载表的副产品。</b></p>
+</div>
+</section>
+
+<!-- ───────────────────────── 9 ───────────────────────── -->
+<section id="s9">
+<h2><span class="num">09</span>K8s 管理</h2>
+
+<div class="callout rule">
+  <span class="label">生命周期由执行环境管理组件统一拥有</span>
+  <p>本节描述 <code>acp</code> Pod 的 K8s 细节，但<b>模板、创建、回收、卷分配、配额这些逻辑不是本链路独有的</b> —— <code>native</code> 的 sandbox Pod 需要一模一样的东西。它们统一归<a href="execution.html">执行环境管理</a>组件，本节只讲 <code>acp</code> 特有的部分。</p>
+</div>
+
+<h3>Pod 身份</h3>
+<pre><code>name:   agent-&lt;session_id 短哈希&gt;
+labels: app=agent-pod
+        session-id=&lt;session_id&gt;
+        agent-id=&lt;agent_id&gt;
+        agent-version=&lt;n&gt;
+        tenant-id=&lt;tenant_id&gt;</code></pre>
+<p>用 label 而非 name 承载 <code>session_id</code> —— name 有长度与字符集限制，而 label 可被 selector 查询，运维排查时能直接按会话定位。</p>
+
+<h3>生命周期</h3>
+<table>
+  <thead><tr><th style="width:170px">阶段</th><th>动作</th></tr></thead>
+  <tbody>
+    <tr><td><b>调度</b></td><td>Server 收到首个 Run 或会话从 <code>cold</code> 唤醒 → 创建 Pod，会话状态置 <code>starting</code></td></tr>
+    <tr><td><b>就绪</b></td><td>就绪探针通过（见下）→ Server 建立 WebSocket → 会话置 <code>active</code></td></tr>
+    <tr><td><b>空闲</b></td><td>无活跃 Run 且超过 idle TTL → 删除 Pod，会话置 <code>cold</code>；状态卷保留</td></tr>
+    <tr><td><b>删除</b></td><td><code>DELETE /sessions/{sid}</code> → 删除 Pod + 按保留策略处理卷</td></tr>
+    <tr><td><b>异常</b></td><td>Pod 消失而会话未主动关闭 → 置 <code>cold</code>，下次提交时重建并 <code>session/load</code></td></tr>
+  </tbody>
+</table>
+
+<h3>就绪探针要验到 CLI，不能只验 Bridge</h3>
+<p>探针只检查 Bridge 的 WS 端口是不可靠的 —— Bridge 起来了但 CLI 不可用（镜像缺二进制、认证失效、卷没挂上、技能目录为空）的话，Server 会把流量打进一个必然失败的 Pod，用户看到的是提交后卡住然后报错。</p>
+<p>探针应当覆盖：CLI 二进制可执行、认证有效、<code>~/.claude</code> 与 <code>workspace</code> 卷可写、技能目录非空。<b>宁可 Pod 起不来，也不要起来一个坏的。</b></p>
+
+<h3>接入控制：谁能连上 Pod 里的 Bridge</h3>
+
+<div class="callout danger">
+  <span class="label">K8s 的默认网络是平的</span>
+  <p>集群里<b>任何 Pod 都能连任何 Pod 的端口</b>。Bridge 的 WS 端点如果不做认证，同集群的其他工作负载 —— 包括别的租户的会话 Pod —— 就能连上它并驱动 CLI：读该会话的工作区、用该会话的凭证执行命令。</p>
+  <p><b>「只有 Server 能连」必须显式实现，不能假设。</b>「它在 Pod 网络里」不是一种安全边界。</p>
+</div>
+
+<table>
+  <thead><tr><th style="width:180px">措施</th><th>做法</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><b>每 Pod 一份凭证</b></td>
+      <td>Server 在创建 Pod 时生成随机凭证，经 K8s Secret 注入。Bridge 在 <b>WS 握手的 header</b> 上校验，不通过直接拒绝握手。<b>绝不能把凭证打进镜像</b> —— 那等于全集群共用一把钥匙。</td>
+    </tr>
+    <tr>
+      <td><b>NetworkPolicy</b></td>
+      <td>限制 ingress 只允许 Server 的 Pod 标签访问 Bridge 端口。这是纵深防御的第二层：凭证泄漏时网络层仍然挡着。</td>
+    </tr>
+    <tr>
+      <td><b>凭证随 Pod 生命周期</b></td>
+      <td>Pod 销毁即失效，重建换新。不需要轮换机制，因为它本来就是短命的。</td>
+    </tr>
+    <tr>
+      <td><b>会话绑定校验</b></td>
+      <td>Bridge 只接受针对<b>本 Pod 所属会话</b>的指令。即使连接通过认证，带着别的 <code>session_id</code> 的请求也要拒绝。</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>本地部署的接入控制是另一套问题 —— 连接方向相反，且需要防止<b>服务端被冒充</b>（后果是用户电脑上的任意命令执行），见<a href="local.html#s3">本地部署 §03</a>。</p>
+
+<h3>优雅终止</h3>
+<p><code>terminationGracePeriodSeconds</code> 要留够 Bridge 做三件事：拒绝新请求、把当前 Run 标记为中断并上报、刷完 OTel span。但<b>不要把数据持久性依赖在这段时间里</b>（<a href="#s4">§04</a>）—— 节点故障和抢占不会给你这个窗口。</p>
+
+<h3>资源与配额</h3>
+<p>CLI 进程的内存占用随上下文增长，<code>limits.memory</code> 设得太紧会在长会话中途 OOMKill，用户感知是「聊着聊着就断了」。建议按实测的长会话峰值设定，并把 OOMKill 作为一个明确的监控指标 —— 它与其他退出原因的处理方式不同（OOMKill 后重建并 resume 是合理的，反复 OOMKill 则说明该会话需要 compact 或更大规格）。</p>
+<p>租户级 Pod 数量配额要有，否则一个租户的批量会话会把集群占满。</p>
+</section>
+
+<!-- ───────────────────────── 10 ──────────────────────── -->
+<section id="s10">
+<h2><span class="num">10</span>启动与恢复时序</h2>
+
+<h3>冷启动</h3>
+<pre><code> 1.  Server        收到 Run 提交，会话无活跃 Pod
+ 2.  K8s           调度 Pod，挂载 4 类卷
+ 3.  initContainer 校验卷可写；<span class="tok-w">清理残留 MCP 配置</span>；预置 hasTrustDialogAccepted
+ 4.  Bridge        启动，监听 WS，spawn adapter 子进程
+ 5.  Bridge→agent  initialize(protocolVersion, clientCapabilities)
+ 6.  Bridge←agent  <span class="tok-s">agentCapabilities</span> —— 记下 loadSession / sessionCapabilities
+ 7.  Bridge        就绪自检（adapter 可用 / 认证 / 卷 / 技能目录非空）
+ 8.  Server        探针通过 → 建立 WebSocket → 会话置 active
+ 9.  Bridge→agent  session/new(cwd=<span class="tok-s">/home/agent/workspace</span>, mcpServers=[指向 Higress])
+10.  Bridge←agent  <span class="tok-s">sessionId</span>
+11.  Server        <span class="tok-w">立即持久化</span> bridge_ref = {pod, acp_session_id}
+12.  Bridge→agent  session/prompt(sessionId, [...])
+13.  Bridge        session/update 流 → 翻译成平台 Event；
+                   session/request_permission → request.pending → 用户</code></pre>
+
+<p>第 6 步拿到的 <code>agentCapabilities</code> 要写回 <code>agents.caps_probed</code>（<a href="session.html#s4">会话管理 §04</a> 的 declared / probed 两层）。第 11 步不能推迟到 prompt 之后，理由见 <a href="#s3">§03</a> 的孤儿窗口。</p>
+
+<h3>从 cold 恢复</h3>
+<pre><code> 1-8  同上，卷挂载到<span class="tok-s">同一 NAS / OSS 前缀</span> → agent 侧会话状态仍在
+ 9.  Bridge        按能力位择路
+                   ├─ sessionCapabilities.resume → session/resume(...)  <span class="tok-s">首选，不重放</span>
+                   ├─ agentCapabilities.loadSession → session/load(...) <span class="tok-c">退路，需去重</span>
+                   │     两者均 → 上下文完整，<span class="tok-s">不提示用户</span>
+                   └─ 皆不支持 → session/new(...)  → 新会话
+                                 → 置 <span class="tok-w">lost</span>，消息流插入「会话已重启」
+10.  Bridge        对账：session/list(cwd) 与库里的 ID 比对，处理孤儿</code></pre>
+
+<div class="callout rule">
+  <span class="label">恢复无损时不要提示用户</span>
+  <p><a href="session.html#s6">会话管理 §06</a> 要求 <code>lost</code> 必须在消息流里插入「会话已重启，此前上下文未保留」。但 <code>session/load</code> 成功时上下文是完整的，<b>不应该提示</b> —— 没必要让用户为一次对他无影响的基础设施事件分心。<code>cold</code> 对用户应当完全透明，代价只是下一条消息慢几秒。</p>
+  <p>反过来，<code>loadSession</code> 为 false 或 <code>session/load</code> 失败时<b>必须提示</b>。这两条路径的用户感受差别很大，而分支条件是上游能力 —— 所以 <a href="#s12">§12</a> 第 1 项的实测结论会直接决定这个功能的体验档次。</p>
+</div>
+</section>
+
+<!-- ───────────────────────── 11 ──────────────────────── -->
+<section id="s11">
+<h2><span class="num">11</span>CLI 适配层</h2>
+
+<p><b>ACP 本身就是适配层</b>，所以这一层比自研 Bridge 时薄得多。会话语义、流式输出、审批回路、恢复与清理都由协议统一，Bridge 的核心逻辑对所有 CLI 通用。</p>
+
+<p>剩下的差异只有两类：<b>怎么把 adapter 拉起来</b>，以及<b>哪些东西还得靠文件系统</b>。</p>
+
+<pre><code><span class="tok-k">interface</span> <span class="tok-n">CliProfile</span> {
+  <span class="tok-c">// adapter 进程怎么起</span>
+  command: <span class="tok-n">string</span>
+  args: <span class="tok-n">string</span>[]
+  env(ctx: LaunchContext): <span class="tok-n">Record</span>&lt;<span class="tok-n">string</span>, <span class="tok-n">string</span>&gt;
+
+  <span class="tok-c">// 需要持久化的状态目录（挂 NAS）</span>
+  statePaths(): <span class="tok-n">string</span>[]
+
+  <span class="tok-c">// 启动前要清理的残留配置，避免与 ACP 参数叠加</span>
+  staleConfigPaths(): <span class="tok-n">string</span>[]
+
+  <span class="tok-c">// 技能 / 设置等仍走文件系统的部分</span>
+  fileConfig(ctx: LaunchContext): ConfigFile[]
+
+  <span class="tok-c">// 就绪自检</span>
+  healthCheck(): <span class="tok-n">Promise</span>&lt;<span class="tok-n">boolean</span>&gt;
+}</code></pre>
+
+<p>注意这里<b>没有</b> session id 派生、没有协议翻译、没有权限回调 —— 那些都归 ACP 管了。</p>
+
+<h3>Claude Code 的 profile</h3>
+<table>
+  <thead><tr><th style="width:190px">字段</th><th>取值</th></tr></thead>
+  <tbody>
+    <tr><td><code>command / args</code></td><td>ACP adapter 的启动命令</td></tr>
+    <tr><td><code>env</code></td><td><code>ANTHROPIC_API_KEY</code>（指向 Higress）、<code>HOME=/home/agent</code></td></tr>
+    <tr><td><code>statePaths</code></td><td><code>~/.claude/projects/</code>（必需）、<code>~/.claude/history.jsonl</code>（可选）</td></tr>
+    <tr><td><code>staleConfigPaths</code></td><td><code>~/.claude.json</code> 的 <code>projects[cwd].mcpServers</code>、<code>workspace/.mcp.json</code></td></tr>
+    <tr><td><code>fileConfig</code></td><td><code>~/.claude/settings.json</code>、<code>~/.claude/skills/</code></td></tr>
+    <tr><td><code>healthCheck</code></td><td>adapter 可执行 + <code>initialize</code> 握手成功 + 卷可写 + 技能目录非空</td></tr>
+  </tbody>
+</table>
+
+<div class="callout warn">
+  <span class="label">Codex 的对应项尚未调研</span>
+  <p>协议层统一了，但上表每一行在 Codex 上仍需确认：adapter 怎么装、状态写在哪、有没有需要清理的残留配置、技能/设置机制是什么。<b>在实际调研之前不要假设它与 Claude Code 对称。</b></p>
+  <p>真正需要警惕的不是这些，而是<b>能力差异</b>：Codex 的 adapter 是否实现 <code>loadSession</code>、<code>session/list</code>、<code>session/delete</code>。这些都是 ACP 的可选能力，缺任何一项都会让 <a href="#s3">§03</a> 的恢复与对账在该 CLI 上降级。接入时第一件事是读它 <code>initialize</code> 返回的 <code>agentCapabilities</code>。</p>
+</div>
+</section>
+
+<!-- ───────────────────────── 12 ──────────────────────── -->
+<section id="s12">
+<h2><span class="num">12</span>待验证清单</h2>
+
+<p>下面各项决定了本文若干设计能否成立，<b>都应当在写代码之前用一个最小实验确认</b>，而不是在实现到一半时发现。</p>
+
+<table>
+  <thead><tr><th style="width:60px">#</th><th style="width:250px">验证项</th><th>影响</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><b>1</b></td>
+      <td><b>adapter 的 <code>initialize</code> 返回什么 <code>agentCapabilities</code></b> —— 五个位全要看：<code>loadSession</code>、<code>sessionCapabilities</code> 的 <code>resume</code> / <code>list</code> / <code>delete</code> / <code>fork</code></td>
+      <td class="no">决定 <a href="#s3">§03</a> 的恢复、对账、清理各自能不能做</td>
+    </tr>
+    <tr>
+      <td><b>2</b></td>
+      <td><code>session/resume</code> 与 <code>session/load</code> 的实际语义差异：是否重放、Pod 重建后能否跨进程恢复、<code>cwd</code> 不一致时的行为</td>
+      <td class="no">决定 <a href="#s10">§10</a> 恢复路径的可用性与用户感受</td>
+    </tr>
+    <tr>
+      <td><b>3</b></td>
+      <td><code>session/new</code> 传入的 <code>mcpServers</code> 是否<b>完全替代</b>了 CLI 自身的 MCP 配置，还是与之叠加</td>
+      <td class="no">决定 <a href="#s6">§06</a> 的残留清理是必需还是保险</td>
+    </tr>
+    <tr>
+      <td><b>4</b></td>
+      <td>模型、权限模式等参数能否经 <code>session/set_config_option</code> 或 <code>modes</code> 控制</td>
+      <td class="maybe">决定 <a href="#s6">§06</a> 里那几项「取决于 adapter」能否落地</td>
+    </tr>
+    <tr>
+      <td><b>5</b></td>
+      <td>长会话下 transcript 的增长曲线与 NAS 上的追加写延迟</td>
+      <td class="maybe">校准 <a href="#s4">§04</a> 的存储选型与 <a href="#s9">§09</a> 的资源规格</td>
+    </tr>
+    <tr>
+      <td><b>6</b></td>
+      <td>技能只读卷嵌套挂载在目标 K8s 版本与 CSI 驱动上的实际表现</td>
+      <td class="maybe">决定 <a href="#s8">§08</a> 是否改用镜像内置</td>
+    </tr>
+    <tr>
+      <td><b>7</b></td>
+      <td>Codex adapter 在 #1–#4 上的对应情况</td>
+      <td class="maybe">决定 <a href="#s11">§11</a> 的 profile 是否够用</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout danger">
+  <span class="label">第 1、2 项是最该先做的实验</span>
+  <p><code>loadSession</code> 在 schema 里<b>默认为 false</b>，agent 必须显式声明支持。它直接决定 <code>cold → active</code> 是「用户无感、只是慢几秒」还是「上下文全丢、要在消息流里道歉」—— 这是两个完全不同档次的产品体验，而分支条件完全在上游手里。</p>
+  <p>建议的最小实验：起 adapter，打印 <code>initialize</code> 的完整响应；建一个会话发两轮对话；杀掉进程重启；用存下来的 <code>sessionId</code> 调 <code>session/load</code>，看能否续上、历史是否重放、<code>session/list</code> 是否列得出来。<b>半天的实验能省掉一次架构返工。</b></p>
+</div>
+
+<div class="callout warn">
+  <span class="label">如果 loadSession 为 false</span>
+  <p>不要立刻退回自研 Bridge —— 那会连带失去 <code>request_permission</code> 这个标准审批回路，代价更大。可选的应对，按推荐顺序：</p>
+  <ol style="margin-bottom:0">
+    <li><b>给 adapter 提 issue 或自己补一个</b> —— 底层 CLI 有 <code>--resume</code>，能力是在的，缺的只是 adapter 没暴露。</li>
+    <li><b>接受 <code>cold</code> 即 <code>lost</code></b> —— 把 idle TTL 调长以降低发生频率，并在 UI 上诚实提示。</li>
+    <li><b>混合方案</b> —— 审批走 ACP，恢复另想办法（例如由 Bridge 直接调用 CLI 的 resume 能力预热）。复杂度高，仅在前两条都不可行时考虑。</li>
+  </ol>
+</div>
+</section>
+
+<footer>
+  <p>相关文档：<a href="architecture.html">系统架构设计</a>（部署拓扑与组件职责）· <a href="session.html">会话管理设计</a>（对象模型与接口契约）。</p>
+</footer>
+
+</main>
+</div>
+</body>
+</html>

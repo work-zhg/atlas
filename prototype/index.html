@@ -1,0 +1,1705 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Atlas 原型 · 对话与智能体管理</title>
+<style>
+/* ============================================================
+   Atlas Design Tokens  —  见 design-system/atlas/MASTER.md
+   与 AntD ConfigProvider token 一一对应
+   ============================================================ */
+:root{
+  /* 背景分层 */
+  --bg-app:#0B1220;        /* rail / 最底层 */
+  --bg:#0F172A;            /* 页面底色 */
+  --bg-1:#111B31;          /* 面板 colorBgContainer */
+  --bg-2:#16223C;          /* 卡片 / hover  colorBgElevated */
+  --bg-3:#1E293B;          /* 选中 / 抬起 */
+  --bg-code:#0C1526;
+
+  /* 描边 */
+  --line:#22304D;          /* 分隔线 colorBorderSecondary */
+  --line-2:#3A4C72;        /* 控件描边 colorBorder */
+
+  /* 文字 */
+  --fg:#F8FAFC;            /* 17.1:1 */
+  --fg-2:#94A3B8;          /* 6.96:1 */
+  --fg-3:#64748B;          /* 3.75:1 — 仅 placeholder/disabled */
+
+  /* 主色 */
+  --primary:#4F46E5;       /* 填充底色，白字 6.29:1 */
+  --primary-hover:#6366F1;
+  --primary-fg:#FFFFFF;
+  --primary-text:#818CF8;  /* 深底上的主色文字 5.98:1 */
+  --primary-soft:rgba(99,102,241,.14);
+  --primary-soft-2:rgba(99,102,241,.24);
+
+  /* 语义 */
+  --success:#22C55E; --success-soft:rgba(34,197,94,.14);
+  --warning:#F59E0B; --warning-soft:rgba(245,158,11,.14);
+  --danger:#EF4444;  --danger-soft:rgba(239,68,68,.14);
+  --info:#38BDF8;    --info-soft:rgba(56,189,248,.14);
+
+  /* 尺寸 */
+  --r-sm:6px; --r-md:8px; --r-lg:12px; --r-full:999px;
+  --h-sm:24px; --h-md:28px; --h-lg:32px;
+  --rail-w:64px; --list-w:264px; --inspector-w:340px;
+
+  /* 间距 (density 8/10) */
+  --s-1:2px; --s-2:4px; --s-3:8px; --s-4:12px; --s-5:16px; --s-6:24px; --s-7:32px;
+
+  /* 动效 */
+  --ease:cubic-bezier(.16,1,.3,1);
+  --t-fast:120ms; --t-mid:180ms;
+
+  --shadow-md:0 4px 12px rgba(0,0,0,.35);
+  --shadow-lg:0 12px 32px rgba(0,0,0,.45);
+
+  --font:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  --mono:"JetBrains Mono","SF Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+
+*,*::before,*::after{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;background:var(--bg);color:var(--fg);
+  font-family:var(--font);font-size:14px;line-height:1.6;
+  -webkit-font-smoothing:antialiased;overflow:hidden;
+}
+button,input,textarea,select{font:inherit;color:inherit}
+button{background:none;border:none;padding:0;cursor:pointer}
+a{color:var(--primary-text);text-decoration:none}
+:focus-visible{outline:2px solid var(--primary-text);outline-offset:2px;border-radius:var(--r-sm)}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:#243352;border-radius:99px;border:3px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:#334A6E;background-clip:content-box}
+::-webkit-scrollbar-track{background:transparent}
+.i{width:16px;height:16px;flex:none;stroke:currentColor;fill:none;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.i-20{width:20px;height:20px}
+.i-14{width:14px;height:14px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+
+/* ---------- 原型导航条（仅原型用，落地时删除） ---------- */
+.proto{
+  height:38px;display:flex;align-items:center;gap:var(--s-4);
+  padding:0 var(--s-4);background:var(--bg-app);
+  border-bottom:1px solid var(--line);font-size:12px;color:var(--fg-2);
+}
+.proto b{color:var(--fg);font-weight:600;letter-spacing:.02em}
+.proto .dot{width:6px;height:6px;border-radius:50%;background:var(--primary-text)}
+.seg{display:flex;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--r-md);padding:2px;gap:2px}
+.seg button{
+  height:22px;padding:0 10px;border-radius:var(--r-sm);color:var(--fg-2);
+  font-size:12px;transition:background var(--t-fast) var(--ease),color var(--t-fast) var(--ease);
+}
+.seg button:hover{color:var(--fg)}
+.seg button[aria-selected="true"]{background:var(--primary);color:var(--primary-fg)}
+.proto .right{margin-left:auto;display:flex;align-items:center;gap:var(--s-4)}
+.kbd{font-family:var(--mono);font-size:11px;background:var(--bg-2);border:1px solid var(--line-2);border-bottom-width:2px;border-radius:4px;padding:1px 5px;color:var(--fg-2)}
+
+/* ---------- App Shell ---------- */
+.app{display:flex;height:calc(100vh - 38px);min-height:0}
+.screen{display:none;flex:1;min-width:0}
+.screen.on{display:flex}
+
+/* ---------- Rail ---------- */
+.rail{
+  width:var(--rail-w);flex:none;background:var(--bg-app);
+  border-right:1px solid var(--line);
+  display:flex;flex-direction:column;align-items:center;padding:var(--s-4) 0;gap:var(--s-2);
+}
+.logo{
+  width:32px;height:32px;border-radius:var(--r-md);flex:none;
+  background:linear-gradient(135deg,var(--primary) 0%,#7C3AED 100%);
+  display:grid;place-items:center;color:#fff;font-weight:700;font-size:15px;
+  margin-bottom:var(--s-4);letter-spacing:-.02em;
+}
+.rail-item{
+  width:52px;padding:7px 0 5px;border-radius:var(--r-md);
+  display:flex;flex-direction:column;align-items:center;gap:3px;
+  color:var(--fg-3);font-size:10px;line-height:1;
+  transition:background var(--t-fast) var(--ease),color var(--t-fast) var(--ease);
+}
+.rail-item:hover{background:var(--bg-2);color:var(--fg-2)}
+.rail-item[aria-current="page"]{background:var(--primary-soft);color:var(--primary-text)}
+.rail .spacer{flex:1}
+.avatar{
+  width:28px;height:28px;border-radius:var(--r-md);flex:none;
+  background:var(--bg-3);border:1px solid var(--line-2);
+  display:grid;place-items:center;font-size:11px;font-weight:600;color:var(--fg-2);
+}
+
+/* ---------- 通用面板 ---------- */
+.pane{display:flex;flex-direction:column;min-height:0;min-width:0}
+.pane-head{
+  height:44px;flex:none;display:flex;align-items:center;gap:var(--s-3);
+  padding:0 var(--s-4);border-bottom:1px solid var(--line);
+}
+.pane-title{font-size:13px;font-weight:600;letter-spacing:.01em}
+.pane-body{flex:1;overflow-y:auto;min-height:0}
+
+/* ---------- 按钮 ---------- */
+.btn{
+  height:var(--h-lg);padding:0 12px;border-radius:var(--r-md);
+  display:inline-flex;align-items:center;gap:6px;justify-content:center;
+  font-size:13px;font-weight:500;white-space:nowrap;
+  border:1px solid var(--line-2);background:var(--bg-2);color:var(--fg);
+  transition:background var(--t-fast) var(--ease),border-color var(--t-fast) var(--ease),color var(--t-fast) var(--ease);
+}
+.btn:hover{background:var(--bg-3);border-color:#4A5F8C}
+.btn-primary{background:var(--primary);border-color:var(--primary);color:var(--primary-fg)}
+.btn-primary:hover{background:var(--primary-hover);border-color:var(--primary-hover)}
+.btn-ghost{background:transparent;border-color:transparent;color:var(--fg-2)}
+.btn-ghost:hover{background:var(--bg-2);color:var(--fg)}
+.btn-sm{height:var(--h-md);padding:0 9px;font-size:12px}
+.btn-icon{width:var(--h-md);height:var(--h-md);padding:0}
+.btn-danger{color:var(--danger)}
+.btn-danger:hover{background:var(--danger-soft);border-color:transparent}
+
+/* ---------- 输入 ---------- */
+.input,.textarea,.select{
+  width:100%;height:var(--h-lg);padding:0 10px;
+  background:var(--bg);border:1px solid var(--line-2);border-radius:var(--r-md);
+  color:var(--fg);font-size:13px;
+  transition:border-color var(--t-fast) var(--ease),box-shadow var(--t-fast) var(--ease);
+}
+.textarea{height:auto;padding:8px 10px;resize:vertical;line-height:1.6;font-family:inherit}
+.input:hover,.textarea:hover,.select:hover{border-color:#4A5F8C}
+.input:focus,.textarea:focus,.select:focus{
+  outline:none;border-color:var(--primary-hover);box-shadow:0 0 0 3px var(--primary-soft);
+}
+.input::placeholder,.textarea::placeholder{color:var(--fg-3)}
+.select{appearance:none;cursor:pointer;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2394A3B8' stroke-width='2' stroke-linecap='round'><path d='m6 9 6 6 6-6'/></svg>");
+  background-repeat:no-repeat;background-position:right 8px center;padding-right:28px;}
+.search{position:relative;flex:1}
+.search .i{position:absolute;left:9px;top:50%;transform:translateY(-50%);color:var(--fg-3);pointer-events:none}
+.search .input{padding-left:30px;height:var(--h-md);font-size:12px}
+
+/* ---------- Tag / 状态 ---------- */
+.tag{
+  display:inline-flex;align-items:center;gap:4px;height:20px;padding:0 7px;
+  border-radius:var(--r-sm);font-size:11px;font-weight:500;line-height:1;
+  background:var(--bg-3);color:var(--fg-2);border:1px solid transparent;white-space:nowrap;
+}
+.tag-mono{font-family:var(--mono);font-size:10.5px;letter-spacing:-.01em}
+.tag-primary{background:var(--primary-soft);color:var(--primary-text)}
+.tag-success{background:var(--success-soft);color:var(--success)}
+.tag-warning{background:var(--warning-soft);color:var(--warning)}
+.tag-danger{background:var(--danger-soft);color:var(--danger)}
+.tag-info{background:var(--info-soft);color:var(--info)}
+.status-dot{width:6px;height:6px;border-radius:50%;flex:none;background:currentColor}
+.pulse{animation:pulse 1.6s var(--ease) infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+/* ============================================================
+   屏幕 1 · 对话工作台
+   ============================================================ */
+.threads{width:var(--list-w);flex:none;background:var(--bg-1);border-right:1px solid var(--line)}
+.threads .pane-head{padding:0 var(--s-3) 0 var(--s-4)}
+.thread-toolbar{padding:var(--s-3) var(--s-3) var(--s-2);display:flex;gap:var(--s-2)}
+.group-label{
+  padding:var(--s-4) var(--s-4) var(--s-2);font-size:11px;font-weight:600;
+  color:var(--fg-3);letter-spacing:.06em;text-transform:uppercase;
+}
+.thread{
+  display:block;width:calc(100% - 12px);margin:0 6px 2px;padding:7px 10px;text-align:left;
+  border-radius:var(--r-md);border:1px solid transparent;
+  transition:background var(--t-fast) var(--ease),border-color var(--t-fast) var(--ease);
+}
+.thread:hover{background:var(--bg-2)}
+.thread[aria-current="true"]{background:var(--bg-3);border-color:var(--line-2)}
+.thread-top{display:flex;align-items:center;gap:6px;margin-bottom:2px}
+.thread-name{font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+.thread-time{font-size:11px;color:var(--fg-3);flex:none}
+.thread-sub{font-size:11.5px;color:var(--fg-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:flex;align-items:center;gap:5px}
+
+/* --- 消息区 --- */
+.chat{flex:1;background:var(--bg);min-width:0}
+.chat-head{justify-content:space-between}
+.chat-head-l{display:flex;align-items:center;gap:var(--s-3);min-width:0}
+.agent-chip{
+  display:flex;align-items:center;gap:7px;height:var(--h-md);padding:0 9px 0 5px;
+  border:1px solid var(--line-2);border-radius:var(--r-md);background:var(--bg-1);
+  transition:border-color var(--t-fast) var(--ease),background var(--t-fast) var(--ease);
+}
+.agent-chip:hover{background:var(--bg-2);border-color:#4A5F8C}
+.agent-av{
+  width:20px;height:20px;border-radius:5px;flex:none;display:grid;place-items:center;
+  font-size:10px;font-weight:700;color:#fff;
+}
+.av-analyst{background:linear-gradient(135deg,#0EA5E9,#2563EB)}
+.av-review{background:linear-gradient(135deg,#8B5CF6,#6366F1)}
+.av-research{background:linear-gradient(135deg,#F59E0B,#EA580C)}
+.av-sre{background:linear-gradient(135deg,#EF4444,#BE123C)}
+.av-doc{background:linear-gradient(135deg,#10B981,#059669)}
+.av-general{background:linear-gradient(135deg,#64748B,#334155)}
+
+.msgs{flex:1;overflow-y:auto;min-height:0;padding:var(--s-6) 0 var(--s-5)}
+.msg{max-width:820px;margin:0 auto var(--s-6);padding:0 var(--s-6)}
+.msg-user{display:flex;justify-content:flex-end}
+.bubble{
+  max-width:78%;background:var(--bg-3);border:1px solid var(--line);
+  border-radius:var(--r-lg) var(--r-lg) var(--r-sm) var(--r-lg);
+  padding:9px 13px;font-size:14.5px;line-height:1.65;
+}
+.msg-head{display:flex;align-items:center;gap:7px;margin-bottom:var(--s-3)}
+.msg-name{font-size:13px;font-weight:600}
+.msg-meta{margin-left:auto;display:flex;align-items:center;gap:var(--s-3);font-size:11px;color:var(--fg-3)}
+.prose{font-size:15px;line-height:1.75;color:#E7EDF6}
+.prose h3{font-size:15.5px;font-weight:650;margin:var(--s-5) 0 var(--s-3);color:var(--fg)}
+.prose p{margin:0 0 var(--s-4)}
+.prose ul,.prose ol{margin:0 0 var(--s-4);padding-left:20px}
+.prose li{margin-bottom:5px}
+.prose strong{color:#fff;font-weight:620}
+.prose code{
+  font-family:var(--mono);font-size:12.5px;background:var(--bg-2);
+  border:1px solid var(--line);border-radius:4px;padding:1px 5px;color:#C7D2FE;
+}
+.prose table{width:100%;border-collapse:collapse;font-size:13px;margin:0 0 var(--s-4)}
+.prose th,.prose td{border:1px solid var(--line);padding:5px 10px;text-align:left}
+.prose th{background:var(--bg-1);font-weight:600;font-size:12px;color:var(--fg-2)}
+.prose td.num{font-family:var(--mono);text-align:right}
+
+/* --- 计划卡（deepagents write_todos） --- */
+.todo-card{
+  background:var(--bg-1);border:1px solid var(--line);border-radius:var(--r-lg);
+  padding:var(--s-4);margin-bottom:var(--s-4);
+}
+.todo-card-head{
+  display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;
+  color:var(--fg-2);margin-bottom:var(--s-3);
+}
+.todo{display:flex;gap:8px;align-items:flex-start;padding:3px 0;font-size:13px}
+.todo-mark{width:14px;height:14px;flex:none;margin-top:3px;border-radius:50%;border:1.5px solid var(--fg-3);position:relative}
+.todo.done .todo-mark{border-color:var(--success);background:var(--success)}
+.todo.done .todo-mark::after{content:"";position:absolute;left:3.5px;top:1px;width:4px;height:7px;border:solid #06210F;border-width:0 1.5px 1.5px 0;transform:rotate(45deg)}
+.todo.doing .todo-mark{border-color:var(--warning);background:conic-gradient(var(--warning) 60%,transparent 0)}
+.todo.done .todo-text{color:var(--fg-3);text-decoration:line-through;text-decoration-color:var(--line-2)}
+.todo.doing .todo-text{color:var(--fg)}
+.todo-text{color:var(--fg-2);flex:1}
+
+/* --- 工具调用行 --- */
+.tool{
+  border:1px solid var(--line);border-radius:var(--r-md);background:var(--bg-1);
+  margin-bottom:var(--s-2);overflow:hidden;
+}
+.tool>summary{
+  list-style:none;cursor:pointer;display:flex;align-items:center;gap:8px;
+  padding:6px 10px;font-size:12.5px;
+  transition:background var(--t-fast) var(--ease);
+}
+.tool>summary::-webkit-details-marker{display:none}
+.tool>summary:hover{background:var(--bg-2)}
+.tool .caret{color:var(--fg-3);transition:transform var(--t-mid) var(--ease)}
+.tool[open] .caret{transform:rotate(90deg)}
+.tool-name{font-family:var(--mono);font-size:12px;color:var(--primary-text)}
+.tool-arg{color:var(--fg-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;font-size:12px}
+.tool-cost{color:var(--fg-3);font-family:var(--mono);font-size:11px;flex:none}
+.tool-body{border-top:1px solid var(--line);padding:var(--s-3) 10px;background:var(--bg-code)}
+pre.code{
+  margin:0;font-family:var(--mono);font-size:11.5px;line-height:1.65;
+  color:#B6C2D9;white-space:pre-wrap;word-break:break-all;
+}
+pre.code .k{color:#818CF8}
+pre.code .s{color:#7DD3A8}
+pre.code .c{color:var(--fg-3)}
+
+/* --- 子智能体卡 --- */
+.subagent{
+  border:1px solid var(--line);border-left:2px solid var(--warning);
+  border-radius:var(--r-md);background:var(--bg-1);margin-bottom:var(--s-4);overflow:hidden;
+}
+.subagent>summary{
+  list-style:none;cursor:pointer;display:flex;align-items:center;gap:8px;padding:8px 10px;
+  transition:background var(--t-fast) var(--ease);
+}
+.subagent>summary::-webkit-details-marker{display:none}
+.subagent>summary:hover{background:var(--bg-2)}
+.subagent[open] .caret{transform:rotate(90deg)}
+.sa-name{font-size:12.5px;font-weight:600}
+.sa-steps{border-top:1px solid var(--line);padding:var(--s-3) 10px}
+.sa-step{display:flex;gap:8px;font-size:12px;color:var(--fg-2);padding:2px 0}
+.sa-step .n{font-family:var(--mono);color:var(--fg-3);flex:none;width:14px}
+
+/* --- 消息操作条 --- */
+.msg-actions{display:flex;gap:2px;margin-top:var(--s-3);opacity:.55;transition:opacity var(--t-fast) var(--ease)}
+.msg:hover .msg-actions{opacity:1}
+.act{
+  height:24px;padding:0 7px;border-radius:var(--r-sm);color:var(--fg-2);
+  display:inline-flex;align-items:center;gap:4px;font-size:11.5px;
+  transition:background var(--t-fast) var(--ease),color var(--t-fast) var(--ease);
+}
+.act:hover{background:var(--bg-2);color:var(--fg)}
+
+/* --- 流式光标 --- */
+.cursor{display:inline-block;width:7px;height:15px;background:var(--primary-text);
+  vertical-align:-2px;margin-left:2px;animation:blink 1s steps(2) infinite}
+@keyframes blink{50%{opacity:0}}
+.thinking{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--fg-2);margin-bottom:var(--s-3)}
+
+/* --- 上下文压缩分隔条（系统行为，视觉权重低于 SubAgentCard） --- */
+.compact{max-width:820px;margin:0 auto var(--s-6);padding:0 var(--s-6)}
+.compact>summary{
+  list-style:none;cursor:pointer;display:flex;align-items:center;gap:var(--s-3);
+  font-size:11.5px;color:var(--fg-3);transition:color var(--t-fast) var(--ease);
+}
+.compact>summary::-webkit-details-marker{display:none}
+.compact>summary:hover{color:var(--fg-2)}
+.compact>summary::before,.compact>summary::after{content:"";flex:1;height:1px;background:var(--line)}
+.compact[open] .caret{transform:rotate(90deg)}
+.compact-body{
+  margin-top:var(--s-3);padding:var(--s-4);background:var(--bg-1);
+  border:1px solid var(--line);border-radius:var(--r-md);
+  font-size:12.5px;color:var(--fg-2);line-height:1.7;
+}
+.compact-body h4{margin:0 0 5px;font-size:12px;font-weight:600;color:var(--fg-2)}
+.compact-body ul{margin:0 0 var(--s-3);padding-left:18px}
+.compact-body li{margin-bottom:3px}
+
+/* --- 输入区 --- */
+.composer{flex:none;padding:0 var(--s-6) var(--s-5);background:var(--bg)}
+.composer-inner{
+  max-width:820px;margin:0 auto;background:var(--bg-1);
+  border:1px solid var(--line-2);border-radius:var(--r-lg);
+  transition:border-color var(--t-fast) var(--ease),box-shadow var(--t-fast) var(--ease);
+}
+.composer-inner:focus-within{border-color:var(--primary-hover);box-shadow:0 0 0 3px var(--primary-soft)}
+.composer textarea{
+  width:100%;background:none;border:none;resize:none;outline:none;
+  padding:11px 13px 4px;font-size:14.5px;line-height:1.6;max-height:180px;
+}
+.composer textarea::placeholder{color:var(--fg-3)}
+.composer-bar{display:flex;align-items:center;gap:var(--s-2);padding:5px 8px 7px 10px}
+.composer-bar .grow{flex:1}
+.hint{font-size:11px;color:var(--fg-3);font-family:var(--mono)}
+.send{width:var(--h-md);height:var(--h-md);border-radius:var(--r-md);background:var(--primary);color:#fff;
+  display:grid;place-items:center;transition:background var(--t-fast) var(--ease)}
+.send:hover{background:var(--primary-hover)}
+
+/* --- 右侧 Trace Inspector --- */
+.inspector{width:var(--inspector-w);flex:none;background:var(--bg-1);border-left:1px solid var(--line)}
+.tabs{display:flex;gap:var(--s-4);padding:0 var(--s-4);border-bottom:1px solid var(--line);flex:none}
+.tab{
+  height:38px;font-size:12.5px;color:var(--fg-2);position:relative;
+  display:flex;align-items:center;gap:5px;
+  transition:color var(--t-fast) var(--ease);
+}
+.tab:hover{color:var(--fg)}
+.tab[aria-selected="true"]{color:var(--fg);font-weight:550}
+.tab[aria-selected="true"]::after{
+  content:"";position:absolute;left:0;right:0;bottom:-1px;height:2px;
+  background:var(--primary-hover);border-radius:2px 2px 0 0;
+}
+.tab .count{font-size:10.5px;color:var(--fg-3);font-family:var(--mono)}
+.tabpanel{display:none;padding:var(--s-4);overflow-y:auto;flex:1;min-height:0}
+.tabpanel.on{display:block}
+.insp-section{font-size:11px;font-weight:600;color:var(--fg-3);letter-spacing:.06em;
+  text-transform:uppercase;margin:0 0 var(--s-3)}
+.insp-section:not(:first-child){margin-top:var(--s-5)}
+.file-row{
+  display:flex;align-items:center;gap:7px;padding:5px 7px;border-radius:var(--r-sm);
+  font-size:12.5px;transition:background var(--t-fast) var(--ease);cursor:pointer;width:100%;text-align:left;
+}
+.file-row:hover{background:var(--bg-2)}
+.file-name{font-family:var(--mono);font-size:11.5px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.file-size{font-size:10.5px;color:var(--fg-3);font-family:var(--mono)}
+.metric{display:flex;justify-content:space-between;padding:4px 0;font-size:12.5px;border-bottom:1px solid var(--line)}
+.metric:last-child{border-bottom:none}
+.metric dt{color:var(--fg-2)}
+.metric dd{margin:0;font-family:var(--mono);font-size:12px}
+
+/* ============================================================
+   屏幕 2 · 智能体列表
+   ============================================================ */
+.page{flex:1;display:flex;flex-direction:column;min-width:0;overflow:hidden}
+.page-head{
+  flex:none;padding:var(--s-5) var(--s-6) 0;border-bottom:1px solid var(--line);
+}
+.page-title-row{display:flex;align-items:flex-start;gap:var(--s-4);margin-bottom:var(--s-4)}
+.page-title{font-size:20px;font-weight:650;letter-spacing:-.01em;margin:0 0 2px;line-height:1.35}
+.page-desc{font-size:12.5px;color:var(--fg-2);margin:0}
+.page-title-row .btn{margin-left:auto}
+.filter-row{display:flex;align-items:center;gap:var(--s-3);padding-bottom:var(--s-4)}
+.page-body{flex:1;overflow-y:auto;padding:var(--s-5) var(--s-6) var(--s-7)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:var(--s-4)}
+
+.acard{
+  background:var(--bg-1);border:1px solid var(--line);border-radius:var(--r-lg);
+  padding:var(--s-4);display:flex;flex-direction:column;gap:var(--s-3);text-align:left;
+  transition:border-color var(--t-fast) var(--ease),background var(--t-fast) var(--ease);
+  cursor:pointer;
+}
+.acard:hover{border-color:#4A5F8C;background:var(--bg-2)}
+.acard-head{display:flex;align-items:flex-start;gap:var(--s-3)}
+.acard-av{width:34px;height:34px;border-radius:9px;flex:none;display:grid;place-items:center;
+  font-size:13px;font-weight:700;color:#fff}
+.acard-name{font-size:14px;font-weight:600;line-height:1.35;display:flex;align-items:center;gap:6px}
+.acard-id{font-family:var(--mono);font-size:11px;color:var(--fg-3)}
+.acard-desc{font-size:12.5px;color:var(--fg-2);line-height:1.6;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:40px}
+.acard-tags{display:flex;flex-wrap:wrap;gap:var(--s-2)}
+.acard-foot{
+  display:flex;align-items:center;gap:var(--s-4);padding-top:var(--s-3);
+  border-top:1px solid var(--line);font-size:11.5px;color:var(--fg-3);
+}
+.acard-foot span{display:flex;align-items:center;gap:4px}
+.acard-foot .last{margin-left:auto}
+
+table.tbl{width:100%;border-collapse:collapse;font-size:13px}
+table.tbl th{
+  text-align:left;font-size:11px;font-weight:600;color:var(--fg-3);letter-spacing:.05em;
+  text-transform:uppercase;padding:0 var(--s-4) var(--s-3);border-bottom:1px solid var(--line);
+}
+table.tbl td{padding:9px var(--s-4);border-bottom:1px solid var(--line)}
+table.tbl tbody tr{transition:background var(--t-fast) var(--ease);cursor:pointer}
+table.tbl tbody tr:hover{background:var(--bg-1)}
+.cell-name{display:flex;align-items:center;gap:9px}
+
+.empty{
+  text-align:center;padding:var(--s-7) var(--s-5);border:1px dashed var(--line-2);
+  border-radius:var(--r-lg);color:var(--fg-2);
+}
+.empty .ring{width:44px;height:44px;border-radius:var(--r-lg);background:var(--bg-2);
+  display:grid;place-items:center;margin:0 auto var(--s-4);color:var(--fg-3)}
+.empty h3{margin:0 0 var(--s-2);font-size:14px;color:var(--fg);font-weight:600}
+.empty p{margin:0 0 var(--s-4);font-size:12.5px}
+
+/* ============================================================
+   屏幕 3 · 智能体编辑器
+   ============================================================ */
+.editor{flex:1;display:flex;min-width:0}
+.editor-main{flex:1;display:flex;flex-direction:column;min-width:0}
+.editor-bar{
+  height:48px;flex:none;display:flex;align-items:center;gap:var(--s-3);
+  padding:0 var(--s-5);border-bottom:1px solid var(--line);background:var(--bg-1);
+}
+.crumb{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--fg-2)}
+.crumb .sep{color:var(--fg-3)}
+.crumb b{color:var(--fg);font-weight:600}
+.editor-bar .right{margin-left:auto;display:flex;align-items:center;gap:var(--s-3)}
+.unsaved{display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--warning)}
+
+.editor-scroll{flex:1;overflow-y:auto;display:flex;min-height:0}
+.anchors{
+  width:150px;flex:none;padding:var(--s-5) var(--s-3) var(--s-5) var(--s-5);
+  position:sticky;top:0;align-self:flex-start;
+}
+.anchor{
+  display:block;width:100%;text-align:left;padding:5px 9px;border-radius:var(--r-sm);
+  font-size:12.5px;color:var(--fg-2);border-left:2px solid transparent;
+  transition:background var(--t-fast) var(--ease),color var(--t-fast) var(--ease);
+}
+.anchor:hover{background:var(--bg-1);color:var(--fg)}
+.anchor[aria-current="true"]{color:var(--primary-text);border-left-color:var(--primary-hover);background:var(--primary-soft)}
+.form{flex:1;max-width:680px;padding:var(--s-5) var(--s-6) var(--s-7) var(--s-3);min-width:0}
+
+.card{background:var(--bg-1);border:1px solid var(--line);border-radius:var(--r-lg);
+  padding:var(--s-5);margin-bottom:var(--s-4)}
+.card-title{font-size:13.5px;font-weight:600;margin:0 0 3px;display:flex;align-items:center;gap:7px}
+.card-sub{font-size:12px;color:var(--fg-2);margin:0 0 var(--s-5)}
+.field{margin-bottom:var(--s-4)}
+.field:last-child{margin-bottom:0}
+.label{display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:550;margin-bottom:5px}
+.req{color:var(--danger)}
+.help{font-size:11.5px;color:var(--fg-2);margin-top:5px;line-height:1.55}
+.help.err{color:var(--danger)}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:var(--s-4)}
+.row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:var(--s-4)}
+.counter{margin-left:auto;font-size:11px;color:var(--fg-3);font-family:var(--mono);font-weight:400}
+
+/* 开关 */
+.switch-row{display:flex;align-items:flex-start;gap:var(--s-3);padding:9px 0;border-bottom:1px solid var(--line)}
+.switch-row:last-child{border-bottom:none}
+.switch-row .txt{flex:1;min-width:0}
+.switch-row .n{font-size:13px;display:flex;align-items:center;gap:6px}
+.switch-row .n code{font-family:var(--mono);font-size:11px;color:var(--fg-3)}
+.switch-row .d{font-size:11.5px;color:var(--fg-2);margin-top:1px}
+.switch{
+  width:36px;height:20px;border-radius:var(--r-full);background:var(--bg-3);
+  border:1px solid var(--line-2);position:relative;flex:none;margin-top:2px;
+  transition:background var(--t-fast) var(--ease),border-color var(--t-fast) var(--ease);
+}
+.switch::after{
+  content:"";position:absolute;left:2px;top:1.5px;width:14px;height:14px;border-radius:50%;
+  background:var(--fg-3);transition:transform var(--t-mid) var(--ease),background var(--t-fast) var(--ease);
+}
+.switch[aria-checked="true"]{background:var(--primary);border-color:var(--primary)}
+.switch[aria-checked="true"]::after{transform:translateX(16px);background:#fff}
+
+/* 滑块 */
+.slider-row{display:flex;align-items:center;gap:var(--s-4)}
+input[type=range]{flex:1;-webkit-appearance:none;height:4px;border-radius:2px;background:var(--bg-3);outline:none}
+input[type=range]::-webkit-slider-thumb{
+  -webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:var(--primary-hover);
+  border:2px solid var(--bg-1);cursor:pointer;box-shadow:0 0 0 1px var(--primary);
+}
+.slider-val{width:44px;text-align:right;font-family:var(--mono);font-size:12px;color:var(--fg)}
+
+/* 子智能体条目 */
+.sub-item{
+  display:flex;align-items:center;gap:var(--s-3);padding:9px 10px;
+  border:1px solid var(--line);border-radius:var(--r-md);background:var(--bg);margin-bottom:var(--s-2);
+}
+.sub-item .txt{flex:1;min-width:0}
+.sub-item .n{font-size:13px;font-weight:550}
+.sub-item .d{font-size:11.5px;color:var(--fg-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dashed{
+  width:100%;height:36px;border:1px dashed var(--line-2);border-radius:var(--r-md);
+  color:var(--fg-2);font-size:12.5px;display:flex;align-items:center;justify-content:center;gap:6px;
+  transition:border-color var(--t-fast) var(--ease),color var(--t-fast) var(--ease),background var(--t-fast) var(--ease);
+}
+.dashed:hover{border-color:var(--primary-hover);color:var(--primary-text);background:var(--primary-soft)}
+
+/* 试跑面板 */
+.testpane{width:360px;flex:none;background:var(--bg-1);border-left:1px solid var(--line)}
+.test-body{flex:1;overflow-y:auto;padding:var(--s-4);display:flex;flex-direction:column;gap:var(--s-3)}
+.tmsg{font-size:13px;line-height:1.65}
+.tmsg.u{align-self:flex-end;max-width:85%;background:var(--bg-3);border-radius:var(--r-md);padding:7px 11px}
+.tmsg.a{color:#E7EDF6}
+.test-foot{flex:none;padding:var(--s-3) var(--s-4) var(--s-4);border-top:1px solid var(--line)}
+
+/* ---------- 响应式 ---------- */
+.only-narrow{display:none}
+@media (max-width:1360px){
+  .inspector{position:absolute;right:0;top:38px;bottom:0;box-shadow:var(--shadow-lg);z-index:20}
+  .inspector[hidden]{display:none}
+  .only-narrow{display:inline-flex}
+}
+@media (max-width:1100px){
+  .testpane{display:none}
+  .anchors{display:none}
+  .form{padding-left:var(--s-6)}
+}
+@media (max-width:900px){
+  .threads{display:none}
+  .msg,.composer-inner{max-width:none}
+  .page-body,.page-head{padding-left:var(--s-4);padding-right:var(--s-4)}
+}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important}
+  .cursor{opacity:1}
+}
+</style>
+</head>
+<body>
+
+<!-- ============ SVG 图标精灵 (Lucide) ============ -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-chat" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></symbol>
+  <symbol id="i-bot" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4M8 16h.01M16 16h.01"/></symbol>
+  <symbol id="i-cog" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
+  <symbol id="i-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+  <symbol id="i-left" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></symbol>
+  <symbol id="i-retry" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5"/></symbol>
+  <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></symbol>
+  <symbol id="i-clip" viewBox="0 0 24 24"><path d="M21.4 11.05 12.25 20.2a5 5 0 0 1-7.07-7.07l9.19-9.19a3.33 3.33 0 1 1 4.71 4.71l-9.2 9.19a1.67 1.67 0 1 1-2.35-2.36l8.49-8.48"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M4 20a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2z"/></symbol>
+  <symbol id="i-wrench" viewBox="0 0 24 24"><path d="M14.7 6.3a4 4 0 0 0 5 5l-9.6 9.6a2.1 2.1 0 0 1-3-3z"/><path d="M19.7 11.3 21 7l-3-3-4.3 1.3"/></symbol>
+  <symbol id="i-todo" viewBox="0 0 24 24"><path d="m3 6 2 2 3-3M3 14l2 2 3-3M11 7h10M11 17h10"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6.3 6.3l2.8 2.8M14.9 14.9l2.8 2.8M17.7 6.3l-2.8 2.8M9.1 14.9l-2.8 2.8"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="m6 4 14 8-14 8z"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18"/></symbol>
+  <symbol id="i-term" viewBox="0 0 24 24"><path d="m4 17 6-5-6-5M12 19h8"/></symbol>
+  <symbol id="i-up-th" viewBox="0 0 24 24"><path d="M7 10v11H4a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1zM7 10l4-7a2 2 0 0 1 2 2v3h5.5a2 2 0 0 1 2 2.4l-1.6 8A2 2 0 0 1 17 21H7"/></symbol>
+  <symbol id="i-down-th" viewBox="0 0 24 24"><path d="M17 14V3h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1zM17 14l-4 7a2 2 0 0 1-2-2v-3H5.5a2 2 0 0 1-2-2.4l1.6-8A2 2 0 0 1 7 3h10"/></symbol>
+  <symbol id="i-panel" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+  <symbol id="i-warn" viewBox="0 0 24 24"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0"/><path d="M12 9v4M12 17h.01"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m20 6-11 11-5-5"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 2 9 5-9 5-9-5z"/><path d="m3 12 9 5 9-5M3 17l9 5 9-5"/></symbol>
+</svg>
+
+<!-- ============ 原型导航（落地时删除） ============ -->
+<div class="proto">
+  <span class="dot"></span><b>ATLAS</b>
+  <span>原型 v0.1</span>
+  <div class="seg" role="tablist" aria-label="原型屏幕">
+    <button role="tab" aria-selected="true" data-screen="chat">对话工作台</button>
+    <button role="tab" aria-selected="false" data-screen="agents">智能体列表</button>
+    <button role="tab" aria-selected="false" data-screen="editor">智能体编辑器</button>
+  </div>
+  <div class="right">
+    <span>Next.js + Ant Design(dark) · 静态原型</span>
+    <span class="kbd">1</span><span class="kbd">2</span><span class="kbd">3</span> 切屏
+  </div>
+</div>
+
+<div class="app">
+
+  <!-- ============ Rail（三屏共享） ============ -->
+  <nav class="rail" aria-label="主导航">
+    <div class="logo" title="Atlas">A</div>
+    <button class="rail-item" data-screen="chat" aria-current="page">
+      <svg class="i i-20"><use href="#i-chat"/></svg><span>对话</span>
+    </button>
+    <button class="rail-item" data-screen="agents">
+      <svg class="i i-20"><use href="#i-bot"/></svg><span>智能体</span>
+    </button>
+    <button class="rail-item" data-screen="settings">
+      <svg class="i i-20"><use href="#i-cog"/></svg><span>设置</span>
+    </button>
+    <div class="spacer"></div>
+    <div class="avatar" title="周 · 工作区管理员">周</div>
+  </nav>
+
+  <!-- ==========================================================
+       屏幕 1 · 对话工作台
+       ========================================================== -->
+  <div class="screen on" id="s-chat">
+
+    <!-- 会话列表 -->
+    <aside class="pane threads" aria-label="会话列表">
+      <div class="thread-toolbar">
+        <button class="btn btn-primary btn-sm" style="flex:1">
+          <svg class="i i-14"><use href="#i-plus"/></svg>新建会话
+        </button>
+        <button class="btn btn-sm btn-icon" aria-label="搜索会话">
+          <svg class="i i-14"><use href="#i-search"/></svg>
+        </button>
+      </div>
+      <div class="pane-body">
+        <div class="group-label">今天</div>
+
+        <button class="thread" aria-current="true">
+          <div class="thread-top">
+            <span class="thread-name">Q2 用户留存下降归因</span>
+            <span class="thread-time">14:32</span>
+          </div>
+          <div class="thread-sub">
+            <span class="agent-av av-analyst" style="width:14px;height:14px;border-radius:4px;font-size:8px">数</span>
+            数据分析师 · 运行中
+          </div>
+        </button>
+
+        <button class="thread">
+          <div class="thread-top">
+            <span class="thread-name">engine/planner 模块 code review</span>
+            <span class="thread-time">11:07</span>
+          </div>
+          <div class="thread-sub">
+            <span class="agent-av av-review" style="width:14px;height:14px;border-radius:4px;font-size:8px">审</span>
+            代码审查员 · 12 条建议
+          </div>
+        </button>
+
+        <button class="thread">
+          <div class="thread-top">
+            <span class="thread-name">竞品 Agent 平台调研</span>
+            <span class="thread-time">09:48</span>
+          </div>
+          <div class="thread-sub">
+            <span class="agent-av av-research" style="width:14px;height:14px;border-radius:4px;font-size:8px">研</span>
+            研究员 · 已完成
+          </div>
+        </button>
+
+        <div class="group-label">最近 7 天</div>
+
+        <button class="thread">
+          <div class="thread-top">
+            <span class="thread-name">线上 5xx 突增排查</span>
+            <span class="thread-time">周一</span>
+          </div>
+          <div class="thread-sub">
+            <span class="agent-av av-sre" style="width:14px;height:14px;border-radius:4px;font-size:8px">运</span>
+            运维排障 · 已归档
+          </div>
+        </button>
+
+        <button class="thread">
+          <div class="thread-top">
+            <span class="thread-name">API 文档草稿生成</span>
+            <span class="thread-time">周一</span>
+          </div>
+          <div class="thread-sub">
+            <span class="agent-av av-doc" style="width:14px;height:14px;border-radius:4px;font-size:8px">文</span>
+            文档撰写 · 已完成
+          </div>
+        </button>
+
+        <button class="thread">
+          <div class="thread-top">
+            <span class="thread-name">Postgres 慢查询优化建议</span>
+            <span class="thread-time">上周日</span>
+          </div>
+          <div class="thread-sub">
+            <span class="agent-av av-general" style="width:14px;height:14px;border-radius:4px;font-size:8px">通</span>
+            通用助手 · 已完成
+          </div>
+        </button>
+      </div>
+    </aside>
+
+    <!-- 消息区 -->
+    <section class="pane chat" aria-label="对话">
+      <header class="pane-head chat-head">
+        <div class="chat-head-l">
+          <button class="agent-chip">
+            <span class="agent-av av-analyst">数</span>
+            <span style="font-size:12.5px;font-weight:550">数据分析师</span>
+            <svg class="i i-14" style="color:var(--fg-3)"><use href="#i-down"/></svg>
+          </button>
+          <span class="tag tag-mono">claude-opus-5</span>
+          <span class="tag tag-success"><span class="status-dot pulse"></span>运行中</span>
+        </div>
+        <div style="display:flex;gap:var(--s-2)">
+          <button class="btn btn-sm btn-ghost only-narrow" id="toggle-inspector">
+            <svg class="i i-14"><use href="#i-panel"/></svg>轨迹
+          </button>
+          <button class="btn btn-sm btn-ghost btn-icon" aria-label="更多操作">
+            <svg class="i i-14"><use href="#i-more"/></svg>
+          </button>
+        </div>
+      </header>
+
+      <div class="msgs">
+
+        <!-- 上下文压缩分隔条：早期消息已摘要，模型看不到原文，但用户仍可上滚查看 -->
+        <details class="compact">
+          <summary>
+            <span style="display:flex;align-items:center;gap:5px;white-space:nowrap">
+              <svg class="i i-14 caret"><use href="#i-right"/></svg>
+              <svg class="i i-14"><use href="#i-layers"/></svg>
+              早期 12 条消息已压缩为摘要 · 152k → 61k tokens
+            </span>
+          </summary>
+          <div class="compact-body">
+            <h4>目标与约束</h4>
+            <ul>
+              <li>分析 2026 Q2 用户留存下降原因，产出可直接发给管理层的报告</li>
+              <li>数据源限定 <code style="font-family:var(--mono)">warehouse.dw_user_retention</code>；禁止访问 PII 表</li>
+            </ul>
+            <h4>已确认事实</h4>
+            <ul>
+              <li>D30 留存 34.2% → 29.4%（-4.8pt），来源 dw_user_retention</li>
+              <li>行业同期均值 -1.2pt，来源 Sensor Tower 2026 H1（经 QuestMobile 交叉核对）</li>
+            </ul>
+            <h4>已排除方案</h4>
+            <ul>
+              <li>按城市维度拆解 —— 各城市降幅均匀，无解释力，已放弃</li>
+              <li>归因到投放渠道质量 —— 投放分群仅贡献 9%，非主因</li>
+            </ul>
+          </div>
+        </details>
+
+        <!-- 用户消息 -->
+        <div class="msg msg-user">
+          <div class="bubble">
+            帮我分析 2026 Q2 的用户留存下降原因，数据在 <code style="font-family:var(--mono);font-size:12px">warehouse.dw_user_retention</code>，最后输出一份可以直接发给管理层的报告。
+          </div>
+        </div>
+
+        <!-- 助手消息（已完成） -->
+        <article class="msg">
+          <div class="msg-head">
+            <span class="agent-av av-analyst">数</span>
+            <span class="msg-name">数据分析师</span>
+            <span class="tag tag-mono">claude-opus-5</span>
+            <div class="msg-meta">
+              <span>14 步</span><span>28.4s</span><span>18.2k tokens</span>
+            </div>
+          </div>
+
+          <!-- 计划卡 -->
+          <div class="todo-card">
+            <div class="todo-card-head">
+              <svg class="i i-14"><use href="#i-todo"/></svg>执行计划
+              <span style="margin-left:auto;font-weight:400;color:var(--fg-3);font-family:var(--mono);font-size:11px">4 / 5</span>
+            </div>
+            <div class="todo done"><span class="todo-mark"></span><span class="todo-text">拉取 Q1–Q2 留存明细与分群维度</span></div>
+            <div class="todo done"><span class="todo-mark"></span><span class="todo-text">按渠道 / 设备 / 新老用户拆解下降贡献度</span></div>
+            <div class="todo done"><span class="todo-mark"></span><span class="todo-text">交叉验证发版记录与线上事故时间线</span></div>
+            <div class="todo done"><span class="todo-mark"></span><span class="todo-text">委派研究员补充行业基准数据</span></div>
+            <div class="todo doing"><span class="todo-mark"></span><span class="todo-text">生成管理层报告（Markdown + 图表）</span></div>
+          </div>
+
+          <!-- 工具调用 -->
+          <details class="tool">
+            <summary>
+              <svg class="i i-14 caret"><use href="#i-right"/></svg>
+              <span class="status-dot" style="color:var(--success)"></span>
+              <span class="tool-name">sql_query</span>
+              <span class="tool-arg">dw_user_retention · 2026-01-01 ~ 2026-06-30 · group by channel</span>
+              <span class="tool-cost">1.2s</span>
+            </summary>
+            <div class="tool-body">
+<pre class="code"><span class="c">-- 参数</span>
+<span class="k">SELECT</span> channel, cohort_month,
+       <span class="k">round</span>(retained_d30 / cohort_size, 4) <span class="k">AS</span> r30
+<span class="k">FROM</span> warehouse.dw_user_retention
+<span class="k">WHERE</span> cohort_month <span class="k">BETWEEN</span> <span class="s">'2026-01'</span> <span class="k">AND</span> <span class="s">'2026-06'</span>
+<span class="k">ORDER BY</span> channel, cohort_month;
+
+<span class="c">-- 返回 42 行，耗时 1.18s</span></pre>
+            </div>
+          </details>
+
+          <details class="tool">
+            <summary>
+              <svg class="i i-14 caret"><use href="#i-right"/></svg>
+              <span class="status-dot" style="color:var(--success)"></span>
+              <span class="tool-name">read_file</span>
+              <span class="tool-arg">/release/changelog-2026Q2.md</span>
+              <span class="tool-cost">36ms</span>
+            </summary>
+            <div class="tool-body">
+              <pre class="code">2026-04-18  v3.8.0  注册流程改版（手机号 → 邮箱优先）
+2026-05-02  v3.8.3  Android 端推送 SDK 升级
+2026-05-21  v3.9.0  首页信息流重排（个性化权重上调）</pre>
+            </div>
+          </details>
+
+          <details class="tool">
+            <summary>
+              <svg class="i i-14 caret"><use href="#i-right"/></svg>
+              <span class="status-dot" style="color:var(--warning)"></span>
+              <span class="tool-name">sql_query</span>
+              <span class="tool-arg">dw_push_delivery · 权限不足，已降级为采样表重试</span>
+              <span class="tool-cost">2.4s</span>
+            </summary>
+            <div class="tool-body">
+              <pre class="code"><span class="c">-- 首次调用</span>
+ERROR: permission denied for table dw_push_delivery
+<span class="c">-- 重试（采样表）</span>
+<span class="k">SELECT</span> * <span class="k">FROM</span> warehouse.dw_push_delivery_sample <span class="k">LIMIT</span> 5000;  <span class="c">-- OK</span></pre>
+            </div>
+          </details>
+
+          <!-- 子智能体 -->
+          <details class="subagent">
+            <summary>
+              <svg class="i i-14 caret"><use href="#i-right"/></svg>
+              <span class="agent-av av-research" style="width:18px;height:18px;border-radius:4px;font-size:9px">研</span>
+              <span class="sa-name">research-agent</span>
+              <span class="tag tag-success" style="height:18px">已完成</span>
+              <span style="margin-left:auto;font-size:11px;color:var(--fg-3);font-family:var(--mono)">6 步 · 9.1s</span>
+            </summary>
+            <div class="sa-steps">
+              <div class="sa-step"><span class="n">1</span>web_search · 2026 社交类 App D30 留存行业基准</div>
+              <div class="sa-step"><span class="n">2</span>fetch_url · Sensor Tower 2026 H1 报告</div>
+              <div class="sa-step"><span class="n">3</span>fetch_url · QuestMobile 季度数据</div>
+              <div class="sa-step"><span class="n">4</span>write_file · /research/benchmark.md</div>
+              <div class="sa-step"><span class="n">5</span>交叉核对两份来源的口径差异</div>
+              <div class="sa-step"><span class="n">6</span>返回结论：行业均值 -1.2pt，本产品 -4.8pt，显著劣于大盘</div>
+            </div>
+          </details>
+
+          <!-- 正文 -->
+          <div class="prose">
+            <h3>结论</h3>
+            <p>Q2 的 D30 留存从 <strong>34.2%</strong> 降至 <strong>29.4%</strong>（-4.8pt）。行业同期均值仅 -1.2pt，因此<strong>这不是大盘因素，是产品内部问题</strong>。下降高度集中在单一分群。</p>
+
+            <h3>贡献度拆解</h3>
+            <table>
+              <thead><tr><th>分群</th><th>Q1 D30</th><th>Q2 D30</th><th>变化</th><th>对整体贡献</th></tr></thead>
+              <tbody>
+                <tr><td>Android · 自然新增</td><td class="num">31.8%</td><td class="num">21.0%</td><td class="num" style="color:var(--danger)">-10.8pt</td><td class="num" style="color:var(--danger)">72%</td></tr>
+                <tr><td>iOS · 自然新增</td><td class="num">36.4%</td><td class="num">34.9%</td><td class="num">-1.5pt</td><td class="num">11%</td></tr>
+                <tr><td>投放渠道</td><td class="num">28.1%</td><td class="num">27.3%</td><td class="num">-0.8pt</td><td class="num">9%</td></tr>
+                <tr><td>老用户回流</td><td class="num">41.2%</td><td class="num">40.6%</td><td class="num">-0.6pt</td><td class="num">8%</td></tr>
+              </tbody>
+            </table>
+
+            <h3>根因（按置信度排序）</h3>
+            <ol>
+              <li><strong>推送 SDK 升级导致触达断崖</strong>（置信度高）—— <code>v3.8.3</code> 于 05-02 发布，Android 推送到达率从 78% 跌至 41%，且时间点与留存曲线拐点完全吻合。</li>
+              <li><strong>注册流程改版抬高了首日流失</strong>（置信度中）—— 04-18 起邮箱优先，Android 用户注册完成率 -6.3pt。</li>
+              <li><strong>信息流重排</strong>（置信度低）—— 05-21 上线，但下降在此之前已发生，时间上解释不了主体降幅。</li>
+            </ol>
+
+            <h3>建议动作</h3>
+            <ul>
+              <li>本周内回滚或热修 <code>v3.8.3</code> 的推送 SDK，优先级 P0。</li>
+              <li>对 Android 注册流程做 A/B，恢复手机号优先分支。</li>
+              <li>补齐 <code>dw_push_delivery</code> 的读权限——本次分析被迫用 5000 行采样表，推送结论存在抽样误差。</li>
+            </ul>
+          </div>
+
+          <div class="msg-actions">
+            <button class="act"><svg class="i i-14"><use href="#i-copy"/></svg>复制</button>
+            <button class="act"><svg class="i i-14"><use href="#i-retry"/></svg>重新生成</button>
+            <button class="act"><svg class="i i-14"><use href="#i-file"/></svg>导出报告</button>
+            <button class="act" aria-label="有帮助"><svg class="i i-14"><use href="#i-up-th"/></svg></button>
+            <button class="act" aria-label="没帮助"><svg class="i i-14"><use href="#i-down-th"/></svg></button>
+          </div>
+        </article>
+
+        <!-- 用户追问 -->
+        <div class="msg msg-user">
+          <div class="bubble">把推送到达率那部分单独画个图，再按周粒度看拐点。</div>
+        </div>
+
+        <!-- 流式中 -->
+        <article class="msg">
+          <div class="msg-head">
+            <span class="agent-av av-analyst">数</span>
+            <span class="msg-name">数据分析师</span>
+            <span class="tag tag-mono">claude-opus-5</span>
+            <div class="msg-meta"><span>3 步</span><span>4.1s</span></div>
+          </div>
+
+          <div class="thinking">
+            <svg class="i i-14 pulse" style="color:var(--primary-text)"><use href="#i-spark"/></svg>
+            正在按周聚合推送到达率…
+          </div>
+
+          <details class="tool" open>
+            <summary>
+              <svg class="i i-14 caret"><use href="#i-right"/></svg>
+              <span class="status-dot pulse" style="color:var(--warning)"></span>
+              <span class="tool-name">sql_query</span>
+              <span class="tool-arg">dw_push_delivery_sample · group by week</span>
+              <span class="tool-cost">运行中</span>
+            </summary>
+            <div class="tool-body">
+              <pre class="code"><span class="k">SELECT</span> <span class="k">date_trunc</span>(<span class="s">'week'</span>, dt) w, <span class="k">avg</span>(delivered::<span class="k">float</span>/sent) rate
+<span class="k">FROM</span> warehouse.dw_push_delivery_sample
+<span class="k">WHERE</span> platform = <span class="s">'android'</span> <span class="k">GROUP BY</span> 1 <span class="k">ORDER BY</span> 1;</pre>
+            </div>
+          </details>
+
+          <div class="prose">
+            <p>按周看拐点非常清晰：到达率在 <strong>2026-W18</strong>（05-04 当周）单周下跌 34pt，此前 12 周稳定在 76–80% 区间<span class="cursor"></span></p>
+          </div>
+        </article>
+
+      </div>
+
+      <!-- 输入区 -->
+      <div class="composer">
+        <div class="composer-inner">
+          <textarea rows="2" placeholder="向 数据分析师 提问，或输入 / 调用命令、@ 切换智能体…"></textarea>
+          <div class="composer-bar">
+            <button class="btn btn-sm btn-ghost btn-icon" aria-label="添加附件"><svg class="i i-14"><use href="#i-clip"/></svg></button>
+            <button class="btn btn-sm btn-ghost"><svg class="i i-14"><use href="#i-wrench"/></svg>工具 6</button>
+            <span class="grow"></span>
+            <span class="hint">18.2k / 200k</span>
+            <span class="hint">⌘↵ 发送</span>
+            <button class="send" aria-label="发送"><svg class="i i-14"><use href="#i-up"/></svg></button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 运行轨迹 Inspector -->
+    <aside class="pane inspector" id="inspector" aria-label="运行轨迹">
+      <div class="tabs" role="tablist">
+        <button class="tab" role="tab" aria-selected="true" data-tab="plan">
+          <svg class="i i-14"><use href="#i-todo"/></svg>计划<span class="count">4/5</span>
+        </button>
+        <button class="tab" role="tab" aria-selected="false" data-tab="tools">
+          <svg class="i i-14"><use href="#i-wrench"/></svg>工具<span class="count">14</span>
+        </button>
+        <button class="tab" role="tab" aria-selected="false" data-tab="files">
+          <svg class="i i-14"><use href="#i-folder"/></svg>文件<span class="count">5</span>
+        </button>
+      </div>
+
+      <div class="tabpanel on" id="tab-plan" role="tabpanel">
+        <p class="insp-section">当前计划</p>
+        <div class="todo done"><span class="todo-mark"></span><span class="todo-text">拉取 Q1–Q2 留存明细与分群维度</span></div>
+        <div class="todo done"><span class="todo-mark"></span><span class="todo-text">按渠道 / 设备 / 新老用户拆解贡献度</span></div>
+        <div class="todo done"><span class="todo-mark"></span><span class="todo-text">交叉验证发版记录与事故时间线</span></div>
+        <div class="todo done"><span class="todo-mark"></span><span class="todo-text">委派研究员补充行业基准</span></div>
+        <div class="todo doing"><span class="todo-mark"></span><span class="todo-text">生成管理层报告</span></div>
+
+        <p class="insp-section">子智能体</p>
+        <div class="sub-item">
+          <span class="agent-av av-research">研</span>
+          <div class="txt"><div class="n">research-agent</div><div class="d">6 步 · 9.1s · 已完成</div></div>
+          <span class="tag tag-success"><span class="status-dot"></span></span>
+        </div>
+
+        <p class="insp-section">本轮消耗</p>
+        <dl style="margin:0">
+          <div class="metric"><dt>输入 tokens</dt><dd>14,908</dd></div>
+          <div class="metric"><dt>输出 tokens</dt><dd>3,271</dd></div>
+          <div class="metric"><dt>缓存读取</dt><dd>11,264</dd></div>
+          <div class="metric"><dt>工具调用</dt><dd>14 次</dd></div>
+          <div class="metric"><dt>累计 / 上限</dt><dd>18.2k / 500k</dd></div>
+        </dl>
+      </div>
+
+      <div class="tabpanel" id="tab-tools" role="tabpanel">
+        <p class="insp-section">调用时间线</p>
+        <details class="tool"><summary>
+          <svg class="i i-14 caret"><use href="#i-right"/></svg>
+          <span class="status-dot" style="color:var(--success)"></span>
+          <span class="tool-name">write_todos</span><span class="tool-arg">5 项</span><span class="tool-cost">8ms</span>
+        </summary><div class="tool-body"><pre class="code">初始化执行计划，5 个待办</pre></div></details>
+
+        <details class="tool"><summary>
+          <svg class="i i-14 caret"><use href="#i-right"/></svg>
+          <span class="status-dot" style="color:var(--success)"></span>
+          <span class="tool-name">sql_query</span><span class="tool-arg">dw_user_retention</span><span class="tool-cost">1.2s</span>
+        </summary><div class="tool-body"><pre class="code">返回 42 行</pre></div></details>
+
+        <details class="tool"><summary>
+          <svg class="i i-14 caret"><use href="#i-right"/></svg>
+          <span class="status-dot" style="color:var(--success)"></span>
+          <span class="tool-name">read_file</span><span class="tool-arg">changelog-2026Q2.md</span><span class="tool-cost">36ms</span>
+        </summary><div class="tool-body"><pre class="code">3 条发版记录</pre></div></details>
+
+        <details class="tool"><summary>
+          <svg class="i i-14 caret"><use href="#i-right"/></svg>
+          <span class="status-dot" style="color:var(--warning)"></span>
+          <span class="tool-name">sql_query</span><span class="tool-arg">权限不足 → 采样表重试</span><span class="tool-cost">2.4s</span>
+        </summary><div class="tool-body"><pre class="code">permission denied → fallback OK</pre></div></details>
+
+        <details class="tool"><summary>
+          <svg class="i i-14 caret"><use href="#i-right"/></svg>
+          <span class="status-dot" style="color:var(--info)"></span>
+          <span class="tool-name">task</span><span class="tool-arg">→ research-agent</span><span class="tool-cost">9.1s</span>
+        </summary><div class="tool-body"><pre class="code">委派子智能体，返回 benchmark.md</pre></div></details>
+
+        <details class="tool"><summary>
+          <svg class="i i-14 caret"><use href="#i-right"/></svg>
+          <span class="status-dot pulse" style="color:var(--warning)"></span>
+          <span class="tool-name">sql_query</span><span class="tool-arg">按周聚合到达率</span><span class="tool-cost">运行中</span>
+        </summary><div class="tool-body"><pre class="code">执行中…</pre></div></details>
+
+        <div style="margin-top:var(--s-4);display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--fg-3)">
+          <svg class="i i-14"><use href="#i-clock"/></svg>仅显示最近 6 次，共 14 次
+        </div>
+      </div>
+
+      <div class="tabpanel" id="tab-files" role="tabpanel">
+        <p class="insp-section">虚拟文件系统</p>
+        <button class="file-row"><svg class="i i-14" style="color:var(--fg-3)"><use href="#i-file"/></svg><span class="file-name">/report/q2-retention.md</span><span class="file-size">8.4 KB</span></button>
+        <button class="file-row"><svg class="i i-14" style="color:var(--fg-3)"><use href="#i-file"/></svg><span class="file-name">/research/benchmark.md</span><span class="file-size">3.1 KB</span></button>
+        <button class="file-row"><svg class="i i-14" style="color:var(--fg-3)"><use href="#i-file"/></svg><span class="file-name">/data/retention_by_channel.csv</span><span class="file-size">12.7 KB</span></button>
+        <button class="file-row"><svg class="i i-14" style="color:var(--fg-3)"><use href="#i-file"/></svg><span class="file-name">/data/push_delivery_weekly.csv</span><span class="file-size">2.2 KB</span></button>
+        <button class="file-row"><svg class="i i-14" style="color:var(--fg-3)"><use href="#i-file"/></svg><span class="file-name">/scratch/notes.md</span><span class="file-size">640 B</span></button>
+
+        <p class="insp-section">说明</p>
+        <p style="font-size:11.5px;color:var(--fg-2);margin:0;line-height:1.6">
+          文件由 agent 在沙箱内读写，会话结束后可一键落库或导出。点击查看差异与内容。
+        </p>
+      </div>
+    </aside>
+  </div>
+
+  <!-- ==========================================================
+       屏幕 2 · 智能体列表
+       ========================================================== -->
+  <div class="screen" id="s-agents">
+    <div class="page">
+      <header class="page-head">
+        <div class="page-title-row">
+          <div>
+            <h1 class="page-title">智能体</h1>
+            <p class="page-desc">共 6 个智能体 · 本月累计调用 12,847 次</p>
+          </div>
+          <button class="btn btn-primary" data-goto="editor">
+            <svg class="i i-14"><use href="#i-plus"/></svg>新建智能体
+          </button>
+        </div>
+        <div class="filter-row">
+          <div class="search">
+            <svg class="i i-14"><use href="#i-search"/></svg>
+            <input class="input" placeholder="搜索名称、标识或描述…">
+          </div>
+          <div class="seg" role="tablist" aria-label="范围筛选">
+            <button role="tab" aria-selected="true">全部</button>
+            <button role="tab" aria-selected="false">我创建的</button>
+            <button role="tab" aria-selected="false">已归档</button>
+          </div>
+          <select class="select" style="width:130px"><option>全部模型</option><option>claude-opus-5</option><option>claude-sonnet-5</option></select>
+          <div class="seg" role="tablist" aria-label="视图切换" id="view-seg">
+            <button role="tab" aria-selected="true" data-view="grid" aria-label="卡片视图"><svg class="i i-14"><use href="#i-grid"/></svg></button>
+            <button role="tab" aria-selected="false" data-view="table" aria-label="表格视图"><svg class="i i-14"><use href="#i-list"/></svg></button>
+          </div>
+        </div>
+      </header>
+
+      <div class="page-body">
+        <!-- 卡片视图 -->
+        <div class="grid" id="view-grid">
+
+          <button class="acard" data-goto="editor">
+            <div class="acard-head">
+              <span class="acard-av av-analyst">数</span>
+              <div style="flex:1;min-width:0">
+                <div class="acard-name">数据分析师 <span class="tag tag-success" style="height:18px"><span class="status-dot"></span>已启用</span></div>
+                <div class="acard-id">data-analyst</div>
+              </div>
+            </div>
+            <p class="acard-desc">连接数仓执行 SQL，做归因、拆解与趋势分析，产出带图表的结论报告。</p>
+            <div class="acard-tags">
+              <span class="tag tag-mono">claude-opus-5</span>
+              <span class="tag">effort high</span>
+              <span class="tag tag-primary">1 子智能体</span>
+            </div>
+            <div class="acard-foot">
+              <span><svg class="i i-14"><use href="#i-wrench"/></svg>6 工具</span>
+              <span><svg class="i i-14"><use href="#i-chat"/></svg>3,204 次</span>
+              <span class="last">2 小时前</span>
+            </div>
+          </button>
+
+          <button class="acard" data-goto="editor">
+            <div class="acard-head">
+              <span class="acard-av av-review">审</span>
+              <div style="flex:1;min-width:0">
+                <div class="acard-name">代码审查员 <span class="tag tag-success" style="height:18px"><span class="status-dot"></span>已启用</span></div>
+                <div class="acard-id">code-reviewer</div>
+              </div>
+            </div>
+            <p class="acard-desc">按仓库规范审查 diff，标注正确性、并发与安全问题，给出可直接应用的补丁。</p>
+            <div class="acard-tags">
+              <span class="tag tag-mono">claude-opus-5</span>
+              <span class="tag">effort xhigh</span>
+              <span class="tag tag-primary">2 子智能体</span>
+            </div>
+            <div class="acard-foot">
+              <span><svg class="i i-14"><use href="#i-wrench"/></svg>8 工具</span>
+              <span><svg class="i i-14"><use href="#i-chat"/></svg>5,912 次</span>
+              <span class="last">今天 11:07</span>
+            </div>
+          </button>
+
+          <button class="acard" data-goto="editor">
+            <div class="acard-head">
+              <span class="acard-av av-research">研</span>
+              <div style="flex:1;min-width:0">
+                <div class="acard-name">研究员 <span class="tag tag-success" style="height:18px"><span class="status-dot"></span>已启用</span></div>
+                <div class="acard-id">deep-researcher</div>
+              </div>
+            </div>
+            <p class="acard-desc">多轮检索 + 交叉验证的深度调研，强制标注来源，冲突结论会显式列出分歧。</p>
+            <div class="acard-tags">
+              <span class="tag tag-mono">claude-opus-5</span>
+              <span class="tag">effort high</span>
+              <span class="tag tag-primary">3 子智能体</span>
+            </div>
+            <div class="acard-foot">
+              <span><svg class="i i-14"><use href="#i-wrench"/></svg>5 工具</span>
+              <span><svg class="i i-14"><use href="#i-chat"/></svg>1,876 次</span>
+              <span class="last">今天 09:48</span>
+            </div>
+          </button>
+
+          <button class="acard" data-goto="editor">
+            <div class="acard-head">
+              <span class="acard-av av-sre">运</span>
+              <div style="flex:1;min-width:0">
+                <div class="acard-name">运维排障 <span class="tag tag-warning" style="height:18px"><span class="status-dot"></span>草稿</span></div>
+                <div class="acard-id">sre-triage</div>
+              </div>
+            </div>
+            <p class="acard-desc">拉取告警、日志与指标，按时间线定位故障根因，输出止血步骤与复盘要点。</p>
+            <div class="acard-tags">
+              <span class="tag tag-mono">claude-sonnet-5</span>
+              <span class="tag">effort medium</span>
+              <span class="tag">无子智能体</span>
+            </div>
+            <div class="acard-foot">
+              <span><svg class="i i-14"><use href="#i-wrench"/></svg>9 工具</span>
+              <span><svg class="i i-14"><use href="#i-chat"/></svg>412 次</span>
+              <span class="last">昨天</span>
+            </div>
+          </button>
+
+          <button class="acard" data-goto="editor">
+            <div class="acard-head">
+              <span class="acard-av av-doc">文</span>
+              <div style="flex:1;min-width:0">
+                <div class="acard-name">文档撰写 <span class="tag tag-success" style="height:18px"><span class="status-dot"></span>已启用</span></div>
+                <div class="acard-id">doc-writer</div>
+              </div>
+            </div>
+            <p class="acard-desc">从代码与接口定义生成中文文档，保持术语一致，输出 Markdown / OpenAPI。</p>
+            <div class="acard-tags">
+              <span class="tag tag-mono">claude-sonnet-5</span>
+              <span class="tag">effort medium</span>
+              <span class="tag">无子智能体</span>
+            </div>
+            <div class="acard-foot">
+              <span><svg class="i i-14"><use href="#i-wrench"/></svg>4 工具</span>
+              <span><svg class="i i-14"><use href="#i-chat"/></svg>988 次</span>
+              <span class="last">3 天前</span>
+            </div>
+          </button>
+
+          <button class="acard" data-goto="editor">
+            <div class="acard-head">
+              <span class="acard-av av-general">通</span>
+              <div style="flex:1;min-width:0">
+                <div class="acard-name">通用助手 <span class="tag" style="height:18px">内置</span></div>
+                <div class="acard-id">general</div>
+              </div>
+            </div>
+            <p class="acard-desc">系统默认智能体，不可删除。未指定智能体的会话会落到这里。</p>
+            <div class="acard-tags">
+              <span class="tag tag-mono">claude-sonnet-5</span>
+              <span class="tag">effort low</span>
+              <span class="tag">无子智能体</span>
+            </div>
+            <div class="acard-foot">
+              <span><svg class="i i-14"><use href="#i-wrench"/></svg>3 工具</span>
+              <span><svg class="i i-14"><use href="#i-chat"/></svg>455 次</span>
+              <span class="last">上周日</span>
+            </div>
+          </button>
+        </div>
+
+        <!-- 表格视图 -->
+        <div id="view-table" hidden>
+          <table class="tbl">
+            <thead><tr>
+              <th>名称</th><th>模型</th><th>工具</th><th>子智能体</th><th>调用量</th><th>状态</th><th>最后更新</th><th></th>
+            </tr></thead>
+            <tbody>
+              <tr data-goto="editor"><td><div class="cell-name"><span class="agent-av av-analyst">数</span><div><div>数据分析师</div><div class="acard-id">data-analyst</div></div></div></td>
+                <td><span class="tag tag-mono">claude-opus-5</span></td><td>6</td><td>1</td><td>3,204</td>
+                <td><span class="tag tag-success"><span class="status-dot"></span>已启用</span></td><td style="color:var(--fg-2)">2 小时前</td>
+                <td><button class="btn btn-sm btn-ghost btn-icon" aria-label="更多"><svg class="i i-14"><use href="#i-more"/></svg></button></td></tr>
+              <tr data-goto="editor"><td><div class="cell-name"><span class="agent-av av-review">审</span><div><div>代码审查员</div><div class="acard-id">code-reviewer</div></div></div></td>
+                <td><span class="tag tag-mono">claude-opus-5</span></td><td>8</td><td>2</td><td>5,912</td>
+                <td><span class="tag tag-success"><span class="status-dot"></span>已启用</span></td><td style="color:var(--fg-2)">今天 11:07</td>
+                <td><button class="btn btn-sm btn-ghost btn-icon" aria-label="更多"><svg class="i i-14"><use href="#i-more"/></svg></button></td></tr>
+              <tr data-goto="editor"><td><div class="cell-name"><span class="agent-av av-research">研</span><div><div>研究员</div><div class="acard-id">deep-researcher</div></div></div></td>
+                <td><span class="tag tag-mono">claude-opus-5</span></td><td>5</td><td>3</td><td>1,876</td>
+                <td><span class="tag tag-success"><span class="status-dot"></span>已启用</span></td><td style="color:var(--fg-2)">今天 09:48</td>
+                <td><button class="btn btn-sm btn-ghost btn-icon" aria-label="更多"><svg class="i i-14"><use href="#i-more"/></svg></button></td></tr>
+              <tr data-goto="editor"><td><div class="cell-name"><span class="agent-av av-sre">运</span><div><div>运维排障</div><div class="acard-id">sre-triage</div></div></div></td>
+                <td><span class="tag tag-mono">claude-sonnet-5</span></td><td>9</td><td>—</td><td>412</td>
+                <td><span class="tag tag-warning"><span class="status-dot"></span>草稿</span></td><td style="color:var(--fg-2)">昨天</td>
+                <td><button class="btn btn-sm btn-ghost btn-icon" aria-label="更多"><svg class="i i-14"><use href="#i-more"/></svg></button></td></tr>
+              <tr data-goto="editor"><td><div class="cell-name"><span class="agent-av av-doc">文</span><div><div>文档撰写</div><div class="acard-id">doc-writer</div></div></div></td>
+                <td><span class="tag tag-mono">claude-sonnet-5</span></td><td>4</td><td>—</td><td>988</td>
+                <td><span class="tag tag-success"><span class="status-dot"></span>已启用</span></td><td style="color:var(--fg-2)">3 天前</td>
+                <td><button class="btn btn-sm btn-ghost btn-icon" aria-label="更多"><svg class="i i-14"><use href="#i-more"/></svg></button></td></tr>
+              <tr data-goto="editor"><td><div class="cell-name"><span class="agent-av av-general">通</span><div><div>通用助手</div><div class="acard-id">general</div></div></div></td>
+                <td><span class="tag tag-mono">claude-sonnet-5</span></td><td>3</td><td>—</td><td>455</td>
+                <td><span class="tag">内置</span></td><td style="color:var(--fg-2)">上周日</td>
+                <td><button class="btn btn-sm btn-ghost btn-icon" aria-label="更多"><svg class="i i-14"><use href="#i-more"/></svg></button></td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- 空态（搜索无结果时切换到这里） -->
+        <div class="empty" id="agents-empty" hidden>
+          <div class="ring"><svg class="i i-20"><use href="#i-bot"/></svg></div>
+          <h3>没有匹配的智能体</h3>
+          <p>换个关键词，或直接新建一个。</p>
+          <button class="btn btn-primary btn-sm" data-goto="editor"><svg class="i i-14"><use href="#i-plus"/></svg>新建智能体</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==========================================================
+       屏幕 3 · 智能体编辑器
+       ========================================================== -->
+  <div class="screen" id="s-editor">
+    <div class="editor">
+      <div class="editor-main">
+
+        <header class="editor-bar">
+          <button class="btn btn-sm btn-ghost btn-icon" data-goto="agents" aria-label="返回列表">
+            <svg class="i i-14"><use href="#i-left"/></svg>
+          </button>
+          <div class="crumb">
+            <button data-goto="agents" style="color:var(--fg-2)">智能体</button>
+            <span class="sep">/</span>
+            <b>数据分析师</b>
+            <span class="tag tag-mono">data-analyst</span>
+            <span class="tag tag-success"><span class="status-dot"></span>已启用</span>
+          </div>
+          <div class="right">
+            <span class="unsaved"><svg class="i i-14"><use href="#i-warn"/></svg>有未保存的修改</span>
+            <button class="btn btn-sm">放弃</button>
+            <button class="btn btn-sm btn-primary"><svg class="i i-14"><use href="#i-check"/></svg>保存</button>
+          </div>
+        </header>
+
+        <div class="editor-scroll">
+          <nav class="anchors" aria-label="表单分区">
+            <button class="anchor" aria-current="true">基础信息</button>
+            <button class="anchor">指令 Prompt</button>
+            <button class="anchor">模型与采样</button>
+            <button class="anchor">工具</button>
+            <button class="anchor">子智能体</button>
+            <button class="anchor">运行限制</button>
+            <button class="anchor">危险操作</button>
+          </nav>
+
+          <div class="form">
+
+            <!-- 基础信息 -->
+            <section class="card">
+              <h2 class="card-title">基础信息</h2>
+              <p class="card-sub">名称与标识用于在对话中选择、在 API 中引用。</p>
+              <div class="row2">
+                <div class="field">
+                  <label class="label" for="f-name">名称 <span class="req">*</span></label>
+                  <input class="input" id="f-name" value="数据分析师">
+                </div>
+                <div class="field">
+                  <label class="label" for="f-slug">标识 <span class="req">*</span></label>
+                  <input class="input" id="f-slug" value="data-analyst" style="font-family:var(--mono);font-size:12.5px">
+                  <div class="help">创建后不可修改，用于 <code style="font-family:var(--mono)">POST /v1/threads</code> 的 <code style="font-family:var(--mono)">agent</code> 字段。</div>
+                </div>
+              </div>
+              <div class="field">
+                <label class="label" for="f-desc">描述</label>
+                <textarea class="textarea" id="f-desc" rows="2">连接数仓执行 SQL，做归因、拆解与趋势分析，产出带图表的结论报告。</textarea>
+                <div class="help">会展示在智能体选择器里，写清"什么时候该用它"比写功能更有用。</div>
+              </div>
+              <div class="field">
+                <label class="label">图标与主色</label>
+                <div style="display:flex;gap:var(--s-3);align-items:center">
+                  <span class="acard-av av-analyst">数</span>
+                  <span class="acard-av av-review" style="opacity:.45">审</span>
+                  <span class="acard-av av-research" style="opacity:.45">研</span>
+                  <span class="acard-av av-sre" style="opacity:.45">运</span>
+                  <span class="acard-av av-doc" style="opacity:.45">文</span>
+                  <span class="acard-av av-general" style="opacity:.45">通</span>
+                </div>
+              </div>
+            </section>
+
+            <!-- 指令 -->
+            <section class="card">
+              <h2 class="card-title">指令 Prompt</h2>
+              <p class="card-sub">拼接为 deepagents 的 system prompt，置于内置的 planning / filesystem 指令之后。</p>
+              <div class="field">
+                <label class="label" for="f-prompt">System Prompt <span class="req">*</span><span class="counter">1,284 / 20,000</span></label>
+                <textarea class="textarea" id="f-prompt" rows="12" style="font-family:var(--mono);font-size:12.5px;line-height:1.7">你是一名资深数据分析师，服务于产品与增长团队。
+
+## 工作方式
+1. 先用 write_todos 拆解任务，再执行；每完成一步立即更新状态。
+2. 任何结论都必须有 SQL 或数据来源支撑，禁止凭经验断言。
+3. 数据口径存疑时，先查元数据表确认，不要猜。
+4. 需要外部行业基准时，委派 research-agent，不要自己去搜。
+
+## 输出规范
+- 结论先行，再给拆解过程。
+- 涉及对比必须给绝对值 + 变化量 + 贡献度三列。
+- 遇到权限不足、采样、口径不一致等影响置信度的问题，
+  必须在报告中显式标注，不要静默降级。
+
+## 禁止
+- 不得执行 UPDATE / DELETE / DROP。
+- 不得访问 dw_user_pii_* 开头的任何表。</textarea>
+                <div class="help">支持 <code style="font-family:var(--mono)">{{workspace_name}}</code>、<code style="font-family:var(--mono)">{{today}}</code>、<code style="font-family:var(--mono)">{{user_name}}</code> 变量。</div>
+              </div>
+            </section>
+
+            <!-- 模型 -->
+            <section class="card">
+              <h2 class="card-title">模型与采样</h2>
+              <p class="card-sub">经 litellm 网关调用，模型列表来自网关的 <code style="font-family:var(--mono)">/model/info</code>。</p>
+              <div class="row2">
+                <div class="field">
+                  <label class="label" for="f-model">模型 <span class="req">*</span></label>
+                  <select class="select" id="f-model">
+                    <option>claude-opus-5</option>
+                    <option>claude-sonnet-5</option>
+                    <option>claude-haiku-4-5</option>
+                  </select>
+                  <div class="help">上下文 1M · 最大输出 128k · 支持 adaptive thinking · prompt 缓存 512 tokens 起</div>
+                </div>
+                <div class="field">
+                  <label class="label" for="f-max">最大输出 tokens</label>
+                  <input class="input" id="f-max" value="16384">
+                </div>
+              </div>
+              <div class="field">
+                <label class="label">思考强度 effort</label>
+                <div class="seg" role="tablist" aria-label="思考强度" id="f-effort">
+                  <button role="tab" aria-selected="false">low</button>
+                  <button role="tab" aria-selected="false">medium</button>
+                  <button role="tab" aria-selected="true">high</button>
+                  <button role="tab" aria-selected="false">xhigh</button>
+                  <button role="tab" aria-selected="false">max</button>
+                </div>
+                <div class="help">
+                  取代 temperature 作为主要控制项：当前模型不接受 temperature（传了会 400）。
+                  编码/agent 类任务建议 xhigh，常规任务 high，低时延场景 low。
+                </div>
+              </div>
+              <div class="row2">
+                <div class="field">
+                  <label class="label">思考模式</label>
+                  <select class="select"><option>自动（按模型能力）</option><option>adaptive</option><option>关闭</option></select>
+                </div>
+                <div class="field">
+                  <label class="label">Prompt 缓存</label>
+                  <select class="select"><option>开启（缓存 system + 工具定义）</option><option>关闭</option></select>
+                </div>
+              </div>
+            </section>
+
+            <!-- 工具 -->
+            <section class="card">
+              <h2 class="card-title">工具 <span class="tag tag-primary">已启用 6</span></h2>
+              <p class="card-sub">内置工具由 engine 提供；MCP 工具在「设置 → 集成」中接入后出现在这里。</p>
+
+              <p class="insp-section" style="margin-top:0">内置</p>
+              <div class="switch-row">
+                <div class="txt"><div class="n">待办清单 <code>write_todos</code></div><div class="d">deepagents 计划能力，强烈建议开启</div></div>
+                <button class="switch" role="switch" aria-checked="true" aria-label="待办清单"></button>
+              </div>
+              <div class="switch-row">
+                <div class="txt"><div class="n">虚拟文件系统 <code>read_file / write_file / ls</code></div><div class="d">中间产物落盘，避免长上下文重复携带</div></div>
+                <button class="switch" role="switch" aria-checked="true" aria-label="虚拟文件系统"></button>
+              </div>
+              <div class="switch-row">
+                <div class="txt"><div class="n">网页搜索 <code>web_search</code></div><div class="d">本智能体不直接搜索，交由子智能体</div></div>
+                <button class="switch" role="switch" aria-checked="false" aria-label="网页搜索"></button>
+              </div>
+              <div class="switch-row" style="opacity:.55">
+                <div class="txt"><div class="n">Shell <code>bash</code> <span class="tag">即将支持</span></div><div class="d">需容器沙箱隔离，本期未开放</div></div>
+                <button class="switch" role="switch" aria-checked="false" aria-label="Shell（暂未开放）" disabled style="cursor:not-allowed"></button>
+              </div>
+
+              <p class="insp-section">MCP 集成</p>
+              <div class="switch-row">
+                <div class="txt"><div class="n">数仓查询 <code>mcp__warehouse__sql_query</code></div><div class="d">只读账号 · 单次上限 10 万行</div></div>
+                <button class="switch" role="switch" aria-checked="true" aria-label="数仓查询"></button>
+              </div>
+              <div class="switch-row">
+                <div class="txt"><div class="n">图表渲染 <code>mcp__charts__render</code></div><div class="d">返回 PNG / SVG，可嵌入报告</div></div>
+                <button class="switch" role="switch" aria-checked="true" aria-label="图表渲染"></button>
+              </div>
+            </section>
+
+            <!-- 子智能体 -->
+            <section class="card">
+              <h2 class="card-title">子智能体</h2>
+              <p class="card-sub">主智能体通过 <code style="font-family:var(--mono)">task</code> 工具委派。子智能体拥有独立上下文，只把结论回传，用来隔离长过程的上下文膨胀。</p>
+              <div class="sub-item">
+                <span class="agent-av av-research">研</span>
+                <div class="txt">
+                  <div class="n">research-agent</div>
+                  <div class="d">检索行业基准与外部资料，强制标注来源</div>
+                </div>
+                <span class="tag tag-mono">sonnet-5</span>
+                <button class="btn btn-sm btn-ghost btn-icon" aria-label="编辑 research-agent"><svg class="i i-14"><use href="#i-cog"/></svg></button>
+                <button class="btn btn-sm btn-ghost btn-icon btn-danger" aria-label="移除 research-agent"><svg class="i i-14"><use href="#i-trash"/></svg></button>
+              </div>
+              <button class="dashed"><svg class="i i-14"><use href="#i-plus"/></svg>添加子智能体</button>
+            </section>
+
+            <!-- 运行限制 -->
+            <section class="card">
+              <h2 class="card-title">运行限制</h2>
+              <p class="card-sub">防止 agent 进入死循环或过度消耗，任一条触发即中断本轮并向用户报告。</p>
+              <div class="row3">
+                <div class="field">
+                  <label class="label">最大步数</label>
+                  <input class="input" value="40">
+                </div>
+                <div class="field">
+                  <label class="label">单轮超时</label>
+                  <input class="input" value="300s">
+                </div>
+                <div class="field">
+                  <label class="label">单轮 token 上限</label>
+                  <input class="input" value="500000">
+                </div>
+              </div>
+              <div class="row2">
+                <div class="field">
+                  <label class="label">子智能体递归深度</label>
+                  <input class="input" value="2">
+                  <div class="help">超过 2 层几乎必然导致结论失真，不建议调高。</div>
+                </div>
+                <div class="field">
+                  <label class="label">工具并发</label>
+                  <input class="input" value="4">
+                </div>
+              </div>
+              <div class="switch-row" style="border-top:1px solid var(--line);margin-top:var(--s-3)">
+                <div class="txt"><div class="n">高风险工具需人工确认</div><div class="d">bash、写库类工具在执行前弹出确认</div></div>
+                <button class="switch" role="switch" aria-checked="true" aria-label="高风险工具需人工确认"></button>
+              </div>
+            </section>
+
+            <!-- 危险操作 -->
+            <section class="card" style="border-color:rgba(239,68,68,.35)">
+              <h2 class="card-title" style="color:var(--danger)"><svg class="i i-14"><use href="#i-warn"/></svg>危险操作</h2>
+              <p class="card-sub">删除后关联的 1,204 条会话将保留但无法继续，此操作不可撤销。</p>
+              <button class="btn btn-sm btn-danger"><svg class="i i-14"><use href="#i-trash"/></svg>删除该智能体</button>
+            </section>
+
+          </div>
+        </div>
+      </div>
+
+      <!-- 试跑面板 -->
+      <aside class="pane testpane" aria-label="试跑">
+        <header class="pane-head">
+          <svg class="i i-14" style="color:var(--primary-text)"><use href="#i-play"/></svg>
+          <span class="pane-title">试跑</span>
+          <span class="tag tag-warning" style="margin-left:auto">草稿配置</span>
+          <button class="btn btn-sm btn-ghost btn-icon" aria-label="清空"><svg class="i i-14"><use href="#i-x"/></svg></button>
+        </header>
+        <div class="test-body">
+          <div class="tmsg u">上个月新增用户里 Android 占比多少？</div>
+
+          <div>
+            <div class="msg-head" style="margin-bottom:6px">
+              <span class="agent-av av-analyst" style="width:18px;height:18px;border-radius:5px;font-size:9px">数</span>
+              <span class="msg-name" style="font-size:12px">数据分析师</span>
+              <div class="msg-meta"><span>2 步 · 3.4s</span></div>
+            </div>
+            <div class="todo-card" style="padding:9px;margin-bottom:8px">
+              <div class="todo done"><span class="todo-mark"></span><span class="todo-text" style="font-size:12px">确认新增用户口径</span></div>
+              <div class="todo done"><span class="todo-mark"></span><span class="todo-text" style="font-size:12px">按平台聚合上月新增</span></div>
+            </div>
+            <details class="tool"><summary>
+              <svg class="i i-14 caret"><use href="#i-right"/></svg>
+              <span class="status-dot" style="color:var(--success)"></span>
+              <span class="tool-name">sql_query</span><span class="tool-arg">dw_user_new</span><span class="tool-cost">0.9s</span>
+            </summary><div class="tool-body"><pre class="code">android 61.3% / ios 36.1% / other 2.6%</pre></div></details>
+            <div class="tmsg a" style="margin-top:8px">
+              2026 年 7 月新增 <strong>218,406</strong> 人，其中 Android <strong>61.3%</strong>（133,843），iOS 36.1%，其他 2.6%。
+              口径：以设备首次激活日计，已剔除内部测试账号。
+            </div>
+          </div>
+
+          <div style="font-size:11.5px;color:var(--fg-3);text-align:center;padding-top:var(--s-3);border-top:1px dashed var(--line)">
+            试跑使用当前未保存的草稿配置，不写入会话历史
+          </div>
+        </div>
+        <div class="test-foot">
+          <div class="composer-inner">
+            <textarea rows="1" placeholder="输入测试问题…" style="padding:8px 11px 2px;font-size:13px"></textarea>
+            <div class="composer-bar" style="padding:3px 6px 5px 8px">
+              <span class="hint">草稿 · 未保存</span>
+              <span class="grow"></span>
+              <button class="send" style="width:24px;height:24px" aria-label="运行"><svg class="i i-14"><use href="#i-play"/></svg></button>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+</div>
+
+<script>
+(function(){
+  'use strict';
+  var SCREENS = ['chat','agents','editor'];
+
+  function show(name){
+    if(SCREENS.indexOf(name) < 0) name = 'chat';
+    SCREENS.forEach(function(s){
+      document.getElementById('s-'+s).classList.toggle('on', s === name);
+    });
+    document.querySelectorAll('.proto .seg [data-screen]').forEach(function(b){
+      b.setAttribute('aria-selected', String(b.dataset.screen === name));
+    });
+    // rail：编辑器归属「智能体」
+    var railActive = (name === 'editor') ? 'agents' : name;
+    document.querySelectorAll('.rail-item').forEach(function(b){
+      if(b.dataset.screen === railActive) b.setAttribute('aria-current','page');
+      else b.removeAttribute('aria-current');
+    });
+    if(location.hash.slice(1) !== name) location.hash = name;  // 深链接
+    document.title = 'Atlas 原型 · ' + ({chat:'对话工作台',agents:'智能体列表',editor:'智能体编辑器'})[name];
+  }
+
+  document.addEventListener('click', function(e){
+    var t = e.target.closest('[data-screen],[data-goto]');
+    if(!t) return;
+    var target = t.dataset.goto || t.dataset.screen;
+    if(target === 'settings') return;             // 原型未实现
+    if(SCREENS.indexOf(target) >= 0){ e.preventDefault(); show(target); }
+  });
+
+  window.addEventListener('hashchange', function(){ show(location.hash.slice(1)); });
+
+  document.addEventListener('keydown', function(e){
+    if(e.metaKey || e.ctrlKey || e.altKey) return;
+    if(/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)) return;
+    if(e.key >= '1' && e.key <= '3') show(SCREENS[+e.key - 1]);
+  });
+
+  // Inspector tabs
+  document.querySelectorAll('.tab[data-tab]').forEach(function(tab){
+    tab.addEventListener('click', function(){
+      document.querySelectorAll('.tab[data-tab]').forEach(function(t){ t.setAttribute('aria-selected','false'); });
+      tab.setAttribute('aria-selected','true');
+      document.querySelectorAll('.tabpanel').forEach(function(p){ p.classList.remove('on'); });
+      document.getElementById('tab-' + tab.dataset.tab).classList.add('on');
+    });
+  });
+
+  // 窄屏 Inspector 抽屉
+  var insp = document.getElementById('inspector');
+  var tog  = document.getElementById('toggle-inspector');
+  if(tog) tog.addEventListener('click', function(){ insp.hidden = !insp.hidden; });
+
+  // 列表视图切换
+  var seg = document.getElementById('view-seg');
+  if(seg) seg.addEventListener('click', function(e){
+    var b = e.target.closest('[data-view]'); if(!b) return;
+    seg.querySelectorAll('[data-view]').forEach(function(x){ x.setAttribute('aria-selected', String(x === b)); });
+    document.getElementById('view-grid').hidden  = b.dataset.view !== 'grid';
+    document.getElementById('view-table').hidden = b.dataset.view !== 'table';
+  });
+
+  // 通用 seg（筛选）
+  document.querySelectorAll('.filter-row .seg:not(#view-seg)').forEach(function(s){
+    s.addEventListener('click', function(e){
+      var b = e.target.closest('button'); if(!b) return;
+      s.querySelectorAll('button').forEach(function(x){ x.setAttribute('aria-selected', String(x === b)); });
+    });
+  });
+
+  // 开关
+  document.querySelectorAll('.switch').forEach(function(sw){
+    sw.addEventListener('click', function(){
+      sw.setAttribute('aria-checked', sw.getAttribute('aria-checked') === 'true' ? 'false' : 'true');
+    });
+  });
+
+  // temperature
+  var effortSeg = document.getElementById('f-effort');
+  if(effortSeg) effortSeg.addEventListener('click', function(e){
+    var b = e.target.closest('button'); if(!b) return;
+    effortSeg.querySelectorAll('button').forEach(function(x){
+      x.setAttribute('aria-selected', String(x === b));
+    });
+  });
+
+  // 表单锚点高亮
+  document.querySelectorAll('.anchor').forEach(function(a, i){
+    a.addEventListener('click', function(){
+      document.querySelectorAll('.anchor').forEach(function(x){ x.removeAttribute('aria-current'); });
+      a.setAttribute('aria-current','true');
+      var card = document.querySelectorAll('.form .card')[i];
+      if(card) card.scrollIntoView({behavior:'smooth', block:'start'});
+    });
+  });
+
+  // textarea 自适应高度
+  document.querySelectorAll('.composer textarea').forEach(function(ta){
+    ta.addEventListener('input', function(){
+      ta.style.height = 'auto';
+      ta.style.height = Math.min(ta.scrollHeight, 180) + 'px';
+    });
+  });
+
+  show(location.hash.slice(1) || 'chat');
+})();
+</script>
+</body>
+</html>

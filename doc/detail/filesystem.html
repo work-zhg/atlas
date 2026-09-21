@@ -1,0 +1,799 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>文件系统与沙箱改造 · AI Platform</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  .tree{background:var(--card);border:1px solid var(--border-soft);border-radius:var(--radius);
+        padding:var(--s3);overflow-x:auto;margin:0 0 var(--s3);font-family:var(--mono);
+        font-size:12.5px;line-height:1.75;white-space:pre;color:#CBD5E1}
+  .tree b{color:#F8FAFC;font-weight:600}
+  .tree i{color:#7A88A0;font-style:normal}
+  .tree s{color:#7DD3FC;text-decoration:none}
+  .tree u{color:#FDE68A;text-decoration:none}
+  .tag{font-family:var(--mono);font-size:10.5px;padding:1px 7px;border-radius:99px;border:1px solid;white-space:nowrap}
+  .tag.new{color:var(--warn);border-color:rgba(245,158,11,.45)}
+  .tag.del{color:var(--danger);border-color:rgba(239,68,68,.45)}
+  .tag.mod{color:var(--native);border-color:rgba(56,189,248,.45)}
+  .tag.keep{color:var(--accent);border-color:rgba(34,197,94,.45)}
+  .step{border-left:2px solid var(--border);padding-left:var(--s3);margin:var(--s4) 0}
+  .step h4{margin-top:0;color:var(--accent);font-family:var(--mono);font-size:12px;letter-spacing:.1em}
+</style>
+</head>
+<body>
+
+<nav class="sitenav">
+  <a class="brand" href="../">AI&nbsp;<b>Platform</b>&nbsp;/ 详细设计</a>
+  <div class="links">
+    <a href="../">概要设计</a>
+    <a href="./">详设目录</a>
+    <a href="native.html">native Agent</a>
+    <a href="structure.html">目录与包结构</a>
+    <a href="kernel.html">kernel 分析</a>
+    <a class="on" href="filesystem.html">文件系统改造</a>
+    <a href="subagent.html">Subagent 重设计</a>
+    <a href="acp.html">acp Agent</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+<nav class="toc" aria-label="目录">
+  <div class="eyebrow">本页</div>
+  <ol>
+    <li><a href="#s1">改动的实质</a></li>
+    <li><a href="#s2">协议层：两个并列协议</a></li>
+    <li><a href="#s3">OssFilesystem</a></li>
+    <li><a href="#s4">search 的能力边界</a></li>
+    <li><a href="#s5">挂载：FUSE 必须在沙箱外</a></li>
+    <li><a href="#s6">一致性：两个写入方</a></li>
+    <li><a href="#s7">SandboxMiddleware</a></li>
+    <li><a href="#s8">技能：随会话拷贝</a></li>
+    <li><a href="#s9">SkillsMiddleware：从扫描到清单</a></li>
+    <li><a href="#s10">提示词分工</a></li>
+    <li><a href="#s11">移除 dry-run</a></li>
+    <li><a href="#s12">逐文件改动清单</a></li>
+    <li><a href="#s13">落地顺序</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<header class="hero">
+  <p class="kicker">Detailed Design · Filesystem</p>
+  <h1>文件系统与沙箱改造</h1>
+  <p class="lede">把 <code>middleware/filesystem</code> 拆成 <b>filesystem</b> 与 <b>sandbox</b> 两个中间件，协议层同步拆成两个<b>并列</b>的 Protocol。更实质的变化是：文件系统的事实源<b>从容器内盘换成 OSS</b>，会话工作区经 FUSE 挂进沙箱的 <code>/workspace</code>。<b>技能随之并入同一条投送路径</b> —— 会话创建时拷进与工作区<b>平级</b>的 <code>skills/</code> 前缀，读走 filesystem，执行走 sandbox。</p>
+  <div class="meta">
+    <span>挂载方案 A · FUSE</span><span>技能随会话拷贝</span><span>移除 dry-run</span><span>kernel 净减 ~8000 行</span>
+  </div>
+</header>
+
+<!-- ══════════════ 1 ══ -->
+<section id="s1">
+  <h2><span class="num">01</span>改动的实质</h2>
+
+  <table>
+    <thead><tr><th style="width:120px"></th><th>现在</th><th>改造后</th></tr></thead>
+    <tbody>
+      <tr><td><b>无沙箱</b></td><td><code>StateBackend</code> —— 文件在 graph state 里，run 结束消失</td><td><code>OssFilesystem</code> —— 真实持久化</td></tr>
+      <tr><td><b>有沙箱</b></td><td><code>DockerSandbox</code> —— 文件工具全部委托 <code>execute()</code>，每次一个 <code>docker exec</code></td><td><code>OssFilesystem</code> 直连 OSS；沙箱只负责跑命令</td></tr>
+      <tr><td><b>工作区</b></td><td>docker volume，与容器绑定</td><td>OSS 前缀，<b>容器回收后仍在</b></td></tr>
+      <tr><td><b>技能</b></td><td>未接入（kernel 有能力，atlas 没用）</td><td>会话创建时拷进 <code>{user}/{thread}/skills/</code>，与工作区平级</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout rule">
+    <span class="label">三个连带收益</span>
+    <ul style="margin-bottom:0">
+      <li><b>没配 bash 的 agent 也有真实文件。</b>现在它们只有 run 级的 state 文件，跨轮都留不住。</li>
+      <li><b><code>docker exec</code> 热路径消失。</b><a href="kernel.html#s3">kernel 分析 §03</a> 指出 <code>ls</code>/<code>read</code>/<code>grep</code>/<code>glob</code> 每次都是一个 exec，换 K8s 后代价升一个量级 —— 现在它们根本不经过容器。</li>
+      <li><b>冷会话恢复有了地基。</b>概要设计里「环境已回收，工作区仍在 OSS」从此是事实而非承诺。</li>
+      <li><b>技能投送不再需要第二条路。</b>见 <a href="#s8">§08</a> —— <code>SkillMaterializer</code>、<code>CompositeBackend</code> 路由、双路分叉全部不需要。</li>
+    </ul>
+  </div>
+
+  <h3>代价要说在前面</h3>
+  <p>OSS 不是文件系统。<code>edit_file</code> 变成 read-modify-write（无法原地改），没有原子 rename，删目录要先列举再批量删，而 FUSE 挂载为了保证可见性必须关掉缓存 —— <b>容器内的文件读取会变慢</b>。详见 <a href="#s6">§06</a>。</p>
+</section>
+
+<!-- ══════════════ 2 ══ -->
+<section id="s2">
+  <h2><span class="num">02</span>协议层：两个并列协议</h2>
+
+  <p>现在是 <code>SandboxBackendProtocol(BackendProtocol)</code> —— <b>继承</b>，所以「沙箱」在类型上必须同时是「文件系统」。拆开后并列：</p>
+
+  <pre><code><span class="tok-c"># kernel/backends/filesystem_protocol.py</span>
+
+<span class="tok-k">class</span> <span class="tok-t">FilesystemProtocol</span>(Protocol):
+    <span class="tok-s">"""只做 OSS 能做的事。路径一律相对会话工作区根。
+
+    ★ 没有 grep：对象存储不支持内容检索。内容搜索归 execute。
+    ★ 没有 ls/glob：统一成 search（前缀 + 可选文件名 glob）。
+    """</span>
+    <span class="tok-k">def</span> <span class="tok-f">read</span>(<span class="tok-k">self</span>, path: <span class="tok-t">str</span>, offset: <span class="tok-t">int</span> = <span class="tok-n">0</span>, limit: <span class="tok-t">int</span> = <span class="tok-n">2000</span>) -> ReadResult: ...
+    <span class="tok-k">def</span> <span class="tok-f">write</span>(<span class="tok-k">self</span>, path: <span class="tok-t">str</span>, content: <span class="tok-t">str</span> | <span class="tok-t">bytes</span>) -> WriteResult: ...
+    <span class="tok-k">def</span> <span class="tok-f">edit</span>(<span class="tok-k">self</span>, path: <span class="tok-t">str</span>, old: <span class="tok-t">str</span>, new: <span class="tok-t">str</span>, *,
+             replace_all: <span class="tok-t">bool</span> = <span class="tok-k">False</span>) -> EditResult: ...
+    <span class="tok-k">def</span> <span class="tok-f">delete</span>(<span class="tok-k">self</span>, path: <span class="tok-t">str</span>, *, recursive: <span class="tok-t">bool</span> = <span class="tok-k">False</span>) -> DeleteResult: ...
+    <span class="tok-k">def</span> <span class="tok-f">search</span>(<span class="tok-k">self</span>, prefix: <span class="tok-t">str</span>, *, pattern: <span class="tok-t">str</span> | <span class="tok-k">None</span> = <span class="tok-k">None</span>,
+               max_keys: <span class="tok-t">int</span> = <span class="tok-n">1000</span>) -> SearchResult: ...
+    <span class="tok-c"># 各配一个 a* 异步版，共 10 个方法</span>
+
+
+<span class="tok-c"># kernel/backends/sandbox_protocol.py</span>
+
+<span class="tok-k">class</span> <span class="tok-t">SandboxProtocol</span>(Protocol):
+    <span class="tok-s">"""只负责「在隔离环境里跑一条命令」。不提供任何文件操作。"""</span>
+    <span class="tok-d">@property</span>
+    <span class="tok-k">def</span> <span class="tok-f">id</span>(<span class="tok-k">self</span>) -> <span class="tok-t">str</span>: ...
+    <span class="tok-k">def</span> <span class="tok-f">execute</span>(<span class="tok-k">self</span>, command: <span class="tok-t">str</span>, *, timeout: <span class="tok-t">int</span> | <span class="tok-k">None</span> = <span class="tok-k">None</span>,
+                cwd: <span class="tok-t">str</span> | <span class="tok-k">None</span> = <span class="tok-k">None</span>) -> ExecuteResponse: ...
+    <span class="tok-k">async</span> <span class="tok-k">def</span> <span class="tok-f">aexecute</span>(<span class="tok-k">self</span>, ...) -> ExecuteResponse: ...</code></pre>
+
+  <div class="callout rule">
+    <span class="label">并列换来的最大收益</span>
+    <p><code>BaseSandbox</code> 那 1824 行里，有 13 个方法是「用 <code>execute()</code> 实现 ls/read/write/edit/delete/grep/glob 及其异步版」的委托代码 —— <code>read</code> 是往沙箱塞一段 Python 脚本跑，<code>ls</code> 是 <code>os.scandir</code> 脚本。<b>全部删掉</b>，只剩 <code>execute</code> / <code>aexecute</code> / <code>execute_with_offload</code> / <code>id</code>。估计 1824 → 约 300 行。</p>
+  </div>
+
+  <h3>结果类型跟着精简</h3>
+  <pre><code>保留   ReadResult · WriteResult · EditResult · DeleteResult · ExecuteResponse
+       ExecuteArtifact · ExecuteOffloadResult
+新增   SearchResult
+删除   LsResult · FileInfo · GlobResult · GrepResult · GrepMatch · ContextLine
+       FileData · FileUploadResponse · FileDownloadResponse *
+
+* upload/download 不再是协议的一部分：它们存在是为了让 BaseSandbox 的
+  文件操作能把内容搬进搬出容器。文件操作没了，它们也就没了消费者。
+  （沙箱内的文件出入现在由 FUSE 挂载承担。）</code></pre>
+</section>
+
+<!-- ══════════════ 3 ══ -->
+<section id="s3">
+  <h2><span class="num">03</span>OssFilesystem</h2>
+
+  <h3>Key 布局</h3>
+  <pre><code>{bucket}/{user_id}/{thread_id}/workspace/   <span class="tok-c">← 工作区。★ 可被子智能体<b>共享挂载</b></span>
+{bucket}/{user_id}/{thread_id}/skills/      <span class="tok-c">← 会话的技能副本。<b>与 workspace 平级</b></span>
+{bucket}/{user_id}/{thread_id}/system/      <span class="tok-c">← 压缩归档、大结果外置</span>
+
+{bucket}/_skills/{slug}/{version}/          <span class="tok-c">← 技能源仓库（全局只读，配置平面发布）</span></code></pre>
+
+  <div class="callout rule">
+    <span class="label">★ 技能与工作区平级，不在 workspace 之内</span>
+    <p><b>因为 workspace 是共享挂载的。</b>子智能体的 Pod 挂的是<b>主 agent 的</b> workspace（见 <a href="subagent.html#s3">Subagent 设计 §03</a>）—— 技能若住在 workspace 里，子智能体挂载时会连主 agent 的技能一起带上，而它应该有自己的一套。</p>
+    <p>平级之后三件事同时成立：挂 workspace 带不上技能、各自的技能互相看不见、<code>search("")</code> 不用靠点前缀过滤就已经列不到技能文件。</p>
+  </div>
+
+  <p>系统区同理：压缩产生的历史归档、外置的大工具结果放在兄弟目录，模型 <code>search</code> 时不会被它们淹没并当成自己的产物 —— 不是靠过滤，是<b>不在前缀内</b>。</p>
+
+  <h3>三个前缀，三个独立的来源</h3>
+  <table>
+    <thead><tr><th style="width:110px">前缀</th><th style="width:170px">thread_id 取自</th><th>为什么</th></tr></thead>
+    <tbody>
+      <tr><td><code>workspace/</code></td><td><b>可配置</b> —— 主 agent 用自己的，子智能体用<b>父的</b></td><td>委派常常就是「帮我处理这批文件」，产物要能互相看见</td></tr>
+      <tr><td><code>skills/</code></td><td>恒为<b>自己的</b></td><td>技能是能力配置，跟 agent 走</td></tr>
+      <tr><td><code>system/</code></td><td>恒为<b>自己的</b></td><td>压缩归档属于自己的上下文历史</td></tr>
+    </tbody>
+  </table>
+
+  <pre><code><span class="tok-c"># 主 agent（thread A）</span>
+workspace → {user}/{A}/workspace     skills → {user}/{A}/skills
+
+<span class="tok-c"># 子智能体 coder（子会话 thread B，父是 A）</span>
+workspace → {user}/<b>{A}</b>/workspace     <span class="tok-c">← 父的</span>
+skills    → {user}/<b>{B}</b>/skills        <span class="tok-c">← 自己的</span></code></pre>
+
+  <h3>session_id 不进 engine</h3>
+  <p>server 构造实例时闭包进去，与现有的 <code>SandboxManager.acquire(thread_id)</code> 同一手法。engine 只看到一个 <code>FilesystemProtocol</code>，不知道会话的存在 —— 分层不动，<code>runner.run()</code> 的签名也不动。</p>
+
+  <pre><code><span class="tok-c"># server/src/atlas_server/providers/filesystem/oss.py</span>
+
+<span class="tok-k">class</span> <span class="tok-t">OssFilesystem</span>(FilesystemProtocol):
+    <span class="tok-k">def</span> <span class="tok-f">__init__</span>(<span class="tok-k">self</span>, client: OssClient, *, root: <span class="tok-t">str</span>, session_id: UUID) -> <span class="tok-k">None</span>:
+        <span class="tok-k">self</span>._client = client
+        base = <span class="tok-s">f"{user_id}/{thread_id}"</span>
+        <span class="tok-c">#: ★ 工作区可以是**别人的** —— 子智能体挂父会话的工作区。</span>
+        ws_base = <span class="tok-s">f"{user_id}/{workspace_thread_id or thread_id}"</span>
+        <span class="tok-k">self</span>._ws = <span class="tok-s">f"{ws_base}/workspace"</span>
+        <span class="tok-c">#: 技能与系统区恒为自己的 —— 与 workspace **平级**，不在它之内，</span>
+        <span class="tok-c">#  所以挂载 workspace 带不上它们。</span>
+        <span class="tok-k">self</span>._skills = <span class="tok-s">f"{base}/skills"</span>
+        <span class="tok-k">self</span>._sys = <span class="tok-s">f"{base}/system"</span>
+
+    <span class="tok-k">def</span> <span class="tok-f">_to_key</span>(<span class="tok-k">self</span>, path: <span class="tok-t">str</span>) -> <span class="tok-t">str</span>:
+        <span class="tok-s">"""★ 本类唯一的安全关键点：路径不得逃出所属前缀。
+
+        规范化必须在拼前缀**之前**做 —— 先拼后归一的话，
+        `../../other-thread/x` 会归一成另一个会话的真实 key。
+        路径里现在有 user 段，这一条同时挡住跨用户。
+
+        ★ `/skills/**` 路由到**自己的** skills 前缀，其余落 workspace。
+          两者是平级的兄弟目录，所以这里只是一次前缀选择 ——
+          不需要 CompositeBackend 那种通用路由（它已随旧协议一起删除）。
+        """</span>
+        norm = posixpath.normpath(posixpath.join(<span class="tok-s">"/"</span>, path))
+        <span class="tok-k">if</span> norm <span class="tok-k">in</span> (<span class="tok-s">"/"</span>, <span class="tok-s">"."</span>) <span class="tok-k">or</span> <span class="tok-k">not</span> norm.startswith(<span class="tok-s">"/"</span>):
+            <span class="tok-k">raise</span> PathEscape(path)
+        <span class="tok-k">if</span> norm == <span class="tok-s">"/skills"</span> <span class="tok-k">or</span> norm.startswith(<span class="tok-s">"/skills/"</span>):
+            <span class="tok-k">return</span> <span class="tok-s">f"{self._skills}{norm[len('/skills'):]}"</span>
+        <span class="tok-k">return</span> <span class="tok-s">f"{self._ws}{norm}"</span></code></pre>
+
+  <div class="callout danger">
+    <span class="label">这一处必须有测试</span>
+    <p><code>../</code>、<code>..%2f</code>、<code>/workspace/../../</code>、符号形式的绝对路径 —— 逐个钉住。会话隔离全靠这个函数，它错了等于会话之间可以互相读写。<b>放进 <code>tests/guards/</code></b>：它红了不是功能坏，是隔离破了。</p>
+  </div>
+
+  <h3>五个操作的实现要点</h3>
+  <table>
+    <thead><tr><th style="width:100px">操作</th><th>OSS 侧</th><th>注意</th></tr></thead>
+    <tbody>
+      <tr><td><code>read</code></td><td><code>GetObject</code> + Range</td><td>行分页要先取到再切；<b>Range 是字节不是行</b>，大文件先按字节窗口取再对齐行边界</td></tr>
+      <tr><td><code>write</code></td><td><code>PutObject</code></td><td>整对象覆盖。无追加语义</td></tr>
+      <tr><td><code>edit</code></td><td>Get → 改 → Put</td><td><b>read-modify-write</b>，见下方大小上限</td></tr>
+      <tr><td><code>delete</code></td><td><code>DeleteObject</code> / 批量</td><td><code>recursive</code> 要先 <code>ListObjects</code> 再 <code>DeleteMultiple</code>，分批（多数实现单批上限 1000）</td></tr>
+      <tr><td><code>search</code></td><td><code>ListObjectsV2</code></td><td>见 <a href="#s4">§04</a></td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout warn">
+    <span class="label">edit_file 要有大小上限</span>
+    <p>OSS 不能原地改，<code>edit</code> 必须把整个对象拉下来。没有上限的话，模型对一个 200MB 的文件做一次替换，会把整个对象拉进执行器内存。</p>
+    <p>建议 <code>EDIT_MAX_BYTES = 2 * 1024 * 1024</code>，超过时<b>明确报错并给出替代方案</b>：「文件超过 2MB，无法用 edit_file 修改；请用 <code>execute</code> 跑 <code>sed -i</code>」。§13.2 的纪律 —— 不静默降级，也不静默吞内存。</p>
+  </div>
+</section>
+
+<!-- ══════════════ 4 ══ -->
+<section id="s4">
+  <h2><span class="num">04</span>search 的能力边界</h2>
+
+  <pre><code><span class="tok-d">@dataclass(frozen=True)</span>
+<span class="tok-k">class</span> <span class="tok-t">SearchResult</span>:
+    keys: <span class="tok-t">list</span>[<span class="tok-t">str</span>]              <span class="tok-c"># 命中的文件路径（已剥掉会话前缀）</span>
+    common_prefixes: <span class="tok-t">list</span>[<span class="tok-t">str</span>]   <span class="tok-c"># delimiter 分组，用来模拟"子目录"</span>
+    truncated: <span class="tok-t">bool</span>              <span class="tok-c"># 撞到 max_keys</span></code></pre>
+
+  <table>
+    <thead><tr><th style="width:280px">调用</th><th>行为</th></tr></thead>
+    <tbody>
+      <tr><td><code>search("")</code></td><td>列工作区根，<code>delimiter="/"</code> → 顶层文件 + 子目录名</td></tr>
+      <tr><td><code>search("reports/")</code></td><td>列该前缀下一层</td></tr>
+      <tr><td><code>search("reports/", pattern="*.md")</code></td><td>列举后在<b>客户端</b>做 fnmatch 过滤</td></tr>
+      <tr><td><code>search("", pattern="**/*.csv")</code></td><td>递归列举（不带 delimiter）后过滤 —— <b>大前缀下会拉很多 key</b></td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout danger">
+    <span class="label">工具描述里必须明说没有内容搜索</span>
+    <p>否则模型会反复用 <code>search</code> 找内容、拿到空结果、然后据此下结论说"没找到相关文件" —— 错得很安静。</p>
+    <pre style="margin:10px 0 0"><code>按<b>路径前缀与文件名</b>查找工作区中的文件。
+本工具<b>不搜索文件内容</b> —— 要按内容查找，用 execute 跑 grep。</code></pre>
+  </div>
+
+  <p><b>连带的能力削减</b>：没配 sandbox 的 agent 失去内容搜索。对顾问型 agent 可以接受（它主要读自己写过的东西），但这是个要意识到的取舍 —— 如果观察到顾问 agent 频繁"找不到东西"，信号是给它配 sandbox，而不是给 filesystem 加 grep。</p>
+
+  <p><code>truncated=True</code> 时结果里要带一句可执行的提示，而不是只标个布尔：「已达 1000 条上限，请缩小前缀范围」。</p>
+
+  <h3>默认跳过点开头的前缀</h3>
+  <p>技能与系统区已经<b>不在 workspace 前缀内</b>（<a href="#s3">§03</a>），所以它们不靠这条过滤 —— 结构上就列不到。</p>
+  <p>这条留给<b>写入隔离区</b>：子智能体的产物落在 <code>.agents/&lt;name&gt;/</code>（<a href="subagent.html#s3">Subagent 设计 §03</a>），不过滤的话主 agent 每次 <code>search("")</code> 都会被子智能体的中间产物淹没。判断<b>按段</b>做而不是只看开头，否则 <code>reports/.draft.md</code> 会漏网；显式给出 <code>search(".agents/coder/")</code> 时仍然列得出来。</p>
+</section>
+
+<!-- ══════════════ 5 ══ -->
+<section id="s5">
+  <h2><span class="num">05</span>挂载：FUSE 必须在沙箱外</h2>
+
+  <div class="callout danger">
+    <span class="label">直接在沙箱容器里挂 FUSE 会毁掉现有的安全姿态</span>
+    <p>atlas 的沙箱容器现在是 <code>--read-only</code> + <code>--cap-drop ALL</code> + <code>--user 1000:1000</code> + <code>--network none</code> + <code>--pids-limit</code>。</p>
+    <p>而在容器内挂 FUSE 需要 <code>--device /dev/fuse</code> + <code>--cap-add SYS_ADMIN</code>。<b><code>SYS_ADMIN</code> 与 <code>cap-drop ALL</code> 直接冲突</b>，而且它是容器逃逸最常用的一块跳板。</p>
+  </div>
+
+  <h3>正确做法：挂载发生在沙箱容器之外</h3>
+
+  <pre><code>Kubernetes（目标形态）
+  ┌─ Node ──────────────────────────────────────────────────┐
+  │  kubelet + OSS CSI driver                                │
+  │     ↓ 在节点上完成 FUSE 挂载                               │
+  │  ┌─ Pod（NetworkPolicy: deny-all）──────────────────────┐ │
+  │  │  sandbox 容器                                         │ │
+  │  │    /workspace ← subPath {user}/{★workspace_thread}/   │ │
+  │  │                        workspace                      │ │
+  │  │    /skills    ← subPath {user}/{自己的 thread}/skills │ │
+  │  │    /tmp       ← emptyDir(Memory)                      │ │
+  │  │    cap-drop ALL · non-root · read-only                │ │
+  │  └──────────────────────────────────────────────────────┘ │
+  └──────────────────────────────────────────────────────────┘
+
+★ 两个挂载点的 subPath **来自不同的 thread**：
+    主 agent    workspace_thread = 自己
+    子智能体     workspace_thread = **父会话** ← 所以 Pod 模板必须参数化</code></pre>
+
+  <p>沙箱容器看到的是一个<b>普通的卷</b>，它自己不需要任何额外能力，<code>cap-drop ALL</code> 原样保留。</p>
+
+  <div class="callout warn">
+    <span class="label">为什么是 CSI 而不是 sidecar</span>
+    <p>把 ossfs 做成 Pod 内的 sidecar 也能挂上，但<b>同一个 Pod 共享网络命名空间</b> —— sidecar 要访问 OSS 端点，就必须给这个 Pod 开 egress，于是<b>沙箱容器里的 bash 也能触达 OSS 端点</b>。「沙箱无网络」这条保证就没了。</p>
+    <p>CSI 让挂载发生在节点层，Pod 可以保持完全的 deny-all。<b>sidecar 只作为 CSI 不可用时的退路，且要接受这个网络面的扩大。</b></p>
+  </div>
+
+  <h3>本地开发（Docker）</h3>
+  <p>同一条原则：ossfs 跑在沙箱容器外。宿主机（或一个带 <code>SYS_ADMIN</code> 的辅助容器）把 OSS 前缀挂到宿主路径，沙箱容器 bind-mount 那个路径。</p>
+  <pre><code><span class="tok-c"># 宿主侧一次性挂载（按会话）</span>
+ossfs {bucket}:/{user}/{thread}/workspace  /var/lib/atlas/{user}/{thread}/workspace \
+      -o url=... -o allow_other \
+      -o attr_timeout=0 -o entry_timeout=0 -o negative_timeout=0   <span class="tok-c">← 见 §06</span>
+
+<span class="tok-c"># 沙箱容器（安全参数不变）。两个挂载源来自不同的 thread ——</span>
+<span class="tok-c"># 子智能体的 WS_TID 是父会话的 id，SELF_TID 是自己的。</span>
+docker run -d --read-only --cap-drop ALL --user 1000:1000 --network none \
+  -v /var/lib/atlas/{user}/${WS_TID}/workspace:/workspace \
+  -v /var/lib/atlas/{user}/${SELF_TID}/skills:/skills:ro \
+  --tmpfs /tmp:rw,size=64m \
+  ...</code></pre>
+
+  <p>本地也可以用 MinIO 顶替 OSS —— 接口是 S3 兼容的，<code>OssFilesystem</code> 一份实现两处都能跑。</p>
+</section>
+
+<!-- ══════════════ 6 ══ -->
+<section id="s6">
+  <h2><span class="num">06</span>一致性：两个写入方</h2>
+
+  <p>这是方案 A 最需要想清楚的地方。工作区有<b>两条写入路径</b>，它们不经过同一个栈：</p>
+
+  <pre><code>① write_file 工具  → OssFilesystem → OSS SDK → OSS        <span class="tok-c">（不经过 FUSE）</span>
+② execute 里的 bash → FUSE 挂载点 → ossfs → OSS</code></pre>
+
+  <div class="callout danger">
+    <span class="label">后果：FUSE 的缓存看不见路径 ①</span>
+    <p>模型 <code>write_file("a.txt")</code> 写进 OSS，紧接着 <code>execute("cat a.txt")</code> —— ossfs 可能命中<b>负缓存</b>（刚才 stat 过，那时文件不存在）而报 No such file。</p>
+    <p>这是那种"平时不出、出了极难查"的问题：它取决于两次调用的间隔与缓存 TTL。</p>
+  </div>
+
+  <h3>处置：关掉 ossfs 的三层缓存</h3>
+  <pre><code>-o attr_timeout=0        <span class="tok-c"># 属性缓存（大小、mtime）</span>
+-o entry_timeout=0       <span class="tok-c"># 目录项缓存</span>
+-o negative_timeout=0    <span class="tok-c">★ 最关键：否则"文件不存在"会被缓存</span>
+-o max_stat_cache_size=0
+（不加 kernel_cache）</code></pre>
+
+  <p><b>代价是真实的</b>：容器内每次 <code>stat</code> / <code>open</code> 都要打一次 OSS。反复读同一个文件的场景（编译、测试）会明显变慢。</p>
+
+  <h3>给模型一条可执行的规避路径</h3>
+  <p>把它写进 sandbox 的提示词，而不是指望模型自己想到：</p>
+  <pre><code>需要反复读取同一批文件时（编译、跑测试），先 cp 到 /tmp 再操作：
+    cp -r /workspace/src /tmp/src && cd /tmp/src && make
+产物写回 /workspace。</code></pre>
+
+  <div class="callout rule">
+    <span class="label">改用方案 B 的信号</span>
+    <p>观察到 <code>execute</code> 里频繁出现重 IO（编译、大量小文件生成、node_modules 这类）。届时改成「启动下载 / 结束上传」，并<b>同时</b>把 <code>write_file</code> 改为经沙箱写入 —— 两件事必须一起做，否则就是 §06 开头那个两份不一致的问题。</p>
+    <p>这个信号可以量化：<a href="../observability.html">可观测性</a>落地后统计 <code>execute</code> 的 P95 时长与命令类型分布。</p>
+  </div>
+
+  <h3>并发不是问题，但要知道为什么</h3>
+  <p>同一会话的 run 被 Redis 锁串行化，工具调用本身也是串行的 —— 两条写入路径不会真正同时发生。<b>唯一的例外是 bash 起了后台进程</b>（<code>&amp;</code> 或 nohup），它可能在 <code>execute</code> 返回后继续写。这个风险低，但值得在容器回收前留一个短暂的静默窗口。</p>
+</section>
+
+<!-- ══════════════ 7 ══ -->
+<section id="s7">
+  <h2><span class="num">07</span>SandboxMiddleware</h2>
+
+  <pre><code><span class="tok-c"># kernel/middleware/sandbox.py（新建，约 400 行）</span>
+
+<span class="tok-k">class</span> <span class="tok-t">SandboxMiddleware</span>(AgentMiddleware):
+    <span class="tok-s">"""提供 execute 工具。不提供任何文件操作。
+
+    ★ 不进 _REQUIRED_MIDDLEWARE：没有沙箱是合法状态
+      （顾问型 agent 可以只有文件工具）。这一点与 FilesystemMiddleware
+      不同 —— 后者是脚手架，大结果外置挂在它上面。
+    """</span>
+
+    <span class="tok-k">def</span> <span class="tok-f">__init__</span>(<span class="tok-k">self</span>, *, sandbox: SandboxProtocol,
+                 max_execute_timeout: <span class="tok-t">int</span> = <span class="tok-n">3600</span>,
+                 workdir: <span class="tok-t">str</span> = <span class="tok-s">"/workspace"</span>,
+                 system_prompt: <span class="tok-t">str</span> | <span class="tok-k">None</span> = <span class="tok-k">None</span>) -> <span class="tok-k">None</span>: ...</code></pre>
+
+  <h3>装配顺序：filesystem 在 sandbox 外层</h3>
+  <pre><code><span class="tok-c"># kernel/graph.py 主栈</span>
+<span class="tok-n">1</span>  <span class="tok-k">if</span> skills:    SkillsMiddleware(...)
+<span class="tok-n">2</span>                FilesystemMiddleware(fs, tools=...)      <span class="tok-c">← 脚手架 · 大结果外置挂这里</span>
+<span class="tok-n">3</span>  <span class="tok-k">if</span> sandbox:   SandboxMiddleware(sandbox=...)          <span class="tok-c">← 新增</span>
+<span class="tok-n">4</span>  <span class="tok-k">if</span> subagents: SubAgentMiddleware(...)
+<span class="tok-n">5</span>                create_summarization_middleware(...)
+   ...</code></pre>
+
+  <p>顺序是有语义的：<code>wrap_tool_call</code> 的大结果外置在 <code>FilesystemMiddleware</code> 上，而它的<b>主要服务对象正是 <code>execute</code></b> —— <code>TOOLS_EXCLUDED_FROM_EVICTION</code> 把 7 个文件工具全排除了（它们自己有分页）。filesystem 必须在外层才能接住 sandbox 的大输出。</p>
+
+  <div class="callout warn">
+    <span class="label">capture-at-source 的取舍</span>
+    <p><code>execute_with_offload</code> 的 capture-at-source 优化（在沙箱内直接把输出重定向到文件，不经内存）要求 <code>execute()</code> 与 <code>read_file</code> 解析到同一文件系统。</p>
+    <p>在新架构下<b>这个前提仍然成立</b> —— 沙箱的 <code>/workspace</code> 就是 OSS 工作区，<code>read_file</code> 读的也是它。所以 capture-at-source 可以保留：把输出写到 <code>/workspace/.atlas/out/&lt;tool_call_id&gt;</code>，模型用 <code>read_file</code> 分页读回。</p>
+    <p>注意那个 <code>.atlas/</code> 前缀要被 <code>search()</code> 默认过滤掉，理由同 <a href="#s3">§03</a> 的系统区。</p>
+  </div>
+
+  <h3>依赖关系改成显式</h3>
+  <p>atlas 现在的 <code>filesystem_allowlist()</code> 藏着一条隐式联动：<b>勾了 bash 就自动获得全部文件工具</b>（注释理由是"bash 写的文件 read_file 要能读到"）。拆分后改成显式校验：</p>
+  <pre><code><span class="tok-c"># tool_registry.py</span>
+ToolDef(
+    name=BASH_TOOL,
+    ...
+    requires=<span class="tok-k">lambda</span> spec: FILESYSTEM_TOOL <span class="tok-k">in</span> spec.tool_names,
+    unmet_hint=<span class="tok-s">"sandbox 需要同时启用文件系统 —— "</span>
+               <span class="tok-s">"否则 execute 产生的文件无法被读取或检索"</span>,
+)</code></pre>
+  <p>不满足时进 <code>unsupported_tools()</code> 明确报出来，<b>而不是偷偷替用户勾上</b>。</p>
+</section>
+
+<!-- ══════════════ 8 ══ -->
+<section id="s8">
+  <h2><span class="num">08</span>技能：随会话拷贝</h2>
+
+  <p>会话创建时把技能包拷进 <code>{user}/{thread}/skills/</code>：<b>读走 filesystem（模型看到 <code>/skills/…</code>），执行走 sandbox（Pod 单独挂一个 <code>/skills</code> 挂载点）</b>。</p>
+
+  <div class="callout rule">
+    <span class="label">为什么这条路成立 —— FUSE 让可执行技能自动可用</span>
+    <p>此前需要设计两条投送路径（有沙箱物化进容器 / 无沙箱塞进 graph state），是因为假设技能区与工作区是两个地方。</p>
+    <p>但 OSS 前缀就是 Pod 的挂载源 —— 技能作为一个<b>平级前缀单独挂到 <code>/skills</code></b>，<b>它在容器里天然有一个真实路径</b>，<code>execute</code> 直接能跑。不需要 <code>SkillMaterializer</code>、不需要幂等判断与残留清理。</p>
+  </div>
+
+  <h3>技能的三个能力层级</h3>
+  <table>
+    <thead><tr><th style="width:130px">层级</th><th style="width:170px">构成</th><th style="width:150px">需要什么</th><th>真实例子</th></tr></thead>
+    <tbody>
+      <tr><td><b>L1 纯指令</b></td><td>只有 <code>SKILL.md</code></td><td>能 <code>read_file</code></td><td>代码规范、写作口径、评审清单</td></tr>
+      <tr><td><b>L2 指令+参考</b></td><td>+ <code>references/</code></td><td>能 <code>read_file</code></td><td><code>dataviz</code>：7 篇参考文档，<b>88 KB / 9 文件</b></td></tr>
+      <tr><td><b>L3 指令+可执行</b></td><td>+ <code>scripts/</code> + <code>data/</code></td><td><b>能 <code>execute</code>，且脚本路径在容器内可见</b></td><td><code>ui-ux-pro-max</code>：<b>3.8 MB / 76 文件</b>（data 3.1M · scripts 684K）</td></tr>
+    </tbody>
+  </table>
+
+  <p>L3 不是假设的形态。<code>ui-ux-pro-max</code> 的 SKILL.md 里直接写着让模型执行脚本：</p>
+  <pre><code>python "&lt;skill&gt;/scripts/search.py" "&lt;query&gt;" --domain &lt;domain&gt;</code></pre>
+  <p>指令本身没有价值，价值在那 3.1MB 的 CSV 与检索脚本里。kernel 注入的提示词也明确教模型这件事：<i>"Skills may contain Python scripts or other executable files. Always use absolute paths."</i> —— <b>可执行技能是这套技能规范的既定语义，不是我们额外加的诉求。</b></p>
+
+  <h3>Key 布局</h3>
+  <pre><code><span class="tok-c"># 技能源仓库 —— 全局只读，配置平面所有，按版本寻址</span>
+{bucket}/_skills/{slug}/{version}/SKILL.md
+                                 /scripts/…
+                                 /data/…
+
+<span class="tok-c"># 会话副本 —— 可读写，随会话生死。★ 与 workspace **平级**</span>
+{bucket}/{user_id}/{thread_id}/skills/{slug}/SKILL.md
+                                            /scripts/…</code></pre>
+
+  <div class="callout danger">
+    <span class="label">技能为什么不能放进 workspace</span>
+    <p><b>因为 workspace 是共享挂载的。</b>子智能体的 Pod 挂的是主 agent 的 workspace（<a href="subagent.html#s3">Subagent 设计 §03</a>）—— 技能若住在里面，子智能体挂载时会连主 agent 的技能一起带上。</p>
+    <p>早先设想过用 <code>.skills/&lt;agent-name&gt;/</code> 分目录解决，但那只是<b>约定</b>：子智能体照样能读、能改别人那份。平级前缀是<b>结构性</b>的 —— 挂载根本带不上。</p>
+  </div>
+
+  <p>副本路径<b>不带版本号</b> —— 会话内只有一份，用哪一版在拷贝那一刻就定了。模型看到的路径因此是稳定的 <code>/skills/&lt;slug&gt;/</code>（由 <code>_to_key</code> 路由到自己的 skills 前缀，见 <a href="#s3">§03</a>）。
+
+  <h3>拷贝流程</h3>
+  <pre><code><span class="tok-c"># server/src/atlas_server/providers/filesystem/skill_copy.py</span>
+
+<span class="tok-k">async</span> <span class="tok-k">def</span> <span class="tok-f">seed_session_skills</span>(
+    fs: OssFilesystem, refs: Sequence[SkillRef], *, concurrency: <span class="tok-t">int</span> = <span class="tok-n">20</span>
+) -> <span class="tok-k">None</span>:
+    <span class="tok-s">"""把 spec 钉死的技能版本拷进会话工作区。
+
+    ★ 时机：**会话创建**，不是首次 run —— 用户对「新建会话」的
+      延迟容忍度更高，而首轮对话的等待是最刺眼的。
+
+    ★ 用 OSS 的 CopyObject：服务端拷贝，不下载不上传。
+      单对象 10–50ms，按包并发 20 的话 76 个对象 < 1s。
+
+    ★ 幂等：目标已存在且 digest 相同则跳过（会话重建、重试都会撞到）。
+
+    ★ 失败即冒泡（§13.2）：少拷几个文件就默默开始，
+      表现是模型「照技能说的做了但脚本不存在」—— 比明确报错难查得多。
+    """</span></code></pre>
+
+  <h3>版本语义：拷贝替代了引用</h3>
+  <p><a href="native.html#s4">native 详设</a>里让 <code>spec.skills</code> 钉死 <code>(slug, version)</code>，是为了防止技能改版悄悄改变历史 run 的含义。<b>会话副本天然做到了这一点</b>，而且更强：</p>
+  <table>
+    <thead><tr><th style="width:200px"></th><th>钉版本引用</th><th>会话副本</th></tr></thead>
+    <tbody>
+      <tr><td>技能发 v4 后，已有会话</td><td>仍读 v3 —— 靠引用正确</td><td>仍读自己那份 —— <b>物理隔离</b></td></tr>
+      <tr><td>v3 被误删 / 误改</td><td>历史会话受影响</td><td>不受影响</td></tr>
+      <tr><td><code>spec</code> 里钉版本还有用吗</td><td colspan="2">有 —— 作用变成<b>决定新会话拷贝哪一版</b></td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout warn">
+    <span class="label">但可复现性的语义确实变了</span>
+    <p>会话可以改自己的技能副本。于是 <code>run.agent_version_id</code> → <code>spec</code> → <code>foo@v3</code> 这条链，回答的是<b>「这个会话开始时拷了哪一版」</b>，不再是「这一轮实际用的是什么」。</p>
+    <p>本期<b>接受</b>这个代价（不额外发 <code>skill.modified</code> 事件）。要还原实际内容时，会话副本本身就在 OSS 里 —— 它是自证的。</p>
+  </div>
+
+  <h3>两条必须跟上的收尾</h3>
+  <ul>
+    <li><b>会话回收要覆盖 <code>{user}/{thread}/</code> 下的全部三个前缀</b>（workspace / skills / system），而不只是用户写的文件。3.8MB × N 会话的技能副本如果不删，会变成只增不减的孤儿对象 —— 而且它们不在任何索引里，事后连查都不好查。<b>子会话同理</b>：它有自己的 skills 与 system 前缀，父会话删除时要连带回收。</li>
+    <li><b>技能不在 workspace 前缀内，<code>search("")</code> 结构上就列不到。</b>早先靠点前缀过滤，现在靠布局 —— 后者更硬：不是「默认不显示」，是「不在那里」。</li>
+  </ul>
+
+  <div class="callout danger">
+    <span class="label">要写清的边界：技能不再是可信输入</span>
+    <p>技能进了工作区，而工作区对 <code>execute</code> 完全开放 —— <b>模型可以改自己的技能脚本然后执行它</b>。这在能力上是想要的，但意味着：</p>
+    <p>将来做技能审核（概要设计里说过技能是可执行内容、要按代码审查来做），审核保证的是<b>发布时</b>那一份，<b>不是会话内运行的那一份</b>。这条边界要在文档和界面上都说清楚，别让「已审核」给人虚假的安全感。</p>
+  </div>
+</section>
+
+<!-- ══════════════ 9 ══ -->
+<section id="s9">
+  <h2><span class="num">09</span>SkillsMiddleware：从扫描到清单</h2>
+
+  <h3>现在每一轮都在重新推导已知信息</h3>
+  <p><code>SkillsMiddleware.before_agent</code> 扫描技能目录，结果缓存进 <code>SkillsState.skills_metadata</code>。但 atlas <b>没有 checkpointer</b> —— 每轮 run 都是一次全新的 graph invocation，state 不跨 run 保留。</p>
+  <p><b>所以每一轮对话都重扫一遍</b>：配 5 个技能的 agent，每轮在模型看到任何东西之前先做 1 次目录列举 + 5 次 <code>SKILL.md</code> 读取。在<a href="#s6">无缓存的 OSS/FUSE</a> 上，这是加在每一轮上的固定延迟。</p>
+
+  <p>而这 6 次 IO 拿回来的东西，我们在调用之前就全知道：</p>
+  <table>
+    <thead><tr><th style="width:220px">信息</th><th>已有来源</th></tr></thead>
+    <tbody>
+      <tr><td>有哪些技能</td><td><code>spec.skills</code> 里钉死的 <code>(slug, version)</code></td></tr>
+      <tr><td><code>name</code> / <code>description</code></td><td>配置平面的 <code>skill</code> 表（<code>configplane/</code> 有永久缓存）</td></tr>
+      <tr><td><code>path</code></td><td>确定的：<code>/skills/&lt;slug&gt;/SKILL.md</code></td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout rule">
+    <span class="label">原实现为什么要扫描</span>
+    <p>在它原本的场景里，技能是人手动扔进 <code>~/.claude/skills/</code> 的，<b>没有任何注册表</b> —— 文件系统就是注册表，扫描是唯一的发现途径。</p>
+    <p>我们的架构反过来：注册表先于文件存在，文件是照着注册表<b>亲手拷贝</b>进去的。继承这个扫描，等于假装自己不知道自己刚做了什么。</p>
+  </div>
+
+  <h3>改造后的接口</h3>
+  <pre><code><span class="tok-d">@dataclass(frozen=True)</span>
+<span class="tok-k">class</span> <span class="tok-t">SkillRef</span>:
+    name: <span class="tok-t">str</span>
+    description: <span class="tok-t">str</span>
+    path: <span class="tok-t">str</span>          <span class="tok-c"># /skills/&lt;slug&gt;/SKILL.md</span>
+
+
+<span class="tok-k">class</span> <span class="tok-t">SkillsMiddleware</span>(AgentMiddleware):
+    <span class="tok-s">"""把技能清单渲染进系统提示词。不做发现，不读文件。"""</span>
+
+    <span class="tok-k">def</span> <span class="tok-f">__init__</span>(<span class="tok-k">self</span>, *, skills: Sequence[SkillRef],
+                 system_prompt: <span class="tok-t">str</span> | <span class="tok-k">None</span> = <span class="tok-k">None</span>) -> <span class="tok-k">None</span>: ...
+
+    <span class="tok-k">def</span> <span class="tok-f">wrap_model_call</span>(<span class="tok-k">self</span>, request, handler): ...   <span class="tok-c"># 唯一的钩子</span></code></pre>
+
+  <p>不再需要 <code>backend</code>，不再需要 <code>sources</code>。<b>1053 行 → 约 150 行</b>，因为下面这些全部消失：</p>
+  <pre><code>删   _load_skills_from_source（+ 异步版）与 backend.ls
+删   YAML frontmatter 解析（_parse_frontmatter / _parse_allowed_tools）
+删   SkillsState / SkillsStateUpdate / before_agent / abefore_agent
+删   加载警告整套（MAX_SKILLS_LOAD_WARNINGS、截断、HTML 转义、
+     &lt;skill_load_warnings&gt; 渲染）
+删   多 source 覆盖逻辑与来源标注
+
+留   SKILLS_SYSTEM_PROMPT 模板（去掉 locations / warnings 两个占位符）
+留   _format_skills_list · wrap_model_call</code></pre>
+
+  <h3>校验从运行时移到发布时</h3>
+  <p>kernel 现在在加载时校验 <code>name</code> ≤64、<code>description</code> ≤1024、文件 ≤10MB。这些<b>搬到配置平面的发布路径</b> —— 技能作者提交时就被拒，而不是等某个用户跑到一半在提示词里看到一条警告。</p>
+  <p>与 atlas 已有的纪律一致：<b>能在保存时拒绝的，不留到运行时。</b></p>
+
+  <h3>frontmatter 的定位变了，但仍然保留</h3>
+  <pre><code>作者写 SKILL.md（带 frontmatter）
+   ↓ 发布时解析一次
+配置平面 skill 表：slug / description / body / resources / digest   <span class="tok-c">← 唯一事实源</span>
+   ↓ 会话创建时拷贝，frontmatter 由 slug + description 重新渲染
+{user}/{thread}/skills/&lt;slug&gt;/SKILL.md</code></pre>
+  <p>这接上了 <a href="native.html#s4">native 详设</a>里那个决定：<code>SkillVersion.body</code> 存<b>不含 frontmatter</b> 的正文，frontmatter 生成出来 —— 避免「正文里的 name 与 skill.slug 不一致」的双事实源。</p>
+  <p>副本里仍然写入 frontmatter，理由是<b>可移植性</b>：会话里的技能目录导出后仍是一个合法技能包，能给别人用或导回 Claude Code。成本为零。</p>
+
+  <h3>不扫描会失去三样东西</h3>
+  <table>
+    <thead><tr><th style="width:210px">失去</th><th style="width:250px">影响</th><th>判断</th></tr></thead>
+    <tbody>
+      <tr><td>会话内<b>新建</b>的技能被发现</td><td>模型在 <code>/skills/</code> 下建新目录，不会出现在提示词里</td><td>诉求是「改技能」不是「建技能」。而且「模型建一个技能再靠提示词发现它」是个奇怪的回路</td></tr>
+      <tr><td>会话内改 <code>description</code> 生效</td><td>提示词里仍显示配置平面那份</td><td><b>这是好事</b>，见下</td></tr>
+      <tr><td>损坏的 SKILL.md 有警告</td><td>副本是我们拷的，损坏只可能来自会话内改坏</td><td>发布时已校验；运行时读到坏文件模型自己会报</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout rule">
+    <span class="label">description 始终来自配置平面，是个正确的安全姿态</span>
+    <p>技能进工作区后不再是可信输入（<a href="#s8">§08</a>）。而 <code>description</code> 的职责是<b>路由</b> —— 「这个任务要不要打开这个技能」。让它始终来自那份经过审核的版本，而正文可以按会话适配，这个分工比「全部可改」更稳：<b>改不动别人对你的第一印象，但可以改自己的做法。</b></p>
+  </div>
+</section>
+
+<!-- ══════════════ 10 ══ -->
+<section id="s10">
+  <h2><span class="num">10</span>提示词分工</h2>
+
+  <p>atlas 现在的 <code>_SANDBOX_HINT</code> 一句话讲了两件事，要拆开，各自中间件出各自那半。</p>
+
+  <pre><code><span class="tok-c"># FilesystemMiddleware</span>
+文件工具作用于<b>会话工作区</b>，内容持久保留，跨轮对话都在。
+按内容搜索不可用 —— <code>search</code> 只匹配路径与文件名；
+要按内容查找，用 <code>execute</code> 跑 <code>grep</code>。</code></pre>
+
+  <pre><code><span class="tok-c"># SandboxMiddleware</span>
+<code>execute</code> 的工作目录是 <code>/workspace</code>，即上述持久工作区。
+
+- 需要<b>保留</b>的产物必须写在 <code>/workspace</code> 下。
+- 临时中间产物写 <code>/tmp</code> —— 它更快，但容器回收后即消失。
+- 需要反复读取同一批文件时（编译、跑测试），先 <code>cp</code> 到 <code>/tmp</code>
+  再操作，产物写回 <code>/workspace</code>。
+- 沙箱无网络。</code></pre>
+
+  <h3>技能那一段由 SkillsMiddleware 出</h3>
+  <p>它是 kernel 既有的 <code>SKILLS_SYSTEM_PROMPT</code>（去掉来源标注与加载警告两块）—— 教模型渐进披露：看描述判断相关性、<code>read_file(path, limit=1000)</code> 读正文、按绝对路径执行脚本。</p>
+  <p>本次要补的只有一句，接在技能清单之后：</p>
+  <pre><code>技能位于 <code>/skills/</code>，是本会话独有的副本 —— 你可以修改它们，
+改动只对本会话生效。需要反复执行某个技能脚本时，先 <code>cp -r</code> 到 <code>/tmp</code> 再跑。</code></pre>
+  <p>后半句是 <a href="#s6">§06</a> 那个 FUSE 性能问题的逃生口：技能脚本导入兄弟模块、读数据文件，每一次都是一个 OSS 往返。</p>
+
+  <div class="callout rule">
+    <span class="label">这条提示词有物理支撑</span>
+    <p>方案 A 让「<code>/tmp</code> 快但易失、<code>/workspace</code> 持久但慢」成为<b>真实的性能与生命周期差异</b>，而不只是一句约定。模型按提示词行事时得到的反馈是一致的 —— 这比单纯的规则更容易被遵守。</p>
+  </div>
+</section>
+
+<!-- ══════════════ 9 ══ -->
+<section id="s11">
+  <h2><span class="num">11</span>移除 dry-run</h2>
+
+  <p>试跑（编辑器右侧面板里不落会话地跑一次）整体移除。它在新架构下的成本明显升高：没有 session_id 就没有 OSS 前缀，要么造临时前缀（多一条生命周期要管），要么保留 <code>StateBackend</code>（多一个协议实现）—— 而它本来就是个便利功能。</p>
+
+  <h3>数据库：0004 的 downgrade 就是路线图</h3>
+  <pre><code><span class="tok-c"># server/migrations/versions/0004_dry_run.py 的 downgrade()</span>
+op.drop_constraint(<span class="tok-s">"run_spec_source"</span>, <span class="tok-s">"run"</span>, type_=<span class="tok-s">"check"</span>)
+op.execute(<span class="tok-s">"DELETE FROM run WHERE agent_version_id IS NULL"</span>)   <span class="tok-c">← 清掉存量试跑</span>
+op.drop_column(<span class="tok-s">"run"</span>, <span class="tok-s">"input_snapshot"</span>)
+op.drop_column(<span class="tok-s">"run"</span>, <span class="tok-s">"spec_snapshot"</span>)
+op.alter_column(<span class="tok-s">"run"</span>, <span class="tok-s">"agent_version_id"</span>, nullable=<span class="tok-k">False</span>)</code></pre>
+  <p>新迁移 <code>0006_drop_dry_run.py</code> 照抄这段，<b>再补一条</b> <code>run.thread_id</code> 改 <code>NOT NULL</code>（0001 建表时它可空正是为了试跑）。</p>
+
+  <div class="callout warn">
+    <span class="label">别直接 DELETE，先确认</span>
+    <p><code>DELETE FROM run WHERE agent_version_id IS NULL</code> 会连带 <code>run_event</code>（<code>ON DELETE CASCADE</code>）。生产库执行前先 <code>SELECT count(*)</code> 看清量级，并在迁移里留一句注释说明这批数据的性质 —— 迁移是不可逆的删除。</p>
+  </div>
+
+  <h3>代码足迹</h3>
+  <div class="tree"><b>server/</b>
+├── migrations/versions/<s>0006_drop_dry_run.py</s>        <span class="tag new">新建</span>
+├── db/models.py            <i>Run: 删 spec_snapshot / input_snapshot；thread_id 与 agent_version_id 转非空</i>
+├── api/v1/agents.py        <i>删 POST /agents/{id}/dry-run</i>
+├── schemas/agent.py        <i>删 DryRunCreate</i>
+├── schemas/run.py          <i>RunOut.thread_id 转非空</i>
+├── services/run.py         <i>删 create_dry_run()</i>
+├── repositories/run.py     <i>load_for_execution / archive 的 thread=None 分支简化</i>
+├── executor/inprocess.py   <i>_prepare 删 version is None 分支；_persist 删"试跑不归档"分支</i>
+├── executor/assembly.py    <i>删 _ephemeral 集合、cleanup()、_titler 的 thread is None 分支、
+│                              _coding_tool 的 volume=None 分支</i>
+└── services/sandbox.py     <i>删 acquire_ephemeral / release_ephemeral</i>
+
+<b>web/</b>
+├── features/editor/<s>DryRunPanel.tsx</s>                 <span class="tag del">删除</span>
+├── features/editor/AgentEditor.tsx  <i>去掉右侧面板与相关状态</i>
+├── api/runs.ts             <i>删 dryRun()</i>
+└── api/schema.d.ts         <i>make web-gen 重生成</i>
+
+<b>tests/</b>
+├── <s>test_dry_run.py</s>                                  <span class="tag del">删除</span>
+├── test_approval.py · test_compaction_api.py · test_sandbox.py   <i>去掉试跑用例</i>
+└── test_spec_snapshots.py  <i>不再需要覆盖 run.spec_snapshot 的反序列化</i></div>
+
+  <div class="callout rule">
+    <span class="label">顺带简化的一处</span>
+    <p><code>PreparedRun.thread</code> 从 <code>Thread | None</code> 变成 <code>Thread</code>，<code>thread_id</code> 属性不再可空。<code>inprocess.py</code> 与 <code>assembly.py</code> 里一连串 <code>if thread_id is not None</code> 全部消失 —— 这是移除试跑最大的代码收益，比删掉的行数更有价值。</p>
+  </div>
+</section>
+
+<!-- ══════════════ 10 ══ -->
+<section id="s12">
+  <h2><span class="num">12</span>逐文件改动清单</h2>
+
+  <h3>kernel/backends/</h3>
+  <table>
+    <thead><tr><th style="width:190px">文件</th><th style="width:70px">现状</th><th>动作</th></tr></thead>
+    <tbody>
+      <tr><td><code>protocol.py</code></td><td>954</td><td><span class="tag mod">拆</span> → <code>filesystem_protocol.py</code> + <code>sandbox_protocol.py</code>，各约 250 行；删 9 个结果类型</td></tr>
+      <tr><td><code>sandbox.py</code></td><td>1824</td><td><span class="tag mod">大改</span> 删 13 个文件操作委托 → 约 300 行</td></tr>
+      <tr><td><b><code>oss.py</code></b></td><td>—</td><td><span class="tag new">新建</span> 约 400 行（若放 server 侧则不在 kernel）</td></tr>
+      <tr><td><code>composite.py</code></td><td>956</td><td><span class="tag del">删</span> 技能进工作区后路由没有消费者了（<a href="#s8">§08</a>）</td></tr>
+      <tr><td><code>utils.py</code></td><td>1037</td><td><span class="tag mod">缩</span> 删 grep/glob 编译相关 → 约 400 行</td></tr>
+      <tr><td><code>state.py</code></td><td>365</td><td><span class="tag del">删</span> 试跑没了，唯一消费者消失</td></tr>
+      <tr><td><code>filesystem.py</code></td><td>1542</td><td><span class="tag del">删</span> 宿主真实盘 backend</td></tr>
+      <tr><td><code>local_shell</code> <code>context_hub</code> <code>langsmith</code> <code>store</code></td><td>2133</td><td><span class="tag del">删</span> 已在 <a href="kernel.html#s8">裁剪清单</a></td></tr>
+    </tbody>
+  </table>
+
+  <h3>kernel/middleware/</h3>
+  <table>
+    <thead><tr><th style="width:190px">文件</th><th style="width:70px">现状</th><th>动作</th></tr></thead>
+    <tbody>
+      <tr><td><code>filesystem.py</code></td><td>3527</td><td><span class="tag mod">拆</span> → <code>filesystem.py</code> 约 1200（5 工具 + 权限 + 外置 + 多模态清洗）<br>+ <code>sandbox.py</code> 约 400（execute + 超时校验 + 输出处理）<br>删：ls/glob/grep 三个工具实现、grep 结果格式化、权限的 ls/glob/grep 过滤</td></tr>
+      <tr><td><code>_video.py</code></td><td>404</td><td><span class="tag del">删</span> 依赖未引入，分支恒不成立</td></tr>
+      <tr><td><code>rubric.py</code></td><td>1024</td><td><span class="tag del">删</span> 已在裁剪清单</td></tr>
+      <tr><td><code>skills.py</code></td><td>1053</td><td><span class="tag mod">大改</span> 去掉扫描与 YAML 解析 → 约 150 行（<a href="#s9">§09</a>）</td></tr>
+    </tbody>
+  </table>
+
+  <h3>kernel/graph.py</h3>
+  <ul>
+    <li><code>filesystem_tools</code> 白名单语义改（只剩 5 个名字）</li>
+    <li>新增 <code>sandbox: SandboxProtocol | None</code> 参数；<code>backend</code> 参数拆成 <code>filesystem</code> + <code>sandbox</code></li>
+    <li>装配顺序插入 <code>SandboxMiddleware</code>（filesystem 之后）</li>
+    <li>子智能体默认栈同步改；<code>SubAgent</code> TypedDict 的 <code>permissions</code> 语义不变</li>
+    <li><code>_REQUIRED_MIDDLEWARE</code> <b>不加</b> SandboxMiddleware</li>
+  </ul>
+
+  <h3>Atlas 自有代码</h3>
+  <div class="tree"><b>engine/src/atlas_engine/</b>
+├── tool_registry.py     <i>filesystem 的 model_tool_names → 5 个；bash 独立；
+│                           <b>filesystem_allowlist() 整个拆掉</b>；bash 加 requires</i>
+├── agent.py             <i>build_agent 装配三个中间件；_SANDBOX_HINT 拆两段；
+│                           skills 由 SkillRef 列表传入，不再传 sources</i>
+└── hooks.py             <i>RunHooks.backend → 拆成 filesystem / sandbox；
+                            skills: SkillsPlan → Sequence[SkillRef]</i>
+
+<b>server/src/atlas_server/</b>
+├── providers/filesystem/<s>oss.py</s>        <span class="tag new">新建</span> <i>OssFilesystem</i>
+├── providers/filesystem/<s>base.py</s>       <span class="tag new">新建</span> <i>Protocol + fake（离线测试）</i>
+├── providers/sandbox/docker.py           <i>DockerSandbox 只实现 SandboxProtocol，
+│                                            删 write/awrite/upload_files/download_files</i>
+├── providers/sandbox/<s>mount.py</s>         <span class="tag new">新建</span> <i>ossfs 挂载的准备与清理</i>
+├── providers/filesystem/<s>skill_copy.py</s>  <span class="tag new">新建</span> <i>会话创建时并发拷贝技能包</i>
+├── services/thread.py                    <i>创建会话时触发 seed_session_skills；
+│                                            删除会话时回收 {user}/{thread}/ 全部前缀</i>
+├── executor/assembly/                    <i>build() 分别构造 filesystem 与 sandbox</i>
+└── config.py                             <i>OSS 端点 / bucket / root / 凭据</i></div>
+
+  <p><b>净变化</b>：kernel 约 <b>−8000 行</b>（含已列入裁剪清单的部分），Atlas 侧新增约 850 行。</p>
+</section>
+
+<!-- ══════════════ 11 ══ -->
+<section id="s13">
+  <h2><span class="num">13</span>落地顺序</h2>
+
+  <div class="step">
+    <h4>步骤 1 · 移除 dry-run</h4>
+    <p>独立且无依赖，先做能让后面每一步都少一个分支。迁移 + 服务层 + 前端面板 + 测试。</p>
+    <p><b>验证</b>：<code>make check</code> 绿；<code>grep -rn "spec_snapshot\|ephemeral" server/src</code> 无结果。</p>
+  </div>
+
+  <div class="step">
+    <h4>步骤 2 · 协议拆分（不换实现）</h4>
+    <p>拆 <code>FilesystemProtocol</code> / <code>SandboxProtocol</code>，<code>BaseSandbox</code> 删掉文件委托，<code>DockerSandbox</code> 只实现 sandbox 侧。<b>此时文件工具暂时仍走 StateBackend</b>，行为不变。</p>
+    <p><b>验证</b>：现有测试全绿 —— 这一步不该有任何行为变化。</p>
+  </div>
+
+  <div class="step">
+    <h4>步骤 3 · 中间件拆分</h4>
+    <p><code>middleware/filesystem.py</code> 拆两个；ls/glob/grep 三工具合并成 <code>search</code>；<code>tool_registry</code> 改造，<code>filesystem_allowlist()</code> 拆掉，bash 的 <code>requires</code> 上线。</p>
+    <p><b>验证</b>：勾 bash 不勾 filesystem 时，<code>unsupported_tools()</code> 明确报出，而不是自动补上。</p>
+  </div>
+
+  <div class="step">
+    <h4>步骤 4 · OssFilesystem + FUSE 挂载</h4>
+    <p>实现 <code>OssFilesystem</code>（本地用 MinIO）；宿主侧 ossfs 挂载；沙箱容器改 bind-mount。<b>路径逃逸测试进 <code>tests/guards/</code></b>。</p>
+    <p><b>验证</b>：写→读往返测试 —— <code>write_file("a.txt")</code> 后立刻 <code>execute("cat a.txt")</code> 必须读到。这条是 <a href="#s6">§06</a> 那个缓存问题的唯一防线，<b>必须在集成测试里跑</b>，不能只靠手测。</p>
+  </div>
+
+  <div class="step">
+    <h4>步骤 5 · 技能接入</h4>
+    <p><code>SkillsMiddleware</code> 精简成清单渲染；<code>skill_copy</code> 在会话创建时并发拷贝；<code>search()</code> 跳过点前缀；会话删除连带回收整个前缀。</p>
+    <p><b>验证</b>：三个层级各跑一遍 —— L1 纯指令能被 <code>read_file</code> 读到；L2 的 <code>references/</code> 可达；<b>L3 的脚本能在沙箱里直接 <code>python</code> 跑起来</b>（这条最能证明这套路径是通的）。再加一条：改掉会话里的 SKILL.md 正文，<b>只影响本会话</b>，同 agent 的新会话仍拿到原版。</p>
+  </div>
+
+  <div class="step">
+    <h4>步骤 6 · K8s CSI</h4>
+    <p>把宿主 ossfs 换成 CSI driver，Pod 保持 deny-all。属于<a href="structure.html">执行环境</a>那一期。</p>
+  </div>
+
+  <div class="callout rule">
+    <span class="label">步骤 1–3 之后可以停一停</span>
+    <p>前三步完成的是<b>结构拆分</b>，行为不变、无新依赖 —— 可以单独合入并观察一个迭代。步骤 4 起才引入 OSS 与 FUSE 这两个新的基础设施依赖，风险与验证成本都上一个台阶。</p>
+  </div>
+</section>
+
+</main>
+</div>
+
+</body>
+</html>

@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>技能管理设计 · AI Platform</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="sitenav">
+  <a class="brand" href="./">AI&nbsp;<b>Platform</b>&nbsp;/ 设计文档</a>
+  <div class="links">
+    <a href="./">目录</a>
+    <a href="detail/">详细设计</a>
+    <a href="architecture.html">系统架构</a>
+    <a href="agent.html">Agent 管理</a>
+    <a class="on" href="skill.html">技能管理</a>
+    <a href="mcp.html">MCP 管理</a>
+    <a href="permission.html">权限管理</a>
+    <a href="execution.html">执行环境</a>
+    <a href="session.html">会话管理</a>
+    <a href="native.html">native Agent</a>
+    <a href="runtime.html">运行时链路</a>
+    <a href="local.html">本地部署</a>
+    <a href="memory.html">记忆</a>
+    <a href="observability.html">可观测性</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+<nav class="toc" aria-label="目录">
+  <div class="eyebrow">本页</div>
+  <ol>
+    <li><a href="#s1">定位与边界</a></li>
+    <li><a href="#s2">技能的结构</a></li>
+    <li><a href="#s3">数据模型</a></li>
+    <li><a href="#s4">生命周期</a></li>
+    <li><a href="#s5">安全审查</a></li>
+    <li><a href="#s6">Agent 关联与版本引用</a></li>
+    <li><a href="#s7">两类 Agent 的下发差异</a></li>
+    <li><a href="#s8">描述质量决定选择质量</a></li>
+    <li><a href="#s9">停用与删除</a></li>
+    <li><a href="#s10">来源与权限</a></li>
+    <li><a href="#s11">待验证清单</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<header class="hero">
+  <p class="kicker">Skill Management</p>
+  <h1>技能管理设计</h1>
+  <p class="lede">技能的增删改查、版本化，以及与 Agent 的关联。核心判断只有一条：<b>技能是可执行的内容，不是配置</b> —— 它包含给模型的指令，也包含真正会跑的脚本，所以审查按代码审查来做。</p>
+  <div class="meta">
+    <span>版本不可变</span><span>安全审查</span><span>Agent 关联</span><span>渐进披露</span>
+  </div>
+</header>
+
+<!-- ───────────────────────── 1 ───────────────────────── -->
+<section id="s1">
+<h2><span class="num">01</span>定位与边界</h2>
+
+<p>技能是给 Agent 的<b>可复用工作方法</b>：怎么做代码评审、怎么写 API 文档、怎么排查某类故障。它不是知识（那是 RAG），也不是工具（那是可调用的函数），而是<b>一段在特定场景下该如何行动的指引</b>。</p>
+
+<div class="callout danger">
+  <span class="label">技能是可执行的内容，不是配置</span>
+  <p>一个技能包里有两样东西会真正「运行」：</p>
+  <ul>
+    <li><b><code>SKILL.md</code> 的正文</b> —— 进入模型上下文，被当作要遵循的指令</li>
+    <li><b><code>scripts/</code> 里的脚本</b> —— 模型可以真的去执行它们</li>
+  </ul>
+  <p>所以一个恶意或错误的技能能做的事，和一段恶意代码差不多：指示模型执行危险命令、用指令覆盖系统提示里的约束、把用户的上下文发到外部地址。<b>技能审查 ≈ 代码审查，不是文档审查。</b></p>
+</div>
+
+<h3>不在本文范围</h3>
+<ul>
+  <li>技能内容本身怎么写才好 —— 那是技能作者的事，本文管的是流程与机制</li>
+  <li>哪个 Agent 该挂哪些技能的<b>产品判断</b> —— 见<a href="agent.html">Agent 管理</a></li>
+  <li>技能在 Pod 内的挂载细节 —— 见<a href="runtime.html#s8">运行时链路 §08</a></li>
+  <li>跨用户的领域知识 —— 那是 RAG，见<a href="memory.html#s1">记忆 §01</a></li>
+</ul>
+</section>
+
+<!-- ───────────────────────── 2 ───────────────────────── -->
+<section id="s2">
+<h2><span class="num">02</span>技能的结构</h2>
+
+<p>沿用 Claude Code 的技能格式，这样平台技能与 CLI 原生技能可以互通（实测自一个真实技能包）：</p>
+
+<pre><code>my-skill/
+├── SKILL.md            <span class="tok-w">必需</span>
+│   ├── frontmatter     name + description  → <span class="tok-s">进索引，始终可见</span>
+│   └── 正文             → <span class="tok-s">命中后才加载</span>
+├── references/         按需读取的参考文档
+├── scripts/            <span class="tok-w">可执行脚本</span>
+└── data/               数据文件</code></pre>
+
+<pre><code>---
+name: ui-ux-pro-max
+description: "UI/UX design intelligence for web, mobile, and desktop.
+  This skill should be used when designing, building, reviewing…
+  Skip it for pure backend logic, API/database design…"
+---
+
+# UI/UX Pro Max
+…正文…</code></pre>
+
+<h3>渐进式披露决定了容量上限</h3>
+<p>实测一个技能包可以到 <b>3.8MB</b>，显然不可能全部塞进上下文。所以只有 <code>frontmatter</code> 进索引，正文与资源在技能被选中后才加载。</p>
+
+<div class="callout rule">
+  <span class="label">真正的容量瓶颈是索引，不是技能包大小</span>
+  <p>技能包再大也只在被用到时才付出代价，但<b>每个技能的 <code>description</code> 都常驻上下文</b>。挂 50 个技能，就是 50 段描述常驻 —— 它们挤占的是每一轮对话的预算。</p>
+  <p>所以「一个 Agent 挂多少技能合适」的约束来自索引膨胀，而不是存储。这也让 <code>description</code> 的<b>简洁与准确</b>同时成为硬指标（<a href="#s8">§08</a>）。</p>
+</div>
+</section>
+
+<!-- ───────────────────────── 3 ───────────────────────── -->
+<section id="s3">
+<h2><span class="num">03</span>数据模型</h2>
+
+<pre><code><span class="tok-k">CREATE TABLE</span> skills (
+  skill_id     <span class="tok-n">TEXT</span>        <span class="tok-k">NOT NULL</span>,
+  version      <span class="tok-n">INT</span>         <span class="tok-k">NOT NULL</span>,
+  status       <span class="tok-n">TEXT</span>        <span class="tok-k">NOT NULL</span>,   <span class="tok-c">-- draft | published | disabled</span>
+
+  <span class="tok-c">-- 来自 SKILL.md frontmatter，解析时提取</span>
+  name         <span class="tok-n">TEXT</span>        <span class="tok-k">NOT NULL</span>,
+  description  <span class="tok-n">TEXT</span>        <span class="tok-k">NOT NULL</span>,
+
+  <span class="tok-c">-- 内容</span>
+  content_uri  <span class="tok-n">TEXT</span>        <span class="tok-k">NOT NULL</span>,   <span class="tok-c">-- 技能包存储位置</span>
+  content_hash <span class="tok-n">TEXT</span>        <span class="tok-k">NOT NULL</span>,   <span class="tok-c">-- 完整性校验</span>
+  size_bytes   <span class="tok-n">BIGINT</span>      <span class="tok-k">NOT NULL</span>,
+  has_scripts  <span class="tok-n">BOOLEAN</span>     <span class="tok-k">NOT NULL</span>,   <span class="tok-w">-- 含可执行内容，审查等级更高</span>
+
+  <span class="tok-c">-- 来源与审查</span>
+  source       <span class="tok-n">TEXT</span>        <span class="tok-k">NOT NULL</span>,   <span class="tok-c">-- builtin | tenant | imported</span>
+  scan_result  <span class="tok-n">JSONB</span>,                  <span class="tok-c">-- 各层扫描的结论</span>
+  scan_at      <span class="tok-n">TIMESTAMPTZ</span>,
+  reviewed_by  <span class="tok-n">TEXT</span>,                   <span class="tok-c">-- 人工审查者</span>
+
+  created_by   <span class="tok-n">TEXT</span>        <span class="tok-k">NOT NULL</span>,
+  created_at   <span class="tok-n">TIMESTAMPTZ</span> <span class="tok-k">NOT NULL</span>,
+  published_at <span class="tok-n">TIMESTAMPTZ</span>,
+
+  <span class="tok-k">PRIMARY KEY</span> (skill_id, version)
+);
+
+<span class="tok-c">-- 一个技能同时只能有一个 draft</span>
+<span class="tok-k">CREATE UNIQUE INDEX</span> uq_skill_draft <span class="tok-k">ON</span> skills (skill_id)
+  <span class="tok-k">WHERE</span> status = <span class="tok-s">'draft'</span>;</code></pre>
+
+<div class="callout rule">
+  <span class="label">版本不可变，与 Agent 同一套规矩</span>
+  <p><code>published</code> 的版本<b>永不修改</b> —— 因为 Agent 版本可能固定引用了它（<a href="#s6">§06</a>），改了等于绕过 Agent 的版本不可变承诺。</p>
+  <p>更新技能 = <b>发布新版本</b>。draft 可反复改，但不能被任何已发布的 Agent 版本引用。</p>
+</div>
+
+<p><code>has_scripts</code> 单独立一个字段，是因为它直接决定审查等级：只有 Markdown 的技能和带 Python 脚本的技能，风险不在一个量级（<a href="#s5">§05</a>）。</p>
+</section>
+
+<!-- ───────────────────────── 4 ───────────────────────── -->
+<section id="s4">
+<h2><span class="num">04</span>生命周期</h2>
+
+<figure>
+<svg viewBox="0 0 900 470" role="img" aria-labelledby="figS-t figS-d" font-family="var(--sans)">
+  <title id="figS-t">技能生命周期与下发路径</title>
+  <desc id="figS-d">技能包经上传、解析、自动扫描、人工审查后发布为不可变版本，再按 Agent 类型分两条路径下发：native 在进程内装载，acp 挂载到 CLI 的技能目录。</desc>
+  <defs>
+    <marker id="arS" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#94A3B8"/>
+    </marker>
+    <marker id="arSb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#38BDF8"/>
+    </marker>
+  </defs>
+
+  <g font-size="12">
+    <rect x="24" y="40" width="152" height="66" rx="8" fill="#0E1223" stroke="#334155"/>
+    <text x="100" y="68" text-anchor="middle" fill="#F8FAFC" font-weight="600">上传</text>
+    <text x="100" y="88" text-anchor="middle" fill="#64748B" font-size="9.5">目录或 zip</text>
+
+    <rect x="194" y="40" width="152" height="66" rx="8" fill="#0E1223" stroke="#334155"/>
+    <text x="270" y="68" text-anchor="middle" fill="#F8FAFC" font-weight="600">解析</text>
+    <text x="270" y="88" text-anchor="middle" fill="#64748B" font-size="9.5">frontmatter · 结构</text>
+
+    <rect x="364" y="40" width="152" height="66" rx="8" fill="#0E1223" stroke="#F59E0B" stroke-opacity=".6"/>
+    <text x="440" y="68" text-anchor="middle" fill="#F59E0B" font-weight="600">自动扫描</text>
+    <text x="440" y="88" text-anchor="middle" fill="#64748B" font-size="9.5">四层，见 §05</text>
+
+    <rect x="534" y="40" width="152" height="66" rx="8" fill="#0E1223" stroke="#F59E0B" stroke-opacity=".6"/>
+    <text x="610" y="68" text-anchor="middle" fill="#F59E0B" font-weight="600">人工审查</text>
+    <text x="610" y="88" text-anchor="middle" fill="#64748B" font-size="9.5">含脚本时必经</text>
+
+    <rect x="704" y="40" width="152" height="66" rx="8" fill="#0E1223" stroke="#22C55E" stroke-opacity=".6"/>
+    <text x="780" y="68" text-anchor="middle" fill="#22C55E" font-weight="600">发布</text>
+    <text x="780" y="88" text-anchor="middle" fill="#64748B" font-size="9.5">版本冻结</text>
+  </g>
+
+  <g stroke="#94A3B8" stroke-width="1.4" fill="none">
+    <line x1="176" y1="73" x2="194" y2="73" marker-end="url(#arS)"/>
+    <line x1="346" y1="73" x2="364" y2="73" marker-end="url(#arS)"/>
+    <line x1="516" y1="73" x2="534" y2="73" marker-end="url(#arS)"/>
+    <line x1="686" y1="73" x2="704" y2="73" marker-end="url(#arS)"/>
+  </g>
+
+  <path d="M780 106 L780 170 M280 170 L780 170" fill="none" stroke="#38BDF8" stroke-width="1.5"/>
+  <line x1="280" y1="170" x2="280" y2="204" stroke="#38BDF8" stroke-width="1.5" marker-end="url(#arSb)"/>
+  <line x1="620" y1="170" x2="620" y2="204" stroke="#38BDF8" stroke-width="1.5" marker-end="url(#arSb)"/>
+  <text x="792" y="146" fill="#38BDF8" font-size="10" font-family="monospace">被 Agent 引用</text>
+
+  <rect x="140" y="204" width="280" height="136" rx="8" fill="#0E1223" stroke="#38BDF8" stroke-opacity=".55"/>
+  <text x="280" y="232" text-anchor="middle" fill="#38BDF8" font-size="13" font-weight="600">type = native</text>
+  <line x1="160" y1="244" x2="400" y2="244" stroke="#232B3D"/>
+  <text x="280" y="266" text-anchor="middle" fill="#F8FAFC" font-size="11">进程内装载</text>
+  <text x="280" y="288" text-anchor="middle" fill="#94A3B8" font-size="10">内容进我们构造的提示词</text>
+  <text x="280" y="310" text-anchor="middle" fill="#22C55E" font-size="10">可做注入防护与裁剪</text>
+  <text x="280" y="330" text-anchor="middle" fill="#64748B" font-size="9.5">下一轮生效</text>
+
+  <rect x="480" y="204" width="280" height="136" rx="8" fill="#0E1223" stroke="#A78BFA" stroke-opacity=".55"/>
+  <text x="620" y="232" text-anchor="middle" fill="#A78BFA" font-size="13" font-weight="600">type = acp</text>
+  <line x1="500" y1="244" x2="740" y2="244" stroke="#232B3D"/>
+  <text x="620" y="266" text-anchor="middle" fill="#F8FAFC" font-size="11">文件挂载到 CLI 技能目录</text>
+  <text x="620" y="288" text-anchor="middle" fill="#94A3B8" font-size="10">CLI 自己读取与解析</text>
+  <text x="620" y="310" text-anchor="middle" fill="#EF4444" font-size="10">下发后无任何补救手段</text>
+  <text x="620" y="330" text-anchor="middle" fill="#64748B" font-size="9.5">Pod / 进程启动时生效</text>
+
+  <rect x="24" y="372" width="852" height="80" rx="8" fill="#0B0F1E" stroke="#232B3D"/>
+  <text x="44" y="398" fill="#F8FAFC" font-size="12" font-weight="600">为什么审查必须在发布前做完</text>
+  <text x="44" y="422" fill="#94A3B8" font-size="11">对 acp 类型，下发就是「把文件放进别人进程能读到的目录」—— 之后 CLI 怎么解析、模型怎么理解，我们</text>
+  <text x="44" y="442" fill="#94A3B8" font-size="11">既看不到也拦不住。<tspan fill="#F59E0B">发布前是唯一的关口，事后没有第二次机会。</tspan></text>
+</svg>
+<figcaption><b>发布前是唯一的审查窗口。</b>native 至少还能在构造提示词时做裁剪与防护；<code>acp</code> 类型是把文件交给别人的进程，交出去之后既观察不到也干预不了。这个不对称决定了审查标准必须按更严的那一侧来定。</figcaption>
+</figure>
+
+<h3>各阶段做什么</h3>
+<table>
+  <thead><tr><th style="width:130px">阶段</th><th>动作</th></tr></thead>
+  <tbody>
+    <tr><td><b>上传</b></td><td>接收目录或 zip；大小上限；条目数上限</td></tr>
+    <tr><td><b>解析</b></td><td><code>SKILL.md</code> 存在性、frontmatter 合法性、<code>name</code> 唯一性、提取 <code>description</code>、统计 <code>has_scripts</code></td></tr>
+    <tr><td><b>自动扫描</b></td><td>四层检查，见 <a href="#s5">§05</a>。有 blocker 直接拒绝</td></tr>
+    <tr><td><b>人工审查</b></td><td><code>has_scripts</code> 或 <code>source != builtin</code> 时必经</td></tr>
+    <tr><td><b>发布</b></td><td>冻结为不可变版本，计算 <code>content_hash</code>，可被 Agent 引用</td></tr>
+  </tbody>
+</table>
+</section>
+
+<!-- ───────────────────────── 5 ───────────────────────── -->
+<section id="s5">
+<h2><span class="num">05</span>安全审查</h2>
+
+<p>分四层，从机械到智能，<b>前三层自动、第四层人工</b>。前面的层拦不住的才交给后面，但后面的层不应该被用来兜前面的底。</p>
+
+<table>
+  <thead><tr><th style="width:60px">层</th><th style="width:170px">检查</th><th>拦什么</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><b>1</b></td><td><b>归档安全</b></td>
+      <td>解压路径穿越（<code>../</code>）、符号链接逃逸、二进制可执行文件、解压后总大小与条目数炸弹。<b>这层是纯机械判断，有命中一律拒绝</b></td>
+    </tr>
+    <tr>
+      <td><b>2</b></td><td><b>结构与元数据</b></td>
+      <td>缺 <code>SKILL.md</code>、frontmatter 不合法、<code>name</code> 冲突、<code>description</code> 过长或缺失、单文件超限</td>
+    </tr>
+    <tr>
+      <td><b>3</b></td><td><b>内容模式扫描</b></td>
+      <td>密钥与凭证模式、可疑外部地址、危险命令模式（<code>curl … | sh</code>）、<b>提示词注入特征</b>（「忽略之前的指令」「你现在是…」）</td>
+    </tr>
+    <tr>
+      <td><b>4</b></td><td><b>人工审查</b></td>
+      <td>意图层面的问题：这个技能想让模型做的事合理吗？脚本做的事和它声称的一致吗？</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout danger">
+  <span class="label">含脚本的技能必须人工审查，没有例外</span>
+  <p>模式扫描能发现<code>curl | sh</code> 这种明显的东西，但发现不了一段逻辑正确、意图不良的代码。而脚本是<b>真的会执行</b>的 —— 在 Pod 里是我们的算力与凭证，在本地部署里是<b>用户自己的机器</b>（<a href="local.html#s5">本地部署 §05</a>）。</p>
+  <p>把「自动扫描通过」当作可以跳过人工的理由，是这套流程里最容易出的错。<b>自动扫描的作用是省掉明显不合格的，不是替代判断。</b></p>
+</div>
+
+<h3>提示词注入是技能特有的攻击面</h3>
+<p><code>SKILL.md</code> 的正文会进入模型上下文并被当作指令。这意味着一个技能可以尝试覆盖系统提示里的约束 —— 比如让模型跳过审批、或者把上下文内容发到某个地址。</p>
+<p>对 <code>native</code> 类型，我们构造提示词时可以把技能内容放进明确标记的边界里，并声明它的优先级低于系统约束。对 <code>acp</code> 类型，<b>这取决于 CLI 怎么处理，我们无法保证</b> —— 又一处只能靠发布前审查的地方。</p>
+
+<h3>扫描结果要留存</h3>
+<p><code>scan_result</code> 记下每层的结论与命中项。用途有二：出问题时回溯「当时扫描说了什么」，以及扫描规则升级后<b>重扫存量技能</b> —— 新规则往往能发现老技能里被漏掉的问题。</p>
+</section>
+
+<!-- ───────────────────────── 6 ───────────────────────── -->
+<section id="s6">
+<h2><span class="num">06</span>Agent 关联与版本引用</h2>
+
+<p>Agent 定义里的 <code>skills</code> 字段决定它挂哪些技能。引用方式有两种，<b>可以混用</b>：</p>
+
+<pre><code>agents.skills = [
+  <span class="tok-s">"code-review"</span>,        <span class="tok-c">// 引用名：自动跟随最新发布版本</span>
+  <span class="tok-s">"api-docs@3"</span>          <span class="tok-w">// 引用版本：固定在 v3，技能更新不影响</span>
+]</code></pre>
+
+<table>
+  <thead><tr><th style="width:150px"></th><th style="width:250px">引用名（宽松）</th><th>引用版本（严格）</th></tr></thead>
+  <tbody>
+    <tr><td><b>技能更新后</b></td><td class="maybe">自动生效</td><td class="yes">不受影响</td></tr>
+    <tr><td><b>Agent 版本决定行为</b></td><td class="no">否</td><td class="yes">是</td></tr>
+    <tr><td><b>技能迭代成本</b></td><td class="yes">低</td><td class="no">要逐个 Agent 发版</td></tr>
+    <tr><td><b>适用</b></td><td>多数场景</td><td>对确定性要求高的 Agent</td></tr>
+  </tbody>
+</table>
+
+<div class="callout warn">
+  <span class="label">引用名会让「版本不可变」出现缺口</span>
+  <p><a href="agent.html#s3">Agent 管理 §03</a> 承诺「同一个 Agent 版本行为一致」。引用名的技能会打破这个承诺 —— 技能更新后，同一个 Agent 版本的实际行为变了。</p>
+  <p>这是个<b>有意接受的取舍</b>：强制逐个发版会让技能迭代寸步难行。但它必须被写下来，别让人以为「版本号一样行为就一样」。对确定性要求高的场景，用 <code>@version</code> 固定。</p>
+</div>
+
+<h3>发布时校验引用</h3>
+<pre><code><span class="tok-k">for</span> ref <span class="tok-k">in</span> agent.skills:
+    skill = resolve(ref)                       <span class="tok-c"># name 或 name@version</span>
+    <span class="tok-k">if</span> skill <span class="tok-k">is</span> <span class="tok-n">None</span>:
+        <span class="tok-k">raise</span> PublishRejected(<span class="tok-s">f"技能不存在：{ref}"</span>)
+    <span class="tok-k">if</span> skill.status != <span class="tok-s">"published"</span>:
+        <span class="tok-k">raise</span> PublishRejected(<span class="tok-s">f"技能未发布：{ref}"</span>)
+
+<span class="tok-c"># 索引预算</span>
+total = <span class="tok-k">sum</span>(<span class="tok-k">len</span>(s.description) <span class="tok-k">for</span> s <span class="tok-k">in</span> resolved)
+<span class="tok-k">if</span> total > INDEX_BUDGET:
+    <span class="tok-k">raise</span> PublishRejected(<span class="tok-s">f"技能索引超预算：{total}"</span>)   <span class="tok-c"># §02</span></code></pre>
+
+<h3>反向查询同样重要</h3>
+<p>管理界面必须能回答<b>「这个技能被哪些 Agent 引用了」</b>。它是停用前的必查项（<a href="#s9">§09</a>），也是评估技能改动影响面的唯一依据 —— 改一个被十个 Agent 引用的技能，和改一个没人用的，风险完全不同。</p>
+</section>
+
+<!-- ───────────────────────── 7 ───────────────────────── -->
+<section id="s7">
+<h2><span class="num">07</span>两类 Agent 的下发差异</h2>
+
+<table>
+  <thead><tr><th style="width:150px"></th><th style="width:250px"><code>native</code></th><th><code>acp</code></th></tr></thead>
+  <tbody>
+    <tr><td><b>下发方式</b></td><td><b>双路</b>：正文进提示词，<code>scripts/</code> 等挂进 Sandbox Pod</td><td>整包挂载到 CLI 的技能目录</td></tr>
+    <tr><td><b>解析方</b></td><td class="yes">我们自己</td><td class="no">CLI</td></tr>
+    <tr><td><b>能否裁剪/防护</b></td><td class="yes">能</td><td class="no">不能</td></tr>
+    <tr><td><b>生效时机</b></td><td>下一轮</td><td>Pod / 进程启动时</td></tr>
+    <tr><td><b>在途会话</b></td><td colspan="2" class="yes">不受影响 —— Agent 版本已钉住</td></tr>
+  </tbody>
+</table>
+
+<div class="callout danger">
+  <span class="label">native 不是「只进提示词」—— 脚本要能跑</span>
+  <p>技能的 <code>SKILL.md</code> 里可能直接指示模型执行脚本（实测一个真实技能就写着 <code>python …/scripts/search.py</code>）。所以 <code>native</code> 的技能必须<b>双路下发</b>：正文进提示词，<code>scripts/</code> / <code>references/</code> / <code>data/</code> 挂进 Sandbox Pod。</p>
+  <p>而且<b>提示词里声明的路径必须与 Pod 内的实际挂载点一致</b>，否则模型照着提示词执行就会找不到文件。详见 <a href="native.html#s5">native Agent §05</a>。</p>
+</div>
+
+<h3>acp 的挂载方式</h3>
+<p>见 <a href="runtime.html#s8">运行时链路 §08</a>：只读卷挂到 <code>~/.claude/skills</code>，或用 <code>--plugin-dir</code> 按会话指定。</p>
+
+<div class="callout warn">
+  <span class="label">按 Agent 下发不同技能集，别在一个大卷里挑</span>
+  <p>用 subPath 从共享卷里挑技能，会让「这个 Agent 能看到哪些技能」散落在部署模板里，和 <code>agents.skills</code> 这份配置产生两个真相源。</p>
+  <p><b>能力边界应当是可查询的配置，不是挂载表的副产品。</b>要么按 Agent 准备独立的卷，要么用 <code>--plugin-dir</code> 显式指定。</p>
+</div>
+
+<h3>本地部署：不要动用户的技能目录</h3>
+<div class="callout danger">
+  <span class="label">用户机器上的 ~/.claude/skills 是他自己的</span>
+  <p>平台下发技能时，不能直接往用户的技能目录里写文件 —— 那会和他自己安装的技能混在一起，卸载时也分不清哪些是平台放的。</p>
+  <p>应当用会话级的机制（如 <code>--plugin-dir</code> 指向一个平台管理的独立目录），并<b>纳入 <a href="local.html#s7">本地部署 §07</a> 的授权范围</b>。静默修改用户的配置目录，无论意图多好都是越界。</p>
+</div>
+</section>
+
+<!-- ───────────────────────── 8 ───────────────────────── -->
+<section id="s8">
+<h2><span class="num">08</span>描述质量决定选择质量</h2>
+
+<div class="callout rule">
+  <span class="label">description 是模型判断「该不该用这个技能」的唯一依据</span>
+  <p>渐进式披露意味着模型在选择时<b>只看得到 <code>description</code></b>，看不到正文。写得含糊，技能就选不中；写得宽泛，就到处乱选。</p>
+  <p>所以它不是附属说明，而是<b>技能质量的核心指标</b>。一个正文写得再好的技能，description 不行就等于没有。</p>
+</div>
+
+<h3>好的 description 包含三件事</h3>
+<pre><code>1. 这个技能做什么
+2. <span class="tok-s">什么时候该用</span>      ← 触发条件，越具体越好
+3. <span class="tok-w">什么时候不该用</span>    ← 常被忽略，但它能显著减少误选</code></pre>
+
+<p>实测的一个例子就明确写了「Skip it for pure backend logic, API/database design…」—— <b>排除条件和触发条件一样重要</b>。</p>
+
+<h3>技能之间的描述冲突</h3>
+<p>两个技能的 description 高度相似时，模型会选错或随机选。发布时应当做<b>相似度检测</b>，命中就提示作者澄清边界，而不是等上线后靠用户反馈发现。</p>
+
+<h3>选中率是必须监测的指标</h3>
+<div class="callout warn">
+  <span class="label">长期零命中是静默失效</span>
+  <p>一个技能挂上去但从来没被选中，不会报任何错 —— 它只是白白占着索引预算。这和 <a href="memory.html#s11">记忆 §11</a> 里「检索命中率为零」是同一类问题：<b>功能等于没有，但没有任何信号</b>。</p>
+  <p>按技能统计<b>选中次数</b>与<b>选中后的完成情况</b>，接入可观测性（<a href="observability.html#s7">§07</a>）。长期为零就该复查 description 或直接下掉。</p>
+</div>
+</section>
+
+<!-- ───────────────────────── 9 ───────────────────────── -->
+<section id="s9">
+<h2><span class="num">09</span>停用与删除</h2>
+
+<pre><code>draft ──发布──→ published ──发新版──→ published(v+1)
+                    │
+                    ↓ 停用
+                 disabled  ← 不能被<span class="tok-s">新的</span> Agent 版本引用
+                    │        已引用它的 Agent 版本<span class="tok-w">继续可用</span>
+                    ↓ 引用归零且会话全部结束
+                  可清理</code></pre>
+
+<div class="callout danger">
+  <span class="label">有 Agent 版本引用就不能删</span>
+  <p>和 <a href="agent.html#s9">Agent 管理 §09</a> 的 <code>deprecated</code> 同理：只要还有 Agent 版本引用某个技能版本，它的内容就必须保留 —— 否则那个 Agent 版本无法装配，存量会话无法恢复，审计也回溯不了「当时它挂的技能是什么」。</p>
+  <p><b>停用是「不再可被新引用」，不是「删掉」。</b>真正的清理要等引用归零、且引用它的会话全部结束，那通常是很久以后。</p>
+</div>
+
+<h3>紧急下架</h3>
+<p>发现技能有安全问题时，「停用」不够 —— 它只挡住新引用，已引用的 Agent 照常装配。需要一个<b>紧急下架</b>动作：</p>
+<ul>
+  <li>标记为 <code>revoked</code>，<b>所有</b>引用它的 Agent 装配时跳过该技能并记录告警</li>
+  <li>已在运行的会话：<code>native</code> 下一轮即生效；<code>acp</code> 需要重启 Pod 才能生效 —— <b>要如实告知影响范围与生效时间</b></li>
+  <li>列出受影响的 Agent 与活跃会话，供运维决定是否强制中止</li>
+</ul>
+
+<p>这和 <a href="memory.html#s10">记忆 §10</a> 的删除生效时机是同一类问题：<b>在 <code>acp</code> 一侧，我们的撤销总是慢一拍</b>，这一点不能对用户隐瞒。</p>
+</section>
+
+<!-- ───────────────────────── 10 ──────────────────────── -->
+<section id="s10">
+<h2><span class="num">10</span>来源与权限</h2>
+
+<table>
+  <thead><tr><th style="width:130px">来源</th><th style="width:170px">谁能上传</th><th>审查要求</th></tr></thead>
+  <tbody>
+    <tr><td><code>builtin</code></td><td>平台管理员</td><td>随平台发布，走代码评审流程</td></tr>
+    <tr><td><code>tenant</code></td><td>租户管理员</td><td class="maybe">全部四层；含脚本必经人工</td></tr>
+    <tr><td><code>imported</code></td><td>平台管理员</td><td class="no">第三方来源，<b>一律人工审查</b>，且需记录来源出处</td></tr>
+  </tbody>
+</table>
+
+<div class="callout warn">
+  <span class="label">租户技能只对本租户可见</span>
+  <p>租户上传的技能不得出现在其他租户的 Agent 里。这条听起来显然，但因为技能是按 <code>name</code> 引用的，<b>命名空间必须按租户隔离</b> —— 否则两个租户各有一个叫 <code>code-review</code> 的技能，解析时就会撞车。</p>
+</div>
+
+<h3>本期建议：先不开放租户自建</h3>
+<p>和 <a href="agent.html#s10">Agent 管理 §10</a> 同样的理由：一旦开放，安全审查就从「管理员的一道流程」变成「必须防住不可信输入的边界」，而技能里可以放<b>可执行脚本</b>，攻击面比 Agent 定义大得多。</p>
+<p>先把平台内置技能跑稳，把 <a href="#s5">§05</a> 的四层扫描在真实技能上验证过，再考虑开放。</p>
+</section>
+
+<!-- ───────────────────────── 11 ──────────────────────── -->
+<section id="s11">
+<h2><span class="num">11</span>待验证清单</h2>
+
+<table>
+  <thead><tr><th style="width:60px">#</th><th style="width:250px">验证项</th><th>影响</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><b>1</b></td>
+      <td><b>技能索引的实际预算</b> —— 挂多少个技能后 description 开始明显挤占上下文、影响回答质量</td>
+      <td class="no">决定 <a href="#s6">§06</a> 的索引上限取值，以及单个 Agent 挂技能的数量建议</td>
+    </tr>
+    <tr>
+      <td><b>2</b></td>
+      <td>选中准确率 —— 用真实任务样本测试模型是否选对技能，以及 description 改写对它的影响</td>
+      <td class="no">决定 <a href="#s8">§08</a> 的描述规范要写到多细</td>
+    </tr>
+    <tr>
+      <td><b>3</b></td>
+      <td>CLI 对技能目录的实际解析行为 —— 是否有大小/数量限制、格式容错度、加载时机</td>
+      <td class="maybe">决定 <a href="#s7">§07</a> 的挂载方式与技能包体积上限</td>
+    </tr>
+    <tr>
+      <td><b>4</b></td>
+      <td>提示词注入的实际防护效果 —— 构造带注入意图的测试技能，验证 <code>native</code> 侧的边界标记是否有效</td>
+      <td class="no">决定 <a href="#s5">§05</a> 第三层扫描的必要强度</td>
+    </tr>
+    <tr>
+      <td><b>5</b></td>
+      <td><code>--plugin-dir</code> 在目标 adapter 上是否可用（按会话指定技能集）</td>
+      <td class="maybe">决定 acp 侧能否避免动用户的技能目录（<a href="#s7">§07</a>）</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>建议的实现顺序</h3>
+<ol class="body">
+  <li><b>先做 CRUD + 版本 + 引用校验</b> —— 内置技能先跑通，来源可控，审查压力最小。</li>
+  <li><b>再做自动扫描的前两层</b> —— 归档安全与结构校验是纯机械判断，见效快且不会误伤。</li>
+  <li><b>然后是选中率监测</b> —— 它决定后续所有质量优化的方向，越早有数据越好。</li>
+  <li><b>内容扫描与人工审查流程最后</b> —— 在开放租户自建之前必须完成，之前可以从简。</li>
+</ol>
+</section>
+
+<footer>
+  <p>相关文档：<a href="agent.html">Agent 管理设计</a>（技能如何绑定到 Agent）· <a href="runtime.html#s8">运行时链路 §08</a>（Pod 内的挂载细节）· <a href="local.html">本地部署设计</a>（用户机器上的技能边界）。</p>
+</footer>
+
+</main>
+</div>
+</body>
+</html>

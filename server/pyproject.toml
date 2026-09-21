@@ -1,0 +1,40 @@
+[project]
+name = "atlas-server"
+version = "0.1.0"
+description = "Atlas server — FastAPI, Postgres, Redis."
+requires-python = ">=3.13"
+dependencies = [
+  "atlas-acp",
+  "atlas-cluster",
+  "atlas-engine",
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.32",
+  "sqlalchemy[asyncio]>=2.0.36",
+  "asyncpg>=0.30",
+  "alembic>=1.14",
+  "pydantic-settings>=2.6",
+  "redis>=5.2",
+  "httpx>=0.27",
+  "langchain-mcp-adapters>=0.1",
+  # 对象存储走 S3 协议：阿里云 OSS 的 S3 兼容端点、MinIO、AWS S3 同一份
+  # 实现。测试用 moto 的内存桶，三种环境的断言等价。
+  "boto3>=1.35",
+  # 遥测（可观测性设计 §02）。★ 是必要依赖而不是可选 extra：
+  #   opentelemetry-api 在没有配置 SDK 时是官方保证的 no-op，那正是它的
+  #   设计目的。做成 extra 只会多出「开了 otel_enabled 却没装包」这一种
+  #   失败模式，而开关本来就该是行为层面的（Settings.otel_enabled）。
+  # ★ 导出走 http/protobuf 而不是 grpc：少一层 grpc 依赖，且 4318 这条路
+  #   对代理与网关更友好。
+  "opentelemetry-api>=1.30",
+  "opentelemetry-sdk>=1.30",
+  "opentelemetry-exporter-otlp-proto-http>=1.30",
+  "mem0ai>=2.1.0",
+  "fastembed>=0.8.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/atlas_server"]

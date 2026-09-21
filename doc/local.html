@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>本地部署设计 · AI Platform</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="sitenav">
+  <a class="brand" href="./">AI&nbsp;<b>Platform</b>&nbsp;/ 设计文档</a>
+  <div class="links">
+    <a href="./">目录</a>
+    <a href="detail/">详细设计</a>
+    <a href="architecture.html">系统架构</a>
+    <a href="agent.html">Agent 管理</a>
+    <a href="skill.html">技能管理</a>
+    <a href="mcp.html">MCP 管理</a>
+    <a href="permission.html">权限管理</a>
+    <a href="execution.html">执行环境</a>
+    <a href="session.html">会话管理</a>
+    <a href="native.html">native Agent</a>
+    <a href="runtime.html">运行时链路</a>
+    <a class="on" href="local.html">本地部署</a>
+    <a href="memory.html">记忆</a>
+    <a href="observability.html">可观测性</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+<nav class="toc" aria-label="目录">
+  <div class="eyebrow">本页</div>
+  <ol>
+    <li><a href="#s1">定位与范围</a></li>
+    <li><a href="#s2">拓扑：连接反转</a></li>
+    <li><a href="#s3">设备配对与信任</a></li>
+    <li><a href="#s4">与云上 Pod 的差异</a></li>
+    <li><a href="#s5">会话独占与租约</a></li>
+    <li><a href="#s6">工作区与配置</a></li>
+    <li><a href="#s7">授权与隐私</a></li>
+    <li><a href="#s8">治理缺口</a></li>
+    <li><a href="#s9">待验证清单</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<header class="hero">
+  <p class="kicker">Local Deployment</p>
+  <h1>本地部署设计</h1>
+  <p class="lede">助理也可以跑在用户自己的电脑上。协议链路与云上 Pod 完全一致 —— 同样是 Bridge 经 ACP 驱动 CLI，只是换了个执行位置。差异集中在连接方向、工作区归属、凭证与信任边界。</p>
+  <div class="meta">
+    <span>驱动模式</span><span>连接反转</span><span>租约</span><span>授权</span>
+  </div>
+</header>
+
+<div class="callout rule">
+  <span class="label">本期范围：只做驱动模式</span>
+  <p><b>平台发起 Run，在用户机器上执行。</b>用户自己在终端里起的会话，平台<b>不观察、不同步、不展示</b>。</p>
+  <p>曾评估过「镜像」方案（监听 CLI 的 transcript 文件，把用户在终端的对话同步到网页端），<b>已排除</b> —— 理由见 <a href="#s1">§01</a>。</p>
+</div>
+
+<!-- ───────────────────────── 1 ───────────────────────── -->
+<section id="s1">
+<h2><span class="num">01</span>定位与范围</h2>
+
+<p>本地部署解决的是「助理需要访问用户本机环境」的场景：真实的代码仓库、本地服务、内网资源、用户自己的开发工具链。这些东西搬不进云上 Pod，所以让助理去它们那里。</p>
+
+<p><b>协议链路与云上完全相同</b>（<a href="runtime.html#s2">运行时链路 §02</a>）：Bridge 作为 ACP client 拉起 adapter，adapter 驱动 Claude Code。本文只写不同的那部分。</p>
+
+<h3>为什么排除了镜像方案</h3>
+<p>镜像的设想是：监听 <code>~/.claude/projects/**/*.jsonl</code>，把用户在自己终端里的对话同步到网页端。实测后排除，三条理由按分量排序：</p>
+
+<ol class="body">
+  <li>
+    <b>拿不到 token 级流式，且最差情况很难看。</b>实测一次 400 词回复：文件在 4.41s 建立，随后<b>约 15 秒零增长</b>，19.85s 时整段 5571 字节一次落盘。transcript 按 content block 完成时写入，生成期间完全不动 —— 网页端会静默十几秒然后整段蹦出来。
+  </li>
+  <li>
+    <b>与驱动模式并存会分叉对话。</b>两个 claude 进程持有同一会话时，各自有独立的内存上下文、互不可见，却追加进同一个文件。此时 transcript 记录的是<b>两段发散的对话</b>，继续同步只会污染 Message 账本。
+  </li>
+  <li>
+    <b>依赖未文档化的内部格式。</b>transcript 的结构、字段与写入时机都是 Claude Code 的内部实现，随版本变化，而它会成为 Message 的来源 —— 核心数据路径不该建在这种地基上。
+  </li>
+</ol>
+
+<div class="callout rule">
+  <span class="label">排除镜像带来的连带简化</span>
+  <p>不再需要解析 transcript，于是 <b>Message 的来源回到 ACP <code>session/update</code></b> —— 一个有明确语义的文档化协议，云上和本地走同一条路径，<a href="session.html#s11">会话管理 §11</a> 的固化清单原样适用。</p>
+  <p>同时去掉了 <code>messages.origin</code> / <code>source_uuid</code> 两个字段、transcript 解析器、版本探测、以及一整套宽容解析要求。<b>少了一个会随上游版本漂移的依赖。</b></p>
+</div>
+
+<div class="callout warn">
+  <span class="label">如果确实需要「本地终端的对话在网页端可见」</span>
+  <p><code>claude --remote-control [name]</code> 与 <code>settings.json</code> 的 <code>remoteControlAtStartup</code> 是 Anthropic 的第一方功能，用途正是把本地会话投到别处查看与控制。它走 Anthropic 自己的通道，我们用不上，但<b>值得先确认它是否已经满足需求</b> —— 若是，这块就不必自建。</p>
+</div>
+</section>
+
+<!-- ───────────────────────── 2 ───────────────────────── -->
+<section id="s2">
+<h2><span class="num">02</span>拓扑：连接反转</h2>
+
+<figure>
+<svg viewBox="0 0 900 440" role="img" aria-labelledby="figL-t figL-d" font-family="var(--sans)">
+  <title id="figL-t">本地部署拓扑</title>
+  <desc id="figL-d">用户机器上运行一个 Bridge，它主动外拨 WebSocket 连接到 Server。Bridge 经 ACP 拉起 adapter 与 Claude Code，后者访问用户的本地工作目录。用户自己在终端启动的 Claude Code 不在平台视野内。</desc>
+  <defs>
+    <marker id="arL" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#94A3B8"/>
+    </marker>
+    <marker id="arLg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#22C55E"/>
+    </marker>
+    <marker id="arLv" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#A78BFA"/>
+    </marker>
+  </defs>
+
+  <rect x="330" y="16" width="240" height="66" rx="8" fill="#0E1223" stroke="#22C55E" stroke-opacity=".55"/>
+  <text x="450" y="44" text-anchor="middle" fill="#F8FAFC" font-size="14" font-weight="600">Server</text>
+  <text x="450" y="64" text-anchor="middle" fill="#94A3B8" font-size="10.5">会话管理 · Message 账本</text>
+
+  <line x1="450" y1="190" x2="450" y2="82" stroke="#22C55E" stroke-width="2" marker-start="url(#arLg)" marker-end="url(#arLg)"/>
+  <text x="462" y="126" fill="#22C55E" font-size="10" font-family="monospace">WS · 本地主动外拨</text>
+  <text x="462" y="142" fill="#64748B" font-size="9">NAT 后面，Server 连不进来</text>
+
+  <rect x="40" y="166" width="820" height="252" rx="10" fill="#0B0F1E" stroke="#334155" stroke-dasharray="6 4"/>
+  <text x="58" y="190" fill="#CBD5E1" font-size="12" font-weight="600">用户电脑</text>
+
+  <rect x="330" y="204" width="240" height="76" rx="8" fill="#0E1223" stroke="#22C55E" stroke-opacity=".5"/>
+  <text x="450" y="230" text-anchor="middle" fill="#F8FAFC" font-size="13" font-weight="600">本地 Bridge</text>
+  <text x="450" y="250" text-anchor="middle" fill="#94A3B8" font-size="10">ACP client · 设备注册 · 心跳</text>
+  <text x="450" y="268" text-anchor="middle" fill="#94A3B8" font-size="10">租约检测</text>
+
+  <line x1="570" y1="242" x2="622" y2="242" stroke="#A78BFA" stroke-width="1.5" marker-end="url(#arLv)"/>
+  <text x="596" y="232" text-anchor="middle" fill="#A78BFA" font-size="9" font-family="monospace">ACP</text>
+
+  <rect x="622" y="204" width="218" height="76" rx="8" fill="#0E1223" stroke="#A78BFA" stroke-opacity=".55"/>
+  <text x="731" y="230" text-anchor="middle" fill="#F8FAFC" font-size="12.5">ACP adapter + claude</text>
+  <text x="731" y="250" text-anchor="middle" fill="#94A3B8" font-size="10">由 Bridge 拉起</text>
+  <text x="731" y="268" text-anchor="middle" fill="#64748B" font-size="9">用户自己的凭证</text>
+
+  <line x1="731" y1="280" x2="731" y2="326" stroke="#94A3B8" stroke-width="1.5" marker-end="url(#arL)"/>
+  <rect x="622" y="326" width="218" height="66" rx="8" fill="#0E1223" stroke="#F59E0B" stroke-opacity=".5"/>
+  <text x="731" y="352" text-anchor="middle" fill="#F8FAFC" font-size="12.5">已授权的本地目录</text>
+  <text x="731" y="372" text-anchor="middle" fill="#F59E0B" font-size="10">真实文件，无 OSS 挂载</text>
+
+  <rect x="62" y="204" width="218" height="76" rx="8" fill="#0B0F1E" stroke="#334155" stroke-dasharray="4 3"/>
+  <text x="171" y="230" text-anchor="middle" fill="#64748B" font-size="12.5">用户终端 claude</text>
+  <text x="171" y="250" text-anchor="middle" fill="#475569" font-size="10">用户自己起的</text>
+  <text x="171" y="270" text-anchor="middle" fill="#EF4444" font-size="10">平台不可见 · 本期不处理</text>
+
+  <line x1="280" y1="242" x2="326" y2="242" stroke="#334155" stroke-width="1.5" stroke-dasharray="3 3"/>
+  <text x="303" y="232" text-anchor="middle" fill="#EF4444" font-size="11">✕</text>
+</svg>
+<figcaption><b>协议链路不变，连接方向变了。</b>用户电脑在 NAT 后面，Server 连不进来，必须由 <b>Bridge 主动外拨</b>并保持长连。ACP 自带的 WebSocket 传输帮不上忙 —— 它是 client 拨 agent，方向相反，且标注为 experimental。<br><br>左侧用户自己起的 <code>claude</code> 不在平台视野内：ACP 走 stdio 父子管道，只有 spawn 它的进程能通信，没有第三方 attach 的入口（<a href="runtime.html#s2">运行时链路 §2.1</a>）。</figcaption>
+</figure>
+
+<h3>连接管理</h3>
+<ul>
+  <li><b>设备注册</b> —— Bridge 首次连接时注册为一台设备，绑定到用户。同一用户可有多台，发起会话时需要选择目标设备。</li>
+  <li><b>连接注册表</b> —— Server 侧把 <code>session_id → 设备连接</code> 与云上的 <code>session_id → Pod</code> 收敛成同一个抽象。<b>不要按 Pod 名硬编码查找</b>，否则本地场景要另写一套。</li>
+  <li><b>心跳与重连</b> —— 断线期间会话置 <code>cold</code>，设备回来后按 <a href="runtime.html#s3">§03</a> 的能力位恢复。</li>
+  <li><b>离线提交</b> —— 用户在网页端对一台离线设备发起 Run，应当<b>立即拒绝并说明设备离线</b>，而不是排队等待。排队会让用户以为任务在跑。</li>
+</ul>
+</section>
+
+<!-- ───────────────────────── 3 ───────────────────────── -->
+<section id="s3">
+<h2><span class="num">03</span>设备配对与信任</h2>
+
+<p>Bridge 与 Server 建立的是一条<b>能在用户电脑上执行任意命令</b>的通道。它的接入控制不是锦上添花，是这条链路的前提。</p>
+
+<h3>威胁模型：两个方向都要防</h3>
+<table>
+  <thead><tr><th style="width:180px">方向</th><th style="width:250px">攻击</th><th>后果</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><b>冒充设备</b><br><span style="color:var(--dim);font-size:12px">连上 Server</span></td>
+      <td>攻击者注册一个假 Bridge，声称是用户 X 的设备</td>
+      <td>收到本该发往该用户机器的 prompt；回传伪造的执行结果与消息</td>
+    </tr>
+    <tr>
+      <td><b>冒充 Server</b><br><span style="color:var(--dim);font-size:12px">驱动 Bridge</span></td>
+      <td>攻击者让用户的 Bridge 连到自己控制的服务端</td>
+      <td class="no"><b>在用户电脑上任意执行命令、读写授权目录内的全部文件</b></td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout danger">
+  <span class="label">第二个方向危害更大，却最容易被忽略</span>
+  <p>通常只想着「别让坏人连上我的服务」，但这条链路里<b>被冒充的服务端等于拿到一台机器的 shell</b>。Bridge 必须验证 Server 的身份，而不只是 Server 验证 Bridge。</p>
+</div>
+
+<h3>配对流程</h3>
+<pre><code>1. 用户在网页端（<span class="tok-s">已认证会话</span>）点击「添加设备」
+2. Server 生成配对码：<span class="tok-w">短时效 · 一次性 · 绑定到该用户</span>
+     只在这个已认证会话里展示，不经任何其他渠道下发
+
+3. 用户在自己机器上执行：
+     bridge pair <span class="tok-s">&lt;code&gt;</span> --server <span class="tok-s">https://&lt;固定域名&gt;</span>
+
+4. Bridge <span class="tok-w">向用户确认</span>：
+     「即将把本机绑定到 账号 alice@corp（组织 ACME）
+       服务端 https://platform.corp
+       绑定后该服务端可在本机执行命令。确认？」
+
+5. TLS 校验通过后，用配对码换取<span class="tok-s">长期设备凭证</span>
+6. Server 记录 device → user 绑定；配对码立即作废
+7. 后续连接一律使用设备凭证</code></pre>
+
+<h3>配对码的性质</h3>
+<ul>
+  <li><b>短时效</b> —— 分钟级过期，不是小时级。它是一次握手的引子，不是长期凭证。</li>
+  <li><b>一次性</b> —— 兑换后立即作废，无论成功与否。</li>
+  <li><b>绑定到生成它的用户</b> —— 不是通用邀请码。</li>
+  <li><b>只在已认证会话里展示</b> —— 不发邮件、不发 IM、不进日志。</li>
+  <li><b>高熵，或低熵配严格限流</b> —— 若为方便手输而用短码，必须配合按用户与按 IP 的尝试次数限制，否则可被枚举。</li>
+</ul>
+
+<div class="callout danger">
+  <span class="label">配对码钓鱼是最现实的攻击</span>
+  <p>攻击者不需要破解任何东西，只需要让用户运行一条命令：<i>「你的环境有问题，执行这个修复一下」</i> —— 里面是攻击者自己的配对码和服务端地址。用户照做，攻击者就获得了这台机器的命令执行权。</p>
+  <p>技术手段拦不住用户主动运行命令，<b>唯一的防线是第 4 步的确认提示</b>：必须明确显示<b>绑定到哪个账号、哪个组织、哪个服务端域名</b>，并说明授予了什么权限。一个只说「确认配对？(y/N)」的提示等于没有。</p>
+  <p>配套的产品规则：<b>配对码只能来自用户自己的已认证会话</b>，任何「别人给你一个码」的场景都应当在文档与提示里明确标记为不正常。</p>
+</div>
+
+<h3>双向验证</h3>
+<table>
+  <thead><tr><th style="width:180px">谁验证谁</th><th>手段</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>Bridge 验证 Server</td>
+      <td>TLS 证书校验 + <b>服务端域名固定在配置里</b>；<b>拒绝 <code>ws://</code> 明文连接</b>；自托管场景下固定 CA 或证书指纹</td>
+    </tr>
+    <tr>
+      <td>Server 验证 Bridge</td>
+      <td>设备凭证放在 <b>WS 握手的 header</b> 里校验 —— 不是连上之后再认证。未通过直接拒绝握手，不进入任何业务逻辑</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>设备凭证</h3>
+<ul>
+  <li><b>per-device</b> —— 一台一份，不共享。</li>
+  <li><b>存在 OS keychain</b> —— 退而求其次才是受限权限的文件，不要明文放在用户目录。</li>
+  <li><b>可轮换</b> —— 定期换发，旧凭证留重叠宽限期。</li>
+  <li><b>撤销即时生效</b> —— 用户点「移除设备」后，<b>正在保持的连接要立刻断开</b>，而不只是阻止下次连接。长连接场景下这两者差别很大。</li>
+</ul>
+
+<h3>会话必须绑定到设备</h3>
+<p><a href="#s4">§04</a> 说过来自本地设备的数据都是不可信输入。配对让这条要求可以落地：</p>
+<pre><code>收到设备 D 发来的关于 session S 的消息
+  → 校验 S 的 owner == D 绑定的用户      <span class="tok-c"># 不是就丢弃</span>
+  → 校验 S 当前的执行设备 == D            <span class="tok-c"># 不是就丢弃</span>
+  → 才进入业务处理</code></pre>
+<p><b>不要因为消息里带了 <code>session_id</code> 就相信它属于这个设备。</b>一台被攻破的设备不应能读写同一用户在另一台设备上的会话，更不用说别人的会话。</p>
+
+<h3>凭证被复制怎么办</h3>
+<p>设备凭证毕竟是一串可以被拷走的数据。无法根除，但要可发现、可处置：</p>
+<ul>
+  <li><b>展示活跃设备</b> —— 名称、最近连接时间、IP 与大致位置，用户自己能看出异常。</li>
+  <li><b>并发异常告警</b> —— 同一设备凭证从不同 IP 同时连接，是明确的可疑信号。</li>
+  <li><b>一键撤销</b> —— 发现异常时用户能立即断掉，不需要联系管理员。</li>
+</ul>
+
+<h3>Bridge 的本地监听面</h3>
+<div class="callout warn">
+  <span class="label">本机的其他进程也是攻击者</span>
+  <p>如果 Bridge 在本机监听端口（比如提供本地控制界面或状态接口），<b>同机的任何进程、以及多用户机器上的其他账号都能连上它</b>。</p>
+  <p>优先用 <b>Unix domain socket 配文件权限</b>；必须用 TCP 时只绑 <code>127.0.0.1</code> 并要求本地令牌（令牌文件权限 0600）。这条容易漏，因为「本机」听起来像是安全的。</p>
+</div>
+</section>
+
+<!-- ───────────────────────── 4 ───────────────────────── -->
+<section id="s4">
+<h2><span class="num">04</span>与云上 Pod 的差异</h2>
+
+<table>
+  <thead><tr><th style="width:170px"></th><th style="width:270px">云上 Pod</th><th>用户电脑</th></tr></thead>
+  <tbody>
+    <tr><td><b>连接方向</b></td><td>Server 主动连 Pod</td><td class="maybe">Bridge 主动外拨</td></tr>
+    <tr><td><b>ACP 链路</b></td><td colspan="2" class="yes">完全相同 —— Bridge spawn adapter，adapter 驱动 CLI</td></tr>
+    <tr><td><b>工作区</b></td><td>OSS 挂载，平台管理</td><td class="maybe">用户的真实目录，<b>授权范围内</b></td></tr>
+    <tr><td><b>CLI 状态目录</b></td><td>NAS 卷，per-session</td><td class="maybe">用户的 <code>~/.claude</code>，<b>与他自己的会话共用</b></td></tr>
+    <tr><td><b>凭证</b></td><td>平台 Secret，指向 Higress</td><td class="no">用户自己的订阅，直连厂商</td></tr>
+    <tr><td><b>隔离</b></td><td>Pod 边界</td><td class="no">无 —— 与用户其他进程同机</td></tr>
+    <tr><td><b>信任</b></td><td>我们控制</td><td class="no"><b>不可信</b>，可被篡改</td></tr>
+    <tr><td><b>会话独占</b></td><td>天然（一 Pod 一会话）</td><td class="no">需租约，见 <a href="#s5">§04</a></td></tr>
+    <tr><td><b>生命周期</b></td><td>idle TTL 销毁 Pod</td><td class="maybe">idle 关闭 adapter 进程</td></tr>
+  </tbody>
+</table>
+
+<div class="callout danger">
+  <span class="label">信任边界是最根本的差异</span>
+  <p>Pod 是我们调度、我们控制的；用户的 Bridge 跑在他自己的机器上，可以被替换、被代理、被逆向。<b>Server 收到的一切来自本地设备的数据都是不可信输入</b> —— 要做字段校验、大小限制、速率配额，不能沿用对 Pod 的信任假设。</p>
+  <p>具体地：不要因为消息声称属于某个 <code>session_id</code> 就相信它；要校验该设备是否确实持有那个会话的租约、以及该会话是否属于这个用户。</p>
+</div>
+</section>
+
+<!-- ───────────────────────── 4 ───────────────────────── -->
+<section id="s5">
+<h2><span class="num">05</span>会话独占与租约</h2>
+
+<p>云上一个 Pod 一个会话，独占是天然的。本地不是 —— 用户随时可能在自己的终端 <code>claude --resume</code> 一个平台正持有的会话。</p>
+
+<div class="callout danger">
+  <span class="label">并发持有会分叉对话，必须拦住</span>
+  <p>两个 claude 进程持有同一会话时，<b>各自有独立的内存上下文、互不可见</b>，却追加进同一个 transcript。两边的下一轮都会带着自己视角的历史去请求模型，越走越远。这不是「体验降级」，是对话分叉。</p>
+</div>
+
+<h3>检测：claude agents --json</h3>
+<p>这是<b>受支持的</b>枚举接口（明确标注 for scripting、不需要 TTY），实测输出：</p>
+<pre><code>[{ <span class="tok-s">"pid"</span>: 284674, <span class="tok-s">"cwd"</span>: <span class="tok-s">"/root/workspace/deer-flow"</span>,
+   <span class="tok-s">"kind"</span>: <span class="tok-s">"interactive"</span>, <span class="tok-s">"sessionId"</span>: <span class="tok-s">"1eb27252-…"</span>,
+   <span class="tok-s">"name"</span>: <span class="tok-s">"deer-flow-23"</span>, <span class="tok-s">"status"</span>: <span class="tok-s">"busy"</span>, <span class="tok-s">"startedAt"</span>: … }]</code></pre>
+
+<p>Bridge 知道自己 spawn 的子进程 PID，于是能判断某个 <code>sessionId</code> 是被<b>我们的 adapter</b> 持有，还是被<b>用户的终端</b>持有。内部文件 <code>~/.claude/sessions/&lt;pid&gt;.json</code> 有更多字段（<code>entrypoint</code>、<code>peerProtocol</code>），可作补充但不作主依据 —— 它是未文档化的内部状态。</p>
+
+<h3>租约规则</h3>
+<pre><code>取得租约 → 平台可驱动该会话
+  ├─ 未被任何活进程持有        → 直接取得
+  ├─ 被我们自己的 adapter 持有  → 已持有，继续
+  └─ <span class="tok-w">被用户终端持有</span>          → 拒绝，网页端提示「该会话正在本地终端使用中」
+
+释放租约 → session/close 让 agent 收尾，再退出 adapter 进程
+  触发：idle TTL，或用户在网页端显式「移交到本地」</code></pre>
+
+<div class="callout warn">
+  <span class="label">租约是协作式的，不是强制的</span>
+  <p>用户随时可以在自己的终端 resume 一个平台正持有的会话，那是他的机器、他的 CLI，没有任何机制能阻止。Bridge 应当<b>持续监测</b>，发现外来进程接管时：把当前 Run 标记为冲突、网页端显示告警、停止把 ACP 事件当作权威、并主动 <code>session/close</code> 退出以避免继续加剧分叉。</p>
+  <p><b>给一个显式的「移交到本地」按钮</b>，让用户主动释放而不是猜 idle TTL 何时到。交接点明确后，冲突就从「随时可能发生」变成「只在用户无视提示时发生」。</p>
+</div>
+
+<h3>本地已存在的会话能否被接管</h3>
+<p>要驱动一个已存在的 CLI 会话，需要 <code>session/resume</code> 或 <code>session/load</code>。但用户在终端起的会话<b>从未经过 ACP</b>，没有 ACP sessionId —— 能否直接拿 Claude Code 的原生 <code>sessionId</code> 去调，取决于 adapter 的 ID 空间是否与 CLI 一致（<a href="#s9">§08</a> 第 2 项）。</p>
+<p>本期<b>不提供这个入口</b>。网页端只展示平台自己发起的会话。</p>
+</section>
+
+<!-- ───────────────────────── 5 ───────────────────────── -->
+<section id="s6">
+<h2><span class="num">06</span>工作区与配置</h2>
+
+<h3>工作区就是用户的真实目录</h3>
+<p>没有 OSS 挂载。<code>session/new</code> 的 <code>cwd</code> 指向用户授权的某个本地目录，<code>additionalDirectories</code> 默认为空。</p>
+
+<div class="callout danger">
+  <span class="label">cwd 决定了助理能改哪些文件</span>
+  <p>云上写坏了大不了重建 Pod；本地写坏的是用户的真实代码。因此：</p>
+  <ul style="margin-bottom:0">
+    <li><b>目录必须由用户显式授权</b>，平台不得自行选择或扩大范围</li>
+    <li><b><code>additionalDirectories</code> 默认为空</b>，每增加一个都要用户单独确认</li>
+    <li><b>审批回路不能省</b> —— <a href="runtime.html#s2">§2.6</a> 的规则在本地更重要，绝不能自动批准</li>
+  </ul>
+</div>
+
+<h3>CLI 状态目录与用户共用</h3>
+<p>adapter 拉起的仍是用户机器上的 <code>claude</code>，读写他自己的 <code>~/.claude</code>。这与云上「per-session NAS 卷」不同 —— 平台会话的 transcript 和用户自己的会话<b>混在同一个目录树里</b>。</p>
+<p>后果：不要假设能按目录清理平台会话的状态；要清理得靠 <code>session/delete</code>（若 adapter 支持），而不是删文件。</p>
+
+<h3>MCP 与技能</h3>
+<ul>
+  <li><b>MCP</b> —— 仍由 <code>session/new</code> 的 <code>mcpServers</code> 传入。若要指向 Higress，前提是用户机器能访问到内网网关；否则只能直连或不配。</li>
+  <li><b>技能</b> —— 用户机器上的 <code>~/.claude/skills/</code> 是他自己的。平台若要下发技能，须经用户同意后写入，或用 <code>--plugin-dir</code> 之类的会话级机制（取决于 adapter 是否暴露）。<b>不要静默修改用户的技能目录。</b></li>
+</ul>
+</section>
+
+<!-- ───────────────────────── 6 ───────────────────────── -->
+<section id="s7">
+<h2><span class="num">07</span>授权与隐私</h2>
+
+<p>去掉镜像后隐私面收窄了很多 —— <b>平台只看得到自己发起的会话</b>，不读用户的历史、不枚举他的项目。但仍有两处需要明确授权：</p>
+
+<table>
+  <thead><tr><th style="width:190px">授权项</th><th>范围</th></tr></thead>
+  <tbody>
+    <tr><td><b>设备接入</b></td><td>安装 Bridge 并绑定到账号。可随时解绑，解绑后立即断连。</td></tr>
+    <tr><td><b>目录访问</b></td><td>逐个目录授权，作为 <code>cwd</code> 或 <code>additionalDirectories</code> 的候选。未授权目录不得出现在任何会话里。</td></tr>
+  </tbody>
+</table>
+
+<ul>
+  <li><b>默认最小</b> —— 安装 Bridge 不等于授权任何目录，要有独立的添加步骤。</li>
+  <li><b>可见的状态</b> —— 用户应随时能看到：哪些目录已授权、当前有哪些活跃会话、各自在动哪个目录。</li>
+  <li><b>本地可中断</b> —— Bridge 要有本地的「立即停止」入口，不依赖网络可达。用户在自己机器上必须能单方面叫停。</li>
+</ul>
+
+<div class="callout warn">
+  <span class="label">可观测性也要跟着收敛</span>
+  <p>本地 Bridge 上报 OTel 在技术上没问题，但涉及用户隐私与网络。<b>只上报与平台会话相关的 span</b>（<code>session_id</code>、<code>run_id</code>、时长、消息计数），不上报本地环境信息、路径内容或用户其他进程的状况。</p>
+</div>
+</section>
+
+<!-- ───────────────────────── 7 ───────────────────────── -->
+<section id="s8">
+<h2><span class="num">08</span>治理缺口</h2>
+
+<div class="callout warn">
+  <span class="label">本地会话的模型调用绕过 Higress</span>
+  <p>用户机器上的 Claude Code 用<b>他自己的订阅或 API key</b>，直连模型厂商。于是 <a href="architecture.html#s6">系统架构 §06</a> 里 LLM 网关的五项收益 —— 鉴权、限流、配额、成本核算、出站审计 —— 在本地会话上<b>全部失效</b>。</p>
+  <p>这不一定是问题（用户用自己的额度干自己的活本就合理），但<b>必须是明确的决定而非意外发现</b>。如果产品上有用量统计或合规审计的承诺，本地会话是一块盲区，口径要先说清楚。</p>
+</div>
+
+<p>相比之下 MCP 还有救：<code>session/new</code> 的 <code>mcpServers</code> 由我们传入，只要用户机器能访问 Higress，工具调用仍可收口。<b>这是本地场景下唯一还能守住的治理点，值得优先保证网络可达性。</b></p>
+
+<h3>审计记录仍然完整</h3>
+<p>好消息是：审批决定、工具调用、消息内容都经 ACP 流回 Server 并落进 Message 账本（<a href="session.html#s11">会话管理 §11</a> 的固化清单）。<b>「谁在什么时候批准了什么」这条审计链在本地场景下不受影响</b> —— 缺的只是模型侧的用量与出站数据审计。</p>
+</section>
+
+<!-- ───────────────────────── 8 ───────────────────────── -->
+<section id="s9">
+<h2><span class="num">09</span>待验证清单</h2>
+
+<p>除 <a href="runtime.html#s12">运行时链路 §12</a> 的通用项外，本地场景另有：</p>
+
+<table>
+  <thead><tr><th style="width:60px">#</th><th style="width:250px">验证项</th><th>影响</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><b>1</b></td>
+      <td>两个 claude 进程同时 resume 同一会话时的实际行为 —— CLI 自身是否有锁或告警</td>
+      <td class="no">决定 <a href="#s5">§04</a> 租约要做到多严格，以及能否依赖 CLI 自己拦一道</td>
+    </tr>
+    <tr>
+      <td><b>2</b></td>
+      <td>能否用 Claude Code 原生 <code>sessionId</code> 调 ACP <code>session/resume</code> / <code>load</code></td>
+      <td class="maybe">决定将来能否接管用户已有的本地会话</td>
+    </tr>
+    <tr>
+      <td><b>3</b></td>
+      <td>adapter 在用户机器上的安装与升级方式 —— 随 Bridge 分发，还是依赖用户环境</td>
+      <td class="no">决定版本一致性与故障排查成本</td>
+    </tr>
+    <tr>
+      <td><b>4</b></td>
+      <td>Windows / macOS 上的进程管理、路径与文件权限差异</td>
+      <td class="maybe">决定 Bridge 的跨平台实现成本</td>
+    </tr>
+    <tr>
+      <td><b>5</b></td>
+      <td>断线重连期间 adapter 进程的处置 —— 保活还是关闭</td>
+      <td class="maybe">影响短暂网络抖动时的用户感受与资源占用</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>建议的上线顺序</h3>
+<ol class="body">
+  <li><b>先在云上把驱动模式跑通</b> —— 同一套 ACP 链路，云上环境可控，问题更容易定位。</li>
+  <li><b>再做连接反转与设备注册</b> —— 这是本地场景唯一的结构性新增。</li>
+  <li><b>然后是授权与租约</b> —— 前者是上线前提，后者决定并发安全。</li>
+  <li><b>最后处理跨平台</b> —— 先支持一个平台跑顺，再铺开。</li>
+</ol>
+</section>
+
+<footer>
+  <p>相关文档：<a href="architecture.html">系统架构设计</a> · <a href="session.html">会话管理设计</a> · <a href="runtime.html">运行时链路设计</a>（ACP 协议与云上 Pod 形态）。</p>
+</footer>
+
+</main>
+</div>
+</body>
+</html>

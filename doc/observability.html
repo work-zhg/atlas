@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>可观测性设计 · AI Platform</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="sitenav">
+  <a class="brand" href="./">AI&nbsp;<b>Platform</b>&nbsp;/ 设计文档</a>
+  <div class="links">
+    <a href="./">目录</a>
+    <a href="detail/">详细设计</a>
+    <a href="architecture.html">系统架构</a>
+    <a href="agent.html">Agent 管理</a>
+    <a href="skill.html">技能管理</a>
+    <a href="mcp.html">MCP 管理</a>
+    <a href="permission.html">权限管理</a>
+    <a href="execution.html">执行环境</a>
+    <a href="session.html">会话管理</a>
+    <a href="native.html">native Agent</a>
+    <a href="runtime.html">运行时链路</a>
+    <a href="local.html">本地部署</a>
+    <a href="memory.html">记忆</a>
+    <a class="on" href="observability.html">可观测性</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+<nav class="toc" aria-label="目录">
+  <div class="eyebrow">本页</div>
+  <ol>
+    <li><a href="#s1">定位与三个信号</a></li>
+    <li><a href="#s2">采集架构</a></li>
+    <li><a href="#s3">语义约定</a></li>
+    <li><a href="#s4">一次 Run 的 Trace</a></li>
+    <li><a href="#s5">助理侧：CLI 遥测接入</a></li>
+    <li><a href="#s6">关联维度</a></li>
+    <li><a href="#s7">指标清单</a></li>
+    <li><a href="#s8">内容与隐私</a></li>
+    <li><a href="#s9">告警</a></li>
+    <li><a href="#s10">成本归因</a></li>
+    <li><a href="#s11">待验证清单</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<header class="hero">
+  <p class="kicker">Observability</p>
+  <h1>可观测性设计</h1>
+  <p class="lede">按 OpenTelemetry GenAI 语义约定采集，Collector 分流到 Langfuse 与通用后端。目标是让一次 Run 在 Server、Higress、Bridge、CLI 四层上拼成同一条可追查的链路。</p>
+  <div class="meta">
+    <span>OTel</span><span>GenAI semconv</span><span>Langfuse</span><span>Collector</span><span>成本归因</span>
+  </div>
+</header>
+
+<div class="callout warn">
+  <span class="label">本文的事实基础</span>
+  <p>GenAI 语义约定的属性名与指标名取自 <code>opentelemetry-semantic-conventions</code> <b>0.65b0</b>；Claude Code 的遥测开关、环境变量与指标名取自其 <b>2.1.220</b> 可执行文件的实测提取。两者均已核对，未凭记忆书写。</p>
+  <p>GenAI 语义约定目前仍在 <code>_incubating</code> 命名空间下，<b>属性名可能随版本变化</b> —— 采集侧应当把它当作可能演进的契约，见 <a href="#s11">§11</a>。</p>
+</div>
+
+<!-- ───────────────────────── 1 ───────────────────────── -->
+<section id="s1">
+<h2><span class="num">01</span>定位与三个信号</h2>
+
+<p>这套系统的可观测性要回答三类完全不同的问题，对应三种信号，不能混为一谈：</p>
+
+<table>
+  <thead><tr><th style="width:120px">信号</th><th style="width:240px">回答什么问题</th><th>典型场景</th></tr></thead>
+  <tbody>
+    <tr><td><b>Trace</b></td><td>这一次为什么慢 / 为什么错</td><td>用户说「刚才那次改文件卡了两分钟」，需要定位到具体哪一环</td></tr>
+    <tr><td><b>Metric</b></td><td>整体是否健康、趋势如何</td><td>审批等待时长的 P95 是否在恶化；token 成本的走势</td></tr>
+    <tr><td><b>Log / Event</b></td><td>当时究竟发生了什么</td><td>某次审批被拒的具体原因；某条记忆是怎么被提炼出来的</td></tr>
+  </tbody>
+</table>
+
+<h3>Langfuse 不替代通用后端</h3>
+<div class="callout rule">
+  <span class="label">两类后端各有不可替代的用途</span>
+  <p><b>Langfuse</b> 擅长 LLM 维度：按会话看提示词与回答、评估打分、按模型/用户的成本归因。<b>但它不是 APM</b> —— Pod 冷启动慢、NAS 写入抖动、WebSocket 断连这类问题在它那里看不出来。</p>
+  <p>所以 Collector 要<b>分流而不是转发</b>：LLM 相关的 span 进 Langfuse，全量 trace 进通用 trace 后端，metrics 进时序库。用一个后端硬扛两类问题，最后两类都查不好。</p>
+</div>
+</section>
+
+<!-- ───────────────────────── 2 ───────────────────────── -->
+<section id="s2">
+<h2><span class="num">02</span>采集架构</h2>
+
+<figure>
+<svg viewBox="0 0 900 470" role="img" aria-labelledby="figO-t figO-d" font-family="var(--sans)">
+  <title id="figO-t">遥测采集与分流架构</title>
+  <desc id="figO-d">Server、Higress、Bridge、Claude Code CLI、Mem0 五个来源都经 OTLP 上报到 OpenTelemetry Collector，Collector 再分流：LLM 相关 span 送 Langfuse，全量 trace 送通用 trace 后端，metrics 送时序库。</desc>
+  <defs>
+    <marker id="arO" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#94A3B8"/>
+    </marker>
+    <marker id="arOb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#38BDF8"/>
+    </marker>
+  </defs>
+
+  <g font-size="11.5">
+    <rect x="24" y="24" width="152" height="58" rx="8" fill="#0E1223" stroke="#22C55E" stroke-opacity=".5"/>
+    <text x="100" y="48" text-anchor="middle" fill="#F8FAFC" font-weight="600">Server</text>
+    <text x="100" y="66" text-anchor="middle" fill="#64748B" font-size="9.5">Run 编排 · 顾问</text>
+
+    <rect x="196" y="24" width="152" height="58" rx="8" fill="#0E1223" stroke="#38BDF8" stroke-opacity=".5"/>
+    <text x="272" y="48" text-anchor="middle" fill="#F8FAFC" font-weight="600">Higress</text>
+    <text x="272" y="66" text-anchor="middle" fill="#64748B" font-size="9.5">LLM · MCP 出站</text>
+
+    <rect x="368" y="24" width="152" height="58" rx="8" fill="#0E1223" stroke="#A78BFA" stroke-opacity=".5"/>
+    <text x="444" y="48" text-anchor="middle" fill="#F8FAFC" font-weight="600">Bridge</text>
+    <text x="444" y="66" text-anchor="middle" fill="#64748B" font-size="9.5">ACP 翻译 · 生命周期</text>
+
+    <rect x="540" y="24" width="152" height="58" rx="8" fill="#0E1223" stroke="#A78BFA" stroke-opacity=".5"/>
+    <text x="616" y="48" text-anchor="middle" fill="#F8FAFC" font-weight="600">Claude Code</text>
+    <text x="616" y="66" text-anchor="middle" fill="#F59E0B" font-size="9.5">原生 OTel 导出</text>
+
+    <rect x="712" y="24" width="152" height="58" rx="8" fill="#0E1223" stroke="#334155"/>
+    <text x="788" y="48" text-anchor="middle" fill="#F8FAFC" font-weight="600">Mem0</text>
+    <text x="788" y="66" text-anchor="middle" fill="#64748B" font-size="9.5">抽取 · 检索</text>
+  </g>
+
+  <g stroke="#94A3B8" stroke-width="1.4" fill="none">
+    <path d="M100 82 L100 128"/><path d="M272 82 L272 128"/><path d="M444 82 L444 128"/>
+    <path d="M616 82 L616 128"/><path d="M788 82 L788 128"/>
+    <path d="M100 128 L788 128"/>
+  </g>
+  <line x1="444" y1="128" x2="444" y2="176" stroke="#94A3B8" stroke-width="1.8" marker-end="url(#arO)"/>
+  <text x="456" y="158" fill="#64748B" font-size="10" font-family="monospace">OTLP</text>
+
+  <rect x="264" y="176" width="360" height="74" rx="8" fill="#0E1223" stroke="#22C55E" stroke-opacity=".6"/>
+  <text x="444" y="202" text-anchor="middle" fill="#F8FAFC" font-size="13.5" font-weight="600">OpenTelemetry Collector</text>
+  <text x="444" y="222" text-anchor="middle" fill="#94A3B8" font-size="10">脱敏 · 采样 · 富化（补 session / run 维度）</text>
+  <text x="444" y="240" text-anchor="middle" fill="#F59E0B" font-size="10">分流，不是转发</text>
+
+  <path d="M444 250 L444 288 M140 288 L748 288" fill="none" stroke="#38BDF8" stroke-width="1.5"/>
+  <line x1="140" y1="288" x2="140" y2="332" stroke="#38BDF8" stroke-width="1.5" marker-end="url(#arOb)"/>
+  <line x1="444" y1="288" x2="444" y2="332" stroke="#38BDF8" stroke-width="1.5" marker-end="url(#arOb)"/>
+  <line x1="748" y1="288" x2="748" y2="332" stroke="#38BDF8" stroke-width="1.5" marker-end="url(#arOb)"/>
+
+  <rect x="24" y="332" width="232" height="76" rx="8" fill="#0E1223" stroke="#F59E0B" stroke-opacity=".55"/>
+  <text x="140" y="358" text-anchor="middle" fill="#F59E0B" font-size="13" font-weight="600">Langfuse</text>
+  <text x="140" y="378" text-anchor="middle" fill="#94A3B8" font-size="10">gen_ai span · 提示词</text>
+  <text x="140" y="396" text-anchor="middle" fill="#94A3B8" font-size="10">评估 · 成本归因</text>
+
+  <rect x="328" y="332" width="232" height="76" rx="8" fill="#0E1223" stroke="#334155"/>
+  <text x="444" y="358" text-anchor="middle" fill="#F8FAFC" font-size="13" font-weight="600">Trace 后端</text>
+  <text x="444" y="378" text-anchor="middle" fill="#94A3B8" font-size="10">全量链路</text>
+  <text x="444" y="396" text-anchor="middle" fill="#64748B" font-size="9.5">Pod / 存储 / 网络问题</text>
+
+  <rect x="632" y="332" width="232" height="76" rx="8" fill="#0E1223" stroke="#334155"/>
+  <text x="748" y="358" text-anchor="middle" fill="#F8FAFC" font-size="13" font-weight="600">Metrics 后端</text>
+  <text x="748" y="378" text-anchor="middle" fill="#94A3B8" font-size="10">时序 · 告警</text>
+  <text x="748" y="396" text-anchor="middle" fill="#64748B" font-size="9.5">趋势与容量</text>
+
+  <text x="24" y="440" fill="#64748B" font-size="10">本地部署的 Bridge 与 CLI 同样经 OTLP 上报，但上报内容受用户授权约束（§08）</text>
+</svg>
+<figcaption><b>Collector 是唯一的收口点，也是唯一该做脱敏的地方。</b>把脱敏散在五个来源里实现，等于五份都要维护、五份都可能漏。集中在 Collector 的 processor 里做，规则只有一份，且新增来源自动受约束。<br><br>它同时承担<b>富化</b>：来源侧可能只带了自己的标识（比如 CLI 只知道自己的 session），由 Collector 补齐平台维度，让下游后端看到统一的 <code>session_id</code> / <code>run_id</code>。</figcaption>
+</figure>
+</section>
+
+<!-- ───────────────────────── 3 ───────────────────────── -->
+<section id="s3">
+<h2><span class="num">03</span>语义约定</h2>
+
+<p>用 OTel 的 GenAI 语义约定，不自定义字段。理由在<a href="architecture.html#s7">系统架构 §07</a>说过：<b>只有共用同一套约定，四层的 span 才能拼成一条链路</b>，也才能被 Langfuse 这类现成后端直接识别。</p>
+
+<h3>核心属性（0.65b0 实测）</h3>
+<pre><code><span class="tok-c"># 操作与模型</span>
+gen_ai.operation.name        chat | execute_tool | invoke_agent | embeddings | retrieval …
+gen_ai.provider.name
+gen_ai.request.model / gen_ai.response.model
+gen_ai.response.finish_reasons
+gen_ai.conversation.id       <span class="tok-s">← 映射我们的 session_id</span>
+
+<span class="tok-c"># 用量（注意缓存与推理 token 是独立字段）</span>
+gen_ai.usage.input_tokens / output_tokens
+gen_ai.usage.cache_read.input_tokens
+gen_ai.usage.cache_creation.input_tokens
+gen_ai.usage.reasoning.output_tokens
+
+<span class="tok-c"># Agent 与工具</span>
+gen_ai.agent.id / name / version
+gen_ai.tool.name / type / description
+
+<span class="tok-w"># 会带内容，默认不采集（§08）</span>
+gen_ai.input.messages / gen_ai.output.messages
+gen_ai.prompt / gen_ai.completion</code></pre>
+
+<h3>标准指标</h3>
+<pre><code>gen_ai.client.operation.duration
+gen_ai.client.token.usage
+gen_ai.client.operation.time_to_first_chunk     <span class="tok-c"># 首字延迟</span>
+gen_ai.client.operation.time_per_output_chunk</code></pre>
+
+<div class="callout warn">
+  <span class="label">缓存 token 必须单独记</span>
+  <p><code>cache_read.input_tokens</code> 与 <code>cache_creation.input_tokens</code> 是独立字段，计价也不同。把它们并进 <code>input_tokens</code> 会让成本核算（<a href="#s10">§10</a>）系统性偏离 —— 对长会话尤其明显，缓存读取往往占输入的大头。</p>
+</div>
+
+<div class="callout warn">
+  <span class="label">约定仍在 incubating</span>
+  <p>这些属性目前位于 <code>_incubating</code> 命名空间，<b>属性名可能随版本调整</b>。采集侧不要把属性名硬编码散落各处 —— 集中在一个常量模块里，升级时只改一处。Collector 也可以配 rename processor 做过渡期兼容。</p>
+</div>
+</section>
+
+<!-- ───────────────────────── 4 ───────────────────────── -->
+<section id="s4">
+<h2><span class="num">04</span>一次 Run 的 Trace</h2>
+
+<p><b>Run 是 trace 的根。</b>不是 Session（太长，一条 trace 装不下），也不是单次模型调用（太碎，看不到因果）。</p>
+
+<h3>顾问</h3>
+<pre><code>Run <span class="tok-c">(root)</span>                             invoke_agent
+├─ memory.search                        retrieval        <span class="tok-c"># 注入前检索</span>
+├─ llm.chat                             chat             <span class="tok-c"># 经 Higress</span>
+│   └─ higress.upstream                                  <span class="tok-c"># 网关侧 span</span>
+├─ tool.execute                         execute_tool
+│   └─ mcp.call                                          <span class="tok-c"># 经 Higress</span>
+├─ llm.chat                             chat             <span class="tok-c"># 带工具结果再来一轮</span>
+└─ <span class="tok-c">（Run 结束后）</span>
+    memory.extract                      <span class="tok-s">独立 trace + span link</span></code></pre>
+
+<p>记忆抽取是 Run 结束后的异步动作（<a href="memory.html#s4">记忆 §04</a>），<b>不要把它挂在 Run 的 trace 下</b> —— 那会让 Run 的耗时统计包含一个用户根本没在等的操作。用 span link 关联，各自独立计时。</p>
+
+<h3>助理</h3>
+<pre><code>Run <span class="tok-c">(root, Server)</span>                     invoke_agent
+└─ bridge.prompt                        <span class="tok-c"># WS 往返</span>
+    └─ acp.session.prompt               <span class="tok-c"># ACP 请求</span>
+        ├─ tool_call                    execute_tool     <span class="tok-c"># 由 session/update 还原</span>
+        ├─ request_permission           <span class="tok-w">← 含用户等待时长</span>
+        └─ <span class="tok-s">CLI 自身的遥测（§05）</span></code></pre>
+
+<div class="callout rule">
+  <span class="label">审批等待必须是独立 span</span>
+  <p>助理的一次 Run 里可能有几分钟花在等用户点「允许」上。<b>如果这段时间混在 Run 总耗时里，所有延迟统计都会被它污染</b> —— 你会看到 P95 高得离谱，却分不清是系统慢还是用户在吃午饭。</p>
+  <p>把 <code>request_permission</code> 做成独立 span，并在指标上分开统计<b>「系统耗时」与「等待人的耗时」</b>。前者是工程问题，后者是产品问题，处理方式完全不同。</p>
+</div>
+</section>
+
+<!-- ───────────────────────── 5 ───────────────────────── -->
+<section id="s5">
+<h2><span class="num">05</span>助理侧：CLI 遥测接入</h2>
+
+<div class="callout rule">
+  <span class="label">CLI 内部不是黑盒 —— 这推翻了早先的判断</span>
+  <p><a href="architecture.html#s7">系统架构 §07</a> 原先写「CLI 内部的工具调用在链路上是一整段黑盒」。<b>实测结论是：Claude Code 原生支持标准 OTel 导出</b>，可以配置成上报到我们自己的 Collector。那段判断已更正。</p>
+</div>
+
+<h3>开关与环境变量（2.1.220 实测）</h3>
+<pre><code>CLAUDE_CODE_ENABLE_TELEMETRY=1
+OTEL_EXPORTER_OTLP_ENDPOINT=<span class="tok-s">https://collector.internal</span>
+OTEL_EXPORTER_OTLP_PROTOCOL / _HEADERS / _TIMEOUT / _COMPRESSION
+OTEL_EXPORTER_OTLP_{TRACES,METRICS,LOGS}_ENDPOINT      <span class="tok-c"># 可分信号分流</span>
+OTEL_METRIC_EXPORT_INTERVAL
+
+<span class="tok-s"># 关联与维度（默认关，按需开）</span>
+OTEL_RESOURCE_ATTRIBUTES=<span class="tok-s">platform.session_id=…,platform.agent_id=…</span>
+OTEL_METRICS_INCLUDE_SESSION_ID
+OTEL_METRICS_INCLUDE_RESOURCE_ATTRIBUTES
+OTEL_METRICS_INCLUDE_ENTRYPOINT / _VERSION / _ACCOUNT_UUID
+
+<span class="tok-w"># 内容采集，默认关，见 §08</span>
+OTEL_LOG_USER_PROMPTS</code></pre>
+
+<p>Bridge 在 spawn adapter 时通过环境变量注入这些值（<a href="runtime.html#s11">运行时链路 §11</a> 的 <code>CliProfile.env</code>），CLI 继承后即生效。</p>
+
+<h3>能拿到什么</h3>
+<table>
+  <thead><tr><th style="width:250px">指标</th><th>价值</th></tr></thead>
+  <tbody>
+    <tr><td><code>claude_code.token.usage</code><br><code>claude_code.cost.usage</code></td><td>助理侧的真实用量与成本，补上 Higress 看不到的部分</td></tr>
+    <tr><td><code>claude_code.llm_request</code></td><td>CLI 内部的模型调用次数与特征</td></tr>
+    <tr><td><code>claude_code.tool.execution</code></td><td>工具执行耗时 —— 定位「改文件卡了两分钟」的关键</td></tr>
+    <tr><td class="yes"><code>claude_code.tool.blocked_on_user</code></td><td><b>审批等待时长</b>，正是 <a href="#s4">§04</a> 要分离的那个量</td></tr>
+    <tr><td><code>claude_code.code_edit_tool.decision</code></td><td>审批决定分布（允许 / 拒绝）</td></tr>
+    <tr><td><code>claude_code.mcp.rpc</code></td><td>MCP 调用延迟与失败</td></tr>
+    <tr><td class="yes"><code>claude_code.compaction</code></td><td><b>上下文压缩事件</b> —— 长会话质量下降的常见诱因，此前没有观测手段</td></tr>
+    <tr><td><code>claude_code.subagent.spawn</code></td><td>CLI 内部子 agent 的派生</td></tr>
+    <tr><td><code>claude_code.bash.subprocess</code></td><td>命令执行</td></tr>
+    <tr><td><code>claude_code.session.count</code><br><code>claude_code.active_time.total</code></td><td>会话数与活跃时长</td></tr>
+  </tbody>
+</table>
+
+<div class="callout warn">
+  <span class="label">TRACEPARENT 有生命周期错配</span>
+  <p>CLI 支持读 <code>TRACEPARENT</code> 环境变量接续 trace context。但<b>环境变量在 spawn 时就固定了，而 adapter 进程要服务整个会话的多个 Run</b> —— 于是所有 Run 的 span 都会挂到第一个 Run 的 trace 上。</p>
+  <p>所以可靠的关联方式是 <b><code>OTEL_RESOURCE_ATTRIBUTES</code> 注入平台 <code>session_id</code></b>，下游按资源属性 + 时间窗做关联；<code>TRACEPARENT</code> 只在会话级有意义，不要指望它做 Run 级串联。</p>
+</div>
+
+<div class="callout danger">
+  <span class="label">本地部署下这是用户的机器</span>
+  <p>在用户电脑上启用 CLI 遥测，等于把他本机的工具执行、命令、会话时长上报到服务端。<b>必须纳入 <a href="local.html#s7">本地部署 §07</a> 的授权范围</b>，与目录授权同一个开关，并且默认关闭。云上 Pod 无此顾虑。</p>
+</div>
+</section>
+
+<!-- ───────────────────────── 6 ───────────────────────── -->
+<section id="s6">
+<h2><span class="num">06</span>关联维度</h2>
+
+<p>四层 span 要拼成一条链路，靠的是同一组 ID。它们正好是会话管理里已有的对象主键，不用另造：</p>
+
+<table>
+  <thead><tr><th style="width:170px">维度</th><th style="width:190px">载体</th><th>传播方式</th></tr></thead>
+  <tbody>
+    <tr><td><code>session_id</code></td><td><code>gen_ai.conversation.id</code></td><td>贯穿全部四层</td></tr>
+    <tr><td><code>run_id</code></td><td>自定义属性</td><td>Server / Bridge 层；CLI 层靠时间窗归属</td></tr>
+    <tr><td><code>user_id</code> / <code>tenant_id</code></td><td>资源属性</td><td>成本归因与配额的维度</td></tr>
+    <tr><td><code>agent_id</code> + version</td><td><code>gen_ai.agent.id</code></td><td>区分顾问与助理、以及 Agent 版本</td></tr>
+  </tbody>
+</table>
+
+<h3>Trace context 的传播路径</h3>
+<pre><code>Server → Higress      HTTP header（traceparent）        <span class="tok-s">标准，可靠</span>
+Server → Bridge       WS 消息体自带 traceparent 字段      <span class="tok-s">自有协议，可靠</span>
+Bridge → adapter      <span class="tok-w">ACP 的 _meta 扩展位</span>              <span class="tok-c">见下</span>
+Bridge → CLI 进程     TRACEPARENT 环境变量               <span class="tok-w">仅会话级（§05）</span></code></pre>
+
+<div class="callout rule">
+  <span class="label">ACP 的 _meta 正是传播 trace context 的地方</span>
+  <p>ACP 的请求模型（<code>NewSessionRequest</code>、<code>PromptRequest</code> 等）都带 <code>_meta</code> 扩展位。协议明确说实现<b>不得对其中的值做假设</b> —— 这恰好意味着放一个 <code>traceparent</code> 进去是安全的：对方不认识就忽略，认识就能接续。</p>
+  <p>但也因为「可以忽略」，<b>不能依赖它必然生效</b>。把它当作锦上添花：能接上就得到完整链路，接不上则退回按 <code>session_id</code> 关联。</p>
+</div>
+</section>
+
+<!-- ───────────────────────── 7 ───────────────────────── -->
+<section id="s7">
+<h2><span class="num">07</span>指标清单</h2>
+
+<p>平台侧需要自己定义的指标。CLI 侧的见 <a href="#s5">§05</a>，模型调用的用标准 <code>gen_ai.client.*</code>。</p>
+
+<h3>会话与 Run</h3>
+<table>
+  <thead><tr><th style="width:270px">指标</th><th style="width:170px">维度</th><th>用途</th></tr></thead>
+  <tbody>
+    <tr><td><code>run.duration</code></td><td>agent_type, stop_reason</td><td><b>要排除审批等待</b>，见 <a href="#s4">§04</a></td></tr>
+    <tr><td><code>run.wait_on_user.duration</code></td><td>agent_type</td><td>产品指标，不是工程指标</td></tr>
+    <tr><td><code>run.stop_reason</code></td><td>agent_type</td><td><code>refusal</code> / <code>max_turn_requests</code> 上升是质量信号</td></tr>
+    <tr><td><code>run.active</code></td><td>agent_type</td><td>并发量，容量规划</td></tr>
+    <tr><td><code>session.state</code></td><td>state</td><td><code>cold</code> / <code>lost</code> 占比，恢复能力是否正常</td></tr>
+  </tbody>
+</table>
+
+<h3>运行时</h3>
+<table>
+  <thead><tr><th style="width:270px">指标</th><th style="width:170px">维度</th><th>用途</th></tr></thead>
+  <tbody>
+    <tr><td><code>pod.cold_start.duration</code></td><td>阶段（拉镜像/挂卷/握手）</td><td>分阶段才能定位，总时长无法行动</td></tr>
+    <tr><td><code>acp.initialize.duration</code></td><td>agent_id</td><td>adapter 握手是否变慢</td></tr>
+    <tr><td><code>bridge.connection</code></td><td>deployment（pod/local）</td><td>本地设备在线率</td></tr>
+    <tr><td><code>transcript.append.latency</code></td><td>存储类型</td><td>NAS 写入抖动，<a href="runtime.html#s4">§04</a> 存储选型的验证</td></tr>
+  </tbody>
+</table>
+
+<h3>记忆</h3>
+<table>
+  <thead><tr><th style="width:270px">指标</th><th style="width:170px">维度</th><th>用途</th></tr></thead>
+  <tbody>
+    <tr><td><code>memory.extract.duration</code> / <code>.facts</code></td><td>—</td><td>抽取产出量，长期为零说明过滤条件太严</td></tr>
+    <tr><td class="yes"><code>memory.search.hits</code> / <code>.score</code></td><td>agent_type</td><td><b>命中长期为零是静默失效</b>，不报错但功能等于没有</td></tr>
+    <tr><td><code>memory.injected.tokens</code></td><td>agent_type</td><td>注入是否在吃掉上下文预算</td></tr>
+  </tbody>
+</table>
+</section>
+
+<!-- ───────────────────────── 8 ───────────────────────── -->
+<section id="s8">
+<h2><span class="num">08</span>内容与隐私</h2>
+
+<div class="callout danger">
+  <span class="label">默认不采集内容</span>
+  <p>GenAI 约定里的 <code>gen_ai.input.messages</code> / <code>gen_ai.output.messages</code> / <code>gen_ai.prompt</code> / <code>gen_ai.completion</code>，以及 CLI 的 <code>OTEL_LOG_USER_PROMPTS</code>，都会把<b>对话原文</b>送进遥测系统。</p>
+  <p>这些内容里会有：用户的私有代码、<code>.env</code> 里的密钥、内部文档片段。一旦进了遥测管道，它们的留存期、访问控制、备份策略就和业务数据完全脱钩了 —— <b>而遥测系统的访问面通常比业务库宽得多</b>。</p>
+</div>
+
+<h3>分档</h3>
+<table>
+  <thead><tr><th style="width:150px">档位</th><th style="width:230px">采集什么</th><th>适用</th></tr></thead>
+  <tbody>
+    <tr><td><b>元数据</b><br><span style="color:var(--dim);font-size:12px">默认</span></td><td>token 数、模型、耗时、finish_reason、工具名</td><td>全部环境，包括本地部署</td></tr>
+    <tr><td><b>摘要</b></td><td>+ 截断与脱敏后的片段</td><td>需要 Langfuse 做质量分析时</td></tr>
+    <tr><td><b>全文</b></td><td>+ 完整提示词与回答</td><td class="no">仅限显式开启、限定范围、限定留存期</td></tr>
+  </tbody>
+</table>
+
+<div class="callout rule">
+  <span class="label">脱敏只在 Collector 做</span>
+  <p>把脱敏逻辑散在 Server、Bridge、CLI 三处实现，等于三份规则要维护、三处都可能漏，而且新增来源时默认是不设防的。<b>集中在 Collector 的 processor 里</b>：规则一份，任何新来源自动受约束。</p>
+  <p>对应地，来源侧的职责是<b>标注</b>而非过滤 —— 把可能含敏感内容的属性打上统一标记，由 Collector 按档位决定丢弃、截断还是放行。</p>
+</div>
+
+<p>本地部署额外一层：CLI 遥测涉及用户本机行为，必须纳入用户授权，默认关闭（<a href="#s5">§05</a>）。</p>
+</section>
+
+<!-- ───────────────────────── 9 ───────────────────────── -->
+<section id="s9">
+<h2><span class="num">09</span>告警</h2>
+
+<p>判断标准只有一条：<b>响不响都不知道该做什么的，不要设成告警。</b>那类信息属于仪表盘，不属于寻呼机。</p>
+
+<table>
+  <thead><tr><th style="width:250px">告警</th><th style="width:110px">级别</th><th>为什么值得被叫醒</th></tr></thead>
+  <tbody>
+    <tr><td>Higress 不可用</td><td class="no">P1</td><td><b>同时掐断推理与工具两条链路</b>（<a href="architecture.html#s6">架构 §06</a>），全平台不可用</td></tr>
+    <tr><td>Run 失败率突增</td><td class="no">P1</td><td>用户直接感知</td></tr>
+    <tr><td>Pod 调度失败 / 配额耗尽</td><td class="maybe">P2</td><td>新会话起不来，但存量不受影响</td></tr>
+    <tr><td>记忆检索命中率跌至零</td><td class="maybe">P2</td><td><b>静默失效</b> —— 不报错，功能等于没有，只能靠指标发现</td></tr>
+    <tr><td>审批等待 P95 异常增长</td><td class="maybe">P2</td><td>可能是通知链路坏了，用户根本没收到审批请求</td></tr>
+    <tr><td>OOMKill 反复发生</td><td class="maybe">P2</td><td>长会话被截断；<a href="runtime.html#s9">§09</a> 要求它与其他退出原因分开看</td></tr>
+    <tr><td>token 成本突增</td><td>P3</td><td>可能是死循环或滥用，但不紧急</td></tr>
+    <tr><td>本地设备批量离线</td><td>P3</td><td>多半是客户端发版问题</td></tr>
+  </tbody>
+</table>
+
+<div class="callout warn">
+  <span class="label">两类「静默失效」要专门盯</span>
+  <p><b>记忆命中率为零</b>和<b>遥测断流</b>都不会报错。前者让记忆功能形同虚设，后者让所有告警失去依据 —— 而「没有告警」很容易被误读成「一切正常」。</p>
+  <p>给 Collector 本身配一个心跳指标，长时间没有数据流入要告警。<b>可观测系统自己的可观测性是最容易被遗漏的一环。</b></p>
+</div>
+</section>
+
+<!-- ───────────────────────── 10 ──────────────────────── -->
+<section id="s10">
+<h2><span class="num">10</span>成本归因</h2>
+
+<p>成本要能归到<b>人</b>、<b>团队</b>、<b>Agent</b>三个维度，否则只能看到一个总数，既无法优化也无法分摊。</p>
+
+<h3>三个采集点，各有盲区</h3>
+<table>
+  <thead><tr><th style="width:170px">采集点</th><th style="width:230px">覆盖</th><th>盲区</th></tr></thead>
+  <tbody>
+    <tr><td><b>Higress</b></td><td>经网关的全部模型调用</td><td>绕过网关的调用看不到</td></tr>
+    <tr><td><b>Server</b></td><td>顾问的调用、记忆抽取</td><td>助理内部的调用</td></tr>
+    <tr><td><b>CLI 遥测</b></td><td><code>claude_code.cost.usage</code></td><td>需显式开启；本地部署受授权约束</td></tr>
+  </tbody>
+</table>
+
+<div class="callout warn">
+  <span class="label">本地部署是成本盲区，这是设计使然</span>
+  <p><a href="local.html#s8">本地部署 §08</a> 已说明：用户机器上的 CLI 用<b>他自己的订阅</b>直连模型厂商，不经 Higress。所以本地会话的模型成本平台<b>看不到也不该看到</b> —— 那是用户自己的额度。</p>
+  <p>这不是缺陷，但必须在口径上说清楚：<b>平台的成本报表不包含本地会话</b>。如果对外有用量统计或计费承诺，这块要单独说明，否则数字对不上时会很被动。</p>
+</div>
+
+<h3>别忘了记忆抽取</h3>
+<p>每个 Run 触发一次 <code>add(infer=True)</code>，那是一次真实的 LLM 调用（<a href="memory.html#s11">记忆 §11</a>）。它不在用户的对话里，容易在成本核算中被漏掉，但会话量大时占比不低。<b>打上独立的 <code>gen_ai.operation.name</code> 维度</b>，让它在报表里可见可拆。</p>
+</section>
+
+<!-- ───────────────────────── 11 ──────────────────────── -->
+<section id="s11">
+<h2><span class="num">11</span>待验证清单</h2>
+
+<table>
+  <thead><tr><th style="width:60px">#</th><th style="width:250px">验证项</th><th>影响</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><b>1</b></td>
+      <td><b>CLI 遥测的实际产出</b> —— 开启后真正发出哪些指标、维度是否含可用的关联字段、<code>OTEL_RESOURCE_ATTRIBUTES</code> 是否透传到 metrics</td>
+      <td class="no">决定 <a href="#s5">§05</a> 的接入是否成立，以及助理侧可观测性的实际深度</td>
+    </tr>
+    <tr>
+      <td><b>2</b></td>
+      <td>ACP adapter 是否透传 <code>_meta</code> 里的 <code>traceparent</code>；CLI 是否读取 <code>TRACEPARENT</code></td>
+      <td class="maybe">决定链路能否真正打通，还是只能按 <code>session_id</code> 关联</td>
+    </tr>
+    <tr>
+      <td><b>3</b></td>
+      <td>Higress 的 span 是否符合 GenAI 语义约定，还是需要在 Collector 侧做属性重命名</td>
+      <td class="no">决定 Langfuse 能否直接识别网关侧数据</td>
+    </tr>
+    <tr>
+      <td><b>4</b></td>
+      <td>Mem0 内部的模型调用能否产生 span 并接入链路</td>
+      <td class="maybe">决定记忆抽取的成本与耗时能否精确归因</td>
+    </tr>
+    <tr>
+      <td><b>5</b></td>
+      <td>GenAI 约定从 <code>_incubating</code> 转正后的属性变更范围</td>
+      <td class="maybe">决定常量集中管理的必要程度与升级成本</td>
+    </tr>
+    <tr>
+      <td><b>6</b></td>
+      <td>全量 trace 的存储成本与采样策略 —— 尤其长会话与高频工具调用场景</td>
+      <td class="maybe">决定采样在 Collector 还是 SDK 侧做</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>建议的上线顺序</h3>
+<ol class="body">
+  <li><b>先打通 Server 侧的 Run trace 与基础指标</b> —— 一条链路端到端可见，比五个来源各有一半数据有用得多。</li>
+  <li><b>再接 Higress</b> —— 成本与限流的依据都在这里。</li>
+  <li><b>然后是 CLI 遥测</b> —— 云上 Pod 先行，验证 §11 第 1 项后再考虑本地。</li>
+  <li><b>内容采集最后，且默认关闭</b> —— 先把元数据档位跑稳，确有质量分析需求时再按 <a href="#s8">§08</a> 分档开启。</li>
+</ol>
+</section>
+
+<footer>
+  <p>相关文档：<a href="architecture.html">系统架构设计</a> · <a href="session.html">会话管理设计</a> · <a href="runtime.html">运行时链路设计</a> · <a href="local.html">本地部署设计</a> · <a href="memory.html">记忆设计</a>。</p>
+</footer>
+
+</main>
+</div>
+</body>
+</html>

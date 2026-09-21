@@ -1,0 +1,80 @@
+# server：API + 进程内执行器 + AcpRuntime。
+#
+# ★ 为什么 server 也跑在集群里，而不是留在宿主上跑 make serve：
+#   cluster 交给 server 的是 `ws://<podIP>:8900`（manager._url 用 Pod IP，
+#   不用 DNS 名）。而 Docker Desktop **不把 Pod 网段路由到 macOS 宿主**
+#   —— 宿主上的 server 连不上任何 Pod。进了集群这一跳才是真的。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atlas-server
+  namespace: atlas-system
+spec:
+  replicas: 1
+  # ★ Recreate 而不是默认的 RollingUpdate：滚动更新要求新旧 Pod 同时在，
+  #   而本机节点的内存会被会话 Pod 吃掉（每个会话 = bridge + 3 个 rclone
+  #   sidecar，且当前**没有闲置回收**，见 cluster 的 idle_ttl_s 未接线）。
+  #   一旦排不下，新 Pod 卡在 Pending/Insufficient memory，而旧 Pod 还在跑 ——
+  #   表现是「部署成功了但代码没更新」。单副本本来也没有滚动的意义。
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {app: atlas-server}
+  template:
+    metadata:
+      labels: {app: atlas-server}
+    spec:
+      # ★ 不给 ServiceAccount 任何 Role：server 不碰 K8s，Pod 生命周期
+      #   归 cluster。这里的默认 SA 什么权限都没有，正是想要的。
+      containers:
+        - name: server
+          image: atlas-app:dev
+          imagePullPolicy: IfNotPresent
+          ports: [{containerPort: 8000, name: http}]
+          env:
+            # PG / Redis / MinIO 都留在宿主的 docker compose 里。
+            - {name: DATABASE_URL, value: "postgresql+asyncpg://atlas:atlas@__HOST_IP__:5433/atlas"}
+            - {name: REDIS_URL, value: "redis://__HOST_IP__:6380/0"}
+            - {name: OSS_ENDPOINT, value: "http://__HOST_IP__:9000"}
+            - {name: OSS_BUCKET, value: atlas-dev}
+            - {name: OSS_ADDRESSING_STYLE, value: path}
+            - {name: OSS_REGION, value: us-east-1}
+            - {name: CLUSTER_BASE_URL, value: "http://atlas-cluster.atlas-system.svc.cluster.local:8010"}
+            # 遥测（可观测性设计 §02）。Collector 跑在宿主的 compose 里，
+            # 与 PG/Redis/MinIO 同款走 LAN IP —— host.docker.internal 会被
+            # Docker Desktop 转发到宿主 loopback，命中不了 compose 的监听。
+            - {name: OTEL_ENABLED, value: "true"}
+            - {name: OTEL_ENDPOINT, value: "http://__HOST_IP__:4318"}
+            # 跨会话记忆（记忆设计）。本轮只抽取与存储，不向任何 Agent 暴露。
+            - {name: MEMORY_ENABLED, value: "true"}
+            - {name: MEMORY_QDRANT_URL, value: "http://__HOST_IP__:6333"}
+            # ★ Mem0 的变更史库。默认在 ~/.mem0，容器里是易失的。
+            - {name: MEMORY_HISTORY_DB, value: "/tmp/mem0-history.db"}
+            - {name: DEFAULT_USER_ID, value: "00000000-0000-0000-0000-000000000001"}
+            # web 从宿主浏览器直连本服务（LoadBalancer 落在 localhost）
+            - {name: CORS_ORIGINS, value: '["http://localhost:3000","http://127.0.0.1:3000"]'}
+            - name: OSS_ACCESS_KEY_ID
+              valueFrom: {secretKeyRef: {name: atlas-server-creds, key: oss_access_key_id}}
+            - name: OSS_ACCESS_KEY_SECRET
+              valueFrom: {secretKeyRef: {name: atlas-server-creds, key: oss_access_key_secret}}
+            - name: LITELLM_BASE_URL
+              valueFrom: {secretKeyRef: {name: atlas-server-creds, key: litellm_base_url}}
+            - name: LITELLM_KEY
+              valueFrom: {secretKeyRef: {name: atlas-server-creds, key: litellm_key}}
+          readinessProbe:
+            httpGet: {path: /healthz, port: 8000}
+            periodSeconds: 3
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+---
+# ★ LoadBalancer：Docker Desktop 把它落到 127.0.0.1:8000，于是宿主的
+#   curl 与浏览器都能直连 —— 而 server 自己在集群网里，够得着 Pod IP。
+apiVersion: v1
+kind: Service
+metadata:
+  name: atlas-server
+  namespace: atlas-system
+spec:
+  type: LoadBalancer
+  selector: {app: atlas-server}
+  ports: [{port: 8000, targetPort: 8000}]

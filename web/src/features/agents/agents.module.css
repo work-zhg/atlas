@@ -1,0 +1,156 @@
+/* 从 prototype/index.html 的 .page / .grid / .acard 系列移植 */
+.page {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.head {
+  flex: none;
+  padding: var(--s-5) var(--s-6) 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.titleRow {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-4);
+  margin-bottom: var(--s-4);
+}
+
+.title {
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  margin: 0 0 2px;
+  line-height: 1.35;
+}
+
+.desc {
+  font-size: 12.5px;
+  color: var(--fg-2);
+  margin: 0;
+}
+
+.titleRow .action {
+  margin-left: auto;
+}
+
+.filterRow {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding-bottom: var(--s-4);
+  flex-wrap: wrap;
+}
+
+.body {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--s-5) var(--s-6) var(--s-7);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--s-4);
+}
+
+.card {
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  padding: var(--s-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  text-align: left;
+  cursor: pointer;
+  /* MASTER.md §3：禁止 translateY 浮起（列表内会抖），只变 border + background */
+  transition:
+    border-color var(--t-fast) var(--ease),
+    background var(--t-fast) var(--ease);
+}
+
+.card:hover {
+  border-color: #4a5f8c;
+  background: var(--bg-2);
+}
+
+.cardHead {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-3);
+}
+
+.avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  font-weight: 700;
+  color: #fff;
+}
+
+.cardName {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.35;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.cardSlug {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--fg-3);
+}
+
+.cardDesc {
+  font-size: 12.5px;
+  color: var(--fg-2);
+  line-height: 1.6;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  min-height: 40px;
+}
+
+.cardTags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+
+.cardFoot {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--line);
+  font-size: 11.5px;
+  color: var(--fg-3);
+}
+
+.cardFoot span {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.cardFoot .last {
+  margin-left: auto;
+}
+
+.mono {
+  font-family: var(--mono);
+}

@@ -1,0 +1,1018 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>native Agent 详细设计 · AI Platform</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  /* 详设专用：对照表与文件清单 */
+  .cmp td:first-child{font-family:var(--mono);font-size:12.5px}
+  .st{font-family:var(--mono);font-size:11px;padding:2px 8px;border-radius:99px;white-space:nowrap;border:1px solid}
+  .st.keep{color:var(--accent);border-color:rgba(34,197,94,.4);background:rgba(34,197,94,.08)}
+  .st.align{color:var(--native);border-color:rgba(56,189,248,.4);background:rgba(56,189,248,.08)}
+  .st.new{color:var(--warn);border-color:rgba(245,158,11,.4);background:rgba(245,158,11,.08)}
+  .st.later{color:var(--dim);border-color:var(--border)}
+  .files{border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin:var(--s3) 0}
+  .files .row{display:flex;gap:var(--s2);align-items:baseline;padding:9px 14px;border-bottom:1px solid var(--border-soft);font-size:13.5px}
+  .files .row:last-child{border-bottom:none}
+  .files .row b{font-family:var(--mono);font-size:12px;font-weight:500;color:#CBD5E1;flex:none;min-width:0}
+  .files .row span{color:var(--muted-fg);font-size:13px}
+  .files .hd{background:var(--card-2);font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted-fg)}
+  .phase{counter-reset:none;border-left:2px solid var(--border);padding-left:var(--s3);margin:var(--s4) 0}
+  .phase h4{margin-top:0;color:var(--accent);font-family:var(--mono);font-size:12px;letter-spacing:.1em}
+</style>
+</head>
+<body>
+
+<nav class="sitenav">
+  <a class="brand" href="../">AI&nbsp;<b>Platform</b>&nbsp;/ 详细设计</a>
+  <div class="links">
+    <a href="../">概要设计</a>
+    <a href="./">详设目录</a>
+    <a class="on" href="native.html">native Agent</a>
+    <a href="structure.html">目录与包结构</a>
+    <a href="kernel.html">kernel 分析</a>
+    <a href="filesystem.html">文件系统改造</a>
+    <a href="subagent.html">Subagent 重设计</a>
+    <a href="acp.html">acp Agent</a>
+    <a href="../native.html">← 概要版</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+<nav class="toc" aria-label="目录">
+  <div class="eyebrow">本页</div>
+  <ol>
+    <li><a href="#s1">现状盘点</a></li>
+    <li><a href="#s2">概念对齐与一处修正</a></li>
+    <li><a href="#s3">Agent.type 与能力推导</a></li>
+    <li><a href="#s4">技能：本期主体</a></li>
+    <li><a href="#s5">记忆：Mem0 接入</a></li>
+    <li><a href="#s6">MCP 从环境变量到库</a></li>
+    <li><a href="#s7">执行环境：先定接缝</a></li>
+    <li><a href="#s8">身份贯通</a></li>
+    <li><a href="#s9">可观测性埋点</a></li>
+    <li><a href="#s10">改动清单与顺序</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<header class="hero">
+  <p class="kicker">Detailed Design · native</p>
+  <h1>native Agent 详细设计</h1>
+  <p class="lede">在 atlas 上落地。结论先说：atlas 的 native 执行内核<b>已经对了</b> —— Message 为事实源、不存 checkpoint、版本快照、会话级沙箱、Run 内审批，全部与概要设计一致。缺的是它周围的四个平台域：技能、记忆、MCP 管理、身份。</p>
+  <div class="meta">
+    <span>基线 7b1a991</span><span>engine 纯库 · server 编排 · web</span><span>27 个测试文件</span><span>import-linter 守分层</span>
+  </div>
+</header>
+
+<!-- ══════════════════════════════════ 1 ══ -->
+<section id="s1">
+  <h2><span class="num">01</span>现状盘点</h2>
+
+  <p>逐条对照概要设计。<span class="st keep">一致</span> 表示不动，<span class="st align">对齐</span> 表示语义相同但要调整，<span class="st new">新建</span> 表示完全没有。</p>
+
+  <h3>执行内核 —— 全部一致</h3>
+  <table class="cmp">
+    <thead><tr><th>概要设计</th><th>atlas 现状</th><th></th></tr></thead>
+    <tbody>
+      <tr><td>Message 为事实源，不存 checkpoint</td><td><code>db/models.py</code> 开篇即写明；<code>InProcessExecutor._prepare</code> 每轮从 message 表重建历史</td><td><span class="st keep">一致</span></td></tr>
+      <tr><td>Agent 配置版本化，Run 指回当时那份</td><td><code>Agent.current_version_id</code> + <code>AgentVersion.spec</code> + <code>Run.agent_version_id</code></td><td><span class="st keep">一致</span></td></tr>
+      <tr><td>LangChain 组装 agent 图</td><td><code>build_agent()</code> → kernel 的 <code>create_deep_agent()</code>，中间件顺序显式分层</td><td><span class="st keep">一致</span></td></tr>
+      <tr><td>Event 属于 Run，seq 严格递增</td><td><code>TraceEvent</code> 契约三条规则；<code>_EventFactory</code> 集中管 seq</td><td><span class="st keep">一致</span></td></tr>
+      <tr><td>sandbox 按会话创建，不按 run</td><td><code>SandboxManager.acquire(thread_id)</code>，per-thread 懒创建幂等</td><td><span class="st keep">一致</span></td></tr>
+      <tr><td>subagent 独立上下文，深度封顶</td><td><code>_subagent_dict()</code> 显式传 <code>tools=[]</code>，结构性封顶在 1</td><td><span class="st keep">一致</span></td></tr>
+      <tr><td>Run 内审批，拒绝不终止</td><td><code>ApprovalMiddleware</code> + <code>Approval</code> 表；拒绝作为工具结果回给模型</td><td><span class="st keep">一致</span></td></tr>
+      <tr><td>上下文压缩，原文不丢</td><td><code>CompactionMiddleware</code> + <code>thread.summary/summary_upto</code></td><td><span class="st keep">一致</span></td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout rule">
+    <span class="label">这一栏的意义</span>
+    <p>这八条是概要设计里论证最久的部分。它们在 atlas 里已经成立，而且是<b>带着理由</b>成立的 —— 代码注释里写明了每个决定的代价。本期不要去动它们，也不要因为命名不同就重构。</p>
+  </div>
+
+  <h3>平台域 —— 缺口在这里</h3>
+  <table class="cmp">
+    <thead><tr><th>概要设计</th><th>atlas 现状</th><th></th></tr></thead>
+    <tbody>
+      <tr><td>Agent 有 <code>type</code> / <code>cli_type</code>，capabilities 推导</td><td>没有 type 字段，隐式全是 native</td><td><span class="st new">新建</span></td></tr>
+      <tr><td>技能 CRUD、版本化、与 Agent 关联、双路投送</td><td>kernel 里 <code>SkillsMiddleware</code> 已就绪且 <code>create_deep_agent(skills=)</code> 已接，<b>但 atlas 一行都没用</b></td><td><span class="st new">新建</span></td></tr>
+      <tr><td>Mem0 长期记忆，读写与用户管理</td><td>没有。kernel 的 <code>memory.py</code> 是 AGENTS.md 静态上下文，<b>不是同一个东西</b></td><td><span class="st new">新建</span></td></tr>
+      <tr><td>MCP server 注册、工具发现、DB 管理</td><td><code>.env</code> 里的 <code>MCP_SERVERS</code> JSON，进程启动才读，不可增删改</td><td><span class="st align">对齐</span></td></tr>
+      <tr><td>身份与权限</td><td><code>identity.py</code> 从 header 取，缺省回落固定 UUID；README 明说不做鉴权</td><td><span class="st align">对齐</span></td></tr>
+      <tr><td>K8s Pod + 模板管理 + 生命周期组件</td><td>Docker CLI + per-thread 容器，<code>WORKDIR=/workspace</code></td><td><span class="st later">下一期</span></td></tr>
+      <tr><td>OpenTelemetry GenAI + Langfuse</td><td>只有 TraceEvent 与标准日志</td><td><span class="st new">新建</span></td></tr>
+      <tr><td>会话叫 session</td><td>叫 thread</td><td><span class="st align">对齐</span></td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout warn">
+    <span class="label">最值得注意的一行</span>
+    <p>kernel 里 <code>SkillsMiddleware</code> 完整可用，<code>create_deep_agent</code> 的签名里 <code>skills: list[str] | None</code> 就在那儿摆着 —— atlas 的 <code>build_agent()</code> 从来没传过它。技能这一块不是从零写，是<b>把已有的能力接上</b>，工作量集中在存储、版本和投送，不在中间件。</p>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════ 2 ══ -->
+<section id="s2">
+  <h2><span class="num">02</span>概念对齐与一处修正</h2>
+
+  <h3>thread 还是 session：不改</h3>
+  <p>概要设计里叫 session，atlas 叫 thread。我的判断是<b>保留 thread</b>，把两个名字登记为同一个概念。</p>
+  <ul>
+    <li><code>thread</code> 是 LangGraph 生态里这个概念的标准词（<code>thread_id</code> 是 checkpointer 的键），atlas 的内核血统如此，改名等于跟生态拧着来。</li>
+    <li>改名的收益是词汇一致，代价是 5 张表的外键、全部 API 路径、前端路由、27 个测试文件 —— 一次纯粹的重命名重构，没有任何行为改进，却有引入回归的真实风险。</li>
+    <li>接 acp 时统一用 thread 即可，两类 Agent 仍然共享一套对象模型。</li>
+  </ul>
+  <p>下文一律用 <code>thread</code>。概要文档里的 session 读作同一个东西。</p>
+
+  <h3>一处概要设计的修正：needs_approval 不该由 type 推导</h3>
+  <p>概要设计的 <a href="../agent.html">Agent 管理</a>里写了这样一条推导：</p>
+  <pre><code><span class="tok-k">caps</span>.in_run_input = caps.needs_approval = <span class="tok-k">not</span> is_native</code></pre>
+  <p>理由是"native 的上下文由服务端每轮重建，不能在 Run 内挂起等人"。<b>atlas 证明这条是错的</b> —— 它的 native agent 有完整的 Run 内审批：<code>ApprovalMiddleware</code> 在图内 interrupt，run 停在那里等决策，拒绝作为工具结果回给模型继续跑。而且 <code>bash</code> 和 <code>coding_task</code> 是<b>强制</b>进审批列表的，这条写在 schema 层，绕过前端直接调 API 同样被拦。</p>
+
+  <div class="callout danger">
+    <span class="label">病根</span>
+    <p>把两件不同的事塞进了一个能力位。「Run 内挂起等人」与「挂起时能接受什么」是两回事：native 挂起后接受的是<b>结构化决策</b>（allow_once / allow_always / reject），acp 挂起后还能接受<b>自由文本</b>。只有后者是 type 推导的。</p>
+  </div>
+
+  <p>修正后的推导：</p>
+  <pre><code><span class="tok-c"># 上下文由服务端持有 ⇒ 可以重建、可以改写</span>
+regenerate = edit_history = branch = rollback_on_cancel = is_native
+
+<span class="tok-c"># 压缩要能改写「模型看到的历史」，前提同样是服务端持有上下文</span>
+compact = is_native <span class="tok-k">and</span> spec.compaction.enabled
+
+<span class="tok-c"># 自由文本插入进行中的 Run —— native 的 Run 内交互是决策不是对话</span>
+in_run_input = <span class="tok-k">not</span> is_native
+
+<span class="tok-c">★ 与 type 无关，由 spec 决定：两类 Agent 都能做 Run 内审批</span>
+needs_approval = <span class="tok-k">bool</span>(spec.limits.require_approval_for)</code></pre>
+
+  <p>这个修正让能力位的来源分成两类，而不是一类：</p>
+  <table>
+    <thead><tr><th>来源</th><th>能力位</th><th>为什么</th></tr></thead>
+    <tbody>
+      <tr><td><b>type 推导</b></td><td>regenerate / edit_history / branch / compact / rollback_on_cancel / in_run_input</td><td>取决于上下文由谁持有 —— 这是 type 的定义本身</td></tr>
+      <tr><td><b>spec 推导</b></td><td>needs_approval</td><td>取决于这一版配置勾了什么，与 type 正交</td></tr>
+      <tr><td><b>握手探测</b></td><td>resume_session（仅 acp）</td><td>取决于 adapter 声明的能力位</td></tr>
+    </tbody>
+  </table>
+  <p>原型里 native 会话不显示审批卡片的那个演示，因此也是错的 —— 配了 <code>require_approval_for</code> 的 native agent 一样会挂起等确认。这一条要同步改回去。</p>
+</section>
+
+<!-- ══════════════════════════════════ 3 ══ -->
+<section id="s3">
+  <h2><span class="num">03</span>Agent.type 与能力推导</h2>
+
+  <h3>为什么现在就加</h3>
+  <p>本期只做 native，<code>type</code> 的取值恒为 <code>native</code> —— 看起来可以等 acp 来了再加。不行，两个理由：</p>
+  <ul>
+    <li><code>type</code> 是<b>不可变</b>字段。等有了存量数据再加，要回填全部 agent 行，而且 API 契约会 breaking（<code>AgentOut</code> 多一个必填字段）。现在加，默认值 <code>native</code>，零成本。</li>
+    <li>capabilities 要投影到 API 给前端用。前端按能力位渲染界面这件事本期就要做（决定"重新生成"按钮显不显示），没有 type 就无从推导。</li>
+  </ul>
+
+  <h3>字段放 agent 行，不放 spec</h3>
+  <pre><code><span class="tok-c"># server/src/atlas_server/db/models.py — Agent 类追加</span>
+
+<span class="tok-k">class</span> <span class="tok-t">Agent</span>(Base, TimestampMixin):
+    ...
+    <span class="tok-c">#: native = 进程内 LangGraph 执行；acp = 经 bridge 驱动 CLI。</span>
+    <span class="tok-c">#  ★ 创建后不可改 —— 见下方论证。服务层拒绝改写，DB 只保证取值合法。</span>
+    type: Mapped[<span class="tok-t">str</span>] = mapped_column(String(<span class="tok-n">16</span>), nullable=<span class="tok-k">False</span>,
+                                          server_default=<span class="tok-s">"native"</span>)
+    <span class="tok-c">#: 仅 acp 有意义：claude-code / codex / …</span>
+    cli_type: Mapped[<span class="tok-t">str</span> | <span class="tok-k">None</span>] = mapped_column(String(<span class="tok-n">32</span>), nullable=<span class="tok-k">True</span>)
+
+    __table_args__ = (
+        CheckConstraint(<span class="tok-s">"status IN ('draft','enabled','archived')"</span>, name=<span class="tok-s">"status_enum"</span>),
+        CheckConstraint(<span class="tok-s">"type IN ('native','acp')"</span>, name=<span class="tok-s">"type_enum"</span>),
+        <span class="tok-c"># native 不得带 cli_type，acp 必须带 —— 让非法组合根本存不进去</span>
+        CheckConstraint(
+            <span class="tok-s">"(type = 'native' AND cli_type IS NULL) OR "</span>
+            <span class="tok-s">"(type = 'acp' AND cli_type IS NOT NULL)"</span>,
+            name=<span class="tok-s">"cli_type_matches_type"</span>,
+        ),
+    )</code></pre>
+
+  <div class="callout rule">
+    <span class="label">为什么不放 agent_version.spec</span>
+    <p><code>spec</code> 回答的是"<b>这一版</b>怎么配"，<code>type</code> 回答的是"这个 agent 走<b>哪条执行路径</b>"。放 spec 里意味着可以通过发新版本把 native 改成 acp —— 同一个 agent 的历史 run 一半走 engine、一半走 bridge，<code>agent_version_id</code> 能指回配置却指不回执行语义，可复现性承诺当场破掉。放 agent 行上，一条 CHECK 加一句服务层拒绝就够了。</p>
+  </div>
+
+  <h3>capabilities 是算出来的，不入库</h3>
+  <p>新文件，放 engine 而不是 server：它是 agent 语义的一部分，server 只做投影。</p>
+
+  <pre><code><span class="tok-c"># engine/src/atlas_engine/capabilities.py （新建）</span>
+<span class="tok-s">"""能力位 —— 由 type 与 spec 推导，不是配置项。
+
+★ 唯一所有者。前端渲染按钮、后端拒绝非法操作，都读这里，
+  不允许任何一方自己判断 `type == "native"`。
+"""</span>
+<span class="tok-k">from</span> dataclasses <span class="tok-k">import</span> dataclass
+
+<span class="tok-k">from</span> .spec <span class="tok-k">import</span> AgentSpec
+
+AgentType = Literal[<span class="tok-s">"native"</span>, <span class="tok-s">"acp"</span>]
+
+
+<span class="tok-d">@dataclass(frozen=True)</span>
+<span class="tok-k">class</span> <span class="tok-t">Capabilities</span>:
+    regenerate: <span class="tok-t">bool</span>          <span class="tok-c"># 重跑最后一轮</span>
+    edit_history: <span class="tok-t">bool</span>        <span class="tok-c"># 改写历史消息后重发</span>
+    branch: <span class="tok-t">bool</span>              <span class="tok-c"># 从某条消息分叉出新 thread</span>
+    compact: <span class="tok-t">bool</span>             <span class="tok-c"># 上下文压缩</span>
+    rollback_on_cancel: <span class="tok-t">bool</span>  <span class="tok-c"># 取消后回到 run 之前的状态</span>
+    in_run_input: <span class="tok-t">bool</span>        <span class="tok-c"># run 进行中插入自由文本</span>
+    needs_approval: <span class="tok-t">bool</span>      <span class="tok-c"># 这一版配置会触发 Run 内审批</span>
+    resume_session: <span class="tok-t">bool</span>      <span class="tok-c"># 环境回收后能续上</span>
+
+
+<span class="tok-k">def</span> <span class="tok-f">capabilities_for</span>(agent_type: AgentType, spec: AgentSpec) -> Capabilities:
+    is_native = agent_type == <span class="tok-s">"native"</span>
+    <span class="tok-k">return</span> Capabilities(
+        regenerate=is_native,
+        edit_history=is_native,
+        branch=is_native,
+        compact=is_native <span class="tok-k">and</span> spec.compaction.enabled,
+        rollback_on_cancel=is_native,
+        in_run_input=<span class="tok-k">not</span> is_native,
+        <span class="tok-c"># ★ 与 type 正交（§02 的修正）</span>
+        needs_approval=<span class="tok-k">bool</span>(spec.limits.require_approval_for),
+        <span class="tok-c"># native 恒真：历史在 message 表，环境回收不影响续聊</span>
+        resume_session=<span class="tok-k">True</span> <span class="tok-k">if</span> is_native <span class="tok-k">else</span> <span class="tok-k">False</span>,  <span class="tok-c"># acp 由握手探测覆盖</span>
+    )</code></pre>
+
+  <h4>投影到 API</h4>
+  <pre><code><span class="tok-c"># server/src/atlas_server/schemas/agent.py</span>
+
+<span class="tok-k">class</span> <span class="tok-t">CapabilitiesOut</span>(BaseModel):
+    regenerate: <span class="tok-t">bool</span>; edit_history: <span class="tok-t">bool</span>; branch: <span class="tok-t">bool</span>
+    compact: <span class="tok-t">bool</span>; rollback_on_cancel: <span class="tok-t">bool</span>
+    in_run_input: <span class="tok-t">bool</span>; needs_approval: <span class="tok-t">bool</span>; resume_session: <span class="tok-t">bool</span>
+
+<span class="tok-k">class</span> <span class="tok-t">AgentOut</span>(BaseModel):
+    ...
+    type: Literal[<span class="tok-s">"native"</span>, <span class="tok-s">"acp"</span>] = <span class="tok-s">"native"</span>
+    cli_type: <span class="tok-t">str</span> | <span class="tok-k">None</span> = <span class="tok-k">None</span>
+    capabilities: CapabilitiesOut</code></pre>
+
+  <h4>拒绝改写 type</h4>
+  <pre><code><span class="tok-c"># server/src/atlas_server/services/agent.py — update()</span>
+
+<span class="tok-c"># AgentUpdate 里根本不提供 type / cli_type 字段 —— 结构性不可改，</span>
+<span class="tok-c"># 而不是"提供了再在服务层拒绝"。后者会让前端以为可以改、</span>
+<span class="tok-c"># 试过才知道不行，多一轮无谓的往返。</span></code></pre>
+
+  <h4>迁移</h4>
+  <pre><code><span class="tok-c"># server/migrations/versions/0006_agent_type.py</span>
+
+<span class="tok-k">def</span> <span class="tok-f">upgrade</span>() -> <span class="tok-k">None</span>:
+    op.add_column(<span class="tok-s">"agent"</span>, sa.Column(<span class="tok-s">"type"</span>, sa.String(<span class="tok-n">16</span>),
+                  nullable=<span class="tok-k">False</span>, server_default=<span class="tok-s">"native"</span>))
+    op.add_column(<span class="tok-s">"agent"</span>, sa.Column(<span class="tok-s">"cli_type"</span>, sa.String(<span class="tok-n">32</span>), nullable=<span class="tok-k">True</span>))
+    op.create_check_constraint(<span class="tok-s">"type_enum"</span>, <span class="tok-s">"agent"</span>, <span class="tok-s">"type IN ('native','acp')"</span>)
+    op.create_check_constraint(
+        <span class="tok-s">"cli_type_matches_type"</span>, <span class="tok-s">"agent"</span>,
+        <span class="tok-s">"(type = 'native' AND cli_type IS NULL) OR "</span>
+        <span class="tok-s">"(type = 'acp' AND cli_type IS NOT NULL)"</span>,
+    )
+    <span class="tok-c"># 存量行由 server_default 填成 native，无需 UPDATE</span></code></pre>
+</section>
+
+<!-- ══════════════════════════════════ 4 ══ -->
+<section id="s4">
+  <h2><span class="num">04</span>技能：本期主体</h2>
+
+  <h3>kernel 已经准备好了</h3>
+  <p><code>create_deep_agent</code> 的签名里就有 <code>skills: list[str] | None</code>，传的是<b>源路径列表</b>。它在三处装配 <code>SkillsMiddleware</code>：主 agent、每个 subagent（如果 subagent spec 里有 <code>skills</code> 键）、以及 general-purpose。</p>
+  <p>更关键的是 <code>graph.py</code> 里这一行：</p>
+  <pre><code>backend = backend <span class="tok-k">if</span> backend <span class="tok-k">is</span> <span class="tok-k">not</span> <span class="tok-k">None</span> <span class="tok-k">else</span> StateBackend()</code></pre>
+  <p>而它的 docstring 明确写着：<i>With <code>StateBackend</code> (default), provide skill files via <code>invoke(files={...})</code>. With <code>FilesystemBackend</code>, skills are loaded [from disk].</i></p>
+
+  <div class="callout rule">
+    <span class="label">概要设计的"双路投送"在这里落地</span>
+    <p>它不是我们要额外设计的机制，而是 kernel 里<b>已经定义好的两种模式</b>。我们要做的是：按 agent 有没有沙箱，决定走哪条，并保证两条路下技能内容<b>完全一致</b>。</p>
+  </div>
+
+  <h3>两条路</h3>
+  <table>
+    <thead><tr><th>agent 配置</th><th>backend</th><th>技能怎么到位</th></tr></thead>
+    <tbody>
+      <tr><td>勾了 <code>bash</code></td><td><code>DockerSandbox</code></td><td>run 启动前把技能包物化进容器 <code>/skills/&lt;slug&gt;/</code>，中间件从容器文件系统读</td></tr>
+      <tr><td>没勾 <code>bash</code></td><td><code>StateBackend</code>（默认）</td><td>把技能文件预置进 graph 初始 state 的 <code>files</code> 字典</td></tr>
+    </tbody>
+  </table>
+
+  <figure>
+    <svg viewBox="0 0 860 400" role="img" aria-labelledby="skl-t skl-d" style="width:100%;height:auto">
+      <title id="skl-t">技能投送的两条路径</title>
+      <desc id="skl-d">技能版本从数据库取出后，按 agent 是否有沙箱分为两条路：有沙箱时物化进容器 /skills 目录，无沙箱时预置进 graph state 的 files 字典；两条路最终都由 SkillsMiddleware 从 backend 读取，渲染进系统提示词。</desc>
+      <defs>
+        <marker id="ar" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+          <path d="M0,0 L9,4.5 L0,9 z" fill="#475569"/>
+        </marker>
+      </defs>
+      <rect x="20" y="20" width="180" height="62" rx="8" fill="#0E1223" stroke="#334155"/>
+      <text x="110" y="45" text-anchor="middle" fill="#F8FAFC" font-size="13" font-family="IBM Plex Sans">skill_version</text>
+      <text x="110" y="64" text-anchor="middle" fill="#94A3B8" font-size="11" font-family="JetBrains Mono">body + resources</text>
+
+      <rect x="20" y="110" width="180" height="62" rx="8" fill="#0E1223" stroke="#334155"/>
+      <text x="110" y="135" text-anchor="middle" fill="#F8FAFC" font-size="13" font-family="IBM Plex Sans">SkillService</text>
+      <text x="110" y="154" text-anchor="middle" fill="#94A3B8" font-size="11" font-family="JetBrains Mono">materialize(refs)</text>
+      <line x1="110" y1="82" x2="110" y2="106" stroke="#475569" stroke-width="1.6" marker-end="url(#ar)"/>
+
+      <path d="M200 141 L245 141 L245 72 L288 72" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#ar)"/>
+      <path d="M200 141 L245 141 L245 232 L288 232" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#ar)"/>
+      <text x="252" y="64" fill="#38BDF8" font-size="11" font-family="JetBrains Mono">有沙箱</text>
+      <text x="252" y="252" fill="#A78BFA" font-size="11" font-family="JetBrains Mono">无沙箱</text>
+
+      <rect x="292" y="42" width="212" height="70" rx="8" fill="#0E1223" stroke="#38BDF8" stroke-opacity=".5"/>
+      <text x="398" y="66" text-anchor="middle" fill="#F8FAFC" font-size="13" font-family="IBM Plex Sans">SkillMaterializer</text>
+      <text x="398" y="85" text-anchor="middle" fill="#94A3B8" font-size="11" font-family="JetBrains Mono">docker cp → /skills/</text>
+      <text x="398" y="102" text-anchor="middle" fill="#64748B" font-size="10.5" font-family="JetBrains Mono">digest 相同则跳过</text>
+
+      <rect x="292" y="202" width="212" height="70" rx="8" fill="#0E1223" stroke="#A78BFA" stroke-opacity=".5"/>
+      <text x="398" y="226" text-anchor="middle" fill="#F8FAFC" font-size="13" font-family="IBM Plex Sans">seed_files</text>
+      <text x="398" y="245" text-anchor="middle" fill="#94A3B8" font-size="11" font-family="JetBrains Mono">graph input 的 files</text>
+      <text x="398" y="262" text-anchor="middle" fill="#64748B" font-size="10.5" font-family="JetBrains Mono">路径同为 /skills/</text>
+
+      <path d="M504 77 L556 77 L556 152 L600 152" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#ar)"/>
+      <path d="M504 237 L556 237 L556 162 L600 162" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#ar)"/>
+
+      <rect x="604" y="122" width="212" height="70" rx="8" fill="#0E1223" stroke="#22C55E" stroke-opacity=".5"/>
+      <text x="710" y="146" text-anchor="middle" fill="#F8FAFC" font-size="13" font-family="IBM Plex Sans">SkillsMiddleware</text>
+      <text x="710" y="165" text-anchor="middle" fill="#94A3B8" font-size="11" font-family="JetBrains Mono">sources=["/skills/"]</text>
+      <text x="710" y="182" text-anchor="middle" fill="#64748B" font-size="10.5" font-family="JetBrains Mono">经 backend 读，不碰本地盘</text>
+
+      <rect x="604" y="222" width="212" height="62" rx="8" fill="#131A2E" stroke="#334155"/>
+      <text x="710" y="246" text-anchor="middle" fill="#F8FAFC" font-size="13" font-family="IBM Plex Sans">系统提示词</text>
+      <text x="710" y="265" text-anchor="middle" fill="#94A3B8" font-size="11" font-family="JetBrains Mono">name + description（渐进披露）</text>
+      <line x1="710" y1="192" x2="710" y2="218" stroke="#475569" stroke-width="1.6" marker-end="url(#ar)"/>
+
+      <rect x="292" y="320" width="524" height="56" rx="8" fill="#131A2E" stroke="#F59E0B" stroke-opacity=".45"/>
+      <text x="310" y="342" fill="#F59E0B" font-size="11" font-family="JetBrains Mono">两条路的前提</text>
+      <text x="310" y="362" fill="#94A3B8" font-size="12" font-family="IBM Plex Sans">backend 路径必须一致 —— 中间件只认 sources，不认内容从哪来</text>
+    </svg>
+    <figcaption>技能投送。分叉只在"内容怎么到 backend"这一步，中间件与提示词渲染完全共用。</figcaption>
+  </figure>
+
+  <h3>存储：技能也要版本</h3>
+  <pre><code><span class="tok-c"># server/src/atlas_server/db/models.py （新增两张表）</span>
+
+<span class="tok-k">class</span> <span class="tok-t">Skill</span>(Base, TimestampMixin):
+    <span class="tok-s">"""技能定义。与 Agent 同构：行存身份与当前版本，内容在 version 表。"""</span>
+    __tablename__ = <span class="tok-s">"skill"</span>
+
+    id: Mapped[UUID] = _uuid_pk()
+    <span class="tok-c">#: == SKILL.md frontmatter 的 name，也是投送路径 /skills/&lt;slug&gt;/</span>
+    slug: Mapped[<span class="tok-t">str</span>] = mapped_column(String(<span class="tok-n">64</span>), nullable=<span class="tok-k">False</span>, unique=<span class="tok-k">True</span>)
+    display_name: Mapped[<span class="tok-t">str</span>] = mapped_column(Text, nullable=<span class="tok-k">False</span>)
+    <span class="tok-c">#: ★ 进系统提示词的那一句。渐进披露下模型只凭它决定要不要展开正文 ——</span>
+    <span class="tok-c">#  写得含糊，技能就等于没有。≤1024 是 Agent Skills 规范的上限。</span>
+    description: Mapped[<span class="tok-t">str</span>] = mapped_column(String(<span class="tok-n">1024</span>), nullable=<span class="tok-k">False</span>)
+    status: Mapped[<span class="tok-t">str</span>] = mapped_column(String(<span class="tok-n">16</span>), server_default=<span class="tok-s">"draft"</span>)
+    current_version_id: Mapped[UUID | <span class="tok-k">None</span>] = mapped_column(
+        UUIDType, ForeignKey(<span class="tok-s">"skill_version.id"</span>, use_alter=<span class="tok-k">True</span>,
+                             name=<span class="tok-s">"fk_skill_current_version"</span>), nullable=<span class="tok-k">True</span>)
+    created_by: Mapped[UUID] = mapped_column(UUIDType, ForeignKey(<span class="tok-s">"app_user.id"</span>))
+
+    __table_args__ = (
+        CheckConstraint(<span class="tok-s">"status IN ('draft','enabled','archived')"</span>, name=<span class="tok-s">"status_enum"</span>),
+    )
+
+
+<span class="tok-k">class</span> <span class="tok-t">SkillVersion</span>(Base):
+    __tablename__ = <span class="tok-s">"skill_version"</span>
+
+    id: Mapped[UUID] = _uuid_pk()
+    skill_id: Mapped[UUID] = mapped_column(
+        UUIDType, ForeignKey(<span class="tok-s">"skill.id"</span>, ondelete=<span class="tok-s">"CASCADE"</span>), nullable=<span class="tok-k">False</span>)
+    version: Mapped[<span class="tok-t">int</span>] = mapped_column(Integer, nullable=<span class="tok-k">False</span>)
+    <span class="tok-c">#: SKILL.md 正文（不含 frontmatter —— 它由 slug/description 渲染生成，</span>
+    <span class="tok-c">#  避免正文里的 name 与 skill.slug 不一致这种双事实源问题）</span>
+    body: Mapped[<span class="tok-t">str</span>] = mapped_column(Text, nullable=<span class="tok-k">False</span>)
+    <span class="tok-c">#: 附属文件 {相对路径: base64}。MVP 入库，与 RunFile 同一个 >1MB 转对象存储的阈值</span>
+    resources: Mapped[<span class="tok-t">dict</span>] = mapped_column(JSONType, nullable=<span class="tok-k">False</span>, default=<span class="tok-t">dict</span>)
+    <span class="tok-c">#: sha256(render()) —— 沙箱物化的幂等键，也是"内容真的变了吗"的判据</span>
+    digest: Mapped[<span class="tok-t">str</span>] = mapped_column(String(<span class="tok-n">64</span>), nullable=<span class="tok-k">False</span>)
+    created_by: Mapped[UUID] = mapped_column(UUIDType, ForeignKey(<span class="tok-s">"app_user.id"</span>))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, server_default=func.now())
+
+    __table_args__ = (UniqueConstraint(<span class="tok-s">"skill_id"</span>, <span class="tok-s">"version"</span>, name=<span class="tok-s">"uq_skill_version"</span>),)</code></pre>
+
+  <div class="callout rule">
+    <span class="label">为什么技能也要版本</span>
+    <p>与 <code>agent_version</code> 同一条理由：run 必须能回答"当时用的哪版技能"。技能是<b>会改变模型行为的内容</b>，甚至含可执行脚本 —— 不版本化的话，技能一改，所有历史 run 的含义跟着变，而 <code>run.agent_version_id</code> 仍然指着同一行配置，可复现性是假的。</p>
+  </div>
+
+  <h3>关联放哪：spec 里存 (slug, version) 对</h3>
+  <p>三个候选，逐个排除：</p>
+  <table>
+    <thead><tr><th>方案</th><th>问题</th></tr></thead>
+    <tbody>
+      <tr><td><code>agent_skill</code> 关联表</td><td>改技能关联不产生 agent 新版本 → 历史 run 的配置快照不完整，可复现性破了</td></tr>
+      <tr><td><code>spec.skill_slugs: list[str]</code></td><td>活引用。技能升级后历史 run 语义静默改变 —— 和上面一个病</td></tr>
+      <tr><td><code>spec</code> 里存技能<b>全文</b></td><td>像 subagent 那样物化拷贝。但 SKILL.md 可能很长且带附件，spec 会膨胀到几百 KB，且技能升级要所有 agent 重新发版</td></tr>
+    </tbody>
+  </table>
+  <p>取第四个：<b>存 (slug, version) 对</b>，保存 agent 时把 <code>None</code> 解析成当时的 current 版本号写死。</p>
+
+  <pre><code><span class="tok-c"># server/src/atlas_server/schemas/agent.py</span>
+
+<span class="tok-k">class</span> <span class="tok-t">SkillRefIn</span>(BaseModel):
+    <span class="tok-s">"""agent 引用一个技能。
+
+    ★ version=None 只在**请求体**里合法，表示"用当前版本"。
+      服务层在保存前解析成具体版本号再落进 spec —— 于是存进
+      agent_version.spec 的永远是确定版本，历史 run 可精确复现。
+
+    ★ 快照纪律（tests/test_spec_snapshots.py）：本模型的必填集合
+      是 {"slug"}，version 必须有默认值。
+    """</span>
+    slug: <span class="tok-t">str</span> = Field(pattern=<span class="tok-s">r"^[a-z][a-z0-9-]{0,62}$"</span>)
+    version: <span class="tok-t">int</span> | <span class="tok-k">None</span> = <span class="tok-k">None</span>
+
+
+<span class="tok-k">class</span> <span class="tok-t">AgentSpecIn</span>(BaseModel):
+    ...
+    <span class="tok-c">#: 默认空列表 —— 历史快照没有这个字段，反序列化照常</span>
+    skills: <span class="tok-t">list</span>[SkillRefIn] = Field(default_factory=<span class="tok-t">list</span>, max_length=<span class="tok-n">32</span>)</code></pre>
+
+  <pre><code><span class="tok-c"># server/src/atlas_server/services/agent.py — 保存路径</span>
+
+<span class="tok-k">async</span> <span class="tok-k">def</span> <span class="tok-f">_pin_skill_versions</span>(<span class="tok-k">self</span>, spec: AgentSpecIn) -> AgentSpecIn:
+    <span class="tok-s">"""把 version=None 解析成当时的 current 版本号。
+
+    ★ 顺带做存在性校验：引用了不存在或已归档的技能，**在保存时就 400**，
+      而不是等到某次 run 才在事件流里报错。与 spec.validate() 同一条纪律
+      （§3 D3：能在保存时拒绝的，不留到运行时）。
+    """</span>
+    <span class="tok-k">if</span> <span class="tok-k">not</span> spec.skills:
+        <span class="tok-k">return</span> spec
+    resolved = <span class="tok-k">await</span> SkillRepository(<span class="tok-k">self</span>._session).resolve_refs(spec.skills)
+    <span class="tok-k">return</span> spec.model_copy(update={<span class="tok-s">"skills"</span>: resolved})</code></pre>
+
+  <p>于是"跟进技能新版本"是个<b>显式动作</b>：用户在编辑器里点"更新到 v5"，产生 agent 新版本。不会有技能作者一改，全平台 agent 行为悄悄变了这种事。</p>
+
+  <h3>投送：SkillService 与 SkillMaterializer</h3>
+  <pre><code><span class="tok-c"># server/src/atlas_server/services/skill.py （新建）</span>
+
+<span class="tok-d">@dataclass(frozen=True)</span>
+<span class="tok-k">class</span> <span class="tok-t">ResolvedSkill</span>:
+    slug: <span class="tok-t">str</span>
+    version: <span class="tok-t">int</span>
+    description: <span class="tok-t">str</span>
+    body: <span class="tok-t">str</span>
+    resources: <span class="tok-t">dict</span>[<span class="tok-t">str</span>, <span class="tok-t">str</span>]
+    digest: <span class="tok-t">str</span>
+
+    <span class="tok-k">def</span> <span class="tok-f">render</span>(<span class="tok-k">self</span>) -> <span class="tok-t">str</span>:
+        <span class="tok-s">"""拼出完整 SKILL.md。frontmatter 由字段生成，不从 body 里取。"""</span>
+        <span class="tok-k">return</span> (
+            <span class="tok-s">f"---\nname: {self.slug}\n"</span>
+            <span class="tok-s">f"description: {self.description}\n---\n\n{self.body}"</span>
+        )
+
+
+<span class="tok-k">class</span> <span class="tok-t">SkillUnavailable</span>(RuntimeError):
+    <span class="tok-s">"""引用的技能不存在 / 版本已归档。冒泡成 run.failed。
+
+    §13.2：勾了却静默跳过，模型会按"我没有这个技能"的行为跑完一轮，
+    用户看到的是"它怎么没照技能说的做"，而不是"技能没装上"。
+    """</span>
+
+
+<span class="tok-k">class</span> <span class="tok-t">SkillService</span>:
+    <span class="tok-k">def</span> <span class="tok-f">__init__</span>(<span class="tok-k">self</span>, session: AsyncSession) -> <span class="tok-k">None</span>:
+        <span class="tok-k">self</span>._repo = SkillRepository(session)
+
+    <span class="tok-k">async</span> <span class="tok-k">def</span> <span class="tok-f">materialize</span>(<span class="tok-k">self</span>, refs: <span class="tok-t">list</span>[<span class="tok-t">dict</span>]) -> <span class="tok-t">list</span>[ResolvedSkill]:
+        <span class="tok-s">"""按 spec 里钉死的 (slug, version) 精确取内容。"""</span>
+        rows = <span class="tok-k">await</span> <span class="tok-k">self</span>._repo.load_exact(
+            [(r[<span class="tok-s">"slug"</span>], r[<span class="tok-s">"version"</span>]) <span class="tok-k">for</span> r <span class="tok-k">in</span> refs])
+        <span class="tok-k">if</span> missing := {r[<span class="tok-s">"slug"</span>] <span class="tok-k">for</span> r <span class="tok-k">in</span> refs} - {s.slug <span class="tok-k">for</span> s <span class="tok-k">in</span> rows}:
+            <span class="tok-k">raise</span> SkillUnavailable(<span class="tok-s">f"技能不可用：{sorted(missing)}"</span>)
+        <span class="tok-k">return</span> rows</code></pre>
+
+  <pre><code><span class="tok-c"># server/src/atlas_server/services/skill_delivery.py （新建）</span>
+
+SKILLS_ROOT = <span class="tok-s">"/skills"</span>
+
+
+<span class="tok-k">def</span> <span class="tok-f">as_seed_files</span>(skills: <span class="tok-t">list</span>[ResolvedSkill]) -> <span class="tok-t">dict</span>[<span class="tok-t">str</span>, <span class="tok-t">str</span>]:
+    <span class="tok-s">"""StateBackend 路：技能 → graph 初始 state 的 files 字典。"""</span>
+    out: <span class="tok-t">dict</span>[<span class="tok-t">str</span>, <span class="tok-t">str</span>] = {}
+    <span class="tok-k">for</span> s <span class="tok-k">in</span> skills:
+        out[<span class="tok-s">f"{SKILLS_ROOT}/{s.slug}/SKILL.md"</span>] = s.render()
+        <span class="tok-k">for</span> rel, b64 <span class="tok-k">in</span> s.resources.items():
+            out[<span class="tok-s">f"{SKILLS_ROOT}/{s.slug}/{rel}"</span>] = b64decode(b64).decode(<span class="tok-s">"utf-8"</span>)
+    <span class="tok-k">return</span> out
+
+
+<span class="tok-k">class</span> <span class="tok-t">SkillMaterializer</span>:
+    <span class="tok-s">"""沙箱路：把技能包写进容器的 /skills/。
+
+    ★ 幂等靠 digest：容器是会话级长寿的，同一 thread 的第二个 run
+      通常技能没变，不该每轮都重写一遍（docker cp 有真实开销，
+      且会让容器内的 mtime 无谓地跳动）。
+
+    ★ 先清理不在本次清单里的目录：agent 改版把某个技能去掉后，
+      残留在容器里的旧技能仍会被 SkillsMiddleware 扫到并进提示词 ——
+      "取消勾选了却还在生效"，比没装上更难查。
+    """</span>
+
+    <span class="tok-k">def</span> <span class="tok-f">__init__</span>(<span class="tok-k">self</span>, backend: Any) -> <span class="tok-k">None</span>:
+        <span class="tok-k">self</span>._backend = backend
+        <span class="tok-k">self</span>._applied: <span class="tok-t">dict</span>[<span class="tok-t">str</span>, <span class="tok-t">str</span>] = {}   <span class="tok-c"># slug → digest</span>
+
+    <span class="tok-k">async</span> <span class="tok-k">def</span> <span class="tok-f">apply</span>(<span class="tok-k">self</span>, skills: <span class="tok-t">list</span>[ResolvedSkill]) -> <span class="tok-k">None</span>:
+        wanted = {s.slug: s <span class="tok-k">for</span> s <span class="tok-k">in</span> skills}
+        <span class="tok-k">for</span> stale <span class="tok-k">in</span> <span class="tok-k">set</span>(<span class="tok-k">self</span>._applied) - <span class="tok-k">set</span>(wanted):
+            <span class="tok-k">await</span> <span class="tok-k">self</span>._backend.aexecute(<span class="tok-s">f"rm -rf {SKILLS_ROOT}/{stale}"</span>)
+            <span class="tok-k">self</span>._applied.pop(stale)
+        <span class="tok-k">for</span> slug, s <span class="tok-k">in</span> wanted.items():
+            <span class="tok-k">if</span> <span class="tok-k">self</span>._applied.get(slug) == s.digest:
+                <span class="tok-k">continue</span>
+            <span class="tok-k">await</span> <span class="tok-k">self</span>._write_one(s)
+            <span class="tok-k">self</span>._applied[slug] = s.digest</code></pre>
+
+  <h3>engine 侧：RunHooks 加一个字段</h3>
+  <pre><code><span class="tok-c"># engine/src/atlas_engine/hooks.py</span>
+
+<span class="tok-d">@dataclass(frozen=True)</span>
+<span class="tok-k">class</span> <span class="tok-t">SkillsPlan</span>:
+    <span class="tok-s">"""技能投送计划。engine 不认识技能从哪来（DB / 对象存储 / 谁的版本），
+    只认两件事：中间件从哪些 source 读、要不要往初始 state 塞文件。"""</span>
+    sources: <span class="tok-t">tuple</span>[<span class="tok-t">str</span>, ...] = ()
+    <span class="tok-c">#: StateBackend 路专用；沙箱路为 None（内容已在容器里）</span>
+    seed_files: <span class="tok-t">dict</span>[<span class="tok-t">str</span>, <span class="tok-t">str</span>] | <span class="tok-k">None</span> = <span class="tok-k">None</span>
+
+
+<span class="tok-d">@dataclass(frozen=True)</span>
+<span class="tok-k">class</span> <span class="tok-t">RunHooks</span>:
+    ...
+    skills: SkillsPlan | <span class="tok-k">None</span> = <span class="tok-k">None</span></code></pre>
+
+  <pre><code><span class="tok-c"># engine/src/atlas_engine/agent.py — build_agent()</span>
+
+    <span class="tok-k">return</span> create_deep_agent(
+        ...
+        <span class="tok-c"># 空 tuple 要传 None：传 [] 会让 kernel 装一个 sources 为空的</span>
+        <span class="tok-c"># SkillsMiddleware，白白多一次 backend 扫描与一段无内容的提示词</span>
+        skills=<span class="tok-t">list</span>(h.skills.sources) <span class="tok-k">if</span> h.skills <span class="tok-k">and</span> h.skills.sources <span class="tok-k">else</span> <span class="tok-k">None</span>,
+    )</code></pre>
+
+  <h4>seed_files 进图，且不能冒充本轮产物</h4>
+  <pre><code><span class="tok-c"># engine/src/atlas_engine/runner.py</span>
+
+<span class="tok-k">def</span> <span class="tok-f">_graph_input</span>(history, input_content, skills: SkillsPlan | <span class="tok-k">None</span>) -> <span class="tok-t">dict</span>:
+    messages = [*history, HumanMessage(content=input_content)]
+    payload: <span class="tok-t">dict</span>[<span class="tok-t">str</span>, Any] = {<span class="tok-s">"messages"</span>: messages}
+    <span class="tok-k">if</span> skills <span class="tok-k">and</span> skills.seed_files:
+        payload[<span class="tok-s">"files"</span>] = skills.seed_files
+    <span class="tok-k">return</span> payload
+
+
+<span class="tok-k">async</span> <span class="tok-k">def</span> <span class="tok-f">run</span>(...):
+    ...
+    seen_files: <span class="tok-t">dict</span>[<span class="tok-t">str</span>, <span class="tok-t">str</span>] = {}
+    <span class="tok-c">#: ★ 技能文件预置进 seen_files，否则 files_delta 会把它们当成本轮新写的文件，</span>
+    <span class="tok-c">#  Inspector 的文件页一上来就冒出 N 个用户没见过的 SKILL.md。</span>
+    <span class="tok-c">#  它们是**输入**不是产物，不该出现在 file.written 流里。</span>
+    <span class="tok-k">if</span> h.skills <span class="tok-k">and</span> h.skills.seed_files:
+        seen_files.update({p: _digest(c) <span class="tok-k">for</span> p, c <span class="tok-k">in</span> h.skills.seed_files.items()})</code></pre>
+
+  <div class="callout warn">
+    <span class="label">容易漏的一处</span>
+    <p>这个 <code>seen_files</code> 预置不写的话，功能"能用"，但每轮对话前端都会多出一串假的文件写入事件。属于跑通之后才会被发现、且一眼看不出病根的那类问题 —— 在设计阶段就钉住。</p>
+  </div>
+
+  <h3>组装：HookAssembly 里的分叉</h3>
+  <pre><code><span class="tok-c"># server/src/atlas_server/executor/assembly.py — build() 内</span>
+
+    <span class="tok-c"># 技能：先解析内容，再按有无 backend 决定投送路径。</span>
+    <span class="tok-c"># ★ 解析必须在 backend 决定之后 —— 两条路的内容一样，但沙箱路</span>
+    <span class="tok-c">#   要往容器里写，没有容器就无从写起。</span>
+    skills_plan = <span class="tok-k">None</span>
+    <span class="tok-k">if</span> skill_refs := (prepared.spec.skill_refs <span class="tok-k">or</span> ()):
+        <span class="tok-k">async</span> <span class="tok-k">with</span> <span class="tok-k">self</span>._sessionmaker() <span class="tok-k">as</span> session:
+            resolved = <span class="tok-k">await</span> SkillService(session).materialize(<span class="tok-t">list</span>(skill_refs))
+        <span class="tok-k">if</span> backend <span class="tok-k">is</span> <span class="tok-k">not</span> <span class="tok-k">None</span>:
+            <span class="tok-k">await</span> <span class="tok-k">self</span>._materializer_for(prepared.thread_id, backend).apply(resolved)
+            skills_plan = SkillsPlan(sources=(SKILLS_ROOT + <span class="tok-s">"/"</span>,))
+        <span class="tok-k">else</span>:
+            skills_plan = SkillsPlan(sources=(SKILLS_ROOT + <span class="tok-s">"/"</span>,),
+                                     seed_files=as_seed_files(resolved))
+
+    <span class="tok-k">return</span> RunHooks(..., skills=skills_plan)</code></pre>
+
+  <h3>subagent 的技能</h3>
+  <p>kernel 的 subagent spec 支持 <code>skills</code> 键（<code>graph.py:687</code>），所以子智能体可以有自己的技能集。<code>SubAgentSpecIn</code> 同样加 <code>skills: list[SkillRefIn]</code>，在 <code>_subagent_dict()</code> 里传下去。</p>
+  <p>注意：子智能体与主 agent <b>共享同一个 backend</b>，所以沙箱路下技能物化只做一次（并集），<code>sources</code> 相同，各自的 <code>SkillsMiddleware</code> 按自己的清单过滤。这一点要在 <code>SkillMaterializer.apply()</code> 的入参上体现 —— 传的是主 agent 与全部 subagent 技能的<b>并集</b>。</p>
+
+  <h3>API</h3>
+  <div class="ep"><span class="verb post">POST</span><span class="path">/v1/skills</span><span class="desc">创建（body: slug/display_name/description/body/resources），落 v1</span></div>
+  <div class="ep"><span class="verb get">GET</span><span class="path">/v1/skills</span><span class="desc">列表，带 status 过滤与游标分页</span></div>
+  <div class="ep"><span class="verb get">GET</span><span class="path">/v1/skills/{id}</span><span class="desc">详情，含当前版本正文</span></div>
+  <div class="ep"><span class="verb">PATCH</span><span class="path">/v1/skills/{id}</span><span class="desc">保存即产生新版本，与 agent 同语义</span></div>
+  <div class="ep"><span class="verb get">GET</span><span class="path">/v1/skills/{id}/versions</span><span class="desc">版本列表</span></div>
+  <div class="ep"><span class="verb post">POST</span><span class="path">/v1/skills/{id}/status</span><span class="desc">draft ↔ enabled ↔ archived</span></div>
+  <div class="ep"><span class="verb del">DELETE</span><span class="path">/v1/skills/{id}</span><span class="desc">仅 draft 且无 agent 引用时允许；否则 409 并列出引用方</span></div>
+</section>
+
+<!-- ══════════════════════════════════ 5 ══ -->
+<section id="s5">
+  <h2><span class="num">05</span>记忆：Mem0 接入</h2>
+
+  <div class="callout warn">
+    <span class="label">先澄清一个同名陷阱</span>
+    <p>kernel 里有 <code>middleware/memory.py</code>，<code>create_deep_agent</code> 也有 <code>memory=</code> 参数 —— 但那是 <b>AGENTS.md 规范</b>的静态上下文加载（每次全量读进提示词），与我们说的 Mem0 长期记忆<b>不是同一件事</b>。两者可以共存，但不要复用那个参数。</p>
+  </div>
+
+  <h3>engine 不认识 Mem0</h3>
+  <p>与 MCP 的处理完全同构：engine 是纯库，不碰凭据与外部服务。记忆在 server 侧检索好，以<b>提示词片段</b>的形态注入。</p>
+
+  <pre><code><span class="tok-c"># engine/src/atlas_engine/hooks.py</span>
+
+<span class="tok-d">@dataclass(frozen=True)</span>
+<span class="tok-k">class</span> <span class="tok-t">RunHooks</span>:
+    ...
+    <span class="tok-c">#: 已渲染好的记忆片段。engine 只负责拼进 system_prompt —— </span>
+    <span class="tok-c">#  它不认识 Mem0、不认识 user_id，也不该认识。</span>
+    memory_context: <span class="tok-t">str</span> | <span class="tok-k">None</span> = <span class="tok-k">None</span></code></pre>
+
+  <pre><code><span class="tok-c"># engine/src/atlas_engine/agent.py — build_agent()</span>
+
+    system_prompt = spec.system_prompt <span class="tok-k">or</span> <span class="tok-s">""</span>
+    <span class="tok-k">if</span> h.backend <span class="tok-k">is</span> <span class="tok-k">not</span> <span class="tok-k">None</span>:
+        system_prompt = <span class="tok-s">f"{system_prompt}\n\n{_SANDBOX_HINT}"</span>.strip()
+    <span class="tok-k">if</span> h.memory_context:
+        <span class="tok-c"># ★ 放在最后：prompt cache 的可缓存前缀要尽量长且稳定。</span>
+        <span class="tok-c">#   记忆是**每轮都可能变**的部分，塞在前面会让每轮都击穿缓存</span>
+        <span class="tok-c">#   （min_cacheable_tokens 在 opus-5 上是 512，很容易越过）。</span>
+        system_prompt = <span class="tok-s">f"{system_prompt}\n\n{h.memory_context}"</span>.strip()</code></pre>
+
+  <h3>server 侧服务</h3>
+  <pre><code><span class="tok-c"># server/src/atlas_server/services/memory.py （新建）</span>
+
+<span class="tok-k">class</span> <span class="tok-t">MemoryService</span>:
+    <span class="tok-s">"""Mem0 接入。
+
+    ★ 作用域映射（容易错配，写死在这里）：
+        mem0 的 user_id  ← atlas 的 app_user.id
+        mem0 的 run_id   ← atlas 的 **thread_id**（mem0 的 run 指"一段会话"）
+        mem0 的 agent_id ← 本期**不用**
+    """</span>
+
+    <span class="tok-k">def</span> <span class="tok-f">__init__</span>(<span class="tok-k">self</span>, settings: Settings) -> <span class="tok-k">None</span>:
+        <span class="tok-k">self</span>._client = AsyncMemory.from_config(settings.mem0_config)
+        <span class="tok-k">self</span>._top_k = settings.memory_top_k
+        <span class="tok-k">self</span>._threshold = settings.memory_threshold
+
+    <span class="tok-k">async</span> <span class="tok-k">def</span> <span class="tok-f">recall</span>(<span class="tok-k">self</span>, *, user_id: UUID, query: <span class="tok-t">str</span>) -> <span class="tok-t">str</span> | <span class="tok-k">None</span>:
+        <span class="tok-s">"""检索并渲染成提示词片段。
+
+        ★ 只按 user_id 检索，不带 agent_id —— 概要设计已定：把任意用户
+          说的话自动变成服务所有人的知识太激进。agent 维度的知识走 RAG，
+          且必须是总结提炼并事实核查过的，不走 Mem0 的自动提取。
+        """</span>
+        hits = <span class="tok-k">await</span> <span class="tok-k">self</span>._client.search(
+            query, user_id=<span class="tok-t">str</span>(user_id),
+            top_k=<span class="tok-k">self</span>._top_k, threshold=<span class="tok-k">self</span>._threshold)
+        <span class="tok-k">if</span> <span class="tok-k">not</span> hits:
+            <span class="tok-k">return</span> <span class="tok-k">None</span>
+        lines = <span class="tok-s">"\n"</span>.join(<span class="tok-s">f"- {h['memory']}"</span> <span class="tok-k">for</span> h <span class="tok-k">in</span> hits)
+        <span class="tok-k">return</span> <span class="tok-s">f"## 关于这位用户已知的事实\n\n{lines}\n\n"</span> \
+               <span class="tok-s">"（来自历史对话的提取，可能过时；与用户当前陈述冲突时以当前为准。）"</span>
+
+    <span class="tok-k">async</span> <span class="tok-k">def</span> <span class="tok-f">remember</span>(<span class="tok-k">self</span>, *, user_id: UUID, thread_id: UUID,
+                       messages: <span class="tok-t">list</span>[<span class="tok-t">dict</span>]) -> <span class="tok-k">None</span>:
+        <span class="tok-k">await</span> <span class="tok-k">self</span>._client.add(
+            messages, user_id=<span class="tok-t">str</span>(user_id), run_id=<span class="tok-t">str</span>(thread_id),
+            metadata={<span class="tok-s">"thread_id"</span>: <span class="tok-t">str</span>(thread_id)})</code></pre>
+
+  <h3>写入时机</h3>
+  <p>不能在 run 内同步做 —— Mem0 的 <code>add</code> 会调 LLM 做提取，几秒起步，把它挂在 run 里等于每轮对话都多等一次模型调用。</p>
+  <p>接在 <code>_persist()</code> 之后，与标题生成<b>同级</b>处理：</p>
+  <pre><code><span class="tok-c"># server/src/atlas_server/executor/inprocess.py — _execute() 收尾</span>
+
+    <span class="tok-k">await</span> <span class="tok-k">self</span>._persist(...)
+    <span class="tok-k">if</span> terminal <span class="tok-k">is</span> <span class="tok-k">not</span> <span class="tok-k">None</span>:
+        <span class="tok-k">await</span> relay.publish(terminal)
+
+    <span class="tok-c"># ★ 记忆提取：run 已经结束、事件已发完，这里是纯后台。</span>
+    <span class="tok-c">#   失败只记日志 —— 与 _generate_title 同一条纪律：</span>
+    <span class="tok-c">#   记忆少一条不影响本轮正确性，不该让 run 变成 failed。</span>
+    <span class="tok-c">#   代价写明：进程重启会丢掉排队中的提取。要可靠就进队列，</span>
+    <span class="tok-c">#   触发信号与 RunExecutor 换 arq 是同一个（§12.1）。</span>
+    <span class="tok-k">if</span> thread_id <span class="tok-k">is</span> <span class="tok-k">not</span> <span class="tok-k">None</span> <span class="tok-k">and</span> status == <span class="tok-s">"succeeded"</span>:
+        asyncio.create_task(<span class="tok-k">self</span>._remember(thread_id, run_id))</code></pre>
+
+  <div class="callout rule">
+    <span class="label">只在 succeeded 时提取</span>
+    <p>failed / cancelled 的 run 里，模型的回答可能是半截的或是报错文本。把它喂给提取器，会得到"用户想做 X，但失败了"这类既无用又会污染后续检索的记忆条目。</p>
+  </div>
+
+  <h3>用户侧管理</h3>
+  <div class="ep"><span class="verb get">GET</span><span class="path">/v1/users/me/memories</span><span class="desc">列出自己的记忆，带来源 thread 链接</span></div>
+  <div class="ep"><span class="verb del">DELETE</span><span class="path">/v1/users/me/memories/{memory_id}</span><span class="desc">删除一条</span></div>
+  <div class="ep"><span class="verb del">DELETE</span><span class="path">/v1/users/me/memories</span><span class="desc">清空（需二次确认，返回删除条数）</span></div>
+  <p>"这条别再记了"这种负向偏好，Mem0 没有原生表达。MVP <b>只做删除</b>，不假装支持 —— 做一条"用户不希望记住 X"的反向记忆，反而会把 X 本身写进检索库里。</p>
+</section>
+
+<!-- ══════════════════════════════════ 6 ══ -->
+<section id="s6">
+  <h2><span class="num">06</span>MCP 从环境变量到库</h2>
+
+  <p>现状：<code>Settings.mcp_servers</code> 从 <code>.env</code> 的 JSON 读，进程启动才加载。改 MCP 配置要改环境变量并重启 —— 不满足概要设计的"运行时增删改查"。</p>
+
+  <pre><code><span class="tok-c"># server/src/atlas_server/db/models.py （新增）</span>
+
+<span class="tok-k">class</span> <span class="tok-t">McpServer</span>(Base, TimestampMixin):
+    __tablename__ = <span class="tok-s">"mcp_server"</span>
+
+    id: Mapped[UUID] = _uuid_pk()
+    name: Mapped[<span class="tok-t">str</span>] = mapped_column(String(<span class="tok-n">64</span>), nullable=<span class="tok-k">False</span>, unique=<span class="tok-k">True</span>)
+    url: Mapped[<span class="tok-t">str</span>] = mapped_column(Text, nullable=<span class="tok-k">False</span>)
+    transport: Mapped[<span class="tok-t">str</span>] = mapped_column(String(<span class="tok-n">32</span>), server_default=<span class="tok-s">"streamable_http"</span>)
+    <span class="tok-c">#: ★ 只存 ${ENV} 占位符，真值在服务器环境变量里。</span>
+    <span class="tok-c">#  DB 化不改变这条 —— GET /v1/mcp-servers 会把配置原样返回给前端，</span>
+    <span class="tok-c">#  写密文进去等于公开（§14）。入库这件事不给"可以存密码"发许可。</span>
+    headers: Mapped[<span class="tok-t">dict</span>] = mapped_column(JSONType, nullable=<span class="tok-k">False</span>, default=<span class="tok-t">dict</span>)
+    enabled: Mapped[<span class="tok-t">bool</span>] = mapped_column(Boolean, server_default=text(<span class="tok-s">"true"</span>))
+    <span class="tok-c">#: 工具目录缓存。列举要建连，编辑器每次打开都连一遍太慢，</span>
+    <span class="tok-c">#  且一个慢 server 会拖住整个工具面板。</span>
+    tools_cache: Mapped[<span class="tok-t">list</span>] = mapped_column(JSONType, nullable=<span class="tok-k">False</span>, default=<span class="tok-t">list</span>)
+    tools_cached_at: Mapped[datetime | <span class="tok-k">None</span>] = mapped_column(UTCDateTime, nullable=<span class="tok-k">True</span>)
+    <span class="tok-c">#: 工具集指纹。变了说明 server 端改过工具，勾过它的 agent 要提示复核。</span>
+    tools_digest: Mapped[<span class="tok-t">str</span> | <span class="tok-k">None</span>] = mapped_column(String(<span class="tok-n">64</span>), nullable=<span class="tok-k">True</span>)</code></pre>
+
+  <p><code>McpService</code> 的构造从 <code>list[McpServerConfig]</code> 改成从仓库读，其余逻辑（占位符解析、逐 server 加载、<code>MissingTool</code> 报错）<b>一行不动</b>。engine 侧零改动 —— 它只收 <code>BaseTool</code>。</p>
+
+  <pre><code><span class="tok-c"># server/src/atlas_server/services/mcp.py</span>
+
+<span class="tok-k">class</span> <span class="tok-t">McpService</span>:
+    <span class="tok-d">@classmethod</span>
+    <span class="tok-k">async</span> <span class="tok-k">def</span> <span class="tok-f">from_db</span>(cls, session: AsyncSession) -> McpService:
+        rows = <span class="tok-k">await</span> McpServerRepository(session).enabled()
+        <span class="tok-k">return</span> cls([McpServerConfig.model_validate(r, from_attributes=<span class="tok-k">True</span>)
+                    <span class="tok-k">for</span> r <span class="tok-k">in</span> rows])</code></pre>
+
+  <h4>迁移期的兼容</h4>
+  <p>迁移 0008 里把 <code>.env</code> 的 <code>MCP_SERVERS</code> 一次性导入表，之后该环境变量弃用。不做"两个来源合并"——双事实源会让"我改了配置怎么不生效"变成一个需要看代码才能回答的问题。</p>
+
+  <div class="ep"><span class="verb get">GET</span><span class="path">/v1/mcp-servers</span><span class="desc">列表（含缓存的工具数与最后探测时间）</span></div>
+  <div class="ep"><span class="verb post">POST</span><span class="path">/v1/mcp-servers</span><span class="desc">注册。创建时同步探测一次，连不上就 400 —— 不让一个坏配置静默躺在表里</span></div>
+  <div class="ep"><span class="verb">PATCH</span><span class="path">/v1/mcp-servers/{id}</span><span class="desc">改 url / headers / enabled</span></div>
+  <div class="ep"><span class="verb post">POST</span><span class="path">/v1/mcp-servers/{id}/probe</span><span class="desc">重新探测工具目录，刷新 cache 与 digest</span></div>
+  <div class="ep"><span class="verb del">DELETE</span><span class="path">/v1/mcp-servers/{id}</span><span class="desc">有 agent 引用其工具时 409 并列出引用方</span></div>
+</section>
+
+<!-- ══════════════════════════════════ 7 ══ -->
+<section id="s7">
+  <h2><span class="num">07</span>执行环境：本期只定接缝</h2>
+
+  <p>概要设计要 K8s Pod + 模板管理 + 生命周期组件。atlas 现在是 Docker CLI + per-thread 容器。</p>
+
+  <div class="callout rule">
+    <span class="label">判断：本期不做 K8s</span>
+    <p>换 K8s 引入的主要是<b>部署形态</b>变化 —— 集群、RBAC、镜像仓库、PVC/OSS CSI、网络策略，不是代码变化。而代码侧的接缝 atlas 已经切对了：<code>DockerSandbox</code> 实现 kernel 的 <code>BaseSandbox</code>，<code>SandboxManager</code> 管生命周期。加一个 <code>K8sSandbox</code> + <code>K8sSandboxProvider</code> 就行，engine 与 executor 零改动。</p>
+    <p>本期做的是<b>把接缝坐实</b>：抽 Protocol。手法与 atlas 自己对 <code>RunExecutor</code> 的处理一致 —— Protocol + 只加实现类。</p>
+  </div>
+
+  <pre><code><span class="tok-c"># server/src/atlas_server/services/sandbox_provider.py （新建）</span>
+
+<span class="tok-k">class</span> <span class="tok-t">SandboxProvider</span>(Protocol):
+    <span class="tok-s">"""会话级沙箱的供给方。
+
+    换 K8s 时**只加一个实现类 + 改一处依赖注入**。
+    触发迁移的信号：需要跨机调度 / 需要 GPU / 单机容器数触顶。
+    """</span>
+
+    <span class="tok-k">async</span> <span class="tok-k">def</span> <span class="tok-f">acquire</span>(<span class="tok-k">self</span>, thread_id: UUID) -> Any:
+        <span class="tok-s">"""取得该会话的沙箱，不存在则创建。幂等。"""</span>
+        ...
+
+    <span class="tok-k">async</span> <span class="tok-k">def</span> <span class="tok-f">acquire_ephemeral</span>(<span class="tok-k">self</span>, run_id: UUID) -> Any:
+        <span class="tok-s">"""试跑用的一次性沙箱。"""</span>
+        ...
+
+    <span class="tok-k">async</span> <span class="tok-k">def</span> <span class="tok-f">release_ephemeral</span>(<span class="tok-k">self</span>, run_id: UUID) -> <span class="tok-k">None</span>: ...
+
+    <span class="tok-k">async</span> <span class="tok-k">def</span> <span class="tok-f">reap_idle</span>(<span class="tok-k">self</span>, idle_s: <span class="tok-t">int</span>) -> <span class="tok-t">int</span>:
+        <span class="tok-s">"""回收闲置沙箱，返回回收数。lifespan 的 reaper 调用。"""</span>
+        ...</code></pre>
+
+  <p>现有 <code>SandboxManager</code> 改名 <code>DockerSandboxProvider</code>，签名已经吻合，基本只是加一个 Protocol 声明与改注入点。</p>
+
+  <h3>目录结构：这个本期要做</h3>
+  <p>因为技能投送依赖它。现状容器里只有 <code>/workspace</code> 一个可写卷，容器根只读 —— 技能写不进去。</p>
+
+  <pre><code>容器内布局
+
+/workspace          rw   会话卷（volume）· 模型产物 · execute 的 cwd
+/skills             rw   tmpfs · 每 run 按清单物化，不持久
+  &lt;slug&gt;/
+    SKILL.md
+    &lt;resources&gt;
+/tmp                rw   tmpfs
+其余                 ro   只读根（cap-drop ALL · 非 root · 无网络）</code></pre>
+
+  <pre><code><span class="tok-c"># services/sandbox.py — 创建容器时追加</span>
+
+_CREATE_ARGS = [
+    ...
+    <span class="tok-s">"--read-only"</span>,
+    <span class="tok-s">"-v"</span>, <span class="tok-s">f"{volume_name(thread_id)}:{WORKDIR}"</span>,
+    <span class="tok-c"># ★ /skills 用 tmpfs 而非 volume：它是**每 run 重算的派生物**，</span>
+    <span class="tok-c">#   不是用户数据。做成持久卷的话，agent 改版去掉某个技能后，</span>
+    <span class="tok-c">#   旧文件会留在卷里被中间件继续扫到 —— 见 SkillMaterializer 的清理逻辑，</span>
+    <span class="tok-c">#   那段清理是**兜底**，tmpfs 让它在容器重建时天然归零。</span>
+    <span class="tok-s">"--tmpfs"</span>, <span class="tok-s">f"{SKILLS_ROOT}:rw,size=32m,mode=0755"</span>,
+    <span class="tok-s">"--tmpfs"</span>, <span class="tok-s">"/tmp:rw,size=64m"</span>,
+]</code></pre>
+</section>
+
+<!-- ══════════════════════════════════ 8 ══ -->
+<section id="s8">
+  <h2><span class="num">08</span>身份贯通</h2>
+
+  <p>atlas 的 README 明说不做鉴权。本期<b>仍然不做权限判定</b>，但必须做<b>身份贯通</b> —— 这不是功能诉求，是记忆功能的正确性前提。</p>
+
+  <div class="callout danger">
+    <span class="label">不做会怎样</span>
+    <p><code>identity.current_user()</code> 缺 header 时回落到 <code>DEFAULT_USER_ID</code>。如果前端不传 header，所有人共用一个 user_id —— Mem0 按 user 隔离的记忆就变成<b>全局共享</b>：A 说的偏好会出现在 B 的对话里。这是数据泄露，不是功能缺失。</p>
+  </div>
+
+  <p>最小动作，三处：</p>
+  <ul>
+    <li>前端每个请求带 <code>X-User-Id</code>（已有 header 支持，只是前端没传）。</li>
+    <li><code>MemoryService.recall/remember</code> 的 <code>user_id</code> 来自 <code>current_user</code>，不允许从别处取 —— 与 <code>identity.py</code> 的"唯一身份来源"纪律一致。</li>
+    <li>配置加一个开关：<code>memory.enabled</code> 默认 <b>false</b>。身份没接通之前，记忆功能不该默认打开。</li>
+  </ul>
+
+  <p>权限矩阵（谁能看到哪些 agent / 用哪些技能 / 调哪些 MCP）留给权限专项。本期只把身份这条线接通。</p>
+</section>
+
+<!-- ══════════════════════════════════ 9 ══ -->
+<section id="s9">
+  <h2><span class="num">09</span>可观测性埋点</h2>
+
+  <p>atlas 有完整的 <code>TraceEvent</code> 流，但那是<b>给用户看</b>的执行轨迹，不是给运维看的遥测。两者受众不同、保留期不同、聚合方式不同，不要复用。</p>
+
+  <h3>埋点位置：engine 的 runner</h3>
+  <p>所有事件的必经之路就是 <code>_EventFactory.make</code> 与 <code>runner.run</code> 的主循环。在那里挂 span 即可。</p>
+
+  <div class="callout rule">
+    <span class="label">分层是允许的</span>
+    <p>import-linter 的 forbidden 列表里是 <code>fastapi / sqlalchemy / redis / uvicorn / …</code>，没有 OTel。而且 <code>opentelemetry-api</code> 是<b>无副作用</b>的接口包 —— 没装 SDK 时它是 no-op。engine 只发 span，server 侧装配 exporter，分层依然成立。这是干净的做法，不需要为可观测性开分层的口子。</p>
+  </div>
+
+  <pre><code><span class="tok-c"># engine/src/atlas_engine/telemetry.py （新建）</span>
+<span class="tok-s">"""OpenTelemetry GenAI 语义约定的埋点。
+
+★ 只依赖 opentelemetry-api（no-op 友好）。exporter 装配在 server。
+★ 属性名一律用 _incubating 里的 GenAI 常量，不自己编 —— 编了的话
+  Langfuse / 任何标准后端都认不出来，仪表盘要手写映射。
+"""</span>
+<span class="tok-k">from</span> opentelemetry <span class="tok-k">import</span> trace
+<span class="tok-k">from</span> opentelemetry.semconv._incubating.attributes <span class="tok-k">import</span> gen_ai_attributes <span class="tok-k">as</span> ga
+
+_tracer = trace.get_tracer(<span class="tok-s">"atlas.engine"</span>)
+
+
+<span class="tok-d">@contextmanager</span>
+<span class="tok-k">def</span> <span class="tok-f">run_span</span>(spec: AgentSpec, run_id: UUID):
+    <span class="tok-k">with</span> _tracer.start_as_current_span(
+        <span class="tok-s">f"invoke_agent {spec.slug}"</span>,
+        attributes={
+            ga.GEN_AI_OPERATION_NAME: <span class="tok-s">"invoke_agent"</span>,
+            ga.GEN_AI_AGENT_NAME: spec.name,
+            ga.GEN_AI_REQUEST_MODEL: spec.model.model,
+            <span class="tok-s">"atlas.run_id"</span>: <span class="tok-t">str</span>(run_id),
+        },
+    ) <span class="tok-k">as</span> span:
+        <span class="tok-k">yield</span> span</code></pre>
+
+  <p>server 侧在 <code>main.py</code> 的 lifespan 里装 OTLP exporter，指向 collector。Langfuse 走 OTLP 协议接入，<b>不引入 Langfuse SDK</b> —— 多一个 SDK 就多一处要跟着升级的依赖，而 OTLP 是它本来就支持的。</p>
+
+  <h3>最少够用的三个指标</h3>
+  <table>
+    <thead><tr><th>指标</th><th>来源</th><th>回答什么</th></tr></thead>
+    <tbody>
+      <tr><td>run 时长拆成「系统」与「等待人」</td><td><code>Run.started_at/finished_at</code> 减去 <code>Approval</code> 的 pending 时长</td><td>慢是模型慢还是人没点</td></tr>
+      <tr><td>stop_reason 分布</td><td><code>run.status</code> + <code>error_kind</code></td><td>失败集中在限流、拒答还是超步数</td></tr>
+      <tr><td>记忆命中率</td><td><code>MemoryService.recall</code> 返回非 None 的比例</td><td>记忆到底有没有在起作用</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ══════════════════════════════════ 10 ══ -->
+<section id="s10">
+  <h2><span class="num">10</span>改动清单与顺序</h2>
+
+  <div class="callout warn">
+    <span class="label">阶段 2 与 4 已被平面拆分改写</span>
+    <p>本节写于「技能与 MCP 建在 Python 侧」的前提下。<a href="structure.html">目录与包结构设计</a>确定了配置平面（Java）拥有技能、MCP、K8s 模板（<b>智能体配置与版本仍留在 Python</b>）之后：<b>阶段 2 的 skill / skill_version 表与阶段 4 的 mcp_server 表不再在 Python 侧创建</b>，对应的 <code>repositories/</code>、CRUD API 迁到配置平面，Python 侧只保留 <code>configplane/</code> 的只读客户端与缓存。<b>阶段 1 的 <code>agent.type</code> 迁移与阶段 3 的记忆照常做</b> —— agent 表不动。</p>
+    <p>另外 §04 的<b>技能双路投送</b>（沙箱物化 / StateBackend seed_files）已被<a href="filesystem.html#s8">文件系统改造 §08</a>取代：技能改为会话创建时拷进 <code>/workspace/.skills/</code>，只有一条路径 —— <code>SkillMaterializer</code>、<code>as_seed_files()</code>、<code>seen_files</code> 预置全部不再需要。<code>spec.skills</code> 钉版本的设计保留，作用变成「决定新会话拷贝哪一版」。</p>
+  <p>不受影响的部分：<b>记忆接入点、能力推导的修正、Mem0 的作用域映射</b>。落地顺序以结构设计的 <a href="structure.html#s12">§12</a> 为准。</p>
+  </div>
+
+  <div class="phase">
+    <h4>阶段 1 · 地基（不改行为）</h4>
+    <div class="files">
+      <div class="row hd"><b style="min-width:300px">文件</b><span>动作</span></div>
+      <div class="row"><b style="min-width:300px">server/migrations/versions/0006_agent_type.py</b><span>新建 · agent 加 type / cli_type + 两条 CHECK</span></div>
+      <div class="row"><b style="min-width:300px">server/src/atlas_server/db/models.py</b><span>改 · Agent 加两列</span></div>
+      <div class="row"><b style="min-width:300px">engine/src/atlas_engine/capabilities.py</b><span>新建 · Capabilities + capabilities_for</span></div>
+      <div class="row"><b style="min-width:300px">server/src/atlas_server/schemas/agent.py</b><span>改 · AgentOut 加 type / cli_type / capabilities</span></div>
+      <div class="row"><b style="min-width:300px">server/src/atlas_server/services/sandbox_provider.py</b><span>新建 · SandboxProvider Protocol</span></div>
+      <div class="row"><b style="min-width:300px">server/src/atlas_server/services/sandbox.py</b><span>改 · SandboxManager → DockerSandboxProvider；容器加 /skills、/tmp tmpfs</span></div>
+      <div class="row"><b style="min-width:300px">web/src/features/agents/</b><span>改 · 按 capabilities 渲染按钮，不再自己判断类型</span></div>
+      <div class="row"><b style="min-width:300px">tests/test_capabilities.py</b><span>新建 · 钉住推导表，含 §02 的修正</span></div>
+    </div>
+  </div>
+
+  <div class="phase">
+    <h4>阶段 2 · 技能（本期主体）</h4>
+    <div class="files">
+      <div class="row hd"><b style="min-width:300px">文件</b><span>动作</span></div>
+      <div class="row"><b style="min-width:300px">server/migrations/versions/0007_skill.py</b><span>新建 · skill + skill_version 两张表</span></div>
+      <div class="row"><b style="min-width:300px">server/src/atlas_server/db/models.py</b><span>改 · Skill / SkillVersion</span></div>
+      <div class="row"><b style="min-width:300px">server/src/atlas_server/repositories/skill.py</b><span>新建 · load_exact / resolve_refs / referenced_by</span></div>
+      <div class="row"><b style="min-width:300px">server/src/atlas_server/services/skill.py</b><span>新建 · ResolvedSkill / SkillService / SkillUnavailable</span></div>
+      <div class="row"><b style="min-width:300px">server/src/atlas_server/services/skill_delivery.py</b><span>新建 · as_seed_files / SkillMaterializer</span></div>
+      <div class="row"><b style="min-width:300px">server/src/atlas_server/schemas/skill.py</b><span>新建 · CRUD schema</span></div>
+      <div class="row"><b style="min-width:300px">server/src/atlas_server/api/v1/skills.py</b><span>新建 · 7 个端点</span></div>
+      <div class="row"><b style="min-width:300px">server/src/atlas_server/schemas/agent.py</b><span>改 · SkillRefIn + AgentSpecIn.skills + SubAgentSpecIn.skills</span></div>
+      <div class="row"><b style="min-width:300px">server/src/atlas_server/services/agent.py</b><span>改 · _pin_skill_versions，保存时解析并校验</span></div>
+      <div class="row"><b style="min-width:300px">engine/src/atlas_engine/spec.py</b><span>改 · AgentSpec / SubAgentSpec 加 skill_refs</span></div>
+      <div class="row"><b style="min-width:300px">engine/src/atlas_engine/hooks.py</b><span>改 · SkillsPlan + RunHooks.skills</span></div>
+      <div class="row"><b style="min-width:300px">engine/src/atlas_engine/agent.py</b><span>改 · 传 skills= 给 create_deep_agent；subagent dict 加 skills</span></div>
+      <div class="row"><b style="min-width:300px">engine/src/atlas_engine/runner.py</b><span>改 · _graph_input 塞 files；seen_files 预置</span></div>
+      <div class="row"><b style="min-width:300px">server/src/atlas_server/executor/assembly.py</b><span>改 · build() 里的两路分叉</span></div>
+      <div class="row"><b style="min-width:300px">tests/test_skills_api.py · test_skill_delivery.py</b><span>新建 · 含"没勾 bash 也能用技能"与"假 file.written"两条回归</span></div>
+      <div class="row"><b style="min-width:300px">tests/test_spec_snapshots.py</b><span>改 · _PINNED_REQUIRED 加 SkillRefIn: {"slug"}</span></div>
+    </div>
+  </div>
+
+  <div class="phase">
+    <h4>阶段 3 · 记忆</h4>
+    <div class="files">
+      <div class="row hd"><b style="min-width:300px">文件</b><span>动作</span></div>
+      <div class="row"><b style="min-width:300px">server/src/atlas_server/services/memory.py</b><span>新建 · MemoryService（recall / remember / list / delete）</span></div>
+      <div class="row"><b style="min-width:300px">server/src/atlas_server/api/v1/memories.py</b><span>新建 · 3 个端点</span></div>
+      <div class="row"><b style="min-width:300px">engine/src/atlas_engine/hooks.py</b><span>改 · RunHooks.memory_context</span></div>
+      <div class="row"><b style="min-width:300px">engine/src/atlas_engine/agent.py</b><span>改 · 记忆片段拼在 system_prompt <b>末尾</b>（护缓存前缀）</span></div>
+      <div class="row"><b style="min-width:300px">server/src/atlas_server/executor/assembly.py</b><span>改 · build() 里 recall</span></div>
+      <div class="row"><b style="min-width:300px">server/src/atlas_server/executor/inprocess.py</b><span>改 · 收尾投 remember 任务，仅 succeeded</span></div>
+      <div class="row"><b style="min-width:300px">server/src/atlas_server/config.py</b><span>改 · mem0 配置 + memory.enabled 默认 false</span></div>
+      <div class="row"><b style="min-width:300px">web/src/features/settings/memories/</b><span>新建 · 记忆管理页</span></div>
+    </div>
+  </div>
+
+  <div class="phase">
+    <h4>阶段 4 · MCP 入库</h4>
+    <div class="files">
+      <div class="row hd"><b style="min-width:300px">文件</b><span>动作</span></div>
+      <div class="row"><b style="min-width:300px">server/migrations/versions/0008_mcp_server.py</b><span>新建 · 建表 + 从 .env 一次性导入</span></div>
+      <div class="row"><b style="min-width:300px">server/src/atlas_server/repositories/mcp.py</b><span>新建</span></div>
+      <div class="row"><b style="min-width:300px">server/src/atlas_server/services/mcp.py</b><span>改 · from_db()；其余逻辑不动</span></div>
+      <div class="row"><b style="min-width:300px">server/src/atlas_server/api/v1/mcp_servers.py</b><span>新建 · 5 个端点</span></div>
+      <div class="row"><b style="min-width:300px">server/src/atlas_server/api/v1/meta.py</b><span>改 · /v1/tools 读缓存而非实时探测</span></div>
+    </div>
+  </div>
+
+  <div class="phase">
+    <h4>阶段 5 · 可观测性</h4>
+    <div class="files">
+      <div class="row hd"><b style="min-width:300px">文件</b><span>动作</span></div>
+      <div class="row"><b style="min-width:300px">engine/src/atlas_engine/telemetry.py</b><span>新建 · GenAI 语义约定 span</span></div>
+      <div class="row"><b style="min-width:300px">engine/src/atlas_engine/runner.py</b><span>改 · run_span 包住主循环</span></div>
+      <div class="row"><b style="min-width:300px">server/src/atlas_server/main.py</b><span>改 · lifespan 装 OTLP exporter</span></div>
+      <div class="row"><b style="min-width:300px">pyproject.toml</b><span>改 · engine 加 opentelemetry-api；server 加 sdk + otlp exporter</span></div>
+    </div>
+  </div>
+
+  <h3>三条不要破的既有纪律</h3>
+  <ul>
+    <li><b>engine 不得依赖 server / DB / Web 框架</b> —— import-linter 守着。技能与记忆都必须以"已解析好的数据"形态经 <code>RunHooks</code> 注入，engine 不认识 <code>SkillRepository</code>，也不认识 Mem0。</li>
+    <li><b>快照新字段必须有默认值</b> —— <code>tests/test_spec_snapshots.py</code> 守着。<code>AgentSpecIn.skills</code> 与 <code>SkillRefIn.version</code> 都遵守。</li>
+    <li><b>不静默降级</b>（§13.2）—— 技能解析失败、MCP 工具缺失、沙箱起不来，一律冒泡成 <code>run.failed</code>，不允许"少装一个就默默跑"。<code>SkillUnavailable</code> 是这条纪律在技能域的实例。</li>
+  </ul>
+
+  <div class="callout rule">
+    <span class="label">阶段 1 与 2 之后可以停</span>
+    <p>阶段 1+2 交付的是<b>能用技能的 native agent</b>，这是概要设计里 native 最核心的缺口。阶段 3（记忆）依赖阶段 8 的身份贯通才安全，阶段 4、5 是平台化与运维诉求 —— 可以按实际优先级重排，但不要把阶段 3 排在身份贯通之前。</p>
+  </div>
+</section>
+
+</main>
+</div>
+
+</body>
+</html>

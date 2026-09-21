@@ -1,0 +1,21 @@
+[project]
+name = "atlas-bridge"
+version = "0.1.0"
+description = "Atlas ACP bridge — runs inside the session Pod, drives the CLI adapter over stdio."
+requires-python = ">=3.13"
+
+# ★ 只有两个依赖，而且都很轻。本包进 Pod 镜像：每多一层就是每个会话 Pod
+#   多一层字节与一个 CVE 面。尤其**不许**依赖 atlas-server —— bridge 与
+#   server 的唯一接口是 WS 上的线协议（atlas_acp）。代码级共享会让
+#   「升级 server 必须同步升级全部在跑的 Pod」，而 Pod 在跑时没法原地升级。
+dependencies = [
+  "atlas-acp",
+  "websockets>=14",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/atlas_bridge"]
