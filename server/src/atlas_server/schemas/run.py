@@ -6,8 +6,20 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from atlas_server.domain.events import TraceEvent
+
+#: ★ 'suspended' 是**非终态**：这一轮还没结束，只是在等子智能体的结果
+#:   （可能等一小时）。前端应当显示「等待中」而不是把这一轮标成完成 ——
+#:   真正的结论要等续跑那一段（domain/events.py::RUN_SUSPENDED）。
 RunStatus = Literal[
-    "queued", "running", "succeeded", "failed", "cancelled", "interrupted", "awaiting_approval"
+    "queued",
+    "running",
+    "succeeded",
+    "failed",
+    "cancelled",
+    "interrupted",
+    "awaiting_approval",
+    "suspended",
 ]
 
 
@@ -71,3 +83,13 @@ class RunOut(BaseModel):
     started_at: datetime | None
     finished_at: datetime | None
     created_at: datetime
+
+
+class RunTraceOut(BaseModel):
+    """一轮的归档轨迹（含子 run），按 thread_seq 正序。
+
+    ★ 不含 message.delta（归档时就滤掉了），正文由 message.completed 一次给全。
+    ★ 空列表 = 归档已被清理，前端退回只显示消息正文。
+    """
+
+    data: list[TraceEvent]

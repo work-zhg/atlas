@@ -1,13 +1,19 @@
 """★ Redis Stream 事件中继（文档 §10.2）。
 
 为什么必须有它：FastAPI 多 worker 部署下，`POST /runs` 可能落在 worker A，
-而浏览器的 `GET /runs/{id}/events` 落在 worker B。没有跨进程中继，B 拿不到
+而浏览器的 `GET /threads/{id}/events` 落在 worker B。没有跨进程中继，B 拿不到
 A 产出的事件。Redis Stream 同时解决了跨 worker 与断线重连两个问题。
 
-读取分三种情形：
-  1. Redis 里有数据      → XRANGE 补发 seq > after 的部分，再 XREAD BLOCK 续读
-  2. Redis 空且 run 已终止 → 从 Postgres 的 run_event 归档表回放（超过 24h TTL 的历史）
-  3. Redis 空且 run 未终止 → 直接进入 XREAD BLOCK 等待（run 刚创建，还没产出）
+★ 订阅单位是 **thread**，不是 run（doc/detail/suspension.html §04）。一个会话
+  一条流，该会话下所有 run（含子 run）的事件都进去 —— 子 run 的过程与审批
+  因此不再需要「冒泡到父流」那套转发。
+
+读取是两段接力：
+  1. 先从 Postgres 的 run_event 归档读到游标（Redis 流有 maxlen 裁剪，而会话流
+     可以很长 —— 早期事件只在库里）
+  2. 再从 Redis 续，两段按 thread_seq 接上
+
+  归档那一段在 services/run.py::stream_thread 里（relay 不碰 DB）。
 """
 
 from __future__ import annotations
@@ -17,6 +23,7 @@ from collections.abc import AsyncIterator
 from uuid import UUID
 
 import redis.asyncio as aioredis
+
 from atlas_server.domain.events import TERMINAL_EVENTS, EventType, TraceEvent
 
 logger = logging.getLogger(__name__)
@@ -24,8 +31,13 @@ logger = logging.getLogger(__name__)
 _TERMINAL_VALUES = {e.value for e in TERMINAL_EVENTS}
 
 
-def stream_key(run_id: UUID) -> str:
-    return f"run:events:{run_id}"
+def thread_stream_key(thread_id: UUID) -> str:
+    """一个会话一条流 —— 子 run 的事件也进它所属**根会话**的这条。"""
+    return f"thread:events:{thread_id}"
+
+
+def thread_seq_key(thread_id: UUID) -> str:
+    return f"thread:seq:{thread_id}"
 
 
 def cancel_key(run_id: UUID) -> str:
@@ -40,63 +52,134 @@ def idempotency_key(key: str) -> str:
     return f"idem:run:{key}"
 
 
+#: 会话级序号的分配。**必须原子** —— 见 next_thread_seq 的说明。
+#:
+#:   KEYS[1] = thread:seq:{id}
+#:   ARGV[1] = DB 水位（Redis 里没有这个 key 时的起点）
+#:   ARGV[2] = TTL 秒
+_NEXT_THREAD_SEQ = (
+    "if redis.call('EXISTS', KEYS[1]) == 0 then "
+    "  redis.call('SET', KEYS[1], ARGV[1]) "
+    "end "
+    "local v = redis.call('INCR', KEYS[1]) "
+    "redis.call('EXPIRE', KEYS[1], ARGV[2]) "
+    "return v"
+)
+
+#: 序号 key 的 TTL。远长于事件流本身（run_events_ttl_s，默认 1 天）——
+#: 它是会话的**水位**，会话还活着就不该丢。活跃会话每次分配都续期，
+#: 所以实际只有冷启动/Redis 重建才会走到水位恢复。
+_SEQ_TTL_S = 30 * 86_400
+
+#: 一条会话流最多保留多少个事件。
+#:
+#: ★ thread 流**永不结束**（它跟着会话活一辈子），不设上限的话内存随会话
+#:   寿命单调增长。用 approximate 裁剪（`~`）让 Redis 按整块丢，O(1)。
+#:
+#: ★ 被裁掉的事件仍在 Postgres 的归档表里（delta 除外，那些本来就不归档），
+#:   回放走 §10.2 的情形 2。
+_STREAM_MAXLEN = 10_000
+
+
 class EventRelay:
     def __init__(self, redis: aioredis.Redis, *, ttl_s: int = 86_400) -> None:
         self._redis = redis
         self._ttl_s = ttl_s
 
-    async def publish(self, event: TraceEvent) -> None:
-        key = stream_key(event.run_id)
+    # ------------------------------------------------------------------ 序号
+
+    async def next_thread_seq(self, thread_id: UUID, *, floor: int) -> int:
+        """分配一个会话级序号。
+
+        ★ 为什么不能在进程内数。同一条会话流有**多个并发生产者** ——
+          并行委派的几个子 run 同时在写（它们的事件都进根会话那条流）。
+          各自在内存里递增会撞号，而撞号的表现是前端把新事件当重复丢掉。
+
+        ★ 为什么必须原子。Redis 是易失的：key 丢了会从 1 重来，于是整段
+          事件的 seq 全部落在前端 `seq <= lastSeq` 的丢弃区里 —— **静默**
+          故障，没有报错、没有缺口告警，只是界面再也不更新。
+          「不存在就用水位初始化」和「递增」之间不能有窗口，所以走 Lua。
+
+        floor: DB 里这条会话已有的最大 thread_seq。调用方每段查一次即可
+            （不是每事件），见 executor 的 _thread_seq_floor。
+        """
+        value = await self._redis.eval(
+            _NEXT_THREAD_SEQ, 1, thread_seq_key(thread_id), str(floor), str(_SEQ_TTL_S)
+        )
+        return int(value)
+
+    # ------------------------------------------------------------------ 发布
+
+    async def publish(self, event: TraceEvent, *, thread_id: UUID, floor: int = 0) -> TraceEvent:
+        """发布一个事件，返回**盖了会话级序号**的那一份。
+
+        ★ 返回值必须被调用方用上：归档要按 thread_seq 落库（它是主键的一半），
+          而分配发生在这里。丢掉返回值的表现是归档全部撞在 thread_seq=0 上。
+        """
+        stamped = event.stamped(await self.next_thread_seq(thread_id, floor=floor))
+        await self.emit(stamped, thread_id=thread_id)
+        return stamped
+
+    async def emit(self, event: TraceEvent, *, thread_id: UUID) -> None:
+        """发布一个**已经盖过序号**的事件。
+
+        ★ 收尾事件（终态 / 挂起）走这条而不是 publish：它的序号必须在**落库
+          之前**就定下来（归档要按 thread_seq 落，而 thread_seq 是主键的一半），
+          而发布必须在落库之后（「看到终止事件 ⇒ DB 已是最终状态」）。
+          分配与发布因此要能分开做。
+        """
+        await self._emit(thread_stream_key(thread_id), event)
+
+    async def _emit(self, key: str, event: TraceEvent) -> None:
         await self._redis.xadd(
             key,
-            {"seq": str(event.seq), "type": event.type.value, "payload": event.model_dump_json()},
+            {
+                "seq": str(event.seq),
+                "thread_seq": str(event.thread_seq),
+                "type": event.type.value,
+                "payload": event.model_dump_json(),
+            },
+            maxlen=_STREAM_MAXLEN,
+            approximate=True,
         )
         # 每次都续期：run 可能跑很久，避免中途过期
         await self._redis.expire(key, self._ttl_s)
 
-    async def replay(self, run_id: UUID, *, after_seq: int) -> list[TraceEvent]:
-        """Redis 里 seq > after_seq 的既有事件。Redis 无数据时返回空列表。"""
-        entries = await self._redis.xrange(stream_key(run_id))
-        out: list[TraceEvent] = []
-        for _id, fields in entries:
-            if int(fields["seq"]) > after_seq:
-                out.append(TraceEvent.model_validate_json(fields["payload"]))
-        return out
+    # ------------------------------------------------------------------ 会话流
 
-    async def has_data(self, run_id: UUID) -> bool:
-        return bool(await self._redis.exists(stream_key(run_id)))
-
-    async def tail(
-        self, run_id: UUID, *, after_seq: int, block_ms: int
+    async def tail_thread(
+        self, thread_id: UUID, *, after_seq: int, block_ms: int
     ) -> AsyncIterator[TraceEvent | None]:
-        """从 after_seq 之后持续产出事件；阻塞超时产出 None 供调用方发心跳。
+        """从 after_seq 之后持续产出一条**会话**流上的事件。
 
-        终止事件产出后即结束迭代。
+        ★ 与 `tail` 最重要的差别：**不因终态事件而结束**。会话流跟着会话活
+          一辈子 —— 一轮跑完了后面还会有下一轮，中间还夹着挂起等待。遇到
+          run.finished 就 return 的话，用户发第二句话时流已经断了。
+          结束的唯一理由是客户端断开（迭代被取消）。
+
+        ★ 按 thread_seq 过滤而不是按 Redis 的 entry id：调用方可能已经从
+          归档表读过一段（Redis 的流有 maxlen，早期事件只在 Postgres 里），
+          两段要能按同一个游标接上。
         """
-        key = stream_key(run_id)
+        key = thread_stream_key(thread_id)
         last_id = "0-0"
-        # 先把已有的读完，同时把游标推到末尾
-        entries = await self._redis.xrange(key)
-        for entry_id, fields in entries:
+
+        # 先把流里已有的读完，同时把游标推到末尾
+        for entry_id, fields in await self._redis.xrange(key):
             last_id = entry_id
-            if int(fields["seq"]) > after_seq:
-                event = TraceEvent.model_validate_json(fields["payload"])
-                yield event
-                if fields["type"] in _TERMINAL_VALUES:
-                    return
+            if int(fields.get("thread_seq", 0)) > after_seq:
+                yield TraceEvent.model_validate_json(fields["payload"])
 
         while True:
             resp = await self._redis.xread({key: last_id}, block=block_ms, count=100)
             if not resp:
-                yield None  # 心跳
+                yield None  # 心跳，防中间层判定空闲断连
                 continue
             for _key, entries in resp:
                 for entry_id, fields in entries:
                     last_id = entry_id
-                    event = TraceEvent.model_validate_json(fields["payload"])
-                    yield event
-                    if fields["type"] in _TERMINAL_VALUES:
-                        return
+                    if int(fields.get("thread_seq", 0)) > after_seq:
+                        yield TraceEvent.model_validate_json(fields["payload"])
 
     # ------------------------------------------------------------------ 取消
 
@@ -157,6 +240,23 @@ class RedisCancelToken:
             return False
 
 
-def event_from_row(*, run_id: UUID, seq: int, ts, type_: str, depth: int, data: dict) -> TraceEvent:
+def event_from_row(
+    *,
+    run_id: UUID,
+    seq: int,
+    ts,
+    type_: str,
+    depth: int,
+    data: dict,
+    thread_seq: int = 0,
+) -> TraceEvent:
     """Postgres 归档行 → TraceEvent（超过 Redis TTL 的历史回放）。"""
-    return TraceEvent(seq=seq, run_id=run_id, ts=ts, type=EventType(type_), depth=depth, data=data)
+    return TraceEvent(
+        seq=seq,
+        thread_seq=thread_seq,
+        run_id=run_id,
+        ts=ts,
+        type=EventType(type_),
+        depth=depth,
+        data=data,
+    )

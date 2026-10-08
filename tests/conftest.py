@@ -36,6 +36,47 @@ _OBJECT_STORAGE_KEYS = (
 
 
 @pytest.fixture(scope="session", autouse=True)
+def _localhost_is_never_proxied() -> Iterator[None]:
+    """★ 测试里的一切连接都直连，不经开发机的代理。
+
+    被测对象全在 127.0.0.1 上：bridge 的 WebSocket、假 adapter、本地
+    Postgres / Redis。经代理出去一趟没有任何意义，而**代理会把它们全弄挂**。
+
+    坑在于代理设置可以完全不在环境变量里。`urllib.request.getproxies()` 是
+
+        getproxies_environment() or getproxies_macosx_sysconf()
+
+    ——环境变量为空时它去读 **macOS 系统网络设置**。于是开发机配了全局 SOCKS
+    代理之后，`websockets` 连 127.0.0.1 也会被拐进代理，报一句和 WebSocket
+    毫无关系的「python-socks is required to use a SOCKS proxy」，
+    而 `env | grep -i proxy` 是空的，线索到此为止。
+    test_bridge.py 的 14 条曾经整体红着，原因就是这个。
+
+    修法要顺着上面那个 `or`：先塞一个**环境变量**代理，让
+    `proxy_bypass()` 走 `proxy_bypass_environment()` 分支（它只在
+    `getproxies_environment()` 非空时才走），再用 no_proxy 把本机放行。
+    只设 no_proxy 是不够的 —— 环境里没有代理变量时那个分支根本不会被选中。
+
+    生产代码里对应的一条是 `HostClient` 的 `connect(..., proxy=None)`。
+    """
+    saved = {k: os.environ.get(k) for k in ("ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy")}
+    # 一个指向黑洞的代理 —— 它存在的唯一目的是让 bypass 逻辑走环境变量分支。
+    # 真被用上就说明 bypass 没生效，那时连接会立刻失败，而不是默默走代理。
+    os.environ["ALL_PROXY"] = "http://127.0.0.1:1"
+    os.environ["all_proxy"] = "http://127.0.0.1:1"
+    os.environ["NO_PROXY"] = "127.0.0.1,localhost,::1"
+    os.environ["no_proxy"] = "127.0.0.1,localhost,::1"
+    try:
+        yield
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+@pytest.fixture(scope="session", autouse=True)
 def _object_storage_is_not_inherited_from_the_developer(tmp_path_factory) -> Iterator[None]:
     """★ 测试不继承开发机 .env 里的对象存储配置。
 

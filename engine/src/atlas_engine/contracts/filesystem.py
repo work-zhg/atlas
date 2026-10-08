@@ -35,9 +35,9 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Protocol, runtime_checkable
+from typing import NotRequired, Protocol, runtime_checkable
 
-from typing_extensions import NotRequired, TypedDict
+from typing_extensions import TypedDict
 
 __all__ = [
     "EDIT_MAX_BYTES",

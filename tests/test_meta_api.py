@@ -96,15 +96,8 @@ async def test_tools_catalog_availability(client: httpx.AsyncClient) -> None:
     assert "K8s" in by_name["bash"]["note"]
     assert "coding_task" not in by_name
 
-    # ★ web_search 的可用性取决于服务端有没有 SERPAPI_KEY —— 断言的是
-    #   那条**规则**，不是本机恰好怎么配。写死 True 的话，没配 key 的
-    #   开发机上这条会红，而它报的并不是回归。
-    from atlas_server.config import get_settings
-
-    expected = get_settings().serpapi_key is not None
-    assert by_name["web_search"]["available"] is expected
-    if not expected:
-        assert "SERPAPI_KEY" in by_name["web_search"]["note"]
+    # ★ 网页搜索已改走 MCP（Higress 上的 serpapi），不再是内置工具
+    assert "web_search" not in by_name
 
     # 无外部前提的工具恒可用
     assert by_name["write_todos"]["available"] is True

@@ -14,9 +14,10 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
+from langchain_core.messages import HumanMessage
+
 from atlas_server.domain.spec import ModelSpec
 from atlas_server.domain.translator import extract_text
-from langchain_core.messages import HumanMessage
 
 from ..config import Settings
 

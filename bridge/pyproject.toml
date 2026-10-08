@@ -10,6 +10,8 @@ requires-python = ">=3.13"
 #   「升级 server 必须同步升级全部在跑的 Pod」，而 Pod 在跑时没法原地升级。
 dependencies = [
   "atlas-acp",
+  "atlas-host",
+  "atlas-jsonrpc",
   "websockets>=14",
 ]
 

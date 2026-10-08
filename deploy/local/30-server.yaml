@@ -1,4 +1,4 @@
-# server：API + 进程内执行器 + AcpRuntime。
+# server：API + 进程内执行器 + HostRuntime（经会话 Pod 里的 bridge 执行 acp agent）。
 #
 # ★ 为什么 server 也跑在集群里，而不是留在宿主上跑 make serve：
 #   cluster 交给 server 的是 `ws://<podIP>:8900`（manager._url 用 Pod IP，
@@ -40,6 +40,14 @@ spec:
             - {name: OSS_ADDRESSING_STYLE, value: path}
             - {name: OSS_REGION, value: us-east-1}
             - {name: CLUSTER_BASE_URL, value: "http://atlas-cluster.atlas-system.svc.cluster.local:8010"}
+            # 配置服务：技能目录（与 MCP 注册表，MCP_REGISTRY=config 时）。
+            # ★ MCP 先保持 env：注册表要先用 `python -m atlas_config mcp import-env`
+            #   导入，再把 MCP_REGISTRY 切成 config。
+            - {name: CONFIG_BASE_URL, value: "http://atlas-config.atlas-system.svc.cluster.local:8020"}
+            - name: CONFIG_INTERNAL_TOKEN
+              valueFrom: {secretKeyRef: {name: atlas-config-creds, key: internal_token}}
+            # 技能版本的磁盘缓存。容器里放 /tmp：丢了只是重新拉一次
+            - {name: CONFIGPLANE_CACHE_DIR, value: /tmp/atlas-configplane}
             # 遥测（可观测性设计 §02）。Collector 跑在宿主的 compose 里，
             # 与 PG/Redis/MinIO 同款走 LAN IP —— host.docker.internal 会被
             # Docker Desktop 转发到宿主 loopback，命中不了 compose 的监听。
@@ -51,6 +59,12 @@ spec:
             # ★ Mem0 的变更史库。默认在 ~/.mem0，容器里是易失的。
             - {name: MEMORY_HISTORY_DB, value: "/tmp/mem0-history.db"}
             - {name: DEFAULT_USER_ID, value: "00000000-0000-0000-0000-000000000001"}
+            # MCP 经 Higress 收口（MCP 详设 §08）。Higress 跑在宿主的 compose 里
+            # （--profile higress），配置见 deploy/local/higress/setup.py。
+            # ★ 后端 key 只在网关里，这里只有网关地址 —— 没有任何 serpapi 凭据。
+            # ★ serpapi 单独给 90s：没有缓存的查询偶尔 50s+，全局 60s 会误判超时。
+            - name: MCP_SERVERS
+              value: '[{"name":"serpapi","url":"http://__HOST_IP__:18080/mcp-servers/serpapi","call_timeout_s":90}]'
             # web 从宿主浏览器直连本服务（LoadBalancer 落在 localhost）
             - {name: CORS_ORIGINS, value: '["http://localhost:3000","http://127.0.0.1:3000"]'}
             - name: OSS_ACCESS_KEY_ID

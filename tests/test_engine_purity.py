@@ -275,7 +275,7 @@ def test_server_pure_layer_pulls_no_infrastructure() -> None:
         "atlas_server.domain.tool_registry",
         "atlas_server.executor.runner",
         "atlas_server.executor.build",
-        "atlas_server.acp.translate",
+        "atlas_server.host.translate.acp_v1",
     )
     code = (
         "import sys, importlib;"

@@ -17,10 +17,15 @@ interface NavItem {
 const NAV: NavItem[] = [
   { href: "/chat", icon: "chat", label: "对话", match: "/chat" },
   { href: "/agents", icon: "bot", label: "智能体", match: "/agents" },
+  { href: "/skills", icon: "spark", label: "技能", match: "/skills" },
+  { href: "/mcp", icon: "plug", label: "MCP", match: "/mcp" },
+  { href: "/memories", icon: "brain", label: "记忆", match: "/memories" },
 ];
 
 export function Rail() {
   const pathname = usePathname();
+  // 文件预览页在新标签里单独打开，是一个整页查看器，不需要主导航
+  if (pathname.startsWith("/files/")) return null;
 
   return (
     <nav className={styles.rail} aria-label="主导航">

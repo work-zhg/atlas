@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ACP 子智能体权限模式（Auto Mode）设计</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --border: #d1d9e0; --head: #f6f8fa;
+    --accent: #0969da; --ok: #1a7f37; --ok-bg: #dafbe1; --warn: #9a6700; --warn-bg: #fff8c5;
+    --bad: #cf222e; --bad-bg: #ffebe9; --code-bg: #f6f8fa; --lane: #8c959f; --box: #ddf4ff; --box-bd: #54aeff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --border: #3d444d; --head: #151b23;
+      --accent: #4493f8; --ok: #3fb950; --ok-bg: #12261e; --warn: #d29922; --warn-bg: #2b2111;
+      --bad: #f85149; --bad-bg: #2d1214; --code-bg: #151b23; --lane: #6e7681; --box: #12263f; --box-bd: #1f6feb;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 32px; background: var(--bg); color: var(--fg);
+         font: 14px/1.7 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif; }
+  main { max-width: 1120px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 40px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 15.5px; margin: 24px 0 8px; }
+  .sub { color: var(--muted); margin: 0 0 16px; }
+  code { font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code-bg); padding: 1px 4px; border-radius: 4px; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px 14px; overflow-x: auto; }
+  pre code { background: none; padding: 0; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0 16px; }
+  th, td { border: 1px solid var(--border); padding: 7px 10px; vertical-align: top; text-align: left; }
+  th { background: var(--head); white-space: nowrap; }
+  .callout { border-left: 4px solid var(--accent); background: var(--head); padding: 10px 14px; border-radius: 4px; margin: 14px 0; }
+  .callout.warn { border-color: var(--warn); background: var(--warn-bg); }
+  .callout.bad { border-color: var(--bad); background: var(--bad-bg); }
+  .tag { display: inline-block; padding: 0 7px; border-radius: 9px; font-size: 12px; font-weight: 600; border: 1px solid; white-space: nowrap; }
+  .tag.ok { color: var(--ok); background: var(--ok-bg); border-color: var(--ok); }
+  .tag.warn { color: var(--warn); background: var(--warn-bg); border-color: var(--warn); }
+  .tag.bad { color: var(--bad); background: var(--bad-bg); border-color: var(--bad); }
+  .toc { columns: 2; padding-left: 18px; }
+  .seq { overflow-x: auto; border: 1px solid var(--border); border-radius: 6px; padding: 8px; }
+  svg text { fill: var(--fg); font-size: 12px; font-family: -apple-system, "PingFang SC", sans-serif; }
+  svg .lane { stroke: var(--lane); stroke-dasharray: 4 4; }
+  svg .box { fill: var(--box); stroke: var(--box-bd); }
+  svg .arrow { stroke: var(--fg); stroke-width: 1.3; fill: none; }
+  svg .reply { stroke-dasharray: 5 4; }
+  svg .new { stroke: var(--accent); stroke-width: 2; }
+  svg .newt { fill: var(--accent); font-weight: 600; }
+  svg .note { fill: var(--warn-bg); stroke: var(--warn); }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Native 委派 ACP 子智能体：权限模式（Auto Mode）设计</h1>
+<p class="sub">状态：<b>第 0～3 期已实施并验证（2026-10-04）</b>；决策：默认 auto、不做 bypass、不做用户覆盖、D8 选 A · 2026-10-03 · 依据当前工作区代码与 adapter 实测（镜像 <code>atlas-acp-bridge:0.2.0</code> 与 npm 上的最新版）</p>
+
+<ol class="toc">
+  <li><a href="#verify">第 0 期验证结果（2026-10-03）</a></li>
+  <li><a href="#facts">现状与关键事实</a></li>
+  <li><a href="#goals">目标与非目标</a></li>
+  <li><a href="#decisions">关键决策</a></li>
+  <li><a href="#flow">时序</a></li>
+  <li><a href="#protocol">协议与数据改动</a></li>
+  <li><a href="#components">各组件改动</a></li>
+  <li><a href="#models">模型兼容与降级</a></li>
+  <li><a href="#security">安全与审计</a></li>
+  <li><a href="#phases">分期实施</a></li>
+  <li><a href="#tests">测试</a></li>
+  <li><a href="#risks">风险</a></li>
+  <li><a href="#open">决策记录与遗留问题</a></li>
+</ol>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2 id="verify">0. 第 0 期验证结果（2026-10-03）</h2>
+<p>方法：临时镜像 <code>atlas-acp-bridge:0.3.0-rc</code>，只把 adapter 换成 <code>@agentclientprotocol/claude-agent-acp@0.85.1</code>。① 在容器里用 bridge 自带的 <code>AcpClient</code> 直连 adapter；② 走平台完整链路（server → cluster → Pod → bridge）。CLI 模型都是 <code>deepseek-chat</code>。</p>
+<table>
+  <tr><th>验证项</th><th>结果</th><th>对设计的影响</th></tr>
+  <tr><td>新 adapter 和现有 bridge 能否配合</td>
+      <td><span class="tag ok">通过</span> 全链路四轮全部成功：写文件 + 执行命令（审批走平台）、同一 Pod 上第二轮、<b>删掉 Pod 后跨 Pod 恢复会话</b>（不读文件，凭记忆答出之前创建的文件名）、取消</td>
+      <td>第 1 期（只升级镜像）可以直接做</td></tr>
+  <tr><td>DeepSeek 下 auto 是否可用</td>
+      <td><span class="tag ok">可用，没有降级</span> <code>set_mode(auto)</code> 生效，实际模式就是 auto。adapter 拿不到 deepseek 的模型信息（<code>models.current</code> 为空），所以不会触发"模型不支持就降级"的检查。判断器的请求发给配置好的 DeepSeek 接口（CLI 的提示原文是 <i>“auto mode keeps working, and its classifier requests are billed as before … go through api.deepseek.com”</i>）</td>
+      <td><b>修正第 7 节</b>：原来"DeepSeek 大概率会被降级成 acceptEdits"的推断不成立。降级的显示逻辑仍然保留（以后换模型可能会触发）</td></tr>
+  <tr><td>auto 的判断器有没有真的在拦截</td>
+      <td><span class="tag ok">在拦截</span> <code>rm -rf /state/*</code>（删除工作区以外的目录）被判断器拒绝，原因为 <code>[Unverifiable Deletion Target]</code>。写文件、<code>ls</code>、<code>date</code>、<code>rm</code> 工作区内的文件都直接放行</td>
+      <td>auto 确实是"有判断的放行"，不等于 bypass</td></tr>
+  <tr><td><b>auto 下有风险的操作是"请示"还是"拒绝"</b></td>
+      <td><span class="tag warn">是拒绝</span> 所有 auto 测试里请示次数都是 0。被拦的操作以工具失败结束，失败信息里带着原因，模型收到后会自己调整做法或停下来说明</td>
+      <td><b>新增决策 D8</b>（见下）：在 auto 下，审批卡片基本不会出现；被拦的操作以失败的工具行呈现，<b>用户没有地方批准它</b></td></tr>
+  <tr><td>default 模式（基线）</td>
+      <td>写文件请示，<code>rm</code> 请示，只读命令（<code>ls</code>、<code>date</code>）不请示</td>
+      <td>与预期一致</td></tr>
+  <tr><td>协议细节变化</td>
+      <td>权限选项的 id 从 <code>allow</code> 变成了 <code>allow-once</code>；adapter 入口变成 <code>…/@agentclientprotocol/claude-agent-acp/dist/index.js</code>；能力位新增 <code>fork</code>、<code>list</code>、<code>delete</code>、<code>subagents</code></td>
+      <td>server 按选项的 <code>kind</code>（<code>allow_once</code>）选择，不受 id 变化影响。入口路径变了，第 1 期必须保留旧路径的软链接</td></tr>
+</table>
+<div class="callout warn">
+  <b>D8：auto 拒绝的操作，用户怎么处理？——已选 A（2026-10-04）。</b> 现在的设计里，被 auto 拒绝的操作只会表现为一个失败的工具行，用户<b>无法批准</b>它；"用户在会话里临时切换模式"又已经决定不做。可选的做法：<br>
+  A. 接受这个行为：失败的工具行上显示拒绝原因；确实需要做的事，由作者把智能体的模式改成 manual。<br>
+  B. 被拒绝时，在对话里给出一张"此操作被自动模式拦截"的卡片，提供"本轮改用手动模式重试"的按钮。这实际上就是有限范围的用户覆盖。<br>
+  建议先做 A，并且在界面上把"被自动模式拦截"和普通的工具失败区分开显示。
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2 id="facts">1. 现状与关键事实</h2>
+
+<h3>1.1 Adapter：auto 只在新包里</h3>
+<table>
+  <tr><th>包</th><th>版本</th><th>Claude Agent SDK</th><th>可用模式</th><th>状态</th></tr>
+  <tr><td><code>@zed-industries/claude-code-acp</code>（镜像当前在用）</td><td>0.16.2</td><td>0.2.44</td>
+      <td>default · acceptEdits · plan · dontAsk · bypassPermissions</td><td><span class="tag bad">无 auto，已停更</span></td></tr>
+  <tr><td><code>@agentclientprotocol/claude-agent-acp</code>（迁移后的新包）</td><td>0.85.1</td><td>0.3.286</td>
+      <td>default（Manual）· acceptEdits · plan · <b>auto</b> · bypassPermissions</td><td><span class="tag ok">有 auto</span></td></tr>
+</table>
+<p>新包里 auto 的定义是 <i>“Claude handles permission decisions”</i>：由 Claude Code 自己判断哪些操作可以直接执行。它没法自己判断的，仍然会走 <code>session/request_permission</code> 来请示（<code>acp-agent.js</code> 的 <code>canUseTool</code> 注释写明：能走到这个回调的请求，模式不会自动放行）。</p>
+
+<h3>1.2 模式在每次打开会话时都会重置</h3>
+<ul>
+  <li>旧包：<code>newSession</code>、<code>loadSession</code>、<code>resumeSession</code> 都写死 <code>permissionMode = "default"</code>（<code>acp-agent.js:768</code>），通过 <code>_meta</code> 也覆盖不了。</li>
+  <li>新包：初始模式取自 Pod 里 <code>settings.json</code> 的 <code>permissions.defaultMode</code>，没有就是 <code>default</code>。</li>
+  <li>两个版本都支持协议的标准方法 <code>session/set_mode</code>，新包另外也支持 <code>session/set_config_option</code>（<code>configId = "mode"</code>）。</li>
+</ul>
+<div class="callout warn">
+  <b>直接后果</b>：模式不能"设置一次就一直有效"。下面这些时刻，CLI 都会回到默认模式：bridge 新建或恢复会话、CLI 崩溃后被 bridge 重启并恢复会话、Pod 重建。<b>重新应用模式只能由 bridge 负责</b>，因为只有它知道 CLI 什么时候重启过。
+</div>
+
+<h3>1.3 auto 依赖模型能力</h3>
+<p><b>CLI 实际用的模型</b>：不是子智能体 spec 里的 <code>model</code>，而是 cluster 的全局配置 <code>ATLAS_CLUSTER_MODEL_NAME=deepseek-chat</code>、<code>MODEL_BASE_URL=https://api.deepseek.com/anthropic</code>，生成 Pod 时注入为 <code>ANTHROPIC_MODEL</code> 和 <code>ANTHROPIC_BASE_URL</code>（<code>cluster/template.py:344-356</code>）。所有会话 Pod 共用这一个模型，子智能体 spec 里的 <code>model</code> 对 CLI 不起作用。</p>
+<p>新包在 <code>session-mode.js</code> 里检查 <code>ModelInfo.supportsAutoMode</code>：模型不支持时，<code>auto</code> 会被自动降级为 <code>acceptEdits</code>，并发出一条 <i>“Auto mode unavailable”</i> 提示。CLI 现在用的是 <code>deepseek-chat</code>（直连 DeepSeek 的 Anthropic 兼容接口），<b>大概率不支持</b>，需要实测确认（见第 7 节）。</p>
+
+<h3>1.4 平台这边的现状</h3>
+<table>
+  <tr><th>层</th><th>现状</th></tr>
+  <tr><td>Spec</td><td><code>CliSpec</code> 只有 <code>cli_type</code>、<code>adapter</code>、<code>image</code> 三个字段，没有模式</td></tr>
+  <tr><td>上游协议 <code>atlas.host.v1</code></td><td><code>session.open</code> 和 <code>turn.start</code> 都没有模式参数</td></tr>
+  <tr><td>bridge</td><td><code>AcpClient.new_session</code> 只取 <code>sessionId</code>，丢弃了响应里的 <code>modes</code>；从不调用 <code>session/set_mode</code></td></tr>
+  <tr><td>审批</td><td>CLI 每次请求权限，都会变成对话里的一张审批卡片，没有等待上限（上一轮刚改的）。默认模式下，写文件、执行命令都要人点</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2 id="goals">2. 目标与非目标</h2>
+<table>
+  <tr><th>目标</th><th>非目标</th></tr>
+  <tr>
+    <td>
+      <ul>
+        <li>智能体作者可以给 ACP 子智能体（以及直接对话的 ACP 智能体）配置权限模式，其中包括 <b>auto</b></li>
+        <li>这个模式在会话的整个生命周期里<b>始终生效</b>：新建、恢复、CLI 崩溃重启、Pod 重建之后都一样</li>
+        <li>用户看得到<b>实际生效</b>的模式；降级了（比如 auto → acceptEdits）也要明确提示</li>
+        <li>auto 下仍然需要请示的操作，照常走对话里的审批卡片</li>
+      </ul>
+    </td>
+    <td>
+      <ul>
+        <li>不让<b>模型</b>通过 <code>task</code> 工具自己选择权限模式，防止模型给自己提权</li>
+        <li>不在平台侧自己实现一套"自动审批"分类器，判断交给 CLI</li>
+        <li>不改 Native 智能体自己的审批机制（<code>require_approval_for</code>）</li>
+        <li>不做"会话中途由用户临时切换模式"（2026-10-03 决定）</li>
+        <li>不做 <code>bypassPermissions</code>（2026-10-03 决定）</li>
+      </ul>
+    </td>
+  </tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2 id="decisions">3. 关键决策</h2>
+
+<table>
+  <tr><th>#</th><th>决策</th><th>备选方案</th><th>取舍理由</th></tr>
+  <tr>
+    <td>D1</td>
+    <td><b>模式由 CLI 原生实现</b>：升级 adapter，并用 ACP 的 <code>session/set_mode</code> 设置</td>
+    <td>
+      A. 平台自己做自动审批：server 收到 <code>permission.ask</code> 后直接按允许答复<br>
+      B. 往 Pod 里写 <code>settings.json</code>，设置 <code>defaultMode</code>
+    </td>
+    <td>A 违反 bridge "绝不自动批准"的原则，而且平台不知道哪些操作安全，相当于全部放行。B 是 Pod 级别的配置，同一 Pod 里没法按每一轮切换，而且模式失效后（比如降级）平台无法感知。<code>set_mode</code> 是协议标准方法，新旧两个包都支持</td>
+  </tr>
+  <tr>
+    <td>D2</td>
+    <td><b>模式配置在 spec 上</b>：<code>CliSpec.permission_mode</code>，由智能体作者设置，随智能体版本快照</td>
+    <td>
+      A. 作为 <code>task</code> 工具的参数，由父模型每次委派时选择<br>
+      B. 由用户在会话里设置
+    </td>
+    <td>A 等于让模型给自己提权，被提示注入时风险最大。B 不做（2026-10-03 决定）。放在 <code>CliSpec</code> 上，直接对话的 ACP 智能体和作为子智能体的 ACP 智能体都能复用</td>
+  </tr>
+  <tr>
+    <td>D3</td>
+    <td><b>模式随 <code>turn.start</code> 下发</b>，bridge 在发出 prompt 之前，按需调用 <code>session/set_mode</code></td>
+    <td>放在 <code>session.open</code> 的 defaults 里</td>
+    <td>会话已经打开时（attach、<code>ALREADY_OPEN</code>）不会走 open，智能体换版本后模式也就不会更新。放在每一轮的开头，会话的任何状态都能覆盖到，而且 <code>turn.start</code> 本身是幂等的。bridge 会记住"期望的模式"，CLI 崩溃并恢复会话后自动重新应用</td>
+  </tr>
+  <tr>
+    <td>D4</td>
+    <td><b>设置失败不让这一轮失败</b>：回退到当前实际生效的模式继续执行，并发出 <code>mode_degraded</code> 提示</td>
+    <td>直接让这一轮失败</td>
+    <td>模式只影响"要不要问人"。降级到更保守的模式，最坏的结果是多弹几张审批卡片，不会造成误操作；而让这一轮失败，用户就得重试。<b>唯一的例外</b>：要求更保守的模式（比如 plan）但没能设置成功时，这一轮失败，避免以比预期更宽松的权限执行</td>
+  </tr>
+  <tr>
+    <td>D5</td>
+    <td><b>不提供 bypassPermissions</b>（2026-10-03 决定）</td>
+    <td>由管理员开关控制是否开放</td>
+    <td>它会跳过所有检查，而工作区是父会话共享的，Pod 里还有模型凭据。没有明确需求，就不引入这个风险面。spec 校验只接受下表里的四个值</td>
+  </tr>
+  <tr>
+    <td>D6</td>
+    <td><b>上报实际生效的模式</b>：<code>turn.state(running)</code> 带上 <code>mode</code> 字段，server 转成事件，前端在委派卡片上显示</td>
+    <td>只记日志</td>
+    <td>auto 会被模型能力悄悄降级。不显示出来的话，用户会以为是 auto，实际却是 acceptEdits，命令还是要一个个点</td>
+  </tr>
+  <tr>
+    <td>D7</td>
+    <td><b>默认值为 <code>auto</code></b>（2026-10-03 决定），包括已有的 ACP 智能体：spec 里没有这个字段时也按 auto 处理</td>
+    <td>默认 manual，保持现有行为</td>
+    <td>减少长任务里的打扰。<b>代价</b>：已有智能体的行为会变，从"每次都请示"变成"文件编辑自动通过"。在 DeepSeek 上执行命令仍然要请示（见第 7 节），所以变化主要在文件编辑上。上线说明里要写明这一点</td>
+  </tr>
+</table>
+
+<h3>支持的模式（平台对外的取值）</h3>
+<table>
+  <tr><th>平台取值</th><th>ACP modeId</th><th>行为</th><th>适用场景</th><th>开放范围</th></tr>
+  <tr><td><code>manual</code></td><td><code>default</code></td><td>编辑文件、执行命令都要请示</td><td>敏感工作区</td><td>所有人</td></tr>
+  <tr><td><code>accept_edits</code></td><td><code>acceptEdits</code></td><td>文件编辑自动通过，命令仍要请示</td><td>写代码为主</td><td>所有人</td></tr>
+  <tr><td><code>auto</code>（默认）</td><td><code>auto</code></td><td>由 Claude 判断；它判断不了的仍要请示。模型不支持时降级为 <code>accept_edits</code></td><td>希望少打扰的长任务</td><td>所有人（需要升级 adapter）</td></tr>
+  <tr><td><code>plan</code></td><td><code>plan</code></td><td>只规划，不执行工具</td><td>只想要方案</td><td>所有人</td></tr>
+</table>
+<p>不对外提供 <code>bypassPermissions</code>（见 D5），也不对外提供 <code>dontAsk</code>（没有预先授权的操作一律拒绝）：它不会请示人，在平台场景下的效果只是让 CLI 默默做不成事。</p>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2 id="flow">4. 时序</h2>
+<p>蓝色部分是这次新增的。</p>
+<div class="seq">
+<svg width="1080" height="560" viewBox="0 0 1080 560" xmlns="http://www.w3.org/2000/svg">
+  <defs><marker id="h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker></defs>
+  <g style="color: currentColor">
+  <!-- lanes: x = 90, 270, 450, 630, 810, 990 -->
+  <rect class="box" x="20" y="10" width="140" height="38" rx="6"/><text x="90" y="34" text-anchor="middle">Native 父 run</text>
+  <rect class="box" x="200" y="10" width="140" height="38" rx="6"/><text x="270" y="34" text-anchor="middle">Executor / Spec</text>
+  <rect class="box" x="380" y="10" width="140" height="38" rx="6"/><text x="450" y="34" text-anchor="middle">HostRuntime</text>
+  <rect class="box" x="560" y="10" width="140" height="38" rx="6"/><text x="630" y="34" text-anchor="middle">bridge</text>
+  <rect class="box" x="740" y="10" width="140" height="38" rx="6"/><text x="810" y="34" text-anchor="middle">ACP adapter</text>
+  <rect class="box" x="920" y="10" width="140" height="38" rx="6"/><text x="990" y="34" text-anchor="middle">前端</text>
+  <line class="lane" x1="90" y1="48" x2="90" y2="550"/><line class="lane" x1="270" y1="48" x2="270" y2="550"/>
+  <line class="lane" x1="450" y1="48" x2="450" y2="550"/><line class="lane" x1="630" y1="48" x2="630" y2="550"/>
+  <line class="lane" x1="810" y1="48" x2="810" y2="550"/><line class="lane" x1="990" y1="48" x2="990" y2="550"/>
+
+  <text x="98" y="78">task(cli-hand, 任务书)</text>
+  <line class="arrow" x1="90" y1="86" x2="268" y2="86" marker-end="url(#h)"/>
+  <text x="278" y="108" class="newt">子 run 的 spec：cli.permission_mode = auto</text>
+  <line class="arrow" x1="270" y1="116" x2="448" y2="116" marker-end="url(#h)"/>
+  <text x="458" y="138">session.open / attach（同现在）</text>
+  <line class="arrow" x1="450" y1="146" x2="628" y2="146" marker-end="url(#h)"/>
+  <text x="638" y="168">session/new | resume → 响应里带 modes（current=default）</text>
+  <line class="arrow reply" x1="810" y1="176" x2="632" y2="176" marker-end="url(#h)"/>
+
+  <text x="458" y="200" class="newt">turn.start(turnId, prompt, mode = "auto")</text>
+  <line class="arrow new" x1="450" y1="208" x2="628" y2="208" marker-end="url(#h)"/>
+  <text x="638" y="230" class="newt">期望 auto ≠ 当前 default → session/set_mode(auto)</text>
+  <line class="arrow new" x1="630" y1="238" x2="808" y2="238" marker-end="url(#h)"/>
+  <text x="638" y="260" class="newt">ok；或 current_mode_update(acceptEdits)（模型不支持，降级）</text>
+  <line class="arrow reply new" x1="810" y1="268" x2="632" y2="268" marker-end="url(#h)"/>
+  <text x="458" y="290" class="newt">turn.state(running, mode{requested: auto, effective})</text>
+  <line class="arrow reply new" x1="630" y1="298" x2="452" y2="298" marker-end="url(#h)"/>
+  <text x="638" y="320">session/prompt</text>
+  <line class="arrow" x1="630" y1="328" x2="808" y2="328" marker-end="url(#h)"/>
+
+  <rect class="note" x="640" y="340" width="420" height="40" rx="4"/>
+  <text x="650" y="356">auto：大部分操作由 CLI 自己放行；</text>
+  <text x="650" y="372">它判断不了的 → request_permission → 对话里的审批卡片（不变）</text>
+
+  <text x="458" y="402" class="newt">mode 事件 → 委派卡片显示「Auto」或「Auto→接受编辑（降级）」</text>
+  <line class="arrow reply new" x1="450" y1="410" x2="988" y2="410" marker-end="url(#h)"/>
+
+  <text x="638" y="440">（CLI 崩溃）→ bridge 重启 CLI 并恢复会话</text>
+  <text x="638" y="462" class="newt">bridge 记得期望的模式 → 恢复后立即 set_mode(auto)</text>
+  <line class="arrow new" x1="630" y1="470" x2="808" y2="470" marker-end="url(#h)"/>
+  <text x="638" y="496">session.state(ready, agent{..., mode})</text>
+  <line class="arrow reply" x1="630" y1="504" x2="452" y2="504" marker-end="url(#h)"/>
+  </g>
+</svg>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2 id="protocol">5. 协议与数据改动</h2>
+
+<h3>5.1 Spec（server）</h3>
+<pre><code># domain/spec.py
+PermissionMode = Literal["manual", "accept_edits", "auto", "plan"]
+
+@dataclass(frozen=True)
+class CliSpec:
+    cli_type: str
+    adapter: str
+    image: str
+    #: ★ 有默认值是快照纪律：历史 agent_version.spec 里没有这个字段。
+    #:   默认 auto（D7）：已有的 ACP 智能体也按 auto 运行
+    permission_mode: PermissionMode = "auto"</code></pre>
+<ul>
+  <li>校验：只接受上面四个值，其他值以 <code>InvalidSpec</code> 拒绝保存。</li>
+  <li><code>schemas/agent.py</code> 的入参与出参同步加这个字段；前端执行 <code>gen:api</code> 重新生成类型。</li>
+</ul>
+
+<h3>5.2 上游协议 <code>atlas.host.v1</code>（新增可选字段，向后兼容）</h3>
+<pre><code># host/messages.py
+class TurnStartParams(Model):
+    ...
+    #: ACP 的 modeId。None = 不管，保持会话当前的模式（旧 server 的行为）
+    mode: str | None = None
+
+class ModeState(Model):
+    requested: str | None      # server 要的
+    effective: str             # adapter 实际生效的
+    available: list[str]       # adapter 支持的
+    degraded: bool = False     # requested 与 effective 不一致
+
+class TurnStateParams(Model):
+    ...
+    #: 只在 state = running 时带
+    mode: ModeState | None = None
+
+class AgentRestart(Model):     # session.state 里的 agent
+    ...
+    mode: ModeState | None = None</code></pre>
+<p>兼容性：旧 server 不发 <code>mode</code>，新 bridge 就不调用 <code>set_mode</code>，行为与现在一致。新 server 连旧 bridge 时，旧 bridge 会忽略这个字段；server 从 <code>turn.state</code> 里收不到 <code>mode</code>，就认为模式"未知"，前端不显示模式标签。</p>
+
+<h3>5.3 ACP 层（bridge ↔ adapter）</h3>
+<ul>
+  <li><code>AcpClient.new_session</code>、<code>load_session</code>、<code>resume_session</code> 返回值里加上 <code>modes</code>（<code>SessionModeState</code>），不再丢弃。</li>
+  <li>新增 <code>AcpClient.set_mode(session_id, mode_id)</code>，调用 <code>session/set_mode</code>，走现有的 ACP 请求超时（30s）。</li>
+  <li>处理 <code>session/update</code> 里的 <code>current_mode_update</code>：更新 bridge 记录的实际生效模式。adapter 自己切换模式时也会发这个通知，比如 auto 降级、或者在 plan 模式下用户同意退出规划。</li>
+</ul>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2 id="components">6. 各组件改动</h2>
+<table>
+  <tr><th>组件</th><th>改动</th><th>估计</th></tr>
+  <tr><td><b>bridge 镜像</b></td>
+      <td>
+        adapter 从 <code>@zed-industries/claude-code-acp 0.16.2</code> 升级到 <code>@agentclientprotocol/claude-agent-acp 0.85.x</code>（要求 Node ≥ 22，镜像里是 Node 24，满足）。<br>
+        ★ 提供一个<b>稳定的启动路径</b> <code>/opt/acp-cli/bin/claude-acp</code>，同时保留旧路径的软链接。已有智能体的 <code>cli.adapter</code> 里写的是旧包的 dist 路径，不保留的话它们会全部起不来。<br>
+        镜像 tag 升到 <code>0.3.0</code>，旧的 <code>0.2.0</code> 保留用于回滚。
+      </td><td>0.5 天，加上回归测试</td></tr>
+  <tr><td><b>bridge</b></td>
+      <td>
+        <code>HostSession</code> 新增 <code>desired_mode</code>（期望）和 <code>mode_state</code>（实际生效）。<br>
+        <code>start_turn</code>：<code>params.mode</code> 不为空、且和实际生效的模式不同时，先调用 <code>set_mode</code>，再发 <code>session/prompt</code>。失败按 D4 处理。<br>
+        <code>_recover</code> 和 <code>_open_agent_session</code>：会话恢复成功后，如果有 <code>desired_mode</code> 就重新应用一次。<br>
+        <code>turn.state(running)</code> 和 <code>session.state(ready)</code> 带上 <code>ModeState</code>。
+      </td><td>1 天</td></tr>
+  <tr><td><b>FakeAgent</b>（测试替身）</td>
+      <td>新增 <code>Script.modes</code>、<code>Script.auto_supported</code>，模拟 <code>session/set_mode</code>、<code>current_mode_update</code> 以及降级</td><td>0.5 天</td></tr>
+  <tr><td><b>server</b></td>
+      <td>
+        <code>CliSpec.permission_mode</code> 字段和校验。<br>
+        <code>HostRuntime._start</code>：把平台取值映射成 ACP modeId，放进 <code>turn.start</code> 的 <code>mode</code>。<br>
+        翻译层：<code>turn.state</code> 里的 <code>mode</code> 转成 <code>agent.mode</code> 事件（新增事件类型），数据为 <code>{requested, effective, degraded}</code>；降级时再发一条可见的提示。<br>
+        <code>run.started</code> 的元信息加上 <code>permission_mode</code>，供审计使用。
+      </td><td>1 天</td></tr>
+  <tr><td><b>前端</b></td>
+      <td>
+        智能体编辑器：ACP 子智能体和 ACP 智能体增加"权限模式"下拉框（默认 Auto），每一项附带一句说明。<br>
+        委派卡片：标题栏显示模式标签，比如 <code>Auto</code>；降级时显示黄色标签 <code>Auto → 接受编辑</code>，并用 tooltip 解释原因。<br>
+        reducer 处理 <code>agent.mode</code> 事件。
+      </td><td>1 天</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2 id="models">7. 模型兼容与降级</h2>
+<div class="callout">
+  <b>更新（第 0 期实测）</b>：DeepSeek 下 auto <b>可用、没有降级</b>，判断器的请求走的就是 DeepSeek 接口，见第 0 节。下面这段是验证之前的推断，保留作为背景。
+</div>
+<div class="callout warn">
+  <b>这是这个功能能否真正可用的前提。</b>auto 的判断由 Claude 模型完成，adapter 依据 SDK 返回的 <code>supportsAutoMode</code> 决定能否启用。我们的 CLI 直连 DeepSeek 的 Anthropic 兼容接口使用 <code>deepseek-chat</code>，SDK 很可能认为它不支持，于是 <b>auto 会一直被降级成 acceptEdits</b>：文件编辑自动通过，执行命令仍然要请示。
+</div>
+<table>
+  <tr><th>情况</th><th>效果</th><th>平台的处理</th></tr>
+  <tr><td>CLI 使用的模型支持 auto（Claude 系）</td><td>真正的 auto</td><td>委派卡片显示 <code>Auto</code></td></tr>
+  <tr><td>不支持（DeepSeek 等非 Claude 模型）</td><td>降级为 acceptEdits</td><td>委派卡片显示黄色标签 <code>Auto → 接受编辑</code>；编辑器保存时给出提示："当前模型可能不支持 Auto，将以'接受编辑'运行"</td></tr>
+  <tr><td>运行中途 CLI 切换了模型</td><td>adapter 自己重新判断（<code>reconcileForModel</code>）</td><td>通过 <code>current_mode_update</code> 同步给前端</td></tr>
+</table>
+<p><b>第 0 期的验证项</b>：用新 adapter 分别配 <code>deepseek-chat</code> 和一个 Claude 模型，各跑一次，记录 <code>supportsAutoMode</code> 和实际生效的模式。如果目标模型都不支持 auto，这个功能对用户的实际价值就等于 acceptEdits，需要重新评估是否值得做。</p>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2 id="security">8. 安全与审计</h2>
+<table>
+  <tr><th>关注点</th><th>措施</th></tr>
+  <tr><td>模型给自己提权</td><td>模式只能来自智能体作者配置的 spec。<code>task</code> 工具没有这个参数；子智能体的系统提示词也改变不了模式</td></tr>
+  <tr><td>提示注入诱导 CLI 越权</td><td>auto 的判断在 CLI 内部完成；平台层的隔离不变：Pod 非 root、只能看到工作区、出网受限（cluster 模板）</td></tr>
+  <tr><td>bypass 的风险</td><td>不提供这个模式（D5）</td></tr>
+  <tr><td>审计</td><td><code>run.started</code> 记录配置的模式，<code>agent.mode</code> 事件记录实际生效的模式，两者都进归档表。哪个 run 在什么模式下执行过什么，可以追溯</td></tr>
+  <tr><td>审批原则不变</td><td>CLI 请示的操作仍然没有等待上限，只由人决定。平台不会因为配置了 auto 就自动替用户批准</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2 id="phases">9. 分期实施</h2>
+<table>
+  <tr><th>期</th><th>内容</th><th>上线条件</th></tr>
+  <tr><td><b>0 · 验证</b>（0.5 天）</td>
+      <td>在临时镜像里升级 adapter，跑一次 <code>acp_smoke</code> 和 <code>subagent_smoke</code>：① 新 adapter 和现有 bridge 能否协作（initialize、resume、cancel、审批）；② <code>deepseek-chat</code> 和 Claude 模型的 <code>supportsAutoMode</code> 分别是什么；③ auto 下还有哪些操作会请示</td>
+      <td>①通过才进入第 1 期；②的结果决定是否调整需求</td></tr>
+  <tr><td><b>1 · 镜像升级</b></td><td>新 adapter、稳定的启动路径、旧路径软链接，镜像 tag <code>0.3.0</code>。只升级 adapter，不加模式功能</td><td>两个 smoke 测试和现有集成测试都通过</td></tr>
+  <tr><td><b>2 · 协议与 bridge</b></td><td>第 5.2、5.3 节的改动，以及 bridge 和 FakeAgent 的改动</td><td>bridge 测试通过（见第 10 节）</td></tr>
+  <tr><td><b>3 · server 与前端</b></td><td>Spec 字段、HostRuntime、事件；编辑器和委派卡片</td><td>端到端：配置 auto 的子智能体，在对话里能看到模式标签和降级提示</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2 id="tests">10. 测试</h2>
+<table>
+  <tr><th>层</th><th>用例</th></tr>
+  <tr><td>bridge 组件层</td>
+      <td>
+        · 要求的模式和当前不同 → 先 <code>set_mode</code> 再 <code>prompt</code>，顺序正确<br>
+        · 要求的模式和当前相同 → 不调用 <code>set_mode</code><br>
+        · CLI 崩溃并恢复会话后，自动重新应用期望的模式<br>
+        · adapter 把 auto 降级为 acceptEdits → <code>turn.state</code> 的 <code>mode.degraded = true</code>，这一轮正常执行<br>
+        · 要求 plan 但 <code>set_mode</code> 失败 → 这一轮失败（D4 的例外）<br>
+        · 要求 auto 但 <code>set_mode</code> 失败 → 以当前模式继续执行，并标记降级<br>
+        · 不传 <code>mode</code> → 不调用 <code>set_mode</code>（兼容旧 server）
+      </td></tr>
+  <tr><td>bridge 集成层（真进程）</td><td>FakeAgent 子进程加 WebSocket：完整一轮里 <code>mode</code> 的往返</td></tr>
+  <tr><td>server</td><td><code>test_host_runtime</code>：spec 的模式能下发到 bridge，<code>agent.mode</code> 事件能产出；spec 里没有这个字段时按 auto 下发；非法值（包括 bypass）保存时会被拒</td></tr>
+  <tr><td>前端</td><td>reducer 处理 <code>agent.mode</code>；委派卡片的标签正确</td></tr>
+  <tr><td>端到端（手动）</td><td>真实 adapter 加真实模型，分别验证 manual、accept_edits、auto 三种模式下审批卡片出现的次数</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2 id="risks">11. 风险</h2>
+<table>
+  <tr><th>风险</th><th>影响</th><th>应对</th></tr>
+  <tr><td>adapter 从 0.16 跨到 0.85，跨度很大</td><td>resume、load、cancel、审批选项的形态可能有变化，bridge 依赖的行为可能失效</td><td>第 0、1 期只升级 adapter、不加功能，用 smoke 测试和集成测试兜底；保留 <code>0.2.0</code> 镜像用于回滚</td></tr>
+  <tr><td>目标模型不支持 auto</td><td>功能实际只相当于 acceptEdits</td><td>第 0 期先确认；界面上如实显示降级</td></tr>
+  <tr><td>已有智能体的 <code>cli.adapter</code> 写死了旧包路径</td><td>升级镜像后起不来</td><td>旧路径软链接到新包；新建的智能体默认用稳定路径</td></tr>
+  <tr><td>auto 判断失误，执行了不该执行的命令</td><td>工作区文件被改坏</td><td>工作区在对象存储上，可以考虑在委派前做快照（另立需求）；敏感工作区建议用 manual</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2 id="open">12. 决策记录与遗留问题</h2>
+<table>
+  <tr><th>问题</th><th>结论（2026-10-03）</th></tr>
+  <tr><td>CLI 用哪个模型</td><td>现在是 cluster 全局配置的 <code>deepseek-chat</code>（DeepSeek 的 Anthropic 兼容接口）。<b>遗留</b>：如果第 0 期确认它不支持 auto，要用上真正的 auto，需要把全局模型换成 Claude 模型；另外，子智能体 spec 里的 <code>model</code> 对 CLI 不生效，这个问题另立需求处理</td></tr>
+  <tr><td>默认值</td><td><b>auto</b>，已有的 ACP 智能体也一样（D7）</td></tr>
+  <tr><td>bypass</td><td><b>不做</b>（D5）</td></tr>
+  <tr><td>用户临时覆盖</td><td><b>不做</b></td></tr>
+</table>
+
+</main>
+</body>
+</html>

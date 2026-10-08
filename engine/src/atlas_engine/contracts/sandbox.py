@@ -19,9 +19,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from typing import NotRequired, Protocol, runtime_checkable
 
-from typing_extensions import NotRequired, TypedDict
+from typing_extensions import TypedDict
 
 __all__ = [
     "DEFAULT_WORKDIR",

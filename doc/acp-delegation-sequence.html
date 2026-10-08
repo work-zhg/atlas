@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Native → ACP 委派时序与超时设置</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --border: #d1d9e0; --head: #f6f8fa;
+    --lane: #8c959f; --phase-bg: #eef2f6; --frame: #8c959f; --note-bg: #fff8c5; --note-bd: #d4a72c;
+    --ok: #1a7f37; --ok-bg: #dafbe1; --add: #cf222e; --add-bg: #ffebe9; --chk: #9a6700; --chk-bg: #fff8c5;
+    --box: #ddf4ff; --box-bd: #54aeff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --border: #3d444d; --head: #151b23;
+      --lane: #6e7681; --phase-bg: #1c2430; --frame: #6e7681; --note-bg: #2b2111; --note-bd: #9e6a03;
+      --ok: #3fb950; --ok-bg: #12261e; --add: #f85149; --add-bg: #2d1214; --chk: #d29922; --chk-bg: #2b2111;
+      --box: #12263f; --box-bd: #1f6feb;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 28px; background: var(--bg); color: var(--fg);
+         font: 14px/1.6 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif; }
+  main { max-width: 1400px; margin: 0 auto; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  h2 { font-size: 18px; margin: 36px 0 8px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  .sub { color: var(--muted); margin: 0 0 12px; }
+  code { font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .legend { display: flex; gap: 18px; flex-wrap: wrap; margin: 10px 0 14px; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .pill { display: inline-block; padding: 0 7px; border-radius: 9px; font-size: 12px; font-weight: 600;
+          border: 1px solid; white-space: nowrap; }
+  .pill.ok { color: var(--ok); background: var(--ok-bg); border-color: var(--ok); }
+  .pill.add { color: var(--add); background: var(--add-bg); border-color: var(--add); }
+  .pill.chk { color: var(--chk); background: var(--chk-bg); border-color: var(--chk); }
+  .scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: 6px; }
+  svg { display: block; font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif; }
+  svg text { fill: var(--fg); font-size: 12px; }
+  svg .lane-line { stroke: var(--lane); stroke-dasharray: 4 4; }
+  svg .lane-box { fill: var(--box); stroke: var(--box-bd); }
+  svg .lane-name { font-weight: 600; font-size: 13px; }
+  svg .lane-sub { fill: var(--muted); font-size: 11px; }
+  svg .arrow { stroke: var(--fg); stroke-width: 1.3; fill: none; }
+  svg .arrow.reply { stroke-dasharray: 5 4; }
+  svg .phase-band { fill: var(--phase-bg); }
+  svg .phase-text { font-weight: 600; font-size: 13px; }
+  svg .frame { fill: none; stroke: var(--frame); }
+  svg .frame-tag { fill: var(--head); stroke: var(--frame); }
+  svg .frame-label { font-size: 11.5px; fill: var(--muted); }
+  svg .frame-sep { stroke: var(--frame); stroke-dasharray: 6 4; }
+  svg .note-box { fill: var(--note-bg); stroke: var(--note-bd); }
+  svg .note-box.add { fill: var(--add-bg); stroke: var(--add); }
+  svg a .tpill rect { cursor: pointer; }
+  svg .tpill.ok rect { fill: var(--ok-bg); stroke: var(--ok); }
+  svg .tpill.ok text { fill: var(--ok); }
+  svg .tpill.add rect { fill: var(--add-bg); stroke: var(--add); }
+  svg .tpill.add text { fill: var(--add); }
+  svg .tpill.chk rect { fill: var(--chk-bg); stroke: var(--chk); }
+  svg .tpill.chk text { fill: var(--chk); }
+  svg .tpill text { font-size: 11px; font-weight: 600; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0; }
+  th, td { border: 1px solid var(--border); padding: 7px 10px; vertical-align: top; text-align: left; }
+  th { background: var(--head); white-space: nowrap; }
+  tr:target td { outline: 2px solid var(--box-bd); outline-offset: -2px; }
+  td.id { white-space: nowrap; font-weight: 600; }
+  .callout { border-left: 4px solid var(--add); background: var(--add-bg); padding: 10px 14px; border-radius: 4px; margin: 12px 0; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Native 委派 ACP 子智能体：全链路时序与超时设置</h1>
+<p class="sub">
+  链路：Native 父 run → SubagentService → Executor → HostRuntime → cluster → Pod → bridge → ACP adapter。
+  依据 2026-10-02 的工作区代码整理；图中每个 ⏱ 标记都可点击，跳到下方对应的超时条目。
+</p>
+
+<div class="legend">
+  <span><span class="pill ok">T· 已有</span>已设置且取值合理</span>
+  <span><span class="pill chk">T· 待核实</span>已设置，但取值或前提需要确认</span>
+  <span><span class="pill add">T· 需新增</span>缺失或配置未生效，需要补上</span>
+  <span>实线 = 请求或调用；虚线 = 响应或回传</span>
+</div>
+
+<div class="scroll"><svg id="seq" xmlns="http://www.w3.org/2000/svg"></svg></div>
+
+<h2>需要新增或调整的超时</h2>
+<div class="callout">
+  按影响从大到小排列。前 4 项是「缺失」：出问题时 run 会挂很久才失败，或者配置项改了不生效。
+</div>
+<table id="todo"></table>
+
+<h2>全部超时条目</h2>
+<table id="catalog"></table>
+
+</main>
+
+<script>
+// ═══════════════════════════ 超时目录：图与表格共用这一份 ═══════════════════════════
+// status: ok = 已有；chk = 已有但待核实 / 需调整；add = 需新增（缺失或未生效）
+const T = {
+  T1:  { status: "ok",  short: "父整段 timeout_s", name: "父 run 每一段的整段上限",
+         value: "asyncio.timeout(spec.limits.timeout_s)", where: "executor/runner.py:212",
+         note: "只约束父 run 的一段。挂起后续跑是新的一段，计时重新开始（见 T5）。" },
+  T2:  { status: "ok",  short: "LLM 120s", name: "父 run 的单次模型调用",
+         value: "litellm_timeout_s = 120s", where: "config.py:26", note: "" },
+  T3:  { status: "ok",  short: "当场等 ≤60s", name: "委派的当场等待窗口",
+         value: "min(subagent_inline_wait_s = 60s, 父 timeout_s)；每 0.5s 轮询", where: "services/subagent.py:263-284",
+         note: "超窗不取消子 run，返回挂起哨兵，父 run 落成 suspended。" },
+  T4:  { status: "chk", short: "锁 TTL≈1天", name: "子会话串行锁的 TTL",
+         value: "max(timeout_s, approval_timeout_s = 86400s) + 120s", where: "services/subagent.py:161",
+         note: "ACP 子 run 的审批是在线等待（240s），不会挂起一整天，这个 TTL 对 ACP 偏长。进程崩溃后锁只能靠孤儿回收释放。",
+         fix: "按 runtime 区分：ACP 子 run 取 timeout_s + Pod 准备预算 + 120s；Native 保持现状。优先级低。" },
+  T5:  { status: "add", short: "挂起等待 无上限", name: "父 run 挂起后等子 run 的总时长",
+         value: "无。suspended_sweep_interval_s = 60s 只负责补唤醒，不判超时", where: "executor/inprocess.py:431-470",
+         note: "子 run 一直进不了终态（比如卡在某个没有超时的环节），父 run 就永远停在 suspended，父会话锁也一直被占着。",
+         fix: "扫描时检查委派等待的时长：超过「子 timeout_s + Pod 准备预算 + 余量」就级联取消子 run 并续跑父 run，结论写明「委派超时」。" },
+  T6:  { status: "ok",  short: "ensure 180s", name: "server → cluster 的 ensure 请求",
+         value: "cluster_timeout_s = 180s", where: "providers/cluster.py:44",
+         note: "必须大于 T7，否则 Pod 正常启动途中 server 就先放弃了。" },
+  T7:  { status: "chk", short: "Pod 就绪 120s", name: "cluster 等 Pod 就绪",
+         value: "pod_ready_timeout_s = 120s（包含调度、拉镜像、bridge 预热）", where: "cluster/manager.py:90",
+         note: "大镜像首次拉取可能超过 120s，每个新节点上的第一个会话都会失败。",
+         fix: "预拉镜像（DaemonSet），或调大到 180~240s；调大时 T6 要同步调大。" },
+  T8:  { status: "ok",  short: "探针 1s×90", name: "Pod 的启动与就绪探针",
+         value: "startupProbe 1s × 60；readinessProbe GET /readyz 1s × 90（BOOTING 时返回 503）", where: "cluster/template.py:274, 467", note: "" },
+  T9:  { status: "ok",  short: "预热 60s", name: "bridge 拉起 adapter 并 initialize",
+         value: "boot_timeout_s = 60s；10 分钟内最多重启 3 次，退避 1s / 5s / 30s", where: "bridge/agent/supervisor.py", note: "" },
+  T10: { status: "ok",  short: "握手 10s", name: "server → bridge 的 WebSocket 握手",
+         value: "acp_ws_connect_timeout_s = 10s", where: "host/client.py:79", note: "" },
+  T11: { status: "ok",  short: "open 150s/120s", name: "session.open",
+         value: "server 150s ＞ bridge open_timeout_s 120s", where: "host/runtime.py:68；bridge/config.py",
+         note: "bridge 先超时，并回 OPEN_TIMEOUT(-32016)，然后重启 adapter。" },
+  T12: { status: "ok",  short: "start 30s+60s", name: "turn.start",
+         value: "单次请求 30s；bridge 恢复中或忙碌时，重试窗口 60s", where: "host/runtime.py:69-71", note: "" },
+  T13: { status: "ok",  short: "deadline", name: "一轮的截止时间",
+         value: "deadlineS = 子 spec.limits.timeout_s（bridge 计时，等人审批时不暂停）", where: "host/runtime.py:429；bridge/session/turn.py", note: "" },
+  T14: { status: "add", short: "idle 未下发", name: "一轮的静默超时（CLI 卡死探测）",
+         value: "server 的 acp_prompt_idle_timeout_s = 120s 已定义但没有任何代码使用；bridge 实际用兜底值 idleS 120s / toolIdleS 600s",
+         where: "config.py:85；host/runtime.py:346-353",
+         note: "运维改这个配置不会有任何效果，属于「看起来可配、实际不可配」。",
+         fix: "在 session.open 的 defaults 里下发 idleS = acp_prompt_idle_timeout_s，并新增 acp_tool_idle_timeout_s（默认 600s）下发为 toolIdleS。" },
+  T15: { status: "chk", short: "审批 240s", name: "ACP 审批的在线等待",
+         value: "acp_approval_wait_s = 240s，下发为 permissionWaitS；到期由 bridge 按拒绝答复并撤回", where: "config.py:97；bridge/session/permissions.py",
+         note: "配置注释说 adapter 自己有 300s 的超时，代码里没有找到出处。如果 adapter 没有这个限制，240s 就是在白白截断用户的思考时间。",
+         fix: "核实 claude-code-acp 的 requestPermission 有没有内部超时。有的话保持 ＜ 它；没有的话可以按产品需要放宽。前端用 expiresAt 显示倒计时。" },
+  T16: { status: "ok",  short: "ping 20s/20s", name: "WebSocket 心跳",
+         value: "ping_interval 20s，ping_timeout 20s（半开连接最多约 40s 被发现）", where: "host/client.py:89", note: "" },
+  T17: { status: "ok",  short: "重连 120s", name: "断线重连窗口",
+         value: "server 退避重连 120s；bridge 的 reconnectWindowS 同为 120s，到期以 upstream_lost 取消这一轮", where: "host/runtime.py:76；bridge/session/host.py", note: "" },
+  T18: { status: "ok",  short: "取消 15s+5s", name: "取消宽限",
+         value: "cancel_grace_s 15s → 判 cancel_unanswered；之后 SIGTERM，kill_grace_s 5s 再 SIGKILL", where: "bridge/session/turn.py；bridge/agent/process.py", note: "" },
+  T19: { status: "ok",  short: "兜底 +90s", name: "server 侧对一轮的兜底",
+         value: "deadline + _DEADLINE_SLACK_S 90s 后 bridge 仍未结束 → run_timeout", where: "host/runtime.py:66, 249", note: "" },
+  T20: { status: "add", short: "子 run 总上限 缺失", name: "ACP 子 run 的整轮墙钟上限",
+         value: "无。Pod 准备、open、start 各自有超时，但不计入 timeout_s；最坏约 180 + 10 + 150 + 90 + timeout_s + 90 秒，断线重连还会再加",
+         where: "host/runtime.py:158-221",
+         note: "Native 的 run 有 asyncio.timeout(timeout_s) 包住整段（T1），ACP 没有对应的整体上限。用户配置的 timeout_s 不是 ACP 子 run 真正的上限。",
+         fix: "在 run_turn 外层加 asyncio.timeout(timeout_s + setup_budget)，setup_budget 单独配置（建议 300s）；超时以 run_timeout 失败，消息里写明卡在哪个阶段。" },
+  T21: { status: "add", short: "SIGTERM 排空 缺失", name: "Pod 终止时的排空",
+         value: "bridge 收到 SIGTERM 立即退出，不发 turn.state(ended)；server 收到 1001 后仍按普通断线重连 120s", where: "bridge/app.py:126-131；host/runtime.py:389-421",
+         note: "滚动更新、节点驱逐、Pod 回收时每次都会碰到：这一轮其实已经没了，用户却要白等 2 分钟才看到失败。",
+         fix: "bridge：SIGTERM 时以 terminating 取消进行中的一轮，等 turn.state(ended) 发出、缓冲发完再退出，总时长 ＜ terminationGracePeriodSeconds。server：收到 1001 GOING_AWAY 不再走 120s 重连，直接判 bridge_lost（或把窗口缩到 10~15s）。" },
+  T22: { status: "ok",  short: "close 30s", name: "关闭 agent 会话",
+         value: "session/close 走 acp_request_timeout_s 30s，失败后直接终止进程", where: "bridge/session/host.py:393-400", note: "" },
+};
+
+// ═══════════════════════════ 参与者 ═══════════════════════════
+const LANES = [
+  ["parent",  "Native 父 run",   "runner · LangGraph"],
+  ["svc",     "SubagentService", "services/subagent.py"],
+  ["exec",    "Executor",        "InProcessExecutor"],
+  ["host",    "HostRuntime",     "server/host"],
+  ["cluster", "cluster 服务",     "K8s 唯一所有者"],
+  ["pod",     "K8s Pod",         "kubelet · 探针"],
+  ["bridge",  "bridge",          "BridgeApp · HostSession"],
+  ["acp",     "ACP adapter",     "claude-code-acp"],
+];
+
+// ═══════════════════════════ 时序步骤 ═══════════════════════════
+// m: 调用；r: 响应（虚线）；s: 自调用；p: 阶段；n: 注释（a..b 横跨）；
+// f: 组合片段开始；e: 片段内分支；x: 片段结束
+const S = [
+  { k: "p", t: "① 委派受理（发生在父 run 的 task 工具里）" },
+  { k: "s", at: "parent", t: "模型决定委派：task(description, subagent_type, fresh)", T: ["T1", "T2"] },
+  { k: "m", a: "parent", b: "svc", t: "delegate(task, name, fresh)" },
+  { k: "s", at: "svc", t: "准入：同轮不重名 · 全局子 run ≤ 3 · 单个父 run ≤ 6 次" },
+  { k: "s", at: "svc", t: "解析子会话 thread（persistent 复用 / ephemeral 新建）→ 获取会话串行锁", T: ["T4"] },
+  { k: "s", at: "svc", t: "建子 run（parent_run_id 指回父 run）· 写入任务书 user message" },
+  { k: "m", a: "svc", b: "exec", t: "submit(child_run_id)：在全新 Context 里起 asyncio.Task" },
+  { k: "s", at: "svc", t: "每 0.5s 轮询子 run 状态和父 run 的取消位", T: ["T3"] },
+
+  { k: "p", t: "② 执行器装配，选中 HostRuntime" },
+  { k: "s", at: "exec", t: "load_for_execution → mark_running → select_runtime(acp)" },
+  { k: "m", a: "exec", b: "host", t: "run_turn(prepared, run_id)" },
+  { k: "r", a: "host", b: "exec", t: "run.started" },
+  { k: "n", a: "host", b: "acp", cls: "add", t: "③～⑥ 整段没有总上限：timeout_s 只从 turn.start 之后开始算", T: ["T20"] },
+
+  { k: "p", t: "③ 确保会话 Pod" },
+  { k: "m", a: "host", b: "cluster", t: "POST /v1/pods/ensure(thread, image, adapter)", T: ["T6"] },
+  { k: "m", a: "cluster", b: "pod", t: "apply Secret → create Pod（已有可用的就复用）" },
+  { k: "s", at: "pod", t: "调度 · 拉镜像 · 挂载 workspace" },
+  { k: "m", a: "pod", b: "bridge", t: "启动容器：python -m atlas_bridge" },
+  { k: "m", a: "bridge", b: "acp", t: "spawn adapter 子进程 · initialize", T: ["T9"] },
+  { k: "r", a: "acp", b: "bridge", t: "initialize 结果（协议版本 · 能力位）" },
+  { k: "m", a: "pod", b: "bridge", t: "readinessProbe GET /readyz（BOOTING 时 503）", T: ["T8"] },
+  { k: "s", at: "cluster", t: "wait_ready：等 Pod 变成 Ready", T: ["T7"] },
+  { k: "r", a: "cluster", b: "host", t: "PodInfo(url, token)" },
+
+  { k: "p", t: "④ 接上会话，开始一轮" },
+  { k: "m", a: "host", b: "bridge", t: "WebSocket 握手 /host（Bearer token · X-Atlas-Session · atlas.host.v1）", T: ["T10", "T16"] },
+  { k: "m", a: "host", b: "bridge", t: "session.open(resume, defaults{deadlineS, permissionWaitS, reconnectWindowS})", T: ["T11", "T14"] },
+  { k: "m", a: "bridge", b: "acp", t: "session/resume | load | new", T: ["T11"] },
+  { k: "r", a: "acp", b: "bridge", t: "sessionId" },
+  { k: "r", a: "bridge", b: "host", t: "OpenResult(agentSessionId, resumed, bridge.instance)" },
+  { k: "s", at: "host", t: "写回 thread.external_session_id（恢复失败 → session.lost 事件）" },
+  { k: "m", a: "host", b: "bridge", t: "turn.start(turnId = run_id, prompt, limits.deadlineS)", T: ["T12"] },
+  { k: "m", a: "bridge", b: "acp", t: "session/prompt：截止与静默计时从这里开始", T: ["T13", "T14"] },
+  { k: "r", a: "bridge", b: "host", t: "{accepted: true}" },
+
+  { k: "p", t: "⑤ 一轮进行中" },
+  { k: "m", a: "acp", b: "bridge", t: "session/update（正文 · 工具调用 · 计划）" },
+  { k: "m", a: "bridge", b: "host", t: "agent.update(seq, origin = turn)" },
+  { k: "r", a: "host", b: "exec", t: "TraceEvent → relay.publish（进父会话的事件流）" },
+  { k: "m", a: "host", b: "bridge", t: "session.ack(seq)：每 1s 或每 200 条" },
+
+  { k: "f", a: "svc", b: "acp", t: "opt  审批" },
+  { k: "m", a: "acp", b: "bridge", t: "session/request_permission（同步 RPC，adapter 阻塞等待）", T: ["T15"] },
+  { k: "m", a: "bridge", b: "host", t: "permission.ask(askId, expiresInS)：轮次进入等人状态，静默计时暂停", T: ["T15"] },
+  { k: "s", at: "host", t: "登记 Approval → 每 1s 查审批门禁 → 前端弹窗" },
+  { k: "r", a: "host", b: "bridge", t: "{optionId: allow}；到期则由 bridge 按拒绝答复并发 permission.withdraw" },
+  { k: "r", a: "bridge", b: "acp", t: "selected / reject_once / cancelled" },
+  { k: "x" },
+
+  { k: "f", a: "svc", b: "acp", t: "opt  断线" },
+  { k: "s", at: "host", t: "连接断开 → 退避重连 → session.attach(bridgeInstance, lastSeq) → 补发", T: ["T16", "T17"] },
+  { k: "n", a: "host", b: "acp", cls: "add", t: "Pod 被删除或滚动更新：bridge 立即退出不排空，server 收到 1001 仍白等 120s", T: ["T21"] },
+  { k: "x" },
+
+  { k: "f", a: "svc", b: "acp", t: "opt  取消" },
+  { k: "s", at: "svc", t: "父 run 被取消 → request_cancel(子 run)" },
+  { k: "s", at: "host", t: "每 0.5s 查取消位" },
+  { k: "m", a: "host", b: "bridge", t: "turn.cancel(turnId)" },
+  { k: "m", a: "bridge", b: "acp", t: "session/cancel；宽限到期仍无结果就终止进程", T: ["T18"] },
+  { k: "x" },
+
+  { k: "p", t: "⑥ 结束与回传" },
+  { k: "r", a: "acp", b: "bridge", t: "prompt 响应 {stopReason}" },
+  { k: "m", a: "bridge", b: "host", t: "turn.state(ended, outcome, stats)", T: ["T19"] },
+  { k: "m", a: "host", b: "bridge", t: "session.ack(force) · 关闭连接（会话和 Pod 保留，下一轮 attach）" },
+  { k: "r", a: "host", b: "exec", t: "message.completed · usage.updated · run.finished | failed | cancelled" },
+  { k: "s", at: "exec", t: "落库 → 发布终止事件 → 释放子会话锁 → resume_if_ready(parent_run_id)" },
+
+  { k: "f", a: "parent", b: "exec", t: "alt  父 run 还在当场等待（≤ 60s）" },
+  { k: "r", a: "svc", b: "parent", t: "轮询到终态 → 最终文本作为 ToolMessage" },
+  { k: "e", t: "父 run 已挂起（suspended）" },
+  { k: "r", a: "exec", b: "parent", t: "claim_for_resume → 新的一段：resolve_delegation 换出结论", T: ["T5"] },
+  { k: "x" },
+  { k: "s", at: "parent", t: "模型拿到结论，继续这一轮" },
+];
+
+// ═══════════════════════════ 渲染 ═══════════════════════════
+const NS = "http://www.w3.org/2000/svg";
+const svg = document.getElementById("seq");
+const LEFT = 30, GAP = 160, TOP = 20, HEAD = 46;
+const X = Object.fromEntries(LANES.map(([id], i) => [id, LEFT + GAP / 2 + i * GAP]));
+const WIDTH = LEFT * 2 + GAP * LANES.length;
+
+function el(tag, attrs = {}, parent = svg) {
+  const node = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+  parent.appendChild(node);
+  return node;
+}
+function text(x, y, s, attrs = {}, parent = svg) {
+  const node = el("text", { x, y, ...attrs }, parent);
+  node.textContent = s;
+  return node;
+}
+/** 一行标签：文字 + 超时标记。超出画布右边界时整体左移，保证能看全。 */
+function label(x, y, s, ids) {
+  const g = el("g", {}, body);
+  const t = text(x, y, s, {}, g);
+  const end = pills(ids, x + 6 + t.getComputedTextLength(), y, g);
+  const overflow = end - (WIDTH - 8);
+  if (overflow > 0) g.setAttribute("transform", `translate(${-overflow},0)`);
+}
+
+/** 在 (x, y) 处依次画出超时标记，返回结束的 x。 */
+function pills(ids, x, y, parent = svg) {
+  for (const id of ids || []) {
+    const t = T[id];
+    const a = el("a", { href: "#" + id }, parent);
+    const g = el("g", { class: "tpill " + t.status }, a);
+    const label = text(0, 0, "⏱ " + id + " " + t.short, {}, g);
+    const w = label.getComputedTextLength() + 12;
+    el("rect", { x: x, y: y - 12, width: w, height: 17, rx: 8.5 }, g);
+    g.appendChild(label);  // 文字压在底色之上
+    label.setAttribute("x", x + 6);
+    label.setAttribute("y", y);
+    const title = el("title", {}, g);
+    title.textContent = `${id} ${t.name}：${t.value}`;
+    x += w + 5;
+  }
+  return x;
+}
+
+// 箭头
+const defs = el("defs");
+const marker = el("marker", { id: "head", viewBox: "0 0 10 10", refX: 9, refY: 5,
+  markerWidth: 7, markerHeight: 7, orient: "auto-start-reverse" }, defs);
+el("path", { d: "M0,0 L10,5 L0,10 z", fill: "currentColor" }, marker);
+svg.style.color = getComputedStyle(document.body).color;
+
+const lifelines = el("g");
+const body = el("g");
+const frames = [];
+let y = TOP + HEAD + 26;
+
+for (const step of S) {
+  switch (step.k) {
+    case "p": {
+      el("rect", { x: 4, y: y - 4, width: WIDTH - 8, height: 26, class: "phase-band" }, body);
+      text(14, y + 13, step.t, { class: "phase-text" }, body);
+      y += 38;
+      break;
+    }
+    case "m":
+    case "r": {
+      const x1 = X[step.a], x2 = X[step.b];
+      const left = Math.min(x1, x2);
+      label(left + 8, y, step.t, step.T);
+      el("line", { x1, y1: y + 9, x2: x2 + (x2 > x1 ? -1 : 1), y2: y + 9,
+        class: "arrow" + (step.k === "r" ? " reply" : ""), "marker-end": "url(#head)" }, body);
+      y += 36;
+      break;
+    }
+    case "s": {
+      const x = X[step.at];
+      el("path", { d: `M${x},${y - 4} h26 v14 h-24`, class: "arrow", "marker-end": "url(#head)" }, body);
+      label(x + 34, y + 7, step.t, step.T);
+      y += 34;
+      break;
+    }
+    case "n": {
+      const x1 = X[step.a] - 70, x2 = X[step.b] + 70;
+      el("rect", { x: x1, y: y - 6, width: x2 - x1, height: 26, rx: 4,
+        class: "note-box" + (step.cls ? " " + step.cls : "") }, body);
+      const g = el("g", {}, body);
+      const t = text(x1 + 10, y + 11, step.t, {}, g);
+      pills(step.T, x1 + 16 + t.getComputedTextLength(), y + 11, g);
+      y += 36;
+      break;
+    }
+    case "f": {
+      frames.push({ a: step.a, b: step.b, t: step.t, y0: y - 4, seps: [] });
+      y += 32;
+      break;
+    }
+    case "e": {
+      const f = frames[frames.length - 1];
+      f.seps.push({ y: y - 4, t: step.t });
+      y += 32;
+      break;
+    }
+    case "x": {
+      const f = frames.pop();
+      const x1 = X[f.a] - 74, x2 = X[f.b] + 74;
+      el("rect", { x: x1, y: f.y0, width: x2 - x1, height: y - f.y0 - 4, class: "frame" }, body);
+      const tag = text(x1 + 8, f.y0 + 15, f.t, { class: "frame-label" }, body);
+      const tw = tag.getComputedTextLength() + 16;
+      const bg = el("path", { d: `M${x1},${f.y0} h${tw} v12 l-8,8 h-${tw - 8} z`, class: "frame-tag" });
+      body.insertBefore(bg, tag);
+      for (const s of f.seps) {
+        el("line", { x1, y1: s.y, x2, y2: s.y, class: "frame-sep" }, body);
+        text(x1 + 8, s.y + 15, "[" + s.t + "]", { class: "frame-label" }, body);
+      }
+      y += 8;
+      break;
+    }
+  }
+}
+
+const HEIGHT = y + 10;
+for (const [id, name, sub] of LANES) {
+  const x = X[id];
+  el("line", { x1: x, y1: TOP + HEAD, x2: x, y2: HEIGHT - 6, class: "lane-line" }, lifelines);
+  el("rect", { x: x - GAP / 2 + 8, y: TOP, width: GAP - 16, height: HEAD, rx: 6, class: "lane-box" }, lifelines);
+  text(x, TOP + 19, name, { class: "lane-name", "text-anchor": "middle" }, lifelines);
+  text(x, TOP + 36, sub, { class: "lane-sub", "text-anchor": "middle" }, lifelines);
+}
+svg.setAttribute("width", WIDTH);
+svg.setAttribute("height", HEIGHT);
+svg.setAttribute("viewBox", `0 0 ${WIDTH} ${HEIGHT}`);
+
+// ═══════════════════════════ 表格 ═══════════════════════════
+const STATUS = { ok: "已有", chk: "待核实", add: "需新增" };
+const ORDER = { add: 0, chk: 1, ok: 2 };
+function row(id, cells) {
+  const tr = document.createElement("tr");
+  tr.id = id;
+  tr.innerHTML = cells.map(c => `<td${c[1] ? ` class="${c[1]}"` : ""}>${c[0]}</td>`).join("");
+  return tr;
+}
+const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+
+const todo = document.getElementById("todo");
+todo.innerHTML = "<tr><th>编号</th><th>状态</th><th>超时</th><th>现状</th><th>问题</th><th>建议</th></tr>";
+Object.entries(T)
+  .filter(([, t]) => t.status !== "ok")
+  .sort((a, b) => ORDER[a[1].status] - ORDER[b[1].status])
+  .forEach(([id, t]) => {
+    const tr = row("todo-" + id, [
+      [id, "id"], [`<span class="pill ${t.status}">${STATUS[t.status]}</span>`],
+      [esc(t.name)], [esc(t.value) + `<br><code>${esc(t.where)}</code>`], [esc(t.note)], [esc(t.fix || "")],
+    ]);
+    todo.appendChild(tr);
+  });
+
+const catalog = document.getElementById("catalog");
+catalog.innerHTML = "<tr><th>编号</th><th>状态</th><th>超时</th><th>取值</th><th>代码位置</th><th>说明</th></tr>";
+Object.entries(T).forEach(([id, t]) => {
+  catalog.appendChild(row(id, [
+    [id, "id"], [`<span class="pill ${t.status}">${STATUS[t.status]}</span>`],
+    [esc(t.name)], [esc(t.value)], [`<code>${esc(t.where)}</code>`], [esc(t.note)],
+  ]));
+});
+</script>
+</body>
+</html>

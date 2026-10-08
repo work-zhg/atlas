@@ -124,6 +124,73 @@
   font-weight: 700;
 }
 
+/* 会话筛选（原型：全部 / 需要我处理 / 进行中） */
+.threadFilters {
+  display: flex;
+  gap: 4px;
+  padding: 0 var(--s-3) var(--s-2);
+}
+
+.chip {
+  height: 24px;
+  padding: 0 9px;
+  border-radius: var(--r-full);
+  font-size: 12px;
+  color: var(--fg-2);
+  border: 1px solid var(--line);
+  background: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.chip[aria-selected="true"] {
+  color: var(--primary-text);
+  border-color: var(--primary-text);
+  background: var(--primary-soft);
+}
+
+.chipCount {
+  color: var(--warning);
+}
+
+.threadAgent {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.threadBadge {
+  margin-inline-end: 0;
+  margin-left: auto;
+  font-size: 11px;
+  line-height: 18px;
+  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.liveDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: livePulse 1.4s infinite;
+}
+
+@keyframes livePulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .liveDot {
+    animation: none;
+  }
+}
+
 /* ---------- 消息区 ---------- */
 .chat {
   flex: 1;
@@ -140,6 +207,20 @@
   align-items: center;
   gap: var(--s-3);
   min-width: 0;
+}
+
+.chatTitle {
+  font-size: 13px;
+  color: var(--fg-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.monoTag {
+  font-family: var(--mono);
+  font-size: 11.5px;
 }
 
 .agentChip {
@@ -660,6 +741,15 @@
   white-space: nowrap;
 }
 
+.fileLink {
+  color: inherit;
+}
+
+.fileLink:hover {
+  color: var(--primary-text);
+  text-decoration: underline;
+}
+
 .fileSize {
   font-size: 10.5px;
   color: var(--fg-3);
@@ -719,4 +809,69 @@
   .threads {
     display: none;
   }
+}
+
+/* ── 对话里的审批卡片：与委派卡片同一套骨架，左侧色条按状态变化 ── */
+.approval {
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--line-2);
+  border-radius: var(--r-md);
+  background: var(--bg-1);
+  margin-bottom: var(--s-4);
+  overflow: hidden;
+}
+
+/* 等用户决定时要显眼：这一轮正停在这里 */
+.approvalActive {
+  border-color: var(--warning);
+  border-left-color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.approvalHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+}
+
+.approvalActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--s-2);
+  margin-top: var(--s-3);
+}
+
+.approvalHint {
+  font-size: 12px;
+  color: var(--fg-3);
+  margin-right: auto;
+}
+
+/* ── acp：CLI 权限模式标签；被 Auto 模式拦截的工具行 ── */
+.modeBadge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--fg-3);
+  margin-bottom: var(--s-3);
+}
+
+.modeHint {
+  color: var(--warning);
+}
+
+.dotWarn {
+  background: var(--warning);
+}
+
+.toolDenied {
+  flex: none;
+  font-size: 11.5px;
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-radius: var(--r-sm);
+  padding: 0 6px;
 }

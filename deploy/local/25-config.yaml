@@ -1,0 +1,65 @@
+# 配置服务（atlas-config）：技能与 MCP 注册表的唯一所有者
+# （doc/skill-mcp-backend-design.html §16）。
+#
+# ★ 凭据（对象存储 HMAC、服务间令牌）不在本文件里 —— 由 deploy/local/apply.sh
+#   建成 Secret atlas-config-creds。
+# ★ 库是宿主 Postgres 上的独立 database atlas_config（docker compose 的
+#   config-init-db 建好）；与运行时库互不访问。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atlas-config
+  namespace: atlas-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: atlas-config}
+  template:
+    metadata:
+      labels: {app: atlas-config}
+    spec:
+      # ★ 配置服务不碰 K8s：默认 SA，没有任何权限
+      initContainers:
+        # 先迁移再起服务。迁移脚本在包内，不依赖工作目录。
+        - name: migrate
+          image: atlas-app:dev
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "atlas_config", "migrate"]
+          env: &config-env
+            - {name: ATLAS_CONFIG_DATABASE_URL, value: "postgresql+asyncpg://atlas:atlas@__HOST_IP__:5433/atlas_config"}
+            - {name: ATLAS_CONFIG_OSS_ENDPOINT, value: "http://__HOST_IP__:9000"}
+            - {name: ATLAS_CONFIG_OSS_BUCKET, value: atlas-dev}
+            - {name: ATLAS_CONFIG_OSS_ADDRESSING_STYLE, value: path}
+            - {name: ATLAS_CONFIG_OSS_REGION, value: us-east-1}
+            - {name: ATLAS_CONFIG_CORS_ORIGINS, value: '["http://localhost:3000","http://127.0.0.1:3000"]'}
+            - name: ATLAS_CONFIG_OSS_ACCESS_KEY_ID
+              valueFrom: {secretKeyRef: {name: atlas-config-creds, key: oss_access_key_id}}
+            - name: ATLAS_CONFIG_OSS_ACCESS_KEY_SECRET
+              valueFrom: {secretKeyRef: {name: atlas-config-creds, key: oss_access_key_secret}}
+            - name: ATLAS_CONFIG_INTERNAL_TOKEN
+              valueFrom: {secretKeyRef: {name: atlas-config-creds, key: internal_token}}
+      containers:
+        - name: config
+          image: atlas-app:dev
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "atlas_config", "serve"]
+          ports: [{containerPort: 8020, name: http}]
+          env: *config-env
+          readinessProbe:
+            httpGet: {path: /health, port: 8020}
+            periodSeconds: 3
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+---
+# ★ LoadBalancer：BFF 上线前管理页由宿主浏览器直连（设计 §13.3），
+#   Docker Desktop 把它落到 127.0.0.1:8020。
+# ★ /internal/* 只该给运行时用：靠服务间令牌把关（浏览器拿不到它）。
+apiVersion: v1
+kind: Service
+metadata:
+  name: atlas-config
+  namespace: atlas-system
+spec:
+  type: LoadBalancer
+  selector: {app: atlas-config}
+  ports: [{port: 8020, targetPort: 8020}]

@@ -38,6 +38,12 @@ class ToolInfo(BaseModel):
     #: 模型侧实际出现的工具名。require_approval_for 匹配的是这些，
     #: 不是 name —— bash 的模型侧名是 execute，filesystem 展开成 7 个。
     model_tool_names: list[str] = []
+    #: MCP 工具：来源 server（编辑器按它分组）。内置工具为 None
+    server: str | None = None
+    #: MCP 工具定义的指纹（保存 agent 时记录，运行时比对 —— 技能 / MCP 设计 §9）
+    digest: str | None = None
+    #: MCP：ok | invalid | pending_review | rejected。内置工具为 None
+    review_status: str | None = None
 
 
 class ToolListResponse(BaseModel):

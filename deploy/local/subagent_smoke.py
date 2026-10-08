@@ -2,7 +2,7 @@
 
     POST /runs（native 父，跑在 server 进程内的图里）
       → 模型调 task 工具 → 子会话 + 子 run
-      → AcpRuntime 对子会话原样生效：cluster 建**第二个** Pod
+      → HostRuntime 对子会话原样生效：cluster 建**第二个** Pod
       → 子 Pod 里真 CLI 往 /workspace 写文件
       → 父只拿回结论，用自己的 filesystem 工具读同一份工作区
 
@@ -28,8 +28,8 @@ import urllib.request
 BASE = "http://127.0.0.1:8000"
 SLUG = "native-parent"
 SUB = "cli-hand"
-ADAPTER = "node /opt/acp-cli/lib/node_modules/@zed-industries/claude-code-acp/dist/index.js"
-IMAGE = "atlas-acp-bridge:0.1.0"
+ADAPTER = "node /opt/acp-cli/bin/claude-acp"
+IMAGE = "atlas-acp-bridge:0.3.0"
 
 
 def call(method: str, path: str, body: dict | None = None) -> dict:

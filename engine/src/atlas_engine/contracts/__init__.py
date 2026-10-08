@@ -34,8 +34,8 @@ slice_read_response）也在列：它们是读窗口分页语义的参考实现�
 `ReadResult.__post_init__` 的校验是同一份语义的两半。
 """
 
-from .approval import ApprovalGate, Decision
-from .delegation import DelegationProtocol
+from .approval import ApprovalGate, ApprovalState, Decision
+from .delegation import DelegationProtocol, delegation_pending
 from .errors import (
     REFUSAL_STOP_REASONS,
     ContextOverflow,
@@ -72,39 +72,59 @@ from .sandbox import (
     SandboxProtocol,
 )
 from .skills import SkillRef
+from .suspension import (
+    RELEASED_MARKER,
+    SUSPENSION_MARKER,
+    Suspension,
+    SuspensionReason,
+    is_released,
+    parse_suspension,
+    released_marker,
+    suspend_marker,
+)
 
 __all__ = [
     "DEFAULT_WORKDIR",
     "EDIT_MAX_BYTES",
     "REFUSAL_STOP_REASONS",
+    "RELEASED_MARKER",
     "SEARCH_MAX_KEYS",
+    "SUSPENSION_MARKER",
     "ApprovalGate",
+    "ApprovalState",
     "ContextOverflow",
     "Decision",
     "DelegationProtocol",
     "DeleteResult",
     "EditResult",
     "EngineError",
+    "ExecuteArtifact",
+    "ExecuteResponse",
+    "FileData",
+    "FilesystemProtocol",
     "InvalidSpec",
     "LimitExceeded",
     "ModelRateLimited",
     "ModelRefused",
     "ModelUnavailable",
+    "ReadResult",
     "RunCancelled",
     "RunTimeout",
-    "UnsupportedProvider",
-    "ExecuteArtifact",
-    "ExecuteResponse",
-    "FileData",
-    "FilesystemProtocol",
-    "ReadResult",
     "SandboxProtocol",
     "SearchResult",
     "SkillRef",
+    "Suspension",
+    "SuspensionReason",
+    "UnsupportedProvider",
     "WriteResult",
     "classify",
     "create_file_data",
+    "delegation_pending",
     "file_data_to_string",
+    "is_released",
     "normalize_read_bounds",
+    "parse_suspension",
+    "released_marker",
     "slice_read_response",
+    "suspend_marker",
 ]

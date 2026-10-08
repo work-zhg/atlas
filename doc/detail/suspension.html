@@ -1,0 +1,753 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>挂起与恢复 · AI Platform</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  .tag{font-family:var(--mono);font-size:10.5px;padding:1px 7px;border-radius:99px;border:1px solid;white-space:nowrap}
+  .tag.new{color:var(--warn);border-color:rgba(245,158,11,.45)}
+  .tag.keep{color:var(--accent);border-color:rgba(34,197,94,.45)}
+  .tag.mod{color:var(--native);border-color:rgba(56,189,248,.45)}
+  .tag.del{color:#F87171;border-color:rgba(248,113,113,.45)}
+  .step{border-left:2px solid var(--border);padding-left:var(--s3);margin:var(--s4) 0}
+  .step h4{margin-top:0;color:var(--accent);font-family:var(--mono);font-size:12px;letter-spacing:.1em}
+  .flow{background:var(--card);border:1px solid var(--border-soft);border-radius:var(--radius);
+        padding:var(--s3);overflow-x:auto;margin:0 0 var(--s3);font-family:var(--mono);
+        font-size:12.5px;line-height:1.8;white-space:pre;color:#CBD5E1}
+  .flow b{color:#F8FAFC;font-weight:600}
+  .flow i{color:#7A88A0;font-style:normal}
+  .flow s{color:#7DD3FC;text-decoration:none}
+  .flow u{color:#FDE68A;text-decoration:none}
+  .flow em{color:#F87171;font-style:normal}
+</style>
+</head>
+<body>
+
+<nav class="sitenav">
+  <a class="brand" href="../">AI&nbsp;<b>Platform</b>&nbsp;/ 详细设计</a>
+  <div class="links">
+    <a href="../">概要设计</a>
+    <a href="./">详设目录</a>
+    <a href="native.html">native Agent</a>
+    <a href="structure.html">目录与包结构</a>
+    <a href="kernel.html">kernel 分析</a>
+    <a href="filesystem.html">文件系统改造</a>
+    <a href="subagent.html">Subagent 重设计</a>
+    <a href="acp.html">acp Agent</a>
+    <a class="on" href="suspension.html">挂起与恢复</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+<nav class="toc" aria-label="目录">
+  <div class="eyebrow">本页</div>
+  <ol>
+    <li><a href="#s1">问题：一次委派可以跑一小时</a></li>
+    <li><a href="#s2">两种等待，一个机制</a></li>
+    <li><a href="#s3">不引入 checkpointer</a></li>
+    <li><a href="#s4">thread 级事件流：seq 的归属</a></li>
+    <li><a href="#s5">depth 重新获得语义</a></li>
+    <li><a href="#s6">审批走 suspension</a></li>
+    <li><a href="#s7">交汇点：补齐与悬空</a></li>
+    <li><a href="#s8">数据模型与迁移</a></li>
+    <li><a href="#s9">契约变更清单</a></li>
+    <li><a href="#s10">落地顺序</a></li>
+    <li><a href="#s11">风险与未决</a></li>
+    <li><a href="#s12">设计过程中的修正</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<header class="hero">
+  <p class="kicker">Detailed Design · Suspension</p>
+  <h1>挂起与恢复</h1>
+  <p class="lede">一次委派可以跑一小时。父 run 在进程里等那么久的代价是明确的：部署一次、OOM 一次，父 run 就没了，连带丢掉子 run <b>已经干完</b>的活。这份设计把「等」从 asyncio.Task 移到数据库 —— 并且发现<b>委派挂起与审批挂起是同一件事</b>。</p>
+  <div class="meta">
+    <span>一个 run，多段执行</span><span>thread 级事件流</span><span>不引入 checkpointer</span><span>审批可以等一天</span>
+  </div>
+</header>
+
+<!-- ══════════════ 1 ══ -->
+<section id="s1">
+  <h2><span class="num">01</span>问题：一次委派可以跑一小时</h2>
+
+  <p>native Agent 通过 <code>task</code> 委派给 acp Agent（一个 CLI 助理）时，子任务的真实时长可以是分钟到小时级。原先的链路是<b>父 run 同步等到子 run 终态</b>（<code>SubagentService._await_result</code> 轮询），这在秒级委派下没有问题，在小时级下有三重代价：</p>
+
+  <table>
+    <thead><tr><th style="width:170px">代价</th><th>具体表现</th></tr></thead>
+    <tbody>
+      <tr><td><b>撑不到中断</b></td><td>父 <code>limits.timeout_s</code> 默认 300s，<code>_await_result</code> 的 deadline 也是它 —— 一小时的委派在第 5 分钟就被判超时并取消</td></tr>
+      <tr><td><b>重启即全丢</b></td><td>父子 run 都是同进程的 asyncio.Task。滚动部署时两者一起死，而 <b>Pod 里的 CLI 还在跑</b> —— 一小时的产出无人认领</td></tr>
+      <tr><td><b>锁的承诺破了</b></td><td>会话串行锁 TTL 按 <code>max(timeout_s, approval_timeout_s)+120</code> 算。等待期间无人续租，锁静默过期，第二个 run 能进来交错写同一个 thread</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout rule">
+    <span class="label">真正值钱的资产不在父 run 上</span>
+    <p>父 run 的状态小到不值得持久化 —— 它就是「一次 <code>task</code> tool call 在等返回」，历史全在 message 表里，重建成本是一次模型调用。子 run 那一小时才是不可重建的。</p>
+    <p>所以问题不是「怎么把父 run 的内存状态存下来」，而是<b>怎么让父 run 不必在线一小时</b>。这个视角决定了后面全部的取舍。</p>
+  </div>
+</section>
+
+<!-- ══════════════ 2 ══ -->
+<section id="s2">
+  <h2><span class="num">02</span>两种等待，一个机制</h2>
+
+  <p>系统里原本有两处「等外部」，各自实现：</p>
+
+  <table>
+    <thead><tr><th style="width:130px"></th><th>委派</th><th>审批（原状）</th></tr></thead>
+    <tbody>
+      <tr><td><b>拦截点</b></td><td><code>task</code> 工具返回值</td><td><code>awrap_tool_call</code> 内 <code>await gate.request()</code></td></tr>
+      <tr><td><b>等待载体</b></td><td>父 run 的轮询循环</td><td>进程内 <code>BLPOP</code>，600s</td></tr>
+      <tr><td><b>进程占用</b></td><td>一个 Task</td><td>一个 Task</td></tr>
+      <tr><td><b>重启后</b></td><td>全丢</td><td>全丢</td></tr>
+      <tr><td><b>工具执行状态</b></td><td>已执行完（结果在等）</td><td><b>尚未执行</b></td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout rule">
+    <span class="label">核心判断</span>
+    <p>两者都是「<b>这一段到此为止，等一个外部事件，事件到了续跑</b>」。差异只有最后一行：审批挂起时工具还没跑。所以不该给审批单独造一套挂起，而应把 suspension 抽象出来，让委派与审批成为它的两个 <code>reason</code>。</p>
+  </div>
+
+  <h3>2.1 统一模型</h3>
+
+<pre><code>engine/contracts/suspension.py
+
+SUSPENSION_MARKER = "__ATLAS_SUSPENDED__"
+
+@dataclass(frozen=True)
+class Suspension:
+    reason: Literal["delegation", "approval"]
+    token: str          # delegation → sub_run_id；approval → approval_id
+
+def suspend_marker(reason, token) -> str   # "__ATLAS_SUSPENDED__:delegation:&lt;uuid&gt;"
+def parse_suspension(text) -> Suspension | None</code></pre>
+
+  <p>能力方（<code>task</code> 工具、审批中间件）在需要等待时<b>返回一个 marker 字符串</b>作为 ToolMessage 的内容。图内只有一个地方认识它：</p>
+
+<pre><code>class SuspensionMiddleware(AgentMiddleware):
+    @hook_config(can_jump_to=["tools", "end"])
+    def before_model(self, state, runtime):
+        ...  # 三条判据，见 §6.3</code></pre>
+
+  <div class="callout warn">
+    <span class="label">★ marker 必须是返回值，不能是异常</span>
+    <p><code>task</code> 工具对受理方抛出的异常一律接成错误文本回给模型（委派失败是局部问题，不该炸掉整个 run）。marker 走异常路径会被那个 <code>except</code> 吞掉，变成模型眼里的一句「委派失败」—— 而它其实正在跑。</p>
+  </div>
+
+  <h3>2.2 为什么 marker 自带 token</h3>
+
+  <p>续跑时要把 marker 换成真实结果，而「换哪一条」只能靠它。把关联关系放在<b>消息序列自己身上</b>的回报是：不需要另一张表去记 <code>(tool_call_id → sub_run_id)</code> —— marker 所在的那条 ToolMessage 本来就带着正确的 <code>tool_call_id</code>（工具节点自己生成的）。</p>
+
+  <p>这一条在实现时救掉了一整张表，见 §12 的修正记录 1。</p>
+</section>
+
+<!-- ══════════════ 3 ══ -->
+<section id="s3">
+  <h2><span class="num">03</span>不引入 checkpointer</h2>
+
+  <p>LangGraph 的原生答案是 checkpointer + <code>interrupt()</code> + <code>Command(resume=)</code>。这份设计<b>明确不用</b>，理由分两层。</p>
+
+  <h3>3.1 它解决的不是我们的问题</h3>
+
+  <table>
+    <thead><tr><th style="width:230px">checkpointer 解决什么</th><th>我们的情况</th></tr></thead>
+    <tbody>
+      <tr><td>恢复图的内存状态</td><td>图的状态<b>就是</b> messages，而 messages 的事实源是 message 表</td></tr>
+      <tr><td>决定从哪个节点恢复</td><td>middleware 的 <code>jump_to</code>（图内条件边）已经提供了这个能力</td></tr>
+      <tr><td>记住「在等什么」</td><td><code>run.waiting_on</code> 一列 + Approval 表</td></tr>
+    </tbody>
+  </table>
+
+  <p>更关键的是它会引入<b>第二个状态源</b>。这条约定在仓库里有四处注释守着（<code>kernel/middleware/skills.py</code>、<code>services/compaction.py</code>、迁移 <code>0001</code>/<code>0005</code>、<code>db/models.py</code>），<code>middleware/approval.py</code> 顶部那段「为什么不用 interrupt」也是同一个判断。推翻它换回来的东西，我们用一个 <code>before_model</code> hook 就拿到了。</p>
+
+  <h3>3.2 实验证据</h3>
+
+  <p>关键问题是：<b>不用 checkpointer，能不能让图从 <code>tools</code> 节点开始执行？</b>这正是审批续跑需要的 —— 挂起时工具没跑，续跑时要先把它跑掉。</p>
+
+  <p>构造一个只有 <code>messages</code> 的输入，其中有一条带 <code>tool_calls</code> 的 AIMessage 但<b>没有</b>对应的 ToolMessage（审批挂起后的形态），middleware 在 <code>before_model</code> 里返回 <code>{"jump_to": "tools"}</code>：</p>
+
+<pre><code>节点顺序: ['ResumeMiddleware.before_model', 'tools',
+           'ResumeMiddleware.before_model', 'model']
+工具实际执行: ['/tmp/x']</code></pre>
+
+  <p>第一次 <code>before_model</code> 发现悬空的 tool_call → 跳 <code>tools</code> → 工具执行 → 再回 <code>before_model</code>，这次没有悬空的了 → 正常流向 <code>model</code> 收尾。<b>零 checkpointer。</b></p>
+
+  <div class="callout danger">
+    <span class="label">★ 而 jump_to 不能从图输入传进去</span>
+    <p>设计初稿写的是「续跑时 <code>_graph_input</code> 带 <code>{"jump_to": "tools"}</code>」。<b>不可行</b>：<code>InputAgentState</code> 只有 <code>messages</code> 一个字段，而 <code>jump_to</code> 标着 <code>PrivateStateAttr = OmitFromSchema(input=True, output=True)</code> —— 从输入 schema 排除，传进去会被直接丢弃。</p>
+    <p>正确做法是<b>判据来自 state 本身</b>，middleware 在图内自己决定。见 §12 的修正记录 2。</p>
+  </div>
+
+  <h3>3.3 由此带来的简化</h3>
+
+  <p><code>PreparedRun.resume_entry</code> 这个字段<b>不需要</b>。server 侧什么都不用传 —— 三条判据全部只看 messages，<code>SuspensionMiddleware</code> 因此是无状态的，也不需要知道审批和委派的存在。</p>
+
+  <p>附带好处：这个判据是通用的 —— 任何「工具没执行完就中断」的 run 续跑时都会自愈，不只审批。</p>
+</section>
+
+<!-- ══════════════ 4 ══ -->
+<section id="s4">
+  <h2><span class="num">04</span>thread 级事件流：seq 的归属</h2>
+
+  <p>挂起暴露了事件流的一个结构性缺陷：<b>前端只订阅父 run 那一条流</b>，而子 run 的过程活在它自己的流上。父 run 挂起后，父流再不产出任何事件 —— 用户盯着一个不动的界面，分不清「在等」和「挂了」。审批更严重（§6.4）。</p>
+
+  <p>根治办法是把订阅单位从 run 换成 <b>thread</b>：一个会话一条流，该会话下所有 run（含子 run）的事件都进去。核心难题不是「合并两条流」，是 <code>seq</code> 的归属权。</p>
+
+  <h3>4.1 契约规则 2 变更</h3>
+
+<pre><code>旧：seq 在单个 <b>run</b> 内从 1 严格递增无空洞
+新：seq 在单个 <b>thread</b> 内从 1 严格递增无空洞</code></pre>
+
+  <div class="callout rule">
+    <span class="label">为什么必须换归属，而不是用复合游标</span>
+    <p>前端的去重是一行 <code>if (event.seq &lt;= state.lastSeq) return state</code>（<code>run-reducer.ts</code>），<code>Last-Event-ID</code> 传 <code>String(lastSeq)</code>。只要 seq 还是「thread 内单调的整数」，<b>这两处一行都不用改</b>。</p>
+    <p>复合游标 <code>(run_id, seq)</code> 会强迫前端为每个 run 维护一个 lastSeq，而且无法回答「两个并发 run（父 suspended + 子 running）的事件谁在前」。</p>
+  </div>
+
+  <h3>4.2 分配方式：Redis INCR + DB 水位恢复</h3>
+
+  <p>thread 级 seq 有<b>多个并发生产者</b>（父 run 挂起时子 run 在跑），不能由单个进程内存分配。必须是共享计数器。</p>
+
+  <p>为什么不用 Postgres 的 <code>UPDATE ... RETURNING</code>：<code>message.delta</code> 是 token 级事件，一次回答几千条 —— 几千次 DB 写不可接受。Redis <code>INCR</code> 是 O(1) 单 RTT，且事件发布不在用户等待路径上。</p>
+
+  <p>Redis 是易失的：key 丢了会从 1 重来 → 重复 seq → 前端把新事件<b>全当重复丢掉</b>（静默故障，最坏的一种）。恢复必须原子：</p>
+
+<pre><code>-- KEYS[1]=thread:seq:{id}  ARGV[1]=DB 水位  ARGV[2]=ttl
+if redis.call('EXISTS', KEYS[1]) == 0 then
+  redis.call('SET', KEYS[1], ARGV[1])
+end
+local v = redis.call('INCR', KEYS[1])
+redis.call('EXPIRE', KEYS[1], ARGV[2])
+return v</code></pre>
+
+  <p>水位 = <code>SELECT COALESCE(MAX(thread_seq),0) FROM run_event WHERE thread_id=?</code>，<b>每段执行开始时查一次</b>（不是每事件），缓存在 <code>EventFactory</code> 里作为 floor。TTL 设 30 天并每次续期 —— 活跃会话不会过期，只有冷启动/Redis 重建才走恢复路径。</p>
+
+  <p><b>不做号段预分配</b>：号段会产生空洞，而「无空洞」是契约的一部分（前端虽不依赖，但 <code>replay(after_seq)</code> 的可推理性依赖它）。</p>
+
+  <h3>4.3 stream key 与归档</h3>
+
+  <table>
+    <thead><tr><th style="width:150px"></th><th>旧</th><th>新</th></tr></thead>
+    <tbody>
+      <tr><td>Redis key</td><td><code>run:events:{run_id}</code></td><td><code>thread:events:{thread_id}</code></td></tr>
+      <tr><td>seq key</td><td>—</td><td><code>thread:seq:{thread_id}</code></td></tr>
+      <tr><td>归档主键</td><td><code>(run_id, seq)</code></td><td><code>(thread_id, thread_seq)</code>，<code>run_id</code> 降为普通列+索引</td></tr>
+      <tr><td>回放查询</td><td><code>WHERE run_id=? AND seq&gt;?</code></td><td><code>WHERE thread_id=? AND thread_seq&gt;?</code></td></tr>
+    </tbody>
+  </table>
+
+  <p><code>run_event</code> 加 <code>thread_id</code> 列而不是 JOIN run 表 —— 回放是热路径。表名保留（它仍是「某个 run 产出的事件」），只是索引口径换了。</p>
+
+  <h3>4.4 SSE 生命周期：最大的 breaking change</h3>
+
+  <table>
+    <thead><tr><th style="width:190px"></th><th>旧（run 流）</th><th>新（thread 流）</th></tr></thead>
+    <tbody>
+      <tr><td>端点</td><td><code>GET /v1/runs/{id}/events</code></td><td><code>GET /v1/threads/{id}/events</code></td></tr>
+      <tr><td>何时关闭</td><td>收到终态事件即关</td><td><b>永不自动关</b>，直到客户端断开</td></tr>
+      <tr><td><code>relay.tail</code> 的 return</td><td><code>type in TERMINAL_EVENTS</code></td><td>删掉</td></tr>
+      <tr><td>前端停止重连</td><td><code>isTerminalEvent</code></td><td>删掉；改为组件卸载时 abort</td></tr>
+      <tr><td><code>activeRunId</code></td><td>决定订阅哪条流</td><td><b>消失</b> —— 订阅只看 threadId</td></tr>
+    </tbody>
+  </table>
+
+  <p>连带简化掉的东西：<code>thread.active_run_id</code> 不再为订阅服务（可留作 UI 判断「是否在跑」）；<code>ChatWorkbench</code> 里那段 <code>restorable &amp;&amp; !activeRunId</code> 的刷新恢复逻辑消失 —— 订阅 thread 天然就是恢复；切会话时 <code>reset()</code> 的时序问题消失。</p>
+
+  <div class="callout danger">
+    <span class="label">★ 两个必须一起处理的新问题</span>
+    <p><b>首连回放量。</b>订阅一个有 500 轮历史的 thread，<code>after_seq=0</code> 会回放全部事件，打开老会话直接卡死。必须同时加 <code>since</code> 语义：默认只回放最近 N 条或「最后一个未完成 run 起」，完整历史轨迹走单独的分页端点。<b>这一条不能延后到 D 之后做。</b></p>
+    <p><b>长连接数。</b>一 thread 一条 SSE，多标签页放大。DB 连接已在 <code>stream()</code> 开头归还，但每条 SSE 占一个 Redis 连接 —— 要给池设上限并在耗尽时明确 503，而不是静默排队。</p>
+  </div>
+
+  <h3>4.5 delta 进流，但归档要分流</h3>
+
+  <p>子 run 的 <code>message.delta</code> <b>进</b> thread 流 —— 否则「过程可见」只到工具粒度，D 的价值减半。代价是事件量大致翻倍，两个配套措施：</p>
+
+  <table>
+    <thead><tr><th style="width:190px">措施</th><th>原因</th></tr></thead>
+    <tbody>
+      <tr><td><code>xadd(maxlen=N, approximate=True)</code></td><td>一个 thread 一条流且永不结束，不设上限则内存随会话寿命单调增长。<code>~</code> 裁剪按整块丢，O(1)</td></tr>
+      <tr><td><b>delta 不再归档</b></td><td>delta 的价值是实时打字效果；回放历史用 <code>message.completed</code> 的完整 content 就够（前端读历史本来走 message 表）。能把归档量降一个数量级</td></tr>
+      <tr><td>前端默认折叠 depth=1 的 delta</td><td>一小时的委派会产出大量 delta，全渲染会让主对话区滚动失控。折叠态显示「已输出 N 字」，展开即见</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ══════════════ 5 ══ -->
+<section id="s5">
+  <h2><span class="num">05</span>depth 重新获得语义</h2>
+
+  <p>现在 <code>depth = len(ns)</code>（LangGraph 子图命名空间深度）。而委派模式下 <code>_build_delegating_task_tool</code> <b>根本不编译子图</b> —— 所以 depth <b>恒为 0</b>。</p>
+
+  <div class="callout warn">
+    <span class="label">两条注释因此是死代码</span>
+    <p><code>SubAgentCard.tsx</code> 说「子智能体内部的工具调用仍然可见 —— 它们在 Inspector 工具页里带 depth 缩进」，<code>run-reducer.ts</code> 说「内部工具调用在 toolCalls 里带 depth≥1」。两者都是<b>图内子图时代的遗留</b>：父流上不存在 depth≥1 的事件。<code>tests/test_subagents.py</code> 自己写着「子 run 有自己的事件流（depth=0），父只看边界事件」，并断言了 <code>all(e.depth == 0)</code>。</p>
+  </div>
+
+  <p>新语义：<b>depth = run 在委派树里的深度</b>。</p>
+
+<pre><code>EventFactory(run_id, clock, start_seq=..., base_depth=...)
+    depth = base_depth + 局部子图深度
+
+base_depth = 1 if run.parent_run_id else 0    # 委派深度封顶 1 ⇒ depth ∈ {0,1}</code></pre>
+
+  <p>这一步让 D 的价值落地：前端拿到 depth=1 的事件就知道「这是子智能体内部的」，Inspector 的缩进逻辑复活，<code>SubAgentCard</code> 可以真的显示步骤列表 —— 那两条注释从死代码变回真的。</p>
+
+  <p>配套：<code>runner._from_messages</code> 里 <code>if depth &gt; 0: return []</code> 这个丢弃<b>保留</b>（它丢的是局部子图，不是子 run），但判据要明确基于<b>局部</b> depth，避免把 <code>base_depth=1</code> 的子 run delta 误丢。</p>
+</section>
+
+<!-- ══════════════ 6 ══ -->
+<section id="s6">
+  <h2><span class="num">06</span>审批走 suspension</h2>
+
+  <h3>6.1 ApprovalGate：从阻塞等待改成查询状态</h3>
+
+<pre><code>#  旧
+async def request(self, *, approval_id, tool_name, args) -> Decision   # 阻塞 600s
+
+#  新
+async def check(self, *, approval_id, tool_name, args) -> ApprovalState
+#  ApprovalState = "pending" | "approved" | "rejected" | "expired"</code></pre>
+
+  <table>
+    <thead><tr><th style="width:190px">gate 返回</th><th>middleware 动作</th></tr></thead>
+    <tbody>
+      <tr><td><code>pending</code>（首次：已落库、已发事件）</td><td>返回 marker ToolMessage → 本段挂起，<b>工具不执行</b></td></tr>
+      <tr><td><code>approved</code></td><td><code>await handler(request)</code> —— 正常执行</td></tr>
+      <tr><td><code>rejected</code> / <code>expired</code></td><td>返回 <code>REJECTED_RESULT</code> / <code>EXPIRED_RESULT</code></td></tr>
+    </tbody>
+  </table>
+
+  <h3>6.2 ★ approval_id 必须可复现</h3>
+
+  <div class="callout danger">
+    <span class="label">这是审批挂起能否成立的关键</span>
+    <p>现在是 <code>uuid.uuid4()</code>。续跑时同一个 tool_call 会算出一个<b>新的</b> approval_id，gate 查到 <code>pending</code>，于是再挂起一次 —— <b>死循环</b>。</p>
+  </div>
+
+<pre><code>approval_id = uuid.uuid5(_NS, f"{run_id}:{tool_call_id}")</code></pre>
+
+  <p><code>(run_id, tool_call_id)</code> 在一个 run 内唯一且跨段稳定（tool_call_id 由工具节点生成，落在 message 表里）。顺带修掉一个既有隐患：随机 approval_id 在重试路径上会留下孤儿 Approval 行。</p>
+
+  <h3>6.3 SuspensionMiddleware 的三条判据</h3>
+
+<pre><code>悬空的 tool_call（有 tool_use 无 tool_result）  → jump_to <b>tools</b>
+末批 ToolMessage 里有 marker                     → jump_to <b>end</b>
+两者都没有                                        → 正常流向 model</code></pre>
+
+  <p>全部只看 messages。一段里同时有两种 marker 时（模型一轮里既委派又调了高风险工具）：<b><code>tools</code> 优先</b> —— 先把待执行的工具跑掉，委派结论已经在历史里了，tools 跑完自然流向 model。</p>
+
+  <h3>6.4 D 让审批的冒泡整个消失</h3>
+
+  <p>这是选 D + 审批挂起的最大回报。原先的链路：</p>
+
+<pre class="flow"><i>旧</i>  子 run 的 approval → <em>父 run 的轮询循环</em> → get_stream_writer() → 父流
+      <em>挂起后三处同时失效：</em>
+        ① _await_result 返回 marker 后循环就结束了，没人再调 _forward_approvals
+        ② 就算想调也没有出口 —— get_stream_writer() 只在图上下文里有效，图已跳出
+        ③ 父流上不会再有新事件
+
+<i>新</i>  子 run 的 approval → <s>子 run 自己的 EventFactory（base_depth=1）</s> → <b>thread 流</b>
+      前端订阅 thread，<b>直接就收到了</b></pre>
+
+  <p><code>SubagentService._forward_approvals</code> 和它那段「实测两次委派各卡满 300s，审批最终 expired」的注释一起<b>删除</b> —— 它记录的问题由架构消解了。</p>
+
+  <p><code>ApprovalRequiredData.run_id</code> 这个字段仍然必要（决策要 POST 到对应 run 的端点），但 <code>ApprovalModal</code> 的 <code>runId={pendingApproval?.runId ?? activeRunId}</code> 可以简化成 <code>runId={pendingApproval.runId}</code> —— thread 流里每个事件都带 run_id，回落不再需要。</p>
+
+  <h3>6.5 超时判定权的移交</h3>
+
+  <table>
+    <thead><tr><th style="width:190px"></th><th>旧</th><th>新</th></tr></thead>
+    <tbody>
+      <tr><td>判定者</td><td>gate 内的 BLPOP 超时</td><td><b>resume reaper</b>：扫 suspended run 时检查 <code>created_at + timeout &lt; now</code> → 标 expired → 唤醒续跑</td></tr>
+      <tr><td><code>approval_timeout_s</code></td><td>600</td><td><b>86400</b>（一天）</td></tr>
+    </tbody>
+  </table>
+
+  <p>默认值从 10 分钟提到一天，是这次改造真正解锁的东西：挂起不占用任何进程，审批因此可以等到用户第二天上班。</p>
+
+  <p>但<b>仍然保留超时</b>，不做无限等：一个永远 pending 的 approval 会让 thread 永久锁死（DB 权威锁认 suspended，见 §8）。</p>
+
+  <div class="callout rule">
+    <span class="label">awaiting_approval 保留为 suspended 的细分</span>
+    <p>不合并。UI 要区分「在等机器」和「在等你」—— 前者用户只能干等，后者需要他行动。实现上两者共用 suspension 机制，只在 status 字面值上分开。</p>
+  </div>
+</section>
+
+<!-- ══════════════ 7 ══ -->
+<section id="s7">
+  <h2><span class="num">07</span>交汇点：补齐与悬空</h2>
+
+  <div class="callout danger">
+    <span class="label">★ 两个机制会在这里打架</span>
+    <p><code>domain/messages.py</code> 的 <code>to_storage</code> 有一条不变量：<b>每个 tool_use 必有配对的 tool_result</b>，悬空的会自动补一条 <code>is_error</code> 的「执行被中断」（不补则下一轮直接 400）。</p>
+    <p>而审批续跑<b>要求</b> tool_call 悬空 —— 那正是 <code>jump_to tools</code> 的判据。补齐之后 middleware 就不跳，工具永远不执行。</p>
+  </div>
+
+  <p>正确的顺序：</p>
+
+  <table>
+    <thead><tr><th style="width:170px">阶段</th><th>消息序列</th><th>为什么</th></tr></thead>
+    <tbody>
+      <tr><td><b>审批挂起落库</b></td><td><code>AIMessage(tool_use)</code> + <code>ToolMessage(marker:approval:&lt;id&gt;)</code></td><td>marker 本身就是一条合法的 tool_result，配对完整，格式合法</td></tr>
+      <tr><td><b>续跑重建历史</b></td><td><b>换成</b>「已放行」占位（<code>__ATLAS_RELEASED__</code>）</td><td>序列保持配对 —— 否则 PatchToolCallsMiddleware 会在图入口把悬空补成「cancelled」（§12 修正 10）</td></tr>
+      <tr><td><b>before_model</b></td><td>删掉占位 + <code>jump_to "tools"</code></td><td>制造悬空的时机推到 patch 之后</td></tr>
+    </tbody>
+  </table>
+
+  <p>而 <code>_seal_dangling_tool_calls</code> 只在<b>真正异常中断</b>（没有 marker 的悬空）时起作用。两者不冲突，但这个边界必须在 <code>_settle_pending</code> 里写死并配一条测试 —— 否则将来有人「顺手统一」就会把审批路径压坏，而症状是「批准了但工具没跑」。</p>
+
+  <p>对比委派续跑的处理，差异一目了然：</p>
+
+<pre class="flow">delegation marker  →  <b>换成结论</b>（子 run 的最终文本）   → 流向 model
+approval   marker  →  <b>换成放行占位</b> → before_model 删它 → 跳 tools</pre>
+</section>
+
+<!-- ══════════════ 8 ══ -->
+<section id="s8">
+  <h2><span class="num">08</span>数据模型与迁移</h2>
+
+  <h3>8.1 已实现（委派挂起）</h3>
+
+<pre><code>0009_message_kind
+  message  + kind ∈ {chat, tool_result}
+           <i>★ role 枚举一个字没改 —— Anthropic 的 tool_result 本来就是 user 角色的 block</i>
+
+0010_run_suspended
+  run      status + 'suspended'
+           ix_run_active 的 WHERE 跟上（active_run_of 要查它）</code></pre>
+
+  <h3>8.2 本设计新增</h3>
+
+<pre><code>0011_thread_event_stream
+  <b>TRUNCATE TABLE run_event</b>          <i>★ 未上线，轨迹历史可弃</i>
+  run_event  + thread_id   UUID NOT NULL
+             + thread_seq  INT  NOT NULL
+             主键 (run_id,seq) → (thread_id,thread_seq)
+             + INDEX (run_id)            <i>按 run 查轨迹仍要支持</i>
+
+0012_suspension_reasons
+  run        + waiting_on   JSONB NULL
+               [{"reason":"approval","token":"&lt;uuid&gt;"}, ...]
+  approval   + tool_call_id VARCHAR(128) NULL   <i>approval_id 可复现的依据，便于审计</i></code></pre>
+
+  <div class="callout rule">
+    <span class="label">TRUNCATE 而不是回填</span>
+    <p><code>thread_seq</code> 本可用 <code>ROW_NUMBER() OVER (PARTITION BY thread_id ORDER BY ts, run_id, seq)</code> 回填，但那要处理「回填期间有并发写入导致水位不准」。项目未上线，历史轨迹可弃 —— 风险降为零。<code>downgrade</code> 同样 TRUNCATE，两个方向语义对称。</p>
+  </div>
+
+  <div class="callout warn">
+    <span class="label">run.waiting_on 是一次有理由的反悔</span>
+    <p>委派挂起的实现里刻意<b>没有</b>建这张列（靠 marker 字符串 + <code>parent_run_id</code> 查 barrier 就够，见 §12 修正记录 1）。加审批之后 barrier 判据分叉了 —— 子 run 终态 vs approval 被决策 —— 把「在等什么」显式落一列比在消息序列里反复解析更清楚。</p>
+  </div>
+
+  <h3>8.3 会话锁的权威源（已实现）</h3>
+
+  <p>挂起可以持续一小时，而<b>没有进程替它续租 Redis 锁</b>。把 TTL 调到覆盖最长等待也不行：进程被杀时锁要空悬那么久，对应会话一直 409。</p>
+
+<pre><code>权威判据 → <b>DB</b>：这个 thread 上还有没有没跑完的 run（active_run_of，含 suspended）
+Redis 锁 → 降为短 TTL 的抢占互斥，只防「两个请求同一瞬间都查到没有活跃 run」</code></pre>
+
+  <p>这顺带修掉了「进程被杀后锁靠长 TTL 熬」这个既有问题。</p>
+</section>
+
+<!-- ══════════════ 9 ══ -->
+<section id="s9">
+  <h2><span class="num">09</span>契约变更清单</h2>
+
+  <p>全部是 breaking change。项目未上线，所以不做兼容层 —— 留兼容层会让两套语义长期并存，而它们必然漂移。</p>
+
+  <table>
+    <thead><tr><th style="width:36px">#</th><th style="width:180px">契约</th><th>变更</th><th style="width:60px"></th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td><code>TraceEvent.seq</code></td><td>run 内 → <b>thread 内</b>单调。前端去重逻辑不变，但新旧事件混用会错乱</td><td><span class="tag mod">改</span></td></tr>
+      <tr><td>2</td><td><code>TraceEvent.thread_id</code></td><td>新增</td><td><span class="tag new">新</span></td></tr>
+      <tr><td>3</td><td><code>TraceEvent.depth</code></td><td>子图深度 → <b>委派树深度</b>，前端缩进逻辑复活</td><td><span class="tag mod">改</span></td></tr>
+      <tr><td>4</td><td>SSE 端点</td><td><code>/runs/{id}/events</code> → <code>/threads/{id}/events</code></td><td><span class="tag mod">改</span></td></tr>
+      <tr><td>5</td><td>SSE 生命周期</td><td>终态即关 → <b>永不自关</b></td><td><span class="tag mod">改</span></td></tr>
+      <tr><td>6</td><td><code>ApprovalGate</code></td><td><code>request()</code> 阻塞 → <code>check()</code> 查询</td><td><span class="tag mod">改</span></td></tr>
+      <tr><td>7</td><td><code>approval_id</code></td><td>随机 → <code>uuid5(run_id, tool_call_id)</code></td><td><span class="tag mod">改</span></td></tr>
+      <tr><td>8</td><td><code>approval_timeout_s</code></td><td>600 → 86400</td><td><span class="tag mod">改</span></td></tr>
+      <tr><td>9</td><td><code>_forward_approvals</code></td><td>整个删除 —— 由 thread 流消解</td><td><span class="tag del">删</span></td></tr>
+      <tr><td>10</td><td><code>PreparedRun.resume_entry</code></td><td>设计初稿有，<b>不需要</b>（§3.3）</td><td><span class="tag del">删</span></td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ══════════════ 10 ══ -->
+<section id="s10">
+  <h2><span class="num">10</span>落地顺序</h2>
+
+  <p>每一步可独立上线、独立回滚。<b>S5 之后「委派挂起期间审批不可见」这个痛点就已经解决</b>，S6–S8 是把它做正确（可跨重启、可等一天）。</p>
+
+  <div class="step">
+    <h4>S1 · depth 改语义 <span class="tag keep">已完成</span></h4>
+    <p><code>EventFactory</code> 加 <code>base_depth</code>；子 run 的事件不再被丢弃。<b>验收</b>：父流上能看到 depth=1 的事件，前端 Inspector 缩进出现。</p>
+  </div>
+  <div class="step">
+    <h4>S2 · thread 级 seq + stream key + 归档列 <span class="tag keep">已完成</span></h4>
+    <p>服务端双写（同时 XADD 到 run 流和 thread 流），新老端点并存，前端未切。含 <code>maxlen</code> 与 delta 不归档。</p>
+  </div>
+  <div class="step">
+    <h4>S3 · 新 SSE 端点 + since 回放语义 <span class="tag keep">已完成</span></h4>
+    <p><b>验收</b>：<code>scripts/verify-stream.ts</code> 能对真实服务跑断线续传。</p>
+  </div>
+  <div class="step">
+    <h4>S4 · 前端切到 thread 流 <span class="tag keep">已完成</span></h4>
+    <p>删 <code>activeRunId</code> 订阅逻辑、删 <code>isTerminalEvent</code> 停止重连。<b>验收</b>：刷新/切后台/多标签页行为不退化。</p>
+  </div>
+  <div class="step">
+    <h4>S5 · 删 run 流双写、删 _forward_approvals <span class="tag keep">已完成</span></h4>
+    <p><b>验收</b>：审批在委派挂起期间可见。</p>
+  </div>
+  <div class="step">
+    <h4>S6 · Suspension 抽象 <span class="tag keep">已完成</span></h4>
+    <p>委派迁移到 <code>SuspensionMiddleware</code>，行为不变。<b>验收</b>：现有 <code>test_suspend_resume.py</code> 全绿。</p>
+  </div>
+  <div class="step">
+    <h4>S7 · ApprovalGate.check() + 可复现 approval_id <span class="tag keep">已完成</span></h4>
+    <p><b>验收</b>：审批挂起 → 重启 → 决策 → 续跑并执行工具。</p>
+  </div>
+  <div class="step">
+    <h4>S8 · 超时判定移交 reaper + 默认值提到 86400 <span class="tag keep">已完成</span></h4>
+    <p><b>验收</b>：长审批不再静默过期。</p>
+  </div>
+</section>
+
+<!-- ══════════════ 11 ══ -->
+<section id="s11">
+  <h2><span class="num">11</span>风险与未决</h2>
+
+  <table>
+    <thead><tr><th style="width:190px">风险</th><th>说明</th><th>对策</th></tr></thead>
+    <tbody>
+      <tr><td><b>首连回放量</b></td><td>老会话从 seq=0 回放会拖死前端</td><td>S3 必须同时做 <code>since</code>，不能延后</td></tr>
+      <tr><td><b>Redis seq 恢复</b></td><td>水位取错 → 重复 seq → 前端静默丢事件</td><td>Lua 原子化；加断言测试（清空 Redis 后继续发事件，seq 必须接着水位）</td></tr>
+      <tr><td><b>SSE 连接数</b></td><td>一 thread 一连，多标签页放大</td><td>Redis 池设上限 + 耗尽时 503；考虑 BroadcastChannel 让同源标签页共用</td></tr>
+      <tr><td><b>tools 入口的连续挂起</b></td><td>一段里多个待执行工具，部分已批准部分未批准 → 可能连续挂起多次</td><td>gate 逐个 check；一条测试钉住「不会死循环」</td></tr>
+      <tr><td><b>thinking block 跨审批挂起</b></td><td>「删掉 tool_result 让工具重跑」这条路径，provider 是否接受待验证</td><td>端到端验证；thinking 已按原样保留</td></tr>
+      <tr><td><b>resume 与压缩的交互</b></td><td>从 <code>tools</code> 进入时跳过了 <code>before_model</code>，压缩中间件挂在那里</td><td>跳过一次压缩检查可接受（下一轮会补上），但要写明</td></tr>
+    </tbody>
+  </table>
+
+  <h3>11.1 不可避免的代价</h3>
+
+  <p>不是 bug，写明以免以后当 bug 查：</p>
+
+  <ul>
+    <li><b>每次挂起必然一次 prompt cache miss。</b>间隔一小时跨过任何档位的 cache TTL。物理限制，消不掉。</li>
+    <li><b>失败的 run 现在也留痕。</b>模型说过的话、调过的工具会落库。原先抹掉的代价是用户重试时模型不知道上次做到哪，把有副作用的操作又做一遍。</li>
+    <li><b>主 agent 下一轮记得上一轮委派的结论。</b>它以 <code>tool_result</code> 落进父历史（格式要求，不是污染）。原先只活在内存里 —— 那其实是个缺陷。父历史会因此变长。</li>
+  </ul>
+
+  <h3>11.2 与本设计正交、仍未做的</h3>
+
+  <ul>
+    <li><b>ACP 断连续传。</b>Pod 里的 CLI 还在跑，但 <code>session/prompt</code> 的响应绑在那条断掉的 WS 上，拿不回来（<code>bridge/ws.py</code> 明确丢弃断连期间的 update）。本设计保住了父 run，<b>没保住子 run 那一小时</b>。</li>
+    <li><b><code>subagent_max_running=3</code> 的配额模型。</b>挂起让父 run 不再占进程，用户会更愿意派长任务；三个小时级委派占满后，后续委派全被拒到任务结束。且判据要从进程内计数改成 DB 查询（挂起跨进程了）。</li>
+  </ul>
+</section>
+
+<!-- ══════════════ 12 ══ -->
+<section id="s12">
+  <h2><span class="num">12</span>设计过程中的修正</h2>
+
+  <p>按 <a href="../README.md">文档约定</a>：设计先写、实现后跑，跑通之后发现设计错了的地方回来改文档，<b>并且写明原来错在哪</b>。删掉修正只留最终形态，会让人以为这些结论一开始就想明白了 —— 而下一个人会在同样的地方再摔一次。</p>
+
+  <div class="step">
+    <h4>修正 1 · run_delegation 表整张不需要</h4>
+    <p>设计初稿要建一张 <code>run_delegation(run_id, tool_call_id, sub_run_id, task_hash, status, result_content)</code>，兼做 join barrier、幂等键、结论载体，估了 8% 的工作量。实现时发现<b>一张都不需要</b>：</p>
+    <table>
+      <thead><tr><th style="width:170px">需求</th><th>初稿</th><th>实际用了什么</th></tr></thead>
+      <tbody>
+        <tr><td>marker ↔ 子 run 关联</td><td>表里存映射</td><td>marker 字符串自带 token，而它所在的 ToolMessage 本来就带正确的 tool_call_id</td></tr>
+        <tr><td>join barrier</td><td>表里数 pending</td><td><code>WHERE parent_run_id=? AND status NOT IN (终态)</code> —— <code>ix_run_parent</code> 早就在</td></tr>
+        <tr><td>结论载体</td><td><code>result_content</code></td><td>子 run 自己的会话（<code>last_assistant_content</code>），续跑时现取</td></tr>
+        <tr><td>幂等</td><td><code>task_hash</code></td><td>挂起方案不重放，用不上</td></tr>
+      </tbody>
+    </table>
+    <p>连带好处是<b>没有第二个事实源</b>：结论的权威始终在子会话里，子 run 被 <code>fresh=true</code> 重跑时不会出现两份分叉的结论。</p>
+    <p><i>（审批加入后 <code>run.waiting_on</code> 一列又回来了 —— 但那是一列，不是一张表，且理由不同：barrier 判据分叉了。见 §8.2。）</i></p>
+  </div>
+
+  <div class="step">
+    <h4>修正 2 · jump_to 不能从图输入传进去</h4>
+    <p>初稿写「续跑时 <code>_graph_input</code> 带 <code>{"jump_to": "tools"}</code>，或用 <code>Command(goto=)</code>」。<b>两条都不成立</b>：<code>InputAgentState</code> 只有 <code>messages</code>，<code>jump_to</code> 标着 <code>PrivateStateAttr = OmitFromSchema(input=True, output=True)</code>，传进去被直接丢弃。</p>
+    <p>正确做法是 middleware 在 <code>before_model</code> 里从 state 自己推断（§3.2 有实验输出）。<b>这个修正让设计变简单了</b>：<code>PreparedRun.resume_entry</code> 整个字段不需要，server 侧什么都不用传。</p>
+  </div>
+
+  <div class="step">
+    <h4>修正 3 · 超时检查必须在轮询之前</h4>
+    <p><code>_await_result</code> 初版是「<code>sleep(interval)</code> → 查子 run 终态 → 查等待窗口是否超时」。于是 <code>subagent_inline_wait_s=0</code>（「不等，直接挂起」）实际上还是会等一个轮询间隔 0.5s，而子 run 在那 0.5s 里往往已经跑完 —— <b>配置为 0 却走了同步路径</b>，挂起从未触发。</p>
+    <p>测试先撞上了这个：断言 <code>run.suspended</code> 事件存在，拿到的却是一条完整的成功事件流。把窗口检查移到 <code>sleep</code> 之前，「等多久」才真正由配置说了算。</p>
+  </div>
+
+  <div class="step">
+    <h4>修正 4 · 「never 返回的假模型」不存在</h4>
+    <p>测试里想构造「子智能体永不返回」来稳定停在 suspended，用的是 <code>TurnModel(scripts=[[AIMessageChunk(content="")]])</code>。但<b>空内容也是一次正常完成</b> —— 子 run 照样终态、照样来唤醒父 run，断言拿到的是 <code>'queued'</code>。</p>
+    <p>改为直接<b>构造</b>状态（跑完一轮再把几个列按回挂起中）。「挂起中」本来就只是几个列的值；直接摆出来，测的反而是这些测试真正关心的东西（取消怎么收尾、扫描捞不捞、孤儿回收碰不碰它）。</p>
+  </div>
+
+  <div class="step">
+    <h4>修正 5 · 迁移里的约束真名</h4>
+    <p><code>op.drop_constraint("status_enum", "run", type_="check")</code> 报「约束不存在」。naming_convention 会加一层 <code>ck_&lt;table&gt;_</code> 前缀，而 <code>0001</code> 建表时传进去的名字本身已经带着一层 —— 库里实际是 <code>ck_run_ck_run_status_enum</code>。改用 raw SQL 写死真名，不让 convention 再插手。</p>
+  </div>
+  <div class="step">
+    <h4>修正 6 · 漏了唤醒的一整条来源</h4>
+    <p>初稿把「谁来唤醒」只想了一半：委派是子 run 收尾时唤醒，而<b>审批的决策来自
+      HTTP</b> —— 那条路径压根没设计。少了它，用户点完「允许」要干等周期扫描
+      （默认 60s），看着像没生效。</p>
+    <p>修法是把 <code>resume_if_ready</code> 提升进 <code>RunExecutor</code> 协议，
+      端点在 <code>submit_decision</code> 之后调它。协议的 docstring 现在明写
+      「唤醒有两个来源，都在执行器之外」。</p>
+  </div>
+
+  <div class="step">
+    <h4>修正 7 · awaiting_approval 在错误的词表里</h4>
+    <p>它原先在 <code>_RUNNING</code>（「有进程在跑」）里 —— 那时是对的：
+      <code>awaiting_approval</code> 意味着一个 asyncio.Task 正阻塞在 BLPOP 上，
+      进程死了它确实是孤儿。</p>
+    <p>改成挂起之后它的含义变了：「挂起中，等人点头」，没有进程是<b>正常的</b>。
+      留在 <code>_RUNNING</code> 里意味着**每次部署都把所有等待中的审批判死**。
+      词表因此拆成三个：<code>_RUNNING</code>（有进程）/ <code>_SUSPENDED</code>
+      （挂起，含 awaiting_approval）/ <code>_UNFINISHED</code>（两者之和）。</p>
+    <p>连带踩到的：<code>resume_if_ready</code> 开头写的是
+      <code>status != "suspended"</code> —— 等审批的 run 落的是
+      <code>awaiting_approval</code>，于是<b>审批永远唤不醒</b>。三条测试同时红才
+      暴露出来。这类「状态值多了一个，而某处还在用 <code>==</code> 比较」的 bug
+      要靠把词表导出成常量（<code>SUSPENDED_STATUSES</code>）来防。</p>
+  </div>
+
+  <div class="step">
+    <h4>修正 8 · 挂起检测不能依赖调用方记得传 transcript</h4>
+    <p><code>_suspensions</code> 只能从 transcript 看（runner 拿不到图的最终
+      state）。而 transcript 原先是可选参数 —— 不传时检测<b>静默失效</b>：图确实
+      因为哨兵跳出了，但 runner 当成正常结束，于是 run 落成 succeeded 而哨兵留在
+      历史里，下一轮模型读到一句 <code>__ATLAS_SUSPENDED__:...</code>。</p>
+    <p>改成 runner 内部无条件构造一份（调用方传了就共享）。让它无条件生效比依赖
+      每个调用方记得传更可靠。</p>
+  </div>
+
+  <div class="step">
+    <h4>修正 9 · 两处死机制要删掉，而不是留着</h4>
+    <p>Redis 的决策队列（<code>run:approval:{id}</code>）在审批改成挂起后没有消费者
+      了，连带 <code>submit_decision</code> 的 <code>redis</code> 参数和那条论证
+      「用 BLPOP 而非 pub/sub」的测试一起删除。同理 gate 的 <code>timeout_s</code>
+      在超时判定移交 reaper 后是个死参数。</p>
+    <p>留着的代价不是那点开销，是<b>误导</b>：下一个人看到 <code>rpush</code> 会
+      以为有等待方。这与 §06 删 <code>_forward_approvals</code> 是同一条理由。</p>
+  </div>
+
+  <div class="step">
+    <h4>修正 10 · 「悬空的 tool_call」这条判据与 kernel 直接冲突</h4>
+    <p>初稿的审批续跑靠「把哨兵那条 ToolMessage <b>删掉</b>，让 tool_use 悬空」
+      来触发 <code>jump_to "tools"</code>。§07 还专门讨论过它与
+      <code>to_storage._seal_dangling_tool_calls</code>（我们自己那个补齐逻辑）
+      的交汇 —— 但<b>漏掉了 kernel 里早就存在的另一个</b>：</p>
+    <p><code>PatchToolCallsMiddleware.before_agent</code> 在<b>图入口</b>给一切悬空的
+      tool_call 补上一句「was cancelled - another message came in before it could be
+      completed.」。它在核心栈里、排在用户 middleware 之前，顺序无法调整。</p>
+    <p>于是续跑段的实际行为是：删出来的悬空被 patch 当场补掉 →
+      <code>SuspensionMiddleware</code> 看到的序列配对完整 → 不跳 tools → 流向模型 →
+      模型看到「工具被取消了」就<b>重新发一次调用</b> → 再挂起一次。
+      <b>死循环</b>，表现是「点了允许但 run 一动不动」，而每转一圈烧一次模型调用。</p>
+    <p><b>修法</b>：续跑时把 approval 哨兵<b>换成</b>一条「已放行」占位
+      （<code>__ATLAS_RELEASED__:&lt;approval_id&gt;</code>），而不是删掉 —— 交给图的
+      序列因此始终<b>配对完整</b>，patch 不插手。制造悬空的时机推到
+      <code>before_model</code>：中间件在那里返回
+      <code>{"messages": [RemoveMessage(id)], "jump_to": "tools"}</code>，一次同时
+      完成「删占位」和「去执行」，而 patch 已经跑完，没有第二次机会。</p>
+    <div class="callout danger">
+      <span class="label">这个 bug 单测抓不到</span>
+      <p>单测直接调 <code>before_model</code> 或用裸 <code>create_agent</code> 构图 ——
+        两种都不含 <code>PatchToolCallsMiddleware</code>（它是 <code>create_deep_agent</code>
+        装的）。12 条中间件测试、7 条审批端到端测试全绿，而真机第一次跑就撞上。</p>
+      <p>教训是具体的：<b>依赖「某个中间状态」作为信号时，要先确认没有别人也在管那个状态</b>。
+        显式标记（一个只有我们认识的占位）比隐式状态（悬空）稳健得多。</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <h4>修正 11 · <code>awaiting_approval</code> 在两条路径上不是一回事</h4>
+    <p>§06 把审批统一成挂起，于是 <code>awaiting_approval</code> 被划进
+      <code>_SUSPENDED</code>，恢复扫描照着这个词表找可续跑的 run。<b>对 native 成立，
+      对 acp 不成立</b>：</p>
+    <table>
+      <thead><tr><th style="width:90px">路径</th><th>审批期间的真实状态</th></tr></thead>
+      <tbody>
+        <tr><td>native</td><td>图已跳出、进程已结束 —— <b>真挂起</b>，<code>waiting_on</code> 有值</td></tr>
+        <tr><td>acp</td><td>CLI 在 Pod 里发起的同步 RPC，<b>run 还在跑</b> —— bridge 正等着响应，只能在线等（见 §06 末），<code>waiting_on</code> <b>是空的</b></td></tr>
+      </tbody>
+    </table>
+    <p>扫描不区分的后果：一个<b>正在跑</b>的 acp 子 run 被当成可续跑并 <code>submit</code> 第二次，
+      第二个 <code>AcpChannel</code> 连上同一个 Pod，bridge 按 <code>CLOSE_SUPERSEDED(4409)</code>
+      关掉第一个 —— 整轮 <code>runtime_crashed</code>。症状是「审批批准了，子 run 却崩了」，
+      而崩的原因在另一个组件的关闭码里。</p>
+    <p><b>修法</b>：<code>suspended_runs()</code> 加一条 <code>waiting_on IS NOT NULL</code>，
+      <code>_waits_are_settled()</code> 里对「状态是 awaiting_approval 但没有 waits」直接返回
+      <code>False</code>。这一条<b>不是优化，是正确性</b> —— 注释里写死了这句话，
+      否则下一个人会把它当成多余的过滤条件删掉。</p>
+  </div>
+
+  <div class="step">
+    <h4>修正 12 · 一列 <code>varchar(128)</code> 伪装成「子智能体不说话」</h4>
+    <p>真机上 native → acp 的委派表现为：子智能体<b>干完活但不出声</b>，父模型连试两次，
+      最后向用户报告「cli-hand 的输出通道可能有问题」。父模型的推理没有错，
+      错的是平台喂给它的每一层信息。</p>
+    <p>根因是一行 schema：<code>Approval.tool_name</code> 是 <code>String(128)</code>。
+      native 往里写的是真工具名（<code>write_todos</code>，十几个字符），acp 写的是 CLI 给的
+      <code>toolCall.title</code> —— 而 Terminal 工具的 title <b>就是整条命令</b>。
+      一条带几个 <code>&amp;&amp;</code> 的验证命令轻松过 128，
+      <code>StringDataRightTruncationError</code>。</p>
+    <p>然后它<b>连过三道，每一道都把信息磨掉一层</b>：</p>
+    <table>
+      <thead><tr><th style="width:150px">环节</th><th>做了什么</th><th>信息损失</th></tr></thead>
+      <tbody>
+        <tr><td><code>gate.check()</code></td><td>捕获一切异常，按<b>不放行</b>处理（§12.2 的红线，方向正确）</td><td>「系统坏了」被压成「用户拒绝了」</td></tr>
+        <tr><td>CLI</td><td>收到 <code>reject_once</code> 就停手，不重试不解释</td><td>本轮零文本产出</td></tr>
+        <tr><td><code>translate_stop</code></td><td><code>stopReason=end_turn</code> → <code>run.finished</code></td><td>子 run 报 <b>succeeded</b>，而它什么都没做成</td></tr>
+      </tbody>
+    </table>
+    <p>再加上 acp 的 <code>tool_call_update</code> 只带<b>变化的</b>字段（title 在 start 时给过就不重复，
+      被拒的工具也没有 output），而前端 <code>upsertTool</code> 是浅合并 —— 空串把 start 时记下的
+      工具名原地抹掉。用户在界面上看到的最终形态是
+      <code>{"name": "", "result": "", "status": "error"}</code>：
+      <b>一个没有名字、没有原因的失败工具行</b>。根因只在 Pod 日志里。</p>
+    <p><b>四处一起改</b>，缺一条就还是查不出来：</p>
+    <table>
+      <thead><tr><th style="width:190px">改动</th><th>为什么在这一层</th></tr></thead>
+      <tbody>
+        <tr><td><code>ApprovalRepository.create</code> 截断 tool_name</td><td>约束属于存储层。只改 acp 的话，下一个长 tool_name 的来源会再撞一次</td></tr>
+        <tr><td><code>ApprovalState</code> 加 <code>failed</code></td><td>「系统没工作」与「系统工作了并否决」处理相同、含义相反。压成一个值，故障在界面上完全隐形</td></tr>
+        <tr><td>acp 自己发一条带原因的 <code>tool.failed</code></td><td>原因只在平台手里 —— CLI 眼里就是「用户没批」</td></tr>
+        <tr><td>「有工具失败 + 零文本产出」→ <code>run.failed</code></td><td>两个条件缺一不可：只看前者会误伤 CLI 的正常试错，只看后者会误伤真的没什么可说的一轮</td></tr>
+      </tbody>
+    </table>
+    <div class="callout danger">
+      <span class="label">失败方向选对了，可观测性仍然可以归零</span>
+      <p><code>except Exception → 不放行</code> 这条红线本身是对的，这次也确实挡住了工具。
+        但它<b>沉默地</b>挡住了 —— 而沉默的安全措施和没有安全措施，在排查时长得一模一样。
+        安全的失败方向不能替代<b>说清楚为什么失败</b>。</p>
+      <p>连带发现：<code>test_acp_end_to_end.py</code> 已经红了一段时间，
+        因为 <code>websockets</code> 默认要问 <code>urllib.request.getproxies()</code>，
+        而它在 macOS 上<b>不只看环境变量</b>、还读系统网络设置 —— 开发机配了全局 SOCKS 代理之后，
+        连 <code>127.0.0.1</code> 也被拐进代理，报一句和 WebSocket 毫无关系的
+        「python-socks is required」，而 <code>env | grep -i proxy</code> 是空的。
+        <code>connect(..., proxy=None)</code> 一行堵住。
+        测试红着没人管，正是上面那条「静默故障」链能活这么久的原因。</p>
+    </div>
+  </div>
+
+</section>
+
+</main>
+</div>
+</body>
+</html>

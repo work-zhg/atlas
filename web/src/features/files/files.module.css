@@ -1,0 +1,156 @@
+/* 文件预览页（新标签打开，doc/detail/file-preview.html §05） */
+
+.page {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  height: 48px;
+  padding: 0 var(--s-4);
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-1);
+  flex: none;
+}
+
+.path {
+  font-family: var(--mono);
+  font-size: 13px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dir {
+  color: var(--fg-3);
+}
+
+.meta {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--fg-3);
+  white-space: nowrap;
+}
+
+.actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex: none;
+}
+
+.body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  position: relative;
+}
+
+.banner {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: 6px var(--s-4);
+  font-size: 12.5px;
+  background: var(--warning-soft);
+  color: var(--warning);
+  border-bottom: 1px solid var(--line);
+  flex: none;
+}
+
+/* HTML：整页 iframe。白底 —— 大多数原型假设浏览器默认背景 */
+.frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #fff;
+}
+
+/* 文本：行号与正文是两个 <pre>，一万行也只有两个节点 */
+.code {
+  display: flex;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  min-height: 100%;
+  background: var(--bg-code);
+}
+
+.gutter,
+.lines {
+  margin: 0;
+  padding: var(--s-3) var(--s-3);
+}
+
+.gutter {
+  text-align: right;
+  color: var(--fg-3);
+  user-select: none;
+  border-right: 1px solid var(--line);
+  flex: none;
+}
+
+.lines {
+  flex: 1;
+  min-width: 0;
+  white-space: pre;
+  color: var(--fg);
+}
+
+.lines.wrap {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.markdown {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: var(--s-6) var(--s-6) var(--s-7);
+}
+
+/* 图片：棋盘格背景，看得出透明区域 */
+.imageStage {
+  min-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--s-5);
+  background-color: #1c2230;
+  background-image:
+    linear-gradient(45deg, #252c3b 25%, transparent 25%),
+    linear-gradient(-45deg, #252c3b 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #252c3b 75%),
+    linear-gradient(-45deg, transparent 75%, #252c3b 75%);
+  background-size: 20px 20px;
+  background-position:
+    0 0,
+    0 10px,
+    10px -10px,
+    -10px 0;
+}
+
+.image {
+  max-width: 100%;
+  cursor: zoom-in;
+}
+
+.image.actual {
+  max-width: none;
+  cursor: zoom-out;
+}
+
+.center {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  padding: var(--s-6);
+}

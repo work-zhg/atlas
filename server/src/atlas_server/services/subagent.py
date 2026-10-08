@@ -21,7 +21,7 @@ import asyncio
 import logging
 from uuid import UUID, uuid4
 
-from langgraph.config import get_stream_writer
+from atlas_engine.contracts import delegation_pending
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from atlas_server.domain.spec import AgentSpec, SubAgentSpec
@@ -30,14 +30,13 @@ from atlas_server.domain.translator import extract_text
 from ..config import Settings
 from ..db.models import Thread
 from ..executor.base import RunExecutor
-from ..repositories.approval import ApprovalRepository
 from ..repositories.run import RunRepository
 from ..repositories.thread import ThreadRepository
 from ..stream.relay import EventRelay
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["DelegationRejected", "SubagentService"]
+__all__ = ["DelegationRejected", "SubagentService", "resolve_delegation"]
 
 _TERMINAL = {"succeeded", "failed", "cancelled", "interrupted"}
 
@@ -159,7 +158,7 @@ class SubagentService:
         # 子会话也是 thread，会话串行锁原样适用 —— 同名委派因此必然串行。
         # 上面的 _inflight 只是把这个必然的冲突提前到调用时暴露。
         run_id = uuid4()
-        ttl = max(self._spec.limits.timeout_s, self._settings.approval_timeout_s) + 120
+        ttl = max(self._spec.limits.timeout_s, self._settings.thread_lock_ttl_s) + 120
         if not await self._relay.acquire_thread_lock(thread_id, owner=run_id, ttl_s=ttl):
             msg = (
                 f"{sub.name} 的会话正被另一个 run 占用。它持有会话，同名委派必须串行 —— "
@@ -246,16 +245,38 @@ class SubagentService:
     # ------------------------------------------------------------------ 等终态
 
     async def _await_result(self, name: str, thread_id: UUID, run_id: UUID) -> str:
-        """轮询子 run 到终态，取子会话最后一条 assistant 消息。
+        """当场等一会儿；等不到就交出哨兵，让这一段挂起。
+
+        ★ 为什么不一直等。一次委派可以跑一小时，而「等」发生在父 run 的
+          asyncio.Task 里 —— 那一小时里部署一次、OOM 一次，父 run 就没了，
+          连带丢掉子 run 已经干完的活。挂起把等待交给数据库：父 run 落成
+          suspended，子 run 跑完再叫醒它。
+
+        ★ 那为什么还留一段当场等。绝大多数委派是秒级的，当场返回真结论
+          意味着它们**一个字都不变**地走老路径 —— 不落挂起、不分段、不多
+          一次模型调用。改造的风险面因此收窄到「真的很慢的那些委派」。
+          分界线是 subagent_inline_wait_s。
 
         ★ 父被取消时级联取消子 run，而不是丢下它自己跑完 —— 子 run 吃的是
           同一批配额（acp 的话还占着一个 Pod）。
         """
         interval = self._settings.subagent_poll_interval_s
-        deadline = asyncio.get_running_loop().time() + self._spec.limits.timeout_s
-        forwarded: set[UUID] = set()
-
+        # 父 run 没有时间上限，当场等多久只由 subagent_inline_wait_s 决定
+        deadline = asyncio.get_running_loop().time() + self._settings.subagent_inline_wait_s
         while True:
+            # ★ 先看窗口，再睡。顺序反过来的话 `inline_wait_s=0`（「不等，直接
+            #   挂起」）实际上还是会等一个轮询间隔 —— 而子 run 在那 0.5s 里
+            #   往往已经跑完了，于是配置为 0 却走了同步路径。
+            #   这个顺序让「等多久」真正由配置说了算。
+            if asyncio.get_running_loop().time() > deadline:
+                # ★ 不取消子 run —— 它没有出问题，只是慢。返回哨兵，本段到此
+                #   为止；`SubAgentMiddleware.before_model` 认得它并让图跳出，
+                #   执行器随后把 run 落成 suspended。
+                logger.info(
+                    "委派 %s（子 run %s）超过当场等待窗口，转为挂起", name, run_id
+                )
+                return delegation_pending(str(run_id))
+
             await asyncio.sleep(interval)
 
             if await self._relay.is_cancelled(self._parent_run_id):
@@ -266,68 +287,61 @@ class SubagentService:
                 run = await RunRepository(session).get(run_id)
                 if run is None:
                     return f"{name} 的子 run 记录丢失，委派未能完成。"
-                # ★ 顺手把子 run 的待审批冒泡到**父**的事件流。子 run 有自己
-                #   的流，而前端只订阅父 run 那一条 —— 不冒泡的话弹窗永远不
-                #   出现，子智能体卡在等人点头，直到 bridge 的 adapter 超时
-                #   （实测两次委派各卡满 300s，审批最终 expired）。
-                await self._forward_approvals(session, name, run_id, forwarded)
+                # ★ 这里曾经要把子 run 的待审批「冒泡」到父流上（前端只订阅
+                #   父 run 那一条，不冒泡弹窗就永远不出现）。订阅单位换成
+                #   thread 之后整段删掉了 —— 子 run 的 approval.required 本来
+                #   就在同一条会话流上，带着 depth=1 和自己的 run_id 直接到
+                #   前端（doc/detail/suspension.html §06）。
+                #
+                #   冒泡那条路径在委派挂起时是**失效**的：本方法返回哨兵之后
+                #   循环就结束了，再没有人去转发；而且图已经跳出，
+                #   get_stream_writer() 也拿不到出口。架构消解掉的正是它。
                 if run.status in _TERMINAL:
                     return await self._final_text(session, name, thread_id, run)
-
-            if asyncio.get_running_loop().time() > deadline:
-                await self._relay.request_cancel(run_id)
-                return (
-                    f"{name} 超过 {self._spec.limits.timeout_s}s 仍未完成，已请求取消。"
-                    f"任务可能过大 —— 拆成更小的一步再派。"
-                )
-
-    async def _forward_approvals(
-        self, session: AsyncSession, name: str, run_id: UUID, forwarded: set[UUID]
-    ) -> None:
-        """把子 run 的待审批转成父流上的 approval.required。
-
-        ★ 走 custom stream 通道，与 engine 的 ApprovalMiddleware 同一条路
-          （runner 的 _CUSTOM_EVENTS 负责翻译）—— 本方法跑在 task 工具里，
-          也就是在图内部，够不到 runner 的事件工厂。
-
-        ★ data 里带 **run_id**：决策要 POST 到**子** run 的端点，而父流上的
-          其它审批都属于父 run。前端据此选择提交目标，缺省才用当前流的 run。
-
-        ★ 只发不撤：审批被决定或过期之后，父流上那条事件仍然在（事件流只增
-          不改）。前端本来就按 approval_id 维护「已决策」集合来关弹窗。
-        """
-        pending = await ApprovalRepository(session).list_pending(run_id)
-        fresh = [a for a in pending if a.id not in forwarded]
-        if not fresh:
-            return
-        try:
-            writer = get_stream_writer()
-        except Exception:  # 不在图上下文里就没有 writer
-            logger.warning("拿不到 stream writer，子智能体的审批无法冒泡到父流")
-            return
-        for approval in fresh:
-            forwarded.add(approval.id)
-            writer(
-                {
-                    "kind": "approval.required",
-                    "approval_id": str(approval.id),
-                    "tool_name": approval.tool_name,
-                    "args": approval.args,
-                    "reason": f"子智能体 {name} 请求执行该工具",
-                    "run_id": str(run_id),
-                }
-            )
 
     async def _final_text(
         self, session: AsyncSession, name: str, thread_id: UUID, run: object
     ) -> str:
-        status = run.status  # type: ignore[attr-defined]
-        if status != "succeeded":
-            detail = (run.error_message or "").strip()  # type: ignore[attr-defined]
-            # ★ 失败照实说，不返回一段像结论的话。返回空串或含糊措辞的话，
-            #   主 agent 会把「子智能体没说什么」当成「没有发现」继续往下走。
-            return f"{name} 的委派以 {status} 结束。{detail}".strip()
+        return await _result_text(session, name, thread_id, run)
 
-        content = await RunRepository(session).last_assistant_content(thread_id)
-        text = extract_text(content).strip() if content else ""
-        return text or f"{name} 完成了委派但没有产出文本结论。"
+
+async def _result_text(
+    session: AsyncSession, name: str, thread_id: UUID, run: object
+) -> str:
+    """一次委派的最终文本。当场等到的和挂起后续跑的走**同一个函数**。
+
+    ★ 两条路必须同源。分开写的话，「子智能体失败了怎么措辞」这种话术会在
+      两处各演化一遍 —— 而其中一处（续跑）用户很少遇到，于是它的退化不会
+      被发现，直到某天一次失败的长委派回给模型一句空话，模型把它当成
+      「没有发现」继续往下走。
+    """
+    status = run.status  # type: ignore[attr-defined]
+    if status != "succeeded":
+        detail = (run.error_message or "").strip()  # type: ignore[attr-defined]
+        # ★ 失败照实说，不返回一段像结论的话。返回空串或含糊措辞的话，
+        #   主 agent 会把「子智能体没说什么」当成「没有发现」继续往下走。
+        return f"{name} 的委派以 {status} 结束。{detail}".strip()
+
+    content = await RunRepository(session).last_assistant_content(thread_id)
+    text = extract_text(content).strip() if content else ""
+    return text or f"{name} 完成了委派但没有产出文本结论。"
+
+
+async def resolve_delegation(session: AsyncSession, sub_run_id: UUID) -> str:
+    """按子 run 的 id 取它的结论 —— 续跑时用来把哨兵换成真话。
+
+    ★ 兜底两种不该发生但必须有交代的情形：记录丢了、以及子 run 居然还没
+      跑完。后者说明 join barrier 漏了一个口子；返回一句实话比让模型看到
+      哨兵强得多 —— 哨兵会被它当成子智能体说的话。
+    """
+    runs = RunRepository(session)
+    run = await runs.get(sub_run_id)
+    if run is None:
+        return "子智能体的 run 记录丢失，委派未能完成。"
+
+    thread = await ThreadRepository(session).by_id(run.thread_id)
+    name = (thread.subagent_name if thread is not None else None) or "子智能体"
+
+    if run.status not in _TERMINAL:
+        return f"{name} 的委派尚未结束（状态 {run.status}），本轮拿不到它的结论。"
+    return await _result_text(session, name, run.thread_id, run)

@@ -16,11 +16,12 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from atlas_server.domain.spec import ModelSpec
-from atlas_server.domain.translator import extract_text
 from langchain_core.messages import BaseMessage, HumanMessage
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from atlas_server.domain.spec import ModelSpec
+from atlas_server.domain.translator import extract_text
 
 from ..config import Settings
 from ..db.models import Thread

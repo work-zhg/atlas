@@ -7,12 +7,13 @@ agent_version 并切换 current_version_id —— 这样每条历史 run 都能�
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.models import Agent, AgentVersion
+from ..domain.mcp_naming import parse_tool_id
 from ..errors import BuiltinAgentProtected, NotFound, SlugTaken
 from ..repositories.agent import AgentRepository
 from ..schemas.agent import (
@@ -25,11 +26,18 @@ from ..schemas.agent import (
     AgentVersionListOut,
     AgentVersionOut,
 )
+from .spec_refs import resolve_spec_refs
+
+if TYPE_CHECKING:
+    import redis.asyncio as aioredis
+
+    from ..config import Settings
 
 
 def _summarize(agent: Agent, version: AgentVersion) -> AgentOut:
     spec: dict[str, Any] = version.spec
     model = (spec.get("model") or {}).get("model", "")
+    tools = spec.get("tool_names") or []
     return AgentOut(
         id=agent.id,
         slug=agent.slug,
@@ -42,15 +50,37 @@ def _summarize(agent: Agent, version: AgentVersion) -> AgentOut:
         model=model,
         tool_count=len(spec.get("tool_names") or []),
         subagent_count=len(spec.get("subagents") or []),
+        kind=spec.get("kind") or "native",
+        builtin_tool_count=sum(1 for t in tools if not str(t).startswith("mcp:")),
+        skill_count=len(spec.get("skills") or []),
+        mcp_servers=sorted({p[0] for t in tools if (p := parse_tool_id(str(t))) is not None}),
+        subagents=[
+            {
+                "name": sub.get("name", ""),
+                "kind": sub.get("kind") or "native",
+                "permission_mode": (sub.get("cli") or {}).get("permission_mode"),
+            }
+            for sub in spec.get("subagents") or []
+            if isinstance(sub, dict)
+        ],
         created_at=agent.created_at,
         updated_at=agent.updated_at,
     )
 
 
 class AgentService:
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        settings: Settings | None = None,
+        redis: aioredis.Redis | None = None,
+    ) -> None:
         self._session = session
         self._repo = AgentRepository(session)
+        #: 保存时解析外部引用要用（技能目录、MCP 目录）。None = 不解析 ——
+        #: 只给不经 API 的内部调用（迁移种子等）留的口子。
+        self._settings = settings
+        self._redis = redis
 
     # ------------------------------------------------------------------ 读
 
@@ -80,16 +110,17 @@ class AgentService:
         if await self._repo.get_by_slug(payload.slug):
             raise SlugTaken(f"标识 {payload.slug!r} 已被占用", slug=payload.slug)
 
+        spec = await self._resolve(payload.spec, previous=None)
         # ★ 在这里就跑 engine 的校验：opus-5 传 temperature 之类的错误
         #   在点保存时被拒，而不是等到某次 run（§3 D3）
-        payload.spec.to_engine(slug=payload.slug, name=payload.name).validate()
+        spec.to_engine(slug=payload.slug, name=payload.name).validate()
 
         agent, version = await self._repo.create(
             slug=payload.slug,
             name=payload.name,
             description=payload.description,
             avatar_key=payload.avatar_key,
-            spec=payload.spec.model_dump(mode="json"),
+            spec=spec.model_dump(mode="json"),
             created_by=user_id,
         )
         return AgentDetailOut(**_summarize(agent, version).model_dump(), spec=version.spec)
@@ -108,9 +139,12 @@ class AgentService:
 
         version = current
         if payload.spec is not None:
-            payload.spec.to_engine(slug=agent.slug, name=agent.name).validate()
+            spec = await self._resolve(
+                payload.spec, previous=AgentSpecIn.model_validate(current.spec)
+            )
+            spec.to_engine(slug=agent.slug, name=agent.name).validate()
             version = await self._repo.add_version(
-                agent=agent, spec=payload.spec.model_dump(mode="json"), created_by=user_id
+                agent=agent, spec=spec.model_dump(mode="json"), created_by=user_id
             )
         else:
             # 只改了元信息也要刷新 updated_at，列表页按它排序
@@ -136,6 +170,14 @@ class AgentService:
         return {"archived": True, "archived_threads": archived}
 
     # ------------------------------------------------------------------ 内部
+
+    async def _resolve(self, spec: AgentSpecIn, *, previous: AgentSpecIn | None) -> AgentSpecIn:
+        """钉死技能版本、记录 MCP 工具指纹（技能 / MCP 设计 §11）。"""
+        if self._settings is None:
+            return spec
+        return await resolve_spec_refs(
+            spec, settings=self._settings, redis=self._redis, previous=previous
+        )
 
     async def _require(self, agent_id: UUID) -> tuple[Agent, AgentVersion]:
         found = await self._repo.get(agent_id)

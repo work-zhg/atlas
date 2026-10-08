@@ -8,6 +8,7 @@
     "start": "next start -p 3000",
     "typecheck": "tsc --noEmit",
     "gen:api": "openapi-typescript http://127.0.0.1:8000/openapi.json -o src/api/schema.d.ts",
+    "gen:api:config": "openapi-typescript http://127.0.0.1:8020/openapi.json -o src/api/config-schema.d.ts",
     "verify:stream": "tsx scripts/verify-stream.ts",
     "check:browser-apis": "tsx scripts/check-browser-apis.ts",
     "check": "pnpm typecheck && pnpm check:browser-apis"

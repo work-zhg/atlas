@@ -3,7 +3,7 @@
 server **不自己碰 K8s**：模板、配额、凭证、回收都在 cluster 服务里
 （它是全仓唯一持有 K8s 写权限的进程）。这里只是一个 HTTP 客户端。
 
-★ 步骤 4 的 LocalPods 与它是同一个协议的两个实现，AcpRuntime 一行不改 ——
+★ 测试里的假实现与它是同一个协议的两个实现，HostRuntime 一行不改 ——
   接缝（acp/pods.py::PodProvider）当初留对了。
 """
 
@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 import httpx
 from atlas_cluster.schemas import EnsurePodRequest, PodInfo, ReapRequest
 
-from ..acp.pods import PodEndpoint
+from .pods import PodEndpoint
 
 if TYPE_CHECKING:
     from ..config import Settings
@@ -30,7 +30,7 @@ __all__ = ["ClusterPods", "ClusterUnavailable"]
 class ClusterUnavailable(RuntimeError):
     """cluster 服务不可达或拒绝了请求。
 
-    ★ 冒泡成 run.failed（AcpRuntime 会翻成 pod_unavailable）而不是静默
+    ★ 冒泡成 run.failed（HostRuntime 会翻成 pod_unavailable）而不是静默
       重试：Pod 起不来的原因往往是配额或镜像，重试一百次也一样，
       而用户看到「转圈」比看到「配额满了，先关掉几个会话」糟得多。
     """

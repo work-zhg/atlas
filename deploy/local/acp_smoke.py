@@ -2,8 +2,8 @@
 
     POST /v1/agents (kind=acp) → POST /v1/threads → POST /threads/{id}/runs
       → server 向 cluster ensure Pod → Pod 起来（rclone 挂 MinIO + 真 CLI）
-      → server 连 ws://<podIP>:8900 → session/prompt → update 流
-      → TraceEvent → GET /v1/runs/{id}/events (SSE)
+      → server 连 ws://<podIP>:8900/host（上游协议）→ turn.start → agent.update 流
+      → TraceEvent → GET /v1/threads/{id}/events (SSE)
 
 用法：
     python deploy/local/acp_smoke.py "帮我在工作区写一个 hello.md"
@@ -22,10 +22,10 @@ import urllib.request
 
 BASE = "http://127.0.0.1:8000"
 SLUG = "acp-smoke"
-# ★ 必须显式给：模板把 cli.adapter 原样写进 ATLAS_ADAPTER_CMD，空字符串会
-#   覆盖掉镜像里的默认值，bridge 随即以 exit 2 退出（"缺少必需的环境变量"）。
-ADAPTER = "node /opt/acp-cli/lib/node_modules/@zed-industries/claude-code-acp/dist/index.js"
-IMAGE = "atlas-acp-bridge:0.1.0"
+# ★ 必须显式给：模板把 cli.adapter 原样写进 ATLAS_BRIDGE_AGENT_CMD，空字符串会
+#   覆盖掉镜像里的默认值，bridge 启动时的配置校验随即失败退出（agent_cmd 不能为空）。
+ADAPTER = "node /opt/acp-cli/bin/claude-acp"
+IMAGE = "atlas-acp-bridge:0.3.0"
 
 
 def call(method: str, path: str, body: dict | None = None) -> dict:
@@ -90,11 +90,11 @@ def auto_approve(run_id: str, stop: "threading.Event") -> None:
             call("POST", f"/v1/runs/{run_id}/approvals/{item['id']}", {"decision": "approved"})
 
 
-def stream_events(run_id: str, timeout_s: float = 600.0) -> None:
+def stream_events(thread_id: str, run_id: str, timeout_s: float = 600.0) -> None:
     """读 SSE 到 run 终态。打的是**事件类型与关键字段**，不是原始帧 ——
     验收标准是「事件与 native 同形」，形状比内容重要。"""
     req = urllib.request.Request(
-        f"{BASE}/v1/runs/{run_id}/events", headers={"Accept": "text/event-stream"}
+        f"{BASE}/v1/threads/{thread_id}/events", headers={"Accept": "text/event-stream"}
     )
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     deadline = time.time() + timeout_s
@@ -108,6 +108,8 @@ def stream_events(run_id: str, timeout_s: float = 600.0) -> None:
             if not line.startswith("data:"):
                 continue
             payload = json.loads(line[5:].strip())
+            if payload.get("run_id") != run_id:
+                continue  # 会话流里还有别的 run（子 run 在子会话自己的流里）
             etype = payload.get("type", "?")
             counts[etype] = counts.get(etype, 0) + 1
             data = payload.get("data") or {}
@@ -115,7 +117,7 @@ def stream_events(run_id: str, timeout_s: float = 600.0) -> None:
             if isinstance(brief.get("text"), str) and len(brief["text"]) > 80:
                 brief["text"] = brief["text"][:80] + "…"
             print(f"  [{payload.get('seq')}] {etype} {brief if brief else ''}")
-            if etype in ("run.succeeded", "run.failed", "run.cancelled", "run.interrupted"):
+            if etype in ("run.finished", "run.failed", "run.cancelled", "run.interrupted"):
                 print("\n事件计数：", json.dumps(counts, ensure_ascii=False))
                 return
 
@@ -146,7 +148,7 @@ def main() -> None:
     approver = threading.Thread(target=auto_approve, args=(run["run_id"], stop), daemon=True)
     approver.start()
     try:
-        stream_events(run["run_id"])
+        stream_events(thread_id, run["run_id"])
     finally:
         stop.set()
     print(f"\n总耗时 {time.time() - t0:.1f}s")

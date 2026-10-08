@@ -10,6 +10,7 @@ import type { AgentSpecIn, ModelInfo } from "@/api/types";
  */
 export type ResolvedSpec = AgentSpecIn & {
   tool_names: string[];
+  skills: NonNullable<AgentSpecIn["skills"]>;
   subagents: NonNullable<AgentSpecIn["subagents"]>;
   limits: NonNullable<AgentSpecIn["limits"]>;
   compaction: NonNullable<AgentSpecIn["compaction"]>;
@@ -34,6 +35,10 @@ export function defaultSpec(model = "claude-sonnet-5"): ResolvedSpec {
     },
     tool_names: [],
     subagents: [],
+    skills: [],
+    // 服务端保存时填写（记录当时的 MCP 工具定义指纹），这里给空即可
+    mcp_tool_digests: {},
+    mcp_drift_policy: "warn",
     limits: {
       max_steps: 40,
       timeout_s: 300,
@@ -79,3 +84,10 @@ export function reconcileModelSpec(
 export function effortForbidsThinkingOff(effort: string | null | undefined): boolean {
   return effort === "xhigh" || effort === "max";
 }
+
+/**
+ * 一个 agent 所挂技能描述的总长上限 —— 与后端 Settings.skill_index_budget_chars 的
+ * 默认值一致（描述常驻每一轮上下文，doc/skill-mcp-backend-design.html §7.2）。
+ * 超了保存会被拒；这里只是提前让人看见。
+ */
+export const SKILL_INDEX_BUDGET = 2000;

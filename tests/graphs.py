@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from atlas_server.executor.runner import run as engine_run
 from atlas_server.executor.build import build_graph
+from atlas_server.executor.runner import run as engine_run
 
 __all__ = ["build_graph", "run_agent"]
 
@@ -25,13 +25,16 @@ def run_agent(
     cancel: Any = None,
     clock: Any = None,
     titler: Any = None,
+    transcript: Any = None,
+    resume: bool = False,
+    base_depth: int = 0,
     **capabilities: Any,
 ):
     """spec + model + 能力对象 → TraceEvent 流。
 
     capabilities 直接透传 build_graph（filesystem / sandbox / approvals /
-    compactor / skills / extra_tools / subagents）；cancel / clock / titler
-    是 runner 的注入点，随 run() 走。
+    compactor / skills / extra_tools / subagents）；cancel / clock / titler /
+    transcript / resume 是 runner 的注入点，随 run() 走。
     """
     graph = build_graph(spec, model, **capabilities)
     return engine_run(
@@ -43,4 +46,7 @@ def run_agent(
         cancel=cancel,
         clock=clock,
         titler=titler,
+        transcript=transcript,
+        resume=resume,
+        base_depth=base_depth,
     )

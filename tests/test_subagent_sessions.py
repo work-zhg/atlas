@@ -19,12 +19,13 @@ from uuid import UUID
 import httpx
 import pytest
 from atlas_server.config import get_settings
+from atlas_server.db.models import Message, Run, RunEvent, Thread
 from atlas_server.db.session import get_sessionmaker
 from atlas_server.executor.inprocess import InProcessExecutor
 from atlas_server.main import create_app
+from atlas_server.repositories.run import RunRepository
 from httpx import ASGITransport
 from langchain_core.messages import AIMessageChunk
-from atlas_server.db.models import Message, Run, RunEvent, Thread
 from sqlalchemy import select
 
 from tests.fakes import TurnModel, tool_call_chunk
@@ -148,12 +149,18 @@ async def runs_of(thread_id) -> list[Run]:
         return list((await session.execute(stmt)).scalars())
 
 
-async def messages_blob(thread_id, *, role: str | None = None) -> str:
-    """一段会话的全部消息内容，拼成一个字符串供包含性断言。"""
+async def messages_blob(thread_id, *, role: str | None = None, kind: str | None = None) -> str:
+    """一段会话的全部消息内容，拼成一个字符串供包含性断言。
+
+    kind 过滤对应 message 表的两类行：'chat' 是对话轮（用户看得见的气泡），
+    'tool_result' 是工具结果（只给模型看）。见 domain/messages.py。
+    """
     async with get_sessionmaker()() as session:
         stmt = select(Message).where(Message.thread_id == thread_id)
         if role:
             stmt = stmt.where(Message.role == role)
+        if kind:
+            stmt = stmt.where(Message.kind == kind)
         rows = list((await session.execute(stmt.order_by(Message.created_at))).scalars())
     return json.dumps([r.content for r in rows], ensure_ascii=False, default=str)
 
@@ -193,11 +200,23 @@ async def test_delegation_creates_a_child_thread_and_child_run(client_factory) -
     assert children[0].status == "succeeded"
 
 
-async def test_subagent_messages_never_touch_the_main_thread(client_factory) -> None:
-    """主线程只看见结论，看不见子智能体的中间过程。
+async def test_subagent_output_reaches_the_main_thread_only_as_a_tool_result(
+    client_factory,
+) -> None:
+    """主对话里子智能体的产出只以**工具结果**的形态存在，别无其它。
 
-    「独立上下文」落到持久化上就是这一条：委派的价值之一正是不让子任务的
-    中间过程污染主对话（设计 §03）。
+    「独立上下文」落到持久化上就是这一条：子会话的消息行留在子会话里，
+    父线程只拿到 `task` 的返回值（设计 §03）。
+
+    ★ 那个返回值**必须**落进父线程的 message 表，这不是污染而是格式要求：
+      父的历史里有一条带 tool_use 的 assistant 消息，Anthropic 要求它后面
+      跟着配对的 tool_result，缺了就是 400（domain/messages.py）。
+      原先它只活在内存的 graph state 里，于是主 agent 在**下一轮**就不记得
+      上一轮委派出去的结论 —— 那是个缺陷，不是隔离。
+
+    ★ 隔离因此体现在两个更精确的地方，这里各钉一条：
+        · 它不出现在任何 kind='chat' 的消息里（那是用户看得见的气泡）
+        · 子会话自己的历史一条不少
     """
     parent = TurnModel(
         scripts=[
@@ -205,20 +224,54 @@ async def test_subagent_messages_never_touch_the_main_thread(client_factory) -> 
             [AIMessageChunk(content="coder 写完了。")],
         ]
     )
-    child = TurnModel(scripts=[[AIMessageChunk(content="子智能体的长篇中间过程")]])
+    child = TurnModel(scripts=[[AIMessageChunk(content="子智能体的结论")]])
     client = await client_factory(parent, child)
 
     thread_id = await setup_thread(client)
     await run_turn(client, thread_id, "帮我写个排序函数")
 
-    blob = await messages_blob(UUID(thread_id))
-    assert "子智能体的长篇中间过程" not in blob
-    assert "coder 写完了。" in blob
+    # 用户看得见的那些消息里没有它
+    chat_blob = await messages_blob(UUID(thread_id), kind="chat")
+    assert "子智能体的结论" not in chat_blob
+    assert "coder 写完了。" in chat_blob
+
+    # 唯一的落脚点是工具结果
+    tool_blob = await messages_blob(UUID(thread_id), kind="tool_result")
+    assert "子智能体的结论" in tool_blob
 
     # 子会话那边则完整保留：任务书 + 子智能体的回答
     sub_blob = await messages_blob((await sub_threads(thread_id))[0].id)
     assert "写个排序函数" in sub_blob
-    assert "子智能体的长篇中间过程" in sub_blob
+    assert "子智能体的结论" in sub_blob
+
+
+async def test_the_api_hides_tool_results_from_the_message_list(client_factory) -> None:
+    """★ 前端契约不变：GET /messages 只给对话气泡。
+
+    工具结果是 role='user' 的消息（Anthropic 的格式）。漏出去的话前端会
+    渲染出一串**空的用户气泡** —— MessageStream 的 blocksOf 只认 text block，
+    tool_result 里一个都没有。
+    """
+    parent = TurnModel(
+        scripts=[
+            [_task_call("写个排序函数", "coder", "c1")],
+            [AIMessageChunk(content="coder 写完了。")],
+        ]
+    )
+    child = TurnModel(scripts=[[AIMessageChunk(content="子智能体的结论")]])
+    client = await client_factory(parent, child)
+
+    thread_id = await setup_thread(client)
+    await run_turn(client, thread_id, "帮我写个排序函数")
+
+    body = (await client.get(f"/v1/threads/{thread_id}/messages")).json()
+    roles = [m["role"] for m in body["data"]]
+    payload = json.dumps(body, ensure_ascii=False)
+
+    assert roles.count("user") == 1, "只应有用户那一条提问"
+    assert "子智能体的结论" not in payload
+    # tool_use 也不该送到网线上 —— 一次 write_file 的 input 可能是整个文件
+    assert "tool_use" not in payload
 
 
 async def test_child_threads_are_not_in_the_users_thread_list(client_factory) -> None:
@@ -598,39 +651,51 @@ async def test_thread_detail_exposes_the_running_run(client_factory) -> None:
     assert detail["active_run_id"] == str(run_id)
 
 
-async def test_subagent_approvals_are_forwarded_to_the_parent_stream(
-    client_factory, monkeypatch
-) -> None:
-    """★ 子 run 的审批必须冒泡到**父**的事件流，否则是死锁。
+async def test_subagent_approvals_land_on_the_thread_stream(client_factory) -> None:
+    """★ 子智能体的审批直接出现在**会话流**上，不需要任何转发。
 
-    子 run 有自己的事件流，而前端只订阅父 run 那一条 —— 不冒泡的话弹窗
-    永远不出现，子智能体一直等人点头，直到 bridge 的 adapter 超时。真实
-    委派会话上实测：两次委派各卡满 300s，审批最终 expired，用户看到的是
-    「回答一半就中断」。
+    这条性质是用架构换来的。原先子 run 有自己的事件流，而前端只订阅父 run
+    那一条 —— 于是 SubagentService 要在轮询循环里把子 run 的待审批「冒泡」
+    成父流上的事件。不冒泡的后果是死锁：弹窗永远不出现，子智能体一直等人
+    点头，直到 bridge 的 adapter 超时。真实委派会话上实测过：两次委派各卡满
+    300s，审批最终 expired，用户看到的是「回答一半就中断」。
 
-    data 里必须带 run_id：决策要 POST 到**子** run 的端点，而父流上其它
-    审批属于父 run。
+    ★ 而那套转发在**委派挂起**时是失效的 —— 父 run 落成 suspended 之后轮询
+      循环就没了，再没有人去转发；图也已经跳出，get_stream_writer() 拿不到
+      出口。订阅单位换成会话之后整段删掉了：子 run 的事件本来就在同一条流上
+      （doc/detail/suspension.html §06）。
+
+    ★ 两个字段不能少：depth=1 让前端知道这是子智能体的；run_id 是决策的提交
+      目标 —— 没有它前端会把决策 POST 到父 run 的端点，拿到 404。
     """
     from uuid import uuid4
 
     from atlas_server.db.models import Approval
-    from atlas_server.services import subagent as subagent_mod
+    from atlas_server.domain.events import EventFactory, EventType
+    from atlas_server.redisx import make_redis
+    from atlas_server.stream.relay import EventRelay
 
-    written: list[dict] = []
-    monkeypatch.setattr(subagent_mod, "get_stream_writer", lambda: written.append)
-
-    parent = TurnModel(scripts=[[AIMessageChunk(content="占位")]])
+    parent = TurnModel(
+        scripts=[
+            [_task_call("写个报告", "coder", "c1")],
+            [AIMessageChunk(content="coder 写完了。")],
+        ]
+    )
     client = await client_factory(parent, TurnModel(scripts=[[AIMessageChunk(content="ok")]]))
     thread_id = await setup_thread(client)
-    run_id = UUID((await run_turn(client, thread_id, "干活"))["id"])
+    await run_turn(client, thread_id, "干活")
 
-    # 造一条「子 run 正在等审批」
+    children = await child_runs()
+    assert children, "应当有一个子 run"
+    sub_run_id = children[0].id
+
+    # 造一条「子 run 正在等审批」，并按子 run 的身份发事件（base_depth=1）
     approval_id = uuid4()
     async with get_sessionmaker()() as session:
         session.add(
             Approval(
                 id=approval_id,
-                run_id=run_id,
+                run_id=sub_run_id,
                 tool_name="Write /workspace/report.md",
                 args={"file_path": "/workspace/report.md"},
                 status="pending",
@@ -638,17 +703,62 @@ async def test_subagent_approvals_are_forwarded_to_the_parent_stream(
         )
         await session.commit()
 
-    service = subagent_mod.SubagentService.__new__(subagent_mod.SubagentService)
-    forwarded: set[UUID] = set()
-    async with get_sessionmaker()() as session:
-        await service._forward_approvals(session, "coder", run_id, forwarded)
-        # 第二次不该重复发 —— 轮询每 0.5s 一次，重复会刷出一串同样的弹窗
-        await service._forward_approvals(session, "coder", run_id, forwarded)
+    redis = make_redis(get_settings())
+    try:
+        relay = EventRelay(redis, ttl_s=get_settings().run_events_ttl_s)
+        async with get_sessionmaker()() as session:
+            floor = await RunRepository(session).thread_seq_floor(UUID(thread_id))
+        event = EventFactory(sub_run_id, _utcnow, base_depth=1).make(
+            EventType.APPROVAL_REQUIRED,
+            {
+                "approval_id": str(approval_id),
+                "tool_name": "Write /workspace/report.md",
+                "args": {"file_path": "/workspace/report.md"},
+                "reason": "子智能体请求执行该工具",
+            },
+        )
+        stamped = await relay.publish(event, thread_id=UUID(thread_id), floor=floor)
+        async with get_sessionmaker()() as session:
+            await RunRepository(session).archive_events(
+                [stamped], thread_id=UUID(thread_id)
+            )
+            await session.commit()
+    finally:
+        await redis.aclose()
 
-    assert len(written) == 1, written
-    event = written[0]
-    assert event["kind"] == "approval.required"
-    assert event["approval_id"] == str(approval_id)
-    assert event["tool_name"] == "Write /workspace/report.md"
-    # ★ 这一条是关键：没有它，前端会把决策提交到父 run 的端点
-    assert event["run_id"] == str(run_id)
+    # ★ 落在**父会话**那条流上 —— 前端订阅的就是它
+    async with get_sessionmaker()() as session:
+        rows = list(
+            (
+                await session.execute(
+                    select(RunEvent).where(
+                        RunEvent.thread_id == UUID(thread_id),
+                        RunEvent.type == "approval.required",
+                    )
+                )
+            ).scalars()
+        )
+
+    assert len(rows) == 1, rows
+    row = rows[0]
+    assert row.depth == 1, "没标成子智能体的事件，前端会把它当主 agent 的"
+    assert row.run_id == sub_run_id, "决策会被提交到父 run 的端点，拿到 404"
+    assert row.data["approval_id"] == str(approval_id)
+
+
+def _utcnow():
+    from datetime import UTC, datetime
+
+    return datetime.now(UTC)
+
+
+async def test_the_forwarding_machinery_is_gone(client_factory) -> None:
+    """★ 转发那套代码必须真的删掉，不是留着不调用。
+
+    留着的话它会被当成「还有这条路」而被将来的改动重新接上 —— 而它在挂起
+    期间是失效的，重新接上只会掩盖问题。
+    """
+    from atlas_server.services import subagent as subagent_mod
+
+    assert not hasattr(subagent_mod.SubagentService, "_forward_approvals")
+    assert not hasattr(subagent_mod, "get_stream_writer")

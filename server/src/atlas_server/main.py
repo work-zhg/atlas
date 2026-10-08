@@ -12,17 +12,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.requests import Request
 
-from .acp.runtime import AcpRuntime
 from .api.v1 import router as v1_router
+from .api.v1.previews import install_log_mask
 from .config import get_settings
 from .db.session import get_sessionmaker
 from .errors import AppError
 from .executor.inprocess import InProcessExecutor
+from .host.runtime import HostRuntime
 from .memory import make_memory, run_worker
 from .providers.cluster import ClusterPods
 from .redisx import make_redis
 from .repositories.thread import ThreadRepository
-from .services.run import RunService
+from .stream.gate import StreamGate, StreamsBusy
 from .telemetry import setup_telemetry, shutdown_telemetry
 
 logging.basicConfig(level=logging.INFO)
@@ -50,15 +51,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.executor = InProcessExecutor(
         get_sessionmaker(),
         settings,
-        acp_runtime=AcpRuntime(get_sessionmaker(), settings, pods),
+        # acp agent 的执行：经会话 Pod 里的 bridge（上游协议 atlas.host.v1）
+        acp_runtime=HostRuntime(get_sessionmaker(), settings, pods),
         memory=memory,
     )
 
     redis = make_redis(settings)
     try:
         async with get_sessionmaker()() as session:
-            service = RunService(session, redis, settings, app.state.executor)
-            await service.reap_orphans()
+            # ★ 启动时不标记孤儿 run（不再把 running 判成 interrupted）：
+            #   进行中的 run 应当断联恢复，而不是直接判中断。
+            # ★ 重启会丢掉「子 run 跑完时叫醒父 run」那个信号，所以启动时立刻补扫
+            #   一次挂起的 run，不等周期到点。
+            await app.state.executor.sweep_suspended()
             # Pod 孤儿：把**还活着的会话**交给 cluster，其余它自己清。
             # cluster 不认识 thread 表 —— 那条反向依赖不该有。
             live = await ThreadRepository(session).all_ids()
@@ -67,6 +72,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logging.getLogger(__name__).warning("孤儿回收失败", exc_info=True)
     finally:
         await redis.aclose()
+
+    # 补唤醒的周期扫描。丢失的唤醒信号只有它能捞回来 —— 没有它，一个 run
+    # 会永远停在「等待子智能体」而不报任何错。
+    app.state.executor.start_sweeper()
 
     # 抽取 worker。★ 它自建 Redis 连接：lifespan 上面那个用完就关了。
     #   ★ 抽取跑在这里而不是 run 的收尾路径上 —— 它要调一次 LLM，同步做
@@ -105,10 +114,29 @@ def create_app() -> FastAPI:
         allow_origins=settings.cors_origins,
         allow_credentials=True,
         allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["Content-Type", "X-User-Id", "Idempotency-Key", "Last-Event-ID"],
+        # Range：文件预览按前 1 MiB 取文本（doc/detail/file-preview.html §08）
+        allow_headers=["Content-Type", "X-User-Id", "Idempotency-Key", "Last-Event-ID", "Range"],
     )
+    install_log_mask()
 
     app.include_router(v1_router)
+
+    # ★ SSE 并发闸门。会话流的寿命是「用户开着这个会话多久」，而不是「一轮
+    #   多久」—— 每条占一个 Redis 连接，不设限的表现是**所有** HTTP 请求一起
+    #   变慢（池耗尽后新命令排队）。见 stream/gate.py。
+    #
+    #   放在 create_app 而不是 lifespan：它是进程级资源计数器，测试里直接
+    #   construct app 也要能用。
+    app.state.stream_gate = StreamGate(settings.sse_max_connections)
+
+    @app.exception_handler(StreamsBusy)
+    async def streams_busy_handler(_: Request, exc: StreamsBusy) -> JSONResponse:
+        """503 + Retry-After。★ 明确拒绝，不排队等一个可能几小时才释放的槽位。"""
+        return JSONResponse(
+            status_code=503,
+            headers={"Retry-After": "5"},
+            content={"error": {"kind": "streams_busy", "message": str(exc), "details": {}}},
+        )
 
     @app.exception_handler(EngineError)
     async def engine_error_handler(_: Request, exc: EngineError) -> JSONResponse:

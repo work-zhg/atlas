@@ -9,7 +9,19 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-__all__ = ["DelegationProtocol"]
+__all__ = ["DelegationProtocol", "delegation_pending"]
+
+
+def delegation_pending(sub_run_id: str) -> str:
+    """「这次委派还没有结果，本段到此为止」—— 返回一个挂起哨兵。
+
+    ★ 委派只是挂起的**一个** reason，审批是另一个。共用的机制在
+      `contracts/suspension.py`：哨兵格式、解析、以及图内那个唯一的跳出点。
+      这个函数存在只为让受理方不必自己拼 reason 字面量。
+    """
+    from atlas_engine.contracts.suspension import suspend_marker
+
+    return suspend_marker("delegation", sub_run_id)
 
 
 @runtime_checkable

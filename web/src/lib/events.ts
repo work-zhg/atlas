@@ -16,6 +16,13 @@ export const EventType = {
   RunFinished: "run.finished",
   RunFailed: "run.failed",
   RunCancelled: "run.cancelled",
+  /**
+   * 这一段跑完了，但这一轮**没结束** —— 在等子智能体的结果（可能等一小时）。
+   *
+   * ★ 不是终态事件：SSE 不关闭，后面还会来这一轮真正的结束。放进
+   *   TERMINAL_EVENTS 的话流会在委派刚开始时断掉，用户永远等不到结论。
+   */
+  RunSuspended: "run.suspended",
   ThinkingDelta: "thinking.delta",
   MessageDelta: "message.delta",
   MessageCompleted: "message.completed",
@@ -30,8 +37,16 @@ export const EventType = {
   FileDeleted: "file.deleted",
   UsageUpdated: "usage.updated",
   ApprovalRequired: "approval.required",
+  /** acp：这一轮 CLI 实际生效的权限模式（可能被降级，必须让用户看见） */
+  AgentMode: "agent.mode",
   ContextCompacted: "context.compacted",
   TitleGenerated: "thread.title_generated",
+  /** 模型读了某个技能的 SKILL.md —— 「选中了这个技能」唯一可观测的信号 */
+  SkillLoaded: "skill.loaded",
+  /** 引用的技能这一轮没装上（紧急下架等）。必须让用户看见 */
+  SkillSkipped: "skill.skipped",
+  /** MCP 工具定义与保存时不一致，或尚未复核 */
+  McpToolDrift: "mcp.tool_drift",
 } as const;
 
 export type EventTypeValue = (typeof EventType)[keyof typeof EventType];
@@ -80,6 +95,24 @@ export interface RunCancelledData {
   partial_text_len: number;
 }
 
+export interface SuspensionWait {
+  /** 等子智能体的结论，还是等人点头。 */
+  reason: "delegation" | "approval";
+  /** delegation → 子 run 的 id；approval → approval 的 id。 */
+  token: string;
+}
+
+export interface RunSuspendedData {
+  /**
+   * 这一轮在等什么。
+   *
+   * ★ 带 reason 是必须的：UI 要区分「在等机器」和「在等你」—— 前者用户只能
+   *   干等，后者需要他行动（去点那个弹窗）。
+   */
+  waiting_on: SuspensionWait[];
+  partial_text_len: number;
+}
+
 export interface MessageDeltaData {
   text: string;
   /**
@@ -125,8 +158,23 @@ export interface ToolFailedData {
   call_id: string;
   duration_ms?: number;
   error: string;
+  /** "auto_mode_denied" = 被 CLI 的 auto 模式判定为有风险而拦下（不是工具坏了） */
   error_kind?: string;
   fallback_applied?: boolean;
+  /** auto 模式的拦截类别，如 "Unverifiable Deletion Target" */
+  denied_reason?: string;
+  result?: unknown;
+  result_preview?: string;
+}
+
+/** 平台的权限模式取值；不认识的（未来新增的）原样透传 */
+export type PermissionMode = "manual" | "accept_edits" | "auto" | "plan" | (string & {});
+
+export interface AgentModeData {
+  requested: PermissionMode | null;
+  /** null = CLI 不支持权限模式 */
+  effective: PermissionMode | null;
+  degraded: boolean;
 }
 
 export interface FileWrittenData {
@@ -190,13 +238,50 @@ export interface ApprovalRequiredData {
 // ---------- 事件信封 ----------
 
 interface Envelope<T extends string, D> {
+  /** run 内单调递增。会话流下只剩诊断价值 —— 游标是 thread_seq。 */
   seq: number;
+  /**
+   * 会话内单调递增 —— **会话流的游标**，去重与续传都以它为准。
+   *
+   * ★ 两个序号不能混用。数值相近（都是小整数），混了不报错，只是重连时
+   *   游标被拿到另一个体系里比较，补发范围整个错位。
+   */
+  thread_seq: number;
   run_id: string;
   ts: string;
-  /** 0=主 agent，1=子 agent。用于消息流缩进。 */
+  /**
+   * = run 在委派树里的深度：0 主 agent，1 子智能体。
+   *
+   * ★ 会话流里两者混在一条流上，靠它路由：depth≥1 的事件不能进主轮次的
+   *   状态（子 run 的 run.finished 会把主轮次标成结束，它的 delta 会让
+   *   子智能体的话冒进主对话）。见 run-reducer 的 applyEvent。
+   */
   depth: number;
   type: T;
   data: D;
+}
+
+export interface SkillLoadedData {
+  slug: string;
+  version: number;
+  call_id?: string;
+}
+
+export interface SkillSkippedData {
+  slug: string;
+  version: number;
+  /** revoked = 紧急下架 */
+  reason: string;
+}
+
+export interface McpToolDriftData {
+  /** spec 标识 mcp:server:tool；整台 server 被拦时是 mcp:server:* */
+  tool: string;
+  server: string;
+  old_digest?: string | null;
+  new_digest?: string;
+  /** used = 提示后照常用；blocked = 本轮不装；pending_review / rejected = 复核闸门 */
+  action: "used" | "blocked" | "pending_review" | "rejected";
 }
 
 export type TraceEvent =
@@ -204,6 +289,7 @@ export type TraceEvent =
   | Envelope<typeof EventType.RunFinished, RunFinishedData>
   | Envelope<typeof EventType.RunFailed, RunFailedData>
   | Envelope<typeof EventType.RunCancelled, RunCancelledData>
+  | Envelope<typeof EventType.RunSuspended, RunSuspendedData>
   | Envelope<typeof EventType.ThinkingDelta, MessageDeltaData>
   | Envelope<typeof EventType.MessageDelta, MessageDeltaData>
   | Envelope<typeof EventType.MessageCompleted, MessageCompletedData>
@@ -218,8 +304,12 @@ export type TraceEvent =
   | Envelope<typeof EventType.FileDeleted, FileDeletedData>
   | Envelope<typeof EventType.UsageUpdated, UsageUpdatedData>
   | Envelope<typeof EventType.ApprovalRequired, ApprovalRequiredData>
+  | Envelope<typeof EventType.AgentMode, AgentModeData>
   | Envelope<typeof EventType.ContextCompacted, ContextCompactedData>
-  | Envelope<typeof EventType.TitleGenerated, TitleGeneratedData>;
+  | Envelope<typeof EventType.TitleGenerated, TitleGeneratedData>
+  | Envelope<typeof EventType.SkillLoaded, SkillLoadedData>
+  | Envelope<typeof EventType.SkillSkipped, SkillSkippedData>
+  | Envelope<typeof EventType.McpToolDrift, McpToolDriftData>;
 
 /** 后端将来新增的事件类型（规则 3）—— 解析后但本前端还不认识的，走这里。 */
 export type UnknownTraceEvent = Envelope<string, Record<string, unknown>>;
@@ -233,6 +323,7 @@ export function parseTraceEvent(raw: string): AnyTraceEvent | null {
     if (typeof v.seq !== "number" || typeof v.type !== "string") return null;
     return {
       seq: v.seq,
+      thread_seq: typeof v.thread_seq === "number" ? v.thread_seq : 0,
       run_id: String(v.run_id ?? ""),
       ts: String(v.ts ?? ""),
       depth: typeof v.depth === "number" ? v.depth : 0,

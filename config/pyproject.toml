@@ -1,0 +1,32 @@
+[project]
+name = "atlas-config"
+version = "0.1.0"
+description = "Atlas config service — owns skills and the MCP registry."
+requires-python = ">=3.13"
+
+# ★ 为什么独立成服务而不是 server 的一个包（doc/skill-mcp-backend-design.html §2.2）：
+#   技能是有独立生命周期的内容资产（创作、审查、发布、下架），MCP 注册表由运维
+#   维护、被多个 agent 共享。放进 server 会让「谁拥有技能」有两个答案；独立之后
+#   只有这里能写技能区，改审查规则也不必重新部署运行时。
+#
+# ★ 同语言最大的风险是「顺手 import」：server 只允许 import atlas_config.schemas，
+#   本包也不认识任何运行时的包 —— 两条都由根 pyproject 的 import-linter 守着。
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.32",
+  "sqlalchemy[asyncio]>=2.0.36",
+  "asyncpg>=0.30",
+  "alembic>=1.14",
+  "pydantic-settings>=2.6",
+  "boto3>=1.35",
+  "pyyaml>=6.0",
+  # multipart/form-data 上传技能包
+  "python-multipart>=0.0.9",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/atlas_config"]

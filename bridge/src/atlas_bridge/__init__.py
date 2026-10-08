@@ -1,11 +1,9 @@
-"""Pod 内的 ACP bridge。
+"""会话 Pod 里的 bridge：ACP client + 上游协议（atlas.host.v1）服务端（代码设计 §5）。
 
-依赖只有 atlas_acp 与 websockets —— **不认识 atlas_server**。与 server 的
-唯一接口是 WS 上的线协议；代码级共享会让「升级 server 必须同步升级全部
-在跑的 Pod」，而 Pod 在跑时没法原地升级（acp 详设 §03）。
+    agent/      对下：agent 进程与 ACP（AgentProcess · AcpClient · AgentSupervisor）
+    session/    核心：会话与轮次的状态机、计时、取消、权限（HostSession · Turn · PermissionBroker）
+    upstream/   对上：WebSocket、握手鉴权、序号与补发（UpstreamServer · Outbox）
+    app.py      装配与启动顺序；入口是 ``python -m atlas_bridge``
 
-    adapter    stdio 上驱动 CLI adapter 的子进程
-    ws         WS 端点：握手鉴权 · 单活跃 prompt 门 · 权限转交
-    lifecycle  优雅终止三步
-    main       入口
+不认识 atlas_server：与 server 的唯一接口是上游协议（Bridge 设计 §3.3）。
 """

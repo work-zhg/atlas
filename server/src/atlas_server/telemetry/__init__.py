@@ -14,17 +14,57 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from ..config import Settings
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["setup_telemetry", "shutdown_telemetry", "tracer"]
+__all__ = [
+    "forced_trace_id",
+    "make_id_generator",
+    "setup_telemetry",
+    "shutdown_telemetry",
+    "tracer",
+]
 
 #: 本模块装上去的 provider。None = 没启用（或启用失败）。
 _provider = None
+
+#: 下一个**根** span 要用的 trace id（RunTrace 用 run id 设置，见 forced_trace_id）
+_FORCED_TRACE_ID: ContextVar[int | None] = ContextVar("atlas_forced_trace_id", default=None)
+
+
+@contextmanager
+def forced_trace_id(value: int | None) -> Iterator[None]:
+    """在这段上下文里新建的根 span，trace id 用 value（而不是随机生成）。
+
+    ★ 为什么不用「虚拟父 span」：那样每一段的根都指向一个从不上报的父，Langfuse 里
+      成了 parentObservationId 指向不存在节点的孤儿，Jaeger 也会提示缺少父 span
+      （langfuse-integration-design §12 V5 实测）。改由 IdGenerator 决定 trace id，
+      根 span 就是真正的根。
+    """
+    token = _FORCED_TRACE_ID.set(value)
+    try:
+        yield
+    finally:
+        _FORCED_TRACE_ID.reset(token)
+
+
+def make_id_generator() -> Any:
+    """SDK 的 IdGenerator：有 forced_trace_id 时用它，否则随机。需要 opentelemetry-sdk。"""
+    from opentelemetry.sdk.trace.id_generator import RandomIdGenerator
+
+    class _RunIdGenerator(RandomIdGenerator):
+        def generate_trace_id(self) -> int:
+            forced = _FORCED_TRACE_ID.get()
+            return forced if forced else super().generate_trace_id()
+
+    return _RunIdGenerator()
 
 
 def setup_telemetry(settings: Settings) -> None:
@@ -50,7 +90,9 @@ def setup_telemetry(settings: Settings) -> None:
         from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
         provider = TracerProvider(
-            resource=Resource.create({"service.name": settings.otel_service_name})
+            resource=Resource.create({"service.name": settings.otel_service_name}),
+            # trace id = run id：一个 run 的多段执行落进同一条 trace（RunTrace.start）
+            id_generator=make_id_generator(),
         )
         # ★ 采样用默认的 parent-based always-on。采样策略（放 SDK 侧还是
         #   Collector 侧）是 §11 第 6 项的待验证项，本机量级不需要先决定 ——

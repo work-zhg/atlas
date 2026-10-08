@@ -17,7 +17,7 @@ import pytest
 from atlas_cluster.api import create_app
 from atlas_cluster.backend import InMemoryBackend
 from atlas_cluster.config import ClusterSettings
-from atlas_server.acp.pods import PodProvider
+from atlas_server.providers.pods import PodProvider
 from atlas_server.config import Settings
 from atlas_server.domain.spec import CliSpec
 from atlas_server.providers.cluster import ClusterPods, ClusterUnavailable
@@ -72,7 +72,7 @@ def test_cluster_never_imports_server() -> None:
 
 def test_cluster_pods_satisfies_the_provider_protocol() -> None:
     """生产实现与步骤 4 的 LocalPods 是同一个协议的两个实现 ——
-    AcpRuntime 因此一行不改。"""
+    HostRuntime 因此一行不改。"""
     assert isinstance(ClusterPods(Settings(litellm_key="x", default_user_id=_UUID)), PodProvider)
 
 

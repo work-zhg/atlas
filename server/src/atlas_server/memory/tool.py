@@ -32,6 +32,8 @@ from uuid import UUID
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
+from ..errors import CapabilityUnavailable
+
 if TYPE_CHECKING:
     from .client import MemoryClient
 
@@ -40,10 +42,10 @@ logger = logging.getLogger(__name__)
 __all__ = ["MEMORY_SEARCH_TOOL", "MemoryUnavailable", "make_memory_search_tool"]
 
 
-class MemoryUnavailable(RuntimeError):
+class MemoryUnavailable(CapabilityUnavailable):
     """勾了 search_memory 却没开记忆 —— 明确报错（§13.2）。
 
-    与 web_search 缺 SERPAPI_KEY 同款取舍：宁可这一轮失败并说清原因，
+    宁可这一轮失败并说清原因，
     也不要静默少装一个工具 —— 那样模型以为自己没有记忆可查，
     而用户以为记忆在工作，两边都不知道哪里不对。
     """

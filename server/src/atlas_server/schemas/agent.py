@@ -11,17 +11,21 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
+from atlas_engine.contracts import InvalidSpec
+from pydantic import BaseModel, Field, field_validator, model_validator
+
 from atlas_server.domain.spec import (
     AgentSpec,
     CliSpec,
-    SkillRefSpec,
     CompactionSpec,
     LimitSpec,
+    McpDriftPolicy,
     ModelSpec,
+    PermissionMode,
+    SkillRefSpec,
     SubAgentSpec,
 )
 from atlas_server.domain.tool_registry import BASH_TOOL
-from pydantic import BaseModel, Field, field_validator, model_validator
 
 Effort = Literal["low", "medium", "high", "xhigh", "max"]
 Thinking = Literal["auto", "adaptive", "off"]
@@ -59,8 +63,12 @@ class SkillRefIn(BaseModel):
     version: int | None = None
 
     def to_engine(self) -> SkillRefSpec:
-        # 落库前已被服务层解析，此处 version 必非空
-        return SkillRefSpec(slug=self.slug, version=self.version or 0)
+        # ★ 落库前服务层必须已把 version 钉死（AgentService._pin_skills）。
+        #   此前这里写的是 `version or 0`：没钉死的引用悄悄变成 v0，建会话时才因
+        #   找不到 _skills/<slug>/0/ 失败 —— 报错离病根很远。
+        if self.version is None:
+            raise InvalidSpec(f"技能 {self.slug} 没有钉死版本号", skill=self.slug)
+        return SkillRefSpec(slug=self.slug, version=self.version)
 
 
 class CompactionSpecIn(BaseModel):
@@ -91,6 +99,9 @@ class SubAgentSpecIn(BaseModel):
     #: 子智能体自己的执行形态 —— native 主 agent 可以委派给 acp 子智能体。
     kind: Literal["native", "acp"] = "native"
     cli: CliSpecIn | None = None
+    #: 见 AgentSpecIn.mcp_tool_digests
+    mcp_tool_digests: dict[str, str] = Field(default_factory=dict)
+    mcp_drift_policy: McpDriftPolicy = "warn"
     #: 这份配置是从哪个智能体**物化**来的，仅供编辑器展示来源。
     #:
     #: ★ 存的是拷贝而不是活引用：spec 是版本快照，run 绑 agent_version_id
@@ -111,6 +122,8 @@ class SubAgentSpecIn(BaseModel):
             compaction=self.compaction.to_engine() if self.compaction else None,
             kind=self.kind,
             cli=self.cli.to_engine() if self.cli else None,
+            mcp_tool_digests=dict(self.mcp_tool_digests),
+            mcp_drift_policy=self.mcp_drift_policy,
         )
 
 
@@ -141,9 +154,16 @@ class CliSpecIn(BaseModel):
     cli_type: str = Field(min_length=1, max_length=64)
     adapter: str = Field(default="", max_length=512)
     image: str = Field(default="", max_length=256)
+    #: CLI 的权限模式。默认 auto；不提供 bypass（见 domain/spec.py::PermissionMode）
+    permission_mode: PermissionMode = "auto"
 
     def to_engine(self) -> CliSpec:
-        return CliSpec(cli_type=self.cli_type, adapter=self.adapter, image=self.image)
+        return CliSpec(
+            cli_type=self.cli_type,
+            adapter=self.adapter,
+            image=self.image,
+            permission_mode=self.permission_mode,
+        )
 
 
 class AgentSpecIn(BaseModel):
@@ -165,6 +185,12 @@ class AgentSpecIn(BaseModel):
     #: 默认 native —— 历史快照没有这两个字段，反序列化照常
     kind: Literal["native", "acp"] = "native"
     cli: CliSpecIn | None = None
+    #: 保存时记录的 MCP 工具定义指纹 {mcp:server:tool → digest}。
+    #: ★ 服务端填写（AgentService），请求里传来的值会被覆盖 —— 指纹的意义是
+    #:   「保存那一刻实际看到的定义」，不能由客户端声称。
+    mcp_tool_digests: dict[str, str] = Field(default_factory=dict)
+    #: 定义漂移时：warn = 提示后照常用；block = 该工具不装（技能 / MCP 设计 §9）
+    mcp_drift_policy: McpDriftPolicy = "warn"
 
     @model_validator(mode="after")
     def _bash_requires_approval(self) -> AgentSpecIn:
@@ -191,6 +217,8 @@ class AgentSpecIn(BaseModel):
             compaction=self.compaction.to_engine(),
             kind=self.kind,
             cli=self.cli.to_engine() if self.cli else None,
+            mcp_tool_digests=dict(self.mcp_tool_digests),
+            mcp_drift_policy=self.mcp_drift_policy,
         )
 
 
@@ -243,6 +271,15 @@ class AgentOut(BaseModel):
     model: str
     tool_count: int
     subagent_count: int
+    #: native | acp
+    kind: str = "native"
+    #: 内置工具数（不含 mcp:*）
+    builtin_tool_count: int = 0
+    skill_count: int = 0
+    #: 引用的 MCP server（去重，按名排序）
+    mcp_servers: list[str] = []
+    #: 委派关系：[{name, kind, permission_mode}] —— 卡片上显示「→ claude-code · Auto」
+    subagents: list[dict[str, Any]] = []
     created_at: datetime
     updated_at: datetime
 

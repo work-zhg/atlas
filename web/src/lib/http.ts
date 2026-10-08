@@ -9,6 +9,12 @@
  */
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
+/**
+ * 配置服务（atlas-config：技能与 MCP 注册表）。BFF 上线前浏览器直连它
+ * （doc/skill-mcp-backend-design.html §13.3）；上线后改成同源路径，只换这一处。
+ */
+export const CONFIG_API_BASE =
+  process.env.NEXT_PUBLIC_CONFIG_API_BASE ?? "http://127.0.0.1:8020";
 
 /** 后端错误信封（文档 §11） */
 export interface ErrorEnvelope {
@@ -47,8 +53,12 @@ export function authHeaders(): Record<string, string> {
   return uid ? { "X-User-Id": uid } : {};
 }
 
-export function apiUrl(path: string, query?: Record<string, string | number | undefined | null>): string {
-  const url = new URL(path.startsWith("/") ? path : `/${path}`, API_BASE);
+export function apiUrl(
+  path: string,
+  query?: Record<string, string | number | undefined | null>,
+  base: string = API_BASE,
+): string {
+  const url = new URL(path.startsWith("/") ? path : `/${path}`, base);
   for (const [k, v] of Object.entries(query ?? {})) {
     if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, String(v));
   }
@@ -60,11 +70,21 @@ async function toApiError(res: Response): Promise<ApiError> {
   let message = `${res.status} ${res.statusText}`;
   let details: Record<string, unknown> = {};
   try {
-    const body = (await res.json()) as Partial<ErrorEnvelope> & { detail?: unknown };
+    const body = (await res.json()) as Partial<ErrorEnvelope> & {
+      detail?: unknown;
+      layer?: string;
+      hits?: string[];
+      context?: Record<string, unknown>;
+    };
     if (body.error) {
       kind = body.error.kind ?? kind;
       message = body.error.message ?? message;
       details = body.error.details ?? {};
+    } else if (typeof body.detail === "string") {
+      // 配置服务的错误体：{detail: "人话", context?} —— 技能扫描未通过时还带 layer/hits
+      kind = body.layer ? "scan_blocked" : `http_${res.status}`;
+      message = body.detail;
+      details = { ...(body.context ?? {}), ...(body.layer ? { layer: body.layer, hits: body.hits ?? [] } : {}) };
     } else if (body.detail !== undefined) {
       // FastAPI 自带的 422 校验错误走 detail，不是我们的信封
       kind = "validation_error";
@@ -85,20 +105,24 @@ export interface RequestOptions {
   body?: unknown;
   headers?: Record<string, string>;
   signal?: AbortSignal;
+  /** 默认 API_BASE（运行时）；配置服务传 CONFIG_API_BASE */
+  base?: string;
 }
 
 export async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
-  const { method = "GET", query, body, headers = {}, signal } = opts;
+  const { method = "GET", query, body, headers = {}, signal, base } = opts;
+  // ★ FormData（上传技能包）不能手设 Content-Type：边界串要由浏览器生成
+  const isForm = typeof FormData !== "undefined" && body instanceof FormData;
 
-  const res = await fetch(apiUrl(path, query), {
+  const res = await fetch(apiUrl(path, query, base), {
     method,
     signal,
     headers: {
-      ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+      ...(body !== undefined && !isForm ? { "Content-Type": "application/json" } : {}),
       ...authHeaders(),
       ...headers,
     },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
+    body: body === undefined ? undefined : isForm ? (body as FormData) : JSON.stringify(body),
   });
 
   if (!res.ok) throw await toApiError(res);
@@ -113,4 +137,19 @@ export const http = {
     request<T>(path, { method: "POST", body, headers }),
   patch: <T>(path: string, body?: unknown) => request<T>(path, { method: "PATCH", body }),
   del: <T>(path: string) => request<T>(path, { method: "DELETE" }),
+};
+
+/** 配置服务（atlas-config）的请求出口。身份头、错误解包与运行时同一套。 */
+export const configHttp = {
+  get: <T>(path: string, query?: Query) => request<T>(path, { query, base: CONFIG_API_BASE }),
+  post: <T>(path: string, body?: unknown) =>
+    request<T>(path, { method: "POST", body, base: CONFIG_API_BASE }),
+  patch: <T>(path: string, body?: unknown) =>
+    request<T>(path, { method: "PATCH", body, base: CONFIG_API_BASE }),
+  /** 原始文本（在线查看技能包里的文件） */
+  text: async (path: string): Promise<string> => {
+    const res = await fetch(apiUrl(path, undefined, CONFIG_API_BASE), { headers: authHeaders() });
+    if (!res.ok) throw await toApiError(res);
+    return res.text();
+  },
 };

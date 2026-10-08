@@ -15,8 +15,11 @@ function preview(call: ToolCall): string {
   }
 }
 
+/** 被 CLI 的 auto 模式判定为有风险而拦下：不是工具坏了，用户也无从批准（设计 D8-A） */
+const isAutoDenied = (call: ToolCall) => call.errorKind === "auto_mode_denied";
+
 function detail(call: ToolCall): string {
-  if (call.status === "error") return call.error ?? "（无错误详情）";
+  if (call.status === "error") return call.error ?? call.resultPreview ?? "（无错误详情）";
   if (call.resultPreview) return call.resultPreview;
   if (call.result !== undefined) {
     try {
@@ -30,12 +33,15 @@ function detail(call: ToolCall): string {
 
 /** 可折叠的工具调用行。收起显示摘要参数，展开显示完整返回。 */
 export function ToolCallRow({ call }: { call: ToolCall }) {
+  const denied = isAutoDenied(call);
   const dotClass =
     call.status === "ok"
       ? styles.dotOk
-      : call.status === "error"
-        ? styles.dotErr
-        : styles.dotRun;
+      : denied
+        ? styles.dotWarn
+        : call.status === "error"
+          ? styles.dotErr
+          : styles.dotRun;
 
   return (
     <details className={styles.tool} style={call.depth > 0 ? { marginLeft: 16 } : undefined}>
@@ -44,6 +50,11 @@ export function ToolCallRow({ call }: { call: ToolCall }) {
         <span className={`${styles.statusDot} ${dotClass}`} aria-hidden="true" />
         <span className={styles.toolName}>{call.name}</span>
         <span className={styles.toolArg}>{preview(call)}</span>
+        {denied && (
+          <span className={styles.toolDenied} title="CLI 的 Auto 模式判定此操作有风险，已拒绝执行">
+            被 Auto 模式拦截{call.deniedReason ? `：${call.deniedReason}` : ""}
+          </span>
+        )}
         {call.fallbackApplied && (
           <span className={styles.toolCost} style={{ color: "var(--warning)" }}>
             已降级

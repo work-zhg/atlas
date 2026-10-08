@@ -11,6 +11,7 @@ import { AgentCard } from "@/features/agents/AgentCard";
 import styles from "@/features/agents/agents.module.css";
 
 type Scope = AgentStatus | "all";
+type Kind = "all" | "native" | "acp";
 
 const SCOPES: { value: Scope; label: string }[] = [
   { value: "all", label: "全部" },
@@ -23,19 +24,20 @@ export default function AgentsPage() {
   const router = useRouter();
   const [scope, setScope] = useState<Scope>("all");
   const [keyword, setKeyword] = useState("");
+  const [kind, setKind] = useState<Kind>("all");
 
   // 搜索走本地过滤而不是每次敲键都打后端：智能体是百量级，
   // 一次拉全量再本地筛，比 debounce + 请求风暴简单也更跟手。
   const { data, isPending, error } = useAgents({ status: scope });
 
   const agents = useMemo(() => {
-    const all = data?.data ?? [];
     const kw = keyword.trim().toLowerCase();
-    if (!kw) return all;
-    return all.filter((a) =>
-      [a.name, a.slug, a.description].some((s) => s.toLowerCase().includes(kw)),
+    return (data?.data ?? []).filter(
+      (a) =>
+        (kind === "all" || a.kind === kind) &&
+        (!kw || [a.name, a.slug, a.description].some((s) => s.toLowerCase().includes(kw))),
     );
-  }, [data, keyword]);
+  }, [data, keyword, kind]);
 
   return (
     <div className={styles.page}>
@@ -45,6 +47,7 @@ export default function AgentsPage() {
             <h1 className={styles.title}>智能体</h1>
             <p className={styles.desc}>
               {isPending ? "加载中…" : `共 ${data?.data.length ?? 0} 个`}
+              {" · "}Native 在平台内运行、可以委派；ACP 在会话 Pod 里驱动 CLI
             </p>
           </div>
           <Button
@@ -65,6 +68,15 @@ export default function AgentsPage() {
             placeholder="搜索名称、标识或描述…"
             prefix={<Icon name="search" size={14} />}
             style={{ width: 260 }}
+          />
+          <Segmented
+            value={kind}
+            onChange={(v) => setKind(v as Kind)}
+            options={[
+              { value: "all", label: "全部类型" },
+              { value: "native", label: "Native" },
+              { value: "acp", label: "ACP · CLI" },
+            ]}
           />
           <Segmented
             value={scope}

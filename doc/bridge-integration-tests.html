@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bridge 集成测试用例清单</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --border: #d1d9e0;
+    --head: #f6f8fa; --group: #eef2f6; --accent: #0969da; --warn-bg: #fff8c5; --warn-bd: #d4a72c;
+    --tag-bg: #ddf4ff; --tag-fg: #0550ae;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --border: #3d444d;
+      --head: #151b23; --group: #1c2430; --accent: #4493f8; --warn-bg: #2b2111; --warn-bd: #9e6a03;
+      --tag-bg: #12263f; --tag-fg: #79c0ff;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 32px; background: var(--bg); color: var(--fg);
+    font: 14px/1.6 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif;
+  }
+  main { max-width: 1280px; margin: 0 auto; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  h2 { font-size: 18px; margin: 40px 0 6px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  .sub { color: var(--muted); margin: 0 0 12px; }
+  code { font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .callout {
+    background: var(--warn-bg); border-left: 4px solid var(--warn-bd);
+    padding: 10px 14px; margin: 16px 0; border-radius: 4px;
+  }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+  th, td { border: 1px solid var(--border); padding: 7px 10px; vertical-align: top; text-align: left; }
+  th { background: var(--head); white-space: nowrap; }
+  td.n { text-align: right; color: var(--muted); width: 36px; }
+  td.name code { word-break: break-all; }
+  tr.group td { background: var(--group); font-weight: 600; }
+  .tag {
+    display: inline-block; padding: 0 6px; border-radius: 10px; font-size: 12px;
+    background: var(--tag-bg); color: var(--tag-fg); margin-right: 4px; white-space: nowrap;
+  }
+  .summary td:first-child { white-space: nowrap; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Bridge 集成测试用例清单</h1>
+<p class="sub">统计日期：2026-10-01 · 只列集成层用例；单元测试和组件测试（<code>SessionHarness</code>、进程内 agent）不在本表。</p>
+
+<h2>总览</h2>
+<table class="summary">
+  <thead>
+    <tr><th>文件</th><th>真实组件</th><th>替身</th><th>用例数</th><th>是否进 <code>make test</code> / CI</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>bridge/tests/test_agent_process.py</code></td>
+      <td><code>AgentProcess</code> + 真实子进程 + 真实 stdio</td>
+      <td>FakeAgent 脚本（独立进程）</td>
+      <td>7</td>
+      <td>❌ 否</td>
+    </tr>
+    <tr>
+      <td><code>bridge/tests/test_upstream_e2e.py</code></td>
+      <td><code>BridgeApp</code> + 真实 WebSocket + agent 子进程</td>
+      <td>FakeAgent；上游用 <code>UpstreamProbe</code> 模拟 server</td>
+      <td>15（参数化展开后 17）</td>
+      <td>❌ 否</td>
+    </tr>
+    <tr>
+      <td><code>tests/test_host_runtime.py</code></td>
+      <td>server <code>HostRuntime</code> + <code>BridgeApp</code> + WebSocket + agent 子进程</td>
+      <td>Pods / Approvals / Sessions / Relay（不碰 DB、Redis）</td>
+      <td>18</td>
+      <td>✅ 是</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout">
+  ⚠️ 根目录 <code>pyproject.toml</code> 里配的是 <code>testpaths = ["tests"]</code>，<code>make test</code> 和 CI 都只跑这个目录。
+  <code>bridge/tests</code> 下的 22 个集成用例只有手动执行 <code>uv run pytest bridge/tests</code> 才会跑（2026-10-01 实测 120 passed）。
+  所有用例的 agent 都是 FakeAgent，<b>没有任何自动化用例</b>会碰真实的 <code>claude-code-acp</code>；这部分只有 <code>deploy/local/acp_smoke.py</code> 手动冒烟能验证。
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<h2>1. agent 子进程：<code>bridge/tests/test_agent_process.py</code></h2>
+<p class="sub">验证 bridge 与 agent 之间的 stdio 管道和进程生命周期。这类问题只有真进程才暴露得出来。</p>
+<table>
+  <thead><tr><th>#</th><th>用例</th><th>场景</th><th>关键断言</th></tr></thead>
+  <tbody>
+    <tr><td class="n">1</td><td class="name"><code>test_line_roundtrip</code></td>
+      <td>经 stdio 发一个 <code>initialize</code>，收响应</td>
+      <td>返回 <code>protocolVersion == 1</code></td></tr>
+    <tr><td class="n">2</td><td class="name"><code>test_environment_is_not_inherited</code></td>
+      <td><span class="tag">安全</span>bridge 自身带有敏感环境变量时启动 agent</td>
+      <td>agent 只能看到白名单变量（<code>ONLY_THIS</code>），看不到 <code>BRIDGE_SECRET</code></td></tr>
+    <tr><td class="n">3</td><td class="name"><code>test_oversize_line_is_skipped_and_the_next_frame_survives</code></td>
+      <td>agent 输出一行 200 KB 的 update（上限 64 KB），紧跟一个权限请求</td>
+      <td>只丢掉超长的那一行，后面的 <code>session/request_permission</code> 照常收到；<code>on_oversize</code> 回调触发 1 次，并带上大小和行首片段</td></tr>
+    <tr><td class="n">4</td><td class="name"><code>test_stderr_is_collected_and_truncated</code></td>
+      <td>agent 往 stderr 写一行普通日志和一行 5000 字符的长日志</td>
+      <td>能收到 stderr；长行被截断到 <code>stderr_line_bytes</code>（100）</td></tr>
+    <tr><td class="n">5</td><td class="name"><code>test_terminate_kills_the_whole_process_group</code></td>
+      <td>agent 自己又拉起一个子进程，然后 bridge 终止 agent</td>
+      <td>孙进程也被一起杀掉，不留孤儿（<code>os.kill(pid, 0)</code> 抛 <code>ProcessLookupError</code>）</td></tr>
+    <tr><td class="n">6</td><td class="name"><code>test_exit_is_observable_and_send_after_exit_fails</code></td>
+      <td>agent 在 prompt 中途崩溃（exit 3）</td>
+      <td><code>receive()</code> 返回 <code>None</code>，<code>wait()</code> 返回 3，之后再 <code>send</code> 抛 <code>ChannelClosed</code></td></tr>
+    <tr><td class="n">7</td><td class="name"><code>test_sigterm_ignored_escalates_to_sigkill</code></td>
+      <td>进程忽略 SIGTERM</td>
+      <td>宽限期（0.5s）过后升级为 SIGKILL，5s 内结束，退出码为负</td></tr>
+  </tbody>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<h2>2. bridge 端到端（上游协议）：<code>bridge/tests/test_upstream_e2e.py</code></h2>
+<p class="sub"><code>BridgeApp</code> 监听随机端口，测试用 <code>UpstreamProbe</code> 扮演 server，按 <code>atlas.host.v1</code> 协议通信。</p>
+<table>
+  <thead><tr><th>#</th><th>用例</th><th>场景</th><th>关键断言</th></tr></thead>
+  <tbody>
+    <tr class="group"><td colspan="4">握手与健康检查</td></tr>
+    <tr><td class="n">1</td><td class="name"><code>test_health_endpoints</code></td>
+      <td>访问 HTTP 探针</td>
+      <td><code>/healthz</code> → 200 <code>ok</code>；<code>/readyz</code> → 200 <code>idle</code>；未知路径 → 404</td></tr>
+    <tr><td class="n">2</td><td class="name"><code>test_handshake_is_rejected_before_upgrade</code><br><span class="tag">参数化 ×3</span></td>
+      <td><span class="tag">安全</span>token 错误 / session_id 不匹配 / 子协议不支持</td>
+      <td>在 WebSocket 升级之前就拒绝，分别返回 401 / 403 / 426</td></tr>
+    <tr><td class="n">3</td><td class="name"><code>test_missing_token_is_401</code></td>
+      <td><span class="tag">安全</span>完全不带 token 去连</td>
+      <td>401</td></tr>
+    <tr><td class="n">4</td><td class="name"><code>test_subprotocol_is_negotiated</code></td>
+      <td>客户端同时提供 <code>v9</code> 和 <code>v1</code></td>
+      <td>协商结果为 <code>atlas.host.v1</code></td></tr>
+
+    <tr class="group"><td colspan="4">一轮对话</td></tr>
+    <tr><td class="n">5</td><td class="name"><code>test_a_full_turn_over_websocket</code></td>
+      <td>open → <code>turn.start</code> → 正常结束 → ack</td>
+      <td>open 返回 ACP 信息和 bridge 实例 id；消息顺序为 <code>running</code> → update×2 → <code>ended</code>；<code>seq</code> 从 1 开始严格递增、不跳号；ack 之后 outbox 缓冲清空</td></tr>
+    <tr><td class="n">6</td><td class="name"><code>test_permission_round_trip_over_websocket</code></td>
+      <td>agent 请求权限，上游回复 allow</td>
+      <td><code>permission.ask</code> 带整数 id、选项、<code>expiresInS=600</code>；状态依次为 <code>running → awaiting_permission → running → ended</code>；agent 确实收到了批准</td></tr>
+    <tr><td class="n">7</td><td class="name"><code>test_cancel_over_websocket</code></td>
+      <td>agent 一直不出声，上游发 <code>turn.cancel</code></td>
+      <td>立即返回 <code>cancelling</code>；最终结果 <code>cancelled</code> / <code>requested</code></td></tr>
+
+    <tr class="group"><td colspan="4">错误码</td></tr>
+    <tr><td class="n">8</td><td class="name"><code>test_error_codes</code></td>
+      <td>依次触发各类协议错误</td>
+      <td>未 open 就 start → -32010 <code>not_opened</code>；重复 open → -32011；空 prompt → -32602；并发两轮 → -32012（带上进行中的 turnId）；取消不存在的轮次 → -32013；未知方法 → -32601</td></tr>
+
+    <tr class="group"><td colspan="4">连接管理</td></tr>
+    <tr><td class="n">9</td><td class="name"><code>test_new_connection_supersedes_the_old_one</code></td>
+      <td>同一会话先后建立两条连接</td>
+      <td>旧连接以 <code>SUPERSEDED</code> 关闭；新连接照常工作</td></tr>
+    <tr><td class="n">10</td><td class="name"><code>test_session_close_closes_with_4410_and_later_connections_too</code></td>
+      <td>一轮进行中调用 <code>session.close</code></td>
+      <td>这一轮先以 <code>session_closing</code> 结束；连接以 4410 <code>SESSION_GONE</code> 关闭；之后的新连接也会收到 4410；进程不退出，等待 Pod 回收</td></tr>
+    <tr><td class="n">11</td><td class="name"><code>test_turn_survives_a_disconnect_and_attach_resends</code></td>
+      <td><span class="tag">断线</span>等待审批时断线，重连后 <code>session.attach</code></td>
+      <td>断线不会结束这一轮；attach 之前什么都不发；attach 返回 <code>in_turn / awaiting_permission</code>，<code>resendFrom = lastSeq+1</code>；补发的 seq 连续，权限询问沿用原 id；响应排在补发消息之前；批准后正常完成</td></tr>
+    <tr><td class="n">12</td><td class="name"><code>test_attach_to_a_restarted_bridge_is_refused</code></td>
+      <td>拿旧的实例 id 去 attach</td>
+      <td>-32010 <code>bridge_restarted</code>，并返回当前实例 id</td></tr>
+    <tr><td class="n">13</td><td class="name"><code>test_already_open_tells_the_instance</code></td>
+      <td>会话已经 open，再次 open</td>
+      <td>错误数据里带上 <code>bridgeInstance</code> 和 <code>agentSessionId</code>，供 server 改用 attach</td></tr>
+    <tr><td class="n">14</td><td class="name"><code>test_turn_is_cancelled_when_upstream_does_not_come_back</code></td>
+      <td><span class="tag">断线</span>断线后超过重连窗口（0.3s）仍未回来</td>
+      <td>这一轮以 <code>upstream_lost</code> 取消；结果留在缓冲里，之后 attach 仍能取到</td></tr>
+
+    <tr class="group"><td colspan="4">故障恢复</td></tr>
+    <tr><td class="n">15</td><td class="name"><code>test_agent_crash_is_recovered_over_websocket</code></td>
+      <td><span class="tag">崩溃</span>SIGKILL 杀掉 agent 进程</td>
+      <td>推送 <code>session.state=ready</code>，<code>restarts=1</code>；FakeAgent 不持久化会话，所以 <code>resumed=false</code>，并且换了新的 <code>agentSessionId</code>（如实上报）；之后新的一轮正常完成</td></tr>
+  </tbody>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<h2>3. server ↔ bridge：<code>tests/test_host_runtime.py</code></h2>
+<p class="sub">server 侧的 <code>HostRuntime.run_turn</code> 直连真实的 <code>BridgeApp</code>，产出 <code>TraceEvent</code> 流；审批、会话存储、取消信号、Pod 分配都用替身。</p>
+<table>
+  <thead><tr><th>#</th><th>用例</th><th>场景</th><th>关键断言</th></tr></thead>
+  <tbody>
+    <tr class="group"><td colspan="4">正常路径与会话</td></tr>
+    <tr><td class="n">1</td><td class="name"><code>test_a_full_turn</code></td>
+      <td>完整的一轮</td>
+      <td>事件依次为 <code>run.started → message.delta×2 → message.completed → usage.updated → run.finished</code>；seq 连续；文本正确拼接；<code>agent_session_id</code> 当场持久化</td></tr>
+    <tr><td class="n">2</td><td class="name"><code>test_second_run_on_the_same_pod</code></td>
+      <td>同一个 Pod 上跑第二轮（open 返回 ALREADY_OPEN）</td>
+      <td>正常 <code>run.finished</code>，不出现 <code>session.lost</code></td></tr>
+    <tr><td class="n">3</td><td class="name"><code>test_resume_on_a_new_pod_that_lost_the_session_is_visible</code></td>
+      <td>在新 Pod 上恢复一个已经丢失的会话</td>
+      <td>产出 <code>session.lost</code> 让用户看到；记下新的会话 id；这一轮照常完成</td></tr>
+
+    <tr class="group"><td colspan="4">审批</td></tr>
+    <tr><td class="n">4</td><td class="name"><code>test_permission_approved</code></td>
+      <td>审批通过</td>
+      <td><code>approval.required</code> 出现在 <code>tool.started</code> 之后，且带上工具名；之后是 <code>tool.completed</code>，没有 <code>tool.failed</code></td></tr>
+    <tr><td class="n">5</td><td class="name"><code>test_permission_rejected_says_why</code></td>
+      <td>审批被拒绝</td>
+      <td><code>tool.failed</code> 的 result 为「用户拒绝了这次调用。」；正文非空，所以这一轮仍是 <code>run.finished</code></td></tr>
+    <tr><td class="n">6</td><td class="name"><code>test_expired_ask_is_withdrawn_and_marked</code></td>
+      <td>审批超时（0.5s），一直没人答复</td>
+      <td>审批行被标记为 expired；<code>tool.failed</code> 说明是超时、按拒绝处理；这一轮正常结束</td></tr>
+    <tr><td class="n">7</td><td class="name"><code>test_silent_rejection_is_a_failure</code></td>
+      <td>工具被拒绝，而且 agent 一个字都没输出</td>
+      <td><code>run.failed</code>，<code>error_kind=subagent_silent</code>（<code>end_turn</code> 不能当作成功）</td></tr>
+
+    <tr class="group"><td colspan="4">取消、超时与故障</td></tr>
+    <tr><td class="n">8</td><td class="name"><code>test_cancel</code></td>
+      <td>运行 0.5s 后用户取消</td>
+      <td><code>run.cancelled</code></td></tr>
+    <tr><td class="n">9</td><td class="name"><code>test_deadline_is_enforced_by_the_bridge</code></td>
+      <td><code>timeout_s=1</code>，agent 一直不出声</td>
+      <td><code>run.failed</code>，<code>run_timeout</code>（截止时间由 bridge 执行）</td></tr>
+    <tr><td class="n">10</td><td class="name"><code>test_agent_crash_mid_turn</code></td>
+      <td><span class="tag">崩溃</span>agent 在一轮中途崩溃</td>
+      <td><code>run.failed</code>，<code>runtime_crashed</code></td></tr>
+    <tr><td class="n">11</td><td class="name"><code>test_pod_unavailable</code></td>
+      <td>Pod 分配失败（quota）</td>
+      <td><code>pod_unavailable</code></td></tr>
+    <tr><td class="n">12</td><td class="name"><code>test_bridge_unreachable</code></td>
+      <td>bridge 地址不通</td>
+      <td><code>runtime_unreachable</code></td></tr>
+    <tr><td class="n">13</td><td class="name"><code>test_wrong_token_is_unreachable_not_a_hang</code></td>
+      <td><span class="tag">安全</span>token 错误</td>
+      <td>快速失败（不会挂住）：<code>runtime_unreachable</code>，消息里带 401</td></tr>
+
+    <tr class="group"><td colspan="4">断线、重连与 attach</td></tr>
+    <tr><td class="n">14</td><td class="name"><code>test_next_run_attaches_instead_of_opening</code></td>
+      <td>第二轮复用已知的 bridge 实例</td>
+      <td>走 attach 而不是 open；全部消息都已确认，bridge 缓冲清空</td></tr>
+    <tr><td class="n">15</td><td class="name"><code>test_disconnect_mid_turn_reconnects_and_the_approval_is_not_duplicated</code></td>
+      <td><span class="tag">断线</span>等待审批时网络抖动（1011），重连后才被批准</td>
+      <td><code>approval.required</code> 只出现 1 次，只登记了 1 条审批，没有 expire；工具完成；事件 seq 连续</td></tr>
+    <tr><td class="n">16</td><td class="name"><code>test_bridge_restarted_mid_turn_is_bridge_lost</code></td>
+      <td><span class="tag">断线</span>一轮中途断线，重连时发现实例 id 变了</td>
+      <td><code>bridge_lost</code>；server 忘掉这个实例，下一轮重新 open</td></tr>
+    <tr><td class="n">17</td><td class="name"><code>test_superseded_connection_does_not_reconnect</code></td>
+      <td>另一条连接接管了会话</td>
+      <td>不再重连：<code>runtime_unreachable</code>，消息里说明被「取代」</td></tr>
+    <tr><td class="n">18</td><td class="name"><code>test_server_that_forgot_the_bridge_attaches_via_already_open</code></td>
+      <td>server 重启后丢了进程内记忆</td>
+      <td>open 得到 ALREADY_OPEN 并拿回实例 id，改用 attach，这一轮正常完成</td></tr>
+  </tbody>
+</table>
+
+<h2>未覆盖</h2>
+<table>
+  <thead><tr><th>缺口</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td>真实 ACP adapter</td><td>所有自动化用例都用 FakeAgent；与 <code>@zed-industries/claude-code-acp</code> 的协议兼容性（能力位、<code>session/resume</code> 能否真正恢复）只有 <code>deploy/local/acp_smoke.py</code> 手动验证</td></tr>
+    <tr><td>会话真正恢复成功</td><td>FakeAgent 是独立进程，不持久化会话，所以真进程场景下只测了 <code>resumed=false</code> 的分支；<code>resumed=true</code> 的分支只在组件层 <code>test_recovery.py</code>（进程内 agent）覆盖</td></tr>
+    <tr><td>容器启动</td><td><code>python -m atlas_bridge</code> 加环境变量的启动路径没有自动化用例；<code>tests/test_cluster_host_bridge.py</code> 只校验模板生成的环境变量能被 <code>BridgeConfig</code> 解析</td></tr>
+  </tbody>
+</table>
+
+</main>
+</body>
+</html>

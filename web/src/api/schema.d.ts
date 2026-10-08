@@ -170,6 +170,66 @@ export interface paths {
         patch: operations["update_thread_v1_threads__thread_id__patch"];
         trace?: never;
     };
+    "/v1/threads/{thread_id}/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Files
+         * @description 会话工作区里的文件 —— 直接列对象存储，包括 acp 子智能体在 Pod 里写的产物。
+         */
+        get: operations["list_files_v1_threads__thread_id__files_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/threads/{thread_id}/files/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Preview
+         * @description 签发文件预览令牌。站点在 GET /v1/previews/{token}/… 下（见 api/v1/previews.py）。
+         */
+        post: operations["create_preview_v1_threads__thread_id__files_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/threads/{thread_id}/files/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download File
+         * @description 下载工作区里的一个文件（流式，不整个读进内存）。
+         */
+        get: operations["download_file_v1_threads__thread_id__files_download_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/threads/{thread_id}/runs": {
         parameters: {
             query?: never;
@@ -187,6 +247,37 @@ export interface paths {
          *     带 Idempotency-Key 时重复提交返回同一个 run，不会变成两条消息（§11.2）。
          */
         post: operations["create_run_v1_threads__thread_id__runs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/threads/{thread_id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream Thread Events
+         * @description 一条会话的 SSE 事件流 —— 该会话下**所有** run 的事件，含子智能体的。
+         *
+         *     与 `GET /runs/{id}/events` 的三处差别（doc/detail/suspension.html §04）：
+         *
+         *       · 永不自动结束。终态事件不再是关闭信号 —— 一轮跑完后面还有下一轮。
+         *         这是子 run 的过程（含审批弹窗）能被看见的前提。
+         *       · id 写 `thread_seq`（会话内单调），不是 run 内的 seq。
+         *       · 首连只回放最近 N 条（sse_thread_replay_events）。带游标的重连不受
+         *         此限 —— 那时要补的是缺口。
+         *
+         *     ★ 游标缺省值是 None 而不是 0，两者语义不同：None = 「我没有游标，给我
+         *       默认窗口」，0 = 「从头给我」。用 0 当缺省会让每次打开老会话都全量回放。
+         */
+        get: operations["stream_thread_events_v1_threads__thread_id__events_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -222,6 +313,29 @@ export interface paths {
         };
         /** Get Run */
         get: operations["get_run_v1_runs__run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/runs/{run_id}/trace": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Run Trace
+         * @description 一轮的归档轨迹（含子 run）—— 历史轮次的工具、委派、审批靠它在对话里重现。
+         *
+         *     ★ 与会话 SSE 流的分工：SSE 只回放最近一个窗口、只服务进行中的那一轮；
+         *       已结束的轮次按需取这里，一轮一次，结果不会再变。
+         */
+        get: operations["get_run_trace_v1_runs__run_id__trace_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -297,7 +411,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/runs/{run_id}/events": {
+    "/v1/memories": {
         parameters: {
             query?: never;
             header?: never;
@@ -305,16 +419,157 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Stream Run Events
-         * @description SSE 事件流。
+         * List Memories
+         * @description 列出**当前用户**的记忆。
          *
-         *     断线重连：浏览器 EventSource 自动带 Last-Event-ID（即上次收到的 seq），
-         *     服务端据此补发缺失部分再续读 —— 前端不需要写重连逻辑（§10.2）。
-         *     after_seq 查询参数供非浏览器客户端使用。
+         *     ★ user_id 由服务端从会话取，**不接受参数传入**（§09）。Mem0 的
+         *       filters 决定了能读到谁的记忆 —— 一旦它可以由调用方指定，就等于
+         *       开了一个读取他人记忆的口子。
          */
-        get: operations["stream_run_events_v1_runs__run_id__events_get"];
+        get: operations["list_memories_v1_memories_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/memories/{memory_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Memory
+         * @description 删除单条。
+         *
+         *     ★ 先确认这条属于当前用户再删 —— Mem0 的 delete(memory_id) 不带作用域，
+         *       直接透传等于任何人都能删别人的记忆。
+         *
+         *     ★ 措辞上**不承诺「彻底删除」**：delete() 到底是真把向量与原文清掉、
+         *       还是只标记为不可见，属于 §12 第 7 项的待验证项。在验证之前对用户
+         *       说「已彻底删除」是不诚实的 —— 而用户删记忆往往正是因为它敏感。
+         */
+        delete: operations["delete_memory_v1_memories__memory_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/skills": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Skills
+         * @description 技能目录（来自配置服务，经缓存）+ 引用数 + 近 7 天加载次数。编辑器选择器用。
+         */
+        get: operations["list_skills_v1_skills_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/skills/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Skill Usage */
+        get: operations["skill_usage_v1_skills_usage_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/skills/{slug}/references": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Skill References
+         * @description 引用该技能的 agent（按当前版本）—— 停用 / 下架前必查。
+         */
+        get: operations["skill_references_v1_skills__slug__references_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/mcp/servers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Mcp Servers
+         * @description ★ 只读快照缓存，不触发发现：管理页不能被一个慢 server 拖住。
+         */
+        get: operations["list_mcp_servers_v1_mcp_servers_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/mcp/servers/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Mcp Server */
+        get: operations["get_mcp_server_v1_mcp_servers__name__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/mcp/servers/{name}/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Refresh Mcp Server
+         * @description 强制重新发现。同一 server 10 秒内只执行一次。
+         */
+        post: operations["refresh_mcp_server_v1_mcp_servers__name__refresh_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -374,6 +629,33 @@ export interface components {
             /** Subagent Count */
             subagent_count: number;
             /**
+             * Kind
+             * @default native
+             */
+            kind: string;
+            /**
+             * Builtin Tool Count
+             * @default 0
+             */
+            builtin_tool_count: number;
+            /**
+             * Skill Count
+             * @default 0
+             */
+            skill_count: number;
+            /**
+             * Mcp Servers
+             * @default []
+             */
+            mcp_servers: string[];
+            /**
+             * Subagents
+             * @default []
+             */
+            subagents: {
+                [key: string]: unknown;
+            }[];
+            /**
              * Created At
              * Format: date-time
              */
@@ -426,6 +708,33 @@ export interface components {
             /** Subagent Count */
             subagent_count: number;
             /**
+             * Kind
+             * @default native
+             */
+            kind: string;
+            /**
+             * Builtin Tool Count
+             * @default 0
+             */
+            builtin_tool_count: number;
+            /**
+             * Skill Count
+             * @default 0
+             */
+            skill_count: number;
+            /**
+             * Mcp Servers
+             * @default []
+             */
+            mcp_servers: string[];
+            /**
+             * Subagents
+             * @default []
+             */
+            subagents: {
+                [key: string]: unknown;
+            }[];
+            /**
              * Created At
              * Format: date-time
              */
@@ -466,6 +775,16 @@ export interface components {
              */
             kind: "native" | "acp";
             cli?: components["schemas"]["CliSpecIn"] | null;
+            /** Mcp Tool Digests */
+            mcp_tool_digests?: {
+                [key: string]: string;
+            };
+            /**
+             * Mcp Drift Policy
+             * @default warn
+             * @enum {string}
+             */
+            mcp_drift_policy: "warn" | "block";
         };
         /** AgentStatusUpdate */
         AgentStatusUpdate: {
@@ -557,6 +876,12 @@ export interface components {
              * @default
              */
             image: string;
+            /**
+             * Permission Mode
+             * @default auto
+             * @enum {string}
+             */
+            permission_mode: "manual" | "accept_edits" | "auto" | "plan";
         };
         /** CompactionSpecIn */
         CompactionSpecIn: {
@@ -586,6 +911,11 @@ export interface components {
              */
             summarizer_model: string;
         };
+        /**
+         * EventType
+         * @enum {string}
+         */
+        EventType: "run.started" | "run.finished" | "run.failed" | "run.cancelled" | "run.suspended" | "thinking.delta" | "message.delta" | "message.completed" | "todos.updated" | "tool.started" | "tool.completed" | "tool.failed" | "subagent.started" | "subagent.step" | "subagent.finished" | "file.written" | "file.deleted" | "usage.updated" | "approval.required" | "context.compacted" | "session.lost" | "agent.mode" | "thread.title_generated" | "skill.loaded" | "skill.skipped" | "mcp.tool_drift";
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -620,6 +950,166 @@ export interface components {
             tool_concurrency: number;
             /** Require Approval For */
             require_approval_for?: string[];
+        };
+        /** McpServerDetailOut */
+        McpServerDetailOut: {
+            /** Name */
+            name: string;
+            /** Url */
+            url: string;
+            /** Transport */
+            transport: string;
+            /** Credential Scope */
+            credential_scope: string;
+            /** Headers */
+            headers: {
+                [key: string]: string;
+            };
+            /** Call Timeout S */
+            call_timeout_s: number | null;
+            /** Enabled */
+            enabled: boolean;
+            /** Review Required */
+            review_required: boolean;
+            /** Status */
+            status: string;
+            /** Error */
+            error?: string | null;
+            /**
+             * Tools Count
+             * @default 0
+             */
+            tools_count: number;
+            /**
+             * Invalid Tools
+             * @default 0
+             */
+            invalid_tools: number;
+            /**
+             * Pending Review
+             * @default 0
+             */
+            pending_review: number;
+            /** Content Hash */
+            content_hash?: string | null;
+            /** Fetched At */
+            fetched_at?: string | null;
+            /** Changed At */
+            changed_at?: string | null;
+            /**
+             * References
+             * @default 0
+             */
+            references: number;
+            /** Tools */
+            tools?: components["schemas"]["McpToolOut"][];
+            /** Removed Tools */
+            removed_tools?: string[];
+            /** Referenced By */
+            referenced_by?: {
+                [key: string]: unknown;
+            }[];
+        };
+        /** McpServerListOut */
+        McpServerListOut: {
+            /** Registry */
+            registry: string;
+            /** Data */
+            data: components["schemas"]["McpServerSummary"][];
+        };
+        /** McpServerSummary */
+        McpServerSummary: {
+            /** Name */
+            name: string;
+            /** Url */
+            url: string;
+            /** Transport */
+            transport: string;
+            /** Credential Scope */
+            credential_scope: string;
+            /** Headers */
+            headers: {
+                [key: string]: string;
+            };
+            /** Call Timeout S */
+            call_timeout_s: number | null;
+            /** Enabled */
+            enabled: boolean;
+            /** Review Required */
+            review_required: boolean;
+            /** Status */
+            status: string;
+            /** Error */
+            error?: string | null;
+            /**
+             * Tools Count
+             * @default 0
+             */
+            tools_count: number;
+            /**
+             * Invalid Tools
+             * @default 0
+             */
+            invalid_tools: number;
+            /**
+             * Pending Review
+             * @default 0
+             */
+            pending_review: number;
+            /** Content Hash */
+            content_hash?: string | null;
+            /** Fetched At */
+            fetched_at?: string | null;
+            /** Changed At */
+            changed_at?: string | null;
+            /**
+             * References
+             * @default 0
+             */
+            references: number;
+        };
+        /** McpToolOut */
+        McpToolOut: {
+            /** Name */
+            name: string;
+            /** Id */
+            id: string;
+            /** Model Name */
+            model_name: string | null;
+            /** Description */
+            description: string;
+            /** Digest */
+            digest: string;
+            /** Issues */
+            issues?: string[];
+            /** Review Status */
+            review_status: string;
+            /** Change */
+            change?: string | null;
+            /** Previous Description */
+            previous_description?: string | null;
+        };
+        /** MemoryListOut */
+        MemoryListOut: {
+            /** Data */
+            data: components["schemas"]["MemoryOut"][];
+        };
+        /** MemoryOut */
+        MemoryOut: {
+            /** Id */
+            id: string;
+            /** Memory */
+            memory: string;
+            /** Created At */
+            created_at?: string | null;
+            /** Updated At */
+            updated_at?: string | null;
+            /** Workspace */
+            workspace?: string | null;
+            /** Source Session */
+            source_session?: string | null;
+            /** Source Run */
+            source_run?: string | null;
         };
         /**
          * MessageListOut
@@ -758,6 +1248,19 @@ export interface components {
             /** Data */
             data: components["schemas"]["PendingApproval"][];
         };
+        /**
+         * PreviewSessionOut
+         * @description 文件预览站点的入口。base_url 以 / 结尾，文件地址 = base_url + 逐段编码的路径。
+         */
+        PreviewSessionOut: {
+            /** Base Url */
+            base_url: string;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+        };
         /** RunAccepted */
         RunAccepted: {
             /**
@@ -774,7 +1277,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | "interrupted" | "awaiting_approval";
+            status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | "interrupted" | "awaiting_approval" | "suspended";
         };
         /**
          * RunCreate
@@ -807,7 +1310,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | "interrupted" | "awaiting_approval";
+            status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | "interrupted" | "awaiting_approval" | "suspended";
             /** Error Kind */
             error_kind: string | null;
             /** Error Message */
@@ -835,6 +1338,49 @@ export interface components {
             created_at: string;
         };
         /**
+         * RunTraceOut
+         * @description 一轮的归档轨迹（含子 run），按 thread_seq 正序。
+         *
+         *     ★ 不含 message.delta（归档时就滤掉了），正文由 message.completed 一次给全。
+         *     ★ 空列表 = 归档已被清理，前端退回只显示消息正文。
+         */
+        RunTraceOut: {
+            /** Data */
+            data: components["schemas"]["TraceEvent"][];
+        };
+        /** SkillListItem */
+        SkillListItem: {
+            /** Slug */
+            slug: string;
+            /** Source */
+            source: string;
+            /** Latest */
+            latest?: number | null;
+            /** Description */
+            description?: string | null;
+            /** Has Scripts */
+            has_scripts?: boolean | null;
+            /** Versions */
+            versions?: components["schemas"]["SkillVersionBrief"][];
+            /**
+             * References
+             * @default 0
+             */
+            references: number;
+            /**
+             * Loads 7D
+             * @default 0
+             */
+            loads_7d: number;
+        };
+        /** SkillListOut */
+        SkillListOut: {
+            /** Directory Configured */
+            directory_configured: boolean;
+            /** Data */
+            data: components["schemas"]["SkillListItem"][];
+        };
+        /**
          * SkillRefIn
          * @description agent 引用一个技能。
          *
@@ -850,6 +1396,67 @@ export interface components {
             slug: string;
             /** Version */
             version?: number | null;
+        };
+        /** SkillReference */
+        SkillReference: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Slug */
+            agent_slug: string;
+            /** Agent Name */
+            agent_name: string;
+            /** Agent Version */
+            agent_version: number;
+            /** Subagent */
+            subagent?: string | null;
+            /** Skill Version */
+            skill_version: number;
+            /**
+             * Active Threads
+             * @default 0
+             */
+            active_threads: number;
+        };
+        /** SkillReferencesOut */
+        SkillReferencesOut: {
+            /** Data */
+            data: components["schemas"]["SkillReference"][];
+        };
+        /** SkillUsageItem */
+        SkillUsageItem: {
+            /** Slug */
+            slug: string;
+            /** Version */
+            version: number;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Loads */
+            loads: number;
+            /** Completed Runs */
+            completed_runs: number;
+        };
+        /** SkillUsageOut */
+        SkillUsageOut: {
+            /** Days */
+            days: number;
+            /** Data */
+            data: components["schemas"]["SkillUsageItem"][];
+        };
+        /** SkillVersionBrief */
+        SkillVersionBrief: {
+            /** Version */
+            version: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "published" | "disabled" | "revoked";
         };
         /** SubAgentSpecIn */
         SubAgentSpecIn: {
@@ -884,6 +1491,16 @@ export interface components {
              */
             kind: "native" | "acp";
             cli?: components["schemas"]["CliSpecIn"] | null;
+            /** Mcp Tool Digests */
+            mcp_tool_digests?: {
+                [key: string]: string;
+            };
+            /**
+             * Mcp Drift Policy
+             * @default warn
+             * @enum {string}
+             */
+            mcp_drift_policy: "warn" | "block";
             /** Source Agent Id */
             source_agent_id?: string | null;
         };
@@ -948,6 +1565,7 @@ export interface components {
             subagent_thread_count: number;
             /** Active Run Id */
             active_run_id?: string | null;
+            last_run?: components["schemas"]["ThreadRunState"] | null;
             /** Message Count */
             message_count: number;
             /** Compact Count */
@@ -966,6 +1584,29 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+        };
+        /**
+         * ThreadRunState
+         * @description 会话最近一个 run 的状态 —— 列表上的「运行中 / 待审批 / 等待子智能体 / 失败」。
+         */
+        ThreadRunState: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Status */
+            status: string;
+            /**
+             * Waiting
+             * @default []
+             */
+            waiting: string[];
+            /**
+             * Needs Approval
+             * @default false
+             */
+            needs_approval: boolean;
         };
         /**
          * ThreadUpdate
@@ -996,11 +1637,52 @@ export interface components {
              * @default []
              */
             model_tool_names: string[];
+            /** Server */
+            server?: string | null;
+            /** Digest */
+            digest?: string | null;
+            /** Review Status */
+            review_status?: string | null;
         };
         /** ToolListResponse */
         ToolListResponse: {
             /** Data */
             data: components["schemas"]["ToolInfo"][];
+        };
+        /** TraceEvent */
+        TraceEvent: {
+            /**
+             * Seq
+             * @description run 内单调递增
+             */
+            seq: number;
+            /**
+             * Thread Seq
+             * @description thread 内单调递增，thread 流的游标
+             * @default 0
+             */
+            thread_seq: number;
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /**
+             * Ts
+             * Format: date-time
+             */
+            ts: string;
+            type: components["schemas"]["EventType"];
+            /**
+             * Depth
+             * @description 0=主 agent，1=子 agent，前端缩进用
+             * @default 0
+             */
+            depth: number;
+            /** Data */
+            data?: {
+                [key: string]: unknown;
+            };
         };
         /** ValidationError */
         ValidationError: {
@@ -1014,6 +1696,32 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
+        };
+        /** WorkspaceFile */
+        WorkspaceFile: {
+            /** Path */
+            path: string;
+            /** Size */
+            size: number;
+            /** Modified At */
+            modified_at?: string | null;
+            /** Etag */
+            etag?: string | null;
+        };
+        /**
+         * WorkspaceFilesOut
+         * @description 会话工作区里的文件（右侧「文件」面板）。子会话看的是父会话的工作区（共享）。
+         */
+        WorkspaceFilesOut: {
+            /** Configured */
+            configured: boolean;
+            /** Data */
+            data: components["schemas"]["WorkspaceFile"][];
+            /**
+             * Truncated
+             * @default false
+             */
+            truncated: boolean;
         };
     };
     responses: never;
@@ -1465,6 +2173,101 @@ export interface operations {
             };
         };
     };
+    list_files_v1_threads__thread_id__files_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceFilesOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_preview_v1_threads__thread_id__files_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreviewSessionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_file_v1_threads__thread_id__files_download_get: {
+        parameters: {
+            query: {
+                path: string;
+            };
+            header?: never;
+            path: {
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     create_run_v1_threads__thread_id__runs_post: {
         parameters: {
             query?: never;
@@ -1489,6 +2292,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RunAccepted"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stream_thread_events_v1_threads__thread_id__events_get: {
+        parameters: {
+            query?: {
+                after_seq?: number | null;
+            };
+            header?: {
+                "Last-Event-ID"?: string | null;
+            };
+            path: {
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -1554,6 +2392,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RunOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_run_trace_v1_runs__run_id__trace_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunTraceOut"];
                 };
             };
             /** @description Validation Error */
@@ -1667,16 +2536,129 @@ export interface operations {
             };
         };
     };
-    stream_run_events_v1_runs__run_id__events_get: {
+    list_memories_v1_memories_get: {
         parameters: {
             query?: {
-                after_seq?: number | null;
+                limit?: number;
+                workspace?: string | null;
+                source_session?: string | null;
             };
             header?: {
-                "Last-Event-ID"?: string | null;
+                "X-User-Id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemoryListOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_memory_v1_memories__memory_id__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-User-Id"?: string | null;
             };
             path: {
-                run_id: string;
+                memory_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_skills_v1_skills_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillListOut"];
+                };
+            };
+        };
+    };
+    skill_usage_v1_skills_usage_get: {
+        parameters: {
+            query?: {
+                days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillUsageOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    skill_references_v1_skills__slug__references_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
             };
             cookie?: never;
         };
@@ -1688,7 +2670,89 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["SkillReferencesOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_mcp_servers_v1_mcp_servers_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpServerListOut"];
+                };
+            };
+        };
+    };
+    get_mcp_server_v1_mcp_servers__name__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpServerDetailOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    refresh_mcp_server_v1_mcp_servers__name__refresh_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpServerDetailOut"];
                 };
             };
             /** @description Validation Error */

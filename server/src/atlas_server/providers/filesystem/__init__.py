@@ -5,7 +5,7 @@ from atlas_server.providers.filesystem.oss import OssFilesystem, PathEscape
 __all__ = ["OssFilesystem", "PathEscape", "make_workspace"]
 
 
-def make_workspace(settings, user_id, thread_id, workspace_thread_id=None):  # noqa: ANN001, ANN201
+def make_workspace(settings, user_id, thread_id, workspace_thread_id=None):
     """按配置构造会话工作区；没配对象存储则返回 None。
 
     workspace_thread_id: 工作区归属的会话。None = 自己；子智能体传父会话的 id

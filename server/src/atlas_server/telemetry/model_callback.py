@@ -8,8 +8,9 @@
   主对话（assembly.py:154）、标题生成（:238）、上下文摘要（:267）。
   挂在那里，三处一并覆盖，而且不用碰 runner（它是纯计算层）。
 
-★ 只记元数据，不记内容（§08）。提示词与回答默认不进遥测管道：那里面
-  有用户的私有代码与密钥，一旦进去，留存期与访问控制就跟业务数据脱钩了。
+★ 默认只记元数据（§08）。提示词与回答只在内容档位为 full 时记录，且经过脱敏和截断
+  （telemetry/content.py）：那里面有用户的私有代码与密钥，一旦进了遥测管道，
+  留存期与访问控制就跟业务数据脱钩了。
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from uuid import UUID
 
 from langchain_core.callbacks import BaseCallbackHandler
 
+from . import content
 from . import semconv as sc
 
 if TYPE_CHECKING:
@@ -45,7 +47,7 @@ class ModelSpanHandler(BaseCallbackHandler):
     def on_chat_model_start(
         self, serialized: dict[str, Any], messages: Any, *, run_id: UUID, **kwargs: Any
     ) -> None:
-        self._start(run_id, kwargs)
+        self._start(run_id, kwargs, messages=messages)
 
     def on_llm_start(
         self, serialized: dict[str, Any], prompts: list[str], *, run_id: UUID, **kwargs: Any
@@ -53,7 +55,7 @@ class ModelSpanHandler(BaseCallbackHandler):
         # 聊天模型走 on_chat_model_start；这条是补给非聊天模型的，同样处理。
         self._start(run_id, kwargs)
 
-    def _start(self, run_id: UUID, kwargs: dict[str, Any]) -> None:
+    def _start(self, run_id: UUID, kwargs: dict[str, Any], *, messages: Any = None) -> None:
         try:
             from opentelemetry import trace as ot
 
@@ -69,8 +71,13 @@ class ModelSpanHandler(BaseCallbackHandler):
                 attributes={
                     sc.OPERATION_NAME: sc.OP_CHAT,
                     sc.REQUEST_MODEL: model,
+                    # ★ 显式标成模型调用：只有它带 gen_ai.usage.*，计费以它为准
+                    sc.LF_OBSERVATION_TYPE: sc.OBS_GENERATION,
                 },
             )
+            # full 档：这次调用的完整输入（系统提示词 + 历史 + 本轮）
+            if (text := content.render(_messages_of(messages), "full")) is not None:
+                self._spans[run_id].set_attribute(sc.LF_OBSERVATION_INPUT, text)
         except Exception:
             logger.debug("模型 span 开启失败", exc_info=True)
 
@@ -125,9 +132,37 @@ class ModelSpanHandler(BaseCallbackHandler):
             if isinstance(usage.get(key), int):
                 span.set_attribute(attr, usage[key])
 
+        if (text := content.render(_message_of(message), "full")) is not None:
+            span.set_attribute(sc.LF_OBSERVATION_OUTPUT, text)
+
         meta = getattr(message, "response_metadata", None) or {}
         if model := meta.get("model_name") or meta.get("model"):
             span.set_attribute(sc.RESPONSE_MODEL, str(model))
         if stop := meta.get("stop_reason") or meta.get("finish_reason"):
             # semconv 规定它是**数组** —— 一次响应可能有多个候选
             span.set_attribute(sc.FINISH_REASONS, [str(stop)])
+
+
+def _message_of(message: Any) -> dict[str, Any] | None:
+    """LangChain 消息 → {role, content[, tool_calls]}。只取展示需要的字段。"""
+    if message is None:
+        return None
+    out: dict[str, Any] = {
+        "role": getattr(message, "type", "unknown"),
+        "content": getattr(message, "content", ""),
+    }
+    if tool_calls := getattr(message, "tool_calls", None):
+        out["tool_calls"] = [
+            {"name": c.get("name"), "args": c.get("args")}
+            for c in tool_calls
+            if isinstance(c, dict)
+        ]
+    return out
+
+
+def _messages_of(messages: Any) -> list[dict[str, Any]] | None:
+    """on_chat_model_start 的 messages 是「批次 × 消息」的二维列表；只记第一批。"""
+    if not messages or not isinstance(messages, list):
+        return None
+    batch = messages[0] if isinstance(messages[0], list) else messages
+    return [m for m in (_message_of(x) for x in batch) if m is not None]

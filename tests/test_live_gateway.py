@@ -13,9 +13,10 @@ from uuid import UUID
 
 import pytest
 from atlas_server.domain.events import EventType
-from atlas_server.providers.llm.factory import build_chat_model
-from tests.graphs import run_agent as run
 from atlas_server.domain.spec import AgentSpec, LimitSpec, ModelSpec
+from atlas_server.providers.llm.factory import build_chat_model
+
+from tests.graphs import run_agent as run
 
 pytestmark = pytest.mark.skipif(
     not os.getenv("ATLAS_LIVE_TESTS"),
@@ -127,20 +128,43 @@ async def test_live_tools_produce_inspector_data() -> None:
     assert [e.seq for e in events] == list(range(1, len(events) + 1))
 
 
-async def test_live_bare_web_search() -> None:
-    """裸搜索工具的真实链路：主模型自己决定搜几次，标准 tool.* 事件。"""
-    if not os.getenv("SERPAPI_KEY"):
-        pytest.skip("需要 SERPAPI_KEY")
-    from atlas_server.services.search import make_web_search_tool
+async def test_live_mcp_web_search_via_higress() -> None:
+    """网页搜索的真实链路：模型 → MCP 工具 → Higress → serpapi。
+
+    前提：本机 Higress 已按 deploy/local/higress/setup.py 配好 serpapi。
+    地址可用 ATLAS_LIVE_MCP_URL 覆盖（默认本机 18080）。
+    """
+    import uuid
+
+    import httpx
+    from atlas_server.providers.mcp import (
+        CallContext,
+        McpServerConfig,
+        NativeMcpTools,
+        SettingsCatalog,
+    )
+
+    url = os.getenv("ATLAS_LIVE_MCP_URL", "http://127.0.0.1:18080/mcp-servers/serpapi")
+    try:
+        httpx.get(url.rsplit("/mcp-servers", 1)[0], timeout=3)
+    except httpx.HTTPError:
+        pytest.skip(f"Higress 不可达：{url}")
 
     base, key = _creds()
     spec = AgentSpec(
         slug="live-search",
         name="搜索宿主",
-        system_prompt="需要查证最新事实时用 web_search，回答带来源链接。",
+        system_prompt="需要查证最新事实时用搜索工具，回答带来源链接。",
         model=ModelSpec(model="claude-sonnet-5", effort="low", max_output_tokens=2048),
-        tool_names=("web_search",),
+        tool_names=("mcp:serpapi:google_search",),
         limits=LimitSpec(timeout_s=180),
+    )
+    catalog = SettingsCatalog(
+        [McpServerConfig(name="serpapi", url=url, call_timeout_s=90)], redis=None
+    )
+    tools = await NativeMcpTools(catalog).tools_for(
+        spec.tool_names,
+        CallContext(run_id=RUN_ID, thread_id=uuid.uuid4(), user_id=uuid.uuid4()),
     )
     chat = build_chat_model(spec.model, base_url=base, api_key=key)
     events = [
@@ -150,7 +174,7 @@ async def test_live_bare_web_search() -> None:
             run_id=RUN_ID,
             model=chat,
             input_content="查一下 Python 3.13 正式发布的日期，给出来源。",
-            extra_tools=[make_web_search_tool(os.environ["SERPAPI_KEY"])],
+            extra_tools=tools,
         )
     ]
     types = [e.type for e in events]
@@ -159,6 +183,8 @@ async def test_live_bare_web_search() -> None:
     )
     assert types[-1] == EventType.RUN_FINISHED
     searches = [
-        e for e in events if e.type is EventType.TOOL_STARTED and e.data.get("name") == "web_search"
+        e
+        for e in events
+        if e.type is EventType.TOOL_STARTED and e.data.get("name") == "serpapi__google_search"
     ]
-    assert searches, "模型没有调用 web_search"
+    assert searches, "模型没有调用 serpapi__google_search"

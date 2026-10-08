@@ -15,7 +15,7 @@
  */
 import { parseTraceEvent, type AnyTraceEvent } from "../src/lib/events";
 import { applyEvent, initialRunState, type RunState } from "../src/lib/run-reducer";
-import { streamRunEvents } from "../src/lib/sse";
+import { streamThreadEvents } from "../src/lib/sse";
 
 const BASE = process.env.API_BASE ?? "http://127.0.0.1:8000";
 
@@ -187,56 +187,62 @@ async function main(): Promise<void> {
   );
 
   // ---------- 场景 4：lib/sse.ts 封装本身 ----------
-  // 前面三个场景验的是协议和归约，这里验封装里最容易写错的部分：
-  // 收到终态事件后必须主动 abort，否则库会把「服务端关闭」当异常而无限重连。
-  console.log("\n场景 4 · streamRunEvents 封装");
+  // 前面三个场景验的是协议和归约，这里验封装里最容易写错的部分。
+  //
+  // ★ 会话流的纪律与 run 流相反：它**永不自己结束**，所以调用方必须在一轮
+  //   结束时主动 abort，否则 await 永远不返回。写错的表现是脚本挂死。
+  console.log("\n场景 4 · streamThreadEvents 封装");
   const t3 = await api<{ id: string }>("/v1/threads", {
     method: "POST",
     body: JSON.stringify({ agent_id: agent.id, title: "" }),
   });
-  const r3 = await api<{ run_id: string }>(`/v1/threads/${t3.id}/runs`, {
+  await api<{ run_id: string }>(`/v1/threads/${t3.id}/runs`, {
     method: "POST",
     body: JSON.stringify({ content: [{ type: "text", text: "只回复 OK" }] }),
   });
 
   let wrapped: RunState = initialRunState;
-  let closed = false;
+  let turnEnded = false;
   let opens = 0;
   let wrapError: Error | null = null;
 
   const started = Date.now();
   const ctrl = new AbortController();
-  await streamRunEvents({
-    runId: r3.run_id,
+  await streamThreadEvents({
+    threadId: t3.id,
     signal: ctrl.signal,
     onOpen: () => opens++,
-    onEvent: (e) => {
+    onEvent: (e: AnyTraceEvent) => {
       wrapped = applyEvent(wrapped, e);
     },
-    onClose: () => {
-      closed = true;
+    onTurnEnd: () => {
+      turnEnded = true;
+      ctrl.abort(); // ★ 会话流不自己结束 —— 一轮跑完由调用方决定是否继续听
     },
-    onError: (e) => {
+    onError: (e: Error) => {
       wrapError = e;
     },
   });
   const elapsed = Date.now() - started;
 
   check(wrapError === null, "封装未报错", wrapError ? String(wrapError) : "");
-  check(closed, "onClose 被调用（正常收线，非异常路径）");
+  check(turnEnded, "onTurnEnd 被调用（一轮结束，不是流结束）");
   check(opens === 1, "只连接了一次，没有重连风暴", `onOpen ×${opens}`);
   check(wrapped.status === "succeeded", "封装归约出终态", wrapped.status);
-  check(elapsed < 60_000, "终态后立即返回，未挂在重连里", `${(elapsed / 1000).toFixed(1)}s`);
+  check(elapsed < 60_000, "abort 后立即返回，未挂在重连里", `${(elapsed / 1000).toFixed(1)}s`);
 
   // ---------- 场景 5：断线续传走封装 ----------
   // 场景 2 验的是协议层。这里验封装是否真的把 lastSeq 变成了 Last-Event-ID ——
   // 这是"刷新页面不丢消息"的实现基础，写错了只会表现为消息重复，很隐蔽。
-  console.log("\n场景 5 · streamRunEvents 断线续传");
+  //
+  // ★ 游标是 thread_seq（会话内单调），不是 run 内的 seq。两者都是小整数，
+  //   混了不报错，只是补发范围整个错位。
+  console.log("\n场景 5 · streamThreadEvents 断线续传");
   const t4 = await api<{ id: string }>("/v1/threads", {
     method: "POST",
     body: JSON.stringify({ agent_id: agent.id, title: "" }),
   });
-  const r4 = await api<{ run_id: string }>(`/v1/threads/${t4.id}/runs`, {
+  await api<{ run_id: string }>(`/v1/threads/${t4.id}/runs`, {
     method: "POST",
     body: JSON.stringify({
       content: [{ type: "text", text: "把 3*4 的结果写进 /wrap.txt。先列两条待办。" }],
@@ -246,28 +252,29 @@ async function main(): Promise<void> {
   // 第一段：收满 3 条就 abort，模拟用户刷新页面
   let half: RunState = initialRunState;
   const ctrlA = new AbortController();
-  await streamRunEvents({
-    runId: r4.run_id,
+  await streamThreadEvents({
+    threadId: t4.id,
     signal: ctrlA.signal,
-    onEvent: (e) => {
+    onEvent: (e: AnyTraceEvent) => {
       half = applyEvent(half, e);
       if (half.lastSeq >= 3) ctrlA.abort();
     },
   });
   check(half.lastSeq >= 3, "第一段收到至少 3 条后中断", `lastSeq=${half.lastSeq}`);
 
-  // 第二段：带上 lastSeq 续传
+  // 第二段：带上游标续传，一轮结束即 abort
   const seen: number[] = [];
   let full: RunState = half;
   const ctrlB = new AbortController();
-  await streamRunEvents({
-    runId: r4.run_id,
+  await streamThreadEvents({
+    threadId: t4.id,
     lastSeq: half.lastSeq,
     signal: ctrlB.signal,
-    onEvent: (e) => {
-      seen.push(e.seq);
+    onEvent: (e: AnyTraceEvent) => {
+      seen.push(e.thread_seq);
       full = applyEvent(full, e);
     },
+    onTurnEnd: () => ctrlB.abort(),
   });
 
   check(

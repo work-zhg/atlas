@@ -23,7 +23,13 @@ const STATUS: Record<SubagentRun["status"], { color: string; label: string }> = 
  *   多个子智能体。按到达顺序猜关联在并发时会串到别人的卡片上，
  *   宁可不显示也不能显示错的。详见 docs/trace-event.md。
  *
- *   子智能体内部的工具调用仍然可见 —— 它们在 Inspector 工具页里带 depth 缩进。
+ * ★ 上面那段论证针对的是**图内子图**的实现方式，它已经不存在了 ——
+ *   子智能体现在跑在自己的子 run 里（doc/detail/subagent.html）。
+ *   `depth` 的语义随之改成「run 在委派树里的深度」：子 run 产出的事件带
+ *   depth=1，与 tool_call_id 无关，因此配对是可靠的。
+ *
+ *   步骤列表因此重新可做，但要等 thread 级事件流上线（前端目前只订阅父 run
+ *   那一条流，看不到子 run 的过程）—— 见 doc/detail/suspension.html §04。
  */
 export function SubAgentCard({ run }: { run: SubagentRun }) {
   const status = STATUS[run.status];

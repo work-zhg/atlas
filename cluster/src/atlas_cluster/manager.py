@@ -82,7 +82,7 @@ class PodManager:
         """等到 Pod 真的能连，再把地址交出去。
 
         ★ 这一步早先没有 —— ensure 在 Pod 还处于 ContainerCreating 时就返回了。
-          后果不是"慢一点"：AcpChannel 的连接超时只有 10s 且不重试，所以
+          后果不是"慢一点"：HostClient 的连接超时只有 10s 且不重试，所以
           **每个新会话的第一轮都必然失败**，报的还是"连不上 bridge"——
           一个看起来像网络问题的调度问题。内存后端里 create 即就绪，
           所以单测一路绿灯。

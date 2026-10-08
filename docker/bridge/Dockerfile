@@ -17,20 +17,36 @@
 FROM node:24-trixie-slim AS node
 
 # ── adapter：把 npm 包装到一个独立前缀 ────────────────────────────────
+# ★ 0.3.0 起换成 @agentclientprotocol/claude-agent-acp（原 @zed-industries/claude-code-acp
+#   已停更于 0.16.2）。新包才有 auto 权限模式（doc/acp-permission-mode-design.html）。
+#
+# ★ 两个入口：
+#   /opt/acp-cli/bin/claude-acp         稳定入口。新建的 agent 用它，以后换 adapter 不用改 spec
+#   旧包的 dist/index.js                 软链接到新包。存量 agent 的 cli.adapter 写死了这个路径，
+#                                       没有它们会全部起不来（Node 按真实路径解析 import，软链接可用）
 FROM node AS adapter
-ARG ACP_ADAPTER_VERSION=0.16.2
+ARG ACP_ADAPTER_VERSION=0.85.1
 RUN npm install --global --prefix /opt/acp-cli \
-        "@zed-industries/claude-code-acp@${ACP_ADAPTER_VERSION}" \
-    && npm cache clean --force
+        "@agentclientprotocol/claude-agent-acp@${ACP_ADAPTER_VERSION}" \
+    && npm cache clean --force \
+    && NEW=/opt/acp-cli/lib/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js \
+    && ln -s "$NEW" /opt/acp-cli/bin/claude-acp \
+    && mkdir -p /opt/acp-cli/lib/node_modules/@zed-industries/claude-code-acp/dist \
+    && ln -s "$NEW" /opt/acp-cli/lib/node_modules/@zed-industries/claude-code-acp/dist/index.js
 
 # ── bridge 的 Python 依赖 ────────────────────────────────────────────
 FROM python:3.14-slim AS wheels
 WORKDIR /build
 COPY acp/ acp/
 COPY bridge/ bridge/
+# bridge 依赖的另外两个包：JSON-RPC 基础与上游协议模型（代码设计 §1）。
+COPY jsonrpc/ jsonrpc/
+COPY host/ host/
 # ★ --no-cache-dir：这一层只为产出 wheel，缓存进不了最终镜像也没用，
 #   留着只是让中间层更大。
 RUN pip install --no-cache-dir --upgrade pip build \
+    && python -m build --wheel --outdir /wheels jsonrpc \
+    && python -m build --wheel --outdir /wheels host \
     && python -m build --wheel --outdir /wheels acp \
     && python -m build --wheel --outdir /wheels bridge
 
@@ -70,11 +86,11 @@ ENV HOME=/state \
     PYTHONDONTWRITEBYTECODE=1
 WORKDIR /workspace
 
-# adapter 的默认启动命令。模板用 ATLAS_ADAPTER_CMD 覆盖它 ——
+# agent（ACP 适配器）的默认启动命令。模板用 ATLAS_BRIDGE_AGENT_CMD 覆盖它 ——
 # 放在这里是为了让镜像自己能说清"我带的是哪个 adapter"。
-ENV ATLAS_ADAPTER_CMD="node /opt/acp-cli/lib/node_modules/@zed-industries/claude-code-acp/dist/index.js"
+ENV ATLAS_BRIDGE_AGENT_CMD="node /opt/acp-cli/bin/claude-acp"
 
 EXPOSE 8900
 # ★ 用 exec 形式：shell 形式会让 PID 1 变成 sh，SIGTERM 到不了 bridge，
-#   优雅终止的三步（拒新请求 / 上报中断 / 刷 span）一步都做不了。
-CMD ["python", "-m", "atlas_bridge.main"]
+#   它就没法在收到信号时关闭连接、终止 agent 的进程组。
+CMD ["python", "-m", "atlas_bridge"]

@@ -11,7 +11,7 @@
 #   配合 imagePullPolicy 的默认行为（本地有就不拉）即可使用。
 set -euo pipefail
 
-IMAGE="${1:-atlas-acp-bridge:0.1.0}"
+IMAGE="${1:-atlas-acp-bridge:0.3.0}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="${TMPDIR:-/tmp}/${IMAGE//[:\/]/-}.tar"
 

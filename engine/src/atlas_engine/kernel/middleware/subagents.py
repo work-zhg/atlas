@@ -175,6 +175,10 @@ def _build_delegating_task_tool(
 class SubAgentMiddleware(AgentMiddleware[Any, ContextT, ResponseT]):
     """把 `task` 工具装进主图。
 
+    ★ 「委派还没出结果就跳出」那条判据**不在这里** —— 它搬到了
+      SuspensionMiddleware（审批也用同一条路，两者是同一件事）。本中间件
+      只剩工具的形态与提示词。
+
     受理方（delegate）是**必填**的：kernel 不再有图内执行的回落路径。
     没有受理方却配了子智能体，正确的失败点在装配时（engine 的 build_agent
     会先以 InvalidSpec 拦下；这里的 ValueError 是 kernel 直用时的兜底）。

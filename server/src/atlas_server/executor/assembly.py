@@ -25,7 +25,7 @@ from langchain_core.messages import BaseMessage
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from atlas_server.domain.spec import AgentSpec
-from atlas_server.domain.tool_registry import MEMORY_SEARCH_TOOL, WEB_SEARCH_TOOL
+from atlas_server.domain.tool_registry import MEMORY_SEARCH_TOOL
 from atlas_server.domain.translator import extract_text
 from atlas_server.executor.runner import Titler
 from atlas_server.memory.tool import MemoryUnavailable, make_memory_search_tool
@@ -33,18 +33,20 @@ from atlas_server.providers.llm.factory import build_chat_model
 from atlas_server.telemetry.model_callback import ModelSpanHandler
 
 from ..config import Settings
+from ..configplane import skill_directory
+from ..configplane.mcp import make_mcp_catalog, mcp_reviews
 from ..db.models import Thread
+from ..domain.events import EventType
 from ..providers.filesystem import make_workspace
 from ..providers.filesystem.skill_copy import (
+    resolve_skills,
     seed_session_skills,
-    skill_metas_for,
     skill_refs_for,
 )
+from ..providers.mcp import MCP_PREFIX, CallContext, NativeMcpTools
 from ..repositories.model_catalog import ModelCatalogRepository
 from ..services.approval import RedisApprovalGate
 from ..services.compaction import ThreadSummarizer, make_persist_hook
-from ..services.mcp import McpService
-from ..services.search import SearchUnavailable, make_web_search_tool
 from ..services.title import TitleService
 from ..stream.relay import EventRelay
 from .build import build_graph
@@ -88,6 +90,18 @@ class PreparedRun:
     agent_version_id: UUID | None = None
     history: list[BaseMessage] = field(default_factory=list)
     history_upto: datetime | None = None
+    #: 事件序号的起点 = 已发出的最后一个 seq。一个 run 分多段执行时，后一段
+    #: 必须接着前一段往下数（契约规则 2 的「无空洞」是跨段成立的）。
+    #: 0 = 全新的 run。
+    start_seq: int = 0
+    #: True = 这个 run 之前已经跑过一段，本次是续跑。本轮输入早已在 history
+    #: 里，不能再 append 一遍（那会让模型看到同一个问题问了两次）。
+    resume: bool = False
+    #: 这个 run 在之前几段里已经花掉的 token。max_total_tokens 是跨段累计的。
+    prior_tokens: int = 0
+    #: 这个 run 在委派树里的深度：主 run 是 0，子 run 是 1。进 TraceEvent.depth，
+    #: 前端据此把子智能体的过程渲染进卡片而不是主对话。
+    base_depth: int = 0
 
     @property
     def thread_id(self) -> UUID:
@@ -122,6 +136,7 @@ class HookAssembly:
         run_id: UUID,
         redis: aioredis.Redis,
         relay: EventRelay,
+        notices: list[tuple[EventType, dict[str, Any]]] | None = None,
     ) -> tuple[Any, Titler | None]:
         """收集本次 run 的全部能力对象，装配出图。返回 (graph, titler)。
 
@@ -131,27 +146,20 @@ class HookAssembly:
         """
         # MCP 工具在这里解析成 BaseTool —— engine 不认识 MCP 的传输与凭据
         # （§14）。解析失败要冒泡成 run.failed，而不是少装几个工具就默默跑
-        # （§13.2）。
-        extra_tools = await McpService(self._settings.mcp_servers).tools_for(
-            list(prepared.spec.tool_names)
+        # （§13.2）。工具定义读目录缓存，命中时装配不连网（MCP 详设 §05）。
+        extra_tools = await self._mcp_tool_list(
+            prepared, run_id=run_id, redis=redis, notices=notices
         )
 
-        # 裸网页搜索：检索策略归模型（拆词/回环/综合它自己做），
-        # server 只提供一次一查的 API。凭据缺失明确失败（§13.2）。
-        if WEB_SEARCH_TOOL in prepared.spec.tool_names:
-            if self._settings.serpapi_key is None:
-                raise SearchUnavailable("勾选了 web_search 但服务端未配置 SERPAPI_KEY")
-            extra_tools = [
-                *extra_tools,
-                make_web_search_tool(self._settings.serpapi_key.get_secret_value()),
-            ]
+        # ★ 网页搜索不再是内置工具：它经 Higress 以 MCP 提供
+        #   （mcp:serpapi:google_search），后端 key 只在网关里，走上面那条路。
 
         # 记忆检索（只读）。★ user_id 从**会话所有者**闭包捕获，不进工具
         #   的参数 schema —— 一旦它可由模型指定，就是一个读取他人记忆的
         #   口子，而提示词注入是真实存在的攻击面（记忆设计 §09）。
         if MEMORY_SEARCH_TOOL in prepared.spec.tool_names:
             # ★ 缺前提要**明确失败**，不能静默少装一个工具（§13.2）。
-            #   与 web_search 缺 SERPAPI_KEY 同款：静默跳过的话，模型会
+            #   静默跳过的话，模型会
             #   以为自己没有记忆可查，而用户以为记忆在工作。
             if self._memory is None:
                 raise MemoryUnavailable(
@@ -159,9 +167,7 @@ class HookAssembly:
                 )
             extra_tools = [
                 *extra_tools,
-                make_memory_search_tool(
-                    self._memory, user_id=prepared.thread.created_by
-                ),
+                make_memory_search_tool(self._memory, user_id=prepared.thread.created_by),
             ]
 
         # ★ sandbox 恒为 None：Docker 实现已删除，K8s Pod 实现（acp 详设的
@@ -180,12 +186,18 @@ class HookAssembly:
             workspace_thread_id=prepared.thread.workspace_thread_id,
         )
 
-        approvals = RedisApprovalGate(
-            self._sessionmaker,
-            redis,
-            run_id,
-            timeout_s=self._settings.approval_timeout_s,
+        approvals = RedisApprovalGate(self._sessionmaker, redis, run_id)
+
+        # 技能清单：描述取自配置服务；已下架的跳过并告诉用户（技能 / MCP 设计 §7.3）
+        skill_metas, skipped = await resolve_skills(
+            prepared.spec.skills, skill_directory(self._settings)
         )
+        for item in skipped:
+            if notices is not None:
+                notices.append((EventType.SKILL_SKIPPED, item))
+            if workspace is not None:
+                # ★ 删掉本会话里的副本：只从索引里拿掉的话，模型仍可能凭记忆去读
+                await workspace.adelete(f"/skills/{item['slug']}", recursive=True)
 
         chat = self._build_model(
             prepared.spec.model,
@@ -202,16 +214,45 @@ class HookAssembly:
             compactor=await self._compactor(prepared),
             # ★ 技能在**会话创建**时就已拷进 skills 前缀（见 skill_copy），
             #   这里只把清单渲染给中间件 —— 不扫描、不读文件。
-            skills=skill_refs_for(skill_metas_for(prepared.spec.skills)),
+            skills=skill_refs_for(skill_metas),
             extra_tools=extra_tools,
             # ★ 委派不在图内跑子图 —— 交给 SubagentService 在子会话上起子 run。
             subagents=self._subagent_gateway(prepared, run_id=run_id, relay=relay),
         )
         return graph, self._titler(prepared)
 
-    def _subagent_gateway(
-        self, prepared: PreparedRun, *, run_id: UUID, relay: EventRelay
-    ) -> Any:
+    async def _mcp_tool_list(
+        self,
+        prepared: PreparedRun,
+        *,
+        run_id: UUID,
+        redis: aioredis.Redis,
+        notices: list[tuple[EventType, dict[str, Any]]] | None,
+    ) -> list[Any]:
+        """spec 里的 mcp:* → BaseTool。未复核 / 漂移的定义经 notices 告知用户（§9）。"""
+        if not any(name.startswith(MCP_PREFIX) for name in prepared.spec.tool_names):
+            return []  # 不碰注册表：没用 MCP 的 agent 不该因为配置服务不可用而失败
+        s = self._settings
+        catalog = await make_mcp_catalog(s, redis)
+        tools = NativeMcpTools(
+            catalog,
+            call_timeout_s=s.mcp_call_timeout_s,
+            max_result_chars=s.mcp_max_result_chars,
+        )
+        return await tools.tools_for(
+            prepared.spec.tool_names,
+            CallContext(
+                run_id=run_id,
+                thread_id=prepared.thread_id,
+                user_id=prepared.thread.created_by,
+            ),
+            digests=prepared.spec.mcp_tool_digests,
+            drift_policy=prepared.spec.mcp_drift_policy,
+            reviews=await mcp_reviews(s, catalog.servers()),
+            notices=notices,
+        )
+
+    def _subagent_gateway(self, prepared: PreparedRun, *, run_id: UUID, relay: EventRelay) -> Any:
         """构造本次 run 的委派受理方（DelegationProtocol 的实现）。
 
         没有子智能体就返回 None —— kernel 据此**根本不装** `task`，
@@ -256,7 +297,10 @@ class HookAssembly:
         )
         if fs is None:
             return
-        await seed_session_skills(fs, skill_metas_for(sub.skills))
+        metas, _skipped = await resolve_skills(
+            sub.skills, skill_directory(self._settings), with_descriptions=False
+        )
+        await seed_session_skills(fs, metas)
 
     # ------------------------------------------------------------------ 各能力
 

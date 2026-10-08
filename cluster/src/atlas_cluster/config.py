@@ -30,7 +30,7 @@ class ClusterSettings(BaseSettings):
     termination_grace_s: int = 30
 
     #: 等 Pod Ready 的上限。★ ensure **必须**等 —— 不等的话 URL 与 token
-    #: 在 Pod 还处于 ContainerCreating 时就交给了 server，而 AcpChannel 的
+    #: 在 Pod 还处于 ContainerCreating 时就交给了 server，而 HostClient 的
     #: 连接超时只有 10s 且不重试：第一轮必然报"连不上 bridge"。
     pod_ready_timeout_s: float = 120.0
 

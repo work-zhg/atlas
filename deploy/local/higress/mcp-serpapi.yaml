@@ -1,0 +1,40 @@
+# SerpApi Google 搜索：REST → MCP（Higress OPEN_API 类型 MCP Server 的工具定义）
+#
+# ★ __SERPAPI_KEY__ 由 setup.py 从环境变量替换后写进 Higress 配置 —— 本文件
+#   入库，key 不入库。后端凭据只存在网关里（MCP 详设 §08）。
+#
+# ★ 模板引擎是 GJSON Template（Go template + GJSON 路径），不是标准 Go template：
+#   管道写法 `{{ .args.query | urlquery }}` 会报 "wrong number of args for
+#   urlquery: want 1 got 0"，必须写成函数调用 `{{ urlquery .args.query }}`。
+#
+# ★ requestTemplate.url 里的主机名不决定转发目标 —— 请求永远发往该 MCP Server
+#   绑定的服务来源（serpapi.dns:443）。
+#
+# ★ answer_box 的字段随查询类型变（天气类没有 answer/snippet），只在有内容时输出，
+#   否则会渲染出一个空的「直接答案」标题。
+server:
+  name: serpapi
+  config:
+    apiKey: __SERPAPI_KEY__
+tools:
+- name: google_search
+  description: "用 Google 搜索网页，返回前几条结果的标题、链接与摘要。适合查询实时信息、新闻、事实。"
+  args:
+  - name: query
+    description: "搜索关键词"
+    type: string
+    required: true
+  requestTemplate:
+    url: "https://serpapi.com/search.json?engine=google&num=5&q={{ urlquery .args.query }}&api_key={{ .config.apiKey }}"
+    method: GET
+  responseTemplate:
+    body: |
+      {{- if .error }}搜索失败：{{ .error }}{{- else }}
+      {{- with .answer_box }}{{- if or .answer .snippet }}## 直接答案
+      {{ .answer }}{{ .snippet }}
+      {{ end }}{{- end }}
+      {{- range $i, $r := .organic_results }}
+      ### {{ add $i 1 }}. {{ $r.title }}
+      - 链接：{{ $r.link }}
+      - 摘要：{{ $r.snippet }}
+      {{- end }}{{- end }}

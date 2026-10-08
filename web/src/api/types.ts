@@ -22,6 +22,7 @@ export type Message = S["MessageOut"];
 
 export type Run = S["RunOut"];
 export type RunAccepted = S["RunAccepted"];
+export type PendingApprovalList = S["PendingApprovalList"];
 export type RunStatus = Run["status"];
 
 export type ModelInfo = S["ModelInfo"];
@@ -48,3 +49,20 @@ export const TERMINAL_RUN_STATUSES = [
 export function isTerminal(status: RunStatus): boolean {
   return (TERMINAL_RUN_STATUSES as readonly string[]).includes(status);
 }
+
+// ---------- 技能 / MCP（运行时侧的只读视图，doc/skill-mcp-backend-design.html §13.3）
+
+export type SkillListOut = S["SkillListOut"];
+export type SkillListItem = S["SkillListItem"];
+export type SkillReference = S["SkillReference"];
+export type SkillUsageOut = S["SkillUsageOut"];
+export type McpServerListOut = S["McpServerListOut"];
+export type McpServerSummary = S["McpServerSummary"];
+export type McpServerDetail = S["McpServerDetailOut"];
+export type McpTool = S["McpToolOut"];
+export type SkillRefIn = S["SkillRefIn"];
+
+export type Memory = S["MemoryOut"];
+export type WorkspaceFile = S["WorkspaceFile"];
+export type WorkspaceFilesOut = S["WorkspaceFilesOut"];
+export type PreviewSessionOut = S["PreviewSessionOut"];

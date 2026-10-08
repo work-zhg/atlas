@@ -12,11 +12,11 @@ LangGraph，要的就是这个类型 —— 现在建对，P4 不用重写。
 
 from __future__ import annotations
 
+from atlas_engine.contracts import UnsupportedProvider
 from langchain_core.language_models import BaseChatModel
 
-from .compat import apply_litellm_compat
-from atlas_engine.contracts import UnsupportedProvider
 from ...domain.spec import ModelSpec
+from .compat import apply_litellm_compat
 
 # 必须在构造任何 ChatAnthropic 之前打上（流式路径依赖它）
 apply_litellm_compat()

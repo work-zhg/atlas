@@ -27,3 +27,6 @@ next-env.d.ts
 atlas-architecture.drawio
 atlas-architecture.archify.json
 .$*.drawio.bkp
+
+# 运行时的本地缓存（配置服务的技能版本等），可随时删除
+var/

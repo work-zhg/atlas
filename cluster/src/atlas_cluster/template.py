@@ -40,6 +40,12 @@ SKILLS_MOUNT = "/skills"
 #: 所以挂在对象存储上没有文件锁问题。
 STATE_MOUNT = "/state"
 
+#: bridge 从文件读 token（Bridge 设计 §8.2：不进环境变量 —— 环境变量会被 agent 继承）
+TOKEN_DIR = "/run/secrets/atlas"
+TOKEN_FILE = f"{TOKEN_DIR}/bridge-token"
+#: bridge 传给 agent 的基础环境变量（白名单；模型相关的另由 _adapter_env 追加）
+_AGENT_ENV_BASE = ("PATH", "HOME", "LANG", "LC_ALL", "TZ", "TERM")
+
 
 def pod_name_for(thread_id: str) -> str:
     """名字由 thread_id 派生 —— 幂等 ensure 靠它，不靠查表。"""
@@ -107,7 +113,7 @@ def pod_manifest(req: EnsurePodRequest, settings: ClusterSettings) -> dict[str, 
             # 调模型网关、访问用户给的 API）。入口的唯一闸门是握手上的
             # per-Pod token，不是网络位置：K8s 的网络是平的，「在集群里」
             # 从来不是安全边界（执行环境 §09）。
-            "volumes": _volumes(req, settings),
+            "volumes": [*_volumes(req, settings), _token_volume(req)],
             **_mounters(req, settings),
             "containers": [_bridge_container(req, settings)],
         },
@@ -414,36 +420,61 @@ def _bridge_mounts(req: EnsurePodRequest, settings: ClusterSettings) -> list[dic
     ]
 
 
+def _token_volume(req: EnsurePodRequest) -> dict[str, Any]:
+    """bridge 的 token 以文件形式挂载（Bridge 设计 §8.2：不进环境变量 —— 环境变量会被
+    agent 继承，也更容易出现在诊断输出里）。"""
+    return {
+        "name": "bridge-token",
+        "secret": {
+            "secretName": secret_name_for(req.thread_id),
+            "items": [{"key": "token", "path": "bridge-token"}],
+            # ★ 0444：Pod 以 run_as_user 运行而 Secret 文件属 root。agent 与 bridge 目前
+            #   是同一个用户，隔离两者要靠 bridge 切换 agent 的用户（Bridge 设计 §8.3），
+            #   那一步落地后收紧为 0400 + fsGroup。
+            "defaultMode": 0o444,
+        },
+    }
+
+
 def _bridge_container(req: EnsurePodRequest, settings: ClusterSettings) -> dict[str, Any]:
+    """bridge 容器：python -m atlas_bridge，上游协议 atlas.host.v1（Bridge 设计 §4 · §8）。"""
+    adapter_env = _adapter_env(req, settings)
+    extra = [e["name"] for e in adapter_env if e["name"] not in _AGENT_ENV_BASE]
+    allow = [*_AGENT_ENV_BASE, *extra]
     return {
         "name": "bridge",
         "image": req.image,
+        "command": ["python", "-m", "atlas_bridge"],
         "ports": [{"containerPort": settings.bridge_port, "name": "bridge"}],
         "env": [
-            {
-                # ★ 凭证从 Secret 注入，不进镜像也不进 manifest 的明文。
-                "name": "ATLAS_BRIDGE_TOKEN",
-                "valueFrom": {
-                    "secretKeyRef": {"name": secret_name_for(req.thread_id), "key": "token"}
-                },
-            },
-            # 会话绑定：bridge 只接受针对**本 Pod 所属会话**的指令。
-            {"name": "ATLAS_THREAD_ID", "value": req.thread_id},
-            {"name": "ATLAS_ADAPTER_CMD", "value": req.adapter},
-            {"name": "ATLAS_BRIDGE_PORT", "value": str(settings.bridge_port)},
-            {"name": "ATLAS_ADAPTER_CWD", "value": WORKSPACE_MOUNT},
-            *_adapter_env(req, settings),
+            # 会话绑定：握手头 X-Atlas-Session 必须等于它，token 对也不行（§4.3）
+            {"name": "ATLAS_BRIDGE_SESSION_ID", "value": req.thread_id},
+            {"name": "ATLAS_BRIDGE_TOKEN_FILE", "value": TOKEN_FILE},
+            {"name": "ATLAS_BRIDGE_LISTEN_PORT", "value": str(settings.bridge_port)},
+            {"name": "ATLAS_BRIDGE_AGENT_CMD", "value": req.adapter},
+            {"name": "ATLAS_BRIDGE_WORKSPACE", "value": WORKSPACE_MOUNT},
+            # agent 只拿到白名单里的变量（§8.3）；模型凭据要显式列入才会传下去
+            {"name": "ATLAS_BRIDGE_AGENT_ENV_ALLOW", "value": ",".join(allow)},
+            *adapter_env,
         ],
-        "volumeMounts": _bridge_mounts(req, settings),
-        # ★ 没有这个探针，Pod 的 Ready 只代表"容器进程起来了"——
-        #   而 bridge 还要拉起 adapter、握完 initialize 才会 bind 端口。
-        #   ensure 在那个窗口里把地址交出去，server 连过去就是
-        #   ECONNREFUSED。真集群上这是个**稳定复现**的竞态：Python 启动
-        #   加 adapter 派生要好几秒，比 kubelet 标 Ready 慢得多。
+        "volumeMounts": [
+            *_bridge_mounts(req, settings),
+            {"name": "bridge-token", "mountPath": TOKEN_DIR, "readOnly": True},
+        ],
+        # 预热（拉起 agent + initialize）完成才就绪；/readyz 在握手前直接回 HTTP（§8.5）。
+        # ★ 没有就绪探针的话，ensure 会在 bridge 监听之前就把地址交出去，server 连过去
+        #   就是 ECONNREFUSED —— 真集群上稳定复现的竞态。
         "readinessProbe": {
-            "tcpSocket": {"port": settings.bridge_port},
+            "httpGet": {"path": "/readyz", "port": settings.bridge_port},
             "periodSeconds": 1,
-            "failureThreshold": 60,
+            "failureThreshold": 90,
+        },
+        # 只看 bridge 的事件循环是否活着，不看 agent：agent 的问题由 bridge 自己恢复（§5.6）
+        "livenessProbe": {
+            "httpGet": {"path": "/healthz", "port": settings.bridge_port},
+            "periodSeconds": 10,
+            "timeoutSeconds": 1,
+            "failureThreshold": 3,
         },
         "resources": {
             "requests": {"cpu": settings.cpu_request, "memory": settings.memory_request},

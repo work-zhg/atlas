@@ -28,7 +28,12 @@
 | --- | --- |
 | [`detail/acp.html`](detail/acp.html) | ACP 智能体：包规划、时序、落地顺序 |
 | [`detail/subagent.html`](detail/subagent.html) | 子智能体：子会话 = thread |
+| [`detail/suspension.html`](detail/suspension.html) | 挂起与恢复：一个 run 多段执行、thread 级事件流、审批走 suspension |
 | [`detail/filesystem.html`](detail/filesystem.html) | 会话工作区与对象存储 |
+| [`detail/mcp.html`](detail/mcp.html) | MCP 接入：目录缓存、命名空间、错误语义、acp 下发 |
+| [`detail/wire.html`](detail/wire.html) | server ⇄ bridge 通道：超时分层、取消善后、轮次归属、版本协商 |
+| [`detail/bridge.html`](detail/bridge.html) | Bridge 重新设计（从零开始，九章）：WebSocket · ACP · 职责边界 · 上游协议 · 会话与轮次 · 超时取消背压 · 故障与恢复 · 安全观测部署 · 收尾 |
+| [`detail/bridge-code.html`](detail/bridge-code.html) | Bridge 代码设计：包划分、模块、类设计、流程、测试、实施拆分 |
 | [`detail/kernel.html`](detail/kernel.html) | kernel 的中间件链 |
 | [`detail/native.html`](detail/native.html) · [`detail/structure.html`](detail/structure.html) | 原生执行 / 代码结构 |
 

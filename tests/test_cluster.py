@@ -21,6 +21,7 @@ from atlas_cluster.template import (
     pod_manifest,
     pod_name_for,
     secret_manifest,
+    secret_name_for,
 )
 from httpx import ASGITransport
 
@@ -162,8 +163,11 @@ def test_no_object_storage_means_an_ephemeral_workspace() -> None:
     spec = manifest["spec"]
 
     assert "initContainers" not in spec
-    assert {v["name"] for v in spec["volumes"]} == {"workspace", "skills", "state", "tmp"}
-    assert all("emptyDir" in v for v in spec["volumes"])
+    volumes = {v["name"]: v for v in spec["volumes"]}
+    # bridge 的 token 卷（Secret）与工作区无关，每个 Pod 都有
+    assert "secret" in volumes.pop("bridge-token")
+    assert set(volumes) == {"workspace", "skills", "state", "tmp"}
+    assert all("emptyDir" in v for v in volumes.values())
     mounts = {m["mountPath"] for m in spec["containers"][0]["volumeMounts"]}
     assert {"/workspace", "/skills"} <= mounts
 
@@ -262,10 +266,12 @@ def test_token_is_injected_from_a_secret_not_the_manifest() -> None:
     """凭证不进 manifest 明文 —— manifest 会被 kubectl get 出来、被日志带走。"""
     manifest = pod_manifest(_req(), _settings())
     env = {e["name"]: e for e in manifest["spec"]["containers"][0]["env"]}
-    assert "value" not in env["ATLAS_BRIDGE_TOKEN"]
-    assert env["ATLAS_BRIDGE_TOKEN"]["valueFrom"]["secretKeyRef"]["key"] == "token"
+    # token 以 Secret 卷挂成文件，不进环境变量（环境变量会被 agent 继承，Bridge 设计 §8.2）
+    assert "ATLAS_BRIDGE_TOKEN" not in env
+    volumes = {v["name"]: v for v in manifest["spec"]["volumes"]}
+    assert volumes["bridge-token"]["secret"]["secretName"] == secret_name_for("t-1")
     # 会话绑定：bridge 只接受针对本 Pod 所属会话的指令
-    assert env["ATLAS_THREAD_ID"]["value"] == "t-1"
+    assert env["ATLAS_BRIDGE_SESSION_ID"]["value"] == "t-1"
 
 
 def test_labels_are_the_only_bookkeeping() -> None:

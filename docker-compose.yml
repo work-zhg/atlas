@@ -63,6 +63,21 @@ services:
         mc mb --ignore-existing atlas/atlas-dev
     restart: "no"
 
+  # 配置服务（atlas-config）的库：同一实例上的独立 database（技能 / MCP 设计 §15）。
+  # 与 langfuse-init-db 同款幂等写法；不挂 profile —— 配置服务是必要组件。
+  config-init-db:
+    image: postgres:16-alpine
+    container_name: atlas-config-initdb
+    depends_on:
+      postgres: {condition: service_healthy}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        psql "postgresql://atlas:atlas@postgres:5432/atlas"
+        -tc "SELECT 1 FROM pg_database WHERE datname='atlas_config'" | grep -q 1 ||
+        psql "postgresql://atlas:atlas@postgres:5432/atlas" -c "CREATE DATABASE atlas_config"
+    restart: "no"
+
   # 记忆的向量库（记忆设计 §03）。Mem0 的默认后端，qdrant-client 本来
   # 就是 mem0ai 的必要依赖，不必再引第三方。
   #
@@ -233,9 +248,42 @@ services:
       LANGFUSE_INIT_USER_NAME: dev
       LANGFUSE_INIT_USER_PASSWORD: atlas-local-dev
 
+  # ── Higress（MCP 网关，MCP 详设 §08）─────────────────────────────────
+  #
+  #     docker compose --profile higress up -d higress
+  #
+  # ★ 用 all-in-one 镜像跑在宿主机，不装进 k8s：本机的 atlas-server 虽在
+  #   docker-desktop 集群里，但它访问 pg / redis 走的就是宿主机局域网 IP
+  #   （deploy/local/30-server.yaml），Higress 同理 —— 宿主机进程走
+  #   localhost:18080，集群内 Pod 走 <宿主机 IP>:18080。
+  #
+  # ★ 端口整体平移到 18xxx：8080 / 8001 是开发机上最容易撞车的两个端口。
+  #   容器内仍是 8080（网关）/ 8001（控制台）/ 8443（HTTPS）。
+  #
+  # ★ MCP Server 能力依赖 Redis（官方 MCP 快速开始）。复用本仓的 redis，
+  #   但用 **db 1** —— atlas 用 db 0，分开免得 FLUSHDB 之类的操作互相误伤。
+  #   在 higress-config 的 mcpServer.redis 里填 redis:6379 / db 1。
+  #
+  # ★ 后端凭据（如 serpapi 的 key）只存在 Higress 的配置里（/data 卷），
+  #   不进本仓任何文件 —— 这正是「经网关收口」要的：Atlas 侧不持有后端 key。
+  #
+  # ★ 挂 profile：MCP 经网关是可选链路，`make up` 不拉起它。
+  higress:
+    image: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/all-in-one:2.2.4
+    container_name: atlas-higress
+    profiles: [higress]
+    depends_on:
+      redis: {condition: service_healthy}
+    ports:
+      - "18080:8080"  # 网关 HTTP —— MCP 端点 /mcp-servers/<name>/...
+      - "18443:8443"  # 网关 HTTPS
+      - "18001:8001"  # 控制台
+    volumes: ["atlas-higressdata:/data"]
+
 volumes:
   atlas-pgdata:
   atlas-redisdata:
   atlas-miniodata:
   atlas-qdrantdata:
   atlas-langfuse-ch:
+  atlas-higressdata:

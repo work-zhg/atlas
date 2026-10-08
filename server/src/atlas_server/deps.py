@@ -14,6 +14,7 @@ from .executor.base import RunExecutor
 from .identity import current_user
 from .redisx import make_redis
 from .services.agent import AgentService
+from .services.catalog import CatalogService
 from .services.meta import MetaService
 from .services.run import RunService
 from .services.thread import ThreadService
@@ -67,8 +68,10 @@ async def get_run_service(
 RunServiceDep = Annotated[RunService, Depends(get_run_service)]
 
 
-async def get_agent_service(session: SessionDep) -> AgentService:
-    return AgentService(session)
+async def get_agent_service(
+    session: SessionDep, settings: SettingsDep, redis: RedisDep
+) -> AgentService:
+    return AgentService(session, settings, redis)
 
 
 async def get_thread_service(session: SessionDep, settings: SettingsDep) -> ThreadService:
@@ -77,3 +80,12 @@ async def get_thread_service(session: SessionDep, settings: SettingsDep) -> Thre
 
 AgentServiceDep = Annotated[AgentService, Depends(get_agent_service)]
 ThreadServiceDep = Annotated[ThreadService, Depends(get_thread_service)]
+
+
+async def get_catalog_service(
+    session: SessionDep, settings: SettingsDep, redis: RedisDep
+) -> CatalogService:
+    return CatalogService(session, settings, redis)
+
+
+CatalogServiceDep = Annotated[CatalogService, Depends(get_catalog_service)]

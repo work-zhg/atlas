@@ -26,12 +26,13 @@ if TYPE_CHECKING:
 #: 它们由 server 解析后以 extra_tools 注入，不在本表内。
 MCP_PREFIX = "mcp:"
 
-from atlas_engine.kernel.middleware.subagents import SUBAGENT_TOOL  # noqa: F401 —— 单一来源在 kernel
+from atlas_engine.kernel.middleware.subagents import (
+    SUBAGENT_TOOL,
+)
 
 TODO_TOOL = "write_todos"
 FILESYSTEM_TOOL = "filesystem"
 BASH_TOOL = "bash"
-WEB_SEARCH_TOOL = "web_search"
 MEMORY_SEARCH_TOOL = "search_memory"
 
 
@@ -132,14 +133,6 @@ BUILTIN_TOOLS: tuple[ToolDef, ...] = (
         requires=lambda spec: bool(spec.subagents),
     ),
     ToolDef(
-        name=WEB_SEARCH_TOOL,
-        display_name="网页搜索",
-        description="按关键词搜索网页，返回标题/链接/摘要 —— 模型自行决定搜几次、搜什么",
-        implemented=True,
-        note="SerpAPI，需要服务端配置 SERPAPI_KEY",
-        # middleware=None：裸 API 工具经 hooks.extra_tools 注入（server 组装，凭据在 server）
-    ),
-    ToolDef(
         name=MEMORY_SEARCH_TOOL,
         display_name="记忆检索",
         description="回忆该用户在之前会话里提到过的偏好、习惯与项目约定",
@@ -148,7 +141,7 @@ BUILTIN_TOOLS: tuple[ToolDef, ...] = (
         #   执行（记忆设计 §05），管理操作是用户的权利而不是 Agent 的能力
         #   （§10）。纯读取则重跑多少次都不改变状态，可以安全挂上。
         note="需要服务端开启记忆（MEMORY_ENABLED）",
-        # middleware=None：与 web_search 同款，经 hooks.extra_tools 注入
+        # middleware=None：经 hooks.extra_tools 注入
         #   —— user_id 要从会话上下文闭包捕获，那是 server 才有的东西。
     ),
     ToolDef(

@@ -34,6 +34,19 @@ class ThreadUpdate(BaseModel):
     status: ThreadStatusIn | None = None
 
 
+class ThreadRunState(BaseModel):
+    """会话最近一个 run 的状态 —— 列表上的「运行中 / 待审批 / 等待子智能体 / 失败」。"""
+
+    id: UUID
+    #: queued | running | awaiting_approval | suspended |
+    #: succeeded | failed | cancelled | interrupted
+    status: str
+    #: 挂起时在等什么：approval / delegation
+    waiting: list[str] = []
+    #: 需要用户处理：本 run 或它委派出去的子 run 在等审批
+    needs_approval: bool = False
+
+
 class ThreadOut(BaseModel):
     id: UUID
     agent_id: UUID
@@ -55,6 +68,8 @@ class ThreadOut(BaseModel):
     #: 机制（Last-Event-ID + run_event 归档）本来就有，缺的只是入口。
     #: 与 subagent_thread_count 同款：只在单条详情上计算，列表恒为 None。
     active_run_id: UUID | None = None
+    #: 最近一个 run 的状态（列表与详情都给；一页两次查询，不 N+1）
+    last_run: ThreadRunState | None = None
     message_count: int
     compact_count: int
     latest_state: dict[str, Any]
@@ -74,6 +89,33 @@ class MessageOut(BaseModel):
     role: Literal["user", "assistant"]
     content: list[dict[str, Any]]
     created_at: datetime
+
+
+class WorkspaceFile(BaseModel):
+    #: 相对工作区根的路径，如 assets/app.js
+    path: str
+    size: int
+    modified_at: str | None = None
+    #: 对象存储的 ETag（去引号）。预览据此判断内容是否变了
+    etag: str | None = None
+
+
+class WorkspaceFilesOut(BaseModel):
+    """会话工作区里的文件（右侧「文件」面板）。子会话看的是父会话的工作区（共享）。"""
+
+    #: False = 没配对象存储：这个部署没有文件能力（不是「还没有文件」）
+    configured: bool
+    data: list[WorkspaceFile]
+    #: 文件太多，只列了前一部分
+    truncated: bool = False
+
+
+class PreviewSessionOut(BaseModel):
+    """文件预览站点的入口。base_url 以 / 结尾，文件地址 = base_url + 逐段编码的路径。"""
+
+    base_url: str
+    #: 空闲到这个时间点就失效；每次访问都会续期
+    expires_at: datetime
 
 
 class MessageListOut(BaseModel):

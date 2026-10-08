@@ -163,7 +163,8 @@ async def test_cancellation_yields_run_cancelled() -> None:
     assert EventType.RUN_FINISHED not in [e.type for e in events]
 
 
-async def test_timeout_yields_run_failed_not_exception() -> None:
+async def test_a_run_has_no_time_limit() -> None:
+    """★ 在干活就不中断：spec 的 timeout_s 不再限制一轮（2.5s 的模型输出远超 1s 照样跑完）。"""
     events = await collect(
         spec=make_spec(timeout_s=1),
         run_id=RUN_ID,
@@ -171,9 +172,8 @@ async def test_timeout_yields_run_failed_not_exception() -> None:
         input_content="hi",
         clock=_clock,
     )
-    last = events[-1]
-    assert last.type == EventType.RUN_FAILED
-    assert last.data["error_kind"] == "timeout"
+    assert events[-1].type == EventType.RUN_FINISHED
+    assert EventType.RUN_FAILED not in [e.type for e in events]
 
 
 async def test_model_exception_becomes_run_failed() -> None:

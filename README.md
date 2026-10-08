@@ -286,9 +286,9 @@ pytest tests/test_cluster_k8s.py -q     # 自动发现 /etc/rancher/k3s/k3s.yaml
 | ACP 执行形态（`bridge` / `cluster`） | ✅ 可用 | 含对真 k3s 集群的测试 |
 | 跨会话记忆（Mem0 + Qdrant） | ✅ 可用 | 默认关，见 `.env.example` |
 | 可观测性（OTel / Jaeger / Langfuse） | ✅ 可用 | 默认关 |
-| 技能投送 · MCP 接入 | ✅ 可用 | |
+| 技能投送 · MCP 接入 | ✅ 可用 | MCP 经 Higress 收口（本机：`docker compose --profile higress up -d higress` + `deploy/local/higress/setup.py`）；网页搜索即 Higress 上的 serpapi MCP，不再是内置工具 |
 | **native 形态的隔离执行** | 🚧 **接入中** | `SandboxProtocol` 与 `SandboxMiddleware` 的接缝已在位，但**尚无实现方** —— K8s Pod 执行环境待接入。期间 `bash` 在工具目录里标为不可用，勾了会明确报出来而不是静默失效 |
-| 模型网关切到 Higress | 📋 规划 | 当前直连 LiteLLM 网关；切换后 MCP 工具代理与模型调用收口到同一处 |
+| 模型网关切到 Higress | 📋 规划 | MCP 已经过 Higress；模型调用仍直连 LiteLLM 网关，切换后两者收口到同一处 |
 | 鉴权 / 多租户 | 📋 规划 | 当前身份注入收敛在 `identity.py` 单点，换成 JWT / SSO 只改这一个函数 |
 
 ---

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from datetime import datetime
+from collections.abc import Sequence
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.models import Agent, Message, Thread
+from ..domain.messages import KIND_CHAT, StoredMessage
 
 
 class ThreadRepository:
@@ -16,6 +18,14 @@ class ThreadRepository:
         self._session = session
 
     # ------------------------------------------------------------------ 读
+
+    async def by_id(self, thread_id: UUID) -> Thread | None:
+        """只要会话行本身，不 join agent。
+
+        调用方（续跑时解析委派结论）要的只是 subagent_name —— 为它多 join
+        一张表是白付一次连接开销。
+        """
+        return await self._session.get(Thread, thread_id)
 
     async def get(self, thread_id: UUID) -> tuple[Thread, Agent] | None:
         stmt = (
@@ -61,8 +71,16 @@ class ThreadRepository:
         cursor: tuple[datetime, UUID] | None = None,
         limit: int = 50,
     ) -> list[Message]:
-        """倒序：最新的在前，前端向上滚加载更旧的。"""
-        stmt = select(Message).where(Message.thread_id == thread_id)
+        """倒序：最新的在前，前端向上滚加载更旧的。
+
+        ★ 只列 kind='chat'。工具结果（kind='tool_result'）是 role='user' 的
+          消息，放进来前端会渲染成一串**空的用户气泡** —— 它的 content 里
+          只有 tool_result block，而 MessageStream 的 blocksOf 只认 text。
+          工具调用的展示本来就走事件流（Inspector 的「工具」页），不走这里。
+        """
+        stmt = select(Message).where(
+            Message.thread_id == thread_id, Message.kind == KIND_CHAT
+        )
         if cursor is not None:
             ts, last_id = cursor
             stmt = stmt.where(
@@ -145,12 +163,53 @@ class ThreadRepository:
         role: str,
         content: list[dict],
         run_id: UUID | None = None,
+        kind: str = KIND_CHAT,
     ) -> Message:
-        message = Message(thread_id=thread_id, role=role, content=content, run_id=run_id)
+        message = Message(
+            thread_id=thread_id, role=role, content=content, run_id=run_id, kind=kind
+        )
         self._session.add(message)
         await self._session.flush()
         await self._session.refresh(message)
         return message
+
+    async def add_messages(
+        self,
+        *,
+        thread_id: UUID,
+        messages: Sequence[StoredMessage],
+        run_id: UUID | None = None,
+    ) -> int:
+        """批量写入一轮产出的完整消息序列。返回写入条数。
+
+        ★ 时间戳**显式逐条递增**，不用列的 default。default 是
+          `datetime.now(UTC)` 逐行求值，在快的机器上同一批里连续两次调用
+          可以落在同一微秒 —— 而消息列表按 (created_at, id) 排序，并列时
+          退化为按随机 UUID 排。后果是一条 assistant(tool_use) 可能排到它的
+          tool_result 后面，下一轮重建历史时 provider 直接回 400
+          （tool_result 找不到对应的 tool_use）。
+
+          迁移 0003 已经为「同一事务内并列」改过一次时钟口径；那一次改的是
+          **单条**插入，这里是同一批里的多条，要自己保证严格递增。
+        """
+        if not messages:
+            return 0
+        base = datetime.now(UTC)
+        self._session.add_all(
+            [
+                Message(
+                    thread_id=thread_id,
+                    role=stored.role,
+                    kind=stored.kind,
+                    content=stored.content,
+                    run_id=run_id,
+                    created_at=base + timedelta(microseconds=index),
+                )
+                for index, stored in enumerate(messages)
+            ]
+        )
+        await self._session.flush()
+        return len(messages)
 
     async def set_generated_title(self, thread_id: UUID, *, title: str, degraded: bool) -> bool:
         """写入自动生成的标题（§8）。返回是否真的写入。
@@ -169,7 +228,14 @@ class ThreadRepository:
         return bool(result.rowcount)
 
     async def count_messages(self, thread_id: UUID) -> int:
-        stmt = select(func.count()).select_from(Message).where(Message.thread_id == thread_id)
+        """★ 与 list_messages 同口径：只数对话轮。
+
+        工具结果也数进去的话，会话列表上的「N 条消息」会随工具调用次数
+        暴涨 —— 一轮里调十次工具就多二十条，而用户只发了一句话。
+        """
+        stmt = select(func.count()).select_from(Message).where(
+            Message.thread_id == thread_id, Message.kind == KIND_CHAT
+        )
         return int((await self._session.execute(stmt)).scalar_one())
 
     async def delete(self, thread: Thread) -> None:

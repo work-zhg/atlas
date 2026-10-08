@@ -55,7 +55,7 @@ class ClusterBackend(Protocol):
 
         ★ 有这个方法是因为 create_pod 返回时 Pod 还在 ContainerCreating：
           没有 IP、bridge 没监听。把 URL 和 token 在那一刻交给 server，
-          第一轮必然以"连不上 bridge"告终 —— 而 AcpChannel 的连接超时只有
+          第一轮必然以"连不上 bridge"告终 —— 而 HostClient 的连接超时只有
           10s 且不重试。真集群冒烟第一下就撞出来了。
 
         超时抛 TimeoutError —— 起不来的原因通常是镜像拉不动或挂载失败，

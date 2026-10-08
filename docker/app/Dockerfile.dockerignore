@@ -9,8 +9,11 @@
 #   .env 进上下文等于把凭据送进镜像层。
 *
 !acp/
+!jsonrpc/
+!host/
 !engine/
 !cluster/
+!config/
 !server/
 **/__pycache__/
 **/*.pyc

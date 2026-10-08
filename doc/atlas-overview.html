@@ -611,7 +611,7 @@
 <li>前端按 seq 去重补齐，刷新页面 / 切后台 / 多标签页都能续上</li></ul></article>
 <article class="card "><h3>工具体系</h3><ul><li><code>write_todos</code> 待办清单 · <code>task</code> 子智能体委派</li>
 <li>虚拟文件系统：<code>ls / read_file / write_file / edit_file / glob / grep</code></li>
-<li><code>web_search</code> 裸搜索 API —— 搜几次、搜什么由模型自己决定</li>
+<li>网页搜索 —— 经 Higress 的 serpapi MCP 服务（<code>mcp:serpapi:google_search</code>），搜几次、搜什么由模型自己决定</li>
 <li>MCP 接入：仅 HTTP/SSE 远程传输，凭据用 ENV 占位符，不落库</li>
 <li><code>execute</code>（沙箱 Shell）· <code>coding_task</code>（容器化编码智能体）</li></ul></article>
 <article class="card "><h3>人工确认（HITL）</h3><ul><li>高风险工具默认进 <code>require_approval_for</code>，弹窗展示完整参数</li>

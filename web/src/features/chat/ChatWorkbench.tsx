@@ -2,7 +2,7 @@
 
 import { Alert, Button, Empty, Modal, Select, Tag } from "antd";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import { useAgents } from "@/api/agents";
 import { useCancelRun, useSendMessage } from "@/api/runs";
@@ -11,20 +11,16 @@ import { Icon } from "@/components/Icon";
 import { avatarBackground, avatarLetter } from "@/features/agents/avatar";
 import { isStreamDone } from "@/lib/run-reducer";
 import styles from "./chat.module.css";
-import { ApprovalModal } from "./ApprovalModal";
 import { newIdempotencyKey } from "@/lib/id";
 import { Composer } from "./Composer";
 import { MessageStream } from "./MessageStream";
 import { ThreadList } from "./ThreadList";
-import { TraceInspector } from "./TraceInspector";
-import { useRunStream } from "./useRunStream";
+import { FilesPanel } from "./FilesPanel";
+import { useThreadStream } from "./useThreadStream";
 
 export function ChatWorkbench({ threadId }: { threadId?: string }) {
   const router = useRouter();
-  const [activeRunId, setActiveRunId] = useState<string>();
   const [newOpen, setNewOpen] = useState(false);
-  // 已决策的 approval：事件流里那条不会消失，靠本地集合把弹窗关掉
-  const [decided, setDecided] = useState<Set<string>>(new Set());
   const [pickedAgent, setPickedAgent] = useState<string>();
 
   const threadsQ = useThreads();
@@ -42,34 +38,32 @@ export function ChatWorkbench({ threadId }: { threadId?: string }) {
   const sendMessage = useSendMessage();
   const cancelRun = useCancelRun();
 
-  const { state, reconnecting, streamError, reset } = useRunStream({
-    runId: activeRunId,
-    threadId,
-  });
-
-  // ★ 刷新/直接打开链接时恢复在跑的 run。activeRunId 原本只在「发消息
-  //   成功」时赋值，重新挂载后是 undefined —— 于是不订阅任何流，而助手
-  //   消息要到 message.completed 才落库，长 run 期间页面上只剩用户那条
-  //   提问，看着像「回答到一半全没了」。
-  //   续传本身早就支持（Last-Event-ID + run_event 归档），缺的只是入口。
-  const restorable = threadQ.data?.active_run_id ?? undefined;
-  useEffect(() => {
-    if (restorable && !activeRunId) setActiveRunId(restorable);
-  }, [restorable, activeRunId]);
-
-  // 切换会话时清空上一轮的实时状态，否则新会话会短暂显示旧会话的轨迹
-  useEffect(() => {
-    setActiveRunId(undefined);
-    reset();
-  }, [threadId, reset]);
+  // ★ 订阅**会话**而不是 run。
+  //
+  //   原先这里要先知道"当前是哪个 run"才能订阅，于是刷新页面后没有入口
+  //   （activeRunId 只在发消息成功时赋值），长 run 期间页面上只剩用户那条
+  //   提问 —— 看着像「回答到一半全没了」。那段恢复逻辑整个消失了：订阅会话
+  //   天然就是恢复。当前是哪个 run 由事件流自己说（state.activeRunId）。
+  const { state, reconnecting, streamError } = useThreadStream({ threadId });
+  const activeRunId = state.activeRunId;
 
   const running = Boolean(activeRunId) && !isStreamDone(state.status);
-  const pendingApproval = state.pendingApprovals.find((a) => !decided.has(a.approvalId));
+  // 头部状态：审批优先（用户要动手），其次是挂起（在等子智能体），最后是运行中
+  const liveTag = !running
+    ? null
+    : state.pendingApprovals.length > 0
+      ? { label: "待审批 · 已挂起", color: "warning" }
+      : state.status === "suspended"
+        ? { label: "等待子智能体", color: "processing" }
+        : { label: "运行中", color: "success" };
+  // ★ 审批不再是弹窗：它作为一张卡片出现在对话里它发生的位置（MessageStream →
+  //   ApprovalCard），「是否还在等」的查库核对也随卡片走。
 
   const handleSend = useCallback(
     (text: string) => {
       if (!threadId) return;
-      reset();
+      // ★ 不 reset：那会把会话流的游标一起归零，下次重连要重放一遍。
+      //   上一轮的轨迹由新一轮的 run.started 清掉（reducer 的 freshTurn）。
       sendMessage.mutate(
         {
           threadId,
@@ -79,10 +73,10 @@ export function ChatWorkbench({ threadId }: { threadId?: string }) {
           //   表现是"输入框毫无反应"，请求根本没发出去。见 lib/id.ts。
           idempotencyKey: newIdempotencyKey(),
         },
-        { onSuccess: (res) => setActiveRunId(res.run_id) },
+        // ★ 不再需要把 run_id 记下来 —— 会话流里的 run.started 会带来它。
       );
     },
-    [threadId, sendMessage, reset],
+    [threadId, sendMessage],
   );
 
   const handleNewThread = () => {
@@ -134,10 +128,17 @@ export function ChatWorkbench({ threadId }: { threadId?: string }) {
                   </span>
                   <span style={{ fontSize: 12.5, fontWeight: 550 }}>{agent.agent_name}</span>
                 </span>
-                <span style={{ fontSize: 13, color: "var(--fg-2)" }}>{agent.title}</span>
-                {running && (
-                  <Tag color="success" style={{ marginInlineEnd: 0 }}>
-                    运行中
+                {state.meta?.model && (
+                  <Tag className={styles.monoTag} style={{ marginInlineEnd: 0 }}>
+                    {state.meta.model}
+                  </Tag>
+                )}
+                <span className={styles.chatTitle} title={agent.title}>
+                  {agent.title}
+                </span>
+                {liveTag && (
+                  <Tag color={liveTag.color} style={{ marginInlineEnd: 0 }}>
+                    {liveTag.label}
                   </Tag>
                 )}
               </>
@@ -145,6 +146,17 @@ export function ChatWorkbench({ threadId }: { threadId?: string }) {
               <span style={{ color: "var(--fg-3)", fontSize: 13 }}>未选择会话</span>
             )}
           </div>
+          {agent && (
+            <Button
+              size="small"
+              type="text"
+              style={{ marginLeft: "auto" }}
+              icon={<Icon name="cog" size={14} />}
+              onClick={() => router.push(`/agents/${agent.agent_id}`)}
+            >
+              智能体配置
+            </Button>
+          )}
         </header>
 
         {threadId ? (
@@ -193,16 +205,7 @@ export function ChatWorkbench({ threadId }: { threadId?: string }) {
         )}
       </section>
 
-      <ApprovalModal
-        // ★ 优先用审批自带的 run：委派来的审批属于**子 run**，提交到父 run
-        //   的端点会 404（services/subagent.py::_forward_approvals 转发时
-        //   带上了 run_id）。
-        runId={pendingApproval?.runId ?? activeRunId}
-        approval={pendingApproval}
-        onDecided={(id) => setDecided((prev) => new Set(prev).add(id))}
-      />
-
-      <TraceInspector state={state} />
+      <FilesPanel threadId={threadId} running={running} writtenCount={state.files.length} />
 
       <Modal
         open={newOpen}

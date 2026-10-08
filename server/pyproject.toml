@@ -6,7 +6,11 @@ requires-python = ">=3.13"
 dependencies = [
   "atlas-acp",
   "atlas-cluster",
+  # 只用 atlas_config.schemas（对外契约）—— import-linter 守着
+  "atlas-config",
   "atlas-engine",
+  "atlas-host",
+  "atlas-jsonrpc",
   "fastapi>=0.115",
   "uvicorn[standard]>=0.32",
   "sqlalchemy[asyncio]>=2.0.36",

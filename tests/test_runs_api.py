@@ -2,6 +2,9 @@
 
 模型经 executor 的 model_builder 注入假实现 —— 整条
 POST /runs → 后台执行 → Redis Stream → SSE 的链路脱离网络运行。
+
+★ SSE 本身的测试在 test_thread_stream.py：订阅单位是**会话**而不是 run
+  （doc/detail/suspension.html §04），本文件只留 run 的生命周期与并发语义。
 """
 
 from __future__ import annotations
@@ -133,88 +136,6 @@ async def test_run_persists_assistant_message_and_usage(
 
 
 # ---------------------------------------------------------------------------
-# ★ SSE 与断线重连
-# ---------------------------------------------------------------------------
-
-
-async def test_sse_streams_events_in_order(client: httpx.AsyncClient, clean_db: None) -> None:
-    tid = await setup_thread(client)
-    rid = (
-        await client.post(
-            f"/v1/threads/{tid}/runs", json={"content": [{"type": "text", "text": "hi"}]}
-        )
-    ).json()["run_id"]
-    await wait_for_status(client, rid)
-
-    resp = await client.get(f"/v1/runs/{rid}/events")
-    assert resp.status_code == 200
-    assert resp.headers["content-type"].startswith("text/event-stream")
-
-    events = parse_sse(resp.text)
-    seqs = [s for s, _ in events]
-    types = [t for _, t in events]
-
-    assert seqs == list(range(1, len(seqs) + 1))  # 契约：从 1 严格递增无空洞
-    assert types[0] == "run.started"
-    assert types[-1] == "run.finished"
-    assert "message.delta" in types
-
-
-async def test_resume_with_last_event_id_skips_delivered_events(
-    client: httpx.AsyncClient, clean_db: None
-) -> None:
-    """★ 中途刷新页面能续上 —— 浏览器 EventSource 自动带 Last-Event-ID。"""
-    tid = await setup_thread(client)
-    rid = (
-        await client.post(
-            f"/v1/threads/{tid}/runs", json={"content": [{"type": "text", "text": "hi"}]}
-        )
-    ).json()["run_id"]
-    await wait_for_status(client, rid)
-
-    full = parse_sse((await client.get(f"/v1/runs/{rid}/events")).text)
-    assert len(full) >= 4
-
-    resume_after = full[1][0]  # 假装只收到了前两条
-    partial = parse_sse(
-        (
-            await client.get(f"/v1/runs/{rid}/events", headers={"Last-Event-ID": str(resume_after)})
-        ).text
-    )
-    assert [s for s, _ in partial] == [s for s, _ in full if s > resume_after]
-    assert partial[-1][1] == "run.finished"  # 仍能看到终止事件
-
-
-async def test_replay_falls_back_to_postgres_when_redis_expired(
-    client: httpx.AsyncClient, clean_db: None
-) -> None:
-    """Redis 24h TTL 过期后，历史会话仍能从 run_event 归档表回放（§10.2 情形 2）。"""
-    tid = await setup_thread(client)
-    rid = (
-        await client.post(
-            f"/v1/threads/{tid}/runs", json={"content": [{"type": "text", "text": "hi"}]}
-        )
-    ).json()["run_id"]
-    await wait_for_status(client, rid)
-
-    from atlas_server.stream.relay import stream_key
-
-    settings = get_settings()
-    import redis.asyncio as aioredis
-
-    redis = aioredis.from_url(settings.redis_url, decode_responses=True)
-    try:
-        await redis.delete(stream_key(__import__("uuid").UUID(rid)))  # 模拟 TTL 过期
-    finally:
-        await redis.aclose()
-
-    events = parse_sse((await client.get(f"/v1/runs/{rid}/events")).text)
-    assert events, "Redis 过期后应从 Postgres 归档回放"
-    assert events[0][1] == "run.started"
-    assert events[-1][1] == "run.finished"
-
-
-# ---------------------------------------------------------------------------
 # 串行锁 / 幂等 / 取消
 # ---------------------------------------------------------------------------
 
@@ -288,119 +209,14 @@ async def test_cancel_finished_run_conflicts(client: httpx.AsyncClient, clean_db
 async def test_run_and_events_404(client: httpx.AsyncClient, clean_db: None) -> None:
     missing = "00000000-0000-0000-0000-0000000000ff"
     assert (await client.get(f"/v1/runs/{missing}")).status_code == 404
-    # SSE 路由也必须以 JSON 404 返回，而不是一个空的 200 流
-    assert (await client.get(f"/v1/runs/{missing}/events")).status_code == 404
+    # SSE 路由也必须以 JSON 404 返回，而不是一个空的 200 流。
+    # ★ 订阅单位是会话（run 流端点已删，S5）。
+    assert (await client.get(f"/v1/threads/{missing}/events")).status_code == 404
 
 
 # ---------------------------------------------------------------------------
 # ★ 孤儿回收（进程内执行的代价，§12.1 / R2）
 # ---------------------------------------------------------------------------
-
-
-async def test_reap_orphans_marks_interrupted(client: httpx.AsyncClient, clean_db: None) -> None:
-    from sqlalchemy import text
-
-    tid = await setup_thread(client)
-    rid = (
-        await client.post(
-            f"/v1/threads/{tid}/runs", json={"content": [{"type": "text", "text": "hi"}]}
-        )
-    ).json()["run_id"]
-    await wait_for_status(client, rid)
-
-    # 伪造"上次进程被杀时还在跑"的状态
-    async with get_sessionmaker()() as session:
-        await session.execute(
-            text("UPDATE run SET status='running', finished_at=NULL WHERE id=CAST(:i AS uuid)"),
-            {"i": rid},
-        )
-        await session.commit()
-
-    import redis.asyncio as aioredis
-    from atlas_server.services.run import RunService
-
-    settings = get_settings()
-    redis = aioredis.from_url(settings.redis_url, decode_responses=True)
-    try:
-        async with get_sessionmaker()() as session:
-            service = RunService(session, redis, settings, None)  # type: ignore[arg-type]
-            assert await service.reap_orphans() >= 1
-    finally:
-        await redis.aclose()
-
-    body = (await client.get(f"/v1/runs/{rid}")).json()
-    assert body["status"] == "interrupted"
-    assert body["error_kind"] == "interrupted"
-
-
-# ---------------------------------------------------------------------------
-# ★ 顺序保证：看到终止事件 ⇒ DB 已是最终状态
-# ---------------------------------------------------------------------------
-
-
-async def test_terminal_event_is_published_after_persist(
-    client: httpx.AsyncClient, clean_db: None
-) -> None:
-    """前端收到 run.finished 会立刻回查最终用量。
-
-    曾经的顺序是"先发布终止事件、后落库"，于是这一查读到 status=running、
-    tokens=0、last_seq=0。终止事件必须是最后一步。
-    """
-    tid = await setup_thread(client)
-    rid = (
-        await client.post(
-            f"/v1/threads/{tid}/runs", json={"content": [{"type": "text", "text": "hi"}]}
-        )
-    ).json()["run_id"]
-
-    saw_terminal = False
-    async with client.stream("GET", f"/v1/runs/{rid}/events") as resp:
-        async for line in resp.aiter_lines():
-            if line.startswith("event: ") and line[7:] in (
-                "run.finished",
-                "run.failed",
-                "run.cancelled",
-            ):
-                saw_terminal = True
-                break
-    assert saw_terminal
-
-    # 不做任何等待，立刻回查
-    run = (await client.get(f"/v1/runs/{rid}")).json()
-    assert run["status"] == "succeeded", run
-    assert run["total_tokens"] == 15
-    assert run["last_seq"] > 0
-
-
-async def test_reconnect_after_finish_closes_immediately(
-    client: httpx.AsyncClient, clean_db: None
-) -> None:
-    """★ run 跑完之后刷新页面：必须立刻关闭，不能挂住。
-
-    曾经的行为是进 XREAD BLOCK 一直发心跳直到客户端超时 ——
-    而"跑完后刷新"是前端最常见的动作之一。
-    终止 run 的事件集完整且不可变，补发缺口后就该结束。
-    """
-    tid = await setup_thread(client)
-    rid = (
-        await client.post(
-            f"/v1/threads/{tid}/runs", json={"content": [{"type": "text", "text": "hi"}]}
-        )
-    ).json()["run_id"]
-    run = await wait_for_status(client, rid)
-    last_seq = run["last_seq"]
-
-    # 游标停在最后一个事件之后 —— 没有任何新事件可给
-    resp = await asyncio.wait_for(
-        client.get(f"/v1/runs/{rid}/events", headers={"Last-Event-ID": str(last_seq)}),
-        timeout=5.0,  # 挂住的话这里会 TimeoutError
-    )
-    assert resp.status_code == 200
-    assert parse_sse(resp.text) == []
-
-    # 从头拉仍然拿得到完整事件集
-    full = parse_sse((await client.get(f"/v1/runs/{rid}/events")).text)
-    assert full[-1][1] == "run.finished"
 
 
 async def test_release_thread_lock_requires_owner() -> None:

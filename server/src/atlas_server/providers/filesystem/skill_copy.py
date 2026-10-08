@@ -29,6 +29,8 @@ from typing import TYPE_CHECKING, Any
 
 from atlas_engine.contracts import SkillRef
 
+from ...errors import CapabilityUnavailable
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
@@ -38,8 +40,8 @@ __all__ = [
     "SKILLS_MOUNT",
     "SkillMeta",
     "SkillUnavailable",
+    "resolve_skills",
     "seed_session_skills",
-    "skill_metas_for",
     "skill_refs_for",
 ]
 
@@ -56,7 +58,7 @@ SKILLS_MOUNT = "/skills"
 _COPY_CONCURRENCY = 20
 
 
-class SkillUnavailable(RuntimeError):
+class SkillUnavailable(CapabilityUnavailable):
     """引用的技能版本在技能区不存在。
 
     ★ 冒泡成 run.failed，不静默跳过。少拷几个文件就默默开始的话，
@@ -78,19 +80,47 @@ class SkillMeta:
     description: str
 
 
-def skill_metas_for(refs: Sequence[Any]) -> list[SkillMeta]:
-    """spec 里钉死的技能引用（SkillRefSpec）→ 展示元数据。
+async def resolve_skills(
+    refs: Sequence[Any], directory: Any, *, with_descriptions: bool = True
+) -> tuple[list[SkillMeta], list[dict[str, Any]]]:
+    """spec 里钉死的技能引用（SkillRefSpec）→ (要装的元数据, 被跳过的说明)。
 
-    ★ description 的权威来源是**配置平面的 skill 表**，不是会话副本里的
-      frontmatter —— 技能进了会话就能被 execute 改，而 description 是模型的
-      **路由依据**（决定要不要展开正文）。让它始终来自那份经过审核的版本，
-      正文则可以按会话适配：改不动别人对你的第一印象，但可以改自己的做法。
-    ★ 配置平面尚未接入，暂用 slug 兜底；接入后从缓存读。
+    ★ 已紧急下架的版本跳过（设计 §7.3）：下架是为了止损，不是让 agent 不可用，
+      所以不让会话 / run 失败；跳过的清单交给调用方变成 skill.skipped 事件。
+    ★ description 的权威来源是**配置服务**，不是会话副本里的 frontmatter ——
+      技能进了会话就能被 execute 改，而 description 是模型的**路由依据**
+      （决定要不要展开正文）。让它始终来自那份经过审查的版本。
+    ★ 没接配置服务（directory.configured=False）时退回接入前的行为：照 spec
+      投送，描述以 slug 兜底。
+    ★ 下架清单拉不到时**放行**（打 warning）：拿不到「哪些被下架了」不该让所有
+      带技能的会话一起失败 —— 下架晚生效一会儿是可以接受的代价。
 
-    主 agent（会话创建）与子智能体（委派时建子会话）共用这一个入口 ——
+    主 agent（会话创建、每轮装配）与子智能体（委派时建子会话）共用这一个入口 ——
     分叉过一次：主 agent 的技能一度根本没被投送，而子智能体的投了。
     """
-    return [SkillMeta(slug=r.slug, version=r.version, description=r.slug) for r in refs]
+    if not refs:
+        return [], []
+    try:
+        revoked = await directory.revoked()
+    except CapabilityUnavailable:
+        logger.warning("拉不到技能下架清单，本次不做下架过滤", exc_info=True)
+        revoked = frozenset()
+
+    metas: list[SkillMeta] = []
+    skipped: list[dict[str, Any]] = []
+    for ref in refs:
+        if (ref.slug, ref.version) in revoked:
+            skipped.append({"slug": ref.slug, "version": ref.version, "reason": "revoked"})
+            continue
+        description = ref.slug
+        if with_descriptions and directory.configured:
+            try:
+                description = (await directory.get(ref.slug, ref.version)).description
+            except LookupError as exc:
+                msg = f"技能 {ref.slug}@v{ref.version} 在技能目录里不存在或未发布"
+                raise SkillUnavailable(msg) from exc
+        metas.append(SkillMeta(slug=ref.slug, version=ref.version, description=description))
+    return metas, skipped
 
 
 def skill_refs_for(metas: Sequence[SkillMeta]) -> list[SkillRef]:

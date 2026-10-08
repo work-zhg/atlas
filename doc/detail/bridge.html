@@ -1,0 +1,2115 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bridge 重新设计 · AI Platform</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  .flow,.tree{background:var(--card);border:1px solid var(--border-soft);border-radius:var(--radius);
+        padding:var(--s3);overflow-x:auto;margin:0 0 var(--s3);font-family:var(--mono);
+        font-size:12.5px;line-height:1.8;white-space:pre;color:#CBD5E1}
+  .flow b,.tree b{color:#F8FAFC;font-weight:600}
+  .flow i,.tree i{color:#7A88A0;font-style:normal}
+  .flow s,.tree s{color:#7DD3FC;text-decoration:none}
+  .flow u,.tree u{color:#FDE68A;text-decoration:none}
+  .flow em,.tree em{color:#F87171;font-style:normal}
+  .take{border-left:3px solid var(--accent);padding:var(--s2) var(--s3);margin:var(--s3) 0;background:rgba(34,197,94,.06);border-radius:0 var(--radius) var(--radius) 0}
+  .take b.l{display:block;color:var(--accent);font-family:var(--mono);font-size:11.5px;letter-spacing:.08em;margin-bottom:4px}
+  .todo{color:#7A88A0}
+</style>
+</head>
+<body>
+
+<nav class="sitenav">
+  <a class="brand" href="../">AI&nbsp;<b>Platform</b>&nbsp;/ 详细设计</a>
+  <div class="links">
+    <a href="../">概要设计</a>
+    <a href="./">详设目录</a>
+    <a href="acp.html">acp Agent</a>
+    <a class="on" href="bridge.html">Bridge 重新设计</a>
+    <a href="bridge-code.html">Bridge 代码设计</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+<nav class="toc" aria-label="目录">
+  <div class="eyebrow">本页</div>
+  <ol>
+    <li><a href="#s0">这份文档怎么写</a></li>
+    <li><a href="#s1">WebSocket</a></li>
+    <li><a href="#s2">ACP 协议</a></li>
+    <li><a href="#s3">bridge 的职责边界</a></li>
+    <li><a href="#s4">上游协议</a></li>
+    <li><a href="#s5">会话与轮次模型</a></li>
+    <li><a href="#s6">超时、取消与背压</a></li>
+    <li><a href="#s7">故障、断线与恢复</a></li>
+    <li><a href="#s8">安全、可观测性与部署</a></li>
+    <li><a href="#s9">收尾：索引与待验证</a></li>
+  </ol>
+  <div class="eyebrow" style="margin-top:var(--s3)">第 1 章小节</div>
+  <ol>
+    <li><a href="#ws-why">解决什么问题</a></li>
+    <li><a href="#ws-layer">协议分层</a></li>
+    <li><a href="#ws-hs">握手</a></li>
+    <li><a href="#ws-frame">帧格式</a></li>
+    <li><a href="#ws-msg">消息与分片</a></li>
+    <li><a href="#ws-ping">心跳：ping / pong</a></li>
+    <li><a href="#ws-close">关闭与状态码</a></li>
+    <li><a href="#ws-life">连接生命周期</a></li>
+    <li><a href="#ws-flow">流控与背压</a></li>
+    <li><a href="#ws-not">它不提供什么</a></li>
+    <li><a href="#ws-sec">安全</a></li>
+    <li><a href="#ws-env">部署环境</a></li>
+    <li><a href="#ws-cmp">与其他方案对比</a></li>
+    <li><a href="#ws-lib">Python websockets 库</a></li>
+    <li><a href="#ws-take">对 bridge 的启示</a></li>
+  </ol>
+  <div class="eyebrow" style="margin-top:var(--s3)">第 2 章小节</div>
+  <ol>
+    <li><a href="#acp-what">是什么、为什么</a></li>
+    <li><a href="#acp-role">角色与拓扑</a></li>
+    <li><a href="#acp-tp">传输</a></li>
+    <li><a href="#acp-msg">消息模型</a></li>
+    <li><a href="#acp-init">版本与能力协商</a></li>
+    <li><a href="#acp-methods">方法全景</a></li>
+    <li><a href="#acp-session">会话</a></li>
+    <li><a href="#acp-turn">一轮 prompt</a></li>
+    <li><a href="#acp-tool">工具调用与权限</a></li>
+    <li><a href="#acp-cancel">取消</a></li>
+    <li><a href="#acp-err">错误码</a></li>
+    <li><a href="#acp-ext">扩展机制</a></li>
+    <li><a href="#acp-v2">v2（草案）</a></li>
+    <li><a href="#acp-eco">生态现状</a></li>
+    <li><a href="#acp-take">对 bridge 的启示</a></li>
+  </ol>
+  <div class="eyebrow" style="margin-top:var(--s3)">第 3 章小节</div>
+  <ol>
+    <li><a href="#b-decide">两项决定</a></li>
+    <li><a href="#b-def">一句话定义</a></li>
+    <li><a href="#b-topo">三段链路</a></li>
+    <li><a href="#b-plane">控制面与数据面</a></li>
+    <li><a href="#b-table">职责分配总表</a></li>
+    <li><a href="#b-not">两边各自不做的事</a></li>
+    <li><a href="#b-cost">D2 的含义与代价</a></li>
+    <li><a href="#b-inv">边界不变式</a></li>
+    <li><a href="#b-trace">T1–T20 的归属</a></li>
+    <li><a href="#b-next">第 4 章要定义什么</a></li>
+  </ol>
+  <div class="eyebrow" style="margin-top:var(--s3)">第 4 章小节</div>
+  <ol>
+    <li><a href="#h-principle">设计原则</a></li>
+    <li><a href="#h-shape">基本形态</a></li>
+    <li><a href="#h-conn">连接与版本协商</a></li>
+    <li><a href="#h-overview">消息总览</a></li>
+    <li><a href="#h-session">会话</a></li>
+    <li><a href="#h-turn">轮次</a></li>
+    <li><a href="#h-perm">权限的往返</a></li>
+    <li><a href="#h-data">数据面</a></li>
+    <li><a href="#h-map">ACP → 上游的映射</a></li>
+    <li><a href="#h-big">大消息与单连接</a></li>
+    <li><a href="#h-err">错误码</a></li>
+    <li><a href="#h-close">关闭码</a></li>
+    <li><a href="#h-example">完整示例</a></li>
+    <li><a href="#h-decisions">本章决定与遗留</a></li>
+  </ol>
+  <div class="eyebrow" style="margin-top:var(--s3)">第 5 章小节</div>
+  <ol>
+    <li><a href="#m-entity">实体与对应关系</a></li>
+    <li><a href="#m-t18">一个进程一个会话</a></li>
+    <li><a href="#m-life">生命周期</a></li>
+    <li><a href="#m-turn">轮次模型</a></li>
+    <li><a href="#m-host">bridge 内部状态机</a></li>
+    <li><a href="#m-resume">会话的恢复</a></li>
+    <li><a href="#m-state">谁持有哪份状态</a></li>
+    <li><a href="#m-decisions">本章决定</a></li>
+  </ol>
+  <div class="eyebrow" style="margin-top:var(--s3)">第 6 章小节</div>
+  <ol>
+    <li><a href="#t-kinds">计时总表</a></li>
+    <li><a href="#t-deadline">截止与静默</a></li>
+    <li><a href="#t-perm">权限等待</a></li>
+    <li><a href="#t-cancel">取消流程</a></li>
+    <li><a href="#t-session">会话层的超时</a></li>
+    <li><a href="#t-bp">背压</a></li>
+    <li><a href="#t-clock">时间的表示</a></li>
+    <li><a href="#t-server">server 侧的计时</a></li>
+    <li><a href="#t-tune">需要实测校准的数值</a></li>
+    <li><a href="#t-decisions">本章决定</a></li>
+  </ol>
+  <div class="eyebrow" style="margin-top:var(--s3)">第 7 章小节</div>
+  <ol>
+    <li><a href="#r-kinds">故障分类</a></li>
+    <li><a href="#r-window">断线时的一轮</a></li>
+    <li><a href="#r-attach">session.attach 与补发</a></li>
+    <li><a href="#r-buffer">补发缓冲</a></li>
+    <li><a href="#r-reconnect">重连策略</a></li>
+    <li><a href="#r-bridge">bridge 进程崩溃</a></li>
+    <li><a href="#r-pod">Pod 丢失</a></li>
+    <li><a href="#r-server">server 持久保存什么</a></li>
+    <li><a href="#r-matrix">恢复对照表</a></li>
+    <li><a href="#r-decisions">本章决定</a></li>
+  </ol>
+  <div class="eyebrow" style="margin-top:var(--s3)">第 8 章小节</div>
+  <ol>
+    <li><a href="#o-threat">威胁模型</a></li>
+    <li><a href="#o-auth">上游连接的鉴权</a></li>
+    <li><a href="#o-agent">把 agent 当作不可信的</a></li>
+    <li><a href="#o-obs">可观测性</a></li>
+    <li><a href="#o-health">健康检查</a></li>
+    <li><a href="#o-deploy">部署形态</a></li>
+    <li><a href="#o-term">终止与回收</a></li>
+    <li><a href="#o-decisions">本章决定</a></li>
+  </ol>
+  <div class="eyebrow" style="margin-top:var(--s3)">第 9 章小节</div>
+  <ol>
+    <li><a href="#z-inv">不变式</a></li>
+    <li><a href="#z-dec">决定索引</a></li>
+    <li><a href="#z-api">上游协议速查</a></li>
+    <li><a href="#z-verify">待验证</a></li>
+    <li><a href="#z-plan">落地顺序</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<header class="hero">
+  <p class="kicker">Detailed Design · Bridge v2</p>
+  <h1>Bridge 重新设计</h1>
+  <p class="lede">Bridge 是会话 Pod 里的那个进程：一头连着平台 server，一头连着 CLI（经 ACP adapter）。这份文档<b>从零设计</b>它，不继承现有实现。由下往上推：先把承载它的传输协议 WebSocket 讲透，再定通道上的应用协议、会话与轮次模型、超时与取消、故障与恢复。</p>
+  <div class="meta">
+    <span>从零设计</span><span>自底向上</span><span>完成</span><span>第 1 章：WebSocket</span><span>第 2 章：ACP</span><span>第 3 章：职责边界</span><span>第 4 章：上游协议</span><span>第 5 章：会话与轮次</span><span>第 6 章：超时取消背压</span><span>第 7 章：故障与恢复</span><span>第 8 章：安全观测部署</span><span>第 9 章：收尾</span>
+  </div>
+</header>
+
+<!-- ══════════════ 0 ══ -->
+<section id="s0">
+  <h2><span class="num">00</span>这份文档怎么写</h2>
+
+  <p>每一章先讲清<b>事实</b>（协议、库、环境的真实行为），再在章末用「对 bridge 的启示」把事实翻译成<b>设计要回答的问题</b>。问题留到对应章节去回答 —— 这样每个设计决定都能追溯到一条事实，而不是一条习惯。</p>
+
+  <table>
+    <thead><tr><th style="width:60px">章</th><th>主题</th><th style="width:90px">状态</th></tr></thead>
+    <tbody>
+      <tr><td>01</td><td>WebSocket：传输层的事实</td><td>已写</td></tr>
+      <tr><td>02</td><td>ACP：bridge 另一侧说的协议</td><td>已写</td></tr>
+      <tr><td>03</td><td>bridge 的职责边界：它是什么、不是什么</td><td>已写</td></tr>
+      <tr><td>04</td><td>上游协议：消息类型、关联、版本</td><td>已写</td></tr>
+      <tr><td>05</td><td>会话与轮次模型</td><td>已写</td></tr>
+      <tr><td>06</td><td>超时、取消与背压</td><td>已写</td></tr>
+      <tr><td>07</td><td>故障、断线与恢复</td><td>已写</td></tr>
+      <tr><td>08</td><td>安全、可观测性、部署</td><td>已写</td></tr>
+      <tr><td>09</td><td>收尾：不变式、决定索引、协议速查、待验证、落地顺序</td><td>已写</td></tr>
+    </tbody>
+  </table>
+  <p class="todo">全部章节已完成。第 9 章的待验证项可能反过来修订前面的设计，修订时在对应章节注明。</p>
+</section>
+
+<!-- ══════════════ 1 ══ -->
+<section id="s1">
+  <h2><span class="num">01</span>WebSocket</h2>
+
+  <p>WebSocket（RFC 6455，2011）是一个建立在 TCP 之上的<b>全双工、长连接、面向消息</b>的协议。它借用一次 HTTP 请求完成握手，之后这条 TCP 连接就不再说 HTTP，而是双方随时可以向对方发送「消息」。</p>
+
+  <!-- ─────────── 1.1 ─── -->
+  <h3 id="ws-why">1.1 它解决什么问题</h3>
+  <p>HTTP 是<b>请求—响应</b>模型：只有客户端能发起，服务端只能被动回答，且一问一答。当服务端需要「主动说话」时，历史上有几种变通：</p>
+  <table>
+    <thead><tr><th style="width:120px">方案</th><th>做法</th><th>代价</th></tr></thead>
+    <tbody>
+      <tr><td>短轮询</td><td>客户端每隔 N 秒问一次「有新消息吗」</td><td>延迟 = 轮询间隔；大量空请求</td></tr>
+      <tr><td>长轮询</td><td>服务端把请求挂住，有消息才返回，客户端立刻再发下一个</td><td>每条消息一次完整 HTTP 往返；服务端要管理挂起的请求</td></tr>
+      <tr><td>SSE</td><td>一个不结束的 HTTP 响应，服务端持续往里写事件</td><td><b>只能服务端 → 客户端</b>；客户端要说话仍得另发 HTTP 请求</td></tr>
+      <tr><td><b>WebSocket</b></td><td>握手后变成双向消息通道</td><td>连接有状态、要自己管理生命周期（见 1.8 · 1.10）</td></tr>
+    </tbody>
+  </table>
+  <p>WebSocket 的核心价值是两点：<b>双方都能主动发</b>，以及<b>一条连接上承载任意多条消息</b>（不必每条消息付一次握手与头部的开销）。</p>
+
+  <!-- ─────────── 1.2 ─── -->
+  <h3 id="ws-layer">1.2 协议分层</h3>
+  <div class="flow"><b>应用协议</b>      你自己定义：消息长什么样、怎么关联请求与响应、版本…   <i>← WebSocket 不管（1.10）</i>
+────────────────────────────────────────────────────────────────
+<b>消息</b>          一条完整的 text（UTF-8）或 binary 数据                <i>← 应用看到的单位</i>
+<b>帧</b>            消息被切成一个或多个帧；另有控制帧 ping/pong/close    <i>← 1.4 · 1.5</i>
+<b>握手</b>          一次 HTTP/1.1 GET + Upgrade，成功后协议切换           <i>← 1.3</i>
+────────────────────────────────────────────────────────────────
+<b>TLS</b>（可选）   wss:// = WebSocket over TLS，与 https 同一套
+<b>TCP</b>           可靠、有序的<u>字节流</u>：不丢、不乱序、不重复 —— 但只在这一条连接之内</div>
+  <p>理解分层能避免一类常见误解：WebSocket 的「可靠、有序」完全来自 TCP，因此<b>只在一条连接的生命周期内成立</b>。连接一断，断点前后发生了什么，协议本身一无所知。</p>
+
+  <!-- ─────────── 1.3 ─── -->
+  <h3 id="ws-hs">1.3 握手</h3>
+  <div class="flow">客户端 → <b>GET /session HTTP/1.1</b>
+         Host: bridge.example:8900
+         <s>Upgrade: websocket</s>
+         <s>Connection: Upgrade</s>
+         <s>Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==</s>          <i>16 字节随机数的 base64</i>
+         <s>Sec-WebSocket-Version: 13</s>
+         Sec-WebSocket-Protocol: acme.v2, acme.v1                 <i>可选：应用子协议，按偏好排序</i>
+         Sec-WebSocket-Extensions: permessage-deflate             <i>可选：扩展（压缩）</i>
+         Authorization: Bearer &lt;token&gt;                            <i>普通 HTTP 头，鉴权常放这里</i>
+
+服务端 → <b>HTTP/1.1 101 Switching Protocols</b>
+         <s>Upgrade: websocket</s>
+         <s>Connection: Upgrade</s>
+         <s>Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=</s>
+         Sec-WebSocket-Protocol: acme.v2                          <i>从客户端列表里<u>选定一个</u>回显</i>
+         Sec-WebSocket-Extensions: permessage-deflate
+
+<i>…此后这条 TCP 连接上只有 WebSocket 帧，不再有 HTTP…</i></div>
+
+  <table>
+    <thead><tr><th style="width:200px">头</th><th>作用</th></tr></thead>
+    <tbody>
+      <tr><td><code>Upgrade</code> / <code>Connection</code></td><td>HTTP/1.1 的协议升级机制。中间的代理必须认识并放行它（1.12）</td></tr>
+      <tr><td><code>Sec-WebSocket-Key</code> → <code>Accept</code></td><td><code>Accept = base64(SHA1(Key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))</code>。<b>不是鉴权</b>：它只证明对面确实是一个理解 WebSocket 的服务端，而不是一个碰巧回了 200 的普通 HTTP 服务或缓存</td></tr>
+      <tr><td><code>Sec-WebSocket-Version</code></td><td>固定 13。不匹配时服务端回 426 并告知支持的版本</td></tr>
+      <tr><td><code>Sec-WebSocket-Protocol</code></td><td><b>应用层协议的版本协商</b>。客户端报列表，服务端选一个回显；不回显 = 没有选定任何子协议。这是 WebSocket 里唯一内建的「双方确定地达成一致」的机制</td></tr>
+      <tr><td><code>Sec-WebSocket-Extensions</code></td><td>协商扩展，最常见的是 <code>permessage-deflate</code>（RFC 7692，逐消息压缩）</td></tr>
+      <tr><td><code>Origin</code></td><td>浏览器自动带上，服务端据此拒绝跨站连接（1.11）。非浏览器客户端通常不带</td></tr>
+    </tbody>
+  </table>
+
+  <p>握手阶段仍然是 HTTP，所以<b>可以用任何 HTTP 状态码拒绝</b>（401、403、426…），而且拒绝时连接根本不会升级。一旦回了 101，再想拒绝就只能走 WebSocket 的关闭流程（1.7）。</p>
+
+  <!-- ─────────── 1.4 ─── -->
+  <h3 id="ws-frame">1.4 帧格式</h3>
+  <div class="flow"> 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-------+-+-------------+-------------------------------+
+|<b>F</b>|<i>R R R</i>|<b>opcode</b> |<b>M</b>| <b>Payload len</b> |   Extended payload length     |
+|<b>I</b>|<i>S S S</i>|  (4)  |<b>A</b>|     (7)     |          (16 / 64)            |
+|<b>N</b>|<i>V V V</i>|       |<b>S</b>|             |   （len=126 或 127 时才有）   |
+| |<i>1 2 3</i>|       |<b>K</b>|             |                               |
++-+-+-+-+-------+-+-------------+ - - - - - - - - - - - - - - - +
+|                               |  Masking-key（MASK=1 时，4 字节）
++-------------------------------+-------------------------------+
+|                         Payload Data …                        |
++---------------------------------------------------------------+</div>
+
+  <table>
+    <thead><tr><th style="width:150px">字段</th><th>含义</th></tr></thead>
+    <tbody>
+      <tr><td><b>FIN</b></td><td>1 = 这是一条消息的最后一帧</td></tr>
+      <tr><td>RSV1–3</td><td>留给扩展用（如压缩置 RSV1），未协商扩展时必须为 0</td></tr>
+      <tr><td><b>opcode</b></td><td><code>0x1</code> text · <code>0x2</code> binary · <code>0x0</code> 续帧 · <code>0x8</code> close · <code>0x9</code> ping · <code>0xA</code> pong</td></tr>
+      <tr><td><b>Payload len</b></td><td>0–125 直接表示长度；126 → 后跟 16 位长度；127 → 后跟 64 位长度。所以一帧头部只有 2–14 字节</td></tr>
+      <tr><td><b>MASK</b> + key</td><td><b>客户端 → 服务端的帧必须掩码</b>，服务端 → 客户端的帧必须不掩码。掩码 = 用 4 字节随机 key 逐字节异或负载</td></tr>
+    </tbody>
+  </table>
+  <div class="callout rule">
+    <span class="label">掩码不是加密</span>
+    <p>key 就明文放在帧里。它存在的唯一目的是让负载在网络上「看起来随机」，防止恶意页面构造出能被中间透明代理误解析为 HTTP 请求的字节，进而投毒代理缓存。它不提供任何保密性 —— 保密要靠 <code>wss://</code>。</p>
+  </div>
+
+  <!-- ─────────── 1.5 ─── -->
+  <h3 id="ws-msg">1.5 消息与分片</h3>
+  <ul>
+    <li><b>消息有边界。</b>这是它相对裸 TCP 的一大便利：TCP 是字节流，应用得自己分包（换行符、长度前缀）；WebSocket 保证收到的就是对方发出的那一整条。</li>
+    <li><b>text 必须是合法 UTF-8</b>，否则对端应以 1007 关闭连接。JSON 走 text；任意字节走 binary。</li>
+    <li><b>分片</b>：一条大消息可以拆成「首帧（opcode=text/binary，FIN=0）+ 若干续帧（opcode=0）+ 末帧（FIN=1）」。发送方可以边生成边发，不必先知道总长度。</li>
+    <li><b>控制帧可以插在分片之间</b>：一条 100MB 的消息正在分片传输时，ping 与 close 仍能及时送达。控制帧自身不能分片，负载 ≤ 125 字节。</li>
+    <li><b>数据消息之间不能交错</b>：一条消息的分片没发完，不能开始发另一条数据消息。所以<b>一条超大消息会堵住它后面的所有消息</b> —— 队头阻塞在消息粒度上依然存在。</li>
+  </ul>
+
+  <!-- ─────────── 1.6 ─── -->
+  <h3 id="ws-ping">1.6 心跳：ping / pong</h3>
+  <p>TCP 有一个根本局限：<b>对端悄无声息地消失时（机器掉电、网络被切、NAT 表项过期），本端在不发数据的情况下永远察觉不到</b>。连接会停在「看起来还开着」的状态，称为<b>半开连接</b>。</p>
+  <ul>
+    <li>收到 <b>ping</b> 必须尽快回 <b>pong</b>，并原样带回 ping 的负载（用来配对是哪一次 ping）。</li>
+    <li>可以主动发不请自来的 pong，作为单向心跳。</li>
+    <li>典型用法：每 N 秒发一次 ping，M 秒内没收到对应 pong 就判定连接已死、主动关闭。</li>
+    <li>心跳还有第二个作用：<b>让连接不空闲</b>，避免被中间的负载均衡 / NAT 按空闲超时掐断（1.12）。</li>
+    <li>浏览器的 JavaScript API <b>不能发 ping</b>（只能被动回 pong），浏览器场景的应用层心跳只能用普通消息模拟。服务端之间通信没有这个限制。</li>
+  </ul>
+  <div class="callout warn">
+    <span class="label">心跳只证明「连接活着」，不证明「对方在干活」</span>
+    <p>pong 通常由协议库在 I/O 层自动回复。对端的业务逻辑哪怕已经卡死在一个死循环里，只要事件循环还能跑，pong 照样回来。「对方业务是否还在推进」是应用层要单独回答的问题。</p>
+  </div>
+
+  <!-- ─────────── 1.7 ─── -->
+  <h3 id="ws-close">1.7 关闭与状态码</h3>
+  <div class="flow">A ──close(1000, "done")──▶ B        A 进入 CLOSING，不再发数据帧（控制帧除外）
+A ◀──close(1000)──────────── B     B 回一个 close，同样不再发数据
+                                  <i>之后 TCP 关闭（通常由服务端先关，避免客户端端口进入 TIME_WAIT）</i></div>
+  <p>这叫<b>关闭握手</b>：双方都明确知道「对方不会再发数据了」。与之相对的是<b>异常关闭</b> —— TCP 直接断掉，没有 close 帧，本端看到的状态码是 1006。</p>
+
+  <table>
+    <thead><tr><th style="width:90px">码</th><th style="width:170px">名称</th><th>含义</th></tr></thead>
+    <tbody>
+      <tr><td>1000</td><td>Normal Closure</td><td>正常结束</td></tr>
+      <tr><td>1001</td><td>Going Away</td><td>一方要离开：服务端下线、页面关闭</td></tr>
+      <tr><td>1002</td><td>Protocol Error</td><td>协议错误</td></tr>
+      <tr><td>1003</td><td>Unsupported Data</td><td>收到了无法处理的数据类型（如只收 text 却来了 binary）</td></tr>
+      <tr><td>1005</td><td>No Status Rcvd</td><td><b>保留，不能发送</b>：对方的 close 帧里没带状态码</td></tr>
+      <tr><td>1006</td><td>Abnormal Closure</td><td><b>保留，不能发送</b>：连接没经过关闭握手就断了</td></tr>
+      <tr><td>1007</td><td>Invalid Payload</td><td>数据不合法，如 text 不是 UTF-8</td></tr>
+      <tr><td>1008</td><td>Policy Violation</td><td>违反策略（通用的「不允许」）</td></tr>
+      <tr><td>1009</td><td>Message Too Big</td><td>消息超过接收方上限</td></tr>
+      <tr><td>1010</td><td>Mandatory Ext.</td><td>客户端要求的扩展服务端没协商</td></tr>
+      <tr><td>1011</td><td>Internal Error</td><td>服务端内部错误（很多库也用它表示心跳超时）</td></tr>
+      <tr><td>1012 / 1013</td><td>Service Restart / Try Again Later</td><td>服务重启 / 过载，稍后重试</td></tr>
+      <tr><td>1015</td><td>TLS Handshake</td><td><b>保留，不能发送</b>：TLS 握手失败</td></tr>
+      <tr><td>3000–3999</td><td>注册段</td><td>向 IANA 注册，给库与框架用</td></tr>
+      <tr><td><b>4000–4999</b></td><td><b>私有段</b></td><td>应用自定义，无需注册。<b>应用自己的关闭原因放这里</b></td></tr>
+    </tbody>
+  </table>
+  <p>close 帧可以附带一个原因字符串，但总负载 ≤ 125 字节（状态码 2 字节 + 原因 ≤ 123 字节），只够写一句话，不适合传结构化的错误信息。</p>
+
+  <!-- ─────────── 1.8 ─── -->
+  <h3 id="ws-life">1.8 连接生命周期</h3>
+  <div class="flow"><b>CONNECTING</b> ──握手成功(101)──▶ <b>OPEN</b> ──一方发出或收到 close──▶ <b>CLOSING</b> ──TCP 关闭──▶ <b>CLOSED</b>
+     │                             │
+     └──握手失败(4xx/超时)──────────┴──TCP 直接断开（无关闭握手，code 1006）──────────────▶ <b>CLOSED</b></div>
+  <ul>
+    <li>只有 <b>OPEN</b> 状态下能收发数据消息。</li>
+    <li>一条连接<b>只会经历一次</b>这个过程，不能「重开」。所谓重连，就是新建一条连接，从 CONNECTING 重新开始 —— 对协议而言它和上一条毫无关系。</li>
+    <li>每个阶段都应有超时：握手超时（CONNECTING 卡住）、关闭超时（对方不回 close 时，等多久后直接断 TCP）。</li>
+  </ul>
+
+  <!-- ─────────── 1.9 ─── -->
+  <h3 id="ws-flow">1.9 流控与背压</h3>
+  <p>WebSocket 协议里<b>没有</b>任何流控机制。唯一的流控来自下层 TCP：接收方读得慢 → 接收窗口变小 → 发送方的内核发送缓冲积压 → 发送方的写操作最终阻塞。</p>
+  <div class="flow">发送方应用 ──send()──▶ [库的写缓冲] ──▶ [内核发送缓冲] ══TCP══▶ [内核接收缓冲] ──▶ [库的接收队列] ──recv()──▶ 接收方应用
+                         <u>write_limit</u>                                                   <u>max_queue</u>
+                         超过则 send() 等待                                               满了就停止从 socket 读
+                                                                                           → TCP 窗口收缩 → 反压到发送方</div>
+  <p>三件事要分清：</p>
+  <ul>
+    <li><b>send() 返回 ≠ 对方收到。</b>它只表示消息已进入本端缓冲。发送方无从得知对方应用有没有处理 —— 需要确认就得在应用层设计（1.10）。</li>
+    <li><b>反压是好事。</b>它让「生产太快的一方」慢下来，而不是让「消费太慢的一方」内存爆掉。设计上要让反压能传到真正的源头，而不是在中间某一层用一个无界队列吞掉。</li>
+    <li><b>单条消息大小上限（max_size）</b>是接收方的自我保护：超过就以 1009 关闭连接。上限要与业务上可能出现的最大消息匹配，并且整条链路上各段一致。</li>
+  </ul>
+
+  <!-- ─────────── 1.10 ─── -->
+  <h3 id="ws-not">1.10 它不提供什么</h3>
+  <p>这一节决定了应用协议要设计什么。WebSocket 只是「一条能双向发消息的管子」，以下这些<b>全都没有</b>：</p>
+  <table>
+    <thead><tr><th style="width:170px">缺失的能力</th><th>后果</th><th>应用层的常见做法</th></tr></thead>
+    <tbody>
+      <tr><td>请求—响应关联</td><td>发出一条消息后，收到的下一条不一定是它的回答</td><td>每条请求带 id，响应回带同一个 id（如 JSON-RPC 2.0）</td></tr>
+      <tr><td>送达确认</td><td>不知道对方应用是否处理了某条消息</td><td>显式 ack，或把「响应」当作确认</td></tr>
+      <tr><td>重投</td><td>连接断开时缓冲里的消息直接丢失</td><td>发送方保留未确认的消息，重连后重发</td></tr>
+      <tr><td>跨连接的顺序与去重</td><td>重连前后的消息谁先谁后、有没有重复，协议不知道</td><td>消息序号 + 接收方按序号去重</td></tr>
+      <tr><td>断线续传</td><td>新连接从零开始</td><td>重连时带上「最后收到的序号」，对方从那里补发</td></tr>
+      <tr><td>鉴权与授权</td><td>握手后的每条消息都不带身份</td><td>握手时鉴权，把身份绑定到连接上</td></tr>
+      <tr><td>消息类型 / 路由</td><td>收到的只是一段 text 或 bytes</td><td>消息内带类型字段</td></tr>
+      <tr><td>超时</td><td>协议层面一条消息可以永远没有回答</td><td>应用对每类请求定义超时及超时后的动作</td></tr>
+      <tr><td>多路复用</td><td>一条连接是一条消息序列，大消息会堵住后面的（1.5）</td><td>在消息里带「流 id」自己复用，或开多条连接</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ─────────── 1.11 ─── -->
+  <h3 id="ws-sec">1.11 安全</h3>
+  <table>
+    <thead><tr><th style="width:170px">议题</th><th>要点</th></tr></thead>
+    <tbody>
+      <tr><td>传输加密</td><td><code>ws://</code> 明文，<code>wss://</code> = TLS。掩码不是加密（1.4）</td></tr>
+      <tr><td>鉴权时机</td><td><b>在握手时做</b>，失败直接回 401/403，连接不升级 —— 攻击者连一条可用的通道都拿不到。握手成功后再在消息里鉴权，意味着任何人都能先占一条连接</td></tr>
+      <tr><td>凭据放哪</td><td>服务端之间：<code>Authorization</code> 头。浏览器：JS API 不能设自定义头，常见替代是 cookie、query 参数（会进访问日志，需短期有效）或借用子协议头</td></tr>
+      <tr><td>跨站劫持（CSWSH）</td><td>WebSocket <b>不受同源策略与 CORS 约束</b>。浏览器会带上目标站点的 cookie，恶意页面因此能以用户身份建连。服务端必须校验 <code>Origin</code>，或不用 cookie 鉴权。只有浏览器会带来这个风险</td></tr>
+      <tr><td>资源耗尽</td><td>限制单条消息大小、接收队列长度、每个来源的连接数；握手与关闭都要有超时，防止慢速连接占满资源</td></tr>
+      <tr><td>压缩</td><td><code>permessage-deflate</code> 省带宽，但每条连接要维护压缩上下文（内存），解压还可能被构造的「压缩炸弹」放大。内网高带宽场景常直接关掉</td></tr>
+      <tr><td>「在内网」不是边界</td><td>同一网络里的其它工作负载一样能连上来。凭据校验不能因为「只在内网」而省略</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ─────────── 1.12 ─── -->
+  <h3 id="ws-env">1.12 部署环境</h3>
+  <table>
+    <thead><tr><th style="width:170px">环境因素</th><th>影响</th></tr></thead>
+    <tbody>
+      <tr><td>反向代理 / 网关</td><td>必须显式支持 HTTP/1.1 Upgrade（如 nginx 需配置转发 <code>Upgrade</code>/<code>Connection</code> 头）。不支持时握手失败，常见表现是 400 或 200</td></tr>
+      <tr><td>空闲超时</td><td>负载均衡、NAT、代理普遍会掐断一段时间没有流量的连接（常见默认 60 秒左右）。心跳间隔必须小于链路上最短的空闲超时</td></tr>
+      <tr><td>HTTP/2 与 HTTP/3</td><td>RFC 6455 只定义了基于 HTTP/1.1 的握手。HTTP/2（RFC 8441）与 HTTP/3（RFC 9220）用扩展 CONNECT 承载 WebSocket，需要两端和中间设施都支持；多数服务端之间的部署仍走 HTTP/1.1</td></tr>
+      <tr><td>连接是有状态的</td><td>一条连接钉在某个后端实例上。实例重启 = 连接全断；扩缩容与滚动发布都要考虑存量连接怎么处理</td></tr>
+      <tr><td>健康检查</td><td>对 WebSocket 端口做 TCP 探测会建立又立刻断开连接，在服务端日志里留下噪音。更好的做法是在同一端口上对某个路径直接回 HTTP（不升级）</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ─────────── 1.13 ─── -->
+  <h3 id="ws-cmp">1.13 与其他方案对比</h3>
+  <table>
+    <thead><tr><th style="width:120px"></th><th>WebSocket</th><th>SSE</th><th>HTTP/2 流 · gRPC 双向流</th><th>裸 TCP</th></tr></thead>
+    <tbody>
+      <tr><td>方向</td><td>双向</td><td>服务端 → 客户端</td><td>双向</td><td>双向</td></tr>
+      <tr><td>消息边界</td><td>有</td><td>有（事件）</td><td>有（gRPC 消息）</td><td>无，自己分包</td></tr>
+      <tr><td>多路复用</td><td>无（1.5）</td><td>无</td><td><b>有</b>，一条连接多条流互不阻塞</td><td>无</td></tr>
+      <tr><td>断线续传</td><td>自己做</td><td><b>内置</b>（<code>Last-Event-ID</code>）</td><td>自己做</td><td>自己做</td></tr>
+      <tr><td>模式 / 类型</td><td>自己定</td><td>自己定</td><td>IDL 强类型（protobuf）</td><td>自己定</td></tr>
+      <tr><td>过代理 / 网关</td><td>需支持 Upgrade</td><td>最容易，就是普通 HTTP</td><td>需支持 HTTP/2 端到端</td><td>通常过不去 HTTP 设施</td></tr>
+      <tr><td>浏览器</td><td>支持</td><td>支持</td><td>gRPC-Web 需要转接</td><td>不支持</td></tr>
+      <tr><td>适合</td><td>双向、低延迟、消息驱动</td><td>单向推送、需要续传</td><td>服务间强类型 RPC 与流</td><td>自定义高性能协议</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ─────────── 1.14 ─── -->
+  <h3 id="ws-lib">1.14 Python <code>websockets</code> 库</h3>
+  <p>下表是 <code>websockets</code> <b>15.0.1</b>（本仓虚拟环境里的版本）asyncio 接口 <code>serve()</code> / <code>connect()</code> 的默认值，逐项从函数签名读出：</p>
+  <table>
+    <thead><tr><th style="width:140px">参数</th><th style="width:110px">默认</th><th>含义与行为</th></tr></thead>
+    <tbody>
+      <tr><td><code>open_timeout</code></td><td>10 s</td><td>握手超时</td></tr>
+      <tr><td><code>ping_interval</code></td><td>20 s</td><td>自动发 ping 的间隔；<code>None</code> 关闭自动心跳</td></tr>
+      <tr><td><code>ping_timeout</code></td><td>20 s</td><td>等 pong 的上限，超时判定连接已死并关闭（1011）</td></tr>
+      <tr><td><code>close_timeout</code></td><td>10 s</td><td>关闭握手等对方 close 的上限，超时直接断 TCP</td></tr>
+      <tr><td><code>max_size</code></td><td>1 MiB</td><td>单条<b>消息</b>上限，超过以 1009 关闭连接</td></tr>
+      <tr><td><code>max_queue</code></td><td>16</td><td>接收队列的高水位（消息条数），满了停止从 socket 读 → TCP 反压（1.9）</td></tr>
+      <tr><td><code>write_limit</code></td><td>32 KiB</td><td>写缓冲的高水位，超过时 <code>send()</code> 等待排空</td></tr>
+      <tr><td><code>compression</code></td><td><code>"deflate"</code></td><td><b>默认开启</b> permessage-deflate；<code>None</code> 关闭</td></tr>
+      <tr><td><code>subprotocols</code></td><td><code>None</code></td><td>子协议列表（客户端报出 / 服务端可接受）</td></tr>
+      <tr><td><code>process_request</code></td><td><code>None</code>（仅 serve）</td><td>握手前的钩子：可以直接返回一个 HTTP 响应（拒绝鉴权、或实现 <code>/healthz</code>）而不升级</td></tr>
+    </tbody>
+  </table>
+  <div class="callout warn">
+    <span class="label">默认值只是起点</span>
+    <p>1 MiB 的 <code>max_size</code> 与默认开启的压缩，都是面向「通用网络应用」的取舍。一个要在内网承载大段文本（例如整份文件内容）的通道，需要按自己的消息分布重新确定这几个值，并在链路的每一段保持一致。</p>
+  </div>
+
+  <!-- ─────────── 1.15 ─── -->
+  <h3 id="ws-take">1.15 对 bridge 的启示</h3>
+  <p>把本章的事实翻译成 bridge 设计必须回答的问题。每一条都会在后面的章节给出答案：</p>
+
+  <div class="take"><b class="l">T1 · 可靠性只在一条连接之内（1.2 · 1.8）</b>连接断开时，正在进行的工作怎么办？重连是「接着来」还是「重新来」？如果要接着来，序号、缓冲与补发由谁负责？</div>
+  <div class="take"><b class="l">T2 · WebSocket 不带请求—响应语义（1.10）</b>通道上跑什么应用协议？请求如何关联响应？一个可能持续很久的请求（CLI 的一整轮工作）与普通请求要不要区别对待？</div>
+  <div class="take"><b class="l">T3 · 双向都能发起请求（1.1）</b>除了 server 找 bridge，bridge 也要找 server（例如 CLI 请求权限）。反向请求没有及时应答时，谁决定超时、默认结果是什么？</div>
+  <div class="take"><b class="l">T4 · 心跳只证明连接活着（1.6）</b>「CLI 还在干活吗」由什么判定？卡死检测与「整件事最多做多久」是不是同一个计时？</div>
+  <div class="take"><b class="l">T5 · 版本协商有现成机制（1.3）</b>server 与 bridge 分开发布、在跑的 Pod 不能原地升级。用子协议协商版本，还是在应用消息里协商？</div>
+  <div class="take"><b class="l">T6 · 鉴权要在握手时完成（1.3 · 1.11）</b>凭据是什么、多久有效、如何把一条连接绑定到一个会话？同一会话来了第二条连接怎么办？</div>
+  <div class="take"><b class="l">T7 · 协议没有流控，只有 TCP 反压（1.9）</b>CLI 输出很快而 server 处理不过来时，压力传到哪里？中间有没有无界队列？单条消息上限定多少，链路各段是否一致？</div>
+  <div class="take"><b class="l">T8 · 大消息会堵住后面的消息（1.5）</b>整份文件内容这类大负载要不要走这条通道？如果走，它会不会延迟取消、权限这类紧急消息？</div>
+  <div class="take"><b class="l">T9 · 关闭要有语义（1.7）</b>哪些情况用 4000–4999 私有关闭码表达（鉴权失败、被新连接取代、会话已结束…）？结构化的错误信息放在关闭帧还是应用消息里？</div>
+  <div class="take"><b class="l">T10 · 部署环境会掐连接（1.12）</b>心跳间隔与链路上的空闲超时是否匹配？健康检查如何不污染日志？Pod 滚动或被驱逐时，存量连接如何收尾？</div>
+</section>
+
+<!-- ══════════════ 2 ══ -->
+<section id="s2">
+  <h2><span class="num">02</span>ACP 协议</h2>
+
+  <p>ACP（Agent Client Protocol）是 bridge 另一侧说的协议：CLI（或它的 adapter）只认 ACP。本章只讲协议本身。依据是官方仓库 <code>agentclientprotocol/agent-client-protocol</code> 的 <b>schema-v1.23.0</b> 标签（2026-09-18 发布）下的规范文档、<code>meta.json</code> 与 <code>schema.json</code>。<b>v1 是稳定版</b>，v2 仍是草案（2.0.0-alpha.5），单独放在 2.13。</p>
+
+  <!-- ─────────── 2.1 ─── -->
+  <h3 id="acp-what">2.1 是什么、为什么</h3>
+  <p>编辑器想接入各种编码 agent，agent 也想被各种编辑器使用。没有标准时，这是一个 M × N 的集成问题：每一对都要写一套胶水代码。ACP 的做法与 LSP（语言服务协议）一样，定义一个中间协议，把问题变成 M + N：编辑器实现一次「ACP client」，agent 实现一次「ACP agent」。</p>
+  <p>官方架构文档列出三条设计原则：</p>
+  <table>
+    <thead><tr><th style="width:130px">原则</th><th>含义</th></tr></thead>
+    <tbody>
+      <tr><td><b>MCP-friendly</b></td><td>基于 JSON-RPC，尽量复用 MCP 的数据类型（如内容块），集成方不用再维护一套表示</td></tr>
+      <tr><td><b>UX-first</b></td><td>为「把 agent 的意图清楚地呈现给人」而设计：流式正文、思考过程、工具调用、计划、diff 都有专门的消息</td></tr>
+      <tr><td><b>Trusted</b></td><td>假设用户在编辑器前、信任所用的模型：用户仍能审批工具调用，但编辑器会把本地文件与 MCP server 交给 agent 使用</td></tr>
+    </tbody>
+  </table>
+  <div class="callout warn">
+    <span class="label">注意「Trusted」这条前提</span>
+    <p>ACP 的默认场景是<b>本机、有人值守</b>：编辑器与 agent 在同一台机器上，用户就坐在屏幕前，随时能点「允许」或「取消」。这个前提决定了协议里很多东西的形态（例如权限请求可以一直等人回答）。把 ACP 搬到远端 Pod、由平台代替编辑器时，这个前提不再自动成立（2.15）。</p>
+  </div>
+
+  <!-- ─────────── 2.2 ─── -->
+  <h3 id="acp-role">2.2 角色与拓扑</h3>
+  <div class="flow">        <b>ACP</b>                                    <b>MCP</b>
+<b>Client</b>  ◀══════════════════▶  <b>Agent</b>  ◀══════════════▶  <b>MCP server</b>（工具 / 数据）
+编辑器、IDE、其它 UI                 编码 agent（常是一个 CLI）
+· 拉起 agent 子进程                  · 调用模型、执行工具
+· 展示过程、代用户做决定              · 向 client 汇报进度、请求权限
+· 把用户配置的 MCP server 告诉 agent  · 自己去连 MCP server</div>
+  <ul>
+    <li><b>Client</b>：管理环境、与用户交互、控制资源访问。<b>Agent</b>：用生成式 AI 自主修改代码，通常作为 client 的子进程运行。</li>
+    <li><b>ACP 与 MCP 分工不同</b>：ACP 是「client ⇄ agent」，MCP 是「agent ⇄ 工具」。client 在建会话时把 MCP server 的连接配置交给 agent，由 agent 自己去连。</li>
+    <li><b>一条连接可以承载多个会话</b>（官方架构文档原话：「Each connection can support several concurrent sessions」）。会话由 <code>sessionId</code> 区分。</li>
+    <li>两个方向都能发请求：client 调 agent（如 <code>session/prompt</code>），agent 也调 client（如 <code>session/request_permission</code>）。</li>
+  </ul>
+
+  <!-- ─────────── 2.3 ─── -->
+  <h3 id="acp-tp">2.3 传输</h3>
+  <p>规范定义的传输只有 <b>stdio</b> 一种；Streamable HTTP 仍是「讨论中的草案」。规范允许自定义传输，条件是保持 JSON-RPC 消息格式与 ACP 的生命周期要求，并且应当写明建连与消息交换的方式。</p>
+  <table>
+    <thead><tr><th style="width:170px">stdio 规则</th><th>内容</th></tr></thead>
+    <tbody>
+      <tr><td>进程关系</td><td><b>client 把 agent 作为子进程拉起</b>，并负责结束它（关闭 stdin、终止进程）</td></tr>
+      <tr><td>方向</td><td>agent 从 stdin 读消息，向 stdout 写消息</td></tr>
+      <tr><td>分帧</td><td><b>一条消息一行</b>，以 <code>\n</code> 分隔，消息内部<b>不得含换行</b>（JSON 里的换行必须转义）</td></tr>
+      <tr><td>编码</td><td>UTF-8</td></tr>
+      <tr><td>stdout 纯净</td><td>agent 的 stdout 上<b>只能</b>出现合法的 ACP 消息；client 写进 stdin 的也只能是 ACP 消息</td></tr>
+      <tr><td>日志</td><td>agent 可以往 stderr 写日志；client 可以收集、转发或忽略</td></tr>
+      <tr><td>大小上限</td><td><b>规范没有规定</b>单条消息的上限。一条消息可能带着整个文件的内容（diff、写入内容），实现方要自己定读缓冲的大小</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ─────────── 2.4 ─── -->
+  <h3 id="acp-msg">2.4 消息模型</h3>
+  <p>ACP 完全遵循 JSON-RPC 2.0，只有两类交互：</p>
+  <table>
+    <thead><tr><th style="width:130px">类型</th><th>形状</th><th>语义</th></tr></thead>
+    <tbody>
+      <tr><td><b>方法</b>（请求—响应）</td><td>请求带 <code>id</code> + <code>method</code> + <code>params</code>；响应带同一个 <code>id</code> 与 <code>result</code> 或 <code>error</code></td><td>必须得到一个响应</td></tr>
+      <tr><td><b>通知</b></td><td>只有 <code>method</code> + <code>params</code>，没有 <code>id</code></td><td>单向，永远不会有响应（成功失败都不回）</td></tr>
+    </tbody>
+  </table>
+  <p>约定：</p>
+  <ul>
+    <li>JSON 对象的键用 <code>camelCase</code>（如 <code>sessionId</code>、<code>toolCallId</code>）；判别字段的取值用 <code>snake_case</code>（如 <code>agent_message_chunk</code>、<code>end_turn</code>）。</li>
+    <li>协议中出现的<b>文件路径必须是绝对路径</b>；行号从 1 开始。</li>
+    <li>两个方向各自分配请求 <code>id</code>。收到一条带 <code>id</code> 的消息时，靠「有没有 <code>method</code>」区分它是对方的请求还是对自己请求的响应。</li>
+  </ul>
+
+  <!-- ─────────── 2.5 ─── -->
+  <h3 id="acp-init">2.5 版本与能力协商</h3>
+  <p>连接建立后，client <b>必须</b>先调用 <code>initialize</code>，之后才能建会话。</p>
+  <div class="flow">client → initialize
+  { <s>"protocolVersion"</s>: 1,
+    <s>"clientCapabilities"</s>: { "fs": { "readTextFile": true, "writeTextFile": true }, "terminal": true },
+    "clientInfo": { "name": "my-client", "version": "1.0.0" } }
+
+agent  → result
+  { <s>"protocolVersion"</s>: 1,
+    <s>"agentCapabilities"</s>: {
+      "loadSession": true,
+      "promptCapabilities": { "image": true, "audio": true, "embeddedContext": true },
+      "mcpCapabilities": { "http": true, "sse": true } },
+    "agentInfo": { "name": "my-agent", "version": "1.0.0" },
+    <s>"authMethods"</s>: [] }</div>
+  <table>
+    <thead><tr><th style="width:150px">规则</th><th>内容</th></tr></thead>
+    <tbody>
+      <tr><td>协议版本</td><td>一个整数，代表<b>主版本</b>，只在有破坏性变更时递增。client 报自己支持的最新版本；agent 支持就原样回，不支持就回它自己支持的最新版本；client 不接受该版本时<b>应当关闭连接</b>并告知用户</td></tr>
+      <tr><td>能力</td><td>所有能力都是可选的；<b>请求里没列出的能力一律视为不支持</b>。新增能力不算破坏性变更 —— 协议靠能力位演进，而不是靠版本号</td></tr>
+      <tr><td>client 能力</td><td><code>fs.readTextFile</code> / <code>fs.writeTextFile</code>（agent 可以反过来调 client 读写文件）、<code>terminal</code>（agent 可以让 client 执行命令）、elicitation（向用户索取结构化信息）等</td></tr>
+      <tr><td>agent 能力</td><td><code>loadSession</code>；<code>promptCapabilities</code>（prompt 里能否带图片、音频、嵌入资源 —— 文本与资源链接是必须支持的基线）；<code>mcpCapabilities</code>（能否连 HTTP / SSE 类 MCP server —— stdio 类是必须支持的）；<code>sessionCapabilities</code>（resume、close、delete、list 等）</td></tr>
+      <tr><td>鉴权</td><td>agent 在 <code>authMethods</code> 里声明它需要的登录方式，client 按需调用 <code>authenticate</code></td></tr>
+    </tbody>
+  </table>
+  <div class="callout rule">
+    <span class="label">能力位是双向承诺</span>
+    <p>client 声明了 <code>fs</code> 或 <code>terminal</code>，就意味着 client <b>必须真的能</b>替 agent 读写文件、执行命令；agent 会据此改变自己的行为（例如不再自己读文件，而是请 client 读）。能力位不是「可以试试」，而是「我保证提供」。</p>
+  </div>
+
+  <!-- ─────────── 2.6 ─── -->
+  <h3 id="acp-methods">2.6 方法全景（v1）</h3>
+  <p>以下逐项取自 v1 的 <code>meta.json</code>：</p>
+  <table>
+    <thead><tr><th style="width:230px">方法</th><th style="width:90px">方向</th><th style="width:110px">类型</th><th>何时可用 / 作用</th></tr></thead>
+    <tbody>
+      <tr><td><code>initialize</code></td><td>C → A</td><td>请求</td><td>必须。协商版本与能力</td></tr>
+      <tr><td><code>authenticate</code> · <code>logout</code></td><td>C → A</td><td>请求</td><td>agent 声明了 <code>authMethods</code> 时；logout 需 <code>auth.logout</code> 能力</td></tr>
+      <tr><td><code>session/new</code></td><td>C → A</td><td>请求</td><td>必须。创建会话，返回 <code>sessionId</code></td></tr>
+      <tr><td><code>session/load</code></td><td>C → A</td><td>请求</td><td>需 <code>loadSession</code>。恢复会话并<b>重放全部历史</b></td></tr>
+      <tr><td><code>session/resume</code></td><td>C → A</td><td>请求</td><td>需 <code>sessionCapabilities.resume</code>。恢复会话，<b>不重放</b></td></tr>
+      <tr><td><code>session/close</code></td><td>C → A</td><td>请求</td><td>需 <code>sessionCapabilities.close</code>。取消进行中的工作并释放资源</td></tr>
+      <tr><td><code>session/list</code> · <code>session/delete</code></td><td>C → A</td><td>请求</td><td>需对应能力。列出 / 删除会话</td></tr>
+      <tr><td><code>session/prompt</code></td><td>C → A</td><td>请求</td><td>必须。发起一轮对话；<b>整轮结束才响应</b>（2.8）</td></tr>
+      <tr><td><code>session/set_mode</code> · <code>session/set_config_option</code></td><td>C → A</td><td>请求</td><td>切换模式 / 设置会话配置（模型、思考强度等）</td></tr>
+      <tr><td><code>session/cancel</code></td><td>C → A</td><td><b>通知</b></td><td>必须。取消当前这一轮（2.10）</td></tr>
+      <tr><td><code>session/update</code></td><td>A → C</td><td><b>通知</b></td><td>必须。流式汇报正文、思考、工具调用、计划等（2.8）</td></tr>
+      <tr><td><code>session/request_permission</code></td><td>A → C</td><td>请求</td><td>必须（client 侧）。执行工具前请求用户授权（2.9）</td></tr>
+      <tr><td><code>fs/read_text_file</code> · <code>fs/write_text_file</code></td><td>A → C</td><td>请求</td><td>client 声明了 <code>fs</code> 能力时</td></tr>
+      <tr><td><code>terminal/create</code> · <code>output</code> · <code>wait_for_exit</code> · <code>kill</code> · <code>release</code></td><td>A → C</td><td>请求</td><td>client 声明了 <code>terminal</code> 能力时</td></tr>
+      <tr><td><code>elicitation/create</code> · <code>elicitation/complete</code></td><td>A → C</td><td>请求 · 通知</td><td>client 声明了对应的 elicitation 模式时</td></tr>
+      <tr><td><code>$/cancel_request</code></td><td>双向</td><td><b>通知</b></td><td>协议级：取消某一个具体请求（2.10）</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ─────────── 2.7 ─── -->
+  <h3 id="acp-session">2.7 会话</h3>
+  <p>会话是一段对话的上下文：它有自己的历史与状态，由 agent 持有。client 拿着 <code>sessionId</code> 与之交互。</p>
+  <div class="flow">initialize 完成
+   ├─ session/new    { cwd, mcpServers }                  → { sessionId }
+   ├─ session/load   { sessionId, cwd, mcpServers }       → <u>先以 session/update 重放全部历史</u>，重放完才响应
+   └─ session/resume { sessionId, cwd, mcpServers }       → 不重放，恢复上下文后直接响应
+                                   │
+                                   ▼
+                        可以发 session/prompt 了</div>
+  <table>
+    <thead><tr><th style="width:150px">参数 / 规则</th><th>内容</th></tr></thead>
+    <tbody>
+      <tr><td><code>cwd</code></td><td>会话的主工作目录，<b>必须是绝对路径</b>；无论 agent 进程是在哪个目录启动的都以它为准，也是相对路径解析的基准。与 <code>additionalDirectories</code>（需能力）一起构成文件操作的边界</td></tr>
+      <tr><td><code>mcpServers</code></td><td>让 agent 去连的 MCP server。v1 中这个字段<b>在 new / load 上必须出现</b>（可以是空数组）。三种传输：<b>stdio</b>（<code>name, command, args, env</code>，所有 agent 必须支持）、<b>http</b>（<code>type:"http", name, url, headers</code>，需 <code>mcpCapabilities.http</code>）、<b>sse</b>（已被 MCP 规范废弃）。<code>env</code> 与 <code>headers</code> 都是 <code>[{name, value}]</code> 数组，不是对象</td></tr>
+      <tr><td>load 的重放</td><td>agent <b>必须</b>把整段对话以 <code>session/update</code> 通知重放出来（用户消息、agent 回答、工具调用…），<b>全部发完之后</b>才响应 load 请求。重放消息的形态与实时消息相同，v1 中<b>没有字段区分</b>「这是重放」还是「这是实时的」</td></tr>
+      <tr><td>close</td><td>agent 必须像收到 <code>session/cancel</code> 一样取消进行中的工作，然后释放该会话的资源</td></tr>
+    </tbody>
+  </table>
+  <p>是否支持 load、resume、close，全看 <code>initialize</code> 返回的能力位；没声明就<b>不得</b>调用。</p>
+
+  <!-- ─────────── 2.8 ─── -->
+  <h3 id="acp-turn">2.8 一轮 prompt</h3>
+  <p>一轮（prompt turn）从用户发出一条消息开始，到 agent 完成回答结束，中间可能多次调用模型与工具。<b>在 v1 中，<code>session/prompt</code> 请求要等整轮结束才响应</b> —— 它是一个可能持续很久的请求。</p>
+  <div class="flow">Client                                         Agent
+  │── session/prompt {sessionId, prompt:[…]} ─────▶│  id=7，<u>之后一直挂着</u>
+  │◀── session/update  plan ────────────────────────│
+  │◀── session/update  agent_thought_chunk ─────────│
+  │◀── session/update  agent_message_chunk ─────────│
+  │◀── session/update  tool_call（pending）─────────│
+  │◀── session/request_permission ──────────────────│  id=12（agent 发起的请求）
+  │── result {outcome:{selected, optionId}} ───────▶│
+  │◀── session/update  tool_call_update（in_progress）
+  │◀── session/update  tool_call_update（completed，带内容）
+  │         …模型拿到工具结果，继续下一步，循环…
+  │◀── response id=7 {stopReason:"end_turn"} ──────│  <u>这一轮结束</u></div>
+
+  <h4><code>session/update</code> 的种类（v1）</h4>
+  <table>
+    <thead><tr><th style="width:230px"><code>sessionUpdate</code> 取值</th><th>内容</th></tr></thead>
+    <tbody>
+      <tr><td><code>user_message_chunk</code></td><td>用户消息片段（主要出现在 load 的重放里）</td></tr>
+      <tr><td><code>agent_message_chunk</code></td><td>agent 回答的流式片段。可带 <code>messageId</code>：同一个 id 属于同一条消息</td></tr>
+      <tr><td><code>agent_thought_chunk</code></td><td>思考过程的流式片段</td></tr>
+      <tr><td><code>tool_call</code> · <code>tool_call_update</code></td><td>工具调用的创建与后续更新（2.9）</td></tr>
+      <tr><td><code>plan</code></td><td>agent 的执行计划（条目列表）</td></tr>
+      <tr><td><code>available_commands_update</code></td><td>可用的斜杠命令</td></tr>
+      <tr><td><code>current_mode_update</code> · <code>config_option_update</code></td><td>模式 / 会话配置发生变化</td></tr>
+      <tr><td><code>session_info_update</code></td><td>会话信息变化（如标题）</td></tr>
+      <tr><td><code>usage_update</code></td><td>上下文用量（<code>used</code>、<code>size</code>）与可选的累计费用</td></tr>
+    </tbody>
+  </table>
+
+  <h4>结束原因（StopReason）</h4>
+  <table>
+    <thead><tr><th style="width:180px">值</th><th>含义</th></tr></thead>
+    <tbody>
+      <tr><td><code>end_turn</code></td><td>模型答完了，没有再要求调用工具</td></tr>
+      <tr><td><code>max_tokens</code></td><td>达到 token 上限</td></tr>
+      <tr><td><code>max_turn_requests</code></td><td>一轮里的模型请求次数达到上限</td></tr>
+      <tr><td><code>refusal</code></td><td>agent 拒绝继续</td></tr>
+      <tr><td><code>cancelled</code></td><td>client 取消了这一轮</td></tr>
+    </tbody>
+  </table>
+  <p>注意：撞上 <code>max_tokens</code> / <code>max_turn_requests</code> 是<b>正常结束</b>，以 result 返回，不是 error。</p>
+
+  <!-- ─────────── 2.9 ─── -->
+  <h3 id="acp-tool">2.9 工具调用与权限</h3>
+  <table>
+    <thead><tr><th style="width:130px">字段</th><th>含义</th></tr></thead>
+    <tbody>
+      <tr><td><code>toolCallId</code></td><td>会话内唯一。后续所有更新靠它关联</td></tr>
+      <tr><td><code>title</code> · <code>name</code></td><td>给人看的描述 / 可选的程序名（仅是元数据，不代表任何授权）</td></tr>
+      <tr><td><code>kind</code></td><td><code>read</code> · <code>edit</code> · <code>delete</code> · <code>move</code> · <code>search</code> · <code>execute</code> · <code>think</code> · <code>fetch</code> · <code>other</code>（默认）</td></tr>
+      <tr><td><code>status</code></td><td><code>pending</code>（输入还在流式生成或<b>在等审批</b>）→ <code>in_progress</code> → <code>completed</code> / <code>failed</code></td></tr>
+      <tr><td><code>content</code></td><td>三种：普通内容块；<b>diff</b>（<code>path, oldText, newText</code> —— 新文件的 oldText 为 null，所以<b>写一个文件就带着整个文件内容</b>）；<b>terminal</b>（引用 client 侧的终端）</td></tr>
+      <tr><td><code>locations</code></td><td>正在访问的文件与行号，供 client 做「跟随」</td></tr>
+      <tr><td><code>rawInput</code> · <code>rawOutput</code></td><td>工具的原始入参与原始返回</td></tr>
+    </tbody>
+  </table>
+  <p><code>tool_call_update</code> 除 <code>toolCallId</code> 外所有字段都可省略，只带变化的部分。</p>
+
+  <h4>权限请求：<code>session/request_permission</code></h4>
+  <div class="flow">agent → { sessionId, <s>toolCall</s>: {toolCallId, title, kind, rawInput…},
+          <s>options</s>: [ {optionId:"a1", name:"允许", kind:"allow_once"},
+                     {optionId:"a2", name:"总是允许", kind:"allow_always"},
+                     {optionId:"r1", name:"拒绝", kind:"reject_once"} ] }
+
+client → { outcome: { outcome:"selected", optionId:"a1" } }      用户选了一项
+      或 { outcome: { outcome:"cancelled" } }                     <u>这一轮被取消了</u></div>
+  <ul>
+    <li>选项的 <code>kind</code> 有四种：<code>allow_once</code> · <code>allow_always</code> · <code>reject_once</code> · <code>reject_always</code>。<code>*_always</code> 表示「记住这个选择」，之后同类操作不再询问 —— 这相当于通过一次点击修改了 agent 的长期策略。</li>
+    <li>client <b>可以</b>按用户设置自动批准或自动拒绝，不必每次都问人。</li>
+    <li>规范<b>没有规定</b>权限请求的等待上限：在有人值守的前提下（2.1），它默认可以一直等到用户回答。</li>
+  </ul>
+
+  <!-- ─────────── 2.10 ─── -->
+  <h3 id="acp-cancel">2.10 取消</h3>
+  <h4>取消一轮：<code>session/cancel</code>（通知）</h4>
+  <table>
+    <thead><tr><th style="width:90px">一方</th><th>规范要求</th></tr></thead>
+    <tbody>
+      <tr><td><b>client</b></td><td>发出 cancel 后，<b>应当</b>立即把本轮未结束的工具调用标为已取消；<b>必须</b>对所有还挂着的 <code>session/request_permission</code> 回复 <code>cancelled</code>；<b>应当</b>继续接收 cancel 之后到来的工具调用更新</td></tr>
+      <tr><td><b>agent</b></td><td><b>应当</b>尽快停止所有模型请求与工具执行；把剩余的更新发完之后，<b>必须</b>以 <code>stopReason:"cancelled"</code> <b>正常响应</b>原来那个 <code>session/prompt</code></td></tr>
+    </tbody>
+  </table>
+  <div class="callout rule">
+    <span class="label">取消不是错误</span>
+    <p>模型 SDK 在请求被中止时通常会抛异常，这个异常很容易以 error 的形式冒到 <code>session/prompt</code> 的响应上。规范明确要求 agent <b>捕获</b>这些异常，回一个 <code>cancelled</code> 结束原因 —— 否则 client 无法可靠地确认「取消已完成」，而会把一次正常的取消当成故障展示给用户。</p>
+  </div>
+
+  <h4>取消单个请求：<code>$/cancel_request</code>（通知）</h4>
+  <p>JSON-RPC 本身没有取消机制，ACP 补了一个通用的：发送方用 <code>$/cancel_request</code> 指明要取消的请求 <code>id</code>。支持它的一方<b>可以</b>中止该请求及其派生的活动，但<b>必须</b>仍给原请求一个响应：要么是有效结果（可带部分结果），要么是错误码 <b>-32800</b>（Request cancelled）。支持是可选的。</p>
+  <p>执行方也可以<b>内部取消</b>（上下文超限、内部超时、资源不足），此时应当回同样的 -32800。规范给出的级联示例是：client 取消一轮 → agent 对自己发出的挂起请求（如权限请求）发 <code>$/cancel_request</code> → client 以 -32800 回复这些请求 → agent 以 <code>cancelled</code> 响应 prompt。</p>
+
+  <!-- ─────────── 2.11 ─── -->
+  <h3 id="acp-err">2.11 错误码</h3>
+  <table>
+    <thead><tr><th style="width:90px">码</th><th style="width:190px">名称</th><th>含义</th></tr></thead>
+    <tbody>
+      <tr><td>-32700</td><td>Parse error</td><td>收到的不是合法 JSON</td></tr>
+      <tr><td>-32600</td><td>Invalid request</td><td>不是合法的请求对象</td></tr>
+      <tr><td>-32601</td><td>Method not found</td><td>方法不存在或不可用（包括不认识的 <code>_</code> 扩展方法）</td></tr>
+      <tr><td>-32602</td><td>Invalid params</td><td>参数不合法 —— 实现按 schema 校验参数，缺必填字段就会收到它</td></tr>
+      <tr><td>-32603</td><td>Internal error</td><td>内部错误</td></tr>
+      <tr><td>-32800</td><td>Request cancelled</td><td>请求被取消（2.10）</td></tr>
+      <tr><td>-32000</td><td>Authentication required</td><td>需要先鉴权</td></tr>
+      <tr><td>-32002</td><td>Resource not found</td><td>资源不存在（如会话不存在）</td></tr>
+    </tbody>
+  </table>
+  <p>-32000 到 -32099 是 JSON-RPC 留给实现定义的区段，ACP 已经占用了其中两个。</p>
+
+  <!-- ─────────── 2.12 ─── -->
+  <h3 id="acp-ext">2.12 扩展机制</h3>
+  <table>
+    <thead><tr><th style="width:170px">机制</th><th>规则</th></tr></thead>
+    <tbody>
+      <tr><td><code>_meta</code> 字段</td><td>协议里<b>所有类型</b>（请求、响应、通知，以及内容块、工具调用等嵌套类型）都有一个 <code>_meta</code> 对象，可以放任意自定义数据。根级的 <code>traceparent</code>、<code>tracestate</code>、<code>baggage</code> 保留给 W3C Trace Context，用于跨进程追踪</td></tr>
+      <tr><td><code>_</code> 前缀方法</td><td>以 <code>_</code> 开头的方法名留给自定义扩展，请求与通知都可以。对方不认识的<b>扩展请求</b>应当回 -32601；不认识的<b>扩展通知</b>应当忽略</td></tr>
+      <tr><td>自定义能力</td><td>在能力对象的 <code>_meta</code> 里声明自己支持哪些扩展，让对方在 <code>initialize</code> 阶段就能知道</td></tr>
+      <tr><td><b>禁止</b></td><td><b>不得在规范定义的类型根部添加自定义字段</b> —— 那些名字全部保留给未来的协议版本。自定义数据只能放进 <code>_meta</code>，或者走 <code>_</code> 方法</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ─────────── 2.13 ─── -->
+  <h3 id="acp-v2">2.13 v2（草案）</h3>
+  <p>同一仓库里已有 v2 的规范与 schema，版本为 <b>2.0.0-alpha.5</b>（2026-09-18）。官方迁移指南写明 v2 整体仍标为草案，建议<b>放在显式的版本协商与特性开关之后</b>，并且<b>继续支持 v1</b>：v1 的对端会长期存在。版本协商机制不变（<code>initialize</code> 里报 <code>protocolVersion: 2</code>），一条连接在协商后只说一个版本。</p>
+  <table>
+    <thead><tr><th style="width:180px">变化</th><th>v1</th><th>v2</th></tr></thead>
+    <tbody>
+      <tr><td><b><code>session/prompt</code> 的响应</b></td><td>整轮结束才响应，带 stopReason</td><td><b>用户消息被接纳（插入会话）就响应</b>，带 <code>messageId</code>；不等工作完成</td></tr>
+      <tr><td><b>一轮结束怎么知道</b></td><td>prompt 的响应</td><td><code>session/update</code> 的 <b><code>state_update</code></b>：<code>running</code>（在干活）· <code>requires_action</code>（<b>在等用户操作</b>，如权限请求）· <code>idle</code>（空闲，结束时带 stopReason）</td></tr>
+      <tr><td>取消的完成信号</td><td>prompt 以 <code>cancelled</code> 响应</td><td>一条 <code>idle</code> + <code>cancelled</code> 的 <code>state_update</code></td></tr>
+      <tr><td>恢复会话</td><td><code>session/load</code>（重放）与 <code>session/resume</code>（不重放）</td><td><b>只有 <code>session/resume</code></b>，用可选的 <code>replayFrom</code> 游标决定是否重放（<code>{type:"start"}</code> = 从头重放）；游标是带类型的联合，为「从某处开始重放」预留</td></tr>
+      <tr><td>消息 id</td><td>可选</td><td><b>必须</b>。并新增整条消息的 upsert（<code>user_message</code> / <code>agent_message</code> / <code>agent_thought</code>），按 <code>messageId</code> 覆盖；重放时沿用同一个 id</td></tr>
+      <tr><td>工具调用</td><td><code>tool_call</code> 创建 + <code>tool_call_update</code> 更新</td><td>只有 <code>tool_call_update</code>（第一条即创建），新增 <code>tool_call_content_chunk</code> 流式追加内容</td></tr>
+      <tr><td>client 侧执行面</td><td><code>fs/*</code>、<code>terminal/*</code></td><td><b>全部移除</b>（官方理由：除少数 IDE 外实现参差，agent 本来就要自己处理文件与命令）</td></tr>
+      <tr><td>模式</td><td><code>session/set_mode</code></td><td>移除，统一为 <code>session/set_config_option</code></td></tr>
+      <tr><td>MCP 配置</td><td>stdio 无 <code>type</code>；有 sse</td><td>每项必须带 <code>type</code>；<b>sse 移除</b>；<code>mcpServers</code> 改为可选</td></tr>
+      <tr><td>鉴权</td><td><code>authenticate</code> / <code>logout</code></td><td><code>auth/login</code> / <code>auth/logout</code></td></tr>
+      <tr><td>批量</td><td>—</td><td>明确遵循 JSON-RPC 批量规则，但<b>不应</b>批量发送 initialize、new、resume、prompt 这类生命周期消息</td></tr>
+    </tbody>
+  </table>
+  <div class="callout rule">
+    <span class="label">v2 最重要的一处改动</span>
+    <p>v1 让「一次请求」承载「一整段可能很长的工作」，请求的响应同时也是「工作结束」的信号 —— 于是请求的超时就等于工作的时限，而工作中「在等人」的时间也被算进去。v2 把这两件事拆开：<b>请求只负责提交，工作的状态由 <code>running / requires_action / idle</code> 显式汇报</b>。调用方第一次可以区分「它在干活」「它在等人」「它停了」。</p>
+  </div>
+
+  <!-- ─────────── 2.14 ─── -->
+  <h3 id="acp-eco">2.14 生态现状</h3>
+  <p>官方「Agents」列表（同一标签下的文档）里，原生支持与需要适配器的各有一批：</p>
+  <table>
+    <thead><tr><th style="width:120px">方式</th><th>agent</th></tr></thead>
+    <tbody>
+      <tr><td>原生支持</td><td>Gemini CLI、Cursor、GitHub Copilot（公开预览）、Goose、OpenCode 等</td></tr>
+      <tr><td><b>经适配器</b></td><td><b>Claude Agent</b>（Zed 的 <code>claude-agent-acp</code>，基于 Claude Agent SDK）、<b>Codex CLI</b>（ACP 官方的 <code>codex-acp</code>）、Pi（<code>pi-acp</code>）等</td></tr>
+    </tbody>
+  </table>
+  <p>适配器本身就是一个 ACP agent 进程：对外说 ACP，对内调用 CLI 或其 SDK。所以当接入的是 Claude 或 Codex 时，链路上实际有「ACP client ⇄ 适配器 ⇄ CLI / SDK」三方，适配器的实现质量（支持哪些能力位、取消后多快响应、是否支持 v2）直接决定了能用哪些协议能力。</p>
+
+  <!-- ─────────── 2.15 ─── -->
+  <h3 id="acp-take">2.15 对 bridge 的启示</h3>
+  <p>继续第 1 章的编号（T1–T10），本章新增 T11–T20：</p>
+
+  <div class="take"><b class="l">T11 · ACP 假设「本机 + 有人值守」（2.1 · 2.9）</b>bridge 把 agent 放进远端 Pod，由平台代替编辑器、用户可能不在线。权限请求等多久？没人回答时默认结果是什么？「在场」这个前提由谁来重建？</div>
+  <div class="take"><b class="l">T12 · 谁是 ACP client（2.2）</b>bridge 自己作为 ACP client 驱动 agent，还是把 ACP 原样转给 server、由 server 当 client？前者让 bridge 理解协议、可以代管超时与取消；后者让 bridge 保持简单、但 server 要跨网络说一个为 stdio 设计的协议。</div>
+  <div class="take"><b class="l">T13 · 规范只定义了 stdio（2.3）</b>bridge 与 agent 之间走 stdio 是顺理成章的；bridge 与 server 之间走什么，属于「自定义传输」，需要自己写明建连与消息交换方式。单行消息没有大小上限，读缓冲要按「整个文件内容」来定。</div>
+  <div class="take"><b class="l">T14 · v1 的 prompt 是长请求（2.8）</b>一个请求可能持续几十分钟、其中包含等人的时间。用什么判断 agent 卡住了、什么判断工作做太久了？这两个问题在 v1 里只能从 update 流与工具状态间接推断。</div>
+  <div class="take"><b class="l">T15 · v2 给出了显式状态（2.13）</b><code>running / requires_action / idle</code> 恰好是判断「在干活 / 在等人 / 停了」所需的信号。bridge 支持哪个版本？对上游要不要统一成一种语义，把 v1 的长请求也表达成「提交 + 状态」？</div>
+  <div class="take"><b class="l">T16 · 取消有严格的双方义务（2.10）</b>发出 cancel 后，挂起的权限请求必须回 <code>cancelled</code>，还要继续收完剩余更新、等到 <code>cancelled</code> 结束。谁来履行这些义务？agent 不按规范响应取消时（超时不回），bridge 的兜底是什么？</div>
+  <div class="take"><b class="l">T17 · 重放与实时在 v1 里无法区分（2.7）</b><code>session/load</code> 把全部历史以普通 update 发一遍。bridge 或上游怎么知道哪些是重放？v2 的 <code>messageId</code> 与 <code>replayFrom</code> 能否用来做去重与断点续传？</div>
+  <div class="take"><b class="l">T18 · 一个进程可以承载多个会话（2.2）</b>一个 Pod 对应一个会话，还是一个 agent 进程服务多个会话？这决定了隔离边界、资源开销和故障的影响范围。</div>
+  <div class="take"><b class="l">T19 · 能力位是承诺（2.5 · 2.13）</b>bridge 以 client 身份声明 <code>fs</code> / <code>terminal</code>，就得真的替 agent 读写文件、执行命令；v2 已经移除这一面。bridge 声明哪些能力、不声明哪些？agent 的能力位（load、resume、close、http MCP）如何影响上游能用的功能？</div>
+  <div class="take"><b class="l">T20 · 扩展只能走 <code>_meta</code> 与 <code>_</code> 方法（2.12）</b>bridge 自己需要的控制信息（轮次、时限、追踪 id）放在哪里？规范<b>禁止</b>在规范类型的根部加字段；如果 bridge 与 server 之间不直接说 ACP，这条约束是否还适用？</div>
+</section>
+
+<!-- ══════════════ 3 ══ -->
+<section id="s3">
+  <h2><span class="num">03</span>bridge 的职责边界</h2>
+
+  <!-- ─────────── 3.1 ─── -->
+  <h3 id="b-decide">3.1 两项决定</h3>
+  <table>
+    <thead><tr><th style="width:36px">#</th><th style="width:210px">决定</th><th>要点</th></tr></thead>
+    <tbody>
+      <tr><td>D1</td><td><b>bridge 是 ACP client</b></td><td>bridge 自己完成 ACP 握手、建会话、发起与取消轮次、应答反向请求。server 不说 ACP 的<b>控制语义</b>，改说一个由平台定义的上游协议（第 4 章）</td></tr>
+      <tr><td>D2</td><td><b>内容翻译在 server</b></td><td><code>session/update</code> 的内容原样交给 server，由 server 翻译成平台事件。bridge 只读取其中用于控制的信号，不改写、不删减、不重排</td></tr>
+    </tbody>
+  </table>
+  <p>D1 的依据：取消的义务（2.10）、进程生命周期（2.3）、卡死判断（T4 · T14）、断线时的默认行为（T11），都只能由<b>贴着 agent 进程</b>的一方可靠完成；而与 ACP 版本绑定的对端（适配器、CLI）和 bridge 在同一个镜像里一起发布，把 ACP 的控制语义放进 bridge，版本耦合就留在镜像内部。</p>
+  <p>D2 的依据：update 内容 → 平台事件的映射是<b>平台的事件契约</b>，前端直接依赖它；这份契约应当随 server 发布、在一处演进，不应该跟着 Pod 镜像走。</p>
+
+  <!-- ─────────── 3.2 ─── -->
+  <h3 id="b-def">3.2 一句话定义</h3>
+  <div class="callout rule">
+    <span class="label">bridge 是 Pod 里的「会话宿主」</span>
+    <p><b>对下</b>，它是一个完整的 ACP client：拉起并看管 agent 进程，按规范履行 client 的全部义务。<b>对上</b>，它提供一个平台定义的会话宿主接口：接受「开会话 / 提交一轮 / 取消 / 关闭」这类指令，汇报「轮次状态」，并把 agent 的输出<b>原样</b>转交上去。<br>它<b>理解协议，不理解业务</b>：知道一轮什么时候开始、结束、卡住，不知道输出的内容意味着什么，也不决定一个工具该不该被允许。</p>
+  </div>
+
+  <!-- ─────────── 3.3 ─── -->
+  <h3 id="b-topo">3.3 三段链路</h3>
+  <div class="flow"><b>server</b>                       <b>bridge</b>（Pod 内）                    <b>agent</b>（适配器 + CLI，Pod 内）
+   │                              │                                     │
+   │══ 上游协议 · WebSocket ══════│══ ACP · stdio（每行一条 JSON-RPC）══│
+   │   平台定义（第 4 章）         │   按 ACP 规范（第 2 章）            │
+   │                              │                                     │
+   │  指令：open / prompt /        │  initialize · session/new|load|resume
+   │        cancel / close        │  session/prompt · session/cancel · session/close
+   │  <u>控制</u>：轮次状态、错误、      │  ◀ session/update（通知）
+   │        权限询问与应答         │  ◀ session/request_permission（反向请求）
+   │  <u>数据</u>：update 原样转交       │  ◀ 适配器进程的 stderr（日志）
+   │                              │                                     │
+   <i>分开发布，版本由我们协商</i>          <i>同一镜像，一起发布</i></div>
+  <p>两段链路各有一个「规范来源」：下段是 ACP 规范，bridge 必须遵守；上段是我们自己的协议，由平台按自己的节奏演进。bridge 是两套规范的唯一交汇点。</p>
+
+  <!-- ─────────── 3.4 ─── -->
+  <h3 id="b-plane">3.4 控制面与数据面</h3>
+  <p>D1 与 D2 合起来，等于把 agent 的输出分成两个面：</p>
+  <table>
+    <thead><tr><th style="width:90px"></th><th style="width:260px">包含什么</th><th>bridge 怎么处理</th><th style="width:170px">server 怎么处理</th></tr></thead>
+    <tbody>
+      <tr><td><b>控制面</b></td><td>会话与轮次的生命周期、轮次状态（在干活 / 在等人 / 已结束）、结束原因、错误、时限、取消、权限询问的收发</td><td><b>拥有</b>：由 bridge 判定、由 bridge 宣告，以上游协议里的控制消息表达</td><td>消费：据此更新 run 状态、弹审批、做兜底超时</td></tr>
+      <tr><td><b>数据面</b></td><td><code>session/update</code> 的内容：正文、思考、工具调用、计划、用量……</td><td><b>只读、原样转交</b>。可以从中读取控制信号（见下），但不改写</td><td><b>拥有</b>：翻译成平台事件、落库、推给前端</td></tr>
+    </tbody>
+  </table>
+
+  <h4>bridge 从数据面里读哪些控制信号</h4>
+  <table>
+    <thead><tr><th style="width:200px">信号</th><th>用途</th></tr></thead>
+    <tbody>
+      <tr><td>任意一条 update 的到达</td><td>「agent 还在推进」的证据，用于卡死检测（第 6 章）</td></tr>
+      <tr><td>v2 的 <code>state_update</code></td><td>直接给出 running / requires_action / idle 与结束原因</td></tr>
+      <tr><td>v1 的 prompt 响应</td><td>一轮结束与结束原因（v1 没有 state_update）</td></tr>
+      <tr><td>工具调用的 <code>status</code></td><td>辅助判断 agent 此刻在执行工具还是在等模型（可选）</td></tr>
+      <tr><td>正在进行的反向请求</td><td>「在等人」的直接证据：权限请求挂起期间，轮次处于等人状态</td></tr>
+    </tbody>
+  </table>
+  <div class="callout warn">
+    <span class="label">同一条消息可能同时属于两个面</span>
+    <p>v2 的 <code>state_update</code> 本身就是一条 <code>session/update</code>：bridge 读它来推进轮次状态（控制面），同时照样原样转交给 server（数据面）。规则是：<b>数据面永远全量、原样转交</b>；控制面是 bridge 基于同一份输入另外发出的消息。server 不需要、也不应当自己从数据面里推断轮次状态 —— 那是 bridge 的职责，推断两次就会得出两个答案。</p>
+  </div>
+
+  <!-- ─────────── 3.5 ─── -->
+  <h3 id="b-table">3.5 职责分配总表</h3>
+  <table>
+    <thead><tr><th style="width:190px">职责</th><th style="width:90px">bridge</th><th style="width:90px">server</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td colspan="4"><b>进程与会话</b></td></tr>
+      <tr><td>agent 进程的拉起、看管、结束、重启</td><td>✅ 拥有</td><td>—</td><td>规范：client 负责子进程（2.3）</td></tr>
+      <tr><td>ACP <code>initialize</code> 与能力协商</td><td>✅ 拥有</td><td>知悉</td><td>协商结果（ACP 版本、agent 能力位）要告诉 server，翻译与功能开关依赖它</td></tr>
+      <tr><td>bridge 声明哪些 client 能力</td><td>✅ 决定</td><td>—</td><td>见 3.7</td></tr>
+      <tr><td>建会话 / 恢复会话</td><td>✅ 执行</td><td>下指令</td><td>「新建还是恢复、恢复哪个」由 server 决定；「用 load 还是 resume、要不要重放」由 bridge 按能力位决定</td></tr>
+      <tr><td>会话参数：<code>cwd</code>、适配器命令</td><td>✅ 提供</td><td>—</td><td>Pod 内的本地事实，server 不需要知道</td></tr>
+      <tr><td>会话参数：MCP server 列表</td><td>透传</td><td>✅ 提供</td><td>平台配置；bridge 不理解其中的凭据，只负责放进 <code>session/new</code> 等请求</td></tr>
+      <tr><td colspan="4"><b>轮次</b></td></tr>
+      <tr><td>提交一轮（prompt 内容）</td><td>执行</td><td>✅ 提供</td><td>内容由 server 给，bridge 包装成 <code>session/prompt</code></td></tr>
+      <tr><td>轮次状态的判定与宣告</td><td>✅ 拥有</td><td>消费</td><td>一轮的开始、等人、结束<b>只由 bridge 宣告</b>（3.8 B1）</td></tr>
+      <tr><td>卡死检测</td><td>✅ 执行</td><td>—</td><td>依据是 stdout 上的更新流，离进程最近才看得准</td></tr>
+      <tr><td>时限的<b>数值</b></td><td>安全默认</td><td>✅ 决定</td><td>数值来自 agent 配置，随每一轮下发；bridge 只有「server 没给时」的兜底值</td></tr>
+      <tr><td>时限的<b>执行</b></td><td>✅ 拥有</td><td>兜底</td><td>server 只在 bridge 失联时兜底</td></tr>
+      <tr><td>v1 / v2 的控制语义差异</td><td>✅ 吸收</td><td>—</td><td>上游只看到统一的「提交 + 状态」，不论 agent 说哪一版</td></tr>
+      <tr><td colspan="4"><b>取消</b></td></tr>
+      <tr><td>发起取消</td><td>执行</td><td>下指令</td><td>用户点取消 → server 下指令 → bridge 发 <code>session/cancel</code></td></tr>
+      <tr><td>取消的全部义务</td><td>✅ 拥有</td><td>—</td><td>对挂起的权限请求回 <code>cancelled</code>、收完剩余 update、等 <code>cancelled</code> 结束、不响应时兜底（2.10）</td></tr>
+      <tr><td>「这一轮必须结束」的内部触发</td><td>✅ 拥有</td><td>—</td><td>时限到、卡死、上游断开时，bridge 自行取消，不等指令</td></tr>
+      <tr><td colspan="4"><b>权限请求</b></td></tr>
+      <tr><td>批准还是拒绝</td><td>—</td><td>✅ 决定</td><td>审批是平台的业务规则（谁能批、要不要问人、记录与审计）</td></tr>
+      <tr><td>把询问送上去、把答复送回 agent</td><td>✅ 执行</td><td>—</td><td>bridge 把 ACP 的反向请求转成上游的「询问」，拿到答复再按 ACP 回给 agent</td></tr>
+      <tr><td>没人答复时的结果</td><td>✅ 执行</td><td>定策略</td><td>等多久、超时算什么，由 server 定；<b>上游不可达时绝不批准</b>，超过重连窗口一律拒绝，这一条不可配置（3.8 B3）</td></tr>
+      <tr><td><code>allow_always</code> / <code>reject_always</code></td><td>—</td><td>✅ 决定</td><td>它会长期改变 agent 的行为，是否允许出现在选项里由平台决定</td></tr>
+      <tr><td colspan="4"><b>数据</b></td></tr>
+      <tr><td>update 内容 → 平台事件</td><td>—</td><td>✅ 拥有</td><td>D2</td></tr>
+      <tr><td>事件落库、编号、推给前端</td><td>—</td><td>✅ 拥有</td><td>bridge 不持久化业务数据（3.8 B4）</td></tr>
+      <tr><td>区分「重放」与「实时」</td><td>✅ 标注</td><td>据此取舍</td><td>只有 bridge 知道一条 update 是在 load 期间还是某一轮期间到达的（T17），它负责在转交时标注；丢不丢由 server 决定</td></tr>
+      <tr><td>面向用户的错误文案</td><td>—</td><td>✅ 拥有</td><td>bridge 给出结构化的错误原因，server 决定怎么对用户说</td></tr>
+      <tr><td colspan="4"><b>连接与运维</b></td></tr>
+      <tr><td>上游连接的鉴权</td><td>✅ 校验</td><td>✅ 持凭据</td><td>握手时完成（1.11）</td></tr>
+      <tr><td>上游协议的版本协商</td><td>✅</td><td>✅</td><td>双方共同完成（第 4 章）</td></tr>
+      <tr><td>背压</td><td>✅ 传导</td><td>✅ 消费</td><td>server 读慢时，压力应当经 bridge 传到 agent 的 stdout，而不是在 bridge 里用无界队列吞掉（1.9）</td></tr>
+      <tr><td>适配器 stderr 日志</td><td>✅ 收集</td><td>—</td><td>进 Pod 日志；是否转交上游见第 8 章</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ─────────── 3.6 ─── -->
+  <h3 id="b-not">3.6 两边各自「不做」的事</h3>
+  <table>
+    <thead><tr><th style="width:50%">bridge <b>不做</b></th><th>server <b>不做</b></th></tr></thead>
+    <tbody>
+      <tr><td>不翻译 update 内容，不理解正文、工具参数的含义</td><td>不说 ACP 的控制方法：不发 <code>initialize</code>、<code>session/prompt</code>、<code>session/cancel</code></td></tr>
+      <tr><td>不决定审批结果，不自动批准任何工具</td><td>不管 agent 进程，不知道适配器怎么启动</td></tr>
+      <tr><td>不持久化业务数据（事件、消息、审批记录）</td><td>不自己从 update 流里推断轮次状态</td></tr>
+      <tr><td>不决定时限、等待上限这类策略数值</td><td>不履行 ACP 的取消义务，也不直接应答 agent 的反向请求</td></tr>
+      <tr><td>不做面向用户的文案</td><td>不区分 agent 说的是 ACP v1 还是 v2 的<b>控制语义</b>（内容格式的差异仍由它的翻译层处理，见 3.7）</td></tr>
+      <tr><td>不在连接之间保存待发的业务数据（断线后的恢复靠 agent 自己的会话持久化，第 7 章）</td><td>不感知 Pod 内的路径、端口等本地事实</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ─────────── 3.7 ─── -->
+  <h3 id="b-cost">3.7 D2 的含义与代价</h3>
+  <h4>server 要能读懂两个版本的 update</h4>
+  <p>内容原样转交，意味着 ACP v1 与 v2 在 update 格式上的差异（2.13：<code>tool_call</code> 与 <code>tool_call_update</code> 的合并、<code>messageId</code> 变为必填、整条消息的 upsert、<code>plan</code> 改为 <code>plan_update</code>……）<b>全部由 server 的翻译层吸收</b>。这是 D2 的主要代价，我们接受它，并用两条规则控制它：</p>
+  <ol>
+    <li><b>bridge 在开会话时把协商结果报上去</b>：ACP 版本、agent 的能力位、agent 名称与版本。server 据此选择翻译规则，而不是靠猜。</li>
+    <li><b>控制语义不外泄</b>：轮次状态、结束原因、取消是否完成，永远以 bridge 的控制消息为准。server 的翻译层只负责「内容 → 展示」，不从内容里推导控制结论。这样 v1/v2 差异里最麻烦的那部分（prompt 响应语义的改变）不会到达 server。</li>
+  </ol>
+
+  <h4>bridge 声明哪些 ACP client 能力</h4>
+  <table>
+    <thead><tr><th style="width:170px">能力</th><th style="width:80px">声明</th><th>理由</th></tr></thead>
+    <tbody>
+      <tr><td><code>fs.readTextFile</code> / <code>writeTextFile</code></td><td>否</td><td>声明就得真的替 agent 读写文件（2.5）。agent 本就在 Pod 里、能直接访问工作区，由 bridge 代理只多一跳；v2 已移除这一面</td></tr>
+      <tr><td><code>terminal</code></td><td>否</td><td>同上，命令由 agent 在 Pod 内自行执行</td></tr>
+      <tr><td>elicitation</td><td>暂不</td><td>向用户索取结构化信息需要平台侧有对应的交互形态；等有需求时再声明</td></tr>
+      <tr><td>其它（如布尔配置项）</td><td>按需</td><td>只声明 server 真能处理的</td></tr>
+    </tbody>
+  </table>
+  <p>原则：<b>bridge 只声明它自己或 server 确实能兑现的能力</b>。多声明一项，agent 就可能改走一条我们没有实现的路径。</p>
+
+  <h4>数据面不是「字节透传」</h4>
+  <p>「原样转交」指<b>语义不变</b>：同一条 update 的 JSON 内容不增、不删、不改，转交顺序与 agent 发出的顺序一致。bridge 可以（也应当）给每条转交的 update 套一层上游协议的信封，写明它属于哪个会话、哪一轮、是重放还是实时、序号是多少 —— 信封是控制面的，内容是数据面的。信封的具体格式在第 4 章定义。</p>
+
+  <!-- ─────────── 3.8 ─── -->
+  <h3 id="b-inv">3.8 边界不变式</h3>
+  <table>
+    <thead><tr><th style="width:36px">#</th><th>不变式</th><th style="width:230px">为什么需要它</th></tr></thead>
+    <tbody>
+      <tr><td>B1</td><td><b>每一轮的开始与结束都由 bridge 宣告，且各只宣告一次</b>，并带上结束原因</td><td>单一事实来源。两处都能宣告，就会有两个答案</td></tr>
+      <tr><td>B2</td><td><b>bridge 转交的 update 与 agent 发出的在内容上完全相同、顺序一致</b></td><td>D2 成立的前提：翻译只在一处发生</td></tr>
+      <tr><td>B3</td><td><b>上游不可达时，bridge 的一切默认都偏向安全</b>：<b>永远不会因为没人应答而批准</b>任何权限请求，超过重连窗口仍不可达则一律拒绝；进行中的一轮按时限继续或取消，不会因为没人看着就无限期运行（第 7 章修订）</td><td>ACP 假设有人在场（2.1），远端 Pod 里这个前提不成立（T11）</td></tr>
+      <tr><td>B4</td><td><b>bridge 不持久化业务数据</b>。Pod 里唯一持久的会话状态，是 agent 自己保存的会话文件</td><td>server 是事件与记录的唯一权威；bridge 重启不应造成数据分叉</td></tr>
+      <tr><td>B5</td><td><b>策略数值来自 server，bridge 只保留安全兜底默认值</b></td><td>同一个 agent 在不同场景下需要不同的时限与等待上限，这些属于平台配置</td></tr>
+      <tr><td>B6</td><td><b>agent 的反向请求永远有回应</b>，无论上游在不在、轮次是否已结束</td><td>ACP 的义务（2.10）；不回应会让 agent 一直等下去</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ─────────── 3.9 ─── -->
+  <h3 id="b-trace">3.9 T1–T20 的归属</h3>
+  <p>把第 1、2 章提出的问题逐条落到一方，并注明细节在哪一章展开：</p>
+  <table>
+    <thead><tr><th style="width:50px">#</th><th style="width:210px">问题</th><th style="width:90px">归属</th><th>本章结论 / 去向</th></tr></thead>
+    <tbody>
+      <tr><td>T1</td><td>连接断开时进行中的工作</td><td>bridge</td><td>只有 bridge 能在断线时继续看管轮次；按 B3 执行。续不续传 → 第 7 章</td></tr>
+      <tr><td>T2</td><td>上游跑什么应用协议</td><td>双方</td><td>平台自定义的会话宿主协议，控制面 + 数据面信封 → 第 4 章</td></tr>
+      <tr><td>T3</td><td>反向请求的超时与默认</td><td>server 定、bridge 执行</td><td>B3 · B5 · B6 → 第 6 章</td></tr>
+      <tr><td>T4</td><td>卡死判断与时限</td><td>bridge</td><td>两种计时分开，都由 bridge 执行 → 第 6 章</td></tr>
+      <tr><td>T5</td><td>上游版本协商</td><td>双方</td><td>→ 第 4 章</td></tr>
+      <tr><td>T6</td><td>鉴权与会话绑定</td><td>bridge 校验</td><td>→ 第 8 章</td></tr>
+      <tr><td>T7</td><td>背压与消息上限</td><td>双方</td><td>压力经 bridge 传导到 agent，不设无界队列 → 第 6 章</td></tr>
+      <tr><td>T8</td><td>大消息阻塞紧急消息</td><td>双方</td><td>数据面原样转交意味着大内容会上行 → 第 4 章考虑控制与数据是否分流</td></tr>
+      <tr><td>T9</td><td>关闭码的语义</td><td>双方</td><td>→ 第 4 章</td></tr>
+      <tr><td>T10</td><td>空闲超时与 Pod 收尾</td><td>bridge</td><td>→ 第 8 章</td></tr>
+      <tr><td>T11</td><td>「有人在场」的前提</td><td>server</td><td>在场与否是平台的事（通知、等待、超时策略）；bridge 只保证 B3</td></tr>
+      <tr><td>T12</td><td>谁是 ACP client</td><td>bridge</td><td><b>已决定：D1</b></td></tr>
+      <tr><td>T13</td><td>传输选择</td><td>—</td><td>下段 stdio（规范）；上段 WebSocket（第 1 章）。读缓冲按「整个文件内容」定 → 第 6 章</td></tr>
+      <tr><td>T14</td><td>v1 的长请求</td><td>bridge</td><td>由 bridge 吸收，上游看不到长请求 → 第 5 章</td></tr>
+      <tr><td>T15</td><td>v1 / v2 支持</td><td>bridge</td><td>控制语义统一成「提交 + 状态」；内容格式差异由 server 翻译层处理（3.7）</td></tr>
+      <tr><td>T16</td><td>取消的义务</td><td>bridge</td><td><b>全部归 bridge</b> → 第 6 章</td></tr>
+      <tr><td>T17</td><td>重放与实时的区分</td><td>bridge 标注</td><td>信封里标注 → 第 4、5 章</td></tr>
+      <tr><td>T18</td><td>一个进程几个会话</td><td>bridge</td><td>→ 第 5 章</td></tr>
+      <tr><td>T19</td><td>声明哪些能力</td><td>bridge</td><td><b>已决定：不声明 fs / terminal</b>（3.7）</td></tr>
+      <tr><td>T20</td><td>控制信息放在哪</td><td>—</td><td>bridge 不在 ACP 消息里夹带任何东西；控制信息全部放在上游协议里 → 第 4 章</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ─────────── 3.10 ─── -->
+  <h3 id="b-next">3.10 第 4 章要定义什么</h3>
+  <p>本章确定了「谁负责什么」，下一章要把上游协议具体化。它至少要包含：</p>
+  <ul>
+    <li><b>指令</b>：打开会话（新建或恢复，附 MCP 列表与策略）、提交一轮、取消、关闭</li>
+    <li><b>控制消息</b>：会话已就绪（附协商结果）、轮次状态变化（开始 / 等人 / 结束 + 原因）、错误</li>
+    <li><b>权限的往返</b>：bridge 发起询问，server 答复；二者如何关联</li>
+    <li><b>数据面信封</b>：会话、轮次、重放标记、序号</li>
+    <li><b>版本协商与关闭码</b></li>
+  </ul>
+</section>
+
+<!-- ══════════════ 4 ══ -->
+<section id="s4">
+  <h2><span class="num">04</span>上游协议</h2>
+  <p>本章定义 server ⇄ bridge 之间的应用协议（下称<b>上游协议</b>），把第 3 章的职责边界落成具体的消息。它承载在 WebSocket 上（第 1 章），与 ACP（第 2 章）是两套独立的协议。</p>
+
+  <!-- ─────────── 4.1 ─── -->
+  <h3 id="h-principle">4.1 设计原则</h3>
+  <table>
+    <thead><tr><th style="width:36px">#</th><th style="width:230px">原则</th><th>理由</th></tr></thead>
+    <tbody>
+      <tr><td>P1</td><td><b>server 发出的请求都是短请求</b></td><td>一轮工作可能持续很久，不能让「一个请求」承载它（T14）。提交一轮立即返回，进展与结束靠通知汇报 —— 与 ACP v2 的做法一致，无论 agent 说哪一版，上游都只看到这一种形态</td></tr>
+      <tr><td>P2</td><td><b>控制与数据走同一条有序流</b></td><td>顺序本身就是正确性的一部分：一轮的最后几条 update 必须先于「这一轮结束」到达。分两条流就要跨流重排序（4.10）</td></tr>
+      <tr><td>P3</td><td><b>数据原样装进信封</b></td><td>第 3 章 B2：ACP update 的内容一字不改，外面套一层上游信封写明归属</td></tr>
+      <tr><td>P4</td><td><b>bridge 发出的每条消息都带序号</b></td><td>为断线续传预留（第 7 章），也让 server 能发现丢失与重复</td></tr>
+      <tr><td>P5</td><td><b>方法名与 ACP 明显区分</b></td><td>上游用点号（<code>turn.start</code>），ACP 用斜杠（<code>session/prompt</code>）。日志与代码里一眼可辨，不会把两套协议混为一谈</td></tr>
+      <tr><td>P6</td><td><b>协议面尽量小</b></td><td>server 与 Pod 分开发布，每多一个方法，两边的兼容负担就多一分。能用参数表达的，不新增方法</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ─────────── 4.2 ─── -->
+  <h3 id="h-shape">4.2 基本形态：JSON-RPC 2.0</h3>
+  <p>消息格式采用 JSON-RPC 2.0，每条消息是一个 WebSocket text 帧。</p>
+  <table>
+    <thead><tr><th style="width:200px">备选</th><th>结论</th></tr></thead>
+    <tbody>
+      <tr><td><b>JSON-RPC 2.0（选定）</b></td><td>请求—响应靠 <code>id</code> 关联、通知单向、双方都能发请求 —— 正好覆盖「server 下指令」「bridge 发通知」「bridge 向 server 询问权限」三种交互。团队已经熟悉它（ACP 同款），调试工具通用</td></tr>
+      <tr><td>自定义带类型的事件流</td><td>要自己重新发明「请求与响应的关联」，收益只是少几个字段</td></tr>
+      <tr><td>gRPC 双向流</td><td>多路复用与强类型是真优势，但需要 HTTP/2 端到端，并引入 IDL 与代码生成；第 1 章已经选定 WebSocket 作为承载</td></tr>
+    </tbody>
+  </table>
+  <p>约定：JSON 键用 <code>camelCase</code>；判别取值用 <code>snake_case</code>（与 ACP 一致，降低在两套协议之间来回切换时的认知成本）；不使用 JSON-RPC 的批量发送。</p>
+
+  <!-- ─────────── 4.3 ─── -->
+  <h3 id="h-conn">4.3 连接与版本协商</h3>
+  <div class="flow">server → GET /host HTTP/1.1
+         Upgrade: websocket
+         Authorization: Bearer &lt;pod-token&gt;          <i>凭据的形态与轮换见第 8 章</i>
+         X-Atlas-Session: &lt;host-session-id&gt;         <i>本 Pod 只服务这一个会话</i>
+         Sec-WebSocket-Protocol: <s>atlas.host.v1</s>
+
+bridge → 101 Switching Protocols
+         Sec-WebSocket-Protocol: <s>atlas.host.v1</s>      <i>选定的版本</i>
+
+<i>鉴权失败或会话不匹配：握手阶段直接回 401 / 403，连接不升级（1.3）</i>
+<i>bridge 不支持 server 报出的任何版本：回 426，不升级</i></div>
+  <ul>
+    <li><b>版本协商用 WebSocket 子协议</b>（1.3）。server 按偏好报出列表，bridge 选一个回显。子协议名只在<b>不兼容</b>的变更时递增；兼容的新增（新的可选字段、新的可选方法）通过 <code>session.open</code> 返回的 <code>features</code> 声明，不改子协议名。</li>
+    <li><b>一个会话同一时刻只有一条连接</b>。新连接握手成功时，旧连接以关闭码 4409 关闭（4.12）。理由：server 重启后旧 TCP 可能要很久才被判定死亡，拒绝新连接会让 Pod 在这段时间里不可达。</li>
+    <li><b>连接 ≠ 会话</b>。连接断开不等于会话结束；会话由 <code>session.open</code> 建立、由 <code>session.close</code> 或 <code>session.ended</code> 结束。断线后如何重新接上同一个会话，见第 7 章。</li>
+  </ul>
+
+  <!-- ─────────── 4.4 ─── -->
+  <h3 id="h-overview">4.4 消息总览</h3>
+  <table>
+    <thead><tr><th style="width:200px">方法</th><th style="width:90px">方向</th><th style="width:80px">类型</th><th style="width:60px">面</th><th>作用</th></tr></thead>
+    <tbody>
+      <tr><td><code>session.open</code></td><td>S → B</td><td>请求</td><td>控制</td><td>建立会话：新建或恢复 agent 会话，返回协商结果（4.5）</td></tr>
+      <tr><td><code>session.close</code></td><td>S → B</td><td>请求</td><td>控制</td><td>结束会话：取消进行中的一轮、关闭 agent 会话</td></tr>
+      <tr><td><code>session.ended</code></td><td>B → S</td><td>通知</td><td>控制</td><td>会话非主动结束（agent 退出且无法恢复等）</td></tr>
+      <tr><td><code>session.state</code></td><td>B → S</td><td>通知</td><td>控制</td><td>会话层状态变化：agent 进程崩溃后的恢复中 / 已恢复（第 5 章补充，5.6）</td></tr>
+      <tr><td><code>session.attach</code></td><td>S → B</td><td>请求</td><td>控制</td><td>断线重连后重新接上会话，带 <code>lastSeq</code>，bridge 随后补发（第 7 章补充，7.3）</td></tr>
+      <tr><td><code>session.ack</code></td><td>S → B</td><td>通知</td><td>控制</td><td>确认已处理完成的最后序号，bridge 据此释放补发缓冲（第 7 章补充，7.3）</td></tr>
+      <tr><td><code>turn.start</code></td><td>S → B</td><td>请求</td><td>控制</td><td>提交一轮，<b>接纳即返回</b>（4.6）</td></tr>
+      <tr><td><code>turn.cancel</code></td><td>S → B</td><td>请求</td><td>控制</td><td>请求取消，<b>收到即返回</b>；完成由 <code>turn.state</code> 报告</td></tr>
+      <tr><td><code>turn.state</code></td><td>B → S</td><td>通知</td><td>控制</td><td>轮次状态变化，含结束原因（B1：结束只报一次）</td></tr>
+      <tr><td><code>permission.ask</code></td><td>B → S</td><td>请求</td><td>控制</td><td>agent 请求权限，询问 server（4.7）</td></tr>
+      <tr><td><code>permission.withdraw</code></td><td>B → S</td><td>通知</td><td>控制</td><td>撤回一个尚未答复的询问（轮次结束、等待超时等）</td></tr>
+      <tr><td><code>agent.update</code></td><td>B → S</td><td>通知</td><td><b>数据</b></td><td>一条 ACP <code>session/update</code>，原样装在信封里（4.8）</td></tr>
+    </tbody>
+  </table>
+  <p>一共 12 个方法（<code>session.state</code> 为第 5 章补充，<code>session.attach</code> 与 <code>session.ack</code> 为第 7 章补充）。bridge → server 的全部消息（通知，以及 <code>permission.ask</code> 这个请求）都带 <code>seq</code>（P4），共用同一个序号，在一个会话内从 1 开始严格递增、不跳号、跨连接连续。</p>
+
+  <!-- ─────────── 4.5 ─── -->
+  <h3 id="h-session">4.5 会话</h3>
+  <h4><code>session.open</code></h4>
+  <pre><code><span class="tok-c">// server → bridge</span>
+{ <span class="tok-s">"jsonrpc"</span>:<span class="tok-s">"2.0"</span>, <span class="tok-s">"id"</span>:<span class="tok-n">1</span>, <span class="tok-s">"method"</span>:<span class="tok-s">"session.open"</span>, <span class="tok-s">"params"</span>: {
+    <span class="tok-s">"resume"</span>: { <span class="tok-s">"agentSessionId"</span>: <span class="tok-s">"sess_7f3a…"</span>, <span class="tok-s">"replay"</span>: <span class="tok-s">"full"</span> },  <span class="tok-c">// 省略 = 新建会话</span>
+    <span class="tok-s">"mcpServers"</span>: [ <span class="tok-c">/* ACP 格式的 MCP 配置，bridge 原样放进 session/new 等请求 */</span> ],
+    <span class="tok-s">"defaults"</span>: { <span class="tok-s">"idleS"</span>:<span class="tok-n">120</span>, <span class="tok-s">"toolIdleS"</span>:<span class="tok-n">600</span>, <span class="tok-s">"deadlineS"</span>:<span class="tok-n">1800</span>,
+                  <span class="tok-s">"permissionWaitS"</span>:<span class="tok-n">600</span>, <span class="tok-s">"reconnectWindowS"</span>:<span class="tok-n">120</span> }  <span class="tok-c">// 每轮可覆盖（B5，第 6、7 章）</span>
+} }
+
+<span class="tok-c">// bridge → server（agent 会话建好之后）</span>
+{ <span class="tok-s">"jsonrpc"</span>:<span class="tok-s">"2.0"</span>, <span class="tok-s">"id"</span>:<span class="tok-n">1</span>, <span class="tok-s">"result"</span>: {
+    <span class="tok-s">"agentSessionId"</span>: <span class="tok-s">"sess_7f3a…"</span>,
+    <span class="tok-s">"resumed"</span>: <span class="tok-k">true</span>,                     <span class="tok-c">// 要求恢复却没恢复成（能力不支持、会话不存在）时为 false</span>
+    <span class="tok-s">"replayed"</span>: <span class="tok-s">"full"</span>,                   <span class="tok-c">// none | full：实际是否重放了历史</span>
+    <span class="tok-s">"acp"</span>: { <span class="tok-s">"protocolVersion"</span>:<span class="tok-n">1</span>, <span class="tok-s">"agentInfo"</span>:{…}, <span class="tok-s">"agentCapabilities"</span>:{…} },  <span class="tok-c">// 3.7：翻译层据此选规则</span>
+    <span class="tok-s">"bridge"</span>: { <span class="tok-s">"version"</span>:<span class="tok-s">"2.0.0"</span>, <span class="tok-s">"instance"</span>:<span class="tok-s">"b-7c1e…"</span> },   <span class="tok-c">// 实例 id：每次进程启动随机生成（7.6）</span>
+    <span class="tok-s">"features"</span>: [ ]                          <span class="tok-c">// 兼容性新增的声明（4.3）</span>
+} }</code></pre>
+  <ul>
+    <li><b>「新建还是恢复、恢复哪个」由 server 决定；「用 load 还是 resume」由 bridge 按 agent 能力位决定</b>（3.5）。<code>replay</code> 表达的是 server 的需求（要不要历史），bridge 选用能满足它的 ACP 方法。</li>
+    <li>要求重放时，历史以 <code>agent.update</code>（<code>origin: "replay"</code>）在 <code>session.open</code> 的响应<b>之前</b>全部送达 —— 与 ACP load「重放完才响应」的顺序一致。</li>
+    <li>恢复失败不是错误：返回 <code>resumed:false</code> 并已经新建了会话。<b>「上下文丢失」必须让 server 知道</b>，由它决定怎么告诉用户。</li>
+    <li><code>session.open</code> 是唯一可能耗时较长的请求（agent 启动 + 历史重放），它有自己的超时（第 6 章）。</li>
+  </ul>
+
+  <h4><code>session.close</code> 与 <code>session.ended</code></h4>
+  <p><code>session.close</code>：若有进行中的一轮，先按取消流程结束它（会收到 <code>turn.state</code> ended），再关闭 agent 会话，然后响应。之后 bridge 以关闭码 4410 关闭连接。</p>
+  <p><code>session.ended</code>：会话在 server 没有要求的情况下结束，例如 agent 进程退出且重启失败。参数带 <code>reason</code> 与结构化的 <code>error</code>。发出后同样以 4410 关闭连接。</p>
+
+  <!-- ─────────── 4.6 ─── -->
+  <h3 id="h-turn">4.6 轮次</h3>
+  <h4><code>turn.start</code></h4>
+  <pre><code><span class="tok-c">// server → bridge</span>
+{ <span class="tok-s">"id"</span>:<span class="tok-n">7</span>, <span class="tok-s">"method"</span>:<span class="tok-s">"turn.start"</span>, <span class="tok-s">"params"</span>: {
+    <span class="tok-s">"turnId"</span>: <span class="tok-s">"run_8ab2…"</span>,              <span class="tok-c">// server 分配；通常就是平台的 run id</span>
+    <span class="tok-s">"prompt"</span>: [ { <span class="tok-s">"type"</span>:<span class="tok-s">"text"</span>, <span class="tok-s">"text"</span>:<span class="tok-s">"…"</span> } ],  <span class="tok-c">// ACP 内容块，原样放进 session/prompt</span>
+    <span class="tok-s">"limits"</span>: { <span class="tok-s">"deadlineS"</span>:<span class="tok-n">900</span> }          <span class="tok-c">// 可选，覆盖 session.open 的 defaults</span>
+} }
+
+<span class="tok-c">// bridge → server：已接纳（ACP 请求已发给 agent），不等工作完成</span>
+{ <span class="tok-s">"id"</span>:<span class="tok-n">7</span>, <span class="tok-s">"result"</span>: { <span class="tok-s">"accepted"</span>: <span class="tok-k">true</span> } }</code></pre>
+  <p>同一会话同一时刻<b>只能有一轮</b>进行中，否则返回错误 <code>TURN_BUSY</code>（4.11），不排队 —— 排队会让「这一轮从什么时候开始算时限」变得不可解释。<code>turnId</code> 由 server 分配，让两边说的是同一个 id，也使 <code>turn.start</code> 可以安全重试：同一个 <code>turnId</code> 重复提交时返回同样的结果，不会开出第二轮。</p>
+
+  <h4><code>turn.cancel</code></h4>
+  <pre><code>{ <span class="tok-s">"id"</span>:<span class="tok-n">9</span>, <span class="tok-s">"method"</span>:<span class="tok-s">"turn.cancel"</span>, <span class="tok-s">"params"</span>: { <span class="tok-s">"turnId"</span>:<span class="tok-s">"run_8ab2…"</span> } }
+{ <span class="tok-s">"id"</span>:<span class="tok-n">9</span>, <span class="tok-s">"result"</span>: { <span class="tok-s">"state"</span>:<span class="tok-s">"cancelling"</span> } }     <span class="tok-c">// 或 "ended"：这一轮早已结束，取消是空操作</span></code></pre>
+  <p>响应只表示「bridge 已开始取消」。取消真正完成，以随后的 <code>turn.state</code>（<code>ended</code>，原因 <code>cancelled</code>）为准；ACP 规定的取消义务全部由 bridge 履行（3.5）。</p>
+
+  <h4><code>turn.state</code> 与状态机</h4>
+  <div class="flow">turn.start 被接纳
+     │
+     ▼
+ <b>running</b> ◀────────────────┐
+     │                         │ 答复送回 agent
+     ├─ agent 请求权限 ─▶ <b>awaiting_permission</b>
+     │
+     ├─ 取消请求 / 时限到 / 卡死 / 上游断开 ─▶ <b>cancelling</b> ─┐
+     │                                                        │
+     └─ agent 结束这一轮 ──────────────────────────────────────┴─▶ <b>ended</b>（只报一次，带 outcome）</div>
+  <pre><code><span class="tok-c">// bridge → server</span>
+{ <span class="tok-s">"method"</span>:<span class="tok-s">"turn.state"</span>, <span class="tok-s">"params"</span>: {
+    <span class="tok-s">"seq"</span>: <span class="tok-n">412</span>, <span class="tok-s">"turnId"</span>: <span class="tok-s">"run_8ab2…"</span>, <span class="tok-s">"state"</span>: <span class="tok-s">"ended"</span>,
+    <span class="tok-s">"outcome"</span>: { <span class="tok-s">"kind"</span>:<span class="tok-s">"cancelled"</span>, <span class="tok-s">"cause"</span>:<span class="tok-s">"deadline"</span> },
+    <span class="tok-s">"stats"</span>: { <span class="tok-s">"elapsedS"</span>:<span class="tok-n">900</span>, <span class="tok-s">"awaitingPermissionS"</span>:<span class="tok-n">212</span> }
+} }</code></pre>
+
+  <table>
+    <thead><tr><th style="width:120px"><code>outcome.kind</code></th><th style="width:270px">附带</th><th>含义</th></tr></thead>
+    <tbody>
+      <tr><td><code>completed</code></td><td><code>stopReason</code>：<code>end_turn</code> · <code>max_tokens</code> · <code>max_turn_requests</code> · <code>refusal</code></td><td>agent 正常结束这一轮（ACP 的结束原因原样带上）</td></tr>
+      <tr><td><code>cancelled</code></td><td><code>cause</code>：<code>requested</code> · <code>deadline</code> · <code>idle</code> · <code>upstream_lost</code> · <code>session_closing</code> · <code>pod_terminating</code>（8.7）</td><td>这一轮被取消，且 <b>agent 已确认</b>（ACP 以 <code>cancelled</code> 结束）</td></tr>
+      <tr><td><code>failed</code></td><td><code>cause</code>：<code>agent_error</code>（附 ACP 错误）· <code>agent_exited</code> · <code>cancel_unanswered</code></td><td>这一轮异常结束。<code>cancel_unanswered</code> = 发出取消后 agent 在宽限期内没有确认，bridge 只能终止并重启 agent 进程</td></tr>
+    </tbody>
+  </table>
+  <p>三类结果把「谁结束的」「为什么」「agent 是否配合」分开表达。server 据此决定 run 的终态与给用户的文案（3.5：文案归 server）。</p>
+
+  <!-- ─────────── 4.7 ─── -->
+  <h3 id="h-perm">4.7 权限的往返</h3>
+  <div class="flow">agent ──session/request_permission(id=12)──▶ bridge ──<s>permission.ask</s>(id=31)──▶ server
+                                                          ◀──result {optionId}────────
+agent ◀──result {outcome:selected, optionId}── bridge</div>
+  <pre><code><span class="tok-c">// bridge → server：询问。request 字段就是 ACP 请求的 params，原样</span>
+{ <span class="tok-s">"id"</span>:<span class="tok-n">31</span>, <span class="tok-s">"method"</span>:<span class="tok-s">"permission.ask"</span>, <span class="tok-s">"params"</span>: {
+    <span class="tok-s">"seq"</span>: <span class="tok-n">205</span>, <span class="tok-s">"turnId"</span>: <span class="tok-s">"run_8ab2…"</span>,
+    <span class="tok-s">"request"</span>: { <span class="tok-s">"sessionId"</span>:<span class="tok-s">"…"</span>, <span class="tok-s">"toolCall"</span>:{…}, <span class="tok-s">"options"</span>:[ {<span class="tok-s">"optionId"</span>:<span class="tok-s">"a1"</span>,<span class="tok-s">"kind"</span>:<span class="tok-s">"allow_once"</span>,…}, … ] },
+    <span class="tok-s">"expiresAt"</span>: <span class="tok-s">"2026-09-30T10:12:00Z"</span>,     <span class="tok-c">// 展示用；到点 bridge 会撤回并按兜底答复</span>
+    <span class="tok-s">"expiresInS"</span>: <span class="tok-n">600</span>                         <span class="tok-c">// 判断用：跨进程只传时长（6.7）</span>
+} }
+
+<span class="tok-c">// server → bridge：答复</span>
+{ <span class="tok-s">"id"</span>:<span class="tok-n">31</span>, <span class="tok-s">"result"</span>: { <span class="tok-s">"optionId"</span>: <span class="tok-s">"a1"</span> } }          <span class="tok-c">// 选中 agent 给出的某一项</span>
+{ <span class="tok-s">"id"</span>:<span class="tok-n">31</span>, <span class="tok-s">"result"</span>: { <span class="tok-s">"reject"</span>: <span class="tok-k">true</span> } }             <span class="tok-c">// 拒绝；由 bridge 选 agent 给出的 reject_once 项</span></code></pre>
+  <ul>
+    <li><b>server 只能从 agent 给出的选项里选</b>，或者直接拒绝。bridge 校验：<code>optionId</code> 不在选项里就当作拒绝。<code>allow_always</code> / <code>reject_always</code> 是否允许被选，由 server 的策略决定（3.5）。</li>
+    <li>询问是一个<b>可能很长的请求</b>（等人），这是 P1 的唯一例外 —— 方向是 bridge → server，等待的是平台侧的人。它的上限由 <code>expiresAt</code> 明确给出。</li>
+    <li>询问发出期间，轮次处于 <code>awaiting_permission</code>，不计入卡死检测（第 6 章）。</li>
+  </ul>
+
+  <h4>bridge 自行答复的情形（B3 · B6）</h4>
+  <table>
+    <thead><tr><th style="width:230px">情形</th><th style="width:210px">给 agent 的答复</th><th>给 server</th></tr></thead>
+    <tbody>
+      <tr><td>这一轮被取消（任何原因）</td><td><code>cancelled</code>（ACP 强制要求，2.10）</td><td><code>permission.withdraw</code>（reason: <code>turn_ended</code>）</td></tr>
+      <tr><td>到了 <code>expiresAt</code> 仍未答复</td><td>选 <code>reject_once</code> 项</td><td><code>permission.withdraw</code>（reason: <code>expired</code>）</td></tr>
+      <tr><td>上游连接不在</td><td>重连窗口内<b>暂存、不答复</b>；窗口到期选 <code>reject_once</code> 项。<b>绝不自动批准，不可配置</b>（7.2）</td><td>重连后随补发送达（7.3）</td></tr>
+      <tr><td>agent 没提供任何 reject 选项</td><td><code>cancelled</code></td><td>同上所属情形</td></tr>
+    </tbody>
+  </table>
+  <p>server 在 <code>permission.withdraw</code> 之后才送达的答复会被 bridge 忽略（这次询问已经有了结果）。server 收到撤回就应当关掉对应的审批界面。</p>
+
+  <!-- ─────────── 4.8 ─── -->
+  <h3 id="h-data">4.8 数据面：<code>agent.update</code></h3>
+  <pre><code>{ <span class="tok-s">"method"</span>:<span class="tok-s">"agent.update"</span>, <span class="tok-s">"params"</span>: {
+    <span class="tok-s">"seq"</span>: <span class="tok-n">206</span>,
+    <span class="tok-s">"origin"</span>: <span class="tok-s">"turn"</span>,                      <span class="tok-c">// replay | turn | stray</span>
+    <span class="tok-s">"turnId"</span>: <span class="tok-s">"run_8ab2…"</span>,               <span class="tok-c">// origin=turn 时必有</span>
+    <span class="tok-s">"update"</span>: { <span class="tok-s">"sessionId"</span>:<span class="tok-s">"…"</span>, <span class="tok-s">"update"</span>: { <span class="tok-s">"sessionUpdate"</span>:<span class="tok-s">"tool_call"</span>, … } }
+                                               <span class="tok-c">// ↑ ACP session/update 的 params，一字不改（B2）</span>
+} }</code></pre>
+  <table>
+    <thead><tr><th style="width:100px"><code>origin</code></th><th>何时</th><th style="width:260px">server 通常怎么处理</th></tr></thead>
+    <tbody>
+      <tr><td><code>replay</code></td><td><code>session.open</code> 要求重放时，在响应之前送达的历史</td><td>按需重建展示；通常不再入库（已有记录）</td></tr>
+      <tr><td><code>turn</code></td><td>某一轮从接纳到 ended 之间到达（包括取消期间 agent 补发的更新）</td><td>翻译成平台事件、入库、推给前端</td></tr>
+      <tr><td><code>stray</code></td><td>没有任何一轮在进行时到达（agent 的后台活动，或违反规范的迟到消息）</td><td>记录并计数；是否展示由 server 决定</td></tr>
+    </tbody>
+  </table>
+  <p>归属由 bridge 标注、由 server 取舍（3.5）。<b>顺序保证</b>：同一会话的所有 bridge → server 消息（通知与请求）按 <code>seq</code> 顺序发送，且一轮的 <code>turn.state</code>（ended）一定排在这一轮全部 <code>agent.update</code> 之后。</p>
+
+  <!-- ─────────── 4.9 ─── -->
+  <h3 id="h-map">4.9 ACP → 上游的映射</h3>
+  <p>bridge 收到的每一种 ACP 消息，在上游都有确定的去向。这张表是 bridge 实现的检查清单：</p>
+  <table>
+    <thead><tr><th style="width:260px">来自 agent 的 ACP 消息</th><th>bridge 在上游产生什么</th></tr></thead>
+    <tbody>
+      <tr><td><code>initialize</code> 的响应</td><td>存下协商结果，放进 <code>session.open</code> 的响应</td></tr>
+      <tr><td><code>session/new</code> · <code>load</code> · <code>resume</code> 的响应</td><td><code>session.open</code> 的响应（<code>agentSessionId</code>、<code>resumed</code>、<code>replayed</code>）</td></tr>
+      <tr><td><code>session/update</code>（任意种类）</td><td><code>agent.update</code>，内容原样；若是 v2 的 <code>state_update</code>，bridge 另外据此推进状态机，必要时发 <code>turn.state</code></td></tr>
+      <tr><td><code>session/prompt</code> 的响应（v1）</td><td><code>turn.state</code> ended（<code>completed</code> 或 <code>cancelled</code>）</td></tr>
+      <tr><td><code>session/prompt</code> 的错误响应</td><td><code>turn.state</code> ended（<code>failed</code> / <code>agent_error</code>，附 ACP 错误）</td></tr>
+      <tr><td><code>session/request_permission</code></td><td><code>permission.ask</code>；若轮次已不在 running，直接按 4.7 兜底答复，不上报</td></tr>
+      <tr><td><code>fs/*</code> · <code>terminal/*</code></td><td>不会出现（未声明能力，3.7）；若出现，回 -32601，记告警</td></tr>
+      <tr><td><code>elicitation/*</code></td><td>同上（暂未声明）</td></tr>
+      <tr><td><code>$/cancel_request</code>（agent 撤回自己发出的请求）</td><td>若撤回的是权限请求：<code>permission.withdraw</code></td></tr>
+      <tr><td>agent 进程退出</td><td>进行中的一轮 → <code>turn.state</code> ended（<code>failed</code> / <code>agent_exited</code>）；随后 <code>session.state</code> recovering → ready（5.6）；无法恢复 → <code>session.ended</code></td></tr>
+      <tr><td>stderr 日志</td><td>不进上游协议，写 Pod 日志（第 8 章）</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ─────────── 4.10 ─── -->
+  <h3 id="h-big">4.10 大消息与单连接（T8）</h3>
+  <p>一条 <code>agent.update</code> 可能带着整个文件的内容（diff 的 <code>newText</code>）。WebSocket 没有多路复用，大消息会堵住它后面的消息（1.5）。三种做法：</p>
+  <table>
+    <thead><tr><th style="width:190px">做法</th><th>评价</th></tr></thead>
+    <tbody>
+      <tr><td><b>单连接、严格按序（选定）</b></td><td>顺序天然正确（P2）。代价是控制消息可能排在大消息后面 —— 在集群内网里，几 MB 的消息传输只需几十毫秒，而控制消息对延迟的要求是秒级，可以接受</td></tr>
+      <tr><td>控制、数据各一条连接</td><td>控制消息不再被大消息阻塞，但「一轮的最后几条 update 先于 ended 到达」要靠跨连接重排序来保证；还要处理「两条连接只断了一条」</td></tr>
+      <tr><td>单连接、控制消息插队</td><td>会违反顺序：ended 可能跑到这一轮最后几条 update 前面</td></tr>
+    </tbody>
+  </table>
+  <p>配套规则：</p>
+  <ul>
+    <li><b>单条消息上限 32 MiB</b>，两端一致（1.9），并与 bridge 读 agent stdout 的单行上限一致。</li>
+    <li><b>超限不静默丢弃</b>：bridge 以一条 <code>agent.update</code> 代替，内容换成 <code>{"oversize": true, "bytes": N, "sessionUpdate": "…"}</code> 并记录告警。这是 B2（内容原样）的<b>唯一例外</b>，且是显式的。</li>
+    <li><b>关闭 permessage-deflate 压缩</b>：内网带宽充裕，压缩的 CPU 开销与每条连接的压缩上下文内存换不来什么（1.11）；跨地域部署时再评估。</li>
+  </ul>
+
+  <!-- ─────────── 4.11 ─── -->
+  <h3 id="h-err">4.11 错误码</h3>
+  <p>JSON-RPC 标准错误码照常使用（-32700 · -32600 · -32601 · -32602 · -32603）。上游协议自己的错误码放在 -32000 ~ -32099 区段，<b>它们只属于上游协议</b>，与 ACP 的同区段错误码无关：</p>
+  <table>
+    <thead><tr><th style="width:90px">码</th><th style="width:200px">名称</th><th>何时</th></tr></thead>
+    <tbody>
+      <tr><td>-32010</td><td>SESSION_NOT_OPEN</td><td>会话尚未打开或已经结束时收到 <code>turn.*</code></td></tr>
+      <tr><td>-32011</td><td>SESSION_ALREADY_OPEN</td><td>会话已打开时再次 <code>session.open</code></td></tr>
+      <tr><td>-32012</td><td>TURN_BUSY</td><td>已有一轮在进行，又来 <code>turn.start</code>（且 <code>turnId</code> 不同）</td></tr>
+      <tr><td>-32013</td><td>TURN_NOT_FOUND</td><td><code>turn.cancel</code> 指向的 <code>turnId</code> 不存在</td></tr>
+      <tr><td>-32014</td><td>AGENT_UNAVAILABLE</td><td>agent 进程起不来或 ACP 握手失败；<code>data</code> 附原因</td></tr>
+      <tr><td>-32015</td><td>AGENT_ERROR</td><td>agent 对 ACP 请求回了错误；<code>data.acp</code> 附 agent 返回的 <code>code</code> 与 <code>message</code></td></tr>
+      <tr><td>-32016</td><td>OPEN_TIMEOUT</td><td><code>session.open</code> 超过时限（agent 启动或历史重放太慢）</td></tr>
+    </tbody>
+  </table>
+  <p>所有错误的 <code>data</code> 至少带 <code>cause</code>（机器可读）与 <code>detail</code>（给人看的排查信息）。面向用户的文案由 server 生成。</p>
+
+  <!-- ─────────── 4.12 ─── -->
+  <h3 id="h-close">4.12 关闭码</h3>
+  <table>
+    <thead><tr><th style="width:90px">码</th><th style="width:170px">谁发</th><th>含义</th></tr></thead>
+    <tbody>
+      <tr><td>1000</td><td>任一方</td><td>正常关闭</td></tr>
+      <tr><td>1001</td><td>bridge</td><td>Pod 正在终止（优雅退出，第 8 章）</td></tr>
+      <tr><td>1009</td><td>任一方</td><td>收到超过 32 MiB 的消息</td></tr>
+      <tr><td>1011</td><td>任一方</td><td>内部错误；心跳超时也由库以此关闭</td></tr>
+      <tr><td><b>4400</b></td><td>任一方</td><td>协议违例（例如收到不认识的方法且无法继续）</td></tr>
+      <tr><td><b>4409</b></td><td>bridge</td><td>被同一会话的新连接取代（4.3）</td></tr>
+      <tr><td><b>4410</b></td><td>bridge</td><td>会话已结束（<code>session.close</code> 完成或 <code>session.ended</code> 之后）。<b>收到它的 server 不应重连</b></td></tr>
+    </tbody>
+  </table>
+  <p>鉴权失败与版本不支持<b>不走关闭码</b>，在握手阶段用 HTTP 401 / 403 / 426 拒绝（4.3）。关闭码的意义在于告诉对方<b>要不要重连</b>：4409、4410 不重连，1001、1011 与异常断开（1006）可以重连（第 7 章）。</p>
+
+  <!-- ─────────── 4.13 ─── -->
+  <h3 id="h-example">4.13 完整示例：一轮带一次审批</h3>
+  <div class="flow"><b>server</b>                                  <b>bridge</b>                                   <b>agent</b>
+  │── turn.start(id=7, turnId=r1) ────────▶│── session/prompt(id=3) ───────────────▶│
+  │◀── result {accepted:true} ─────────────│                                        │
+  │◀── turn.state seq=40 running ──────────│                                        │
+  │◀── agent.update seq=41 agent_thought ──│◀── session/update ─────────────────────│
+  │◀── agent.update seq=42 tool_call ──────│◀── session/update ─────────────────────│
+  │◀── permission.ask(id=31) seq=43 ───────│◀── session/request_permission(id=9) ───│
+  │◀── turn.state seq=44 awaiting_permission                                        │
+  │        <i>…用户在前端点了「允许」…</i>                                                │
+  │── result(id=31) {optionId:"a1"} ──────▶│── result(id=9) {selected,a1} ─────────▶│
+  │◀── turn.state seq=45 running ──────────│                                        │
+  │◀── agent.update seq=46 tool_call_update│◀── session/update（completed）─────────│
+  │◀── agent.update seq=47 agent_message ──│◀── session/update ─────────────────────│
+  │◀── turn.state seq=48 ended ────────────│◀── result(id=3) {stopReason:end_turn} ─│
+  │      outcome {completed, end_turn}     │                                        │</div>
+  <p>注意 <code>seq</code>：bridge 发出的通知与请求共用一个序号（43 是询问、44 是状态），server 按序号就能还原 bridge 视角下的完整时间线。</p>
+
+  <!-- ─────────── 4.14 ─── -->
+  <h3 id="h-decisions">4.14 本章决定与遗留</h3>
+  <table>
+    <thead><tr><th style="width:50px">#</th><th>决定</th><th style="width:130px">回答了</th></tr></thead>
+    <tbody>
+      <tr><td>H1</td><td>JSON-RPC 2.0 over WebSocket text，12 个方法（含第 5、7 章的补充），方法名用点号</td><td>T2</td></tr>
+      <tr><td>H2</td><td>版本用 WebSocket 子协议 <code>atlas.host.v1</code> 协商，兼容新增走 <code>features</code></td><td>T5</td></tr>
+      <tr><td>H3</td><td><code>turn.start</code> 接纳即返回，轮次状态由 <code>turn.state</code> 汇报，结束只报一次</td><td>T14 · T15</td></tr>
+      <tr><td>H4</td><td>权限由 bridge 发 <code>permission.ask</code>、server 答复；取消、过期、断线时 bridge 自行答复并撤回</td><td>T3</td></tr>
+      <tr><td>H5</td><td>数据面 <code>agent.update</code>：内容原样 + 信封（<code>seq</code>、<code>origin</code>、<code>turnId</code>）</td><td>T17 · T20</td></tr>
+      <tr><td>H6</td><td>单连接、严格按序；单条上限 32 MiB，超限显式替换；关闭压缩</td><td>T7（部分）· T8</td></tr>
+      <tr><td>H7</td><td>上游错误码 -32010 ~ -32016；私有关闭码 4400 / 4409 / 4410，关闭码决定是否重连</td><td>T9</td></tr>
+    </tbody>
+  </table>
+  <p>留给后续章节：一个进程承载几个会话、agent 进程与会话的生命周期（第 5 章）；各种时限的计时规则与背压（第 6 章）；断线后重新接上同一会话、<code>seq</code> 的补发与去重（第 7 章）；凭据、日志与 Pod 收尾（第 8 章）。</p>
+</section>
+
+<!-- ══════════════ 5 ══ -->
+<section id="s5">
+  <h2><span class="num">05</span>会话与轮次模型</h2>
+  <p>第 4 章定义了消息，本章定义消息背后的<b>对象</b>：有哪些实体、它们之间是几对几、各自活多久、谁持有哪份状态，以及 agent 进程出问题时会话怎么延续。</p>
+
+  <!-- ─────────── 5.1 ─── -->
+  <h3 id="m-entity">5.1 实体与对应关系</h3>
+  <div class="flow"><b>平台会话</b>（thread）                                        <i>server 持有，持久</i>
+   │ 1 : 1
+<b>宿主会话</b>（host session，id = thread id）                      <i>bridge 内存中，随 Pod</i>
+   │ 1 : 1
+<b>Pod</b> ─ 1 : 1 ─ <b>bridge 进程</b>
+                     │ 1 : 0..1（任一时刻至多一个）
+                  <b>agent 进程</b>（适配器 + CLI）                       <i>可在 Pod 内重启</i>
+                     │ 1 : 0..1（任一时刻至多一个）
+                  <b>ACP 会话</b>（agentSessionId）                       <i>agent 自己持久化到磁盘</i>
+                     │ 1 : N（依次进行，同一时刻至多一个）
+                  <b>轮次</b>（turn，id = 平台 run id）
+另外：宿主会话 1 : N <b>上游连接</b>（依次存在，同一时刻至多一条，4.3）</div>
+
+  <table>
+    <thead><tr><th style="width:130px">实体</th><th style="width:180px">身份</th><th style="width:130px">谁分配</th><th>谁记住它</th></tr></thead>
+    <tbody>
+      <tr><td>平台会话</td><td>thread id</td><td>server</td><td>server（数据库）</td></tr>
+      <tr><td>宿主会话</td><td>= thread id</td><td>server</td><td>bridge（握手头 <code>X-Atlas-Session</code>，Pod 创建时即确定）</td></tr>
+      <tr><td>ACP 会话</td><td><code>agentSessionId</code></td><td>agent</td><td>agent（磁盘）；<b>server 也记一份</b>，Pod 重建后凭它请求恢复（5.6）</td></tr>
+      <tr><td>轮次</td><td><code>turnId</code> = run id</td><td>server</td><td>server（数据库）；bridge 只记当前这一轮与最近几轮的结果（5.4）</td></tr>
+      <tr><td>上游连接</td><td>无需身份</td><td>—</td><td>—</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ─────────── 5.2 ─── -->
+  <h3 id="m-t18">5.2 一个进程一个会话（T18）</h3>
+  <p>ACP 允许一个 agent 进程同时承载多个会话（2.2）。我们<b>不使用</b>这项能力：一个平台会话独占一个 Pod、一个 agent 进程、一个 ACP 会话。</p>
+  <table>
+    <thead><tr><th style="width:160px">考量</th><th>一进程一会话（选定）</th><th>一进程多会话</th></tr></thead>
+    <tbody>
+      <tr><td>隔离</td><td>工作区、凭据、进程内存按会话天然隔离</td><td>多个会话共享进程内存与 agent 的全局状态；一个会话的工具调用可能影响另一个</td></tr>
+      <tr><td>故障范围</td><td>agent 崩溃只影响一个会话</td><td>一次崩溃带走所有会话</td></tr>
+      <tr><td>取消与重启</td><td>取消不响应时可以直接重启进程（4.6 <code>cancel_unanswered</code>）</td><td>不能为了一个会话重启全部会话</td></tr>
+      <tr><td>工作目录</td><td>Pod 里只挂一个会话的工作区，<code>cwd</code> 固定</td><td>要在一个 Pod 里挂多个会话的工作区并互相隔离</td></tr>
+      <tr><td>资源</td><td>每个会话一份 Pod 开销，<b>需要空闲回收</b>（第 8 章）</td><td>开销更低</td></tr>
+    </tbody>
+  </table>
+  <p>资源开销是这个选择的主要代价，用「空闲回收 + 恢复」来抵消：会话闲置一段时间后回收 Pod，下次使用时新建 Pod 并凭 <code>agentSessionId</code> 恢复上下文（5.6）。这要求 agent 的会话文件存放在 Pod 之外的持久存储上（第 8 章）。</p>
+
+  <!-- ─────────── 5.3 ─── -->
+  <h3 id="m-life">5.3 生命周期</h3>
+  <table>
+    <thead><tr><th style="width:120px">层</th><th style="width:190px">开始</th><th style="width:230px">结束</th><th>典型时长</th></tr></thead>
+    <tbody>
+      <tr><td>Pod / bridge</td><td>平台为会话申请执行环境</td><td>空闲回收、会话关闭、驱逐</td><td>分钟到小时</td></tr>
+      <tr><td>agent 进程</td><td>bridge 启动时预热（5.5）</td><td>Pod 结束；或崩溃、取消不响应后被重启</td><td>通常与 Pod 相同</td></tr>
+      <tr><td>ACP 会话</td><td><code>session.open</code> 时 new / load / resume</td><td>平台会话被删除（显式关闭只是释放进程内资源，磁盘上的会话仍可恢复）</td><td><b>跨越多个 Pod</b></td></tr>
+      <tr><td>轮次</td><td><code>turn.start</code> 被接纳</td><td><code>turn.state</code> ended</td><td>秒到小时</td></tr>
+      <tr><td>上游连接</td><td>握手成功</td><td>任一方关闭或网络断开</td><td>任意，可能很短</td></tr>
+    </tbody>
+  </table>
+  <p>关键事实：<b>ACP 会话比承载它的 Pod 活得久</b>，而连接比轮次活得短也是常态。所以任何一层都不能把「下层还活着」当作前提：轮次不依赖连接（第 7 章），会话不依赖进程（5.6），平台会话不依赖 Pod。</p>
+
+  <!-- ─────────── 5.4 ─── -->
+  <h3 id="m-turn">5.4 轮次模型</h3>
+  <h4>一轮 = 恰好一次 <code>session/prompt</code></h4>
+  <table>
+    <thead><tr><th style="width:120px"></th><th>ACP v1</th><th>ACP v2</th></tr></thead>
+    <tbody>
+      <tr><td>开始</td><td>发出 <code>session/prompt</code></td><td>发出 <code>session/prompt</code>；收到响应（消息已插入）即视为已接纳</td></tr>
+      <tr><td>在等人</td><td>有未答复的 <code>request_permission</code></td><td><code>state_update: requires_action</code>，或有未答复的权限请求</td></tr>
+      <tr><td>结束</td><td><code>session/prompt</code> 的响应（结果或错误）</td><td><code>state_update: idle</code>，带结束原因</td></tr>
+      <tr><td>取消完成</td><td>响应的 <code>stopReason</code> 为 <code>cancelled</code></td><td><code>idle</code> + <code>cancelled</code></td></tr>
+    </tbody>
+  </table>
+  <p>这张表就是 bridge 吸收 v1 / v2 控制语义差异的全部内容（3.5）。上游只看到 <code>turn.state</code>。</p>
+
+  <h4>同一时刻只有一轮</h4>
+  <ul>
+    <li>ACP v2 允许在工作进行中再发 prompt（「contribute to foreground work」，即中途追加指令）。上游协议<b>暂不开放</b>这种用法：一轮进行中再来 <code>turn.start</code> 一律 <code>TURN_BUSY</code>。以后需要「中途追加」时，作为 <code>features</code> 里的新能力加入（4.3），不改变现有语义。</li>
+    <li>没有任何一轮在进行时，agent 仍可能发 update（v2 的后台活动），标为 <code>origin: "stray"</code>（4.8），不开启新的一轮。</li>
+  </ul>
+
+  <h4>轮次结果的记忆</h4>
+  <p>为了让 <code>turn.start</code> 可以安全重试（4.6），bridge 记住<b>最近 16 轮</b>的 <code>turnId</code> 与结果：同一个 <code>turnId</code> 再次提交时，进行中的返回「已接纳」，已结束的返回「已接纳」并立即重发一次它的 ended 状态。更早的轮次不再记忆 —— 那时 server 的数据库早已记录了结果，重试这么老的轮次本身就是错误。</p>
+
+  <!-- ─────────── 5.5 ─── -->
+  <h3 id="m-host">5.5 bridge 内部状态机</h3>
+  <div class="flow"><b>BOOTING</b>     bridge 启动：拉起 agent 进程，完成 ACP initialize（预热）
+   │
+   ▼
+<b>IDLE</b>        agent 已就绪，等 session.open                    ◀── 上游连接可以随时来去
+   │ session.open
+   ▼
+<b>OPENING</b>     session/new | load | resume；重放的历史以 agent.update(replay) 送出
+   │ 成功
+   ▼
+<b>READY</b>  ⇄  <b>IN_TURN</b>（running · awaiting_permission · cancelling）
+   │  ╲
+   │   ╲ agent 进程退出 / 取消不响应被终止
+   │    ▼
+   │  <b>RECOVERING</b>  重启 agent → initialize → 恢复同一个 agentSessionId（5.6）
+   │    │ 成功 → READY          失败 → ENDED（session.ended）
+   │ session.close
+   ▼
+<b>CLOSING</b> → <b>ENDED</b>     连接以 4410 关闭；Pod 等待回收</div>
+
+  <table>
+    <thead><tr><th style="width:140px">决定</th><th>理由</th></tr></thead>
+    <tbody>
+      <tr><td><b>预热：Pod 启动即拉起 agent 并完成 initialize</b></td><td><code>initialize</code> 不需要 server 提供任何参数，却要付出进程启动的全部时间（适配器与 CLI 的启动常以秒计）。提前做完，<code>session.open</code> 只剩建会话这一步</td></tr>
+      <tr><td><b>建会话要等 <code>session.open</code></b></td><td><code>session/new</code> 需要 MCP 列表，恢复需要 <code>agentSessionId</code>，这些只有 server 知道</td></tr>
+      <tr><td><b>单线程事件循环</b></td><td>bridge 的全部状态变更都在一个事件循环里串行发生，<code>seq</code> 在消息<b>进入发送队列时</b>分配。这样「状态转换的顺序」与「消息的顺序」天然一致，不需要锁</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ─────────── 5.6 ─── -->
+  <h3 id="m-resume">5.6 会话的恢复</h3>
+  <h4>三种需要恢复的场景</h4>
+  <table>
+    <thead><tr><th style="width:210px">场景</th><th style="width:150px">谁发起</th><th>做法</th></tr></thead>
+    <tbody>
+      <tr><td>Pod 被回收或重建后再次使用</td><td>server</td><td>新 Pod 上 <code>session.open</code> 带 <code>resume.agentSessionId</code></td></tr>
+      <tr><td>agent 进程在 Pod 内崩溃</td><td>bridge 自行</td><td>RECOVERING：重启进程、initialize、恢复<b>同一个</b> <code>agentSessionId</code>，不重放</td></tr>
+      <tr><td>取消后 agent 不响应，被终止</td><td>bridge 自行</td><td>同上</td></tr>
+    </tbody>
+  </table>
+
+  <h4>按能力位选择 ACP 方法</h4>
+  <table>
+    <thead><tr><th style="width:170px">server 要的（<code>replay</code>）</th><th style="width:170px">agent 能力</th><th style="width:210px">bridge 用的方法</th><th>结果</th></tr></thead>
+    <tbody>
+      <tr><td rowspan="2"><code>none</code>（不要历史）</td><td>v1 <code>sessionCapabilities.resume</code> / v2</td><td><code>session/resume</code>（v2 不带 <code>replayFrom</code>）</td><td><code>resumed:true</code>，<code>replayed:"none"</code></td></tr>
+      <tr><td>只有 <code>loadSession</code></td><td><code>session/load</code></td><td>历史照样会被重放，bridge 仍标 <code>origin:"replay"</code> 送出，由 server 丢弃；<code>replayed:"full"</code></td></tr>
+      <tr><td rowspan="2"><code>full</code>（要历史）</td><td>v1 <code>loadSession</code></td><td><code>session/load</code></td><td><code>replayed:"full"</code></td></tr>
+      <tr><td>v2</td><td><code>session/resume</code> + <code>replayFrom:{type:"start"}</code></td><td><code>replayed:"full"</code>；只支持 resume 的 v1 agent 无法重放，返回 <code>replayed:"none"</code></td></tr>
+      <tr><td>任意</td><td>都不支持，或 agent 回「会话不存在」</td><td><code>session/new</code></td><td><code>resumed:false</code> —— <b>上下文丢失，必须让 server 知道</b></td></tr>
+    </tbody>
+  </table>
+  <p>原则：<b>bridge 尽力满足，但从不假装</b>。实际做了什么，如实写进 <code>resumed</code> 与 <code>replayed</code>。</p>
+
+  <h4>空闲时发生的恢复：补充 <code>session.state</code></h4>
+  <p>agent 进程可能在<b>没有任何一轮进行时</b>崩溃并被 bridge 恢复。第 4 章的 <code>turn.state</code> 只描述轮次，没有消息能告诉 server「会话刚刚经历了一次重启、上下文是否还在」。本章为上游协议补充一个通知：</p>
+  <pre><code>{ <span class="tok-s">"method"</span>:<span class="tok-s">"session.state"</span>, <span class="tok-s">"params"</span>: {
+    <span class="tok-s">"seq"</span>: <span class="tok-n">530</span>,
+    <span class="tok-s">"state"</span>: <span class="tok-s">"recovering"</span>,            <span class="tok-c">// recovering → ready</span>
+    <span class="tok-s">"agent"</span>: { <span class="tok-s">"restarts"</span>: <span class="tok-n">1</span>, <span class="tok-s">"cause"</span>: <span class="tok-s">"agent_exited"</span> }
+} }
+{ <span class="tok-s">"method"</span>:<span class="tok-s">"session.state"</span>, <span class="tok-s">"params"</span>: {
+    <span class="tok-s">"seq"</span>: <span class="tok-n">531</span>, <span class="tok-s">"state"</span>: <span class="tok-s">"ready"</span>,
+    <span class="tok-s">"agent"</span>: { <span class="tok-s">"restarts"</span>: <span class="tok-n">1</span>, <span class="tok-s">"resumed"</span>: <span class="tok-k">true</span> }   <span class="tok-c">// false = 恢复失败，已新建会话，上下文丢失</span>
+} }</code></pre>
+  <p>恢复期间收到的 <code>turn.start</code> 返回 <code>SESSION_NOT_OPEN</code>，并在 <code>data.cause</code> 注明 <code>recovering</code>，server 可稍后重试。上游协议的方法数由 9 个变为 <b>10 个</b>（第 4 章已同步修订）。</p>
+
+  <h4>重启的节制</h4>
+  <p>agent 反复崩溃时不能无限重启。规则：<b>10 分钟内最多重启 3 次</b>，间隔按 1 秒、5 秒、30 秒递增；超过则放弃，发 <code>session.ended</code>（<code>cause: "agent_crash_loop"</code>）。反复崩溃通常说明镜像或会话数据本身有问题，继续重启只会反复失败并消耗资源。</p>
+
+  <!-- ─────────── 5.7 ─── -->
+  <h3 id="m-state">5.7 谁持有哪份状态</h3>
+  <table>
+    <thead><tr><th style="width:220px">状态</th><th style="width:170px">持有者</th><th>丢失后怎么办</th></tr></thead>
+    <tbody>
+      <tr><td>对话历史、工具调用记录（展示用）</td><td>server（数据库）</td><td>权威来源，不丢</td></tr>
+      <tr><td>模型上下文（agent 自己的会话）</td><td>agent（持久存储上的会话文件）</td><td>丢失 = 上下文丢失，<code>resumed:false</code> 如实报告</td></tr>
+      <tr><td>工作区文件</td><td>持久存储（挂进 Pod）</td><td>与 Pod 无关</td></tr>
+      <tr><td><code>agentSessionId</code></td><td>agent 分配；server 记录</td><td>server 记录丢失 = 无法恢复，只能新建</td></tr>
+      <tr><td>当前轮次状态、待答复的询问、<code>seq</code> 计数、最近 16 轮结果</td><td><b>bridge 内存</b></td><td>只在 bridge 进程重启时丢失，而那意味着 Pod 重启：进行中的一轮以失败告终，由 server 按「Pod 已丢失」处理（第 7 章）</td></tr>
+    </tbody>
+  </table>
+  <p>这张表是 B4（bridge 不持久化业务数据）的具体化：bridge 内存里只有<b>进行中的协调状态</b>，没有任何一份需要长期保存的记录。</p>
+
+  <!-- ─────────── 5.8 ─── -->
+  <h3 id="m-decisions">5.8 本章决定</h3>
+  <table>
+    <thead><tr><th style="width:50px">#</th><th>决定</th><th style="width:120px">回答了</th></tr></thead>
+    <tbody>
+      <tr><td>M1</td><td>一个平台会话 = 一个 Pod = 一个 agent 进程 = 一个 ACP 会话；不使用 ACP 的多会话能力</td><td>T18</td></tr>
+      <tr><td>M2</td><td>一轮 = 恰好一次 <code>session/prompt</code>；同一时刻只有一轮；v2 的中途追加暂不开放</td><td>T14 · T15</td></tr>
+      <tr><td>M3</td><td>Pod 启动即预热 agent 进程与 initialize；建会话等 <code>session.open</code></td><td>—</td></tr>
+      <tr><td>M4</td><td>恢复时按能力位选 load / resume，如实报告 <code>resumed</code> / <code>replayed</code></td><td>T17（部分）</td></tr>
+      <tr><td>M5</td><td>新增 <code>session.state</code> 通知；agent 崩溃后自动恢复同一会话，10 分钟内最多 3 次</td><td>—</td></tr>
+      <tr><td>M6</td><td>bridge 记住最近 16 轮的结果，支持 <code>turn.start</code> 安全重试</td><td>—</td></tr>
+      <tr><td>M7</td><td>agent 的会话文件必须放在 Pod 之外的持久存储上</td><td>—（部署要求，第 8 章）</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ══════════════ 6 ══ -->
+<section id="s6">
+  <h2><span class="num">06</span>超时、取消与背压</h2>
+  <p>前几章多次写着「计时规则见第 6 章」。本章把它们一次讲清：有哪些计时、各自从什么时候开始算、到点之后做什么；取消的完整流程；以及当某一方处理不过来时，压力怎么传导。</p>
+
+  <!-- ─────────── 6.1 ─── -->
+  <h3 id="t-kinds">6.1 计时总表</h3>
+  <table>
+    <thead><tr><th style="width:130px">层</th><th style="width:170px">计时</th><th style="width:80px">默认</th><th>到点之后</th></tr></thead>
+    <tbody>
+      <tr><td rowspan="3">连接</td><td>握手</td><td>10 s</td><td>放弃这次连接</td></tr>
+      <tr><td>心跳（ping 间隔 / 等 pong）</td><td>20 s / 20 s</td><td>判定连接已死，关闭（1011）</td></tr>
+      <tr><td>关闭握手</td><td>10 s</td><td>直接断开 TCP</td></tr>
+      <tr><td rowspan="3">会话</td><td><b>预热</b>：拉起 agent + initialize</td><td>60 s</td><td>终止进程，按 5.6 的节制重试；仍失败则 <code>session.open</code> 回 <code>AGENT_UNAVAILABLE</code></td></tr>
+      <tr><td><b>打开</b>：new / load / resume（含历史重放）</td><td>120 s</td><td><code>OPEN_TIMEOUT</code>；终止并重启 agent，回到 IDLE（6.5）</td></tr>
+      <tr><td>其它 ACP 控制请求（close、set_config_option…）</td><td>30 s</td><td>视为 agent 无响应，终止并重启</td></tr>
+      <tr><td rowspan="4">轮次</td><td><b>截止</b>（deadline）</td><td>1800 s</td><td>取消，原因 <code>deadline</code></td></tr>
+      <tr><td><b>静默</b>（在等模型）</td><td>120 s</td><td>取消，原因 <code>idle</code></td></tr>
+      <tr><td><b>静默</b>（在执行工具）</td><td>600 s</td><td>取消，原因 <code>idle</code></td></tr>
+      <tr><td><b>权限等待</b></td><td>600 s</td><td>拒绝并撤回询问（4.7），这一轮继续</td></tr>
+      <tr><td rowspan="2">取消</td><td><b>取消宽限</b>：发出 cancel 后等 agent 确认</td><td>15 s</td><td>终止 agent 进程，结果 <code>failed / cancel_unanswered</code></td></tr>
+      <tr><td>终止宽限：SIGTERM 之后</td><td>5 s</td><td>SIGKILL</td></tr>
+    </tbody>
+  </table>
+  <p>轮次层的四个数值是<b>策略</b>，由 server 按 agent 配置在 <code>session.open</code> 的 <code>defaults</code> 或 <code>turn.start</code> 的 <code>limits</code> 里给出；表中的默认值只在 server 没给时使用（B5）。连接、会话、取消层的数值是 bridge 的实现参数，由部署配置决定。</p>
+
+  <!-- ─────────── 6.2 ─── -->
+  <h3 id="t-deadline">6.2 截止与静默：两个不同的问题</h3>
+  <table>
+    <thead><tr><th style="width:90px"></th><th style="width:330px">截止（deadline）</th><th>静默（idle）</th></tr></thead>
+    <tbody>
+      <tr><td>回答</td><td>这一轮<b>最多占用</b>多久？</td><td>agent <b>还在推进</b>吗？</td></tr>
+      <tr><td>从何时算</td><td>bridge 把 <code>session/prompt</code> 发给 agent 的那一刻</td><td>最近一次「进展证据」（见下）</td></tr>
+      <tr><td>等人的时间</td><td><b>计入</b>：一轮占着 Pod 与会话，没有绝对上限的话，一个没人理的询问能把会话挂到等待上限为止</td><td><b>不计入</b>：处于 <code>awaiting_permission</code> 时暂停，人在想不等于 agent 卡死</td></tr>
+      <tr><td>到点</td><td>取消，<code>cause: deadline</code></td><td>取消，<code>cause: idle</code></td></tr>
+      <tr><td>对 server 的意义</td><td>任务太大，应当拆分或调大上限；重试大概率还是超时</td><td>agent 或模型服务出了问题；重试可能成功</td></tr>
+    </tbody>
+  </table>
+
+  <h4>什么算「进展证据」</h4>
+  <p>agent 在这个会话上从 stdout 送来的<b>任何一条消息</b>：update 通知、它发起的请求（如权限请求）、它对 bridge 请求的响应。心跳不算（ACP 没有心跳；WebSocket 的心跳只证明连接活着，1.6）。</p>
+
+  <h4>为什么静默要分两档</h4>
+  <p>agent 执行一个长时间的命令（安装依赖、跑测试、编译）时，往往几分钟都没有任何输出：工具调用停在 <code>in_progress</code>，模型在等工具结果。只用一个阈值的话，要么调得很短、把正常执行的命令误判为卡死，要么调得很长、真卡死时要等很久才发现。</p>
+  <div class="flow">bridge 从数据面读取工具调用的状态（3.4），维护「进行中的工具调用」集合：
+
+  tool_call / tool_call_update 的 status = in_progress   → 加入集合
+  status = completed / failed（或 v2 的 cancelled）      → 移出集合
+
+  集合为空  → 静默阈值 = <b>idleS</b>（默认 120 s）        在等模型：模型服务不该沉默这么久
+  集合非空  → 静默阈值 = <b>toolIdleS</b>（默认 600 s）    在执行工具：允许长时间没有输出</div>
+  <p>v2 的 <code>terminal_output_chunk</code> 与 <code>tool_call_content_chunk</code> 本身就是进展证据，长命令只要有输出就会不断重置计时。</p>
+
+  <!-- ─────────── 6.3 ─── -->
+  <h3 id="t-perm">6.3 权限等待</h3>
+  <ul>
+    <li>询问的过期时刻 = <code>min(现在 + permissionWaitS, 本轮截止时刻)</code>。截止先到时，询问随这一轮一起结束（按取消处理，给 agent 的答复是 <code>cancelled</code>）。</li>
+    <li>到期未答复：给 agent 选 <code>reject_once</code>，向 server 发 <code>permission.withdraw</code>（<code>expired</code>），轮次回到 <code>running</code> 并重置静默计时。agent 收到拒绝后通常会换一种做法继续。</li>
+    <li>同一轮里可能有多个询问同时挂起（agent 并发调用多个工具）。<b>只要有一个询问挂起，轮次就处于 <code>awaiting_permission</code></b>，静默计时暂停；全部答复后才恢复。</li>
+  </ul>
+
+  <!-- ─────────── 6.4 ─── -->
+  <h3 id="t-cancel">6.4 取消流程</h3>
+  <p>无论取消由谁触发，bridge 都走同一条流程。触发原因：</p>
+  <table>
+    <thead><tr><th style="width:170px"><code>cause</code></th><th>触发</th></tr></thead>
+    <tbody>
+      <tr><td><code>requested</code></td><td>server 发来 <code>turn.cancel</code>（通常是用户点了取消）</td></tr>
+      <tr><td><code>deadline</code> · <code>idle</code></td><td>6.2 的计时到点</td></tr>
+      <tr><td><code>upstream_lost</code></td><td>上游连接断开且在重连窗口内没有恢复（第 7 章）</td></tr>
+      <tr><td><code>session_closing</code></td><td>收到 <code>session.close</code> 时这一轮还在进行</td></tr>
+    </tbody>
+  </table>
+
+  <div class="flow"><b>① 进入 cancelling</b>，发 turn.state(cancelling)；此后到来的 turn.cancel 都是空操作
+<b>② 履行 ACP 义务</b>：对所有挂起的 session/request_permission 回 <u>cancelled</u>，并向 server 发 permission.withdraw
+<b>③ 发 ACP session/cancel</b>（通知）
+<b>④ 启动取消宽限计时（15 s）</b>，期间：
+     · agent 的 update 照常以 origin=turn 转交（规范允许 cancel 之后仍有更新，2.10）
+     · agent 新发来的权限请求 → 直接回 cancelled，不上报
+<b>⑤ 等 agent 结束这一轮</b>（v1：prompt 的响应；v2：idle state_update）
+     ├─ stopReason = cancelled         → ended <b>cancelled</b>（cause 为触发原因）
+     ├─ stopReason = 其它（刚好做完）   → ended <b>completed</b>（以 agent 的实际结果为准）
+     ├─ 错误响应（违反规范）            → ended <b>cancelled</b>，记一条「agent 取消时回了错误」的告警
+     └─ 宽限到点仍无结果                → ⑥
+<b>⑥ 终止 agent</b>：SIGTERM，5 s 后 SIGKILL → ended <b>failed / cancel_unanswered</b> → RECOVERING（5.6）</div>
+
+  <div class="callout rule">
+    <span class="label">为什么以 agent 的实际结果为准</span>
+    <p>取消与完成可能在同一时刻发生：bridge 发出 cancel 时，agent 恰好已经答完。此时如实报告 <code>completed</code>，server 可以照常把这一轮的结果展示给用户；硬报 <code>cancelled</code> 反而会让用户以为工作没做完，而文件其实已经改了。</p>
+  </div>
+  <div class="callout warn">
+    <span class="label">终止进程是最后手段</span>
+    <p>终止 agent 会丢掉它进程内的全部状态，只能靠会话文件恢复（5.6）。所以宽限期不宜太短：15 s 足够一个遵守规范的 agent 中止模型请求、收拾工具、回出 <code>cancelled</code>；取消后多久能收尾，不同适配器差异很大，这个值上线后要按实测调整（6.9）。</p>
+  </div>
+
+  <!-- ─────────── 6.5 ─── -->
+  <h3 id="t-session">6.5 会话层的超时</h3>
+  <table>
+    <thead><tr><th style="width:190px">环节</th><th>超时后</th><th style="width:260px">为什么这样处理</th></tr></thead>
+    <tbody>
+      <tr><td>预热（spawn + initialize）</td><td>终止进程，按 5.6 的节制重试；bridge 保持 BOOTING，<code>session.open</code> 若此时到来就等预热结束或失败</td><td>预热没有 server 在等，不必立刻失败</td></tr>
+      <tr><td>打开（new / load / resume）</td><td>回 <code>OPEN_TIMEOUT</code>；<b>终止并重启 agent</b>，回到 IDLE，server 可以重试 <code>session.open</code></td><td>ACP 请求超时后，agent 可能仍在处理它（比如还在重放历史）。不重启的话，下一次 open 会与上一次的残留交错</td></tr>
+      <tr><td>关闭（session/close）</td><td>直接终止进程</td><td>会话本来就要结束了</td></tr>
+    </tbody>
+  </table>
+  <p>通用规则：<b>一个 ACP 请求超时，就当作 agent 处于未知状态</b>，唯一可靠的收场是重启它。这条规则让 bridge 永远不需要猜测「agent 是不是还在处理那个请求」。</p>
+
+  <!-- ─────────── 6.6 ─── -->
+  <h3 id="t-bp">6.6 背压</h3>
+  <p>数据流向是 agent → bridge → server。当下游处理不过来时，压力应当向上游传导，而不是在中间某处无限堆积（1.9）。</p>
+  <div class="flow">agent ──stdout 管道──▶ bridge ──发送队列──▶ WebSocket ──TCP──▶ server
+      <i>操作系统管道缓冲</i>   <i>读取循环</i>   <b>有界</b>          <i>库的写缓冲</i>            <i>server 的读取</i>
+                                     <b>64 MiB</b></div>
+  <table>
+    <thead><tr><th style="width:190px">一环</th><th>规则</th></tr></thead>
+    <tbody>
+      <tr><td>server 读取</td><td>server 必须及时从连接读取；入库、翻译等慢操作不能阻塞读取本身。它自己的缓冲也要有界，满了就停止读取，让 TCP 把压力传给 bridge</td></tr>
+      <tr><td>bridge 发送队列</td><td><b>按字节计的上限 64 MiB</b>。队列满时，bridge <b>停止读取 agent 的 stdout</b></td></tr>
+      <tr><td>agent 的 stdout</td><td>bridge 不读，管道缓冲写满，agent 的写操作受阻 —— 压力到达源头</td></tr>
+      <tr><td>单条消息</td><td>stdout 单行上限、WebSocket 单条上限都是 32 MiB（4.10）</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout warn">
+    <span class="label">背压未必能让 agent 真的慢下来</span>
+    <p>「管道满了写操作就阻塞」是同步写的行为。常见的 ACP 适配器用 Node.js 实现，而 Node 写管道时<b>不会阻塞</b>：写不进去的数据留在它自己的内存里继续排队。这种情况下 bridge 停止读取只是把积压从 bridge 的内存挪到了 agent 的内存 —— 保护了 bridge，却保护不了 Pod。所以背压之外还需要一条兜底规则。</p>
+  </div>
+  <p><b>兜底：</b>发送队列持续处于满的状态超过 <b>30 s</b>，就判定上游不健康，主动以 1011 关闭连接，进入第 7 章的断线处理。长时间读不动，意味着 server 已经跟不上了；与其让积压一直增长直到 Pod 内存耗尽，不如把它明确地变成一次断线。</p>
+
+  <h4>反方向不受影响</h4>
+  <p>WebSocket 是全双工的：bridge → server 方向的积压<b>不会</b>阻塞 server → bridge 方向。只要 bridge 读取上游消息的循环与发送队列相互独立，即使在大量数据积压时，<code>turn.cancel</code> 仍能及时到达 bridge。这是 bridge 实现上的一条硬性要求：<b>读上游、读 agent、写上游，三者互不阻塞</b>。</p>
+
+  <!-- ─────────── 6.7 ─── -->
+  <h3 id="t-clock">6.7 时间的表示</h3>
+  <ul>
+    <li><b>跨进程传递时长，不传递时刻。</b>server 给出 <code>deadlineS: 900</code>，bridge 用自己的<b>单调时钟</b>计时。两台机器的系统时间可能相差数秒甚至更多，用绝对时刻做判断会被时钟偏差放大或缩小。</li>
+    <li><code>permission.ask</code> 里的 <code>expiresAt</code> 是<b>展示用</b>的绝对时刻（让前端显示倒计时），同时附带 <code>expiresInS</code>；server 的判断应当基于后者。bridge 自己的判断始终基于单调时钟。</li>
+    <li><code>turn.state</code> 的 <code>stats</code> 里给出 <code>elapsedS</code>、<code>awaitingPermissionS</code> 等耗时，server 据此向用户解释「这一轮为什么超时」（例如「共 900 秒，其中等待审批 212 秒」）。</li>
+  </ul>
+
+  <!-- ─────────── 6.8 ─── -->
+  <h3 id="t-server">6.8 server 侧的计时</h3>
+  <p>bridge 负责执行时限，server 只做兜底：</p>
+  <table>
+    <thead><tr><th style="width:170px">请求</th><th style="width:130px">server 等多久</th><th>理由</th></tr></thead>
+    <tbody>
+      <tr><td><code>turn.start</code> · <code>turn.cancel</code></td><td>10 s</td><td>都是「接纳即返回」，正常情况下毫秒级（P1）</td></tr>
+      <tr><td><code>session.open</code></td><td>打开超时 + 30 s</td><td>bridge 自己会先报 <code>OPEN_TIMEOUT</code>；多出的 30 s 只在 bridge 失联时起作用</td></tr>
+      <tr><td>一轮没有收到 ended</td><td>截止 + 取消宽限 + 终止宽限 + 60 s</td><td>正常情况下 bridge 一定会报 ended（B1）。超过这个时间还没有，说明 bridge 本身失联，按「Pod 已丢失」处理（第 7 章）</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ─────────── 6.9 ─── -->
+  <h3 id="t-tune">6.9 需要实测校准的数值</h3>
+  <table>
+    <thead><tr><th style="width:160px">数值</th><th>校准依据</th></tr></thead>
+    <tbody>
+      <tr><td>取消宽限 15 s</td><td>各适配器从收到 cancel 到回出 <code>cancelled</code> 的实际耗时分布</td></tr>
+      <tr><td>静默 120 s / 600 s</td><td>模型首个输出的延迟分布（大上下文时会变长）；常见工具命令的最长静默时长</td></tr>
+      <tr><td>预热 60 s · 打开 120 s</td><td>适配器冷启动耗时；最长会话的历史重放耗时</td></tr>
+      <tr><td>发送队列 64 MiB · 兜底 30 s</td><td>历史重放时的峰值积压；server 在正常负载下的读取延迟</td></tr>
+    </tbody>
+  </table>
+  <p>这些数值第一版按经验给出，上线后必须用第 8 章的指标（每轮耗时、静默时长、取消收尾耗时、队列积压）校准。</p>
+
+  <!-- ─────────── 6.10 ─── -->
+  <h3 id="t-decisions">6.10 本章决定</h3>
+  <table>
+    <thead><tr><th style="width:50px">#</th><th>决定</th><th style="width:120px">回答了</th></tr></thead>
+    <tbody>
+      <tr><td>C1</td><td>截止与静默分开计时：截止计入等人时间，静默在等人时暂停</td><td>T4</td></tr>
+      <tr><td>C2</td><td>静默分两档：在等模型 120 s，在执行工具 600 s；依据是 bridge 读取到的工具调用状态</td><td>T4 · T14</td></tr>
+      <tr><td>C3</td><td>统一的取消流程：先履行 ACP 义务、再发 cancel、宽限 15 s、以 agent 实际结果为准、不响应则终止重启</td><td>T16</td></tr>
+      <tr><td>C4</td><td>任何 ACP 请求超时都视为 agent 状态未知，唯一收场是重启</td><td>—</td></tr>
+      <tr><td>C5</td><td>发送队列按字节有界（64 MiB），满则停止读取 agent；持续满 30 s 视为上游不健康并断开</td><td>T7</td></tr>
+      <tr><td>C6</td><td>读上游、读 agent、写上游三者互不阻塞，保证取消指令在积压时也能送达</td><td>—</td></tr>
+      <tr><td>C7</td><td>跨进程只传时长，bridge 用单调时钟计时；绝对时刻只用于展示</td><td>—</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ══════════════ 7 ══ -->
+<section id="s7">
+  <h2><span class="num">07</span>故障、断线与恢复</h2>
+  <p>第 5 章处理了 agent 进程在 Pod 内崩溃的情形。本章处理剩下的：上游连接断开、server 重启、bridge 进程崩溃、Pod 丢失。目标只有一个 —— <b>无论哪一层出事，server 最终都能知道发生了什么，并把会话带回可用状态</b>。</p>
+
+  <!-- ─────────── 7.1 ─── -->
+  <h3 id="r-kinds">7.1 故障分类</h3>
+  <table>
+    <thead><tr><th style="width:160px">故障</th><th style="width:220px">典型原因</th><th style="width:170px">什么还在</th><th>处理</th></tr></thead>
+    <tbody>
+      <tr><td><b>上游连接断开</b></td><td>网络抖动、server 重启或滚动发布、背压兜底主动断开（6.6）</td><td>Pod、bridge、agent、进行中的一轮</td><td>重连 + <code>session.attach</code> + 按序号补发（7.3）</td></tr>
+      <tr><td><b>agent 进程崩溃</b></td><td>适配器或 CLI 出错、被 OOM 终止</td><td>Pod、bridge、会话文件</td><td>bridge 自行恢复（5.6）</td></tr>
+      <tr><td><b>bridge 进程崩溃</b></td><td>bridge 自身的缺陷、容器被重启</td><td>Pod（容器重启后）、会话文件、工作区</td><td>server 发现 bridge 已重启，重新 <code>session.open</code> 恢复（7.6）</td></tr>
+      <tr><td><b>Pod 丢失</b></td><td>节点故障、驱逐、空闲回收</td><td>会话文件、工作区（都在持久存储上，M7）</td><td>新建 Pod，<code>session.open</code> 恢复（7.7）</td></tr>
+    </tbody>
+  </table>
+  <p>四种故障的共同点：<b>持久存储上的东西都在</b>（会话文件、工作区），丢的只是进程内的协调状态。恢复的本质就是用持久的东西重建协调状态。</p>
+
+  <!-- ─────────── 7.2 ─── -->
+  <h3 id="r-window">7.2 断线时进行中的一轮：继续跑</h3>
+  <p>bridge 拥有轮次（D1），它不依赖上游连接也能看管这一轮。所以断线<b>不立即</b>结束这一轮，而是给一个<b>重连窗口</b>：</p>
+  <div class="flow">上游断开
+   │  这一轮照常进行；bridge 发出的消息全部留在<b>补发缓冲</b>里
+   │  agent 发来的权限询问：<u>暂存</u>，不答复（agent 在等，静默计时按 6.3 暂停）
+   │  截止与静默计时照常走
+   │
+   ├─ 窗口内 server 重连并 attach ──▶ 补发缓冲里的消息，暂存的询问随之送达，一切照常
+   │
+   └─ 窗口到期仍未重连 ──▶ 取消这一轮（cause: <b>upstream_lost</b>，6.4）
+                         暂存的询问全部答复拒绝（取消流程里为 cancelled）
+                         会话保持打开（READY），ended 等结果留在缓冲里，等 server 回来取</div>
+  <table>
+    <thead><tr><th style="width:180px">决定</th><th>理由</th></tr></thead>
+    <tbody>
+      <tr><td><b>重连窗口默认 120 s</b>，由 server 在 <code>session.open</code> 的 <code>defaults.reconnectWindowS</code> 给出</td><td>要能覆盖一次 server 的滚动发布或重启（通常几十秒）。更长的窗口意味着 agent 在无人观察的情况下继续工作，但这仍受截止时限约束</td></tr>
+      <tr><td><b>询问在窗口内暂存，而不是立即拒绝</b></td><td>一次几秒钟的网络抖动不应该让一个本来会被批准的操作被拒绝。暂存有上限（窗口），窗口到期仍一律拒绝 —— <b>永远不会因为没人应答而自动批准</b></td></tr>
+      <tr><td><b>窗口到期后会话不关闭</b></td><td>server 可能只是重启得慢一些。会话保持打开，结果留在缓冲里，直到 server 回来或 Pod 被回收</td></tr>
+    </tbody>
+  </table>
+  <p>这一节修正了第 3 章 B3 的表述：原文「上游不可达时权限一律拒绝」改为「不会因上游不可达而自动批准；超过重连窗口仍不可达则拒绝」（第 3 章已同步修订）。</p>
+
+  <!-- ─────────── 7.3 ─── -->
+  <h3 id="r-attach">7.3 重新接上：<code>session.attach</code> 与补发</h3>
+  <h4>为什么需要确认</h4>
+  <p>bridge 把消息写进连接，不代表 server 收到并处理了它（1.9）。断线时，最后若干条消息可能在 bridge 的缓冲里、在网络上、或者已被 server 读到但还没来得及入库。只有 server 能说清楚「我已经可靠地处理到了哪一条」。</p>
+
+  <h4>两个新方法</h4>
+  <pre><code><span class="tok-c">// ① server → bridge：定期确认（通知）。bridge 据此释放补发缓冲</span>
+{ <span class="tok-s">"method"</span>:<span class="tok-s">"session.ack"</span>, <span class="tok-s">"params"</span>: { <span class="tok-s">"seq"</span>: <span class="tok-n">412</span> } }
+  <span class="tok-c">// 含义：seq ≤ 412 的消息已经<b>处理完成</b>（入库），而不只是收到</span>
+  <span class="tok-c">// 频率：每 1 s 或每 200 条，以先到者为准</span>
+
+<span class="tok-c">// ② server → bridge：重连后第一条请求（代替 session.open）</span>
+{ <span class="tok-s">"id"</span>:<span class="tok-n">1</span>, <span class="tok-s">"method"</span>:<span class="tok-s">"session.attach"</span>, <span class="tok-s">"params"</span>: {
+    <span class="tok-s">"bridgeInstance"</span>: <span class="tok-s">"b-7c1e…"</span>,   <span class="tok-c">// 上次见到的 bridge 实例 id（7.6）</span>
+    <span class="tok-s">"lastSeq"</span>: <span class="tok-n">412</span>                 <span class="tok-c">// server 已处理完成的最后一条</span>
+} }
+{ <span class="tok-s">"id"</span>:<span class="tok-n">1</span>, <span class="tok-s">"result"</span>: {
+    <span class="tok-s">"state"</span>: <span class="tok-s">"in_turn"</span>,                                    <span class="tok-c">// ready | in_turn | recovering | ended</span>
+    <span class="tok-s">"turn"</span>: { <span class="tok-s">"turnId"</span>:<span class="tok-s">"run_8ab2…"</span>, <span class="tok-s">"state"</span>:<span class="tok-s">"awaiting_permission"</span> },
+    <span class="tok-s">"resendFrom"</span>: <span class="tok-n">413</span>,                                       <span class="tok-c">// 随后补发的第一条</span>
+    <span class="tok-s">"gaps"</span>: [ ]                                               <span class="tok-c">// 缓冲溢出时丢掉的区间（7.4）</span>
+} }
+<span class="tok-c">// 响应之后，bridge 按 seq 顺序补发 413 起的全部消息，然后接着发实时消息</span></code></pre>
+  <ul>
+    <li><b>投递语义：至少一次 + 按序号去重。</b>补发可能与 server 已经收到的消息重复，server 按 <code>seq</code> 丢弃已处理过的即可。「处理完成」由 server 用同一个数据库事务记录事件与 <code>lastSeq</code>，于是重启后的 server 也能给出准确的 <code>lastSeq</code>。</li>
+    <li><b>补发的询问沿用原来的 JSON-RPC id。</b>server 对同一个询问的答复只会被采用一次；bridge 已经自行答复过的（例如窗口到期后拒绝），紧跟着会补发 <code>permission.withdraw</code>，server 据此关闭审批界面。</li>
+    <li><b>server 的判断依据是 <code>state</code> 与 <code>turn</code>，不是补发的消息。</b>补发是为了把事件流补全；会话此刻处于什么状态，以 attach 的响应为准。</li>
+  </ul>
+
+  <!-- ─────────── 7.4 ─── -->
+  <h3 id="r-buffer">7.4 补发缓冲</h3>
+  <p>第 6 章的发送队列与补发缓冲是<b>同一个缓冲</b>：消息发出后不删除，直到被 <code>session.ack</code> 确认。上限仍是 64 MiB（6.6）。</p>
+  <table>
+    <thead><tr><th style="width:200px">情形</th><th>规则</th></tr></thead>
+    <tbody>
+      <tr><td>连接正常</td><td>server 每秒确认一次，缓冲里通常只有最近一两秒的消息</td></tr>
+      <tr><td>断线期间缓冲将满</td><td><b>先淘汰最老的 <code>agent.update</code></b>，控制消息（<code>turn.state</code>、<code>session.state</code>、询问与撤回）<b>永不淘汰</b>。被淘汰的序号区间记入 <code>gaps</code></td></tr>
+      <tr><td>控制消息本身把缓冲占满</td><td>理论上不会发生（控制消息很小、很少）。万一发生，取消当前这一轮以止损</td></tr>
+    </tbody>
+  </table>
+  <p>这个淘汰顺序保证了：即使补发不完整，<b>server 对会话与轮次状态的认知永远是完整的</b>，缺的只是一段展示内容。server 收到 <code>gaps</code> 后，在对应的一轮上标注「部分过程记录缺失」，而不是假装完整。</p>
+  <div class="callout rule">
+    <span class="label">连接正常时，缓冲的上限同时起背压作用</span>
+    <p>server 如果收到消息却迟迟不确认（处理太慢），缓冲会被已发送但未确认的消息占满，bridge 随即停止读取 agent（6.6）。这正是想要的：「server 跟不上」无论表现为读不动还是确认不动，压力都会传回 agent。6.6 的「持续满 30 s 即断开」对两种情况同样适用。</p>
+  </div>
+
+  <!-- ─────────── 7.5 ─── -->
+  <h3 id="r-reconnect">7.5 重连策略（server 侧）</h3>
+  <table>
+    <thead><tr><th style="width:180px">规则</th><th>内容</th></tr></thead>
+    <tbody>
+      <tr><td>谁重连</td><td>server（它是 WebSocket 的客户端）</td></tr>
+      <tr><td>何时不重连</td><td>收到关闭码 4409（被取代）或 4410（会话已结束）（4.12）</td></tr>
+      <tr><td>退避</td><td>0.5 s、1 s、2 s、4 s…，上限 10 s，带随机抖动；一直重试到重连窗口结束，之后改为低频探测（每 30 s）直到 Pod 被确认丢失</td></tr>
+      <tr><td>连上之后</td><td>第一条请求是 <code>session.attach</code>；attach 失败才考虑 <code>session.open</code>（7.6）</td></tr>
+      <tr><td><b>单一连接者</b></td><td>server 有多个实例时，同一会话只能由一个实例连接。平台需要为每个会话维护一个持有者（例如带过期时间的租约），否则两个实例会互相用 4409 把对方顶下线</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ─────────── 7.6 ─── -->
+  <h3 id="r-bridge">7.6 bridge 进程崩溃</h3>
+  <p>bridge 崩溃时，它的子进程 agent 也随之结束（bridge 作为容器的主进程运行，容器退出会带走进程组内的全部进程），进程内的协调状态全部丢失。容器被重启后，bridge 从 BOOTING 重新开始，<b>没有任何会话</b>。</p>
+  <h4>server 怎么知道 bridge 重启过</h4>
+  <p>每个 bridge 进程启动时生成一个随机的<b>实例 id</b>，在 <code>session.open</code> 与 <code>session.attach</code> 的响应里返回。server 把它与会话一起记下。</p>
+  <div class="flow">server 重连，发 session.attach { bridgeInstance: "b-7c1e…", lastSeq: 412 }
+   │
+   ├─ 实例 id 相同、会话存在       → 正常 attach（7.3）
+   │
+   └─ 实例 id 不同（bridge 重启过） → 返回 SESSION_NOT_OPEN，data: { cause: "bridge_restarted",
+                                      bridgeInstance: "b-91d4…" }
+                                    server 据此：
+                                      · 进行中的那一轮 → 以失败结束（cause: bridge_lost）
+                                      · 发 session.open，带 resume.agentSessionId 恢复上下文</div>
+  <p>实例 id 解决的是一个具体的歧义：没有它，server 分不清「会话在，但缓冲里的消息补不回来了」与「会话根本不存在了」。</p>
+
+  <!-- ─────────── 7.7 ─── -->
+  <h3 id="r-pod">7.7 Pod 丢失</h3>
+  <p>server 发现 Pod 丢失的途径：执行环境的管理组件报告 Pod 已不存在，或者重连持续失败超过 6.8 的兜底时间。处理与 7.6 相同：进行中的一轮以失败结束（<code>cause: pod_lost</code>），新建 Pod，<code>session.open</code> 恢复。</p>
+  <div class="callout warn">
+    <span class="label">工具的副作用无法撤销</span>
+    <p>一轮在中途失败时，agent 可能已经改了一些文件、执行了一些命令。这些副作用留在工作区里，恢复会话不会把它们撤回。server 在向用户报告失败时应当说明这一点，而这一轮已送达的工具调用事件（数据面）正好记录了哪些操作已经发生。<code>gaps</code> 非空时，这份记录本身也可能不完整，要一并说明。</p>
+  </div>
+
+  <!-- ─────────── 7.8 ─── -->
+  <h3 id="r-server">7.8 server 需要持久保存什么</h3>
+  <table>
+    <thead><tr><th style="width:180px">字段（每个会话）</th><th>用途</th></tr></thead>
+    <tbody>
+      <tr><td><code>agentSessionId</code></td><td>新 Pod 上恢复上下文（5.6）</td></tr>
+      <tr><td><code>bridgeInstance</code></td><td>判断 bridge 是否重启过（7.6）</td></tr>
+      <tr><td><code>lastSeq</code></td><td>attach 时告诉 bridge 从哪里补发；<b>与事件在同一事务里更新</b></td></tr>
+      <tr><td>当前轮次的 <code>turnId</code> 与状态</td><td>重启后知道有没有一轮悬而未决，并在 attach 后与 bridge 的报告对账</td></tr>
+    </tbody>
+  </table>
+  <p>这四项加上事件本身，就是 server 在任何时刻重启后恢复协作所需的全部信息。bridge 一侧不需要任何持久化（B4）。</p>
+
+  <!-- ─────────── 7.9 ─── -->
+  <h3 id="r-matrix">7.9 恢复对照表</h3>
+  <table>
+    <thead><tr><th style="width:220px">server 重连后看到</th><th>含义</th><th style="width:260px">server 的动作</th></tr></thead>
+    <tbody>
+      <tr><td>attach 成功，<code>state: in_turn</code></td><td>这一轮还在进行</td><td>补全事件流，继续等 ended</td></tr>
+      <tr><td>attach 成功，<code>state: ready</code>，补发里有 ended</td><td>断线期间这一轮结束了（正常完成，或窗口到期被取消）</td><td>按补发的 ended 结束这一轮</td></tr>
+      <tr><td>attach 成功，<code>gaps</code> 非空</td><td>补发不完整</td><td>标注「部分过程记录缺失」</td></tr>
+      <tr><td>attach 成功，<code>state: recovering</code></td><td>agent 正在 Pod 内恢复</td><td>等 <code>session.state</code> ready</td></tr>
+      <tr><td>attach 失败，<code>bridge_restarted</code></td><td>bridge 重启过，进程内状态全丢</td><td>该轮失败（<code>bridge_lost</code>）→ <code>session.open</code> 恢复</td></tr>
+      <tr><td>连接关闭码 4410</td><td>会话已结束</td><td>不重连；需要时申请新 Pod 并 <code>session.open</code></td></tr>
+      <tr><td>长时间连不上，或执行环境报告 Pod 不存在</td><td>Pod 丢失</td><td>该轮失败（<code>pod_lost</code>）→ 新 Pod → <code>session.open</code> 恢复</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ─────────── 7.10 ─── -->
+  <h3 id="r-decisions">7.10 本章决定</h3>
+  <table>
+    <thead><tr><th style="width:50px">#</th><th>决定</th><th style="width:120px">回答了</th></tr></thead>
+    <tbody>
+      <tr><td>R1</td><td>断线不立即结束这一轮：重连窗口默认 120 s，窗口内继续运行，到期以 <code>upstream_lost</code> 取消</td><td>T1</td></tr>
+      <tr><td>R2</td><td>窗口内权限询问暂存、窗口到期拒绝；永不因无人应答而批准（修订 B3）</td><td>T3 · T11</td></tr>
+      <tr><td>R3</td><td>新增 <code>session.ack</code>（处理完成才确认）与 <code>session.attach</code>（带 <code>lastSeq</code> 重连）；投递语义为至少一次 + 按序号去重</td><td>T1</td></tr>
+      <tr><td>R4</td><td>发送队列即补发缓冲，64 MiB；溢出时先淘汰数据、永不淘汰控制消息，并报告 <code>gaps</code></td><td>T7</td></tr>
+      <tr><td>R5</td><td>bridge 实例 id 区分「会话仍在」与「bridge 已重启」</td><td>—</td></tr>
+      <tr><td>R6</td><td>同一会话只能由一个 server 实例连接，平台需要为每个会话维护持有者</td><td>—</td></tr>
+      <tr><td>R7</td><td>server 持久保存 <code>agentSessionId</code>、<code>bridgeInstance</code>、<code>lastSeq</code>（与事件同一事务）、当前轮次</td><td>—</td></tr>
+    </tbody>
+  </table>
+  <p>上游协议因本章增加 <code>session.ack</code> 与 <code>session.attach</code>，共 <b>12 个方法</b>（第 4 章已同步修订）。</p>
+</section>
+
+<!-- ══════════════ 8 ══ -->
+<section id="s8">
+  <h2><span class="num">08</span>安全、可观测性与部署</h2>
+
+  <!-- ─────────── 8.1 ─── -->
+  <h3 id="o-threat">8.1 威胁模型</h3>
+  <table>
+    <thead><tr><th style="width:190px">要保护的</th><th>为什么重要</th></tr></thead>
+    <tbody>
+      <tr><td>工作区与会话文件</td><td>用户的代码、配置，可能含密钥</td></tr>
+      <tr><td><b>审批的真实性</b></td><td>审批是平台对 agent 行为的唯一把关；能伪造审批，就等于拿到了在 Pod 里任意读写、执行的权限</td></tr>
+      <tr><td>bridge 的连接凭据</td><td>持有它就能以 server 的身份驱动这个会话</td></tr>
+      <tr><td>agent 使用的模型凭据</td><td>泄露会造成费用与配额损失</td></tr>
+    </tbody>
+  </table>
+  <table>
+    <thead><tr><th style="width:190px">可能的攻击者</th><th>能力</th></tr></thead>
+    <tbody>
+      <tr><td>同集群的其它工作负载</td><td>集群网络默认是平的，任何 Pod 都能连到 bridge 的端口（1.11「在内网不是边界」）</td></tr>
+      <tr><td>其它会话的 Pod</td><td>同上，而且它本身就运行着一个同样不可信的 agent</td></tr>
+      <tr><td><b>本会话的 agent 自己</b></td><td>它的行为由模型驱动，可能被提示注入操纵（例如读到的某个文件里藏着指令）。它与 bridge 在<b>同一个容器</b>里，能执行任意命令</td></tr>
+    </tbody>
+  </table>
+  <div class="callout warn">
+    <span class="label">最危险的是自己的 agent</span>
+    <p>设想 agent 被注入后执行：读取 bridge 的环境变量拿到连接凭据 → 连上 bridge 的端口 → 以 4409 顶掉真正的 server → 对自己发出的每一个权限请求回复「允许」。审批机制就此失效，而用户界面上什么都看不到。<b>bridge 必须把 agent 当作不可信的输入源，并且让 agent 在操作系统层面拿不到 bridge 的凭据</b>（8.3）。</p>
+  </div>
+
+  <!-- ─────────── 8.2 ─── -->
+  <h3 id="o-auth">8.2 上游连接的鉴权</h3>
+  <table>
+    <thead><tr><th style="width:170px">项</th><th>规则</th></tr></thead>
+    <tbody>
+      <tr><td>凭据形态</td><td>每个 Pod 一个 256 位随机 token，由执行环境在创建 Pod 时生成</td></tr>
+      <tr><td>交给 bridge</td><td>以<b>文件</b>形式挂载（Kubernetes Secret），权限只允许 bridge 的系统用户读取。<b>不放进环境变量</b>：环境变量会被子进程继承，也更容易出现在诊断输出里</td></tr>
+      <tr><td>交给 server</td><td>server 向执行环境查询该 Pod 的 token，只保存在内存中</td></tr>
+      <tr><td>有效期</td><td>与 Pod 相同，Pod 删除即失效。会话 Pod 的寿命以小时计，不做轮换</td></tr>
+      <tr><td>会话绑定</td><td>握手头 <code>X-Atlas-Session</code> 必须等于该 Pod 所属的会话，token 对也不行（4.3）</td></tr>
+      <tr><td>比较方式</td><td>常数时间比较，避免时序侧信道</td></tr>
+      <tr><td>失败</td><td>握手阶段回 401 / 403，连接不升级；记录来源地址，频繁失败时告警</td></tr>
+      <tr><td>网络策略</td><td><b>必须</b>配置 NetworkPolicy：bridge 端口只允许来自 server 的 Pod。凭据校验与网络隔离是两道独立的防线</td></tr>
+      <tr><td>传输加密</td><td>集群内可以不加密（依赖网络策略）；跨节点流量需要加密时，由服务网格提供 mTLS，bridge 本身不处理证书</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ─────────── 8.3 ─── -->
+  <h3 id="o-agent">8.3 把 agent 当作不可信的</h3>
+  <h4>操作系统层面的隔离</h4>
+  <table>
+    <thead><tr><th style="width:200px">措施</th><th>防的是什么</th></tr></thead>
+    <tbody>
+      <tr><td><b>agent 以另一个系统用户运行</b>（bridge 为 uid A，agent 为 uid B）</td><td>不同用户的进程无法读取对方的 <code>/proc/&lt;pid&gt;/environ</code>、内存，也无法向对方发信号。token 文件只对 uid A 可读</td></tr>
+      <tr><td><b>清理传给 agent 的环境变量</b></td><td>只传 agent 运行所需的（HOME、PATH、模型相关配置等），bridge 自己的配置一律不传</td></tr>
+      <tr><td><b>拒绝来自本 Pod 地址的连接</b></td><td>agent 与 bridge 共享网络命名空间，agent 连 bridge 端口时源地址就是 Pod 自己的地址（或回环地址），而 server 永远来自别的 Pod。这是凭据之外的又一层</td></tr>
+      <tr><td>agent 只能写工作区与自己的会话目录</td><td>限制 agent 能篡改的范围</td></tr>
+    </tbody>
+  </table>
+  <p>以另一个用户身份拉起子进程，需要 bridge 具备 <code>CAP_SETUID</code> / <code>CAP_SETGID</code>。bridge 只保留这两项能力，其余全部丢弃。备选做法是把 agent 放进同一 Pod 的另一个容器、双方通过共享卷上的 Unix socket 通信 —— 隔离更彻底，但 ACP 的 stdio 传输就要改成自定义传输（2.3），复杂度明显上升。第一版采用前者。</p>
+
+  <h4>协议层面的防御</h4>
+  <table>
+    <thead><tr><th style="width:200px">规则</th><th>内容</th></tr></thead>
+    <tbody>
+      <tr><td>输入校验</td><td>agent 的每条输出都按 ACP schema 解析；不合法的行记录并丢弃，不影响状态机</td></tr>
+      <tr><td>大小上限</td><td>单行 32 MiB（4.10）</td></tr>
+      <tr><td>并发询问上限</td><td>同一轮最多 <b>8 个</b>挂起的权限询问，超出的直接拒绝。防止 agent 用大量询问淹没用户</td></tr>
+      <tr><td>不认识的方法</td><td>未声明能力的方法（<code>fs/*</code>、<code>terminal/*</code>）与 <code>_</code> 扩展方法一律回 -32601（4.9）</td></tr>
+      <tr><td>agent 不能影响控制决定之外的东西</td><td>agent 能决定「这一轮以什么原因结束」，但不能延长时限、不能改变审批结果、不能影响 <code>seq</code></td></tr>
+    </tbody>
+  </table>
+
+  <h4>数据与日志</h4>
+  <p>数据面里是用户的代码与对话，可能包含密钥。bridge 的日志<b>默认只记元数据</b>（方法、会话、轮次、<code>seq</code>、大小、耗时），不记内容。适配器的 stderr 按行截断到 2 KB 后写入 Pod 日志，因为它同样可能打印敏感内容。需要记录内容排查问题时，由 server 按会话临时开启，并自动过期。</p>
+
+  <!-- ─────────── 8.4 ─── -->
+  <h3 id="o-obs">8.4 可观测性</h3>
+  <h4>日志</h4>
+  <p>结构化 JSON，每条带 <code>session</code>、<code>turn</code>、<code>seq</code>（如有）、<code>bridgeInstance</code>。关键的状态转换（5.5 与 4.6 的每一条边）都记一条，足以在事后还原一个会话的完整时间线。</p>
+
+  <h4>指标</h4>
+  <p>以下指标同时服务于运维与第 6 章的数值校准（6.9）：</p>
+  <table>
+    <thead><tr><th style="width:270px">指标</th><th>用途</th></tr></thead>
+    <tbody>
+      <tr><td><code>bridge_turn_duration_seconds{outcome,cause}</code></td><td>每轮耗时分布；截止值是否合理</td></tr>
+      <tr><td><code>bridge_turn_awaiting_permission_seconds</code></td><td>等人占了多少时间</td></tr>
+      <tr><td><code>bridge_idle_gap_seconds{phase=model|tool}</code></td><td>两次进展之间的最长间隔；两档静默阈值的依据</td></tr>
+      <tr><td><code>bridge_time_to_first_update_seconds</code></td><td>提交后多久出现第一条输出；模型首响应延迟</td></tr>
+      <tr><td><code>bridge_cancel_settle_seconds{result}</code></td><td>从发出 cancel 到 agent 确认的耗时；取消宽限的依据</td></tr>
+      <tr><td><code>bridge_agent_restarts_total{cause}</code></td><td>agent 崩溃与被终止的次数</td></tr>
+      <tr><td><code>bridge_open_duration_seconds{method}</code></td><td>预热、打开（new / load / resume）耗时</td></tr>
+      <tr><td><code>bridge_send_buffer_bytes</code> · <code>bridge_send_buffer_full_seconds</code></td><td>积压与背压兜底</td></tr>
+      <tr><td><code>bridge_attach_total{result}</code> · <code>bridge_resend_messages_total</code> · <code>bridge_gaps_total</code></td><td>断线恢复是否健康</td></tr>
+      <tr><td><code>bridge_frames_rejected_total{reason}</code></td><td>超长、非法、未知方法的帧；异常 agent 的信号</td></tr>
+      <tr><td><code>bridge_upstream_auth_failures_total</code></td><td>鉴权失败，可能的探测行为</td></tr>
+    </tbody>
+  </table>
+
+  <h4>链路追踪</h4>
+  <p>server 在 <code>turn.start</code> 的参数里带上 W3C trace context（<code>traceparent</code>）。bridge 以它为父节点创建「一轮」与每个 ACP 请求的 span，并通过 ACP 请求的 <code>_meta.traceparent</code> 继续传给 agent —— 这是 ACP 为追踪保留的键（2.12），适配器支持的话，链路能一直延伸到模型调用。这是 bridge 在 ACP 消息里写入的<b>唯一</b>附加信息，而且它走的是规范认可的位置。</p>
+
+  <!-- ─────────── 8.5 ─── -->
+  <h3 id="o-health">8.5 健康检查</h3>
+  <table>
+    <thead><tr><th style="width:120px">探针</th><th style="width:130px">端点</th><th>判定</th></tr></thead>
+    <tbody>
+      <tr><td>startup</td><td><code>/readyz</code></td><td>覆盖预热时间：最长等 90 s</td></tr>
+      <tr><td>readiness</td><td><code>/readyz</code></td><td>预热完成（状态不在 BOOTING），可以接受 <code>session.open</code></td></tr>
+      <tr><td>liveness</td><td><code>/healthz</code></td><td>bridge 的事件循环能在 1 s 内响应。<b>不检查 agent</b>：agent 的问题由 bridge 自己恢复（5.6），不应该让 Kubernetes 因此重启整个容器</td></tr>
+    </tbody>
+  </table>
+  <p>两个端点与 WebSocket 共用一个端口，在握手前直接回 HTTP、不升级（1.12）。这样健康检查不会在日志里留下一条条「连接建立又断开」的噪音。</p>
+
+  <!-- ─────────── 8.6 ─── -->
+  <h3 id="o-deploy">8.6 部署形态</h3>
+  <div class="flow"><b>会话 Pod</b>（一个平台会话一个，M1）
+ └─ 容器（镜像 = bridge + ACP 适配器 + CLI，一起构建、一起发布）
+     ├─ PID 1：轻量 init（负责信号转发与回收僵尸进程）
+     │    └─ <b>bridge</b>（uid A，只保留 CAP_SETUID / CAP_SETGID）
+     │         └─ <b>agent</b>（uid B，oom_score_adj 调高）
+     ├─ /run/secrets/bridge-token     只读，仅 uid A 可读
+     ├─ /workspace                   持久存储：工作区
+     ├─ /home/agent/…（会话目录）       <b>持久存储</b>：agent 的会话文件（M7）
+     └─ /tmp                         临时</div>
+  <table>
+    <thead><tr><th style="width:190px">要求</th><th>理由</th></tr></thead>
+    <tbody>
+      <tr><td>bridge、适配器、CLI 在同一镜像</td><td>ACP 的版本耦合留在镜像内部（3.1 D1）。镜像标签写明三者的版本，<code>session.open</code> 如实报告</td></tr>
+      <tr><td>bridge 退出则容器退出</td><td>保证 agent 不会在没有 bridge 看管时继续运行（7.6）</td></tr>
+      <tr><td><b>agent 的 OOM 优先级调高</b></td><td>bridge 与 agent 共用容器的内存上限。内存不足时应当让内核先杀 agent —— bridge 还能把它恢复回来；先杀 bridge 则整个会话的协调状态都丢了</td></tr>
+      <tr><td>会话目录放在持久存储上</td><td>否则 Pod 回收后无法恢复上下文（5.2、5.6）。具体路径取决于 CLI，需要按 CLI 确认（9.4）</td></tr>
+      <tr><td>内存预算</td><td>bridge 自身：发送缓冲 64 MiB + 单条消息 32 MiB + 运行开销，约 256 MiB；其余留给 agent</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ─────────── 8.7 ─── -->
+  <h3 id="o-term">8.7 Pod 的终止与回收（T10）</h3>
+  <h4>收到 SIGTERM</h4>
+  <div class="flow">① 进入排空：新的 turn.start 一律拒绝（SESSION_NOT_OPEN，cause: <b>draining</b>）
+② 有一轮在进行 → 取消（cause: <b>pod_terminating</b>，6.4），等它结束
+③ 对 agent 发 session/close（如果支持），让它把会话文件写完整
+④ 发 session.ended（cause: pod_terminating），以 1001 关闭上游连接
+⑤ 终止 agent，bridge 退出</div>
+  <p><code>terminationGracePeriodSeconds</code> 设为 <b>60 s</b>：取消宽限 15 s + 终止宽限 5 s + 关闭会话与收尾，留有余量。超时后 Kubernetes 会强制终止，此时会话文件可能不完整 —— 这正是要给足时间的原因。</p>
+  <p>收到 1001 的 server 知道这是一次有序退出：这一轮已经以 <code>pod_terminating</code> 结束，下次使用时在新 Pod 上恢复。</p>
+
+  <h4>空闲回收</h4>
+  <p><b>由平台决定，不由 bridge 决定</b>（B5）：平台发现会话闲置超过阈值（例如 30 分钟没有新的一轮），先发 <code>session.close</code>，再删除 Pod。bridge 不自行退出，因为它不知道用户是不是马上就会回来，也不知道平台的资源状况。</p>
+
+  <!-- ─────────── 8.8 ─── -->
+  <h3 id="o-decisions">8.8 本章决定</h3>
+  <table>
+    <thead><tr><th style="width:50px">#</th><th>决定</th><th style="width:110px">回答了</th></tr></thead>
+    <tbody>
+      <tr><td>O1</td><td>每 Pod 一个随机 token，以只读文件交给 bridge；会话绑定；常数时间比较；握手阶段拒绝</td><td>T6</td></tr>
+      <tr><td>O2</td><td>NetworkPolicy 必须配置；加密交给服务网格</td><td>T6</td></tr>
+      <tr><td>O3</td><td><b>agent 以另一个系统用户运行</b>、环境变量清理、拒绝本 Pod 地址的连接 —— 防 agent 自我批准</td><td>—</td></tr>
+      <tr><td>O4</td><td>同一轮最多 8 个挂起询问；日志默认不记内容</td><td>—</td></tr>
+      <tr><td>O5</td><td>指标覆盖第 6 章全部待校准数值；trace context 经 <code>_meta.traceparent</code> 传给 agent</td><td>—</td></tr>
+      <tr><td>O6</td><td>健康检查与 WebSocket 同端口、握手前回 HTTP；liveness 不检查 agent</td><td>T10</td></tr>
+      <tr><td>O7</td><td>bridge、适配器、CLI 同镜像；agent 的 OOM 优先级调高；会话目录在持久存储上</td><td>—</td></tr>
+      <tr><td>O8</td><td>SIGTERM 时排空、取消、关闭会话、以 1001 退出；宽限 60 s；空闲回收由平台决定</td><td>T10</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ══════════════ 9 ══ -->
+<section id="s9">
+  <h2><span class="num">09</span>收尾：索引与待验证</h2>
+
+  <!-- ─────────── 9.1 ─── -->
+  <h3 id="z-inv">9.1 不变式</h3>
+  <table>
+    <thead><tr><th style="width:50px">#</th><th>不变式</th><th style="width:80px">出处</th></tr></thead>
+    <tbody>
+      <tr><td>B1</td><td>每一轮的开始与结束都由 bridge 宣告，且各只宣告一次</td><td>3.8</td></tr>
+      <tr><td>B2</td><td>bridge 转交的 update 与 agent 发出的内容相同、顺序一致（唯一例外：超过 32 MiB 时显式替换）</td><td>3.8 · 4.10</td></tr>
+      <tr><td>B3</td><td>永远不会因为没人应答而批准；超过重连窗口仍不可达则拒绝</td><td>3.8 · 7.2</td></tr>
+      <tr><td>B4</td><td>bridge 不持久化业务数据</td><td>3.8 · 5.7</td></tr>
+      <tr><td>B5</td><td>策略数值来自 server，bridge 只保留安全兜底默认值</td><td>3.8</td></tr>
+      <tr><td>B6</td><td>agent 的反向请求永远有回应</td><td>3.8</td></tr>
+      <tr><td>—</td><td>server 发出的请求都是短请求；bridge 发出的每条消息都带 <code>seq</code>，跨连接连续</td><td>4.1</td></tr>
+      <tr><td>—</td><td>控制消息永不因缓冲溢出而丢失</td><td>7.4</td></tr>
+      <tr><td>—</td><td>任何 ACP 请求超时都视为 agent 状态未知，唯一收场是重启</td><td>6.5</td></tr>
+      <tr><td>—</td><td>agent 在操作系统层面拿不到 bridge 的凭据</td><td>8.3</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ─────────── 9.2 ─── -->
+  <h3 id="z-dec">9.2 决定索引</h3>
+  <table>
+    <thead><tr><th style="width:130px">编号</th><th style="width:170px">章</th><th>内容摘要</th></tr></thead>
+    <tbody>
+      <tr><td>D1 · D2</td><td>3 职责边界</td><td>bridge 是 ACP client；内容翻译在 server</td></tr>
+      <tr><td>H1 – H7</td><td>4 上游协议</td><td>JSON-RPC 12 个方法、子协议版本、提交即返回、权限往返、数据面信封、单连接、错误码与关闭码</td></tr>
+      <tr><td>M1 – M7</td><td>5 会话与轮次</td><td>一会话一 Pod 一进程、一轮一次 prompt、预热、按能力恢复、<code>session.state</code>、结果记忆、会话目录持久化</td></tr>
+      <tr><td>C1 – C7</td><td>6 超时取消背压</td><td>截止与静默分开、静默两档、统一取消流程、超时即重启、有界缓冲、三路互不阻塞、只传时长</td></tr>
+      <tr><td>R1 – R7</td><td>7 故障与恢复</td><td>重连窗口、询问暂存、attach 与 ack、控制消息不淘汰、实例 id、单一连接者、server 持久字段</td></tr>
+      <tr><td>O1 – O8</td><td>8 安全观测部署</td><td>Pod token、网络策略、agent 隔离、询问上限、指标与追踪、健康检查、镜像与 OOM、终止与回收</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ─────────── 9.3 ─── -->
+  <h3 id="z-api">9.3 上游协议速查</h3>
+  <table>
+    <thead><tr><th style="width:170px">方法</th><th style="width:70px">方向</th><th style="width:70px">类型</th><th>要点</th></tr></thead>
+    <tbody>
+      <tr><td><code>session.open</code></td><td>S → B</td><td>请求</td><td>新建或恢复；返回 ACP 协商结果、<code>resumed</code>、<code>replayed</code>、bridge 实例 id</td></tr>
+      <tr><td><code>session.attach</code></td><td>S → B</td><td>请求</td><td>重连；带 <code>lastSeq</code>，返回当前状态与 <code>gaps</code>，随后补发</td></tr>
+      <tr><td><code>session.ack</code></td><td>S → B</td><td>通知</td><td>已处理完成的最后序号</td></tr>
+      <tr><td><code>session.close</code></td><td>S → B</td><td>请求</td><td>结束会话；之后以 4410 关闭</td></tr>
+      <tr><td><code>session.state</code></td><td>B → S</td><td>通知</td><td>recovering / ready</td></tr>
+      <tr><td><code>session.ended</code></td><td>B → S</td><td>通知</td><td>会话非主动结束；之后以 4410 关闭</td></tr>
+      <tr><td><code>turn.start</code></td><td>S → B</td><td>请求</td><td>接纳即返回；同一 <code>turnId</code> 可安全重试</td></tr>
+      <tr><td><code>turn.cancel</code></td><td>S → B</td><td>请求</td><td>收到即返回；完成以 <code>turn.state</code> 为准</td></tr>
+      <tr><td><code>turn.state</code></td><td>B → S</td><td>通知</td><td>running / awaiting_permission / cancelling / ended（completed · cancelled · failed）</td></tr>
+      <tr><td><code>permission.ask</code></td><td>B → S</td><td>请求</td><td>原样带 ACP 请求；server 选 <code>optionId</code> 或拒绝</td></tr>
+      <tr><td><code>permission.withdraw</code></td><td>B → S</td><td>通知</td><td>轮次结束或过期时撤回</td></tr>
+      <tr><td><code>agent.update</code></td><td>B → S</td><td>通知</td><td>ACP update 原样 + <code>seq</code> · <code>origin</code> · <code>turnId</code></td></tr>
+    </tbody>
+  </table>
+
+  <!-- ─────────── 9.4 ─── -->
+  <h3 id="z-verify">9.4 待验证</h3>
+  <p>设计中依赖、但尚未在真实的适配器与 CLI 上确认的事实。落地前逐项验证，结论可能反过来修改设计：</p>
+  <table>
+    <thead><tr><th style="width:40px">#</th><th>验证项</th><th style="width:230px">影响</th></tr></thead>
+    <tbody>
+      <tr><td>V1</td><td>目标适配器（如 <code>claude-agent-acp</code>、<code>codex-acp</code>）实际声明哪些能力：<code>loadSession</code>、<code>sessionCapabilities.resume / close</code>、HTTP MCP、是否支持 ACP v2</td><td>5.6 的恢复路径能走哪几条</td></tr>
+      <tr><td>V2</td><td>收到 <code>session/cancel</code> 后多久回出 <code>cancelled</code>；工具执行中途能否及时中止</td><td>6.4 的取消宽限（15 s）</td></tr>
+      <tr><td>V3</td><td>stdout 被阻塞时适配器的行为：是真的放慢，还是在自身内存里无限缓冲</td><td>6.6 背压兜底的必要程度</td></tr>
+      <tr><td>V4</td><td>CLI 的会话文件存放在哪里、能否指定到持久存储、Pod 重建后 load / resume 能否可靠恢复</td><td>M7；空闲回收是否可行</td></tr>
+      <tr><td>V5</td><td>适配器与 CLI 能否以非 root 的独立用户运行（HOME、缓存目录、登录态文件的位置）</td><td>O3 的可行性</td></tr>
+      <tr><td>V6</td><td>单条 update 的实际大小分布（写入大文件、长命令输出）</td><td>32 MiB 上限与 64 MiB 缓冲</td></tr>
+      <tr><td>V7</td><td>工具执行期间最长的无输出间隔；模型首个输出的延迟</td><td>6.2 的两档静默阈值</td></tr>
+      <tr><td>V8</td><td>适配器是否会读取并继续传递 <code>_meta.traceparent</code></td><td>8.4 的链路能否延伸到模型调用</td></tr>
+      <tr><td>V9</td><td>适配器在没有进行中的一轮时是否会发 update（后台活动）</td><td><code>origin: "stray"</code> 的出现频率与处理方式</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ─────────── 9.5 ─── -->
+  <h3 id="z-plan">9.5 建议的落地顺序</h3>
+  <table>
+    <thead><tr><th style="width:60px">阶段</th><th>内容</th><th style="width:260px">完成标志</th></tr></thead>
+    <tbody>
+      <tr><td>0</td><td>完成 V1 – V5 的验证，按结论修订本文</td><td>每一项都有实测记录</td></tr>
+      <tr><td>1</td><td>bridge 的 ACP client 与状态机（第 5 章）、上游协议的会话与轮次部分（4.5 · 4.6 · 4.8）、单元测试用的假 agent</td><td>一轮完整对话在假 agent 上跑通</td></tr>
+      <tr><td>2</td><td>计时与取消（第 6 章）、权限往返（4.7）</td><td>超时、卡死、取消不响应、询问过期等故障路径全部有测试覆盖</td></tr>
+      <tr><td>3</td><td>server 侧：上游协议客户端、按 <code>seq</code> 去重与事务内记录 <code>lastSeq</code>、ACP v1 update 的翻译</td><td>真实适配器上的端到端对话</td></tr>
+      <tr><td>4</td><td>断线与恢复（第 7 章）</td><td>断网注入、server 重启、bridge 重启、Pod 删除四种场景演练通过</td></tr>
+      <tr><td>5</td><td>安全与部署（第 8 章）、指标接入</td><td>agent 无法读取 token、无法自连 bridge 的验证通过</td></tr>
+      <tr><td>6</td><td>ACP v2 的翻译与控制语义（按适配器支持情况）</td><td>—</td></tr>
+    </tbody>
+  </table>
+  <p>阶段 2 把故障路径放在接入真实适配器之前，是有意的：正常路径在真实环境里很快就能跑通，而故障路径只有在刻意制造时才会出现 —— 等到线上自然发生再补，代价要大得多。</p>
+</section>
+
+</main>
+</div>
+
+</body>
+</html>

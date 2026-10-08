@@ -54,9 +54,64 @@ AGENT_KIND = "atlas.agent.kind"  # native | acp
 #: 委派出去的子 run。父 span 上带它，好从父跳到子的 trace。
 SUBAGENT_NAME = "atlas.subagent.name"
 
-# ── 本轮不采集的内容类属性（§08，默认关）─────────────────────────────
+#: 本 run 所在的会话（子 run 是子会话）。gen_ai.conversation.id 统一用**根会话**，
+#: 这里保留真实所在，不丢失「它在子会话里」这个事实。
+THREAD_ID = "atlas.thread_id"
+#: 委派树：子 run 指回父 run（langfuse-integration-design §4 P3）
+PARENT_RUN_ID = "atlas.parent_run_id"
+#: 这一段是不是挂起后的续跑（一个 run 可以分多段执行，同属一条 trace）
+RESUMED = "atlas.resumed"
+
+# ── 整轮累计用量（只给人看，不参与计费）──────────────────────────────
 #
-# 列在这里是为了让「我们知道有这些、且刻意没用」变成可 grep 的事实，
-# 而不是一个看不见的遗漏。开启内容采集时才会用到它们。
+# ★ 根 span 上的整轮累计用量**不能**用 gen_ai.usage.*：Langfuse 可能把「带模型名与
+#   用量的 span」当成一次模型调用，Native 的费用就会被算两遍（设计 §8.2 的规则：
+#   只有 Generation 带 gen_ai.usage.*）。
+ATLAS_USAGE_INPUT = "atlas.usage.input_tokens"
+ATLAS_USAGE_OUTPUT = "atlas.usage.output_tokens"
+ATLAS_USAGE_CACHE_READ = "atlas.usage.cache_read_tokens"
+ATLAS_USAGE_CACHE_CREATION = "atlas.usage.cache_creation_tokens"
+ATLAS_USAGE_REASONING = "atlas.usage.reasoning_tokens"
+#: 合成 Generation 的用量口径：turn = 一整轮（ACP 看不到 CLI 内部的单次调用）
+USAGE_SCOPE = "atlas.usage.scope"
+
+# ── 内容类属性（§08，默认不采集，见 telemetry/content.py 的档位）──────────
 INPUT_MESSAGES = "gen_ai.input.messages"
 OUTPUT_MESSAGES = "gen_ai.output.messages"
+
+# ── 遥测后端的专有属性：Langfuse ───────────────────────────────────────
+#
+# ★ 后端专有的属性名**只在这里出现**（设计 §5.6-5）。Langfuse 升级、或换后端，
+#   只改这一段。其余模块只引用常量，不写字面量。
+# ★ 只用于 OTel 标准里没有对应写法的概念：会话、用户、trace 名称 / 标签 / 元数据 /
+#   输入输出、observation 类型。模型名、用量、工具名仍走 gen_ai.*（标准优先）。
+LF_SESSION_ID = "langfuse.session.id"
+LF_USER_ID = "langfuse.user.id"
+LF_ENVIRONMENT = "langfuse.environment"
+LF_TRACE_NAME = "langfuse.trace.name"
+LF_TRACE_TAGS = "langfuse.trace.tags"
+LF_TRACE_INPUT = "langfuse.trace.input"
+LF_TRACE_OUTPUT = "langfuse.trace.output"
+#: 前缀：langfuse.trace.metadata.<key>
+LF_TRACE_METADATA = "langfuse.trace.metadata."
+LF_OBSERVATION_TYPE = "langfuse.observation.type"
+LF_OBSERVATION_INPUT = "langfuse.observation.input"
+LF_OBSERVATION_OUTPUT = "langfuse.observation.output"
+
+#: langfuse.observation.type 的取值。★ 显式指定，不靠后端按「有没有模型名 / 用量」推断。
+OBS_AGENT = "agent"
+OBS_GENERATION = "generation"
+OBS_TOOL = "tool"
+#: 瞬时事件。★ Langfuse 不展示 OTel 的 span event（V8 实测：既不成为 observation，也不进
+#: 元数据），所以瞬时事件另发一个零时长的 event 类型 span；根 span 上的 event 照留给 Jaeger。
+OBS_EVENT = "event"
+
+#: 全部内容类属性。Collector 发往 Jaeger 的管道要删掉的就是这些（deploy/local/otel/）。
+CONTENT_ATTRIBUTES = (
+    INPUT_MESSAGES,
+    OUTPUT_MESSAGES,
+    LF_TRACE_INPUT,
+    LF_TRACE_OUTPUT,
+    LF_OBSERVATION_INPUT,
+    LF_OBSERVATION_OUTPUT,
+)

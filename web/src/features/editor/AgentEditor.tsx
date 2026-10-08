@@ -18,9 +18,18 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
-import { useAgent, useAgents, useCreateAgent, useSetAgentStatus, useUpdateAgent } from "@/api/agents";
+import {
+  useAgent,
+  useAgents,
+  useAgentVersions,
+  useCreateAgent,
+  useSetAgentStatus,
+  useUpdateAgent,
+} from "@/api/agents";
+import { useMcpServers, useSkillCatalog } from "@/api/catalog";
 import { useModels, useTools } from "@/api/meta";
-import type { AgentDetail, AgentStatus } from "@/api/types";
+import type { AgentDetail, AgentStatus, AgentVersion } from "@/api/types";
+import { relativeTime } from "@/lib/format";
 import { qk } from "@/api/keys";
 import { http } from "@/lib/http";
 import { Icon } from "@/components/Icon";
@@ -28,6 +37,7 @@ import { ApiError } from "@/lib/http";
 import { AVATAR_KEYS, avatarBackground, avatarLetter } from "@/features/agents/avatar";
 import { AGENT_STATUS_META } from "@/features/agents/status";
 import styles from "./editor.module.css";
+import { McpToolsSection, SkillsSection } from "./CatalogSections";
 import {
   defaultSpec,
   effortForbidsThinkingOff,
@@ -36,6 +46,82 @@ import {
 } from "./spec-defaults";
 
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+
+/** 左侧锚点导航（prototype/atlas-v2.html 编辑器） */
+const NAV: [string, string][] = [
+  ["e-basic", "基本信息"],
+  ["e-kind", "执行形态"],
+  ["e-prompt", "系统提示词"],
+  ["e-model", "模型"],
+  ["e-tools", "内置工具"],
+  ["e-skills", "技能"],
+  ["e-mcp", "MCP"],
+  ["e-subs", "子智能体"],
+  ["e-approval", "人工确认"],
+  ["e-limits", "限制"],
+];
+
+/** 后端存的 spec → 编辑器的 spec。旧快照没有后加的字段：补默认值，免得各处判空 */
+function normalizeSpec(raw: unknown): ResolvedSpec {
+  const spec = raw as Partial<ResolvedSpec>;
+  return {
+    ...(spec as ResolvedSpec),
+    skills: spec.skills ?? [],
+    mcp_tool_digests: spec.mcp_tool_digests ?? {},
+    mcp_drift_policy: spec.mcp_drift_policy ?? "warn",
+  };
+}
+
+/**
+ * 版本历史。★ 「载入」只把那一版的配置放进编辑区，不直接回滚 —— 保存后成为
+ *   一个**新**版本（版本只增不改，历史 run 仍指向各自当时的版本）。
+ */
+function VersionPanel({
+  agentId,
+  current,
+  onRestore,
+}: {
+  agentId: string;
+  current?: number;
+  onRestore: (v: AgentVersion) => void;
+}) {
+  const versionsQ = useAgentVersions(agentId);
+  const versions = [...(versionsQ.data?.data ?? [])].sort((a, b) => b.version - a.version);
+  return (
+    <aside className={styles.side} aria-label="版本历史">
+      <p className={styles.sideTitle}>
+        <Icon name="clock" size={13} /> 版本
+        <span className={styles.sideHint}>新会话用当前版本</span>
+      </p>
+      {versionsQ.isPending && <Skeleton active paragraph={{ rows: 4 }} />}
+      {versions.map((v) => (
+        <div key={v.id} className={styles.version} aria-current={v.version === current ? "true" : undefined}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <b>v{v.version}</b>
+            {v.version === current && (
+              <Tag color="success" style={{ marginInlineEnd: 0 }}>
+                当前
+              </Tag>
+            )}
+            <span className={styles.sideHint}>{relativeTime(v.created_at)}</span>
+          </div>
+          <div className={styles.versionMeta}>
+            {(v.spec as { model?: { model?: string } }).model?.model ?? ""}
+            {" · "}
+            {((v.spec as { tool_names?: string[] }).tool_names ?? []).length} 工具
+            {" · "}
+            {((v.spec as { skills?: unknown[] }).skills ?? []).length} 技能
+          </div>
+          {v.version !== current && (
+            <Button size="small" type="link" style={{ padding: 0 }} onClick={() => onRestore(v)}>
+              载入到编辑区
+            </Button>
+          )}
+        </div>
+      ))}
+    </aside>
+  );
+}
 
 interface Draft {
   slug: string;
@@ -46,22 +132,34 @@ interface Draft {
 }
 
 function Section({
+  id,
   title,
   desc,
   children,
 }: {
+  id?: string;
   title: string;
   desc?: string;
   children: React.ReactNode;
 }) {
   return (
-    <div className={styles.section}>
+    <div id={id} className={styles.section}>
       <h2 className={styles.sectionTitle}>{title}</h2>
       {desc && <p className={styles.sectionDesc}>{desc}</p>}
       {children}
     </div>
   );
 }
+
+type PermissionModeValue = "manual" | "accept_edits" | "auto" | "plan";
+
+/** ACP CLI 的权限模式（doc/acp-permission-mode-design.html）。不提供 bypass。 */
+const PERMISSION_MODE_OPTIONS: { value: PermissionModeValue; label: string }[] = [
+  { value: "auto", label: "Auto（默认）· CLI 自己判断，有风险的直接拒绝" },
+  { value: "accept_edits", label: "自动接受编辑 · 执行命令仍要确认" },
+  { value: "manual", label: "手动确认 · 编辑和命令都要确认" },
+  { value: "plan", label: "仅规划 · 不执行任何操作" },
+];
 
 export function AgentEditor({ agentId }: { agentId?: string }) {
   const router = useRouter();
@@ -71,6 +169,8 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
   const detailQ = useAgent(agentId);
   const modelsQ = useModels();
   const toolsQ = useTools();
+  const skillCatalogQ = useSkillCatalog();
+  const mcpServersQ = useMcpServers();
 
   const createAgent = useCreateAgent();
   const updateAgent = useUpdateAgent(agentId ?? "");
@@ -99,7 +199,7 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
       name: d.name,
       description: d.description,
       avatar_key: d.avatar_key,
-      spec: d.spec as unknown as ResolvedSpec,
+      spec: normalizeSpec(d.spec),
     });
   }, [detailQ.data]);
 
@@ -123,7 +223,7 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
 
   /**
    * 审批候选项：只列**已勾选**工具的模型侧名字 —— 没勾的工具列出来也拦不到。
-   * tags 模式允许自由输入，MCP 工具（mcp:server:tool）走那条路。
+   * MCP 工具的模型侧名是 server__tool，同样由 model_tool_names 给出。
    */
   const approvalOptions = useMemo(() => {
     const picked = new Set(draft.spec.tool_names);
@@ -191,6 +291,10 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
               //   都是平台自己的 agent；acp 子智能体目前只能经 API 配置。
               kind: "native",
               source_agent_id: src.id,
+              // 技能随配置一起拷贝（版本已钉死）；MCP 指纹由服务端保存时重新记录
+              skills: spec.skills ?? [],
+              mcp_tool_digests: {},
+              mcp_drift_policy: spec.mcp_drift_policy ?? "warn",
             },
           ],
         },
@@ -310,6 +414,14 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
         </div>
       </header>
 
+      <div className={styles.layout}>
+        <nav className={styles.nav} aria-label="配置分节">
+          {NAV.map(([id, label]) => (
+            <a key={id} href={`#${id}`} className={styles.navLink}>
+              {label}
+            </a>
+          ))}
+        </nav>
       <div className={styles.body}>
         <div className={styles.form}>
           {readOnly && (
@@ -328,7 +440,13 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
               showIcon
               style={{ marginBottom: 16 }}
               message={
-                saveError.kind === "invalid_spec" ? "配置不合法，已被拒绝" : "保存失败"
+                saveError.kind === "invalid_spec"
+                  ? "配置不合法，已被拒绝"
+                  : saveError.kind === "invalid_reference"
+                    ? "引用的技能或 MCP 工具有问题"
+                    : saveError.kind === "dependency_unavailable"
+                      ? "配置服务暂时不可用，无法确认引用 —— 稍后再保存"
+                      : "保存失败"
               }
               // engine 的 spec.validate() 会明确指出哪个参数不被该模型接受
               // （§3 D3：不静默降级），message 已经是可读的中文
@@ -336,7 +454,7 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
             />
           )}
 
-          <Section title="基本信息">
+          <Section id="e-basic" title="基本信息">
             <div className={styles.grid2}>
               <div>
                 <label style={{ fontSize: 12, color: "var(--fg-2)" }}>名称</label>
@@ -400,7 +518,39 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
             </div>
           </Section>
 
-          <Section title="系统提示词" desc="决定这个智能体的角色与行为准则。">
+          <Section
+            id="e-kind"
+            title="执行形态"
+            desc="type 是机制不是角色：Native 在平台内运行、可以委派子智能体；ACP 在会话 Pod 里驱动 CLI，工具由 CLI 自带。"
+          >
+            <Segmented
+              disabled
+              value={draft.spec.kind ?? "native"}
+              options={[
+                { value: "native", label: "Native · 平台内运行" },
+                { value: "acp", label: "ACP · CLI" },
+              ]}
+            />
+            {draft.spec.kind === "acp" && draft.spec.cli ? (
+              <div style={{ marginTop: 12, fontSize: 12.5, color: "var(--fg-2)" }}>
+                CLI <code>{draft.spec.cli.cli_type}</code> · 权限模式{" "}
+                <Select
+                  size="small"
+                  style={{ width: 300 }}
+                  disabled={readOnly}
+                  value={draft.spec.cli.permission_mode ?? "auto"}
+                  options={PERMISSION_MODE_OPTIONS}
+                  onChange={(mode: PermissionModeValue) =>
+                    draft.spec.cli && patchSpec({ cli: { ...draft.spec.cli, permission_mode: mode } })
+                  }
+                />
+              </div>
+            ) : (
+              <p className={styles.capNote}>执行形态在创建时确定；ACP 智能体目前经 API 创建。</p>
+            )}
+          </Section>
+
+          <Section id="e-prompt" title="系统提示词" desc="决定这个智能体的角色与行为准则。">
             <Input.TextArea
               value={draft.spec.system_prompt}
               disabled={readOnly}
@@ -411,6 +561,7 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
           </Section>
 
           <Section
+            id="e-model"
             title="模型"
             desc="下方控件按所选模型的实测能力渲染 —— 不支持的参数不会出现，避免配出会被网关拒绝的组合。"
           >
@@ -531,41 +682,68 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
             </div>
           </Section>
 
-          <Section title="工具">
-            {toolsQ.data?.data.map((t) => {
-              const checked = draft.spec.tool_names.includes(t.name);
-              return (
-                <div
-                  key={t.name}
-                  className={`${styles.toolRow} ${t.available ? "" : styles.toolRowDisabled}`}
-                >
-                  <Checkbox
-                    checked={checked}
-                    disabled={readOnly || !t.available}
-                    onChange={(e) =>
-                      patchSpec({
-                        tool_names: e.target.checked
-                          ? [...draft.spec.tool_names, t.name]
-                          : draft.spec.tool_names.filter((n) => n !== t.name),
-                      })
-                    }
-                  />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <span className={styles.toolName}>{t.name}</span>{" "}
-                    <span style={{ fontSize: 12.5 }}>{t.display_name}</span>
-                    {!t.available && (
-                      <Tag color="default" style={{ marginLeft: 6 }}>
-                        本期未接入
-                      </Tag>
-                    )}
-                    <p className={styles.toolDesc}>{t.note || t.description}</p>
+          <Section id="e-tools" title="内置工具" desc="平台自己实现的工具。勾选后才可在「人工确认」里选择。">
+            {toolsQ.data?.data
+              .filter((t) => t.kind !== "mcp")
+              .map((t) => {
+                const checked = draft.spec.tool_names.includes(t.name);
+                return (
+                  <div
+                    key={t.name}
+                    className={`${styles.toolRow} ${t.available ? "" : styles.toolRowDisabled}`}
+                  >
+                    <Checkbox
+                      checked={checked}
+                      disabled={readOnly || !t.available}
+                      onChange={(e) =>
+                        patchSpec({
+                          tool_names: e.target.checked
+                            ? [...draft.spec.tool_names, t.name]
+                            : draft.spec.tool_names.filter((n) => n !== t.name),
+                        })
+                      }
+                    />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <span className={styles.toolName}>{t.name}</span>{" "}
+                      <span style={{ fontSize: 12.5 }}>{t.display_name}</span>
+                      {!t.available && (
+                        <Tag color="default" style={{ marginLeft: 6 }}>
+                          本期未接入
+                        </Tag>
+                      )}
+                      <p className={styles.toolDesc}>{t.note || t.description}</p>
+                    </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })}
           </Section>
 
+          <SkillsSection
+            skills={draft.spec.skills}
+            catalog={skillCatalogQ.data}
+            readOnly={readOnly}
+            onChange={(skills) => patchSpec({ skills })}
+          />
+
+          <McpToolsSection
+            tools={(toolsQ.data?.data ?? []).filter((t) => t.kind === "mcp")}
+            servers={mcpServersQ.data?.data ?? []}
+            picked={draft.spec.tool_names}
+            digests={draft.spec.mcp_tool_digests ?? {}}
+            policy={draft.spec.mcp_drift_policy ?? "warn"}
+            readOnly={readOnly}
+            onToggle={(name, on) =>
+              patchSpec({
+                tool_names: on
+                  ? [...draft.spec.tool_names, name]
+                  : draft.spec.tool_names.filter((n) => n !== name),
+              })
+            }
+            onPolicy={(mcp_drift_policy) => patchSpec({ mcp_drift_policy })}
+          />
+
           <Section
+            id="e-subs"
             title="子智能体"
             desc="主智能体通过 task 工具把子任务整体委派出去，在独立上下文里执行，只拿回结论。"
           >
@@ -632,6 +810,26 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
                           来自智能体
                         </Tag>
                       )}
+                      {/* ACP 子智能体（CLI 跑在会话 Pod 里）：权限模式由作者定，不让模型自己选 */}
+                      {sub.kind === "acp" && sub.cli && (
+                        <div style={{ margin: "6px 0 2px", fontSize: 12, color: "var(--fg-2)" }}>
+                          CLI 权限模式{" "}
+                          <Select
+                            size="small"
+                            style={{ width: 300 }}
+                            disabled={readOnly}
+                            value={sub.cli.permission_mode ?? "auto"}
+                            options={PERMISSION_MODE_OPTIONS}
+                            onChange={(mode: PermissionModeValue) =>
+                              patchSpec({
+                                subagents: draft.spec.subagents.map((s, j) =>
+                                  j === i && s.cli ? { ...s, cli: { ...s.cli, permission_mode: mode } } : s,
+                                ),
+                              })
+                            }
+                          />
+                        </div>
+                      )}
                       {!readOnly && (
                         <Button
                           size="small"
@@ -655,6 +853,12 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
                       {(sub.tool_names ?? []).length === 0 && (
                         <span style={{ fontSize: 12, color: "var(--fg-3)" }}>无工具</span>
                       )}
+                      {(sub.skills ?? []).map((k) => (
+                        <Tag key={k.slug} color="purple" style={{ marginInlineEnd: 4 }}>
+                          技能 {k.slug}
+                          {k.version != null ? ` v${k.version}` : ""}
+                        </Tag>
+                      ))}
                       {/* description 是主智能体判断「何时委派」的唯一依据，
                           所以它比 system_prompt 更该被看见。 */}
                       <p className={styles.toolDesc}>
@@ -696,6 +900,7 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
           </Section>
 
           <Section
+            id="e-approval"
             title="人工确认"
             desc="列出的工具在执行前会挂起，等用户点头。拒绝不终止本轮 —— 作为工具结果回给智能体，它可以换个方案继续。"
           >
@@ -703,7 +908,7 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
               mode="tags"
               style={{ width: "100%" }}
               disabled={readOnly}
-              placeholder="选择需要人工确认的工具（可直接输入 MCP 工具名，如 mcp:server:tool）"
+              placeholder="选择需要人工确认的工具（先在上方勾选工具）"
               value={draft.spec.limits.require_approval_for}
               onChange={(v: string[]) =>
                 // 强制项去不掉：后端 schema 校验会再加回来，UI 上先兜住，
@@ -730,7 +935,11 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
             </p>
           </Section>
 
-          <Section title="限制" desc="超出即中断本轮运行（§13）。">
+          <Section
+            id="e-limits"
+            title="限制"
+            desc="只限制「做多少」，不限制「做多久」：一轮运行和审批等待都没有时长上限。"
+          >
             <div className={styles.grid2}>
               <div>
                 <label style={{ fontSize: 12, color: "var(--fg-2)" }}>最大步数</label>
@@ -740,16 +949,6 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
                   disabled={readOnly}
                   value={draft.spec.limits.max_steps}
                   onChange={(v) => v && patchLimits({ max_steps: v })}
-                />
-              </div>
-              <div>
-                <label style={{ fontSize: 12, color: "var(--fg-2)" }}>超时（秒）</label>
-                <InputNumber
-                  style={{ width: "100%" }}
-                  min={10}
-                  disabled={readOnly}
-                  value={draft.spec.limits.timeout_s}
-                  onChange={(v) => v && patchLimits({ timeout_s: v })}
                 />
               </div>
               <div>
@@ -784,6 +983,17 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
             </p>
           )}
         </div>
+      </div>
+        {agentId && (
+          <VersionPanel
+            agentId={agentId}
+            current={detail?.version}
+            onRestore={(v) => {
+              setDraft((d) => ({ ...d, spec: normalizeSpec(v.spec) }));
+              message.info(`已载入 v${v.version} 的配置到编辑区 —— 保存后成为新版本`);
+            }}
+          />
+        )}
       </div>
     </div>
   );

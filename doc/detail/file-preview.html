@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>会话文件预览 · AI Platform</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  .tag{font-family:var(--mono);font-size:10.5px;padding:1px 7px;border-radius:99px;border:1px solid;white-space:nowrap}
+  .tag.new{color:var(--warn);border-color:rgba(245,158,11,.45)}
+  .tag.keep{color:var(--accent);border-color:rgba(34,197,94,.45)}
+  .tag.mod{color:var(--native);border-color:rgba(56,189,248,.45)}
+  .tag.p2{color:#A78BFA;border-color:rgba(167,139,250,.45)}
+  .step{border-left:2px solid var(--border);padding-left:var(--s3);margin:var(--s4) 0}
+  .step h4{margin-top:0;color:var(--accent);font-family:var(--mono);font-size:12px;letter-spacing:.1em}
+  .flow{background:var(--card);border:1px solid var(--border-soft);border-radius:var(--radius);
+        padding:var(--s3);overflow-x:auto;margin:0 0 var(--s3);font-family:var(--mono);
+        font-size:12.5px;line-height:1.7;white-space:pre;color:#CBD5E1}
+  .flow b{color:#F8FAFC;font-weight:600}
+  .flow i{color:#7A88A0;font-style:normal}
+  .flow s{color:#7DD3FC;text-decoration:none}
+  .flow u{color:#FDE68A;text-decoration:none}
+  .flow em{color:#F87171;font-style:normal}
+</style>
+</head>
+<body>
+
+<nav class="sitenav">
+  <a class="brand" href="../">AI&nbsp;<b>Platform</b>&nbsp;/ 详细设计</a>
+  <div class="links">
+    <a href="../">概要设计</a>
+    <a href="./">详设目录</a>
+    <a href="filesystem.html">文件系统改造</a>
+    <a href="suspension.html">挂起与恢复</a>
+    <a class="on" href="file-preview.html">会话文件预览</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+<nav class="toc" aria-label="目录">
+  <div class="eyebrow">本页</div>
+  <ol>
+    <li><a href="#s1">目标与范围</a></li>
+    <li><a href="#s2">现状</a></li>
+    <li><a href="#s3">核心判断：预览 = 只读站点</a></li>
+    <li><a href="#s4">文件类型与渲染器</a></li>
+    <li><a href="#s5">交互设计</a></li>
+    <li><a href="#s6">后端接口</a></li>
+    <li><a href="#s7">安全模型</a></li>
+    <li><a href="#s8">读取上限、编码与二进制判定</a></li>
+    <li><a href="#s9">运行中文件在变</a></li>
+    <li><a href="#s10">前端结构</a></li>
+    <li><a href="#s11">失败与边界情况</a></li>
+    <li><a href="#s12">落地顺序与测试</a></li>
+    <li><a href="#s13">风险与未决</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<header class="hero">
+  <p class="kicker">Detailed Design · Workspace File Preview</p>
+  <h1>会话文件预览</h1>
+  <p class="lede">会话右侧现在只能<b>列出文件、下载文件</b>。智能体产出的东西（一份报告、一段代码、一个能点的 Web 原型）用户必须先下载、再用本地工具打开，才知道它做得对不对。这份设计让文件在平台里直接看。其中最难的一种是 HTML 原型：它是<b>多个文件组成的站点</b>，会执行脚本。所以设计的重心是<b>把工作区当成一个隔离的只读站点</b>来提供。</p>
+  <div class="meta">
+    <span>只读</span><span>工作区 = 站点</span><span>令牌放在 URL 路径里</span><span>sandbox 不透明 origin</span><span>按 ETag 刷新</span><span>新标签页</span>
+  </div>
+</header>
+
+<!-- ══════════════ 1 ══ -->
+<section id="s1">
+  <h2><span class="num">01</span>目标与范围</h2>
+
+  <table>
+    <thead><tr><th>目标</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td>点开即看</td><td>在文件面板里点一个文件，不下载就能看到内容。</td></tr>
+      <tr><td>HTML 能跑</td><td><code>index.html</code> 引用的 <code>assets/app.js</code>、<code>assets/styles.css</code> 都能正确加载，页面能点、能交互。这正是当前会话 <code>065c767d…</code> 的真实产物形态。</td></tr>
+      <tr><td>不伤平台</td><td>预览的内容是模型生成的，一律视为<b>不可信</b>。它的脚本不能读写平台页面、不能借用户身份调用 API。</td></tr>
+      <tr><td>跟得上运行</td><td>run 进行中文件在变，预览要能看到新内容，但不能把用户正在操作的页面突然刷掉。</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout warn">
+    <span class="label">不在本文范围</span>
+    <p>编辑文件；预览技能区（<code>.skills/</code>）和隐藏文件；Office 文档、音视频、压缩包浏览；对外分享链接（预览令牌是短期的个人凭据，不是分享机制）；窄屏（&lt;1280px）下文件面板被隐藏、没有预览入口的问题（现状如此，放到 P2）。</p>
+  </div>
+</section>
+
+<!-- ══════════════ 2 ══ -->
+<section id="s2">
+  <h2><span class="num">02</span>现状</h2>
+
+  <table>
+    <thead><tr><th>位置</th><th>现在做什么</th><th>与预览相关的约束</th></tr></thead>
+    <tbody>
+      <tr><td><code>GET /v1/threads/{id}/files</code></td><td>递归列出工作区对象（<code>WorkspaceListing.list</code>），跳过以点开头的路径段，最多 2000 条</td><td>只返回 <code>path / size / modified_at</code>，<b>没有 ETag</b>，前端无法判断"内容变了没有"</td></tr>
+      <tr><td><code>GET /v1/threads/{id}/files/download?path=</code></td><td>流式返回整个文件，<code>Content-Disposition: attachment</code></td><td>要带 <code>X-User-Id</code> 请求头，所以前端只能用 <code>fetch</code> 下载，<b>iframe / img 用不了</b></td></tr>
+      <tr><td><code>WorkspaceListing.open</code></td><td>用 <code>_to_key</code> 把路径限制在本会话的 workspace 前缀内</td><td>会话隔离的唯一安全关键点，预览<b>必须</b>复用它，不能另写一套路径解析</td></tr>
+      <tr><td><code>FilesPanel.tsx</code></td><td>右侧 340px 列表 + 下载按钮；运行中每 10s 刷新一次</td><td>340px 放不下 HTML 预览；屏幕窄于 1280px 时整块隐藏</td></tr>
+      <tr><td><code>components/Markdown.tsx</code></td><td>react-markdown + rehype-sanitize，禁 <code>img</code>，链接强制 <code>noopener</code></td><td>可以直接用来渲染 <code>.md</code></td></tr>
+      <tr><td>身份</td><td><code>identity.current_user</code> 从 <code>X-User-Id</code> 取，缺失时回落默认用户（决策 1：不做鉴权）</td><td>现在 iframe 不带请求头也能访问，<b>但以后换 JWT 就会失效</b>。设计不能依赖"不鉴权"这个现状</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ══════════════ 3 ══ -->
+<section id="s3">
+  <h2><span class="num">03</span>核心判断：预览 = 只读站点</h2>
+
+  <p>最直观的做法是"新增一个返回文件内容的接口，前端按类型渲染"。对文本、图片够用，<b>对 HTML 不行</b>：</p>
+  <ul>
+    <li>把 <code>index.html</code> 的内容塞进 <code>iframe srcdoc</code>，里面的 <code>&lt;script src="assets/app.js"&gt;</code> 会相对于平台页面解析，全部 404。</li>
+    <li>前端自己改写所有相对路径、内联资源？要解析 HTML、CSS 里的 <code>url()</code>、JS 里的动态 <code>import()</code> 和 <code>fetch()</code>，写不完，也写不对。</li>
+  </ul>
+
+  <div class="callout rule">
+    <span class="label">决定</span>
+    <p>把一个会话的工作区当成一个<b>只读静态站点</b>，挂在 <code>/v1/previews/{token}/</code> 下。浏览器按正常的相对路径规则解析子资源，服务端按路径从对象存储里取文件。<b>所有预览读取（HTML、图片、文本）都走这条路</b>，下载仍走原来的 <code>download</code> 接口。</p>
+  </div>
+
+  <p>这样就有了三个连锁的设计点，后面逐个展开：</p>
+  <table>
+    <thead><tr><th>问题</th><th>答案</th><th>章节</th></tr></thead>
+    <tbody>
+      <tr><td>iframe / img 不能带请求头，身份怎么传？</td><td>短期<b>预览令牌</b>，放在 URL <b>路径</b>里（不放 query，否则相对路径解析时会丢掉）</td><td><a href="#s6">06</a></td></tr>
+      <tr><td>站点里的脚本是不可信的，怎么隔离？</td><td>iframe <code>sandbox</code> + 响应头 <code>CSP: sandbox</code>，两层都让文档运行在不透明 origin</td><td><a href="#s7">07</a></td></tr>
+      <tr><td>文件在变，怎么知道该刷新？</td><td>文件列表补上 <code>etag</code>，预览接口支持 <code>If-None-Match</code></td><td><a href="#s9">09</a></td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ══════════════ 4 ══ -->
+<section id="s4">
+  <h2><span class="num">04</span>文件类型与渲染器</h2>
+
+  <p>渲染器按<b>扩展名</b>选，扩展名不认识时再看内容（<a href="#s8">08</a>）。不按服务端返回的 <code>Content-Type</code> 选：同一个文件的类型判断只在一处做，前后端就不会出现两种答案。</p>
+
+  <table>
+    <thead><tr><th>kind</th><th>扩展名</th><th>渲染</th><th>上限</th><th>阶段</th></tr></thead>
+    <tbody>
+      <tr><td><code>html</code></td><td>.html .htm</td><td><b>预览</b>：sandbox iframe 指向站点 URL；<b>源码</b>：同 text。默认显示预览</td><td>不限（按需加载子资源）</td><td><span class="tag new">P1</span></td></tr>
+      <tr><td><code>markdown</code></td><td>.md .markdown</td><td><code>Markdown</code> 组件（已 sanitize）+ 源码切换</td><td>1 MiB</td><td><span class="tag new">P1</span></td></tr>
+      <tr><td><code>text</code></td><td>.txt .log .json .yaml .yml .toml .ini .csv .xml .css .js .mjs .ts .tsx .jsx .py .go .java .rs .sh .sql …</td><td>等宽 <code>&lt;pre&gt;</code> + 行号；.json 提供"格式化"开关</td><td>1 MiB</td><td><span class="tag new">P1</span></td></tr>
+      <tr><td><code>image</code></td><td>.png .jpg .jpeg .gif .webp .svg .ico</td><td><code>&lt;img&gt;</code> 指向站点 URL，默认适应宽度，点击切换原尺寸，棋盘格背景（看得出透明区域）</td><td>20 MiB</td><td><span class="tag new">P1</span></td></tr>
+      <tr><td><code>pdf</code></td><td>.pdf</td><td>见 <a href="#s13">13</a>：Chrome 的 PDF 查看器在 sandbox iframe 里不工作。P1 先提供"新标签打开"</td><td>—</td><td><span class="tag p2">P2</span></td></tr>
+      <tr><td><code>table</code></td><td>.csv .tsv</td><td>P1 按 text 显示；P2 解析成表格（前 1000 行）</td><td>1 MiB</td><td><span class="tag p2">P2</span></td></tr>
+      <tr><td><code>empty</code></td><td>size = 0</td><td>"空文件"占位，不发请求</td><td>—</td><td><span class="tag new">P1</span></td></tr>
+      <tr><td><code>binary</code></td><td>其它，且内容判定为二进制</td><td>"不支持预览" + 下载按钮 + 大小、修改时间</td><td>—</td><td><span class="tag new">P1</span></td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout warn">
+    <span class="label">刻意不做</span>
+    <p><b>语法高亮放到 P2</b>：当前前端没有高亮依赖，引入 shiki 一类的库（几百 KB，要按需懒加载）不该和 P1 的安全改动混在一个变更里。<b>SVG 只用 <code>&lt;img&gt;</code> 显示</b>：<code>&lt;img&gt;</code> 里的 SVG 不执行脚本；直接在新标签打开时由 CSP sandbox 兜底。</p>
+  </div>
+</section>
+
+<!-- ══════════════ 5 ══ -->
+<section id="s5">
+  <h2><span class="num">05</span>交互设计</h2>
+
+  <h3>布局：新标签页</h3>
+  <p>比较过三种放法，<b>采用新标签页</b>：</p>
+  <table>
+    <thead><tr><th>方案</th><th>优点</th><th>问题</th><th>结论</th></tr></thead>
+    <tbody>
+      <tr><td>A. 新标签页 <code>/files/{threadId}?path=…</code></td><td>预览占满整个窗口；对话留在原标签不受打扰，会话流订阅不断；浏览器原生的标签切换、并排、关闭都能用</td><td>来回要切标签</td><td><b>采用</b></td></tr>
+      <tr><td>B. 右侧面板就地展开</td><td>和对话并排</td><td>面板最宽也只有半屏，原型看不全；屏幕窄于 1280px 时面板整块隐藏</td><td>不做</td></tr>
+      <tr><td>C. Modal / Drawer 覆盖</td><td>空间大</td><td>挡住对话，看和说只能二选一</td><td>不做</td></tr>
+    </tbody>
+  </table>
+
+<div class="flow"><i>原标签：对话</i>                         <i>新标签：/files/&lt;threadId&gt;?path=index.html（不显示主导航）</i>
+<i>┌ 会话 ┬── 对话 ──┬ 文件 ──────┐</i>     <i>┌──────────────────────────────────────────────────────────┐</i>
+<i>│</i>      <i>│</i>          <i>│</i> README.md  <i>│</i>     <i>│</i> ▣ <b>index.html</b>  2.7 KiB · 3 天前  <s>[预览|源码]</s> <u>↻</u> <u>🌐</u> <u>⤓ 下载</u> <i>│</i>
+<i>│</i>      <i>│</i>          <i>│</i> <b>index.html</b> ──点击──▶ <i>├──────────────────────────────────────────────────────────┤</i>
+<i>│</i>      <i>│</i>          <i>│</i> assets/…   <i>│</i>     <i>│</i> <em>⚠ 页面的文件已更新  [重新加载]</em>   <i>（站点任一文件 etag 变了才出现）</i>  <i>│</i>
+<i>│</i>      <i>│</i>          <i>│</i>            <i>│</i>     <i>│</i>        sandbox iframe（不透明 origin，占满整页）          <i>│</i>
+<i>└──────┴──────────┴────────────┘</i>     <i>└──────────────────────────────────────────────────────────┘</i>
+  <s>[预览|源码]</s> 只对 html / markdown   文本类另有「换行」，.json 另有「格式化」
+  <u>↻</u> 重新加载（会换一个令牌）   <u>🌐</u> 打开原始文件（HTML 无工具栏整页）   <u>⤓</u> 下载</div>
+
+  <h3>交互细则</h3>
+  <table>
+    <thead><tr><th>动作</th><th>行为</th></tr></thead>
+    <tbody>
+      <tr><td>点文件名</td><td>文件面板里的文件名是一个链接（<code>target="_blank" rel="noopener noreferrer"</code>），在新标签打开预览页。下载按钮保留，点它直接下载。</td></tr>
+      <tr><td>地址</td><td><code>/files/{threadId}?path=assets/app.js</code>。路径放 query：工作区路径本身含 <code>/</code>，放进路径段要整体转义，地址栏就不可读了。地址可以收藏、刷新、转发给同一部署的人。</td></tr>
+      <tr><td>页面外壳</td><td>不显示主导航（Rail 在 <code>/files/</code> 下隐藏）。顶栏：文件图标、路径（目录弱化）、大小与修改时间、视图切换、重新加载、打开原始文件、下载。标签页标题是 <code>文件名 · 文件预览</code>。</td></tr>
+      <tr><td>文件被删</td><td>文件列表是完整的却没有这个路径：显示"文件已不存在"。列表被截断时不下这个结论，直接按路径去取。</td></tr>
+      <tr><td>打开原始文件</td><td>直接打开站点 URL。那个页面里没有 iframe，隔离只靠响应头 <code>CSP: sandbox</code>（<a href="#s7">07</a>）。</td></tr>
+      <tr><td>HTML 里的链接</td><td>站内相对链接在 iframe 内跳转；<code>target=_blank</code> 的外链靠 <code>allow-popups</code> 在新标签打开。不开 <code>allow-popups-to-escape-sandbox</code>，所以弹出的页面<b>同样继承</b> sandbox 限制（见 07）。</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ══════════════ 6 ══ -->
+<section id="s6">
+  <h2><span class="num">06</span>后端接口</h2>
+
+  <table>
+    <thead><tr><th></th><th>接口</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td><span class="tag new">新</span></td><td><code>POST /v1/threads/{id}/files/preview</code></td><td>为这个会话签发预览令牌，返回 <code>{ base_url, expires_at }</code>。要求请求身份对会话有读权限（现在等价于会话存在；有鉴权后改为 <code>created_by == user</code>）。</td></tr>
+      <tr><td><span class="tag new">新</span></td><td><code>GET /v1/previews/{token}/{path:path}</code></td><td>只读站点。<b>不看 <code>X-User-Id</code></b>，令牌本身就是凭据。支持 <code>Range</code>、<code>If-None-Match</code>。</td></tr>
+      <tr><td><span class="tag mod">改</span></td><td><code>GET /v1/threads/{id}/files</code></td><td>每项加 <code>etag</code>（S3 <code>ETag</code> 去引号）。纯新增字段，旧前端不受影响。</td></tr>
+      <tr><td><span class="tag keep">不变</span></td><td><code>GET /v1/threads/{id}/files/download</code></td><td>下载语义不变。预览不复用它：它要带请求头、又强制 attachment。</td></tr>
+    </tbody>
+  </table>
+
+  <h3>预览令牌</h3>
+  <table>
+    <thead><tr><th>项</th><th>决定</th><th>理由</th></tr></thead>
+    <tbody>
+      <tr><td>形态</td><td>32 字节随机数，base64url。存 Redis：<code>atlas:preview:{token}</code> → <code>{thread_id, user_id, workspace_thread_id}</code></td><td>比 HMAC 签名令牌多一次 Redis 读，换来<b>可吊销</b>（删会话时可以连带删掉）和不用管密钥轮换。站点的每个子资源都会读一次 Redis，量级是单页几十次，可以接受。</td></tr>
+      <tr><td>位置</td><td>URL <b>路径</b>：<code>/v1/previews/{token}/index.html</code></td><td>放在 query 里的话，<code>&lt;script src="app.js"&gt;</code> 按相对路径解析时会把 query 丢掉，子资源全部 401。</td></tr>
+      <tr><td>有效期</td><td><code>preview_token_ttl_s = 3600</code>，<b>每次命中续期</b>（<code>EXPIRE</code>）</td><td>正在看的页面一直有效；放着超过一小时没有任何请求才失效。前端在 50 分钟内复用同一个；遇到 410 自动换一个重试一次，「重新加载」也会换新令牌。</td></tr>
+      <tr><td>范围</td><td>一个会话工作区、只读</td><td>子会话的令牌按 <code>workspace_thread_id</code> 解析到父会话的工作区，与 <code>list_files</code> 的口径一致。</td></tr>
+      <tr><td>失效时</td><td>返回 <code>410</code> + 一个极简 HTML 页"预览已过期，请回到平台重新打开"</td><td>iframe 里拿不到状态码，至少要让人看得懂。</td></tr>
+    </tbody>
+  </table>
+
+  <h3>站点路由的行为</h3>
+<div class="flow"><b>GET /v1/previews/{token}/{path}</b>
+  1. token → Redis 取会话；不存在 → <em>410</em>；存在 → EXPIRE 续期
+  2. path 规范化：空 或 以 / 结尾 → 追加 <s>index.html</s>
+  3. 任一路径段以 . 开头 → <em>404</em>              <i># 与列表的 _is_hidden 一致，.skills/ 不可经此读取</i>
+  4. <s>WorkspaceListing.open(path, range=, if_none_match=)</s>
+       └─ 复用 <s>_to_key</s> + workspace 前缀检查        <i># 会话隔离只有这一个关卡</i>
+       └─ PathEscape → <em>400</em>   NoSuchKey → <em>404</em>   S3 304 → <u>304</u>
+  5. 响应：StreamingResponse(body)，状态 200 / 206
+       Content-Type          <i>按扩展名，文本类加 ; charset=utf-8，未知 → application/octet-stream</i>
+       Content-Length / Content-Range / ETag / Accept-Ranges: bytes
+       <b>安全头见 07</b></div>
+
+  <p>需要扩展 <code>WorkspaceListing.open</code>：把 <code>Range</code> 和 <code>IfNoneMatch</code> 原样传给 <code>get_object</code>，返回值从 <code>(body, size)</code> 改为一个小结构 <code>(body, status, headers)</code>。原有的 <code>download</code> 调用方只取 body 和 size，<b>改成关键字参数默认不传</b>，行为不变。</p>
+
+  <p>配置新增两项：<code>preview_token_ttl_s</code>，以及 <code>preview_base_url</code>（可选，见 <a href="#s7">07</a> 的独立 origin）。<code>POST …/preview</code> 返回的 <code>base_url</code> 由它拼出；没配置时用 API 自身的地址。</p>
+</section>
+
+<!-- ══════════════ 7 ══ -->
+<section id="s7">
+  <h2><span class="num">07</span>安全模型</h2>
+
+  <p>威胁的出发点：预览内容是模型写的，而模型的输入里可能有网页、文档等外部内容，所以<b>预览的 HTML 可以是任意脚本</b>。要守住的是平台本身，而不是预览页自己：预览页读到的只是它所在工作区的文件，这些文件它本来就能引用。</p>
+
+  <table>
+    <thead><tr><th>威胁</th><th>防线</th></tr></thead>
+    <tbody>
+      <tr><td>脚本读平台页面的 DOM、localStorage，或带着用户身份调用 API</td><td><b>两层 sandbox，都不给 <code>allow-same-origin</code></b>：iframe 的 <code>sandbox</code> 属性，加上响应头 <code>Content-Security-Policy: sandbox …</code>。文档运行在<b>不透明 origin</b>，和平台、和 API 都不同源。响应头这一层是为了"新标签打开"和有人直接访问 URL 的情况，那时没有 iframe。</td></tr>
+      <tr><td>令牌经 <code>Referer</code> 泄露给页面引用的 CDN</td><td><code>Referrer-Policy: no-referrer</code>（响应头），iframe 上也设 <code>referrerpolicy="no-referrer"</code>。</td></tr>
+      <tr><td>令牌出现在访问日志里</td><td>访问日志中间件对 <code>/v1/previews/</code> 的路径做掩码，只保留令牌前 6 位。</td></tr>
+      <tr><td>用 <code>../</code>、<code>%2e%2e</code>、绝对路径读其它会话</td><td>只走 <code>_to_key</code> + 前缀检查这一个关卡（与 download 同一道），并补测试。</td></tr>
+      <tr><td>浏览器把文本按 HTML 嗅探执行</td><td><code>X-Content-Type-Options: nosniff</code>；<code>.md</code>、<code>.txt</code> 一律 <code>text/plain</code> 或 <code>text/markdown</code>。</td></tr>
+      <tr><td>点击劫持：别的站点把预览嵌进去</td><td><code>CSP frame-ancestors</code> 只允许平台前端的 origin（取 <code>CORS_ORIGINS</code>）。</td></tr>
+      <tr><td>弹出的新标签逃出沙箱</td><td>不开 <code>allow-popups-to-escape-sandbox</code>：弹出的页面同样受限。代价是外链在新标签里也处在 sandbox 状态，第三方站点可能工作不正常，可以接受。</td></tr>
+    </tbody>
+  </table>
+
+  <h3>sandbox 授权清单</h3>
+<div class="flow"><b>iframe</b>   sandbox="<s>allow-scripts allow-forms allow-modals allow-popups allow-downloads</s>"
+         referrerpolicy="no-referrer"
+
+<b>响应头</b>  Content-Security-Policy: <s>sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads</s>;
+                                 frame-ancestors <u>&lt;平台前端 origin&gt;</u>
+         Referrer-Policy: no-referrer
+         X-Content-Type-Options: nosniff
+         Access-Control-Allow-Origin: *          <i># 见下</i>
+         Cache-Control: no-cache                 <i># 每次用 ETag 重新校验，见 09</i>
+
+<em>永远不加</em>  allow-same-origin   <i># 加了它再配 allow-scripts，sandbox 形同虚设</i>
+         allow-top-navigation / allow-popups-to-escape-sandbox</div>
+
+  <div class="callout warn">
+    <span class="label">不透明 origin 带来的副作用：要开 CORS</span>
+    <p>sandbox 文档的 origin 是 <code>null</code>。它加载同一站点下的 <code>&lt;script type="module"&gt;</code>、<code>fetch('data.json')</code>、Web 字体时，在浏览器看来都是<b>跨域</b>请求，需要 CORS。所以预览路由返回 <code>Access-Control-Allow-Origin: *</code>。这是安全的：响应不依赖 cookie 或请求头凭据（凭据在路径里），<code>*</code> 本来就不允许带凭据。要验证的一点：全局的 <code>CORSMiddleware</code> 遇到 <code>Origin: null</code> 时不能覆盖或剥掉这个头（<a href="#s13">13</a>）。</p>
+  </div>
+
+  <h3>同源部署 vs 独立 origin</h3>
+  <table>
+    <thead><tr><th></th><th>开发 / 本机</th><th>生产（建议）</th></tr></thead>
+    <tbody>
+      <tr><td>站点地址</td><td>和 API 同一个地址：<code>http://localhost:8000/v1/previews/…</code></td><td>独立域名：<code>https://preview.&lt;domain&gt;/v1/previews/…</code>（配置 <code>preview_base_url</code>）</td></tr>
+      <tr><td>隔离依赖</td><td>完全依赖 CSP sandbox 头一定会下发</td><td>sandbox 加上浏览器同源策略，两层</td></tr>
+      <tr><td>理由</td><td>本机多起一个域名不值得</td><td>任何一处漏发 CSP 头（比如有人改了中间件、或从网关直接回源），独立域名仍然隔离得住。以后上 cookie 鉴权时，这一点是必需的</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ══════════════ 8 ══ -->
+<section id="s8">
+  <h2><span class="num">08</span>读取上限、编码与二进制判定</h2>
+
+  <table>
+    <thead><tr><th>项</th><th>决定</th></tr></thead>
+    <tbody>
+      <tr><td>文本上限</td><td>前端请求时带 <code>Range: bytes=0-1048575</code>（1 MiB），服务端透传给 S3，返回 <code>206</code> + <code>Content-Range: bytes 0-1048575/&lt;总大小&gt;</code>。总大小大于 1 MiB 时，顶部显示"只显示前 1 MiB，共 N MiB · 下载完整文件"。文件本身小于上限时 S3 返回 200，前端两种都接受。</td></tr>
+      <tr><td>截断边界</td><td>截断点可能落在一个多字节 UTF-8 字符中间：用 <code>TextDecoder('utf-8', { fatal: false })</code> 解码，末尾那个 <code>U+FFFD</code> 直接丢掉。</td></tr>
+      <tr><td>编码</td><td>只按 UTF-8 解码（智能体写出来的文件几乎都是 UTF-8）。BOM 去掉。不做 GBK 等编码探测，乱码时用户可以下载。</td></tr>
+      <tr><td>二进制判定</td><td>只对<b>扩展名不认识</b>的文件做：先请求前 8 KiB，里面有 <code>NUL</code> 字节就判为 binary，否则按 text 再取 1 MiB。认识的扩展名不做判定，少一次请求。</td></tr>
+      <tr><td>图片上限</td><td>&gt; 20 MiB 不渲染，显示"图片过大"和下载按钮。避免一张大图把标签页内存撑爆。</td></tr>
+      <tr><td>HTML</td><td>不设上限：iframe 按需加载子资源，跟正常浏览一个站点一样。</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ══════════════ 9 ══ -->
+<section id="s9">
+  <h2><span class="num">09</span>运行中文件在变</h2>
+
+  <p>现状：run 进行中，<code>FilesPanel</code> 每 10s 拉一次文件列表，收到 <code>file.written</code> 时也立刻刷新。在这个基础上：</p>
+
+  <table>
+    <thead><tr><th>渲染器</th><th>etag 变了之后</th><th>理由</th></tr></thead>
+    <tbody>
+      <tr><td>text / markdown / image</td><td><b>自动刷新</b>。react-query 的 key 是 <code>[threadId, path, etag]</code>，etag 一变就重新取</td><td>这些是只读视图，刷新不会打断用户；看着智能体一点点把文件写出来，正是想要的效果</td></tr>
+      <tr><td>html</td><td><b>不自动刷新</b>，顶部出现"文件已更新 · 重新加载"条，点了才 reload iframe</td><td>用户可能正在原型里点到第三屏，自动刷新会把状态清掉。站点由多个文件组成，任何一个变了都提示（比较整个列表的 etag 集合，而不只是入口文件）</td></tr>
+    </tbody>
+  </table>
+
+  <p>iframe 内的子资源由浏览器 HTTP 缓存管理：预览响应带 <code>Cache-Control: no-cache</code> + <code>ETag</code>，所以 reload 时每个资源都发一次条件请求，没变的走 <code>304</code>，变了的才重新传。不需要在 URL 上加版本号。</p>
+</section>
+
+<!-- ══════════════ 10 ══ -->
+<section id="s10">
+  <h2><span class="num">10</span>前端结构</h2>
+
+<div class="flow">web/src/
+  api/threads.ts
+    <u>+ usePreviewSession(threadId)</u>        <i>POST …/files/preview；staleTime 50min</i>
+    <u>+ previewFileUrl(baseUrl, path)</u>      <i>逐段 encodeURIComponent</i>
+    <u>+ fetchPreviewText(url, maxBytes)</u>    <i>Range 读开头，返回 { text, truncated, total, binary }</i>
+  api/schema.d.ts                       <s>~ WorkspaceFile.etag、PreviewSessionOut（gen:api）</s>
+  app/files/[threadId]/page.tsx         <u>+ 路由：读 ?path=，Suspense 包住 useSearchParams</u>
+  components/Rail.tsx                   <s>~ /files/ 下不渲染</s>
+  features/chat/FilesPanel.tsx          <s>~ 文件名改为新标签链接</s>
+  features/files/
+    <u>previewKind.ts</u>                    <i>纯函数 (path, size) → kind，扩展名表</i>
+    <u>FilePreviewPage.tsx</u>               <i>顶栏 + 分派 + 令牌续期 + 「已更新」条</i>
+    <u>renderers.tsx</u>                     <i>HtmlFrame（SANDBOX 常量）/ PdfFrame / ImageView / TextView / MarkdownView</i>
+    <u>format.ts</u>  <u>files.module.css</u></div>
+
+  <div class="callout rule">
+    <span class="label">两条约束</span>
+    <ul style="margin-bottom:0">
+      <li><b>sandbox 属性写成常量</b>放在 <code>HtmlPreview.tsx</code> 一处，旁边写清楚为什么不能加 <code>allow-same-origin</code>。这是整个功能里最容易被"顺手修个 bug"改坏的一行。</li>
+      <li><b>渲染器只拿 URL 和元数据</b>，不自己拼令牌或路径：路径编码（中文、空格、<code>#</code>）统一在 <code>previewUrl(baseUrl, path)</code> 里逐段 <code>encodeURIComponent</code>。</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ══════════════ 11 ══ -->
+<section id="s11">
+  <h2><span class="num">11</span>失败与边界情况</h2>
+
+  <table>
+    <thead><tr><th>情况</th><th>表现</th></tr></thead>
+    <tbody>
+      <tr><td>部署没有配置对象存储</td><td>沿用现状：文件面板显示"没有文件能力"，没有可点的文件；直接访问预览页时 <code>POST …/preview</code> 返回 404，页面显示同样的提示</td></tr>
+      <tr><td>令牌过期（放置 &gt;1h）</td><td>iframe 内显示 410 提示页；文本类请求失败后前端自动重新申请一次令牌再试，仍失败才报错</td></tr>
+      <tr><td>文件在预览期间被删</td><td>404 → "文件已不存在"；列表刷新后同步消失</td></tr>
+      <tr><td>文件名含中文、空格、<code>#</code>、<code>?</code></td><td>逐段编码；补测试</td></tr>
+      <tr><td>HTML 引用了工作区外的绝对路径 <code>/foo.js</code></td><td>会解析到 <code>/foo.js</code>（API 根），404。这是原型自身的问题，不改写。源码视图里能看到</td></tr>
+      <tr><td>HTML 依赖外网 CDN，而部署在内网</td><td>页面样式缺失。提示文案："页面引用的外部资源可能无法加载"，不做代理</td></tr>
+      <tr><td>文件列表被截断（&gt;2000）</td><td>沿用现状提示；深链到列表里没有的文件仍可预览（站点按路径取，不依赖列表），只是没有 etag，不会自动刷新</td></tr>
+      <tr><td>屏幕窄于 1280px</td><td>文件面板本来就隐藏，入口也就没有了；预览页本身不受影响（P2 再给窄屏一个入口）</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ══════════════ 12 ══ -->
+<section id="s12">
+  <h2><span class="num">12</span>落地顺序与测试</h2>
+
+  <div class="step">
+    <h4>P1-a · 后端</h4>
+    <p><code>WorkspaceListing.open</code> 支持 range / if_none_match；列表加 etag；<code>PreviewService</code>（签发、解析、续期）；预览路由与安全头；配置两项；日志掩码。</p>
+  </div>
+  <div class="step">
+    <h4>P1-b · 前端</h4>
+    <p><code>previewKind</code>；新标签预览页 <code>/files/{threadId}?path=</code> 与文件面板的链接；html / pdf / image / text / markdown 渲染器与"不支持"兜底；etag 驱动刷新与"文件已更新"条。</p>
+  </div>
+  <div class="step">
+    <h4>P2</h4>
+    <p>语法高亮（懒加载）；CSV 表格；PDF；Markdown 里的工作区相对图片（经站点 URL，放行 img 但只放行站点 origin）；窄屏下的文件入口。</p>
+  </div>
+
+  <h3>必须有的测试</h3>
+  <table>
+    <thead><tr><th>测试</th><th>断言</th></tr></thead>
+    <tbody>
+      <tr><td>路径逃逸</td><td><code>../</code>、<code>%2e%2e/</code>、<code>..%2f</code>、绝对路径、<code>.skills/x</code> 都拿不到工作区外或隐藏的内容（400 / 404）</td></tr>
+      <tr><td>令牌范围</td><td>会话 A 的令牌读不到会话 B 的同名文件；子会话令牌读到的是父会话工作区</td></tr>
+      <tr><td>安全头</td><td><b>每一个</b>预览响应（含 404、410、304）都带 CSP sandbox、<code>nosniff</code>、<code>no-referrer</code>，且 sandbox 中没有 <code>allow-same-origin</code></td></tr>
+      <tr><td>Range / 条件请求</td><td>206 + 正确的 <code>Content-Range</code>；<code>If-None-Match</code> 命中返回 304</td></tr>
+      <tr><td>目录与 index</td><td><code>/v1/previews/{t}/</code> 与 <code>/v1/previews/{t}/sub/</code> 返回对应的 <code>index.html</code></td></tr>
+      <tr><td>CORS</td><td><code>Origin: null</code> 的请求拿到 <code>Access-Control-Allow-Origin: *</code>，没有被全局中间件改掉</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout warn">
+    <span class="label">测试环境注意</span>
+    <p>当前 pytest 与开发共用一个数据库，<code>clean_db</code> 会删掉非内置的 agent。预览相关测试尽量用替身 S3 和 fakeredis，不依赖数据库里的会话行；要依赖时先确认不会清掉开发数据。</p>
+  </div>
+</section>
+
+<!-- ══════════════ 13 ══ -->
+<section id="s13">
+  <h2><span class="num">13</span>风险与未决</h2>
+
+  <table>
+    <thead><tr><th>#</th><th>项</th><th>现状判断</th><th>处理</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>同源部署下，隔离完全依赖 CSP 头</td><td>漏发一次就是 API origin 上的 XSS</td><td>"每个响应都带安全头"写成测试；生产用独立域名</td></tr>
+      <tr><td>2</td><td><code>CORSMiddleware</code> 与预览路由自己设的 <code>ACAO: *</code> 是否冲突</td><td><b>已验证</b>（Starlette 1.6）：<code>Origin: null</code> 时中间件只追加 <code>Access-Control-Allow-Credentials: true</code>，不动 <code>ACAO: *</code>；对非凭据请求浏览器忽略前者</td><td>由 <code>test_opaque_origin_gets_wildcard_cors</code> 守住</td></tr>
+      <tr><td>3</td><td>Chrome 的 PDF 查看器在 sandbox iframe 或带 CSP sandbox 的响应里不工作</td><td>已知行为</td><td>P1 只提供"新标签打开"（PDF 响应单独去掉 sandbox，只保留 <code>nosniff</code> 和 <code>Content-Disposition: inline</code>），P2 再定是否引入 pdf.js</td></tr>
+      <tr><td>4</td><td>会话读权限</td><td>现在不鉴权，任何人知道 thread_id 就能列文件、能签发令牌（与 download 现状一致）</td><td>签发接口预留 <code>created_by == user</code> 检查的位置，随权限设计一起打开</td></tr>
+      <tr><td>5</td><td>S3 ETag 在分片上传时不是 MD5</td><td>不影响用途：只用来判断"变没变"</td><td>无</td></tr>
+      <tr><td>6</td><td>令牌在用户本机浏览器历史、截图里可见</td><td>一小时空闲过期，范围只读、只有一个会话</td><td>接受。会话删除时清掉对应的令牌（P2）</td></tr>
+      <tr><td>7</td><td>一个大站点的子资源请求很多，每个都要读一次 Redis + 一次 S3</td><td>原型规模（几十个文件）无压力</td><td>不做缓存；真成为问题时在路由里加进程内 LRU（令牌 → 会话，TTL 30s）</td></tr>
+    </tbody>
+  </table>
+</section>
+
+</main>
+</div>
+</body>
+</html>

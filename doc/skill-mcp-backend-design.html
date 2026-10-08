@@ -1,0 +1,792 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Atlas 技能与 MCP 后端详细设计</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --border: #d1d9e0; --head: #f6f8fa;
+    --accent: #0969da; --ok: #1a7f37; --ok-bg: #dafbe1; --warn: #9a6700; --warn-bg: #fff8c5;
+    --bad: #cf222e; --bad-bg: #ffebe9; --code-bg: #f6f8fa;
+    --b1: #ddf4ff; --b1d: #54aeff; --b2: #fbefff; --b2d: #c297ff; --b3: #dafbe1; --b3d: #4ac26b;
+    --b4: #fff8c5; --b4d: #d4a72c; --b5: #ffebe9; --b5d: #ff8182;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --border: #3d444d; --head: #151b23;
+      --accent: #4493f8; --ok: #3fb950; --ok-bg: #12261e; --warn: #d29922; --warn-bg: #2b2111;
+      --bad: #f85149; --bad-bg: #2d1214; --code-bg: #151b23;
+      --b1: #12263f; --b1d: #1f6feb; --b2: #271a36; --b2d: #8957e5; --b3: #12261e; --b3d: #2ea043;
+      --b4: #2b2111; --b4d: #9e6a03; --b5: #2d1214; --b5d: #da3633;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 32px; background: var(--bg); color: var(--fg);
+         font: 14px/1.75 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif; }
+  main { max-width: 1120px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 44px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 15.5px; margin: 24px 0 8px; }
+  .sub { color: var(--muted); margin: 0 0 14px; }
+  code { font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code-bg); padding: 1px 4px; border-radius: 4px; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px 14px; overflow-x: auto; font-size: 12.5px; line-height: 1.55; }
+  pre code { background: none; padding: 0; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0 16px; }
+  th, td { border: 1px solid var(--border); padding: 7px 10px; vertical-align: top; text-align: left; }
+  th { background: var(--head); white-space: nowrap; }
+  .callout { border-left: 4px solid var(--accent); background: var(--head); padding: 10px 14px; border-radius: 4px; margin: 14px 0; }
+  .callout.warn { border-color: var(--warn); background: var(--warn-bg); }
+  .callout.bad { border-color: var(--bad); background: var(--bad-bg); }
+  .tag { display: inline-block; padding: 0 7px; border-radius: 9px; font-size: 12px; font-weight: 600; border: 1px solid; white-space: nowrap; }
+  .tag.ok { color: var(--ok); background: var(--ok-bg); border-color: var(--ok); }
+  .tag.new { color: var(--accent); background: var(--head); border-color: var(--accent); }
+  .tag.warn { color: var(--warn); background: var(--warn-bg); border-color: var(--warn); }
+  .tag.bad { color: var(--bad); background: var(--bad-bg); border-color: var(--bad); }
+  .toc { columns: 2; padding-left: 18px; }
+  .fig { border: 1px solid var(--border); border-radius: 6px; padding: 10px; overflow-x: auto; margin: 10px 0 16px; }
+  svg text { fill: var(--fg); font-size: 12px; font-family: -apple-system, "PingFang SC", sans-serif; }
+  svg .s { font-size: 11px; fill: var(--muted); }
+  svg .b { font-weight: 600; }
+  svg .c1 { fill: var(--b1); stroke: var(--b1d); } svg .c2 { fill: var(--b2); stroke: var(--b2d); }
+  svg .c3 { fill: var(--b3); stroke: var(--b3d); } svg .c4 { fill: var(--b4); stroke: var(--b4d); }
+  svg .c5 { fill: var(--b5); stroke: var(--b5d); }
+  svg .ln { stroke: var(--fg); stroke-width: 1.3; fill: none; }
+  svg .dash { stroke-dasharray: 5 4; }
+  svg .lane { stroke: var(--border); stroke-dasharray: 4 4; }
+  td.c { text-align: center; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Atlas 技能与 MCP 后端详细设计</h1>
+<p class="sub">状态：v2 · <b>已实现并部署到本机 K8s</b>（P1 + P2 前后端，见 §20）· 2026-10-05 · 依据：前端原型 <code>prototype/atlas-v2.html</code>（技能 / MCP / 智能体编辑器），
+概要设计 <code>doc/skill.html</code>、<code>doc/mcp.html</code>，两个平面的划分 <code>doc/detail/structure.html</code>，
+用户模块 <code>doc/user-module-design.html</code>，以及当前工作区代码（下文逐条标注位置）。</p>
+
+<div class="callout"><b>v2 变更</b>：配置端改用 Python 编写，作为 uv workspace 的新成员 <code>config/</code>（包名 <code>atlas_config</code>），
+做法与现有的 <code>cluster</code> 服务一致（同一镜像、独立进程、import-linter 约束依赖方向）。
+随之简化：去掉 v1 里给 Java 准备的「对象存储索引」中间契约，技能发布逻辑写成库，命令行（P1）和 HTTP 接口（P2）共用。
+<code>iam</code> / BFF 的实现语言不在本文范围，仍按用户模块设计；本文的接口只要求「验证令牌」，与 BFF 用什么语言无关。</div>
+
+<ol class="toc">
+  <li><a href="#s1">现状与差距</a></li>
+  <li><a href="#s2">目标、分期与服务形态</a></li>
+  <li><a href="#s3">总体架构与职责划分</a></li>
+  <li><a href="#s4">atlas-config 工程结构</a></li>
+  <li><a href="#s5">技能：数据模型与生命周期</a></li>
+  <li><a href="#s6">技能：发布流水线</a></li>
+  <li><a href="#s7">技能：运行时消费</a></li>
+  <li><a href="#s8">MCP：注册、发现与复核</a></li>
+  <li><a href="#s9">MCP：智能体引用与变更检测</a></li>
+  <li><a href="#s10">MCP：ACP 下发（补缺口）</a></li>
+  <li><a href="#s11">Agent spec 变更与保存流程</a></li>
+  <li><a href="#s12">事件与可观测性</a></li>
+  <li><a href="#s13">API 设计</a></li>
+  <li><a href="#s14">认证与权限</a></li>
+  <li><a href="#s15">数据库与迁移</a></li>
+  <li><a href="#s16">部署</a></li>
+  <li><a href="#s17">原型 → 后端能力对照</a></li>
+  <li><a href="#s18">测试</a></li>
+  <li><a href="#s19">风险与待决问题</a></li>
+  <li><a href="#s20">实现状态与偏差</a></li>
+</ol>
+
+<!-- ================================================================ -->
+<h2 id="s1">1. 现状与差距</h2>
+
+<h3>1.1 已有的（已对照代码核实）</h3>
+<table>
+  <tr><th>方面</th><th>现状</th><th>位置</th></tr>
+  <tr><td>技能引用</td><td>agent 和子智能体都有 <code>skills: [(slug, version)]</code>；请求体里 <code>version</code> 可以为空，注释说"服务层落库前解析成具体版本号"</td><td><code>domain/spec.py</code> SkillRefSpec、<code>schemas/agent.py:49</code> SkillRefIn</td></tr>
+  <tr><td>技能投送</td><td>源仓库 <code>_skills/{slug}/{version}/</code>（全局只读）；<b>建会话时</b>服务端拷贝到 <code>{user}/{thread}/skills/{slug}/</code>，与 workspace 平级；模型看到 <code>/skills/&lt;slug&gt;/SKILL.md</code>；源不存在时抛 <code>SkillUnavailable</code> → run 失败</td><td><code>providers/filesystem/skill_copy.py</code>、<code>oss.py:121</code></td></tr>
+  <tr><td>技能描述</td><td>索引里给模型看的 description <b>暂用 slug 兜底</b>（"配置平面尚未接入"）</td><td><code>skill_copy.py</code> skill_metas_for</td></tr>
+  <tr><td>MCP 注册</td><td>server 列表来自环境变量 <code>MCP_SERVERS</code>（name / url / transport / headers / enabled / call_timeout_s），headers 只存 <code>${ENV}</code> 占位符，连接时由 <code>resolve_env_refs</code> 解析</td><td><code>config.py:212</code>、<code>providers/mcp/config.py</code></td></tr>
+  <tr><td>MCP 发现</td><td><code>SettingsCatalog</code>：工具定义缓存在 Redis（软过期 10 分钟、硬过期 7 天），刷新失败保留旧定义并记录 error；每个工具有 <code>digest</code>，server 有 <code>content_hash</code>；可疑定义记入 <code>issues</code> 并不可选。<code>McpCatalog</code> 是 Protocol，注释写明"配置平面上线后换实现，调用方不动"</td><td><code>providers/mcp/catalog.py</code></td></tr>
+  <tr><td>MCP 命名</td><td>spec 标识 <code>mcp:github:search</code>、模型侧名 <code>github__search</code>、线上名 <code>search</code></td><td><code>domain/mcp_naming.py</code></td></tr>
+  <tr><td>MCP 调用</td><td>native 装配成普通工具，调用时带 <code>X-Atlas-User</code></td><td><code>providers/mcp/native.py:59</code></td></tr>
+  <tr><td>工具目录 API</td><td><code>GET /v1/tools</code> 返回内置 + MCP 工具（<code>kind</code>、<code>model_tool_names</code>）</td><td><code>api/v1/meta.py</code></td></tr>
+  <tr><td>ACP 约束</td><td>ACP agent 只能配 <code>mcp:*</code> 工具，配了内置工具保存时报错</td><td><code>domain/spec.py</code> validate</td></tr>
+  <tr><td>独立服务的先例</td><td><code>cluster</code>：workspace 成员、同一个 <code>atlas-app</code> 镜像、<code>python -m atlas_cluster</code> 启动；import-linter 规定 server 只能 import <code>atlas_cluster.schemas</code></td><td><code>cluster/</code>、<code>pyproject.toml</code>、<code>deploy/local/20-cluster.yaml</code></td></tr>
+</table>
+
+<h3>1.2 差距</h3>
+<table>
+  <tr><th>#</th><th>问题</th><th>后果</th><th>依据</th></tr>
+  <tr><td>G1 <span class="tag bad">缺陷</span></td><td><b>技能版本从未被钉死</b>：没有任何地方把 <code>version=None</code> 解析成具体版本，<code>to_engine()</code> 直接写成 <code>version or 0</code></td><td>编辑器不填版本时，快照里存的是 <code>v0</code>；建会话时找不到 <code>_skills/{slug}/0/</code>，会话创建失败</td><td><code>schemas/agent.py:65</code>；全仓库无 pin 逻辑</td></tr>
+  <tr><td>G2 <span class="tag bad">缺陷</span></td><td><b>ACP 拿不到 MCP</b>：打开会话时 <code>mcpServers</code> 固定为空数组</td><td>ACP agent 上配的 <code>mcp:*</code> 工具保存成功、运行时<b>静默不生效</b></td><td><code>host/runtime.py:357</code></td></tr>
+  <tr><td>G3</td><td>没有技能目录：不能列出有哪些技能、版本、描述</td><td>编辑器无法提供技能选择器；模型看到的描述是 slug</td><td>—</td></tr>
+  <tr><td>G4</td><td>技能只能手工往对象存储里放，没有发布流程、不可变保护、审查</td><td>同一版本可被覆盖，破坏可复现性；含脚本的技能无人审查</td><td>—</td></tr>
+  <tr><td>G5</td><td>MCP 没有管理视图；改 server 要改 <code>.env</code> 并重启</td><td>原型的 MCP 页没有数据来源</td><td>—</td></tr>
+  <tr><td>G6</td><td>MCP 工具定义变了没人知道：<code>digest</code> 算了但"本期不据此做判断"</td><td>描述被改（注入风险最高）时，agent 照常把新描述交给模型</td><td><code>catalog.py</code> McpToolDef.digest 注释</td></tr>
+  <tr><td>G7</td><td>没有"技能被加载"这个事件</td><td>原型时间线的「加载技能」行、技能「7 天选中」都无数据</td><td><code>domain/events.py</code></td></tr>
+</table>
+
+<!-- ================================================================ -->
+<h2 id="s2">2. 目标、分期与服务形态</h2>
+
+<h3>2.1 分期</h3>
+<table>
+  <tr><th>期</th><th>atlas-server（运行时）</th><th>atlas-config（配置端）</th></tr>
+  <tr><td><b>P1</b> 跑通技能链路</td><td>
+    修 G1、G2；<code>configplane/</code> 客户端 + 永久版本缓存；技能 / MCP 只读 API；
+    保存时钉死技能版本、记录 MCP 工具指纹；<code>skill.loaded</code> 等事件与用量统计</td><td>
+    新建服务；技能两张表；发布流水线（解析 + 机械扫描 + 上传）以<b>命令行</b>提供；
+    运行时只读接口 + 管理端只读接口</td></tr>
+  <tr><td><b>P2</b> 管理闭环</td><td>MCP 目录切到 <code>ConfigPlaneCatalog</code>；按复核结果过滤工具</td><td>
+    上传 / 异步扫描 / 人工审查 / 停用 / 紧急下架的 HTTP 接口；MCP 注册表增删改与工具复核；审计表</td></tr>
+  <tr><td><b>P3</b> 凭证与收口</td><td>ACP 改发网关会话令牌</td><td>user 作用域 OAuth、经 Higress 收口</td></tr>
+</table>
+<p><b>非目标</b>：租户自建技能（<code>skill.html §10</code> 建议本期不开放）；stdio 类型 MCP server 托管；技能内容怎么写；计费。</p>
+
+<h3>2.2 为什么独立成服务，而不是 server 里的一个模块</h3>
+<table>
+  <tr><th></th><th>A：server 内模块，共用数据库</th><th>B：独立服务 atlas-config（推荐）</th></tr>
+  <tr><td>工作量</td><td>最少：直接调函数、同一事务</td><td>多一个进程、一个数据库、一层 HTTP 客户端</td></tr>
+  <tr><td>归属</td><td>技能的审查发布和会话执行混在一个进程，谁拥有技能有两个答案</td><td>技能与 MCP 注册表只有一个所有者（与 cluster 拥有 Pod 生命周期同理）</td></tr>
+  <tr><td>发布节奏</td><td>改审查规则要重新部署运行时，打断在途会话的连接</td><td>独立部署，运行时不受影响</td></tr>
+  <tr><td>权限</td><td>运行时进程需要技能区的写权限</td><td>只有 atlas-config 能写 <code>_skills/</code>；运行时只读</td></tr>
+  <tr><td>运行时可用性</td><td>—</td><td>运行时按版本永久缓存，atlas-config 宕机时已用过的技能照常工作</td></tr>
+  <tr><td>以后拆分</td><td>同语言共库，很快会出现跨模块直接查表，再拆就是数据迁移</td><td>边界从第一天就由 import-linter 和独立数据库保证</td></tr>
+</table>
+<div class="callout warn"><b>同语言最大的风险是「顺手 import」</b>：两边都是 Python，server 直接 import <code>atlas_config.db</code> 去查表只要一行。
+所以和 cluster 一样，用 import-linter 规定 <b>server 只能 import <code>atlas_config.schemas</code></b>，<b>atlas_config 不能 import 任何其他 atlas_* 包</b>，违反即 CI 红。</div>
+
+<!-- ================================================================ -->
+<h2 id="s3">3. 总体架构与职责划分</h2>
+
+<div class="fig">
+<svg width="1080" height="410" viewBox="0 0 1080 410"><defs><marker id="ar" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="currentColor"/></marker></defs><g style="color:var(--fg)">
+  <rect x="10" y="10" width="360" height="390" rx="8" class="c2"/>
+  <text x="24" y="34" class="b">配置端 · Python（atlas-config）</text>
+  <rect x="26" y="50" width="328" height="120" rx="6" class="c4"/>
+  <text x="38" y="72" class="b">skill/</text>
+  <text x="38" y="92" class="s">解析 · 机械扫描 · 人工审查 · 发布（版本不可变）</text>
+  <text x="38" y="110" class="s">停用 · 紧急下架</text>
+  <text x="38" y="128" class="s">P1 命令行：python -m atlas_config skill publish</text>
+  <text x="38" y="146" class="s">P2 HTTP：上传 · 异步扫描 · 审查</text>
+  <text x="38" y="164" class="s">表：skill · skill_version</text>
+  <rect x="26" y="182" width="328" height="96" rx="6" class="c4"/>
+  <text x="38" y="204" class="b">mcp/（P2）</text>
+  <text x="38" y="224" class="s">注册表（headers 只存 ${ENV} 占位符）</text>
+  <text x="38" y="242" class="s">工具复核：批准 / 拒绝的 digest</text>
+  <text x="38" y="260" class="s">★ 不连 MCP server，看不到真凭证</text>
+  <rect x="26" y="290" width="328" height="96" rx="6" class="c4"/>
+  <text x="38" y="312" class="b">api/ · schemas.py · audit</text>
+  <text x="38" y="332" class="s">/internal/*：给运行时（只返回已发布版本）</text>
+  <text x="38" y="350" class="s">/config/*：给管理页（含草稿、审查）</text>
+  <text x="38" y="368" class="s">schemas.py = 唯一允许 server import 的模块</text>
+
+  <rect x="400" y="60" width="240" height="96" rx="8" class="c3"/>
+  <text x="414" y="84" class="b">对象存储（MinIO / OSS）</text>
+  <text x="414" y="106" class="s">_skills/{slug}/{version}/　已发布包</text>
+  <text x="414" y="124" class="s">_skills_drafts/{upload_id}/　草稿</text>
+  <text x="414" y="142" class="s">写：仅 atlas-config　读：运行时</text>
+  <rect x="400" y="190" width="240" height="70" rx="8" class="c3"/>
+  <text x="414" y="214" class="b">PostgreSQL</text>
+  <text x="414" y="234" class="s">atlas（运行时库）· atlas_config（配置库）</text>
+  <text x="414" y="252" class="s">同一实例，两个 database，互不访问</text>
+
+  <rect x="670" y="10" width="400" height="390" rx="8" class="c1"/>
+  <text x="684" y="34" class="b">运行时 · Python（atlas-server）</text>
+  <rect x="686" y="50" width="368" height="104" rx="6" class="c3"/>
+  <text x="698" y="72" class="b">configplane/（新增）</text>
+  <text x="698" y="92" class="s">HttpSkillDirectory → /internal/skills/*</text>
+  <text x="698" y="110" class="s">ConfigPlaneCatalog（P2）→ /internal/mcp/*</text>
+  <text x="698" y="128" class="s">VersionCache：按版本永久缓存（内存 + 磁盘）</text>
+  <text x="698" y="146" class="s">fake.py：单测不起 atlas-config</text>
+  <rect x="686" y="166" width="368" height="76" rx="6" class="c3"/>
+  <text x="698" y="188" class="b">MCP 发现（保留在运行时）</text>
+  <text x="698" y="208" class="s">唯一持有凭证的进程 → 唯一能 tools/list 的进程</text>
+  <text x="698" y="226" class="s">Redis 快照 · digest · 上一版快照（用于 diff）</text>
+  <rect x="686" y="254" width="368" height="132" rx="6" class="c3"/>
+  <text x="698" y="276" class="b">agent 配置 · 装配 · run</text>
+  <text x="698" y="296" class="s">保存：钉死技能版本 · 记录 MCP 工具指纹</text>
+  <text x="698" y="314" class="s">建会话：拷贝技能 · 跳过已下架</text>
+  <text x="698" y="332" class="s">装配：MCP 指纹比对 · ACP 下发 mcpServers</text>
+  <text x="698" y="350" class="s">事件：skill.loaded · mcp.tool_drift …</text>
+  <text x="698" y="368" class="s">引用反查 · skill_usage_daily（运行数据）</text>
+
+  <path class="ln" d="M354 110 L400 108"/>
+  <path class="ln" d="M640 108 L686 290"/><text x="646" y="200" class="s">拷贝</text>
+  <path class="ln dash" d="M686 140 H656 V330 H354" marker-end="url(#ar)"/><text x="400" y="322" class="s">运行时 → 配置端 只读拉取（唯一方向）</text>
+</g></svg>
+</div>
+
+<table>
+  <tr><th>职责</th><th>atlas-config</th><th>atlas-server</th></tr>
+  <tr><td>技能内容与版本</td><td><b>权威</b>：解析、审查、发布、停用、下架</td><td>只读消费；<b>拿不到草稿</b>（内部接口根本不返回）</td></tr>
+  <tr><td>技能被谁引用</td><td>不知道</td><td><b>权威</b>：引用在 agent_version.spec 里；提供反查接口</td></tr>
+  <tr><td>技能用量</td><td>不知道</td><td><b>权威</b>：skill_usage_daily</td></tr>
+  <tr><td>MCP server 定义</td><td><b>权威</b>（P2）</td><td>只读；P1 仍来自环境变量</td></tr>
+  <tr><td>MCP 工具发现</td><td>不做</td><td><b>权威</b>：发现、缓存、digest、变更检测</td></tr>
+  <tr><td>MCP 工具复核结论</td><td><b>权威</b>（P2）</td><td>按结论过滤工具</td></tr>
+  <tr><td>凭证</td><td>只存占位符，<b>永远看不到真值</b></td><td>解析占位符、发起连接</td></tr>
+</table>
+
+<div class="callout"><b>调用方向只有一个：server → config（只读）。</b>
+管理页需要的"被谁引用""用量""MCP 当前工具定义"都在运行时，前端直接向 server 要，<b>不让 config 反向调 server</b>。
+MCP 复核时，前端把从 server 拿到的 digest 提交给 config 记录；config 不需要（也无法）验证它。</div>
+
+<div class="callout warn"><b>对 structure.html 的两处修正</b>：
+① 配置端语言由 Java 改为 Python，仓库从独立的 <code>atlas-config/</code> 改为本仓 workspace 成员 <code>config/</code>；
+② 它把"MCP 工具目录探测"放在配置端，但又规定凭证只在运行时进程里——两条不能同时成立。本设计保留"凭证不出运行时"，探测留在 server。评审通过后同步修改 structure.html。</div>
+
+<!-- ================================================================ -->
+<h2 id="s4">4. atlas-config 工程结构</h2>
+<pre><code>config/
+├── pyproject.toml              atlas-config：fastapi · uvicorn · sqlalchemy · alembic · boto3 · pydantic-settings · pyyaml
+├── migrations/                 独立的 alembic（版本表 alembic_version 在 atlas_config 库里）
+└── src/atlas_config/
+    ├── __main__.py             CLI：serve | skill publish|disable|enable|revoke|rescan | mcp import-env
+    ├── settings.py             CONFIG_DATABASE_URL · S3 · 认证模式 · 上传上限
+    ├── schemas.py              ★ 对外契约（pydantic）：SkillVersionOut · SkillCatalogItem · McpServerOut · ToolReviewOut …
+    ├── auth.py                 dev 请求头 / JWT 验证 → Principal（与 server 同规则，各自实现）
+    ├── db/
+    │   ├── models.py           不建外键（与运行时同约定）
+    │   └── session.py
+    ├── storage.py              对象存储：草稿区、发布区、只读校验
+    ├── skill/
+    │   ├── parser.py           SKILL.md frontmatter · 结构校验 · has_scripts · content_hash
+    │   ├── scanner.py          归档安全 · 结构 · 内容模式（三层机械扫描）
+    │   ├── publisher.py        ★ 发布流水线：CLI 与 HTTP 共用
+    │   └── service.py          状态机 · 审查 · 停用 / 下架
+    ├── mcp/
+    │   ├── registry.py         server 增删改 · headers 占位符校验
+    │   └── review.py           工具复核
+    ├── audit.py                config_audit 写入
+    └── api/
+        ├── internal.py         /internal/*（运行时用，服务间令牌）
+        └── admin.py            /config/*（管理页用，用户令牌）</code></pre>
+
+<h3>4.1 import-linter 新增契约</h3>
+<pre><code>[[tool.importlinter.contracts]]
+name = "server 只认 atlas_config 的 schemas"
+type = "forbidden"
+source_modules = ["atlas_server"]
+forbidden_modules = ["atlas_config.db", "atlas_config.skill", "atlas_config.mcp",
+                     "atlas_config.api", "atlas_config.storage", "atlas_config.audit"]
+
+[[tool.importlinter.contracts]]
+name = "atlas_config 不认识运行时"
+type = "forbidden"
+source_modules = ["atlas_config"]
+forbidden_modules = ["atlas_server", "atlas_engine", "atlas_cluster", "atlas_bridge", "atlas_acp", "redis"]</code></pre>
+<p><code>atlas_config.schemas</code> 只依赖 pydantic，server import 它不会带进 sqlalchemy 之外的新依赖。</p>
+
+<!-- ================================================================ -->
+<h2 id="s5">5. 技能：数据模型与生命周期</h2>
+
+<h3>5.1 表（atlas_config 库）</h3>
+<pre><code>class Skill(Base):
+    __tablename__ = "skill"
+    slug        = String(63), primary_key          # ^[a-z][a-z0-9-]{0,62}$；P2 不开放租户自建，暂不加 org 前缀
+    source      = String(16)                       # builtin | tenant | imported
+    origin_url  = Text, nullable                   # imported 必填：第三方出处
+    created_by  = String(255)                      # iam 的用户标识（sub）
+    created_at
+
+class SkillVersion(Base):
+    __tablename__ = "skill_version"
+    slug, version                                  # 复合主键；version 从 1 递增，草稿不占号（发布时分配）
+    id          = UUID, unique                     # 草稿阶段用它寻址
+    status      = String(16)                       # pending_review | rejected | published | disabled | revoked（实现：无 draft/scanning，见 §20）
+    description = Text                             # 来自 frontmatter，发布后不可改
+    frontmatter = JSON
+    storage_key = Text                             # 草稿：_skills_drafts/{id}/；发布后：_skills/{slug}/{version}/
+    content_hash= String(80)                       # sha256(排序后的 [路径, 文件哈希] 列表)
+    size_bytes, file_count, has_scripts
+    files       = JSON                             # [{path, size, sha256, executable}]
+    scan_result = JSON                             # 各层结论与命中项
+    reviewed_by, reviewed_at, review_note
+    status_reason = Text
+    published_by, published_at
+    updated_at
+    # 约束：一个技能同时只有一个 draft/scanning/pending_review
+    #   partial unique index (slug) WHERE status IN ('draft','scanning','pending_review')
+    # 约束：status='published'|'disabled'|'revoked' 时 version 非空</code></pre>
+<p>草稿阶段 <code>version</code> 为空——审查不通过的草稿不该消耗版本号，否则清单里会出现"v4 不存在"的空洞。</p>
+
+<h3>5.2 生命周期</h3>
+<div class="fig">
+<svg width="1060" height="230" viewBox="0 0 1060 230">
+  <defs><marker id="a" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="currentColor"/></marker></defs>
+  <g style="color:var(--fg)">
+  <rect x="10" y="60" width="110" height="44" rx="6" class="c1"/><text x="40" y="87" class="b">draft</text>
+  <rect x="170" y="60" width="120" height="44" rx="6" class="c4"/><text x="186" y="80" class="b">scanning</text><text x="186" y="96" class="s">自动扫描 1–3 层</text>
+  <rect x="340" y="60" width="130" height="44" rx="6" class="c4"/><text x="352" y="80" class="b">pending_review</text><text x="352" y="96" class="s">含脚本 / 非 builtin</text>
+  <rect x="520" y="60" width="120" height="44" rx="6" class="c3"/><text x="546" y="80" class="b">published</text><text x="534" y="96" class="s">此时分配版本号</text>
+  <rect x="700" y="20" width="120" height="44" rx="6" class="c2"/><text x="730" y="47" class="b">disabled</text>
+  <rect x="700" y="110" width="120" height="44" rx="6" class="c5"/><text x="734" y="137" class="b">revoked</text>
+  <rect x="880" y="60" width="160" height="44" rx="6" class="c1"/><text x="892" y="80" class="b">rejected</text><text x="892" y="96" class="s">扫描 blocker / 审查不通过</text>
+  <path class="ln" d="M120 82 H170" marker-end="url(#a)"/><text x="122" y="74" class="s">提交</text>
+  <path class="ln" d="M290 82 H340" marker-end="url(#a)"/>
+  <path class="ln" d="M470 82 H520" marker-end="url(#a)"/><text x="474" y="74" class="s">批准</text>
+  <path class="ln" d="M230 60 C230 20, 500 20, 540 60" marker-end="url(#a)"/><text x="300" y="28" class="s">builtin 且无脚本：跳过人工</text>
+  <path class="ln" d="M640 72 L700 46" marker-end="url(#a)"/><text x="648" y="50" class="s">停用</text>
+  <path class="ln" d="M700 34 C670 34, 660 60, 640 66" marker-end="url(#a)"/><text x="646" y="30" class="s">启用</text>
+  <path class="ln" d="M640 94 L700 128" marker-end="url(#a)"/><text x="600" y="122" class="s">紧急下架</text>
+  <path class="ln" d="M760 64 V110" marker-end="url(#a)"/>
+  <path class="ln dash" d="M405 104 V200 H960 V104" marker-end="url(#a)"/><text x="600" y="194" class="s">审查不通过</text>
+  <path class="ln dash" d="M230 104 V215 H1000 V104" marker-end="url(#a)"/><text x="600" y="228" class="s">扫描有 blocker</text>
+  </g>
+</svg>
+</div>
+<table>
+  <tr><th>规则</th><th>原因</th></tr>
+  <tr><td>published 之后包内容、<code>description</code>、<code>content_hash</code> <b>永不修改</b>；只有 <code>status</code> / <code>status_reason</code> 可变</td><td>运行时按版本永久缓存；描述是模型的路由依据，改描述等于改行为</td></tr>
+  <tr><td>revoked 不可撤销（要恢复只能发新版本）；disabled 可以重新启用</td><td>下架是安全事件，撤销会让"已处理"的问题静默回来</td></tr>
+  <tr><td><b>不提供物理删除</b></td><td>引用关系在运行时，配置端无法判断"引用归零"；停用 / 下架已覆盖所有止损场景</td></tr>
+  <tr><td>审查人 ≠ 上传人</td><td>四眼原则；含脚本的技能等同代码评审</td></tr>
+  <tr><td>扫描规则升级后可 <code>rescan</code> 存量版本：结果只追加到 <code>scan_result.history</code>，不改内容；发现问题走下架</td><td>新规则常能发现老技能里漏掉的问题</td></tr>
+</table>
+
+<!-- ================================================================ -->
+<h2 id="s6">6. 技能：发布流水线</h2>
+
+<h3>6.1 一份代码，两个入口</h3>
+<pre><code># atlas_config/skill/publisher.py
+async def ingest(archive: Path | bytes, *, source: str, actor: str) -&gt; SkillVersion:
+    """解压到临时目录 → parser → scanner → 上传草稿区 → 写 skill_version(status=scanning→…)"""
+
+async def approve(version_id: UUID, *, reviewer: str, note: str) -&gt; SkillVersion: ...
+async def publish(version_id: UUID, *, actor: str) -&gt; SkillVersion:
+    """分配版本号 → 草稿区拷到 _skills/{slug}/{version}/ → 校验对象数与哈希 → 改 status"""
+
+# P1：python -m atlas_config skill publish ./sdk-migration --source builtin [--reviewed-by li]
+#      命令行把 ingest + approve + publish 串起来；含脚本必须带 --reviewed-by（且 ≠ 当前用户）
+# P2：POST /config/skills（上传，同步扫描）→ POST /config/skill-uploads/{id}/approve → 自动 publish</code></pre>
+
+<h3>6.2 各步骤</h3>
+<table>
+  <tr><th>步骤</th><th>检查 / 动作</th><th>失败处理</th></tr>
+  <tr><td>1 归档安全</td><td>拒绝符号链接、绝对路径与 <code>../</code>、设备文件、二进制可执行文件（按魔数）；解压后总大小 ≤ 20MB、文件数 ≤ 500、单文件 ≤ 5MB（可配置）</td><td>blocker → rejected</td></tr>
+  <tr><td>2 结构</td><td><code>SKILL.md</code> 存在；frontmatter 是合法 YAML 且有 <code>name</code>、<code>description</code>；name 与 slug 一致；description ≤ 1024 字符</td><td>blocker → rejected</td></tr>
+  <tr><td>3 内容模式</td><td>私钥 / 云密钥 / Bearer token 模式；<code>curl … | sh</code> 等危险命令；"忽略之前的指令""你现在是"等注入特征；可疑外部地址</td><td>只记 warn，交给人工审查判断</td></tr>
+  <tr><td>描述冲突</td><td>与其他已发布技能描述做相似度（字符 3-gram Jaccard）；&gt; 0.8 记 warn</td><td>warn</td></tr>
+  <tr><td>4 人工审查</td><td><code>has_scripts</code> 或 <code>source != builtin</code> 时必经</td><td>reject 必填理由</td></tr>
+  <tr><td>发布</td><td>事务内：取 <code>max(version)+1</code>（行锁 <code>skill</code>）→ 拷贝对象 → 列出目标前缀核对对象数与 content_hash → 改 status=published</td><td>拷贝失败回滚事务；残留对象下次发布前清理（目标前缀非空且库里无对应版本 = 残留）</td></tr>
+</table>
+<p><b>P2 的异步扫描</b>：上传请求只做步骤 1–2（同步、快），然后状态置 scanning，由进程内后台任务做步骤 3。
+状态在库里，进程重启时把 <code>status='scanning'</code> 的行重新入队——不需要引入消息队列。</p>
+
+<!-- ================================================================ -->
+<h2 id="s7">7. 技能：运行时消费</h2>
+
+<h3>7.1 <code>configplane/</code>（server 侧新增）</h3>
+<pre><code>class SkillDirectory(Protocol):
+    async def catalog(self) -&gt; list[SkillCatalogItem]: ...                # 编辑器选择器
+    async def get(self, slug: str, version: int) -&gt; SkillVersionOut: ...   # 不存在 → SkillUnavailable
+    async def latest(self, slug: str) -&gt; SkillVersionOut | None: ...       # 只看 published
+    async def revoked(self) -&gt; frozenset[tuple[str, int]]: ...
+
+# HttpSkillDirectory —— 调 atlas-config /internal/skills/*（类型直接用 atlas_config.schemas）
+# FakeSkillDirectory —— 内存实现，单测用</code></pre>
+<table>
+  <tr><th>数据</th><th>缓存策略</th><th>原因</th></tr>
+  <tr><td><code>get(slug, version)</code> 的内容字段</td><td>内存 + 磁盘（<code>var/cache/configplane/</code>），<b>永久</b></td><td>版本不可变。若同一版本拿到不同 content_hash：用缓存并告警（对方破了契约）</td></tr>
+  <tr><td><code>status</code>、<code>revoked()</code></td><td>TTL 60 秒；拉取失败时继续用上一次结果</td><td>可变状态；下架要在一分钟内生效，配置端短暂不可用不能让运行时停摆</td></tr>
+  <tr><td><code>catalog()</code>、<code>latest()</code></td><td>TTL 60 秒</td><td>只用于编辑器和保存时解析</td></tr>
+</table>
+<p>atlas-config 不可用时：已缓存的版本照常装配；只有首次用到的新版本、以及保存 agent 时的版本解析会失败，错误指明"技能目录不可用"。</p>
+
+<h3>7.2 保存时钉死版本（修 G1）</h3>
+<pre><code># services/agent.py（新增，创建 / 发新版本前调用；主 agent 与每个子智能体都处理）
+async def _pin_skills(self, refs: list[SkillRefIn], previous: set[tuple[str, int]]) -&gt; list[SkillRefIn]:
+    out, budget = [], 0
+    for ref in refs:
+        if ref.version is None:
+            info = await self._skills.latest(ref.slug)
+            if info is None:
+                raise InvalidSpec(f"技能 {ref.slug} 没有已发布的版本")
+        else:
+            info = await self._skills.get(ref.slug, ref.version)
+        key = (info.slug, info.version)
+        if info.status == "revoked":
+            raise InvalidSpec(f"技能 {key} 已被紧急下架，请移除")
+        if info.status == "disabled" and key not in previous:
+            raise InvalidSpec(f"技能 {key} 已停用，不能新增引用")
+        budget += len(info.description)
+        out.append(SkillRefIn(slug=info.slug, version=info.version))
+    if budget &gt; settings.skill_index_budget_chars:                # 默认 2000
+        raise InvalidSpec("技能描述总长超出预算", total=budget)
+    return out</code></pre>
+<ul>
+  <li>停用的技能：沿用（上一版本已引用）放行，新加入拒绝——否则引用了停用技能的 agent 再也改不了别的配置。</li>
+  <li><code>SkillRefIn.to_engine()</code> 改为版本为空时报错，不再写 0。</li>
+  <li>存量：一次性脚本列出 <code>agent_version.spec</code> 中 <code>version == 0</code> 的引用，由人决定是否发新版本修正；不改写历史版本。</li>
+  <li>P1 上线时，现有 <code>_skills/</code> 下手工放的技能用 <code>python -m atlas_config skill adopt &lt;slug&gt; &lt;version&gt;</code> 登记进表（只计算哈希、不移动对象），避免已有 agent 失效。</li>
+</ul>
+
+<h3>7.3 建会话与装配</h3>
+<table>
+  <tr><th>环节</th><th>变化</th></tr>
+  <tr><td><code>skill_metas_for</code></td><td>description 改从 <code>SkillDirectory.get()</code> 取，去掉 slug 兜底；改为 async</td></tr>
+  <tr><td>建会话拷贝（主 agent / 子会话）</td><td>拷贝前过滤 <code>revoked()</code>：跳过并发 <code>skill.skipped</code>。不让会话创建失败——下架是为了止损，不是让 agent 不可用</td></tr>
+  <tr><td>native 每轮装配</td><td>技能索引再过滤一次 <code>revoked()</code>，并删除本会话副本 <code>{user}/{thread}/skills/{slug}/</code>（幂等）。<b>下一轮生效</b></td></tr>
+  <tr><td>ACP</td><td>技能随 Pod 挂载，运行中改不了。新会话不挂；在途会话发 <code>skill.skipped</code> 提示，<b>Pod 重建后才生效</b>。管理页展示"受影响的活跃会话数"（来自 server 的引用接口）</td></tr>
+</table>
+
+<h3>7.4 技能被加载（修 G7）</h3>
+<p>"选中"的可观测定义：<b>模型读取了 <code>/skills/&lt;slug&gt;/SKILL.md</code></b>——正文只有被选中时才读。</p>
+<table>
+  <tr><th>类型</th><th>检测位置</th></tr>
+  <tr><td>native</td><td><code>OssFilesystem</code> 读路径命中 <code>/skills/{slug}/SKILL.md</code> 时发 <code>skill.loaded {slug, version}</code>（同一 run 同一技能只发一次）</td></tr>
+  <tr><td>ACP</td><td>翻译层（<code>host/translate/acp_v1.py</code>）看到 Read 工具读技能挂载点下的 <code>SKILL.md</code>，或 CLI 的 Skill 工具调用时补发同一事件；识别不到算漏计，不影响功能</td></tr>
+</table>
+<p>run 结束时按 <code>(日期, slug, version, agent_id)</code> 累加到 server 的 <code>skill_usage_daily</code>：<code>loads</code>、<code>completed_runs</code>。</p>
+
+<!-- ================================================================ -->
+<h2 id="s8">8. MCP：注册、发现与复核</h2>
+
+<h3>8.1 server 定义的归属</h3>
+<table>
+  <tr><th>期</th><th>来源</th><th>server 侧实现</th></tr>
+  <tr><td>P1</td><td>环境变量 <code>MCP_SERVERS</code>（不变）</td><td><code>SettingsCatalog</code>（不变）</td></tr>
+  <tr><td>P2</td><td>atlas-config 的 <code>mcp_server</code> 表；用 <code>python -m atlas_config mcp import-env</code> 从现有 JSON 一次性导入</td><td><code>ConfigPlaneCatalog</code>：server 定义从 <code>/internal/mcp/servers</code> 拉取（TTL 60 秒，失败用上次结果），发现与快照逻辑复用 SettingsCatalog 的代码</td></tr>
+</table>
+<pre><code>class McpServer(Base):            # atlas_config 库
+    __tablename__ = "mcp_server"
+    name            = String(24), primary_key   # 工具前缀；^[a-z][a-z0-9-]{0,23}$；改名 = 新 server
+    display_name, description
+    transport       = String(24)                # streamable_http | sse
+    url             = Text
+    headers         = JSON                      # 值必须完全由 ${ENV} 占位符构成，或是不含凭证的固定值（见下）
+    credential_scope= String(16)                # platform | user（user 在 P3 才可启用）
+    call_timeout_s  = Float, nullable
+    review_required = Boolean, default true
+    status          = String(16)                # enabled | disabled
+    created_by, created_at, updated_by, updated_at</code></pre>
+<p><b>headers 校验</b>：键名属于 <code>Authorization</code> / <code>*-Key</code> / <code>*-Token</code> / <code>Cookie</code> 等敏感名时，值必须匹配 <code>^[^$]*\$\{[A-Z0-9_]+\}[^$]*$</code>（含占位符），否则 400——配置端从结构上拒绝保存真凭证。</p>
+
+<h3>8.2 快照增加"上一版"（server 侧，支撑原型的描述 diff）</h3>
+<pre><code>@dataclass(frozen=True)
+class ServerSnapshot:
+    …                                      # 已有字段不变
+    changed_at: float | None = None        # content_hash 最近一次变化的时间
+    previous: tuple[McpToolDef, ...] = ()  # 变化前那一版的工具定义（只保留一版）</code></pre>
+<p>刷新时若 <code>content_hash</code> 变了：旧 tools 放进 <code>previous</code>、记 <code>changed_at</code>、打 warning 并发指标 <code>mcp.fingerprint.changed</code>。管理页按工具名对齐，分类为新增 / 删除 / 描述变更 / 参数变更。</p>
+
+<h3>8.3 工具复核（P2）</h3>
+<pre><code>class McpToolReview(Base):        # atlas_config 库
+    __tablename__ = "mcp_tool_review"
+    server, tool_name, digest      # 复合主键
+    decision    = String(16)       # approved | rejected
+    decided_by, decided_at, note</code></pre>
+<table>
+  <tr><th>情况</th><th>状态</th><th>可选？进模型上下文？</th></tr>
+  <tr><td>有 <code>issues</code>（命名 / 长度 / schema）</td><td>invalid</td><td>否（已有行为）</td></tr>
+  <tr><td>server 不要求复核，或当前 digest 已批准</td><td>ok</td><td>是</td></tr>
+  <tr><td>当前 digest 未复核</td><td>pending_review</td><td>否；agent 上已勾选的该工具本轮跳过并发 <code>mcp.tool_drift</code></td></tr>
+  <tr><td>当前 digest 被拒绝</td><td>rejected</td><td>否</td></tr>
+</table>
+<p>server 通过 <code>/internal/mcp/reviews?server=</code> 拉取批准集合（TTL 60 秒）。P1 没有复核表，所有无 issues 的工具视为 ok；原型 MCP 页在 P1 只显示"与上一版相比有变化"。</p>
+
+<!-- ================================================================ -->
+<h2 id="s9">9. MCP：智能体引用与变更检测</h2>
+<p>引用粒度沿用 <code>tool_names</code>（<code>mcp:github:search_issues</code>）：native 按<b>工具</b>选，编辑器按 server 分组展示。</p>
+<pre><code># AgentSpec / SubAgentSpec 新增（快照纪律：必须有默认值）
+mcp_tool_digests: Mapping[str, str] = {}      # "mcp:github:search_issues" → digest
+mcp_drift_policy: Literal["warn", "block"] = "warn"</code></pre>
+<ul>
+  <li><b>保存时由服务端填写</b>，客户端传的值忽略：读每个引用工具当前快照的 <code>digest</code>。工具不存在或 invalid → 400。</li>
+  <li><b>装配时比对</b>：当前 digest ≠ 记录值 → 本轮发一次 <code>mcp.tool_drift</code>。<code>warn</code> 照常使用；<code>block</code> 该工具不进本轮（跳过并提示，run 照常进行）。</li>
+  <li>存量 agent 没有记录（空字典）→ 不比对，下次保存时补上。</li>
+  <li>编辑器的「待复核」= 当前快照与 agent 当前版本记录的 digest 不一致；"确认"就是重新保存一个版本。</li>
+</ul>
+
+<!-- ================================================================ -->
+<h2 id="s10">10. MCP：ACP 下发（修 G2）</h2>
+<pre><code># host/runtime.py _open()：由 spec.tool_names 中的 mcp:* 推出 server 集合
+def acp_mcp_servers(spec, catalog, user_id) -&gt; list[dict]:
+    servers = sorted({p[0] for t in spec.tool_names if (p := parse_tool_id(t))})
+    out = []
+    for name in servers:
+        cfg = catalog.server(name)                 # 未注册 / 已停用 → McpUnavailable，run 失败
+        if cfg.credential_scope != "platform":
+            raise McpUnavailable(f"{name} 需要用户授权，ACP 暂不支持")   # P3 前
+        conn = connection_for(cfg, timeout_s=…)    # 解析 ${ENV}；缺变量明确报错
+        out.append({
+            "type": "http" if cfg.transport == "streamable_http" else "sse",
+            "name": name,
+            "url": conn["url"],
+            "headers": [{"name": k, "value": v} for k, v in conn["headers"].items()]
+                       + [{"name": "X-Atlas-User", "value": str(user_id)}],
+        })
+    return out
+
+params["mcpServers"] = acp_mcp_servers(prepared.spec, catalog, user_id)   # 新建与 resume 都传</code></pre>
+<table>
+  <tr><th>要点</th><th>说明</th></tr>
+  <tr><td>粒度只能到 server</td><td>ACP 的 <code>mcpServers</code> 是 server 级的，CLI 会看到该 server 的<b>全部</b>工具。编辑器对 ACP 只提供 server 级选择（原型需小改：显示"github · 全部 6 个工具"），保存时自动展开为该 server 当前全部可用工具，以便记录指纹</td></tr>
+  <tr><td>会话内不变</td><td>只在新建 / resume 时下发。server 被停用后在途会话不受影响，<b>紧急下线要在网关侧做</b>（P3）；管理页对停用操作给出该提示</td></tr>
+  <tr><td>真实凭证进 Pod</td><td>解析后的 token 会交给 CLI 进程——P1 的已知风险。只下发 platform 作用域的 server，建议用最小权限的专用 key；P3 换成网关会话令牌</td></tr>
+  <tr><td>能力协商</td><td>adapter 需声明 <code>mcpCapabilities.http</code>；不支持时 run 失败并说明，不静默丢弃（待验证 V3）</td></tr>
+</table>
+
+<!-- ================================================================ -->
+<h2 id="s11">11. Agent spec 变更与保存流程</h2>
+<table>
+  <tr><th>字段</th><th>位置</th><th>默认值</th><th>谁写</th></tr>
+  <tr><td><code>skills[].version</code></td><td>AgentSpec、SubAgentSpec</td><td>已有；落库后必非空</td><td>服务端钉死</td></tr>
+  <tr><td><code>mcp_tool_digests</code></td><td>同上</td><td><code>{}</code></td><td>服务端填写</td></tr>
+  <tr><td><code>mcp_drift_policy</code></td><td>同上</td><td><code>"warn"</code></td><td>编辑器（高级选项）</td></tr>
+</table>
+<div class="fig">
+<svg width="1060" height="300" viewBox="0 0 1060 300">
+  <defs><marker id="b" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="currentColor"/></marker></defs>
+  <g style="color:var(--fg)">
+  <text x="40" y="20" class="b">编辑器</text><text x="230" y="20" class="b">atlas-server API</text><text x="430" y="20" class="b">AgentService</text><text x="610" y="20" class="b">atlas-config（经缓存）</text><text x="870" y="20" class="b">McpCatalog</text>
+  <line x1="60" y1="28" x2="60" y2="290" class="lane"/><line x1="260" y1="28" x2="260" y2="290" class="lane"/>
+  <line x1="470" y1="28" x2="470" y2="290" class="lane"/><line x1="690" y1="28" x2="690" y2="290" class="lane"/><line x1="900" y1="28" x2="900" y2="290" class="lane"/>
+  <path class="ln" d="M60 50 H258" marker-end="url(#b)"/><text x="70" y="45" class="s">PUT /v1/agents/{id}（skills 可不带版本）</text>
+  <path class="ln" d="M260 70 H468" marker-end="url(#b)"/><text x="270" y="65" class="s">认证 · 授权</text>
+  <path class="ln" d="M470 100 H688" marker-end="url(#b)"/><text x="480" y="95" class="s">① latest / get（主 + 子智能体）</text>
+  <path class="ln dash" d="M688 120 H472" marker-end="url(#b)"/><text x="500" y="135" class="s">版本 · 状态 · 描述长度</text>
+  <path class="ln" d="M470 160 H898" marker-end="url(#b)"/><text x="480" y="155" class="s">② snapshot(server) 取每个 mcp:* 的 digest</text>
+  <path class="ln dash" d="M898 180 H472" marker-end="url(#b)"/>
+  <rect x="380" y="200" width="200" height="50" rx="5" class="c3"/>
+  <text x="390" y="220" class="s">③ spec.validate()（已有门禁）</text>
+  <text x="390" y="238" class="s">④ 写 agent_version（新版本号）</text>
+  <path class="ln dash" d="M470 270 H62" marker-end="url(#b)"/><text x="160" y="265" class="s">200 + 钉死后的 spec；任一步失败 → 400 带原因</text>
+  </g>
+</svg>
+</div>
+
+<!-- ================================================================ -->
+<h2 id="s12">12. 事件与可观测性</h2>
+<table>
+  <tr><th>事件（server 新增）</th><th>载荷</th><th>前端用途（原型）</th></tr>
+  <tr><td><code>skill.loaded</code></td><td>slug、version、depth</td><td>时间线「加载技能」行；技能 7 天选中</td></tr>
+  <tr><td><code>skill.skipped</code></td><td>slug、version、reason（revoked / pending_pod_restart）</td><td>时间线提示；Trace 页签</td></tr>
+  <tr><td><code>mcp.tool_drift</code></td><td>tool、server、old_digest、new_digest、change、action（used / blocked / pending_review）</td><td>对话中黄色提示；智能体页「待复核」</td></tr>
+</table>
+<ul>
+  <li>MCP 工具调用复用 <code>tool.*</code> 事件；前端通过模型侧名里的 <code>__</code> 识别来源 server。</li>
+  <li>OTel：工具 span 加 <code>atlas.mcp.server</code>；<code>skill.loaded</code> 走 <code>run_trace._point()</code> 生成 Langfuse event 观测。</li>
+  <li>atlas-config 自身：FastAPI 请求 span 接入同一个 collector（<code>service.name=atlas-config</code>）；server → config 的调用由 httpx 插桩串成同一条 trace。</li>
+  <li>指标：<code>mcp.discovery.duration</code>、<code>mcp.fingerprint.changed</code>、<code>skill.loads</code>、<code>configplane.fetch.errors</code>（运行时拉配置失败数，配置端宕机的第一信号）。</li>
+</ul>
+<p><b>审计</b>：atlas-config 的写操作都记 <code>config_audit(id, at, actor, action, target_kind, target_id, before, after, request_id)</code>，与业务写入同一事务。</p>
+
+<!-- ================================================================ -->
+<h2 id="s13">13. API 设计</h2>
+
+<h3>13.1 atlas-config · 运行时用（<code>/internal</code>，服务间令牌）</h3>
+<table>
+  <tr><th>接口</th><th>期</th><th>说明</th></tr>
+  <tr><td><code>GET /internal/skills/catalog</code></td><td>P1</td><td>每个技能：slug、latest、latest 的 description / has_scripts、source</td></tr>
+  <tr><td><code>GET /internal/skills/{slug}/versions</code></td><td>P1</td><td>只含 published / disabled / revoked</td></tr>
+  <tr><td><code>GET /internal/skills/{slug}/versions/{v}</code></td><td>P1</td><td>单版本全部字段；草稿 / 不存在 → 404</td></tr>
+  <tr><td><code>GET /internal/skills/revoked</code></td><td>P1</td><td><code>[{slug, version, reason, at}]</code></td></tr>
+  <tr><td><code>GET /internal/mcp/servers</code></td><td>P2</td><td>enabled 的 server 定义（占位符原样）</td></tr>
+  <tr><td><code>GET /internal/mcp/reviews?server=</code></td><td>P2</td><td>该 server 的复核结论</td></tr>
+</table>
+
+<h3>13.2 atlas-config · 管理页用（<code>/config</code>，用户令牌）</h3>
+<table>
+  <tr><th>接口</th><th>期</th><th>角色</th><th>说明</th></tr>
+  <tr><td><code>GET /config/skills</code>、<code>GET /config/skills/{slug}</code></td><td>P1</td><td>builder+</td><td>含草稿、扫描结果、审查信息</td></tr>
+  <tr><td><code>GET /config/skills/{slug}/versions/{v}/files/{path}</code></td><td>P1</td><td>builder+</td><td>在线查看包内文件（文本，≤ 1MB）</td></tr>
+  <tr><td><code>POST /config/skills</code>（multipart zip）</td><td>P2</td><td>admin</td><td>新技能或新版本草稿；同步做步骤 1–2</td></tr>
+  <tr><td><code>POST /config/skill-uploads/{id}/approve</code> / <code>/reject</code></td><td>P2</td><td>admin（≠ 上传人）</td><td>note 必填</td></tr>
+  <tr><td><code>POST /config/skills/{slug}/versions/{v}/disable</code> / <code>/enable</code> / <code>/revoke</code> / <code>/rescan</code></td><td>P2</td><td>admin</td><td>revoke 必填原因</td></tr>
+  <tr><td><code>GET/POST/PATCH /config/mcp/servers[/{name}]</code></td><td>P2</td><td>admin</td><td>注册表；无 DELETE，只有 disabled</td></tr>
+  <tr><td><code>POST /config/mcp/servers/{name}/reviews</code></td><td>P2</td><td>admin</td><td><code>{tool_name, digest, decision, note}</code>，digest 来自 server 的 MCP 详情接口</td></tr>
+  <tr><td><code>GET /config/audit?target=</code></td><td>P2</td><td>admin</td><td>变更记录</td></tr>
+</table>
+
+<h3>13.3 atlas-server（运行时）</h3>
+<table>
+  <tr><th>接口</th><th>期</th><th>角色</th><th>说明</th></tr>
+  <tr><td><code>GET /v1/skills</code></td><td>P1</td><td>builder+</td><td>编辑器选择器：catalog（经缓存）+ 引用数 + <code>loads_7d</code> 合并成一次返回</td></tr>
+  <tr><td><code>GET /v1/skills/{slug}/references</code></td><td>P1</td><td>builder+</td><td>引用该技能的 agent（按当前版本）、子智能体路径、版本号、活跃会话数</td></tr>
+  <tr><td><code>GET /v1/skills/usage?days=7</code></td><td>P1</td><td>builder+</td><td>按技能 / 版本 / agent 汇总</td></tr>
+  <tr><td><code>GET /v1/mcp/servers</code>、<code>GET /v1/mcp/servers/{name}</code></td><td>P1</td><td>builder+</td><td>运行状态、工具定义（含 digest、issues、复核状态）、previous 差异、引用。只读 Redis 快照，<b>不触发发现</b></td></tr>
+  <tr><td><code>POST /v1/mcp/servers/{name}:refresh</code></td><td>P1</td><td>admin</td><td>强制重新发现；同一 server 10 秒内只执行一次</td></tr>
+  <tr><td><code>GET /v1/tools</code>（改）</td><td>P1</td><td>member+</td><td>MCP 工具增加 <code>server</code>、<code>digest</code>、<code>review_status</code></td></tr>
+</table>
+<pre><code>// GET /v1/mcp/servers
+{"data": [{
+  "name": "serpapi", "display_name": "SerpAPI",
+  "url": "https://mcp.serpapi.com/mcp",          // 去掉 query 与 userinfo
+  "transport": "streamable_http", "credential_scope": "platform",
+  "headers": {"Authorization": "${SERPAPI_KEY}"}, // 只回显占位符；其余值显示 "••••"
+  "call_timeout_s": 90, "enabled": true,
+  "status": "changed",        // ok | changed | stale（刷新失败在用缓存）| error（从未成功）| disabled
+  "error": null,
+  "tools_count": 1, "invalid_tools": 0, "pending_review": 0,
+  "content_hash": "c802…11ab",
+  "fetched_at": "2026-10-05T07:40:12Z", "changed_at": "2026-10-05T07:40:12Z",
+  "references": 3
+}]}</code></pre>
+<p><b>前端怎么连两个服务</b>：BFF 上线前，web 增加 <code>NEXT_PUBLIC_CONFIG_API_BASE</code>（与现有 <code>NEXT_PUBLIC_API_BASE</code> 同样的做法）；技能 / MCP 管理页同时调两边——内容与审查找 config，引用 / 用量 / MCP 运行状态找 server。BFF 上线后改为同源路径转发，页面代码只换 base。</p>
+
+<h3>13.4 引用反查的实现</h3>
+<p>只查每个 agent 的<b>当前版本</b>：<code>agent ⋈ agent_version ON current_version_id</code>，在 Python 里遍历 spec 的 <code>skills</code> / <code>tool_names</code>（含子智能体）。agent 数量是百级，全量遍历可接受；到千级再加 <code>agent_version_ref</code> 投影表，保存时写入。</p>
+
+<!-- ================================================================ -->
+<h2 id="s14">14. 认证与权限</h2>
+<table>
+  <tr><th>调用</th><th>认证</th></tr>
+  <tr><td>浏览器 → atlas-config <code>/config/*</code></td><td>与 server 相同：dev 模式用 <code>X-User-Id</code>（角色固定 admin）；jwt 模式用 iam 的 JWKS 验签，角色取自令牌（用户模块设计 §5）</td></tr>
+  <tr><td>server → atlas-config <code>/internal/*</code></td><td>服务间共享令牌 <code>CONFIG_INTERNAL_TOKEN</code>（K8s Secret）+ 网络策略只允许 atlas-system 内访问；<code>/internal</code> 不接受用户令牌</td></tr>
+</table>
+<p>两边的认证代码各自实现（每边几十行），<b>不抽公共包</b>：抽出来就是第三个所有服务都依赖的包，收益抵不上耦合。规则以用户模块设计为准，用同一组测试向量验证两边一致。</p>
+<table>
+  <tr><th>操作</th><th>member</th><th>builder</th><th>admin</th></tr>
+  <tr><td>对话中使用 agent 已配置的技能 / MCP</td><td class="c">✓</td><td class="c">✓</td><td class="c">✓</td></tr>
+  <tr><td>查看技能目录、MCP server 列表与详情</td><td class="c">—</td><td class="c">✓</td><td class="c">✓</td></tr>
+  <tr><td>在 agent 上引用技能 / MCP 工具</td><td class="c">—</td><td class="c">✓</td><td class="c">✓</td></tr>
+  <tr><td>MCP 强制刷新</td><td class="c">—</td><td class="c">—</td><td class="c">✓</td></tr>
+  <tr><td>技能上传 / 审查 / 停用 / 下架</td><td class="c">—</td><td class="c">—</td><td class="c">✓（审查人 ≠ 上传人）</td></tr>
+  <tr><td>MCP 注册表增删改、工具复核</td><td class="c">—</td><td class="c">—</td><td class="c">✓</td></tr>
+</table>
+
+<!-- ================================================================ -->
+<h2 id="s15">15. 数据库与迁移</h2>
+<table>
+  <tr><th>库</th><th>迁移</th><th>表</th></tr>
+  <tr><td><code>atlas_config</code>（新，同一 PG 实例）</td><td><code>atlas_config/migrations/</code>（包内）：<code>c0001_initial</code></td><td>skill · skill_version · mcp_server · mcp_tool_review · config_audit</td></tr>
+  <tr><td><code>atlas</code>（运行时，已有）</td><td><code>server/migrations/</code>：<code>0014_skill_usage_daily</code></td><td>skill_usage_daily</td></tr>
+</table>
+<ul>
+  <li>两边都<b>不建外键</b>（运行时 0013 起的约定，配置端从一开始就遵守）；类型走各自的 <code>db/types.py</code>，不写厂商专有类型。</li>
+  <li>独立 database 而不是同库不同 schema：各自 alembic 版本表互不干扰，以后迁出实例只改连接串。</li>
+  <li>本地开发：<code>docker-compose.yml</code> 的 Postgres 初始化脚本加一行 <code>CREATE DATABASE atlas_config</code>。测试库同理（<code>clean_db</code> 只清 <code>atlas</code> 库）。</li>
+</ul>
+<pre><code># server 迁移 0014
+skill_usage_daily
+  day date · slug varchar(63) · version int · agent_id uuid
+  loads int default 0 · completed_runs int default 0
+  PRIMARY KEY (day, slug, version, agent_id)</code></pre>
+<table>
+  <tr><th>新增配置</th><th>所在服务</th><th>默认</th></tr>
+  <tr><td><code>config_base_url</code>、<code>config_internal_token</code></td><td>server</td><td>空 = 使用 FakeSkillDirectory 并在启动日志醒目告警（仅允许 dev 模式）</td></tr>
+  <tr><td><code>skill_index_budget_chars</code></td><td>server</td><td>2000</td></tr>
+  <tr><td><code>configplane_status_ttl_s</code></td><td>server</td><td>60</td></tr>
+  <tr><td><code>CONFIG_DATABASE_URL</code>、S3 连接、<code>skill_max_bytes</code> 等</td><td>atlas-config</td><td>—</td></tr>
+</table>
+
+<!-- ================================================================ -->
+<h2 id="s16">16. 部署</h2>
+<table>
+  <tr><th>项</th><th>做法</th></tr>
+  <tr><td>镜像</td><td>沿用 <code>atlas-app</code>：<code>docker/app/Dockerfile</code> 加 <code>COPY config/ config/</code>，workspace 加成员 <code>config</code></td></tr>
+  <tr><td>K8s</td><td>新增 <code>deploy/local/25-config.yaml</code>（namespace atlas-system，<code>command: ["python", "-m", "atlas_config", "serve"]</code>，端口 8020）；启动前跑 <code>alembic upgrade head</code>（initContainer）</td></tr>
+  <tr><td>对象存储权限</td><td>atlas-config 的凭证可写 <code>_skills/</code>、<code>_skills_drafts/</code>；server 的凭证对 <code>_skills/</code> 只读（MinIO policy）。本地 MinIO 先共用一组 key，正式环境分开</td></tr>
+  <tr><td>网络</td><td><code>/internal/*</code> 只对 atlas-system 内开放；<code>/config/*</code> 经 BFF / Ingress</td></tr>
+  <tr><td>启动顺序</td><td>无强依赖：server 启动时不连 config，首次需要时才拉；config 宕机不影响已缓存的技能</td></tr>
+</table>
+
+<!-- ================================================================ -->
+<h2 id="s17">17. 原型 → 后端能力对照</h2>
+<table>
+  <tr><th>原型元素</th><th>后端能力</th><th>期</th></tr>
+  <tr><td>技能列表（版本、状态、来源、含脚本、引用、7 天选中）</td><td>config <code>GET /config/skills</code> + server references / usage</td><td>P1 只读</td></tr>
+  <tr><td>技能详情：frontmatter、包结构、扫描结果、被引用、效果</td><td>skill_version 字段 + 文件查看接口 + server references / usage</td><td>P1 只读</td></tr>
+  <tr><td>上传技能 / 新版本 / 停用 / 紧急下架按钮</td><td>P1 命令行；P2 <code>/config/*</code> 写接口</td><td>P2 上页面</td></tr>
+  <tr><td>「待人工审查」状态</td><td>status=pending_review</td><td>P1 命令行即有；P2 页面</td></tr>
+  <tr><td>MCP 列表（传输、凭证、状态、工具数、最近发现、引用）</td><td>server <code>GET /v1/mcp/servers</code></td><td>P1</td></tr>
+  <tr><td>MCP 详情：连接参数、指纹、描述 diff</td><td>server 快照 previous</td><td>P1</td></tr>
+  <tr><td>「确认变更」「停用该 server」「注册 server」</td><td>config mcp_tool_review / mcp_server</td><td>P2</td></tr>
+  <tr><td>编辑器技能区：选择、钉死版本、升级提示、已下架、预算条</td><td><code>_pin_skills</code> + server <code>GET /v1/skills</code></td><td>P1</td></tr>
+  <tr><td>编辑器 MCP 区：按 server 分组、凭证作用域、指纹、待复核</td><td><code>/v1/tools</code> 新字段 + mcp_tool_digests</td><td>P1</td></tr>
+  <tr><td>ACP 子智能体配技能 / MCP</td><td>技能：已有投送；MCP：§10 下发，<b>server 级</b></td><td>P1</td></tr>
+  <tr><td>时间线「加载技能」行、MCP 来源标记</td><td><code>skill.loaded</code>；模型侧名解析</td><td>P1</td></tr>
+  <tr><td>用户菜单「已连接的服务」</td><td>user 作用域 OAuth</td><td>P3</td></tr>
+</table>
+
+<!-- ================================================================ -->
+<h2 id="s18">18. 测试</h2>
+<table>
+  <tr><th>层</th><th>用例</th></tr>
+  <tr><td>config 单元</td><td>parser：frontmatter 缺字段 / 非法 YAML / name 与 slug 不一致；scanner：符号链接、<code>../</code>、超限、二进制、注入特征；content_hash 与文件顺序无关；状态机非法迁移；审查人 = 上传人被拒；headers 明文凭证被拒</td></tr>
+  <tr><td>config 集成（PG + moto S3）</td><td>publish 版本号递增且并发安全；同版本不可覆盖；拷贝失败回滚；残留对象清理；草稿不出现在 <code>/internal</code>；重启后 scanning 行被重新处理；<code>adopt</code> 登记现有技能</td></tr>
+  <tr><td>server 单元（FakeSkillDirectory）</td><td>钉死：空版本取 latest、不存在 400、revoked 400、disabled 沿用通过 / 新增 400、预算超限、子智能体同样处理；<code>to_engine()</code> 空版本抛错；永久缓存与 content_hash 不一致告警；revoked 拉取失败用上次结果；快照 previous；drift warn / block；<code>acp_mcp_servers</code></td></tr>
+  <tr><td>server 集成</td><td>建会话跳过 revoked 并发 <code>skill.skipped</code>；读 SKILL.md → <code>skill.loaded</code> 一次 + usage 累加；<code>/v1/mcp/servers</code> 不触发网络</td></tr>
+  <tr><td>契约</td><td>server 的 HttpSkillDirectory 对着真实启动的 atlas-config（TestClient）跑一遍，保证两边对 <code>atlas_config.schemas</code> 的理解一致</td></tr>
+  <tr><td>守卫</td><td>import-linter 两条新契约；<code>test_spec_snapshots.py</code> 覆盖新字段默认值</td></tr>
+  <tr><td>ACP 冒烟</td><td><code>deploy/local/acp_smoke.py</code> 扩展：ACP agent 配一个本地 MCP server，CLI 能列出并调用其工具（G2 回归）</td></tr>
+</table>
+<p class="sub">注意：<code>clean_db</code> 会清空开发库里非内置的 agent，本地跑集成测试前先确认。</p>
+
+<!-- ================================================================ -->
+<h2 id="s19">19. 风险与待决问题</h2>
+<table>
+  <tr><th>#</th><th>问题</th><th>影响 / 建议</th></tr>
+  <tr><td>R1</td><td>ACP 下发真实凭证进 Pod（§10）</td><td>CLI 和模型可执行的命令都能读到 token。P1 仅允许 platform 作用域、最小权限专用 key；P3 换网关会话令牌</td></tr>
+  <tr><td>R2</td><td>ACP 的 MCP 只能 server 级</td><td>无法只给 CLI 部分工具。受限场景可注册一个"子集" server（网关按路径过滤），P3 评估</td></tr>
+  <tr><td>R3</td><td>同语言导致边界被 import 绕过</td><td>import-linter 契约（§4.1）；评审时检查新增的跨包 import</td></tr>
+  <tr><td>R4</td><td>技能与引用分处两个库，没有事务</td><td>停用 / 下架不检查引用（本来就允许）；运行时以"拿不到就明确报错"兜底；不提供物理删除</td></tr>
+  <tr><td>R5</td><td>修 G1 后存量 <code>version=0</code> 引用、以及手工放进 <code>_skills/</code> 的技能</td><td>扫描脚本出清单 + <code>skill adopt</code> 登记</td></tr>
+  <tr><td>R6</td><td>"选中"按读取 SKILL.md 判定，ACP 侧可能漏计</td><td>只影响统计；V2 验证</td></tr>
+</table>
+
+<h3>待验证</h3>
+<table>
+  <tr><th>#</th><th>验证项</th><th>决定什么</th></tr>
+  <tr><td>V1</td><td>技能描述预算 2000 字符是否合适</td><td><code>skill_index_budget_chars</code></td></tr>
+  <tr><td>V2</td><td>CLI 加载平台挂载技能时的事件形态（Read 还是 Skill 工具）</td><td>§7.4 ACP 检测规则</td></tr>
+  <tr><td>V3</td><td>bridge 0.3.0 的 adapter 是否声明 <code>mcpCapabilities.http</code>，resume 时是否接受 mcpServers</td><td>§10 是否需要 bridge 侧改动</td></tr>
+  <tr><td>V4</td><td>MCP server 的 tools/list 多次返回是否稳定</td><td>digest 会不会误报变更</td></tr>
+</table>
+
+<h3>需要评审确认的决定</h3>
+<ol>
+  <li><b>atlas-config 作为独立服务</b>（workspace 成员 + 独立 database），而不是 server 内模块（§2.2）。</li>
+  <li><b>MCP 发现留在运行时</b>，配置端只存定义与复核结论；同步修改 structure.html（§3）。</li>
+  <li><b>技能固定版本</b>，不支持"自动跟随最新"；编辑器内一键升级。</li>
+  <li><b>不提供技能物理删除</b>，只有停用与紧急下架。</li>
+  <li><b>P1 技能发布用命令行</b>，管理页的写入口等 P2。</li>
+  <li><b>BFF 上线前 web 直连两个服务</b>（两个 base URL）。</li>
+</ol>
+
+
+<!-- ================================================================ -->
+<h2 id="s20">20. 实现状态与偏差（2026-10-05）</h2>
+
+<h3>20.1 已实现</h3>
+<table>
+  <tr><th>部分</th><th>内容</th><th>位置</th></tr>
+  <tr><td>atlas-config 服务</td><td>技能：解析、三层机械扫描、审查（四眼）、发布（版本号在发布时分配、并发安全）、停用 / 启用 / 紧急下架 / 重扫、adopt 登记存量；MCP 注册表增改与停用、header 明文凭据拒收、工具复核；审计；内部 / 管理两组接口；CLI；独立库迁移</td><td><code>config/src/atlas_config/</code></td></tr>
+  <tr><td>运行时消费</td><td>技能目录客户端（版本内容内存 + 磁盘永久缓存，状态 TTL、拉取失败用上次结果）；保存时钉死版本与预算校验（修 G1）；建会话 / 装配时过滤已下架；描述取自配置服务</td><td><code>server/…/configplane/</code>、<code>services/spec_refs.py</code>、<code>skill_copy.py</code></td></tr>
+  <tr><td>MCP</td><td>注册表来源可切换（<code>MCP_REGISTRY=env|config</code>）；快照保留上一版定义；复核闸门；保存时记录指纹、运行时比对；ACP 下发 mcpServers（修 G2）</td><td><code>providers/mcp/{review,acp,native,catalog}.py</code>、<code>host/runtime.py</code></td></tr>
+  <tr><td>事件与统计</td><td><code>skill.loaded</code>（native 与 ACP 同一规则）、<code>skill.skipped</code>、<code>mcp.tool_drift</code>；装配期提示经 runner 统一编号；<code>skill_usage_daily</code>（迁移 0014）</td><td><code>domain/skill_events.py</code>、<code>executor/runner.py</code></td></tr>
+  <tr><td>只读 API</td><td><code>/v1/skills</code>、<code>/v1/skills/usage</code>、<code>/v1/skills/{slug}/references</code>、<code>/v1/mcp/servers[/{name}]</code>、<code>/v1/mcp/servers/{name}/refresh</code>；<code>/v1/tools</code> 增加 server / digest / review_status</td><td><code>api/v1/catalog.py</code></td></tr>
+  <tr><td>部署</td><td>workspace 成员、import-linter 两条契约、镜像、<code>deploy/local/25-config.yaml</code>、compose 建库、Makefile</td><td>—</td></tr>
+</table>
+
+<h3>20.2 与上文设计的偏差</h3>
+<table>
+  <tr><th>设计</th><th>实现</th><th>原因</th></tr>
+  <tr><td>状态有 draft / scanning，扫描异步</td><td>无这两个状态：上传即同步扫描，结果是 pending_review 或直接 published</td><td>≤ 20MB 的正则扫描是毫秒级；多一个中间态只多一种「重启后卡在半路」</td></tr>
+  <tr><td>skill_version 主键 (slug, version)</td><td>主键 id（UUID），(slug, version) 唯一</td><td>待审查 / 被拒的上传没有版本号</td></tr>
+  <tr><td>动作用 <code>…:approve</code></td><td>子路径 <code>…/approve</code></td><td>Starlette 路径参数会吞掉冒号后的部分</td></tr>
+  <tr><td>block 策略下全被拦则 run 失败</td><td>跳过并提示，run 照常</td><td>与复核闸门同一套行为，更简单</td></tr>
+  <tr><td>loads = 加载次数</td><td>loads = 加载过该技能的 run 数</td><td>同一 run 常分段读同一个 SKILL.md，按次数会虚高</td></tr>
+  <tr><td>没有配置服务时 = 不可用</td><td>兼容模式：技能必须写明版本号，描述以 slug 兜底</td><td>接入前已存在的部署不应因此失效</td></tr>
+  <tr><td>运行时 API 按角色检查</td><td>暂未检查</td><td>用户模块未上线，现在只有 dev 身份</td></tr>
+  <tr><td>ACP 子智能体编辑器按 server 选</td><td>后端不展开通配；下发按 server，闸门按 server（任一工具未复核整台不下发）</td><td>CLI 自己 tools/list，平台无法按工具裁剪</td></tr>
+</table>
+
+<h3>20.3 验证</h3>
+<ul>
+  <li>atlas-config：51 个测试（包、扫描、状态机、并发发布、HTTP、MCP 注册表），独立测试库 <code>atlas_config_test</code></li>
+  <li>运行时：新增 34 个测试（含对着真实 atlas-config 的契约测试）；其余不清库的用例 483 通过，2 个失败为既有的模型目录与网关环境问题，与本次无关</li>
+  <li>端到端冒烟：真实 MinIO + HTTP —— 发布（含审查）→ 运行时读取 → CLI 下架 → 运行时看到下架；内部接口无令牌 401</li>
+  <li>未运行：用 <code>clean_db</code> 的用例（会清掉开发库里的 agent）</li>
+  <li>部署后端到端（本机 K8s，真实模型）：发布技能 → 不带版本创建 agent 被钉成 v1、MCP 指纹已记录 → 会话里模型读 SKILL.md 产出 <code>skill.loaded</code> → 用量与引用反查正确 → 紧急下架 → 下一轮 <code>skill.skipped</code>、会话副本被删除 → 再保存被 400 拒绝</li>
+</ul>
+
+<h3>20.4 未做</h3>
+<ul>
+  <li>P3：user 作用域 OAuth、经 Higress 收口、ACP 改发网关会话令牌</li>
+  <li>V1–V4 待验证项（尤其 V3：adapter 的 mcpCapabilities 与 resume 时的 mcpServers）</li>
+  <li>MCP 注册表仍为 <code>MCP_REGISTRY=env</code>；切到 config 需先 <code>mcp import-env</code></li>
+  <li>新的时间线提示（加载技能 / 跳过 / MCP 漂移）只在本轮进行中显示；刷新后的历史视图与工具行一样不回放事件</li>
+</ul>
+</main>
+</body>
+</html>

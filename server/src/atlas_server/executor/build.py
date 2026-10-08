@@ -16,7 +16,9 @@ from typing import TYPE_CHECKING, Any
 from atlas_engine.contracts import InvalidSpec
 from atlas_engine.kernel.middleware.approval import ApprovalMiddleware
 from atlas_engine.kernel.middleware.limits import StepLimitMiddleware, ToolGovernorMiddleware
+from atlas_engine.kernel.middleware.suspension import SuspensionMiddleware
 
+from atlas_server.domain.mcp_naming import approval_target
 from atlas_server.domain.tool_registry import FILESYSTEM_TOOL, filesystem_tools_for, middleware_for
 
 if TYPE_CHECKING:
@@ -100,15 +102,24 @@ def build_graph(
     # ★ 中间件顺序即语义，从外到内分两层显式列出（列表顺序 = 包裹顺序）：
     #
     #   外层（顺序敏感）：
-    #     1. approval  必须最外 —— 排后面的话工具已被内层执行掉，再问也来不及
-    #     2. compactor 次之 —— abefore_model 要在其它中间件动手前拿到完整消息列表
+    #     1. suspension 必须最外 —— 它的 before_model 要在任何「为模型调用做
+    #        准备」的工作之前跳出。排在 compactor 后面的话，一个马上就要挂起
+    #        的段可能先触发一次压缩：调一次 LLM、写一次 thread.summary，
+    #        然后才发现这一段根本不调模型。白花钱且把摘要边界搞乱。
+    #     2. approval  次之 —— 排后面的话工具已被内层执行掉，再问也来不及
+    #     3. compactor 再次之 —— abefore_model 要在其它中间件动手前拿到完整消息列表
     #   内层（彼此无序）：
     #     工具中间件 + 步数上限 + 工具并发/熔断（§4.4 / §13.2）
     #
     # 新增有序中间件时把它插进 outer 的正确位置并写明理由，不要用 insert(0)。
     outer: list[Any] = []
+    # ★ 无条件装：它无状态、零开销（只扫最后几条消息），而「悬空的 tool_call
+    #   续跑时自愈」这条判据对任何 agent 都有价值 —— 不只是配了子智能体或
+    #   高风险工具的那些。
+    outer.append(SuspensionMiddleware())
     if spec.limits.require_approval_for and approvals is not None:
-        outer.append(ApprovalMiddleware(frozenset(spec.limits.require_approval_for), approvals))
+        guarded = frozenset(approval_target(n) for n in spec.limits.require_approval_for)
+        outer.append(ApprovalMiddleware(guarded, approvals))
     if compactor is not None:
         outer.append(compactor)
 

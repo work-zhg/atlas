@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Langfuse 功能与原理介绍</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --border: #d1d9e0; --head: #f6f8fa;
+    --accent: #0969da; --ok: #1a7f37; --ok-bg: #dafbe1; --warn: #9a6700; --warn-bg: #fff8c5;
+    --code-bg: #f6f8fa; --box: #ddf4ff; --box-bd: #54aeff; --box2: #fbefff; --box2-bd: #c297ff;
+    --box3: #dafbe1; --box3-bd: #4ac26b; --box4: #fff8c5; --box4-bd: #d4a72c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --border: #3d444d; --head: #151b23;
+      --accent: #4493f8; --ok: #3fb950; --ok-bg: #12261e; --warn: #d29922; --warn-bg: #2b2111;
+      --code-bg: #151b23; --box: #12263f; --box-bd: #1f6feb; --box2: #271a36; --box2-bd: #8957e5;
+      --box3: #12261e; --box3-bd: #2ea043; --box4: #2b2111; --box4-bd: #9e6a03;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 32px; background: var(--bg); color: var(--fg);
+         font: 14px/1.75 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; }
+  h1 { font-size: 27px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 42px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 15.5px; margin: 22px 0 8px; }
+  .sub { color: var(--muted); margin: 0 0 14px; }
+  code { font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code-bg); padding: 1px 4px; border-radius: 4px; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px 14px; overflow-x: auto; }
+  pre code { background: none; padding: 0; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0 16px; }
+  th, td { border: 1px solid var(--border); padding: 7px 10px; vertical-align: top; text-align: left; }
+  th { background: var(--head); white-space: nowrap; }
+  .callout { border-left: 4px solid var(--accent); background: var(--head); padding: 10px 14px; border-radius: 4px; margin: 14px 0; }
+  .callout.warn { border-color: var(--warn); background: var(--warn-bg); }
+  .tag { display: inline-block; padding: 0 7px; border-radius: 9px; font-size: 12px; font-weight: 600; border: 1px solid; white-space: nowrap; }
+  .tag.repo { color: var(--ok); background: var(--ok-bg); border-color: var(--ok); }
+  .tag.doc { color: var(--warn); background: var(--warn-bg); border-color: var(--warn); }
+  .toc { columns: 2; padding-left: 18px; }
+  .fig { border: 1px solid var(--border); border-radius: 6px; padding: 10px; overflow-x: auto; margin: 10px 0 16px; }
+  svg text { fill: var(--fg); font-size: 12.5px; font-family: -apple-system, "PingFang SC", sans-serif; }
+  svg .t-sm { font-size: 11px; fill: var(--muted); }
+  svg .t-b { font-weight: 600; }
+  svg .b1 { fill: var(--box); stroke: var(--box-bd); }
+  svg .b2 { fill: var(--box2); stroke: var(--box2-bd); }
+  svg .b3 { fill: var(--box3); stroke: var(--box3-bd); }
+  svg .b4 { fill: var(--box4); stroke: var(--box4-bd); }
+  svg .ln { stroke: var(--fg); stroke-width: 1.4; fill: none; }
+  svg .dash { stroke-dasharray: 5 4; }
+  svg .num { fill: var(--accent); font-weight: 700; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; margin: 12px 0; }
+  .card { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; background: var(--bg); }
+  .card h4 { margin: 0 0 6px; font-size: 14.5px; }
+  .card p { margin: 0; color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Langfuse 功能与原理介绍</h1>
+<p class="sub">
+  2026-10-04 · 来源标注：<span class="tag repo">仓库核对</span> 表示已对照 Atlas 仓库里的配置；
+  <span class="tag doc">官方资料</span> 表示来自 Langfuse 官方公开文档（截至编写者的知识范围），具体版本细节以官方最新文档为准。
+</p>
+
+<ol class="toc">
+  <li><a href="#what">Langfuse 是什么</a></li>
+  <li><a href="#features">核心功能</a></li>
+  <li><a href="#model">数据模型</a></li>
+  <li><a href="#arch">架构与组件</a></li>
+  <li><a href="#ingest">原理：一条 trace 是怎么进来的</a></li>
+  <li><a href="#principles">原理：提示词管理与评估</a></li>
+  <li><a href="#integrate">接入方式</a></li>
+  <li><a href="#vs">与 Jaeger 等 APM 的分工</a></li>
+  <li><a href="#atlas">在 Atlas 里怎么用</a></li>
+  <li><a href="#tradeoffs">优缺点与注意事项</a></li>
+</ol>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2 id="what">1. Langfuse 是什么 <span class="tag doc">官方资料</span></h2>
+<p>
+  Langfuse 是一个<b>开源的 LLM 工程平台</b>，帮团队观察、调试、评估和迭代基于大模型的应用（包括 Agent）。
+  核心代码以 MIT 许可开源，可以<b>自托管</b>，也可以使用官方云服务；少量企业功能（如 SSO 细粒度权限、审计日志）属于商业版。
+</p>
+<p>一句话概括它解决的问题：<b>"模型这一次到底收到了什么、回了什么、花了多少钱、效果好不好，以及改了提示词之后有没有变好。"</b></p>
+<table>
+  <tr><th>典型问题</th><th>Langfuse 给出的答案</th></tr>
+  <tr><td>用户说回答不对，当时模型看到了什么？</td><td>Tracing：按会话、按用户找到那一次调用，看完整的输入输出和中间步骤</td></tr>
+  <tr><td>这个月模型花了多少钱，花在哪了？</td><td>成本统计：按模型、用户、功能、提示词版本拆分 token 用量和费用</td></tr>
+  <tr><td>改了提示词，效果是变好还是变坏？</td><td>提示词版本管理 + 数据集实验 + 评分，对比不同版本</td></tr>
+  <tr><td>线上回答质量怎么持续监控？</td><td>评估：LLM 自动打分（LLM-as-a-Judge）、人工标注、用户反馈</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2 id="features">2. 核心功能 <span class="tag doc">官方资料</span></h2>
+<div class="grid">
+  <div class="card"><h4>🔍 链路追踪 Tracing</h4><p>记录一次请求里的每一步：模型调用、工具调用、检索、Agent 推理。可以看完整的输入输出、耗时、token 和费用，支持多模态内容（图片、音频）。</p></div>
+  <div class="card"><h4>💬 会话与用户 Sessions / Users</h4><p>把多条 trace 归到同一个会话（多轮对话）或同一个用户下，按会话回放整段对话，按用户统计用量和费用。</p></div>
+  <div class="card"><h4>📝 提示词管理 Prompt Management</h4><p>提示词集中存储、版本化，用标签（如 <code>production</code>、<code>staging</code>）发布；应用运行时按名称加标签拉取，改提示词不用重新发版。</p></div>
+  <div class="card"><h4>⚖️ 评估 Evaluation</h4><p>给 trace 或其中某一步打分（Score）：LLM-as-a-Judge 自动评估、人工标注队列、用户反馈（点赞点踩）、通过 API 写入的自定义指标。</p></div>
+  <div class="card"><h4>🧪 数据集与实验 Datasets / Experiments</h4><p>沉淀测试样本（可以直接从线上 trace 加入），拿不同的提示词或模型版本跑一遍，结果自动打分，横向对比。</p></div>
+  <div class="card"><h4>🛝 Playground</h4><p>在界面里直接调提示词、换模型、改参数，立即看效果；可以从某条 trace 一键打开，复现当时的调用。</p></div>
+  <div class="card"><h4>📊 指标与看板 Dashboards</h4><p>成本、延迟、token 用量、质量评分随时间的变化，可以按模型、用户、标签、提示词版本等维度切分。</p></div>
+  <div class="card"><h4>🔌 开放 API 与导出</h4><p>所有数据都能通过 Public API 读写，支持导出到对象存储或数据仓库做离线分析。</p></div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2 id="model">3. 数据模型 <span class="tag doc">官方资料</span></h2>
+<p>理解 Langfuse，先理解它的几个核心对象：</p>
+<div class="fig">
+<svg width="1040" height="300" viewBox="0 0 1040 300" xmlns="http://www.w3.org/2000/svg">
+  <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker></defs>
+  <g style="color: currentColor">
+  <rect class="b4" x="20" y="20" width="170" height="54" rx="8"/><text x="105" y="43" text-anchor="middle" class="t-b">Session 会话</text><text x="105" y="62" text-anchor="middle" class="t-sm">一段多轮对话</text>
+  <rect class="b4" x="20" y="96" width="170" height="54" rx="8"/><text x="105" y="119" text-anchor="middle" class="t-b">User 用户</text><text x="105" y="138" text-anchor="middle" class="t-sm">按用户统计用量</text>
+
+  <rect class="b1" x="260" y="50" width="200" height="72" rx="8"/><text x="360" y="76" text-anchor="middle" class="t-b">Trace 链路</text>
+  <text x="360" y="96" text-anchor="middle" class="t-sm">一次请求 / 一次 Agent 执行</text><text x="360" y="112" text-anchor="middle" class="t-sm">sessionId · userId · tags · metadata</text>
+  <line class="ln" x1="190" y1="47" x2="258" y2="78" marker-end="url(#a)"/><line class="ln" x1="190" y1="123" x2="258" y2="96" marker-end="url(#a)"/>
+  <text x="196" y="40" class="t-sm">包含多条</text>
+
+  <rect class="b3" x="530" y="14" width="230" height="44" rx="8"/><text x="645" y="34" text-anchor="middle" class="t-b">Span 步骤</text><text x="645" y="50" text-anchor="middle" class="t-sm">有起止时间的任意步骤，可嵌套</text>
+  <rect class="b3" x="530" y="66" width="230" height="44" rx="8"/><text x="645" y="86" text-anchor="middle" class="t-b">Generation 模型调用</text><text x="645" y="102" text-anchor="middle" class="t-sm">模型名 · 参数 · token · 费用 · 提示词版本</text>
+  <rect class="b3" x="530" y="118" width="230" height="44" rx="8"/><text x="645" y="138" text-anchor="middle" class="t-b">Event 事件</text><text x="645" y="154" text-anchor="middle" class="t-sm">没有时长的单点事件</text>
+  <text x="530" y="182" class="t-sm">↑ 统称 Observation；新版还细分出 agent / tool / retriever / embedding 等类型</text>
+  <line class="ln" x1="460" y1="86" x2="528" y2="36" marker-end="url(#a)"/><line class="ln" x1="460" y1="86" x2="528" y2="88" marker-end="url(#a)"/><line class="ln" x1="460" y1="86" x2="528" y2="140" marker-end="url(#a)"/>
+  <text x="466" y="64" class="t-sm">树状嵌套</text>
+
+  <rect class="b2" x="830" y="40" width="190" height="54" rx="8"/><text x="925" y="63" text-anchor="middle" class="t-b">Score 评分</text><text x="925" y="82" text-anchor="middle" class="t-sm">数值 / 分类 / 布尔</text>
+  <line class="ln dash" x1="828" y1="70" x2="762" y2="86" marker-end="url(#a)"/>
+  <text x="772" y="118" class="t-sm">挂在 trace 或某一步上</text>
+
+  <rect class="b2" x="260" y="210" width="200" height="54" rx="8"/><text x="360" y="233" text-anchor="middle" class="t-b">Prompt 提示词</text><text x="360" y="252" text-anchor="middle" class="t-sm">名称 · 版本 · 标签 · 变量</text>
+  <line class="ln dash" x1="460" y1="230" x2="527" y2="96" marker-end="url(#a)"/><text x="480" y="214" class="t-sm">Generation 记录用了哪个版本</text>
+
+  <rect class="b2" x="760" y="210" width="260" height="54" rx="8"/><text x="890" y="233" text-anchor="middle" class="t-b">Dataset → Item → Run</text><text x="890" y="252" text-anchor="middle" class="t-sm">测试集 · 样本 · 一次实验（关联 trace）</text>
+  </g>
+</svg>
+</div>
+<table>
+  <tr><th>对象</th><th>含义</th><th>要点</th></tr>
+  <tr><td><b>Trace</b></td><td>一次完整请求或一次 Agent 执行</td><td>所有步骤的根。挂 <code>sessionId</code>、<code>userId</code>、<code>tags</code>、<code>metadata</code>，方便检索</td></tr>
+  <tr><td><b>Observation</b></td><td>trace 里的一步，有父子关系，组成一棵树</td><td>三种基本类型：<b>Span</b>（有时长的步骤）、<b>Generation</b>（模型调用，带模型、参数、token、费用）、<b>Event</b>（单点事件）</td></tr>
+  <tr><td><b>Session</b></td><td>多条 trace 组成的一段对话</td><td>不需要单独创建，trace 上带同一个 <code>sessionId</code> 就自动归为一组</td></tr>
+  <tr><td><b>Score</b></td><td>对 trace 或某一步的评价</td><td>来源可以是自动评估、人工标注、用户反馈或 API；可以是数值、分类或布尔值</td></tr>
+  <tr><td><b>Prompt</b></td><td>受管理的提示词</td><td>不可变的版本 + 可以移动的标签；Generation 上记录用了哪个版本，于是能按版本对比效果</td></tr>
+  <tr><td><b>Dataset</b></td><td>测试集</td><td>每个 Item 有输入和期望输出；一次 Run 是"拿某个版本跑一遍这个测试集"，每个样本对应一条 trace</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2 id="arch">4. 架构与组件（v3 自托管） <span class="tag doc">官方资料</span> <span class="tag repo">仓库核对</span></h2>
+<p>v3 把系统拆成"接收请求"和"处理数据"两部分，存储也按数据特点分成了四种：</p>
+<div class="fig">
+<svg width="1010" height="370" viewBox="0 0 1010 370" xmlns="http://www.w3.org/2000/svg">
+  <defs><marker id="b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker></defs>
+  <g style="color: currentColor">
+  <!-- 调用方 -->
+  <rect class="b4" x="20" y="30" width="190" height="72" rx="8"/><text x="115" y="56" text-anchor="middle" class="t-b">你的应用</text><text x="115" y="75" text-anchor="middle" class="t-sm">Langfuse SDK / OTel SDK</text><text x="115" y="91" text-anchor="middle" class="t-sm">框架集成（LangChain…）</text>
+  <rect class="b4" x="20" y="130" width="190" height="56" rx="8"/><text x="115" y="154" text-anchor="middle" class="t-b">浏览器</text><text x="115" y="172" text-anchor="middle" class="t-sm">查看、标注、管理提示词</text>
+
+  <!-- 处理链 -->
+  <rect class="b1" x="300" y="20" width="250" height="176" rx="10"/>
+  <text x="425" y="46" text-anchor="middle" class="t-b">langfuse-web</text>
+  <text x="425" y="66" text-anchor="middle" class="t-sm">Next.js：Web UI + API</text>
+  <text x="425" y="92" text-anchor="middle" class="t-sm">摄取接口 /api/public/ingestion</text>
+  <text x="425" y="110" text-anchor="middle" class="t-sm">OTel 接口 /api/public/otel</text>
+  <text x="425" y="128" text-anchor="middle" class="t-sm">Public API（读写数据）</text>
+  <text x="425" y="154" text-anchor="middle" class="t-sm">只做鉴权、校验、落盘、入队</text>
+  <text x="425" y="172" text-anchor="middle" class="t-sm">不做重处理</text>
+
+  <rect class="b3" x="330" y="230" width="190" height="44" rx="8"/><text x="425" y="250" text-anchor="middle" class="t-b">Redis / Valkey</text><text x="425" y="266" text-anchor="middle" class="t-sm">任务队列 · 缓存</text>
+
+  <rect class="b1" x="300" y="306" width="250" height="52" rx="10"/><text x="425" y="328" text-anchor="middle" class="t-b">langfuse-worker</text><text x="425" y="346" text-anchor="middle" class="t-sm">合并事件 · 计算费用 · 自动评估 · 导出</text>
+
+  <!-- 存储 -->
+  <rect class="b3" x="690" y="20" width="300" height="56" rx="8"/><text x="840" y="44" text-anchor="middle" class="t-b">S3 / 对象存储</text><text x="840" y="62" text-anchor="middle" class="t-sm">原始事件 · 多模态媒体 · 导出文件</text>
+  <rect class="b3" x="690" y="120" width="300" height="56" rx="8"/><text x="840" y="144" text-anchor="middle" class="t-b">PostgreSQL</text><text x="840" y="162" text-anchor="middle" class="t-sm">用户 · 项目 · API Key · 提示词 · 数据集</text>
+  <rect class="b3" x="690" y="302" width="300" height="56" rx="8"/><text x="840" y="326" text-anchor="middle" class="t-b">ClickHouse</text><text x="840" y="344" text-anchor="middle" class="t-sm">trace · observation · score（列式，海量、聚合查询）</text>
+
+  <!-- 箭头 -->
+  <line class="ln" x1="210" y1="66" x2="298" y2="80" marker-end="url(#b)"/><text x="218" y="60" class="t-sm">批量上报</text>
+  <line class="ln" x1="210" y1="158" x2="298" y2="146" marker-end="url(#b)"/>
+  <line class="ln" x1="550" y1="44" x2="688" y2="44" marker-end="url(#b)"/><text x="566" y="38" class="num">①</text><text x="582" y="38" class="t-sm">原始事件落盘</text>
+  <line class="ln" x1="550" y1="148" x2="688" y2="148" marker-end="url(#b)"/><text x="566" y="142" class="t-sm">配置 · 提示词</text>
+  <line class="ln" x1="425" y1="196" x2="425" y2="228" marker-end="url(#b)"/><text x="433" y="217" class="num">②</text><text x="450" y="217" class="t-sm">入队</text>
+  <line class="ln" x1="425" y1="274" x2="425" y2="304" marker-end="url(#b)"/><text x="433" y="294" class="num">③</text><text x="450" y="294" class="t-sm">取任务</text>
+  <polyline class="ln dash" points="550,318 630,318 630,66 688,66" marker-end="url(#b)"/><text x="636" y="210" class="t-sm">读原始事件</text>
+  <line class="ln" x1="550" y1="340" x2="688" y2="330" marker-end="url(#b)"/><text x="566" y="352" class="num">④</text><text x="582" y="362" class="t-sm">合并、计费后写入</text>
+  <polyline class="ln dash" points="550,180 660,180 660,302" marker-end="url(#b)"/><text x="666" y="250" class="t-sm">查询</text>
+  </g>
+</svg>
+</div>
+<table>
+  <tr><th>组件</th><th>职责</th><th>为什么这样选</th></tr>
+  <tr><td><b>langfuse-web</b></td><td>界面和全部 API；接收上报后只做鉴权、校验、落盘、入队</td><td>接收路径要快、要稳，把重活交给 worker，上报高峰不会拖慢界面</td></tr>
+  <tr><td><b>langfuse-worker</b></td><td>消费队列：解析事件、合并同一对象的多次更新、计算 token 和费用、写入 ClickHouse；执行自动评估、批量导出等后台任务</td><td>可以独立横向扩容。<b>Atlas 部署时踩过的坑：只起 web 不起 worker 的话，上报会返回 200，但数据永远不会出现，也不报错</b>（<code>docker-compose.yml</code> 的注释） <span class="tag repo">仓库核对</span></td></tr>
+  <tr><td><b>ClickHouse</b></td><td>存 trace、observation、score 这类海量、只追加、以聚合查询为主的数据</td><td>v2 只用 Postgres，量一大查询就慢；列式数据库适合"按时间、模型、用户聚合"这类看板查询</td></tr>
+  <tr><td><b>PostgreSQL</b></td><td>存用户、项目、API Key、提示词、数据集配置等事务性数据</td><td>量小、需要事务和强一致</td></tr>
+  <tr><td><b>Redis / Valkey</b></td><td>web 和 worker 之间的任务队列，以及缓存（比如 API Key 校验、提示词）</td><td>解耦接收和处理，削峰</td></tr>
+  <tr><td><b>S3 / 对象存储</b></td><td>上报的原始事件先落这里；图片、音频等多模态内容；批量导出</td><td>原始事件可以重放：处理出错或升级后能重新入库，不怕丢数据</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2 id="ingest">5. 原理：一条 trace 是怎么进来的 <span class="tag doc">官方资料</span></h2>
+<ol>
+  <li><b>应用侧埋点，异步批量发送</b>：SDK 在内存里攒事件，后台线程批量发给服务端，<b>不阻塞业务请求</b>。网络出错会重试；进程退出前要调用 <code>flush()</code>，否则缓冲里最后一批会丢失。</li>
+  <li><b>web 接收</b>：校验 API Key（Basic Auth，公钥 <code>pk-lf-…</code> 加私钥 <code>sk-lf-…</code>）和事件格式，然后：
+    <ul>
+      <li>把原始事件写进对象存储（同一个对象的多次更新，按 id 落在同一个路径下）；</li>
+      <li>往 Redis 队列里放一个"处理这个对象"的任务；</li>
+      <li>立即返回。<b>返回 2xx 只代表已收下，不代表已经能查到。</b></li>
+    </ul>
+  </li>
+  <li><b>worker 处理</b>：从队列取任务，从对象存储读出这个对象的所有事件，<b>合并成最终状态</b>（一个 span 往往先上报开始、后上报结束和输出）；对 Generation 按模型价格表计算费用（上报里没有 token 数时，会用对应模型的分词器估算）；最后写进 ClickHouse。</li>
+  <li><b>查询</b>：界面和 API 从 ClickHouse 读。从上报到能查到，通常是<b>秒级延迟</b>，属于最终一致。</li>
+</ol>
+<div class="callout">
+  <b>为什么要"先落对象存储，再入队，再合并"</b>：LLM 应用的事件天然是乱序、分多次到达的（开始、流式中间状态、结束、事后补打的评分）。先把原始事件可靠地存下来，再由 worker 按对象合并，就不用关心到达顺序，也能在出错后重放。
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2 id="principles">6. 原理：提示词管理与评估 <span class="tag doc">官方资料</span></h2>
+<h3>6.1 提示词管理</h3>
+<ul>
+  <li><b>版本不可变，标签可移动</b>：每次保存都生成一个新版本；<code>production</code> 这样的标签指向某个版本，发布或回滚就是移动标签。</li>
+  <li><b>客户端缓存</b>：SDK 按"名称 + 标签"拉取提示词并缓存在本地（有过期时间），过期后在后台刷新，期间继续用旧值（stale-while-revalidate）。所以 Langfuse 短暂不可用，不会让应用拿不到提示词，拉取也不会给每次请求增加延迟。</li>
+  <li><b>和 trace 关联</b>：调用模型时把提示词对象传给 Generation，就能在看板里按提示词版本对比费用、延迟和评分。</li>
+</ul>
+<h3>6.2 评估</h3>
+<table>
+  <tr><th>方式</th><th>原理</th></tr>
+  <tr><td>LLM-as-a-Judge</td><td>在界面里配置"评估器"：用哪个裁判模型、什么评分提示词、作用于哪些 trace（过滤条件 + 采样比例）。新 trace 入库后，由 worker 异步调用裁判模型打分，结果写成 Score</td></tr>
+  <tr><td>人工标注</td><td>把 trace 放进标注队列，按预先定义好的评分维度逐条打分</td></tr>
+  <tr><td>用户反馈</td><td>前端把用户的点赞点踩通过 SDK 或 API 写成 Score，挂到对应的 trace 上</td></tr>
+  <tr><td>自定义</td><td>业务代码自己算指标（比如代码能不能编译通过），通过 API 写入</td></tr>
+  <tr><td>数据集实验</td><td>拿一组固定样本跑新版本，每个样本生成一条 trace 并自动打分，和旧版本放在一起对比</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2 id="integrate">7. 接入方式 <span class="tag doc">官方资料</span></h2>
+<table>
+  <tr><th>方式</th><th>说明</th><th>适合</th></tr>
+  <tr><td><b>原生 SDK</b>（Python / JS·TS）</td><td>用 <code>@observe</code> 装饰器自动记录函数的输入、输出和耗时；或者手动创建 span 和 generation。新版 SDK 基于 OpenTelemetry 构建</td><td>自己写的应用，想要最完整的功能（提示词管理、评分等）</td></tr>
+  <tr><td><b>OpenAI SDK 替换</b></td><td>把 <code>import openai</code> 换成 Langfuse 提供的包装模块，调用会被自动记录</td><td>直接用 OpenAI SDK 的项目，改动最小</td></tr>
+  <tr><td><b>框架集成</b></td><td>LangChain / LangGraph 的回调（<code>CallbackHandler</code>）、LlamaIndex、LiteLLM、Vercel AI SDK 等</td><td>用了这些框架的项目</td></tr>
+  <tr><td><b>OpenTelemetry</b></td><td>标准 OTLP/HTTP 发到 <code>/api/public/otel</code>；会把 OTel GenAI 语义约定（<code>gen_ai.*</code> 属性）映射成 Langfuse 的模型调用、token、费用</td><td>已经有 OTel 埋点、或者要和 APM 共用一套埋点的项目（<b>Atlas 用的就是这种</b>）</td></tr>
+  <tr><td><b>Public API</b></td><td>REST 接口直接读写 trace、score、数据集、提示词</td><td>其他语言、或者离线批量导入导出</td></tr>
+</table>
+<pre><code># Python SDK 最小示例（示意）
+from langfuse import observe, get_client
+
+@observe()                      # 自动记录成一个 span（输入、输出、耗时）
+def answer(question: str) -> str:
+    ...                         # 里面的模型调用若用了集成，会自动成为子 Generation
+    return "..."
+
+answer("Langfuse 是什么？")
+get_client().flush()            # 短进程退出前务必 flush，否则最后一批事件会丢</code></pre>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2 id="vs">8. 与 Jaeger 等 APM 的分工 <span class="tag repo">仓库核对</span></h2>
+<p>Atlas 的设计里，Langfuse <b>不替代</b> Jaeger，而是分流（<code>deploy/local/otel/collector-langfuse.yaml</code> 的注释）：</p>
+<table>
+  <tr><th></th><th>Langfuse</th><th>Jaeger（APM）</th></tr>
+  <tr><td>关注点</td><td>LLM 维度：提示词、回答、token、费用、质量评分、提示词版本</td><td>系统维度：服务间调用链、耗时分布、错误</td></tr>
+  <tr><td>擅长回答</td><td>"这一轮为什么答得不好"、"哪个提示词版本更好"、"钱花在哪"</td><td>"为什么这么慢"、"哪一跳超时了"</td></tr>
+  <tr><td>看不到的</td><td>Pod 冷启动慢、存储抖动、WebSocket 断连这类基础设施问题</td><td>提示词内容、评估分数、按会话回放对话</td></tr>
+</table>
+<p>结论：用一个后端去同时应付两类问题，最后两类都查不好。所以同一份埋点数据，由 Collector 同时发给两边。</p>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2 id="atlas">9. 在 Atlas 里怎么用 <span class="tag repo">仓库核对</span></h2>
+<h3>9.1 现有接入方式</h3>
+<pre><code>Server ──OTLP/HTTP──▶ OpenTelemetry Collector ──▶ Jaeger（全量链路）
+                                            └──▶ Langfuse（LLM 维度，可选）</code></pre>
+<ul>
+  <li><b>server 只发给 Collector，不直连任何后端</b>（<code>telemetry/__init__.py</code>）。要不要接 Langfuse，只是换一份 Collector 配置的事，server 代码不用改。</li>
+  <li><b>埋点遵循 OTel GenAI 语义约定</b>（<code>telemetry/semconv.py</code>）：<code>gen_ai.request.model</code>、<code>gen_ai.usage.input_tokens</code>、<code>gen_ai.conversation.id</code> 等。Langfuse 能直接识别成模型调用、token 用量和会话。缓存 token、推理 token 都是独立字段，保证费用核算准确。</li>
+  <li><b>一个 run 对应一棵 span 树</b>（<code>telemetry/run_trace.py</code>）：根 span 是 run，下面挂模型调用和工具调用；Native 和 ACP 产出的事件形状相同，同一套代码两条路径都覆盖。</li>
+  <li><b>会话映射</b>：Atlas 的会话（thread）对应 <code>gen_ai.conversation.id</code>，在 Langfuse 里就是一个 Session。</li>
+</ul>
+
+<h3>9.2 本机启动</h3>
+<pre><code># 1. 起 Langfuse（挂在 profile 上，make up 不会启动它）+ 换成带 Langfuse 的 Collector 配置
+OTEL_COLLECTOR_CONFIG=collector-langfuse.yaml docker compose --profile langfuse up -d
+
+# 2. server 打开遥测（默认关闭）
+OTEL_ENABLED=true              # 对应 config.py 的 otel_enabled（配置无前缀）
+OTEL_ENDPOINT=http://127.0.0.1:4318
+
+# 3. 打开 Langfuse 界面（3000 端口被前端占了，所以映射到 3001）
+open http://localhost:3001</code></pre>
+<table>
+  <tr><th>本机组件</th><th>说明</th></tr>
+  <tr><td><code>langfuse-web</code> + <code>langfuse-worker</code></td><td>镜像 <code>langfuse/langfuse:3</code>、<code>langfuse/langfuse-worker:3</code>，两个都必须起</td></tr>
+  <tr><td>ClickHouse</td><td>独立容器 <code>atlas-langfuse-ch</code>；需要两个地址：8123（HTTP）和 9000（迁移用的原生协议）</td></tr>
+  <tr><td>Redis</td><td>独立容器 <code>atlas-langfuse-redis</code>，用 <code>REDIS_HOST/PORT/AUTH</code> 三个变量配置，不是连接串</td></tr>
+  <tr><td>PostgreSQL / MinIO</td><td>复用 Atlas 已有的实例：Postgres 里用独立的 <code>langfuse</code> 库，MinIO 用同一个桶的 <code>langfuse-events/</code> 前缀</td></tr>
+  <tr><td>鉴权</td><td>Collector 用 Basic Auth（<code>base64(pk:sk)</code>），还必须带 <code>x-langfuse-ingestion-version</code> 请求头，少了会被拒</td></tr>
+</table>
+
+<div class="callout warn">
+  <b>注意：默认看不到提示词和回答的内容。</b>Collector 配置里有一个脱敏处理器 <code>attributes/strip-content</code>，会删掉 <code>gen_ai.input.messages</code>、<code>gen_ai.output.messages</code> 等内容字段；server 的 <code>otel_capture_content</code> 也默认关闭。所以 Langfuse 里能看到调用链、token、费用、耗时，但<b>看不到对话内容</b>，而按会话看提示词、做内容评估恰恰是 Langfuse 最大的价值。要用这部分能力，需要同时打开 <code>otel_capture_content</code>，并去掉通往 Langfuse 那条管道上的脱敏处理器。这里有数据合规上的权衡，要先确认内容允许落到 Langfuse 的存储里。
+</div>
+
+<h3>9.3 能力对照：Atlas 现在用到了哪些</h3>
+<table>
+  <tr><th>Langfuse 功能</th><th>Atlas 现状</th></tr>
+  <tr><td>链路追踪、会话、token 与费用</td><td>✅ 已经通过 OTel 接入（需要手动打开）</td></tr>
+  <tr><td>对话内容查看</td><td>⚠️ 默认脱敏，见上方提示</td></tr>
+  <tr><td>提示词管理</td><td>❌ 没用。Atlas 的系统提示词在智能体版本快照里管理，有自己的版本机制</td></tr>
+  <tr><td>评估、数据集、实验</td><td>❌ 没用。可以作为后续引入的方向（比如对委派结果做 LLM-as-a-Judge 质检）</td></tr>
+  <tr><td>用户反馈打分</td><td>❌ 没用。前端还没有点赞点踩</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2 id="tradeoffs">10. 优缺点与注意事项</h2>
+<table>
+  <tr><th>优点</th><th>代价与注意事项</th></tr>
+  <tr>
+    <td>
+      <ul>
+        <li>开源、可自托管，数据留在自己手里</li>
+        <li>追踪、提示词、评估、数据集在同一个平台里打通，能形成"观察 → 评估 → 改进"的闭环</li>
+        <li>支持 OTel，可以和 APM 共用一套埋点，不被厂商绑定</li>
+        <li>上报是异步批量的，对业务延迟影响很小</li>
+      </ul>
+    </td>
+    <td>
+      <ul>
+        <li><b>自托管的组件多</b>：web、worker、ClickHouse、Redis、Postgres、对象存储，一共 6 个，运维成本不低</li>
+        <li><b>最终一致</b>：上报成功不等于马上能查到；worker 停了，数据会静默积压</li>
+        <li><b>内容合规</b>：完整的提示词和回答落盘后，需要考虑脱敏、保留期限和访问权限</li>
+        <li><b>短进程要 flush</b>：脚本、Serverless 函数退出前不 flush，最后一批事件会丢</li>
+        <li><b>费用是估算值</b>：依赖模型价格表，自定义模型或网关模型（比如 DeepSeek 经网关）需要自己配置价格，否则费用为空或不准</li>
+      </ul>
+    </td>
+  </tr>
+</table>
+
+</main>
+</body>
+</html>

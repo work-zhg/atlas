@@ -1,4 +1,4 @@
-# server 与 cluster 的运行镜像。
+# server、cluster 与 config 的运行镜像。
 #
 # ★ 一个镜像、两个入口：两者是同一个 workspace 里的包，依赖树高度重叠
 #   （fastapi / uvicorn / pydantic），拆成两个镜像只是多构建一次。
@@ -18,8 +18,11 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 COPY acp/ acp/
+COPY jsonrpc/ jsonrpc/
+COPY host/ host/
 COPY engine/ engine/
 COPY cluster/ cluster/
+COPY config/ config/
 COPY server/ server/
 
 # ★ 四个包一次装：它们彼此按名字依赖（server → engine/acp/cluster），
@@ -27,7 +30,9 @@ COPY server/ server/
 #
 # ★ cluster[k8s]：KubernetesBackend 的客户端是可选依赖，不装就只剩内存
 #   后端 —— 而内存后端「起来了但什么都没真的创建」，acp 的每一轮都会超时。
-RUN pip install --no-cache-dir ./acp ./engine "./cluster[k8s]" ./server
+#
+# ★ config 要在 server 之前：server 依赖 atlas-config（只用它的 schemas）。
+RUN pip install --no-cache-dir ./jsonrpc ./host ./acp ./engine "./cluster[k8s]" ./config ./server
 
 # ★ 预置记忆用的 embedding 模型（记忆设计 §12 第 3 项）。
 #
@@ -47,7 +52,9 @@ RUN python -c "from fastembed import TextEmbedding; TextEmbedding(model_name='${
 # alembic.ini 与 migrations/ 在包外（server/ 目录下），迁移要从这里跑。
 WORKDIR /app/server
 
-EXPOSE 8000 8010
+EXPOSE 8000 8010 8020
 
-# server 的入口。cluster 由 Deployment 覆盖成 python -m atlas_cluster。
+# server 的入口。cluster 由 Deployment 覆盖成 python -m atlas_cluster；
+# config 覆盖成 python -m atlas_config serve（迁移：python -m atlas_config migrate，
+# 迁移脚本在包内，不依赖工作目录）。
 CMD ["uvicorn", "atlas_server.main:app", "--host", "0.0.0.0", "--port", "8000"]

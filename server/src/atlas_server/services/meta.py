@@ -7,19 +7,23 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 
 import redis.asyncio as aioredis
 from atlas_engine.contracts import ModelUnavailable
-from atlas_server.providers.llm.gateway import GatewayConfig, list_models
-from atlas_server.domain.tool_registry import BUILTIN_TOOLS, WEB_SEARCH_TOOL
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from atlas_server.domain.tool_registry import BUILTIN_TOOLS
+from atlas_server.providers.llm.gateway import GatewayConfig, list_models
+
 from ..config import Settings
+from ..configplane import ConfigPlaneUnavailable
+from ..configplane.mcp import make_mcp_catalog, mcp_reviews
+from ..providers.mcp import review_status, tool_id
 from ..repositories.model_catalog import ModelCatalogRepository
 from ..schemas.meta import ModelInfo, ModelListResponse, ToolInfo, ToolListResponse
-from .mcp import McpService
 
 logger = logging.getLogger(__name__)
 
@@ -112,30 +116,55 @@ class MetaService:
 
     async def list_tools(self) -> ToolListResponse:
         tools = list(_BUILTIN_TOOLS)
-
-        if self._settings.serpapi_key is None:
-            tools = [
-                t.model_copy(update={"available": False, "note": "服务端未配置 SERPAPI_KEY"})
-                if t.name == WEB_SEARCH_TOOL
-                else t
-                for t in tools
-            ]
-
-        # P7：并入远程 MCP server 上发现的工具（§11 GET /tools）。
-        # 单个 server 不可用不会让整张目录挂掉 —— McpService 内部已容错，
-        # 那台的工具不出现在列表里，其余照常。
-        mcp = McpService(self._settings.mcp_servers)
-        if mcp.configured:
-            tools.extend(
-                ToolInfo(
-                    name=item["name"],
-                    kind="mcp",
-                    display_name=item["display_name"],
-                    description=item["description"],
-                    available=True,
-                    note=f"来自 MCP server {item['server']}",
-                )
-                for item in await mcp.list_tools()
-            )
-
+        tools.extend(await self._mcp_tools())
         return ToolListResponse(data=tools)
+
+    async def _mcp_tools(self) -> list[ToolInfo]:
+        """远程 MCP server 上的工具，读目录缓存（MCP 详设 §05）。
+
+        单个 server 不可用不会让整张目录挂掉：有缓存就照常列出（note 里带上
+        最近一次刷新的错误），冷缓存又连不上的那台不出现，其余照常。
+        """
+        try:
+            catalog = await make_mcp_catalog(self._settings, self._redis)
+            reviews = await mcp_reviews(self._settings, catalog.servers())
+        except ConfigPlaneUnavailable as exc:
+            # 注册表拉不到：内置工具照常列出，MCP 那部分缺席（并说明原因）
+            logger.warning("MCP 注册表不可用，工具目录里暂缺 MCP 工具：%s", exc)
+            return []
+        names = [c.name for c in catalog.servers()]
+        results = await asyncio.gather(
+            *(catalog.snapshot(n) for n in names), return_exceptions=True
+        )
+        out: list[ToolInfo] = []
+        for name, snap in zip(names, results, strict=True):
+            if isinstance(snap, BaseException):
+                logger.warning("MCP server %s 不可用：%s", name, snap)
+                continue
+            config = catalog.server(name)
+            for d in snap.tools:
+                status = review_status(config, d, reviews) if config else "invalid"
+                notes = [f"来自 MCP server {name}", *d.issues]
+                if status == "pending_review":
+                    notes.append("定义未经复核，暂不可用")
+                elif status == "rejected":
+                    notes.append("定义复核未通过")
+                if snap.error:
+                    notes.append(f"最近一次刷新失败：{snap.error}")
+                out.append(
+                    ToolInfo(
+                        name=tool_id(name, d.name),
+                        kind="mcp",
+                        display_name=d.name,
+                        description=d.description[:500],
+                        available=status == "ok",
+                        note="；".join(notes),
+                        # ★ require_approval_for 匹配的是模型侧名 —— 此前这里
+                        #   为空，编辑器里根本选不到 MCP 工具做审批
+                        model_tool_names=[d.model_name] if d.model_name else [],
+                        server=name,
+                        digest=d.digest,
+                        review_status=status,
+                    )
+                )
+        return out

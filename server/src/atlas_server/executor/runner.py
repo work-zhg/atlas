@@ -29,13 +29,15 @@ from atlas_engine.contracts import (
     EngineError,
     LimitExceeded,
     ModelRefused,
-    RunTimeout,
     classify,
+    parse_suspension,
 )
 from atlas_engine.kernel.middleware.subagents import SUBAGENT_TOOL
-from langchain_core.messages import AIMessageChunk, BaseMessage, HumanMessage
+from langchain_core.messages import AIMessageChunk, BaseMessage, HumanMessage, ToolMessage
 
 from ..domain.events import Answer, EventFactory, EventType, TraceEvent
+from ..domain.messages import Transcript
+from ..domain.skill_events import SkillLoadTracker
 from ..domain.spec import AgentSpec
 from ..domain.tool_registry import unsupported_tools
 from ..domain.translator import (
@@ -67,10 +69,21 @@ def _utcnow() -> datetime:
     return datetime.now(UTC)
 
 
-def _graph_input(history: Sequence[BaseMessage], input_content: str | list[dict]) -> dict[str, Any]:
-    """system_prompt 交给 agent 自己拼，这里**不再重复塞 SystemMessage**。"""
+def _graph_input(
+    history: Sequence[BaseMessage],
+    input_content: str | list[dict],
+    *,
+    resume: bool = False,
+) -> dict[str, Any]:
+    """system_prompt 交给 agent 自己拼，这里**不再重复塞 SystemMessage**。
+
+    ★ resume=True 时不 append 输入：那一段是续跑，用户的提问早已在 history
+      里（连同上一段的工具调用与结果）。再 append 一遍的表现是模型把同一个
+      问题回答两次，而第二次还带着第一次的上下文 —— 看起来像它自言自语。
+    """
     messages = list(history)
-    messages.append(HumanMessage(content=input_content))  # type: ignore[arg-type]
+    if not resume:
+        messages.append(HumanMessage(content=input_content))  # type: ignore[arg-type]
     return {"messages": messages}
 
 
@@ -87,32 +100,7 @@ _CUSTOM_EVENTS = {
 }
 
 
-async def run(
-    spec: AgentSpec,
-    *,
-    run_id: UUID,
-    graph: Any,
-    input_content: str | list[dict],
-    history: Sequence[BaseMessage] = (),
-    cancel: CancelToken | None = None,
-    clock: Callable[[], datetime] | None = None,
-    titler: Titler | None = None,
-) -> AsyncIterator[TraceEvent]:
-    """驱动一张**已装配好的图**，产出 TraceEvent 流。
-
-    ★ 图由调用方装配（server/executor/build.py::build_graph）—— runner 只管
-      执行循环与事件推导。曾经的 RunHooks 参数对象随图外置一起消失：能力
-      对象直接进中间件构造，这里只剩 runner 自己消费的三个注入点
-      （cancel / clock / titler）。
-
-    spec 在这里只读三样：run.started 的元信息、timeout_s、max_total_tokens ——
-    调用方必须保证 graph 与 spec 出自同一份配置（build.py 是唯一装配点）。
-    """
-    spec.validate()
-
-    cancel = cancel or _NeverCancelled()
-    events = EventFactory(run_id, clock or _utcnow)
-
+def _started_data(spec: AgentSpec) -> dict[str, Any]:
     started: dict[str, Any] = {
         "agent_slug": spec.slug,
         "agent_name": spec.name,
@@ -124,77 +112,177 @@ async def run(
     # 请求了但本期未接的工具要报出来，不能静默忽略（§13.2）
     if missing := unsupported_tools(spec):
         started["unsupported_tools"] = missing
-    yield events.make(EventType.RUN_STARTED, started)
+    return started
+
+
+def failed_before_start(
+    spec: AgentSpec,
+    *,
+    run_id: UUID,
+    kind: str,
+    message: str,
+    details: dict[str, Any] | None = None,
+    clock: Callable[[], datetime] | None = None,
+    start_seq: int = 0,
+    base_depth: int = 0,
+) -> list[TraceEvent]:
+    """图还没装出来就失败了（装配期）—— 照样产出 run.started → run.failed。
+
+    ★ 此前装配异常直接冒泡到执行器兜底：run 落成「执行器内部错误」，
+      **一个事件都不发**。SSE 上既无开始也无结束，前端只能干等；而
+      「MCP server 上不存在工具 X」这种能直接指出病根的信息只留在服务端日志里。
+
+    ★ 用与 run() 同样的 EventFactory 规则编号（start_seq 接着数），所以 seq
+      契约不破；run.started 的 data 与正常路径同形，前端不用区分这是哪条路。
+    """
+    events = EventFactory(run_id, clock or _utcnow, start_seq=start_seq, base_depth=base_depth)
+    return [
+        events.make(EventType.RUN_STARTED, _started_data(spec)),
+        events.make(
+            EventType.RUN_FAILED,
+            {"error_kind": kind, "message": message, "retryable": False, **(details or {})},
+        ),
+    ]
+
+
+async def run(
+    spec: AgentSpec,
+    *,
+    run_id: UUID,
+    graph: Any,
+    input_content: str | list[dict],
+    history: Sequence[BaseMessage] = (),
+    cancel: CancelToken | None = None,
+    clock: Callable[[], datetime] | None = None,
+    titler: Titler | None = None,
+    transcript: Transcript | None = None,
+    start_seq: int = 0,
+    resume: bool = False,
+    prior_tokens: int = 0,
+    base_depth: int = 0,
+    notices: Sequence[tuple[EventType, dict[str, Any]]] = (),
+) -> AsyncIterator[TraceEvent]:
+    """驱动一张**已装配好的图**，产出 TraceEvent 流。
+
+    ★ 图由调用方装配（server/executor/build.py::build_graph）—— runner 只管
+      执行循环与事件推导。曾经的 RunHooks 参数对象随图外置一起消失：能力
+      对象直接进中间件构造，这里只剩 runner 自己消费的三个注入点
+      （cancel / clock / titler）。
+
+    spec 在这里只读两样：run.started 的元信息、max_total_tokens ——
+    调用方必须保证 graph 与 spec 出自同一份配置（build.py 是唯一装配点）。
+
+    transcript: 收集本轮**实际产生**的消息（模型的 tool_use、工具的结果）。
+        调用方要落库这些消息时传进来；不传就不收集，零开销。见
+        domain/messages.py::Transcript。
+
+    start_seq: 事件序号的起点。同一个 run 分多段执行时，第二段必须接着第一段
+        的 seq 往下数 —— 前端靠 seq 去重与补齐，从 1 重数会让断线重连拿到
+        错乱的历史（契约规则 2）。
+
+    resume: True = 本次是续跑，输入已在 history 里，不要再 append。
+
+    prior_tokens: 这个 run 在之前几段里已经花掉的 token。max_total_tokens 是
+        **跨段**的累计上限 —— 每段各算各的话，分三段就能烧三倍预算。
+
+    base_depth: 这个 run 在委派树里的深度（主 run 0，子 run 1）。叠加到所有
+        事件的 depth 上，前端据此决定渲染位置。
+
+    notices: 装配期发现、要让用户看见的情况（技能被下架跳过、MCP 工具定义变了）。
+        紧跟 run.started 产出 —— 装配发生在事件工厂之前，由这里统一编号才能
+        保住 seq 无空洞（契约规则 2）。
+    """
+    spec.validate()
+
+    cancel = cancel or _NeverCancelled()
+    # ★ 总是收集 transcript，调用方传了就共享那一份。
+    #
+    #   挂起检测（_suspensions）只能从 transcript 看 —— runner 拿不到图的最终
+    #   state。transcript 为 None 时检测会静默失效：图确实因为哨兵跳出了，但
+    #   这里当成正常结束，于是 run 落成 succeeded 而哨兵留在历史里，下一轮
+    #   模型读到一句 `__ATLAS_SUSPENDED__:...`。
+    #   让它无条件生效比依赖每个调用方记得传更可靠。
+    transcript = transcript if transcript is not None else Transcript()
+    events = EventFactory(run_id, clock or _utcnow, start_seq=start_seq, base_depth=base_depth)
+
+    yield events.make(EventType.RUN_STARTED, _started_data(spec))
+    for kind, data in notices:
+        yield events.make(kind, data)
 
     answer = Answer()
     usage: dict[str, int] = {}
     thinking_seen = False
     refused = False
     seen_files: dict[str, str] = {}
+    # 「模型读了某个技能的 SKILL.md」→ skill.loaded（技能 / MCP 设计 §7.4）
+    skills = SkillLoadTracker(spec.skills)
 
     try:
-        async with asyncio.timeout(spec.limits.timeout_s):
-            # ★ subgraphs=True：子智能体的内部步骤会以带命名空间的形式流出来。
-            #   命名空间深度就是 agent 深度 —— 主 agent 是 ()，子智能体是
-            #   ('tools:<id>',)。这是 TraceEvent.depth 的唯一来源。
-            async for ns, mode, chunk in graph.astream(
-                _graph_input(history, input_content),
-                # custom 是审批中间件把「需要确认」送出来的通道 ——
-                # 它在图内部执行，够不到 runner 的事件工厂（§12.2）。
-                stream_mode=["updates", "messages", "custom"],
-                subgraphs=True,
-            ):
-                if await cancel.is_cancelled():
-                    yield events.make(
-                        EventType.RUN_CANCELLED,
-                        {"partial_text_len": len(answer.text)},
+        # ★ 一轮没有时间上限：在干活就不中断。单次模型调用（litellm_timeout_s）与
+        #   单次工具调用（如 mcp_call_timeout_s）各有超时，不会无限挂住；
+        #   结束只由完成、出错、用户取消、token 上限（max_total_tokens）决定。
+        # ★ subgraphs=True：子智能体的内部步骤会以带命名空间的形式流出来。
+        #   命名空间深度就是 agent 深度 —— 主 agent 是 ()，子智能体是
+        #   ('tools:<id>',)。这是 TraceEvent.depth 的唯一来源。
+        async for ns, mode, chunk in graph.astream(
+            _graph_input(history, input_content, resume=resume),
+            # custom 是审批中间件把「需要确认」送出来的通道 ——
+            # 它在图内部执行，够不到 runner 的事件工厂（§12.2）。
+            stream_mode=["updates", "messages", "custom"],
+            subgraphs=True,
+        ):
+            if await cancel.is_cancelled():
+                yield events.make(
+                    EventType.RUN_CANCELLED,
+                    {"partial_text_len": len(answer.text)},
+                )
+                return
+
+            # ★ **局部**深度：图内子图的命名空间层数，与这个 run 在委派树
+            #   里的位置无关。后者是 base_depth，由 EventFactory 叠加。
+            #
+            #   两者必须分开：委派模式下图内不编译子图，所以 local_depth
+            #   恒为 0 —— 而子 run 的事件要带 depth=1。混用的话下面那些
+            #   `local_depth == 0` 的判据会把子 run 的正文全部丢掉，症状是
+            #   「子智能体状态 succeeded、模型确实被调用、内容凭空消失」。
+            local_depth = len(ns)
+
+            if mode == "messages":
+                for event in _from_messages(chunk, events, answer, local_depth):
+                    yield event
+                msg = chunk[0] if isinstance(chunk, tuple) else chunk
+                if isinstance(msg, AIMessageChunk):
+                    # §13.1 model_refused：不是故障，重试无用，
+                    # 把模型自己的说明原样展示给用户
+                    meta = getattr(msg, "response_metadata", None) or {}
+                    if meta.get("stop_reason") in REFUSAL_STOP_REASONS:
+                        refused = True
+                    thinking_seen = thinking_seen or has_thinking(msg.content)
+                    # ★ 累加而非覆盖：一轮对话里模型被调用多次（每次工具
+                    #   往返一次），子智能体还会再调。覆盖的话只剩最后一次，
+                    #   token 上限形同虚设，账面也对不上。
+                    _accumulate(usage, normalize_usage(msg.usage_metadata))
+            elif mode == "updates":
+                if local_depth == 0:
+                    transcript.extend(_transcript_messages(chunk))
+                for event in _from_updates(chunk, events, seen_files, local_depth, answer):
+                    yield event
+                    for kind, data in skills.observe(event.type, event.data):
+                        yield events.make(kind, data, local_depth)
+            elif mode == "custom" and isinstance(chunk, dict):
+                kind = chunk.get("kind")
+                if kind == "usage.delta":
+                    # ★ 复合工具内部的模型调用不经过主图，不自报的话
+                    #   usage 与 max_total_tokens 对它们全盲
+                    #   （docs/research-loop.md §3）。不是事件，只入账。
+                    _accumulate(
+                        usage,
+                        {k: v for k, v in chunk.items() if isinstance(v, int)},
                     )
-                    return
+                elif kind in _CUSTOM_EVENTS:
+                    payload = {k: v for k, v in chunk.items() if k != "kind"}
+                    yield events.make(_CUSTOM_EVENTS[kind], payload, local_depth)
 
-                depth = len(ns)
-
-                if mode == "messages":
-                    for event in _from_messages(chunk, events, answer, depth):
-                        yield event
-                    msg = chunk[0] if isinstance(chunk, tuple) else chunk
-                    if isinstance(msg, AIMessageChunk):
-                        # §13.1 model_refused：不是故障，重试无用，
-                        # 把模型自己的说明原样展示给用户
-                        meta = getattr(msg, "response_metadata", None) or {}
-                        if meta.get("stop_reason") in REFUSAL_STOP_REASONS:
-                            refused = True
-                        thinking_seen = thinking_seen or has_thinking(msg.content)
-                        # ★ 累加而非覆盖：一轮对话里模型被调用多次（每次工具
-                        #   往返一次），子智能体还会再调。覆盖的话只剩最后一次，
-                        #   token 上限形同虚设，账面也对不上。
-                        _accumulate(usage, normalize_usage(msg.usage_metadata))
-                elif mode == "updates":
-                    for event in _from_updates(chunk, events, seen_files, depth, answer):
-                        yield event
-                elif mode == "custom" and isinstance(chunk, dict):
-                    kind = chunk.get("kind")
-                    if kind == "usage.delta":
-                        # ★ 复合工具内部的模型调用不经过主图，不自报的话
-                        #   usage 与 max_total_tokens 对它们全盲
-                        #   （docs/research-loop.md §3）。不是事件，只入账。
-                        _accumulate(
-                            usage,
-                            {k: v for k, v in chunk.items() if isinstance(v, int)},
-                        )
-                    elif kind in _CUSTOM_EVENTS:
-                        payload = {k: v for k, v in chunk.items() if k != "kind"}
-                        yield events.make(_CUSTOM_EVENTS[kind], payload, depth)
-
-    except TimeoutError:
-        yield events.make(
-            EventType.RUN_FAILED,
-            {
-                "error_kind": RunTimeout.kind,
-                "message": f"执行超时（{spec.limits.timeout_s}s）",
-                "partial_text": answer.text,
-            },
-        )
-        return
     except EngineError as exc:
         yield events.make(
             EventType.RUN_FAILED,
@@ -227,6 +315,18 @@ async def run(
 
     yield events.make(EventType.MESSAGE_COMPLETED, {"content": answer.content()})
 
+    # ★ 图跳出是因为有委派还没出结果 → 这一段到此为止，run 没结束。
+    #
+    #   必须在检查 token 上限**之前**：挂起不是终态，不该在这里被一个
+    #   「本轮超支」的判断改写成失败 —— 累计用量在下一段续跑时照样会撞上
+    #   同一个刹车，而那时它是真的结束。
+    if pending := _suspensions(transcript):
+        yield events.make(
+            EventType.RUN_SUSPENDED,
+            {"waiting_on": pending, "partial_text_len": len(answer.text)},
+        )
+        return
+
     # 下面几处要的是**全文**，不是分段：拒答说明、标题素材、字数统计，
     # 三者都与「模型说了几轮」无关。
     text = answer.text
@@ -243,7 +343,10 @@ async def run(
         return
 
     # token 上限是刹车不是硬墙：只能在调用返回后检查（文档 §4.4）
-    total = usage.get("total_tokens", 0)
+    #
+    # ★ 加上 prior_tokens —— 「累计」是**跨段**的。一个 run 分三段执行时，
+    #   每段各算各的话就能烧掉三倍预算，而账面上刹车一直没踩到。
+    total = prior_tokens + usage.get("total_tokens", 0)
     if total > spec.limits.max_total_tokens:
         yield events.make(
             EventType.RUN_FAILED,
@@ -272,6 +375,55 @@ async def _generate_title(titler: Titler, text: str) -> dict[str, Any] | None:
         # TimeoutError 也在此列（它是 OSError 的子类）。
         # CancelledError 是 BaseException，不会被吞 —— 取消必须继续传播。
         return None
+
+
+#: transcript 只收这两个节点的输出。
+#:
+#: ★ 中间件节点（`<name>.before_model` 等）一概不收。压缩中间件会改写 state
+#:   里的 messages —— 驱逐旧消息、换成一段摘要。那是**模型视角**的变化；落库
+#:   的必须是原始全量（「压缩只改变模型视角，原始消息一条不丢」）。收了的话
+#:   一次压缩会让 transcript 里凭空多出一条摘要消息，而原文那几条还在，
+#:   下一段执行时模型会看到同一段内容的两个版本。
+_TRANSCRIPT_NODES = frozenset({"model", "tools"})
+
+
+def _suspensions(transcript: Transcript | None) -> list[dict[str, str]]:
+    """本段末尾还在等什么 —— 有就说明图是因为挂起才跳出的。
+
+    返回 [{"reason": ..., "token": ...}]，落进 `run.waiting_on`。
+
+    ★ reason 必须带上。续跑的 barrier 按它分派：委派等「子 run 终态」，审批等
+      「approval 被决策」。只记 token 的话审批挂起会被当成委派 —— 而审批挂起
+      时没有子 run，barrier 立刻满足，于是续跑、又挂起、再续跑，**死循环**。
+
+    ★ 判据与 `SuspensionMiddleware._last_batch_is_suspended` 逐字一致：只看
+      **最后一批** ToolMessage。两处必须同源 —— 那边决定跳不跳出，这边决定
+      跳出之后算挂起还是算正常结束。不一致的表现是 run 正常结束了，而哨兵
+      留在历史里，下一轮模型读到一句 `__ATLAS_SUSPENDED__:...`。
+    """
+    if transcript is None:
+        return []
+    pending: list[dict[str, str]] = []
+    for message in reversed(transcript.messages):
+        if not isinstance(message, ToolMessage):
+            break
+        if (found := parse_suspension(message.content)) is not None:
+            pending.append({"reason": found.reason, "token": found.token})
+    return list(reversed(pending))
+
+
+def _transcript_messages(chunk: Any) -> list[BaseMessage]:
+    """updates 的一帧 → 该帧里新产生的消息（按节点过滤）。"""
+    if not isinstance(chunk, dict):
+        return []
+    out: list[BaseMessage] = []
+    for node, payload in chunk.items():
+        if node not in _TRANSCRIPT_NODES or not isinstance(payload, dict):
+            continue
+        for message in payload.get("messages") or []:
+            if isinstance(message, BaseMessage):
+                out.append(message)
+    return out
 
 
 def _accumulate(total: dict[str, int], delta: dict[str, int]) -> None:
@@ -325,7 +477,10 @@ def _subagent_started(call: dict[str, Any]) -> dict[str, Any]:
 
 
 def _from_updates(
-    chunk: Any, events: EventFactory, seen_files: dict[str, str], depth: int,
+    chunk: Any,
+    events: EventFactory,
+    seen_files: dict[str, str],
+    depth: int,
     answer: Answer,
 ) -> list[TraceEvent]:
     """节点状态更新 → 工具 / 待办 / 文件 / 子智能体事件。"""
@@ -354,17 +509,23 @@ def _from_updates(
             if result := tool_result_from(message):
                 failed = result.get("status") == "error"
                 if depth == 0 and result.get("name") == SUBAGENT_TOOL:
-                    out.append(
-                        events.make(
-                            EventType.SUBAGENT_FINISHED,
-                            {
-                                "subagent_run_id": result.get("call_id", ""),
-                                "failed": failed,
-                                **result,
-                            },
-                            depth,
-                        )
-                    )
+                    payload = {
+                        "subagent_run_id": result.get("call_id", ""),
+                        "failed": failed,
+                        **result,
+                    }
+                    # ★ 挂起不是完成。task 的返回值是哨兵时这条仍然要发
+                    #   （前端靠它更新卡片），但必须说清楚「还在等」——
+                    #   不标的话卡片会显示「已完成」，而子智能体正在 Pod 里
+                    #   干活，用户看到的是一个自相矛盾的界面。
+                    #
+                    #   哨兵本身也不能外泄：它是内部标记，显示出来只是一串
+                    #   看不懂的字符。
+                    if parse_suspension(result.get("result")) is not None:
+                        payload["suspended"] = True
+                        payload["result"] = ""
+                        payload["result_preview"] = ""
+                    out.append(events.make(EventType.SUBAGENT_FINISHED, payload, depth))
                 else:
                     out.append(
                         events.make(

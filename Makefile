@@ -1,4 +1,4 @@
-.PHONY: up down sync lint types arch test migrate serve check \
+.PHONY: up down sync lint types arch test migrate serve check config-migrate config-serve \
         web-install web-dev web-build web-check web-gen dev
 
 # ---------- 后端 ----------
@@ -11,6 +11,9 @@ arch:    ; uv run lint-imports
 test:    ; uv run pytest -q
 migrate: ; cd server && uv run alembic upgrade head
 serve:   ; uv run uvicorn atlas_server.main:app --reload --port 8000
+# 配置服务（技能 / MCP 注册表）。库是同一 PG 上的 atlas_config（make up 会建）。
+config-migrate: ; uv run python -m atlas_config migrate
+config-serve:   ; ATLAS_CONFIG_ALLOW_SELF_REVIEW=true uv run python -m atlas_config serve
 check: lint arch test
 
 # ---------- 前端 ----------
@@ -38,6 +41,6 @@ dev:
 #   而 BuildKit 的独立二进制自带 runc，装了就能用。导出 OCI 归档之后
 #   直接进 k3s 的 containerd —— 镜像是本地构建的，registry 上没有，
 #   所以 Pod 那边必须靠 import 而不是 pull。
-BRIDGE_IMAGE ?= atlas-acp-bridge:0.1.0
+BRIDGE_IMAGE ?= atlas-acp-bridge:0.3.0
 bridge-image:
 	./scripts/build_bridge_image.sh $(BRIDGE_IMAGE)

@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Langfuse 接入设计：链路追踪 · 会话 · token 与费用 · 对话内容</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --border: #d1d9e0; --head: #f6f8fa;
+    --accent: #0969da; --ok: #1a7f37; --ok-bg: #dafbe1; --warn: #9a6700; --warn-bg: #fff8c5;
+    --bad: #cf222e; --bad-bg: #ffebe9; --code-bg: #f6f8fa;
+    --b1: #ddf4ff; --b1d: #54aeff; --b2: #fbefff; --b2d: #c297ff; --b3: #dafbe1; --b3d: #4ac26b;
+    --b4: #fff8c5; --b4d: #d4a72c; --b5: #ffebe9; --b5d: #ff8182;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --border: #3d444d; --head: #151b23;
+      --accent: #4493f8; --ok: #3fb950; --ok-bg: #12261e; --warn: #d29922; --warn-bg: #2b2111;
+      --bad: #f85149; --bad-bg: #2d1214; --code-bg: #151b23;
+      --b1: #12263f; --b1d: #1f6feb; --b2: #271a36; --b2d: #8957e5; --b3: #12261e; --b3d: #2ea043;
+      --b4: #2b2111; --b4d: #9e6a03; --b5: #2d1214; --b5d: #da3633;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 32px; background: var(--bg); color: var(--fg);
+         font: 14px/1.75 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif; }
+  main { max-width: 1120px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 44px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 15.5px; margin: 24px 0 8px; }
+  .sub { color: var(--muted); margin: 0 0 14px; }
+  code { font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code-bg); padding: 1px 4px; border-radius: 4px; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px 14px; overflow-x: auto; font-size: 12.5px; }
+  pre code { background: none; padding: 0; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0 16px; }
+  th, td { border: 1px solid var(--border); padding: 7px 10px; vertical-align: top; text-align: left; }
+  th { background: var(--head); white-space: nowrap; }
+  .callout { border-left: 4px solid var(--accent); background: var(--head); padding: 10px 14px; border-radius: 4px; margin: 14px 0; }
+  .callout.warn { border-color: var(--warn); background: var(--warn-bg); }
+  .callout.bad { border-color: var(--bad); background: var(--bad-bg); }
+  .tag { display: inline-block; padding: 0 7px; border-radius: 9px; font-size: 12px; font-weight: 600; border: 1px solid; white-space: nowrap; }
+  .tag.have { color: var(--ok); background: var(--ok-bg); border-color: var(--ok); }
+  .tag.new { color: var(--accent); background: var(--head); border-color: var(--accent); }
+  .tag.verify { color: var(--warn); background: var(--warn-bg); border-color: var(--warn); }
+  .tag.bug { color: var(--bad); background: var(--bad-bg); border-color: var(--bad); }
+  .toc { columns: 2; padding-left: 18px; }
+  .fig { border: 1px solid var(--border); border-radius: 6px; padding: 10px; overflow-x: auto; margin: 10px 0 16px; }
+  svg text { fill: var(--fg); font-size: 12px; font-family: -apple-system, "PingFang SC", sans-serif; }
+  svg .s { font-size: 11px; fill: var(--muted); }
+  svg .b { font-weight: 600; }
+  svg .n { fill: var(--accent); font-weight: 600; }
+  svg .c1 { fill: var(--b1); stroke: var(--b1d); } svg .c2 { fill: var(--b2); stroke: var(--b2d); }
+  svg .c3 { fill: var(--b3); stroke: var(--b3d); } svg .c4 { fill: var(--b4); stroke: var(--b4d); }
+  svg .c5 { fill: var(--b5); stroke: var(--b5d); }
+  svg .ln { stroke: var(--fg); stroke-width: 1.3; fill: none; }
+  svg .dash { stroke-dasharray: 5 4; }
+  svg .tick { stroke: var(--border); }
+  .chat { border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; background: var(--head); }
+  .chat .u { margin: 6px 0; } .chat .u b { color: var(--accent); }
+  .chat .a { margin: 6px 0 12px; } .chat .a b { color: var(--ok); }
+  .chat .x { color: var(--muted); font-size: 12.5px; margin: 2px 0 2px 16px; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Langfuse 接入设计：链路追踪 · 会话 · token 与费用 · 对话内容</h1>
+<p class="sub">
+  状态：<b>已实施并在本机 Langfuse 上验证（2026-10-05）</b>，见 12.1 · 2026-10-04 初稿 · 依据当前工作区代码（<code>server/src/atlas_server/telemetry/</code>、<code>deploy/local/otel/</code>）<br>
+  标记：<span class="tag have">已有</span> 现有代码已经产出；<span class="tag new">新增</span> 本设计要加；
+  <span class="tag verify">待验证</span> 依赖 Langfuse 的行为，第 0 期实测确认；<span class="tag bug">缺陷</span> 现有问题，顺带修复
+</p>
+
+<ol class="toc">
+  <li><a href="#goal">目标与范围</a></li>
+  <li><a href="#example">示例会话</a></li>
+  <li><a href="#now">现状：Atlas 已经发出了什么</a></li>
+  <li><a href="#mapping">对象映射：Atlas → Langfuse</a></li>
+  <li><a href="#fields">字段设计：Langfuse 如何把 OTel 数据归档</a></li>
+  <li><a href="#trace">链路追踪设计</a></li>
+  <li><a href="#session">会话设计</a></li>
+  <li><a href="#cost">token 与费用设计</a></li>
+  <li><a href="#content">对话内容查看设计</a></li>
+  <li><a href="#pipeline">Collector 管道设计</a></li>
+  <li><a href="#changes">改动清单</a></li>
+  <li><a href="#verify">待验证项与第 0 期验证计划</a></li>
+  <li><a href="#phases">分期与风险</a></li>
+</ol>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2 id="goal">1. 目标与范围</h2>
+<table>
+  <tr><th>能力</th><th>要回答的问题</th><th>验收标准（以第 2 节的示例会话为准）</th></tr>
+  <tr><td><b>链路追踪</b></td><td>这一轮做了哪些步骤、各花多久、哪里出错</td><td>每一轮对应一条 trace，包含模型调用、工具调用、委派；委派出去的子 run 能找到，并且能跳回父 run</td></tr>
+  <tr><td><b>会话</b></td><td>这段对话从头到尾发生了什么</td><td>整段会话（包括委派给子智能体的工作）落在<b>同一个</b> Session 里，按时间顺序回放</td></tr>
+  <tr><td><b>token 与费用</b></td><td>每一轮、每个会话、每个用户花了多少钱，花在哪个模型上</td><td>Langfuse 显示的总 token 与 Atlas 的 <code>run</code> 表一致（误差为 0），费用按 DeepSeek 的价格（含缓存价）计算</td></tr>
+  <tr><td><b>对话内容查看</b></td><td>模型当时收到了什么、回答了什么，工具的参数和结果是什么</td><td>开关打开时能看到用户输入、最终回答、每次模型调用的输入输出、工具的参数和结果；开关关闭时这些一个字都不出现</td></tr>
+</table>
+<p><b>不在范围内</b>：评估（打分、LLM-as-a-Judge）、数据集与实验、Langfuse 的提示词管理（Atlas 的提示词由智能体版本快照管理）。</p>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2 id="example">2. 示例会话</h2>
+<p>全文以这个会话为例。用户和「开发协调者（委派 CLI）」对话：主智能体是 Native（<code>deepseek-chat</code>），它把动手的工作委派给 ACP 子智能体 <code>cli-hand</code>（Pod 里的 Claude Code，权限模式 auto）。</p>
+<div class="chat">
+  <div class="u"><b>用户（第 1 轮）</b>：在工作区写一个 hello.py，打印当前时间，然后运行它告诉我输出</div>
+  <div class="x">主智能体：思考，然后调用 <code>task(cli-hand, "新建 hello.py …")</code></div>
+  <div class="x">　└ 子智能体 cli-hand（另一个 run，在子会话里）：Write hello.py → Bash <code>python hello.py</code> → 汇报</div>
+  <div class="x">主智能体：<code>read_file hello.py</code> 确认</div>
+  <div class="a"><b>助手</b>：已创建 hello.py，运行输出为 <code>2026-10-04 10:21:05</code>…</div>
+  <div class="u"><b>用户（第 2 轮）</b>：把输出改成中文格式</div>
+  <div class="x">主智能体：再次委派给 cli-hand（持久会话，记得上一轮的上下文）</div>
+  <div class="x">　└ 子智能体：Edit hello.py → Bash 运行 → 汇报</div>
+  <div class="a"><b>助手</b>：已改为中文格式，输出为 <code>2026年10月04日 10时22分</code>…</div>
+</div>
+<p>在 Atlas 的数据里，这个会话包含以下对象（id 为示例）：</p>
+<table>
+  <tr><th>对象</th><th>id</th><th>说明</th></tr>
+  <tr><td>根会话 thread</td><td><code>T</code></td><td>用户看到的那段对话</td></tr>
+  <tr><td>子会话 thread</td><td><code>T'</code></td><td><code>parent_thread_id = T</code>，子智能体 cli-hand 的持久会话</td></tr>
+  <tr><td>第 1 轮父 run</td><td><code>R1</code></td><td>在 T 上。如果委派超过 60s，会先挂起、再续跑，<b>分成两段执行</b></td></tr>
+  <tr><td>第 1 轮子 run</td><td><code>R1'</code></td><td>在 T' 上，<code>parent_run_id = R1</code></td></tr>
+  <tr><td>第 2 轮父 run / 子 run</td><td><code>R2</code> / <code>R2'</code></td><td>同上</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2 id="now">3. 现状：Atlas 已经发出了什么</h2>
+<p>遥测默认关闭（<code>otel_enabled=false</code>）。打开后，按示例的第 1 轮，现在会产生下面这些 span <span class="tag have">已有</span>：</p>
+<table>
+  <tr><th>span</th><th>来源</th><th>关键属性</th></tr>
+  <tr><td><code>invoke_agent acp-delegator</code>（根）</td><td><code>RunTrace.start</code>，每一段执行一个</td><td><code>gen_ai.operation.name=invoke_agent</code>、<code>gen_ai.agent.name</code>、<code>gen_ai.request.model</code>、<code>gen_ai.conversation.id=T</code>、<code>atlas.run_id</code>、<code>atlas.agent.kind</code>；结束时带<b>整轮累计</b>的 <code>gen_ai.usage.*</code></td></tr>
+  <tr><td><code>chat deepseek-chat</code></td><td><code>ModelSpanHandler</code>（LangChain 回调），<b>只有 Native 有</b></td><td>请求模型、响应模型、<code>gen_ai.usage.*</code>（单次）、<code>finish_reasons</code></td></tr>
+  <tr><td><code>invoke_agent cli-hand</code></td><td>由 <code>subagent.started</code> / <code>finished</code> 事件派生</td><td><code>atlas.subagent.name</code>；key 是 task 的 tool_call_id，<b>不是子 run 的 id</b></td></tr>
+  <tr><td><code>execute_tool read_file</code></td><td>由 <code>tool.started</code> / <code>completed</code> 事件派生，Native 和 ACP 都有</td><td><code>gen_ai.tool.name</code>、<code>gen_ai.tool.call.id</code>；失败时状态为 ERROR</td></tr>
+  <tr><td>子 run R1' 的根 <code>invoke_agent cli-hand</code></td><td>子 run 在自己的 task 里执行，<b>是另一条独立的 trace</b></td><td><code>gen_ai.conversation.id=T'</code>（子会话）；下面只有工具 span，<b>没有 chat span</b>（模型调用在 Pod 里的 CLI 内部）；用量是整轮累计值</td></tr>
+  <tr><td>span 事件</td><td>根 span 上</td><td><code>context.compacted</code>、<code>session.lost</code></td></tr>
+</table>
+<p>直接把这些发给 Langfuse，会遇到下面的问题：</p>
+<table>
+  <tr><th>#</th><th>问题</th><th>后果</th></tr>
+  <tr><td>P1</td><td>子 run 的会话 id 是 T'，不是 T</td><td>委派出去的工作落在另一个 Session，按会话回放时看不到子智能体做了什么</td></tr>
+  <tr><td>P2</td><td>挂起后续跑会重新 <code>RunTrace.start</code>，trace id 随机生成</td><td>一个 run 变成两条 trace，费用和步骤被拆开</td></tr>
+  <tr><td>P3</td><td>父 run 的委派 span 上没有子 run 的 id，子 run 上也没有父 run 的 id</td><td>父子 trace 之间没法互相跳转</td></tr>
+  <tr><td>P4</td><td>根 span 带整轮累计用量，子 chat span 又带单次用量 <span class="tag verify">待验证</span></td><td>如果 Langfuse 把带模型名和用量的根 span 当成模型调用（Generation），<b>Native 的费用会被算两遍</b></td></tr>
+  <tr><td>P5</td><td>ACP 的 run 没有 chat span，用量只在根 span 上</td><td>如果根 span 不被当成 Generation，ACP 的费用就是 0</td></tr>
+  <tr><td>P6 <span class="tag bug">缺陷</span></td><td>新 adapter 返回的缓存 token 字段是 <code>cachedReadTokens</code> / <code>cachedWriteTokens</code>，翻译层读的是 <code>cacheRead</code> / <code>cacheCreation</code>（<code>host/translate/acp_v1.py:51</code>）</td><td>ACP 的缓存 token 一直记成 0。不只是 Langfuse，Atlas 自己 <code>run</code> 表里的用量也少记了</td></tr>
+  <tr><td>P7</td><td><code>otel_capture_content</code> 只定义了，没有任何代码读它</td><td>没有采集对话内容的能力</td></tr>
+  <tr><td>P8</td><td>Collector 的两条出口共用一个脱敏处理器</td><td>即使采集了内容，Langfuse 也收不到</td></tr>
+  <tr><td>P9</td><td>span 上没有用户 id</td><td>没法按用户统计用量和费用</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2 id="mapping">4. 对象映射：Atlas → Langfuse</h2>
+<p>本节只说"映射成什么"。<b>映射靠哪些字段实现、Langfuse 按什么规则归档，见第 5 节</b>：没有那些字段，下面的映射一条都不会自动发生。</p>
+<div class="fig">
+<svg width="1060" height="300" viewBox="0 0 1060 300" xmlns="http://www.w3.org/2000/svg">
+  <defs><marker id="m" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker></defs>
+  <g style="color: currentColor">
+  <text x="140" y="20" text-anchor="middle" class="b">Atlas</text><text x="880" y="20" text-anchor="middle" class="b">Langfuse</text>
+  <rect class="c4" x="20" y="34" width="240" height="44" rx="7"/><text x="140" y="54" text-anchor="middle" class="b">根会话 thread T</text><text x="140" y="70" text-anchor="middle" class="s">（子会话 T' 也归它）</text>
+  <rect class="c1" x="20" y="96" width="240" height="44" rx="7"/><text x="140" y="116" text-anchor="middle" class="b">run（R1、R1'、R2、R2'）</text><text x="140" y="132" text-anchor="middle" class="s">含挂起后的多段执行</text>
+  <rect class="c3" x="20" y="158" width="240" height="40" rx="7"/><text x="140" y="183" text-anchor="middle" class="b">模型调用（Native 的 chat）</text>
+  <rect class="c3" x="20" y="208" width="240" height="40" rx="7"/><text x="140" y="233" text-anchor="middle" class="b">ACP 一轮的总用量</text>
+  <rect class="c2" x="20" y="258" width="240" height="34" rx="7"/><text x="140" y="280" text-anchor="middle" class="b">工具调用 · 委派边界</text>
+
+  <rect class="c4" x="760" y="34" width="240" height="44" rx="7"/><text x="880" y="54" text-anchor="middle" class="b">Session</text><text x="880" y="70" text-anchor="middle" class="s">session.id = T</text>
+  <rect class="c1" x="760" y="96" width="240" height="44" rx="7"/><text x="880" y="116" text-anchor="middle" class="b">Trace</text><text x="880" y="132" text-anchor="middle" class="s">trace id = run id（一个 run 一条）</text>
+  <rect class="c3" x="760" y="158" width="240" height="40" rx="7"/><text x="880" y="183" text-anchor="middle" class="b">Generation（有模型、用量、费用）</text>
+  <rect class="c3" x="760" y="208" width="240" height="40" rx="7"/><text x="880" y="233" text-anchor="middle" class="b">Generation（一轮一个，合成）</text>
+  <rect class="c2" x="760" y="258" width="240" height="34" rx="7"/><text x="880" y="280" text-anchor="middle" class="b">tool / agent 类型的 Observation</text>
+
+  <line class="ln" x1="260" y1="56" x2="758" y2="56" marker-end="url(#m)"/><text x="300" y="50" class="s">gen_ai.conversation.id + langfuse.session.id，统一用根会话 T</text>
+  <line class="ln" x1="260" y1="118" x2="758" y2="118" marker-end="url(#m)"/><text x="300" y="112" class="s">OTel trace id 由 run id 派生（128 位 UUID 正好等于 128 位 trace id）</text>
+  <line class="ln" x1="260" y1="178" x2="758" y2="178" marker-end="url(#m)"/><text x="300" y="172" class="s">chat span，显式标 observation.type = generation</text>
+  <line class="ln" x1="260" y1="228" x2="758" y2="228" marker-end="url(#m)"/><text x="300" y="222" class="s">新增合成 span "chat {cli 模型}"，带 ACP 一轮的总用量</text>
+  <line class="ln" x1="260" y1="275" x2="758" y2="275" marker-end="url(#m)"/><text x="300" y="269" class="s">execute_tool → tool；invoke_agent → agent（根 span 不再带用量）</text>
+  </g>
+</svg>
+</div>
+<table>
+  <tr><th>Atlas</th><th>Langfuse</th><th>映射规则</th></tr>
+  <tr><td>根会话 thread（<code>stream_thread_id</code>）</td><td>Session</td><td>父 run 和子 run <b>都用根会话的 id</b>（解决 P1）。子会话 id 放进 trace 元数据，不丢失</td></tr>
+  <tr><td><code>thread.created_by</code></td><td>User</td><td>根 span 上带 <code>user.id</code> / <code>langfuse.user.id</code>（解决 P9）</td></tr>
+  <tr><td>run</td><td>Trace</td><td>trace id = run id 的 128 位整数。同一个 run 的多段执行落在同一条 trace 里（解决 P2）；拿 Atlas 的 run id 就能直接定位到 Langfuse 的 trace</td></tr>
+  <tr><td>run 的每一段执行</td><td>trace 下的顶层 agent observation</td><td>两段执行就有两个并列的 <code>invoke_agent</code>，按时间排列，中间的空档就是挂起等待的时间</td></tr>
+  <tr><td>父子 run</td><td>同一个 Session 里的两条 trace，元数据互相引用</td><td>子 run 的根 span 带 <code>atlas.parent_run_id</code>；父 run 的委派 span 结束时补上子 run 的 id（解决 P3）</td></tr>
+  <tr><td>Native 的模型调用</td><td>Generation</td><td>按次计费</td></tr>
+  <tr><td>ACP 一轮的总用量</td><td>合成的 Generation</td><td>CLI 内部的模型调用平台看不到，用一个合成 span 承载整轮用量（解决 P5）</td></tr>
+  <tr><td>工具调用 / 委派边界</td><td>tool / agent 类型的 Observation</td><td>不带用量，不参与计费</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2 id="fields">5. 字段设计：Langfuse 如何把 OTel 数据归档</h2>
+
+<div class="callout warn">
+  <b>结论先说：用 OTel 采集了 trace，Langfuse 并不会自动具备会话、用户、费用、对话内容这些能力。</b>
+  OTel 只负责把 span 送到 Langfuse。Langfuse 拿到的是一堆带属性的 span，它要按<b>自己约定的字段规则</b>去读这些属性，
+  才知道"这些 span 是哪个会话的""这一步是不是模型调用""用了多少 token""输入输出是什么"。
+  属性名不对、写错位置、或者干脆没写，对应的功能就不会出现，而且<b>不会报错</b>，只是界面上什么都没有。
+  所以必须有一份字段设计，第 4 节的映射关系全靠这一节的字段来实现。
+</div>
+
+<h3>5.1 不做字段设计，只接 OTel，Langfuse 里能得到什么</h3>
+<p>以现在 Atlas 已经发出的 span（第 3 节）为例，直接接进 Langfuse：</p>
+<table>
+  <tr><th>能力</th><th>能不能得到</th><th>原因</th></tr>
+  <tr><td>按请求看 span 树、耗时、错误</td><td>✅ 能</td><td>靠 OTel 原生的 trace id、span id、父 span id、起止时间、状态，任何后端都认</td></tr>
+  <tr><td>trace 名称</td><td>⚠️ 勉强</td><td>默认取根 span 的名字（<code>invoke_agent acp-delegator</code>），能看，但不是为检索设计的</td></tr>
+  <tr><td>Session（按会话回放）</td><td>❌ 没有</td><td>Langfuse 不认识 Atlas 的 <code>gen_ai.conversation.id</code> 是不是会话 <span class="tag verify">待验证 V2</span>；不写它认识的会话字段，trace 就不属于任何 Session</td></tr>
+  <tr><td>按用户统计</td><td>❌ 没有</td><td>现在根本没有用户字段</td></tr>
+  <tr><td>token 用量</td><td>⚠️ 部分</td><td>Langfuse 识别 OTel GenAI 标准的 <code>gen_ai.usage.input_tokens</code> / <code>output_tokens</code>；缓存和推理 token 的标准属性能不能识别，<span class="tag verify">待验证 V4</span></td></tr>
+  <tr><td>费用</td><td>⚠️ 不一定</td><td>只对被认作 Generation、并且模型名能在价格表里匹配上的 span 计算；DeepSeek 不在默认价格表里，所以是 0</td></tr>
+  <tr><td>对话内容</td><td>❌ 没有</td><td>现在没有采集（P7），而且 Langfuse 只认特定的内容字段</td></tr>
+  <tr><td>observation 类型（模型调用 / 工具 / Agent）</td><td>⚠️ 靠推断</td><td>不显式指定时，Langfuse 按有没有模型名、用量来推断，可能把根 span 当成模型调用，导致费用重复（P4）</td></tr>
+</table>
+
+<h3>5.2 字段规则分两层</h3>
+<table>
+  <tr><th>层</th><th>内容</th><th>规则由谁定</th><th>需要设计吗</th></tr>
+  <tr><td><b>第一层：OTel 原生结构</b></td><td><code>trace_id</code>、<code>span_id</code>、<code>parent_span_id</code>、span 名、起止时间、状态、span 事件、resource</td><td>OTel 标准，所有后端都一样</td><td>结构本身不用设计，但 <b>trace_id 怎么生成</b>要设计：它决定了哪些 span 算同一条 trace（6.3 节）</td></tr>
+  <tr><td rowspan="3"><b>第二层：属性语义</b></td><td>(a) <b>OTel GenAI 标准属性</b> <code>gen_ai.*</code>：模型名、token 用量、工具名、操作类型</td><td>OTel 语义约定（目前还在 incubating 阶段）</td><td>Atlas 已经遵循（<code>semconv.py</code>）。Langfuse 识别其中一部分，换别的后端也能用</td></tr>
+  <tr><td>(b) <b>Langfuse 专有属性</b> <code>langfuse.*</code>：会话、用户、trace 名称、trace 输入输出、observation 类型、标签、元数据、环境</td><td><b>Langfuse 自己定</b>，只有 Langfuse 认识</td><td><b>必须设计</b>。会话、用户这类概念在 OTel 标准里没有对应的、Langfuse 能识别的写法</td></tr>
+  <tr><td>(c) 其他属性，比如 <code>atlas.run_id</code></td><td>Atlas 自定义</td><td>Langfuse 不解读，原样放进 metadata 展示，可以查看，但不参与任何功能</td></tr>
+</table>
+<p>所以回答"字段规则是不是依赖 Langfuse"：<b>归组类的字段（会话、用户、trace 级的输入输出、observation 类型）依赖 Langfuse 的规则；模型和用量类的字段尽量用 OTel 标准，Langfuse 认就行。</b>Langfuse 的规则会随版本变化，所以第 12 节把这些都列为待验证，并且规定所有 <code>langfuse.*</code> 字段名只出现在 <code>semconv.py</code> 这一个文件里。</p>
+
+<h3>5.3 归档规则：span → trace → session</h3>
+<div class="fig">
+<svg width="1060" height="330" viewBox="0 0 1060 330" xmlns="http://www.w3.org/2000/svg">
+  <defs><marker id="f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker></defs>
+  <g style="color: currentColor">
+  <text x="20" y="20" class="b">OTel span（Collector 送来的原始数据）</text>
+  <rect class="c3" x="20" y="32" width="300" height="34" rx="6"/><text x="30" y="54" class="s">span A · trace_id=R1 · parent=∅ · 第 1 段根</text>
+  <rect class="c3" x="40" y="72" width="280" height="34" rx="6"/><text x="50" y="94" class="s">span B · trace_id=R1 · parent=A · chat</text>
+  <rect class="c3" x="20" y="112" width="300" height="34" rx="6"/><text x="30" y="134" class="s">span C · trace_id=R1 · parent=∅ · 第 2 段根</text>
+  <rect class="c3" x="20" y="166" width="300" height="34" rx="6"/><text x="30" y="188" class="s">span D · trace_id=R1' · parent=∅ · 子 run 根</text>
+  <rect class="c3" x="20" y="230" width="300" height="34" rx="6"/><text x="30" y="252" class="s">span E · trace_id=R2 · parent=∅ · 第 2 轮根</text>
+  <text x="20" y="290" class="s">A、C、D、E 上都写了 langfuse.session.id = T</text>
+
+  <text x="390" y="20" class="b">① 按 trace_id 分组 → Trace</text>
+  <rect class="c1" x="390" y="32" width="270" height="114" rx="8"/><text x="404" y="54" class="b">Trace R1</text><text x="404" y="74" class="s">观测树：A → B；C（顶层）</text><text x="404" y="92" class="s">名称、输入输出：取自 langfuse.trace.*，</text><text x="404" y="108" class="s">没写就取根 span</text><text x="404" y="128" class="s">trace id = R1 的 32 位十六进制</text>
+  <rect class="c1" x="390" y="166" width="270" height="34" rx="8"/><text x="404" y="188" class="b">Trace R1'</text>
+  <rect class="c1" x="390" y="230" width="270" height="34" rx="8"/><text x="404" y="252" class="b">Trace R2</text>
+
+  <text x="740" y="20" class="b">② 按 session id 字符串分组 → Session</text>
+  <rect class="c4" x="740" y="32" width="300" height="232" rx="8"/><text x="754" y="56" class="b">Session T</text>
+  <text x="754" y="80" class="s">· Session 不需要预先创建</text>
+  <text x="754" y="98" class="s">· sessionId 相同的 trace 就是同一个 Session</text>
+  <text x="754" y="116" class="s">· 没写 sessionId 的 trace 不属于任何 Session</text>
+  <text x="754" y="140">包含：Trace R1、R1'、R2、R2'</text>
+  <text x="754" y="166" class="s">User 也是同一机制：</text>
+  <text x="754" y="184" class="s">langfuse.user.id 相同 → 同一用户</text>
+
+  <line class="ln" x1="320" y1="49" x2="388" y2="70" marker-end="url(#f)"/>
+  <line class="ln" x1="320" y1="89" x2="388" y2="86" marker-end="url(#f)"/>
+  <line class="ln" x1="320" y1="129" x2="388" y2="110" marker-end="url(#f)"/>
+  <line class="ln" x1="320" y1="183" x2="388" y2="183" marker-end="url(#f)"/>
+  <line class="ln" x1="320" y1="247" x2="388" y2="247" marker-end="url(#f)"/>
+  <line class="ln" x1="660" y1="89" x2="738" y2="120" marker-end="url(#f)"/>
+  <line class="ln" x1="660" y1="183" x2="738" y2="150" marker-end="url(#f)"/>
+  <line class="ln" x1="660" y1="247" x2="738" y2="180" marker-end="url(#f)"/>
+  </g>
+</svg>
+</div>
+<table>
+  <tr><th>问题</th><th>Langfuse 的规则</th><th>Atlas 的做法</th></tr>
+  <tr><td><b>一个 span 怎么归到一条 trace？</b></td>
+      <td>按 OTel 的 <code>trace_id</code>：<code>trace_id</code> 相同的 span 就是同一条 trace，Langfuse 的 trace id 就是它的 32 位十六进制。这是 OTel 原生规则，不需要任何属性</td>
+      <td rowspan="2">
+        <b>Langfuse 里没有"run"这个概念。</b>要让"一个 run = 一条 trace"，唯一的办法是让这个 run 的所有 span 共用同一个 <code>trace_id</code>。<br>
+        现状：每一段执行都随机生成 <code>trace_id</code>，所以挂起后续跑的 run 会变成两条 trace（P2）。<br>
+        设计：<code>trace_id = run_id</code> 的 128 位整数（6.3 节）。子 run 有自己的 run id，自然是另一条 trace。
+      </td></tr>
+  <tr><td><b>trace 内部的树怎么来？</b></td>
+      <td>按 <code>span_id</code> 和 <code>parent_span_id</code> 建父子关系，每个 span 是一个 observation。没有父 span（或者父 span 不在这条 trace 里）的是顶层 observation</td></tr>
+  <tr><td><b>trace 的名称和输入输出从哪来？</b></td>
+      <td>优先读 <code>langfuse.trace.name</code>、<code>langfuse.trace.input</code>、<code>langfuse.trace.output</code>；没有就取根 span 的名字和输入输出。这些字段要写在哪个 span 上才生效（只认根 span，还是任意 span 都行）<span class="tag verify">待验证 V7</span></td>
+      <td>名称写智能体 slug；输入写在第 1 段的根 span 上，输出写在最后一段的根 span 上</td></tr>
+  <tr><td><b>一条 trace 怎么归到一个 session？</b></td>
+      <td>Session 不是一个需要创建的对象，它只是 trace 上的一个 <code>sessionId</code> 字符串：sessionId 相同的 trace 就是同一个 Session。OTel 进来的数据，sessionId 来自 span 属性 <code>langfuse.session.id</code>（也接受通用的 <code>session.id</code>）。没有这个属性，trace 就不属于任何 Session</td>
+      <td><code>langfuse.session.id = 根会话 id</code>（<code>thread.stream_thread_id</code>），写在<b>每一段的根 span</b> 上。父 run R1、R2 和子 run R1'、R2' 都写 T，于是归到同一个 Session</td></tr>
+  <tr><td><b>一条 trace 怎么归到一个用户？</b></td>
+      <td>同上，<code>langfuse.user.id</code>（或 <code>user.id</code>）</td>
+      <td><code>thread.created_by</code>，同样写在每一段的根 span 上</td></tr>
+</table>
+
+<h3>5.4 字段字典</h3>
+<p>下表就是"Atlas 的数据 → Langfuse 字段"的完整对应关系。"Langfuse 识别的属性"一列来自 Langfuse 官方的 OTel 接入文档，具体版本以第 0 期核对结果为准（V2）。</p>
+<table>
+  <tr><th>Langfuse 字段</th><th>Langfuse 识别的 OTel 属性</th><th>Atlas 写入的值</th><th>写在哪些 span</th><th>规则来源</th></tr>
+  <tr><td>Trace ID</td><td>OTel <code>trace_id</code></td><td><code>run_id</code> 的 128 位整数</td><td>全部（由上下文继承）</td><td>OTel 原生</td></tr>
+  <tr><td>Observation ID / 父子关系</td><td><code>span_id</code> / <code>parent_span_id</code></td><td>OTel SDK 自动生成</td><td>全部</td><td>OTel 原生</td></tr>
+  <tr><td>开始、结束、耗时</td><td>span 起止时间</td><td>工具和委派 span 用事件的时间戳；其他用实际时间</td><td>全部</td><td>OTel 原生</td></tr>
+  <tr><td>错误级别</td><td>span status = ERROR 加 status message</td><td>失败原因</td><td>失败的 span</td><td>OTel 原生</td></tr>
+  <tr><td>Trace 名称</td><td><code>langfuse.trace.name</code>；没有就取根 span 名</td><td>智能体 slug，比如 <code>acp-delegator</code></td><td>每段根</td><td>Langfuse 专有</td></tr>
+  <tr><td><b>Session ID</b></td><td><code>langfuse.session.id</code>（或 <code>session.id</code>）</td><td>根会话 id <code>T</code></td><td>每段根</td><td>Langfuse 专有</td></tr>
+  <tr><td><b>User ID</b></td><td><code>langfuse.user.id</code>（或 <code>user.id</code>）</td><td><code>thread.created_by</code></td><td>每段根</td><td>Langfuse 专有</td></tr>
+  <tr><td>Tags</td><td><code>langfuse.trace.tags</code>（字符串数组）</td><td><code>["native", "acp-delegator"]</code></td><td>每段根</td><td>Langfuse 专有</td></tr>
+  <tr><td>Trace 元数据</td><td><code>langfuse.trace.metadata.&lt;key&gt;</code></td><td><code>run_id</code>、<code>thread_id</code>（子 run 是 T'）、<code>parent_run_id</code>、<code>agent_version_id</code>、<code>segment</code></td><td>每段根</td><td>Langfuse 专有</td></tr>
+  <tr><td>Trace 输入 / 输出</td><td><code>langfuse.trace.input</code> / <code>langfuse.trace.output</code>（JSON 字符串）</td><td>用户这一轮的消息 / 最终回答</td><td>第 1 段根写输入，最后一段根写输出</td><td>Langfuse 专有；<b>受内容档位控制</b></td></tr>
+  <tr><td>环境</td><td><code>langfuse.environment</code></td><td><code>local</code> / <code>test</code> / <code>prod</code></td><td>每段根</td><td>Langfuse 专有</td></tr>
+  <tr><td><b>Observation 类型</b></td><td><code>langfuse.observation.type</code>；没有就推断</td><td><code>agent</code> / <code>generation</code> / <code>tool</code></td><td>每个 span 显式写，不靠推断</td><td>Langfuse 专有</td></tr>
+  <tr><td>模型名</td><td><code>gen_ai.request.model</code> / <code>gen_ai.response.model</code>（或 <code>langfuse.observation.model.name</code>）</td><td>实际模型名，比如 <code>deepseek-chat</code></td><td>只写在 Generation 上</td><td>OTel GenAI 标准</td></tr>
+  <tr><td><b>用量</b></td><td><code>gen_ai.usage.input_tokens</code> / <code>output_tokens</code>；缓存和推理 token 的映射 <span class="tag verify">待验证 V4</span>，不行就用 <code>langfuse.observation.usage_details</code>（JSON）</td><td><code>normalize_usage</code> 的五项结果</td><td><b>只写在 Generation 上</b></td><td>标准优先，专有兜底</td></tr>
+  <tr><td>费用</td><td>不传：Langfuse 按模型定义的价格表计算；也可以传 <code>langfuse.observation.cost_details</code></td><td>不传，由价格表计算（8.3 节）</td><td>—</td><td>Langfuse 配置</td></tr>
+  <tr><td>Observation 输入 / 输出</td><td><code>langfuse.observation.input</code> / <code>output</code>；标准属性 <code>gen_ai.input.messages</code> / <code>output.messages</code> 是否识别 <span class="tag verify">待验证 V3</span></td><td>模型调用的消息；工具的参数和结果预览</td><td>Generation、tool</td><td>受内容档位控制</td></tr>
+  <tr><td>Observation 元数据</td><td><code>langfuse.observation.metadata.&lt;key&gt;</code>；其他没被识别的属性也会出现在元数据里</td><td><code>purpose</code>（chat / title / compaction）、<code>call_id</code>、<code>usage_scope</code></td><td>按需</td><td>Langfuse 专有</td></tr>
+  <tr><td>瞬时事件</td><td>OTel span event；Langfuse 怎么展示 <span class="tag verify">待验证 V8</span></td><td><code>context.compacted</code>、<code>session.lost</code>、<code>agent.mode</code>、<code>tool.denied</code></td><td>根 span</td><td>OTel 原生</td></tr>
+</table>
+
+<h3>5.5 示例：R1 第 1 段的两个 span，带上字段之后长什么样</h3>
+<pre><code>// span A：R1 第 1 段的根（Collector 收到的 OTLP 数据，简化后）
+{
+  "traceId": "&lt;R1 去掉横线&gt;",                       // ← 第一层：决定它属于 Trace R1
+  "spanId": "a1…", "parentSpanId": "&lt;虚拟父&gt;",
+  "name": "invoke_agent acp-delegator",
+  "attributes": {
+    "gen_ai.operation.name": "invoke_agent",          // ← 第二层 (a)：OTel GenAI 标准
+    "gen_ai.agent.name": "acp-delegator",
+    "gen_ai.conversation.id": "T",
+    "langfuse.session.id": "T",                       // ← 第二层 (b)：Langfuse 专有 → 归到 Session T
+    "langfuse.user.id": "u-001",                      //    → 归到用户 u-001
+    "langfuse.trace.name": "acp-delegator",
+    "langfuse.trace.tags": ["native", "acp-delegator"],
+    "langfuse.trace.metadata.run_id": "R1",
+    "langfuse.trace.metadata.segment": 1,
+    "langfuse.observation.type": "agent",             //    → 显示为 agent，不计费
+    "langfuse.trace.input": "{\"text\": \"在工作区写一个 hello.py…\"}",   // 仅内容档位 ≥ io
+    "atlas.run_id": "R1",                             // ← 第二层 (c)：Atlas 自定义，进元数据
+    "atlas.usage.input_tokens": 2310                  //    整轮累计，改名后不参与计费
+  }
+}
+
+// span B：第 1 段里的一次模型调用
+{
+  "traceId": "&lt;R1 去掉横线&gt;", "spanId": "b1…", "parentSpanId": "a1…",   // ← 父子关系：挂在 A 下面
+  "name": "chat deepseek-chat",
+  "attributes": {
+    "gen_ai.operation.name": "chat",
+    "gen_ai.request.model": "deepseek-chat",          // ← 去价格表匹配
+    "gen_ai.usage.input_tokens": 2310,                // ← 按这些计算费用
+    "gen_ai.usage.output_tokens": 120,
+    "gen_ai.usage.cache_read.input_tokens": 0,
+    "langfuse.observation.type": "generation",        // ← 显式标成模型调用
+    "langfuse.observation.metadata.purpose": "chat"
+  }
+}</code></pre>
+<p>Langfuse 据此得到：Trace R1（名称 acp-delegator、用户 u-001、属于 Session T）；它下面有一个 agent 类型的 observation A，A 下面挂着一个 Generation B，按 <code>deepseek-chat</code> 的价格计算 B 的费用。A 不计费。</p>
+
+<h3>5.6 字段设计的规则</h3>
+<ol>
+  <li><b>归组字段写在每一段的根 span 上</b>：<code>trace_id</code>（由上下文继承）、session、user、trace 名称和元数据。不依赖 Langfuse 是否会把属性从一个 span 传播到整条 trace（V7）。</li>
+  <li><b>用量只写在 Generation 上</b>：其他 span 一律不带 <code>gen_ai.usage.*</code>，从根本上避免重复计费。</li>
+  <li><b>标准优先，专有兜底</b>：能用 <code>gen_ai.*</code> 表达的（模型、用量、工具名）不用 <code>langfuse.*</code>；只有 OTel 标准里没有对应写法的概念（会话、用户、trace 输入输出、observation 类型、标签、元数据）才用 Langfuse 专有属性。</li>
+  <li><b>observation 类型显式指定</b>：不靠 Langfuse 推断，推断规则会随版本变化。</li>
+  <li><b>后端专有的字段名只在 <code>semconv.py</code> 里出现</b>：Langfuse 升级、或者以后换别的后端，只改这一个文件。</li>
+  <li><b>内容类字段全部受档位控制</b>，并且在 Collector 发往 Jaeger 的管道里删除（第 10 节）。</li>
+  <li><b>值的类型</b>：OTel 属性只支持字符串、数字、布尔值和它们的数组；输入输出、复杂的元数据都要先序列化成 JSON 字符串。</li>
+</ol>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2 id="trace">6. 链路追踪设计</h2>
+
+<h3>6.1 示例第 1 轮在 Langfuse 里的样子</h3>
+<p>R1（父）和 R1'（子）是同一个 Session 里的两条 trace。下图假设委派超过 60s，R1 先挂起再续跑，分成了两段：</p>
+<div class="fig">
+<svg width="1060" height="420" viewBox="0 0 1060 420" xmlns="http://www.w3.org/2000/svg">
+  <g>
+  <text x="20" y="20" class="b">Trace R1（父 run）· trace id = R1 · session = T</text>
+  <line class="tick" x1="320" y1="30" x2="320" y2="200"/><line class="tick" x1="520" y1="30" x2="520" y2="200"/><line class="tick" x1="720" y1="30" x2="720" y2="200"/><line class="tick" x1="920" y1="30" x2="920" y2="200"/>
+  <text x="320" y="42" class="s">0s</text><text x="520" y="42" class="s">30s</text><text x="720" y="42" class="s">60s</text><text x="920" y="42" class="s">90s</text>
+
+  <text x="20" y="66">agent · invoke_agent acp-delegator（第 1 段）</text><rect class="c1" x="320" y="54" width="400" height="16" rx="3"/>
+  <text x="36" y="88">generation · chat deepseek-chat</text><rect class="c3" x="320" y="76" width="60" height="16" rx="3"/><text x="386" y="88" class="s">in 2,310 · out 120 · ¥0.003</text>
+  <text x="36" y="110">agent · invoke_agent cli-hand（委派）</text><rect class="c2" x="380" y="98" width="340" height="16" rx="3"/><text x="726" y="110" class="s">→ 子 run R1'（等待超过 60s，挂起）</text>
+  <text x="20" y="140">agent · invoke_agent acp-delegator（第 2 段，续跑）</text><rect class="c1" x="880" y="128" width="120" height="16" rx="3"/>
+  <text x="36" y="162">tool · execute_tool read_file</text><rect class="c2" x="882" y="150" width="14" height="16" rx="3"/>
+  <text x="36" y="184">generation · chat deepseek-chat</text><rect class="c3" x="900" y="172" width="90" height="16" rx="3"/><text x="760" y="184" class="s">in 3,050 · out 210</text>
+
+  <text x="20" y="240" class="b">Trace R1'（子 run）· trace id = R1' · session = T · 元数据 parent_run_id = R1</text>
+  <line class="tick" x1="320" y1="250" x2="320" y2="410"/><line class="tick" x1="520" y1="250" x2="520" y2="410"/><line class="tick" x1="720" y1="250" x2="720" y2="410"/><line class="tick" x1="920" y1="250" x2="920" y2="410"/>
+  <text x="20" y="276">agent · invoke_agent cli-hand（ACP）</text><rect class="c1" x="382" y="264" width="496" height="16" rx="3"/>
+  <text x="36" y="298">tool · execute_tool Write hello.py</text><rect class="c2" x="470" y="286" width="20" height="16" rx="3"/>
+  <text x="36" y="320">tool · execute_tool Bash python hello.py</text><rect class="c2" x="560" y="308" width="40" height="16" rx="3"/>
+  <text x="36" y="342">event · agent.mode（auto）</text><circle cx="400" cy="337" r="5" class="c4"/>
+  <text x="36" y="364">generation · chat deepseek-chat（ACP 合成）</text><rect class="c3" x="382" y="352" width="496" height="16" rx="3" opacity="0.55"/><text x="392" y="364" class="s">整轮用量：in 19,659 · cache read 57,856 · out 278</text>
+  <text x="36" y="392" class="s">合成 Generation 的起止时间 = 这一轮的起止时间，标注 atlas.usage.scope = turn（不是单次调用）</text>
+  </g>
+</svg>
+</div>
+<p class="sub">图中的数字是示意；ACP 一轮的用量取自第 0 期实测时的数量级。</p>
+
+<h3>6.2 每种 span 的属性</h3>
+<table>
+  <tr><th>span</th><th>属性</th><th>状态</th></tr>
+  <tr><td rowspan="3"><b>run 段根</b><br><code>invoke_agent {slug}</code></td>
+      <td>现有属性不变：<code>gen_ai.operation.name</code>、<code>gen_ai.agent.name</code>、<code>gen_ai.request.model</code>、<code>atlas.run_id</code>、<code>atlas.agent.kind</code></td><td><span class="tag have">已有</span></td></tr>
+  <tr><td><code>gen_ai.conversation.id</code> 改用<b>根会话 id</b>；新增 <code>langfuse.session.id</code>（同值）、<code>langfuse.user.id</code>、<code>langfuse.trace.name</code>（智能体 slug）、<code>langfuse.trace.tags</code>（<code>[kind, slug]</code>）、<code>langfuse.trace.metadata.thread_id</code>（本 run 所在的会话，子 run 是 T'）、<code>langfuse.trace.metadata.parent_run_id</code>、<code>langfuse.observation.type = agent</code>、<code>atlas.segment</code>（第几段）</td><td><span class="tag new">新增</span></td></tr>
+  <tr><td><b>整轮累计用量改名</b>为 <code>atlas.usage.*</code>（Jaeger 里照样能看到），不再用 <code>gen_ai.usage.*</code>，避免被当成一次模型调用重复计费（P4）</td><td><span class="tag new">新增</span> <span class="tag verify">待验证</span></td></tr>
+  <tr><td><b>模型调用</b><br><code>chat {model}</code>（Native）</td><td>现有属性不变；新增 <code>langfuse.observation.type = generation</code>；内容开关打开时，带输入输出（见第 9 节）</td><td><span class="tag have">已有</span> + <span class="tag new">新增</span></td></tr>
+  <tr><td><b>ACP 合成调用</b><br><code>chat {cli 模型}</code></td><td>在 <code>usage.updated</code> 时创建，起止时间等于这一轮的起止时间。模型名取自 prompt 响应的 <code>_meta.quota.model_usage[].model</code>（第 0 期实测里是 <code>deepseek-chat</code>），拿不到时用 cluster 配置的模型名；用量写成 <code>gen_ai.usage.*</code>；<code>atlas.usage.scope = turn</code>；<code>langfuse.observation.type = generation</code></td><td><span class="tag new">新增</span></td></tr>
+  <tr><td><b>工具调用</b><br><code>execute_tool {name}</code></td><td>现有属性不变；新增 <code>langfuse.observation.type = tool</code>；内容开关打开时，输入为参数、输出为结果预览（最多 200 字）</td><td><span class="tag have">已有</span> + <span class="tag new">新增</span></td></tr>
+  <tr><td><b>委派边界</b><br><code>invoke_agent {sub}</code></td><td>新增 <code>langfuse.observation.type = agent</code>；结束时补上 <code>atlas.child_run_id</code></td><td><span class="tag new">新增</span></td></tr>
+  <tr><td><b>瞬时事件</b></td><td>现有：<code>context.compacted</code>、<code>session.lost</code>。新增：<code>agent.mode</code>（ACP 实际生效的权限模式）、<code>tool.denied</code>（被 Auto 模式拦截）</td><td><span class="tag have">已有</span> + <span class="tag new">新增</span></td></tr>
+</table>
+
+<h3>6.3 用 run id 派生 trace id</h3>
+<pre><code># telemetry/run_trace.py（示意）
+from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags, set_span_in_context
+
+def _trace_context(run_id: UUID):
+    """让这个 run 的所有段都落进同一条 trace：trace id = run id 的 128 位整数。"""
+    parent = SpanContext(
+        trace_id=run_id.int,               # UUID 是 128 位，OTel trace id 也是 128 位
+        span_id=_span_id_of(run_id),       # 从 run id 派生一个固定的"虚拟父 span"
+        is_remote=True,
+        trace_flags=TraceFlags(TraceFlags.SAMPLED),
+    )
+    return set_span_in_context(NonRecordingSpan(parent))
+
+span = tracer().start_span(name, context=_trace_context(run_id), ...)</code></pre>
+<ul>
+  <li>好处：Atlas 里的 run id 去掉横线就是 Langfuse / Jaeger 里的 trace id，从 Atlas 界面可以直接拼出跳转链接。</li>
+  <li>代价：每一段的根 span 都挂在一个"虚拟父 span"下面，这个父 span 本身不会上报。Jaeger 会显示一条"缺少父 span"的提示，Langfuse 能否把它们正常当作顶层 observation <span class="tag verify">待验证</span>。如果不行，退而求其次：只派生 trace id、不设父 span（要自定义 <code>IdGenerator</code>）。</li>
+</ul>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2 id="session">7. 会话设计</h2>
+<h3>7.1 示例会话在 Langfuse Session 页里的样子</h3>
+<div class="fig">
+<svg width="1060" height="330" viewBox="0 0 1060 330" xmlns="http://www.w3.org/2000/svg">
+  <g>
+  <rect class="c4" x="10" y="10" width="1040" height="36" rx="6"/>
+  <text x="24" y="33" class="b">Session T · 用户 u-001 · 4 条 trace · 共 ¥0.087 · 总 token 98,412</text>
+  <text x="760" y="33" class="s">标签：native · acp · acp-delegator · cli-hand</text>
+
+  <rect class="c1" x="10" y="58" width="1040" height="58" rx="6"/>
+  <text x="24" y="78" class="b">Trace R1 · acp-delegator · 10:20:41 · 94s · ¥0.011</text>
+  <text x="24" y="96">输入：在工作区写一个 hello.py，打印当前时间，然后运行它告诉我输出</text>
+  <text x="24" y="110" class="s">输出：已创建 hello.py，运行输出为 2026-10-04 10:21:05 …</text>
+
+  <rect class="c2" x="40" y="124" width="1010" height="50" rx="6"/>
+  <text x="54" y="144" class="b">Trace R1' · cli-hand（ACP · Auto）· 10:20:47 · 41s · ¥0.032 · 父 run = R1</text>
+  <text x="54" y="162" class="s">输入：新建 hello.py … ｜ 输出：已创建并运行，输出 2026-10-04 10:21:05</text>
+
+  <rect class="c1" x="10" y="186" width="1040" height="58" rx="6"/>
+  <text x="24" y="206" class="b">Trace R2 · acp-delegator · 10:22:10 · 38s · ¥0.009</text>
+  <text x="24" y="224">输入：把输出改成中文格式</text>
+  <text x="24" y="238" class="s">输出：已改为中文格式，输出为 2026年10月04日 10时22分 …</text>
+
+  <rect class="c2" x="40" y="252" width="1010" height="50" rx="6"/>
+  <text x="54" y="272" class="b">Trace R2' · cli-hand（ACP · Auto）· 10:22:14 · 22s · ¥0.035 · 父 run = R2</text>
+  <text x="54" y="290" class="s">输入：把 hello.py 的输出改成中文 … ｜ 输出：已修改并运行</text>
+  <text x="10" y="322" class="s">（示意：Langfuse 的 Session 页按时间列出 trace，并显示每条 trace 的输入和输出。缩进是为了说明父子关系，Langfuse 实际是平铺的，父子关系体现在元数据里）</text>
+  </g>
+</svg>
+</div>
+
+<h3>7.2 设计要点</h3>
+<table>
+  <tr><th>要点</th><th>设计</th><th>理由</th></tr>
+  <tr><td>Session 粒度</td><td>根会话，也就是用户看到的那一段对话</td><td>用户和运维的视角都是"这段对话"；子会话是实现细节</td></tr>
+  <tr><td>子 run 的归属</td><td><code>langfuse.session.id = 根会话 id</code>；本来所在的子会话 id 放在 <code>langfuse.trace.metadata.thread_id</code></td><td>回放时能看到子智能体实际做了什么，又不丢失"它在子会话里"这个事实</td></tr>
+  <tr><td>trace 的输入输出</td><td>根 span 上设置 <code>langfuse.trace.input</code>（用户这一轮的消息）和 <code>langfuse.trace.output</code>（最终回答）。子 run 的输入是任务书，输出是汇报</td><td>Session 页靠这两项显示成对话形式，这是"按会话回放"的核心。<b>属于内容，受第 9 节开关控制</b>；关闭时只显示步骤和耗时</td></tr>
+  <tr><td>用户</td><td><code>langfuse.user.id = thread.created_by</code></td><td>按用户统计费用</td></tr>
+  <tr><td>标签</td><td><code>[agent.kind, agent.slug]</code>，子 run 再加上子智能体名</td><td>按智能体筛选和统计</td></tr>
+  <tr><td>环境</td><td>资源属性 <code>deployment.environment</code>（Collector 已经在加），新增 <code>langfuse.environment</code></td><td>本机、测试、正式环境的数据分开</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2 id="cost">8. token 与费用设计</h2>
+<h3>8.1 用量从哪来</h3>
+<table>
+  <tr><th>run 类型</th><th>粒度</th><th>来源</th><th>落在哪个 span 上</th></tr>
+  <tr><td>Native</td><td>每次模型调用</td><td>LangChain 的 <code>usage_metadata</code>，经 <code>normalize_usage</code> 拆成输入、输出、缓存读、缓存写、推理五项 <span class="tag have">已有</span></td><td><code>chat {model}</code>（Generation）</td></tr>
+  <tr><td>ACP</td><td>每一轮（CLI 内部的单次调用看不到）</td><td>prompt 响应里的 <code>usage</code>（<code>usage_of</code>）<span class="tag have">已有</span>；缓存字段名要修正 <span class="tag bug">缺陷 P6</span></td><td>合成的 <code>chat {cli 模型}</code>（Generation）<span class="tag new">新增</span></td></tr>
+  <tr><td>Native 的旁路调用</td><td>每次</td><td>标题生成、上下文压缩的摘要调用也经过 <code>ModelSpanHandler</code> <span class="tag have">已有</span></td><td>同一条 trace 下的 Generation，可以按 <code>langfuse.observation.metadata.purpose</code>（chat / title / compaction）区分 <span class="tag new">新增</span></td></tr>
+</table>
+
+<h3>8.2 防止重复计费</h3>
+<div class="callout bad">
+  <b>规则：只有 Generation 带 <code>gen_ai.usage.*</code>，其他 span 一律不带。</b>根 span 上整轮累计的用量改名为 <code>atlas.usage.*</code>。否则 Langfuse 可能把"带模型名和用量的根 span"推断成一次模型调用，Native 的费用就会被算两遍（P4）。推断规则 <span class="tag verify">待验证</span>，但这条规则不管推断结果如何都是安全的。
+</div>
+
+<h3>8.3 价格配置</h3>
+<p>Langfuse 按模型名匹配价格表计算费用。<code>deepseek-chat</code> 不在默认价格表里，需要在 Langfuse 里添加自定义模型定义（界面或 API 都可以）：</p>
+<table>
+  <tr><th>Langfuse 用量类型</th><th>对应的 OTel 属性</th><th>对应的 Atlas 字段</th><th>价格</th></tr>
+  <tr><td><code>input</code></td><td><code>gen_ai.usage.input_tokens</code></td><td><code>input_tokens</code>（不含缓存）</td><td rowspan="5">按 DeepSeek 官方价格填写，缓存命中和未命中分开计价。价格会变，以配置当天的官方价格为准，配置里注明生效日期</td></tr>
+  <tr><td><code>output</code></td><td><code>gen_ai.usage.output_tokens</code></td><td><code>output_tokens</code></td></tr>
+  <tr><td><code>input_cache_read</code></td><td><code>gen_ai.usage.cache_read.input_tokens</code></td><td><code>cache_read</code></td></tr>
+  <tr><td><code>input_cache_creation</code></td><td><code>gen_ai.usage.cache_creation.input_tokens</code></td><td><code>cache_creation</code></td></tr>
+  <tr><td>（推理）</td><td><code>gen_ai.usage.reasoning.output_tokens</code></td><td><code>thinking_tokens</code></td></tr>
+</table>
+<ul>
+  <li><b>模型名匹配</b>：用正则 <code>^deepseek-chat$</code>，其他模型（<code>deepseek-reasoner</code>、Claude 系列）各配一条。</li>
+  <li><b>关键前提</b> <span class="tag verify">待验证</span>：<code>input_tokens</code> 是否已经不含缓存部分（Atlas 的 <code>normalize_usage</code> 是拆开记的），以及 Langfuse 对 OTel 缓存属性的映射名。任何一处对不上，费用都会系统性偏高或偏低。</li>
+  <li><b>对账</b>：Atlas 的 <code>run</code> 表本来就记了每个 run 的 token。第 0 期拿示例会话对账：Langfuse 里一个 trace 的 token 合计，必须等于 <code>run</code> 表里对应 run 的值。</li>
+</ul>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2 id="content">9. 对话内容查看设计</h2>
+<h3>9.1 采集档位</h3>
+<table>
+  <tr><th>档位（<code>otel_capture_content</code>）</th><th>采集什么</th><th>适用场景</th></tr>
+  <tr><td><code>off</code>（默认）</td><td>只有元数据：步骤、耗时、模型、token、费用、工具名、错误类型</td><td>正式环境，以及所有没有明确批准的环境</td></tr>
+  <tr><td><code>io</code></td><td>再加上 <b>trace 的输入输出</b>（用户消息、最终回答、子 run 的任务书和汇报）和 <b>工具的参数与结果预览</b></td><td>测试环境；需要按会话回放、排查问题的环境</td></tr>
+  <tr><td><code>full</code></td><td>再加上 <b>每次模型调用的完整输入输出</b>（包括系统提示词和历史消息）</td><td>本机开发、问题复现；临时打开</td></tr>
+</table>
+<p>配置从布尔值改成三档的枚举，<b>默认值保持关闭</b>。原来的 <code>otel_capture_content=true</code> 等价于 <code>full</code>。</p>
+
+<h3>9.2 每一档在示例里看到什么</h3>
+<table>
+  <tr><th>位置</th><th>内容</th><th>off</th><th>io</th><th>full</th></tr>
+  <tr><td>R1 trace 的输入</td><td>"在工作区写一个 hello.py……"</td><td>—</td><td>✅</td><td>✅</td></tr>
+  <tr><td>R1 trace 的输出</td><td>"已创建 hello.py，运行输出为……"</td><td>—</td><td>✅</td><td>✅</td></tr>
+  <tr><td>委派的任务书</td><td>R1' trace 的输入（"新建 hello.py……"）</td><td>—</td><td>✅</td><td>✅</td></tr>
+  <tr><td>工具 <code>Bash python hello.py</code></td><td>参数：命令；结果：<code>2026-10-04 10:21:05</code></td><td>—</td><td>✅</td><td>✅</td></tr>
+  <tr><td>父 run 的 <code>chat deepseek-chat</code></td><td>系统提示词 + 历史 + 本轮消息；模型输出（含 tool_use）</td><td>—</td><td>—</td><td>✅</td></tr>
+  <tr><td>ACP 子 run 的模型调用</td><td>CLI 内部的提示词</td><td colspan="3">❌ 任何档位都看不到：调用发生在 Pod 里的 CLI 内部，平台拿不到。能看到的是任务书、工具调用、汇报，以及权限模式和拦截事件</td></tr>
+</table>
+
+<h3>9.3 内容从哪取</h3>
+<table>
+  <tr><th>内容</th><th>来源</th><th>属性</th></tr>
+  <tr><td>trace 输入</td><td><code>prepared.input_content</code>（续跑的段不重复写）</td><td rowspan="2"><code>langfuse.trace.input</code> / <code>langfuse.trace.output</code></td></tr>
+  <tr><td>trace 输出</td><td><code>message.completed</code> 事件里的 content</td></tr>
+  <tr><td>模型调用的输入输出</td><td><code>ModelSpanHandler.on_chat_model_start</code> 的 <code>messages</code>，以及 <code>on_llm_end</code> 的 generations</td><td>标准属性 <code>gen_ai.input.messages</code> / <code>gen_ai.output.messages</code>（<code>semconv.py</code> 里已经预留）；Langfuse 能否识别 <span class="tag verify">待验证</span>，识别不了就同时写 <code>langfuse.observation.input/output</code></td></tr>
+  <tr><td>工具参数和结果</td><td><code>tool.started</code> 的 <code>args</code>，<code>tool.completed/failed</code> 的 <code>result_preview</code></td><td><code>langfuse.observation.input</code> / <code>output</code></td></tr>
+</table>
+
+<h3>9.4 安全约束</h3>
+<table>
+  <tr><th>风险</th><th>措施</th></tr>
+  <tr><td>内容里有密钥、私有代码</td><td>① 默认关闭，开启需要显式配置；② 写入前在 server 端用正则脱敏常见凭据格式（<code>sk-…</code>、<code>AKIA…</code>、<code>Bearer …</code>、<code>-----BEGIN … KEY-----</code>），规则集中放在 <code>telemetry/redact.py</code>；③ 只发往 Langfuse，<b>Jaeger 那条管道照常删掉内容</b>（第 10 节）</td></tr>
+  <tr><td>单条内容过大</td><td>每个字段截断到 32 KB，并标注 <code>…[truncated n chars]</code>。full 档每次模型调用都会带上完整历史，长会话的存储量是"调用次数 × 历史长度"，所以 full 档只建议临时打开</td></tr>
+  <tr><td>留存与访问</td><td>Langfuse 的项目设置数据保留期（建议测试环境 30 天）；Langfuse 账号按最小权限分配</td></tr>
+  <tr><td>合规</td><td><b>开启 io 或 full 档之前，需要确认内容允许存进 Langfuse 的存储</b>（ClickHouse 和对象存储）。这是部署前提，不是技术问题</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2 id="pipeline">10. Collector 管道设计</h2>
+<p>现在两条出口共用一个脱敏处理器（P8）。改成两条管道，同一份数据分别处理：</p>
+<pre><code># deploy/local/otel/collector-langfuse.yaml（示意）
+service:
+  pipelines:
+    traces/jaeger:                     # APM：永远不带内容
+      receivers: [otlp]
+      processors: [attributes/strip-content, attributes/strip-langfuse, resource, batch]
+      exporters: [otlp_grpc/jaeger]
+    traces/langfuse:                   # LLM 维度：内容由 server 的档位决定，这里不再删
+      receivers: [otlp]
+      processors: [resource, batch]
+      exporters: [otlp_http/langfuse]
+
+processors:
+  attributes/strip-content:            # 现有，再补上新增的内容字段
+    actions:
+      - {key: gen_ai.input.messages, action: delete}
+      - {key: gen_ai.output.messages, action: delete}
+      - {key: langfuse.trace.input, action: delete}
+      - {key: langfuse.trace.output, action: delete}
+      - {key: langfuse.observation.input, action: delete}
+      - {key: langfuse.observation.output, action: delete}</code></pre>
+<ul>
+  <li><b>为什么脱敏放在 server、而不是 Collector</b>：Collector 的 core 版没有 <code>redaction</code> / <code>transform</code> 处理器，要换成 500 MB 以上的 contrib 版（compose 注释里刻意避开了）。正则脱敏在 server 端做，改动小，还能写单元测试。</li>
+  <li><b>为什么 Jaeger 那条也要删 <code>langfuse.*</code> 内容字段</b>：<code>langfuse.trace.input</code> 这些也是内容，不删的话就绕过了 Jaeger 的脱敏规则。</li>
+</ul>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2 id="changes">11. 改动清单</h2>
+<table>
+  <tr><th>文件</th><th>改动</th><th>解决</th></tr>
+  <tr><td><code>telemetry/semconv.py</code></td><td>新增 Langfuse 的提示属性（<code>LF_SESSION_ID</code>、<code>LF_USER_ID</code>、<code>LF_OBSERVATION_TYPE</code>……），以及 <code>atlas.usage.*</code>、<code>atlas.parent_run_id</code>、<code>atlas.child_run_id</code>。<b>后端专有的属性名只在这一个文件里出现</b></td><td>—</td></tr>
+  <tr><td><code>telemetry/run_trace.py</code></td><td>trace id 由 run id 派生；会话用根会话 id；用户 id；observation 类型；根 span 的用量改名；ACP 合成 Generation；trace 输入输出；工具输入输出；<code>agent.mode</code> 和 <code>tool.denied</code> 事件；父子 run 互相引用</td><td>P1–P5、P9</td></tr>
+  <tr><td><code>telemetry/model_callback.py</code></td><td>observation 类型；用途（chat / title / compaction）；full 档时记录模型调用的输入输出</td><td>P4、P7</td></tr>
+  <tr><td><code>telemetry/redact.py</code>（新增）</td><td>凭据正则脱敏、截断</td><td>9.4</td></tr>
+  <tr><td><code>config.py</code></td><td><code>otel_capture_content</code> 改成 <code>off</code> / <code>io</code> / <code>full</code> 三档，默认 <code>off</code>；新增 <code>otel_content_max_chars</code>（默认 32768）</td><td>P7</td></tr>
+  <tr><td><code>host/translate/acp_v1.py</code></td><td><code>_USAGE_KEYS</code> 兼容 <code>cachedReadTokens</code> / <code>cachedWriteTokens</code>；从 <code>_meta.quota.model_usage</code> 取模型名</td><td>P6、P5</td></tr>
+  <tr><td><code>deploy/local/otel/collector-langfuse.yaml</code></td><td>拆成两条管道；补充内容字段的删除规则</td><td>P8</td></tr>
+  <tr><td>Langfuse 项目配置</td><td>DeepSeek 等模型的价格定义；数据保留期</td><td>8.3、9.4</td></tr>
+  <tr><td>测试</td><td>用 OTel 的 <code>InMemorySpanExporter</code> 断言 span 树：trace id 等于 run id、会话 id 是根会话、只有 Generation 带 <code>gen_ai.usage.*</code>、off 档没有任何内容属性、脱敏规则生效</td><td>—</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2 id="verify">12. 待验证项与第 0 期验证计划</h2>
+<p>下面这些依赖 Langfuse 的具体行为，先在本机用示例会话实测，再定最终实现：</p>
+<table>
+  <tr><th>#</th><th>待验证</th><th>验证方法</th><th>不成立时的退路</th></tr>
+  <tr><td>V1</td><td>Langfuse 是否把"带模型名和用量的非 chat span"推断成 Generation</td><td>发一条带 <code>gen_ai.usage.*</code> 的 agent span，看界面上是否算了费用</td><td>不影响：8.2 的规则在两种情况下都安全</td></tr>
+  <tr><td>V2</td><td><code>langfuse.session.id</code> / <code>user.id</code> / <code>observation.type</code> / <code>trace.input</code> 等属性名在当前版本是否生效</td><td>发一条带全部属性的 trace，逐项看界面</td><td>按官方文档的当前写法调整 <code>semconv.py</code>（只改这一个文件）</td></tr>
+  <tr><td>V3</td><td>标准属性 <code>gen_ai.input.messages</code> / <code>output.messages</code> 能否显示成对话格式</td><td>full 档跑一轮，看 Generation 的详情页</td><td>同时写 <code>langfuse.observation.input/output</code></td></tr>
+  <tr><td>V4</td><td>缓存 token 的映射，以及 <code>input_tokens</code> 是否已经不含缓存</td><td>示例会话跑完，和 <code>run</code> 表对账</td><td>在 <code>semconv.py</code> 里调整映射</td></tr>
+  <tr><td>V5</td><td>由 run id 派生 trace id、挂"虚拟父 span"之后，Langfuse 能否正常显示</td><td>制造一次挂起后续跑（委派超过 60s），看是不是一条 trace、两个顶层 agent</td><td>改用自定义 <code>IdGenerator</code>，只派生 trace id</td></tr>
+  <tr><td>V6</td><td>单条 span 的大小上限</td><td>full 档跑一个长会话，看有没有被拒收</td><td>调小截断上限</td></tr>
+  <tr><td>V7</td><td>trace 级字段（session、user、名称、输入输出、元数据）是只认根 span，还是写在任意 span 上都生效；多段执行的多个根 span 上的值如何合并</td><td>只在第 2 段根 span 上写 session，看 Langfuse 是否归档</td><td>不影响：规则 5.6-1 规定每一段的根都写</td></tr>
+  <tr><td>V8</td><td>OTel span event（<code>context.compacted</code> 等）在 Langfuse 里是否显示、显示在哪</td><td>制造一次上下文压缩，看界面</td><td>改成 event 类型的 observation（<code>langfuse.observation.type = event</code> 的零时长 span）</td></tr>
+</table>
+<h3>12.1 实测结论（2026-10-05，Langfuse 3.225.8，本机）</h3>
+<p>用真实的埋点代码（<code>RunTrace</code>、<code>ModelSpanHandler</code>）把第 2 节的示例会话发进本机 Langfuse，经公开 API 逐项核对：</p>
+<table>
+  <tr><th>#</th><th>结论</th><th>对实现的影响</th></tr>
+  <tr><td>V1</td><td><b>成立</b>：不标类型、带模型名和用量的 span 会被推断成 Generation</td><td>证实 8.2 的规则是必要的：根 span 的累计用量改名为 <code>atlas.usage.*</code></td></tr>
+  <tr><td>V2</td><td><code>langfuse.session.id</code>、<code>user.id</code>、<code>trace.name</code>、<code>trace.tags</code>、<code>trace.metadata.*</code>、<code>trace.input/output</code>、<code>observation.type</code> 全部生效</td><td>按设计实现</td></tr>
+  <tr><td>V3</td><td><code>langfuse.observation.input/output</code> 正常显示</td><td><b>直接采用 Langfuse 专有字段</b>，不再同时写 <code>gen_ai.input/output.messages</code>，避免内容写两份</td></tr>
+  <tr><td>V4</td><td>用量键：<code>gen_ai.usage.input_tokens → input</code>、<code>cache_read.input_tokens → input_cached_tokens</code>、<code>cache_creation.input_tokens → input_cache_creation</code>。Langfuse 按 OTel 约定认为 <code>input_tokens</code> <b>包含</b>缓存，入库时会减掉缓存部分</td><td>
+      ① <b>发现 Atlas 自身口径不一致</b>：Native 的 input 含缓存，ACP（adapter）的 input 不含。已在 <code>usage_of</code> 里统一成"含缓存"（修复前 ACP 的输入在 Langfuse 里被算成 0，<code>run</code> 表里两种智能体也不可比）。<br>
+      ② 价格定义要按上面的用量键配置，并且必须用 <code>pricingTiers</code> 传入。费用在<b>入库时</b>计算，先配价格再接数据。<br>
+      ③ 用测试价格核对，三个 Generation 的费用与手算一致</td></tr>
+  <tr><td>V5</td><td>"虚拟父 span"方案下，每一段的根 observation 指向一个不存在的父节点（成为孤儿）</td><td><b>改用自定义 IdGenerator</b>（<code>telemetry.forced_trace_id</code>）：根 span 没有父节点，trace id 由 run id 决定。复测后根节点干净</td></tr>
+  <tr><td>V7</td><td>每一段的根都写归档字段，两段执行归到同一个 trace 和 Session</td><td>按设计实现</td></tr>
+  <tr><td>V8</td><td><b>OTel span event 不显示</b>：既不成为 observation，也不进元数据</td><td>瞬时事件另发零时长的 <code>event</code> 类型 span（根 span 上的 event 照留给 Jaeger）。复测后显示为 EVENT</td></tr>
+  <tr><td>—</td><td>Jaeger 管道在 full 档下也没有任何内容字段，会话、用户等元数据保留</td><td>Collector 双管道生效</td></tr>
+  <tr><td>V6</td><td>未测（单条 span 大小上限）</td><td>先用 32 KB 截断兜底</td></tr>
+</table>
+<p>实施过程中另外发现并修复的问题：<b>P10</b> 子 run 的 <code>RunTrace</code> 把自己的事件全部当成"更深一层"丢掉（子 run 的 trace 里没有工具、没有用量）；ACP 一轮因静默 / 断线 / 关闭被取消且带用量时，<code>usage.model_dump()</code> 抛 <code>AttributeError</code>。</p>
+<div class="callout">
+  第 0 期约半天：在本机用 <code>docker compose --profile langfuse</code> 起 Langfuse，打开遥测，跑一遍示例会话的两轮。<b>这一期只读不改</b>，结论写回本文第 12 节。另外，P6（ACP 缓存 token 记成 0）不依赖 Langfuse，影响 Atlas 自己的用量统计，可以立刻单独修。
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2 id="phases">13. 分期与风险</h2>
+<table>
+  <tr><th>期</th><th>内容</th><th>验收</th></tr>
+  <tr><td><b>0 · 验证</b>（0.5 天）</td><td>第 12 节的 V1–V8</td><td>每一项都有结论</td></tr>
+  <tr><td><b>1 · 修复 P6</b>（0.5 天）</td><td>ACP 缓存 token 的字段名</td><td>ACP run 的 <code>run</code> 表里缓存 token 不再是 0</td></tr>
+  <tr><td><b>2 · 链路、会话、费用</b>（1.5 天）</td><td>第 6、7、8 节，off 档</td><td>示例会话在 Langfuse 里是 1 个 Session、4 条 trace；费用和 <code>run</code> 表对账一致</td></tr>
+  <tr><td><b>3 · 对话内容</b>（1.5 天）</td><td>第 9、10 节：三档开关、脱敏、截断、Collector 分两条管道</td><td>io 档时 Session 页显示成对话形式；off 档时 Langfuse 和 Jaeger 里都没有任何内容属性；Jaeger 在任何档位下都没有内容</td></tr>
+</table>
+<table>
+  <tr><th>风险</th><th>应对</th></tr>
+  <tr><td>Langfuse 的属性约定随版本变化</td><td>后端专有的属性名只出现在 <code>semconv.py</code>；升级 Langfuse 时只核对这一个文件</td></tr>
+  <tr><td>修改 <code>gen_ai.conversation.id</code> 的取值（子会话改成根会话）会影响 Jaeger 里已有的查询习惯</td><td>子会话 id 保留在元数据里；变更写进发布说明</td></tr>
+  <tr><td>内容合规</td><td>默认关闭，开启需要批准；脱敏和截断由测试保证</td></tr>
+  <tr><td>ACP 子 run 看不到 CLI 内部的模型调用</td><td>这是结构性限制。以后如果需要，可以研究 Claude Code 自带的 OTel 导出（它导出的是指标和日志事件，不是链路），作为补充</td></tr>
+</table>
+
+</main>
+</body>
+</html>

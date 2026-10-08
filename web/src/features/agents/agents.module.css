@@ -154,3 +154,8 @@
 .mono {
   font-family: var(--mono);
 }
+
+/* 已归档：停用后不能新建会话，弱化显示 */
+.cardMuted {
+  opacity: 0.6;
+}

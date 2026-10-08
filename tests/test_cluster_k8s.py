@@ -29,6 +29,7 @@ from __future__ import annotations
 import os
 
 import pytest
+from atlas_cluster.template import TOKEN_FILE
 
 from . import podkit
 
@@ -241,9 +242,13 @@ async def test_token_is_injected_from_the_secret(backend) -> None:
     finally:
         await api.api_client.close()
 
+    # token 以 Secret 卷挂成文件，不进环境变量（环境变量会被 agent 继承，Bridge 设计 §8.2）
     env = {e.name: e for e in pod.spec.containers[0].env}
-    assert env["ATLAS_BRIDGE_TOKEN"].value is None
-    assert env["ATLAS_BRIDGE_TOKEN"].value_from.secret_key_ref.key == "token"
+    assert "ATLAS_BRIDGE_TOKEN" not in env
+    assert env["ATLAS_BRIDGE_TOKEN_FILE"].value == TOKEN_FILE
+    volumes = {v.name: v for v in pod.spec.volumes}
+    assert volumes["bridge-token"].secret.secret_name == "atlas-sess-t-secret-auth"
+    assert volumes["bridge-token"].secret.items[0].key == "token"
     # Secret 里存的确实是这次签发的那一份
     stored = await backend.read_secret_value("atlas-sess-t-secret-auth", "token")
     assert stored == info.token

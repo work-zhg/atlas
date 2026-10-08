@@ -15,7 +15,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import httpx
-
 from atlas_engine.contracts import ModelUnavailable
 
 # GET /v1/models 只给 id，能力元信息必须在 Atlas 侧维护 → server 的 model_catalog 表。

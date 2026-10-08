@@ -85,6 +85,42 @@
       <p class="d">把执行环境概设的 Bridge/Pod 链路落到 atlas 骨架上。核心判断：<b>acp 的 run 也是普通 run</b> —— 分岔只在 <code>AgentRuntime</code>。含 atlas_acp 线协议包、Bridge 独立部署物、事件翻译表、配对/一轮 prompt/恢复三张时序图。</p>
       <div class="k">AgentRuntime · 线协议共享包 · 审批回路 · lost 降级 · 落地六步</div>
     </a>
+    <a class="doccard" href="suspension.html">
+      <div class="n">06</div>
+      <div class="t">挂起与恢复</div>
+      <p class="d">一次委派可以跑一小时，父 run 不该在进程里等那么久。核心判断：<b>委派挂起与审批挂起是同一件事</b> —— 都是「这一段到此为止，等一个外部事件」。含 thread 级事件流（seq 归属从 run 移到 thread）、<b>不引入 checkpointer</b> 的论证与实验、以及五条设计修正记录。</p>
+      <div class="k">一 run 多段 · thread 流 · jump_to tools · 审批可等一天</div>
+    </a>
+    <a class="doccard" href="mcp.html">
+      <div class="n">08</div>
+      <div class="t">MCP 接入详细设计</div>
+      <p class="d">核心判断：<b>发现与调用必须分离</b> —— 工具定义走缓存，装配期零网络。含现状六处缺口（模型侧名无命名空间导致审批失效、acp 的 MCP 从未下发、传输错误打死整个 run 等）、<code>server__tool</code> 命名、interceptor 链，以及 acp 只能按 server 粒度下发的语义修正。per-agent 版本钉在实现前撤销，撤销理由留在 §09。</p>
+      <div class="k">McpCatalog · 三种名字 · 错误语义 · 装配失败可见 · 凭据进 Pod</div>
+    </a>
+    <a class="doccard" href="wire.html">
+      <div class="n">09</div>
+      <div class="t">server ⇄ bridge 通道详细设计</div>
+      <p class="d">WebSocket 通道的<b>异常路径</b>：一轮跑多久算超时、超时之后谁收拾残局、上一轮的帧怎么不串进下一轮。由一次真实事故推出 —— 五次委派全部卡在 bridge 写死的 300s，超时不取消 CLI、残留轮次堵住后续每一次委派。核心判断：<b>长请求不能用固定总时限，「这一轮结束」必须是三方共知的事实</b>。</p>
+      <div class="k">超时分层 · 超时即取消 · 轮次 id · WS 子协议协商 · 兼容旧 Pod</div>
+    </a>
+    <a class="doccard" href="bridge.html">
+      <div class="n">10</div>
+      <div class="t">Bridge 重新设计</div>
+      <p class="d">从零设计会话 Pod 里的 bridge，不继承现有实现。自底向上推：每章先讲清事实，章末把事实翻译成设计要回答的问题。<b>第 1 章：WebSocket</b> —— 握手、帧、心跳、关闭码、背压、它不提供什么。<b>第 2 章：ACP</b> —— 依官方 schema-v1.23.0 逐项整理：传输、协商、方法全景、一轮 prompt、权限、取消义务、扩展规则，以及仍在草案中的 v2（prompt 改为「接纳即返回」+ 显式会话状态）。<b>第 3 章：职责边界</b> —— bridge 是 ACP client、内容翻译在 server；控制面与数据面、职责总表、六条边界不变式。<b>第 4 章：上游协议</b> —— JSON-RPC over WebSocket 的 12 个方法：提交即返回的轮次、权限往返与兜底、原样装箱的数据面、错误码与关闭码。<b>第 5 章：会话与轮次</b> —— 一会话一 Pod 一进程、预热与恢复、bridge 状态机、状态归属。<b>第 6 章：超时、取消与背压</b> —— 截止与静默分开计时、静默按「等模型 / 执行工具」分两档、统一取消流程、有界队列与兜底。<b>第 7 章：故障与恢复</b> —— 断线后一轮继续跑、attach + 按序号补发、控制消息永不淘汰、bridge 实例 id、恢复对照表。<b>第 8 章：安全、可观测性与部署</b> —— 防 agent 自我批准（独立用户、凭据隔离）、指标与追踪、终止与回收。<b>第 9 章：收尾</b> —— 不变式、决定索引、协议速查、待验证、落地顺序。</p>
+      <div class="k">从零设计 · 事实 → 启示 → 决定 · 九章完成</div>
+    </a>
+    <a class="doccard" href="bridge-code.html">
+      <div class="n">11</div>
+      <div class="t">Bridge 代码设计</div>
+      <p class="d">把 Bridge 重新设计的九章落成代码：四个包（jsonrpc · acp · host · bridge）与依赖契约、bridge 的三层模块（agent / session / upstream）、核心类的状态与方法、关键流程在类之间的走向、异常约定、测试替身与 FakeAgent 剧本、十步实施拆分。</p>
+      <div class="k">包划分 · 类设计 · 单事件循环 · 假时钟可测</div>
+    </a>
+    <a class="doccard" href="file-preview.html">
+      <div class="n">12</div>
+      <div class="t">会话文件预览</div>
+      <p class="d">在会话右侧直接看智能体产出的文件，不用先下载。难点是 HTML 原型：它是多个文件组成、会执行脚本的站点。核心判断：<b>把工作区当成只读站点</b>挂在 <code>/v1/previews/{token}/</code> 下，令牌放在 URL 路径里（iframe 带不了请求头），iframe sandbox 和 CSP sandbox 两层都运行在不透明 origin。内容另有：文件类型与渲染器矩阵、Range 截断与二进制判定、按 ETag 刷新（HTML 只提示不自动刷新）、生产环境独立 origin、测试清单与未决项。</p>
+      <div class="k">工作区 = 站点 · 预览令牌 · sandbox 不透明 origin · ETag 刷新</div>
+    </a>
   </div>
 
   <h3>待写</h3>

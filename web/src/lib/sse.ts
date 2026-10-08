@@ -25,19 +25,27 @@ const SSE_MIME = "text/event-stream";
 /** 退避序列（毫秒）。超出长度后固定用最后一个值。 */
 const BACKOFF_MS = [500, 1000, 2000, 4000, 8000];
 
-export interface RunStreamOptions {
-  runId: string;
+export interface ThreadStreamOptions {
+  threadId: string;
   /**
-   * 从哪个 seq 之后开始收。页面刷新后从 0 开始 ——
-   * 此时本地没有任何状态，需要后端完整回放。
+   * 从哪个 thread_seq 之后开始收。
+   *
+   * ★ 0 = 「我没有游标」，服务端给一个**默认窗口**（最近若干条），而不是从
+   *   会话开头全量回放 —— 一条会话可以有几百轮，全量会把页面灌死。
+   *   带游标的重连不受此限：那时要补的是缺口。
    */
   lastSeq?: number;
   signal: AbortSignal;
   onEvent: (event: AnyTraceEvent) => void;
   /** 每次（重）连成功。用于复位 UI 上的"重新连接中"。 */
   onOpen?: () => void;
-  /** 流正常结束（收到终态事件） */
-  onClose?: () => void;
+  /**
+   * 一轮结束（收到 run.finished / failed / cancelled）。
+   *
+   * ★ 不是「流结束」—— 会话流永不自己结束。它跨轮次存在，一轮的终态只是
+   *   「该回查用量、该刷新消息列表」的时机。
+   */
+  onTurnEnd?: (runId: string) => void;
   /** 不可恢复的错误。可恢复错误在内部重试消化，不会走到这里。 */
   onError?: (error: Error) => void;
   /** 连续失败多少次后放弃。默认 6 次（约 25 秒）。 */
@@ -90,23 +98,31 @@ function frameData(frame: string): string | null {
 }
 
 /**
- * 订阅一个 run 的事件流。Promise 在流结束或放弃重试时 resolve。
- * 取消订阅：abort 传入的 signal。
+ * 订阅一条**会话**的事件流 —— 该会话下所有 run 的事件，含子智能体的。
+ *
+ * ★ 与按 run 订阅最大的差别：**这条流永不自己结束**。终态事件不再是关闭
+ *   信号（一轮跑完后面还有下一轮，中间还夹着委派挂起）。所以：
+ *     · 没有 `terminated` 这回事，循环只看 signal
+ *     · 流被服务端断开一律视为**意外**，退避后带游标重连
+ *   取消订阅的唯一方式是 abort signal（组件卸载 / 切会话）。
+ *
+ * ★ 这也是「委派挂起期间审批弹窗消失」的解法：父 run 挂起时父流不产出事件，
+ *   但会话流还在，子智能体的 approval.required 直接就到了
+ *   （doc/detail/suspension.html §06）。
  */
-export async function streamRunEvents(opts: RunStreamOptions): Promise<void> {
-  const { runId, signal, onEvent, onOpen, onClose, onError, maxRetries = 6 } = opts;
+export async function streamThreadEvents(opts: ThreadStreamOptions): Promise<void> {
+  const { threadId, signal, onEvent, onOpen, onTurnEnd, onError, maxRetries = 6 } = opts;
 
   let lastSeq = opts.lastSeq ?? 0;
-  let terminated = false;
   let attempt = 0;
 
-  while (!terminated && !signal.aborted) {
+  while (!signal.aborted) {
     try {
       const headers: Record<string, string> = { Accept: SSE_MIME, ...authHeaders() };
-      // ★ 续传游标。首连时若 lastSeq>0（页面恢复场景）也会带上。
+      // ★ 续传游标（thread_seq）。不带 = 让服务端给默认窗口，而不是全量回放。
       if (lastSeq > 0) headers["Last-Event-ID"] = String(lastSeq);
 
-      const res = await fetch(apiUrl(`/v1/runs/${runId}/events`), { headers, signal });
+      const res = await fetch(apiUrl(`/v1/threads/${threadId}/events`), { headers, signal });
 
       if (res.status >= 400 && res.status < 500) {
         throw new FatalError(res.status, `事件流被拒绝（${res.status}）`);
@@ -124,13 +140,15 @@ export async function streamRunEvents(opts: RunStreamOptions): Promise<void> {
         const event = parseTraceEvent(raw);
         if (!event) return; // 坏帧不该拖垮整条流
 
-        // 去重交给 reducer（契约规则 2），这里只维护续传游标
-        if (event.seq > lastSeq) lastSeq = event.seq;
+        // 去重交给 reducer（契约规则 2），这里只维护续传游标。
+        // ★ 游标是 thread_seq —— 会话流上并发的两个 run 各有自己的 seq。
+        if (event.thread_seq > lastSeq) lastSeq = event.thread_seq;
         onEvent(event);
-        if (isTerminalEvent(event.type)) terminated = true;
+        // 一轮结束（不是流结束）。depth>0 的是子 run 的终态，不算。
+        if (event.depth === 0 && isTerminalEvent(event.type)) onTurnEnd?.(event.run_id);
       });
 
-      // 流结束但没见到终态 —— 意外断开，退避后带游标续传
+      // 走到这里说明连接断了。会话流不会正常结束 —— 一律当意外，退避重连。
     } catch (err) {
       if (signal.aborted) return; // 调用方主动取消，不是错误
       if (err instanceof FatalError) {
@@ -140,7 +158,7 @@ export async function streamRunEvents(opts: RunStreamOptions): Promise<void> {
       // 其余当作可恢复，落到下面的退避逻辑
     }
 
-    if (terminated || signal.aborted) break;
+    if (signal.aborted) break;
 
     if (++attempt > maxRetries) {
       onError?.(new Error(`事件流连接中断，已重试 ${maxRetries} 次`));
@@ -155,6 +173,4 @@ export async function streamRunEvents(opts: RunStreamOptions): Promise<void> {
       }, { once: true });
     });
   }
-
-  if (!signal.aborted) onClose?.();
 }

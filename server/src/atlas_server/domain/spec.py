@@ -11,6 +11,7 @@ frozen=True 是刻意的：一次 run 期间配置不可变，避免"跑到一�
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -167,6 +168,28 @@ class SkillRefSpec:
 AgentKind = Literal["native", "acp"]
 
 
+#: acp CLI 的权限模式（doc/acp-permission-mode-design.html）。
+#: 平台对外的取值，下发时映射成 ACP modeId。
+#:
+#: manual       —— 编辑文件、执行命令都要请示
+#: accept_edits —— 文件编辑自动通过，命令仍要请示
+#: auto         —— 由 CLI 自己判断；有风险的操作直接拒绝（不请示人）
+#: plan         —— 只规划，不执行
+#:
+#: ★ 不提供 bypassPermissions（跳过一切检查）：工作区是父会话共享的，Pod 里还有模型凭据。
+PermissionMode = Literal["manual", "accept_edits", "auto", "plan"]
+
+#: 平台取值 → ACP modeId
+ACP_MODE_ID: dict[str, str] = {
+    "manual": "default",
+    "accept_edits": "acceptEdits",
+    "auto": "auto",
+    "plan": "plan",
+}
+#: ACP modeId → 平台取值（回报实际生效的模式时用；不认识的原样返回）
+PLATFORM_MODE: dict[str, str] = {v: k for k, v in ACP_MODE_ID.items()}
+
+
 @dataclass(frozen=True)
 class CliSpec:
     """acp agent 的 CLI 形态。
@@ -179,6 +202,8 @@ class CliSpec:
     cli_type: str  #: "claude-code" / "codex" …
     adapter: str = ""  #: adapter 启动命令（进 Pod 模板）
     image: str = ""  #: Pod 镜像（cli + adapter + bridge 三件套的版本组合）
+    #: ★ 默认 auto（2026-10-03 决定），存量 agent 的快照里没有这个字段，也按 auto 运行
+    permission_mode: PermissionMode = "auto"
 
 
 #: 子智能体的会话模式。
@@ -189,6 +214,9 @@ class CliSpec:
 #: ephemeral  —— 每次委派新建子会话、跑完归档。无状态 ⇒ 可以并行，
 #:   适合「并行调研五个选项」这类彼此无关的任务。
 SessionMode = Literal["persistent", "ephemeral"]
+
+#: MCP 工具定义漂移时的处理（技能 / MCP 设计 §9）
+McpDriftPolicy = Literal["warn", "block"]
 
 
 @dataclass(frozen=True)
@@ -215,11 +243,14 @@ class SubAgentSpec:
     #: ★ 默认 native 而不是「继承父的」：只有 native agent 能委派（acp 的
     #:   工具面由 CLI 自带，平台的 task 工具进不去它的图），所以父恒为
     #:   native，「继承」与「默认 native」在语义上等价而后者更直白。
-    #: ★ 委派链路本身不认识它：子会话也是 thread，AcpRuntime 对它原样生效
+    #: ★ 委派链路本身不认识它：子会话也是 thread，HostRuntime 对它原样生效
     #:   （subagent §02 的对称性）。这里只是让子会话的 spec 派生带上它。
     kind: AgentKind = "native"
     #: kind="acp" 时必填。
     cli: CliSpec | None = None
+    #: 见 AgentSpec.mcp_tool_digests
+    mcp_tool_digests: Mapping[str, str] = field(default_factory=dict)
+    mcp_drift_policy: McpDriftPolicy = "warn"
 
 
 @dataclass(frozen=True)
@@ -239,6 +270,12 @@ class AgentSpec:
     kind: AgentKind = "native"
     #: kind="acp" 时必填，validate() 互校。
     cli: CliSpec | None = None
+    #: 保存时记录的 MCP 工具定义指纹：{spec 标识 mcp:server:tool → digest}。
+    #: ★ 由服务端在保存时填写，客户端传的值不算数（技能 / MCP 设计 §9）。
+    #:   空 = 保存于该机制出现之前，不比对。
+    mcp_tool_digests: Mapping[str, str] = field(default_factory=dict)
+    #: 定义与记录不一致时：warn = 照常用新定义并提示；block = 该工具本轮不装
+    mcp_drift_policy: McpDriftPolicy = "warn"
 
     def subagent(self, name: str) -> SubAgentSpec | None:
         """按名字取子智能体配置。子会话执行时用它派生出独立的 AgentSpec。"""
@@ -322,4 +359,6 @@ def spec_for_subagent(parent: AgentSpec, name: str) -> AgentSpec:
         #   acp 子智能体（「让 Claude Code 去改这三个文件」），反过来不行。
         kind=sub.kind,
         cli=sub.cli,
+        mcp_tool_digests=sub.mcp_tool_digests,
+        mcp_drift_policy=sub.mcp_drift_policy,
     )

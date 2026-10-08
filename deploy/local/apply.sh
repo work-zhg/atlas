@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# 把 server 与 cluster 部署到本机 K8s（Docker Desktop）。
+# 把 server、cluster 与 config 部署到本机 K8s（Docker Desktop）。
 #
 # 前置：make up（宿主的 PG / Redis / MinIO）、两个镜像已构建：
-#   docker build -f docker/bridge/Dockerfile -t atlas-acp-bridge:0.1.0 .
+#   docker build -f docker/bridge/Dockerfile -t atlas-acp-bridge:0.3.0 .
 #   docker build -f docker/app/Dockerfile    -t atlas-app:dev .
 #
 # ★ 凭据从仓库根的 .env 读，建成 K8s Secret —— 不进任何 YAML，
@@ -33,6 +33,17 @@ kubectl -n atlas-system create secret generic atlas-server-creds \
   --from-literal=litellm_key="${LITELLM_KEY}" \
   --dry-run=client -o yaml | kubectl apply -f -
 
+# 服务间令牌：.env 里有就用；没有就沿用集群里已有的；都没有才新生成。
+# ★ 每次 apply 都换令牌的话，正在跑的 server 与 config 会短暂对不上。
+CONFIG_TOKEN="${ATLAS_CONFIG_INTERNAL_TOKEN:-$(kubectl -n atlas-system get secret atlas-config-creds \
+  -o jsonpath='{.data.internal_token}' 2>/dev/null | base64 --decode || true)}"
+[ -n "$CONFIG_TOKEN" ] || CONFIG_TOKEN="$(openssl rand -hex 24)"
+kubectl -n atlas-system create secret generic atlas-config-creds \
+  --from-literal=oss_access_key_id="${OSS_ACCESS_KEY_ID}" \
+  --from-literal=oss_access_key_secret="${OSS_ACCESS_KEY_SECRET}" \
+  --from-literal=internal_token="${CONFIG_TOKEN}" \
+  --dry-run=client -o yaml | kubectl apply -f -
+
 # ★ 宿主地址用 LAN IP，不用 host.docker.internal —— 后者会被 Docker Desktop
 #   转发到宿主 loopback，命中绑在 127.0.0.1 的本机服务而不是 compose 那个。
 HOST_IP="${ATLAS_HOST_IP:-$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1)}"
@@ -40,8 +51,10 @@ HOST_IP="${ATLAS_HOST_IP:-$(ipconfig getifaddr en0 2>/dev/null || ipconfig getif
 echo "宿主地址 = $HOST_IP"
 
 sed "s/__HOST_IP__/${HOST_IP}/g" deploy/local/20-cluster.yaml | kubectl apply -f -
+sed "s/__HOST_IP__/${HOST_IP}/g" deploy/local/25-config.yaml  | kubectl apply -f -
 sed "s/__HOST_IP__/${HOST_IP}/g" deploy/local/30-server.yaml  | kubectl apply -f -
 
 kubectl -n atlas-system rollout status deploy/atlas-cluster --timeout=180s
+kubectl -n atlas-system rollout status deploy/atlas-config --timeout=180s
 kubectl -n atlas-system rollout status deploy/atlas-server --timeout=180s
-echo "server → http://127.0.0.1:8000"
+echo "server → http://127.0.0.1:8000   config → http://127.0.0.1:8020"

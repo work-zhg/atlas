@@ -19,7 +19,7 @@ from atlas_server.executor.runtime import AgentRuntime, NativeRuntime, select_ru
 def test_native_runtime_satisfies_the_protocol_structurally() -> None:
     """满足协议只需要一个 run_turn，不需要继承。
 
-    acp 的 AcpRuntime 将来同样只是「有这个方法」—— 两个实现之间没有
+    acp 的 HostRuntime 同样只是「有这个方法」—— 两个实现之间没有
     共同基类可以被顺手塞进公共逻辑，那正是我们要的。
     """
     assert isinstance(NativeRuntime(assembly=None), AgentRuntime)  # type: ignore[arg-type]
@@ -39,10 +39,14 @@ def test_run_turn_takes_per_run_plumbing_as_parameters() -> None:
 
     后台任务不能用请求级连接（创建它的那个 HTTP 请求早已结束）。把它们
     绑在 runtime 实例上，进程级复用的 runtime 就会握着一条早已关闭的连接。
+
+    ★ transcript 同理，而且理由更强：它是**这一轮**产生的消息，绑在实例上
+      就会让并发的两个 run 往同一个 sink 里塞 —— 落库的历史于是混进别的
+      会话的工具调用。放在签名上是让这个错误压根写不出来。
     """
     params = inspect.signature(NativeRuntime.run_turn).parameters
-    assert set(params) == {"self", "prepared", "run_id", "redis", "relay"}
-    for name in ("run_id", "redis", "relay"):
+    assert set(params) == {"self", "prepared", "run_id", "redis", "relay", "transcript"}
+    for name in ("run_id", "redis", "relay", "transcript"):
         assert params[name].kind is inspect.Parameter.KEYWORD_ONLY, name
 
 
