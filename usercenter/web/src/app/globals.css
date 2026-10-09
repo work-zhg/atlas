@@ -1,0 +1,13 @@
+html, body { margin: 0; padding: 0; background: #f6f7f9; }
+* { box-sizing: border-box; }
+.uc-mono { font-family: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; }
+.uc-muted { color: #64748b; }
+.uc-page-head { display: flex; align-items: flex-end; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
+.uc-page-head h1 { font-size: 21px; margin: 0; }
+.uc-page-head .sub { color: #64748b; font-size: 13px; margin-top: 4px; }
+.uc-grow { flex: 1; }
+.uc-code { background: #0f172a; color: #e2e8f0; border-radius: 8px; padding: 10px 12px; font-family: "SF Mono", Menlo, monospace; font-size: 12px; line-height: 1.6; overflow: auto; white-space: pre; margin: 0; }
+.uc-pv-side { background: #111827; border-radius: 10px; padding: 10px 8px; color: #aeb8cb; font-size: 13px; min-height: 120px; }
+.uc-pv-brand { color: #fff; font-weight: 650; padding: 4px 10px 10px; border-bottom: 1px solid rgba(255,255,255,.08); margin-bottom: 6px; }
+.uc-pv-dir { color: #8592a8; font-size: 11.5px; padding: 8px 10px 4px; }
+.uc-pv-item { padding: 7px 10px; border-radius: 8px; }
