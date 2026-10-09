@@ -1,0 +1,783 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>应用接入模块 · 详细设计 · 用户中心</title>
+<style>
+  :root{
+    --bg:#f6f7f9;--surface:#fff;--surface-2:#fbfbfd;--ink:#0f172a;--ink-2:#334155;--ink-3:#64748b;--ink-4:#94a3b8;
+    --line:#e6e8ee;--line-2:#eef0f4;--primary:#4f46e5;--primary-weak:#eef0ff;
+    --warning:#b45309;--warning-weak:#fef3e2;
+    --mono:"JetBrains Mono","SF Mono",ui-monospace,Menlo,Consolas,monospace;
+    --font:"Inter","PingFang SC","Microsoft YaHei",system-ui,-apple-system,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink-2);font-family:var(--font);font-size:14.5px;line-height:1.75}
+  a{color:var(--primary);text-decoration:none}
+  .wrap{display:grid;grid-template-columns:240px minmax(0,1fr);gap:36px;max-width:1240px;margin:0 auto;padding:32px 28px 80px}
+  nav.toc{position:sticky;top:24px;align-self:start;max-height:calc(100vh - 48px);overflow:auto;font-size:13px}
+  nav.toc .t{font-size:11px;letter-spacing:.12em;color:var(--ink-4);text-transform:uppercase;margin-bottom:8px;font-weight:600}
+  nav.toc ol{list-style:none;margin:0;padding:0;counter-reset:s}
+  nav.toc li{counter-increment:s}
+  nav.toc a{display:block;padding:4px 8px;border-radius:6px;color:var(--ink-3)}
+  nav.toc a::before{content:counter(s,decimal-leading-zero) "  ";font-family:var(--mono);font-size:11px;color:var(--ink-4)}
+  nav.toc a:hover{background:#fff;color:var(--ink)}
+  header.hero{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:28px 30px;margin-bottom:28px}
+  .kicker{font-family:var(--mono);font-size:11.5px;letter-spacing:.14em;color:var(--primary);text-transform:uppercase;margin:0 0 6px}
+  h1{font-size:26px;color:var(--ink);margin:0 0 10px;letter-spacing:-.3px}
+  .lede{margin:0;font-size:15px}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+  .meta span{font-size:12px;padding:2px 10px;border-radius:999px;background:var(--primary-weak);color:var(--primary)}
+  section{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:24px 28px;margin-bottom:20px}
+  h2{font-size:19px;color:var(--ink);margin:0 0 14px;display:flex;align-items:center;gap:10px}
+  h2 .num{font-family:var(--mono);font-size:12px;color:#fff;background:var(--primary);border-radius:6px;padding:2px 7px}
+  h3{font-size:15.5px;color:var(--ink);margin:22px 0 8px}
+  p{margin:0 0 12px}
+  code{font-family:var(--mono);font-size:12.5px;background:#f1f3f7;border:1px solid var(--line-2);border-radius:4px;padding:0 5px;color:#be185d}
+  table{width:100%;border-collapse:collapse;font-size:13.5px;margin:6px 0 14px}
+  th{text-align:left;background:var(--surface-2);color:var(--ink-3);font-weight:600;font-size:12.5px}
+  th,td{border:1px solid var(--line);padding:8px 10px;vertical-align:top}
+  td code{white-space:nowrap}
+  pre{background:#0f172a;color:#e2e8f0;border-radius:10px;padding:14px 16px;font-family:var(--mono);font-size:12.5px;line-height:1.65;overflow:auto;margin:6px 0 14px;white-space:pre-wrap}
+  pre .c{color:#94a3b8}
+  .callout{border:1px solid;border-left-width:4px;border-radius:10px;padding:10px 14px;margin:8px 0 14px;font-size:13.5px}
+  .callout b.l{display:block;font-size:11.5px;letter-spacing:.1em;margin-bottom:3px}
+  .rule{background:var(--primary-weak);border-color:#c7c9f5;color:#312e81}
+  .warn{background:var(--warning-weak);border-color:#f6d39b;color:#7c2d12}
+  .tag{display:inline-block;font-size:11.5px;padding:0 8px;border-radius:999px;border:1px solid var(--line);background:var(--surface-2);color:var(--ink-3);white-space:nowrap}
+  .tag.new{color:var(--primary);border-color:#c7c9f5;background:var(--primary-weak)}
+  .tag.p2{color:var(--warning);border-color:#f6d39b;background:var(--warning-weak)}
+  .flow{font-family:var(--mono);font-size:12.5px;line-height:1.75;background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:14px 16px;white-space:pre;overflow:auto;margin:6px 0 14px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .box{border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:var(--surface-2)}
+  .box h4{margin:0 0 6px;font-size:13.5px;color:var(--ink)}
+  ul,ol{margin:0 0 12px;padding-left:20px}
+  li{margin:2px 0}
+  .muted{color:var(--ink-4);font-size:12px}
+  /* 关系图 */
+  .arch{margin:6px 0 14px}
+  .arch-sys{border:1.5px dashed #c7c9f5;border-radius:12px;padding:12px 14px;background:#fafaff}
+  .arch-sys-t{font-size:12px;font-weight:700;color:var(--primary);margin-bottom:8px;letter-spacing:.06em}
+  .arch-row{display:flex;align-items:center}
+  .arch-box{flex:1;background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:13px}
+  .arch-box.me{border-color:var(--primary);box-shadow:0 0 0 3px rgba(79,70,229,.1)}
+  .arch-box b{color:var(--ink)}
+  .arch-box ul{margin:6px 0 0;padding-left:16px;color:var(--ink-3);font-size:12.5px}
+  .arch-link{width:96px;flex:none;text-align:center;font-size:11.5px;color:var(--ink-3);position:relative;padding-bottom:10px}
+  .arch-link i{position:absolute;left:8px;right:8px;bottom:0;height:2px;background:#9aa4b6}
+  .arch-link i.r::after{content:"";position:absolute;right:-2px;top:-4px;border-left:7px solid #9aa4b6;border-top:5px solid transparent;border-bottom:5px solid transparent}
+  .arch-link i.l::before{content:"";position:absolute;left:-2px;top:-4px;border-right:7px solid #9aa4b6;border-top:5px solid transparent;border-bottom:5px solid transparent}
+  .arch-note{margin-top:8px;font-size:12px;color:var(--ink-3)}
+  .arch-down{display:flex;align-items:center;gap:8px;margin-left:calc(83% - 1px);height:34px;font-size:11.5px;color:var(--ink-3)}
+  .arch-down i{width:2px;height:100%;background:#9aa4b6;position:relative}
+  .arch-down i::after{content:"";position:absolute;left:-4px;bottom:-2px;border-top:7px solid #9aa4b6;border-left:5px solid transparent;border-right:5px solid transparent}
+  .arch-ext{margin-left:calc(83% - 90px);width:180px;text-align:center;border:1px solid #9aa4b6;border-radius:10px;padding:8px;background:#fff;font-weight:600;color:var(--ink);font-size:13px}
+  @media (max-width:980px){.wrap{grid-template-columns:1fr}nav.toc{position:static;max-height:none}.grid2{grid-template-columns:1fr}
+    .arch-row{flex-direction:column;align-items:stretch}.arch-link{width:auto;height:30px}.arch-down,.arch-ext{margin-left:0}}
+  .sm{width:100%;height:auto;display:block;margin:6px 0 14px;background:var(--surface-2);border:1px solid var(--line);border-radius:10px}
+  .ok{color:#15803d;font-weight:700}.no{color:var(--ink-4)}
+  .diff td:first-child{white-space:nowrap}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<nav class="toc">
+  <div class="t">目录</div>
+  <ol>
+    <li><a href="#s1">定位与范围</a></li>
+    <li><a href="#s2">术语</a></li>
+    <li><a href="#s3">与其他模块的关系</a></li>
+    <li><a href="#s4">功能清单</a></li>
+    <li><a href="#s5">领域模型</a></li>
+    <li><a href="#s6">应用生命周期</a></li>
+    <li><a href="#s7">应用凭据</a></li>
+    <li><a href="#s8">可访问范围</a></li>
+    <li><a href="#s9">操作目录</a></li>
+    <li><a href="#s10">菜单</a></li>
+    <li><a href="#s11">角色</a></li>
+    <li><a href="#s12">数据编码</a></li>
+    <li><a href="#s13">接入方式（本期）</a></li>
+    <li><a href="#s14">开放接口</a></li>
+    <li><a href="#s15">后续统一登录（Keycloak）</a></li>
+    <li><a href="#s16">数据模型</a></li>
+    <li><a href="#s17">管理 API</a></li>
+    <li><a href="#s18">权限</a></li>
+    <li><a href="#s19">页面设计</a></li>
+    <li><a href="#s20">审计</a></li>
+    <li><a href="#s21">异常与边界</a></li>
+    <li><a href="#s22">非功能</a></li>
+    <li><a href="#s23">与原型的差异</a></li>
+    <li><a href="#s24">测试要点</a></li>
+    <li><a href="#s25">落地计划</a></li>
+    <li><a href="#s26">待确认</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<header class="hero">
+  <p class="kicker">User Center · Detailed Design</p>
+  <h1>应用接入模块</h1>
+  <p class="lede">用户中心是用户、组织与权限的<b>主数据来源</b>。内部系统（AI TeamFlow、Atlas 等）在<b>服务端</b>用 App Key / Secret 调用用户中心的<b>开放接口</b>，获取用户、部门以及本应用的授权（能否访问、角色、操作码、菜单、数据权限）。应用接入模块管理每个应用的<b>接入配置</b>（应用凭据、可访问范围），以及<b>属于应用</b>的权限元数据：<b>操作目录、菜单、角色、数据编码</b>。</p>
+  <p class="lede" style="margin-top:8px"><b>统一登录（SSO / OIDC）本期不做</b>：应用自行处理登录，按账号与用户中心对齐身份；以后需要时引入 <b>Keycloak</b> 等成熟方案，用户中心继续作为数据源（第 15 节）。</p>
+  <div class="meta"><span>服务端开放接口</span><span>App Secret 只显示一次</span><span>可访问范围按部门</span><span>角色 / 菜单 / 操作 / 数据编码属于应用</span><span>用户中心是内置应用</span><span>只停用不删除</span><span>SSO 后续用 Keycloak</span></div>
+</header>
+
+<section id="s1">
+  <h2><span class="num">01</span>定位与范围</h2>
+  <div class="grid2">
+    <div class="box"><h4>本模块负责</h4>
+      <ul>
+        <li>应用登记：名称、图标、说明；启用 / 停用</li>
+        <li>应用凭据：App Key、App Secret（生成、轮换）</li>
+        <li>可访问范围（全员 / 指定部门含下级）</li>
+        <li>应用的<b>操作目录</b>、<b>菜单树</b>、<b>角色</b>（角色绑定操作与菜单）、<b>数据编码</b></li>
+        <li><b>开放接口</b>的接入规范：鉴权、用户与部门查询、授权快照、实时校验、变更通知</li>
+      </ul></div>
+    <div class="box"><h4>不在本模块</h4>
+      <ul>
+        <li>把角色 / 岗位授予用户或部门、数据授权 → <b>权限管理</b></li>
+        <li>部门树 → <b>组织管理</b>；账号 → <b>用户管理</b></li>
+        <li><b>统一登录（SSO / OIDC）</b>：本期不做；后续用 Keycloak（第 15 节）</li>
+        <li>应用自身的登录与业务鉴权（应用按开放接口返回的结果自行控制）</li>
+      </ul></div>
+  </div>
+  <div class="callout warn"><b class="l">用户中心管理台自身的登录</b>用户中心自己的管理台仍使用账号密码登录（密码策略、锁定、首次登录改密），属于「认证与安全策略」模块，<b>只服务于用户中心自身，不对外提供单点登录</b>。</div>
+</section>
+
+<section id="s2">
+  <h2><span class="num">02</span>术语</h2>
+  <table>
+    <tr><th style="width:150px">术语</th><th>含义</th></tr>
+    <tr><td>应用</td><td>接入用户中心的内部系统，用 App Key / Secret 调用开放接口。</td></tr>
+    <tr><td>内置应用</td><td>用户中心自身。它的操作和菜单随版本发布（只读），角色可在界面维护；没有应用凭据与数据编码。</td></tr>
+    <tr><td>App Key / App Secret</td><td>应用调用开放接口的凭据。Secret 只在生成时显示一次，服务端只存哈希；只能保存在应用后端。</td></tr>
+    <tr><td>开放接口</td><td>用户中心对接入应用提供的服务端接口（<code>/open/v1</code>），每次调用都限定在调用方应用的范围内。</td></tr>
+    <tr><td>授权快照</td><td>某用户在某应用中的 <code>can_access</code>、角色、操作码、可见菜单，应用登录后取一次并缓存。</td></tr>
+    <tr><td>可访问范围</td><td>哪些人可以使用该应用：全员，或指定部门（含下级部门）。本期由应用根据 <code>can_access</code> 执行。</td></tr>
+    <tr><td>操作 / 操作码</td><td>应用内可被授权的动作，格式 <code>资源:动作</code>（如 <code>process:start</code>）。前端用它控制按钮，后端用它鉴权。</td></tr>
+    <tr><td>菜单</td><td>应用的导航结构，分<b>目录</b>（分组）与<b>菜单</b>（对应页面路由）；菜单可设为<b>公共</b>（人人可见）。</td></tr>
+    <tr><td>角色</td><td>属于某个应用的一组操作 + 菜单。授予用户 / 部门 / 岗位后生效（在权限管理中进行）。</td></tr>
+    <tr><td>数据编码</td><td>应用登记的数据类型标识（如 Atlas 的 <code>Agent</code>）。数据权限按「数据编码 + 数据 Id」记录。</td></tr>
+  </table>
+</section>
+
+<section id="s3">
+  <h2><span class="num">03</span>与其他模块的关系</h2>
+  <div class="arch">
+    <div class="arch-sys">
+      <div class="arch-sys-t">用户中心</div>
+      <div class="arch-row">
+        <div class="arch-box"><b>开放接口</b><ul><li>按应用凭据鉴权</li><li>按本模块配置限定范围、组装授权快照</li></ul></div>
+        <div class="arch-link">读取配置<i class="l"></i></div>
+        <div class="arch-box me"><b>应用接入（本模块）</b><ul><li>应用、凭据、可访问范围</li><li>操作、菜单、角色、数据编码</li></ul></div>
+        <div class="arch-link">角色 / 数据编码<i class="r"></i></div>
+        <div class="arch-box"><b>权限管理</b><ul><li>把角色 / 岗位授予用户、部门</li><li>按数据编码做数据授权</li></ul></div>
+      </div>
+      <div class="arch-note" style="margin:12px 0 8px">同时依赖：</div>
+      <div class="arch-row" style="gap:12px">
+        <div class="arch-box"><b>组织管理</b><ul><li>可访问范围按部门（含下级）计算</li></ul></div>
+        <div class="arch-box"><b>用户管理</b><ul><li>可访问人数、菜单预览按用户计算</li></ul></div>
+        <div class="arch-box"><b>审计日志</b><ul><li>写入全部配置变更</li></ul></div>
+      </div>
+    </div>
+  </div>
+  <table>
+    <tr><th style="width:200px">接入应用的动作</th><th style="width:260px">调用</th><th>用户中心做什么</th></tr>
+    <tr><td>获取接口令牌</td><td><code>POST /open/v1/auth/token</code></td><td>校验 App Key / Secret 与应用状态，签发 2 小时的接口令牌</td></tr>
+    <tr><td>用户登录应用后确认身份</td><td><code>GET /open/v1/users/by-account/{account}</code></td><td>返回用户 uuid、姓名、状态、部门、直属上级</td></tr>
+    <tr><td>取本应用授权快照</td><td><code>GET /open/v1/users/{id}/authz</code></td><td>返回 can_access、角色、操作码、可见菜单（只含本应用）</td></tr>
+    <tr><td>敏感操作前实时校验</td><td><code>POST /open/v1/authz/check</code></td><td>实时计算是否拥有某操作码</td></tr>
+    <tr><td>数据权限</td><td><code>/open/v1/data-permissions</code></td><td>写入 Owner、校验、列出可访问数据；只限本应用的数据编码</td></tr>
+    <tr><td>接收变更通知 <span class="tag">P1</span></td><td>应用登记的 Webhook</td><td>用户停用、授权变化、应用停用时推送事件，应用据此清缓存 / 踢出会话</td></tr>
+  </table>
+</section>
+
+<section id="s4">
+  <h2><span class="num">04</span>功能清单</h2>
+  <table>
+    <tr><th style="width:170px">功能</th><th>说明</th><th style="width:70px">优先级</th></tr>
+    <tr><td>应用列表</td><td>内置应用排第一；卡片显示状态、App Key、可访问范围、角色数 / 数据编码数</td><td><span class="tag new">P0</span></td></tr>
+    <tr><td>接入应用</td><td>填名称、说明 → 生成 App Key / Secret（Secret 只显示一次）</td><td><span class="tag new">P0</span></td></tr>
+    <tr><td>编辑应用</td><td>名称、图标、说明</td><td><span class="tag new">P0</span></td></tr>
+    <tr><td>停用 / 启用</td><td>停用后开放接口拒绝该应用的全部调用</td><td><span class="tag new">P0</span></td></tr>
+    <tr><td>轮换 Secret</td><td>生成新 Secret，旧 Secret 立即失效</td><td><span class="tag new">P0</span></td></tr>
+    <tr><td>可访问范围</td><td>全员 / 指定部门（含下级）；显示可访问人数</td><td><span class="tag new">P0</span></td></tr>
+    <tr><td>操作目录</td><td>按模块登记操作码；删除时从角色中移除</td><td><span class="tag new">P0</span></td></tr>
+    <tr><td>菜单</td><td>目录 / 菜单树；编码、路由、图标、排序、公共菜单；按用户预览</td><td><span class="tag new">P0</span></td></tr>
+    <tr><td>角色</td><td>新建 / 复制 / 编辑 / 删除；勾选操作与菜单；查看授权与拥有者（来自权限管理）</td><td><span class="tag new">P0</span></td></tr>
+    <tr><td>数据编码</td><td>登记 / 删除；接口说明</td><td><span class="tag new">P0</span></td></tr>
+    <tr><td>Secret 平滑轮换</td><td>新旧 Secret 并存一段时间（如 24 小时）再废弃旧的</td><td><span class="tag">P1</span></td></tr>
+    <tr><td>开放接口</td><td>接口令牌、用户 / 部门查询、授权快照、实时校验、数据权限</td><td><span class="tag new">P0</span></td></tr>
+    <tr><td>变更通知（Webhook）</td><td>用户停用 / 启用、调部门、授权变化、应用停用时推送事件</td><td><span class="tag">P1</span></td></tr>
+    <tr><td>元数据同步接口</td><td>应用用接口批量上报操作 / 菜单（随应用版本发布），替代手工维护</td><td><span class="tag">P1</span></td></tr>
+    <tr><td>统一登录（SSO / OIDC）</td><td>本期不做；后续接入 Keycloak（第 15 节）</td><td><span class="tag">不做</span></td></tr>
+    <tr><td>删除 / 归档应用</td><td>本期只停用不删除</td><td><span class="tag p2">P2</span></td></tr>
+  </table>
+</section>
+
+
+
+<section id="s5">
+  <h2><span class="num">05</span>领域模型</h2>
+  <div class="arch">
+    <div class="arch-row" style="gap:12px">
+      <div class="arch-box me" style="flex:none;width:250px"><b>应用</b><ul><li>名称、图标、说明、状态</li><li>App Key、Secret 哈希</li><li>Webhook 地址（P1）</li><li>可访问范围：全员 或 部门（0..n）</li></ul></div>
+      <div class="arch-link">1 : n<i class="r"></i></div>
+      <div style="flex:1;display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div class="arch-box"><b>操作</b><ul><li>模块、操作码、名称</li></ul></div>
+        <div class="arch-box"><b>菜单</b><ul><li>目录 / 菜单树，路由，公共</li></ul></div>
+        <div class="arch-box"><b>角色</b><ul><li>n:n 操作、n:n 菜单（只能是本应用的）</li></ul></div>
+        <div class="arch-box"><b>数据编码</b><ul><li>数据类型标识</li></ul></div>
+      </div>
+    </div>
+    <div class="arch-note">角色、数据编码被权限管理引用：角色授予用户 / 部门 / 岗位；数据权限记录「数据编码 + 数据 Id + 级别 + 授权对象」。</div>
+  </div>
+  <table>
+    <tr><th style="width:120px">对象</th><th>唯一性</th><th>可修改</th></tr>
+    <tr><td>应用</td><td>名称全局唯一；App Key 全局唯一</td><td>名称、图标、说明；App Key 不可改</td></tr>
+    <tr><td>操作</td><td>操作码在应用内唯一</td><td>名称、模块；操作码不可改</td></tr>
+    <tr><td>菜单</td><td>编码在应用内唯一；路由在应用内唯一</td><td>名称、图标、上级、路由、公共、排序；编码与类型不可改</td></tr>
+    <tr><td>角色</td><td>角色编码<b>全局</b>唯一；名称在应用内唯一</td><td>名称、说明、操作、菜单（内置角色锁定）；编码与所属应用不可改</td></tr>
+    <tr><td>数据编码</td><td>编码全局唯一</td><td>名称、说明；编码不可改</td></tr>
+  </table>
+  <div class="callout rule"><b class="l">编码一律不可改</b>操作码、菜单编码、角色编码、数据编码都被应用代码引用，修改等于在应用中改代码；需要更名时新建 + 迁移授权 + 删除旧的。</div>
+</section>
+
+
+
+<section id="s6">
+  <h2><span class="num">06</span>应用生命周期</h2>
+  <table>
+    <tr><th style="width:110px">状态</th><th>行为</th></tr>
+    <tr><td>启用</td><td>可获取接口令牌、调用开放接口</td></tr>
+    <tr><td>停用</td><td>不能再获取接口令牌；已签发的接口令牌立即失效（每次调用校验应用状态）；推送 <code>app.disabled</code>（P1）。角色、菜单、授权、数据权限<b>全部保留</b>，启用即恢复。</td></tr>
+  </table>
+  <ul>
+    <li>本期<b>不删除</b>应用：角色授权、数据权限、审计都引用它；与用户「只停用不删除」一致。</li>
+    <li>内置应用（用户中心）不能停用。</li>
+    <li>应用停用后用户能否继续使用该应用，取决于应用自身：应用拿不到用户与权限数据，应拒绝登录（接入规范要求）。</li>
+  </ul>
+</section>
+
+<section id="s7">
+  <h2><span class="num">07</span>应用凭据</h2>
+  <table>
+    <tr><th style="width:120px">项</th><th>规则</th></tr>
+    <tr><td>App Key</td><td>系统生成：<code>ap_</code> + 16 位小写十六进制；全局唯一；不可修改</td></tr>
+    <tr><td>App Secret</td><td>CSPRNG 生成 32 字节，Base64URL 编码（43 字符）；<b>只在接入成功 / 轮换时显示一次</b>；服务端存 SHA-256 哈希（Secret 本身高熵，无需慢哈希）与末 4 位用于界面识别</td></tr>
+    <tr><td>使用</td><td>只在应用<b>后端</b>使用，换取接口令牌；禁止下发到浏览器或客户端</td></tr>
+    <tr><td>接口令牌</td><td>不透明串，有效期 2 小时，服务端存储（Redis）；每次调用校验应用状态，应用停用或 Secret 轮换后立即失效</td></tr>
+    <tr><td>轮换</td><td>P0：生成新 Secret，旧 Secret 与其签发的接口令牌立即失效，确认弹窗提示「应用在更新配置前无法调用开放接口」。P1：平滑轮换，旧 Secret 保留 24 小时</td></tr>
+    <tr><td>校验</td><td>常量时间比较；按 App Key 与来源 IP 限流，连续失败告警；可选 IP 白名单 <span class="tag">P1</span></td></tr>
+  </table>
+</section>
+
+<section id="s8">
+  <h2><span class="num">08</span>可访问范围</h2>
+  <ul>
+    <li>两种：<b>全员</b>；<b>指定部门</b>（选中部门含其全部下级部门，可多选）。新接入的应用默认<b>指定部门且为空</b>，即无人可访问，避免误开放；界面提示「未设置（无人可访问）」。</li>
+    <li>判定：用户未停用，且（全员 或 用户部门链与所选部门有交集）。</li>
+    <li>执行点（本期）：开放接口在授权快照中返回 <code>can_access</code>；<b>接入规范要求应用在用户登录时检查，为 false 时拒绝登录</b>，提示「你没有访问该应用的权限，请联系管理员」。不在范围内的用户，授权快照中的角色、操作码、菜单均为空。接入 Keycloak 后改为在登录时由 Keycloak 执行。</li>
+    <li>修改范围后，界面显示「当前 N 人可访问」；被移出范围的人在应用下次获取授权快照（或收到变更通知，P1）时失去访问。</li>
+    <li>部门被删除时，从范围中移除（组织模块回调）；若某应用因此变为空范围，删除确认中提示。</li>
+    <li>可访问范围决定<b>能不能登录</b>；登录后能看到哪些菜单、能做哪些操作，由角色授予决定。</li>
+  </ul>
+</section>
+
+
+
+<section id="s9">
+  <h2><span class="num">09</span>操作目录</h2>
+  <ul>
+    <li>字段：模块（分组名）、名称、操作码。操作码格式 <code>^[a-z][a-z0-9_]*:[a-z][a-z0-9_]*$</code>，应用内唯一。</li>
+    <li>删除：预览「被哪些角色使用」，确认后从这些角色中移除；应用前端对应的按钮将对所有人隐藏。</li>
+    <li>界面同时给出前端控制示例：<code>can(op) = permissions.includes(op)</code>，并提示后端接口按同一操作码鉴权。</li>
+    <li>内置应用（用户中心）的操作随版本发布，界面只读。</li>
+    <li>P1：应用通过元数据接口上报操作（按操作码 upsert，界面标记「由应用上报」）。</li>
+  </ul>
+</section>
+
+
+
+<section id="s10">
+  <h2><span class="num">10</span>菜单</h2>
+  <table>
+    <tr><th style="width:110px">字段</th><th>规则</th></tr>
+    <tr><td>类型</td><td>目录（只用来分组，无路由）/ 菜单（对应一个页面）；创建后不可改</td></tr>
+    <tr><td>编码</td><td><code>^[a-z][a-z0-9_]{1,31}$</code>，应用内唯一，不可改</td></tr>
+    <tr><td>上级</td><td>只能是本应用的目录；最多 3 级</td></tr>
+    <tr><td>路由</td><td>菜单必填，以 <code>/</code> 开头，应用内唯一</td></tr>
+    <tr><td>公共</td><td>仅菜单可设；所有能登录该应用的人都可见，无需角色绑定</td></tr>
+    <tr><td>排序</td><td>同级内上移 / 下移</td></tr>
+  </table>
+  <h3>可见菜单的计算</h3>
+<pre>visibleMenus(user, app):
+  bound = ∪ 用户在该应用的全部角色绑定的菜单        <span class="c">// 角色来源：直接授予、部门继承、岗位默认角色（权限管理计算）</span>
+  leaves = { m | m.type = menu 且 (m.public 或 m ∈ bound) }
+  return leaves ∪ leaves 的全部上级目录            <span class="c">// 目录只在有可见子菜单时出现</span></pre>
+  <ul>
+    <li>删除：目录下有子菜单时拒绝；删除菜单同时解除所有角色的绑定（确认中列出角色）。</li>
+    <li>菜单预览：选择一个用户，按应用样式渲染其可见导航，并显示开放接口返回的 <code>menus</code> JSON；悬停显示每个菜单的来源角色。</li>
+    <li>内置应用的菜单只读，<b>用户中心自己的侧边栏就是按这棵树和登录人的角色生成的</b>；其中「权限管理」为公共菜单（人人都有「数据授权」）。</li>
+  </ul>
+  <div class="callout rule"><b class="l">菜单与操作码的分工</b>菜单决定「看得到哪些页面」（导航 + 路由守卫）；操作码决定「页面里能做什么」（按钮 + 接口）。两者在角色上分别勾选。</div>
+</section>
+
+
+
+<section id="s11">
+  <h2><span class="num">11</span>角色</h2>
+  <table>
+    <tr><th style="width:110px">项</th><th>规则</th></tr>
+    <tr><td>归属</td><td>在应用详情「角色」分页中维护，只属于一个应用，不可更改</td></tr>
+    <tr><td>编码</td><td><code>^[A-Z][A-Z0-9_]{1,31}$</code>，<b>全局唯一</b>（便于在授权、日志中无歧义识别），不可改</td></tr>
+    <tr><td>名称</td><td>应用内唯一</td></tr>
+    <tr><td>操作权限</td><td>按模块勾选本应用的操作，支持整组全选</td></tr>
+    <tr><td>菜单权限</td><td>树形勾选本应用的菜单；勾目录即勾其下全部菜单；公共菜单默认勾选且不可改</td></tr>
+    <tr><td>内置角色</td><td>如「超级管理员」：不可删除，操作与菜单锁定</td></tr>
+    <tr><td>复制</td><td>复制操作与菜单，不复制授权</td></tr>
+    <tr><td>删除</td><td>预览：将撤销的授权数、作为默认角色的岗位、当前拥有人数；确认后由权限管理撤销授权并从岗位默认角色中移除</td></tr>
+  </table>
+  <ul>
+    <li>角色详情还有「授权」「拥有者」两个分页，数据来自权限管理：授予了哪些用户 / 部门、哪些岗位带有该角色、实际拥有的人及来源。</li>
+    <li>修改角色的操作或菜单后，所有拥有者的权限随之变化：用户中心内实时生效；应用在下次获取授权快照（或收到变更通知，P1）时生效。</li>
+    <li>超级管理员保护：任何导致「没有可用的超级管理员」的变更都被拒绝（由权限管理校验）。</li>
+  </ul>
+</section>
+
+
+
+<section id="s12">
+  <h2><span class="num">12</span>数据编码</h2>
+  <ul>
+    <li>字段：编码 <code>^[A-Z][A-Za-z0-9]{1,31}$</code>（全局唯一，不可改）、名称、说明。</li>
+    <li>应用只能读写<b>自己登记的</b>数据编码的数据权限（接口令牌所属应用必须与数据编码的所属应用一致）。</li>
+    <li>删除：还有数据使用该编码时拒绝，提示应用先删除数据并调用清理接口。</li>
+    <li>权限级别「只读 / 读写 / Owner」在数据上的具体含义由应用解释；用户中心只记录与计算级别（详见权限管理 · 数据授权）。</li>
+    <li>数据编码分页内附应用调用的接口说明：写入 Owner、校验权限、列出可访问数据、删除清理。</li>
+  </ul>
+</section>
+
+
+
+<section id="s13">
+  <h2><span class="num">13</span>接入方式（本期）</h2>
+  <h3>接入步骤</h3>
+  <ol>
+    <li>管理员在「应用接入」中接入应用，保存 App Key / Secret（配置到应用后端）。</li>
+    <li>设置可访问范围。</li>
+    <li>登记操作目录、菜单、数据编码；建角色并勾选操作与菜单。</li>
+    <li>在权限管理中把角色授予用户 / 部门 / 岗位。</li>
+    <li>应用按下面的时序对接开放接口。</li>
+  </ol>
+  <h3>运行时序</h3>
+  <table>
+    <tr><th style="width:40px">#</th><th style="width:240px">时机</th><th>应用做什么</th></tr>
+    <tr><td>1</td><td>应用启动 / 令牌到期前</td><td>用 App Key / Secret 换取接口令牌并缓存</td></tr>
+    <tr><td>2</td><td>用户在应用中登录（应用自己的登录）</td><td>按账号查询用户：不存在或 <code>status = disabled</code> → 拒绝登录</td></tr>
+    <tr><td>3</td><td>登录成功后</td><td>取授权快照：<code>can_access = false</code> → 拒绝登录；否则把角色、操作码、菜单存入应用会话</td></tr>
+    <tr><td>4</td><td>渲染页面</td><td>按 <code>menus</code> 渲染导航、做路由守卫；按 <code>permissions</code> 控制按钮</td></tr>
+    <tr><td>5</td><td>后端处理请求</td><td>按会话中的 <code>permissions</code> 鉴权；敏感操作调用实时校验接口</td></tr>
+    <tr><td>6</td><td>会话期间</td><td>授权快照缓存不超过 5 分钟，到期重新获取；P1 起收到变更通知立即刷新或踢出</td></tr>
+  </table>
+  <div class="callout warn"><b class="l">身份对齐</b>本期不提供登录服务，应用的登录账号须与用户中心的<b>账号</b>一致（或在应用侧维护映射到用户 uuid）。应用内部应保存用户中心的 <b>uuid</b> 作为关联键，不要用账号做外键。如何让应用验证用户密码见「待确认」。</div>
+</section>
+
+<section id="s14">
+  <h2><span class="num">14</span>开放接口</h2>
+  <p class="muted">前缀 <code>https://uc.xinghai.com/open/v1</code>；除获取令牌外都需 <code>Authorization: Bearer &lt;接口令牌&gt;</code>；所有结果都限定在调用方应用的范围内。路径与报文中的 <code>id</code> 为用户 / 部门的 uuid。</p>
+  <table>
+    <tr><th style="width:330px">接口</th><th>说明</th></tr>
+    <tr><td><code>POST /auth/token</code></td><td><code>{app_key, app_secret}</code> → <code>{access_token, expires_in: 7200}</code></td></tr>
+    <tr><td><code>GET /users/by-account/{account}</code> · <code>GET /users/{id}</code></td><td>用户信息：uuid、账号、姓名、邮箱、状态、部门（uuid、路径）、直属上级</td></tr>
+    <tr><td><code>GET /users?q=&amp;dept_id=&amp;include_sub=</code></td><td>选人用的用户列表，<b>只返回本应用可访问范围内</b>的未停用用户；分页</td></tr>
+    <tr><td><code>GET /depts/tree</code></td><td>部门树（uuid、名称、上级、负责人）</td></tr>
+    <tr><td><code>GET /users/{id}/authz</code></td><td>授权快照：<code>can_access</code>、角色编码、操作码、可见菜单树（只含本应用）</td></tr>
+    <tr><td><code>POST /authz/check</code></td><td><code>{user_id, permission}</code> → <code>{allowed, roles[]}</code>，实时计算</td></tr>
+    <tr><td><code>/data-permissions</code>（4 个接口）</td><td>写入 Owner、校验、列出可访问数据、删除清理（见权限管理 · 数据授权）</td></tr>
+    <tr><td><code>PUT /metadata</code> <span class="tag">P1</span></td><td>应用上报操作与菜单（按编码 upsert）</td></tr>
+  </table>
+<pre>GET /open/v1/users/0192f3b1-27aa-7c40-8e15-9d0c1b2a3f44/authz     <span class="c">// AI TeamFlow 后端调用</span>
+{
+  "user": { "id": "0192f3b1-27aa-7c40-8e15-9d0c1b2a3f44", "account": "zhang.ming", "name": "张明", "status": "active" },
+  "can_access": true,
+  "roles": ["TF_PLATFORM_ADMIN", "TF_MEMBER"],
+  "permissions": ["team:create", "flow_template:edit", "flow_template:publish",
+                  "file_template:upload", "process:view", "process:start"],
+  "menus": [
+    { "name": "工作", "children": [ { "code": "process", "name": "我的流程", "path": "/processes" },
+                                    { "code": "team", "name": "团队", "path": "/teams" } ] },
+    { "name": "模板", "children": [ { "code": "flow_tpl", "name": "流程模板", "path": "/flow-templates" },
+                                    { "code": "file_tpl", "name": "文件模板", "path": "/file-templates" } ] },
+    { "code": "settings", "name": "系统设置", "path": "/settings" }
+  ],
+  "computed_at": "2026-10-09T10:20:00+08:00"
+}</pre>
+  <h3>变更通知（Webhook） <span class="tag">P1</span></h3>
+  <ul>
+    <li>应用在接入配置中登记 Webhook 地址；用户中心用该应用的签名密钥做 HMAC-SHA256 签名（请求头 <code>X-UC-Signature</code>、<code>X-UC-Timestamp</code>），应用验签并拒绝 5 分钟外的请求。</li>
+    <li>事件：<code>user.disabled</code>、<code>user.enabled</code>、<code>user.updated</code>（含调部门）、<code>authz.changed</code>（该应用的角色定义或授权变化，附受影响用户 uuid 列表，过多时只给「全量刷新」标记）、<code>app.disabled</code>。</li>
+    <li>至少一次投递：失败按 1 分钟、5 分钟、30 分钟、2 小时重试；应用按事件 id 去重。</li>
+    <li>签名密钥需要可还原，加密存储（KMS / 主密钥），与 App Secret 分开。</li>
+  </ul>
+</section>
+
+<section id="s15">
+  <h2><span class="num">15</span>后续统一登录（Keycloak）</h2>
+  <p>需要统一登录时，<b>不自建 OIDC</b>，引入 Keycloak 作为身份提供方。用户中心继续作为用户、组织、权限的<b>唯一数据源</b>，Keycloak 只负责登录协议与会话。</p>
+  <table>
+    <tr><th style="width:150px">方案</th><th>做法</th><th style="width:250px">评价</th></tr>
+    <tr><td><b>A. 用户联邦（推荐）</b></td><td>开发 Keycloak User Storage SPI：按账号 / 邮箱从用户中心查用户，密码交给用户中心校验；<code>must_change_password</code> 映射为 Keycloak 的「更新密码」必需动作</td><td>用户数据只有一份；用户中心的密码策略、锁定、临时密码继续有效</td></tr>
+    <tr><td>B. 单向同步</td><td>用户中心把用户推送到 Keycloak，密码由 Keycloak 管理</td><td>实现简单，但密码相关功能要迁到 Keycloak，两边状态需对账</td></tr>
+  </table>
+  <ul>
+    <li>每个接入应用对应一个 Keycloak Client；回调地址、PKCE 等协议配置在 Keycloak 中维护。用户中心的「应用」与 Keycloak Client 通过 App Key 关联。</li>
+    <li>可访问范围：在 Keycloak 登录流程中加一个自定义认证步骤调用用户中心 <code>can_access</code>，或继续由应用检查。</li>
+    <li>令牌中只放身份（<code>sub</code> = 用户 uuid、账号、姓名）；角色、操作码、菜单仍由应用调用开放接口获取，避免令牌过大、避免权限只在登录时刷新。</li>
+    <li>用户中心管理台自身也改为通过 Keycloak 登录，原登录页下线。</li>
+  </ul>
+  <div class="callout rule"><b class="l">本期为此预留</b>用户 uuid 作为全系统稳定标识；账号全局唯一且不可改；密码用 argon2id 存储并提供内部校验能力；用户状态、可访问范围都可通过接口查询。接入 Keycloak 时无需迁移业务数据。</div>
+</section>
+
+<section id="s16">
+  <h2><span class="num">16</span>数据模型</h2>
+  <div class="callout rule"><b class="l">主键约定（全部表通用）</b>
+    <code>id bigint</code> 自增主键，只在库内使用，<b>不对外暴露、不用于任何关联</b>；
+    <code>uuid uuid</code> 逻辑主键（UUIDv7），<b>表间关联、外键、API 都使用它</b>。关联字段命名为 <code>xxx_uuid</code>，外键引用对方表的 <code>uuid</code>；API 中的 <code>id</code> / <code>xxx_id</code> 取值即对应的 uuid。</div>
+<pre><span class="c">-- 应用</span>
+CREATE TABLE uc_app (
+  id                 bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  uuid               uuid        NOT NULL,
+  name               varchar(50) NOT NULL,
+  icon               varchar(16),
+  description        varchar(200),
+  app_key            varchar(40),                 <span class="c">-- 内置应用为空</span>
+  secret_hash        char(64),                    <span class="c">-- SHA-256 hex</span>
+  secret_tail        char(4),
+  secret_rotated_at  timestamptz,
+  webhook_url        varchar(500),                <span class="c">-- P1</span>
+  webhook_secret_enc bytea,                       <span class="c">-- P1，加密存储（需可还原用于签名）</span>
+  scope_all          boolean     NOT NULL DEFAULT false,
+  status             varchar(16) NOT NULL DEFAULT 'active',   <span class="c">-- active | disabled</span>
+  is_builtin         boolean     NOT NULL DEFAULT false,
+  created_at timestamptz NOT NULL DEFAULT now(), created_by uuid,
+  updated_at timestamptz NOT NULL DEFAULT now(), updated_by uuid,
+  version            int NOT NULL DEFAULT 1,
+  CONSTRAINT uk_app_uuid      UNIQUE (uuid),
+  CONSTRAINT uk_app_name      UNIQUE (name),
+  CONSTRAINT uk_app_app_key   UNIQUE (app_key),
+  CONSTRAINT ck_app_status    CHECK (status IN ('active','disabled'))
+);
+
+
+<span class="c">-- 可访问范围（scope_all = false 时生效；选中部门含下级）</span>
+CREATE TABLE uc_app_scope_dept (
+  id        bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  uuid      uuid NOT NULL UNIQUE,
+  app_uuid  uuid NOT NULL REFERENCES uc_app(uuid),
+  dept_uuid uuid NOT NULL REFERENCES uc_dept(uuid) ON DELETE CASCADE,
+  CONSTRAINT uk_scope UNIQUE (app_uuid, dept_uuid)
+);
+
+<span class="c">-- 操作</span>
+CREATE TABLE uc_operation (
+  id        bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  uuid      uuid NOT NULL UNIQUE,
+  app_uuid  uuid NOT NULL REFERENCES uc_app(uuid),
+  module    varchar(32) NOT NULL,
+  code      varchar(64) NOT NULL,                 <span class="c">-- 资源:动作</span>
+  name      varchar(64) NOT NULL,
+  sort      int NOT NULL DEFAULT 0,
+  source    varchar(16) NOT NULL DEFAULT 'manual',  <span class="c">-- manual | reported | builtin</span>
+  CONSTRAINT uk_op_code UNIQUE (app_uuid, code)
+);
+
+<span class="c">-- 菜单</span>
+CREATE TABLE uc_menu (
+  id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  uuid        uuid NOT NULL UNIQUE,
+  app_uuid    uuid NOT NULL REFERENCES uc_app(uuid),
+  parent_uuid uuid REFERENCES uc_menu(uuid),
+  type        varchar(8)  NOT NULL,               <span class="c">-- dir | menu</span>
+  code        varchar(32) NOT NULL,
+  name        varchar(32) NOT NULL,
+  icon        varchar(16),
+  path        varchar(200),                        <span class="c">-- 菜单必填，目录为空</span>
+  is_public   boolean NOT NULL DEFAULT false,
+  sort        int NOT NULL DEFAULT 0,
+  source      varchar(16) NOT NULL DEFAULT 'manual',
+  CONSTRAINT uk_menu_code UNIQUE (app_uuid, code),
+  CONSTRAINT ck_menu_type CHECK (type IN ('dir','menu')),
+  CONSTRAINT ck_menu_path CHECK ((type = 'menu') = (path IS NOT NULL)),
+  CONSTRAINT ck_menu_public CHECK (type = 'menu' OR NOT is_public)
+);
+CREATE UNIQUE INDEX uk_menu_path ON uc_menu (app_uuid, path) WHERE path IS NOT NULL;
+
+<span class="c">-- 角色</span>
+CREATE TABLE uc_role (
+  id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  uuid        uuid NOT NULL UNIQUE,
+  app_uuid    uuid NOT NULL REFERENCES uc_app(uuid),
+  code        varchar(32) NOT NULL,
+  name        varchar(32) NOT NULL,
+  description varchar(200),
+  is_builtin  boolean NOT NULL DEFAULT false,
+  created_at timestamptz NOT NULL DEFAULT now(), created_by uuid,
+  updated_at timestamptz NOT NULL DEFAULT now(), updated_by uuid,
+  version     int NOT NULL DEFAULT 1,
+  CONSTRAINT uk_role_code UNIQUE (code),
+  CONSTRAINT uk_role_name UNIQUE (app_uuid, name)
+);
+
+CREATE TABLE uc_role_operation (
+  id             bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  uuid           uuid NOT NULL UNIQUE,
+  role_uuid      uuid NOT NULL REFERENCES uc_role(uuid) ON DELETE CASCADE,
+  operation_uuid uuid NOT NULL REFERENCES uc_operation(uuid) ON DELETE CASCADE,
+  CONSTRAINT uk_role_op UNIQUE (role_uuid, operation_uuid)
+);
+
+CREATE TABLE uc_role_menu (
+  id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  uuid       uuid NOT NULL UNIQUE,
+  role_uuid  uuid NOT NULL REFERENCES uc_role(uuid) ON DELETE CASCADE,
+  menu_uuid  uuid NOT NULL REFERENCES uc_menu(uuid) ON DELETE CASCADE,
+  CONSTRAINT uk_role_menu UNIQUE (role_uuid, menu_uuid)
+);
+
+<span class="c">-- 数据编码</span>
+CREATE TABLE uc_data_type (
+  id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  uuid        uuid NOT NULL UNIQUE,
+  app_uuid    uuid NOT NULL REFERENCES uc_app(uuid),
+  code        varchar(32) NOT NULL,
+  name        varchar(32) NOT NULL,
+  description varchar(200),
+  CONSTRAINT uk_data_type_code UNIQUE (code)
+);</pre>
+  <ul>
+    <li>「角色只能绑定本应用的操作 / 菜单」「菜单上级必须是本应用的目录」由服务层校验（跨表条件不便用外键表达）。</li>
+    <li><code>uc_role_menu</code> 只存菜单（type = menu）；目录可见性由子菜单推导，不存储。</li>
+    <li>内置应用及其操作、菜单、内置角色由数据库迁移脚本写入（<code>source = builtin</code>），界面只读。</li>
+  </ul>
+</section>
+
+
+
+<section id="s17">
+  <h2><span class="num">17</span>管理 API</h2>
+  <p class="muted">用户中心管理台使用，前缀 <code>/api/v1</code>；路径与报文中的 <code>{id}</code>、<code>*_id</code> 均为逻辑主键 uuid。开放接口见第 14 节。</p>
+  <table>
+    <tr><th style="width:310px">接口</th><th>说明</th><th style="width:110px">操作码</th></tr>
+    <tr><td><code>GET /apps</code></td><td>应用列表（含内置应用）</td><td>app:manage / role:view</td></tr>
+    <tr><td><code>POST /apps</code></td><td><code>{name, description, icon}</code> → <code>{app, app_secret}</code></td><td>app:manage</td></tr>
+    <tr><td><code>GET /apps/{id}</code> · <code>PATCH /apps/{id}</code></td><td>详情；改名称、图标、说明（<code>If-Match</code>）</td><td>app:manage</td></tr>
+    <tr><td><code>POST /apps/{id}:disable</code> · <code>:enable</code></td><td>停用 / 启用</td><td>app:manage</td></tr>
+    <tr><td><code>POST /apps/{id}:rotate-secret</code></td><td>→ <code>{app_secret}</code>（只返回这一次）</td><td>app:manage</td></tr>
+    <tr><td><code>PUT /apps/{id}/webhook</code> <span class="tag">P1</span></td><td><code>{url}</code> → <code>{signing_secret}</code>（只返回这一次）</td><td>app:manage</td></tr>
+    <tr><td><code>PUT /apps/{id}/scope</code></td><td><code>{all, dept_ids[]}</code> → <code>{accessible_users}</code></td><td>app:manage</td></tr>
+    <tr><td><code>GET/POST /apps/{id}/operations</code></td><td>列表 / 新增</td><td>role:view / app:manage</td></tr>
+    <tr><td><code>PATCH/DELETE /operations/{id}</code></td><td>改名称、模块 / 删除（<code>dry_run</code> 返回受影响角色）</td><td>app:manage</td></tr>
+    <tr><td><code>GET/POST /apps/{id}/menus</code></td><td>菜单树 / 新增</td><td>role:view / app:manage</td></tr>
+    <tr><td><code>PATCH/DELETE /menus/{id}</code></td><td>修改 / 删除（<code>dry_run</code> 返回受影响角色）</td><td>app:manage</td></tr>
+    <tr><td><code>POST /menus/{id}:move</code></td><td><code>{parent_id, after_id}</code> 调整上级与排序</td><td>app:manage</td></tr>
+    <tr><td><code>GET /apps/{id}/menus:preview?user_id=</code></td><td>该用户的可见菜单树与来源角色</td><td>role:view</td></tr>
+    <tr><td><code>GET/POST /apps/{id}/roles</code></td><td>列表 / 新建（<code>copy_from</code> 可选）</td><td>role:view / role:manage</td></tr>
+    <tr><td><code>GET/PATCH/DELETE /roles/{id}</code></td><td>详情 / 改名称说明 / 删除（<code>dry_run</code> 返回授权数、岗位、拥有人数）</td><td>role:view / role:manage</td></tr>
+    <tr><td><code>PUT /roles/{id}/operations</code></td><td><code>{operation_ids[]}</code> 整体替换</td><td>role:manage</td></tr>
+    <tr><td><code>PUT /roles/{id}/menus</code></td><td><code>{menu_ids[]}</code> 整体替换</td><td>role:manage</td></tr>
+    <tr><td><code>GET/POST /apps/{id}/data-types</code></td><td>列表 / 登记</td><td>app:manage</td></tr>
+    <tr><td><code>PATCH/DELETE /data-types/{id}</code></td><td>改名称说明 / 删除</td><td>app:manage</td></tr>
+    <tr><td><code>PUT /apps/{id}/metadata</code> <span class="tag">P1</span></td><td>见开放接口 <code>PUT /open/v1/metadata</code></td><td>应用自身</td></tr>
+  </table>
+  <h3>错误码</h3>
+  <table>
+    <tr><th style="width:230px">code</th><th style="width:60px">HTTP</th><th>场景</th></tr>
+    <tr><td><code>APP_NOT_FOUND</code></td><td>404</td><td>应用不存在</td></tr>
+    <tr><td><code>APP_NAME_EXISTS</code></td><td>409</td><td>应用名称重复</td></tr>
+    <tr><td><code>BUILTIN_READONLY</code></td><td>409</td><td>修改内置应用的配置 / 操作 / 菜单，或内置角色</td></tr>
+    <tr><td><code>OP_CODE_INVALID</code> / <code>OP_CODE_EXISTS</code></td><td>422 / 409</td><td>操作码格式 / 重复</td></tr>
+    <tr><td><code>MENU_CODE_EXISTS</code> / <code>MENU_PATH_EXISTS</code></td><td>409</td><td>菜单编码 / 路由重复</td></tr>
+    <tr><td><code>MENU_HAS_CHILDREN</code></td><td>409</td><td>删除有子菜单的目录</td></tr>
+    <tr><td><code>MENU_DEPTH_EXCEEDED</code></td><td>422</td><td>超过 3 级</td></tr>
+    <tr><td><code>ROLE_CODE_EXISTS</code> / <code>ROLE_NAME_EXISTS</code></td><td>409</td><td>角色编码全局重复 / 名称应用内重复</td></tr>
+    <tr><td><code>CROSS_APP_REFERENCE</code></td><td>422</td><td>角色勾选了其他应用的操作 / 菜单</td></tr>
+    <tr><td><code>LAST_SUPER_ADMIN</code></td><td>409</td><td>变更会导致没有可用的超级管理员</td></tr>
+    <tr><td><code>DATA_TYPE_EXISTS</code></td><td>409</td><td>数据编码重复</td></tr>
+    <tr><td><code>DATA_TYPE_IN_USE</code></td><td>409</td><td>还有数据使用该编码</td></tr>
+    <tr><td><code>VERSION_CONFLICT</code></td><td>409</td><td>乐观锁冲突</td></tr>
+  </table>
+</section>
+
+
+
+<section id="s18">
+  <h2><span class="num">18</span>权限</h2>
+  <p>菜单「应用接入」由角色绑定的菜单决定是否可见；页面内分页与按钮按操作码控制：</p>
+  <table>
+    <tr><th>分页 / 动作</th><th style="width:170px">需要</th><th>说明</th></tr>
+    <tr><td>接入配置（凭据、范围、停用、Webhook）</td><td><code>app:manage</code></td><td>含 Secret 操作，内置应用无此分页</td></tr>
+    <tr><td>操作目录、菜单（查看）</td><td><code>app:manage</code> 或 <code>role:view</code></td><td>维护角色需要看到它们</td></tr>
+    <tr><td>操作目录、菜单（维护）</td><td><code>app:manage</code></td><td>内置应用只读</td></tr>
+    <tr><td>角色（查看）</td><td><code>role:view</code></td><td>含授权、拥有者分页</td></tr>
+    <tr><td>角色（新建 / 编辑 / 删除 / 改操作与菜单）</td><td><code>role:manage</code></td><td>内置角色锁定</td></tr>
+    <tr><td>角色「授权」分页中的授权按钮</td><td><code>grant:manage</code></td><td>权限管理的能力</td></tr>
+    <tr><td>数据编码</td><td><code>app:manage</code></td><td>内置应用无此分页</td></tr>
+    <tr><td>接入应用（列表页按钮）</td><td><code>app:manage</code></td><td></td></tr>
+  </table>
+</section>
+
+
+
+<section id="s19">
+  <h2><span class="num">19</span>页面设计</h2>
+  <p>以原型为准（<code>prototype/usercenter/index.html</code> → 应用接入）。</p>
+  <div class="grid2">
+    <div class="box"><h4>应用列表 <code>#/apps</code></h4>
+      <ul><li>卡片网格；内置应用第一个，带「内置」标记</li>
+      <li>卡片：图标、名称、说明、状态、App Key、可访问范围、角色数 / 数据编码数</li>
+      <li>右上「＋ 接入应用」</li></ul></div>
+    <div class="box"><h4>应用详情 <code>#/apps/:id</code></h4>
+      <ul><li>页头：图标、名称、说明、接入时间；停用 / 启用、返回</li>
+      <li>分页：接入配置 / 操作目录 / 菜单 / 角色 / 数据编码（按权限显示，带数量）</li>
+      <li>停用时页头下方警示条</li></ul></div>
+    <div class="box"><h4>接入配置</h4>
+      <ul><li>左：应用凭据（App Key 复制、Secret 末 4 位 + 重新生成）、开放接口（Base URL、获取令牌、主要接口）；「统一登录暂不提供」说明</li>
+      <li>右：可访问范围（全员 / 指定部门树形勾选，显示可访问人数）</li></ul></div>
+    <div class="box"><h4>操作目录</h4>
+      <ul><li>表格：模块、操作、操作码、使用该操作的角色、删除</li>
+      <li>底部：前端 <code>can()</code> 示例代码</li></ul></div>
+    <div class="box"><h4>菜单</h4>
+      <ul><li>左：菜单树表格（名称缩进、类型、公共、编码、路由、可见范围、＋子菜单 / 上移 / 编辑 / 删除）</li>
+      <li>右：菜单预览（选用户 → 模拟侧边栏 + 开放接口返回的 menus）</li></ul></div>
+    <div class="box"><h4>角色</h4>
+      <ul><li>左：角色列表（内置标记、操作数、人数）+ 新建</li>
+      <li>右：角色详情，分页：操作权限 / 菜单权限 / 授权 / 拥有者；复制、编辑、删除</li></ul></div>
+    <div class="box"><h4>数据编码</h4>
+      <ul><li>表格：编码、名称、数据条数、说明、删除</li>
+      <li>权限级别说明；下方接口说明（4 个接口示例）</li></ul></div>
+    <div class="box"><h4>一次性 Secret 弹窗</h4>
+      <ul><li>App Key、App Secret + 复制；「只显示这一次、只能存放在应用后端」警示</li>
+      <li>唯一按钮「我已保存」；不可点遮罩关闭</li></ul></div>
+  </div>
+</section>
+
+
+
+<section id="s20">
+  <h2><span class="num">20</span>审计</h2>
+  <table>
+    <tr><th style="width:170px">动作</th><th>说明字段</th></tr>
+    <tr><td>接入应用 / 编辑应用</td><td>名称；字段差异</td></tr>
+    <tr><td>停用应用 / 启用应用</td><td>—</td></tr>
+    <tr><td>重新生成 Secret</td><td>不记录 Secret，只记末 4 位</td></tr>
+    <tr><td>设置 Webhook</td><td>地址（不记录签名密钥）</td></tr>
+    <tr><td>修改可访问范围</td><td>全员 / 部门列表；变更前后可访问人数</td></tr>
+    <tr><td>新增 / 修改 / 删除操作</td><td>操作码；删除时受影响角色</td></tr>
+    <tr><td>新增 / 编辑 / 删除菜单</td><td>编码、路由；删除时受影响角色</td></tr>
+    <tr><td>新建 / 复制 / 编辑 / 删除角色</td><td>编码；复制来源；删除时撤销的授权数</td></tr>
+    <tr><td>修改角色操作 / 修改角色菜单</td><td>新增 N 项、移除 M 项（列出编码）</td></tr>
+    <tr><td>登记 / 删除数据编码</td><td>编码</td></tr>
+  </table>
+</section>
+
+
+
+<section id="s21">
+  <h2><span class="num">21</span>异常与边界</h2>
+  <table>
+    <tr><th style="width:260px">场景</th><th>处理</th></tr>
+    <tr><td>新接入的应用未设置可访问范围</td><td>默认无人可访问（<code>can_access = false</code>）；列表与详情显示「未设置（无人可访问）」</td></tr>
+    <tr><td>Secret 轮换后应用未更新配置</td><td>换令牌返回 <code>invalid_app</code>，应用无法获取用户与权限；P1 平滑轮换避免中断</td></tr>
+    <tr><td>应用没有检查 <code>can_access</code></td><td>属于接入不合规：授权快照中的角色、操作码、菜单均为空，用户进入后也看不到任何功能；接入验收时检查</td></tr>
+    <tr><td>用户中心短暂不可用</td><td>应用可在缓存有效期内继续使用已缓存的授权快照；新登录失败并提示稍后再试（不能放行）</td></tr>
+    <tr><td>用户被停用，但应用缓存了快照</td><td>最长 5 分钟内仍可用；P1 收到 <code>user.disabled</code> 后应用立即踢出</td></tr>
+    <tr><td>删除被角色使用的操作 / 菜单</td><td>预览受影响角色，确认后一并解除</td></tr>
+    <tr><td>修改菜单为公共</td><td>原有角色绑定保留（无副作用）；取消公共后按绑定计算</td></tr>
+    <tr><td>修改超级管理员相关角色</td><td>内置角色锁定；自建角色的变更也经权限管理校验「至少一名可用超级管理员」</td></tr>
+    <tr><td>应用停用期间修改其角色 / 菜单</td><td>允许；启用后按最新配置生效</td></tr>
+    <tr><td>应用用他人的数据编码调用数据权限接口</td><td>拒绝：<code>DATA_TYPE_NOT_OWNED</code>（403）</td></tr>
+  </table>
+</section>
+
+<section id="s22">
+  <h2><span class="num">22</span>非功能</h2>
+  <div class="grid2">
+    <div class="box"><h4>安全</h4>
+      <ul><li>App Secret 只显示一次、只存哈希；响应 <code>no-store</code></li>
+      <li>开放接口只走 HTTPS；接口令牌 2 小时，服务端可随时作废</li>
+      <li>每次调用限定在调用方应用：只能看到本应用的授权、可访问范围内的用户、本应用的数据编码</li>
+      <li>按 App Key 与 IP 限流；可选 IP 白名单（P1）</li>
+      <li>Webhook 签名 + 时间戳防重放</li></ul></div>
+    <div class="box"><h4>性能与可用性</h4>
+      <ul><li>应用配置、操作、菜单、角色定义常驻内存缓存，变更时按应用失效</li>
+      <li>授权快照 p95 &lt; 50ms；实时校验 p95 &lt; 20ms</li>
+      <li>开放接口可用性 99.9%；应用侧以快照缓存兜底短时故障</li></ul></div>
+  </div>
+</section>
+
+<section id="s23">
+  <h2><span class="num">23</span>与原型的差异</h2>
+  <p>原型已同步：去掉 OIDC 与回调地址，接入配置改为「应用凭据 + 开放接口」。剩余差异：</p>
+  <table class="diff">
+    <tr><th>项</th><th>原型</th><th>详细设计</th></tr>
+    <tr><td>编辑应用名称 / 图标 / 说明</td><td>无</td><td>P0 支持</td></tr>
+    <tr><td>菜单层级</td><td>不限</td><td>最多 3 级</td></tr>
+    <tr><td>内置应用停用</td><td>无入口</td><td>明确禁止</td></tr>
+    <tr><td>Secret 平滑轮换、Webhook 变更通知、元数据上报、IP 白名单</td><td>无</td><td>P1</td></tr>
+  </table>
+</section>
+
+
+
+<section id="s24">
+  <h2><span class="num">24</span>测试要点</h2>
+  <ul>
+    <li>接入应用：Secret 只返回一次；App Key 唯一；名称重复。</li>
+    <li>轮换 Secret：旧 Secret 与其接口令牌立即失效；新 Secret 可换令牌。</li>
+    <li>停用应用：换令牌、已有令牌调用全部拒绝；启用后恢复；内置应用不可停用。</li>
+    <li>可访问范围：全员；指定部门含下级；空范围；用户调部门后进 / 出范围；部门删除后范围更新；范围外用户的快照角色 / 操作码 / 菜单为空。</li>
+    <li>开放接口隔离：A 应用看不到 B 应用的角色 / 菜单 / 数据编码；用户列表只含本应用范围内的人。</li>
+    <li>操作：格式、重复、删除后从角色移除、内置应用只读。</li>
+    <li>菜单：类型不可改、编码 / 路由重复、3 级上限、删除有子菜单的目录、公共菜单可见性、目录随子菜单显示、预览结果与开放接口返回一致。</li>
+    <li>角色：编码全局唯一、名称应用内唯一、跨应用勾选被拒、复制不带授权、删除撤销授权与岗位默认角色、内置角色锁定。</li>
+    <li>数据编码：格式、全局唯一、有数据时不可删、应用只能操作自己的编码。</li>
+    <li>实时校验与快照一致；授权变更后快照与实时校验立即反映。</li>
+    <li>Webhook（P1）：签名、重放、重试、去重。</li>
+    <li>权限：各分页与按钮在缺少操作码时隐藏、接口 403。</li>
+  </ul>
+</section>
+
+<section id="s25">
+  <h2><span class="num">25</span>落地计划</h2>
+  <table>
+    <tr><th style="width:90px">阶段</th><th>内容</th><th style="width:150px">依赖</th></tr>
+    <tr><td>M1</td><td>uc_app 等表；内置应用迁移；应用列表 / 接入 / 编辑 / 停用；App Secret</td><td>—</td></tr>
+    <tr><td>M2</td><td>可访问范围；开放接口：接口令牌、用户 / 部门查询</td><td>组织、用户</td></tr>
+    <tr><td>M3</td><td>操作目录、菜单、角色（操作 + 菜单）；菜单预览</td><td>—</td></tr>
+    <tr><td>M4</td><td>开放接口：授权快照、实时校验；角色授权 / 拥有者分页</td><td>权限管理</td></tr>
+    <tr><td>M5</td><td>数据编码与数据权限接口</td><td>权限管理（数据授权）</td></tr>
+    <tr><td>M6</td><td>Webhook 变更通知、Secret 平滑轮换、元数据上报、IP 白名单</td><td>应用侧配合</td></tr>
+    <tr><td>以后</td><td>引入 Keycloak 统一登录（第 15 节）</td><td>Keycloak</td></tr>
+  </table>
+</section>
+
+<section id="s26">
+  <h2><span class="num">26</span>待确认</h2>
+  <ol>
+    <li><b>本期应用如何验证用户密码</b>：(a) 各应用沿用自己的登录，账号与用户中心对齐（当前设计）；(b) 用户中心提供一个「校验账号密码」的开放接口供应用调用——实现简单，但应用会接触明文密码，且等于自建认证，与「认证先不做」冲突，<b>不建议</b>。请确认采用 (a)。</li>
+    <li><b>操作与菜单的维护方式</b>：管理员手工维护（当前），还是由应用发布时通过接口上报（P1，推荐）？两者并存时以谁为准？</li>
+    <li><b>Secret 轮换</b>：P0 立即失效是否可接受，还是直接做平滑轮换？</li>
+    <li><b>授权快照缓存</b>：应用侧最长缓存 5 分钟是否合适？是否要求 P0 就做 Webhook？</li>
+    <li><b>Keycloak 方案</b>：以后接入时倾向用户联邦（推荐）还是单向同步？</li>
+    <li><b>应用删除</b>：是否需要「归档」能力（隐藏但保留数据）？</li>
+  </ol>
+</section>
+
+</main>
+</div>
+</body>
+</html>

@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>文件模板模块 · 详细设计 · AI TeamFlow</title>
+<style>
+  :root{
+    --bg:#f6f7f9;--surface:#fff;--surface-2:#fbfbfd;--ink:#0f172a;--ink-2:#334155;--ink-3:#64748b;--ink-4:#94a3b8;
+    --line:#e6e8ee;--line-2:#eef0f4;--primary:#4f46e5;--primary-weak:#eef0ff;
+    --warning:#b45309;--warning-weak:#fef3e2;
+    --mono:"JetBrains Mono","SF Mono",ui-monospace,Menlo,Consolas,monospace;
+    --font:"Inter","PingFang SC","Microsoft YaHei",system-ui,-apple-system,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink-2);font-family:var(--font);font-size:14.5px;line-height:1.75}
+  a{color:var(--primary);text-decoration:none}
+  .wrap{display:grid;grid-template-columns:240px minmax(0,1fr);gap:36px;max-width:1240px;margin:0 auto;padding:32px 28px 80px}
+  nav.toc{position:sticky;top:24px;align-self:start;max-height:calc(100vh - 48px);overflow:auto;font-size:13px}
+  nav.toc .t{font-size:11px;letter-spacing:.12em;color:var(--ink-4);text-transform:uppercase;margin-bottom:8px;font-weight:600}
+  nav.toc ol{list-style:none;margin:0;padding:0;counter-reset:s}
+  nav.toc li{counter-increment:s}
+  nav.toc a{display:block;padding:4px 8px;border-radius:6px;color:var(--ink-3)}
+  nav.toc a::before{content:counter(s,decimal-leading-zero) "  ";font-family:var(--mono);font-size:11px;color:var(--ink-4)}
+  nav.toc a:hover{background:#fff;color:var(--ink)}
+  header.hero{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:28px 30px;margin-bottom:28px}
+  .kicker{font-family:var(--mono);font-size:11.5px;letter-spacing:.14em;color:var(--primary);text-transform:uppercase;margin:0 0 6px}
+  h1{font-size:26px;color:var(--ink);margin:0 0 10px;letter-spacing:-.3px}
+  .lede{margin:0;font-size:15px}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+  .meta span{font-size:12px;padding:2px 10px;border-radius:999px;background:var(--primary-weak);color:var(--primary)}
+  section{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:24px 28px;margin-bottom:20px}
+  h2{font-size:19px;color:var(--ink);margin:0 0 14px;display:flex;align-items:center;gap:10px}
+  h2 .num{font-family:var(--mono);font-size:12px;color:#fff;background:var(--primary);border-radius:6px;padding:2px 7px}
+  h3{font-size:15.5px;color:var(--ink);margin:22px 0 8px}
+  p{margin:0 0 12px}
+  code{font-family:var(--mono);font-size:12.5px;background:#f1f3f7;border:1px solid var(--line-2);border-radius:4px;padding:0 5px;color:#be185d}
+  table{width:100%;border-collapse:collapse;font-size:13.5px;margin:6px 0 14px}
+  th{text-align:left;background:var(--surface-2);color:var(--ink-3);font-weight:600;font-size:12.5px}
+  th,td{border:1px solid var(--line);padding:8px 10px;vertical-align:top}
+  td code{white-space:nowrap}
+  pre{background:#0f172a;color:#e2e8f0;border-radius:10px;padding:14px 16px;font-family:var(--mono);font-size:12.5px;line-height:1.65;overflow:auto;margin:6px 0 14px;white-space:pre-wrap}
+  pre .c{color:#94a3b8}
+  .callout{border:1px solid;border-left-width:4px;border-radius:10px;padding:10px 14px;margin:8px 0 14px;font-size:13.5px}
+  .callout b.l{display:block;font-size:11.5px;letter-spacing:.1em;margin-bottom:3px}
+  .rule{background:var(--primary-weak);border-color:#c7c9f5;color:#312e81}
+  .warn{background:var(--warning-weak);border-color:#f6d39b;color:#7c2d12}
+  .tag{display:inline-block;font-size:11.5px;padding:0 8px;border-radius:999px;border:1px solid var(--line);background:var(--surface-2);color:var(--ink-3);white-space:nowrap}
+  .tag.new{color:var(--primary);border-color:#c7c9f5;background:var(--primary-weak)}
+  .tag.p2{color:var(--warning);border-color:#f6d39b;background:var(--warning-weak)}
+  .flow{font-family:var(--mono);font-size:12.5px;line-height:1.75;background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:14px 16px;white-space:pre;overflow:auto;margin:6px 0 14px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .box{border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:var(--surface-2)}
+  .box h4{margin:0 0 6px;font-size:13.5px;color:var(--ink)}
+  ul,ol{margin:0 0 12px;padding-left:20px}
+  li{margin:2px 0}
+  .muted{color:var(--ink-4);font-size:12px}
+  /* 关系图 */
+  .arch{margin:6px 0 14px}
+  .arch-sys{border:1.5px dashed #c7c9f5;border-radius:12px;padding:12px 14px;background:#fafaff}
+  .arch-sys-t{font-size:12px;font-weight:700;color:var(--primary);margin-bottom:8px;letter-spacing:.06em}
+  .arch-row{display:flex;align-items:center}
+  .arch-box{flex:1;background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:13px}
+  .arch-box.me{border-color:var(--primary);box-shadow:0 0 0 3px rgba(79,70,229,.1)}
+  .arch-box b{color:var(--ink)}
+  .arch-box ul{margin:6px 0 0;padding-left:16px;color:var(--ink-3);font-size:12.5px}
+  .arch-link{width:96px;flex:none;text-align:center;font-size:11.5px;color:var(--ink-3);position:relative;padding-bottom:10px}
+  .arch-link i{position:absolute;left:8px;right:8px;bottom:0;height:2px;background:#9aa4b6}
+  .arch-link i.r::after{content:"";position:absolute;right:-2px;top:-4px;border-left:7px solid #9aa4b6;border-top:5px solid transparent;border-bottom:5px solid transparent}
+  .arch-link i.l::before{content:"";position:absolute;left:-2px;top:-4px;border-right:7px solid #9aa4b6;border-top:5px solid transparent;border-bottom:5px solid transparent}
+  .arch-note{margin-top:8px;font-size:12px;color:var(--ink-3)}
+  .arch-down{display:flex;align-items:center;gap:8px;margin-left:calc(83% - 1px);height:34px;font-size:11.5px;color:var(--ink-3)}
+  .arch-down i{width:2px;height:100%;background:#9aa4b6;position:relative}
+  .arch-down i::after{content:"";position:absolute;left:-4px;bottom:-2px;border-top:7px solid #9aa4b6;border-left:5px solid transparent;border-right:5px solid transparent}
+  .arch-ext{margin-left:calc(83% - 90px);width:180px;text-align:center;border:1px solid #9aa4b6;border-radius:10px;padding:8px;background:#fff;font-weight:600;color:var(--ink);font-size:13px}
+  @media (max-width:980px){.wrap{grid-template-columns:1fr}nav.toc{position:static;max-height:none}.grid2{grid-template-columns:1fr}
+    .arch-row{flex-direction:column;align-items:stretch}.arch-link{width:auto;height:30px}.arch-down,.arch-ext{margin-left:0}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<nav class="toc">
+  <div class="t">目录</div>
+  <ol>
+    <li><a href="#s1">定位与范围</a></li>
+    <li><a href="#s2">术语</a></li>
+    <li><a href="#s3">与其他模块的关系</a></li>
+    <li><a href="#s4">功能清单</a></li>
+    <li><a href="#s5">领域模型与状态</a></li>
+    <li><a href="#s6">数据模型</a></li>
+    <li><a href="#s7">文件格式、存储与查看</a></li>
+    <li><a href="#s8">版本规则</a></li>
+    <li><a href="#s9">在流程中的使用</a></li>
+    <li><a href="#s10">API</a></li>
+    <li><a href="#s11">权限</a></li>
+    <li><a href="#s12">页面设计</a></li>
+    <li><a href="#s13">审计</a></li>
+    <li><a href="#s14">异常与边界</a></li>
+    <li><a href="#s15">非功能</a></li>
+    <li><a href="#s16">测试要点</a></li>
+    <li><a href="#s17">落地计划</a></li>
+    <li><a href="#s18">待确认</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<header class="hero">
+  <p class="kicker">AI TeamFlow · Detailed Design</p>
+  <h1>文件模板模块</h1>
+  <p class="lede">文件模板是一份<b>带版本的 Markdown 规则文件</b>，写明「某件事该怎么做、做到什么样」。流程中的节点通过选用文件模板，把规则交给 AI Agent：现在用于规定<b>产物的格式与写作要求</b>，未来用于写<b>自动准出的判定规则</b>。模板由平台统一维护、所有团队共用；进行中的节点不受模板更新影响。</p>
+  <div class="meta"><span>只支持 Markdown</span><span>平台统一定义</span><span>文件即规则</span><span>不解析文件内容</span><span>版本不可变</span><span>开工即锁定</span><span>依赖：Atlas AI Agent</span></div>
+</header>
+
+<!-- 01 -->
+<section id="s1">
+  <h2><span class="num">01</span>定位与范围</h2>
+  <p>文件模板回答一个问题：<b>「这件事的规则是什么」</b>。它只管规则文件本身，不管某次流程实际产出了什么。</p>
+  <table>
+    <tr><th style="width:18%">用途</th><th>说明</th><th style="width:12%">阶段</th></tr>
+    <tr><td>产物格式</td><td>流程模板的节点为自己的产物选用一个文件模板，Agent 按模板产出（如 PRD 编写规范）。</td><td><span class="tag new">P1</span></td></tr>
+    <tr><td>自动准出规则</td><td>节点的准出评审可选用一个文件模板作为判定规则，由 AI 按规则自动判断能否准出。本文只预留引用方式（§9.3），功能由流程模块后续设计。</td><td><span class="tag p2">预留</span></td></tr>
+  </table>
+  <table>
+    <tr><th style="width:18%">在范围内</th><td>文件模板的增、改、停用；Markdown 文件上传与版本管理；在线查看与下载；查询被哪些流程模板节点引用；向流程模块提供「该用哪个版本、内容是什么」。</td></tr>
+    <tr><th>不在范围内</th><td><b>不解析文件内容</b>（不提取章节、不做结构化）；流程实例中实际产物的存储与评审（流程模块）；流程模板编排（流程模板模块）；自动准出的判定逻辑（流程模块，未来）；Agent 本身的运行（Atlas）。</td></tr>
+  </table>
+  <div class="callout rule"><b class="l">设计原则</b>
+    <ol style="margin:0">
+      <li><b>文件即规则</b>：规则的唯一来源是上传的 Markdown 文件。平台不解析、不转换，原样交给 Agent 阅读。</li>
+      <li><b>只支持 Markdown</b>：纯文本、可读、可对比，能直接放进 Agent 的指令里（§5.2）。</li>
+      <li><b>模板与用途解耦</b>：文件模板不知道自己被用来规定产物还是判定准出，用途由引用它的地方决定。</li>
+      <li><b>版本不可变</b>：上传即产生新版本，旧版本永不修改，任何产物都能追溯到当时依据的那一版。</li>
+      <li><b>开工即锁定</b>：节点开始执行时锁定当时的生效版本；之后模板再更新，进行中的节点不变。</li>
+    </ol>
+  </div>
+</section>
+
+<!-- 02 -->
+<section id="s2">
+  <h2><span class="num">02</span>术语</h2>
+  <table>
+    <tr><th style="width:18%">术语</th><th>含义</th></tr>
+    <tr><td>文件模板</td><td>一份规则的定义，如「PRD 编写规范」。有名称、说明、图标、用途标签，以及一个<b>生效版本</b>。</td></tr>
+    <tr><td>模板文件</td><td>某个版本对应的 Markdown 文件（<code>.md</code>，UTF-8）。</td></tr>
+    <tr><td>模板版本</td><td>某次上传形成的不可变快照：Markdown 内容 + 更新说明。版本号 v1、v2… 在同一模板内递增。</td></tr>
+    <tr><td>生效版本</td><td>新开工的节点将使用的版本。每个模板最多一个；未上传文件时为空。</td></tr>
+    <tr><td>锁定版本</td><td>某个流程节点开工时记录下的版本，该节点之后一直用它。</td></tr>
+    <tr><td>用途标签</td><td>产物格式 / 评审规则 / 其他。只用于列表筛选与选择时的提示，<b>不限制</b>模板被用在哪里。</td></tr>
+    <tr><td>产物</td><td>流程节点的输出，名称由节点定义。不属于本模块。</td></tr>
+  </table>
+</section>
+
+<!-- 03 -->
+<section id="s3">
+  <h2><span class="num">03</span>与其他模块的关系</h2>
+  <div class="arch">
+    <div class="arch-sys">
+      <div class="arch-sys-t">AI TeamFlow</div>
+      <div class="arch-row">
+        <div class="arch-box me">
+          <b>文件模板模块</b><span class="muted">（本文）</span>
+          <ul><li>文件模板</li><li>版本（不可变）</li><li>Markdown 内容（存数据库）</li></ul>
+        </div>
+        <div class="arch-link"><span>被引用</span><i class="l"></i></div>
+        <div class="arch-box">
+          <b>流程模板模块</b>
+          <ul><li>节点产物 → 文件模板</li><li>节点准出规则 → 文件模板（预留）</li><li>只存模板 id，不存版本</li></ul>
+        </div>
+        <div class="arch-link"><span>实例化</span><i class="r"></i></div>
+        <div class="arch-box">
+          <b>流程模块</b><span class="muted">（项目 / 流程实例）</span>
+          <ul><li>开工时锁定版本</li><li>把模板内容交给 Agent</li><li>自动准出（未来）</li></ul>
+        </div>
+      </div>
+      <div class="arch-note">文件模板模块 ──▶ 流程模块：提供锁定版本的 Markdown 内容（只读）</div>
+    </div>
+    <div class="arch-down"><i></i><span>节点执行（唯一外部依赖）</span></div>
+    <div class="arch-ext">Atlas AI Agent</div>
+  </div>
+  <table>
+    <tr><th style="width:20%">对方</th><th>关系</th><th style="width:30%">接口</th></tr>
+    <tr><td>流程模板模块</td><td>节点配置里选择文件模板，保存模板 id，不存版本 —— 文件模板升级时流程模板不需要重新发布。</td><td>本模块提供列表 / 详情；对方提供「被引用节点」查询</td></tr>
+    <tr><td>流程模块</td><td>节点开工时取生效版本并锁定；把锁定版本的内容交给 Agent（§9）。</td><td><code>resolve</code>、<code>content</code></td></tr>
+    <tr><td>Atlas AI Agent</td><td>本模块<b>不调用</b> Atlas。由流程模块在启动节点会话时把模板内容放进 Agent 指令。</td><td>无</td></tr>
+  </table>
+  <div class="callout warn"><b class="l">边界</b>AI TeamFlow 是独立系统，只使用 Atlas 的 AI Agent 能力。本模块的存储、权限、审计都在 TeamFlow 内部实现，不复用 Atlas 的任何其他模块。</div>
+</section>
+
+<!-- 04 -->
+<section id="s4">
+  <h2><span class="num">04</span>功能清单</h2>
+  <p>对应原型 <code>#/file-templates</code>。</p>
+  <table>
+    <tr><th style="width:5%">#</th><th style="width:18%">功能</th><th>说明</th><th style="width:9%">阶段</th></tr>
+    <tr><td>F1</td><td>模板列表</td><td>卡片网格：图标、名称、说明、用途标签、模板文件（名称 / 大小 / 版本）、被引用节点数、更新时间；未上传文件的标「未上传模板文件」并排在前面；可按用途筛选。</td><td><span class="tag new">P1</span></td></tr>
+    <tr><td>F2</td><td>新建模板</td><td>填写名称、说明、图标、用途标签；可同时上传首个 .md 文件，也可稍后上传。</td><td><span class="tag new">P1</span></td></tr>
+    <tr><td>F3</td><td>编辑基本信息</td><td>名称、说明、图标、用途标签可改；不影响已有版本与引用。</td><td><span class="tag new">P1</span></td></tr>
+    <tr><td>F4</td><td>上传新版本</td><td>选择 .md 文件 + 填写更新说明 → 生成新版本，立即成为生效版本。</td><td><span class="tag new">P1</span></td></tr>
+    <tr><td>F5</td><td>在线查看</td><td>安全渲染 Markdown，可切换「渲染 / 源码」；可切换查看历史版本。</td><td><span class="tag new">P1</span></td></tr>
+    <tr><td>F6</td><td>下载</td><td>下载任一版本的 .md 文件。</td><td><span class="tag new">P1</span></td></tr>
+    <tr><td>F7</td><td>版本历史</td><td>版本号、上传人、时间、更新说明、文件名与大小；标出生效版本。</td><td><span class="tag new">P1</span></td></tr>
+    <tr><td>F8</td><td>引用该模板的节点</td><td>列出引用它的流程模板、节点，以及引用方式（产物格式 / 准出规则），可跳转。</td><td><span class="tag new">P1</span></td></tr>
+    <tr><td>F9</td><td>停用 / 启用</td><td>停用后流程模板无法再新选它；已引用的节点保留（§14）。</td><td><span class="tag new">P1</span></td></tr>
+    <tr><td>F10</td><td>版本对比</td><td>任意两个版本的文本行级差异（增 / 删高亮）。Markdown 是纯文本，实现成本低。</td><td><span class="tag p2">P2</span></td></tr>
+    <tr><td>F11</td><td>回退生效版本</td><td>把某个历史版本重新设为生效版本：生成一个新版本号，内容与该历史版本相同。</td><td><span class="tag p2">P2</span></td></tr>
+    <tr><td>F12</td><td>在线编辑</td><td>在页面上直接编辑 Markdown，保存即生成新版本（省去本地编辑再上传）。</td><td><span class="tag p2">P2</span></td></tr>
+  </table>
+</section>
+
+<!-- 05 -->
+<section id="s5">
+  <h2><span class="num">05</span>领域模型与状态</h2>
+<div class="flow">FileTemplate（文件模板）                 1 ──── * FileTemplateVersion（模板版本，不可变）
+  id, name, icon, description              id, template_id, version_no
+  usage: artifact | review_rule | other    file_name, content（Markdown）, size_bytes, sha256
+  status: active | disabled                change_note
+  current_version_id  ──────────────────▶  uploaded_by, uploaded_at</div>
+
+  <h3>5.1 模板状态</h3>
+  <table>
+    <tr><th style="width:16%">状态</th><th>含义</th><th style="width:34%">可做的操作</th></tr>
+    <tr><td><code>active</code></td><td>正常。可能还没有生效版本（未上传文件）。</td><td>上传版本、编辑、停用</td></tr>
+    <tr><td><code>disabled</code></td><td>停用。流程模板节点不能再新选它；已引用的不受影响。</td><td>启用、查看、下载</td></tr>
+  </table>
+  <p>版本没有状态：上传成功即可用，立即成为生效版本。不提供物理删除版本。</p>
+
+  <h3>5.2 为什么只支持 Markdown、且不解析</h3>
+  <table>
+    <tr><th style="width:24%">考虑</th><th>结论</th></tr>
+    <tr><td>Agent 读得懂</td><td>Markdown 是纯文本，可以<b>直接嵌入 Agent 指令</b>，不依赖 Agent 读取 Word / Excel / PDF 的能力</td></tr>
+    <tr><td>人读得懂</td><td>标题、列表、表格都能表达规则，在线查看只需渲染 Markdown</td></tr>
+    <tr><td>可追溯</td><td>版本之间可以做文本 diff，看得清规则改了什么</td></tr>
+    <tr><td>不解析</td><td>规则的写法多样（产物格式偏「章节 + 要求」，准出规则偏「检查项 + 判定标准」），平台不强加结构，原样交给 Agent</td></tr>
+    <tr><td>代价</td><td>已有的 Word / PDF 规范需要先转成 Markdown；平台侧不做「章节覆盖核对」，靠 Agent 自查与人工评审</td></tr>
+  </table>
+</section>
+
+<!-- 06 -->
+<section id="s6">
+  <h2><span class="num">06</span>数据模型</h2>
+  <h3>6.1 <code>file_template</code></h3>
+  <table>
+    <tr><th style="width:26%">字段</th><th style="width:18%">类型</th><th>说明</th></tr>
+    <tr><td><code>id</code></td><td>uuid PK</td><td></td></tr>
+    <tr><td><code>name</code></td><td>varchar(64)</td><td>如「PRD 编写规范」，全局唯一</td></tr>
+    <tr><td><code>icon</code></td><td>varchar(16)</td><td>emoji 或图标 key</td></tr>
+    <tr><td><code>description</code></td><td>text</td><td>写明这份规则用于什么</td></tr>
+    <tr><td><code>usage</code></td><td>varchar(16)</td><td><code>artifact</code> 产物格式 / <code>review_rule</code> 评审规则 / <code>other</code>；只用于筛选</td></tr>
+    <tr><td><code>status</code></td><td>varchar(16)</td><td><code>active</code> / <code>disabled</code></td></tr>
+    <tr><td><code>current_version_id</code></td><td>uuid NULL FK</td><td>生效版本；NULL = 未上传文件</td></tr>
+    <tr><td><code>row_version</code></td><td>int</td><td>乐观锁，防并发上传互相覆盖生效版本（§14）</td></tr>
+    <tr><td><code>created_by / created_at / updated_by / updated_at</code></td><td></td><td></td></tr>
+  </table>
+
+  <h3>6.2 <code>file_template_version</code></h3>
+  <table>
+    <tr><th style="width:26%">字段</th><th style="width:18%">类型</th><th>说明</th></tr>
+    <tr><td><code>id</code></td><td>uuid PK</td><td></td></tr>
+    <tr><td><code>template_id</code></td><td>uuid FK</td><td></td></tr>
+    <tr><td><code>version_no</code></td><td>int</td><td>模板内递增；<code>UNIQUE(template_id, version_no)</code></td></tr>
+    <tr><td><code>file_name</code></td><td>varchar(255)</td><td>上传时的文件名，下载时沿用</td></tr>
+    <tr><td><code>content</code></td><td>mediumtext</td><td>Markdown 原文（UTF-8，去掉 BOM，其余原样保存）</td></tr>
+    <tr><td><code>size_bytes</code></td><td>int</td><td>≤ 100 KB（§7）</td></tr>
+    <tr><td><code>sha256</code></td><td>char(64)</td><td>内容哈希；与生效版本相同则拒绝上传（「内容未变化」）</td></tr>
+    <tr><td><code>change_note</code></td><td>varchar(500)</td><td>更新说明，必填</td></tr>
+    <tr><td><code>uploaded_by / uploaded_at</code></td><td></td><td></td></tr>
+  </table>
+  <p>版本行写入后不允许任何修改。列表接口不返回 <code>content</code>，只在查看 / 下载 / 内部取内容时读取。</p>
+
+  <h3>6.3 引用字段（由其他模块持有）</h3>
+  <table>
+    <tr><th style="width:40%">表.字段</th><th>说明</th><th style="width:10%">阶段</th></tr>
+    <tr><td><code>flow_template_node.artifact_file_template_id</code></td><td>节点产物选用的文件模板（不含版本）</td><td><span class="tag new">P1</span></td></tr>
+    <tr><td><code>process_node.artifact_file_template_version_id</code></td><td>节点<b>开工时</b>锁定的版本；NULL = 未选用或开工时无生效版本</td><td><span class="tag new">P1</span></td></tr>
+    <tr><td><code>flow_template_node.exit_rule_file_template_id</code></td><td>节点自动准出的规则文件</td><td><span class="tag p2">预留</span></td></tr>
+    <tr><td><code>process_node.exit_rule_file_template_version_id</code></td><td>开工时锁定的准出规则版本</td><td><span class="tag p2">预留</span></td></tr>
+  </table>
+  <p>两处引用都遵循同一条规则：流程模板存 id，流程节点开工时锁定版本。新增用途时只需在引用方加一对字段，本模块不需要改动。</p>
+</section>
+
+<!-- 07 -->
+<section id="s7">
+  <h2><span class="num">07</span>文件格式、存储与查看</h2>
+  <h3>7.1 文件格式</h3>
+  <table>
+    <tr><th style="width:22%">项</th><th>规则</th></tr>
+    <tr><td>扩展名</td><td>只接受 <code>.md</code>（也接受 <code>.markdown</code>，保存时统一）</td></tr>
+    <tr><td>编码</td><td>必须是合法 UTF-8；含 BOM 时去掉；含 NUL 字节视为二进制文件拒绝</td></tr>
+    <tr><td>大小</td><td>1 字节 ～ 100 KB。理由：内容要整段放进 Agent 指令（§9.1），过大会挤占上下文；规则写到 100 KB 以上通常也说明需要拆分</td></tr>
+    <tr><td>内容</td><td>不校验 Markdown 语法（任何文本都是合法 Markdown）；不允许为空白</td></tr>
+  </table>
+
+  <h3>7.2 存储</h3>
+  <p>Markdown 体积小，<b>直接存数据库</b>（<code>file_template_version.content</code>），不使用对象存储：</p>
+  <ul>
+    <li>上传：浏览器以 <code>multipart/form-data</code> 直接提交到「上传新版本」接口，服务端校验后与版本行同事务写入。</li>
+    <li>下载：服务端直接返回内容，<code>Content-Type: text/markdown; charset=utf-8</code>，<code>Content-Disposition: attachment</code>。</li>
+    <li>不可变：版本行只插入不更新；数据库账号对该表不授予 UPDATE / DELETE（或由触发器拒绝）。</li>
+  </ul>
+
+  <h3>7.3 在线查看</h3>
+  <table>
+    <tr><th style="width:22%">项</th><th>规则</th></tr>
+    <tr><td>渲染</td><td>前端渲染 Markdown（支持标题、列表、表格、代码块、引用）；可切换查看源码</td></tr>
+    <tr><td>安全</td><td>白名单渲染：不渲染原始 HTML、不执行脚本、不加载外链图片；链接强制新窗口打开并带 <code>noopener</code></td></tr>
+    <tr><td>历史版本</td><td>版本历史中点击任一版本即可查看其内容</td></tr>
+  </table>
+</section>
+
+<!-- 08 -->
+<section id="s8">
+  <h2><span class="num">08</span>版本规则</h2>
+  <table>
+    <tr><th style="width:24%">规则</th><th>说明</th></tr>
+    <tr><td>版本号</td><td>同一模板内从 v1 递增</td></tr>
+    <tr><td>生效版本</td><td>上传成功即成为生效版本，旧版本进入历史</td></tr>
+    <tr><td>锁定</td><td>流程节点<b>开工</b>（进入「人机协同中」）时锁定生效版本；被驳回回到本节点修改时<b>不重新锁定</b>，同一节点前后只用一套规则</td></tr>
+    <tr><td>打回到更早阶段</td><td>被打回的上游节点沿用它原来锁定的版本</td></tr>
+    <tr><td>流程模板的引用</td><td>只存模板 id，跟随生效版本；流程模板不需要因文件模板升级而重新发布</td></tr>
+  </table>
+<div class="flow">时间轴：  v2 生效 ─────────── v3 生效（上传新版本）──────────────▶
+节点 A：   开工锁定 v2 ─── 执行 ─── 驳回 ─── 修改（仍是 v2）─── 通过
+节点 B：                          开工锁定 v3 ─── 执行 ─── 通过</div>
+</section>
+
+<!-- 09 -->
+<section id="s9">
+  <h2><span class="num">09</span>在流程中的使用</h2>
+  <p>本模块只提供「锁定哪个版本」和「内容是什么」。如何交给 Agent、如何展示，由流程模块实现；这里约定接口与行为。</p>
+
+  <h3>9.1 产物格式：交给执行 Agent</h3>
+<div class="flow">节点开工 ──▶ resolve(模板 id) 得到生效版本 ──▶ 锁定到 process_node
+                                                     │
+          启动 Agent 会话 ◀── content(锁定版本) 取 Markdown 原文
+          · 原文直接嵌入给 Agent 的指令（不走附件）
+          · 指令写明：按「{模板名} v{n}」的结构与要求产出</div>
+<pre><span class="c"># 流程模块给 Agent 的指令片段（示例）</span>
+你在本节点要产出「PRD」。下面是本产物的文件模板《PRD 编写规范》v3，
+请严格按它的结构与要求产出；某部分确实不适用时写「不适用：原因」。产出后对照模板自查一遍再提交。
+
+&lt;file-template name="PRD 编写规范" version="3"&gt;
+{模板 Markdown 原文}
+&lt;/file-template&gt;</pre>
+  <table>
+    <tr><th style="width:24%">规则</th><th>说明</th></tr>
+    <tr><td>嵌入方式</td><td>原文放在定界标签中，与指令的其他部分分开；原文中若出现相同的结束标签，由流程模块转义</td></tr>
+    <tr><td>没有生效版本</td><td>指令中写明「该产物暂无文件模板，按通用结构产出」；节点页提示</td></tr>
+    <tr><td>自查</td><td>靠指令要求 Agent 对照模板自查；平台不做章节核对（不解析文件）</td></tr>
+  </table>
+
+  <h3>9.2 评审：展示依据版本</h3>
+  <p>准出 / 准入评审时，产物旁显示「依据：PRD 编写规范 v3」，可展开查看模板内容。若模板已有更新的生效版本，提示「模板已更新到 v4，本节点按 v3 执行」。</p>
+
+  <h3>9.3 自动准出规则（预留）</h3>
+  <p>未来节点可配置「自动准出」：选用一个文件模板（通常用途为评审规则）写明判定标准，节点提交准出时由 AI 读取「规则 + 产物」给出通过 / 不通过与理由。本模块为此需要的准备：</p>
+  <ul>
+    <li>引用方式与产物格式相同：流程模板存 id，节点开工时锁定版本（§6.3 预留字段）。</li>
+    <li>规则同样是 Markdown，能以同样方式嵌入判定用的 Agent 指令。</li>
+    <li>用途标签 <code>review_rule</code> 便于在配置自动准出时筛选；「引用该模板的节点」区分引用方式。</li>
+  </ul>
+  <p>判定由谁执行、结果如何与人工评审组合，属于流程模块的设计，不在本文范围。</p>
+</section>
+
+<!-- 10 -->
+<section id="s10">
+  <h2><span class="num">10</span>API</h2>
+  <p>前缀 <code>/api/v1</code>；内部接口 <code>/internal</code> 只对 TeamFlow 内部服务开放（服务间令牌）。</p>
+  <table>
+    <tr><th style="width:42%">接口</th><th>说明</th><th style="width:10%">权限</th></tr>
+    <tr><td><code>GET /file-templates</code></td><td>列表；含生效版本摘要（不含内容）、被引用节点数；支持 <code>usage</code>、<code>status</code> 过滤</td><td>成员</td></tr>
+    <tr><td><code>POST /file-templates</code></td><td>新建；body：name、icon、description、usage</td><td>管理员</td></tr>
+    <tr><td><code>GET /file-templates/{id}</code></td><td>详情；含生效版本元数据</td><td>成员</td></tr>
+    <tr><td><code>PATCH /file-templates/{id}</code></td><td>改基本信息；需带 <code>row_version</code></td><td>管理员</td></tr>
+    <tr><td><code>POST /file-templates/{id}/disable</code> · <code>/enable</code></td><td>停用 / 启用</td><td>管理员</td></tr>
+    <tr><td><code>DELETE /file-templates/{id}</code></td><td>仅限无引用且从未被锁定（§14），否则 409</td><td>管理员</td></tr>
+    <tr><td><code>POST /file-templates/{id}/versions</code></td><td>上传新版本：<code>multipart/form-data</code>，字段 file、change_note、row_version；校验 → 建版本 → 设为生效版本</td><td>管理员</td></tr>
+    <tr><td><code>GET /file-templates/{id}/versions</code></td><td>版本历史（分页，不含内容）</td><td>成员</td></tr>
+    <tr><td><code>GET /file-templates/{id}/versions/{no}</code></td><td>某版本的元数据与 Markdown 内容（用于在线查看）</td><td>成员</td></tr>
+    <tr><td><code>GET /file-templates/{id}/versions/{no}/download</code></td><td>下载 .md 文件</td><td>成员</td></tr>
+    <tr><td><code>GET /file-templates/{id}/references</code></td><td>引用它的流程模板节点及引用方式（数据由流程模板模块提供）</td><td>成员</td></tr>
+    <tr><td><code>GET /internal/file-templates/{id}/resolve</code></td><td>返回生效版本 id；无则 404 <code>no_current_version</code>。流程模块开工时调用并锁定</td><td>内部</td></tr>
+    <tr><td><code>GET /internal/file-template-versions/{id}/content</code></td><td>返回该版本的名称、版本号与 Markdown 原文，供流程模块嵌入 Agent 指令</td><td>内部</td></tr>
+  </table>
+  <h3>10.1 错误码</h3>
+  <table>
+    <tr><th style="width:30%">code</th><th style="width:10%">HTTP</th><th>含义</th></tr>
+    <tr><td><code>name_conflict</code></td><td>409</td><td>名称重复</td></tr>
+    <tr><td><code>stale_row_version</code></td><td>409</td><td>他人已修改（如同时上传），刷新后重试</td></tr>
+    <tr><td><code>unsupported_file_type</code></td><td>422</td><td>不是 .md 文件</td></tr>
+    <tr><td><code>invalid_encoding</code></td><td>422</td><td>不是合法的 UTF-8 文本</td></tr>
+    <tr><td><code>file_too_large</code></td><td>422</td><td>超过 100 KB</td></tr>
+    <tr><td><code>empty_content</code></td><td>422</td><td>文件为空或只有空白</td></tr>
+    <tr><td><code>content_unchanged</code></td><td>422</td><td>与生效版本内容相同</td></tr>
+    <tr><td><code>template_in_use</code></td><td>409</td><td>被引用或被锁定过，不能删除</td></tr>
+    <tr><td><code>template_disabled</code></td><td>409</td><td>已停用，不能上传新版本（需先启用）</td></tr>
+  </table>
+</section>
+
+<!-- 11 -->
+<section id="s11">
+  <h2><span class="num">11</span>权限</h2>
+  <table>
+    <tr><th style="width:24%">操作码</th><th>能做什么</th></tr>
+    <tr><td><code>file_template:view</code></td><td>只读：列表、详情、在线查看、下载、查看引用（三个角色）</td></tr>
+    <tr><td><code>file_template:manage</code></td><td>新建、编辑、上传版本、停用 / 启用、删除（平台管理员）</td></tr>
+    <tr><td>内部服务</td><td>resolve、content</td></tr>
+  </table>
+  <p>文件模板是平台级资产、所有团队共用。操作码登记在用户中心，由角色授予：平台管理员管理，团队管理员与团队成员只读，见<a href="permission-design.html">权限设计</a>。准出规则直接影响流程能否推进，写操作只给少数人。</p>
+</section>
+
+<!-- 12 -->
+<section id="s12">
+  <h2><span class="num">12</span>页面设计</h2>
+  <p>以原型 <code>#/file-templates</code> 为准。</p>
+  <div class="grid2">
+    <div class="box">
+      <h4>列表页 <code>#/file-templates</code></h4>
+      <ul>
+        <li>筛选：全部 / 产物格式 / 评审规则 / 其他；可显示已停用</li>
+        <li>排序：未上传文件的排前，其余按更新时间倒序</li>
+        <li>卡片：图标、名称、用途标签、说明、文件（名称 / 大小 / 版本）、被引用节点数、更新日期</li>
+        <li>停用的置灰并标「已停用」；非管理员不显示「新建文件模板」</li>
+      </ul>
+    </div>
+    <div class="box">
+      <h4>详情页 <code>#/file-templates/:id</code></h4>
+      <ul>
+        <li>模板文件卡：文件名、大小、上传人、时间、更新说明、生效版本；「下载」「上传新版本」</li>
+        <li>内容区：渲染后的 Markdown，可切换「渲染 / 源码」</li>
+        <li>右侧：版本历史（点击切换查看历史版本）、引用该模板的节点（标明产物格式 / 准出规则）</li>
+      </ul>
+    </div>
+  </div>
+  <h3>上传新版本弹窗</h3>
+  <table>
+    <tr><th style="width:24%">字段</th><th>规则</th></tr>
+    <tr><td>文件</td><td>拖放或选择，只接受 .md；前端先校验扩展名与大小（≤ 100 KB），以服务端校验为准；选中后显示内容预览，确认无误再提交</td></tr>
+    <tr><td>更新说明</td><td>必填，≤ 500 字</td></tr>
+    <tr><td>影响提示</td><td>「上传后，新开工的节点使用新版本；进行中的 N 个节点继续使用 v3」—— N 来自流程模块的统计</td></tr>
+  </table>
+  <h3>流程模板节点配置中的选择器</h3>
+  <p>节点「产物」处选择文件模板：默认只列用途为「产物格式」的，可切换显示全部；列表显示生效版本或「未上传模板文件」；已停用的不可选。</p>
+</section>
+
+<!-- 13 -->
+<section id="s13">
+  <h2><span class="num">13</span>审计</h2>
+  <p>写操作与业务数据同事务写入 TeamFlow 全局审计表 <code>audit_log</code>，本模块只定义事件。</p>
+  <table>
+    <tr><th style="width:34%">事件</th><th>记录内容</th></tr>
+    <tr><td><code>file_template.created</code></td><td>名称、用途</td></tr>
+    <tr><td><code>file_template.updated</code></td><td>变更前后字段</td></tr>
+    <tr><td><code>file_template.version_uploaded</code></td><td>版本号、文件名、大小、sha256、更新说明；旧生效版本 → 新生效版本</td></tr>
+    <tr><td><code>file_template.disabled</code> / <code>enabled</code> / <code>deleted</code></td><td>操作人</td></tr>
+  </table>
+</section>
+
+<!-- 14 -->
+<section id="s14">
+  <h2><span class="num">14</span>异常与边界</h2>
+  <table>
+    <tr><th style="width:30%">场景</th><th>处理</th></tr>
+    <tr><td>两人同时上传新版本</td><td>上传时校验 <code>row_version</code>，后到的返回 <code>stale_row_version</code>，不建版本；提示刷新后决定是否重新上传</td></tr>
+    <tr><td>节点开工时模板没有生效版本</td><td>锁定为 NULL，Agent 按通用结构产出；节点页与评审页提示「暂无文件模板」</td></tr>
+    <tr><td>节点开工时模板已停用</td><td>仍锁定其生效版本并正常执行（停用只阻止新选用）；流程模板页提示该节点引用了已停用的模板</td></tr>
+    <tr><td>删除</td><td>存在任何流程模板节点引用，或任何流程节点锁定过它的版本 → 409 <code>template_in_use</code>，引导改为停用</td></tr>
+    <tr><td>上传非 .md / 非 UTF-8 / 超大 / 空文件</td><td>分别返回 <code>unsupported_file_type</code> / <code>invalid_encoding</code> / <code>file_too_large</code> / <code>empty_content</code>，弹窗内就地提示</td></tr>
+    <tr><td>模板中含有类似「忽略以上要求」的文字</td><td>模板由平台管理员维护，视为可信规则；嵌入时用定界标签与指令其他部分隔开（§9.1），降低误读</td></tr>
+  </table>
+</section>
+
+<!-- 15 -->
+<section id="s15">
+  <h2><span class="num">15</span>非功能</h2>
+  <table>
+    <tr><th style="width:24%">项</th><th>要求</th></tr>
+    <tr><td>规模</td><td>模板数百级、单模板版本数十级；单版本 ≤ 100 KB，总量在 MB 级，数据库存储无压力；列表不分页，版本历史分页（每页 20）</td></tr>
+    <tr><td>性能</td><td>列表 / 详情 P95 &lt; 300 ms；resolve P95 &lt; 50 ms（可缓存，按 <code>row_version</code> 失效）；content P95 &lt; 50 ms（版本不可变，可长期缓存）</td></tr>
+    <tr><td>可用性</td><td>只依赖数据库，没有额外的外部存储依赖</td></tr>
+    <tr><td>安全</td><td>只接受 UTF-8 文本；在线查看白名单渲染，不渲染原始 HTML、不加载外链资源</td></tr>
+  </table>
+</section>
+
+<!-- 16 -->
+<section id="s16">
+  <h2><span class="num">16</span>测试要点</h2>
+  <ul>
+    <li>上传 → 立即成为生效版本；版本号递增；相同内容拒绝</li>
+    <li>格式校验：非 .md、改了扩展名的二进制文件、GBK 编码、带 BOM、超过 100 KB、空文件、只有空白</li>
+    <li>并发上传：只有一个成功，另一个返回 <code>stale_row_version</code></li>
+    <li>节点开工锁定版本；之后上传新版本，该节点（含驳回后修改、被打回）仍用旧版本；新开工节点用新版本</li>
+    <li>在线查看：Markdown 中的 HTML、脚本、外链图片不被执行或加载</li>
+    <li>content 接口返回的原文与上传文件逐字节一致（BOM 除外）</li>
+    <li>删除保护：被引用 / 被锁定过的不可删；停用后不可新选、已引用的照常执行</li>
+    <li>权限：非管理员调用写接口返回 403；内部接口不带令牌返回 401</li>
+  </ul>
+</section>
+
+<!-- 17 -->
+<section id="s17">
+  <h2><span class="num">17</span>落地计划</h2>
+  <table>
+    <tr><th style="width:12%">阶段</th><th>内容</th></tr>
+    <tr><td>M1</td><td>表结构；新建 / 编辑 / 列表 / 详情；上传新版本与格式校验；下载；版本历史；停用 / 启用；Markdown 在线查看</td></tr>
+    <tr><td>M2</td><td>被引用节点查询；与流程模块对接 resolve、锁定版本、content 接口；评审页展示依据版本</td></tr>
+    <tr><td>M3（P2）</td><td>版本对比、回退生效版本、在线编辑；配合流程模块的自动准出启用 <code>exit_rule_file_template_id</code></td></tr>
+  </table>
+</section>
+
+<!-- 18 -->
+<section id="s18">
+  <h2><span class="num">18</span>待确认</h2>
+  <table>
+    <tr><th style="width:5%">#</th><th style="width:36%">问题</th><th>当前假设</th></tr>
+    <tr><td>1</td><td>新版本是否需要审批后才生效？</td><td>不需要，上传即生效。只有平台管理员能上传；准出规则类模板在启用自动准出后可能需要审批（随自动准出一起设计）</td></tr>
+    <tr><td>2</td><td>团队能否有自己的模板变体？</td><td>P1 不支持，全平台一份</td></tr>
+  </table>
+  <p class="muted">已确认：单个模板上限 100 KB；原型已同步为「文件模板」（路由 <code>#/file-templates</code>，只接受 .md，Markdown 在线查看）。</p>
+</section>
+
+</main>
+</div>
+</body>
+</html>

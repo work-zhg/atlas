@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>组织管理模块 · 详细设计 · 用户中心</title>
+<style>
+  :root{
+    --bg:#f6f7f9;--surface:#fff;--surface-2:#fbfbfd;--ink:#0f172a;--ink-2:#334155;--ink-3:#64748b;--ink-4:#94a3b8;
+    --line:#e6e8ee;--line-2:#eef0f4;--primary:#4f46e5;--primary-weak:#eef0ff;
+    --warning:#b45309;--warning-weak:#fef3e2;
+    --mono:"JetBrains Mono","SF Mono",ui-monospace,Menlo,Consolas,monospace;
+    --font:"Inter","PingFang SC","Microsoft YaHei",system-ui,-apple-system,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink-2);font-family:var(--font);font-size:14.5px;line-height:1.75}
+  a{color:var(--primary);text-decoration:none}
+  .wrap{display:grid;grid-template-columns:240px minmax(0,1fr);gap:36px;max-width:1240px;margin:0 auto;padding:32px 28px 80px}
+  nav.toc{position:sticky;top:24px;align-self:start;max-height:calc(100vh - 48px);overflow:auto;font-size:13px}
+  nav.toc .t{font-size:11px;letter-spacing:.12em;color:var(--ink-4);text-transform:uppercase;margin-bottom:8px;font-weight:600}
+  nav.toc ol{list-style:none;margin:0;padding:0;counter-reset:s}
+  nav.toc li{counter-increment:s}
+  nav.toc a{display:block;padding:4px 8px;border-radius:6px;color:var(--ink-3)}
+  nav.toc a::before{content:counter(s,decimal-leading-zero) "  ";font-family:var(--mono);font-size:11px;color:var(--ink-4)}
+  nav.toc a:hover{background:#fff;color:var(--ink)}
+  header.hero{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:28px 30px;margin-bottom:28px}
+  .kicker{font-family:var(--mono);font-size:11.5px;letter-spacing:.14em;color:var(--primary);text-transform:uppercase;margin:0 0 6px}
+  h1{font-size:26px;color:var(--ink);margin:0 0 10px;letter-spacing:-.3px}
+  .lede{margin:0;font-size:15px}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+  .meta span{font-size:12px;padding:2px 10px;border-radius:999px;background:var(--primary-weak);color:var(--primary)}
+  section{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:24px 28px;margin-bottom:20px}
+  h2{font-size:19px;color:var(--ink);margin:0 0 14px;display:flex;align-items:center;gap:10px}
+  h2 .num{font-family:var(--mono);font-size:12px;color:#fff;background:var(--primary);border-radius:6px;padding:2px 7px}
+  h3{font-size:15.5px;color:var(--ink);margin:22px 0 8px}
+  p{margin:0 0 12px}
+  code{font-family:var(--mono);font-size:12.5px;background:#f1f3f7;border:1px solid var(--line-2);border-radius:4px;padding:0 5px;color:#be185d}
+  table{width:100%;border-collapse:collapse;font-size:13.5px;margin:6px 0 14px}
+  th{text-align:left;background:var(--surface-2);color:var(--ink-3);font-weight:600;font-size:12.5px}
+  th,td{border:1px solid var(--line);padding:8px 10px;vertical-align:top}
+  td code{white-space:nowrap}
+  pre{background:#0f172a;color:#e2e8f0;border-radius:10px;padding:14px 16px;font-family:var(--mono);font-size:12.5px;line-height:1.65;overflow:auto;margin:6px 0 14px;white-space:pre-wrap}
+  pre .c{color:#94a3b8}
+  .callout{border:1px solid;border-left-width:4px;border-radius:10px;padding:10px 14px;margin:8px 0 14px;font-size:13.5px}
+  .callout b.l{display:block;font-size:11.5px;letter-spacing:.1em;margin-bottom:3px}
+  .rule{background:var(--primary-weak);border-color:#c7c9f5;color:#312e81}
+  .warn{background:var(--warning-weak);border-color:#f6d39b;color:#7c2d12}
+  .tag{display:inline-block;font-size:11.5px;padding:0 8px;border-radius:999px;border:1px solid var(--line);background:var(--surface-2);color:var(--ink-3);white-space:nowrap}
+  .tag.new{color:var(--primary);border-color:#c7c9f5;background:var(--primary-weak)}
+  .tag.p2{color:var(--warning);border-color:#f6d39b;background:var(--warning-weak)}
+  .flow{font-family:var(--mono);font-size:12.5px;line-height:1.75;background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:14px 16px;white-space:pre;overflow:auto;margin:6px 0 14px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .box{border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:var(--surface-2)}
+  .box h4{margin:0 0 6px;font-size:13.5px;color:var(--ink)}
+  ul,ol{margin:0 0 12px;padding-left:20px}
+  li{margin:2px 0}
+  .muted{color:var(--ink-4);font-size:12px}
+  /* 关系图 */
+  .arch{margin:6px 0 14px}
+  .arch-sys{border:1.5px dashed #c7c9f5;border-radius:12px;padding:12px 14px;background:#fafaff}
+  .arch-sys-t{font-size:12px;font-weight:700;color:var(--primary);margin-bottom:8px;letter-spacing:.06em}
+  .arch-row{display:flex;align-items:center}
+  .arch-box{flex:1;background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:13px}
+  .arch-box.me{border-color:var(--primary);box-shadow:0 0 0 3px rgba(79,70,229,.1)}
+  .arch-box b{color:var(--ink)}
+  .arch-box ul{margin:6px 0 0;padding-left:16px;color:var(--ink-3);font-size:12.5px}
+  .arch-link{width:96px;flex:none;text-align:center;font-size:11.5px;color:var(--ink-3);position:relative;padding-bottom:10px}
+  .arch-link i{position:absolute;left:8px;right:8px;bottom:0;height:2px;background:#9aa4b6}
+  .arch-link i.r::after{content:"";position:absolute;right:-2px;top:-4px;border-left:7px solid #9aa4b6;border-top:5px solid transparent;border-bottom:5px solid transparent}
+  .arch-link i.l::before{content:"";position:absolute;left:-2px;top:-4px;border-right:7px solid #9aa4b6;border-top:5px solid transparent;border-bottom:5px solid transparent}
+  .arch-note{margin-top:8px;font-size:12px;color:var(--ink-3)}
+  .arch-down{display:flex;align-items:center;gap:8px;margin-left:calc(83% - 1px);height:34px;font-size:11.5px;color:var(--ink-3)}
+  .arch-down i{width:2px;height:100%;background:#9aa4b6;position:relative}
+  .arch-down i::after{content:"";position:absolute;left:-4px;bottom:-2px;border-top:7px solid #9aa4b6;border-left:5px solid transparent;border-right:5px solid transparent}
+  .arch-ext{margin-left:calc(83% - 90px);width:180px;text-align:center;border:1px solid #9aa4b6;border-radius:10px;padding:8px;background:#fff;font-weight:600;color:var(--ink);font-size:13px}
+  @media (max-width:980px){.wrap{grid-template-columns:1fr}nav.toc{position:static;max-height:none}.grid2{grid-template-columns:1fr}
+    .arch-row{flex-direction:column;align-items:stretch}.arch-link{width:auto;height:30px}.arch-down,.arch-ext{margin-left:0}}
+  .sm{width:100%;height:auto;display:block;margin:6px 0 14px;background:var(--surface-2);border:1px solid var(--line);border-radius:10px}
+  .ok{color:#15803d;font-weight:700}.no{color:var(--ink-4)}
+  .diff td:first-child{white-space:nowrap}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<nav class="toc">
+  <div class="t">目录</div>
+  <ol>
+    <li><a href="#s1">定位与范围</a></li>
+    <li><a href="#s2">术语</a></li>
+    <li><a href="#s3">与其他模块的关系</a></li>
+    <li><a href="#s4">功能清单</a></li>
+    <li><a href="#s5">领域模型</a></li>
+    <li><a href="#s6">部门树规则</a></li>
+    <li><a href="#s7">部门负责人</a></li>
+    <li><a href="#s8">直属上级计算</a></li>
+    <li><a href="#s9">新建部门</a></li>
+    <li><a href="#s10">编辑与移动部门</a></li>
+    <li><a href="#s11">删除部门</a></li>
+    <li><a href="#s12">部门成员</a></li>
+    <li><a href="#s13">变更的影响与生效</a></li>
+    <li><a href="#s14">数据模型</a></li>
+    <li><a href="#s15">树的存储与查询</a></li>
+    <li><a href="#s16">API</a></li>
+    <li><a href="#s17">权限</a></li>
+    <li><a href="#s18">页面设计</a></li>
+    <li><a href="#s19">审计</a></li>
+    <li><a href="#s20">异常与边界</a></li>
+    <li><a href="#s21">非功能</a></li>
+    <li><a href="#s22">与原型的差异</a></li>
+    <li><a href="#s23">测试要点</a></li>
+    <li><a href="#s24">落地计划</a></li>
+    <li><a href="#s25">待确认</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<header class="hero">
+  <p class="kicker">User Center · Detailed Design</p>
+  <h1>组织管理模块</h1>
+  <p class="lede">组织管理维护公司的<b>部门树</b>、各部门的<b>负责人</b>和<b>部门成员</b>。它是其他模块的基础：用户必须属于一个部门；<b>直属上级</b>按部门负责人实时计算；权限可以授予部门并向下继承；应用的可访问范围、数据权限都可以按部门设置。</p>
+  <div class="meta"><span>唯一根部门</span><span>每个部门一名负责人</span><span>负责人须在本部门或下级部门</span><span>直属上级实时计算</span><span>有子部门或成员不可删除</span><span>移动部门连同子树</span></div>
+</header>
+
+<section id="s1">
+  <h2><span class="num">01</span>定位与范围</h2>
+  <div class="grid2">
+    <div class="box"><h4>本模块负责</h4>
+      <ul>
+        <li>部门树：新建、改名、移动（连同子部门与成员）、删除</li>
+        <li>部门负责人：设置、清空、约束校验、自动清空</li>
+        <li>直属上级计算 <code>managerOf</code>（供用户详情、开放接口、接入应用使用）</li>
+        <li>部门成员视图：直属成员 / 含子部门成员；调入成员；在部门下新建用户</li>
+        <li>向其他模块提供部门路径、子树、成员范围等查询</li>
+      </ul></div>
+    <div class="box"><h4>不在本模块</h4>
+      <ul>
+        <li>用户档案与账号状态 → <b>用户管理</b>（调入成员调用其服务改 <code>dept_uuid</code>）</li>
+        <li>授予部门的岗位 / 角色 / 数据权限 → <b>权限管理</b>（部门页只提供「授权」入口）</li>
+        <li>应用可访问范围的配置 → <b>应用接入</b></li>
+        <li><b>本期不做</b>：HR 系统同步、批量导入部门、兼职多部门、副负责人</li>
+      </ul></div>
+  </div>
+</section>
+
+<section id="s2">
+  <h2><span class="num">02</span>术语</h2>
+  <table>
+    <tr><th style="width:150px">术语</th><th>含义</th></tr>
+    <tr><td>根部门</td><td>部门树的顶点，代表公司（如「星海科技」）。系统初始化时创建，唯一，不可删除、不可移动，可改名、设负责人。</td></tr>
+    <tr><td>部门路径</td><td>从根到该部门的名称序列，展示为「星海科技 / 研发中心 / 交易中台」；对外（开放接口）通常省略根部门。</td></tr>
+    <tr><td>子树</td><td>某部门及其全部下级部门。</td></tr>
+    <tr><td>直属成员</td><td><code>dept_uuid</code> 等于该部门的用户。</td></tr>
+    <tr><td>含子部门成员</td><td><code>dept_uuid</code> 在该部门子树内的用户。</td></tr>
+    <tr><td>负责人</td><td>部门的唯一负责人 <code>leader_uuid</code>，必须是该部门子树内未停用的用户。一个人可以同时负责多个部门。</td></tr>
+    <tr><td>直属上级</td><td>不存储。从用户所在部门向上，取第一个「不是本人、未停用」的负责人（第 08 节）。</td></tr>
+  </table>
+</section>
+
+<section id="s3">
+  <h2><span class="num">03</span>与其他模块的关系</h2>
+  <div class="arch">
+    <div class="arch-sys">
+      <div class="arch-sys-t">用户中心</div>
+      <div class="arch-row">
+        <div class="arch-box"><b>用户管理</b><ul><li>用户必须属于一个部门</li><li>详情展示直属上级</li></ul></div>
+        <div class="arch-link">dept_uuid / managerOf<i class="l"></i></div>
+        <div class="arch-box me"><b>组织管理（本模块）</b><ul><li>部门树、负责人</li><li>直属上级计算</li><li>成员范围查询</li></ul></div>
+        <div class="arch-link">授权对象<i class="r"></i></div>
+        <div class="arch-box"><b>权限管理</b><ul><li>岗位 / 角色授予部门，可含下级继承</li><li>数据权限可授予部门</li></ul></div>
+      </div>
+      <div class="arch-note" style="margin:12px 0 8px">组织管理同时被以下模块使用：</div>
+      <div class="arch-row" style="gap:12px">
+        <div class="arch-box"><b>应用接入</b><ul><li>可访问范围 = 指定部门（含下级）</li></ul></div>
+        <div class="arch-box"><b>开放接口</b><ul><li>向接入应用提供部门树、部门路径、直属上级</li></ul></div>
+        <div class="arch-box"><b>审计日志</b><ul><li>写入部门与负责人的全部变更</li></ul></div>
+      </div>
+    </div>
+  </div>
+  <table>
+    <tr><th style="width:170px">方向</th><th>接口</th><th>说明</th></tr>
+    <tr><td>其他 → 组织</td><td><code>OrgService.exists(uuid)</code>、<code>path(uuid)</code>、<code>descendants(uuid)</code>、<code>inSubtree(dept, root)</code></td><td>用户表单校验、列表按部门（含下级）筛选、授权继承、应用范围计算</td></tr>
+    <tr><td>其他 → 组织</td><td><code>OrgService.managerOf(user_uuid)</code></td><td>直属上级，实时计算</td></tr>
+    <tr><td>组织 → 用户</td><td><code>UserService.countInDept(dept_uuid)</code>、<code>moveUsers(user_uuids, dept_uuid)</code></td><td>删除前校验、调入成员</td></tr>
+    <tr><td>组织 → 权限 / 应用 / 数据</td><td><code>onDeptDeleted(dept_uuid)</code></td><td>删除部门时清理授予该部门的授权、应用可访问范围中的该部门、该部门的数据权限</td></tr>
+    <tr><td>用户 → 组织</td><td><code>onUserDeptChanged(user_uuid)</code>、<code>onUserDisabled(user_uuid)</code></td><td>负责人自动清空 / 停用提示（第 07 节）</td></tr>
+  </table>
+</section>
+
+<section id="s4">
+  <h2><span class="num">04</span>功能清单</h2>
+  <table>
+    <tr><th style="width:170px">功能</th><th>说明</th><th style="width:70px">优先级</th></tr>
+    <tr><td>部门树</td><td>展开 / 收起；每个节点显示含子部门人数；选中部门时自动展开其上级</td><td><span class="tag new">P0</span></td></tr>
+    <tr><td>新建子部门</td><td>在选中部门下新建；只填名称</td><td><span class="tag new">P0</span></td></tr>
+    <tr><td>编辑部门</td><td>改名、设置 / 清空负责人；非根部门可改上级（移动）</td><td><span class="tag new">P0</span></td></tr>
+    <tr><td>删除部门</td><td>有子部门或直属成员时拒绝；删除时清理引用</td><td><span class="tag new">P0</span></td></tr>
+    <tr><td>部门负责人</td><td>表单设置或在成员列表「设为负责人」；约束校验；自动清空</td><td><span class="tag new">P0</span></td></tr>
+    <tr><td>直属上级计算</td><td><code>managerOf</code>，部门树缓存</td><td><span class="tag new">P0</span></td></tr>
+    <tr><td>部门成员</td><td>直属 / 含子部门切换；调入成员；在本部门下新建用户</td><td><span class="tag new">P0</span></td></tr>
+    <tr><td>变更前影响提示</td><td>移动部门、调入成员、改用户部门前，提示会被清空负责人的部门</td><td><span class="tag">P1</span></td></tr>
+    <tr><td>同级排序</td><td>上移 / 下移，或拖拽调整同级部门顺序</td><td><span class="tag">P1</span></td></tr>
+    <tr><td>部门搜索</td><td>按名称搜索并定位到树节点</td><td><span class="tag">P1</span></td></tr>
+    <tr><td>成员分页与搜索</td><td>大部门成员列表分页、按姓名 / 账号搜索</td><td><span class="tag">P1</span></td></tr>
+    <tr><td>我的直属下属</td><td>反查 <code>managerOf(x) = 我</code> 的用户</td><td><span class="tag p2">P2</span></td></tr>
+    <tr><td>HR 同步 / 批量导入部门 / 兼职 / 副负责人</td><td>本期不做</td><td><span class="tag">不做</span></td></tr>
+  </table>
+</section>
+
+<section id="s5">
+  <h2><span class="num">05</span>领域模型</h2>
+  <table>
+    <tr><th style="width:150px">属性</th><th>规则</th></tr>
+    <tr><td>名称 <code>name</code></td><td>必填，1–50 字符，去首尾空白；不允许包含 <code>/</code>（部门路径的分隔符）；<b>同一上级下不能重名</b>，不同上级可以重名</td></tr>
+    <tr><td>上级 <code>parent_uuid</code></td><td>根部门为空，其他必填；不能是自己或自己的下级</td></tr>
+    <tr><td>负责人 <code>leader_uuid</code></td><td>选填；必须是本部门子树内<b>未停用</b>的用户（第 07 节）</td></tr>
+    <tr><td>排序 <code>sort</code></td><td>同级部门的显示顺序，新建时排在最后 <span class="tag">P1</span></td></tr>
+    <tr><td>层级 <code>depth</code></td><td>根部门为 1，最多 10 级</td></tr>
+    <tr><td>路径 <code>path</code></td><td>由各级部门 uuid 组成的物化路径（第 15 节），系统维护，用于子树查询</td></tr>
+  </table>
+</section>
+
+<section id="s6">
+  <h2><span class="num">06</span>部门树规则</h2>
+  <ul>
+    <li><b>唯一根部门</b>：初始化时创建；不可删除、不可移动；可改名（公司更名）、可设负责人（通常是 CEO）。</li>
+    <li><b>层级上限 10 级</b>：新建与移动都校验，移动时校验「目标层级 + 被移动子树的高度」。</li>
+    <li><b>同级不重名</b>：新建、改名、移动时校验目标上级下是否已有同名部门。</li>
+    <li><b>不能移动到自己的子树下</b>：上级下拉中直接排除自己及全部下级。</li>
+    <li><b>删除只删空部门</b>：有子部门或直属成员时拒绝，提示先移走或删除。删除不级联删除用户或子部门。</li>
+    <li>树结构变更（新建、移动、删除）低频，服务端串行执行，避免并发移动形成环（第 15 节）。</li>
+  </ul>
+</section>
+
+<section id="s7">
+  <h2><span class="num">07</span>部门负责人</h2>
+  <h3>约束</h3>
+  <ul>
+    <li>每个部门<b>最多一名</b>负责人，可以不设。</li>
+    <li>负责人必须是该部门<b>子树内</b>的用户（可以是直属成员，也可以在下级部门，例如李工属于「交易中台」，同时负责「研发中心」）。</li>
+    <li>设置时必须是<b>未停用</b>的用户。</li>
+    <li>一个人可以同时负责多个部门。</li>
+  </ul>
+  <div class="callout rule"><b class="l">为什么要求负责人在子树内</b>直属上级按负责人计算，负责人在子树内才能保证「上级部门的人管下级部门」的方向不乱；同时一个部门只有一名负责人，计算结果唯一。</div>
+  <h3>设置入口</h3>
+  <table>
+    <tr><th style="width:170px">入口</th><th>说明</th></tr>
+    <tr><td>编辑部门弹窗</td><td>负责人下拉只列本部门子树内未停用的成员；可选「不设置」清空</td></tr>
+    <tr><td>成员列表「设为负责人」</td><td>对列表中未停用、且不是当前负责人的成员显示；勾选「包含子部门」时下级部门的成员也可设</td></tr>
+    <tr><td>新建部门</td><td>不设负责人：新部门还没有成员，调入成员后再设置</td></tr>
+  </table>
+  <h3>自动清空</h3>
+  <p>以下变更导致负责人<b>不再位于部门子树内</b>时，系统清空该部门的负责人（审计操作人为 system，说明原因）：</p>
+  <table>
+    <tr><th style="width:200px">触发</th><th>示例</th></tr>
+    <tr><td>用户调整部门（编辑用户 / 调入成员）</td><td>李工从「交易中台」调到「产品部」→ 「研发中心」「交易中台」的负责人都被清空</td></tr>
+    <tr><td>移动部门</td><td>「技术中心」移出「研发中心」，若研发中心的负责人属于技术中心 → 研发中心负责人被清空</td></tr>
+  </table>
+  <p>提交前先用 <code>dry_run</code> 计算将被清空的部门，界面确认后再执行（<span class="tag">P1</span>；P0 在执行后提示）。</p>
+  <h3>负责人被停用</h3>
+  <ul>
+    <li><b>不自动清空</b>：停用可逆，启用后恢复原状。</li>
+    <li>计算直属上级时跳过该负责人，继续向上找。</li>
+    <li>部门详情在负责人旁显示「负责人已停用，请更换」，引导管理员处理。</li>
+  </ul>
+</section>
+
+<section id="s8">
+  <h2><span class="num">08</span>直属上级计算</h2>
+<pre>managerOf(user):
+  d = dept(user.dept_uuid)
+  while d is not null:
+    leader = d.leader
+    if leader is not null and leader != user and leader.status != disabled:
+      return leader
+    d = parent(d)                <span class="c">// 本人是负责人 / 部门无负责人 / 负责人已停用 → 向上一级</span>
+  return null                    <span class="c">// 根部门负责人没有直属上级</span></pre>
+  <table>
+    <tr><th>用户</th><th>所在部门</th><th>直属上级</th><th>说明</th></tr>
+    <tr><td>何超</td><td>研发中心 / 交易中台</td><td>李工</td><td>本部门负责人</td></tr>
+    <tr><td>陈运</td><td>研发中心 / 技术中心（本人负责）</td><td>李工</td><td>上级部门「研发中心」负责人</td></tr>
+    <tr><td>李工</td><td>研发中心 / 交易中台（本人负责，同时负责研发中心）</td><td>林远</td><td>连续跳过本人</td></tr>
+    <tr><td>高峰</td><td>研发中心 / 技术中心（负责人陈运已停用）</td><td>李工</td><td>跳过已停用负责人</td></tr>
+    <tr><td>林远</td><td>星海科技（本人负责）</td><td>—</td><td>根部门负责人</td></tr>
+  </table>
+  <ul>
+    <li>返回值附带来源：<code>own_dept</code>（所在部门负责人）或 <code>ancestor</code>（上级部门负责人），用户详情据此注明。</li>
+    <li>部门树（含负责人 id）常驻内存缓存，计算为 O(层级)，不查库；负责人状态从用户缓存取。</li>
+    <li>不落库，因此部门换负责人后所有相关人员的直属上级立即变化，用户表无任何写入。</li>
+  </ul>
+</section>
+
+<section id="s9">
+  <h2><span class="num">09</span>新建部门</h2>
+  <ul>
+    <li>入口：选中部门 →「＋ 新建子部门」。上级固定为当前部门。</li>
+    <li>只填名称；校验名称格式、同级不重名、层级上限。</li>
+    <li>创建后自动展开上级并选中新部门。</li>
+    <li>新部门没有成员、没有负责人，不继承任何授权以外的东西（上级部门「含下级」的授权自动覆盖新部门，见权限模块）。</li>
+  </ul>
+</section>
+
+<section id="s10">
+  <h2><span class="num">10</span>编辑与移动部门</h2>
+  <table>
+    <tr><th style="width:120px">字段</th><th>规则</th><th style="width:220px">影响</th></tr>
+    <tr><td>名称</td><td>格式、同级不重名</td><td>部门路径变化；开放接口实时返回新路径</td></tr>
+    <tr><td>负责人</td><td>第 07 节约束</td><td>相关人员直属上级立即变化</td></tr>
+    <tr><td>上级（移动）</td><td>非根部门；不能是自己或下级；目标下不重名；层级不超限</td><td>连同子部门与成员一起移动；见下</td></tr>
+  </table>
+  <h3>移动的影响</h3>
+  <ul>
+    <li>子树内所有成员的部门路径变化。</li>
+    <li>从旧上级「含下级」继承的授权失去，从新上级「含下级」继承的授权获得（权限模块实时计算，无需迁移数据）。</li>
+    <li>应用可访问范围按部门链计算，可能变化（例如移出「研发中心」后不再能访问只开放给研发中心的 Atlas）。</li>
+    <li>子树成员的直属上级可能变化（子树外的上级部门负责人不同了）。</li>
+    <li>旧上级链中负责人属于被移动子树的部门，负责人被自动清空。</li>
+  </ul>
+  <div class="callout warn"><b class="l">提示</b>移动部门影响面大，确认弹窗列出：子树部门数、成员数、将被清空负责人的部门；并提示「授权与应用访问将按新位置重新计算；接入应用在刷新授权快照（或收到变更通知）后生效」。</div>
+</section>
+
+<section id="s11">
+  <h2><span class="num">11</span>删除部门</h2>
+  <ol>
+    <li>前置校验：不是根部门；没有子部门；没有直属成员。不满足时提示「部门下还有 N 个子部门、M 名成员，请先移走或删除」。</li>
+    <li>影响预览（<code>dry_run</code>）：该部门出现在哪些应用的可访问范围中、有多少条授予该部门的授权与数据权限。</li>
+    <li>确认后在一个事务内：删除部门；通知应用接入、权限管理、数据权限清理对该部门的引用；写审计（含被清理引用的快照）。</li>
+  </ol>
+  <p>物理删除。审计中保留部门名称与路径快照，历史记录仍能看到「当时是哪个部门」。</p>
+</section>
+
+<section id="s12">
+  <h2><span class="num">12</span>部门成员</h2>
+  <ul>
+    <li>默认显示<b>含子部门</b>成员（上级部门往往没有直属成员），可切换为只看直属成员。</li>
+    <li>列：成员（姓名、账号、负责人徽标）、所在部门、岗位（权限模块计算结果）、状态；整行点击进入用户详情。</li>
+    <li><b>调入成员</b>：从其他部门选择未停用的用户，调入后其 <code>dept_uuid</code> 变为当前部门（调用用户管理服务，逐人写审计「调整部门」）；会触发负责人自动清空检查。</li>
+    <li><b>＋ 新建用户</b>：打开用户管理的新建表单，部门预填为当前部门。</li>
+    <li><b>设为负责人</b>：见第 07 节。</li>
+    <li>成员超过 100 人时分页，支持按姓名 / 账号搜索 <span class="tag">P1</span>。</li>
+  </ul>
+</section>
+
+<section id="s13">
+  <h2><span class="num">13</span>变更的影响与生效</h2>
+  <table>
+    <tr><th>操作</th><th>直属上级</th><th>部门继承的授权</th><th>应用可访问范围</th><th>部门数据权限</th></tr>
+    <tr><td>改负责人</td><td>变化</td><td>—</td><td>—</td><td>—</td></tr>
+    <tr><td>改名</td><td>—</td><td>—</td><td>—</td><td>—</td></tr>
+    <tr><td>用户调整部门</td><td>变化</td><td>变化</td><td>可能变化</td><td>变化</td></tr>
+    <tr><td>移动部门</td><td>可能变化</td><td>变化</td><td>可能变化</td><td>变化（含下级的授权）</td></tr>
+    <tr><td>删除部门（空部门）</td><td>—</td><td>授予该部门的授权被撤销</td><td>从范围中移除</td><td>该部门的数据权限被移除</td></tr>
+  </table>
+  <ul>
+    <li>用户中心内部（用户详情、权限校验接口、<code>managerOf</code>）都是<b>实时计算</b>，变更后立即反映。</li>
+    <li>接入应用通过开放接口实时查询；若应用缓存了授权快照（最长 5 分钟），在缓存到期或收到变更通知（P1）后更新。</li>
+  </ul>
+</section>
+
+<section id="s14">
+  <h2><span class="num">14</span>数据模型</h2>
+  <div class="callout rule"><b class="l">主键约定（全部表通用）</b>
+    <code>id bigint</code> 自增主键，只在库内使用（聚簇、分页游标），<b>不对外暴露、不用于任何关联</b>；
+    <code>uuid uuid</code> 逻辑主键（UUIDv7，按时间有序、对索引友好，由应用生成），<b>表间关联、外键、API、开放接口、审计对象都使用它</b>。
+    关联字段统一命名为 <code>xxx_uuid</code>，外键引用对方表的 <code>uuid</code>；API 中的 <code>id</code> / <code>xxx_id</code> 取值即对应的 uuid。</div>
+<pre><span class="c">-- 部门</span>
+CREATE TABLE uc_dept (
+  id           bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,   <span class="c">-- 自增主键，仅库内使用</span>
+  uuid         uuid        NOT NULL,                              <span class="c">-- 逻辑主键（UUIDv7）</span>
+  parent_uuid  uuid        REFERENCES uc_dept(uuid),             <span class="c">-- 根部门为空</span>
+  name         varchar(50) NOT NULL,
+  leader_uuid  uuid        REFERENCES uc_user(uuid),
+  sort         int         NOT NULL DEFAULT 0,
+  path         varchar(400) NOT NULL,     <span class="c">-- '/{root_uuid}/{rd_uuid}/{trade_uuid}/'，10 级 × 37 字符</span>
+  depth        smallint    NOT NULL,      <span class="c">-- 根 = 1</span>
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  created_by   uuid,
+  updated_at   timestamptz NOT NULL DEFAULT now(),
+  updated_by   uuid,
+  version      int NOT NULL DEFAULT 1,
+  CONSTRAINT uk_dept_uuid         UNIQUE (uuid),
+  CONSTRAINT uk_dept_sibling_name UNIQUE (parent_uuid, name),
+  CONSTRAINT ck_dept_name  CHECK (position('/' in name) = 0),
+  CONSTRAINT ck_dept_depth CHECK (depth BETWEEN 1 AND 10)
+);
+CREATE UNIQUE INDEX uk_dept_single_root ON uc_dept ((parent_uuid IS NULL)) WHERE parent_uuid IS NULL;
+CREATE INDEX ix_dept_parent ON uc_dept (parent_uuid, sort);
+CREATE INDEX ix_dept_path   ON uc_dept (path varchar_pattern_ops);
+CREATE INDEX ix_dept_leader ON uc_dept (leader_uuid);</pre>
+  <p class="muted"><code>uc_dept.leader_uuid → uc_user.uuid</code> 与 <code>uc_user.dept_uuid → uc_dept.uuid</code> 互相引用：建表时先建两表，再用 <code>ALTER TABLE ... ADD CONSTRAINT</code> 补外键；初始化根部门与首个管理员时在同一事务内插入，<code>leader_uuid</code> 后更新。</p>
+  <p class="muted">「负责人在子树内」涉及用户表，无法用数据库约束表达，由服务层在设置负责人、用户调部门、移动部门时校验与修正。</p>
+</section>
+
+<section id="s15">
+  <h2><span class="num">15</span>树的存储与查询</h2>
+  <table>
+    <tr><th style="width:150px">操作</th><th>实现</th></tr>
+    <tr><td>子树查询</td><td><code>WHERE path LIKE '/{root_uuid}/{rd_uuid}/%'</code>（前缀索引）；含子部门成员：<code>uc_user.dept_uuid IN (子树 uuid)</code></td></tr>
+    <tr><td>部门路径</td><td>按 <code>path</code> 中的 uuid 依次取名称（内存缓存）</td></tr>
+    <tr><td>移动</td><td>一条 UPDATE 改写子树的 path 前缀与 depth：<code>path = :new || substr(path, length(:old)+1)</code>，<code>depth = depth + :delta</code></td></tr>
+    <tr><td>人数统计</td><td>按 <code>dept_uuid</code> 分组得到直属人数，在内存树上自底向上累加得到含子部门人数</td></tr>
+    <tr><td>并发控制</td><td>新建 / 移动 / 删除在事务内取 <code>pg_advisory_xact_lock('uc_dept_tree')</code> 串行化；改名、改负责人用乐观锁 <code>version</code></td></tr>
+    <tr><td>缓存</td><td>整棵树（uuid、parent_uuid、name、leader_uuid、sort、depth）常驻各实例内存；树版本号存 Redis，变更后 +1，各实例发现版本变化即重载</td></tr>
+  </table>
+</section>
+
+<section id="s16">
+  <h2><span class="num">16</span>API</h2>
+  <p class="muted">前缀 <code>/api/v1</code>；带 <code>dry_run=true</code> 的接口只计算影响、不落库。路径与报文中的 <code>{id}</code>、<code>id</code>、<code>parent_id</code>、<code>leader_id</code>、<code>user_ids</code> 均为逻辑主键 uuid。</p>
+  <table>
+    <tr><th style="width:300px">接口</th><th>说明</th><th style="width:110px">操作码</th></tr>
+    <tr><td><code>GET /depts/tree</code></td><td>整棵树：id、parent_id、name、leader（id、姓名、状态）、sort、depth、直属人数、含子部门人数</td><td>org:view</td></tr>
+    <tr><td><code>GET /depts/{id}</code></td><td>详情：路径、负责人、人数、子部门、version</td><td>org:view</td></tr>
+    <tr><td><code>POST /depts</code></td><td><code>{parent_id, name}</code></td><td>org:manage</td></tr>
+    <tr><td><code>PATCH /depts/{id}</code></td><td><code>{name?, leader_id?}</code>；<code>If-Match</code>；<code>leader_id: null</code> 表示清空</td><td>org:manage</td></tr>
+    <tr><td><code>POST /depts/{id}:move</code></td><td><code>{parent_id}</code>；支持 <code>dry_run</code>，返回 <code>{dept_count, member_count, leaders_to_clear[]}</code></td><td>org:manage</td></tr>
+    <tr><td><code>POST /depts/{id}:reorder</code></td><td><code>{after_id}</code> 同级排序 <span class="tag">P1</span></td><td>org:manage</td></tr>
+    <tr><td><code>DELETE /depts/{id}</code></td><td>支持 <code>dry_run</code>，返回 <code>{app_scopes[], grants, data_acls}</code></td><td>org:manage</td></tr>
+    <tr><td><code>GET /depts/{id}/members</code></td><td><code>include_sub, q, page, size</code></td><td>org:view</td></tr>
+    <tr><td><code>POST /depts/{id}/members:move-in</code></td><td><code>{user_ids[]}</code>；支持 <code>dry_run</code>，返回 <code>leaders_to_clear[]</code></td><td>org:manage</td></tr>
+    <tr><td><code>GET /users/{id}/manager</code></td><td><code>{manager: {id, name}|null, source: own_dept|ancestor, dept_id}</code></td><td>user:view</td></tr>
+  </table>
+  <h3>示例：移动部门（预演）</h3>
+<pre>POST /api/v1/depts/0192f3a8-71b4-7e09-a2c3-5f6e7d8c9b02:move?dry_run=true
+{ "parent_id": "0192f3a8-5a00-7b11-8c22-1d2e3f4a5b60" }
+
+200 OK
+{ "dept_count": 1, "member_count": 2,
+  "leaders_to_clear": [],
+  "path_after": "星海科技 / 技术中心" }</pre>
+  <h3>16.1 错误码</h3>
+  <table>
+    <tr><th style="width:210px">code</th><th style="width:60px">HTTP</th><th>场景</th></tr>
+    <tr><td><code>DEPT_NOT_FOUND</code></td><td>404</td><td>部门不存在</td></tr>
+    <tr><td><code>VALIDATION_FAILED</code></td><td>422</td><td>名称为空、超长、含 <code>/</code></td></tr>
+    <tr><td><code>DEPT_NAME_EXISTS</code></td><td>409</td><td>同一上级下已有同名部门</td></tr>
+    <tr><td><code>ROOT_IMMUTABLE</code></td><td>409</td><td>删除或移动根部门</td></tr>
+    <tr><td><code>MOVE_INTO_SUBTREE</code></td><td>422</td><td>移动到自己或自己的下级</td></tr>
+    <tr><td><code>DEPTH_EXCEEDED</code></td><td>422</td><td>超过 10 级</td></tr>
+    <tr><td><code>DEPT_NOT_EMPTY</code></td><td>409</td><td>删除时有子部门或直属成员，<code>details</code> 给出数量</td></tr>
+    <tr><td><code>LEADER_NOT_IN_DEPT</code></td><td>422</td><td>负责人不在部门子树内</td></tr>
+    <tr><td><code>LEADER_DISABLED</code></td><td>422</td><td>设置已停用用户为负责人</td></tr>
+    <tr><td><code>VERSION_CONFLICT</code></td><td>409</td><td>乐观锁冲突</td></tr>
+    <tr><td><code>PERMISSION_DENIED</code></td><td>403</td><td>缺少操作码</td></tr>
+  </table>
+</section>
+
+<section id="s17">
+  <h2><span class="num">17</span>权限</h2>
+  <p>菜单「组织架构」由角色绑定的菜单决定是否可见；页面内按操作码控制。</p>
+  <table>
+    <tr><th style="width:150px">操作码</th><th>前端控制</th><th>内置角色</th></tr>
+    <tr><td><code>org:view</code></td><td>部门树、部门详情、成员列表</td><td>超级管理员、用户管理员、审计员</td></tr>
+    <tr><td><code>org:manage</code></td><td>新建子部门、编辑、删除、调入成员、设为负责人</td><td>超级管理员、用户管理员</td></tr>
+    <tr><td><code>user:create</code></td><td>成员卡片「＋ 新建用户」</td><td>超级管理员、用户管理员</td></tr>
+    <tr><td><code>grant:view</code></td><td>部门详情「授权」按钮（跳转权限管理并选中该部门）</td><td>超级管理员、用户管理员、审计员</td></tr>
+  </table>
+  <p class="muted">数据范围（只管理本部门子树）为 P2。</p>
+</section>
+
+<section id="s18">
+  <h2><span class="num">18</span>页面设计</h2>
+  <p>以原型为准（<code>prototype/usercenter/index.html</code> → 组织架构）。左右两栏：</p>
+  <div class="grid2">
+    <div class="box"><h4>左：部门树</h4>
+      <ul><li>根部门 🏢，其余 📁；节点右侧显示含子部门人数</li>
+      <li>有子部门的节点可展开 / 收起；选中时自动展开上级</li>
+      <li>顶部部门搜索 <span class="tag">P1</span></li></ul></div>
+    <div class="box"><h4>右上：部门信息</h4>
+      <ul><li>部门路径、名称；按钮：授权 / ＋ 新建子部门 / 编辑 / 删除（根部门无删除）</li>
+      <li>负责人（已停用时橙色提示；未设置时提示「成员的直属上级取上级部门负责人」）</li>
+      <li>直属成员 / 含子部门人数；子部门标签（点击跳转）</li></ul></div>
+    <div class="box"><h4>右下：成员</h4>
+      <ul><li>「包含子部门」开关、调入成员、＋ 新建用户</li>
+      <li>表格：成员（负责人徽标）、所在部门、岗位、状态、设为负责人</li></ul></div>
+    <div class="box"><h4>弹窗</h4>
+      <ul><li>新建子部门：名称；提示调入成员后再设负责人</li>
+      <li>编辑部门：名称、上级（根部门无）、负责人（子树内未停用成员）</li>
+      <li>删除：不满足条件时只给「知道了」；满足时列出将清理的引用</li>
+      <li>调入成员：可搜索的多选列表，提示「主部门将变更为当前部门」</li></ul></div>
+  </div>
+</section>
+
+<section id="s19">
+  <h2><span class="num">19</span>审计</h2>
+  <table>
+    <tr><th style="width:140px">动作</th><th>对象</th><th>说明字段</th></tr>
+    <tr><td>新建部门</td><td>部门名</td><td>上级路径</td></tr>
+    <tr><td>编辑部门</td><td>部门名</td><td>改名：旧 → 新</td></tr>
+    <tr><td>移动部门</td><td>部门名</td><td>旧路径 → 新路径；子树部门数、成员数</td></tr>
+    <tr><td>删除部门</td><td>部门路径</td><td>被清理的应用范围、授权数、数据权限数</td></tr>
+    <tr><td>设置部门负责人</td><td>部门名</td><td>旧负责人 → 新负责人</td></tr>
+    <tr><td>清空部门负责人</td><td>部门名</td><td>手动；或 system：「某某已不在该部门及其下级部门」</td></tr>
+    <tr><td>调整部门</td><td>用户</td><td>旧部门 → 新部门（调入成员时逐人记录）</td></tr>
+  </table>
+</section>
+
+<section id="s20">
+  <h2><span class="num">20</span>异常与边界</h2>
+  <table>
+    <tr><th style="width:260px">场景</th><th>处理</th></tr>
+    <tr><td>两人同时把 A 移到 B 下、把 B 移到 A 下</td><td>树结构变更串行化，后执行者校验发现会形成环，返回 <code>MOVE_INTO_SUBTREE</code></td></tr>
+    <tr><td>设置负责人时，该用户刚被调出子树</td><td>服务端按最新数据校验，返回 <code>LEADER_NOT_IN_DEPT</code></td></tr>
+    <tr><td>负责人被停用</td><td>保留；直属上级计算跳过；部门页提示更换</td></tr>
+    <tr><td>负责人被启用</td><td>重新作为直属上级生效，无需操作</td></tr>
+    <tr><td>部门没有负责人</td><td>成员的直属上级取上级部门负责人</td></tr>
+    <tr><td>删除部门时它正被应用的可访问范围使用</td><td>允许删除，从范围中移除；若某应用的范围因此为空，提示「该应用将无人可访问」</td></tr>
+    <tr><td>根部门只有一个人（初始化）</td><td>初始化脚本创建根部门与第一个超级管理员，并将其设为根部门负责人</td></tr>
+    <tr><td>移动后层级超限</td><td><code>DEPTH_EXCEEDED</code>，提示被移动子树的层数</td></tr>
+  </table>
+</section>
+
+<section id="s21">
+  <h2><span class="num">21</span>非功能</h2>
+  <div class="grid2">
+    <div class="box"><h4>容量与性能</h4>
+      <ul><li>按 5000 个部门、5 万用户设计</li>
+      <li>部门树接口 p95 &lt; 200ms（内存缓存）</li>
+      <li><code>managerOf</code> 单次 &lt; 1ms（内存，O(层级)）</li>
+      <li>移动 1000 个部门的子树 &lt; 1s（一条 UPDATE）</li></ul></div>
+    <div class="box"><h4>一致性</h4>
+      <ul><li>树结构变更串行化，杜绝环</li>
+      <li>负责人约束在每个可能破坏它的写操作里校验 / 修正，并在同一事务内完成</li>
+      <li>缓存以版本号失效，写后读不到旧树</li></ul></div>
+  </div>
+</section>
+
+<section id="s22">
+  <h2><span class="num">22</span>与原型的差异</h2>
+  <p>原型已按本设计同步：负责人只能选子树内成员、新建部门不设负责人、根部门可改名与设负责人、调出负责人自动清空、停用负责人有提示。剩余差异：</p>
+  <table class="diff">
+    <tr><th>项</th><th>原型</th><th>详细设计</th></tr>
+    <tr><td>自动清空负责人</td><td>执行后提示</td><td>P1 起执行前 <code>dry_run</code> 确认</td></tr>
+    <tr><td>同级排序</td><td>无</td><td>P1 支持</td></tr>
+    <tr><td>部门搜索、成员分页</td><td>无</td><td>P1 支持</td></tr>
+    <tr><td>名称格式</td><td>只校验非空、同级不重名</td><td>增加长度上限、禁止 <code>/</code>、层级上限 10</td></tr>
+    <tr><td>删除影响中「应用范围为空」</td><td>无</td><td>额外提示</td></tr>
+  </table>
+</section>
+
+<section id="s23">
+  <h2><span class="num">23</span>测试要点</h2>
+  <ul>
+    <li>名称：空、50 / 51 字符、含 <code>/</code>、同级重名、不同上级同名。</li>
+    <li>根部门：不能删除、不能移动；可改名、可设负责人；唯一性（不能再建第二个根）。</li>
+    <li>移动：到自己、到下级、到同级、到根；层级 10 / 11；并发互相移动。</li>
+    <li>删除：有子部门、有直属成员、有含下级成员但无直属成员（子部门存在则拒绝）、空部门；清理应用范围 / 授权 / 数据权限。</li>
+    <li>负责人：直属成员、下级部门成员、子树外用户（拒绝）、已停用用户（拒绝）、同一人负责多个部门。</li>
+    <li>自动清空：用户调出子树、调到子树内另一部门（不清空）、移动部门导致上级负责人脱离子树。</li>
+    <li>直属上级：第 08 节示例全部；换负责人后立即变化且用户表无写入。</li>
+    <li>缓存：A 实例改树，B 实例下一次读取即为新树。</li>
+    <li>权限：缺少 <code>org:manage</code> 时所有写按钮隐藏、接口 403。</li>
+  </ul>
+</section>
+
+<section id="s24">
+  <h2><span class="num">24</span>落地计划</h2>
+  <table>
+    <tr><th style="width:90px">阶段</th><th>内容</th><th style="width:150px">依赖</th></tr>
+    <tr><td>M1</td><td>uc_dept 表、初始化根部门；树查询、新建、改名、删除（空部门）；树缓存</td><td>—</td></tr>
+    <tr><td>M2</td><td>负责人设置与约束；<code>managerOf</code>；成员列表、调入成员</td><td>用户管理</td></tr>
+    <tr><td>M3</td><td>移动部门（path 改写、串行化）；负责人自动清空；dry_run</td><td>—</td></tr>
+    <tr><td>M4</td><td>删除时清理引用；变更影响提示</td><td>权限、应用接入、数据权限</td></tr>
+    <tr><td>M5</td><td>同级排序、部门搜索、成员分页</td><td>—</td></tr>
+  </table>
+</section>
+
+<section id="s25">
+  <h2><span class="num">25</span>待确认</h2>
+  <ol>
+    <li><b>负责人约束</b>：本设计采用「每个部门一名负责人，且必须在本部门子树内」。是否认可？如需副负责人，后续以单独字段加入，不参与直属上级计算。</li>
+    <li><b>负责人停用</b>：当前为保留并提示更换。是否改为停用时自动清空？</li>
+    <li><b>层级上限</b> 10 级是否足够？</li>
+    <li><b>部门编码</b>：是否需要业务编码（如财务成本中心编号）供外部系统对接？</li>
+    <li><b>部门类型</b>：是否需要区分公司 / 事业部 / 部门 / 小组？</li>
+    <li><b>删除恢复</b>：删除是否需要回收站（软删除可恢复）？当前为物理删除 + 审计快照。</li>
+  </ol>
+</section>
+
+</main>
+</div>
+</body>
+</html>

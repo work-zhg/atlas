@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>用户中心 — 用户与组织管理</title>
+  <link rel="stylesheet" href="assets/styles.css" />
+</head>
+<body>
+  <!-- 登录页与管理台共用一个入口：未登录时只渲染 #login-root -->
+  <div id="login-root"></div>
+
+  <div class="app-shell" id="app" hidden>
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-logo" aria-hidden="true">
+          <svg width="26" height="26" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect x="2" y="2" width="28" height="28" rx="8" fill="url(#g1)"/>
+            <circle cx="16" cy="12.5" r="4.2" stroke="#fff" stroke-width="2.2"/>
+            <path d="M8.5 24c1.4-3.6 4.2-5.4 7.5-5.4s6.1 1.8 7.5 5.4" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/>
+            <defs>
+              <linearGradient id="g1" x1="2" y1="2" x2="30" y2="30" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#0ea5e9"/><stop offset="1" stop-color="#6366f1"/>
+              </linearGradient>
+            </defs>
+          </svg>
+        </span>
+        <div class="brand-text"><strong>用户中心</strong><small>用户 · 组织 · 权限</small></div>
+      </div>
+
+      <nav class="nav" id="nav"><!-- 由「用户中心」应用的菜单 + 登录人的角色生成 --></nav>
+
+      <div class="sidebar-foot" id="sidebar-foot"></div>
+    </aside>
+
+    <div class="main">
+      <header class="topbar" id="topbar"></header>
+      <main class="content" id="content"></main>
+    </div>
+  </div>
+
+  <div id="modal-root"></div>
+  <div id="toast-root" class="toast-root" aria-live="polite"></div>
+
+  <script src="assets/app.js"></script>
+</body>
+</html>

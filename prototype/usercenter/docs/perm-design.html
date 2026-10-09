@@ -1,0 +1,742 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>权限管理模块 · 详细设计 · 用户中心</title>
+<style>
+  :root{
+    --bg:#f6f7f9;--surface:#fff;--surface-2:#fbfbfd;--ink:#0f172a;--ink-2:#334155;--ink-3:#64748b;--ink-4:#94a3b8;
+    --line:#e6e8ee;--line-2:#eef0f4;--primary:#4f46e5;--primary-weak:#eef0ff;
+    --warning:#b45309;--warning-weak:#fef3e2;
+    --mono:"JetBrains Mono","SF Mono",ui-monospace,Menlo,Consolas,monospace;
+    --font:"Inter","PingFang SC","Microsoft YaHei",system-ui,-apple-system,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink-2);font-family:var(--font);font-size:14.5px;line-height:1.75}
+  a{color:var(--primary);text-decoration:none}
+  .wrap{display:grid;grid-template-columns:240px minmax(0,1fr);gap:36px;max-width:1240px;margin:0 auto;padding:32px 28px 80px}
+  nav.toc{position:sticky;top:24px;align-self:start;max-height:calc(100vh - 48px);overflow:auto;font-size:13px}
+  nav.toc .t{font-size:11px;letter-spacing:.12em;color:var(--ink-4);text-transform:uppercase;margin-bottom:8px;font-weight:600}
+  nav.toc ol{list-style:none;margin:0;padding:0;counter-reset:s}
+  nav.toc li{counter-increment:s}
+  nav.toc a{display:block;padding:4px 8px;border-radius:6px;color:var(--ink-3)}
+  nav.toc a::before{content:counter(s,decimal-leading-zero) "  ";font-family:var(--mono);font-size:11px;color:var(--ink-4)}
+  nav.toc a:hover{background:#fff;color:var(--ink)}
+  header.hero{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:28px 30px;margin-bottom:28px}
+  .kicker{font-family:var(--mono);font-size:11.5px;letter-spacing:.14em;color:var(--primary);text-transform:uppercase;margin:0 0 6px}
+  h1{font-size:26px;color:var(--ink);margin:0 0 10px;letter-spacing:-.3px}
+  .lede{margin:0;font-size:15px}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+  .meta span{font-size:12px;padding:2px 10px;border-radius:999px;background:var(--primary-weak);color:var(--primary)}
+  section{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:24px 28px;margin-bottom:20px}
+  h2{font-size:19px;color:var(--ink);margin:0 0 14px;display:flex;align-items:center;gap:10px}
+  h2 .num{font-family:var(--mono);font-size:12px;color:#fff;background:var(--primary);border-radius:6px;padding:2px 7px}
+  h3{font-size:15.5px;color:var(--ink);margin:22px 0 8px}
+  p{margin:0 0 12px}
+  code{font-family:var(--mono);font-size:12.5px;background:#f1f3f7;border:1px solid var(--line-2);border-radius:4px;padding:0 5px;color:#be185d}
+  table{width:100%;border-collapse:collapse;font-size:13.5px;margin:6px 0 14px}
+  th{text-align:left;background:var(--surface-2);color:var(--ink-3);font-weight:600;font-size:12.5px}
+  th,td{border:1px solid var(--line);padding:8px 10px;vertical-align:top}
+  td code{white-space:nowrap}
+  pre{background:#0f172a;color:#e2e8f0;border-radius:10px;padding:14px 16px;font-family:var(--mono);font-size:12.5px;line-height:1.65;overflow:auto;margin:6px 0 14px;white-space:pre-wrap}
+  pre .c{color:#94a3b8}
+  .callout{border:1px solid;border-left-width:4px;border-radius:10px;padding:10px 14px;margin:8px 0 14px;font-size:13.5px}
+  .callout b.l{display:block;font-size:11.5px;letter-spacing:.1em;margin-bottom:3px}
+  .rule{background:var(--primary-weak);border-color:#c7c9f5;color:#312e81}
+  .warn{background:var(--warning-weak);border-color:#f6d39b;color:#7c2d12}
+  .tag{display:inline-block;font-size:11.5px;padding:0 8px;border-radius:999px;border:1px solid var(--line);background:var(--surface-2);color:var(--ink-3);white-space:nowrap}
+  .tag.new{color:var(--primary);border-color:#c7c9f5;background:var(--primary-weak)}
+  .tag.p2{color:var(--warning);border-color:#f6d39b;background:var(--warning-weak)}
+  .flow{font-family:var(--mono);font-size:12.5px;line-height:1.75;background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:14px 16px;white-space:pre;overflow:auto;margin:6px 0 14px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .box{border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:var(--surface-2)}
+  .box h4{margin:0 0 6px;font-size:13.5px;color:var(--ink)}
+  ul,ol{margin:0 0 12px;padding-left:20px}
+  li{margin:2px 0}
+  .muted{color:var(--ink-4);font-size:12px}
+  /* 关系图 */
+  .arch{margin:6px 0 14px}
+  .arch-sys{border:1.5px dashed #c7c9f5;border-radius:12px;padding:12px 14px;background:#fafaff}
+  .arch-sys-t{font-size:12px;font-weight:700;color:var(--primary);margin-bottom:8px;letter-spacing:.06em}
+  .arch-row{display:flex;align-items:center}
+  .arch-box{flex:1;background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:13px}
+  .arch-box.me{border-color:var(--primary);box-shadow:0 0 0 3px rgba(79,70,229,.1)}
+  .arch-box b{color:var(--ink)}
+  .arch-box ul{margin:6px 0 0;padding-left:16px;color:var(--ink-3);font-size:12.5px}
+  .arch-link{width:96px;flex:none;text-align:center;font-size:11.5px;color:var(--ink-3);position:relative;padding-bottom:10px}
+  .arch-link i{position:absolute;left:8px;right:8px;bottom:0;height:2px;background:#9aa4b6}
+  .arch-link i.r::after{content:"";position:absolute;right:-2px;top:-4px;border-left:7px solid #9aa4b6;border-top:5px solid transparent;border-bottom:5px solid transparent}
+  .arch-link i.l::before{content:"";position:absolute;left:-2px;top:-4px;border-right:7px solid #9aa4b6;border-top:5px solid transparent;border-bottom:5px solid transparent}
+  .arch-note{margin-top:8px;font-size:12px;color:var(--ink-3)}
+  .arch-down{display:flex;align-items:center;gap:8px;margin-left:calc(83% - 1px);height:34px;font-size:11.5px;color:var(--ink-3)}
+  .arch-down i{width:2px;height:100%;background:#9aa4b6;position:relative}
+  .arch-down i::after{content:"";position:absolute;left:-4px;bottom:-2px;border-top:7px solid #9aa4b6;border-left:5px solid transparent;border-right:5px solid transparent}
+  .arch-ext{margin-left:calc(83% - 90px);width:180px;text-align:center;border:1px solid #9aa4b6;border-radius:10px;padding:8px;background:#fff;font-weight:600;color:var(--ink);font-size:13px}
+  @media (max-width:980px){.wrap{grid-template-columns:1fr}nav.toc{position:static;max-height:none}.grid2{grid-template-columns:1fr}
+    .arch-row{flex-direction:column;align-items:stretch}.arch-link{width:auto;height:30px}.arch-down,.arch-ext{margin-left:0}}
+  .sm{width:100%;height:auto;display:block;margin:6px 0 14px;background:var(--surface-2);border:1px solid var(--line);border-radius:10px}
+  .ok{color:#15803d;font-weight:700}.no{color:var(--ink-4)}
+  .diff td:first-child{white-space:nowrap}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<nav class="toc">
+  <div class="t">目录</div>
+  <ol>
+    <li><a href="#s1">定位与范围</a></li>
+    <li><a href="#s2">术语</a></li>
+    <li><a href="#s3">与其他模块的关系</a></li>
+    <li><a href="#s4">功能清单</a></li>
+    <li><a href="#s5">授权模型</a></li>
+    <li><a href="#s6">有效权限的计算</a></li>
+    <li><a href="#s7">角色授权</a></li>
+    <li><a href="#s8">岗位管理</a></li>
+    <li><a href="#s9">超级管理员保护</a></li>
+    <li><a href="#s10">数据授权</a></li>
+    <li><a href="#s11">数据授权的接口写入</a></li>
+    <li><a href="#s12">变更的生效</a></li>
+    <li><a href="#s13">数据模型</a></li>
+    <li><a href="#s14">计算与查询实现</a></li>
+    <li><a href="#s15">管理 API</a></li>
+    <li><a href="#s16">开放接口</a></li>
+    <li><a href="#s17">权限</a></li>
+    <li><a href="#s18">页面设计</a></li>
+    <li><a href="#s19">审计</a></li>
+    <li><a href="#s20">异常与边界</a></li>
+    <li><a href="#s21">非功能</a></li>
+    <li><a href="#s22">与原型的差异</a></li>
+    <li><a href="#s23">测试要点</a></li>
+    <li><a href="#s24">落地计划</a></li>
+    <li><a href="#s25">待确认</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<header class="hero">
+  <p class="kicker">User Center · Detailed Design</p>
+  <h1>权限管理模块</h1>
+  <p class="lede">权限管理回答两个问题：<b>谁能用应用的哪些功能</b>（角色授权），<b>谁能动哪一条数据</b>（数据授权）。角色、操作、菜单、数据编码的<b>定义</b>属于应用（应用接入模块）；本模块负责把<b>岗位和角色授予用户或组织</b>、维护<b>岗位</b>、按「数据编码 + 数据 Id」做<b>数据授权</b>，并计算每个人的<b>有效权限</b>，通过开放接口提供给接入应用。</p>
+  <div class="meta"><span>岗位 / 角色 → 用户 / 部门</span><span>部门授权可含下级</span><span>有效权限 = 并集，实时计算</span><span>数据权限：只读 &lt; 读写 &lt; Owner</span><span>只有 Owner 能改数据授权</span><span>至少一名超级管理员 / Owner</span></div>
+</header>
+
+<section id="s1">
+  <h2><span class="num">01</span>定位与范围</h2>
+  <div class="grid2">
+    <div class="box"><h4>本模块负责</h4>
+      <ul>
+        <li><b>角色授权</b>：把岗位、角色授予用户或部门（部门可含下级）；撤销；调整范围</li>
+        <li><b>岗位管理</b>：岗位及其默认角色</li>
+        <li><b>数据授权</b>：数据登记、只读 / 读写 / Owner 授权，Owner 维护</li>
+        <li><b>有效权限计算</b>：角色、操作码、菜单、数据权限级别及来源</li>
+        <li>保护规则：至少一名可用的超级管理员；每条数据至少一名可用的 Owner</li>
+        <li>开放接口中的授权快照、实时校验、数据权限接口</li>
+      </ul></div>
+    <div class="box"><h4>不在本模块</h4>
+      <ul>
+        <li>角色、操作、菜单、数据编码的定义 → <b>应用接入</b></li>
+        <li>用户、部门本身 → <b>用户管理</b>、<b>组织管理</b></li>
+        <li>应用内「只读 / 读写」具体能做什么 → 由各应用解释</li>
+        <li>登录（SSO）→ 本期不做，以后用 Keycloak</li>
+        <li><b>本期不做</b>：拒绝授权（deny）、管理数据范围（只管本部门）、授权有效期 / 临时授权、授权审批</li>
+      </ul></div>
+  </div>
+</section>
+
+<section id="s2">
+  <h2><span class="num">02</span>术语</h2>
+  <table>
+    <tr><th style="width:150px">术语</th><th>含义</th></tr>
+    <tr><td>授权对象</td><td>用户，或部门。授予部门时可选「含下级部门」。</td></tr>
+    <tr><td>角色授权</td><td>一条记录：把一个<b>岗位</b>或<b>角色</b>授予一个授权对象。</td></tr>
+    <tr><td>岗位</td><td>全局维护的职位（如「后端工程师」），可关联多个<b>默认角色</b>（可跨应用）；获得岗位即获得其默认角色。</td></tr>
+    <tr><td>直接授权 / 继承</td><td>授予用户本人的是直接授权；授予其所在部门、或授予上级部门且含下级的，是继承。继承来的授权只能在来源处修改。</td></tr>
+    <tr><td>有效角色</td><td>用户命中的全部角色授权 ∪ 命中岗位的默认角色，去重并记录每个来源。</td></tr>
+    <tr><td>数据对象</td><td>应用中的一条数据，用「数据编码 + 数据 Id」标识（如 <code>Agent</code> + <code>agt_7f3a21</code>）。</td></tr>
+    <tr><td>数据权限级别</td><td>只读（1）&lt; 读写（2）&lt; Owner（3）。高级别包含低级别；Owner 还能管理这条数据的授权。</td></tr>
+    <tr><td>授权快照</td><td>某用户在某应用的 can_access、角色、操作码、菜单，由开放接口返回，应用缓存使用。</td></tr>
+  </table>
+</section>
+
+<section id="s3">
+  <h2><span class="num">03</span>与其他模块的关系</h2>
+  <div class="arch">
+    <div class="arch-sys">
+      <div class="arch-sys-t">用户中心</div>
+      <div class="arch-row">
+        <div class="arch-box"><b>应用接入</b><ul><li>定义角色（操作 + 菜单）、数据编码</li><li>可访问范围</li></ul></div>
+        <div class="arch-link">角色 / 数据编码<i class="l"></i></div>
+        <div class="arch-box me"><b>权限管理（本模块）</b><ul><li>角色授权、岗位、数据授权</li><li>有效权限计算、保护规则</li></ul></div>
+        <div class="arch-link">授权对象<i class="l"></i></div>
+        <div class="arch-box"><b>用户 / 组织</b><ul><li>用户状态、所在部门</li><li>部门树（继承计算）</li></ul></div>
+      </div>
+      <div class="arch-note" style="margin:12px 0 8px">本模块的计算结果被以下使用：</div>
+      <div class="arch-row" style="gap:12px">
+        <div class="arch-box"><b>开放接口</b><ul><li>授权快照、实时校验、数据权限接口</li></ul></div>
+        <div class="arch-box"><b>用户中心自身</b><ul><li>侧边栏菜单、按钮（操作码）</li></ul></div>
+        <div class="arch-box"><b>用户详情 / 角色详情</b><ul><li>只读展示授权、拥有者、来源</li></ul></div>
+      </div>
+    </div>
+  </div>
+  <table>
+    <tr><th style="width:170px">方向</th><th>接口 / 事件</th><th>说明</th></tr>
+    <tr><td>本模块 → 组织</td><td><code>OrgService.chain(dept_uuid)</code>、<code>descendants()</code></td><td>继承计算：用户部门链；部门授权覆盖的人</td></tr>
+    <tr><td>本模块 → 应用接入</td><td><code>RoleDef.ops(role)</code>、<code>menus(role)</code>、<code>canAccess(user, app)</code></td><td>角色定义、可访问范围</td></tr>
+    <tr><td>用户 → 本模块</td><td><code>guardSuper()</code>（停用 / 调部门前）</td><td>超级管理员保护</td></tr>
+    <tr><td>组织 → 本模块</td><td><code>onDeptDeleted</code>、<code>guardSuper()</code>（移动部门前）</td><td>删除部门时撤销授予该部门的授权与数据授权</td></tr>
+    <tr><td>应用接入 → 本模块</td><td><code>onRoleDeleted</code>、<code>onDataTypeDeleting</code></td><td>删除角色时撤销授权、从岗位默认角色移除；数据编码有数据时拒绝删除</td></tr>
+  </table>
+</section>
+
+<section id="s4">
+  <h2><span class="num">04</span>功能清单</h2>
+  <table>
+    <tr><th style="width:170px">功能</th><th>说明</th><th style="width:70px">优先级</th></tr>
+    <tr><td>按对象授权</td><td>组织树 / 用户列表选对象 → 查看自有与继承的岗位、角色 → 授予、撤销、调整范围</td><td><span class="tag new">P0</span></td></tr>
+    <tr><td>全部授权</td><td>全部授权记录：按岗位 / 角色、用户 / 组织筛选，搜索，撤销</td><td><span class="tag new">P0</span></td></tr>
+    <tr><td>从岗位 / 角色授权</td><td>在岗位管理、角色详情中一次授予多个部门和用户</td><td><span class="tag new">P0</span></td></tr>
+    <tr><td>岗位管理</td><td>新建、编辑（默认角色）、删除（有授权时拒绝）</td><td><span class="tag new">P0</span></td></tr>
+    <tr><td>有效权限</td><td>用户的有效角色、操作码、菜单、数据权限及来源（用户详情只读）</td><td><span class="tag new">P0</span></td></tr>
+    <tr><td>数据授权</td><td>我管理的 / 我可访问的 / 全部数据；Owner 添加、改级别、改范围、移除授权</td><td><span class="tag new">P0</span></td></tr>
+    <tr><td>数据权限开放接口</td><td>应用写入 Owner、校验、列出可访问数据、清理</td><td><span class="tag new">P0</span></td></tr>
+    <tr><td>授权快照 / 实时校验</td><td>开放接口供应用使用</td><td><span class="tag new">P0</span></td></tr>
+    <tr><td>保护规则</td><td>至少一名可用超级管理员；每条数据至少一名可用 Owner</td><td><span class="tag new">P0</span></td></tr>
+    <tr><td>授权提示</td><td>授予的用户不在该角色所属应用的可访问范围时提示「暂不生效」</td><td><span class="tag">P1</span></td></tr>
+    <tr><td>代表用户修改数据授权</td><td>应用以 Owner 身份（operator）调用接口修改授权，便于在应用内提供分享功能</td><td><span class="tag">P1</span></td></tr>
+    <tr><td>变更通知</td><td>授权变化时向应用推送 <code>authz.changed</code></td><td><span class="tag">P1</span></td></tr>
+    <tr><td>Owner 移交</td><td>数据无可用 Owner 时由超级管理员指定新 Owner（待确认）</td><td><span class="tag">P1</span></td></tr>
+    <tr><td>拒绝授权、授权有效期、管理数据范围</td><td>本期不做</td><td><span class="tag p2">P2</span></td></tr>
+  </table>
+</section>
+
+<section id="s5">
+  <h2><span class="num">05</span>授权模型</h2>
+  <div class="grid2">
+    <div class="box"><h4>角色授权（功能权限）</h4>
+      <div class="arch-row" style="gap:0;margin-top:8px">
+        <div class="arch-box"><b>岗位</b><ul><li>全局维护</li><li>默认角色 0..n</li></ul></div>
+        <div class="arch-link" style="width:70px">默认角色<i class="r"></i></div>
+        <div class="arch-box"><b>角色</b><ul><li>属于某应用</li><li>= 操作 + 菜单</li></ul></div>
+      </div>
+      <div class="arch-note" style="margin-top:10px">授权记录：<b>岗位</b> 或 <b>角色</b> → <b>用户</b> / <b>部门</b>（可含下级）</div>
+    </div>
+    <div class="box"><h4>数据授权（数据权限）</h4>
+      <div class="arch-row" style="gap:0;margin-top:8px">
+        <div class="arch-box"><b>数据编码</b><ul><li>属于某应用</li><li>如 Agent</li></ul></div>
+        <div class="arch-link" style="width:70px">1 : n<i class="r"></i></div>
+        <div class="arch-box"><b>数据对象</b><ul><li>数据 Id</li><li>如 agt_7f3a21</li></ul></div>
+      </div>
+      <div class="arch-note" style="margin-top:10px">授权记录：<b>只读 / 读写 / Owner</b> → <b>用户</b> / <b>部门</b>（可含下级）</div>
+    </div>
+  </div>
+  <ul>
+    <li>两套授权<b>相互独立</b>：有某应用的角色不代表能看到它的某条数据，反之亦然；应用通常两者都检查（先看操作码，再看数据级别）。</li>
+    <li>两套授权的授权对象规则一致：用户、部门（含下级可选），继承方式相同。</li>
+    <li>只有<b>授予</b>，没有拒绝；有效结果是所有来源的<b>并集</b>（数据权限取<b>最高级别</b>）。</li>
+  </ul>
+</section>
+
+<section id="s6">
+  <h2><span class="num">06</span>有效权限的计算</h2>
+  <h3>命中的授权</h3>
+<pre>matchedGrants(user):                      <span class="c">// 角色授权与数据授权使用同一规则</span>
+  chain = 用户所在部门及其全部上级部门
+  return grants where
+       (subject = user)                                   <span class="c">// 直接授权</span>
+    or (subject = 用户所在部门)                            <span class="c">// 所在部门（不论是否含下级）</span>
+    or (subject ∈ chain 的上级部门 and include_sub = true)  <span class="c">// 上级部门且含下级</span></pre>
+  <h3>有效角色、操作码、菜单</h3>
+<pre>effectiveRoles(user):
+  if user.status = disabled: return ∅
+  roles = {}
+  for g in matchedGrants(user) where g.kind = role:     roles[g.role] += 来源(g)
+  for g in matchedGrants(user) where g.kind = position:
+    for r in g.position.default_roles:                  roles[r] += "岗位：" + g.position.name
+  return roles                                          <span class="c">// 角色 → 来源列表</span>
+
+permissions(user, app) = ∪ { r.operations | r ∈ effectiveRoles(user), r.app = app }
+menus(user, app)       = 公共菜单 ∪ 角色绑定的菜单，补上级目录（见应用接入 · 菜单）
+canAccess(user, app)   = user 未停用 且 在 app 的可访问范围内
+<span class="c">// 不在可访问范围内时，授权快照中的角色 / 操作码 / 菜单一律返回空</span></pre>
+  <h3>示例（原型数据：陈运，技术中心）</h3>
+  <table>
+    <tr><th>命中的授权</th><th>来源</th><th>带来的角色</th></tr>
+    <tr><td>岗位「SRE 负责人」授予陈运</td><td>直接授权</td><td>流程成员（TeamFlow）、Agent 管理员（Atlas）</td></tr>
+    <tr><td>角色「流程成员」授予研发中心（含下级）</td><td>部门：研发中心（含下级）</td><td>流程成员</td></tr>
+    <tr><td>角色「Agent 管理员」授予技术中心</td><td>部门：技术中心</td><td>Agent 管理员</td></tr>
+  </table>
+  <p>结果：流程成员（来源：岗位 SRE 负责人、部门 研发中心（含下级））；Agent 管理员（来源：岗位 SRE 负责人、部门 技术中心）。撤销其中一个来源，角色仍然保留。</p>
+  <h3>数据权限级别</h3>
+<pre>levelOf(user, data) = max{ a.level | a ∈ data.acl, a 命中 user }    <span class="c">// 无命中 = 无权限；已停用用户 = 无权限</span></pre>
+</section>
+
+<section id="s7">
+  <h2><span class="num">07</span>角色授权</h2>
+  <table>
+    <tr><th style="width:150px">规则</th><th>说明</th></tr>
+    <tr><td>唯一</td><td>同一（岗位或角色，授权对象）只有一条记录；重复授予时：部门授权按本次选择更新「含下级」，用户授权跳过</td></tr>
+    <tr><td>含下级</td><td>只对部门有效；界面默认勾选（上级部门往往没有直属成员）；可随时切换</td></tr>
+    <tr><td>继承只读</td><td>在子部门或用户上看到的继承授权不能直接撤销，显示「继承自 研发中心（含下级）」并可跳转到来源</td></tr>
+    <tr><td>已停用用户</td><td>不能新授予；已有授权保留（启用后恢复），停用期间不生效</td></tr>
+    <tr><td>可访问范围</td><td>允许授予范围外的用户，但不生效；P1 在授予时提示</td></tr>
+    <tr><td>撤销</td><td>确认弹窗显示覆盖人数，提示「没有其他来源的人将失去对应权限」</td></tr>
+    <tr><td>保护</td><td>任何撤销、范围调整都经过超级管理员保护（第 09 节）</td></tr>
+  </table>
+  <h3>三个入口</h3>
+  <table>
+    <tr><th style="width:190px">入口</th><th>操作</th></tr>
+    <tr><td>权限管理 → 按对象授权</td><td>选部门或用户 →「授予岗位」「授予角色」（多选，部门可选含下级）</td></tr>
+    <tr><td>岗位管理 →「授权」</td><td>选多个部门（含下级可选）和多个用户，一次授予该岗位</td></tr>
+    <tr><td>应用接入 → 角色 →「授权」分页</td><td>同上，授予该角色；同时列出哪些岗位带有该角色</td></tr>
+  </table>
+</section>
+
+<section id="s8">
+  <h2><span class="num">08</span>岗位管理</h2>
+  <table>
+    <tr><th style="width:120px">字段</th><th>规则</th></tr>
+    <tr><td>名称</td><td>必填，全局唯一，1–32 字符</td></tr>
+    <tr><td>编码</td><td><code>^[A-Z][A-Z0-9_]{1,31}$</code>，全局唯一，创建后不可改</td></tr>
+    <tr><td>默认角色</td><td>0..n 个，可来自不同应用；按应用分组勾选</td></tr>
+    <tr><td>排序</td><td>列表显示顺序 <span class="tag">P1</span></td></tr>
+  </table>
+  <ul>
+    <li>修改默认角色<b>立即</b>影响所有获得该岗位的人（含经部门获得的）；经过超级管理员保护。</li>
+    <li>删除：岗位还有授权时拒绝，提示「请先在角色授权中撤销 N 条授权」。</li>
+    <li>列表显示：名称、编码、默认角色、授权对象（前 3 个 + 总数）、人数（实际获得该岗位的人）、操作（授权 / 编辑 / 删除）。</li>
+    <li>用户的「岗位」展示 = 其命中的全部岗位授权（可多个），不再是用户表上的字段。</li>
+  </ul>
+</section>
+
+<section id="s9">
+  <h2><span class="num">09</span>超级管理员保护</h2>
+  <p>规则：任何时候至少有一名<b>未停用</b>、且有效角色包含内置角色「超级管理员」（<code>UC_SUPER</code>）的用户。否则没人能再管理用户中心。</p>
+  <table>
+    <tr><th style="width:220px">可能破坏规则的写操作</th><th>所在模块</th></tr>
+    <tr><td>撤销授权、把部门授权改为仅本部门</td><td>本模块</td></tr>
+    <tr><td>修改岗位默认角色</td><td>本模块</td></tr>
+    <tr><td>停用用户</td><td>用户管理</td></tr>
+    <tr><td>用户调整部门、移动部门（继承关系改变）</td><td>用户管理、组织管理</td></tr>
+  </table>
+  <h3>实现</h3>
+  <ul>
+    <li>上述操作在事务内先取 <code>pg_advisory_xact_lock('uc_super_guard')</code> 串行化，再执行变更，再计算是否仍有可用超级管理员；没有则回滚并返回 <code>LAST_SUPER_ADMIN</code>。串行化避免「两个管理员同时撤销两位超级管理员，各自检查都通过」。</li>
+    <li>计算：取所有 <code>UC_SUPER</code> 授权与带有它的岗位授权 → 展开为用户（部门授权按含下级展开）→ 过滤未停用 → 找到一个即可返回。</li>
+    <li>超级管理员是内置角色：不可删除，操作与菜单锁定。</li>
+  </ul>
+</section>
+
+<section id="s10">
+  <h2><span class="num">10</span>数据授权</h2>
+  <h3>数据对象</h3>
+  <ul>
+    <li>由应用在创建数据时调用开放接口登记（首次写入 Owner 时自动创建数据对象），记录数据编码、数据 Id、名称（展示用）、所属应用。</li>
+    <li>数据 Id 是应用自己的 Id（≤ 64 字符），在同一数据编码下唯一。</li>
+    <li>应用删除数据时调用清理接口，删除数据对象及其全部授权。</li>
+  </ul>
+  <h3>授权规则</h3>
+  <table>
+    <tr><th style="width:150px">规则</th><th>说明</th></tr>
+    <tr><td>级别</td><td>只读 &lt; 读写 &lt; Owner；同一对象对同一条数据只有一条授权，再次授予即更新级别（与部门范围）</td></tr>
+    <tr><td>授权对象</td><td>用户、部门（可含下级）；继承规则同角色授权</td></tr>
+    <tr><td><b>谁能修改</b></td><td><b>只有对该数据有效级别为 Owner 的人</b>（直接或经部门获得）。管理员（<code>data:view</code>）只能查看</td></tr>
+    <tr><td>Owner 保护</td><td>任何添加 / 改级别 / 改范围 / 移除后，这条数据至少还有一名<b>未停用</b>的用户是 Owner，否则回滚（<code>LAST_DATA_OWNER</code>）</td></tr>
+    <tr><td>授予 Owner</td><td>被授予者也能管理这条数据的授权（包括移除原 Owner）</td></tr>
+    <tr><td>来源</td><td>记录「接口写入（应用名）」或「某某授权」</td></tr>
+  </table>
+  <h3>无可用 Owner</h3>
+  <p>Owner 离职被停用、或调出了作为 Owner 的部门时，数据可能变成「无可用 Owner」。本期<b>不阻止</b>停用 / 调部门（否则会卡住人事操作）：</p>
+  <ul>
+    <li>「全部数据」列表中标红「无可用 Owner」，可按此筛选。</li>
+    <li>Owner 被启用后自动恢复。</li>
+    <li>P1：超级管理员「移交 Owner」，写审计（需确认是否允许，见待确认）。</li>
+  </ul>
+  <h3>界面分组</h3>
+  <table>
+    <tr><th style="width:120px">分组</th><th>内容</th><th style="width:140px">谁能看到</th></tr>
+    <tr><td>我管理的</td><td>我的有效级别为 Owner 的数据</td><td>所有登录用户</td></tr>
+    <tr><td>我可访问的</td><td>我的有效级别为只读 / 读写的数据</td><td>所有登录用户</td></tr>
+    <tr><td>全部数据</td><td>全部数据对象（只读）</td><td><code>data:view</code></td></tr>
+  </table>
+  <p>数据详情：我的级别及来源；授权列表（Owner 可在表格中直接改级别、切换含下级、移除，以及添加授权）；实际可访问的人（有效级别及来源）。</p>
+</section>
+
+<section id="s11">
+  <h2><span class="num">11</span>数据授权的接口写入</h2>
+  <table>
+    <tr><th style="width:40px">#</th><th style="width:220px">场景</th><th>调用</th></tr>
+    <tr><td>1</td><td>用户在 Atlas 创建 Agent</td><td>Atlas 后端：<code>POST /open/v1/data-permissions</code>，<code>permission=OWNER</code>，<code>subject=创建人</code>；数据对象不存在时自动创建</td></tr>
+    <tr><td>2</td><td>用户打开 / 编辑 / 删除 Agent</td><td><code>GET /open/v1/data-permissions/check</code>，按返回级别决定</td></tr>
+    <tr><td>3</td><td>Agent 列表页</td><td><code>GET /open/v1/data-permissions/accessible?min=READ</code> 过滤</td></tr>
+    <tr><td>4</td><td>Owner 在 Atlas 内「分享」给组织 <span class="tag">P1</span></td><td><code>POST /open/v1/data-permissions</code> 带 <code>operator_id</code>：用户中心校验 operator 对该数据为 Owner</td></tr>
+    <tr><td>5</td><td>删除 Agent</td><td><code>DELETE /open/v1/data-permissions?data_code=Agent&amp;data_id=…</code></td></tr>
+  </table>
+  <div class="callout rule"><b class="l">接口侧的 Owner 规则</b>
+    应用以自身身份（不带 operator）只能做两件事：<b>为不存在授权的数据写入第一个 Owner</b>（创建场景）、<b>清理整条数据</b>（删除场景）。其他修改必须带 <code>operator_id</code> 且该用户是 Owner。这样应用无法绕过「只有 Owner 能改授权」。</div>
+</section>
+
+<section id="s12">
+  <h2><span class="num">12</span>变更的生效</h2>
+  <table>
+    <tr><th style="width:220px">变更</th><th>受影响的人</th></tr>
+    <tr><td>授予 / 撤销给用户</td><td>该用户</td></tr>
+    <tr><td>授予 / 撤销给部门</td><td>该部门成员（含下级时为子树成员）</td></tr>
+    <tr><td>修改岗位默认角色</td><td>所有获得该岗位的人</td></tr>
+    <tr><td>修改角色的操作 / 菜单（应用接入）</td><td>该角色的全部拥有者</td></tr>
+    <tr><td>用户调部门 / 移动部门（组织）</td><td>相关成员的继承授权变化</td></tr>
+  </table>
+  <ul>
+    <li><b>用户中心内</b>（用户详情、侧边栏、按钮、实时校验接口、数据权限接口）都是<b>实时计算</b>，变更立即生效。</li>
+    <li><b>接入应用</b>缓存的授权快照最长 5 分钟后刷新；P1 起推送 <code>authz.changed</code>（附受影响用户 uuid，超过 1000 人时只给「全量刷新」标记），应用立即刷新。</li>
+    <li>数据权限接口本身不缓存，应用每次 check 即为最新结果。</li>
+  </ul>
+</section>
+
+<section id="s13">
+  <h2><span class="num">13</span>数据模型</h2>
+  <div class="callout rule"><b class="l">主键约定（全部表通用）</b>
+    <code>id bigint</code> 自增主键，只在库内使用，<b>不对外暴露、不用于任何关联</b>；
+    <code>uuid uuid</code> 逻辑主键（UUIDv7），<b>表间关联、外键、API 都使用它</b>。关联字段命名为 <code>xxx_uuid</code>，外键引用对方表的 <code>uuid</code>；API 中的 <code>id</code> / <code>xxx_id</code> 取值即对应的 uuid。</div>
+<pre><span class="c">-- 岗位</span>
+CREATE TABLE uc_position (
+  id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  uuid        uuid        NOT NULL UNIQUE,
+  code        varchar(32) NOT NULL UNIQUE,
+  name        varchar(32) NOT NULL UNIQUE,
+  sort        int NOT NULL DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now(), created_by uuid,
+  updated_at timestamptz NOT NULL DEFAULT now(), updated_by uuid,
+  version     int NOT NULL DEFAULT 1
+);
+
+<span class="c">-- 岗位默认角色</span>
+CREATE TABLE uc_position_role (
+  id             bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  uuid           uuid NOT NULL UNIQUE,
+  position_uuid  uuid NOT NULL REFERENCES uc_position(uuid) ON DELETE CASCADE,
+  role_uuid      uuid NOT NULL REFERENCES uc_role(uuid) ON DELETE CASCADE,
+  CONSTRAINT uk_position_role UNIQUE (position_uuid, role_uuid)
+);
+
+<span class="c">-- 角色授权：岗位 或 角色 → 用户 或 部门</span>
+CREATE TABLE uc_grant (
+  id             bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  uuid           uuid NOT NULL UNIQUE,
+  kind           varchar(8)  NOT NULL,             <span class="c">-- position | role</span>
+  position_uuid  uuid REFERENCES uc_position(uuid),
+  role_uuid      uuid REFERENCES uc_role(uuid) ON DELETE CASCADE,
+  subject_type   varchar(8)  NOT NULL,             <span class="c">-- user | dept</span>
+  user_uuid      uuid REFERENCES uc_user(uuid),
+  dept_uuid      uuid REFERENCES uc_dept(uuid) ON DELETE CASCADE,
+  include_sub    boolean NOT NULL DEFAULT false,
+  granted_by     uuid NOT NULL,
+  granted_at     timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT ck_grant_kind CHECK ((kind = 'position') = (position_uuid IS NOT NULL)
+                              AND (kind = 'role')     = (role_uuid IS NOT NULL)),
+  CONSTRAINT ck_grant_subject CHECK ((subject_type = 'user') = (user_uuid IS NOT NULL)
+                                 AND (subject_type = 'dept') = (dept_uuid IS NOT NULL)),
+  CONSTRAINT ck_grant_sub CHECK (subject_type = 'dept' OR NOT include_sub)
+);
+CREATE UNIQUE INDEX uk_grant ON uc_grant (kind, coalesce(position_uuid, role_uuid), coalesce(user_uuid, dept_uuid));
+CREATE INDEX ix_grant_user ON uc_grant (user_uuid) WHERE user_uuid IS NOT NULL;
+CREATE INDEX ix_grant_dept ON uc_grant (dept_uuid) WHERE dept_uuid IS NOT NULL;
+CREATE INDEX ix_grant_role ON uc_grant (role_uuid) WHERE role_uuid IS NOT NULL;
+CREATE INDEX ix_grant_pos  ON uc_grant (position_uuid) WHERE position_uuid IS NOT NULL;
+
+<span class="c">-- 数据对象</span>
+CREATE TABLE uc_data_object (
+  id              bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  uuid            uuid NOT NULL UNIQUE,
+  data_type_uuid  uuid NOT NULL REFERENCES uc_data_type(uuid),
+  data_id         varchar(64)  NOT NULL,           <span class="c">-- 应用自己的数据 Id</span>
+  data_name       varchar(100),
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT uk_data_object UNIQUE (data_type_uuid, data_id)
+);
+
+<span class="c">-- 数据授权</span>
+CREATE TABLE uc_data_acl (
+  id                bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  uuid              uuid NOT NULL UNIQUE,
+  data_object_uuid  uuid NOT NULL REFERENCES uc_data_object(uuid) ON DELETE CASCADE,
+  level             smallint NOT NULL,             <span class="c">-- 1 只读 | 2 读写 | 3 Owner</span>
+  subject_type      varchar(8) NOT NULL,           <span class="c">-- user | dept</span>
+  user_uuid         uuid REFERENCES uc_user(uuid),
+  dept_uuid         uuid REFERENCES uc_dept(uuid) ON DELETE CASCADE,
+  include_sub       boolean NOT NULL DEFAULT false,
+  source            varchar(8) NOT NULL,           <span class="c">-- api | manual</span>
+  granted_by        uuid,                          <span class="c">-- manual 时为操作人；api 时为空</span>
+  granted_app_uuid  uuid,                          <span class="c">-- api 时为调用应用</span>
+  granted_at        timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT ck_acl_level   CHECK (level IN (1, 2, 3)),
+  CONSTRAINT ck_acl_subject CHECK ((subject_type = 'user') = (user_uuid IS NOT NULL)
+                               AND (subject_type = 'dept') = (dept_uuid IS NOT NULL)),
+  CONSTRAINT ck_acl_sub     CHECK (subject_type = 'dept' OR NOT include_sub)
+);
+CREATE UNIQUE INDEX uk_data_acl ON uc_data_acl (data_object_uuid, coalesce(user_uuid, dept_uuid));
+CREATE INDEX ix_acl_user ON uc_data_acl (user_uuid) WHERE user_uuid IS NOT NULL;
+CREATE INDEX ix_acl_dept ON uc_data_acl (dept_uuid) WHERE dept_uuid IS NOT NULL;</pre>
+  <ul>
+    <li>级别存数字（1 / 2 / 3），取最高级别用 <code>max(level)</code>；对外显示为 READ / WRITE / OWNER。</li>
+    <li>授予部门的授权随部门删除级联删除（组织模块删除前已提示数量并写审计）；删除角色级联删除其授权。</li>
+    <li>岗位不级联：有授权的岗位不能删除。</li>
+  </ul>
+</section>
+
+<section id="s14">
+  <h2><span class="num">14</span>计算与查询实现</h2>
+  <h3>用户命中的授权</h3>
+<pre><span class="c">-- :user 用户 uuid；:dept 用户所在部门；:ancestors 其全部上级部门（由部门树缓存得到）</span>
+SELECT * FROM uc_grant
+WHERE  user_uuid = :user
+   OR  dept_uuid = :dept
+   OR (include_sub AND dept_uuid = ANY(:ancestors));</pre>
+  <h3>用户可访问的数据（列表过滤）</h3>
+<pre>SELECT o.data_id, max(a.level) AS level
+FROM   uc_data_object o
+JOIN   uc_data_acl a ON a.data_object_uuid = o.uuid
+WHERE  o.data_type_uuid = :type
+  AND (a.user_uuid = :user OR a.dept_uuid = :dept OR (a.include_sub AND a.dept_uuid = ANY(:ancestors)))
+GROUP  BY o.data_id
+HAVING max(a.level) &gt;= :min_level
+ORDER  BY o.data_id
+LIMIT  :size OFFSET :offset;</pre>
+  <h3>缓存</h3>
+  <ul>
+    <li>维护全局<b>授权版本号</b>（Redis）：任何授权、岗位、角色定义、用户部门 / 状态、部门结构变更后 +1。</li>
+    <li>每个用户的有效角色（含来源）按 <code>(user, 版本号)</code> 缓存；版本号变化即失效重算。写操作低频，全局版本号足够且不易出错。</li>
+    <li>角色定义（操作、菜单）、部门树在各实例内存中，按各自版本号失效。</li>
+    <li>数据权限不缓存，直接走上面的 SQL（命中索引）。</li>
+  </ul>
+  <h3>并发</h3>
+  <ul>
+    <li>可能减少超级管理员的写操作：事务内 <code>pg_advisory_xact_lock('uc_super_guard')</code>。</li>
+    <li>数据授权的写操作：事务内 <code>SELECT … FROM uc_data_object WHERE uuid = :obj FOR UPDATE</code> 锁住该数据，再做 Owner 校验，避免两名 Owner 同时互相移除。</li>
+  </ul>
+</section>
+
+<section id="s15">
+  <h2><span class="num">15</span>管理 API</h2>
+  <p class="muted">用户中心管理台使用，前缀 <code>/api/v1</code>；路径与报文中的 id 均为 uuid。</p>
+  <table>
+    <tr><th style="width:320px">接口</th><th>说明</th><th style="width:110px">操作码</th></tr>
+    <tr><td><code>GET /grants</code></td><td>全部授权：<code>kind, subject_type, q, page</code>；含覆盖人数</td><td>grant:view</td></tr>
+    <tr><td><code>GET /subjects/{type}/{id}/grants</code></td><td>某用户 / 部门的自有授权 + 继承授权（含来源）</td><td>grant:view</td></tr>
+    <tr><td><code>POST /grants</code></td><td><code>{kind, target_ids[], subjects:[{type,id}], include_sub}</code> → <code>{added, updated}</code></td><td>grant:manage</td></tr>
+    <tr><td><code>PATCH /grants/{id}</code></td><td><code>{include_sub}</code></td><td>grant:manage</td></tr>
+    <tr><td><code>DELETE /grants/{id}</code></td><td>撤销；<code>dry_run</code> 返回覆盖人数</td><td>grant:manage</td></tr>
+    <tr><td><code>GET /users/{id}/effective</code></td><td>有效角色（来源）、各应用操作码与菜单、数据权限</td><td>grant:view</td></tr>
+    <tr><td><code>GET /roles/{id}/grants</code> · <code>/holders</code></td><td>角色的授权、带有它的岗位；实际拥有者及来源</td><td>role:view</td></tr>
+    <tr><td><code>GET /positions</code> · <code>POST /positions</code></td><td>列表（含授权对象、人数）/ 新建 <code>{code, name, role_ids[]}</code></td><td>position:view / manage</td></tr>
+    <tr><td><code>PATCH /positions/{id}</code> · <code>DELETE</code></td><td>改名称、默认角色 / 删除</td><td>position:manage</td></tr>
+    <tr><td><code>GET /data</code></td><td><code>scope=mine|access|all, data_code, q, page</code>；all 需 data:view</td><td>登录 / data:view</td></tr>
+    <tr><td><code>GET /data/{id}</code></td><td>数据详情：我的级别与来源、授权列表、实际可访问的人</td><td>有任意级别或 data:view</td></tr>
+    <tr><td><code>POST /data/{id}/acl</code></td><td><code>{level, subjects:[{type,id}], include_sub}</code></td><td>该数据 Owner</td></tr>
+    <tr><td><code>PATCH /data-acl/{id}</code> · <code>DELETE</code></td><td>改级别 / 含下级；移除</td><td>该数据 Owner</td></tr>
+  </table>
+  <h3>错误码</h3>
+  <table>
+    <tr><th style="width:230px">code</th><th style="width:60px">HTTP</th><th>场景</th></tr>
+    <tr><td><code>GRANT_NOT_FOUND</code></td><td>404</td><td>授权不存在</td></tr>
+    <tr><td><code>TARGET_NOT_FOUND</code></td><td>422</td><td>岗位 / 角色不存在</td></tr>
+    <tr><td><code>SUBJECT_NOT_FOUND</code></td><td>422</td><td>用户 / 部门不存在</td></tr>
+    <tr><td><code>USER_DISABLED</code></td><td>422</td><td>授予已停用用户</td></tr>
+    <tr><td><code>LAST_SUPER_ADMIN</code></td><td>409</td><td>操作后没有可用的超级管理员</td></tr>
+    <tr><td><code>POSITION_CODE_EXISTS</code> / <code>POSITION_NAME_EXISTS</code></td><td>409</td><td>岗位编码 / 名称重复</td></tr>
+    <tr><td><code>POSITION_IN_USE</code></td><td>409</td><td>删除仍有授权的岗位，<code>details</code> 给出授权数</td></tr>
+    <tr><td><code>DATA_NOT_FOUND</code></td><td>404</td><td>数据对象不存在</td></tr>
+    <tr><td><code>NOT_DATA_OWNER</code></td><td>403</td><td>非 Owner 修改数据授权</td></tr>
+    <tr><td><code>LAST_DATA_OWNER</code></td><td>409</td><td>操作后该数据没有可用的 Owner</td></tr>
+    <tr><td><code>VERSION_CONFLICT</code></td><td>409</td><td>乐观锁冲突（岗位）</td></tr>
+    <tr><td><code>PERMISSION_DENIED</code></td><td>403</td><td>缺少操作码</td></tr>
+  </table>
+</section>
+
+<section id="s16">
+  <h2><span class="num">16</span>开放接口</h2>
+  <p class="muted">由本模块实现、经应用接入模块的接口令牌鉴权，前缀 <code>/open/v1</code>；结果限定在调用方应用。</p>
+  <table>
+    <tr><th style="width:330px">接口</th><th>说明</th></tr>
+    <tr><td><code>GET /users/{id}/authz</code></td><td>授权快照：<code>can_access</code>、角色编码、操作码、菜单树、<code>computed_at</code></td></tr>
+    <tr><td><code>POST /authz/check</code></td><td><code>{user_id, permission}</code> → <code>{allowed, roles[]}</code>；实时</td></tr>
+    <tr><td><code>POST /data-permissions</code></td><td><code>{data_code, data_id, data_name?, permission, subject_type, subject_id | subject_account, include_sub?, operator_id?}</code></td></tr>
+    <tr><td><code>GET /data-permissions/check</code></td><td><code>data_code, data_id, user_id</code> → <code>{permission: READ|WRITE|OWNER|NONE, sources[]}</code></td></tr>
+    <tr><td><code>GET /data-permissions/accessible</code></td><td><code>data_code, user_id, min, page</code> → <code>{items:[{data_id, permission}]}</code></td></tr>
+    <tr><td><code>GET /data-permissions/acl</code> <span class="tag">P1</span></td><td>某条数据的授权列表（应用内展示「已分享给」）</td></tr>
+    <tr><td><code>PATCH</code> · <code>DELETE /data-permissions/acl/{id}</code> <span class="tag">P1</span></td><td>带 <code>operator_id</code>（须为 Owner）修改 / 移除</td></tr>
+    <tr><td><code>DELETE /data-permissions</code></td><td><code>data_code, data_id</code>：数据删除后清理</td></tr>
+  </table>
+<pre>POST /open/v1/data-permissions                  <span class="c">// Atlas 创建 Agent 后调用</span>
+{ "data_code": "Agent", "data_id": "agt_7f3a21", "data_name": "代码评审助手",
+  "permission": "OWNER", "subject_type": "USER", "subject_id": "0192f3b1-27aa-7c40-8e15-9d0c1b2a3f44" }
+
+201 Created
+{ "acl_id": "0192f3c0-...", "data_object_created": true }
+
+GET /open/v1/data-permissions/check?data_code=Agent&amp;data_id=agt_7f3a21&amp;user_id=0192f3b1-...chen
+{ "permission": "WRITE",
+  "sources": [ { "type": "USER", "level": "WRITE" },
+               { "type": "DEPT", "dept": "研发中心", "include_sub": true, "level": "READ" } ] }</pre>
+  <h3>开放接口错误码（补充）</h3>
+  <table>
+    <tr><th style="width:230px">code</th><th style="width:60px">HTTP</th><th>场景</th></tr>
+    <tr><td><code>DATA_TYPE_NOT_OWNED</code></td><td>403</td><td>数据编码不属于调用方应用</td></tr>
+    <tr><td><code>OWNER_REQUIRED</code></td><td>403</td><td>数据已有授权，且未带 operator 或 operator 不是 Owner</td></tr>
+    <tr><td><code>LAST_DATA_OWNER</code></td><td>409</td><td>修改后没有可用 Owner</td></tr>
+    <tr><td><code>SUBJECT_NOT_FOUND</code></td><td>422</td><td>用户 / 部门不存在</td></tr>
+  </table>
+</section>
+
+<section id="s17">
+  <h2><span class="num">17</span>权限</h2>
+  <p>「权限管理」菜单是<b>公共菜单</b>（每个人都可能是某条数据的 Owner），页面内分页按操作码显示：</p>
+  <table>
+    <tr><th style="width:150px">操作码</th><th>前端控制</th><th>内置角色</th></tr>
+    <tr><td><code>grant:view</code></td><td>「角色授权」分页；用户详情「权限」分页</td><td>超级管理员、用户管理员、审计员</td></tr>
+    <tr><td><code>grant:manage</code></td><td>授予、撤销、调整范围；岗位 / 角色页的「授权」按钮</td><td>超级管理员、用户管理员</td></tr>
+    <tr><td><code>position:view</code></td><td>「岗位管理」分页</td><td>超级管理员、用户管理员</td></tr>
+    <tr><td><code>position:manage</code></td><td>新建、编辑、删除岗位</td><td>超级管理员、用户管理员</td></tr>
+    <tr><td><code>data:view</code></td><td>「数据授权 → 全部数据」，只读</td><td>超级管理员、审计员</td></tr>
+    <tr><td>（无，按 Owner）</td><td>数据授权的添加 / 改级别 / 移除</td><td>该数据的 Owner</td></tr>
+  </table>
+  <p class="muted">只有数据授权的普通用户登录后侧边栏只有「权限管理」，进入后只有「数据授权」分页。</p>
+</section>
+
+<section id="s18">
+  <h2><span class="num">18</span>页面设计</h2>
+  <p>以原型为准（<code>prototype/usercenter/index.html</code> → 权限管理）。页头说明随分页变化；分页：角色授权 / 数据授权 / 岗位管理。</p>
+  <div class="grid2">
+    <div class="box"><h4>角色授权 · 按对象授权</h4>
+      <ul><li>左：「组织 / 用户」切换；组织树（节点显示自有授权数）或可搜索的用户列表</li>
+      <li>右：对象信息（部门：本部门人数 / 含下级人数；用户：状态、部门路径）+「授予岗位」「授予角色」</li>
+      <li>岗位表、角色表：名称、默认角色 / 所属应用、来源（本部门授权 · 含下级 / 直接授权 / 继承自 X）、授权人与时间、改范围 / 撤销</li>
+      <li>用户另有「有效角色」卡片：角色与来源、操作数，跳转用户详情</li></ul></div>
+    <div class="box"><h4>角色授权 · 全部授权</h4>
+      <ul><li>筛选：全部 / 岗位 / 角色；全部对象 / 用户 / 组织；搜索</li>
+      <li>表格：授权内容、授权对象（可点击跳到按对象授权）、范围、覆盖人数、授权人与时间、改范围 / 撤销</li></ul></div>
+    <div class="box"><h4>数据授权</h4>
+      <ul><li>页头「模拟：在 Atlas 中创建 Agent」（原型演示用）</li>
+      <li>分组：我管理的 / 我可访问的 / 全部数据；按数据编码筛选、搜索</li>
+      <li>表格：数据（名称、数据 Id）、数据编码与应用、我的权限、Owner、授权数、创建时间</li></ul></div>
+    <div class="box"><h4>数据详情</h4>
+      <ul><li>数据信息 + 我的权限及来源；非 Owner 显示「只有 Owner 可以修改」</li>
+      <li>授权表：对象、级别（Owner 可下拉修改）、范围、来源、时间、改范围 / 移除；「添加授权」</li>
+      <li>实际可访问的人：有效级别与来源</li></ul></div>
+    <div class="box"><h4>岗位管理</h4>
+      <ul><li>表格：岗位、编码、默认角色、授权对象、人数、授权 / 编辑 / 删除</li>
+      <li>新建 / 编辑弹窗：名称、编码、按应用分组勾选默认角色</li></ul></div>
+    <div class="box"><h4>授权弹窗</h4>
+      <ul><li>从对象出发：勾选岗位或角色（已授予的置灰），部门可选「含下级」</li>
+      <li>从岗位 / 角色 / 数据出发：左组织树多选 + 含下级，右可搜索的用户多选；数据授权另选级别</li></ul></div>
+  </div>
+</section>
+
+<section id="s19">
+  <h2><span class="num">19</span>审计</h2>
+  <table>
+    <tr><th style="width:170px">动作</th><th>对象</th><th>说明字段</th></tr>
+    <tr><td>授予岗位 / 授予角色</td><td>岗位 / 角色名</td><td>授权对象列表、范围</td></tr>
+    <tr><td>调整授权范围</td><td>授权内容 → 对象</td><td>含下级 / 仅本部门</td></tr>
+    <tr><td>撤销授权</td><td>授权内容 → 对象</td><td>覆盖人数</td></tr>
+    <tr><td>新建 / 编辑 / 删除岗位</td><td>岗位名</td><td>默认角色差异</td></tr>
+    <tr><td>数据授权</td><td>数据编码 · 名称</td><td>级别 → 对象</td></tr>
+    <tr><td>修改数据权限</td><td>数据编码 · 名称</td><td>对象：旧级别 → 新级别</td></tr>
+    <tr><td>调整数据授权范围 / 移除数据授权</td><td>数据编码 · 名称</td><td>对象</td></tr>
+    <tr><td>接口写入数据权限</td><td>数据编码 · 名称</td><td>操作人 = 应用；级别 → 对象</td></tr>
+    <tr><td>清理数据授权</td><td>数据编码 · 数据 Id</td><td>应用；删除的授权数</td></tr>
+    <tr><td>回滚（保护规则触发）</td><td>—</td><td>不写审计，只返回错误</td></tr>
+  </table>
+</section>
+
+<section id="s20">
+  <h2><span class="num">20</span>异常与边界</h2>
+  <table>
+    <tr><th style="width:280px">场景</th><th>处理</th></tr>
+    <tr><td>同一角色经多个来源获得，撤销其一</td><td>角色仍在，来源减少</td></tr>
+    <tr><td>部门授权改为仅本部门</td><td>下级部门成员失去继承；经超级管理员保护</td></tr>
+    <tr><td>两个管理员同时撤销两位超级管理员</td><td>串行化执行，后者 <code>LAST_SUPER_ADMIN</code></td></tr>
+    <tr><td>两名 Owner 同时互相移除</td><td>数据行加锁，后者 <code>LAST_DATA_OWNER</code></td></tr>
+    <tr><td>Owner 全部被停用</td><td>不阻止停用；数据标「无可用 Owner」；启用后恢复；P1 移交</td></tr>
+    <tr><td>授予的用户不在应用可访问范围</td><td>授权保存但不生效；P1 授予时提示</td></tr>
+    <tr><td>角色被删除</td><td>授权级联删除，并从岗位默认角色移除（删除前在应用接入中预览）</td></tr>
+    <tr><td>部门被删除</td><td>授予该部门的角色授权、数据授权级联删除（组织模块删除前提示数量）</td></tr>
+    <tr><td>应用对已存在授权的数据再次写入 Owner（不带 operator）</td><td><code>OWNER_REQUIRED</code>，防止应用绕过 Owner 规则</td></tr>
+    <tr><td>用户对某数据既有直接只读又有部门读写</td><td>有效级别为读写；详情中列出两个来源</td></tr>
+  </table>
+</section>
+
+<section id="s21">
+  <h2><span class="num">21</span>非功能</h2>
+  <div class="grid2">
+    <div class="box"><h4>性能</h4>
+      <ul><li>按 5 万用户、10 万条角色授权、100 万条数据授权设计</li>
+      <li>授权快照 p95 &lt; 50ms（有效角色缓存命中 &lt; 5ms）</li>
+      <li>数据权限 check p95 &lt; 20ms；accessible 分页 p95 &lt; 100ms</li>
+      <li>覆盖人数、拥有者列表按需计算，列表页分页</li></ul></div>
+    <div class="box"><h4>正确性</h4>
+      <ul><li>保护规则与变更在同一事务，失败整体回滚</li>
+      <li>缓存以全局授权版本号失效，不会读到过期的有效权限</li>
+      <li>开放接口按调用方应用隔离：只能看到本应用的角色 / 菜单 / 数据编码</li></ul></div>
+  </div>
+</section>
+
+<section id="s22">
+  <h2><span class="num">22</span>与原型的差异</h2>
+  <table class="diff">
+    <tr><th>项</th><th>原型</th><th>详细设计</th></tr>
+    <tr><td>授予已停用用户</td><td>选人列表已排除，但无服务端校验</td><td>服务端拒绝 <code>USER_DISABLED</code></td></tr>
+    <tr><td>超级管理员保护范围</td><td>授权变更、岗位默认角色、停用用户</td><td>另含用户调部门、移动部门</td></tr>
+    <tr><td>数据权限接口的授权对象</td><td>按账号</td><td>按 uuid，兼容账号（<code>subject_account</code>）</td></tr>
+    <tr><td>应用修改已有数据授权</td><td>无此规则</td><td>须带 operator 且为 Owner</td></tr>
+    <tr><td>无可用 Owner</td><td>列表标红</td><td>同上 + 可筛选；P1 移交</td></tr>
+    <tr><td>授权范围外提示、变更通知</td><td>无</td><td>P1</td></tr>
+  </table>
+</section>
+
+<section id="s23">
+  <h2><span class="num">23</span>测试要点</h2>
+  <ul>
+    <li>继承：直接、所在部门（含 / 不含下级都命中）、上级部门含下级命中、上级部门不含下级不命中、多级继承。</li>
+    <li>有效角色：岗位默认角色、多来源去重、撤销一个来源角色仍在、已停用用户为空、范围外用户快照为空。</li>
+    <li>授权唯一：重复授予用户跳过；重复授予部门更新含下级。</li>
+    <li>岗位：编码格式 / 唯一、名称唯一、删除有授权的岗位被拒、修改默认角色立即影响拥有者。</li>
+    <li>超级管理员保护：撤销、改范围、改岗位默认角色、停用、调部门、移动部门；并发撤销两位只能成功一个。</li>
+    <li>数据授权：级别取最高；非 Owner 修改被拒；Owner 互相移除并发；最后一名 Owner 移除 / 降级被拒；经部门获得 Owner 后可降级本人。</li>
+    <li>接口：写入首个 Owner 自动建数据对象；已存在授权时不带 operator 被拒；跨应用数据编码被拒；accessible 分页与 min 过滤；清理接口。</li>
+    <li>级联：删除部门、删除角色后授权与数据授权被清理。</li>
+    <li>缓存：任意授权变更后快照与 check 立即反映新结果。</li>
+    <li>权限：各分页在缺少操作码时隐藏、接口 403；普通用户只有数据授权分页。</li>
+  </ul>
+</section>
+
+<section id="s24">
+  <h2><span class="num">24</span>落地计划</h2>
+  <table>
+    <tr><th style="width:90px">阶段</th><th>内容</th><th style="width:150px">依赖</th></tr>
+    <tr><td>M1</td><td>uc_grant、uc_position、uc_position_role；有效角色计算与缓存；超级管理员保护</td><td>用户、组织、应用接入（角色）</td></tr>
+    <tr><td>M2</td><td>角色授权页面（按对象 / 全部）、岗位管理；用户详情权限分页；角色授权 / 拥有者分页</td><td>—</td></tr>
+    <tr><td>M3</td><td>开放接口：授权快照、实时校验；用户中心自身菜单与按钮接入</td><td>应用接入（接口令牌）</td></tr>
+    <tr><td>M4</td><td>uc_data_object、uc_data_acl；数据权限开放接口；数据授权页面；Owner 保护</td><td>应用接入（数据编码）</td></tr>
+    <tr><td>M5</td><td>operator 代表修改、授权提示、<code>authz.changed</code> 通知、Owner 移交</td><td>应用侧配合</td></tr>
+  </table>
+</section>
+
+<section id="s25">
+  <h2><span class="num">25</span>待确认</h2>
+  <ol>
+    <li><b>Owner 移交</b>：数据无可用 Owner 时，是否允许超级管理员指定新 Owner？这与「只有 Owner 能修改」相冲突，但能避免数据永久无人管理。</li>
+    <li><b>停用用户的授权</b>：保留（当前，启用后恢复），还是停用时自动撤销？</li>
+    <li><b>授予范围外用户</b>：允许但不生效（当前），还是直接拒绝？</li>
+    <li><b>岗位是否需要按应用划分</b>：当前岗位全局、默认角色可跨应用。</li>
+    <li><b>应用代表用户修改数据授权（operator）</b>是否需要 P0 就提供（Atlas 是否要在应用内做「分享」）？</li>
+    <li><b>授权快照缓存</b>：最长 5 分钟是否可接受？</li>
+  </ol>
+</section>
+
+</main>
+</div>
+</body>
+</html>

@@ -1,0 +1,675 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>用户管理模块 · 详细设计 · 用户中心</title>
+<style>
+  :root{
+    --bg:#f6f7f9;--surface:#fff;--surface-2:#fbfbfd;--ink:#0f172a;--ink-2:#334155;--ink-3:#64748b;--ink-4:#94a3b8;
+    --line:#e6e8ee;--line-2:#eef0f4;--primary:#4f46e5;--primary-weak:#eef0ff;
+    --warning:#b45309;--warning-weak:#fef3e2;
+    --mono:"JetBrains Mono","SF Mono",ui-monospace,Menlo,Consolas,monospace;
+    --font:"Inter","PingFang SC","Microsoft YaHei",system-ui,-apple-system,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink-2);font-family:var(--font);font-size:14.5px;line-height:1.75}
+  a{color:var(--primary);text-decoration:none}
+  .wrap{display:grid;grid-template-columns:240px minmax(0,1fr);gap:36px;max-width:1240px;margin:0 auto;padding:32px 28px 80px}
+  nav.toc{position:sticky;top:24px;align-self:start;max-height:calc(100vh - 48px);overflow:auto;font-size:13px}
+  nav.toc .t{font-size:11px;letter-spacing:.12em;color:var(--ink-4);text-transform:uppercase;margin-bottom:8px;font-weight:600}
+  nav.toc ol{list-style:none;margin:0;padding:0;counter-reset:s}
+  nav.toc li{counter-increment:s}
+  nav.toc a{display:block;padding:4px 8px;border-radius:6px;color:var(--ink-3)}
+  nav.toc a::before{content:counter(s,decimal-leading-zero) "  ";font-family:var(--mono);font-size:11px;color:var(--ink-4)}
+  nav.toc a:hover{background:#fff;color:var(--ink)}
+  header.hero{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:28px 30px;margin-bottom:28px}
+  .kicker{font-family:var(--mono);font-size:11.5px;letter-spacing:.14em;color:var(--primary);text-transform:uppercase;margin:0 0 6px}
+  h1{font-size:26px;color:var(--ink);margin:0 0 10px;letter-spacing:-.3px}
+  .lede{margin:0;font-size:15px}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+  .meta span{font-size:12px;padding:2px 10px;border-radius:999px;background:var(--primary-weak);color:var(--primary)}
+  section{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:24px 28px;margin-bottom:20px}
+  h2{font-size:19px;color:var(--ink);margin:0 0 14px;display:flex;align-items:center;gap:10px}
+  h2 .num{font-family:var(--mono);font-size:12px;color:#fff;background:var(--primary);border-radius:6px;padding:2px 7px}
+  h3{font-size:15.5px;color:var(--ink);margin:22px 0 8px}
+  p{margin:0 0 12px}
+  code{font-family:var(--mono);font-size:12.5px;background:#f1f3f7;border:1px solid var(--line-2);border-radius:4px;padding:0 5px;color:#be185d}
+  table{width:100%;border-collapse:collapse;font-size:13.5px;margin:6px 0 14px}
+  th{text-align:left;background:var(--surface-2);color:var(--ink-3);font-weight:600;font-size:12.5px}
+  th,td{border:1px solid var(--line);padding:8px 10px;vertical-align:top}
+  td code{white-space:nowrap}
+  pre{background:#0f172a;color:#e2e8f0;border-radius:10px;padding:14px 16px;font-family:var(--mono);font-size:12.5px;line-height:1.65;overflow:auto;margin:6px 0 14px;white-space:pre-wrap}
+  pre .c{color:#94a3b8}
+  .callout{border:1px solid;border-left-width:4px;border-radius:10px;padding:10px 14px;margin:8px 0 14px;font-size:13.5px}
+  .callout b.l{display:block;font-size:11.5px;letter-spacing:.1em;margin-bottom:3px}
+  .rule{background:var(--primary-weak);border-color:#c7c9f5;color:#312e81}
+  .warn{background:var(--warning-weak);border-color:#f6d39b;color:#7c2d12}
+  .tag{display:inline-block;font-size:11.5px;padding:0 8px;border-radius:999px;border:1px solid var(--line);background:var(--surface-2);color:var(--ink-3);white-space:nowrap}
+  .tag.new{color:var(--primary);border-color:#c7c9f5;background:var(--primary-weak)}
+  .tag.p2{color:var(--warning);border-color:#f6d39b;background:var(--warning-weak)}
+  .flow{font-family:var(--mono);font-size:12.5px;line-height:1.75;background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:14px 16px;white-space:pre;overflow:auto;margin:6px 0 14px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .box{border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:var(--surface-2)}
+  .box h4{margin:0 0 6px;font-size:13.5px;color:var(--ink)}
+  ul,ol{margin:0 0 12px;padding-left:20px}
+  li{margin:2px 0}
+  .muted{color:var(--ink-4);font-size:12px}
+  /* 关系图 */
+  .arch{margin:6px 0 14px}
+  .arch-sys{border:1.5px dashed #c7c9f5;border-radius:12px;padding:12px 14px;background:#fafaff}
+  .arch-sys-t{font-size:12px;font-weight:700;color:var(--primary);margin-bottom:8px;letter-spacing:.06em}
+  .arch-row{display:flex;align-items:center}
+  .arch-box{flex:1;background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:13px}
+  .arch-box.me{border-color:var(--primary);box-shadow:0 0 0 3px rgba(79,70,229,.1)}
+  .arch-box b{color:var(--ink)}
+  .arch-box ul{margin:6px 0 0;padding-left:16px;color:var(--ink-3);font-size:12.5px}
+  .arch-link{width:96px;flex:none;text-align:center;font-size:11.5px;color:var(--ink-3);position:relative;padding-bottom:10px}
+  .arch-link i{position:absolute;left:8px;right:8px;bottom:0;height:2px;background:#9aa4b6}
+  .arch-link i.r::after{content:"";position:absolute;right:-2px;top:-4px;border-left:7px solid #9aa4b6;border-top:5px solid transparent;border-bottom:5px solid transparent}
+  .arch-link i.l::before{content:"";position:absolute;left:-2px;top:-4px;border-right:7px solid #9aa4b6;border-top:5px solid transparent;border-bottom:5px solid transparent}
+  .arch-note{margin-top:8px;font-size:12px;color:var(--ink-3)}
+  .arch-down{display:flex;align-items:center;gap:8px;margin-left:calc(83% - 1px);height:34px;font-size:11.5px;color:var(--ink-3)}
+  .arch-down i{width:2px;height:100%;background:#9aa4b6;position:relative}
+  .arch-down i::after{content:"";position:absolute;left:-4px;bottom:-2px;border-top:7px solid #9aa4b6;border-left:5px solid transparent;border-right:5px solid transparent}
+  .arch-ext{margin-left:calc(83% - 90px);width:180px;text-align:center;border:1px solid #9aa4b6;border-radius:10px;padding:8px;background:#fff;font-weight:600;color:var(--ink);font-size:13px}
+  @media (max-width:980px){.wrap{grid-template-columns:1fr}nav.toc{position:static;max-height:none}.grid2{grid-template-columns:1fr}
+    .arch-row{flex-direction:column;align-items:stretch}.arch-link{width:auto;height:30px}.arch-down,.arch-ext{margin-left:0}}
+  .sm{width:100%;height:auto;display:block;margin:6px 0 14px;background:var(--surface-2);border:1px solid var(--line);border-radius:10px}
+  .ok{color:#15803d;font-weight:700}.no{color:var(--ink-4)}
+  .diff td:first-child{white-space:nowrap}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<nav class="toc">
+  <div class="t">目录</div>
+  <ol>
+    <li><a href="#s1">定位与范围</a></li>
+    <li><a href="#s2">术语</a></li>
+    <li><a href="#s3">与其他模块的关系</a></li>
+    <li><a href="#s4">功能清单</a></li>
+    <li><a href="#s5">领域模型</a></li>
+    <li><a href="#s6">直属上级（由组织计算）</a></li>
+    <li><a href="#s7">账号状态与生命周期</a></li>
+    <li><a href="#s8">新建用户与临时密码</a></li>
+    <li><a href="#s9">编辑用户</a></li>
+    <li><a href="#s10">停用 · 启用 · 解锁 · 重置密码</a></li>
+    <li><a href="#s11">列表与查询</a></li>
+    <li><a href="#s12">用户详情</a></li>
+    <li><a href="#s13">个人中心（自助）</a></li>
+    <li><a href="#s14">数据模型</a></li>
+    <li><a href="#s15">API</a></li>
+    <li><a href="#s16">权限</a></li>
+    <li><a href="#s17">页面设计</a></li>
+    <li><a href="#s18">审计</a></li>
+    <li><a href="#s19">异常与边界</a></li>
+    <li><a href="#s20">非功能</a></li>
+    <li><a href="#s21">与原型的差异</a></li>
+    <li><a href="#s22">测试要点</a></li>
+    <li><a href="#s23">落地计划</a></li>
+    <li><a href="#s24">待确认</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<header class="hero">
+  <p class="kicker">User Center · Detailed Design</p>
+  <h1>用户管理模块</h1>
+  <p class="lede">用户中心<b>自建账号</b>，接入应用（AI TeamFlow、Atlas 等）通过开放接口获取用户、组织与权限（统一登录本期不做，以后用 Keycloak）。用户管理模块负责账号的<b>建立、维护、状态与密码</b>：新建、编辑、停用 / 启用、解锁、重置密码，以及用户本人的个人中心。<b>直属上级不存储</b>，由组织架构按部门负责人计算。岗位、角色、菜单与数据权限不在这里维护——它们由<b>权限管理</b>模块授予用户或组织，用户详情只做只读展示。</p>
+  <div class="meta"><span>自建账号</span><span>账号不可修改、不物理删除</span><span>临时密码只显示一次</span><span>首次登录必须改密</span><span>停用即注销所有会话</span><span>岗位在权限管理中授予</span><span>直属上级由组织计算</span></div>
+</header>
+
+<section id="s1">
+  <h2><span class="num">01</span>定位与范围</h2>
+  <div class="grid2">
+    <div class="box"><h4>本模块负责</h4>
+      <ul>
+        <li>用户档案：姓名、账号、邮箱、手机、所属部门</li>
+        <li>账号状态：未激活 / 正常 / 已锁定 / 已停用，及其转换</li>
+        <li>管理员侧密码操作：生成临时密码、重置密码、解锁</li>
+        <li>用户详情：基本信息、权限（只读）、登录记录、可访问的应用</li>
+        <li>个人中心：本人修改邮箱 / 手机、修改密码、查看可访问的应用</li>
+      </ul></div>
+    <div class="box"><h4>不在本模块</h4>
+      <ul>
+        <li>部门树、部门负责人、<b>直属上级的计算</b> → <b>组织架构</b>模块</li>
+        <li>岗位、角色、菜单、数据权限的授予 → <b>权限管理</b>模块</li>
+        <li>用户中心管理台的登录、会话、密码策略、锁定规则 → <b>认证与安全策略</b>模块（本模块调用其服务）；<b>不对外提供统一登录</b>，以后用 Keycloak</li>
+        <li>应用的可访问范围 → <b>应用接入</b>模块</li>
+        <li>日志查询页面 → <b>审计日志</b>模块（本模块只负责写入事件）</li>
+        <li><b>本期不做</b>：批量操作、批量导入、导出；HR 系统同步（用户中心即人员数据来源）</li>
+      </ul></div>
+  </div>
+  <div class="callout rule"><b class="l">设计原则</b>账号是各系统识别人的依据：<b>账号创建后不可修改，用户不做物理删除</b>（离职走停用），保证接入应用里的历史数据、审计记录始终能对上人。</div>
+</section>
+
+<section id="s2">
+  <h2><span class="num">02</span>术语</h2>
+  <table>
+    <tr><th style="width:150px">术语</th><th>含义</th></tr>
+    <tr><td>账号 <code>account</code></td><td>登录名，小写字母、数字、点、下划线，3–32 位；全局唯一，创建后不可修改，停用后也不回收复用。</td></tr>
+    <tr><td>主键 <code>id</code> / 逻辑主键 <code>uuid</code></td><td><code>id</code> 为自增主键，仅库内使用；<code>uuid</code> 为逻辑主键（UUIDv7），业务关联、API、开放接口都使用它；以后接入 Keycloak 时作为用户的稳定标识。</td></tr>
+    <tr><td>临时密码</td><td>新建、重置时由系统生成的一次性密码，只向管理员显示一次；用户用它登录后必须修改密码。</td></tr>
+    <tr><td>激活</td><td>用户首次登录并按策略设置了自己的密码。激活前状态为「未激活」。</td></tr>
+    <tr><td>须改密</td><td>用户下次登录必须先改密码的标记（<code>must_change_password</code>）。临时密码、密码过期都会置位。</td></tr>
+    <tr><td>直属上级</td><td>不存储。从用户所在部门开始向上，取第一个「不是本人、未停用」的部门负责人（见第 06 节）。</td></tr>
+    <tr><td>主部门</td><td>用户所属的唯一部门（<code>dept_uuid</code>）。本期一人一个部门，兼职多部门见「待确认」。</td></tr>
+    <tr><td>会话</td><td>用户中心管理台的登录会话，由认证与安全策略模块管理，本模块在停用 / 重置密码时请求注销。接入应用的会话由应用自己管理（用户中心通过开放接口返回用户状态，P1 起推送变更通知）。</td></tr>
+  </table>
+</section>
+
+<section id="s3">
+  <h2><span class="num">03</span>与其他模块的关系</h2>
+  <div class="arch">
+    <div class="arch-sys">
+      <div class="arch-sys-t">用户中心</div>
+      <div class="arch-row">
+        <div class="arch-box"><b>组织架构</b><ul><li>提供部门树、部门路径</li><li>按负责人链计算直属上级</li><li>调入成员 = 改用户的 dept_uuid</li></ul></div>
+        <div class="arch-link">dept_uuid<i class="l"></i></div>
+        <div class="arch-box me"><b>用户管理（本模块）</b><ul><li>用户档案、状态、临时密码</li><li>停用 / 解锁 / 重置密码</li><li>个人中心</li></ul></div>
+        <div class="arch-link">授权对象<i class="r"></i></div>
+        <div class="arch-box"><b>权限管理</b><ul><li>岗位 / 角色 / 菜单 / 数据授予用户或部门</li><li>用户详情「权限」页只读展示</li></ul></div>
+      </div>
+      <div class="arch-note" style="margin:12px 0 8px">用户管理同时调用：</div>
+      <div class="arch-row" style="gap:12px">
+        <div class="arch-box"><b>认证与安全策略</b><ul><li>密码策略校验、哈希、临时密码</li><li>停用 / 重置时注销会话</li></ul></div>
+        <div class="arch-box"><b>审计日志</b><ul><li>写入全部管理事件</li><li>登录记录由认证模块写入</li></ul></div>
+        <div class="arch-box"><b>应用接入</b><ul><li>按用户部门链计算</li><li>用户详情「可访问的应用」</li></ul></div>
+      </div>
+      <div class="arch-note">本模块只依赖其他模块的服务接口，不直接读写它们的表；部门被删除前由组织模块校验「部门下没有用户」。</div>
+    </div>
+  </div>
+  <table>
+    <tr><th style="width:170px">依赖方向</th><th>接口</th><th>说明</th></tr>
+    <tr><td>用户 → 组织</td><td><code>OrgService.exists(dept_uuid)</code>、<code>deptPath(dept_uuid)</code>、<code>descendants(dept_uuid)</code></td><td>新建 / 编辑校验部门；列表按部门（含下级）筛选</td></tr>
+    <tr><td>用户 → 组织</td><td><code>OrgService.managerOf(user_uuid)</code></td><td>详情、开放接口中的直属上级（实时计算，不落库）</td></tr>
+    <tr><td>用户 → 认证</td><td><code>PasswordService.generateTemp()</code>、<code>hash()</code>、<code>check(policy)</code>、<code>SessionService.revokeAll(user_uuid)</code></td><td>临时密码生成、改密校验、停用 / 重置时注销会话</td></tr>
+    <tr><td>用户 → 权限</td><td><code>GrantService.effective(user_uuid)</code>、<code>superAdminCount(except)</code></td><td>详情页只读展示；停用前校验「至少保留一名可用的超级管理员」</td></tr>
+    <tr><td>用户 → 应用接入</td><td><code>AppService.accessibleApps(user)</code></td><td>按部门链计算可访问的应用</td></tr>
+    <tr><td>组织 → 用户</td><td><code>UserService.countInDept(dept_uuid)</code>、<code>moveUsers(ids, dept_uuid)</code></td><td>删部门前校验；部门页「调入成员」</td></tr>
+  </table>
+</section>
+
+<section id="s4">
+  <h2><span class="num">04</span>功能清单</h2>
+  <table>
+    <tr><th style="width:160px">功能</th><th>说明</th><th style="width:70px">优先级</th></tr>
+    <tr><td>用户列表</td><td>按状态分组计数；按部门（含下级）筛选；姓名 / 账号 / 邮箱 / 手机搜索；分页</td><td><span class="tag new">P0</span></td></tr>
+    <tr><td>新建用户</td><td>填写档案 → 生成临时密码（只显示一次）→ 状态「未激活」</td><td><span class="tag new">P0</span></td></tr>
+    <tr><td>编辑用户</td><td>姓名、邮箱、手机、部门；账号只读</td><td><span class="tag new">P0</span></td></tr>
+    <tr><td>停用 / 启用</td><td>停用立即注销所有会话；启用恢复到停用前的激活状态</td><td><span class="tag new">P0</span></td></tr>
+    <tr><td>解锁</td><td>管理员手动解除登录失败锁定</td><td><span class="tag new">P0</span></td></tr>
+    <tr><td>重置密码</td><td>生成新临时密码、注销会话、下次登录须改密</td><td><span class="tag new">P0</span></td></tr>
+    <tr><td>用户详情</td><td>基本信息（含计算出的直属上级）/ 权限（只读）/ 登录记录 / 可访问的应用</td><td><span class="tag new">P0</span></td></tr>
+    <tr><td>个人中心</td><td>改邮箱、手机、密码；查看可访问的应用</td><td><span class="tag new">P0</span></td></tr>
+    <tr><td>临时密码有效期</td><td>临时密码超过有效期不能登录，须管理员重新生成</td><td><span class="tag">P1</span></td></tr>
+    <tr><td>部门调整影响提示</td><td>改部门前提示会失去 / 获得哪些继承授权与应用访问</td><td><span class="tag p2">P2</span></td></tr>
+    <tr><td>管理数据范围</td><td>如「只能管理本部门用户」</td><td><span class="tag p2">P2</span></td></tr>
+    <tr><td>下属查询</td><td>按负责人链反查「我的直属下属」，供审批等场景使用</td><td><span class="tag p2">P2</span></td></tr>
+    <tr><td>批量操作 / 导入 / 导出</td><td>本期不做</td><td><span class="tag">不做</span></td></tr>
+    <tr><td>HR 系统同步</td><td>不做：用户中心是人员数据的唯一来源</td><td><span class="tag">不做</span></td></tr>
+  </table>
+</section>
+
+<section id="s5">
+  <h2><span class="num">05</span>领域模型</h2>
+  <table>
+    <tr><th style="width:170px">属性</th><th>规则</th><th style="width:110px">谁能改</th></tr>
+    <tr><td>姓名 <code>name</code></td><td>必填，1–32 字符，去首尾空白；可重名</td><td>管理员</td></tr>
+    <tr><td>账号 <code>account</code></td><td>必填，<code>^[a-z0-9._]{3,32}$</code>，全局唯一（含已停用），不可修改</td><td>—</td></tr>
+    <tr><td>邮箱 <code>email</code></td><td>必填，格式校验，小写存储，全局唯一（含已停用）</td><td>管理员 / 本人</td></tr>
+    <tr><td>手机 <code>phone</code></td><td>选填，中国大陆 11 位手机号；不做唯一校验（不用于登录，可多人共用座机 / 前台号码）</td><td>管理员 / 本人</td></tr>
+    <tr><td>部门 <code>dept_uuid</code></td><td>必填，必须是存在的部门；可以是根部门</td><td>管理员</td></tr>
+    <tr><td>直属上级</td><td><b>不是用户属性</b>，由组织架构按部门负责人实时计算（第 06 节）</td><td>—（改部门负责人即改变）</td></tr>
+    <tr><td>状态</td><td>见第 07 节；由 <code>status</code>、<code>activated_at</code>、<code>locked_until</code> 推导展示状态</td><td>系统 / 管理员</td></tr>
+    <tr><td>岗位、角色</td><td><b>不是用户属性</b>。由权限管理授予（可经部门继承），本模块只读展示</td><td>权限管理</td></tr>
+  </table>
+  <div class="callout rule"><b class="l">为什么岗位不放在用户上</b>一个人可以有多个岗位，岗位也可以按部门整体授予；放在用户表上会形成两套来源。统一由权限管理授予后，用户列表的「岗位」列只是展示计算结果。</div>
+</section>
+
+<section id="s6">
+  <h2><span class="num">06</span>直属上级（由组织计算）</h2>
+  <p>直属上级<b>不存储在用户上</b>，由组织架构模块根据「用户所在部门 + 各部门负责人」实时计算。部门更换负责人后，相关人员的直属上级自动跟着变化，不需要批量修改用户数据，也不会出现数据不一致。</p>
+  <h3>计算规则</h3>
+  <pre>managerOf(user):
+  d = dept(user.dept_uuid)
+  while d is not null:
+    leader = d.leader
+    if leader is not null and leader != user and leader.status != disabled:
+      return leader
+    d = parent(d)                <span class="c">// 本人是该部门负责人，或部门无负责人 / 负责人已停用 → 向上一级</span>
+  return null                    <span class="c">// 根部门负责人没有直属上级</span></pre>
+  <h3>示例（原型数据）</h3>
+  <table>
+    <tr><th>用户</th><th>所在部门</th><th>部门负责人</th><th>直属上级</th><th>说明</th></tr>
+    <tr><td>何超</td><td>研发中心 / 交易中台</td><td>李工</td><td>李工</td><td>普通成员 → 本部门负责人</td></tr>
+    <tr><td>陈运</td><td>研发中心 / 技术中心</td><td>陈运（本人）</td><td>李工</td><td>本人是负责人 → 上级部门「研发中心」的负责人</td></tr>
+    <tr><td>李工</td><td>研发中心 / 交易中台</td><td>李工（本人）</td><td>林远</td><td>同时是「研发中心」负责人 → 连续跳过本人，取「星海科技」负责人</td></tr>
+    <tr><td>林远</td><td>星海科技（根）</td><td>林远（本人）</td><td>—</td><td>根部门负责人</td></tr>
+  </table>
+  <div class="callout rule"><b class="l">更换负责人的效果</b>把「交易中台」负责人从李工改为刘洋：何超、许晴的直属上级立即变为刘洋；刘洋自己的直属上级为研发中心负责人李工。整个过程只改了部门表的一个字段。</div>
+  <h3>对外提供</h3>
+  <ul>
+    <li>负责人约束：每个部门一名负责人，且必须是该部门子树内未停用的用户（见<a href="org-design.html#s7">组织管理模块</a>），保证计算结果唯一。</li>
+    <li>组织模块提供 <code>OrgService.managerOf(user_uuid)</code>；部门树（含负责人）缓存在内存，部门或负责人变更时失效，计算不查库。</li>
+    <li>用户详情「基本信息」只读展示，并注明来源（所在部门负责人 / 上级部门负责人）。</li>
+    <li>接入应用需要直属上级（如审批流）时，调用开放接口查询用户信息（实时计算），不应长期缓存。</li>
+    <li>「我的直属下属」（P2）= 所有 <code>managerOf(x) = 我</code> 的用户。只需遍历我负责的部门及其下级部门的成员，由组织模块基于部门树计算。</li>
+  </ul>
+</section>
+
+<section id="s7">
+  <h2><span class="num">07</span>账号状态与生命周期</h2>
+  <p>存储字段：<code>status ∈ {active, disabled}</code>，配合 <code>activated_at</code>（是否激活过）、<code>locked_until</code>（锁定到期时间）、<code>must_change_password</code>。展示状态按下面的优先级推导，避免「锁定」「未激活」与「停用」互相覆盖丢失信息：</p>
+  <table>
+    <tr><th style="width:60px">优先级</th><th>条件</th><th>展示状态</th></tr>
+    <tr><td>1</td><td><code>status = 'disabled'</code></td><td>已停用</td></tr>
+    <tr><td>2</td><td><code>locked_until &gt; now()</code></td><td>已锁定</td></tr>
+    <tr><td>3</td><td><code>activated_at is null</code></td><td>未激活</td></tr>
+    <tr><td>4</td><td>其他</td><td>正常（<code>must_change_password</code> 为真时附「须改密」标记）</td></tr>
+  </table>
+  <svg class="sm" viewBox="0 0 880 300" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC, Microsoft YaHei, sans-serif">
+    <defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#64748b"/></marker></defs>
+    <g font-size="15" font-weight="700" text-anchor="middle">
+      <rect x="40" y="60" width="160" height="48" rx="10" fill="#e6f6fe" stroke="#0ea5e9"/><text x="120" y="89" fill="#0369a1">未激活</text>
+      <rect x="350" y="60" width="160" height="48" rx="10" fill="#e7f6ec" stroke="#16a34a"/><text x="430" y="89" fill="#15803d">正常</text>
+      <rect x="660" y="60" width="160" height="48" rx="10" fill="#fdeaea" stroke="#dc2626"/><text x="740" y="89" fill="#b91c1c">已锁定</text>
+      <rect x="350" y="222" width="160" height="48" rx="10" fill="#f1f3f7" stroke="#94a3b8"/><text x="430" y="251" fill="#475569">已停用</text>
+    </g>
+    <g stroke="#64748b" stroke-width="1.6" fill="none" marker-end="url(#ar)">
+      <line x1="120" y1="16" x2="120" y2="57"/>
+      <line x1="200" y1="76" x2="347" y2="76"/>
+      <line x1="510" y1="72" x2="657" y2="72"/>
+      <line x1="660" y1="96" x2="513" y2="96"/>
+      <line x1="418" y1="108" x2="418" y2="219"/>
+      <line x1="442" y1="222" x2="442" y2="111"/>
+      <polyline points="90,108 90,238 347,238"/>
+      <polyline points="350,260 150,260 150,111"/>
+      <polyline points="740,108 740,246 513,246"/>
+    </g>
+    <g font-size="12" fill="#334155">
+      <text x="128" y="34">新建（生成临时密码）</text>
+      <text x="274" y="68" text-anchor="middle">首次登录并改密</text>
+      <text x="584" y="64" text-anchor="middle">连续失败 N 次</text>
+      <text x="584" y="114" text-anchor="middle">到期自动 / 管理员解锁</text>
+      <text x="410" y="170" text-anchor="end">停用</text>
+      <text x="450" y="170">启用（激活过）</text>
+      <text x="220" y="232" text-anchor="middle">停用</text>
+      <text x="250" y="278" text-anchor="middle">启用（从未激活）</text>
+      <text x="630" y="240" text-anchor="middle">停用</text>
+    </g>
+  </svg>
+  <table>
+    <tr><th style="width:120px">当前</th><th style="width:160px">动作</th><th>结果</th><th style="width:130px">附带</th></tr>
+    <tr><td>—</td><td>新建</td><td>status=active，activated_at=null，must_change=true → <b>未激活</b></td><td>生成临时密码</td></tr>
+    <tr><td>未激活</td><td>首次登录并改密</td><td>activated_at=now，must_change=false → <b>正常</b></td><td>写登录日志</td></tr>
+    <tr><td>未激活 / 正常</td><td>连续失败 N 次（认证模块）</td><td>locked_until=now+M 分钟 → <b>已锁定</b></td><td>系统审计「锁定账号」</td></tr>
+    <tr><td>已锁定</td><td>到期 / 管理员解锁</td><td>locked_until=null，失败计数清零 → 回到未激活或正常</td><td>—</td></tr>
+    <tr><td>未激活 / 正常 / 已锁定</td><td>重置密码</td><td>新临时密码，must_change=true，同时解锁；激活状态不变</td><td>注销全部会话</td></tr>
+    <tr><td>未激活 / 正常 / 已锁定</td><td>停用</td><td>status=disabled → <b>已停用</b></td><td>注销全部会话</td></tr>
+    <tr><td>已停用</td><td>启用</td><td>status=active；activated_at 有值 → 正常，否则 → 未激活；锁定信息清空</td><td>—</td></tr>
+    <tr><td>已停用</td><td>重置密码 / 解锁</td><td><b>不允许</b>，先启用</td><td>—</td></tr>
+  </table>
+  <p class="muted">密码过期（安全策略 expireDays）只在登录时置 must_change=true，不改变展示状态。</p>
+</section>
+
+<section id="s8">
+  <h2><span class="num">08</span>新建用户与临时密码</h2>
+  <div class="flow">管理员填写表单 → 服务端校验（格式 / 唯一 / 部门存在）
+  → 事务内：插入用户 + 写凭据（临时密码哈希，must_change=true，temp_expires_at）+ 写审计
+  → 响应中返回一次明文临时密码 → 页面弹窗显示「只显示这一次」+ 复制按钮
+  → 管理员通过安全渠道告知用户 → 用户首次登录 → 强制改密 → 激活</div>
+  <h3>临时密码规则</h3>
+  <ul>
+    <li>使用 CSPRNG 生成，长度 <code>max(12, 策略最小长度)</code>，保证满足当前密码策略（大写 / 数字 / 特殊字符），去掉易混淆字符（0/O、1/l/I）。</li>
+    <li>服务端只存哈希（argon2id），<b>明文只出现在这一次响应里</b>；不写日志、不写审计、不落库。</li>
+    <li>有效期默认 7 天（<code>temp_expires_at</code>），过期后登录提示「临时密码已过期，请联系管理员重置」。<span class="tag">P1</span></li>
+    <li>响应带 <code>Cache-Control: no-store</code>；前端弹窗关闭后从内存清除，不进入任何前端状态持久化。</li>
+  </ul>
+  <h3>表单字段</h3>
+  <table>
+    <tr><th>字段</th><th>必填</th><th>默认值</th><th>说明</th></tr>
+    <tr><td>姓名</td><td>是</td><td>—</td><td></td></tr>
+    <tr><td>账号</td><td>是</td><td>—</td><td>失焦即调用 <code>GET /users:check-account</code> 提示是否可用；提交时仍以服务端唯一约束为准</td></tr>
+    <tr><td>邮箱</td><td>是</td><td>—</td><td></td></tr>
+    <tr><td>手机</td><td>否</td><td>—</td><td></td></tr>
+    <tr><td>部门</td><td>是</td><td>从部门页进入时为当前部门，否则为根部门</td><td>树形下拉</td></tr>
+  </table>
+  <div class="callout warn"><b class="l">不在表单里</b>岗位、角色。新建后如需授权，到「权限管理 → 角色授权」按用户或部门授予；用户进入某部门即自动继承该部门的授权。</div>
+</section>
+
+<section id="s9">
+  <h2><span class="num">09</span>编辑用户</h2>
+  <ul>
+    <li>可改：姓名、邮箱、手机、部门。账号只读并提示「账号创建后不可修改（各系统以它识别用户）」。</li>
+    <li>使用乐观锁：请求带 <code>If-Match: &lt;version&gt;</code>，版本不一致返回 <code>VERSION_CONFLICT</code>，前端提示「该用户已被他人修改，请刷新后重试」。</li>
+    <li>部门变更：只改 <code>dept_uuid</code>，同一事务写审计「调整部门：A → B」。直属上级随之按新部门重新计算；若该用户是某部门负责人且调出了该部门子树，该部门负责人被自动清空（规则见<a href="org-design.html#s7">组织管理 · 部门负责人</a>），保存前提示。影响（按部门继承的授权、应用可访问范围）在用户中心内实时生效；接入应用在刷新授权快照（或收到变更通知）后生效，界面提示「接入应用中的权限将在几分钟内更新」。</li>
+    <li>邮箱变更：唯一性校验；不触发重新激活。</li>
+    <li>审计记录字段级差异（<code>{field: [old, new]}</code>），邮箱 / 手机在审计中脱敏（<code>138****0003</code>）。</li>
+    <li>已停用用户也可编辑档案（例如更正姓名），不改变状态。</li>
+  </ul>
+</section>
+
+<section id="s10">
+  <h2><span class="num">10</span>停用 · 启用 · 解锁 · 重置密码</h2>
+  <table>
+    <tr><th style="width:90px">操作</th><th>前置校验</th><th>效果</th><th style="width:150px">确认文案要点</th></tr>
+    <tr><td>停用</td><td>不能停用自己；停用后至少保留一名可用的超级管理员（调用权限模块计算，含经岗位 / 部门获得的）</td><td>status=disabled，记录 disabled_at / by / 原因；注销用户中心会话；开放接口随即返回 <code>status = disabled</code>、<code>can_access = false</code>；授权、数据权限<b>保留</b></td><td>无法登录用户中心及所有接入应用；数据保留，可随时启用</td></tr>
+    <tr><td>启用</td><td>—</td><td>status=active；按 activated_at 回到正常或未激活；清空锁定</td><td>—</td></tr>
+    <tr><td>解锁</td><td>当前为已锁定</td><td>locked_until=null，失败计数清零</td><td>—</td></tr>
+    <tr><td>重置密码</td><td>不能是已停用</td><td>生成临时密码，must_change=true，解锁；注销全部会话；返回一次明文</td><td>原密码立即失效；各应用登录会话被注销</td></tr>
+  </table>
+  <h3>会话注销的生效时间</h3>
+  <ul>
+    <li>用户中心管理台会话：<b>立即</b>失效。</li>
+    <li>接入应用：开放接口立即返回已停用；应用缓存的授权快照最长 5 分钟内仍可能放行。需要立即踢出的应用订阅变更通知（Webhook <code>user.disabled</code>）。<span class="tag">P1</span></li>
+  </ul>
+  <div class="callout warn"><b class="l">停用不级联清授权</b>停用是可逆操作，授权与数据权限都保留；有效权限计算时排除已停用用户（例如「至少保留一名可用 Owner / 超级管理员」都不把已停用用户计入）。</div>
+</section>
+
+<section id="s11">
+  <h2><span class="num">11</span>列表与查询</h2>
+  <table>
+    <tr><th style="width:120px">能力</th><th>规则</th></tr>
+    <tr><td>状态分组</td><td>全部 / 正常 / 未激活 / 已锁定 / 已停用，带计数（计数受部门、关键字筛选影响）</td></tr>
+    <tr><td>部门筛选</td><td>选择部门即包含其全部下级部门</td></tr>
+    <tr><td>关键字</td><td>姓名、账号、邮箱、手机模糊匹配；输入防抖 300ms</td></tr>
+    <tr><td>排序</td><td>默认按创建时间倒序；可按姓名、最近登录排序</td></tr>
+    <tr><td>分页</td><td>每页 20 / 50 / 100</td></tr>
+    <tr><td>列</td><td>用户（姓名、账号、用户中心角色徽标）、部门路径、岗位、状态、最近登录、操作</td></tr>
+  </table>
+  <h3>行操作与状态</h3>
+  <table>
+    <tr><th>状态</th><th>编辑</th><th>重置密码</th><th>解锁</th><th>停用</th><th>启用</th></tr>
+    <tr><td>正常</td><td class="ok">✓</td><td class="ok">✓</td><td class="no">—</td><td class="ok">✓</td><td class="no">—</td></tr>
+    <tr><td>未激活</td><td class="ok">✓</td><td class="ok">✓ 重新生成</td><td class="no">—</td><td class="ok">✓</td><td class="no">—</td></tr>
+    <tr><td>已锁定</td><td class="ok">✓</td><td class="ok">✓</td><td class="ok">✓</td><td class="ok">✓</td><td class="no">—</td></tr>
+    <tr><td>已停用</td><td class="ok">✓</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="ok">✓</td></tr>
+  </table>
+  <p class="muted">按钮同时受操作码控制（第 16 节）；「停用」对当前登录人自己置灰。</p>
+</section>
+
+<section id="s12">
+  <h2><span class="num">12</span>用户详情</h2>
+  <table>
+    <tr><th style="width:120px">分页</th><th>内容</th><th style="width:150px">数据来源</th></tr>
+    <tr><td>基本信息</td><td>邮箱、手机、部门路径、岗位（只读，提示「在权限管理中授权」）、直属上级（只读，注明「所在部门负责人」或「上级部门负责人」）、创建时间、最近登录</td><td>本模块；直属上级来自组织架构</td></tr>
+    <tr><td>权限</td><td>生效的授权（来源：直接 / 部门继承）、有效角色、有效操作、可见菜单、数据权限、应用通过开放接口拿到的授权快照示例；带「在权限管理中授权 →」跳转</td><td>权限管理（只读），需 <code>grant:view</code></td></tr>
+    <tr><td>登录记录</td><td>最近 90 天：时间、IP、结果（失败原因）；分页。只有用户中心管理台的登录；应用的登录由应用自行记录</td><td>认证模块登录日志</td></tr>
+    <tr><td>可访问的应用</td><td>按应用可访问范围与用户部门链计算；标出已停用的应用</td><td>应用接入</td></tr>
+  </table>
+  <p>页头：头像、姓名、展示状态、用户中心角色徽标、账号 · 部门路径 · 岗位；右侧按状态与操作码显示「编辑 / 重置密码 / 解锁 / 停用 / 启用」。</p>
+</section>
+
+<section id="s13">
+  <h2><span class="num">13</span>个人中心（自助）</h2>
+  <ul>
+    <li>所有登录用户可用，不需要任何操作码。</li>
+    <li>可改：邮箱（唯一性校验）、手机。姓名、部门、岗位只读，提示「由管理员维护」。</li>
+    <li>修改密码：需当前密码；新密码按当前策略校验，不能与当前密码相同（密码历史见安全策略模块）；成功后注销<b>除当前会话外</b>的全部会话。</li>
+    <li>修改密码连续输错当前密码 5 次，计入登录失败锁定（防止会话被盗后暴力猜测）。</li>
+    <li>「我可以访问的应用」只列启用中的应用。</li>
+  </ul>
+</section>
+
+<section id="s14">
+  <h2><span class="num">14</span>数据模型</h2>
+  <p class="muted">假设：PostgreSQL 15+。凭据单独成表，便于收紧访问与审计。</p>
+  <div class="callout rule"><b class="l">主键约定（全部表通用）</b>
+    <code>id bigint</code> 自增主键，只在库内使用（聚簇、分页游标），<b>不对外暴露、不用于任何关联</b>；
+    <code>uuid uuid</code> 逻辑主键（UUIDv7，按时间有序、对索引友好，由应用生成），<b>表间关联、外键、API、开放接口、审计对象都使用它</b>。
+    关联字段统一命名为 <code>xxx_uuid</code>，外键引用对方表的 <code>uuid</code>；API 中的 <code>id</code> / <code>xxx_id</code> 取值即对应的 uuid。</div>
+<pre><span class="c">-- 用户档案</span>
+CREATE TABLE uc_user (
+  id               bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,   <span class="c">-- 自增主键，仅库内使用</span>
+  uuid             uuid         NOT NULL,          <span class="c">-- 逻辑主键（UUIDv7）</span>
+  account          varchar(32)  NOT NULL,
+  name             varchar(32)  NOT NULL,
+  email            varchar(128) NOT NULL,          <span class="c">-- 小写存储</span>
+  phone            varchar(20),
+  dept_uuid        uuid         NOT NULL REFERENCES uc_dept(uuid),
+  status           varchar(16)  NOT NULL DEFAULT 'active',   <span class="c">-- active | disabled</span>
+  activated_at     timestamptz,                    <span class="c">-- null = 未激活</span>
+  disabled_at      timestamptz,
+  disabled_by      uuid,                           <span class="c">-- 操作人 uc_user.uuid</span>
+  disabled_reason  varchar(200),
+  last_login_at    timestamptz,
+  last_login_ip    varchar(45),
+  created_at       timestamptz NOT NULL DEFAULT now(),
+  created_by       uuid,
+  updated_at       timestamptz NOT NULL DEFAULT now(),
+  updated_by       uuid,
+  version          int NOT NULL DEFAULT 1,
+  CONSTRAINT uk_user_uuid    UNIQUE (uuid),
+  CONSTRAINT uk_user_account UNIQUE (account),
+  CONSTRAINT uk_user_email   UNIQUE (email),
+  CONSTRAINT ck_user_status  CHECK (status IN ('active','disabled'))
+);
+CREATE INDEX ix_user_dept    ON uc_user (dept_uuid);
+CREATE INDEX ix_user_created ON uc_user (created_at DESC);
+CREATE INDEX ix_user_search  ON uc_user USING gin ((name || ' ' || account || ' ' || email || ' ' || coalesce(phone,'')) gin_trgm_ops);
+
+<span class="c">-- 凭据与登录保护（认证模块读写，本模块在新建 / 重置时写入）</span>
+CREATE TABLE uc_user_credential (
+  id                   bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  uuid                 uuid NOT NULL,
+  user_uuid            uuid NOT NULL REFERENCES uc_user(uuid),
+  password_hash        varchar(255) NOT NULL,      <span class="c">-- argon2id</span>
+  must_change_password boolean NOT NULL DEFAULT true,
+  temp_expires_at      timestamptz,                <span class="c">-- 临时密码有效期；改密后置空</span>
+  password_changed_at  timestamptz,
+  failed_count         int NOT NULL DEFAULT 0,
+  locked_until         timestamptz,
+  CONSTRAINT uk_cred_uuid UNIQUE (uuid),
+  CONSTRAINT uk_cred_user UNIQUE (user_uuid)      <span class="c">-- 一人一条凭据</span>
+);
+</pre>
+  <div class="callout rule"><b class="l">展示状态不落库</b>「已锁定」「未激活」由 <code>locked_until</code>、<code>activated_at</code> 实时推导，锁定到期无需定时任务解锁；列表按状态筛选时用对应条件查询（<code>locked_until &gt; now()</code> 等）。</div>
+</section>
+
+<section id="s15">
+  <h2><span class="num">15</span>API</h2>
+  <p class="muted">前缀 <code>/api/v1</code>；管理端需登录且具备对应操作码；自助端 <code>/me</code> 只需登录。时间为 ISO 8601。路径与报文中的 <code>{id}</code>、<code>id</code>、<code>dept_id</code> 均为逻辑主键 uuid，自增 id 不出现在 API 中。</p>
+  <table>
+    <tr><th style="width:290px">接口</th><th>说明</th><th style="width:130px">操作码</th></tr>
+    <tr><td><code>GET /users</code></td><td>列表：<code>status, dept_id, q, page, size, sort</code>；返回 items + 各状态计数</td><td>user:view</td></tr>
+    <tr><td><code>GET /users:check-account?account=</code></td><td>账号可用性</td><td>user:create</td></tr>
+    <tr><td><code>POST /users</code></td><td>新建；返回 <code>{user, temp_password}</code></td><td>user:create</td></tr>
+    <tr><td><code>GET /users/{id}</code></td><td>详情（含展示状态、岗位计算结果、直属上级计算结果、version）</td><td>user:view</td></tr>
+    <tr><td><code>PATCH /users/{id}</code></td><td>编辑；<code>If-Match</code> 版本</td><td>user:edit</td></tr>
+    <tr><td><code>POST /users/{id}:disable</code></td><td><code>{reason?}</code></td><td>user:disable</td></tr>
+    <tr><td><code>POST /users/{id}:enable</code></td><td></td><td>user:disable</td></tr>
+    <tr><td><code>POST /users/{id}:unlock</code></td><td></td><td>user:disable</td></tr>
+    <tr><td><code>POST /users/{id}:reset-password</code></td><td>返回 <code>{temp_password, temp_expires_at}</code></td><td>user:reset_pwd</td></tr>
+    <tr><td><code>GET /users/{id}/login-logs</code></td><td>登录记录，分页</td><td>user:view</td></tr>
+    <tr><td><code>GET /users/{id}/apps</code></td><td>可访问的应用</td><td>user:view</td></tr>
+    <tr><td><code>GET /me</code> · <code>PATCH /me</code></td><td>本人信息；可改 email、phone</td><td>登录即可</td></tr>
+    <tr><td><code>POST /me/password</code></td><td><code>{old_password, new_password}</code></td><td>登录即可</td></tr>
+    <tr><td><code>GET /me/apps</code></td><td>我可访问的应用</td><td>登录即可</td></tr>
+  </table>
+  <h3>示例：新建用户</h3>
+<pre>POST /api/v1/users
+{ "name": "周宁", "account": "zhou.ning", "email": "zhou.ning@xinghai.com",
+  "phone": "", "dept_id": "0192f3a8-6c1e-7d2a-9b0f-3e4d5c6b7a81" }
+
+201 Created
+Cache-Control: no-store
+{ "user": { "id": "0192f3b1-27aa-7c40-8e15-9d0c1b2a3f44", "account": "zhou.ning", "status": "pending", "version": 1, ... },
+  "temp_password": "K7#mPq2vXw9a",          <span class="c">// 只出现在这一次响应中</span>
+  "temp_expires_at": "2026-10-16T10:00:00+08:00" }</pre>
+  <h3>15.1 错误码</h3>
+  <table>
+    <tr><th style="width:210px">code</th><th style="width:60px">HTTP</th><th>场景</th></tr>
+    <tr><td><code>USER_NOT_FOUND</code></td><td>404</td><td>用户不存在</td></tr>
+    <tr><td><code>VALIDATION_FAILED</code></td><td>422</td><td>字段格式错误，<code>details</code> 按字段给出原因</td></tr>
+    <tr><td><code>ACCOUNT_EXISTS</code></td><td>409</td><td>账号已存在（含已停用）</td></tr>
+    <tr><td><code>EMAIL_EXISTS</code></td><td>409</td><td>邮箱已被使用</td></tr>
+    <tr><td><code>DEPT_NOT_FOUND</code></td><td>422</td><td>部门不存在</td></tr>
+    <tr><td><code>CANNOT_DISABLE_SELF</code></td><td>409</td><td>停用自己</td></tr>
+    <tr><td><code>LAST_SUPER_ADMIN</code></td><td>409</td><td>操作后没有可用的超级管理员</td></tr>
+    <tr><td><code>USER_DISABLED</code></td><td>409</td><td>对已停用用户重置密码 / 解锁</td></tr>
+    <tr><td><code>VERSION_CONFLICT</code></td><td>409</td><td>乐观锁版本不一致</td></tr>
+    <tr><td><code>PASSWORD_POLICY</code></td><td>422</td><td>新密码不符合策略，<code>details</code> 列出未满足项</td></tr>
+    <tr><td><code>OLD_PASSWORD_WRONG</code></td><td>422</td><td>当前密码错误</td></tr>
+    <tr><td><code>PERMISSION_DENIED</code></td><td>403</td><td>缺少操作码</td></tr>
+  </table>
+</section>
+
+<section id="s16">
+  <h2><span class="num">16</span>权限</h2>
+  <p>菜单「用户管理」由角色绑定的菜单决定是否可见；页面内的按钮与接口按操作码控制，前后端使用同一套操作码。</p>
+  <table>
+    <tr><th style="width:150px">操作码</th><th>前端控制</th><th>内置角色</th></tr>
+    <tr><td><code>user:view</code></td><td>列表、详情、登录记录、可访问的应用</td><td>超级管理员、用户管理员、审计员</td></tr>
+    <tr><td><code>user:create</code></td><td>「新建用户」按钮；部门页「＋ 新建用户」</td><td>超级管理员、用户管理员</td></tr>
+    <tr><td><code>user:edit</code></td><td>「编辑」</td><td>超级管理员、用户管理员</td></tr>
+    <tr><td><code>user:disable</code></td><td>「停用 / 启用 / 解锁」</td><td>超级管理员、用户管理员</td></tr>
+    <tr><td><code>user:reset_pwd</code></td><td>「重置密码」</td><td>超级管理员、用户管理员</td></tr>
+    <tr><td><code>grant:view</code></td><td>详情「权限」分页</td><td>超级管理员、用户管理员、审计员</td></tr>
+  </table>
+  <ul>
+    <li>数据范围：本期管理员可管理全部用户；「只管理本部门」作为 P2，在角色上增加数据范围。</li>
+    <li>前端隐藏只负责「看不到」，所有接口在服务端按操作码再次鉴权。</li>
+  </ul>
+</section>
+
+<section id="s17">
+  <h2><span class="num">17</span>页面设计</h2>
+  <p>以原型为准（<code>prototype/usercenter/index.html</code> → 用户管理）。要点：</p>
+  <div class="grid2">
+    <div class="box"><h4>用户列表 <code>#/users</code></h4>
+      <ul><li>页头：新建用户（按操作码显示）</li>
+      <li>工具栏：状态分组 tabs（带计数）、部门下拉、搜索框</li>
+      <li>整行点击进入详情；行内按钮不触发跳转</li></ul></div>
+    <div class="box"><h4>新建 / 编辑弹窗</h4>
+      <ul><li>两列表单：姓名、账号、邮箱、手机、部门（没有直属上级字段）</li>
+      <li>新建底部提示：将生成一次性临时密码，账号为「未激活」</li>
+      <li>错误在表单底部集中显示，并定位到首个错误字段</li></ul></div>
+    <div class="box"><h4>临时密码弹窗</h4>
+      <ul><li>显示用户与临时密码 + 复制按钮</li>
+      <li>醒目提示「只显示这一次」；唯一按钮「我已记下」</li>
+      <li>不可点遮罩关闭，防止误关</li></ul></div>
+    <div class="box"><h4>用户详情 <code>#/users/:id</code></h4>
+      <ul><li>页头操作按状态显示；停用对自己置灰</li>
+      <li>基本信息中的直属上级为只读链接，并注明来源</li>
+      <li>分页：基本信息 / 权限 / 登录记录 / 可访问的应用</li></ul></div>
+    <div class="box"><h4>个人中心 <code>#/me</code></h4>
+      <ul><li>左：个人信息（邮箱、手机可改）</li>
+      <li>右：修改密码（显示当前策略要求）、我可以访问的应用</li></ul></div>
+  </div>
+</section>
+
+<section id="s18">
+  <h2><span class="num">18</span>审计</h2>
+  <table>
+    <tr><th style="width:130px">动作</th><th>对象</th><th>说明字段</th></tr>
+    <tr><td>新建用户</td><td>姓名（账号）</td><td>部门</td></tr>
+    <tr><td>编辑用户</td><td>姓名（账号）</td><td>字段差异；邮箱 / 手机脱敏</td></tr>
+    <tr><td>调整部门</td><td>姓名（账号）</td><td>原部门 → 新部门（直属上级随之变化，不单独记录）</td></tr>
+    <tr><td>停用用户</td><td>姓名（账号）</td><td>原因</td></tr>
+    <tr><td>启用用户 / 解锁账号</td><td>姓名（账号）</td><td>—</td></tr>
+    <tr><td>重置密码</td><td>姓名（账号）</td><td>不记录任何密码</td></tr>
+    <tr><td>锁定账号</td><td>姓名（账号）</td><td>操作人 = system；连续 N 次密码错误</td></tr>
+    <tr><td>修改个人信息 / 修改密码</td><td>本人</td><td>修改密码不记录密码</td></tr>
+    <tr><td>首次登录激活</td><td>本人</td><td>由认证模块写入</td></tr>
+  </table>
+  <p class="muted">审计只追加、不可修改；与业务写操作在同一事务内写入，保证「有操作必有记录」。</p>
+</section>
+
+<section id="s19">
+  <h2><span class="num">19</span>异常与边界</h2>
+  <table>
+    <tr><th style="width:240px">场景</th><th>处理</th></tr>
+    <tr><td>两个管理员同时新建相同账号</td><td>数据库唯一约束兜底，后到者 <code>ACCOUNT_EXISTS</code></td></tr>
+    <tr><td>两个管理员同时编辑同一用户</td><td>乐观锁，后到者 <code>VERSION_CONFLICT</code></td></tr>
+    <tr><td>部门在填写表单期间被删除</td><td>提交时 <code>DEPT_NOT_FOUND</code>；组织模块删除部门前已校验「无用户」</td></tr>
+    <tr><td>停用唯一的超级管理员（包括经岗位 / 部门获得）</td><td><code>LAST_SUPER_ADMIN</code></td></tr>
+    <tr><td>部门负责人被停用</td><td>计算直属上级时跳过该负责人，继续向上找；组织架构页提示该部门「负责人已停用」，引导更换</td></tr>
+    <tr><td>部门没有设置负责人</td><td>继续向上找上级部门负责人；全部为空则直属上级为空</td></tr>
+    <tr><td>用户是根部门负责人（如 CEO）</td><td>直属上级为空</td></tr>
+    <tr><td>用户同时是本部门和上级部门的负责人</td><td>连续跳过本人，取更上一级的负责人（例：李工 → 林远）</td></tr>
+    <tr><td>未激活用户的临时密码丢失</td><td>重置密码（对未激活用户即「重新生成临时密码」）</td></tr>
+    <tr><td>用户被停用时正在应用中操作</td><td>应用下次获取授权快照时得知已停用并终止会话；订阅 Webhook 的应用立即踢出</td></tr>
+    <tr><td>修改邮箱为他人已停用账号的邮箱</td><td>拒绝（唯一性含已停用），需先更正对方邮箱</td></tr>
+  </table>
+</section>
+
+<section id="s20">
+  <h2><span class="num">20</span>非功能</h2>
+  <div class="grid2">
+    <div class="box"><h4>安全</h4>
+      <ul><li>密码哈希 argon2id；临时密码 CSPRNG，满足策略</li>
+      <li>明文密码不进日志、审计、数据库、前端持久化</li>
+      <li>含密码的响应 <code>Cache-Control: no-store</code></li>
+      <li>重置密码接口按操作人限流（如 30 次 / 分钟）</li></ul></div>
+    <div class="box"><h4>性能与容量</h4>
+      <ul><li>按 5 万用户设计：列表 p95 &lt; 300ms（trgm 索引 + 部门 id 列表过滤）</li>
+      <li>直属上级计算走内存中的部门树缓存（部门变更时失效），单次 O(部门深度)，不查用户表以外的数据</li></ul></div>
+    <div class="box"><h4>个人信息保护</h4>
+      <ul><li>审计中邮箱 / 手机脱敏</li>
+      <li>停用用户的个人信息保留；删除 / 匿名化见「待确认」</li></ul></div>
+    <div class="box"><h4>可观测</h4>
+      <ul><li>指标：新建 / 重置 / 停用次数</li>
+      <li>告警：短时间内大量重置密码或停用（可能是误操作或越权）</li></ul></div>
+  </div>
+</section>
+
+<section id="s21">
+  <h2><span class="num">21</span>与原型的差异</h2>
+  <p>原型用于确认交互，以下几处在详细设计中收紧，实现以本文档为准（直属上级改为组织计算、去掉批量 / 导入 / 导出，原型已同步修改）：</p>
+  <table class="diff">
+    <tr><th>项</th><th>原型</th><th>详细设计</th><th>原因</th></tr>
+    <tr><td>重置正常用户的密码</td><td>状态变为「未激活」</td><td>保持「正常」，附「须改密」标记</td><td>「未激活」应只表示从未登录过，否则统计和筛选会失真</td></tr>
+    <tr><td>启用</td><td>一律变为「正常」</td><td>按是否激活过回到「正常」或「未激活」</td><td>从未激活的人启用后仍须用临时密码首次登录</td></tr>
+    <tr><td>临时密码有效期</td><td>无</td><td>默认 7 天</td><td>降低临时密码泄露后的风险</td></tr>
+    <tr><td>停用原因</td><td>无</td><td>可选填写，进入审计</td><td>离职 / 违规等便于追溯</td></tr>
+  </table>
+</section>
+
+<section id="s22">
+  <h2><span class="num">22</span>测试要点</h2>
+  <ul>
+    <li>账号格式边界（2 / 3 / 32 / 33 位、大写、非法字符）；账号与已停用账号重复。</li>
+    <li>邮箱大小写归一后的唯一性；手机格式。</li>
+    <li>直属上级计算：普通成员 → 本部门负责人；本部门负责人 → 上级部门负责人；同时负责多级部门 → 连续跳过本人；负责人已停用 → 跳过；部门无负责人 → 向上；根部门负责人 → 空。</li>
+    <li>更换部门负责人后，相关成员的直属上级立即变化，且用户表无写入。</li>
+    <li>用户调整部门后直属上级按新部门计算。</li>
+    <li>状态机全部转换（第 07 节表格逐行）；锁定到期后无需操作自动变回原状态。</li>
+    <li>临时密码：满足各种策略组合；只返回一次；过期后不能登录；首次登录强制改密。</li>
+    <li>停用：自己、唯一超级管理员（直接 / 经岗位 / 经部门继承）；停用后用户中心会话失效、开放接口返回已停用。</li>
+    <li>重置密码：已停用拒绝；已锁定被解锁；会话注销。</li>
+    <li>权限：每个按钮 / 接口在缺少对应操作码时隐藏且返回 403。</li>
+    <li>乐观锁冲突提示；审计中无明文密码、联系方式已脱敏。</li>
+  </ul>
+</section>
+
+<section id="s23">
+  <h2><span class="num">23</span>落地计划</h2>
+  <table>
+    <tr><th style="width:90px">阶段</th><th>内容</th><th style="width:140px">依赖</th></tr>
+    <tr><td>M1</td><td>数据表与 UserService；新建 / 编辑 / 详情 / 列表（含状态推导、部门含下级筛选、搜索）；审计写入</td><td>组织模块（部门表）</td></tr>
+    <tr><td>M2</td><td>停用 / 启用 / 解锁 / 重置密码；临时密码；会话注销；超级管理员保护</td><td>认证模块、权限模块</td></tr>
+    <tr><td>M3</td><td>个人中心；详情「直属上级 / 权限 / 登录记录 / 可访问的应用」</td><td>组织（managerOf）、权限、应用接入</td></tr>
+    <tr><td>M4</td><td>临时密码有效期、用户变更通知（Webhook）、限流与告警</td><td>应用侧配合</td></tr>
+  </table>
+</section>
+
+<section id="s24">
+  <h2><span class="num">24</span>待确认</h2>
+  <ol>
+    <li><b>临时密码分发方式</b>：管理员手工告知（当前设计），还是系统邮件发送激活链接（更安全，但依赖邮件服务）？</li>
+    <li><b>临时密码有效期</b>默认 7 天是否合适？</li>
+    <li><b>停用原因</b>是否必填？是否需要原因字典（离职 / 长期休假 / 违规）？</li>
+    <li><b>删除与匿名化</b>：离职人员个人信息是否需要在一定期限后匿名化（合规要求）？</li>
+    <li><b>兼职多部门</b>：是否需要一人多部门（主部门 + 兼职部门），兼职部门是否参与授权继承、应用可访问范围与直属上级计算？</li>
+    <li><b>忘记密码自助找回</b>：是否需要（依赖邮箱验证；手机号非必填、不唯一，不能用于找回）？本期默认由管理员重置。</li>
+  </ol>
+</section>
+
+</main>
+</div>
+</body>
+</html>

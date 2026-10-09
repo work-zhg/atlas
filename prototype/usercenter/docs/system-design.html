@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>用户中心 · 总体详细设计</title>
+<style>
+  :root{
+    --bg:#f6f7f9;--surface:#fff;--surface-2:#fbfbfd;--ink:#0f172a;--ink-2:#334155;--ink-3:#64748b;--ink-4:#94a3b8;
+    --line:#e6e8ee;--line-2:#eef0f4;--primary:#4f46e5;--primary-weak:#eef0ff;
+    --warning:#b45309;--warning-weak:#fef3e2;
+    --mono:"JetBrains Mono","SF Mono",ui-monospace,Menlo,Consolas,monospace;
+    --font:"Inter","PingFang SC","Microsoft YaHei",system-ui,-apple-system,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink-2);font-family:var(--font);font-size:14.5px;line-height:1.75}
+  a{color:var(--primary);text-decoration:none}
+  .wrap{display:grid;grid-template-columns:240px minmax(0,1fr);gap:36px;max-width:1240px;margin:0 auto;padding:32px 28px 80px}
+  nav.toc{position:sticky;top:24px;align-self:start;max-height:calc(100vh - 48px);overflow:auto;font-size:13px}
+  nav.toc .t{font-size:11px;letter-spacing:.12em;color:var(--ink-4);text-transform:uppercase;margin-bottom:8px;font-weight:600}
+  nav.toc ol{list-style:none;margin:0;padding:0;counter-reset:s}
+  nav.toc li{counter-increment:s}
+  nav.toc a{display:block;padding:4px 8px;border-radius:6px;color:var(--ink-3)}
+  nav.toc a::before{content:counter(s,decimal-leading-zero) "  ";font-family:var(--mono);font-size:11px;color:var(--ink-4)}
+  nav.toc a:hover{background:#fff;color:var(--ink)}
+  header.hero{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:28px 30px;margin-bottom:28px}
+  .kicker{font-family:var(--mono);font-size:11.5px;letter-spacing:.14em;color:var(--primary);text-transform:uppercase;margin:0 0 6px}
+  h1{font-size:26px;color:var(--ink);margin:0 0 10px;letter-spacing:-.3px}
+  .lede{margin:0;font-size:15px}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+  .meta span{font-size:12px;padding:2px 10px;border-radius:999px;background:var(--primary-weak);color:var(--primary)}
+  section{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:24px 28px;margin-bottom:20px}
+  h2{font-size:19px;color:var(--ink);margin:0 0 14px;display:flex;align-items:center;gap:10px}
+  h2 .num{font-family:var(--mono);font-size:12px;color:#fff;background:var(--primary);border-radius:6px;padding:2px 7px}
+  h3{font-size:15.5px;color:var(--ink);margin:22px 0 8px}
+  p{margin:0 0 12px}
+  code{font-family:var(--mono);font-size:12.5px;background:#f1f3f7;border:1px solid var(--line-2);border-radius:4px;padding:0 5px;color:#be185d}
+  table{width:100%;border-collapse:collapse;font-size:13.5px;margin:6px 0 14px}
+  th{text-align:left;background:var(--surface-2);color:var(--ink-3);font-weight:600;font-size:12.5px}
+  th,td{border:1px solid var(--line);padding:8px 10px;vertical-align:top}
+  td code{white-space:nowrap}
+  pre{background:#0f172a;color:#e2e8f0;border-radius:10px;padding:14px 16px;font-family:var(--mono);font-size:12.5px;line-height:1.65;overflow:auto;margin:6px 0 14px;white-space:pre-wrap}
+  pre .c{color:#94a3b8}
+  .callout{border:1px solid;border-left-width:4px;border-radius:10px;padding:10px 14px;margin:8px 0 14px;font-size:13.5px}
+  .callout b.l{display:block;font-size:11.5px;letter-spacing:.1em;margin-bottom:3px}
+  .rule{background:var(--primary-weak);border-color:#c7c9f5;color:#312e81}
+  .warn{background:var(--warning-weak);border-color:#f6d39b;color:#7c2d12}
+  .tag{display:inline-block;font-size:11.5px;padding:0 8px;border-radius:999px;border:1px solid var(--line);background:var(--surface-2);color:var(--ink-3);white-space:nowrap}
+  .tag.new{color:var(--primary);border-color:#c7c9f5;background:var(--primary-weak)}
+  .tag.p2{color:var(--warning);border-color:#f6d39b;background:var(--warning-weak)}
+  .flow{font-family:var(--mono);font-size:12.5px;line-height:1.75;background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:14px 16px;white-space:pre;overflow:auto;margin:6px 0 14px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .box{border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:var(--surface-2)}
+  .box h4{margin:0 0 6px;font-size:13.5px;color:var(--ink)}
+  ul,ol{margin:0 0 12px;padding-left:20px}
+  li{margin:2px 0}
+  .muted{color:var(--ink-4);font-size:12px}
+  /* 关系图 */
+  .arch{margin:6px 0 14px}
+  .arch-sys{border:1.5px dashed #c7c9f5;border-radius:12px;padding:12px 14px;background:#fafaff}
+  .arch-sys-t{font-size:12px;font-weight:700;color:var(--primary);margin-bottom:8px;letter-spacing:.06em}
+  .arch-row{display:flex;align-items:center}
+  .arch-box{flex:1;background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:13px}
+  .arch-box.me{border-color:var(--primary);box-shadow:0 0 0 3px rgba(79,70,229,.1)}
+  .arch-box b{color:var(--ink)}
+  .arch-box ul{margin:6px 0 0;padding-left:16px;color:var(--ink-3);font-size:12.5px}
+  .arch-link{width:96px;flex:none;text-align:center;font-size:11.5px;color:var(--ink-3);position:relative;padding-bottom:10px}
+  .arch-link i{position:absolute;left:8px;right:8px;bottom:0;height:2px;background:#9aa4b6}
+  .arch-link i.r::after{content:"";position:absolute;right:-2px;top:-4px;border-left:7px solid #9aa4b6;border-top:5px solid transparent;border-bottom:5px solid transparent}
+  .arch-link i.l::before{content:"";position:absolute;left:-2px;top:-4px;border-right:7px solid #9aa4b6;border-top:5px solid transparent;border-bottom:5px solid transparent}
+  .arch-note{margin-top:8px;font-size:12px;color:var(--ink-3)}
+  .arch-down{display:flex;align-items:center;gap:8px;margin-left:calc(83% - 1px);height:34px;font-size:11.5px;color:var(--ink-3)}
+  .arch-down i{width:2px;height:100%;background:#9aa4b6;position:relative}
+  .arch-down i::after{content:"";position:absolute;left:-4px;bottom:-2px;border-top:7px solid #9aa4b6;border-left:5px solid transparent;border-right:5px solid transparent}
+  .arch-ext{margin-left:calc(83% - 90px);width:180px;text-align:center;border:1px solid #9aa4b6;border-radius:10px;padding:8px;background:#fff;font-weight:600;color:var(--ink);font-size:13px}
+  @media (max-width:980px){.wrap{grid-template-columns:1fr}nav.toc{position:static;max-height:none}.grid2{grid-template-columns:1fr}
+    .arch-row{flex-direction:column;align-items:stretch}.arch-link{width:auto;height:30px}.arch-down,.arch-ext{margin-left:0}}
+  .sm{width:100%;height:auto;display:block;margin:6px 0 14px;background:var(--surface-2);border:1px solid var(--line);border-radius:10px}
+  .ok{color:#15803d;font-weight:700}.no{color:var(--ink-4)}
+  .diff td:first-child{white-space:nowrap}
+  .layers{display:flex;flex-direction:column;gap:8px;margin:6px 0 14px}
+  .layer{display:flex;align-items:stretch;border:1px solid var(--line);border-radius:10px;background:var(--surface-2);overflow:hidden}
+  .layer-t{width:96px;flex:none;display:flex;align-items:center;justify-content:center;font-size:12.5px;font-weight:700;color:var(--primary);background:var(--primary-weak);border-right:1px solid var(--line)}
+  .layer.ext .layer-t{color:var(--ink-3);background:#f1f3f7}
+  .cells{display:flex;flex-wrap:wrap;gap:6px;padding:10px}
+  .cells span{background:#fff;border:1px solid var(--line);border-radius:8px;padding:4px 10px;font-size:12.5px;color:var(--ink-2)}
+  /* 系统架构 */
+  .sys{display:flex;align-items:center;gap:0;margin:6px 0 14px}
+  .sys-col{display:flex;flex-direction:column;gap:10px;width:150px;flex:none}
+  .sys-col.wide{flex:1;width:auto}
+  .sys-arrow{width:84px;flex:none;text-align:center;font-size:11px;color:var(--ink-3);position:relative;padding-bottom:12px}
+  .sys-arrow::after{content:"";position:absolute;left:8px;right:8px;bottom:0;height:2px;background:#9aa4b6}
+  .sys-box{border:1px solid var(--line);border-radius:10px;background:#fff;padding:8px 10px;font-size:12.5px;display:flex;flex-direction:column;gap:2px}
+  .sys-box b{color:var(--ink);font-size:13px}
+  .sys-box span{color:var(--ink-3);font-size:11.5px}
+  .sys-box.ui{border-color:#9ec5f8;background:#f3f8ff}
+  .sys-box.ext{border-color:#9aa4b6;background:#f6f7f9}
+  .sys-box.db{background:#fbfbfd}
+  .sys-group{border:1.5px dashed #c7c9f5;border-radius:12px;padding:10px 12px;background:#fafaff}
+  .sys-group-t{font-size:12px;font-weight:700;color:var(--primary);margin-bottom:8px}
+  .sys-mods{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+  .sys-mods span{background:#fff;border:1px solid #dcdcfb;border-radius:6px;padding:2px 8px;font-size:12px;color:var(--primary)}
+  .sys-sub,.sys-store{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .sys-store{grid-template-columns:1fr 1fr 1fr;margin-top:10px}
+  @media (max-width:980px){.sys{flex-direction:column;align-items:stretch}.sys-col{width:auto}.sys-arrow{width:auto;height:34px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<nav class="toc">
+  <div class="t">目录</div>
+  <ol>
+    <li><a href="#s1">背景与目标</a></li>
+    <li><a href="#s2">范围</a></li>
+    <li><a href="#s3">核心概念</a></li>
+    <li><a href="#s4">功能架构</a></li>
+    <li><a href="#s5">系统架构</a></li>
+    <li><a href="#s6">模块划分与依赖</a></li>
+    <li><a href="#s7">领域模型</a></li>
+    <li><a href="#s8">关键流程</a></li>
+    <li><a href="#s9">权限计算总览</a></li>
+    <li><a href="#s10">开放接口总览</a></li>
+    <li><a href="#s11">数据设计约定</a></li>
+    <li><a href="#s12">一致性与并发</a></li>
+    <li><a href="#s13">缓存</a></li>
+    <li><a href="#s14">安全</a></li>
+    <li><a href="#s15">非功能</a></li>
+    <li><a href="#s16">部署</a></li>
+    <li><a href="#s17">技术选型</a></li>
+    <li><a href="#s18">与其他系统的关系</a></li>
+    <li><a href="#s19">路线图</a></li>
+    <li><a href="#s20">风险与待确认</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<header class="hero">
+  <p class="kicker">User Center · System Design</p>
+  <h1>用户中心 · 总体详细设计</h1>
+  <p class="lede">用户中心是公司内部系统共用的<b>用户、组织与权限</b>的唯一数据源：自建账号、维护部门树与负责人、登记接入应用及其权限元数据（操作、菜单、角色、数据编码）、把岗位 / 角色 / 数据权限授予人和组织，并通过<b>服务端开放接口</b>把这些结果提供给 AI TeamFlow、Atlas 等应用。本文给出整体架构、模块边界、跨模块流程与通用约定；各模块细节见对应的模块详细设计。</p>
+  <div class="meta"><span>用户 · 组织 · 应用接入 · 权限</span><span>开放接口（服务端）</span><span>模块化单体</span><span>PostgreSQL + Redis</span><span>自增 id + uuid 逻辑主键</span><span>SSO 以后用 Keycloak</span></div>
+  <div class="meta" style="margin-top:8px">
+    <a class="tag new" href="user-design.html">用户管理</a>
+    <a class="tag new" href="org-design.html">组织管理</a>
+    <a class="tag new" href="app-design.html">应用接入</a>
+    <a class="tag new" href="perm-design.html">权限管理</a>
+    <span class="tag">安全策略（后续）</span><span class="tag">审计日志（后续）</span>
+  </div>
+</header>
+
+<section id="s1">
+  <h2><span class="num">01</span>背景与目标</h2>
+  <p>公司内部系统各自维护账号、组织和权限，导致人员变动要在多处修改、权限口径不一致、离职回收不及时。用户中心把这三类数据收拢到一处：</p>
+  <div class="grid2">
+    <div class="box"><h4>目标</h4>
+      <ul>
+        <li><b>一处维护</b>：账号、部门、负责人只在用户中心维护</li>
+        <li><b>统一口径</b>：功能权限（角色 → 操作码 / 菜单）与数据权限（只读 / 读写 / Owner）有同一套授权模型</li>
+        <li><b>按组织授权</b>：授予部门（可含下级），人员调动后权限自动跟随</li>
+        <li><b>易接入</b>：应用只需调开放接口，不必自建权限体系</li>
+        <li><b>离职即生效</b>：停用后各应用立即查到已停用</li>
+      </ul></div>
+    <div class="box"><h4>非目标（本期）</h4>
+      <ul>
+        <li>统一登录（SSO / OIDC）：以后用 Keycloak，不自建</li>
+        <li>安全策略、审计日志两个模块的页面与详细设计</li>
+        <li>HR 系统同步；批量导入 / 导出 / 批量操作</li>
+        <li>兼职多部门、副负责人；拒绝授权、授权有效期、授权审批</li>
+        <li>应用内业务鉴权的具体实现（由各应用按返回结果控制）</li>
+      </ul></div>
+  </div>
+</section>
+
+<section id="s2">
+  <h2><span class="num">02</span>范围</h2>
+  <table>
+    <tr><th style="width:130px">模块</th><th>本期内容</th><th style="width:150px">详细设计</th></tr>
+    <tr><td>用户管理</td><td>自建账号、状态（未激活 / 正常 / 已锁定 / 已停用）、临时密码、重置、停用 / 启用、解锁、个人中心</td><td><a href="user-design.html">user-design.html</a></td></tr>
+    <tr><td>组织管理</td><td>部门树、负责人（约束与自动清空）、直属上级计算、部门成员</td><td><a href="org-design.html">org-design.html</a></td></tr>
+    <tr><td>应用接入</td><td>应用与凭据、可访问范围、操作目录、菜单、角色、数据编码、开放接口规范</td><td><a href="app-design.html">app-design.html</a></td></tr>
+    <tr><td>权限管理</td><td>角色授权、岗位、数据授权、有效权限计算、保护规则、授权相关开放接口</td><td><a href="perm-design.html">perm-design.html</a></td></tr>
+    <tr><td>安全策略</td><td><b>后续</b>。本期密码与登录保护使用配置中的固定值（第 14 节）</td><td>—</td></tr>
+    <tr><td>审计日志</td><td><b>后续</b>（查询页面、保留、导出）。本期各模块仍写入审计事件（第 11 节）</td><td>—</td></tr>
+  </table>
+</section>
+
+<section id="s3">
+  <h2><span class="num">03</span>核心概念</h2>
+  <table>
+    <tr><th style="width:130px">概念</th><th>说明</th><th style="width:100px">所属模块</th></tr>
+    <tr><td>用户</td><td>自建账号；账号不可改、不物理删除；属于一个部门</td><td>用户</td></tr>
+    <tr><td>部门</td><td>树形，唯一根部门，最多 10 级</td><td>组织</td></tr>
+    <tr><td>负责人 / 直属上级</td><td>每个部门最多一名负责人（须在本部门子树内）；直属上级不存储，沿部门链向上取第一个不是本人、未停用的负责人</td><td>组织</td></tr>
+    <tr><td>应用</td><td>接入的内部系统，用 App Key / Secret 调开放接口；用户中心自身是内置应用</td><td>应用接入</td></tr>
+    <tr><td>可访问范围</td><td>全员或指定部门（含下级）；决定 <code>can_access</code></td><td>应用接入</td></tr>
+    <tr><td>操作 / 菜单</td><td>属于应用；操作码控制按钮与接口，菜单控制导航与路由；菜单可设公共</td><td>应用接入</td></tr>
+    <tr><td>角色</td><td>属于应用，= 操作 + 菜单</td><td>应用接入</td></tr>
+    <tr><td>岗位</td><td>全局，带默认角色（可跨应用）</td><td>权限</td></tr>
+    <tr><td>角色授权</td><td>岗位或角色 → 用户或部门（可含下级）</td><td>权限</td></tr>
+    <tr><td>数据编码 / 数据对象</td><td>数据编码属于应用（如 Agent）；数据对象 = 数据编码 + 数据 Id</td><td>应用接入 / 权限</td></tr>
+    <tr><td>数据授权</td><td>只读 &lt; 读写 &lt; Owner → 用户或部门；只有 Owner 能改</td><td>权限</td></tr>
+    <tr><td>授权快照</td><td>某用户在某应用的 can_access、角色、操作码、菜单</td><td>权限（开放接口）</td></tr>
+  </table>
+</section>
+
+<section id="s4">
+  <h2><span class="num">04</span>功能架构</h2>
+  <div class="layers">
+    <div class="layer"><div class="layer-t">管理台</div>
+      <div class="cells"><span>组织架构</span><span>用户管理</span><span>权限管理：角色授权 / 数据授权 / 岗位管理</span><span>应用接入：配置 / 操作 / 菜单 / 角色 / 数据编码</span><span>个人中心</span></div></div>
+    <div class="layer"><div class="layer-t">核心能力</div>
+      <div class="cells"><span>账号与状态</span><span>临时密码</span><span>部门树与负责人</span><span>直属上级计算</span><span>有效权限计算</span><span>超级管理员 / Owner 保护</span><span>可访问范围</span></div></div>
+    <div class="layer"><div class="layer-t">开放接口</div>
+      <div class="cells"><span>接口令牌</span><span>用户 / 部门查询</span><span>授权快照</span><span>实时校验</span><span>数据权限</span><span>变更通知（P1）</span></div></div>
+    <div class="layer"><div class="layer-t">基础</div>
+      <div class="cells"><span>管理台登录与会话</span><span>审计事件写入</span><span>缓存与版本号</span><span>并发控制</span><span>配置</span></div></div>
+    <div class="layer ext"><div class="layer-t">外部</div>
+      <div class="cells"><span>AI TeamFlow</span><span>Atlas</span><span>其他内部系统</span><span>Keycloak（以后）</span></div></div>
+  </div>
+</section>
+
+<section id="s5">
+  <h2><span class="num">05</span>系统架构</h2>
+  <div class="sys">
+    <div class="sys-col">
+      <div class="sys-box ui"><b>管理台前端</b><span>React SPA</span><span>管理员与普通用户</span></div>
+    </div>
+    <div class="sys-arrow">HTTPS<br>/api/v1<br>Cookie 会话</div>
+    <div class="sys-col wide">
+      <div class="sys-group">
+        <div class="sys-group-t">用户中心后端（模块化单体）</div>
+        <div class="sys-mods"><span>用户管理</span><span>组织管理</span><span>应用接入</span><span>权限管理</span><span>开放接口</span><span>管理台认证</span><span>审计写入</span></div>
+        <div class="sys-sub">
+          <div class="sys-box"><b>API 服务</b><span>无状态，水平扩展；管理 API + 开放接口</span></div>
+          <div class="sys-box"><b>Worker（P1）</b><span>Webhook 投递与重试、过期数据清理</span></div>
+        </div>
+      </div>
+      <div class="sys-store" style="grid-template-columns:1fr 1fr">
+        <div class="sys-box db"><b>PostgreSQL</b><span>全部业务数据、审计事件</span></div>
+        <div class="sys-box db"><b>Redis</b><span>会话、接口令牌、版本号、限流</span></div>
+      </div>
+    </div>
+    <div class="sys-arrow">HTTPS<br>/open/v1<br>App Key / Secret</div>
+    <div class="sys-col">
+      <div class="sys-box ext"><b>AI TeamFlow</b><span>后端调用</span></div>
+      <div class="sys-box ext"><b>Atlas</b><span>后端调用</span></div>
+      <div class="sys-box ext"><b>Keycloak（以后）</b><span>用户联邦</span></div>
+    </div>
+  </div>
+  <ul>
+    <li><b>模块化单体</b>：四个业务模块在一个进程中，按包隔离、只经服务接口互相调用，不跨模块读写表；用户规模（数万）与写入频率低，没有拆微服务的必要，部署与事务都更简单。</li>
+    <li>管理 API（<code>/api/v1</code>）给管理台用，按登录会话 + 操作码鉴权；开放接口（<code>/open/v1</code>）给应用后端用，按接口令牌鉴权并限定在调用方应用。</li>
+    <li>浏览器不直接访问开放接口；App Secret 只存在应用后端。</li>
+  </ul>
+</section>
+
+<section id="s6">
+  <h2><span class="num">06</span>模块划分与依赖</h2>
+  <table>
+    <tr><th style="width:110px">模块</th><th>职责</th><th style="width:250px">主要表</th></tr>
+    <tr><td>用户管理</td><td>账号、状态、临时密码、个人中心</td><td>uc_user、uc_user_credential</td></tr>
+    <tr><td>组织管理</td><td>部门树、负责人、直属上级、成员</td><td>uc_dept</td></tr>
+    <tr><td>应用接入</td><td>应用、凭据、范围、操作、菜单、角色、数据编码</td><td>uc_app、uc_app_scope_dept、uc_operation、uc_menu、uc_role、uc_role_operation、uc_role_menu、uc_data_type</td></tr>
+    <tr><td>权限管理</td><td>角色授权、岗位、数据授权、有效权限</td><td>uc_grant、uc_position、uc_position_role、uc_data_object、uc_data_acl</td></tr>
+    <tr><td>开放接口</td><td>接口令牌、路由与隔离、限流（业务逻辑委托给各模块）</td><td>—（令牌在 Redis）</td></tr>
+    <tr><td>基础</td><td>管理台登录与会话、审计写入、缓存版本号</td><td>uc_audit_event</td></tr>
+  </table>
+  <h3>依赖规则</h3>
+  <table>
+    <tr><th style="width:150px">调用方</th><th>可以调用</th></tr>
+    <tr><td>用户管理</td><td>组织（部门校验、直属上级）、权限（超级管理员保护、有效权限只读）、应用接入（可访问的应用）</td></tr>
+    <tr><td>组织管理</td><td>用户（人数、调入成员）、权限（超级管理员保护、删除部门时清理）、应用接入（删除部门时清理范围）</td></tr>
+    <tr><td>权限管理</td><td>组织（部门链）、应用接入（角色定义、可访问范围、数据编码）、用户（状态）</td></tr>
+    <tr><td>应用接入</td><td>权限（删除角色 / 数据编码时的清理与校验）、组织（范围计算）</td></tr>
+  </table>
+  <p class="muted">模块间存在双向调用（如组织 ↔ 用户），都通过服务接口进行，并在同一数据库事务中完成；不使用异步事件来保证内部一致性（异步只用于对外的 Webhook）。</p>
+</section>
+
+<section id="s7">
+  <h2><span class="num">07</span>领域模型</h2>
+  <div class="arch">
+    <div class="arch-row" style="gap:12px;align-items:stretch">
+      <div class="arch-box"><b>组织</b><ul><li>部门（树）</li><li>负责人 → 用户</li></ul></div>
+      <div class="arch-box"><b>用户</b><ul><li>属于一个部门</li><li>凭据（密码哈希、锁定）</li></ul></div>
+      <div class="arch-box"><b>应用</b><ul><li>可访问范围 → 部门</li><li>操作、菜单、角色（操作 + 菜单）、数据编码</li></ul></div>
+      <div class="arch-box me"><b>授权</b><ul><li>岗位（默认角色）</li><li>角色授权：岗位 / 角色 → 用户 / 部门</li><li>数据对象、数据授权 → 用户 / 部门</li></ul></div>
+    </div>
+  </div>
+  <table>
+    <tr><th>关系</th><th>基数</th><th>说明</th></tr>
+    <tr><td>部门 — 部门</td><td>1 : n</td><td>父子；唯一根</td></tr>
+    <tr><td>用户 — 部门</td><td>n : 1</td><td>必填</td></tr>
+    <tr><td>部门 — 负责人</td><td>n : 0..1</td><td>负责人须在部门子树内；一人可负责多个部门</td></tr>
+    <tr><td>应用 — 操作 / 菜单 / 角色 / 数据编码</td><td>1 : n</td><td>都属于应用，编码不可改</td></tr>
+    <tr><td>角色 — 操作、角色 — 菜单</td><td>n : n</td><td>只能是同一应用的</td></tr>
+    <tr><td>岗位 — 角色</td><td>n : n</td><td>默认角色，可跨应用</td></tr>
+    <tr><td>角色授权</td><td>（岗位 | 角色）× （用户 | 部门）</td><td>同一组合唯一；部门可含下级</td></tr>
+    <tr><td>数据编码 — 数据对象 — 数据授权</td><td>1 : n : n</td><td>同一对象对同一数据唯一；级别取最高</td></tr>
+  </table>
+</section>
+
+<section id="s8">
+  <h2><span class="num">08</span>关键流程</h2>
+  <h3>① 新员工入职</h3>
+  <table>
+    <tr><th style="width:40px">#</th><th>动作</th><th style="width:150px">模块</th></tr>
+    <tr><td>1</td><td>管理员在部门下新建用户 → 生成临时密码（只显示一次），状态「未激活」</td><td>用户</td></tr>
+    <tr><td>2</td><td>用户自动继承所在部门（及上级含下级）的岗位、角色、数据授权；如需个人授权，在权限管理中授予岗位 / 角色</td><td>权限</td></tr>
+    <tr><td>3</td><td>用户首次登录用户中心管理台并修改密码 → 激活</td><td>用户 / 管理台认证</td></tr>
+    <tr><td>4</td><td>用户登录 TeamFlow（应用自身的登录）→ TeamFlow 按账号查询用户、取授权快照 → <code>can_access</code> 为真则进入，并按菜单 / 操作码渲染</td><td>开放接口</td></tr>
+  </table>
+  <h3>② 新应用接入</h3>
+  <table>
+    <tr><th style="width:40px">#</th><th>动作</th><th style="width:150px">模块</th></tr>
+    <tr><td>1</td><td>接入应用 → App Key / Secret（只显示一次）；设置可访问范围</td><td>应用接入</td></tr>
+    <tr><td>2</td><td>登记操作、菜单、数据编码；建角色并勾选操作与菜单</td><td>应用接入</td></tr>
+    <tr><td>3</td><td>把角色授予部门 / 用户，或加入岗位的默认角色</td><td>权限</td></tr>
+    <tr><td>4</td><td>应用后端按接入规范对接开放接口</td><td>应用</td></tr>
+  </table>
+  <h3>③ Atlas 创建 Agent 并分享</h3>
+  <table>
+    <tr><th style="width:40px">#</th><th>动作</th><th style="width:150px">模块</th></tr>
+    <tr><td>1</td><td>张明在 Atlas 创建 Agent → Atlas 后端调 <code>POST /open/v1/data-permissions</code> 写入张明为 Owner（自动登记数据对象）</td><td>权限</td></tr>
+    <tr><td>2</td><td>张明在用户中心「权限管理 → 数据授权 → 我管理的」中把只读授予「研发中心（含下级）」、读写授予陈运（P1 起也可在 Atlas 内带 operator 完成）</td><td>权限</td></tr>
+    <tr><td>3</td><td>陈运打开 Agent → Atlas 调 <code>check</code> → 读写（直接授权）与只读（部门）取最高 = 读写</td><td>权限</td></tr>
+  </table>
+  <h3>④ 组织调整</h3>
+  <table>
+    <tr><th style="width:220px">动作</th><th>连锁影响（全部自动、实时）</th></tr>
+    <tr><td>部门换负责人</td><td>部门成员的直属上级立即变化，用户表无写入</td></tr>
+    <tr><td>员工调部门</td><td>直属上级、部门继承的授权、应用可访问范围、部门数据权限按新部门计算；若其是原部门负责人且调出子树，负责人自动清空；经过超级管理员保护</td></tr>
+    <tr><td>移动部门</td><td>子树成员的继承授权、范围、直属上级重算；旧上级链中负责人脱离子树的被清空</td></tr>
+    <tr><td>删除空部门</td><td>从应用范围中移除；授予该部门的角色授权、数据授权被撤销</td></tr>
+  </table>
+  <h3>⑤ 员工离职</h3>
+  <table>
+    <tr><th style="width:40px">#</th><th>动作</th></tr>
+    <tr><td>1</td><td>管理员停用用户（不能停用唯一的超级管理员）→ 管理台会话注销</td></tr>
+    <tr><td>2</td><td>开放接口立即返回 <code>status = disabled</code>、<code>can_access = false</code>、有效权限为空；应用最长 5 分钟内刷新快照后终止其会话（P1 收到 <code>user.disabled</code> 立即踢出）</td></tr>
+    <tr><td>3</td><td>授权、数据权限保留（可启用恢复）；其作为负责人的部门提示更换；其为唯一 Owner 的数据标「无可用 Owner」</td></tr>
+  </table>
+</section>
+
+<section id="s9">
+  <h2><span class="num">09</span>权限计算总览</h2>
+  <table>
+    <tr><th style="width:160px">结果</th><th>计算</th><th style="width:150px">计算位置 / 缓存</th></tr>
+    <tr><td>命中的授权</td><td>授予本人 ∪ 授予所在部门 ∪ 授予上级部门且含下级</td><td>权限；按用户 + 授权版本号缓存</td></tr>
+    <tr><td>有效角色</td><td>命中的角色授权 ∪ 命中岗位的默认角色（记录来源）；已停用用户为空</td><td>同上</td></tr>
+    <tr><td><code>can_access(app)</code></td><td>未停用且在应用可访问范围内</td><td>应用接入</td></tr>
+    <tr><td>操作码 <code>(app)</code></td><td>有效角色中属于该应用的角色的操作并集；范围外为空</td><td>权限 + 应用接入</td></tr>
+    <tr><td>菜单 <code>(app)</code></td><td>公共菜单 ∪ 角色绑定菜单，补上级目录；范围外为空</td><td>同上</td></tr>
+    <tr><td>数据级别</td><td>该数据上命中的数据授权的最高级别；已停用为无</td><td>权限；不缓存，SQL 索引</td></tr>
+    <tr><td>直属上级</td><td>部门链上第一个不是本人、未停用的负责人</td><td>组织；部门树内存缓存</td></tr>
+  </table>
+  <div class="callout rule"><b class="l">用户中心自己也用这套规则</b>用户中心是内置应用：它的侧边栏 = 内置菜单树按登录人角色计算的结果（「权限管理」为公共菜单）；页面按钮 = 操作码（如 <code>user:create</code>、<code>grant:manage</code>）。内置角色：超级管理员（全部，锁定）、用户管理员、审计员。</div>
+</section>
+
+<section id="s10">
+  <h2><span class="num">10</span>开放接口总览</h2>
+  <table>
+    <tr><th style="width:330px">接口</th><th>说明</th><th style="width:90px">模块</th></tr>
+    <tr><td><code>POST /open/v1/auth/token</code></td><td>App Key / Secret → 接口令牌（2 小时）</td><td>应用接入</td></tr>
+    <tr><td><code>GET /users/by-account/{account}</code> · <code>/users/{id}</code></td><td>用户信息（含部门路径、直属上级、状态）</td><td>用户 / 组织</td></tr>
+    <tr><td><code>GET /users</code></td><td>选人：只含本应用可访问范围内的未停用用户</td><td>用户</td></tr>
+    <tr><td><code>GET /depts/tree</code></td><td>部门树</td><td>组织</td></tr>
+    <tr><td><code>GET /users/{id}/authz</code></td><td>授权快照</td><td>权限</td></tr>
+    <tr><td><code>POST /authz/check</code></td><td>实时校验操作码</td><td>权限</td></tr>
+    <tr><td><code>/data-permissions</code>（写入 / check / accessible / 清理）</td><td>数据权限；只限本应用数据编码</td><td>权限</td></tr>
+    <tr><td><code>PUT /metadata</code> <span class="tag">P1</span></td><td>应用上报操作与菜单</td><td>应用接入</td></tr>
+    <tr><td>Webhook <span class="tag">P1</span></td><td><code>user.*</code>、<code>authz.changed</code>、<code>app.disabled</code>，HMAC 签名</td><td>各模块</td></tr>
+  </table>
+  <ul>
+    <li><b>隔离</b>：每个请求都限定在接口令牌所属应用——只能看到本应用的角色 / 菜单 / 数据编码、本应用范围内的用户。</li>
+    <li><b>版本</b>：路径带 <code>v1</code>；只做向后兼容的新增，破坏性变更走 <code>v2</code> 并行一段时间。</li>
+    <li><b>限流</b>：按 App Key，默认 50 次 / 秒，可按应用调整。</li>
+    <li><b>错误格式</b>：<code>{ "code": "...", "message": "...", "details": {...} }</code>，与管理 API 一致。</li>
+  </ul>
+</section>
+
+<section id="s11">
+  <h2><span class="num">11</span>数据设计约定</h2>
+  <table>
+    <tr><th style="width:150px">约定</th><th>规则</th></tr>
+    <tr><td>主键</td><td><code>id bigint</code> 自增主键，仅库内使用，不对外、不做关联；<code>uuid</code> 逻辑主键（UUIDv7，应用生成）用于全部关联、外键、API、审计对象</td></tr>
+    <tr><td>命名</td><td>表名 <code>uc_</code> 前缀、单数；关联字段 <code>xxx_uuid</code>；时间 <code>xxx_at</code>（timestamptz）；操作人 <code>xxx_by</code>（用户 uuid）</td></tr>
+    <tr><td>公共列</td><td>可编辑的主体表带 <code>created_at/by</code>、<code>updated_at/by</code>、<code>version</code>（乐观锁，接口用 <code>If-Match</code>）</td></tr>
+    <tr><td>删除策略</td><td>用户、应用<b>只停用不删除</b>；部门、岗位、角色、操作、菜单、数据编码物理删除（有引用时拒绝或按规则级联），审计保留快照</td></tr>
+    <tr><td>编码</td><td>账号、角色编码、操作码、菜单编码、数据编码、岗位编码一律创建后不可改</td></tr>
+    <tr><td>枚举</td><td>varchar + CHECK 约束（如 <code>status IN ('active','disabled')</code>）；数据权限级别用 smallint 1 / 2 / 3</td></tr>
+    <tr><td>迁移</td><td>Alembic 版本化迁移；内置应用、内置角色、内置菜单、根部门与首个超级管理员由初始化迁移写入</td></tr>
+  </table>
+  <h3>审计事件（本期只写入）</h3>
+<pre>CREATE TABLE uc_audit_event (
+  id           bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  uuid         uuid NOT NULL UNIQUE,
+  occurred_at  timestamptz NOT NULL DEFAULT now(),
+  actor_type   varchar(8)  NOT NULL,      <span class="c">-- user | app | system</span>
+  actor_uuid   uuid,
+  action       varchar(64) NOT NULL,      <span class="c">-- 如 user.create、grant.revoke</span>
+  target_type  varchar(32) NOT NULL,
+  target_uuid  uuid,
+  target_name  varchar(200),              <span class="c">-- 快照，对象删除后仍可读</span>
+  detail       jsonb,                     <span class="c">-- 字段差异等；不含密码、Secret，联系方式脱敏</span>
+  batch_uuid   uuid
+);
+CREATE INDEX ix_audit_time   ON uc_audit_event (occurred_at DESC);
+CREATE INDEX ix_audit_target ON uc_audit_event (target_type, target_uuid);</pre>
+  <p class="muted">只追加、不更新；与业务写操作同一事务。查询页面、保留期限、导出放到后续的审计日志模块。</p>
+  <h3>表清单（19 张）</h3>
+  <div class="cells" style="padding:0;margin:6px 0 14px">
+    <span>uc_user</span><span>uc_user_credential</span><span>uc_dept</span><span>uc_app</span><span>uc_app_scope_dept</span><span>uc_operation</span><span>uc_menu</span><span>uc_role</span><span>uc_role_operation</span><span>uc_role_menu</span><span>uc_data_type</span><span>uc_position</span><span>uc_position_role</span><span>uc_grant</span><span>uc_data_object</span><span>uc_data_acl</span><span>uc_audit_event</span><span>uc_login_log</span><span>uc_config</span>
+  </div>
+  <p class="muted"><code>uc_login_log</code>：管理台登录记录（时间、用户、IP、结果）；<code>uc_config</code>：键值配置（本期存放密码与登录保护的固定值，供以后安全策略模块接管）。</p>
+</section>
+
+<section id="s12">
+  <h2><span class="num">12</span>一致性与并发</h2>
+  <table>
+    <tr><th style="width:220px">风险</th><th>手段</th></tr>
+    <tr><td>并发移动部门形成环</td><td>树结构变更取 <code>pg_advisory_xact_lock('uc_dept_tree')</code> 串行化</td></tr>
+    <tr><td>并发操作导致没有超级管理员</td><td>可能减少超级管理员的操作（撤销授权、改岗位默认角色、停用、调部门、移动部门）取 <code>pg_advisory_xact_lock('uc_super_guard')</code>，变更后校验，失败回滚</td></tr>
+    <tr><td>两名 Owner 互相移除</td><td>数据对象行 <code>SELECT … FOR UPDATE</code>，变更后校验至少一名可用 Owner</td></tr>
+    <tr><td>两人同时编辑同一对象</td><td><code>version</code> 乐观锁，后到者 <code>VERSION_CONFLICT</code></td></tr>
+    <tr><td>唯一性竞争（账号、编码）</td><td>数据库唯一约束兜底</td></tr>
+    <tr><td>负责人约束被破坏</td><td>设置负责人、用户调部门、移动部门时在同一事务内校验 / 自动清空</td></tr>
+    <tr><td>对外通知与数据不一致（P1）</td><td>事务内写 outbox 表，提交后由 Worker 投递 Webhook（至少一次，应用按事件 id 去重）</td></tr>
+  </table>
+</section>
+
+<section id="s13">
+  <h2><span class="num">13</span>缓存</h2>
+  <table>
+    <tr><th style="width:170px">内容</th><th>位置</th><th>失效</th></tr>
+    <tr><td>部门树（含负责人）</td><td>各实例内存</td><td>树版本号（Redis）变化时重载</td></tr>
+    <tr><td>应用配置、操作、菜单、角色定义</td><td>各实例内存</td><td>按应用的版本号</td></tr>
+    <tr><td>用户有效角色（含来源）</td><td>Redis，键 = 用户 + 授权版本号</td><td>授权版本号：任何授权、岗位、角色定义、用户状态 / 部门、部门结构变更 +1</td></tr>
+    <tr><td>管理台会话、接口令牌</td><td>Redis</td><td>到期 / 停用 / 轮换时删除</td></tr>
+    <tr><td>数据权限</td><td>不缓存</td><td>—</td></tr>
+    <tr><td>应用侧授权快照</td><td>应用自己</td><td>最长 5 分钟；P1 Webhook 触发</td></tr>
+  </table>
+  <p class="muted">写操作低频，使用粗粒度的全局版本号：实现简单、不会读到过期结果，代价只是变更后短时间内缓存命中率下降。</p>
+</section>
+
+<section id="s14">
+  <h2><span class="num">14</span>安全</h2>
+  <div class="grid2">
+    <div class="box"><h4>管理台登录（本期）</h4>
+      <ul><li>账号密码登录；密码 argon2id；临时密码 CSPRNG，只显示一次</li>
+      <li>首次登录 / 临时密码 / 过期必须改密</li>
+      <li>连续失败锁定；会话 Cookie：HttpOnly、Secure、SameSite=Lax；CSRF 令牌</li>
+      <li>固定值（<code>uc_config</code>）：密码至少 8 位含大写与数字、有效期 90 天、5 次失败锁定 15 分钟、会话 12 小时；以后由安全策略模块提供配置界面</li></ul></div>
+    <div class="box"><h4>接口与数据</h4>
+      <ul><li>App Secret 只显示一次、只存哈希；接口令牌 2 小时可随时作废</li>
+      <li>开放接口按应用隔离；按 App Key / IP 限流</li>
+      <li>审计不含密码与 Secret，邮箱 / 手机脱敏</li>
+      <li>全站 HTTPS；含密码 / Secret 的响应 <code>no-store</code></li>
+      <li>前端隐藏只负责「看不到」，所有接口服务端按操作码 / Owner 再鉴权</li></ul></div>
+  </div>
+  <div class="callout warn"><b class="l">统一登录</b>本期不提供 SSO，应用自行登录并按账号对齐身份。以后引入 Keycloak（推荐用户联邦：Keycloak 从用户中心读用户、由用户中心校验密码），用户中心仍是唯一数据源，管理台也改由 Keycloak 登录。详见<a href="app-design.html#s15">应用接入 · 后续统一登录</a>。</div>
+</section>
+
+<section id="s15">
+  <h2><span class="num">15</span>非功能</h2>
+  <table>
+    <tr><th style="width:150px">类别</th><th>指标</th></tr>
+    <tr><td>容量</td><td>5 万用户、5000 部门、50 个应用、10 万条角色授权、100 万条数据授权</td></tr>
+    <tr><td>管理台</td><td>列表 / 详情 p95 &lt; 300ms；部门树 &lt; 200ms</td></tr>
+    <tr><td>开放接口</td><td>授权快照 p95 &lt; 50ms；实时校验、数据权限 check p95 &lt; 20ms；accessible 分页 &lt; 100ms</td></tr>
+    <tr><td>可用性</td><td>开放接口 99.9%；应用以快照缓存兜底短时故障（新登录不能放行）</td></tr>
+    <tr><td>数据</td><td>PostgreSQL 每日全量备份 + WAL 连续归档（PITR）；RPO ≤ 5 分钟，RTO ≤ 30 分钟</td></tr>
+    <tr><td>可观测</td><td>结构化日志、请求追踪 id；指标：接口 QPS / 延迟 / 错误率、按应用的调用量、登录失败与锁定数；告警：开放接口错误率、短时大量停用 / 重置 / 撤销授权</td></tr>
+  </table>
+</section>
+
+<section id="s16">
+  <h2><span class="num">16</span>部署</h2>
+  <table>
+    <tr><th style="width:150px">组件</th><th style="width:110px">实例</th><th>说明</th></tr>
+    <tr><td>uc-web</td><td>静态资源</td><td>管理台 SPA，Nginx / 对象存储托管</td></tr>
+    <tr><td>uc-api</td><td>≥ 2</td><td>无状态；管理 API 与开放接口同一服务，按路径分流；可分别配置限流</td></tr>
+    <tr><td>uc-worker</td><td>1（P1）</td><td>Webhook 投递、过期令牌 / 导入任务清理</td></tr>
+    <tr><td>PostgreSQL</td><td>主备</td><td>定时备份 + PITR</td></tr>
+    <tr><td>Redis</td><td>主备</td><td>会话、令牌、版本号、限流；丢失时用户需重新登录、应用重新换令牌，业务数据不受影响</td></tr>
+  </table>
+  <ul>
+    <li>环境：开发 / 测试 / 生产独立数据库；生产只允许 HTTPS。</li>
+    <li>发布：先执行数据库迁移（只做向后兼容的变更），再滚动更新 uc-api。</li>
+    <li>初始化：首次部署的迁移创建根部门、内置应用（用户中心）及其操作 / 菜单 / 内置角色、首个超级管理员（临时密码输出到部署日志一次）。</li>
+  </ul>
+</section>
+
+<section id="s17">
+  <h2><span class="num">17</span>技术选型</h2>
+  <table>
+    <tr><th style="width:120px">层</th><th style="width:280px">选型</th><th>理由</th></tr>
+    <tr><td>后端</td><td>Python 3.12 + FastAPI + SQLAlchemy 2 + Alembic</td><td>与 AI TeamFlow、Atlas 一致，团队熟悉；类型标注 + Pydantic 校验适合接口密集的服务</td></tr>
+    <tr><td>数据库</td><td>PostgreSQL 15+</td><td>事务、部分索引、advisory lock、物化路径前缀查询、jsonb（审计明细）</td></tr>
+    <tr><td>缓存</td><td>Redis 7</td><td>会话、令牌、版本号、限流</td></tr>
+    <tr><td>前端</td><td>React + TypeScript + Ant Design</td><td>与 TeamFlow 一致；树、表格、表单组件成熟；按原型的信息架构实现</td></tr>
+    <tr><td>密码</td><td>argon2-cffi（argon2id）</td><td>当前推荐的口令哈希；将来 Keycloak 联邦时由用户中心校验，无需迁移哈希</td></tr>
+    <tr><td>ID</td><td>UUIDv7（应用生成）</td><td>按时间有序，索引友好</td></tr>
+    <tr><td>统一登录（以后）</td><td>Keycloak</td><td>成熟的 OIDC / SAML 实现，不自建</td></tr>
+  </table>
+</section>
+
+<section id="s18">
+  <h2><span class="num">18</span>与其他系统的关系</h2>
+  <table>
+    <tr><th style="width:130px">系统</th><th>关系</th></tr>
+    <tr><td>AI TeamFlow</td><td>通过开放接口获取用户、部门（选人、团队成员）与授权快照（菜单、操作码，如 <code>team:create</code>、<code>flow_template:publish</code>）；其设计文档中「企业统一身份（OIDC）」应改为对接用户中心开放接口</td></tr>
+    <tr><td>Atlas</td><td>同上；另用数据权限接口管理 Agent、Skill 的 Owner / 分享</td></tr>
+    <tr><td>Keycloak（以后）</td><td>身份提供方；通过用户联邦读取用户中心的用户与密码校验</td></tr>
+  </table>
+</section>
+
+<section id="s19">
+  <h2><span class="num">19</span>路线图</h2>
+  <table>
+    <tr><th style="width:90px">阶段</th><th>内容</th><th style="width:170px">对应模块</th></tr>
+    <tr><td>M1 基础</td><td>工程骨架、迁移与初始化、管理台登录（固定策略）、审计写入、缓存版本号；组织（树、负责人、直属上级）；用户（账号、状态、临时密码、个人中心）</td><td>组织、用户、基础</td></tr>
+    <tr><td>M2 权限元数据</td><td>应用接入（应用、凭据、范围、操作、菜单、角色）；用户中心自身的菜单与按钮按角色控制</td><td>应用接入</td></tr>
+    <tr><td>M3 授权</td><td>角色授权、岗位、有效权限、超级管理员保护；用户详情权限分页</td><td>权限</td></tr>
+    <tr><td>M4 开放接口</td><td>接口令牌、用户 / 部门查询、授权快照、实时校验；TeamFlow 对接</td><td>应用接入、权限</td></tr>
+    <tr><td>M5 数据权限</td><td>数据编码、数据对象与授权、数据权限接口、Owner 保护；Atlas 对接</td><td>应用接入、权限</td></tr>
+    <tr><td>M6 增强（P1）</td><td>Webhook、operator 代表修改、Secret 平滑轮换、元数据上报、变更前影响提示、排序与搜索</td><td>全部</td></tr>
+    <tr><td>以后</td><td>安全策略模块、审计日志模块、Keycloak 统一登录</td><td>—</td></tr>
+  </table>
+</section>
+
+<section id="s20">
+  <h2><span class="num">20</span>风险与待确认</h2>
+  <table>
+    <tr><th style="width:40px">#</th><th>问题</th><th style="width:240px">当前设计 / 建议</th></tr>
+    <tr><td>1</td><td><b>安全策略、审计日志「先不做」的范围</b>：本期是否仍写入审计事件、是否保留管理台的密码策略与锁定？</td><td>建议写入审计事件、使用固定策略值（成本低，避免以后补录）</td></tr>
+    <tr><td>2</td><td>本期应用如何验证用户密码</td><td>各应用沿用自己的登录，按账号对齐；不提供密码校验接口</td></tr>
+    <tr><td>3</td><td>数据无可用 Owner 时是否允许超级管理员移交</td><td>P1 提供，需确认</td></tr>
+    <tr><td>4</td><td>操作与菜单由管理员维护还是应用上报</td><td>建议 P1 支持应用上报</td></tr>
+    <tr><td>5</td><td>应用侧授权快照最长缓存 5 分钟是否可接受；Webhook 是否提前到 P0</td><td>5 分钟；Webhook 为 P1</td></tr>
+    <tr><td>6</td><td>停用用户的授权保留还是自动撤销</td><td>保留，启用后恢复</td></tr>
+    <tr><td>7</td><td>负责人约束（每部门一名、须在子树内）、负责人停用的处理</td><td>如设计；停用保留并提示更换</td></tr>
+    <tr><td>8</td><td>临时密码分发方式与有效期</td><td>管理员告知；7 天</td></tr>
+    <tr><td>风险</td><td>应用未按规范检查 <code>can_access</code> / 停用状态</td><td>接入验收清单 + 范围外用户快照为空兜底</td></tr>
+    <tr><td>风险</td><td>授权快照缓存导致离职后短时可用</td><td>缓存 ≤ 5 分钟；P1 Webhook 立即踢出</td></tr>
+  </table>
+</section>
+
+</main>
+</div>
+</body>
+</html>

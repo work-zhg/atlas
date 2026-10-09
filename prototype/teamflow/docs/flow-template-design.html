@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>流程模板模块 · 详细设计 · AI TeamFlow</title>
+<style>
+  :root{
+    --bg:#f6f7f9;--surface:#fff;--surface-2:#fbfbfd;--ink:#0f172a;--ink-2:#334155;--ink-3:#64748b;--ink-4:#94a3b8;
+    --line:#e6e8ee;--line-2:#eef0f4;--primary:#4f46e5;--primary-weak:#eef0ff;
+    --warning:#b45309;--warning-weak:#fef3e2;
+    --mono:"JetBrains Mono","SF Mono",ui-monospace,Menlo,Consolas,monospace;
+    --font:"Inter","PingFang SC","Microsoft YaHei",system-ui,-apple-system,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink-2);font-family:var(--font);font-size:14.5px;line-height:1.75}
+  a{color:var(--primary);text-decoration:none}
+  .wrap{display:grid;grid-template-columns:240px minmax(0,1fr);gap:36px;max-width:1240px;margin:0 auto;padding:32px 28px 80px}
+  nav.toc{position:sticky;top:24px;align-self:start;max-height:calc(100vh - 48px);overflow:auto;font-size:13px}
+  nav.toc .t{font-size:11px;letter-spacing:.12em;color:var(--ink-4);text-transform:uppercase;margin-bottom:8px;font-weight:600}
+  nav.toc ol{list-style:none;margin:0;padding:0;counter-reset:s}
+  nav.toc li{counter-increment:s}
+  nav.toc a{display:block;padding:4px 8px;border-radius:6px;color:var(--ink-3)}
+  nav.toc a::before{content:counter(s,decimal-leading-zero) "  ";font-family:var(--mono);font-size:11px;color:var(--ink-4)}
+  nav.toc a:hover{background:#fff;color:var(--ink)}
+  header.hero{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:28px 30px;margin-bottom:28px}
+  .kicker{font-family:var(--mono);font-size:11.5px;letter-spacing:.14em;color:var(--primary);text-transform:uppercase;margin:0 0 6px}
+  h1{font-size:26px;color:var(--ink);margin:0 0 10px;letter-spacing:-.3px}
+  .lede{margin:0;font-size:15px}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+  .meta span{font-size:12px;padding:2px 10px;border-radius:999px;background:var(--primary-weak);color:var(--primary)}
+  section{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:24px 28px;margin-bottom:20px}
+  h2{font-size:19px;color:var(--ink);margin:0 0 14px;display:flex;align-items:center;gap:10px}
+  h2 .num{font-family:var(--mono);font-size:12px;color:#fff;background:var(--primary);border-radius:6px;padding:2px 7px}
+  h3{font-size:15.5px;color:var(--ink);margin:22px 0 8px}
+  p{margin:0 0 12px}
+  code{font-family:var(--mono);font-size:12.5px;background:#f1f3f7;border:1px solid var(--line-2);border-radius:4px;padding:0 5px;color:#be185d}
+  table{width:100%;border-collapse:collapse;font-size:13.5px;margin:6px 0 14px}
+  th{text-align:left;background:var(--surface-2);color:var(--ink-3);font-weight:600;font-size:12.5px}
+  th,td{border:1px solid var(--line);padding:8px 10px;vertical-align:top}
+  td code{white-space:nowrap}
+  pre{background:#0f172a;color:#e2e8f0;border-radius:10px;padding:14px 16px;font-family:var(--mono);font-size:12.5px;line-height:1.65;overflow:auto;margin:6px 0 14px;white-space:pre-wrap}
+  pre .c{color:#94a3b8}
+  .callout{border:1px solid;border-left-width:4px;border-radius:10px;padding:10px 14px;margin:8px 0 14px;font-size:13.5px}
+  .callout b.l{display:block;font-size:11.5px;letter-spacing:.1em;margin-bottom:3px}
+  .rule{background:var(--primary-weak);border-color:#c7c9f5;color:#312e81}
+  .warn{background:var(--warning-weak);border-color:#f6d39b;color:#7c2d12}
+  .tag{display:inline-block;font-size:11.5px;padding:0 8px;border-radius:999px;border:1px solid var(--line);background:var(--surface-2);color:var(--ink-3);white-space:nowrap}
+  .tag.new{color:var(--primary);border-color:#c7c9f5;background:var(--primary-weak)}
+  .tag.p2{color:var(--warning);border-color:#f6d39b;background:var(--warning-weak)}
+  .flow{font-family:var(--mono);font-size:12.5px;line-height:1.75;background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:14px 16px;white-space:pre;overflow:auto;margin:6px 0 14px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .box{border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:var(--surface-2)}
+  .box h4{margin:0 0 6px;font-size:13.5px;color:var(--ink)}
+  ul,ol{margin:0 0 12px;padding-left:20px}
+  li{margin:2px 0}
+  .muted{color:var(--ink-4);font-size:12px}
+  /* 关系图 */
+  .arch{margin:6px 0 14px}
+  .arch-sys{border:1.5px dashed #c7c9f5;border-radius:12px;padding:12px 14px;background:#fafaff}
+  .arch-sys-t{font-size:12px;font-weight:700;color:var(--primary);margin-bottom:8px;letter-spacing:.06em}
+  .arch-row{display:flex;align-items:center}
+  .arch-box{flex:1;background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:13px}
+  .arch-box.me{border-color:var(--primary);box-shadow:0 0 0 3px rgba(79,70,229,.1)}
+  .arch-box b{color:var(--ink)}
+  .arch-box ul{margin:6px 0 0;padding-left:16px;color:var(--ink-3);font-size:12.5px}
+  .arch-link{width:96px;flex:none;text-align:center;font-size:11.5px;color:var(--ink-3);position:relative;padding-bottom:10px}
+  .arch-link i{position:absolute;left:8px;right:8px;bottom:0;height:2px;background:#9aa4b6}
+  .arch-link i.r::after{content:"";position:absolute;right:-2px;top:-4px;border-left:7px solid #9aa4b6;border-top:5px solid transparent;border-bottom:5px solid transparent}
+  .arch-link i.l::before{content:"";position:absolute;left:-2px;top:-4px;border-right:7px solid #9aa4b6;border-top:5px solid transparent;border-bottom:5px solid transparent}
+  .arch-note{margin-top:8px;font-size:12px;color:var(--ink-3)}
+  .arch-down{display:flex;align-items:center;gap:8px;margin-left:calc(83% - 1px);height:34px;font-size:11.5px;color:var(--ink-3)}
+  .arch-down i{width:2px;height:100%;background:#9aa4b6;position:relative}
+  .arch-down i::after{content:"";position:absolute;left:-4px;bottom:-2px;border-top:7px solid #9aa4b6;border-left:5px solid transparent;border-right:5px solid transparent}
+  .arch-ext{margin-left:calc(83% - 90px);width:180px;text-align:center;border:1px solid #9aa4b6;border-radius:10px;padding:8px;background:#fff;font-weight:600;color:var(--ink);font-size:13px}
+  @media (max-width:980px){.wrap{grid-template-columns:1fr}nav.toc{position:static;max-height:none}.grid2{grid-template-columns:1fr}
+    .arch-row{flex-direction:column;align-items:stretch}.arch-link{width:auto;height:30px}.arch-down,.arch-ext{margin-left:0}}
+  /* 流程结构示意 */
+  .fig{border:1px solid var(--line);border-radius:10px;background:var(--surface-2);padding:16px;overflow-x:auto;margin:6px 0 14px}
+  .fig-row{display:inline-flex;align-items:center}
+  .fig-node{flex:none;background:#fff;border:1px solid #cfd4ea;border-radius:8px;padding:6px 12px;font-size:12.5px;font-weight:600;color:var(--ink);white-space:nowrap}
+  .fig-arrow{flex:none;width:26px;height:2px;background:#9aa4b6;position:relative}
+  .fig-arrow::after{content:"";position:absolute;right:-1px;top:-4px;border-left:6px solid #9aa4b6;border-top:5px solid transparent;border-bottom:5px solid transparent}
+  .fig-arrow.s{width:18px}
+  .fig-par{flex:none;border:1.5px dashed #c7c9f5;border-radius:10px;padding:8px 10px;background:#fafaff;display:flex;flex-direction:column;gap:8px}
+  .fig-par-t{font-size:11px;color:var(--primary);font-weight:700}
+  .fig-track{display:flex;align-items:center}
+  .fig-tl{width:46px;font-size:11px;color:var(--ink-3)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<nav class="toc">
+  <div class="t">目录</div>
+  <ol>
+    <li><a href="#s1">定位与范围</a></li>
+    <li><a href="#s2">术语</a></li>
+    <li><a href="#s3">与其他模块的关系</a></li>
+    <li><a href="#s4">功能清单</a></li>
+    <li><a href="#s5">流程结构模型</a></li>
+    <li><a href="#s6">节点模型</a></li>
+    <li><a href="#s7">版本与草稿</a></li>
+    <li><a href="#s8">数据模型</a></li>
+    <li><a href="#s9">发布校验</a></li>
+    <li><a href="#s10">编辑交互</a></li>
+    <li><a href="#s11">与项目、流程的衔接</a></li>
+    <li><a href="#s12">API</a></li>
+    <li><a href="#s13">权限</a></li>
+    <li><a href="#s14">页面设计</a></li>
+    <li><a href="#s15">审计</a></li>
+    <li><a href="#s16">异常与边界</a></li>
+    <li><a href="#s17">非功能</a></li>
+    <li><a href="#s18">测试要点</a></li>
+    <li><a href="#s19">落地计划</a></li>
+    <li><a href="#s20">待确认</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<header class="hero">
+  <p class="kicker">AI TeamFlow · Detailed Design</p>
+  <h1>流程模板模块</h1>
+  <p class="lede">流程模板定义一类工作<b>「怎么做」</b>：有哪些节点、谁执行（执行角色）、产出什么（产物与文件模板）、谁把关（准出 / 准入评审角色与规则），以及节点之间的先后与并行。模板只写<b>角色</b>，不写人；由项目把角色分配给团队里的人和 AI Agent。模板有版本，发布后不可修改；进行中的流程不受模板修改影响。</p>
+  <div class="meta"><span>步骤序列 + 并行轨道</span><span>节点一律人机协同</span><span>角色而非人</span><span>草稿 → 发布版本</span><span>流程发起即锁定版本</span></div>
+</header>
+
+<!-- 01 -->
+<section id="s1">
+  <h2><span class="num">01</span>定位与范围</h2>
+  <table>
+    <tr><th style="width:18%">在范围内</th><td>流程模板的新建、复制、停用；流程结构编辑（节点、并行组、轨道）；节点配置（执行角色、产物、文件模板、准出 / 准入评审）；草稿与版本发布；版本历史；角色库；查询被哪些项目绑定；向项目与流程模块提供「当前版本的定义」。</td></tr>
+    <tr><th>不在范围内</th><td>流程实例的运行与状态流转、审批投票（流程模块）；角色分配给人和 Agent（项目模块）；文件模板本身（文件模板模块）；Agent 的运行（Atlas）。</td></tr>
+  </table>
+  <div class="callout rule"><b class="l">设计原则</b>
+    <ol style="margin:0">
+      <li><b>结构简单、语义确定</b>：流程是步骤序列，步骤可以是并行组；不做任意连线，节点依赖由结构推导。</li>
+      <li><b>模板描述规则，项目落实到人</b>：模板里只有角色名称，同一模板可被多个团队、多个项目复用。</li>
+      <li><b>版本不可变</b>：编辑只改草稿，发布生成新版本；已发布版本永不修改。</li>
+      <li><b>发起即锁定</b>：流程发起时锁定模板当前版本，之后模板再发布新版本，进行中的流程不变。</li>
+    </ol>
+  </div>
+</section>
+
+<!-- 02 -->
+<section id="s2">
+  <h2><span class="num">02</span>术语</h2>
+  <table>
+    <tr><th style="width:18%">术语</th><th>含义</th></tr>
+    <tr><td>流程模板</td><td>一类工作的定义，如「研发流程模板」。有名称、图标、说明、适用范围，以及一个<b>当前版本</b>。</td></tr>
+    <tr><td>模板版本</td><td>某次发布形成的不可变定义（流程结构 + 全部节点配置），版本号如 v1.3。</td></tr>
+    <tr><td>草稿</td><td>正在编辑、尚未发布的定义。每个模板最多一份。</td></tr>
+    <tr><td>步骤</td><td>流程结构的一级元素：<b>单个节点</b>，或<b>并行组</b>。步骤按顺序执行。</td></tr>
+    <tr><td>并行组 / 轨道</td><td>并行组包含 ≥ 2 条轨道，每条轨道是一串顺序执行的节点。各轨道同时开工，全部完成后汇合进入下一步骤。</td></tr>
+    <tr><td>节点</td><td>一项人机协同的工作单元，产出一份产物，经准出、准入评审后完成。</td></tr>
+    <tr><td>执行角色</td><td>完成节点的角色（如「架构设计」）；项目为它分配人与 AI Agent，人下达指令、Agent 执行。</td></tr>
+    <tr><td>评审角色</td><td>负责准出或准入评审的角色（如「技术负责人」）。</td></tr>
+    <tr><td>准出 / 准入</td><td>准出：产出方把关产物质量；准入：下游把关产物能否作为输入。准入可选。</td></tr>
+    <tr><td>评审规则</td><td><code>any</code> 任一人同意即通过；<code>all</code> 角色下所有成员都同意才通过。任一人驳回即退回。</td></tr>
+  </table>
+</section>
+
+<!-- 03 -->
+<section id="s3">
+  <h2><span class="num">03</span>与其他模块的关系</h2>
+  <div class="arch">
+    <div class="arch-sys">
+      <div class="arch-sys-t">AI TeamFlow</div>
+      <div class="arch-row">
+        <div class="arch-box">
+          <b>文件模板模块</b>
+          <ul><li>节点产物选用文件模板</li><li>准出规则（预留）</li></ul>
+        </div>
+        <div class="arch-link"><span>引用</span><i class="l"></i></div>
+        <div class="arch-box me">
+          <b>流程模板模块</b><span class="muted">（本文）</span>
+          <ul><li>流程结构 + 节点配置</li><li>草稿 / 版本</li><li>角色库</li></ul>
+        </div>
+        <div class="arch-link"><span>绑定 / 实例化</span><i class="r"></i></div>
+        <div class="arch-box">
+          <b>项目 / 流程模块</b>
+          <ul><li>项目绑定模板、分配角色</li><li>流程发起时锁定版本</li><li>按定义运行节点</li></ul>
+        </div>
+      </div>
+      <div class="arch-note">流程模板模块不直接与 Atlas 交互；节点由流程模块交给 Atlas AI Agent 执行</div>
+    </div>
+  </div>
+  <table>
+    <tr><th style="width:20%">对方</th><th>关系</th><th style="width:30%">接口</th></tr>
+    <tr><td>文件模板模块</td><td>节点的产物格式引用文件模板 id（不含版本）；文件模板版本在节点开工时由流程模块锁定。</td><td>本模块读取文件模板列表用于选择；对方查询「引用该模板的节点」</td></tr>
+    <tr><td>项目模块</td><td>项目绑定流程模板 id；从当前版本推导需分配的角色（执行角色 + 评审角色）。</td><td><code>GET current version</code>、<code>roles</code></td></tr>
+    <tr><td>流程模块</td><td>发起流程时取当前版本并锁定；整个流程按该版本定义运行。</td><td><code>GET version definition</code></td></tr>
+  </table>
+</section>
+
+<!-- 04 -->
+<section id="s4">
+  <h2><span class="num">04</span>功能清单</h2>
+  <p>对应原型 <code>#/templates</code> 与 <code>#/templates/:id</code>。</p>
+  <table>
+    <tr><th style="width:5%">#</th><th style="width:20%">功能</th><th>说明</th><th style="width:9%">阶段</th></tr>
+    <tr><td>F1</td><td>模板列表</td><td>卡片：图标、名称、当前版本、节点数、被绑定项目数、适用范围、说明。</td><td><span class="tag new">P1</span></td></tr>
+    <tr><td>F2</td><td>新建模板</td><td>空白新建（含一个起始节点）或<b>复制</b>已有模板（复制当前版本为新模板的草稿）。</td><td><span class="tag new">P1</span></td></tr>
+    <tr><td>F3</td><td>查看模板</td><td>只读流程图 + 节点配置；可切换查看历史版本。</td><td><span class="tag new">P1</span></td></tr>
+    <tr><td>F4</td><td>编辑流程结构</td><td>进入草稿：插入节点、插入并行组、新增轨道、轨道内新增节点、删除节点 / 轨道（§10）。</td><td><span class="tag new">P1</span></td></tr>
+    <tr><td>F5</td><td>节点配置</td><td>名称、执行角色、产物名称、文件模板、准出评审（角色 + 规则）、准入评审（可选，角色 + 规则）（§6）。</td><td><span class="tag new">P1</span></td></tr>
+    <tr><td>F6</td><td>草稿自动保存</td><td>编辑即保存草稿，刷新页面不丢失；可「放弃修改」。</td><td><span class="tag new">P1</span></td></tr>
+    <tr><td>F7</td><td>发布</td><td>校验通过后发布新版本，填写更新说明；显示影响范围（§10.4）。</td><td><span class="tag new">P1</span></td></tr>
+    <tr><td>F8</td><td>版本历史</td><td>版本号、发布人、时间、更新说明；可查看任一版本。</td><td><span class="tag new">P1</span></td></tr>
+    <tr><td>F9</td><td>绑定的项目</td><td>列出绑定该模板的项目及进行中流程数。</td><td><span class="tag new">P1</span></td></tr>
+    <tr><td>F10</td><td>停用 / 启用</td><td>停用后不能被新项目绑定；已绑定的项目照常使用（§16）。</td><td><span class="tag new">P1</span></td></tr>
+    <tr><td>F11</td><td>角色库</td><td>平台维护的角色名称列表，供执行角色 / 评审角色选择；编辑时可输入新角色名，发布时自动入库。</td><td><span class="tag new">P1</span></td></tr>
+    <tr><td>F12</td><td>内置模板</td><td>研发、内容生产、合同合规审查、数据分析报告、故障处理五个预置模板，开箱即用、可复制修改。</td><td><span class="tag new">P1</span></td></tr>
+    <tr><td>F13</td><td>版本对比</td><td>两个版本的结构与节点配置差异。</td><td><span class="tag p2">P2</span></td></tr>
+    <tr><td>F14</td><td>自动准出配置</td><td>节点的准出可配置为「AI 按规则文件自动判定」，规则引用文件模板（字段已预留，§6）。</td><td><span class="tag p2">预留</span></td></tr>
+  </table>
+</section>
+
+<!-- 05 -->
+<section id="s5">
+  <h2><span class="num">05</span>流程结构模型</h2>
+  <h3>5.1 结构</h3>
+  <p>流程是<b>步骤序列</b>；步骤是单个节点或并行组；并行组由 ≥ 2 条轨道组成，每条轨道是 ≥ 1 个节点的序列。不支持嵌套并行。</p>
+  <div class="fig">
+    <div class="fig-row">
+      <div class="fig-node">需求澄清</div><div class="fig-arrow"></div>
+      <div class="fig-node">PRD</div><div class="fig-arrow"></div>
+      <div class="fig-par">
+        <div class="fig-par-t">并行组</div>
+        <div class="fig-track"><span class="fig-tl">轨道 A</span><div class="fig-node">技术方案</div><div class="fig-arrow s"></div><div class="fig-node">编码</div></div>
+        <div class="fig-track"><span class="fig-tl">轨道 B</span><div class="fig-node">测试用例设计</div></div>
+      </div><div class="fig-arrow"></div>
+      <div class="fig-node">测试执行</div><div class="fig-arrow"></div>
+      <div class="fig-node">发布上线</div>
+    </div>
+  </div>
+<pre><span class="c">// 定义（JSON）中的结构部分，对应上图</span>
+"flow": [
+  { "type": "node", "id": "clarify" },
+  { "type": "node", "id": "prd" },
+  { "type": "parallel", "tracks": [
+      { "nodes": ["tech", "code"] },
+      { "nodes": ["testcase"] } ] },
+  { "type": "node", "id": "testexec" },
+  { "type": "node", "id": "release" }
+]</pre>
+
+  <h3>5.2 运行语义（由结构推导依赖）</h3>
+  <table>
+    <tr><th style="width:26%">位置</th><th>上游（依赖）</th></tr>
+    <tr><td>第一个步骤的节点</td><td>无，流程发起即开工</td></tr>
+    <tr><td>单节点步骤</td><td>上一步骤的全部「出口」：上一步是节点 → 该节点；上一步是并行组 → <b>每条轨道的最后一个节点</b>（汇合）</td></tr>
+    <tr><td>轨道中的第一个节点</td><td>上一步骤的全部出口（各轨道同时开工）</td></tr>
+    <tr><td>轨道中的后续节点</td><td>同一轨道中的前一个节点</td></tr>
+  </table>
+  <p>上例推导结果：<code>tech</code>、<code>testcase</code> 都依赖 <code>prd</code>；<code>code</code> 依赖 <code>tech</code>；<code>testexec</code> 依赖 <code>code</code> 与 <code>testcase</code>。节点在依赖<b>全部通过</b>后自动开工，「上游产物就绪即可开工」由此实现。</p>
+
+  <h3>5.3 结构规范化</h3>
+  <p>每次结构编辑后自动规范化，保证结构始终合法：</p>
+  <ul>
+    <li>空轨道删除；</li>
+    <li>只剩 1 条轨道的并行组，退化为该轨道节点的顺序步骤；</li>
+    <li>没有轨道的并行组删除；</li>
+    <li>流程至少保留 1 个节点（删除最后一个节点被拒绝）。</li>
+  </ul>
+
+  <h3>5.4 为什么不做任意连线</h3>
+  <table>
+    <tr><th style="width:24%">考虑</th><th>结论</th></tr>
+    <tr><td>编辑成本</td><td>插入 / 新增轨道即可表达常见的顺序与并行，不需要拖线，非技术用户也能上手</td></tr>
+    <tr><td>运行语义</td><td>开工与汇合规则唯一确定，不会出现环、悬空节点、无法汇合等需要额外校验的情况</td></tr>
+    <tr><td>代价</td><td>不能表达嵌套并行、跨轨道依赖（如 B 轨道某节点依赖 A 轨道中间节点）、条件分支；列入待确认（§20）</td></tr>
+  </table>
+</section>
+
+<!-- 06 -->
+<section id="s6">
+  <h2><span class="num">06</span>节点模型</h2>
+  <table>
+    <tr><th style="width:24%">字段</th><th style="width:14%">必填</th><th>说明</th></tr>
+    <tr><td><code>id</code></td><td>是</td><td>模板内唯一，创建时生成，之后不变（流程实例按它记录节点状态）</td></tr>
+    <tr><td><code>name</code></td><td>是</td><td>节点名称，模板内唯一，≤ 32 字</td></tr>
+    <tr><td><code>exec_role</code></td><td>是</td><td>执行角色。执行方式固定为<b>人机协同</b>：该角色下的人下达指令、评审成果，Agent 执行并产出</td></tr>
+    <tr><td><code>output_name</code></td><td>是</td><td>产物名称（如「技术方案」），模板内唯一；下游节点的「输入产物」即上游的产物名称</td></tr>
+    <tr><td><code>artifact_file_template_id</code></td><td>否</td><td>产物格式所依据的文件模板；为空时 Agent 按通用格式产出</td></tr>
+    <tr><td><code>exit_review</code></td><td>是</td><td><code>{ "role": "技术负责人", "rule": "all" }</code>：准出评审角色与规则</td></tr>
+    <tr><td><code>admit_review</code></td><td>否</td><td><code>{ "role": "测试负责人", "rule": "any" }</code> 或 <code>null</code>：准入评审；为空则准出通过即完成</td></tr>
+    <tr><td><code>exit_rule_file_template_id</code></td><td>否</td><td><span class="tag p2">预留</span> 自动准出的规则文件</td></tr>
+    <tr><td><code>exit_mode</code></td><td>否</td><td><span class="tag p2">预留</span> <code>manual</code>（默认）/ <code>auto</code> / <code>auto_then_manual</code></td></tr>
+  </table>
+
+  <h3>6.1 节点生命周期（由流程模块实现，本模块定义语义）</h3>
+<div class="flow">人机协同中 ──提交准出──▶ 待准出 ──准出规则满足──▶ 待准入 ──准入规则满足──▶ 已通过 ──▶ 下游依赖全部通过的节点开工
+                           │ 任一人驳回             │ 任一人驳回           ▲
+                           └──▶ 回到本节点修改，或打回到更早的节点 ◀──┘       │
+                                                                          未配置准入时，准出通过即「已通过」</div>
+  <table>
+    <tr><th style="width:24%">规则</th><th>说明</th></tr>
+    <tr><td><code>any</code> 任一人同意</td><td>评审角色中有 1 人同意即通过</td></tr>
+    <tr><td><code>all</code> 所有人同意</td><td>评审角色中每个成员都同意才通过（成员数在项目中决定）</td></tr>
+    <tr><td>驳回</td><td>任一评审人驳回即退回；本阶段已有的同意记录清空</td></tr>
+    <tr><td>输入产物</td><td>由结构推导：节点的上游节点的产物名称；不单独配置</td></tr>
+  </table>
+</section>
+
+<!-- 07 -->
+<section id="s7">
+  <h2><span class="num">07</span>版本与草稿</h2>
+<div class="flow">                ┌───────── 编辑（自动保存）─────────┐
+  当前版本 v1.3 ──「编辑流程」──▶ 草稿 ──「发布」（校验通过）──▶ 当前版本 v1.4（v1.3 进入历史）
+                                  └──「放弃修改」──▶ 删除草稿</div>
+  <table>
+    <tr><th style="width:24%">规则</th><th>说明</th></tr>
+    <tr><td>版本号</td><td><code>v{主}.{次}</code>。每次发布次版本 +1；主版本 P1 不提供手动升级（新建模板从 v1.0 开始）</td></tr>
+    <tr><td>不可变</td><td>已发布版本的定义只读；所有修改都通过草稿 → 发布完成</td></tr>
+    <tr><td>草稿数量</td><td>每个模板同一时间最多一份草稿；草稿记录编辑人</td></tr>
+    <tr><td>并发编辑</td><td>他人打开时显示「张明 正在编辑草稿（10 分钟前）」，可只读查看或「接管编辑」；保存草稿带 <code>row_version</code>，冲突时提示刷新</td></tr>
+    <tr><td>草稿基线</td><td>草稿记录创建时基于的版本；发布时若当前版本已变化（他人先发布），要求在新版本基础上重新编辑</td></tr>
+    <tr><td>历史版本</td><td>可查看；P1 不提供「回滚」，需要时在草稿中改回后发布</td></tr>
+  </table>
+</section>
+
+<!-- 08 -->
+<section id="s8">
+  <h2><span class="num">08</span>数据模型</h2>
+  <h3>8.1 <code>flow_template</code></h3>
+  <table>
+    <tr><th style="width:26%">字段</th><th style="width:18%">类型</th><th>说明</th></tr>
+    <tr><td><code>id</code></td><td>uuid PK</td><td></td></tr>
+    <tr><td><code>name</code></td><td>varchar(64)</td><td>全局唯一</td></tr>
+    <tr><td><code>icon / description / scope</code></td><td></td><td>图标、说明、适用范围说明（文本）</td></tr>
+    <tr><td><code>builtin</code></td><td>bool</td><td>是否内置模板</td></tr>
+    <tr><td><code>status</code></td><td>varchar(16)</td><td><code>active</code> / <code>disabled</code></td></tr>
+    <tr><td><code>current_version_id</code></td><td>uuid FK</td><td>当前版本；新建模板发布前为 NULL</td></tr>
+    <tr><td><code>row_version</code></td><td>int</td><td>乐观锁</td></tr>
+    <tr><td><code>created_by / created_at / updated_by / updated_at</code></td><td></td><td></td></tr>
+  </table>
+  <h3>8.2 <code>flow_template_version</code>（不可变）</h3>
+  <table>
+    <tr><th style="width:26%">字段</th><th style="width:18%">类型</th><th>说明</th></tr>
+    <tr><td><code>id</code></td><td>uuid PK</td><td></td></tr>
+    <tr><td><code>template_id</code></td><td>uuid FK</td><td></td></tr>
+    <tr><td><code>major / minor</code></td><td>int</td><td><code>UNIQUE(template_id, major, minor)</code></td></tr>
+    <tr><td><code>definition</code></td><td>json</td><td>完整定义：<code>flow</code> + <code>nodes</code>（§8.4）</td></tr>
+    <tr><td><code>roles</code></td><td>json</td><td>发布时从定义推导：<code>{"exec":[…],"review":[…]}</code>，供项目分配角色时直接读取</td></tr>
+    <tr><td><code>change_note</code></td><td>varchar(500)</td><td>更新说明，必填</td></tr>
+    <tr><td><code>published_by / published_at</code></td><td></td><td></td></tr>
+  </table>
+  <h3>8.3 <code>flow_template_draft</code></h3>
+  <table>
+    <tr><th style="width:26%">字段</th><th style="width:18%">类型</th><th>说明</th></tr>
+    <tr><td><code>template_id</code></td><td>uuid PK FK</td><td>一模板一草稿</td></tr>
+    <tr><td><code>base_version_id</code></td><td>uuid NULL</td><td>草稿基于的版本</td></tr>
+    <tr><td><code>definition</code></td><td>json</td><td>编辑中的定义</td></tr>
+    <tr><td><code>editor_id / updated_at / row_version</code></td><td></td><td>当前编辑人、最后保存时间、乐观锁</td></tr>
+  </table>
+  <h3>8.4 <code>definition</code> 示例</h3>
+<pre>{
+  "flow": [ { "type": "node", "id": "prd" },
+            { "type": "parallel", "tracks": [ { "nodes": ["tech"] }, { "nodes": ["testcase"] } ] } ],
+  "nodes": {
+    "prd":  { "name": "PRD", "exec_role": "产品设计", "output_name": "PRD",
+              "artifact_file_template_id": "ft-prd",
+              "exit_review":  { "role": "产品经理", "rule": "any" },
+              "admit_review": { "role": "技术负责人", "rule": "any" } },
+    "tech": { "name": "技术方案", "exec_role": "架构设计", "output_name": "技术方案",
+              "artifact_file_template_id": "ft-tech",
+              "exit_review":  { "role": "技术负责人", "rule": "all" },
+              "admit_review": { "role": "测试负责人", "rule": "any" } },
+    "testcase": { … }
+  }
+}</pre>
+  <p>定义以 JSON 整体存储：模板定义总是整体读取、整体发布，不需要按节点查询；依赖关系不存储，运行时由 §5.2 推导。</p>
+  <h3>8.5 <code>role</code>（角色库）</h3>
+  <table>
+    <tr><th style="width:26%">字段</th><th style="width:18%">类型</th><th>说明</th></tr>
+    <tr><td><code>name</code></td><td>varchar(32) PK</td><td>角色名称，全局唯一</td></tr>
+    <tr><td><code>description</code></td><td>varchar(200)</td><td></td></tr>
+    <tr><td><code>created_by / created_at</code></td><td></td><td>发布时自动入库的新角色，记录发布人</td></tr>
+  </table>
+</section>
+
+<!-- 09 -->
+<section id="s9">
+  <h2><span class="num">09</span>发布校验</h2>
+  <p>草稿编辑过程中实时提示；发布时执行完整校验，<b>错误</b>阻止发布，<b>警告</b>可确认后发布。</p>
+  <table>
+    <tr><th style="width:8%">级别</th><th>规则</th></tr>
+    <tr><td>错误</td><td>至少 1 个节点；结构合法（并行组 ≥ 2 条轨道、每条轨道 ≥ 1 个节点、无嵌套并行）</td></tr>
+    <tr><td>错误</td><td>节点 id、节点名称、产物名称在模板内唯一</td></tr>
+    <tr><td>错误</td><td>每个节点有执行角色、产物名称、准出评审（角色 + 规则）；准入评审若配置则角色与规则齐全</td></tr>
+    <tr><td>错误</td><td>引用的文件模板存在且未停用</td></tr>
+    <tr><td>警告</td><td>引用的文件模板没有生效版本（节点将按通用格式产出）</td></tr>
+    <tr><td>警告</td><td>有下游的节点未配置准入评审</td></tr>
+    <tr><td>警告</td><td>本次发布新增了角色：绑定该模板的 N 个项目需补充分配</td></tr>
+    <tr><td>错误</td><td>更新说明为空</td></tr>
+  </table>
+</section>
+
+<!-- 10 -->
+<section id="s10">
+  <h2><span class="num">10</span>编辑交互</h2>
+  <h3>10.1 结构编辑（编辑态）</h3>
+  <table>
+    <tr><th style="width:24%">操作</th><th>位置与效果</th></tr>
+    <tr><td>插入节点</td><td>任意两个步骤之间、首尾的「＋」→「插入节点」：新增一个顺序节点并选中，下方配置名称等</td></tr>
+    <tr><td>插入并行轨道</td><td>同一「＋」→「插入并行轨道」：新增一个含 2 条轨道（各 1 个节点）的并行组</td></tr>
+    <tr><td>新增轨道</td><td>并行组右上「＋ 新增轨道」：追加一条含 1 个节点的轨道</td></tr>
+    <tr><td>轨道内新增节点</td><td>轨道末尾「＋ 节点」：在该轨道末尾追加节点</td></tr>
+    <tr><td>删除节点</td><td>悬停节点右上「×」；之后按 §5.3 规范化</td></tr>
+    <tr><td>删除轨道</td><td>轨道右侧「删除轨道」：删除该轨道及其节点；之后规范化</td></tr>
+  </table>
+  <h3>10.2 节点配置面板</h3>
+  <table>
+    <tr><th style="width:24%">字段</th><th>控件</th></tr>
+    <tr><td>节点名称 / 产物名称</td><td>输入框，失焦保存</td></tr>
+    <tr><td>执行方式</td><td>只读展示「人机协同」</td></tr>
+    <tr><td>执行角色</td><td>角色库下拉 + 「或输入新角色名」</td></tr>
+    <tr><td>文件模板</td><td>下拉，默认只列用途为「产物格式」的文件模板，显示生效版本或「未上传文件」；可选「不使用」</td></tr>
+    <tr><td>输入产物</td><td>只读，由结构推导</td></tr>
+    <tr><td>准出评审</td><td>角色下拉 + 规则（任一人同意 / 所有人同意）</td></tr>
+    <tr><td>准入评审</td><td>开关「需要准入」+ 角色下拉 + 规则</td></tr>
+  </table>
+  <h3>10.3 保存</h3>
+  <p>每次结构或配置变化后防抖 1 秒保存草稿；顶部显示「草稿已保存 · 刚刚」。离开页面不丢失，下次进入继续编辑。</p>
+  <h3>10.4 发布弹窗</h3>
+  <ul>
+    <li>新版本号（如 v1.4）、更新说明（必填）；</li>
+    <li>校验结果：错误列表（不可发布）、警告列表（需勾选「已知晓」）；</li>
+    <li>影响：「绑定该模板的 3 个项目，新发起的流程将使用 v1.4；进行中的 6 个流程仍按原版本执行」；新增角色时列出需补充分配的项目。</li>
+  </ul>
+</section>
+
+<!-- 11 -->
+<section id="s11">
+  <h2><span class="num">11</span>与项目、流程的衔接</h2>
+  <table>
+    <tr><th style="width:24%">场景</th><th>行为</th></tr>
+    <tr><td>项目绑定</td><td>项目存模板 id，跟随当前版本；只能绑定已发布、未停用的模板</td></tr>
+    <tr><td>角色分配</td><td>项目设置读取当前版本的 <code>roles</code>，为每个角色分配人和 Agent；模板发布新版本后新增的角色在项目中显示为「未分配」</td></tr>
+    <tr><td>发起流程</td><td>流程记录 <code>flow_template_version_id</code>，之后完全按该版本定义运行；模板再发布不影响</td></tr>
+    <tr><td>节点开工</td><td>流程模块按版本定义取节点的执行角色、文件模板 id 等；文件模板版本在此时锁定（见文件模板设计）</td></tr>
+    <tr><td>项目更换模板</td><td>只影响之后新发起的流程</td></tr>
+  </table>
+</section>
+
+<!-- 12 -->
+<section id="s12">
+  <h2><span class="num">12</span>API</h2>
+  <p>前缀 <code>/api/v1</code>；内部接口 <code>/internal</code> 只对 TeamFlow 内部服务开放。</p>
+  <table>
+    <tr><th style="width:44%">接口</th><th>说明</th><th style="width:10%">权限</th></tr>
+    <tr><td><code>GET /flow-templates</code></td><td>列表（含当前版本摘要、节点数、绑定项目数）</td><td>成员</td></tr>
+    <tr><td><code>POST /flow-templates</code></td><td>新建；body：name、icon、description、scope，可选 <code>copy_from</code>（模板 id）</td><td>管理员</td></tr>
+    <tr><td><code>GET /flow-templates/{id}</code></td><td>详情，含当前版本定义</td><td>成员</td></tr>
+    <tr><td><code>PATCH /flow-templates/{id}</code></td><td>改基本信息；带 <code>row_version</code></td><td>管理员</td></tr>
+    <tr><td><code>POST /flow-templates/{id}/disable</code> · <code>/enable</code></td><td>停用 / 启用</td><td>管理员</td></tr>
+    <tr><td><code>DELETE /flow-templates/{id}</code></td><td>仅限从未被项目绑定的模板，否则 409</td><td>管理员</td></tr>
+    <tr><td><code>GET /flow-templates/{id}/draft</code></td><td>取草稿；无则 404</td><td>管理员</td></tr>
+    <tr><td><code>POST /flow-templates/{id}/draft</code></td><td>基于当前版本创建草稿（已存在则返回现有草稿与编辑人）</td><td>管理员</td></tr>
+    <tr><td><code>PUT /flow-templates/{id}/draft</code></td><td>保存草稿定义；带 <code>row_version</code>；返回实时校验结果</td><td>管理员</td></tr>
+    <tr><td><code>POST /flow-templates/{id}/draft/takeover</code></td><td>接管他人的草稿</td><td>管理员</td></tr>
+    <tr><td><code>DELETE /flow-templates/{id}/draft</code></td><td>放弃修改</td><td>管理员</td></tr>
+    <tr><td><code>POST /flow-templates/{id}/draft/validate</code></td><td>完整校验，返回错误 / 警告 / 影响范围</td><td>管理员</td></tr>
+    <tr><td><code>POST /flow-templates/{id}/draft/publish</code></td><td>body：change_note、acknowledged_warnings；校验 → 生成版本 → 删除草稿</td><td>管理员</td></tr>
+    <tr><td><code>GET /flow-templates/{id}/versions</code></td><td>版本历史</td><td>成员</td></tr>
+    <tr><td><code>GET /flow-templates/{id}/versions/{v}</code></td><td>某版本定义</td><td>成员</td></tr>
+    <tr><td><code>GET /flow-templates/{id}/projects</code></td><td>绑定的项目与进行中流程数</td><td>成员</td></tr>
+    <tr><td><code>GET /roles</code> · <code>POST /roles</code></td><td>角色库查询 / 新增</td><td>成员 / 管理员</td></tr>
+    <tr><td><code>GET /internal/flow-template-versions/{id}</code></td><td>版本定义 + 推导好的依赖，供流程模块运行</td><td>内部</td></tr>
+  </table>
+  <h3>12.1 错误码</h3>
+  <table>
+    <tr><th style="width:30%">code</th><th style="width:10%">HTTP</th><th>含义</th></tr>
+    <tr><td><code>name_conflict</code></td><td>409</td><td>模板名称重复</td></tr>
+    <tr><td><code>draft_locked</code></td><td>409</td><td>草稿正被他人编辑，可接管</td></tr>
+    <tr><td><code>stale_row_version</code></td><td>409</td><td>草稿已被修改，刷新后重试</td></tr>
+    <tr><td><code>base_version_outdated</code></td><td>409</td><td>他人已发布新版本，需基于新版本重新编辑</td></tr>
+    <tr><td><code>validation_failed</code></td><td>422</td><td>发布校验有错误，返回错误列表</td></tr>
+    <tr><td><code>warnings_not_acknowledged</code></td><td>422</td><td>存在警告未确认</td></tr>
+    <tr><td><code>template_in_use</code></td><td>409</td><td>被项目绑定过，不能删除</td></tr>
+  </table>
+</section>
+
+<!-- 13 -->
+<section id="s13">
+  <h2><span class="num">13</span>权限</h2>
+  <table>
+    <tr><th style="width:24%">操作码</th><th>能做什么</th></tr>
+    <tr><td><code>flow_template:view</code></td><td>只读：列表、查看任一版本、查看绑定项目（平台管理员、团队管理员）</td></tr>
+    <tr><td><code>flow_template:manage</code></td><td>新建、复制、编辑草稿、发布、停用 / 启用、删除；维护流程角色库（平台管理员）</td></tr>
+    <tr><td>内部服务</td><td>读取版本定义</td></tr>
+  </table>
+  <p>操作码登记在用户中心，由角色授予：平台管理员配置，团队管理员只读（绑定项目时选择），见<a href="permission-design.html">权限设计</a>。流程模板是「组织规范」，团队自建模板列入待确认（§20）。</p>
+</section>
+
+<!-- 14 -->
+<section id="s14">
+  <h2><span class="num">14</span>页面设计</h2>
+  <p>以原型 <code>#/templates</code>、<code>#/templates/:id</code> 为准，补充原型未表达的细节：</p>
+  <div class="grid2">
+    <div class="box">
+      <h4>列表页</h4>
+      <ul>
+        <li>「＋ 新建模板」弹窗：空白新建 / 从已有模板复制</li>
+        <li>卡片显示「有未发布的草稿」角标（仅管理员可见）</li>
+        <li>停用的模板置灰并标「已停用」</li>
+      </ul>
+    </div>
+    <div class="box">
+      <h4>详情页</h4>
+      <ul>
+        <li>查看态：版本下拉可切换历史版本（只读）</li>
+        <li>编辑态：顶部草稿条「草稿已保存 · 刚刚」「放弃修改」「发布」；校验错误数以红点标在「发布」上</li>
+        <li>节点卡片上有校验错误时红框提示，点开配置面板定位到字段</li>
+        <li>右侧（或下方）：版本历史、绑定的项目</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- 15 -->
+<section id="s15">
+  <h2><span class="num">15</span>审计</h2>
+  <table>
+    <tr><th style="width:34%">事件</th><th>记录内容</th></tr>
+    <tr><td><code>flow_template.created</code></td><td>名称、是否复制自某模板</td></tr>
+    <tr><td><code>flow_template.updated</code></td><td>基本信息变更前后</td></tr>
+    <tr><td><code>flow_template.draft_created</code> / <code>draft_discarded</code> / <code>draft_taken_over</code></td><td>编辑人</td></tr>
+    <tr><td><code>flow_template.published</code></td><td>版本号、更新说明、节点数、新增 / 删除的节点与角色、已确认的警告</td></tr>
+    <tr><td><code>flow_template.disabled</code> / <code>enabled</code> / <code>deleted</code></td><td>操作人</td></tr>
+  </table>
+  <p>草稿的每次保存不记审计（频繁且未生效），发布时记录与上一版本的差异摘要。</p>
+</section>
+
+<!-- 16 -->
+<section id="s16">
+  <h2><span class="num">16</span>异常与边界</h2>
+  <table>
+    <tr><th style="width:30%">场景</th><th>处理</th></tr>
+    <tr><td>两人同时编辑</td><td>后来者看到「正在编辑」提示，可只读或接管；接管后原编辑人保存时收到 <code>draft_locked</code></td></tr>
+    <tr><td>编辑期间他人发布了新版本</td><td>发布时返回 <code>base_version_outdated</code>；草稿保留，提示对照新版本重新调整（P2 提供合并辅助）</td></tr>
+    <tr><td>删除了有进行中流程的节点</td><td>不影响：进行中的流程使用发起时锁定的版本</td></tr>
+    <tr><td>新版本新增了角色</td><td>绑定的项目显示「N 个角色未分配」；新发起的流程走到相应节点时无人协同 / 审批，项目首页已有提示</td></tr>
+    <tr><td>停用模板</td><td>不能被新项目绑定；已绑定的项目照常发起流程，项目设置中提示「绑定的模板已停用」</td></tr>
+    <tr><td>删除模板</td><td>只允许从未被项目绑定的模板；否则引导停用</td></tr>
+    <tr><td>引用的文件模板被停用</td><td>已发布版本不受影响（照常运行）；下次发布校验报错，需更换</td></tr>
+    <tr><td>节点改名</td><td>节点 id 不变，进行中流程不受影响；历史流程显示其版本中的旧名称</td></tr>
+  </table>
+</section>
+
+<!-- 17 -->
+<section id="s17">
+  <h2><span class="num">17</span>非功能</h2>
+  <table>
+    <tr><th style="width:24%">项</th><th>要求</th></tr>
+    <tr><td>规模</td><td>模板数十至数百；单模板 ≤ 50 个节点、并行组 ≤ 8 条轨道；定义 JSON ≤ 256 KB</td></tr>
+    <tr><td>性能</td><td>详情 P95 &lt; 300 ms；草稿保存 P95 &lt; 200 ms；内部读取版本定义 P95 &lt; 50 ms（版本不可变，可长期缓存）</td></tr>
+    <tr><td>一致性</td><td>发布（生成版本 + 切换当前版本 + 删除草稿 + 角色入库 + 审计）在同一事务中完成</td></tr>
+  </table>
+</section>
+
+<!-- 18 -->
+<section id="s18">
+  <h2><span class="num">18</span>测试要点</h2>
+  <ul>
+    <li>依赖推导：顺序、并行开工、多节点轨道、汇合到下一节点、首尾为并行组</li>
+    <li>规范化：删空轨道、删到只剩 1 条轨道退化、删除最后一个节点被拒</li>
+    <li>发布校验：每条错误 / 警告规则各一组用例；警告未确认时拒绝发布</li>
+    <li>版本不可变：发布后修改草稿不影响已发布版本；进行中流程使用锁定版本</li>
+    <li>并发：两人编辑、接管、<code>row_version</code> 冲突、<code>base_version_outdated</code></li>
+    <li>新增角色发布后，绑定项目显示未分配</li>
+    <li>复制模板：复制的是当前版本，生成独立的新模板</li>
+    <li>权限：非管理员无法创建草稿与发布</li>
+  </ul>
+</section>
+
+<!-- 19 -->
+<section id="s19">
+  <h2><span class="num">19</span>落地计划</h2>
+  <table>
+    <tr><th style="width:12%">阶段</th><th>内容</th></tr>
+    <tr><td>M1</td><td>数据模型、定义 JSON 与依赖推导、角色库、列表 / 详情（只读）、内置模板种子数据</td></tr>
+    <tr><td>M2</td><td>草稿编辑（结构编辑、节点配置、自动保存）、发布校验、发布、版本历史</td></tr>
+    <tr><td>M3</td><td>与项目对接（绑定、角色推导、新增角色提示）、与流程对接（发起锁定版本、内部读取接口）</td></tr>
+    <tr><td>M4（P2）</td><td>版本对比、自动准出配置（配合流程模块与文件模板）</td></tr>
+  </table>
+</section>
+
+<!-- 20 -->
+<section id="s20">
+  <h2><span class="num">20</span>待确认</h2>
+  <table>
+    <tr><th style="width:5%">#</th><th style="width:36%">问题</th><th>当前假设</th></tr>
+    <tr><td>1</td><td>是否需要嵌套并行、跨轨道依赖、条件分支？</td><td>P1 不支持；用「步骤序列 + 并行组」覆盖研发、内容、合同、数据、故障五类内置流程</td></tr>
+    <tr><td>2</td><td>项目跟随模板最新版本，还是锁定版本手动升级？</td><td>跟随最新版本（与原型一致）；进行中的流程不受影响</td></tr>
+    <tr><td>3</td><td>团队能否自建流程模板？</td><td>P1 只由平台管理员维护</td></tr>
+    <tr><td>4</td><td>准入评审是否可选？</td><td>可选；未配置时准出通过即完成（最后一个节点通常不需要准入）</td></tr>
+    <tr><td>5</td><td>版本号是否需要手动升主版本？</td><td>P1 只自动升次版本</td></tr>
+  </table>
+</section>
+
+</main>
+</div>
+</body>
+</html>

@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI TeamFlow — AI 协同工作流平台</title>
+  <link rel="stylesheet" href="assets/styles.css" />
+</head>
+<body>
+  <div class="app-shell" id="app">
+    <!-- 侧边栏 -->
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <span class="brand-logo" aria-hidden="true">
+          <svg width="26" height="26" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect x="2" y="2" width="28" height="28" rx="8" fill="url(#g1)"/>
+            <path d="M10 11.5h12M10 16h8M10 20.5h10" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/>
+            <circle cx="24" cy="21" r="4" fill="#22d3ee" stroke="#0b1220" stroke-width="1.6"/>
+            <defs>
+              <linearGradient id="g1" x1="2" y1="2" x2="30" y2="30" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#6366f1"/><stop offset="1" stop-color="#0ea5e9"/>
+              </linearGradient>
+            </defs>
+          </svg>
+        </span>
+        <div class="brand-text">
+          <strong>AI TeamFlow</strong>
+          <small>AI 协同工作流平台</small>
+        </div>
+      </div>
+
+      <nav class="nav" id="nav">
+        <a class="nav-item" data-nav="#/teams" href="#/teams">
+          <span class="nav-ico">👥</span><span>团队管理</span>
+        </a>
+        <a class="nav-item" data-nav="#/templates" href="#/templates">
+          <span class="nav-ico">🧩</span><span>流程模板</span>
+        </a>
+        <a class="nav-item" data-nav="#/file-templates" href="#/file-templates">
+          <span class="nav-ico">📑</span><span>文件模板</span>
+        </a>
+
+      </nav>
+
+      <div class="sidebar-foot">
+        <div class="agent-online">
+          <span class="dot"></span> 7 个 Agent 在线
+        </div>
+        <div class="me">
+          <div class="avatar avatar-human">张</div>
+          <div>
+            <strong>张明</strong>
+            <small>产品经理 · 交易中台</small>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- 主区域 -->
+    <div class="main">
+      <header class="topbar" id="topbar"></header>
+      <main class="content" id="content"></main>
+    </div>
+  </div>
+
+  <div id="modal-root"></div>
+  <div id="toast-root" class="toast-root" aria-live="polite"></div>
+
+  <script src="assets/app.js"></script>
+</body>
+</html>

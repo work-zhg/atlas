@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI TeamFlow · 整体系统设计</title>
+<style>
+  :root{
+    --bg:#f6f7f9;--surface:#fff;--surface-2:#fbfbfd;--ink:#0f172a;--ink-2:#334155;--ink-3:#64748b;--ink-4:#94a3b8;
+    --line:#e6e8ee;--line-2:#eef0f4;--primary:#4f46e5;--primary-weak:#eef0ff;
+    --warning:#b45309;--warning-weak:#fef3e2;
+    --mono:"JetBrains Mono","SF Mono",ui-monospace,Menlo,Consolas,monospace;
+    --font:"Inter","PingFang SC","Microsoft YaHei",system-ui,-apple-system,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink-2);font-family:var(--font);font-size:14.5px;line-height:1.75}
+  a{color:var(--primary);text-decoration:none}
+  .wrap{display:grid;grid-template-columns:240px minmax(0,1fr);gap:36px;max-width:1240px;margin:0 auto;padding:32px 28px 80px}
+  nav.toc{position:sticky;top:24px;align-self:start;max-height:calc(100vh - 48px);overflow:auto;font-size:13px}
+  nav.toc .t{font-size:11px;letter-spacing:.12em;color:var(--ink-4);text-transform:uppercase;margin-bottom:8px;font-weight:600}
+  nav.toc ol{list-style:none;margin:0;padding:0;counter-reset:s}
+  nav.toc li{counter-increment:s}
+  nav.toc a{display:block;padding:4px 8px;border-radius:6px;color:var(--ink-3)}
+  nav.toc a::before{content:counter(s,decimal-leading-zero) "  ";font-family:var(--mono);font-size:11px;color:var(--ink-4)}
+  nav.toc a:hover{background:#fff;color:var(--ink)}
+  header.hero{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:28px 30px;margin-bottom:28px}
+  .kicker{font-family:var(--mono);font-size:11.5px;letter-spacing:.14em;color:var(--primary);text-transform:uppercase;margin:0 0 6px}
+  h1{font-size:26px;color:var(--ink);margin:0 0 10px;letter-spacing:-.3px}
+  .lede{margin:0;font-size:15px}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+  .meta span{font-size:12px;padding:2px 10px;border-radius:999px;background:var(--primary-weak);color:var(--primary)}
+  section{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:24px 28px;margin-bottom:20px}
+  h2{font-size:19px;color:var(--ink);margin:0 0 14px;display:flex;align-items:center;gap:10px}
+  h2 .num{font-family:var(--mono);font-size:12px;color:#fff;background:var(--primary);border-radius:6px;padding:2px 7px}
+  h3{font-size:15.5px;color:var(--ink);margin:22px 0 8px}
+  p{margin:0 0 12px}
+  code{font-family:var(--mono);font-size:12.5px;background:#f1f3f7;border:1px solid var(--line-2);border-radius:4px;padding:0 5px;color:#be185d}
+  table{width:100%;border-collapse:collapse;font-size:13.5px;margin:6px 0 14px}
+  th{text-align:left;background:var(--surface-2);color:var(--ink-3);font-weight:600;font-size:12.5px}
+  th,td{border:1px solid var(--line);padding:8px 10px;vertical-align:top}
+  td code{white-space:nowrap}
+  pre{background:#0f172a;color:#e2e8f0;border-radius:10px;padding:14px 16px;font-family:var(--mono);font-size:12.5px;line-height:1.65;overflow:auto;margin:6px 0 14px;white-space:pre-wrap}
+  pre .c{color:#94a3b8}
+  .callout{border:1px solid;border-left-width:4px;border-radius:10px;padding:10px 14px;margin:8px 0 14px;font-size:13.5px}
+  .callout b.l{display:block;font-size:11.5px;letter-spacing:.1em;margin-bottom:3px}
+  .rule{background:var(--primary-weak);border-color:#c7c9f5;color:#312e81}
+  .warn{background:var(--warning-weak);border-color:#f6d39b;color:#7c2d12}
+  .tag{display:inline-block;font-size:11.5px;padding:0 8px;border-radius:999px;border:1px solid var(--line);background:var(--surface-2);color:var(--ink-3);white-space:nowrap}
+  .tag.new{color:var(--primary);border-color:#c7c9f5;background:var(--primary-weak)}
+  .tag.p2{color:var(--warning);border-color:#f6d39b;background:var(--warning-weak)}
+  .flow{font-family:var(--mono);font-size:12.5px;line-height:1.75;background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:14px 16px;white-space:pre;overflow:auto;margin:6px 0 14px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .box{border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:var(--surface-2)}
+  .box h4{margin:0 0 6px;font-size:13.5px;color:var(--ink)}
+  ul,ol{margin:0 0 12px;padding-left:20px}
+  li{margin:2px 0}
+  .muted{color:var(--ink-4);font-size:12px}
+  /* 关系图 */
+  .arch{margin:6px 0 14px}
+  .arch-sys{border:1.5px dashed #c7c9f5;border-radius:12px;padding:12px 14px;background:#fafaff}
+  .arch-sys-t{font-size:12px;font-weight:700;color:var(--primary);margin-bottom:8px;letter-spacing:.06em}
+  .arch-row{display:flex;align-items:center}
+  .arch-box{flex:1;background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:13px}
+  .arch-box.me{border-color:var(--primary);box-shadow:0 0 0 3px rgba(79,70,229,.1)}
+  .arch-box b{color:var(--ink)}
+  .arch-box ul{margin:6px 0 0;padding-left:16px;color:var(--ink-3);font-size:12.5px}
+  .arch-link{width:96px;flex:none;text-align:center;font-size:11.5px;color:var(--ink-3);position:relative;padding-bottom:10px}
+  .arch-link i{position:absolute;left:8px;right:8px;bottom:0;height:2px;background:#9aa4b6}
+  .arch-link i.r::after{content:"";position:absolute;right:-2px;top:-4px;border-left:7px solid #9aa4b6;border-top:5px solid transparent;border-bottom:5px solid transparent}
+  .arch-link i.l::before{content:"";position:absolute;left:-2px;top:-4px;border-right:7px solid #9aa4b6;border-top:5px solid transparent;border-bottom:5px solid transparent}
+  .arch-note{margin-top:8px;font-size:12px;color:var(--ink-3)}
+  .arch-down{display:flex;align-items:center;gap:8px;margin-left:calc(83% - 1px);height:34px;font-size:11.5px;color:var(--ink-3)}
+  .arch-down i{width:2px;height:100%;background:#9aa4b6;position:relative}
+  .arch-down i::after{content:"";position:absolute;left:-4px;bottom:-2px;border-top:7px solid #9aa4b6;border-left:5px solid transparent;border-right:5px solid transparent}
+  .arch-ext{margin-left:calc(83% - 90px);width:180px;text-align:center;border:1px solid #9aa4b6;border-radius:10px;padding:8px;background:#fff;font-weight:600;color:var(--ink);font-size:13px}
+  @media (max-width:980px){.wrap{grid-template-columns:1fr}nav.toc{position:static;max-height:none}.grid2{grid-template-columns:1fr}
+    .arch-row{flex-direction:column;align-items:stretch}.arch-link{width:auto;height:30px}.arch-down,.arch-ext{margin-left:0}}
+  /* 功能分层 */
+  .layers{display:flex;flex-direction:column;gap:8px;margin:6px 0 14px}
+  .layer{display:flex;align-items:stretch;border:1px solid var(--line);border-radius:10px;background:var(--surface-2);overflow:hidden}
+  .layer-t{width:96px;flex:none;display:flex;align-items:center;justify-content:center;font-size:12.5px;font-weight:700;color:var(--primary);background:var(--primary-weak);border-right:1px solid var(--line)}
+  .layer.ext .layer-t{color:var(--ink-3);background:#f1f3f7}
+  .cells{display:flex;flex-wrap:wrap;gap:6px;padding:10px}
+  .cells span{background:#fff;border:1px solid var(--line);border-radius:8px;padding:4px 10px;font-size:12.5px;color:var(--ink-2)}
+  /* 系统架构 */
+  .sys{display:flex;align-items:center;gap:0;margin:6px 0 14px}
+  .sys-col{display:flex;flex-direction:column;gap:10px;width:150px;flex:none}
+  .sys-col.wide{flex:1;width:auto}
+  .sys-arrow{width:84px;flex:none;text-align:center;font-size:11px;color:var(--ink-3);position:relative;padding-bottom:12px}
+  .sys-arrow::after{content:"";position:absolute;left:8px;right:8px;bottom:0;height:2px;background:#9aa4b6}
+  .sys-box{border:1px solid var(--line);border-radius:10px;background:#fff;padding:8px 10px;font-size:12.5px;display:flex;flex-direction:column;gap:2px}
+  .sys-box b{color:var(--ink);font-size:13px}
+  .sys-box span{color:var(--ink-3);font-size:11.5px}
+  .sys-box.ui{border-color:#9ec5f8;background:#f3f8ff}
+  .sys-box.ext{border-color:#9aa4b6;background:#f6f7f9}
+  .sys-box.db{background:#fbfbfd}
+  .sys-group{border:1.5px dashed #c7c9f5;border-radius:12px;padding:10px 12px;background:#fafaff}
+  .sys-group-t{font-size:12px;font-weight:700;color:var(--primary);margin-bottom:8px}
+  .sys-mods{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+  .sys-mods span{background:#fff;border:1px solid #dcdcfb;border-radius:6px;padding:2px 8px;font-size:12px;color:var(--primary)}
+  .sys-sub,.sys-store{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .sys-store{grid-template-columns:1fr 1fr 1fr;margin-top:10px}
+  @media (max-width:980px){.sys{flex-direction:column;align-items:stretch}.sys-col{width:auto}.sys-arrow{width:auto;height:34px}}
+  .grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+  .grid3 .flow{margin:6px 0 14px}
+  @media (max-width:980px){.grid3{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<nav class="toc">
+  <div class="t">目录</div>
+  <ol>
+    <li><a href="#s1">背景与目标</a></li>
+    <li><a href="#s2">范围</a></li>
+    <li><a href="#s3">核心概念</a></li>
+    <li><a href="#s4">功能架构</a></li>
+    <li><a href="#s5">系统架构</a></li>
+    <li><a href="#s6">模块划分</a></li>
+    <li><a href="#s7">领域模型</a></li>
+    <li><a href="#s8">关键流程</a></li>
+    <li><a href="#s9">流程运行</a></li>
+    <li><a href="#s10">Agent 接入（Atlas）</a></li>
+    <li><a href="#s11">产物与 Git</a></li>
+    <li><a href="#s12">版本与锁定</a></li>
+    <li><a href="#s13">实时与通知</a></li>
+    <li><a href="#s14">安全与权限</a></li>
+    <li><a href="#s15">审计与追溯</a></li>
+    <li><a href="#s16">非功能</a></li>
+    <li><a href="#s17">部署</a></li>
+    <li><a href="#s18">技术选型</a></li>
+    <li><a href="#s19">路线图</a></li>
+    <li><a href="#s20">风险与待确认</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<header class="hero">
+  <p class="kicker">AI TeamFlow · System Design</p>
+  <h1>AI TeamFlow 整体系统设计</h1>
+  <p class="lede"><b>让 AI Agent 作为团队成员，和人一起按规范流程把工作做完。</b>团队把工作流程配置成模板；每个节点由人与 AI Agent 协同完成 —— 人下达指令、审核成果、必要时介入，Agent 执行并产出；审核通过自动流转到下一节点。所有产物以 Git 版本化留痕，从最初的需求到最终交付全程可追溯。</p>
+  <div class="meta"><span>独立系统</span><span>唯一外部依赖：Atlas AI Agent</span><span>模块化单体 + Worker</span><span>产物存 Git</span><span>版本锁定保证在途稳定</span></div>
+</header>
+
+<!-- 01 -->
+<section id="s1">
+  <h2><span class="num">01</span>背景与目标</h2>
+  <table>
+    <tr><th style="width:20%">现状</th><th>问题</th></tr>
+    <tr><td>网页聊天、Claude Code、Codex 等 AI 工具</td><td>产出方便、有人把关，但<b>过程无从追溯</b>：指令怎么下的、依据什么产出、谁审过、改过几轮，都散落在个人会话里</td></tr>
+    <tr><td>Jira 等协同工具</td><td>有流程、<b>无执行</b>：每一步的活仍然要人来干</td></tr>
+  </table>
+  <p>AI TeamFlow 把两者合一：</p>
+  <div class="grid2">
+    <div class="box"><h4>按规范推进</h4>团队把流程配置成模板：有哪些环节、谁负责、谁审核、产物长什么样。</div>
+    <div class="box"><h4>每一步由 AI 执行</h4>节点由人与 AI Agent 协同完成，Agent 以上游产物为输入继续工作。</div>
+    <div class="box"><h4>人在关键节点把关</h4>准出（产出方）与准入（下游）两道评审，支持「任一人 / 所有人同意」，可驳回、可打回。</div>
+    <div class="box"><h4>全过程可审计</h4>指令、Agent 产出、每个版本、每次评审都留痕，产物以 Git 管理。</div>
+  </div>
+</section>
+
+<!-- 02 -->
+<section id="s2">
+  <h2><span class="num">02</span>范围</h2>
+  <table>
+    <tr><th style="width:18%">本期（P1）</th><td>团队管理（人、AI Agent、项目、角色分配）；流程模板（结构编辑、节点配置、版本）；文件模板（Markdown 规则文件）；流程运行（发起、人机协同、准出 / 准入评审、驳回 / 打回、自动流转）；产物 Git 管理与预览；审计；站内实时更新。</td></tr>
+    <tr><th>后续（P2+）</th><td>AI 自动准出（按文件模板规则判定）；度量（环节耗时、返工率、AI 一次通过率）与工作台；IM / 邮件通知；评审转交；版本对比；团队自建模板。</td></tr>
+    <tr><th>不做</th><td>Agent 的创建与配置（由 Atlas 负责）；通用项目管理（任务看板、工时）；代码托管平台本身（使用现有 Git 服务）。</td></tr>
+  </table>
+</section>
+
+<!-- 03 -->
+<section id="s3">
+  <h2><span class="num">03</span>核心概念</h2>
+  <table>
+    <tr><th style="width:16%">概念</th><th>含义</th><th style="width:22%">详细设计</th></tr>
+    <tr><td>团队</td><td>人 + AI Agent 的集合；项目与流程归属团队</td><td><a href="team-design.html">团队管理模块</a></td></tr>
+    <tr><td>项目</td><td>团队内的一项持续工作；绑定一个流程模板，把模板角色分配给人和 Agent</td><td><a href="team-design.html">团队管理模块</a></td></tr>
+    <tr><td>流程模板</td><td>一类工作「怎么做」：步骤序列 + 并行轨道；节点配置执行角色、产物、文件模板、准出 / 准入评审</td><td><a href="flow-template-design.html">流程模板模块</a></td></tr>
+    <tr><td>文件模板</td><td>带版本的 Markdown 规则文件：规定产物格式，未来用于自动准出规则</td><td><a href="file-template-design.html">文件模板模块</a></td></tr>
+    <tr><td>流程</td><td>按项目绑定的模板发起的一次工作，如「支持手机号登录」</td><td><a href="process-design.html">流程运行模块</a></td></tr>
+    <tr><td>节点</td><td>流程中的一个工作单元：人机协同产出一份产物，经评审后完成</td><td><a href="process-design.html">流程运行模块</a></td></tr>
+    <tr><td>产物</td><td>节点的输出，以 Markdown 文件存于 Git，每次提交一个版本</td><td><a href="process-design.html#s8">产物与仓库</a></td></tr>
+    <tr><td>角色</td><td>模板中的执行角色 / 评审角色；在项目中落到具体的人与 Agent</td><td>—</td></tr>
+  </table>
+</section>
+
+<!-- 04 -->
+<section id="s4">
+  <h2><span class="num">04</span>功能架构</h2>
+  <div class="layers">
+    <div class="layer"><div class="layer-t">用户界面</div>
+      <div class="cells"><span>团队管理</span><span>项目首页（流程列表 / 待我处理）</span><span>流程详情（流程图 · 人机协同 · 审批 · 产物）</span><span>项目设置</span><span>流程模板编辑</span><span>文件模板</span></div></div>
+    <div class="layer"><div class="layer-t">业务能力</div>
+      <div class="cells"><span>团队 / 成员 / Agent</span><span>项目与角色分配</span><span>流程模板与版本</span><span>文件模板与版本</span><span>流程运行与状态机</span><span>评审与投票</span><span>产物版本化</span><span>审计</span></div></div>
+    <div class="layer"><div class="layer-t">支撑能力</div>
+      <div class="cells"><span>用户中心对接（身份与权限）</span><span>Agent 适配层</span><span>Git 仓库服务</span><span>异步任务</span><span>实时推送</span><span>通知（P2）</span></div></div>
+    <div class="layer ext"><div class="layer-t">外部</div>
+      <div class="cells"><span>用户中心（开放接口）</span><span>Atlas AI Agent</span><span>Git 服务（如 GitLab / Gitea）</span></div></div>
+  </div>
+</section>
+
+<!-- 05 -->
+<section id="s5">
+  <h2><span class="num">05</span>系统架构</h2>
+  <div class="sys">
+    <div class="sys-col">
+      <div class="sys-box ui"><b>Web 前端</b><span>React SPA</span></div>
+    </div>
+    <div class="sys-arrow">HTTPS · REST<br>SSE（实时）</div>
+    <div class="sys-col wide">
+      <div class="sys-group">
+        <div class="sys-group-t">TeamFlow 后端（模块化单体）</div>
+        <div class="sys-mods">
+          <span>团队管理</span><span>流程模板</span><span>文件模板</span><span>流程运行</span><span>产物</span><span>审计</span><span>Agent 适配层</span><span>身份与权限</span>
+        </div>
+        <div class="sys-sub">
+          <div class="sys-box"><b>API 服务</b><span>无状态，可水平扩展</span></div>
+          <div class="sys-box"><b>Worker</b><span>Agent 运行监督、状态同步、Git 提交重试、通知</span></div>
+        </div>
+      </div>
+      <div class="sys-store">
+        <div class="sys-box db"><b>PostgreSQL</b><span>业务数据 · 审计</span></div>
+        <div class="sys-box db"><b>Redis</b><span>任务队列 · 实时推送 · 锁</span></div>
+        <div class="sys-box db"><b>Git 服务</b><span>产物仓库</span></div>
+      </div>
+    </div>
+    <div class="sys-arrow">REST<br>事件流</div>
+    <div class="sys-col">
+      <div class="sys-box ext"><b>Atlas</b><span>AI Agent 执行</span></div>
+      <div class="sys-box ext"><b>用户中心</b><span>开放接口</span></div>
+    </div>
+  </div>
+  <table>
+    <tr><th style="width:20%">组件</th><th>职责</th></tr>
+    <tr><td>Web 前端</td><td>全部页面；通过 SSE 订阅流程事件（Agent 输出、投票、状态变化）实现实时更新</td></tr>
+    <tr><td>API 服务</td><td>REST 接口；业务规则与事务；SSE 推送出口</td></tr>
+    <tr><td>Worker</td><td>耗时与周期任务：订阅 Atlas 事件并落库 / 转发、节点开工后的 Agent 会话启动、Agent 可用性同步、Git 提交失败重试、通知</td></tr>
+    <tr><td>PostgreSQL</td><td>所有业务数据与审计日志（文件模板内容也在这里）</td></tr>
+    <tr><td>Redis</td><td>任务队列、SSE 广播（多实例间）、分布式锁（防止同一节点被并发推进）</td></tr>
+    <tr><td>Git 服务</td><td>产物仓库：每个项目一个仓库，每次提交一个 commit</td></tr>
+    <tr><td>Atlas</td><td>唯一外部能力依赖：按 Agent 执行节点工作，提供会话、运行与事件流</td></tr>
+  </table>
+  <div class="callout rule"><b class="l">为什么是模块化单体</b>当前规模（数百团队、并发流程数千级）下，一个按模块划分的后端加一个 Worker 足以支撑；模块之间只通过各自的服务接口调用、不跨模块访问表，后续若某个模块（如流程运行）压力突出，可以单独拆出。</div>
+</section>
+
+<!-- 06 -->
+<section id="s6">
+  <h2><span class="num">06</span>模块划分</h2>
+  <table>
+    <tr><th style="width:16%">模块</th><th>职责</th><th style="width:26%">依赖</th><th style="width:12%">详细设计</th></tr>
+    <tr><td>身份与权限</td><td>登录对接、授权快照、操作码与团队权限校验（见<a href="permission-design.html">权限设计</a>）</td><td>用户中心</td><td>—</td></tr>
+    <tr><td>团队管理</td><td>团队、成员、团队 Agent；项目、绑定模板、角色分配；项目首页聚合</td><td>流程模板、流程运行、Atlas（Agent 列表）</td><td><a href="team-design.html">已完成</a></td></tr>
+    <tr><td>流程模板</td><td>结构与节点配置、草稿与版本、角色库、发布校验</td><td>文件模板</td><td><a href="flow-template-design.html">已完成</a></td></tr>
+    <tr><td>文件模板</td><td>Markdown 规则文件与版本</td><td>—</td><td><a href="file-template-design.html">已完成</a></td></tr>
+    <tr><td>流程运行</td><td>发起流程、节点状态机、依赖推导与自动流转、版本与分配锁定、投票、驳回 / 打回、待办索引</td><td>流程模板、文件模板、团队管理、Agent 适配层、产物</td><td><a href="process-design.html">已完成</a></td></tr>
+    <tr><td>Agent 适配层</td><td>把节点会话映射为 Atlas 会话；转发人的指令；接收事件流；组装上下文</td><td>Atlas</td><td><a href="process-design.html#s7">已完成</a></td></tr>
+    <tr><td>产物</td><td>产物文件的 Git 提交、版本列表、内容读取与预览</td><td>Git 服务</td><td><a href="process-design.html#s8">已完成</a></td></tr>
+    <tr><td>审计</td><td>统一的审计日志写入与查询</td><td>—</td><td>（随各模块）</td></tr>
+  </table>
+  <p>依赖方向单向：<b>团队管理 / 流程运行 → 流程模板 → 文件模板</b>；流程运行 → Agent 适配层 → Atlas；流程运行 → 产物 → Git。被依赖的模块不反向调用上层。</p>
+</section>
+
+<!-- 07 -->
+<section id="s7">
+  <h2><span class="num">07</span>领域模型</h2>
+<div class="grid3">
+<div class="flow">【组织】
+Team
+ ├─ TeamMember
+ │    User + team_role
+ ├─ TeamAgent
+ │    atlas_agent_id
+ └─ Project
+      flow_template_id → 定义
+      └─ RoleAssignment
+           role → User / TeamAgent</div>
+<div class="flow">【定义】
+FlowTemplate
+ └─ FlowTemplateVersion
+      definition：flow + nodes
+      节点的文件模板 id
+        → FileTemplate
+
+FileTemplate
+ └─ FileTemplateVersion
+      Markdown 内容</div>
+<div class="flow">【运行】
+Process
+  锁定 FlowTemplateVersion
+ └─ ProcessNode
+      状态、锁定的文件模板版本、
+      执行 Agent、评审人名单
+      ├─ AgentSession
+      │    atlas_thread_id
+      │    └─ Message
+      ├─ ArtifactVersion
+      │    git commit
+      └─ ReviewRound
+           └─ Vote</div>
+</div>
+  <p>三类「定义」（流程模板、文件模板、角色分配）都可以随时修改；三类「运行」（流程、节点、评审轮次）在关键时刻锁定定义（§12），保证进行中的工作不被打乱。</p>
+</section>
+
+<!-- 08 -->
+<section id="s8">
+  <h2><span class="num">08</span>关键流程</h2>
+  <h3>8.1 配置：从团队到可发起流程</h3>
+  <table>
+    <tr><th style="width:6%">#</th><th style="width:20%">谁</th><th>做什么</th></tr>
+    <tr><td>1</td><td>平台管理员</td><td>维护流程模板与文件模板（或直接使用内置模板）</td></tr>
+    <tr><td>2</td><td>平台管理员</td><td>新建团队，指定团队管理员（写入团队 Owner）</td></tr>
+    <tr><td>3</td><td>团队管理员</td><td>添加成员（个人或部门，成员默认读写、团队管理员为 Owner，存于用户中心）；从 Atlas 已启用的 Agent 中接入团队 Agent</td></tr>
+    <tr><td>4</td><td>团队管理员</td><td>新建项目、绑定流程模板；在项目设置中为每个角色分配人和 Agent</td></tr>
+  </table>
+
+  <h3>8.2 运行：一个节点从开工到流转</h3>
+  <table>
+    <tr><th style="width:6%">#</th><th style="width:20%">参与方</th><th>动作</th></tr>
+    <tr><td>1</td><td>成员</td><td>在项目首页「发起流程」，填写一句话需求 → 流程运行模块锁定模板版本，起始节点开工</td></tr>
+    <tr><td>2</td><td>流程运行</td><td>节点开工：锁定文件模板版本与执行 Agent；Agent 适配层创建 Atlas 会话，发送开工上下文（节点指令 + 文件模板原文 + 上游产物 + 需求）</td></tr>
+    <tr><td>3</td><td>人 ⇄ Agent</td><td>在「人机协同」区对话：Agent 澄清问题、人回答与下达指令；Agent 的输出经事件流实时显示</td></tr>
+    <tr><td>4</td><td>Agent / 人</td><td>Agent 产出产物 → 产物模块提交到 Git（一个 commit = 一个版本）→ 人点击「提交准出评审」</td></tr>
+    <tr><td>5</td><td>准出评审人</td><td>锁定评审人名单；逐人「同意 / 驳回」。规则满足（任一人 / 所有人）→ 进入准入；任一人驳回 → 回到第 3 步，批注作为下一轮指令发给 Agent（或打回到更早节点）</td></tr>
+    <tr><td>6</td><td>准入评审人</td><td>同上；未配置准入时跳过</td></tr>
+    <tr><td>7</td><td>流程运行</td><td>节点「已通过」；所有依赖都已通过的下游节点自动开工（回到第 2 步），上游产物作为其输入；全部节点通过后流程完成</td></tr>
+  </table>
+
+  <h3>8.3 驳回与打回</h3>
+  <table>
+    <tr><th style="width:24%">情形</th><th>效果</th></tr>
+    <tr><td>驳回 · 本节点修改</td><td>节点回到人机协同中；本阶段同意记录清空；驳回批注作为指令发给 Agent；修改后重新提交准出（重新锁定评审人名单）</td></tr>
+    <tr><td>驳回 · 打回到更早节点</td><td>本节点标记「已打回」；目标节点回到人机协同中（沿用其原锁定的模板版本）；目标节点重新通过后，依赖它的节点按依赖关系重新开工</td></tr>
+  </table>
+</section>
+
+<!-- 09 -->
+<section id="s9">
+  <h2><span class="num">09</span>流程运行</h2>
+  <p>流程运行模块是系统核心，下面给出边界与关键规则，细节在其详细设计中展开。</p>
+  <h3>9.1 节点状态机</h3>
+<div class="flow">待开始 ──依赖全部通过──▶ 人机协同中 ──提交准出──▶ 待准出 ──规则满足──▶ 待准入 ──规则满足──▶ 已通过
+                              ▲                       │ 驳回                │ 驳回
+                              └───────────────────────┴─────────────────────┘
+                              （或打回到更早节点：本节点 → 已打回）</div>
+  <h3>9.2 关键规则</h3>
+  <table>
+    <tr><th style="width:24%">规则</th><th>说明</th></tr>
+    <tr><td>依赖与流转</td><td>依赖由模板结构推导（顺序、并行开工、汇合）；节点通过时计算所有依赖已满足的下游节点并开工</td></tr>
+    <tr><td>并发控制</td><td>同一流程的状态推进串行化（流程级锁）；投票等操作带乐观锁，重复提交幂等</td></tr>
+    <tr><td>待办索引</td><td>维护「谁在等待处理什么」的索引（评审待投、协同中），支撑项目首页的「待我处理」与通知，不现场遍历流程</td></tr>
+    <tr><td>事件</td><td>每次状态变化写入流程事件表（审计 + 实时推送的共同来源）</td></tr>
+    <tr><td>无超时</td><td>人机协同与评审都没有等待上限，不会到点自动通过或驳回</td></tr>
+  </table>
+</section>
+
+<!-- 10 -->
+<section id="s10">
+  <h2><span class="num">10</span>Agent 接入（Atlas）</h2>
+  <p>Atlas 是 TeamFlow 唯一的外部能力依赖，只使用其 AI Agent 能力。所有交互经过 <b>Agent 适配层</b>，业务模块不直接调用 Atlas。</p>
+  <table>
+    <tr><th style="width:24%">TeamFlow</th><th style="width:26%">Atlas</th><th>说明</th></tr>
+    <tr><td>团队 Agent</td><td>Agent（id）</td><td>团队接入时只保存 Atlas Agent id 与快照；定期同步可用状态</td></tr>
+    <tr><td>节点会话</td><td>会话（thread）</td><td>节点开工时创建，一个节点一个会话；驳回后在同一会话中继续，保留上下文</td></tr>
+    <tr><td>人的一条指令</td><td>一次运行（run）</td><td>人在人机协同区发送消息 → 在该会话上发起运行</td></tr>
+    <tr><td>Agent 输出 / 进度</td><td>事件流</td><td>Worker 订阅事件流，落库为消息并经 SSE 推给页面；断线按游标续传</td></tr>
+  </table>
+  <h3>10.1 开工上下文</h3>
+<pre><span class="c"># Agent 适配层组装的首条消息（示意）</span>
+你是流程「{流程名}」中节点「{节点名}」的执行者，需要产出「{产物名}」。
+需求：{发起时的一句话需求}
+&lt;file-template name="{文件模板名}" version="{n}"&gt; {Markdown 原文} &lt;/file-template&gt;
+&lt;input name="{上游产物名}" version="{commit}"&gt; {上游产物内容} &lt;/input&gt;   （每个上游一段）
+请先澄清不清楚的地方，再按文件模板产出，并对照模板自查。</pre>
+  <table>
+    <tr><th style="width:24%">规则</th><th>说明</th></tr>
+    <tr><td>驳回后</td><td>把驳回批注作为新一条指令发到同一会话</td></tr>
+    <tr><td>产物提取</td><td>约定 Agent 用固定标记输出产物全文（或调用「提交产物」工具，视 Atlas 能力而定），适配层识别后交给产物模块提交 Git</td></tr>
+    <tr><td>失败与断线</td><td>Atlas 运行失败时，节点停在人机协同中并提示；事件流断线由 Worker 按游标续传，不判失败</td></tr>
+    <tr><td>Agent 不可用</td><td>节点开工时执行 Agent 不可用 → 节点停在人机协同中，提示团队管理员更换分配</td></tr>
+  </table>
+</section>
+
+<!-- 11 -->
+<section id="s11">
+  <h2><span class="num">11</span>产物与 Git</h2>
+<div class="flow">仓库：{team-slug}/{project-slug}                         （每个项目一个仓库）
+  {process-id}-{流程名}/
+    01-需求澄清/需求澄清纪要.md
+    02-PRD/PRD.md
+    03-技术方案/技术方案.md
+    ...</div>
+  <table>
+    <tr><th style="width:24%">规则</th><th>说明</th></tr>
+    <tr><td>一次提交 = 一个版本</td><td>Agent 每次产出（含驳回后的修改）提交一个 commit；commit 信息包含流程、节点、轮次、提交人 / Agent</td></tr>
+    <tr><td>格式</td><td>产物统一为 Markdown（与文件模板一致），便于预览、对比与作为下游输入</td></tr>
+    <tr><td>评审关联</td><td>每轮评审记录其针对的 commit；批注与投票存于数据库，并以 git note 或审计记录关联到该 commit</td></tr>
+    <tr><td>写入方式</td><td>只有 TeamFlow（服务账号）写仓库；Git 服务不可用时提交进入 Worker 重试队列，节点暂不能提交准出</td></tr>
+    <tr><td>读取</td><td>产物列表、版本、内容与差异由产物模块从 Git 读取并缓存</td></tr>
+  </table>
+</section>
+
+<!-- 12 -->
+<section id="s12">
+  <h2><span class="num">12</span>版本与锁定</h2>
+  <p>「定义可以随时改，进行中的工作不被打乱」是贯穿全系统的规则：</p>
+  <table>
+    <tr><th style="width:26%">锁定什么</th><th style="width:22%">何时锁定</th><th>之后定义变化的影响</th></tr>
+    <tr><td>流程模板版本</td><td>流程发起时</td><td>模板再发布不影响该流程</td></tr>
+    <tr><td>文件模板版本</td><td>节点开工时</td><td>模板再上传不影响该节点（驳回修改、被打回也不重新锁定）</td></tr>
+    <tr><td>执行 Agent</td><td>节点开工时</td><td>项目改分配不影响该节点</td></tr>
+    <tr><td>评审人名单</td><td>节点进入待准出 / 待准入时</td><td>本轮评审人数不变；驳回重提后用新名单</td></tr>
+  </table>
+</section>
+
+<!-- 13 -->
+<section id="s13">
+  <h2><span class="num">13</span>实时与通知</h2>
+  <table>
+    <tr><th style="width:24%">能力</th><th>设计</th></tr>
+    <tr><td>流程详情实时更新</td><td>页面订阅流程事件的 SSE：Agent 输出逐段显示、投票与状态变化即时刷新；带游标续传，刷新页面不丢事件</td></tr>
+    <tr><td>多实例推送</td><td>事件写库后经 Redis 广播到各 API 实例，再推给各自的 SSE 连接</td></tr>
+    <tr><td>待我处理</td><td>由待办索引驱动；项目首页与流程卡片显示标记</td></tr>
+    <tr><td>通知（P2）</td><td>待办产生时推送 IM / 邮件，带直达流程的链接</td></tr>
+  </table>
+</section>
+
+<!-- 14 -->
+<section id="s14">
+  <h2><span class="num">14</span>安全与权限</h2>
+  <table>
+    <tr><th style="width:24%">项</th><th>设计</th></tr>
+    <tr><td>认证</td><td>账号来自用户中心：本期 TeamFlow 自行登录并按账号与用户中心对齐，登录后取授权快照；以后统一由 Keycloak 登录。TeamFlow 不保存密码</td></tr>
+    <tr><td>授权</td><td>三个角色（平台管理员管模板、团队管理员配置团队项目、团队成员处理流程）+ 团队数据权限（每个团队一条：成员读写、团队管理员 Owner）+ 流程角色分配（决定能否协同与评审）。详见<a href="permission-design.html">权限设计</a></td></tr>
+    <tr><td>数据隔离</td><td>团队是数据边界：对团队没有权限的人看不到其项目、流程与产物；接口按用户中心返回的团队级别过滤</td></tr>
+    <tr><td>服务凭据</td><td>访问 Atlas 与 Git 使用服务账号；凭据存于密钥管理，不进代码与配置文件</td></tr>
+    <tr><td>内容安全</td><td>产物与模板一律按纯文本 / 白名单 Markdown 渲染，不执行脚本、不加载外链资源</td></tr>
+    <tr><td>Agent 边界</td><td>Agent 只能读到开工上下文与会话内容；写 Git 只经 TeamFlow，Agent 不直接持有仓库凭据</td></tr>
+  </table>
+</section>
+
+<!-- 15 -->
+<section id="s15">
+  <h2><span class="num">15</span>审计与追溯</h2>
+  <p>「过程可追溯」是产品的核心价值之一。任何一份产物都能回答：</p>
+  <table>
+    <tr><th style="width:30%">问题</th><th>来源</th></tr>
+    <tr><td>依据哪版流程与规则产出？</td><td>流程锁定的模板版本、节点锁定的文件模板版本</td></tr>
+    <tr><td>指令怎么下的、Agent 怎么回应？</td><td>节点会话的消息记录（人机协同全文）</td></tr>
+    <tr><td>改过几轮、每轮改了什么？</td><td>Git commit 历史与差异</td></tr>
+    <tr><td>谁审过、意见是什么？</td><td>评审轮次与投票、批注（关联到 commit）</td></tr>
+    <tr><td>配置被谁改过？</td><td>模板、项目、角色分配的审计日志</td></tr>
+  </table>
+  <p>审计日志与业务写入同一事务；只追加、不修改；保留期按企业合规要求配置（默认 3 年）。</p>
+</section>
+
+<!-- 16 -->
+<section id="s16">
+  <h2><span class="num">16</span>非功能</h2>
+  <table>
+    <tr><th style="width:20%">项</th><th>目标</th></tr>
+    <tr><td>规模</td><td>团队数百、成员数千、并发进行中的流程数千、单项目流程数万</td></tr>
+    <tr><td>性能</td><td>普通页面接口 P95 &lt; 300 ms；项目首页首屏 P95 &lt; 500 ms；Agent 输出到页面的延迟 &lt; 1 s（不含 Agent 自身耗时）</td></tr>
+    <tr><td>可用性</td><td>99.9%（工作时间）；Atlas 或 Git 短时不可用时，查看与评审不受影响，开工 / 提交排队重试</td></tr>
+    <tr><td>长任务</td><td>Agent 运行可能持续数十分钟：运行状态与事件全部持久化，服务重启后由 Worker 续接，不判失败</td></tr>
+    <tr><td>可观测</td><td>结构化日志 + 链路追踪（请求 → 流程 → Atlas 调用）；关键指标：进行中节点数、Atlas 调用耗时与失败率、Git 提交队列长度、待办积压</td></tr>
+  </table>
+</section>
+
+<!-- 17 -->
+<section id="s17">
+  <h2><span class="num">17</span>部署</h2>
+  <table>
+    <tr><th style="width:22%">单元</th><th style="width:16%">实例</th><th>说明</th></tr>
+    <tr><td>Web 前端</td><td>静态资源</td><td>CDN / Nginx 托管</td></tr>
+    <tr><td>API 服务</td><td>≥ 2</td><td>无状态，K8s Deployment，按 CPU / 连接数扩缩</td></tr>
+    <tr><td>Worker</td><td>≥ 2</td><td>消费任务队列；Atlas 事件订阅按流程分片，避免重复消费</td></tr>
+    <tr><td>PostgreSQL</td><td>主备</td><td>定时备份 + PITR</td></tr>
+    <tr><td>Redis</td><td>主备</td><td>队列与推送；数据可从 PostgreSQL 重建</td></tr>
+    <tr><td>Git 服务</td><td>使用企业现有</td><td>TeamFlow 以服务账号访问；按团队建组、按项目建仓库</td></tr>
+  </table>
+  <p>与 Atlas 独立部署、独立发布，仅通过 Atlas 的 API 交互。</p>
+</section>
+
+<!-- 18 -->
+<section id="s18">
+  <h2><span class="num">18</span>技术选型</h2>
+  <table>
+    <tr><th style="width:20%">层</th><th style="width:30%">选型</th><th>理由</th></tr>
+    <tr><td>后端</td><td>Python 3.12 + FastAPI + SQLAlchemy</td><td>团队熟悉；异步 IO 适合大量 SSE 与外部调用</td></tr>
+    <tr><td>任务</td><td>Redis 队列（如 arq）</td><td>轻量，满足重试与延迟任务</td></tr>
+    <tr><td>前端</td><td>React + TypeScript + Ant Design</td><td>组件成熟；与原型的信息架构一一对应</td></tr>
+    <tr><td>数据库</td><td>PostgreSQL</td><td>事务、JSON 字段（模板定义）</td></tr>
+    <tr><td>Git</td><td>GitLab / Gitea API</td><td>使用企业现有服务，不自建托管</td></tr>
+    <tr><td>Markdown 渲染</td><td>白名单渲染库</td><td>模板与产物统一渲染与安全策略</td></tr>
+  </table>
+</section>
+
+<!-- 19 -->
+<section id="s19">
+  <h2><span class="num">19</span>路线图</h2>
+  <table>
+    <tr><th style="width:12%">阶段</th><th>内容</th><th style="width:28%">可演示的结果</th></tr>
+    <tr><td>M1 基础</td><td>身份与权限、团队与成员、文件模板、流程模板（只读 + 内置模板）</td><td>能登录、建团队、看模板</td></tr>
+    <tr><td>M2 配置</td><td>流程模板编辑与发布、Atlas Agent 接入、项目与角色分配</td><td>能配出一个可发起的项目</td></tr>
+    <tr><td>M3 运行</td><td>流程运行（状态机、流转、锁定）、Agent 适配层、产物 Git、人机协同实时对话</td><td>一个流程从需求跑到 PRD</td></tr>
+    <tr><td>M4 把关</td><td>准出 / 准入评审与规则、驳回 / 打回、待我处理、项目首页、审计查询</td><td>研发流程端到端跑通</td></tr>
+    <tr><td>P2</td><td>AI 自动准出、度量与工作台、通知、评审转交、版本对比</td><td>—</td></tr>
+  </table>
+</section>
+
+<!-- 20 -->
+<section id="s20">
+  <h2><span class="num">20</span>风险与待确认</h2>
+  <table>
+    <tr><th style="width:5%">#</th><th style="width:32%">事项</th><th>说明 / 当前假设</th></tr>
+    <tr><td>1</td><td>Agent 如何交付产物</td><td><b>风险</b>：依赖 Atlas Agent 能否按约定标记输出全文或调用提交工具；M3 前需用真实 Agent 验证，必要时由人在页面上确认并提交</td></tr>
+    <tr><td>2</td><td>Git 服务选择</td><td>假设使用企业现有 GitLab；需确认服务账号权限与按项目建仓库的配额</td></tr>
+    <tr><td>3</td><td>上下文长度</td><td>文件模板 ≤ 100 KB，加上多个上游产物可能超出 Agent 上下文；超出时只传摘要 + 链接，由 Agent 按需读取（视 Atlas 能力）</td></tr>
+    <tr><td>4</td><td>成本</td><td>每个节点一个 Agent 会话、多轮修改，模型调用成本需按团队统计；P1 先记录用量，P2 再做预算控制</td></tr>
+    <tr><td>5</td><td>非文档类产物（代码）</td><td>编码节点的产物是代码变更而非 Markdown：P1 以「MR 链接 + 说明」作为产物，代码本身留在代码仓库</td></tr>
+    <tr><td>6</td><td>详细设计</td><td>已完成：<a href="process-design.html">流程运行（含 Agent 适配层、产物与仓库）</a></td></tr>
+  </table>
+</section>
+
+</main>
+</div>
+</body>
+</html>

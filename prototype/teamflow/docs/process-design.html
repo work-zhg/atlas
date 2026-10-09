@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI TeamFlow · 流程运行（含 Agent 适配层、产物与仓库）详细设计</title>
+<style>
+  :root{
+    --bg:#f6f7f9;--surface:#fff;--surface-2:#fbfbfd;--ink:#0f172a;--ink-2:#334155;--ink-3:#64748b;--ink-4:#94a3b8;
+    --line:#e6e8ee;--line-2:#eef0f4;--primary:#4f46e5;--primary-weak:#eef0ff;
+    --warning:#b45309;--warning-weak:#fef3e2;
+    --mono:"JetBrains Mono","SF Mono",ui-monospace,Menlo,Consolas,monospace;
+    --font:"Inter","PingFang SC","Microsoft YaHei",system-ui,-apple-system,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink-2);font-family:var(--font);font-size:14.5px;line-height:1.75}
+  a{color:var(--primary);text-decoration:none}
+  .wrap{display:grid;grid-template-columns:240px minmax(0,1fr);gap:36px;max-width:1240px;margin:0 auto;padding:32px 28px 80px}
+  nav.toc{position:sticky;top:24px;align-self:start;max-height:calc(100vh - 48px);overflow:auto;font-size:13px}
+  nav.toc .t{font-size:11px;letter-spacing:.12em;color:var(--ink-4);text-transform:uppercase;margin-bottom:8px;font-weight:600}
+  nav.toc ol{list-style:none;margin:0;padding:0;counter-reset:s}
+  nav.toc li{counter-increment:s}
+  nav.toc a{display:block;padding:4px 8px;border-radius:6px;color:var(--ink-3)}
+  nav.toc a::before{content:counter(s,decimal-leading-zero) "  ";font-family:var(--mono);font-size:11px;color:var(--ink-4)}
+  nav.toc a:hover{background:#fff;color:var(--ink)}
+  header.hero{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:28px 30px;margin-bottom:28px}
+  .kicker{font-family:var(--mono);font-size:11.5px;letter-spacing:.14em;color:var(--primary);text-transform:uppercase;margin:0 0 6px}
+  h1{font-size:26px;color:var(--ink);margin:0 0 10px;letter-spacing:-.3px}
+  .lede{margin:0;font-size:15px}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+  .meta span{font-size:12px;padding:2px 10px;border-radius:999px;background:var(--primary-weak);color:var(--primary)}
+  section{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:24px 28px;margin-bottom:20px}
+  h2{font-size:19px;color:var(--ink);margin:0 0 14px;display:flex;align-items:center;gap:10px}
+  h2 .num{font-family:var(--mono);font-size:12px;color:#fff;background:var(--primary);border-radius:6px;padding:2px 7px}
+  h3{font-size:15.5px;color:var(--ink);margin:22px 0 8px}
+  p{margin:0 0 12px}
+  code{font-family:var(--mono);font-size:12.5px;background:#f1f3f7;border:1px solid var(--line-2);border-radius:4px;padding:0 5px;color:#be185d}
+  table{width:100%;border-collapse:collapse;font-size:13.5px;margin:6px 0 14px}
+  th{text-align:left;background:var(--surface-2);color:var(--ink-3);font-weight:600;font-size:12.5px}
+  th,td{border:1px solid var(--line);padding:8px 10px;vertical-align:top}
+  td code{white-space:nowrap}
+  pre{background:#0f172a;color:#e2e8f0;border-radius:10px;padding:14px 16px;font-family:var(--mono);font-size:12.5px;line-height:1.65;overflow:auto;margin:6px 0 14px;white-space:pre-wrap}
+  pre .c{color:#94a3b8}
+  .callout{border:1px solid;border-left-width:4px;border-radius:10px;padding:10px 14px;margin:8px 0 14px;font-size:13.5px}
+  .callout b.l{display:block;font-size:11.5px;letter-spacing:.1em;margin-bottom:3px}
+  .rule{background:var(--primary-weak);border-color:#c7c9f5;color:#312e81}
+  .warn{background:var(--warning-weak);border-color:#f6d39b;color:#7c2d12}
+  .tag{display:inline-block;font-size:11.5px;padding:0 8px;border-radius:999px;border:1px solid var(--line);background:var(--surface-2);color:var(--ink-3);white-space:nowrap}
+  .tag.new{color:var(--primary);border-color:#c7c9f5;background:var(--primary-weak)}
+  .tag.p2{color:var(--warning);border-color:#f6d39b;background:var(--warning-weak)}
+  .flow{font-family:var(--mono);font-size:12.5px;line-height:1.75;background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:14px 16px;white-space:pre;overflow:auto;margin:6px 0 14px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .box{border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:var(--surface-2)}
+  .box h4{margin:0 0 6px;font-size:13.5px;color:var(--ink)}
+  ul,ol{margin:0 0 12px;padding-left:20px}
+  li{margin:2px 0}
+  .muted{color:var(--ink-4);font-size:12px}
+  /* 关系图 */
+  .arch{margin:6px 0 14px}
+  .arch-sys{border:1.5px dashed #c7c9f5;border-radius:12px;padding:12px 14px;background:#fafaff}
+  .arch-sys-t{font-size:12px;font-weight:700;color:var(--primary);margin-bottom:8px;letter-spacing:.06em}
+  .arch-row{display:flex;align-items:center}
+  .arch-box{flex:1;background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:13px}
+  .arch-box.me{border-color:var(--primary);box-shadow:0 0 0 3px rgba(79,70,229,.1)}
+  .arch-box b{color:var(--ink)}
+  .arch-box ul{margin:6px 0 0;padding-left:16px;color:var(--ink-3);font-size:12.5px}
+  .arch-link{width:96px;flex:none;text-align:center;font-size:11.5px;color:var(--ink-3);position:relative;padding-bottom:10px}
+  .arch-link i{position:absolute;left:8px;right:8px;bottom:0;height:2px;background:#9aa4b6}
+  .arch-link i.r::after{content:"";position:absolute;right:-2px;top:-4px;border-left:7px solid #9aa4b6;border-top:5px solid transparent;border-bottom:5px solid transparent}
+  .arch-link i.l::before{content:"";position:absolute;left:-2px;top:-4px;border-right:7px solid #9aa4b6;border-top:5px solid transparent;border-bottom:5px solid transparent}
+  .arch-note{margin-top:8px;font-size:12px;color:var(--ink-3)}
+  .arch-down{display:flex;align-items:center;gap:8px;margin-left:calc(83% - 1px);height:34px;font-size:11.5px;color:var(--ink-3)}
+  .arch-down i{width:2px;height:100%;background:#9aa4b6;position:relative}
+  .arch-down i::after{content:"";position:absolute;left:-4px;bottom:-2px;border-top:7px solid #9aa4b6;border-left:5px solid transparent;border-right:5px solid transparent}
+  .arch-ext{margin-left:calc(83% - 90px);width:180px;text-align:center;border:1px solid #9aa4b6;border-radius:10px;padding:8px;background:#fff;font-weight:600;color:var(--ink);font-size:13px}
+  @media (max-width:980px){.wrap{grid-template-columns:1fr}nav.toc{position:static;max-height:none}.grid2{grid-template-columns:1fr}
+    .arch-row{flex-direction:column;align-items:stretch}.arch-link{width:auto;height:30px}.arch-down,.arch-ext{margin-left:0}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<nav class="toc">
+  <div class="t">目录</div>
+  <ol>
+    <li><a href="#s1">定位与范围</a></li>
+    <li><a href="#s2">节点状态机</a></li>
+    <li><a href="#s3">锁定规则</a></li>
+    <li><a href="#s4">调度与流转</a></li>
+    <li><a href="#s5">评审：准出与准入</a></li>
+    <li><a href="#s6">驳回与打回</a></li>
+    <li><a href="#s7">Agent 适配层</a></li>
+    <li><a href="#s8">产物与仓库</a></li>
+    <li><a href="#s9">实时推送</a></li>
+    <li><a href="#s10">待我处理</a></li>
+    <li><a href="#s11">数据模型</a></li>
+    <li><a href="#s12">API</a></li>
+    <li><a href="#s13">权限</a></li>
+    <li><a href="#s14">并发与一致性</a></li>
+    <li><a href="#s15">异常与边界</a></li>
+    <li><a href="#s16">首版取舍</a></li>
+    <li><a href="#s18">多实例部署</a></li>
+    <li><a href="#s17">测试要点</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<header class="hero">
+  <p class="kicker">AI TeamFlow · Detailed Design</p>
+  <h1>流程运行模块（含 Agent 适配层、产物与仓库）</h1>
+  <p class="lede">成员按项目绑定的模板<b>发起流程</b>；节点由<b>人与 AI Agent 协同</b>产出一份产物（Markdown，存 <b>Git</b>），经<b>准出 / 准入</b>评审后通过，依赖都通过的下游节点自动开工。定义可以随时改，进行中的工作在关键时刻<b>锁定</b>定义而不被打乱。本文是 <a href="system-design.html">整体系统设计</a> §8–§12 的展开，与实现（<code>teamflow/src/atlas_teamflow/process</code>、<code>agents</code>）一致。</p>
+  <div class="meta"><span>状态机 + 流程级锁</span><span>一个节点一个 Atlas 会话</span><span>一次提交 = 一个版本</span><span>事件表 = 审计 + 实时</span><span>无超时</span></div>
+</header>
+
+<section id="s1">
+  <h2><span class="num">01</span>定位与范围</h2>
+  <table>
+    <tr><th>在范围内</th><td>发起流程（锁模板版本）；节点状态机与自动流转（顺序、并行开工、汇合）；人机协同（指令排队投递给 Agent、Agent 输出实时显示）；产物版本（Agent 交付或人工提交，均为 Git 提交）；准出 / 准入评审（任一人 / 所有人）；驳回（本节点修改）与打回（到更早节点）；终止；流程事件（审计 + 实时）；待我处理。</td></tr>
+    <tr><th>不在范围内（P2）</th><td>AI 自动准出、评审转交、版本对比（diff 页面）、IM / 邮件通知、度量、Git 远端推送（GitLab / Gitea）、产物白名单 Markdown 渲染（首版按纯文本显示）。</td></tr>
+  </table>
+</section>
+
+<section id="s2">
+  <h2><span class="num">02</span>节点状态机</h2>
+  <div class="flow">待开始 ──依赖全部通过──▶ 人机协同中 ──提交准出──▶ 待准出 ──规则满足──▶ 待准入 ──规则满足──▶ 已通过
+                              ▲   驳回                  │                     │
+                              └────────────────────────┴─────────────────────┘
+已通过 / 协同中 / 评审中 ──（上游被打回）──▶ 已打回 ──上游重新通过──▶ 人机协同中（第 n+1 轮）</div>
+  <table>
+    <tr><th>状态</th><th>编码</th><th>说明</th></tr>
+    <tr><td>待开始</td><td><code>pending</code></td><td>依赖尚未全部通过</td></tr>
+    <tr><td>人机协同中</td><td><code>working</code></td><td>人下指令、Agent 产出；可手工提交产物；有本轮产物后可提交准出</td></tr>
+    <tr><td>待准出 / 待准入</td><td><code>exit_review</code> / <code>admit_review</code></td><td>有一个打开的评审轮次；未配置准入时准出通过即「已通过」</td></tr>
+    <tr><td>已通过</td><td><code>passed</code></td><td>触发调度；全部节点通过 → 流程完成</td></tr>
+    <tr><td>已打回</td><td><code>returned</code></td><td>上游被打回修改；等上游重新通过后按依赖重新开工</td></tr>
+  </table>
+  <p><b>轮次</b>：每次回到人机协同（首次开工、驳回、打回重开）轮次 +1。提交准出要求当前产物属于本轮 —— 驳回后必须有新版本（内容不变可人工重新提交一次）。流程状态：<code>running</code> / <code>completed</code> / <code>terminated</code>。</p>
+</section>
+
+<section id="s3">
+  <h2><span class="num">03</span>锁定规则</h2>
+  <table>
+    <tr><th>锁定什么</th><th>何时</th><th>存在哪</th><th>之后定义变化</th></tr>
+    <tr><td>流程模板版本</td><td>发起时</td><td><code>tf_process.template_version_uuid</code></td><td>模板再发布不影响该流程</td></tr>
+    <tr><td>文件模板版本</td><td>节点<b>首次</b>开工</td><td><code>tf_process_node.file_template_version_uuid</code></td><td>驳回、打回重开都不重新锁定</td></tr>
+    <tr><td>执行 Agent</td><td>节点首次开工</td><td><code>tf_process_node.agent_uuid / atlas_agent_id</code></td><td>项目改分配不影响该节点</td></tr>
+    <tr><td>评审人名单</td><td>每次进入待准出 / 待准入</td><td><code>tf_review_round.reviewers</code></td><td>本轮人数不变；驳回重提后用新名单</td></tr>
+  </table>
+  <p>执行<b>人</b>不锁定：谁能在节点上协同按项目<b>当前</b>分配判断（换人立即生效）。</p>
+</section>
+
+<section id="s4">
+  <h2><span class="num">04</span>调度与流转</h2>
+  <ol>
+    <li>依赖由模板结构推导（<code>structure.derive_deps</code>）：单节点依赖上一步全部出口；并行组每条轨道的首节点依赖上一步全部出口；轨道内顺序依赖。</li>
+    <li><code>_advance</code>：在流程锁内，把所有「待开始 / 已打回」且依赖全部通过的节点开工；全部通过则流程完成。发起时与每个节点通过时调用。</li>
+    <li>开工：首次 → 锁文件模板版本与执行 Agent，排一条<b>开工上下文</b>（§7.2）；重开 → 排一条「上游已更新」指令（带新的上游产物）。</li>
+    <li>没有分配 Agent 或 Agent 不可用：节点照常进入协同中并给出提示，由人直接提交产物。</li>
+  </ol>
+</section>
+
+<section id="s5">
+  <h2><span class="num">05</span>评审：准出与准入</h2>
+  <table>
+    <tr><th>规则</th><th>说明</th></tr>
+    <tr><td>打开轮次</td><td>执行人「提交准出评审」→ 新建轮次：阶段、角色、规则、锁定的名单、针对的产物版本</td></tr>
+    <tr><td>投票</td><td>名单中的人逐个「同意 / 驳回」，每人每轮一票；驳回必须写意见</td></tr>
+    <tr><td>通过</td><td>任一人：第一张同意即通过；所有人：同意数 = 名单人数。准出通过且配置了准入 → 打开准入轮次；否则节点通过</td></tr>
+    <tr><td>驳回</td><td>任一人驳回即驳回本轮（两种规则相同）</td></tr>
+    <tr><td>名单为空</td><td>评审角色没有分配人：轮次照开并提示；分配后由执行人「重新提交评审」刷新名单</td></tr>
+  </table>
+</section>
+
+<section id="s6">
+  <h2><span class="num">06</span>驳回与打回</h2>
+  <table>
+    <tr><th>情形</th><th>效果</th></tr>
+    <tr><td>驳回 · 本节点修改</td><td>轮次 → 驳回；节点回到协同中（轮次 +1）；驳回意见作为指令排队发给 Agent</td></tr>
+    <tr><td>驳回 · 打回到上游节点</td><td>只能选本节点的祖先。目标节点回到协同中（轮次 +1，沿用原锁定，意见发给其 Agent）；目标的所有下游里非「待开始」的节点 → 已打回（取消其打开的轮次）。目标重新通过后，下游按依赖重新开工</td></tr>
+  </table>
+</section>
+
+<section id="s7">
+  <h2><span class="num">07</span>Agent 适配层</h2>
+  <h3>7.1 映射</h3>
+  <table>
+    <tr><th>TeamFlow</th><th>Atlas</th><th>说明</th></tr>
+    <tr><td>节点会话</td><td>thread</td><td>首次投递时创建（标题「[TeamFlow] 流程 · 节点」），驳回 / 打回在同一会话继续</td></tr>
+    <tr><td>一条指令（人 / 系统）</td><td>run</td><td><code>POST /v1/threads/{id}/runs</code>，<b>幂等键 = 消息 uuid</b>，重启后重发不会变成两条</td></tr>
+    <tr><td>Agent 输出</td><td>会话事件流</td><td><code>GET /v1/threads/{id}/events?after_seq=游标</code>；游标（thread_seq）存在节点上，断线 / 重启续传</td></tr>
+    <tr><td>服务身份</td><td>X-User-Id</td><td>固定 UUID（<code>ATLAS_TF_ATLAS_USER_ID</code>），TeamFlow 建的会话都归在它下面</td></tr>
+  </table>
+  <h3>7.2 开工上下文</h3>
+  <pre>你是流程「{流程名}」中节点「{节点名}」的执行者，需要产出「{产物名}」。
+需求：{发起时的需求}
+&lt;file-template name="…" version="n"&gt; 原文 &lt;/file-template&gt;
+&lt;input name="{上游产物名}" version="n"&gt; 内容 &lt;/input&gt;（每个上游一段）
+请先澄清不清楚的地方，再按文件模板产出，并对照模板自查。
+★ 交付产物时，把产物全文放在 &lt;artifact&gt; 与 &lt;/artifact&gt; 之间，每次修改都输出完整全文。</pre>
+  <h3>7.3 投递与跟随（监督器）</h3>
+  <ol>
+    <li>状态迁移只把指令写入 <code>tf_node_message</code>（status = <code>queued</code>），<b>事务提交后</b>唤醒监督器 —— 慢的 Atlas 调用不在流程锁里。</li>
+    <li>同一节点串行：没有运行中的 run 时取最早一条排队指令 → 建会话（如无）→ 建 run → 记 <code>atlas_run_id</code>，并插入一条 <code>streaming</code> 的 Agent 消息。</li>
+    <li>跟随事件流：<code>message.delta</code> 经广播推给页面（不落库）；<code>message.completed</code> 取正文；<code>approval.required</code> 提示去 Atlas 处理；终态（finished / failed / cancelled）→ 在流程锁内落库回复、清 run、存游标。</li>
+    <li>回复里有 <code>&lt;artifact&gt;</code> 且节点仍在协同中 → 提交产物版本（同一轮内容相同不重复提交）。</li>
+    <li>启动时续接：有运行中 run 的节点、有排队指令的节点。</li>
+  </ol>
+  <div class="callout rule"><b class="l">无超时</b>Agent 运行可能持续数十分钟：不设等待上限，断线只续传不判失败；连接错误时节点显示「正在重试」并按间隔重试。</div>
+</section>
+
+<section id="s8">
+  <h2><span class="num">08</span>产物与仓库</h2>
+  <div class="flow">gitee.com/{命名空间}/teamflow-{项目 uuid}      ← 每个项目一个私有仓库（Gitee API 提交）
+  0001-支持手机号登录/
+    01-需求分析/需求文档.md
+    02-架构设计/设计文档.md</div>
+  <table>
+    <tr><th>规则</th><th>说明</th></tr>
+    <tr><td>一次提交 = 一个版本</td><td>Agent 交付或人工提交都 commit（Gitee contents 接口：新文件 POST、已有文件带 blob sha PUT；内容不变也产生 commit）</td></tr>
+    <tr><td>两种后端</td><td><code>gitee</code>（多实例必须，实例本地不存仓库）；<code>local</code>（本机 git CLI，单实例开发 / 测试）。接口相同：commit / read / web_url</td></tr>
+    <tr><td>凭据</td><td>token 只放 <code>.env</code>（<code>ATLAS_TF_GITEE_TOKEN</code>），放在 <code>Authorization</code> 头而不是 URL；写入失败（网络、5xx、并发冲突）重试 3 次</td></tr>
+    <tr><td>提交信息</td><td>标题「流程 · 节点 · 产物 vN」+ 说明 + 结尾 <code>Process / Node / Round / By</code> 四行，便于 <code>git log</code> 追溯</td></tr>
+    <tr><td>写入身份</td><td>只有 TeamFlow（token 所属账号）写仓库，Agent 不持有凭据</td></tr>
+    <tr><td>库内缓存</td><td><code>tf_artifact_version.content</code> 缓存内容：预览、作为下游输入都不读 Git</td></tr>
+    <tr><td>路径</td><td>用 uuid 而不是团队 / 项目名：改名不影响历史；流程、节点名经安全化（去路径分隔符）</td></tr>
+  </table>
+</section>
+
+<section id="s9">
+  <h2><span class="num">09</span>实时推送</h2>
+  <p><code>GET /api/v1/processes/{id}/stream?after=游标</code>（SSE）。先按游标回放 <code>tf_process_event</code>，再等进程内广播：</p>
+  <table>
+    <tr><th>帧</th><th>来源</th><th>前端处理</th></tr>
+    <tr><td><code>event: process</code>（带 id = seq）</td><td>事件表；事务提交后 nudge 订阅方去库里取</td><td>刷新流程与对应节点；断线浏览器带 Last-Event-ID 续传</td></tr>
+    <tr><td><code>event: delta</code></td><td>监督器转发的 Agent 增量</td><td>拼到「正在输出」</td></tr>
+    <tr><td><code>: ping</code></td><td>15 秒心跳</td><td>—</td></tr>
+  </table>
+  <p>鉴权后立刻归还请求级数据库连接，之后每次取事件用短会话（SSE 可以挂很久）。</p>
+</section>
+
+<section id="s10">
+  <h2><span class="num">10</span>待我处理</h2>
+  <p>两类，查询得出（不另建索引表）：① 进行中流程里「协同中」的节点，且我在其执行角色的<b>当前</b>分配中；② 打开的评审轮次，我在锁定名单里（JSONB <code>@&gt;</code>）且还没投票。结果按我仍可见的团队过滤。</p>
+</section>
+
+<section id="s11">
+  <h2><span class="num">11</span>数据模型</h2>
+  <table>
+    <tr><th>表</th><th>要点</th></tr>
+    <tr><td><code>tf_process</code></td><td>项目内编号 <code>no</code>（项目行锁内分配）、标题、需求、锁定的模板版本、状态、发起人、<code>event_seq</code>（事件游标）</td></tr>
+    <tr><td><code>tf_process_node</code></td><td><code>node_id</code>、名称、冗余 <code>exec_role</code>、状态、轮次、锁定的文件模板版本与 Agent、Atlas 会话 / 运行 / 游标、提示、当前产物</td></tr>
+    <tr><td><code>tf_node_message</code></td><td>role = user / agent / system；status = queued / streaming / done / failed；对应 run</td></tr>
+    <tr><td><code>tf_artifact_version</code></td><td>节点内版本号、轮次、路径、commit、内容缓存、来源（agent / user）、提交人</td></tr>
+    <tr><td><code>tf_review_round</code></td><td>阶段、轮次、角色、规则、锁定名单（JSON）、针对的产物、状态（open / passed / rejected / cancelled）</td></tr>
+    <tr><td><code>tf_vote</code></td><td>每人每轮唯一；决定、意见、打回目标</td></tr>
+    <tr><td><code>tf_process_event</code></td><td>(流程, seq) 唯一；类型、节点、操作人、数据 —— 只追加</td></tr>
+  </table>
+  <p>主键约定同其它模块：自增 <code>id</code> + <code>uuid</code> 逻辑主键，关联一律用 uuid。</p>
+</section>
+
+<section id="s12">
+  <h2><span class="num">12</span>API</h2>
+  <table>
+    <tr><th>接口</th><th>说明</th></tr>
+    <tr><td><code>GET /projects/{id}/processes?filter=all|todo|running|done&amp;q=</code></td><td>项目首页列表：进度、卡在哪 / 等谁、提示</td></tr>
+    <tr><td><code>POST /projects/{id}/processes</code></td><td>发起：title、requirement</td></tr>
+    <tr><td><code>GET /processes/{id}</code></td><td>详情：定义、依赖、各节点状态（含我是否执行人 / 评审人）、可终止</td></tr>
+    <tr><td><code>GET /processes/{id}/nodes/{node}</code></td><td>节点：消息、产物版本、评审轮次与投票、输入、可执行的动作</td></tr>
+    <tr><td><code>GET …/artifacts/{version}</code></td><td>某版本内容</td></tr>
+    <tr><td><code>POST …/messages</code> · <code>…/artifacts</code> · <code>…/submit-review</code> · <code>…/votes</code></td><td>下指令 · 手工提交产物 · 提交（或刷新）评审 · 投票（decision、comment、return_to）</td></tr>
+    <tr><td><code>POST /processes/{id}/terminate</code></td><td>终止</td></tr>
+    <tr><td><code>GET /processes/{id}/stream</code></td><td>SSE（§9）</td></tr>
+    <tr><td><code>GET /todo</code></td><td>待我处理（跨项目）</td></tr>
+  </table>
+</section>
+
+<section id="s13">
+  <h2><span class="num">13</span>权限</h2>
+  <table>
+    <tr><th>动作</th><th>操作码</th><th>团队级别</th><th>流程角色</th></tr>
+    <tr><td>查看流程、节点、产物</td><td>—</td><td>读写（或 <code>team:manage_all</code>）</td><td>—</td></tr>
+    <tr><td>发起</td><td><code>process:start</code></td><td>读写</td><td>—（项目须未归档）</td></tr>
+    <tr><td>下指令、提交产物、提交评审</td><td><code>process:handle</code></td><td>读写</td><td>在执行角色的当前分配中</td></tr>
+    <tr><td>投票</td><td><code>process:review</code></td><td>读写</td><td>在本轮锁定名单中</td></tr>
+    <tr><td>终止</td><td><code>process:terminate</code></td><td>发起人；或 Owner 终止任一</td><td>—</td></tr>
+  </table>
+</section>
+
+<section id="s14">
+  <h2><span class="num">14</span>并发与一致性</h2>
+  <ul>
+    <li>所有改变流程状态的操作先 <code>SELECT … FOR UPDATE</code> 锁流程行；监督器落库 Agent 回复也拿同一把锁 —— 同一流程的推进串行。</li>
+    <li>投票唯一约束 (轮次, 人)；重复投票返回 <code>ALREADY_VOTED</code>。</li>
+    <li>事件 seq 在流程锁内递增；通知订阅方在事务<b>提交后</b>（SQLAlchemy after_commit），避免读到未提交数据。</li>
+    <li>Atlas run 用消息 uuid 做幂等键：建 run 后、记录 run id 前崩溃，重启重发返回同一个 run。</li>
+  </ul>
+</section>
+
+<section id="s15">
+  <h2><span class="num">15</span>异常与边界</h2>
+  <table>
+    <tr><th>情形</th><th>处理</th></tr>
+    <tr><td>执行 Agent 未分配 / 不可用</td><td>节点照常开工并提示；人可直接提交产物；不能下指令（<code>NO_AGENT</code>）</td></tr>
+    <tr><td>Atlas 运行失败 / 取消</td><td>Agent 消息标失败，节点提示；人再发一条指令即重试</td></tr>
+    <tr><td>Atlas 暂不可用、事件流断开</td><td>提示「正在重试」，按间隔重试；续传不判失败</td></tr>
+    <tr><td>Agent 在 Atlas 等待操作确认</td><td>节点提示去 Atlas 会话处理（TeamFlow 不代批）</td></tr>
+    <tr><td>流程终止时 Agent 还在跑</td><td>run 结束后回复照常落库，但不再提交产物、不再投递排队指令</td></tr>
+    <tr><td>评审期间 Agent 又交付了产物</td><td>只在协同中提交产物；评审中的回复只记消息</td></tr>
+  </table>
+</section>
+
+<section id="s16">
+  <h2><span class="num">16</span>首版取舍</h2>
+  <table>
+    <tr><th>系统设计</th><th>首版</th><th>原因 / 以后</th></tr>
+    <tr><td>Redis 任务队列</td><td>不用队列：指令在数据库排队；唤醒经 Redis 广播；节点租约锁 + 定期扫描保证只处理一次、崩溃可接管</td><td>数据库是排队的唯一真相，少一层状态</td></tr>
+    <tr><td>GitLab / Gitea</td><td>Gitee API</td><td>按要求使用 gitee.com</td></tr>
+    <tr><td>待办索引</td><td>按条件查询</td><td>数据量下足够；需要通知时再落索引</td></tr>
+    <tr><td>产物白名单 Markdown 渲染</td><td>纯文本显示</td><td>不执行任何内容，安全优先；P2 换渲染库</td></tr>
+    <tr><td>移除成员的阻塞项（锁定名单中未投票等）</td><td>未检查</td><td>后续补到团队成员移除流程</td></tr>
+  </table>
+</section>
+
+<section id="s17">
+  <h2><span class="num">17</span>测试要点</h2>
+  <ul>
+    <li>端到端：发起 → Agent 交付（Git 有提交）→ 下指令修订 → 准出驳回（意见发给 Agent，新轮次）→ 准出通过 → 准入「所有人同意」→ 并行开工 → 汇合（两个上游作为输入）→ 打回到上游（下游已打回、旁路节点不受影响）→ 上游重新通过 → 下游重开 → 完成。</li>
+    <li>权限：非执行人不能下指令、非名单不能投票、重复投票、非成员看不到、终止只限发起人 / Owner。</li>
+    <li>异常：无 Agent 时人工提交；Agent 失败提示与恢复；流程终止后不能投票。</li>
+    <li>并发：重复打开、同时投票由流程锁串行。</li>
+    <li>真实环境：对 Atlas 实测 Agent 按 <code>&lt;artifact&gt;</code> 交付；重启后续接排队指令。</li>
+  </ul>
+</section>
+
+<section id="s18">
+  <h2><span class="num">18</span>多实例部署</h2>
+  <table>
+    <tr><th>进程</th><th>说明</th></tr>
+    <tr><td>API（可多个）</td><td><code>python -m atlas_teamflow serve</code>；<code>ATLAS_TF_EMBEDDED_WORKER</code> 决定进程内是否也跑监督器（开着也安全）</td></tr>
+    <tr><td>Worker（可多个）</td><td><code>python -m atlas_teamflow worker</code>：只跑监督器，不接 HTTP</td></tr>
+  </table>
+  <table>
+    <tr><th>问题</th><th>机制</th></tr>
+    <tr><td>同一节点被两个实例同时处理</td><td>节点租约锁：<code>SET {前缀}node-lock:{节点} token NX PX 30000</code>；持有者每 10 秒续租（Lua 校验 token）；续不上（已被别人拿走）立即停止本实例的处理</td></tr>
+    <tr><td>唤醒只到达一个实例</td><td>唤醒经 Redis 频道广播给全部实例，谁拿到租约谁干活；另有定期扫描（默认 15 秒）补漏</td></tr>
+    <tr><td>实例崩溃</td><td>不再续租 → 租约 30 秒后过期 → 其他实例扫描时接手，从节点上存的游标续传 Atlas 事件流；Atlas run 带幂等键，不会重复下指令</td></tr>
+    <tr><td>页面连在 A，Agent 在 B 上跑</td><td>事件通知与逐段输出都经 Redis 发布 / 订阅，每个 API 实例把收到的推给自己的 SSE 连接</td></tr>
+    <tr><td>团队级别缓存</td><td>本实例立即失效，并广播给其他实例</td></tr>
+  </table>
+  <div class="callout rule"><b class="l">租约不是超时</b>租约只用来判断「处理者还活着」：持有者活着就一直续租，Agent 运行多久都可以。</div>
+</section>
+
+</main>
+</div>
+</body>
+</html>
