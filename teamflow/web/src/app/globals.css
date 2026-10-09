@@ -1,0 +1,27 @@
+html, body { margin: 0; padding: 0; background: #f6f7f9; }
+* { box-sizing: border-box; }
+.tf-mono { font-family: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; }
+.tf-muted { color: #64748b; }
+.tf-page-head { display: flex; align-items: flex-end; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
+.tf-page-head h1 { font-size: 21px; margin: 0; }
+.tf-page-head .sub { color: #64748b; font-size: 13px; margin-top: 4px; }
+.tf-grow { flex: 1; }
+.tf-code { background: #0f172a; color: #e2e8f0; border-radius: 8px; padding: 10px 12px; font-family: "SF Mono", Menlo, monospace; font-size: 12px; line-height: 1.6; overflow: auto; white-space: pre; margin: 0; }
+.tf-pv-side { background: #111827; border-radius: 10px; padding: 10px 8px; color: #aeb8cb; font-size: 13px; min-height: 120px; }
+.tf-pv-brand { color: #fff; font-weight: 650; padding: 4px 10px 10px; border-bottom: 1px solid rgba(255,255,255,.08); margin-bottom: 6px; }
+.tf-pv-dir { color: #8592a8; font-size: 11.5px; padding: 8px 10px 4px; }
+.tf-pv-item { padding: 7px 10px; border-radius: 8px; }
+.tf-card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }
+.tf-md { background: #fff; border: 1px solid #e6e8ee; border-radius: 10px; padding: 16px 18px; white-space: pre-wrap; font-size: 13.5px; line-height: 1.75; font-family: "SF Mono", Menlo, ui-monospace, monospace; max-height: 560px; overflow: auto; margin: 0; }
+.tf-flow { display: flex; align-items: stretch; gap: 10px; overflow-x: auto; padding: 6px 2px 12px; }
+.tf-arrow { align-self: center; color: #94a3b8; font-size: 18px; flex: none; }
+.tf-node { width: 176px; flex: none; background: #fff; border: 1.5px solid #e6e8ee; border-radius: 12px; padding: 10px 12px; cursor: pointer; transition: border-color .15s, box-shadow .15s; }
+.tf-node:hover { border-color: #a5b4fc; }
+.tf-node.active { border-color: #4f46e5; box-shadow: 0 0 0 3px #eef0ff; }
+.tf-node.bad { border-color: #fca5a5; }
+.tf-node .t { font-weight: 650; font-size: 13.5px; margin-bottom: 4px; }
+.tf-node .m { color: #64748b; font-size: 12px; line-height: 1.6; }
+.tf-par { border: 1.5px dashed #c7d2fe; border-radius: 14px; padding: 8px; display: flex; flex-direction: column; gap: 8px; background: #fafaff; flex: none; }
+.tf-track { display: flex; gap: 8px; align-items: center; }
+.tf-par-label { font-size: 11.5px; color: #6366f1; font-weight: 600; padding: 0 4px; }
+.tf-row-bad td { background: #fff5f5 !important; }

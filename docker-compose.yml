@@ -78,6 +78,34 @@ services:
         psql "postgresql://atlas:atlas@postgres:5432/atlas" -c "CREATE DATABASE atlas_config"
     restart: "no"
 
+  # 用户中心（atlas-usercenter）的库：同一实例上的独立 database，与 config-init-db 同款幂等写法。
+  usercenter-init-db:
+    image: postgres:16-alpine
+    container_name: atlas-usercenter-initdb
+    depends_on:
+      postgres: {condition: service_healthy}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        psql "postgresql://atlas:atlas@postgres:5432/atlas"
+        -tc "SELECT 1 FROM pg_database WHERE datname='atlas_usercenter'" | grep -q 1 ||
+        psql "postgresql://atlas:atlas@postgres:5432/atlas" -c "CREATE DATABASE atlas_usercenter"
+    restart: "no"
+
+  # AI TeamFlow（atlas-teamflow）的库。
+  teamflow-init-db:
+    image: postgres:16-alpine
+    container_name: atlas-teamflow-initdb
+    depends_on:
+      postgres: {condition: service_healthy}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        psql "postgresql://atlas:atlas@postgres:5432/atlas"
+        -tc "SELECT 1 FROM pg_database WHERE datname='atlas_teamflow'" | grep -q 1 ||
+        psql "postgresql://atlas:atlas@postgres:5432/atlas" -c "CREATE DATABASE atlas_teamflow"
+    restart: "no"
+
   # 记忆的向量库（记忆设计 §03）。Mem0 的默认后端，qdrant-client 本来
   # 就是 mem0ai 的必要依赖，不必再引第三方。
   #

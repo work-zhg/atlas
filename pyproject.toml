@@ -3,14 +3,14 @@ name = "atlas"
 version = "0.1.0"
 description = "Atlas — agent platform (workspace root)"
 requires-python = ">=3.13"
-dependencies = ["atlas-acp", "atlas-bridge", "atlas-cluster", "atlas-config", "atlas-engine", "atlas-host", "atlas-jsonrpc", "atlas-server"]
+dependencies = ["atlas-acp", "atlas-bridge", "atlas-cluster", "atlas-config", "atlas-engine", "atlas-host", "atlas-jsonrpc", "atlas-server", "atlas-teamflow", "atlas-usercenter"]
 
 # Workspace root is a container, not an installable package.
 [tool.uv]
 package = false
 
 [tool.uv.workspace]
-members = ["acp", "bridge", "cluster", "config", "engine", "host", "jsonrpc", "server"]
+members = ["acp", "bridge", "cluster", "config", "engine", "host", "jsonrpc", "server", "teamflow", "usercenter"]
 
 [tool.uv.sources]
 atlas-acp = { workspace = true }
@@ -21,6 +21,8 @@ atlas-engine = { workspace = true }
 atlas-host = { workspace = true }
 atlas-jsonrpc = { workspace = true }
 atlas-server = { workspace = true }
+atlas-teamflow = { workspace = true }
+atlas-usercenter = { workspace = true }
 
 [dependency-groups]
 dev = [
@@ -39,7 +41,7 @@ dev = [
 # ★ 依赖单向的硬约束（文档 §2.1）。engine 一旦 import server/db/web 就 CI 红。
 # ---------------------------------------------------------------------------
 [tool.importlinter]
-root_packages = ["atlas_acp", "atlas_bridge", "atlas_cluster", "atlas_config", "atlas_engine", "atlas_host", "atlas_jsonrpc", "atlas_server"]
+root_packages = ["atlas_acp", "atlas_bridge", "atlas_cluster", "atlas_config", "atlas_engine", "atlas_host", "atlas_jsonrpc", "atlas_server", "atlas_teamflow", "atlas_usercenter"]
 # forbidden_modules 里有第三方包（fastapi/sqlalchemy/...），必须打开这个开关
 include_external_packages = true
 
@@ -196,6 +198,72 @@ forbidden_modules = [
   "langgraph",
 ]
 
+# 用户中心是独立系统（prototype/usercenter/docs/system-design.html §05）：它不认识 atlas 的
+# 任何包，atlas 的任何包也不认识它 —— Atlas 将来只通过 /open/v1 开放接口使用它。
+[[tool.importlinter.contracts]]
+name = "atlas_usercenter 不认识 atlas 其它包"
+type = "forbidden"
+source_modules = ["atlas_usercenter"]
+forbidden_modules = [
+  "atlas_acp",
+  "atlas_bridge",
+  "atlas_cluster",
+  "atlas_config",
+  "atlas_engine",
+  "atlas_host",
+  "atlas_jsonrpc",
+  "atlas_server",
+]
+
+[[tool.importlinter.contracts]]
+name = "atlas 其它包不认识 atlas_usercenter"
+type = "forbidden"
+source_modules = [
+  "atlas_acp",
+  "atlas_bridge",
+  "atlas_cluster",
+  "atlas_config",
+  "atlas_engine",
+  "atlas_host",
+  "atlas_jsonrpc",
+  "atlas_server",
+]
+forbidden_modules = ["atlas_usercenter"]
+
+# AI TeamFlow 也是独立系统（prototype/teamflow/docs/system-design.html）：人员与权限只走用户中心
+# 开放接口，Agent 只走 Atlas 的 HTTP 接口 —— 与 atlas 其它包（含用户中心）互不 import。
+[[tool.importlinter.contracts]]
+name = "atlas_teamflow 不认识 atlas 其它包"
+type = "forbidden"
+source_modules = ["atlas_teamflow"]
+forbidden_modules = [
+  "atlas_acp",
+  "atlas_bridge",
+  "atlas_cluster",
+  "atlas_config",
+  "atlas_engine",
+  "atlas_host",
+  "atlas_jsonrpc",
+  "atlas_server",
+  "atlas_usercenter",
+]
+
+[[tool.importlinter.contracts]]
+name = "atlas 其它包不认识 atlas_teamflow"
+type = "forbidden"
+source_modules = [
+  "atlas_acp",
+  "atlas_bridge",
+  "atlas_cluster",
+  "atlas_config",
+  "atlas_engine",
+  "atlas_host",
+  "atlas_jsonrpc",
+  "atlas_server",
+  "atlas_usercenter",
+]
+forbidden_modules = ["atlas_teamflow"]
+
 # server 里的纯计算层：装配（build）、执行循环（runner）、词汇（spec/events/
 # translator/tool_registry）不许碰基础设施 —— 「run 一轮」必须继续可以用
 # 假模型脱离 DB/Redis 测试。IO 归 assembly / services / repositories。
@@ -218,6 +286,10 @@ target-version = "py313"
 extend-exclude = [
   "server/migrations/versions",
   "config/src/atlas_config/migrations/versions",
+  "usercenter/src/atlas_usercenter/migrations/versions",
+  "usercenter/web",
+  "teamflow/src/atlas_teamflow/migrations/versions",
+  "teamflow/web",
   "docs",          # 别去动设计文档里的示例代码块
   "prototype",
   "design-system",
@@ -234,6 +306,10 @@ ignore = ["RUF001", "RUF002", "RUF003"]
 
 # kernel/ 纳入检查以捕获真问题（F/B/SIM 等），
 # 但不为继承来的风格大改。裁剪推进时可逐步收紧这里。
+# FastAPI 的依赖写在参数默认值里是框架约定；require(...) 返回的就是一个 Depends
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "atlas_usercenter.api.deps.require", "atlas_teamflow.api.deps.require", "fastapi.File", "fastapi.Form"]
+
 [tool.ruff.lint.per-file-ignores]
 "engine/src/atlas_engine/kernel/**" = ["E501", "RUF100", "UP", "B", "SIM", "RUF012"]
 
@@ -246,7 +322,7 @@ exclude = ["engine/src/atlas_engine/kernel/**"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["tests", "config/tests"]
+testpaths = ["tests", "config/tests", "usercenter/tests", "teamflow/tests"]
 addopts = "-ra"
 
 [tool.mypy]

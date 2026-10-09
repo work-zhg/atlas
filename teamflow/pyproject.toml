@@ -1,0 +1,28 @@
+[project]
+name = "atlas-teamflow"
+version = "0.1.0"
+description = "AI TeamFlow —— 让 AI Agent 作为团队成员参与研发流程。"
+requires-python = ">=3.13"
+
+# ★ 独立系统（prototype/teamflow/docs/system-design.html）：自己的库与进程。
+#   人员、角色、操作码、菜单、团队数据权限都来自用户中心开放接口；Agent 来自 Atlas 的 HTTP 接口。
+#   与 atlas 其它包（含 atlas_usercenter）互不 import —— 由根 pyproject 的 import-linter 守着。
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.32",
+  "sqlalchemy[asyncio]>=2.0.36",
+  "asyncpg>=0.30",
+  "alembic>=1.14",
+  "pydantic-settings>=2.6",
+  "httpx>=0.27",
+  "python-multipart>=0.0.9",
+  # 多实例协调（广播、唤醒、节点租约锁）；单实例不配 ATLAS_TF_REDIS_URL 时不连接
+  "redis>=5",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/atlas_teamflow"]

@@ -1,4 +1,6 @@
 .PHONY: up down sync lint types arch test migrate serve check config-migrate config-serve \
+        uc-migrate uc-serve uc-bootstrap uc-web-install uc-web-dev uc-dev \
+        tf-migrate tf-serve tf-worker tf-register-uc tf-web-install tf-web-dev tf-dev \
         web-install web-dev web-build web-check web-gen dev
 
 # ---------- 后端 ----------
@@ -14,6 +16,27 @@ serve:   ; uv run uvicorn atlas_server.main:app --reload --port 8000
 # 配置服务（技能 / MCP 注册表）。库是同一 PG 上的 atlas_config（make up 会建）。
 config-migrate: ; uv run python -m atlas_config migrate
 config-serve:   ; ATLAS_CONFIG_ALLOW_SELF_REVIEW=true uv run python -m atlas_config serve
+# 用户中心（独立系统，prototype/usercenter/docs/）。库是同一 PG 上的 atlas_usercenter（make up 会建）。
+#   首次：make uc-migrate && make uc-bootstrap ACCOUNT=admin NAME=管理员 EMAIL=admin@example.com COMPANY=星海科技
+uc-migrate:   ; uv run python -m atlas_usercenter migrate
+uc-serve:     ; uv run uvicorn atlas_usercenter.api.app:create_app --factory --reload --port 8030
+uc-bootstrap: ; uv run python -m atlas_usercenter bootstrap --company "$(COMPANY)" --account "$(ACCOUNT)" --name "$(NAME)" --email "$(EMAIL)"
+uc-web-install: ; cd usercenter/web && pnpm install
+uc-web-dev:     ; cd usercenter/web && pnpm dev
+uc-dev:
+	@echo "用户中心后端 → http://127.0.0.1:8030   前端 → http://127.0.0.1:3100"
+	@$(MAKE) -j2 uc-serve uc-web-dev
+# AI TeamFlow（独立系统，prototype/teamflow/docs/）。库是同一 PG 上的 atlas_teamflow（make up 会建）。
+#   首次：make tf-migrate && make tf-register-uc ACCOUNT=admin（把输出的 App Key / Secret 写进 .env）
+tf-migrate:     ; uv run python -m atlas_teamflow migrate
+tf-serve:       ; uv run uvicorn atlas_teamflow.api.app:create_app --factory --reload --port 8040
+tf-worker:      ; uv run python -m atlas_teamflow worker   # 多实例：独立的 Agent 监督器，可起多个
+tf-register-uc: ; uv run python -m atlas_teamflow register-uc --account "$(ACCOUNT)"
+tf-web-install: ; cd teamflow/web && pnpm install
+tf-web-dev:     ; cd teamflow/web && pnpm dev
+tf-dev:
+	@echo "TeamFlow 后端 → http://127.0.0.1:8040   前端 → http://127.0.0.1:3200"
+	@$(MAKE) -j2 tf-serve tf-web-dev
 check: lint arch test
 
 # ---------- 前端 ----------
