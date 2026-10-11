@@ -1,11 +1,12 @@
 "use client";
 
 import { useQueryClient } from "@tanstack/react-query";
-import { Avatar, Button, Spin } from "antd";
+import { Avatar, Button, Space, Spin } from "antd";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, type ReactNode } from "react";
 
+import { BackendDown, isAuthRedirect } from "@/components/BackendDown";
 import { api, ApiError } from "@/lib/api";
 import { flatMenus, landingPath, useMe } from "@/lib/session";
 import type { MenuNode } from "@/lib/types";
@@ -27,16 +28,20 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const qc = useQueryClient();
-  const { data: me, error } = useMe();
+  const { data: me, error, refetch, isFetching } = useMe();
   const leaves = me ? flatMenus(me.menus) : [];
   const active = menuOf(pathname, leaves);
-  const allowed = !!active && leaves.some((m) => m.path === active);
+  /** 个人页（绑定 Gitee 账号）不是菜单：登录即可访问 */
+  const personal = pathname === "/account" || pathname.startsWith("/account/");
+  const allowed = personal || (!!active && leaves.some((m) => m.path === active));
 
   useEffect(() => {
     if (error instanceof ApiError && error.status === 401) router.replace("/login");
     else if (me && !allowed) router.replace(landingPath(me));
   }, [me, error, allowed, router]);
 
+  if (!me && error && !isAuthRedirect(error))
+    return <BackendDown error={error} onRetry={() => void refetch()} retrying={isFetching} />;
   if (!me || !allowed) return <Spin style={{ display: "block", marginTop: 120 }} />;
 
   async function logout() {
@@ -109,9 +114,14 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
               <div style={{ color: "#8592a8", fontSize: 11 }}>{me.user.account}</div>
             </div>
           </div>
-          <Button type="text" size="small" onClick={logout} style={{ color: "#8592a8", marginTop: 4 }}>
-            退出登录
-          </Button>
+          <Space size={0} style={{ marginTop: 4 }}>
+            <Link href="/account" style={{ color: personal ? "#fff" : "#8592a8", fontSize: 12.5, padding: "0 8px" }}>
+              Gitee 账号
+            </Link>
+            <Button type="text" size="small" onClick={logout} style={{ color: "#8592a8" }}>
+              退出登录
+            </Button>
+          </Space>
         </div>
       </aside>
       <main style={{ flex: 1, minWidth: 0, padding: "24px 28px 60px" }}>{children}</main>

@@ -144,11 +144,9 @@ function StartProcess({ project, open, onClose }: { project: ProjectDetail; open
         <Form.Item name="title" label="流程名称" rules={[{ required: true, message: "请填写流程名称" }]}>
           <Input maxLength={100} placeholder="如：支持手机号登录" />
         </Form.Item>
-        <Form.Item name="requirement" label="需求" rules={[{ required: true, message: "请用一两句话描述需求" }]}>
-          <Input.TextArea maxLength={5000} rows={4} placeholder="一句话需求：会作为每个节点 Agent 的开工上下文" />
-        </Form.Item>
         <div className="tf-muted" style={{ fontSize: 12.5 }}>
-          使用模板 {project.template_name} {project.template_version}（发起时锁定版本）
+          使用模板 {project.template_name} {project.template_version}（发起时锁定版本）。
+          发起后，在第一个节点的对话里告诉 Agent 要做什么。
         </div>
       </Form>
     </Modal>

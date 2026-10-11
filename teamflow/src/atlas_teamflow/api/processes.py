@@ -24,7 +24,7 @@ from ..db.models import (
     TfUser,
 )
 from ..db.session import get_sessionmaker
-from ..errors import NotFound
+from ..errors import Invalid, NotFound
 from ..identity import LEVEL_RANK
 from ..process.bus import coordinator
 from ..process.service import ProcessService
@@ -36,7 +36,7 @@ router = APIRouter(prefix="/api/v1", tags=["processes"])
 
 
 def _svc(request: Request, teams: TeamsDep) -> ProcessService:
-    return ProcessService(teams, request.app.state.git)
+    return ProcessService(teams, request.app.state.repo)
 
 
 ProcessesDep = Annotated[ProcessService, Depends(_svc)]
@@ -44,16 +44,10 @@ ProcessesDep = Annotated[ProcessService, Depends(_svc)]
 
 class StartBody(BaseModel):
     title: str
-    requirement: str
 
 
 class MessageBody(BaseModel):
     text: str
-
-
-class ArtifactBody(BaseModel):
-    content: str
-    note: str | None = None
 
 
 class VoteBody(BaseModel):
@@ -70,7 +64,8 @@ STAGE = {
     "pending": "待开始",
     "working": "人机协同中",
     "exit_review": "待准出",
-    "admit_review": "待准入",
+    "exited": "待下游准入",
+    "admit_review": "准入评审中",
     "passed": "已通过",
     "returned": "已打回",
 }
@@ -92,6 +87,10 @@ async def _summary(svc: ProcessService, proc: Process) -> dict[str, Any]:
     for n in active:
         if n.status == "working":
             waiting.append({"node": n.name, "stage": STAGE[n.status], "who": n.exec_role})
+        elif n.status == "admit_review":
+            # 准入挂在下游节点上：「等谁」是下游的准入评审角色
+            rr = await svc.open_round(n)
+            waiting.append({"node": n.name, "stage": STAGE[n.status], "who": rr.role if rr else ""})
         else:
             rr = await svc.open_round(n)
             waiting.append({"node": n.name, "stage": STAGE[n.status], "who": rr.role if rr else ""})
@@ -127,7 +126,7 @@ async def list_processes(
 
 @router.post("/projects/{pid}/processes", status_code=201)
 async def start_process(pid: UUID, body: StartBody, svc: ProcessesDep) -> dict[str, Any]:
-    proc = await svc.start(pid, body.title, body.requirement)
+    proc = await svc.start(pid, body.title)
     return await _summary(svc, proc)
 
 
@@ -170,7 +169,6 @@ async def detail(proc_id: UUID, svc: ProcessesDep) -> dict[str, Any]:
     starter = await svc.session.scalar(select(TfUser.name).where(TfUser.uuid == proc.started_by))
     return {
         **(await _summary(svc, proc)),
-        "requirement": proc.requirement,
         "team_id": str(proc.team_uuid),
         "team_name": await svc.session.scalar(select(Team.name).where(Team.uuid == proc.team_uuid)),
         "project_id": str(proc.project_uuid),
@@ -248,6 +246,11 @@ async def node_detail(proc_id: UUID, node_id: str, svc: ProcessesDep) -> dict[st
         "round": n.round,
         "notice": n.notice,
         "agent_running": n.atlas_run_id is not None,
+        # 对话区（@atlas/chat-ui）经 …/nodes/{node}/atlas 代理读写这个 Atlas 会话
+        "atlas_thread_id": n.atlas_thread_id,
+        # 产物由 Agent 提交到这里（产物仓库与 Agent 提交）
+        "artifact_path": n.artifact_path,
+        "repository": await _repo_view(svc, proc),
         "file_template": ft,
         "inputs": inputs,
         "upstream": sorted(_ancestors_of(deps, node_id)),
@@ -271,9 +274,12 @@ async def node_detail(proc_id: UUID, node_id: str, svc: ProcessesDep) -> dict[st
                 "path": a.path,
                 "source": a.source,
                 "by": names.get(str(a.created_by)) if a.created_by else None,
+                "author": a.author_name,
+                "author_login": a.author_login,
                 "note": a.note,
                 "current": a.uuid == n.current_artifact_uuid,
-                "url": svc.git.web_url(proc.team_uuid, proc.project_uuid, a.commit_sha, a.path),
+                "url": a.web_url,
+                "committed_at": iso(a.committed_at),
                 "created_at": iso(a.created_at),
             }
             for a in arts
@@ -327,6 +333,16 @@ async def node_detail(proc_id: UUID, node_id: str, svc: ProcessesDep) -> dict[st
     }
 
 
+async def _repo_view(svc: ProcessService, proc: Process) -> dict[str, Any] | None:
+    name = await svc.session.scalar(
+        select(Project.repo_name).where(Project.uuid == proc.project_uuid)
+    )
+    if not name:
+        return None
+    info = svc.repo.info(name)
+    return {"full_name": info.full_name, "web_url": info.web_url, "clone_url": info.clone_url}
+
+
 def _ancestors_of(deps: dict[str, list[str]], nid: str) -> set[str]:
     out: set[str] = set()
     stack = list(deps.get(nid, []))
@@ -348,20 +364,53 @@ async def artifact(proc_id: UUID, node_id: str, version: int, svc: ProcessesDep)
     return {"version": a.version_no, "commit": a.commit_sha, "path": a.path, "content": a.content}
 
 
+async def _process_repo(svc: ProcessService, proc_id: UUID, ref: str) -> tuple[Any, str, str, str]:
+    """→ (流程, 仓库名, 流程目录, commit sha)。ref 可以是分支名或 commit。"""
+    proc = await svc.get(proc_id)
+    repo = (await svc._repo_info(proc)).full_name.split("/")[-1]
+    sha = await svc.repo.resolve(repo, ref)
+    if sha is None:
+        raise NotFound("REF_NOT_FOUND", f"仓库里没有 {ref}（产物可能还没有提交）")
+    return proc, repo, svc.process_dir(proc), sha
+
+
+@router.get("/processes/{proc_id}/files")
+async def files(
+    proc_id: UUID, svc: ProcessesDep, ref: Annotated[str, Query(max_length=100)] = "master"
+) -> dict[str, Any]:
+    """目录预览：本流程目录下的文件（只开放本流程目录）。"""
+    _, repo, root, sha = await _process_repo(svc, proc_id, ref)
+    items, truncated = await svc.repo.tree(repo, sha, root)
+    return {
+        "ref": sha,
+        "root": root,
+        "files": [{"path": f.path, "size": f.size} for f in items],
+        "truncated": truncated,
+    }
+
+
+@router.get("/processes/{proc_id}/files/content")
+async def file_content(
+    proc_id: UUID,
+    svc: ProcessesDep,
+    path: Annotated[str, Query(max_length=300)],
+    ref: Annotated[str, Query(max_length=100)] = "master",
+) -> dict[str, Any]:
+    _, repo, root, sha = await _process_repo(svc, proc_id, ref)
+    if not path.startswith(root) or ".." in path.split("/"):
+        raise Invalid("PATH_OUT_OF_PROCESS", "只能查看本流程目录下的文件")
+    content = await svc.repo.read_file(repo, path, sha)
+    if content is None:
+        raise NotFound("FILE_NOT_FOUND", "文件不存在")
+    return {"path": path, "ref": sha, "content": content}
+
+
 @router.post("/processes/{proc_id}/nodes/{node_id}/messages", status_code=201)
 async def send_message(
     proc_id: UUID, node_id: str, body: MessageBody, svc: ProcessesDep
 ) -> dict[str, Any]:
     m = await svc.send_message(proc_id, node_id, body.text)
     return {"id": str(m.uuid), "status": m.status}
-
-
-@router.post("/processes/{proc_id}/nodes/{node_id}/artifacts", status_code=201)
-async def submit_artifact(
-    proc_id: UUID, node_id: str, body: ArtifactBody, svc: ProcessesDep
-) -> dict[str, Any]:
-    a = await svc.submit_artifact(proc_id, node_id, body.content, body.note)
-    return {"version": a.version_no, "commit": a.commit_sha}
 
 
 @router.post("/processes/{proc_id}/nodes/{node_id}/submit-review")

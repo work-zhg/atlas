@@ -6,6 +6,7 @@ import Link from "next/link";
 import { use, useState } from "react";
 
 import { EmptyBox, PageHead, UserPicker } from "@/components/common";
+import { RepositoryCard } from "@/components/RepositoryCard";
 import { api, errorText } from "@/lib/api";
 import { RULE } from "@/lib/format";
 import type { FlowTemplate, ProjectDetail, RoleRow, TeamDetail } from "@/lib/types";
@@ -127,6 +128,7 @@ export default function ProjectSettings({ params }: { params: Promise<{ id: stri
           </div>
           <RoleTable project={p} team={team} editable={editable} />
         </Card>
+        <RepositoryCard project={p} editable={editable} />
         {p.can.archive && (
           <Card title="危险操作" size="small" styles={{ header: { color: "#dc2626" } }}>
             {p.status === "active" ? (

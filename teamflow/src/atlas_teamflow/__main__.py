@@ -49,7 +49,7 @@ def worker() -> None:
     from .atlas import AtlasClient
     from .db.session import get_engine, get_sessionmaker
     from .process.bus import make_coordinator, set_coordinator
-    from .process.git_store import make_git_store
+    from .process.repo_host import make_repo_host
 
     settings = get_settings()
     check_deployment(settings)
@@ -64,12 +64,13 @@ def worker() -> None:
         coord = make_coordinator(settings.redis_url, settings.worker_lease_seconds)
         set_coordinator(coord)
         atlas = AtlasClient(settings)
-        git = make_git_store(settings)
-        await git.prepare()
+        host = make_repo_host(settings)
+        await host.prepare()
         sup = AgentSupervisor(
             get_sessionmaker,
             atlas,
-            git,
+            host,
+            git_profile=settings.atlas_git_profile,
             lease_seconds=settings.worker_lease_seconds,
             sweep_seconds=settings.worker_sweep_seconds,
         )

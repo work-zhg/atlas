@@ -150,7 +150,6 @@ def validate(
     names: dict[str, str] = {}
     outputs: dict[str, str] = {}
     deps = derive_deps(flow) if not errors else {}
-    has_downstream = {d for ups in deps.values() for d in ups}
     for nid in ids:
         node = nodes.get(nid)
         if node is None:
@@ -178,11 +177,14 @@ def validate(
         exit_r = node.get("exit_review") or {}
         if not (exit_r.get("role") or "").strip() or exit_r.get("rule") not in ("any", "all"):
             err(f"「{label}」的准出评审需要角色与规则", nid, "exit_review")
+        # 准入：本节点开工前审核上游产物（下阶段准入），配在下游节点上
         admit = node.get("admit_review")
         if admit is not None and (
             not (admit.get("role") or "").strip() or admit.get("rule") not in ("any", "all")
         ):
             err(f"「{label}」的准入评审需要角色与规则（或不配置准入）", nid, "admit_review")
+        elif admit is not None and not deps.get(nid):
+            err(f"「{label}」没有上游节点，不需要准入评审", nid, "admit_review")
         ft = node.get("artifact_file_template_id")
         if ft:
             info = file_templates.get(ft)
@@ -199,8 +201,8 @@ def validate(
                     f"「{label}」引用的文件模板「{info['name']}」还没有生效版本，将按通用格式产出",
                     nid,
                 )
-        if nid in has_downstream and admit is None:
-            warn(f"「{label}」有下游节点但没有配置准入评审", nid)
+        if deps.get(nid) and admit is None:
+            warn(f"「{label}」没有配置准入评审：上游准出后将直接开工", nid)
     roles = derive_roles(definition)
     for r in sorted(set(roles["exec"]) & set(roles["review"])):
         err(f"角色「{r}」不能同时作为执行角色和评审角色（执行角色需要 Agent，评审角色只能是人）")

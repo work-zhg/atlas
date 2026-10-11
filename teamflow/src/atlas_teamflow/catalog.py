@@ -42,14 +42,15 @@ MENUS: list[dict[str, Any]] = [
         "path": "/teams",
         "is_public": True,
     },
-    {"type": "dir", "code": "tpl", "name": "模板", "icon": "🗂️"},
+    # 系统设置：流程模板、文件模板与集成配置，只有平台管理员可见、可配置
+    {"type": "dir", "code": "sys", "name": "系统设置", "icon": "⚙️"},
     {
         "type": "menu",
         "code": "flow_tpl",
         "name": "流程模板",
         "icon": "🧭",
         "path": "/templates/flow",
-        "parent": "tpl",
+        "parent": "sys",
     },
     {
         "type": "menu",
@@ -57,16 +58,23 @@ MENUS: list[dict[str, Any]] = [
         "name": "文件模板",
         "icon": "📄",
         "path": "/templates/file",
-        "parent": "tpl",
+        "parent": "sys",
     },
-    {"type": "menu", "code": "settings", "name": "系统设置", "icon": "⚙️", "path": "/settings"},
+    {
+        "type": "menu",
+        "code": "settings",
+        "name": "集成配置",
+        "icon": "🔌",
+        "path": "/settings",
+        "parent": "sys",
+    },
 ]
 
 ROLES: list[dict[str, Any]] = [
     {
         "code": "TF_PLATFORM_ADMIN",
         "name": "平台管理员",
-        "description": "配置流程模板与文件模板；新建团队、调整任意团队的管理员；系统设置",
+        "description": "系统设置（流程模板、文件模板、集成配置）；新建团队、调整任意团队的管理员",
         "operations": [
             "flow_template:view",
             "flow_template:manage",
@@ -76,7 +84,7 @@ ROLES: list[dict[str, Any]] = [
             "team:manage_all",
             "settings:manage",
         ],
-        "menus": ["tpl", "flow_tpl", "file_tpl", "settings"],
+        "menus": ["sys", "flow_tpl", "file_tpl", "settings"],
     },
     {
         "code": "TF_TEAM_ADMIN",
@@ -89,11 +97,12 @@ ROLES: list[dict[str, Any]] = [
             "project:create",
             "project:configure",
             "project:archive",
+            # 只读：建项目 / 项目设置里选择流程模板（模板的配置只在系统设置，平台管理员）
             "flow_template:view",
             "file_template:view",
             "process:view",
         ],
-        "menus": ["tpl", "flow_tpl", "file_tpl"],
+        "menus": [],
     },
     {
         "code": "TF_TEAM_MEMBER",
@@ -107,7 +116,7 @@ ROLES: list[dict[str, Any]] = [
             "process:terminate",
             "file_template:view",
         ],
-        "menus": ["todo", "tpl", "file_tpl"],
+        "menus": ["todo"],
     },
 ]
 

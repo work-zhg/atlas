@@ -3,8 +3,9 @@
 - 一个节点一个 Atlas 会话（thread）；人的一条指令 / 系统的开工上下文 = 一次运行（run）。
 - 指令先在库里排队（tf_node_message.status = queued），事务提交后唤醒这里投递；
   同一节点串行：上一个 run 结束才投递下一条（Atlas 同一会话也只允许一个运行中的 run）。
-- 订阅 Atlas 会话事件流：增量经进程内广播推给页面；run 结束时落库 Agent 回复，
-  识别 <artifact>…</artifact> 并提交为产物版本。
+- 订阅 Atlas 会话事件流：增量经广播推给页面；run 结束时落库 Agent 回复。
+  产物由 Agent 在 Pod 里用 git 提交，这里不访问仓库（提交准出评审时才锁定 commit）。
+- 建 Atlas 会话时声明 git 凭据档案：Pod 里的 git CLI 由平台挂好凭据。
 - 断线按游标（thread_seq）续传，不判失败；服务重启后续接未完成的 run 与排队的指令。
 
 ★ 没有超时：Agent 运行可能持续数十分钟（atlas-no-timeouts 原则）。
@@ -16,7 +17,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 from collections.abc import Callable
 from typing import Any
 from uuid import UUID, uuid4
@@ -25,24 +25,17 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ..atlas import AtlasClient
-from ..db.models import ArtifactVersion, NodeMessage, Process, ProcessNode
+from ..db.models import NodeMessage, Process, ProcessNode
+from ..errors import Upstream
 from ..process.bus import LocalCoordinator, coordinator
-from ..process.git_store import GitStore
+from ..process.repo_host import RepoHost
 from ..process.service import ProcessService
 
-__all__ = ["AgentSupervisor", "extract_artifact"]
+__all__ = ["AgentSupervisor"]
 
 log = logging.getLogger("atlas_teamflow.agents")
 
-_ARTIFACT = re.compile(r"<artifact(?:\s[^>]*)?>\s*\n?(.*?)\n?\s*</artifact>", re.DOTALL)
 _TERMINAL = {"run.finished", "run.failed", "run.cancelled"}
-
-
-def extract_artifact(text: str) -> str | None:
-    """取最后一个 <artifact> 块的内容（Agent 每次输出完整全文）。"""
-    hits = _ARTIFACT.findall(text or "")
-    body = hits[-1].strip() if hits else ""
-    return body or None
 
 
 class AgentSupervisor:
@@ -50,16 +43,19 @@ class AgentSupervisor:
         self,
         sessionmaker: Callable[[], async_sessionmaker[AsyncSession]],
         atlas: AtlasClient,
-        git: GitStore,
+        repo: RepoHost,
         *,
         retry_seconds: float = 3.0,
         lease_seconds: int = 30,
         sweep_seconds: float = 15.0,
         coord: LocalCoordinator | None = None,
+        git_profile: str = "",
     ) -> None:
         self._sm = sessionmaker
         self.atlas = atlas
-        self.git = git
+        self.repo = repo
+        #: 节点会话的 Atlas git 凭据档案（Pod 里 git CLI 的凭据）
+        self.git_profile = git_profile
         self.retry_seconds = retry_seconds
         self.lease_seconds = lease_seconds
         self.sweep_seconds = sweep_seconds
@@ -71,8 +67,27 @@ class AgentSupervisor:
 
     async def start(self) -> None:
         """续接重启前未完成的工作，并定期扫描（接管崩溃实例留下的节点、补漏掉的唤醒）。"""
+        await self._advance_running()
         if self._sweeper is None:
             self._sweeper = asyncio.get_running_loop().create_task(self._sweep_forever())
+
+    async def _advance_running(self) -> None:
+        """进行中的流程各推进一次（幂等，流程行锁串行）：补上升级前停在旧状态的流程，
+        如准入改为下游发起后，迁移把旧语义的准入节点改成了「待下游准入」。"""
+        async with self._sm()() as s:
+            ids = list(await s.scalars(select(Process.uuid).where(Process.status == "running")))
+        for pid in ids:
+            try:
+                async with self._sm()() as s:
+                    proc = (
+                        await s.execute(
+                            select(Process).where(Process.uuid == pid).with_for_update()
+                        )
+                    ).scalar_one()
+                    await ProcessService.system(s, self.repo)._advance(proc)
+                    await s.commit()
+            except Exception as exc:
+                log.warning("推进流程 %s 失败：%s", pid, exc)
 
     # ───────────────────────────── 调度
 
@@ -136,7 +151,12 @@ class AgentSupervisor:
                     more = await self._step(node_uuid)
                 except asyncio.CancelledError:
                     raise
-                except Exception as exc:  # 不判失败：记下提示，稍后重试
+                except Exception as exc:  # 不判失败：稍后重试
+                    if isinstance(exc, Upstream) and exc.code == "ATLAS_BUSY":
+                        # 会话上已有运行中的 run（人经代理发的）：等它结束后再投递，不算故障
+                        await asyncio.sleep(self.retry_seconds)
+                        more = True
+                        continue
                     log.warning("节点 %s 的 Agent 投递出错：%s", node_uuid, exc)
                     await self._notice(node_uuid, f"Agent 暂时无法连接，正在重试：{str(exc)[:80]}")
                     await asyncio.sleep(self.retry_seconds)
@@ -194,7 +214,9 @@ class AgentSupervisor:
                     return True
                 if node.atlas_thread_id is None:
                     node.atlas_thread_id = await self.atlas.create_thread(
-                        node.atlas_agent_id, f"[TeamFlow] {proc.title} · {node.name}"
+                        node.atlas_agent_id,
+                        f"[TeamFlow] {proc.title} · {node.name}",
+                        git_profile=self.git_profile or None,
                     )
                     await s.commit()
                 run_id = await self.atlas.create_run(
@@ -222,7 +244,7 @@ class AgentSupervisor:
                             round=node.round,
                         )
                     )
-                svc = ProcessService.system(s, self.git)
+                svc = ProcessService.system(s, self.repo)
                 await s.execute(
                     select(Process.id).where(Process.uuid == proc.uuid).with_for_update()
                 )
@@ -323,27 +345,13 @@ class AgentSupervisor:
                 msg.status = "done" if ok else "failed"
             node.atlas_run_id = None
             node.atlas_cursor = cursor
-            svc = ProcessService.system(s, self.git)
+            svc = ProcessService.system(s, self.repo)
             if not ok:
                 what = "被取消" if kind == "run.cancelled" else "失败"
                 node.notice = f"Agent 运行{what}：{(error or '')[:120]}"
                 svc.emit(proc, "agent.failed", node.node_id, error=(error or "")[:200])
             else:
                 svc.emit(proc, "agent.replied", node.node_id)
-                content = extract_artifact(body)
-                if content and node.status == "working" and proc.status == "running":
-                    cur = None
-                    if node.current_artifact_uuid:
-                        cur = (
-                            await s.execute(
-                                select(ArtifactVersion.content, ArtifactVersion.round).where(
-                                    ArtifactVersion.uuid == node.current_artifact_uuid
-                                )
-                            )
-                        ).one()
-                    # 同一轮里重复输出相同全文不重复提交；新的一轮即使内容相同也记一个版本
-                    if cur is None or cur[0].strip() != content.strip() or cur[1] != node.round:
-                        await svc.commit_artifact(proc, node, content, source="agent", author=None)
             await s.commit()
 
     async def _notice(self, node_uuid: UUID, text: str) -> None:

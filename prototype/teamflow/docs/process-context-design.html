@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI TeamFlow · 流程上下文与 Agent 记忆 · 详细设计</title>
+<style>
+  :root{
+    --bg:#f6f7f9;--surface:#fff;--surface-2:#fbfbfd;--ink:#0f172a;--ink-2:#334155;--ink-3:#64748b;--ink-4:#94a3b8;
+    --line:#e6e8ee;--line-2:#eef0f4;--primary:#4f46e5;--primary-weak:#eef0ff;
+    --warning:#b45309;--warning-weak:#fef3e2;
+    --mono:"JetBrains Mono","SF Mono",ui-monospace,Menlo,Consolas,monospace;
+    --font:"Inter","PingFang SC","Microsoft YaHei",system-ui,-apple-system,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink-2);font-family:var(--font);font-size:14.5px;line-height:1.75}
+  a{color:var(--primary);text-decoration:none}
+  .wrap{display:grid;grid-template-columns:240px minmax(0,1fr);gap:36px;max-width:1240px;margin:0 auto;padding:32px 28px 80px}
+  nav.toc{position:sticky;top:24px;align-self:start;max-height:calc(100vh - 48px);overflow:auto;font-size:13px}
+  nav.toc .t{font-size:11px;letter-spacing:.12em;color:var(--ink-4);text-transform:uppercase;margin-bottom:8px;font-weight:600}
+  nav.toc ol{list-style:none;margin:0;padding:0;counter-reset:s}
+  nav.toc li{counter-increment:s}
+  nav.toc a{display:block;padding:4px 8px;border-radius:6px;color:var(--ink-3)}
+  nav.toc a::before{content:counter(s,decimal-leading-zero) "  ";font-family:var(--mono);font-size:11px;color:var(--ink-4)}
+  nav.toc a:hover{background:#fff;color:var(--ink)}
+  header.hero{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:28px 30px;margin-bottom:28px}
+  .kicker{font-family:var(--mono);font-size:11.5px;letter-spacing:.14em;color:var(--primary);text-transform:uppercase;margin:0 0 6px}
+  h1{font-size:26px;color:var(--ink);margin:0 0 10px;letter-spacing:-.3px}
+  .lede{margin:0;font-size:15px}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+  .meta span{font-size:12px;padding:2px 10px;border-radius:999px;background:var(--primary-weak);color:var(--primary)}
+  section{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:24px 28px;margin-bottom:20px}
+  h2{font-size:19px;color:var(--ink);margin:0 0 14px;display:flex;align-items:center;gap:10px}
+  h2 .num{font-family:var(--mono);font-size:12px;color:#fff;background:var(--primary);border-radius:6px;padding:2px 7px}
+  h3{font-size:15.5px;color:var(--ink);margin:22px 0 8px}
+  p{margin:0 0 12px}
+  code{font-family:var(--mono);font-size:12.5px;background:#f1f3f7;border:1px solid var(--line-2);border-radius:4px;padding:0 5px;color:#be185d}
+  table{width:100%;border-collapse:collapse;font-size:13.5px;margin:6px 0 14px}
+  th{text-align:left;background:var(--surface-2);color:var(--ink-3);font-weight:600;font-size:12.5px}
+  th,td{border:1px solid var(--line);padding:8px 10px;vertical-align:top}
+  td code{white-space:nowrap}
+  pre{background:#0f172a;color:#e2e8f0;border-radius:10px;padding:14px 16px;font-family:var(--mono);font-size:12.5px;line-height:1.65;overflow:auto;margin:6px 0 14px;white-space:pre-wrap}
+  pre .c{color:#94a3b8}
+  .callout{border:1px solid;border-left-width:4px;border-radius:10px;padding:10px 14px;margin:8px 0 14px;font-size:13.5px}
+  .callout b.l{display:block;font-size:11.5px;letter-spacing:.1em;margin-bottom:3px}
+  .rule{background:var(--primary-weak);border-color:#c7c9f5;color:#312e81}
+  .warn{background:var(--warning-weak);border-color:#f6d39b;color:#7c2d12}
+  .tag{display:inline-block;font-size:11.5px;padding:0 8px;border-radius:999px;border:1px solid var(--line);background:var(--surface-2);color:var(--ink-3);white-space:nowrap}
+  .tag.new{color:var(--primary);border-color:#c7c9f5;background:var(--primary-weak)}
+  .tag.p2{color:var(--warning);border-color:#f6d39b;background:var(--warning-weak)}
+  .flow{font-family:var(--mono);font-size:12.5px;line-height:1.75;background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:14px 16px;white-space:pre;overflow:auto;margin:6px 0 14px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .box{border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:var(--surface-2)}
+  .box h4{margin:0 0 6px;font-size:13.5px;color:var(--ink)}
+  ul,ol{margin:0 0 12px;padding-left:20px}
+  li{margin:2px 0}
+  .muted{color:var(--ink-4);font-size:12px}
+  /* 关系图 */
+  .arch{margin:6px 0 14px}
+  .arch-sys{border:1.5px dashed #c7c9f5;border-radius:12px;padding:12px 14px;background:#fafaff}
+  .arch-sys-t{font-size:12px;font-weight:700;color:var(--primary);margin-bottom:8px;letter-spacing:.06em}
+  .arch-row{display:flex;align-items:center}
+  .arch-box{flex:1;background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:13px}
+  .arch-box.me{border-color:var(--primary);box-shadow:0 0 0 3px rgba(79,70,229,.1)}
+  .arch-box b{color:var(--ink)}
+  .arch-box ul{margin:6px 0 0;padding-left:16px;color:var(--ink-3);font-size:12.5px}
+  .arch-link{width:96px;flex:none;text-align:center;font-size:11.5px;color:var(--ink-3);position:relative;padding-bottom:10px}
+  .arch-link i{position:absolute;left:8px;right:8px;bottom:0;height:2px;background:#9aa4b6}
+  .arch-link i.r::after{content:"";position:absolute;right:-2px;top:-4px;border-left:7px solid #9aa4b6;border-top:5px solid transparent;border-bottom:5px solid transparent}
+  .arch-link i.l::before{content:"";position:absolute;left:-2px;top:-4px;border-right:7px solid #9aa4b6;border-top:5px solid transparent;border-bottom:5px solid transparent}
+  .arch-note{margin-top:8px;font-size:12px;color:var(--ink-3)}
+  .arch-down{display:flex;align-items:center;gap:8px;margin-left:calc(83% - 1px);height:34px;font-size:11.5px;color:var(--ink-3)}
+  .arch-down i{width:2px;height:100%;background:#9aa4b6;position:relative}
+  .arch-down i::after{content:"";position:absolute;left:-4px;bottom:-2px;border-top:7px solid #9aa4b6;border-left:5px solid transparent;border-right:5px solid transparent}
+  .arch-ext{margin-left:calc(83% - 90px);width:180px;text-align:center;border:1px solid #9aa4b6;border-radius:10px;padding:8px;background:#fff;font-weight:600;color:var(--ink);font-size:13px}
+  @media (max-width:980px){.wrap{grid-template-columns:1fr}nav.toc{position:static;max-height:none}.grid2{grid-template-columns:1fr}
+    .arch-row{flex-direction:column;align-items:stretch}.arch-link{width:auto;height:30px}.arch-down,.arch-ext{margin-left:0}}
+
+  /* 本文补充 */
+  ol.steps{list-style:none;padding:0;margin:6px 0 14px;counter-reset:st}
+  ol.steps li{counter-increment:st;position:relative;padding:8px 12px 8px 44px;border:1px solid var(--line);border-radius:10px;margin:6px 0;background:var(--surface-2)}
+  ol.steps li::before{content:counter(st);position:absolute;left:12px;top:9px;width:22px;height:22px;border-radius:6px;background:var(--primary);color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center}
+  .who{display:inline-block;font-size:11.5px;padding:0 8px;border-radius:999px;background:var(--primary-weak);color:var(--primary);margin-right:6px}
+  .layers{display:flex;flex-direction:column;gap:8px;margin:8px 0 16px}
+  .layer{display:grid;grid-template-columns:150px 1fr 220px;gap:12px;align-items:center;border:1px solid var(--line);border-radius:10px;padding:10px 14px;background:#fff}
+  .layer.new{border-color:#c7c9f5;background:#fafaff}
+  .layer.off{border-style:dashed;background:#fbfbfd;color:var(--ink-3)}
+  .layer b{color:var(--ink)}
+  .layer .k{font-family:var(--mono);font-size:11.5px;color:var(--ink-4)}
+  .ctx{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:8px 0 14px}
+  .ctx .box h4{display:flex;justify-content:space-between;align-items:center}
+  @media (max-width:980px){.layer{grid-template-columns:1fr}.ctx{grid-template-columns:1fr 1fr}}
+
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav class="toc">
+  <div class="t">目录</div>
+  <ol>
+    <li><a href="#s1">问题与现状</a></li>
+    <li><a href="#s2">目标与范围</a></li>
+    <li><a href="#s3">记忆分层</a></li>
+    <li><a href="#s4">流程上下文的内容</a></li>
+    <li><a href="#s5">注入方式（P1）</a></li>
+    <li><a href="#s6">Atlas 用户记忆的处理（P0）</a></li>
+    <li><a href="#s7">会话固定上下文（P2）</a></li>
+    <li><a href="#s8">界面</a></li>
+    <li><a href="#s9">权限</a></li>
+    <li><a href="#s10">数据模型</a></li>
+    <li><a href="#s11">接口</a></li>
+    <li><a href="#s12">异常与边界</a></li>
+    <li><a href="#s13">实施计划</a></li>
+    <li><a href="#s14">待确认</a></li>
+  </ol>
+</nav>
+
+<main>
+<header class="hero">
+  <p class="kicker">AI TeamFlow · Detailed Design</p>
+  <h1>流程上下文与 Agent 记忆</h1>
+  <p class="lede">一个流程有一些<b>每个节点都需要知道的固定内容</b>（这个流程要做什么、项目的约定、过程中定下的决策），而每个节点的 Agent 可以不同、会话互不相通。本文规划 TeamFlow 调用 Atlas 时的记忆：<b>流程上下文由 TeamFlow 持有</b>（可审阅、有版本、与哪个 Agent 无关），每次向节点投递时按需带上；<b>Atlas 的用户记忆对 TeamFlow 会话关闭</b>（它按人划分、自动抽取，放在共享服务身份下会跨团队串味）；长期由 Atlas 提供<b>会话固定上下文</b>承载，不占对话历史、不怕压缩。</p>
+  <div class="meta"><span>上下文归 TeamFlow</span><span>与 Agent 无关</span><span>不空跑</span><span>有版本、可审阅</span><span>关闭 Atlas 用户记忆</span></div>
+</header>
+
+<section id="s1">
+  <h2><span class="num">01</span>问题与现状</h2>
+  <table>
+    <tr><th>现状</th><th>问题</th></tr>
+    <tr><td>一个节点一个 Atlas 会话；不同节点可以分配不同的 Agent</td><td>会话之间没有共享的上下文：n2 的 Agent 不知道 n1 的执行人最初说了什么，也不知道评审时定下的约束</td></tr>
+    <tr><td>节点之间只靠<b>产物</b>交接（仓库路径 + commit）</td><td>产物是结论，不是全部：「为什么这么定」「哪些是硬约束」常常只在对话或评审意见里</td></tr>
+    <tr><td>发起流程只填名称（<a href="process-design.html#s7">流程运行 §7.2</a>），要做什么在第一个节点的对话里说</td><td>流程的<b>发起意图</b>只存在于第一个节点的会话里，下游看不到</td></tr>
+    <tr><td>项目级的约定（技术栈、规范、术语）没有地方放</td><td>每个节点的执行人都要重复交代，或者 Agent 各自猜</td></tr>
+    <tr><td>Atlas 开着用户记忆（Mem0，<code>MEMORY_ENABLED=true</code>）；TeamFlow 所有会话都用<b>同一个服务身份</b>（<code>ATLAS_TF_ATLAS_USER_ID</code>）</td><td><b>跨团队 / 跨项目串味</b>：记忆只按用户划分，检索只按 <code>user_id</code> 过滤（<code>memory/client.py</code>）。A 团队会话里抽取的「事实」会被注入或检索到 B 团队的节点里（§6）</td></tr>
+    <tr><td>长会话会被压缩（Atlas 发出 <code>context.compacted</code>；ACP CLI 也会自行压缩）</td><td>开工时给的上下文可能被摘要掉，Agent 后面「忘了」项目约定</td></tr>
+  </table>
+</section>
+
+<section id="s2">
+  <h2><span class="num">02</span>目标与范围</h2>
+  <table>
+    <tr><th>目标</th><td><ol>
+      <li>流程级的固定内容只维护一份，<b>每个节点（不论哪个 Agent）都能拿到同一版本</b>。</li>
+      <li>内容由人维护、可审阅、有版本和来源，不靠模型自动抽取。</li>
+      <li>内容变化后，进行中的节点在<b>下一次投递时</b>拿到更新 —— 不为了同步上下文单独启动 Agent（不空跑）。</li>
+      <li>会话压缩后能补回，不会「忘了」。</li>
+      <li>TeamFlow 的会话之间不通过 Atlas 用户记忆互相影响。</li>
+    </ol></td></tr>
+    <tr><th>不在范围</th><td>跨项目的组织知识库（RAG）；Agent 自主写记忆；把对话自动提炼成流程上下文（P2 以后再评估）。</td></tr>
+  </table>
+</section>
+
+<section id="s3">
+  <h2><span class="num">03</span>记忆分层</h2>
+  <div class="layers">
+    <div class="layer"><div><b>节点会话</b><div class="k">短期 · 节点内</div></div><div>同一节点的多轮对话（驳回、打回重开都在同一会话继续）；Atlas 负责压缩</div><div class="muted">Atlas thread（已有）</div></div>
+    <div class="layer"><div><b>产物</b><div class="k">节点间交接</div></div><div>上游锁定版本的路径 + commit，下游用 git 读取（<a href="artifact-git-design.html#s7">产物仓库 §7</a>）</div><div class="muted">Gitee 仓库（已有）</div></div>
+    <div class="layer new"><div><b>流程上下文</b> <span class="tag new">新</span><div class="k">流程级 · 所有节点</div></div><div>流程概况、流程说明、流程备忘（§4）—— 本文主体</div><div class="muted">TeamFlow 库 · 投递时带上</div></div>
+    <div class="layer new"><div><b>项目上下文</b> <span class="tag new">新</span><div class="k">项目级 · 所有流程</div></div><div>项目背景、技术栈、规范、术语；团队管理员维护，作为流程上下文的一部分注入</div><div class="muted">TeamFlow 库 · 投递时带上</div></div>
+    <div class="layer off"><div><b>Atlas 用户记忆</b><div class="k">跨会话 · 按人</div></div><div>自动抽取的个人偏好；对 TeamFlow 会话<b>关闭</b>（§6）</div><div class="muted">Mem0 · TeamFlow 不用</div></div>
+  </div>
+  <div class="callout rule"><b class="l">原则</b>需要每个节点都遵守的东西，必须是<b>人写下、有版本、TeamFlow 投递</b>的；不能指望某个 Agent「记得」，也不能交给自动抽取。</div>
+</section>
+
+<section id="s4">
+  <h2><span class="num">04</span>流程上下文的内容</h2>
+  <div class="ctx">
+    <div class="box"><h4>流程概况 <span class="tag">自动</span></h4>流程名称、模板版本、流程结构、本节点位置与上下游、各节点执行角色。TeamFlow 生成，不可编辑。</div>
+    <div class="box"><h4>项目上下文 <span class="tag">项目级</span></h4>项目背景、技术栈、规范、术语。团队管理员在项目设置维护，所有流程共享。</div>
+    <div class="box"><h4>流程说明 <span class="tag">流程级</span></h4>这个流程要做什么（发起意图）。默认取第一个节点执行人的第一条说明，可修改。</div>
+    <div class="box"><h4>流程备忘 <span class="tag">流程级</span></h4>过程中定下、后续节点必须遵守的决策与约束；每条带来源节点与作者。</div>
+  </div>
+  <table>
+    <tr><th>块</th><th>谁写</th><th>何时产生 / 变化</th><th>例子</th></tr>
+    <tr><td>流程概况</td><td>TeamFlow</td><td>每次投递时按当前状态生成</td><td>「n1 需求分析 → (n2 架构设计 ∥ n3 测试方案) → n4 编码实现；你在 n2，上游 n1，下游 n4」</td></tr>
+    <tr><td>项目上下文</td><td>团队管理员</td><td>项目设置里编辑；对进行中的流程，下次投递时生效</td><td>「后端 Java 17 + Spring Boot；接口遵循《开放接口规范 v2》；手机号统一 E.164」</td></tr>
+    <tr><td>流程说明</td><td>第一个节点执行人（第一条说明时勾选「同时作为流程说明」，默认勾选）；发起人、团队管理员可改</td><td>第一条说明时写入；之后人工修改</td><td>「同一手机号 1 分钟最多 1 次验证码，1 小时最多 5 次，超限提示等待时间」</td></tr>
+    <tr><td>流程备忘</td><td>任一节点执行人；评审人投票时勾选「写入流程备忘」；团队管理员</td><td>随时追加；作者或团队管理员可删除</td><td>「[n1 评审 · 李工] 采用滑动窗口、拒绝不计次」</td></tr>
+  </table>
+  <div class="callout warn"><b class="l">不放进流程上下文</b>产物全文（走仓库输入，避免两份不一致）；对话细节；凭据与令牌（保存时提示）。</div>
+</section>
+
+<section id="s5">
+  <h2><span class="num">05</span>注入方式（P1：只改 TeamFlow）</h2>
+  <h3>5.1 格式</h3>
+  <pre>&lt;process-context version="p3.f5"&gt;
+&lt;overview&gt;流程「登录验证码限流」（标准研发流程 v1.0）
+n1 需求分析 → (n2 架构设计 ∥ n3 测试方案) → n4 编码实现；你在 n2（执行角色：架构师），上游 n1，下游 n4&lt;/overview&gt;
+&lt;project version="3"&gt;后端 Java 17 + Spring Boot；接口遵循《开放接口规范 v2》……&lt;/project&gt;
+&lt;brief&gt;同一手机号 1 分钟最多 1 次验证码……&lt;/brief&gt;
+&lt;notes&gt;
+- [n1 评审 · 李工] 采用滑动窗口、拒绝不计次
+- [n2 · 何超] 计数存 Redis，key 前缀 login:otp:
+&lt;/notes&gt;
+&lt;/process-context&gt;
+以上是团队维护的流程上下文，所有节点共享。冲突时：执行人在本节点的最新说明 &gt; 流程备忘 &gt; 流程说明 &gt; 项目上下文。</pre>
+  <p><code>version</code> = 项目上下文版本 + 流程上下文版本（流程说明或备忘任何变化都 +1）。</p>
+
+  <h3>5.2 何时带上</h3>
+  <table>
+    <tr><th>时机</th><th>带什么</th><th>说明</th></tr>
+    <tr><td>节点第一次投递（开工上下文；没有上游的节点是与执行人第一条说明合成的那条）</td><td>全文</td><td>放在开工上下文最前面</td></tr>
+    <tr><td>上下文版本变化后，该节点的<b>下一次投递</b></td><td>「流程上下文已更新（p3.f4 → p3.f5）」+ 全文</td><td>前置在那条指令前；<b>不为同步上下文单独发起 run</b>（不空跑）</td></tr>
+    <tr><td>该节点会话收到 <code>context.compacted</code> 后的下一次投递</td><td>全文</td><td>压缩可能把早先的上下文摘要掉；监督器跟随事件流时打标记</td></tr>
+    <tr><td>其他投递</td><td>不带</td><td>上下文已经在会话里，重复只浪费 token</td></tr>
+  </table>
+  <ol class="steps">
+    <li><span class="who">TeamFlow</span>任一来源排队给节点的消息（执行人指令、驳回 / 打回、上游更新）在入队时检查：节点已发送的版本 ≠ 当前版本，或节点被标记「已压缩」→ 前置上下文。</li>
+    <li><span class="who">TeamFlow</span>入队成功后记下 <code>context_sent = 当前版本</code>、清除压缩标记（与消息同一事务）。</li>
+    <li><span class="who">监督器</span>跟随会话事件流时遇到 <code>context.compacted</code> → 节点 <code>context_stale = true</code>。</li>
+  </ol>
+  <h3>5.3 为什么与「哪个 Agent」无关</h3>
+  <ul>
+    <li>内容存在 TeamFlow，每个节点会话从同一份内容开始；Agent 是谁、是原生还是 ACP、换没换模型，都不影响。</li>
+    <li>节点的执行 Agent 在首次开工时锁定（<a href="process-design.html#s3">流程运行 §3</a>）；节点内不会中途换 Agent，所以「本节点会话里已经有上下文」是成立的。</li>
+    <li>纯文本注入对原生 Agent 和 ACP CLI 都适用，不依赖任何一方的私有记忆机制。</li>
+  </ul>
+  <h3>5.4 大小预算</h3>
+  <table>
+    <tr><th>块</th><th>上限</th><th>超限时</th></tr>
+    <tr><td>项目上下文</td><td>4,000 字</td><td>保存时拒绝，提示精简或改为放进仓库文档后引用路径</td></tr>
+    <tr><td>流程说明</td><td>4,000 字</td><td>同上</td></tr>
+    <tr><td>流程备忘</td><td>单条 500 字，合计 6,000 字</td><td>拒绝追加，提示整理（合并 / 删除过时条目）</td></tr>
+  </table>
+  <p>上限保证每次全文注入的成本可控（约 1 万字以内），也逼着内容保持「必须遵守的要点」，长文档放仓库。</p>
+</section>
+
+<section id="s6">
+  <h2><span class="num">06</span>Atlas 用户记忆的处理（P0）</h2>
+  <h3>6.1 现状风险</h3>
+  <table>
+    <tr><th>环节</th><th>行为（代码事实）</th><th>对 TeamFlow 的后果</th></tr>
+    <tr><td>写入</td><td>每个 run 完成后，从会话消息抽取，<code>user_id</code> = 会话所有者，metadata 记 workspace（父会话 id）</td><td>所有团队、所有项目的节点对话都抽取进<b>同一个用户</b>（TeamFlow 服务身份）的记忆</td></tr>
+    <tr><td>读取</td><td>检索只按 <code>user_id</code> 过滤（<code>memory/client.py</code> 的 <code>search</code>）；原生 Agent 挂 <code>search_memory</code> 工具</td><td>A 团队会话里抽出的「事实」会被 B 团队节点检索到、当作背景使用</td></tr>
+    <tr><td>性质</td><td>自动抽取、模型判断「值得记」</td><td>不权威、不可审阅，与流程上下文「人写、有版本」的要求相反</td></tr>
+  </table>
+  <h3>6.2 方案：TeamFlow 会话关闭用户记忆</h3>
+  <ol class="steps">
+    <li><span class="who">Atlas</span><code>POST /v1/threads</code> 新增 <code>memory: "off"</code>（默认 <code>"on"</code>，保存在会话上，子会话继承）。关闭时：不抽取、不注入、不挂检索工具。</li>
+    <li><span class="who">TeamFlow</span>建节点会话时传 <code>memory: "off"</code>（与 <code>git_profile</code> 同一处）。</li>
+    <li><span class="who">运维</span>清理已经在 TeamFlow 服务身份下抽取的记忆（按用户批量删除，记忆管理 §10 的 bulk-delete）。</li>
+  </ol>
+  <table>
+    <tr><th>备选</th><th>结论</th></tr>
+    <tr><td>按团队 / 流程设 workspace，检索时加 workspace 过滤</td><td>❌ 能止住串味，但仍是自动抽取、不可审阅；且需要改 Atlas 检索逻辑。流程上下文已经覆盖了需求</td></tr>
+    <tr><td>每个团队一个 Atlas 服务身份</td><td>❌ 身份管理复杂（会话归属、配额、Pod 授权都要跟着变），收益只是记忆隔离</td></tr>
+    <tr><td>用 Atlas 记忆承载流程上下文</td><td>❌ 按人划分、自动抽取、ACP 只能按需检索，不满足「每个节点都拿到同一版本」</td></tr>
+  </table>
+</section>
+
+<section id="s7">
+  <h2><span class="num">07</span>会话固定上下文（P2：Atlas 能力）</h2>
+  <p>P1 的注入是「消息里带上」：会占对话历史，压缩后要补发。更好的载体是 Atlas 提供<b>会话级的固定上下文</b>：</p>
+  <table>
+    <tr><th>项</th><th>原生 Agent</th><th>ACP CLI</th></tr>
+    <tr><td>设置</td><td colspan="2"><code>POST /v1/threads</code> 带 <code>pinned_context</code>；<code>PATCH /v1/threads/{id}</code> 更新（带版本号，只增不减地记录历史）</td></tr>
+    <tr><td>怎么生效</td><td>每轮拼在系统提示词之后（模型请求层，不进 Message、不参与压缩），始终最新</td><td>首轮前置；同时写入会话工作区的说明文件（如 <code>AGENTS.md</code> / <code>CLAUDE.md</code>），CLI 压缩后会自动重读</td></tr>
+    <tr><td>更新后</td><td>下一轮自动是新内容</td><td>下一轮前置一段「固定上下文已更新」+ 重写说明文件</td></tr>
+  </table>
+  <p>有了它，TeamFlow 把 §5 的「前置拼接」换成 <code>PATCH</code> 会话的固定上下文：内容变化时更新所有进行中节点的会话即可，不再关心压缩与投递时机。P1 的数据与界面不变。</p>
+  <div class="callout warn"><b class="l">依赖</b>需要 Atlas 增加会话固定上下文与工作区写文件能力（当前只有列出 / 预览 / 下载）。在 Atlas 侧单独设计，本文只定接口形态。</div>
+</section>
+
+<section id="s8">
+  <h2><span class="num">08</span>界面</h2>
+  <table>
+    <tr><th>位置</th><th>内容</th></tr>
+    <tr><td>流程页 ·「流程上下文」页签</td><td>当前版本的全文预览（与注入给 Agent 的一致）；编辑流程说明；追加 / 删除备忘；版本历史（谁、何时、改了什么）</td></tr>
+    <tr><td>节点页 · 侧边卡片</td><td>本节点已拿到的上下文版本；落后于当前版本时提示「下次给 Agent 发指令时会带上新内容」</td></tr>
+    <tr><td>第一个节点 · 第一次说明的输入框</td><td>勾选「同时作为流程说明（所有节点可见）」，默认勾选</td></tr>
+    <tr><td>评审投票</td><td>勾选「写入流程备忘」：把意见作为一条备忘（来源 = 节点 + 评审轮次）</td></tr>
+    <tr><td>项目设置 ·「项目上下文」卡片</td><td>团队管理员编辑；显示版本与最近修改人</td></tr>
+  </table>
+</section>
+
+<section id="s9">
+  <h2><span class="num">09</span>权限</h2>
+  <table>
+    <tr><th>操作</th><th>谁可以</th></tr>
+    <tr><td>查看流程上下文</td><td>团队成员（与查看流程相同）</td></tr>
+    <tr><td>编辑流程说明</td><td>发起人、团队管理员、第一个节点的执行人；流程进行中</td></tr>
+    <tr><td>追加备忘</td><td>任一节点的执行人；评审人（投票时）；团队管理员；流程进行中</td></tr>
+    <tr><td>删除备忘</td><td>作者本人或团队管理员</td></tr>
+    <tr><td>编辑项目上下文</td><td>团队管理员（<code>project:configure</code> + 团队 Owner）</td></tr>
+  </table>
+  <p>所有修改记审计。流程上下文由团队成员写入，信任级别等同执行人的指令（不是外部不可信文本），但 Agent 仍须遵守平台的安全约束。</p>
+</section>
+
+<section id="s10">
+  <h2><span class="num">10</span>数据模型</h2>
+  <table>
+    <tr><th>表</th><th>字段</th></tr>
+    <tr><td><code>tf_project</code></td><td>新增 <code>context</code>（项目上下文正文）、<code>context_version</code></td></tr>
+    <tr><td><code>tf_process</code></td><td>新增 <code>brief</code>（流程说明）、<code>context_version</code>（说明或备忘变化 +1）</td></tr>
+    <tr><td><code>tf_process_note</code>（新）</td><td><code>process_uuid</code>、<code>content</code>、<code>source_node</code>、<code>source</code>（manual / review）、<code>review_uuid</code>、<code>author_uuid</code>、<code>created_at</code>、<code>deleted_at</code>（软删，保留历史）</td></tr>
+    <tr><td><code>tf_context_revision</code>（新）</td><td>每次修改一行：范围（project / process）、对象 uuid、新版本号、变更类型（brief / note_add / note_delete / project）、前后内容摘要、操作人、时间 —— 版本历史与审计用</td></tr>
+    <tr><td><code>tf_process_node</code></td><td>新增 <code>context_sent</code>（已发送的版本，如 <code>p3.f5</code>）、<code>context_stale</code>（收到压缩事件）</td></tr>
+  </table>
+</section>
+
+<section id="s11">
+  <h2><span class="num">11</span>接口</h2>
+  <table>
+    <tr><th>接口</th><th>说明</th></tr>
+    <tr><td><code>GET /api/v1/processes/{id}/context</code></td><td>各块内容、当前版本、渲染后的全文（与注入一致）、版本历史</td></tr>
+    <tr><td><code>PUT /api/v1/processes/{id}/context/brief</code></td><td>修改流程说明（带版本号防并发覆盖）</td></tr>
+    <tr><td><code>POST /api/v1/processes/{id}/context/notes</code> · <code>DELETE …/notes/{note}</code></td><td>追加 / 删除备忘</td></tr>
+    <tr><td><code>PATCH /api/v1/projects/{id}</code></td><td>新增 <code>context</code>（项目上下文）</td></tr>
+    <tr><td><code>POST …/nodes/{node}/messages</code></td><td>新增 <code>as_brief: bool</code>（第一条说明同时作为流程说明）</td></tr>
+    <tr><td><code>POST …/nodes/{node}/votes</code></td><td>新增 <code>to_notes: bool</code>（意见写入流程备忘）</td></tr>
+    <tr><td>Atlas <code>POST /v1/threads</code></td><td>P0 新增 <code>memory: "off"</code>；P2 新增 <code>pinned_context</code></td></tr>
+  </table>
+</section>
+
+<section id="s12">
+  <h2><span class="num">12</span>异常与边界</h2>
+  <table>
+    <tr><th>情形</th><th>处理</th></tr>
+    <tr><td>节点经人机协同代理（对话组件）直接发指令</td><td>代理在转发前同样检查版本，必要时把上下文前置到这条消息（与排队路径一致）</td></tr>
+    <tr><td>上下文更新时 Agent 正在运行</td><td>不打断；本轮结束后下一次投递带上</td></tr>
+    <tr><td>项目上下文在流程进行中被修改</td><td>进行中节点下一次投递时更新；已完成的节点不受影响（历史投递保留当时版本）</td></tr>
+    <tr><td>打回重开 / 上游更新重开</td><td>重开指令按当前版本判断，落后则前置</td></tr>
+    <tr><td>流程已完成 / 终止</td><td>上下文只读</td></tr>
+    <tr><td>内容里出现疑似令牌 / 密码</td><td>保存前提示（与 Gitee 令牌同类正则），不阻止</td></tr>
+    <tr><td>备忘与执行人最新说明冲突</td><td>按 §5.1 的优先级；执行人可删除过时备忘或追加新的</td></tr>
+  </table>
+</section>
+
+<section id="s13">
+  <h2><span class="num">13</span>实施计划</h2>
+  <table>
+    <tr><th>阶段</th><th>内容</th><th>改动方</th></tr>
+    <tr><td><b>P0</b></td><td>会话级关闭用户记忆（<code>memory: "off"</code>），TeamFlow 建会话时传；清理已抽取的记忆</td><td>Atlas（小）+ TeamFlow（一行）</td></tr>
+    <tr><td><b>P1</b></td><td>流程上下文（概况 / 项目 / 说明 / 备忘）、版本与历史、投递时按版本前置、压缩后补发、界面与权限</td><td>TeamFlow</td></tr>
+    <tr><td><b>P2</b></td><td>Atlas 会话固定上下文 + 工作区说明文件；TeamFlow 改为 PATCH 会话固定上下文</td><td>Atlas + TeamFlow</td></tr>
+  </table>
+</section>
+
+<section id="s14">
+  <h2><span class="num">14</span>待确认</h2>
+  <table>
+    <tr><th>#</th><th>事项</th><th>当前假设</th></tr>
+    <tr><td>1</td><td>流程说明默认取第一个节点执行人的第一条说明</td><td>是，默认勾选，可取消；之后可改</td></tr>
+    <tr><td>2</td><td>评审意见能否进流程备忘</td><td>能，由评审人勾选；不自动</td></tr>
+    <tr><td>3</td><td>项目上下文放 TeamFlow 库还是仓库里的文档</td><td>TeamFlow 库（有版本、能控制大小、不依赖 Agent 有没有 git）；长文档放仓库后在上下文里引用路径</td></tr>
+    <tr><td>4</td><td>模板是否预置上下文骨架（如「背景 / 约束 / 术语」小节）</td><td>P2 再做</td></tr>
+    <tr><td>5</td><td>P0 关闭用户记忆后，TeamFlow 会话是否完全不需要 Atlas 记忆</td><td>是。节点内靠会话历史，节点间靠产物 + 流程上下文</td></tr>
+  </table>
+</section>
+
+</main>
+</div>
+</body>
+</html>

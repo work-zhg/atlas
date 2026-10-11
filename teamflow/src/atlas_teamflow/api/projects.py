@@ -8,7 +8,7 @@ from uuid import UUID
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from .deps import ProjectsDep
+from .deps import PrincipalDep, ProjectsDep
 from .views import project_view, team_view
 
 router = APIRouter(prefix="/api/v1/projects", tags=["projects"])
@@ -18,6 +18,7 @@ class ProjectPatch(BaseModel):
     name: str | None = None
     description: str | None = None
     flow_template_id: UUID | None = None
+    allow_admin_commit: bool | None = None
     version: int | None = None
 
 
@@ -94,3 +95,26 @@ async def assign(pid: UUID, role: str, body: RoleAssign, projects: ProjectsDep) 
         pid, role, [str(u) for u in body.users], [str(a) for a in body.agents], body.version
     )
     return await _detail(projects, pid)
+
+
+async def _repository(projects: ProjectsDep, pid: UUID, me: UUID) -> dict[str, Any]:
+    pr = await projects.get(pid)
+    can_manage = await projects.teams.can_manage(pr.team_uuid, "project:configure")
+    return await projects.repository(pr, me, with_collaborators=can_manage) | {
+        "can_sync": can_manage
+    }
+
+
+@router.get("/{pid}/repository")
+async def repository(pid: UUID, projects: ProjectsDep, principal: PrincipalDep) -> dict[str, Any]:
+    """产物仓库：地址、我的访问权限；团队管理员另看协作者同步状态。"""
+    return await _repository(projects, pid, principal.uuid)
+
+
+@router.post("/{pid}/repository/sync")
+async def sync_repository(
+    pid: UUID, projects: ProjectsDep, principal: PrincipalDep
+) -> dict[str, Any]:
+    """建仓库（之前失败的重试）并按团队成员身份同步协作者。"""
+    await projects.sync_repo(pid)
+    return await _repository(projects, pid, principal.uuid)

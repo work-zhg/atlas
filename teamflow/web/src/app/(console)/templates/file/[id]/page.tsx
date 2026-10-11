@@ -8,7 +8,7 @@ import { useRouter } from "next/navigation";
 import { use, useState } from "react";
 
 import { EmptyBox, PageHead, StatusTag } from "@/components/common";
-import { api, errorText, upload } from "@/lib/api";
+import { api, BASE_PATH, errorText, upload } from "@/lib/api";
 import { dt, size, USAGE } from "@/lib/format";
 import { useCan } from "@/lib/session";
 import type { FileTemplate, FileVersion } from "@/lib/types";
@@ -93,7 +93,7 @@ export default function FileTemplatePage({ params }: { params: Promise<{ id: str
             title={showing ? `v${showing.version_no}（历史版本）` : t.current_version ? `v${t.current_version.version_no}（生效）· ${t.current_version.file_name}` : "内容"}
             extra={
               (showing ?? t.current_version) && (
-                <a href={`/api/v1/file-templates/${id}/versions/${(showing ?? t.current_version)!.version_no}/download`}>
+                <a href={`${BASE_PATH}/api/v1/file-templates/${id}/versions/${(showing ?? t.current_version)!.version_no}/download`}>
                   <DownloadOutlined /> 下载
                 </a>
               )

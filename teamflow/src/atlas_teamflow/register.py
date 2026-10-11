@@ -98,15 +98,10 @@ def register(
             print(f"  - 删除目录外的操作 {code}")
             ops.pop(code)
 
-    # ── 菜单（先删目录外的子菜单，再删目录）
+    # ── 菜单：先建 / 改（含挪到新目录），再删目录外的（先子菜单后目录）
+    #    ★ 顺序不能反：菜单挪走之前旧目录下还有子菜单，用户中心不允许删
     menus = {m["code"]: m for m in uc.get(f"/api/v1/apps/{aid}/menus")}
     want_menus = {m["code"] for m in catalog.MENUS}
-    for m in sorted(
-        (m for c, m in menus.items() if c not in want_menus), key=lambda m: m["type"] == "dir"
-    ):
-        uc.send("DELETE", f"/api/v1/menus/{m['id']}")
-        print(f"  - 删除目录外的菜单 {m['code']}")
-        menus.pop(m["code"])
     for spec in catalog.MENUS:
         parent_id = menus[spec["parent"]]["id"] if spec.get("parent") else None
         body = {
@@ -124,6 +119,12 @@ def register(
             )
         else:
             uc.send("PATCH", f"/api/v1/menus/{menus[spec['code']]['id']}", body)
+    for m in sorted(
+        (m for c, m in menus.items() if c not in want_menus), key=lambda m: m["type"] == "dir"
+    ):
+        uc.send("DELETE", f"/api/v1/menus/{m['id']}")
+        print(f"  - 删除目录外的菜单 {m['code']}")
+        menus.pop(m["code"])
     _order_menus(uc, aid)
 
     # ── 角色

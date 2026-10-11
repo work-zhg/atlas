@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import tempfile
-from pathlib import Path
 from typing import Any
 
 import httpx
 from atlas_teamflow.api.app import create_app
 from atlas_teamflow.settings import get_settings
-from tf_fakes import FakeAtlas, FakeUC
+from tf_fakes import FakeAtlas, FakeUC, MemoryRepoHost
 
 
 class Client:
@@ -26,7 +24,9 @@ class Client:
         return await self.http.get(url, **kw)
 
     async def post(self, url: str, json: Any = None, **kw: Any) -> httpx.Response:
-        return await self.http.post(url, json=json, headers=self._h(), **kw)
+        return await self.http.post(
+            url, json=json, headers={**self._h(), **kw.pop("headers", {})}, **kw
+        )
 
     async def patch(self, url: str, json: Any = None) -> httpx.Response:
         return await self.http.patch(url, json=json, headers=self._h())
@@ -39,14 +39,20 @@ class Client:
 
 
 class World:
-    def __init__(self, coord: Any = None, **overrides: Any) -> None:
+    def __init__(self, coord: Any = None, oauth: Any = None, **overrides: Any) -> None:
         self.uc = FakeUC()
         self.atlas = FakeAtlas()
-        self.git_root = Path(tempfile.mkdtemp(prefix="tf-git-"))
-        self.settings = get_settings().model_copy(
-            update={"team_level_ttl_seconds": 0, "git_root": self.git_root, **overrides}
+        self.repo = MemoryRepoHost()
+        self.atlas.host = self.repo
+        self.settings = get_settings().model_copy(update={"team_level_ttl_seconds": 0, **overrides})
+        self.app = create_app(
+            self.settings,
+            uc=self.uc,  # type: ignore[arg-type]
+            atlas=self.atlas,  # type: ignore[arg-type]
+            coord=coord,
+            repo=self.repo,
+            oauth=oauth,
         )
-        self.app = create_app(self.settings, uc=self.uc, atlas=self.atlas, coord=coord)  # type: ignore[arg-type]
         # 平台管理员、两位团队管理员、三位成员
         self.ids = {
             "padmin": self.uc.add_user("padmin", "平台管理员", ["TF_PLATFORM_ADMIN"]),
@@ -91,7 +97,7 @@ def node(
 
 
 def simple_definition() -> dict[str, Any]:
-    """需求 → (设计 ∥ 测试方案) → 开发。"""
+    """需求 → (设计 ∥ 测试方案) → 开发。准入配在下游节点上（开工前审核上游产物）。"""
     return {
         "flow": [
             {"type": "node", "id": "n1"},
@@ -99,10 +105,10 @@ def simple_definition() -> dict[str, Any]:
             {"type": "node", "id": "n4"},
         ],
         "nodes": {
-            "n1": node("需求分析", "产品", "需求文档", "产品评审", admit="技术评审"),
+            "n1": node("需求分析", "产品", "需求文档", "产品评审"),
             "n2": node("架构设计", "架构", "设计文档", "技术评审", admit="技术评审"),
             "n3": node("测试方案", "测试", "测试方案", "技术评审", admit="技术评审"),
-            "n4": node("开发", "开发", "代码", "技术评审"),
+            "n4": node("开发", "开发", "代码", "技术评审", admit="技术评审"),
         },
     }
 

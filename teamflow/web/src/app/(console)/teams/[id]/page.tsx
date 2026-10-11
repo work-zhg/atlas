@@ -23,6 +23,7 @@ import {
   Tag,
 } from "antd";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { use, useState } from "react";
 
 import { AgentAvatar, DeptPicker, EmptyBox, LevelTag, PageHead, PersonAvatar, StatusTag, UserPicker } from "@/components/common";
@@ -144,6 +145,7 @@ function Projects({ team }: { team: TeamDetail }) {
 
 function CreateProject({ team, open, onClose }: { team: TeamDetail; open: boolean; onClose: () => void }) {
   const qc = useQueryClient();
+  const router = useRouter();
   const { message } = App.useApp();
   const [form] = Form.useForm();
   const { data: tpls = [] } = useQuery({
@@ -158,7 +160,7 @@ function CreateProject({ team, open, onClose }: { team: TeamDetail; open: boolea
       await qc.invalidateQueries({ queryKey: ["team", team.id] });
       message.success("项目已创建，接下来分配角色");
       onClose();
-      window.location.href = `/projects/${p.id}/settings`;
+      router.push(`/projects/${p.id}/settings`);
     } catch (e) {
       message.error(errorText(e));
     }

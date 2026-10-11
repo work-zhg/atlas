@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from typing import Any
 from uuid import UUID
@@ -18,23 +19,108 @@ from ..audit import record
 from ..db.models import (
     FlowTemplate,
     FlowTemplateVersion,
+    GitAccount,
     Project,
+    RepoCollaborator,
     RoleAssignment,
     TeamAgent,
     TfUser,
 )
-from ..errors import Conflict, Invalid, NotFound
+from ..errors import Conflict, Invalid, NotFound, TFError
+from ..process.repo_host import RepoHost
+from ..process.repository import ensure_project_repo, sync_project_collaborators
 from ..templates import structure
 from .service import TeamService, _text
+
+log = logging.getLogger("atlas_teamflow.projects")
 
 __all__ = ["ProjectService"]
 
 
 class ProjectService:
-    def __init__(self, teams: TeamService) -> None:
+    def __init__(self, teams: TeamService, repo: RepoHost | None = None) -> None:
         self.teams = teams
         self.session = teams.session
         self.p = teams.p
+        self.repo = repo
+
+    async def provision_repo(self, pr: Project) -> None:
+        """建产物仓库并同步协作者。失败不挡住项目本身（记在 repo_status，发起流程前会重试）。"""
+        if self.repo is None:
+            return
+        try:
+            await ensure_project_repo(self.session, self.repo, pr)
+            await sync_project_collaborators(self.session, self.teams.uc, self.repo, pr)
+        except TFError as exc:
+            log.warning("项目 %s 的产物仓库未就绪：%s", pr.uuid, exc.message)
+
+    async def sync_repo(self, uuid: UUID) -> Project:
+        """团队管理员手动重试：建仓库（失败会抛出原因）并同步协作者。"""
+        pr = await self.get(uuid)
+        await self.teams._require_manage(await self.teams.get(pr.team_uuid), "project:configure")
+        if self.repo is None:
+            raise Conflict("REPO_NOT_CONFIGURED", "未配置产物仓库")
+        if pr.status == "archived":
+            raise Conflict("PROJECT_ARCHIVED", "项目已归档")
+        await ensure_project_repo(self.session, self.repo, pr)
+        stats = await sync_project_collaborators(self.session, self.teams.uc, self.repo, pr)
+        record(
+            self.session, self.p.uuid, "project.repo_synced", "project", pr.uuid, pr.name, **stats
+        )
+        return pr
+
+    async def repository(
+        self, pr: Project, me: UUID, *, with_collaborators: bool
+    ) -> dict[str, Any]:
+        """产物仓库视图：地址 + 我的访问方式；管理员另看协作者同步状态。"""
+        info = self.repo.info(pr.repo_name) if self.repo is not None and pr.repo_name else None
+        account = await self.session.scalar(select(GitAccount).where(GitAccount.user_uuid == me))
+        rows = list(
+            await self.session.scalars(
+                select(RepoCollaborator)
+                .where(RepoCollaborator.project_uuid == pr.uuid)
+                .order_by(RepoCollaborator.login)
+            )
+        )
+        mine = next((r for r in rows if r.user_uuid == me), None)
+        names = (
+            {
+                u.uuid: u.name
+                for u in await self.session.scalars(
+                    select(TfUser).where(
+                        TfUser.uuid.in_({r.user_uuid for r in rows if r.user_uuid})
+                    )
+                )
+            }
+            if rows
+            else {}
+        )
+        return {
+            "status": pr.repo_status,
+            "error": pr.repo_error,
+            "full_name": info.full_name if info else None,
+            "web_url": info.web_url if info else None,
+            "clone_url": info.clone_url if info else None,
+            "allow_admin_commit": pr.allow_admin_commit,
+            "me": {
+                "login": account.login if account else None,
+                "permission": mine.permission if mine else None,
+                "error": mine.error if mine else None,
+            },
+            "collaborators": [
+                {
+                    "login": r.login,
+                    "user_id": str(r.user_uuid) if r.user_uuid else None,
+                    "user_name": names.get(r.user_uuid) if r.user_uuid else None,
+                    "permission": r.permission,
+                    "synced_at": r.synced_at.isoformat() if r.synced_at else None,
+                    "error": r.error,
+                }
+                for r in rows
+            ]
+            if with_collaborators
+            else None,
+        }
 
     # ───────────────────────────── 读取
 
@@ -122,6 +208,7 @@ class ProjectService:
         )
         self.session.add(pr)
         await self.session.flush()
+        await self.provision_repo(pr)
         record(
             self.session,
             self.p.uuid,
@@ -152,12 +239,20 @@ class ProjectService:
             pr.name = name  # type: ignore[assignment]
         if "description" in data:
             pr.description = _text(data["description"], "description", "说明", 500, required=False)
+        resync = False
+        if (
+            "allow_admin_commit" in data
+            and bool(data["allow_admin_commit"]) != pr.allow_admin_commit
+        ):
+            pr.allow_admin_commit, resync = bool(data["allow_admin_commit"]), True
         if "flow_template_id" in data:
             new = UUID(str(data["flow_template_id"])) if data["flow_template_id"] else None
             if new != pr.flow_template_uuid:
                 pr.flow_template_uuid = await self._bindable(new)
         pr.version += 1
         pr.updated_by = self.p.uuid
+        if resync:
+            await self.provision_repo(pr)
         record(
             self.session, self.p.uuid, "project.updated", "project", pr.uuid, pr.name,
             template_before=before if before != pr.flow_template_uuid else None,

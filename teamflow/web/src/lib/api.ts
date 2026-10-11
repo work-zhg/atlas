@@ -20,11 +20,20 @@ export class ApiError extends Error {
   }
 }
 
+/** 写请求须带的头（双提交 CSRF）。嵌入的 Atlas 对话组件经代理发消息时也用它。 */
+export function writeHeaders(): Record<string, string> {
+  const token = csrf();
+  return token ? { "X-TF-CSRF": token } : {};
+}
+
 function csrf(): string | undefined {
   if (typeof document === "undefined") return undefined;
   const hit = document.cookie.split("; ").find((c) => c.startsWith("tf_csrf="));
   return hit ? decodeURIComponent(hit.slice("tf_csrf=".length)) : undefined;
 }
+
+/** 部署子路径（与 next.config 的 basePath 一致）。fetch / EventSource / <a href> 不会自动加，要手动拼。 */
+export const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 
 type Query = Record<string, string | number | boolean | undefined | null>;
 
@@ -34,7 +43,7 @@ function url(path: string, query?: Query): string {
     if (v !== undefined && v !== null && v !== "") qs.set(k, String(v));
   }
   const s = qs.toString();
-  return `/api/v1${path}${s ? `?${s}` : ""}`;
+  return `${BASE_PATH}/api/v1${path}${s ? `?${s}` : ""}`;
 }
 
 async function request<T>(method: string, path: string, body?: unknown, query?: Query): Promise<T> {
@@ -80,7 +89,7 @@ export async function upload<T>(path: string, form: FormData): Promise<T> {
   const headers: Record<string, string> = {};
   const token = csrf();
   if (token) headers["X-TF-CSRF"] = token;
-  const res = await fetch(`/api/v1${path}`, { method: "POST", body: form, headers, credentials: "same-origin" });
+  const res = await fetch(`${BASE_PATH}/api/v1${path}`, { method: "POST", body: form, headers, credentials: "same-origin" });
   if (!res.ok) {
     let payload: { code?: string; message?: string; details?: Record<string, unknown> } = {};
     try {

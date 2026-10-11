@@ -28,8 +28,10 @@ def _test_database() -> Iterator[None]:
     os.environ["ATLAS_TF_DATABASE_URL"] = TEST_URL
     # ★ 测试绝不碰真实外部服务：.env 里配的 Gitee / Redis 一律覆盖掉
     #   （环境变量优先于 .env）。需要 Redis 的用例自己构造协调器。
-    os.environ["ATLAS_TF_GIT_BACKEND"] = "local"
     os.environ["ATLAS_TF_GITEE_TOKEN"] = ""
+    os.environ["ATLAS_TF_ATLAS_API_KEY"] = ""
+    os.environ["ATLAS_TF_GITEE_WEBHOOK_SECRET"] = ""
+    os.environ["ATLAS_TF_GITEE_OAUTH_CLIENT_ID"] = ""
     os.environ["ATLAS_TF_REDIS_URL"] = ""
     os.environ["ATLAS_TF_EMBEDDED_WORKER"] = "true"
     get_settings.cache_clear()
@@ -54,8 +56,10 @@ def _test_database() -> Iterator[None]:
         yield
     finally:
         for k in (
-            "ATLAS_TF_GIT_BACKEND",
             "ATLAS_TF_GITEE_TOKEN",
+            "ATLAS_TF_ATLAS_API_KEY",
+            "ATLAS_TF_GITEE_WEBHOOK_SECRET",
+            "ATLAS_TF_GITEE_OAUTH_CLIENT_ID",
             "ATLAS_TF_REDIS_URL",
             "ATLAS_TF_EMBEDDED_WORKER",
         ):

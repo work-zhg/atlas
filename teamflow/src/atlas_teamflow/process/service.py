@@ -32,6 +32,7 @@ from ..db.models import (
     FileTemplateVersion,
     FlowTemplate,
     FlowTemplateVersion,
+    GitAccount,
     NodeMessage,
     Process,
     ProcessEvent,
@@ -40,7 +41,6 @@ from ..db.models import (
     ReviewRound,
     RoleAssignment,
     TeamAgent,
-    TfUser,
     Vote,
 )
 from ..db.types import utcnow
@@ -49,7 +49,8 @@ from ..identity import LEVEL_RANK
 from ..teams.service import TeamService
 from ..templates import structure
 from .bus import nudge_after_commit, wake_after_commit
-from .git_store import GitStore, safe_segment
+from .repo_host import CommitInfo, RepoHost, RepoInfo, safe_segment
+from .repository import ensure_project_repo
 
 __all__ = ["ProcessService", "build_kickoff"]
 
@@ -65,45 +66,100 @@ def _text(value: str | None, label: str, max_len: int) -> str:
     return v
 
 
+#: 提交说明的尾注：TeamFlow 据此识别 Agent 的提交与所属节点（产物仓库与 Agent 提交 · §5.2）
+TRAILER_NODE = "TeamFlow-Node"
+
+
+def commit_template(process: Process, node: ProcessNode, agent_name: str) -> str:
+    return (
+        f"{process.title} · {node.name} · 第 {node.round} 轮\n"
+        "\n"
+        "<一句话说明本次修改>\n"
+        "\n"
+        f"TeamFlow-Process: {process.uuid}\n"
+        f"{TRAILER_NODE}: {node.node_id}\n"
+        f"TeamFlow-Round: {node.round}\n"
+        f"Agent: {agent_name}"
+    )
+
+
+def git_steps(repo: RepoInfo, node: ProcessNode, template: str) -> str:
+    """在 Pod 里用 git CLI 提交产物的做法（会话 Pod 已挂好 git 凭据，见 Atlas git 凭据档案）。"""
+    local = f"/repos/{repo.full_name.split('/')[-1]}"
+    node_dir = (node.artifact_path or "").rsplit("/", 1)[0]
+    return (
+        "在命令行里操作产物仓库（git 凭据已由平台配置好，直接用 git；"
+        "不要询问、打印或保存任何密码 / 令牌）：\n"
+        f"1. 准备仓库：未 clone 过执行 `git clone {repo.clone_url} {local}`；"
+        f"已 clone 过执行 `cd {local} && git pull --rebase`\n"
+        "2. 读输入：`git show <commit>:<path>`（commit 与 path 见 <input>）\n"
+        f"3. 把产物完整全文（Markdown）写入 `{node.artifact_path}`；"
+        f"只修改 `{node_dir}/` 目录，不要改其他路径\n"
+        f"4. 提交并推送：`git add -- '{node_dir}'`，再用下面的提交说明 `git commit -F -`，"
+        "然后 `git push origin HEAD:master`；推送被拒绝时先 `git pull --rebase` 再推送\n"
+        f"提交说明：\n```\n{template}\n```\n"
+        "5. 推送成功后，在回复中给出 commit 号与修改说明。\n"
+        "如果你不能执行命令，请直接说明，不要只在回复里贴产物全文 —— 没有提交就没有产物。"
+    )
+
+
 def build_kickoff(
     *,
     process: Process,
     node_def: dict[str, Any],
+    node: ProcessNode,
+    repo: RepoInfo,
+    agent_name: str,
     file_template: tuple[str, int, str] | None,
-    inputs: list[tuple[str, int, str]],
+    inputs: list[tuple[str, str, str]],
 ) -> str:
-    """开工上下文（系统设计 §10.1）。inputs: [(上游产物名, 版本号, 内容)]。"""
+    """开工上下文（产物仓库与 Agent 提交 · §7）。inputs: [(上游产物名, 路径, commit)]。
+
+    ★ 上游产物不再内联全文：给路径与 commit，由 Agent 用 git 读取（也避免上下文过长）。
+    """
+    repo_xml = [
+        f'<repository provider="gitee" clone="{repo.clone_url}" branch="master" '
+        f'web="{repo.web_url}">',
+        f'  <output path="{node.artifact_path}" />',
+        *(f'  <input name="{n}" path="{p}" commit="{c}" />' for n, p, c in inputs),
+        "</repository>",
+    ]
     parts = [
         f"你是流程「{process.title}」中节点「{node_def['name']}」的执行者，"
         f"需要产出「{node_def['output_name']}」。",
-        f"需求：{process.requirement}",
+        "\n".join(repo_xml),
     ]
     if file_template:
         name, ver, content = file_template
         parts.append(f'<file-template name="{name}" version="{ver}">\n{content}\n</file-template>')
-    for name, ver, content in inputs:
-        parts.append(f'<input name="{name}" version="{ver}">\n{content}\n</input>')
-    parts.append(
-        "请先澄清不清楚的地方，再按文件模板产出，并对照模板自查。\n"
-        "★ 交付产物时，把产物全文（Markdown）放在 <artifact> 与 </artifact> 之间，"
-        "每次修改都输出完整全文；标记之外可以写说明。"
-    )
+    if inputs:
+        parts.append(
+            "以上游产物为输入；执行人可能在对话中补充要求，以执行人的说明为准。"
+            "先澄清不清楚的地方，再按文件模板产出，并对照模板自查。"
+        )
+    else:
+        # 发起流程只填名称：这段上下文与执行人的第一条说明合成一条发出（见 _with_pending_kickoff）
+        parts.append(
+            "本节点没有上游输入，要做什么以本消息末尾执行人的说明为准。"
+            "先澄清不清楚的地方，再按文件模板产出，并对照模板自查。"
+        )
+    parts.append(git_steps(repo, node, commit_template(process, node, agent_name)))
     return "\n\n".join(parts)
 
 
 class ProcessService:
-    def __init__(self, teams: TeamService, git: GitStore) -> None:
+    def __init__(self, teams: TeamService, repo: RepoHost) -> None:
         self.teams = teams
         self.session: AsyncSession = teams.session
         self.p = teams.p
-        self.git = git
+        self.repo = repo
 
     @classmethod
-    def system(cls, session: AsyncSession, git: GitStore) -> ProcessService:
-        """Agent 监督器用的系统身份：只做状态写入（提交 Agent 产物、记事件），不做权限判断。"""
+    def system(cls, session: AsyncSession, repo: RepoHost) -> ProcessService:
+        """Agent 监督器 / 产物观察用的系统身份：只做状态写入（登记产物、记事件），不做权限判断。"""
         self = cls.__new__(cls)
         self.teams = None  # type: ignore[assignment]
-        self.session, self.p, self.git = session, None, git  # type: ignore[assignment]
+        self.session, self.p, self.repo = session, None, repo  # type: ignore[assignment]
         return self
 
     @property
@@ -234,7 +290,7 @@ class ProcessService:
 
     # ───────────────────────────── 发起
 
-    async def start(self, project_uuid: UUID, title: str, requirement: str) -> Process:
+    async def start(self, project_uuid: UUID, title: str) -> Process:
         pr = await self._project(project_uuid)
         await self._member(pr.team_uuid, "process:start")
         if pr.status != "active":
@@ -246,6 +302,8 @@ class ProcessService:
         ).scalar_one_or_none()
         if tpl is None or tpl.current_version_uuid is None:
             raise Invalid("TEMPLATE_NOT_PUBLISHED", "项目还没有绑定已发布的流程模板")
+        # 产物仓库须就绪（老项目在这里补建）：Agent 要往里提交
+        await ensure_project_repo(self.session, self.repo, pr)
         # 同一项目的编号在项目行锁内分配
         await self.session.execute(
             select(Project.id).where(Project.uuid == pr.uuid).with_for_update()
@@ -266,7 +324,6 @@ class ProcessService:
             project_uuid=pr.uuid,
             no=no,
             title=_text(title, "流程名称", 100),
-            requirement=_text(requirement, "需求", 5000),
             template_uuid=tpl.uuid,
             template_version_uuid=tpl.current_version_uuid,
             started_by=self.p.uuid,
@@ -294,20 +351,50 @@ class ProcessService:
     # ───────────────────────────── 调度
 
     async def _advance(self, proc: Process) -> None:
-        """开工所有依赖已满足的节点；全部通过则流程完成。"""
+        """推进：上游都已准出的节点发起准入（没配准入则直接开工）；全部通过则流程完成。
+
+        准入由下游节点发起、审核上游产物（下阶段准入）：
+        - 上游准出通过且有下游 → exited（待下游准入）；
+        - 下游的上游全部 exited / passed → 下游配了准入就进入 admit_review，否则直接开工；
+        - 下游开工后，上游的全部下游都开工了，上游才通过（passed）。
+        """
         definition = await self.definition(proc)
         deps = structure.derive_deps(definition["flow"])
         nodes = await self.nodes(proc)
         for nid, ups in deps.items():
             n = nodes[nid]
-            if n.status in ("pending", "returned") and all(
-                nodes[u].status == "passed" for u in ups
-            ):
+            if n.status not in ("pending", "returned"):
+                continue
+            if not all(nodes[u].status in ("exited", "passed") for u in ups):
+                continue
+            admit = definition["nodes"][nid].get("admit_review")
+            if admit and any(nodes[u].status == "exited" for u in ups):
+                await self._open_round(proc, n, "admit", admit)
+            else:
                 await self._start_node(proc, n, definition, deps, nodes)
+                self._settle_upstreams(proc, deps, nodes, nid)
         if all(n.status == "passed" for n in nodes.values()):
             proc.status = "completed"
             proc.finished_at = utcnow()
             self.emit(proc, "process.completed")
+
+    def _settle_upstreams(
+        self,
+        proc: Process,
+        deps: dict[str, list[str]],
+        nodes: dict[str, ProcessNode],
+        nid: str,
+    ) -> None:
+        """nid 开工后：其上游中「全部下游都已开工」的待下游准入节点 → 通过。"""
+        started = ("working", "exit_review", "exited", "passed")
+        for u in deps.get(nid, []):
+            up = nodes[u]
+            if up.status != "exited":
+                continue
+            downs = [d for d, ups in deps.items() if u in ups]
+            if all(nodes[d].status in started for d in downs):
+                up.status, up.passed_at, up.notice = "passed", utcnow(), None
+                self.emit(proc, "node.passed", u)
 
     async def _start_node(
         self,
@@ -324,6 +411,7 @@ class ProcessService:
         n.notice = None
         if not restart:
             n.started_at = utcnow()
+            n.artifact_path = await self.artifact_path(proc, n, nd["output_name"])
             # 锁定文件模板版本
             ft_id = nd.get("artifact_file_template_id")
             if ft_id:
@@ -341,33 +429,58 @@ class ProcessService:
                     await self.session.execute(select(TeamAgent).where(TeamAgent.uuid == agents[0]))
                 ).scalar_one_or_none()
             if ta is None:
-                n.notice = (
-                    f"执行角色「{n.exec_role}」没有分配 Agent："
-                    "可由人直接提交产物，或请团队管理员分配"
-                )
+                n.notice = f"执行角色「{n.exec_role}」没有分配 Agent，请团队管理员分配"
             elif not ta.available:
                 n.notice = f"执行 Agent「{ta.name}」不可用，请团队管理员更换分配"
             else:
                 n.agent_uuid, n.atlas_agent_id = ta.uuid, ta.atlas_agent_id
+                n.notice = await self._shell_capability_notice(ta)
         await self.session.flush()
         inputs = await self._inputs(definition, deps, nodes, n)
+        repo = await self._repo_info(proc)
+        agent_name = await self._agent_name(n)
+        if not restart and not inputs:
+            # 没有上游输入：不空跑 Agent。等执行人第一次说明要做什么时，
+            # 开工上下文与说明合成一条投递（_with_pending_kickoff）
+            self.emit(proc, "node.started", n.node_id, round=n.round, notice=n.notice)
+            return
         if not restart:
-            self._queue(
-                n,
-                "system",
-                build_kickoff(
-                    process=proc,
-                    node_def=nd,
-                    file_template=await self._file_template(n),
-                    inputs=inputs,
-                ),
-            )
+            text = await self._kickoff(proc, n, inputs)
         else:
-            text = "上游产物已更新，请基于新的输入修订产物，并输出完整全文。"
-            for name, ver, content in inputs:
-                text += f'\n\n<input name="{name}" version="{ver}">\n{content}\n</input>'
-            self._queue(n, "system", text)
+            text = "上游产物已更新，请基于新的输入修订产物。\n\n" + "\n".join(
+                f'<input name="{name}" path="{path}" commit="{sha}" />'
+                for name, path, sha in inputs
+            )
+            text += "\n\n" + git_steps(repo, n, commit_template(proc, n, agent_name))
+        self._queue(n, "system", text)
         self.emit(proc, "node.started", n.node_id, round=n.round, notice=n.notice)
+
+    async def _kickoff(
+        self, proc: Process, n: ProcessNode, inputs: list[tuple[str, str, str]]
+    ) -> str:
+        definition = await self.definition(proc)
+        return build_kickoff(
+            process=proc,
+            node_def=definition["nodes"][n.node_id],
+            node=n,
+            repo=await self._repo_info(proc),
+            agent_name=await self._agent_name(n),
+            file_template=await self._file_template(n),
+            inputs=inputs,
+        )
+
+    async def _with_pending_kickoff(
+        self, proc: Process, n: ProcessNode, text: str, who: str
+    ) -> str:
+        """节点还没给 Agent 发过任何东西（没有上游、开工时没有投递）→ 把开工上下文拼在前面。"""
+        if n.atlas_thread_id or not n.agent_uuid:
+            return text
+        sent = await self.session.scalar(
+            select(NodeMessage.id).where(NodeMessage.node_uuid == n.uuid).limit(1)
+        )
+        if sent:
+            return text
+        return f"{await self._kickoff(proc, n, [])}\n\n{who}：\n{text}"
 
     async def _file_template(self, n: ProcessNode) -> tuple[str, int, str] | None:
         if not n.file_template_version_uuid:
@@ -389,14 +502,48 @@ class ProcessService:
         deps: dict[str, list[str]],
         nodes: dict[str, ProcessNode],
         n: ProcessNode,
-    ) -> list[tuple[str, int, str]]:
+    ) -> list[tuple[str, str, str]]:
+        """上游产物：(产物名, 路径, 当前登记版本的 commit)。"""
         out = []
         for up in deps.get(n.node_id, []):
             un = nodes[up]
             if un.current_artifact_uuid:
                 a = await self._artifact(un.current_artifact_uuid)
-                out.append((definition["nodes"][up]["output_name"], a.version_no, a.content))
+                out.append((definition["nodes"][up]["output_name"], a.path, a.commit_sha))
         return out
+
+    async def _repo_info(self, proc: Process) -> RepoInfo:
+        name = await self.session.scalar(
+            select(Project.repo_name).where(Project.uuid == proc.project_uuid)
+        )
+        return self.repo.info(name or self.repo.repo_name(proc.project_uuid))
+
+    async def _agent_name(self, n: ProcessNode) -> str:
+        if not n.agent_uuid:
+            return "Agent"
+        return (
+            await self.session.scalar(select(TeamAgent.name).where(TeamAgent.uuid == n.agent_uuid))
+            or "Agent"
+        )
+
+    async def _shell_capability_notice(self, ta: TeamAgent) -> str | None:
+        """产物要由 Agent 在 Pod 里用 git 提交：执行 Agent 必须能执行命令
+        （ACP 类 Agent，或带 ACP 子智能体的原生 Agent）。查不到时不拦，只在运行中暴露。"""
+        atlas = getattr(self.teams, "atlas", None) if self.teams else None
+        if atlas is None:
+            return None
+        try:
+            a = await atlas.get_agent(ta.atlas_agent_id)
+        except Exception:
+            return None
+        if not a:
+            return f"执行 Agent「{ta.name}」在 Atlas 中不存在，请团队管理员更换分配"
+        if a.get("kind") == "acp" or any(s.get("kind") == "acp" for s in a.get("subagents") or []):
+            return None
+        return (
+            f"执行 Agent「{ta.name}」不能执行命令（需要 ACP 类 Agent，或带 ACP 子智能体），"
+            "无法向产物仓库提交，请到 Atlas 配置或更换分配"
+        )
 
     async def _artifact(self, uuid: UUID) -> ArtifactVersion:
         return (
@@ -413,34 +560,56 @@ class ProcessService:
         if n.status != "working":
             raise Conflict("NODE_NOT_WORKING", "节点不在人机协同中")
         if not n.agent_uuid:
-            raise Conflict("NO_AGENT", "该节点没有可用的执行 Agent，请直接提交产物")
-        m = self._queue(n, "user", _text(text, "指令", 20000))
+            raise Conflict("NO_AGENT", "该节点没有可用的执行 Agent，请团队管理员分配")
+        body = _text(text, "指令", 20000)
+        m = self._queue(n, "user", await self._with_pending_kickoff(proc, n, body, "执行人的说明"))
         self.emit(proc, "message.sent", n.node_id)
         await self.session.flush()
         return m
 
+    @staticmethod
+    def process_dir(proc: Process) -> str:
+        """本流程在产物仓库里的目录（各节点产物都在它下面；目录预览只开放这里）。"""
+        return f"{proc.no:04d}-{safe_segment(proc.title)}/"
+
     async def artifact_path(self, proc: Process, n: ProcessNode, output_name: str) -> str:
         definition = await self.definition(proc)
         idx = structure.flow_node_ids(definition["flow"]).index(n.node_id) + 1
-        return (
-            f"{proc.no:04d}-{safe_segment(proc.title)}/"
-            f"{idx:02d}-{safe_segment(n.name)}/{safe_segment(output_name)}.md"
-        )
+        node_dir = f"{idx:02d}-{safe_segment(n.name)}"
+        return f"{self.process_dir(proc)}{node_dir}/{safe_segment(output_name)}.md"
 
-    async def commit_artifact(
-        self,
-        proc: Process,
-        n: ProcessNode,
-        content: str,
-        *,
-        source: str,
-        author: UUID | None,
-        note: str | None = None,
+    async def _latest_commit(self, proc: Process, n: ProcessNode) -> tuple[CommitInfo, str]:
+        """产物路径上最新的提交与该提交的产物全文（访问托管平台：调用方不要持有流程锁）。"""
+        repo = (await self._repo_info(proc)).full_name.split("/")[-1]
+        path = n.artifact_path or ""
+        commits = await self.repo.commits(repo, path=path, limit=1)
+        if not commits:
+            raise Conflict(
+                "NO_ARTIFACT", f"产物路径还没有提交：{path}（让 Agent 按要求提交并推送）"
+            )
+        content = await self.repo.read_file(repo, path, commits[0].sha)
+        if content is None:
+            raise Conflict("NO_ARTIFACT", f"最新提交里没有产物文件：{path}")
+        return commits[0], content
+
+    async def _source(self, n: ProcessNode, commit: CommitInfo) -> tuple[str, UUID | None]:
+        """来源：带本节点尾注 → agent；作者是已绑定账号的成员 → user；否则 unknown。"""
+        trailer = f"{TRAILER_NODE}: {n.node_id}"
+        if any(line.strip() == trailer for line in commit.message.splitlines()):
+            return "agent", None
+        if commit.author_login:
+            user = await self.session.scalar(
+                select(GitAccount.user_uuid).where(GitAccount.login == commit.author_login)
+            )
+            if user:
+                return "user", user
+        return "unknown", None
+
+    async def _lock_version(
+        self, proc: Process, n: ProcessNode, commit: CommitInfo, content: str
     ) -> ArtifactVersion:
-        """提交一个产物版本（Git commit + 库内缓存）。调用方已持有流程锁。"""
-        definition = await self.definition(proc)
-        nd = definition["nodes"][n.node_id]
-        path = await self.artifact_path(proc, n, nd["output_name"])
+        """把产物路径的这个提交登记为本次评审的版本（调用方已持有流程锁）。"""
+        source, user_uuid = await self._source(n, commit)
         no = (
             int(
                 await self.session.scalar(
@@ -452,50 +621,28 @@ class ProcessService:
             )
             + 1
         )
-        who = "Agent" if source == "agent" else "人工"
-        if author:
-            name = await self.session.scalar(select(TfUser.name).where(TfUser.uuid == author))
-            who = f"{who}（{name}）"
-        message = (
-            f"{proc.title} · {n.name} · {nd['output_name']} v{no}\n\n"
-            f"{note or ''}\n\n"
-            f"Process: {proc.uuid}\nNode: {n.node_id}\nRound: {n.round}\nBy: {who}\n"
-        )
-        sha = await self.git.commit(proc.team_uuid, proc.project_uuid, path, content, message)
         a = ArtifactVersion(
             node_uuid=n.uuid,
             version_no=no,
             round=n.round,
-            path=path,
-            commit_sha=sha,
+            path=n.artifact_path or "",
+            commit_sha=commit.sha,
             content=content,
             source=source,
-            created_by=author,
-            note=(note or None) and note[:200],
+            created_by=user_uuid,
+            note=commit.message.splitlines()[0][:200] if commit.message else None,
+            author_name=commit.author_name[:100] or None,
+            author_login=commit.author_login,
+            committed_at=commit.committed_at,
+            web_url=commit.web_url,
         )
         self.session.add(a)
         await self.session.flush()
         n.current_artifact_uuid = a.uuid
-        self.emit(proc, "artifact.committed", n.node_id, version=no, source=source, commit=sha[:10])
-        return a
-
-    async def submit_artifact(
-        self, process_uuid: UUID, node_id: str, content: str, note: str | None
-    ) -> ArtifactVersion:
-        proc = await self.get(process_uuid, lock=True)
-        self._require_running(proc)
-        n = await self.node(proc, node_id)
-        await self._require_executor(proc, n)
-        if n.status != "working":
-            raise Conflict("NODE_NOT_WORKING", "节点不在人机协同中")
-        body = (content or "").strip()
-        if not body:
-            raise Invalid("VALIDATION_FAILED", "产物内容不能为空")
-        if len(body.encode()) > 512 * 1024:
-            raise Invalid("VALIDATION_FAILED", "产物超过 512 KB")
-        return await self.commit_artifact(
-            proc, n, body, source="user", author=self.p.uuid, note=note
+        self.emit(
+            proc, "artifact.locked", n.node_id, version=no, source=source, commit=commit.sha[:10]
         )
+        return a
 
     # ───────────────────────────── 评审
 
@@ -506,11 +653,13 @@ class ProcessService:
         rr = ReviewRound(
             node_uuid=n.uuid,
             stage=stage,
-            round=n.round,
+            # 准入发生在本节点开工之前：记为即将开始的那一轮
+            round=n.round if stage == "exit" else n.round + 1,
             role=review["role"],
             rule=review["rule"],
             reviewers=[str(u) for u in users],
-            artifact_uuid=n.current_artifact_uuid,  # type: ignore[arg-type]
+            # 准入审核的是上游各节点当前锁定的版本，不绑定本节点的版本
+            artifact_uuid=n.current_artifact_uuid if stage == "exit" else None,
         )
         self.session.add(rr)
         n.status = "exit_review" if stage == "exit" else "admit_review"
@@ -541,7 +690,18 @@ class ProcessService:
         ).scalar_one_or_none()
 
     async def submit_review(self, process_uuid: UUID, node_id: str) -> ProcessNode:
-        """提交准出评审；评审人名单为空的待评审轮次可以重新提交以刷新名单。"""
+        """提交准出评审：锁定产物路径当前最新的 commit 作为本次评审的版本。
+        评审人名单为空的待评审轮次可以重新提交以刷新名单。
+
+        ★ 只在这里访问托管平台（run 结束与运行中都不看仓库）；先在锁外读，再加锁校验。
+        """
+        pre = await self.get(process_uuid)
+        pre_node = await self.node(pre, node_id)
+        latest = (
+            await self._latest_commit(pre, pre_node)
+            if pre_node.status == "working" and pre_node.artifact_path
+            else None
+        )
         proc = await self.get(process_uuid, lock=True)
         self._require_running(proc)
         n = await self.node(proc, node_id)
@@ -559,12 +719,17 @@ class ProcessService:
             return n
         if n.status != "working":
             raise Conflict("NODE_NOT_WORKING", "节点不在人机协同中")
-        if not n.current_artifact_uuid:
-            raise Conflict("NO_ARTIFACT", "还没有产物，不能提交评审")
-        a = await self._artifact(n.current_artifact_uuid)
-        if a.round != n.round:
-            # 驳回 / 打回后回到协同中：必须有本轮的新版本（内容不变也可人工重新提交一次）
-            raise Conflict("ARTIFACT_NOT_REVISED", "本轮还没有新的产物版本")
+        if latest is None:
+            raise Conflict("NO_ARTIFACT", "节点还没有产物路径")
+        commit, content = latest
+        if await self.session.scalar(
+            select(ArtifactVersion.id).where(
+                ArtifactVersion.node_uuid == n.uuid, ArtifactVersion.commit_sha == commit.sha
+            )
+        ):
+            # 驳回 / 打回后回到协同中：产物路径必须有新的提交
+            raise Conflict("ARTIFACT_NOT_REVISED", "上次评审之后产物还没有新的提交")
+        await self._lock_version(proc, n, commit, content)
         await self._open_round(proc, n, "exit", nd["exit_review"])
         return n
 
@@ -595,6 +760,12 @@ class ProcessService:
         deps = structure.derive_deps(definition["flow"])
         if decision == "reject":
             comment = _text(comment, "驳回意见", 5000)
+            if rr.stage == "admit" and not return_to:
+                # 准入驳回 = 打回上游（本节点还没开工）；只有一个上游时默认打回它
+                ups = deps.get(n.node_id, [])
+                if len(ups) != 1:
+                    raise Invalid("RETURN_TARGET_REQUIRED", "准入驳回需要选择打回到哪个上游节点")
+                return_to = ups[0]
             if return_to and return_to not in _ancestors(deps, n.node_id):
                 raise Invalid("INVALID_RETURN_TARGET", "只能打回到本节点的上游节点")
         self.session.add(
@@ -617,11 +788,16 @@ class ProcessService:
                 n.status = "working"
                 n.round += 1
                 n.notice = None
+                text = f"{'准出' if rr.stage == 'exit' else '准入'}评审驳回，" + (
+                    f"请按意见修改产物：\n\n{comment}\n\n"
+                    + git_steps(
+                        await self._repo_info(proc),
+                        n,
+                        commit_template(proc, n, await self._agent_name(n)),
+                    )
+                )
                 self._queue(
-                    n,
-                    "system",
-                    f"{'准出' if rr.stage == 'exit' else '准入'}评审驳回，"
-                    f"请按意见修改产物并输出完整全文：\n\n{comment}",
+                    n, "system", await self._with_pending_kickoff(proc, n, text, "本轮指令")
                 )
             await self.session.flush()
             return n
@@ -636,14 +812,19 @@ class ProcessService:
         if rr.rule == "any" or approvals >= len(rr.reviewers):
             rr.status, rr.closed_at = "passed", utcnow()
             self.emit(proc, "review.passed", n.node_id, stage=rr.stage)
-            admit = definition["nodes"][n.node_id].get("admit_review")
-            if rr.stage == "exit" and admit:
-                await self._open_round(proc, n, "admit", admit)
+            if rr.stage == "admit":
+                # 准入通过：本节点开工；上游的下游都开工后上游通过
+                nodes = await self.nodes(proc)
+                await self._start_node(proc, n, definition, deps, nodes)
+                self._settle_upstreams(proc, deps, nodes, n.node_id)
+            elif any(n.node_id in ups for ups in deps.values()):
+                n.status, n.notice = "exited", None  # 待下游准入
+                self.emit(proc, "node.exited", n.node_id)
             else:
-                n.status, n.passed_at, n.notice = "passed", utcnow(), None
+                n.status, n.passed_at, n.notice = "passed", utcnow(), None  # 最后一个节点
                 self.emit(proc, "node.passed", n.node_id)
-                await self.session.flush()
-                await self._advance(proc)
+            await self.session.flush()
+            await self._advance(proc)
         await self.session.flush()
         return n
 
@@ -656,7 +837,8 @@ class ProcessService:
         target_id: str,
         comment: str,
     ) -> None:
-        """打回：目标节点回到人机协同中；它下游已开工 / 已通过的节点 → 已打回。"""
+        """打回：目标节点回到人机协同中；它下游已开工 / 已通过 / 准入中的节点 → 已打回。"""
+        via = "准入" if n.status == "admit_review" else ""  # 下面会把 n 也标为已打回，先记下
         nodes = await self.nodes(proc)
         target = nodes[target_id]
         for did in _descendants(deps, target_id):
@@ -671,10 +853,17 @@ class ProcessService:
         target.round += 1
         target.passed_at = None
         target.notice = None
+        text = (
+            f"下游节点「{n.name}」{via}评审时打回到本节点，"
+            f"请按意见修改产物：\n\n{comment}\n\n"
+            + git_steps(
+                await self._repo_info(proc),
+                target,
+                commit_template(proc, target, await self._agent_name(target)),
+            )
+        )
         self._queue(
-            target,
-            "system",
-            f"下游节点「{n.name}」评审时打回到本节点，请按意见修改产物并输出完整全文：\n\n{comment}",
+            target, "system", await self._with_pending_kickoff(proc, target, text, "本轮指令")
         )
         self.emit(proc, "node.returned", target_id, by=n.node_id)
 

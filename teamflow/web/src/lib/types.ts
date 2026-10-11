@@ -230,7 +230,8 @@ export interface DirDept {
 
 // ───────────── 流程运行
 
-export type NodeStatus = "pending" | "working" | "exit_review" | "admit_review" | "passed" | "returned";
+/** exited = 准出通过、待下游准入；admit_review = 本节点开工前的准入评审中（审核上游产物） */
+export type NodeStatus = "pending" | "working" | "exit_review" | "exited" | "admit_review" | "passed" | "returned";
 
 export interface ProcessSummary {
   id: string;
@@ -258,7 +259,6 @@ export interface ProcessNodeState {
 }
 
 export interface ProcessDetail extends ProcessSummary {
-  requirement: string;
   team_id: string;
   team_name: string;
   project_id: string;
@@ -280,6 +280,8 @@ export interface NodeDetail {
   round: number;
   notice: string | null;
   agent_running: boolean;
+  /** 节点的 Atlas 会话（对话区经代理读写它）；Agent 尚未开工时为空 */
+  atlas_thread_id: string | null;
   file_template: { id: string; name: string; version: number } | null;
   inputs: { node_id: string; node: string; output: string; version: number | null }[];
   upstream: string[];
@@ -292,16 +294,23 @@ export interface NodeDetail {
     round: number;
     created_at: string;
   }[];
+  /** 本节点产物在仓库里的路径（Agent 提交到这里）；未开工时为空 */
+  artifact_path: string | null;
+  repository: RepoInfo | null;
   artifacts: {
     version: number;
     round: number;
     commit: string;
     path: string;
-    source: "agent" | "user";
+    /** agent = 带本节点尾注的提交；user = 已绑定账号的成员；unknown = 认不出提交人 */
+    source: "agent" | "user" | "unknown";
     by: string | null;
+    author: string | null;
+    author_login: string | null;
     note: string | null;
     current: boolean;
     url: string | null;
+    committed_at: string | null;
     created_at: string;
   }[];
   current_content: string | null;
@@ -331,4 +340,31 @@ export interface TodoItem {
   node_id: string;
   node_name: string;
   since: string | null;
+}
+
+export interface RepoInfo {
+  full_name: string;
+  web_url: string;
+  clone_url: string;
+}
+
+/** 项目产物仓库：地址 + 我的访问方式；管理员另有协作者同步状态 */
+export interface ProjectRepository {
+  status: "none" | "ready" | "error";
+  error: string | null;
+  full_name: string | null;
+  web_url: string | null;
+  clone_url: string | null;
+  allow_admin_commit: boolean;
+  me: { login: string | null; permission: "pull" | "push" | null; error: string | null };
+  collaborators:
+    | { login: string; user_id: string | null; user_name: string | null; permission: "pull" | "push"; synced_at: string | null; error: string | null }[]
+    | null;
+  can_sync: boolean;
+}
+
+export interface GitAccountView {
+  oauth_enabled: boolean;
+  account: { provider: string; login: string; name: string | null; bound_at: string } | null;
+  repositories: { login: string; permission: "pull" | "push"; error: string | null; project_id: string }[];
 }

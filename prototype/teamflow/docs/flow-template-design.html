@@ -153,10 +153,10 @@
     <tr><td>草稿</td><td>正在编辑、尚未发布的定义。每个模板最多一份。</td></tr>
     <tr><td>步骤</td><td>流程结构的一级元素：<b>单个节点</b>，或<b>并行组</b>。步骤按顺序执行。</td></tr>
     <tr><td>并行组 / 轨道</td><td>并行组包含 ≥ 2 条轨道，每条轨道是一串顺序执行的节点。各轨道同时开工，全部完成后汇合进入下一步骤。</td></tr>
-    <tr><td>节点</td><td>一项人机协同的工作单元，产出一份产物，经准出、准入评审后完成。</td></tr>
+    <tr><td>节点</td><td>一项人机协同的工作单元，产出一份产物；经本节点准出、下游节点准入后完成。</td></tr>
     <tr><td>执行角色</td><td>完成节点的角色（如「架构设计」）；项目为它分配人与 AI Agent，人下达指令、Agent 执行。</td></tr>
     <tr><td>评审角色</td><td>负责准出或准入评审的角色（如「技术负责人」）。</td></tr>
-    <tr><td>准出 / 准入</td><td>准出：产出方把关产物质量；准入：下游把关产物能否作为输入。准入可选。</td></tr>
+    <tr><td>准出 / 准入</td><td>准出：产出方把关产物质量；准入：<b>本节点开工前</b>审核上游产物能否作为输入（配在下游节点上，下阶段准入）。准入可选，第一个节点没有上游、不配置准入。</td></tr>
     <tr><td>评审规则</td><td><code>any</code> 任一人同意即通过；<code>all</code> 角色下所有成员都同意才通过。任一人驳回即退回。</td></tr>
   </table>
 </section>
@@ -285,16 +285,15 @@
     <tr><td><code>output_name</code></td><td>是</td><td>产物名称（如「技术方案」），模板内唯一；下游节点的「输入产物」即上游的产物名称</td></tr>
     <tr><td><code>artifact_file_template_id</code></td><td>否</td><td>产物格式所依据的文件模板；为空时 Agent 按通用格式产出</td></tr>
     <tr><td><code>exit_review</code></td><td>是</td><td><code>{ "role": "技术负责人", "rule": "all" }</code>：准出评审角色与规则</td></tr>
-    <tr><td><code>admit_review</code></td><td>否</td><td><code>{ "role": "测试负责人", "rule": "any" }</code> 或 <code>null</code>：准入评审；为空则准出通过即完成</td></tr>
+    <tr><td><code>admit_review</code></td><td>否</td><td><code>{ "role": "测试负责人", "rule": "any" }</code> 或 <code>null</code>：本节点开工前对上游产物的准入评审；为空则上游准出后直接开工</td></tr>
     <tr><td><code>exit_rule_file_template_id</code></td><td>否</td><td><span class="tag p2">预留</span> 自动准出的规则文件</td></tr>
     <tr><td><code>exit_mode</code></td><td>否</td><td><span class="tag p2">预留</span> <code>manual</code>（默认）/ <code>auto</code> / <code>auto_then_manual</code></td></tr>
   </table>
 
   <h3>6.1 节点生命周期（由流程模块实现，本模块定义语义）</h3>
-<div class="flow">人机协同中 ──提交准出──▶ 待准出 ──准出规则满足──▶ 待准入 ──准入规则满足──▶ 已通过 ──▶ 下游依赖全部通过的节点开工
-                           │ 任一人驳回             │ 任一人驳回           ▲
-                           └──▶ 回到本节点修改，或打回到更早的节点 ◀──┘       │
-                                                                          未配置准入时，准出通过即「已通过」</div>
+<div class="flow">上游全部准出 ──▶ 本节点准入评审（审核上游产物）──准入规则满足──▶ 人机协同中 ──提交准出──▶ 待准出
+──准出规则满足──▶ 待下游准入 ──下游全部准入（开工）──▶ 已通过
+未配置准入：上游准出后直接开工；最后一个节点：准出通过即「已通过」</div>
   <table>
     <tr><th style="width:24%">规则</th><th>说明</th></tr>
     <tr><td><code>any</code> 任一人同意</td><td>评审角色中有 1 人同意即通过</td></tr>
@@ -389,10 +388,10 @@
     <tr><th style="width:8%">级别</th><th>规则</th></tr>
     <tr><td>错误</td><td>至少 1 个节点；结构合法（并行组 ≥ 2 条轨道、每条轨道 ≥ 1 个节点、无嵌套并行）</td></tr>
     <tr><td>错误</td><td>节点 id、节点名称、产物名称在模板内唯一</td></tr>
-    <tr><td>错误</td><td>每个节点有执行角色、产物名称、准出评审（角色 + 规则）；准入评审若配置则角色与规则齐全</td></tr>
+    <tr><td>错误</td><td>每个节点有执行角色、产物名称、准出评审（角色 + 规则）；准入评审若配置则角色与规则齐全；没有上游的节点不能配置准入</td></tr>
     <tr><td>错误</td><td>引用的文件模板存在且未停用</td></tr>
     <tr><td>警告</td><td>引用的文件模板没有生效版本（节点将按通用格式产出）</td></tr>
-    <tr><td>警告</td><td>有下游的节点未配置准入评审</td></tr>
+    <tr><td>警告</td><td>有上游的节点未配置准入评审（上游准出后直接开工）</td></tr>
     <tr><td>警告</td><td>本次发布新增了角色：绑定该模板的 N 个项目需补充分配</td></tr>
     <tr><td>错误</td><td>更新说明为空</td></tr>
   </table>

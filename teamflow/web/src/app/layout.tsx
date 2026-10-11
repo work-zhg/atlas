@@ -3,6 +3,8 @@ import type { Metadata } from "next";
 import "@ant-design/v5-patch-for-react-19";
 
 import { Providers } from "@/lib/providers";
+// 对话区（Atlas 对话组件）的设计变量；只在 .atlas-chat-root 内生效的样式由 AtlasChatTheme 套上
+import "@atlas/chat-ui/src/theme/tokens.css";
 import "./globals.css";
 
 export const metadata: Metadata = { title: "AI TeamFlow", description: "让 AI Agent 作为团队成员参与研发流程" };

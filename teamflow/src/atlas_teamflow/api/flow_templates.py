@@ -1,4 +1,4 @@
-"""流程模板：查看（flow_template:view，平台管理员与团队管理员），维护（flow_template:manage，平台管理员）。"""
+"""流程模板（系统设置）：维护（flow_template:manage）只有平台管理员；团队管理员只读（flow_template:view，建项目时选择模板）。"""
 
 from __future__ import annotations
 

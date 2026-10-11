@@ -35,7 +35,14 @@ CSRF_HEADER = "x-tf-csrf"
 _SAFE = {"GET", "HEAD", "OPTIONS"}
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
-SettingsDep = Annotated[TFSettings, Depends(get_settings)]
+
+
+def _settings(request: Request) -> TFSettings:
+    """create_app 传入的配置优先（测试 / 嵌入时与全局配置不同）。"""
+    return getattr(request.app.state, "settings", None) or get_settings()
+
+
+SettingsDep = Annotated[TFSettings, Depends(_settings)]
 
 
 def _uc(request: Request) -> UCClient:
@@ -80,16 +87,21 @@ def require(*ops: str):  # type: ignore[no-untyped-def]
 
 
 def _teams(
-    session: SessionDep, principal: PrincipalDep, uc: UCDep, levels: LevelsDep, atlas: AtlasDep
+    request: Request,
+    session: SessionDep,
+    principal: PrincipalDep,
+    uc: UCDep,
+    levels: LevelsDep,
+    atlas: AtlasDep,
 ) -> TeamService:
-    return TeamService(session, principal, uc, levels, atlas)
+    return TeamService(session, principal, uc, levels, atlas, repo=request.app.state.repo)
 
 
 TeamsDep = Annotated[TeamService, Depends(_teams)]
 
 
 def _projects(teams: TeamsDep) -> ProjectService:
-    return ProjectService(teams)
+    return ProjectService(teams, teams.repo)
 
 
 ProjectsDep = Annotated[ProjectService, Depends(_projects)]

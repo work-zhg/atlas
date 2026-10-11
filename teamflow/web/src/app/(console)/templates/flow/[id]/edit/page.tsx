@@ -405,7 +405,7 @@ function NodeForm({ node, onChange, disabled }: { node: NodeConfig; onChange: (n
           />
         </Space>
       </Form.Item>
-      <Form.Item label="准入评审（下游把关能否作为输入）">
+      <Form.Item label="准入评审（本节点开工前审核上游产物）" extra="上游准出后，由本节点的准入评审决定是否接收；通过后本节点开工、上游完成。不配置则上游准出后直接开工；第一个节点没有上游，不需要准入。">
         <Space direction="vertical">
           <Switch
             checked={!!node.admit_review}

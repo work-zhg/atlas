@@ -1,4 +1,4 @@
-"""文件模板：所有角色可查看（file_template:view），平台管理员维护（file_template:manage）。"""
+"""文件模板（系统设置）：维护（file_template:manage）只有平台管理员；其他角色只读接口（file_template:view）。"""
 
 from __future__ import annotations
 

@@ -76,7 +76,7 @@ async def test_flow_template_draft_and_publish() -> None:
     assert r.status_code == 422 and r.json()["details"]["errors"]
 
     defn = simple_definition()
-    defn["nodes"]["n2"]["admit_review"] = None  # 有下游却无准入 → 警告
+    defn["nodes"]["n2"]["admit_review"] = None  # 有上游却无准入（上游准出后直接开工）→ 警告
     d = ok(
         await admin.put(
             f"/api/v1/flow-templates/{tid}/draft", {"definition": defn, "version": d["version"]}

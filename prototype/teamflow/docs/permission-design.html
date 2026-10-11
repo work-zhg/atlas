@@ -108,7 +108,7 @@
 <header class="hero">
   <p class="kicker">AI TeamFlow · Detailed Design</p>
   <h1>权限设计：角色、操作与数据权限</h1>
-  <p class="lede">TeamFlow 不自建账号与权限体系：<b>人员、角色、操作码、菜单、数据权限都在用户中心维护</b>，TeamFlow 作为接入应用，在服务端调用用户中心开放接口取得结果并执行。TeamFlow 只有三个角色：<b>平台管理员</b>管模板，<b>团队管理员</b>配置团队的项目，<b>团队成员</b>处理流程。<b>每个团队对应一条数据权限</b>（数据编码 <code>Team</code> + 团队 Id）：团队成员默认读写，团队管理员是 Owner。</p>
+  <p class="lede">TeamFlow 不自建账号与权限体系：<b>人员、角色、操作码、菜单、数据权限都在用户中心维护</b>，TeamFlow 作为接入应用，在服务端调用用户中心开放接口取得结果并执行。TeamFlow 只有三个角色：<b>平台管理员</b>管系统设置（流程模板、文件模板、集成配置），<b>团队管理员</b>配置团队的项目，<b>团队成员</b>处理流程。<b>每个团队对应一条数据权限</b>（数据编码 <code>Team</code> + 团队 Id）：团队成员默认读写，团队管理员是 Owner。</p>
   <div class="meta"><span>三个角色</span><span>一个团队一条数据权限</span><span>成员 = 读写</span><span>团队管理员 = Owner</span><span>节点分工 = 流程角色分配</span></div>
 </header>
 
@@ -147,7 +147,7 @@
   <h2><span class="num">03</span>权限模型</h2>
   <div class="arch">
     <div class="arch-row" style="gap:12px;align-items:stretch">
-      <div class="arch-box me"><b>① 角色（能做哪一类事）</b><ul><li>平台管理员：模板</li><li>团队管理员：配置团队与项目</li><li>团队成员：处理流程</li><li>用户中心 · 角色授权</li></ul></div>
+      <div class="arch-box me"><b>① 角色（能做哪一类事）</b><ul><li>平台管理员：系统设置（模板）</li><li>团队管理员：配置团队与项目</li><li>团队成员：处理流程</li><li>用户中心 · 角色授权</li></ul></div>
       <div class="arch-box me"><b>② 团队数据权限（在哪个团队做）</b><ul><li>一个团队一条：Team + 团队 Id</li><li>成员 = 读写，团队管理员 = Owner</li><li>用户中心 · 数据授权</li></ul></div>
       <div class="arch-box"><b>③ 流程角色分配（节点谁做谁审）</b><ul><li>项目里「流程角色 → 成员 / Agent」</li><li>TeamFlow 自己维护</li></ul></div>
     </div>
@@ -165,7 +165,7 @@
   <h2><span class="num">04</span>角色</h2>
   <table>
     <tr><th style="width:150px">角色（编码）</th><th>负责</th><th style="width:140px">需要的团队级别</th><th style="width:200px">建议授予</th></tr>
-    <tr><td><b>平台管理员</b><br><code>TF_PLATFORM_ADMIN</code></td><td>配置流程模板与文件模板；新建团队并指定团队管理员；调整任意团队的管理员；系统设置</td><td>不需要</td><td>平台负责人（个人）</td></tr>
+    <tr><td><b>平台管理员</b><br><code>TF_PLATFORM_ADMIN</code></td><td>系统设置：配置流程模板、文件模板与集成配置（只有平台管理员可见、可配置）；新建团队并指定团队管理员；调整任意团队的管理员</td><td>不需要</td><td>平台负责人（个人）</td></tr>
     <tr><td><b>团队管理员</b><br><code>TF_TEAM_ADMIN</code></td><td>配置团队的项目（新建、绑定流程模板、流程角色分配、归档）；管理团队成员与 Agent；编辑团队信息</td><td>对该团队 Owner</td><td>各团队负责人（个人或岗位，如「技术负责人」）</td></tr>
     <tr><td><b>团队成员</b><br><code>TF_TEAM_MEMBER</code></td><td>处理流程：发起、节点协同、准入 / 准出评审</td><td>对该团队读写</td><td>全员：授予根部门（含下级）。能进哪个团队由团队数据权限决定</td></tr>
   </table>
@@ -181,13 +181,13 @@
   <p>登记在用户中心「应用接入 → AI TeamFlow → 操作目录」。「团队级别」列是该操作在 TeamFlow 里还要满足的团队数据权限。</p>
   <table>
     <tr><th style="width:80px">模块</th><th style="width:190px">操作码</th><th>名称</th><th style="width:90px">团队级别</th><th style="width:150px">所属角色</th></tr>
-    <tr><td>流程模板</td><td><code>flow_template:view</code></td><td>查看流程模板</td><td>—</td><td>平台管理员、团队管理员</td></tr>
+    <tr><td>流程模板</td><td><code>flow_template:view</code></td><td>查看流程模板（团队管理员只用于建项目 / 项目设置时选择模板，没有菜单）</td><td>—</td><td>平台管理员、团队管理员</td></tr>
     <tr><td>流程模板</td><td><code>flow_template:manage</code></td><td>新建 / 编辑 / 发布 / 停用 / 删除；维护流程角色库</td><td>—</td><td>平台管理员</td></tr>
-    <tr><td>文件模板</td><td><code>file_template:view</code></td><td>查看 / 下载文件模板</td><td>—</td><td>三个角色</td></tr>
+    <tr><td>文件模板</td><td><code>file_template:view</code></td><td>查看 / 下载文件模板（非平台管理员没有菜单，只有只读接口）</td><td>—</td><td>三个角色</td></tr>
     <tr><td>文件模板</td><td><code>file_template:manage</code></td><td>新建 / 上传版本 / 停用 / 删除</td><td>—</td><td>平台管理员</td></tr>
     <tr><td>团队</td><td><code>team:create</code></td><td>新建团队并指定团队管理员</td><td>—</td><td>平台管理员</td></tr>
     <tr><td>团队</td><td><code>team:manage_all</code></td><td>查看全部团队、调整任意团队的管理员</td><td>—</td><td>平台管理员</td></tr>
-    <tr><td>系统</td><td><code>settings:manage</code></td><td>系统设置（Atlas / Git 连接、通知）</td><td>—</td><td>平台管理员</td></tr>
+    <tr><td>系统</td><td><code>settings:manage</code></td><td>集成配置（Atlas / Gitee 连接、通知）</td><td>—</td><td>平台管理员</td></tr>
     <tr><td>团队</td><td><code>team:edit</code></td><td>编辑团队信息</td><td>Owner</td><td>团队管理员</td></tr>
     <tr><td>团队</td><td><code>team:member</code></td><td>管理团队成员</td><td>Owner</td><td>团队管理员</td></tr>
     <tr><td>团队</td><td><code>team:agent</code></td><td>接入 / 移除团队 Agent</td><td>Owner</td><td>团队管理员</td></tr>
@@ -209,10 +209,10 @@
     <tr><th style="width:200px">菜单（编码）</th><th style="width:150px">路由</th><th>可见</th></tr>
     <tr><td>📋 待我处理（<code>todo</code>）</td><td class="mono">/todo</td><td>团队成员</td></tr>
     <tr><td>👥 团队（<code>teams</code>）</td><td class="mono">/teams</td><td>公共菜单：人人可见，列表只含我有数据权限的团队（平台管理员看全部）</td></tr>
-    <tr><td>🗂️ 模板（目录 <code>tpl</code>）</td><td>—</td><td>有可见子菜单时出现</td></tr>
-    <tr><td>　🧭 流程模板（<code>flow_tpl</code>）</td><td class="mono">/flow-templates</td><td>平台管理员、团队管理员</td></tr>
-    <tr><td>　📄 文件模板（<code>file_tpl</code>）</td><td class="mono">/file-templates</td><td>三个角色</td></tr>
-    <tr><td>⚙️ 系统设置（<code>settings</code>）</td><td class="mono">/settings</td><td>平台管理员</td></tr>
+    <tr><td>⚙️ 系统设置（目录 <code>sys</code>）</td><td>—</td><td>平台管理员</td></tr>
+    <tr><td>　🧭 流程模板（<code>flow_tpl</code>）</td><td class="mono">/templates/flow</td><td>平台管理员</td></tr>
+    <tr><td>　📄 文件模板（<code>file_tpl</code>）</td><td class="mono">/templates/file</td><td>平台管理员</td></tr>
+    <tr><td>　🔌 集成配置（<code>settings</code>）</td><td class="mono">/settings</td><td>平台管理员</td></tr>
   </table>
   <p>项目、流程、节点是团队下的页面，不是菜单。TeamFlow 前端用 <code>menus</code> 渲染导航、做路由守卫，用 <code>permissions</code> 控制按钮；进入某个团队后再按团队级别显示配置类按钮（Owner）。</p>
 </section>
@@ -351,7 +351,7 @@
     <li>团队成员级别来源：直接授予、部门授予（含 / 不含下级）。</li>
     <li>新建团队：多名管理员一次写入；写入失败时团队回滚。</li>
     <li>移除最后一名团队管理员被拒（用户中心 Owner 保护）。</li>
-    <li>菜单：团队成员只有待我处理、团队、文件模板；团队管理员多流程模板；平台管理员多系统设置。</li>
+    <li>菜单：团队成员、团队管理员只有待我处理、团队；平台管理员多「系统设置」（流程模板、文件模板、集成配置）。</li>
   </ul>
 </section>
 

@@ -29,10 +29,13 @@ class AtlasClient:
     def __init__(
         self, settings: TFSettings, transport: httpx.AsyncBaseTransport | None = None
     ) -> None:
+        key = settings.atlas_api_key.get_secret_value()
+        # 服务账号密钥优先（Atlas 开启登录后唯一有效的凭据）；没配时沿用 dev 模式的请求头身份
+        auth = {"Authorization": f"Bearer {key}"} if key else {"X-User-Id": settings.atlas_user_id}
         self._http = httpx.AsyncClient(
             base_url=settings.atlas_base_url,
             timeout=10.0,
-            headers={"X-User-Id": settings.atlas_user_id},
+            headers=auth,
             transport=transport,
         )
 
@@ -68,8 +71,14 @@ class AtlasClient:
 
     # ───────────────────────────── 会话与运行（Agent 适配层专用）
 
-    async def create_thread(self, agent_id: str, title: str) -> str:
-        r = await self._post("/v1/threads", {"agent_id": agent_id, "title": title[:256]})
+    async def create_thread(
+        self, agent_id: str, title: str, *, git_profile: str | None = None
+    ) -> str:
+        """建会话。git_profile：Atlas 的 git 凭据档案名，会话 Pod 里的 git CLI 据此获得凭据。"""
+        body: dict[str, Any] = {"agent_id": agent_id, "title": title[:256]}
+        if git_profile:
+            body["git_profile"] = git_profile
+        r = await self._post("/v1/threads", body)
         return str(r["id"])
 
     async def create_run(self, thread_id: str, text: str, idempotency_key: str) -> str:
@@ -113,6 +122,53 @@ class AtlasClient:
             r = await self._http.post(path, json=body, headers=headers)
         except httpx.HTTPError as exc:
             raise Upstream("ATLAS_UNAVAILABLE", "Atlas 暂不可用，请稍后重试") from exc
+        if r.status_code == 409:
+            # 同一会话已有运行中的 run（如人刚经代理发了一条）：不是故障，调用方稍后重试
+            raise Upstream("ATLAS_BUSY", "Agent 正在运行")
         if r.status_code >= 400:
             raise Upstream("ATLAS_ERROR", f"Atlas 返回 {r.status_code}：{r.text[:200]}")
         return r.json()
+
+    # ───────────────────────────── 透传（人机协同代理用，见 api/atlas_proxy.py）
+
+    async def raw(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        json_body: Any = None,
+        headers: dict[str, str] | None = None,
+    ) -> httpx.Response:
+        """原样转发一个请求，返回 Atlas 的响应（状态码与响应体不做解释）。"""
+        try:
+            return await self._http.request(
+                method, path, params=params, json=json_body, headers=headers
+            )
+        except httpx.HTTPError as exc:
+            raise Upstream("ATLAS_UNAVAILABLE", "Atlas 暂不可用，请稍后重试") from exc
+
+    async def raw_stream(
+        self,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> tuple[int, AsyncIterator[bytes]]:
+        """原样转发一个流式 GET（会话事件 SSE）→ (状态码, 字节流)。不设读超时（Atlas 有心跳）。"""
+        req = self._http.build_request(
+            "GET", path, params=params, headers=headers, timeout=httpx.Timeout(10.0, read=None)
+        )
+        try:
+            r = await self._http.send(req, stream=True)
+        except httpx.HTTPError as exc:
+            raise Upstream("ATLAS_UNAVAILABLE", "Atlas 暂不可用，请稍后重试") from exc
+
+        async def body() -> AsyncIterator[bytes]:
+            try:
+                async for chunk in r.aiter_raw():
+                    yield chunk
+            finally:
+                await r.aclose()
+
+        return r.status_code, body()

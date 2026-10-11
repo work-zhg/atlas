@@ -109,7 +109,7 @@
 <header class="hero">
   <p class="kicker">AI TeamFlow · Detailed Design</p>
   <h1>流程运行模块（含 Agent 适配层、产物与仓库）</h1>
-  <p class="lede">成员按项目绑定的模板<b>发起流程</b>；节点由<b>人与 AI Agent 协同</b>产出一份产物（Markdown，存 <b>Git</b>），经<b>准出 / 准入</b>评审后通过，依赖都通过的下游节点自动开工。定义可以随时改，进行中的工作在关键时刻<b>锁定</b>定义而不被打乱。本文是 <a href="system-design.html">整体系统设计</a> §8–§12 的展开，与实现（<code>teamflow/src/atlas_teamflow/process</code>、<code>agents</code>）一致。</p>
+  <p class="lede">成员按项目绑定的模板<b>发起流程</b>；节点由<b>人与 AI Agent 协同</b>产出一份产物（Markdown，存 <b>Git</b>），经本节点<b>准出</b>、再经下游节点<b>准入</b>（下阶段准入）后完成，下游随之开工。定义可以随时改，进行中的工作在关键时刻<b>锁定</b>定义而不被打乱。本文是 <a href="system-design.html">整体系统设计</a> §8–§12 的展开，与实现（<code>teamflow/src/atlas_teamflow/process</code>、<code>agents</code>）一致。</p>
   <div class="meta"><span>状态机 + 流程级锁</span><span>一个节点一个 Atlas 会话</span><span>一次提交 = 一个版本</span><span>事件表 = 审计 + 实时</span><span>无超时</span></div>
 </header>
 
@@ -123,16 +123,22 @@
 
 <section id="s2">
   <h2><span class="num">02</span>节点状态机</h2>
-  <div class="flow">待开始 ──依赖全部通过──▶ 人机协同中 ──提交准出──▶ 待准出 ──规则满足──▶ 待准入 ──规则满足──▶ 已通过
-                              ▲   驳回                  │                     │
-                              └────────────────────────┴─────────────────────┘
-已通过 / 协同中 / 评审中 ──（上游被打回）──▶ 已打回 ──上游重新通过──▶ 人机协同中（第 n+1 轮）</div>
+  <div class="flow">待开始 ──上游全部准出──▶ 准入评审中（本节点审核上游产物）──通过──▶ 人机协同中
+        └──（未配置准入 / 没有上游）────────────────────────────────▶ 人机协同中
+
+人机协同中 ──提交准出──▶ 待准出 ──规则满足──▶ 待下游准入 ──全部下游都已开工──▶ 已通过
+     ▲          驳回          │                    │
+     └───────────────────────┘     下游准入驳回 ──┘（打回本节点重做）
+最后一个节点（没有下游）：准出通过即「已通过」
+已开工 / 待下游准入 / 准入中 ──（上游被打回）──▶ 已打回 ──上游重新准出──▶ 重新准入 / 开工</div>
   <table>
     <tr><th>状态</th><th>编码</th><th>说明</th></tr>
-    <tr><td>待开始</td><td><code>pending</code></td><td>依赖尚未全部通过</td></tr>
+    <tr><td>待开始</td><td><code>pending</code></td><td>上游尚未全部准出</td></tr>
+    <tr><td>准入评审中</td><td><code>admit_review</code></td><td>上游都已准出，本节点开工前按自己的准入角色审核上游产物（挂在<b>下游</b>节点上）；通过 → 本节点开工</td></tr>
     <tr><td>人机协同中</td><td><code>working</code></td><td>人下指令、Agent 产出；可手工提交产物；有本轮产物后可提交准出</td></tr>
-    <tr><td>待准出 / 待准入</td><td><code>exit_review</code> / <code>admit_review</code></td><td>有一个打开的评审轮次；未配置准入时准出通过即「已通过」</td></tr>
-    <tr><td>已通过</td><td><code>passed</code></td><td>触发调度；全部节点通过 → 流程完成</td></tr>
+    <tr><td>待准出</td><td><code>exit_review</code></td><td>本节点有一个打开的准出轮次</td></tr>
+    <tr><td>待下游准入</td><td><code>exited</code></td><td>准出已通过，等下游节点准入；下游开工即被接收</td></tr>
+    <tr><td>已通过</td><td><code>passed</code></td><td>全部下游都已开工（被准入），或是最后一个节点且准出通过；全部节点通过 → 流程完成</td></tr>
     <tr><td>已打回</td><td><code>returned</code></td><td>上游被打回修改；等上游重新通过后按依赖重新开工</td></tr>
   </table>
   <p><b>轮次</b>：每次回到人机协同（首次开工、驳回、打回重开）轮次 +1。提交准出要求当前产物属于本轮 —— 驳回后必须有新版本（内容不变可人工重新提交一次）。流程状态：<code>running</code> / <code>completed</code> / <code>terminated</code>。</p>
@@ -145,7 +151,7 @@
     <tr><td>流程模板版本</td><td>发起时</td><td><code>tf_process.template_version_uuid</code></td><td>模板再发布不影响该流程</td></tr>
     <tr><td>文件模板版本</td><td>节点<b>首次</b>开工</td><td><code>tf_process_node.file_template_version_uuid</code></td><td>驳回、打回重开都不重新锁定</td></tr>
     <tr><td>执行 Agent</td><td>节点首次开工</td><td><code>tf_process_node.agent_uuid / atlas_agent_id</code></td><td>项目改分配不影响该节点</td></tr>
-    <tr><td>评审人名单</td><td>每次进入待准出 / 待准入</td><td><code>tf_review_round.reviewers</code></td><td>本轮人数不变；驳回重提后用新名单</td></tr>
+    <tr><td>评审人名单</td><td>每次打开准出 / 准入轮次</td><td><code>tf_review_round.reviewers</code></td><td>本轮人数不变；驳回重提后用新名单</td></tr>
   </table>
   <p>执行<b>人</b>不锁定：谁能在节点上协同按项目<b>当前</b>分配判断（换人立即生效）。</p>
 </section>
@@ -154,8 +160,9 @@
   <h2><span class="num">04</span>调度与流转</h2>
   <ol>
     <li>依赖由模板结构推导（<code>structure.derive_deps</code>）：单节点依赖上一步全部出口；并行组每条轨道的首节点依赖上一步全部出口；轨道内顺序依赖。</li>
-    <li><code>_advance</code>：在流程锁内，把所有「待开始 / 已打回」且依赖全部通过的节点开工；全部通过则流程完成。发起时与每个节点通过时调用。</li>
-    <li>开工：首次 → 锁文件模板版本与执行 Agent，排一条<b>开工上下文</b>（§7.2）；重开 → 排一条「上游已更新」指令（带新的上游产物）。</li>
+    <li><code>_advance</code>：在流程锁内，对所有「待开始 / 已打回」且上游全部「待下游准入 / 已通过」的节点：配置了准入且有上游待准入 → 打开准入轮次；否则直接开工。节点开工后，其上游中「全部下游都已开工」的节点 → 已通过。全部通过则流程完成。发起、准出通过、准入通过时调用；监督器启动时对进行中的流程各调用一次（幂等）。</li>
+    <li>分叉（A → B ∥ C）：B、C 各自准入 A 的产物，都开工后 A 完成。汇合（B ∥ C → D）：B、C 都准出后 D 一次准入审核两份产物。</li>
+    <li>开工：首次 → 锁文件模板版本与执行 Agent；有上游则排一条<b>开工上下文</b>（§7.2），没有上游则等执行人第一次说明时与说明合成一条投递；重开 → 排一条「上游已更新」指令（带新的上游产物）。</li>
     <li>没有分配 Agent 或 Agent 不可用：节点照常进入协同中并给出提示，由人直接提交产物。</li>
   </ol>
 </section>
@@ -164,9 +171,9 @@
   <h2><span class="num">05</span>评审：准出与准入</h2>
   <table>
     <tr><th>规则</th><th>说明</th></tr>
-    <tr><td>打开轮次</td><td>执行人「提交准出评审」→ 新建轮次：阶段、角色、规则、锁定的名单、针对的产物版本</td></tr>
+    <tr><td>打开轮次</td><td>准出：执行人「提交准出评审」→ 锁定产物版本，按本节点的准出角色建轮次。准入：上游全部准出后自动在<b>下游节点</b>上建轮次，按下游节点的准入角色锁定名单，审核上游各节点锁定的版本</td></tr>
     <tr><td>投票</td><td>名单中的人逐个「同意 / 驳回」，每人每轮一票；驳回必须写意见</td></tr>
-    <tr><td>通过</td><td>任一人：第一张同意即通过；所有人：同意数 = 名单人数。准出通过且配置了准入 → 打开准入轮次；否则节点通过</td></tr>
+    <tr><td>通过</td><td>任一人：第一张同意即通过；所有人：同意数 = 名单人数。准出通过 → 待下游准入（没有下游则节点通过）；准入通过 → 下游节点开工</td></tr>
     <tr><td>驳回</td><td>任一人驳回即驳回本轮（两种规则相同）</td></tr>
     <tr><td>名单为空</td><td>评审角色没有分配人：轮次照开并提示；分配后由执行人「重新提交评审」刷新名单</td></tr>
   </table>
@@ -177,6 +184,7 @@
   <table>
     <tr><th>情形</th><th>效果</th></tr>
     <tr><td>驳回 · 本节点修改</td><td>轮次 → 驳回；节点回到协同中（轮次 +1）；驳回意见作为指令排队发给 Agent</td></tr>
+    <tr><td>准入驳回</td><td>本节点还没开工，只能打回上游：只有一个上游时默认打回它，多个上游时必须选择（<code>RETURN_TARGET_REQUIRED</code>）。效果同下一行；被打回的上游重新准出后，本节点重新发起准入</td></tr>
     <tr><td>驳回 · 打回到上游节点</td><td>只能选本节点的祖先。目标节点回到协同中（轮次 +1，沿用原锁定，意见发给其 Agent）；目标的所有下游里非「待开始」的节点 → 已打回（取消其打开的轮次）。目标重新通过后，下游按依赖重新开工</td></tr>
   </table>
 </section>
@@ -193,11 +201,14 @@
   </table>
   <h3>7.2 开工上下文</h3>
   <pre>你是流程「{流程名}」中节点「{节点名}」的执行者，需要产出「{产物名}」。
-需求：{发起时的需求}
+&lt;repository clone="…" branch="master"&gt; output 路径 + 每个上游的 input（路径 + commit）&lt;/repository&gt;
 &lt;file-template name="…" version="n"&gt; 原文 &lt;/file-template&gt;
-&lt;input name="{上游产物名}" version="n"&gt; 内容 &lt;/input&gt;（每个上游一段）
-请先澄清不清楚的地方，再按文件模板产出，并对照模板自查。
-★ 交付产物时，把产物全文放在 &lt;artifact&gt; 与 &lt;/artifact&gt; 之间，每次修改都输出完整全文。</pre>
+有上游：以上游产物为输入，执行人可能在对话中补充要求，以执行人的说明为准；先澄清再产出。
+没有上游：要做什么以本消息末尾执行人的说明为准。
+{在 Pod 里用 git 提交的步骤与提交说明模板}</pre>
+  <p><b>发起流程只填流程名称</b>，没有固定的「需求」字段：流程做什么由模板决定，具体诉求由执行人在第一个节点的对话里告诉 Agent，下游节点以上游产物为输入。</p>
+  <p><b>不空跑</b>：没有上游的节点开工时<b>不建会话、不启动 Agent</b>；执行人第一次说明时，开工上下文与说明合成一条投递（此时才建会话）。若在此之前先发生驳回 / 打回，那条系统指令前同样补上开工上下文。有上游的节点开工即投递（有实际输入可干）。产物与仓库的细节见 <a href="artifact-git-design.html#s7">产物仓库与 Agent 提交 §7</a>。</p>
+  <p>每个节点都需要的流程级固定内容（流程说明、项目约定、过程中的决策）与 Atlas 记忆的规划见 <a href="process-context-design.html">流程上下文与 Agent 记忆</a>。</p>
   <h3>7.3 投递与跟随（监督器）</h3>
   <ol>
     <li>状态迁移只把指令写入 <code>tf_node_message</code>（status = <code>queued</code>），<b>事务提交后</b>唤醒监督器 —— 慢的 Atlas 调用不在流程锁里。</li>
@@ -211,6 +222,7 @@
 
 <section id="s8">
   <h2><span class="num">08</span>产物与仓库</h2>
+  <div class="callout warn"><b class="l">已调整</b>产物改为由 Agent 自己提交，TeamFlow 不再写仓库：见 <a href="artifact-git-design.html">产物仓库与 Agent 提交</a>。本节描述的是首版实现。</div>
   <div class="flow">gitee.com/{命名空间}/teamflow-{项目 uuid}      ← 每个项目一个私有仓库（Gitee API 提交）
   0001-支持手机号登录/
     01-需求分析/需求文档.md
@@ -248,7 +260,7 @@
   <h2><span class="num">11</span>数据模型</h2>
   <table>
     <tr><th>表</th><th>要点</th></tr>
-    <tr><td><code>tf_process</code></td><td>项目内编号 <code>no</code>（项目行锁内分配）、标题、需求、锁定的模板版本、状态、发起人、<code>event_seq</code>（事件游标）</td></tr>
+    <tr><td><code>tf_process</code></td><td>项目内编号 <code>no</code>（项目行锁内分配）、标题、锁定的模板版本、状态、发起人、<code>event_seq</code>（事件游标）</td></tr>
     <tr><td><code>tf_process_node</code></td><td><code>node_id</code>、名称、冗余 <code>exec_role</code>、状态、轮次、锁定的文件模板版本与 Agent、Atlas 会话 / 运行 / 游标、提示、当前产物</td></tr>
     <tr><td><code>tf_node_message</code></td><td>role = user / agent / system；status = queued / streaming / done / failed；对应 run</td></tr>
     <tr><td><code>tf_artifact_version</code></td><td>节点内版本号、轮次、路径、commit、内容缓存、来源（agent / user）、提交人</td></tr>

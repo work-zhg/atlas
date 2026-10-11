@@ -9,7 +9,8 @@ const STATUS_STYLE: Record<string, { border: string; bg: string; label: string; 
   pending: { border: "#e6e8ee", bg: "#fff", label: "待开始", color: "default" },
   working: { border: "#0ea5e9", bg: "#f0f9ff", label: "人机协同中", color: "processing" },
   exit_review: { border: "#f59e0b", bg: "#fffbeb", label: "待准出", color: "warning" },
-  admit_review: { border: "#f59e0b", bg: "#fffbeb", label: "待准入", color: "warning" },
+  exited: { border: "#14b8a6", bg: "#f0fdfa", label: "待下游准入", color: "cyan" },
+  admit_review: { border: "#a855f7", bg: "#faf5ff", label: "准入评审中", color: "purple" },
   passed: { border: "#16a34a", bg: "#f0fdf4", label: "已通过", color: "success" },
   returned: { border: "#dc2626", bg: "#fef2f2", label: "已打回", color: "error" },
 };
@@ -61,7 +62,7 @@ export function FlowView({
           </div>
           {n?.admit_review && (
             <div>
-              🚪 {n.admit_review.role} · {RULE[n.admit_review.rule]}
+              🚪 准入 {n.admit_review.role} · {RULE[n.admit_review.rule]}
             </div>
           )}
         </div>

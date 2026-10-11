@@ -61,12 +61,15 @@ class TeamService:
         uc: UCClient,
         levels: TeamLevelCache,
         atlas: AtlasClient | None = None,
+        repo: Any = None,
     ) -> None:
         self.session = session
         self.p = principal
         self.uc = uc
         self.levels = levels
         self.atlas = atlas
+        #: 产物仓库主机：成员变化时同步仓库协作者（产物仓库与 Agent 提交 · §9.2）
+        self.repo = repo
 
     # ───────────────────────────── 读取与级别
 
@@ -238,6 +241,7 @@ class TeamService:
         )
         self.levels.invalidate(t.uuid)
         coordinator().team_changed(t.uuid)  # 其他实例的缓存
+        await self.sync_repo_access(t.uuid)  # 仓库协作者随团队身份变化
         record(
             self.session,
             self.p.uuid,
@@ -266,6 +270,7 @@ class TeamService:
         )
         self.levels.invalidate(t.uuid)
         coordinator().team_changed(t.uuid)  # 其他实例的缓存
+        await self.sync_repo_access(t.uuid)  # 仓库协作者随团队身份变化
         record(
             self.session,
             self.p.uuid,
@@ -286,6 +291,7 @@ class TeamService:
         await self.uc.delete_team_grant(acl_id, self.p.uuid)
         self.levels.invalidate(t.uuid)
         coordinator().team_changed(t.uuid)  # 其他实例的缓存
+        await self.sync_repo_access(t.uuid)  # 仓库协作者随团队身份变化
         record(
             self.session,
             self.p.uuid,
@@ -295,6 +301,13 @@ class TeamService:
             t.name,
             subject=g["subject"]["name"],
         )
+
+    async def sync_repo_access(self, team_uuid: UUID) -> None:
+        """成员 / 管理员变化后，按团队身份同步该团队全部项目仓库的协作者。"""
+        if self.repo is not None:
+            from ..process.repository import sync_team_collaborators
+
+            await sync_team_collaborators(self.session, self.uc, self.repo, team_uuid)
 
     async def member_ids(self, team_uuid: UUID) -> set[UUID]:
         return {UUID(h["user"]["id"]) for h in await self.uc.team_holders(team_uuid, "WRITE")}

@@ -232,6 +232,13 @@ class Project(Keys, Audited, Base):
     #: 绑定模板 id，跟随模板当前版本（团队设计 §8.1）
     flow_template_uuid: Mapped[UUID | None] = mapped_column(ForeignKey("tf_flow_template.uuid"))
     status: Mapped[str] = mapped_column(String(16), default="active", nullable=False)
+    #: 产物仓库名（命名空间由配置决定）；建仓库失败时 repo_status=error，可重试
+    repo_name: Mapped[str | None] = mapped_column(String(100))
+    #: none | ready | error
+    repo_status: Mapped[str] = mapped_column(String(8), default="none", nullable=False)
+    repo_error: Mapped[str | None] = mapped_column(String(300))
+    #: 允许团队管理员用自己的 Gitee 账号直接提交（默认否：产物由 Agent 提交）
+    allow_admin_commit: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     __table_args__ = (
         UniqueConstraint("team_uuid", "name", name="uq_tf_project_name"),
@@ -275,7 +282,6 @@ class Process(Keys, Base):
     )
     no: Mapped[int] = mapped_column(Integer, nullable=False)
     title: Mapped[str] = mapped_column(String(100), nullable=False)
-    requirement: Mapped[str] = mapped_column(Text, nullable=False)
     template_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
     template_version_uuid: Mapped[UUID] = mapped_column(
         ForeignKey("tf_flow_template_version.uuid"), nullable=False
@@ -306,7 +312,8 @@ class ProcessNode(Keys, Base):
     name: Mapped[str] = mapped_column(String(64), nullable=False)
     #: 冗余模板中的执行角色：「待我处理」按项目当前分配匹配人
     exec_role: Mapped[str] = mapped_column(String(32), nullable=False)
-    #: pending | working | exit_review | admit_review | passed | returned
+    #: pending | working | exit_review | exited（准出通过，待下游准入）
+    #: | admit_review（本节点开工前的准入评审中） | passed | returned
     status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False)
     #: 第几轮（每次回到人机协同 +1）
     round: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -321,13 +328,16 @@ class ProcessNode(Keys, Base):
     #: 提示（如「执行 Agent 不可用」「Agent 运行失败」），空 = 正常
     notice: Mapped[str | None] = mapped_column(String(200))
     current_artifact_uuid: Mapped[UUID | None] = mapped_column(UUIDType)
+    #: 本节点的产物路径（首次开工时计算并固定；Agent 提交到这里，提交准出评审时锁定 commit）
+    artifact_path: Mapped[str | None] = mapped_column(String(300))
     started_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     passed_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
     __table_args__ = (
         UniqueConstraint("process_uuid", "node_id", name="uq_tf_process_node"),
         CheckConstraint(
-            "status IN ('pending','working','exit_review','admit_review','passed','returned')",
+            "status IN ('pending','working','exit_review','exited','admit_review','passed',"
+            "'returned')",
             name="status_enum",
         ),
     )
@@ -354,7 +364,8 @@ class NodeMessage(Keys, Base):
 
 
 class ArtifactVersion(Keys, Base):
-    """产物版本：一次 Git 提交。内容在库里缓存一份，供预览与作为下游输入。"""
+    """产物版本：产物路径上的一次提交（由 Agent 或被授权的人提交，TeamFlow 观察登记）。
+    内容在库里缓存一份供预览与审计；以仓库为准。"""
 
     __tablename__ = "tf_artifact_version"
 
@@ -366,17 +377,27 @@ class ArtifactVersion(Keys, Base):
     path: Mapped[str] = mapped_column(String(300), nullable=False)
     commit_sha: Mapped[str] = mapped_column(String(64), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    #: agent | user
+    #: agent（提交说明带 TeamFlow 尾注）| user（作者是已绑定账号的成员）| unknown
     source: Mapped[str] = mapped_column(String(8), nullable=False)
+    #: 作者是已绑定 Gitee 账号的成员时记成员
     created_by: Mapped[UUID | None] = mapped_column(UUIDType)
+    #: 提交说明的第一行
     note: Mapped[str | None] = mapped_column(String(200))
+    author_name: Mapped[str | None] = mapped_column(String(100))
+    author_login: Mapped[str | None] = mapped_column(String(100))
+    committed_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    web_url: Mapped[str | None] = mapped_column(String(300))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, nullable=False)
 
-    __table_args__ = (UniqueConstraint("node_uuid", "version_no", name="uq_tf_artifact_no"),)
+    __table_args__ = (
+        UniqueConstraint("node_uuid", "version_no", name="uq_tf_artifact_no"),
+        # 观察幂等：同一个提交只登记一次（多实例 / 重复扫描）
+        UniqueConstraint("node_uuid", "commit_sha", name="uq_tf_artifact_commit"),
+    )
 
 
 class ReviewRound(Keys, Base):
-    """一轮准出 / 准入评审：锁定评审人名单与针对的产物版本。"""
+    """一轮评审：准出 = 本节点产物能否交出；准入 = 本节点开工前审核上游产物（挂在下游节点上）。"""
 
     __tablename__ = "tf_review_round"
 
@@ -391,7 +412,8 @@ class ReviewRound(Keys, Base):
     rule: Mapped[str] = mapped_column(String(4), nullable=False)
     #: 锁定的评审人（用户 uuid 字符串列表）
     reviewers: Mapped[list[str]] = mapped_column(JSONType, nullable=False)
-    artifact_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
+    #: 准出：锁定的本节点产物版本；准入：空（审核的是上游各节点当前锁定的版本）
+    artifact_uuid: Mapped[UUID | None] = mapped_column(UUIDType)
     #: open | passed | rejected | cancelled
     status: Mapped[str] = mapped_column(String(10), default="open", nullable=False)
     opened_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, nullable=False)
@@ -431,6 +453,47 @@ class ProcessEvent(Keys, Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, nullable=False)
 
     __table_args__ = (UniqueConstraint("process_uuid", "seq", name="uq_tf_process_event_seq"),)
+
+
+# ───────────────────────────────────────────── 代码托管账号与仓库访问
+
+
+class GitAccount(Keys, Base):
+    """成员绑定的 Gitee 账号（OAuth 证明归属；不保存任何令牌）。"""
+
+    __tablename__ = "tf_git_account"
+
+    user_uuid: Mapped[UUID] = mapped_column(
+        ForeignKey("tf_user.uuid", ondelete="CASCADE"), unique=True, nullable=False
+    )
+    provider: Mapped[str] = mapped_column(String(16), default="gitee", nullable=False)
+    login: Mapped[str] = mapped_column(String(100), nullable=False)
+    provider_user_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    name: Mapped[str | None] = mapped_column(String(100))
+    bound_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("provider", "provider_user_id", name="uq_tf_git_account_provider"),
+    )
+
+
+class RepoCollaborator(Keys, Base):
+    """TeamFlow 为成员设置的仓库协作者权限（期望值 + 最近一次同步结果）。对账以它为准，
+    只管理自己设置过的账号，不碰命名空间所有者等其他成员。"""
+
+    __tablename__ = "tf_repo_collaborator"
+
+    project_uuid: Mapped[UUID] = mapped_column(
+        ForeignKey("tf_project.uuid", ondelete="CASCADE"), nullable=False
+    )
+    login: Mapped[str] = mapped_column(String(100), nullable=False)
+    user_uuid: Mapped[UUID | None] = mapped_column(UUIDType)
+    #: pull | push
+    permission: Mapped[str] = mapped_column(String(8), nullable=False)
+    synced_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    error: Mapped[str | None] = mapped_column(String(300))
+
+    __table_args__ = (UniqueConstraint("project_uuid", "login", name="uq_tf_repo_collaborator"),)
 
 
 # ───────────────────────────────────────────── 审计

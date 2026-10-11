@@ -1,4 +1,5 @@
-"""用户中心 / Atlas 的内存实现：与 uc.UCClient、atlas.AtlasClient 的方法签名一致。
+"""用户中心 / Atlas / 产物仓库的内存实现：
+与 uc.UCClient、atlas.AtlasClient、RepoHost 的方法签名一致。
 
 规则按用户中心的真实行为简化：
 - 授权快照 = 角色 → 操作码（取自 catalog），菜单从略；
@@ -10,14 +11,21 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
+import re
 import uuid
 from collections.abc import AsyncIterator
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
+import httpx
 from atlas_teamflow import catalog
 from atlas_teamflow.atlas import AtlasEvent
-from atlas_teamflow.errors import Conflict, Forbidden, Invalid, NotFound, Unauthorized
+from atlas_teamflow.errors import Conflict, Forbidden, Invalid, NotFound, Unauthorized, Upstream
+from atlas_teamflow.process.repo_host import CommitInfo, RepoFile, RepoInfo
 
 LEVELS = {"NONE": 0, "READ": 1, "WRITE": 2, "OWNER": 3}
 NAMES = {v: k for k, v in LEVELS.items()}
@@ -254,29 +262,148 @@ class FakeUC:
         return None
 
 
+@dataclass
+class _Commit:
+    info: CommitInfo
+    changed: list[str]
+    tree: dict[str, str] = field(default_factory=dict)
+
+
+class MemoryRepoHost:
+    """产物仓库的内存实现：提交由测试（模拟 Agent / 成员在本地）用 push 写入，TeamFlow 只读。"""
+
+    namespace = "tf-test"
+
+    def __init__(self) -> None:
+        self.repos: dict[str, list[_Commit]] = {}  # 新的在前
+        self.collab: dict[str, dict[str, str]] = {}
+        self.fail_ensure = False
+
+    async def prepare(self) -> None:
+        return None
+
+    async def aclose(self) -> None:
+        return None
+
+    def repo_name(self, project_uuid: UUID) -> str:
+        return f"teamflow-{project_uuid.hex}"
+
+    def info(self, repo: str) -> RepoInfo:
+        web = f"https://gitee.test/{self.namespace}/{repo}"
+        return RepoInfo(f"{self.namespace}/{repo}", web, f"{web}.git")
+
+    async def ensure_repo(self, repo: str, description: str) -> RepoInfo:
+        if self.fail_ensure:
+            raise Upstream("GITEE_UNAVAILABLE", "Gitee 暂不可用")
+        self.repos.setdefault(repo, [])
+        self.collab.setdefault(repo, {})
+        return self.info(repo)
+
+    def push(
+        self,
+        repo: str,
+        files: dict[str, str],
+        message: str,
+        *,
+        author_login: str | None = None,
+        author_name: str = "TeamFlow Agent",
+    ) -> str:
+        history = self.repos[repo]
+        tree = {**(history[0].tree if history else {}), **files}
+        sha = hashlib.sha1(f"{repo}{len(history)}{message}".encode()).hexdigest()
+        info = CommitInfo(
+            sha=sha,
+            message=message,
+            committed_at=datetime.now(UTC),
+            author_name=author_name,
+            author_email=f"{author_login or 'agent'}@x.com",
+            author_login=author_login,
+            web_url=f"{self.info(repo).web_url}/commit/{sha}",
+        )
+        history.insert(0, _Commit(info, list(files), tree))
+        return sha
+
+    def last(self, repo: str) -> CommitInfo:
+        return self.repos[repo][0].info
+
+    async def commits(
+        self, repo: str, *, path: str | None = None, limit: int = 20
+    ) -> list[CommitInfo]:
+        hits = [c.info for c in self.repos.get(repo, []) if path is None or path in c.changed]
+        return hits[:limit]
+
+    async def resolve(self, repo: str, ref: str) -> str | None:
+        history = self.repos.get(repo, [])
+        if ref == "master":
+            return history[0].info.sha if history else None
+        return next((c.info.sha for c in history if c.info.sha == ref), None)
+
+    async def tree(self, repo: str, sha: str, prefix: str) -> tuple[list[RepoFile], bool]:
+        c = next(c for c in self.repos[repo] if c.info.sha == sha)
+        files = [RepoFile(p, len(v.encode())) for p, v in c.tree.items() if p.startswith(prefix)]
+        return sorted(files, key=lambda f: f.path), False
+
+    async def read_file(self, repo: str, path: str, ref: str) -> str | None:
+        c = next((c for c in self.repos.get(repo, []) if c.info.sha == ref), None)
+        return c.tree.get(path) if c else None
+
+    async def collaborators(self, repo: str) -> dict[str, str]:
+        return dict(self.collab.get(repo, {}))
+
+    async def set_collaborator(self, repo: str, login: str, permission: str) -> None:
+        self.collab.setdefault(repo, {})[login] = permission
+
+    async def remove_collaborator(self, repo: str, login: str) -> None:
+        self.collab.get(repo, {}).pop(login, None)
+
+
+_CLONE = re.compile(r"git clone (\S+?)(?:\.git)? /repos/")
+_OUTPUT = re.compile(r"写入 `([^`]+)`")
+_MESSAGE = re.compile(r"提交说明：\n```\n(.*?)\n```", re.S)
+
+
 class FakeAtlas:
     """Agent 列表 + 会话 / 运行 / 事件流。
 
     create_run 立刻把这一轮的事件写进会话流（started → delta… → completed → finished），
     回复内容由 reply(指令) 决定；fail_next 置位时这一轮失败。
+    ★ 模拟能执行命令的 Agent：指令里带 git 操作说明时记下仓库 / 产物路径 / 提交说明，
+      之后每轮都把产物提交到 host（commits=False 时模拟「不会执行命令」的 Agent）。
     """
 
     def __init__(self) -> None:
+        self.host: MemoryRepoHost | None = None
+        self.commits = True
+        self.git_ctx: dict[str, tuple[str, str, str]] = {}
+        self.thread_profiles: dict[str, str | None] = {}
         self.agents: dict[str, dict[str, Any]] = {}
         self.threads: dict[str, list[AtlasEvent]] = {}
         self.inputs: dict[str, list[str]] = {}
         self.fail_next = False
         self.version = 0
+        #: run → 会话；会话 → 消息（透传接口用）
+        self.run_thread: dict[str, str] = {}
+        self.messages: dict[str, list[dict[str, Any]]] = {}
         self._cond = asyncio.Condition()
         self._idem: dict[str, str] = {}
 
-    def reply(self, text: str) -> str:
+    def reply(self, thread_id: str, text: str) -> str:
         self.version += 1
         body = f"# 产物 第 {self.version} 稿\n\n依据：{text[:30]}"
-        return f"好的，已按要求产出。\n<artifact>\n{body}\n</artifact>"
+        ctx = self.git_ctx.get(thread_id)
+        if not (self.commits and self.host and ctx):
+            return f"好的，已按要求产出。\n\n{body}"
+        repo, out, template = ctx
+        sha = self.host.push(
+            repo, {out: body}, template.replace("<一句话说明本次修改>", "按要求产出")
+        )
+        return f"已提交 {sha[:8]}：按要求产出。"
 
-    async def create_thread(self, agent_id: str, title: str) -> str:
+    async def create_thread(
+        self, agent_id: str, title: str, *, git_profile: str | None = None
+    ) -> str:
         tid = str(uuid.uuid4())
+        self.thread_profiles[tid] = git_profile
         self.threads[tid], self.inputs[tid] = [], []
         return tid
 
@@ -286,6 +413,20 @@ class FakeAtlas:
         rid = str(uuid.uuid4())
         self._idem[idempotency_key] = rid
         self.inputs[thread_id].append(text)
+        clone, path, msg = _CLONE.search(text), _OUTPUT.search(text), _MESSAGE.search(text)
+        if clone and path and msg:  # 记下 git 操作说明（即使这一轮失败，下一轮仍按它提交）
+            repo = clone.group(1).rsplit("/", 1)[-1]
+            self.git_ctx[thread_id] = (repo, path.group(1), msg.group(1))
+        self.run_thread[rid] = thread_id
+        self.messages.setdefault(thread_id, []).append(
+            {
+                "id": str(uuid.uuid4()),
+                "thread_id": thread_id,
+                "run_id": rid,
+                "role": "user",
+                "content": [{"type": "text", "text": text}],
+            }
+        )
         evs = self.threads[thread_id]
 
         def add(type_: str, data: dict[str, Any]) -> None:
@@ -296,10 +437,19 @@ class FakeAtlas:
             self.fail_next = False
             add("run.failed", {"message": "模型网关超时"})
         else:
-            out = self.reply(text)
+            out = self.reply(thread_id, text)
             for i in range(0, len(out), 20):
                 add("message.delta", {"text": out[i : i + 20], "block": 0})
             add("message.completed", {"content": [{"type": "text", "text": out}]})
+            self.messages[thread_id].append(
+                {
+                    "id": str(uuid.uuid4()),
+                    "thread_id": thread_id,
+                    "run_id": rid,
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": out}],
+                }
+            )
             add("run.finished", {})
         async with self._cond:
             self._cond.notify_all()
@@ -315,7 +465,7 @@ class FakeAtlas:
             async with self._cond:
                 await self._cond.wait()
 
-    def add(self, name: str, status: str = "enabled") -> str:
+    def add(self, name: str, status: str = "enabled", kind: str = "acp") -> str:
         aid = str(uuid.uuid4())
         self.agents[aid] = {
             "id": aid,
@@ -324,6 +474,8 @@ class FakeAtlas:
             "avatar_key": "robot",
             "model": "claude-sonnet-5",
             "status": status,
+            "kind": kind,
+            "subagents": [],
         }
         return aid
 
@@ -338,6 +490,100 @@ class FakeAtlas:
 
     async def get_agent(self, agent_id: str) -> dict[str, Any] | None:
         return self.agents.get(agent_id)
+
+    async def aclose(self) -> None:
+        return None
+
+    # ── 透传接口（人机协同代理）：按 Atlas 的路径与响应形状模拟
+    async def raw(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        json_body: Any = None,
+        headers: dict[str, str] | None = None,
+    ) -> httpx.Response:
+        parts = path.strip("/").split("/")  # v1 / threads|runs / id / ...
+        if parts[1] == "threads" and parts[2] in self.threads:
+            tid = parts[2]
+            if len(parts) == 3 and method == "GET":
+                return httpx.Response(
+                    200,
+                    json={
+                        "id": tid,
+                        "title": "节点会话",
+                        "agent_name": "全能 Agent",
+                        "agent_avatar_key": "robot",
+                        "parent_thread_id": None,
+                    },
+                )
+            if parts[3:] == ["messages"] and method == "GET":
+                return httpx.Response(
+                    200,
+                    json={"data": list(reversed(self.messages.get(tid, []))), "next_cursor": None},
+                )
+            if parts[3:] == ["runs"] and method == "POST":
+                text = "".join(b.get("text", "") for b in (json_body or {}).get("content", []))
+                key = (headers or {}).get("idempotency-key") or str(uuid.uuid4())
+                rid = await self.create_run(tid, text, key)
+                return httpx.Response(
+                    202, json={"run_id": rid, "message_id": str(uuid.uuid4()), "status": "queued"}
+                )
+        if parts[1] == "runs" and parts[2] in self.run_thread:
+            rid = parts[2]
+            if len(parts) == 3:
+                return httpx.Response(
+                    200, json={"id": rid, "thread_id": self.run_thread[rid], "status": "succeeded"}
+                )
+            if parts[3:] == ["cancel"] and method == "POST":
+                return httpx.Response(
+                    200, json={"id": rid, "thread_id": self.run_thread[rid], "status": "cancelled"}
+                )
+        return httpx.Response(404, json={"error": {"kind": "not_found", "message": "not found"}})
+
+    async def raw_stream(
+        self,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> tuple[int, AsyncIterator[bytes]]:
+        tid = path.strip("/").split("/")[2]
+        evs = list(self.threads.get(tid, []))
+
+        async def body() -> AsyncIterator[bytes]:
+            for ev in evs:  # 测试用：回放已有事件后结束（真实的会话流不会自己结束）
+                frame = {
+                    "type": ev.type,
+                    "run_id": ev.run_id,
+                    "thread_seq": ev.thread_seq,
+                    "data": ev.data,
+                }
+                data = json.dumps(frame, ensure_ascii=False)
+                yield f"id: {ev.thread_seq}\nevent: {ev.type}\ndata: {data}\n\n".encode()
+
+        return 200, body()
+
+
+class FakeOAuth:
+    """Gitee OAuth 的内存实现：code → Gitee 用户。"""
+
+    enabled = True
+
+    def __init__(self) -> None:
+        self.users: dict[str, Any] = {}
+
+    def authorize_url(self, state: str) -> str:
+        return f"https://gitee.test/oauth/authorize?state={state}"
+
+    async def exchange(self, code: str) -> Any:
+        from atlas_teamflow.gitee_oauth import GiteeUser
+
+        if code not in self.users:
+            raise Invalid("GITEE_OAUTH_FAILED", "Gitee 授权失败或已过期，请重新绑定")
+        login, uid = self.users[code]
+        return GiteeUser(id=uid, login=login, name=login)
 
     async def aclose(self) -> None:
         return None
