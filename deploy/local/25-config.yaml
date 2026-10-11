@@ -32,6 +32,10 @@ spec:
             - {name: ATLAS_CONFIG_OSS_ADDRESSING_STYLE, value: path}
             - {name: ATLAS_CONFIG_OSS_REGION, value: us-east-1}
             - {name: ATLAS_CONFIG_CORS_ORIGINS, value: '["http://localhost:3000","http://127.0.0.1:3000"]'}
+            # 浏览器直连本服务（经网关 /atlas-config-api），登录会话交给 atlas-server 校验
+            # （doc/auth-permission-design.html §9）；凭据是下面的 ATLAS_CONFIG_INTERNAL_TOKEN
+            - {name: ATLAS_CONFIG_AUTH_MODE, value: uc}
+            - {name: ATLAS_CONFIG_SERVER_URL, value: "http://atlas-server.atlas-system.svc.cluster.local:8000"}
             - name: ATLAS_CONFIG_OSS_ACCESS_KEY_ID
               valueFrom: {secretKeyRef: {name: atlas-config-creds, key: oss_access_key_id}}
             - name: ATLAS_CONFIG_OSS_ACCESS_KEY_SECRET

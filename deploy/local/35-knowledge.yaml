@@ -1,0 +1,112 @@
+# 知识库服务（atlas-knowledge，doc/atlas-rag-design.html §14）：api + Celery worker，同一镜像。
+#
+# ★ 库是宿主 Postgres 上的独立 database atlas_knowledge（docker compose 的 knowledge-init-db）；
+#   Redis 用 3 号库作 Celery broker 与缓存；Qdrant 与记忆共用一个实例（collection 前缀 kb_）。
+# ★ 服务间令牌复用 atlas-config-creds 的 internal_token：本服务校验浏览器会话时调的是
+#   atlas-server 的 /internal/v1/auth/introspect，那条接口认的就是它。
+# ★ 浏览器经网关 /atlas-knowledge-api 访问，Service 只需 ClusterIP。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atlas-knowledge
+  namespace: atlas-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: atlas-knowledge}
+  template:
+    metadata:
+      labels: {app: atlas-knowledge}
+    spec:
+      initContainers:
+        - name: migrate
+          image: atlas-app:dev
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "atlas_knowledge", "migrate"]
+          env: &kb-env
+            - {name: ATLAS_KB_DATABASE_URL, value: "postgresql+asyncpg://atlas:atlas@__HOST_IP__:5433/atlas_knowledge"}
+            - {name: ATLAS_KB_REDIS_URL, value: "redis://__HOST_IP__:6380/3"}
+            - {name: ATLAS_KB_QDRANT_URL, value: "http://__HOST_IP__:6333"}
+            - {name: ATLAS_KB_OSS_ENDPOINT, value: "http://__HOST_IP__:9000"}
+            - {name: ATLAS_KB_OSS_BUCKET, value: atlas-dev}
+            - {name: ATLAS_KB_OSS_ADDRESSING_STYLE, value: path}
+            - {name: ATLAS_KB_OSS_REGION, value: us-east-1}
+            - {name: ATLAS_KB_AUTH_MODE, value: uc}
+            - {name: ATLAS_KB_SERVER_URL, value: "http://atlas-server.atlas-system.svc.cluster.local:8000"}
+            - {name: ATLAS_KB_CORS_ORIGINS, value: '["http://localhost:3000","http://127.0.0.1:3000"]'}
+            # ★ 不设 ATLAS_KB_MODEL_CACHE_DIR：它对向量模型同样生效，设了就不用镜像里预装的
+            #   bge-small-zh、改去 HuggingFace 重新下载（Pod 里没有代理，会卡住）。
+            #   重排模型（约 1GB）首次使用时下载到默认目录，Pod 重建后要重新下载。
+            - {name: MEM0_TELEMETRY, value: "False"}
+            - name: ATLAS_KB_OSS_ACCESS_KEY_ID
+              valueFrom: {secretKeyRef: {name: atlas-config-creds, key: oss_access_key_id}}
+            - name: ATLAS_KB_OSS_ACCESS_KEY_SECRET
+              valueFrom: {secretKeyRef: {name: atlas-config-creds, key: oss_access_key_secret}}
+            - name: ATLAS_KB_INTERNAL_TOKEN
+              valueFrom: {secretKeyRef: {name: atlas-config-creds, key: internal_token}}
+      containers:
+        - name: api
+          image: atlas-app:dev
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "atlas_knowledge", "serve"]
+          ports: [{containerPort: 8050, name: http}]
+          env: *kb-env
+          readinessProbe:
+            httpGet: {path: /health, port: 8050}
+            periodSeconds: 3
+          resources:
+            # 查询向量在 api 进程里算：bge-small-zh 常驻约 300MB
+            requests: {cpu: 100m, memory: 512Mi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atlas-knowledge-worker
+  namespace: atlas-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: atlas-knowledge-worker}
+  template:
+    metadata:
+      labels: {app: atlas-knowledge-worker}
+    spec:
+      containers:
+        - name: worker
+          image: atlas-app:dev
+          imagePullPolicy: IfNotPresent
+          # 解析与本地向量化是 CPU 活：并发 2，按机器调
+          command: ["python", "-m", "atlas_knowledge", "worker", "--concurrency", "2"]
+          # ★ YAML 锚点不跨 --- 文档：worker 这份要完整写出，改 api 的环境变量时同步改这里
+          env:
+            - {name: ATLAS_KB_DATABASE_URL, value: "postgresql+asyncpg://atlas:atlas@__HOST_IP__:5433/atlas_knowledge"}
+            - {name: ATLAS_KB_REDIS_URL, value: "redis://__HOST_IP__:6380/3"}
+            - {name: ATLAS_KB_QDRANT_URL, value: "http://__HOST_IP__:6333"}
+            - {name: ATLAS_KB_OSS_ENDPOINT, value: "http://__HOST_IP__:9000"}
+            - {name: ATLAS_KB_OSS_BUCKET, value: atlas-dev}
+            - {name: ATLAS_KB_OSS_ADDRESSING_STYLE, value: path}
+            - {name: ATLAS_KB_OSS_REGION, value: us-east-1}
+            - {name: ATLAS_KB_AUTH_MODE, value: uc}
+            - {name: ATLAS_KB_SERVER_URL, value: "http://atlas-server.atlas-system.svc.cluster.local:8000"}
+            - {name: ATLAS_KB_CORS_ORIGINS, value: '["http://localhost:3000","http://127.0.0.1:3000"]'}
+            # ★ 不设 ATLAS_KB_MODEL_CACHE_DIR：它对向量模型同样生效，设了就不用镜像里预装的
+            #   bge-small-zh、改去 HuggingFace 重新下载（Pod 里没有代理，会卡住）。
+            #   重排模型（约 1GB）首次使用时下载到默认目录，Pod 重建后要重新下载。
+            - {name: MEM0_TELEMETRY, value: "False"}
+            - name: ATLAS_KB_OSS_ACCESS_KEY_ID
+              valueFrom: {secretKeyRef: {name: atlas-config-creds, key: oss_access_key_id}}
+            - name: ATLAS_KB_OSS_ACCESS_KEY_SECRET
+              valueFrom: {secretKeyRef: {name: atlas-config-creds, key: oss_access_key_secret}}
+            - name: ATLAS_KB_INTERNAL_TOKEN
+              valueFrom: {secretKeyRef: {name: atlas-config-creds, key: internal_token}}
+          resources:
+            requests: {cpu: 200m, memory: 1Gi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: atlas-knowledge
+  namespace: atlas-system
+spec:
+  selector: {app: atlas-knowledge}
+  ports: [{port: 8050, targetPort: 8050}]

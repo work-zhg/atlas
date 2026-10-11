@@ -1,22 +1,16 @@
 "use client";
 
-import { Alert, Button, Empty, Modal, Select, Tag } from "antd";
+import { Alert, Button, Empty, Modal, Select } from "antd";
 import { useRouter } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
 
+import styles from "@atlas/chat-ui/src/chat/chat.module.css";
+import { ThreadConversation, type ConversationStreamState } from "@atlas/chat-ui/src/chat/ThreadConversation";
 import { useAgents } from "@/api/agents";
-import { useCancelRun, useSendMessage } from "@/api/runs";
-import { flattenMessages, useCreateThread, useMessages, useThread, useThreads } from "@/api/threads";
+import { useCreateThread, useThread, useThreads } from "@/api/threads";
 import { Icon } from "@/components/Icon";
-import { avatarBackground, avatarLetter } from "@/features/agents/avatar";
-import { isStreamDone } from "@/lib/run-reducer";
-import styles from "./chat.module.css";
-import { newIdempotencyKey } from "@/lib/id";
-import { Composer } from "./Composer";
-import { MessageStream } from "./MessageStream";
 import { ThreadList } from "./ThreadList";
 import { FilesPanel } from "./FilesPanel";
-import { useThreadStream } from "./useThreadStream";
 
 export function ChatWorkbench({ threadId }: { threadId?: string }) {
   const router = useRouter();
@@ -30,54 +24,18 @@ export function ChatWorkbench({ threadId }: { threadId?: string }) {
   );
 
   const threadQ = useThread(threadId);
-  const messagesQ = useMessages(threadId);
-  const messages = useMemo(() => flattenMessages(messagesQ.data?.pages), [messagesQ.data]);
-
   const agentsQ = useAgents({ status: "enabled" });
   const createThread = useCreateThread();
-  const sendMessage = useSendMessage();
-  const cancelRun = useCancelRun();
 
-  // ★ 订阅**会话**而不是 run。
-  //
-  //   原先这里要先知道"当前是哪个 run"才能订阅，于是刷新页面后没有入口
-  //   （activeRunId 只在发消息成功时赋值），长 run 期间页面上只剩用户那条
-  //   提问 —— 看着像「回答到一半全没了」。那段恢复逻辑整个消失了：订阅会话
-  //   天然就是恢复。当前是哪个 run 由事件流自己说（state.activeRunId）。
-  const { state, reconnecting, streamError } = useThreadStream({ threadId });
-  const activeRunId = state.activeRunId;
-
-  const running = Boolean(activeRunId) && !isStreamDone(state.status);
-  // 头部状态：审批优先（用户要动手），其次是挂起（在等子智能体），最后是运行中
-  const liveTag = !running
-    ? null
-    : state.pendingApprovals.length > 0
-      ? { label: "待审批 · 已挂起", color: "warning" }
-      : state.status === "suspended"
-        ? { label: "等待子智能体", color: "processing" }
-        : { label: "运行中", color: "success" };
-  // ★ 审批不再是弹窗：它作为一张卡片出现在对话里它发生的位置（MessageStream →
-  //   ApprovalCard），「是否还在等」的查库核对也随卡片走。
-
-  const handleSend = useCallback(
-    (text: string) => {
-      if (!threadId) return;
-      // ★ 不 reset：那会把会话流的游标一起归零，下次重连要重放一遍。
-      //   上一轮的轨迹由新一轮的 run.started 清掉（reducer 的 freshTurn）。
-      sendMessage.mutate(
-        {
-          threadId,
-          content: [{ type: "text", text }],
-          // ★ 不用 crypto.randomUUID()：它只在安全上下文可用（HTTPS/localhost），
-          //   用 http 访问域名时是 undefined，点发送会直接抛 TypeError ——
-          //   表现是"输入框毫无反应"，请求根本没发出去。见 lib/id.ts。
-          idempotencyKey: newIdempotencyKey(),
-        },
-        // ★ 不再需要把 run_id 记下来 —— 会话流里的 run.started 会带来它。
-      );
-    },
-    [threadId, sendMessage],
-  );
+  // 对话区（消息流、发送、取消、实时轨迹）在共享组件里；这里只拿流状态给文件面板联动
+  const [live, setLive] = useState({ running: false, filesWritten: 0 });
+  const onStreamState = useCallback((s: ConversationStreamState) => {
+    setLive((prev) =>
+      prev.running === s.running && prev.filesWritten === s.filesWritten
+        ? prev
+        : { running: s.running, filesWritten: s.filesWritten },
+    );
+  }, []);
 
   const handleNewThread = () => {
     if (!pickedAgent) return;
@@ -113,88 +71,29 @@ export function ChatWorkbench({ threadId }: { threadId?: string }) {
         onLoadMore={() => void threadsQ.fetchNextPage()}
       />
 
-      <section className={`${styles.pane} ${styles.chat}`} aria-label="对话">
-        <header className={`${styles.paneHead} ${styles.chatHead}`}>
-          <div className={styles.chatHeadLeft}>
-            {agent ? (
-              <>
-                <span className={styles.agentChip}>
-                  <span
-                    className={styles.agentAvatar}
-                    style={{ background: avatarBackground(agent.agent_avatar_key) }}
-                    aria-hidden="true"
-                  >
-                    {avatarLetter(agent.agent_name)}
-                  </span>
-                  <span style={{ fontSize: 12.5, fontWeight: 550 }}>{agent.agent_name}</span>
-                </span>
-                {state.meta?.model && (
-                  <Tag className={styles.monoTag} style={{ marginInlineEnd: 0 }}>
-                    {state.meta.model}
-                  </Tag>
-                )}
-                <span className={styles.chatTitle} title={agent.title}>
-                  {agent.title}
-                </span>
-                {liveTag && (
-                  <Tag color={liveTag.color} style={{ marginInlineEnd: 0 }}>
-                    {liveTag.label}
-                  </Tag>
-                )}
-              </>
-            ) : (
-              <span style={{ color: "var(--fg-3)", fontSize: 13 }}>未选择会话</span>
-            )}
-          </div>
-          {agent && (
-            <Button
-              size="small"
-              type="text"
-              style={{ marginLeft: "auto" }}
-              icon={<Icon name="cog" size={14} />}
-              onClick={() => router.push(`/agents/${agent.agent_id}`)}
-            >
-              智能体配置
-            </Button>
-          )}
-        </header>
-
-        {threadId ? (
-          <>
-            <MessageStream
-              messages={messages}
-              loading={messagesQ.isPending}
-              hasMore={Boolean(messagesQ.hasNextPage)}
-              loadingMore={messagesQ.isFetchingNextPage}
-              onLoadMore={() => void messagesQ.fetchNextPage()}
-              live={activeRunId ? state : undefined}
-              liveRunId={activeRunId}
-              agentName={agent?.agent_name ?? "助手"}
-              agentAvatarKey={agent?.agent_avatar_key ?? "general"}
-              reconnecting={reconnecting}
-              streamError={streamError}
-            />
-
-            {sendMessage.isError && (
-              <div style={{ maxWidth: 820, margin: "0 auto var(--s-3)", padding: "0 var(--s-6)" }}>
-                <Alert
-                  type="error"
-                  showIcon
-                  message="发送失败"
-                  description={sendMessage.error.message}
-                  closable
-                />
-              </div>
-            )}
-
-            <Composer
-              disabled={false}
-              running={running}
-              onSend={handleSend}
-              onCancel={() => activeRunId && cancelRun.mutate(activeRunId)}
-            />
-          </>
-        ) : (
+      {threadId ? (
+        <ThreadConversation
+          key={threadId}
+          threadId={threadId}
+          onStreamState={onStreamState}
+          headerExtra={
+            agent && (
+              <Button
+                size="small"
+                type="text"
+                icon={<Icon name="cog" size={14} />}
+                onClick={() => router.push(`/agents/${agent.agent_id}`)}
+              >
+                智能体配置
+              </Button>
+            )
+          }
+        />
+      ) : (
+        <section className={`${styles.pane} ${styles.chat}`} aria-label="对话">
+          <header className={`${styles.paneHead} ${styles.chatHead}`}>
+            <span style={{ color: "var(--fg-3)", fontSize: 13 }}>未选择会话</span>
+          </header>
           <div style={{ flex: 1, display: "grid", placeItems: "center" }}>
             <Empty description="选择左侧会话，或新建一个">
               <Button type="primary" icon={<Icon name="plus" size={14} />} onClick={() => setNewOpen(true)}>
@@ -202,10 +101,10 @@ export function ChatWorkbench({ threadId }: { threadId?: string }) {
               </Button>
             </Empty>
           </div>
-        )}
-      </section>
+        </section>
+      )}
 
-      <FilesPanel threadId={threadId} running={running} writtenCount={state.files.length} />
+      <FilesPanel threadId={threadId} running={live.running} writtenCount={live.filesWritten} />
 
       <Modal
         open={newOpen}

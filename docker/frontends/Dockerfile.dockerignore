@@ -1,0 +1,15 @@
+# 只把三个前端的源码送进构建上下文
+*
+!package.json
+!pnpm-workspace.yaml
+!pnpm-lock.yaml
+!packages/
+!web/
+!usercenter/web/
+!teamflow/web/
+**/node_modules/
+**/.next/
+**/*.tsbuildinfo
+# ★ 本地环境文件可能带个人配置（如 NEXT_PUBLIC_USER_ID），不进镜像
+**/.env.local
+**/.env.*.local

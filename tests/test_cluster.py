@@ -54,9 +54,7 @@ def test_workspace_and_skills_come_from_different_threads_under_csi() -> None:
 
     csi 模式下这个区分落在 subPath 上。
     """
-    manifest = pod_manifest(
-        _req("t-child", workspace="t-parent"), _settings(workspace_mount="csi")
-    )
+    manifest = pod_manifest(_req("t-child", workspace="t-parent"), _settings(workspace_mount="csi"))
     mounts = {m["mountPath"]: m for m in manifest["spec"]["containers"][0]["volumeMounts"]}
 
     assert mounts["/workspace"]["subPath"] == "t-parent/workspace"
@@ -166,7 +164,8 @@ def test_no_object_storage_means_an_ephemeral_workspace() -> None:
     volumes = {v["name"]: v for v in spec["volumes"]}
     # bridge 的 token 卷（Secret）与工作区无关，每个 Pod 都有
     assert "secret" in volumes.pop("bridge-token")
-    assert set(volumes) == {"workspace", "skills", "state", "tmp"}
+    # repos：git clone 用的本地临时盘，每个 Pod 都有（git 凭据档案另算，这里没指定）
+    assert set(volumes) == {"workspace", "skills", "state", "tmp", "repos"}
     assert all("emptyDir" in v for v in volumes.values())
     mounts = {m["mountPath"] for m in spec["containers"][0]["volumeMounts"]}
     assert {"/workspace", "/skills"} <= mounts
@@ -407,3 +406,65 @@ async def test_reap_endpoint(cluster_client) -> None:
         resp = await client.post("/v1/pods/reap", json={"live_thread_ids": []})
         assert resp.json()["removed"] == ["t-1"]
         assert not backend.pods
+
+
+# ──────────────────────────────────────────────── git 凭据档案
+
+
+_PROFILES = {"teamflow-gitee": {"secret": "atlas-git-teamflow", "allowed_users": ["u-tf"]}}
+
+
+def _git_req(profile: str = "teamflow-gitee", *, user_id: str = "u-tf") -> EnsurePodRequest:
+    return _req(user_id=user_id).model_copy(update={"git_profile": profile})
+
+
+def _bridge(manifest: dict) -> dict:
+    return next(c for c in manifest["spec"]["containers"] if c["name"] == "bridge")
+
+
+def test_every_pod_gets_a_local_repos_disk_but_no_git_credentials_by_default() -> None:
+    """★ git 仓库放本地临时盘：/workspace 是对象存储的 FUSE 挂载，
+    git 依赖的 rename / 锁在上面不可靠。没指定档案的会话一点 git 凭据都拿不到。"""
+    m = pod_manifest(_req(), _settings(git_profiles=_PROFILES))
+    vols = {v["name"]: v for v in m["spec"]["volumes"]}
+    assert vols["repos"] == {"name": "repos", "emptyDir": {"sizeLimit": "5Gi"}}
+    assert "git-credentials" not in vols
+    bridge = _bridge(m)
+    assert {"name": "repos", "mountPath": "/repos"} in bridge["volumeMounts"]
+    assert not any(e["name"].startswith("GIT_") for e in bridge["env"])
+
+
+def test_a_git_profile_is_mounted_read_only_and_never_written_to_home() -> None:
+    m = pod_manifest(_git_req(), _settings(git_profiles=_PROFILES))
+    vols = {v["name"]: v for v in m["spec"]["volumes"]}
+    assert vols["git-credentials"]["secret"]["secretName"] == "atlas-git-teamflow"
+    bridge = _bridge(m)
+    mount = next(v for v in bridge["volumeMounts"] if v["name"] == "git-credentials")
+    assert mount == {"name": "git-credentials", "mountPath": "/run/secrets/git", "readOnly": True}
+    env = {e["name"]: e.get("value") for e in bridge["env"]}
+    # ★ 指向只读挂载的 gitconfig：HOME（/state）在对象存储上，写进去就成了用户可见的持久文件
+    assert env["GIT_CONFIG_GLOBAL"] == "/run/secrets/git/gitconfig"
+    assert env["GIT_TERMINAL_PROMPT"] == "0"
+    # agent（CLI）进程要拿得到这两个变量：进了 bridge 的白名单
+    allow = env["ATLAS_BRIDGE_AGENT_ENV_ALLOW"].split(",")
+    assert "GIT_CONFIG_GLOBAL" in allow and "GIT_TERMINAL_PROMPT" in allow
+
+
+async def test_unknown_or_unauthorized_git_profiles_are_refused() -> None:
+    """★ 档案是凭据：名字写错或无权一律拒绝，而不是静默不挂。"""
+    from atlas_cluster.manager import GitProfileDenied
+
+    manager = PodManager(InMemoryBackend(), _settings(git_profiles=_PROFILES))
+    with pytest.raises(GitProfileDenied):
+        await manager.ensure(_git_req("nope"))
+    with pytest.raises(GitProfileDenied):
+        await manager.ensure(_git_req(user_id="someone-else"))
+    info = await manager.ensure(_git_req())
+    assert info.created
+
+
+async def test_the_api_answers_403_for_a_denied_git_profile() -> None:
+    app = create_app(settings=_settings(git_profiles=_PROFILES), backend=InMemoryBackend())
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://c") as c:
+        r = await c.post("/v1/pods/ensure", json=_git_req(user_id="intruder").model_dump())
+    assert r.status_code == 403

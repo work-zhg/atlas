@@ -42,6 +42,10 @@ class QuotaExceeded(RuntimeError):
     """
 
 
+class GitProfileDenied(PermissionError):
+    """请求的 git 凭据档案不存在，或会话创建者不在该档案的允许名单里。"""
+
+
 class PodManager:
     def __init__(self, backend: ClusterBackend, settings: ClusterSettings) -> None:
         self._backend = backend
@@ -54,6 +58,7 @@ class PodManager:
           换一个新的只会让它与 Pod 内的那份对不上。token 因此存在
           Secret 里，复用路径经 backend.read_secret_value 读回来。
         """
+        self._check_git_profile(req)
         name = pod_name_for(req.thread_id)
         await self._await_terminating(req.thread_id)
         existing = await self._find(req.thread_id)
@@ -89,6 +94,17 @@ class PodManager:
         """
         pod = await self._backend.wait_ready(name, timeout_s=self._settings.pod_ready_timeout_s)
         return PodInfo(pod_name=name, url=self._url(pod.ip), token=token, created=created)
+
+    def _check_git_profile(self, req: EnsurePodRequest) -> None:
+        """★ 档案是凭据：谁能用由 cluster 决定，不信任调用方 —— 名字写错或无权一律拒绝，
+        而不是静默不挂（静默的表现是 git 在 Pod 里鉴权失败，原因很难追到这里）。"""
+        if not req.git_profile:
+            return
+        profile = self._settings.git_profiles.get(req.git_profile)
+        if profile is None:
+            raise GitProfileDenied(f"git 凭据档案 {req.git_profile!r} 不存在")
+        if profile.allowed_users and req.user_id not in profile.allowed_users:
+            raise GitProfileDenied(f"会话创建者无权使用 git 凭据档案 {req.git_profile!r}")
 
     async def release(self, thread_id: str) -> None:
         """删 Pod 与它的 Secret。幂等 —— 会话删除的级联会重复调。"""

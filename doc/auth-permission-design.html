@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Atlas 权限与数据权限详细设计（接入用户中心）</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --border: #d1d9e0; --head: #f6f8fa;
+    --accent: #0969da; --ok: #1a7f37; --ok-bg: #dafbe1; --warn: #9a6700; --warn-bg: #fff8c5;
+    --bad: #cf222e; --bad-bg: #ffebe9; --code-bg: #f6f8fa;
+    --b1: #ddf4ff; --b1d: #54aeff; --b2: #fbefff; --b2d: #c297ff; --b3: #dafbe1; --b3d: #4ac26b;
+    --b4: #fff8c5; --b4d: #d4a72c; --b5: #ffebe9; --b5d: #ff8182;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --border: #3d444d; --head: #151b23;
+      --accent: #4493f8; --ok: #3fb950; --ok-bg: #12261e; --warn: #d29922; --warn-bg: #2b2111;
+      --bad: #f85149; --bad-bg: #2d1214; --code-bg: #151b23;
+      --b1: #12263f; --b1d: #1f6feb; --b2: #271a36; --b2d: #8957e5; --b3: #12261e; --b3d: #2ea043;
+      --b4: #2b2111; --b4d: #9e6a03; --b5: #2d1214; --b5d: #da3633;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 32px; background: var(--bg); color: var(--fg);
+         font: 14px/1.75 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif; }
+  main { max-width: 1120px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 44px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 15.5px; margin: 24px 0 8px; }
+  .sub { color: var(--muted); margin: 0 0 14px; }
+  code { font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code-bg); padding: 1px 4px; border-radius: 4px; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px 14px; overflow-x: auto; font-size: 12.5px; }
+  pre code { background: none; padding: 0; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0 16px; }
+  th, td { border: 1px solid var(--border); padding: 7px 10px; vertical-align: top; text-align: left; }
+  th { background: var(--head); white-space: nowrap; }
+  .callout { border-left: 4px solid var(--accent); background: var(--head); padding: 10px 14px; border-radius: 4px; margin: 14px 0; }
+  .callout.warn { border-color: var(--warn); background: var(--warn-bg); }
+  .callout.bad { border-color: var(--bad); background: var(--bad-bg); }
+  .tag { display: inline-block; padding: 0 7px; border-radius: 9px; font-size: 12px; font-weight: 600; border: 1px solid; white-space: nowrap; }
+  .tag.ok { color: var(--ok); background: var(--ok-bg); border-color: var(--ok); }
+  .tag.new { color: var(--accent); background: var(--head); border-color: var(--accent); }
+  .tag.warn { color: var(--warn); background: var(--warn-bg); border-color: var(--warn); }
+  .tag.bad { color: var(--bad); background: var(--bad-bg); border-color: var(--bad); }
+  .toc { columns: 2; padding-left: 18px; }
+  .fig { border: 1px solid var(--border); border-radius: 6px; padding: 10px; overflow-x: auto; margin: 10px 0 16px; }
+  svg text { fill: var(--fg); font-size: 12px; font-family: -apple-system, "PingFang SC", sans-serif; }
+  svg .s { font-size: 11px; fill: var(--muted); }
+  svg .b { font-weight: 600; }
+  svg .n { fill: var(--accent); font-weight: 600; }
+  svg .c1 { fill: var(--b1); stroke: var(--b1d); } svg .c2 { fill: var(--b2); stroke: var(--b2d); }
+  svg .c3 { fill: var(--b3); stroke: var(--b3d); } svg .c4 { fill: var(--b4); stroke: var(--b4d); }
+  svg .c5 { fill: var(--b5); stroke: var(--b5d); }
+  svg .ln { stroke: var(--fg); stroke-width: 1.3; fill: none; }
+  svg .dash { stroke-dasharray: 5 4; }
+  svg .lane { stroke: var(--border); stroke-dasharray: 4 4; }
+  td.c { text-align: center; }
+
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 10px 0 16px; }
+  .card { border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; background: var(--head); }
+  .card b { display: block; margin-bottom: 4px; }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+
+</style>
+</head>
+<body>
+<main>
+<h1>Atlas 权限与数据权限详细设计（接入用户中心）</h1>
+<p class="sub">状态：设计稿，待评审 · 2026-10-10 · 依据当前代码（<code>identity.py</code>、<code>db/models.py</code>、<code>repositories/</code>、<code>config/src/atlas_config/auth.py</code>、<code>web/src/lib/http.ts</code>）与用户中心开放接口（<code>/open/v1</code>）。
+<b>替代</b> <a href="user-module-design.html">Atlas 用户模块详细设计</a> 中「由配置平面 Java iam 签发 JWT」的身份方案；其授权规则（归属链、404 不泄露存在性、角色不存库）沿用。</p>
+
+<ol class="toc">
+  <li><a href="#s1">现状与问题</a></li>
+  <li><a href="#s2">目标与非目标</a></li>
+  <li><a href="#s3">总体架构</a></li>
+  <li><a href="#s4">身份：三类主体</a></li>
+  <li><a href="#s5">用户与用户中心打通</a></li>
+  <li><a href="#s6">在用户中心登记：操作码、菜单、角色</a></li>
+  <li><a href="#s7">数据权限</a></li>
+  <li><a href="#s8">权限矩阵</a></li>
+  <li><a href="#s9">配置服务的访问</a></li>
+  <li><a href="#s10">服务账号与 TeamFlow 接入</a></li>
+  <li><a href="#s11">数据模型变更</a></li>
+  <li><a href="#s12">接口</a></li>
+  <li><a href="#s13">前端</a></li>
+  <li><a href="#s14">网关与部署</a></li>
+  <li><a href="#s15">上线与存量数据</a></li>
+  <li><a href="#s16">安全清单</a></li>
+  <li><a href="#s17">分期与待确认</a></li>
+</ol>
+
+<h2 id="s1">1. 现状与问题</h2>
+<table>
+  <tr><th>#</th><th>现状（已对照代码）</th><th>后果</th></tr>
+  <tr><td>G1 <span class="tag bad">高</span></td><td>没有认证：身份来自请求头 <code>X-User-Id</code>，缺省落到 <code>default_user_id</code>（<code>identity.py</code>）</td><td>任何能访问接口的人都能冒充任何人</td></tr>
+  <tr><td>G2 <span class="tag bad">高</span></td><td>会话列表不按用户过滤；按 id 读写会话、消息、事件流、run 都不检查归属（<code>repositories/thread.py</code>）</td><td>所有人能看、能订阅、能删除别人的会话</td></tr>
+  <tr><td>G3 <span class="tag bad">高</span></td><td>审批不检查谁能批</td><td>审批形同虚设</td></tr>
+  <tr><td>G4 <span class="tag warn">中</span></td><td>智能体全局可见、谁都能改</td><td>无法共享给指定人 / 部门，也挡不住误改</td></tr>
+  <tr><td>G5 <span class="tag warn">中</span></td><td>用户没有统一来源：<code>app_user</code> 只种了一个默认用户；用户中心的人员与 Atlas 没有对应</td><td>归属指向不存在的用户；无法按部门授权</td></tr>
+  <tr><td>G6 <span class="tag warn">中</span></td><td>配置服务（技能、MCP 注册表）由浏览器直连（<code>CONFIG_API_BASE</code>，8020），开发模式下角色固定 admin</td><td>谁都能注册 MCP、发布技能</td></tr>
+  <tr><td>G7 <span class="tag warn">中</span></td><td>TeamFlow 以一个固定 <code>X-User-Id</code> 调用 Atlas</td><td>服务身份无凭据；Atlas 侧不知道是哪个人在操作；用户记忆跨团队串味（见 <a href="../prototype/teamflow/docs/process-context-design.html#s6">TeamFlow 流程上下文 §6</a>）</td></tr>
+  <tr><td>G8 <span class="tag warn">中</span></td><td>run 没有发起人字段</td><td>会话共享或服务代表用户操作时，分不清是谁发起的这一轮</td></tr>
+</table>
+
+<h2 id="s2">2. 目标与非目标</h2>
+<table>
+  <tr><th>目标</th><th>非目标</th></tr>
+  <tr><td><ol>
+    <li>用户来自用户中心：用用户中心的账号登录；人员、部门、角色只在用户中心维护。</li>
+    <li>Atlas 作为接入应用登记到用户中心：操作码、菜单、角色、数据编码按用户中心的模型表达。</li>
+    <li>会话及其下一切数据按所有者隔离（G2、G3）。</li>
+    <li>智能体、MCP 服务可以按人 / 部门授权使用与维护（G4）。</li>
+    <li>服务调用有凭据，并能声明「代表哪位用户」（G7）。</li>
+    <li>浏览器经同源网关访问 atlas-server 与 atlas-config；配置服务按操作码鉴权（G6）。</li>
+    <li>本机开发体验不变（dev 模式）。</li>
+  </ol></td><td><ul>
+    <li>Atlas 自建账号、密码、组织、角色维护：都在用户中心。</li>
+    <li>自建 OIDC / 令牌签发：不做；以后 SSO 接 Keycloak，只替换登录这一步。</li>
+    <li>多租户：一套部署一个组织；租户维度以后再加。</li>
+    <li>会话多人共享：第 3 期；本期预留 <code>run.created_by</code>。</li>
+    <li>计费：只记录归属，不定价。</li>
+  </ul></td></tr>
+</table>
+
+<h2 id="s3">3. 总体架构</h2>
+<div class="fig"><svg viewBox="0 0 1080 430" width="100%" role="img" aria-label="总体架构">
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+<g style="color:var(--fg)">
+<rect class="c1" x="20" y="30" width="170" height="70" rx="8"/><text x="105" y="58" text-anchor="middle" class="b">浏览器</text><text x="105" y="78" text-anchor="middle" class="s">会话 Cookie + CSRF</text>
+<rect class="c1" x="20" y="300" width="170" height="80" rx="8"/><text x="105" y="328" text-anchor="middle" class="b">TeamFlow 等服务</text><text x="105" y="348" text-anchor="middle" class="s">服务账号 API Key</text><text x="105" y="366" text-anchor="middle" class="s">+ 代表用户（可选）</text>
+<rect class="c4" x="240" y="30" width="170" height="70" rx="8"/><text x="325" y="58" text-anchor="middle" class="b">网关 nginx</text><text x="325" y="76" text-anchor="middle" class="s">/atlas → 前端</text><text x="325" y="92" text-anchor="middle" class="s">/atlas/api → server</text>
+<rect class="c2" x="460" y="20" width="330" height="380" rx="10"/><text x="625" y="44" text-anchor="middle" class="b">atlas-server（唯一入口）</text>
+<rect class="c3" x="480" y="60" width="290" height="58" rx="6"/><text x="625" y="84" text-anchor="middle" class="b">auth：识别主体</text><text x="625" y="104" text-anchor="middle" class="s">用户会话 · 服务账号 · dev（仅本机）</text>
+<rect class="c3" x="480" y="128" width="290" height="58" rx="6"/><text x="625" y="152" text-anchor="middle" class="b">用户投影 app_user + 授权快照缓存</text><text x="625" y="172" text-anchor="middle" class="s">id = 用户中心用户 id · 快照 5 分钟</text>
+<rect class="c3" x="480" y="196" width="290" height="70" rx="6"/><text x="625" y="220" text-anchor="middle" class="b">authz：三类判定</text><text x="625" y="240" text-anchor="middle" class="s">操作码（快照）· 数据权限（智能体 / MCP，用户中心）</text><text x="625" y="256" text-anchor="middle" class="s">归属（会话及其下数据，本地）</text>
+<rect class="c3" x="480" y="276" width="290" height="50" rx="6"/><text x="625" y="300" text-anchor="middle" class="b">内部接口：会话校验</text><text x="625" y="316" text-anchor="middle" class="s">/internal/v1/auth/introspect（内部令牌）</text>
+<rect class="c3" x="480" y="336" width="290" height="50" rx="6"/><text x="625" y="360" text-anchor="middle" class="b">运行时：会话 · run · 审批 · 文件 · 记忆</text><text x="625" y="376" text-anchor="middle" class="s">按根会话所有者隔离</text>
+<rect class="c5" x="840" y="40" width="220" height="120" rx="8"/><text x="950" y="66" text-anchor="middle" class="b">用户中心（开放接口）</text><text x="950" y="88" text-anchor="middle" class="s">校验密码 · 授权快照</text><text x="950" y="106" text-anchor="middle" class="s">数据权限：AtlasAgent ·</text><text x="950" y="122" text-anchor="middle" class="s">AtlasMcpServer</text><text x="950" y="140" text-anchor="middle" class="s">通讯录（人员 · 部门）</text>
+<rect class="c4" x="840" y="270" width="220" height="70" rx="8"/><text x="950" y="296" text-anchor="middle" class="b">atlas-config（浏览器直连）</text><text x="950" y="316" text-anchor="middle" class="s">技能 · MCP 注册表 · 审计</text>
+<path class="ln" d="M190 65 H238" marker-end="url(#a)"/>
+<path class="ln" d="M410 65 H458" marker-end="url(#a)"/>
+<path class="ln" d="M190 340 H458" marker-end="url(#a)"/>
+<path class="ln" d="M770 110 C810 110 810 95 838 95" marker-end="url(#a)"/>
+<path class="ln" d="M770 300 H838" marker-end="url(#a)"/>
+</g></svg></div>
+<table>
+  <tr><th>组件</th><th>职责</th><th>不做什么</th></tr>
+  <tr><td>用户中心</td><td><b>权威</b>：人员、部门、账号状态、密码校验；Atlas 的角色 / 操作码 / 菜单授权；智能体与 MCP 服务的数据权限（谁对哪个对象有读 / 写 / 所有者）</td><td>不知道会话、run 这些运行时数据</td></tr>
+  <tr><td>atlas-server · auth</td><td>识别主体：用户会话（Cookie）、服务账号（API Key）、dev 请求头；维护用户投影；缓存授权快照</td><td>不存密码、不签发通用令牌</td></tr>
+  <tr><td>atlas-server · authz</td><td>三类判定：<b>操作码</b>（这类事能不能做，来自快照）、<b>数据权限</b>（这个智能体 / MCP 服务能不能用、能不能改，问用户中心）、<b>归属</b>（这个会话是不是你的，本地判定）</td><td>—</td></tr>
+  <tr><td>atlas-server · 内部接口</td><td>为 atlas-config 校验浏览器会话（<code>/internal/v1/auth/introspect</code>，内部令牌）</td><td>不对浏览器开放（网关屏蔽 <code>/internal/*</code>）</td></tr>
+  <tr><td>atlas-config</td><td>技能、MCP 注册表、配置审计；浏览器经网关直连；按操作码鉴权</td><td>不维护登录、不接用户中心</td></tr>
+</table>
+<div class="callout">与 <a href="user-module-design.html">旧方案</a> 的区别：旧方案由「配置平面 Java iam + BFF」登录并签发 RS256 令牌，运行时只验签。现在配置平面是 Python、用户中心已经存在且约定「接入走开放接口、不自建 OIDC」，所以改为 <b>atlas-server 直接用用户中心开放接口登录并维护会话</b>，模式与 AI TeamFlow 相同（同一套经验、同一类代码）。</div>
+
+<h2 id="s4">4. 身份：三类主体</h2>
+<table>
+  <tr><th>主体</th><th>凭据</th><th>Principal</th><th>适用</th></tr>
+  <tr><td>用户</td><td>会话 Cookie <code>atlas_session</code>（HttpOnly）+ 写请求 CSRF 双提交</td><td><code>kind=user</code>、<code>user_id</code>（= 用户中心用户 id）、姓名、部门、操作码集合</td><td>Atlas 前端</td></tr>
+  <tr><td>服务账号</td><td><code>Authorization: Bearer atlas_sk_…</code>（只存哈希）</td><td><code>kind=service</code>、<code>service_id</code>、服务账号的操作码；可带「代表用户」<code>acting_user</code></td><td>TeamFlow 等后端服务（§10）</td></tr>
+  <tr><td>dev</td><td><code>X-User-Id</code> 请求头，缺省默认用户；角色固定 admin</td><td><code>kind=user</code></td><td>本机开发、单测。<code>auth_mode=dev</code> 且监听非本机地址时<b>拒绝启动</b>（旧方案是警告，这里收紧）</td></tr>
+</table>
+<h3>4.1 用户登录（与 TeamFlow 相同的做法）</h3>
+<pre>浏览器 POST /atlas/api/v1/auth/login {account, password}
+  → atlas-server 调用户中心 POST /open/v1/auth/verify-password（应用令牌）
+  → 用户中心返回用户；再取 GET /open/v1/users/{id}/authz（授权快照：can_access、角色、操作码、菜单）
+  → can_access = false（不在 Atlas 的可访问范围）→ 403「没有使用 Atlas 的权限」
+  → upsert app_user（id = 用户中心用户 id）→ 建 auth_session → Set-Cookie atlas_session + atlas_csrf
+后续请求：Cookie → auth_session（未过期）→ 快照（进程内缓存 ≤ 5 分钟，过期向用户中心刷新）→ Principal</pre>
+<ul>
+  <li>会话有效期 12 小时（滑动续期）；登出删除会话行。</li>
+  <li>快照刷新时发现账号停用或失去应用访问权 → 删除该用户全部会话，本次请求 401。</li>
+  <li>以后接 SSO（Keycloak）：只把「校验密码」换成 OIDC 登录回调，其余（会话、快照、投影）不变。</li>
+</ul>
+<h3>4.2 后台执行</h3>
+<p>run 在后台任务里执行，没有请求；身份取会话所有者（现状如此，保持）。所有者被停用后，执行器不再为他启动新的 run。</p>
+
+<h2 id="s5">5. 用户与用户中心打通</h2>
+<table>
+  <tr><th>项</th><th>设计</th></tr>
+  <tr><td>主键</td><td><code>app_user.id</code> <b>直接用用户中心的用户 id</b>（UUID）。业务表的 <code>created_by</code>、对象存储路径 <code>{user}/{thread}/…</code>、Pod 配额标签、记忆的 <code>user_id</code> 都是它，与用户中心无需再映射。<code>external_id</code> 同值保留（兼容旧代码）</td></tr>
+  <tr><td>投影字段</td><td>账号、姓名、邮箱、部门 id 与名称、状态（active / disabled）、最近访问时间、资料同步时间</td></tr>
+  <tr><td>登记时机</td><td>首次登录自动登记（JIT）；被授权共享智能体但还没登录过的人，在授权时按用户中心资料登记（只读展示用）</td></tr>
+  <tr><td>同步</td><td>登录与快照刷新时更新资料（以用户中心为准）；停用 → 投影标 disabled、清会话。用户中心的变更通知（Webhook，用户中心 P1）上线后改为即时</td></tr>
+  <tr><td>删除 / 离职</td><td>投影不删，只标 disabled：历史会话、审批要能显示是谁；数据移交另立流程</td></tr>
+  <tr><td>部门</td><td>不在 Atlas 存部门树；授权时从用户中心通讯录（<code>/open/v1/depts/tree</code>、<code>/open/v1/users</code>）选人选部门</td></tr>
+  <tr><td>角色</td><td><b>不存库</b>：来自用户中心授权快照（存一份就会出现「用户中心已收回、Atlas 还写着有」）</td></tr>
+</table>
+
+<h2 id="s6">6. 在用户中心登记：操作码、菜单、角色</h2>
+<p>Atlas 作为应用「Atlas」登记到用户中心（与 TeamFlow 的 <code>register-uc</code> 同一方式，目录定义在代码里，幂等同步）。</p>
+<h3>6.1 操作码</h3>
+<table>
+  <tr><th>模块</th><th>编码</th><th>名称</th><th>说明</th></tr>
+  <tr><td>对话</td><td><code>chat:use</code></td><td>使用对话</td><td>新建会话、发消息、看自己的会话与记忆</td></tr>
+  <tr><td>智能体</td><td><code>agent:create</code></td><td>新建智能体</td><td>创建者自动成为该智能体的所有者</td></tr>
+  <tr><td>智能体</td><td><code>agent:manage_all</code></td><td>管理全部智能体</td><td>数据编码 <code>AtlasAgent</code> 的<b>数据管理员操作码</b>：看全部、改全部、调整任意授权；内置智能体只有它能改</td></tr>
+  <tr><td>技能</td><td><code>skill:upload</code></td><td>上传技能</td><td>上传新技能 / 新版本（待审核）</td></tr>
+  <tr><td>技能</td><td><code>skill:review</code></td><td>审核技能</td><td>审核、发布、下线技能版本</td></tr>
+  <tr><td>MCP</td><td><code>mcp:manage</code></td><td>维护 MCP 服务</td><td>注册服务、工具审核；创建者为该服务所有者</td></tr>
+  <tr><td>MCP</td><td><code>mcp:manage_all</code></td><td>管理全部 MCP 服务</td><td>数据编码 <code>AtlasMcpServer</code> 的数据管理员操作码</td></tr>
+  <tr><td>系统</td><td><code>model:manage</code></td><td>模型目录</td><td>维护模型目录与可用性</td></tr>
+  <tr><td>系统</td><td><code>service_account:manage</code></td><td>服务账号</td><td>创建 / 停用服务账号、轮换密钥（§10）</td></tr>
+  <tr><td>系统</td><td><code>audit:view</code></td><td>查看审计</td><td>配置审计、授权变更记录</td></tr>
+</table>
+<h3>6.2 菜单</h3>
+<table>
+  <tr><th>菜单</th><th>路径</th><th>可见</th></tr>
+  <tr><td>💬 对话</td><td><code>/chat</code></td><td>成员及以上</td></tr>
+  <tr><td>🤖 智能体</td><td><code>/agents</code></td><td>成员及以上（成员只看到自己可用的）</td></tr>
+  <tr><td>🧠 记忆</td><td><code>/memories</code></td><td>成员及以上（只有自己的）</td></tr>
+  <tr><td>🧩 技能</td><td><code>/skills</code></td><td>构建者、管理员</td></tr>
+  <tr><td>🔌 MCP</td><td><code>/mcp</code></td><td>管理员</td></tr>
+  <tr><td>⚙️ 系统设置（目录）：模型目录、服务账号、审计</td><td><code>/settings/*</code></td><td>管理员</td></tr>
+</table>
+<h3>6.3 角色</h3>
+<table>
+  <tr><th>角色</th><th>编码</th><th>操作码</th><th>典型人群</th></tr>
+  <tr><td>成员</td><td><code>ATLAS_MEMBER</code></td><td><code>chat:use</code></td><td>全员（建议授给根部门含下级）</td></tr>
+  <tr><td>构建者</td><td><code>ATLAS_BUILDER</code></td><td>成员 + <code>agent:create</code>、<code>skill:upload</code></td><td>做智能体的人</td></tr>
+  <tr><td>管理员</td><td><code>ATLAS_ADMIN</code></td><td>全部</td><td>平台负责人</td></tr>
+</table>
+<p>角色可叠加；判定一律看<b>操作码</b>，不看角色名（角色只是操作码的打包，用户中心里可以调整）。</p>
+
+<h2 id="s7">7. 数据权限</h2>
+<h3>7.1 哪些资源走用户中心的数据权限</h3>
+<table>
+  <tr><th>资源</th><th>走用户中心？</th><th>理由</th></tr>
+  <tr><td>智能体</td><td><span class="tag ok">是</span> 数据编码 <code>AtlasAgent</code>，一个智能体一条</td><td>要按人 / 部门共享；数量适中；授权需要在用户中心统一审计</td></tr>
+  <tr><td>MCP 服务（平台凭据）</td><td><span class="tag ok">是</span> 数据编码 <code>AtlasMcpServer</code></td><td>平台凭据下「谁能用」是唯一防线（<a href="permission.html">权限管理 §05</a>）；用户凭据（OAuth）的服务不需要，OAuth 本身就是边界</td></tr>
+  <tr><td>技能</td><td><span class="tag">否</span></td><td>不做独立授权，随智能体走（<a href="permission.html">权限管理 §06</a>）</td></tr>
+  <tr><td>会话、run、消息、事件、审批、文件、子会话、Pod</td><td><span class="tag">否</span>，本地归属</td><td>个人数据、数量大、创建频繁；放进用户中心既慢又没必要。按<b>根会话所有者</b>判定（§7.4）</td></tr>
+  <tr><td>记忆</td><td><span class="tag">否</span></td><td>只属于本人（现状已按 <code>user_id</code> 隔离；身份可信后才真正成立）</td></tr>
+  <tr><td>模型目录、服务账号</td><td><span class="tag">否</span></td><td>平台配置，用操作码控制</td></tr>
+</table>
+
+<h3>7.2 智能体：级别语义</h3>
+<table>
+  <tr><th>级别</th><th>能做什么</th></tr>
+  <tr><td><code>READ</code> 使用</td><td>在列表里看到已启用的智能体；用它新建会话；被别的智能体当作子智能体调用不需要使用者另有授权（委派按父智能体定义走）</td></tr>
+  <tr><td><code>WRITE</code> 编辑</td><td>使用 + 查看草稿、编辑并保存新版本</td></tr>
+  <tr><td><code>OWNER</code> 所有者</td><td>编辑 + 启用 / 归档 + 调整授权（加人、加部门、改级别）；至少保留一个所有者</td></tr>
+  <tr><td>数据管理员（<code>agent:manage_all</code>）</td><td>看全部、改全部、调整任意授权；内置智能体只有它能改</td></tr>
+</table>
+<ul>
+  <li><b>创建即授权</b>：新建智能体时，Atlas 调用户中心写入「创建者 = OWNER」。</li>
+  <li><b>全员可用</b>：授「根部门 · 含下级 · READ」即可，不另设「公开」标记（一个概念只有一处事实）。内置「通用助手」迁移时默认这样授。</li>
+  <li><b>状态叠加</b>：草稿只对 WRITE 及以上可见；归档只对 OWNER 与数据管理员可见；已启用对 READ 可见。</li>
+  <li><b>列表</b>：调用户中心 <code>/open/v1/data-permissions/accessible?data_code=AtlasAgent&amp;user_id=…&amp;min=READ</code>，按用户缓存 60 秒，再与状态叠加过滤。</li>
+  <li><b>何时校验</b>：建会话时校验一次 READ；会话建立后不再复查（会话已钉住版本；中途收回不让用户聊到一半报错，与 <a href="permission.html">权限管理 §03</a> 一致）。要立即断开走显式终止。</li>
+  <li><b>改名同步</b>：智能体改名时同步数据对象名称（<code>PATCH /open/v1/data-objects</code>），用户中心里的授权列表显示正确名称。</li>
+</ul>
+
+<h3>7.3 MCP 服务</h3>
+<ul>
+  <li>有效服务 = 智能体配置的服务 ∩ 本人对服务有 READ（平台凭据）—— 访问权的交集模型沿用 <a href="permission.html">权限管理 §04</a>。</li>
+  <li>每轮运行开始时复查（MCP 权限要及时收回，与智能体不同）；被收回的工具对模型隐藏，并在界面标出「部分工具因权限未启用」。</li>
+  <li><code>OWNER</code> 维护服务配置与工具审核；<code>mcp:manage_all</code> 是数据管理员。</li>
+</ul>
+
+<h3>7.4 会话类数据：归属链（沿用旧方案 7.3）</h3>
+<pre>所有者 = 根会话.created_by
+  根会话 ─ run · message · run_event · approval · run_file · 子会话（委派）· 会话 Pod · 工作区文件
+判定：资源 id → 所在会话 → 根会话所有者，与 Principal 比较（一条 JOIN 查询）
+  · 用户主体：所有者 = 本人
+  · 服务账号：所有者 = 该服务账号（TeamFlow 的节点会话归 TeamFlow，权限在 TeamFlow 判定）
+管理员默认也不能读别人的会话（对话是个人数据）；排障走单独的审计入口（第 3 期）</pre>
+<h3>7.5 拒绝时返回什么</h3>
+<table>
+  <tr><th>情形</th><th>返回</th><th>理由</th></tr>
+  <tr><td>资源不属于你 / 对智能体没有 READ</td><td>404</td><td>不泄露对象是否存在</td></tr>
+  <tr><td>能看到但级别不够（如 READ 去编辑）</td><td>403</td><td>对象已经可见，没有泄露问题</td></tr>
+  <tr><td>操作码不够（如成员去建智能体）</td><td>403</td><td>不涉及具体资源</td></tr>
+  <tr><td>没有登录 / 会话失效 / 账号停用</td><td>401</td><td>原因只写日志</td></tr>
+</table>
+
+<h2 id="s8">8. 权限矩阵</h2>
+<table>
+  <tr><th>操作</th><th>成员</th><th>构建者</th><th>管理员</th><th>服务账号</th><th>附加条件</th></tr>
+  <tr><td>列出、使用已启用的智能体</td><td class="c">✅</td><td class="c">✅</td><td class="c">✅</td><td class="c">✅</td><td>对该智能体有 READ；服务账号按其「可用智能体范围」（§10）</td></tr>
+  <tr><td>新建智能体</td><td class="c">—</td><td class="c">✅</td><td class="c">✅</td><td class="c">—</td><td><code>agent:create</code></td></tr>
+  <tr><td>编辑智能体</td><td class="c">—</td><td class="c">✅</td><td class="c">✅</td><td class="c">—</td><td>WRITE 及以上，或数据管理员</td></tr>
+  <tr><td>启用 / 归档 / 授权智能体</td><td class="c">—</td><td class="c">✅</td><td class="c">✅</td><td class="c">—</td><td>OWNER，或数据管理员；内置智能体只有数据管理员</td></tr>
+  <tr><td>新建会话</td><td class="c">✅</td><td class="c">✅</td><td class="c">✅</td><td class="c">✅</td><td>智能体对他可用且已启用</td></tr>
+  <tr><td>看、改名、删除会话；发消息、取消；订阅事件；读文件</td><td class="c">本人</td><td class="c">本人</td><td class="c">本人</td><td class="c">本服务</td><td>根会话所有者</td></tr>
+  <tr><td>决策审批</td><td class="c">本人</td><td class="c">本人</td><td class="c">本人</td><td class="c">本服务</td><td>子 run 的审批归根会话所有者</td></tr>
+  <tr><td>查看、删除记忆</td><td class="c">本人</td><td class="c">本人</td><td class="c">本人</td><td class="c">—</td><td>服务账号的会话默认关闭记忆（§10）</td></tr>
+  <tr><td>上传技能</td><td class="c">—</td><td class="c">✅</td><td class="c">✅</td><td class="c">—</td><td><code>skill:upload</code></td></tr>
+  <tr><td>审核、发布技能</td><td class="c">—</td><td class="c">—</td><td class="c">✅</td><td class="c">—</td><td><code>skill:review</code></td></tr>
+  <tr><td>注册 MCP 服务、工具审核</td><td class="c">—</td><td class="c">—</td><td class="c">✅</td><td class="c">—</td><td><code>mcp:manage</code>；维护某个服务需 OWNER 或 <code>mcp:manage_all</code></td></tr>
+  <tr><td>模型目录、服务账号、审计</td><td class="c">—</td><td class="c">—</td><td class="c">✅</td><td class="c">—</td><td>对应操作码</td></tr>
+</table>
+
+<h2 id="s9">9. 配置服务的访问</h2>
+<p><b>浏览器直接访问 atlas-config</b>（经网关同源路径 <code>/atlas-config-api</code>），不经 atlas-server 转发。atlas-config 不维护登录：</p>
+<table>
+  <tr><th>环节</th><th>做法</th></tr>
+  <tr><td>识别用户</td><td>uc 模式取浏览器带来的 <code>atlas_session</code> Cookie（atlas-server 登录时设置，Path=/，同源下两个服务都收得到），调 atlas-server <code>POST /internal/v1/auth/introspect</code>（带内部令牌）拿回用户 id 与操作码；成功结果缓存 30 秒（权限收回最多滞后 30 秒）</td></tr>
+  <tr><td>写请求</td><td>CSRF 双提交（<code>X-Atlas-CSRF</code> = <code>atlas_csrf</code> Cookie），与 atlas-server 相同</td></tr>
+  <tr><td>鉴权</td><td>按操作码（替换原 admin ⊃ builder 三级）：看技能目录 = 构建类操作码之一；上传技能 <code>skill:upload</code>；审核 / 发布 / 下线 <code>skill:review</code>；看 MCP 注册表 = <code>mcp:manage</code> 或智能体相关操作码；注册 / 工具审核 <code>mcp:manage</code>；审计 <code>audit:view</code></td></tr>
+  <tr><td>dev 模式</td><td>不变：读 <code>X-User-Id</code>，操作码全有</td></tr>
+  <tr><td>运行时 → 已发布内容</td><td><code>/internal/*</code> 共享令牌，不变</td></tr>
+</table>
+<p>MCP 服务的数据权限（§7.3，P2）由 atlas-server 在运行时判定；atlas-config 不调用用户中心（保持配置服务无外部依赖）。</p>
+
+<h2 id="s10">10. 服务账号与 TeamFlow 接入</h2>
+<h3>10.1 服务账号</h3>
+<table>
+  <tr><th>项</th><th>设计</th></tr>
+  <tr><td>是什么</td><td>Atlas 自己的主体（不是用户中心的人员）：名称、密钥（<code>atlas_sk_</code> 前缀，只显示一次，只存哈希）、操作码（默认 <code>chat:use</code>）、可用智能体范围、是否允许「代表用户」、默认关闭记忆、状态</td></tr>
+  <tr><td>谁管理</td><td>管理员（<code>service_account:manage</code>）在「系统设置 · 服务账号」创建、停用、轮换密钥</td></tr>
+  <tr><td>可用智能体范围</td><td><code>all_enabled</code>（所有已启用的智能体）或指定列表。服务账号不是用户中心的人员，无法被授予数据权限，所以范围在 Atlas 配置</td></tr>
+  <tr><td>代表用户（<code>X-Atlas-Acting-User</code>）</td><td>可选，值为用户中心用户 id。<b>只在服务账号允许时生效</b>：① 列智能体时返回「服务范围 ∩ 该用户可用」，便于业务系统只让用户挑他自己能用的；② 记入 <code>run.created_by</code> 与审计。不改变会话归属，不用于读该用户的会话或记忆</td></tr>
+  <tr><td>会话归属</td><td>服务账号建的会话归服务账号；谁能看、谁能操作由业务系统（如 TeamFlow）判定</td></tr>
+  <tr><td>记忆</td><td>服务账号建的会话默认 <code>memory: "off"</code>（不抽取、不注入、不挂检索工具）—— 避免同一服务身份下不同团队的记忆串味</td></tr>
+  <tr><td>git 凭据档案</td><td>atlas-cluster 的 <code>allowed_users</code> 改为允许的<b>服务账号 id</b>（原来是那个固定 UUID）</td></tr>
+</table>
+<h3>10.2 TeamFlow 的改动</h3>
+<table>
+  <tr><th>现在</th><th>改为</th></tr>
+  <tr><td><code>X-User-Id: 3a08906c-…</code></td><td><code>Authorization: Bearer &lt;服务账号密钥&gt;</code>（放 <code>.env</code> 的 <code>ATLAS_TF_ATLAS_API_KEY</code>）</td></tr>
+  <tr><td>不知道是谁操作</td><td>人机协同代理转发时带 <code>X-Atlas-Acting-User</code> = 当前 TeamFlow 用户（同一个用户中心 id）；监督器的系统投递不带</td></tr>
+  <tr><td>团队接入 Agent 时列出全部已启用智能体</td><td>带上团队管理员作为代表用户：只列出他自己在 Atlas 能用的智能体</td></tr>
+  <tr><td>节点会话开着用户记忆</td><td>服务账号默认关闭（不需要 TeamFlow 再传参数）</td></tr>
+</table>
+
+<h2 id="s11">11. 数据模型变更（atlas-server）</h2>
+<table>
+  <tr><th>表</th><th>变更</th></tr>
+  <tr><td><code>app_user</code></td><td>id = 用户中心用户 id；新增 <code>account</code>、<code>email</code>、<code>dept_id</code>、<code>dept_name</code>、<code>status</code>（active / disabled）、<code>last_seen_at</code>（最多 10 分钟写一次）、<code>updated_at</code></td></tr>
+  <tr><td><code>auth_session</code>（新）</td><td><code>token_hash</code>、<code>user_id</code>、<code>expires_at</code>、<code>created_at</code>、<code>last_used_at</code>、<code>user_agent</code>；Cookie 里只放随机令牌，库里存哈希</td></tr>
+  <tr><td><code>service_account</code>（新）</td><td><code>id</code>、<code>name</code>、<code>key_prefix</code>、<code>key_hash</code>、<code>operations</code>、<code>agent_scope</code>（all_enabled / list）、<code>agent_ids</code>、<code>allow_acting</code>、<code>memory_default</code>、<code>status</code>、<code>created_by</code>、<code>last_used_at</code></td></tr>
+  <tr><td><code>thread</code></td><td>新增 <code>owner_kind</code>（user / service）、<code>memory</code>（on / off）；索引 <code>(created_by, updated_at DESC, id DESC) WHERE parent_thread_id IS NULL</code>（会话列表）</td></tr>
+  <tr><td><code>run</code></td><td>新增 <code>created_by</code>（发起人：用户本人，或服务账号代表的用户，系统投递为空）；存量回填为会话所有者</td></tr>
+  <tr><td>智能体 / MCP 的授权</td><td><b>不建本地表</b>：在用户中心；Atlas 只缓存（按用户 60 秒）</td></tr>
+</table>
+
+<h2 id="s12">12. 接口</h2>
+<h3>12.1 新增</h3>
+<table>
+  <tr><th>接口</th><th>说明</th></tr>
+  <tr><td><code>POST /v1/auth/login</code> · <code>POST /v1/auth/logout</code></td><td>用户中心账号登录 / 登出</td></tr>
+  <tr><td><code>GET /v1/me</code></td><td>当前主体：用户资料、操作码、菜单、用量摘要</td></tr>
+  <tr><td><code>GET /v1/agents/{id}/grants</code> · <code>PUT …/grants</code></td><td>智能体授权的查看与调整（OWNER / 数据管理员），转为用户中心数据权限读写</td></tr>
+  <tr><td><code>GET /v1/directory/users?q=</code> · <code>GET /v1/directory/depts</code></td><td>授权时选人选部门（转发用户中心通讯录）</td></tr>
+  <tr><td><code>/v1/service-accounts</code>（CRUD、轮换密钥）</td><td>管理员</td></tr>
+  <tr><td><code>POST /internal/v1/auth/introspect</code></td><td>服务间：atlas-config 校验浏览器会话（内部令牌；网关不对外）</td></tr>
+</table>
+<h3>12.2 行为变化</h3>
+<table>
+  <tr><th>接口</th><th>变化</th></tr>
+  <tr><td><code>GET /v1/threads</code></td><td>只返回本主体的根会话</td></tr>
+  <tr><td>会话、消息、事件流、run、取消、审批、文件、预览</td><td>不属于本主体 → 404</td></tr>
+  <tr><td><code>POST /v1/threads</code></td><td>校验智能体 READ（或服务账号范围）；服务账号建的会话 <code>memory=off</code></td></tr>
+  <tr><td><code>GET /v1/agents</code></td><td>只返回可用的（叠加状态）；带 <code>X-Atlas-Acting-User</code> 时取交集</td></tr>
+  <tr><td><code>POST /v1/agents</code>、<code>PATCH</code>、<code>/status</code></td><td>操作码 + 数据权限级别（§7.2）</td></tr>
+  <tr><td>全部接口</td><td><code>auth_mode=uc</code> 下 <code>X-User-Id</code> 被忽略并从 OpenAPI 移除</td></tr>
+</table>
+
+<h2 id="s13">13. 前端</h2>
+<ul>
+  <li>登录页（用户中心账号）；未登录跳登录；后端不可达显示与 TeamFlow 相同的 BackendDown 状态。</li>
+  <li>菜单按授权快照渲染；按钮显隐只是体验，权限在服务端。</li>
+  <li>智能体详情「共享」：选人 / 选部门（含下级）+ 级别（使用 / 编辑 / 所有者），即用户中心数据权限。</li>
+  <li>系统设置：模型目录、服务账号（创建时只显示一次密钥）、审计。</li>
+  <li>部署时去掉构建期写死的 <code>NEXT_PUBLIC_USER_ID</code>；运行时与配置服务都走同源路径（<code>/atlas-api</code>、<code>/atlas-config-api</code>），带 Cookie 与 CSRF 头。</li>
+</ul>
+
+<h2 id="s14">14. 网关与部署</h2>
+<table>
+  <tr><th>项</th><th>设计</th></tr>
+  <tr><td>同源</td><td>前端 Pod 的 nginx：<code>/atlas-api/ → atlas-server</code>（SSE 关闭缓冲）、<code>/atlas-config-api/ → atlas-config</code>；<code>/atlas-api/internal/</code> 返回 404</td></tr>
+  <tr><td>Cookie</td><td><code>atlas_session</code>：HttpOnly、SameSite=Lax、Path=/（两个服务都要收到）、生产环境 Secure</td></tr>
+  <tr><td>用户中心凭据</td><td>Atlas 应用的 App Key / Secret 放 <code>.env</code>，部署时建成 K8s Secret（与 TeamFlow 相同）</td></tr>
+  <tr><td>atlas-server 配置</td><td><code>AUTH_MODE=dev|uc</code>、<code>UC_BASE_URL</code>、<code>UC_APP_KEY</code> / <code>UC_APP_SECRET</code>（Secret）、<code>SESSION_HOURS</code>、<code>AUTHZ_SNAPSHOT_TTL_S</code>、<code>AUTH_COOKIE_SECURE</code>；<code>uc</code> 模式缺 App Key 拒绝启动</td></tr>
+  <tr><td>atlas-config 配置</td><td><code>ATLAS_CONFIG_AUTH_MODE=dev|uc</code>、<code>ATLAS_CONFIG_SERVER_URL</code>、<code>ATLAS_CONFIG_INTERNAL_TOKEN</code>（与 atlas-server 的 <code>CONFIG_INTERNAL_TOKEN</code> 同值）、<code>ATLAS_CONFIG_INTROSPECT_TTL_S</code></td></tr>
+  <tr><td>登记</td><td><code>python -m atlas_server register-uc --account admin</code>：操作码、菜单、角色、数据编码幂等同步；首次输出 App Key / Secret</td></tr>
+</table>
+
+<h2 id="s15">15. 上线与存量数据</h2>
+<table>
+  <tr><th>步骤</th><th>内容</th></tr>
+  <tr><td>1</td><td>在用户中心登记 Atlas 应用（操作码、菜单、角色、数据编码 <code>AtlasAgent</code> / <code>AtlasMcpServer</code>），给人员授角色</td></tr>
+  <tr><td>2</td><td>存量归属：默认用户名下的会话、智能体、记忆，迁移到指定的用户中心账号（管理员执行一次性脚本，按 id 改写 <code>created_by</code> 与对象存储前缀）</td></tr>
+  <tr><td>3</td><td>存量智能体写入数据权限：创建者 = OWNER；内置智能体 = 根部门含下级 READ；其余已启用的按评审决定（默认全员 READ，保持现有可见性不突变）</td></tr>
+  <tr><td>4</td><td>创建 TeamFlow 服务账号；TeamFlow 已有会话的 <code>created_by</code>（固定 UUID）改写为该服务账号 id，cluster 的 <code>allowed_users</code> 同步更新</td></tr>
+  <tr><td>5</td><td>切换 <code>AUTH_MODE=uc</code> 与 <code>ATLAS_CONFIG_AUTH_MODE=uc</code>，前端走同源网关</td></tr>
+</table>
+
+<h2 id="s16">16. 安全清单</h2>
+<ul>
+  <li><code>uc</code> 模式下不接受 <code>X-User-Id</code>；dev 模式只能监听本机地址，否则拒绝启动。</li>
+  <li>会话令牌、服务账号密钥只存哈希；密钥只显示一次；支持轮换与停用。</li>
+  <li>写请求 CSRF 双提交；Cookie HttpOnly + SameSite。</li>
+  <li><code>X-Atlas-Acting-User</code> 只在服务账号允许时生效，且只影响列表交集与审计，不扩大任何访问。</li>
+  <li>不属于你的资源一律 404；授权变更（智能体共享、服务账号）记审计。</li>
+  <li>记忆检索的 <code>user_id</code> 由服务端从会话所有者取，不来自参数；服务账号会话关闭记忆。</li>
+  <li>atlas-config 在 uc 模式只认 atlas-server 校验过的会话；会话校验接口只接受内部令牌，网关屏蔽 <code>/internal/*</code>。</li>
+</ul>
+
+<h2 id="s17">17. 分期与待确认</h2>
+<table>
+  <tr><th>阶段</th><th>内容</th></tr>
+  <tr><td><b>P1</b></td><td>用户中心登记；登录 / 会话 / 快照 / 用户投影；会话类数据按所有者隔离（G1、G2、G3、G5、G8）；服务账号 + TeamFlow 切换 + 服务会话关闭记忆（G7）；同源网关；配置服务按操作码鉴权、会话交 atlas-server 校验（G6）</td></tr>
+  <tr><td><b>P2</b></td><td>智能体数据权限与共享界面（G4）；MCP 服务数据权限与每轮复查；目录选人选部门</td></tr>
+  <tr><td><b>P3</b></td><td>会话多人共享；管理员排障审计入口；用户中心 Webhook 即时停用；SSO（Keycloak）</td></tr>
+</table>
+<table>
+  <tr><th>#</th><th>待确认</th><th>当前假设</th></tr>
+  <tr><td>1</td><td><code>app_user.id</code> 直接用用户中心用户 id</td><td>是（与 TeamFlow 一致，省一层映射）</td></tr>
+  <tr><td>2</td><td>现有已启用智能体的默认可见范围</td><td>全员 READ（不突变）；内置智能体同</td></tr>
+  <tr><td>3</td><td>管理员能否查看他人会话</td><td>否；排障走第 3 期审计入口</td></tr>
+  <tr><td>4</td><td>TeamFlow 服务账号的可用智能体范围</td><td><code>all_enabled</code> + 允许代表用户（列表按团队管理员本人可用取交集）</td></tr>
+  <tr><td>5</td><td>配置服务的访问方式</td><td><b>已定</b>：浏览器直连 atlas-config（经网关同源路径），会话交 atlas-server 校验，不做转发</td></tr>
+  <tr><td>6</td><td>Atlas 是否需要「可访问范围」限制（用户中心的应用可访问部门）</td><td>需要：不在范围内的人登录返回「没有使用 Atlas 的权限」</td></tr>
+</table>
+</main>
+</body>
+</html>

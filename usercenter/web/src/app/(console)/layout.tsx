@@ -6,6 +6,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, type ReactNode } from "react";
 
+import { BackendDown, isAuthRedirect } from "@/components/BackendDown";
 import { api, ApiError } from "@/lib/api";
 import { flatMenus, landingPath, useMe } from "@/lib/session";
 
@@ -14,7 +15,7 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const qc = useQueryClient();
-  const { data: me, error } = useMe();
+  const { data: me, error, refetch, isFetching } = useMe();
   const menus = me ? flatMenus(me.menus) : [];
   const top = "/" + (pathname.split("/")[1] ?? "");
   const allowed = top === "/me" || menus.some((m) => m.path === top);
@@ -26,6 +27,8 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
     else if (me && !allowed) router.replace(landingPath(me));
   }, [me, error, allowed, router]);
 
+  if (!me && error && !isAuthRedirect(error))
+    return <BackendDown error={error} onRetry={() => void refetch()} retrying={isFetching} />;
   if (!me || me.must_change_password || !allowed) return <Spin style={{ display: "block", marginTop: 120 }} />;
 
   async function logout() {

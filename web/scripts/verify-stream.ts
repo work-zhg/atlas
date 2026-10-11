@@ -15,6 +15,7 @@
  */
 import { parseTraceEvent, type AnyTraceEvent } from "../src/lib/events";
 import { applyEvent, initialRunState, type RunState } from "../src/lib/run-reducer";
+import { atlasClient } from "../src/lib/http";
 import { streamThreadEvents } from "../src/lib/sse";
 
 const BASE = process.env.API_BASE ?? "http://127.0.0.1:8000";
@@ -209,6 +210,7 @@ async function main(): Promise<void> {
   const started = Date.now();
   const ctrl = new AbortController();
   await streamThreadEvents({
+      client: atlasClient,
     threadId: t3.id,
     signal: ctrl.signal,
     onOpen: () => opens++,
@@ -253,6 +255,7 @@ async function main(): Promise<void> {
   let half: RunState = initialRunState;
   const ctrlA = new AbortController();
   await streamThreadEvents({
+      client: atlasClient,
     threadId: t4.id,
     signal: ctrlA.signal,
     onEvent: (e: AnyTraceEvent) => {
@@ -267,6 +270,7 @@ async function main(): Promise<void> {
   let full: RunState = half;
   const ctrlB = new AbortController();
   await streamThreadEvents({
+      client: atlasClient,
     threadId: t4.id,
     lastSeq: half.lastSeq,
     signal: ctrlB.signal,

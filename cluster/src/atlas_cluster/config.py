@@ -2,10 +2,23 @@
 
 from __future__ import annotations
 
-from pydantic import SecretStr
+from pydantic import BaseModel, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 __all__ = ["ClusterSettings"]
+
+
+class GitProfile(BaseModel):
+    """一个 git 凭据档案：运维预先在会话命名空间建好的 Secret + 允许使用它的身份。
+
+    Secret 的键：gitconfig（含 credential helper，读同目录的 username / token）、username、token。
+    ★ 凭据只经 Secret 挂载，不进 manifest、不进环境变量、不写进 HOME
+      （HOME 在对象存储上会被持久化）。
+    """
+
+    secret: str
+    #: 允许使用该档案的会话创建者（Atlas 用户 id）。空 = 不限（只建议在本机开发用）。
+    allowed_users: list[str] = []
 
 
 class ClusterSettings(BaseSettings):
@@ -95,3 +108,11 @@ class ClusterSettings(BaseSettings):
     cpu_limit: str = "2"
     memory_request: str = "512Mi"
     memory_limit: str = "4Gi"
+
+    # ── git ──────────────────────────────────────────────────────────
+    #: 凭据档案：名字 → GitProfile。环境变量以 JSON 给出，如
+    #: ATLAS_CLUSTER_GIT_PROFILES='{"teamflow-gitee": {"secret": "atlas-git-teamflow",
+    #:                              "allowed_users": ["<TeamFlow 的 Atlas 服务身份>"]}}'
+    git_profiles: dict[str, GitProfile] = {}
+    #: /repos 本地临时盘的上限（git clone 放这里，不放对象存储挂载的 /workspace）
+    repos_size_limit: str = "5Gi"

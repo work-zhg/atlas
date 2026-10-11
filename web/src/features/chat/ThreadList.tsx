@@ -7,7 +7,7 @@ import type { Thread } from "@/api/types";
 import { Icon } from "@/components/Icon";
 import { relativeTime } from "@/lib/format";
 import { avatarBackground, avatarLetter } from "@/features/agents/avatar";
-import styles from "./chat.module.css";
+import styles from "@atlas/chat-ui/src/chat/chat.module.css";
 import { threadBadge } from "./threadState";
 
 interface Props {

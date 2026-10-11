@@ -3,14 +3,14 @@ name = "atlas"
 version = "0.1.0"
 description = "Atlas — agent platform (workspace root)"
 requires-python = ">=3.13"
-dependencies = ["atlas-acp", "atlas-bridge", "atlas-cluster", "atlas-config", "atlas-engine", "atlas-host", "atlas-jsonrpc", "atlas-server", "atlas-teamflow", "atlas-usercenter"]
+dependencies = ["atlas-acp", "atlas-bridge", "atlas-cluster", "atlas-config", "atlas-engine", "atlas-host", "atlas-jsonrpc", "atlas-knowledge", "atlas-server", "atlas-teamflow", "atlas-usercenter"]
 
 # Workspace root is a container, not an installable package.
 [tool.uv]
 package = false
 
 [tool.uv.workspace]
-members = ["acp", "bridge", "cluster", "config", "engine", "host", "jsonrpc", "server", "teamflow", "usercenter"]
+members = ["acp", "bridge", "cluster", "config", "engine", "host", "jsonrpc", "knowledge", "server", "teamflow", "usercenter"]
 
 [tool.uv.sources]
 atlas-acp = { workspace = true }
@@ -20,6 +20,7 @@ atlas-config = { workspace = true }
 atlas-engine = { workspace = true }
 atlas-host = { workspace = true }
 atlas-jsonrpc = { workspace = true }
+atlas-knowledge = { workspace = true }
 atlas-server = { workspace = true }
 atlas-teamflow = { workspace = true }
 atlas-usercenter = { workspace = true }
@@ -41,7 +42,7 @@ dev = [
 # ★ 依赖单向的硬约束（文档 §2.1）。engine 一旦 import server/db/web 就 CI 红。
 # ---------------------------------------------------------------------------
 [tool.importlinter]
-root_packages = ["atlas_acp", "atlas_bridge", "atlas_cluster", "atlas_config", "atlas_engine", "atlas_host", "atlas_jsonrpc", "atlas_server", "atlas_teamflow", "atlas_usercenter"]
+root_packages = ["atlas_acp", "atlas_bridge", "atlas_cluster", "atlas_config", "atlas_engine", "atlas_host", "atlas_jsonrpc", "atlas_knowledge", "atlas_server", "atlas_teamflow", "atlas_usercenter"]
 # forbidden_modules 里有第三方包（fastapi/sqlalchemy/...），必须打开这个开关
 include_external_packages = true
 
@@ -264,6 +265,42 @@ source_modules = [
 ]
 forbidden_modules = ["atlas_teamflow"]
 
+# 知识库服务是独立部署物（doc/atlas-rag-design.html §4）：atlas-server 只经 HTTP 调它，
+# 双方互不 import —— 同语言越界只要一行 import，所以要 CI 拦。
+[[tool.importlinter.contracts]]
+name = "atlas_knowledge 不认识 atlas 其它包"
+type = "forbidden"
+source_modules = ["atlas_knowledge"]
+forbidden_modules = [
+  "atlas_acp",
+  "atlas_bridge",
+  "atlas_cluster",
+  "atlas_config",
+  "atlas_engine",
+  "atlas_host",
+  "atlas_jsonrpc",
+  "atlas_server",
+  "atlas_teamflow",
+  "atlas_usercenter",
+]
+
+[[tool.importlinter.contracts]]
+name = "atlas 其它包不认识 atlas_knowledge"
+type = "forbidden"
+source_modules = [
+  "atlas_acp",
+  "atlas_bridge",
+  "atlas_cluster",
+  "atlas_config",
+  "atlas_engine",
+  "atlas_host",
+  "atlas_jsonrpc",
+  "atlas_server",
+  "atlas_teamflow",
+  "atlas_usercenter",
+]
+forbidden_modules = ["atlas_knowledge"]
+
 # server 里的纯计算层：装配（build）、执行循环（runner）、词汇（spec/events/
 # translator/tool_registry）不许碰基础设施 —— 「run 一轮」必须继续可以用
 # 假模型脱离 DB/Redis 测试。IO 归 assembly / services / repositories。
@@ -289,6 +326,7 @@ extend-exclude = [
   "usercenter/src/atlas_usercenter/migrations/versions",
   "usercenter/web",
   "teamflow/src/atlas_teamflow/migrations/versions",
+  "knowledge/src/atlas_knowledge/migrations/versions",
   "teamflow/web",
   "docs",          # 别去动设计文档里的示例代码块
   "prototype",
@@ -322,7 +360,7 @@ exclude = ["engine/src/atlas_engine/kernel/**"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["tests", "config/tests", "usercenter/tests", "teamflow/tests"]
+testpaths = ["tests", "config/tests", "usercenter/tests", "teamflow/tests", "knowledge/tests"]
 addopts = "-ra"
 
 [tool.mypy]

@@ -62,6 +62,7 @@
 <main>
 
 <h1>Atlas 用户模块详细设计</h1>
+<div class="callout warn"><b>身份方案已更新</b>：用户来自用户中心、Atlas 直接用用户中心开放接口登录，不再由配置平面 Java iam 签发 JWT。见 <a href="auth-permission-design.html">Atlas 权限与数据权限详细设计（接入用户中心）</a>；本文的授权规则（归属链、404 不泄露、角色不存库）仍然有效。</div>
 <p class="sub">
   状态：设计稿，待评审 · 2026-10-04 · 依据当前工作区代码（<code>identity.py</code>、<code>db/models.py</code>、<code>repositories/</code>、<code>web/src/lib/http.ts</code>）
   与已有架构规划（<code>doc/detail/structure.html</code> §08–§10：iam 在配置平面，<code>app_user</code> 是运行时侧的用户投影）

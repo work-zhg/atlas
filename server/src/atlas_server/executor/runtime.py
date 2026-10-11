@@ -114,6 +114,7 @@ class NativeRuntime:
         # runner 只驱动已装好的图 —— cancel / titler 是 runner 自己的注入点。
         notices: list[tuple[EventType, dict[str, Any]]] = []
         try:
+            prepared = await self._assembly.with_knowledge(prepared, run_id=run_id)
             graph, titler = await self._assembly.build(
                 prepared, run_id=run_id, redis=redis, relay=relay, notices=notices
             )

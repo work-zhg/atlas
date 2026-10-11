@@ -14,7 +14,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.models import Agent, AgentVersion
 from ..domain.mcp_naming import parse_tool_id
-from ..errors import BuiltinAgentProtected, NotFound, SlugTaken
+from ..errors import (
+    BuiltinAgentProtected,
+    DependencyUnavailable,
+    InvalidReference,
+    NotFound,
+    SlugTaken,
+)
+from ..providers.knowledge import KnowledgeUnavailable, make_knowledge_client
 from ..repositories.agent import AgentRepository
 from ..schemas.agent import (
     AgentCreate,
@@ -31,6 +38,7 @@ from .spec_refs import resolve_spec_refs
 if TYPE_CHECKING:
     import redis.asyncio as aioredis
 
+    from ..auth.principal import Principal
     from ..config import Settings
 
 
@@ -106,11 +114,14 @@ class AgentService:
 
     # ------------------------------------------------------------------ 写
 
-    async def create(self, payload: AgentCreate, *, user_id: UUID) -> AgentDetailOut:
+    async def create(
+        self, payload: AgentCreate, *, user_id: UUID, principal: Principal | None = None
+    ) -> AgentDetailOut:
         if await self._repo.get_by_slug(payload.slug):
             raise SlugTaken(f"标识 {payload.slug!r} 已被占用", slug=payload.slug)
 
         spec = await self._resolve(payload.spec, previous=None)
+        await self._check_knowledge(spec, previous=None, principal=principal)
         # ★ 在这里就跑 engine 的校验：opus-5 传 temperature 之类的错误
         #   在点保存时被拒，而不是等到某次 run（§3 D3）
         spec.to_engine(slug=payload.slug, name=payload.name).validate()
@@ -126,7 +137,12 @@ class AgentService:
         return AgentDetailOut(**_summarize(agent, version).model_dump(), spec=version.spec)
 
     async def update(
-        self, agent_id: UUID, payload: AgentUpdate, *, user_id: UUID
+        self,
+        agent_id: UUID,
+        payload: AgentUpdate,
+        *,
+        user_id: UUID,
+        principal: Principal | None = None,
     ) -> AgentDetailOut:
         agent, current = await self._require(agent_id)
 
@@ -139,9 +155,9 @@ class AgentService:
 
         version = current
         if payload.spec is not None:
-            spec = await self._resolve(
-                payload.spec, previous=AgentSpecIn.model_validate(current.spec)
-            )
+            previous = AgentSpecIn.model_validate(current.spec)
+            spec = await self._resolve(payload.spec, previous=previous)
+            await self._check_knowledge(spec, previous=previous, principal=principal)
             spec.to_engine(slug=agent.slug, name=agent.name).validate()
             version = await self._repo.add_version(
                 agent=agent, spec=spec.model_dump(mode="json"), created_by=user_id
@@ -178,6 +194,31 @@ class AgentService:
         return await resolve_spec_refs(
             spec, settings=self._settings, redis=self._redis, previous=previous
         )
+
+    async def _check_knowledge(
+        self, spec: AgentSpecIn, *, previous: AgentSpecIn | None, principal: Principal | None
+    ) -> None:
+        """新绑定的知识库，保存的人必须能读（doc/atlas-rag-design.html §11.2）。
+
+        ★ 只查**新增**的：沿用旧版本已绑定的库不重新判 —— 否则管理员改个提示词，会因为
+          自己读不到别人绑的库而保存失败。
+        ★ 绑定 = 间接授权：能用这个智能体的人都能经它读到库的内容（前端绑定时明示）。
+        """
+        before = set(previous.knowledge.dataset_ids) if previous else set()
+        added = [d for d in spec.knowledge.dataset_ids if d not in before]
+        if not added or principal is None or self._settings is None:
+            return
+        client = make_knowledge_client(self._settings)
+        if client is None:
+            raise InvalidReference("服务端未接入知识库服务，不能绑定知识库")
+        try:
+            readable = await client.readable(principal.owner_id, principal.operations, added)
+        except KnowledgeUnavailable as exc:
+            raise DependencyUnavailable(str(exc)) from exc
+        ok = {d["id"] for d in readable}
+        missing = [d for d in added if d not in ok]
+        if missing:
+            raise InvalidReference("知识库不存在或你没有读取权限", dataset_ids=",".join(missing))
 
     async def _require(self, agent_id: UUID) -> tuple[Agent, AgentVersion]:
         found = await self._repo.get(agent_id)

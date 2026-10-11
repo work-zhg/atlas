@@ -362,6 +362,7 @@ class RunRepository:
         agent_version_id: UUID,
         run_id: UUID | None = None,
         parent_run_id: UUID | None = None,
+        created_by: UUID | None = None,
     ) -> Run:
         """run_id 可由调用方预生成：会话串行锁的 owner 值是 run_id，而锁必须
         先于 run 行拿到（拿不到就不该插行）—— 见 RunService.create。
@@ -372,6 +373,7 @@ class RunRepository:
             thread_id=thread_id,
             agent_version_id=agent_version_id,
             parent_run_id=parent_run_id,
+            created_by=created_by,
             status="queued",
         )
         if run_id is not None:

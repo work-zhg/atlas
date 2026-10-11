@@ -26,6 +26,9 @@ function csrf(): string | undefined {
   return hit ? decodeURIComponent(hit.slice("uc_csrf=".length)) : undefined;
 }
 
+/** 部署子路径（与 next.config 的 basePath 一致）。fetch / EventSource / <a href> 不会自动加，要手动拼。 */
+export const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
+
 type Query = Record<string, string | number | boolean | undefined | null>;
 
 function url(path: string, query?: Query): string {
@@ -34,7 +37,7 @@ function url(path: string, query?: Query): string {
     if (v !== undefined && v !== null && v !== "") qs.set(k, String(v));
   }
   const s = qs.toString();
-  return `/api/v1${path}${s ? `?${s}` : ""}`;
+  return `${BASE_PATH}/api/v1${path}${s ? `?${s}` : ""}`;
 }
 
 async function request<T>(method: string, path: string, body?: unknown, query?: Query): Promise<T> {

@@ -34,6 +34,9 @@ class EnsurePodRequest(BaseModel):
     #: adapter 启动命令，进 bridge 的 ATLAS_ADAPTER_CMD
     adapter: str = ""
     cli_type: str = ""
+    #: git 凭据档案（cluster 配置里的名字）。非空时把该档案的 Secret 只读挂进 Pod，
+    #: Pod 内的 git CLI 用它访问代码托管平台。为空 = 不给任何 git 凭据。
+    git_profile: str = ""
 
 
 class PodInfo(BaseModel):

@@ -6,7 +6,8 @@ import { App as AntdApp, ConfigProvider } from "antd";
 import zhCN from "antd/locale/zh_CN";
 import { useState, type ReactNode } from "react";
 
-import { ApiError } from "@/lib/http";
+import { AtlasClientProvider } from "@atlas/chat-ui/src/client";
+import { ApiError, atlasClient } from "@/lib/http";
 import { atlasTheme } from "@/theme/antd";
 
 function makeQueryClient(): QueryClient {
@@ -35,7 +36,10 @@ export function Providers({ children }: { children: ReactNode }) {
     <AntdRegistry>
       <ConfigProvider theme={atlasTheme} locale={zhCN} componentSize="middle">
         <AntdApp>
-          <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+          <QueryClientProvider client={queryClient}>
+            {/* 对话组件（共享包）向 Atlas 自己的后端发请求 */}
+            <AtlasClientProvider config={atlasClient}>{children}</AtlasClientProvider>
+          </QueryClientProvider>
         </AntdApp>
       </ConfigProvider>
     </AntdRegistry>

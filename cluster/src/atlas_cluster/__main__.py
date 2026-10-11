@@ -41,7 +41,7 @@ def main() -> None:
 
     uvicorn.run(
         create_app(backend=backend, settings=settings),
-        host=os.environ.get("ATLAS_CLUSTER_HOST", "0.0.0.0"),  # noqa: S104
+        host=os.environ.get("ATLAS_CLUSTER_HOST", "0.0.0.0"),
         port=_port(),
     )
 

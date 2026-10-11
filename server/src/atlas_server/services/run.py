@@ -75,7 +75,12 @@ class RunService:
     # ------------------------------------------------------------------ 创建
 
     async def create(
-        self, thread_id: UUID, payload: RunCreate, *, idempotency_key: str | None
+        self,
+        thread_id: UUID,
+        payload: RunCreate,
+        *,
+        idempotency_key: str | None,
+        initiator: UUID | None = None,
     ) -> RunAccepted:
         if idempotency_key:
             existing = await self._relay.lookup_idempotency(idempotency_key)
@@ -134,7 +139,10 @@ class RunService:
                 thread_id=thread_id, role="user", content=payload.content
             )
             run = await self._runs.create(
-                run_id=run_id, thread_id=thread_id, agent_version_id=version.id
+                run_id=run_id,
+                thread_id=thread_id,
+                agent_version_id=version.id,
+                created_by=initiator,
             )
             await self._session.commit()
         except Exception:

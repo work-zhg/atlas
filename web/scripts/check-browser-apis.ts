@@ -13,14 +13,18 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
-const SRC = join(import.meta.dirname, "..", "src");
+/** 扫描范围：Atlas 前端源码 + 共享对话组件包（对话代码在那里，嵌入方也会跑到）。 */
+const ROOTS = [
+  { dir: join(import.meta.dirname, "..", "src"), label: "src" },
+  { dir: join(import.meta.dirname, "..", "..", "packages", "chat-ui", "src"), label: "packages/chat-ui/src" },
+];
 
 /** 只在安全上下文可用的 API —— 裸用即报错。 */
 const FORBIDDEN: { pattern: RegExp; api: string; hint: string }[] = [
   {
     pattern: /(?<!typeof\s)\bcrypto\.randomUUID\s*\(/,
     api: "crypto.randomUUID()",
-    hint: "用 @/lib/id 的 randomId() / newIdempotencyKey()",
+    hint: "用 lib/id 的 randomId() / newIdempotencyKey()",
   },
   {
     pattern: /\bcrypto\.subtle\b/,
@@ -46,8 +50,9 @@ function* walk(dir: string): Generator<string> {
 }
 
 let failed = 0;
-for (const file of walk(SRC)) {
-  const rel = relative(SRC, file).replaceAll("\\", "/");
+for (const { dir, label } of ROOTS)
+for (const file of walk(dir)) {
+  const rel = relative(dir, file).replaceAll("\\", "/");
   if (ALLOWLIST.has(rel)) continue;
 
   const lines = readFileSync(file, "utf8").split("\n");
@@ -55,7 +60,7 @@ for (const file of walk(SRC)) {
     if (line.trimStart().startsWith("//") || line.trimStart().startsWith("*")) return;
     for (const { pattern, api, hint } of FORBIDDEN) {
       if (pattern.test(line)) {
-        console.error(`✗ src/${rel}:${i + 1}  ${api} 只在安全上下文（HTTPS/localhost）可用`);
+        console.error(`✗ ${label}/${rel}:${i + 1}  ${api} 只在安全上下文（HTTPS/localhost）可用`);
         console.error(`    ${hint}`);
         console.error(`    ${line.trim()}`);
         failed += 1;

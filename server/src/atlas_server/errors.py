@@ -24,6 +24,20 @@ class NotFound(AppError):
     kind = "not_found"
 
 
+class Unauthorized(AppError):
+    """没有登录 / 会话失效 / 账号停用。原因只写日志，不告诉调用方（权限设计 §7.5）。"""
+
+    status_code = 401
+    kind = "unauthorized"
+
+
+class Forbidden(AppError):
+    """操作码不够，或对已可见的对象级别不够。不涉及「对象是否存在」时才用（否则用 404）。"""
+
+    status_code = 403
+    kind = "forbidden"
+
+
 class Conflict(AppError):
     status_code = 409
     kind = "conflict"

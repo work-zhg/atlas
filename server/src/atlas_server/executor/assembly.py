@@ -13,6 +13,7 @@ HookAssembly.build() 产出「用什么能力跑」（RunHooks，签名的后半
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -29,6 +30,7 @@ from atlas_server.domain.tool_registry import MEMORY_SEARCH_TOOL
 from atlas_server.domain.translator import extract_text
 from atlas_server.executor.runner import Titler
 from atlas_server.memory.tool import MemoryUnavailable, make_memory_search_tool
+from atlas_server.providers.knowledge import format_context, make_knowledge_tool, require_client
 from atlas_server.providers.llm.factory import build_chat_model
 from atlas_server.telemetry.model_callback import ModelSpanHandler
 
@@ -157,7 +159,8 @@ class HookAssembly:
         # 记忆检索（只读）。★ user_id 从**会话所有者**闭包捕获，不进工具
         #   的参数 schema —— 一旦它可由模型指定，就是一个读取他人记忆的
         #   口子，而提示词注入是真实存在的攻击面（记忆设计 §09）。
-        if MEMORY_SEARCH_TOOL in prepared.spec.tool_names:
+        # 会话关闭了用户记忆（如服务账号的会话）→ 不挂检索工具：这是会话的设定，不是缺前提
+        if MEMORY_SEARCH_TOOL in prepared.spec.tool_names and prepared.thread.memory != "off":
             # ★ 缺前提要**明确失败**，不能静默少装一个工具（§13.2）。
             #   静默跳过的话，模型会
             #   以为自己没有记忆可查，而用户以为记忆在工作。
@@ -168,6 +171,20 @@ class HookAssembly:
             extra_tools = [
                 *extra_tools,
                 make_memory_search_tool(self._memory, user_id=prepared.thread.created_by),
+            ]
+
+        # 知识库（tool 模式）：库 id 闭包捕获，不进参数（doc/atlas-rag-design.html §10）
+        knowledge = prepared.spec.knowledge
+        if knowledge.enabled and knowledge.mode == "tool":
+            extra_tools = [
+                *extra_tools,
+                make_knowledge_tool(
+                    require_client(self._settings),
+                    knowledge,
+                    names=None,
+                    source_ref=f"thread:{prepared.thread_id}/run:{run_id}",
+                    actor=prepared.thread.created_by,
+                ),
             ]
 
         # ★ sandbox 恒为 None：Docker 实现已删除，K8s Pod 实现（acp 详设的
@@ -220,6 +237,31 @@ class HookAssembly:
             subagents=self._subagent_gateway(prepared, run_id=run_id, relay=relay),
         )
         return graph, self._titler(prepared)
+
+    async def with_knowledge(self, prepared: PreparedRun, *, run_id: UUID) -> PreparedRun:
+        """auto 模式：先用本轮提问检索，参考资料并入**这一轮**的输入（同 Dify 对话应用的上下文）。
+
+        ★ 只改模型这一轮看到的输入：用户消息早已按原文落库，Transcript 也只收模型与工具的输出，
+          所以历史里没有这段资料 —— 下一轮按下一轮的提问重新检索。
+        ★ 续跑段（resume）不再检索：本轮输入已在 history 里，没有可并入的位置。
+        ★ 检索失败让这一轮明确失败（KnowledgeUnavailable），不静默当作「没查到」（§13.2）。
+        """
+        knowledge = prepared.spec.knowledge
+        if not knowledge.enabled or knowledge.mode != "auto" or prepared.resume:
+            return prepared
+        query = extract_text(prepared.input_content).strip()
+        if not query:
+            return prepared
+        records = await require_client(self._settings).retrieve(
+            knowledge,
+            query[:2000],
+            source="agent",
+            source_ref=f"thread:{prepared.thread_id}/run:{run_id}",
+            actor=prepared.thread.created_by,
+        )
+        return dataclasses.replace(
+            prepared, input_content=format_context(prepared.input_content, records)
+        )
 
     async def _mcp_tool_list(
         self,

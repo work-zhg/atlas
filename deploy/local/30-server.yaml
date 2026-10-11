@@ -44,6 +44,8 @@ spec:
             # ★ MCP 先保持 env：注册表要先用 `python -m atlas_config mcp import-env`
             #   导入，再把 MCP_REGISTRY 切成 config。
             - {name: CONFIG_BASE_URL, value: "http://atlas-config.atlas-system.svc.cluster.local:8020"}
+            # 知识库服务（doc/atlas-rag-design.html §10）；服务间令牌复用 CONFIG_INTERNAL_TOKEN
+            - {name: KNOWLEDGE_BASE_URL, value: "http://atlas-knowledge.atlas-system.svc.cluster.local:8050"}
             - name: CONFIG_INTERNAL_TOKEN
               valueFrom: {secretKeyRef: {name: atlas-config-creds, key: internal_token}}
             # 技能版本的磁盘缓存。容器里放 /tmp：丢了只是重新拉一次
@@ -59,6 +61,14 @@ spec:
             # ★ Mem0 的变更史库。默认在 ~/.mem0，容器里是易失的。
             - {name: MEMORY_HISTORY_DB, value: "/tmp/mem0-history.db"}
             - {name: DEFAULT_USER_ID, value: "00000000-0000-0000-0000-000000000001"}
+            # 身份与鉴权（doc/auth-permission-design.html）：用户中心账号登录 + 服务账号密钥；
+            # X-User-Id 不再生效。用户中心后端在宿主上运行（:8030）
+            - {name: AUTH_MODE, value: uc}
+            - {name: UC_BASE_URL, value: "http://__HOST_IP__:8030"}
+            - name: UC_APP_KEY
+              valueFrom: {secretKeyRef: {name: atlas-server-creds, key: uc_app_key}}
+            - name: UC_APP_SECRET
+              valueFrom: {secretKeyRef: {name: atlas-server-creds, key: uc_app_secret}}
             # MCP 经 Higress 收口（MCP 详设 §08）。Higress 跑在宿主的 compose 里
             # （--profile higress），配置见 deploy/local/higress/setup.py。
             # ★ 后端 key 只在网关里，这里只有网关地址 —— 没有任何 serpapi 凭据。
@@ -66,7 +76,9 @@ spec:
             - name: MCP_SERVERS
               value: '[{"name":"serpapi","url":"http://__HOST_IP__:18080/mcp-servers/serpapi","call_timeout_s":90}]'
             # web 从宿主浏览器直连本服务（LoadBalancer 落在 localhost）
-            - {name: CORS_ORIGINS, value: '["http://localhost:3000","http://127.0.0.1:3000"]'}
+            # ★ 也是会话文件预览的 frame-ancestors（previews.py）：经前端网关（:8080，见 40-frontends.yaml）
+            #   打开的预览页要能 iframe 嵌入预览站点
+            - {name: CORS_ORIGINS, value: '["http://localhost:3000","http://127.0.0.1:3000","http://localhost:8080","http://127.0.0.1:8080"]'}
             - name: OSS_ACCESS_KEY_ID
               valueFrom: {secretKeyRef: {name: atlas-server-creds, key: oss_access_key_id}}
             - name: OSS_ACCESS_KEY_SECRET

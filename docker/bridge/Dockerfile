@@ -65,6 +65,13 @@ RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
 
 COPY --from=adapter /opt/acp-cli /opt/acp-cli
 
+# git：会话里的 CLI 要 clone / commit / push（AI TeamFlow 的产物仓库，以后还有项目代码）。
+# ★ 凭据不在镜像里：由 cluster 按会话的 git 凭据档案把 Secret 只读挂到 /run/secrets/git，
+#   GIT_CONFIG_GLOBAL 指向那里的 gitconfig（见 cluster template.py）。
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --from=wheels /wheels /tmp/wheels
 RUN pip install --no-cache-dir /tmp/wheels/*.whl \
     && rm -rf /tmp/wheels
@@ -78,8 +85,8 @@ RUN pip install --no-cache-dir /tmp/wheels/*.whl \
 #   而 CLI 要往 HOME 写会话记录。/state 由挂载器挂到对象存储上 ——
 #   resume 跨 Pod 重建就靠它。
 RUN useradd --uid 1000 --create-home --home-dir /home/agent agent \
-    && mkdir -p /workspace /skills /state \
-    && chown agent:agent /workspace /skills /state
+    && mkdir -p /workspace /skills /state /repos \
+    && chown agent:agent /workspace /skills /state /repos
 USER 1000:1000
 ENV HOME=/state \
     PYTHONUNBUFFERED=1 \

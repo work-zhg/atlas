@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# 把 server、cluster 与 config 部署到本机 K8s（Docker Desktop）。
+# 把 server、cluster、config 与 knowledge 部署到本机 K8s（Docker Desktop）。
 #
 # 前置：make up（宿主的 PG / Redis / MinIO）、两个镜像已构建：
-#   docker build -f docker/bridge/Dockerfile -t atlas-acp-bridge:0.3.0 .
+#   docker build -f docker/bridge/Dockerfile -t atlas-acp-bridge:0.4.0 .
 #   docker build -f docker/app/Dockerfile    -t atlas-app:dev .
 #
 # ★ 凭据从仓库根的 .env 读，建成 K8s Secret —— 不进任何 YAML，
@@ -31,6 +31,8 @@ kubectl -n atlas-system create secret generic atlas-server-creds \
   --from-literal=oss_access_key_secret="${OSS_ACCESS_KEY_SECRET}" \
   --from-literal=litellm_base_url="${LITELLM_BASE_URL}" \
   --from-literal=litellm_key="${LITELLM_KEY}" \
+  --from-literal=uc_app_key="${UC_APP_KEY:-}" \
+  --from-literal=uc_app_secret="${UC_APP_SECRET:-}" \
   --dry-run=client -o yaml | kubectl apply -f -
 
 # 服务间令牌：.env 里有就用；没有就沿用集群里已有的；都没有才新生成。
@@ -44,6 +46,11 @@ kubectl -n atlas-system create secret generic atlas-config-creds \
   --from-literal=internal_token="${CONFIG_TOKEN}" \
   --dry-run=client -o yaml | kubectl apply -f -
 
+# TeamFlow 的 git 凭据档案（会话 Pod 里 git push 产物）：.env 没有 Gitee 令牌就跳过
+if [ -n "${ATLAS_GIT_TEAMFLOW_TOKEN:-${ATLAS_TF_GITEE_TOKEN:-}}" ]; then
+  deploy/local/git-profile.sh
+fi
+
 # ★ 宿主地址用 LAN IP，不用 host.docker.internal —— 后者会被 Docker Desktop
 #   转发到宿主 loopback，命中绑在 127.0.0.1 的本机服务而不是 compose 那个。
 HOST_IP="${ATLAS_HOST_IP:-$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1)}"
@@ -53,8 +60,11 @@ echo "宿主地址 = $HOST_IP"
 sed "s/__HOST_IP__/${HOST_IP}/g" deploy/local/20-cluster.yaml | kubectl apply -f -
 sed "s/__HOST_IP__/${HOST_IP}/g" deploy/local/25-config.yaml  | kubectl apply -f -
 sed "s/__HOST_IP__/${HOST_IP}/g" deploy/local/30-server.yaml  | kubectl apply -f -
+sed "s/__HOST_IP__/${HOST_IP}/g" deploy/local/35-knowledge.yaml | kubectl apply -f -
 
 kubectl -n atlas-system rollout status deploy/atlas-cluster --timeout=180s
 kubectl -n atlas-system rollout status deploy/atlas-config --timeout=180s
 kubectl -n atlas-system rollout status deploy/atlas-server --timeout=180s
+kubectl -n atlas-system rollout status deploy/atlas-knowledge --timeout=300s
+kubectl -n atlas-system rollout status deploy/atlas-knowledge-worker --timeout=300s
 echo "server → http://127.0.0.1:8000   config → http://127.0.0.1:8020"

@@ -38,6 +38,7 @@ import { AVATAR_KEYS, avatarBackground, avatarLetter } from "@/features/agents/a
 import { AGENT_STATUS_META } from "@/features/agents/status";
 import styles from "./editor.module.css";
 import { McpToolsSection, SkillsSection } from "./CatalogSections";
+import { DEFAULT_KNOWLEDGE, KnowledgeSection } from "./KnowledgeSection";
 import {
   defaultSpec,
   effortForbidsThinkingOff,
@@ -56,6 +57,7 @@ const NAV: [string, string][] = [
   ["e-tools", "内置工具"],
   ["e-skills", "技能"],
   ["e-mcp", "MCP"],
+  ["e-knowledge", "知识库"],
   ["e-subs", "子智能体"],
   ["e-approval", "人工确认"],
   ["e-limits", "限制"],
@@ -69,6 +71,7 @@ function normalizeSpec(raw: unknown): ResolvedSpec {
     skills: spec.skills ?? [],
     mcp_tool_digests: spec.mcp_tool_digests ?? {},
     mcp_drift_policy: spec.mcp_drift_policy ?? "warn",
+    knowledge: spec.knowledge ?? DEFAULT_KNOWLEDGE,
   };
 }
 
@@ -740,6 +743,13 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
               })
             }
             onPolicy={(mcp_drift_policy) => patchSpec({ mcp_drift_policy })}
+          />
+
+          <KnowledgeSection
+            value={draft.spec.knowledge ?? DEFAULT_KNOWLEDGE}
+            kind={draft.spec.kind ?? "native"}
+            readOnly={readOnly}
+            onChange={(knowledge) => patchSpec({ knowledge })}
           />
 
           <Section

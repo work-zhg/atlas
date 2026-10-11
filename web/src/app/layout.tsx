@@ -4,8 +4,10 @@ import type { Metadata, Viewport } from "next";
 // 静态方法（App.useApp 之外的调用路径）会报 unmountComponentAtNode 不存在。
 import "@ant-design/v5-patch-for-react-19";
 
+import { AuthGate } from "@/components/AuthGate";
 import { Rail } from "@/components/Rail";
 import { Providers } from "@/lib/providers";
+import "@atlas/chat-ui/src/theme/tokens.css";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -24,11 +26,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="zh-CN">
       <body>
         <Providers>
-          {/* Console Shell 三段式的最外层：Rail + 内容区（MASTER.md §1） */}
-          <div style={{ display: "flex", height: "100vh", overflow: "hidden" }}>
-            <Rail />
-            <div style={{ flex: 1, minWidth: 0, display: "flex" }}>{children}</div>
-          </div>
+          {/* 登录守卫在最外层：没登录不渲染导航与页面（权限设计 §13） */}
+          <AuthGate>
+            {/* Console Shell 三段式的最外层：Rail + 内容区（MASTER.md §1） */}
+            <div style={{ display: "flex", height: "100vh", overflow: "hidden" }}>
+              <Rail />
+              <div style={{ flex: 1, minWidth: 0, display: "flex" }}>{children}</div>
+            </div>
+          </AuthGate>
         </Providers>
       </body>
     </html>

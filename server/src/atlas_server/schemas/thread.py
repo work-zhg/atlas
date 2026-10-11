@@ -25,6 +25,11 @@ TitleSource = Literal["pending", "generated", "fallback", "manual"]
 class ThreadCreate(BaseModel):
     agent_id: UUID
     title: str = Field(default="", max_length=256)
+    #: git 凭据档案（cluster 配置里的名字）。acp 会话的 Pod 据此挂载 git 凭据；
+    #: 档案是否存在、调用者能否使用由 cluster 校验。不需要 git 时不传。
+    git_profile: str | None = Field(default=None, max_length=64, pattern=r"^[a-z0-9][a-z0-9-]*$")
+    #: 用户记忆：传 off 关闭（不抽取、不注入、不挂检索工具）。服务账号的会话按账号设置，默认关闭
+    memory: Literal["on", "off"] | None = None
 
 
 class ThreadUpdate(BaseModel):
@@ -60,6 +65,9 @@ class ThreadOut(BaseModel):
     #: 只作为父会话详情页上的可展开分支（设计 §02）。
     parent_thread_id: UUID | None = None
     subagent_name: str | None = None
+    #: git 凭据档案名（不含凭据）；子会话继承父会话
+    git_profile: str | None = None
+    memory: str = "on"
     #: 本会话下的子会话数。★ 删除确认要显示它：删父会话会**级联删掉**所有
     #: 子会话的 message / run / run_event，影响面比改造前大得多。
     #: 只在单条详情上计算，列表接口恒为 0（避免 N+1）。

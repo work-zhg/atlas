@@ -18,6 +18,7 @@ from atlas_server.domain.spec import (
     AgentSpec,
     CliSpec,
     CompactionSpec,
+    KnowledgeSpec,
     LimitSpec,
     McpDriftPolicy,
     ModelSpec,
@@ -127,7 +128,6 @@ class SubAgentSpecIn(BaseModel):
         )
 
 
-
 class LimitSpecIn(BaseModel):
     max_steps: int = Field(default=40, gt=0)
     timeout_s: int = Field(default=300, gt=0)
@@ -147,7 +147,6 @@ class LimitSpecIn(BaseModel):
         )
 
 
-
 class CliSpecIn(BaseModel):
     """acp agent 的 CLI 形态。快照纪律：除 cli_type 外都要有默认值。"""
 
@@ -163,6 +162,23 @@ class CliSpecIn(BaseModel):
             adapter=self.adapter,
             image=self.image,
             permission_mode=self.permission_mode,
+        )
+
+
+class KnowledgeSpecIn(BaseModel):
+    dataset_ids: list[str] = Field(default_factory=list, max_length=10)
+    mode: Literal["auto", "tool"] = "auto"
+    top_k: int = Field(default=4, ge=1, le=20)
+    score_threshold: float | None = Field(default=None, ge=0, le=1)
+    rerank: bool = False
+
+    def to_engine(self) -> KnowledgeSpec:
+        return KnowledgeSpec(
+            dataset_ids=tuple(dict.fromkeys(self.dataset_ids)),
+            mode=self.mode,
+            top_k=self.top_k,
+            score_threshold=self.score_threshold,
+            rerank=self.rerank,
         )
 
 
@@ -191,6 +207,8 @@ class AgentSpecIn(BaseModel):
     mcp_tool_digests: dict[str, str] = Field(default_factory=dict)
     #: 定义漂移时：warn = 提示后照常用；block = 该工具不装（技能 / MCP 设计 §9）
     mcp_drift_policy: McpDriftPolicy = "warn"
+    #: 绑定的知识库（默认不绑定 —— 历史快照没有这个字段）
+    knowledge: KnowledgeSpecIn = Field(default_factory=KnowledgeSpecIn)
 
     @model_validator(mode="after")
     def _bash_requires_approval(self) -> AgentSpecIn:
@@ -219,6 +237,7 @@ class AgentSpecIn(BaseModel):
             cli=self.cli.to_engine() if self.cli else None,
             mcp_tool_digests=dict(self.mcp_tool_digests),
             mcp_drift_policy=self.mcp_drift_policy,
+            knowledge=self.knowledge.to_engine(),
         )
 
 

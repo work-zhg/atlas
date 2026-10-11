@@ -63,6 +63,7 @@ class ClusterPods:
             image=cli.image,
             adapter=cli.adapter,
             cli_type=cli.cli_type,
+            git_profile=thread.git_profile or "",
         )
         info = await self._post("/v1/pods/ensure", payload.model_dump(), PodInfo)
         if info.created:

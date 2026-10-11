@@ -19,7 +19,7 @@ from atlas_bridge.app import BridgeApp
 from atlas_bridge.config import BridgeConfig
 from atlas_bridge.testing.fake_agent import Script
 from atlas_server.domain.events import EventType, TraceEvent
-from atlas_server.domain.spec import CliSpec
+from atlas_server.domain.spec import CliSpec, KnowledgeSpec
 from atlas_server.host.runtime import HostRuntime
 from atlas_server.providers.pods import PodEndpoint
 
@@ -92,6 +92,7 @@ def prepared(
         tool_names=(),
         skills=(),
         limits=SimpleNamespace(timeout_s=timeout_s),
+        knowledge=KnowledgeSpec(),
     )
     return SimpleNamespace(
         spec=spec,

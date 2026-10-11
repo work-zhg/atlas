@@ -19,7 +19,7 @@ from fastapi.responses import JSONResponse
 
 from atlas_cluster.backend import ClusterBackend, InMemoryBackend
 from atlas_cluster.config import ClusterSettings
-from atlas_cluster.manager import PodManager, QuotaExceeded
+from atlas_cluster.manager import GitProfileDenied, PodManager, QuotaExceeded
 from atlas_cluster.schemas import EnsurePodRequest, PodInfo, ReapRequest, ReapResult
 
 logger = logging.getLogger(__name__)
@@ -48,6 +48,8 @@ def create_app(
     async def ensure(req: EnsurePodRequest) -> PodInfo:
         try:
             return await manager.ensure(req)
+        except GitProfileDenied as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         except QuotaExceeded as exc:
             # 429 而不是 500：调用方据此告诉用户「先关掉几个旧会话」，
             # 而 500 只会让它当作故障去重试，把配额撞得更死。

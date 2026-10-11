@@ -253,6 +253,49 @@ class SubAgentSpec:
     mcp_drift_policy: McpDriftPolicy = "warn"
 
 
+#: 知识库的接入方式（doc/atlas-rag-design.html §10）：
+#:
+#: auto —— 每轮先用用户的提问检索，结果作为参考资料并入这一轮的输入（同 Dify 对话应用的「上下文」）
+#: tool —— 给模型一个 knowledge_search 工具，由它决定何时查（同 Dify Agent 应用的知识库工具）
+#:
+#: ★ acp agent 只有 tool 一种：CLI 的一轮由它自己驱动，平台只能经 MCP 给它工具。
+KnowledgeMode = Literal["auto", "tool"]
+
+
+@dataclass(frozen=True)
+class KnowledgeSpec:
+    """智能体绑定的知识库与检索参数。各库的检索方式（语义 / 全文 / 混合）用库自己的设置，
+    这里只收口多库合并后的 top_k、阈值与重排。"""
+
+    dataset_ids: tuple[str, ...] = ()
+    mode: KnowledgeMode = "auto"
+    top_k: int = 4
+    score_threshold: float | None = None
+    #: 多库合并后是否统一重排（加权；各库须同一向量模型）
+    rerank: bool = False
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.dataset_ids)
+
+    def retrieval_config(self) -> dict[str, object]:
+        return {
+            "top_k": self.top_k,
+            "score_threshold_enabled": self.score_threshold is not None,
+            "score_threshold": self.score_threshold if self.score_threshold is not None else 0.5,
+            "reranking_enable": self.rerank,
+            "reranking_mode": "weighted_score",
+        }
+
+    def validate(self) -> None:
+        if len(self.dataset_ids) > 10:
+            raise InvalidSpec("一个智能体最多绑定 10 个知识库")
+        if not 1 <= self.top_k <= 20:
+            raise InvalidSpec("知识库 top_k 须在 1 ~ 20 之间")
+        if self.score_threshold is not None and not 0 <= self.score_threshold <= 1:
+            raise InvalidSpec("知识库分数阈值须在 0 ~ 1 之间")
+
+
 @dataclass(frozen=True)
 class AgentSpec:
     slug: str
@@ -276,6 +319,8 @@ class AgentSpec:
     mcp_tool_digests: Mapping[str, str] = field(default_factory=dict)
     #: 定义与记录不一致时：warn = 照常用新定义并提示；block = 该工具本轮不装
     mcp_drift_policy: McpDriftPolicy = "warn"
+    #: 绑定的知识库。★ 有默认值（快照纪律）；子智能体不继承 —— 要用就在子智能体自己配。
+    knowledge: KnowledgeSpec = field(default_factory=KnowledgeSpec)
 
     def subagent(self, name: str) -> SubAgentSpec | None:
         """按名字取子智能体配置。子会话执行时用它派生出独立的 AgentSpec。"""
@@ -287,11 +332,12 @@ class AgentSpec:
     def validate(self) -> None:
         self.model.validate()
         self.compaction.validate()
+        self.knowledge.validate()
+        if self.kind == "acp" and self.knowledge.enabled and self.knowledge.mode != "tool":
+            raise InvalidSpec("acp agent 的知识库只能以工具方式接入（mode='tool'）")
         if self.kind == "acp" and self.cli is None:
             raise InvalidSpec("kind='acp' 必须提供 cli（cli_type / adapter / image）")
-        if self.kind == "acp" and any(
-            not name.startswith("mcp:") for name in self.tool_names
-        ):
+        if self.kind == "acp" and any(not name.startswith("mcp:") for name in self.tool_names):
             # ★ acp 的工具来自 CLI 自带，平台内置工具对它没有意义。勾了是
             #   配置错误 —— 报出来而不是静默忽略（Agent 管理 §05）。
             raise InvalidSpec(

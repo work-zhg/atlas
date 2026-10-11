@@ -43,6 +43,9 @@ STATE_MOUNT = "/state"
 #: bridge 从文件读 token（Bridge 设计 §8.2：不进环境变量 —— 环境变量会被 agent 继承）
 TOKEN_DIR = "/run/secrets/atlas"
 TOKEN_FILE = f"{TOKEN_DIR}/bridge-token"
+#: git 凭据档案的挂载点（Secret，只读）与 git 仓库的本地临时盘
+GIT_SECRET_DIR = "/run/secrets/git"
+REPOS_MOUNT = "/repos"
 #: bridge 传给 agent 的基础环境变量（白名单；模型相关的另由 _adapter_env 追加）
 _AGENT_ENV_BASE = ("PATH", "HOME", "LANG", "LC_ALL", "TZ", "TERM")
 
@@ -113,11 +116,32 @@ def pod_manifest(req: EnsurePodRequest, settings: ClusterSettings) -> dict[str, 
             # 调模型网关、访问用户给的 API）。入口的唯一闸门是握手上的
             # per-Pod token，不是网络位置：K8s 的网络是平的，「在集群里」
             # 从来不是安全边界（执行环境 §09）。
-            "volumes": [*_volumes(req, settings), _token_volume(req)],
+            "volumes": [*_volumes(req, settings), _token_volume(req), *_git_volumes(req, settings)],
             **_mounters(req, settings),
             "containers": [_bridge_container(req, settings)],
         },
     }
+
+
+def _git_volumes(req: EnsurePodRequest, settings: ClusterSettings) -> list[dict[str, Any]]:
+    """/repos 本地临时盘（所有会话都有）+ git 凭据档案的 Secret（只在指定了档案时）。
+
+    ★ git 仓库放本地盘而不是 /workspace：后者是对象存储的 FUSE 挂载，git 依赖的
+      rename / 文件锁 / mmap 在上面既慢又不可靠。仓库的事实来源是远端，Pod 重建后重新 clone 即可。
+    """
+    vols: list[dict[str, Any]] = [
+        {"name": "repos", "emptyDir": {"sizeLimit": settings.repos_size_limit}}
+    ]
+    profile = settings.git_profiles.get(req.git_profile) if req.git_profile else None
+    if profile is not None:
+        vols.append(
+            {
+                "name": "git-credentials",
+                # 0444：同 bridge-token —— Secret 文件属 root，Pod 以 run_as_user 运行
+                "secret": {"secretName": profile.secret, "defaultMode": 0o444},
+            }
+        )
+    return vols
 
 
 def _labels(req: EnsurePodRequest) -> dict[str, str]:
@@ -340,6 +364,12 @@ def _adapter_env(req: EnsurePodRequest, settings: ClusterSettings) -> list[dict[
     # ★ HOME 必须可写**且持久**：根是只读的，而 CLI 把会话记录写在 HOME 下 ——
     #   放 emptyDir 的话 resume 只在 Pod 活着时成立，而 Pod 会被闲置回收。
     env: list[dict[str, Any]] = [{"name": "HOME", "value": STATE_MOUNT}]
+    if req.git_profile in settings.git_profiles:
+        # ★ 用 GIT_CONFIG_GLOBAL 指向只读挂载的 gitconfig，而不是写 ~/.gitconfig：
+        #   HOME 在对象存储上会被持久化，凭据就会躺进用户可见的会话文件里。
+        env.append({"name": "GIT_CONFIG_GLOBAL", "value": f"{GIT_SECRET_DIR}/gitconfig"})
+        # 没有凭据时立刻失败，而不是卡在交互式输入用户名上（Pod 里没有终端）
+        env.append({"name": "GIT_TERMINAL_PROMPT", "value": "0"})
 
     if req.cli_type != "claude-code" or not settings.model_base_url:
         return env
@@ -365,7 +395,7 @@ def _bridge_mounts(req: EnsurePodRequest, settings: ClusterSettings) -> list[dic
     /workspace 是**父会话的**（共享），/skills 与 /state 是**自己的**，
     其中 /skills 只读、/state 是 CLI 的 HOME。
     """
-    tmp = {"name": "tmp", "mountPath": "/tmp"}  # noqa: S108
+    tmp = {"name": "tmp", "mountPath": "/tmp"}
 
     if settings.workspace_mount == "csi":
         return [
@@ -460,6 +490,12 @@ def _bridge_container(req: EnsurePodRequest, settings: ClusterSettings) -> dict[
         "volumeMounts": [
             *_bridge_mounts(req, settings),
             {"name": "bridge-token", "mountPath": TOKEN_DIR, "readOnly": True},
+            {"name": "repos", "mountPath": REPOS_MOUNT},
+            *(
+                [{"name": "git-credentials", "mountPath": GIT_SECRET_DIR, "readOnly": True}]
+                if req.git_profile in settings.git_profiles
+                else []
+            ),
         ],
         # 预热（拉起 agent + initialize）完成才就绪；/readyz 在握手前直接回 HTTP（§8.5）。
         # ★ 没有就绪探针的话，ensure 会在 bridge 监听之前就把地址交出去，server 连过去

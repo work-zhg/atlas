@@ -1,0 +1,6 @@
+{
+  "name": "atlas-frontends",
+  "private": true,
+  "description": "前端 workspace：Atlas（web/）、AI TeamFlow（teamflow/web/）与共享对话组件（packages/chat-ui）。用户中心前端（usercenter/web）独立，不在其中。",
+  "packageManager": "pnpm@11.7.0"
+}

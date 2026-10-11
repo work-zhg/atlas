@@ -4,148 +4,85 @@
  * 两件事集中在这里，别在别处重复：
  *   1. 身份注入（X-User-Id）。后端 identity.py 是唯一身份来源，前端也保持单点，
  *      将来换 JWT/SSO 只改 authHeaders()。
- *   2. 错误信封解包。后端统一返回 {"error": {kind, message, details}}（文档 §11），
- *      前端一律转成 ApiError，组件按 kind 分支而不是猜 HTTP 码。
+ *   2. Atlas 自己的接口端点（API_BASE / 配置服务）。错误信封解包、URL 拼接、请求本身在
+ *      共享包 @atlas/chat-ui 的 lib/http.ts（对话组件与 AI TeamFlow 共用同一份）。
  */
+
+import {
+  apiUrl as coreApiUrl,
+  makeHttp,
+  request as coreRequest,
+  toApiError,
+  type AtlasClientConfig,
+  type RequestOptions as CoreRequestOptions,
+} from "@atlas/chat-ui/src/lib/http";
+
+export { ApiError, toApiError, type ErrorEnvelope, type Query } from "@atlas/chat-ui/src/lib/http";
+
+/** 部署子路径（与 next.config 的 basePath 一致）。原生 <a href> / window.open 不会自动加，要手动拼。 */
+export const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
 /**
- * 配置服务（atlas-config：技能与 MCP 注册表）。BFF 上线前浏览器直连它
- * （doc/skill-mcp-backend-design.html §13.3）；上线后改成同源路径，只换这一处。
+ * 配置服务（atlas-config：技能与 MCP 注册表）。浏览器直连它（权限设计 §9）；
+ * 部署时经网关走同源路径（如 /atlas/config-api），登录 Cookie 才会带上。
  */
 export const CONFIG_API_BASE =
   process.env.NEXT_PUBLIC_CONFIG_API_BASE ?? "http://127.0.0.1:8020";
-
-/** 后端错误信封（文档 §11） */
-export interface ErrorEnvelope {
-  error: {
-    kind: string;
-    message: string;
-    details?: Record<string, unknown>;
-  };
-}
-
-export class ApiError extends Error {
-  readonly status: number;
-  readonly kind: string;
-  readonly details: Record<string, unknown>;
-
-  constructor(status: number, kind: string, message: string, details: Record<string, unknown> = {}) {
-    super(message);
-    this.name = "ApiError";
-    this.status = status;
-    this.kind = kind;
-    this.details = details;
-  }
-
-  /** 422 校验错误常来自 spec.validate()，编辑器要就地显示到字段上 */
-  get isValidation(): boolean {
-    return this.status === 422 || this.kind === "invalid_spec";
-  }
-}
+/** 知识库服务（atlas-knowledge，doc/atlas-rag-design.html）。同样浏览器直连、经网关同源。 */
+export const KNOWLEDGE_API_BASE =
+  process.env.NEXT_PUBLIC_KNOWLEDGE_API_BASE ?? "http://127.0.0.1:8050";
 
 /**
- * 身份 header。决策 1：不做鉴权 —— 留空时后端回落到 default_user_id。
+ * 身份 header（doc/auth-permission-design.html §13）。
+ *   · uc 模式：身份在 HttpOnly 会话 Cookie 里（同源请求自动带上）；写请求带 CSRF 双提交头
+ *     （值取自可读的 atlas_csrf Cookie）。
+ *   · dev 模式：构建期的 NEXT_PUBLIC_USER_ID 写进 X-User-Id（后端缺省回落 default_user_id）。
  * SSE 也要用这份 header，故导出（这正是不用原生 EventSource 的原因）。
  */
 export function authHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {};
   const uid = process.env.NEXT_PUBLIC_USER_ID;
-  return uid ? { "X-User-Id": uid } : {};
+  if (uid) headers["X-User-Id"] = uid;
+  const csrf = readCookie("atlas_csrf");
+  if (csrf) headers["X-Atlas-CSRF"] = csrf;
+  return headers;
 }
+
+function readCookie(name: string): string | undefined {
+  if (typeof document === "undefined") return undefined;
+  const hit = document.cookie.split("; ").find((c) => c.startsWith(`${name}=`));
+  return hit ? decodeURIComponent(hit.slice(name.length + 1)) : undefined;
+}
+
+/** Atlas 前端自己的接口端点：注入给对话组件（AtlasClientProvider）与下面的 http。 */
+export const atlasClient: AtlasClientConfig = { apiBase: API_BASE, headers: authHeaders };
+const configClient: AtlasClientConfig = { apiBase: CONFIG_API_BASE, headers: authHeaders };
+const knowledgeClient: AtlasClientConfig = { apiBase: KNOWLEDGE_API_BASE, headers: authHeaders };
 
 export function apiUrl(
   path: string,
   query?: Record<string, string | number | undefined | null>,
   base: string = API_BASE,
 ): string {
-  const url = new URL(path.startsWith("/") ? path : `/${path}`, base);
-  for (const [k, v] of Object.entries(query ?? {})) {
-    if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, String(v));
-  }
-  return url.toString();
+  return coreApiUrl(path, query, base);
 }
 
-async function toApiError(res: Response): Promise<ApiError> {
-  let kind = "http_error";
-  let message = `${res.status} ${res.statusText}`;
-  let details: Record<string, unknown> = {};
-  try {
-    const body = (await res.json()) as Partial<ErrorEnvelope> & {
-      detail?: unknown;
-      layer?: string;
-      hits?: string[];
-      context?: Record<string, unknown>;
-    };
-    if (body.error) {
-      kind = body.error.kind ?? kind;
-      message = body.error.message ?? message;
-      details = body.error.details ?? {};
-    } else if (typeof body.detail === "string") {
-      // 配置服务的错误体：{detail: "人话", context?} —— 技能扫描未通过时还带 layer/hits
-      kind = body.layer ? "scan_blocked" : `http_${res.status}`;
-      message = body.detail;
-      details = { ...(body.context ?? {}), ...(body.layer ? { layer: body.layer, hits: body.hits ?? [] } : {}) };
-    } else if (body.detail !== undefined) {
-      // FastAPI 自带的 422 校验错误走 detail，不是我们的信封
-      kind = "validation_error";
-      message = "请求参数不合法";
-      details = { detail: body.detail };
-    }
-  } catch {
-    // 响应不是 JSON（如 502 网关页），保留状态码信息即可
-  }
-  return new ApiError(res.status, kind, message, details);
-}
-
-export type Query = Record<string, string | number | undefined | null>;
-
-export interface RequestOptions {
-  method?: string;
-  query?: Query;
-  body?: unknown;
-  headers?: Record<string, string>;
-  signal?: AbortSignal;
+export interface RequestOptions extends CoreRequestOptions {
   /** 默认 API_BASE（运行时）；配置服务传 CONFIG_API_BASE */
   base?: string;
 }
 
-export async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
-  const { method = "GET", query, body, headers = {}, signal, base } = opts;
-  // ★ FormData（上传技能包）不能手设 Content-Type：边界串要由浏览器生成
-  const isForm = typeof FormData !== "undefined" && body instanceof FormData;
-
-  const res = await fetch(apiUrl(path, query, base), {
-    method,
-    signal,
-    headers: {
-      ...(body !== undefined && !isForm ? { "Content-Type": "application/json" } : {}),
-      ...authHeaders(),
-      ...headers,
-    },
-    body: body === undefined ? undefined : isForm ? (body as FormData) : JSON.stringify(body),
-  });
-
-  if (!res.ok) throw await toApiError(res);
-  if (res.status === 204) return undefined as T;
-  return (await res.json()) as T;
+export function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
+  const { base, ...rest } = opts;
+  return coreRequest<T>(base ? { apiBase: base, headers: authHeaders } : atlasClient, path, rest);
 }
 
-export const http = {
-  get: <T>(path: string, query?: Query, signal?: AbortSignal) =>
-    request<T>(path, { query, signal }),
-  post: <T>(path: string, body?: unknown, headers?: Record<string, string>) =>
-    request<T>(path, { method: "POST", body, headers }),
-  patch: <T>(path: string, body?: unknown) => request<T>(path, { method: "PATCH", body }),
-  del: <T>(path: string) => request<T>(path, { method: "DELETE" }),
-};
+export const http = makeHttp(atlasClient);
 
 /** 配置服务（atlas-config）的请求出口。身份头、错误解包与运行时同一套。 */
 export const configHttp = {
-  get: <T>(path: string, query?: Query) => request<T>(path, { query, base: CONFIG_API_BASE }),
-  post: <T>(path: string, body?: unknown) =>
-    request<T>(path, { method: "POST", body, base: CONFIG_API_BASE }),
-  patch: <T>(path: string, body?: unknown) =>
-    request<T>(path, { method: "PATCH", body, base: CONFIG_API_BASE }),
+  ...makeHttp(configClient),
   /** 原始文本（在线查看技能包里的文件） */
   text: async (path: string): Promise<string> => {
     const res = await fetch(apiUrl(path, undefined, CONFIG_API_BASE), { headers: authHeaders() });
@@ -153,3 +90,6 @@ export const configHttp = {
     return res.text();
   },
 };
+
+/** 知识库服务（atlas-knowledge）的请求出口。 */
+export const knowledgeHttp = makeHttp(knowledgeClient);

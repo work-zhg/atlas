@@ -3,9 +3,12 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import APIRouter
+from sqlalchemy import select
 
-from ...deps import CurrentUserDep, ExecutorDep, RunServiceDep, SessionDep
-from ...errors import Conflict
+from ...auth.authz import PrincipalDep, ensure_run_owner
+from ...db.models import Approval
+from ...deps import ExecutorDep, RunServiceDep, SessionDep
+from ...errors import Conflict, NotFound
 from ...repositories.approval import ApprovalRepository
 from ...schemas.run import (
     ApprovalDecision,
@@ -20,34 +23,46 @@ from ...services.approval import submit_decision
 router = APIRouter(prefix="/runs", tags=["runs"])
 
 @router.get("/{run_id}", response_model=RunOut)
-async def get_run(run_id: UUID, service: RunServiceDep) -> RunOut:
+async def get_run(
+    run_id: UUID, service: RunServiceDep, session: SessionDep, principal: PrincipalDep
+) -> RunOut:
+    await ensure_run_owner(session, run_id, principal)
     return await service.get(run_id)
 
 
 @router.get("/{run_id}/trace", response_model=RunTraceOut)
-async def get_run_trace(run_id: UUID, service: RunServiceDep) -> RunTraceOut:
+async def get_run_trace(
+    run_id: UUID, service: RunServiceDep, session: SessionDep, principal: PrincipalDep
+) -> RunTraceOut:
     """一轮的归档轨迹（含子 run）—— 历史轮次的工具、委派、审批靠它在对话里重现。
 
     ★ 与会话 SSE 流的分工：SSE 只回放最近一个窗口、只服务进行中的那一轮；
       已结束的轮次按需取这里，一轮一次，结果不会再变。
     """
+    await ensure_run_owner(session, run_id, principal)
     return await service.trace(run_id)
 
 
 @router.post("/{run_id}/cancel", response_model=RunOut)
-async def cancel_run(run_id: UUID, service: RunServiceDep) -> RunOut:
+async def cancel_run(
+    run_id: UUID, service: RunServiceDep, session: SessionDep, principal: PrincipalDep
+) -> RunOut:
     """写取消信号；engine 每步检查一次，到安全点后产出 run.cancelled。"""
+    await ensure_run_owner(session, run_id, principal)
     return await service.cancel(run_id)
 
 
 @router.get("/{run_id}/approvals", response_model=PendingApprovalList)
-async def list_pending_approvals(run_id: UUID, session: SessionDep) -> PendingApprovalList:
+async def list_pending_approvals(
+    run_id: UUID, session: SessionDep, principal: PrincipalDep
+) -> PendingApprovalList:
     """该 run 上还没决策的确认项。
 
     存在的理由是**刷新页面**：审批挂起时用户刷新，实时状态全没了。
     SSE 重连虽然会重放 approval.required，但那依赖 Redis 里的事件还在；
     这个端点直接查库，是更硬的恢复路径。
     """
+    await ensure_run_owner(session, run_id, principal)
     rows = await ApprovalRepository(session).list_pending(run_id)
     return PendingApprovalList(
         data=[
@@ -63,7 +78,7 @@ async def decide_approval(
     approval_id: UUID,
     payload: ApprovalDecision,
     session: SessionDep,
-    user_id: CurrentUserDep,
+    principal: PrincipalDep,
     executor: ExecutorDep,
 ) -> ApprovalOut:
     """批准或拒绝一次高风险工具调用（§12.2）。
@@ -71,8 +86,18 @@ async def decide_approval(
     拒绝**不终止 run** —— agent 会收到"用户拒绝"作为工具结果，
     可以换个方案继续，而不是整轮白跑。
     """
+    # ★ 归属按审批**实际所在**的 run 判：只看路径里的 run 会让人拿自己的 run id
+    #   去批别人的审批（子智能体的审批可能挂在子 run 上，所以不要求两者相等）
+    await ensure_run_owner(session, run_id, principal)
+    approval_run = await session.scalar(select(Approval.run_id).where(Approval.id == approval_id))
+    if approval_run is None:
+        raise NotFound("确认项不存在", approval_id=str(approval_id))
+    await ensure_run_owner(session, approval_run, principal)
     ok = await submit_decision(
-        session, approval_id=approval_id, decision=payload.decision, user_id=user_id
+        session,
+        approval_id=approval_id,
+        decision=payload.decision,
+        user_id=principal.initiator_id or principal.owner_id,
     )
     if not ok:
         raise Conflict("该确认已被处理过或已超时", approval_id=str(approval_id))

@@ -45,8 +45,10 @@ def _uuid_pk() -> Mapped[UUID]:
 
 
 class AppUser(Base):
-    """决策 1：不做鉴权，只存 uid + name，后期关联外部系统 user 表。
+    """用户中心用户在 Atlas 的投影（权限设计 §5）。
 
+    ★ id 直接用用户中心的用户 id：created_by、对象存储路径、Pod 配额标签、记忆的 user_id
+      都是它，不再映射。资料以用户中心为准，登录与授权快照刷新时同步；角色不存库。
     表名不能用 "user" —— 那是 SQL 保留字。
     """
 
@@ -56,6 +58,14 @@ class AppUser(Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     # String 而非 Text：它进了唯一索引，而 MySQL 不能给无长度的 TEXT 建索引
     external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    account: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    email: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    dept_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    dept_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    #: active | disabled（停用的用户所有请求 401，执行器不再为他启动新的 run）
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="active")
+    last_seen_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    updated_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         UTCDateTime, server_default=func.now(), nullable=False
     )
@@ -67,6 +77,63 @@ class AppUser(Base):
             unique=True,
             postgresql_where=text("external_id IS NOT NULL"),
         ),
+    )
+
+
+class AuthSession(Base):
+    """浏览器登录会话（权限设计 §4.1）。Cookie 里只放随机令牌，这里存它的 SHA-256。"""
+
+    __tablename__ = "auth_session"
+
+    id: Mapped[UUID] = _uuid_pk()
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    user_id: Mapped[UUID] = mapped_column(UUIDType, nullable=False, index=True)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    last_used_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime, server_default=func.now(), nullable=False
+    )
+
+
+class ServiceAccount(Base):
+    """服务账号（权限设计 §10）：后端服务（如 AI TeamFlow）调用 Atlas 的主体。
+
+    不是用户中心的人员，所以不能被授予数据权限：可用智能体范围在这里配置。
+    密钥只显示一次，这里只存 SHA-256。
+    """
+
+    __tablename__ = "service_account"
+
+    id: Mapped[UUID] = _uuid_pk()
+    name: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    key_prefix: Mapped[str] = mapped_column(String(24), nullable=False)
+    key_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    operations: Mapped[list] = mapped_column(JSONType, nullable=False, default=list)
+    #: all_enabled | list
+    agent_scope: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="all_enabled"
+    )
+    agent_ids: Mapped[list] = mapped_column(JSONType, nullable=False, default=list)
+    #: 是否接受「代表用户」（X-Atlas-Acting-User）：只用于列表取交集与审计
+    allow_acting: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    #: 该账号所建会话的用户记忆默认值；默认关闭，避免同一服务身份下的数据互相串味
+    memory_default: Mapped[str] = mapped_column(String(8), nullable=False, server_default="off")
+    #: active | disabled
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="active")
+    created_by: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime, server_default=func.now(), nullable=False
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint("agent_scope IN ('all_enabled','list')", name="agent_scope_enum"),
+        CheckConstraint("memory_default IN ('on','off')", name="memory_default_enum"),
+        CheckConstraint("status IN ('active','disabled')", name="status_enum"),
     )
 
 
@@ -177,6 +244,13 @@ class Thread(Base, TimestampMixin):
     subagent_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
     #: ACP 侧的会话标识，供 loadSession 恢复（acp 详设那一期接入）。
     external_session_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    #: git 凭据档案（cluster 配置里的名字）：acp 会话的 Pod 据此挂载 git 凭据。
+    #: 建会话时由调用方声明（如 AI TeamFlow 给节点会话声明产物仓库的档案）；子会话继承父会话。
+    git_profile: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    #: 所有者 = created_by；所有者是用户（user）还是服务账号（service）。子会话继承父会话
+    owner_kind: Mapped[str] = mapped_column(String(8), nullable=False, server_default="user")
+    #: 用户记忆：on | off。off = 不抽取、不注入、不挂检索工具（服务账号的会话默认 off）
+    memory: Mapped[str] = mapped_column(String(8), nullable=False, server_default="on")
     created_by: Mapped[UUID] = mapped_column(
         UUIDType, nullable=False
     )
@@ -300,6 +374,9 @@ class Run(Base):
     parent_run_id: Mapped[UUID | None] = mapped_column(
         UUIDType, nullable=True
     )
+    #: 发起人（权限设计 §11）：用户本人，或服务账号代表的用户；系统投递为空。
+    #: 与会话所有者不同 —— 服务账号的会话归服务账号，这一轮是谁触发的记在这里。
+    created_by: Mapped[UUID | None] = mapped_column(UUIDType, nullable=True)
     status: Mapped[str] = mapped_column(String(24), nullable=False, server_default="queued")
     #: 挂起时「在等什么」（迁移 0012）。形如
     #: [{"reason": "approval", "token": "<approval_id>"}]。

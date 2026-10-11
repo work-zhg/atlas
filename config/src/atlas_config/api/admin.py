@@ -13,7 +13,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile
 from sqlalchemy import select
 
-from ..auth import Principal, require_admin, require_builder
+from ..auth import Principal, require_any
 from ..db.models import ConfigAudit
 from ..schemas import (
     AuditOut,
@@ -33,8 +33,19 @@ from .deps import RegistryDep, SessionDep, SkillServiceDep
 
 router = APIRouter(prefix="/config", tags=["config"])
 
-Builder = Annotated[Principal, Depends(require_builder)]
-Admin = Annotated[Principal, Depends(require_admin)]
+#: 按操作码鉴权（权限设计 §6.1）。查看目录：编辑智能体时要选技能 / MCP，所以构建类操作码都可以看
+SkillReader = Annotated[
+    Principal,
+    Depends(require_any("skill:upload", "skill:review", "agent:create", "agent:manage_all")),
+]
+SkillUploader = Annotated[Principal, Depends(require_any("skill:upload", "skill:review"))]
+SkillReviewer = Annotated[Principal, Depends(require_any("skill:review"))]
+McpReader = Annotated[
+    Principal,
+    Depends(require_any("mcp:manage", "mcp:manage_all", "agent:create", "agent:manage_all")),
+]
+McpManager = Annotated[Principal, Depends(require_any("mcp:manage", "mcp:manage_all"))]
+Auditor = Annotated[Principal, Depends(require_any("audit:view"))]
 
 
 def _admin_out(row: object) -> SkillVersionAdminOut:
@@ -45,12 +56,12 @@ def _admin_out(row: object) -> SkillVersionAdminOut:
 
 
 @router.get("/skills", response_model=list[SkillDetailOut])
-async def list_skills(service: SkillServiceDep, _: Builder) -> list[SkillDetailOut]:
+async def list_skills(service: SkillServiceDep, _: SkillReader) -> list[SkillDetailOut]:
     return await service.admin_list()
 
 
 @router.get("/skills/{slug}", response_model=SkillDetailOut)
-async def get_skill(slug: str, service: SkillServiceDep, _: Builder) -> SkillDetailOut:
+async def get_skill(slug: str, service: SkillServiceDep, _: SkillReader) -> SkillDetailOut:
     return await service.admin_detail(slug)
 
 
@@ -63,7 +74,7 @@ def _file_response(path: str, body: bytes) -> Response:
 
 @router.get("/skills/{slug}/versions/{version}/files/{path:path}")
 async def read_published_file(
-    slug: str, version: int, path: str, service: SkillServiceDep, _: Builder
+    slug: str, version: int, path: str, service: SkillServiceDep, _: SkillReader
 ) -> Response:
     row = await service.version_for_view(slug=slug, version=version)
     return _file_response(path, await service.read_file(row, path))
@@ -71,7 +82,7 @@ async def read_published_file(
 
 @router.get("/skill-uploads/{upload_id}/files/{path:path}")
 async def read_upload_file(
-    upload_id: UUID, path: str, service: SkillServiceDep, _: Builder
+    upload_id: UUID, path: str, service: SkillServiceDep, _: SkillReader
 ) -> Response:
     """审查人看待审查的包。"""
     row = await service.version_for_view(upload_id=upload_id)
@@ -84,7 +95,7 @@ async def read_upload_file(
 @router.post("/skills", response_model=SkillVersionAdminOut, status_code=201)
 async def upload_skill(
     service: SkillServiceDep,
-    principal: Admin,
+    principal: SkillUploader,
     file: Annotated[UploadFile, File(description="技能包 zip")],
     source: Annotated[Literal["builtin", "tenant", "imported"], Form()] = "builtin",
     origin_url: Annotated[str | None, Form()] = None,
@@ -101,7 +112,7 @@ async def upload_skill(
 
 @router.post("/skill-uploads/{upload_id}/approve", response_model=SkillVersionAdminOut)
 async def approve(
-    upload_id: UUID, body: ReviewDecisionIn, service: SkillServiceDep, principal: Admin
+    upload_id: UUID, body: ReviewDecisionIn, service: SkillServiceDep, principal: SkillReviewer
 ) -> SkillVersionAdminOut:
     return _admin_out(
         await service.review(upload_id, reviewer=principal.user, approve=True, note=body.note)
@@ -110,7 +121,7 @@ async def approve(
 
 @router.post("/skill-uploads/{upload_id}/reject", response_model=SkillVersionAdminOut)
 async def reject(
-    upload_id: UUID, body: ReviewDecisionIn, service: SkillServiceDep, principal: Admin
+    upload_id: UUID, body: ReviewDecisionIn, service: SkillServiceDep, principal: SkillReviewer
 ) -> SkillVersionAdminOut:
     return _admin_out(
         await service.review(upload_id, reviewer=principal.user, approve=False, note=body.note)
@@ -123,7 +134,7 @@ async def change_status(
     version: int,
     action: Literal["disable", "enable", "revoke", "rescan"],
     service: SkillServiceDep,
-    principal: Admin,
+    principal: SkillReviewer,
     body: StatusChangeIn | None = None,
 ) -> SkillVersionAdminOut:
     if action == "rescan":
@@ -139,35 +150,37 @@ async def change_status(
 
 
 @router.get("/mcp/servers", response_model=list[McpServerOut])
-async def list_servers(registry: RegistryDep, _: Builder) -> list[McpServerOut]:
+async def list_servers(registry: RegistryDep, _: McpReader) -> list[McpServerOut]:
     return await registry.list()
 
 
 @router.post("/mcp/servers", response_model=McpServerOut, status_code=201)
-async def create_server(body: McpServerIn, registry: RegistryDep, principal: Admin) -> McpServerOut:
+async def create_server(
+    body: McpServerIn, registry: RegistryDep, principal: McpManager
+) -> McpServerOut:
     return await registry.create(body, actor=principal.user)
 
 
 @router.get("/mcp/servers/{name}", response_model=McpServerOut)
-async def get_server(name: str, registry: RegistryDep, _: Builder) -> McpServerOut:
+async def get_server(name: str, registry: RegistryDep, _: McpReader) -> McpServerOut:
     return await registry.get(name)
 
 
 @router.patch("/mcp/servers/{name}", response_model=McpServerOut)
 async def patch_server(
-    name: str, body: McpServerPatch, registry: RegistryDep, principal: Admin
+    name: str, body: McpServerPatch, registry: RegistryDep, principal: McpManager
 ) -> McpServerOut:
     return await registry.patch(name, body, actor=principal.user)
 
 
 @router.get("/mcp/servers/{name}/reviews", response_model=list[ToolReviewOut])
-async def list_reviews(name: str, registry: RegistryDep, _: Builder) -> list[ToolReviewOut]:
+async def list_reviews(name: str, registry: RegistryDep, _: McpReader) -> list[ToolReviewOut]:
     return await registry.reviews(name)
 
 
 @router.post("/mcp/servers/{name}/reviews", response_model=ToolReviewOut, status_code=201)
 async def review_tool(
-    name: str, body: ToolReviewIn, registry: RegistryDep, principal: Admin
+    name: str, body: ToolReviewIn, registry: RegistryDep, principal: McpManager
 ) -> ToolReviewOut:
     return await registry.review(name, body, actor=principal.user)
 
@@ -178,7 +191,7 @@ async def review_tool(
 @router.get("/audit", response_model=list[AuditOut])
 async def list_audit(
     session: SessionDep,
-    _: Admin,
+    _: Auditor,
     target_kind: str | None = None,
     target_id: str | None = None,
     limit: Annotated[int, Query(ge=1, le=500)] = 100,

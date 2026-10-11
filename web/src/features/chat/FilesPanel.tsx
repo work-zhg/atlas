@@ -16,7 +16,8 @@ import { useEffect, useState } from "react";
 import { downloadThreadFile, useThreadFiles } from "@/api/threads";
 import { Icon } from "@/components/Icon";
 import { compactNumber, relativeTime } from "@/lib/format";
-import styles from "./chat.module.css";
+import { BASE_PATH } from "@/lib/http";
+import styles from "@atlas/chat-ui/src/chat/chat.module.css";
 
 export function FilesPanel({
   threadId,
@@ -100,7 +101,7 @@ export function FilesPanel({
                   {/* ★ 新标签打开预览页：对话还在原标签，边看产物边说话 */}
                   <a
                     className={`${styles.fileName} ${styles.fileLink}`}
-                    href={`/files/${threadId}?path=${encodeURIComponent(f.path)}`}
+                    href={`${BASE_PATH}/files/${threadId}?path=${encodeURIComponent(f.path)}`}
                     target="_blank"
                     rel="noopener noreferrer"
                     title={`在新标签预览 ${f.path}`}

@@ -50,6 +50,7 @@ from ..domain.mcp_naming import MCP_PREFIX
 from ..domain.skill_events import SkillLoadTracker
 from ..domain.spec import ACP_MODE_ID, PLATFORM_MODE
 from ..errors import CapabilityUnavailable
+from ..providers.knowledge import mcp_server_entry, require_client
 from ..providers.mcp.acp import acp_mcp_servers
 from ..repositories.approval import ApprovalRepository
 from ..services.approval import RedisApprovalGate
@@ -338,18 +339,31 @@ class HostRuntime:
         self, prepared: PreparedRun, redis: aioredis.Redis
     ) -> tuple[list[dict[str, Any]], list[tuple[EventType, dict[str, Any]]]]:
         spec = prepared.spec
-        if not any(name.startswith(MCP_PREFIX) for name in spec.tool_names):
-            return [], []
-        catalog = await make_mcp_catalog(self._settings, redis)
-        return await acp_mcp_servers(
-            spec.tool_names,
-            catalog,
-            user_id=prepared.thread.created_by,
-            digests=spec.mcp_tool_digests,
-            drift_policy=spec.mcp_drift_policy,
-            reviews=await mcp_reviews(self._settings, catalog.servers()),
-            timeout_s=self._settings.mcp_call_timeout_s,
-        )
+        servers: list[dict[str, Any]] = []
+        notices: list[tuple[EventType, dict[str, Any]]] = []
+        if any(name.startswith(MCP_PREFIX) for name in spec.tool_names):
+            catalog = await make_mcp_catalog(self._settings, redis)
+            servers, notices = await acp_mcp_servers(
+                spec.tool_names,
+                catalog,
+                user_id=prepared.thread.created_by,
+                digests=spec.mcp_tool_digests,
+                drift_policy=spec.mcp_drift_policy,
+                reviews=await mcp_reviews(self._settings, catalog.servers()),
+                timeout_s=self._settings.mcp_call_timeout_s,
+            )
+        # 知识库：Pod 里的 CLI 经 MCP 调 knowledge_search（doc/atlas-rag-design.html §10）
+        if spec.knowledge.enabled:
+            servers = [
+                *servers,
+                mcp_server_entry(
+                    require_client(self._settings),
+                    spec.knowledge,
+                    thread_id=prepared.thread_id,
+                    actor=prepared.thread.created_by,
+                ),
+            ]
+        return servers, notices
 
     # ------------------------------------------------------------------ 接上会话
 

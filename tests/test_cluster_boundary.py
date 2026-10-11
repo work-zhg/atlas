@@ -104,6 +104,7 @@ class _Thread:
         self.id = thread_id
         self.created_by = user_id
         self.workspace_thread_id = workspace_thread_id
+        self.git_profile: str | None = None  # 不需要 git 凭据的会话
 
 
 _CLI = CliSpec(cli_type="claude-code", adapter="node acp", image="atlas-acp:1")

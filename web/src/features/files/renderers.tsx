@@ -6,7 +6,7 @@ import { useMemo, useState } from "react";
 
 import { fetchPreviewText, PreviewFetchError, type PreviewText } from "@/api/threads";
 import { Markdown } from "@/components/Markdown";
-import chatStyles from "@/features/chat/chat.module.css";
+import chatStyles from "@atlas/chat-ui/src/chat/chat.module.css";
 import { formatBytes } from "./format";
 import { TEXT_MAX_BYTES } from "./previewKind";
 import styles from "./files.module.css";

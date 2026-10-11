@@ -63,6 +63,14 @@ class ConfigSettings(BaseSettings):
     # ── 认证 ────────────────────────────────────────────────────────────
     #: 运行时调 /internal/* 用的共享令牌。空 = 不校验（仅本机开发，启动时告警）。
     internal_token: SecretStr | None = None
+    #: dev = 读 X-User-Id（缺省 default_user），操作码全有；
+    #: uc  = 浏览器带来的 Atlas 登录会话（Cookie atlas_session），交给 atlas-server 校验
+    #:       （权限设计 §9：浏览器直连本服务，但不在这里维护登录）
+    auth_mode: Literal["dev", "uc"] = "dev"
+    #: atlas-server 地址（uc 模式校验会话用；凭据是上面的 internal_token）
+    server_url: str = "http://127.0.0.1:8000"
+    #: 会话校验结果的缓存时间（权限收回最多滞后这么久）
+    introspect_ttl_s: float = 30.0
     #: 没带 X-User-Id 时的身份（dev 模式，与运行时同规则）
     default_user: str = "local-dev"
     #: 允许上传人审查自己的技能。★ 默认关：四眼原则（设计 §5.2）。

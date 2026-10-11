@@ -22,13 +22,14 @@ import logging
 from uuid import UUID, uuid4
 
 from atlas_engine.contracts import delegation_pending
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from atlas_server.domain.spec import AgentSpec, SubAgentSpec
 from atlas_server.domain.translator import extract_text
 
 from ..config import Settings
-from ..db.models import Thread
+from ..db.models import Run, Thread
 from ..executor.base import RunExecutor
 from ..repositories.run import RunRepository
 from ..repositories.thread import ThreadRepository
@@ -173,6 +174,10 @@ class SubagentService:
                     thread_id=thread_id,
                     agent_version_id=self._agent_version_id,
                     parent_run_id=self._parent_run_id,
+                    # 子 run 的发起人 = 父 run 的发起人（权限设计 §11）
+                    created_by=await session.scalar(
+                        select(Run.created_by).where(Run.id == self._parent_run_id)
+                    ),
                 )
                 await session.commit()
         except Exception:

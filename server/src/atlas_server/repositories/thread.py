@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.models import Agent, Message, Thread
@@ -39,6 +39,7 @@ class ThreadRepository:
     async def list(
         self,
         *,
+        owner: UUID | None = None,
         status: str | None = None,
         cursor: tuple[datetime, UUID] | None = None,
         limit: int = 30,
@@ -50,6 +51,8 @@ class ThreadRepository:
             .join(Agent, Agent.id == Thread.agent_id)
             .where(Thread.parent_thread_id.is_(None))
         )
+        if owner is not None:  # 只列本主体的会话（权限设计 §7.4）
+            stmt = stmt.where(Thread.created_by == owner)
         if status:
             stmt = stmt.where(Thread.status == status)
         if cursor is not None:
@@ -107,7 +110,25 @@ class ThreadRepository:
         parent_thread_id: UUID | None = None,
         subagent_name: str | None = None,
         status: str = "active",
+        git_profile: str | None = None,
+        owner_kind: str = "user",
+        memory: str = "on",
     ) -> Thread:
+        if parent_thread_id is not None:
+            # ★ 子智能体会话继承父会话的 git 凭据档案、所有者类型与记忆开关：
+            #   委派出去的 CLI 才是真正在 Pod 里跑 git 的那个（如原生 agent 委派给
+            #   cli-hand）；父会话关了记忆，子会话不能偷偷开着。
+            parent = (
+                await self._session.execute(
+                    select(Thread.git_profile, Thread.owner_kind, Thread.memory).where(
+                        Thread.id == parent_thread_id
+                    )
+                )
+            ).one_or_none()
+            if parent is not None:
+                if git_profile is None:
+                    git_profile = parent.git_profile
+                owner_kind, memory = parent.owner_kind, parent.memory
         thread = Thread(
             agent_id=agent_id,
             title=title,
@@ -117,6 +138,9 @@ class ThreadRepository:
             created_by=created_by,
             parent_thread_id=parent_thread_id,
             subagent_name=subagent_name,
+            git_profile=git_profile,
+            owner_kind=owner_kind,
+            memory=memory,
         )
         self._session.add(thread)
         await self._session.flush()
@@ -239,9 +263,26 @@ class ThreadRepository:
         return int((await self._session.execute(stmt)).scalar_one())
 
     async def delete(self, thread: Thread) -> None:
-        """会话是真删 —— message / run / run_file 由 ON DELETE CASCADE 带走。
+        """会话是真删：连同子会话，以及它们的 message / run / run_event / approval / run_file。
 
+        ★ 迁移 0013 去掉了外键（引用完整性由代码保证），ON DELETE CASCADE 不复存在 ——
+          只删 thread 行会留下大量孤儿行（残留的未结束 run 还会占用全局的子智能体名额）。
         与 agent 不同：会话没有"别的行还指着它"的问题。
         """
+        from ..db.models import Approval, Message, Run, RunEvent, RunFile
+
+        ids = [thread.id, *await self._session.scalars(
+            select(Thread.id).where(Thread.parent_thread_id == thread.id)
+        )]
+        run_ids = select(Run.id).where(Run.thread_id.in_(ids)).scalar_subquery()
+        for stmt in (
+            delete(Approval).where(Approval.run_id.in_(run_ids)),
+            delete(RunEvent).where(RunEvent.thread_id.in_(ids)),
+            delete(RunFile).where(RunFile.thread_id.in_(ids)),
+            delete(Message).where(Message.thread_id.in_(ids)),
+            delete(Run).where(Run.thread_id.in_(ids)),
+            delete(Thread).where(Thread.parent_thread_id == thread.id),
+        ):
+            await self._session.execute(stmt)
         await self._session.delete(thread)
         await self._session.flush()

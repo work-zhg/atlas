@@ -32,7 +32,7 @@ tf-migrate:     ; uv run python -m atlas_teamflow migrate
 tf-serve:       ; uv run uvicorn atlas_teamflow.api.app:create_app --factory --reload --port 8040
 tf-worker:      ; uv run python -m atlas_teamflow worker   # 多实例：独立的 Agent 监督器，可起多个
 tf-register-uc: ; uv run python -m atlas_teamflow register-uc --account "$(ACCOUNT)"
-tf-web-install: ; cd teamflow/web && pnpm install
+tf-web-install: ; pnpm install   # 前端 workspace（根 pnpm-workspace.yaml），与 Atlas 前端共用依赖
 tf-web-dev:     ; cd teamflow/web && pnpm dev
 tf-dev:
 	@echo "TeamFlow 后端 → http://127.0.0.1:8040   前端 → http://127.0.0.1:3200"
@@ -40,7 +40,7 @@ tf-dev:
 check: lint arch test
 
 # ---------- 前端 ----------
-web-install: ; cd web && pnpm install
+web-install: ; pnpm install   # 前端 workspace（根 pnpm-workspace.yaml）
 web-dev:     ; cd web && pnpm dev
 web-build:   ; cd web && pnpm build
 web-check:   ; cd web && pnpm typecheck
@@ -64,6 +64,6 @@ dev:
 #   而 BuildKit 的独立二进制自带 runc，装了就能用。导出 OCI 归档之后
 #   直接进 k3s 的 containerd —— 镜像是本地构建的，registry 上没有，
 #   所以 Pod 那边必须靠 import 而不是 pull。
-BRIDGE_IMAGE ?= atlas-acp-bridge:0.3.0
+BRIDGE_IMAGE ?= atlas-acp-bridge:0.4.0
 bridge-image:
 	./scripts/build_bridge_image.sh $(BRIDGE_IMAGE)

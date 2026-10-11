@@ -1,0 +1,177 @@
+# 三个前端（Atlas、用户中心、AI TeamFlow）放在一个 Pod 里：
+#   nginx（:80，按路径路由）+ atlas-web（:3000）+ uc-web（:3100）+ tf-web（:3200），Pod 内经 localhost 互通。
+#
+#   /atlas/*             → atlas-web（basePath=/atlas）     /                   → 302 到 /atlas
+#   /v1/previews/*       → atlas-server（会话文件预览站点）
+#   /atlas-api/*         → atlas-server（集群内）            /atlas-config-api/* → atlas-config（集群内）
+#   /atlas-knowledge-api/* → atlas-knowledge（集群内；/internal、/mcp 不对外）
+#   /uc/*                → uc-web（basePath=/uc）           /uc/api/*           → 用户中心后端（宿主 :8030）
+#   /teamflow/*          → tf-web（basePath=/teamflow）     /teamflow/api/*     → TeamFlow 后端（宿主 :8040）
+#
+# ★ 接口由 nginx 直接转到后端，不经过 Next：后端地址只在这里，换地址不用重新构建镜像；
+#   浏览器全部同源访问，没有 CORS。
+# ★ __HOST_IP__ 由 frontends.sh 替换为宿主 LAN IP；宿主上的后端要监听 0.0.0.0。
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: atlas-frontends-nginx
+  namespace: atlas-system
+data:
+  default.conf: |
+    server {
+      listen 80;
+      client_max_body_size 20m;
+      # 跳转只给路径（Location: /atlas），浏览器沿用当前主机与端口；
+      # 否则 nginx 会拼成自己的 :80，经 LoadBalancer 的 :8080 访问时跳错端口
+      absolute_redirect off;
+
+      proxy_http_version 1.1;
+      # $http_host 带端口：后端据此生成的绝对地址（如 Atlas 预览站点）才指向网关的 :8080
+      proxy_set_header Host              $http_host;
+      proxy_set_header X-Forwarded-Host  $http_host;
+      proxy_set_header X-Real-IP         $remote_addr;
+      proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $scheme;
+      proxy_set_header Connection        "";
+      # 连接空闲上限：SSE 有心跳（TeamFlow 15 秒、Atlas 定时 ping），不会因此断开；
+      # 这不是工作时长上限 —— Agent 运行多久都可以，断线后前端按游标续传。
+      proxy_read_timeout 1h;
+      proxy_send_timeout 1h;
+
+      location = /healthz { access_log off; return 200 "ok\n"; }
+
+      # ── 用户中心
+      location ^~ /uc/api/ {
+        proxy_pass http://__HOST_IP__:8030/api/;
+      }
+      location ~ ^/uc(/|$) {
+        proxy_pass http://127.0.0.1:3100;
+      }
+
+      # ── AI TeamFlow（流程实时事件是 SSE：关闭缓冲）
+      location ^~ /teamflow/api/ {
+        proxy_pass http://__HOST_IP__:8040/api/;
+        proxy_buffering off;
+        proxy_cache off;
+      }
+      location ~ ^/teamflow(/|$) {
+        proxy_pass http://127.0.0.1:3200;
+      }
+
+      # ── Atlas（会话事件是 SSE：关闭缓冲）
+      # 服务间接口不对外（本来就要内部令牌，这里再挡一层）
+      location ^~ /atlas-api/internal/ { return 404; }
+      location ^~ /atlas-api/ {
+        proxy_pass http://atlas-server.atlas-system.svc.cluster.local:8000/;
+        proxy_buffering off;
+        proxy_cache off;
+      }
+      # Atlas 会话文件预览站点：地址由 atlas-server 按请求的 Host 生成（/v1/previews/{令牌}/…），
+      # 令牌在路径里、不需要身份头。内容隔离靠后端的 CSP sandbox 响应头（不透明 origin），与域名无关。
+      location ^~ /v1/previews/ {
+        proxy_pass http://atlas-server.atlas-system.svc.cluster.local:8000;
+      }
+      location ^~ /atlas-config-api/ {
+        proxy_pass http://atlas-config.atlas-system.svc.cluster.local:8020/;
+      }
+      # 知识库：/internal 给运行时、/mcp 给会话 Pod，都只走集群内地址
+      location ^~ /atlas-knowledge-api/internal/ { return 404; }
+      location ^~ /atlas-knowledge-api/mcp { return 404; }
+      location ^~ /atlas-knowledge-api/ {
+        proxy_pass http://atlas-knowledge.atlas-system.svc.cluster.local:8050/;
+        # 上传文档（服务端上限 50MB）
+        client_max_body_size 60m;
+        proxy_read_timeout 300s;
+      }
+      location ~ ^/atlas(/|$) {
+        proxy_pass http://127.0.0.1:3000;
+      }
+
+      # 根路径不承载任何前端：跳到 Atlas（旧书签 / 直接输入域名都能落到可用页面）
+      location = / {
+        return 302 /atlas;
+      }
+      location / {
+        return 404;
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atlas-frontends
+  namespace: atlas-system
+  labels: {app: atlas-frontends}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: atlas-frontends}
+  template:
+    metadata:
+      labels: {app: atlas-frontends}
+      annotations:
+        # nginx 配置变了要滚动重建（ConfigMap 更新不会自动重启 nginx）
+        atlas/nginx-config-sha: "__CONFIG_SHA__"
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.27-alpine
+          ports: [{containerPort: 80, name: http}]
+          volumeMounts:
+            - {name: nginx-conf, mountPath: /etc/nginx/conf.d}
+          readinessProbe:
+            httpGet: {path: /healthz, port: 80}
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 20m, memory: 32Mi}
+            limits: {memory: 128Mi}
+        - name: atlas-web
+          image: atlas-frontends:dev
+          imagePullPolicy: Never   # 本机构建的镜像（Docker Desktop 与 K8s 共用镜像存储）
+          command: ["node", "/app/atlas/web/server.js"]
+          env: [{name: PORT, value: "3000"}]
+          ports: [{containerPort: 3000}]
+          readinessProbe:
+            tcpSocket: {port: 3000}
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 50m, memory: 96Mi}
+            limits: {memory: 384Mi}
+        - name: uc-web
+          image: atlas-frontends:dev
+          imagePullPolicy: Never
+          command: ["node", "/app/uc/server.js"]
+          env: [{name: PORT, value: "3100"}]
+          ports: [{containerPort: 3100}]
+          readinessProbe:
+            tcpSocket: {port: 3100}
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 50m, memory: 96Mi}
+            limits: {memory: 384Mi}
+        - name: tf-web
+          image: atlas-frontends:dev
+          imagePullPolicy: Never
+          command: ["node", "/app/tf/teamflow/web/server.js"]
+          env: [{name: PORT, value: "3200"}]
+          ports: [{containerPort: 3200}]
+          readinessProbe:
+            tcpSocket: {port: 3200}
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 50m, memory: 96Mi}
+            limits: {memory: 384Mi}
+      volumes:
+        - name: nginx-conf
+          configMap: {name: atlas-frontends-nginx}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: atlas-frontends
+  namespace: atlas-system
+spec:
+  type: LoadBalancer   # Docker Desktop：映射到宿主 localhost:8080
+  selector: {app: atlas-frontends}
+  ports:
+    - {name: http, port: 8080, targetPort: 80}

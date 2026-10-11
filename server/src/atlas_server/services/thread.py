@@ -9,6 +9,8 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..auth.authz import can_use_agent
+from ..auth.principal import Principal
 from ..config import Settings
 from ..configplane import skill_directory
 from ..db.models import Agent, AgentVersion, Message, Thread
@@ -106,6 +108,8 @@ def _to_out(
         status=thread.status,  # type: ignore[arg-type]
         parent_thread_id=thread.parent_thread_id,
         subagent_name=thread.subagent_name,
+        git_profile=thread.git_profile,
+        memory=thread.memory,
         subagent_thread_count=subagent_thread_count,
         active_run_id=active_run_id,
         last_run=last_run,
@@ -143,8 +147,12 @@ class ThreadService:
 
     # ------------------------------------------------------------------ 读
 
-    async def list(self, *, status: str | None, cursor: str | None, limit: int) -> ThreadListOut:
-        rows = await self._repo.list(status=status, cursor=_parse_cursor(cursor), limit=limit + 1)
+    async def list(
+        self, *, owner: UUID | None, status: str | None, cursor: str | None, limit: int
+    ) -> ThreadListOut:
+        rows = await self._repo.list(
+            owner=owner, status=status, cursor=_parse_cursor(cursor), limit=limit + 1
+        )
         has_more = len(rows) > limit
         rows = rows[:limit]
         next_cursor = (
@@ -184,12 +192,36 @@ class ThreadService:
 
     # ------------------------------------------------------------------ 写
 
-    async def create(self, payload: ThreadCreate, *, user_id: UUID) -> ThreadOut:
+    async def create(
+        self,
+        payload: ThreadCreate,
+        *,
+        principal: Principal | None = None,
+        user_id: UUID | None = None,
+    ) -> ThreadOut:
+        """principal 来自接口层；只给 user_id 的调用方（脚本、测试）按普通用户处理。"""
+        if principal is None:
+            if user_id is None:
+                raise TypeError("需要 principal 或 user_id")
+            principal = Principal(kind="user", owner_id=user_id)
         found = await self._agents.get(payload.agent_id)
-        if found is None:
+        # 不可用的智能体与不存在的一样返回 404（不泄露存在性，权限设计 §7.5）
+        if found is None or not can_use_agent(principal, found[0]):
             raise NotFound(f"智能体 {payload.agent_id} 不存在", agent_id=str(payload.agent_id))
         agent, version = found
-        thread = await self._repo.create(agent_id=agent.id, title=payload.title, created_by=user_id)
+        user_id = principal.owner_id
+        # 服务账号的会话按账号设置（默认关闭用户记忆）；调用方可以显式关闭，不能替服务账号打开
+        memory = principal.memory_default if principal.kind == "service" else "on"
+        if payload.memory == "off":
+            memory = "off"
+        thread = await self._repo.create(
+            agent_id=agent.id,
+            title=payload.title,
+            created_by=user_id,
+            git_profile=payload.git_profile,
+            owner_kind=principal.kind,
+            memory=memory,
+        )
         await self._session.refresh(thread)
         await self._seed_skills(version, thread_id=thread.id, user_id=user_id)
         return _to_out(thread, agent)

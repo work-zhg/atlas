@@ -29,7 +29,7 @@ class KubernetesBackend:
 
     def __init__(self, namespace: str, *, kubeconfig: str | None = None) -> None:
         try:
-            from kubernetes_asyncio import client, config  # noqa: PLC0415
+            from kubernetes_asyncio import client, config
         except ImportError as exc:  # pragma: no cover - 取决于部署环境
             msg = (
                 "KubernetesBackend 需要可选依赖 kubernetes-asyncio："
@@ -47,8 +47,8 @@ class KubernetesBackend:
             # 集群内用 ServiceAccount，集群外回落 kubeconfig（本地排查用）
             try:
                 self._config.load_incluster_config()
-            except Exception:  # noqa: BLE001 - 不在集群里
-                import os  # noqa: PLC0415
+            except Exception:
+                import os
 
                 # 调用时读，不用库的导入期默认值（见类 docstring）
                 path = self._kubeconfig or os.environ.get("KUBECONFIG") or None
@@ -76,7 +76,7 @@ class KubernetesBackend:
         api = await self._core()
         try:
             created = await api.create_namespaced_pod(self._namespace, manifest)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             # ★ 409 要翻成 FileExistsError —— PodManager.ensure 用它识别
             #   「并发 ensure 撞上了」并转成复用。不翻的话那条分支在真集群上
             #   **永远走不到**（内存实现抛的就是 FileExistsError，所以单测全绿），
@@ -120,7 +120,7 @@ class KubernetesBackend:
         api = await self._core()
         try:
             await api.delete_namespaced_pod(name, self._namespace)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             # 幂等：已经没了不算失败。回收路径上抛异常会让后面的清理跳过。
             if getattr(exc, "status", None) != 404:
                 raise
@@ -130,7 +130,7 @@ class KubernetesBackend:
         name = manifest["metadata"]["name"]
         try:
             await api.create_namespaced_secret(self._namespace, manifest)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             if getattr(exc, "status", None) != 409:
                 raise
             await api.replace_namespaced_secret(name, self._namespace, manifest)
@@ -139,19 +139,19 @@ class KubernetesBackend:
         api = await self._core()
         try:
             await api.delete_namespaced_secret(name, self._namespace)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             if getattr(exc, "status", None) != 404:
                 raise
 
     async def read_secret_value(self, name: str, key: str) -> str | None:
         """K8s 的 Secret 读回来是 base64 的 `data`（写进去的 `stringData`
         只是入参糖）—— 这里解回明文。"""
-        import base64  # noqa: PLC0415
+        import base64
 
         api = await self._core()
         try:
             secret = await api.read_namespaced_secret(name, self._namespace)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             if getattr(exc, "status", None) == 404:
                 return None
             raise

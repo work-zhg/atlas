@@ -25,8 +25,22 @@ class Settings(BaseSettings):
     litellm_key: SecretStr
     litellm_timeout_s: float = 120.0
 
-    # §5.2 身份注入的回落值（决策 1：不做鉴权）
+    # ── 身份与鉴权（doc/auth-permission-design.html）──────────────────
+    #: dev = 读 X-User-Id 请求头，缺省 default_user_id，操作码全有（本机开发、单测）；
+    #: uc  = 用户中心账号登录（会话 Cookie）+ 服务账号密钥；X-User-Id 一律忽略
+    auth_mode: Literal["dev", "uc"] = "dev"
+    #: dev 模式的回落身份
     default_user_id: UUID
+    #: 用户中心开放接口（uc 模式必填）。App Key / Secret 只放 .env
+    uc_base_url: str = "http://127.0.0.1:8030"
+    uc_app_key: str = ""
+    uc_app_secret: SecretStr = SecretStr("")
+    #: 登录会话有效期（滑动续期）
+    session_hours: int = 12
+    #: 授权快照（操作码 / 菜单 / 账号状态）的进程内缓存
+    authz_snapshot_ttl_s: float = 300.0
+    #: 生产环境（HTTPS）置 true
+    auth_cookie_secure: bool = False
 
     default_model: str = "claude-sonnet-5"
     summarizer_model: str = "claude-haiku-4-5"  # §7 压缩 / §8 标题 共用
@@ -244,6 +258,14 @@ class Settings(BaseSettings):
     configplane_cache_dir: Path = _REPO_ROOT / "var" / "cache" / "configplane"
     #: 单个 agent 所挂技能描述的总长上限 —— 描述常驻每一轮上下文（设计 §7.2）
     skill_index_budget_chars: int = 2000
+
+    # ── 知识库服务（atlas-knowledge，doc/atlas-rag-design.html §10）──────
+    #: 空 = 未接入：绑定了知识库的智能体保存与运行都会明确报错（不静默少装能力）。
+    #: ★ 服务间令牌复用 config_internal_token —— 知识库服务校验浏览器会话时调的
+    #:   就是本服务的 /internal/v1/auth/introspect，那条接口认的也是它。
+    #: ★ Pod 里的 ACP CLI 也按这个地址连知识库的 MCP 端点（同在集群内）。
+    knowledge_base_url: str | None = None
+    knowledge_timeout_s: float = 30.0
 
     # web 前端的来源。浏览器直连 API（不走 Next 代理 —— SSE 经代理有缓冲风险），
     # 故必须放行跨源。生产改为实际域名，**不要**用 "*"：

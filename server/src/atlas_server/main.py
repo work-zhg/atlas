@@ -12,8 +12,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.requests import Request
 
+from .api.internal import router as internal_router
 from .api.v1 import router as v1_router
 from .api.v1.previews import install_log_mask
+from .auth.uc import UCClient
 from .config import get_settings
 from .db.session import get_sessionmaker
 from .errors import AppError
@@ -37,6 +39,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     必须标成 interrupted，否则会话永远停在"运行中"。
     """
     settings = get_settings()
+    # 用户中心客户端（权限设计 §4）：uc 模式必需；dev 模式配了 App Key 也建（便于登记 / 联调）
+    app.state.uc = UCClient(settings) if settings.uc_app_key else None
+    if settings.auth_mode == "uc" and app.state.uc is None:
+        raise RuntimeError("AUTH_MODE=uc 需要配置 UC_APP_KEY / UC_APP_SECRET（用户中心的应用凭据）")
+    if settings.auth_mode == "dev":
+        logging.getLogger(__name__).warning(
+            "AUTH_MODE=dev：信任 X-User-Id 请求头，只能用于本机开发"
+        )
     # ★ 遥测要在任何 span 产生之前装好。装不上不拦着进程起（它是旁路），
     #   但会把失败喊出来 —— 否则就成了「以为在采集其实没有」。
     setup_telemetry(settings)
@@ -98,6 +108,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             with contextlib.suppress(Exception):
                 await worker_redis.aclose()
         await app.state.executor.shutdown()
+        if app.state.uc is not None:
+            await app.state.uc.aclose()
         # ★ executor 停完再 flush：最后那批 span 往往正是收尾阶段产生的，
         #   顺序反过来就会把它们丢在缓冲里。
         shutdown_telemetry()
@@ -115,11 +127,21 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
         # Range：文件预览按前 1 MiB 取文本（doc/detail/file-preview.html §08）
-        allow_headers=["Content-Type", "X-User-Id", "Idempotency-Key", "Last-Event-ID", "Range"],
+        allow_headers=[
+            "Content-Type",
+            "X-User-Id",
+            "X-Atlas-CSRF",
+            "Authorization",
+            "X-Atlas-Acting-User",
+            "Idempotency-Key",
+            "Last-Event-ID",
+            "Range",
+        ],
     )
     install_log_mask()
 
     app.include_router(v1_router)
+    app.include_router(internal_router)
 
     # ★ SSE 并发闸门。会话流的寿命是「用户开着这个会话多久」，而不是「一轮
     #   多久」—— 每条占一个 Redis 连接，不设限的表现是**所有** HTTP 请求一起

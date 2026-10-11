@@ -548,7 +548,8 @@ class InProcessExecutor:
           体量是正文的几十倍，会让抽取成本暴涨、信噪比崩掉（§04）。
           这里天然做到了：这两个变量里本来就只有正文。
         """
-        if self._memory is None:
+        if self._memory is None or prepared.thread.memory == "off":
+            # 会话关闭了用户记忆（服务账号的会话默认关闭）：不抽取
             return
         try:
             status = _STATUS_BY_TERMINAL.get(terminal.type, "failed") if terminal else "failed"
