@@ -2,13 +2,13 @@
 # 共享包 @atlas/chat-ui 与 Atlas / TeamFlow 用的是同一个 React / antd / react-query。
 # ★ 用户中心前端（usercenter/web）有自己的 pnpm-workspace.yaml，独立安装，不在此列。
 packages:
-  - web
+  - agent-platform/web
   - teamflow/web
   - packages/*
 
 # pnpm 11：未决的原生构建许可是硬错误（ERR_PNPM_IGNORED_BUILDS），必须显式表态。
 allowBuilds:
-  # tsx 的底层，仅在跑 web/scripts 下的验证脚本时用到
+  # tsx 的底层，仅在跑 agent-platform/web/scripts 下的验证脚本时用到
   esbuild: true
   # next/image 生产图片优化的依赖
   sharp: true

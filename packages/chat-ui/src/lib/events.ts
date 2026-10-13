@@ -40,6 +40,10 @@ export const EventType = {
   /** acp：这一轮 CLI 实际生效的权限模式（可能被降级，必须让用户看见） */
   AgentMode: "agent.mode",
   ContextCompacted: "context.compacted",
+  /** 旧的工具结果被清除以节省上下文（上下文管理 §8 ②） */
+  ContextCleared: "context.cleared",
+  /** 每次模型调用的上下文用量与构成（上下文管理 §16） */
+  ContextUsage: "context.usage",
   TitleGenerated: "thread.title_generated",
   /** 模型读了某个技能的 SKILL.md —— 「选中了这个技能」唯一可观测的信号 */
   SkillLoaded: "skill.loaded",
@@ -214,6 +218,41 @@ export interface ContextCompactedData {
   tokens_after: number;
   summary: string;
   degraded?: boolean;
+  /** threshold = 达到压缩档；overflow = 模型报上下文过长后的强制压缩 */
+  reason?: string;
+  /** 压缩后重新附上的文件（工作集恢复） */
+  restored_files?: string[];
+  circuit_open?: boolean;
+}
+
+export interface ContextClearedData {
+  cleared: number;
+  tokens_freed: number;
+  /** threshold = 达到清理档；idle = 缓存已过期顺手清理 */
+  reason?: string;
+}
+
+export interface ContextComposition {
+  system: number;
+  tools: number;
+  summary: number;
+  conversation: number;
+  tool_results: number;
+  attachments: number;
+}
+
+export interface ContextUsageData {
+  tokens: number;
+  /** usage = 以模型返回的用量为准；estimate = 估算；acp = CLI 上报 */
+  basis: string;
+  context_window: number;
+  effective_window: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  thresholds?: { clear: number | null; compact: number; warn: number | null };
+  composition?: ContextComposition;
+  attachments?: string[];
+  compaction_disabled?: boolean;
 }
 
 export interface TitleGeneratedData {
@@ -306,6 +345,8 @@ export type TraceEvent =
   | Envelope<typeof EventType.ApprovalRequired, ApprovalRequiredData>
   | Envelope<typeof EventType.AgentMode, AgentModeData>
   | Envelope<typeof EventType.ContextCompacted, ContextCompactedData>
+  | Envelope<typeof EventType.ContextCleared, ContextClearedData>
+  | Envelope<typeof EventType.ContextUsage, ContextUsageData>
   | Envelope<typeof EventType.TitleGenerated, TitleGeneratedData>
   | Envelope<typeof EventType.SkillLoaded, SkillLoadedData>
   | Envelope<typeof EventType.SkillSkipped, SkillSkippedData>

@@ -1,0 +1,12 @@
+# 样例评测集：用于走通评测流程（不是公开评测集）。
+# 三篇虚构公司的制度文档（带标题层级与表格），20 道题覆盖事实、换说法、表格、多跳、汇总、拒答。
+# 公开评测集（CRUD-RAG、MultiHop-RAG 等）由导入器转成同一格式后放在 var/bench/datasets/。
+name: demo-zh
+version: "1"
+lang: zh
+license: 自建样例（随仓库发布）
+documents:
+  - {doc_id: 差旅报销制度.md, path: docs/差旅报销制度.md}
+  - {doc_id: 请假与考勤制度.md, path: docs/请假与考勤制度.md}
+  - {doc_id: 信息安全规范.md, path: docs/信息安全规范.md}
+questions: questions.jsonl

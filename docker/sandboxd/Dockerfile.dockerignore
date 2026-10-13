@@ -1,0 +1,5 @@
+# 只需要 sandboxd 的源码。.env 绝不进上下文。
+*
+!agent-platform/pod/sandboxd/src/
+**/__pycache__/
+**/*.pyc

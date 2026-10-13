@@ -1,0 +1,44 @@
+# 走通流程用的智能体评测（doc/agent-eval-design.html）：demo 任务集（7 题）× 3 个配置 × 每题 3 次。
+#
+#   native-full     原生智能体：文件 + Shell + 待办清单
+#   native-minimal  原生智能体：只有文件 + Shell（消融：去掉待办清单）
+#   acp-claude      ACP：在 Atlas 的 Pod 里跑 Claude Code
+#
+# ★ 模型统一用 deepseek-chat：ACP 的 Claude Code 由 cluster 配置的模型驱动（ATLAS_CLUSTER_MODEL_NAME），
+#   原生智能体也选同一个，才算「固定模型、只换 harness」。
+# ★ 勾了 Shell 会强制 execute 进审批：评测按 approve_all 自动批准，次数与等待时间计入指标。
+name: agent-demo
+suites: [demo]
+trials: 3
+concurrency: 3
+approval_policy: approve_all
+comparisons:
+  - [native-minimal, native-full]   # 待办清单的边际贡献
+  - [native-full, acp-claude]       # 原生 harness vs Claude Code（同模型）
+variants:
+  native-full:
+    description: 原生：文件 + Shell + 待办
+    agent:
+      system_prompt: 你在一个带 Linux 沙箱的工作区里完成用户的任务。直接动手做，做完自己验证，最后用一两句话说明结果。
+      model: {model: deepseek-chat, provider: anthropic}
+      tool_names: [filesystem, bash, write_todos]
+      limits: {max_steps: 80}
+  native-minimal:
+    description: 原生：文件 + Shell
+    agent:
+      system_prompt: 你在一个带 Linux 沙箱的工作区里完成用户的任务。直接动手做，做完自己验证，最后用一两句话说明结果。
+      model: {model: deepseek-chat, provider: anthropic}
+      tool_names: [filesystem, bash]
+      limits: {max_steps: 80}
+  acp-claude:
+    description: ACP：Claude Code（Pod 内）
+    agent:
+      kind: acp
+      system_prompt: 你在一个工作区里完成用户的任务。直接动手做，做完自己验证，最后用一两句话说明结果。
+      model: {model: deepseek-chat, provider: anthropic}
+      tool_names: []
+      cli:
+        cli_type: claude-code
+        adapter: node /opt/acp-cli/bin/claude-acp
+        image: atlas-acp-bridge:0.4.0
+        permission_mode: auto

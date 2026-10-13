@@ -1,0 +1,21 @@
+{"id": 1, "name": "Alice", "age": 27, "active": true}
+{"id": 2, "name": "Bob", "age": 20, "active": true}
+{"id": 3, "name": "Carol", "age": 50, "active": true}
+{"id": 4, "name": "Dave", "age": 49, "active": false}
+{"id": 5, "name": "Erin", "age": null, "active": true}
+{"id": 6, "name": "Frank", "age": 42, "active": false}
+{"id": 7, "name": "Grace", "age": 26, "active": false}
+{"id": 8, "name": "Heidi", "age": 57, "active": "yes"}
+{"id": 9, "name": "Ivan", "age": 65, "active": true}
+{"id": 10, "name": "Judy", "age": 37, "active": true}
+{"id": 11, "name": "Mallory", "age": 21, "active": false}
+{"id": 12, "name": "Niaj", "age": 21, "active": true}
+{"id": 13, "name": "Olivia", "age": 45, "active": true}
+{"id": 14, "name": "Peggy", "age": 12, "active": true}
+{"id": 15, "name": "Rupert", "age": 16, "active": false}
+{"id": 16, "name": "Sybil", "age": 49, "active": false}
+{"id": 17, "name": "Trent", "age": 61, "active": false}
+{"id": 18, "name": "Victor", "age": 67, "active": false}
+{"id": 19, "name": "Walter", "age": 50, "active": true}
+{"id": 20, "name": "Yvonne", "age": 68, "active": true}
+

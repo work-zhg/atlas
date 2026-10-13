@@ -26,13 +26,13 @@ WORKDIR /src
 # ── 前端 workspace（Atlas + AI TeamFlow + 共享对话组件 @atlas/chat-ui）：依赖只装一次
 FROM base AS ws
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
-COPY web/package.json web/
+COPY agent-platform/web/package.json agent-platform/web/
 COPY teamflow/web/package.json teamflow/web/
 COPY packages/chat-ui/package.json packages/chat-ui/
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm-store,sharing=locked \
     pnpm install --frozen-lockfile --store-dir /pnpm-store
 COPY packages/ packages/
-COPY web/ web/
+COPY agent-platform/web/ agent-platform/web/
 COPY teamflow/web/ teamflow/web/
 ENV NEXT_TELEMETRY_DISABLED=1
 
@@ -62,13 +62,13 @@ RUN pnpm --filter atlas-teamflow-web build
 FROM node:22-alpine
 ENV NODE_ENV=production HOSTNAME=0.0.0.0 NEXT_TELEMETRY_DISABLED=1
 WORKDIR /app
-# workspace 下 standalone 按仓库相对路径展开：入口在 <名>/web/server.js、<名>/teamflow/web/server.js
-COPY --from=atlas --chown=node:node /src/web/.next/standalone ./atlas
-COPY --from=atlas --chown=node:node /src/web/.next/static ./atlas/web/.next/static
+# workspace 下 standalone 按仓库相对路径展开：入口在 atlas/agent-platform/web/server.js、tf/teamflow/web/server.js
+COPY --from=atlas --chown=node:node /src/agent-platform/web/.next/standalone ./atlas
+COPY --from=atlas --chown=node:node /src/agent-platform/web/.next/static ./atlas/agent-platform/web/.next/static
 COPY --from=uc --chown=node:node /src/.next/standalone ./uc
 COPY --from=uc --chown=node:node /src/.next/static ./uc/.next/static
 COPY --from=tf --chown=node:node /src/teamflow/web/.next/standalone ./tf
 COPY --from=tf --chown=node:node /src/teamflow/web/.next/static ./tf/teamflow/web/.next/static
 USER node
 # 默认启动 Atlas；Pod 里每个容器用 command 指定自己的 server.js 与 PORT
-CMD ["node", "/app/atlas/web/server.js"]
+CMD ["node", "/app/atlas/agent-platform/web/server.js"]

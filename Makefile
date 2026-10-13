@@ -8,10 +8,10 @@ up:      ; docker compose up -d
 down:    ; docker compose down
 sync:    ; uv sync --all-packages
 lint:    ; uv run ruff check . && uv run ruff format --check .
-types:   ; uv run mypy engine/src server/src
+types:   ; uv run mypy agent-platform/libs/engine/src agent-platform/services/server/src
 arch:    ; uv run lint-imports
 test:    ; uv run pytest -q
-migrate: ; cd server && uv run alembic upgrade head
+migrate: ; cd agent-platform/services/server && uv run alembic upgrade head
 serve:   ; uv run uvicorn atlas_server.main:app --reload --port 8000
 # 配置服务（技能 / MCP 注册表）。库是同一 PG 上的 atlas_config（make up 会建）。
 config-migrate: ; uv run python -m atlas_config migrate
@@ -41,17 +41,17 @@ check: lint arch test
 
 # ---------- 前端 ----------
 web-install: ; pnpm install   # 前端 workspace（根 pnpm-workspace.yaml）
-web-dev:     ; cd web && pnpm dev
-web-build:   ; cd web && pnpm build
-web-check:   ; cd web && pnpm typecheck
+web-dev:     ; cd agent-platform/web && pnpm dev
+web-build:   ; cd agent-platform/web && pnpm build
+web-check:   ; cd agent-platform/web && pnpm typecheck
 
 # 对真实后端验证 SSE 帧解析、事件归约与断线续传（需要 make serve 在跑，会真实计费）。
 # tsc 只能保证字段名拼对，保证不了"后端真的这么发"—— 改 events/sse/run-reducer 后必跑。
-web-verify:  ; cd web && pnpm verify:stream
+web-verify:  ; cd agent-platform/web && pnpm verify:stream
 
 # API 类型从运行中的后端生成。★ 生成结果要提交 ——
 # 否则新克隆的仓库在后端没起来时无法通过类型检查。
-web-gen:     ; cd web && pnpm gen:api
+web-gen:     ; cd agent-platform/web && pnpm gen:api
 
 # 前后端一起起。后端 :8000，前端 :3000（浏览器直连后端，靠 CORS，不走代理）
 dev:

@@ -21,6 +21,21 @@ import styles from "./chat.module.css";
 export function CompactionDivider({ mark }: { mark: CompactionMark }) {
   const [open, setOpen] = useState(false);
 
+  // 清除旧工具结果：比压缩轻，只一行说明（上下文管理 §8 ②）
+  if (mark.variant === "cleared") {
+    return (
+      <div style={{ maxWidth: 820, margin: "0 auto var(--s-6)", padding: "0 var(--s-6)" }}>
+        <div className={styles.compaction}>
+          <Icon name="layers" size={13} />
+          <span>
+            {mark.reason === "idle" ? "距上次回复较久，" : "上下文较满，"}已清除 {mark.cleared ?? 0}{" "}
+            个较早的工具结果（约 {compactNumber(mark.tokensFreed ?? 0)} tokens）；模型需要时会重新获取
+          </span>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={{ maxWidth: 820, margin: "0 auto var(--s-6)", padding: "0 var(--s-6)" }}>
       <div className={styles.compaction}>
@@ -29,8 +44,12 @@ export function CompactionDivider({ mark }: { mark: CompactionMark }) {
           <span>早期 {mark.messagesSummarized} 条消息已截断（摘要生成失败）</span>
         ) : (
           <span>
-            早期 {mark.messagesSummarized} 条消息已压缩为摘要（
-            {compactNumber(mark.tokensBefore)} → {compactNumber(mark.tokensAfter)} tokens）
+            {mark.reason === "overflow" ? "上下文超出模型上限，" : ""}早期 {mark.messagesSummarized}{" "}
+            条消息已压缩为摘要（{compactNumber(mark.tokensBefore)} → {compactNumber(mark.tokensAfter)}{" "}
+            tokens）
+            {mark.restoredFiles && mark.restoredFiles.length > 0 && (
+              <>，已重新附上 {mark.restoredFiles.length} 个正在处理的文件</>
+            )}
           </span>
         )}
         <button
@@ -66,6 +85,9 @@ export function CompactionDivider({ mark }: { mark: CompactionMark }) {
       {open && !mark.degraded && (
         <p style={{ fontSize: 11, color: "var(--fg-3)", marginTop: 6 }}>
           原始消息仍完整保留，向上滚动可以看到。摘要只影响模型看到的内容。
+          {mark.restoredFiles && mark.restoredFiles.length > 0 && (
+            <> 重新附上的文件：{mark.restoredFiles.join("、")}</>
+          )}
         </p>
       )}
     </div>

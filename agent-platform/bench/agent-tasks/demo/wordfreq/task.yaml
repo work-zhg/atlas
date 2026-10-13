@@ -1,0 +1,9 @@
+category: eng
+tags: [core, multi-step]
+instruction: |
+  请在工作区完成一个小工具：
+  1. 写 wordfreq.py：统计 docs/ 目录下所有 .md 文件（只看 .md）中英文单词的出现次数。单词 = 连续的英文字母，
+     一律转小写；忽略 stopwords.txt 里列出的词。
+  2. 运行它，把出现次数最多的 10 个单词写入 result.tsv，每行 `单词<TAB>次数`，按次数从多到少，次数相同按单词字母序。
+  3. 为 wordfreq.py 写单元测试 test_wordfreq.py（unittest），并确保 `python3 -m unittest test_wordfreq` 通过。
+budget: {wall_s: 900}

@@ -1,0 +1,7 @@
+category: data
+tags: [core, data]
+instruction: |
+  工作区的 sales.csv 是销售流水（列：date,region,product,amount）。请统计每个大区的销售额合计，
+  写入 summary.json，格式：{"by_region": {"华东": 123.4, ...}, "total": 456.7}。
+  金额保留 1 位小数；金额为空或不是数字的行跳过。
+budget: {wall_s: 600}

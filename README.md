@@ -198,6 +198,40 @@ flowchart LR
 
 ---
 
+## 目录结构
+
+仓库里有三个**平级的产品**：Agent 平台（Atlas）、用户中心、AI TeamFlow。顶层按产品分，产品内部再按部署形态分。
+Python 包名不随目录变化（仍是 `atlas_server`、`atlas_engine`……），import 路径与目录无关。
+
+```
+agent-platform/            Agent 平台（Atlas）
+├── services/              平台后端服务（独立部署，K8s）
+│   ├── server/            API + 执行器（atlas_server）
+│   ├── cluster/           会话 / 沙箱 Pod 生命周期（atlas_cluster）
+│   ├── config/            技能 / MCP / 持久指令（atlas_config）
+│   └── knowledge/         知识库与检索（atlas_knowledge）
+├── libs/                  纯库，不单独部署
+│   ├── engine/            智能体内核（atlas_engine）
+│   ├── host/              server ⇄ bridge 上游协议（atlas_host）
+│   ├── acp/               ACP 协议（atlas_acp）
+│   └── jsonrpc/           JSON-RPC 2.0（atlas_jsonrpc）
+├── pod/                   跑在会话 / 沙箱 Pod 里的进程
+│   ├── bridge/            ACP bridge（atlas_bridge）
+│   └── sandboxd/          原生沙箱守护进程（atlas_sandboxd）
+├── web/                   控制台前端
+├── bench/                 评测（RAG + Agent）
+└── tests/                 平台的测试（server / engine / cluster / bridge）
+usercenter/                用户中心
+├── services/server/       后端（atlas_usercenter）：pyproject.toml src/ tests/
+└── web/                   前端
+teamflow/                  AI TeamFlow
+├── services/server/       后端 API 与 worker（atlas_teamflow）：pyproject.toml src/ tests/
+└── web/                   前端
+packages/chat-ui/          跨产品共享的对话组件（控制台与 TeamFlow 共用）
+deploy/  docker/           部署清单与镜像（跨产品）
+doc/  prototype/           设计文档与原型
+```
+
 ## 技术栈
 
 Python 3.13 · FastAPI · SQLAlchemy (async) · PostgreSQL 16 · Redis 7 · Qdrant ·
@@ -227,7 +261,7 @@ make web-install
 
 # 4. 配置环境变量
 cp .env.example .env       # 填入模型网关地址与 key
-cp web/.env.local.example web/.env.local
+cp agent-platform/web/.env.local.example agent-platform/web/.env.local
 
 # 5. 前后端一起起（后端 :8000，前端 :3000）
 make dev
@@ -253,14 +287,14 @@ make web-gen      # 从运行中的后端重新生成 API 类型（结果需提�
 ### 本机跑一个最小 K8s 集群
 
 `cluster` 服务的 `KubernetesBackend` 有一组**对着真集群**的测试
-（`tests/test_cluster_k8s.py`），没有集群时整体跳过。本机验证：
+（`agent-platform/tests/test_cluster_k8s.py`），没有集群时整体跳过。本机验证：
 
 ```bash
 curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="server \
     --disable=traefik --disable=servicelb --disable=metrics-server \
     --disable=local-storage --write-kubeconfig-mode=644" sh -
 pip install kubernetes-asyncio          # cluster 的可选依赖
-pytest tests/test_cluster_k8s.py -q     # 自动发现 /etc/rancher/k3s/k3s.yaml
+pytest agent-platform/tests/test_cluster_k8s.py -q     # 自动发现 /etc/rancher/k3s/k3s.yaml
 ```
 
 约 1.5GB 内存即可（k3s 裁掉了 traefik / servicelb / metrics-server）。

@@ -1,0 +1,7 @@
+category: code
+tags: [core, easy]
+instruction: |
+  在工作区写一个 fizzbuzz.py：运行 `python3 fizzbuzz.py` 时，按行输出 1 到 30 的 FizzBuzz
+  （3 的倍数输出 Fizz，5 的倍数输出 Buzz，同时是 3 和 5 的倍数输出 FizzBuzz，其余输出数字本身）。
+  写完后自己运行一遍确认输出正确。
+budget: {wall_s: 600}

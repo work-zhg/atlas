@@ -212,7 +212,8 @@
   <tr><td><code>kb_document_metadata</code></td><td>dataset_metadata_bindings + document.doc_metadata</td><td>document_uuid、field_uuid、value；同时冗余到 Qdrant payload 供过滤</td></tr>
   <tr><td><code>kb_embedding_cache</code></td><td>embeddings</td><td>provider、model、text_hash、embedding（bytea）；唯一键 (provider, model, text_hash)</td></tr>
   <tr><td><code>kb_keyword_table</code></td><td>dataset_keyword_tables</td><td>dataset_uuid、table JSON（关键词 → segment index_node_id 列表）</td></tr>
-  <tr><td><code>kb_query_log</code></td><td>dataset_queries</td><td>dataset_uuid、query、source(hit_testing|agent|api|mcp)、source_ref（thread / run）、created_by</td></tr>
+  <tr><td><code>kb_query_log</code></td><td>dataset_queries</td><td>dataset_uuid、query、source(hit_testing|agent|api|mcp)、source_ref（thread / run）、created_by、retrieval_uuid（指回 kb_retrieval）</td></tr>
+  <tr><td><code>kb_retrieval</code></td><td>（Atlas 扩展）</td><td>一次检索一条：dataset_uuids、query、source、config、stages（各环节候选的 id / 分数 / 名次）、results、trace_id、latency_ms。见 §9.1</td></tr>
   <tr><td><code>kb_external_api</code> / <code>kb_external_binding</code></td><td>external_knowledge_apis / bindings</td><td>endpoint、api_key（加密）、dataset_uuid ↔ external_knowledge_id</td></tr>
   <tr><td><code>kb_pipeline</code> / <code>kb_pipeline_run</code></td><td>pipelines / execution_logs</td><td>步骤链 JSON、模板标记；每次执行的步骤日志</td></tr>
   <tr><td><code>kb_sync_source</code></td><td>（Dify 记在 document.data_source_info）</td><td>dataset_uuid、type、配置、cron、last_synced_at、last_cursor（如 commit sha）</td></tr>
@@ -277,6 +278,20 @@ IndexingRunner.run(document)                                      ← 每个阶�
   <tr><td><code>QAIndexProcessor</code></td><td>切分 → 每段调大模型生成问答对（按文档语言）；也支持上传 CSV（问题, 答案）</td><td>问题写 point，答案存 <code>kb_segment.answer</code></td><td>问题 + 答案</td></tr>
 </table>
 
+<h3>7.4 按标题分段（结构感知，2026-10-12 新增）</h3>
+<p>算法借鉴 Docling 的 HierarchicalChunker / HybridChunker（MIT），中文编号标题的识别借鉴 RAGFlow 手册模板的规则组。代码：<code>knowledge/src/atlas_knowledge/rag/structure.py</code>。</p>
+<table>
+  <tr><th>步骤</th><th>做法</th></tr>
+  <tr><td>识别标题</td><td>优先 Markdown <code>#</code>；没有时用中文编号规则组（第X编/章/节/条、一、、（一）、1.1），自动选匹配最多的一组；层级按文档里实际出现的级别排名</td></tr>
+  <tr><td>切小节</td><td>标题栈：一个标题管辖到下一个同级或更高级标题为止；只有标题的小节不单独成块，标题并入下级路径；超过层级上限的标题当作正文</td></tr>
+  <tr><td>结构单元</td><td>段落、列表项、表格行（表头 + 分隔行单独一个单元，只进父块正文）、代码块（整块）；<code>---</code> 分隔线不算单元</td></tr>
+  <tr><td>父块</td><td>一个小节一个父块；超长的在小节内按单元边界拆开，每块都带同样的标题路径；同一上级下相邻短小节合并（父子分段默认不合并，通用分段默认合并 200 字以下的）</td></tr>
+  <tr><td>子块</td><td>父块里的单元；不到 20 字的并入下一条，超长的按句切开</td></tr>
+  <tr><td>存储</td><td>父块、子块都存原文；父块 <code>title_path</code>，子块 <code>context</code>（标题路径，表格行再加表头）；建向量与 BM25 用「前缀 + 原文」</td></tr>
+  <tr><td>检索</td><td>重排用「前缀 + 原文」打分；结果带 <code>title_path</code>，给模型的参考资料标题形如「《简历》项目经验 &gt; 五、资信平台」；父子分段取 top_k × 4 个子块候选，去重后截到 top_k 个父块</td></tr>
+  <tr><td>默认</td><td>父子分段默认 <code>parent_mode=structure</code>（父块 ≤3000 字、子块 ≤300 字、切到第 3 级）；通用分段可选 <code>mode=structure</code>（每段 ≤800 字，受向量模型 512 token 输入上限约束）。没有标题的文档自动退回按段落打包</td></tr>
+</table>
+
 <h2 id="s8">8. 向量化与索引存储</h2>
 <h3>8.1 向量库抽象（与 Dify 同构）</h3>
 <div class="flow2">class BaseVector(ABC):                      # vdb/base.py
@@ -332,6 +347,24 @@ class Vector:                                # vdb/vector_factory.py：按 datas
   <tr><td>经济与高质量混用必须用重排模型</td><td>关键词分与余弦分不可比</td></tr>
   <tr><td>单路召回依赖库描述</td><td>库描述为空时前端提示，并用文档名摘要自动生成建议描述</td></tr>
 </table>
+
+<h3 id="s9-1">9.1 可观测性：检索过程记录与链路</h3>
+<p>回答「为什么没检索到 / 为什么排在后面」：要能看到一次检索在<b>每个环节</b>的候选，以及想要的分段在哪一环掉的。两份数据，同一个来源：</p>
+<table>
+  <tr><th></th><th>检索过程记录（kb_retrieval）</th><th>链路（OpenTelemetry span）</th></tr>
+  <tr><td>内容</td><td>各环节全部候选的分段 / point、名次、分数</td><td>各环节耗时、候选数、前 10 名分数；正文按档位（off / io / full）只进 Langfuse</td></tr>
+  <tr><td>看哪里</td><td>召回测试 →「检索过程」/「最近检索」里的漏斗</td><td>Jaeger（耗时、错误）、Langfuse（带正文）</td></tr>
+  <tr><td>串联</td><td colspan="2">atlas-server 调检索时带 <code>traceparent</code>：知识库的 span 挂在这次 run 的链路下（run → atlas.knowledge.retrieve → knowledge.retrieve → 各环节）；
+    run 链路上的 <code>atlas.knowledge.retrieval_id</code> 指向检索过程记录</td></tr>
+</table>
+<div class="flow">  knowledge.retrieve（RETRIEVER）
+    semantic ⟶ embed_query（EMBEDDING，标缓存命中）    full_text（与 semantic 并行）
+    merged（混合去重）→ rerank（RERANKER）→ threshold → assemble（归并到分段）→ final（取前 top_k）
+  多库：每库一组 semantic / full_text / …（带 dataset_uuid），再接跨库的 merged / rerank / threshold
+  入库：knowledge.ingest → parse → split → save → load → load_batch × N（独立链路，按文档 id 查）</div>
+<p>漏斗的判定：沿分段所在库的环节 + 跨库环节走，第一次「出现过、之后不在了」的环节就是掉的地方（并行的两路召回不算）——
+  掉在 threshold = <b>低于阈值</b>，掉在 final = <b>排名靠后被截断</b>，掉在 assemble = <b>分段已删除</b>；不在表里 = 没召回。
+  候选只存 id 与分数，正文在看的时候从分段表取（已删的显示为已删除）。</p>
 
 <h2 id="s10">10. 接入智能体</h2>
 <table>

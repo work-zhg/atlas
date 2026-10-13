@@ -37,11 +37,11 @@ RUN npm install --global --prefix /opt/acp-cli \
 # ── bridge 的 Python 依赖 ────────────────────────────────────────────
 FROM python:3.14-slim AS wheels
 WORKDIR /build
-COPY acp/ acp/
-COPY bridge/ bridge/
+COPY agent-platform/libs/acp/ acp/
+COPY agent-platform/pod/bridge/ bridge/
 # bridge 依赖的另外两个包：JSON-RPC 基础与上游协议模型（代码设计 §1）。
-COPY jsonrpc/ jsonrpc/
-COPY host/ host/
+COPY agent-platform/libs/jsonrpc/ jsonrpc/
+COPY agent-platform/libs/host/ host/
 # ★ --no-cache-dir：这一层只为产出 wheel，缓存进不了最终镜像也没用，
 #   留着只是让中间层更大。
 RUN pip install --no-cache-dir --upgrade pip build \

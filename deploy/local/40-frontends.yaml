@@ -128,7 +128,7 @@ spec:
         - name: atlas-web
           image: atlas-frontends:dev
           imagePullPolicy: Never   # 本机构建的镜像（Docker Desktop 与 K8s 共用镜像存储）
-          command: ["node", "/app/atlas/web/server.js"]
+          command: ["node", "/app/atlas/agent-platform/web/server.js"]
           env: [{name: PORT, value: "3000"}]
           ports: [{containerPort: 3000}]
           readinessProbe:

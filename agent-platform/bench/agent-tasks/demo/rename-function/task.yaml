@@ -1,0 +1,6 @@
+category: code
+tags: [core, refactor]
+instruction: |
+  textkit/strings.py 里的函数名 `slugfy` 拼错了。请把它改名为 `slugify`，并同步修改整个工作区里所有引用它的地方
+  （包括测试）。改完后 `python3 -m unittest discover -s tests` 必须通过，工作区里不能再出现 `slugfy`。
+budget: {wall_s: 600}

@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Atlas 上下文管理设计</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --border: #d1d9e0; --head: #f6f8fa;
+    --accent: #0969da; --ok: #1a7f37; --ok-bg: #dafbe1; --warn: #9a6700; --warn-bg: #fff8c5;
+    --bad: #cf222e; --bad-bg: #ffebe9; --code-bg: #f6f8fa;
+    --b1: #ddf4ff; --b1d: #54aeff; --b2: #fbefff; --b2d: #c297ff; --b3: #dafbe1; --b3d: #4ac26b;
+    --b4: #fff8c5; --b4d: #d4a72c; --b5: #ffebe9; --b5d: #ff8182;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --border: #3d444d; --head: #151b23;
+      --accent: #4493f8; --ok: #3fb950; --ok-bg: #12261e; --warn: #d29922; --warn-bg: #2b2111;
+      --bad: #f85149; --bad-bg: #2d1214; --code-bg: #151b23;
+      --b1: #12263f; --b1d: #1f6feb; --b2: #271a36; --b2d: #8957e5; --b3: #12261e; --b3d: #2ea043;
+      --b4: #2b2111; --b4d: #9e6a03; --b5: #2d1214; --b5d: #da3633;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 32px; background: var(--bg); color: var(--fg);
+         font: 14px/1.75 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif; }
+  main { max-width: 1120px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 44px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 15.5px; margin: 24px 0 8px; }
+  .sub { color: var(--muted); margin: 0 0 14px; }
+  code { font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code-bg); padding: 1px 4px; border-radius: 4px; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px 14px; overflow-x: auto; font-size: 12.5px; }
+  pre code { background: none; padding: 0; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0 16px; }
+  th, td { border: 1px solid var(--border); padding: 7px 10px; vertical-align: top; text-align: left; }
+  th { background: var(--head); white-space: nowrap; }
+  .callout { border-left: 4px solid var(--accent); background: var(--head); padding: 10px 14px; border-radius: 4px; margin: 14px 0; }
+  .callout.warn { border-color: var(--warn); background: var(--warn-bg); }
+  .callout.bad { border-color: var(--bad); background: var(--bad-bg); }
+  .tag { display: inline-block; padding: 0 7px; border-radius: 9px; font-size: 12px; font-weight: 600; border: 1px solid; white-space: nowrap; }
+  .tag.ok { color: var(--ok); background: var(--ok-bg); border-color: var(--ok); }
+  .tag.new { color: var(--accent); background: var(--head); border-color: var(--accent); }
+  .tag.warn { color: var(--warn); background: var(--warn-bg); border-color: var(--warn); }
+  .tag.bad { color: var(--bad); background: var(--bad-bg); border-color: var(--bad); }
+  .toc { columns: 2; padding-left: 18px; }
+  .fig { border: 1px solid var(--border); border-radius: 6px; padding: 10px; overflow-x: auto; margin: 10px 0 16px; }
+  svg text { fill: var(--fg); font-size: 12px; font-family: -apple-system, "PingFang SC", sans-serif; }
+  svg .s { font-size: 11px; fill: var(--muted); }
+  svg .b { font-weight: 600; }
+  svg .n { fill: var(--accent); font-weight: 600; }
+  svg .c1 { fill: var(--b1); stroke: var(--b1d); } svg .c2 { fill: var(--b2); stroke: var(--b2d); }
+  svg .c3 { fill: var(--b3); stroke: var(--b3d); } svg .c4 { fill: var(--b4); stroke: var(--b4d); }
+  svg .c5 { fill: var(--b5); stroke: var(--b5d); }
+  svg .ln { stroke: var(--fg); stroke-width: 1.3; fill: none; }
+  svg .dash { stroke-dasharray: 5 4; }
+  svg .lane { stroke: var(--border); stroke-dasharray: 4 4; }
+  td.c { text-align: center; }
+
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 10px 0 16px; }
+  .card { border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; background: var(--head); }
+  .card b { display: block; margin-bottom: 4px; }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+
+
+  .flow2 { font: 12.5px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px 14px; white-space: pre; overflow-x: auto; margin: 10px 0 16px; }
+  .src { color: var(--muted); font-size: 12px; }
+
+
+
+  .ok { color: #16a34a; font-weight: 600; }
+  .part { color: #ca8a04; }
+
+</style>
+</head>
+<body>
+<main>
+<h1>Atlas 上下文管理设计</h1>
+<p class="sub">日期：2026-10-13 · 关联：<a href="native.html">native Agent 设计</a>（§7 上下文压缩）、<a href="memory.html">记忆设计</a>、<a href="atlas-rag-design.html">知识库设计</a> §10、<a href="detail/subagent.html">子智能体</a>、<a href="observability.html">可观测性</a><br>
+参照：Claude Code CLI 的上下文管理（本地分析副本：<code>../claude-code</code>，github.com/codeaashu/claude-code）。<br>
+目标：让原生智能体在长对话、长任务里<b>不爆窗口、不丢关键信息、不白付缓存</b>，并且上下文的构成对用户与运维<b>可见</b>。</p>
+
+<div class="callout warn"><b>关于参照源码：</b>该仓库自称是泄露的 Claude Code 源码，属于 Anthropic 的专有代码、没有开源许可。本文只在<b>机制与思路</b>层面借鉴（这些机制大多也见于 Anthropic 公开的文档与博客），<b>不拷贝其代码</b>；Atlas 的实现按自己的架构从零写。下文引用的数值（阈值、预算）是对其设计取向的观察，Atlas 的取值以本文表格为准。</div>
+
+<ol class="toc">
+  <li><a href="#s1">为什么要管上下文</a></li>
+  <li><a href="#s2">Claude Code 怎么做：全景</a></li>
+  <li><a href="#s3">Claude Code 的关键机制</a></li>
+  <li><a href="#s4">Atlas 现状与差距</a></li>
+  <li><a href="#s5">设计原则</a></li>
+  <li><a href="#s6">总体架构：分层上下文</a></li>
+  <li><a href="#s7">计量与预算</a></li>
+  <li><a href="#s8">请求前流水线</a></li>
+  <li><a href="#s9">压缩：摘要与工作集恢复</a></li>
+  <li><a href="#s10">持久指令分层</a></li>
+  <li><a href="#s11">长期记忆与知识的注入</a></li>
+  <li><a href="#s12">每轮附件（system-reminder）</a></li>
+  <li><a href="#s13">工具与技能的按需加载</a></li>
+  <li><a href="#s14">子智能体与 ACP</a></li>
+  <li><a href="#s15">与 prompt cache 协同</a></li>
+  <li><a href="#s16">可观测与用户可见</a></li>
+  <li><a href="#s17">数据模型与配置</a></li>
+  <li><a href="#s18">不照搬的部分</a></li>
+  <li><a href="#s19">分期</a></li>
+  <li><a href="#s20">风险与限制</a></li>
+  <li><a href="#s21">实现状态（2026-10-13）</a></li>
+</ol>
+
+<!-- 1 -->
+<h2 id="s1">1. 为什么要管上下文</h2>
+<table>
+  <tr><th>问题</th><th>表现</th></tr>
+  <tr><td>窗口溢出</td><td>长任务里工具结果（读文件、跑命令、检索）迅速堆满窗口，模型调用直接 400</td></tr>
+  <tr><td>信息稀释</td><td>窗口没满但塞满了过期的工具输出，模型注意力被稀释，开始遗忘早期的约束与已否决的方案</td></tr>
+  <tr><td>成本</td><td>每轮都重发全部历史；前缀缓存一旦被打乱（中间插内容、压缩改写），整段按全价重新计费</td></tr>
+  <tr><td>不可见</td><td>用户不知道为什么智能体「忘了」，运维不知道一轮的 token 花在了哪</td></tr>
+</table>
+<p>上下文管理要同时回答四个问题：<b>放什么</b>（构成）、<b>放多少</b>（预算）、<b>满了怎么办</b>（清理 / 压缩 / 恢复）、<b>怎么让人看见</b>（可观测）。</p>
+
+<!-- 2 -->
+<h2 id="s2">2. Claude Code 怎么做：全景</h2>
+<p>Claude Code 把一次模型请求的上下文拆成几层，每层有自己的来源、预算和清理方式：</p>
+<div class="flow2">  ┌ 静态前缀（最稳定，缓存命中的基础）
+  │   系统提示词 · 工具定义（MCP 工具可延迟加载，只列名字）
+  ├ 会话上下文（每个会话算一次，memoize）
+  │   CLAUDE.md 分层指令（托管 / 用户 / 项目含 rules / 本地，@include）· git 状态（≤2000 字符）· 当天日期
+  ├ 对话历史（compact boundary 之后的部分）
+  │   用户消息 · 助手消息 · 工具调用与结果 · 压缩摘要
+  └ 每轮附件（追加在最后，不破坏前缀）
+      &lt;system-reminder&gt; 包裹的 40 余种：文件被改动、待办提醒、相关记忆、新可用工具、
+      技能清单、token 用量、计划模式、日期变化、IDE 选区……
+
+  每次请求前的处理流水线（按顺序）：
+    取 compact boundary 之后的消息
+    → 工具结果预算：单条过大落盘留预览；一条消息里的工具结果总量封顶
+    → 历史剪裁（snip，内部实验）
+    → 微压缩（microcompact）：清掉旧的工具结果
+    → 上下文折叠（context collapse，内部实验）
+    → 自动压缩（autocompact）：超阈值时把整段历史压成摘要
+    → 调模型
+    → 失败恢复：上下文超限 → 反应式压缩后重试；输出被截断 → 提高输出上限续写</div>
+
+<!-- 3 -->
+<h2 id="s3">3. Claude Code 的关键机制</h2>
+<h3>3.1 计量：以 API 返回的用量为准</h3>
+<ul>
+  <li><b>有效窗口</b> = 模型窗口 − min(最大输出, 约 20k)（预留给压缩时摘要的输出；取值依据是摘要输出的 p99.99）。</li>
+  <li><b>当前占用</b> = 最近一次 API 响应的 usage（input + cache_creation + cache_read + output）+ 之后新增消息的估算。不靠纯字符估算，也不额外调 count_tokens。</li>
+  <li><b>阈值分档</b>：自动压缩在「有效窗口 − 13k」；警告、错误提示再各留 20k 余量；手动 /compact 只留 3k。可用环境变量把窗口人为调小（便于测试与控成本）。</li>
+  <li><b>熔断</b>：自动压缩连续失败 3 次就停（避免上下文已不可救时每轮白打一次压缩请求）。</li>
+</ul>
+<h3>3.2 工具结果预算：落盘而不是截断</h3>
+<ul>
+  <li>单条工具结果超过阈值（默认约 5 万字符，可按工具覆盖）→ 完整内容写到会话目录的 <code>tool-results/</code>，消息里只留约 2KB 预览和文件路径，模型需要时再用读文件工具取。</li>
+  <li>一条消息里所有工具结果的总量也有上限（约 20 万字符）——并行十个工具各返回一点，加起来同样会撑爆。</li>
+  <li>读文件工具自身有分页上限，不走落盘（落盘后再读是循环）。</li>
+</ul>
+<h3>3.3 微压缩：清旧工具结果，优先不碰缓存</h3>
+<ul>
+  <li>只清「可再生」的工具结果：读文件、Shell、grep、glob、网页搜索/抓取、编辑、写入——这些都能重新执行拿回来。清掉的位置换成一句「旧的工具结果已清除」。</li>
+  <li><b>时间触发</b>：距上一条助手消息超过 60 分钟（服务端 1 小时缓存必然过期，整段前缀反正要重写）→ 请求前把旧结果清掉、只留最近 5 个。缓存还热的时候不动，因为改历史会打掉缓存。</li>
+  <li><b>缓存编辑</b>（内部）：用 API 的 cache editing 在服务端删除旧工具结果，本地消息不变、缓存前缀不失效。</li>
+  <li><b>服务端上下文管理</b>：API 原生的 <code>clear_tool_uses</code>（超过输入阈值时清工具调用，保留最近若干）与 <code>clear_thinking</code>（只保留最近若干轮的 thinking）。</li>
+</ul>
+<h3>3.4 全量压缩：结构化摘要 + 工作集恢复</h3>
+<ul>
+  <li>压缩用一个<b>不带工具的分叉 agent</b>完成，复用主对话的前缀缓存（实验数据：不复用时压缩请求约 98% 缓存未命中）。</li>
+  <li>摘要先写 <code>&lt;analysis&gt;</code> 草稿再写 <code>&lt;summary&gt;</code>，草稿丢弃。摘要固定九段：主要请求与意图、关键技术概念、文件与代码片段、错误与修复（含用户的纠正）、问题解决、<b>全部用户消息</b>、待办、当前工作、下一步（必须与用户最近的明确请求一致）。</li>
+  <li>压缩请求自身超长 → 截掉最旧的若干 API 回合重试，最多 3 次。</li>
+  <li><b>压缩后恢复工作集</b>：重新附上最近读过的文件（最多 5 个，每个 ≤5k token，总 ≤50k）、用过的技能正文（每个 ≤5k，总 ≤25k）、当前计划与异步任务状态。技能清单本身不重发（省一次缓存写入，模型的工具定义里还有技能工具）。</li>
+  <li>支持「部分压缩」（只压前半段，保留后半段原文）与压缩前钩子（PreCompact hook，可附加用户指令）。</li>
+</ul>
+<h3>3.5 会话记忆：后台记笔记，压缩时直接用</h3>
+<ul>
+  <li>后台的分叉 agent 周期性维护一份结构化 markdown 笔记：标题、当前状态、任务规格、文件与函数、工作流、错误与纠正、系统文档、经验、关键结果、工作日志。每节有长度上限，「当前状态」每次必更新。</li>
+  <li>触发：上下文增长超过 token 阈值<b>且</b>（工具调用数达到阈值<b>或</b>上一轮没有工具调用）——token 阈值始终必需。</li>
+  <li>压缩时若笔记可用，<b>直接拿笔记当摘要</b>（省一次 LLM 调用、几乎零延迟），保留最近 1 万～4 万 token 原文、至少 5 条文本消息，且切分点不拆开 tool_use / tool_result。</li>
+</ul>
+<h3>3.6 持久指令与长期记忆</h3>
+<ul>
+  <li><b>CLAUDE.md 分层</b>：托管（全员）→ 用户（个人全局）→ 项目（入库，含 <code>.claude/rules/*.md</code>）→ 本地（个人、不入库）；离当前目录越近优先级越高；支持 <code>@path</code> 引用其它文件，防循环。</li>
+  <li><b>自动记忆</b>：<code>MEMORY.md</code> 索引（≤200 行、≤25KB，超出截断并警告）+ 单条记忆文件；每轮按相关性挑选记忆作为附件注入；后台从对话中抽取新记忆。</li>
+</ul>
+<h3>3.7 按需加载，压低固定开销</h3>
+<ul>
+  <li><b>延迟工具</b>：MCP 工具默认只通告名字，模型用 ToolSearch 按需加载完整 schema——几十个 MCP 工具的定义不再常驻上下文。</li>
+  <li><b>技能</b>：上下文里只有技能名与一句描述，调用时才加载正文。</li>
+  <li><b>子 agent</b>：子任务在独立上下文里跑，主 agent 只收到结论。</li>
+</ul>
+<h3>3.8 一条贯穿始终的约束：不打掉前缀缓存</h3>
+<p>附件只追加在末尾、压缩分叉复用缓存、微压缩只在缓存已过期时改写历史、缓存还热时用 cache editing——几乎每个机制的取舍都先问「会不会让前缀缓存失效」。</p>
+
+<!-- 4 -->
+<h2 id="s4">4. Atlas 现状与差距</h2>
+<table>
+  <tr><th>能力</th><th>Atlas 现状</th><th>差距</th></tr>
+  <tr><td>自动压缩</td><td><span class="tag ok">有</span> CompactionMiddleware：模型调用前按估算 token 判断，超过窗口 75% 压到 40%，保留最近 3 个回合；不拆 tool 对；压缩区的 thinking 丢弃；摘要写 <code>thread.summary</code>，后续轮次回填（不每轮重压）；摘要失败降级为只保留最近回合并告知用户</td><td>计量靠「字符 ÷ 2.5」估算，不用 API usage；没有超限后的反应式恢复；没有熔断；压缩后不恢复工作集；摘要模型写死 haiku（网关未必有）</td></tr>
+  <tr><td>摘要结构</td><td><span class="tag ok">有</span> 四块：目标与硬约束、带来源的事实、决定与<b>已排除的方案及理由</b>、待办</td><td>缺「全部用户消息」「错误与纠正」「当前工作 / 下一步」——这三块恰是续上工作最需要的</td></tr>
+  <tr><td>大工具结果</td><td><span class="tag ok">有</span> 超过 2 万 token 外置到 <code>/large_tool_results/</code>，模型可读回</td><td>没有单批总量上限；没有清理旧工具结果（微压缩）</td></tr>
+  <tr><td>持久指令</td><td><span class="tag warn">部分</span> 只有智能体的 system_prompt</td><td>没有平台 / 用户 / 工作区级的指令分层（对应 CLAUDE.md）</td></tr>
+  <tr><td>长期记忆</td><td><span class="tag warn">部分</span> mem0 抽取已做；只读的 search_memory 工具</td><td>自动注入未开（记忆设计里列为待解决）</td></tr>
+  <tr><td>知识库</td><td><span class="tag ok">有</span> auto 模式本轮注入、不落库，下一轮重新检索</td><td>没有和其它注入物共享预算</td></tr>
+  <tr><td>工具定义</td><td><span class="tag warn">全量</span> MCP 工具定义全部常驻；技能清单渲染在系统提示词</td><td>MCP 工具多时固定开销大，没有按需加载</td></tr>
+  <tr><td>子智能体</td><td><span class="tag ok">有</span> 子会话独立上下文，只回结论</td><td>—</td></tr>
+  <tr><td>ACP</td><td><span class="tag ok">CLI 自管</span> Claude Code 自己压缩</td><td>平台看不到 CLI 的上下文用量（<code>usage_update</code> 目前未翻译）</td></tr>
+  <tr><td>可观测</td><td><span class="tag warn">部分</span> <code>context.compacted</code> 事件</td><td>看不到一轮上下文的构成（指令 / 工具定义 / 历史 / 工具结果 / 注入各占多少）</td></tr>
+</table>
+
+<!-- 5 -->
+<h2 id="s5">5. 设计原则</h2>
+<table>
+  <tr><th>原则</th><th>说明</th></tr>
+  <tr><td>事实源不变</td><td>message 表永远存完整原文（用户视角完整）；所有清理 / 压缩只改「模型这一轮看到的视图」。延续现有 §7.4 的做法，不引入 checkpointer</td></tr>
+  <tr><td>能重新拿到的先丢</td><td>清理顺序：可再生的旧工具结果 → 过期附件 → 早期对话（摘要）。用户消息与决定最后才动，且只以摘要形式保留</td></tr>
+  <tr><td>不打掉缓存</td><td>稳定内容在前、变化内容在后；只在必要时改写历史前缀（超阈值、或缓存已过期）</td></tr>
+  <tr><td>一处计量、统一预算</td><td>所有注入物（指令、记忆、知识、附件、工作集恢复）从同一个预算里分配，不各自为政</td></tr>
+  <tr><td>失败要说</td><td>压缩失败、清理发生、预算截断都产出事件，用户看得到「早期内容已压缩 / 已清除」</td></tr>
+  <tr><td>渐进</td><td>先补计量、恢复、摘要结构这些低风险高收益项；会话笔记、延迟工具等放后面</td></tr>
+</table>
+
+<!-- 6 -->
+<h2 id="s6">6. 总体架构：分层上下文</h2>
+<div class="flow2">  一次模型请求的组成（自上而下 = 越来越易变；缓存断点放在 L1 末尾与历史末尾）
+  L0 静态前缀    平台基础提示词 · 智能体 system_prompt · 工具定义（常驻部分）       每个智能体版本固定
+  L1 会话指令    平台 / 组织 / 用户指令 · 工作区 ATLAS.md · 技能清单                 会话内基本固定
+  L2 会话摘要    thread.summary（压缩后才有）                                       压缩时才变
+  L3 对话历史    message 表重建 → 视图变换（清理旧工具结果 / 截掉已压缩部分）       每轮追加
+  L4 本轮附件    记忆 · 知识库片段 · 工作集恢复 · 待办提醒 · 文件变化 · 用量提醒     每轮重算，不落库
+
+  组件（native 运行时内）
+    ContextBudget       计量当前占用、给各层分配预算、决定触发哪一档处理
+    ContextPipeline     请求前的有序变换：工具结果预算 → 旧结果清理 → 自动压缩
+    Compactor           生成摘要、写 thread.summary、准备工作集恢复（已有，扩展）
+    AttachmentProviders 每轮附件的提供方，统一接口、统一预算、统一渲染为 &lt;system-reminder&gt;
+    ContextInspector    记录每次请求的构成，供 API / 事件 / 链路查看</div>
+
+<!-- 7 -->
+<h2 id="s7">7. 计量与预算</h2>
+<ul>
+  <li><b>窗口</b>：取自模型目录（<code>model_catalog.context_window</code>、<code>max_output_tokens</code>，已有字段）。有效窗口 = 窗口 − min(本次请求的最大输出, 20k)。</li>
+  <li><b>当前占用</b>：以上一次模型调用的 usage（input + cache_read + cache_creation + output）为基线，加上之后新增消息的估算；没有基线（新会话、续跑首段）时退回现有的字符估算。DeepSeek 等网关同样返回 usage，不依赖 Anthropic 专有能力。</li>
+  <li><b>分档</b>（比例相对有效窗口，可按智能体配置）：</li>
+</ul>
+<table>
+  <tr><th>档位</th><th>默认</th><th>动作</th></tr>
+  <tr><td>清理</td><td>60%</td><td>清掉较早的可再生工具结果（§8 ②）</td></tr>
+  <tr><td>压缩</td><td>80%（现为 75%）</td><td>自动压缩（§9）</td></tr>
+  <tr><td>提醒</td><td>90%</td><td>给模型一条用量附件：「上下文将满，请精简输出、尽快收尾或保存进度」</td></tr>
+  <tr><td>超限</td><td>API 返回上下文过长</td><td>反应式压缩后重试一次（§8 ⑤）</td></tr>
+</table>
+<ul>
+  <li><b>附件预算</b>：L4 总量默认 ≤ 有效窗口的 10%，按优先级分配：工作集恢复 &gt; 知识库 &gt; 记忆 &gt; 其它提醒；超出部分截断并在附件里写明。</li>
+  <li><b>熔断</b>：同一会话自动压缩连续失败 3 次 → 本会话停止自动压缩，发事件告知（用户可手动触发或新开会话）。</li>
+</ul>
+
+<!-- 8 -->
+<h2 id="s8">8. 请求前流水线</h2>
+<p>在 kernel 的 <code>before_model</code> 阶段按序执行（现有 CompactionMiddleware 扩展为流水线；顺序固定写在一处并注明理由）：</p>
+<table>
+  <tr><th>#</th><th>步骤</th><th>做法</th><th>是否改写历史前缀</th></tr>
+  <tr><td>①</td><td>工具结果预算</td><td>单条超限外置到工作区 <code>/large_tool_results/</code>（已有）；<b>新增</b>同一批工具结果总量上限（默认 8 万 token），超出的从最大的开始外置</td><td>否（只影响新结果）</td></tr>
+  <tr><td>②</td><td>旧工具结果清理</td><td>只清可再生的工具：read_file、search、execute、MCP 只读类、知识库检索；保留最近 N 个（默认 5）；替换为「[旧的工具结果已清除，可重新调用 X 获取]」。<b>触发</b>：占用 ≥ 清理档，<b>或</b>距上次助手消息已超过缓存 TTL（缓存反正失效）</td><td>是，所以只在上述两种情况触发</td></tr>
+  <tr><td>③</td><td>自动压缩</td><td>占用 ≥ 压缩档 → §9</td><td>是</td></tr>
+  <tr><td>④</td><td>附件注入</td><td>§12，追加到最后一条用户消息之后</td><td>否</td></tr>
+  <tr><td>⑤</td><td>失败恢复</td><td>模型返回「上下文过长」→ 立即强制压缩并重试一次；返回「输出被截断」（max_tokens）→ 提高本次输出上限续写一次（不超过模型上限）</td><td>按需</td></tr>
+</table>
+<p class="src">★ 视图变换只作用于本轮发给模型的消息列表；message 表、事件归档不变。清理与压缩都产出事件（<code>context.cleared</code> / <code>context.compacted</code>），前端在对话里显示一条分隔说明。</p>
+
+<!-- 9 -->
+<h2 id="s9">9. 压缩：摘要与工作集恢复</h2>
+<h3>9.1 摘要结构（扩展现有四块）</h3>
+<table>
+  <tr><th>#</th><th>段落</th><th>来源</th></tr>
+  <tr><td>1</td><td>用户的原始目标与硬约束</td><td>现有</td></tr>
+  <tr><td>2</td><td>已确认的关键事实与数据（必须带来源）</td><td>现有</td></tr>
+  <tr><td>3</td><td>已做出的决定，以及已排除的方案与排除理由</td><td>现有（最易丢、最贵的失败模式）</td></tr>
+  <tr><td>4</td><td>涉及的文件、命令与关键片段</td><td>新增</td></tr>
+  <tr><td>5</td><td>遇到的错误与修复，<b>尤其是用户的纠正</b></td><td>新增</td></tr>
+  <tr><td>6</td><td>全部用户消息（逐条，非工具结果）</td><td>新增——用户意图的变化轨迹，摘要最容易抹掉它</td></tr>
+  <tr><td>7</td><td>待办</td><td>现有</td></tr>
+  <tr><td>8</td><td>当前正在做什么、下一步（必须与用户最近的明确请求一致）</td><td>新增</td></tr>
+</table>
+<ul>
+  <li>先写草稿（<code>&lt;analysis&gt;</code>）再写摘要，只保留摘要。</li>
+  <li><b>摘要模型</b>：默认用智能体自身的模型（质量与当前任务一致，且能复用前缀缓存——见 §15）；可配置为便宜模型（<code>compaction.summarizer_model</code>，空 = 用自身模型）。去掉写死的 haiku。</li>
+  <li>压缩请求自身超长 → 截掉最旧的回合重试，最多 3 次；仍失败走现有降级（只保留最近回合 + 告知）。</li>
+</ul>
+<h3>9.2 压缩后恢复工作集</h3>
+<p>摘要写得再好，也丢掉了「刚才正在看的那几个文件的原文」。压缩后的下一次请求，以附件形式补回（不落库）：</p>
+<table>
+  <tr><th>内容</th><th>上限</th><th>来源</th></tr>
+  <tr><td>最近读 / 写过的工作区文件（当前内容）</td><td>最多 5 个，每个 ≤5k token，总 ≤40k</td><td>从被压缩区间的工具调用里收集路径，按最近使用排序；重新从对象存储读当前版本</td></tr>
+  <tr><td>本会话已加载的技能正文</td><td>每个 ≤5k，总 ≤20k</td><td>压缩区间里读过的 SKILL.md</td></tr>
+  <tr><td>当前待办清单</td><td>—</td><td>最新的 todos 快照</td></tr>
+  <tr><td>进行中的委派 / 挂起状态</td><td>—</td><td>未结束的子 run</td></tr>
+</table>
+<h3>9.3 会话笔记（P3，可选）</h3>
+<p>参照 Claude Code 的会话记忆：后台在阈值满足时（上下文增长 ≥ X token 且 工具调用 ≥ Y 或上一轮无工具调用）更新一份结构化笔记（存会话的 system 前缀，用户在会话侧栏可见）；压缩时<b>优先用笔记作摘要</b>，省一次模型调用、压缩几乎无延迟。代价是后台额外的模型调用——P3 视成本数据决定是否开启。</p>
+
+<!-- 10 -->
+<h2 id="s10">10. 持久指令分层</h2>
+<p>Claude Code 靠本地文件系统发现 CLAUDE.md；Atlas 是服务端多租户，指令来源换成「数据库分层 + 工作区文件」：</p>
+<table>
+  <tr><th>层</th><th>谁维护</th><th>存哪</th><th>例子</th></tr>
+  <tr><td>平台</td><td>管理员</td><td>配置服务（新表 instruction，scope=platform）</td><td>合规要求、输出语言、禁止事项</td></tr>
+  <tr><td>组织 / 团队</td><td>团队管理员</td><td>同上，scope=org</td><td>团队规范、术语表</td></tr>
+  <tr><td>用户</td><td>用户本人</td><td>同上，scope=user</td><td>「默认中文、技术术语保留英文」这类个人偏好</td></tr>
+  <tr><td>智能体</td><td>智能体作者</td><td>AgentSpec.system_prompt（已有）</td><td>角色与能力说明</td></tr>
+  <tr><td>工作区</td><td>任何能写工作区的人 / 智能体</td><td>工作区根目录的 <code>ATLAS.md</code>（兼容读取 <code>AGENTS.md</code>）</td><td>项目约定、目录说明</td></tr>
+</table>
+<ul>
+  <li>注入位置：L1，紧跟系统提示词，顺序 平台 → 组织 → 用户 → 工作区（后者优先级高，放后面）。</li>
+  <li>每层大小上限（默认 4k token），总上限 12k；超出截断并在事件里提示。</li>
+  <li>会话开始时快照一次（会话内保持不变，保住缓存）；用户修改后从下一个会话生效，或手动「刷新指令」。</li>
+  <li>与记忆的分工：<b>指令是人主动写的规则</b>（必须遵守）；<b>记忆是系统观察到的事实</b>（参考、可能过期）。</li>
+</ul>
+
+<!-- 11 -->
+<h2 id="s11">11. 长期记忆与知识的注入</h2>
+<ul>
+  <li><b>记忆</b>（衔接记忆设计）：开启自动注入后，每轮用本轮提问检索 top-k（默认 5）相关记忆，作为 L4 附件注入，预算 ≤2k token；附件写明「以下是关于用户的历史记忆，可能已过期，与当前指令冲突时以指令为准」。不落库、不进历史（下一轮重新检索），与知识库 auto 模式同一做法。</li>
+  <li><b>知识库</b>：auto 模式现状不变（本轮注入、不落库），改为从统一的附件预算里分配。</li>
+  <li>两者都附<b>来源</b>（记忆 id / 文档名 + 标题路径），便于模型引用、用户追溯。</li>
+</ul>
+
+<!-- 12 -->
+<h2 id="s12">12. 每轮附件（system-reminder）</h2>
+<p>把散落的「本轮额外信息」统一成附件机制：</p>
+<pre><code>class AttachmentProvider(Protocol):
+    name: str
+    priority: int                      # 预算不够时先保高优先级
+    async def collect(self, ctx: TurnContext) -&gt; list[Attachment]   # 返回空 = 本轮不需要
+
+Attachment = {name, text, tokens, source}   # 渲染为 &lt;system-reminder name="…"&gt;…&lt;/system-reminder&gt;</code></pre>
+<table>
+  <tr><th>附件</th><th>触发</th><th>阶段</th></tr>
+  <tr><td>工作集恢复</td><td>刚压缩完的下一次请求</td><td>P1</td></tr>
+  <tr><td>知识库片段</td><td>auto 模式（现有迁移过来）</td><td>P1</td></tr>
+  <tr><td>用量提醒</td><td>占用 ≥ 提醒档</td><td>P1</td></tr>
+  <tr><td>待办提醒</td><td>有未完成待办且若干轮没更新</td><td>P2</td></tr>
+  <tr><td>工作区文件变化</td><td>本会话读过的文件被别处改了（ACP 子智能体 / 用户上传）</td><td>P2</td></tr>
+  <tr><td>相关记忆</td><td>记忆自动注入开启</td><td>P2</td></tr>
+  <tr><td>新可用工具 / 工具漂移</td><td>MCP 工具变化（现有 mcp.tool_drift 事件对应）</td><td>P2</td></tr>
+  <tr><td>日期变化</td><td>会话跨天</td><td>P2</td></tr>
+</table>
+<p>附件追加在本轮最后一条用户消息之后，不进 message 表；模型提示词说明「system-reminder 是平台附加的上下文，不是用户说的话」。</p>
+
+<!-- 13 -->
+<h2 id="s13">13. 工具与技能的按需加载</h2>
+<ul>
+  <li><b>延迟工具（P3）</b>：智能体挂的 MCP 工具超过阈值（默认 20 个或定义超过 10k token）时，非核心工具改为只列名字 + 一句描述，提供 <code>tool_search</code> 工具按需加载完整定义；加载过的工具本会话内常驻。模型侧需要支持动态增加工具（LangChain 每次调用都 bind_tools，可在中间件里按会话状态扩展）。</li>
+  <li><b>技能</b>：现状已是「清单 + 按需读 SKILL.md」，保持；压缩后不重发清单（清单在 L1 本就常驻）。</li>
+</ul>
+
+<!-- 14 -->
+<h2 id="s14">14. 子智能体与 ACP</h2>
+<ul>
+  <li><b>子智能体</b>：独立子会话、只回结论（现有，保持）。委派时的输入上下文显式（task 描述 + 必要文件路径），不继承主会话历史——这本身就是最有效的上下文隔离。子会话各自有压缩与预算。</li>
+  <li><b>ACP</b>：上下文由 CLI 自管（Claude Code 自带上述全部机制），平台不介入改写；但把 ACP 的 <code>usage_update</code> 翻译成平台的用量事件，用于展示上下文用量与链路观测（目前日志里是「未翻译的 session/update 类型」）。</li>
+</ul>
+
+<!-- 15 -->
+<h2 id="s15">15. 与 prompt cache 协同</h2>
+<table>
+  <tr><th>做法</th><th>理由</th></tr>
+  <tr><td>固定顺序 L0 → L1 → L2 → L3 → L4，缓存断点放在 L1 末尾与 L3 末尾</td><td>稳定的在前；附件每轮变，放最后不影响前面命中</td></tr>
+  <tr><td>旧工具结果清理只在「超档」或「缓存已过期」时触发</td><td>缓存还热时改写历史 = 整段重新计费，得不偿失</td></tr>
+  <tr><td>压缩默认用智能体自身模型，请求 = 原历史 + 摘要指令</td><td>命中原历史的前缀缓存（Claude Code 实测不复用时约 98% 未命中）。用便宜模型时缓存无法复用——二者的成本取舍按「历史长度 × 缓存价差」决定，提供配置</td></tr>
+  <tr><td>指令在会话开始时快照</td><td>会话内 L1 不变</td></tr>
+  <tr><td>缓存 TTL 来自模型目录 / 网关配置（5 分钟或 1 小时）</td><td>时间触发的清理依赖它；DeepSeek 等网关的缓存语义不同，按实际配置</td></tr>
+</table>
+
+<!-- 16 -->
+<h2 id="s16">16. 可观测与用户可见</h2>
+<ul>
+  <li><b>上下文构成</b>：每次模型调用记录各层 token（L0 工具定义 / 指令 / 摘要 / 历史：对话 + 工具结果 / 附件按名字），写入 OTel span 属性 <code>atlas.context.*</code>，并提供 <code>GET /v1/runs/{id}/context</code> 返回最近一次请求的构成。</li>
+  <li><b>事件</b>：<code>context.compacted</code>（已有，补充压缩前后 token、摘要模型、是否用了笔记）、<code>context.cleared</code>（清了几个工具结果、释放多少）、<code>context.warning</code>（达到提醒档）。</li>
+  <li><b>前端</b>：会话顶部显示上下文用量条（占有效窗口的比例，颜色对应档位）；对话里在压缩 / 清理处显示分隔说明；「查看上下文构成」弹窗（同 Claude Code 的 /context）；支持手动「压缩」按钮（可附加「重点保留什么」的说明）。</li>
+</ul>
+
+<!-- 17 -->
+<h2 id="s17">17. 数据模型与配置</h2>
+<table>
+  <tr><th>变更</th><th>说明</th></tr>
+  <tr><td><code>thread.context_state</code>（JSON，新增）</td><td>自动压缩连续失败次数、最近一次 usage 基线、压缩后待恢复的工作集（文件路径、技能）</td></tr>
+  <tr><td><code>thread.summary</code> / <code>history_upto</code></td><td>已有，不变</td></tr>
+  <tr><td>配置服务 <code>instruction</code> 表（新增）</td><td>scope（platform / org / user）、owner、content、updated_at</td></tr>
+  <tr><td>AgentSpec.compaction 扩展</td><td>clear_ratio（0.6）、trigger_ratio（0.8）、warn_ratio（0.9）、keep_recent_tool_results（5）、summarizer_model（空 = 自身模型）、restore_files（5）、attachment_budget_ratio（0.1）</td></tr>
+  <tr><td>Settings</td><td>指令层大小上限、记忆注入 top-k 与预算、延迟工具阈值</td></tr>
+</table>
+
+<!-- 18 -->
+<h2 id="s18">18. 不照搬的部分</h2>
+<table>
+  <tr><th>Claude Code 的做法</th><th>Atlas 的取舍</th></tr>
+  <tr><td>缓存编辑（cache editing）删除旧工具结果</td><td>依赖 Anthropic 专有 beta；Atlas 经 LiteLLM / DeepSeek 网关，不可用。P3 视网关能力再接</td></tr>
+  <tr><td>服务端 <code>clear_tool_uses</code> / <code>clear_thinking</code></td><td>同上，网关支持时作为 §8 ② 的实现之一（改为服务端执行，客户端不改历史）</td></tr>
+  <tr><td>上下文折叠、历史剪裁（内部实验）</td><td>不做；Atlas 用「清理 + 压缩」两档即可</td></tr>
+  <tr><td>本地文件系统发现 CLAUDE.md</td><td>换成数据库分层指令 + 工作区 ATLAS.md（多租户、服务端运行）</td></tr>
+  <tr><td>大量功能开关与远程实验配置</td><td>Atlas 用智能体配置 + Settings，不做远程实验平台</td></tr>
+  <tr><td>工具结果落本地磁盘</td><td>落会话工作区（对象存储），与文件工具同一份数据（已有机制）</td></tr>
+</table>
+
+<!-- 19 -->
+<h2 id="s19">19. 分期</h2>
+<table>
+  <tr><th>阶段</th><th>内容</th><th>收益</th></tr>
+  <tr><td><b>P1</b></td><td>usage 基线计量 + 分档；反应式恢复（上下文过长 / 输出截断）；熔断；摘要扩展到八段、摘要模型可配置（去掉写死 haiku）；压缩后工作集恢复；附件机制骨架（工作集、知识库、用量提醒）；上下文构成写入链路与事件</td><td>不再因溢出失败；压缩后不「失忆」；看得见 token 花在哪</td></tr>
+  <tr><td><b>P2</b></td><td>旧工具结果清理（超档 / 缓存过期触发）；单批工具结果总量上限；持久指令分层（平台 / 组织 / 用户 / ATLAS.md）；记忆自动注入；待办、文件变化、工具漂移、日期附件；前端用量条与构成弹窗、手动压缩；ACP 用量翻译</td><td>长任务更省、更稳；个性化</td></tr>
+  <tr><td><b>P3</b></td><td>会话笔记（后台维护、压缩时直接用）；延迟工具（tool_search）；网关支持时接服务端上下文编辑</td><td>压缩近乎零延迟；工具多时固定开销大降</td></tr>
+</table>
+<p>每期用 <a href="agent-eval-design.html">Agent 评测</a>验证：加入长程任务（读大量文件、超过窗口的任务）到任务集，对比开关前后的成功率、token、压缩次数与「压缩后失忆」类失败的占比。</p>
+
+<!-- 20 -->
+<h2 id="s20">20. 风险与限制</h2>
+<table>
+  <tr><th>风险</th><th>缓解</th></tr>
+  <tr><td>清理掉的工具结果后来又需要</td><td>只清可再生的工具，占位文本告诉模型怎么重新获取；保留最近 N 个</td></tr>
+  <tr><td>摘要遗漏关键约束</td><td>八段结构强制覆盖用户消息与纠正；工作集恢复补原文；评测里专门加「压缩后仍需遵守早期约束」的任务</td></tr>
+  <tr><td>附件膨胀反成负担</td><td>统一预算 + 优先级；附件 token 计入构成观测</td></tr>
+  <tr><td>usage 基线在续跑 / 多段执行时不准</td><td>无可靠基线时退回字符估算（偏保守）；基线随 thread.context_state 持久化</td></tr>
+  <tr><td>不同网关的缓存语义不同</td><td>缓存 TTL 与是否支持缓存编辑按模型目录配置，不写死</td></tr>
+  <tr><td>指令分层被滥用（塞进大量内容）</td><td>每层大小上限与总上限；超出截断并提示</td></tr>
+</table>
+
+<!-- 21 -->
+<h2 id="s21">21. 实现状态（2026-10-13）</h2>
+<p>P1、P2 与 P3 的延迟工具已实现并部署到本机 K8s。P3 的「会话笔记」「服务端上下文编辑」按决定不做。</p>
+<table>
+  <tr><th>模块</th><th>位置</th><th>状态</th></tr>
+  <tr><td>计量、分档、清理、单批上限、反应式恢复、熔断、工作集恢复、附件、构成事件</td><td><code>engine/…/middleware/compaction.py</code>、<code>_context.py</code></td><td>完成；单测覆盖</td></tr>
+  <tr><td>八段摘要、摘要模型解析、熔断计数持久化</td><td><code>server/…/services/compaction.py</code>、<code>domain/spec.py</code>、迁移 0017</td><td>完成</td></tr>
+  <tr><td>持久指令：平台 / 用户 / 工作区 ATLAS.md</td><td>配置服务 <code>api/instructions.py</code>（迁移 c0002）、<code>executor/context.py</code>、前端「指令」页</td><td>完成；ATLAS.md 注入已用评测任务端到端验证</td></tr>
+  <tr><td>记忆自动注入</td><td><code>executor/context.py</code></td><td>完成（附件形式，不落库）</td></tr>
+  <tr><td>观测：<code>GET /v1/threads/{id}/context</code>、<code>POST …/compact</code>、context.usage / context.cleared 事件、前端用量条</td><td><code>services/context.py</code>、<code>ContextMeter.tsx</code></td><td>完成；手动压缩已端到端验证</td></tr>
+  <tr><td>ACP 用量翻译</td><td><code>host/translate/acp_v1.py</code></td><td>完成</td></tr>
+  <tr><td>延迟工具（tool_search）</td><td><code>middleware/tool_search.py</code>、<code>assembly._deferred_mcp_tools</code></td><td>完成；只有单测（本机没有超阈值的 MCP 工具集，未端到端验证）</td></tr>
+</table>
+<h3>与设计的偏差</h3>
+<ul>
+  <li>持久指令每一轮开始时读一次，而不是在会话开始时固定一份快照：修改从下一轮生效；本轮内不变，前缀缓存不受影响。</li>
+  <li>组织层指令暂不做：用户中心的组织模型还没接进 Atlas。</li>
+  <li>平台指令要求 <code>instruction:manage</code> 权限，但这个操作还没在用户中心注册（缺管理员凭据），暂时以 <code>model:manage</code> 兜底。</li>
+  <li>延迟工具只覆盖 MCP 工具，原生工具一直常驻。阈值是 MCP 工具超过 20 个，或定义总量超过 10k tokens（<code>deferred_tools_min_count / min_tokens</code>）。</li>
+  <li>旧版本智能体的 spec 里存着旧默认值 <code>summarizer_model: claude-haiku-4-5</code>，现在按「未设置」处理，改用智能体自己的模型（<code>resolve_summarizer_model</code>）。</li>
+  <li>摘要提取有兜底：deepseek-chat 有时只写完 &lt;analysis&gt; 就结束、不输出 &lt;summary&gt;，这时退回使用 analysis 正文。</li>
+</ul>
+<h3>验证中顺带修复</h3>
+<ul>
+  <li>OSS 文件系统对越界路径或工作区根（如 <code>read_file("/workspace")</code>）原来是直接抛 <code>PathEscape</code>，会打断整个 run，而且被误归类成 model_unavailable。现在 read / write / edit / delete 都改为返回错误结果，由模型自行纠正。</li>
+</ul>
+</main>
+</body>
+</html>

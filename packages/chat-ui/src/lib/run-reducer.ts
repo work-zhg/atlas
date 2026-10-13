@@ -14,7 +14,9 @@ import {
   type AgentModeData,
   type AnyTraceEvent,
   type ContentBlock,
+  type ContextClearedData,
   type ContextCompactedData,
+  type ContextUsageData,
   type FileWrittenData,
   type McpToolDriftData,
   type SkillLoadedData,
@@ -132,11 +134,17 @@ export type Notice =
 
 export interface CompactionMark {
   seq: number;
+  /** compacted = 压缩成摘要；cleared = 清除了旧的工具结果 */
+  variant?: "compacted" | "cleared";
   messagesSummarized: number;
   tokensBefore: number;
   tokensAfter: number;
   summary: string;
   degraded: boolean;
+  reason?: string;
+  restoredFiles?: string[];
+  cleared?: number;
+  tokensFreed?: number;
 }
 
 export interface RunState {
@@ -183,6 +191,8 @@ export interface RunState {
   meta?: RunStartedData;
   error?: { kind: string; message: string; partialText?: string };
   compactions: CompactionMark[];
+  /** 最近一次模型调用的上下文用量（主智能体的；子智能体的不覆盖它） */
+  contextUsage?: ContextUsageData;
   /** 技能 / MCP 的一行式提示（按 thread_seq 标识，跨 run 唯一） */
   notices: Notice[];
   /** 还在等人决定的审批（§12.2）。run 走到终态时出列。 */
@@ -659,21 +669,56 @@ export function applyEvent(state: RunState, event: AnyTraceEvent): RunState {
 
     case EventType.ContextCompacted: {
       const c = d as unknown as ContextCompactedData;
+      // ★ 用会话级 thread_seq 当键：run 内的 seq 跨 run 会重复，两次压缩会被当成同一条
+      const seq = event.thread_seq || event.seq;
       return {
         ...base,
         compactions: [
           ...base.compactions,
           {
-            seq: event.seq,
+            seq,
+            variant: "compacted",
             messagesSummarized: c.messages_summarized,
             tokensBefore: c.tokens_before,
             tokensAfter: c.tokens_after,
             summary: c.summary,
             degraded: Boolean(c.degraded),
+            reason: c.reason,
+            restoredFiles: c.restored_files ?? [],
           },
         ],
-        timeline: appendOnce(base.timeline, { kind: "compaction", seq: event.seq }),
+        timeline: appendOnce(base.timeline, { kind: "compaction", seq }),
       };
+    }
+
+    case EventType.ContextCleared: {
+      const c = d as unknown as ContextClearedData;
+      const seq = event.thread_seq || event.seq;
+      return {
+        ...base,
+        compactions: [
+          ...base.compactions,
+          {
+            seq,
+            variant: "cleared",
+            messagesSummarized: 0,
+            tokensBefore: 0,
+            tokensAfter: 0,
+            summary: "",
+            degraded: false,
+            reason: c.reason,
+            cleared: c.cleared,
+            tokensFreed: c.tokens_freed,
+          },
+        ],
+        timeline: appendOnce(base.timeline, { kind: "compaction", seq }),
+      };
+    }
+
+    case EventType.ContextUsage: {
+      // 子智能体的用量不覆盖主会话的（它在自己的子会话里）
+      if (event.depth > 0) return base;
+      return { ...base, contextUsage: d as unknown as ContextUsageData };
     }
 
     case EventType.ApprovalRequired: {

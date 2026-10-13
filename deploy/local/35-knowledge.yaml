@@ -34,6 +34,10 @@ spec:
             - {name: ATLAS_KB_AUTH_MODE, value: uc}
             - {name: ATLAS_KB_SERVER_URL, value: "http://atlas-server.atlas-system.svc.cluster.local:8000"}
             - {name: ATLAS_KB_CORS_ORIGINS, value: '["http://localhost:3000","http://127.0.0.1:3000"]'}
+            # 遥测：与 atlas-server 同一个 Collector（Jaeger 那路会删正文，Langfuse 那路保留）
+            - {name: ATLAS_KB_OTEL_ENABLED, value: "true"}
+            - {name: ATLAS_KB_OTEL_ENDPOINT, value: "http://__HOST_IP__:4318"}
+            - {name: ATLAS_KB_TRACE_URL_TEMPLATE, value: "http://localhost:16686/trace/{trace_id}"}
             # ★ 不设 ATLAS_KB_MODEL_CACHE_DIR：它对向量模型同样生效，设了就不用镜像里预装的
             #   bge-small-zh、改去 HuggingFace 重新下载（Pod 里没有代理，会卡住）。
             #   重排模型（约 1GB）首次使用时下载到默认目录，Pod 重建后要重新下载。
@@ -89,6 +93,10 @@ spec:
             - {name: ATLAS_KB_AUTH_MODE, value: uc}
             - {name: ATLAS_KB_SERVER_URL, value: "http://atlas-server.atlas-system.svc.cluster.local:8000"}
             - {name: ATLAS_KB_CORS_ORIGINS, value: '["http://localhost:3000","http://127.0.0.1:3000"]'}
+            # 遥测：与 atlas-server 同一个 Collector（Jaeger 那路会删正文，Langfuse 那路保留）
+            - {name: ATLAS_KB_OTEL_ENABLED, value: "true"}
+            - {name: ATLAS_KB_OTEL_ENDPOINT, value: "http://__HOST_IP__:4318"}
+            - {name: ATLAS_KB_TRACE_URL_TEMPLATE, value: "http://localhost:16686/trace/{trace_id}"}
             # ★ 不设 ATLAS_KB_MODEL_CACHE_DIR：它对向量模型同样生效，设了就不用镜像里预装的
             #   bge-small-zh、改去 HuggingFace 重新下载（Pod 里没有代理，会卡住）。
             #   重排模型（约 1GB）首次使用时下载到默认目录，Pod 重建后要重新下载。

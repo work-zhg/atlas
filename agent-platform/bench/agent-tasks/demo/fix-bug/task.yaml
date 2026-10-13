@@ -1,0 +1,6 @@
+category: code
+tags: [core, debug]
+instruction: |
+  工作区里的 calc.py 有 bug，`python3 -m unittest test_calc` 跑不过。请修复 calc.py 让测试全部通过。
+  不要修改 test_calc.py。
+budget: {wall_s: 600}

@@ -1,0 +1,33 @@
+# 走通流程用的实验：样例评测集 × Atlas 三种配置（doc/rag-eval-design.html §14 的 E1 / E3 雏形）。
+#
+#   naive      朴素基线：自动分段（按行、500 字）+ 纯语义检索
+#   structure  父子分段 · 按标题（当前默认）+ 纯语义检索
+#   hybrid     父子分段 · 按标题 + 混合检索（加权重排）
+#
+# structure 与 hybrid 的入库配置相同，共用一个库，只是检索方式不同。
+name: demo-分段与检索方式
+datasets: [demo-zh]
+split: all
+top_k: 3
+repeats: 1
+concurrency: 4
+generation: unified
+generator_model: deepseek-flash
+judge_model: deepseek-v4-pro
+generation_metrics: [crag, refusal, ragas_faithfulness, ragas_factual_correctness]
+platforms:
+  - adapter: atlas
+    variants:
+      naive:
+        ingest: {doc_form: text_model, process_rule: automatic}
+        retrieval: {search_method: semantic_search}
+      structure:
+        ingest: {doc_form: hierarchical_model}
+        retrieval: {search_method: semantic_search}
+      hybrid:
+        ingest: {doc_form: hierarchical_model}
+        retrieval:
+          search_method: hybrid_search
+          reranking_enable: true
+          reranking_mode: weighted_score
+          weights: {vector_setting: {vector_weight: 0.7}, keyword_setting: {keyword_weight: 0.3}}

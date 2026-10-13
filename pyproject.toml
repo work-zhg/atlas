@@ -3,17 +3,32 @@ name = "atlas"
 version = "0.1.0"
 description = "Atlas — agent platform (workspace root)"
 requires-python = ">=3.13"
-dependencies = ["atlas-acp", "atlas-bridge", "atlas-cluster", "atlas-config", "atlas-engine", "atlas-host", "atlas-jsonrpc", "atlas-knowledge", "atlas-server", "atlas-teamflow", "atlas-usercenter"]
+dependencies = ["atlas-acp", "atlas-bench", "atlas-bridge", "atlas-cluster", "atlas-config", "atlas-engine", "atlas-host", "atlas-jsonrpc", "atlas-knowledge", "atlas-sandboxd", "atlas-server", "atlas-teamflow", "atlas-usercenter"]
 
 # Workspace root is a container, not an installable package.
 [tool.uv]
 package = false
 
 [tool.uv.workspace]
-members = ["acp", "bridge", "cluster", "config", "engine", "host", "jsonrpc", "knowledge", "server", "teamflow", "usercenter"]
+members = [
+  "agent-platform/libs/acp",
+  "agent-platform/bench",
+  "agent-platform/pod/bridge",
+  "agent-platform/services/cluster",
+  "agent-platform/services/config",
+  "agent-platform/libs/engine",
+  "agent-platform/libs/host",
+  "agent-platform/libs/jsonrpc",
+  "agent-platform/services/knowledge",
+  "agent-platform/pod/sandboxd",
+  "agent-platform/services/server",
+  "teamflow/services/server",
+  "usercenter/services/server",
+]
 
 [tool.uv.sources]
 atlas-acp = { workspace = true }
+atlas-bench = { workspace = true }
 atlas-bridge = { workspace = true }
 atlas-cluster = { workspace = true }
 atlas-config = { workspace = true }
@@ -21,6 +36,7 @@ atlas-engine = { workspace = true }
 atlas-host = { workspace = true }
 atlas-jsonrpc = { workspace = true }
 atlas-knowledge = { workspace = true }
+atlas-sandboxd = { workspace = true }
 atlas-server = { workspace = true }
 atlas-teamflow = { workspace = true }
 atlas-usercenter = { workspace = true }
@@ -42,7 +58,7 @@ dev = [
 # ★ 依赖单向的硬约束（文档 §2.1）。engine 一旦 import server/db/web 就 CI 红。
 # ---------------------------------------------------------------------------
 [tool.importlinter]
-root_packages = ["atlas_acp", "atlas_bridge", "atlas_cluster", "atlas_config", "atlas_engine", "atlas_host", "atlas_jsonrpc", "atlas_knowledge", "atlas_server", "atlas_teamflow", "atlas_usercenter"]
+root_packages = ["atlas_acp", "atlas_bench", "atlas_bridge", "atlas_cluster", "atlas_config", "atlas_engine", "atlas_host", "atlas_jsonrpc", "atlas_knowledge", "atlas_sandboxd", "atlas_server", "atlas_teamflow", "atlas_usercenter"]
 # forbidden_modules 里有第三方包（fastapi/sqlalchemy/...），必须打开这个开关
 include_external_packages = true
 
@@ -301,6 +317,25 @@ source_modules = [
 ]
 forbidden_modules = ["atlas_knowledge"]
 
+# 评测框架只走被测平台的公开 HTTP 接口（doc/rag-eval-design.html §2）：对 Atlas 与竞品一视同仁。
+[[tool.importlinter.contracts]]
+name = "atlas_bench 不认识 atlas 其它包"
+type = "forbidden"
+source_modules = ["atlas_bench"]
+forbidden_modules = [
+  "atlas_acp",
+  "atlas_bridge",
+  "atlas_cluster",
+  "atlas_config",
+  "atlas_engine",
+  "atlas_host",
+  "atlas_jsonrpc",
+  "atlas_knowledge",
+  "atlas_server",
+  "atlas_teamflow",
+  "atlas_usercenter",
+]
+
 # server 里的纯计算层：装配（build）、执行循环（runner）、词汇（spec/events/
 # translator/tool_registry）不许碰基础设施 —— 「run 一轮」必须继续可以用
 # 假模型脱离 DB/Redis 测试。IO 归 assembly / services / repositories。
@@ -321,19 +356,21 @@ forbidden_modules = ["sqlalchemy", "fastapi", "redis", "alembic", "pydantic_sett
 line-length = 100
 target-version = "py313"
 extend-exclude = [
-  "server/migrations/versions",
-  "config/src/atlas_config/migrations/versions",
-  "usercenter/src/atlas_usercenter/migrations/versions",
+  # 智能体评测的任务夹具（初始文件 / 校验脚本 / 参考答案）：内容就是题目本身，不做格式化与 lint
+  "agent-platform/bench/agent-tasks",
+  "agent-platform/services/server/migrations/versions",
+  "agent-platform/services/config/src/atlas_config/migrations/versions",
+  "usercenter/services/server/src/atlas_usercenter/migrations/versions",
   "usercenter/web",
-  "teamflow/src/atlas_teamflow/migrations/versions",
-  "knowledge/src/atlas_knowledge/migrations/versions",
+  "teamflow/services/server/src/atlas_teamflow/migrations/versions",
+  "agent-platform/services/knowledge/src/atlas_knowledge/migrations/versions",
   "teamflow/web",
   "docs",          # 别去动设计文档里的示例代码块
   "prototype",
   "design-system",
   # 由 acp/scripts/generate_v1.py 从官方 schema 生成，不手改，也不按本仓风格检查
-  "acp/src/atlas_acp/v1/_generated.py",
-  "acp/src/atlas_acp/v1/methods.py",
+  "agent-platform/libs/acp/src/atlas_acp/v1/_generated.py",
+  "agent-platform/libs/acp/src/atlas_acp/v1/methods.py",
 ]
 
 [tool.ruff.lint]
@@ -349,22 +386,29 @@ ignore = ["RUF001", "RUF002", "RUF003"]
 extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "atlas_usercenter.api.deps.require", "atlas_teamflow.api.deps.require", "fastapi.File", "fastapi.Form"]
 
 [tool.ruff.lint.per-file-ignores]
-"engine/src/atlas_engine/kernel/**" = ["E501", "RUF100", "UP", "B", "SIM", "RUF012"]
+"agent-platform/libs/engine/src/atlas_engine/kernel/**" = ["E501", "RUF100", "UP", "B", "SIM", "RUF012"]
 
 # ★ formatter 没有 per-file-ignores，是全有或全无 —— 只能在这里整体排除。
 #   不排除的话 `ruff format` 会重排 kernel 下 31 个文件，与上面
 #   "不为继承来的风格大改" 的决定自相矛盾，且淹没真正的改动。
 #   裁剪到某个模块时，可把该模块从这里移出并单独格式化。
 [tool.ruff.format]
-exclude = ["engine/src/atlas_engine/kernel/**"]
+exclude = ["agent-platform/libs/engine/src/atlas_engine/kernel/**"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["tests", "config/tests", "usercenter/tests", "teamflow/tests", "knowledge/tests"]
+testpaths = ["agent-platform/tests", "agent-platform/services/config/tests", "usercenter/services/server/tests", "teamflow/services/server/tests", "agent-platform/services/knowledge/tests", "agent-platform/bench/tests"]
 addopts = "-ra"
 
 [tool.mypy]
 python_version = "3.13"
 strict = false
 warn_unused_ignores = true
-exclude = ["engine/src/atlas_engine/vendor", "server/migrations/versions"]
+exclude = ["agent-platform/libs/engine/src/atlas_engine/vendor", "agent-platform/services/server/migrations/versions"]
+
+[[tool.importlinter.contracts]]
+# doc/native-sandbox-design.html §6.1：sandboxd 注入任意镜像运行，零依赖；与 server 的唯一接口是 HTTP
+name = "atlas_sandboxd 不依赖本仓任何其它包"
+type = "forbidden"
+source_modules = ["atlas_sandboxd"]
+forbidden_modules = ["atlas_acp", "atlas_bench", "atlas_bridge", "atlas_cluster", "atlas_config", "atlas_engine", "atlas_host", "atlas_jsonrpc", "atlas_knowledge", "atlas_server", "atlas_teamflow", "atlas_usercenter"]

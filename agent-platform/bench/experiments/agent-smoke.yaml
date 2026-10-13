@@ -1,0 +1,39 @@
+# 冒烟：demo 前 3 题 × 原生 / ACP × 1 次，验证评测通路（不作能力结论）。
+name: agent-smoke
+suites:
+- demo
+trials: 1
+concurrency: 3
+approval_policy: approve_all
+comparisons:
+- - native-full
+  - acp-claude
+variants:
+  native-full:
+    description: 原生：文件 + Shell + 待办
+    agent:
+      system_prompt: 你在一个带 Linux 沙箱的工作区里完成用户的任务。直接动手做，做完自己验证，最后用一两句话说明结果。
+      model:
+        model: deepseek-chat
+        provider: anthropic
+      tool_names:
+      - filesystem
+      - bash
+      - write_todos
+      limits:
+        max_steps: 80
+  acp-claude:
+    description: ACP：Claude Code（Pod 内）
+    agent:
+      kind: acp
+      system_prompt: 你在一个工作区里完成用户的任务。直接动手做，做完自己验证，最后用一两句话说明结果。
+      model:
+        model: deepseek-chat
+        provider: anthropic
+      tool_names: []
+      cli:
+        cli_type: claude-code
+        adapter: node /opt/acp-cli/bin/claude-acp
+        image: atlas-acp-bridge:0.4.0
+        permission_mode: auto
+limit: 3

@@ -1,0 +1,7 @@
+category: data
+tags: [core, data]
+instruction: |
+  users.jsonl 每行一个用户（id、name、age、active）。请找出 age >= 18 且 active 为 true（必须是布尔 true）的用户，
+  按 age 从大到小、age 相同按 id 升序排列，把他们的 name 列表写入 adults.json（一个 JSON 数组）。
+  age 缺失或不是数字的用户不算。空行忽略。
+budget: {wall_s: 600}

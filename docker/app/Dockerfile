@@ -4,7 +4,7 @@
 #   （fastapi / uvicorn / pydantic），拆成两个镜像只是多构建一次。
 #
 # ★ 共享的只是**文件系统**，不是进程。cluster 是全仓唯一持有 K8s 写权限的
-#   进程（cluster/api.py 的开头就是这句），把它与 server 合进一个进程等于
+#   进程（atlas_cluster/api.py 的开头就是这句），把它与 server 合进一个进程等于
 #   把那份 RBAC 一并发给 server。两个 Deployment、两个 ServiceAccount。
 
 FROM python:3.13-slim
@@ -38,14 +38,16 @@ RUN HF_HUB_DISABLE_XET=1 python -c "from fastembed import TextEmbedding; TextEmb
     && du -sh /tmp/fastembed_cache
 
 WORKDIR /app
-COPY acp/ acp/
-COPY jsonrpc/ jsonrpc/
-COPY host/ host/
-COPY engine/ engine/
-COPY cluster/ cluster/
-COPY config/ config/
-COPY knowledge/ knowledge/
-COPY server/ server/
+# ★ 源码在 agent-platform/ 下按 libs / services 分组；镜像内仍平铺在 /app 下（布局不变，
+#   K8s 清单里的工作目录 /app/server 不用跟着改）
+COPY agent-platform/libs/acp/ acp/
+COPY agent-platform/libs/jsonrpc/ jsonrpc/
+COPY agent-platform/libs/host/ host/
+COPY agent-platform/libs/engine/ engine/
+COPY agent-platform/services/cluster/ cluster/
+COPY agent-platform/services/config/ config/
+COPY agent-platform/services/knowledge/ knowledge/
+COPY agent-platform/services/server/ server/
 
 # ★ 四个包一次装：它们彼此按名字依赖（server → engine/acp/cluster），
 #   分开装的话 pip 会去 PyPI 找 atlas-engine，而那里没有这个包。

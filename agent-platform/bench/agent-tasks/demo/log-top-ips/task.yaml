@@ -1,0 +1,6 @@
+category: data
+tags: [core, cli]
+instruction: |
+  分析工作区的 access.log（nginx 访问日志）：找出请求次数最多的 3 个客户端 IP，只统计状态码为 5xx 以外的请求。
+  结果写入 top_ips.txt，每行 `IP 次数`（空格分隔），按次数从多到少；次数相同按 IP 字符串升序。
+budget: {wall_s: 600}

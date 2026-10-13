@@ -1,0 +1,46 @@
+[project]
+name = "atlas-knowledge"
+version = "0.1.0"
+description = "Atlas knowledge service — datasets, ingestion and retrieval (RAG)."
+requires-python = ">=3.13"
+
+# ★ 为什么独立成服务（doc/atlas-rag-design.html §4）：入库是重 CPU / 内存的活（解析 PDF、
+#   本地向量化），放进 atlas-server 会拖慢对话链路；与 Dify 的 api + worker 同构。
+#   同一个包两种进程：python -m atlas_knowledge serve | worker | beat。
+#
+# ★ 与其它包互不 import（根 pyproject 的 import-linter 守着）：atlas-server 只经 HTTP 调本服务。
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.32",
+  "sqlalchemy[asyncio]>=2.0.36",
+  "asyncpg>=0.30",
+  "alembic>=1.14",
+  "pydantic-settings>=2.6",
+  "httpx>=0.27",
+  "redis>=5.2",
+  "boto3>=1.35",
+  "python-multipart>=0.0.9",
+  "celery[redis]>=5.4",
+  "qdrant-client>=1.12",
+  "fastembed>=0.8.0",
+  "numpy>=1.26",
+  "jieba>=0.42.1",
+  # 解析器（与 Dify 内置解析器同款选择）
+  "pypdfium2>=4.30",
+  "python-docx>=1.1",
+  "openpyxl>=3.1",
+  "beautifulsoup4>=4.12",
+  "charset-normalizer>=3.3",
+  "mcp>=1.10",
+  # 遥测（与 atlas-server 同一套：OTLP/HTTP → Collector → Jaeger / Langfuse）
+  "opentelemetry-api>=1.30",
+  "opentelemetry-sdk>=1.30",
+  "opentelemetry-exporter-otlp-proto-http>=1.30",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/atlas_knowledge"]

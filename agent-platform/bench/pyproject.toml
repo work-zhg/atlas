@@ -1,0 +1,31 @@
+[project]
+name = "atlas-bench"
+version = "0.1.0"
+description = "Atlas RAG 评测：检索评测 + 生成评测（doc/rag-eval-design.html）"
+requires-python = ">=3.13"
+
+# ★ 只通过 HTTP 与被测平台交互，不 import 任何 atlas 包（根 pyproject 的 import-linter 守着）：
+#   对 Atlas 与竞品同等对待，评测结果才公平。
+dependencies = [
+  "httpx>=0.27",
+  "pyyaml>=6.0",
+  "pydantic>=2.9",
+  "pydantic-settings>=2.6",
+  "numpy>=1.26",
+  # 检索指标计算（与 BEIR / C-MTEB 使用的 pytrec_eval 口径一致）
+  "ranx>=0.3.20",
+  "rapidfuzz>=3.9",
+  # 生成评测：RAGAS 指标 + OpenAI 兼容的大模型客户端
+  "ragas>=0.4",
+  # ★ RAGAS（含 0.4.3 与 2026-02 主分支）仍从 langchain_community.chat_models.vertexai 导入，
+  #   该模块在 langchain-community 0.4 中已移除；只有 RAGAS 依赖它，固定在 0.4 以下。
+  "langchain-community<0.4",
+  "openai>=1.50",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/atlas_bench"]

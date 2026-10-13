@@ -4,7 +4,7 @@
 !pnpm-workspace.yaml
 !pnpm-lock.yaml
 !packages/
-!web/
+!agent-platform/web/
 !usercenter/web/
 !teamflow/web/
 **/node_modules/

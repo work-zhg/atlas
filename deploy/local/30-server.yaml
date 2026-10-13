@@ -46,6 +46,8 @@ spec:
             - {name: CONFIG_BASE_URL, value: "http://atlas-config.atlas-system.svc.cluster.local:8020"}
             # 知识库服务（doc/atlas-rag-design.html §10）；服务间令牌复用 CONFIG_INTERNAL_TOKEN
             - {name: KNOWLEDGE_BASE_URL, value: "http://atlas-knowledge.atlas-system.svc.cluster.local:8050"}
+            # 原生智能体的 Shell 沙箱（doc/native-sandbox-design.html）：Pod 由 atlas-cluster 创建
+            - {name: SANDBOX_ENABLED, value: "true"}
             - name: CONFIG_INTERNAL_TOKEN
               valueFrom: {secretKeyRef: {name: atlas-config-creds, key: internal_token}}
             # 技能版本的磁盘缓存。容器里放 /tmp：丢了只是重新拉一次
