@@ -305,6 +305,32 @@ async def test_ensure_is_idempotent_and_reuses_the_token() -> None:
     assert len(backend.pods) == 1
 
 
+async def test_concurrent_ensure_hands_out_the_token_the_pod_actually_uses() -> None:
+    """★ 一批并行的 execute 在 Pod 还不存在时同时 ensure：各自签 token、各自覆盖写 Secret，
+    建出 Pod 的那一方手里的 token 与 Pod 启动时读到的对不上 → 固定一个请求 401
+    （2026-10-13 评测 atlas-eng/parallel-approval）。同一会话的 ensure 必须串行。"""
+    import asyncio
+
+    class SlowBackend(InMemoryBackend):
+        # 真集群上这些都是网络调用：在写 Secret / 建 Pod 时让出事件循环，制造交错
+        async def apply_secret(self, manifest):
+            await asyncio.sleep(0.01)
+            await super().apply_secret(manifest)
+
+        async def create_pod(self, manifest):
+            await asyncio.sleep(0.01)
+            return await super().create_pod(manifest)
+
+    backend = SlowBackend()
+    manager = PodManager(backend, _settings())
+    infos = await asyncio.gather(*(manager.ensure(_req()) for _ in range(3)))
+
+    (secret,) = backend.secrets.values()
+    assert {i.token for i in infos} == {secret["stringData"]["token"]}
+    assert len(backend.pods) == 1 and sum(i.created for i in infos) == 1
+    assert manager._locks == {}  # 锁按引用计数回收
+
+
 async def test_secret_is_created_before_the_pod() -> None:
     """顺序要紧：反过来的话 Pod 会卡在 ContainerCreating，
     而那个状态从外面看只是「起得慢」。"""
@@ -352,6 +378,24 @@ async def test_reap_takes_live_threads_not_dead_ones() -> None:
 
     assert sorted(removed) == ["t-1", "t-3"]
     assert set(backend.pods) == {pod_name_for("t-2")}
+
+
+async def test_reap_spares_pods_younger_than_the_retention() -> None:
+    """★ 名单取完到 reap 之间新建的会话不在名单里 —— 它的 Pod 还年轻，不能误删
+    （多副本下 reap 由维护者定期做，横向扩展设计 §7.1）。"""
+    import time
+
+    backend = InMemoryBackend()
+    manager = PodManager(backend, _settings())
+    for tid in ("t-old", "t-new"):
+        await manager.ensure(_req(tid))
+    backend.pods[pod_name_for("t-old")].created_at = time.time() - 3600
+    backend.pods[pod_name_for("t-new")].created_at = time.time()
+
+    removed = await manager.reap([])
+
+    assert removed == ["t-old"]
+    assert set(backend.pods) == {pod_name_for("t-new")}
 
 
 async def test_reap_ignores_pods_it_does_not_manage() -> None:
@@ -461,6 +505,20 @@ async def test_unknown_or_unauthorized_git_profiles_are_refused() -> None:
         await manager.ensure(_git_req(user_id="someone-else"))
     info = await manager.ensure(_git_req())
     assert info.created
+
+
+async def test_git_profiles_can_be_limited_to_a_source_app() -> None:
+    """去服务账号后（内网身份传递 §9）：共享机器人账号的档案按建会话的业务应用限定。"""
+    from atlas_cluster.manager import GitProfileDenied
+
+    profiles = {"teamflow-gitee": {"secret": "atlas-git-teamflow", "allowed_apps": ["teamflow"]}}
+    manager = PodManager(InMemoryBackend(), _settings(git_profiles=profiles))
+    with pytest.raises(GitProfileDenied):
+        await manager.ensure(_git_req(user_id="anyone"))  # 人直接建的会话
+    with pytest.raises(GitProfileDenied):
+        await manager.ensure(_git_req(user_id="anyone").model_copy(update={"source_app": "bench"}))
+    req = _git_req(user_id="anyone").model_copy(update={"source_app": "teamflow"})
+    assert (await manager.ensure(req)).created
 
 
 async def test_the_api_answers_403_for_a_denied_git_profile() -> None:

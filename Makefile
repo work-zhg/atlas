@@ -1,4 +1,4 @@
-.PHONY: up down sync lint types arch test migrate serve check config-migrate config-serve \
+.PHONY: up down sync lint types arch test migrate serve check smoke regress config-migrate config-serve \
         uc-migrate uc-serve uc-bootstrap uc-web-install uc-web-dev uc-dev \
         tf-migrate tf-serve tf-worker tf-register-uc tf-web-install tf-web-dev tf-dev \
         web-install web-dev web-build web-check web-gen dev
@@ -8,11 +8,11 @@ up:      ; docker compose up -d
 down:    ; docker compose down
 sync:    ; uv sync --all-packages
 lint:    ; uv run ruff check . && uv run ruff format --check .
-types:   ; uv run mypy agent-platform/libs/engine/src agent-platform/services/server/src
+types:   ; uv run mypy agent-platform/libs/engine/src agent-platform/services/agent/src
 arch:    ; uv run lint-imports
 test:    ; uv run pytest -q
-migrate: ; cd agent-platform/services/server && uv run alembic upgrade head
-serve:   ; uv run uvicorn atlas_server.main:app --reload --port 8000
+migrate: ; cd agent-platform/services/agent && uv run alembic upgrade head
+serve:   ; uv run uvicorn atlas_agent.main:app --reload --port 8000
 # 配置服务（技能 / MCP 注册表）。库是同一 PG 上的 atlas_config（make up 会建）。
 config-migrate: ; uv run python -m atlas_config migrate
 config-serve:   ; ATLAS_CONFIG_ALLOW_SELF_REVIEW=true uv run python -m atlas_config serve
@@ -38,6 +38,10 @@ tf-dev:
 	@echo "TeamFlow 后端 → http://127.0.0.1:8040   前端 → http://127.0.0.1:3200"
 	@$(MAKE) -j2 tf-serve tf-web-dev
 check: lint arch test
+# 部署并滚动重启后的冒烟（Agent 评测 L0，只看硬门槛；会真实调用模型）
+smoke: ; deploy/local/smoke.sh
+# L1 回归：跑一轮 agent-baseline 并与基线（var/bench/baselines/agent-l1）配对比较
+regress: ; deploy/local/regress.sh
 
 # ---------- 前端 ----------
 web-install: ; pnpm install   # 前端 workspace（根 pnpm-workspace.yaml）

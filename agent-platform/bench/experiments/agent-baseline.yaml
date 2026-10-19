@@ -1,0 +1,19 @@
+# X1 基线（doc/agent-platform-eval-plan.html §6）：L0 + atlas-eng 首批场景，各 3 次。
+# 后续所有回归都与这份基线做配对比较；基线只在确认改进或有意改变行为时更新。
+#
+# ★ 变体配置与 agent-l0 / agent-demo 的 native-full 完全一致（同一指纹 → 复用同一个智能体）。
+# ★ concurrency 3：子智能体全局并发上限是 3（subagent_max_running），并行委派场景
+#   同时跑太多会互相挤占名额，测成「平台不让并行」。
+name: agent-baseline
+suites: [demo, atlas-eng]
+trials: 3
+concurrency: 3
+approval_policy: approve_all
+variants:
+  native-full:
+    description: 原生：文件 + Shell + 待办
+    agent:
+      system_prompt: 你在一个带 Linux 沙箱的工作区里完成用户的任务。直接动手做，做完自己验证，最后用一两句话说明结果。
+      model: {model: deepseek-chat, provider: anthropic}
+      tool_names: [filesystem, bash, write_todos]
+      limits: {max_steps: 80}

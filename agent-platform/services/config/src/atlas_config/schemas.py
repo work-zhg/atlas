@@ -1,6 +1,6 @@
 """配置服务的对外契约。
 
-★ 这是 atlas_server **唯一**允许 import 的模块（import-linter）。所以它只依赖
+★ 这是 atlas_agent **唯一**允许 import 的模块（import-linter）。所以它只依赖
   pydantic：import 它不该把 sqlalchemy / boto3 / fastapi 带进调用方。
 ★ 运行时用的模型（SkillVersionOut 等）字段只增不改；新增字段必须有默认值 ——
   运行时把它们永久缓存在磁盘上，旧缓存要能被新代码读回来。

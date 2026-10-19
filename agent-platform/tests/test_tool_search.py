@@ -85,8 +85,8 @@ async def test_block_system_message_is_preserved() -> None:
 
 
 def test_deferred_threshold() -> None:
-    from atlas_server.config import Settings
-    from atlas_server.executor.assembly import _deferred_mcp_tools
+    from atlas_agent.config import Settings
+    from atlas_agent.executor.assembly import _deferred_mcp_tools
 
     s = Settings(deferred_tools_min_count=2, deferred_tools_min_tokens=10_000)
     assert _deferred_mcp_tools([], s) == []

@@ -1,0 +1,712 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Demo：智能体怎么「挂起」又怎么「恢复」</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --border: #d1d9e0; --head: #f6f8fa;
+    --lane: #8c959f; --phase-bg: #eef2f6; --note-bg: #fff8c5; --note-bd: #d4a72c;
+    --ok: #1a7f37; --ok-bg: #dafbe1; --bad: #cf222e; --bad-bg: #ffebe9; --warn: #9a6700; --warn-bg: #fff8c5;
+    --box: #ddf4ff; --box-bd: #54aeff; --accent: #0969da;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --border: #3d444d; --head: #151b23;
+      --lane: #6e7681; --phase-bg: #1c2430; --note-bg: #2b2111; --note-bd: #9e6a03;
+      --ok: #3fb950; --ok-bg: #12261e; --bad: #f85149; --bad-bg: #2d1214; --warn: #d29922; --warn-bg: #2b2111;
+      --box: #12263f; --box-bd: #1f6feb; --accent: #4493f8;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 28px; background: var(--bg); color: var(--fg);
+         font: 15px/1.75 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif; }
+  main { max-width: 1240px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 20px; margin: 44px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 16px; margin: 24px 0 6px; }
+  .sub { color: var(--muted); margin: 0 0 18px; }
+  code { font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--head);
+         padding: 1px 5px; border-radius: 4px; }
+  pre { background: var(--head); border: 1px solid var(--border); border-radius: 6px; padding: 12px 14px;
+        overflow-x: auto; font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 14px; }
+  th, td { border: 1px solid var(--border); padding: 7px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--head); white-space: nowrap; }
+  .toc { background: var(--head); border: 1px solid var(--border); border-radius: 6px; padding: 10px 18px; }
+  .toc ol { margin: 4px 0; padding-left: 20px; }
+  .callout { border-left: 4px solid var(--accent); background: var(--head); padding: 10px 14px; margin: 14px 0;
+             border-radius: 0 6px 6px 0; }
+  .callout.warn { border-color: var(--warn); }
+  .callout.bad { border-color: var(--bad); }
+  .scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: 6px; margin: 12px 0; }
+  .caption { color: var(--muted); font-size: 13px; margin-top: -4px; }
+  /* 消息「气泡」 */
+  .msg { display: inline-block; margin: 2px 4px 2px 0; padding: 1px 8px; border-radius: 10px; border: 1px solid;
+         font: 12.5px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap; }
+  .msg.h { color: var(--accent); border-color: var(--box-bd); background: var(--box); }
+  .msg.a { color: var(--fg); border-color: var(--lane); background: var(--head); }
+  .msg.t { color: var(--ok); border-color: var(--ok); background: var(--ok-bg); }
+  .msg.s { color: var(--warn); border-color: var(--warn); background: var(--warn-bg); }
+  .msg.r { color: var(--bad); border-color: var(--bad); background: var(--bad-bg); }
+  .msg.gone { opacity: .45; text-decoration: line-through; }
+  /* SVG */
+  svg { display: block; font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif; }
+  svg text { fill: var(--fg); font-size: 12.5px; }
+  svg .lane-line { stroke: var(--lane); stroke-dasharray: 4 4; }
+  svg .lane-box { fill: var(--box); stroke: var(--box-bd); }
+  svg .lane-name { font-weight: 600; font-size: 13px; }
+  svg .lane-sub { fill: var(--muted); font-size: 11px; }
+  svg .arrow { stroke: var(--fg); stroke-width: 1.3; fill: none; }
+  svg .arrow.reply { stroke-dasharray: 5 4; }
+  svg .arrow.bad { stroke: var(--bad); }
+  svg .arrow.ok { stroke: var(--ok); }
+  svg .head { fill: var(--fg); }
+  svg .head.bad { fill: var(--bad); }
+  svg .head.ok { fill: var(--ok); }
+  svg .phase-band { fill: var(--phase-bg); }
+  svg .phase-text { font-weight: 600; font-size: 13px; }
+  svg .note-box { fill: var(--note-bg); stroke: var(--note-bd); }
+  svg .note-box.bad { fill: var(--bad-bg); stroke: var(--bad); }
+  svg .node { fill: var(--box); stroke: var(--box-bd); }
+  svg .node.term { fill: var(--head); stroke: var(--lane); }
+  svg .node.hook { fill: var(--warn-bg); stroke: var(--warn); }
+  svg .lbl { font-size: 12px; fill: var(--muted); }
+  svg .lbl.bad { fill: var(--bad); }
+  svg .lbl.ok { fill: var(--ok); }
+  svg .t-bold { font-weight: 600; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Demo：智能体怎么「挂起」又怎么「恢复」</h1>
+<p class="sub">
+  代码：<code>demo/suspend-resume/suspend_resume_state.py</code>（单文件，约 290 行）　·
+  运行：<code>.venv/bin/python demo/suspend-resume/suspend_resume_state.py</code>（不需要 API key）<br>
+  前置知识：<code>demo/state-schema/README.html</code>（state schema、reducer、<code>Command</code>）
+</p>
+
+<div class="toc">
+  <b>目录</b>
+  <ol>
+    <li><a href="#problem">要解决什么问题</a></li>
+    <li><a href="#basics">读懂这个 demo 需要的五个概念</a></li>
+    <li><a href="#idea">核心思路：一句话 + 三个要点</a></li>
+    <li><a href="#seq">完整时序图</a></li>
+    <li><a href="#snapshots">每一步存储里有什么</a></li>
+    <li><a href="#why">几个「为什么」</a></li>
+    <li><a href="#code">代码导读</a></li>
+    <li><a href="#lab">动手实验</a></li>
+    <li><a href="#gap">demo 和真实系统的差别</a></li>
+  </ol>
+</div>
+
+<!-- ================================================================== -->
+<h2 id="problem">1. 要解决什么问题</h2>
+
+<p>
+  一个「智能体」（Agent）的工作方式很朴素：<b>大模型想一步 → 调一个工具 → 看结果 → 再想一步</b>，直到它认为可以回答用户了。
+  大多数时候这个循环一口气就能跑完，但有两种情况<b>必须停下来等</b>：
+</p>
+
+<table>
+  <tr><th>场景</th><th>在等什么</th><th>可能等多久</th></tr>
+  <tr><td>人工审批</td><td>模型想删文件、发邮件……这类危险操作要先等人点「批准」</td><td>几分钟，也可能到第二天上班</td></tr>
+  <tr><td>子智能体委派</td><td>把一个子任务交给另一个智能体去做，等它的结论</td><td>可能要一个小时</td></tr>
+</table>
+
+<p>
+  让程序原地干等显然不行：进程会重启、会被调度到别的机器、会占着资源。所以我们需要：
+</p>
+<ol>
+  <li><b>挂起</b>：在「需要等」的地方干净地停下来，把该记的都记进数据库，然后进程就可以退出了。</li>
+  <li><b>恢复</b>：等的东西到了以后，<b>任何一个进程</b>都能从数据库里把现场拼回来，从停下的地方接着跑。</li>
+</ol>
+
+<p>这个 demo 用最小的场景演示整个过程：<b>用户让智能体删一个文件，删除需要人工审批</b>。</p>
+
+<!-- ================================================================== -->
+<h2 id="basics">2. 读懂这个 demo 需要的五个概念</h2>
+
+<p>没接触过 LangChain / LangGraph 也没关系，下面这五个概念就够用了。</p>
+
+<h3>① 消息（Message）：对话就是一串消息</h3>
+<p>智能体的全部「记忆」就是一个按顺序排列的消息列表，只有三种消息：</p>
+<table>
+  <tr><th>类型</th><th>谁产生的</th><th>例子</th></tr>
+  <tr><td><span class="msg h">human</span></td><td>用户</td><td>「帮我删掉 /tmp/demo.txt」</td></tr>
+  <tr><td><span class="msg a">ai</span></td><td>大模型</td><td>可以是一句回答；也可以是「我要调用工具 <code>delete_file(path=…)</code>」——这叫一个 <b>tool_call</b>，带一个编号，比如 <code>call_1</code></td></tr>
+  <tr><td><span class="msg t">tool</span></td><td>工具</td><td>工具的执行结果，比如「已删除 /tmp/demo.txt」。它会注明自己回应的是哪个编号（<code>tool_call_id=call_1</code>）</td></tr>
+</table>
+<div class="callout warn">
+  <b>一条硬规则：交给模型的消息里，每个 tool_call 都必须有且只有一条对应编号的 tool 消息</b>（一问一答，必须配对）。
+  缺了，模型厂商的 API 直接报错（HTTP 400）；同一个调用有两条结果，也会被拒绝（Atlas 的模型网关遇到过）。<br>
+  注意它约束的是<b>交给模型的那一刻</b>：图里暂时有一个没回答的 tool_call 是允许的，只要调用模型之前补上结果就行。本 demo 的挂起就是利用这一点实现的。
+</div>
+
+<h3>② 图（Graph）：把「想 → 做 → 再想」画成一张流程图</h3>
+<p>
+  LangGraph 把智能体的循环表示成一张有向图：每个方框是一个<b>节点</b>（一段代码），箭头决定下一步去哪。
+  LangChain 的 <code>create_agent()</code> 会帮你生成下面这张图，你只需要提供模型和工具：
+</p>
+
+<div class="scroll">
+<svg viewBox="0 0 960 330" width="960" height="330" role="img" aria-label="智能体的图结构">
+  <defs>
+    <marker id="g-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="head" d="M0,0 L10,5 L0,10 z"/></marker>
+    <marker id="g-ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="head bad" d="M0,0 L10,5 L0,10 z"/></marker>
+    <marker id="g-ah-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="head ok" d="M0,0 L10,5 L0,10 z"/></marker>
+  </defs>
+
+  <!-- 节点 -->
+  <rect class="node term" x="20" y="135" width="80" height="40" rx="20"/>
+  <text x="60" y="160" text-anchor="middle" class="t-bold">开始</text>
+
+  <rect class="node hook" x="150" y="125" width="170" height="60" rx="6"/>
+  <text x="235" y="150" text-anchor="middle" class="t-bold">before_model</text>
+  <text x="235" y="170" text-anchor="middle" class="lbl">调模型之前的检查点</text>
+
+  <rect class="node" x="410" y="125" width="140" height="60" rx="6"/>
+  <text x="480" y="150" text-anchor="middle" class="t-bold">model</text>
+  <text x="480" y="170" text-anchor="middle" class="lbl">调用大模型</text>
+
+  <rect class="node" x="640" y="125" width="150" height="60" rx="6"/>
+  <text x="715" y="150" text-anchor="middle" class="t-bold">tools</text>
+  <text x="715" y="170" text-anchor="middle" class="lbl">执行工具</text>
+
+  <rect class="node term" x="850" y="135" width="90" height="40" rx="20"/>
+  <text x="895" y="160" text-anchor="middle" class="t-bold">结束</text>
+
+  <!-- 普通边 -->
+  <path class="arrow" d="M100,155 L148,155" marker-end="url(#g-ah)"/>
+  <path class="arrow" d="M320,155 L408,155" marker-end="url(#g-ah)"/>
+  <text x="364" y="146" text-anchor="middle" class="lbl">默认</text>
+  <path class="arrow" d="M550,155 L638,155" marker-end="url(#g-ah)"/>
+  <text x="594" y="146" text-anchor="middle" class="lbl">要调工具</text>
+  <path class="arrow" d="M480,125 L480,85 L880,85 L880,133" marker-end="url(#g-ah)"/>
+  <text x="680" y="78" text-anchor="middle" class="lbl">模型直接给出回答</text>
+  <path class="arrow" d="M700,185 L700,235 L215,235 L215,187" marker-end="url(#g-ah)"/>
+  <text x="458" y="228" text-anchor="middle" class="lbl">工具跑完，回到 before_model（循环）</text>
+
+  <!-- jump_to 边 -->
+  <path class="arrow bad" d="M235,125 L235,40 L905,40 L905,133" marker-end="url(#g-ah-bad)" stroke-dasharray="6 4"/>
+  <text x="570" y="33" text-anchor="middle" class="lbl bad">jump_to "end"：有东西在等 → 直接结束，不调模型（挂起）</text>
+  <path class="arrow ok" d="M255,185 L255,290 L730,290 L730,187" marker-end="url(#g-ah-ok)" stroke-dasharray="6 4"/>
+  <text x="492" y="310" text-anchor="middle" class="lbl ok">jump_to "tools"：等到了 → 跳过模型，直接去执行工具（恢复）</text>
+</svg>
+</div>
+<p class="caption">黑色实线是 <code>create_agent()</code> 自带的流转；红、绿两条虚线是本 demo 用 <code>jump_to</code> 加上的「捷径」。</p>
+
+<p>
+  注意 <code>before_model</code> 的位置：<b>工具跑完以后、下一次调用模型之前，一定会经过它</b>。
+  这时候整批工具结果都已经出来了，模型还没被调用，是做「要不要继续」判断的最佳时机。
+</p>
+
+<h3>③ 中间件（Middleware）：在图的固定位置插入你自己的代码</h3>
+<p>你不用改图的结构，只要写一个中间件类，实现对应的「钩子」方法，框架会在对应时机调用它。demo 用到三个钩子：</p>
+<table>
+  <tr><th>钩子</th><th>什么时候被调用</th><th>demo 里用它做什么</th></tr>
+  <tr><td><code>before_agent(state)</code></td><td>每次 <code>invoke</code> 开头，只跑一次（上图没画，在「开始」和 before_model 之间）</td>
+    <td><code>PatchToolCallsMiddleware</code>：给被放弃的悬空 tool_call 补一条「was cancelled」</td></tr>
+  <tr><td><code>before_model(state)</code></td><td>每次调用模型之前</td>
+    <td><code>SuspensionMiddleware</code>：看 <code>waiting_on</code>，决定「正常调模型 / 跳到结束 / 跳到工具」</td></tr>
+  <tr><td><code>wrap_tool_call(request, handler)</code></td><td>每次执行工具时，把执行过程包一层</td>
+    <td><code>ApprovalMiddleware</code>：调用 <code>handler(request)</code> 就是真执行；不调用、只返回一个登记 <code>waiting_on</code> 的 <code>Command</code>，就是<b>拦下来不执行</b></td></tr>
+</table>
+
+<h3>④ jump_to：钩子可以改变「下一步去哪」</h3>
+<p>
+  <code>before_model</code> 返回 <code>{"jump_to": "end"}</code>，图就直接结束；返回 <code>{"jump_to": "tools"}</code>，就跳过模型去执行工具。
+  这就是上面那张图里的两条虚线。返回 <code>None</code> 表示不干预，按默认流程走。
+  钩子要用 <code>@hook_config(can_jump_to=[...])</code> 声明能跳去哪；子类覆盖这个钩子时要重新声明，否则 <code>jump_to</code> 会被悄悄忽略。
+</p>
+
+<h3>⑤ state：除了消息，还能放自定义字段</h3>
+<p>
+  图在运行时持有一个 <b>state</b>。<code>create_agent()</code> 默认的 state 主要就是消息列表 <code>state["messages"]</code>，
+  中间件可以通过 <b>state schema</b> 加自己的字段。本 demo 加了两个：
+</p>
+<table>
+  <tr><th>字段</th><th>内容</th><th>谁写</th><th>谁读</th></tr>
+  <tr><td><code>waiting_on</code></td><td><code>{tool_call_id: {reason, token}}</code>：哪个调用在等什么</td>
+    <td>审批中间件（挂起时登记、放行后删除）；server 续跑时交回</td><td>before_model、Patch；server 落库、过关卡</td></tr>
+  <tr><td><code>decisions</code></td><td><code>{token: "approved" / "rejected"}</code>：已经做出的审批决策</td>
+    <td>server 续跑时交进来</td><td>before_model、审批中间件</td></tr>
+</table>
+<p>
+  state 只活一次 <code>invoke</code>，下一次 <code>invoke</code> 不会自动保留。所以 server 要从返回值里取出 <code>waiting_on</code> 存进 run 表，续跑时再传回去。
+  LangGraph 官方的「暂停/恢复」方案 <b>checkpointer + interrupt</b> 会把整个图的现场序列化存起来；本 demo <b>故意不用</b>，原因见 <a href="#why-checkpointer">§6.1</a>。
+</p>
+
+<!-- ================================================================== -->
+<h2 id="idea">3. 核心思路：一句话 + 三个要点</h2>
+
+<div class="callout">
+  <b>一句话：</b>不用 checkpointer。危险工具被拦下时<b>不执行、也不写结果</b>，tool_call 留着悬空，「在等什么」登记在 state 的 <code>waiting_on</code> 里；
+  <code>before_model</code> 看到 <code>waiting_on</code> 非空就跳出图（挂起）。server 把消息和 <code>waiting_on</code> 一起落库；
+  等到结果后，把消息、<code>waiting_on</code> 和审批结果 <code>decisions</code> 一起交给一个新建的图，<code>before_model</code> 看到有了决策就跳去执行工具（恢复）。
+</div>
+
+<h3>要点 1：依据有两份，必须一起存、一起交回</h3>
+<p>
+  消息表本来就要存下来给用户看历史；<code>waiting_on</code> 记的是消息里没有的信息：哪个调用在等、等的是什么。
+  两份都是依据，缺一不可：只看消息表，只能看出 call_1 还没有结果，看不出它在等什么。
+  所以 demo 只在 <code>run_segment()</code> 一处落库、只在 <code>resume_payload()</code> 一处组装入参；真实系统里两者要在<b>同一个事务</b>里写入。
+  漏传的后果见实验 4（<a href="#lab">§8</a>）。
+</p>
+
+<h3>要点 2：悬空的 tool_call 有两种含义，靠 waiting_on 区分</h3>
+<table>
+  <tr><th>悬空的原因</th><th>例子</th><th>续跑时该怎么办</th><th>谁处理</th></tr>
+  <tr><td><b>在等</b></td><td>审批中间件挂起时故意不写结果</td><td>保持悬空，等有了决策再执行</td>
+    <td>在 <code>waiting_on</code> 里 → Patch 跳过；<code>before_model</code> 决定继续挂起还是放行</td></tr>
+  <tr><td><b>被放弃</b></td><td>进程在工具执行到一半时退出，结果没写进去</td><td>补一句「was cancelled」，让模型自己决定要不要重试</td>
+    <td>不在 <code>waiting_on</code> 里 → Patch 补上</td></tr>
+</table>
+<p>为什么 Patch 必须看 <code>waiting_on</code>，见 <a href="#why-patch">§6.3</a>。</p>
+
+<h3>要点 3：按等待原因判断能否续跑</h3>
+<p>续跑之前先过一道<b>关卡（barrier）</b>：根据 <code>waiting_on</code> 里每一项的 <code>reason</code>，去查对应的东西是不是已经有结果了。</p>
+<table>
+  <tr><th>reason</th><th>关卡条件</th><th>本 demo</th></tr>
+  <tr><td><code>approval</code></td><td>审批表里这一条不再是 <code>pending</code></td><td>已实现</td></tr>
+  <tr><td><code>delegation</code></td><td>子智能体的 run 已经跑完</td><td>没有实现，只用来说明为什么要区分 reason</td></tr>
+</table>
+<p>为什么一定要区分 reason，见 <a href="#why-reason">§6.4</a>，那里有一张「不区分就会死循环」的时序图。</p>
+
+<!-- ================================================================== -->
+<h2 id="seq">4. 完整时序图</h2>
+
+<p>
+  从左到右的参与者：<b>用户</b>；<b>Server</b>（demo 里的 <code>run_segment</code> / <code>waits_are_settled</code> / <code>resume_payload</code>）；
+  <b>存储</b>（三张表，demo 里是三个全局变量）；以及图内的三个部分：<b>中间件</b>（图入口的 Patch 和 <code>before_model</code>）、<b>模型</b>、<b>工具节点</b>。
+  虚线箭头表示返回。
+</p>
+<div class="scroll"><div id="seq-main"></div></div>
+
+<!-- ================================================================== -->
+<h2 id="snapshots">5. 每一步存储里有什么</h2>
+
+<table>
+  <tr><th>#</th><th>时刻</th><th>消息列表（从左到右按时间顺序）</th><th>waiting_on</th><th>发生了什么</th></tr>
+  <tr><td>1</td><td>段 1 开始</td>
+    <td><span class="msg h">human: 帮我删掉 /tmp/demo.txt</span></td><td>—</td>
+    <td>用户提问，写入消息表</td></tr>
+  <tr><td>2</td><td>模型返回</td>
+    <td><span class="msg h">human</span><span class="msg a">ai: tool_call delete_file (call_1)</span></td><td>—</td>
+    <td>模型决定调用工具</td></tr>
+  <tr><td>3</td><td>工具节点返回</td>
+    <td>（同上，call_1 没有 tool 消息）</td><td><code>{call_1: {approval, ap-call_1}}</code></td>
+    <td>审批中间件拦下：不执行、不写结果，只登记 <code>waiting_on</code>。审批表：<code>pending</code></td></tr>
+  <tr><td>4</td><td>段 1 结束</td>
+    <td>（原样落库）</td><td>（存进 run 表）</td>
+    <td><code>before_model</code> 看到 <code>waiting_on</code> 非空 → <code>jump_to end</code>。run 表：<code>suspended</code></td></tr>
+  <tr><td>5</td><td>续跑的入参</td>
+    <td>（原样交入，<b>不改写</b>）</td><td>（原样交回）</td>
+    <td>审批已通过，barrier 满足；另外附带 <code>decisions={ap-call_1: approved}</code></td></tr>
+  <tr><td>6</td><td>图入口 / before_model</td>
+    <td>（不变）</td><td>（不变）</td>
+    <td>Patch：call_1 在 <code>waiting_on</code> 里 → 不补；<code>before_model</code>：有决策 → <code>jump_to tools</code></td></tr>
+  <tr><td>7</td><td>工具节点返回</td>
+    <td><span class="msg h">human</span><span class="msg a">ai: call_1</span><span class="msg t">tool(call_1): 已删除 /tmp/demo.txt</span></td><td><code>{}</code></td>
+    <td>审批中间件看到 <code>approved</code> → 执行工具，同时写 <code>{call_1: None}</code>，由 reducer 删掉这一项</td></tr>
+  <tr><td>8</td><td>模型返回</td>
+    <td><span class="msg h">human</span><span class="msg a">ai: call_1</span><span class="msg t">tool(call_1)</span><span class="msg a">ai: 好的，已删除 /tmp/demo.txt。</span></td><td><code>{}</code></td>
+    <td>模型看到真实结果，给出回答。run 表：<code>done</code></td></tr>
+</table>
+
+<div class="callout">
+  从第 1 行到第 8 行，消息列表<b>只被追加，没有任何一条被改写或删除</b>；最终的消息表里也没有挂起留下的痕迹。
+  对模型而言，这就是一次普普通通的工具调用。
+</div>
+
+<!-- ================================================================== -->
+<h2 id="why">6. 几个「为什么」</h2>
+
+<h3 id="why-checkpointer">6.1 为什么不用 LangGraph 官方的 checkpointer？</h3>
+<table>
+  <tr><th></th><th>checkpointer + interrupt</th><th>本方案：消息表 + waiting_on</th></tr>
+  <tr><td>状态存在哪</td><td>checkpoint 表（图的完整现场）<b>+</b> 消息表（给用户看的历史）</td><td>消息表 + run 表里的 <code>waiting_on</code> 字段</td></tr>
+  <tr><td>两份数据会不会不一致</td><td>会。checkpoint 是整个现场的副本，上下文压缩、手动修历史以后，两份对不上，排查很难</td>
+    <td><code>waiting_on</code> 不是消息的副本，只记消息里没有的那一点信息；两者在同一个事务里写入</td></tr>
+  <tr><td>恢复需要什么</td><td>反序列化图的现场</td><td>重新建图，把消息、<code>waiting_on</code>、<code>decisions</code> 交进去，靠 <code>jump_to</code> 决定从哪继续</td></tr>
+  <tr><td>额外需要的东西</td><td>checkpoint 表、序列化兼容性（升级代码后旧存档还能不能读）</td><td>两个 state 字段 + 三个中间件</td></tr>
+</table>
+<p>
+  关键在于：<code>create_agent()</code> 这种图的现场<b>本来就只有消息列表</b>，下一步去哪也能从消息和 <code>waiting_on</code> 推断出来，
+  没有必要再存一份完整的现场。
+</p>
+
+<h3 id="why-no-placeholder">6.2 为什么挂起时不写一条占位 tool 消息？</h3>
+<p>很容易以为：工具被拦下了，也得写一条「等待审批」之类的 tool 消息，才能满足 §2 ① 的配对规则。逐条看：</p>
+<table>
+  <tr><th>以为的理由</th><th>实际情况</th></tr>
+  <tr><td>每个 tool_call 都要有结果，否则模型 API 报错</td>
+    <td>这条规则只约束<b>交给模型</b>的消息。挂起时 <code>before_model</code> 直接 <code>jump_to "end"</code>，不调模型；
+      续跑时先执行工具再调模型，模型拿到的消息是配对完整的</td></tr>
+  <tr><td>ToolNode 要求返回的 <code>Command</code> 里带一条对应的 ToolMessage</td>
+    <td>ToolNode 只检查<b>工具自己</b>返回的 <code>Command</code>，不检查 <code>wrap_tool_call</code> 的返回值，只返回 <code>waiting_on</code> 可以</td></tr>
+  <tr><td>续跑时 tool_call 必须没有结果，<code>jump_to "tools"</code> 才会执行它</td>
+    <td><code>jump_to "tools"</code> 时 ToolNode 执行最后一条 ai 消息里的<b>全部</b> tool_call，不看有没有结果（所以才有 §9 说的兄弟调用重跑问题）</td></tr>
+  <tr><td>图入口的 <code>PatchToolCallsMiddleware</code> 会给悬空的调用补「was cancelled」</td>
+    <td>Patch 先看 <code>waiting_on</code>，在等的调用不补（§6.3）</td></tr>
+</table>
+<p>写了占位反而有坏处：</p>
+<ul>
+  <li>续跑执行工具前要先把它删掉，否则同一个调用有两份结果。</li>
+  <li>续跑时如果漏传 <code>waiting_on</code>，模型会把「等待审批」当成工具的真实结果往下说。</li>
+  <li>消息表如果只追加、不整表覆盖，占位那一行会一直留在表里，还得另加去重规则。</li>
+</ul>
+
+<h3 id="why-patch">6.3 为什么 PatchToolCallsMiddleware 要看 waiting_on？</h3>
+<p>
+  Patch 是 Atlas kernel 里的中间件（deepagents 自带），本 demo 放了一个精简版。它的本职工作是<b>崩溃恢复</b>：
+  进程在工具执行到一半时退出，消息表里会留下没有结果的 tool_call，续跑时直接交给模型会 400。
+  Patch 在图入口给它补一句「was cancelled」，模型看到后自己决定要不要重试。
+</p>
+<p>本 demo 的挂起也会留下悬空的 tool_call。Patch 如果不区分，续跑时会这样（实验 5）：</p>
+<ol>
+  <li>图入口：Patch 给 call_1 补上「was cancelled」；</li>
+  <li><code>before_model</code>：call_1 有了决策 → <code>jump_to tools</code>，工具真正执行，又写了一条结果；</li>
+  <li>调用模型：call_1 有两条结果 → 400。</li>
+</ol>
+<table>
+  <tr><th>修法</th><th>评价</th></tr>
+  <tr><td>Patch 照补，<code>before_model</code> 放行时按 <code>tool_call_id</code> 把补的那条删掉</td>
+    <td>先补后删。<code>before_model</code> 必须知道 Patch 会插消息，是一个隐式依赖；
+      审批还在 pending 时如果图被调起，返回的消息里会留下一条假的「was cancelled」；每次续跑，Patch 都要把整个消息列表重写一遍</td></tr>
+  <tr><td><b>Patch 跳过 <code>waiting_on</code> 里的调用</b>（本 demo）</td>
+    <td>「悬空是在等还是被放弃」只在 Patch 一处判断；<code>before_model</code> 放行时只要 <code>jump_to "tools"</code></td></tr>
+</table>
+
+<h3 id="why-reason">6.4 为什么挂起时必须记下「等待原因」？</h3>
+<p>
+  续跑之前要问一句「等的东西有结果了吗」。<b>不同原因的判断标准完全不同</b>：委派要看「子 run 跑完没有」，审批要看「人批了没有」。
+  如果只记了凭证、没记原因，所有挂起都按委派的标准判断，那么一个审批挂起会这样：
+</p>
+<div class="scroll"><div id="seq-loop"></div></div>
+<p>
+  这就是「续跑后又挂起」的死循环：审批挂起时<b>根本没有子 run</b>，「子 run 都跑完了吗」这个问题的答案永远是「是」，关卡形同虚设。
+  记下 <code>reason</code> 后，关卡按原因分别判断，审批挂起的 run 会一直安静地等到有人做出决策。
+</p>
+<p>实验 3（<a href="#lab">§8</a>）可以在 demo 里亲眼看到「续跑后又挂起」。</p>
+
+<h3 id="why-reducer">6.5 为什么 waiting_on 要自己写 reducer？</h3>
+<pre><code>def merge_waits(old, new):
+    """按 tool_call_id 合并；值为 None 表示删除。"""
+    merged = {**(old or {}), **(new or {})}
+    return {k: v for k, v in merged.items() if v is not None}
+
+class SuspendState(AgentState):
+    # 不加可见性标注：挂起时要从返回值里取出来落库，续跑时要原样传回去
+    waiting_on: NotRequired[Annotated[dict[str, dict[str, str]], merge_waits]]
+    # 只进不出：续跑时由 server 交进来
+    decisions: NotRequired[Annotated[dict[str, str], OmitFromOutput]]</code></pre>
+<table>
+  <tr><th>写法</th><th>问题</th></tr>
+  <tr><td>不写 reducer</td><td>审批通过后写入的 <code>{call_1: None}</code> 会<b>原样覆盖</b>旧值，state 里留下 <code>{"call_1": None}</code>，
+      <code>before_model</code> 读 <code>w["token"]</code> 时报 <code>TypeError</code>（实验 6）。一批多个工具同时挂起时，还会报 <code>InvalidUpdateError</code></td></tr>
+  <tr><td><code>operator.add</code></td><td>只能往里加，审批通过后没法把这一项删掉</td></tr>
+  <tr><td><code>merge_waits</code></td><td>同一步的多个写入按 key 合并；值为 <code>None</code> 表示删除</td></tr>
+</table>
+
+<h3 id="why-decisions">6.6 为什么 decisions 只放已经决策的审批？</h3>
+<p>
+  <code>before_model</code> 只看 token 在不在 <code>decisions</code> 里，在就放行；它不认识 <code>approved</code> / <code>rejected</code> 这些值，
+  因为不同 reason 的结果长得不一样。如果把 <code>pending</code> 也放进去：<code>before_model</code> 放行 → 审批中间件发现还是 pending，
+  又登记一次 <code>waiting_on</code> → 回到 <code>before_model</code> 又放行……在图里来回跳，直到 <code>GraphRecursionError</code>（实验 3′）。
+  正常流程有关卡挡着，碰不到这种情况；但关卡一旦判断错，就是死循环而不是安静地再挂起一次。
+  所以 <code>resume_payload()</code> 只把已经决策的审批放进 <code>decisions</code>。
+</p>
+
+<!-- ================================================================== -->
+<h2 id="code">7. 代码导读</h2>
+
+<p>按阅读顺序列出：</p>
+<table>
+  <tr><th>代码</th><th>作用</th></tr>
+  <tr><td><code>MESSAGES</code> / <code>APPROVALS</code> / <code>RUN</code></td><td>代替数据库里的消息表、审批表、run 表</td></tr>
+  <tr><td><code>merge_waits</code> / <code>SuspendState</code></td><td>state schema：<code>waiting_on</code> 和 <code>decisions</code> 两个字段（§2 ⑤、§6.5）</td></tr>
+  <tr><td><code>delete_file</code></td><td>需要审批的工具（只打印，不真删）</td></tr>
+  <tr><td><code>ScriptedModel</code></td><td>假模型：最后一条是用户消息就调工具，否则汇报结果。内含一条断言，模拟 API 的配对规则：每个 tool_call 恰好一条结果</td></tr>
+  <tr><td><code>PatchToolCallsMiddleware</code></td><td>图入口：给被放弃的悬空调用补「was cancelled」，跳过 <code>waiting_on</code> 里的（§6.3）</td></tr>
+  <tr><td><code>ApprovalMiddleware</code></td><td>没批准就拦下：只登记 <code>waiting_on</code>；有了决策就执行（或返回「拒绝」），并删掉这一项</td></tr>
+  <tr><td><code>SuspensionMiddleware</code></td><td>唯一的图内判断点：等的有了决策 → 跳工具；还在等 → 跳结束</td></tr>
+  <tr><td><code>build_agent</code></td><td>每段都新建图，模拟进程已经换过</td></tr>
+  <tr><td><code>run_segment</code></td><td>跑一段，把消息和 <code>waiting_on</code> 一起落库</td></tr>
+  <tr><td><code>waits_are_settled</code></td><td>续跑前的关卡，按 reason 判断</td></tr>
+  <tr><td><code>resume_payload</code></td><td>组装续跑的入参：消息 + <code>waiting_on</code> + 已决策的 <code>decisions</code>（§6.6）</td></tr>
+  <tr><td><code>main</code></td><td>按剧本走一遍：段 1 → 等待 → 批准 → 段 2</td></tr>
+</table>
+
+<h3>正常运行的输出</h3>
+<pre><code>== 段 1：首次运行 ==
+    [model] 决定调用 delete_file
+    [approval] 需要审批，登记 waiting_on（approval=ap-call_1）
+    [before_model] waiting_on 非空 → jump_to end（不调模型）
+
+  消息表  run={'status': 'suspended', 'waiting_on': {'call_1': {'reason': 'approval', 'token': 'ap-call_1'}}}
+     human: '帮我删掉 /tmp/demo.txt'
+        ai: '' tool_calls=['delete_file']
+
+== 审批还没决策 ==
+    barrier 满足吗？False  → 不续跑，run 保持挂起
+
+== 用户点了「批准」 ==
+    barrier 满足吗？True  → 续跑
+
+== 段 2：续跑（全新的图，入参 = 消息 + waiting_on + decisions） ==
+    入参：waiting_on={'call_1': {'reason': 'approval', 'token': 'ap-call_1'}} decisions={'ap-call_1': 'approved'}
+    [patch] call_1 悬空，但在 waiting_on 里 → 是在等，不补
+    [before_model] ['call_1'] 已有决策 → jump_to tools
+    [tool] 执行删除 /tmp/demo.txt
+    [model] 汇报结果
+
+  消息表  run={'status': 'done', 'waiting_on': None}
+     human: '帮我删掉 /tmp/demo.txt'
+        ai: '' tool_calls=['delete_file']
+      tool: '已删除 /tmp/demo.txt'
+        ai: '好的，已删除 /tmp/demo.txt。'</code></pre>
+<p>
+  留意三点：段 1 里模型<b>只被调用了一次</b>（第二次被 <code>jump_to end</code> 拦住了）；
+  段 1 结束时 call_1 <b>没有 tool 消息</b>；段 2 一开始<b>没有调用模型</b>，而是直接去执行工具（被 <code>jump_to tools</code> 引过去）。
+</p>
+
+<!-- ================================================================== -->
+<h2 id="lab">8. 动手实验</h2>
+<p>每个实验只改一两处。下面的结果都是实际运行得到的。</p>
+
+<table>
+  <tr><th>#</th><th>改动</th><th>观察到的现象</th><th>说明了什么</th></tr>
+  <tr>
+    <td>1</td>
+    <td><code>main()</code> 里把 <code>APPROVALS[token] = "approved"</code> 改成 <code>"rejected"</code></td>
+    <td>段 2 没有打印 <code>[tool] 执行删除</code>；消息表变成 <code>tool: '用户拒绝了这次操作'</code>、<code>ai: '好的，用户拒绝了这次操作。'</code></td>
+    <td>拒绝走的是<b>同一条恢复路径</b>：照样跳到工具节点，只是审批中间件这次返回「拒绝」而不是执行工具</td>
+  </tr>
+  <tr>
+    <td>2</td>
+    <td><code>SuspensionMiddleware.before_model</code> 最后一行 <code>return {"jump_to": "end"}</code> 改成 <code>return None</code></td>
+    <td>段 1 直接报 <code>AssertionError: tool_call ['call_1'] 的结果不是恰好一条</code>（假模型里的断言）</td>
+    <td>不跳出的话，模型会拿到悬空的调用，真实 API 返回 400</td>
+  </tr>
+  <tr>
+    <td>3</td>
+    <td>让 <code>waits_are_settled()</code> 第一行直接 <code>return True</code>，并删掉 <code>main()</code> 里批准的那一行</td>
+    <td>段 2 的入参是 <code>decisions={}</code>，打印 <code>[before_model] waiting_on 非空 → jump_to end</code>，结束时 run 又回到 <code>suspended</code></td>
+    <td>关卡判断错误 → 续跑后立刻又挂起。demo 只续跑一次，真实系统会定时扫描挂起的 run，就成了 <a href="#why-reason">§6.4</a> 里的死循环</td>
+  </tr>
+  <tr>
+    <td>3′</td>
+    <td>同 3，并把 <code>resume_payload()</code> 里的 <code>if APPROVALS[t] != "pending"</code> 去掉</td>
+    <td>入参变成 <code>decisions={'ap-call_1': 'pending'}</code>，<code>[before_model] 已有决策 → jump_to tools</code> 和 <code>[approval] 需要审批</code> 交替刷屏，最后报 <code>GraphRecursionError</code></td>
+    <td><a href="#why-decisions">§6.6</a>：<code>decisions</code> 只能放已经决策的审批</td>
+  </tr>
+  <tr>
+    <td>4</td>
+    <td><code>resume_payload()</code> 里删掉 <code>"waiting_on": waits,</code></td>
+    <td>打印 <code>[patch] call_1 悬空，且不在 waiting_on 里 → 补 cancelled</code>；模型回答「好的，Tool call delete_file with id call_1 was cancelled.。」，
+      run 标成 <code>done</code>，<b>文件没删</b>，全程不报错</td>
+    <td>要点 1：两份依据必须一起交回。漏了 <code>waiting_on</code>，「在等」就被当成了「被放弃」</td>
+  </tr>
+  <tr>
+    <td>5</td>
+    <td><code>PatchToolCallsMiddleware.before_agent</code> 里删掉 <code>if call["id"] in waiting:</code> 那三行</td>
+    <td>段 2 报 <code>AssertionError: tool_call ['call_1'] 的结果不是恰好一条</code>：一条是补的 cancelled，一条是真实结果</td>
+    <td><a href="#why-patch">§6.3</a>：Patch 必须看 <code>waiting_on</code></td>
+  </tr>
+  <tr>
+    <td>6</td>
+    <td>去掉 <code>waiting_on</code> 的 reducer，改成 <code>NotRequired[dict[str, dict[str, str]]]</code></td>
+    <td>段 2 报 <code>TypeError: 'NoneType' object is not subscriptable</code>：<code>{call_1: None}</code> 没有被当成删除，而是覆盖进了 state</td>
+    <td><a href="#why-reducer">§6.5</a></td>
+  </tr>
+</table>
+
+<!-- ================================================================== -->
+<h2 id="gap">9. demo 和真实系统的差别</h2>
+<table>
+  <tr><th>方面</th><th>demo</th><th>真实系统</th></tr>
+  <tr><td>存储</td><td>三个全局变量，每段结束整表覆盖</td><td>数据库表，消息只追加；挂起后进程真的可以退出，由别的进程接管</td></tr>
+  <tr><td>挂起原因</td><td>只有审批</td><td>审批 + 子智能体委派</td></tr>
+  <tr><td>并行工具调用</td><td>每批只有一个调用</td><td><code>jump_to tools</code> 会把最后一条 ai 消息里的<b>所有</b> tool_call 再执行一遍，
+      已经有结果的兄弟调用要在 <code>wrap_tool_call</code> 里原样返回，避免重复执行</td></tr>
+  <tr><td>何时续跑</td><td><code>main()</code> 手动调用</td><td>审批决策、子 run 结束时主动唤醒，外加定时扫描兜底；两条路都要先过关卡</td></tr>
+  <tr><td>挂起的实现</td><td>本 demo 的方案</td><td>Atlas 已按本 demo 迁移：kernel 的 <code>PatchToolCallsMiddleware</code> 认 <code>waiting_on</code>，
+      委派也走同一套（<code>decisions</code> 里放子会话的结论，<code>SubAgentMiddleware</code> 填进 <code>task</code> 的结果）。
+      差别：<code>run.waiting_on</code> 留到 run 结束才清（续跑段可能被任意实例领取），交回图之前剪掉已有结果的项
+      （见 <code>doc/detail/suspension.html</code> 修正 13）</td></tr>
+</table>
+
+</main>
+
+<script>
+/* 极简时序图渲染：用数据描述参与者和步骤，生成 SVG。改图只改数据，不用算坐标。
+   步骤类型：
+     {phase: "标题"}                                   阶段色带
+     {from, to, text, reply?, cls?}                     消息箭头（reply = 虚线返回）
+     {self: lane, text}                                 自调用（自己内部的处理）
+     {note: [laneA, laneB], text, cls?}                 便签（text 可用 \n 换行） */
+const SVG_NS = "http://www.w3.org/2000/svg";
+let seqCount = 0;
+
+function el(tag, attrs, text) {
+  const node = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) node.setAttribute(k, v);
+  if (text != null) node.textContent = text;
+  return node;
+}
+
+function renderSeq(container, spec) {
+  const id = "s" + (++seqCount);
+  const laneW = spec.laneWidth || 180, left = 100, lineH = 16;
+  const x = {};
+  spec.lanes.forEach((l, i) => { x[l.id] = left + i * laneW; });
+  const lastLane = spec.lanes[spec.lanes.length - 1].id;
+  const width = left * 2 + (spec.lanes.length - 1) * laneW;
+  const svg = el("svg", {width, role: "img"});
+  const defs = el("defs");
+  for (const cls of ["", "bad", "ok"]) {
+    const m = el("marker", {id: `${id}-ah${cls}`, viewBox: "0 0 10 10", refX: 9, refY: 5,
+                            markerWidth: 8, markerHeight: 8, orient: "auto-start-reverse"});
+    m.appendChild(el("path", {class: "head " + cls, d: "M0,0 L10,5 L0,10 z"}));
+    defs.appendChild(m);
+  }
+  svg.appendChild(defs);
+  const back = el("g"), front = el("g");
+  svg.append(back, front);
+
+  // 参与者
+  for (const l of spec.lanes) {
+    front.appendChild(el("rect", {class: "lane-box", x: x[l.id] - 78, y: 10, width: 156, height: 46, rx: 6}));
+    front.appendChild(el("text", {class: "lane-name", x: x[l.id], y: 30, "text-anchor": "middle"}, l.name));
+    if (l.sub) front.appendChild(el("text", {class: "lane-sub", x: x[l.id], y: 47, "text-anchor": "middle"}, l.sub));
+  }
+
+  let y = 80;
+  for (const s of spec.steps) {
+    if (s.phase) {
+      back.appendChild(el("rect", {class: "phase-band", x: 0, y: y, width, height: 26}));
+      front.appendChild(el("text", {class: "phase-text", x: 12, y: y + 18}, s.phase));
+      y += 44;
+    } else if (s.note) {
+      const lines = s.text.split("\n");
+      const xs = s.note.map(n => x[n]);
+      const x0 = Math.min(...xs) - 80, x1 = Math.max(...xs) + 80;
+      const h = lines.length * lineH + 12;
+      front.appendChild(el("rect", {class: "note-box " + (s.cls || ""), x: x0, y, width: x1 - x0, height: h, rx: 4}));
+      lines.forEach((t, i) => front.appendChild(el("text", {x: x0 + 10, y: y + 18 + i * lineH}, t)));
+      y += h + 16;
+    } else if (s.self) {
+      const sx = x[s.self];
+      const onLeft = s.self === lastLane;
+      const dx = onLeft ? -28 : 28;
+      const lines = s.text.split("\n");
+      front.appendChild(el("path", {class: "arrow " + (s.cls || ""), d: `M${sx},${y} L${sx + dx},${y} L${sx + dx},${y + 14} L${sx + 2 * Math.sign(dx)},${y + 14}`,
+                                    "marker-end": `url(#${id}-ah${s.cls || ""})`}));
+      lines.forEach((t, i) => front.appendChild(el("text", {
+        x: sx + dx + (onLeft ? -6 : 6), y: y + 12 + i * lineH, "text-anchor": onLeft ? "end" : "start"}, t)));
+      y += 22 + lines.length * lineH;
+    } else {
+      const x1 = x[s.from], x2 = x[s.to];
+      const lines = s.text.split("\n");
+      lines.forEach((t, i) => front.appendChild(el("text", {
+        x: (x1 + x2) / 2, y: y + i * lineH, "text-anchor": "middle"}, t)));
+      const ay = y + (lines.length - 1) * lineH + 8;
+      const end = x2 + (x2 > x1 ? -2 : 2);
+      front.appendChild(el("path", {class: "arrow " + (s.reply ? "reply " : "") + (s.cls || ""),
+                                    d: `M${x1},${ay} L${end},${ay}`, "marker-end": `url(#${id}-ah${s.cls || ""})`}));
+      y = ay + 26;
+    }
+  }
+  const height = y + 10;
+  for (const l of spec.lanes) {
+    back.appendChild(el("line", {class: "lane-line", x1: x[l.id], y1: 56, x2: x[l.id], y2: height}));
+  }
+  svg.setAttribute("height", height);
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  container.appendChild(svg);
+}
+
+renderSeq(document.getElementById("seq-main"), {
+  laneWidth: 190,
+  lanes: [
+    {id: "user", name: "用户"},
+    {id: "srv", name: "Server", sub: "run_segment / barrier"},
+    {id: "db", name: "存储", sub: "消息表 · 审批表 · run 表"},
+    {id: "mw", name: "中间件", sub: "Patch / before_model"},
+    {id: "model", name: "模型", sub: "ScriptedModel"},
+    {id: "tools", name: "工具节点", sub: "审批中间件 + delete_file"},
+  ],
+  steps: [
+    {phase: "段 1：首次运行"},
+    {from: "user", to: "srv", text: "帮我删掉 /tmp/demo.txt"},
+    {from: "srv", to: "db", text: "消息表写入 human"},
+    {self: "srv", text: "build_agent()：新建一个图"},
+    {from: "srv", to: "mw", text: "invoke({messages: [human]})"},
+    {self: "mw", text: "Patch：没有悬空的调用 → 不补\nbefore_model：waiting_on 为空 → 不干预"},
+    {from: "mw", to: "model", text: "调用模型"},
+    {from: "model", to: "tools", text: "ai：tool_call delete_file (call_1)"},
+    {self: "tools", text: "ApprovalMiddleware：decisions 里没有\n→ 不执行工具，也不写结果"},
+    {from: "tools", to: "db", text: "审批表：ap-call_1 = pending"},
+    {from: "tools", to: "mw", text: "Command{ waiting_on: {call_1: {approval, ap-call_1}} }\ncall_1 悬空"},
+    {self: "mw", text: "before_model：waiting_on 非空\n→ jump_to \"end\"（不调模型）", cls: "bad"},
+    {from: "mw", to: "srv", text: "返回 {messages, waiting_on}", reply: true},
+    {from: "srv", to: "db", text: "两样一起落库：消息表 + run.waiting_on\nrun：suspended"},
+    {note: ["srv", "tools"], text: "到这里进程就可以退出了：内存里什么都没留，所有状态都在存储里。\n消息表只能看出 call_1 还没有结果；能说明「call_1 在等审批 ap-call_1」的只有 run.waiting_on。"},
+
+    {phase: "等待：可能是几分钟，也可能是第二天"},
+    {from: "srv", to: "db", text: "barrier：读 waiting_on → reason=approval\n→ 查审批表 ap-call_1"},
+    {from: "db", to: "srv", text: "pending → 不满足，不续跑", reply: true},
+    {from: "user", to: "srv", text: "点击「批准」"},
+    {from: "srv", to: "db", text: "审批表：ap-call_1 = approved"},
+    {from: "srv", to: "db", text: "barrier 再查一次"},
+    {from: "db", to: "srv", text: "approved → 满足，可以续跑", reply: true, cls: "ok"},
+
+    {phase: "段 2：续跑（任何进程都可以接手）"},
+    {from: "srv", to: "db", text: "读消息表 + run.waiting_on + 审批表"},
+    {self: "srv", text: "resume_payload()：消息原样不动\n+ waiting_on + decisions={ap-call_1: approved}"},
+    {self: "srv", text: "build_agent()：再新建一个图"},
+    {from: "srv", to: "mw", text: "invoke({messages, waiting_on, decisions})"},
+    {self: "mw", text: "Patch：call_1 悬空，但在 waiting_on 里\n→ 是在等，不补 cancelled"},
+    {self: "mw", text: "before_model：ap-call_1 在 decisions 里\n→ jump_to \"tools\"（跳过模型）", cls: "ok"},
+    {from: "mw", to: "tools", text: "执行悬空的 call_1"},
+    {self: "tools", text: "ApprovalMiddleware：ap-call_1 已批准\n→ 放行，delete_file 真正执行"},
+    {from: "tools", to: "mw", text: "Command{ messages: +[tool 已删除 /tmp/demo.txt],\nwaiting_on: {call_1: None} }"},
+    {self: "mw", text: "before_model：merge_waits 删掉 call_1\n→ waiting_on 为空 → 不干预"},
+    {from: "mw", to: "model", text: "调用模型"},
+    {from: "model", to: "srv", text: "ai：好的，已删除 /tmp/demo.txt。图结束", reply: true},
+    {from: "srv", to: "db", text: "消息表落库；run：done，waiting_on 清空"},
+    {from: "srv", to: "user", text: "好的，已删除 /tmp/demo.txt。", reply: true},
+  ],
+});
+
+renderSeq(document.getElementById("seq-loop"), {
+  laneWidth: 200,
+  lanes: [
+    {id: "srv", name: "Server", sub: "barrier / resume_payload"},
+    {id: "run", name: "run 表"},
+    {id: "ap", name: "审批表"},
+    {id: "g", name: "图", sub: "中间件 + 工具节点"},
+  ],
+  steps: [
+    {phase: "反例：waiting_on 只记 token，不记 reason"},
+    {from: "g", to: "srv", text: "审批挂起，图结束", reply: true},
+    {from: "srv", to: "run", text: "waiting_on = {call_1: ap-call_1}（没有 reason）"},
+    {phase: "loop：无限重复"},
+    {from: "srv", to: "run", text: "barrier：不知道在等什么，只好按委派判断\n「这个 run 还有没跑完的子 run 吗？」"},
+    {from: "run", to: "srv", text: "没有子 run → 满足！", reply: true, cls: "bad"},
+    {from: "srv", to: "ap", text: "组装 decisions：ap-call_1 是什么状态？"},
+    {from: "ap", to: "srv", text: "还是 pending（人还没批）→ 不放进 decisions", reply: true},
+    {from: "srv", to: "g", text: "续跑", cls: "bad"},
+    {self: "g", text: "waiting_on 非空、没有决策 → jump_to end"},
+    {from: "g", to: "srv", text: "又挂起了", reply: true, cls: "bad"},
+    {note: ["srv", "g"], cls: "bad", text: "审批挂起时根本没有子 run，「子 run 都跑完了吗」永远回答「是」。\n于是：续跑 → 挂起 → 续跑 → 挂起……白白消耗资源，日志刷屏。\n修复：waiting_on 记成 {call_1: {reason: \"approval\", token: \"ap-call_1\"}}，barrier 按 reason 去查审批表。"},
+  ],
+});
+</script>
+</body>
+</html>

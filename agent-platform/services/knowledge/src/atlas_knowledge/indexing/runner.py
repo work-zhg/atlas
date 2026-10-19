@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from typing import Any
@@ -27,11 +28,19 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from ..db.models import ChildChunk, Dataset, Document, ProcessRule, Segment
 from ..db.types import utcnow
 from ..rag import index_processor
-from ..rag.extractor import extract
+from ..rag.docir import DocIR
+from ..rag.enhance import (
+    apply_llm_context,
+    enhance,
+    normalize_enhancements,
+    tables_of,
+)
 from ..rag.models import Document as RagDocument
+from ..rag.parsers import parse
 from ..runtime import Runtime
 from ..telemetry import tracer
-from .loader import index_segments
+from .loader import index_segments, sync_doc_payload
+from .versions import stores
 
 __all__ = ["DocumentPaused", "IndexingRunner", "is_paused", "pause_key"]
 
@@ -122,16 +131,45 @@ class IndexingRunner:
             await self._check_pause(doc_uuid)
             await self._set(doc_uuid, indexing_status="parsing")
             with tracer().start_as_current_span("knowledge.ingest.parse") as span:
-                parsed = await self._extract(doc)
-                span.set_attribute("knowledge.pages", len(parsed))
-                span.set_attribute("knowledge.chars", sum(len(d.page_content) for d in parsed))
-            await self._set(doc_uuid, indexing_status="splitting", parsing_completed_at=utcnow())
+                ir = await self._extract(doc, rule.rules.get("parser") or "auto")
+                span.set_attribute("knowledge.parser", str(ir.meta.get("parser", "")))
+                span.set_attribute("knowledge.blocks", len(ir.blocks))
+                span.set_attribute("knowledge.images", len(ir.images))
+                docir_key = await self._store_docir(doc, ir)
+            review: dict[str, Any] = {}
+            report = ir.report or {}
+            if (
+                self._rt.settings.parse_review
+                and report.get("needs_review")
+                and doc.review_status == "none"
+            ):
+                # 解析质量有严重问题：先进待审核（不参与检索），人看过预览再放行（§4.7）
+                review = {
+                    "review_status": "pending",
+                    "review_note": "解析质量待确认：" + "；".join(report.get("warnings") or []),
+                }
+            await self._set(
+                doc_uuid,
+                indexing_status="splitting",
+                parsing_completed_at=utcnow(),
+                parse_report=report or None,
+                docir_key=docir_key,
+                **review,
+            )
 
             await self._check_pause(doc_uuid)
             with tracer().start_as_current_span("knowledge.ingest.split") as span:
                 span.set_attribute("knowledge.doc_form", doc.doc_form)
+                embedder = await asyncio.to_thread(
+                    self._rt.registry.embedding, ds.embedding_provider, ds.embedding_model
+                )
                 nodes = await asyncio.to_thread(
-                    index_processor.transform, parsed, doc_form=doc.doc_form, rules=rule.rules
+                    index_processor.transform_ir,
+                    ir,
+                    doc_form=doc.doc_form,
+                    rules=rule.rules,
+                    embed=embedder.embed_documents,
+                    doc_title=index_processor.doc_title_of(ir, doc.name),
                 )
                 span.set_attribute("knowledge.segments", len(nodes))
                 span.set_attribute(
@@ -139,6 +177,22 @@ class IndexingRunner:
                 )
             if not nodes:
                 raise RuntimeError("没有解析出任何文本内容")
+            with tracer().start_as_current_span("knowledge.ingest.enhance") as span:
+                stats = await enhance(
+                    nodes,
+                    full_text=ir.plain_text(),
+                    tables=tables_of(ir),
+                    cfg=normalize_enhancements(ds.enhancements),
+                    llm=self._rt.llm,
+                    redis=self._rt.redis,
+                    doc_chars=self._rt.settings.contextual_doc_chars,
+                    concurrency=self._rt.settings.llm_concurrency,
+                )
+                apply_llm_context(nodes)
+                for k, v in stats.items():
+                    span.set_attribute(f"knowledge.enhance.{k}", v)
+            if any(stats.values()):
+                await self._set(doc_uuid, parse_report={**(ir.report or {}), "enhance": stats})
             with tracer().start_as_current_span("knowledge.ingest.save"):
                 await self._save(doc, nodes)
 
@@ -161,22 +215,73 @@ class IndexingRunner:
             doc2.word_count = int(word_count or 0)
             doc2.indexing_latency = round(time.monotonic() - started, 3)
             await s.commit()
+            if doc2.version_group is not None and doc2.is_current:
+                await self._supersede(s, ds, doc2)
 
-    async def _extract(self, doc: Document) -> list[RagDocument]:
+    async def _supersede(self, s: AsyncSession, ds: Dataset, doc: Document) -> None:
+        """新版本入库完成：同组的其他当前版本被取代（§7.5）。
+
+        旧版本的失效时间截止到新版本生效（没有生效时间就是现在）—— 按时间点（as_of）检索时，
+        时间点落在哪个版本的生效区间就返回哪个版本。
+        """
+        olds = (
+            await s.scalars(
+                select(Document).where(
+                    Document.version_group == doc.version_group,
+                    Document.uuid != doc.uuid,
+                    Document.is_current.is_(True),
+                )
+            )
+        ).all()
+        if not olds:
+            return
+        cutoff = doc.valid_from or utcnow()
+        for old in olds:
+            old.is_current = False
+            if old.valid_to is None or old.valid_to > cutoff:
+                old.valid_to = cutoff
+        # 新版本从切换时刻起生效：按切换之前的时间点检索只看到旧版本
+        doc.valid_from = cutoff
+        await s.flush()
+        for d in [*olds, doc]:
+            await sync_doc_payload(s, self._rt, ds, d)
+        await s.commit()
+
+    async def _extract(self, doc: Document, parser: str = "auto") -> DocIR:
         info = doc.data_source_info
         if doc.data_source_type != "upload_file":
             raise RuntimeError(f"暂不支持的数据源：{doc.data_source_type}")
         data = await asyncio.to_thread(self._rt.storage.get, info["object_key"])
-        return await asyncio.to_thread(extract, info.get("filename") or doc.name, data)
+        return await asyncio.to_thread(parse, info.get("filename") or doc.name, data, parser)
+
+    async def _store_docir(self, doc: Document, ir: DocIR) -> str:
+        """图片写对象存储（块上填 asset），再把 DocIR 存下来（解析预览、换分段规则时复用）。
+
+        ★ 与原文件同一前缀（{oss_prefix}/{库}/{文档}/）：删文档时一并清掉。
+        """
+        base = f"{self._rt.settings.oss_prefix}/{doc.dataset_uuid}/{doc.uuid}"
+        storage = self._rt.storage
+        for block in ir.blocks:
+            image_id = block.attrs.get("image_id")
+            if block.type != "image" or not image_id or image_id not in ir.images:
+                continue
+            data, mime = ir.images[image_id]
+            ext = {"image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp"}.get(mime, "png")
+            key = f"{base}/assets/{image_id}.{ext}"
+            await asyncio.to_thread(storage.put, key, data, mime)
+            block.asset = key
+        key = f"{base}/docir.json"
+        body = json.dumps(ir.to_json(), ensure_ascii=False).encode("utf-8")
+        await asyncio.to_thread(storage.put, key, body, "application/json")
+        return key
 
     async def _save(self, doc: Document, nodes: list[RagDocument]) -> None:
         """清掉旧分段与旧向量，写新分段。一个事务。"""
         async with self._sm() as s:
             ds = await s.scalar(select(Dataset).where(Dataset.uuid == doc.dataset_uuid))
             assert ds is not None
-            await self._rt.vectors.for_collection(ds.collection_name).delete_by_document(
-                str(doc.uuid)
-            )
+            for store in await stores(s, self._rt, ds):
+                await store.delete_by_document(str(doc.uuid))
             await s.execute(delete(ChildChunk).where(ChildChunk.document_uuid == doc.uuid))
             await s.execute(delete(Segment).where(Segment.document_uuid == doc.uuid))
             for pos, node in enumerate(nodes, start=1):
@@ -187,6 +292,8 @@ class IndexingRunner:
                     position=pos,
                     content=node.page_content,
                     title_path=node.metadata.get("title_path") or None,
+                    source_locator=node.metadata.get("source_locator") or None,
+                    context=node.metadata.get("context") or None,
                     word_count=len(node.page_content),
                     status="waiting",
                     created_by=doc.created_by,
@@ -202,6 +309,7 @@ class IndexingRunner:
                             position=cpos,
                             content=child.page_content,
                             context=child.metadata.get("context") or None,
+                            type=child.metadata.get("type") or "automatic",
                             word_count=len(child.page_content),
                             created_by=doc.created_by,
                         )

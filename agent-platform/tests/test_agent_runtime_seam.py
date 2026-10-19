@@ -12,8 +12,8 @@ from __future__ import annotations
 
 import inspect
 
-from atlas_server.executor import inprocess
-from atlas_server.executor.runtime import AgentRuntime, NativeRuntime, select_runtime
+from atlas_agent.executor import inprocess
+from atlas_agent.executor.runtime import AgentRuntime, NativeRuntime, select_runtime
 
 
 def test_native_runtime_satisfies_the_protocol_structurally() -> None:

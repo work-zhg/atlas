@@ -16,7 +16,7 @@ import pytest
 from atlas_engine.contracts import EDIT_MAX_BYTES, FilesystemProtocol
 from moto import mock_aws
 
-from atlas_server.providers.filesystem.oss import (
+from atlas_agent.providers.filesystem.oss import (
     READ_MAX_BYTES,
     OssFilesystem,
     PathEscape,
@@ -396,7 +396,7 @@ def test_subagent_skills_land_under_its_own_thread_prefix(s3) -> None:
     """
     import asyncio
 
-    from atlas_server.providers.filesystem.skill_copy import SkillMeta, seed_session_skills
+    from atlas_agent.providers.filesystem.skill_copy import SkillMeta, seed_session_skills
 
     s3.put_object(Bucket=BUCKET, Key="_skills/dataviz/1/SKILL.md", Body=b"v1")
 

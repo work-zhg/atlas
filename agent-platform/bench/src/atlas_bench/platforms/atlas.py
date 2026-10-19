@@ -5,8 +5,9 @@
     检索    POST /v1/datasets/{id}/hit-testing（可逐次指定检索设置：同一个库能评多种检索方式）
     清理    DELETE /v1/datasets/{id}
 
-身份：评测专用服务账号（Bearer atlas_sk_…，需 kb:create）。建的库都是「仅自己可见」，
-库名 bench:<数据集>:<语料与入库配置的指纹>，评测完可以按前缀整体清理。
+身份：内网免令牌（内网身份传递 §12）—— 请求头 X-Uid = 评测用户 atlas-bench（需 kb:create），
+X-Caller-App: bench。建的库 OWNER 是它，库名 bench:<数据集>:<语料与入库配置的指纹>，评测完
+可以按前缀整体清理。
 """
 
 from __future__ import annotations
@@ -44,12 +45,16 @@ class AtlasPlatform:
     name = "atlas"
 
     def __init__(
-        self, base_url: str, api_key: str, *, transport: httpx.AsyncBaseTransport | None = None
+        self,
+        base_url: str,
+        headers: dict[str, str],
+        *,
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._base = base_url.rstrip("/")
         self._c = httpx.AsyncClient(
             base_url=self._base,
-            headers={"Authorization": f"Bearer {api_key}"},
+            headers=headers,
             timeout=120.0,
             trust_env=False,
             transport=transport,
@@ -113,6 +118,8 @@ class AtlasPlatform:
         }
         if ingest.get("embedding_model"):
             body["embedding_model"] = ingest["embedding_model"]
+        if ingest.get("enhancements"):  # 入库增强：上下文补全 L2、表格摘要
+            body["enhancements"] = ingest["enhancements"]
         ds = await self._req("POST", "/v1/datasets", json=body)
 
         process_rule = ingest.get("process_rule")

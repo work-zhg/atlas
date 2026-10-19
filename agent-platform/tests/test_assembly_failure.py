@@ -15,12 +15,12 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from atlas_agent.domain.events import EventType
+from atlas_agent.domain.spec import AgentSpec, ModelSpec
+from atlas_agent.executor.runtime import NativeRuntime
+from atlas_agent.memory.tool import MemoryUnavailable
+from atlas_agent.providers.mcp import MissingTool
 from atlas_engine.contracts import InvalidSpec
-from atlas_server.domain.events import EventType
-from atlas_server.domain.spec import AgentSpec, ModelSpec
-from atlas_server.executor.runtime import NativeRuntime
-from atlas_server.memory.tool import MemoryUnavailable
-from atlas_server.providers.mcp import MissingTool
 
 SPEC = AgentSpec(
     slug="a",

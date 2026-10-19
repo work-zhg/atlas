@@ -8,6 +8,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from ..auth import IdentityHeadersMiddleware
 from ..errors import KnowledgeError
 from ..runtime import Runtime, build_runtime
 from ..settings import get_settings
@@ -52,6 +53,8 @@ def create_app(*, runtime: Runtime | None = None, cors_origins: list[str] | None
 
     # 取请求头里的 traceparent：检索 span 挂在 atlas-server 那次调用之下
     trace_requests(app)
+    # 身份请求头透传：本请求里调用户中心 / atlas-server 都带上（auth.py）
+    app.add_middleware(IdentityHeadersMiddleware)
 
     @app.exception_handler(KnowledgeError)
     async def _error(_: Request, exc: KnowledgeError) -> JSONResponse:

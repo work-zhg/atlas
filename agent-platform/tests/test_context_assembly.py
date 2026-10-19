@@ -6,8 +6,8 @@ from typing import Any, ClassVar
 from uuid import uuid4
 
 import pytest
-from atlas_server.config import Settings
-from atlas_server.executor import context as ctx
+from atlas_agent.config import Settings
+from atlas_agent.executor import context as ctx
 
 _BASE = {"database_url": "postgresql+asyncpg://x:y@localhost/z", "litellm_key": "k"}
 
@@ -124,7 +124,7 @@ async def test_memory_attachment_skips(
 
 
 def test_extract_summary_falls_back_to_unclosed_analysis() -> None:
-    from atlas_server.services.compaction import _extract_summary
+    from atlas_agent.services.compaction import _extract_summary
 
     assert _extract_summary("<analysis>草稿</analysis>\n<summary>正文</summary>") == "正文"
     assert _extract_summary("<analysis>草稿</analysis>\n直接写的摘要") == "直接写的摘要"
@@ -134,7 +134,7 @@ def test_extract_summary_falls_back_to_unclosed_analysis() -> None:
 
 
 def test_summarizer_model_treats_legacy_default_as_unset() -> None:
-    from atlas_server.domain.spec import resolve_summarizer_model
+    from atlas_agent.domain.spec import resolve_summarizer_model
 
     assert resolve_summarizer_model("", "deepseek-chat") == "deepseek-chat"
     assert resolve_summarizer_model(None, "deepseek-chat") == "deepseek-chat"

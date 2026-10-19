@@ -1,0 +1,43 @@
+# 知识库企业级能力（doc/knowledge-enterprise-design.html §5 / §7）在样例集上的对照。
+#
+#   structure   基线：父子分段 · 按标题 + 纯语义检索（当前默认，L1 上下文已默认开）
+#   enhanced    入库增强：L2 上下文补全 + 表格摘要入口
+#   query       查询理解：多查询 + HyDE（RRF 合并）
+#   full        入库增强 + 混合检索 + 多查询 + MMR
+#
+# ★ 样例集只有 20 题、按标题分段已接近饱和：用来确认新能力不退化、流程走通，不能作为提升幅度的结论。
+name: enterprise-增强与查询理解
+datasets: [demo-zh]
+split: all
+top_k: 3
+repeats: 1
+concurrency: 4
+generation: unified
+generator_model: deepseek-flash
+judge_model: deepseek-v4-pro
+generation_metrics: [crag, refusal, ragas_faithfulness, ragas_factual_correctness]
+platforms:
+  - adapter: atlas
+    variants:
+      structure:
+        ingest: {doc_form: hierarchical_model}
+        retrieval: {search_method: semantic_search}
+      enhanced:
+        ingest:
+          doc_form: hierarchical_model
+          enhancements: {contextual: true, table_summary: true, table_summary_min_rows: 4}
+        retrieval: {search_method: semantic_search}
+      query:
+        ingest: {doc_form: hierarchical_model}
+        retrieval: {search_method: semantic_search, multi_query: true, hyde: true}
+      full:
+        ingest:
+          doc_form: hierarchical_model
+          enhancements: {contextual: true, table_summary: true, table_summary_min_rows: 4}
+        retrieval:
+          search_method: hybrid_search
+          reranking_enable: true
+          reranking_mode: weighted_score
+          weights: {vector_setting: {vector_weight: 0.7}, keyword_setting: {keyword_weight: 0.3}}
+          multi_query: true
+          mmr_enable: true

@@ -12,10 +12,12 @@
 !agent-platform/libs/jsonrpc/
 !agent-platform/libs/host/
 !agent-platform/libs/engine/
-!agent-platform/services/cluster/
+!infra-platform/services/cluster/
 !agent-platform/services/config/
 !agent-platform/services/knowledge/
-!agent-platform/services/server/
+!agent-platform/services/agent/
+!usercenter/services/usercenter/
+!teamflow/services/teamflow/
 **/__pycache__/
 **/*.pyc
 .venv/

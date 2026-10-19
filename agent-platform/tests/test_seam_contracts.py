@@ -7,35 +7,26 @@
 
 from __future__ import annotations
 
+from atlas_agent.domain.tool_registry import SUBAGENT_TOOL
 from atlas_engine import contracts
-from atlas_server.domain.tool_registry import SUBAGENT_TOOL
-
-
-class _NullGateway:
-    async def delegate(self, task: str, name: str, *, fresh: bool = False) -> str:
-        return ""
 
 
 def test_task_tool_name_matches_the_event_discriminator() -> None:
-    """kernel 造出的委派工具名必须等于 runner 的事件判别常量。
+    """kernel 造出的 task 工具名必须等于 runner 的事件判别常量。
 
-    runner 靠 `call["name"] == SUBAGENT_TOOL` 区分「委派」与「普通工具调用」。
+    runner 靠 `call["name"] == SUBAGENT_TOOL` 区分「派 SubAgent」与「普通工具调用」。
     该常量现已单一来源于 kernel/middleware/subagents.py（tool_registry 只
     re-export）——这条测试从「钉双写」降级为回归钉：谁在工具构造里重新
     写死字符串，这里立刻红。
     """
-    from atlas_engine.kernel.middleware.subagents import _build_delegating_task_tool
+    from atlas_engine.kernel.middleware.subagents import _build_task_tool
 
-    tool = _build_delegating_task_tool(
-        [{"name": "coder", "description": "写代码", "system_prompt": "x"}],
-        _NullGateway(),
-        None,
-    )
+    tool = _build_task_tool([{"name": "coder", "description": "写代码", "system_prompt": "x"}])
     assert tool.name == SUBAGENT_TOOL
 
 
-def test_delegation_protocol_is_published_from_one_place() -> None:
-    """kernel 用的 DelegationProtocol 必须**就是** contracts 里定义的那一个。
+def test_spawner_protocol_is_published_from_one_place() -> None:
+    """kernel 用的 SubAgentSpawner 必须**就是** contracts 里定义的那一个。
 
     历史教训：`Delegate` 类型曾在 hooks.py 与 kernel 各写一份，内容相同、
     没有任何东西拴着。现在定义唯一地住在 contracts —— 这条断言防的是
@@ -43,7 +34,7 @@ def test_delegation_protocol_is_published_from_one_place() -> None:
     """
     from atlas_engine.kernel.middleware import subagents
 
-    assert contracts.DelegationProtocol is subagents.DelegationProtocol
+    assert contracts.SubAgentSpawner is subagents.SubAgentSpawner
 
 
 def test_subagent_service_satisfies_the_protocol() -> None:
@@ -53,11 +44,11 @@ def test_subagent_service_satisfies_the_protocol() -> None:
     from types import SimpleNamespace
     from uuid import uuid4
 
-    from atlas_server.domain.spec import AgentSpec, ModelSpec
-    from atlas_server.services.subagent import SubagentService
+    from atlas_agent.domain.spec import AgentSpec, ModelSpec
+    from atlas_agent.services.subagent import SubAgentService
 
     thread = SimpleNamespace(id=uuid4(), agent_id=uuid4(), created_by=uuid4())
-    service = SubagentService(
+    service = SubAgentService(
         None,  # type: ignore[arg-type] — isinstance 只查方法，不会真跑
         None,  # type: ignore[arg-type]
         None,  # type: ignore[arg-type]
@@ -69,23 +60,18 @@ def test_subagent_service_satisfies_the_protocol() -> None:
         ),
         agent_version_id=uuid4(),
     )
-    assert isinstance(service, contracts.DelegationProtocol)
+    assert isinstance(service, contracts.SubAgentSpawner)
 
 
 def test_runner_state_keys_exist_in_kernel_schemas() -> None:
     """runner 模式匹配的状态键必须在 kernel 的状态 schema 里真实存在。
 
-    runner.py::_from_updates 用 `payload.get("todos")` / `payload.get("files")`
-    推导 todos.updated 与 file.written 事件 —— 这是 runner 与 kernel 之间
-    一份**没有类型的隐式契约**。kernel（或上游 langchain）改键名的后果
-    同样是事件静默消失。
+    runner.py::_from_updates 用 `payload.get("todos")` 推导 todos.updated 事件 ——
+    这是 runner 与上游 langchain 之间一份**没有类型的隐式契约**，改键名的后果
+    是事件静默消失。（file.written 不走 state：文件在对象存储，由
+    FilesystemMiddleware 经 custom stream 补发，见 test_tool_gating。）
     """
     from langchain.agents.middleware import TodoListMiddleware
-
-    from atlas_engine.kernel.middleware.filesystem import FilesystemMiddleware
-
-    fs_keys = FilesystemMiddleware(backend=None).state_schema.__annotations__
-    assert "files" in fs_keys, "kernel 的文件状态键变了，runner 的 file.written 会静默消失"
 
     todo_keys = TodoListMiddleware().state_schema.__annotations__
     assert "todos" in todo_keys, "上游的待办状态键变了，runner 的 todos.updated 会静默消失"

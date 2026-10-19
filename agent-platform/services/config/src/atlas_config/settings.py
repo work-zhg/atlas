@@ -68,18 +68,15 @@ class ConfigSettings(BaseSettings):
         default="us-east-1", validation_alias=_alias("ATLAS_CONFIG_OSS_REGION", "OSS_REGION")
     )
 
-    # ── 认证 ────────────────────────────────────────────────────────────
-    #: 运行时调 /internal/* 用的共享令牌。空 = 不校验（仅本机开发，启动时告警）。
-    internal_token: SecretStr | None = None
-    #: dev = 读 X-User-Id（缺省 default_user），操作码全有；
-    #: uc  = 浏览器带来的 Atlas 登录会话（Cookie atlas_session），交给 atlas-server 校验
-    #:       （权限设计 §9：浏览器直连本服务，但不在这里维护登录）
+    # ── 认证（内网身份传递 §3；见 auth.py）────────────────────────────────
+    #: dev = 缺 X-Uid 用 default_user，操作码全有；
+    #: uc  = 缺 X-Uid 一律 401；操作码按 X-Auth-Uid 取用户中心授权快照
     auth_mode: Literal["dev", "uc"] = "dev"
-    #: atlas-server 地址（uc 模式校验会话用；凭据是上面的 internal_token）
-    server_url: str = "http://127.0.0.1:8000"
-    #: 会话校验结果的缓存时间（权限收回最多滞后这么久）
-    introspect_ttl_s: float = 30.0
-    #: 没带 X-User-Id 时的身份（dev 模式，与运行时同规则）
+    #: 用户中心开放接口（uc 模式取授权快照）。内网免令牌：X-Caller-App: atlas 即应用身份
+    uc_base_url: str = "http://127.0.0.1:8030"
+    #: 授权快照的缓存时间（权限收回最多滞后这么久）
+    authz_ttl_s: float = 30.0
+    #: 没带 X-Uid 时的身份（dev 模式，与运行时同规则）
     default_user: str = "local-dev"
     #: 允许上传人审查自己的技能。★ 默认关：四眼原则（设计 §5.2）。
     #: 本机单人开发时可以打开。

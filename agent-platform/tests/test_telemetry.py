@@ -16,10 +16,10 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import pytest
-from atlas_server.domain.events import EventFactory, EventType, TraceEvent
-from atlas_server.domain.spec import AgentSpec, CliSpec, ModelSpec
-from atlas_server.telemetry import semconv as sc
-from atlas_server.telemetry.run_trace import RunTrace
+from atlas_agent.domain.events import EventFactory, EventType, TraceEvent
+from atlas_agent.domain.spec import AgentSpec, CliSpec, ModelSpec
+from atlas_agent.telemetry import semconv as sc
+from atlas_agent.telemetry.run_trace import RunTrace
 
 RUN_ID = UUID("77777777-7777-7777-7777-777777777777")
 THREAD_ID = UUID("88888888-8888-8888-8888-888888888888")
@@ -34,7 +34,7 @@ def spans():
       重复设置会打警告并忽略。所以这里用**自己的** tracer provider，通过
       monkeypatch 把 telemetry.tracer 指过去 —— 测试之间互不影响。
     """
-    from atlas_server.telemetry import make_id_generator
+    from atlas_agent.telemetry import make_id_generator
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -49,8 +49,8 @@ def spans():
 @pytest.fixture
 def traced(spans, monkeypatch):
     provider, exporter = spans
-    import atlas_server.telemetry as telemetry
-    import atlas_server.telemetry.run_trace as run_trace_mod
+    import atlas_agent.telemetry as telemetry
+    import atlas_agent.telemetry.run_trace as run_trace_mod
 
     monkeypatch.setattr(telemetry, "tracer", lambda: provider.get_tracer("test"))
     monkeypatch.setattr(run_trace_mod, "tracer", lambda: provider.get_tracer("test"), raising=False)
@@ -99,14 +99,14 @@ def test_disabled_setup_installs_nothing() -> None:
     opentelemetry-api 在没有 SDK 时是 no-op，所以埋点处才敢不写 if。
     这条要是破了，「关着的时候零开销」这个前提就没了。
     """
-    from atlas_server.config import Settings
-    from atlas_server.telemetry import setup_telemetry, shutdown_telemetry
+    from atlas_agent.config import Settings
+    from atlas_agent.telemetry import setup_telemetry, shutdown_telemetry
 
     settings = Settings(litellm_key="x", default_user_id=RUN_ID, database_url="x", redis_url="x")
     assert settings.otel_enabled is False
 
     setup_telemetry(settings)  # 不抛
-    import atlas_server.telemetry as telemetry
+    import atlas_agent.telemetry as telemetry
 
     assert telemetry._provider is None
     shutdown_telemetry()  # 也不抛
@@ -151,7 +151,7 @@ def test_spans_started_inside_the_run_nest_under_it(traced) -> None:
     传 context），chat span 却全是平行的根。Jaeger 上看就是一堆与 Run 没有
     任何关系的 chat，而那正好废掉了 trace 的意义。端到端跑一次才发现的。
     """
-    import atlas_server.telemetry as telemetry
+    import atlas_agent.telemetry as telemetry
 
     with RunTrace.start(_Prepared(make_spec()), run_id=str(RUN_ID)):  # noqa: SIM117
         # ★ 嵌套是这条测试的**全部意义**：外层不把 span 设成 current 的话，
@@ -298,11 +298,11 @@ async def test_requesting_an_approval_is_recorded_as_a_span(traced, monkeypatch)
       会话流上、同一个 run_id 下。那是个查询，不是一个 span —— 而它本来就
       更准（含进程重启的那段）。
     """
-    import atlas_server.services.approval as approval_mod
-    from atlas_server.services.approval import RedisApprovalGate
+    import atlas_agent.services.approval as approval_mod
+    from atlas_agent.services.approval import RedisApprovalGate
 
     provider_tracer = traced  # exporter
-    import atlas_server.telemetry as telemetry
+    import atlas_agent.telemetry as telemetry
 
     monkeypatch.setattr(approval_mod, "_tracer", telemetry.tracer, raising=False)
 
@@ -386,7 +386,7 @@ def capture(monkeypatch):
     """设置内容档位（off / io / full）。"""
 
     def set_level(level: str) -> None:
-        import atlas_server.telemetry.content as content_mod
+        import atlas_agent.telemetry.content as content_mod
 
         monkeypatch.setattr(content_mod, "level", lambda: level)
 
@@ -545,8 +545,8 @@ def test_mode_and_denial_become_root_events(traced) -> None:
 
 
 def test_model_call_is_a_generation_with_content_only_at_full(traced, capture) -> None:
-    import atlas_server.telemetry.model_callback as mc
-    from atlas_server.telemetry import tracer as _tracer  # noqa: F401  （确保模块已加载）
+    import atlas_agent.telemetry.model_callback as mc
+    from atlas_agent.telemetry import tracer as _tracer  # noqa: F401  （确保模块已加载）
     from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
     from langchain_core.outputs import ChatGeneration, LLMResult
 
@@ -579,7 +579,7 @@ def test_model_call_is_a_generation_with_content_only_at_full(traced, capture) -
 
 
 def test_redaction_covers_common_secret_shapes() -> None:
-    from atlas_server.telemetry.content import redact
+    from atlas_agent.telemetry.content import redact
 
     text = redact(
         "key sk-abcdefghijklmnopqrstuv; aws AKIAABCDEFGHIJKLMNOP; "
@@ -600,7 +600,7 @@ def test_redaction_covers_common_secret_shapes() -> None:
 
 
 def test_render_truncates_and_respects_level(monkeypatch) -> None:
-    import atlas_server.telemetry.content as content_mod
+    import atlas_agent.telemetry.content as content_mod
 
     monkeypatch.setattr(content_mod, "level", lambda: "io")
     monkeypatch.setattr(content_mod, "_max_chars", lambda: 10)
@@ -610,7 +610,7 @@ def test_render_truncates_and_respects_level(monkeypatch) -> None:
 
 
 def test_capture_content_accepts_the_old_boolean(monkeypatch) -> None:
-    from atlas_server.config import Settings
+    from atlas_agent.config import Settings
 
     for raw, expected in ((True, "full"), (False, "off"), ("true", "full"), ("io", "io")):
         s = Settings(litellm_key="x", default_user_id=USER, otel_capture_content=raw)  # type: ignore[arg-type]

@@ -30,6 +30,9 @@ dependencies = [
   "python-docx>=1.1",
   "openpyxl>=3.1",
   "beautifulsoup4>=4.12",
+  # 版面感知解析：字符坐标、字体、表格检测（doc/knowledge-enterprise-design.html §4.3）
+  "pdfplumber>=0.11",
+  "python-pptx>=1.0",
   "charset-normalizer>=3.3",
   "mcp>=1.10",
   # 遥测（与 atlas-server 同一套：OTLP/HTTP → Collector → Jaeger / Langfuse）

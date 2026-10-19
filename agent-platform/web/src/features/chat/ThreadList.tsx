@@ -158,6 +158,8 @@ export function ThreadList({
                       {avatarLetter(t.agent_name)}
                     </span>
                     <span className={styles.threadAgent}>{t.agent_name}</span>
+                    {/* 业务应用建的会话（如 TeamFlow 的节点会话）：在 Atlas 里只读 */}
+                    {t.source_app && <Tag className={styles.threadBadge}>来自 {appName(t.source_app)}</Tag>}
                     {badge ? (
                       <Tag color={badge.color} className={styles.threadBadge}>
                         {badge.live && <span className={styles.liveDot} aria-hidden="true" />}
@@ -183,4 +185,9 @@ export function ThreadList({
       </div>
     </aside>
   );
+}
+
+/** 业务应用编码 → 展示名（内网身份传递 §7.3） */
+export function appName(code: string): string {
+  return ({ teamflow: "TeamFlow", bench: "评测" } as Record<string, string>)[code] ?? code;
 }

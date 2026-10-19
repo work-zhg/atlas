@@ -1,0 +1,56 @@
+# AI TeamFlow 后端（atlas_teamflow）：团队、项目、流程；API 进程内嵌 Agent 监督器（embedded_worker）。
+#
+# ★ 原先在宿主上跑 uvicorn（:8040）；按「部署一律放 Pod」迁进集群。镜像与 Atlas 共用 atlas-app:dev。
+# ★ 凭据只剩 Gitee 令牌（atlas-teamflow-creds，由 apply.sh 从仓库根 .env 建）。调用户中心、
+#   Atlas 都是内网免令牌：请求头 X-Uid + X-Caller-App: teamflow（内网身份传递 §10）。
+# ★ Service 名不叫 atlas-tf：理由同 15-usercenter.yaml（ATLAS_TF_ 是配置前缀）。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atlas-teamflow
+  namespace: atlas-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: atlas-teamflow}
+  template:
+    metadata:
+      labels: {app: atlas-teamflow}
+    spec:
+      enableServiceLinks: false
+      initContainers:
+        - name: migrate
+          image: atlas-app:dev
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "atlas_teamflow", "migrate"]
+          env: &tf-env
+            - {name: ATLAS_TF_DATABASE_URL, value: "postgresql+asyncpg://atlas:atlas@__HOST_IP__:5433/atlas_teamflow"}
+            - {name: ATLAS_TF_REDIS_URL, value: "redis://__HOST_IP__:6380/0"}
+            - {name: ATLAS_TF_UC_BASE_URL, value: "http://atlas-usercenter.atlas-system.svc.cluster.local:8030"}
+            - {name: ATLAS_TF_ATLAS_BASE_URL, value: "http://atlas-server.atlas-system.svc.cluster.local:8000"}
+            - {name: ATLAS_TF_GIT_BACKEND, value: gitee}
+            - name: ATLAS_TF_GITEE_TOKEN
+              valueFrom: {secretKeyRef: {name: atlas-teamflow-creds, key: gitee_token}}
+      containers:
+        - name: teamflow
+          image: atlas-app:dev
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "atlas_teamflow", "serve"]
+          ports: [{containerPort: 8040, name: http}]
+          env: *tf-env
+          readinessProbe:
+            httpGet: {path: /health, port: 8040}
+            periodSeconds: 3
+          resources:
+            requests: {cpu: 50m, memory: 192Mi}
+---
+# ★ ClusterIP（内网身份传递 §4）：只经网关对外
+apiVersion: v1
+kind: Service
+metadata:
+  name: atlas-teamflow
+  namespace: atlas-system
+spec:
+  type: ClusterIP
+  selector: {app: atlas-teamflow}
+  ports: [{port: 8040, targetPort: 8040}]

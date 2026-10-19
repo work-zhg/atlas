@@ -4,7 +4,7 @@
 中间件里，而两者在四个维度上性质不同：
 
   · **生命周期**：文件工具只要有对象存储就能跑，execute 必须有沙箱。
-    混在一起只能靠运行时 `supports_execution(backend)` 判断，而那是个
+    混在一起只能靠运行时 `supports_execution(filesystem)` 判断，而那是个
     应该在装配期就分开的事。
   · **权限模型**：`FilesystemPermission` 按路径 glob 拦截文件工具，
     对 execute **完全不生效** —— shell 命令的路径无法静态分析。
@@ -14,7 +14,7 @@
     SandboxUnavailable，在这里转成工具错误（doc/native-sandbox-design.html §2）。
   · **审批粒度**：execute 在 schema 层被强制入审批列表，文件工具不审批。
 
-★ 不进 `_REQUIRED_MIDDLEWARE`：没有沙箱是合法状态（顾问型 agent 可以
+★ 不是恒装的脚手架：没有沙箱是合法状态（顾问型 agent 可以
   只有文件工具）。这一点与 FilesystemMiddleware 不同 —— 后者是脚手架。
 """
 

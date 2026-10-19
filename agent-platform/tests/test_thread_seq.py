@@ -16,9 +16,9 @@ from __future__ import annotations
 from uuid import uuid4
 
 import pytest
-from atlas_server.config import get_settings
-from atlas_server.redisx import make_redis
-from atlas_server.stream.relay import EventRelay, thread_seq_key
+from atlas_agent.config import get_settings
+from atlas_agent.redisx import make_redis
+from atlas_agent.stream.relay import EventRelay, thread_seq_key
 
 
 @pytest.fixture

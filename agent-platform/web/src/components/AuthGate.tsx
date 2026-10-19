@@ -1,29 +1,28 @@
 "use client";
 
 /**
- * 登录守卫：GET /v1/me 401 → 去登录页（带回跳地址）；dev 模式后端直接返回 dev 身份，不需要登录。
- * 后端不可达时给出明确的错误和重试，而不是一直转圈。
+ * 登录守卫：GET /v1/me 401 → 整页跳到用户中心登录页（带回跳地址，doc/identity-propagation-design.html §4）；
+ * dev 模式后端直接返回 dev 身份，不需要登录。后端不可达时给出明确的错误和重试，而不是一直转圈。
  */
 import { Button, Result, Spin } from "antd";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { useEffect, type ReactNode } from "react";
 
 import { ApiError } from "@/lib/http";
-import { useMe } from "@/lib/session";
+import { ucLoginUrl, useMe } from "@/lib/session";
 
-/** 不需要登录的页面：登录页；文件预览页靠预览令牌，不走会话 */
+/** 不需要登录的页面：旧登录页（只做跳转） */
 const PUBLIC = ["/login"];
 
 export function AuthGate({ children }: { children: ReactNode }) {
   const pathname = usePathname();
-  const router = useRouter();
   const open = PUBLIC.some((p) => pathname === p || pathname.startsWith(`${p}/`));
   const { data, error, isFetching, refetch } = useMe();
   const unauth = error instanceof ApiError && error.status === 401;
 
   useEffect(() => {
-    if (!open && unauth) router.replace(`/login?next=${encodeURIComponent(pathname)}`);
-  }, [open, unauth, pathname, router]);
+    if (!open && unauth) window.location.assign(ucLoginUrl());
+  }, [open, unauth, pathname]);
 
   if (open) return <>{children}</>;
   if (data) return <>{children}</>;

@@ -10,7 +10,7 @@ from uuid import uuid4
 
 import boto3
 import pytest
-from atlas_server.providers.filesystem.oss import OssFilesystem, PathEscape, WorkspaceListing
+from atlas_agent.providers.filesystem.oss import OssFilesystem, PathEscape, WorkspaceListing
 from moto import mock_aws
 
 BUCKET = "ws-files"

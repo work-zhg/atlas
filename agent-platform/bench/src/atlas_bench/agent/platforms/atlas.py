@@ -12,7 +12,8 @@
     取产物    GET  /v1/threads/{id}/files + download
     清理      DELETE /v1/threads/{id}；cleanup 命令删除 bench- 开头的智能体
 
-身份：评测专用服务账号（Bearer atlas_sk_…，需 agent:create + chat:use）。
+身份：内网免令牌（内网身份传递 §12）—— 请求头 X-Uid = 评测用户 atlas-bench（需 agent:create +
+chat:use），X-Caller-App: bench。不写 X-Auth-Uid：按谁判由 Atlas 按 Agent 定。
 """
 
 from __future__ import annotations
@@ -55,9 +56,26 @@ class TrialRun:
     run_id: str = ""
     status: str = ""
     error: str | None = None
+    #: run 失败时平台给的 error_kind（runner 据此区分平台错误与 Agent 失败）
+    error_kind: str | None = None
     budget_exceeded: str | None = None
     approvals: list[dict[str, Any]] = field(default_factory=list)
     started: float = field(default_factory=time.monotonic)
+    #: 前置会话（W4）：会话 id、失败原因、开始前已有的记忆 id（None = 本题不碰记忆）
+    setup_threads: list[str] = field(default_factory=list)
+    setup_error: str | None = None
+    memories_before: set[str] | None = None
+    memories_new: int = 0
+    #: 会话流上收到的事件 id（thread_seq，按到达顺序）与主动断线重连次数（E18）
+    sse_ids: list[int] = field(default_factory=list)
+    sse_reconnects: int = 0
+
+
+def _decide(policy: str, already: int) -> str:
+    """审批策略 → 这一次的决定。already = 本 trial 已经决定过几次。"""
+    if policy == "deny_all" or (policy == "deny_first" and already == 0):
+        return "rejected"
+    return "approved"
 
 
 def _fingerprint(spec: dict[str, Any]) -> str:
@@ -68,10 +86,14 @@ class AtlasAgentPlatform:
     name = "atlas"
 
     def __init__(
-        self, base_url: str, api_key: str, *, transport: httpx.AsyncBaseTransport | None = None
+        self,
+        base_url: str,
+        headers: dict[str, str],
+        *,
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._base = base_url.rstrip("/")
-        self._headers = {"Authorization": f"Bearer {api_key}"}
+        self._headers = dict(headers)
         self._c = httpx.AsyncClient(
             base_url=self._base,
             headers=self._headers,
@@ -97,7 +119,7 @@ class AtlasAgentPlatform:
 
     async def describe(self) -> dict[str, Any]:
         me = await self._req("GET", "/v1/me")
-        return {"base_url": self._base, "principal": me.get("name"), "kind": me.get("kind")}
+        return {"base_url": self._base, "principal": me.get("name"), "account": me.get("account")}
 
     # ------------------------------------------------------------------ 智能体
 
@@ -136,9 +158,29 @@ class AtlasAgentPlatform:
         thread = await self._req(
             "POST",
             "/v1/threads",
-            json={"agent_id": agent["id"], "title": f"bench:{task.id}#{trial}", "memory": "off"},
+            json={
+                "agent_id": agent["id"],
+                "title": f"bench:{task.id}#{trial}",
+                "memory": task.thread_memory,
+            },
         )
         tr = TrialRun(thread_id=thread["id"])
+        if task.thread_memory == "on":
+            if thread.get("memory") != "on":
+                # ★ 服务账号的会话按账号的 memory_default 开关记忆，调用方不能替它打开
+                #   （services/thread.py）。这是评测环境配置问题，不是平台故障 —— 早报、别空等
+                await self.delete_thread(tr)
+                msg = (
+                    "本题需要用户记忆，但评测服务账号的 memory_default 是 off："
+                    "请在「服务账号」设置里把它打开"
+                )
+                raise AtlasError(msg)
+            tr.memories_before = await self._memory_ids()
+        if task.setup:
+            await self._run_setup(agent, task, trial, tr)
+            if tr.setup_error:
+                tr.status, tr.error_kind, tr.error = "failed", "setup_failed", tr.setup_error
+                return tr
         for path, content in task.files.items():
             await self._req(
                 "PUT",
@@ -146,7 +188,9 @@ class AtlasAgentPlatform:
                 params={"path": path},
                 content=content.encode("utf-8"),
             )
-        listener = asyncio.create_task(self._approve_from_stream(tr, approval_policy))
+        listener = asyncio.create_task(
+            self._approve_from_stream(tr, approval_policy, task.sse_disconnect_after)
+        )
         try:
             accepted = await self._req(
                 "POST",
@@ -168,6 +212,7 @@ class AtlasAgentPlatform:
             tr.status = run["status"]
             if tr.status in _TERMINAL:
                 if tr.status != "succeeded":
+                    tr.error_kind = run.get("error_kind") or tr.status
                     tr.error = (
                         f"{run.get('error_kind') or tr.status}：{run.get('error_message') or ''}"
                     )
@@ -185,10 +230,17 @@ class AtlasAgentPlatform:
                 return
             await asyncio.sleep(_POLL_S)
 
-    async def _approve_from_stream(self, tr: TrialRun, policy: str) -> None:
-        """跟着会话事件流批审批（主 run 与子 run 的都在这条流上）。断了就带游标重连。"""
+    async def _approve_from_stream(
+        self, tr: TrialRun, policy: str, disconnect_after: int | None = None
+    ) -> None:
+        """跟着会话事件流批审批（主 run 与子 run 的都在这条流上）。断了就带游标重连。
+
+        disconnect_after：收到这么多条事件后**主动**断开、2 秒后带游标重连 ——
+        检查断线续传有没有丢事件或重复（E18）。只断一次。
+        """
         cursor = 0
         decided: set[str] = set()
+        delay = float(policy.split(":", 1)[1]) if policy.startswith("delay:") else 0.0
         while True:
             try:
                 async with (
@@ -207,6 +259,14 @@ class AtlasAgentPlatform:
                         if line.startswith("id:"):
                             with contextlib.suppress(ValueError):
                                 cursor = int(line[3:].strip())
+                                tr.sse_ids.append(cursor)
+                            if (
+                                disconnect_after
+                                and not tr.sse_reconnects
+                                and len(tr.sse_ids) >= disconnect_after
+                            ):
+                                tr.sse_reconnects += 1
+                                break
                         if not line.startswith("data:"):
                             continue
                         try:
@@ -220,8 +280,11 @@ class AtlasAgentPlatform:
                         if not aid or aid in decided:
                             continue
                         decided.add(aid)
-                        decision = "approved" if policy == "approve_all" else "rejected"
                         t0 = time.monotonic()
+                        decision = _decide(policy, len(tr.approvals))
+                        if delay:
+                            # 模拟「人很久之后才批」：平台不该因为等待而结束 run
+                            await asyncio.sleep(delay)
                         await self._req(
                             "POST",
                             f"/v1/runs/{event['run_id']}/approvals/{aid}",
@@ -239,7 +302,67 @@ class AtlasAgentPlatform:
             except Exception as exc:  # 断线：稍后带游标重连
                 logger.debug("会话事件流断开：%s", exc)
             # 流结束（正常不会）或断开：都稍等再带游标重连，不空转
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(2.0 if tr.sse_reconnects else 1.0)
+
+    # ------------------------------------------------------------------ 前置会话与记忆（W4）
+
+    async def _run_setup(self, agent: dict[str, Any], task: Task, trial: int, tr: TrialRun) -> None:
+        """在另一个会话里按顺序发 setup 消息（各等到终态）；需要时再等记忆抽取出来。"""
+        thread = await self._req(
+            "POST",
+            "/v1/threads",
+            json={
+                "agent_id": agent["id"],
+                "title": f"bench:{task.id}#{trial}:setup",
+                "memory": task.thread_memory,
+            },
+        )
+        tr.setup_threads.append(thread["id"])
+        deadline = time.monotonic() + task.budget.wall_s
+        for text in task.setup:
+            accepted = await self._req(
+                "POST",
+                f"/v1/threads/{thread['id']}/runs",
+                json={"content": [{"type": "text", "text": text}]},
+                headers={"Idempotency-Key": f"bench-{uuid.uuid4().hex}"},
+            )
+            while True:
+                run = await self._req("GET", f"/v1/runs/{accepted['run_id']}")
+                if run["status"] in _TERMINAL:
+                    break
+                if time.monotonic() > deadline:
+                    tr.setup_error = "前置会话超过时间预算"
+                    return
+                await asyncio.sleep(_POLL_S)
+            if run["status"] != "succeeded":
+                tr.setup_error = (
+                    f"前置会话失败：{run.get('error_kind')} {run.get('error_message') or ''}"
+                )
+                return
+        if task.wait_memory_s and tr.memories_before is not None:
+            # 记忆是 run 结束后异步抽取的：轮询到出现新记忆为止
+            until = time.monotonic() + task.wait_memory_s
+            while time.monotonic() < until:
+                tr.memories_new = len(await self._memory_ids() - tr.memories_before)
+                if tr.memories_new:
+                    return
+                await asyncio.sleep(3.0)
+            tr.setup_error = f"前置会话结束后 {task.wait_memory_s:.0f}s 内没有抽取出记忆"
+
+    async def _memory_ids(self) -> set[str]:
+        page = await self._req("GET", "/v1/memories", params={"limit": 200})
+        return {str(m["id"]) for m in page.get("data") or []}
+
+    async def cleanup_memories(self, tr: TrialRun) -> int:
+        """删掉本 trial 期间新增的记忆（服务账号的记忆在所有评测之间共享，留着会污染别的题）。"""
+        if tr.memories_before is None:
+            return 0
+        removed = 0
+        with contextlib.suppress(AtlasError):
+            for mid in await self._memory_ids() - tr.memories_before:
+                await self._req("DELETE", f"/v1/memories/{quote(mid)}")
+                removed += 1
+        return removed
 
     # ------------------------------------------------------------------ 收集
 
@@ -271,8 +394,9 @@ class AtlasAgentPlatform:
         return files, skipped
 
     async def delete_thread(self, tr: TrialRun) -> None:
-        with contextlib.suppress(AtlasError):
-            await self._req("DELETE", f"/v1/threads/{tr.thread_id}")
+        for tid in [tr.thread_id, *tr.setup_threads]:
+            with contextlib.suppress(AtlasError):
+                await self._req("DELETE", f"/v1/threads/{tid}")
 
     async def cleanup_all(self) -> list[str]:
         """删除评测建的智能体（slug 前缀 bench-）。"""

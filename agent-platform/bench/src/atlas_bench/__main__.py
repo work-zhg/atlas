@@ -7,8 +7,10 @@ python -m atlas_bench datasets               列出可用数据集
 python -m atlas_bench cleanup                删除评测在 Atlas 上建的库（库名前缀 bench:）
 
 智能体评测（doc/agent-eval-design.html）：
-python -m atlas_bench agent run experiments/agent-demo.yaml [--limit N] [--resume <运行目录>]
+python -m atlas_bench agent run experiments/agent-demo.yaml [--limit N] [--resume <目录>] [--gate]
+    --gate：硬门槛不过（平台错误、沙箱不可用、过程断言失败）时退出码 2
 python -m atlas_bench agent report <运行目录>  重新汇总与生成报告（不重跑）
+python -m atlas_bench agent compare <基线目录> <新目录>  按题配对比较；回归或硬门槛不过时退出码 3
 python -m atlas_bench agent tasks              列出任务套件
 python -m atlas_bench agent cleanup            删除评测建的智能体（slug 前缀 bench-）
 """
@@ -17,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import sys
 from pathlib import Path
@@ -50,11 +53,7 @@ def _llm(settings: BenchSettings, concurrency: int = 4) -> LlmClient:
 
 
 def _atlas(settings: BenchSettings) -> AtlasPlatform:
-    if settings.atlas_api_key is None:
-        raise SystemExit(
-            "缺少 Atlas 评测服务账号密钥：设置 ATLAS_BENCH_ATLAS_API_KEY（需要 kb:create）"
-        )
-    return AtlasPlatform(settings.atlas_kb_url, settings.atlas_api_key.get_secret_value())
+    return AtlasPlatform(settings.atlas_kb_url, settings.identity_headers())
 
 
 async def _run(args: argparse.Namespace, settings: BenchSettings) -> int:
@@ -99,12 +98,7 @@ async def _score(args: argparse.Namespace, settings: BenchSettings) -> int:
 def _agent_platform(settings: BenchSettings):
     from .agent.platforms.atlas import AtlasAgentPlatform
 
-    if settings.atlas_api_key is None:
-        raise SystemExit(
-            "缺少 Atlas 评测服务账号密钥：设置 ATLAS_BENCH_ATLAS_API_KEY"
-            "（需要 agent:create + chat:use）"
-        )
-    return AtlasAgentPlatform(settings.atlas_api_url, settings.atlas_api_key.get_secret_value())
+    return AtlasAgentPlatform(settings.atlas_api_url, settings.identity_headers())
 
 
 async def _agent(args: argparse.Namespace, settings: BenchSettings) -> int:
@@ -121,6 +115,27 @@ async def _agent(args: argparse.Namespace, settings: BenchSettings) -> int:
         md, page = write_agent_report(Path(args.run_dir))
         print(f"报告：{md}\n      {page}")
         return 0
+    if args.agent_command == "compare":
+        from .agent.report import compare_runs
+
+        res = compare_runs(Path(args.base_dir), Path(args.new_dir))
+        for v, x in res["variants"].items():
+            d = x["diff"]
+            verdict = (
+                "回归" if x["regression"] else ("显著变化" if x["significant"] else "无显著差异")
+            )
+            print(
+                f"{v}：成功率差 {d['mean'] * 100:+.1f} 个百分点"
+                f"（{d['low'] * 100:+.1f} ~ {d['high'] * 100:+.1f}，{d['n']} 题）→ {verdict}"
+            )
+            for line in [*x["hard_gate"], *x["warnings"]]:
+                print(f"  ⚠ {line}")
+            if x["tasks_dropped"]:
+                print("  下降的题：" + "、".join(x["tasks_dropped"]))
+        (Path(args.new_dir) / "compare.json").write_text(
+            json.dumps(res, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        return 3 if res["regression"] else 0
     platform = _agent_platform(settings)
     try:
         if args.agent_command == "cleanup":
@@ -141,6 +156,14 @@ async def _agent(args: argparse.Namespace, settings: BenchSettings) -> int:
         await platform.aclose()
     md, page = write_agent_report(run_dir)
     print(f"运行目录：{run_dir}\n报告：{md}\n      {page}")
+    if getattr(args, "gate", False):
+        from .agent.report import hard_gate_failures
+
+        summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
+        if failures := hard_gate_failures(summary):
+            print("硬门槛未通过：\n  " + "\n  ".join(failures))
+            return 2
+        print("硬门槛通过")
     return 0
 
 
@@ -177,8 +200,12 @@ def main(argv: list[str] | None = None) -> int:
     ar.add_argument("experiment")
     ar.add_argument("--limit", type=int, default=None, help="只跑前 N 个任务")
     ar.add_argument("--resume", default=None, help="接着跑某个运行目录")
+    ar.add_argument("--gate", action="store_true", help="硬门槛不过时退出码 2（部署后冒烟用）")
     arp = agsub.add_parser("report")
     arp.add_argument("run_dir")
+    acp = agsub.add_parser("compare")
+    acp.add_argument("base_dir")
+    acp.add_argument("new_dir")
     agsub.add_parser("tasks")
     agsub.add_parser("cleanup")
     args = parser.parse_args(argv)

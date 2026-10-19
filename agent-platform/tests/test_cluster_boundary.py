@@ -17,10 +17,10 @@ import pytest
 from atlas_cluster.api import create_app
 from atlas_cluster.backend import InMemoryBackend
 from atlas_cluster.config import ClusterSettings
-from atlas_server.providers.pods import PodProvider
-from atlas_server.config import Settings
-from atlas_server.domain.spec import CliSpec
-from atlas_server.providers.cluster import ClusterPods, ClusterUnavailable
+from atlas_agent.providers.pods import PodProvider
+from atlas_agent.config import Settings
+from atlas_agent.domain.spec import CliSpec
+from atlas_agent.providers.cluster import ClusterPods, ClusterUnavailable
 from httpx import ASGITransport
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -50,7 +50,7 @@ def test_server_never_imports_cluster_internals() -> None:
     """
     pattern = re.compile(r"atlas_cluster\.(?!schemas)(\w+)")
     offenders: list[str] = []
-    for path in (_ROOT / "services" / "server" / "src").rglob("*.py"):
+    for path in (_ROOT / "services" / "agent" / "src").rglob("*.py"):
         for match in pattern.finditer(path.read_text(encoding="utf-8")):
             offenders.append(f"{path.name} → atlas_cluster.{match.group(1)}")
     assert offenders == [], f"server 碰了 cluster 内部：{offenders}"
@@ -62,7 +62,7 @@ def test_cluster_never_imports_server() -> None:
         "import sys, importlib;"
         "[importlib.import_module('atlas_cluster.' + m) "
         "for m in ('schemas','template','manager','backend','api')];"
-        "bad=[m for m in ('atlas_server','atlas_engine','atlas_bridge','sqlalchemy','redis') "
+        "bad=[m for m in ('atlas_agent','atlas_engine','atlas_bridge','sqlalchemy','redis') "
         "if m in sys.modules];"
         "print(','.join(bad))"
     )
@@ -105,6 +105,7 @@ class _Thread:
         self.created_by = user_id
         self.workspace_thread_id = workspace_thread_id
         self.git_profile: str | None = None  # 不需要 git 凭据的会话
+        self.source_app: str | None = None  # 人直接建的会话
 
 
 _CLI = CliSpec(cli_type="claude-code", adapter="node acp", image="atlas-acp:1")

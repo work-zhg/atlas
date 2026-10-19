@@ -12,9 +12,9 @@ from typing import Any
 from uuid import UUID
 
 import pytest
-from atlas_server.domain.events import EventType
+from atlas_agent.domain.events import EventType
 from tests.graphs import run_agent as run
-from atlas_server.domain.spec import AgentSpec, LimitSpec, ModelSpec
+from atlas_agent.domain.spec import AgentSpec, LimitSpec, ModelSpec
 
 from tests.fakes import (
     blocks_model,
@@ -157,7 +157,8 @@ async def test_cancellation_yields_run_cancelled() -> None:
         run_id=RUN_ID,
         model=text_model("ab"),
         input_content="hi",
-        cancel=AlwaysCancelled(), clock=_clock,
+        cancel=AlwaysCancelled(),
+        clock=_clock,
     )
     assert events[-1].type == EventType.RUN_CANCELLED
     assert EventType.RUN_FINISHED not in [e.type for e in events]
@@ -246,3 +247,39 @@ async def test_thinking_blocks_are_not_treated_as_visible_text() -> None:
     )
     deltas = [e.data["text"] for e in events if e.type == EventType.MESSAGE_DELTA]
     assert deltas == ["答案是 42"]
+
+
+async def test_usage_is_reported_even_when_the_run_fails() -> None:
+    """★ 失败前已经花掉的 token 也要入账：inprocess 只从 usage.updated 取用量，
+    失败分支提前 return 的话失败 run 记成 0（评测 atlas-eng/long-read 撞到）。"""
+    from langchain_core.messages import AIMessageChunk
+    from langchain_core.outputs import ChatGenerationChunk
+
+    from tests.fakes import TurnModel, tool_call_chunk
+
+    class FailsOnSecondCall(TurnModel):
+        async def _astream(self, messages, stop=None, run_manager=None, **kwargs):
+            if self.call_count >= 1:
+                raise RuntimeError("网关炸了")
+            self._calls += 1
+            first = tool_call_chunk("write_todos", '{"todos": []}', "c1")
+            yield ChatGenerationChunk(
+                message=AIMessageChunk(
+                    content=first.content,
+                    tool_call_chunks=first.tool_call_chunks,
+                    usage_metadata={"input_tokens": 100, "output_tokens": 20, "total_tokens": 120},
+                )
+            )
+
+    events = await collect(
+        spec=make_spec(),
+        run_id=RUN_ID,
+        model=FailsOnSecondCall(),
+        input_content="hi",
+        clock=_clock,
+    )
+    types = [e.type for e in events]
+    assert types[-1] == EventType.RUN_FAILED
+    usage = [e for e in events if e.type == EventType.USAGE_UPDATED]
+    assert usage and usage[-1].data["total_tokens"] == 120
+    assert types.index(EventType.USAGE_UPDATED) < types.index(EventType.RUN_FAILED)

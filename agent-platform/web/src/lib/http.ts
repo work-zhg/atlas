@@ -2,8 +2,8 @@
  * HTTP 封装 —— 所有 REST 请求的唯一出口。
  *
  * 两件事集中在这里，别在别处重复：
- *   1. 身份注入（X-User-Id）。后端 identity.py 是唯一身份来源，前端也保持单点，
- *      将来换 JWT/SSO 只改 authHeaders()。
+ *   1. 请求头（authHeaders）。身份由网关按用户中心的登录态写入（doc/identity-propagation-design.html
+ *      §4），前端只带 CSRF 双提交头；本机 dev 模式才自己写 X-Uid。
  *   2. Atlas 自己的接口端点（API_BASE / 配置服务）。错误信封解包、URL 拼接、请求本身在
  *      共享包 @atlas/chat-ui 的 lib/http.ts（对话组件与 AI TeamFlow 共用同一份）。
  */
@@ -34,18 +34,18 @@ export const KNOWLEDGE_API_BASE =
   process.env.NEXT_PUBLIC_KNOWLEDGE_API_BASE ?? "http://127.0.0.1:8050";
 
 /**
- * 身份 header（doc/auth-permission-design.html §13）。
- *   · uc 模式：身份在 HttpOnly 会话 Cookie 里（同源请求自动带上）；写请求带 CSRF 双提交头
- *     （值取自可读的 atlas_csrf Cookie）。
- *   · dev 模式：构建期的 NEXT_PUBLIC_USER_ID 写进 X-User-Id（后端缺省回落 default_user_id）。
+ * 请求头（doc/identity-propagation-design.html §4）。
+ *   · 经网关：身份在用户中心的 HttpOnly 会话 Cookie 里（同源请求自动带上），网关校验后写成
+ *     X-Uid；写请求带 CSRF 双提交头（值取自可读的 uc_csrf Cookie，由网关交给用户中心校验）。
+ *   · 本机 dev 模式（不经网关）：构建期的 NEXT_PUBLIC_USER_ID 写进 X-Uid（后端缺省回落 default_user_id）。
  * SSE 也要用这份 header，故导出（这正是不用原生 EventSource 的原因）。
  */
 export function authHeaders(): Record<string, string> {
   const headers: Record<string, string> = {};
   const uid = process.env.NEXT_PUBLIC_USER_ID;
-  if (uid) headers["X-User-Id"] = uid;
-  const csrf = readCookie("atlas_csrf");
-  if (csrf) headers["X-Atlas-CSRF"] = csrf;
+  if (uid) headers["X-Uid"] = uid;
+  const csrf = readCookie("uc_csrf");
+  if (csrf) headers["X-UC-CSRF"] = csrf;
   return headers;
 }
 

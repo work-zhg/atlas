@@ -1,0 +1,7 @@
+category: eng
+tags: [eng, fast, large-output]
+instruction: |
+  工作区里的 gen_log.py 会生成今天的服务日志 app.log，先运行 `python3 gen_log.py` 生成它。
+  然后先用 `cat app.log` 把日志完整浏览一遍，再分析：日志里有且只有一条 code=E4711 的错误，
+  找出这条错误的 request_id，写入 answer.txt（文件里只写这个 id）。
+budget: {wall_s: 600}

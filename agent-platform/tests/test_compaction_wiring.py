@@ -21,9 +21,9 @@ from atlas_engine.kernel.middleware.compaction import (
     facts_from,
 )
 from atlas_engine.contracts import ContextOverflow
-from atlas_server.domain.events import EventType
+from atlas_agent.domain.events import EventType
 from tests.graphs import run_agent as run
-from atlas_server.domain.spec import AgentSpec, CompactionSpec, LimitSpec, ModelSpec
+from atlas_agent.domain.spec import AgentSpec, CompactionSpec, LimitSpec, ModelSpec
 from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
@@ -281,7 +281,7 @@ def test_disabled_spec_means_no_middleware_at_all() -> None:
       None，图里连这个节点都没有 —— 比装一个每轮空转的中间件更诚实。
       这里钉住装配层真的这么做了。
     """
-    from atlas_server.executor.assembly import HookAssembly
+    from atlas_agent.executor.assembly import HookAssembly
 
     import inspect
 

@@ -73,14 +73,20 @@ class KnowledgeSettings(BaseSettings):
     #: 桶内前缀
     oss_prefix: str = "_knowledge"
 
-    # ── 认证（与 atlas-config 同一模式：会话交给 atlas-server 校验）────────
-    #: dev = 读 X-User-Id（缺省 default_user），操作码全有；uc = 校验 Atlas 登录会话 / 服务账号
+    # ── 认证（内网身份传递 §3、§8；见 auth.py）────────────────────────────
+    #: dev = 缺 X-Uid 用 default_user，操作码全有；uc = 缺 X-Uid 一律 401，操作码按 X-Auth-Uid
+    #: 取用户中心授权快照
     auth_mode: Literal["dev", "uc"] = "dev"
+    #: atlas-server（文档级权限的主体展开 /internal/v1/auth/principals）
     server_url: str = "http://127.0.0.1:8000"
-    #: 双向的服务间令牌：本服务调 atlas-server introspect、atlas-server 调本服务 /internal。
-    #: ★ 与 atlas-config 用同一个（atlas-server 侧叫 CONFIG_INTERNAL_TOKEN）。
-    internal_token: SecretStr | None = None
-    introspect_ttl_s: float = 30.0
+    #: 知识库 MCP 令牌的签名密钥（与 atlas-server 的 KNOWLEDGE_MCP_SECRET 一致）。
+    #: ★ 给会话 Pod（不可信代码）的能力凭据，不是服务间令牌 —— 内网去令牌后仍保留（§5.3）
+    mcp_secret: SecretStr | None = None
+    #: 授权快照（操作码）的进程内缓存
+    authz_ttl_s: float = 30.0
+    #: 用户中心（库级权限 = 数据编码 AtlasKnowledgeBase，见 perms.py）。内网免令牌：
+    #: 请求头 X-Caller-App: atlas 即应用身份。uc 模式必需；dev 模式不接 = 人人 OWNER
+    uc_base_url: str = "http://127.0.0.1:8030"
     default_user: str = "00000000-0000-0000-0000-000000000001"
     cors_origins: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
 
@@ -91,8 +97,36 @@ class KnowledgeSettings(BaseSettings):
     rerank_model: str = "BAAI/bge-reranker-base"
     #: fastembed 模型目录。None = fastembed 默认（<tmp>/fastembed_cache，镜像预装的位置）
     model_cache_dir: str | None = None
+    #: 远程向量模型（provider = openai_compatible，§6.1）：OpenAI 兼容的 /embeddings 地址
+    embedding_base_url: str | None = None
+    embedding_api_key: SecretStr | None = None
+    #: 远程重排（provider = cohere_compatible / tei）：/rerank 所在地址
+    rerank_base_url: str | None = None
+    rerank_api_key: SecretStr | None = None
+    #: 界面上可选的远程模型（环境变量写 JSON 列表，如 ["bge-m3"]）
+    #: 远程重排协议：cohere_compatible | tei
+    embedding_remote_models: list[str] = []
+    rerank_remote_models: list[str] = []
+    rerank_remote_provider: str = "cohere_compatible"
+    remote_model_timeout_s: float = 60.0
     #: 查询向量缓存秒数（同 Dify）
     query_embedding_ttl_s: int = 600
+
+    # ── LLM（上下文补全、表格摘要、查询理解；doc/knowledge-enterprise-design.html）──
+    #: OpenAI 兼容的 chat/completions 地址（如 https://api.deepseek.com/v1）。空 = 不用 LLM，
+    #: 依赖它的增强全部降级为不做
+    llm_base_url: str | None = None
+    llm_api_key: SecretStr | None = None
+    llm_model: str = "deepseek-chat"
+    llm_timeout_s: float = 60.0
+    #: 入库时 LLM 增强的并发调用数
+    llm_concurrency: int = 4
+    #: 上下文补全时作为固定前缀送给模型的文档正文上限（字符）；超出的长文档改用分段所在的邻近内容
+    contextual_doc_chars: int = 30_000
+    #: 解析质量有严重问题（疑似扫描件、乱码）的文档入库后先进待审核，审核通过才参与检索（§4.7）
+    parse_review: bool = True
+    #: 文档级权限的主体展开结果缓存（秒）
+    principals_ttl_s: float = 60.0
 
     # ── 入库 ─────────────────────────────────────────────────────────────
     #: 自定义分段长度上限（同 Dify INDEXING_MAX_SEGMENTATION_TOKENS_LENGTH，按字符）

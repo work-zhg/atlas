@@ -31,7 +31,7 @@ export function threadBadge(thread: Pick<Thread, "last_run">): ThreadBadge | nul
       return { label: "运行中", color: "success", needsMe: false, active: true, live: true };
     case "suspended":
       return {
-        label: run.waiting.includes("delegation") ? "等待子智能体" : "已挂起",
+        label: run.waiting.includes("subagent") ? "等待子智能体" : "已挂起",
         color: "processing",
         needsMe: false,
         active: true,

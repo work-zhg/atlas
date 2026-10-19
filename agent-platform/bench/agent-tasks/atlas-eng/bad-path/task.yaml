@@ -1,0 +1,6 @@
+category: eng
+tags: [eng, fast, error-recovery]
+instruction: |
+  先用 read_file 直接读取目录 /workspace/notes，看看里面有哪些文件（如果读不了，就换别的办法列出目录）。
+  然后把 notes 目录下每个 .md 文件第一行的标题（去掉开头的 # 和空格）按文件名排序写入 titles.txt，一行一个。
+budget: {wall_s: 600}

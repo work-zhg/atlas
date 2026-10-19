@@ -23,11 +23,19 @@ export const EventType = {
    *   TERMINAL_EVENTS 的话流会在委派刚开始时断掉，用户永远等不到结论。
    */
   RunSuspended: "run.suspended",
+  /**
+   * 这一轮换了一个服务实例继续跑（停机交接 / 实例崩溃后被接管）。紧随其后是新一段的
+   * run.started。data.discard_chars 是上一个实例已流出、但会重做的那段正文 —— 丢掉它，
+   * 否则同一段话出现两遍。
+   */
+  RunResumed: "run.resumed",
   ThinkingDelta: "thinking.delta",
   MessageDelta: "message.delta",
   MessageCompleted: "message.completed",
   TodosUpdated: "todos.updated",
   ToolStarted: "tool.started",
+  /** 工具调用的参数 / 名字补全（acp 先发只有标题的调用，参数随后补上）。按 call_id 合并，不是新调用 */
+  ToolUpdated: "tool.updated",
   ToolCompleted: "tool.completed",
   ToolFailed: "tool.failed",
   SubagentStarted: "subagent.started",
@@ -100,10 +108,16 @@ export interface RunCancelledData {
 }
 
 export interface SuspensionWait {
-  /** 等子智能体的结论，还是等人点头。 */
-  reason: "delegation" | "approval";
-  /** delegation → 子 run 的 id；approval → approval 的 id。 */
+  /** 等 SubAgent 的结论，还是等人点头。 */
+  reason: "subagent" | "approval";
+  /** subagent → 子 run 的 id；approval → approval 的 id。 */
   token: string;
+}
+
+export interface RunResumedData {
+  reason: "handoff" | "expired";
+  discard_chars: number;
+  takeovers: number;
 }
 
 export interface RunSuspendedData {
@@ -146,6 +160,13 @@ export interface TodosUpdatedData {
 export interface ToolStartedData {
   call_id: string;
   name: string;
+  args_preview?: string;
+  args?: unknown;
+}
+
+export interface ToolUpdatedData {
+  call_id: string;
+  name?: string;
   args_preview?: string;
   args?: unknown;
 }
@@ -329,11 +350,13 @@ export type TraceEvent =
   | Envelope<typeof EventType.RunFailed, RunFailedData>
   | Envelope<typeof EventType.RunCancelled, RunCancelledData>
   | Envelope<typeof EventType.RunSuspended, RunSuspendedData>
+  | Envelope<typeof EventType.RunResumed, RunResumedData>
   | Envelope<typeof EventType.ThinkingDelta, MessageDeltaData>
   | Envelope<typeof EventType.MessageDelta, MessageDeltaData>
   | Envelope<typeof EventType.MessageCompleted, MessageCompletedData>
   | Envelope<typeof EventType.TodosUpdated, TodosUpdatedData>
   | Envelope<typeof EventType.ToolStarted, ToolStartedData>
+  | Envelope<typeof EventType.ToolUpdated, ToolUpdatedData>
   | Envelope<typeof EventType.ToolCompleted, ToolCompletedData>
   | Envelope<typeof EventType.ToolFailed, ToolFailedData>
   | Envelope<typeof EventType.SubagentStarted, SubagentStartedData>

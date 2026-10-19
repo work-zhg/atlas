@@ -124,7 +124,7 @@ def clear_plan(
     """要清掉的旧工具结果 → 替换后的 ToolMessage（同 id，按 id 去重的 reducer 会原地替换）。
 
     ★ 最后一批（最近一条 AIMessage 之后的）结果从不清：模型马上就要读它们。
-    ★ 已经是占位的不重复清；挂起哨兵 / 放行占位不碰（续跑机制依赖它们）。
+    ★ 已经是占位的不重复清。
     """
     clearable = set(clearable)
     names = _call_names(messages)
@@ -137,7 +137,7 @@ def clear_plan(
         if name not in clearable:
             continue
         text = _text_of(m)
-        if text.startswith("[旧的工具结果已清除") or text.startswith("__ATLAS_"):
+        if text.startswith("[旧的工具结果已清除"):
             continue
         candidates.append(m)
     victims = candidates[: max(0, len(candidates) - keep_recent)]

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 把 server、cluster、config 与 knowledge 部署到本机 K8s（Docker Desktop）。
+# 把用户中心、server、cluster、config、knowledge 与 TeamFlow 后端部署到本机 K8s（Docker Desktop）。
 #
 # 前置：make up（宿主的 PG / Redis / MinIO）、两个镜像已构建：
 #   docker build -f docker/bridge/Dockerfile -t atlas-acp-bridge:0.4.0 .
@@ -31,19 +31,30 @@ kubectl -n atlas-system create secret generic atlas-server-creds \
   --from-literal=oss_access_key_secret="${OSS_ACCESS_KEY_SECRET}" \
   --from-literal=litellm_base_url="${LITELLM_BASE_URL}" \
   --from-literal=litellm_key="${LITELLM_KEY}" \
-  --from-literal=uc_app_key="${UC_APP_KEY:-}" \
-  --from-literal=uc_app_secret="${UC_APP_SECRET:-}" \
   --dry-run=client -o yaml | kubectl apply -f -
 
-# 服务间令牌：.env 里有就用；没有就沿用集群里已有的；都没有才新生成。
-# ★ 每次 apply 都换令牌的话，正在跑的 server 与 config 会短暂对不上。
-CONFIG_TOKEN="${ATLAS_CONFIG_INTERNAL_TOKEN:-$(kubectl -n atlas-system get secret atlas-config-creds \
-  -o jsonpath='{.data.internal_token}' 2>/dev/null | base64 --decode || true)}"
-[ -n "$CONFIG_TOKEN" ] || CONFIG_TOKEN="$(openssl rand -hex 24)"
+# 知识库 MCP 令牌的签名密钥（atlas-server 签、知识库验）：给会话 Pod 的能力凭据（§5.3）。
+# .env 里有就用；没有就沿用集群里已有的（含改名前 atlas-config-creds 里的那份，已签发的令牌
+# 继续有效）；都没有才新生成。★ 必须在重建 atlas-config-creds 之前读：apply 会删掉旧键。
+MCP_SECRET="${ATLAS_KNOWLEDGE_MCP_SECRET:-$(kubectl -n atlas-system get secret atlas-knowledge-mcp \
+  -o jsonpath='{.data.secret}' 2>/dev/null | base64 --decode || true)}"
+[ -n "$MCP_SECRET" ] || MCP_SECRET="$(kubectl -n atlas-system get secret atlas-config-creds \
+  -o jsonpath='{.data.internal_token}' 2>/dev/null | base64 --decode || true)"
+[ -n "$MCP_SECRET" ] || MCP_SECRET="$(openssl rand -hex 24)"
+kubectl -n atlas-system create secret generic atlas-knowledge-mcp \
+  --from-literal=secret="${MCP_SECRET}" \
+  --dry-run=client -o yaml | kubectl apply -f -
+
+# ★ 内网免令牌（doc/identity-propagation-design.html）：服务间令牌、用户中心 App Key / Secret、
+#   Atlas 服务账号密钥都已下线，这里不再建。
 kubectl -n atlas-system create secret generic atlas-config-creds \
   --from-literal=oss_access_key_id="${OSS_ACCESS_KEY_ID}" \
   --from-literal=oss_access_key_secret="${OSS_ACCESS_KEY_SECRET}" \
-  --from-literal=internal_token="${CONFIG_TOKEN}" \
+  --dry-run=client -o yaml | kubectl apply -f -
+
+# TeamFlow 后端的凭据：只剩 Gitee 令牌（迁到 GitLab 后换成 GitLab 的项目管理令牌）
+kubectl -n atlas-system create secret generic atlas-teamflow-creds \
+  --from-literal=gitee_token="${ATLAS_TF_GITEE_TOKEN:-}" \
   --dry-run=client -o yaml | kubectl apply -f -
 
 # TeamFlow 的 git 凭据档案（会话 Pod 里 git push 产物）：.env 没有 Gitee 令牌就跳过
@@ -57,14 +68,28 @@ HOST_IP="${ATLAS_HOST_IP:-$(ipconfig getifaddr en0 2>/dev/null || ipconfig getif
 [ -n "$HOST_IP" ] || { echo "取不到宿主 LAN IP，手动给 ATLAS_HOST_IP="; exit 1; }
 echo "宿主地址 = $HOST_IP"
 
+# 一次性（内网身份传递 §4）：后端 Service 从 LoadBalancer 改为 ClusterIP，只经网关对外。
+# 直接 apply 改不了类型（已分配的 nodePort 会被拒），先删旧的再建 —— 只影响这次 apply 的几秒。
+for svc in atlas-usercenter atlas-config atlas-server atlas-teamflow; do
+  if [ "$(kubectl -n atlas-system get svc "$svc" -o jsonpath='{.spec.type}' 2>/dev/null)" = "LoadBalancer" ]; then
+    kubectl -n atlas-system delete svc "$svc"
+  fi
+done
+
+# 用户中心先起：server / knowledge / TeamFlow 都依赖它
+sed "s/__HOST_IP__/${HOST_IP}/g" deploy/local/15-usercenter.yaml | kubectl apply -f -
+kubectl -n atlas-system rollout status deploy/atlas-usercenter --timeout=180s
 sed "s/__HOST_IP__/${HOST_IP}/g" deploy/local/20-cluster.yaml | kubectl apply -f -
 sed "s/__HOST_IP__/${HOST_IP}/g" deploy/local/25-config.yaml  | kubectl apply -f -
 sed "s/__HOST_IP__/${HOST_IP}/g" deploy/local/30-server.yaml  | kubectl apply -f -
 sed "s/__HOST_IP__/${HOST_IP}/g" deploy/local/35-knowledge.yaml | kubectl apply -f -
+sed "s/__HOST_IP__/${HOST_IP}/g" deploy/local/45-teamflow.yaml | kubectl apply -f -
 
 kubectl -n atlas-system rollout status deploy/atlas-cluster --timeout=180s
 kubectl -n atlas-system rollout status deploy/atlas-config --timeout=180s
 kubectl -n atlas-system rollout status deploy/atlas-server --timeout=180s
 kubectl -n atlas-system rollout status deploy/atlas-knowledge --timeout=300s
 kubectl -n atlas-system rollout status deploy/atlas-knowledge-worker --timeout=300s
-echo "server → http://127.0.0.1:8000   config → http://127.0.0.1:8020"
+kubectl -n atlas-system rollout status deploy/atlas-teamflow --timeout=180s
+echo "后端只经网关对外（deploy/local/frontends.sh → http://localhost:8080）；"
+echo "运维直连用 kubectl -n atlas-system port-forward svc/<服务> <端口>（评测见 forward.sh）"

@@ -22,11 +22,11 @@ from uuid import UUID, uuid4
 
 import httpx
 import pytest
-from atlas_server.config import get_settings
-from atlas_server.db.models import Message, Run
-from atlas_server.db.session import get_sessionmaker
-from atlas_server.executor.inprocess import InProcessExecutor
-from atlas_server.main import create_app
+from atlas_agent.config import get_settings
+from atlas_agent.db.models import Message, Run
+from atlas_agent.db.session import get_sessionmaker
+from atlas_agent.executor.inprocess import InProcessExecutor
+from atlas_agent.main import create_app
 from httpx import ASGITransport
 from langchain_core.messages import AIMessageChunk
 from sqlalchemy import select
@@ -38,21 +38,15 @@ pytestmark = pytest.mark.usefixtures("clean_db")
 PARENT_MODEL = "claude-sonnet-5"
 CHILD_MODEL = "claude-haiku-4-5"
 
-#: 让委派必然走挂起：当场等待窗口压到 0，第一次轮询就转异步。
-#:
-#: ★ 这正是生产里 subagent_inline_wait_s 的作用 —— 它是改造的风险闸门，
-#:   短委派走老路径、长委派走挂起。测试把闸门开到最大来盯住新路径。
-INSTANT_SUSPEND = 0.0
-
-
 def _task_call(brief: str, name: str, call_id: str) -> AIMessageChunk:
     args = json.dumps({"description": brief, "subagent_type": name}, ensure_ascii=False)
     return tool_call_chunk("task", args, call_id)
 
 
-def make_app(parent: TurnModel, child: TurnModel, *, inline_wait: float):
+def make_app(parent: TurnModel, child: TurnModel):
+    """派 SubAgent 一律挂起：spawn 立刻返回，父 run 落成 suspended，子 run 跑完叫醒它。"""
     app = create_app()
-    settings = get_settings().model_copy(update={"subagent_inline_wait_s": inline_wait})
+    settings = get_settings()
     models = {PARENT_MODEL: parent, CHILD_MODEL: child}
 
     def builder(model_spec, **_kw):
@@ -71,9 +65,9 @@ async def client_factory():
     executors: list[InProcessExecutor] = []
 
     async def make(
-        parent: TurnModel, child: TurnModel, *, inline_wait: float = INSTANT_SUSPEND
+        parent: TurnModel, child: TurnModel
     ) -> tuple[httpx.AsyncClient, InProcessExecutor]:
-        app = make_app(parent, child, inline_wait=inline_wait)
+        app = make_app(parent, child)
         c = httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
         clients.append(c)
         executors.append(app.state.executor)
@@ -148,7 +142,7 @@ def _delegating_parent() -> TurnModel:
 
 
 async def events_of(run_id: str) -> list:
-    from atlas_server.db.models import RunEvent
+    from atlas_agent.db.models import RunEvent
 
     async with get_sessionmaker()() as session:
         stmt = (
@@ -282,7 +276,7 @@ async def test_sub_run_events_land_in_the_parent_thread(client_factory) -> None:
     归到子会话的话，回放父会话那条流时子智能体的全过程都不在里面，而那正是
     审批弹窗在委派挂起期间消失的根因。
     """
-    from atlas_server.db.models import RunEvent
+    from atlas_agent.db.models import RunEvent
 
     client, _ = await client_factory(
         _delegating_parent(), TurnModel(scripts=[[AIMessageChunk(content="结论是 42")]])
@@ -361,10 +355,8 @@ async def test_usage_accumulates_across_segments(client_factory) -> None:
 
 
 async def test_the_resumed_segment_sees_the_real_conclusion(client_factory) -> None:
-    """★ 续跑时模型看到的是子智能体的结论，而不是哨兵。
-
-    看到哨兵的后果是最坏的一种：它会把 `__ATLAS_SUSPENDED__:...`
-    当成子智能体说的话，然后一本正经地向用户汇报一个不存在的结果。
+    """★ 续跑时模型看到的是子智能体的结论 —— 由 SubAgentMiddleware 按 decisions 填进
+    `task` 的结果（contracts/suspension.py），而不是任何内部标记。
     """
     seen: list[list[Any]] = []
 
@@ -389,15 +381,15 @@ async def test_the_resumed_segment_sees_the_real_conclusion(client_factory) -> N
 
     assert len(seen) == 2, "父模型应当被调用两段"
     second = json.dumps([m.content for m in seen[1]], ensure_ascii=False, default=str)
-    assert "__ATLAS_SUSPENDED__" not in second
+    assert "__ATLAS_" not in second
     assert "快排" in second, "续跑段必须看到子智能体的真实结论"
 
 
-async def test_the_sentinel_stays_in_the_stored_history(client_factory) -> None:
-    """★ 表里留着哨兵是**对的** —— 它忠实记录「这一段是在等待中结束的」。
+async def test_the_stored_history_is_an_ordinary_tool_call(client_factory) -> None:
+    """★ 挂起不在消息表里留任何痕迹：一个 tool_use，恰好一条结果（子智能体的结论）。
 
-    结论的权威住在子 run 自己的会话里，续跑时现取。两边都写一份就有了两个
-    事实源，而它们会在子 run 被重跑（fresh=true）时分叉。
+    挂起时那个调用只是悬空（在等的事记在 run.waiting_on 里），续跑时结论作为它的结果
+    落库 —— 对模型和用户而言，这就是一次普通的工具调用（demo/suspend-resume §5）。
     """
     client, _ = await client_factory(
         _delegating_parent(), TurnModel(scripts=[[AIMessageChunk(content="结论是 42")]])
@@ -417,11 +409,14 @@ async def test_the_sentinel_stays_in_the_stored_history(client_factory) -> None:
             ).scalars()
         )
     blob = json.dumps([r.content for r in rows], ensure_ascii=False, default=str)
-    assert "__ATLAS_SUSPENDED__" in blob
+    assert "__ATLAS_" not in blob
 
-    # 但它对用户不可见
-    body = (await client.get(f"/v1/threads/{thread_id}/messages")).json()
-    assert "__ATLAS_SUSPENDED__" not in json.dumps(body, ensure_ascii=False)
+    blocks = [b for r in rows for b in (r.content or []) if isinstance(b, dict)]
+    uses = [b["id"] for b in blocks if b.get("type") == "tool_use"]
+    results = [b for b in blocks if b.get("type") == "tool_result"]
+    assert uses == ["c1"]
+    assert [b["tool_use_id"] for b in results] == ["c1"], "同一个调用不能有两份结果"
+    assert "42" in json.dumps(results[0], ensure_ascii=False)
 
 
 # ──────────────────────────────────────────────── 不被误当成孤儿
@@ -439,10 +434,18 @@ async def _freeze_as_suspended(run_id: str, *, child_status: str) -> None:
       真正关心的东西：取消怎么收尾、扫描捞不捞、孤儿回收碰不碰它。
     """
     async with get_sessionmaker()() as session:
+        child_id = (
+            await session.execute(select(Run.id).where(Run.parent_run_id == UUID(run_id)))
+        ).scalar_one()
+        # ★ 真实的挂起一定带着 waiting_on（关卡按它分派）—— 没有它的「挂起」不会被续跑
         await session.execute(
             Run.__table__.update()
             .where(Run.id == UUID(run_id))
-            .values(status="suspended", finished_at=None)
+            .values(
+                status="suspended",
+                finished_at=None,
+                waiting_on={"c1": {"reason": "subagent", "token": str(child_id)}},
+            )
         )
         await session.execute(
             Run.__table__.update()
@@ -528,8 +531,8 @@ async def test_cancelling_the_parent_cascades_to_the_child(client_factory) -> No
     整段时间都占着一个 Pod；更难解释的是它跑完后还会来唤醒一个已被取消的
     父 run。
     """
-    from atlas_server.redisx import make_redis
-    from atlas_server.stream.relay import EventRelay
+    from atlas_agent.redisx import make_redis
+    from atlas_agent.stream.relay import EventRelay
 
     client, _executor, _thread_id, run_id = await _suspend_a_run(client_factory)
     async with get_sessionmaker()() as session:
@@ -556,7 +559,7 @@ async def test_an_approval_during_suspension_reaches_the_thread_stream(
 ) -> None:
     """★ S5 的验收点：**父 run 挂起期间**，子智能体的审批照样能被看见。
 
-    这正是旧机制失效的那个场景。原先靠 SubagentService 在轮询循环里把子 run
+    这正是旧机制失效的那个场景。原先靠 SubAgentService 在轮询循环里把子 run
     的待审批冒泡到父流，而挂起之后：
 
       ① 轮询循环已经结束（_await_result 返回哨兵就退出了）
@@ -569,10 +572,10 @@ async def test_an_approval_during_suspension_reaches_the_thread_stream(
     订阅单位换成会话之后这个问题由架构消解：子 run 的事件本来就在同一条流上。
     这条测试钉住的就是「挂起中的 run，其子 run 的事件仍然进得来」。
     """
-    from atlas_server.domain.events import EventFactory, EventType
-    from atlas_server.redisx import make_redis
-    from atlas_server.repositories.run import RunRepository
-    from atlas_server.stream.relay import EventRelay, thread_stream_key
+    from atlas_agent.domain.events import EventFactory, EventType
+    from atlas_agent.redisx import make_redis
+    from atlas_agent.repositories.run import RunRepository
+    from atlas_agent.stream.relay import EventRelay, thread_stream_key
 
     _client, _executor, thread_id, run_id = await _suspend_a_run(client_factory)
 

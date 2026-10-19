@@ -6,9 +6,9 @@
 
 from __future__ import annotations
 
-from atlas_server.config import get_settings
-from atlas_server.domain.spec import ModelSpec
-from atlas_server.providers.llm.factory import build_chat_model
+from atlas_agent.config import get_settings
+from atlas_agent.domain.spec import ModelSpec
+from atlas_agent.providers.llm.factory import build_chat_model
 
 
 def test_anthropic_client_gets_request_timeout() -> None:

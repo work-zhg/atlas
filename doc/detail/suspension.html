@@ -117,35 +117,37 @@
 
   <h3>2.1 统一模型</h3>
 
-<pre><code>engine/contracts/suspension.py
+<pre><code>engine/contracts/suspension.py              <i>（修正 13 之后；之前是 marker 字符串，见 §12）</i>
 
-SUSPENSION_MARKER = "__ATLAS_SUSPENDED__"
-
-@dataclass(frozen=True)
-class Suspension:
-    reason: Literal["delegation", "approval"]
+class Wait(TypedDict):
+    reason: Literal["subagent", "approval"]      <i># 步骤 7 之前叫 "delegation"</i>
     token: str          # delegation → sub_run_id；approval → approval_id
 
-def suspend_marker(reason, token) -> str   # "__ATLAS_SUSPENDED__:delegation:&lt;uuid&gt;"
-def parse_suspension(text) -> Suspension | None</code></pre>
+WaitingOn = dict[str, Wait]                 # tool_call_id → Wait
+def merge_waits(old, new) -> WaitingOn      # reducer：按 tool_call_id 合并，None = 删除
 
-  <p>能力方（<code>task</code> 工具、审批中间件）在需要等待时<b>返回一个 marker 字符串</b>作为 ToolMessage 的内容。图内只有一个地方认识它：</p>
+kernel/middleware/suspension.py
+class SuspensionState(AgentState):
+    waiting_on: NotRequired[Annotated[WaitingOn, merge_waits]]          # 进也出：挂起时落库
+    decisions:  NotRequired[Annotated[dict[str, str], OmitFromOutput]]  # 只进：续跑时交入</code></pre>
+
+  <p>能力方（审批中间件、<code>SubAgentMiddleware</code>）在需要等待时<b>不执行、也不写任何 tool 消息</b>，只返回 <code>Command(update={"waiting_on": {call_id: Wait}})</code>。那个 tool_call 于是留着悬空；「在等什么」只记在 state 里。图内只有一个地方据此决定去向：</p>
 
 <pre><code>class SuspensionMiddleware(AgentMiddleware):
     @hook_config(can_jump_to=["tools", "end"])
     def before_model(self, state, runtime):
-        ...  # 三条判据，见 §6.3</code></pre>
+        ...  # 只看 waiting_on + decisions，见 §6.3</code></pre>
 
   <div class="callout warn">
-    <span class="label">★ marker 必须是返回值，不能是异常</span>
-    <p><code>task</code> 工具对受理方抛出的异常一律接成错误文本回给模型（委派失败是局部问题，不该炸掉整个 run）。marker 走异常路径会被那个 <code>except</code> 吞掉，变成模型眼里的一句「委派失败」—— 而它其实正在跑。</p>
+    <span class="label">★ 受理方的「还在跑」必须是返回值，不能是异常</span>
+    <p><code>task</code> 工具对受理方抛出的异常一律接成错误文本回给模型（委派失败是局部问题，不该炸掉整个 run）。挂起信号（<code>delegation_pending(sub_run_id)</code>）走异常路径会被那个 <code>except</code> 吞掉，变成模型眼里的一句「委派失败」—— 而它其实正在跑。这个信号只在受理方 → <code>task</code> → <code>SubAgentMiddleware</code> 之间传递，中间件把它换成 waiting_on 里的一项，不进消息。</p>
   </div>
 
-  <h3>2.2 为什么 marker 自带 token</h3>
+  <h3>2.2 为什么 waiting_on 以 tool_call_id 为键</h3>
 
-  <p>续跑时要把 marker 换成真实结果，而「换哪一条」只能靠它。把关联关系放在<b>消息序列自己身上</b>的回报是：不需要另一张表去记 <code>(tool_call_id → sub_run_id)</code> —— marker 所在的那条 ToolMessage 本来就带着正确的 <code>tool_call_id</code>（工具节点自己生成的）。</p>
+  <p>续跑时要知道「哪个调用在等哪个外部事件」。把它记成 <code>tool_call_id → (reason, token)</code>，关联关系就有了唯一的归宿：不需要另一张表去记 <code>(tool_call_id → sub_run_id)</code>，也不需要在消息里放占位。Patch 按这个键认出「在等」的悬空，审批 / 委派中间件按它找到自己的 token。</p>
 
-  <p>这一条在实现时救掉了一整张表，见 §12 的修正记录 1。</p>
+  <p>最初的实现把这层关联放在<b>消息序列自己身上</b>（marker 所在的 ToolMessage 带着 tool_call_id），同样救掉了一整张表（§12 修正 1）；修正 13 把它挪进了 state，消息因此不再被改写。</p>
 </section>
 
 <!-- ══════════════ 3 ══ -->
@@ -187,9 +189,9 @@ def parse_suspension(text) -> Suspension | None</code></pre>
 
   <h3>3.3 由此带来的简化</h3>
 
-  <p><code>PreparedRun.resume_entry</code> 这个字段<b>不需要</b>。server 侧什么都不用传 —— 三条判据全部只看 messages，<code>SuspensionMiddleware</code> 因此是无状态的，也不需要知道审批和委派的存在。</p>
+  <p><code>PreparedRun.resume_entry</code> 这个字段<b>不需要</b>：从哪个节点开始由 <code>SuspensionMiddleware</code> 在图内从 state 推断。server 只需把<b>挂起现场</b>原样交回 —— <code>waiting_on</code>（落在 <code>run.waiting_on</code>）和查好的 <code>decisions</code>（审批表的状态、子会话的结论）。中间件因此不需要知道审批和委派的存在。</p>
 
-  <p>附带好处：这个判据是通用的 —— 任何「工具没执行完就中断」的 run 续跑时都会自愈，不只审批。</p>
+  <p><i>（修正 13 之前这里写的是「server 什么都不用传，判据全部只看 messages」—— 那套判据靠消息里的哨兵 / 放行占位，代价见 §12 修正 13。）</i></p>
 </section>
 
 <!-- ══════════════ 4 ══ -->
@@ -319,7 +321,7 @@ async def check(self, *, approval_id, tool_name, args) -> ApprovalState
   <table>
     <thead><tr><th style="width:190px">gate 返回</th><th>middleware 动作</th></tr></thead>
     <tbody>
-      <tr><td><code>pending</code>（首次：已落库、已发事件）</td><td>返回 marker ToolMessage → 本段挂起，<b>工具不执行</b></td></tr>
+      <tr><td><code>pending</code>（首次：已落库、已发事件）</td><td>登记 <code>waiting_on</code>（不写 tool 消息）→ 本段挂起，<b>工具不执行</b></td></tr>
       <tr><td><code>approved</code></td><td><code>await handler(request)</code> —— 正常执行</td></tr>
       <tr><td><code>rejected</code> / <code>expired</code></td><td>返回 <code>REJECTED_RESULT</code> / <code>EXPIRED_RESULT</code></td></tr>
     </tbody>
@@ -336,13 +338,15 @@ async def check(self, *, approval_id, tool_name, args) -> ApprovalState
 
   <p><code>(run_id, tool_call_id)</code> 在一个 run 内唯一且跨段稳定（tool_call_id 由工具节点生成，落在 message 表里）。顺带修掉一个既有隐患：随机 approval_id 在重试路径上会留下孤儿 Approval 行。</p>
 
-  <h3>6.3 SuspensionMiddleware 的三条判据</h3>
+  <h3>6.3 SuspensionMiddleware 的判据</h3>
 
-<pre><code>悬空的 tool_call（有 tool_use 无 tool_result）  → jump_to <b>tools</b>
-末批 ToolMessage 里有 marker                     → jump_to <b>end</b>
-两者都没有                                        → 正常流向 model</code></pre>
+<pre><code>waiting_on 为空                              → 正常流向 model
+有一项的 token 已在 decisions 里             → jump_to <b>tools</b>（执行 / 填结论，并删掉这一项）
+都还没有结果                                  → jump_to <b>end</b></code></pre>
 
-  <p>全部只看 messages。一段里同时有两种 marker 时（模型一轮里既委派又调了高风险工具）：<b><code>tools</code> 优先</b> —— 先把待执行的工具跑掉，委派结论已经在历史里了，tools 跑完自然流向 model。</p>
+  <p>只看 state 的 <code>waiting_on</code> 与 <code>decisions</code>（修正 13；之前是「悬空 → tools、末批有 marker → end」，见 §12）。jump_to tools 时 ToolNode 执行最后一条 AIMessage 的<b>全部</b>调用：在等的那项由各自的中间件处理（审批按决策执行或拒绝，委派直接填结论、不再派一次），已完成的兄弟调用由 <code>SuspensionMiddleware.wrap_tool_call</code> 原样返回。</p>
+
+  <p><b>decisions 只放已经有结果的</b>：放了 pending 的话 before_model 放行、审批中间件又登记一次，两边来回跳到 <code>GraphRecursionError</code>。approval 行丢了按 <code>failed</code>（门禁故障）给模型 —— 关卡已判它结清，图里却拿不到决策的话，会挂起、续跑、再挂起。</p>
 
   <h3>6.4 D 让审批的冒泡整个消失</h3>
 
@@ -386,28 +390,23 @@ async def check(self, *, approval_id, tool_name, args) -> ApprovalState
   <h2><span class="num">07</span>交汇点：补齐与悬空</h2>
 
   <div class="callout danger">
-    <span class="label">★ 两个机制会在这里打架</span>
-    <p><code>domain/messages.py</code> 的 <code>to_storage</code> 有一条不变量：<b>每个 tool_use 必有配对的 tool_result</b>，悬空的会自动补一条 <code>is_error</code> 的「执行被中断」（不补则下一轮直接 400）。</p>
-    <p>而审批续跑<b>要求</b> tool_call 悬空 —— 那正是 <code>jump_to tools</code> 的判据。补齐之后 middleware 就不跳，工具永远不执行。</p>
+    <span class="label">★ 悬空有两种含义，三个「补齐者」都要分得清</span>
+    <p><b>在等</b>：审批 / 委派挂起时故意不写结果，登记在 <code>waiting_on</code> 里，续跑时才拿到结果。<b>被放弃</b>：进程在工具执行中退出、一轮异常中断，结果没来得及写。只有后者该补 —— 在等的也补上的话，续跑后同一个调用有两份结果（下一次模型调用 400），或者被批准的工具永远不执行。</p>
   </div>
 
-  <p>正确的顺序：</p>
-
   <table>
-    <thead><tr><th style="width:170px">阶段</th><th>消息序列</th><th>为什么</th></tr></thead>
+    <thead><tr><th style="width:240px">补齐者</th><th>何时</th><th>怎么认「在等」</th></tr></thead>
     <tbody>
-      <tr><td><b>审批挂起落库</b></td><td><code>AIMessage(tool_use)</code> + <code>ToolMessage(marker:approval:&lt;id&gt;)</code></td><td>marker 本身就是一条合法的 tool_result，配对完整，格式合法</td></tr>
-      <tr><td><b>续跑重建历史</b></td><td><b>换成</b>「已放行」占位（<code>__ATLAS_RELEASED__</code>）</td><td>序列保持配对 —— 否则 PatchToolCallsMiddleware 会在图入口把悬空补成「cancelled」（§12 修正 10）</td></tr>
-      <tr><td><b>before_model</b></td><td>删掉占位 + <code>jump_to "tools"</code></td><td>制造悬空的时机推到 patch 之后</td></tr>
+      <tr><td><code>PatchToolCallsMiddleware</code>（kernel 核心栈）</td><td>图入口 <code>before_agent</code>，补「was cancelled」</td><td>跳过 <code>state.waiting_on</code> 里的调用 —— 所以续跑时 waiting_on <b>必须</b>和消息一起交回（漏了就是 demo 实验 4：模型照着「cancelled」回答，工具没执行，全程不报错）</td></tr>
+      <tr><td><code>to_storage</code> / <code>Transcript.remaining_rows</code></td><td>段收尾落库，补「执行被中断」</td><td><code>waiting=</code> 参数（取自本段的 run.suspended），与 <code>run.waiting_on</code> 同一个事务落库</td></tr>
+      <tr><td><code>interrupted_results</code>（接管）</td><td>租约过期被接管时，补「结果未知」</td><td><b>不认</b>：接管只发生在有租约的 run 上，挂起的 run 没有租约。续跑段崩溃被接管时，被批准但可能执行了一半的工具按「结果未知」交给模型 —— 与横向扩展对其它工具的处理一致，不盲目重放副作用</td></tr>
     </tbody>
   </table>
 
-  <p>而 <code>_seal_dangling_tool_calls</code> 只在<b>真正异常中断</b>（没有 marker 的悬空）时起作用。两者不冲突，但这个边界必须在 <code>_settle_pending</code> 里写死并配一条测试 —— 否则将来有人「顺手统一」就会把审批路径压坏，而症状是「批准了但工具没跑」。</p>
+  <p>委派与审批的续跑因此是同一条路径，差别只在 decisions 里放什么、谁来消费：</p>
 
-  <p>对比委派续跑的处理，差异一目了然：</p>
-
-<pre class="flow">delegation marker  →  <b>换成结论</b>（子 run 的最终文本）   → 流向 model
-approval   marker  →  <b>换成放行占位</b> → before_model 删它 → 跳 tools</pre>
+<pre class="flow">subagent    decisions[sub_run_id]  = 子会话的结论  → SubAgentMiddleware 填进 task 的结果（不再起子 run）
+approval    decisions[approval_id] = approved / rejected / expired / failed → ApprovalMiddleware 执行或拒绝</pre>
 </section>
 
 <!-- ══════════════ 8 ══ -->
@@ -435,7 +434,8 @@ approval   marker  →  <b>换成放行占位</b> → before_model 删它 → �
 
 0012_suspension_reasons
   run        + waiting_on   JSONB NULL
-               [{"reason":"approval","token":"&lt;uuid&gt;"}, ...]
+               {"&lt;tool_call_id&gt;": {"reason":"approval","token":"&lt;uuid&gt;"}, ...}
+               <i>形状随修正 13 改为与 state.waiting_on 同形（原先是数组）；列不变，无迁移</i>
   approval   + tool_call_id VARCHAR(128) NULL   <i>approval_id 可复现的依据，便于审计</i></code></pre>
 
   <div class="callout rule">
@@ -743,6 +743,52 @@ Redis 锁 → 降为短 TTL 的抢占互斥，只防「两个请求同一瞬间�
         <code>connect(..., proxy=None)</code> 一行堵住。
         测试红着没人管，正是上面那条「静默故障」链能活这么久的原因。</p>
     </div>
+  </div>
+
+  <div class="step">
+    <h4>修正 13 · 挂起现场从消息挪进 state（2026-10-19，参照 demo/suspend-resume）</h4>
+    <p>修正 10 之后的做法是：能力方写一条<b>哨兵</b> ToolMessage；续跑时 server 改写历史
+      （委派换成结论、审批换成「已放行」占位）；before_model 再删占位、跳 tools。这一圈
+      全是为了躲开 <code>PatchToolCallsMiddleware</code>。它跑通了，但代价一直在长：</p>
+    <table>
+      <thead><tr><th style="width:190px">代价</th><th>表现</th></tr></thead>
+      <tbody>
+        <tr><td>消息表里有内部标记</td><td>同一个调用在表里有「哨兵 + 真实结果」两条，<code>_settle_pending</code> 要先剔掉已结案的哨兵 —— 一轮两次审批时漏剔过一次（2026-10-13 评测冒烟）</td></tr>
+        <tr><td>同一条判据散在四处</td><td><code>_scan_last_batch</code> / <code>runner._suspensions</code> / <code>_settled_call_ids</code> / 压缩 <code>clear_plan</code> 的 <code>__ATLAS_</code> 前缀，注释里写着「必须逐字一致」</td></tr>
+        <tr><td>事件说了假话</td><td>挂起时发 <code>tool.completed</code>（内容是哨兵）、<code>subagent.finished{suspended}</code>，前端再把它们撤回成「运行中」</td></tr>
+      </tbody>
+    </table>
+    <p><b>改法</b>（与 demo 同一套）：被拦下的调用<b>悬空</b>、不写任何占位，「在等什么」登记在
+      <code>state.waiting_on</code>；Patch 学会跳过它；挂起时 runner 从 <code>values</code> 流取最终
+      waiting_on，与消息同一个事务落进 <code>run.waiting_on</code>；续跑时把「消息（原样）+
+      waiting_on + decisions」交给新建的图。消息表从此只追加、不改写。
+      修正 10 的教训仍然成立 —— 依赖的不是「悬空」这个隐式状态，而是 waiting_on 这个显式登记；
+      只是登记从消息挪进了 state，而所有管悬空的人（Patch、落库补齐）都认它。</p>
+    <p>实现时撞到的三件事：</p>
+    <table>
+      <thead><tr><th style="width:190px">问题</th><th>处理</th></tr></thead>
+      <tbody>
+        <tr><td>续跑跳 tools 时 tools 节点的 updates 是<b>列表</b></td><td>只要有中间件返回 Command（审批放行、委派填结论），ToolNode 整批的更新就以列表交出。runner 原先只认 dict —— 续跑执行出的结果既不发事件也不落库，而且不报错。<code>runner._node_updates</code> 展开，测试钉住</td></tr>
+        <tr><td><code>run.waiting_on</code> 不能在领取续跑时清</td><td>续跑段可能被任意实例领取，只能从库里读。改为 run 结束（<code>finish</code>）时清、下次挂起时覆盖；接管条件去掉 <code>waiting_on IS NULL</code>（挂起的 run 本来就没有租约）；会话摘要只在挂起态读 reason；<code>_resume_state</code> 剪掉历史里已有结果的项</td></tr>
+        <tr><td>续跑时重新派生 approval_id</td><td>改为直接用 waiting_on 里登记的 token。顺带发现：runner 没把 run_id 传进图，<code>_run_id_of</code> 永远回落成空串，approval_id 实际只由 tool_call_id 派生 —— 测试里 tool_call_id 固定为 <code>c1</code>，跨测试撞 id（test_approval_api 连跑时的失败即此）；生产上 Anthropic 的 id 全局唯一，暂未暴露。<b>未修</b></td></tr>
+      </tbody>
+    </table>
+    <div class="callout warn">
+      <span class="label">行为变化与已知窗口</span>
+      <p>续跑段崩溃被接管时，被批准、可能执行了一半的工具按「结果未知」交给模型，不再自动重跑（原先会再执行一次）。</p>
+      <p>第一段里审批刚登记、段还没落库时进程死掉：waiting_on 随之丢失，接管时这个调用补「结果未知」，审批行成了孤儿 —— 用户之后点批准不会有反应。窗口是毫秒级，未处理。</p>
+      <p>旧格式数据（数组形状的 waiting_on、消息表里的哨兵）不迁移、不兼容：数组按「没有等待项」处理，那种 run 不会被续跑，可以手动取消。</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <h4>修正 14 · 派 SubAgent 一律挂起，当场等待删除（2026-10-19）</h4>
+    <p>修正 3 讨论的 <code>_await_result</code> 与 <code>subagent_inline_wait_s</code>（「先当场等 60 秒，等不到才挂起」）整个删掉了。
+      SubAgent 改成照审批的姿态：<code>SubAgentSpawner.spawn()</code> 像 <code>ApprovalGate.check()</code> 一样立刻返回，
+      <code>SubAgentMiddleware</code> 登记 <code>waiting_on</code>（reason 从 <code>delegation</code> 改名为 <code>subagent</code>）、本段挂起。
+      两种等待从此是同一条路径，不再有一条「短任务走老路」的分支要维护。代价是秒级的 SubAgent 也多一次挂起 / 续跑。</p>
+    <p>同一次改动里 SubAgent 可以继续派 SubAgent、层数不设上限 —— 挂起不在进程里等，嵌套就只是这条路一层层叠起来
+      （<a href="subagent.html#s13">subagent.html 步骤 7</a>）。</p>
   </div>
 
 </section>

@@ -8,6 +8,8 @@ import styles from "./chat.module.css";
 function preview(call: ToolCall): string {
   if (call.argsPreview) return call.argsPreview;
   if (call.args === undefined) return "";
+  // 空参数不显示：acp 的工具调用刚出现时参数还没补上，显示成「Edit{}」只会让人困惑
+  if (call.args && typeof call.args === "object" && Object.keys(call.args).length === 0) return "";
   try {
     return JSON.stringify(call.args).slice(0, 200);
   } catch {

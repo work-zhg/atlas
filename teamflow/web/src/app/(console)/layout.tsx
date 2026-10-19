@@ -7,7 +7,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, type ReactNode } from "react";
 
 import { BackendDown, isAuthRedirect } from "@/components/BackendDown";
-import { api, ApiError } from "@/lib/api";
+import { ApiError, logoutToUC, ucLoginUrl } from "@/lib/api";
 import { flatMenus, landingPath, useMe } from "@/lib/session";
 import type { MenuNode } from "@/lib/types";
 
@@ -36,7 +36,7 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
   const allowed = personal || (!!active && leaves.some((m) => m.path === active));
 
   useEffect(() => {
-    if (error instanceof ApiError && error.status === 401) router.replace("/login");
+    if (error instanceof ApiError && error.status === 401) window.location.assign(ucLoginUrl());
     else if (me && !allowed) router.replace(landingPath(me));
   }, [me, error, allowed, router]);
 
@@ -45,9 +45,8 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
   if (!me || !allowed) return <Spin style={{ display: "block", marginTop: 120 }} />;
 
   async function logout() {
-    await api.post("/auth/logout");
     qc.clear();
-    router.replace("/login");
+    await logoutToUC();
   }
 
   const item = (m: MenuNode, indent = false) => {

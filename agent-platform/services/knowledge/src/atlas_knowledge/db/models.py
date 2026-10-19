@@ -46,7 +46,8 @@ INDEXING_STATUSES = (
 )
 #: 审核状态：none = 库不要求审核；pending / approved / rejected
 REVIEW_STATUSES = ("none", "pending", "approved", "rejected")
-#: 可见范围（同 Dify DatasetPermissionEnum）
+#: 新建时的共享预设（同 Dify DatasetPermissionEnum 的取值）。★ 只在新建时用来写入用户中心的
+#: 初始授权；之后的共享以用户中心数据权限为准（perms.py），本服务不再保存可见范围
 PERMISSIONS = ("only_me", "all_team", "partial_members")
 #: 文档的分段结构（同 Dify doc_form）
 DOC_FORMS = ("text_model", "hierarchical_model", "qa_model")
@@ -72,6 +73,11 @@ class Dataset(_Row, Base):
     description: Mapped[str] = mapped_column(Text, default="", nullable=False)
     icon: Mapped[str] = mapped_column(String(64), default="📚", nullable=False)
     owner_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    #: user = 已登记到用户中心，库级权限全在用户中心。service = 存量：服务账号建的、没有登记，
+    #: 只有「全部知识库」授权的人能用。去服务账号后新库都是 user；`sync-uc --service-owner`
+    #: 把存量改归一个人（内网身份传递 §14），之后这一列可以删掉
+    owner_kind: Mapped[str] = mapped_column(String(16), default="user", nullable=False)
+    #: ★ 已废弃：接入用户中心前的可见范围。只有一次性迁移命令（sync-uc）还会读它
     permission: Mapped[str] = mapped_column(String(32), default="only_me", nullable=False)
     #: high_quality = 向量；economy = 关键词（P2）
     indexing_technique: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -85,6 +91,8 @@ class Dataset(_Row, Base):
     doc_form: Mapped[str] = mapped_column(String(32), default="text_model", nullable=False)
     #: Atlas 扩展：入库审核（doc §11.3）
     review_required: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    #: 入库增强开关（doc/knowledge-enterprise-design.html §5.3 / §5.5）：上下文补全 L2、大表摘要
+    enhancements: Mapped[dict[str, Any] | None] = mapped_column(JSONType, nullable=True)
     collection_name: Mapped[str] = mapped_column(String(128), nullable=False)
     #: 最近一次使用的处理规则（新文档沿用）
     latest_process_rule_uuid: Mapped[UUID | None] = mapped_column(UUIDType, nullable=True)
@@ -94,7 +102,7 @@ class Dataset(_Row, Base):
 
 
 class DatasetPermission(_Row, Base):
-    """partial_members 的成员表（同 Dify dataset_permissions）。level: read | write。"""
+    """★ 已废弃：接入用户中心前 partial_members 的成员表。只有迁移命令（sync-uc）还会读它。"""
 
     __tablename__ = "kb_dataset_permission"
 
@@ -129,6 +137,10 @@ class Document(_Row, Base):
     doc_form: Mapped[str] = mapped_column(String(32), nullable=False)
     doc_language: Mapped[str | None] = mapped_column(String(32), nullable=True)
     content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    #: 解析质量报告（doc/knowledge-enterprise-design.html §4.7）：页数、扫描页、乱码比例、告警……
+    parse_report: Mapped[dict[str, Any] | None] = mapped_column(JSONType, nullable=True)
+    #: DocIR 在对象存储里的 key：解析预览、换分段规则时不必重新解析
+    docir_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
     indexing_status: Mapped[str] = mapped_column(String(16), default="waiting", nullable=False)
     processing_started_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
@@ -148,6 +160,16 @@ class Document(_Row, Base):
     reviewed_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
     reviewed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: 业务元数据（§7.2）：{字段名: 值}，字段由 kb_metadata_field 定义；写进 point payload 的 meta
+    doc_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSONType, nullable=True)
+    #: 文档级权限（§7.4）：可访问主体标签，如 ["u:123", "d:45", "r:hr"]；None = 库内公开
+    acl: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
+    #: 版本与时效（§7.5）：同一份文档的各版本共用 version_group；新版本入库完成后旧版本
+    #: is_current = false；生效区间外的不参与检索
+    version_group: Mapped[UUID | None] = mapped_column(UUIDType, nullable=True, index=True)
+    is_current: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    valid_from: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    valid_to: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     created_by: Mapped[str] = mapped_column(String(64), nullable=False)
 
     __table_args__ = (Index(None, "dataset_uuid", "position"),)
@@ -168,6 +190,12 @@ class Segment(_Row, Base):
     #: 按标题分段时的标题路径（如 ["项目经验", "五、资信平台"]）；建向量与返回给模型时拼在前面，
     #: 不进正文 —— 正文保持原文
     title_path: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
+    #: 引用定位（§4.6）：{"pages": [...], "boxes": [{"page", "bbox"}], "assets": [图片 key]}
+    source_locator: Mapped[dict[str, Any] | None] = mapped_column(JSONType, nullable=True)
+    #: 向量化前缀（文档标题 + 标题路径 + LLM 上下文，§5.3）；正文仍是原文。老分段为空，用标题路径
+    context: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: 分段级元数据覆盖（§7.2）：与文档元数据合并（同名以分段为准）后写进 payload 的 meta
+    meta: Mapped[dict[str, Any] | None] = mapped_column(JSONType, nullable=True)
     #: 问答模式的答案（P2）
     answer: Mapped[str | None] = mapped_column(Text, nullable=True)
     word_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -260,3 +288,60 @@ class Retrieval(_Row, Base):
     #: 本次检索所在链路（遥测关闭时为空）
     trace_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     latency_ms: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
+#: 索引版本状态：building 构建中 → ready 可切换 → active 当前 → retired 已退役（collection 保留，
+#: 可回滚）→ deleted（collection 已删）；failed 构建失败
+INDEX_VERSION_STATUSES = ("building", "ready", "active", "retired", "deleted", "failed")
+#: collection 还在的版本：写入（双写）、删除、开关都要同步到这些版本
+LIVE_INDEX_STATUSES = ("building", "ready", "active", "retired")
+
+
+class IndexVersion(_Row, Base):
+    """知识库的向量索引版本（doc/knowledge-enterprise-design.html §6.2）。
+
+    kb_dataset 上的 embedding_* 与 collection_name 是 active 版本的指针：切换版本 = 在一个事务里
+    改这几个字段（检索按请求读知识库，看到的要么是旧版本、要么是新版本）。
+    """
+
+    __tablename__ = "kb_index_version"
+
+    dataset_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False, index=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    embedding_provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    embedding_model: Mapped[str] = mapped_column(String(255), nullable=False)
+    embedding_dim: Mapped[int] = mapped_column(Integer, nullable=False)
+    collection_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    #: 构建完成后自动切换
+    auto_activate: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    #: 构建进度：{documents, done, points}
+    progress: Mapped[dict[str, Any] | None] = mapped_column(JSONType, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    activated_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    created_by: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    __table_args__ = (UniqueConstraint("dataset_uuid", "version"),)
+
+
+#: 元数据字段类型
+METADATA_TYPES = ("string", "number", "date", "enum")
+
+
+class MetadataField(_Row, Base):
+    """知识库的元数据字段定义（§7.2）。值存在 kb_document.doc_metadata，检索时转成 payload 过滤。"""
+
+    __tablename__ = "kb_metadata_field"
+
+    dataset_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    #: string | number | date | enum
+    type: Mapped[str] = mapped_column(String(16), nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    #: enum 的可选值
+    options: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
+    multi: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    #: 允许查询理解从问题里抽取这个字段的过滤条件
+    llm_extract: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    __table_args__ = (UniqueConstraint("dataset_uuid", "name"),)

@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>用户中心 · 租户详细设计</title>
+<style>
+  :root{
+    --bg:#f6f7f9;--surface:#fff;--surface-2:#fbfbfd;--ink:#0f172a;--ink-2:#334155;--ink-3:#64748b;--ink-4:#94a3b8;
+    --line:#e6e8ee;--line-2:#eef0f4;--primary:#4f46e5;--primary-weak:#eef0ff;
+    --warning:#b45309;--warning-weak:#fef3e2;
+    --mono:"JetBrains Mono","SF Mono",ui-monospace,Menlo,Consolas,monospace;
+    --font:"Inter","PingFang SC","Microsoft YaHei",system-ui,-apple-system,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink-2);font-family:var(--font);font-size:14.5px;line-height:1.75}
+  a{color:var(--primary);text-decoration:none}
+  .wrap{display:grid;grid-template-columns:240px minmax(0,1fr);gap:36px;max-width:1240px;margin:0 auto;padding:32px 28px 80px}
+  nav.toc{position:sticky;top:24px;align-self:start;max-height:calc(100vh - 48px);overflow:auto;font-size:13px}
+  nav.toc .t{font-size:11px;letter-spacing:.12em;color:var(--ink-4);text-transform:uppercase;margin-bottom:8px;font-weight:600}
+  nav.toc ol{list-style:none;margin:0;padding:0;counter-reset:s}
+  nav.toc li{counter-increment:s}
+  nav.toc a{display:block;padding:4px 8px;border-radius:6px;color:var(--ink-3)}
+  nav.toc a::before{content:counter(s,decimal-leading-zero) "  ";font-family:var(--mono);font-size:11px;color:var(--ink-4)}
+  nav.toc a:hover{background:#fff;color:var(--ink)}
+  header.hero{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:28px 30px;margin-bottom:28px}
+  .kicker{font-family:var(--mono);font-size:11.5px;letter-spacing:.14em;color:var(--primary);text-transform:uppercase;margin:0 0 6px}
+  h1{font-size:26px;color:var(--ink);margin:0 0 10px;letter-spacing:-.3px}
+  .lede{margin:0;font-size:15px}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+  .meta span{font-size:12px;padding:2px 10px;border-radius:999px;background:var(--primary-weak);color:var(--primary)}
+  section{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:24px 28px;margin-bottom:20px}
+  h2{font-size:19px;color:var(--ink);margin:0 0 14px;display:flex;align-items:center;gap:10px}
+  h2 .num{font-family:var(--mono);font-size:12px;color:#fff;background:var(--primary);border-radius:6px;padding:2px 7px}
+  h3{font-size:15.5px;color:var(--ink);margin:22px 0 8px}
+  p{margin:0 0 12px}
+  code{font-family:var(--mono);font-size:12.5px;background:#f1f3f7;border:1px solid var(--line-2);border-radius:4px;padding:0 5px;color:#be185d}
+  table{width:100%;border-collapse:collapse;font-size:13.5px;margin:6px 0 14px}
+  th{text-align:left;background:var(--surface-2);color:var(--ink-3);font-weight:600;font-size:12.5px}
+  th,td{border:1px solid var(--line);padding:8px 10px;vertical-align:top}
+  td code{white-space:nowrap}
+  pre{background:#0f172a;color:#e2e8f0;border-radius:10px;padding:14px 16px;font-family:var(--mono);font-size:12.5px;line-height:1.65;overflow:auto;margin:6px 0 14px;white-space:pre-wrap}
+  pre .c{color:#94a3b8}
+  .callout{border:1px solid;border-left-width:4px;border-radius:10px;padding:10px 14px;margin:8px 0 14px;font-size:13.5px}
+  .callout b.l{display:block;font-size:11.5px;letter-spacing:.1em;margin-bottom:3px}
+  .rule{background:var(--primary-weak);border-color:#c7c9f5;color:#312e81}
+  .warn{background:var(--warning-weak);border-color:#f6d39b;color:#7c2d12}
+  .tag{display:inline-block;font-size:11.5px;padding:0 8px;border-radius:999px;border:1px solid var(--line);background:var(--surface-2);color:var(--ink-3);white-space:nowrap}
+  .tag.new{color:var(--primary);border-color:#c7c9f5;background:var(--primary-weak)}
+  .tag.p2{color:var(--warning);border-color:#f6d39b;background:var(--warning-weak)}
+  .flow{font-family:var(--mono);font-size:12.5px;line-height:1.75;background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:14px 16px;white-space:pre;overflow:auto;margin:6px 0 14px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .box{border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:var(--surface-2)}
+  .box h4{margin:0 0 6px;font-size:13.5px;color:var(--ink)}
+  ul,ol{margin:0 0 12px;padding-left:20px}
+  li{margin:2px 0}
+  .muted{color:var(--ink-4);font-size:12px}
+  /* 关系图 */
+  .arch{margin:6px 0 14px}
+  .arch-sys{border:1.5px dashed #c7c9f5;border-radius:12px;padding:12px 14px;background:#fafaff}
+  .arch-sys-t{font-size:12px;font-weight:700;color:var(--primary);margin-bottom:8px;letter-spacing:.06em}
+  .arch-row{display:flex;align-items:center}
+  .arch-box{flex:1;background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:13px}
+  .arch-box.me{border-color:var(--primary);box-shadow:0 0 0 3px rgba(79,70,229,.1)}
+  .arch-box b{color:var(--ink)}
+  .arch-box ul{margin:6px 0 0;padding-left:16px;color:var(--ink-3);font-size:12.5px}
+  .arch-link{width:96px;flex:none;text-align:center;font-size:11.5px;color:var(--ink-3);position:relative;padding-bottom:10px}
+  .arch-link i{position:absolute;left:8px;right:8px;bottom:0;height:2px;background:#9aa4b6}
+  .arch-link i.r::after{content:"";position:absolute;right:-2px;top:-4px;border-left:7px solid #9aa4b6;border-top:5px solid transparent;border-bottom:5px solid transparent}
+  .arch-link i.l::before{content:"";position:absolute;left:-2px;top:-4px;border-right:7px solid #9aa4b6;border-top:5px solid transparent;border-bottom:5px solid transparent}
+  .arch-note{margin-top:8px;font-size:12px;color:var(--ink-3)}
+  .arch-down{display:flex;align-items:center;gap:8px;margin-left:calc(83% - 1px);height:34px;font-size:11.5px;color:var(--ink-3)}
+  .arch-down i{width:2px;height:100%;background:#9aa4b6;position:relative}
+  .arch-down i::after{content:"";position:absolute;left:-4px;bottom:-2px;border-top:7px solid #9aa4b6;border-left:5px solid transparent;border-right:5px solid transparent}
+  .arch-ext{margin-left:calc(83% - 90px);width:180px;text-align:center;border:1px solid #9aa4b6;border-radius:10px;padding:8px;background:#fff;font-weight:600;color:var(--ink);font-size:13px}
+  @media (max-width:980px){.wrap{grid-template-columns:1fr}nav.toc{position:static;max-height:none}.grid2{grid-template-columns:1fr}
+    .arch-row{flex-direction:column;align-items:stretch}.arch-link{width:auto;height:30px}.arch-down,.arch-ext{margin-left:0}}
+  .sm{width:100%;height:auto;display:block;margin:6px 0 14px;background:var(--surface-2);border:1px solid var(--line);border-radius:10px}
+  .ok{color:#15803d;font-weight:700}.no{color:var(--ink-4)}
+  .diff td:first-child{white-space:nowrap}
+  .layers{display:flex;flex-direction:column;gap:8px;margin:6px 0 14px}
+  .layer{display:flex;align-items:stretch;border:1px solid var(--line);border-radius:10px;background:var(--surface-2);overflow:hidden}
+  .layer-t{width:96px;flex:none;display:flex;align-items:center;justify-content:center;font-size:12.5px;font-weight:700;color:var(--primary);background:var(--primary-weak);border-right:1px solid var(--line)}
+  .layer.ext .layer-t{color:var(--ink-3);background:#f1f3f7}
+  .cells{display:flex;flex-wrap:wrap;gap:6px;padding:10px}
+  .cells span{background:#fff;border:1px solid var(--line);border-radius:8px;padding:4px 10px;font-size:12.5px;color:var(--ink-2)}
+  /* 系统架构 */
+  .sys{display:flex;align-items:center;gap:0;margin:6px 0 14px}
+  .sys-col{display:flex;flex-direction:column;gap:10px;width:150px;flex:none}
+  .sys-col.wide{flex:1;width:auto}
+  .sys-arrow{width:84px;flex:none;text-align:center;font-size:11px;color:var(--ink-3);position:relative;padding-bottom:12px}
+  .sys-arrow::after{content:"";position:absolute;left:8px;right:8px;bottom:0;height:2px;background:#9aa4b6}
+  .sys-box{border:1px solid var(--line);border-radius:10px;background:#fff;padding:8px 10px;font-size:12.5px;display:flex;flex-direction:column;gap:2px}
+  .sys-box b{color:var(--ink);font-size:13px}
+  .sys-box span{color:var(--ink-3);font-size:11.5px}
+  .sys-box.ui{border-color:#9ec5f8;background:#f3f8ff}
+  .sys-box.ext{border-color:#9aa4b6;background:#f6f7f9}
+  .sys-box.db{background:#fbfbfd}
+  .sys-group{border:1.5px dashed #c7c9f5;border-radius:12px;padding:10px 12px;background:#fafaff}
+  .sys-group-t{font-size:12px;font-weight:700;color:var(--primary);margin-bottom:8px}
+  .sys-mods{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+  .sys-mods span{background:#fff;border:1px solid #dcdcfb;border-radius:6px;padding:2px 8px;font-size:12px;color:var(--primary)}
+  .sys-sub,.sys-store{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .sys-store{grid-template-columns:1fr 1fr 1fr;margin-top:10px}
+  @media (max-width:980px){.sys{flex-direction:column;align-items:stretch}.sys-col{width:auto}.sys-arrow{width:auto;height:34px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<nav class="toc">
+  <div class="t">目录</div>
+  <ol>
+    <li><a href="#s1">背景与目标</a></li>
+    <li><a href="#s2">核心概念</a></li>
+    <li><a href="#s3">隔离方案选型</a></li>
+    <li><a href="#s4">归属划分：哪些表属于租户</a></li>
+    <li><a href="#s5">数据模型</a></li>
+    <li><a href="#s6">隔离的实现</a></li>
+    <li><a href="#s7">平台与租户的管理</a></li>
+    <li><a href="#s8">登录与租户识别</a></li>
+    <li><a href="#s9">开放接口</a></li>
+    <li><a href="#s10">权限计算的变化</a></li>
+    <li><a href="#s11">关键流程</a></li>
+    <li><a href="#s12">对接入应用的影响</a></li>
+    <li><a href="#s13">存量迁移</a></li>
+    <li><a href="#s14">缓存、审计与安全</a></li>
+    <li><a href="#s15">分期</a></li>
+    <li><a href="#s16">风险与待确认</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<header class="hero">
+  <p class="kicker">User Center · Tenant Design</p>
+  <h1>用户中心 · 租户详细设计</h1>
+  <p class="lede">在用户中心引入<b>租户</b>：每个用户、每个部门都属于且只属于一个租户；组织、授权、数据权限在租户之间完全隔离。接入应用（Atlas、AI TeamFlow）在平台上<b>登记一次</b>，按租户<b>开通</b>。现有数据迁移为一个租户，单租户部署的行为不变。</p>
+  <div class="meta"><span>2026-10-16 · 设计稿，待评审</span><span>共享表 + tenant_uuid + 复合外键</span><span>令牌绑定租户</span><span>平台租户 / 客户租户</span></div>
+  <div class="meta" style="margin-top:8px">
+    <a class="tag new" href="system-design.html">总体设计</a>
+    <a class="tag new" href="user-design.html">用户管理</a>
+    <a class="tag new" href="org-design.html">组织管理</a>
+    <a class="tag new" href="app-design.html">应用接入</a>
+    <a class="tag new" href="perm-design.html">权限管理</a>
+  </div>
+</header>
+
+<div class="callout rule"><b class="l">结论先行</b>
+<ol>
+  <li><b>共享表 + 每张租户表一列 <code>tenant_uuid</code></b>，并用<b>复合外键 <code>(tenant_uuid, xxx_uuid)</code></b> 让「跨租户引用」在数据库层面不可能写入（部门挂到别的租户、给别的租户的人授权……）。应用层再用统一的租户过滤兜底，查询漏写过滤条件也取不到别的租户的数据。</li>
+  <li><b>应用、操作、菜单、数据编码属于平台</b>（应用方定义一次）；<b>组织、用户、岗位、授权、数据对象与数据授权属于租户</b>。角色两级：应用内置角色是平台级只读模板，租户可以建自己的角色。</li>
+  <li><b>开放接口令牌绑定 (应用, 租户)</b>：应用换令牌时声明租户，之后每个请求自动限定在该租户内，接口参数里不出现租户，所以不可能被参数带到别的租户。</li>
+  <li><b>平台运营方也是一个租户</b>（<code>kind = platform</code>，全局唯一）：「每个用户都属于某个租户」没有例外；平台级操作（建租户、维护应用目录）只对平台租户内的人生效。存量数据迁移成这个平台租户，单租户部署零感知。</li>
+</ol>
+</div>
+
+<section id="s1">
+  <h2><span class="num">01</span>背景与目标</h2>
+  <p>用户中心现在默认「一套部署 = 一个组织」：唯一根部门、账号与邮箱全局唯一、应用的可访问范围直接挂部门。要让同一套用户中心（以及其上的 Atlas、AI TeamFlow）服务多家子公司或外部客户，就需要在组织之上加一层「租户」。</p>
+  <div class="grid2">
+    <div class="box"><h4>目标</h4>
+      <ul>
+        <li>用户、部门属于且只属于一个租户；每个租户一棵独立的部门树</li>
+        <li>租户之间完全隔离：管理台、开放接口、权限计算、数据权限都看不到别的租户</li>
+        <li>应用在平台登记一次，按租户开通，并由租户自己设可访问范围</li>
+        <li>账号在租户内唯一，不同租户可以有同名账号</li>
+        <li>存量平滑迁移；单租户部署的使用方式不变</li>
+      </ul></div>
+    <div class="box"><h4>非目标（本期）</h4>
+      <ul>
+        <li>同一个人跨租户共用身份：本期在两个租户就是两个账号；以后由 Keycloak 关联（P3）</li>
+        <li>按租户独立数据库 / 独立部署（大客户专属，P3 再评估）</li>
+        <li>租户自定义安全策略（密码规则、会话时长）：P2</li>
+        <li>租户私有应用（只在本租户接入的应用）：P2</li>
+        <li>计费：只记录归属与配额，不定价</li>
+      </ul></div>
+  </div>
+</section>
+
+<section id="s2">
+  <h2><span class="num">02</span>核心概念</h2>
+  <table>
+    <tr><th>概念</th><th>说明</th></tr>
+    <tr><td>租户</td><td>一个相互隔离的组织空间：自己的部门树、用户、岗位、角色授权、数据权限。有企业代码（<code>code</code>，登录时用）、名称、状态、配额</td></tr>
+    <tr><td>平台租户</td><td><code>kind = platform</code>，全局唯一。运营方自己的人在这里；只有平台租户内的人能持有平台级操作（建租户、维护应用目录）</td></tr>
+    <tr><td>客户租户</td><td><code>kind = customer</code>。不能持有任何平台级操作，只能管理自己</td></tr>
+    <tr><td>应用（目录）</td><td>平台级：凭据、操作、菜单、数据编码、内置角色由应用方定义一次，所有租户看到的是同一份</td></tr>
+    <tr><td>租户开通应用</td><td>某租户能用某应用：开通状态 + 本租户内的可访问范围（全员 / 指定部门含下级）。<code>can_access</code> = 开通 ∧ 在范围内</td></tr>
+    <tr><td>角色（两级）</td><td>应用内置角色：平台级，所有开通租户可授、不可改；租户自定义角色：只属于本租户</td></tr>
+    <tr><td>租户上下文</td><td>每个请求的「当前租户」：管理台取自登录用户所属租户，开放接口取自令牌。<b>永远不从请求参数读取</b>（登录时的企业代码除外）</td></tr>
+  </table>
+</section>
+
+<section id="s3">
+  <h2><span class="num">03</span>隔离方案选型</h2>
+  <table>
+    <tr><th>方案</th><th>优点</th><th>代价</th><th>结论</th></tr>
+    <tr><td><b>共享表 + tenant_uuid</b></td><td>一套表、一套迁移；平台级统计与运维简单；用户规模（每租户数百到数万）完全够</td><td>隔离靠约束与代码纪律，漏写过滤就是越权 —— 用复合外键 + 统一过滤器 + （P2）行级安全三层兜住</td><td class="ok">采用</td></tr>
+    <tr><td>每租户一个 schema</td><td>隔离天然；按租户备份恢复方便</td><td>迁移要对 N 个 schema 各跑一遍；连接要切 search_path；平台级查询要 UNION；租户数一多运维成本线性增长</td><td>不采用</td></tr>
+    <tr><td>每租户一个数据库</td><td>隔离最强，可按客户独立部署</td><td>资源与运维成本最高；平台级能力（应用目录）要另建一个库同步</td><td>P3：只为有合规要求的大客户评估</td></tr>
+  </table>
+</section>
+
+<section id="s4">
+  <h2><span class="num">04</span>归属划分：哪些表属于租户</h2>
+  <table>
+    <tr><th>表</th><th>归属</th><th>变化</th></tr>
+    <tr><td><code>uc_tenant</code></td><td>平台</td><td><span class="tag new">新</span> 租户本身</td></tr>
+    <tr><td><code>uc_dept</code></td><td><b>租户</b></td><td>加 tenant_uuid；「唯一根部门」改为<b>每租户</b>唯一根；同级重名约束不变（parent 已隐含租户）</td></tr>
+    <tr><td><code>uc_user</code></td><td><b>租户</b></td><td>加 tenant_uuid；账号、邮箱唯一性改为<b>租户内</b>唯一</td></tr>
+    <tr><td><code>uc_user_credential</code> · <code>uc_session</code></td><td>随用户</td><td>不加列（经用户确定租户）</td></tr>
+    <tr><td><code>uc_login_log</code></td><td>租户</td><td>加 tenant_uuid（登录失败时用户可能不存在，按企业代码记）</td></tr>
+    <tr><td><code>uc_app</code> · <code>uc_operation</code> · <code>uc_menu</code> · <code>uc_data_type</code></td><td>平台</td><td>不变：应用目录全局一份</td></tr>
+    <tr><td><code>uc_tenant_app</code></td><td>租户</td><td><span class="tag new">新</span> 租户开通应用：状态、是否全员、开通人 / 时间</td></tr>
+    <tr><td><code>uc_app_scope_dept</code></td><td><b>租户</b></td><td>加 tenant_uuid：可访问范围是「某租户开通某应用」的属性，不再挂在应用上</td></tr>
+    <tr><td><code>uc_app_token</code></td><td>(应用, 租户)</td><td>加 tenant_uuid：令牌绑定租户</td></tr>
+    <tr><td><code>uc_role</code> · <code>uc_role_operation</code> · <code>uc_role_menu</code></td><td>两级</td><td>加 tenant_uuid（可空）：空 = 应用内置角色；非空 = 租户自定义。编码唯一改为 (租户, 编码)</td></tr>
+    <tr><td><code>uc_position</code> · <code>uc_position_role</code></td><td><b>租户</b></td><td>加 tenant_uuid；岗位编码 / 名称租户内唯一</td></tr>
+    <tr><td><code>uc_grant</code></td><td><b>租户</b></td><td>加 tenant_uuid；主体（用户 / 部门）与岗位必须同租户；角色必须是内置或本租户的</td></tr>
+    <tr><td><code>uc_data_object</code></td><td><b>租户</b></td><td>加 tenant_uuid；唯一键改为 (租户, 数据编码, data_id) —— 两个租户的同一个 data_id 互不相干</td></tr>
+    <tr><td><code>uc_data_acl</code> · <code>uc_data_type_acl</code></td><td><b>租户</b></td><td>加 tenant_uuid。<b>「全部数据授权」只覆盖本租户的全部数据</b>（「全部智能体 · Owner」不会跨租户）</td></tr>
+    <tr><td><code>uc_audit_event</code></td><td>租户 / 平台</td><td>加 tenant_uuid（可空：平台级操作为空）</td></tr>
+    <tr><td><code>uc_config</code></td><td>平台</td><td>本期不变（全局密码与登录保护）；P2 增加租户覆盖</td></tr>
+  </table>
+</section>
+
+<section id="s5">
+  <h2><span class="num">05</span>数据模型</h2>
+  <h3>5.1 租户与开通</h3>
+<pre>CREATE TABLE uc_tenant (
+  id            bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  uuid          uuid NOT NULL UNIQUE,
+  code          varchar(32)  NOT NULL UNIQUE,   -- 企业代码：小写字母开头，字母数字与 -，创建后不可改
+  name          varchar(64)  NOT NULL,
+  kind          varchar(16)  NOT NULL DEFAULT 'customer',   -- platform | customer
+  status        varchar(16)  NOT NULL DEFAULT 'active',     -- active | suspended | closed
+  max_users     integer,                        -- 配额；空 = 不限
+  expires_at    timestamptz,                    -- 到期后视同 suspended
+  created_at …, created_by …, updated_at …, updated_by …, version …,
+  CHECK (kind IN ('platform','customer')),
+  CHECK (status IN ('active','suspended','closed'))
+);
+CREATE UNIQUE INDEX uq_uc_tenant_platform ON uc_tenant ((kind)) WHERE kind = 'platform';  -- 平台租户只有一个
+
+CREATE TABLE uc_tenant_app (
+  id, uuid,
+  tenant_uuid   uuid NOT NULL REFERENCES uc_tenant(uuid),
+  app_uuid      uuid NOT NULL REFERENCES uc_app(uuid),
+  status        varchar(16) NOT NULL DEFAULT 'active',      -- active | disabled（租户侧停用该应用）
+  scope_all     boolean NOT NULL DEFAULT false,             -- 全员可访问；否则看 uc_app_scope_dept
+  enabled_by    uuid, enabled_at timestamptz NOT NULL,
+  UNIQUE (tenant_uuid, app_uuid)
+);</pre>
+  <h3>5.2 租户表的通用改造</h3>
+  <table>
+    <tr><th>项</th><th>规则</th></tr>
+    <tr><td>租户列</td><td>每张租户表 <code>tenant_uuid uuid NOT NULL</code>；索引一律以 tenant_uuid 打头（列表、搜索都先按租户收窄）</td></tr>
+    <tr><td>复合唯一</td><td>被引用的租户表加 <code>UNIQUE (tenant_uuid, uuid)</code>，给复合外键用</td></tr>
+    <tr><td>复合外键</td><td>租户表之间的引用改为 <code>(tenant_uuid, xxx_uuid) → 对方 (tenant_uuid, uuid)</code>：<br>
+      <code>uc_user(tenant_uuid, dept_uuid) → uc_dept</code>、<code>uc_dept(tenant_uuid, parent_uuid / leader_uuid)</code>、<code>uc_grant(tenant_uuid, user_uuid / dept_uuid / position_uuid)</code>、<code>uc_data_acl(tenant_uuid, data_object_uuid / user_uuid / dept_uuid)</code>、<code>uc_data_type_acl</code>、<code>uc_position_role(tenant_uuid, position_uuid)</code>、<code>uc_app_scope_dept(tenant_uuid, dept_uuid)</code><br>
+      ★ 这是隔离的<b>硬保证</b>：哪怕代码 bug 把别的租户的部门 id 传进来，数据库也拒绝写入</td></tr>
+    <tr><td>唯一性改写</td><td><code>uc_user</code>：(tenant, account)、(tenant, email)；<code>uc_dept</code>：每租户一个根 <code>UNIQUE (tenant_uuid) WHERE parent_uuid IS NULL</code>；<code>uc_role</code>：<code>UNIQUE (coalesce(tenant_uuid, 零值), code)</code> 且租户角色编码不得与内置角色同名；<code>uc_position</code>：(tenant, code)、(tenant, name)；<code>uc_data_object</code>：(tenant, data_type, data_id)</td></tr>
+    <tr><td>授权引用角色</td><td><code>uc_grant.role_uuid</code> 指向的角色必须 <code>tenant_uuid IS NULL OR = 授权的租户</code>（触发器或服务层校验 —— 可空租户列无法用复合外键表达）</td></tr>
+  </table>
+</section>
+
+<section id="s6">
+  <h2><span class="num">06</span>隔离的实现</h2>
+  <table>
+    <tr><th>层</th><th>做法</th><th>防的是什么</th></tr>
+    <tr><td>① 数据库约束</td><td>复合外键与复合唯一（5.2）</td><td>跨租户<b>写入</b>（把 A 租户的人加进 B 租户的授权）</td></tr>
+    <tr><td>② 统一过滤</td><td>请求开始时建立 <code>TenantContext</code>（管理台：会话用户的租户；开放接口：令牌的租户）。SQLAlchemy 会话上注册 <code>with_loader_criteria</code>，对所有带 <code>tenant_uuid</code> 的模型自动追加 <code>tenant_uuid = 当前租户</code>。平台级操作显式声明 <code>platform_scope()</code> 才能跨租户</td><td>跨租户<b>读取</b>：某个查询忘了写租户条件</td></tr>
+    <tr><td>③ 行级安全（P2）</td><td>PostgreSQL RLS：每个事务 <code>SET LOCAL app.tenant = …</code>，策略 <code>tenant_uuid = current_setting('app.tenant')::uuid</code>；平台操作用单独的数据库角色</td><td>绕过 ORM 的原生 SQL；纵深防御</td></tr>
+    <tr><td>④ 测试守卫</td><td>每个管理 API / 开放接口的契约测试都在两个租户里各造一份数据，断言 A 的凭据访问 B 的 id 一律 404</td><td>回归</td></tr>
+  </table>
+  <div class="callout warn"><b class="l">跨租户一律 404</b>按 id 访问别的租户的用户、部门、角色、数据对象，返回「不存在」而不是「无权限」—— 不泄露别的租户里有什么。</div>
+</section>
+
+<section id="s7">
+  <h2><span class="num">07</span>平台与租户的管理</h2>
+  <h3>7.1 两类管理员</h3>
+  <table>
+    <tr><th></th><th>平台管理员</th><th>租户超级管理员</th></tr>
+    <tr><td>在哪</td><td>平台租户内的用户</td><td>每个租户内（含平台租户自己）</td></tr>
+    <tr><td>能做</td><td>建 / 停用 / 注销租户、设配额与到期；接入应用（凭据、操作、菜单、数据编码、内置角色）；给租户开通应用</td><td>本租户的组织、用户、岗位、角色授权、自定义角色、数据授权；本租户已开通应用的可访问范围</td></tr>
+    <tr><td>不能做</td><td><b>默认看不到客户租户内的人员与授权</b>；排障需要「代管」显式进入（限时、强制审计，P2）</td><td>任何平台级操作；看到别的租户</td></tr>
+    <tr><td>保护</td><td>平台租户至少一名平台管理员</td><td><b>每个租户</b>至少一名可用的超级管理员（现有超级管理员保护按租户进行）</td></tr>
+  </table>
+  <h3>7.2 用户中心内置操作码拆分</h3>
+  <table>
+    <tr><th>级别</th><th>操作码</th><th>说明</th></tr>
+    <tr><td>平台（只对平台租户内的人生效）</td><td><code>tenant:view</code> · <code>tenant:manage</code> <span class="tag new">新</span>、<code>app:manage</code>（含义收窄为应用目录）</td><td>建租户、开通应用、接入应用</td></tr>
+    <tr><td>租户</td><td><code>tenant_app:manage</code> <span class="tag new">新</span>、<code>org:*</code>、<code>user:*</code>、<code>grant:*</code>、<code>position:*</code>、<code>role:*</code>（仅本租户自定义角色）、<code>data:view</code>、<code>data:type_grant</code></td><td>原有操作码的含义不变，只是范围限定在本租户</td></tr>
+  </table>
+  <p>判定：<code>has(op)</code> 之外再看操作码的级别 —— 平台级操作码对客户租户的人即使被授予也不生效（防止误把平台角色授进客户租户）。内置角色随之拆成「平台管理员」（平台租户专用）与现有的「超级管理员 / 用户管理员 / 审计员」（每个租户都有）。</p>
+  <p class="muted">与「角色归角色、数据权限归数据权限」一致：租户只是两个领域共同的边界，不引入新的「管理全部租户数据」操作码；平台管理员默认不对任何客户租户的数据有权限。</p>
+</section>
+
+<section id="s8">
+  <h2><span class="num">08</span>登录与租户识别</h2>
+  <table>
+    <tr><th>入口</th><th>P1</th><th>P2</th></tr>
+    <tr><td>用户中心管理台</td><td>登录页三项：<b>企业代码</b> + 账号 + 密码。浏览器记住上次的企业代码；只有一个租户时（单租户部署）隐藏企业代码</td><td>子域名 <code>{code}.uc.example.com</code> 自动带出企业代码</td></tr>
+    <tr><td>接入应用的登录（Atlas、TeamFlow）</td><td>应用以自己的租户令牌调 <code>verify-password</code>，在该租户内校验（单租户部署：应用配置固定租户）</td><td>多租户应用：登录页带企业代码，应用按企业代码取对应租户的令牌</td></tr>
+    <tr><td>以后的 SSO（Keycloak）</td><td colspan="2">一个租户对应一个 Keycloak realm（或 organization）；只替换「校验密码」这一步，租户模型不变</td></tr>
+  </table>
+  <p>失败提示不区分「企业代码不存在」与「账号或密码错误」，统一为「企业代码、账号或密码错误」—— 不让人枚举租户。租户 suspended / closed / 已到期：登录返回「企业账号已停用，请联系管理员」。</p>
+</section>
+
+<section id="s9">
+  <h2><span class="num">09</span>开放接口</h2>
+  <table>
+    <tr><th>接口</th><th>变化</th></tr>
+    <tr><td><code>POST /open/v1/auth/token</code></td><td>请求加 <code>tenant_code</code>：令牌绑定 (应用, 租户)。租户未开通该应用 → 403 <code>APP_NOT_ENABLED</code>；租户停用 / 到期 → 403 <code>TENANT_DISABLED</code>。兼容期缺省 = 平台租户（即存量的默认租户），之后必填</td></tr>
+    <tr><td><code>GET /open/v1/tenants</code> <span class="tag new">新</span></td><td>用 App Key / Secret 直接调（不需要租户令牌）：列出已开通本应用的租户 <code>{id, code, name, status}</code> —— 多租户应用据此为每个租户取令牌</td></tr>
+    <tr><td>其余全部接口</td><td>请求不变，<b>自动限定在令牌的租户内</b>：<code>/users</code> 只列本租户、<code>/users/{id}</code> 别的租户的 id → 404、<code>/depts/tree</code> 是本租户的树、数据权限只读写本租户的数据对象</td></tr>
+    <tr><td>返回体</td><td>用户、部门、授权快照里加 <code>tenant: {id, code}</code>，便于应用自检</td></tr>
+    <tr><td>Webhook（P1 规划中）</td><td>事件体加 <code>tenant_id</code>；租户级事件 <code>tenant.suspended</code>、<code>tenant.app_disabled</code></td></tr>
+    <tr><td>限流</td><td>由按 App Key 改为按 (App Key, 租户)：一个租户的流量不挤占别的租户</td></tr>
+  </table>
+</section>
+
+<section id="s10">
+  <h2><span class="num">10</span>权限计算的变化</h2>
+  <table>
+    <tr><th>结果</th><th>计算</th></tr>
+    <tr><td>命中的授权</td><td>不变（授予本人 ∪ 所在部门 ∪ 上级部门含下级），天然只在本租户内（授权、部门都是租户表）</td></tr>
+    <tr><td>有效角色</td><td>命中的角色 —— 应用内置角色或本租户自定义角色</td></tr>
+    <tr><td>can_access(app)</td><td>租户 active 且未到期 ∧ 租户开通了该应用（<code>uc_tenant_app.status = active</code>）∧ 用户未停用 ∧ 在本租户为该应用设的范围内</td></tr>
+    <tr><td>操作码 / 菜单</td><td>不变；平台级操作码只对平台租户内的人计入（7.2）</td></tr>
+    <tr><td>数据级别</td><td>max(本租户该数据的授权, 本租户该编码的全部数据授权)</td></tr>
+    <tr><td>数字员工</td><td>与人一样属于一个租户 —— 即创建它的应用调用时令牌所属的租户；绑定的 Agent 也在这个租户（见数字员工设计）</td></tr>
+  </table>
+</section>
+
+<section id="s11">
+  <h2><span class="num">11</span>关键流程</h2>
+  <h3>① 开通新租户</h3>
+  <table>
+    <tr><th>#</th><th>动作</th><th>谁</th></tr>
+    <tr><td>1</td><td>新建租户：企业代码、名称、配额、到期 → 同一事务内建根部门（名称 = 租户名）与首个租户超级管理员（临时密码只显示一次）</td><td>平台管理员</td></tr>
+    <tr><td>2</td><td>为租户开通应用（Atlas、TeamFlow…）</td><td>平台管理员</td></tr>
+    <tr><td>3</td><td>租户超级管理员首次登录（企业代码 + 账号 + 临时密码）→ 改密 → 建部门、建用户、设各应用的可访问范围、授角色</td><td>租户超级管理员</td></tr>
+  </table>
+  <h3>② 接入一个新应用</h3>
+  <p>平台管理员接入一次（凭据、操作、菜单、数据编码、内置角色），再按租户开通。应用侧 <code>register-uc</code> 这类目录同步脚本只写平台级的应用目录，不碰任何租户数据。</p>
+  <h3>③ 租户停用 / 到期 / 注销</h3>
+  <table>
+    <tr><th>状态</th><th>效果</th></tr>
+    <tr><td>suspended（或已到期）</td><td>管理台与应用登录拒绝；该租户的接口令牌全部作废，换令牌 403；数据完整保留，恢复即可用</td></tr>
+    <tr><td>closed（注销）</td><td>同 suspended，且进入保留期（默认 30 天）；到期后由 Worker 清除该租户全部数据（P2，需平台管理员二次确认，清除前导出可选）</td></tr>
+  </table>
+  <h3>④ 租户侧停用某应用</h3>
+  <p>租户超级管理员把 <code>uc_tenant_app.status</code> 置为 disabled：该租户的人对该应用 <code>can_access = false</code>，应用的该租户令牌作废；数据权限保留。</p>
+</section>
+
+<section id="s12">
+  <h2><span class="num">12</span>对接入应用的影响</h2>
+  <table>
+    <tr><th>阶段</th><th>Atlas / AI TeamFlow 要做的</th></tr>
+    <tr><td><b>P1 单租户绑定</b></td><td>配置项 <code>UC_TENANT_CODE</code>（缺省 = 平台租户）；换令牌时带上；用户投影（Atlas <code>app_user</code>、TeamFlow <code>tf_user</code>）加 <code>tenant_id</code> 记录来源。<b>行为完全不变</b> —— 一个部署服务一个租户</td></tr>
+    <tr><td>P2 应用多租户</td><td>应用自己的业务数据按租户隔离：Atlas 的 agent / thread / run / 知识库 / 记忆、对象存储前缀、会话 Pod 标签与配额、Redis 键、向量库过滤条件；TeamFlow 的团队、项目、流程。这是<b>每个应用独立的改造项目</b>，用户中心只提供租户身份</td></tr>
+    <tr><td>数据权限调用</td><td>不用改：令牌绑定租户后，<code>data_id</code> 只在本租户内有意义；同一个 Agent id 不会在两个租户里撞</td></tr>
+    <tr><td>缓存</td><td>应用侧授权快照等缓存的键加上租户（P2 多租户时必需；P1 单租户无影响）</td></tr>
+  </table>
+</section>
+
+<section id="s13">
+  <h2><span class="num">13</span>存量迁移</h2>
+  <table>
+    <tr><th>#</th><th>迁移步骤（一个 Alembic 版本，单事务）</th></tr>
+    <tr><td>1</td><td>建 <code>uc_tenant</code>，插入一个<b>平台租户</b>：<code>code = default</code>、名称取根部门名、<code>kind = platform</code>。存量就是这个租户 —— 现有超级管理员同时是平台管理员，单租户部署的管理方式不变</td></tr>
+    <tr><td>2</td><td>所有租户表加 <code>tenant_uuid</code>（先可空）→ 回填为平台租户 → 改 NOT NULL</td></tr>
+    <tr><td>3</td><td>为每个存量应用建 <code>uc_tenant_app</code>（平台租户，开通；<code>scope_all</code> 取原 <code>uc_app.scope_all</code>），<code>uc_app_scope_dept</code> 回填租户</td></tr>
+    <tr><td>4</td><td>删除旧的全局唯一约束，建租户内唯一与复合外键</td></tr>
+    <tr><td>5</td><td>作废全部接口令牌（应用下次调用自动重新换取，兼容期缺省租户 = default）</td></tr>
+    <tr><td>6</td><td><code>uc_app.scope_all</code> 保留到兼容期结束后删除</td></tr>
+  </table>
+  <p class="muted">以后要做 SaaS：新建客户租户即可，平台租户保持为运营方自己。若要把运营方与原业务组织拆开，另起一次「租户拆分」操作（P2），不在本次迁移里。</p>
+</section>
+
+<section id="s14">
+  <h2><span class="num">14</span>缓存、审计与安全</h2>
+  <table>
+    <tr><th>项</th><th>设计</th></tr>
+    <tr><td>缓存</td><td>部门树、有效角色缓存的键加租户；授权版本号<b>按租户</b>（一个租户的授权变更不让全部租户的缓存失效）；应用目录缓存仍全局</td></tr>
+    <tr><td>审计</td><td>每条事件记租户；平台操作（建租户、开通应用、代管进入）记在平台审计里，同时在对应租户的审计里留一条「平台操作」</td></tr>
+    <tr><td>租户上下文</td><td>只来自会话或令牌，绝不来自请求参数；跨租户 id → 404</td></tr>
+    <tr><td>枚举防护</td><td>登录失败不区分企业代码与账号；<code>/open/v1/tenants</code> 只返回开通了本应用的租户</td></tr>
+    <tr><td>配额</td><td>建用户时校验 <code>max_users</code>（停用用户不计）；数字员工不计入人员配额</td></tr>
+  </table>
+</section>
+
+<section id="s15">
+  <h2><span class="num">15</span>分期</h2>
+  <table>
+    <tr><th>阶段</th><th>内容</th><th>退出标准</th></tr>
+    <tr><td>P1 租户模型与隔离</td><td>数据模型与迁移（平台租户）；复合外键；统一过滤；平台管理员（租户管理、开通应用）；登录企业代码；令牌绑定租户；<code>/open/v1/tenants</code>；应用侧单租户绑定（配置项）；按租户的超级管理员保护</td><td>两租户契约测试：任一管理 API / 开放接口，A 的凭据访问 B 的数据一律 404，写入一律被拒；存量部署迁移后所有既有测试通过</td></tr>
+    <tr><td>P2 运营与纵深防御</td><td>行级安全（RLS）；子域名登录；代管（限时、审计）；租户注销与清除；租户级安全策略；租户私有应用；Atlas / TeamFlow 多租户改造</td><td>绕过 ORM 的查询也取不到别的租户的数据</td></tr>
+    <tr><td>P3 身份联邦</td><td>Keycloak：一租户一 realm / organization；同一自然人跨租户关联；大客户独立库评估</td><td>—</td></tr>
+  </table>
+</section>
+
+<section id="s16">
+  <h2><span class="num">16</span>风险与待确认</h2>
+  <table>
+    <tr><th>风险</th><th>缓解</th></tr>
+    <tr><td>某个查询漏写租户条件 → 越权读</td><td>统一过滤器自动追加；复合外键挡住写；P2 RLS；两租户契约测试</td></tr>
+    <tr><td>平台角色被误授进客户租户</td><td>平台级操作码只对平台租户内的人生效（7.2），授了也无效</td></tr>
+    <tr><td>迁移改大量唯一约束 / 外键，锁表时间长</td><td>表规模小（数万行）；单事务执行，选低峰期；先在副本上演练</td></tr>
+    <tr><td>应用缓存未区分租户导致串号</td><td>P1 应用只服务一个租户，不存在；P2 多租户改造时缓存键加租户列入检查清单</td></tr>
+  </table>
+  <table>
+    <tr><th>#</th><th>待确认</th><th>当前假设</th></tr>
+    <tr><td>1</td><td>同一个人能否同时属于多个租户</td><td>否：每个账号只属于一个租户；跨租户 = 多个账号，P3 由 Keycloak 关联</td></tr>
+    <tr><td>2</td><td>存量数据迁成什么租户</td><td>平台租户（code = default）：现有管理员同时是平台管理员，单租户部署零感知</td></tr>
+    <tr><td>3</td><td>邮箱唯一范围</td><td>租户内唯一（同一邮箱可以在两个租户各有一个账号）</td></tr>
+    <tr><td>4</td><td>租户能否修改应用内置角色</td><td>不能（平台级只读）；可以「复制为自定义角色」再改</td></tr>
+    <tr><td>5</td><td>岗位是否提供平台级模板</td><td>否：岗位完全属于租户；以后需要再加「从模板创建」</td></tr>
+    <tr><td>6</td><td>租户识别方式</td><td>P1 企业代码；P2 子域名</td></tr>
+    <tr><td>7</td><td>平台管理员能否查看客户租户的人员 / 授权</td><td>默认不能；排障走 P2 的限时代管，强制审计</td></tr>
+    <tr><td>8</td><td>租户能否自定义操作码 / 数据编码</td><td>不能：它们由应用定义（应用目录平台级）</td></tr>
+  </table>
+</section>
+
+</main>
+</div>
+</body>
+</html>

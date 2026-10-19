@@ -17,13 +17,13 @@ from typing import Any
 
 import httpx
 import pytest
+from atlas_agent.providers.cluster import ClusterUnavailable
+from atlas_agent.providers.pods import PodEndpoint
+from atlas_agent.providers.sandbox import PodSandbox
 from atlas_engine.contracts import SandboxUnavailable
 from atlas_sandboxd.config import ServeConfig
 from atlas_sandboxd.execs import ExecManager
 from atlas_sandboxd.server import make_server
-from atlas_server.providers.cluster import ClusterUnavailable
-from atlas_server.providers.pods import PodEndpoint
-from atlas_server.providers.sandbox import PodSandbox
 
 WS = "ws-thread"
 
@@ -213,8 +213,8 @@ async def test_reconnect_resumes_the_same_command(daemon: _Daemon) -> None:
 
 
 async def test_assembly_refuses_bash_when_sandbox_disabled() -> None:
-    from atlas_server.errors import CapabilityUnavailable
-    from atlas_server.executor.assembly import SandboxNotEnabled
+    from atlas_agent.errors import CapabilityUnavailable
+    from atlas_agent.executor.assembly import SandboxNotEnabled
 
     assert issubclass(SandboxNotEnabled, CapabilityUnavailable)
 

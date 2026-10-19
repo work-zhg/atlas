@@ -29,7 +29,12 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, Remove
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
 from atlas_engine.contracts import ContextOverflow
-from atlas_engine.kernel.middleware._compaction import MessageFacts, drop_thinking, plan_split
+from atlas_engine.kernel.middleware._compaction import (
+    MessageFacts,
+    drop_thinking,
+    plan_split,
+    plan_split_within_turn,
+)
 from atlas_engine.kernel.middleware._context import (
     DEFAULT_CLEARABLE_TOOLS,
     SUMMARY_PREFIX,
@@ -56,6 +61,13 @@ __all__ = ["DEGRADED_SUMMARY", "SUMMARY_PREFIX", "CompactionMiddleware", "Summar
 DEGRADED_SUMMARY = "【早期对话已省略：摘要生成失败】"
 #: 工作集恢复段的标题
 _RESTORE_HEADER = "\n\n【压缩前正在处理的内容（已重新读取当前版本）】"
+#: 回合内压缩时保留最近几轮工具调用（一轮 = 一条发出 tool_use 的 assistant 及其结果）
+_KEEP_RECENT_ROUNDS = 3
+#: 回合内压缩后的衔接（平台附加，不是用户说的话）
+_CONTINUE_NOTE = (
+    "（以下为平台附加的说明，不是用户说的话）上文的早期过程已压缩为摘要，"
+    "用户的原始请求见摘要。请从当前进度继续，不要重复已完成的步骤。"
+)
 _LARGE_RESULTS_DIR = "/large_tool_results"
 
 
@@ -294,11 +306,16 @@ class CompactionMiddleware(AgentMiddleware):
     ) -> tuple[list[BaseMessage], dict[str, Any]]:
         facts = facts_from(messages)
         split = plan_split(facts, keep_recent_turns=self._keep_recent_turns)
+        intra_turn = False
         if split <= 0:
-            # 回合数不够，压不动（§7.6：保留区本身就装不下 → 报错而不是无限压缩）
+            # 回合数不够（典型：单轮长任务）→ 退到回合内按工具轮次切
+            split = plan_split_within_turn(facts, keep_recent_rounds=_KEEP_RECENT_ROUNDS)
+            intra_turn = True
+        if split <= 0:
+            # 连最近几轮工具调用都装不下（§7.6：报错而不是无限压缩）
             raise ContextOverflow(
                 f"上下文 {before} tokens 超过阈值 {self._trigger}，"
-                f"但最近 {self._keep_recent_turns} 个回合本身就装不下"
+                f"但最近 {_KEEP_RECENT_ROUNDS} 轮工具调用本身就装不下"
             )
         dropped = set(drop_thinking(facts, split))
         head = messages[:split]
@@ -319,6 +336,10 @@ class CompactionMiddleware(AgentMiddleware):
         kept = messages[split:]
         summary_message = AIMessage(content=SUMMARY_PREFIX + summary + restore_text)
         after_messages = [summary_message, *kept]
+        if kept and not isinstance(kept[0], HumanMessage):
+            # 回合内切分：保留区从 assistant 开始，紧跟在摘要（也是 assistant）后面。
+            # 补一条标明来源的衔接，避免两条 assistant 相连、也让模型知道是「接着做」
+            after_messages.insert(1, HumanMessage(content=_CONTINUE_NOTE))
         after = self._meter.measure(after_messages)[0]
         payload = {
             "kind": "context.compacted",
@@ -329,11 +350,15 @@ class CompactionMiddleware(AgentMiddleware):
             "summary": summary,
             "degraded": degraded,
             "restored_files": restored,
+            "intra_turn": intra_turn,
             "failures": self._failures,
             "circuit_open": self._failures >= self._max_failures,
         }
         _emit(payload)
-        if self._on_compacted is not None and not degraded:
+        # ★ 回合内的摘要不落库：它覆盖的是本轮内部的过程，而本轮完整的历史会在结束时
+        #   照常落库 —— 落了的话下一轮会「摘要 + 原文」重复。下一轮有了新的用户回合，
+        #   就能按回合正常压缩。
+        if self._on_compacted is not None and not degraded and not intra_turn:
             await self._on_compacted({k: v for k, v in payload.items() if k != "kind"})
         return after_messages, payload
 

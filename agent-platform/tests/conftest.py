@@ -16,8 +16,8 @@ from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 
 import pytest
-from atlas_server.config import Settings, get_settings
-from atlas_server.db.session import get_engine, get_sessionmaker
+from atlas_agent.config import Settings, get_settings
+from atlas_agent.db.session import get_engine, get_sessionmaker
 
 REPO_ROOT = Path(__file__).resolve().parents[2]  # agent-platform/tests → 仓库根
 

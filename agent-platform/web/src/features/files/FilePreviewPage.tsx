@@ -4,7 +4,7 @@
  * 会话文件预览页 —— 从文件面板**新标签**打开（/files/{threadId}?path=…）。
  *
  * ★ 文件内容一律经预览站点读取（GET /v1/previews/{token}/…），不走 download：
- *   iframe / img 带不了 X-User-Id，令牌在 URL 路径里（§06）。
+ *   iframe / img 带不了身份头，令牌在 URL 路径里（§06）。
  * ★ 运行中文件在变：文本、图片随 etag 自动刷新；HTML 只提示「已更新」，
  *   点了才重载 —— 自动刷新会把用户在原型里点到的状态清掉（§09）。
  */

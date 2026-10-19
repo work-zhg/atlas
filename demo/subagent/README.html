@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Demo：SubAgent——并行派出，父 run 挂起，子 run 跑完再叫醒</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --border: #d1d9e0; --head: #f6f8fa;
+    --lane: #8c959f; --phase-bg: #eef2f6; --note-bg: #fff8c5; --note-bd: #d4a72c;
+    --ok: #1a7f37; --ok-bg: #dafbe1; --bad: #cf222e; --bad-bg: #ffebe9; --warn: #9a6700; --warn-bg: #fff8c5;
+    --box: #ddf4ff; --box-bd: #54aeff; --accent: #0969da;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --border: #3d444d; --head: #151b23;
+      --lane: #6e7681; --phase-bg: #1c2430; --note-bg: #2b2111; --note-bd: #9e6a03;
+      --ok: #3fb950; --ok-bg: #12261e; --bad: #f85149; --bad-bg: #2d1214; --warn: #d29922; --warn-bg: #2b2111;
+      --box: #12263f; --box-bd: #1f6feb; --accent: #4493f8;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 28px; background: var(--bg); color: var(--fg);
+         font: 15px/1.75 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif; }
+  main { max-width: 1240px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 20px; margin: 44px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 16px; margin: 24px 0 6px; }
+  .sub { color: var(--muted); margin: 0 0 18px; }
+  code { font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--head);
+         padding: 1px 5px; border-radius: 4px; }
+  pre { background: var(--head); border: 1px solid var(--border); border-radius: 6px; padding: 12px 14px;
+        overflow-x: auto; font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 14px; }
+  th, td { border: 1px solid var(--border); padding: 7px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--head); white-space: nowrap; }
+  .toc { background: var(--head); border: 1px solid var(--border); border-radius: 6px; padding: 10px 18px; }
+  .toc ol { margin: 4px 0; padding-left: 20px; }
+  .callout { border-left: 4px solid var(--accent); background: var(--head); padding: 10px 14px; margin: 14px 0;
+             border-radius: 0 6px 6px 0; }
+  .callout.warn { border-color: var(--warn); }
+  .callout.bad { border-color: var(--bad); }
+  .scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: 6px; margin: 12px 0; }
+  .caption { color: var(--muted); font-size: 13px; margin-top: -4px; }
+  /* 消息「气泡」 */
+  .msg { display: inline-block; margin: 2px 4px 2px 0; padding: 1px 8px; border-radius: 10px; border: 1px solid;
+         font: 12.5px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap; }
+  .msg.h { color: var(--accent); border-color: var(--box-bd); background: var(--box); }
+  .msg.a { color: var(--fg); border-color: var(--lane); background: var(--head); }
+  .msg.t { color: var(--ok); border-color: var(--ok); background: var(--ok-bg); }
+  .msg.s { color: var(--warn); border-color: var(--warn); background: var(--warn-bg); }
+  .msg.r { color: var(--bad); border-color: var(--bad); background: var(--bad-bg); }
+  .msg.gone { opacity: .45; text-decoration: line-through; }
+  /* SVG */
+  svg { display: block; font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif; }
+  svg text { fill: var(--fg); font-size: 12.5px; }
+  svg .lane-line { stroke: var(--lane); stroke-dasharray: 4 4; }
+  svg .lane-box { fill: var(--box); stroke: var(--box-bd); }
+  svg .lane-name { font-weight: 600; font-size: 13px; }
+  svg .lane-sub { fill: var(--muted); font-size: 11px; }
+  svg .arrow { stroke: var(--fg); stroke-width: 1.3; fill: none; }
+  svg .arrow.reply { stroke-dasharray: 5 4; }
+  svg .arrow.bad { stroke: var(--bad); }
+  svg .arrow.ok { stroke: var(--ok); }
+  svg .head { fill: var(--fg); }
+  svg .head.bad { fill: var(--bad); }
+  svg .head.ok { fill: var(--ok); }
+  svg .phase-band { fill: var(--phase-bg); }
+  svg .phase-text { font-weight: 600; font-size: 13px; }
+  svg .note-box { fill: var(--note-bg); stroke: var(--note-bd); }
+  svg .note-box.bad { fill: var(--bad-bg); stroke: var(--bad); }
+  svg .node { fill: var(--box); stroke: var(--box-bd); }
+  svg .node.term { fill: var(--head); stroke: var(--lane); }
+  svg .node.hook { fill: var(--warn-bg); stroke: var(--warn); }
+  svg .lbl { font-size: 12px; fill: var(--muted); }
+  svg .lbl.bad { fill: var(--bad); }
+  svg .lbl.ok { fill: var(--ok); }
+  svg .t-bold { font-weight: 600; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Demo：SubAgent——并行派出，父 run 挂起，子 run 跑完再叫醒</h1>
+<p class="sub">
+  代码：<code>demo/subagent/</code>（按功能拆成 9 个文件，共约 820 行）　·
+  运行：<code>.venv/bin/python demo/subagent/main.py</code>（不需要 API key，约 1 秒）<br>
+  前置阅读：<code>demo/suspend-resume/README.html</code>（挂起与恢复。本 demo 的挂起方式和它<b>完全一样</b>，那边讲过的图、中间件、jump_to、state 这里不再重复）
+</p>
+
+<div class="toc">
+  <b>目录</b>
+  <ol>
+    <li><a href="#problem">要解决什么问题</a></li>
+    <li><a href="#basics">读懂这个 demo 需要的四个概念</a></li>
+    <li><a href="#idea">核心思路：一句话 + 三个要点</a></li>
+    <li><a href="#files">文件结构：按功能模块拆分</a></li>
+    <li><a href="#seq">完整时序图</a></li>
+    <li><a href="#snapshots">每一步存储里有什么</a></li>
+    <li><a href="#why">几个「为什么」</a></li>
+    <li><a href="#code">代码导读</a></li>
+    <li><a href="#lab">动手实验</a></li>
+    <li><a href="#gap">demo 和真实系统的差别</a></li>
+  </ol>
+</div>
+
+<!-- ================================================================== -->
+<h2 id="problem">1. 要解决什么问题</h2>
+<p>
+  智能体遇到多步骤的活（调研三个方案、跑一遍压测），想交给 SubAgent 去做，自己只要结论；SubAgent 干活时也可能发现需要再交给别的 SubAgent。放进真实环境，要同时满足：
+</p>
+<table>
+  <tr><th>要求</th><th>意思</th></tr>
+  <tr><td>上下文隔离</td><td>SubAgent 的过程（工具调用、读过的资料）不进父会话，父会话只看见结论</td></tr>
+  <tr><td>并行</td><td>「同时调研三个方案」要能一批派出去一起跑，总耗时接近最慢的那个，而不是加起来</td></tr>
+  <tr><td>可以嵌套</td><td>SubAgent 也能派 SubAgent，层数不设上限，每一层的规则都一样</td></tr>
+  <tr><td>不在内存里等</td><td>一个 SubAgent 可能跑一小时。这一小时里发布一次、OOM 一次，父 run 和子 run 已经干完的活都不能丢</td></tr>
+  <tr><td>失败可恢复</td><td>SubAgent 跑挂了、派给了不存在的 SubAgent，父 run 的模型应该能看到原因、改派或自己动手，而不是整轮失败</td></tr>
+  <tr><td>机制只有一套</td><td>审批已经有一套挂起 / 续跑机制（姊妹篇 suspend-resume），SubAgent 不该再发明第二套</td></tr>
+</table>
+<p>
+  这个 demo 的做法：<b>每次派 SubAgent 都挂起</b>。<code>task</code> 工具只负责起子 run，不等结果；当前 run 当场结束这一段、落库；
+  子 run 全部结束时叫醒它，用一张全新的图接着跑。主智能体和 SubAgent 用的是同一套图、同一条执行路径，所以嵌套就是这条路一层层叠起来。
+</p>
+<p>
+  场景：用户要选一个消息队列。主智能体分两波派 SubAgent，每一波都是同一批并行发出、每一波都挂起；
+  其中调研 Kafka 的 researcher 自己又派了一个 benchmarker 去压测，于是它也挂起、被叫醒、再交结论。
+</p>
+
+<!-- ================================================================== -->
+<h2 id="basics">2. 读懂这个 demo 需要的四个概念</h2>
+
+<h3>① 子 run 和 SubAgent 的会话</h3>
+<p>SubAgent 没有发明新的存储，直接复用「会话」（thread 表）和「一轮执行」（run 表）：</p>
+<table>
+  <tr><th>概念</th><th>是什么</th><th>关键字段</th></tr>
+  <tr><td>SubAgent 的会话</td><td>每次派 SubAgent 新建一个 thread，第一条消息就是任务书</td><td><code>parent_thread_id</code>、<code>subagent_name</code></td></tr>
+  <tr><td>子 run</td><td>这个会话上一个普通的 run，和根 run 走同一个执行器、同一条路</td><td><code>parent_run_id</code> 指回派出它的 run；id 由 <code>(父 run, tool_call_id)</code> 派生</td></tr>
+  <tr><td>结论</td><td>子 run 最后一条 ai 消息；失败时是一段说明</td><td>续跑时作为那次 <code>task</code> 调用的工具结果</td></tr>
+</table>
+<p>
+  id 一层层派生下去就是祖先链：<code>r1</code> 是根 run，<code>r1-c1</code> 是它的 c1 调用派出的，<code>r1-c1-c1</code> 是 <code>r1-c1</code> 的 c1 调用派出的。
+  每次都是新会话，所以 SubAgent 之间互不共享状态，同一个 SubAgent 在同一批里派几次都可以并行。
+</p>
+
+<h3>② task 工具和 SubAgentSpawner</h3>
+<p>
+  每个智能体（包括 SubAgent）都有一个 <code>task</code> 工具，参数是 <code>subagent_type</code> 和 <code>description</code>（任务书）。它的全部行为在 <code>SubAgentMiddleware.awrap_tool_call</code> 里，
+  工具函数本身永远不会被执行。中间件在图里，<b>不认识数据库</b>，起子 run 时只调一个注入进来的协议：
+</p>
+<pre><code>class SubAgentSpawner(Protocol):
+    async def spawn(self, name: str, task: str, call_id: str) -&gt; str: ...   # 起子 run，返回它的 id，不等它跑完</code></pre>
+<p>server 侧的 <code>SubAgentService</code> 实现它：建会话、建子 run、交给执行器。这条边界对应 Atlas 的 <code>DelegationProtocol</code>。</p>
+
+<h3>③ waiting_on：悬空的 task 调用在等哪个子 run</h3>
+<p>和姊妹篇的审批一模一样，只是 reason 从 <code>approval</code> 换成了 <code>subagent</code>、token 从审批 id 换成了子 run id：</p>
+<pre><code>waiting_on = {
+    "c1": {"reason": "subagent", "token": "r1-c1"},
+    "c2": {"reason": "subagent", "token": "r1-c2"},
+    "c3": {"reason": "subagent", "token": "r1-c3"},
+}</code></pre>
+<p>
+  起了子 run 后，<code>task</code> <b>不写工具结果</b>，调用留着悬空，只在 state 的 <code>waiting_on</code> 里登记。续跑时 server 再把子 run 的结论放进另一个字段
+  <code>results</code>（<code>子 run id → 结论文本</code>，只进不出），对应姊妹篇的 <code>decisions</code>。
+</p>
+
+<h3>④ barrier 和 CAS：谁来叫醒、叫醒几次</h3>
+<table>
+  <tr><th>名词</th><th>意思</th><th>demo 里</th></tr>
+  <tr><td>barrier</td><td>续跑的前提：waiting_on 里等的东西全都有结果了</td><td><code>Executor.pending_waits</code>：每个 token 对应的子 run 都到终态了吗</td></tr>
+  <tr><td>CAS</td><td>「还是旧值才改成新值」，一条语句原子完成</td><td><code>Store.claim_for_resume</code>：<code>status</code> 还是 <code>suspended</code> 才改成 <code>queued</code></td></tr>
+</table>
+<p>每个子 run 结束时都去试着叫醒它的父 run：barrier 不满足就算了；满足了再用 CAS 抢「续跑权」，只有一个能抢到。</p>
+
+<!-- ================================================================== -->
+<h2 id="idea">3. 核心思路：一句话 + 三个要点</h2>
+<div class="callout">
+  <b>一句话：</b><code>task</code> 只起子 run 不等：登记 <code>waiting_on</code>、不写结果，<code>before_model</code> 看到 <code>waiting_on</code> 就结束这一段；
+  消息和 <code>waiting_on</code> 一起落库，当前 run 挂起；子 run 全部结束时 CAS 叫醒它，新建一张图，入参是消息 + <code>waiting_on</code> + <code>results</code>，
+  <code>jump_to tools</code> 让 <code>task</code> 再执行一遍，这次直接把结论当工具结果返回。每个 run 都走这同一条路，所以 SubAgent 可以无限嵌套。
+</div>
+
+<h3>要点 1：每次派 SubAgent 都挂起，等待交给数据库</h3>
+<p>
+  run 不在内存里等任何东西。一段结束时，「在等谁」就在 <code>run.waiting_on</code> 里，执行这一段的任务随即结束，这时重启进程什么都不丢。
+  叫醒的入口有两个：子 run 结束时、自己落库后复查（真实系统还有周期补扫），都走同一个 <code>resume_if_ready</code>：先过 barrier，再 CAS。
+</p>
+
+<h3>要点 2：并行靠「每个 tool_call 一个子 run」，嵌套靠「所有 run 同一条路」</h3>
+<table>
+  <tr><th>环节</th><th>怎么做</th></tr>
+  <tr><td>派出</td><td>同一批的几个 <code>task</code> 由 LangGraph 并行执行（每个 tool_call 一个 <code>Send</code>），各起一个子 run</td></tr>
+  <tr><td>登记</td><td>它们在同一步里各写一次 <code>waiting_on</code>，靠自定义 reducer 合并成一份</td></tr>
+  <tr><td>执行</td><td>子 run 各自在自己的会话上跑，互不依赖。demo 里四次工具调用串行要 1.1 秒，整轮约 0.7 秒</td></tr>
+  <tr><td>嵌套</td><td>子 run 的图里也有 <code>task</code>：它派出孙 run 后同样挂起，孙 run 结束叫醒它，它续跑、结束后再叫醒自己的父 run</td></tr>
+  <tr><td>汇合</td><td>barrier 等齐这一批，父 run 只续跑一次，模型一次看到全部结论</td></tr>
+</table>
+
+<h3>要点 3：续跑时让 task 再走一遍，兄弟调用原样返回</h3>
+<p>
+  续跑不改写消息表，而是把三样依据原样交回一张新图：<code>messages</code>（task 调用还悬空着）、<code>waiting_on</code>（它们在等谁）、<code>results</code>（等到的结论）。
+  入口的 Patch 看到悬空的调用在 <code>waiting_on</code> 里，不补 cancelled；<code>before_model</code> 看到结论到了，<code>jump_to tools</code>；
+  ToolNode 把最后一条 ai 消息里的调用<b>全部</b>再执行一遍：在等的 <code>task</code> 这次返回结论，同一批里早就有结果的兄弟调用原样返回，不重跑。
+</p>
+
+<!-- ================================================================== -->
+<h2 id="files">4. 文件结构：按功能模块拆分</h2>
+<p>拆分的依据是 Atlas 的分层：图这一侧（kernel）不认识存储，只认协议；server 侧负责存储、执行和叫醒。依赖只从上往下（<code>tracing.py</code> 谁都可以用）：</p>
+<pre><code>main.py                      剧本入口
+└─ executor.py               执行器（server）
+   ├─ subagent_service.py    SubAgentSpawner 的实现（server）
+   ├─ agents.py              组装图（kernel）
+   │  ├─ middleware.py       三个中间件 + task 工具 + SubAgentSpawner（kernel）
+   │  │  └─ state.py         state schema（kernel）
+   │  └─ scripted.py         假模型 + 假工具
+   └─ store.py               外部存储（server）
+tracing.py                   输出前缀（谁都可以用）</code></pre>
+<table>
+  <tr><th>文件</th><th>层</th><th>负责什么</th><th>不知道什么</th></tr>
+  <tr><td><code>store.py</code></td><td>server</td><td>thread / run / message 三张表；建子 run（幂等）、落一段、失败、领取、续跑的 CAS</td><td>图、中间件</td></tr>
+  <tr><td><code>state.py</code></td><td>kernel</td><td><code>SubAgentState</code>：<code>waiting_on</code>（reducer）、<code>results</code>（只进不出）</td><td>一切存储</td></tr>
+  <tr><td><code>middleware.py</code></td><td>kernel</td><td>Patch / Suspension / SubAgent 三个中间件，<code>task</code> 工具，<code>SubAgentSpawner</code> 协议</td><td>子 run 是一行 run、会话是一行 thread</td></tr>
+  <tr><td><code>agents.py</code></td><td>kernel</td><td><code>build_agent</code>：主智能体和 SubAgent 同一套中间件；SubAgent 名录</td><td>存储</td></tr>
+  <tr><td><code>subagent_service.py</code></td><td>server</td><td><code>SubAgentService</code>（<code>SubAgentSpawner</code> 的实现）；子 run 结局 → 结论文本</td><td>图的内部</td></tr>
+  <tr><td><code>executor.py</code></td><td>server</td><td>所有 run 同一条路：跑一段、落库、barrier、CAS 续跑、组装每段的入参</td><td>中间件怎么判断</td></tr>
+  <tr><td><code>scripted.py</code></td><td>—</td><td>一个假模型演所有角色（按剧本出牌）、假工具、配对规则断言</td><td>—</td></tr>
+  <tr><td><code>tracing.py</code></td><td>—</td><td>输出：每行带上是哪个 run 的哪一段在说话，按嵌套深度缩进（contextvar）</td><td>—</td></tr>
+  <tr><td><code>main.py</code></td><td>—</td><td>用户说话 → 提交根 run → 等结束 → 打印各表</td><td>—</td></tr>
+</table>
+<p>
+  模块之间用裸模块名互相导入（<code>from store import Store</code>），因为脚本的目录会被放进 <code>sys.path</code> 第一位。这是 demo 的简化；放进正式代码库应该是一个包。
+  输出模块叫 <code>tracing.py</code> 而不是 <code>trace.py</code>，是为了不遮住标准库的 <code>trace</code>。
+</p>
+
+<!-- ================================================================== -->
+<h2 id="seq">5. 完整时序图</h2>
+<p>
+  参与者：<b>用户</b>；<b>执行器</b>；所有实例共用的<b>数据库</b>（内存模拟）；三层 run：<b>r1</b>（根 run，主智能体）、<b>r1-c*</b>（第 1 层 SubAgent）、<b>r1-c1-c1</b>（第 2 层）。
+  每个 run 的每一段都是执行器新建一张图来跑的，图里的步骤画成 run 自己身上的自调用。虚线箭头表示返回。
+</p>
+<div class="scroll"><div id="seq-main"></div></div>
+
+<!-- ================================================================== -->
+<h2 id="snapshots">6. 每一步存储里有什么</h2>
+<table>
+  <tr><th>#</th><th>时刻</th><th>r1</th><th>r1-c1</th><th>r1.waiting_on</th><th>主会话 message 表</th></tr>
+  <tr><td>1</td><td>r1 段 1 落库</td><td><b>suspended</b></td><td>刚起</td><td><code>c1→r1-c1</code> <code>c2→r1-c2</code> <code>c3→r1-c3</code></td>
+    <td><span class="msg h">human</span><span class="msg a">ai: task c1 c2 c3</span>　三个调用悬空</td></tr>
+  <tr><td>2</td><td>r1-c1 派出 r1-c1-c1</td><td>suspended</td><td><b>suspended</b>，等 <code>c1→r1-c1-c1</code></td><td>（不变）</td><td>（不变）</td></tr>
+  <tr><td>3</td><td>r1-c2 完成</td><td>suspended</td><td>suspended</td><td>（不变）</td><td>（不变）。r1-c2 来叫醒：还在等 c1、c3</td></tr>
+  <tr><td>4</td><td>r1-c1-c1 完成</td><td>suspended</td><td><b>queued</b>（CAS）→ 段 2</td><td>（不变）</td><td>（不变）。叫醒的是 r1-c1，不是 r1</td></tr>
+  <tr><td>5</td><td>r1-c1 交出结论</td><td>suspended</td><td>succeeded，共 2 段</td><td>（不变）</td><td>（不变）。r1-c1 来叫醒 r1：还在等 c3</td></tr>
+  <tr><td>6</td><td>r1-c3 失败（最后一个）</td><td><b>queued</b>（CAS）</td><td></td><td>（不变，续跑要用）</td><td>（不变）</td></tr>
+  <tr><td>7</td><td>r1 段 2 落库</td><td>suspended</td><td></td><td><code>c4→r1-c4</code></td>
+    <td>… <span class="msg t">tool c1</span><span class="msg t">tool c2</span><span class="msg r">tool c3：failed 说明</span><span class="msg a">ai: task c4 c5</span><span class="msg r">tool c5：writer 不存在</span></td></tr>
+  <tr><td>8</td><td>r1 段 3 落库</td><td><b>succeeded</b>，共 3 段</td><td></td><td>空</td>
+    <td>… <span class="msg r">tool c5</span><span class="msg t">tool c4</span><span class="msg a">ai: 回复</span></td></tr>
+</table>
+<div class="callout">
+  主会话的消息表里<b>没有任何占位消息</b>，也看不到 r1-c1 派过 benchmarker：那是 r1-c1 自己会话里的事，主会话只拿到它的最终结论。
+  注意 c5 的结果排在 c4 前面：它在段 2 当场就有了，c4 的结论到段 3 才补上。配对规则只要求每个调用恰好一条结果，不要求顺序。
+</div>
+
+<!-- ================================================================== -->
+<h2 id="why">7. 几个「为什么」</h2>
+
+<h3 id="why-always">7.1 为什么每次派 SubAgent 都挂起，不当场等一会儿？</h3>
+<table>
+  <tr><th>方案</th><th>好处</th><th>代价</th></tr>
+  <tr><td>当场等一会儿，超时再挂起（Atlas 现在的做法，窗口 60 秒）</td><td>秒级的 SubAgent 不分段，少一次建图和落库</td><td>两条路径：当场等到的、续跑补上的，结论整形、失败话术要两边保持一致；还多一个「等多久」的配置和它的边界竞态</td></tr>
+  <tr><td><b>一律挂起</b>（本 demo）</td><td>只有一条路径；run 从不在内存里等，部署、OOM 都不丢东西</td><td>每派一批多一段：多一次建图、一次读库、一次叫醒的延迟</td></tr>
+</table>
+<p>
+  多出来的那一段<b>不多调模型</b>：续跑时 <code>before_model</code> 直接 <code>jump_to tools</code>，模型调用次数和当场等完全一样。代价只是一次建图加几次数据库往返，相对一次 SubAgent（至少一整轮智能体）可以忽略。
+</p>
+
+<h3 id="why-nest">7.2 为什么 SubAgent 能继续派 SubAgent，又不用写任何额外的代码？</h3>
+<p>因为根 run 和子 run 之间<b>没有区别</b>，除了有没有 <code>parent_run_id</code>：</p>
+<ul>
+  <li><b>图一样</b>：<code>build_agent</code> 给主智能体和 SubAgent 装同一套中间件，SubAgent 只是多了自己的工具。</li>
+  <li><b>执行路径一样</b>：<code>Executor._execute</code> 对所有 run 都是「跑一段 → 挂起就复查自己 / 结束就叫醒父 run」。</li>
+  <li><b>id 派生一样</b>：<code>SubAgentService</code> 绑定的是「正在跑的那个 run」，派出去的子 run 自然挂在它下面，id 自然多一层。</li>
+</ul>
+<p>
+  所以第 2 层的 r1-c1-c1 结束时叫醒的是 r1-c1，r1-c1 续跑、交出结论后叫醒的是 r1。r1 完全不知道 r1-c1 中间挂起过：它看到的只是「r1-c1 比较慢」。
+</p>
+<div class="callout warn">
+  <b>去掉深度上限的代价：</b>递归停不停完全由模型决定。模型如果陷入「再派一个 SubAgent 去查」的循环，会一层层派下去，每层都占一个 run（acp 的还占一个 Pod）。
+  真实系统需要别的护栏，比如整棵树的 token / run 数预算、可配置的最大深度、或在准入时按祖先链检测重复任务。demo 没有做。
+</div>
+
+<h3 id="why-same">7.3 为什么挂起方式要和审批一样？</h3>
+<table>
+  <tr><th></th><th>审批（suspend-resume）</th><th>SubAgent（本 demo）</th></tr>
+  <tr><td>登记</td><td><code>{"reason": "approval", "token": 审批 id}</code></td><td><code>{"reason": "subagent", "token": 子 run id}</code></td></tr>
+  <tr><td>barrier</td><td>审批行被决策</td><td>子 run 到终态</td></tr>
+  <tr><td>续跑时交进来</td><td><code>decisions</code></td><td><code>results</code></td></tr>
+  <tr><td>续跑时工具干什么</td><td>批准 → 真正执行；拒绝 → 回一句拒绝</td><td>把结论当工具结果返回</td></tr>
+</table>
+<p>
+  Patch 和 Suspension 两个中间件共用。同一批里既有审批又有 SubAgent 也不用特殊处理：<code>waiting_on</code> 里两种 reason 各管各的，barrier 按 reason 分别判断。
+  SubAgent 自己调危险工具要审批时，挂起的是那个子 run，它的父 run 照常等它，机制一样。
+</p>
+<div class="callout warn">
+  Atlas 现在的 SubAgent 挂起<b>不是</b>这套做法：它让 <code>task</code> 返回一个 <code>__ATLAS_SUSPENDED__:delegation:&lt;子 run id&gt;</code> 哨兵字符串作为占位结果，续跑时 server 在内存里把哨兵换成结论。
+  按本 demo 迁移，需要和姊妹篇一起改（见 <a href="#gap">§10</a>）。
+</div>
+
+<h3 id="why-rerun">7.4 为什么续跑要 jump_to tools 让 task 再执行一遍，而不是 server 直接把结论写进消息表？</h3>
+<ul>
+  <li><b>消息表只追加，不改写</b>：server 不需要知道「换哪一条、换成什么」，也不会出现「表里写了结论、子 run 里又是另一份」两个事实源。</li>
+  <li><b>工具结果由图自己产生</b>：和普通工具一样，结果从 ToolNode 出来，<code>waiting_on</code> 的删除和结果的写入在同一个 <code>Command</code> 里，不会一边成功一边失败。</li>
+  <li><b>和审批是同一条路</b>：审批续跑也是 <code>jump_to tools</code>，只是这次工具真正执行。</li>
+</ul>
+
+<h3 id="why-reducer">7.5 为什么 waiting_on 必须有自定义 reducer？</h3>
+<p>
+  同一批的三个 <code>task</code> 并行执行，在同一步里各返回一个 <code>Command(update={"waiting_on": {...}})</code>。普通字段一步只能收一个值，
+  实验 1 去掉 reducer，r1 段 1 直接以 <code>At key 'waiting_on': Can receive only one value per step</code> 失败。
+  不用 <code>operator.add</code> 是因为续跑时要把等到的那一项<b>删掉</b>（值为 <code>None</code> 表示删除），add 只能加不能删。
+</p>
+
+<h3 id="why-barrier">7.6 为什么 barrier 要等齐一整批？</h3>
+<p>
+  实验 8 把 barrier 改成「永远满足」：每个 run 落库后的复查都立刻续跑，续跑后 <code>before_model</code> 发现还在等，又挂起，又复查……
+  r1 跑了<b>三十七八段</b>，r1-c1 跑了 20 段，绝大多数是「在等 → jump_to end」的空转。结论最终是齐的（子 run 不会重复起、兄弟调用原样返回），但白白建了几十次图。
+</p>
+<p>等齐一整批还有一个好处：模型一次看到全部结论再决定下一步，而不是看到一份就动手。</p>
+
+<h3 id="why-sibling">7.7 为什么续跑时，已经有结果的兄弟调用要原样返回？</h3>
+<p>
+  <code>jump_to tools</code> 直接进 ToolNode，它会把<b>最后一条 ai 消息里的全部调用</b>再执行一遍，不管哪些已经有结果。
+  第 2 波的 c5 派给了不存在的 <code>writer</code>，段 2 当场就回了一句错误文本；段 3 续跑时 c5 又会被执行一遍。
+</p>
+<p>
+  <code>SuspensionMiddleware.awrap_tool_call</code> 发现这个调用在消息里已经有结果，就把<b>那条消息本身</b>原样返回。消息按 id 合并，同一个 id 只会替换、不会追加，于是结果还是恰好一条。
+  实验 7 去掉这段，r1 段 3 以 <code>tool_call ['c5'] 的结果不是恰好一条</code> 失败（真实 API 是 400）。
+  同一批里混着普通工具时也一样：已经执行过的工具不会因为续跑再执行一次（副作用不重放）。
+</p>
+
+<h3 id="why-id">7.8 为什么子 run 的 id 要由 (父 run, tool_call_id) 派生？</h3>
+<p>
+  一段的结果是在图跑完之后才落库的。如果起了子 run 之后、落库之前进程崩了，接管者会把这一段<b>重跑一遍</b>，<code>task</code> 会再被调用一次。
+</p>
+<ul>
+  <li>id 可复现（<code>r1-c2</code>）：重跑时 <code>create_child</code> 发现已存在，什么都不做，返回同一个 id。实验 6 让每一段都跑两遍，每一层都打印「已存在，不重复起」，最后还是 5 个子 run。</li>
+  <li>id 随机：实验 6′ 一共起了 <b>12 个子 run</b>，其中 7 个是孤儿。嵌套让它成倍增加：孤儿 researcher 自己也会再派出孤儿 benchmarker。</li>
+</ul>
+<p>这和姊妹篇提到的「approval_id 必须可复现」是同一个道理。实验 5″ 里它还顺带兜住了「同一段被并发跑了两遍」的情况。</p>
+
+<h3 id="why-recheck">7.9 为什么 run 落库之后还要自己再查一次？</h3>
+<p>子 run 一被起就开始跑，而父 run 要等这一段图跑完才落库。如果子 run 跑得比父 run 落库还快：</p>
+<ol>
+  <li>子 run 结束，去叫醒父 run：父还是 running，<code>resume_if_ready</code> 直接返回，<b>这次唤醒落空，没有任何输出</b>；</li>
+  <li>父 run 落成 suspended，之后再没有人来叫它。</li>
+</ol>
+<p>
+  实验 4 让 r1 第 1 段落库前多等 1 秒，它的子 run（包括 r1-c1 那条嵌套链）都在这段时间里结束，全靠复查续上；实验 4′ 再删掉复查，r1 永远停在 suspended，没有报错。
+  真实系统还有周期补扫兜底：子 run 收尾那一刻进程正好重启，唤醒也会丢。
+</p>
+
+<h3 id="why-cas">7.10 为什么叫醒要用 CAS？</h3>
+<p>
+  一批子 run 可能同时结束，每个都会来叫醒。实验 5 让 r1-c2、r1-c3 同时结束：一个「CAS 抢到」，一个「CAS 没抢到，别人已经续上了」。
+  demo 里其实有<b>两道</b> CAS：续跑的 <code>claim_for_resume</code>，和执行器领取 run 的 <code>claim</code>（真实系统是 <code>SELECT … FOR UPDATE SKIP LOCKED</code>）。
+</p>
+<table>
+  <tr><th>实验</th><th>去掉了什么</th><th>结果</th></tr>
+  <tr><td>5′</td><td>续跑的 CAS</td><td>两个唤醒都打印「CAS 抢到」，但领取那道兜住了，段 2 只跑一次</td></tr>
+  <tr><td>5″</td><td>两道都去掉</td><td>r1 段 2 被并发跑了<b>两遍</b>（两次模型调用）；可复现的子 run id 让第 2 波没有重复起；run 表显示「共 3 段」，实际跑了 4 段：并发的读改写丢了更新</td></tr>
+</table>
+
+<h3 id="why-text">7.11 为什么 SubAgent 失败要回成文本？</h3>
+<ul>
+  <li><b>派不出去</b>（SubAgent 不存在）：当场回一条工具结果，不挂起。模型看到「可用的是 researcher、benchmarker」，可以改派。</li>
+  <li><b>子 run 失败</b>：子 run 落成 failed，结论文本照实说「以 failed 结束：搜索服务超时。没有拿到结论，需要的话重新派」。主智能体据此在第 2 波重新调研了 Pulsar。</li>
+  <li>两种都不抛给父 run：一个 SubAgent 失败是局部问题，抛出去会让整个父 run 失败。也不能让模型把失败读成「没有发现」。</li>
+</ul>
+
+<!-- ================================================================== -->
+<h2 id="code">8. 代码导读</h2>
+<table>
+  <tr><th>代码</th><th>作用</th><th>对应的真实代码（<code>agent-platform/</code> 下）</th></tr>
+  <tr><td><code>store.Store.create_child</code></td><td>一个事务：建会话、子 run、写任务书；id 已存在就什么都不做</td><td><code>services/agent/…/services/subagent.py</code> 的 <code>_run_once</code>（Atlas 用随机 uuid）</td></tr>
+  <tr><td><code>store.Store.save_segment</code> / <code>fail</code></td><td>一段结束：消息、waiting_on、状态一起写；或者落成 failed</td><td><code>executor/inprocess.py</code> 的 <code>_persist</code> + <code>RunRepository.suspend</code></td></tr>
+  <tr><td><code>store.Store.claim_for_resume</code></td><td>续跑的 CAS（不清 waiting_on）</td><td><code>RunRepository.claim_for_resume</code>（Atlas 会清掉 waiting_on）</td></tr>
+  <tr><td><code>state.SubAgentState</code> / <code>merge_waits</code></td><td>waiting_on（reducer）、results（只进不出）</td><td>Atlas 目前没有；同 <code>demo/suspend-resume</code> 的 <code>SuspendState</code></td></tr>
+  <tr><td><code>middleware.PatchToolCallsMiddleware</code></td><td>图入口补 cancelled，在等的不补</td><td><code>libs/engine/…/kernel/middleware/patch_tool_calls.py</code>（现在还不看 waiting_on）</td></tr>
+  <tr><td><code>middleware.SuspensionMiddleware</code></td><td><code>before_model</code> 判断 end / tools；<code>awrap_tool_call</code> 让兄弟调用原样返回</td><td><code>libs/engine/…/kernel/middleware/suspension.py</code>（现在看哨兵）</td></tr>
+  <tr><td><code>middleware.SubAgentMiddleware</code></td><td><code>task</code> 的全部行为：起子 run + 登记 / 返回结论 + 删除登记</td><td><code>libs/engine/…/kernel/middleware/subagents.py</code></td></tr>
+  <tr><td><code>middleware.SubAgentSpawner</code></td><td>图侧唯一认识的协议：起子 run，返回 id</td><td><code>libs/engine/…/contracts/delegation.py</code> 的 <code>DelegationProtocol</code>（它会等结果）</td></tr>
+  <tr><td><code>agents.build_agent</code></td><td>主智能体和 SubAgent 同一套中间件，每段新建</td><td>engine 的 <code>build_agent</code> + <code>spec_for_subagent</code>（Atlas 的 SubAgent 没有 task，深度封顶 1）</td></tr>
+  <tr><td><code>subagent_service.SubAgentService</code> / <code>result_text</code></td><td>SubAgentSpawner 的实现；子 run 结局 → 结论文本</td><td><code>services/subagent.py</code> 的 <code>SubagentService</code>、<code>format_delegation_result</code>、<code>resolve_delegation</code></td></tr>
+  <tr><td><code>executor.Executor._execute</code> / <code>_run_segment</code></td><td>所有 run 同一条路：跑一段 → 挂起就复查 / 结束就叫醒父 run</td><td><code>executor/inprocess.py</code> 的一段执行与收尾</td></tr>
+  <tr><td><code>executor.Executor.resume_if_ready</code> / <code>pending_waits</code></td><td>barrier → CAS → 提交下一段</td><td><code>executor/inprocess.py</code> 的 <code>resume_if_ready</code> + <code>_waits_are_settled</code></td></tr>
+  <tr><td><code>executor.segment_payload</code></td><td>组装每段入参：首段只有消息；续跑三样一起交回</td><td>Atlas 是 <code>_settle_pending</code>（在内存里换哨兵）</td></tr>
+  <tr><td><code>scripted.check_pairing</code></td><td>模拟真实 API 的配对规则（每个调用恰好一条结果）</td><td>模型网关的 400</td></tr>
+  <tr><td><code>tracing.enter</code> / <code>say</code></td><td>每行带上 run 和段，按深度缩进</td><td>真实系统是事件流里的 <code>run_id</code> + <code>depth</code></td></tr>
+</table>
+
+<h3>正常运行的输出</h3>
+<pre><code>== 用户：「帮我选一个消息队列：Kafka、RabbitMQ、Pulsar」 ==
+[r1·段1] 主智能体 开跑「帮我选一个消息队列：Kafka、RabbitMQ、Pulsar」
+[r1·段1] 模型同一批发出 3 个 task：c1 researcher「调研 Kafka」、c2 researcher「调研 RabbitMQ」、c3 researcher「调研 Pulsar」
+[r1·段1] c1 → 新建 researcher 的会话和子 run r1-c1，提交执行；登记 waiting_on
+[r1·段1] c3 → 新建 researcher 的会话和子 run r1-c3，提交执行；登记 waiting_on
+[r1·段1] c2 → 新建 researcher 的会话和子 run r1-c2，提交执行；登记 waiting_on
+[r1·段1] before_model：在等 [&#x27;c1&#x27;, &#x27;c2&#x27;, &#x27;c3&#x27;] → jump_to end（不调模型，本段结束）
+[r1·段1] 落库：消息 2 条 + waiting_on [&#x27;c1&#x27;, &#x27;c2&#x27;, &#x27;c3&#x27;] → suspended
+    [r1-c1·段1] researcher 开跑「调研 Kafka」
+    [r1-c3·段1] researcher 开跑「调研 Pulsar」
+    [r1-c2·段1] researcher 开跑「调研 RabbitMQ」
+    [r1-c1·段1] 模型同一批发出 1 个 task：c1 benchmarker「压测 Kafka」
+[r1·段1] 落库后复查 r1：还在等 [&#x27;r1-c1&#x27;, &#x27;r1-c2&#x27;, &#x27;r1-c3&#x27;]，不续
+    [r1-c1·段1] c1 → 新建 benchmarker 的会话和子 run r1-c1-c1，提交执行；登记 waiting_on
+    [r1-c1·段1] before_model：在等 [&#x27;c1&#x27;] → jump_to end（不调模型，本段结束）
+    [r1-c1·段1] 落库：消息 2 条 + waiting_on [&#x27;c1&#x27;] → suspended
+        [r1-c1-c1·段1] benchmarker 开跑「压测 Kafka」
+    [r1-c1·段1] 落库后复查 r1-c1：还在等 [&#x27;r1-c1-c1&#x27;]，不续
+    [r1-c2·段1] 落库 → 结束：RabbitMQ：路由灵活，吞吐中等
+    [r1-c2·段1] 收尾时叫醒 r1：还在等 [&#x27;r1-c1&#x27;, &#x27;r1-c3&#x27;]，不续
+        [r1-c1-c1·段1] 落库 → 结束：Kafka 单机 100 万条/秒
+        [r1-c1-c1·段1] 收尾时叫醒 r1-c1：等的子 run 都结束了，CAS 抢到 → 提交下一段
+    [r1-c1·段2] 续跑（全新的图）：消息 2 条 + waiting_on [&#x27;c1&#x27;] + results [&#x27;r1-c1-c1&#x27;]
+    [r1-c1·段2] before_model：[&#x27;c1&#x27;] 的结论都到了 → jump_to tools
+    [r1-c1·段2] c1 的子 run r1-c1-c1 已结束 → 结论作为工具结果
+    [r1-c1·段2] 模型读到 benchmarker 的结论：Kafka 单机 100 万条/秒
+    [r1-c1·段2] 模型给出最终答复：Kafka：吞吐最高（压测单机 100 万条/秒），生态最成熟
+    [r1-c1·段2] 落库 → 结束：Kafka：吞吐最高（压测单机 100 万条/秒），生态最成熟
+    [r1-c1·段2] 收尾时叫醒 r1：还在等 [&#x27;r1-c3&#x27;]，不续
+    [r1-c3·段1] 失败：搜索服务超时
+    [r1-c3·段1] 收尾时叫醒 r1：等的子 run 都结束了，CAS 抢到 → 提交下一段
+[r1·段2] 续跑（全新的图）：消息 2 条 + waiting_on [&#x27;c1&#x27;, &#x27;c2&#x27;, &#x27;c3&#x27;] + results [&#x27;r1-c1&#x27;, &#x27;r1-c2&#x27;, &#x27;r1-c3&#x27;]
+[r1·段2] before_model：[&#x27;c1&#x27;, &#x27;c2&#x27;, &#x27;c3&#x27;] 的结论都到了 → jump_to tools
+[r1·段2] c1 的子 run r1-c1 已结束 → 结论作为工具结果
+[r1·段2] c2 的子 run r1-c2 已结束 → 结论作为工具结果
+[r1·段2] c3 的子 run r1-c3 已结束 → 结论作为工具结果
+[r1·段2] 模型读到 researcher 的结论：Kafka：吞吐最高（压测单机 100 万条/秒），生态最成熟
+[r1·段2] 模型读到 researcher 的结论：RabbitMQ：路由灵活，吞吐中等
+[r1·段2] 模型读到 researcher 的结论：SubAgent researcher 以 failed 结束：搜索服务超时。没有拿到结论，需要的话重新派
+[r1·段2] 模型同一批发出 2 个 task：c4 researcher「重新调研 Pulsar」、c5 writer「写选型报告」
+[r1·段2] c5 → SubAgent writer 不存在 → 当场回成工具结果，不挂起
+[r1·段2] c4 → 新建 researcher 的会话和子 run r1-c4，提交执行；登记 waiting_on
+[r1·段2] before_model：在等 [&#x27;c4&#x27;] → jump_to end（不调模型，本段结束）
+[r1·段2] 落库：消息 7 条 + waiting_on [&#x27;c4&#x27;] → suspended
+    [r1-c4·段1] researcher 开跑「重新调研 Pulsar」
+[r1·段2] 落库后复查 r1：还在等 [&#x27;r1-c4&#x27;]，不续
+    [r1-c4·段1] 落库 → 结束：Pulsar：多租户好，运维复杂
+    [r1-c4·段1] 收尾时叫醒 r1：等的子 run 都结束了，CAS 抢到 → 提交下一段
+[r1·段3] 续跑（全新的图）：消息 7 条 + waiting_on [&#x27;c4&#x27;] + results [&#x27;r1-c4&#x27;]
+[r1·段3] before_model：[&#x27;c4&#x27;] 的结论都到了 → jump_to tools
+[r1·段3] c5 在上一段已经有结果 → 原样返回，不重跑
+[r1·段3] c4 的子 run r1-c4 已结束 → 结论作为工具结果
+[r1·段3] 模型读到 writer 的结论：SubAgent writer 不存在，可用的是：researcher、benchmarker
+[r1·段3] 模型读到 researcher 的结论：Pulsar：多租户好，运维复杂
+[r1·段3] 模型给出最终答复：选 Kafka：吞吐最高（单机 100 万条/秒）、生态最成熟；Pulsar 多租户好，但运维复杂。
+[r1·段3] 落库 → 结束：选 Kafka：吞吐最高（单机 100 万条/秒）、生态最成熟；Pulsar 多租户好，但运维复杂。
+
+整轮用时约 0.7 秒（四次工具调用串行要 1.1 秒：同一批的子 run 是并行跑的）
+
+== 最终各表 ==
+  run 表（每个子 run 在自己的新会话上；id 就是祖先链）
+    r1        主智能体    succeeded 共 3 段  根 run
+    r1-c1     researcher  succeeded 共 2 段  父 run r1
+    r1-c1-c1  benchmarker succeeded 共 1 段  父 run r1-c1
+    r1-c2     researcher  succeeded 共 1 段  父 run r1
+    r1-c3     researcher  failed    共 1 段  父 run r1（搜索服务超时）
+    r1-c4     researcher  succeeded 共 1 段  父 run r1
+  主会话的 message 表：没有占位消息，也没有 SubAgent 的过程，只有结论
+    human  帮我选一个消息队列：Kafka、RabbitMQ、Pulsar
+    ai     → task(c1)、task(c2)、task(c3)
+    tool   [c1] Kafka：吞吐最高（压测单机 100 万条/秒），生态最成熟
+    tool   [c2] RabbitMQ：路由灵活，吞吐中等
+    tool   [c3] SubAgent researcher 以 failed 结束：搜索服务超时。没有拿到结论，需要的话重新派
+    ai     → task(c4)、task(c5)
+    tool   [c5] SubAgent writer 不存在，可用的是：researcher、benchmarker
+    tool   [c4] Pulsar：多租户好，运维复杂
+    ai     选 Kafka：吞吐最高（单机 100 万条/秒）、生态最成熟；Pulsar 多租户好，但运维复杂。
+  子 run r1-c1 的会话：它自己的过程，包括它派出的 benchmarker 和拿回的结论
+    human  调研 Kafka
+    ai     → task(c1)
+    tool   [c1] Kafka 单机 100 万条/秒
+    ai     Kafka：吞吐最高（压测单机 100 万条/秒），生态最成熟</code></pre>
+<p>
+  留意几点：每一行开头的 <code>[run·段]</code> 和缩进说明是谁在说话；每一段的结尾都是「jump_to end（不调模型）」+「落库 → suspended」，续跑段的开头是「续跑（全新的图）：消息 + waiting_on + results」；
+  r1-c1-c1 叫醒的是 r1-c1，r1-c1 交出结论后才去叫 r1；r1 收到的三次叫醒里只有最后一次 barrier 满足；r1 段 3 里 c5「原样返回，不重跑」。
+  <b>同一批并行执行的那几行</b>（几个子 run 的「开跑」、各自的落库和叫醒）先后顺序每次可能不同，这是并行本身的性质；排序后每次的输出完全一样。整轮用时每次有零点几秒的出入。
+</p>
+
+<!-- ================================================================== -->
+<h2 id="lab">9. 动手实验</h2>
+<p>每个实验只改一两处，结果都是实际运行得到的。</p>
+<table>
+  <tr><th>#</th><th>改动</th><th>观察到的现象</th><th>说明了什么</th></tr>
+  <tr>
+    <td>1</td>
+    <td><code>state.py</code>：<code>waiting_on</code> 的类型去掉 reducer，改成 <code>NotRequired[dict[str, dict[str, str]]]</code></td>
+    <td>r1 段 1 打印「失败：At key 'waiting_on': Can receive only one value per step」；三个子 run 已经起了，照样开跑，成了没人等的孤儿</td>
+    <td><a href="#why-reducer">§7.5</a>：并行的 task 在同一步各写一次 waiting_on。顺带说明真实系统需要「父失败 → 级联取消子 run」</td>
+  </tr>
+  <tr>
+    <td>2</td>
+    <td><code>executor.segment_payload</code> 的返回值里删掉 <code>"waiting_on": waits</code></td>
+    <td>r1-c1 段 2、r1 段 2、r1 段 3 开头都打印「patch：cN 悬空，且不在 waiting_on 里 → 补 cancelled」，模型读到的全是 <code>Tool call task with id cN was cancelled.</code>，
+      照样给出最终答复，run 正常结束。所有子 run 的结论全丢了，<b>全程不报错</b></td>
+    <td>要点 3：三样依据必须一起交回。漏了 waiting_on，「在等」就被当成了「被放弃」，每一层都一样</td>
+  </tr>
+  <tr>
+    <td>3</td>
+    <td><code>PatchToolCallsMiddleware</code> 里把 <code>or call["id"] in waiting</code> 删掉</td>
+    <td>r1-c1 段 2 入口给 c1 补了 cancelled，之后 <code>before_model … jump_to tools</code> 和 <code>c1 在上一段已经有结果 → 原样返回</code> 无限交替（3 秒里 4000 多轮）；r1 一直在等它，停在 suspended</td>
+    <td>Patch 必须看 waiting_on。补上的 cancelled 让调用「已有结果」，waiting_on 永远删不掉。LangGraph 默认递归上限是 10007，不会很快报错</td>
+  </tr>
+  <tr>
+    <td>4</td>
+    <td><code>_run_segment</code> 里 <code>save_segment</code> 前加 <code>if run.id == "r1" and run.segments == 1: await asyncio.sleep(1)</code>（根 run 第 1 段落库慢）</td>
+    <td>r1 的三个子 run 在它落库前都结束了，它们的唤醒没有任何输出；之后「落库后复查 r1：等的子 run 都结束了，CAS 抢到」续上</td>
+    <td rowspan="2"><a href="#why-recheck">§7.9</a>：唤醒会静默落空，复查是补这个窗口的</td>
+  </tr>
+  <tr>
+    <td>4′</td>
+    <td>同 4，并把 <code>await self.resume_if_ready(run.id, why="落库后复查")</code> 换成 <code>pass</code></td>
+    <td>「⚠ 等了 3 秒，r1 还是 suspended」，run 表里 r1 停在 suspended、共 1 段，它的子 run 都已终态</td>
+  </tr>
+  <tr>
+    <td>5</td>
+    <td><code>TOOL_SCRIPT</code> 里「调研 RabbitMQ」「调研 Pulsar」的时长都改成 <code>0.6</code>（这两个同时、最后结束）</td>
+    <td>r1-c3「收尾时叫醒 r1：… CAS 抢到」，r1-c2「CAS 没抢到，别人已经续上了」。每次都一样</td>
+    <td rowspan="3"><a href="#why-cas">§7.10</a></td>
+  </tr>
+  <tr>
+    <td>5′</td>
+    <td>同 5，并把 <code>claim_for_resume</code> 改成先查后改：<code>run = await self.get_run(run_id)</code>，判断后 <code>await asyncio.sleep(0.05)</code> 再改 status</td>
+    <td>r1-c2、r1-c3 都打印「CAS 抢到」，但 r1 段 2 只跑了一次：执行器的 <code>claim</code> 也是 CAS，后来的领取失败</td>
+  </tr>
+  <tr>
+    <td>5″</td>
+    <td>同 5′，并把 <code>claim</code> 也照样改成先查后改</td>
+    <td>「[r1·段2] 续跑」打印了两次，模型发了两次第 2 波；c4 打印一次「已存在，不重复起」；最终只回复一次，run 表显示「共 3 段」（实际跑了 4 段）</td>
+  </tr>
+  <tr>
+    <td>6</td>
+    <td><code>_run_segment</code> 里在 <code>result = await agent.ainvoke(payload)</code> 前面再加一行 <code>await agent.ainvoke(payload)</code>（模拟落库前崩了、这一段被重跑）</td>
+    <td>r1 段 1、r1-c1 段 1、r1 段 2 的第二遍都打印「已存在，不重复起」；run 表里还是 5 个子 run</td>
+    <td rowspan="2"><a href="#why-id">§7.8</a>：可复现的 id 让重放无害</td>
+  </tr>
+  <tr>
+    <td>6′</td>
+    <td>同 6，并把 <code>SubAgentService.spawn</code> 里的 id 改成随机：<code>f"{self.parent.id}-{uuid.uuid4().hex[:4]}"</code>（文件头加 <code>import uuid</code>）</td>
+    <td>一共起了 12 个子 run，其中 7 个是孤儿：两个调研 Kafka 的 researcher 各派了两个 benchmarker</td>
+  </tr>
+  <tr>
+    <td>7</td>
+    <td><code>SuspensionMiddleware.awrap_tool_call</code> 里把 <code>if isinstance(message, ToolMessage) and message.tool_call_id == call_id:</code> 改成 <code>if False:</code></td>
+    <td>r1 段 3 里 c5 被再执行一遍，又回了一条「writer 不存在」，接着「[r1·段3] 失败：tool_call ['c5'] 的结果不是恰好一条」</td>
+    <td><a href="#why-sibling">§7.7</a>：jump_to tools 会把整批再执行一遍</td>
+  </tr>
+  <tr>
+    <td>8</td>
+    <td><code>resume_if_ready</code> 里把 <code>pending = await self.pending_waits(run)</code> 改成 <code>pending = []</code>（barrier 永远满足）</td>
+    <td>r1 跑了 37～38 段，r1-c1 跑了 20 段：绝大多数是「results []」→「在等 … jump_to end」的空转；结论最终齐全，回复和原来一样</td>
+    <td><a href="#why-barrier">§7.6</a>：barrier 错了不一定出错，但会空转。真实系统里每段都是一次领取和建图</td>
+  </tr>
+</table>
+
+<!-- ================================================================== -->
+<h2 id="gap">10. demo 和真实系统的差别</h2>
+<table>
+  <tr><th>方面</th><th>demo</th><th>真实系统（Atlas 现状）</th></tr>
+  <tr><td>挂起的表示</td><td>task 不写结果，悬空 + state 里的 <code>waiting_on</code>；续跑交回 <code>results</code></td>
+    <td>已按本 demo 迁移：<code>SubAgentMiddleware</code> 接管 task、登记 <code>waiting_on</code>（reason <code>subagent</code>），续跑时结论从 <code>decisions</code> 进来（与审批共用一个字段）。
+      差别：<code>SubAgentMiddleware</code> 排在审批与续跑去重之内 —— task 可以被配成需审批，先审批再起子 run</td></tr>
+  <tr><td>嵌套</td><td>不设上限：SubAgent 和主智能体同一套图</td><td>同样不设上限：native SubAgent 带着同一份名录；acp SubAgent（Pod 里的 CLI）装不了 task</td></tr>
+  <tr><td>当场等待</td><td>没有，一律挂起</td><td>同样没有，一律挂起</td></tr>
+  <tr><td>会话模式</td><td>只有一种：每次新会话</td><td>persistent（复用会话、记得之前的任务、同名串行）和 ephemeral 两种</td></tr>
+  <tr><td>子 run id</td><td>由 <code>(父 run, tool_call_id)</code> 派生，可复现，本身就是祖先链</td><td>随机 uuid</td></tr>
+  <tr><td>存储</td><td>内存，每次调用让出 1 毫秒；会话消息每段整表覆盖</td><td>数据库，消息只追加；检查点、事件归档、租约校验在同一个事务里</td></tr>
+  <tr><td>叫醒</td><td>子 run 结束时、自己落库后复查</td><td>再加周期补扫；唤醒经 Redis 发布 / 订阅通知别的实例</td></tr>
+  <tr><td>执行器</td><td><code>submit</code> 直接起一个 asyncio 任务</td><td>领取队列 + 租约 + 接管：实例死了，别的实例接着领</td></tr>
+  <tr><td>护栏</td><td>没有</td><td>全局并发上限 + <b>整棵 run 树</b>的累计上限（按 <code>run.root_run_id</code> 数，<a href="#why-nest">§7.2</a>）；两者都是先数后建的软上限</td></tr>
+  <tr><td>取消</td><td>没有：父 run 失败时子 run 照样跑完（实验 1）</td><td>父被取消 → 逐层取消所有子孙 run；挂起中被取消 → 不续跑，直接收尾</td></tr>
+  <tr><td>事件</td><td>只打印，靠 contextvar 带上 run 和深度</td><td>子孙 run 的事件带 <code>depth</code>（<code>run.depth</code>）进根会话那一条流（<code>thread.root_thread_id</code>，姊妹篇 sse-stream）；前端对 depth ≥ 2 的嵌套展示还没做</td></tr>
+  <tr><td>结论文本</td><td>结论 + 简化的统计行</td><td>失败时附部分输出（截断到 4000 字），统计行带 tokens、工具调用次数、耗时</td></tr>
+</table>
+
+</main>
+
+<script>
+/* 极简时序图渲染：用数据描述参与者和步骤，生成 SVG。改图只改数据，不用算坐标。
+   步骤类型：
+     {phase: "标题"}                                   阶段色带
+     {from, to, text, reply?, cls?}                     消息箭头（reply = 虚线返回）
+     {self: lane, text}                                 自调用（自己内部的处理）
+     {note: [laneA, laneB], text, cls?}                 便签（text 可用 \n 换行） */
+const SVG_NS = "http://www.w3.org/2000/svg";
+let seqCount = 0;
+
+function el(tag, attrs, text) {
+  const node = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) node.setAttribute(k, v);
+  if (text != null) node.textContent = text;
+  return node;
+}
+
+function renderSeq(container, spec) {
+  const id = "s" + (++seqCount);
+  const laneW = spec.laneWidth || 180, left = 100, lineH = 16;
+  const x = {};
+  spec.lanes.forEach((l, i) => { x[l.id] = left + i * laneW; });
+  const lastLane = spec.lanes[spec.lanes.length - 1].id;
+  const width = left * 2 + (spec.lanes.length - 1) * laneW;
+  const svg = el("svg", {width, role: "img"});
+  const defs = el("defs");
+  for (const cls of ["", "bad", "ok"]) {
+    const m = el("marker", {id: `${id}-ah${cls}`, viewBox: "0 0 10 10", refX: 9, refY: 5,
+                            markerWidth: 8, markerHeight: 8, orient: "auto-start-reverse"});
+    m.appendChild(el("path", {class: "head " + cls, d: "M0,0 L10,5 L0,10 z"}));
+    defs.appendChild(m);
+  }
+  svg.appendChild(defs);
+  const back = el("g"), front = el("g");
+  svg.append(back, front);
+
+  // 参与者
+  for (const l of spec.lanes) {
+    front.appendChild(el("rect", {class: "lane-box", x: x[l.id] - 78, y: 10, width: 156, height: 46, rx: 6}));
+    front.appendChild(el("text", {class: "lane-name", x: x[l.id], y: 30, "text-anchor": "middle"}, l.name));
+    if (l.sub) front.appendChild(el("text", {class: "lane-sub", x: x[l.id], y: 47, "text-anchor": "middle"}, l.sub));
+  }
+
+  let y = 80;
+  for (const s of spec.steps) {
+    if (s.phase) {
+      back.appendChild(el("rect", {class: "phase-band", x: 0, y: y, width, height: 26}));
+      front.appendChild(el("text", {class: "phase-text", x: 12, y: y + 18}, s.phase));
+      y += 44;
+    } else if (s.note) {
+      const lines = s.text.split("\n");
+      const xs = s.note.map(n => x[n]);
+      const x0 = Math.min(...xs) - 80, x1 = Math.max(...xs) + 80;
+      const h = lines.length * lineH + 12;
+      front.appendChild(el("rect", {class: "note-box " + (s.cls || ""), x: x0, y, width: x1 - x0, height: h, rx: 4}));
+      lines.forEach((t, i) => front.appendChild(el("text", {x: x0 + 10, y: y + 18 + i * lineH}, t)));
+      y += h + 16;
+    } else if (s.self) {
+      const sx = x[s.self];
+      const onLeft = s.self === lastLane;
+      const dx = onLeft ? -28 : 28;
+      const lines = s.text.split("\n");
+      front.appendChild(el("path", {class: "arrow " + (s.cls || ""), d: `M${sx},${y} L${sx + dx},${y} L${sx + dx},${y + 14} L${sx + 2 * Math.sign(dx)},${y + 14}`,
+                                    "marker-end": `url(#${id}-ah${s.cls || ""})`}));
+      lines.forEach((t, i) => front.appendChild(el("text", {
+        x: sx + dx + (onLeft ? -6 : 6), y: y + 12 + i * lineH, "text-anchor": onLeft ? "end" : "start"}, t)));
+      y += 22 + lines.length * lineH;
+    } else {
+      const x1 = x[s.from], x2 = x[s.to];
+      const lines = s.text.split("\n");
+      lines.forEach((t, i) => front.appendChild(el("text", {
+        x: (x1 + x2) / 2, y: y + i * lineH, "text-anchor": "middle"}, t)));
+      const ay = y + (lines.length - 1) * lineH + 8;
+      const end = x2 + (x2 > x1 ? -2 : 2);
+      front.appendChild(el("path", {class: "arrow " + (s.reply ? "reply " : "") + (s.cls || ""),
+                                    d: `M${x1},${ay} L${end},${ay}`, "marker-end": `url(#${id}-ah${s.cls || ""})`}));
+      y = ay + 26;
+    }
+  }
+  const height = y + 10;
+  for (const l of spec.lanes) {
+    back.appendChild(el("line", {class: "lane-line", x1: x[l.id], y1: 56, x2: x[l.id], y2: height}));
+  }
+  svg.setAttribute("height", height);
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  container.appendChild(svg);
+}
+renderSeq(document.getElementById("seq-main"), {
+  laneWidth: 190,
+  lanes: [
+    {id: "user", name: "用户"},
+    {id: "exec", name: "执行器", sub: "executor.py"},
+    {id: "db", name: "数据库", sub: "thread / run / message"},
+    {id: "r1", name: "r1", sub: "根 run · 主智能体"},
+    {id: "c", name: "r1-c1 … r1-c4", sub: "第 1 层 SubAgent"},
+    {id: "cc", name: "r1-c1-c1", sub: "第 2 层 · benchmarker"},
+  ],
+  steps: [
+    {phase: "r1 段 1：首次运行"},
+    {from: "user", to: "exec", text: "「帮我选一个消息队列」→ 根 run r1"},
+    {from: "exec", to: "r1", text: "建图，ainvoke(消息)"},
+    {self: "r1", text: "模型：同一批 3 个 task（c1 c2 c3）"},
+    {from: "r1", to: "db", text: "3 个 task 并行：各建会话 + 子 run r1-c1 / c2 / c3"},
+    {from: "r1", to: "c", text: "submit ×3"},
+    {self: "r1", text: "只登记 waiting_on，不写结果\nbefore_model → jump_to end", cls: "bad"},
+    {from: "r1", to: "db", text: "消息 + waiting_on 落库，r1 = suspended；复查：还在等"},
+    {note: ["exec", "r1"], text: "执行 r1 的任务到这里就结束了。这时重启进程什么都不丢：\n「在等谁」在 run.waiting_on 里，子 run 在 run 表里。"},
+
+    {phase: "第 1 层并行跑；r1-c1 又派了一层"},
+    {self: "c", text: "r1-c1 的模型：task c1\nbenchmarker「压测 Kafka」"},
+    {from: "c", to: "db", text: "建会话 + 子 run r1-c1-c1"},
+    {from: "c", to: "cc", text: "submit"},
+    {self: "c", text: "r1-c1：before_model → jump_to end\n落库，r1-c1 = suspended", cls: "bad"},
+    {from: "c", to: "db", text: "r1-c2 完成 → 叫醒 r1：还在等 c1、c3"},
+    {from: "cc", to: "db", text: "r1-c1-c1 完成 → 叫醒 r1-c1：CAS 抢到", cls: "ok"},
+    {from: "db", to: "c", text: "提交 r1-c1 段 2", reply: true, cls: "ok"},
+    {self: "c", text: "r1-c1 段 2：jump_to tools → 拿到压测数字\n模型交出结论"},
+    {from: "c", to: "db", text: "r1-c1 结束 → 叫醒 r1：还在等 c3"},
+    {from: "c", to: "db", text: "r1-c3 失败（搜索服务超时）→ 叫醒 r1：都结束了，CAS 抢到", cls: "ok"},
+    {from: "db", to: "exec", text: "提交 r1 段 2", reply: true, cls: "ok"},
+
+    {phase: "r1 段 2：续跑（全新的图）"},
+    {from: "exec", to: "r1", text: "ainvoke(消息 + waiting_on + results)"},
+    {self: "r1", text: "Patch：c1–c3 在 waiting_on 里 → 不补\nbefore_model → jump_to tools", cls: "ok"},
+    {self: "r1", text: "task ×3 再执行一遍 → 三份结论（一份是失败说明）"},
+    {self: "r1", text: "第 2 波：c4 researcher；\nc5 writer 不存在 → 当场回成文本", cls: "bad"},
+    {from: "r1", to: "c", text: "起 r1-c4「重新调研 Pulsar」"},
+    {from: "r1", to: "db", text: "落库，r1 = suspended（等 c4）"},
+
+    {phase: "r1 段 3"},
+    {from: "c", to: "db", text: "r1-c4 完成 → 叫醒 r1：CAS 抢到", cls: "ok"},
+    {from: "exec", to: "r1", text: "ainvoke(消息 + waiting_on + results)"},
+    {self: "r1", text: "jump_to tools：c5 原样返回，c4 → 结论\n模型给出最终答复"},
+    {from: "r1", to: "db", text: "落库，r1 = succeeded（共 3 段）"},
+    {from: "exec", to: "user", text: "「选 Kafka：吞吐最高（单机 100 万条/秒）……」", reply: true},
+  ],
+});
+</script>
+</body>
+</html>

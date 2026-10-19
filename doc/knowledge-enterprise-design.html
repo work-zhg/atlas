@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>知识库企业级能力设计（核心模块）</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --border: #d1d9e0; --head: #f6f8fa;
+    --accent: #0969da; --ok: #1a7f37; --ok-bg: #dafbe1; --warn: #9a6700; --warn-bg: #fff8c5;
+    --bad: #cf222e; --bad-bg: #ffebe9; --code-bg: #f6f8fa;
+    --b1: #ddf4ff; --b1d: #54aeff; --b2: #fbefff; --b2d: #c297ff; --b3: #dafbe1; --b3d: #4ac26b;
+    --b4: #fff8c5; --b4d: #d4a72c; --b5: #ffebe9; --b5d: #ff8182;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --border: #3d444d; --head: #151b23;
+      --accent: #4493f8; --ok: #3fb950; --ok-bg: #12261e; --warn: #d29922; --warn-bg: #2b2111;
+      --bad: #f85149; --bad-bg: #2d1214; --code-bg: #151b23;
+      --b1: #12263f; --b1d: #1f6feb; --b2: #271a36; --b2d: #8957e5; --b3: #12261e; --b3d: #2ea043;
+      --b4: #2b2111; --b4d: #9e6a03; --b5: #2d1214; --b5d: #da3633;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 32px; background: var(--bg); color: var(--fg);
+         font: 14px/1.75 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif; }
+  main { max-width: 1120px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 44px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 15.5px; margin: 24px 0 8px; }
+  .sub { color: var(--muted); margin: 0 0 14px; }
+  code { font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code-bg); padding: 1px 4px; border-radius: 4px; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px 14px; overflow-x: auto; font-size: 12.5px; }
+  pre code { background: none; padding: 0; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0 16px; }
+  th, td { border: 1px solid var(--border); padding: 7px 10px; vertical-align: top; text-align: left; }
+  th { background: var(--head); white-space: nowrap; }
+  .callout { border-left: 4px solid var(--accent); background: var(--head); padding: 10px 14px; border-radius: 4px; margin: 14px 0; }
+  .callout.warn { border-color: var(--warn); background: var(--warn-bg); }
+  .callout.bad { border-color: var(--bad); background: var(--bad-bg); }
+  .tag { display: inline-block; padding: 0 7px; border-radius: 9px; font-size: 12px; font-weight: 600; border: 1px solid; white-space: nowrap; }
+  .tag.ok { color: var(--ok); background: var(--ok-bg); border-color: var(--ok); }
+  .tag.new { color: var(--accent); background: var(--head); border-color: var(--accent); }
+  .tag.warn { color: var(--warn); background: var(--warn-bg); border-color: var(--warn); }
+  .tag.bad { color: var(--bad); background: var(--bad-bg); border-color: var(--bad); }
+  .toc { columns: 2; padding-left: 18px; }
+  .fig { border: 1px solid var(--border); border-radius: 6px; padding: 10px; overflow-x: auto; margin: 10px 0 16px; }
+  svg text { fill: var(--fg); font-size: 12px; font-family: -apple-system, "PingFang SC", sans-serif; }
+  svg .s { font-size: 11px; fill: var(--muted); }
+  svg .b { font-weight: 600; }
+  svg .n { fill: var(--accent); font-weight: 600; }
+  svg .c1 { fill: var(--b1); stroke: var(--b1d); } svg .c2 { fill: var(--b2); stroke: var(--b2d); }
+  svg .c3 { fill: var(--b3); stroke: var(--b3d); } svg .c4 { fill: var(--b4); stroke: var(--b4d); }
+  svg .c5 { fill: var(--b5); stroke: var(--b5d); }
+  svg .ln { stroke: var(--fg); stroke-width: 1.3; fill: none; }
+  svg .dash { stroke-dasharray: 5 4; }
+  svg .lane { stroke: var(--border); stroke-dasharray: 4 4; }
+  td.c { text-align: center; }
+
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 10px 0 16px; }
+  .card { border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; background: var(--head); }
+  .card b { display: block; margin-bottom: 4px; }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+
+
+  .flow2 { font: 12.5px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px 14px; white-space: pre; overflow-x: auto; margin: 10px 0 16px; }
+  .src { color: var(--muted); font-size: 12px; }
+
+
+
+  .ok { color: #16a34a; font-weight: 600; }
+  .part { color: #ca8a04; }
+
+</style>
+</head>
+<body>
+<main>
+<h1>知识库企业级能力设计（核心模块）</h1>
+<p class="sub">日期：2026-10-14 · 关联：<a href="atlas-rag-design.html">知识库详细设计</a>（现有架构与流水线）、<a href="rag-eval-design.html">RAG 评测体系</a>、<a href="context-management-design.html">上下文管理设计</a><br>
+范围：文档解析、分段、向量化与索引、检索、生成与引用、知识更新与数据源、评测与反馈七个<b>核心模块</b>。<br>
+不在本期：OCR（扫描件与图片型 PDF 只检测、标记，不识别）；横向的企业级要求（水平扩容、多租户、安全合规、运营看板）。</p>
+
+<div class="callout">
+<b>结论先行：</b>现有的入库流水线、结构感知分段、稠密 + BM25 混合检索、检索漏斗与评测框架是可靠的骨架，本设计<b>不重写，只在已有阶段上扩展</b>。三处最大的短板依次是：
+<ol>
+  <li><b>文档理解</b>：PDF 只取文本层（双栏读串、页眉页脚混入、表格拍平）——决定效果上限；</li>
+  <li><b>检索的准确与可控</b>：不能按业务元数据过滤、没有文档级权限、口语化和多轮提问没有改写；</li>
+  <li><b>可信回答与知识保鲜</b>：没有可追溯引用与拒答；知识只能手动上传，不能从源系统增量同步。</li>
+</ol>
+每一项改进都要能在<b>检索漏斗</b>上看到候选质量的变化，并在<b>评测集</b>上用配对比较证明有效，否则不默认开启。
+</div>
+
+<ol class="toc">
+  <li><a href="#s1">目标与原则</a></li>
+  <li><a href="#s2">现状盘点</a></li>
+  <li><a href="#s3">总体架构</a></li>
+  <li><a href="#s4">文档解析</a></li>
+  <li><a href="#s5">分段</a></li>
+  <li><a href="#s6">向量化与索引</a></li>
+  <li><a href="#s7">检索</a></li>
+  <li><a href="#s8">生成与引用</a></li>
+  <li><a href="#s9">知识更新与数据源</a></li>
+  <li><a href="#s10">评测与反馈</a></li>
+  <li><a href="#s11">数据模型变更</a></li>
+  <li><a href="#s12">接口变更</a></li>
+  <li><a href="#s13">分期</a></li>
+  <li><a href="#s14">风险与限制</a></li>
+  <li><a href="#s15">实现状态</a></li>
+</ol>
+
+<!-- ─────────────────────────────────────────────── 1 -->
+<h2 id="s1">1. 目标与原则</h2>
+<table>
+  <tr><th>目标</th><th>衡量方式</th></tr>
+  <tr><td>真实企业文档（双栏 PDF、带表格的报表、PPT、Wiki）能被正确理解</td><td>解析质量指标；评测集上召回率（Recall@k）、MRR 的提升</td></tr>
+  <tr><td>检索结果准确、可控：按业务条件过滤，只返回调用者有权看到的内容，只返回生效版本</td><td>过滤 / 权限 / 版本类评测题的通过率；越权检索为 0</td></tr>
+  <tr><td>回答可信：每个结论可追溯到原文，没有依据时明确拒答</td><td>引用正确率、忠实度（faithfulness）、无答案题的拒答率</td></tr>
+  <tr><td>知识保鲜：源系统的变化自动、增量地反映到知识库</td><td>同步延迟、增量同步时重新向量化的比例</td></tr>
+</table>
+<h3>原则</h3>
+<ul>
+  <li><b>渐进扩展</b>：沿用现有流水线五阶段、表结构、Qdrant 布局和检索漏斗；新能力作为新阶段或新选项挂上去，默认行为不变。</li>
+  <li><b>每项开关都要被评测证明</b>：查询改写、上下文补全、问答对索引这些会增加成本的能力，按知识库开关；在评测集上配对比较显著提升后，才考虑默认开启。</li>
+  <li><b>可观测</b>：每个新阶段都写进检索记录（漏斗）和链路 span，失败可以定位到阶段。</li>
+  <li><b>成本可控</b>：用到 LLM 的步骤（上下文补全、问答对、改写、图片描述、忠实度校验）都有缓存（按内容哈希）、批量和预算上限，失败时降级为不做，而不是让入库或检索失败。</li>
+  <li><b>权限在服务端判定</b>：过滤条件、权限范围由服务端根据调用者身份决定，永远不交给模型生成。</li>
+</ul>
+
+<!-- ─────────────────────────────────────────────── 2 -->
+<h2 id="s2">2. 现状盘点</h2>
+<table>
+  <tr><th>模块</th><th>已有</th><th>缺口</th></tr>
+  <tr><td>解析</td><td>PDF（pypdfium2 逐页取文本层）、DOCX（按文档顺序保留标题与表格，表格转 Markdown）、XLSX（逐行转「表头：值」）、CSV、HTML、纯文本；清洗规则</td><td>PDF 无版面分析（双栏、页眉页脚、阅读顺序）、无表格结构、无标题识别；不支持 PPTX / Markdown 原生结构 / 邮件 / 网页 URL；图片丢失；无解析质量检测</td></tr>
+  <tr><td>分段</td><td>普通分段；结构感知分段（标题栈、中文编号标题、父块 = 小节、子块按单元）；父子分段；子块向量前缀 = 标题路径（表格行加表头）</td><td>无语义分段；上下文只有标题路径、没有语义级补全；问答对索引（qa_model）未实现；表格、代码块没有保证「整体不切开」</td></tr>
+  <tr><td>向量化</td><td>提供方抽象；按库记录模型；文档向量落库缓存、查询向量 Redis 缓存；批量推理</td><td>只有本地 ONNX 一种提供方；没有换模型的迁移流程；没有多粒度索引</td></tr>
+  <tr><td>检索</td><td>语义 / BM25 / 混合；模型重排与加权重排；阈值；首尾重排序；多库合并；检索漏斗与链路</td><td>无元数据过滤；无查询改写 / 多查询 / 分解；无多库路由；只有库级权限；无版本与时效；无多样性控制</td></tr>
+  <tr><td>生成</td><td>无（检索结果交给 Agent）</td><td>无问答接口、无引用定位、无拒答、无忠实度校验</td></tr>
+  <tr><td>数据源</td><td>手动上传；文档有 content_hash</td><td>无连接器、无增量同步、无源端删除同步、无过期</td></tr>
+  <tr><td>评测</td><td>检索评测（Recall / Precision / MRR / NDCG）+ RAGAS；配置化实验</td><td>只有样例集；无线上反馈；改配置不会自动评测；无分段质量分析</td></tr>
+</table>
+
+<!-- ─────────────────────────────────────────────── 3 -->
+<h2 id="s3">3. 总体架构</h2>
+<pre>
+                 ┌──────────────── 知识更新（§9） ────────────────┐
+  源系统 ──连接器──▶ 同步任务：列举 / 变更检测 / 权限读取 ──┐       │
+  手动上传 ─────────────────────────────────────────────────┤       │
+                                                            ▼       │
+  入库流水线（现有五阶段，扩展）                                    │
+    ① 解析 ── DocIR（统一中间表示，§4.1）── 解析质量检测（§4.7）    │
+    ② 清洗 + 分段 ── 结构感知 / 语义 / 原子块（§5）                  │
+       └─ 增强（可选）：上下文补全 · 问答对 · 图片描述 · 表格摘要   │
+    ③ 写库 ── 分段 + 元数据 + 权限标签 + 版本（§11）                │
+    ④ 向量化 ── 多粒度 point（正文 / 问题 / 摘要），按索引版本写入（§6）
+    ⑤ 完成 ── 解析与分段统计                                        │
+                                                                    │
+  检索流水线（现有，扩展）                                          │
+    ⓪ 查询理解：改写 · 多查询 · 分解 · 元数据过滤抽取 · 多库路由（§7.1）
+    ① 召回：语义 / BM25（附带 元数据 + 权限 + 版本 过滤，§7.2–7.4）
+    ② 合并（RRF）→ ③ 重排 → ④ 阈值 → ⑤ 多样性 → ⑥ 组装（父块）→ ⑦ 首尾重排序
+                                                                    │
+  问答（新增，§8）：检索 → 生成 → 引用校验 → 拒答 / 忠实度校验      │
+                                                                    │
+  评测与反馈（§10）：黄金集 · 线上反馈 · 改配置自动评测 · 分段质量分析 ◀┘
+</pre>
+<p>所有新增阶段都写进 <code>kb_retrieval</code> 的漏斗记录和链路 span；查询理解、增强、问答用到的 LLM 统一经模型网关调用，按知识库配置模型。</p>
+
+<!-- ─────────────────────────────────────────────── 4 -->
+<h2 id="s4">4. 文档解析</h2>
+
+<h3>4.1 统一中间表示 DocIR</h3>
+<p>现在各解析器直接输出纯文本，结构信息（标题、表格、页码）要么丢失、要么由结构感知分段再从文本里猜一遍。改为所有解析器输出统一的块序列 <b>DocIR</b>，分段直接消费结构：</p>
+<pre>
+DocIR = [Block]
+Block {
+  type:   heading | paragraph | list_item | table | code | image | caption | quote
+  text:   str                 # table 为 Markdown；image 为描述（有的话）
+  level:  int | None          # heading 层级
+  table:  {rows, header_rows} | None   # 结构化表格（合并单元格已展开）
+  page:   int | None          # 来源页码（PDF / PPTX 页）
+  bbox:   [x0, y0, x1, y1] | None      # 页内坐标，用于引用高亮（§8.2）
+  asset:  str | None          # 图片在对象存储里的 key
+  attrs:  {...}               # 解析器附加信息（字体大小、是否加粗、列号……）
+}
+</pre>
+<ul>
+  <li><b>兼容</b>：保留现有「纯文本 → 结构感知分段」路径；DocIR 渲染成 Markdown 后也能走老路径。结构感知分段新增一个入口直接接收 Block 序列，跳过从文本里识别标题这一步。</li>
+  <li><b>落库</b>：DocIR 以 JSON 存到对象存储（<code>{dataset}/{document}/docir.json</code>），用于重新分段（换分段规则时不必重新解析）和前端的解析预览。</li>
+</ul>
+
+<h3>4.2 解析器路由与插件化</h3>
+<table>
+  <tr><th>类型</th><th>解析器</th><th>说明</th></tr>
+  <tr><td>PDF（默认）</td><td><b>版面感知解析器</b>（基于 pypdfium2 / pdfplumber 的字符坐标）</td><td>轻量、CPU 即可；做阅读顺序、页眉页脚、标题识别、简单表格（§4.3–4.4）</td></tr>
+  <tr><td>PDF（高级）</td><td><b>Docling / MinerU</b>（版面模型）</td><td>复杂版面、复杂表格的效果更好但更重；按处理规则选用，跑在独立的 worker 队列（<code>kb.parse.heavy</code>），不阻塞普通入库</td></tr>
+  <tr><td>DOCX</td><td>现有（python-docx）</td><td>输出改为 DocIR；补图片抽取</td></tr>
+  <tr><td>PPTX</td><td>新增（python-pptx）</td><td>每页：标题 → heading，文本框按位置排序 → paragraph / list_item，表格 → table，备注 → paragraph（标注「备注」），图片 → image</td></tr>
+  <tr><td>Markdown</td><td>新增（markdown-it）</td><td>原生标题、列表、表格、代码块；链接保留为属性</td></tr>
+  <tr><td>邮件（EML / MSG）</td><td>新增</td><td>主题、发件人、时间进元数据；正文按 HTML / 文本解析；附件作为子文档入库（带 <code>parent_document</code>）</td></tr>
+  <tr><td>网页 URL</td><td>新增</td><td>抓取后用正文抽取（readability 类算法）去掉导航、广告，再按 HTML 解析</td></tr>
+  <tr><td>XLSX / CSV / HTML / 纯文本</td><td>现有</td><td>输出改为 DocIR（XLSX / CSV 的工作表作为 table 块）</td></tr>
+</table>
+<p>解析器实现统一接口 <code>parse(data, meta) -&gt; DocIR</code>，按 MIME 与处理规则里的 <code>parser</code> 选项路由；新增格式只需注册一个解析器。</p>
+
+<h3>4.3 版面分析（默认 PDF 解析器）</h3>
+<table>
+  <tr><th>问题</th><th>做法</th></tr>
+  <tr><td>双栏 / 多栏读串行</td><td>按字符坐标聚成文本行和文本块；按块的 x 坐标做列聚类，列内自上而下、列间自左而右排出阅读顺序；跨栏的标题、图表按纵向位置插入</td></tr>
+  <tr><td>页眉、页脚、页码混入正文</td><td>统计每页顶部 / 底部区域的文本，跨页重复（容忍数字变化）的判定为页眉页脚并剔除；页码单独识别</td></tr>
+  <tr><td>断行与连字符</td><td>同一段内的换行合并；英文行尾连字符拼接；中文行尾不加空格</td></tr>
+  <tr><td>标题识别</td><td>字号显著大于正文、加粗、独占一行、编号模式（复用现有中文编号正则）综合打分；字号聚类得到层级。PDF 自带书签（outline）时优先用书签确定标题与层级</td></tr>
+  <tr><td>扫描件（不做 OCR）</td><td>某页文本层为空或字符数极少、但页面有大图 → 标记为「扫描页」，计入解析质量（§4.7），文档进入待审核，提示需要 OCR</td></tr>
+</table>
+
+<h3>4.4 表格</h3>
+<ul>
+  <li><b>抽取</b>：默认解析器用线条与对齐检测简单表格（pdfplumber 的表格检测）；高级解析器用版面模型处理无框线、跨页、合并单元格。结果为结构化 <code>{rows, header_rows}</code>，合并单元格展开填充。</li>
+  <li><b>跨页表格</b>：相邻两页、列数相同、后一页首行不是表头 → 合并成一张表，表头沿用前一页。</li>
+  <li><b>分段规则</b>（§5.3）：小表整表一个分段；大表按行切，每块都带表头与表名（现有「表格行加表头」的上下文前缀沿用）。</li>
+  <li><b>表格摘要（可选）</b>：大表额外生成一段摘要（LLM，描述表的主题、维度、关键数字），作为一个检索入口指向整表，解决「问汇总性问题时匹配不到任何一行」。</li>
+</ul>
+
+<h3>4.5 图片</h3>
+<ul>
+  <li>抽取文档内嵌图片（PDF / DOCX / PPTX），存对象存储；就近的图注（「图 3-1 …」）作为 caption 块关联。</li>
+  <li><b>图片描述（可选，按知识库开关）</b>：用多模态模型生成描述（流程图写出步骤和分支，架构图写出组件和关系，截图写出界面要素），作为 image 块的文本参与分段和检索；检索命中时把原图作为引用附件返回。</li>
+  <li>过滤：尺寸过小、装饰性图片（图标、分隔线）、页眉 logo（跨页重复）不处理。</li>
+  <li>成本：按图片内容哈希缓存描述；单文档图片数上限；超出只保留图注。</li>
+</ul>
+
+<h3>4.6 解析结果的定位信息</h3>
+<p>每个 Block 保留 <code>page</code> 和 <code>bbox</code>（PDF / PPTX）或字符区间（文本类）；分段时汇总成分段的 <b>source_locator</b>（§11），供引用跳转和高亮（§8.2）。</p>
+
+<h3>4.7 解析质量检测</h3>
+<table>
+  <tr><th>指标</th><th>含义</th><th>处置</th></tr>
+  <tr><td>空文本页比例</td><td>无文本层的页（疑似扫描件）</td><td>超过阈值 → 待审核，提示需要 OCR</td></tr>
+  <tr><td>乱码率</td><td>不可打印字符、私有区字符、高频替换符的比例（字体编码问题）</td><td>超过阈值 → 待审核；可尝试高级解析器</td></tr>
+  <tr><td>标题识别数</td><td>长文档一个标题都没识别出</td><td>提示：结构感知分段将退化为按段落切</td></tr>
+  <tr><td>表格、图片数</td><td>识别到的表格与图片</td><td>展示在解析预览里供人工核对</td></tr>
+  <tr><td>剔除的页眉页脚</td><td>被剔除的文本</td><td>展示，便于发现误删</td></tr>
+</table>
+<p>指标写入文档的 <code>parse_report</code>（§11）；复用现有的审核状态（review_status），异常文档进入「待审核」，前端提供 DocIR 预览（按块高亮类型）。</p>
+
+<!-- ─────────────────────────────────────────────── 5 -->
+<h2 id="s5">5. 分段</h2>
+
+<h3>5.1 分段方式</h3>
+<table>
+  <tr><th>方式</th><th>状态</th><th>适用</th></tr>
+  <tr><td>普通分段（分隔符 + 长度 + 重叠）</td><td>已有</td><td>纯文本、无结构的内容</td></tr>
+  <tr><td>结构感知分段（标题栈）</td><td>已有，改为直接消费 DocIR</td><td>有标题结构的文档（默认）</td></tr>
+  <tr><td>父子分段</td><td>已有</td><td>需要兼顾召回精度与上下文完整性</td></tr>
+  <tr><td><b>语义分段</b></td><td>新增</td><td>长篇无标题的文本（会议纪要、聊天记录导出、报告正文）</td></tr>
+</table>
+<p><b>语义分段</b>：按句切分 → 计算相邻句（或滑动窗口）的向量相似度 → 在相似度显著下降处（低于分位数阈值）断开 → 再按长度上下限合并或拆分。作为结构感知分段在「无标题小节」内部的切分方式之一，不单独成为一种文档形态。</p>
+
+<h3>5.2 原子块</h3>
+<p>表格（小表）、代码块、公式、列表（短列表）作为<b>原子块</b>不被切开；超过长度上限的表格按行切（带表头），代码块按函数 / 空行边界切。</p>
+
+<h3>5.3 上下文补全</h3>
+<p>现有：子块向量的前缀 = 标题路径（表格行再加表头），正文仍是原文。扩展为三级，按知识库开关：</p>
+<table>
+  <tr><th>级别</th><th>内容</th><th>成本</th></tr>
+  <tr><td>L0（现有，默认）</td><td>标题路径 + 表头</td><td>无</td></tr>
+  <tr><td>L1（新增，默认开）</td><td>L0 + 文档标题 + 文档级元数据（如产品线、生效日期）</td><td>无</td></tr>
+  <tr><td>L2（新增，按库开关）</td><td>L1 + LLM 生成的一句话<b>分段上下文</b>：说明这一段在全文中讲什么、指代对象是谁（Contextual Retrieval）</td><td>每个分段一次 LLM 调用；文档全文作为固定前缀，利用 prompt cache 降本；按「文档哈希 + 分段哈希」缓存</td></tr>
+</table>
+<p>上下文只参与向量化（稠密与 BM25 都用），不改变返回给模型的正文；存在 <code>context</code> 字段（子块已有，分段新增）。</p>
+
+<h3>5.4 问答对索引（qa_model）</h3>
+<ul>
+  <li>入库时由 LLM 为每个分段生成若干个「用户可能会怎么问」的问题（带答案要点）；问题作为<b>额外的检索入口</b>，命中后回到对应分段。</li>
+  <li><b>复用子块路径</b>：问题存为 <code>kb_child_chunk</code>，<code>type = question</code>；检索时「命中子块 → 回到父分段」的逻辑原样复用，不新建检索链路。</li>
+  <li>人工可编辑、新增问题（FAQ 类知识库常见需求）；人工问题不会被重新生成覆盖。</li>
+  <li>适用：FAQ、制度、产品说明；按知识库开关。</li>
+</ul>
+
+<h3>5.5 多粒度索引</h3>
+<p>同一个分段可以有多个检索入口，统一写为 Qdrant 的 point，payload 用 <code>kind</code> 区分：</p>
+<table>
+  <tr><th>kind</th><th>内容</th><th>命中后</th></tr>
+  <tr><td><code>chunk</code></td><td>分段正文（或子块）</td><td>回到分段</td></tr>
+  <tr><td><code>question</code></td><td>生成或人工维护的问题</td><td>回到分段</td></tr>
+  <tr><td><code>summary</code></td><td>大表摘要、长小节摘要</td><td>回到整表 / 整个小节</td></tr>
+  <tr><td><code>image</code></td><td>图片描述</td><td>回到所在分段，附带原图</td></tr>
+</table>
+<p>同一分段被多个入口命中时，按分段去重、取最高分；漏斗记录里保留是哪种入口命中的，用于评估每种入口的贡献。</p>
+
+<!-- ─────────────────────────────────────────────── 6 -->
+<h2 id="s6">6. 向量化与索引</h2>
+
+<h3>6.1 模型提供方</h3>
+<table>
+  <tr><th>提供方</th><th>场景</th></tr>
+  <tr><td><code>fastembed</code>（现有）</td><td>本地 ONNX 推理，开发与小规模</td></tr>
+  <tr><td><code>openai_compatible</code>（新增）</td><td>OpenAI 兼容的 embedding 接口：模型网关、TEI、vLLM、云厂商。生产默认</td></tr>
+  <tr><td>重排：<code>tei_rerank</code> / <code>cohere_compatible</code>（新增）</td><td>独立部署的重排服务（如 bge-reranker-v2-m3）或云端重排 API</td></tr>
+</table>
+<ul>
+  <li>远程提供方：批量请求、并发上限、指数退避重试、按 token 计费统计；启动时校验向量维度与知识库记录一致。</li>
+  <li>推荐配置（生产）：中文 / 中英混合场景的 embedding 选多语言、长上下文的模型（如 bge-m3），重排选 bge-reranker-v2-m3 一类交叉编码器；以评测集结果为准，不写死。</li>
+</ul>
+
+<h3>6.2 换模型：索引版本与原子切换</h3>
+<p>现在每个知识库记录了模型，但换模型只能「删了重建」，期间知识库不可用。引入<b>索引版本</b>：</p>
+<pre>
+kb_index_version
+  dataset_uuid, version, provider, model, dim, collection_name,
+  status: building | active | retired, progress, created_at, activated_at
+</pre>
+<ol>
+  <li>新建版本（status=building），创建新 collection；</li>
+  <li>后台任务用新模型为所有分段 / 子块 / 问题重新向量化，写入新 collection（分段内容不变，只重做向量；embedding 缓存按「模型 + 文本哈希」生效）；</li>
+  <li>完成后可先在评测集上对比新旧版本；确认后<b>原子切换</b> active 指针；旧版本保留一段时间用于回滚，之后清理；</li>
+  <li>构建期间的新增与更新：同时写入新旧两个版本（双写），保证切换时不丢数据。</li>
+</ol>
+
+<h3>6.3 Payload 扩展</h3>
+<p>为支持过滤（§7.2–7.4），point 的 payload 增加以下字段，并建立 payload 索引：</p>
+<table>
+  <tr><th>字段</th><th>用途</th></tr>
+  <tr><td><code>kind</code></td><td>入口类型（§5.5）</td></tr>
+  <tr><td><code>meta.*</code></td><td>文档元数据（按知识库的元数据字段定义建索引）</td></tr>
+  <tr><td><code>acl</code></td><td>可访问主体标签数组（§7.4）</td></tr>
+  <tr><td><code>valid_from</code> / <code>valid_to</code> / <code>is_current</code></td><td>版本与时效（§7.5）</td></tr>
+</table>
+<p>元数据或权限变更时只更新 payload（Qdrant set_payload），不重新向量化。</p>
+
+<!-- ─────────────────────────────────────────────── 7 -->
+<h2 id="s7">7. 检索</h2>
+
+<h3>7.1 查询理解（新增阶段 ⓪）</h3>
+<table>
+  <tr><th>能力</th><th>做法</th><th>触发</th></tr>
+  <tr><td><b>对话改写</b></td><td>结合最近几轮对话，把「那它的报销标准呢」改写成独立完整的问题</td><td>调用方传入了对话历史，且问题含指代或过短</td></tr>
+  <tr><td><b>多查询</b></td><td>生成 2–3 个不同表述的查询分别召回，结果用 RRF 合并</td><td>按库开关；或首轮召回最高分低于阈值时自适应触发一次</td></tr>
+  <tr><td><b>HyDE</b></td><td>先让模型写一段假设性答案，用它去做语义召回</td><td>按库开关（术语差异大的场景）</td></tr>
+  <tr><td><b>问题分解</b></td><td>复合问题（对比、多条件、多跳）拆成子问题，分别检索；结果按子问题分组返回</td><td>LLM 判定为复合问题时</td></tr>
+  <tr><td><b>过滤条件抽取</b></td><td>按知识库的元数据字段定义，从问题里抽出过滤条件（「2026 版」→ <code>version_year = 2026</code>）</td><td>知识库定义了可抽取的元数据字段</td></tr>
+  <tr><td><b>多库路由</b></td><td>按库的描述（及描述的向量）为问题选出最相关的 N 个库；低置信度时回退到全部库</td><td>绑定的库超过阈值（如 5 个）</td></tr>
+</table>
+<ul>
+  <li>查询理解用一次结构化输出的 LLM 调用完成（同时产出改写、是否分解、过滤条件），控制延迟；结果按「问题 + 历史」哈希缓存。</li>
+  <li>每一步都写进漏斗：原问题、改写结果、子问题、抽取的过滤条件、路由选中的库及理由。</li>
+  <li><b>降级</b>：LLM 失败或超时，直接用原问题检索，不让检索失败。</li>
+  <li><b>LLM 抽取的过滤条件只能收窄、不能放宽</b>，并且只作用于业务元数据；权限和版本过滤由服务端强制附加，与 LLM 无关。</li>
+</ul>
+
+<h3>7.2 元数据过滤</h3>
+<ul>
+  <li><b>字段定义</b>：知识库级的元数据字段（名称、类型 string / number / date / enum、是否多值、是否允许 LLM 抽取）；内置字段：来源、作者、文档类型、更新时间、生效时间。</li>
+  <li><b>赋值</b>：文档级赋值（上传时、批量编辑、连接器从源系统映射）；分段继承文档元数据，必要时可以在分段上覆盖。</li>
+  <li><b>过滤表达式</b>：接口里支持 <code>and / or / eq / in / range / exists</code>，转成 Qdrant filter；多库检索时只对定义了该字段的库生效。</li>
+</ul>
+
+<h3>7.3 结果多样性</h3>
+<ul>
+  <li><b>每文档上限</b>：同一文档最多返回 N 个分段，避免 top_k 被一篇文档的相邻分段占满。</li>
+  <li><b>MMR</b>：在重排后的候选上按「相关性 − 与已选结果的相似度」挑选，可调 λ。</li>
+  <li><b>相邻合并</b>：同一文档里位置相邻、都被命中的分段合并成一个结果，减少碎片、保留连贯上下文。</li>
+</ul>
+
+<h3>7.4 文档级权限</h3>
+<ul>
+  <li><b>权限标签</b>：文档有可访问主体列表（用户、部门、角色、用户组），或标记为「库内公开」。写入分段和 point 的 <code>acl</code> 字段（如 <code>["public"]</code> 或 <code>["u:123", "d:45", "r:hr"]</code>）。</li>
+  <li><b>来源</b>：手动设置；连接器从源系统读取（如 Wiki 空间 / 页面权限）；或引用用户中心的数据权限。</li>
+  <li><b>检索时</b>：服务端根据调用者身份展开主体集合（用户 id + 所属部门（含上级）+ 角色 + 用户组），作为 filter 强制附加：<code>acl</code> 与主体集合有交集，或为 <code>public</code>。展开结果短时缓存。</li>
+  <li><b>Agent 调用</b>：以发起对话的终端用户身份检索，而不是以智能体或服务账号身份，避免「通过 Agent 看到自己本来看不到的文档」。</li>
+  <li><b>权限变更</b>：只更新 payload，不重新向量化；变更即时生效。</li>
+  <li>库级权限（现有）照旧，作为第一道判定；文档级权限在库级之内进一步收窄。</li>
+</ul>
+
+<h3>7.5 版本与时效</h3>
+<ul>
+  <li><b>文档版本</b>：同一份文档的新版本作为新文档入库，并通过 <code>version_group</code> 关联；新版本完成入库后，旧版本自动标记为「已被取代」（<code>is_current = false</code>）。</li>
+  <li><b>生效区间</b>：<code>valid_from</code> / <code>valid_to</code>（手动设置或连接器映射）；到期后自动下线。</li>
+  <li><b>检索默认</b>只返回当前版本且在生效区间内的分段；接口支持 <code>as_of</code>（按某个时间点检索）和 <code>include_superseded</code>（查历史版本）。</li>
+  <li>引用里标注版本和生效时间，避免把作废版本当成依据。</li>
+</ul>
+
+<h3>7.6 召回合并</h3>
+<p>多查询、子问题、多入口（§5.5）都会产生多路结果：先按分段去重，再用 <b>RRF（倒数排名融合）</b>合并成一个候选列表进入重排。现有的混合检索合并逻辑保持不变，多查询的合并在其外层。</p>
+
+<h3>7.7 漏斗阶段（更新后）</h3>
+<pre>
+query_understanding → semantic / full_text（各子查询）→ merged（RRF）→ rerank → threshold
+  → diversity → assemble → reorder → final
+（每个阶段的过滤条件、权限范围、命中入口类型都写进记录）
+</pre>
+
+<!-- ─────────────────────────────────────────────── 8 -->
+<h2 id="s8">8. 生成与引用</h2>
+<p>新增<b>问答接口</b>，提供「检索 + 生成 + 引用」的一体化能力，供不经过 Agent 的业务系统直接使用；同时把引用所需的结构（分段 id、定位信息）加进检索结果，让 Agent 也能引用。</p>
+
+<h3>8.1 问答流程</h3>
+<pre>
+问题（+ 对话历史）→ 检索（§7）→ 证据充分性判断 ──不足──▶ 拒答（§8.3）
+                                      │
+                                     充足
+                                      ▼
+                         生成（带编号的证据，要求逐句引用）
+                                      ▼
+                         引用校验（编号必须存在）→ 忠实度校验（§8.4，可选）
+                                      ▼
+                         流式返回：答案 + 引用列表 + 检索记录 id
+</pre>
+
+<h3>8.2 可追溯引用</h3>
+<ul>
+  <li>证据以编号 <code>[1] [2]</code> 提供给模型，提示词要求每个结论后标注引用编号；生成后校验编号必须在证据范围内，非法编号去掉并记录。</li>
+  <li><b>引用定位</b>：每个引用返回文档名、版本、标题路径、页码、页内区域（bbox）或字符区间，以及命中的原文片段；前端跳转到原文并高亮。</li>
+  <li>图片证据返回原图链接；表格证据返回结构化表格。</li>
+</ul>
+
+<h3>8.3 拒答</h3>
+<ul>
+  <li><b>检索侧判断</b>：重排后的最高分低于阈值、或没有结果 → 不调用生成，直接返回「知识库中没有找到相关内容」，并附上相近的主题或建议换个问法。</li>
+  <li><b>生成侧约束</b>：提示词要求证据不足时明确说明，而不是凭常识补全；回答里区分「知识库中的内容」和「推断」。</li>
+  <li>拒答的问题记入查询日志（零结果 / 低分查询），作为补充知识的线索（§10.4）。</li>
+</ul>
+
+<h3>8.4 忠实度校验（可选）</h3>
+<ul>
+  <li>把回答拆成陈述句，逐句检查是否能被其引用的证据支持（LLM 判定；或用 NLI 模型降本）。</li>
+  <li>两种模式：<b>标注</b>（不被支持的句子标为「未找到依据」）、<b>拦截</b>（不被支持的比例超过阈值时改为拒答）。</li>
+  <li>默认异步执行：结果写入问答记录，用于质量统计；对高风险知识库（制度、合规）可以开启同步拦截。</li>
+</ul>
+
+<!-- ─────────────────────────────────────────────── 9 -->
+<h2 id="s9">9. 知识更新与数据源</h2>
+
+<h3>9.1 连接器框架</h3>
+<pre>
+Connector 接口
+  list(cursor)        → 文档清单（源 id、标题、修改时间 / 版本号、路径）
+  fetch(source_id)    → 原文件 + 元数据
+  changes(cursor)     → 增量变更（新增 / 修改 / 删除），不支持时退化为全量 list + 比对
+  permissions(source_id) → 源端的可访问主体（可选，用于 §7.4）
+</pre>
+<table>
+  <tr><th>首批连接器</th><th>说明</th></tr>
+  <tr><td>飞书文档 / 知识库</td><td>空间、文档树；文档导出为 Markdown / DOCX；权限映射</td></tr>
+  <tr><td>Confluence</td><td>空间、页面树；页面导出；空间和页面权限</td></tr>
+  <tr><td>Git 仓库</td><td>按路径规则同步 Markdown / 文档；以 commit 作为增量游标</td></tr>
+  <tr><td>对象存储目录</td><td>按前缀同步；以 ETag 判断变化</td></tr>
+  <tr><td>网站</td><td>按 sitemap 或起始 URL 加深度抓取；以 Last-Modified / 内容哈希判断变化</td></tr>
+</table>
+<ul>
+  <li><b>数据源</b>（<code>kb_data_source</code>）绑定到知识库：类型、配置、凭据引用（凭据不明文入库）、同步计划（定时 / 手动 / webhook）、游标、字段映射（源字段 → 元数据字段）。</li>
+  <li><b>同步任务</b>（<code>kb_sync_run</code>）：每次同步一条记录，含新增 / 更新 / 删除 / 跳过 / 失败数和明细；跑在 Celery，复用入库流水线。</li>
+</ul>
+
+<h3>9.2 增量更新</h3>
+<ol>
+  <li><b>文档级</b>：源端版本或 ETag 没变 → 跳过；变了 → 重新获取，比较 <code>content_hash</code>（已有字段），内容没变只更新元数据。</li>
+  <li><b>分段级</b>：内容变了 → 重新解析和分段，按分段内容哈希与旧分段比对：
+    <ul>
+      <li>没变的分段保留（id 不变，向量不重做，引用与反馈记录不丢）；</li>
+      <li>新增的分段向量化写入；删除的分段从库表与向量库里删除；</li>
+      <li>embedding 缓存按「模型 + 文本哈希」命中，进一步减少重复计算。</li>
+    </ul>
+  </li>
+  <li>记录本次重新向量化的比例，作为增量效果的指标。</li>
+</ol>
+
+<h3>9.3 删除与过期</h3>
+<ul>
+  <li>源端删除 → 同步删除（或按配置先归档，保留一段时间）；</li>
+  <li><code>valid_to</code> 到期 → 定时任务把文档下线（<code>enabled = false</code>），从检索中移除；</li>
+  <li>连续多次同步失败的文档标记异常，不删除已有内容，等待人工处理。</li>
+</ul>
+
+<h3>9.4 知识冲突检测（P3）</h3>
+<p>离线任务：对不同文档中向量相似度很高的分段对，用 LLM 判断是否存在矛盾（数字、日期、规则不一致）；疑似冲突进入审核队列，由知识管理员决定保留哪一份（或标记旧版本为已取代）。</p>
+
+<!-- ─────────────────────────────────────────────── 10 -->
+<h2 id="s10">10. 评测与反馈</h2>
+
+<h3>10.1 评测集</h3>
+<ul>
+  <li><b>黄金测试集</b>：按知识库维护，每题包含问题、期望命中的分段（或文档）、参考答案；题型覆盖事实、表格、跨段、多跳、过滤条件、权限、版本、无答案（应拒答）。</li>
+  <li><b>来源</b>：从查询日志里挑真实问题人工标注；由 LLM 基于文档生成候选题，人工审核后入集；线上反馈里的失败案例（§10.2）。</li>
+  <li><b>公开评测集</b>：导入 CRUD-RAG、MultiHop-RAG 等，作为通用能力的基线（复用现有评测框架的导入器机制）。</li>
+</ul>
+
+<h3>10.2 线上反馈</h3>
+<ul>
+  <li>反馈接口：针对一次检索或问答（关联检索记录 id）提交点赞 / 点踩、原因（没找到、找错了、答错了、引用不对、内容过期）、纠正内容。</li>
+  <li>反馈与检索漏斗关联：点踩的记录可以直接看到每个阶段的候选，定位问题环节。</li>
+  <li>失败反馈经人工确认后进入黄金测试集。</li>
+</ul>
+
+<h3>10.3 改配置自动评测</h3>
+<p>修改处理规则（分段策略）、索引版本（换模型）、检索配置（检索方式、重排、阈值、查询改写开关）时，自动在该知识库的黄金测试集上跑一轮评测，与当前配置<b>按题配对比较</b>（复用 Agent 评测的配对 bootstrap）：检索指标和忠实度没有显著下降才允许生效；显著下降时提示并保留原配置。</p>
+
+<h3>10.4 分段质量分析</h3>
+<table>
+  <tr><th>分析</th><th>发现的问题</th></tr>
+  <tr><td>从未被召回的分段</td><td>切分不当、内容无用、或缺少检索入口（可考虑生成问题）</td></tr>
+  <tr><td>常被召回但很少被引用的分段</td><td>相关性误判、内容噪声（如目录、免责声明）</td></tr>
+  <tr><td>零结果 / 低分查询聚类</td><td>知识缺口：需要补充的主题</td></tr>
+  <tr><td>高频点踩的文档</td><td>内容过期或错误</td></tr>
+</table>
+<p>结果按周汇总，作为知识运营的待办清单。</p>
+
+<!-- ─────────────────────────────────────────────── 11 -->
+<h2 id="s11">11. 数据模型变更</h2>
+<table>
+  <tr><th>对象</th><th>变更</th><th>说明</th></tr>
+  <tr><td><code>kb_document</code></td><td>+ <code>parse_report</code>（JSON）、<code>docir_key</code>、<code>metadata</code>（JSON）、<code>acl</code>（JSON）、<code>version_group</code>、<code>version</code>、<code>is_current</code>、<code>valid_from</code>、<code>valid_to</code>、<code>source_id</code>、<code>source_version</code>、<code>data_source_uuid</code>、<code>parent_document_uuid</code></td><td>解析质量、元数据、权限、版本、连接器来源、邮件附件</td></tr>
+  <tr><td><code>kb_segment</code></td><td>+ <code>context</code>、<code>source_locator</code>（JSON：页码、bbox、字符区间）、<code>content_hash</code>、<code>metadata_override</code>（JSON）、<code>kind</code>（text / table / code / image）、<code>asset_key</code></td><td>上下文补全、引用定位、增量比对、原子块类型、图片</td></tr>
+  <tr><td><code>kb_child_chunk</code></td><td><code>type</code> 增加 <code>question</code>；+ <code>source</code>（generated / manual）</td><td>问答对索引复用子块路径</td></tr>
+  <tr><td><code>kb_dataset</code></td><td>+ <code>active_index_version</code>、<code>enhancements</code>（JSON：上下文补全级别、问答对、图片描述、表格摘要）、<code>query_config</code>（JSON：改写、多查询、HyDE、分解、路由）、<code>answer_config</code>（JSON：拒答阈值、忠实度模式、生成模型）</td><td>按库开关</td></tr>
+  <tr><td><code>kb_metadata_field</code>（新）</td><td>dataset、name、type、multi、extractable、description</td><td>元数据字段定义</td></tr>
+  <tr><td><code>kb_index_version</code>（新）</td><td>见 §6.2</td><td>换模型</td></tr>
+  <tr><td><code>kb_data_source</code> / <code>kb_sync_run</code>（新）</td><td>见 §9.1</td><td>连接器与同步记录</td></tr>
+  <tr><td><code>kb_answer</code>（新）</td><td>问题、检索记录 id、答案、引用、拒答标记、忠实度结果、耗时与 token</td><td>问答记录</td></tr>
+  <tr><td><code>kb_feedback</code>（新）</td><td>关联检索记录 / 问答记录、评分、原因、纠正内容、处理状态</td><td>线上反馈</td></tr>
+  <tr><td><code>kb_eval_set</code> / <code>kb_eval_case</code>（新）</td><td>知识库的黄金测试集与题目</td><td>持续评测</td></tr>
+</table>
+<p>迁移策略：新增字段均可为空或有默认值，老数据行为不变；Qdrant payload 新字段由后台任务回填（只 set_payload，不重算向量）。</p>
+
+<!-- ─────────────────────────────────────────────── 12 -->
+<h2 id="s12">12. 接口变更</h2>
+<table>
+  <tr><th>接口</th><th>说明</th></tr>
+  <tr><td><code>POST /datasets/{id}/retrieve</code>（扩展）</td><td>+ <code>filter</code>（元数据过滤表达式）、<code>history</code>（对话历史，用于改写）、<code>as_of</code> / <code>include_superseded</code>、<code>diversity</code>；返回 + 引用定位、命中入口类型、查询理解结果。调用者身份由鉴权得出，用于文档级权限</td></tr>
+  <tr><td><code>POST /answer</code>（新）</td><td>跨一个或多个库的问答，SSE 流式返回答案、引用、拒答标记</td></tr>
+  <tr><td><code>GET /documents/{id}/docir</code>（新）</td><td>解析预览</td></tr>
+  <tr><td><code>PUT /documents/{id}/metadata</code>、<code>PUT /documents/{id}/acl</code>（新）</td><td>元数据与权限（只更新 payload）</td></tr>
+  <tr><td><code>/datasets/{id}/metadata-fields</code>（新）</td><td>元数据字段定义</td></tr>
+  <tr><td><code>/datasets/{id}/index-versions</code>（新）</td><td>新建版本、查看进度、切换、回滚</td></tr>
+  <tr><td><code>/datasets/{id}/data-sources</code>、<code>/data-sources/{id}/sync</code>（新）</td><td>数据源与同步</td></tr>
+  <tr><td><code>POST /feedback</code>（新）</td><td>线上反馈</td></tr>
+  <tr><td><code>/datasets/{id}/eval-sets</code>（新）</td><td>黄金测试集维护与评测运行</td></tr>
+</table>
+<p>服务间接口（Agent 平台使用的 <code>/internal</code>）与 MCP 端点同步扩展：检索结果带引用定位；检索以终端用户身份进行（§7.4）。</p>
+
+<!-- ─────────────────────────────────────────────── 13 -->
+<h2 id="s13">13. 分期</h2>
+<table>
+  <tr><th>阶段</th><th>内容</th><th>退出标准</th></tr>
+  <tr><td><b>P1 理解与可控</b></td><td>DocIR 与解析器路由；PDF 版面分析（阅读顺序、页眉页脚、标题、简单表格、跨页表）；PPTX、Markdown 解析器；解析质量检测与预览；原子块；L1 上下文；元数据字段与过滤；文档级权限；引用定位（source_locator）；黄金测试集与改配置自动评测</td><td>在包含双栏 PDF、报表、PPT 的评测集上，召回率显著提升；权限类评测题越权为 0；过滤类评测题全部通过</td></tr>
+  <tr><td><b>P2 召回与可信</b></td><td>openai_compatible 与远程重排提供方；索引版本与原子切换；查询理解（改写、多查询、过滤抽取）；多样性；问答接口（引用、拒答）；问答对索引；L2 上下文补全；表格摘要；线上反馈；连接器框架与首批连接器（飞书、Confluence、Git）、增量同步、删除与过期</td><td>多轮、口语化评测题的召回率显著提升；无答案题拒答率达标；增量同步时重新向量化的比例显著低于全量</td></tr>
+  <tr><td><b>P3 深化</b></td><td>高级 PDF 解析器（Docling / MinerU）；图片抽取与描述；语义分段；HyDE、问题分解、多库路由；版本与时效；忠实度校验；邮件与网页解析器；更多连接器；分段质量分析；知识冲突检测</td><td>多跳、跨文档评测题的效果提升；忠实度指标达标</td></tr>
+</table>
+<p>每个阶段内，能力按「默认关 → 评测证明有效 → 默认开」推进；P1 的评测集建设放在最前面，后面所有能力都用它来证明效果。</p>
+
+<!-- ─────────────────────────────────────────────── 14 -->
+<h2 id="s14">14. 风险与限制</h2>
+<table>
+  <tr><th>风险</th><th>缓解</th></tr>
+  <tr><td>规则式版面分析覆盖不了复杂版面</td><td>解析质量检测发现问题文档；提供高级解析器（P3）作为按文档 / 按库的选项；DocIR 预览让人工能看见并纠正</td></tr>
+  <tr><td>不做 OCR，扫描件无法入库</td><td>明确检测并标记扫描页，提示需要 OCR；DocIR 与解析器路由预留了 OCR 解析器的接入位置</td></tr>
+  <tr><td>LLM 增强（上下文补全、问答对、图片描述、改写）成本高</td><td>按库开关、按内容哈希缓存、文档前缀走 prompt cache、单文档预算上限；评测证明有效才默认开启</td></tr>
+  <tr><td>查询理解增加检索延迟</td><td>一次结构化调用完成多项理解；条件触发（自适应）；缓存；超时降级为原问题检索</td></tr>
+  <tr><td>文档级权限的主体展开依赖用户中心</td><td>短时缓存；用户中心不可用时按「只返回 public」降级，宁可少返回不越权</td></tr>
+  <tr><td>增量同步中分段 id 的稳定性</td><td>按内容哈希比对保留未变分段；位置变化不影响 id，引用与反馈记录不丢</td></tr>
+  <tr><td>换模型期间双写的一致性</td><td>双写失败的记录进入补偿队列；切换前校验新旧版本的分段数一致</td></tr>
+  <tr><td>评测集维护成本</td><td>从查询日志和反馈里半自动生成候选题，人工只做审核</td></tr>
+</table>
+
+<!-- ─────────────────────────────────────────────── 15 -->
+<h2 id="s15">15. 实现状态（2026-10-14，迁移 k0004–k0006）</h2>
+<p>本轮范围：§4 文档解析、§5 分段、§6 向量化、§7 检索。不做：OCR、图片的多模态描述、邮件 / 网页解析器、问答对索引（§5.4）、§8 生成与引用、§9 知识更新与数据源、§10 评测与反馈、横向的企业级要求。</p>
+<table>
+  <tr><th>能力</th><th>状态</th><th>实现位置 / 说明</th></tr>
+  <tr><td>DocIR、解析器路由</td><td><span class="tag">已实现</span></td><td><code>rag/docir.py</code>、<code>rag/parsers/</code>；DocIR 存对象存储 <code>docir.json</code>，<code>GET …/documents/{id}/docir</code> 预览</td></tr>
+  <tr><td>PDF 版面分析</td><td><span class="tag">已实现</span></td><td><code>rag/parsers/pdf_layout.py</code>（pdfplumber + pypdfium2）：双栏阅读顺序、页眉页脚、标题层级（书签 → 字号 → 同编号模式同级）、有线表格与跨页合并、图片裁切 + 图注、扫描页 / 乱码检测</td></tr>
+  <tr><td>DOCX / PPTX / Markdown / 表格</td><td><span class="tag">已实现</span></td><td><code>rag/parsers/office.py</code>、<code>tabular.py</code>、<code>text.py</code>；图片按像素尺寸过滤小图标</td></tr>
+  <tr><td>高级 PDF 解析器（Docling）</td><td><span class="tag warn">未做</span></td><td>模型下载重；路由里留了位置</td></tr>
+  <tr><td>按处理规则选解析器</td><td><span class="tag">已实现</span></td><td>处理规则 <code>parser</code>：auto（按格式路由）| text（只抽纯文本，版面分析出错时的退路）；高级解析器以后也作为一个选项</td></tr>
+  <tr><td>解析质量报告</td><td><span class="tag">已实现</span></td><td><code>kb_document.parse_report</code>（页数、双栏页、扫描页、乱码率、标题 / 表格 / 图片数、警告；入库增强的统计也写在这里）；疑似扫描件、乱码的文档入库后自动进待审核（<code>ATLAS_KB_PARSE_REVIEW</code>，默认开），审核通过才参与检索</td></tr>
+  <tr><td>原子块、引用定位</td><td><span class="tag">已实现</span></td><td>表格整体放进一个父块（放不下才按行拆、子块前缀带表头）；<code>kb_segment.source_locator</code> = {pages, boxes, assets}</td></tr>
+  <tr><td>语义分段</td><td><span class="tag">已实现</span></td><td>处理规则 <code>structure.semantic_split</code>；超长小节在相邻段落相似度最低的 20% 处切开，父块至少填到 40%</td></tr>
+  <tr><td>上下文 L1 / L2</td><td><span class="tag">已实现</span></td><td>L1（文档标题 + 标题路径）默认开；L2 按库开关 <code>enhancements.contextual</code>，Redis 缓存 30 天；结果存 <code>kb_segment.context</code></td></tr>
+  <tr><td>表格摘要入口</td><td><span class="tag">已实现</span></td><td><code>enhancements.table_summary</code>：表格从 DocIR 取，摘要作为 <code>type=summary</code> 的子块挂到含该表单元格最多的分段；通用分段也为它单独建 point</td></tr>
+  <tr><td>远程向量 / 重排</td><td><span class="tag">已实现</span></td><td><code>rag/remote_models.py</code>：<code>openai_compatible</code> 向量；<code>cohere_compatible</code> / <code>tei</code> 重排；地址与 key 走 <code>ATLAS_KB_EMBEDDING_* / ATLAS_KB_RERANK_*</code>；远程向量的 token 用量写进入库 / 检索的 span（<code>knowledge.embedding.tokens</code>，命中缓存的数量记在 <code>knowledge.embedding.cached</code>）</td></tr>
+  <tr><td>索引版本与原子切换</td><td><span class="tag">已实现</span></td><td><code>kb_index_version</code>、<code>indexing/versions.py</code>：<code>…/index-versions</code> 新建（后台重建）/ 切换 / 回滚 / 删除；hit-testing 可指定版本做对比；改知识库的向量模型 = 新建自动切换的版本</td></tr>
+  <tr><td>Payload 扩展</td><td><span class="tag">已实现</span></td><td>kind、meta.*（含内置 doc_type / author / uploaded_at）、acl、is_current、valid_from / valid_to，并建 payload 索引</td></tr>
+  <tr><td>查询理解</td><td><span class="tag">已实现</span></td><td><code>rag/query.py</code>：一次 JSON 调用产出改写 / 多查询 / HyDE / 子问题 / 过滤抽取 / 多库路由；按需触发，Redis 缓存 1 小时，失败降级；自适应多查询：首轮最高分低于 <code>adaptive_multi_query_threshold</code> 时生成多个表述再检索一次（漏斗只保留第二轮）</td></tr>
+  <tr><td>元数据过滤</td><td><span class="tag">已实现</span></td><td><code>kb_metadata_field</code>、<code>rag/filters.py</code>：and / or / eq / ne / in / range / exists；多库时没定义的字段在该库视为不限；分段可覆盖文档的元数据（<code>kb_segment.meta</code>，同名以分段为准）</td></tr>
+  <tr><td>文档级权限</td><td><span class="tag">已实现</span></td><td>atlas-server <code>/internal/v1/auth/principals</code> 展开 u / d（含上级）/ r；智能体与 MCP 调用按发起人检索，没有发起人只看公开；库管理员调试不受限</td></tr>
+  <tr><td>版本与时效</td><td><span class="tag">已实现</span></td><td>上传时 <code>supersedes</code>：新版本入库完成后旧版本 is_current = false、valid_to 截到切换时刻，新版本从切换时刻生效；检索支持 <code>as_of</code> / <code>include_superseded</code></td></tr>
+  <tr><td>RRF、多样性、漏斗</td><td><span class="tag">已实现</span></td><td>多表述 / 子问题用 RRF 合并；MMR、每文档上限、相邻合并（检索配置开关）；漏斗新增 query_understanding、diversity 环节，子问题的环节带 branch</td></tr>
+</table>
+<div class="callout warn">
+<p><b>与设计不同 / 未覆盖：</b></p>
+<ul>
+  <li>双写没有补偿队列：重建结束时会清掉新 collection 里库中已不存在的 point，并补扫构建期间新完成的文档；双写本身失败会让该文档入库失败（可重试）。</li>
+  <li>主体展开失败时降级为只用 <code>u:用户</code>（只看公开文档与直接授权给本人的文档），而不是只看 public。</li>
+  <li>用户组（g:）标签已支持写入与过滤，但用户中心还没有用户组，展开结果里暂时没有。</li>
+  <li>查询理解抽取的过滤条件可能把结果过滤成空：目前不回退，漏斗里能看到抽取了什么。</li>
+  <li>文档权限只能手动设标签，还没有引用用户中心的数据权限（§7.4 的第三种来源）。</li>
+  <li>前端：只有漏斗页认识新环节；DocIR 预览、增强开关、元数据字段、文档权限与版本、索引版本都只有接口，没有管理页面。</li>
+  <li>多查询且未开重排时，分数阈值不生效（RRF 分数与相似度不可比）。</li>
+</ul>
+</div>
+</main>
+</body>
+</html>

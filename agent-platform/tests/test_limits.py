@@ -19,17 +19,17 @@ from atlas_engine.contracts import (
     ModelUnavailable,
     classify,
 )
-from atlas_server.domain.events import EventType
+from atlas_agent.domain.events import EventType
 from atlas_engine.kernel.middleware.limits import (
     CIRCUIT_THRESHOLD,
     StepLimitMiddleware,
     ToolGovernorMiddleware,
 )
 from tests.graphs import run_agent as run
-from atlas_server.domain.spec import AgentSpec, LimitSpec, ModelSpec, SubAgentSpec
+from atlas_agent.domain.spec import AgentSpec, LimitSpec, ModelSpec, SubAgentSpec
 from langchain_core.messages import AIMessageChunk, ToolMessage
 
-from .fakes import TurnModel, raising_model, text_model, tool_call_chunk
+from .fakes import Spawner, TurnModel, raising_model, text_model, tool_call_chunk
 
 RUN_ID = UUID("99999999-9999-9999-9999-999999999999")
 
@@ -168,7 +168,7 @@ async def test_success_resets_the_counter() -> None:
     assert governor.failures_of("flaky") == 0, "成功一次后计数没清零"
 
 
-# ---------------------------------------------------------------- 子智能体深度
+# ---------------------------------------------------------------- SubAgent 的有无
 
 
 _SUB = SubAgentSpec(
@@ -176,7 +176,7 @@ _SUB = SubAgentSpec(
 )
 
 
-def _delegating_spec(*, subagents: tuple[SubAgentSpec, ...], depth: int = 2) -> AgentSpec:
+def _delegating_spec(*, subagents: tuple[SubAgentSpec, ...]) -> AgentSpec:
     return AgentSpec(
         slug="s",
         name="n",
@@ -184,25 +184,15 @@ def _delegating_spec(*, subagents: tuple[SubAgentSpec, ...], depth: int = 2) -> 
         model=ModelSpec(model="claude-sonnet-5"),
         tool_names=("task",),
         subagents=subagents,
-        limits=LimitSpec(max_subagent_depth=depth, timeout_s=20),
+        limits=LimitSpec(timeout_s=20),
     )
 
 
-class _ReplyGateway:
-    """DelegationProtocol 的最小实现 —— 固定回一句话。"""
+async def _delegate(spec: AgentSpec, target: str) -> tuple[list, Spawner]:
+    """让模型调一次 task，返回 (这一段的事件, spawner)。
 
-    def __init__(self, reply: str) -> None:
-        self._reply = reply
-
-    async def delegate(self, task: str, name: str, *, fresh: bool = False) -> str:
-        return self._reply
-
-
-async def _delegate(spec: AgentSpec, target: str) -> str:
-    """让模型调一次 task，返回它拿到的工具结果。
-
-    ★ 用行为断言而不是查图结构：depth=0 与 depth=2 编译出的节点名完全相同，
-      静态检查区分不了，写出来会是个永远通过的空断言。
+    ★ 用行为断言而不是查图结构：静态检查区分不了「装了 task」与「装了但拦着」，
+      写出来会是个永远通过的空断言。
     """
     model = TurnModel(
         scripts=[
@@ -210,16 +200,15 @@ async def _delegate(spec: AgentSpec, target: str) -> str:
             [AIMessageChunk(content="完")],
         ]
     )
+    spawner = Spawner()
     events = [
         e
-        async for e in run(
-            spec,
-            run_id=RUN_ID,
-            model=model,
-            input_content="去",
-            subagents=_ReplyGateway("子结论"),
-        )
+        async for e in run(spec, run_id=RUN_ID, model=model, input_content="去", spawner=spawner)
     ]
+    return events, spawner
+
+
+def _tool_result(events: list) -> str:
     for event in events:
         if event.type in (EventType.SUBAGENT_FINISHED, EventType.TOOL_FAILED):
             return str(event.data.get("result", ""))
@@ -227,21 +216,16 @@ async def _delegate(spec: AgentSpec, target: str) -> str:
 
 
 async def test_delegation_works_when_configured() -> None:
-    assert "子结论" in await _delegate(_delegating_spec(subagents=(_SUB,)), "r")
-
-
-async def test_depth_zero_blocks_delegation() -> None:
-    """max_subagent_depth=0 = 不允许委派。"""
-    result = await _delegate(_delegating_spec(subagents=(_SUB,), depth=0), "r")
-    assert "not a valid tool" in result, f"depth=0 没能挡住委派：{result[:80]}"
+    events, spawner = await _delegate(_delegating_spec(subagents=(_SUB,)), "r")
+    assert spawner.calls == [("r", "x", False)]
+    assert events[-1].type is EventType.RUN_SUSPENDED
 
 
 async def test_task_unavailable_without_subagents() -> None:
     """★ 没配子智能体时 `task` 根本不该存在。
 
     kernel 原本无条件注入一个 general-purpose 子智能体，于是即使调用方
-    一个都没配，agent 也能委派 —— 用户没开这个能力，token 消耗也不受
-    max_subagent_depth 约束。这与 unsupported_tools() 的契约直接冲突
+    一个都没配，agent 也能派 SubAgent —— 用户没开这个能力。这与 unsupported_tools() 的契约直接冲突
     （它明确把「没配子智能体时的 task」报为不可用）。
     kernel 是自有代码，已在 graph.py 改为「调用方给了才补默认的」。
     """
@@ -254,8 +238,9 @@ async def test_task_unavailable_without_subagents() -> None:
         subagents=(),
         limits=LimitSpec(timeout_s=20),
     )
-    result = await _delegate(spec, "general-purpose")
-    assert "not a valid tool" in result, f"没配子智能体却能委派：{result[:80]}"
+    events, _spawner = await _delegate(spec, "general-purpose")
+    result = _tool_result(events)
+    assert "not a valid tool" in result, f"没配子智能体却能派：{result[:80]}"
 
 
 # ---------------------------------------------------------------- 错误分类

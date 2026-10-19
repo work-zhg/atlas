@@ -1,6 +1,6 @@
 """跨方言的列类型。
 
-★ 与 atlas_server/db/types.py 同一套规则，但**不 import 它**：两个服务不共享
+★ 与 atlas_agent/db/types.py 同一套规则，但**不 import 它**：两个服务不共享
   代码包（import-linter 契约）。这里只留本服务用得到的三样。
 """
 

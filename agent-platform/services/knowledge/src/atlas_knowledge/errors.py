@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-__all__ = ["Conflict", "Forbidden", "Invalid", "KnowledgeError", "NotFound"]
+__all__ = ["Conflict", "Forbidden", "Invalid", "KnowledgeError", "NotFound", "Unavailable"]
 
 
 class KnowledgeError(Exception):
@@ -28,3 +28,9 @@ class NotFound(KnowledgeError):
 
 class Conflict(KnowledgeError):
     status_code = 409
+
+
+class Unavailable(KnowledgeError):
+    """依赖的服务（用户中心）暂不可用。"""
+
+    status_code = 503

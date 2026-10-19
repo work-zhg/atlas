@@ -14,13 +14,11 @@ import os
 import re
 from collections.abc import Sequence
 from pathlib import PurePosixPath
-from typing import Any, Final, Literal, overload
+from typing import Literal, overload
 
 logger = logging.getLogger(__name__)
 
 EMPTY_CONTENT_WARNING = "System reminder: File exists but has empty contents"
-MAX_VIDEO_INPUT_BYTES: Final = 1024 * 1024 * 1024
-"""Maximum raw video payload size accepted by `read_file` frame extraction."""
 
 FileType = Literal["text", "image", "audio", "video", "file"]
 """Classification of a file by extension."""
@@ -164,38 +162,6 @@ def _get_file_type(path: str) -> FileType:
     return _EXTENSION_TO_FILE_TYPE.get(PurePosixPath(path).suffix.lower(), "text")
 
 
-_VIDEO_EXTRA_EXTENSIONS: frozenset[str] = frozenset({".mkv"})
-"""Video container extensions handled outside the Google-derived multimodal map.
-
-These are intentionally absent from `_EXTENSION_TO_FILE_TYPE`, so a `read_file`
-without the optional `[video]` extra returns them as a generic file block rather
-than a native video block. Backends must still read them as binary — never
-text-decode them — and `read_file` layers frame extraction on top only when the
-`[video]` dependencies are installed.
-"""
-
-
-def _get_backend_read_file_type(path: str) -> FileType:
-    """Classify a file for backend reads, forcing known video containers to binary.
-
-    Backends decide binary-vs-text on `_get_file_type(...) != "text"`. Extensions
-    in `_VIDEO_EXTRA_EXTENSIONS` are absent from `_EXTENSION_TO_FILE_TYPE`, so
-    `_get_file_type` alone would treat them as text and corrupt the bytes (a raw
-    UTF-8 decode of a video, or line-slicing a base64 blob). Classify them as
-    `"video"` here so the binary read path runs on every backend.
-
-    Args:
-        path: File path to classify.
-
-    Returns:
-        `"video"` for `_VIDEO_EXTRA_EXTENSIONS`; otherwise the shared
-            `_get_file_type` classification.
-    """
-    if PurePosixPath(path).suffix.lower() in _VIDEO_EXTRA_EXTENSIONS:
-        return "video"
-    return _get_file_type(path)
-
-
 @overload
 def truncate_if_too_long(result: list[str]) -> list[str]: ...
 
@@ -259,7 +225,7 @@ def _paths_overlap(call_path: str, rule_anchor: str) -> bool:
 def to_posix_path(path: str) -> str:
     r"""Normalize backslash separators to forward slashes for `PurePosixPath` use.
 
-    Backends running on Windows return OS-native paths using backslashes.
+    Filesystems running on Windows return OS-native paths using backslashes.
     `PurePosixPath` treats backslashes as literal filename characters,
     so `PurePosixPath(r"C:\a\b").name` yields the full string instead
     of `"b"`. Normalize before constructing a `PurePosixPath`.
@@ -346,111 +312,12 @@ def validate_path(path: str, *, allowed_prefixes: Sequence[str] | None = None) -
     return normalized
 
 
-def _normalize_path(path: str | None) -> str:
-    """Normalize a path to canonical form.
-
-    Converts path to absolute form starting with /, removes trailing slashes
-    (except for root), and validates that the path is not empty.
-
-    Args:
-        path: Path to normalize (None defaults to "/")
-
-    Returns:
-        Normalized path starting with / (without trailing slash unless it's root)
-
-    Raises:
-        ValueError: If path is invalid (empty string after strip)
-
-    Example:
-        _normalize_path(None) -> "/"
-        _normalize_path("/dir/") -> "/dir"
-        _normalize_path("dir") -> "/dir"
-        _normalize_path("/") -> "/"
-    """
-    path = path or "/"
-    if not path or path.strip() == "":
-        msg = "Path cannot be empty"
-        raise ValueError(msg)
-
-    normalized = path if path.startswith("/") else "/" + path
-
-    # Only root should have trailing slash
-    if normalized != "/" and normalized.endswith("/"):
-        normalized = normalized.rstrip("/")
-
-    return normalized
-
-
-def _filter_files_by_path(files: dict[str, Any], normalized_path: str) -> dict[str, Any]:
-    """Filter files dict by normalized path, handling exact file matches and directory prefixes.
-
-    Expects a normalized path from `_normalize_path` (no trailing slash except root).
-
-    Args:
-        files: Dictionary mapping file paths to file data
-        normalized_path: Normalized path from `_normalize_path` (e.g., "/", "/dir", "/dir/file")
-
-    Returns:
-        Filtered dictionary of files matching the path
-
-    Example:
-        files = {"/dir/file": {...}, "/dir/other": {...}}
-        _filter_files_by_path(files, "/dir/file")  # Returns {"/dir/file": {...}}
-        _filter_files_by_path(files, "/dir")       # Returns both files
-    """
-    # Check if path matches an exact file
-    if normalized_path in files:
-        return {normalized_path: files[normalized_path]}
-
-    # Otherwise treat as directory prefix
-    if normalized_path == "/":
-        # Root directory - match all files starting with /
-        return {fp: fd for fp, fd in files.items() if fp.startswith("/")}
-    # Non-root directory - add trailing slash for prefix matching
-    dir_prefix = normalized_path + "/"
-    return {fp: fd for fp, fd in files.items() if fp.startswith(dir_prefix)}
-
-
-
-
-
-
-
-
 # -------- Structured helpers for composition --------
 
 
 
 
 
-
-
-
-
-
-def _group_adjacent_lines(displayed_lines: dict[int, str]) -> list[list[tuple[int, str]]]:
-    """Split `{line_number: text}` into runs of consecutive line numbers."""
-    groups: list[list[tuple[int, str]]] = []
-    for item in sorted(displayed_lines.items()):
-        if not groups or item[0] > groups[-1][-1][0] + 1:
-            groups.append([item])
-        else:
-            groups[-1].append(item)
-    return groups
-
-
-_REGEX_SIGNAL_RE = re.compile(
-    r"\|"  # alternation
-    r"|\.\*"  # `.*` wildcard
-    r"|\.\+"  # `.+` wildcard
-    r"|\\[.wWdDsSbB(){}\[\]|+*?^$]"  # escaped regex metacharacters / classes
-)
-"""Strong signals that a pattern was written as a regex rather than literal text.
-
-Deliberately conservative: bare `.`, `(`, `)`, `[`, `]`, `?`, `^`, `$` are
-omitted because they appear routinely in literal code searches (e.g.
-`self.tools`, `def __init__(self):`, `arr[0]`), which would cause false hints.
-"""
 
 
 

@@ -88,6 +88,27 @@ def plan_split(facts: Sequence[MessageFacts], *, keep_recent_turns: int) -> int:
     return candidate
 
 
+def plan_split_within_turn(facts: Sequence[MessageFacts], *, keep_recent_rounds: int) -> int:
+    """回合内切分：按用户回合切不动时（一条用户消息 + 几十次工具调用，全在同一个回合里），
+    改按**工具轮次**切 —— 保留最近 keep_recent_rounds 轮（一轮 = 一条发出 tool_use 的
+    assistant 消息及其结果），更早的进压缩区。返回 0 表示连这样也切不动。
+
+    ★ 这是 Agent 最典型的形态（一个任务、大量工具调用）。只按用户回合切的话，单轮长任务
+      一旦超过阈值就只能报「上下文溢出」失败，而不是压缩（2026-10-13 评测 atlas-eng/long-read）。
+    ★ 切点同样必须是安全边界：一轮的开头（上一轮的结果都已回应）天然安全。
+    """
+    if keep_recent_rounds < 1:
+        raise ValueError("keep_recent_rounds 至少为 1")
+    rounds = [i for i, f in enumerate(facts) if f.issues]
+    if len(rounds) <= keep_recent_rounds:
+        return 0
+    candidate = rounds[len(rounds) - keep_recent_rounds]
+    safe = set(safe_boundaries(facts))
+    while candidate > 0 and candidate not in safe:
+        candidate -= 1
+    return candidate
+
+
 def would_split_tool_pair(facts: Sequence[MessageFacts], index: int) -> bool:
     """诊断用：在 index 处切会不会拆散 tool_use/tool_result 对。
 

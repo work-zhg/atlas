@@ -55,10 +55,6 @@ def serve() -> None:
     from .api.app import create_app
 
     settings = get_settings()
-    if not settings.internal_token:
-        logger.warning(
-            "ATLAS_CONFIG_INTERNAL_TOKEN 未设置：/internal/* 不校验服务间令牌 —— 仅限本机开发"
-        )
     uvicorn.run(
         create_app(cors_origins=settings.cors_origins),
         host=os.environ.get("ATLAS_CONFIG_HOST", "0.0.0.0"),

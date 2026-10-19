@@ -18,16 +18,15 @@ Middleware subclasses `AgentMiddleware`, overriding its `wrap_model_call()`
 hook that **intercepts every LLM request** before it is sent. This lets
 middleware:
 
-* **Filter tools dynamically** -- e.g. `FilesystemMiddleware` removes the
-    `execute` tool at call-time when the resolved backend doesn't support it.
+* **Filter tools dynamically** -- e.g. `FilesystemMiddleware` registers only
+    the file tools on its allowlist.
 * **Inject system-prompt context** -- e.g. `SkillsMiddleware` injects relevant
     instructions into the system message on every call so the LLM knows how to
     use the tools it provides.
-* **Transform messages** -- e.g. `SummarizationMiddleware` counts tokens,
-    truncates old tool arguments, and replaces history with summaries when the
-    context window fills up.
+* **Transform messages** -- e.g. `CompactionMiddleware` clears old tool
+    results and replaces history with a summary when the context window fills up.
 * **Maintain cross-turn state** -- middleware can read/write a typed state
-    dict that persists across agent turns (e.g. summarization events).
+    dict that persists across agent turns (e.g. `waiting_on` in `SuspensionMiddleware`).
 
 A plain tool function in a `tools=[]` list cannot do any of this -- it is
 only invoked *by* the LLM, not *before* the LLM call.
@@ -53,26 +52,11 @@ from atlas_engine.kernel.middleware.subagents import (
     SubAgent,
     SubAgentMiddleware,
 )
-from atlas_engine.kernel.middleware.summarization import (
-    DEEPAGENTS_DEFAULT_SUMMARY_PROMPT,
-    SummarizationMiddleware,
-    SummarizationToolMiddleware,
-    create_summarization_tool_middleware,
-)
 
 __all__ = [
-    "DEEPAGENTS_DEFAULT_SUMMARY_PROMPT",
-    "GRADER_SYSTEM_PROMPT",
-    "RUBRIC_GRADER_MESSAGE_SOURCE",
-    "CriterionEval",
     "FilesystemMiddleware",
     "FilesystemPermission",
-    "GraderVerdict",
-    "RubricResult",
     "SkillsMiddleware",
     "SubAgent",
     "SubAgentMiddleware",
-    "SummarizationMiddleware",
-    "SummarizationToolMiddleware",
-    "create_summarization_tool_middleware",
 ]

@@ -74,7 +74,7 @@ class FileData(TypedDict):
 
 @dataclass
 class ReadResult:
-    """Result from backend read operations."""
+    """Result from filesystem read operations."""
 
     error: str | None = None
     """Error message on failure, `None` on success."""
@@ -83,7 +83,7 @@ class ReadResult:
     """File data on success, `None` on failure."""
 
     total_lines: int | None = None
-    """Total number of source lines when the backend can determine it."""
+    """Total number of source lines when the filesystem can determine it."""
 
     start_line: int | None = None
     """1-indexed first source line returned in `file_data`."""
@@ -97,7 +97,7 @@ class ReadResult:
     no_lines_requested: bool = False
     """The read asked for zero lines and the file was never inspected.
 
-    Set by backends when a non-positive `limit` short-circuits the read, so
+    Set by filesystems when a non-positive `limit` short-circuits the read, so
     the middleware can tell a never-inspected window apart from a file that
     was inspected and is genuinely empty — both otherwise arrive as empty
     content with no pagination metadata.
@@ -113,7 +113,7 @@ class ReadResult:
         end_line`), the file is at least as long as the window
         (`total_lines >= end_line`), and the resume point is the 0-indexed line
         immediately after the last one shown (`next_offset == end_line`, since
-        `end_line` is 1-indexed). Fail loudly here to keep a backend from
+        `end_line` is 1-indexed). Fail loudly here to keep a filesystem from
         emitting a `next_offset` that would silently skip unshown source lines
         once it reaches the middleware.
         """
@@ -147,7 +147,7 @@ class ReadResult:
 
 @dataclass
 class WriteResult:
-    """Result from backend `write` operations.
+    """Result from filesystem `write` operations.
 
     Attributes:
         error: Error message on failure, `None` on success.
@@ -163,7 +163,7 @@ class WriteResult:
 
 @dataclass
 class EditResult:
-    """Result from backend `edit` operations.
+    """Result from filesystem `edit` operations.
 
     Attributes:
         error: Error message on failure, `None` on success.
@@ -181,7 +181,7 @@ class EditResult:
 
 @dataclass
 class DeleteResult:
-    """Result from backend delete operations.
+    """Result from filesystem delete operations.
 
     Attributes:
         error: Error message on failure, None on success.
@@ -400,19 +400,19 @@ def normalize_read_bounds(offset: int, limit: int) -> tuple[int, int]:
     """Floor a requested read window at a zero offset and zero lines.
 
     Models occasionally emit degenerate `read_file` arguments (`offset=-1`,
-    `limit=0`). Clamping `offset` keeps backends from reporting a line range
+    `limit=0`). Clamping `offset` keeps filesystems from reporting a line range
     that starts before line 1, which `ReadResult` rejects.
 
     Clamping `limit` is *not* sufficient on its own: flooring a negative limit
     at `0` produces a zero-length window, which still has no valid
     `start_line`/`end_line` pair. Callers must additionally treat a returned
     `limit` of `0` as an empty read — see `slice_read_response` below, or the
-    equivalent short-circuits in the sandbox and LangSmith backends, which
+    equivalent short-circuits in the sandbox and LangSmith implementations, which
     flag the result with `ReadResult.no_lines_requested`.
 
     The `int()` coercion is deliberate and load-bearing, not redundant with the
     annotations: `offset` and `limit` originate from model-supplied tool
-    arguments, and the sandbox backend interpolates them into the source of a
+    arguments, and the sandbox implementation interpolates them into the source of a
     script it executes (`_READ_COMMAND_TEMPLATE`). Do not remove it.
 
     Args:
@@ -495,7 +495,7 @@ def slice_read_response(
         return ReadResult(error=f"Line offset {offset} exceeds file length ({total_lines} lines)")
 
     # Normalize line endings to LF, but only across the requested window.
-    # State/Store backends may carry CRLF or CR content as written;
+    # State/Store implementations may carry CRLF or CR content as written;
     # downstream tooling (edit match, grep, format) assumes LF.
     sliced = "".join(lines[start_idx:end_idx]).replace("\r\n", "\n").replace("\r", "\n")
     next_offset = end_idx if end_idx < total_lines else None

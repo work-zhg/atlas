@@ -40,8 +40,8 @@ import {
   type ProcessRules,
   type RetrievalConfig,
   type StructureRule,
+  LEVEL_LABEL,
   METHOD_LABEL,
-  PERMISSION_LABEL,
   STATUS_LABEL,
   kbApi,
   pathLabel,
@@ -52,6 +52,7 @@ import {
   useQueries,
 } from "./api";
 import { RetrievalFunnel } from "./RetrievalFunnel";
+import { SharingTab } from "./SharingTab";
 
 export function DatasetPage({ datasetId }: { datasetId: string }) {
   const { data: ds, error } = useDataset(datasetId);
@@ -76,7 +77,7 @@ export function DatasetPage({ datasetId }: { datasetId: string }) {
         </div>
       </div>
       <Space size={4} style={{ marginBottom: 8 }}>
-        <Tag>{PERMISSION_LABEL[ds.permission]}</Tag>
+        {ds.my_level && <Tag>{LEVEL_LABEL[ds.my_level]}</Tag>}
         <Tag>{ds.doc_form === "hierarchical_model" ? "父子分段" : "通用分段"}</Tag>
         <Tag>{METHOD_LABEL[ds.retrieval_config.search_method]}</Tag>
         <Tag>{ds.embedding_model}</Tag>
@@ -88,6 +89,7 @@ export function DatasetPage({ datasetId }: { datasetId: string }) {
         items={[
           { key: "documents", label: "文档", children: <DocumentsTab ds={ds} /> },
           { key: "hit", label: "召回测试", children: <HitTestingTab ds={ds} /> },
+          { key: "sharing", label: "共享", children: <SharingTab ds={ds} /> },
           { key: "settings", label: "设置", children: <SettingsTab ds={ds} /> },
         ]}
       />
@@ -756,19 +758,8 @@ function SettingsTab({ ds }: { ds: Dataset }) {
 
   async function submit() {
     const v = await form.validateFields();
+    // 可见范围改在「共享」里（用户中心数据权限），这里不再提交
     const body: Record<string, unknown> = { ...v, retrieval_config: cfg };
-    if (v.permission === "partial_members") {
-      body.members = String(v.members ?? "")
-        .split(/[\s,，]+/)
-        .filter(Boolean)
-        .map((id: string) => ({ id, level: "read" }));
-    } else {
-      delete body.members;
-    }
-    if (!ds.can_admin) {
-      delete body.permission;
-      delete body.members;
-    }
     try {
       await save.mutateAsync(body);
       message.success("已保存");
@@ -787,9 +778,7 @@ function SettingsTab({ ds }: { ds: Dataset }) {
           name: ds.name,
           description: ds.description,
           icon: ds.icon,
-          permission: ds.permission,
           review_required: ds.review_required,
-          members: (ds.members ?? []).map((m) => m.id).join("\n"),
         }}
       >
         <div style={{ display: "flex", gap: 12 }}>
@@ -802,21 +791,6 @@ function SettingsTab({ ds }: { ds: Dataset }) {
         </div>
         <Form.Item name="description" label="描述">
           <Input.TextArea rows={3} maxLength={2000} />
-        </Form.Item>
-        <Form.Item name="permission" label="可见范围" extra={!ds.can_admin ? "只有所有者或管理员可以修改" : undefined}>
-          <Radio.Group
-            disabled={!ds.can_admin}
-            options={(["only_me", "all_team", "partial_members"] as const).map((v) => ({ value: v, label: PERMISSION_LABEL[v] }))}
-          />
-        </Form.Item>
-        <Form.Item noStyle shouldUpdate={(a, b) => a.permission !== b.permission}>
-          {({ getFieldValue }) =>
-            getFieldValue("permission") === "partial_members" && (
-              <Form.Item name="members" label="成员（用户 id，每行一个）">
-                <Input.TextArea rows={3} disabled={!ds.can_admin} />
-              </Form.Item>
-            )
-          }
         </Form.Item>
         <Form.Item name="review_required" label="入库审核" valuePropName="checked">
           <Switch />

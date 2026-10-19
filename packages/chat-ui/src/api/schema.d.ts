@@ -4,40 +4,6 @@
  */
 
 export interface paths {
-    "/v1/auth/login": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Login */
-        post: operations["login_v1_auth_login_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/auth/logout": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Logout */
-        post: operations["logout_v1_auth_logout_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/v1/me": {
         parameters: {
             query?: never;
@@ -632,61 +598,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/service-accounts": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Service Accounts */
-        get: operations["list_service_accounts_v1_service_accounts_get"];
-        put?: never;
-        /** Create Service Account */
-        post: operations["create_service_account_v1_service_accounts_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/service-accounts/{sid}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        /** Update Service Account */
-        patch: operations["update_service_account_v1_service_accounts__sid__patch"];
-        trace?: never;
-    };
-    "/v1/service-accounts/{sid}/rotate-key": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Rotate Service Account Key
-         * @description 轮换后旧密钥立即失效。
-         */
-        post: operations["rotate_service_account_key_v1_service_accounts__sid__rotate_key_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1074,24 +985,12 @@ export interface components {
              */
             max_total_tokens: number;
             /**
-             * Max Subagent Depth
-             * @default 2
-             */
-            max_subagent_depth: number;
-            /**
              * Tool Concurrency
              * @default 4
              */
             tool_concurrency: number;
             /** Require Approval For */
             require_approval_for?: string[];
-        };
-        /** LoginBody */
-        LoginBody: {
-            /** Account */
-            account: string;
-            /** Password */
-            password: string;
         };
         /** McpServerDetailOut */
         McpServerDetailOut: {
@@ -1490,97 +1389,6 @@ export interface components {
             /** Data */
             data: components["schemas"]["TraceEvent"][];
         };
-        /** ServiceAccountIn */
-        ServiceAccountIn: {
-            /** Name */
-            name: string;
-            /**
-             * Description
-             * @default
-             */
-            description: string;
-            /**
-             * Operations
-             * @default [
-             *       "chat:use"
-             *     ]
-             */
-            operations: string[];
-            /**
-             * Agent Scope
-             * @default all_enabled
-             * @enum {string}
-             */
-            agent_scope: "all_enabled" | "list";
-            /**
-             * Agent Ids
-             * @default []
-             */
-            agent_ids: string[];
-            /**
-             * Allow Acting
-             * @default false
-             */
-            allow_acting: boolean;
-            /**
-             * Memory Default
-             * @default off
-             * @enum {string}
-             */
-            memory_default: "on" | "off";
-        };
-        /** ServiceAccountOut */
-        ServiceAccountOut: {
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /** Name */
-            name: string;
-            /** Description */
-            description: string;
-            /** Key Prefix */
-            key_prefix: string;
-            /** Operations */
-            operations: string[];
-            /** Agent Scope */
-            agent_scope: string;
-            /** Agent Ids */
-            agent_ids: string[];
-            /** Allow Acting */
-            allow_acting: boolean;
-            /** Memory Default */
-            memory_default: string;
-            /** Status */
-            status: string;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Last Used At */
-            last_used_at: string | null;
-            /** Key */
-            key?: string | null;
-        };
-        /** ServiceAccountPatch */
-        ServiceAccountPatch: {
-            /** Description */
-            description?: string | null;
-            /** Operations */
-            operations?: string[] | null;
-            /** Agent Scope */
-            agent_scope?: ("all_enabled" | "list") | null;
-            /** Agent Ids */
-            agent_ids?: string[] | null;
-            /** Allow Acting */
-            allow_acting?: boolean | null;
-            /** Memory Default */
-            memory_default?: ("on" | "off") | null;
-            /** Status */
-            status?: ("active" | "disabled") | null;
-        };
         /** SkillListItem */
         SkillListItem: {
             /** Slug */
@@ -1802,6 +1610,8 @@ export interface components {
              * @default on
              */
             memory: string;
+            /** Source App */
+            source_app?: string | null;
             /**
              * Subagent Thread Count
              * @default 0
@@ -1976,63 +1786,6 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
-    login_v1_auth_login_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["LoginBody"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    logout_v1_auth_logout_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: boolean;
-                    };
-                };
-            };
-        };
-    };
     me_v1_me_get: {
         parameters: {
             query?: never;
@@ -3109,134 +2862,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["McpServerDetailOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_service_accounts_v1_service_accounts_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ServiceAccountOut"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    create_service_account_v1_service_accounts_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ServiceAccountIn"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ServiceAccountOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    update_service_account_v1_service_accounts__sid__patch: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ServiceAccountPatch"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ServiceAccountOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    rotate_service_account_key_v1_service_accounts__sid__rotate_key_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ServiceAccountOut"];
                 };
             };
             /** @description Validation Error */

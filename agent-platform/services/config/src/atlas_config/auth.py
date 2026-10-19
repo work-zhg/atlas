@@ -1,14 +1,13 @@
-"""认证（设计 §14；权限设计 doc/auth-permission-design.html §9）。
+"""认证（设计 §14；权限设计 §9；内网身份传递 §3）。
 
-两条通道、两种凭据，互不通用：
+内网免令牌：身份在请求头里（网关按登录态写入 X-Uid；atlas-server 运行时调用时写这一轮的身份）。
 
-  /config/*    用户（浏览器直连）。
-               dev 模式：读 X-User-Id，没给就用默认用户，操作码全有（与运行时同规则）。
-               uc 模式：取浏览器带来的 Atlas 登录会话（Cookie atlas_session），交给
-               atlas-server 的 /internal/v1/auth/introspect 校验，拿回用户 id 与操作码；
-               写请求校验 CSRF 双提交。本服务不维护登录、不接用户中心。
-  /internal/*  运行时进程。共享令牌 ATLAS_CONFIG_INTERNAL_TOKEN；**不接受用户身份**
-               —— 内部接口能读到全部已发布内容，不能让浏览器直接打到它。
+  /config/*    用户（经网关）。
+               dev 模式：缺 X-Uid 用默认用户，操作码全有（与运行时同规则）。
+               uc 模式：缺 X-Uid 一律 401；操作码按 X-Auth-Uid（缺省 = X-Uid）取用户中心
+               授权快照（以 Atlas 应用的身份：X-Caller-App: atlas）。登录、CSRF 在网关 +
+               用户中心，这里不再处理。
+  /internal/*  运行时进程。网关一律 404（只在内网可达）；不再要服务间令牌。
 
 ★ 与运行时各自实现，不抽公共包：规则只有几十行，抽出来就是第三个所有服务都
   依赖的包，收益抵不上耦合。
@@ -16,38 +15,33 @@
 
 from __future__ import annotations
 
-import hmac
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Annotated
+from typing import Annotated, Any
 
 import httpx
-from fastapi import Depends, Header, HTTPException, Request
+from fastapi import Depends, HTTPException, Request
 
 from .settings import ConfigSettings, get_settings
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["Principal", "current_principal", "require_any", "require_internal"]
+__all__ = ["Principal", "current_principal", "require_any"]
 
-SESSION_COOKIE = "atlas_session"
-CSRF_COOKIE = "atlas_csrf"
-CSRF_HEADER = "x-atlas-csrf"
-_SAFE = {"GET", "HEAD", "OPTIONS"}
+#: 调用户中心时的应用编码（配置服务属于 Atlas 应用，操作码登记在它名下）
+CALLER_APP = "atlas"
+_FORWARD = {"x-uid": "X-Uid", "x-auth-uid": "X-Auth-Uid", "x-tenant-id": "X-Tenant-Id"}
 
 #: dev 模式的全部操作码（与 atlas-server auth/catalog.py 的目录一致）
 DEV_OPERATIONS = frozenset(
     {
         "chat:use",
         "agent:create",
-        "agent:manage_all",
         "skill:upload",
         "skill:review",
         "mcp:manage",
-        "mcp:manage_all",
         "model:manage",
-        "service_account:manage",
         "audit:view",
     }
 )
@@ -55,6 +49,7 @@ DEV_OPERATIONS = frozenset(
 
 @dataclass(frozen=True)
 class Principal:
+    #: 谁在用（X-Uid）：上传人、审查人
     user: str
     operations: frozenset[str] = field(default_factory=frozenset)
 
@@ -62,72 +57,73 @@ class Principal:
         return any(op in self.operations for op in ops)
 
 
-class _IntrospectCache:
-    """会话令牌 → (过期时刻, 主体)。只缓存成功结果；失败每次都问。"""
+class _Cache:
+    """auth-uid → (过期时刻, 操作码)。只缓存成功结果；失败每次都问。"""
 
     def __init__(self) -> None:
-        self._rows: dict[str, tuple[float, Principal]] = {}
+        self._rows: dict[str, tuple[float, frozenset[str]]] = {}
 
-    def get(self, token: str) -> Principal | None:
-        row = self._rows.get(token)
+    def get(self, key: str) -> frozenset[str] | None:
+        row = self._rows.get(key)
         if row is None or row[0] < time.monotonic():
-            self._rows.pop(token, None)
+            self._rows.pop(key, None)
             return None
         return row[1]
 
-    def put(self, token: str, p: Principal, ttl: float) -> None:
+    def put(self, key: str, ops: frozenset[str], ttl: float) -> None:
         if len(self._rows) > 10_000:  # 防止无界增长
             self._rows.clear()
-        self._rows[token] = (time.monotonic() + ttl, p)
+        self._rows[key] = (time.monotonic() + ttl, ops)
 
 
-_cache = _IntrospectCache()
+_cache = _Cache()
 #: 测试替换用（生产为 None，走真实网络）
 _transport: httpx.AsyncBaseTransport | None = None
 
 
-async def _introspect(settings: ConfigSettings, token: str) -> Principal:
-    hit = _cache.get(token)
+async def _operations(settings: ConfigSettings, request: Request, auth_uid: str) -> frozenset[str]:
+    hit = _cache.get(auth_uid)
     if hit is not None:
         return hit
-    internal = settings.internal_token.get_secret_value() if settings.internal_token else ""
+    # 透传本次请求的身份（用户中心据此建立租户上下文）
+    headers: dict[str, Any] = {
+        out: request.headers[name] for name, out in _FORWARD.items() if request.headers.get(name)
+    }
+    headers["X-Caller-App"] = CALLER_APP
     try:
         async with httpx.AsyncClient(timeout=5.0, trust_env=False, transport=_transport) as client:
-            r = await client.post(
-                f"{settings.server_url.rstrip('/')}/internal/v1/auth/introspect",
-                json={"token": token},
-                headers={"X-Internal-Token": internal},
+            r = await client.get(
+                f"{settings.uc_base_url.rstrip('/')}/open/v1/users/{auth_uid}/authz",
+                headers=headers,
             )
     except httpx.HTTPError as exc:
-        logger.warning("会话校验失败（atlas-server 不可达）：%s", exc)
-        raise HTTPException(status_code=503, detail="暂时无法校验登录，请稍后重试") from exc
-    if r.status_code == 401:
+        logger.warning("取授权快照失败（用户中心不可达）：%s", exc)
+        raise HTTPException(status_code=503, detail="暂时无法校验权限，请稍后重试") from exc
+    if r.status_code in (401, 404):
         raise HTTPException(status_code=401, detail="请先登录")
     if r.status_code != 200:
-        logger.warning("会话校验返回 %s", r.status_code)
-        raise HTTPException(status_code=503, detail="暂时无法校验登录，请稍后重试")
+        logger.warning("授权快照返回 %s", r.status_code)
+        raise HTTPException(status_code=503, detail="暂时无法校验权限，请稍后重试")
     body = r.json()
-    p = Principal(user=str(body["user_id"]), operations=frozenset(body.get("operations") or []))
-    _cache.put(token, p, settings.introspect_ttl_s)
-    return p
+    if (body.get("user") or {}).get("status") == "disabled":
+        raise HTTPException(status_code=401, detail="账号已停用")
+    if not body.get("can_access"):
+        raise HTTPException(status_code=403, detail="没有使用 Atlas 的权限")
+    ops = frozenset(body.get("permissions") or [])
+    _cache.put(auth_uid, ops, settings.authz_ttl_s)
+    return ops
 
 
 async def current_principal(
-    request: Request,
-    settings: Annotated[ConfigSettings, Depends(get_settings)],
-    x_user_id: Annotated[str | None, Header()] = None,
+    request: Request, settings: Annotated[ConfigSettings, Depends(get_settings)]
 ) -> Principal:
+    uid = (request.headers.get("x-uid") or "").strip()
     if settings.auth_mode == "uc":
-        token = request.cookies.get(SESSION_COOKIE)
-        if not token:
+        if not uid:
             raise HTTPException(status_code=401, detail="请先登录")
-        if request.method not in _SAFE:
-            cookie = request.cookies.get(CSRF_COOKIE)
-            if not cookie or cookie != request.headers.get(CSRF_HEADER):
-                raise HTTPException(status_code=403, detail="请求校验失败，请刷新页面后重试")
-        return await _introspect(settings, token)
-    user = (x_user_id or "").strip() or settings.default_user
-    return Principal(user=user, operations=DEV_OPERATIONS)
+        auth_uid = (request.headers.get("x-auth-uid") or "").strip() or uid
+        return Principal(user=uid, operations=await _operations(settings, request, auth_uid))
+    return Principal(user=uid or settings.default_user, operations=DEV_OPERATIONS)
 
 
 def require_any(*ops: str):  # type: ignore[no-untyped-def]
@@ -139,16 +135,3 @@ def require_any(*ops: str):  # type: ignore[no-untyped-def]
         return principal
 
     return dep
-
-
-def require_internal(
-    settings: Annotated[ConfigSettings, Depends(get_settings)],
-    authorization: Annotated[str | None, Header()] = None,
-) -> None:
-    expected = settings.internal_token.get_secret_value() if settings.internal_token else ""
-    if not expected:
-        return  # 本机开发：启动时已告警（__main__）
-    given = (authorization or "").removeprefix("Bearer ").strip()
-    # ★ 定时比较：令牌比对不能因前缀匹配长度而泄露信息
-    if not hmac.compare_digest(given.encode(), expected.encode()):
-        raise HTTPException(status_code=401, detail="内部接口需要服务间令牌")

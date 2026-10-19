@@ -108,8 +108,7 @@ class ToolGovernorMiddleware(AgentMiddleware):
                 # ★ 工具内部抛出的 LimitExceeded 必然来自嵌套图（子智能体经
                 #   task 委派，其 StepLimit 在子图的 abefore_model 里抛）。
                 #   在这里落地为工具失败而不是任由其冒泡 —— 委派失败回给
-                #   主 agent，run 继续（§13.2「单个工具失败不终止 run」，
-                #   与 §4.4 里 max_subagent_depth 超限的语义同款）。
+                #   主 agent，run 继续（§13.2「单个工具失败不终止 run」）。
                 #   主图自身的 StepLimit 不经过任何工具调用，仍然直接终止 run。
                 result = ToolMessage(
                     content=f"委派已中止：{exc.message}",

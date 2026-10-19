@@ -1,14 +1,13 @@
-"""知识库的权限判定（知识库设计 §11.2）。
+"""知识库的库级权限判定 —— 用户中心数据权限（数据编码 AtlasKnowledgeBase，见 perms.py）。
 
-可见范围同 Dify：only_me / all_team / partial_members
-（成员表 kb_dataset_permission，read | write）。
+    读（看到、检索、召回测试）        有效级别 ≥ READ
+    写（上传、编辑分段、改检索设置）  有效级别 ≥ WRITE
+    管（删除、共享、换向量模型）      有效级别 = OWNER（含「全部知识库 · Owner」）
+    审核入库文档                      OWNER，或 操作码 kb:review ∧ 能读（角色管「能不能审」，
+                                      数据权限管「审哪些库」）
 
-    读（看到、检索、召回测试）  owner、kb:manage_all、all_team、partial 成员
-    写（上传、编辑分段、改检索设置）owner、kb:manage_all、partial 成员中 level=write
-    管（删除、改可见范围）        owner、kb:manage_all
-
-★ 先落在本服务的成员表上；Atlas 权限 P2（用户中心数据权限）接入后，成员表换成数据权限查询，
-  判定函数的签名不变。
+★ 一律按 auth-uid（按谁的权限判，内网身份传递 §6、§8）：人直接操作时就是本人，
+  Agent 运行时是它的数字员工（P2）。只剩这一套规则。
 ★ 看不到的库一律 404（不暴露存在性），看得到但不能改的才 403。
 """
 
@@ -16,52 +15,86 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, and_, or_, select
+from sqlalchemy import ColumnElement, false, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth import Principal
-from ..db.models import Dataset, DatasetPermission
+from ..db.models import Dataset
 from ..errors import Forbidden, NotFound
+from ..perms import LEVEL_RANK, DataPermissions
 
-__all__ = ["DatasetAccess", "load_dataset", "visible_clause"]
+__all__ = [
+    "DatasetAccess",
+    "Visibility",
+    "dataset_level",
+    "load_dataset",
+    "visibility",
+    "visible_clause",
+]
 
 
-def visible_clause(p: Principal) -> ColumnElement[bool]:
-    if p.has("kb:manage_all"):
-        return Dataset.id.is_not(None)
-    members = select(DatasetPermission.dataset_uuid).where(DatasetPermission.principal_id == p.id)
-    return or_(
-        Dataset.owner_id == p.id,
-        Dataset.permission == "all_team",
-        and_(Dataset.permission == "partial_members", Dataset.uuid.in_(members)),
-    )
+async def dataset_level(perms: DataPermissions, ds: Dataset, p: Principal) -> str:
+    # 没有登记到用户中心的库（存量服务账号的库，sync-uc 之前）：只有「全部知识库」授权能覆盖它
+    # （check 对未登记的返回编码级）
+    return await perms.level(p.auth_uid, str(ds.uuid))
+
+
+class Visibility:
+    """一次查询用户中心，得到列表过滤条件与每个库的级别（列表页要显示「我的权限」）。"""
+
+    def __init__(self, p: Principal, levels: dict[str, str], type_level: str) -> None:
+        self.p = p
+        self._levels = levels
+        self._type = type_level
+
+    @property
+    def clause(self) -> ColumnElement[bool]:
+        if LEVEL_RANK[self._type] >= LEVEL_RANK["READ"]:
+            return true()
+        readable = [UUID(i) for i in self._levels]
+        return Dataset.uuid.in_(readable) if readable else false()
+
+    def level(self, ds: Dataset) -> str:
+        own = self._levels.get(str(ds.uuid), "NONE")
+        return own if LEVEL_RANK[own] >= LEVEL_RANK[self._type] else self._type
+
+
+async def visibility(perms: DataPermissions, p: Principal) -> Visibility:
+    """列表：用户中心里可读的库；有「全部知识库」授权则全部。"""
+    levels, type_level = await perms.accessible(p.auth_uid, "READ")
+    return Visibility(p, levels, type_level)
+
+
+async def visible_clause(perms: DataPermissions, p: Principal) -> ColumnElement[bool]:
+    return (await visibility(perms, p)).clause
 
 
 class DatasetAccess:
-    def __init__(self, ds: Dataset, p: Principal, member_level: str | None) -> None:
+    def __init__(self, ds: Dataset, p: Principal, level: str) -> None:
         self.ds = ds
         self.p = p
-        self._level = member_level
+        self.level = level
 
     @property
     def is_admin(self) -> bool:
-        return self.p.has("kb:manage_all") or self.ds.owner_id == self.p.id
+        return self.level == "OWNER"
 
     @property
     def can_read(self) -> bool:
-        if self.is_admin or self.ds.permission == "all_team":
-            return True
-        return self.ds.permission == "partial_members" and self._level is not None
+        return LEVEL_RANK[self.level] >= LEVEL_RANK["READ"]
 
     @property
     def can_write(self) -> bool:
-        if self.is_admin:
-            return True
-        return self.ds.permission == "partial_members" and self._level == "write"
+        return LEVEL_RANK[self.level] >= LEVEL_RANK["WRITE"]
 
     @property
     def can_review(self) -> bool:
-        return self.is_admin or self.p.has("kb:review")
+        return self.is_admin or (self.p.has("kb:review") and self.can_read)
+
+    @property
+    def shareable(self) -> bool:
+        """存量服务账号的库（sync-uc 之前）没有登记到用户中心，不能共享。"""
+        return self.ds.owner_kind == "user"
 
     def require_write(self) -> None:
         if not self.can_write:
@@ -69,24 +102,20 @@ class DatasetAccess:
 
     def require_admin(self) -> None:
         if not self.is_admin:
-            raise Forbidden("只有知识库所有者或管理员可以执行该操作")
+            raise Forbidden("只有知识库所有者可以执行该操作")
 
     def require_review(self) -> None:
         if not self.can_review:
             raise Forbidden("没有审核该知识库文档的权限")
 
 
-async def load_dataset(session: AsyncSession, dataset_uuid: UUID, p: Principal) -> DatasetAccess:
+async def load_dataset(
+    session: AsyncSession, perms: DataPermissions, dataset_uuid: UUID, p: Principal
+) -> DatasetAccess:
     ds = await session.scalar(select(Dataset).where(Dataset.uuid == dataset_uuid))
     if ds is None:
         raise NotFound("知识库不存在")
-    level = await session.scalar(
-        select(DatasetPermission.level).where(
-            DatasetPermission.dataset_uuid == dataset_uuid,
-            DatasetPermission.principal_id == p.id,
-        )
-    )
-    access = DatasetAccess(ds, p, level)
+    access = DatasetAccess(ds, p, await dataset_level(perms, ds, p))
     if not access.can_read:
         raise NotFound("知识库不存在")
     return access

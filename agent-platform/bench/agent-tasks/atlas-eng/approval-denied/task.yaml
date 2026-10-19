@@ -1,0 +1,12 @@
+category: eng
+tags: [eng, fast, approval]
+instruction: |
+  第一步先用 execute 运行 `wc -l data.csv` 看一下行数。
+  然后把 data.csv 的数据行数（不含表头）写入 count.txt（只写数字）。
+approval_policy: deny_first
+expect:
+  - desc: 第一次审批被拒绝（场景生效）
+    gate: false
+    metric: approvals_rejected
+    count: ">=1"
+budget: {wall_s: 600}

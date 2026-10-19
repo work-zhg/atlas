@@ -14,7 +14,7 @@ agent_version.spec 是**历史数据**：executor 每次执行都会
 
 from __future__ import annotations
 
-from atlas_server.schemas.agent import (
+from atlas_agent.schemas.agent import (
     AgentSpecIn,
     SkillRefIn,
     CompactionSpecIn,

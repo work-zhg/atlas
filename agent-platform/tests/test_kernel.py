@@ -38,6 +38,20 @@ def test_entry_points_used_by_atlas_import() -> None:
     )
 
 
+def test_configs_reject_missing_counterpart() -> None:
+    """「有名单没 spawner」「有白名单没 filesystem」在构造参数对象时就报错。
+
+    前者原本是 create_deep_agent 里的运行时检查，挪进 SubAgentConfig 后
+    不能丢：静默不装 task 会让模型按「没有帮手」做事（§13.2）。
+    """
+    from atlas_engine.kernel import FilesystemConfig, SubAgentConfig
+
+    with pytest.raises(ValueError, match="spawner"):
+        SubAgentConfig(agents=[{"name": "r", "description": "d"}], spawner=None)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="filesystem"):
+        FilesystemConfig(filesystem=None, tools=["read_file"])  # type: ignore[arg-type]
+
+
 def test_namespace_rewrite_is_complete() -> None:
     """kernel 内部必须一律用 `atlas_engine.kernel.*` 绝对导入。
 

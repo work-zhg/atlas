@@ -11,8 +11,8 @@ from typing import Any
 
 import httpx
 import pytest
-from atlas_server.main import create_app
-from atlas_server.schemas.agent import AgentSpecIn
+from atlas_agent.main import create_app
+from atlas_agent.schemas.agent import AgentSpecIn
 from httpx import ASGITransport
 
 BUILTIN_SLUG = "general"

@@ -2,7 +2,7 @@
 
 ★ 住在 contracts：错误种类是**事件契约的一部分**（run.failed 携带
   error_kind，前端按它分流展示），抛出方遍布 kernel 中间件（LimitExceeded /
-  ContextOverflow）、spec 校验（InvalidSpec）与 runner（RunTimeout）——
+  ContextOverflow）、spec 校验（InvalidSpec）与 runner ——
   典型的「两边都认、谁都不拥有」。
 """
 
@@ -49,10 +49,6 @@ class LimitExceeded(EngineError):
     kind = "limit_exceeded"
 
 
-class RunTimeout(EngineError):
-    kind = "timeout"
-
-
 class ModelRefused(EngineError):
     """模型拒绝作答（`stop_reason: refusal`）。
 
@@ -60,10 +56,6 @@ class ModelRefused(EngineError):
     """
 
     kind = "model_refused"
-
-
-class RunCancelled(EngineError):
-    kind = "cancelled"
 
 
 def classify(exc: BaseException) -> EngineError:

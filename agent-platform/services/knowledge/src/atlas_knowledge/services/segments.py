@@ -15,14 +15,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.models import ChildChunk, Document, ProcessRule, Segment
 from ..errors import Conflict, Invalid, NotFound
-from ..indexing.loader import index_segments, point_ids_of, remove_segments
+from ..indexing.loader import (
+    index_segments,
+    point_ids_of,
+    remove_segments,
+    sync_segment_meta,
+)
+from ..indexing.versions import stores
 from ..rag.index_processor import HIERARCHICAL_DEFAULT_RULES
 from ..rag.splitter import FixedRecursiveCharacterTextSplitter
 from ..rag.structure import Parent, StructureOptions, child_texts, parse_sections, path_text
+from ..rag.vdb import BaseVector
 from ..runtime import Runtime
 from .permission import DatasetAccess
 
 __all__ = ["SegmentService"]
+
+
+_UNSET = object()
 
 
 class SegmentService:
@@ -127,8 +137,8 @@ class SegmentService:
     async def _rebuild_children(self, doc: Document, seg: Segment, actor: str) -> None:
         old = await self.children(seg)
         ids = [c.index_node_id for c in old if c.index_node_id]
-        ds_collection = await self._collection(doc)
-        await self._rt.vectors.for_collection(ds_collection).delete_by_ids(ids)
+        for store in await self._stores(doc):
+            await store.delete_by_ids(ids)
         for c in old:
             await self._s.delete(c)
         for pos, (text, context) in enumerate(await self._child_pieces(doc, seg), start=1):
@@ -146,14 +156,12 @@ class SegmentService:
             )
         await self._s.flush()
 
-    async def _collection(self, doc: Document) -> str:
+    async def _stores(self, doc: Document) -> list[BaseVector]:
         from ..db.models import Dataset
 
-        name = await self._s.scalar(
-            select(Dataset.collection_name).where(Dataset.uuid == doc.dataset_uuid)
-        )
-        assert name is not None
-        return name
+        ds = await self._s.scalar(select(Dataset).where(Dataset.uuid == doc.dataset_uuid))
+        assert ds is not None
+        return await stores(self._s, self._rt, ds)
 
     async def create(self, access: DatasetAccess, doc: Document, content: str) -> Segment:
         access.require_write()
@@ -176,12 +184,12 @@ class SegmentService:
             content=content,
             word_count=len(content),
             status="indexing",
-            created_by=access.p.id,
+            created_by=access.p.uid,
         )
         self._s.add(seg)
         await self._s.flush()
         if doc.doc_form == "hierarchical_model":
-            await self._rebuild_children(doc, seg, access.p.id)
+            await self._rebuild_children(doc, seg, access.p.uid)
         await index_segments(self._s, self._rt, access.ds, doc, [seg])
         doc.word_count += seg.word_count
         return seg
@@ -194,9 +202,18 @@ class SegmentService:
         *,
         content: str | None = None,
         enabled: bool | None = None,
+        metadata: dict[str, Any] | object | None = _UNSET,
     ) -> Segment:
+        """metadata：分段级元数据覆盖（§7.2）；None / {} = 去掉覆盖，回到文档的元数据。"""
         access.require_write()
         self._require_indexed(doc)
+        if metadata is not _UNSET:
+            from .metadata import MetadataService
+
+            seg.meta = await MetadataService(self._s, self._rt).normalize_metadata(access, metadata)
+            seg.updated_by = access.p.uid
+            await self._s.flush()
+            await sync_segment_meta(self._s, self._rt, access.ds, doc, seg)
         if content is not None and content.strip() != seg.content:
             content = content.strip()
             if not content:
@@ -204,17 +221,16 @@ class SegmentService:
             doc.word_count += len(content) - seg.word_count
             seg.content = content
             seg.word_count = len(content)
-            seg.updated_by = access.p.id
+            seg.updated_by = access.p.uid
             if doc.doc_form == "hierarchical_model":
-                await self._rebuild_children(doc, seg, access.p.id)
+                await self._rebuild_children(doc, seg, access.p.uid)
             await index_segments(self._s, self._rt, access.ds, doc, [seg])
         if enabled is not None and enabled != seg.enabled:
             seg.enabled = enabled
-            seg.updated_by = access.p.id
+            seg.updated_by = access.p.uid
             ids = await point_ids_of(self._s, [seg])
-            await self._rt.vectors.for_collection(access.ds.collection_name).set_enabled(
-                ids, enabled
-            )
+            for store in await stores(self._s, self._rt, access.ds):
+                await store.set_enabled(ids, enabled)
         await self._s.flush()
         return seg
 
@@ -260,7 +276,7 @@ class SegmentService:
             context=path_text(seg.title_path) or None,
             word_count=len(content),
             type="customized",
-            created_by=access.p.id,
+            created_by=access.p.uid,
         )
         self._s.add(child)
         await self._reindex_children(access, doc, seg)
@@ -298,8 +314,7 @@ class SegmentService:
         self._require_hierarchical(doc)
         child = await self._child(seg, child_uuid)
         if child.index_node_id:
-            await self._rt.vectors.for_collection(access.ds.collection_name).delete_by_ids(
-                [child.index_node_id]
-            )
+            for store in await stores(self._s, self._rt, access.ds):
+                await store.delete_by_ids([child.index_node_id])
         await self._s.delete(child)
         await self._s.flush()

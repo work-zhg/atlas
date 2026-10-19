@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent 平台横向扩展设计</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --border: #d1d9e0; --head: #f6f8fa;
+    --accent: #0969da; --ok: #1a7f37; --ok-bg: #dafbe1; --warn: #9a6700; --warn-bg: #fff8c5;
+    --bad: #cf222e; --bad-bg: #ffebe9; --code-bg: #f6f8fa;
+    --b1: #ddf4ff; --b1d: #54aeff; --b2: #fbefff; --b2d: #c297ff; --b3: #dafbe1; --b3d: #4ac26b;
+    --b4: #fff8c5; --b4d: #d4a72c; --b5: #ffebe9; --b5d: #ff8182;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --border: #3d444d; --head: #151b23;
+      --accent: #4493f8; --ok: #3fb950; --ok-bg: #12261e; --warn: #d29922; --warn-bg: #2b2111;
+      --bad: #f85149; --bad-bg: #2d1214; --code-bg: #151b23;
+      --b1: #12263f; --b1d: #1f6feb; --b2: #271a36; --b2d: #8957e5; --b3: #12261e; --b3d: #2ea043;
+      --b4: #2b2111; --b4d: #9e6a03; --b5: #2d1214; --b5d: #da3633;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 32px; background: var(--bg); color: var(--fg);
+         font: 14px/1.75 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif; }
+  main { max-width: 1120px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 44px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 15.5px; margin: 24px 0 8px; }
+  .sub { color: var(--muted); margin: 0 0 14px; }
+  code { font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code-bg); padding: 1px 4px; border-radius: 4px; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px 14px; overflow-x: auto; font-size: 12.5px; }
+  pre code { background: none; padding: 0; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0 16px; }
+  th, td { border: 1px solid var(--border); padding: 7px 10px; vertical-align: top; text-align: left; }
+  th { background: var(--head); white-space: nowrap; }
+  .callout { border-left: 4px solid var(--accent); background: var(--head); padding: 10px 14px; border-radius: 4px; margin: 14px 0; }
+  .callout.warn { border-color: var(--warn); background: var(--warn-bg); }
+  .callout.bad { border-color: var(--bad); background: var(--bad-bg); }
+  .tag { display: inline-block; padding: 0 7px; border-radius: 9px; font-size: 12px; font-weight: 600; border: 1px solid; white-space: nowrap; }
+  .tag.ok { color: var(--ok); background: var(--ok-bg); border-color: var(--ok); }
+  .tag.new { color: var(--accent); background: var(--head); border-color: var(--accent); }
+  .tag.warn { color: var(--warn); background: var(--warn-bg); border-color: var(--warn); }
+  .tag.bad { color: var(--bad); background: var(--bad-bg); border-color: var(--bad); }
+  .toc { columns: 2; padding-left: 18px; }
+  .fig { border: 1px solid var(--border); border-radius: 6px; padding: 10px; overflow-x: auto; margin: 10px 0 16px; }
+  svg text { fill: var(--fg); font-size: 12px; font-family: -apple-system, "PingFang SC", sans-serif; }
+  svg .s { font-size: 11px; fill: var(--muted); }
+  svg .b { font-weight: 600; }
+  svg .n { fill: var(--accent); font-weight: 600; }
+  svg .c1 { fill: var(--b1); stroke: var(--b1d); } svg .c2 { fill: var(--b2); stroke: var(--b2d); }
+  svg .c3 { fill: var(--b3); stroke: var(--b3d); } svg .c4 { fill: var(--b4); stroke: var(--b4d); }
+  svg .c5 { fill: var(--b5); stroke: var(--b5d); }
+  svg .ln { stroke: var(--fg); stroke-width: 1.3; fill: none; }
+  svg .dash { stroke-dasharray: 5 4; }
+  svg .lane { stroke: var(--border); stroke-dasharray: 4 4; }
+  td.c { text-align: center; }
+
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 10px 0 16px; }
+  .card { border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; background: var(--head); }
+  .card b { display: block; margin-bottom: 4px; }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+
+
+  .flow2 { font: 12.5px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px 14px; white-space: pre; overflow-x: auto; margin: 10px 0 16px; }
+  .src { color: var(--muted); font-size: 12px; }
+
+
+
+  .ok { color: #16a34a; font-weight: 600; }
+  .part { color: #ca8a04; }
+
+</style>
+</head>
+<body>
+<main>
+<h1>Agent 平台横向扩展设计</h1>
+<p class="sub">日期：2026-10-15 · 关联：<a href="execution.html">执行设计</a>、<a href="session.html">会话与事件流</a>、<a href="native-sandbox-design.html">原生智能体沙箱</a>、<a href="memory.html">长期记忆</a><br>
+范围：atlas-server（API 与 run 执行）、atlas-cluster、atlas-config、atlas-knowledge 的多副本部署、滚动发布与故障接管。<br>
+不在本期：PostgreSQL / Redis 自身的高可用（主从、Sentinel / Cluster）、多地域部署、多租户隔离。</p>
+
+<div class="callout">
+<b>结论先行：</b>事件流（Redis Stream + 归档）、取消位、挂起 run 的认领（CAS）、MCP 目录、知识库（API + Celery）已经是多副本友好的；真正阻碍横向扩展的是 <b>run 的执行绑在进程里</b>：
+<ol>
+  <li>run 由进程内的 asyncio 任务执行，一段（segment）的消息与事件<b>只在段结束时落库</b>，进程退出即丢失这一段的工作，run 停在 running；</li>
+  <li>会话锁的 TTL 是 <code>max(timeout, 24h) + 120s</code>，持锁进程死掉后，会话最长被锁 24 小时；</li>
+  <li>ACP run 与 bridge 的 WebSocket 连接只能由发起它的进程重连，换个实例接不上；</li>
+  <li>启动时的 Pod 回收、记忆抽取队列、授权缓存失效、cluster 的会话锁都假设「只有一个进程」。</li>
+</ol>
+方案的核心是把 run 从「某个进程的任务」变成「数据库里可被任何实例领取、续跑的工作」：<b>租约（lease）领取 + 每个工具轮次落检查点 + 过期接管 + 优雅停机交接</b>。这与挂起 / 续跑已经在用的「消息表是唯一事实源、run 由多段组成」完全同构，不引入 checkpointer，也不引入第二个状态源。
+</div>
+
+<ol class="toc">
+  <li><a href="#s1">目标与原则</a></li>
+  <li><a href="#s2">现状盘点</a></li>
+  <li><a href="#s3">总体架构</a></li>
+  <li><a href="#s4">run 的调度：领取与租约</a></li>
+  <li><a href="#s5">断点续跑：检查点与接管</a></li>
+  <li><a href="#s6">优雅停机与滚动发布</a></li>
+  <li><a href="#s7">单例任务与跨实例状态</a></li>
+  <li><a href="#s8">其他服务</a></li>
+  <li><a href="#s9">扩缩容与容量</a></li>
+  <li><a href="#s10">可观测性</a></li>
+  <li><a href="#s11">数据模型与接口变更</a></li>
+  <li><a href="#s12">分期</a></li>
+  <li><a href="#s13">风险与限制</a></li>
+</ol>
+
+<!-- ─────────────────────────────────────────────── 1 -->
+<h2 id="s1">1. 目标与原则</h2>
+<table>
+  <tr><th>目标</th><th>衡量</th></tr>
+  <tr><td>任意服务都能跑多个副本，加副本即加容量</td><td>server / config / knowledge 副本数 ≥ 2，压测吞吐随副本数近线性增长</td></tr>
+  <tr><td>滚动发布不打断进行中的 run</td><td>发布期间 run 不失败、不重复执行已完成的工具调用；前端只看到短暂的「重新连接」</td></tr>
+  <tr><td>实例故障（OOM、节点宕机）后 run 自动接管</td><td>接管延迟 ≤ 一个租约周期（默认 30 秒）；丢失的工作 ≤ 一个工具轮次</td></tr>
+  <tr><td>按负载自动扩缩</td><td>API 按连接与 CPU、执行器按排队 run 数扩缩</td></tr>
+</table>
+<p><b>原则（沿用平台既有约定）：</b></p>
+<ul>
+  <li><b>不设到点结束的超时</b>：租约是「进程还活着」的心跳，不是工作时长上限；Agent 跑多久、审批等多久都可以。</li>
+  <li><b>消息表是唯一事实源</b>：不引入 LangGraph checkpointer；检查点就是「把已完成的消息按轮次落库」。</li>
+  <li><b>断联恢复，而不是判失败</b>：进程退出、连接断开都按「可续上」处理，只有续不上时才给出明确的失败原因。</li>
+  <li><b>数据库是排队的唯一真相，Redis 只做唤醒与加速</b>：Redis 丢消息时由定期扫描兜底，不会丢 run。</li>
+</ul>
+
+<!-- ─────────────────────────────────────────────── 2 -->
+<h2 id="s2">2. 现状盘点</h2>
+<table>
+  <tr><th>组件</th><th>现状</th><th>多副本下</th></tr>
+  <tr><td>会话事件流</td><td>Redis Stream（按根会话一条）+ PostgreSQL 归档，按 thread_seq 接力；序号键丢失时按库里水位恢复</td><td><span class="tag ok">可用</span> 提交与订阅落在不同实例也能收到</td></tr>
+  <tr><td>取消</td><td>Redis 取消位，执行循环每步检查；挂起中的 run 由接到请求的实例直接收尾</td><td><span class="tag ok">可用</span></td></tr>
+  <tr><td>挂起 run 的续跑</td><td>子 run 收尾时主动唤醒 + 每个实例周期扫描；<code>claim_for_resume</code> 用 CAS 保证只有一方续上</td><td><span class="tag ok">可用</span></td></tr>
+  <tr><td>SSE 连接上限</td><td>进程级计数（StreamGate），超限立即 503</td><td><span class="tag ok">可用</span> 刻意按进程计，配合负载均衡</td></tr>
+  <tr><td>MCP 目录</td><td>Redis 缓存 + 发现锁</td><td><span class="tag ok">可用</span></td></tr>
+  <tr><td>run 执行</td><td><code>InProcessExecutor</code>：<code>submit</code> 在<b>接到请求的那个进程</b>里起 asyncio 任务；一段的消息、事件、用量在段结束时一次落库</td><td><span class="tag bad">阻塞</span> 进程退出 → 这一段的工作丢失、run 停在 running、无人接管</td></tr>
+  <tr><td>会话锁</td><td>Redis <code>run:lock:{thread}</code>，owner = run，TTL = max(timeout, 24h) + 120s，run 结束时释放</td><td><span class="tag bad">阻塞</span> 持锁进程死掉后会话最长锁 24 小时，用户发不出下一句</td></tr>
+  <tr><td>ACP 连接</td><td>执行该 run 的进程持有到 Pod 内 bridge 的 WebSocket；断线后<b>同一进程</b>重连并 attach（bridge 有 outbox 与确认序号）</td><td><span class="tag warn">部分</span> 换实例无法 attach：turn id 与已确认序号只在内存里</td></tr>
+  <tr><td>启动回收</td><td>lifespan 里 <code>sweep_suspended()</code> + <code>pods.reap(存活会话)</code></td><td><span class="tag warn">部分</span> 每个副本启动都跑一遍 reap；与新会话建 Pod 存在竞态</td></tr>
+  <tr><td>记忆抽取队列</td><td>每个 server 内嵌 worker，<code>BRPOP</code> 消费</td><td><span class="tag warn">部分</span> 多消费者没问题，但取出即删，抽取中途进程退出则任务丢失</td></tr>
+  <tr><td>授权快照缓存</td><td>进程内缓存（TTL = authz_snapshot_ttl_s），撤销用户时只清本进程</td><td><span class="tag warn">部分</span> 其他副本在 TTL 内仍放行已撤销的用户</td></tr>
+  <tr><td>atlas-cluster</td><td>单副本，全仓唯一持有 K8s 写权限；同一会话 Pod 的 ensure 用<b>进程内</b> asyncio 锁串行</td><td><span class="tag warn">部分</span> 多副本时并发 ensure 会互相覆盖 Secret（2026-10-13 撞到过的 401）</td></tr>
+  <tr><td>atlas-config</td><td>无状态 API</td><td><span class="tag ok">可用</span></td></tr>
+  <tr><td>atlas-knowledge</td><td>API 与 Celery worker 已拆分；任务 <code>acks_late</code>；主体展开结果进程内短缓存</td><td><span class="tag ok">可用</span></td></tr>
+  <tr><td>数据库连接</td><td>每个进程一个连接池</td><td><span class="tag warn">部分</span> 副本数 × 池大小可能超过 PostgreSQL 连接上限</td></tr>
+</table>
+
+<!-- ─────────────────────────────────────────────── 3 -->
+<h2 id="s3">3. 总体架构</h2>
+<div class="flow2">            浏览器 / 业务系统 / TeamFlow
+                     │  HTTP · SSE
+              ┌──────▼──────┐
+              │  负载均衡    │   无会话粘滞：任何请求可落在任何实例
+              └──────┬──────┘
+        ┌────────────┼────────────┐
+   ┌────▼────┐  ┌────▼────┐  ┌────▼────┐
+   │ api #1  │  │ api #2  │  │ api #N  │   atlas-server --role api
+   └────┬────┘  └────┬────┘  └────┬────┘   建 run（status=queued）、读写会话、SSE 订阅
+        │ 写库 + 唤醒 │             │
+        ▼            ▼             ▼
+   ┌──────────────────────────────────────┐
+   │ PostgreSQL：run（排队、租约、检查点） │◀──── 唯一真相
+   │ Redis：唤醒广播 · 事件流 · 取消位 · 锁 │◀──── 唤醒与加速
+   └──────────────────────────────────────┘
+        ▲ 领取 / 续租 / 落检查点 / 发事件
+   ┌────┴─────┐ ┌──────────┐ ┌──────────┐
+   │ runner #1│ │ runner #2│ │ runner #M│   atlas-server --role runner
+   └────┬─────┘ └────┬─────┘ └────┬─────┘   执行 run（native 在进程内，acp 连 Pod 内 bridge）
+        │            │            │
+        ▼            ▼            ▼
+   模型网关 · MCP · atlas-cluster（会话 Pod） · atlas-knowledge · mem0</div>
+<p><b>拆分 API 与执行器（runner）</b>：同一镜像、同一代码，启动参数选择角色；小规模部署可以 <code>--role all</code> 合在一个进程（即现在的形态）。拆开的理由：</p>
+<ul>
+  <li><b>负载形态不同</b>：API 是大量长连接（SSE）与短请求，执行器是模型流式调用、工具执行与上下文压缩，CPU 与内存特征完全不同，各自独立扩缩更划算；</li>
+  <li><b>发布互不影响</b>：发 API 不碰正在跑的 run；发执行器时 run 走交接（§6），用户的 SSE 连接不断；</li>
+  <li><b>故障隔离</b>：执行器 OOM（例如超长上下文）不会带走所有用户的 SSE 连接。</li>
+</ul>
+<p>API 与执行器之间<b>不直接调用</b>：API 只写库并发唤醒，执行器只从库里领取。两者都可以任意加副本，彼此不需要知道对方有几个。</p>
+
+<!-- ─────────────────────────────────────────────── 4 -->
+<h2 id="s4">4. run 的调度：领取与租约</h2>
+<h3>4.1 生命周期</h3>
+<div class="flow2">  POST /runs ──▶ queued ──领取（CAS + 租约）──▶ running ──段结束──▶ suspended / 终态
+                    ▲                              │ 续租（每 lease/3）
+                    │                              │
+                    ├──── 交接（优雅停机，§6）◀─────┤
+                    └──── 租约过期被扫描接管（§5）◀─┘     接管次数记入 run.takeovers</div>
+<h3>4.2 领取</h3>
+<ul>
+  <li><b>入队</b>：API 在同一事务里创建 run（<code>queued</code>）并占会话锁，<b>事务提交后</b>向 Redis 发唤醒（<code>run:wake</code>，发布 / 订阅）。唤醒只是「有新活了」，丢了也没关系。</li>
+  <li><b>领取</b>：执行器收到唤醒或定期扫描（默认 5 秒）时，用一条 CAS 抢 run：
+<pre><code>UPDATE run SET status = 'running', owner = :instance, lease_until = now() + :lease,
+               claimed_at = now()
+ WHERE id = (SELECT id FROM run
+              WHERE status = 'queued' OR (status = 'running' AND lease_until &lt; now())
+              ORDER BY created_at
+              FOR UPDATE SKIP LOCKED LIMIT 1)
+RETURNING id</code></pre>
+  <code>SKIP LOCKED</code> 让多个执行器并发领取互不阻塞；第二个条件就是接管（§5）。</li>
+  <li><b>本地并发上限</b>：每个执行器有 <code>max_concurrent_runs</code>（按内存估算，默认 32），满了就不再领取，自然形成背压，排队的 run 由其他实例或新扩出来的实例领走。</li>
+  <li><b>委派的子 run</b>：同样只入队不直接执行；父 run 的原地短暂等待改为订阅子 run 的终止事件（事件流本来就在 Redis 里），等待窗口内拿到结论就继续，超过窗口就挂起——与现在的语义一致，只是子 run 可能在别的实例上跑。</li>
+</ul>
+<h3>4.3 租约</h3>
+<ul>
+  <li>持有者每 <code>lease / 3</code>（默认 10 秒）续租一次：<code>UPDATE run SET lease_until = now() + :lease WHERE id = :run AND owner = :me</code>，返回 0 行说明已被别人接管，立即停止本地执行（防止「假死后复活」的双写）。</li>
+  <li><b>租约是心跳，不是时长上限</b>：只要进程活着就一直续，run 跑一小时也不会被抢。</li>
+  <li>续租批量进行（一个执行器一条 SQL 续自己持有的全部 run），租约数量对数据库的压力与 run 数无关。</li>
+</ul>
+<h3>4.4 会话锁跟随租约</h3>
+<p>会话锁仍然保证「一个会话同时只有一个活跃 run」，但不再用 24 小时的长 TTL：锁的 owner 仍是 run，TTL 改为与租约同长，由持租约的执行器一并续期。持有者死掉后，锁在一个租约周期内过期；接管者领取 run 时重新占锁（owner 不变，仍是同一个 run），用户在此期间发新消息会看到「上一轮仍在进行」，而不是被锁 24 小时。挂起中的 run 不持有执行器，会话锁由「run 处于 suspended」这个库内状态表达，不依赖 Redis 键的存活。</p>
+
+<!-- ─────────────────────────────────────────────── 5 -->
+<h2 id="s5">5. 断点续跑：检查点与接管</h2>
+<p>接管的前提是「接手的实例知道做到了哪」。native 与 acp 的事实源不同，分开处理。</p>
+<h3>5.1 native：每个工具轮次落一次检查点</h3>
+<p>现在一段的消息在段结束时才落库。改为<b>以工具轮次为单位增量落库</b>：模型输出 tool_use、全部工具结果返回后，把这一轮的 assistant 消息与 tool 消息、这一轮的事件归档、累计用量<b>在一个事务里</b>写入，并推进 <code>run.checkpoint_seq</code>。段结束时只补写收尾。</p>
+<div class="flow2">  一段 = [模型调用 → 工具执行]* → 段结束
+                        └─ 每轮结束：消息 + 事件归档 + 用量 一个事务落库（检查点）
+
+  接管：从消息表重建历史（与挂起续跑同一条路径）→ 从下一次模型调用继续</div>
+<table>
+  <tr><th>中断时刻</th><th>接管后的处理</th><th>丢失的工作</th></tr>
+  <tr><td>模型流式输出中</td><td>从上一个检查点重建历史，重新调用模型；向前端发 <code>run.resumed</code>，前端丢掉未完成的那段文本</td><td>一次模型调用（重新计费）</td></tr>
+  <tr><td>工具执行中（已拿到部分结果）</td><td>这一轮的 tool_use 没有落库，整轮作废，重新调用模型——模型通常会再发起同样的调用</td><td>本轮已执行的工具；<b>有副作用的工具可能被再执行一次</b>（见下）</td></tr>
+  <tr><td>两轮之间</td><td>直接从下一次模型调用继续</td><td>无</td></tr>
+  <tr><td>压缩（摘要生成）中</td><td>摘要未落库，重新判断是否需要压缩</td><td>一次摘要调用</td></tr>
+</table>
+<p><b>副作用工具的去重</b>：对写文件、执行命令、调外部系统这类工具，在<b>执行前</b>先落一条「意图」记录（tool_call_id、工具名、参数哈希），执行完再落结果。接管时发现有意图、没结果的调用，不盲目重放，而是补一条工具结果「执行被中断，结果未知，请先检查当前状态再决定是否重试」交给模型——与 <code>PatchToolCallsMiddleware</code> 处理悬空调用的方式一致。工具也可以声明 <code>idempotent=true</code>（如读文件、检索），这类直接重放。</p>
+<h3>5.2 acp：bridge 是持久的一方，接管 = 重新 attach</h3>
+<p>ACP run 真正的执行在会话 Pod 里：Claude Code 不因 server 实例退出而停止，bridge 的 outbox 保存未确认的事件。现在 turn id 与已确认的序号只在执行进程的内存里，改为写入 run 行（<code>acp_turn_id</code>、<code>acp_acked_seq</code>，确认后随租约续期一并更新）。接管实例：</p>
+<ol>
+  <li>经 atlas-cluster 取得 Pod 地址，重连 bridge；</li>
+  <li>以 <code>acp_turn_id</code> 调用 attach，从 <code>acp_acked_seq</code> 之后重放 outbox，翻译成平台事件继续发布——同进程断线重连已经走这条路，只是参数改从库里读；</li>
+  <li>如果这一轮在断开期间已经结束，outbox 里有收尾事件，按正常收尾落库；如果 Pod 已不存在，以「执行环境已回收」失败收尾。</li>
+</ol>
+<p>acp 不会重复执行工具：工具在 Pod 里只执行一次，接管只是把事件流接回来。</p>
+<h3>5.3 事件序号与前端</h3>
+<ul>
+  <li>会话序号（thread_seq）已在 Redis 分配并以库内水位兜底，接管后继续分配，不重号；检查点之后发布到 Redis、但未归档的事件，接管时从 Redis 流补归档（流里有、库里没有的序号）。</li>
+  <li>前端 SSE 断开后带游标重连（已有能力），落到哪个 API 实例都一样；新增的 <code>run.resumed</code> 事件让对话区把正在流式输出的消息复位，并提示「已在其他节点继续」。</li>
+</ul>
+
+<!-- ─────────────────────────────────────────────── 6 -->
+<h2 id="s6">6. 优雅停机与滚动发布</h2>
+<p>滚动发布时让 run「主动交接」，而不是等租约过期被动接管——交接零等待，且 native 不丢工作。</p>
+<table>
+  <tr><th>步骤</th><th>API 实例</th><th>执行器实例</th></tr>
+  <tr><td>收到 SIGTERM</td><td>readiness 置为失败，负载均衡摘掉流量</td><td>停止领取新 run</td></tr>
+  <tr><td>处理在途工作</td><td>向每个 SSE 连接发 <code>retry</code> 提示后关闭，前端带游标重连到其他实例；短请求正常处理完</td><td>native：在<b>下一个安全点</b>（当前工具轮次结束、检查点落库之后）停下，run 置回 <code>queued</code>（<code>handoff</code>），释放租约，立即被其他实例领取；<br>acp：直接断开 bridge 连接、写回已确认序号并置回 <code>queued</code>，Pod 里的那一轮照常进行</td></tr>
+  <tr><td>收尾</td><td>退出</td><td>全部交接后退出；<code>terminationGracePeriodSeconds</code> 内没等到安全点的（例如一个工具执行了很久），进程被强杀后走租约过期接管，最多丢这一轮</td></tr>
+</table>
+<div class="callout warn"><b>宽限期不是 run 的超时：</b>宽限期限制的是「进程多久必须退出」，不是 run 能跑多久。超过宽限期的 run 不会失败，只是从「主动交接」退化为「过期接管」。建议宽限期设为 60–120 秒，覆盖绝大多数工具调用。</div>
+
+<!-- ─────────────────────────────────────────────── 7 -->
+<h2 id="s7">7. 单例任务与跨实例状态</h2>
+<h3>7.1 单例任务：租约选主</h3>
+<p>Pod 孤儿回收、记忆死信重试这类「全局只需要一个人做」的任务，从 lifespan 里移出，交给<b>维护者（maintainer）</b>：每个执行器都参与竞选，用 Redis <code>SET maintainer NX PX</code> 加续租选出一个，持有者定期执行，进程退出后其他实例接任。挂起 run 的周期扫描本身靠 CAS 已幂等，保留在每个执行器上（多扫几遍只是多几次查询）。</p>
+<table>
+  <tr><th>任务</th><th>现在</th><th>改为</th></tr>
+  <tr><td>Pod 孤儿回收</td><td>每个副本启动时调一次</td><td>维护者每 10 分钟一次；只回收「会话已删除且超过保留期」的 Pod，避免与正在建 Pod 的会话竞态</td></tr>
+  <tr><td>挂起 run 补唤醒</td><td>每个实例周期扫描</td><td>不变（CAS 幂等）</td></tr>
+  <tr><td>租约过期接管</td><td>无</td><td>每个执行器的领取扫描自带（§4.2）</td></tr>
+  <tr><td>记忆死信重试</td><td>无</td><td>维护者定期把死信按退避重新入队</td></tr>
+</table>
+<h3>7.2 记忆抽取队列：可靠消费</h3>
+<p><code>BRPOP</code> 改为 <code>BLMOVE queue → processing:{instance}</code>：取出时原子地放进本实例的处理中列表，处理完再删除。实例退出后，维护者把「所属实例已不在」的处理中列表搬回主队列。抽取本身按 run 去重（同一 run 只抽一次），重复投递无害。</p>
+<h3>7.3 进程内缓存的失效</h3>
+<table>
+  <tr><th>缓存</th><th>问题</th><th>做法</th></tr>
+  <tr><td>授权快照（server）</td><td>撤销用户只清本进程</td><td>撤销时经 Redis 发布 <code>authz:invalidate {user}</code>，各实例订阅后清本地；TTL 仍保留作为兜底</td></tr>
+  <tr><td>introspect 结果（config / knowledge）</td><td>同上</td><td>订阅同一频道</td></tr>
+  <tr><td>主体展开（knowledge）</td><td>部门 / 角色变化后最长 60 秒生效</td><td>可接受，不改</td></tr>
+  <tr><td>Agent 版本、模型实例、MCP 连接</td><td>按 key 不可变或有自身 TTL</td><td>不改</td></tr>
+</table>
+
+<!-- ─────────────────────────────────────────────── 8 -->
+<h2 id="s8">8. 其他服务</h2>
+<table>
+  <tr><th>服务</th><th>做法</th></tr>
+  <tr><td>atlas-cluster</td><td>
+    会话 Pod 的 ensure 串行从进程内锁改为 Redis 锁（<code>pod:ensure:{thread}:{kind}</code>，带续租），多副本时同一会话仍串行；Secret 写入加 resourceVersion 乐观并发，二次防线。<br>
+    cluster 的 QPS 很低，本期目标是 <b>2 副本做高可用</b>而不是扩容量；K8s 写权限仍只在这一个服务里。</td></tr>
+  <tr><td>atlas-config</td><td>已无状态，直接多副本；只需订阅授权失效频道（§7.3）。</td></tr>
+  <tr><td>atlas-knowledge</td><td>API 与 worker 已拆分，直接加副本；索引版本重建是 Celery 任务，<code>acks_late</code> 保证 worker 被杀时重新投递（重建是幂等覆盖写）。</td></tr>
+  <tr><td>前端（frontends）</td><td>静态资源与 Next 服务端无状态，直接多副本。</td></tr>
+  <tr><td>Pod 内 bridge</td><td>不变：它是 ACP 的持久方，接管能力依赖它的 outbox 与 attach（§5.2）。</td></tr>
+</table>
+<h3>8.1 数据库连接</h3>
+<p>副本数上来以后，「副本数 × 连接池大小」很快超过 PostgreSQL 的连接上限。在服务与数据库之间加 <b>PgBouncer（transaction 模式）</b>，各进程的池调小（API 10、执行器 20）。注意 transaction 模式下不能用会话级特性：本平台没有用 LISTEN/NOTIFY 与会话级 advisory lock，<code>SELECT … FOR UPDATE SKIP LOCKED</code> 在事务内，兼容。</p>
+
+<!-- ─────────────────────────────────────────────── 9 -->
+<h2 id="s9">9. 扩缩容与容量</h2>
+<table>
+  <tr><th>角色</th><th>扩缩依据</th><th>缩容</th></tr>
+  <tr><td>api</td><td>HPA：CPU 与每实例 SSE 连接数（StreamGate 计数作为自定义指标）</td><td>摘流量后 SSE 重连到其他实例（§6）</td></tr>
+  <tr><td>runner</td><td>KEDA：排队 run 数（<code>status='queued'</code>）与「运行中 run / 本地并发上限」</td><td>缩容即优雅停机交接，不中断 run</td></tr>
+  <tr><td>knowledge-worker</td><td>KEDA：Celery 队列长度</td><td>Celery 正常停机</td></tr>
+  <tr><td>cluster</td><td>固定 2 副本</td><td>—</td></tr>
+</table>
+<p><b>容量估算的单位是「并发 run」而不是 QPS</b>：一个 native run 常驻的是上下文（几十 KB 到几 MB 的消息）与流式连接，主要耗内存与模型网关并发；acp run 在执行器里只是一条 WebSocket 与事件翻译，开销很小，真正的资源在会话 Pod。<code>max_concurrent_runs</code> 按 native 估，acp 单独计数、上限放宽。</p>
+
+<!-- ─────────────────────────────────────────────── 10 -->
+<h2 id="s10">10. 可观测性</h2>
+<ul>
+  <li><b>run 根 span</b> 增加 <code>atlas.instance</code>、<code>atlas.takeovers</code>；每次接管或交接开一个新段，span 上记 <code>resumed_from</code>（交接 / 过期接管）与丢弃的工作量（重放的模型调用数）。</li>
+  <li><b>指标</b>：排队 run 数与最长排队时间、领取延迟、租约续期失败次数、接管次数（按原因）、交接耗时、检查点落库耗时、各实例运行中 run 数。</li>
+  <li><b>告警</b>：接管次数突增（实例频繁崩溃）、排队时间持续上升（执行器不足）、租约续期失败（数据库抖动）。</li>
+</ul>
+
+<!-- ─────────────────────────────────────────────── 11 -->
+<h2 id="s11">11. 数据模型与接口变更</h2>
+<table>
+  <tr><th>表 / 接口</th><th>变更</th></tr>
+  <tr><td><code>run</code></td><td>新增 <code>owner</code>（实例 id）、<code>lease_until</code>、<code>claimed_at</code>、<code>takeovers</code>、<code>checkpoint_seq</code>、<code>acp_turn_id</code>、<code>acp_acked_seq</code>；索引 <code>(status, lease_until)</code>、<code>(status, created_at)</code></td></tr>
+  <tr><td><code>tool_intent</code>（新表）</td><td>run_id、tool_call_id、工具名、参数哈希、状态（started / done）；副作用工具执行前写入</td></tr>
+  <tr><td>事件</td><td>新增 <code>run.resumed</code>（data：原因、丢弃的模型调用数）；<code>run.handoff</code> 只进归档、不推前端</td></tr>
+  <tr><td>工具声明</td><td>新增 <code>idempotent</code> 属性（默认 false），内置的只读工具标为 true</td></tr>
+  <tr><td>启动参数</td><td><code>--role api | runner | all</code>；执行器配置 <code>lease_s</code>、<code>max_concurrent_runs</code>、<code>claim_scan_s</code></td></tr>
+  <tr><td>RunExecutor 协议</td><td><code>submit</code> 改为「入队 + 唤醒」；新增 <code>Runner</code>（领取、续租、交接），现有 <code>InProcessExecutor</code> 的执行循环原样搬入 Runner——HookAssembly 与 AgentRuntime 不改</td></tr>
+</table>
+
+<!-- ─────────────────────────────────────────────── 12 -->
+<h2 id="s12">12. 分期</h2>
+<table>
+  <tr><th>阶段</th><th>内容</th><th>退出标准</th></tr>
+  <tr><td><b>P1 可接管</b></td><td>run 租约与领取（仍 <code>--role all</code>）；会话锁跟随租约；native 按工具轮次落检查点；acp 持久化 turn 与确认序号、跨实例 attach；优雅停机交接；维护者选主（Pod 回收移出 lifespan）；记忆队列可靠消费；授权缓存失效广播；server 2 副本</td><td>评测集 L1 在「执行中随机杀实例」与「滚动发布」两种扰动下成功率不下降、平台错误为 0；副作用工具不出现重复执行</td></tr>
+  <tr><td><b>P2 可扩容</b></td><td>API / 执行器拆分部署；KEDA 按排队数扩缩执行器；HPA 扩 API；PgBouncer；cluster Redis 锁与 2 副本；config / knowledge 多副本</td><td>压测：并发 run 随执行器副本数近线性增长；扩缩容过程中 run 零失败</td></tr>
+  <tr><td><b>P3 深化</b></td><td>副作用工具意图记录覆盖全部内置工具与 MCP 工具（按工具声明）；按租户或 Agent 的执行器分组与配额；Redis Sentinel、PostgreSQL 主从切换演练</td><td>故障演练（Redis 主从切换、数据库切换）中 run 不丢</td></tr>
+</table>
+<p>P1 的验证直接复用 Agent 评测体系：在 <code>make regress</code> 的场景集上加两种扰动（运行中随机删除 server Pod、执行 <code>kubectl rollout restart</code>），对比无扰动基线，判定条件就是成功率与平台错误数。</p>
+
+<!-- ─────────────────────────────────────────────── 13 -->
+<h2 id="s13">13. 风险与限制</h2>
+<table>
+  <tr><th>风险</th><th>缓解</th></tr>
+  <tr><td>native 中断时副作用工具被重复执行</td><td>执行前写意图、接管时不盲目重放（§5.1）；只读工具声明幂等直接重放</td></tr>
+  <tr><td>假死后复活的实例与接管者双写</td><td>续租返回 0 行即停止本地执行；落检查点时校验 <code>owner = 本实例</code>，不是自己的 run 不写</td></tr>
+  <tr><td>接管时重新调用模型的成本</td><td>检查点粒度是工具轮次，最多重放一次模型调用；交接走安全点，正常发布零重放</td></tr>
+  <tr><td>每轮落检查点增加数据库写入</td><td>一轮一个事务，批量写消息与事件；相比模型调用的耗时可以忽略，落库耗时进指标</td></tr>
+  <tr><td>Redis 不可用时唤醒与事件流中断</td><td>领取靠定期扫描兜底（数据库为真相）；事件流中断期间前端退化为轮询会话状态（P3）</td></tr>
+  <tr><td>ACP Pod 在 server 断开期间被回收</td><td>Pod 回收只针对已删除会话（§7.1）；会话 Pod 的空闲回收以「最近活动」为准，run 进行中的 Pod 持续有活动</td></tr>
+</table>
+</main>
+</body>
+</html>

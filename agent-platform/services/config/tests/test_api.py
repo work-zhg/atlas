@@ -7,9 +7,7 @@ from collections.abc import AsyncIterator
 import httpx
 import pytest
 from atlas_config.api.app import create_app
-from atlas_config.settings import get_settings
 from config_testkit import make_zip, skill_files
-from pydantic import SecretStr
 
 
 @pytest.fixture
@@ -25,7 +23,7 @@ def _upload(client: httpx.AsyncClient, files: dict[str, bytes], *, user: str = "
         "/config/skills",
         files={"file": ("skill.zip", make_zip(files), "application/zip")},
         data={"source": "builtin", **form},
-        headers={"X-User-Id": user},
+        headers={"X-Uid": user},
     )
 
 
@@ -69,13 +67,13 @@ async def test_review_flow_over_http(client: httpx.AsyncClient) -> None:
     selfie = await client.post(
         f"/config/skill-uploads/{upload['id']}/approve",
         json={"note": "ok"},
-        headers={"X-User-Id": "alice"},
+        headers={"X-Uid": "alice"},
     )
     assert selfie.status_code == 403
     ok = await client.post(
         f"/config/skill-uploads/{upload['id']}/approve",
         json={"note": "脚本只 echo"},
-        headers={"X-User-Id": "bob"},
+        headers={"X-Uid": "bob"},
     )
     assert ok.status_code == 200 and ok.json()["version"] == 1
 
@@ -91,14 +89,9 @@ async def test_status_actions(client: httpx.AsyncClient) -> None:
     assert again.status_code == 409
 
 
-async def test_internal_token(client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(get_settings(), "internal_token", SecretStr("s3cret"))
-    assert (await client.get("/internal/skills/catalog")).status_code == 401
-    # ★ 用户身份不能打开内部接口
-    assert (
-        await client.get("/internal/skills/catalog", headers={"X-User-Id": "admin"})
-    ).status_code == 401
-    ok = await client.get("/internal/skills/catalog", headers={"Authorization": "Bearer s3cret"})
+async def test_internal_needs_no_token(client: httpx.AsyncClient) -> None:
+    """内网免令牌（内网身份传递 §3）：/internal 只在内网可达（网关 404），不再校验服务间令牌。"""
+    ok = await client.get("/internal/skills/catalog", headers={"X-Caller-App": "atlas"})
     assert ok.status_code == 200
 
 

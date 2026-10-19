@@ -1,9 +1,9 @@
-"""子会话的 spec 派生与 `task` 的委派形态。
+"""子会话的 spec 派生与 `task` 的形态。
 
-这两件事一起构成了 subagent 重设计在 engine 侧的全部改动面：
+这两件事一起构成了 SubAgent 重设计在 engine 侧的全部改动面：
 
   spec_for_subagent   子会话的 run 用哪份配置跑
-  subagent_delegate   `task` 是在图内跑子图，还是把活交出去
+  SubAgentConfig      `task` 是在图内跑子图，还是让 spawner 起子 run
 
 红了大多意味着「子会话不再走与普通 run 同一条链路」—— 而那条对称性正是
 「子会话 = thread」这个选择的全部回报。
@@ -12,8 +12,7 @@
 from __future__ import annotations
 
 import pytest
-from atlas_engine.contracts import InvalidSpec
-from atlas_server.domain.spec import (
+from atlas_agent.domain.spec import (
     AgentSpec,
     CompactionSpec,
     LimitSpec,
@@ -22,6 +21,7 @@ from atlas_server.domain.spec import (
     SubAgentSpec,
     spec_for_subagent,
 )
+from atlas_engine.contracts import InvalidSpec
 
 MODEL = ModelSpec(model="claude-sonnet-5")
 HAIKU = ModelSpec(model="claude-haiku-4-5")
@@ -35,7 +35,7 @@ def _parent(**sub_kwargs) -> AgentSpec:
         model=MODEL,
         tool_names=("filesystem", "bash"),
         skills=(SkillRefSpec("writing", 3),),
-        limits=LimitSpec(max_steps=17, timeout_s=99, max_subagent_depth=2),
+        limits=LimitSpec(max_steps=17, timeout_s=99),
         compaction=CompactionSpec(trigger_ratio=0.8, target_ratio=0.3),
         subagents=(
             SubAgentSpec(
@@ -65,19 +65,30 @@ def test_child_spec_is_a_full_agent_spec() -> None:
     assert child.name == "coder"
     assert child.system_prompt == "你是 coder"
     assert child.model == HAIKU
-    assert child.tool_names == ("filesystem",)
+    # 自己的工具 + task（native SubAgent 带着名录，可以继续派 SubAgent）
+    assert child.tool_names == ("filesystem", "task")
     # slug 带上父的：日志与事件里一眼看出这是谁的哪个子智能体
     assert child.slug == "assistant/coder"
 
 
-def test_delegation_depth_is_capped_structurally() -> None:
-    """子智能体不能再委派 —— 两道保险，不靠提示词。
+def test_a_native_subagent_keeps_the_roster() -> None:
+    """★ native SubAgent 带着**同一份名录**：它也装 task，可以继续派 SubAgent，层数不设上限。
 
-    会话级模型下嵌套委派会让「哪个会话恢复哪个」变成一棵要遍历的树。
+    名录只有根 agent 版本快照里这一份，孙 run 也从根快照按名字派生 —— 每一层看到同一张表。
+    跑飞的递归由整棵树的累计上限兜住（SubAgentService），不靠深度。
     """
-    child = spec_for_subagent(_parent(), "coder")
+    parent = _parent()
+    child = spec_for_subagent(parent, "coder")
+    assert child.subagents == parent.subagents
+    assert spec_for_subagent(child, "coder").subagents == parent.subagents
+
+
+def test_an_acp_subagent_has_no_roster() -> None:
+    """acp SubAgent 不带名录：它的工具面由 CLI 自带，task 装不进它的图（AgentSpec.validate）。"""
+    from atlas_agent.domain.spec import CliSpec
+
+    child = spec_for_subagent(_parent(kind="acp", cli=CliSpec(cli_type="claude-code")), "coder")
     assert child.subagents == ()
-    assert child.limits.max_subagent_depth == 0
 
 
 def test_child_carries_its_own_skills_not_the_parents() -> None:
@@ -93,11 +104,11 @@ def test_child_carries_its_own_skills_not_the_parents() -> None:
     assert parent.skills == (SkillRefSpec("writing", 3),)
 
 
-def test_limits_are_inherited_except_the_depth_cap() -> None:
-    """步数、超时、审批名单整体继承 —— 委派不是逃避治理的口子。"""
-    child = spec_for_subagent(_parent(), "coder")
-    assert child.limits.max_steps == 17
-    assert child.limits.timeout_s == 99
+def test_limits_are_inherited() -> None:
+    """步数、超时、审批名单整体继承 —— 派 SubAgent 不是逃避治理的口子。"""
+    parent = _parent()
+    child = spec_for_subagent(parent, "coder")
+    assert child.limits == parent.limits
 
 
 def test_compaction_falls_back_to_the_parents() -> None:
@@ -125,17 +136,81 @@ def test_session_mode_defaults_to_persistent() -> None:
     assert _parent().subagents[0].session_mode == "persistent"
 
 
-# ──────────────────────────────────────────────── task 的委派形态
+# ──────────────────────────────────────────────── task 的形态
 
 
-class _Gateway:
-    """DelegationProtocol 的测试实现 —— 记录调用并按脚本返回。"""
+def _caller(**over) -> object:
+    """会派 coder 的父模型：第一轮发 task。"""
+    import json
 
-    def __init__(self, fn):
-        self._fn = fn
+    from langchain_core.messages import AIMessageChunk
 
-    async def delegate(self, task: str, name: str, *, fresh: bool = False) -> str:
-        return await self._fn(task, name, fresh)
+    from .fakes import TurnModel, tool_call_chunk
+
+    args = {"description": "修那三个用例", "subagent_type": "coder", **over}
+    return TurnModel(
+        scripts=[
+            [tool_call_chunk("task", json.dumps(args, ensure_ascii=False), "c1")],
+            [AIMessageChunk(content="好了")],
+        ]
+    )
+
+
+@pytest.mark.anyio
+async def test_task_spawns_a_sub_run_instead_of_running_a_subgraph() -> None:
+    """`task` 只把三个标量交给 spawner，不跑任何子图，本段随即挂起。
+
+    ★ 这条是整个改造的接缝。红了说明 kernel 又开始在主图的协程里跑 SubAgent ——
+      于是子会话、子 run、独立事件、独立审批全部失效。
+    """
+    from uuid import uuid4
+
+    from atlas_agent.domain.events import EventType
+
+    from .fakes import Spawner
+    from .graphs import run_agent
+
+    spawner = Spawner()
+    events = [
+        e
+        async for e in run_agent(
+            _parent(), _caller(), run_id=uuid4(), input_content="修一下", spawner=spawner
+        )
+    ]
+    assert spawner.calls == [("coder", "修那三个用例", False)]
+    assert events[-1].type is EventType.RUN_SUSPENDED
+
+
+@pytest.mark.anyio
+async def test_fresh_reaches_the_spawner() -> None:
+    """`fresh=True` 是模型可用的出口（设计 §04），不能在工具层被吃掉。"""
+    from uuid import uuid4
+
+    from .fakes import Spawner
+    from .graphs import run_agent
+
+    spawner = Spawner()
+    async for _ in run_agent(
+        _parent(), _caller(fresh=True), run_id=uuid4(), input_content="重来", spawner=spawner
+    ):
+        pass
+    assert spawner.calls[0][2] is True
+
+
+@pytest.mark.anyio
+async def test_the_task_tool_body_never_runs() -> None:
+    """★ task 的全部行为在 SubAgentMiddleware.awrap_tool_call 里，工具函数只提供 schema。
+
+    它被直接执行就说明中间件没接住 —— 比如有人把 SubAgentMiddleware 挪出了工具调用链。
+    """
+    from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+
+    from .fakes import Spawner
+    from .graphs import build_graph
+
+    agent = build_graph(_parent(), GenericFakeChatModel(messages=iter([])), spawner=Spawner())
+    with pytest.raises(RuntimeError, match="SubAgentMiddleware"):
+        await _task_tool(agent).ainvoke({"description": "x", "subagent_type": "coder"})
 
 
 def _task_tool(agent) -> object:
@@ -145,102 +220,18 @@ def _task_tool(agent) -> object:
     raise AssertionError("图里没有 task 工具")
 
 
-@pytest.mark.anyio
-async def test_task_calls_the_delegate_instead_of_running_a_subgraph() -> None:
-    """注入 delegate 后 `task` 只转发三个标量，不跑任何子图。
+def test_no_general_purpose_subagent_is_added() -> None:
+    """不补 general-purpose。
 
-    ★ 这条是整个改造的接缝。红了说明 kernel 又开始在主图的协程里跑子智能体 ——
-      于是子会话、子 run、独立事件流、独立审批全部失效。
+    它在 server 的 AgentSpec 里没有对应的 SubAgentSpec，派过去会在解析
+    子会话配置时失败 —— 模型看得见一个注定报错的 SubAgent，每次尝试烧一轮 token。
     """
     from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 
-    from tests.graphs import build_graph
+    from .fakes import Spawner
+    from .graphs import build_graph
 
-    seen: list[tuple[str, str, bool]] = []
-
-    async def delegate(description: str, name: str, fresh: bool) -> str:
-        seen.append((description, name, fresh))
-        return "子智能体的结论"
-
-    agent = build_graph(
-        _parent(),
-        GenericFakeChatModel(messages=iter([])),
-        subagents=_Gateway(delegate),
-    )
-    tool = _task_tool(agent)
-
-    result = await tool.ainvoke(
-        {"description": "修那三个用例", "subagent_type": "coder", "fresh": False}
-    )
-
-    assert seen == [("修那三个用例", "coder", False)]
-    # 返回的是纯文本，不是 Command —— 子会话的状态归子会话，
-    # 主线程只看见结论（设计 §02）。
-    assert result == "子智能体的结论"
-
-
-@pytest.mark.anyio
-async def test_fresh_reaches_the_delegate() -> None:
-    """`fresh=True` 是模型可用的出口（设计 §04），不能在工具层被吃掉。"""
-    from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
-
-    from tests.graphs import build_graph
-
-    seen: list[bool] = []
-
-    async def delegate(description: str, name: str, fresh: bool) -> str:
-        seen.append(fresh)
-        return "ok"
-
-    agent = build_graph(
-        _parent(), GenericFakeChatModel(messages=iter([])), subagents=_Gateway(delegate)
-    )
-    await _task_tool(agent).ainvoke(
-        {"description": "重来", "subagent_type": "coder", "fresh": True}
-    )
-    assert seen == [True]
-
-
-@pytest.mark.anyio
-async def test_delegation_failure_becomes_tool_text_not_a_run_failure() -> None:
-    """委派失败回成工具错误文本，不冒泡。
-
-    撞并发上限、同轮重名都是**可恢复的局部问题**：主 agent 能改派、
-    合并任务或自己动手。让它冒泡等于把一次局部问题升级成全局故障。
-    """
-    from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
-
-    from tests.graphs import build_graph
-
-    async def delegate(description: str, name: str, fresh: bool) -> str:
-        msg = "coder 已在本轮中被委派"
-        raise RuntimeError(msg)
-
-    agent = build_graph(
-        _parent(), GenericFakeChatModel(messages=iter([])), subagents=_Gateway(delegate)
-    )
-    result = await _task_tool(agent).ainvoke({"description": "x", "subagent_type": "coder"})
-
-    assert isinstance(result, str)
-    assert "coder 已在本轮中被委派" in result
-
-
-def test_delegating_mode_does_not_add_a_general_purpose_subagent() -> None:
-    """委派模式下不补 general-purpose。
-
-    它在 server 的 AgentSpec 里没有对应的 SubAgentSpec，委派过去会在解析
-    子会话配置时失败 —— 模型看得见一个注定报错的子智能体，每次尝试烧一轮 token。
-    """
-    from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
-
-    from tests.graphs import build_graph
-
-    async def delegate(description: str, name: str, fresh: bool) -> str:
-        return ""
-
-    agent = build_graph(
-        _parent(), GenericFakeChatModel(messages=iter([])), subagents=_Gateway(delegate)
-    )
+    agent = build_graph(_parent(), GenericFakeChatModel(messages=iter([])), spawner=Spawner())
     assert "general-purpose" not in _task_tool(agent).description
 
 

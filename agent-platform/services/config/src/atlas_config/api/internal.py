@@ -2,17 +2,17 @@
 
 ★ 只返回 published / disabled / revoked。待审查与被拒的上传在这里**不存在** ——
   运行时拿不到草稿，不是靠它自觉过滤，而是接口根本不给。
+★ 只在内网可达：网关一律 404。内网免令牌（内网身份传递 §3），不再校验服务间令牌。
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 
-from ..auth import require_internal
 from ..schemas import McpServerOut, RevokedSkill, SkillCatalogItem, SkillVersionOut, ToolReviewOut
 from .deps import RegistryDep, SkillServiceDep
 
-router = APIRouter(prefix="/internal", tags=["internal"], dependencies=[Depends(require_internal)])
+router = APIRouter(prefix="/internal", tags=["internal"])
 
 
 @router.get("/skills/catalog", response_model=list[SkillCatalogItem])

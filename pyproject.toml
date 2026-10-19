@@ -3,7 +3,7 @@ name = "atlas"
 version = "0.1.0"
 description = "Atlas — agent platform (workspace root)"
 requires-python = ">=3.13"
-dependencies = ["atlas-acp", "atlas-bench", "atlas-bridge", "atlas-cluster", "atlas-config", "atlas-engine", "atlas-host", "atlas-jsonrpc", "atlas-knowledge", "atlas-sandboxd", "atlas-server", "atlas-teamflow", "atlas-usercenter"]
+dependencies = ["atlas-acp", "atlas-agent", "atlas-bench", "atlas-bridge", "atlas-cluster", "atlas-config", "atlas-engine", "atlas-host", "atlas-jsonrpc", "atlas-knowledge", "atlas-redislock", "atlas-sandboxd", "atlas-teamflow", "atlas-usercenter"]
 
 # Workspace root is a container, not an installable package.
 [tool.uv]
@@ -12,22 +12,24 @@ package = false
 [tool.uv.workspace]
 members = [
   "agent-platform/libs/acp",
+  "agent-platform/services/agent",
   "agent-platform/bench",
   "agent-platform/pod/bridge",
-  "agent-platform/services/cluster",
+  "infra-platform/services/cluster",
   "agent-platform/services/config",
   "agent-platform/libs/engine",
   "agent-platform/libs/host",
   "agent-platform/libs/jsonrpc",
+  "infra-platform/libs/redislock",
   "agent-platform/services/knowledge",
   "agent-platform/pod/sandboxd",
-  "agent-platform/services/server",
-  "teamflow/services/server",
-  "usercenter/services/server",
+  "teamflow/services/teamflow",
+  "usercenter/services/usercenter",
 ]
 
 [tool.uv.sources]
 atlas-acp = { workspace = true }
+atlas-agent = { workspace = true }
 atlas-bench = { workspace = true }
 atlas-bridge = { workspace = true }
 atlas-cluster = { workspace = true }
@@ -36,8 +38,8 @@ atlas-engine = { workspace = true }
 atlas-host = { workspace = true }
 atlas-jsonrpc = { workspace = true }
 atlas-knowledge = { workspace = true }
+atlas-redislock = { workspace = true }
 atlas-sandboxd = { workspace = true }
-atlas-server = { workspace = true }
 atlas-teamflow = { workspace = true }
 atlas-usercenter = { workspace = true }
 
@@ -50,6 +52,8 @@ dev = [
   "httpx>=0.27",
   "moto>=5.0",
   "datamodel-code-generator>=0.34",
+  # 知识库解析测试：生成带版面（双栏、页眉页脚、表格、图片）的 PDF 样本
+  "reportlab>=4.0",
 ]
 # mypy 暂不纳入 dev group：本机网络下 13MB wheel 反复下载超时，
 # 且 CI 步骤未调用它。需要类型检查时单独 `uv tool install mypy`。
@@ -58,7 +62,7 @@ dev = [
 # ★ 依赖单向的硬约束（文档 §2.1）。engine 一旦 import server/db/web 就 CI 红。
 # ---------------------------------------------------------------------------
 [tool.importlinter]
-root_packages = ["atlas_acp", "atlas_bench", "atlas_bridge", "atlas_cluster", "atlas_config", "atlas_engine", "atlas_host", "atlas_jsonrpc", "atlas_knowledge", "atlas_sandboxd", "atlas_server", "atlas_teamflow", "atlas_usercenter"]
+root_packages = ["atlas_acp", "atlas_agent", "atlas_bench", "atlas_bridge", "atlas_cluster", "atlas_config", "atlas_engine", "atlas_host", "atlas_jsonrpc", "atlas_knowledge", "atlas_redislock", "atlas_sandboxd", "atlas_teamflow", "atlas_usercenter"]
 # forbidden_modules 里有第三方包（fastapi/sqlalchemy/...），必须打开这个开关
 include_external_packages = true
 
@@ -67,7 +71,7 @@ include_external_packages = true
 name = "atlas_jsonrpc 不得导入任何 atlas_* 包"
 type = "forbidden"
 source_modules = ["atlas_jsonrpc"]
-forbidden_modules = ["atlas_acp", "atlas_bridge", "atlas_cluster", "atlas_engine", "atlas_host", "atlas_server"]
+forbidden_modules = ["atlas_acp", "atlas_bridge", "atlas_cluster", "atlas_engine", "atlas_host", "atlas_agent"]
 
 [[tool.importlinter.contracts]]
 # Bridge 设计 §3 D2 / 代码设计 §1.3：上游协议运送 ACP 内容，但不理解它。
@@ -75,14 +79,14 @@ forbidden_modules = ["atlas_acp", "atlas_bridge", "atlas_cluster", "atlas_engine
 name = "atlas_host 不得导入 atlas_acp 及其它 atlas_* 包"
 type = "forbidden"
 source_modules = ["atlas_host"]
-forbidden_modules = ["atlas_acp", "atlas_bridge", "atlas_cluster", "atlas_engine", "atlas_jsonrpc", "atlas_server"]
+forbidden_modules = ["atlas_acp", "atlas_bridge", "atlas_cluster", "atlas_engine", "atlas_jsonrpc", "atlas_agent"]
 
 [[tool.importlinter.contracts]]
 name = "engine 不得依赖 server / web / DB / HTTP 框架"
 type = "forbidden"
 source_modules = ["atlas_engine"]
 forbidden_modules = [
-  "atlas_server",
+  "atlas_agent",
   "fastapi",
   "sqlalchemy",
   "alembic",
@@ -94,7 +98,7 @@ forbidden_modules = [
 [[tool.importlinter.contracts]]
 name = "分层：server -> engine 单向"
 type = "layers"
-layers = ["atlas_server", "atlas_engine"]
+layers = ["atlas_agent", "atlas_engine"]
 
 # layers contract 把 atlas_engine 当一个节点，拦不住「server 穿过外层直捅
 # kernel 内部」。kernel 是仍在持续重写的内部层，模块路径随时可能变、不是
@@ -110,7 +114,7 @@ layers = ["atlas_server", "atlas_engine"]
 # 曾经的「server 禁 import kernel」contract 随 agent.py 防腐层一起撤销。
 
 # atlas_acp 会被装进 **Pod 镜像**（bridge 依赖它）。它必须能脱离整个 atlas
-# 依赖树独立安装 —— 拖进 atlas_server 就等于把 sqlalchemy/fastapi 塞进每个
+# 依赖树独立安装 —— 拖进 atlas_agent 就等于把 sqlalchemy/fastapi 塞进每个
 # 会话 Pod。运行时同款守卫见 tests/test_acp_wire.py 的子进程 import 探测。
 [[tool.importlinter.contracts]]
 name = "atlas_acp 是叶子：不依赖本仓任何其它包，也不碰重依赖"
@@ -118,7 +122,7 @@ type = "forbidden"
 source_modules = ["atlas_acp"]
 forbidden_modules = [
   "atlas_engine",
-  "atlas_server",
+  "atlas_agent",
   "sqlalchemy",
   "fastapi",
   "redis",
@@ -136,7 +140,7 @@ name = "bridge 只认 atlas_acp，不认识 server"
 type = "forbidden"
 source_modules = ["atlas_bridge"]
 forbidden_modules = [
-  "atlas_server",
+  "atlas_agent",
   "atlas_engine",
   "atlas_cluster",
   "sqlalchemy",
@@ -153,15 +157,15 @@ forbidden_modules = [
 [[tool.importlinter.contracts]]
 name = "server 里只有 host.translate 能读 ACP（Bridge 设计 §3 D1：server 不说 ACP 的控制语义）"
 type = "forbidden"
-source_modules = ["atlas_server"]
+source_modules = ["atlas_agent"]
 forbidden_modules = ["atlas_acp"]
-ignore_imports = ["atlas_server.host.translate.** -> atlas_acp.**"]
+ignore_imports = ["atlas_agent.host.translate.** -> atlas_acp.**"]
 unmatched_ignore_imports_alerting = "none"
 
 [[tool.importlinter.contracts]]
 name = "server 只认 cluster 的 schemas"
 type = "forbidden"
-source_modules = ["atlas_server"]
+source_modules = ["atlas_agent"]
 forbidden_modules = [
   "atlas_cluster.api",
   "atlas_cluster.backend",
@@ -177,7 +181,7 @@ forbidden_modules = [
 name = "cluster 不认识 server / engine / bridge"
 type = "forbidden"
 source_modules = ["atlas_cluster"]
-forbidden_modules = ["atlas_server", "atlas_engine", "atlas_bridge", "sqlalchemy", "redis"]
+forbidden_modules = ["atlas_agent", "atlas_engine", "atlas_bridge", "sqlalchemy", "redis"]
 
 # server 只许认配置服务的**对外契约**（schemas，只依赖 pydantic），不许碰它的
 # 库、存储、服务层。两边同是 Python，越界只要一行 import —— 所以要 CI 拦
@@ -185,7 +189,7 @@ forbidden_modules = ["atlas_server", "atlas_engine", "atlas_bridge", "sqlalchemy
 [[tool.importlinter.contracts]]
 name = "server 只认 atlas_config 的 schemas"
 type = "forbidden"
-source_modules = ["atlas_server"]
+source_modules = ["atlas_agent"]
 forbidden_modules = [
   "atlas_config.db",
   "atlas_config.skill",
@@ -204,7 +208,7 @@ name = "atlas_config 不认识运行时"
 type = "forbidden"
 source_modules = ["atlas_config"]
 forbidden_modules = [
-  "atlas_server",
+  "atlas_agent",
   "atlas_engine",
   "atlas_cluster",
   "atlas_bridge",
@@ -229,7 +233,7 @@ forbidden_modules = [
   "atlas_engine",
   "atlas_host",
   "atlas_jsonrpc",
-  "atlas_server",
+  "atlas_agent",
 ]
 
 [[tool.importlinter.contracts]]
@@ -243,7 +247,7 @@ source_modules = [
   "atlas_engine",
   "atlas_host",
   "atlas_jsonrpc",
-  "atlas_server",
+  "atlas_agent",
 ]
 forbidden_modules = ["atlas_usercenter"]
 
@@ -261,7 +265,7 @@ forbidden_modules = [
   "atlas_engine",
   "atlas_host",
   "atlas_jsonrpc",
-  "atlas_server",
+  "atlas_agent",
   "atlas_usercenter",
 ]
 
@@ -276,7 +280,7 @@ source_modules = [
   "atlas_engine",
   "atlas_host",
   "atlas_jsonrpc",
-  "atlas_server",
+  "atlas_agent",
   "atlas_usercenter",
 ]
 forbidden_modules = ["atlas_teamflow"]
@@ -295,7 +299,7 @@ forbidden_modules = [
   "atlas_engine",
   "atlas_host",
   "atlas_jsonrpc",
-  "atlas_server",
+  "atlas_agent",
   "atlas_teamflow",
   "atlas_usercenter",
 ]
@@ -311,7 +315,7 @@ source_modules = [
   "atlas_engine",
   "atlas_host",
   "atlas_jsonrpc",
-  "atlas_server",
+  "atlas_agent",
   "atlas_teamflow",
   "atlas_usercenter",
 ]
@@ -331,7 +335,7 @@ forbidden_modules = [
   "atlas_host",
   "atlas_jsonrpc",
   "atlas_knowledge",
-  "atlas_server",
+  "atlas_agent",
   "atlas_teamflow",
   "atlas_usercenter",
 ]
@@ -343,12 +347,12 @@ forbidden_modules = [
 name = "server 纯计算层不得依赖基础设施"
 type = "forbidden"
 source_modules = [
-  "atlas_server.domain",
-  "atlas_server.executor.runner",
-  "atlas_server.executor.build",
+  "atlas_agent.domain",
+  "atlas_agent.executor.runner",
+  "atlas_agent.executor.build",
   # translate 是纯函数：一条 update 进、零或多条事件意图出。它必须能脱离
   # WS 与 DB 单测 —— §06 的表就是它的测试用例（acp 详设 §03）。
-  "atlas_server.host.translate",
+  "atlas_agent.host.translate",
 ]
 forbidden_modules = ["sqlalchemy", "fastapi", "redis", "alembic", "pydantic_settings"]
 
@@ -358,11 +362,11 @@ target-version = "py313"
 extend-exclude = [
   # 智能体评测的任务夹具（初始文件 / 校验脚本 / 参考答案）：内容就是题目本身，不做格式化与 lint
   "agent-platform/bench/agent-tasks",
-  "agent-platform/services/server/migrations/versions",
+  "agent-platform/services/agent/migrations/versions",
   "agent-platform/services/config/src/atlas_config/migrations/versions",
-  "usercenter/services/server/src/atlas_usercenter/migrations/versions",
+  "usercenter/services/usercenter/src/atlas_usercenter/migrations/versions",
   "usercenter/web",
-  "teamflow/services/server/src/atlas_teamflow/migrations/versions",
+  "teamflow/services/teamflow/src/atlas_teamflow/migrations/versions",
   "agent-platform/services/knowledge/src/atlas_knowledge/migrations/versions",
   "teamflow/web",
   "docs",          # 别去动设计文档里的示例代码块
@@ -397,18 +401,25 @@ exclude = ["agent-platform/libs/engine/src/atlas_engine/kernel/**"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["agent-platform/tests", "agent-platform/services/config/tests", "usercenter/services/server/tests", "teamflow/services/server/tests", "agent-platform/services/knowledge/tests", "agent-platform/bench/tests"]
+testpaths = ["agent-platform/tests", "agent-platform/services/config/tests", "usercenter/services/usercenter/tests", "teamflow/services/teamflow/tests", "agent-platform/services/knowledge/tests", "agent-platform/bench/tests", "infra-platform/libs/redislock/tests"]
 addopts = "-ra"
 
 [tool.mypy]
 python_version = "3.13"
 strict = false
 warn_unused_ignores = true
-exclude = ["agent-platform/libs/engine/src/atlas_engine/vendor", "agent-platform/services/server/migrations/versions"]
+exclude = ["agent-platform/libs/engine/src/atlas_engine/vendor", "agent-platform/services/agent/migrations/versions"]
 
 [[tool.importlinter.contracts]]
 # doc/native-sandbox-design.html §6.1：sandboxd 注入任意镜像运行，零依赖；与 server 的唯一接口是 HTTP
 name = "atlas_sandboxd 不依赖本仓任何其它包"
 type = "forbidden"
 source_modules = ["atlas_sandboxd"]
-forbidden_modules = ["atlas_acp", "atlas_bench", "atlas_bridge", "atlas_cluster", "atlas_config", "atlas_engine", "atlas_host", "atlas_jsonrpc", "atlas_knowledge", "atlas_server", "atlas_teamflow", "atlas_usercenter"]
+forbidden_modules = ["atlas_acp", "atlas_bench", "atlas_bridge", "atlas_cluster", "atlas_config", "atlas_engine", "atlas_host", "atlas_jsonrpc", "atlas_knowledge", "atlas_agent", "atlas_teamflow", "atlas_usercenter"]
+
+[[tool.importlinter.contracts]]
+# 分布式锁是通用层，server / teamflow / knowledge 都可以用 —— 因此它不能认识其中任何一个
+name = "atlas_redislock 不依赖本仓任何其它包"
+type = "forbidden"
+source_modules = ["atlas_redislock"]
+forbidden_modules = ["atlas_acp", "atlas_bench", "atlas_bridge", "atlas_cluster", "atlas_config", "atlas_engine", "atlas_host", "atlas_jsonrpc", "atlas_knowledge", "atlas_sandboxd", "atlas_agent", "atlas_teamflow", "atlas_usercenter"]

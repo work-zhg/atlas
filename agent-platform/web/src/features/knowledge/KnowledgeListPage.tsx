@@ -9,7 +9,7 @@ import { useState } from "react";
 import { Icon } from "@/components/Icon";
 import { can, useMe } from "@/lib/session";
 
-import { type DocForm, type Permission, PERMISSION_LABEL, kbApi, useDatasets, useKbMutation } from "./api";
+import { type DocForm, type Permission, LEVEL_LABEL, PERMISSION_LABEL, kbApi, useDatasets, useKbMutation } from "./api";
 
 export function KnowledgeListPage() {
   const { data: me } = useMe();
@@ -67,7 +67,8 @@ export function KnowledgeListPage() {
                   {ds.description || "暂无描述"}
                 </Typography.Paragraph>
                 <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-                  <Tag>{PERMISSION_LABEL[ds.permission]}</Tag>
+                  {ds.my_level && <Tag>{LEVEL_LABEL[ds.my_level]}</Tag>}
+                  {ds.owner_kind === "service" && <Tag>服务账号的库</Tag>}
                   <Tag>{ds.doc_form === "hierarchical_model" ? "父子分段" : "通用分段"}</Tag>
                   {ds.review_required && <Tag color="gold">入库审核</Tag>}
                 </div>
@@ -135,7 +136,7 @@ function CreateModal({ open, onClose }: { open: boolean; onClose: () => void }) 
             <Radio value="hierarchical_model">父子：小块匹配、返回所在大块</Radio>
           </Radio.Group>
         </Form.Item>
-        <Form.Item name="permission" label="可见范围">
+        <Form.Item name="permission" label="初始共享" extra="之后可在知识库「设置 → 共享」里按人 / 部门调整。">
           <Radio.Group
             options={(["only_me", "all_team"] as Permission[]).map((v) => ({ value: v, label: PERMISSION_LABEL[v] }))}
           />

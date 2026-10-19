@@ -1,8 +1,9 @@
 /**
  * 请求的唯一出口。
  *
- * 1. 同源：/api 由 Next 代理到TeamFlow 后端，会话靠 HttpOnly Cookie。
- * 2. 写请求带双提交的 CSRF 头（值取自非 HttpOnly 的 tf_csrf Cookie）。
+ * 1. 同源：/api 经网关转到 TeamFlow 后端。登录统一在用户中心（doc/identity-propagation-design.html
+ *    §4）：网关校验用户中心的 HttpOnly 会话 Cookie，把身份写进请求头；未登录 401 → ucLoginUrl()。
+ * 2. 写请求带双提交的 CSRF 头（值取自非 HttpOnly 的 uc_csrf Cookie，由网关交给用户中心校验）。
  * 3. 错误统一为 {code, message, details}，转成 ApiError。
  */
 
@@ -23,13 +24,26 @@ export class ApiError extends Error {
 /** 写请求须带的头（双提交 CSRF）。嵌入的 Atlas 对话组件经代理发消息时也用它。 */
 export function writeHeaders(): Record<string, string> {
   const token = csrf();
-  return token ? { "X-TF-CSRF": token } : {};
+  return token ? { "X-UC-CSRF": token } : {};
 }
 
 function csrf(): string | undefined {
   if (typeof document === "undefined") return undefined;
-  const hit = document.cookie.split("; ").find((c) => c.startsWith("tf_csrf="));
-  return hit ? decodeURIComponent(hit.slice("tf_csrf=".length)) : undefined;
+  const hit = document.cookie.split("; ").find((c) => c.startsWith("uc_csrf="));
+  return hit ? decodeURIComponent(hit.slice("uc_csrf=".length)) : undefined;
+}
+
+/** 用户中心的登录页（同源，经网关 /uc）。next = 登录后回到的页面（含 basePath）。 */
+export function ucLoginUrl(next?: string): string {
+  const here =
+    next ?? (typeof window === "undefined" ? "/" : window.location.pathname + window.location.search);
+  return `/uc/login?next=${encodeURIComponent(here)}`;
+}
+
+/** 登出在用户中心（三个前端共用一个登录态）：登出后去用户中心登录页。 */
+export async function logoutToUC(): Promise<void> {
+  await fetch("/uc/api/v1/auth/logout", { method: "POST", headers: writeHeaders(), credentials: "same-origin" });
+  window.location.assign("/uc/login");
 }
 
 /** 部署子路径（与 next.config 的 basePath 一致）。fetch / EventSource / <a href> 不会自动加，要手动拼。 */
@@ -51,7 +65,7 @@ async function request<T>(method: string, path: string, body?: unknown, query?: 
   if (body !== undefined) headers["Content-Type"] = "application/json";
   if (method !== "GET") {
     const token = csrf();
-    if (token) headers["X-TF-CSRF"] = token;
+    if (token) headers["X-UC-CSRF"] = token;
   }
   const res = await fetch(url(path, query), {
     method,

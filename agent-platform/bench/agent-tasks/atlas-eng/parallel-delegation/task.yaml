@@ -1,0 +1,25 @@
+category: eng
+tags: [eng, fast, subagent]
+instruction: |
+  q1.txt、q2.txt、q3.txt 里各有一列整数（每个文件 10 个两位数）。请在同一轮里并行发起三个 task，把三个文件分别交给
+  calc 子智能体求和（不要自己计算），拿到三个结果后把 {"q1": 和, "q2": 和, "q3": 和}
+  写入 sums.json。
+expect:
+  - desc: 委派了三次（场景生效）
+    gate: false
+    event: subagent.started
+    count: ">=3"
+  - desc: 子智能体并行执行（同时运行 ≥ 2 个）（场景生效）
+    gate: false
+    metric: max_parallel_subagents
+    count: ">=2"
+# ★ 子智能体的 model 要写全：补丁是深合并，subagents 列表整体替换
+agent_patch:
+  subagents:
+    - name: calc
+      description: 读取工作区里指定的文件，计算其中所有整数之和
+      system_prompt: 你负责读取工作区里指定的文件，计算其中所有整数之和。最后只回复这个和（一个整数）。
+      model: {model: deepseek-chat, provider: anthropic}
+      tool_names: [filesystem]
+      session_mode: ephemeral
+budget: {wall_s: 900}

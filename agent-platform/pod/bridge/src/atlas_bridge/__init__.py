@@ -5,5 +5,5 @@
     upstream/   对上：WebSocket、握手鉴权、序号与补发（UpstreamServer · Outbox）
     app.py      装配与启动顺序；入口是 ``python -m atlas_bridge``
 
-不认识 atlas_server：与 server 的唯一接口是上游协议（Bridge 设计 §3.3）。
+不认识 atlas_agent：与 server 的唯一接口是上游协议（Bridge 设计 §3.3）。
 """

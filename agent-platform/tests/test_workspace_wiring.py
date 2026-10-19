@@ -13,9 +13,9 @@ import boto3
 import pytest
 from moto import mock_aws
 
-from atlas_server.config import Settings
-from atlas_server.providers.filesystem import make_workspace
-from atlas_server.providers.filesystem.oss import OssFilesystem
+from atlas_agent.config import Settings
+from atlas_agent.providers.filesystem import make_workspace
+from atlas_agent.providers.filesystem.oss import OssFilesystem
 
 _BASE = {"litellm_key": "x"}
 
@@ -53,7 +53,7 @@ def test_filesystem_tools_absent_without_workspace(tools: tuple[str, ...]) -> No
     """
     from atlas_engine.kernel.middleware.filesystem import FilesystemMiddleware
 
-    middleware = FilesystemMiddleware(backend=None)
+    middleware = FilesystemMiddleware(filesystem=None)
     assert middleware.tools == []
     # 大结果外置也必须一并关闭：外置出去的内容没有 read_file 读得回来
     assert middleware._tool_token_limit_before_evict is None

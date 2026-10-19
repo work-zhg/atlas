@@ -35,6 +35,8 @@ _TABLES = (
     "kb_embedding_cache",
     "kb_query_log",
     "kb_retrieval",
+    "kb_index_version",
+    "kb_metadata_field",
 )
 
 
@@ -127,9 +129,147 @@ class MemoryStorage:
 class RecordingDispatcher:
     def __init__(self) -> None:
         self.queued: list[str] = []
+        self.rebuilds: list[str] = []
 
     def indexing(self, document_uuids: list[str]) -> None:
         self.queued.extend(document_uuids)
+
+    def rebuild_index(self, version_uuid: str) -> None:
+        self.rebuilds.append(version_uuid)
+
+
+_RANK = {"NONE": 0, "READ": 1, "WRITE": 2, "OWNER": 3}
+_NAME = {v: k for k, v in _RANK.items()}
+
+
+class FakeDataPermissions:
+    """内存版用户中心数据权限（AtlasKnowledgeBase）。
+
+    规则按用户中心简化：用户直授 + 部门授权（只有一个根部门 root，所有人都在里面）+ 全部数据
+    授权（type_levels）；有效级别取最高；改授权须操作人有效级别为 OWNER；至少保留一个 OWNER。
+    """
+
+    def __init__(self) -> None:
+        self.rows: dict[str, list[dict[str, Any]]] = {}
+        #: 用户 → 对全部知识库的级别（数据编码级授权）
+        self.type_levels: dict[str, str] = {}
+        self._seq = 0
+
+    def _own(self, user: str, data_id: str) -> int:
+        hits = [
+            _RANK[r["level"]]
+            for r in self.rows.get(data_id, [])
+            if r["subject_type"] == "dept" or r["subject_id"] == user
+        ]
+        return max(hits, default=0)
+
+    def _eff(self, user: str, data_id: str) -> int:
+        return max(self._own(user, data_id), _RANK[self.type_levels.get(user, "NONE")])
+
+    async def level(self, user_id: str, dataset_id: str) -> str:
+        return _NAME[self._eff(user_id, dataset_id)]
+
+    async def accessible(self, user_id: str, min_level: str = "READ") -> tuple[dict[str, str], str]:
+        out = {
+            d: _NAME[self._eff(user_id, d)]
+            for d in self.rows
+            if self._eff(user_id, d) >= _RANK[min_level]
+        }
+        return out, self.type_levels.get(user_id, "NONE")
+
+    def _upsert(self, data_id: str, grants: list[Any]) -> None:
+        rows = self.rows.setdefault(data_id, [])
+        for g in grants:
+            row = next(
+                (
+                    r
+                    for r in rows
+                    if (r["subject_type"], r["subject_id"]) == (g.subject_type, g.subject_id)
+                ),
+                None,
+            )
+            if row is None:
+                self._seq += 1
+                rows.append(
+                    {
+                        "id": f"acl-{self._seq}",
+                        "level": g.level,
+                        "subject_type": g.subject_type,
+                        "subject_id": g.subject_id,
+                        "include_sub": g.include_sub,
+                    }
+                )
+            else:
+                row["level"], row["include_sub"] = g.level, g.include_sub
+
+    def _guard(self, data_id: str) -> None:
+        from atlas_knowledge.errors import Conflict
+
+        if not any(r["level"] == "OWNER" for r in self.rows.get(data_id, [])):
+            raise Conflict("至少保留一名可用的 Owner")
+
+    def _require_owner(self, data_id: str, operator: str) -> None:
+        from atlas_knowledge.errors import Forbidden
+
+        if self._eff(operator, data_id) < _RANK["OWNER"]:
+            raise Forbidden("只有 Owner 可以修改这条数据的授权")
+
+    async def create(self, dataset_id: str, name: str, grants: list[Any]) -> None:
+        assert dataset_id not in self.rows and any(g.level == "OWNER" for g in grants)
+        self._upsert(dataset_id, grants)
+
+    async def acl(self, dataset_id: str) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": r["id"],
+                "permission": r["level"],
+                "subject": {"type": r["subject_type"].upper(), "id": r["subject_id"]},
+                "include_sub": r["include_sub"],
+            }
+            for r in self.rows.get(dataset_id, [])
+        ]
+
+    async def grant(self, dataset_id: str, operator: str, grants: list[Any]) -> None:
+        self._require_owner(dataset_id, operator)
+        self._upsert(dataset_id, grants)
+
+    def _find(self, acl_id: str) -> tuple[str, dict[str, Any]]:
+        return next((d, r) for d, rows in self.rows.items() for r in rows if r["id"] == acl_id)
+
+    async def update(
+        self, acl_id: str, operator: str, *, level: str | None, include_sub: bool | None
+    ) -> None:
+        data_id, row = self._find(acl_id)
+        self._require_owner(data_id, operator)
+        before = dict(row)
+        if level:
+            row["level"] = level
+        if include_sub is not None:
+            row["include_sub"] = include_sub
+        try:
+            self._guard(data_id)
+        except Exception:
+            row.update(before)
+            raise
+
+    async def revoke(self, acl_id: str, operator: str) -> None:
+        data_id, row = self._find(acl_id)
+        self._require_owner(data_id, operator)
+        self.rows[data_id].remove(row)
+        try:
+            self._guard(data_id)
+        except Exception:
+            self.rows[data_id].append(row)
+            raise
+
+    async def rename(self, dataset_id: str, name: str) -> None:
+        return None
+
+    async def cleanup(self, dataset_id: str) -> None:
+        self.rows.pop(dataset_id, None)
+
+    async def root_dept(self) -> str:
+        return "root"
 
 
 @pytest.fixture
@@ -159,6 +299,7 @@ async def rt() -> AsyncIterator[Any]:
         redis=redis,
         dispatcher=RecordingDispatcher(),
         storage_factory=lambda: storage,
+        data_permissions=FakeDataPermissions(),
     )
     try:
         yield runtime
@@ -180,6 +321,15 @@ async def client(rt: Any) -> AsyncIterator[Any]:
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://kb") as c:
         yield c
+
+
+async def run_rebuilds(rt: Any) -> None:
+    """把投递器记下的索引版本重建跑一遍。"""
+    from atlas_knowledge.indexing.versions import rebuild
+
+    queued, rt.dispatcher.rebuilds = list(rt.dispatcher.rebuilds), []
+    for version_uuid in queued:
+        await rebuild(rt, get_sessionmaker(), version_uuid)
 
 
 async def run_indexing(rt: Any) -> None:

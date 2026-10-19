@@ -31,12 +31,27 @@ class BenchSettings(BaseSettings):
         populate_by_name=True,
     )
 
-    # ── 被测平台：Atlas 知识库服务（经网关）────────────────────────────
-    atlas_kb_url: str = "http://localhost:8080/atlas-knowledge-api"
-    #: 评测专用服务账号的密钥（知识库评测需 kb:create；智能体评测需 agent:create + chat:use）
-    atlas_api_key: SecretStr | None = None
-    #: 被测平台：atlas-server（智能体评测，doc/agent-eval-design.html）
-    atlas_api_url: str = "http://127.0.0.1:8000"
+    # ── 被测平台（内网身份传递 §12）─────────────────────────────────────
+    #: 内网接口不对宿主暴露：smoke.sh / regress.sh 先 kubectl port-forward 到这两个端口
+    #: 知识库服务（atlas-knowledge）
+    atlas_kb_url: str = "http://127.0.0.1:18050"
+    #: atlas-server（智能体评测，doc/agent-eval-design.html）
+    atlas_api_url: str = "http://127.0.0.1:18000"
+    #: 评测身份：用户中心里的普通用户 atlas-bench（禁止登录），授「评测」角色
+    #: （kb:create · agent:create · chat:use）。请求头 X-Uid 写它，X-Caller-App: bench
+    uid: str | None = None
+    #: 它所在的租户（单租户部署可不填：用户中心按 uid 推）
+    tenant_id: str | None = None
+
+    def identity_headers(self) -> dict[str, str]:
+        if not self.uid:
+            raise SystemExit(
+                "缺少评测身份：设置 ATLAS_BENCH_UID（用户中心里的评测用户 atlas-bench 的 id）"
+            )
+        h = {"X-Uid": self.uid, "X-Caller-App": "bench"}
+        if self.tenant_id:
+            h["X-Tenant-Id"] = self.tenant_id
+        return h
 
     # ── 生成与裁判模型（OpenAI 兼容接口）─────────────────────────────────
     llm_base_url: str = "https://api.deepseek.com/v1"

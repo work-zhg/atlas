@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 import { api, errorText } from "@/lib/api";
-import { useMe } from "@/lib/session";
+import { goNext, useMe } from "@/lib/session";
 
 export default function ChangePasswordPage() {
   const router = useRouter();
@@ -25,7 +25,7 @@ export default function ChangePasswordPage() {
     try {
       await api.post("/auth/password", { old_password: v.old_password, new_password: v.new_password });
       await qc.invalidateQueries({ queryKey: ["me"] });
-      router.replace("/");
+      if (!goNext()) router.replace("/");
     } catch (e) {
       setErr(errorText(e));
     } finally {

@@ -134,10 +134,10 @@
 deepagent_middleware = []
 
 <span class="tok-n">1</span>  <span class="tok-k">if</span> skills:      SkillsMiddleware(backend, sources=skills)
-<span class="tok-n">2</span>                  FilesystemMiddleware(backend, tools=filesystem_tools,
+<span class="tok-n">2</span>                  FilesystemMiddleware(filesystem, tools=filesystem_tools,
                                        _permissions=permissions)      <span class="tok-c">← 必备脚手架</span>
 <span class="tok-n">3</span>  <span class="tok-k">if</span> subagents:   SubAgentMiddleware(backend, subagents, state_schema)  <span class="tok-c">← 必备脚手架</span>
-<span class="tok-n">4</span>                  create_summarization_middleware(model, backend)
+<span class="tok-n">4</span>                  create_summarization_middleware(model, filesystem)
 <span class="tok-n">5</span>                  PatchToolCallsMiddleware()
 <span class="tok-n">6</span>  <span class="tok-k">if</span> async_sub:   AsyncSubAgentMiddleware(async_subagents)
    ──────────────────────────────── 以上是「核心栈」
@@ -169,7 +169,7 @@ deepagent_middleware = []
 
   <h3>子智能体有自己的一套栈</h3>
   <pre><code><span class="tok-c"># 每个 SubAgent 的默认栈（graph.py 约 672–690 行）</span>
-FilesystemMiddleware(backend, tools=filesystem_tools, _permissions=继承或自有)
+FilesystemMiddleware(filesystem, tools=filesystem_tools, _permissions=继承或自有)
 create_summarization_middleware(subagent_model, backend)
 PatchToolCallsMiddleware()
 <span class="tok-k">if</span> spec[<span class="tok-s">"skills"</span>]: SkillsMiddleware(backend, sources=...)
@@ -279,6 +279,7 @@ PatchToolCallsMiddleware()
 
   <div class="mod">
     <div class="hd"><span class="nm">summarization</span><span class="ln">2169 行</span><span class="act keep">Atlas 在用（自动那半）</span></div>
+    <p><b>2026-10-19 已删除</b>（连同只为它服务的 <code>_overflow_clip</code>）。它和 Atlas 自研的 <code>CompactionMiddleware</code> 同时装着：触发线是窗口 × 0.85，总在 Compaction（有效窗口 × 0.8）之后，只在压缩被关闭、模型不在 <code>model_catalog</code>、或 Compaction 熔断时才轮到它；而它的压缩记录 <code>_summarization_event</code> 只在本轮 graph state 里、server 不保存，一旦触发就每轮重压一次（摘要 token 重复付、prompt cache 每轮击穿）。以下为删除前的记录。</p>
     <p>两个中间件：</p>
     <ul>
       <li><code>_DeepAgentsSummarizationMiddleware</code> —— 自动压缩。相比 LangChain 原版多三件事：<b>被逐出的消息先追加到 backend 的 <code>/conversation_history/{session}.md</code></b>（原版直接丢弃，无恢复路径）；压缩前先截断老消息里的大 <code>write_file</code> 参数，常常就够用不必真压；<b>provider 超预算报错时兜底压缩再重试</b>。</li>
@@ -330,7 +331,7 @@ PatchToolCallsMiddleware()
     <div class="hd"><span class="nm">辅助模块</span><span class="ln">共约 750 行</span><span class="act keep">保留</span></div>
     <ul>
       <li><code>_message_eviction</code> / <code>_overflow_clip</code> —— 大内容的 head+tail 预览与读侧裁剪，被 filesystem 与 summarization 共用</li>
-      <li><code>_prompt_caching</code> —— 按 provider 追加缓存中间件</li>
+      <li><code>_prompt_caching</code> —— 按 provider 追加缓存中间件。<b>2026-10-19 删除</b>：Bedrock / Fireworks 分支依赖都没装；剩下的 Anthropic 那一行内联进 <code>graph.py</code>，改由 <code>create_deep_agent(prompt_cache_ttl=)</code> 控制装不装 —— 原先无条件装，编辑器里的 <code>prompt_cache</code> 开关与模型目录的 <code>supports_cache</code> 运行时都没人读。现在 server 按「spec 开了 且 目录实测支持」决定，TTL 与上下文管理的闲置判断共用 <code>Settings.prompt_cache_ttl</code>。</li>
       <li><code>_tool_exclusion</code> —— 最后一道工具过滤</li>
       <li><code>_fs_interrupt</code> —— 权限规则 → HITL 配置的翻译器</li>
       <li><code>permissions.py</code> —— 7 行，只是向后兼容的 re-export</li>
@@ -341,6 +342,11 @@ PatchToolCallsMiddleware()
 <!-- ══════════════ 5 ══ -->
 <section id="s5">
   <h2><span class="num">05</span>Profiles：两套档案</h2>
+
+  <div class="callout warn">
+    <span class="label">2026-10-19 已整层删除</span>
+    <p style="margin-bottom:0"><code>kernel/profiles/</code> 连同 <code>_excluded_middleware</code> / <code>_tool_exclusion</code> / <code>_tools</code>、<code>_REQUIRED_MIDDLEWARE</code> 一并删除；<code>create_deep_agent</code> 不再按模型调整任何东西 —— 系统提示词、工具、中间件只由调用方决定（<code>system_prompt=None</code> 即空串）。生产上它只起过一个作用：给 haiku-4.5 的系统提示词悄悄追加一段后缀。本节以下为删除前的记录。</p>
+  </div>
 
   <p>这是 kernel 里 Atlas <b>完全没用</b>的一层，但它恰好是"按模型定制行为"的官方扩展点。</p>
 
@@ -425,6 +431,19 @@ PatchToolCallsMiddleware()
     <p>barrel <code>__init__.py</code> 的导出让<b>一切都"可达"</b>——直接跑可达性分析，53 个模块里 50 个是"活的"，结论毫无用处。</p>
     <p>上表的判据是<b>功能可达</b>：从 <code>create_deep_agent()</code> 出发，沿真正参与装配的 import 走。"仅经 barrel 可达"正是死代码的特征 —— <code>rubric</code> / <code>context_hub</code> / <code>local_shell</code> 三个都是这样。</p>
   </div>
+
+  <div class="callout warn">
+    <span class="label">2026-10-19 再清一轮（约 1,300 行）</span>
+    <p>判据同上，并加两条：①名字只在注释 / 字符串 / import / <code>__all__</code> 里出现不算引用，按 token 统计并迭代剔除「只被死代码引用」的；②server 实际传什么配置（<code>build_graph</code>），从不传的那条路就算到不了。逐项人工核对后删除：</p>
+    <ul>
+      <li><b>休眠 → 删除</b>：<code>_fs_interrupt</code> 连同 <code>create_deep_agent(interrupt_on=)</code> 与 HITL 装配、<code>FilesystemPermission</code> 的 <code>interrupt</code> 模式 —— HITL 靠 LangGraph <code>interrupt()</code> + checkpointer，而 Atlas 不用 checkpointer，审批走 <code>ApprovalMiddleware</code> 挂起；<code>SummarizationToolMiddleware</code> 与工厂（从未装配）。</li>
+      <li><b>死代码</b>：已删工具 ls / glob / grep 的 schema 与描述、<code>FilesystemMiddleware</code> 里 execute 的残留（schema、描述、<code>max_execute_timeout</code>、能力过滤）与 <code>grep_max_count</code>、<code>_fs_utils</code> 的路径 / 视频辅助、<code>_models</code> 的 Bedrock 判断与 <code>model_matches_spec</code>、整个 <code>_state.py</code>、HarnessProfile 的序列化与公开 <code>register_harness_profile</code>、<code>RunTimeout</code> / <code>RunCancelled</code>。</li>
+    </ul>
+    <p><b>死代码变成了 bug</b>：<code>FilesystemMiddleware</code> 那段 execute 能力过滤在沙箱拆成 <code>SandboxMiddleware</code> 之后仍在 —— 文件系统对象不实现 <code>SandboxProtocol</code> 就把 execute 从模型请求里剔掉，而 <code>OssFilesystem</code> 从不实现它，于是配了 bash 的智能体模型侧<b>看不到 execute</b>。已有测试用假模型硬发 tool_call，绑没绑定都照样执行，所以没撞上；补了一条只看模型拿到哪些工具的测试（<code>test_tool_gating.py::test_the_model_sees_execute_when_a_sandbox_is_configured</code>）。</p>
+    <p>同日随后整层删除了 <code>HarnessProfile</code>（见 <a href="#s5">§05</a>）与 kernel 恒装的 <code>SummarizationMiddleware</code>（见 <a href="#s4">§04</a>）—— 压缩只剩 Atlas 自研的 <code>CompactionMiddleware</code> 一套；prompt caching 从「无条件装」改为由调用方经 <code>prompt_cache_ttl</code> 决定（见 <a href="#s4">§04</a> 辅助模块）。</p>
+    <p><code>_messages_reducer</code> 与 <code>DeepAgentState</code> 也删了：它们给 messages 换上 <code>DeltaChannel</code>（LangGraph beta）+ 自写 reducer，只为 checkpoint 存储瘦身，而 Atlas 不用 checkpointer。图状态回到标准 <code>AgentState</code> / <code>add_messages</code>。同类的 <code>FilesystemState.files</code>（服务已删的 StateBackend）及 runner 里读它的 <code>files_delta</code> 一并删除 —— 文件在对象存储，<code>file.written</code> 早已改由中间件经 custom stream 补发，那条分支在生产上从不触发。</p>
+    <p style="margin-bottom:0"><b>仍在、但只用到一部分</b>：<code>FilesystemPermission</code> 的 allow / deny（server 从不配）、<code>GraphOptions</code>（透传参数，有意留作扩展点）。</p>
+  </div>
 </section>
 
 <!-- ══════════════ 8 ══ -->
@@ -480,6 +499,7 @@ PatchToolCallsMiddleware()
 
   <div class="mod">
     <div class="hd"><span class="nm">⑥ HarnessProfile vs Atlas 自有的模型适配</span><span class="act mod">值得收敛</span></div>
+    <p><b>2026-10-19 已执行，且比下面的「裁掉」更彻底</b>：连骨架也没留，<code>graph.py</code> 不再依赖它，按模型的适配只剩 Atlas 自己那一套。</p>
     <p><b>现在有两套做同一件事的机制</b>：kernel 的 <code>HarnessProfile</code> / <code>ProviderProfile</code>，与 Atlas 的 <code>spec.py</code> 门禁 + <code>model_factory.py</code> + <code>compat.py</code>。两者互不感知。</p>
     <p>具体的重叠：Atlas 的 <code>_SANDBOX_HINT</code>（有 backend 时往 system_prompt 拼一段路径引导）其实正是 <code>HarnessProfile.system_prompt_suffix</code> 的用途。</p>
     <p><b>两个方向，我倾向后者</b>：</p>

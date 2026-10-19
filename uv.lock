@@ -15,6 +15,7 @@ resolution-markers = [
 members = [
     "atlas",
     "atlas-acp",
+    "atlas-agent",
     "atlas-bench",
     "atlas-bridge",
     "atlas-cluster",
@@ -23,8 +24,8 @@ members = [
     "atlas-host",
     "atlas-jsonrpc",
     "atlas-knowledge",
+    "atlas-redislock",
     "atlas-sandboxd",
-    "atlas-server",
     "atlas-teamflow",
     "atlas-usercenter",
 ]
@@ -317,6 +318,7 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "atlas-acp" },
+    { name = "atlas-agent" },
     { name = "atlas-bench" },
     { name = "atlas-bridge" },
     { name = "atlas-cluster" },
@@ -325,8 +327,8 @@ dependencies = [
     { name = "atlas-host" },
     { name = "atlas-jsonrpc" },
     { name = "atlas-knowledge" },
+    { name = "atlas-redislock" },
     { name = "atlas-sandboxd" },
-    { name = "atlas-server" },
     { name = "atlas-teamflow" },
     { name = "atlas-usercenter" },
 ]
@@ -339,24 +341,26 @@ dev = [
     { name = "moto" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
+    { name = "reportlab" },
     { name = "ruff" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "atlas-acp", editable = "agent-platform/libs/acp" },
+    { name = "atlas-agent", editable = "agent-platform/services/agent" },
     { name = "atlas-bench", editable = "agent-platform/bench" },
     { name = "atlas-bridge", editable = "agent-platform/pod/bridge" },
-    { name = "atlas-cluster", editable = "agent-platform/services/cluster" },
+    { name = "atlas-cluster", editable = "infra-platform/services/cluster" },
     { name = "atlas-config", editable = "agent-platform/services/config" },
     { name = "atlas-engine", editable = "agent-platform/libs/engine" },
     { name = "atlas-host", editable = "agent-platform/libs/host" },
     { name = "atlas-jsonrpc", editable = "agent-platform/libs/jsonrpc" },
     { name = "atlas-knowledge", editable = "agent-platform/services/knowledge" },
+    { name = "atlas-redislock", editable = "infra-platform/libs/redislock" },
     { name = "atlas-sandboxd", editable = "agent-platform/pod/sandboxd" },
-    { name = "atlas-server", editable = "agent-platform/services/server" },
-    { name = "atlas-teamflow", editable = "teamflow/services/server" },
-    { name = "atlas-usercenter", editable = "usercenter/services/server" },
+    { name = "atlas-teamflow", editable = "teamflow/services/teamflow" },
+    { name = "atlas-usercenter", editable = "usercenter/services/usercenter" },
 ]
 
 [package.metadata.requires-dev]
@@ -367,6 +371,7 @@ dev = [
     { name = "moto", specifier = ">=5.0" },
     { name = "pytest", specifier = ">=8.3" },
     { name = "pytest-asyncio", specifier = ">=0.24" },
+    { name = "reportlab", specifier = ">=4.0" },
     { name = "ruff", specifier = ">=0.8" },
 ]
 
@@ -380,6 +385,59 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "pydantic", specifier = ">=2.9" }]
+
+[[package]]
+name = "atlas-agent"
+version = "0.1.0"
+source = { editable = "agent-platform/services/agent" }
+dependencies = [
+    { name = "alembic" },
+    { name = "asyncpg" },
+    { name = "atlas-acp" },
+    { name = "atlas-cluster" },
+    { name = "atlas-config" },
+    { name = "atlas-engine" },
+    { name = "atlas-host" },
+    { name = "atlas-jsonrpc" },
+    { name = "boto3" },
+    { name = "fastapi" },
+    { name = "fastembed" },
+    { name = "httpx" },
+    { name = "langchain-mcp-adapters" },
+    { name = "mem0ai" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-exporter-otlp-proto-http" },
+    { name = "opentelemetry-sdk" },
+    { name = "pydantic-settings" },
+    { name = "redis" },
+    { name = "sqlalchemy", extra = ["asyncio"] },
+    { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "alembic", specifier = ">=1.14" },
+    { name = "asyncpg", specifier = ">=0.30" },
+    { name = "atlas-acp", editable = "agent-platform/libs/acp" },
+    { name = "atlas-cluster", editable = "infra-platform/services/cluster" },
+    { name = "atlas-config", editable = "agent-platform/services/config" },
+    { name = "atlas-engine", editable = "agent-platform/libs/engine" },
+    { name = "atlas-host", editable = "agent-platform/libs/host" },
+    { name = "atlas-jsonrpc", editable = "agent-platform/libs/jsonrpc" },
+    { name = "boto3", specifier = ">=1.35" },
+    { name = "fastapi", specifier = ">=0.115" },
+    { name = "fastembed", specifier = ">=0.8.0" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "langchain-mcp-adapters", specifier = ">=0.1" },
+    { name = "mem0ai", specifier = ">=2.1.0" },
+    { name = "opentelemetry-api", specifier = ">=1.30" },
+    { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.30" },
+    { name = "opentelemetry-sdk", specifier = ">=1.30" },
+    { name = "pydantic-settings", specifier = ">=2.6" },
+    { name = "redis", specifier = ">=5.2" },
+    { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.36" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
+]
 
 [[package]]
 name = "atlas-bench"
@@ -434,7 +492,7 @@ requires-dist = [
 [[package]]
 name = "atlas-cluster"
 version = "0.1.0"
-source = { editable = "agent-platform/services/cluster" }
+source = { editable = "infra-platform/services/cluster" }
 dependencies = [
     { name = "fastapi" },
     { name = "pydantic" },
@@ -550,10 +608,12 @@ dependencies = [
     { name = "opentelemetry-api" },
     { name = "opentelemetry-exporter-otlp-proto-http" },
     { name = "opentelemetry-sdk" },
+    { name = "pdfplumber" },
     { name = "pydantic-settings" },
     { name = "pypdfium2" },
     { name = "python-docx" },
     { name = "python-multipart" },
+    { name = "python-pptx" },
     { name = "qdrant-client" },
     { name = "redis" },
     { name = "sqlalchemy", extra = ["asyncio"] },
@@ -578,10 +638,12 @@ requires-dist = [
     { name = "opentelemetry-api", specifier = ">=1.30" },
     { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.30" },
     { name = "opentelemetry-sdk", specifier = ">=1.30" },
+    { name = "pdfplumber", specifier = ">=0.11" },
     { name = "pydantic-settings", specifier = ">=2.6" },
     { name = "pypdfium2", specifier = ">=4.30" },
     { name = "python-docx", specifier = ">=1.1" },
     { name = "python-multipart", specifier = ">=0.0.9" },
+    { name = "python-pptx", specifier = ">=1.0" },
     { name = "qdrant-client", specifier = ">=1.12" },
     { name = "redis", specifier = ">=5.2" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.36" },
@@ -589,67 +651,25 @@ requires-dist = [
 ]
 
 [[package]]
+name = "atlas-redislock"
+version = "0.1.0"
+source = { editable = "infra-platform/libs/redislock" }
+dependencies = [
+    { name = "redis" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "redis", specifier = ">=5.2" }]
+
+[[package]]
 name = "atlas-sandboxd"
 version = "0.1.0"
 source = { editable = "agent-platform/pod/sandboxd" }
 
 [[package]]
-name = "atlas-server"
-version = "0.1.0"
-source = { editable = "agent-platform/services/server" }
-dependencies = [
-    { name = "alembic" },
-    { name = "asyncpg" },
-    { name = "atlas-acp" },
-    { name = "atlas-cluster" },
-    { name = "atlas-config" },
-    { name = "atlas-engine" },
-    { name = "atlas-host" },
-    { name = "atlas-jsonrpc" },
-    { name = "boto3" },
-    { name = "fastapi" },
-    { name = "fastembed" },
-    { name = "httpx" },
-    { name = "langchain-mcp-adapters" },
-    { name = "mem0ai" },
-    { name = "opentelemetry-api" },
-    { name = "opentelemetry-exporter-otlp-proto-http" },
-    { name = "opentelemetry-sdk" },
-    { name = "pydantic-settings" },
-    { name = "redis" },
-    { name = "sqlalchemy", extra = ["asyncio"] },
-    { name = "uvicorn", extra = ["standard"] },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "alembic", specifier = ">=1.14" },
-    { name = "asyncpg", specifier = ">=0.30" },
-    { name = "atlas-acp", editable = "agent-platform/libs/acp" },
-    { name = "atlas-cluster", editable = "agent-platform/services/cluster" },
-    { name = "atlas-config", editable = "agent-platform/services/config" },
-    { name = "atlas-engine", editable = "agent-platform/libs/engine" },
-    { name = "atlas-host", editable = "agent-platform/libs/host" },
-    { name = "atlas-jsonrpc", editable = "agent-platform/libs/jsonrpc" },
-    { name = "boto3", specifier = ">=1.35" },
-    { name = "fastapi", specifier = ">=0.115" },
-    { name = "fastembed", specifier = ">=0.8.0" },
-    { name = "httpx", specifier = ">=0.27" },
-    { name = "langchain-mcp-adapters", specifier = ">=0.1" },
-    { name = "mem0ai", specifier = ">=2.1.0" },
-    { name = "opentelemetry-api", specifier = ">=1.30" },
-    { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.30" },
-    { name = "opentelemetry-sdk", specifier = ">=1.30" },
-    { name = "pydantic-settings", specifier = ">=2.6" },
-    { name = "redis", specifier = ">=5.2" },
-    { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.36" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
-]
-
-[[package]]
 name = "atlas-teamflow"
 version = "0.1.0"
-source = { editable = "teamflow/services/server" }
+source = { editable = "teamflow/services/teamflow" }
 dependencies = [
     { name = "alembic" },
     { name = "asyncpg" },
@@ -678,7 +698,7 @@ requires-dist = [
 [[package]]
 name = "atlas-usercenter"
 version = "0.1.0"
-source = { editable = "usercenter/services/server" }
+source = { editable = "usercenter/services/usercenter" }
 dependencies = [
     { name = "alembic" },
     { name = "argon2-cffi" },
@@ -3655,6 +3675,33 @@ wheels = [
 ]
 
 [[package]]
+name = "pdfminer-six"
+version = "20260107"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "charset-normalizer" },
+    { name = "cryptography" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/34/a4/5cec1112009f0439a5ca6afa8ace321f0ab2f48da3255b7a1c8953014670/pdfminer_six-20260107.tar.gz", hash = "sha256:96bfd431e3577a55a0efd25676968ca4ce8fd5b53f14565f85716ff363889602", size = 8512094, upload-time = "2026-01-07T13:29:12.937Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/20/8b/28c4eaec9d6b036a52cb44720408f26b1a143ca9bce76cc19e8f5de00ab4/pdfminer_six-20260107-py3-none-any.whl", hash = "sha256:366585ba97e80dffa8f00cebe303d2f381884d8637af4ce422f1df3ef38111a9", size = 6592252, upload-time = "2026-01-07T13:29:10.742Z" },
+]
+
+[[package]]
+name = "pdfplumber"
+version = "0.11.10"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pdfminer-six" },
+    { name = "pillow" },
+    { name = "pypdfium2" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/05/56/6f450312ba05a27d7713b73857c1a25100dbda04fbc1331b13fb227a607d/pdfplumber-0.11.10.tar.gz", hash = "sha256:b95b2d28c66efb0a794a83b88c6c6aea5987532a445d20a1cbcfa657022e6e57", size = 102892, upload-time = "2026-06-15T03:31:31.035Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a2/9a/07d658e1e7fad860f1c541ab941348125dbdab773be3a0afaf32361866c7/pdfplumber-0.11.10-py3-none-any.whl", hash = "sha256:7741ea81bf165b474b153e6789d10d18e06b6ddcf3ec84289c3ef2fed6802580", size = 60047, upload-time = "2026-06-15T03:31:29.702Z" },
+]
+
+[[package]]
 name = "pillow"
 version = "12.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -4181,6 +4228,21 @@ wheels = [
 ]
 
 [[package]]
+name = "python-pptx"
+version = "1.0.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "lxml" },
+    { name = "pillow" },
+    { name = "typing-extensions" },
+    { name = "xlsxwriter" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/52/a9/0c0db8d37b2b8a645666f7fd8accea4c6224e013c42b1d5c17c93590cd06/python_pptx-1.0.2.tar.gz", hash = "sha256:479a8af0eaf0f0d76b6f00b0887732874ad2e3188230315290cd1f9dd9cc7095", size = 10109297, upload-time = "2024-08-07T17:33:37.772Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d9/4f/00be2196329ebbff56ce564aa94efb0fbc828d00de250b1980de1a34ab49/python_pptx-1.0.2-py3-none-any.whl", hash = "sha256:160838e0b8565a8b1f67947675886e9fea18aa5e795db7ae531606d68e785cba", size = 472788, upload-time = "2024-08-07T17:33:28.192Z" },
+]
+
+[[package]]
 name = "pytokens"
 version = "0.4.1"
 source = { registry = "https://pypi.org/simple" }
@@ -4520,6 +4582,19 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/63/0b/83aab3b5b739947f744135a7a3a446e25433ebc92b05e01aae197ccbfdda/regex-2026.9.29-cp315-cp315t-win32.whl", hash = "sha256:c4e38dd8f39c43a91d2410ad2b85610701b0979342c3df1d69eaf8e838c757d8", size = 276964, upload-time = "2026-09-29T00:49:50.524Z" },
     { url = "https://files.pythonhosted.org/packages/72/f2/6314b5fc68789b5dcc38885bc6e3d6986b34fb3372b7231088ee5cecaa05/regex-2026.9.29-cp315-cp315t-win_amd64.whl", hash = "sha256:e2c89e9b762c57f59d5e99ee8b20202adb892e35f8d3485741340999ca55058e", size = 286487, upload-time = "2026-09-29T00:49:53.224Z" },
     { url = "https://files.pythonhosted.org/packages/56/bc/97b2245c8c7b2dd01f2db74f2bea003cd33c15009b4996a2447f46b5325c/regex-2026.9.29-cp315-cp315t-win_arm64.whl", hash = "sha256:e8c65ef3862a8ad6e86492b6ed9327805dd66904c012bd3649dc67d822ed6c34", size = 285955, upload-time = "2026-09-29T00:49:55.655Z" },
+]
+
+[[package]]
+name = "reportlab"
+version = "5.0.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "charset-normalizer" },
+    { name = "pillow" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/4a/51/dbe28534ae12c852f61be91f039f343305fd1f34f1c66b8de75afae7a525/reportlab-5.0.1.tar.gz", hash = "sha256:ebd13154be1c8515e665de70bd2d303ae9ddc3ef47e44afd5116441ca0283a26", size = 3945711, upload-time = "2026-08-20T13:48:16.461Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/db/cb/dacbc268cb68d0428ea2cbd85266195a9ab3e677449589ddae59bd7542ac/reportlab-5.0.1-py3-none-any.whl", hash = "sha256:1c36e6bb0e71780c72331eba60da7f602e8d4389a8723825af71342e49d791e8", size = 1957258, upload-time = "2026-08-20T13:48:14.026Z" },
 ]
 
 [[package]]
@@ -5353,6 +5428,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/b3/8f/705086c9d734d3b663af0e9bb3d4de6578d08f46b1b101c2442fd9aecaa2/win32_setctime-1.2.0.tar.gz", hash = "sha256:ae1fdf948f5640aae05c511ade119313fb6a30d7eabe25fef9764dca5873c4c0", size = 4867, upload-time = "2024-12-07T15:28:28.314Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e1/07/c6fe3ad3e685340704d314d765b7912993bcb8dc198f0e7a89382d37974b/win32_setctime-1.2.0-py3-none-any.whl", hash = "sha256:95d644c4e708aba81dc3704a116d8cbc974d70b3bdb8be1d150e36be6e9d1390", size = 4083, upload-time = "2024-12-07T15:28:26.465Z" },
+]
+
+[[package]]
+name = "xlsxwriter"
+version = "3.2.9"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/46/2c/c06ef49dc36e7954e55b802a8b231770d286a9758b3d936bd1e04ce5ba88/xlsxwriter-3.2.9.tar.gz", hash = "sha256:254b1c37a368c444eac6e2f867405cc9e461b0ed97a3233b2ac1e574efb4140c", size = 215940, upload-time = "2025-09-16T00:16:21.63Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3a/0c/3662f4a66880196a590b202f0db82d919dd2f89e99a27fadef91c4a33d41/xlsxwriter-3.2.9-py3-none-any.whl", hash = "sha256:9a5db42bc5dff014806c58a20b9eae7322a134abb6fce3c92c181bfb275ec5b3", size = 175315, upload-time = "2025-09-16T00:16:20.108Z" },
 ]
 
 [[package]]

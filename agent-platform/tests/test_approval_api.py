@@ -19,10 +19,10 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 import redis.asyncio as aioredis
-from atlas_server.config import get_settings
-from atlas_server.db.session import get_sessionmaker
-from atlas_server.executor.inprocess import InProcessExecutor
-from atlas_server.main import create_app
+from atlas_agent.config import get_settings
+from atlas_agent.db.session import get_sessionmaker
+from atlas_agent.executor.inprocess import InProcessExecutor
+from atlas_agent.main import create_app
 from httpx import ASGITransport
 from langchain_core.messages import AIMessageChunk
 
@@ -207,7 +207,7 @@ async def test_an_old_approval_never_expires(client: httpx.AsyncClient) -> None:
     """★ 审批只由人决定：等多久都不替用户按拒绝处理（原先一天后由扫描判死）。"""
     from datetime import UTC, datetime, timedelta
 
-    from atlas_server.db.models import Approval
+    from atlas_agent.db.models import Approval
     from sqlalchemy import update
 
     run_id, approval_id = await _start_guarded_run(client)
@@ -258,7 +258,7 @@ async def test_an_online_wait_is_not_mistaken_for_a_suspension(
     第一个，整轮 runtime_crashed。真机验证时撞到过，症状是「审批批准了，
     子 run 却崩了」。
     """
-    from atlas_server.db.models import Run
+    from atlas_agent.db.models import Run
     from sqlalchemy import update
 
     run_id, _approval_id = await _start_guarded_run(client)
@@ -296,9 +296,9 @@ async def test_a_very_long_tool_name_still_registers(
 
     截断放在仓储层，所以这条测试走的就是生产路径的那个 gate。
     """
-    from atlas_server.db.models import Approval
-    from atlas_server.repositories.approval import _TOOL_NAME_MAX
-    from atlas_server.services.approval import RedisApprovalGate
+    from atlas_agent.db.models import Approval
+    from atlas_agent.repositories.approval import _TOOL_NAME_MAX
+    from atlas_agent.services.approval import RedisApprovalGate
 
     run_id, _ = await _start_guarded_run(client)
 

@@ -4,9 +4,12 @@
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { knowledgeHttp } from "@/lib/http";
+import { http, knowledgeHttp } from "@/lib/http";
 
+/** 新建时的共享预设（只在新建时用，之后在「共享」里调整） */
 export type Permission = "only_me" | "all_team" | "partial_members";
+/** 库级权限 = 用户中心数据权限（AtlasKnowledgeBase） */
+export type KbLevel = "NONE" | "READ" | "WRITE" | "OWNER";
 export type DocForm = "text_model" | "hierarchical_model";
 export type SearchMethod = "semantic_search" | "full_text_search" | "hybrid_search";
 
@@ -27,7 +30,10 @@ export interface Dataset {
   description: string;
   icon: string;
   owner_id: string;
-  permission: Permission;
+  /** service = 服务账号建的库：只有它自己能用，不能共享 */
+  owner_kind: "user" | "service";
+  /** 我对这个库的级别（用户中心数据权限，含「全部知识库」授权） */
+  my_level?: KbLevel;
   indexing_technique: string;
   embedding_model: string;
   retrieval_config: RetrievalConfig;
@@ -36,7 +42,6 @@ export interface Dataset {
   document_count: number;
   word_count: number;
   created_at: string;
-  members?: { id: string; level: "read" | "write" }[];
   can_write?: boolean;
   can_admin?: boolean;
 }
@@ -278,8 +283,52 @@ export function useKbMutation<A, R>(fn: (args: A) => Promise<R>) {
   });
 }
 
+export interface KbGrant {
+  id: string;
+  permission: Exclude<KbLevel, "NONE">;
+  subject: { type: "USER" | "DEPT"; id: string; name?: string; account?: string; status?: string };
+  include_sub: boolean;
+  source?: string;
+  granted_at?: string;
+}
+
+export interface KbGrants {
+  data: KbGrant[];
+  my_level: KbLevel;
+  can_manage: boolean;
+  shareable: boolean;
+}
+
+export interface DirUser {
+  id: string;
+  name: string;
+  account: string;
+}
+
+export interface DirDept {
+  id: string;
+  parent_id: string | null;
+  name: string;
+}
+
+export function useGrants(id: string) {
+  return useQuery({ queryKey: ["kb", "grants", id], queryFn: () => knowledgeHttp.get<KbGrants>(`/v1/datasets/${id}/grants`) });
+}
+
+/** 通讯录（atlas-server 转发用户中心）：共享时选人、选部门 */
+export const directory = {
+  users: (q: string) => http.get<DirUser[]>("/v1/directory/users", { q, limit: 20 }),
+  depts: () => http.get<DirDept[]>("/v1/directory/depts"),
+};
+
 export const kbApi = {
-  createDataset: (body: Partial<Dataset> & { name: string }) => knowledgeHttp.post<Dataset>("/v1/datasets", body),
+  createDataset: (body: Partial<Dataset> & { name: string; permission?: Permission }) =>
+    knowledgeHttp.post<Dataset>("/v1/datasets", body),
+  addGrants: (id: string, body: { level: Exclude<KbLevel, "NONE">; subjects: { type: "user" | "dept"; id: string }[]; include_sub: boolean }) =>
+    knowledgeHttp.post(`/v1/datasets/${id}/grants`, body),
+  updateGrant: (id: string, aclId: string, body: { level?: Exclude<KbLevel, "NONE">; include_sub?: boolean }) =>
+    knowledgeHttp.patch(`/v1/datasets/${id}/grants/${aclId}`, body),
+  revokeGrant: (id: string, aclId: string) => knowledgeHttp.del<void>(`/v1/datasets/${id}/grants/${aclId}`),
   updateDataset: (id: string, body: Record<string, unknown>) => knowledgeHttp.patch<Dataset>(`/v1/datasets/${id}`, body),
   deleteDataset: (id: string) => knowledgeHttp.del<void>(`/v1/datasets/${id}`),
   estimate: (form: FormData) =>
@@ -336,8 +385,15 @@ export const STATUS_LABEL: Record<KbDocument["indexing_status"], { label: string
 
 export const PERMISSION_LABEL: Record<Permission, string> = {
   only_me: "仅自己",
-  all_team: "全部成员",
+  all_team: "全部成员只读",
   partial_members: "部分成员",
+};
+
+export const LEVEL_LABEL: Record<KbLevel, string> = {
+  NONE: "无权限",
+  READ: "只读",
+  WRITE: "可编辑",
+  OWNER: "所有者",
 };
 
 export const METHOD_LABEL: Record<SearchMethod, string> = {

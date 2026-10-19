@@ -9,7 +9,7 @@ from atlas_acp.v1 import AgentCaps
 
 #: 装进 Pod 就等于每个会话多背一层的东西
 FORBIDDEN = (
-    "atlas_server",
+    "atlas_agent",
     "atlas_engine",
     "atlas_host",
     "atlas_bridge",

@@ -31,9 +31,19 @@ from typing import Any
 
 from ..errors import Invalid
 from .cleaner import clean
+from .docir import Block, DocIR
 from .models import Document, text_hash
 from .splitter import FixedRecursiveCharacterTextSplitter
-from .structure import StructureOptions, build_parents, child_texts, parse_sections
+from .structure import (
+    Embed,
+    Parent,
+    StructureOptions,
+    build_parents,
+    child_texts,
+    parse_sections,
+    path_text,
+    sections_from_blocks,
+)
 
 __all__ = [
     "AUTOMATIC_RULES",
@@ -41,6 +51,7 @@ __all__ = [
     "STRUCTURE_TEXT_DEFAULTS",
     "normalize_process_rule",
     "transform",
+    "transform_ir",
 ]
 
 #: 同 Dify DatasetProcessRule.AUTOMATIC_RULES
@@ -108,13 +119,36 @@ def _structure(raw: Any, *, defaults: dict[str, Any], max_length: int) -> dict[s
         raise Invalid(f"按标题分段的最大长度须在 100 ~ {max_length} 之间")
     if small < 0 or small >= size:
         raise Invalid("合并阈值须小于最大长度")
-    return {"max_heading_level": level, "max_length": size, "min_length": small}
+    return {
+        "max_heading_level": level,
+        "max_length": size,
+        "min_length": small,
+        # 语义分段（§5.1）：超长小节在相邻段落向量相似度最低处切开，而不是按长度硬切
+        "semantic_split": bool(cfg.get("semantic_split", False)),
+    }
 
 
 def normalize_process_rule(
     mode: str, rules: dict[str, Any] | None, *, doc_form: str, max_length: int
 ) -> tuple[str, dict[str, Any]]:
-    """校验并补全处理规则，返回 (mode, rules)。doc_form 决定允许的 mode。"""
+    """校验并补全处理规则，返回 (mode, rules)。doc_form 决定允许的 mode。
+
+    rules.parser（§4.2）：auto（按格式路由，默认）| text（只抽纯文本）；默认值不写进规则。
+    """
+    from .parsers import PARSER_OPTIONS
+
+    parser = (rules or {}).get("parser") or "auto"
+    if parser not in PARSER_OPTIONS:
+        raise Invalid(f"parser 只能是 {' / '.join(PARSER_OPTIONS)}")
+    mode, out = _normalize_rule(mode, rules, doc_form=doc_form, max_length=max_length)
+    if parser != "auto":
+        out["parser"] = parser
+    return mode, out
+
+
+def _normalize_rule(
+    mode: str, rules: dict[str, Any] | None, *, doc_form: str, max_length: int
+) -> tuple[str, dict[str, Any]]:
     if doc_form == "hierarchical_model":
         if mode != "hierarchical":
             raise Invalid("父子分段只能用 hierarchical 规则")
@@ -194,6 +228,62 @@ def _nodes(
     return out
 
 
+def _structure_opts(
+    rules: dict[str, Any], child_max_length: int, embed: Embed | None = None
+) -> StructureOptions:
+    cfg = rules["structure"]
+    return StructureOptions(
+        max_heading_level=cfg["max_heading_level"],
+        max_length=cfg["max_length"],
+        min_length=cfg["min_length"],
+        child_max_length=child_max_length,
+        embed=embed if cfg.get("semantic_split") else None,
+    )
+
+
+def _join_ctx(*parts: str | None) -> str:
+    return "\n".join(p for p in parts if p)
+
+
+def _parent_nodes(
+    parents: list[Parent],
+    opts: StructureOptions,
+    meta: dict[str, Any],
+    *,
+    preview_limit: int | None,
+    doc_title: str = "",
+) -> list[Document]:
+    """父块 → 分段。向量化前缀（context）= 文档标题 + 标题路径（上下文补全 L1，§5.3）。"""
+    out: list[Document] = []
+    for p in parents:
+        md: dict[str, Any] = {
+            **meta,
+            "doc_id": str(uuid.uuid4()),
+            "doc_hash": text_hash(p.content),
+            "title_path": p.path,
+            "context": _join_ctx(doc_title, path_text(p.path)),
+        }
+        if (loc := p.locator()) is not None:
+            md["source_locator"] = loc
+        node = Document(page_content=p.content, metadata=md)
+        if opts.child_max_length:
+            node.children = [
+                Document(
+                    page_content=text_,
+                    metadata={
+                        "doc_id": str(uuid.uuid4()),
+                        "doc_hash": text_hash(text_),
+                        "context": _join_ctx(doc_title, ctx),
+                    },
+                )
+                for text_, ctx in child_texts(p, opts)
+            ]
+        out.append(node)
+        if preview_limit and len(out) >= preview_limit:
+            break
+    return out
+
+
 def _structure_nodes(
     documents: list[Document],
     rules: dict[str, Any],
@@ -206,42 +296,11 @@ def _structure_nodes(
     多页 / 多段解析结果先拼成一篇：小节可以跨页。
     """
     text = clean("\n\n".join(d.page_content for d in documents), rules)
-    cfg = rules["structure"]
-    opts = StructureOptions(
-        max_heading_level=cfg["max_heading_level"],
-        max_length=cfg["max_length"],
-        min_length=cfg["min_length"],
-        child_max_length=child_max_length,
-    )
+    opts = _structure_opts(rules, child_max_length)
     meta = dict(documents[0].metadata) if documents else {}
     meta.pop("page", None)
-    out: list[Document] = []
-    for p in build_parents(parse_sections(text, opts.max_heading_level), opts):
-        node = Document(
-            page_content=p.content,
-            metadata={
-                **meta,
-                "doc_id": str(uuid.uuid4()),
-                "doc_hash": text_hash(p.content),
-                "title_path": p.path,
-            },
-        )
-        if child_max_length:
-            node.children = [
-                Document(
-                    page_content=text_,
-                    metadata={
-                        "doc_id": str(uuid.uuid4()),
-                        "doc_hash": text_hash(text_),
-                        "context": ctx,
-                    },
-                )
-                for text_, ctx in child_texts(p, opts)
-            ]
-        out.append(node)
-        if preview_limit and len(out) >= preview_limit:
-            break
-    return out
+    parents = build_parents(parse_sections(text, opts.max_heading_level), opts)
+    return _parent_nodes(parents, opts, meta, preview_limit=preview_limit)
 
 
 def transform(
@@ -300,3 +359,86 @@ def transform(
         return parents
 
     raise Invalid(f"暂不支持的分段结构：{doc_form}")
+
+
+# ───────────────────────────────────────────── DocIR 入口（§4.1）
+
+
+def _clean_blocks(ir: DocIR, rules: dict[str, Any]) -> list[Block]:
+    """清洗规则作用到每个块的文本上；表格单元格不动（列名与数字不该被改写）。"""
+    out = []
+    for b in ir.blocks:
+        if b.type in ("table", "image") or not b.text:
+            out.append(b)
+            continue
+        out.append(copy.replace(b, text=clean(b.text, rules)))
+    return out
+
+
+def _structured(doc_form: str, rules: dict[str, Any]) -> int | None:
+    """按结构分段时返回子块长度（0 = 不切子块）；不按结构分段返回 None。"""
+    if doc_form == "text_model" and "structure" in rules:
+        return 0
+    if doc_form == "hierarchical_model" and rules.get("parent_mode") == "structure":
+        return int(rules["subchunk_segmentation"]["max_tokens"])
+    return None
+
+
+def doc_title_of(ir: DocIR, fallback: str = "") -> str:
+    """文档标题：解析器给出的标题 → 文件名去掉扩展名。"""
+    title = str(ir.meta.get("title") or "").strip()
+    if title:
+        return title
+    name = str(ir.meta.get("source") or fallback)
+    return name.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+
+
+def transform_ir(
+    ir: DocIR,
+    *,
+    doc_form: str,
+    rules: dict[str, Any],
+    preview_limit: int | None = None,
+    embed: Embed | None = None,
+    doc_title: str | None = None,
+) -> list[Document]:
+    """DocIR → 分段。按结构分段时直接用块的结构（并带上 source_locator）；
+    其余模式按页渲染成文本后走原来的切分（分段带页码）。
+
+    embed：语义分段要用的向量化函数（处理规则开了 semantic_split 才会用到）。
+    """
+    source = str(ir.meta.get("source") or "")
+    title = doc_title if doc_title is not None else doc_title_of(ir)
+    child_len = _structured(doc_form, rules)
+    if child_len is not None:
+        opts = _structure_opts(rules, child_len, embed)
+        if ir.is_plain_text:
+            text = clean(ir.plain_text(), rules)
+            sections = parse_sections(text, opts.max_heading_level)
+        else:
+            sections = sections_from_blocks(_clean_blocks(ir, rules), opts.max_heading_level)
+        return _parent_nodes(
+            build_parents(sections, opts),
+            opts,
+            {"source": source},
+            preview_limit=preview_limit,
+            doc_title=title,
+        )
+    documents = (
+        [Document(page_content=ir.plain_text(), metadata={"source": source})]
+        if ir.is_plain_text
+        else ir.page_documents(source)
+    )
+    nodes = transform(
+        [d for d in documents if d.page_content.strip()],
+        doc_form=doc_form,
+        rules=rules,
+        preview_limit=preview_limit,
+    )
+    for n in nodes:
+        n.metadata["context"] = title
+        for c in n.children or []:
+            c.metadata["context"] = _join_ctx(title, c.metadata.get("context"))
+        if (page := n.metadata.get("page")) is not None:
+            n.metadata.setdefault("source_locator", {"pages": [page]})
+    return nodes

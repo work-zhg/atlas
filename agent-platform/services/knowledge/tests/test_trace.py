@@ -92,7 +92,7 @@ async def test_funnel_truncated_and_threshold(client: Any, rt: Any) -> None:
     from atlas_knowledge.errors import NotFound
     from atlas_knowledge.services.retrieval import KnowledgeRetrieval
 
-    bob = Principal(id="bob", operations=frozenset())
+    bob = Principal(uid="bob", operations=frozenset())
     async with get_sessionmaker()() as s:
         with pytest.raises(NotFound):
             await KnowledgeRetrieval(s, rt).get(bob, UUID(res["retrieval_id"]))

@@ -14,7 +14,7 @@
 
 from __future__ import annotations
 
-from atlas_server.domain.messages import (
+from atlas_agent.domain.messages import (
     KIND_CHAT,
     KIND_TOOL_RESULT,
     StoredMessage,

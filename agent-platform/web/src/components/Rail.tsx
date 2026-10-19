@@ -3,9 +3,9 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { Popover } from "antd";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 
-import { http } from "@/lib/http";
+import { authHeaders } from "@/lib/http";
 import { can, useMe } from "@/lib/session";
 
 import { Icon, type IconName } from "./Icon";
@@ -29,16 +29,16 @@ const NAV: NavItem[] = [
     icon: "spark",
     label: "技能",
     match: "/skills",
-    ops: ["skill:upload", "skill:review", "agent:create", "agent:manage_all"],
+    ops: ["skill:upload", "skill:review", "agent:create"],
   },
   {
     href: "/knowledge",
     icon: "book",
     label: "知识库",
     match: "/knowledge",
-    ops: ["kb:create", "kb:manage_all", "kb:review", "agent:create"],
+    ops: ["kb:create", "kb:review", "agent:create"],
   },
-  { href: "/mcp", icon: "plug", label: "MCP", match: "/mcp", ops: ["mcp:manage", "mcp:manage_all"] },
+  { href: "/mcp", icon: "plug", label: "MCP", match: "/mcp", ops: ["mcp:manage"] },
   { href: "/memories", icon: "brain", label: "记忆", match: "/memories", ops: ["chat:use"] },
   {
     href: "/settings/instructions",
@@ -47,27 +47,20 @@ const NAV: NavItem[] = [
     match: "/settings/instructions",
     ops: ["chat:use"],
   },
-  {
-    href: "/settings/service-accounts",
-    icon: "shield",
-    label: "服务账号",
-    match: "/settings/service-accounts",
-    ops: ["service_account:manage"],
-  },
 ];
 
 export function Rail() {
   const pathname = usePathname();
-  const router = useRouter();
   const qc = useQueryClient();
   const { data: me } = useMe();
   // 文件预览页在新标签里单独打开，是一个整页查看器，不需要主导航；登录页也不要
   if (pathname.startsWith("/files/") || pathname === "/login") return null;
 
+  /** 登出在用户中心（三个前端共用一个登录态）：登出后去用户中心登录页。 */
   async function logout() {
-    await http.post("/v1/auth/logout");
+    await fetch("/uc/api/v1/auth/logout", { method: "POST", headers: authHeaders() });
     qc.clear();
-    router.replace("/login");
+    window.location.assign("/uc/login");
   }
 
   return (

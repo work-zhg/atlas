@@ -283,9 +283,8 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
               description: src.description,
               system_prompt: spec.system_prompt ?? "",
               model: spec.model,
-              // ★ 剔除 task：子智能体不能再委派（深度结构性封顶在 1），
-              //   留着只会让人以为它能，实际是个哑参数
-              tool_names: (spec.tool_names ?? []).filter((n) => n !== "task"),
+              // SubAgent 可以继续派 SubAgent（共用这份名录，层数不设上限），task 照原样保留
+              tool_names: spec.tool_names ?? [],
               // ★ 与后端 SubAgentSpec 的默认值对齐。两者在生成类型里是必填
               //   （后端有默认值 ⇒ 响应里必然存在），少写就编译不过。
               //   persistent：子智能体持有自己的会话，第二次委派恢复上下文。
@@ -899,8 +898,7 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
                   </div>
                 ))}
                 <p style={{ margin: "10px 0 0", fontSize: 12, color: "var(--fg-3)" }}>
-                  委派深度上限 {draft.spec.limits.max_subagent_depth}
-                  ；子智能体不能再委派子智能体（结构性封顶），因此加入时会自动剔除它的 task 工具。
+                  子智能体也能继续派这份名录里的子智能体，层数不设上限；一轮累计能派出的数量由服务端配置兜底。
                   <br />
                   加入的是来源智能体<b>当时的配置副本</b> —— 之后改动来源智能体不会影响这里，
                   历史会话的可复现性也不受影响。需要更新时，移除后重新加入即可。

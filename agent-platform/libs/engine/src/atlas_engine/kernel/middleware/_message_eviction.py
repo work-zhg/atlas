@@ -122,19 +122,19 @@ def _build_evicted_tool_message(message: ToolMessage, evicted_content: str | lis
 def _offload_tool_message_content(
     message: ToolMessage,
     content_str: str,
-    backend: FilesystemProtocol,
+    filesystem: FilesystemProtocol,
     large_tool_results_prefix: str,
 ) -> ToolMessage | None:
     """Write `content_str` to `{prefix}/{tool_call_id}` and return a clipped replacement.
 
     The replacement carries a head+tail preview and the offload path in
     `TOO_LARGE_TOOL_MSG` format so the agent can `read_file` the full content
-    by tool_call_id. Returns `None` if the backend write fails — caller should
+    by tool_call_id. Returns `None` if the filesystem write fails — caller should
     keep the original message in that case.
     """
     sanitized_id = sanitize_tool_call_id(message.tool_call_id) if message.tool_call_id else "unknown"
     file_path = f"{large_tool_results_prefix}/{sanitized_id}"
-    result = backend.write(file_path, content_str)
+    result = filesystem.write(file_path, content_str)
     if result is None or result.error:
         return None
     replacement_text = TOO_LARGE_TOOL_MSG.format(
@@ -148,13 +148,13 @@ def _offload_tool_message_content(
 async def _aoffload_tool_message_content(
     message: ToolMessage,
     content_str: str,
-    backend: FilesystemProtocol,
+    filesystem: FilesystemProtocol,
     large_tool_results_prefix: str,
 ) -> ToolMessage | None:
-    """Async variant of `_offload_tool_message_content` using `backend.awrite`."""
+    """Async variant of `_offload_tool_message_content` using `filesystem.awrite`."""
     sanitized_id = sanitize_tool_call_id(message.tool_call_id) if message.tool_call_id else "unknown"
     file_path = f"{large_tool_results_prefix}/{sanitized_id}"
-    result = await backend.awrite(file_path, content_str)
+    result = await filesystem.awrite(file_path, content_str)
     if result is None or result.error:
         return None
     replacement_text = TOO_LARGE_TOOL_MSG.format(

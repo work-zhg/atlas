@@ -1,7 +1,8 @@
-"""P5：委派的事件边界、用量、标题生成。
+"""P5：SubAgent 的事件边界、用量、标题生成。
 
 全部脱离 DB 与网络 —— 用假模型驱动真实的 kernel 图，注入一个假的
-`DelegationProtocol` 受理方，所以测的是真的图行为，不是 mock 出来的行为。
+`SubAgentSpawner`，所以测的是真的图行为，不是 mock 出来的行为。派 SubAgent
+一律挂起：这里用 tests/graphs.py::run_to_end 按执行器的方式续跑到底。
 
 ## 图内路径的测试去哪了
 
@@ -31,13 +32,14 @@ from typing import Any
 from uuid import UUID
 
 from atlas_engine.contracts import InvalidSpec
-from atlas_server.domain.events import EventType
-from atlas_server.domain.spec import AgentSpec, LimitSpec, ModelSpec, SubAgentSpec
-from atlas_server.domain.tool_registry import unsupported_tools
+from atlas_agent.domain.events import EventType
+from atlas_agent.domain.spec import AgentSpec, LimitSpec, ModelSpec, SubAgentSpec
+from atlas_agent.domain.tool_registry import unsupported_tools
 from langchain_core.messages import AIMessageChunk
+from langchain_core.tools import StructuredTool
 
-from .fakes import TurnModel, tool_call_chunk
-from .graphs import build_graph, run_agent as run
+from .fakes import Spawner, TurnModel, tool_call_chunk
+from .graphs import build_graph, run_to_end
 
 RUN_ID = UUID("55555555-5555-5555-5555-555555555555")
 
@@ -47,18 +49,6 @@ RESEARCHER = SubAgentSpec(
     system_prompt="你是研究员。",
     model=ModelSpec(model="claude-sonnet-5"),
 )
-
-
-class Gateway:
-    """DelegationProtocol 的测试实现：按脚本返回，并记录收到的委派。"""
-
-    def __init__(self, reply: str = "子结论") -> None:
-        self.reply = reply
-        self.calls: list[tuple[str, str, bool]] = []
-
-    async def delegate(self, task: str, name: str, *, fresh: bool = False) -> str:
-        self.calls.append((task, name, fresh))
-        return self.reply
 
 
 def _spec(**over: Any) -> AgentSpec:
@@ -89,25 +79,18 @@ def _delegating_parent() -> TurnModel:
     )
 
 
-async def _collect(spec: AgentSpec, parent: TurnModel, gateway: Gateway, **hook_kw: Any) -> list:
-    return [
-        e
-        async for e in run(
-            spec,
-            run_id=RUN_ID,
-            model=parent,
-            input_content="帮我查 X",
-            subagents=gateway, **hook_kw,
-        )
-    ]
+async def _collect(spec: AgentSpec, parent: TurnModel, spawner: Spawner, **hook_kw: Any) -> list:
+    return await run_to_end(
+        spec, parent, run_id=RUN_ID, input_content="帮我查 X", spawner=spawner, **hook_kw
+    )
 
 
-# ---------------------------------------------------------------- 委派
+# ---------------------------------------------------------------- SubAgent
 
 
 async def test_delegation_emits_subagent_boundary_events() -> None:
     """★ P5 完成标准：SubAgentCard 有数据 —— started/finished 成对且可配对。"""
-    events = await _collect(_spec(), _delegating_parent(), Gateway("X 的结论是 42。"))
+    events = await _collect(_spec(), _delegating_parent(), Spawner("X 的结论是 42。"))
     types = [e.type for e in events]
 
     assert EventType.RUN_FAILED not in types, next(
@@ -125,16 +108,19 @@ async def test_delegation_emits_subagent_boundary_events() -> None:
     assert started.data["subagent_run_id"] == finished.data["subagent_run_id"] == "call_1"
 
 
-async def test_the_gateway_receives_the_brief() -> None:
-    """任务书原样到达受理方 —— 这是委派唯一携带的输入（设计 §02）。"""
-    gateway = Gateway()
-    await _collect(_spec(), _delegating_parent(), gateway)
-    assert gateway.calls == [("查一下 X", "researcher", False)]
+async def test_the_spawner_receives_the_brief() -> None:
+    """任务书原样到达 spawner —— 这是派 SubAgent 唯一携带的输入（设计 §02）。
+
+    ★ 只派一次：续跑那一段 task 被再执行一遍时直接填结论，不会再起一个子 run。
+    """
+    spawner = Spawner()
+    await _collect(_spec(), _delegating_parent(), spawner)
+    assert spawner.calls == [("researcher", "查一下 X", False)]
 
 
 async def test_task_is_not_reported_as_plain_tool_call() -> None:
-    """委派不该在工具页里显示成一次普通的 `task` 调用。"""
-    events = await _collect(_spec(), _delegating_parent(), Gateway())
+    """派 SubAgent 不该在工具页里显示成一次普通的 `task` 调用。"""
+    events = await _collect(_spec(), _delegating_parent(), Spawner())
 
     tool_names = [
         e.data.get("name")
@@ -145,14 +131,14 @@ async def test_task_is_not_reported_as_plain_tool_call() -> None:
 
 
 async def test_delegation_result_does_not_pollute_main_answer() -> None:
-    """受理方返回的结论进 ToolMessage，不进主回复。
+    """SubAgent 的结论进 ToolMessage，不进主回复。
 
-    主回复必须完全来自主模型自己的输出 —— 委派结果混进 message.delta 的话，
+    主回复必须完全来自主模型自己的输出 —— 结论混进 message.delta 的话，
     用户会看到一段突然冒出来、语气都不一样的话。
     """
-    events = await _collect(_spec(), _delegating_parent(), Gateway("【子智能体的内部输出】"))
+    events = await _collect(_spec(), _delegating_parent(), Spawner("【子智能体的内部输出】"))
 
-    final = next(e for e in events if e.type is EventType.MESSAGE_COMPLETED)
+    final = [e for e in events if e.type is EventType.MESSAGE_COMPLETED][-1]
     text = final.data["content"][0]["text"]
     assert "子智能体的内部输出" not in text
     assert text == "子智能体查完了。"
@@ -162,11 +148,11 @@ async def test_delegation_result_does_not_pollute_main_answer() -> None:
 
 
 async def test_usage_is_summed_across_all_model_calls() -> None:
-    """★ 累加而非覆盖。
+    """父 run 的用量只算父模型自己的调用。
 
-    一轮对话里主模型被调用多次（每次工具往返一次）。只留最后一次的话
-    token 上限形同虚设。子智能体的用量不在此列 —— 它记在**子 run 自己**
-    的行上，这正是「委派 = 子会话上的一个 run」的账目含义。
+    子智能体的用量不在此列 —— 它记在**子 run 自己**的行上，这正是
+    「SubAgent = 子会话上的一个 run」的账目含义。派 SubAgent 一律挂起，
+    两次父模型调用各在一段里，各段的 usage.updated 由执行器累加进 run 行。
     """
     usage = {"input_tokens": 100, "output_tokens": 10, "total_tokens": 110}
     parent = TurnModel(
@@ -179,18 +165,18 @@ async def test_usage_is_summed_across_all_model_calls() -> None:
         ]
     )
 
-    events = await _collect(_spec(), parent, Gateway())
-    u = next(e.data for e in events if e.type is EventType.USAGE_UPDATED)
+    events = await _collect(_spec(), parent, Spawner())
+    total = sum(e.data["total_tokens"] for e in events if e.type is EventType.USAGE_UPDATED)
 
     # 父自己的 2 次调用，各 110 —— 子智能体的账不混进来
-    assert u["total_tokens"] == 220, f"实际 {u['total_tokens']}，说明用量被覆盖而非累加"
+    assert total == 220, f"实际 {total}"
 
 
 # ---------------------------------------------------------------- 装配纪律
 
 
-def test_subagents_without_gateway_is_a_loud_error() -> None:
-    """§13.2 不允许静默降级：配了子智能体却没注入受理方必须报错。
+def test_subagents_without_spawner_is_a_loud_error() -> None:
+    """§13.2 不允许静默降级：配了 SubAgent 却没注入 spawner 必须报错。
 
     静默砍掉 task 的话，模型按「没有帮手」的方式做事，而配置界面显示它有 ——
     两边都看不出异常。装配移到 server 之后失败点也随之前移：build_graph
@@ -198,7 +184,7 @@ def test_subagents_without_gateway_is_a_loud_error() -> None:
     """
     import pytest
 
-    with pytest.raises(InvalidSpec, match="受理方"):
+    with pytest.raises(InvalidSpec, match="SubAgentSpawner"):
         build_graph(_spec(), _delegating_parent())
 
 
@@ -220,7 +206,7 @@ async def test_title_emitted_before_run_finished() -> None:
     async def titler(_text: str) -> dict[str, Any]:
         return {"title": "关于 X 的调研", "degraded": False}
 
-    events = await _collect(_spec(), _delegating_parent(), Gateway(), titler=titler)
+    events = await _collect(_spec(), _delegating_parent(), Spawner(), titler=titler)
     types = [e.type for e in events]
 
     assert EventType.TITLE_GENERATED in types
@@ -234,7 +220,7 @@ async def test_title_failure_does_not_fail_the_run() -> None:
     async def broken(_text: str) -> dict[str, Any]:
         raise RuntimeError("haiku 挂了")
 
-    events = await _collect(_spec(), _delegating_parent(), Gateway(), titler=broken)
+    events = await _collect(_spec(), _delegating_parent(), Spawner(), titler=broken)
     types = [e.type for e in events]
 
     assert EventType.TITLE_GENERATED not in types
@@ -242,8 +228,8 @@ async def test_title_failure_does_not_fail_the_run() -> None:
 
 
 async def test_seq_still_gapless_with_subagents() -> None:
-    """契约规则 2 在委派事件混排下仍然成立。"""
-    events = await _collect(_spec(), _delegating_parent(), Gateway())
+    """契约规则 2 在 SubAgent 事件混排、跨段续跑下仍然成立。"""
+    events = await _collect(_spec(), _delegating_parent(), Spawner())
     seqs = [e.seq for e in events]
     assert seqs == list(range(1, len(seqs) + 1)), f"seq 不连续：{seqs}"
 
@@ -263,18 +249,20 @@ async def test_text_before_a_tool_call_is_a_separate_block() -> None:
 
     段的边界是**工具调用**，不是换行或段落 —— 见 domain/events.py::Answer。
     """
+    # ★ 用一个普通工具：task 一律挂起，两轮发言会落在两段里；分段要看的是同一段之内
+    lookup = StructuredTool.from_function(
+        func=lambda query: "X 的结论是 42。", name="lookup", description="查资料"
+    )
     parent = TurnModel(
         scripts=[
             [
                 AIMessageChunk(content="我先委派一下。"),
-                tool_call_chunk(
-                    "task", '{"description":"查 X","subagent_type":"researcher"}', "c1"
-                ),
+                tool_call_chunk("lookup", '{"query":"X"}', "c1"),
             ],
             [AIMessageChunk(content="查完了，结论是 42。")],
         ]
     )
-    events = await _collect(_spec(), parent, Gateway("X 的结论是 42。"))
+    events = await _collect(_spec(), parent, Spawner(), extra_tools=[lookup])
 
     completed = next(e for e in events if e.type is EventType.MESSAGE_COMPLETED)
     assert completed.data["content"] == [
@@ -292,6 +280,6 @@ async def test_text_before_a_tool_call_is_a_separate_block() -> None:
 async def test_a_run_without_tool_calls_stays_one_block() -> None:
     """没调过工具就只有一段 —— 不要凭空把普通回答切碎。"""
     parent = TurnModel(scripts=[[AIMessageChunk(content="直接回答你。")]])
-    events = await _collect(_spec(), parent, Gateway())
+    events = await _collect(_spec(), parent, Spawner())
     completed = next(e for e in events if e.type is EventType.MESSAGE_COMPLETED)
     assert completed.data["content"] == [{"type": "text", "text": "直接回答你。"}]

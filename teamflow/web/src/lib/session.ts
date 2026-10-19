@@ -16,6 +16,13 @@ export function useCan(): (op: string) => boolean {
   return (op: string) => set.has(op);
 }
 
+/** 对某数据编码下「全部」数据的级别是否 ≥ min（数据编码级授权，如「全部团队 · Owner」）。 */
+export function useAllData(): (code: string, min?: "READ" | "WRITE" | "OWNER") => boolean {
+  const { data } = useMe();
+  const rank = { NONE: 0, READ: 1, WRITE: 2, OWNER: 3 } as const;
+  return (code, min = "READ") => rank[data?.data_levels?.[code] ?? "NONE"] >= rank[min];
+}
+
 export function flatMenus(nodes: MenuNode[]): MenuNode[] {
   return nodes.flatMap((n) => (n.children ? flatMenus(n.children) : [n]));
 }

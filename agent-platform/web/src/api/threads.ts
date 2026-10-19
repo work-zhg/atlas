@@ -84,7 +84,7 @@ export function useThreadFiles(threadId: string | undefined, running: boolean) {
 /**
  * 文件预览站点的入口（doc/detail/file-preview.html §06）。
  *
- * ★ 令牌在 URL 路径里：iframe / img 带不了 X-User-Id。后端空闲 1 小时才失效、
+ * ★ 令牌在 URL 路径里：iframe / img 带不了身份头。后端空闲 1 小时才失效、
  *   每次访问都续期，所以这里 50 分钟内复用同一个；失效（410）时调用方 refetch。
  */
 export function usePreviewSession(threadId: string | undefined) {
@@ -137,7 +137,7 @@ export async function fetchPreviewText(url: string, maxBytes: number): Promise<P
   return { text, truncated, total: Number.isFinite(total) ? total : bytes.length, binary };
 }
 
-/** 下载工作区文件。★ 走 fetch 而不是 <a href>：要带身份头（X-User-Id）。 */
+/** 下载工作区文件。★ 走 fetch 而不是 <a href>：要带请求头（authHeaders）。 */
 export async function downloadThreadFile(threadId: string, path: string): Promise<void> {
   const res = await fetch(apiUrl(`/v1/threads/${threadId}/files/download`, { path }), {
     headers: authHeaders(),

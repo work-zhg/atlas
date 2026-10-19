@@ -8,13 +8,13 @@ from __future__ import annotations
 
 import httpx
 import pytest
-from atlas_server.config import get_settings
-from atlas_server.db.models import Thread
-from atlas_server.db.session import get_sessionmaker
-from atlas_server.executor.inprocess import InProcessExecutor
-from atlas_server.main import create_app
-from atlas_server.repositories.run import RunRepository
-from atlas_server.services.compaction import ThreadSummarizer, make_persist_hook
+from atlas_agent.config import get_settings
+from atlas_agent.db.models import Thread
+from atlas_agent.db.session import get_sessionmaker
+from atlas_agent.executor.inprocess import InProcessExecutor
+from atlas_agent.main import create_app
+from atlas_agent.repositories.run import RunRepository
+from atlas_agent.services.compaction import ThreadSummarizer, make_persist_hook
 from httpx import ASGITransport
 from sqlalchemy import select
 

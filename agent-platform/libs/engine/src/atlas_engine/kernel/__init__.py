@@ -8,13 +8,9 @@
   模块路径随时可能变 —— server 要的协议与结果类型一律走 atlas_engine.contracts
   （那里的 re-export 才是承诺面）。守卫见 tests/test_engine_purity.py。
 
-★ middleware/summarization.py 是唯一没吃透的大块，动它之前先读这段。
-  2174 行、占 kernel 22%，是全包里**唯一基本保持引入原样**的模块 —— 其余要么
-  自研、要么已重写或深度改造过，唯独它的行为没有人真正走通过一遍。
-  而压缩恰恰是 bug 最隐蔽的地方：token 计数偏差、切分边界算错、
-  tool_call 与 tool_result 配对被切断 —— 这些都不报错，表现是「模型莫名其妙
-  忘事」，在事件流上看不出任何异常（与 §13.2「不静默降级」同款的失败形态）。
-  它排在重写队列的前面；在那之前，改这个文件的人要自己补覆盖测试。
+★ 压缩只有一套：middleware/compaction.py（Atlas 自研，server 按智能体配置装）。
+  原先 create_deep_agent 恒装的 middleware/summarization.py（引入自上游、全包唯一
+  没人走通过的大块）2026-10-19 删除，理由见 graph.py 模块文档。
 
 ★ 这里刻意**不导出 __version__**。它原先来自 _version.py —— 那个模块 217 行
   全部为了算一个字符串喂给 LangSmith 的 `lc_versions` 元数据（含一整套
@@ -26,7 +22,9 @@
 """
 
 from atlas_engine.kernel.graph import (
-    DeepAgentState,
+    FilesystemConfig,
+    GraphOptions,
+    SubAgentConfig,
     create_deep_agent,
 )
 from atlas_engine.kernel.middleware.filesystem import (
@@ -38,21 +36,15 @@ from atlas_engine.kernel.middleware.subagents import (
     SubAgent,
     SubAgentMiddleware,
 )
-from atlas_engine.kernel.profiles.harness.harness_profiles import (
-    HarnessProfile,
-    HarnessProfileConfig,
-    register_harness_profile,
-)
 
 __all__ = [
-    "DeepAgentState",
+    "FilesystemConfig",
     "FilesystemMiddleware",
     "FilesystemPermission",
     "FsToolName",
-    "HarnessProfile",
-    "HarnessProfileConfig",
+    "GraphOptions",
     "SubAgent",
+    "SubAgentConfig",
     "SubAgentMiddleware",
     "create_deep_agent",
-    "register_harness_profile",
 ]

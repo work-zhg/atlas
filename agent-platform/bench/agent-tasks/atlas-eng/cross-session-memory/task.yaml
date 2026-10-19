@@ -1,0 +1,13 @@
+category: eng
+tags: [eng, memory]
+instruction: |
+  写一个 Python 脚本 total.py：读取 nums.txt（每行一个整数），打印它们的和。写完运行确认。
+# 偏好只在前置会话里说过；主会话的任务说明不提 —— 考察记忆是否抽取、是否被注入并遵守
+setup:
+  - |
+    请记住我的一个长期要求：以后你给我写的任何 Python 脚本，第一行都必须是注释 `# owner: data-team-lin`。这次不用写代码，回复「好的」即可。
+thread_memory: "on"
+wait_memory_s: 120
+# 用户记忆在所有 trial 之间共享：同一题的 trial 串行，各自结束后清掉新增的记忆
+serial: true
+budget: {wall_s: 900}

@@ -1,10 +1,11 @@
-"""子智能体委派中间件 —— `task` 工具的唯一形态。
+"""SubAgent 中间件 —— `task` 工具的唯一形态。
 
-Atlas 的子智能体**只有一种执行方式**：`task` 把 (任务书, 名字, fresh) 交给
-注入的 `DelegationProtocol` 受理方，由它在子智能体自己的会话上起一个子 run
-（detail/subagent.html）。曾经并存的另外三种形态已整体删除：
+Atlas 的 SubAgent **只有一种执行方式**：`task` 让注入的 `SubAgentSpawner` 在
+SubAgent 自己的会话上起一个子 run，本段随即挂起，子 run 跑完叫醒父 run、
+续跑时把结论填进 `task` 的结果（detail/subagent.html、contracts/suspension.py）。
+曾经并存的另外三种形态已整体删除：
 
-  图内 SubAgent          在主图协程里编译并 ainvoke 子图。每次委派从空上下文
+  图内 SubAgent          在主图协程里编译并 ainvoke 子图。每次从空上下文
                          开始，且需要一套**平行的**治理装配（子图审批 / 子图
                          步数刹车 / 子图文件白名单）—— 与子 run 天然继承的
                          同一批守卫重复，两份语义必然漂移
@@ -15,7 +16,8 @@ Atlas 的子智能体**只有一种执行方式**：`task` 把 (任务书, 名�
                          不用 LangSmith
 
 多一种执行形态就多一套要维护的治理语义。kernel 在这里只剩两件事：
-工具的形态（schema / 描述），和把受理方的返回整形成 ToolMessage。
+工具的形态（schema / 描述），以及 `task` 调用与 state.waiting_on 之间的转换
+（SubAgentMiddleware.awrap_tool_call，与审批中间件同一个姿态）。
 """
 
 from collections.abc import Awaitable, Callable, Sequence
@@ -29,13 +31,16 @@ from langchain.agents.middleware.types import (
     ResponseT,
 )
 from langchain.tools import BaseTool
+from langchain_core.messages import ToolMessage
 from langchain_core.tools import StructuredTool
+from langgraph.types import Command
 from pydantic import BaseModel, Field
 
-from atlas_engine.contracts import DelegationProtocol
+from atlas_engine.contracts import SubAgentSpawner
 from atlas_engine.kernel.middleware._utils import append_to_system_message
+from atlas_engine.kernel.middleware.suspension import SuspensionState, release_wait
 
-#: 委派工具在模型侧的名字。runner 的事件推导（subagent.started/finished 的
+#: SubAgent 工具在模型侧的名字。runner 的事件推导（subagent.started/finished 的
 #: 判别）与 tool_registry 的目录都引用这里 —— 单一来源，改名只改一处。
 SUBAGENT_TOOL = "task"
 
@@ -60,11 +65,11 @@ class SubAgent(TypedDict):
     """唯一标识。主 agent 调 `task` 时用它选人。"""
 
     description: str
-    """干什么的。主 agent 据此决定何时委派。"""
+    """干什么的。模型据此决定何时派给它。"""
 
     system_prompt: NotRequired[str]
     """子智能体的提示词。kernel **不使用** —— 它在子 run 里生效。
-    调用方（atlas_engine.agent）顺手传了它，留作调试时一眼可见。"""
+    调用方（server 的 build_graph）顺手传了它，留作调试时一眼可见。"""
 
     session_mode: NotRequired[Literal["persistent", "ephemeral"]]
     """会话模式，缺省 persistent。只用来写工具描述：两种模式的「记不记得」与
@@ -116,8 +121,8 @@ Usage notes:
 - Delegation costs a full agent run. Use it when the task is genuinely multi-step or needs its own context window, not to save a couple of tool calls.
 - Different subagents, or the same [ephemeral] subagent, can be called in parallel within one turn.
 - The report is not shown to the user; relay what matters yourself.
-- The result ends with a <delegation .../> line (status, tokens, tool calls, duration). If the subagent failed or was stopped, its last partial output is included — verify it before relying on it."""  # noqa: E501
-"""Task-tool description for the **delegating** (session-level) mode.
+- The result ends with a <subagent .../> line (status, tokens, tool calls, duration). If the subagent failed or was stopped, its last partial output is included — verify it before relying on it."""  # noqa: E501
+"""Task-tool description for the session-level SubAgent mode.
 
 The default `TASK_TOOL_DESCRIPTION` says "Each invocation is stateless", which
 is exactly backwards for session-scoped subagents. Getting that wrong has
@@ -134,51 +139,26 @@ def _agents_block(subagents: Sequence[SubAgent]) -> str:
     )
 
 
-def _build_delegating_task_tool(
-    subagents: Sequence[SubAgent],
-    gateway: DelegationProtocol,
-    task_description: str | None,
-) -> BaseTool:
-    """委派模式的 `task`：不跑子图，只调 `delegate` 回调。
+def _build_task_tool(subagents: Sequence[SubAgent]) -> BaseTool:
+    """`task` 工具：只提供 schema 与描述，函数体**永远不会被执行**。
 
-    ★ 与图内模式最重要的差别不是「谁来跑」，而是**子智能体图根本不编译**。
-      会话级子智能体跑在自己的子 run 里，那条链路会用子会话的 spec 重新
-      装配一遍 —— 在这里再编译一份，既白建一个图，也会让「哪份配置真正
+    ★ 它的全部行为在 SubAgentMiddleware.awrap_tool_call 里（起子 run、登记
+      waiting_on、续跑时填结论）—— 与审批中间件接管高风险工具是同一个姿态。
+      工具函数本身做不到：ToolNode 要求工具返回的 Command 里必须带一条对应的
+      ToolMessage，而起了子 run 之后恰恰**不该**写结果（调用要悬空，contracts/suspension.py）。
+
+    ★ SubAgent 的图根本不编译：它跑在自己的子 run 里，那条链路会用 SubAgent 的
+      spec 重新装配一遍 —— 在这里再编译一份，既白建一个图，也会让「哪份配置真正
       生效」有两个答案。所以这里只用到 spec 的 name / description。
-
-    返回值是子智能体的最终文本，直接作为 ToolMessage 内容。没有 Command、
-    没有状态合并：子会话的状态归子会话，主线程只看见结论（设计 §02）。
     """
-    names = [spec["name"] for spec in subagents]
-    block = _agents_block(subagents)
-    if task_description is None:
-        description = SESSION_TASK_TOOL_DESCRIPTION.format(available_agents=block)
-    elif "{available_agents}" in task_description:
-        description = task_description.format(available_agents=block)
-    else:
-        description = task_description
-
-    def _unknown(subagent_type: str) -> str:
-        allowed = ", ".join(f"`{n}`" for n in names)
-        return f"We cannot invoke subagent {subagent_type} because it does not exist, the only allowed types are {allowed}"
-
-    async def atask(description: str, subagent_type: str, fresh: bool = False) -> str:
-        if subagent_type not in names:
-            return _unknown(subagent_type)
-        # ★ 委派失败（撞并发上限、同轮重名、子 run 失败）回成**工具错误文本**，
-        #   不冒泡。主 agent 因此能改派、合并任务或自己动手 —— 而异常会让
-        #   整个 run 失败，把一次可恢复的局部问题升级成全局故障。
-        try:
-            return await gateway.delegate(description, subagent_type, fresh=fresh)
-        except Exception as exc:  # noqa: BLE001
-            return f"委派给 {subagent_type} 失败：{exc}"
+    description = SESSION_TASK_TOOL_DESCRIPTION.format(available_agents=_agents_block(subagents))
 
     def task(description: str, subagent_type: str, fresh: bool = False) -> str:
-        # 同步路径在 Atlas 里不会被走到（图跑在 asyncio 上），但工具必须
-        # 两条都给 —— 缺了同步版的话 StructuredTool 在同步调用时报的是
-        # 一个与委派无关的内部错误。
-        msg = "会话级子智能体只支持异步委派；请在异步图里调用 task。"
-        raise NotImplementedError(msg)
+        msg = "task 不会被直接执行：SubAgentMiddleware 在 awrap_tool_call 里接管"
+        raise RuntimeError(msg)
+
+    async def atask(description: str, subagent_type: str, fresh: bool = False) -> str:
+        return task(description, subagent_type, fresh)
 
     return StructuredTool.from_function(
         name=SUBAGENT_TOOL,
@@ -191,37 +171,48 @@ def _build_delegating_task_tool(
 
 
 class SubAgentMiddleware(AgentMiddleware[Any, ContextT, ResponseT]):
-    """把 `task` 工具装进主图。
+    """把 `task` 工具装进图，并接管它的全部行为。
 
-    ★ 「委派还没出结果就跳出」那条判据**不在这里** —— 它搬到了
-      SuspensionMiddleware（审批也用同一条路，两者是同一件事）。本中间件
-      只剩工具的形态与提示词。
+        首次    名字不在名录里 → 当场回一条失败结果；否则 spawner 起子 run，
+                在 waiting_on 里登记（reason=subagent），**不写结果** —— 本段随即挂起
+        续跑    这个调用的结论已在 decisions 里 → 作为 `task` 的结果交出，删掉那一项
 
-    受理方（delegate）是**必填**的：kernel 不再有图内执行的回落路径。
-    没有受理方却配了子智能体，正确的失败点在装配时（engine 的 build_agent
-    会先以 InvalidSpec 拦下；这里的 ValueError 是 kernel 直用时的兜底）。
+    ★ 它排在调用方中间件**之后**（create_deep_agent）：已经有结果的兄弟调用由外层的
+      SuspensionMiddleware 原样返回，`task` 被配成需审批时由外层的 ApprovalMiddleware
+      先放行 —— 起子 run 永远是最后一步，不会重复起、也不会绕过审批。
+
+    ★ SubAgent 的 SubAgent：子 run 的图装的是同一个中间件（server 侧的
+      spec_for_subagent 给 native SubAgent 留着名录），所以嵌套不设层数 —— 每一层都是
+      「起子 run → 挂起 → 被叫醒 → 填结论」这同一件事。
+
+    spawner 是**必填**的：kernel 没有图内执行的回落路径。没有 spawner 却配了
+    SubAgent，正确的失败点在装配时（server 的 build_graph 先以 InvalidSpec 拦下；
+    这里的 ValueError 是 kernel 直用时的兜底）。
     """
+
+    state_schema = SuspensionState
 
     def __init__(
         self,
         *,
         subagents: Sequence[SubAgent],
-        delegate: DelegationProtocol,
+        spawner: SubAgentSpawner,
         system_prompt: str | None = None,
-        task_description: str | None = None,
     ) -> None:
         super().__init__()
         if not subagents:
             msg = "At least one subagent must be specified"
             raise ValueError(msg)
-        if delegate is None:
-            msg = "SubAgentMiddleware 需要 DelegationProtocol 受理方 —— 图内执行已删除"
+        if spawner is None:
+            msg = "SubAgentMiddleware 需要 SubAgentSpawner —— 图内执行已删除"
             raise ValueError(msg)
 
-        self.tools = [_build_delegating_task_tool(subagents, delegate, task_description)]
+        self._spawner = spawner
+        self._names = [spec["name"] for spec in subagents]
+        self.tools = [_build_task_tool(subagents)]
 
-        # 附加到系统提示词的说明（可选）—— 子智能体名录已在工具描述里，
-        # 这里只用于调用方想额外强调的委派方针。
+        # 附加到系统提示词的说明（可选）—— SubAgent 名录已在工具描述里，
+        # 这里只用于调用方想额外强调的派发方针。
         if system_prompt is not None:
             self.system_prompt = system_prompt + "\n\nAvailable subagent types:\n\n" + _agents_block(subagents)
         else:
@@ -248,3 +239,50 @@ class SubAgentMiddleware(AgentMiddleware[Any, ContextT, ResponseT]):
             new_system_message = append_to_system_message(request.system_message, self.system_prompt)
             return await handler(request.override(system_message=new_system_message))
         return await handler(request)
+
+    async def awrap_tool_call(
+        self,
+        request: Any,
+        handler: Callable[[Any], Awaitable[ToolMessage | Command[Any]]],
+    ) -> ToolMessage | Command[Any]:
+        call = request.tool_call or {}
+        if call.get("name") != SUBAGENT_TOOL:
+            return await handler(request)
+        call_id = str(call.get("id") or "")
+        state = getattr(request, "state", None) or {}
+
+        # 续跑：结论已到 → 作为工具结果交出，并从 waiting_on 里删掉这一项
+        wait = (state.get("waiting_on") or {}).get(call_id)
+        if wait is not None and wait.get("reason") == "subagent":
+            result = (state.get("decisions") or {}).get(wait.get("token", ""))
+            if result is None:
+                # barrier 只在子 run 终态后续跑，走不到这里；真走到了就原样保持登记，
+                # 而不是再起一个子 run
+                return Command(update={"waiting_on": {call_id: wait}})
+            message = ToolMessage(content=result, tool_call_id=call_id, name=SUBAGENT_TOOL)
+            return release_wait(message, call_id)
+
+        args = call.get("args") or {}
+        name = str(args.get("subagent_type") or "")
+        if name not in self._names:
+            # ★ 派不出去的当场回成失败结果，不挂起：模型看到后可以改派或自己动手
+            allowed = ", ".join(f"`{n}`" for n in self._names)
+            return _failed(call_id, f"SubAgent {name!r} 不存在，可用的是：{allowed}")
+        try:
+            sub_run_id = await self._spawner.spawn(
+                name, str(args.get("description") or ""), fresh=bool(args.get("fresh", False))
+            )
+        except Exception as exc:  # noqa: BLE001
+            # ★ 撞上限、同轮同名、会话被占都回成**失败的工具结果**，不冒泡：一次派不出去是
+            #   可恢复的局部问题，模型可以改派、合并任务或自己动手；异常会让整个 run 失败
+            return _failed(call_id, f"派给 {name} 失败：{exc}")
+
+        # ★ 不写结果：调用留着悬空，只在 waiting_on 里登记。SuspensionMiddleware 在
+        #   before_model 看到它就让本段结束（不调模型），子 run 跑完再叫醒这个 run
+        return Command(
+            update={"waiting_on": {call_id: {"reason": "subagent", "token": str(sub_run_id)}}}
+        )
+
+
+def _failed(call_id: str, text: str) -> ToolMessage:
+    return ToolMessage(content=text, tool_call_id=call_id, name=SUBAGENT_TOOL, status="error")

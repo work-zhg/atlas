@@ -2,8 +2,9 @@
 #
 # ★ 库是宿主 Postgres 上的独立 database atlas_knowledge（docker compose 的 knowledge-init-db）；
 #   Redis 用 3 号库作 Celery broker 与缓存；Qdrant 与记忆共用一个实例（collection 前缀 kb_）。
-# ★ 服务间令牌复用 atlas-config-creds 的 internal_token：本服务校验浏览器会话时调的是
-#   atlas-server 的 /internal/v1/auth/introspect，那条接口认的就是它。
+# ★ 内网免令牌（内网身份传递 §3、§8）：身份在请求头里；操作码按 X-Auth-Uid 取用户中心快照。
+#   只剩知识库 MCP 的签名密钥（Secret atlas-knowledge-mcp，与 atlas-server 共用）—— 那是给会话
+#   Pod（不可信代码）的能力凭据，不是服务间令牌。
 # ★ 浏览器经网关 /atlas-knowledge-api 访问，Service 只需 ClusterIP。
 apiVersion: apps/v1
 kind: Deployment
@@ -33,6 +34,9 @@ spec:
             - {name: ATLAS_KB_OSS_REGION, value: us-east-1}
             - {name: ATLAS_KB_AUTH_MODE, value: uc}
             - {name: ATLAS_KB_SERVER_URL, value: "http://atlas-server.atlas-system.svc.cluster.local:8000"}
+            # 库级权限 = 用户中心数据权限（AtlasKnowledgeBase）：以 Atlas 应用的身份调用户中心，
+            # 与 atlas-server 同一对 App Key / Secret。用户中心后端在集群里（15-usercenter.yaml）
+            - {name: ATLAS_KB_UC_BASE_URL, value: "http://atlas-usercenter.atlas-system.svc.cluster.local:8030"}
             - {name: ATLAS_KB_CORS_ORIGINS, value: '["http://localhost:3000","http://127.0.0.1:3000"]'}
             # 遥测：与 atlas-server 同一个 Collector（Jaeger 那路会删正文，Langfuse 那路保留）
             - {name: ATLAS_KB_OTEL_ENABLED, value: "true"}
@@ -46,8 +50,14 @@ spec:
               valueFrom: {secretKeyRef: {name: atlas-config-creds, key: oss_access_key_id}}
             - name: ATLAS_KB_OSS_ACCESS_KEY_SECRET
               valueFrom: {secretKeyRef: {name: atlas-config-creds, key: oss_access_key_secret}}
-            - name: ATLAS_KB_INTERNAL_TOKEN
-              valueFrom: {secretKeyRef: {name: atlas-config-creds, key: internal_token}}
+            - name: ATLAS_KB_MCP_SECRET
+              valueFrom: {secretKeyRef: {name: atlas-knowledge-mcp, key: secret}}
+            # 入库增强（上下文补全、表格摘要）与查询理解用的 LLM：OpenAI 兼容的 chat/completions。
+            #   key 复用 server 的模型网关凭据（同一个 DeepSeek 账号）
+            - {name: ATLAS_KB_LLM_BASE_URL, value: "https://api.deepseek.com"}
+            - {name: ATLAS_KB_LLM_MODEL, value: deepseek-chat}
+            - name: ATLAS_KB_LLM_API_KEY
+              valueFrom: {secretKeyRef: {name: atlas-server-creds, key: litellm_key}}
       containers:
         - name: api
           image: atlas-app:dev
@@ -92,6 +102,9 @@ spec:
             - {name: ATLAS_KB_OSS_REGION, value: us-east-1}
             - {name: ATLAS_KB_AUTH_MODE, value: uc}
             - {name: ATLAS_KB_SERVER_URL, value: "http://atlas-server.atlas-system.svc.cluster.local:8000"}
+            # 库级权限 = 用户中心数据权限（AtlasKnowledgeBase）：以 Atlas 应用的身份调用户中心，
+            # 与 atlas-server 同一对 App Key / Secret。用户中心后端在集群里（15-usercenter.yaml）
+            - {name: ATLAS_KB_UC_BASE_URL, value: "http://atlas-usercenter.atlas-system.svc.cluster.local:8030"}
             - {name: ATLAS_KB_CORS_ORIGINS, value: '["http://localhost:3000","http://127.0.0.1:3000"]'}
             # 遥测：与 atlas-server 同一个 Collector（Jaeger 那路会删正文，Langfuse 那路保留）
             - {name: ATLAS_KB_OTEL_ENABLED, value: "true"}
@@ -105,8 +118,14 @@ spec:
               valueFrom: {secretKeyRef: {name: atlas-config-creds, key: oss_access_key_id}}
             - name: ATLAS_KB_OSS_ACCESS_KEY_SECRET
               valueFrom: {secretKeyRef: {name: atlas-config-creds, key: oss_access_key_secret}}
-            - name: ATLAS_KB_INTERNAL_TOKEN
-              valueFrom: {secretKeyRef: {name: atlas-config-creds, key: internal_token}}
+            - name: ATLAS_KB_MCP_SECRET
+              valueFrom: {secretKeyRef: {name: atlas-knowledge-mcp, key: secret}}
+            # 入库增强（上下文补全、表格摘要）与查询理解用的 LLM：OpenAI 兼容的 chat/completions。
+            #   key 复用 server 的模型网关凭据（同一个 DeepSeek 账号）
+            - {name: ATLAS_KB_LLM_BASE_URL, value: "https://api.deepseek.com"}
+            - {name: ATLAS_KB_LLM_MODEL, value: deepseek-chat}
+            - name: ATLAS_KB_LLM_API_KEY
+              valueFrom: {secretKeyRef: {name: atlas-server-creds, key: litellm_key}}
           resources:
             requests: {cpu: 200m, memory: 1Gi}
 ---

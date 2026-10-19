@@ -17,6 +17,8 @@ const STAGE_LABEL: Record<string, string> = {
   merged: "合并",
   rerank: "重排",
   threshold: "分数阈值",
+  query_understanding: "查询理解",
+  diversity: "多样性",
   assemble: "归并到分段",
   final: "取前 K 个",
 };

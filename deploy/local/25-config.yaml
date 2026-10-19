@@ -1,8 +1,8 @@
 # 配置服务（atlas-config）：技能与 MCP 注册表的唯一所有者
 # （doc/skill-mcp-backend-design.html §16）。
 #
-# ★ 凭据（对象存储 HMAC、服务间令牌）不在本文件里 —— 由 deploy/local/apply.sh
-#   建成 Secret atlas-config-creds。
+# ★ 凭据（对象存储 HMAC）不在本文件里 —— 由 deploy/local/apply.sh 建成 Secret atlas-config-creds。
+#   内网免令牌（内网身份传递 §3）：没有服务间令牌。
 # ★ 库是宿主 Postgres 上的独立 database atlas_config（docker compose 的
 #   config-init-db 建好）；与运行时库互不访问。
 apiVersion: apps/v1
@@ -32,16 +32,14 @@ spec:
             - {name: ATLAS_CONFIG_OSS_ADDRESSING_STYLE, value: path}
             - {name: ATLAS_CONFIG_OSS_REGION, value: us-east-1}
             - {name: ATLAS_CONFIG_CORS_ORIGINS, value: '["http://localhost:3000","http://127.0.0.1:3000"]'}
-            # 浏览器直连本服务（经网关 /atlas-config-api），登录会话交给 atlas-server 校验
-            # （doc/auth-permission-design.html §9）；凭据是下面的 ATLAS_CONFIG_INTERNAL_TOKEN
+            # 浏览器经网关 /atlas-config-api 访问：网关校验登录、写入 X-Uid；操作码按 X-Auth-Uid
+            # 取用户中心授权快照（内网身份传递 §3）。内网免令牌
             - {name: ATLAS_CONFIG_AUTH_MODE, value: uc}
-            - {name: ATLAS_CONFIG_SERVER_URL, value: "http://atlas-server.atlas-system.svc.cluster.local:8000"}
+            - {name: ATLAS_CONFIG_UC_BASE_URL, value: "http://atlas-usercenter.atlas-system.svc.cluster.local:8030"}
             - name: ATLAS_CONFIG_OSS_ACCESS_KEY_ID
               valueFrom: {secretKeyRef: {name: atlas-config-creds, key: oss_access_key_id}}
             - name: ATLAS_CONFIG_OSS_ACCESS_KEY_SECRET
               valueFrom: {secretKeyRef: {name: atlas-config-creds, key: oss_access_key_secret}}
-            - name: ATLAS_CONFIG_INTERNAL_TOKEN
-              valueFrom: {secretKeyRef: {name: atlas-config-creds, key: internal_token}}
       containers:
         - name: config
           image: atlas-app:dev
@@ -55,15 +53,13 @@ spec:
           resources:
             requests: {cpu: 50m, memory: 128Mi}
 ---
-# ★ LoadBalancer：BFF 上线前管理页由宿主浏览器直连（设计 §13.3），
-#   Docker Desktop 把它落到 127.0.0.1:8020。
-# ★ /internal/* 只该给运行时用：靠服务间令牌把关（浏览器拿不到它）。
+# ★ ClusterIP（内网身份传递 §4）：浏览器只经网关访问；/internal/* 网关一律 404，只在内网可达。
 apiVersion: v1
 kind: Service
 metadata:
   name: atlas-config
   namespace: atlas-system
 spec:
-  type: LoadBalancer
+  type: ClusterIP
   selector: {app: atlas-config}
   ports: [{port: 8020, targetPort: 8020}]

@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from ..audit import record
-from ..auth import Principal, current_principal, require_any, require_internal
+from ..auth import Principal, current_principal, require_any
 from ..db.models import Instruction
 from ..db.types import utcnow
 from .deps import SessionDep
@@ -29,9 +29,8 @@ __all__ = ["internal_router", "router"]
 MAX_CHARS = 10_000
 
 router = APIRouter(prefix="/config/instructions", tags=["instructions"])
-internal_router = APIRouter(
-    prefix="/internal", tags=["internal"], dependencies=[Depends(require_internal)]
-)
+#: 只在内网可达（网关 404），内网免令牌（内网身份传递 §3）
+internal_router = APIRouter(prefix="/internal", tags=["internal"])
 
 User = Annotated[Principal, Depends(current_principal)]
 PlatformAdmin = Annotated[Principal, Depends(require_any("instruction:manage", "model:manage"))]

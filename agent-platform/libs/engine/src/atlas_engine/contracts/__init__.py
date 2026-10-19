@@ -2,10 +2,10 @@
 
 ## 定位
 
-三个能力协议（Filesystem / Sandbox / Delegation）与它们的结果类型**定义在
+能力协议（Filesystem / Sandbox / SubAgentSpawner / ApprovalGate）与它们的结果类型**定义在
 这里**，kernel 与 server 都向下依赖本层：
 
-    server（实现方）   OssFilesystem / DockerSandbox / SubagentService
+    server（实现方）   OssFilesystem / DockerSandbox / SubAgentService
         ↓ 实现                          ↑ 消费
     contracts（本层）  ←──────  kernel 中间件 / engine 装配
 
@@ -35,7 +35,6 @@ slice_read_response）也在列：它们是读窗口分页语义的参考实现�
 """
 
 from .approval import ApprovalGate, ApprovalState, Decision
-from .delegation import DelegationProtocol, delegation_pending
 from .errors import (
     REFUSAL_STOP_REASONS,
     ContextOverflow,
@@ -45,8 +44,6 @@ from .errors import (
     ModelRateLimited,
     ModelRefused,
     ModelUnavailable,
-    RunCancelled,
-    RunTimeout,
     UnsupportedProvider,
     classify,
 )
@@ -73,29 +70,18 @@ from .sandbox import (
     SandboxUnavailable,
 )
 from .skills import SkillRef
-from .suspension import (
-    RELEASED_MARKER,
-    SUSPENSION_MARKER,
-    Suspension,
-    SuspensionReason,
-    is_released,
-    parse_suspension,
-    released_marker,
-    suspend_marker,
-)
+from .subagent import SubAgentSpawner
+from .suspension import SuspensionReason, Wait, WaitingOn, merge_waits
 
 __all__ = [
     "DEFAULT_WORKDIR",
     "EDIT_MAX_BYTES",
     "REFUSAL_STOP_REASONS",
-    "RELEASED_MARKER",
     "SEARCH_MAX_KEYS",
-    "SUSPENSION_MARKER",
     "ApprovalGate",
     "ApprovalState",
     "ContextOverflow",
     "Decision",
-    "DelegationProtocol",
     "DeleteResult",
     "EditResult",
     "EngineError",
@@ -109,24 +95,20 @@ __all__ = [
     "ModelRefused",
     "ModelUnavailable",
     "ReadResult",
-    "RunCancelled",
-    "RunTimeout",
     "SandboxProtocol",
     "SandboxUnavailable",
     "SearchResult",
     "SkillRef",
-    "Suspension",
+    "SubAgentSpawner",
     "SuspensionReason",
     "UnsupportedProvider",
+    "Wait",
+    "WaitingOn",
     "WriteResult",
     "classify",
     "create_file_data",
-    "delegation_pending",
     "file_data_to_string",
-    "is_released",
+    "merge_waits",
     "normalize_read_bounds",
-    "parse_suspension",
-    "released_marker",
     "slice_read_response",
-    "suspend_marker",
 ]

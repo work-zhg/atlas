@@ -1,4 +1,4 @@
-# server、cluster、config 与 knowledge 的运行镜像。
+# server、cluster、config、knowledge、用户中心与 AI TeamFlow 后端的运行镜像。
 #
 # ★ 一个镜像、两个入口：两者是同一个 workspace 里的包，依赖树高度重叠
 #   （fastapi / uvicorn / pydantic），拆成两个镜像只是多构建一次。
@@ -38,16 +38,20 @@ RUN HF_HUB_DISABLE_XET=1 python -c "from fastembed import TextEmbedding; TextEmb
     && du -sh /tmp/fastembed_cache
 
 WORKDIR /app
-# ★ 源码在 agent-platform/ 下按 libs / services 分组；镜像内仍平铺在 /app 下（布局不变，
-#   K8s 清单里的工作目录 /app/server 不用跟着改）
+# ★ 源码按产品分目录（agent-platform / infra-platform / usercenter / teamflow），产品内再按
+#   libs / services 分组；镜像内仍平铺在 /app 下（布局不变，K8s 清单里的工作目录 /app/server
+#   不用跟着改）。所以 services/agent 拷进来仍叫 server/ —— 那是镜像布局，不是包名（atlas_agent）
 COPY agent-platform/libs/acp/ acp/
 COPY agent-platform/libs/jsonrpc/ jsonrpc/
 COPY agent-platform/libs/host/ host/
 COPY agent-platform/libs/engine/ engine/
-COPY agent-platform/services/cluster/ cluster/
+COPY infra-platform/services/cluster/ cluster/
 COPY agent-platform/services/config/ config/
 COPY agent-platform/services/knowledge/ knowledge/
-COPY agent-platform/services/server/ server/
+COPY agent-platform/services/agent/ server/
+# 用户中心与 AI TeamFlow 后端：与 Atlas 共用依赖树（fastapi / sqlalchemy / httpx），同一个镜像、各自的 Deployment
+COPY usercenter/services/usercenter/ usercenter/
+COPY teamflow/services/teamflow/ teamflow/
 
 # ★ 四个包一次装：它们彼此按名字依赖（server → engine/acp/cluster），
 #   分开装的话 pip 会去 PyPI 找 atlas-engine，而那里没有这个包。
@@ -60,15 +64,18 @@ COPY agent-platform/services/server/ server/
 # ★ pip 下载缓存放 BuildKit 缓存挂载（不进镜像层）：源码在依赖之前拷入，任何代码改动都会让这一层
 #   重跑，有了缓存就不必每次重新下载全部依赖。
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install ./jsonrpc ./host ./acp ./engine "./cluster[k8s]" ./config ./knowledge ./server
+    pip install ./jsonrpc ./host ./acp ./engine "./cluster[k8s]" ./config ./knowledge ./server \
+                ./usercenter ./teamflow
 
 
 # alembic.ini 与 migrations/ 在包外（server/ 目录下），迁移要从这里跑。
 WORKDIR /app/server
 
-EXPOSE 8000 8010 8020
+EXPOSE 8000 8010 8020 8030 8040 8050
 
 # server 的入口。cluster 由 Deployment 覆盖成 python -m atlas_cluster；
 # config 覆盖成 python -m atlas_config serve（迁移：python -m atlas_config migrate，
 # 迁移脚本在包内，不依赖工作目录）。
-CMD ["uvicorn", "atlas_server.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# --timeout-graceful-shutdown：停机时等进行中响应的上限。会话 SSE 由交接逻辑主动关闭，
+# 这里兜的是别的长请求（大文件下载）—— 不设的话 uvicorn 会无限等下去，拖到被 K8s 强杀
+CMD ["uvicorn", "atlas_agent.main:app", "--host", "0.0.0.0", "--port", "8000", "--timeout-graceful-shutdown", "70"]

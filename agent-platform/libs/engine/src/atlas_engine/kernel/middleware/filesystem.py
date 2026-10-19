@@ -8,7 +8,7 @@ import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, NotRequired, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 import wcmatch.glob as wcglob
 from langchain.agents.middleware.types import (
@@ -25,7 +25,6 @@ from langchain.tools.tool_node import ToolCallRequest
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, RemoveMessage, ToolMessage
 from langchain_core.messages.content import ContentBlock
 from langchain_core.tools import BaseTool, StructuredTool
-from langgraph.channels.delta import DeltaChannel
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.types import Command
 from pydantic import BaseModel, Field
@@ -33,10 +32,8 @@ from pydantic import BaseModel, Field
 from atlas_engine.contracts import (
     DeleteResult,
     EditResult,
-    FileData,
     FilesystemProtocol,
     ReadResult,
-    SandboxProtocol,
     WriteResult,
 )
 from atlas_engine.kernel.middleware._fs_utils import (
@@ -90,16 +87,6 @@ _SYNC_GLOB_WORKERS = 4
 FilesystemOperation = Literal["read", "write"]
 """Classification of filesystem tools as read-only or mutating."""
 
-_DEFAULT_FS_TOOL_OPS: dict[str, FilesystemOperation] = {
-    "ls": "read",
-    "read_file": "read",
-    "glob": "read",
-    "grep": "read",
-    "write_file": "write",
-    "edit_file": "write",
-    "delete": "write",
-}
-"""Default mapping from filesystem tool name to its operation category."""
 
 _READ_FILE_MEDIA_RESULT: Final = "read_file_media_result"
 """`additional_kwargs` key marking synthetic `HumanMessage` media from `read_file`."""
@@ -130,11 +117,6 @@ def _emit_file_written(path: str, size_bytes: int) -> None:
         get_stream_writer()({"kind": "file.written", "path": path, "size_bytes": size_bytes})
     except Exception:  # noqa: BLE001 - 无 writer 时静默跳过是有意的
         return
-
-
-def _tool_error(name: str, tool_call_id: str | None, content: str) -> ToolMessage:
-    """Build a `ToolMessage` carrying a plain text error."""
-    return ToolMessage(content=content, name=name, tool_call_id=tool_call_id, status="error")
 
 
 def _is_read_file_media_result(message: AnyMessage) -> bool:
@@ -276,10 +258,6 @@ def _scrub_unsupported_multimodal_content(messages: list[AnyMessage], model: "Ba
     return [_scrub_message_multimodal_content(message, profile=profile, tolerates_non_pdf_files=tolerates_non_pdf_files) for message in messages]
 
 
-
-
-
-
 def _get_read_file_type(path: str) -> FileType:
     """Classify a file for `read_file`, gating optional video extensions."""
     file_type = _get_file_type(path)
@@ -292,24 +270,23 @@ class FilesystemPermission:
 
     operations: list[FilesystemOperation]
     paths: list[str]
-    mode: Literal["allow", "deny", "interrupt"] = "allow"
+    mode: Literal["allow", "deny"] = "allow"
     """Effect when a tool call matches this rule:
 
     - `"allow"` (default): the call proceeds.
     - `"deny"`: the tool returns a permission-denied error.
-    - `"interrupt"`: the call is paused for human approval via
-        [`HumanInTheLoopMiddleware`][langchain.agents.middleware.HumanInTheLoopMiddleware].
 
-        Best paired with patterns that have a literal leading anchor (e.g.,
-        `/secrets/**`, `/projects/*/secrets/**`). Bulk tools
-        (`ls`/`glob`/`grep`) fire the interrupt based on whether their
-        search subtree could overlap the rule's anchored prefix, so a fully
-        unanchored pattern (`/**/secrets`) collapses to `/` and
-        conservatively over-fires for any bulk call.
+    ★ 没有 `"interrupt"`（原实现经 HumanInTheLoopMiddleware 暂停等人确认）：它靠
+      LangGraph 的 interrupt() + checkpointer，而 Atlas 不用 checkpointer，审批走
+      ApprovalMiddleware 的挂起（contracts/suspension.py）。要按路径审批，在那里加。
     """
 
     def __post_init__(self) -> None:
-        """Validate permission path patterns."""
+        """Validate the mode and permission path patterns."""
+        if self.mode not in ("allow", "deny"):
+            # 调用方只认 "deny"：别的值会被当成放行 —— 报出来，不静默
+            msg = f"Permission mode must be 'allow' or 'deny': {self.mode!r}"
+            raise ValueError(msg)
         for path in self.paths:
             if not path.startswith("/"):
                 msg = f"Permission path must start with '/': {path!r}"
@@ -327,7 +304,7 @@ def _check_fs_permission(
     rules: list[FilesystemPermission],
     operation: FilesystemOperation,
     path: str,
-) -> Literal["allow", "deny", "interrupt"]:
+) -> Literal["allow", "deny"]:
     for rule in rules:
         if operation not in rule.operations:
             continue
@@ -386,11 +363,11 @@ def _wildcard_delete_overlap(pattern: str, anchor: str, target: str) -> bool:
 
 
 def _delete_target_may_have_descendants(
-    backend: Any, target: str, *, permissions_configured: bool
+    filesystem: Any, target: str, *, permissions_configured: bool
 ) -> bool:
     """`delete` 是否要走保守的递归权限检查。
 
-    ★ 原实现用 `backend.ls(target)` 判断是不是目录。`ls` 已随三个检索工具
+    ★ 原实现用 `filesystem.ls(target)` 判断是不是目录。`ls` 已随三个检索工具
       一起并入 `search` —— 对象存储上没有目录，只有前缀。现在改成：
       该前缀下还有别的 key ⇒ 有子节点。
 
@@ -401,7 +378,7 @@ def _delete_target_may_have_descendants(
     if not permissions_configured:
         return False
     try:
-        result = backend.search(target.lstrip("/"), max_keys=2)
+        result = filesystem.search(target.lstrip("/"), max_keys=2)
     except (NotImplementedError, AttributeError):
         return True
     if result.error is not None:
@@ -411,13 +388,13 @@ def _delete_target_may_have_descendants(
 
 
 async def _adelete_target_may_have_descendants(
-    backend: Any, target: str, *, permissions_configured: bool
+    filesystem: Any, target: str, *, permissions_configured: bool
 ) -> bool:
     """`_delete_target_may_have_descendants` 的异步版。"""
     if not permissions_configured:
         return False
     try:
-        result = await backend.asearch(target.lstrip("/"), max_keys=2)
+        result = await filesystem.asearch(target.lstrip("/"), max_keys=2)
     except (NotImplementedError, AttributeError):
         return True
     if result.error is not None:
@@ -475,7 +452,7 @@ def _find_delete_deny_patterns(
         rules: Filesystem permission rules.
         target: Absolute, validated path being deleted.
         has_descendants: Whether `target` may have entries nested under it.
-            Pass `False` only once the backend has confirmed it's a leaf.
+            Pass `False` only once the filesystem has confirmed it's a leaf.
 
     Returns:
         Matching deny-write patterns, or an empty list if the delete is allowed.
@@ -504,35 +481,6 @@ def _find_delete_deny_patterns(
     return denying
 
 
-
-
-def _all_paths_scoped_to_routes(
-    rules: list[FilesystemPermission],
-    backend: FilesystemProtocol,
-) -> bool:
-    """权限规则是否全部落在 backend 的路由范围内。
-
-    ★ CompositeBackend 已删除（技能改为随会话拷进工作区之后，按路径前缀
-      路由到不同 backend 这件事没有了消费者）。没有路由可言，这个判断
-      恒为假 —— 调用方据此走「规则未被路由收拢」的那条分支。
-    """
-    return False
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def _format_file_paths(paths: list[str]) -> str:
     """Format filesystem path lists for tool output."""
     if not paths:
@@ -540,13 +488,11 @@ def _format_file_paths(paths: list[str]) -> str:
     return str(truncate_if_too_long(paths))
 
 
-
-
 def _remaining_lines_notice(read_result: ReadResult) -> str:
-    """Render the read pagination notice when the backend returned a partial window.
+    """Render the read pagination notice when the filesystem returned a partial window.
 
     Args:
-        read_result: Backend read result carrying the pagination metadata
+        read_result: Filesystem read result carrying the pagination metadata
             (`start_line`, `end_line`, `next_offset`, `total_lines`).
 
     Returns:
@@ -580,7 +526,7 @@ def _remaining_lines_notice(read_result: ReadResult) -> str:
 def _clamped_offset_notice(offset: int) -> str:
     """Disclose that a negative requested offset was read from the file start.
 
-    Backends clamp a negative `offset` to `0` rather than erroring, so without
+    Filesystems clamp a negative `offset` to `0` rather than erroring, so without
     this the model sees a correct-looking gutter starting at line 1 and no
     indication its request was reinterpreted. `_remaining_lines_notice` cannot
     carry the disclosure: it returns an empty string once the window reaches the
@@ -610,26 +556,10 @@ teaches the model that the empty-contents reminder means the file itself is
 empty, so reusing it for a zero-line window would state something false about
 the filesystem that a following `write_file` could act on destructively.
 
-Backends declare the zero-line window with `ReadResult.no_lines_requested`,
+Filesystems declare the zero-line window with `ReadResult.no_lines_requested`,
 so an inspected-but-empty file (which otherwise arrives identically: empty
 content, no pagination metadata) keeps the empty-file reminder instead.
 """
-GLOB_TIMEOUT = 10.0  # seconds
-GREP_TRUNCATION_NOTE = (
-    "Note: the search stopped early (it hit its time limit or the maximum match count). "
-    "The matches above are valid but incomplete. Narrow the search (a more specific pattern or a "
-    "narrower path), or raise max_count, to see the rest."
-)
-# Glob has no match-count cap and no `max_count` argument, so its note names only
-# the time/size limit and omits the (inapplicable) "raise max_count" remedy.
-GLOB_TRUNCATION_NOTE = (
-    "Note: the search stopped early because it hit its time limit. The paths above are valid but "
-    "incomplete. Narrow the search (a more specific pattern or a narrower path) to see the rest."
-)
-
-
-
-
 
 
 DEFAULT_READ_OFFSET = 0
@@ -658,9 +588,9 @@ def _truncate_paginated_read(
 ) -> str:
     """Truncate a paginated read without skipping undisplayed source lines.
 
-    The backend computes the pagination notice from the full window it
+    The filesystem computes the pagination notice from the full window it
     returned, but the char budget may drop trailing rows from what the model
-    actually sees. Appending the backend's notice verbatim would then advertise
+    actually sees. Appending the filesystem's notice verbatim would then advertise
     a `next_offset` past those dropped lines, so a re-read would silently skip
     them. This recomputes the notice from the last *complete* rendered row that
     still fits, and falls back to the size warning alone (no stale offset) when
@@ -671,7 +601,7 @@ def _truncate_paginated_read(
             `format_content_with_line_numbers` (a marker followed by two spaces
             and the source content).
         file_path: Path used to format the truncation message.
-        read_result: Backend read result carrying the window metadata; the
+        read_result: Filesystem read result carrying the window metadata; the
             adjusted `next_offset` is derived from its 1-indexed line range.
         token_limit: Char budget is `NUM_CHARS_PER_TOKEN * token_limit`; when
             falsy, content is returned with its notice untouched.
@@ -681,7 +611,7 @@ def _truncate_paginated_read(
             which source lines were shown.
 
     Examples:
-        If the backend returns source lines 11-20 with `next_offset=20`, but
+        If the filesystem returns source lines 11-20 with `next_offset=20`, but
         the budget fits only through line 14, the returned notice reports lines
         11-14 and tells the caller to resume from offset 14 rather than 20.
 
@@ -712,7 +642,7 @@ def _truncate_paginated_read(
             marker = row.lstrip().partition("  ")[0].partition(".")[0]
             source_line = int(marker)
             # Rows numbered past the window's last source line are not file
-            # content: a byte-capped backend page appends its own truncation
+            # content: a byte-capped filesystem page appends its own truncation
             # banner (preceded by a blank line), which `format_content_with_line_numbers`
             # then numbers as `end_line + 1`, `end_line + 2`, .... Stop before
             # them so a banner row is never chosen as a boundary — resuming from
@@ -746,63 +676,9 @@ def _truncate_paginated_read(
                 return content[:boundary] + truncation_msg + adjusted_notice
 
     # No complete source line fits. Keep the size warning but omit the
-    # backend's stale pagination offset.
+    # filesystem's stale pagination offset.
     max_content_length = max(0, threshold - len(truncation_msg))
     return content[:max_content_length] + truncation_msg
-
-
-
-
-def _file_data_delta_reducer(
-    left: dict[str, FileData] | None,
-    values: list[dict[str, FileData | None]],
-) -> dict[str, FileData]:
-    """Batch reducer for use with DeltaChannel.
-
-    `DeltaChannel` calls `reducer(base, list(values))` where values is a list of
-    all writes in the current step.
-
-    Single dict copy + one pass over all writes.
-    """
-    result: dict[str, FileData] = dict(left) if left else {}
-    for writes in values:
-        for key, value in writes.items():
-            if value is None:
-                result.pop(key, None)
-            else:
-                result[key] = value
-    return result
-
-
-class FilesystemState(AgentState):
-    """State for the filesystem middleware."""
-
-    files: Annotated[NotRequired[dict[str, FileData]], DeltaChannel(_file_data_delta_reducer, snapshot_frequency=50)]  # ty: ignore[invalid-argument-type]
-    """Files in the filesystem. Uses DeltaChannel with snapshots every ~50 pregel steps to bound read depth."""
-
-
-GREP_GLOB_DESCRIPTION = (
-    "Glob pattern (NOT regex) limiting which files are searched (e.g. '*.py', "
-    "'*.ts'). A pattern without '/' matches the file name at any depth; a pattern "
-    "containing '/' matches the search-root-relative path (e.g. 'src/**/*.py'). "
-    "This is an in-tool file filter, not a call to the separate glob tool. Brace "
-    "expansion (e.g. '*.{ts,tsx}') is not supported on all backends; run a "
-    "separate search per extension for reliable results."
-)
-
-GREP_OUTPUT_MODE_DESCRIPTION = (
-    "Shape of the returned text. 'files_with_matches' (default): newline-separated "
-    "matching file paths. 'content': matching lines grouped by file under a "
-    "'<path>:' header, each line indented and formatted '<line_number>: <line text>' "
-    "(only the matched line, no surrounding context). 'count': one "
-    "'<path>: <match_count>' line per file."
-)
-
-
-class LsSchema(BaseModel):
-    """Input schema for the `ls` tool."""
-
-    path: str = Field(description="Absolute path to the directory to list. Must be absolute, not relative.")
 
 
 class ReadFileSchema(BaseModel):
@@ -819,8 +695,6 @@ class ReadFileSchema(BaseModel):
         default=DEFAULT_READ_LIMIT,
         description="Maximum number of lines to read. Use for pagination of large files.",
     )
-
-
 
 
 class WriteFileSchema(BaseModel):
@@ -852,48 +726,6 @@ class DeleteSchema(BaseModel):
     file_path: str = Field(description="Absolute path to the file to delete. Must be absolute, not relative.")
 
 
-class GlobSchema(BaseModel):
-    """Input schema for the `glob` tool."""
-
-    pattern: str = Field(
-        description=(
-            "Glob pattern to match files (e.g., '*.py', '**/*.py', '/subdir/**/*.md'). "
-            "A pattern without '/' matches the file name at any depth; a pattern containing "
-            "'/' matches the search-root-relative path; a leading '/' anchors to the search "
-            "root ('/*.py' matches only top-level files). Leading-dot names are excluded "
-            "unless the pattern segment starts with '.', so prefer the bare form '*.py' over "
-            "'**/*.py' -- '**' will not descend into dot-directories like '.github'."
-        )
-    )
-
-    path: str | None = Field(default=None, description="Base directory to search from. Defaults to the backend's default root.")
-
-
-class GrepSchema(BaseModel):
-    """Input schema for the `grep` tool."""
-
-    pattern: str = Field(description="Text pattern to search for (literal string, not regex).")
-
-    path: str | None = Field(default=None, description="Directory to search in. Defaults to current working directory.")
-
-    glob: str | None = Field(default=None, description=GREP_GLOB_DESCRIPTION)
-
-    output_mode: Literal["files_with_matches", "content", "count"] = Field(
-        default="files_with_matches",
-        description=GREP_OUTPUT_MODE_DESCRIPTION,
-    )
-
-    max_count: int | None = Field(
-        default=None,
-        gt=0,
-        description=(
-            "Optional cap on the total number of matches returned across all files. "
-            "Leave unset to use the configured default. When the cap is hit, results "
-            "are truncated and a note says so; narrow the pattern or path to see the rest."
-        ),
-    )
-
-
 SEARCH_TOOL_DESCRIPTION = """Lists files in the session workspace by path prefix and file name.
 
 Usage:
@@ -917,22 +749,6 @@ class SearchSchema(BaseModel):
         description="Optional file-name glob, e.g. '*.md'. Prefix with '**/' to recurse.",
     )
 
-
-class ExecuteSchema(BaseModel):
-    """Input schema for the `execute` tool."""
-
-    command: str = Field(description="Shell command to execute in the sandbox environment.")
-
-    timeout: int | None = Field(
-        default=None,
-        description="Optional timeout in seconds for this command. Overrides the default timeout. Use 0 for no-timeout execution on backends that support it.",
-    )
-
-
-LIST_FILES_TOOL_DESCRIPTION = """Lists all files in a directory.
-
-This is useful for exploring the filesystem and finding the right file to read or edit.
-You should almost ALWAYS use this tool before using the read_file or edit_file tools."""
 
 _READ_FILE_TOOL_DESCRIPTION_TEMPLATE = """Reads a file from the filesystem. Assume any path the user provides is valid; reading a missing file returns an error.
 
@@ -987,63 +803,6 @@ Usage:
 - This cannot be undone, so only delete paths you are sure are no longer needed.
 """
 
-GLOB_TOOL_DESCRIPTION = """Find files matching a glob pattern, returning absolute paths.
-
-Supports `*` (any characters within a path segment), `**` (any directories), `?` (single character), `[abc]` (one character from a set), and `{a,b}` (alternatives), e.g. `*.py`, `src/**/*.py`, `*.{yml,yaml}`.
-
-A pattern without `/` matches the file name at any depth under the search root (`*.py` matches `src/app/main.py`). A pattern containing `/` matches the search-root-relative path (`src/**/*.py`). A leading `/` anchors to the search root (`/*.py` matches only top-level Python files).
-
-Leading-dot names are only matched when the pattern segment itself starts with `.` (use `.env`, or `.github/**/*.yml`). Because `**` will not descend into dot-directories, the bare form `*.yml` is *broader* than `**/*.yml` and is usually what you want."""
-
-# Carries its own leading newline so the empty-string substitution below drops
-# the whole line cleanly, with no blank line left behind.
-_GREP_REGEX_EXECUTE_FALLBACK = "\n- If you genuinely need regex, use the execute tool with `rg '<regex>'` instead."
-
-_GREP_TOOL_DESCRIPTION_TEMPLATE = """Search for a LITERAL text pattern across files (NOT regex).
-
-The pattern is matched verbatim: regex metacharacters are ordinary characters, not operators. To match any of several strings, run a separate grep for each; `grep(pattern="foo|bar")` searches for the literal text "foo|bar", and `.*` or `\\.` match those characters literally.{execute_fallback}
-
-Returns matching files or content per `output_mode`. Offloaded large tool results live under the artifacts root (`/large_tool_results/` by default); grep that directory to search them when you do not know the exact path."""
-
-GREP_TOOL_DESCRIPTION = _GREP_TOOL_DESCRIPTION_TEMPLATE.format(execute_fallback=_GREP_REGEX_EXECUTE_FALLBACK)
-_GREP_TOOL_DESCRIPTION_WITHOUT_EXECUTE = _GREP_TOOL_DESCRIPTION_TEMPLATE.format(execute_fallback="")
-
-_EXECUTE_SEARCH_GUIDANCE = "You MUST avoid using search commands like find and grep. Instead use the grep, glob tools to search. "
-_EXECUTE_GREP_SEARCH_GUIDANCE = "You MUST avoid using shell grep for searches. Instead use the grep tool to search text. "
-_EXECUTE_GLOB_SEARCH_GUIDANCE = "You MUST avoid using shell find for searches. Instead use the glob tool to find files. "
-_EXECUTE_GLOB_BAD_EXAMPLE = "\n    - execute(command=\"find . -name '*.py'\")  # Use glob tool instead"
-_EXECUTE_GREP_BAD_EXAMPLE = "\n    - execute(command=\"grep -r 'pattern' .\")  # Use grep tool instead"
-
-_EXECUTE_TOOL_DESCRIPTION_TEMPLATE = """Executes a shell command in an isolated sandbox and returns combined stdout/stderr with the exit code (truncated if very large).
-
-Usage:
-- Quote paths containing spaces (e.g. cd "/path/with spaces").
-- Chain commands with ';' or '&&' (use '&&' when a command depends on the previous); do not use newlines except inside quoted strings.
-- Use absolute paths and avoid `cd` so the working directory stays stable; use the optional timeout to override the default (0 disables it on backends that support that).
-- {search_guidance}Use read_file rather than cat/head/tail.{glob_bad_example}{grep_bad_example}
-
-Only available on backends implementing SandboxProtocol; otherwise it returns an error."""
-
-EXECUTE_TOOL_DESCRIPTION = _EXECUTE_TOOL_DESCRIPTION_TEMPLATE.format(
-    search_guidance=_EXECUTE_SEARCH_GUIDANCE,
-    glob_bad_example=_EXECUTE_GLOB_BAD_EXAMPLE,
-    grep_bad_example=_EXECUTE_GREP_BAD_EXAMPLE,
-)
-_EXECUTE_TOOL_DESCRIPTION_WITH_GREP_ONLY = _EXECUTE_TOOL_DESCRIPTION_TEMPLATE.format(
-    search_guidance=_EXECUTE_GREP_SEARCH_GUIDANCE,
-    glob_bad_example="",
-    grep_bad_example=_EXECUTE_GREP_BAD_EXAMPLE,
-)
-_EXECUTE_TOOL_DESCRIPTION_WITH_GLOB_ONLY = _EXECUTE_TOOL_DESCRIPTION_TEMPLATE.format(
-    search_guidance=_EXECUTE_GLOB_SEARCH_GUIDANCE,
-    glob_bad_example=_EXECUTE_GLOB_BAD_EXAMPLE,
-    grep_bad_example="",
-)
-_EXECUTE_TOOL_DESCRIPTION_WITHOUT_SEARCH = _EXECUTE_TOOL_DESCRIPTION_TEMPLATE.format(
-    search_guidance="",
-    glob_bad_example="",
-    grep_bad_example="",
-)
 
 FsToolName = Literal["read_file", "write_file", "edit_file", "delete", "search"]
 """Names of the built-in filesystem tools that can be passed to `FilesystemMiddleware(tools=...)`."""
@@ -1052,33 +811,14 @@ _FS_TOOL_ORDER: tuple[str, ...] = ("read_file", "write_file", "edit_file", "dele
 _ALL_FS_TOOL_NAMES: frozenset[str] = frozenset(_FS_TOOL_ORDER)
 
 
-
-
-def _supports_delete(backend: object) -> bool:
-    """backend 是否提供 delete。
+def _supports_delete(filesystem: object) -> bool:
+    """filesystem 是否提供 delete。
 
     ★ FilesystemProtocol 把 delete 列为必备，所以这里恒为真 —— 保留这个
-      判断只为让「未来出现只读 backend」时有一个现成的挂点，而不是把
+      判断只为让「未来出现只读 filesystem」时有一个现成的挂点，而不是把
       工具注册和能力判断焊死。
     """
-    return callable(getattr(backend, "delete", None))
-
-
-def supports_execution(backend: object) -> bool:
-    """Check if a backend supports command execution.
-
-    For `CompositeBackend`,
-    checks if the default backend supports execution.
-    For other backends, checks if they implement
-    [`SandboxProtocol`][SandboxProtocol].
-
-    Args:
-        backend: The backend to check.
-
-    Returns:
-        True if the backend supports execution, False otherwise.
-    """
-    return isinstance(backend, SandboxProtocol)
+    return callable(getattr(filesystem, "delete", None))
 
 
 # Tools that should be excluded from the large result eviction logic.
@@ -1153,11 +893,11 @@ def _build_truncated_human_message(message: HumanMessage, file_path: str) -> Hum
 
     Computes a preview from the full content still in state and returns a
     lightweight replacement the model will see. Pure string computation — no
-    backend I/O.
+    filesystem I/O.
 
     Args:
         message: The original HumanMessage (full content in state).
-        file_path: The backend path where the content was evicted.
+        file_path: The filesystem path where the content was evicted.
 
     Returns:
         A new HumanMessage with truncated content and the same `id`.
@@ -1172,130 +912,95 @@ def _build_truncated_human_message(message: HumanMessage, file_path: str) -> Hum
     return message.model_copy(update={"content": evicted})
 
 
-class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]):
+class FilesystemMiddleware(AgentMiddleware[AgentState, ContextT, ResponseT]):
     """Middleware for providing filesystem and optional execution tools to an agent.
 
-    This middleware adds filesystem tools to the agent: `ls`, `read_file`, `write_file`,
-    `edit_file`, `glob`, and `grep`.
+    This middleware adds filesystem tools to the agent: `read_file`, `write_file`,
+    `edit_file`, `delete`, and `search`.
 
-    Files can be stored using any backend that implements the
+    Files can be stored using any filesystem that implements the
     [`FilesystemProtocol`][FilesystemProtocol].
 
-    If the backend implements
-    [`SandboxProtocol`][SandboxProtocol],
-    an `execute` tool is also added for running shell commands. Its results carry
-    [`ExecuteArtifact`][ExecuteArtifact] metadata on
-    `ToolMessage.artifact`.
+    ★ 不管 `execute`：它归 SandboxMiddleware（沙箱与文件系统是两个独立的能力）。
+      这里曾按「文件系统对象是否实现 SandboxProtocol」过滤 execute —— 沙箱拆出去
+      之后那段检查把 SandboxMiddleware 注册的 execute 也从模型请求里剔掉了
+      （OssFilesystem 从不实现它），2026-10-19 随死代码一并删除。
 
     This middleware also automatically evicts large tool results to the file system when
     they exceed a token threshold, preventing context window saturation.
 
     Args:
-        backend: Backend for file storage and optional execution.
+        filesystem: The agent's filesystem —— a `FilesystemProtocol` instance
+            (Atlas: `OssFilesystem`, the session workspace plus its `/skills`).
 
-            If not provided, defaults to
-            `StateBackend`
-            (ephemeral storage in agent state).
+            `None` means no file capability: no file tools are registered and
+            large-result eviction is off (there is no ephemeral fallback).
 
-            For persistent storage or hybrid setups, use
-            `CompositeBackend`
-            with custom routes.
-
-            For execution support, use a backend that implements
+            For execution support, use a filesystem that implements
             [`SandboxProtocol`][SandboxProtocol].
         system_prompt: Optional custom system prompt override.
-        custom_tool_descriptions: Optional custom tool descriptions override.
         tool_token_limit_before_evict: Token limit before evicting a tool result to the
             filesystem.
 
-            When exceeded, writes the result using the configured backend and replaces it
+            When exceeded, writes the result using the configured filesystem and replaces it
             with a truncated preview and file reference.
 
     Example:
         ```python
         from atlas_engine.kernel.middleware.filesystem import FilesystemMiddleware
-        from atlas_engine.kernel.backends import StateBackend, StoreBackend, CompositeBackend
         from langchain.agents import create_agent
 
-        # Ephemeral storage only (default, no execution)
-        agent = create_agent(middleware=[FilesystemMiddleware()])
+        # The session workspace on object storage (server: providers/filesystem)
+        agent = create_agent(middleware=[FilesystemMiddleware(filesystem=oss_filesystem)])
 
-        # With hybrid storage (ephemeral + persistent /memories/)
-        backend = CompositeBackend(
-            default=StateBackend(), routes={"/memories/": StoreBackend(namespace=lambda rt: (rt.server_info.user.identity, "filesystem"))}
-        )
-        agent = create_agent(middleware=[FilesystemMiddleware(backend=backend)])
-
-        # With sandbox backend (supports execution)
-        from my_sandbox import DockerSandboxBackend
-
-        sandbox = DockerSandboxBackend(container_id="my-container")
-        agent = create_agent(middleware=[FilesystemMiddleware(backend=sandbox)])
+        # No file capability: the middleware stays (it is scaffolding), no file tools
+        agent = create_agent(middleware=[FilesystemMiddleware(filesystem=None)])
         ```
     """
-
-    state_schema = FilesystemState
 
     def __init__(
         self,
         *,
-        backend: Any = None,
+        filesystem: Any = None,
         system_prompt: str | None = None,
-        custom_tool_descriptions: Mapping[str, str] | None = None,
         tool_token_limit_before_evict: int | None = 20000,
         human_message_token_limit_before_evict: int | None = 50000,
-        max_execute_timeout: int = 3600,
-        grep_max_count: int | None = 1000,
         tools: list[FsToolName] | Literal["all"] | None = None,
         _permissions: list[FilesystemPermission] | None = None,
     ) -> None:
         """Initialize the filesystem middleware.
 
         Args:
-            backend: Backend for file storage and optional execution. Defaults to
-                StateBackend if not provided.
+            filesystem: The agent's filesystem (`FilesystemProtocol`). `None` =
+                no file capability: no file tools, large-result eviction off.
             system_prompt: Optional custom system prompt override.
-            custom_tool_descriptions: Optional custom tool descriptions override.
             tool_token_limit_before_evict: Optional token limit before evicting a tool result to the filesystem.
             human_message_token_limit_before_evict: Optional token limit before
                 evicting a HumanMessage to the filesystem.
-            max_execute_timeout: Maximum allowed value in seconds for per-command timeout
-                overrides on the execute tool.
-
-                Defaults to 3600 seconds (1 hour). Any per-command timeout
-                exceeding this value will be rejected with an error message.
-            grep_max_count: Default total cap on the number of matches the
-                `grep` tool returns across all files.
-
-                Defaults to `1000`, which bounds memory use and context size on
-                very large repositories. The model can override it per call via
-                the tool's `max_count` argument. Set to `None` to disable the
-                default cap (return every match unless a per-call cap is given).
             tools: Allowlist of tool names to expose to the model.
                 ``"all"` indicates all tools. If unset, defaults to `"all"`.
-                Pass a list containing any of `"ls"`, `"read_file"`,
-                `"write_file"`, `"edit_file"`, `"delete"`, `"glob"`,
-                `"grep"`, `"execute"` to restrict the model to only those
-                tools; all others are hidden. `read_file` must be included
-                in any list. Backend capability checks for `execute` and
-                `delete` still apply; listing them when the backend does not
-                support them is a no-op.
+                Pass a list containing any of `"read_file"`, `"write_file"`,
+                `"edit_file"`, `"delete"`, `"search"` to restrict the model to
+                only those tools; all others are hidden. `read_file` must be
+                included in any non-empty list. The capability check for
+                `delete` still applies; listing it when the filesystem does not
+                support it is a no-op.
             _permissions: Optional filesystem permission rules enforced directly
                 by this middleware's tool implementations.
 
                 Marked private for now because this is an internal
-                implementation detail and may move to the backend layer in a
+                implementation detail and may move to the filesystem layer in a
                 future change.
         """
-        if backend is None or (isinstance(tools, list) and tools == []):
+        if filesystem is None or (isinstance(tools, list) and tools == []):
             # ★ Atlas 改动（Sandbox S0）：空白名单 = 完全关闭文件工具。
             #   原实现没预想过这个模式（校验要求 read_file 恒在）。中间件本体
-            #   必须保留 —— 它是 _REQUIRED_MIDDLEWARE 脚手架；但大结果外置
+            #   必须保留 —— 它是恒装的脚手架；但大结果外置
             #   依赖 read_file 把内容读回，零工具时外置出去的内容对模型
             #   不可达，所以一并关闭。
             #
-            # ★ backend is None 走同一条路：没有配置对象存储 = 没有文件能力。
-            #   不再像原实现那样回落 StateBackend —— 那会让模型以为自己有持久
+            # ★ filesystem is None 走同一条路：没有配置对象存储 = 没有文件能力。
+            #   不再像原实现那样回落到内存里的临时存储 —— 那会让模型以为自己有持久
             #   工作区，写进去的东西 run 结束即弃，而它收不到任何提示。
             tools = []
             tool_token_limit_before_evict = None
@@ -1303,29 +1008,11 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
         elif isinstance(tools, list) and "read_file" not in tools:
             msg = "read_file must be included in tools; it is required by FilesystemMiddleware"
             raise ValueError(msg)
-        if max_execute_timeout <= 0:
-            msg = f"max_execute_timeout must be positive, got {max_execute_timeout}"
-            raise ValueError(msg)
-        if grep_max_count is not None and grep_max_count <= 0:
-            msg = f"grep_max_count must be positive or None, got {grep_max_count}"
-            raise ValueError(msg)
         #: None = 没有文件能力（见上方 tools 的处理）。
-        self.backend = backend
-        if self.backend is not None and callable(self.backend) and not isinstance(self.backend, FilesystemProtocol):
-            msg = (
-                "backend must be an initialized backend instance. Backend factories "
-                "were removed in deepagents 0.7; pass StateBackend(), "
-                "CompositeBackend(...), or another FilesystemProtocol instance instead."
-            )
+        self.filesystem = filesystem
+        if self.filesystem is not None and callable(self.filesystem) and not isinstance(self.filesystem, FilesystemProtocol):
+            msg = "filesystem must be a FilesystemProtocol instance, not a factory"
             raise TypeError(msg)
-        if _permissions and supports_execution(self.backend) and not _all_paths_scoped_to_routes(_permissions, self.backend):
-            msg = (
-                "FilesystemMiddleware does not yet support permissions with backends that "
-                "provide command execution (SandboxProtocol). Tool-level permissions "
-                "for the execute tool are not implemented. Either remove permissions or use "
-                "a backend without execution support."
-            )
-            raise NotImplementedError(msg)
 
         artifacts_root = "/"
         _root = artifacts_root.rstrip("/")
@@ -1334,11 +1021,8 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
 
         # Store configuration (private - internal implementation details)
         self._custom_system_prompt = system_prompt
-        self._custom_tool_descriptions = custom_tool_descriptions or {}
         self._tool_token_limit_before_evict = tool_token_limit_before_evict
         self._human_message_token_limit_before_evict = human_message_token_limit_before_evict
-        self._max_execute_timeout = max_execute_timeout
-        self._grep_max_count = grep_max_count
         if isinstance(tools, list):
             self._enabled_tools: frozenset[str] | None = frozenset(tools)
         elif tools == "all":
@@ -1348,7 +1032,7 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
         self._permissions = list(_permissions or [])
 
         # Shared executor for enforcing GLOB_TIMEOUT on the sync glob tool.
-        # Timed-out worker threads keep running until the backend call returns,
+        # Timed-out worker threads keep running until the filesystem call returns,
         # so the semaphore rejects overload instead of queueing behind them.
         self._glob_executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=_SYNC_GLOB_WORKERS,
@@ -1375,7 +1059,7 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
           否则模型会反复用它找内容、拿到空结果、然后据此下「没找到」的结论，
           错得很安静。
         """
-        tool_description = self._custom_tool_descriptions.get("search") or SEARCH_TOOL_DESCRIPTION
+        tool_description = SEARCH_TOOL_DESCRIPTION
 
         def _shape(result: Any, tool_call_id: str | None) -> ToolMessage:
             if result.error:
@@ -1397,18 +1081,18 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
             return ToolMessage(content=content, name="search", tool_call_id=tool_call_id)
 
         def sync_search(
-            runtime: ToolRuntime[None, FilesystemState],
+            runtime: ToolRuntime[None, AgentState],
             prefix: str = "",
             pattern: str | None = None,
         ) -> ToolMessage:
-            return _shape(self.backend.search(prefix, pattern=pattern), runtime.tool_call_id)
+            return _shape(self.filesystem.search(prefix, pattern=pattern), runtime.tool_call_id)
 
         async def async_search(
-            runtime: ToolRuntime[None, FilesystemState],
+            runtime: ToolRuntime[None, AgentState],
             prefix: str = "",
             pattern: str | None = None,
         ) -> ToolMessage:
-            return _shape(await self.backend.asearch(prefix, pattern=pattern), runtime.tool_call_id)
+            return _shape(await self.filesystem.asearch(prefix, pattern=pattern), runtime.tool_call_id)
 
         return StructuredTool.from_function(
             name="search",
@@ -1422,7 +1106,7 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
 
     def _create_read_file_tool(self) -> BaseTool:  # noqa: C901
         """Create the read_file tool."""
-        tool_description = self._custom_tool_descriptions.get("read_file") or READ_FILE_TOOL_DESCRIPTION
+        tool_description = READ_FILE_TOOL_DESCRIPTION
         args_schema = ReadFileSchema
         token_limit = self._tool_token_limit_before_evict
 
@@ -1475,7 +1159,7 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
                 # zero-line window, where the file was never inspected, and a
                 # genuinely empty file. Reporting the former as the latter
                 # states something false about a file that may have contents.
-                # The backend declares which one happened: both arrive as
+                # The filesystem declares which one happened: both arrive as
                 # empty content with no pagination metadata, but only the
                 # never-inspected window sets `no_lines_requested` — a file
                 # that was inspected and is empty (whitespace-only text from
@@ -1491,7 +1175,7 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
                     status="success",
                 )
 
-            # Route on the backend-declared encoding first: `"base64"` means the
+            # Route on the filesystem-declared encoding first: `"base64"` means the
             # content is binary and must never be line-numbered as text, even
             # when the extension is absent from `_EXTENSION_TO_FILE_TYPE`.
             # The extension map is only consulted to pick the multimodal block
@@ -1507,12 +1191,12 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
                     status="success",
                 )
 
-            # `max(offset, 0)` so the fallback gutter stays 1-indexed: a backend
+            # `max(offset, 0)` so the fallback gutter stays 1-indexed: a filesystem
             # that returns numberable text without `start_line` would otherwise
             # render a zero or negative line marker, which the row-marker
             # parsers downstream assume never happens.
             content = format_content_with_line_numbers(content, start_line=read_result.start_line or max(offset, 0) + 1)
-            # `limit` already bounded raw source lines at the backend; do not
+            # `limit` already bounded raw source lines at the filesystem; do not
             # re-truncate by row count here, or wrapped continuation rows would
             # push real source lines off the end of the page (#2453).
             # The clamp notice is appended after truncation so it cannot be cut.
@@ -1525,12 +1209,12 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
 
         def sync_read_file(
             file_path: str,
-            runtime: ToolRuntime[None, FilesystemState],
+            runtime: ToolRuntime[None, AgentState],
             offset: int = DEFAULT_READ_OFFSET,
             limit: int = DEFAULT_READ_LIMIT,
         ) -> ToolMessage | Command:
             """Synchronous wrapper for read_file tool."""
-            resolved_backend = self.backend
+            resolved_filesystem = self.filesystem
             try:
                 validated_path = validate_path(file_path)
             except ValueError as e:
@@ -1547,17 +1231,17 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
                     tool_call_id=runtime.tool_call_id,
                     status="error",
                 )
-            read_result = resolved_backend.read(validated_path, offset=offset, limit=limit)
+            read_result = resolved_filesystem.read(validated_path, offset=offset, limit=limit)
             return _handle_read_result(read_result, validated_path, runtime.tool_call_id, offset, limit)
 
         async def async_read_file(
             file_path: str,
-            runtime: ToolRuntime[None, FilesystemState],
+            runtime: ToolRuntime[None, AgentState],
             offset: int = DEFAULT_READ_OFFSET,
             limit: int = DEFAULT_READ_LIMIT,
         ) -> ToolMessage | Command:
             """Asynchronous wrapper for read_file tool."""
-            resolved_backend = self.backend
+            resolved_filesystem = self.filesystem
             try:
                 validated_path = validate_path(file_path)
             except ValueError as e:
@@ -1574,7 +1258,7 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
                     tool_call_id=runtime.tool_call_id,
                     status="error",
                 )
-            read_result = await resolved_backend.aread(validated_path, offset=offset, limit=limit)
+            read_result = await resolved_filesystem.aread(validated_path, offset=offset, limit=limit)
             return _handle_read_result(read_result, validated_path, runtime.tool_call_id, offset, limit)
 
         return StructuredTool.from_function(
@@ -1588,15 +1272,15 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
 
     def _create_write_file_tool(self) -> BaseTool:
         """Create the write_file tool."""
-        tool_description = self._custom_tool_descriptions.get("write_file") or WRITE_FILE_TOOL_DESCRIPTION
+        tool_description = WRITE_FILE_TOOL_DESCRIPTION
 
         def sync_write_file(
             file_path: str,
             content: str,
-            runtime: ToolRuntime[None, FilesystemState],
+            runtime: ToolRuntime[None, AgentState],
         ) -> ToolMessage:
             """Synchronous wrapper for write_file tool."""
-            resolved_backend = self.backend
+            resolved_filesystem = self.filesystem
             try:
                 validated_path = validate_path(file_path)
             except ValueError as e:
@@ -1614,7 +1298,7 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
                     tool_call_id=runtime.tool_call_id,
                     status="error",
                 )
-            res: WriteResult = resolved_backend.write(validated_path, content)
+            res: WriteResult = resolved_filesystem.write(validated_path, content)
             if res.error:
                 return ToolMessage(
                     content=res.error,
@@ -1633,10 +1317,10 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
         async def async_write_file(
             file_path: str,
             content: str,
-            runtime: ToolRuntime[None, FilesystemState],
+            runtime: ToolRuntime[None, AgentState],
         ) -> ToolMessage:
             """Asynchronous wrapper for write_file tool."""
-            resolved_backend = self.backend
+            resolved_filesystem = self.filesystem
             try:
                 validated_path = validate_path(file_path)
             except ValueError as e:
@@ -1654,7 +1338,7 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
                     tool_call_id=runtime.tool_call_id,
                     status="error",
                 )
-            res: WriteResult = await resolved_backend.awrite(validated_path, content)
+            res: WriteResult = await resolved_filesystem.awrite(validated_path, content)
             if res.error:
                 return ToolMessage(
                     content=res.error,
@@ -1681,18 +1365,18 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
 
     def _create_edit_file_tool(self) -> BaseTool:
         """Create the edit_file tool."""
-        tool_description = self._custom_tool_descriptions.get("edit_file") or EDIT_FILE_TOOL_DESCRIPTION
+        tool_description = EDIT_FILE_TOOL_DESCRIPTION
 
         def sync_edit_file(
             file_path: str,
             old_string: str,
             new_string: str,
-            runtime: ToolRuntime[None, FilesystemState],
+            runtime: ToolRuntime[None, AgentState],
             *,
             replace_all: bool = False,
         ) -> ToolMessage:
             """Synchronous wrapper for edit_file tool."""
-            resolved_backend = self.backend
+            resolved_filesystem = self.filesystem
             try:
                 validated_path = validate_path(file_path)
             except ValueError as e:
@@ -1710,7 +1394,7 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
                     tool_call_id=runtime.tool_call_id,
                     status="error",
                 )
-            res: EditResult = resolved_backend.edit(validated_path, old_string, new_string, replace_all=replace_all)
+            res: EditResult = resolved_filesystem.edit(validated_path, old_string, new_string, replace_all=replace_all)
             if res.error:
                 return ToolMessage(
                     content=res.error,
@@ -1729,12 +1413,12 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
             file_path: str,
             old_string: str,
             new_string: str,
-            runtime: ToolRuntime[None, FilesystemState],
+            runtime: ToolRuntime[None, AgentState],
             *,
             replace_all: bool = False,
         ) -> ToolMessage:
             """Asynchronous wrapper for edit_file tool."""
-            resolved_backend = self.backend
+            resolved_filesystem = self.filesystem
             try:
                 validated_path = validate_path(file_path)
             except ValueError as e:
@@ -1752,7 +1436,7 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
                     tool_call_id=runtime.tool_call_id,
                     status="error",
                 )
-            res: EditResult = await resolved_backend.aedit(validated_path, old_string, new_string, replace_all=replace_all)
+            res: EditResult = await resolved_filesystem.aedit(validated_path, old_string, new_string, replace_all=replace_all)
             if res.error:
                 return ToolMessage(
                     content=res.error,
@@ -1778,14 +1462,14 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
 
     def _create_delete_tool(self) -> BaseTool:  # Tool wiring + permission/support handling
         """Create the delete tool."""
-        tool_description = self._custom_tool_descriptions.get("delete") or DELETE_TOOL_DESCRIPTION
+        tool_description = DELETE_TOOL_DESCRIPTION
 
         def sync_delete(
             file_path: str,
-            runtime: ToolRuntime[None, FilesystemState],
+            runtime: ToolRuntime[None, AgentState],
         ) -> ToolMessage:
             """Synchronous wrapper for delete tool."""
-            resolved_backend = self.backend
+            resolved_filesystem = self.filesystem
             try:
                 validated_path = validate_path(file_path)
             except ValueError as e:
@@ -1796,7 +1480,7 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
                     status="error",
                 )
 
-            has_descendants = _delete_target_may_have_descendants(resolved_backend, validated_path, permissions_configured=bool(self._permissions))
+            has_descendants = _delete_target_may_have_descendants(resolved_filesystem, validated_path, permissions_configured=bool(self._permissions))
             denying_patterns = _find_delete_deny_patterns(self._permissions, validated_path, has_descendants=has_descendants)
             if denying_patterns:
                 return ToolMessage(
@@ -1805,7 +1489,7 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
                     tool_call_id=runtime.tool_call_id,
                     status="error",
                 )
-            res: DeleteResult = resolved_backend.delete(validated_path)
+            res: DeleteResult = resolved_filesystem.delete(validated_path)
             if res.error:
                 return ToolMessage(
                     content=res.error,
@@ -1822,10 +1506,10 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
 
         async def async_delete(
             file_path: str,
-            runtime: ToolRuntime[None, FilesystemState],
+            runtime: ToolRuntime[None, AgentState],
         ) -> ToolMessage:
             """Asynchronous wrapper for delete tool."""
-            resolved_backend = self.backend
+            resolved_filesystem = self.filesystem
             try:
                 validated_path = validate_path(file_path)
             except ValueError as e:
@@ -1837,7 +1521,7 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
                 )
 
             has_descendants = await _adelete_target_may_have_descendants(
-                resolved_backend, validated_path, permissions_configured=bool(self._permissions)
+                resolved_filesystem, validated_path, permissions_configured=bool(self._permissions)
             )
             denying_patterns = _find_delete_deny_patterns(self._permissions, validated_path, has_descendants=has_descendants)
             if denying_patterns:
@@ -1847,7 +1531,7 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
                     tool_call_id=runtime.tool_call_id,
                     status="error",
                 )
-            res: DeleteResult = await resolved_backend.adelete(validated_path)
+            res: DeleteResult = await resolved_filesystem.adelete(validated_path)
             if res.error:
                 return ToolMessage(
                     content=res.error,
@@ -1872,14 +1556,6 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
         )
 
 
-
-    def _grep_tool_description(self, *, include_execution: bool) -> str:
-        """Return the grep description for the current execution visibility."""
-        return self._custom_tool_descriptions.get("grep") or (GREP_TOOL_DESCRIPTION if include_execution else _GREP_TOOL_DESCRIPTION_WITHOUT_EXECUTE)
-
-
-
-
     @staticmethod
     def _tool_name(tool: object) -> str | None:
         """Extract a request tool name from `BaseTool`, dict, or test doubles."""
@@ -1894,53 +1570,31 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
             return cast("str | None", get("name"))
         return None
 
-    def _unsupported_tools_and_execution_state(
-        self,
-        tool_names: set[str | None],
-    ) -> tuple[set[str | None], bool, FilesystemProtocol | None]:
-        """Return unsupported filesystem tools and whether execute remains active."""
-        # `tools=` exclusions are enforced at `__init__` (absent from
-        # `self.tools` entirely), so only backend-capability gating
-        # `execute`/`delete` on a backend that doesn't support them is
-        # computed here.
-        unsupported: set[str | None] = set()
-        execution_active = False
-        backend = None
-        has_execute_tool = "execute" in tool_names
-        has_delete_tool = "delete" in tool_names
-        if not has_delete_tool and not has_execute_tool:
-            return unsupported, execution_active, backend
+    def _unsupported_tools(self, tool_names: set[str | None]) -> set[str | None]:
+        """这个文件系统撑不起来的文件工具（目前只有 delete 一项能力门禁）。
 
-        backend = self.backend
-        if has_execute_tool and "execute" not in unsupported:
-            execution_active = supports_execution(backend)
-            if not execution_active:
-                unsupported.add("execute")
-        if has_delete_tool and "delete" not in unsupported and not _supports_delete(backend):
-            unsupported.add("delete")
-        return unsupported, execution_active, backend
-
-
-
-
-
+        `tools=` 的白名单在 `__init__` 里就生效了（不在白名单里的根本不在 `self.tools`），
+        这里只按文件系统的能力过滤。★ 只管自己的工具 —— 别的中间件注册的工具
+        （如 SandboxMiddleware 的 execute）不归它判断。
+        """
+        if "delete" in tool_names and not _supports_delete(self.filesystem):
+            return {"delete"}
+        return set()
 
     def _filter_unsupported_tools_and_apply_prompt(self, request: ModelRequest[ContextT]) -> ModelRequest[ContextT]:
-        """Drop capability-gated tools the backend can't serve, then apply the system prompt.
+        """Drop capability-gated tools the filesystem can't serve, then apply the system prompt.
 
         Shared by the sync and async `wrap_model_call` paths (the only part that
-        differs between them is sync vs. async message eviction). The `execute`
-        and `delete` tools are optional per backend, so when the resolved
-        backend doesn't support a capability the corresponding tool is filtered
-        out of the request rather than advertised to the model and left to fail
-        at call time. Resolving the backend and probing support is synchronous,
-        so both paths route through here.
+        differs between them is sync vs. async message eviction). The `delete`
+        tool is optional per filesystem, so when the filesystem doesn't support
+        it the tool is filtered out of the request rather than advertised to the
+        model and left to fail at call time.
 
         Returns the request with unsupported tools removed and the filesystem
         system prompt appended.
         """
         tool_names: set[str | None] = {self._tool_name(tool) for tool in request.tools}
-        unsupported, _execution_active, _backend = self._unsupported_tools_and_execution_state(tool_names)
+        unsupported = self._unsupported_tools(tool_names)
         visible_tools = [tool for tool in request.tools if self._tool_name(tool) not in unsupported]
         if unsupported:
             request = request.override(tools=visible_tools)
@@ -1970,7 +1624,7 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
             `additional_kwargs` is replaced with a truncated preview for the
             model request (content in state is unchanged).
         2. If the most recent message is an untagged HumanMessage exceeding the
-            eviction threshold, its content is written to the backend and the
+            eviction threshold, its content is written to the filesystem and the
             message is tagged in state via `ExtendedModelResponse`.
 
         It also scrubs unsupported multimodal blocks, replacing them with text
@@ -2007,7 +1661,7 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
         request: ModelRequest[ContextT],
         handler: Callable[[ModelRequest[ContextT]], Awaitable[ModelResponse[ResponseT]]],
     ) -> ModelResponse[ResponseT] | ExtendedModelResponse:
-        """(async) Update the system prompt and filter tools based on backend capabilities.
+        """(async) Update the system prompt and filter tools based on filesystem capabilities.
 
         Also evicts oversized HumanMessages to the filesystem. See
         `wrap_model_call` for full documentation.
@@ -2041,13 +1695,13 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
     def _process_large_message(
         self,
         message: ToolMessage,
-        resolved_backend: FilesystemProtocol,
+        resolved_filesystem: FilesystemProtocol,
     ) -> tuple[ToolMessage, bool]:
         """Process a large ToolMessage by evicting its content to filesystem.
 
         Args:
             message: The ToolMessage with large content to evict.
-            resolved_backend: The filesystem backend to write the content to.
+            resolved_filesystem: The filesystem filesystem to write the content to.
 
         Returns:
             A tuple of `(processed_message, evicted)`:
@@ -2062,7 +1716,7 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
             both the size check and eviction. Non-text blocks
             (images, audio, etc.) are preserved in the replacement message
             so multimodal context is not lost. The model can recover
-            the full text by reading the offloaded file from the backend.
+            the full text by reading the offloaded file from the filesystem.
         """
         # Early exit if eviction not configured
         if not self._tool_token_limit_before_evict:
@@ -2077,7 +1731,7 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
         processed_message = _offload_tool_message_content(
             message,
             content_str,
-            resolved_backend,
+            resolved_filesystem,
             self._large_tool_results_prefix,
         )
         if processed_message is None:
@@ -2087,11 +1741,11 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
     async def _aprocess_large_message(
         self,
         message: ToolMessage,
-        resolved_backend: FilesystemProtocol,
+        resolved_filesystem: FilesystemProtocol,
     ) -> tuple[ToolMessage, bool]:
         """Async version of _process_large_message.
 
-        Uses async backend methods to avoid sync calls in async context.
+        Uses async filesystem methods to avoid sync calls in async context.
 
         See `_process_large_message` for full documentation.
         """
@@ -2107,7 +1761,7 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
         processed_message = await _aoffload_tool_message_content(
             message,
             content_str,
-            resolved_backend,
+            resolved_filesystem,
             self._large_tool_results_prefix,
         )
         if processed_message is None:
@@ -2147,16 +1801,16 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
         """Tag a newly evicted message and truncate all tagged messages.
 
         When a new eviction fires, emits a `Command` whose messages update
-        contains only the tagged `HumanMessage`. Because `ensure_message_ids`
-        stamps a stable UUID onto the original write before it is checkpointed,
-        the tagged copy (which reuses that ID) is deduped in-place by the
-        `DeltaChannel` reducer — no `REMOVE_ALL_MESSAGES` sentinel is needed.
+        contains only the tagged `HumanMessage`. The original already carries an ID in
+        state (`add_messages` assigns one on write), so the tagged copy (which
+        reuses that ID) replaces it in place — no `REMOVE_ALL_MESSAGES` sentinel
+        is needed.
         Using a sentinel would also clobber the `AIMessage` that the model node
         writes in the same super-step.
 
         Args:
             messages: The message list (may be modified if write succeeded).
-            write_result: Result of the backend write, or `None` if no new
+            write_result: Result of the filesystem write, or `None` if no new
                 eviction was attempted.
             file_path: Path the content was written to.
 
@@ -2213,9 +1867,9 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
         write_result: WriteResult | None = None
         file_path: str | None = None
         if new_eviction_needed:
-            backend = self.backend
+            filesystem = self.filesystem
             file_path = f"{self._conversation_history_prefix}/{uuid.uuid4()}.md"
-            write_result = backend.write(file_path, _extract_text_from_message(messages[-1]))
+            write_result = filesystem.write(file_path, _extract_text_from_message(messages[-1]))
 
         return self._apply_eviction_and_truncate(messages, write_result, file_path)
 
@@ -2239,9 +1893,9 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
         write_result: WriteResult | None = None
         file_path: str | None = None
         if new_eviction_needed:
-            backend = self.backend
+            filesystem = self.filesystem
             file_path = f"{self._conversation_history_prefix}/{uuid.uuid4()}.md"
-            write_result = await backend.awrite(file_path, _extract_text_from_message(messages[-1]))
+            write_result = await filesystem.awrite(file_path, _extract_text_from_message(messages[-1]))
 
         return self._apply_eviction_and_truncate(messages, write_result, file_path)
 
@@ -2287,10 +1941,10 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
             offloaded to filesystem to prevent context window overflow.
         """
         if isinstance(tool_result, ToolMessage):
-            resolved_backend = self.backend
+            resolved_filesystem = self.filesystem
             processed_message, _evicted = self._process_large_message(
                 tool_result,
-                resolved_backend,
+                resolved_filesystem,
             )
             return processed_message
 
@@ -2299,7 +1953,7 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
             if update is None:
                 return tool_result
             command_messages, wrapped = self._unwrap_command_messages(update)
-            resolved_backend = self.backend
+            resolved_filesystem = self.filesystem
             processed_messages = []
             for message in command_messages:
                 if not isinstance(message, ToolMessage):
@@ -2308,7 +1962,7 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
 
                 processed_message, _evicted = self._process_large_message(
                     message,
-                    resolved_backend,
+                    resolved_filesystem,
                 )
                 processed_messages.append(processed_message)
             new_messages = self._rewrap_command_messages(processed_messages, wrapped=wrapped)
@@ -2323,15 +1977,15 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
     async def _aintercept_large_tool_result(self, tool_result: ToolMessage | Command) -> ToolMessage | Command:
         """Async version of _intercept_large_tool_result.
 
-        Uses async backend methods to avoid sync calls in async context.
+        Uses async filesystem methods to avoid sync calls in async context.
 
         See `_intercept_large_tool_result` for full documentation.
         """
         if isinstance(tool_result, ToolMessage):
-            resolved_backend = self.backend
+            resolved_filesystem = self.filesystem
             processed_message, _evicted = await self._aprocess_large_message(
                 tool_result,
-                resolved_backend,
+                resolved_filesystem,
             )
             return processed_message
 
@@ -2340,7 +1994,7 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
             if update is None:
                 return tool_result
             command_messages, wrapped = self._unwrap_command_messages(update)
-            resolved_backend = self.backend
+            resolved_filesystem = self.filesystem
             processed_messages = []
             for message in command_messages:
                 if not isinstance(message, ToolMessage):
@@ -2349,7 +2003,7 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
 
                 processed_message, _evicted = await self._aprocess_large_message(
                     message,
-                    resolved_backend,
+                    resolved_filesystem,
                 )
                 processed_messages.append(processed_message)
             new_messages = self._rewrap_command_messages(processed_messages, wrapped=wrapped)

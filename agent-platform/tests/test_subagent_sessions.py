@@ -1,8 +1,8 @@
-"""子会话与子 run —— 委派的端到端行为。
+"""子会话与子 run —— SubAgent 的端到端行为。
 
-假模型 + 真实的执行链路：POST /runs → 主 run 发 `task` → SubagentService
-建子会话、起子 run → 子 run 走与普通 run **完全同一条**链路 → 最终文本
-回到主 run。整条链路脱离网络运行。
+假模型 + 真实的执行链路：POST /runs → 主 run 发 `task` → SubAgentService
+建子会话、起子 run（主 run 挂起）→ 子 run 走与普通 run **完全同一条**链路 →
+跑完叫醒主 run，最终文本作为 task 的结果回到主 run。整条链路脱离网络运行。
 
 设计验收点（detail/subagent.html §11 步骤 2）：
   · 连续委派两次，第二次的子 run 历史里能看到第一次的对话
@@ -18,12 +18,12 @@ from uuid import UUID
 
 import httpx
 import pytest
-from atlas_server.config import get_settings
-from atlas_server.db.models import Message, Run, RunEvent, Thread
-from atlas_server.db.session import get_sessionmaker
-from atlas_server.executor.inprocess import InProcessExecutor
-from atlas_server.main import create_app
-from atlas_server.repositories.run import RunRepository
+from atlas_agent.config import get_settings
+from atlas_agent.db.models import Message, Run, RunEvent, Thread
+from atlas_agent.db.session import get_sessionmaker
+from atlas_agent.executor.inprocess import InProcessExecutor
+from atlas_agent.main import create_app
+from atlas_agent.repositories.run import RunRepository
 from httpx import ASGITransport
 from langchain_core.messages import AIMessageChunk
 from sqlalchemy import select
@@ -428,7 +428,7 @@ async def test_child_run_uses_the_subagents_own_config(client_factory) -> None:
     `run.started` 是权威视角：它记的是这次 run 实际装出来的模型、工具与身份。
     两条断言各守一头 ——
       · agent_name/slug 是子智能体的 ⇒ spec 派生生效了
-      · 工具里没有 `task` ⇒ 深度结构性封顶在 1，子智能体不能再委派
+      · 工具里有 `task` ⇒ native SubAgent 带着同一份名录，可以继续派 SubAgent
     """
     parent = TurnModel(
         scripts=[[_task_call("干活", "coder", "c1")], [AIMessageChunk(content="好了")]]
@@ -453,7 +453,54 @@ async def test_child_run_uses_the_subagents_own_config(client_factory) -> None:
     assert started.data["agent_name"] == "coder"
     assert started.data["agent_slug"] == "delegator/coder"
     assert started.data["model"] == CHILD_MODEL
-    assert "task" not in started.data["tools"]
+    assert "task" in started.data["tools"]
+
+
+async def test_a_subagent_can_spawn_a_subagent(client_factory) -> None:
+    """★ SubAgent 继续派 SubAgent：孙 run 叫醒子 run，子 run 交出结论后再叫醒主 run。
+
+    每一层都是同一件事（起子 run → 挂起 → 被叫醒 → 填结论），所以要看的是「树」记对了：
+      · run 树：孙 run 的 depth=2、root_run_id 指向主 run（整棵树的累计上限按它数）
+      · 会话树：孙会话挂在子会话下面，但根是主会话 —— 工作区与事件流都归根会话
+      · 结论一层层冒上来：主会话里的 task 结果是子 SubAgent 的结论
+    """
+    parent = TurnModel(
+        scripts=[[_task_call("干活", "coder", "c1")], [AIMessageChunk(content="好了")]]
+    )
+    # 子和孙都是 coder（同一个模型），按调用顺序吃脚本：子段 1 → 孙 → 子段 2
+    child = TurnModel(
+        scripts=[
+            [_task_call("细分一下", "coder", "g1")],
+            [AIMessageChunk(content="孙结论：x=1")],
+            [AIMessageChunk(content="子结论：孙说 x=1")],
+        ]
+    )
+    client = await client_factory(parent, child)
+    thread_id = await setup_thread(client)
+    result = await run_turn(client, thread_id, "干活")
+    assert result["status"] == "succeeded", result
+
+    runs = {r.depth: r for r in await child_runs()}
+    assert set(runs) == {1, 2}
+    root_id = UUID(result["id"])
+    assert runs[1].parent_run_id == root_id and runs[1].root_run_id == root_id
+    assert runs[2].parent_run_id == runs[1].id and runs[2].root_run_id == root_id
+
+    child_thread = (await sub_threads(thread_id))[0]
+    grandchild_thread = (await sub_threads(str(child_thread.id)))[0]
+    assert grandchild_thread.root_thread_id == UUID(thread_id)
+    assert grandchild_thread.stream_thread_id == UUID(thread_id)
+
+    async with get_sessionmaker()() as session:
+        archived = list(
+            (
+                await session.execute(select(RunEvent).where(RunEvent.run_id == runs[2].id))
+            ).scalars()
+        )
+    assert archived and all(e.thread_id == UUID(thread_id) for e in archived)
+    assert all(e.depth == 2 for e in archived)
+
+    assert "子结论：孙说 x=1" in await messages_blob(thread_id, kind="tool_result")
 
 
 async def test_admission_limits_are_global_and_per_run(client_factory, monkeypatch) -> None:
@@ -670,10 +717,10 @@ async def test_subagent_approvals_land_on_the_thread_stream(client_factory) -> N
     """
     from uuid import uuid4
 
-    from atlas_server.db.models import Approval
-    from atlas_server.domain.events import EventFactory, EventType
-    from atlas_server.redisx import make_redis
-    from atlas_server.stream.relay import EventRelay
+    from atlas_agent.db.models import Approval
+    from atlas_agent.domain.events import EventFactory, EventType
+    from atlas_agent.redisx import make_redis
+    from atlas_agent.stream.relay import EventRelay
 
     parent = TurnModel(
         scripts=[
@@ -758,7 +805,7 @@ async def test_the_forwarding_machinery_is_gone(client_factory) -> None:
     留着的话它会被当成「还有这条路」而被将来的改动重新接上 —— 而它在挂起
     期间是失效的，重新接上只会掩盖问题。
     """
-    from atlas_server.services import subagent as subagent_mod
+    from atlas_agent.services import subagent as subagent_mod
 
-    assert not hasattr(subagent_mod.SubagentService, "_forward_approvals")
+    assert not hasattr(subagent_mod.SubAgentService, "_forward_approvals")
     assert not hasattr(subagent_mod, "get_stream_writer")

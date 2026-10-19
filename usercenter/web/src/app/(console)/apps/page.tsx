@@ -19,7 +19,7 @@ export default function AppsPage() {
   const [form] = Form.useForm();
   const list = useQuery({ queryKey: ["apps"], queryFn: () => api.get<AppInfo[]>("/apps") });
 
-  async function create(v: { name: string; description?: string; icon?: string }) {
+  async function create(v: { name: string; code?: string; description?: string; icon?: string }) {
     try {
       const r = await api.post<{ app: AppInfo; app_secret: string }>("/apps", v);
       qc.invalidateQueries({ queryKey: ["apps"] });
@@ -35,7 +35,7 @@ export default function AppsPage() {
     <>
       <PageHead
         title="应用接入"
-        sub="接入的系统在服务端用 App Key / Secret 调用开放接口，获取用户、组织与本应用的权限；角色、菜单、操作、数据编码都属于应用。"
+        sub="接入的系统在服务端调用开放接口，获取用户、组织与本应用的权限；内网系统以请求头 X-Caller-App（应用编码）表明身份。角色、菜单、操作、数据编码都属于应用。"
         extra={can("app:manage") && <Button type="primary" onClick={() => (form.resetFields(), setOpen(true))}>＋ 接入应用</Button>}
       />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(320px,1fr))", gap: 16 }}>
@@ -51,6 +51,11 @@ export default function AppsPage() {
               {a.is_builtin ? <Tag color="purple">内置</Tag> : a.status === "active" ? <Tag color="green">已启用</Tag> : <Tag>已停用</Tag>}
             </div>
             <div className="uc-muted" style={{ marginTop: 12, fontSize: 12.5, lineHeight: 1.9 }}>
+              {!a.is_builtin && (
+                <div>
+                  应用编码 <span className="uc-mono">{a.code ?? "未设置（内网不可调用）"}</span>
+                </div>
+              )}
               {!a.is_builtin && a.app_key && (
                 <div>
                   App Key <span className="uc-mono">{a.app_key}</span>
@@ -70,6 +75,14 @@ export default function AppsPage() {
         <Form form={form} layout="vertical" onFinish={create}>
           <Form.Item name="name" label="应用名称" rules={[{ required: true }]}>
             <Input maxLength={50} placeholder="例如：报销系统" />
+          </Form.Item>
+          <Form.Item
+            name="code"
+            label="应用编码"
+            extra="内网服务调用开放接口时，请求头 X-Caller-App 写它；不填则只能用 App Key / Secret"
+            rules={[{ pattern: /^[a-z][a-z0-9-]{1,31}$/, message: "小写字母开头，小写字母、数字、短横线，2–32 位" }]}
+          >
+            <Input maxLength={32} placeholder="例如：expense" />
           </Form.Item>
           <Form.Item name="description" label="说明">
             <Input maxLength={200} />

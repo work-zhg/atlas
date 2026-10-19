@@ -36,15 +36,15 @@ router = APIRouter(prefix="/config", tags=["config"])
 #: 按操作码鉴权（权限设计 §6.1）。查看目录：编辑智能体时要选技能 / MCP，所以构建类操作码都可以看
 SkillReader = Annotated[
     Principal,
-    Depends(require_any("skill:upload", "skill:review", "agent:create", "agent:manage_all")),
+    Depends(require_any("skill:upload", "skill:review", "agent:create")),
 ]
 SkillUploader = Annotated[Principal, Depends(require_any("skill:upload", "skill:review"))]
 SkillReviewer = Annotated[Principal, Depends(require_any("skill:review"))]
 McpReader = Annotated[
     Principal,
-    Depends(require_any("mcp:manage", "mcp:manage_all", "agent:create", "agent:manage_all")),
+    Depends(require_any("mcp:manage", "agent:create")),
 ]
-McpManager = Annotated[Principal, Depends(require_any("mcp:manage", "mcp:manage_all"))]
+McpManager = Annotated[Principal, Depends(require_any("mcp:manage"))]
 Auditor = Annotated[Principal, Depends(require_any("audit:view"))]
 
 

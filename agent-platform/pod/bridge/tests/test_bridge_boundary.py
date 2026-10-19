@@ -6,7 +6,7 @@ import subprocess
 import sys
 
 FORBIDDEN = (
-    "atlas_server",
+    "atlas_agent",
     "atlas_engine",
     "atlas_cluster",
     "sqlalchemy",

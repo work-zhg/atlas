@@ -1,6 +1,6 @@
 # 用户中心（atlas-usercenter）
 
-用户、组织与权限的唯一数据源。接入的内部系统（AI TeamFlow、Atlas 等）在**服务端**用 App Key / Secret 调用开放接口 `/open/v1` 获取用户、部门与本应用的授权。统一登录（SSO）本期不做，以后用 Keycloak。
+用户、组织与权限的唯一数据源，也是统一登录的地方：网关（atlas-frontends 的 nginx）对各应用接口做 `auth_request` → `/api/v1/auth/verify`，把 `X-Uid`、`X-Tenant-Id` 写进请求头。接入的内部系统（AI TeamFlow、Atlas 等）在**服务端**调用开放接口 `/open/v1` 获取用户、部门与本应用的授权 —— 内网免令牌，应用身份 = 请求头 `X-Caller-App`（应用编码），租户 = `X-Tenant-Id`（缺省按 `X-Uid` 推）。见 doc/identity-propagation-design.html。SSO 以后用 Keycloak，只换 verify 背后的校验。
 
 设计文档：`prototype/usercenter/docs/`（总体设计 `system-design.html` 与四个模块的详细设计）。
 

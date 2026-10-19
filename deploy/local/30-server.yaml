@@ -26,6 +26,10 @@ spec:
     spec:
       # ★ 不给 ServiceAccount 任何 Role：server 不碰 K8s，Pod 生命周期
       #   归 cluster。这里的默认 SA 什么权限都没有，正是想要的。
+      # ★ 停机交接（doc/horizontal-scaling-design.html §6）：SIGTERM 后 native run 走到
+      #   安全点、acp run 断开，交给别的副本（或重建后的本副本）接着跑。宽限期要盖过
+      #   DRAIN_TIMEOUT_S（默认 60s）+ 关连接与 flush 遥测的时间。
+      terminationGracePeriodSeconds: 90
       containers:
         - name: server
           image: atlas-app:dev
@@ -44,12 +48,14 @@ spec:
             # ★ MCP 先保持 env：注册表要先用 `python -m atlas_config mcp import-env`
             #   导入，再把 MCP_REGISTRY 切成 config。
             - {name: CONFIG_BASE_URL, value: "http://atlas-config.atlas-system.svc.cluster.local:8020"}
-            # 知识库服务（doc/atlas-rag-design.html §10）；服务间令牌复用 CONFIG_INTERNAL_TOKEN
+            # 知识库服务（doc/atlas-rag-design.html §10）；内网免令牌，带身份请求头
             - {name: KNOWLEDGE_BASE_URL, value: "http://atlas-knowledge.atlas-system.svc.cluster.local:8050"}
             # 原生智能体的 Shell 沙箱（doc/native-sandbox-design.html）：Pod 由 atlas-cluster 创建
             - {name: SANDBOX_ENABLED, value: "true"}
-            - name: CONFIG_INTERNAL_TOKEN
-              valueFrom: {secretKeyRef: {name: atlas-config-creds, key: internal_token}}
+            # 知识库 MCP 令牌的签名密钥：给会话 Pod（不可信代码）的能力凭据，不是服务间令牌
+            # （内网身份传递 §5.3）。与知识库的 ATLAS_KB_MCP_SECRET 是同一个
+            - name: KNOWLEDGE_MCP_SECRET
+              valueFrom: {secretKeyRef: {name: atlas-knowledge-mcp, key: secret}}
             # 技能版本的磁盘缓存。容器里放 /tmp：丢了只是重新拉一次
             - {name: CONFIGPLANE_CACHE_DIR, value: /tmp/atlas-configplane}
             # 遥测（可观测性设计 §02）。Collector 跑在宿主的 compose 里，
@@ -63,22 +69,17 @@ spec:
             # ★ Mem0 的变更史库。默认在 ~/.mem0，容器里是易失的。
             - {name: MEMORY_HISTORY_DB, value: "/tmp/mem0-history.db"}
             - {name: DEFAULT_USER_ID, value: "00000000-0000-0000-0000-000000000001"}
-            # 身份与鉴权（doc/auth-permission-design.html）：用户中心账号登录 + 服务账号密钥；
-            # X-User-Id 不再生效。用户中心后端在宿主上运行（:8030）
+            # 身份与鉴权（doc/identity-propagation-design.html）：网关校验用户中心登录态、写入 X-Uid；
+            # 缺 X-Uid 一律 401。操作码按 X-Auth-Uid 取用户中心授权快照（内网免令牌）
             - {name: AUTH_MODE, value: uc}
-            - {name: UC_BASE_URL, value: "http://__HOST_IP__:8030"}
-            - name: UC_APP_KEY
-              valueFrom: {secretKeyRef: {name: atlas-server-creds, key: uc_app_key}}
-            - name: UC_APP_SECRET
-              valueFrom: {secretKeyRef: {name: atlas-server-creds, key: uc_app_secret}}
+            - {name: UC_BASE_URL, value: "http://atlas-usercenter.atlas-system.svc.cluster.local:8030"}
             # MCP 经 Higress 收口（MCP 详设 §08）。Higress 跑在宿主的 compose 里
             # （--profile higress），配置见 deploy/local/higress/setup.py。
             # ★ 后端 key 只在网关里，这里只有网关地址 —— 没有任何 serpapi 凭据。
             # ★ serpapi 单独给 90s：没有缓存的查询偶尔 50s+，全局 60s 会误判超时。
             - name: MCP_SERVERS
               value: '[{"name":"serpapi","url":"http://__HOST_IP__:18080/mcp-servers/serpapi","call_timeout_s":90}]'
-            # web 从宿主浏览器直连本服务（LoadBalancer 落在 localhost）
-            # ★ 也是会话文件预览的 frame-ancestors（previews.py）：经前端网关（:8080，见 40-frontends.yaml）
+            # ★ 会话文件预览的 frame-ancestors（previews.py）：经前端网关（:8080，见 40-frontends.yaml）
             #   打开的预览页要能 iframe 嵌入预览站点
             - {name: CORS_ORIGINS, value: '["http://localhost:3000","http://127.0.0.1:3000","http://localhost:8080","http://127.0.0.1:8080"]'}
             - name: OSS_ACCESS_KEY_ID
@@ -89,20 +90,26 @@ spec:
               valueFrom: {secretKeyRef: {name: atlas-server-creds, key: litellm_base_url}}
             - name: LITELLM_KEY
               valueFrom: {secretKeyRef: {name: atlas-server-creds, key: litellm_key}}
+          # ★ /readyz 在停机交接期间返回 503，负载均衡据此摘流量
           readinessProbe:
-            httpGet: {path: /healthz, port: 8000}
+            httpGet: {path: /readyz, port: 8000}
             periodSeconds: 3
+          lifecycle:
+            # 给 Endpoints 摘除一点传播时间，再发 SIGTERM
+            preStop:
+              exec: {command: ["sleep", "5"]}
           resources:
             requests: {cpu: 100m, memory: 256Mi}
 ---
-# ★ LoadBalancer：Docker Desktop 把它落到 127.0.0.1:8000，于是宿主的
-#   curl 与浏览器都能直连 —— 而 server 自己在集群网里，够得着 Pod IP。
+# ★ ClusterIP（内网身份传递 §4）：身份在请求头里、内网免令牌，所以只能经网关对外 ——
+#   宿主直连 localhost:8000 就是绕过网关的后门。评测 / 运维用 kubectl port-forward
+#   （deploy/local/forward.sh）。
 apiVersion: v1
 kind: Service
 metadata:
   name: atlas-server
   namespace: atlas-system
 spec:
-  type: LoadBalancer
+  type: ClusterIP
   selector: {app: atlas-server}
   ports: [{port: 8000, targetPort: 8000}]

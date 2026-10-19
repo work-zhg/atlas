@@ -8,15 +8,17 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from atlas_server.db.models import Agent, AgentVersion, Run
-from atlas_server.db.session import get_sessionmaker
-from atlas_server.repositories.run import RunRepository
-from atlas_server.services.agent import _summarize
+from atlas_agent.db.models import Agent, AgentVersion, Run
+from atlas_agent.db.session import get_sessionmaker
+from atlas_agent.repositories.run import RunRepository
+from atlas_agent.services.agent import _summarize
 
 
 async def test_latest_run_state_per_thread_in_rolled_back_tx() -> None:
     now = datetime.now(UTC)
-    t_running, t_approval, t_sub_approval, t_done, t_none = (uuid.uuid4() for _ in range(5))
+    t_running, t_approval, t_sub_approval, t_done, t_none, t_resumed = (
+        uuid.uuid4() for _ in range(6)
+    )
     version_id = uuid.uuid4()
     async with get_sessionmaker()() as session:
         try:
@@ -37,33 +39,42 @@ async def test_latest_run_state_per_thread_in_rolled_back_tx() -> None:
             # 旧的失败 run 不影响：只看最近一个
             run(t_running, "failed", at=now - timedelta(minutes=5))
             run(t_running, "running", at=now)
-            run(t_approval, "suspended", at=now, waiting=[{"reason": "approval", "token": "a"}])
+            run(
+                t_approval,
+                "suspended",
+                at=now,
+                waiting={"c1": {"reason": "approval", "token": "a"}},
+            )
             parent = run(
                 t_sub_approval,
                 "suspended",
                 at=now,
-                waiting=[{"reason": "delegation", "token": "x"}],
+                waiting={"c1": {"reason": "subagent", "token": "x"}},
             )
             # 委派出去的子 run 在等审批：父会话也要算「需要我处理」
             run(
                 uuid.uuid4(),
                 "suspended",
                 at=now,
-                waiting=[{"reason": "approval"}],
+                waiting={"c2": {"reason": "approval", "token": "y"}},
                 parent=parent.id,
             )
             run(t_done, "succeeded", at=now)
+            # ★ 续跑中的 run 还带着上一次挂起的 waiting_on（留到 run 结束才清）—— 不算「需要我处理」
+            run(t_resumed, "running", at=now, waiting={"c1": {"reason": "approval", "token": "z"}})
             await session.flush()
 
             states = await RunRepository(session).latest_runs_of(
-                [t_running, t_approval, t_sub_approval, t_done, t_none]
+                [t_running, t_approval, t_sub_approval, t_done, t_none, t_resumed]
             )
             assert states[t_running]["status"] == "running"
             assert states[t_running]["needs_approval"] is False
             assert states[t_approval]["needs_approval"] is True
-            assert states[t_sub_approval]["waiting"] == ["delegation"]
+            assert states[t_sub_approval]["waiting"] == ["subagent"]
             assert states[t_sub_approval]["needs_approval"] is True
             assert states[t_done]["status"] == "succeeded"
+            assert states[t_resumed]["waiting"] == []
+            assert states[t_resumed]["needs_approval"] is False
             assert t_none not in states
             assert await RunRepository(session).latest_runs_of([]) == {}
         finally:

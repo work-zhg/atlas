@@ -43,7 +43,6 @@ export function defaultSpec(model = "claude-sonnet-5"): ResolvedSpec {
       max_steps: 40,
       timeout_s: 300,
       max_total_tokens: 500_000,
-      max_subagent_depth: 2,
       tool_concurrency: 4,
       require_approval_for: [],
     },

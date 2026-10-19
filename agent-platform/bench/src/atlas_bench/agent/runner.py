@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import random
@@ -22,15 +23,49 @@ from typing import Any
 
 from ..runner import _git_commit
 from ..settings import BenchSettings
-from .platforms.atlas import AtlasAgentPlatform, AtlasError
-from .schema import AgentExperimentConfig, Task, TrialResult
+from .platforms.atlas import AtlasAgentPlatform, AtlasError, TrialRun
+from .schema import AgentExperimentConfig, Task, TrialResult, VariantConfig
 from .tasks import select_tasks
-from .trajectory import metrics_from_trace
+from .trajectory import check_expectations, metrics_from_trace
 from .verify import verify_workspace
 
-__all__ = ["run_agent_experiment", "trials_path"]
+__all__ = ["PLATFORM_ERROR_KINDS", "deep_merge", "run_agent_experiment", "trials_path"]
 
 logger = logging.getLogger(__name__)
+
+#: run 失败时，这些 error_kind 的原因在**基础设施**（网关、Pod、平台内部），不在 Agent：
+#: 记 platform_error、按协议重跑一次。其余（超步数、上下文溢出、模型拒答）是 Agent / harness
+#: 自身的失败，记 agent_error —— 那正是评测要量的东西，不能重跑掉。
+PLATFORM_ERROR_KINDS = frozenset(
+    {
+        "model_unavailable",
+        "model_rate_limited",
+        "internal_error",
+        "interrupted",
+        "pod_unavailable",
+        "runtime_crashed",
+        "dependency_unavailable",
+        "capability_unavailable",
+        # 前置会话失败 / 记忆没抽取出来（评测协议的一部分，见 platforms/atlas.py _run_setup）
+        "setup_failed",
+    }
+)
+
+
+def deep_merge(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    """字典递归合并，其余（含列表）整体替换。不改动入参。"""
+    out = dict(base)
+    for k, v in patch.items():
+        out[k] = (
+            deep_merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
+        )
+    return out
+
+
+def _agent_key(variant: str, task: Task) -> str:
+    return (
+        f"{variant}|{json.dumps(task.agent_patch, sort_keys=True)}" if task.agent_patch else variant
+    )
 
 
 def trials_path(run_dir: Path, variant: str) -> Path:
@@ -61,7 +96,62 @@ def _final_message(trace: list[dict[str, Any]]) -> str:
     return ""
 
 
+def sse_metrics(tr: TrialRun, trace: list[dict[str, Any]]) -> dict[str, int]:
+    """断线续传检查（E18）：以归档里本 run 的事件为准，看客户端收到的 id 有没有缺口与重复。
+
+    只比 [首个收到的 id, 最后收到的 id] 区间：之前的是首连前就发生的，之后的是
+    评测客户端停止收听后才归档的 —— 都不是续传的问题。流式增量不归档，不参与比较。
+    """
+    got = tr.sse_ids
+    if not got:
+        return {"sse_received": 0, "sse_missing": 0, "sse_duplicates": 0, "sse_reconnects": 0}
+    lo, hi = min(got), max(got)
+    archived = {
+        int(e["thread_seq"])
+        for e in trace
+        if e.get("run_id") == tr.run_id and e.get("thread_seq") is not None
+    }
+    return {
+        "sse_received": len(got),
+        "sse_missing": len({s for s in archived if lo <= s <= hi} - set(got)),
+        "sse_duplicates": len(got) - len(set(got)),
+        "sse_reconnects": tr.sse_reconnects,
+    }
+
+
+def _classify(tr: TrialRun, passed: bool, metrics: dict[str, Any]) -> str:
+    if tr.budget_exceeded:
+        return "budget_exceeded"
+    if passed:
+        return "success"
+    if tr.status in ("failed", "interrupted") and (tr.error_kind or "") in PLATFORM_ERROR_KINDS:
+        return "platform_error"
+    if metrics.get("sandbox_unavailable"):  # 沙箱起不来被当成了工具错误，Agent 没机会做成
+        return "platform_error"
+    if tr.status in ("failed", "interrupted"):
+        return "agent_error"
+    return "failure"
+
+
 async def _trial(
+    platform: AtlasAgentPlatform,
+    agent: dict[str, Any],
+    variant: str,
+    task: Task,
+    trial: int,
+    cfg: AgentExperimentConfig,
+    run_dir: Path,
+) -> TrialResult:
+    """一个 trial；平台错误按协议重跑一次（新会话），重跑仍失败才记 platform_error。"""
+    res = await _attempt(platform, agent, variant, task, trial, cfg, run_dir)
+    if res.outcome == "platform_error":
+        logger.info("%s %s#%d 平台错误，按协议重跑一次：%s", variant, task.id, trial, res.error)
+        res = await _attempt(platform, agent, variant, task, trial, cfg, run_dir)
+        res.retried = True
+    return res
+
+
+async def _attempt(
     platform: AtlasAgentPlatform,
     agent: dict[str, Any],
     variant: str,
@@ -72,9 +162,10 @@ async def _trial(
 ) -> TrialResult:
     t0 = time.monotonic()
     base = {"task_id": task.id, "variant": variant, "trial": trial}
+    policy = task.approval_policy or cfg.approval_policy
     try:
-        tr = await platform.run_trial(agent, task, trial=trial, approval_policy=cfg.approval_policy)
-    except (AtlasError, OSError) as exc:  # 建会话 / 上传 / 发消息失败：平台问题
+        tr = await platform.run_trial(agent, task, trial=trial, approval_policy=policy)
+    except (AtlasError, OSError) as exc:  # 建会话 / 上传 / 发消息失败：评测侧拿不到现场
         return TrialResult(**base, outcome="infra_error", error=str(exc))
     refs = {"thread_id": tr.thread_id, "run_id": tr.run_id, "agent_slug": agent["slug"]}
     try:
@@ -91,21 +182,20 @@ async def _trial(
     )
     metrics = metrics_from_trace(trace, runs)
     metrics["approval_wait_ms"] = sum(a["latency_ms"] for a in tr.approvals)
+    metrics["approvals_rejected"] = sum(1 for a in tr.approvals if a["decision"] == "rejected")
     if skipped:
         metrics["skipped_files"] = skipped
+    if task.sse_disconnect_after:
+        metrics.update(sse_metrics(tr, trace))
+    if task.thread_memory == "on":
+        metrics["memories_new"] = tr.memories_new
+        # 先清记忆再校验：服务账号的记忆在所有评测之间共享，不能留给下一题
+        metrics["memories_removed"] = await platform.cleanup_memories(tr)
+    expectations, expect_ok = check_expectations(task.expect, trace, metrics)
 
     # 即使 run 失败 / 超预算也照样校验：工作区里可能已经做对了（只是没好好收尾）
     v = await verify_workspace(task, files)
-    if v.infra_error:
-        outcome = "infra_error"
-    elif tr.budget_exceeded:
-        outcome = "budget_exceeded"
-    elif v.passed:
-        outcome = "success"
-    elif tr.status in ("failed", "interrupted"):
-        outcome = "agent_error"
-    else:
-        outcome = "failure"
+    outcome = "infra_error" if v.infra_error else _classify(tr, v.passed, metrics)
     if cfg.delete_threads:
         await platform.delete_thread(tr)
     return TrialResult(
@@ -119,6 +209,8 @@ async def _trial(
         final_message=_final_message(trace),
         wall_s=round(time.monotonic() - t0, 1),
         refs=refs,
+        expectations=expectations,
+        expect_ok=expect_ok,
     )
 
 
@@ -139,6 +231,18 @@ async def run_agent_experiment(
     run_dir.mkdir(parents=True, exist_ok=True)
 
     agents = {v: await platform.prepare(v, vc) for v, vc in cfg.variants.items()}
+    # ★ 带 agent_patch 的任务用「被测配置 + 补丁」另建一个智能体（slug 带配置指纹，可复用）。
+    #   预先建好：并发的 trial 同时去建同一个 slug 会撞唯一约束
+    patched: dict[str, dict[str, Any]] = {}
+    for v, vc in cfg.variants.items():
+        for t in tasks:
+            if t.agent_patch and (key := _agent_key(v, t)) not in patched:
+                merged = VariantConfig(
+                    adapter=vc.adapter,
+                    agent=deep_merge(vc.agent, t.agent_patch),
+                    description=vc.description,
+                )
+                patched[key] = await platform.prepare(v, merged)
     manifest = {
         "kind": "agent",
         "config": cfg.model_dump(mode="json"),
@@ -150,6 +254,7 @@ async def run_agent_experiment(
             v: {"id": a["id"], "slug": a["slug"], "version": a.get("version")}
             for v, a in agents.items()
         },
+        "patched_agents": {k: a["slug"] for k, a in patched.items()},
     }
     (run_dir / "manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -173,12 +278,18 @@ async def run_agent_experiment(
 
     sem = asyncio.Semaphore(cfg.concurrency)
     lock = asyncio.Lock()
+    #: serial 任务的 trial 彼此不并发（共享状态，如用户记忆）
+    serial_locks = {t.id: asyncio.Lock() for t in tasks if t.serial}
     finished = 0
 
     async def one(variant: str, task: Task, n: int) -> None:
         nonlocal finished
-        async with sem:
-            res = await _trial(platform, agents[variant], variant, task, n, cfg, run_dir)
+        agent = patched.get(_agent_key(variant, task)) or agents[variant]
+        async with contextlib.AsyncExitStack() as stack:
+            if task.id in serial_locks:  # 先排 serial 锁再占并发名额，不白占名额
+                await stack.enter_async_context(serial_locks[task.id])
+            await stack.enter_async_context(sem)
+            res = await _trial(platform, agent, variant, task, n, cfg, run_dir)
         async with lock:
             path = trials_path(run_dir, variant)
             path.parent.mkdir(parents=True, exist_ok=True)

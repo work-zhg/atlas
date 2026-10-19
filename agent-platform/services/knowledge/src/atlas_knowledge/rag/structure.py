@@ -15,16 +15,22 @@
 ★ 一个标题都识别不出来时，整篇是一个无标题小节，③ 会按单元边界打包 —— 自然退回按段落切。
 ★ 标题层级按文档里实际出现的级别排名：只用了 ## 和 ### 的文档，它们就是第 1、2 级。
 ★ --- 这类分隔线是装饰，不作为单元。
+
+DocIR 入口（sections_from_blocks，doc/knowledge-enterprise-design.html §4.1 / §5.2）：
+解析器已经给出了结构化的块，① 直接由块组装，不再从文本里识别；单元带页码、坐标与图片，
+父块据此汇总出 source_locator。表格是原子块：整张表放得进一个父块时不被拆开（按 group 装箱）。
 """
 
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from .splitter import FixedRecursiveCharacterTextSplitter
 
 __all__ = [
+    "Embed",
     "Parent",
     "Section",
     "StructureOptions",
@@ -33,6 +39,7 @@ __all__ = [
     "child_texts",
     "parse_sections",
     "path_text",
+    "sections_from_blocks",
 ]
 
 PATH_SEP = " > "
@@ -70,6 +77,15 @@ _CN_HEADING_MAX_LEN = 50
 _SENTENCE_END = tuple("。；;，,：:！!？?")
 
 
+#: 文本 → 向量（语义分段用；与知识库的向量模型同一个）
+Embed = Callable[[list[str]], list[list[float]]]
+
+#: 语义切点：相邻单元相似度处于最低的这个比例时视为话题转换
+_SEMANTIC_PERCENTILE = 0.2
+#: 父块至少装到上限的这个比例才在语义切点切开（避免碎块）
+_SEMANTIC_MIN_FILL = 0.4
+
+
 @dataclass
 class StructureOptions:
     #: 切到第几级标题（按文档里实际出现的级别排名）
@@ -82,6 +98,8 @@ class StructureOptions:
     child_max_length: int = 300
     #: 短于它的单元并入下一个单元（如单独一行的「**核心能力**」）
     child_min_length: int = 20
+    #: 语义分段（§5.1）：超长小节在话题转换处切开。None = 按长度装箱
+    embed: Embed | None = None
 
 
 @dataclass
@@ -94,6 +112,12 @@ class Unit:
     gap: bool = False
     #: 表格行的表头（只用于建向量的前缀）
     table_header: str = ""
+    #: 来源位置（DocIR 入口才有）：页码、页内坐标、图片在对象存储里的 key
+    page: int | None = None
+    bbox: list[float] | None = None
+    asset: str | None = None
+    #: 原子块分组（同一张表的单元同组）：整组放得进父块时不拆开
+    group: str | None = None
 
 
 @dataclass
@@ -114,6 +138,29 @@ class Parent:
     units: list[Unit]
     #: 合并进来的各小节的路径（子块用自己所在小节的路径）
     unit_paths: list[list[str]]
+
+    def locator(self) -> dict[str, object] | None:
+        """引用定位（§4.6）：涉及的页码、各单元的页内区域、图片。没有位置信息时为 None。"""
+        pages: list[int] = []
+        boxes: list[dict[str, object]] = []
+        assets: list[str] = []
+        for u in self.units:
+            if u.page is not None and u.page not in pages:
+                pages.append(u.page)
+            if u.bbox is not None:
+                box = {"page": u.page, "bbox": u.bbox}
+                if not boxes or boxes[-1] != box:
+                    boxes.append(box)
+            if u.asset and u.asset not in assets:
+                assets.append(u.asset)
+        if not pages and not boxes and not assets:
+            return None
+        out: dict[str, object] = {"pages": sorted(pages)}
+        if boxes:
+            out["boxes"] = boxes
+        if assets:
+            out["assets"] = assets
+        return out
 
 
 def path_text(path: list[str] | None) -> str:
@@ -304,28 +351,68 @@ def _split_oversized(u: Unit, limit: int) -> list[Unit]:
         chunk_size=limit, chunk_overlap=0, fixed_separator="\n"
     ).split_text(u.text)
     out = [
-        Unit(u.kind, p.strip(), u.gap if k == 0 else False, u.table_header)
+        Unit(
+            u.kind,
+            p.strip(),
+            u.gap if k == 0 else False,
+            u.table_header,
+            page=u.page,
+            bbox=u.bbox,
+            asset=u.asset,
+            group=u.group,
+        )
         for k, p in enumerate(pieces)
         if p.strip()
     ]
     return out or [u]
 
 
-def _pack_section(section: Section, max_length: int) -> list[Parent]:
-    """一个小节 → 一个或多个父块（按单元边界装箱）。"""
+def _semantic_breaks(units: list[Unit], embed: Embed) -> set[int]:
+    """话题转换处：单元 k 之前是一个切点（k 与 k-1 的相似度处于最低的 20%）。
+
+    ★ 表格行、代码不参与判断（同一张表的行之间相似度天然高，且表格已经是原子块）。
+    """
+    import numpy as np
+
+    idx = [k for k, u in enumerate(units) if u.kind in ("paragraph", "list_item", "heading")]
+    if len(idx) < 4:
+        return set()
+    vecs = np.asarray(embed([units[k].text[:512] for k in idx]), dtype=np.float64)
+    vecs /= np.linalg.norm(vecs, axis=1, keepdims=True) + 1e-12
+    sims = (vecs[1:] * vecs[:-1]).sum(axis=1)
+    cut = float(np.quantile(sims, _SEMANTIC_PERCENTILE))
+    return {idx[j + 1] for j, s in enumerate(sims) if s <= cut}
+
+
+def _pack_section(section: Section, max_length: int, embed: Embed | None = None) -> list[Parent]:
+    """一个小节 → 一个或多个父块（按单元边界装箱；开了语义分段时优先在话题转换处切）。"""
     head = section.heading
     budget = max_length - (len(head) + 1 if head else 0)
     units: list[Unit] = []
     for u in section.units:
         units.extend(_split_oversized(u, max(budget, 50)))
+    total = sum(len(u.text) + 1 for u in units) + (len(head) if head else 0)
+    breaks = _semantic_breaks(units, embed) if embed is not None and total > max_length else set()
+
+    #: 每个原子组（同一张表）的总长度
+    group_size: dict[str, int] = {}
+    for u in units:
+        if u.group:
+            group_size[u.group] = group_size.get(u.group, 0) + len(u.text) + 1
 
     parents: list[Parent] = []
     window: list[Unit] = []
     size = len(head) if head else 0
     first = True
-    for u in units:
+    for k, u in enumerate(units):
         extra = len(u.text) + (2 if u.gap else 1)
-        if window and size + extra > max_length:
+        starts_group = u.group is not None and (k == 0 or units[k - 1].group != u.group)
+        # 原子块：整组放得进一个父块、但放不进当前这块的剩余空间 → 先收尾，整组进下一块
+        need = group_size[u.group] if starts_group and u.group else extra
+        if starts_group and need > max_length:
+            need = extra  # 整张表比一个父块还大：只能按行拆（每行子块的前缀带表头）
+        semantic_cut = k in breaks and size >= max_length * _SEMANTIC_MIN_FILL
+        if window and (size + need > max_length or semantic_cut):
             parents.append(
                 Parent(
                     section.path,
@@ -355,7 +442,7 @@ def build_parents(sections: list[Section], opts: StructureOptions) -> list[Paren
     #: 上一个父块是不是一个完整的小节（没被拆开），以及它的上级路径
     prev_whole: tuple[list[str], Section] | None = None
     for sec in sections:
-        packed = _pack_section(sec, opts.max_length)
+        packed = _pack_section(sec, opts.max_length, opts.embed)
         whole = len(packed) == 1
         if (
             whole
@@ -424,3 +511,76 @@ def child_texts(parent: Parent, opts: StructureOptions) -> list[tuple[str, str]]
         else:
             emit(pending, pending_path)
     return out
+
+
+# ───────────────────────────────────────────── DocIR 入口
+
+
+def sections_from_blocks(blocks: list, max_heading_level: int = 3) -> list[Section]:  # type: ignore[type-arg]
+    """DocIR 的块 → 小节（结构由解析器给出，不再从文本里识别）。
+
+    ★ text 块（纯文本类格式混在里面时）交给 parse_sections；heading 的层级按文档里实际出现的
+      级别排名；一个标题都没有时用中文编号规则组在短段落里找。
+    """
+    from .docir import image_text, table_markdown
+
+    levels: dict[int, int] = {i: b.level or 1 for i, b in enumerate(blocks) if b.type == "heading"}
+    if not levels:
+        cand = {
+            i: b.text.strip()
+            for i, b in enumerate(blocks)
+            if b.type == "paragraph" and "\n" not in b.text.strip()
+        }
+        idx = list(cand)
+        levels = {idx[k]: lv for k, lv in _detect_cn_levels([cand[i] for i in idx]).items()}
+    ranks = _heading_ranks(levels)
+
+    sections: list[Section] = []
+    stack: list[tuple[int, str]] = []
+    current = Section(path=[], heading=None)
+    sections.append(current)
+    table_no = 0
+
+    for i, b in enumerate(blocks):
+        if b.type == "text":
+            for sec in parse_sections(b.text, max_heading_level):
+                if sec.heading is None and not sec.path:
+                    current.units.extend(sec.units)
+                else:
+                    sec.path = [t for _, t in stack] + sec.path
+                    sections.append(sec)
+                    current = sec
+            continue
+        if i in ranks:
+            title = _strip_md(b.text.strip())
+            if ranks[i] <= max_heading_level:
+                while stack and stack[-1][0] >= ranks[i]:
+                    stack.pop()
+                stack.append((ranks[i], title))
+                current = Section(path=[t for _, t in stack], heading=title)
+                sections.append(current)
+            else:
+                current.units.append(Unit("heading", title, True, page=b.page, bbox=b.bbox))
+            continue
+        loc = {"page": b.page, "bbox": b.bbox}
+        if b.type == "table" and b.table:
+            table_no += 1
+            md = table_markdown(b.table.get("rows") or [], int(b.table.get("header_rows", 1)))
+            lines = md.split("\n")
+            group = f"t{table_no}"
+            current.units.append(Unit("table_head", "\n".join(lines[:2]), True, group=group, **loc))
+            current.units.extend(
+                Unit("table_row", row, False, lines[0], group=group, **loc) for row in lines[2:]
+            )
+        elif b.type == "image":
+            current.units.append(Unit("image", image_text(b), True, asset=b.asset, **loc))
+        elif b.type == "caption" and b.attrs.get("attached"):
+            continue
+        elif b.type == "code":
+            current.units.append(Unit("code", f"```\n{b.text}\n```", True, **loc))
+        elif b.text.strip():
+            kind = "list_item" if b.type == "list_item" else "paragraph"
+            current.units.append(Unit(kind, b.text.strip(), kind == "paragraph", **loc))
+
+    # 只有标题、没有正文的小节不单独成块（同 parse_sections）
+    return [s for s in sections if s.units]

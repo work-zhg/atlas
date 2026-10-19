@@ -8,11 +8,12 @@ import { useState } from "react";
 
 import { AgentAvatar, DeptPicker, EmptyBox, LevelTag, PageHead, UserPicker } from "@/components/common";
 import { api, errorText } from "@/lib/api";
-import { useCan } from "@/lib/session";
+import { useAllData, useCan } from "@/lib/session";
 import type { Team } from "@/lib/types";
 
 export default function TeamsPage() {
   const can = useCan();
+  const allData = useAllData();
   const [open, setOpen] = useState(false);
   const { data, isLoading } = useQuery({ queryKey: ["teams"], queryFn: () => api.get<Team[]>("/teams") });
 
@@ -20,7 +21,7 @@ export default function TeamsPage() {
     <>
       <PageHead
         title="团队"
-        sub={can("team:manage_all") ? "全部团队（平台管理员）" : "我所在的团队"}
+        sub={allData("Team", "WRITE") ? "全部团队（你有全部团队的数据权限）" : "我所在的团队"}
         extra={
           can("team:create") && (
             <Button type="primary" icon={<PlusOutlined />} onClick={() => setOpen(true)}>

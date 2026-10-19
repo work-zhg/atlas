@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from atlas_server.domain.translator import files_delta, tool_calls_from, tool_result_from
+from atlas_agent.domain.translator import tool_calls_from, tool_result_from
 from langchain_core.messages import AIMessage, ToolMessage
 
 
@@ -53,43 +53,3 @@ def test_tool_result_error_is_distinguishable() -> None:
 
 def test_tool_result_from_non_tool_message_is_none() -> None:
     assert tool_result_from(AIMessage(content="hi")) is None
-
-
-# ---------------------------------------------------------------------------
-# 文件：kernel 每次给整张表，只该报变化过的
-# ---------------------------------------------------------------------------
-
-
-def _files(**paths: str) -> dict:
-    return {p: {"content": c, "encoding": "utf-8"} for p, c in paths.items()}
-
-
-def test_files_delta_reports_new_files() -> None:
-    seen: dict[str, str] = {}
-    changed = files_delta(_files(**{"/a.txt": "1"}), seen)
-    assert [c["path"] for c in changed] == ["/a.txt"]
-    assert changed[0]["size_bytes"] == 1
-
-
-def test_files_delta_suppresses_unchanged() -> None:
-    """★ 不去重的话 Inspector 会反复刷同样的行。"""
-    seen: dict[str, str] = {}
-    snapshot = _files(**{"/a.txt": "1"})
-    assert len(files_delta(snapshot, seen)) == 1
-    assert files_delta(snapshot, seen) == []  # 第二次同样内容 → 不再上报
-
-
-def test_files_delta_reports_modification() -> None:
-    seen: dict[str, str] = {}
-    files_delta(_files(**{"/a.txt": "1"}), seen)
-    changed = files_delta(_files(**{"/a.txt": "2"}), seen)
-    assert [c["path"] for c in changed] == ["/a.txt"]
-
-
-def test_files_delta_handles_non_dict() -> None:
-    assert files_delta(None, {}) == []
-
-
-def test_files_delta_counts_utf8_bytes() -> None:
-    changed = files_delta(_files(**{"/cn.txt": "中文"}), {})
-    assert changed[0]["size_bytes"] == 6  # 而不是 2

@@ -1,0 +1,15 @@
+# L0 冒烟（doc/agent-platform-eval-plan.html §3）：demo 7 题 × 1 次，部署后跑。
+# 只看硬门槛（--gate）：平台错误、沙箱不可用、过程断言失败。成功率不作门槛（单次有方差）。
+name: agent-l0
+suites: [demo]
+trials: 1
+concurrency: 4
+approval_policy: approve_all
+variants:
+  native-full:
+    description: 原生：文件 + Shell + 待办
+    agent:
+      system_prompt: 你在一个带 Linux 沙箱的工作区里完成用户的任务。直接动手做，做完自己验证，最后用一两句话说明结果。
+      model: {model: deepseek-chat, provider: anthropic}
+      tool_names: [filesystem, bash, write_todos]
+      limits: {max_steps: 80}

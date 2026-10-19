@@ -8,10 +8,11 @@
 
 | 变量 | 说明 |
 | --- | --- |
-| `ATLAS_BENCH_ATLAS_API_KEY` | 评测专用服务账号的密钥（只需 `kb:create`） |
+| `ATLAS_BENCH_UID` | 评测身份：用户中心里的普通用户 `atlas-bench`（禁止登录），授「评测」角色（`kb:create` · `agent:create` · `chat:use`）。请求头 `X-Uid` 写它、`X-Caller-App: bench`（内网免令牌，doc/identity-propagation-design.html §12） |
+| `ATLAS_BENCH_TENANT_ID` | 它所在的租户；单租户部署可不填（用户中心按 uid 推） |
 | `ATLAS_BENCH_LLM_API_KEY` | 生成与裁判模型的密钥（OpenAI 兼容接口）；不设则依次用 `MEMORY_LLM_API_KEY`、`LITELLM_KEY` |
 | `ATLAS_BENCH_LLM_BASE_URL` | 默认 `https://api.deepseek.com/v1` |
-| `ATLAS_BENCH_ATLAS_KB_URL` | 默认 `http://localhost:8080/atlas-knowledge-api`（经网关） |
+| `ATLAS_BENCH_ATLAS_KB_URL` | 默认 `http://127.0.0.1:18050`：内网接口不对宿主暴露，先 `kubectl -n atlas-system port-forward svc/atlas-knowledge 18050:8050`（`make smoke` / `make regress` 自动开关，见 `deploy/local/forward.sh`） |
 
 ## 使用
 
@@ -55,7 +56,7 @@ uv run python -m atlas_bench agent report <运行目录>                        
 uv run python -m atlas_bench agent cleanup                                 # 删除评测建的智能体（bench- 前缀）
 ```
 
-- 身份：同一个服务账号 `ATLAS_BENCH_ATLAS_API_KEY`，需要 `agent:create` + `chat:use`；地址 `ATLAS_BENCH_ATLAS_API_URL`（默认 `http://127.0.0.1:8000`）。
+- 身份：同一个评测用户 `ATLAS_BENCH_UID`，需要 `agent:create` + `chat:use`；地址 `ATLAS_BENCH_ATLAS_API_URL`（默认 `http://127.0.0.1:18000`，`kubectl -n atlas-system port-forward svc/atlas-server 18000:8000`）。
 - 任务格式：`agent-platform/bench/agent-tasks/<套件>/<任务>/` 下 `task.yaml`（指令、类别、预算）、`files/`（初始工作区，经 `PUT /v1/threads/{id}/files` 上传）、
   `verifier/verify.py`（校验，Agent 看不到）、`solution/`（参考答案，只给单测用）。
 - 校验：最终工作区拷进 `python:3.12-slim` 容器（无网络）跑校验脚本；退出码 0 = 通过，最后一行 `SCORE=x` 给部分得分。需要本机 docker。

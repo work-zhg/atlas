@@ -8,11 +8,11 @@ from __future__ import annotations
 
 import httpx
 import pytest
-from atlas_server.config import get_settings
-from atlas_server.db.session import get_sessionmaker
-from atlas_server.executor.inprocess import InProcessExecutor
-from atlas_server.main import create_app
-from atlas_server.services.title import _clean, fallback_title
+from atlas_agent.config import get_settings
+from atlas_agent.db.session import get_sessionmaker
+from atlas_agent.executor.inprocess import InProcessExecutor
+from atlas_agent.main import create_app
+from atlas_agent.services.title import _clean, fallback_title
 from httpx import ASGITransport
 
 from tests.fakes import text_model

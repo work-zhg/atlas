@@ -18,9 +18,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..db.models import ChildChunk, Document, ProcessRule, Segment
 from ..db.types import utcnow
 from ..errors import Conflict, Invalid, NotFound
+from ..indexing.loader import sync_doc_payload
 from ..indexing.runner import pause_key
+from ..indexing.versions import stores
 from ..rag import index_processor
-from ..rag.extractor import SUPPORTED_EXTENSIONS, extension_of, extract
+from ..rag.extractor import extension_of
+from ..rag.parsers import SUPPORTED_EXTENSIONS, parse
 from ..runtime import Runtime
 from .permission import DatasetAccess
 
@@ -147,9 +150,21 @@ class DocumentService:
         """分段预览（同 Dify indexing-estimate）：返回前 10 段与总数。"""
         self._check_file(f)
         _, rules = self._rule(doc_form, process_rule)
-        parsed = await asyncio.to_thread(extract, f.filename, f.data)
+        ir = await asyncio.to_thread(parse, f.filename, f.data, rules.get("parser") or "auto")
+        embed = None
+        if (rules.get("structure") or {}).get("semantic_split"):
+            # 预览不属于某个知识库：语义分段用默认向量模型（与入库时可能略有差异）
+            model = await asyncio.to_thread(
+                self._rt.registry.embedding, "fastembed", self._rt.settings.embedding_model
+            )
+            embed = model.embed_documents
         nodes = await asyncio.to_thread(
-            index_processor.transform, parsed, doc_form=doc_form, rules=rules
+            index_processor.transform_ir,
+            ir,
+            doc_form=doc_form,
+            rules=rules,
+            embed=embed,
+            doc_title=index_processor.doc_title_of(ir, f.filename),
         )
         preview = []
         for n in nodes[:10]:
@@ -178,11 +193,25 @@ class DocumentService:
         *,
         process_rule: dict[str, Any] | None,
         doc_form: str | None = None,
+        attrs: dict[str, Any] | None = None,
     ) -> tuple[str, list[Document]]:
+        """attrs：文档属性（metadata / acl / valid_from / valid_to / supersedes），
+        批内各文档相同。"""
+        from .metadata import MetadataService, _when, normalize_acl
+
         access.require_write()
         ds = access.ds
         if not files:
             raise Invalid("请选择要上传的文件")
+        attrs = attrs or {}
+        meta_svc = MetadataService(self._s, self._rt)
+        doc_metadata = await meta_svc.normalize_metadata(access, attrs.get("metadata"))
+        acl = normalize_acl(attrs.get("acl"))
+        valid_from = _when(attrs.get("valid_from"), "valid_from")
+        valid_to = _when(attrs.get("valid_to"), "valid_to")
+        supersedes = attrs.get("supersedes")
+        if supersedes and len(files) != 1:
+            raise Invalid("上传新版本时一次只能传一个文件")
         doc_form = doc_form or ds.doc_form
         count = int(
             await self._s.scalar(
@@ -199,7 +228,7 @@ class DocumentService:
         exts = [self._check_file(f) for f in files]
         mode, rules = self._rule(doc_form, process_rule)
 
-        rule = ProcessRule(dataset_uuid=ds.uuid, mode=mode, rules=rules, created_by=access.p.id)
+        rule = ProcessRule(dataset_uuid=ds.uuid, mode=mode, rules=rules, created_by=access.p.uid)
         self._s.add(rule)
         await self._s.flush()
         ds.latest_process_rule_uuid = rule.uuid
@@ -238,8 +267,14 @@ class DocumentService:
                 doc_form=doc_form,
                 indexing_status="waiting",
                 review_status="pending" if ds.review_required else "none",
-                created_by=access.p.id,
+                doc_metadata=doc_metadata,
+                acl=acl,
+                valid_from=valid_from,
+                valid_to=valid_to,
+                created_by=access.p.uid,
             )
+            if supersedes:
+                await meta_svc.link_version(access, doc, UUID(str(supersedes)))
             self._s.add(doc)
             docs.append(doc)
         await self._s.commit()
@@ -253,7 +288,7 @@ class DocumentService:
         if doc.indexing_status not in _RUNNING:
             raise Conflict("只有入库中的文档可以暂停")
         await self._rt.redis.set(pause_key(doc.uuid), "1")
-        doc.paused_by = access.p.id
+        doc.paused_by = access.p.uid
         doc.paused_at = utcnow()
         if doc.indexing_status == "waiting":
             doc.indexing_status = "paused"
@@ -284,9 +319,8 @@ class DocumentService:
         return docs
 
     async def _sync_doc_ok(self, access: DatasetAccess, docs: list[Document]) -> None:
-        store = self._rt.vectors.for_collection(access.ds.collection_name)
         for doc in docs:
-            await store.set_doc_ok(str(doc.uuid), doc.available)
+            await sync_doc_payload(self._s, self._rt, access.ds, doc)
 
     async def set_status(self, access: DatasetAccess, docs: list[Document], action: str) -> None:
         access.require_write()
@@ -312,7 +346,7 @@ class DocumentService:
             if doc.review_status not in ("pending", "rejected", "approved"):
                 raise Conflict(f"文档「{doc.name}」不需要审核")
             doc.review_status = "approved" if approve else "rejected"
-            doc.reviewed_by = access.p.id
+            doc.reviewed_by = access.p.uid
             doc.reviewed_at = utcnow()
             doc.review_note = note
         await self._s.flush()
@@ -328,11 +362,12 @@ class DocumentService:
 
     async def delete(self, access: DatasetAccess, docs: list[Document]) -> None:
         access.require_write()
-        store = self._rt.vectors.for_collection(access.ds.collection_name)
+        targets = await stores(self._s, self._rt, access.ds)
         for doc in docs:
             # 正在跑的入库任务看到暂停标记会停下；看到文档没了会直接退出
             await self._rt.redis.set(pause_key(doc.uuid), "1", ex=3600)
-            await store.delete_by_document(str(doc.uuid))
+            for store in targets:
+                await store.delete_by_document(str(doc.uuid))
             await self._s.execute(delete(ChildChunk).where(ChildChunk.document_uuid == doc.uuid))
             await self._s.execute(delete(Segment).where(Segment.document_uuid == doc.uuid))
             await self._s.delete(doc)

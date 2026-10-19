@@ -200,3 +200,25 @@ def slow_model(text: str, delay: float = 0.3, *, pieces: int = 5) -> ScriptedCha
     model = text_model(text, pieces=pieces)
     model.delay = delay
     return model
+
+
+class Spawner:
+    """SubAgentSpawner 的测试替身：立刻返回一个子 run id，并记下收到了什么。
+
+    子 run 不真跑 —— 它的结论由 `result()` 按脚本给出，续跑时（tests/graphs.py::run_to_end）
+    放进 decisions，与执行器从子会话里取结论是同一个位置。
+    """
+
+    def __init__(self, reply: str = "子结论", *, error: Exception | None = None) -> None:
+        self.reply = reply
+        self.error = error
+        self.calls: list[tuple[str, str, bool]] = []
+
+    async def spawn(self, name: str, task: str, *, fresh: bool = False) -> str:
+        if self.error is not None:
+            raise self.error
+        self.calls.append((name, task, fresh))
+        return f"sub-{len(self.calls)}"
+
+    def result(self, sub_run_id: str) -> str:
+        return self.reply

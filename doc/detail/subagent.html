@@ -454,8 +454,9 @@ external_session_id: <span class="tok-t">str</span> | <span class="tok-k">None</
   <h3>准入控制：全局，不是每 run</h3>
   <pre><code><span class="tok-c"># 子 run 的准入与普通 run 分开计</span>
 subagent_max_running: <span class="tok-t">int</span> = <span class="tok-n">3</span>     <span class="tok-c"># 全进程同时执行的子 run</span>
-subagent_max_per_run: <span class="tok-t">int</span> = <span class="tok-n">6</span>     <span class="tok-c"># 单个父 run 累计委派次数</span></code></pre>
-  <p>第二个数防的是一种绕过：长 run 在每个规划点发起一批「合法尺寸」的委派，累计起来远超并发限制。deer-flow 用持久委派账本挡这个，我们查 <code>run</code> 表里 <code>parent_run_id = 当前 run</code> 的行数即可 —— 不用新表。</p>
+subagent_max_per_run: <span class="tok-t">int</span> = <span class="tok-n">6</span>     <span class="tok-c"># 一轮（整棵 run 树）累计派出的 SubAgent 数</span></code></pre>
+  <p>第二个数防的是一种绕过：长 run 在每个规划点发起一批「合法尺寸」的委派，累计起来远超并发限制。deer-flow 用持久委派账本挡这个，我们查 <code>run</code> 表即可 —— 不用新表。</p>
+  <p><i>（步骤 7 起按整棵树数：<code>root_run_id = 这一轮的根 run</code> 的行数。SubAgent 可以继续派 SubAgent，而挂起中的子 run 不占第一个数的名额 —— 按父 run 数的话，一条「A 派 A 再派 A……」的链永远撞不上限。）</i></p>
 
   <div class="callout warn">
     <span class="label">acp 子智能体吃 Pod，准入必须是全局的</span>
@@ -524,6 +525,11 @@ subagent_max_per_run: <span class="tok-t">int</span> = <span class="tok-n">6</sp
 <!-- ══════════════ 9 ══ -->
 <section id="s9">
   <h2><span class="num">09</span>代码机制：hook 与 delegate</h2>
+
+  <div class="callout warn">
+    <span class="label">2026-10-19 起的形态（步骤 7）</span>
+    <p>本节下面描述的是第一版。现在的名字与形态：<code>DelegationProtocol.delegate()</code> → <code>SubAgentSpawner.spawn(name, task, *, fresh)</code>，<b>立刻返回子 run id、不等它跑完</b>；<code>SubagentService</code> → <code>SubAgentService</code>；<code>task</code> 的工具函数不再执行，全部行为在 <code>SubAgentMiddleware.awrap_tool_call</code> 里（起子 run → 登记 <code>waiting_on</code> → 本段挂起；续跑时结论从 <code>decisions</code> 填进来）。「三个标量进」不变，「一段文本出」变成了「一个子 run id 出」—— 文本在续跑时才到。</p>
+  </div>
 
   <p>前面几节说的是「应该怎样」。这一节说代码里<b>实际是怎么接起来的</b> —— 一次 <code>task</code> 调用从主图出发，经过哪几个对象，最后变成子会话上的一个 run。</p>
 
@@ -1048,6 +1054,22 @@ op.create_foreign_key(<span class="tok-s">"fk_run_parent"</span>, <span class="t
     <p><b>验证</b>：第二次委派时 CLI 记得上次改过什么；adapter 不支持 <code>loadSession</code> 时状态明确标 <code>lost</code>，而不是静默新建。</p>
   </div>
 
+  <div class="step">
+    <h4>步骤 7 · 照审批的方式挂起，SubAgent 可以继续派 SubAgent（2026-10-19）<span class="tag keep">已实现，未部署</span></h4>
+    <p>参照 <code>demo/subagent</code>，三件事一起改：</p>
+    <table>
+      <thead><tr><th style="width:150px">改动</th><th>做法</th></tr></thead>
+      <tbody>
+        <tr><td><b>名字</b></td><td>不叫「委派 / delegation」，统一叫 SubAgent；协议按职责起名：<code>SubAgentSpawner.spawn()</code>（原 <code>DelegationProtocol.delegate()</code>）、<code>SubAgentService</code>、<code>SubAgentRejected</code>、<code>subagent_result</code> / <code>format_subagent_result</code>、结论末尾 <code>&lt;subagent .../&gt;</code>、<code>waiting_on</code> 的 reason <code>"subagent"</code>（原 <code>"delegation"</code>，前端 <code>SuspensionWait</code> 与会话列表标签同步）</td></tr>
+        <tr><td><b>挂起照审批</b></td><td><code>spawn()</code> 像 <code>ApprovalGate.check()</code> 一样<b>立刻返回</b>；<code>SubAgentMiddleware.awrap_tool_call</code> 接管 <code>task</code>（工具函数只提供 schema）：名录里没有 / 被拒 → 当场回失败结果；否则登记 <code>waiting_on</code>、不写结果、本段挂起；续跑时结论从 <code>decisions</code> 填进来。<b>当场等待（<code>subagent_inline_wait_s</code> / <code>_await_result</code> 轮询）整个删除</b>：派 SubAgent 一律挂起，短任务也多走一次挂起 / 续跑（几百毫秒），换来与审批同一条路径</td></tr>
+        <tr><td><b>中间件位置</b></td><td><code>SubAgentMiddleware</code> 从核心栈挪到<b>调用方中间件之后</b>：已有结果的兄弟调用先被 <code>SuspensionMiddleware</code> 原样返回（不重复起子 run），<code>task</code> 被配成需审批时先过 <code>ApprovalMiddleware</code>（不绕过审批）。审批放行后等待项从 approval 换成 subagent，<code>release_wait</code> 改为内层登记的优先</td></tr>
+        <tr><td><b>不限层数</b></td><td>native SubAgent 的 spec 带着同一份名录（并补上 <code>task</code>），也能继续派；acp 的不带。删除 <code>max_subagent_depth</code>（领域模型、API、编辑器；旧快照里的键被忽略）。迁移 <code>0021_subagent_tree</code>：<code>thread.root_thread_id</code>（工作区与事件流归根会话，原先 <code>parent_thread_id or id</code> 只看一层）、<code>run.root_run_id</code>（整棵树的累计上限按它数）、<code>run.depth</code>（事件的 depth 不再只有 0/1）。取消改成逐层往下取消所有子孙 run</td></tr>
+      </tbody>
+    </table>
+    <p><b>验证</b>：<code>tests/test_subagent_sessions.py::test_a_subagent_can_spawn_a_subagent</code>（主 → coder → coder，孙 run depth=2、root 正确、孙会话的根是主会话、孙 run 的事件归到主会话的流、结论一层层冒上来）；<code>test_subagent_suspend.py</code>（一律挂起、续跑不重复起、先审批后起子 run、兄弟不重派）；<code>test_orphans_and_cancel.py::test_stopping_cancels_the_whole_subtree</code>。</p>
+    <p><b>还没做</b>：前端对 depth ≥ 2 的嵌套展示（现在 depth &gt; 0 的事件一律按「子智能体内部」处理，孙 SubAgent 的卡片不会单独出来）。</p>
+  </div>
+
   <div class="callout rule">
     <span class="label">实施回顾：步骤 1 最终没有单独合入</span>
     <p>原计划让它先走 —— 它不碰执行模型，纯粹是技能投送多一个维度。实际做下来它<b>依赖步骤 2</b>：「子智能体的技能落在不同的 thread 前缀下」这条验收标准，在子会话不存在时根本没有第二个 thread 可用。图内执行模型下只能退回成 <code>workspace/.skills/&lt;name&gt;/</code> 这类<b>约定</b>，而 <a href="#s3">§03</a> 花了整节论证约定不够。于是两步一起合。</p>
@@ -1075,7 +1097,7 @@ op.create_foreign_key(<span class="tok-s">"fk_run_parent"</span>, <span class="t
     <tbody>
       <tr><td><b>非阻塞委派</b></td><td>需要跨轮传句柄（无 checkpointer，得落表）、结果回来的通知机制、以及<b>改会话串行锁</b>。而委派的语义就是「我需要这个结论」</td><td>量到 <code>task</code> 的 P95 超过 60s</td></tr>
       <tr><td><b>子会话完全独立的工作区</b></td><td>产物就得靠返回值搬运，而返回值是一段文本。<b>读共享 + 写隔离</b>（<a href="#s3">§03</a>）比两个极端都好：读得到，写不乱</td><td>永不 —— 真要更严就收紧挂载，不是切前缀</td></tr>
-      <tr><td><b>子智能体再委派</b></td><td>深度仍然结构性封顶在 1。会话级模型下嵌套会让「哪个会话恢复哪个」变成一棵要遍历的树</td><td>永不</td></tr>
+      <tr><td><s><b>子智能体再委派</b></s></td><td><s>深度仍然结构性封顶在 1。会话级模型下嵌套会让「哪个会话恢复哪个」变成一棵要遍历的树</s><br><b>2026-10-19 放开（步骤 7）</b>：挂起改成 waiting_on 之后，每一层都是同一件事（起子 run → 挂起 → 被叫醒 → 填结论），「恢复哪个会话」也只看直接父会话，树不需要遍历。跑飞的递归由整棵树的累计上限兜住</td><td>—</td></tr>
       <tr><td><b>照搬 deer-flow 的隔离事件循环</b></td><td>它买的是故障隔离，而「子 run」已经天然具备：独立 run_id、独立取消令牌、<code>reap_orphans</code> 覆盖</td><td>永不</td></tr>
       <tr><td><b>验收标准与凭据核验</b><br>（deer-flow 的 1826 行）</td><td>价值高但与本次改造正交，且体量大。<b>单独立项</b></td><td>子智能体的产出开始不可信时</td></tr>
     </tbody>

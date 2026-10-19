@@ -17,12 +17,12 @@ from uuid import uuid4
 
 import boto3
 import pytest
-from atlas_server.api.v1 import previews
-from atlas_server.config import Settings, get_settings
-from atlas_server.deps import get_redis
-from atlas_server.providers.filesystem.oss import OssFilesystem, WorkspaceListing
-from atlas_server.services import preview as preview_mod
-from atlas_server.services.preview import PreviewService
+from atlas_agent.api.v1 import previews
+from atlas_agent.config import Settings, get_settings
+from atlas_agent.deps import get_redis
+from atlas_agent.providers.filesystem.oss import OssFilesystem, WorkspaceListing
+from atlas_agent.services import preview as preview_mod
+from atlas_agent.services.preview import PreviewService
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.testclient import TestClient
@@ -263,7 +263,7 @@ async def test_issue_and_resolve_token(monkeypatch) -> None:
 
 
 async def test_issue_unknown_thread_is_404() -> None:
-    from atlas_server.errors import NotFound
+    from atlas_agent.errors import NotFound
 
     service = PreviewService(FakeRedis(), _settings())  # type: ignore[arg-type]
     with pytest.raises(NotFound):

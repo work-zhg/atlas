@@ -6,7 +6,7 @@
   2. execute 是「注册后运行时报错」而非「不注册」—— 模型看得见它，
      每次尝试烧一轮 token
 
-修法是 create_deep_agent(filesystem_tools=) 白名单贯通三处注入点。
+修法是文件工具白名单（现为 FilesystemConfig.tools）贯通三处注入点。
 全部用**行为断言**（让模型真调一次，看拿到什么）—— P6 的教训：
 查图结构在这类问题上会写出永远通过的空断言。
 """
@@ -16,11 +16,11 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from atlas_server.domain.events import EventType
+from atlas_agent.domain.events import EventType
 from tests.graphs import run_agent as run
-from atlas_server.domain.spec import AgentSpec, LimitSpec, ModelSpec
+from atlas_agent.domain.spec import AgentSpec, LimitSpec, ModelSpec
 
-from atlas_server.providers.filesystem.base import MemoryFilesystem
+from atlas_agent.providers.filesystem.base import MemoryFilesystem
 from langchain_core.messages import AIMessageChunk
 
 from .fakes import TurnModel, tool_call_chunk
@@ -49,7 +49,7 @@ async def _call_tool(spec: AgentSpec, tool: str, args: str, **hook_kw: Any) -> s
     ★ 勾了 filesystem 就注入一个内存实现。没有 filesystem 配置 = 没有文件
       能力（不再回落 StateBackend），所以"勾了就得能用"的用例必须给它一个。
     """
-    from atlas_server.providers.filesystem.base import MemoryFilesystem
+    from atlas_agent.providers.filesystem.base import MemoryFilesystem
 
     if "filesystem" in spec.tool_names and "filesystem" not in hook_kw:
         hook_kw["filesystem"] = MemoryFilesystem()
@@ -188,7 +188,7 @@ def test_bash_requires_filesystem() -> None:
 
     部署是否开启沙箱不在这里判：没开时装配期明确报错（SandboxNotEnabled），见 test_sandbox_provider。
     """
-    from atlas_server.domain.tool_registry import unsupported_tools
+    from atlas_agent.domain.tool_registry import unsupported_tools
 
     assert unsupported_tools(_spec(("bash",))) == ["bash"]
     assert unsupported_tools(_spec(("bash", "filesystem"))) == []
@@ -197,13 +197,13 @@ def test_bash_requires_filesystem() -> None:
 def test_filesystem_and_sandbox_middlewares_are_independent() -> None:
     """两个中间件各自独立装配，互不为前提。
 
-    filesystem 是 _REQUIRED_MIDDLEWARE 脚手架（大结果外置挂在它上面），
+    filesystem 是恒装的脚手架（大结果外置挂在它上面），
     恒装；sandbox 只在注入了 SandboxProtocol 时才装 —— 没有沙箱是合法状态。
     """
     from atlas_engine.kernel.middleware.filesystem import FilesystemMiddleware
     from atlas_engine.kernel.middleware.sandbox import SandboxMiddleware
 
-    fs = FilesystemMiddleware(backend=MemoryFilesystem())
+    fs = FilesystemMiddleware(filesystem=MemoryFilesystem())
     assert [t.name for t in fs.tools] == [
         "read_file",
         "write_file",
@@ -222,3 +222,43 @@ def test_filesystem_and_sandbox_middlewares_are_independent() -> None:
             raise NotImplementedError
 
     assert [t.name for t in SandboxMiddleware(sandbox=_Box()).tools] == ["execute"]
+
+
+async def test_the_model_sees_execute_when_a_sandbox_is_configured() -> None:
+    """★ 配了沙箱，execute 必须出现在**绑定给模型的**工具里，而不只是注册在工具节点上。
+
+    2026-10-19 排查死代码时发现：FilesystemMiddleware 还留着 execute 归它管时的能力过滤 ——
+    文件系统对象不实现 SandboxProtocol 就把 execute 从模型请求里剔掉。生产上的
+    OssFilesystem 从不实现它，于是配了 bash 的智能体模型侧根本看不到 execute。
+    上面那批测试用假模型硬发 tool_call，绑没绑定都照样执行，所以一直没撞上 ——
+    这条只看模型拿到了哪些工具。
+    """
+    from uuid import uuid4
+
+    bound: list[list[str]] = []
+
+    class _Recorder(TurnModel):
+        def bind_tools(self, tools, **kwargs):  # type: ignore[no-untyped-def]
+            bound.append(sorted(getattr(t, "name", None) or t["name"] for t in tools))
+            return self
+
+    class _Box:
+        id = "probe"
+
+        def execute(self, command, *, timeout=None):  # type: ignore[no-untyped-def]
+            raise NotImplementedError
+
+        async def aexecute(self, command, *, timeout=None):  # type: ignore[no-untyped-def]
+            raise NotImplementedError
+
+    model = _Recorder(scripts=[[AIMessageChunk(content="好")]])
+    async for _ in run(
+        _spec(("filesystem", "bash")),
+        run_id=uuid4(),
+        model=model,
+        input_content="跑一下",
+        filesystem=MemoryFilesystem(),
+        sandbox=_Box(),
+    ):
+        pass
+    assert bound and "execute" in bound[0], bound

@@ -1,52 +1,55 @@
 """装配中心：`create_deep_agent` —— 把中间件按固定顺序叠成一张图。
 
-backend 走 atlas_engine.contracts 的协议（实现方在 server），subagents 与
-skills 两条栈是 Atlas 自己的语义 —— 前者把委派交还调用方、在子智能体自己的
-会话上起子 run，后者按需投送技能。
+filesystem 走 atlas_engine.contracts 的协议（实现方在 server），subagents 与
+skills 两条栈是 Atlas 自己的语义 —— 前者让调用方在 SubAgent 自己的会话上起子 run
+（本段随即挂起），后者按需投送技能。
 
-★ 中间件的叠加顺序带语义，不能随手调：profile 中间件必须在 prompt caching
-  之前（它会改系统提示词，放后面会让缓存前缀每轮失效）；_ToolExclusion 必须
-  最后跑（等所有注入工具的中间件跑完才剔得干净）。完整推导见
-  doc/detail/kernel.html §02。FilesystemMiddleware 与 SubAgentMiddleware 是
-  结构上不可剔除的脚手架，试图排除它们直接 ValueError 而不是退化运行。
+★ 中间件的叠加顺序带语义，不能随手调：prompt caching 在调用方中间件之后（改系统
+  提示词的中间件放在它后面会让缓存前缀每轮失效）。装不装、TTL 多长由调用方经
+  `prompt_cache_ttl` 决定（模型支不支持缓存、用户开没开都只有 server 知道）；
+  kernel 只保证装了就排在最内层。完整推导见 doc/detail/kernel.html
+  §02。FilesystemMiddleware 是恒装的脚手架（大结果外置、文件权限挂在它上面），
+  没有文件能力时也装，只是不注册工具。
+
+★ 不按模型做任何调整：系统提示词、工具、中间件都只由调用方决定。原先的 HarnessProfile
+  （按模型追加提示词、改写工具描述、剔除工具 / 中间件）2026-10-19 删除。
+
+★ kernel 不装压缩：上下文管理只有调用方的 CompactionMiddleware 一套（server 按智能体
+  配置装）。原先恒装的 SummarizationMiddleware（引入自上游）2026-10-19 删除 —— 它的
+  触发线（窗口 × 0.85）总在 Compaction（有效窗口 × 0.8）之后，只在压缩被关闭、模型
+  不在目录里、或 Compaction 熔断时才轮到它；而它的压缩记录只在本轮 graph state 里，
+  server 不保存，一旦触发就每轮重压一次。
+
+★ SubAgentMiddleware 排在**调用方中间件之后**：它在 awrap_tool_call 里接管 `task`
+  （起子 run、登记 waiting_on），必须在续跑去重（SuspensionMiddleware）和审批
+  （task 可以被配成需审批）之内 —— 先去重、先审批，最后才起子 run。
 """
 
 import logging
 from collections.abc import Callable, Sequence
-from typing import Annotated, Any, Literal, Required
+from dataclasses import dataclass
+from typing import Any, Literal
 
 from langchain.agents import AgentState, create_agent
-from langchain.agents.middleware import HumanInTheLoopMiddleware, InterruptOnConfig
 from langchain.agents.middleware.types import (
     AgentMiddleware,
     InputAgentState,
     OutputAgentState,
-    ResponseT,
     StateT_co,
 )
 from langchain.agents.structured_output import ResponseFormat
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AnyMessage, SystemMessage
+from langchain_core.messages import SystemMessage
 from langchain_core.tools import BaseTool
+from langchain_anthropic.middleware import AnthropicPromptCachingMiddleware
 from langgraph.cache.base import BaseCache
-from langgraph.channels.delta import DeltaChannel
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.store.base import BaseStore
 from langgraph.types import Checkpointer
 from langgraph.typing import ContextT
 
-from atlas_engine.kernel._excluded_middleware import (
-    _apply_excluded_middleware,
-    _validate_excluded_middleware_config,
-    _verify_excluded_middleware_coverage,
-)
-from atlas_engine.kernel._messages_reducer import _messages_delta_reducer
 from atlas_engine.kernel._models import resolve_model
-from atlas_engine.kernel._tools import _apply_tool_description_overrides
-from atlas_engine.contracts import DelegationProtocol, FilesystemProtocol
-from atlas_engine.kernel.middleware._fs_interrupt import _build_interrupt_on_from_permissions
-from atlas_engine.kernel.middleware._prompt_caching import append_prompt_caching_middleware
-from atlas_engine.kernel.middleware._tool_exclusion import _ToolExclusionMiddleware
+from atlas_engine.contracts import FilesystemProtocol, SubAgentSpawner
 from atlas_engine.kernel.middleware.filesystem import FilesystemMiddleware, FilesystemPermission
 from atlas_engine.kernel.middleware.patch_tool_calls import PatchToolCallsMiddleware
 from atlas_engine.kernel.middleware.skills import SkillRef, SkillsMiddleware
@@ -54,38 +57,85 @@ from atlas_engine.kernel.middleware.subagents import (
     SubAgent,
     SubAgentMiddleware,
 )
-from atlas_engine.kernel.middleware.summarization import create_summarization_middleware
-from atlas_engine.kernel.profiles.harness.harness_profiles import (
-    _apply_profile_prompt,
-    _harness_profile_for_model,
-)
 
 logger = logging.getLogger(__name__)
 
+# ★ 图状态就是 langchain 的 AgentState（messages 用标准 add_messages 合并）。原先的
+#   DeepAgentState 给 messages 换了 DeltaChannel + 自写 reducer，那是为 checkpoint 存储
+#   瘦身（O(N²)→O(N)）；Atlas 不用 checkpointer（历史每轮从 message 表重建），收益为零，
+#   却要背一个 beta 通道，2026-10-19 删除。
 
-class DeepAgentState(AgentState):
-    """AgentState with `DeltaChannel` on messages to reduce checkpoint growth from O(N²) to O(N)."""
 
-    messages: Required[Annotated[list[AnyMessage], DeltaChannel(_messages_delta_reducer, snapshot_frequency=50)]]  # ty: ignore[invalid-argument-type]
+@dataclass(frozen=True)
+class FilesystemConfig:
+    """文件系统能力：工作区存储 + 模型可见的文件工具 + 访问规则。
 
-
-def _merge_fs_interrupt_on(
-    fs_interrupt_on: dict[str, InterruptOnConfig],
-    user_interrupt_on: dict[str, bool | InterruptOnConfig] | None,
-) -> dict[str, bool | InterruptOnConfig] | None:
-    """Combine filesystem-permission configs with user-defined interrupts.
-
-    User-defined `interrupt_on` entries take precedence over generated
-    filesystem-permission entries with the same tool name. Returns `None` when
-    there are no interrupts to configure, allowing `HumanInTheLoopMiddleware` to
-    be omitted.
+    不要文件能力就不传这个对象（`filesystem=None`），而不是传一个没有
+    文件系统的配置 —— 「有工具白名单 / 有权限规则，却没有存储」这种组合
+    没有意义，所以 filesystem 必填。
     """
-    if not fs_interrupt_on and not user_interrupt_on:
-        return None
-    merged: dict[str, bool | InterruptOnConfig] = {**fs_interrupt_on}
-    if user_interrupt_on:
-        merged.update(user_interrupt_on)
-    return merged
+
+    filesystem: FilesystemProtocol
+    """智能体看到的文件系统（Atlas：会话工作区 + 自己的 /skills）。也是大结果外置的去处。"""
+
+    # ★ Atlas 改动（Sandbox S0）：文件工具白名单。原逻辑默认注册全部工具
+    #   （含 execute），造成两个门禁缺口：
+    #     · 未勾 filesystem 的 agent 也能 write_file（工具目录说谎）
+    #     · execute 在 filesystem 不支持时「注册后运行时报错」—— 模型看得见、
+    #       调用后才失败，每次尝试烧一轮 token
+    #   传 [] 时中间件本体保留（它是恒装的脚手架：大结果外置、
+    #   权限机制挂在上面），但模型看不到任何文件工具。"all" 保持原本的全量行为。
+    tools: list[str] | Literal["all"] = "all"
+    """可选值见 `FsToolName`；`"all"` 表示全部注册。"""
+
+    permissions: list[FilesystemPermission] | None = None
+    """按声明顺序匹配、首条命中生效的访问规则（allow / deny）；都不命中则放行。"""
+
+    def __post_init__(self) -> None:
+        if self.filesystem is None:
+            msg = "FilesystemConfig 需要 filesystem —— 不要文件能力就传 create_deep_agent(filesystem=None)"
+            raise ValueError(msg)
+
+
+@dataclass(frozen=True)
+class SubAgentConfig:
+    """SubAgent：`task` 工具认识的名单 + 起子 run 的一方。"""
+
+    agents: Sequence[SubAgent]
+    """只有名字、描述与会话模式 —— 写 `task` 的工具描述、校验 subagent_type。为空则不装 `task`。"""
+
+    # ★ Atlas 改动（SubAgent）：`task` 不在图内跑子图，而是让 spawner 在 SubAgent
+    #   **自己的会话**上起一个子 run，本段随即挂起（middleware/subagents.py）。
+    #   SubAgent 的图**完全不编译**：那份配置会在子 run 里重新装配，
+    #   在这里再编译一份等于让「哪份配置生效」有两个答案。
+    spawner: SubAgentSpawner
+
+    def __post_init__(self) -> None:
+        if self.spawner is None:
+            msg = "SubAgentConfig 需要 spawner —— kernel 不在图内编译 SubAgent 的图"
+            raise ValueError(msg)
+
+
+@dataclass(frozen=True)
+class GraphOptions:
+    """原样透传给 `langchain.agents.create_agent` 的图选项。"""
+
+    response_format: ResponseFormat[Any] | type[Any] | dict[str, Any] | None = None
+    """结构化输出格式。"""
+
+    state_schema: type[AgentState] | None = None
+    """自定义图状态，须继承 `AgentState`。缺省即 `AgentState`。"""
+
+    context_schema: type[Any] | None = None
+    """run 内不可变上下文的 schema。"""
+
+    checkpointer: Checkpointer | None = None
+    store: BaseStore | None = None
+    debug: bool = False
+    name: str | None = None
+    """agent 名，同时写进 metadata 的 `lc_agent_name`。"""
+
+    cache: BaseCache | None = None
 
 
 def _apply_custom_middleware(
@@ -99,7 +149,7 @@ def _apply_custom_middleware(
     - If its `.name` matches a name still present in `base`: replace in-place,
       preserving stack order.
     - Otherwise: a brand-new entry lands after the last `core_names` member (so it
-      precedes the profile/prompt-caching tail), or at the end when
+      precedes the prompt-caching tail), or at the end when
       `core_names` is unset.
     """
     if not custom:
@@ -125,82 +175,28 @@ def _apply_custom_middleware(
     return result
 
 
-_REQUIRED_MIDDLEWARE: tuple[tuple[type[AgentMiddleware[Any, Any, Any]], tuple[str, ...]], ...] = (
-    (FilesystemMiddleware, ()),
-    (SubAgentMiddleware, ()),
-)
-"""Scaffolding middleware that core deep agent features depend on.
-
-Each entry pairs a class with any extra string aliases its `.name` may take
-beyond `__name__`. Removing any of these silently breaks core features:
-`FilesystemMiddleware` backs every built-in file tool and now also enforces
-`permissions` rules (a security guarantee), while `SubAgentMiddleware` backs
-the `task` tool handler.
-
-Tracked here so `HarnessProfile.excluded_middleware` cannot strip them:
-`_apply_excluded_middleware` raises `ValueError` rather than proceeding with
-a silently degraded agent.
-"""
-
-_REQUIRED_MIDDLEWARE_CLASSES: frozenset[type[AgentMiddleware[Any, Any, Any]]] = frozenset(cls for cls, _ in _REQUIRED_MIDDLEWARE)
-"""Set of all class types that cannot be excluded from the middleware stack.
-
-Derived from `_REQUIRED_MIDDLEWARE` and used for quick membership testing.
-"""
-
-_REQUIRED_MIDDLEWARE_NAMES: frozenset[str] = frozenset(name for cls, aliases in _REQUIRED_MIDDLEWARE for name in (cls.__name__, *aliases))
-"""Set of all `.name` values that cannot be excluded from the middleware stack.
-
-Derived from `_REQUIRED_MIDDLEWARE` and used for quick membership testing.
-"""
-
-
 def create_deep_agent(  # noqa: C901, PLR0912, PLR0915  # Complex graph assembly logic with many conditional branches
     model: str | BaseChatModel | None = None,
     tools: Sequence[BaseTool | Callable | dict[str, Any]] | None = None,
     *,
     system_prompt: str | SystemMessage | None = None,
     middleware: Sequence[AgentMiddleware[StateT_co, ContextT]] = (),
-    subagents: Sequence[SubAgent] | None = None,
     skills: Sequence[SkillRef] | None = None,
-    permissions: list[FilesystemPermission] | None = None,
-    backend: FilesystemProtocol | None = None,
-    # ★ Atlas 改动（Sandbox S0）：文件工具白名单，贯通主 agent / 子智能体默认栈 /
-    #   general-purpose 三处 FilesystemMiddleware。原逻辑三处都默认注册全部工具
-    #   （含 execute），造成两个门禁缺口：
-    #     · 未勾 filesystem 的 agent 也能 write_file（工具目录说谎）
-    #     · execute 在 backend 不支持时「注册后运行时报错」—— 模型看得见、
-    #       调用后才失败，每次尝试烧一轮 token
-    #   传 [] 时中间件本体保留（它是 _REQUIRED_MIDDLEWARE 脚手架：大结果外置、
-    #   权限机制挂在上面），但模型看不到任何文件工具。"all" 保持原本的全量行为。
-    filesystem_tools: list[str] | Literal["all"] = "all",
-    # ★ Atlas 改动（Subagent）：注入后 `task` 不再在图内跑子图，而是把
-    #   (任务书, 名字, fresh) 交给调用方 —— 由它在子智能体**自己的会话**上
-    #   起一个子 run。见 middleware/subagents.py::Delegate。
-    #   非 None 时子智能体图**完全不编译**：那份配置会在子 run 里重新装配，
-    #   在这里再编译一份等于让「哪份配置生效」有两个答案。
-    subagent_delegate: DelegationProtocol | None = None,
-    interrupt_on: dict[str, bool | InterruptOnConfig] | None = None,
-    response_format: ResponseFormat[ResponseT] | type[ResponseT] | dict[str, Any] | None = None,
-    state_schema: type[DeepAgentState] | None = None,
-    context_schema: type[ContextT] | None = None,
-    checkpointer: Checkpointer | None = None,
-    store: BaseStore | None = None,
-    debug: bool = False,
-    name: str | None = None,
-    cache: BaseCache | None = None,
-) -> CompiledStateGraph[AgentState[ResponseT], ContextT, InputAgentState, OutputAgentState[ResponseT]]:  # ty: ignore[invalid-type-arguments]  # ty can't verify generic TypedDicts satisfy StateLike bound
+    filesystem: FilesystemConfig | None = None,
+    subagents: SubAgentConfig | None = None,
+    prompt_cache_ttl: Literal["5m", "1h"] | None = None,
+    graph: GraphOptions | None = None,
+) -> CompiledStateGraph[AgentState[Any], Any, InputAgentState, OutputAgentState[Any]]:  # ty: ignore[invalid-type-arguments]  # ty can't verify generic TypedDicts satisfy StateLike bound
     r"""Create a deep agent.
 
-    By default, this agent has access to the following tools:
+    Built-in tools, each present only when its capability is configured:
 
-    - `ls`, `read_file`, `write_file`, `edit_file`, `glob`, `grep`: file operations
-    - `execute`: run shell commands
-    - `task`: call subagents
+    - `read_file`, `write_file`, `edit_file`, `delete`, `search`: file
+        operations (`filesystem=`, narrowed by `FilesystemConfig.tools`)
+    - `task`: hand work to a SubAgent (`subagents=`)
 
-    The `execute` tool allows running shell commands if the backend implements
-    [`SandboxProtocol`][SandboxProtocol].
-    For non-sandbox backends, the `execute` tool will return an error message.
+    Shell execution (`execute`) is not built in —— the caller installs
+    `SandboxMiddleware` via `middleware=`.
 
     Args:
         model: The model to use. **Required** — passing `None` raises
@@ -229,34 +225,16 @@ def create_deep_agent(  # noqa: C901, PLR0912, PLR0915  # Complex graph assembly
                 and pass the initialized model instance here.
         tools: Additional tools the agent should have access to.
 
-            These are merged with the built-in tool suite listed above
-            (filesystem tools, `execute`, and `task`).
+            These are merged with the built-in tools listed above
+            (filesystem tools and `task`).
 
             Passing tools here is additive — it never removes a built-in.
-            To drop a built-in tool, register a
-            `HarnessProfile` with
-            `excluded_tools`.
-        system_prompt: Caller-authored system instructions (`USER`) placed
-            first in the system prompt sent to the model.
-
-            The final authored prompt is assembled as `USER` -> `BASE` -> `SUFFIX`.
-            `BASE` is empty unless the active
-            `HarnessProfile` defines
-            `base_system_prompt`, and `SUFFIX` is the profile's optional
-            `system_prompt_suffix`. Parts are separated by blank lines.
-
-            With `system_prompt=None` and no profile `base_system_prompt` or
-            `system_prompt_suffix`, the model receives an empty authored system
-            prompt.
+        system_prompt: The system prompt sent to the model, as given —— nothing
+            is appended per model. `None` means an empty authored system prompt.
 
             Passing a `SystemMessage` preserves any `cache_control` markers
             on its existing content blocks — useful for explicit Anthropic
-            prompt-cache breakpoints. When profile content is present, its
-            assembled `BASE` and `SUFFIX` are appended as an additional text
-            content block after the caller's blocks.
-
-            See Prompt assembly
-            for the full case-by-case breakdown.
+            prompt-cache breakpoints.
         middleware: Additional middleware to apply after the base stack
             but before the tail middleware. The full ordering is:
 
@@ -264,169 +242,77 @@ def create_deep_agent(  # noqa: C901, PLR0912, PLR0915  # Complex graph assembly
 
             - `SkillsMiddleware` (if `skills` is provided)
             - `FilesystemMiddleware`
-            - `SubAgentMiddleware`
-                (if `subagents` are provided — requires `subagent_delegate`)
-            - [`SummarizationMiddleware`][langchain.agents.middleware.SummarizationMiddleware]
             - `PatchToolCallsMiddleware`
 
-            *User middleware is inserted here.*
+            *User middleware is inserted here, followed by*
+            `SubAgentMiddleware` (if `subagents` is provided with a non-empty
+            `agents`) —— its tool wrapper must sit inside the caller's
+            approval / resume-dedup wrappers.
 
             Tail stack:
 
-            - Harness profile `extra_middleware` (if any)
-            - `_ToolExclusionMiddleware` (if profile has `excluded_tools`)
-            - [`AnthropicPromptCachingMiddleware`][langchain_anthropic.middleware.AnthropicPromptCachingMiddleware] (unconditional; no-ops for
-                non-Anthropic models)
-            - [`BedrockPromptCachingMiddleware`](https://reference.langchain.com/python/langchain-aws/middleware/prompt_caching/BedrockPromptCachingMiddleware)
-                when `langchain-aws` is installed (no-ops for non-Bedrock models)
-            - [`FireworksPromptCachingMiddleware`](https://reference.langchain.com/python/integrations/langchain_fireworks/middleware/prompt_caching/FireworksPromptCachingMiddleware)
-                when `langchain-fireworks` is installed (no-ops for non-Fireworks models)
-            - [`HumanInTheLoopMiddleware`][langchain.agents.middleware.HumanInTheLoopMiddleware] (if `interrupt_on` is provided)
-
-            After assembly, any entries in the profile's
-            `excluded_middleware` are filtered from the final stack. Class
-            entries match exact type; string entries match
-            `AgentMiddleware.name` exactly (e.g. `"SummarizationMiddleware"`
-            drops the summarization middleware via its public alias).
-            Entries that match nothing in the assembled stack raise
-            `ValueError`, as does excluding any class in the harness's
-            protected scaffolding set (e.g.,
-            `FilesystemMiddleware`
-            or `SubAgentMiddleware`).
+            - [`AnthropicPromptCachingMiddleware`][langchain_anthropic.middleware.AnthropicPromptCachingMiddleware]
+                when `prompt_cache_ttl` is set (no-ops for non-Anthropic models)
 
             To run without the `task` tool, pass no subagents via
             `subagents=`.
-        subagents: Subagent specs available to the main agent via the `task`
-            tool. **Delegation is the only form** —— each entry is a
-            `SubAgent`
-            (`name` + `description`); execution happens in the subagent's
-            own child run via `subagent_delegate`, never as an in-graph
-            subgraph. Passing `subagents` without `subagent_delegate`
-            raises `ValueError`.
+        skills: Skills already delivered to the workspace, each a `SkillRef`
+            (`name` + `description` + `path` of its SKILL.md).
 
-        skills: List of skill source paths (e.g., `["/skills/user/", "/skills/project/"]`).
+            Installs `SkillsMiddleware`, which puts the skill index
+            (name + description) into the system prompt; the model reads
+            the full SKILL.md at `path` with `read_file` when it decides a
+            skill applies.
+        filesystem: The agent's filesystem, visible file tools and access rules
+            —— see `FilesystemConfig`. `None` means **no file capability**:
+            `FilesystemMiddleware` is still installed (it is scaffolding) but
+            registers no tools, and large-result offload is off.
 
-            Paths must be specified using POSIX conventions (forward slashes)
-            and are relative to the backend's root. When using
-            `StateBackend` (default), provide skill files via
-            `invoke(files={...})`. With `FilesystemBackend`, skills are loaded
-            from disk relative to the backend's `root_dir`. Later sources
-            override earlier ones for skills with the same name (last one wins).
-
-            Display names are automatically derived from paths.
-
-            Memory is loaded at agent startup and added into the system prompt.
-        permissions: List of `FilesystemPermission` rules for the main agent
-            and its subagents.
-
-            Rules are evaluated in declaration order; the first match wins.
-            If no rule matches, the call is allowed.
-
-            Each rule's `mode` can be:
-
-            - `"allow"` (default): the call proceeds.
-            - `"deny"`: the tool returns a permission-denied error.
-            - `"interrupt"`: the call pauses for human approval via
-                `HumanInTheLoopMiddleware`. A `HumanInTheLoopMiddleware` is
-                auto-installed when any interrupt-mode rule is present, and the
-                generated `interrupt_on` entries are merged with the
-                `interrupt_on` argument below (user-supplied entries win per
-                tool name). Requires a `langchain` version that supports the
-                `when` predicate on `InterruptOnConfig`.
-
-            Subagents inherit these rules unless they specify their own
-            `permissions` field, which replaces the parent's rules entirely.
-
-            `FilesystemMiddleware` applies these permissions at the tool
-            level for its built-in filesystem tools, not at the backend
-            level. Direct backend usage does not currently incorporate
-            `permissions`.
-        backend: Optional backend for file storage and execution.
-
-            Pass a `Backend` instance (e.g. `StateBackend()`).
-
-            For execution support, use a backend that
-            implements [`SandboxProtocol`][SandboxProtocol].
-        interrupt_on: Mapping of tool names to interrupt configs.
-
-            Pass to pause agent execution at specified tool calls for human
-            approval or modification.
-
-            This config always applies to the main agent. Subagents run in
-            their own child runs — approval and interrupt behavior there
-            comes from the child run's own assembly, not from this config.
-
-            For example, `interrupt_on={"edit_file": True}` pauses before
-            every edit.
-        response_format: A structured output response format to use for the agent.
-        state_schema: Custom state schema for the agent graph. Must be a
-            `TypedDict` subclass of
-            `DeepAgentState` so the
-            built-in `DeltaChannel` reducer on `messages` is preserved.
-
-            Generally, prefer defining state extensions with middleware so
-            the extra fields stay scoped to the hooks and tools that use
-            them.
-
-            When provided, this schema is used as the base graph schema and
-            is merged with state schemas contributed by middleware.
-            Subagents do not see it — they run in their own child runs
-            with their own graphs.
+            `FilesystemConfig.permissions` are evaluated in declaration
+            order; the first match wins and no match means allow. Each
+            rule's `mode` is `"allow"` (default) or `"deny"` (the tool returns
+            a permission-denied error). Rules apply at the
+            tool level for the built-in filesystem tools, not at the filesystem
+            level. They do not reach subagents —— those run in their own
+            child runs with their own assembly.
+        subagents: SubAgents the agent can hand work to via the `task`
+            tool —— see `SubAgentConfig`. A `task` call never runs in-graph:
+            `SubAgentConfig.spawner` starts a child run in the SubAgent's own
+            session and the segment suspends until it finishes.
+            `None` or an empty `agents` means no `task` tool.
+        prompt_cache_ttl: Prompt-cache TTL (`"5m"` / `"1h"`) for Anthropic
+            models. `None` means no caching middleware —— the caller decides,
+            since only it knows whether the model supports caching and whether
+            the user turned it on. When set, the caching middleware is the
+            innermost wrapper so it tags the final request (system prompt,
+            last tool, message tail).
+        graph: Options passed through to
+            [`create_agent`][langchain.agents.create_agent] —— see
+            `GraphOptions`. `state_schema`, when given, is used as the base
+            graph schema and merged with state schemas contributed by
+            middleware; prefer extending state through middleware so the
+            extra fields stay scoped to the hooks and tools that use them.
 
             ```python
-            from atlas_engine.kernel.graph import DeepAgentState
+            from langchain.agents import AgentState
+
+            from atlas_engine.kernel.graph import GraphOptions
 
 
-            class MyState(DeepAgentState):
+            class MyState(AgentState):
                 page_url: str
                 file_urls: list[str]
 
 
-            agent = create_deep_agent(model=..., state_schema=MyState)
+            agent = create_deep_agent(model=..., graph=GraphOptions(state_schema=MyState))
             ```
-        context_schema: Schema class that defines immutable run-scoped context.
-
-            Passed through to [`create_agent`][langchain.agents.create_agent].
-        checkpointer: Optional `Checkpointer` for persisting agent state
-            between runs.
-
-            Passed through to [`create_agent`][langchain.agents.create_agent].
-        store: Optional store for persistent storage (required if backend
-            uses `StoreBackend`).
-
-            Passed through to [`create_agent`][langchain.agents.create_agent].
-        debug: Whether to enable debug mode.
-
-            Passed through to [`create_agent`][langchain.agents.create_agent].
-        name: The name of the agent.
-
-            Passed through to [`create_agent`][langchain.agents.create_agent].
-        cache: The cache to use for the agent.
-
-            Passed through to [`create_agent`][langchain.agents.create_agent].
 
     Returns:
         A configured deep agent.
 
     Raises:
-        ImportError: If a required provider package is missing or below the
-            minimum supported version (e.g., `langchain-openrouter`).
-        ValueError: If the active `HarnessProfile.excluded_middleware`
-            references a class in the harness's protected scaffolding set
-            (e.g.,
-            `FilesystemMiddleware`
-            or
-            `SubAgentMiddleware`),
-            uses a private (underscore-prefixed) name, collides with multiple
-            distinct middleware classes, or matches no entry in the assembled
-            stack.
+        ValueError: If `model` is `None`.
     """
-    # `DeepAgentState` is a `TypedDict`; TypedDicts disallow `issubclass`, so the
-    # subclass constraint on `state_schema` is enforced by typing alone and not
-    # validated at runtime.
-
-    _model_spec: str | None = model if isinstance(model, str) else None
-
     # ★ model 必填。原本的 model=None → 默认 ChatAnthropic 回落
     #   连同整个 _api 弃用告警机制一起删除：kernel 没有外部用户，弃用期
     #   服务的对象不存在，静默回落一个硬编码模型则与 §13.2 相悖。
@@ -434,157 +320,80 @@ def create_deep_agent(  # noqa: C901, PLR0912, PLR0915  # Complex graph assembly
         msg = "create_deep_agent 需要显式的 model —— 默认模型回落已删除"
         raise ValueError(msg)
     model = resolve_model(model)
-    _profile = _harness_profile_for_model(model, _model_spec)
-    # Validate profile-level invariants (required scaffolding, private names)
-    _validate_excluded_middleware_config(
-        _profile,
-        required_classes=_REQUIRED_MIDDLEWARE_CLASSES,
-        required_names=_REQUIRED_MIDDLEWARE_NAMES,
-    )
-    # Accumulate which entries matched across the main agent + general-purpose
-    # subagent stacks (both use `_profile`). A profile-level entry only has to
-    # match somewhere, not in every stack, so coverage is verified once after
-    # all filters have run.
-    _main_matched_classes: set[type[AgentMiddleware[Any, Any, Any]]] = set()
-    _main_matched_names: set[str] = set()
 
-    # Copy of `tools` with any harness-specific description rewrites.
-    # (Tool exclusion is handled by _ToolExclusionMiddleware which filters
-    # all tools (user-supplied and middleware-injected) in one place.)
-    _tools = _apply_tool_description_overrides(
-        tools,
-        _profile.tool_description_overrides,
-    )
-
-    # ★ 没有 filesystem 配置就**没有文件能力** —— 不再回落 StateBackend。
+    # ★ 没有 filesystem 配置就**没有文件能力** —— 不再回落到内存里的临时存储。
     #   回落意味着模型以为自己有持久工作区，写进去的东西 run 结束即弃，
     #   而它不会收到任何提示。宁可结构性地没有这些工具。
     #   FilesystemMiddleware 本体仍会装（它是脚手架），但 tools 为空、
     #   大结果外置一并关闭 —— 外置出去的内容没有 read_file 读得回来。
+    fs = filesystem.filesystem if filesystem is not None else None
+    permissions = filesystem.permissions if filesystem is not None else None
+    filesystem_tools: list[str] | Literal["all"] = (
+        filesystem.tools if filesystem is not None else []
+    )
 
-    # The built-in tool-usage guidance prose duplicates the tools' own schema
-    # descriptions, so the kernel-owned middleware (filesystem / subagent /
-    # async-subagent) default to emitting none of it; only the essential dynamic
-    # bits remain (filesystem's host-path routing, empty for non-composite
-    # backends; the available-agent list, which reaches the model through the
-    # `task` tool / async tools). `TodoListMiddleware` is from langchain and
-    # defaults to its full prompt, so it is the one middleware passed
-    # `system_prompt=""` here to trim it. Skills keeps its fragment: it is the
-    # only channel that surfaces the loaded skill index, and it is built only
-    # when the caller passes `skills=`.
-
-    # ★ Atlas：子智能体只有**一种**形态 —— 名字 + 描述，经 `task` 委派给
-    #   注入的受理方，在子智能体自己的会话上起子 run。图内编译子图、
-    #   CompiledSubAgent、AsyncSubAgent、自动补 general-purpose 已整体删除：
-    #   多一种执行形态就多一套要维护的治理语义（审批 / 步数 / 白名单各一份），
-    #   而那些守卫在「子 run 是普通 run」的模型下是免费继承的。
-    if subagents and subagent_delegate is None:
-        msg = "subagents 需要 subagent_delegate —— kernel 不再图内编译子智能体图"
-        raise ValueError(msg)
-    inline_subagents: list[SubAgent] = list(subagents or [])
+    # ★ Atlas：SubAgent 只有**一种**形态 —— 名字 + 描述，`task` 经注入的 spawner
+    #   在 SubAgent 自己的会话上起子 run。图内编译子图、CompiledSubAgent、
+    #   AsyncSubAgent、自动补 general-purpose 已整体删除：多一种执行形态就多一套
+    #   要维护的治理语义（审批 / 步数 / 白名单各一份），而那些守卫在「子 run 是
+    #   普通 run」的模型下是免费继承的。「有名单没 spawner」由 SubAgentConfig 构造时拒绝。
+    subagent_middleware: list[AgentMiddleware[Any, Any, Any]] = []
+    if subagents is not None and subagents.agents:
+        subagent_middleware.append(
+            SubAgentMiddleware(subagents=list(subagents.agents), spawner=subagents.spawner)
+        )
+    options = graph if graph is not None else GraphOptions()
 
     # Build main agent middleware stack
     deepagent_middleware: list[AgentMiddleware[Any, Any, Any]] = []
     if skills:
         deepagent_middleware.append(SkillsMiddleware(skills=skills))
     deepagent_middleware.append(
-        FilesystemMiddleware(
-            backend=backend,
-            custom_tool_descriptions=_profile.tool_description_overrides,
-            _permissions=permissions,
-            tools=filesystem_tools,
-        )
+        FilesystemMiddleware(filesystem=fs, _permissions=permissions, tools=filesystem_tools)
     )
-    if inline_subagents:
-        deepagent_middleware.append(
-            SubAgentMiddleware(
-                subagents=inline_subagents,
-                # Overrides the task tool description. Value should include
-                # {available_agents} — a format placeholder replaced with the
-                # subagent name/description list. Without it the model can't
-                # see which subagents exist. None (default) uses the built-in
-                # template. Stale keys silently no-op if the tool is renamed.
-                task_description=_profile.tool_description_overrides.get("task"),
-                delegate=subagent_delegate,
-            )
-        )
-    deepagent_middleware.extend(
-        [
-            create_summarization_middleware(model, backend),
-            PatchToolCallsMiddleware(),
-        ]
-    )
+    deepagent_middleware.append(PatchToolCallsMiddleware())
 
     # Names of the core stack, captured before the tail is appended so new user
-    # middleware can splice in ahead of the profile/prompt-caching tail.
+    # middleware can splice in ahead of the prompt-caching tail.
     _main_core_names = {m.name for m in deepagent_middleware}
-    deepagent_middleware.extend(_profile.materialize_extra_middleware())
-    append_prompt_caching_middleware(deepagent_middleware)
-    main_interrupt_on = _merge_fs_interrupt_on(
-        _build_interrupt_on_from_permissions(permissions or []),
-        interrupt_on,
-    )
-    if main_interrupt_on is not None:
-        deepagent_middleware.append(HumanInTheLoopMiddleware(interrupt_on=main_interrupt_on))
-    deepagent_middleware = _apply_excluded_middleware(
-        deepagent_middleware,
-        _profile,
-        matched_classes=_main_matched_classes,
-        matched_names=_main_matched_names,
-    )
-    deepagent_middleware = _apply_custom_middleware(deepagent_middleware, middleware or [], core_names=_main_core_names)
-    deepagent_middleware = _apply_excluded_middleware(
-        deepagent_middleware,
-        _profile,
-        matched_classes=_main_matched_classes,
-        matched_names=_main_matched_names,
-    )
-    # Tool exclusion runs after custom middleware so excluded tool names are
-    # stripped last and cannot be restored by a custom wrap_model_call.
-    if _profile.excluded_tools:
-        deepagent_middleware.append(_ToolExclusionMiddleware(excluded=_profile.excluded_tools))
-    # Verify every main-profile exclusion matched at least one middleware in
-    # either the main agent stack or the GP subagent stack. An entry that
-    # matched nothing across both is almost certainly a typo or a stale
-    # profile.
-    _verify_excluded_middleware_coverage(
-        _profile,
-        _main_matched_classes,
-        _main_matched_names,
-        required_classes=_REQUIRED_MIDDLEWARE_CLASSES,
-        required_names=_REQUIRED_MIDDLEWARE_NAMES,
+    if prompt_cache_ttl is not None:
+        # ★ 不是 ChatAnthropic 时它什么也不做（ignore）。「这个模型支不支持缓存」由调用方
+        #   按实测能力判断 —— 不支持就别传 TTL，而不是靠这里的类型探测兜底。
+        deepagent_middleware.append(
+            AnthropicPromptCachingMiddleware(ttl=prompt_cache_ttl, unsupported_model_behavior="ignore")
+        )
+    # ★ 不装 HumanInTheLoopMiddleware：它靠 LangGraph 的 interrupt() + checkpointer，
+    #   而 Atlas 不用 checkpointer —— 人工审批走调用方的 ApprovalMiddleware（挂起）。
+    # ★ SubAgentMiddleware 跟在调用方中间件后面（见模块文档）：它的 awrap_tool_call
+    #   因此在审批与续跑去重**之内**，起子 run 是 `task` 最后一步。
+    deepagent_middleware = _apply_custom_middleware(
+        deepagent_middleware, [*(middleware or []), *subagent_middleware], core_names=_main_core_names
     )
 
-    base_prompt = _apply_profile_prompt(_profile, "")
-    if system_prompt is None:
-        final_system_prompt: str | SystemMessage = base_prompt
-    elif isinstance(system_prompt, SystemMessage):
-        if base_prompt:
-            final_system_prompt = SystemMessage(content_blocks=[*system_prompt.content_blocks, {"type": "text", "text": f"\n\n{base_prompt}"}])
-        else:
-            final_system_prompt = system_prompt
-    else:
-        final_system_prompt = system_prompt + (f"\n\n{base_prompt}" if base_prompt else "")
+    # ★ 系统提示词就是调用方给的那一份，不按模型追加任何东西。原先的 HarnessProfile
+    #   会给特定模型（如 claude-haiku-4-5）悄悄补一段提示词，用户在配置里看不到，
+    #   2026-10-19 删除。没给时传空串，与删除前一致。
+    final_system_prompt: str | SystemMessage = system_prompt if system_prompt is not None else ""
 
     return create_agent(
         model,
         system_prompt=final_system_prompt,
-        tools=_tools,
+        tools=tools,
         middleware=deepagent_middleware,
-        response_format=response_format,
-        context_schema=context_schema,
-        checkpointer=checkpointer,
-        store=store,
-        debug=debug,
-        name=name,
-        cache=cache,
-        state_schema=state_schema if state_schema is not None else DeepAgentState,
+        response_format=options.response_format,
+        context_schema=options.context_schema,
+        checkpointer=options.checkpointer,
+        store=options.store,
+        debug=options.debug,
+        name=options.name,
+        cache=options.cache,
+        state_schema=options.state_schema,
     ).with_config(
         {
             "recursion_limit": 9_999,
             "metadata": {
                 "ls_integration": "deepagents",
-                "lc_agent_name": name,
+                "lc_agent_name": options.name,
             },
         }
     )

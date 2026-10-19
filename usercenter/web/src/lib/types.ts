@@ -25,6 +25,21 @@ export interface Me {
   permissions: string[];
   menus: MenuNode[];
   password_policy: string;
+  /** 当前租户（租户设计）：platform = 平台租户（运营方）；customer = 客户租户 */
+  tenant: { id: string; code: string; name: string; kind: "platform" | "customer" };
+}
+
+export interface TenantInfo {
+  id: string;
+  code: string;
+  name: string;
+  kind: "platform" | "customer";
+  status: "active" | "suspended" | "closed";
+  usable: boolean;
+  max_users: number | null;
+  expires_at: string | null;
+  created_at: string;
+  users: number;
 }
 
 export interface User {
@@ -74,6 +89,8 @@ export interface DeptDetail {
 export interface AppInfo {
   id: string;
   name: string;
+  /** 应用编码：内网调用开放接口时请求头 X-Caller-App 写它（内网身份传递 §3） */
+  code: string | null;
   icon: string | null;
   description: string | null;
   app_key: string | null;
@@ -134,7 +151,6 @@ export interface DataTypeInfo {
   code: string;
   name: string;
   description: string | null;
-  admin_operation_code?: string | null;
   data_count?: number;
 }
 

@@ -10,9 +10,9 @@ import subprocess
 import sys
 
 import pytest
+from atlas_agent.domain.events import TERMINAL_EVENTS, EventType, TraceEvent
+from atlas_agent.domain.spec import AgentSpec, CompactionSpec, ModelSpec, SubAgentSpec
 from atlas_engine.contracts import InvalidSpec
-from atlas_server.domain.events import TERMINAL_EVENTS, EventType, TraceEvent
-from atlas_server.domain.spec import AgentSpec, CompactionSpec, ModelSpec, SubAgentSpec
 
 FORBIDDEN = ("sqlalchemy", "fastapi", "redis", "alembic", "uvicorn", "pydantic_settings")
 
@@ -269,13 +269,13 @@ def test_server_pure_layer_pulls_no_infrastructure() -> None:
     静默消失了。import-linter 有同款 contract（CI），这里让本地套件也兜住。
     """
     modules = (
-        "atlas_server.domain.spec",
-        "atlas_server.domain.events",
-        "atlas_server.domain.translator",
-        "atlas_server.domain.tool_registry",
-        "atlas_server.executor.runner",
-        "atlas_server.executor.build",
-        "atlas_server.host.translate.acp_v1",
+        "atlas_agent.domain.spec",
+        "atlas_agent.domain.events",
+        "atlas_agent.domain.translator",
+        "atlas_agent.domain.tool_registry",
+        "atlas_agent.executor.runner",
+        "atlas_agent.executor.build",
+        "atlas_agent.host.translate.acp_v1",
     )
     code = (
         "import sys, importlib;"

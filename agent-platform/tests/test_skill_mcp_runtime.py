@@ -15,34 +15,34 @@ from typing import Any
 
 import httpx
 import pytest
-from atlas_config.schemas import SkillCatalogItem, SkillVersionBrief, SkillVersionOut
-from atlas_server.config import Settings, get_settings
-from atlas_server.configplane import (
+from atlas_agent.config import Settings, get_settings
+from atlas_agent.configplane import (
     ConfigPlaneUnavailable,
     FakeSkillDirectory,
     HttpSkillDirectory,
     UnconfiguredSkillDirectory,
     override_skill_directory,
 )
-from atlas_server.configplane.client import ConfigClient
-from atlas_server.configplane.skills import SkillNotFound
-from atlas_server.domain.events import EventType
-from atlas_server.domain.skill_events import SkillLoadTracker, skill_slug_of
-from atlas_server.domain.spec import AgentSpec, ModelSpec, SkillRefSpec
-from atlas_server.errors import InvalidReference
-from atlas_server.providers.filesystem.skill_copy import SkillUnavailable, resolve_skills
-from atlas_server.providers.mcp import CallContext, McpServerConfig, McpUnavailable, NativeMcpTools
-from atlas_server.providers.mcp.acp import acp_mcp_servers
-from atlas_server.providers.mcp.catalog import (
+from atlas_agent.configplane.client import ConfigClient
+from atlas_agent.configplane.skills import SkillNotFound
+from atlas_agent.domain.events import EventType
+from atlas_agent.domain.skill_events import SkillLoadTracker, skill_slug_of
+from atlas_agent.domain.spec import AgentSpec, ModelSpec, SkillRefSpec
+from atlas_agent.errors import InvalidReference
+from atlas_agent.providers.filesystem.skill_copy import SkillUnavailable, resolve_skills
+from atlas_agent.providers.mcp import CallContext, McpServerConfig, McpUnavailable, NativeMcpTools
+from atlas_agent.providers.mcp.acp import acp_mcp_servers
+from atlas_agent.providers.mcp.catalog import (
     McpToolDef,
     ServerSnapshot,
     SettingsCatalog,
     _carry_history,
     build_snapshot,
 )
-from atlas_server.redisx import make_redis
-from atlas_server.schemas.agent import AgentSpecIn, SkillRefIn, SubAgentSpecIn
-from atlas_server.services.spec_refs import resolve_spec_refs
+from atlas_agent.redisx import make_redis
+from atlas_agent.schemas.agent import AgentSpecIn, SkillRefIn, SubAgentSpecIn
+from atlas_agent.services.spec_refs import resolve_spec_refs
+from atlas_config.schemas import SkillCatalogItem, SkillVersionBrief, SkillVersionOut
 
 
 def _settings(**kw: Any) -> Settings:
@@ -97,8 +97,8 @@ def test_skill_slug_of(args: Any, slug: str | None) -> None:
 
 
 async def test_runner_emits_notices_right_after_run_started() -> None:
-    from atlas_server.executor.build import build_graph
-    from atlas_server.executor.runner import run as engine_run
+    from atlas_agent.executor.build import build_graph
+    from atlas_agent.executor.runner import run as engine_run
 
     from tests.fakes import text_model
 
@@ -163,7 +163,7 @@ class _Server:
         return httpx.Response(200, json=found.model_dump(mode="json"))
 
     def directory(self, cache_dir: Path | None, ttl: float = 60) -> HttpSkillDirectory:
-        client = ConfigClient("http://cfg", None, transport=httpx.MockTransport(self.handler))
+        client = ConfigClient("http://cfg", transport=httpx.MockTransport(self.handler))
         return HttpSkillDirectory(client, cache_dir=cache_dir, status_ttl_s=ttl)
 
 
@@ -286,7 +286,7 @@ async def test_contract_against_real_config_service(real_config_app: Any) -> Non
         assert resp.status_code == 201, resp.text
 
     directory = HttpSkillDirectory(
-        ConfigClient("http://cfg", None, transport=transport), cache_dir=None, status_ttl_s=60
+        ConfigClient("http://cfg", transport=transport), cache_dir=None, status_ttl_s=60
     )
     latest = await directory.latest("demo")
     assert latest is not None
@@ -401,7 +401,7 @@ async def test_resolve_skills_unknown_version_fails_the_run() -> None:
 
 
 def _tool(server: str, name: str, description: str = "d") -> McpToolDef:
-    from atlas_server.providers.mcp.catalog import normalize
+    from atlas_agent.providers.mcp.catalog import normalize
     from mcp.types import Tool
 
     return normalize(
@@ -608,9 +608,9 @@ async def test_save_without_reachable_server_skips_digest(redis: Any) -> None:
 
 
 async def test_skill_usage_is_counted_once_per_run_in_rolled_back_tx() -> None:
-    from atlas_server.db.models import Agent, AgentVersion, Run, RunEvent
-    from atlas_server.db.session import get_sessionmaker
-    from atlas_server.repositories.skill_usage import SkillUsageRepository
+    from atlas_agent.db.models import Agent, AgentVersion, Run, RunEvent
+    from atlas_agent.db.session import get_sessionmaker
+    from atlas_agent.repositories.skill_usage import SkillUsageRepository
 
     today = date(2026, 10, 5)
     async with get_sessionmaker()() as session:

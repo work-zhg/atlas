@@ -57,7 +57,7 @@ jobs:
         run: uv run lint-imports
 
       - name: Migrate
-        run: cd agent-platform/services/server && uv run alembic upgrade head
+        run: cd agent-platform/services/agent && uv run alembic upgrade head
 
       - name: Test
         run: uv run pytest -q

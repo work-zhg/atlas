@@ -13,6 +13,8 @@ export interface Me {
   roles: string[];
   permissions: string[];
   menus: MenuNode[];
+  /** 数据权限：对各数据编码下全部数据的级别（如 { Team: "OWNER" }），与角色无关 */
+  data_levels?: Record<string, "READ" | "WRITE" | "OWNER" | "NONE">;
 }
 
 export interface Issue {

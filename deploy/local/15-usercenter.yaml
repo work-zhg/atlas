@@ -1,0 +1,55 @@
+# 用户中心后端（atlas_usercenter）：用户、组织、租户、角色与数据权限的唯一来源。
+#
+# ★ 原先在宿主上跑 uvicorn（:8030）；按「部署一律放 Pod」迁进集群。镜像与 Atlas 共用 atlas-app:dev。
+# ★ initContainer 先迁移（含内置应用同步）再起服务：用户中心的迁移改约束、改唯一性，
+#   必须在新代码接请求之前完成。
+# ★ ClusterIP（内网身份传递 §4）：浏览器经网关 /uc/api；它也是网关 auth_request 的校验方
+#   （/api/v1/auth/verify）。宿主上的 register-uc 等运维命令先
+#   kubectl -n atlas-system port-forward svc/atlas-usercenter 8030:8030，再按 127.0.0.1:8030 访问。
+# ★ Service 名不叫 atlas-uc：K8s 会给 Pod 注入 <SERVICE>_PORT 一类变量，ATLAS_UC_ 前缀正是
+#   用户中心的配置前缀，会撞上。另外关掉 enableServiceLinks，双保险。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atlas-usercenter
+  namespace: atlas-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: atlas-usercenter}
+  template:
+    metadata:
+      labels: {app: atlas-usercenter}
+    spec:
+      enableServiceLinks: false
+      initContainers:
+        - name: migrate
+          image: atlas-app:dev
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "atlas_usercenter", "migrate"]
+          env: &uc-env
+            - {name: ATLAS_UC_DATABASE_URL, value: "postgresql+asyncpg://atlas:atlas@__HOST_IP__:5433/atlas_usercenter"}
+      containers:
+        - name: usercenter
+          image: atlas-app:dev
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "atlas_usercenter", "serve"]
+          ports: [{containerPort: 8030, name: http}]
+          env: *uc-env
+          readinessProbe:
+            httpGet: {path: /health, port: 8030}
+            periodSeconds: 3
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+---
+# ★ ClusterIP（内网身份传递 §4）：只经网关（atlas-frontends 的 nginx）对外；运维直连用
+#   kubectl -n atlas-system port-forward svc/atlas-usercenter 8030:8030
+apiVersion: v1
+kind: Service
+metadata:
+  name: atlas-usercenter
+  namespace: atlas-system
+spec:
+  type: ClusterIP
+  selector: {app: atlas-usercenter}
+  ports: [{port: 8030, targetPort: 8030}]

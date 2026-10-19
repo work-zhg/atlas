@@ -2,7 +2,8 @@
 
 collection   kb_{dataset_uuid_hex}
 向量         dense（cosine）+ 稀疏 bm25（IDF modifier）—— 同一个 point，混合检索不用两个存储
-payload 索引 document_uuid、segment_uuid、enabled、doc_ok
+payload 索引 document_uuid、segment_uuid、enabled、doc_ok、kind、acl、is_current、
+             valid_from、valid_to；meta.* 按知识库的元数据字段定义另建（ensure_index）
 """
 
 from __future__ import annotations
@@ -19,7 +20,28 @@ DENSE = "dense"
 SPARSE = "bm25"
 
 
-def _flags_filter(document_uuids: list[str] | None) -> models.Filter:
+_INDEX_TYPES = {
+    "keyword": models.PayloadSchemaType.KEYWORD,
+    "float": models.PayloadSchemaType.FLOAT,
+    "bool": models.PayloadSchemaType.BOOL,
+    "datetime": models.PayloadSchemaType.DATETIME,
+}
+_BASE_INDEXES = (
+    ("document_uuid", "keyword"),
+    ("segment_uuid", "keyword"),
+    ("enabled", "bool"),
+    ("doc_ok", "bool"),
+    ("kind", "keyword"),
+    ("acl", "keyword"),
+    ("is_current", "bool"),
+    ("valid_from", "float"),
+    ("valid_to", "float"),
+)
+
+
+def _flags_filter(document_uuids: list[str] | None, conditions: Any = None) -> models.Filter:
+    """conditions：检索层拼好的附加过滤（qdrant Filter：权限、版本时效、元数据），
+    与开关过滤取与。"""
     must: list[Any] = [
         models.FieldCondition(key="enabled", match=models.MatchValue(value=True)),
         models.FieldCondition(key="doc_ok", match=models.MatchValue(value=True)),
@@ -28,6 +50,8 @@ def _flags_filter(document_uuids: list[str] | None) -> models.Filter:
         must.append(
             models.FieldCondition(key="document_uuid", match=models.MatchAny(any=document_uuids))
         )
+    if conditions is not None:
+        must.append(conditions)
     return models.Filter(must=must)
 
 
@@ -52,13 +76,18 @@ class QdrantVector(BaseVector):
             vectors_config={DENSE: models.VectorParams(size=dim, distance=models.Distance.COSINE)},
             sparse_vectors_config={SPARSE: models.SparseVectorParams(modifier=models.Modifier.IDF)},
         )
-        for key, schema in (
-            ("document_uuid", models.PayloadSchemaType.KEYWORD),
-            ("segment_uuid", models.PayloadSchemaType.KEYWORD),
-            ("enabled", models.PayloadSchemaType.BOOL),
-            ("doc_ok", models.PayloadSchemaType.BOOL),
-        ):
-            await self._c.create_payload_index(self.collection, key, field_schema=schema)
+        for key, kind in _BASE_INDEXES:
+            await self.ensure_index(key, kind)
+
+    async def ensure_index(self, key: str, kind: str) -> None:
+        if not await self._c.collection_exists(self.collection):
+            return
+        info = await self._c.get_collection(self.collection)
+        if key in (info.payload_schema or {}):
+            return
+        await self._c.create_payload_index(
+            self.collection, key, field_schema=_INDEX_TYPES[kind], wait=True
+        )
 
     async def add(self, points: list[VectorPoint]) -> None:
         if not points:
@@ -114,6 +143,38 @@ class QdrantVector(BaseVector):
                 wait=True,
             )
 
+    async def set_doc_payload(self, document_uuid: str, payload: dict[str, Any]) -> None:
+        if not payload or not await self._c.collection_exists(self.collection):
+            return
+        keep = {k: v for k, v in payload.items() if v is not None}
+        if keep:
+            await self._c.set_payload(
+                self.collection, payload=keep, points=_doc_filter(document_uuid), wait=True
+            )
+        # 值为 None 的键（如取消生效区间）删掉：检索按「没有这个键」处理
+        gone = [k for k, v in payload.items() if v is None]
+        if gone:
+            await self._c.delete_payload(
+                self.collection, keys=gone, points=_doc_filter(document_uuid), wait=True
+            )
+
+    async def set_points_payload(self, ids: list[str], payload: dict[str, Any]) -> None:
+        if ids and payload and await self._c.collection_exists(self.collection):
+            await self._c.set_payload(self.collection, payload=payload, points=ids, wait=True)
+
+    async def point_ids(self) -> list[str]:
+        if not await self._c.collection_exists(self.collection):
+            return []
+        out: list[str] = []
+        offset = None
+        while True:
+            rows, offset = await self._c.scroll(
+                self.collection, limit=1000, offset=offset, with_payload=False, with_vectors=False
+            )
+            out.extend(str(r.id) for r in rows)
+            if offset is None:
+                return out
+
     async def search_by_vector(
         self,
         vector: list[float],
@@ -121,6 +182,7 @@ class QdrantVector(BaseVector):
         top_k: int,
         score_threshold: float | None = None,
         document_uuids: list[str] | None = None,
+        conditions: Any = None,
     ) -> list[Hit]:
         if not await self._c.collection_exists(self.collection):
             return []
@@ -130,7 +192,7 @@ class QdrantVector(BaseVector):
             using=DENSE,
             limit=top_k,
             score_threshold=score_threshold,
-            query_filter=_flags_filter(document_uuids),
+            query_filter=_flags_filter(document_uuids, conditions),
             with_payload=True,
             with_vectors=[DENSE],
         )
@@ -151,6 +213,7 @@ class QdrantVector(BaseVector):
         *,
         top_k: int,
         document_uuids: list[str] | None = None,
+        conditions: Any = None,
     ) -> list[Hit]:
         if not indices or not await self._c.collection_exists(self.collection):
             return []
@@ -159,7 +222,7 @@ class QdrantVector(BaseVector):
             query=models.SparseVector(indices=indices, values=values),
             using=SPARSE,
             limit=top_k,
-            query_filter=_flags_filter(document_uuids),
+            query_filter=_flags_filter(document_uuids, conditions),
             with_payload=True,
             with_vectors=[DENSE],
         )

@@ -1,0 +1,19 @@
+category: eng
+tags: [eng, fast, context]
+instruction: |
+  archive/ 目录下有 01.md 到 24.md 共 24 份项目档案。请按编号顺序用 read_file 逐份完整阅读（一次读一份），
+  全部读完后回答三个问题，写入 answer.txt，格式为「01 号档案的项目代号,24 号档案的负责人,状态为延期的档案份数」，
+  例如：项目-123,张三,5
+# ★ 把压缩阈值调到约 12k tokens，用 24 份档案（约 2 万字）稳定触发压缩，成本可控；
+#   keep_recent_tool_results 设满，让「旧结果清理」没东西可清，确保走到压缩。
+# ★ 不给 shell：只能逐份 read_file，不能 grep 绕过（绕过了压缩就不会发生，场景不成立）。
+#   关键事实在最早读的 01 号里 —— 压缩后还要用得到。
+agent_patch:
+  tool_names: [filesystem, write_todos]
+  compaction: {trigger_ratio: 0.1, clear_ratio: 0.1, target_ratio: 0.05, keep_recent_tool_results: 100}
+expect:
+  - desc: 发生了压缩（场景生效）
+    gate: false
+    event: context.compacted
+    count: ">=1"
+budget: {wall_s: 900}

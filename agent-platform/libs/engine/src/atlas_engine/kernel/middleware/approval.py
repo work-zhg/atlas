@@ -8,11 +8,11 @@
 
   原先这里 `await gate.request(...)` 一路等到有人点头或 600s 超时：一个
   asyncio.Task 全程挂着，进程重启即丢。现在问一次 `gate.check(...)`，还没
-  结果就返回一个挂起哨兵让本段结束 —— 等待交给数据库，决策到达后续跑。
+  结果就在 state.waiting_on 里登记一项让本段结束 —— 等待交给数据库，决策到达后续跑。
 
-  两条路在图里的差别只有一处：**挂起时工具还没执行**。续跑时 server 把哨兵
-  那条 ToolMessage 整条删掉，于是 tool_use 变成悬空，SuspensionMiddleware
-  看到就跳去 tools 节点把它跑掉。委派则相反（结果已有，换掉内容即可）。
+  ★ 挂起时**不执行、也不写任何 tool 消息**，tool_call 留着悬空（contracts/suspension.py）。
+    续跑时 server 把决策放进 state.decisions，SuspensionMiddleware 看到就跳去
+    tools，这里按决策执行或拒绝，并把这一项从 waiting_on 里删掉。
 
 等待逻辑由调用方经 `contracts.ApprovalGate` 注入 —— kernel 不知道
 Postgres 与 Redis 的存在。
@@ -30,7 +30,7 @@ from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 
 from atlas_engine.contracts import ApprovalGate
-from atlas_engine.contracts.suspension import suspend_marker
+from atlas_engine.kernel.middleware.suspension import SuspensionState, release_wait
 
 __all__ = [
     "EXPIRED_RESULT",
@@ -82,6 +82,8 @@ def approval_id_for(run_id: str, tool_call_id: str) -> str:
 class ApprovalMiddleware(AgentMiddleware):
     """对 `require_approval_for` 里的工具，执行前先确认批过了。"""
 
+    state_schema = SuspensionState
+
     def __init__(self, tool_names: frozenset[str], gate: ApprovalGate) -> None:
         super().__init__()
         self._guarded = tool_names
@@ -100,27 +102,42 @@ class ApprovalMiddleware(AgentMiddleware):
         from langgraph.config import get_stream_writer
 
         tool_call_id = str(call.get("id", ""))
-        run_id = _run_id_of(request)
-        approval_id = approval_id_for(run_id, tool_call_id)
         args = call.get("args") or {}
+        graph_state = getattr(request, "state", None) or {}
+        wait = (graph_state.get("waiting_on") or {}).get(tool_call_id)
+        waiting = wait is not None
+        # ★ 续跑时用挂起时登记的那个 id，不重新派生：两段之间派生规则若有变化（部署跨越
+        #   挂起期），重算出的新 id 查不到决策，用户就得再批一次。
+        approval_id = (
+            str(wait.get("token"))
+            if waiting and wait.get("reason") == "approval" and wait.get("token")
+            else approval_id_for(_run_id_of(request), tool_call_id)
+        )
 
-        state = await self._gate.check(approval_id=approval_id, tool_name=name, args=args)
+        # ★ 续跑时决策由 server 从审批表读好交进来，图的行为只由输入决定；
+        #   没有（首次见到这个调用）才问 gate —— 它顺便把这次审批登记下来。
+        decision = (graph_state.get("decisions") or {}).get(approval_id)
+        if decision is None:
+            decision = await self._gate.check(approval_id=approval_id, tool_name=name, args=args)
 
-        if state == "approved":
-            return await handler(request)
+        if decision == "approved":
+            result = await handler(request)
+            return release_wait(result, tool_call_id) if waiting else result
 
-        # ★ 三者都不放行，但给模型的说法不同 —— 见 GATE_FAILED_RESULT 的注释。
-        if state in ("rejected", "expired", "failed"):
-            return ToolMessage(
+        # ★ 都不放行，但给模型的说法不同 —— 见 GATE_FAILED_RESULT 的注释。
+        #   认不出的值按「门禁故障」处理：当成 pending 会再登记一次，而它的 token 已经
+        #   在 decisions 里 —— before_model 又放行，两边来回跳到 GraphRecursionError。
+        if decision != "pending":
+            refused = ToolMessage(
                 content={
                     "rejected": REJECTED_RESULT,
                     "expired": EXPIRED_RESULT,
-                    "failed": GATE_FAILED_RESULT,
-                }[state],
+                }.get(decision, GATE_FAILED_RESULT),
                 tool_call_id=tool_call_id,
                 name=name,
                 status="error",
             )
+            return release_wait(refused, tool_call_id) if waiting else refused
 
         # pending：把「需要确认」发出去，然后挂起本段。
         #
@@ -136,12 +153,10 @@ class ApprovalMiddleware(AgentMiddleware):
             }
         )
 
-        # ★ 返回哨兵而不是 await。工具**不执行** —— 续跑时 server 把这条整条
-        #   删掉，tool_use 于是悬空，SuspensionMiddleware 跳去 tools 把它跑掉。
-        return ToolMessage(
-            content=suspend_marker("approval", approval_id),
-            tool_call_id=tool_call_id,
-            name=name,
+        # ★ 只登记、不 await、不写 tool 消息。工具**不执行**，tool_call 留着悬空；
+        #   SuspensionMiddleware 在 before_model 看到 waiting_on 非空就跳出本段。
+        return Command(
+            update={"waiting_on": {tool_call_id: {"reason": "approval", "token": approval_id}}}
         )
 
 

@@ -1,0 +1,17 @@
+category: eng
+tags: [eng, fast, context]
+instruction: |
+  reports/ 目录下有 01.md 到 10.md 共 10 份周报。请按编号顺序用 read_file 逐份阅读，
+  每读完一份，立刻把「编号: 本周新增工单数」追加到 notes.md（一份一行）。
+  10 份都记完后，把 10 份的新增工单数合计写入 total.txt（只写数字）。
+# ★ 清理阈值调到约 7k tokens、只保留最近 2 个工具结果：读到后几份时，前面的 read_file
+#   结果会被清成占位。答案必须靠每读一份就记进 notes.md（这正是清理后仍能做对的前提）。
+agent_patch:
+  tool_names: [filesystem, write_todos]
+  compaction: {clear_ratio: 0.06, trigger_ratio: 0.5, keep_recent_tool_results: 2}
+expect:
+  - desc: 旧工具结果被清理（场景生效）
+    gate: false
+    event: context.cleared
+    count: ">=1"
+budget: {wall_s: 900}

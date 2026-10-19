@@ -1,0 +1,17 @@
+category: eng
+tags: [eng, fast, events]
+instruction: |
+  写一个 primes.py，打印 100 以内的所有质数（每行一个），运行它并把输出写入 primes.txt。
+# 评测客户端收到 8 条事件后主动断开会话流，2 秒后带游标重连：检查事件不丢不重
+sse_disconnect_after: 8
+expect:
+  - desc: 发生了断线重连
+    metric: sse_reconnects
+    count: ">=1"
+  - desc: 重连后没有丢事件
+    metric: sse_missing
+    count: "==0"
+  - desc: 重连后没有重复事件
+    metric: sse_duplicates
+    count: "==0"
+budget: {wall_s: 600}

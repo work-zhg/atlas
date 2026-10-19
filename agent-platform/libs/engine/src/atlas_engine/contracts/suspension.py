@@ -1,109 +1,72 @@
 """挂起：「这一段到此为止，等一个外部事件，事件到了续跑」。
 
-★ 核心判断：**委派挂起与审批挂起是同一件事**（doc/detail/suspension.html §02）。
+★ 核心判断：**SubAgent 挂起与审批挂起是同一件事**（doc/detail/suspension.html §02）。
 
-    委派   子智能体要跑一小时 —— 父 run 不该在进程里等那么久
-    审批   要等人点头 —— 可能等到第二天上班
+    SubAgent  子智能体要跑一小时 —— 父 run 不该在进程里等那么久
+    审批      要等人点头 —— 可能等到第二天上班
 
   两者都是「等外部」，差别只有一处：审批挂起时那个工具**还没执行**，续跑时
-  要先把它跑掉；委派挂起时结果已经在等着了，续跑时填进历史即可。
-  这条差异由 server 侧的历史重建处理（删掉 marker vs 换掉 marker 的内容），
-  kernel 只需要认识「有东西在等」。
+  要先把它跑掉；SubAgent 挂起时子 run 已经起了，续跑时把结论填进去即可。
+  这条差异由各自的中间件处理，SuspensionMiddleware 只认识「有东西在等」。
 
-★ 为什么用一个字符串而不是异常或状态位。能力方（`task` 工具、审批中间件）
-  产出的东西必须是一条合法的 ToolMessage —— Anthropic 要求每个 tool_use 都有
-  配对的 tool_result，缺了就是 400。marker 因此既是「在等」的信号，也是那条
-  占位的结果。
+★ 「在等什么」只记在 state 的 `waiting_on` 里，消息里没有任何占位
+  （doc/detail/suspension.html 修正 13；demo/suspend-resume）：
 
-★ 为什么 marker 自带 token。续跑时要把它换成真话，而「换哪一条」只能靠它。
-  把关联关系放在消息序列**自己身上**的回报是不需要另一张表去记
-  `(tool_call_id → sub_run_id)` —— marker 所在的 ToolMessage 本来就带着正确
-  的 tool_call_id（工具节点生成的）。
+    waiting_on   tool_call_id → Wait。能力方（审批 / SubAgent 中间件）拦下调用时
+                 登记，有了结果时删掉。挂起时 server 从图的最终 state 里取出来、
+                 与消息**在同一个事务里**落进 run.waiting_on；续跑时原样交回
+    decisions    token → 结果。续跑时 server 交进来，只进不出：
+                   approval    "approved" / "rejected" / "expired" / "failed"
+                   subagent    子 run 的结论文本
+                 ★ 只放**已经有结果**的。放了 pending 的话 before_model 放行、
+                   审批中间件又登记一次，两边来回跳到 GraphRecursionError
+
+  被拦下的 tool_call 因此在消息里**悬空**。配对规则（每个 tool_use 恰好一条
+  tool_result）只约束交给模型的那一刻：挂起时图在 before_model 就跳出、不调
+  模型；续跑时先执行工具再调模型。悬空有两种含义，靠 waiting_on 区分 ——
+  在里面的是「在等」，不在的是「被放弃」（补 cancelled / 中断）。
+
+★ 本模块是 contracts 层，不依赖 langchain：state schema 本身（带 reducer 与
+  可见性标注）在 kernel/middleware/suspension.py::SuspensionState。
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, TypedDict
 
 __all__ = [
-    "RELEASED_MARKER",
-    "SUSPENSION_MARKER",
-    "Suspension",
     "SuspensionReason",
-    "is_released",
-    "parse_suspension",
-    "released_marker",
-    "suspend_marker",
+    "Wait",
+    "WaitingOn",
+    "merge_waits",
 ]
 
-SuspensionReason = Literal["delegation", "approval"]
-
-#: 哨兵前缀。
-#:
-#: ★ 必须是**返回值**，不能是异常。`task` 工具对受理方抛出的异常一律接成错误
-#:   文本回给模型（委派失败是局部问题，不该炸掉整个 run）—— marker 走异常
-#:   路径会被那个 except 吞掉，变成模型眼里的一句「委派失败」，而它其实正在跑。
-#:
-#: ★ 模型永远看不到它。图在 before_model 处就跳出了
-#:   （kernel/middleware/suspension.py），marker 不进入任何一次模型调用。
-SUSPENSION_MARKER = "__ATLAS_SUSPENDED__"
-
-#: 「等到了，去执行那个工具」——续跑时替换 approval 哨兵用的占位。
-#:
-#: ★ 为什么不直接把哨兵那条**删掉**（那样 tool_call 悬空，正是 jump_to "tools"
-#:   的判据）：kernel 的 `PatchToolCallsMiddleware` 在图入口（before_agent）会
-#:   给一切悬空的 tool_call 补上一句「was cancelled」。它排在核心栈里、在用户
-#:   middleware 之前，顺序无法调整。于是删出来的悬空会被它当场补掉，
-#:   SuspensionMiddleware 看到的序列已经配对完整 —— 不跳 tools，流向模型，
-#:   模型看到「工具被取消了」就重新发一次调用，于是再挂起一次：**死循环**。
-#:   （真实环境验证时撞到的，见 doc/detail/suspension.html §12 修正记录 10。）
-#:
-#: ★ 所以序列在图入口必须是**配对完整**的：这条占位就是那个「结果」。
-#:   制造悬空的时机推到 before_model —— SuspensionMiddleware 在那里把它删掉
-#:   并同时 jump_to "tools"，patch 已经跑完，没有第二次插手的机会。
-RELEASED_MARKER = "__ATLAS_RELEASED__"
-
-_SEP = ":"
+SuspensionReason = Literal["subagent", "approval"]
 
 
-@dataclass(frozen=True)
-class Suspension:
-    """一次挂起：等什么，以及等的那个东西怎么找。"""
+class Wait(TypedDict):
+    """一个被拦下的 tool_call 在等什么。
+
+    ★ reason 必须带上。续跑的 barrier 按它分派：SubAgent 等「子 run 终态」，审批等
+      「approval 被决策」。只记 token 的话审批挂起会被当成 SubAgent —— 审批挂起时
+      没有子 run，barrier 立刻满足，于是续跑、又挂起、再续跑，**死循环**。
+    """
 
     reason: SuspensionReason
-    #: delegation → 子 run 的 id；approval → approval 的 id。
+    #: subagent → 子 run 的 id；approval → approval 的 id。也是 decisions 的 key。
     token: str
 
 
-def suspend_marker(reason: SuspensionReason, token: str) -> str:
-    """造一个哨兵字符串，作为占位 ToolMessage 的内容。"""
-    return f"{SUSPENSION_MARKER}{_SEP}{reason}{_SEP}{token}"
+#: tool_call_id → Wait。state 与 run.waiting_on 是同一个形状。
+WaitingOn = dict[str, Wait]
 
 
-def released_marker(token: str) -> str:
-    """造一个「已放行」占位，替换掉 approval 哨兵。"""
-    return f"{RELEASED_MARKER}{_SEP}{token}"
+def merge_waits(old: WaitingOn | None, new: dict[str, Wait | None] | None) -> WaitingOn:
+    """waiting_on 的 reducer：按 tool_call_id 合并，值为 None 表示删除。
 
-
-def is_released(text: object) -> bool:
-    """这条 ToolMessage 是不是「已放行，去执行」的占位。"""
-    return isinstance(text, str) and text.startswith(RELEASED_MARKER)
-
-
-def parse_suspension(text: object) -> Suspension | None:
-    """从 ToolMessage 的内容里认出哨兵。不是哨兵就返回 None。
-
-    ★ 容错到底：解析失败一律当成「不是挂起」。判错方向要选安全的那一边 ——
-      把真 marker 当普通结果的后果是模型看到一串奇怪的字符（可见、可查）；
-      把普通结果当 marker 的后果是 run 永久停在 suspended（静默、难查）。
+    ★ 不能用 operator.add：拿到结果后要把那一项**删掉**，add 只能加。
+    ★ 必须有 reducer：一批里几个调用同时被拦下时，它们在同一步写 waiting_on，
+      没有 reducer 会报 InvalidUpdateError；删除写的 None 也会原样覆盖进去。
     """
-    if not isinstance(text, str) or not text.startswith(SUSPENSION_MARKER):
-        return None
-    parts = text.split(_SEP)
-    if len(parts) != 3:
-        return None
-    _prefix, reason, token = parts
-    if reason not in ("delegation", "approval") or not token:
-        return None
-    return Suspension(reason=reason, token=token)  # type: ignore[arg-type]
+    merged = {**(old or {}), **(new or {})}
+    return {k: v for k, v in merged.items() if v is not None}

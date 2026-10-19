@@ -18,8 +18,13 @@ import json
 from uuid import UUID
 
 import pytest
-from atlas_server.memory import DEAD_KEY, QUEUE_KEY, ExtractionJob, build_job, enqueue
-from atlas_server.memory.queue import run_worker
+from atlas_agent.memory import DEAD_KEY, QUEUE_KEY, ExtractionJob, build_job, enqueue
+from atlas_agent.memory.queue import (
+    processing_key,
+    recover_orphaned,
+    revive_dead,
+    run_worker,
+)
 
 OWNER = UUID("11111111-1111-1111-1111-111111111111")
 OTHER = UUID("22222222-2222-2222-2222-222222222222")
@@ -125,6 +130,7 @@ def test_only_user_and_assistant_text_is_fed() -> None:
 class FakeRedis:
     def __init__(self) -> None:
         self.lists: dict[str, list[str]] = {}
+        self.keys: dict[str, str] = {}
 
     async def lpush(self, key: str, value: str) -> None:
         self.lists.setdefault(key, []).insert(0, value)
@@ -142,6 +148,44 @@ class FakeRedis:
                 return (k, self.lists[k].pop())
         await asyncio.sleep(0.01)
         return None
+
+    async def blmove(self, src: str, dst: str, timeout: int, wherefrom: str, whereto: str):
+        """BLMOVE RIGHT LEFT：同样要模拟阻塞（理由见 brpop）。"""
+        if self.lists.get(src):
+            value = self.lists[src].pop()
+            self.lists.setdefault(dst, []).insert(0, value)
+            return value
+        await asyncio.sleep(0.01)
+        return None
+
+    async def lrem(self, key: str, count: int, value: str) -> int:
+        items = self.lists.get(key) or []
+        if value in items:
+            items.remove(value)
+            return 1
+        return 0
+
+    async def exists(self, key: str) -> int:
+        return int(key in self.keys)
+
+    async def set(self, key: str, value: str, **_kw) -> None:
+        self.keys[key] = value
+
+    async def lmove(self, src: str, dst: str, wherefrom: str, whereto: str):
+        if not self.lists.get(src):
+            return None
+        value = self.lists[src].pop()
+        self.lists.setdefault(dst, []).append(value)
+        return value
+
+    async def lrange(self, key: str, start: int, end: int) -> list[str]:
+        return list(self.lists.get(key) or [])
+
+    async def scan_iter(self, match: str):
+        prefix = match.rstrip("*")
+        for key in list(self.lists):
+            if key.startswith(prefix):
+                yield key
 
 
 class BrokenRedis(FakeRedis):
@@ -181,7 +225,7 @@ async def test_worker_retries_then_dead_letters() -> None:
     assert job is not None
     await enqueue(redis, job)
 
-    task = asyncio.create_task(run_worker(redis, memory, max_attempts=3))
+    task = asyncio.create_task(run_worker(redis, memory, max_attempts=3, instance="test"))
     for _ in range(60):
         await asyncio.sleep(0.02)
         if redis.lists.get(DEAD_KEY):
@@ -207,7 +251,7 @@ async def test_worker_survives_a_poisoned_item() -> None:
     assert good is not None
     await enqueue(redis, good)
 
-    task = asyncio.create_task(run_worker(redis, memory, max_attempts=3))
+    task = asyncio.create_task(run_worker(redis, memory, max_attempts=3, instance="test"))
     for _ in range(60):
         await asyncio.sleep(0.02)
         if memory.calls:
@@ -216,6 +260,50 @@ async def test_worker_survives_a_poisoned_item() -> None:
 
     assert memory.calls, "坏任务之后的正常任务仍应被处理"
     assert memory.calls[0]["user_id"] == OWNER
+
+
+async def test_worker_clears_its_processing_list_and_dedupes_by_run() -> None:
+    """可靠消费（横向扩展设计 §7.2）：处理完才从处理中列表删；同一个 run 只抽一次。"""
+    redis = FakeRedis()
+    memory = FakeMemory()
+    job = make_job()
+    assert job is not None
+    await enqueue(redis, job)
+    await enqueue(redis, job)  # 重复投递（处理中列表被搬回过）
+
+    task = asyncio.create_task(run_worker(redis, memory, max_attempts=3, instance="w1"))
+    for _ in range(60):
+        await asyncio.sleep(0.02)
+        if not redis.lists.get(QUEUE_KEY) and not redis.lists.get(processing_key("w1")):
+            break
+    task.cancel()
+
+    assert len(memory.calls) == 1, "同一个 run 被抽了两次"
+    assert not redis.lists.get(processing_key("w1")), "处理完的任务还留在处理中列表里"
+
+
+async def test_orphaned_processing_lists_go_back_to_the_queue() -> None:
+    redis = FakeRedis()
+    redis.lists[processing_key("dead")] = ["job-a"]
+    redis.lists[processing_key("alive")] = ["job-b"]
+
+    assert await recover_orphaned(redis, {"alive"}) == 1
+    assert redis.lists[QUEUE_KEY] == ["job-a"]
+    assert redis.lists[processing_key("alive")] == ["job-b"], "活着的实例正在处理的不能动"
+
+
+async def test_dead_letters_are_revived_a_bounded_number_of_times() -> None:
+    redis = FakeRedis()
+    job = make_job()
+    assert job is not None
+    fresh = json.dumps({**job.to_json(), "attempt": 3})
+    spent = json.dumps({**job.to_json(), "attempt": 3, "revived": 3})
+    redis.lists[DEAD_KEY] = [fresh, spent]
+
+    assert await revive_dead(redis) == 1
+    revived = json.loads(redis.lists[QUEUE_KEY][0])
+    assert revived["attempt"] == 0 and revived["revived"] == 1
+    assert redis.lists[DEAD_KEY] == [spent], "复活轮次用尽的留在死信里等人看"
 
 
 def test_job_survives_a_json_round_trip() -> None:
@@ -293,7 +381,7 @@ async def test_converge_removes_the_superseded_memory() -> None:
     用户从 pnpm 改用 bun 之后，旧事实不会被更新，会与新事实并存 ——
     实测过。这一层就是设计文档 §12 第 2 项说的「在抽取器外面再加的收敛」。
     """
-    from atlas_server.memory import converge
+    from atlas_agent.memory import converge
 
     mem = FakeConvergeMemory(
         existing={"old-1": "用户使用 pnpm 作为包管理器"},
@@ -308,7 +396,7 @@ async def test_converge_removes_the_superseded_memory() -> None:
 
 async def test_converge_does_nothing_without_new_facts() -> None:
     """没产生新事实就不跑 —— 不花那次 LLM 调用，也不去碰任何旧记忆。"""
-    from atlas_server.memory import converge
+    from atlas_agent.memory import converge
 
     mem = FakeConvergeMemory(existing={"old-1": "x"}, verdict='{"superseded_ids": ["old-1"]}')
     assert await converge(mem, user_id=OWNER, added=[]) == 0
@@ -321,7 +409,7 @@ async def test_converge_ignores_ids_it_did_not_offer() -> None:
     这一层会**自动删除用户数据**，宽容一点的实现（比如按内容模糊匹配）
     在模型抽风时就会删错东西，而用户根本不知道自己少了一条记忆。
     """
-    from atlas_server.memory import converge
+    from atlas_agent.memory import converge
 
     mem = FakeConvergeMemory(
         existing={"old-1": "用户使用 pnpm"},
@@ -339,7 +427,7 @@ async def test_converge_keeps_everything_when_it_fails() -> None:
     而且不能抛 —— 抛出去会让这次抽取算作失败进重试队列，同一批事实
     就会被反复写入。
     """
-    from atlas_server.memory import converge
+    from atlas_agent.memory import converge
 
     class Broken(FakeConvergeMemory):
         async def complete_json(self, prompt: str) -> str:
@@ -373,7 +461,7 @@ def test_search_tool_does_not_expose_user_id_to_the_model() -> None:
     它就能（被诱导）指定任意 user_id 读别人的记忆 —— 而助理还要处理来自
     代码仓库、网页、工具输出的不可信文本，提示词注入是真实攻击面。
     """
-    from atlas_server.memory.tool import make_memory_search_tool
+    from atlas_agent.memory.tool import make_memory_search_tool
 
     tool = make_memory_search_tool(FakeSearchMemory(), user_id=OWNER)
     fields = set(tool.args_schema.model_fields)
@@ -387,7 +475,7 @@ def test_search_tool_is_read_only() -> None:
     写记忆会随 regenerate 重复执行；管理操作是用户的权利而不是 Agent 的
     能力。这条测试钉住「记忆相关的内置工具有且只有一个，且是只读的」。
     """
-    from atlas_server.domain.tool_registry import BUILTIN_TOOLS
+    from atlas_agent.domain.tool_registry import BUILTIN_TOOLS
 
     names = [t.name for t in BUILTIN_TOOLS if "memor" in t.name]
     assert names == ["search_memory"], f"记忆工具只该有只读的一个，实际 {names}"
@@ -395,7 +483,7 @@ def test_search_tool_is_read_only() -> None:
 
 async def test_search_tool_binds_the_session_owner() -> None:
     """检索恒以会话所有者的身份发出。"""
-    from atlas_server.memory.tool import make_memory_search_tool
+    from atlas_agent.memory.tool import make_memory_search_tool
 
     mem = FakeSearchMemory([{"memory": "用户用 bun 做包管理"}])
     tool = make_memory_search_tool(mem, user_id=OWNER)
@@ -410,7 +498,7 @@ async def test_search_tool_degrades_instead_of_failing_the_run() -> None:
     记忆是辅助 —— 没有它照样能回答。抛异常会让用户的问题因为一个旁路
     系统而失败。
     """
-    from atlas_server.memory.tool import make_memory_search_tool
+    from atlas_agent.memory.tool import make_memory_search_tool
 
     tool = make_memory_search_tool(FakeSearchMemory(fail=True), user_id=OWNER)
     out = await tool.ainvoke({"query": "随便"})
@@ -419,7 +507,7 @@ async def test_search_tool_degrades_instead_of_failing_the_run() -> None:
 
 async def test_search_tool_says_so_when_nothing_matches() -> None:
     """空结果要明说 —— 返回空串会让模型以为工具坏了。"""
-    from atlas_server.memory.tool import make_memory_search_tool
+    from atlas_agent.memory.tool import make_memory_search_tool
 
     tool = make_memory_search_tool(FakeSearchMemory([]), user_id=OWNER)
     out = await tool.ainvoke({"query": "从没聊过的话题"})

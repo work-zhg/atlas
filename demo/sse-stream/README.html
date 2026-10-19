@@ -1,0 +1,666 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Demo：事件流怎么做到「断了能接上、换了实例也能接上」</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --border: #d1d9e0; --head: #f6f8fa;
+    --lane: #8c959f; --phase-bg: #eef2f6; --note-bg: #fff8c5; --note-bd: #d4a72c;
+    --ok: #1a7f37; --ok-bg: #dafbe1; --bad: #cf222e; --bad-bg: #ffebe9; --warn: #9a6700; --warn-bg: #fff8c5;
+    --box: #ddf4ff; --box-bd: #54aeff; --accent: #0969da;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --border: #3d444d; --head: #151b23;
+      --lane: #6e7681; --phase-bg: #1c2430; --note-bg: #2b2111; --note-bd: #9e6a03;
+      --ok: #3fb950; --ok-bg: #12261e; --bad: #f85149; --bad-bg: #2d1214; --warn: #d29922; --warn-bg: #2b2111;
+      --box: #12263f; --box-bd: #1f6feb; --accent: #4493f8;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 28px; background: var(--bg); color: var(--fg);
+         font: 15px/1.75 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif; }
+  main { max-width: 1240px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 20px; margin: 44px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 16px; margin: 24px 0 6px; }
+  .sub { color: var(--muted); margin: 0 0 18px; }
+  code { font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--head);
+         padding: 1px 5px; border-radius: 4px; }
+  pre { background: var(--head); border: 1px solid var(--border); border-radius: 6px; padding: 12px 14px;
+        overflow-x: auto; font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 14px; }
+  th, td { border: 1px solid var(--border); padding: 7px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--head); white-space: nowrap; }
+  .toc { background: var(--head); border: 1px solid var(--border); border-radius: 6px; padding: 10px 18px; }
+  .toc ol { margin: 4px 0; padding-left: 20px; }
+  .callout { border-left: 4px solid var(--accent); background: var(--head); padding: 10px 14px; margin: 14px 0;
+             border-radius: 0 6px 6px 0; }
+  .callout.warn { border-color: var(--warn); }
+  .callout.bad { border-color: var(--bad); }
+  .scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: 6px; margin: 12px 0; }
+  .caption { color: var(--muted); font-size: 13px; margin-top: -4px; }
+  /* 消息「气泡」 */
+  .msg { display: inline-block; margin: 2px 4px 2px 0; padding: 1px 8px; border-radius: 10px; border: 1px solid;
+         font: 12.5px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap; }
+  .msg.h { color: var(--accent); border-color: var(--box-bd); background: var(--box); }
+  .msg.a { color: var(--fg); border-color: var(--lane); background: var(--head); }
+  .msg.t { color: var(--ok); border-color: var(--ok); background: var(--ok-bg); }
+  .msg.s { color: var(--warn); border-color: var(--warn); background: var(--warn-bg); }
+  .msg.r { color: var(--bad); border-color: var(--bad); background: var(--bad-bg); }
+  .msg.gone { opacity: .45; text-decoration: line-through; }
+  /* SVG */
+  svg { display: block; font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif; }
+  svg text { fill: var(--fg); font-size: 12.5px; }
+  svg .lane-line { stroke: var(--lane); stroke-dasharray: 4 4; }
+  svg .lane-box { fill: var(--box); stroke: var(--box-bd); }
+  svg .lane-name { font-weight: 600; font-size: 13px; }
+  svg .lane-sub { fill: var(--muted); font-size: 11px; }
+  svg .arrow { stroke: var(--fg); stroke-width: 1.3; fill: none; }
+  svg .arrow.reply { stroke-dasharray: 5 4; }
+  svg .arrow.bad { stroke: var(--bad); }
+  svg .arrow.ok { stroke: var(--ok); }
+  svg .head { fill: var(--fg); }
+  svg .head.bad { fill: var(--bad); }
+  svg .head.ok { fill: var(--ok); }
+  svg .phase-band { fill: var(--phase-bg); }
+  svg .phase-text { font-weight: 600; font-size: 13px; }
+  svg .note-box { fill: var(--note-bg); stroke: var(--note-bd); }
+  svg .note-box.bad { fill: var(--bad-bg); stroke: var(--bad); }
+  svg .node { fill: var(--box); stroke: var(--box-bd); }
+  svg .node.term { fill: var(--head); stroke: var(--lane); }
+  svg .node.hook { fill: var(--warn-bg); stroke: var(--warn); }
+  svg .lbl { font-size: 12px; fill: var(--muted); }
+  svg .lbl.bad { fill: var(--bad); }
+  svg .lbl.ok { fill: var(--ok); }
+  svg .t-bold { font-weight: 600; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Demo：事件流怎么做到「断了能接上、换了实例也能接上」</h1>
+<p class="sub">
+  代码：<code>demo/sse-stream/sse_stream.py</code>（单文件，约 500 行）　·
+  运行：<code>.venv/bin/python demo/sse-stream/sse_stream.py</code>（不需要 API key，约 3 秒）<br>
+  姊妹篇：<code>demo/suspend-resume/README.html</code>（挂起与恢复）
+</p>
+
+<div class="toc">
+  <b>目录</b>
+  <ol>
+    <li><a href="#problem">要解决什么问题</a></li>
+    <li><a href="#basics">读懂这个 demo 需要的五个概念</a></li>
+    <li><a href="#idea">核心思路：一句话 + 三个要点</a></li>
+    <li><a href="#seq">完整时序图</a></li>
+    <li><a href="#snapshots">每一步各处有什么</a></li>
+    <li><a href="#why">几个「为什么」</a></li>
+    <li><a href="#code">代码导读</a></li>
+    <li><a href="#lab">动手实验</a></li>
+    <li><a href="#gap">demo 和真实系统的差别</a></li>
+  </ol>
+</div>
+
+<!-- ================================================================== -->
+<h2 id="problem">1. 要解决什么问题</h2>
+
+<p>
+  智能体的一轮对话可能跑几十分钟甚至几小时，过程中的每一步（模型在打字、调了哪个工具、需要谁审批）都要<b>实时</b>推给浏览器。
+  可这么长的时间里，两头都会出状况：
+</p>
+<table>
+  <tr><th>哪一头</th><th>会发生什么</th></tr>
+  <tr><td>浏览器</td><td>刷新页面、切到后台、断网、同时开好几个标签页</td></tr>
+  <tr><td>服务端</td><td>多实例部署，发消息的请求和看事件的请求落在不同实例；Redis 重启；实例停机发布</td></tr>
+</table>
+<p>所以这条事件流要做到：</p>
+<table>
+  <tr><th>要求</th><th>意思</th></tr>
+  <tr><td>不丢</td><td>断开期间产出的事件，重连后要补上</td></tr>
+  <tr><td>不重</td><td>已经显示过的，重连后不能再显示一遍（打字效果重复一段话很难看）</td></tr>
+  <tr><td>跨实例</td><td>A 实例上跑的 run，连在 B 实例上的浏览器也要看得到；B 停机了，换到 A 也能接着看</td></tr>
+  <tr><td>不拖垮服务</td><td>流可能挂几个小时、开很多条，不能把服务端的连接、内存耗光</td></tr>
+</table>
+<p>这个 demo 用最小的场景演示整个过程：<b>两个实例 A、B，用户在一个会话里说了两句话，中间经历了断网、Redis 重启、B 停机</b>。</p>
+
+<!-- ================================================================== -->
+<h2 id="basics">2. 读懂这个 demo 需要的五个概念</h2>
+
+<h3>① SSE：一个不关闭的 HTTP 响应</h3>
+<p>
+  SSE（Server-Sent Events）就是一个普通的 HTTP GET，只是服务端返回 <code>Content-Type: text/event-stream</code> 之后<b>不关闭响应</b>，
+  有新事件就往里写一段文本。每个事件叫一<b>帧</b>，帧之间用空行隔开：
+</p>
+<pre><code>id: 4
+event: tool.started
+data: {"thread_seq": 4, "run_id": "r1", "type": "tool.started", "data": {...}}
+
+: ping
+
+retry: 1000
+</code></pre>
+<table>
+  <tr><th>行</th><th>含义</th><th>本 demo 怎么用</th></tr>
+  <tr><td><code>id:</code></td><td>这一帧的编号。客户端重连时把<b>最后收到的 id</b> 放进请求头 <code>Last-Event-ID</code></td><td>写 <code>thread_seq</code>，就是续传游标</td></tr>
+  <tr><td><code>event:</code></td><td>事件类型</td><td><code>run.started</code>、<code>message.delta</code>、<code>tool.started</code>……</td></tr>
+  <tr><td><code>data:</code></td><td>内容</td><td>整个事件的 JSON</td></tr>
+  <tr><td><code>: ...</code></td><td>冒号开头是注释，客户端忽略</td><td>心跳（§6.5）</td></tr>
+  <tr><td><code>retry:</code></td><td>建议客户端隔多久重连（毫秒）</td><td>停机时发给浏览器（§6.8）</td></tr>
+</table>
+<p>
+  浏览器自带的 <code>EventSource</code> 会自动重连并带上 <code>Last-Event-ID</code>，但它设不了自定义请求头（放不了认证信息）。
+  所以 Atlas 前端用 <code>fetch</code> 自己解析帧、自己重连（<code>packages/chat-ui/src/lib/sse.ts</code>），本 demo 的 <code>Browser</code> 照它写。
+</p>
+
+<h3>② 创建和订阅是两个请求</h3>
+<table>
+  <tr><th>请求</th><th>做什么</th><th>返回</th></tr>
+  <tr><td><code>POST /threads/{id}/runs</code></td><td>发消息，把 run 交给执行器</td><td>立刻返回 <code>202 {run_id}</code>，不等它跑完</td></tr>
+  <tr><td><code>GET /threads/{id}/events</code></td><td>订阅这个会话的事件流</td><td>SSE，<b>永不自己结束</b>，可带 <code>Last-Event-ID</code> 续传</td></tr>
+</table>
+<p>
+  订阅的单位是<b>会话</b>而不是 run：一条流带着这个会话里所有 run 的事件，跨越多轮对话。为什么这么拆，见 <a href="#why-split">§6.1</a>。
+</p>
+
+<h3>③ 游标：会话内单调递增的 thread_seq</h3>
+<p>
+  每个事件发布时分到一个 <code>thread_seq</code>，同一个会话内从 1 开始严格递增。它写进帧的 <code>id</code>，浏览器记住<b>处理过的最大值</b>，
+  断线重连时放进 <code>Last-Event-ID</code>，服务端只发比它大的。浏览器这边也只认比它大的，小于等于的一律当重复丢掉。
+</p>
+
+<h3>④ Redis Stream：实例之间的中继</h3>
+<p>所有实例共用一个 Redis。每个会话一条 Stream（一个只能追加的日志）：</p>
+<table>
+  <tr><th>命令</th><th>谁用</th><th>做什么</th></tr>
+  <tr><td><code>XADD … MAXLEN n</code></td><td>执行器（发布事件）</td><td>追加一条；超过 n 条就把最早的裁掉</td></tr>
+  <tr><td><code>XRANGE</code></td><td>事件流（刚连上时）</td><td>读出流里现有的全部条目</td></tr>
+  <tr><td><code>XREAD BLOCK t</code></td><td>事件流（之后一直）</td><td>阻塞等新条目，最多等 t 毫秒；超时返回空，正好用来发心跳</td></tr>
+  <tr><td><code>INCR</code></td><td>执行器</td><td>分配 thread_seq（§6.2）</td></tr>
+</table>
+<p>run 在 A 上跑，事件写进 Redis；浏览器连在 B 上，B 从 Redis 读出来推给它。这就是「跨实例」。</p>
+
+<h3>⑤ 归档表：Postgres 里的那一份</h3>
+<p>
+  Redis 会裁剪、会重启丢数据，所以事件还要<b>归档</b>进 Postgres 的 <code>run_event</code> 表，主键是 <code>(thread_id, thread_seq)</code>。
+  归档不是每个事件写一次，而是在<b>检查点</b>（一批工具结果收齐时）和<b>一轮结束时</b>批量写，所以它比 Redis 滞后一点。
+  <code>message.delta</code>（打字效果的增量）不归档：回放历史时，正文由 <code>message.completed</code> 一次给全。
+</p>
+
+<!-- ================================================================== -->
+<h2 id="idea">3. 核心思路：一句话 + 三个要点</h2>
+
+<div class="callout">
+  <b>一句话：</b>事件发布时从共享计数器分到一个会话内单调递增的 <code>thread_seq</code>，写进 SSE 帧的 <code>id</code>；
+  事件先进 Redis Stream（实时、跨实例），关键事件随检查点归档进 Postgres（持久）。
+  浏览器记住处理到的最大 <code>thread_seq</code>，断线后带 <code>Last-Event-ID</code> 重连到<b>任意</b>实例，
+  服务端先从归档补、再从 Redis 接，按 <code>thread_seq</code> 拼成一条不重不漏的流。
+</div>
+
+<h3>要点 1：游标是会话级的 thread_seq，由共享计数器分配</h3>
+<p>
+  同一个会话可能有好几个生产者同时在写（并行委派的几个子 run），序号只能由 Redis 里的一个计数器分配。
+  Redis 重启后计数器没了，就用 <b>DB 水位</b>（归档里最大的 <code>thread_seq</code>）接着数，保证序号永远往上走。见 <a href="#why-seq">§6.2</a>。
+</p>
+
+<h3>要点 2：归档和 Redis 两段接力</h3>
+<table>
+  <tr><th></th><th>Redis Stream</th><th>Postgres 归档</th></tr>
+  <tr><td>新不新</td><td>最新，发布即到</td><td>滞后：检查点和一轮结束时才写</td></tr>
+  <tr><td>全不全</td><td>只留最近 MAXLEN 条，重启就没了</td><td>全，但不含 delta</td></tr>
+  <tr><td>能不能阻塞等新事件</td><td>能（<code>XREAD BLOCK</code>）</td><td>不能，只能轮询</td></tr>
+</table>
+<p>
+  重连时：先从归档读出所有 <code>&gt; 游标</code> 的事件，<b>读到哪，游标就推到哪</b>；再从 Redis 读 <code>&gt; 新游标</code> 的；之后阻塞等新事件。
+  两段谁也替代不了谁，见 <a href="#why-two">§6.3</a>。
+</p>
+
+<h3>要点 3：会话流永不自己结束，所以连接要管起来</h3>
+<table>
+  <tr><th>措施</th><th>防的是什么</th><th>见</th></tr>
+  <tr><td>心跳 <code>: ping</code></td><td>空闲连接被代理、负载均衡掐掉</td><td><a href="#why-ping">§6.5</a></td></tr>
+  <tr><td>每个实例的连接数闸门，超限 503</td><td>长连接把服务端资源耗光，拖慢所有请求</td><td><a href="#why-gate">§6.7</a></td></tr>
+  <tr><td>停机时发 <code>retry:</code> 后主动关流</td><td>实例停不下来</td><td><a href="#why-drain">§6.8</a></td></tr>
+</table>
+
+<!-- ================================================================== -->
+<h2 id="seq">4. 完整时序图</h2>
+<p>
+  参与者：<b>浏览器</b>（demo 里的 <code>Browser</code>）；两个 server 实例 <b>B</b> 和 <b>A</b>（每个都是真实的 HTTP 服务，跑在本进程的随机端口上）；
+  所有实例共用的 <b>Redis</b> 和 <b>Postgres</b>（内存模拟）。为了让「归档段」派上用场，demo 把 Redis 流的 MAXLEN 调成了 2。虚线箭头表示返回。
+</p>
+<div class="scroll"><div id="seq-main"></div></div>
+
+<!-- ================================================================== -->
+<h2 id="snapshots">5. 每一步各处有什么</h2>
+<table>
+  <tr><th>#</th><th>时刻</th><th>Redis 流（只留 2 条）</th><th>归档</th><th>浏览器游标</th><th>说明</th></tr>
+  <tr><td>1</td><td>浏览器处理完 #3，断网</td><td><code>#2 #3</code></td><td>无</td><td>3</td><td>#1 已经被裁出 Redis，但浏览器早就收过了</td></tr>
+  <tr><td>2</td><td>断网期间 A 产出到 #6</td><td><code>#5 #6</code></td><td><code>#1 #4 #5</code></td><td>3</td><td>检查点归档了 #1 #4 #5（delta 不归档）。<b>#4 只剩归档里那一份</b></td></tr>
+  <tr><td>3</td><td>网络恢复，<code>Last-Event-ID: 3</code></td><td>（不变）</td><td>（不变）</td><td>6</td><td>归档段 <code>#4 #5</code>，游标推到 5；Redis 段 <code>#6</code></td></tr>
+  <tr><td>4</td><td>第一轮结束</td><td><code>#8 #9</code></td><td><code>#1 #4 #5 #8 #9</code></td><td>9</td><td>先归档 #8 #9，再发布 #9 <code>run.finished</code>。流不关，空闲时只有心跳</td></tr>
+  <tr><td>5</td><td>Redis 重启</td><td>空，计数器也没了</td><td>（不变）</td><td>9</td><td>浏览器的游标还是有效的：它指向的是会话序号，不是 Redis 里的位置</td></tr>
+  <tr><td>6</td><td>第二轮产出 #10 #11</td><td><code>#10 #11</code></td><td>（不变）</td><td>11</td><td>计数器从 DB 水位 9 接着数</td></tr>
+  <tr><td>7</td><td>B 停机，浏览器重连到 A</td><td>（不变）</td><td>（不变）</td><td>11</td><td><code>Last-Event-ID: 11</code>：两段都没有更新的，直接实时</td></tr>
+  <tr><td>8</td><td>第二轮结束</td><td><code>#13 #14</code></td><td><code>… #10 #13 #14</code></td><td>14</td><td></td></tr>
+  <tr><td>9</td><td>新开一个标签页</td><td>（不变）</td><td>（不变）</td><td>14</td><td>没有游标：只回放归档里最近 3 条 <code>#10 #13 #14</code></td></tr>
+</table>
+<div class="callout">
+  第一个标签页从头到尾<b>一条没重、一条没漏</b>，中间换过两次连接、一次实例。
+  新标签页只拿到最近一轮的关键事件，没有打字增量，但正文由 <code>message.completed</code> 一次给全，界面是完整的。
+</div>
+
+<!-- ================================================================== -->
+<h2 id="why">6. 几个「为什么」</h2>
+
+<h3 id="why-split">6.1 为什么创建和订阅要拆成两个请求？</h3>
+<p>最直接的写法是 <code>POST /runs</code> 直接返回一个流，跑完就关。它扛不住这几件事：</p>
+<table>
+  <tr><th>情况</th><th>POST 直接返回流</th><th>拆成 POST + GET 流</th></tr>
+  <tr><td>刷新页面 / 断网</td><td>流断了，run 还在跑，但再也接不上：POST 不能重发（会变成第二条消息）</td><td>GET 可以随便重发，带游标接着收</td></tr>
+  <tr><td>多个标签页</td><td>只有发消息的那个标签页看得到</td><td>每个标签页各自订阅</td></tr>
+  <tr><td>多实例</td><td>run 必须在接 POST 的实例上跑，而且这个实例停机时流就断了</td><td>run 在哪跑无所谓，流可以连在任意实例</td></tr>
+  <tr><td>一轮跑完之后</td><td>流关了，下一轮、挂起期间子 run 的审批请求都看不到</td><td>会话流一直开着</td></tr>
+</table>
+
+<h3 id="why-seq">6.2 为什么游标是会话级的 thread_seq，而且必须由共享计数器分配？</h3>
+<ul>
+  <li><b>会话级</b>：一条流里有多个 run 的事件。如果用 run 内的序号当游标，两个 run 的序号都从 1 开始，重连时没法说「从哪里接着」。</li>
+  <li><b>共享计数器</b>：同一个会话可能同时有好几个生产者（并行委派的几个子 run 同时在写，可能还在不同实例上），各自在内存里数一定会撞号。</li>
+  <li><b>用 DB 水位初始化</b>：Redis 重启后计数器没了。如果从 0 重新数，新事件的序号全部小于浏览器的游标，
+    服务端按游标过滤掉、浏览器按游标当重复丢掉，<b>界面再也不更新，而且没有任何报错</b>（实验 2）。
+    唯一的报错出现在后面：归档时撞了主键。</li>
+  <li><b>必须原子</b>：「计数器不存在就用水位初始化」和「递增」之间不能有空隙，否则两个生产者可能各自初始化一次。真实系统用一段 Lua 脚本，demo 是单线程事件循环，天然原子。</li>
+</ul>
+
+<h3 id="why-two">6.3 为什么要「归档 + Redis」两段，只用一个不行吗？</h3>
+<table>
+  <tr><th>只用</th><th>问题</th></tr>
+  <tr><td>Redis</td><td>流有 MAXLEN，断开久一点，中间的事件就被裁掉了；Redis 重启更是全没了。
+    实验 1 里断网期间的 <code>#4 tool.started</code> 被裁掉，浏览器上那个工具调用<b>就不显示了，没有任何报错</b></td></tr>
+  <tr><td>Postgres</td><td>不能阻塞等新事件，只能轮询，实时性和数据库压力二选一；而且归档滞后，最新的那几条还不在里面</td></tr>
+</table>
+<p>
+  拼接的关键是<b>按 thread_seq 接，不按位置接</b>：归档读到 #5，Redis 就从 #5 之后读。
+  Redis 的 entry id 重启后会变，<code>thread_seq</code> 不会变，所以 Redis 重启后浏览器的游标依然有效。
+</p>
+<p>
+  为什么 delta 不归档：一个长会话的 delta 能有几十万条，绝大多数永远不会被回放；回放历史时正文由 <code>message.completed</code> 一次给全。
+  代价是断开太久（delta 已被裁出 Redis）时，那一段的打字效果没了，但正文最终是完整的。
+</p>
+
+<h3 id="why-endless">6.4 为什么 run.finished 之后流也不关？</h3>
+<p>
+  订阅的单位是会话，一轮结束了后面还有下一轮；更要紧的是挂起：父 run 挂起等子智能体时，父 run 自己不产出事件，
+  可子 run 的审批请求正发生在这段时间里（姊妹篇讲的挂起）。流要是跟着某个 run 的结束一起关，这些就都看不到了。
+</p>
+<p>
+  所以 <code>run.finished</code> 对浏览器的意思只是「这一轮完了，可以去取最终用量、刷新消息列表了」，不是「流结束」。
+  流被服务端关掉，一律当作意外：退避后带游标重连。
+</p>
+
+<h3 id="why-ping">6.5 为什么要心跳？</h3>
+<p>
+  nginx、云负载均衡一般会把一段时间（比如 60 秒）没有数据的连接当成死连接掐掉。智能体在想、在等审批的时候，可能几分钟没有事件。
+  所以 <code>XREAD BLOCK</code> 等到超时还没有新事件，就发一行 <code>: ping</code>。它是注释行，客户端解析时直接忽略。
+  Atlas 是 15 秒一次，demo 是 0.3 秒。
+</p>
+
+<h3 id="why-window">6.6 为什么没有游标的首连只回放最近 N 条？</h3>
+<p>
+  一个会话可以有几百轮、上万个事件，打开老会话时全量回放会把页面灌死；历史消息本来就走消息列表接口分页加载。
+  所以要区分两种情况：
+</p>
+<table>
+  <tr><th>请求</th><th>意思</th><th>服务端</th></tr>
+  <tr><td>不带 <code>Last-Event-ID</code></td><td>「我没有游标」</td><td>只回放最近 N 条（Atlas 500，demo 3）</td></tr>
+  <tr><td><code>Last-Event-ID: 0</code></td><td>「从头给我」</td><td>全量</td></tr>
+  <tr><td><code>Last-Event-ID: 11</code></td><td>「我处理到 11 了」</td><td>补 11 之后的缺口，不限量</td></tr>
+</table>
+<p>所以服务端的游标缺省值是 <code>None</code> 而不是 0，浏览器在没有游标时也<b>不带</b>这个请求头。缺省成 0 的后果见实验 3。</p>
+
+<h3 id="why-gate">6.7 为什么每个实例要有连接数闸门，而且要在路由里先查？</h3>
+<p>
+  每条流都要占服务端资源（真实系统里每条占一个 Redis 连接），而且一挂就是几个小时，一个用户开三个标签页就是三条。
+  不设上限的话，症状不是「第 N+1 个连不上」，而是连接池耗尽后<b>所有</b> HTTP 请求一起变慢，根因离症状很远。
+  所以超限时要明确返回 <code>503</code> + <code>Retry-After</code>，客户端退避重连。
+</p>
+<p>
+  <b>检查必须放在路由函数里</b>，在构造 <code>StreamingResponse</code> 之前。<code>StreamingResponse</code> 是先发出 <code>200</code> 响应头、再迭代生成器的：
+  在生成器里才检查、才抛异常，响应头早就发出去了，客户端拿到的是 <code>200</code> 加上一个被掐断的响应体（实验 4′）。这比 503 糟糕得多：
+</p>
+<ul>
+  <li>客户端以为连上了，把退避重置了，于是每 0.5 秒重试一次，而不是越来越慢；</li>
+  <li>服务端每次都打一份 <code>Exception in ASGI application</code> 的堆栈。</li>
+</ul>
+<p>
+  <b>Atlas 现在的 <code>stream/gate.py</code> 就是在生成器里检查的</b>，用真实的 <code>StreamGate</code> 实测，超限时客户端收到的是
+  <code>RemoteProtocolError: peer closed connection without sending complete message body</code>，而不是 503。
+</p>
+<p>
+  占用计数仍然放在生成器里（随流结束而释放），路由里只做检查。两者之间有一个很小的窗口，几个同时到达的请求可能一起通过，
+  所以这是一个软上限，用来防资源耗尽足够了。
+</p>
+
+<h3 id="why-drain">6.8 为什么停机时要主动关流？</h3>
+<p>
+  uvicorn 收到停机信号后，会等所有进行中的响应结束再退出。会话流永远不会自己结束，所以它会一直等到宽限期（K8s 的 <code>terminationGracePeriodSeconds</code>）用完、被强制杀掉。
+  这段时间里本该做的停机工作（比如把正在跑的 run 交接给别的实例）都排不上。
+</p>
+<p>
+  所以停机时先把实例标成 draining：新连接 503，负载均衡把它摘掉；已有的流在下一次醒来（最迟一个心跳周期）时发一行 <code>retry: 1000</code> 然后结束。
+  浏览器带游标重连，落到别的实例上，一条不丢。实验 5 去掉主动关流，B 停机从 0.3 秒变成 2 秒。
+</p>
+
+<h3 id="why-order">6.9 为什么 run.finished 要先落库再发布？</h3>
+<p>
+  浏览器收到 <code>run.finished</code> 后会立刻去取这一轮的最终用量。如果先发布后落库，它可能读到 <code>status=running</code>、<code>tokens=0</code>。
+  先落库再发布，就保证了「看到收尾事件，DB 一定已经是最终状态」。demo 里打印的「落库（归档 #8 #9）后再发布 #9」就是这条顺序。
+</p>
+
+<!-- ================================================================== -->
+<h2 id="code">7. 代码导读</h2>
+<table>
+  <tr><th>代码</th><th>作用</th><th>对应的真实代码（<code>agent-platform/services/agent/src/atlas_agent/</code> 下）</th></tr>
+  <tr><td><code>FakeRedis</code></td><td>会话事件流（XADD / XRANGE / XREAD BLOCK）和序号计数器</td><td><code>stream/relay.py</code> 的 <code>EventRelay</code></td></tr>
+  <tr><td><code>FakeArchive</code></td><td><code>run_event</code> 表：主键 <code>(thread_id, thread_seq)</code>，delta 不归档；DB 水位；首连窗口</td><td><code>repositories/run.py</code></td></tr>
+  <tr><td><code>SCRIPTS</code></td><td>假模型：按用户的话产出一串事件，<code>PAUSE</code> 处等 <code>main()</code> 放行</td><td>真实的模型和工具</td></tr>
+  <tr><td><code>Instance.create_run</code></td><td><code>POST /runs</code>：交给执行器，立刻 202</td><td><code>api/v1/threads.py</code> 的 <code>create_run</code></td></tr>
+  <tr><td><code>Instance.events</code></td><td><code>GET /events</code>：闸门检查（503），然后返回 <code>StreamingResponse</code></td><td><code>api/v1/threads.py</code> 的 <code>stream_thread_events</code></td></tr>
+  <tr><td><code>Instance.execute</code></td><td>执行器：分配序号、发布、检查点归档、先落库再发布终态</td><td><code>executor/inprocess.py</code></td></tr>
+  <tr><td><code>Instance.stream</code></td><td>事件流：首连窗口、归档段、Redis 段、实时 tail、心跳、停机时关流</td><td><code>services/run.py</code> 的 <code>stream_thread</code> + <code>EventRelay.tail_thread</code></td></tr>
+  <tr><td><code>Instance.shutdown</code></td><td>标成 draining，等 uvicorn 退出</td><td><code>main.py</code> 的停机处理 + <code>stream/gate.py</code> 的 <code>drain</code></td></tr>
+  <tr><td><code>LoadBalancer</code></td><td>挑第一个没在停机的实例</td><td>K8s Service</td></tr>
+  <tr><td><code>Browser</code></td><td>解析帧、维护游标、去重、退避重连、把事件归约成界面</td><td><code>packages/chat-ui/src/lib/sse.ts</code> + <code>run-reducer.ts</code></td></tr>
+  <tr><td><code>main</code></td><td>按剧本走一遍：断网 → 重连 → Redis 重启 → B 停机 → 新标签页</td><td>—</td></tr>
+</table>
+
+<h3>正常运行的输出</h3>
+<pre><code>== 浏览器打开会话：事件流连到 B ==
+  [B] GET /events 没有游标，只回放最近 3 条（#0 之后） → 归档段：无；Redis 段：无；之后实时
+
+== 第一轮：用户发消息，POST 落到 A；浏览器处理完 #3 时断网 ==
+  [A] POST /runs「北京天气怎么样？」→ 202 run_id=r1
+  [Redis] 没有 t1 的序号计数器 → 从 0 接着数（DB 水位 0）
+  [A·r1] 发布 #1 run.started
+  [浏览器] ← #1 run.started
+  [A·r1] 发布 #2 message.delta
+  [浏览器] ← #2 message.delta 我查一下
+  [A·r1] 发布 #3 message.delta
+  [浏览器] ← #3 message.delta 天气。
+  [浏览器] 网络断了（已处理到 #3）
+  [A·r1] 发布 #4 tool.started
+  [A·r1] 发布 #5 tool.completed
+  [A·r1] 检查点：归档 #1 #4 #5，delta 不归档
+  [A·r1] 发布 #6 message.delta
+
+== 网络恢复 ==
+  [B] GET /events Last-Event-ID=3 → 归档段：#4 #5；Redis 段：#6；之后实时
+  [浏览器] ← #4 tool.started get_weather
+  [浏览器] ← #5 tool.completed 晴，25 度
+  [浏览器] ← #6 message.delta 北京今天晴，
+  [A·r1] 发布 #7 message.delta
+  [浏览器] ← #7 message.delta 25 度。
+  [A·r1] 发布 #8 message.completed
+  [浏览器] ← #8 message.completed 我查一下天气。北京今天晴，25 度。
+  [A·r1] 落库（归档 #8 #9）后再发布 #9
+  [浏览器] ← #9 run.finished
+  [浏览器] ← 心跳（: ping），之后不再打印
+
+== Redis 重启：事件流和序号计数器都丢了 ==
+
+== 第二轮：POST 落到 A；模型思考时 B 停机 ==
+  [A] POST /runs「谢谢」→ 202 run_id=r2
+  [Redis] 没有 t1 的序号计数器 → 从 9 接着数（DB 水位 9）
+  [A·r2] 发布 #10 run.started
+  [浏览器] ← #10 run.started
+  [A·r2] 发布 #11 message.delta
+  [浏览器] ← #11 message.delta 不客气，
+  [B] 停机：给浏览器发 retry 后关闭事件流
+  [浏览器] ← retry: 1000
+  [浏览器] 连接被服务端关闭
+  [B] 已停机，用时 0.3 秒
+  [A] GET /events Last-Event-ID=11 → 归档段：无；Redis 段：无；之后实时
+  [A·r2] 发布 #12 message.delta
+  [浏览器] ← #12 message.delta 还有什么要查的吗？
+  [A·r2] 发布 #13 message.completed
+  [浏览器] ← #13 message.completed 不客气，还有什么要查的吗？
+  [A·r2] 落库（归档 #10 #13 #14）后再发布 #14
+  [浏览器] ← #14 run.finished
+
+== 新开一个标签页（没有游标）==
+  [A] GET /events 没有游标，只回放最近 3 条（#9 之后） → 归档段：#10 #13 #14；Redis 段：无；之后实时
+  [标签页2] ← #10 run.started
+  [标签页2] ← #13 message.completed 不客气，还有什么要查的吗？
+  [标签页2] ← #14 run.finished
+
+== 最终界面 ==
+  浏览器（游标 #14）
+    r1 [已结束] 工具：get_weather ✓  正文：'我查一下天气。北京今天晴，25 度。'
+    r2 [已结束] 工具：无  正文：'不客气，还有什么要查的吗？'
+  标签页2（游标 #14）
+    r2 [已结束] 工具：无  正文：'不客气，还有什么要查的吗？'
+  [A] 已停机，用时 0.1 秒</code></pre>
+<p>
+  留意几点：断网期间 A 照常发布，浏览器重连时的那一行说清了补发从哪来（归档段 <code>#4 #5</code>，Redis 段 <code>#6</code>）；
+  <code>#9 run.finished</code> 之后流没有关；Redis 重启后序号从 9 接着数；B 停机后浏览器换到 A，<code>Last-Event-ID: 11</code> 正好接上。
+  停机用时每次会有零点几秒的出入。
+</p>
+
+<!-- ================================================================== -->
+<h2 id="lab">8. 动手实验</h2>
+<p>每个实验只改一两处，结果都是实际运行得到的。</p>
+<table>
+  <tr><th>#</th><th>改动</th><th>观察到的现象</th><th>说明了什么</th></tr>
+  <tr>
+    <td>1</td>
+    <td><code>Instance.stream</code> 里把 <code>archived = self.archive.after(thread_id, cursor)</code> 改成 <code>archived = []</code>（只读 Redis）</td>
+    <td>重连那一行变成「归档段：无；Redis 段：#5 #6」，<code>#4 tool.started</code> 没收到。最终界面上第一轮的工具是「无」，全程不报错</td>
+    <td><a href="#why-two">§6.3</a>：Redis 有 MAXLEN，断开期间的事件可能已经被裁掉</td>
+  </tr>
+  <tr>
+    <td>2</td>
+    <td><code>FakeRedis.next_thread_seq</code> 里把 <code>self.counters[thread_id] = floor</code> 改成 <code>= 0</code>（Redis 重启后从 0 数）</td>
+    <td>第二轮的事件序号是 #1 #2 #3……，浏览器一条都没收到（打印「等了 3 秒也没等到：浏览器收到 #11」）；
+      第二轮结束时 A 打印「归档失败：主键冲突 (t1, 1)」；新标签页只看到第一轮</td>
+    <td><a href="#why-seq">§6.2</a>：序号倒退的表现是界面静默不更新，唯一的报错在归档那里</td>
+  </tr>
+  <tr>
+    <td>3</td>
+    <td><code>Instance.stream</code> 里把 <code>cursor = self.archive.window_floor(thread_id, REPLAY_WINDOW)</code> 改成 <code>cursor = 0</code></td>
+    <td>新标签页回放了整个会话的归档：<code>#1 #4 #5 #8 #9 #10 #13 #14</code></td>
+    <td><a href="#why-window">§6.6</a>：这里只有 8 条，真实的老会话是上万条</td>
+  </tr>
+  <tr>
+    <td>4</td>
+    <td>把 <code>SSE_LIMIT</code> 改成 <code>1</code></td>
+    <td>新标签页连 A 时收到 <code>503，Retry-After=1</code>，按 0.5、1、2 秒退避重试了 3 次</td>
+    <td><a href="#why-gate">§6.7</a>：超限明确拒绝，客户端退避</td>
+  </tr>
+  <tr>
+    <td>4′</td>
+    <td>同 4，并把 <code>events</code> 路由里的闸门检查挪进 <code>stream()</code> 开头，改成 <code>raise RuntimeError("事件流已满")</code>（Atlas 现在的写法）</td>
+    <td>新标签页收到的不是 503，而是「peer closed connection without sending complete message body」；
+      3 秒里重试了 6 次（退避没有增长）；服务端打了 6 次 <code>Exception in ASGI application</code></td>
+    <td><a href="#why-gate">§6.7</a>：响应头先发、生成器后跑，在生成器里拒绝已经来不及了</td>
+  </tr>
+  <tr>
+    <td>5</td>
+    <td>删掉 <code>Instance.stream</code> 里 <code>if self.draining:</code> 那一段（停机时不主动关流）</td>
+    <td>B 停机用时从 0.3 秒变成 2.2 秒；uvicorn 打印「Cancel 1 running task(s), timeout graceful shutdown exceeded」；
+      浏览器收到的是断开的连接，而不是 <code>retry:</code>。之后照样带游标重连到 A，没丢事件</td>
+    <td><a href="#why-drain">§6.8</a>：游标保住了数据，但停机被拖到宽限期用完；真实系统里这段时间本该用来交接 run</td>
+  </tr>
+</table>
+
+<!-- ================================================================== -->
+<h2 id="gap">9. demo 和真实系统的差别</h2>
+<table>
+  <tr><th>方面</th><th>demo</th><th>真实系统</th></tr>
+  <tr><td>Redis / Postgres</td><td>内存模拟</td><td>真实的 Redis Stream 和 <code>run_event</code> 表</td></tr>
+  <tr><td>序号分配的原子性</td><td>单线程事件循环，天然原子</td><td>一段 Lua 脚本：不存在就用水位初始化，然后 INCR</td></tr>
+  <tr><td>参数</td><td>MAXLEN 2，首连窗口 3，心跳 0.3 秒，闸门 10</td><td>MAXLEN 10000（近似裁剪），首连窗口 500，心跳 15 秒，闸门 200</td></tr>
+  <tr><td>事件种类</td><td>7 种</td><td>30 多种（审批、子智能体、用量、上下文压缩……）；子 run 的事件也进同一条会话流，用 <code>depth=1</code> 区分</td></tr>
+  <tr><td>检查点</td><td>工具结果收齐时归档</td><td>同样的时机，但消息、事件归档、序号在一个事务里写，并且校验租约（防止接管者和假死复活的旧实例双写）</td></tr>
+  <tr><td>数据库连接</td><td>无</td><td>流开始前一次读完归档，然后<b>马上归还连接</b>：流可以挂几个小时，不还的话每个观看者占死一条</td></tr>
+  <tr><td>鉴权</td><td>无</td><td>构造流之前先校验会话归属，让 404 以 JSON 返回，而不是变成一个 200 的空流</td></tr>
+  <tr><td>客户端</td><td>Python，照 <code>sse.ts</code> 写</td><td>TypeScript 的 <code>sse.ts</code> + <code>run-reducer.ts</code>；连续失败 6 次后放弃</td></tr>
+  <tr><td>停机</td><td><code>main()</code> 手动调用</td><td>SIGTERM 触发：事件流 drain，同时把正在跑的 run 交接出去</td></tr>
+  <tr><td>闸门检查的位置</td><td>路由里先查，超限 503</td><td>在生成器里检查，超限时客户端拿到 200 + 断流（<a href="#why-gate">§6.7</a>）</td></tr>
+</table>
+
+</main>
+
+<script>
+/* 极简时序图渲染：用数据描述参与者和步骤，生成 SVG。改图只改数据，不用算坐标。
+   步骤类型：
+     {phase: "标题"}                                   阶段色带
+     {from, to, text, reply?, cls?}                     消息箭头（reply = 虚线返回）
+     {self: lane, text}                                 自调用（自己内部的处理）
+     {note: [laneA, laneB], text, cls?}                 便签（text 可用 \n 换行） */
+const SVG_NS = "http://www.w3.org/2000/svg";
+let seqCount = 0;
+
+function el(tag, attrs, text) {
+  const node = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) node.setAttribute(k, v);
+  if (text != null) node.textContent = text;
+  return node;
+}
+
+function renderSeq(container, spec) {
+  const id = "s" + (++seqCount);
+  const laneW = spec.laneWidth || 180, left = 100, lineH = 16;
+  const x = {};
+  spec.lanes.forEach((l, i) => { x[l.id] = left + i * laneW; });
+  const lastLane = spec.lanes[spec.lanes.length - 1].id;
+  const width = left * 2 + (spec.lanes.length - 1) * laneW;
+  const svg = el("svg", {width, role: "img"});
+  const defs = el("defs");
+  for (const cls of ["", "bad", "ok"]) {
+    const m = el("marker", {id: `${id}-ah${cls}`, viewBox: "0 0 10 10", refX: 9, refY: 5,
+                            markerWidth: 8, markerHeight: 8, orient: "auto-start-reverse"});
+    m.appendChild(el("path", {class: "head " + cls, d: "M0,0 L10,5 L0,10 z"}));
+    defs.appendChild(m);
+  }
+  svg.appendChild(defs);
+  const back = el("g"), front = el("g");
+  svg.append(back, front);
+
+  // 参与者
+  for (const l of spec.lanes) {
+    front.appendChild(el("rect", {class: "lane-box", x: x[l.id] - 78, y: 10, width: 156, height: 46, rx: 6}));
+    front.appendChild(el("text", {class: "lane-name", x: x[l.id], y: 30, "text-anchor": "middle"}, l.name));
+    if (l.sub) front.appendChild(el("text", {class: "lane-sub", x: x[l.id], y: 47, "text-anchor": "middle"}, l.sub));
+  }
+
+  let y = 80;
+  for (const s of spec.steps) {
+    if (s.phase) {
+      back.appendChild(el("rect", {class: "phase-band", x: 0, y: y, width, height: 26}));
+      front.appendChild(el("text", {class: "phase-text", x: 12, y: y + 18}, s.phase));
+      y += 44;
+    } else if (s.note) {
+      const lines = s.text.split("\n");
+      const xs = s.note.map(n => x[n]);
+      const x0 = Math.min(...xs) - 80, x1 = Math.max(...xs) + 80;
+      const h = lines.length * lineH + 12;
+      front.appendChild(el("rect", {class: "note-box " + (s.cls || ""), x: x0, y, width: x1 - x0, height: h, rx: 4}));
+      lines.forEach((t, i) => front.appendChild(el("text", {x: x0 + 10, y: y + 18 + i * lineH}, t)));
+      y += h + 16;
+    } else if (s.self) {
+      const sx = x[s.self];
+      const onLeft = s.self === lastLane;
+      const dx = onLeft ? -28 : 28;
+      const lines = s.text.split("\n");
+      front.appendChild(el("path", {class: "arrow " + (s.cls || ""), d: `M${sx},${y} L${sx + dx},${y} L${sx + dx},${y + 14} L${sx + 2 * Math.sign(dx)},${y + 14}`,
+                                    "marker-end": `url(#${id}-ah${s.cls || ""})`}));
+      lines.forEach((t, i) => front.appendChild(el("text", {
+        x: sx + dx + (onLeft ? -6 : 6), y: y + 12 + i * lineH, "text-anchor": onLeft ? "end" : "start"}, t)));
+      y += 22 + lines.length * lineH;
+    } else {
+      const x1 = x[s.from], x2 = x[s.to];
+      const lines = s.text.split("\n");
+      lines.forEach((t, i) => front.appendChild(el("text", {
+        x: (x1 + x2) / 2, y: y + i * lineH, "text-anchor": "middle"}, t)));
+      const ay = y + (lines.length - 1) * lineH + 8;
+      const end = x2 + (x2 > x1 ? -2 : 2);
+      front.appendChild(el("path", {class: "arrow " + (s.reply ? "reply " : "") + (s.cls || ""),
+                                    d: `M${x1},${ay} L${end},${ay}`, "marker-end": `url(#${id}-ah${s.cls || ""})`}));
+      y = ay + 26;
+    }
+  }
+  const height = y + 10;
+  for (const l of spec.lanes) {
+    back.appendChild(el("line", {class: "lane-line", x1: x[l.id], y1: 56, x2: x[l.id], y2: height}));
+  }
+  svg.setAttribute("height", height);
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  container.appendChild(svg);
+}
+
+renderSeq(document.getElementById("seq-main"), {
+  laneWidth: 200,
+  lanes: [
+    {id: "web", name: "浏览器", sub: "Browser（照 sse.ts 写）"},
+    {id: "b", name: "实例 B"},
+    {id: "a", name: "实例 A"},
+    {id: "redis", name: "Redis", sub: "事件流 · 序号计数器"},
+    {id: "pg", name: "Postgres", sub: "run_event 归档"},
+  ],
+  steps: [
+    {phase: "开始：浏览器打开会话，事件流连到 B"},
+    {from: "web", to: "b", text: "GET /threads/t1/events（没有游标）"},
+    {from: "b", to: "pg", text: "最近 3 条？（现在没有）"},
+    {from: "b", to: "redis", text: "XRANGE，然后 XREAD BLOCK 等新事件"},
+    {from: "b", to: "web", text: "200 text/event-stream（不关闭）", reply: true},
+
+    {phase: "第一轮：POST 落到 A"},
+    {from: "web", to: "a", text: "POST /threads/t1/runs「北京天气怎么样？」"},
+    {from: "a", to: "web", text: "202 {run_id: r1}，不等它跑完", reply: true},
+    {from: "a", to: "redis", text: "INCR 分到 #1 → XADD #1 run.started"},
+    {from: "redis", to: "b", text: "XREAD 返回 #1", reply: true},
+    {from: "b", to: "web", text: "id: 1 / event: run.started / data: {...}"},
+    {note: ["web", "redis"], text: "#2 #3 message.delta 同理：A 写 Redis，B 读出来推给浏览器。"},
+    {self: "web", text: "处理完 #3，网络断了", cls: "bad"},
+    {from: "a", to: "redis", text: "XADD #4 tool.started、#5 tool.completed"},
+    {from: "a", to: "pg", text: "检查点：归档 #1 #4 #5（delta 不归档）"},
+    {from: "a", to: "redis", text: "XADD #6 message.delta"},
+    {note: ["redis", "pg"], text: "Redis 流只留最近 2 条：#5 #6。\n#4 只剩归档里那一份。"},
+
+    {phase: "网络恢复：带游标重连"},
+    {from: "web", to: "b", text: "GET /events　Last-Event-ID: 3"},
+    {from: "b", to: "pg", text: "归档里 > #3 的？"},
+    {from: "pg", to: "b", text: "#4 #5 → 游标推到 5", reply: true},
+    {from: "b", to: "redis", text: "Redis 里 > #5 的？"},
+    {from: "redis", to: "b", text: "#6", reply: true},
+    {from: "b", to: "web", text: "#4 #5 #6，之后实时", cls: "ok"},
+    {from: "a", to: "redis", text: "#7 message.delta、#8 message.completed"},
+    {from: "a", to: "pg", text: "先落库：归档 #8 #9"},
+    {from: "a", to: "redis", text: "再发布 #9 run.finished"},
+    {from: "b", to: "web", text: "#7 #8 #9"},
+    {from: "b", to: "web", text: ": ping（空闲时的心跳）"},
+    {note: ["web", "a"], text: "一轮结束了，流不关：后面还有下一轮。"},
+
+    {phase: "Redis 重启，然后第二轮"},
+    {self: "redis", text: "重启：事件流和计数器都丢了", cls: "bad"},
+    {from: "web", to: "a", text: "POST /runs「谢谢」→ 202 r2"},
+    {from: "a", to: "pg", text: "DB 水位？"},
+    {from: "pg", to: "a", text: "9", reply: true},
+    {from: "a", to: "redis", text: "计数器不在 → 从 9 接着数：XADD #10 #11"},
+    {from: "b", to: "web", text: "#10 #11"},
+
+    {phase: "B 停机：主动关流，浏览器换到 A"},
+    {self: "b", text: "draining：新连接 503，负载均衡摘掉 B", cls: "bad"},
+    {from: "b", to: "web", text: "retry: 1000，然后关闭响应"},
+    {from: "web", to: "a", text: "0.5 秒后重连：GET /events　Last-Event-ID: 11"},
+    {from: "a", to: "web", text: "归档、Redis 都没有 > #11 的 → 直接实时", reply: true, cls: "ok"},
+    {from: "a", to: "web", text: "#12 #13 #14（A 自己产出，也经 Redis 读回来）"},
+    {note: ["web", "pg"], text: "浏览器换了两次连接、一次实例，经历了一次 Redis 重启，\n收到的事件一条没重、一条没漏。"},
+  ],
+});
+</script>
+</body>
+</html>

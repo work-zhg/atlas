@@ -9,7 +9,7 @@ import { ThreadConversation, type ConversationStreamState } from "@atlas/chat-ui
 import { useAgents } from "@/api/agents";
 import { useCreateThread, useThread, useThreads } from "@/api/threads";
 import { Icon } from "@/components/Icon";
-import { ThreadList } from "./ThreadList";
+import { appName, ThreadList } from "./ThreadList";
 import type { ContextUsageData } from "@atlas/chat-ui/src/lib/events";
 
 import { ContextMeter } from "./ContextMeter";
@@ -84,6 +84,11 @@ export function ChatWorkbench({ threadId }: { threadId?: string }) {
           key={threadId}
           threadId={threadId}
           onStreamState={onStreamState}
+          // 业务应用建的会话只读：续聊要回到那个应用，不能绕过它的流程状态（内网身份传递 §7.3）
+          readOnly={!!agent?.source_app}
+          readOnlyHint={
+            agent?.source_app && `这个会话来自 ${appName(agent.source_app)}，请回到 ${appName(agent.source_app)} 里继续`
+          }
           headerExtra={
             agent && (
               <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>

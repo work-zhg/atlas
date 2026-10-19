@@ -1,0 +1,18 @@
+category: eng
+tags: [eng, fast, approval, resume]
+instruction: |
+  这是一次 shell 并行执行的测试：必须用 execute 工具执行下面三条命令，不要用文件工具直接写 effects.log。
+  请在同一步里并行发起这三个 execute 调用（一起发出，不要合并成一条命令），
+  全部执行完后告诉我 effects.log 的内容：
+    echo A >> effects.log
+    echo B >> effects.log
+    echo C >> effects.log
+  每条命令只执行一次，不要重复执行。
+# 审批晚 3 秒才批：执行挂起后再续跑，检查续跑时不会重复执行已完成的命令
+approval_policy: delay:3
+expect:
+  - desc: execute 经过审批（挂起 / 续跑路径生效）
+    gate: false
+    metric: approvals
+    count: ">=3"
+budget: {wall_s: 600}

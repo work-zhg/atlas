@@ -13,9 +13,9 @@ from uuid import uuid4
 
 import httpx
 import pytest
-from atlas_engine.contracts import InvalidSpec
-from atlas_server.domain.spec import KnowledgeSpec
-from atlas_server.providers.knowledge import (
+from atlas_agent.domain.spec import KnowledgeSpec
+from atlas_agent.outbound import CallIdentity, use_identity
+from atlas_agent.providers.knowledge import (
     KnowledgeClient,
     KnowledgeUnavailable,
     format_context,
@@ -23,7 +23,8 @@ from atlas_server.providers.knowledge import (
     mcp_server_entry,
     sign_mcp_token,
 )
-from atlas_server.schemas.agent import AgentSpecIn
+from atlas_agent.schemas.agent import AgentSpecIn
+from atlas_engine.contracts import InvalidSpec
 
 RECORDS = [
     {
@@ -42,7 +43,7 @@ def _client(seen: list[dict[str, Any]], status: int = 200) -> KnowledgeClient:
             {
                 "path": request.url.path,
                 "body": json.loads(request.content),
-                "token": request.headers.get("x-internal-token"),
+                "headers": dict(request.headers),
             }
         )
         if status != 200:
@@ -51,7 +52,7 @@ def _client(seen: list[dict[str, Any]], status: int = 200) -> KnowledgeClient:
             return httpx.Response(200, json={"data": [{"id": "ds-ok"}]})
         return httpx.Response(200, json={"records": RECORDS})
 
-    return KnowledgeClient("http://kb:8040", "tok", transport=httpx.MockTransport(handler))
+    return KnowledgeClient("http://kb:8040", "s3cret", transport=httpx.MockTransport(handler))
 
 
 def test_spec_snapshot_and_validation() -> None:
@@ -93,52 +94,68 @@ def test_format_context() -> None:
 async def test_client_and_tool() -> None:
     seen: list[dict[str, Any]] = []
     k = KnowledgeSpec(dataset_ids=("d1",), mode="tool", top_k=2, score_threshold=0.3)
-    tool = make_knowledge_tool(_client(seen), k, names=None, source_ref="thread:x", actor=None)
+    tool = make_knowledge_tool(_client(seen), k, names=None, source_ref="thread:x")
     # ★ 库 id 不在参数里
     assert set(tool.args) == {"query"}
-    text = await tool.ainvoke({"query": "退款"})
+    # 内网免令牌：带这一轮 run 的身份请求头（按谁判 = auth-uid，内网身份传递 §8）
+    uid, auth_uid = uuid4(), uuid4()
+    use_identity(CallIdentity(uid=uid, auth_uid=auth_uid))
+    try:
+        text = await tool.ainvoke({"query": "退款"})
+    finally:
+        use_identity(None)
     assert "退款七天内可申请" in text
-    body = seen[0]["body"]
-    assert seen[0]["token"] == "tok" and body["dataset_ids"] == ["d1"]
+    body, headers = seen[0]["body"], seen[0]["headers"]
+    assert "x-internal-token" not in headers and "actor" not in body
+    assert headers["x-uid"] == str(uid) and headers["x-auth-uid"] == str(auth_uid)
+    assert headers["x-caller-app"] == "atlas" and body["dataset_ids"] == ["d1"]
     assert (
         body["retrieval_config"]["top_k"] == 2
         and body["retrieval_config"]["score_threshold_enabled"]
     )
 
-    broken = make_knowledge_tool(_client([], status=500), k, names=None, source_ref="x", actor=None)
+    broken = make_knowledge_tool(_client([], status=500), k, names=None, source_ref="x")
     assert "暂时不可用" in await broken.ainvoke({"query": "退款"})
     with pytest.raises(KnowledgeUnavailable):
-        await _client([], status=500).retrieve(k, "q", source="agent", source_ref=None, actor=None)
+        await _client([], status=500).retrieve(k, "q", source="agent", source_ref=None)
 
 
 def test_mcp_token_matches_knowledge_service() -> None:
     from atlas_knowledge.api.mcp import TokenInvalid, verify_token
 
     thread = uuid4()
-    token = sign_mcp_token("s3cret", dataset_ids=["d1", "d2"], thread_id=thread, actor=None)
+    token = sign_mcp_token("s3cret", dataset_ids=["d1", "d2"], thread_id=thread, auth_uid=None)
     claims = verify_token("s3cret", token)
     assert claims["d"] == ["d1", "d2"] and claims["t"] == str(thread)
     with pytest.raises(TokenInvalid):
         verify_token("other", token)
 
-    entry = mcp_server_entry(
-        _client([]), KnowledgeSpec(dataset_ids=("d1",), mode="tool"), thread_id=thread, actor=None
-    )
+    # u = 按谁判（auth-uid），o = 发起人（只进检索记录）—— 取自这一轮 run 的出站身份
+    uid, auth_uid = uuid4(), uuid4()
+    use_identity(CallIdentity(uid=uid, auth_uid=auth_uid))
+    try:
+        entry = mcp_server_entry(
+            _client([]), KnowledgeSpec(dataset_ids=("d1",), mode="tool"), thread_id=thread
+        )
+    finally:
+        use_identity(None)
     assert (
         entry["url"] == "http://kb:8040/mcp/"
         and entry["headers"][0]["name"] == "X-Atlas-Knowledge-Token"
     )
+    claims = verify_token("s3cret", entry["headers"][0]["value"])
+    assert claims["u"] == str(auth_uid) and claims["o"] == str(uid)
 
 
 async def test_agent_save_checks_new_bindings(monkeypatch: pytest.MonkeyPatch) -> None:
-    from atlas_server.auth.principal import Principal
-    from atlas_server.errors import InvalidReference
-    from atlas_server.services import agent as agent_mod
+    from atlas_agent.auth.principal import Principal
+    from atlas_agent.errors import InvalidReference
+    from atlas_agent.services import agent as agent_mod
 
     seen: list[dict[str, Any]] = []
     monkeypatch.setattr(agent_mod, "make_knowledge_client", lambda _s: _client(seen))
     svc = agent_mod.AgentService(session=None, settings=object())  # type: ignore[arg-type]
-    p = Principal(kind="user", owner_id=uuid4(), operations=frozenset({"agent:create"}))
+    p = Principal(uid=uuid4(), operations=frozenset({"agent:create"}))
 
     def spec(*ids: str) -> AgentSpecIn:
         return AgentSpecIn.model_validate(
@@ -163,7 +180,7 @@ def test_context_shows_title_path() -> None:
 
 async def test_client_propagates_trace(monkeypatch: pytest.MonkeyPatch) -> None:
     """检索请求带 traceparent：知识库那边的 span 挂在 atlas.knowledge.retrieve 下。"""
-    import atlas_server.providers.knowledge as mod
+    import atlas_agent.providers.knowledge as mod
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -179,10 +196,10 @@ async def test_client_propagates_trace(monkeypatch: pytest.MonkeyPatch) -> None:
         headers.append(request.headers.get("traceparent"))
         return httpx.Response(200, json={"records": RECORDS, "retrieval_id": "r-1"})
 
-    client = KnowledgeClient("http://kb", "tok", transport=httpx.MockTransport(handler))
+    client = KnowledgeClient("http://kb", transport=httpx.MockTransport(handler))
     k = KnowledgeSpec(dataset_ids=("d1",), mode="auto")
     with provider.get_tracer("test").start_as_current_span("run") as run:
-        await client.retrieve(k, "退款", source="agent", source_ref=None, actor=None)
+        await client.retrieve(k, "退款", source="agent", source_ref=None)
 
     span = next(s for s in exporter.get_finished_spans() if s.name == "atlas.knowledge.retrieve")
     assert span.parent is not None and span.parent.span_id == run.get_span_context().span_id

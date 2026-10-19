@@ -85,7 +85,9 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
             <Avatar style={{ background: "#14b8a6" }}>{me.user.name.slice(-1)}</Avatar>
             <div>
               <div style={{ color: "#eef2f8", fontSize: 13, fontWeight: 600 }}>{me.user.name}</div>
-              <div style={{ color: "#8592a8", fontSize: 11 }}>{me.user.account}</div>
+              <div style={{ color: "#8592a8", fontSize: 11 }}>
+                {me.user.account} · {me.tenant.name}
+              </div>
             </div>
           </Link>
           <Button type="text" size="small" onClick={logout} style={{ color: "#8592a8", marginTop: 4 }}>

@@ -15,13 +15,13 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
+from atlas_agent.domain.events import EventType, TraceEvent
+from atlas_agent.domain.spec import CliSpec, KnowledgeSpec
+from atlas_agent.host.runtime import HostRuntime
+from atlas_agent.providers.pods import PodEndpoint
 from atlas_bridge.app import BridgeApp
 from atlas_bridge.config import BridgeConfig
 from atlas_bridge.testing.fake_agent import Script
-from atlas_server.domain.events import EventType, TraceEvent
-from atlas_server.domain.spec import CliSpec, KnowledgeSpec
-from atlas_server.host.runtime import HostRuntime
-from atlas_server.providers.pods import PodEndpoint
 
 TOKEN = "tok-" + "y" * 40
 
@@ -101,6 +101,9 @@ def prepared(
         thread_id=thread.id,
         start_seq=0,
         base_depth=0,
+        takeover=None,
+        acp_bridge_instance=None,
+        acp_acked_seq=0,
     )
 
 

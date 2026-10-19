@@ -16,8 +16,8 @@ async def client(storage) -> AsyncIterator[httpx.AsyncClient]:  # type: ignore[n
     async with httpx.AsyncClient(transport=transport, base_url="http://cfg") as c:
         yield c
 
-ALICE = {"X-User-Id": "alice"}
-BOB = {"X-User-Id": "bob"}
+ALICE = {"X-Uid": "alice"}
+BOB = {"X-Uid": "bob"}
 
 
 async def test_personal_instructions_are_per_user(client: httpx.AsyncClient) -> None:

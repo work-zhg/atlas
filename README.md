@@ -19,7 +19,7 @@
 flowchart LR
   web["web · Next.js 15<br/>会话工作台 · 事件归约"]
 
-  subgraph server["server · atlas_server（FastAPI）"]
+  subgraph server["server · atlas_agent（FastAPI）"]
     direction LR
     api["api/v1<br/>agents · threads · runs"]
     services["services/<br/>幂等 · 会话串行锁"]
@@ -200,14 +200,14 @@ flowchart LR
 
 ## 目录结构
 
-仓库里有三个**平级的产品**：Agent 平台（Atlas）、用户中心、AI TeamFlow。顶层按产品分，产品内部再按部署形态分。
-Python 包名不随目录变化（仍是 `atlas_server`、`atlas_engine`……），import 路径与目录无关。
+仓库里有三个**平级的产品**：Agent 平台（Atlas）、用户中心、AI TeamFlow，外加它们共用的基础设施平台。
+顶层按产品分，产品内部再按部署形态分。服务目录与包同名（`services/agent` 即 `atlas_agent`）——
+一个产品以后可以有多个服务，目录名要说明是哪一个，而不是统一叫 server。
 
 ```
 agent-platform/            Agent 平台（Atlas）
 ├── services/              平台后端服务（独立部署，K8s）
-│   ├── server/            API + 执行器（atlas_server）
-│   ├── cluster/           会话 / 沙箱 Pod 生命周期（atlas_cluster）
+│   ├── agent/             API + 执行器（atlas_agent）
 │   ├── config/            技能 / MCP / 持久指令（atlas_config）
 │   └── knowledge/         知识库与检索（atlas_knowledge）
 ├── libs/                  纯库，不单独部署
@@ -220,12 +220,17 @@ agent-platform/            Agent 平台（Atlas）
 │   └── sandboxd/          原生沙箱守护进程（atlas_sandboxd）
 ├── web/                   控制台前端
 ├── bench/                 评测（RAG + Agent）
-└── tests/                 平台的测试（server / engine / cluster / bridge）
+└── tests/                 平台的测试（agent / engine / cluster / bridge）
+infra-platform/            基础设施平台（跨产品共用）
+├── services/
+│   └── cluster/           会话 / 沙箱 Pod 生命周期（atlas_cluster）
+└── libs/
+    └── redislock/         Redis 分布式锁（atlas_redislock）
 usercenter/                用户中心
-├── services/server/       后端（atlas_usercenter）：pyproject.toml src/ tests/
+├── services/usercenter/   后端（atlas_usercenter）：pyproject.toml src/ tests/
 └── web/                   前端
 teamflow/                  AI TeamFlow
-├── services/server/       后端 API 与 worker（atlas_teamflow）：pyproject.toml src/ tests/
+├── services/teamflow/     后端 API 与 worker（atlas_teamflow）：pyproject.toml src/ tests/
 └── web/                   前端
 packages/chat-ui/          跨产品共享的对话组件（控制台与 TeamFlow 共用）
 deploy/  docker/           部署清单与镜像（跨产品）

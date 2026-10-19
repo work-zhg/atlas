@@ -13,8 +13,8 @@ import pytest
 from atlas_engine.kernel.middleware.skills import SkillRef, SkillsMiddleware
 from moto import mock_aws
 
-from atlas_server.providers.filesystem.oss import OssFilesystem
-from atlas_server.providers.filesystem.skill_copy import (
+from atlas_agent.providers.filesystem.oss import OssFilesystem
+from atlas_agent.providers.filesystem.skill_copy import (
     SkillMeta,
     SkillUnavailable,
     seed_session_skills,
@@ -134,11 +134,11 @@ async def test_creating_a_thread_seeds_the_agents_skills(clean_db) -> None:
     import boto3
     from moto import mock_aws
 
-    from atlas_server.config import Settings
-    from atlas_server.db.session import get_sessionmaker
-    from atlas_server.repositories.agent import AgentRepository
-    from atlas_server.schemas.thread import ThreadCreate
-    from atlas_server.services.thread import ThreadService
+    from atlas_agent.config import Settings
+    from atlas_agent.db.session import get_sessionmaker
+    from atlas_agent.repositories.agent import AgentRepository
+    from atlas_agent.schemas.thread import ThreadCreate
+    from atlas_agent.services.thread import ThreadService
 
     with mock_aws():
         s3 = boto3.client("s3", region_name="us-east-1")
@@ -185,11 +185,11 @@ async def test_thread_creation_without_object_storage_is_not_an_error(clean_db) 
     「没配 bucket = 没有文件能力」是个完整的产品决定：模型那边文件工具
     一个都不注册，技能自然也无处可放。这不是降级路径，不该拦住建会话。
     """
-    from atlas_server.config import Settings
-    from atlas_server.db.session import get_sessionmaker
-    from atlas_server.repositories.agent import AgentRepository
-    from atlas_server.schemas.thread import ThreadCreate
-    from atlas_server.services.thread import ThreadService
+    from atlas_agent.config import Settings
+    from atlas_agent.db.session import get_sessionmaker
+    from atlas_agent.repositories.agent import AgentRepository
+    from atlas_agent.schemas.thread import ThreadCreate
+    from atlas_agent.services.thread import ThreadService
 
     settings = Settings(litellm_key="x")
     assert settings.workspace_configured is False
@@ -220,7 +220,7 @@ async def test_thread_creation_without_object_storage_is_not_an_error(clean_db) 
 
 
 async def _any_user_id(session):
-    from atlas_server.db.models import AppUser
+    from atlas_agent.db.models import AppUser
     from sqlalchemy import select
 
     return (await session.execute(select(AppUser.id).limit(1))).scalars().one()

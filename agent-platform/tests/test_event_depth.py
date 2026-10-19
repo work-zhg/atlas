@@ -22,8 +22,8 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from atlas_server.domain.events import EventFactory, EventType
-from atlas_server.domain.spec import AgentSpec, LimitSpec, ModelSpec
+from atlas_agent.domain.events import EventFactory, EventType
+from atlas_agent.domain.spec import AgentSpec, LimitSpec, ModelSpec
 from langchain_core.messages import AIMessageChunk
 
 from .fakes import TurnModel, text_model

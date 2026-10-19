@@ -1,7 +1,7 @@
 /**
  * Atlas 接口的请求核心 —— 与部署无关：接口根地址与身份头由调用方注入（AtlasClientConfig）。
  *
- *   · Atlas 前端注入自己的 API_BASE 与 X-User-Id（web/src/lib/http.ts）；
+ *   · Atlas 前端注入自己的 API_BASE 与请求头（web/src/lib/http.ts）；
  *   · 嵌入方（如 AI TeamFlow）注入它的代理地址与自己的会话 / CSRF 头。
  *
  * 错误信封解包在这里集中：后端统一返回 {"error": {kind, message, details}}，

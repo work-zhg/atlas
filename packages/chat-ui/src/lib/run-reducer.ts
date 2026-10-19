@@ -24,6 +24,7 @@ import {
   type MessageCompletedData,
   type MessageDeltaData,
   type RunFailedData,
+  type RunResumedData,
   type ApprovalRequiredData,
   type RunStartedData,
   type SubagentStartedData,
@@ -32,6 +33,7 @@ import {
   type ToolCompletedData,
   type ToolFailedData,
   type ToolStartedData,
+  type ToolUpdatedData,
   type UsageUpdatedData,
 } from "./events";
 
@@ -389,6 +391,19 @@ function applySubEvent(
       };
     }
 
+    case EventType.ToolUpdated: {
+      // 参数 / 名字补全：合并进已有的行。缺席的字段由 upsertTool 的 definedOnly 跳过，不会抹掉旧值
+      const t = d as unknown as ToolUpdatedData;
+      return {
+        ...base,
+        toolCalls: upsertTool(base.toolCalls, t.call_id, {
+          name: t.name,
+          argsPreview: t.args_preview,
+          args: t.args,
+        }),
+      };
+    }
+
     case EventType.ToolCompleted:
     case EventType.ToolFailed: {
       const t = d as unknown as ToolCompletedData & Partial<ToolFailedData>;
@@ -557,6 +572,19 @@ export function applyEvent(state: RunState, event: AnyTraceEvent): RunState {
           depth: event.depth,
         }),
         timeline: appendOnce(base.timeline, { kind: "tool", callId: t.call_id }),
+      };
+    }
+
+    case EventType.ToolUpdated: {
+      // 参数 / 名字补全：合并进已有的行。缺席的字段由 upsertTool 的 definedOnly 跳过，不会抹掉旧值
+      const t = d as unknown as ToolUpdatedData;
+      return {
+        ...base,
+        toolCalls: upsertTool(base.toolCalls, t.call_id, {
+          name: t.name,
+          argsPreview: t.args_preview,
+          args: t.args,
+        }),
       };
     }
 
@@ -771,6 +799,21 @@ export function applyEvent(state: RunState, event: AnyTraceEvent): RunState {
     case EventType.RunSuspended:
       // 等子智能体。流不关，后面还会来这一轮真正的结束。
       return { ...base, status: "suspended" };
+
+    case EventType.RunResumed: {
+      // 换了一个服务实例继续跑。上一个实例最后一次模型调用已经流出、没落库的那段正文
+      // 会被重做 —— 从末尾丢掉它，否则同一段话出现两遍。后面紧跟新一段的 run.started。
+      if (event.run_id !== base.activeRunId) return base;
+      let discard = (d as unknown as RunResumedData).discard_chars ?? 0;
+      if (discard <= 0) return base;
+      const blocks = [...base.blocks];
+      for (let i = blocks.length - 1; i >= base.blockOffset && discard > 0; i--) {
+        const keep = Math.max(blocks[i]!.length - discard, 0);
+        discard -= blocks[i]!.length - keep;
+        blocks[i] = blocks[i]!.slice(0, keep);
+      }
+      return { ...base, blocks, text: blocks.join("") };
+    }
 
     default:
       // 规则 3：后端新增的事件类型（subagent.* / approval.* 等本期未渲染的）

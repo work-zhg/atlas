@@ -13,10 +13,10 @@ import asyncio
 
 import httpx
 import pytest
-from atlas_server.config import get_settings
-from atlas_server.db.session import get_sessionmaker
-from atlas_server.executor.inprocess import InProcessExecutor
-from atlas_server.main import create_app
+from atlas_agent.config import get_settings
+from atlas_agent.db.session import get_sessionmaker
+from atlas_agent.executor.inprocess import InProcessExecutor
+from atlas_agent.main import create_app
 from httpx import ASGITransport
 
 from tests.fakes import ScriptedChatModel, text_model, usage_model
@@ -225,8 +225,8 @@ async def test_release_thread_lock_requires_owner() -> None:
     from uuid import uuid4
 
     import redis.asyncio as aioredis
-    from atlas_server.config import get_settings
-    from atlas_server.stream.relay import EventRelay, thread_lock_key
+    from atlas_agent.config import get_settings
+    from atlas_agent.stream.relay import EventRelay, thread_lock_key
 
     settings = get_settings()
     redis = aioredis.from_url(settings.redis_url, decode_responses=True)

@@ -15,6 +15,8 @@ interface Source {
   dept?: string;
   include_sub?: boolean;
   level: Level;
+  /** data = 授给这条数据；data_type = 授给它所属编码下的全部数据 */
+  scope?: "data" | "data_type";
 }
 
 interface DataDetail {
@@ -43,7 +45,8 @@ interface DataDetail {
   holders: { user: { id: string; name: string; account: string }; dept: string; level: Level; sources: Source[] }[];
 }
 
-const srcText = (s: Source) => `${s.type === "USER" ? "直接授权" : `部门：${s.dept}${s.include_sub ? "（含下级）" : ""}`}·${LEVEL[s.level].label}`;
+const srcText = (s: Source) =>
+  `${s.scope === "data_type" ? "全部数据授权·" : ""}${s.type === "USER" ? "直接授权" : `部门：${s.dept}${s.include_sub ? "（含下级）" : ""}`}·${LEVEL[s.level].label}`;
 const LEVEL_OPTS = (["READ", "WRITE", "OWNER"] as const).map((l) => ({ value: l, label: LEVEL[l].label }));
 
 export default function DataDetailPage() {
@@ -97,7 +100,7 @@ export default function DataDetailPage() {
             </div>
           </div>
           {!d.can_manage && <Alert style={{ marginTop: 12 }} type="info" showIcon message="只有 Owner 可以修改这条数据的授权。" />}
-          {d.can_manage && !d.is_owner && <Alert style={{ marginTop: 12 }} type="info" showIcon message="你以数据管理员身份管理这条数据的授权。" />}
+          {d.can_manage && !d.is_owner && <Alert style={{ marginTop: 12 }} type="info" showIcon message={`你以「全部${d.data_type_name} · Owner」（数据编码级授权）身份管理这条数据的授权。`} />}
           {!d.has_active_owner && <Alert style={{ marginTop: 12 }} type="warning" showIcon message="这条数据目前没有可用的 Owner（Owner 已停用或调离）。" />}
         </Card>
         <Card

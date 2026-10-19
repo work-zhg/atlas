@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Demo：用 state_schema 给智能体加自定义状态</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --border: #d1d9e0; --head: #f6f8fa;
+    --lane: #8c959f; --phase-bg: #eef2f6; --note-bg: #fff8c5; --note-bd: #d4a72c;
+    --ok: #1a7f37; --ok-bg: #dafbe1; --bad: #cf222e; --bad-bg: #ffebe9; --warn: #9a6700; --warn-bg: #fff8c5;
+    --box: #ddf4ff; --box-bd: #54aeff; --accent: #0969da;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --border: #3d444d; --head: #151b23;
+      --lane: #6e7681; --phase-bg: #1c2430; --note-bg: #2b2111; --note-bd: #9e6a03;
+      --ok: #3fb950; --ok-bg: #12261e; --bad: #f85149; --bad-bg: #2d1214; --warn: #d29922; --warn-bg: #2b2111;
+      --box: #12263f; --box-bd: #1f6feb; --accent: #4493f8;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 28px; background: var(--bg); color: var(--fg);
+         font: 15px/1.75 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif; }
+  main { max-width: 1240px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 20px; margin: 44px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 16px; margin: 24px 0 6px; }
+  .sub { color: var(--muted); margin: 0 0 18px; }
+  code { font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--head);
+         padding: 1px 5px; border-radius: 4px; }
+  pre { background: var(--head); border: 1px solid var(--border); border-radius: 6px; padding: 12px 14px;
+        overflow-x: auto; font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 14px; }
+  th, td { border: 1px solid var(--border); padding: 7px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--head); white-space: nowrap; }
+  .toc { background: var(--head); border: 1px solid var(--border); border-radius: 6px; padding: 10px 18px; }
+  .toc ol { margin: 4px 0; padding-left: 20px; }
+  .callout { border-left: 4px solid var(--accent); background: var(--head); padding: 10px 14px; margin: 14px 0;
+             border-radius: 0 6px 6px 0; }
+  .callout.warn { border-color: var(--warn); }
+  .callout.bad { border-color: var(--bad); }
+  .scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: 6px; margin: 12px 0; }
+  .caption { color: var(--muted); font-size: 13px; margin-top: -4px; }
+  /* 消息「气泡」 */
+  .msg { display: inline-block; margin: 2px 4px 2px 0; padding: 1px 8px; border-radius: 10px; border: 1px solid;
+         font: 12.5px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap; }
+  .msg.h { color: var(--accent); border-color: var(--box-bd); background: var(--box); }
+  .msg.a { color: var(--fg); border-color: var(--lane); background: var(--head); }
+  .msg.t { color: var(--ok); border-color: var(--ok); background: var(--ok-bg); }
+  .msg.s { color: var(--warn); border-color: var(--warn); background: var(--warn-bg); }
+  .msg.r { color: var(--bad); border-color: var(--bad); background: var(--bad-bg); }
+  .msg.gone { opacity: .45; text-decoration: line-through; }
+  /* SVG */
+  svg { display: block; font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif; }
+  svg text { fill: var(--fg); font-size: 12.5px; }
+  svg .lane-line { stroke: var(--lane); stroke-dasharray: 4 4; }
+  svg .lane-box { fill: var(--box); stroke: var(--box-bd); }
+  svg .lane-name { font-weight: 600; font-size: 13px; }
+  svg .lane-sub { fill: var(--muted); font-size: 11px; }
+  svg .arrow { stroke: var(--fg); stroke-width: 1.3; fill: none; }
+  svg .arrow.reply { stroke-dasharray: 5 4; }
+  svg .arrow.bad { stroke: var(--bad); }
+  svg .arrow.ok { stroke: var(--ok); }
+  svg .head { fill: var(--fg); }
+  svg .head.bad { fill: var(--bad); }
+  svg .head.ok { fill: var(--ok); }
+  svg .phase-band { fill: var(--phase-bg); }
+  svg .phase-text { font-weight: 600; font-size: 13px; }
+  svg .note-box { fill: var(--note-bg); stroke: var(--note-bd); }
+  svg .note-box.bad { fill: var(--bad-bg); stroke: var(--bad); }
+  svg .node { fill: var(--box); stroke: var(--box-bd); }
+  svg .node.term { fill: var(--head); stroke: var(--lane); }
+  svg .node.hook { fill: var(--warn-bg); stroke: var(--warn); }
+  svg .lbl { font-size: 12px; fill: var(--muted); }
+  svg .lbl.bad { fill: var(--bad); }
+  svg .lbl.ok { fill: var(--ok); }
+  svg .t-bold { font-weight: 600; }
+  .yes { color: var(--ok); font-weight: 600; }
+  .no { color: var(--bad); font-weight: 600; }
+  td.c, th.c { text-align: center; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Demo：用 state_schema 给智能体加自定义状态</h1>
+<p class="sub">
+  代码：<code>demo/state-schema/state_schema.py</code>（单文件，约 170 行）　·
+  运行：<code>.venv/bin/python demo/state-schema/state_schema.py</code>（不需要 API key）　·
+  姊妹篇：<code>demo/suspend-resume/README.html</code>
+</p>
+
+<div class="toc">
+  <b>目录</b>
+  <ol>
+    <li><a href="#problem">要解决什么问题</a></li>
+    <li><a href="#three">先分清三样东西：messages、state、context</a></li>
+    <li><a href="#merge">state_schema 是怎么生效的</a></li>
+    <li><a href="#annot">字段标注详解</a></li>
+    <li><a href="#rw">谁能读、谁能写 state</a></li>
+    <li><a href="#seq">完整时序图</a></li>
+    <li><a href="#life">四个字段的一生</a></li>
+    <li><a href="#traps">静默失败清单</a></li>
+    <li><a href="#lab">动手实验</a></li>
+    <li><a href="#ext">扩展：放 state、context 还是 messages？</a></li>
+    <li><a href="#code">代码导读与运行输出</a></li>
+  </ol>
+</div>
+
+<!-- ================================================================== -->
+<h2 id="problem">1. 要解决什么问题</h2>
+
+<p>
+  用 LangChain 的 <code>create_agent()</code> 建出来的智能体，默认只认一样东西：<b>消息列表</b>（<code>messages</code>）。
+  调用时传 <code>{"messages": [...]}</code>，返回的也是 <code>{"messages": [...]}</code>。
+</p>
+<p>可实际开发中总会有一些「不是对话、但智能体运行时要用」的数据：</p>
+<table>
+  <tr><th>数据</th><th>例子</th><th>谁给 / 谁用</th></tr>
+  <tr><td>调用方的偏好</td><td>温度单位用摄氏还是华氏</td><td>调用方传入，工具读取，结果里也想带回去</td></tr>
+  <tr><td>调试开关</td><td>打开后打印更多日志</td><td>调用方传入，只在内部用，不需要返回</td></tr>
+  <tr><td>运行记录</td><td>这次查过哪些城市</td><td>工具一边跑一边记，最后交给调用方；调用方不该能伪造</td></tr>
+  <tr><td>内部计数</td><td>模型被调了几次</td><td>只在图内部用，既不让外面传、也不往外露</td></tr>
+</table>
+
+<p>如果直接往 <code>invoke</code> 里多塞一个键，比如 <code>{"messages": [...], "unit": "C"}</code>，<b>它会被悄无声息地丢掉</b>：不报错，图里也读不到。</p>
+<p>
+  <b>state_schema</b> 就是用来解决这个问题的：先<b>声明</b>有哪些字段、每个字段的规则（能不能传入、会不会返回、多次写入怎么合并），
+  框架再按声明去收、去存、去交出。这个 demo 用一个「查北京、上海天气」的场景，把四种典型字段各演示一遍。
+</p>
+
+<!-- ================================================================== -->
+<h2 id="three">2. 先分清三样东西：messages、state、context</h2>
+
+<p>
+  LangGraph 把智能体表示成一张图（模型节点、工具节点……来回流转，详见姊妹篇 §2）。
+  图在运行时手里拿着三类数据，它们的定位完全不同：
+</p>
+
+<table>
+  <tr><th></th><th>messages</th><th>state 的其它字段</th><th>context</th></tr>
+  <tr><td>是什么</td><td>对话历史</td><td>图运行过程中要用的其它数据</td><td>这次调用的「环境信息」：是谁、在哪个租户……</td></tr>
+  <tr><td>怎么声明</td><td><code>AgentState</code> 自带</td><td><b>继承 <code>AgentState</code></b>，挂到中间件的 <code>state_schema</code> 上</td><td><code>create_agent(context_schema=…)</code></td></tr>
+  <tr><td>怎么传入</td><td><code>invoke({"messages": …})</code></td><td><code>invoke({"messages": …, "unit": …})</code></td><td><code>invoke(…, context={…})</code></td></tr>
+  <tr><td>图里能改吗</td><td>能</td><td>能</td><td><b>不能</b>（设计上只读）</td></tr>
+  <tr><td>会出现在返回值里吗</td><td>会</td><td>看标注（<a href="#annot">§4</a>）</td><td>不会</td></tr>
+  <tr><td>模型看得到吗</td><td>看得到（这就是给模型的输入）</td><td>看不到，除非中间件把它写进提示词或消息</td><td>看不到</td></tr>
+  <tr><td>demo 里的例子</td><td>用户提问、工具结果</td><td><code>unit</code> / <code>debug</code> / <code>visited</code> / <code>model_calls</code></td><td><code>user_id</code></td></tr>
+</table>
+
+<div class="callout">
+  一句话区分：<b>context 是「谁在调」，state 是「在干什么」</b>。用户 ID、租户这类调用期间不会变、也不该被图改掉的东西放 context；
+  会在运行中被读写、累积的东西放 state。
+</div>
+
+<!-- ================================================================== -->
+<h2 id="merge">3. state_schema 是怎么生效的</h2>
+
+<h3>3.1 写法：继承 AgentState，挂到中间件上</h3>
+<pre><code>class WeatherState(AgentState):          # AgentState 自带 messages 等字段
+    unit: NotRequired[str]                # 加你自己的字段
+
+class WeatherMiddleware(AgentMiddleware):
+    state_schema = WeatherState           # 就这一行
+
+agent = create_agent(model=…, tools=[…], middleware=[WeatherMiddleware()])</code></pre>
+<p>
+  <code>AgentState</code> 是一个 <code>TypedDict</code>，所以 <code>WeatherState</code> 也是。<b>TypedDict 只是给类型检查器和框架看的「说明书」，运行时 state 就是一个普通 <code>dict</code></b>，
+  因此取值写 <code>state["unit"]</code> 或 <code>state.get("unit")</code>，而不是 <code>state.unit</code>。
+</p>
+<p>
+  也可以不经过中间件，直接 <code>create_agent(state_schema=WeatherState)</code>。官方建议优先挂在中间件上：
+  字段跟着用它的那段逻辑走，换掉中间件时字段也一起走，不会留下没人用的字段。
+</p>
+
+<h3>3.2 合并：多份声明 → 一份完整 state → 再派生出入参和返回值</h3>
+<div class="scroll">
+<svg viewBox="0 0 990 290" width="990" height="290" role="img" aria-label="state_schema 合并流程">
+  <defs>
+    <marker id="m-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="head" d="M0,0 L10,5 L0,10 z"/></marker>
+  </defs>
+  <rect class="node hook" x="20" y="25" width="270" height="56" rx="6"/>
+  <text x="34" y="48" class="t-bold">中间件 1 的 state_schema</text>
+  <text x="34" y="68" class="lbl">demo：WeatherMiddleware → WeatherState</text>
+  <rect class="node hook" x="20" y="112" width="270" height="56" rx="6"/>
+  <text x="34" y="135" class="t-bold">中间件 2、3 …… 的 state_schema</text>
+  <text x="34" y="155" class="lbl">按注册顺序排列</text>
+  <rect class="node hook" x="20" y="199" width="270" height="56" rx="6"/>
+  <text x="34" y="222" class="t-bold">create_agent(state_schema=…)</text>
+  <text x="34" y="242" class="lbl">没传就是 AgentState；排在最后</text>
+
+  <rect class="node" x="370" y="100" width="210" height="80" rx="6"/>
+  <text x="475" y="128" text-anchor="middle" class="t-bold">按顺序合并</text>
+  <text x="475" y="148" text-anchor="middle" class="lbl">同名字段：后面的覆盖前面的</text>
+  <text x="475" y="166" text-anchor="middle" class="lbl">create_agent 的那份优先级最高</text>
+
+  <path class="arrow" d="M290,53 L368,125" marker-end="url(#m-ah)"/>
+  <path class="arrow" d="M290,140 L368,140" marker-end="url(#m-ah)"/>
+  <path class="arrow" d="M290,227 L368,155" marker-end="url(#m-ah)"/>
+
+  <rect class="node" x="650" y="18" width="320" height="66" rx="6"/>
+  <text x="664" y="40" class="t-bold">StateSchema：全部字段 → 图内的 state</text>
+  <text x="664" y="58" class="lbl">messages · jump_to · structured_response</text>
+  <text x="664" y="75" class="lbl">unit · debug · visited · model_calls</text>
+  <rect class="node" x="650" y="107" width="320" height="66" rx="6"/>
+  <text x="664" y="129" class="t-bold">InputSchema：去掉「不许传入」的 → invoke 入参</text>
+  <text x="664" y="150" class="lbl">demo：messages · unit · debug</text>
+  <rect class="node" x="650" y="196" width="320" height="66" rx="6"/>
+  <text x="664" y="218" class="t-bold">OutputSchema：去掉「不许返回」的 → 返回值</text>
+  <text x="664" y="239" class="lbl">demo：messages · structured_response</text>
+  <text x="664" y="255" class="lbl">　　　· unit · visited</text>
+
+  <path class="arrow" d="M580,125 L648,51" marker-end="url(#m-ah)"/>
+  <path class="arrow" d="M580,140 L648,140" marker-end="url(#m-ah)"/>
+  <path class="arrow" d="M580,155 L648,229" marker-end="url(#m-ah)"/>
+</svg>
+</div>
+<p class="caption">右侧三个框里的字段是 demo 实际打印出来的（<code>agent.get_input_jsonschema()</code> / <code>get_output_jsonschema()</code>）。</p>
+
+<p>这个过程在 <code>langchain/agents/factory.py</code> 的 <code>_resolve_schemas</code> 里，做三件事：</p>
+<ol>
+  <li><b>收集</b>：所有中间件的 <code>state_schema</code>（按注册顺序），最后加上 <code>create_agent(state_schema=…)</code>，没传就用 <code>AgentState</code>。</li>
+  <li><b>合并</b>：把所有字段放进一个新的 TypedDict。同名字段后者覆盖前者。<br>
+    实验验证：两个中间件都声明了字段 <code>f</code>，一个带 reducer、一个不带，<b>谁注册在后面就听谁的</b>，且不会有任何提示。</li>
+  <li><b>派生</b>：从合并结果里按字段标注过滤，生成 InputSchema 和 OutputSchema，分别决定 <code>invoke</code> 收什么、交出什么。</li>
+</ol>
+
+<div class="callout warn">
+  <b>合并后所有字段是全局共享的。</b>某个中间件声明的字段，其它中间件和所有工具都能读写，并不存在「只属于某个中间件」的字段。
+  字段名起得具体一些（比如 <code>weather_visited</code> 而不是 <code>visited</code>），可以避免不同中间件撞名后被静默覆盖。
+</div>
+
+<!-- ================================================================== -->
+<h2 id="annot">4. 字段标注详解</h2>
+
+<p>一个字段的完整写法可以叠好几层，每一层管一件事：</p>
+<pre><code>visited: NotRequired[Annotated[list[str], OmitFromInput, operator.add]]
+#        └─ ①必填性   └─ ②附加信息  └─ 类型    └─ ③可见性     └─ ④reducer（必须放最后）</code></pre>
+
+<table>
+  <tr><th>层</th><th>写法</th><th>管什么</th><th>谁在看</th></tr>
+  <tr><td>① 必填性</td><td><code>NotRequired[…]</code> / <code>Required[…]</code></td><td>这个键在 dict 里是不是一定存在</td><td>类型检查器（运行时<b>不检查</b>）</td></tr>
+  <tr><td>② 附加信息</td><td><code>Annotated[类型, 元数据1, 元数据2, …]</code></td><td>Python 标准语法：给类型挂上额外信息，本身不改变类型</td><td>—</td></tr>
+  <tr><td>③ 可见性</td><td><code>OmitFromInput</code> / <code>OmitFromOutput</code> / <code>PrivateStateAttr</code></td><td>能不能从 invoke 传入、会不会出现在返回值里</td><td>LangChain（<code>create_agent</code>）</td></tr>
+  <tr><td>④ reducer</td><td>一个 <code>(旧值, 新值) → 合并后的值</code> 函数，如 <code>operator.add</code></td><td>多次写入怎么合并</td><td>LangGraph（图引擎）</td></tr>
+</table>
+
+<h3 id="annot-req">4.1 必填性：一律用 NotRequired，读的时候用 .get()</h3>
+<p>
+  TypedDict 的字段默认是 <code>Required</code>（必须有）。但<b>框架在运行时并不检查</b>：实验中把字段声明为 <code>unit: str</code>（Required），
+  调用时不传，<code>before_model</code> 里 <code>"unit" in state</code> 是 <code>False</code>，没有任何报错。
+</p>
+<p>
+  所以 <code>Required</code> 只会让类型检查器误以为这个键一定存在。老老实实写 <code>NotRequired</code>，读取时用 <code>state.get("unit", 默认值)</code>，
+  类型提示和真实行为才一致。
+</p>
+<p>
+  例外是带 reducer 的字段（<a href="#annot-reducer">§4.3</a>）：它从一开始就有初始值。demo 里 <code>visited</code> 在第一次进 <code>before_model</code> 时就是 <code>[]</code>（实测），
+  而普通字段在没被写过之前是<b>根本不存在</b>的，比如 <code>model_calls</code> 第一次不在 state 的键里。
+</p>
+
+<h3 id="annot-vis">4.2 可见性：三种标注，其实是一个开关矩阵</h3>
+<p>三种标注在源码里是同一个类的三个实例（<code>langchain/agents/middleware/types.py</code>）：</p>
+<pre><code>@dataclass
+class OmitFromSchema:
+    input: bool = True     # True = 从 InputSchema 里去掉（不许从 invoke 传入）
+    output: bool = True    # True = 从 OutputSchema 里去掉（不出现在返回值里）
+
+OmitFromInput    = OmitFromSchema(input=True,  output=False)
+OmitFromOutput   = OmitFromSchema(input=False, output=True)
+PrivateStateAttr = OmitFromSchema(input=True,  output=True)</code></pre>
+
+<table>
+  <tr><th>标注</th><th class="c">invoke 能传入</th><th class="c">图内能读写</th><th class="c">出现在返回值</th><th>典型用途</th><th>demo 字段</th></tr>
+  <tr><td>（不加）</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td><td>调用方给的参数，结果里也要带回</td><td><code>unit</code></td></tr>
+  <tr><td><code>OmitFromOutput</code></td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c no">✗</td><td>开关、配置类输入，不需要返回</td><td><code>debug</code></td></tr>
+  <tr><td><code>OmitFromInput</code></td><td class="c no">✗</td><td class="c yes">✓</td><td class="c yes">✓</td><td>由图产出的结果，不许调用方伪造</td><td><code>visited</code></td></tr>
+  <tr><td><code>PrivateStateAttr</code></td><td class="c no">✗</td><td class="c yes">✓</td><td class="c no">✗</td><td>纯内部的计数器、缓存</td><td><code>model_calls</code></td></tr>
+</table>
+
+<p>几个容易误会的地方：</p>
+<ul>
+  <li><b>传了不许传入的字段，不会报错，只会被丢掉。</b>demo 故意传了 <code>visited=["伪造的城市"]</code> 和 <code>model_calls=99</code>，图里完全看不到这两个值。</li>
+  <li><b>「图内能读写」对所有人都成立。</b><code>PrivateStateAttr</code> 的源码注释写的是 “purely internal for a given middleware”，
+    但实验显示：中间件 A 声明并写入的私有字段，另一个<b>没声明任何 schema</b> 的中间件 B 也能读到。它只是对 <code>invoke</code> 的调用方隐藏，不是对其它中间件隐藏。</li>
+  <li><b>可见性只影响 invoke 的边界。</b>图内部的读写不受这些标注影响。</li>
+</ul>
+
+<h3 id="annot-reducer">4.3 reducer：同一个字段被写多次时怎么办</h3>
+<p>
+  图是一步一步执行的。每个节点执行完返回「要更新哪些字段」，图引擎再把更新合并进 state。默认规则是<b>新值覆盖旧值</b>。
+  问题出在<b>同一步里有多个写入</b>的时候，最典型的就是模型一次发起多个工具调用、多个工具<b>并行</b>执行：
+</p>
+<table>
+  <tr><th>字段写法</th><th>两个工具在同一步都写了 <code>visited</code></th></tr>
+  <tr><td><code>visited: NotRequired[list[str]]</code>（无 reducer）</td>
+    <td><span class="no">报错</span> <code>InvalidUpdateError: At key 'visited': Can receive only one value per step. Use an Annotated key to handle multiple values.</code><br>
+      （覆盖规则下，两个值谁覆盖谁没有定义，引擎干脆拒绝）</td></tr>
+  <tr><td><code>visited: NotRequired[Annotated[list[str], operator.add]]</code></td>
+    <td><span class="yes">合并</span> <code>[] + ["北京"] + ["上海"] = ["北京", "上海"]</code></td></tr>
+</table>
+<p>reducer 就是一个接收两个参数的函数：<code>(当前值, 本次写入的值) → 新值</code>。常见写法：</p>
+<table>
+  <tr><th>reducer</th><th>效果</th></tr>
+  <tr><td><code>operator.add</code></td><td>列表拼接、数字相加、字符串连接</td></tr>
+  <tr><td>自定义函数，如 <code>lambda a, b: {**a, **b}</code></td><td>字典合并</td></tr>
+  <tr><td><code>add_messages</code></td><td><code>messages</code> 字段自带的 reducer：追加新消息、同 id 替换、遇到 <code>RemoveMessage</code> 就删除（姊妹篇的 Patch 中间件用 <code>RemoveMessage(id=REMOVE_ALL_MESSAGES)</code> 整体替换消息列表）</td></tr>
+</table>
+
+<div class="callout bad">
+  <b>reducer 必须是 Annotated 的最后一个元数据。</b>LangGraph 判断 reducer 时只看最后一个
+  （<code>langgraph/graph/state.py</code> 的 <code>_is_field_binop</code>：<code>callable(meta[-1])</code>）。<br>
+  写成 <code>Annotated[list[str], operator.add, OmitFromInput]</code> 时，最后一个元数据是 <code>OmitFromInput</code>，它不是函数，
+  于是 reducer <b>被静默忽略</b>，并行写入时报上面那个 <code>InvalidUpdateError</code>。正确写法是：
+  <code>Annotated[list[str], OmitFromInput, operator.add]</code>。<br>
+  可见性标注就没有这个限制：LangChain 会遍历所有元数据去找 <code>OmitFromSchema</code>，放在哪个位置都行。
+</div>
+
+<h3>4.4 AgentState 自带的三个字段</h3>
+<p>理解了上面的标注，再回头看 <code>AgentState</code> 的定义就很清楚了：</p>
+<pre><code>class AgentState(TypedDict, Generic[ResponseT]):
+    messages: Required[Annotated[list[AnyMessage], add_messages]]
+    jump_to: NotRequired[Annotated[JumpTo | None, EphemeralValue, PrivateStateAttr]]
+    structured_response: NotRequired[Annotated[ResponseT, OmitFromInput]]</code></pre>
+<table>
+  <tr><th>字段</th><th>标注解读</th></tr>
+  <tr><td><code>messages</code></td><td>reducer 是 <code>add_messages</code>；没有可见性标注 → 能传入、会返回</td></tr>
+  <tr><td><code>jump_to</code></td><td><code>PrivateStateAttr</code> → 不能传入、不会返回；<code>EphemeralValue</code> → 只活一步，用完就清空。
+    中间件返回 <code>{"jump_to": "end"}</code> 就是写这个字段（姊妹篇的核心机制）</td></tr>
+  <tr><td><code>structured_response</code></td><td><code>OmitFromInput</code> → 由图产出、会返回，调用方不能传。只有配置了 <code>response_format</code> 才有值，
+    所以 demo 的 OutputSchema 里有它，但返回值里没有</td></tr>
+</table>
+
+<h3>4.5 组合写法速查</h3>
+<table>
+  <tr><th>我想要……</th><th>写法</th></tr>
+  <tr><td>调用方可传、会返回，覆盖式更新</td><td><code>x: NotRequired[str]</code></td></tr>
+  <tr><td>调用方可传，但不返回</td><td><code>x: NotRequired[Annotated[bool, OmitFromOutput]]</code></td></tr>
+  <tr><td>图产出、会返回，不许传入</td><td><code>x: NotRequired[Annotated[str, OmitFromInput]]</code></td></tr>
+  <tr><td>图产出、会返回，并行追加</td><td><code>x: NotRequired[Annotated[list[str], OmitFromInput, operator.add]]</code></td></tr>
+  <tr><td>纯内部，覆盖式</td><td><code>x: NotRequired[Annotated[int, PrivateStateAttr]]</code></td></tr>
+  <tr><td>纯内部，累加计数</td><td><code>x: NotRequired[Annotated[int, PrivateStateAttr, operator.add]]</code>（各处返回 <code>{"x": 1}</code>）</td></tr>
+</table>
+
+<!-- ================================================================== -->
+<h2 id="rw">5. 谁能读、谁能写 state</h2>
+
+<table>
+  <tr><th>角色</th><th>怎么读</th><th>怎么写</th><th>demo 里</th></tr>
+  <tr><td>invoke 的调用方</td><td>读返回值（经 OutputSchema 过滤）</td><td>传入参（经 InputSchema 过滤）</td><td><code>main()</code></td></tr>
+  <tr><td>中间件钩子<br><span class="caption">before_agent / before_model / after_model / after_agent</span></td>
+    <td>参数 <code>state</code>（完整 state）；<code>runtime.context</code> 读 context</td>
+    <td><b>返回一个 dict</b>，只写要改的字段；返回 <code>None</code> 表示不改</td>
+    <td><code>before_model</code> 返回 <code>{"model_calls": n}</code></td></tr>
+  <tr><td>工具</td>
+    <td>加一个参数 <code>runtime: ToolRuntime</code>，读 <code>runtime.state</code>、<code>runtime.context</code>、<code>runtime.tool_call_id</code><br>
+      <span class="caption">这个参数由框架注入，不会出现在给模型看的参数列表里（实测模型只看到 <code>city</code>）</span></td>
+    <td>返回 <code>Command(update={…})</code>。<b>注意要自己把 ToolMessage 放进 <code>messages</code></b>，否则这个 tool_call 没有结果</td>
+    <td><code>get_weather</code></td></tr>
+  <tr><td>工具包装钩子 <code>wrap_tool_call</code></td><td><code>request.state</code></td><td>同样可以返回 <code>Command(update={…})</code>（实测可行）</td><td>— 见 <a href="#ext">§10</a></td></tr>
+  <tr><td>模型</td><td colspan="2">只看到 <code>messages</code>（加上系统提示词）。要让模型知道 state 里的值，得由中间件写进提示词或消息</td><td>—</td></tr>
+</table>
+
+<div class="callout">
+  中间件钩子和工具<b>返回的是「更新」，不是「新的完整 state」</b>。只返回要改的字段，其它字段保持不变；
+  有 reducer 的字段，返回的值会和旧值合并，而不是替换。
+</div>
+
+<!-- ================================================================== -->
+<h2 id="seq">6. 完整时序图</h2>
+<p>
+  参与者：<b>调用方</b>（<code>main()</code>）；<b>入口 / 出口过滤</b>（框架按 InputSchema / OutputSchema 收发）；
+  <b>state</b>（图引擎持有的数据，负责按 reducer 合并更新）；<b>WeatherMiddleware</b>；<b>模型</b>；<b>get_weather</b>（被并行调用两次）。
+</p>
+<div class="scroll"><div id="seq-main"></div></div>
+
+<!-- ================================================================== -->
+<h2 id="life">7. 四个字段的一生</h2>
+<table>
+  <tr><th>字段</th><th>标注</th><th>invoke 传入的值</th><th>图内初始值</th><th>谁写了它</th><th>最终值（图内）</th><th>返回值里</th></tr>
+  <tr><td><code>unit</code></td><td>（无）</td><td><code>"C"</code></td><td><code>"C"</code></td><td>没人改</td><td><code>"C"</code></td><td class="yes"><code>"C"</code></td></tr>
+  <tr><td><code>debug</code></td><td><code>OmitFromOutput</code></td><td><code>True</code></td><td><code>True</code></td><td>没人改</td><td><code>True</code></td><td class="no">没有</td></tr>
+  <tr><td><code>visited</code></td><td><code>OmitFromInput</code> + <code>operator.add</code></td><td><code>["伪造的城市"]</code> → <span class="no">丢弃</span></td><td><code>[]</code>（reducer 字段自带初值）</td><td>两个工具并行各追加一个</td><td><code>["北京", "上海"]</code></td><td class="yes"><code>["北京", "上海"]</code></td></tr>
+  <tr><td><code>model_calls</code></td><td><code>PrivateStateAttr</code></td><td><code>99</code> → <span class="no">丢弃</span></td><td>不存在</td><td><code>before_model</code> 两次</td><td><code>2</code></td><td class="no">没有</td></tr>
+</table>
+
+<!-- ================================================================== -->
+<h2 id="traps">8. 静默失败清单</h2>
+<p>
+  state_schema 最大的坑是：<b>大部分错误都不报错，只是数据悄悄没了</b>。下面每一条都实际跑过：
+</p>
+<table>
+  <tr><th>#</th><th>做了什么</th><th>结果</th><th>怎么防</th></tr>
+  <tr><td>1</td><td>invoke 时传了没声明的字段</td><td>静默丢弃</td><td>先声明再用；在入口处打印 <code>agent.get_input_jsonschema()</code> 核对</td></tr>
+  <tr><td>2</td><td>传了被 <code>OmitFromInput</code> / <code>PrivateStateAttr</code> 标注的字段</td><td>静默丢弃</td><td>这是预期行为，确认标注符合意图</td></tr>
+  <tr><td>3</td><td>中间件钩子返回了没声明的字段</td><td>静默丢弃</td><td>同 1</td></tr>
+  <tr><td>4</td><td>工具 <code>Command(update=…)</code> 写了没声明的字段</td><td>静默丢弃（实验 2）</td><td>同 1</td></tr>
+  <tr><td>5</td><td>删掉中间件的 <code>state_schema = …</code></td><td>整个程序照常跑完，所有自定义字段都读不到、写不进（实验 2）</td><td>为关键字段写测试：断言返回值里有它</td></tr>
+  <tr><td>6</td><td>reducer 没写在 Annotated 的最后</td><td>reducer 被忽略；并行写入时才报 <code>InvalidUpdateError</code>，串行时<b>直接覆盖、不报错</b></td><td>永远把 reducer 写在最后</td></tr>
+  <tr><td>7</td><td>两个中间件声明了同名字段、标注不同</td><td>后注册的覆盖先注册的，无提示</td><td>字段名加前缀</td></tr>
+  <tr><td>8</td><td>传入值类型和声明不符（<code>unit=123</code>）</td><td>原样接收，不校验（实验 4）</td><td>在用到它的地方自己校验</td></tr>
+  <tr><td>9</td><td>字段声明为 Required，但调用时没传</td><td>不报错，键不存在</td><td>用 NotRequired + <code>.get()</code></td></tr>
+  <tr><td>10</td><td>以为 state 在两次 invoke 之间会保留</td><td>不会。没有 checkpointer 时，每次 invoke 都从入参重新开始</td><td>需要跨次保留的数据，从返回值取出来自己存、下次再传入</td></tr>
+</table>
+
+<!-- ================================================================== -->
+<h2 id="lab">9. 动手实验</h2>
+<p>每个实验只改一处，结果都是实际运行得到的。</p>
+<table>
+  <tr><th>#</th><th>改动</th><th>观察到的现象</th><th>说明了什么</th></tr>
+  <tr><td>1</td>
+    <td><code>visited</code> 的标注改成 <code>Annotated[list[str], operator.add, OmitFromInput]</code>（reducer 挪到前面）</td>
+    <td>两个工具执行完后报 <code>InvalidUpdateError: At key 'visited': Can receive only one value per step</code></td>
+    <td>reducer 必须放在最后（<a href="#annot-reducer">§4.3</a>）</td></tr>
+  <tr><td>2</td>
+    <td>删掉 <code>WeatherMiddleware</code> 里的 <code>state_schema = WeatherState</code></td>
+    <td>不报错；没有 <code>[before_model]</code> 的打印（<code>debug</code> 被丢了）；<code>after_agent</code> 打印 <code>model_calls=None visited=None</code>；返回值只剩 <code>messages</code></td>
+    <td>没声明就等于不存在，而且全程静默</td></tr>
+  <tr><td>3</td>
+    <td><code>main()</code> 里 <code>"unit": "C"</code> 改成 <code>"F"</code></td>
+    <td>工具结果变成 <code>北京 64°F</code>、<code>上海 72°F</code></td>
+    <td>工具通过 <code>runtime.state</code> 读到了调用方传入的字段</td></tr>
+  <tr><td>4</td>
+    <td><code>"unit": "C"</code> 改成 <code>123</code></td>
+    <td>照常运行，工具打印 <code>unit=123</code>，返回值 <code>unit: 123</code></td>
+    <td>TypedDict 的类型声明在运行时不校验</td></tr>
+</table>
+
+<!-- ================================================================== -->
+<h2 id="ext">10. 扩展：放 state、context 还是 messages？</h2>
+
+<h3>10.1 选择依据</h3>
+<table>
+  <tr><th>问自己</th><th>是 → 放哪</th></tr>
+  <tr><td>模型需要看到它吗？</td><td>messages（或由中间件写进提示词）</td></tr>
+  <tr><td>调用期间不会变、图也不该改它（用户、租户、权限）？</td><td>context</td></tr>
+  <tr><td>运行中会被读写、累积，或者需要作为结果交出去？</td><td>state 字段，用标注控制进出</td></tr>
+</table>
+<p>
+  按这个标准，「租户」更适合放 context 而不是 state：它是调用方的身份信息，不该被图里任何一段代码改掉。
+  demo 里的 <code>user_id</code> 就放在 context 里。
+</p>
+
+<h3>10.2 回到挂起 demo：等待信息放在 state 里</h3>
+<p>
+  姊妹篇的挂起 demo 把「在等什么」放在一个 state 字段里：审批中间件在 <code>wrap_tool_call</code> 里拦下工具时，不执行、也不写 tool 消息，只返回
+</p>
+<pre><code>Command(update={"waiting_on": {call_id: {"reason": "approval", "token": f"ap-{call_id}"}}})</code></pre>
+<p>用到了本篇的三样东西，也要看清它的代价：</p>
+<table>
+  <tr><th>本篇的知识</th><th>在挂起 demo 里的用法</th></tr>
+  <tr><td>自定义 reducer</td><td><code>waiting_on</code> 按 <code>tool_call_id</code> 合并，值为 <code>None</code> 表示删除：多个调用同时挂起要合并，审批通过后要删掉这一项</td></tr>
+  <tr><td><code>OmitFromOutput</code></td><td><code>decisions</code>（审批结果）只进不出：续跑时交进来，不需要再带回去</td></tr>
+  <tr><td>工具包装钩子返回 <code>Command</code></td><td>拦下工具时只更新 <code>waiting_on</code>；放行后同时写工具结果和 <code>{call_id: None}</code></td></tr>
+  <tr><td>代价：state 只活一次 invoke</td><td>要从返回值取出 <code>waiting_on</code>、和消息一起落库、续跑时再传入。消息和 <code>waiting_on</code> 两份都是依据，漏传一份就出错</td></tr>
+</table>
+
+<!-- ================================================================== -->
+<h2 id="code">11. 代码导读与运行输出</h2>
+<table>
+  <tr><th>代码</th><th>作用</th></tr>
+  <tr><td><code>Ctx</code></td><td>context 的类型：<code>user_id</code>。用 TypedDict 而不是 dataclass：dataclass 会触发 pydantic 序列化警告（实测）</td></tr>
+  <tr><td><code>WeatherState</code></td><td>四个自定义字段，每个演示一种标注组合</td></tr>
+  <tr><td><code>get_weather</code></td><td>工具：从 <code>runtime.state</code> 读 <code>unit</code>，从 <code>runtime.context</code> 读 <code>user_id</code>，返回 <code>Command</code> 同时写 tool 消息和 <code>visited</code></td></tr>
+  <tr><td><code>ScriptedModel</code></td><td>假模型：收到用户消息就并行调用两次 <code>get_weather</code>，否则把工具结果拼成回答</td></tr>
+  <tr><td><code>WeatherMiddleware</code></td><td>声明 <code>state_schema</code>；<code>before_model</code> 计数，<code>after_agent</code> 打印内部状态</td></tr>
+  <tr><td><code>main()</code></td><td>打印合并出的入参 / 返回值字段，故意多传两个字段后调用，再打印返回值</td></tr>
+</table>
+
+<pre><code>== create_agent 合并出的入参 / 返回值字段 ==
+    invoke 能传入：['debug', 'messages', 'unit']
+    invoke 会返回：['messages', 'structured_response', 'unit', 'visited']
+
+== invoke（故意多传了 visited 和 model_calls） ==
+    [before_model] 第 1 次调用模型，state 里的键 = ['debug', 'messages', 'unit', 'visited']
+    [tool] user=u-42 查 北京（unit=C）
+    [tool] user=u-42 查 上海（unit=C）
+    [before_model] 第 2 次调用模型，state 里的键 = ['debug', 'messages', 'model_calls', 'unit', 'visited']
+    [after_agent] user=u-42 model_calls=2 visited=['北京', '上海']
+
+== invoke 的返回值 ==
+    messages: ["human: '北京和上海现在多少度？'", "ai: ''", "tool: '北京 18°C'", "tool: '上海 22°C'", "ai: '北京 18°C、上海 22°C'"]
+    unit: C
+    visited: ['北京', '上海']</code></pre>
+<p>对照着看：</p>
+<ul>
+  <li>第 1 次 <code>before_model</code> 时 <code>visited</code> 已经在了（reducer 字段的初值 <code>[]</code>），<code>model_calls</code> 还不在；第 2 次时 <code>model_calls</code> 才出现。</li>
+  <li>传入的 <code>visited=["伪造的城市"]</code>、<code>model_calls=99</code> 都没有生效。</li>
+  <li>返回值里没有 <code>debug</code>（只进不出）和 <code>model_calls</code>（不进不出）；<code>structured_response</code> 虽然在 OutputSchema 里，但没有值，所以不出现。</li>
+  <li>两个工具的执行顺序每次可能不同（并行），但 <code>visited</code> 总能收齐两个城市。</li>
+</ul>
+
+</main>
+
+<script>
+/* 极简时序图渲染：用数据描述参与者和步骤，生成 SVG。改图只改数据，不用算坐标。
+   步骤类型：
+     {phase: "标题"}                                   阶段色带
+     {from, to, text, reply?, cls?}                     消息箭头（reply = 虚线返回）
+     {self: lane, text}                                 自调用（自己内部的处理）
+     {note: [laneA, laneB], text, cls?}                 便签（text 可用 \n 换行） */
+const SVG_NS = "http://www.w3.org/2000/svg";
+let seqCount = 0;
+
+function el(tag, attrs, text) {
+  const node = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) node.setAttribute(k, v);
+  if (text != null) node.textContent = text;
+  return node;
+}
+
+function renderSeq(container, spec) {
+  const id = "s" + (++seqCount);
+  const laneW = spec.laneWidth || 180, left = 100, lineH = 16;
+  const x = {};
+  spec.lanes.forEach((l, i) => { x[l.id] = left + i * laneW; });
+  const lastLane = spec.lanes[spec.lanes.length - 1].id;
+  const width = left * 2 + (spec.lanes.length - 1) * laneW;
+  const svg = el("svg", {width, role: "img"});
+  const defs = el("defs");
+  for (const cls of ["", "bad", "ok"]) {
+    const m = el("marker", {id: `${id}-ah${cls}`, viewBox: "0 0 10 10", refX: 9, refY: 5,
+                            markerWidth: 8, markerHeight: 8, orient: "auto-start-reverse"});
+    m.appendChild(el("path", {class: "head " + cls, d: "M0,0 L10,5 L0,10 z"}));
+    defs.appendChild(m);
+  }
+  svg.appendChild(defs);
+  const back = el("g"), front = el("g");
+  svg.append(back, front);
+
+  // 参与者
+  for (const l of spec.lanes) {
+    front.appendChild(el("rect", {class: "lane-box", x: x[l.id] - 78, y: 10, width: 156, height: 46, rx: 6}));
+    front.appendChild(el("text", {class: "lane-name", x: x[l.id], y: 30, "text-anchor": "middle"}, l.name));
+    if (l.sub) front.appendChild(el("text", {class: "lane-sub", x: x[l.id], y: 47, "text-anchor": "middle"}, l.sub));
+  }
+
+  let y = 80;
+  for (const s of spec.steps) {
+    if (s.phase) {
+      back.appendChild(el("rect", {class: "phase-band", x: 0, y: y, width, height: 26}));
+      front.appendChild(el("text", {class: "phase-text", x: 12, y: y + 18}, s.phase));
+      y += 44;
+    } else if (s.note) {
+      const lines = s.text.split("\n");
+      const xs = s.note.map(n => x[n]);
+      const x0 = Math.min(...xs) - 80, x1 = Math.max(...xs) + 80;
+      const h = lines.length * lineH + 12;
+      front.appendChild(el("rect", {class: "note-box " + (s.cls || ""), x: x0, y, width: x1 - x0, height: h, rx: 4}));
+      lines.forEach((t, i) => front.appendChild(el("text", {x: x0 + 10, y: y + 18 + i * lineH}, t)));
+      y += h + 16;
+    } else if (s.self) {
+      const sx = x[s.self];
+      const onLeft = s.self === lastLane;
+      const dx = onLeft ? -28 : 28;
+      const lines = s.text.split("\n");
+      front.appendChild(el("path", {class: "arrow " + (s.cls || ""), d: `M${sx},${y} L${sx + dx},${y} L${sx + dx},${y + 14} L${sx + 2 * Math.sign(dx)},${y + 14}`,
+                                    "marker-end": `url(#${id}-ah${s.cls || ""})`}));
+      lines.forEach((t, i) => front.appendChild(el("text", {
+        x: sx + dx + (onLeft ? -6 : 6), y: y + 12 + i * lineH, "text-anchor": onLeft ? "end" : "start"}, t)));
+      y += 22 + lines.length * lineH;
+    } else {
+      const x1 = x[s.from], x2 = x[s.to];
+      const lines = s.text.split("\n");
+      lines.forEach((t, i) => front.appendChild(el("text", {
+        x: (x1 + x2) / 2, y: y + i * lineH, "text-anchor": "middle"}, t)));
+      const ay = y + (lines.length - 1) * lineH + 8;
+      const end = x2 + (x2 > x1 ? -2 : 2);
+      front.appendChild(el("path", {class: "arrow " + (s.reply ? "reply " : "") + (s.cls || ""),
+                                    d: `M${x1},${ay} L${end},${ay}`, "marker-end": `url(#${id}-ah${s.cls || ""})`}));
+      y = ay + 26;
+    }
+  }
+  const height = y + 10;
+  for (const l of spec.lanes) {
+    back.appendChild(el("line", {class: "lane-line", x1: x[l.id], y1: 56, x2: x[l.id], y2: height}));
+  }
+  svg.setAttribute("height", height);
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  container.appendChild(svg);
+}
+
+renderSeq(document.getElementById("seq-main"), {
+  laneWidth: 185,
+  lanes: [
+    {id: "caller", name: "调用方", sub: "main()"},
+    {id: "gate", name: "入口 / 出口过滤", sub: "Input / OutputSchema"},
+    {id: "state", name: "state", sub: "图引擎，按 reducer 合并"},
+    {id: "mw", name: "WeatherMiddleware", sub: "before_model / after_agent"},
+    {id: "model", name: "模型", sub: "ScriptedModel"},
+    {id: "tool", name: "get_weather", sub: "并行两次"},
+  ],
+  steps: [
+    {phase: "建图：create_agent(middleware=[WeatherMiddleware()], context_schema=Ctx)"},
+    {self: "gate", text: "合并 state_schema → 派生出\nInput：messages · unit · debug\nOutput：messages · structured_response · unit · visited"},
+
+    {phase: "入口"},
+    {from: "caller", to: "gate", text: "invoke({messages, unit:\"C\", debug:True,\nvisited:[\"伪造的城市\"], model_calls:99},\ncontext={user_id:\"u-42\"})"},
+    {self: "gate", text: "按 InputSchema 过滤：丢掉 visited、model_calls", cls: "bad"},
+    {from: "gate", to: "state", text: "写入 messages · unit · debug"},
+    {self: "state", text: "visited 有 reducer → 初始化为 []\nmodel_calls 不存在"},
+
+    {phase: "第 1 轮：模型决定调用工具"},
+    {from: "state", to: "mw", text: "before_model(state)"},
+    {self: "mw", text: "debug=True → 打印 state 的键\nmodel_calls 不存在 → 视为 0"},
+    {from: "mw", to: "state", text: "return {model_calls: 1}", reply: true},
+    {from: "state", to: "model", text: "messages"},
+    {from: "model", to: "state", text: "ai：tool_calls = [北京, 上海]", reply: true},
+    {note: ["state", "tool"], text: "两个 tool_call 在同一步并行执行，它们的更新会在这一步结束时一起交给 state 合并。"},
+    {from: "state", to: "tool", text: "get_weather(北京) + runtime(state, context, tool_call_id)"},
+    {from: "tool", to: "state", text: "Command{messages: +[tool 北京 18°C], visited: [北京]}", reply: true},
+    {from: "state", to: "tool", text: "get_weather(上海) + runtime(…)"},
+    {from: "tool", to: "state", text: "Command{messages: +[tool 上海 22°C], visited: [上海]}", reply: true},
+    {self: "state", text: "同一步两个 visited 写入\n→ operator.add：[] + [北京] + [上海]", cls: "ok"},
+
+    {phase: "第 2 轮：模型汇总"},
+    {from: "state", to: "mw", text: "before_model(state)"},
+    {from: "mw", to: "state", text: "return {model_calls: 2}", reply: true},
+    {from: "state", to: "model", text: "messages（含两条工具结果）"},
+    {from: "model", to: "state", text: "ai：北京 18°C、上海 22°C", reply: true},
+    {from: "state", to: "mw", text: "after_agent(state, runtime)"},
+    {self: "mw", text: "读到 model_calls=2、visited、context.user_id"},
+
+    {phase: "出口"},
+    {from: "state", to: "gate", text: "完整 state：messages · unit · debug · visited · model_calls"},
+    {self: "gate", text: "按 OutputSchema 过滤：去掉 debug、model_calls", cls: "bad"},
+    {from: "gate", to: "caller", text: "{messages, unit:\"C\", visited:[北京, 上海]}", reply: true},
+  ],
+});
+</script>
+</body>
+</html>

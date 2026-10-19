@@ -274,3 +274,51 @@ async def test_usage_warning_reminder_near_limit() -> None:
 def test_effective_window_reserves_output(ratio: float) -> None:
     mw = _mw(context_window=100_000, max_output_tokens=16_384, trigger_ratio=ratio)
     assert mw._effective == 100_000 - 16_384 and mw._trigger == int((100_000 - 16_384) * ratio)
+
+
+# ─────────────────────────────────────────────── 回合内压缩（单轮长任务）
+
+
+def _single_turn(rounds: int) -> list[Any]:
+    """一条用户消息 + 若干轮工具调用：Agent 最典型的形态。"""
+    msgs: list[Any] = [HumanMessage(content="逐份阅读 30 份档案后回答问题", id="h0")]
+    for i in range(rounds):
+        cid = f"c{i}"
+        msgs.append(
+            AIMessage(
+                content="",
+                id=f"a{i}",
+                tool_calls=[{"id": cid, "name": "read_file", "args": {"file_path": f"/f{i}.md"}}],
+            )
+        )
+        msgs.append(ToolMessage(content=BULK, tool_call_id=cid, name="read_file", id=f"t{i}"))
+    return msgs
+
+
+def test_plan_split_within_turn_keeps_recent_rounds() -> None:
+    from atlas_engine.kernel.middleware._compaction import plan_split_within_turn
+    from atlas_engine.kernel.middleware.compaction import facts_from
+
+    facts = facts_from(_single_turn(6))
+    # 1 条用户消息 + 6 轮（每轮 2 条）：保留最近 3 轮 → 切在第 4 轮的开头（下标 7）
+    assert plan_split_within_turn(facts, keep_recent_rounds=3) == 7
+    assert plan_split_within_turn(facts_from(_single_turn(3)), keep_recent_rounds=3) == 0
+
+
+async def test_single_long_turn_compacts_instead_of_overflowing() -> None:
+    """★ 只按用户回合切的话，单轮长任务超过阈值就只能报上下文溢出（评测 atlas-eng/long-read）。"""
+    persisted: list[Any] = []
+
+    async def on_compacted(p: dict[str, Any]) -> None:
+        persisted.append(p)
+
+    mw = _mw(context_window=20_000, on_compacted=on_compacted)
+    out = await mw.abefore_model({"messages": _single_turn(8)})
+    assert out is not None
+    msgs = out["messages"]
+    assert msgs[0].id == REMOVE_ALL_MESSAGES
+    assert msgs[1].content.startswith(SUMMARY_PREFIX)
+    # 保留区从 assistant 开始：补一条平台附加的衔接，避免两条 assistant 相连
+    assert isinstance(msgs[2], HumanMessage) and "不是用户说的话" in msgs[2].content
+    assert [m.id for m in msgs[3:]] == ["a5", "t5", "a6", "t6", "a7", "t7"]
+    assert persisted == []  # 回合内的摘要不落库

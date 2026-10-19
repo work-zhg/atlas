@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import httpx
 import pytest
-from atlas_server.main import create_app
+from atlas_agent.main import create_app
 from httpx import ASGITransport
 
 #: 迁移种子里的全部模型（0001 的 claude-* + 0008 的 deepseek-*）。

@@ -16,10 +16,9 @@ make up                         # 会建 atlas_teamflow 库
 make tf-migrate
 make uc-serve                   # 依赖用户中心（:8030）
 make tf-register-uc ACCOUNT=admin
-                                # 登记 TeamFlow 的操作 / 菜单 / 角色 / 数据编码 Team，
-                                # 首次输出 App Key / Secret → 写入 .env：
-                                #   ATLAS_TF_UC_APP_KEY=…  ATLAS_TF_UC_APP_SECRET=…
-                                # 幂等，可重复执行；已存在时加 --rotate 才换 Secret
+                                # 登记 TeamFlow 的应用编码 teamflow、操作 / 菜单 / 角色 / 数据编码 Team。
+                                # 内网免令牌（doc/identity-propagation-design.html）：调用户中心、Atlas 只带
+                                # 请求头 X-Uid + X-Caller-App: teamflow，不需要 App Key / Secret。幂等
 pnpm install                    # 前端 workspace（仓库根）：Atlas、TeamFlow 与共享对话组件一起装
 make tf-dev                     # 后端 :8040 + 前端 :3200（/api 由 Next 反向代理）
 ```
@@ -65,7 +64,7 @@ teamflow/
     register.py    register-uc：按 catalog 幂等同步到用户中心
     uc.py          用户中心开放接口客户端（唯一接触点）
     atlas.py       Atlas 客户端（Agent 列表 / 详情）
-    identity.py    登录（用户中心代为校验密码）、会话、授权快照、团队级别缓存
+    identity.py    请求头身份（X-Uid，网关写入）、授权快照缓存、团队级别缓存
     templates/     文件模板；流程模板（structure.py 是纯函数：规范化、依赖推导、发布校验）
     process/       流程运行：状态机与锁定（service.py）、产物仓库客户端（repo_host.py）、建仓库与协作者同步（repository.py）、实时广播（bus.py）
     agents/        Agent 适配层：监督器投递指令、跟随 Atlas 事件流、落库回复（不访问仓库）、重启续接
@@ -95,7 +94,7 @@ teamflow/
 
 | 项 | 设计 | 实现 | 原因 |
 | --- | --- | --- | --- |
-| 登录 | SSO（以后） | 用户中心开放接口代为校验密码，TeamFlow 自建会话 | 本期没有 SSO；以后换 Keycloak 只改 `identity.login()` |
+| 登录 | SSO（以后） | 统一到用户中心登录，网关校验后把身份写进请求头（doc/identity-propagation-design.html） | 以后换 Keycloak 只改网关 `/_auth` 背后的校验 |
 | 团队级别缓存失效 | 订阅用户中心 Webhook | 进程内 30 秒缓存，本进程写授权后立即失效 | Webhook 是用户中心 P1 |
 | Agent 可用性 | 定时同步（`agent_sync_seconds`） | 团队页「同步可用性」按钮触发 | 定时任务随流程模块一起做 |
 | 查看团队 / 项目 | `process:view` ∧ 团队读写 | 只看团队读写 | 团队管理员、成员角色都带 `process:view`，首版不重复检查 |

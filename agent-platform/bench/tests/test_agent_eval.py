@@ -18,6 +18,9 @@ from atlas_bench.agent.tasks import load_suite
 from atlas_bench.agent.trajectory import metrics_from_trace
 from atlas_bench.agent.verify import verify_workspace
 
+#: 评测身份（内网身份传递 §12）：用户中心的评测用户 + X-Caller-App: bench
+BENCH_HEADERS = {"X-Uid": "00000000-0000-0000-0000-0000000000be", "X-Caller-App": "bench"}
+
 
 def _docker_ok() -> bool:
     if shutil.which("docker") is None:
@@ -40,7 +43,9 @@ def test_demo_suite_loads() -> None:
 
 
 @pytest.mark.skipif(not _docker_ok(), reason="需要 docker 与 python:3.12-slim 镜像")
-@pytest.mark.parametrize("task", load_suite("demo"), ids=lambda t: t.id)
+@pytest.mark.parametrize(
+    "task", [*load_suite("demo"), *load_suite("atlas-eng")], ids=lambda t: t.id
+)
 def test_verifier_rejects_initial_and_accepts_solution(task: Task) -> None:
     """初始状态校验不过（题目有意义），参考答案校验通过（校验脚本没写错）。"""
     initial = {k: v.encode() for k, v in task.files.items()}
@@ -164,9 +169,12 @@ class _FakeAtlas:
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         m, p = request.method, request.url.path
+        # 内网免令牌：只带身份请求头（内网身份传递 §12）
+        assert "authorization" not in request.headers
+        assert request.headers.get("x-caller-app") == "bench" and request.headers.get("x-uid")
         self.calls.append((m, p))
         if (m, p) == ("GET", "/v1/me"):
-            return httpx.Response(200, json={"name": "atlas-bench", "kind": "service"})
+            return httpx.Response(200, json={"name": "atlas-bench", "account": "atlas-bench"})
         if (m, p) == ("GET", "/v1/agents"):
             return httpx.Response(200, json={"data": []})
         if (m, p) == ("POST", "/v1/agents"):
@@ -220,7 +228,9 @@ async def test_atlas_adapter_flow(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(mod, "_POLL_S", 0.05)
     fake = _FakeAtlas()
-    plat = AtlasAgentPlatform("http://atlas", "k", transport=httpx.MockTransport(fake.handler))
+    plat = AtlasAgentPlatform(
+        "http://atlas", BENCH_HEADERS, transport=httpx.MockTransport(fake.handler)
+    )
     try:
         agent = await plat.prepare("native", VariantConfig(agent={"model": {"model": "m"}}))
         assert agent["slug"].startswith("bench-native-")
@@ -253,7 +263,7 @@ async def test_budget_exceeded_cancels_run(monkeypatch: pytest.MonkeyPatch) -> N
             return httpx.Response(200, json={})
         return orig(req)
 
-    plat = AtlasAgentPlatform("http://atlas", "k", transport=httpx.MockTransport(handler))
+    plat = AtlasAgentPlatform("http://atlas", BENCH_HEADERS, transport=httpx.MockTransport(handler))
     try:
         agent = await plat.prepare("v", VariantConfig(agent={}))
         task = Task(id="demo/x", suite="demo", instruction="x", budget={"wall_s": 0.2})
@@ -261,3 +271,139 @@ async def test_budget_exceeded_cancels_run(monkeypatch: pytest.MonkeyPatch) -> N
     finally:
         await plat.aclose()
     assert tr.budget_exceeded and seen == ["cancel"]
+
+
+# ─────────────────────────────── 过程断言、审批策略、结局分类（评测计划阶段 1）
+
+
+def test_deep_merge_recurses_dicts_and_replaces_lists() -> None:
+    from atlas_bench.agent.runner import deep_merge
+
+    base = {"model": {"model": "m", "provider": "p"}, "tool_names": ["a"], "limits": {"x": 1}}
+    out = deep_merge(base, {"model": {"model": "n"}, "tool_names": ["b"], "limits": {"y": 2}})
+    assert out == {
+        "model": {"model": "n", "provider": "p"},
+        "tool_names": ["b"],
+        "limits": {"x": 1, "y": 2},
+    }
+    assert base["model"]["model"] == "m"  # 入参不被改动
+
+
+def test_approval_policies() -> None:
+    from atlas_bench.agent.platforms.atlas import _decide
+
+    assert [_decide("deny_first", i) for i in range(3)] == ["rejected", "approved", "approved"]
+    assert _decide("deny_all", 5) == "rejected" and _decide("delay:30", 0) == "approved"
+
+
+def test_max_parallel_subagents_and_sandbox_down() -> None:
+    from atlas_bench.agent.trajectory import metrics_from_trace
+
+    ev = [
+        {"type": "subagent.started", "depth": 0, "data": {"subagent_run_id": "a"}},
+        {"type": "subagent.started", "depth": 0, "data": {"subagent_run_id": "b"}},
+        {
+            "type": "subagent.finished",
+            "depth": 0,
+            "data": {"subagent_run_id": "a", "suspended": True},
+        },
+        {"type": "subagent.started", "depth": 0, "data": {"subagent_run_id": "c"}},
+        {"type": "subagent.finished", "depth": 0, "data": {"subagent_run_id": "a"}},
+        {
+            "type": "tool.failed",
+            "data": {"name": "execute", "result": "Error: Sandbox unavailable. 配额满"},
+        },
+    ]
+    m = metrics_from_trace(ev, [])
+    assert m["max_parallel_subagents"] == 3  # 挂起不算结束
+    assert m["sandbox_unavailable"] == 1
+
+
+def test_check_expectations() -> None:
+    from atlas_bench.agent.schema import Expectation
+    from atlas_bench.agent.trajectory import check_expectations
+
+    ev = [
+        {"type": "tool.started", "data": {"name": "tool_search"}},
+        {"type": "tool.started", "data": {"name": "read_file"}},
+        {"type": "context.compacted", "data": {}},
+    ]
+    exp = [
+        Expectation(event="context.compacted", count=">=1"),
+        Expectation(desc="用了 tool_search", event="tool.started", where={"name": "tool_search"}),
+        Expectation(metric="max_parallel_subagents", count=">=2"),
+    ]
+    res, ok = check_expectations(exp, ev, {"max_parallel_subagents": 1})
+    assert [r["ok"] for r in res] == [True, True, False] and ok is False
+    assert res[1]["desc"] == "用了 tool_search" and res[2]["actual"] == 1
+    assert check_expectations([], ev, {}) == ([], None)
+
+
+def test_outcome_classification() -> None:
+    from atlas_bench.agent.platforms.atlas import TrialRun
+    from atlas_bench.agent.runner import _classify
+
+    def tr(status: str, kind: str | None = None) -> TrialRun:
+        return TrialRun(thread_id="t", status=status, error_kind=kind)
+
+    assert _classify(tr("succeeded"), True, {}) == "success"
+    assert _classify(tr("failed", "model_unavailable"), False, {}) == "platform_error"
+    assert _classify(tr("failed", "limit_exceeded"), False, {}) == "agent_error"
+    assert _classify(tr("succeeded"), False, {"sandbox_unavailable": 1}) == "platform_error"
+    assert _classify(tr("succeeded"), False, {}) == "failure"
+
+
+def test_sse_metrics_counts_gaps_and_duplicates_within_the_window() -> None:
+    from atlas_bench.agent.platforms.atlas import TrialRun
+    from atlas_bench.agent.runner import sse_metrics
+
+    trace = [{"run_id": "r", "thread_seq": s} for s in (1, 2, 5, 6, 9, 12)]
+    tr = TrialRun(thread_id="t", run_id="r", sse_ids=[2, 3, 4, 6, 6, 9], sse_reconnects=1)
+    m = sse_metrics(tr, trace)
+    # 区间 [2, 9] 内归档有 2 5 6 9，没收到 5；6 收到两次；1 与 12 在区间外不算
+    assert m == {"sse_received": 6, "sse_missing": 1, "sse_duplicates": 1, "sse_reconnects": 1}
+
+
+def test_compare_runs_flags_a_significant_drop(tmp_path: Path) -> None:
+    from atlas_bench.agent.report import compare_runs
+
+    def run_dir(name: str, passed: dict[str, list[bool]]) -> Path:
+        d = tmp_path / name
+        (d / "trials").mkdir(parents=True)
+        tasks = [{"id": t, "category": "eng", "tags": []} for t in passed]
+        cfg = {
+            "name": name,
+            "trials": 3,
+            "approval_policy": "approve_all",
+            "variants": {"v": {"agent": {}}},
+        }
+        manifest = {
+            "config": cfg,
+            "tasks": tasks,
+            "agents": {"v": {"slug": "s"}},
+            "git_commit": "x",
+            "started_at": "",
+        }
+        (d / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        rows = [
+            TrialResult(
+                task_id=t,
+                variant="v",
+                trial=i + 1,
+                outcome="success" if ok else "failure",
+                passed=ok,
+            )
+            for t, oks in passed.items()
+            for i, ok in enumerate(oks)
+        ]
+        (d / "trials" / "v.jsonl").write_text(
+            "\n".join(r.model_dump_json() for r in rows), encoding="utf-8"
+        )
+        return d
+
+    all_ok = {f"s/t{i}": [True] * 3 for i in range(10)}
+    base = run_dir("base", all_ok)
+    same = compare_runs(base, run_dir("same", all_ok))
+    assert same["regression"] is False
+    worse = compare_runs(base, run_dir("worse", {t: [False] * 3 for t in all_ok}))
+    assert worse["regression"] is True and worse["variants"]["v"]["tasks_dropped"]

@@ -4,8 +4,7 @@
 #   deploy/local/frontends.sh            构建镜像并部署
 #   deploy/local/frontends.sh --no-build 只部署（镜像已构建）
 #
-# 前置：atlas-server / atlas-config 已由 apply.sh 部署；用户中心、TeamFlow 后端在宿主上运行
-#       且监听 0.0.0.0（python -m atlas_usercenter serve / python -m atlas_teamflow serve 默认就是）。
+# 前置：atlas-server / atlas-config / 用户中心 / TeamFlow 后端已由 apply.sh 部署到集群。
 # ★ 不改动、不重启 atlas-server 等已有部署。
 set -euo pipefail
 cd "$(dirname "$0")/../.."

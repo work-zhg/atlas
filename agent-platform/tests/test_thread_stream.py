@@ -21,12 +21,12 @@ from uuid import UUID
 
 import httpx
 import pytest
-from atlas_server.config import Settings, get_settings
-from atlas_server.db.session import get_sessionmaker
-from atlas_server.domain.events import TraceEvent
-from atlas_server.executor.inprocess import InProcessExecutor
-from atlas_server.main import create_app
-from atlas_server.stream.gate import StreamGate, StreamsBusy
+from atlas_agent.config import Settings, get_settings
+from atlas_agent.db.session import get_sessionmaker
+from atlas_agent.domain.events import TraceEvent
+from atlas_agent.executor.inprocess import InProcessExecutor
+from atlas_agent.main import create_app
+from atlas_agent.stream.gate import StreamGate, StreamsBusy
 from httpx import ASGITransport
 
 from .fakes import text_model
@@ -121,8 +121,8 @@ async def read_stream(
     ★ 「生成器自行结束」= StopAsyncIteration。会话流正确的行为是**不**结束，
       所以它为 True 反而说明出了问题。
     """
-    from atlas_server.redisx import make_redis
-    from atlas_server.services.run import RunService
+    from atlas_agent.redisx import make_redis
+    from atlas_agent.services.run import RunService
 
     conf = settings or get_settings()
     events: list[TraceEvent] = []
@@ -164,8 +164,8 @@ async def iter_stream(thread_id: str, *, after_seq: int | None, seconds: float =
     ★ 与 read_stream 的差别是「能提前停」—— 测「收到某个事件的**那一刻**
       DB 是什么状态」必须能在事件到达时立刻跳出，而不是等流读完。
     """
-    from atlas_server.redisx import make_redis
-    from atlas_server.services.run import RunService
+    from atlas_agent.redisx import make_redis
+    from atlas_agent.services.run import RunService
 
     conf = get_settings()
     redis = make_redis(conf)
@@ -347,8 +347,8 @@ async def test_replay_falls_back_to_the_archive_when_redis_is_gone(client) -> No
 
     所以回放是「先归档、再 Redis」接力。Redis 整个没了也要能读出历史。
     """
-    from atlas_server.redisx import make_redis
-    from atlas_server.stream.relay import thread_stream_key
+    from atlas_agent.redisx import make_redis
+    from atlas_agent.stream.relay import thread_stream_key
 
     tid = await setup_thread(client)
     await run_once(client, tid)

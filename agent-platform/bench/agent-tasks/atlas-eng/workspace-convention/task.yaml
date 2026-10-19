@@ -1,0 +1,6 @@
+category: eng
+tags: [eng, fast, instructions]
+instruction: |
+  在工作区写一个 hello.py，运行 `python3 hello.py` 时输出 hello。写完自己运行确认。
+# 约定只写在工作区的 ATLAS.md 里，任务说明不提 —— 考察持久指令是否注入并被遵守
+budget: {wall_s: 600}

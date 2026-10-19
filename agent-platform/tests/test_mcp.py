@@ -19,9 +19,9 @@ from pathlib import Path
 
 import httpx
 import pytest
-from atlas_server.config import get_settings
-from atlas_server.domain.mcp_naming import approval_target
-from atlas_server.providers.mcp import (
+from atlas_agent.config import get_settings
+from atlas_agent.domain.mcp_naming import approval_target
+from atlas_agent.providers.mcp import (
     CallContext,
     McpServerConfig,
     McpUnavailable,
@@ -34,7 +34,7 @@ from atlas_server.providers.mcp import (
     resolve_env_refs,
     tool_id,
 )
-from atlas_server.redisx import make_redis
+from atlas_agent.redisx import make_redis
 from pydantic import ValidationError
 
 
@@ -344,8 +344,8 @@ def test_approval_target_translates_spec_ids() -> None:
 
 async def test_catalog_endpoint_includes_mcp(mcp_port: int, redis: object) -> None:
     """★ 端到端：/v1/tools 里同时有内置工具与 MCP 工具，且 MCP 工具可选作审批目标。"""
-    from atlas_server.config import Settings
-    from atlas_server.main import create_app
+    from atlas_agent.config import Settings
+    from atlas_agent.main import create_app
     from httpx import ASGITransport
 
     name = _name()
@@ -369,8 +369,8 @@ async def test_catalog_endpoint_includes_mcp(mcp_port: int, redis: object) -> No
 
 async def test_unreachable_server_does_not_break_catalog(redis: object) -> None:
     """★ 一台 server 挂了（且无缓存），目录照常返回其余内容。"""
-    from atlas_server.config import Settings
-    from atlas_server.main import create_app
+    from atlas_agent.config import Settings
+    from atlas_agent.main import create_app
     from httpx import ASGITransport
 
     base = get_settings()

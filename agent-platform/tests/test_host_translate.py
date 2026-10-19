@@ -9,9 +9,9 @@
 
 from __future__ import annotations
 
-from atlas_server.domain.events import EventType
-from atlas_server.host.runtime import note_failed_tool, silent_failure_message
-from atlas_server.host.translate.acp_v1 import (
+from atlas_agent.domain.events import EventType
+from atlas_agent.host.runtime import note_failed_tool, silent_failure_message
+from atlas_agent.host.translate.acp_v1 import (
     AcpV1Translator,
     model_of,
     translate_crash,
@@ -444,7 +444,7 @@ def test_cancelled_turn_with_usage_does_not_crash_and_carries_the_model() -> Non
 
     （usage 是 dict，不是 pydantic 模型。）
     """
-    from atlas_server.host.runtime import _finish
+    from atlas_agent.host.runtime import _finish
 
     response = {
         "stopReason": "cancelled",
@@ -466,8 +466,8 @@ def test_cancelled_turn_with_usage_does_not_crash_and_carries_the_model() -> Non
 
 def test_usage_update_becomes_context_usage() -> None:
     """ACP 的上下文用量 → 平台的 context.usage（平台只观测，不改写 CLI 的上下文）。"""
-    from atlas_server.domain.events import EventType
-    from atlas_server.host.translate.acp_v1 import translate_update
+    from atlas_agent.domain.events import EventType
+    from atlas_agent.host.translate.acp_v1 import translate_update
 
     out = translate_update({"sessionUpdate": "usage_update", "used": 42_000, "size": 200_000})
     assert out == [
@@ -486,3 +486,110 @@ def test_usage_update_becomes_context_usage() -> None:
         translate_update({"sessionUpdate": "available_commands_update", "availableCommands": []})
         == []
     )
+
+
+# ─────────────────────────────── 工具参数补全（tool.updated）
+
+
+def _wrap(update: dict) -> dict:
+    return {"update": update}
+
+
+def test_streamed_tool_call_gets_its_arguments_from_the_refinement() -> None:
+    """★ CLI 在模型刚开始输出工具调用时就发 tool_call（只有标题、rawInput 为空），参数随后由
+    tool_call_update 补上。丢掉补全的话工具行永远是「Edit{}」（会话 dcd9a7a0 的 cli-hand）。"""
+    t = AcpV1Translator()
+    started = t.update(
+        _wrap(
+            {
+                "sessionUpdate": "tool_call",
+                "toolCallId": "c1",
+                "title": "Edit",
+                "kind": "edit",
+                "rawInput": {},
+            }
+        )
+    )
+    assert started[0][0] is EventType.TOOL_STARTED and started[0][1]["args"] == {}
+
+    refined = t.update(
+        _wrap(
+            {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "c1",
+                "title": "Edit pages/home.html",
+                "rawInput": {
+                    "file_path": "/workspace/pages/home.html",
+                    "old_string": "a",
+                    "new_string": "b",
+                },
+            }
+        )
+    )
+    assert [k for k, _ in refined] == [EventType.TOOL_UPDATED]
+    data = refined[0][1]
+    assert data["call_id"] == "c1" and data["name"] == "Edit pages/home.html"
+    assert "pages/home.html" in data["args_preview"]
+
+    # 同样的内容再来一次（逐字段补全时常见）：不重复发
+    assert (
+        t.update(
+            _wrap(
+                {
+                    "sessionUpdate": "tool_call_update",
+                    "toolCallId": "c1",
+                    "title": "Edit pages/home.html",
+                }
+            )
+        )
+        == []
+    )
+
+
+def test_locations_only_refinement_previews_the_path() -> None:
+    out = translate_update(
+        {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "c2",
+            "locations": [{"path": "/workspace/a.py"}],
+        }
+    )
+    assert out == [(EventType.TOOL_UPDATED, {"call_id": "c2", "args_preview": "/workspace/a.py"})]
+
+
+def test_non_terminal_update_without_refinement_is_still_silent() -> None:
+    """只有状态变化（in_progress）的中间态照旧不产事件 —— 否则工具行会闪烁。"""
+    assert (
+        translate_update(
+            {"sessionUpdate": "tool_call_update", "toolCallId": "c3", "status": "in_progress"}
+        )
+        == []
+    )
+
+
+def test_terminal_update_carries_late_arguments() -> None:
+    out = translate_update(
+        {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "c4",
+            "status": "completed",
+            "rawInput": {"command": "ls"},
+        }
+    )
+    assert out[0][0] is EventType.TOOL_COMPLETED
+    assert out[0][1]["args"] == {"command": "ls"} and "ls" in out[0][1]["args_preview"]
+
+
+def test_long_multiline_titles_are_shortened() -> None:
+    """claude-agent-acp 把整段 shell 命令当终端工具的标题：名字只留一行（命令在参数预览里）。"""
+    out = translate_update(
+        {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "c5",
+            "title": 'python3 -c "\nimport csv\nprint(1)\n"',
+            "rawInput": {"command": 'python3 -c "\nimport csv\nprint(1)\n"'},
+        }
+    )
+    assert out[0][1]["name"] == 'python3 -c "…'
+    long = translate_update({"sessionUpdate": "tool_call", "toolCallId": "c6", "title": "x" * 200})
+    assert long[0][1]["name"] == "x" * 80 + "…"

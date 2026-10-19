@@ -18,6 +18,8 @@ from typing import Any
 from uuid import UUID
 
 import pytest
+from atlas_agent.domain.events import EventType
+from atlas_agent.domain.spec import AgentSpec, LimitSpec, ModelSpec
 from atlas_engine.contracts import ApprovalState
 from atlas_engine.kernel.middleware.approval import (
     EXPIRED_RESULT,
@@ -25,8 +27,6 @@ from atlas_engine.kernel.middleware.approval import (
     REJECTED_RESULT,
     approval_id_for,
 )
-from atlas_server.domain.events import EventType
-from atlas_server.domain.spec import AgentSpec, LimitSpec, ModelSpec
 from langchain_core.messages import AIMessageChunk
 
 from tests.graphs import run_agent as run
@@ -124,19 +124,65 @@ async def test_the_suspension_records_the_approval_it_waits_on() -> None:
     assert len(waits) == 1
     assert waits[0]["reason"] == "approval"
     assert waits[0]["token"], "没记下 approval_id，续跑时无从查状态"
+    # 没记下是哪个调用在等的话，续跑时 Patch 会把它补成 cancelled
+    assert waits[0]["tool_call_id"] == "c1"
 
 
-async def test_the_marker_never_reaches_the_model() -> None:
-    """哨兵是内部标记 —— 模型看到它会把它当成工具的返回值。"""
+async def test_pending_writes_no_tool_result() -> None:
+    """挂起时不写任何 tool 结果：调用留着悬空，只在 waiting_on 里登记（contracts/suspension.py）。
+
+    写了占位的话，续跑执行工具前还得先删掉它，否则同一个调用有两份结果；
+    续跑漏传 waiting_on 时，模型还会把占位当成工具的真实返回往下说。
+    """
     model = _tool_using_model()
     events = await _collect(_spec(), ScriptedGate("pending"), model=model)
+    types = [e.type for e in events]
 
     assert model.call_count == 1, "挂起之后不该再有模型调用"
-    completed = [e for e in events if e.type is EventType.MESSAGE_COMPLETED]
-    text = "".join(
-        b.get("text", "") for e in completed for b in e.data.get("content", [])
-    )
-    assert "__ATLAS_SUSPENDED__" not in text
+    assert EventType.TOOL_STARTED in types
+    assert EventType.TOOL_COMPLETED not in types and EventType.TOOL_FAILED not in types
+
+
+async def test_resume_executes_the_approved_call_without_asking_again() -> None:
+    """续跑段：消息原样 + waiting_on + decisions → 直接执行，不再问 gate、不再弹窗。"""
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    gate = ScriptedGate("pending")
+    token = approval_id_for("", "c1")
+    history = [
+        HumanMessage(content="记个待办"),
+        AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "id": "c1",
+                    "name": "write_todos",
+                    "args": {"todos": [{"content": "做事", "status": "pending"}]},
+                }
+            ],
+        ),
+    ]
+    model = TurnModel(scripts=[[AIMessageChunk(content="办完了。")]])
+    events = [
+        e
+        async for e in run(
+            _spec(),
+            run_id=RUN_ID,
+            model=model,
+            input_content=None,
+            history=history,
+            resume=True,
+            approvals=gate,
+            waiting_on={"c1": {"reason": "approval", "token": token}},
+            decisions={token: "approved"},
+        )
+    ]
+    types = [e.type for e in events]
+
+    assert gate.asked == [], "决策已经交进来了，不该再问 gate"
+    assert EventType.APPROVAL_REQUIRED not in types
+    assert EventType.TODOS_UPDATED in types, "被批准的工具没有执行"
+    assert types[-1] is EventType.RUN_FINISHED
 
 
 def test_the_approval_id_is_reproducible() -> None:

@@ -35,9 +35,9 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from atlas_server.config import Settings
-from atlas_server.providers.filesystem import make_workspace
-from atlas_server.providers.filesystem.oss import SKILLS_MOUNT
+from atlas_agent.config import Settings
+from atlas_agent.providers.filesystem import make_workspace
+from atlas_agent.providers.filesystem.oss import SKILLS_MOUNT
 
 from .conftest import REPO_ROOT
 

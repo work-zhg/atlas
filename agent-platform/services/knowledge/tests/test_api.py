@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 from typing import Any
+from uuid import UUID
 
+import pytest
 from conftest import run_indexing
 
-ALICE = {"X-User-Id": "alice"}
-BOB = {"X-User-Id": "bob"}
+ALICE = {"X-Uid": "alice"}
+BOB = {"X-Uid": "bob"}
 
 FAQ = """退款政策：购买后七天内可以申请无理由退款，退款会在三个工作日内原路返回。
 
@@ -249,44 +251,138 @@ async def test_review_required(client: Any, rt: Any) -> None:
 
 
 async def test_permissions(client: Any, rt: Any) -> None:
-    from atlas_knowledge.auth import Principal
-    from atlas_knowledge.services.permission import DatasetAccess
+    """库级权限 = 用户中心数据权限（AtlasKnowledgeBase）。
 
+    新建时按预设写初始授权，之后经共享接口调整。
+    """
     private = await _dataset(client)
-    # dev 模式下 bob 也有 kb:manage_all —— 用判定类直接验证规则
-    ds_row: Any = type("D", (), {"owner_id": "alice", "permission": "only_me"})()
-    bob = Principal(id="bob", operations=frozenset())
-    assert not DatasetAccess(ds_row, bob, None).can_read
-    ds_row.permission = "all_team"
-    acc = DatasetAccess(ds_row, bob, None)
-    assert acc.can_read and not acc.can_write
-    ds_row.permission = "partial_members"
-    assert not DatasetAccess(ds_row, bob, None).can_read
-    assert DatasetAccess(ds_row, bob, "read").can_read
-    assert DatasetAccess(ds_row, bob, "write").can_write
-    assert not DatasetAccess(ds_row, bob, "write").is_admin
-    assert DatasetAccess(
-        ds_row, Principal(id="x", operations=frozenset({"kb:manage_all"})), None
-    ).is_admin
-
-    # 列表的可见性查询
-    from atlas_knowledge.db.session import get_sessionmaker
-    from atlas_knowledge.services.datasets import DatasetService
-
     shared = await _dataset(
         client, permission="partial_members", members=[{"id": "bob", "level": "read"}]
     )
     team = await _dataset(client, permission="all_team")
+
+    async def ids(headers: dict[str, str]) -> set[str]:
+        r = await client.get("/v1/datasets", headers=headers)
+        return {d["id"] for d in r.json()["data"]}
+
+    assert await ids(BOB) == {shared["id"], team["id"]}, "建库预设写进了用户中心"
+    assert (await client.get(f"/v1/datasets/{private['id']}", headers=BOB)).status_code == 404
+    me = (await client.get(f"/v1/datasets/{shared['id']}", headers=BOB)).json()
+    assert me["my_level"] == "READ" and me["can_write"] is False and me["can_admin"] is False
+    # 只读的人改不了、删不了、共享不了
+    r = await client.patch(f"/v1/datasets/{shared['id']}", json={"name": "x"}, headers=BOB)
+    assert r.status_code == 403
+    assert (await client.delete(f"/v1/datasets/{shared['id']}", headers=BOB)).status_code == 403
+    body = {"level": "WRITE", "subjects": [{"type": "user", "id": "carol"}]}
+    r = await client.post(f"/v1/datasets/{shared['id']}/grants", json=body, headers=BOB)
+    assert r.status_code == 403
+
+    # 所有者共享：bob 升为读写；可见范围不再经 PATCH 改
+    r = await client.post(
+        f"/v1/datasets/{private['id']}/grants",
+        json={"level": "WRITE", "subjects": [{"type": "user", "id": "bob"}]},
+        headers=ALICE,
+    )
+    assert r.status_code == 201, r.text
+    assert private["id"] in await ids(BOB)
+    assert (await client.get(f"/v1/datasets/{private['id']}", headers=BOB)).json()["can_write"]
+    r = await client.patch(
+        f"/v1/datasets/{private['id']}", json={"permission": "all_team"}, headers=ALICE
+    )
+    assert r.status_code == 400
+
+    grants = (await client.get(f"/v1/datasets/{private['id']}/grants", headers=ALICE)).json()
+    assert grants["can_manage"] is True
+    owner_row = next(g for g in grants["data"] if g["permission"] == "OWNER")
+    bob_row = next(g for g in grants["data"] if g["subject"]["id"] == "bob")
+    # 至少保留一个 Owner（用户中心兜底）
+    r = await client.delete(f"/v1/datasets/{private['id']}/grants/{owner_row['id']}", headers=ALICE)
+    assert r.status_code == 409
+    # 别的库的授权行 id 不能拿来用
+    r = await client.delete(f"/v1/datasets/{team['id']}/grants/{bob_row['id']}", headers=ALICE)
+    assert r.status_code == 404
+    r = await client.delete(f"/v1/datasets/{private['id']}/grants/{bob_row['id']}", headers=ALICE)
+    assert r.status_code == 204
+    assert private["id"] not in await ids(BOB)
+
+    # 「全部知识库 · Owner」（数据编码级授权，取代 kb:manage_all）：看全部、管全部
+    rt.perms.type_levels["dave"] = "OWNER"
+    dave = {"X-Uid": "dave"}
+    assert await ids(dave) == {private["id"], shared["id"], team["id"]}
+    assert (await client.get(f"/v1/datasets/{private['id']}", headers=dave)).json()["can_admin"]
+
+    # 删除库时清掉用户中心里的授权
+    r = await client.delete(f"/v1/datasets/{team['id']}", headers=ALICE)
+    assert r.status_code == 204
+    assert team["id"] not in rt.perms.rows
+
+
+async def test_auth_uid_governs_dataset_permissions(client: Any, rt: Any) -> None:
+    """库级权限一律按 X-Auth-Uid（内网身份传递 §6、§8）：建库人记 X-Uid，OWNER 是 auth-uid。
+
+    存量服务账号的库（owner_kind = service，没登记到用户中心）只有「全部知识库」授权的人看得到、
+    不能共享；sync-uc --service-owner 把它改归一个人。
+    """
+    from atlas_knowledge.auth import Principal
+    from atlas_knowledge.db.models import Dataset
+    from atlas_knowledge.db.session import get_sessionmaker
+    from atlas_knowledge.errors import Forbidden
+    from atlas_knowledge.services.datasets import DatasetService
+    from atlas_knowledge.sync_uc import sync_uc
+    from sqlalchemy import select
+
+    on_behalf = {"X-Uid": "alice", "X-Auth-Uid": "de-1"}
+    r = await client.post(
+        "/v1/datasets",
+        json={"name": "数字员工的库", "embedding_model": "fake-embedding"},
+        headers=on_behalf,
+    )
+    assert r.status_code == 201, r.text
+    ds = r.json()
+    owner = next(g for g in rt.perms.rows[ds["id"]] if g["level"] == "OWNER")
+    assert owner["subject_id"] == "de-1"
     async with get_sessionmaker()() as s:
-        rows, total = await DatasetService(s, rt).list(bob)
-    ids = {str(r.uuid) for r in rows}
-    assert ids == {shared["id"], team["id"]} and total == 2 and private["id"] not in ids
+        row = await s.scalar(select(Dataset).where(Dataset.uuid == UUID(ds["id"])))
+        assert row is not None and row.created_by == "alice" and row.owner_id == "de-1"
+    # alice 本人（auth-uid = alice）看不到；按 de-1 判的请求看得到
+    assert ds["id"] not in {
+        d["id"] for d in (await client.get("/v1/datasets", headers=ALICE)).json()["data"]
+    }
+    listed = (await client.get("/v1/datasets", headers=on_behalf)).json()["data"]
+    assert ds["id"] in {d["id"] for d in listed}
+
+    # 存量服务账号的库
+    legacy = Dataset(
+        name="评测库",
+        owner_id="sa-bench",
+        owner_kind="service",
+        indexing_technique="high_quality",
+        embedding_model="fake-embedding",
+        embedding_dim=8,
+        retrieval_config={},
+        collection_name="kb_legacy",
+        created_by="sa-bench",
+    )
+    async with get_sessionmaker()() as s:
+        s.add(legacy)
+        await s.commit()
+    r = await client.get("/v1/datasets", headers=ALICE)
+    assert str(legacy.uuid) not in {d["id"] for d in r.json()["data"]}
+    rt.perms.type_levels["alice"] = "READ"
+    r = await client.get(f"/v1/datasets/{legacy.uuid}", headers=ALICE)
+    assert r.status_code == 200 and r.json()["my_level"] == "READ"
+    rt.perms.type_levels.pop("alice")
+    async with get_sessionmaker()() as s:
+        out = await sync_uc(s, rt.perms, service_owner="bench-user")
+        assert out["adopted"] == 1
+        await s.refresh(await s.merge(legacy))
+    bench = {"X-Uid": "bench-user"}
+    r = await client.get(f"/v1/datasets/{legacy.uuid}", headers=bench)
+    assert r.status_code == 200 and r.json()["can_admin"] and r.json()["owner_kind"] == "user"
 
     # 创建需要 kb:create
+    bob = Principal(uid="bob", operations=frozenset())
     async with get_sessionmaker()() as s:
-        import pytest
-        from atlas_knowledge.errors import Forbidden
-
         with pytest.raises(Forbidden):
             await DatasetService(s, rt).create(bob, {"name": "x"})
 
@@ -332,9 +428,9 @@ async def test_internal_and_multi_retrieve(client: Any, rt: Any) -> None:
     assert r.status_code == 200, r.text
     assert r.json()["records"][0]["content"].startswith("退款")
 
-    r = await client.post("/internal/v1/datasets/readable", json={"principal_id": "alice"})
+    r = await client.post("/internal/v1/datasets/readable", json={}, headers=ALICE)
     assert {d["name"] for d in r.json()["data"]} == {"A", "B"}
-    r = await client.post("/internal/v1/datasets/readable", json={"principal_id": "bob"})
+    r = await client.post("/internal/v1/datasets/readable", json={}, headers=BOB)
     assert r.json()["data"] == []
 
 
@@ -366,7 +462,7 @@ async def test_mcp_knowledge_search(client: Any, rt: Any) -> None:
 
     ds = await _dataset(client)
     await _upload(client, rt, ds["id"], process_rule=CUSTOM)
-    rt.settings = rt.settings.model_copy(update={"internal_token": SecretStr("s3cret")})
+    rt.settings = rt.settings.model_copy(update={"mcp_secret": SecretStr("s3cret")})
 
     app = create_app(runtime=rt)
     headers = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
@@ -457,7 +553,8 @@ async def test_structure_chunking_end_to_end(client: Any, rt: Any) -> None:
         "| 后端 | Java、Spring Boot |",
         "| 中间件 | Kafka、Redis |",
     ]
-    assert skills["child_chunks"][0]["context"] == "张三 > 专业技能\n| 方向 | 技能 |"
+    # 前缀 = 文档标题（上下文补全 L1）+ 标题路径 + 表头
+    assert skills["child_chunks"][0]["context"] == "resume\n张三 > 专业技能\n| 方向 | 技能 |"
 
     # 子块原文里没有「资信平台」，靠前缀里的标题路径召回到正确的项目
     records = await _hit(client, ds["id"], "资信平台", search_method="full_text_search")
@@ -483,3 +580,57 @@ async def test_structure_chunking_end_to_end(client: Any, rt: Any) -> None:
     assert all(k["context"] == "张三 > 项目经验 > 二、资信平台｜技术经理" for k in kids)
     records = await _hit(client, ds["id"], "反欺诈特征服务", search_method="full_text_search")
     assert records[0]["title_path"][-1] == "二、资信平台｜技术经理"
+
+
+async def test_sync_uc_moves_legacy_visibility_into_the_user_center(rt: Any) -> None:
+    """一次性迁移：旧的可见范围 / 成员 → 用户中心；所有者不在用户中心的认定为服务账号的库。"""
+    from uuid import uuid4
+
+    from atlas_knowledge.db.models import Dataset, DatasetPermission
+    from atlas_knowledge.db.session import get_sessionmaker
+    from atlas_knowledge.errors import Invalid
+    from atlas_knowledge.sync_uc import sync_uc
+    from conftest import FakeDataPermissions
+
+    class Perms(FakeDataPermissions):
+        async def create(self, dataset_id: str, name: str, grants: list[Any]) -> None:
+            if grants[0].subject_id == "sa-old":
+                raise Invalid("用户不存在")
+            await super().create(dataset_id, name, grants)
+
+    def row(owner: str, permission: str) -> Dataset:
+        u = uuid4()
+        return Dataset(
+            uuid=u,
+            name=f"{owner}-{permission}",
+            owner_id=owner,
+            permission=permission,
+            indexing_technique="high_quality",
+            embedding_model="fake-embedding",
+            embedding_dim=8,
+            retrieval_config={},
+            collection_name=f"kb_{u.hex}",
+            created_by=owner,
+        )
+
+    perms = Perms()
+    team, partial, mine, sa = (
+        row("alice", "all_team"),
+        row("alice", "partial_members"),
+        row("alice", "only_me"),
+        row("sa-old", "only_me"),
+    )
+    async with get_sessionmaker()() as s:
+        s.add_all([team, partial, mine, sa])
+        await s.flush()
+        s.add(DatasetPermission(dataset_uuid=partial.uuid, principal_id="bob", level="write"))
+        await s.commit()
+        out = await sync_uc(s, perms)
+        assert out == {"synced": 3, "skipped": 0, "service": 1, "member_failed": 0, "adopted": 0}
+        assert await perms.level("bob", str(team.uuid)) == "READ"  # 全员只读
+        assert await perms.level("bob", str(partial.uuid)) == "WRITE"
+        assert await perms.level("bob", str(mine.uuid)) == "NONE"
+        await s.refresh(sa)
+        assert sa.owner_kind == "service"
+        # 可以重复执行
+        assert (await sync_uc(s, perms))["skipped"] == 3

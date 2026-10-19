@@ -5,12 +5,12 @@ import { Alert, App, Button, Card, Checkbox, Descriptions, Empty, Form, Input, L
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
-import { DeptSelect, PageHead, showOnce, StatusTag, UserSelect } from "@/components/common";
+import { DeptSelect, LevelTag, PageHead, showOnce, StatusTag, SubjectPicker, toSubjects, UserSelect, type SubjectValue } from "@/components/common";
 import { GrantToModal, useGrantMutations } from "@/components/grantActions";
 import { api, errorText } from "@/lib/api";
-import { fmtTime } from "@/lib/format";
+import { fmtTime, LEVEL } from "@/lib/format";
 import { useCan } from "@/lib/session";
-import type { AppInfo, DataTypeInfo, GrantRow, MenuItem, MenuNode, Operation, Role } from "@/lib/types";
+import type { AppInfo, DataTypeInfo, GrantRow, Level, MenuItem, MenuNode, Operation, Role } from "@/lib/types";
 
 export default function AppDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -23,7 +23,8 @@ export default function AppDetailPage() {
   if (!a) return <Card loading />;
 
   const tabs = [
-    !a.is_builtin && can("app:manage") && { key: "conf", label: "接入配置", children: <ConfTab app={a} /> },
+    // 凭据属于平台（app:manage）；可访问范围属于本租户（tenant_app:manage）
+    !a.is_builtin && (can("app:manage") || can("tenant_app:manage")) && { key: "conf", label: "接入配置", children: <ConfTab app={a} /> },
     { key: "ops", label: `操作目录（${a.operations}）`, children: <OpsTab app={a} /> },
     { key: "menus", label: `菜单（${a.menus}）`, children: <MenusTab app={a} /> },
     can("role:view") && { key: "roles", label: `角色（${a.roles}）`, children: <RolesTab app={a} /> },
@@ -75,6 +76,7 @@ export default function AppDetailPage() {
 // ───────────────────────────────────────────── 接入配置
 
 function ConfTab({ app }: { app: AppInfo }) {
+  const can = useCan();
   const qc = useQueryClient();
   const { message, modal } = App.useApp();
   const [all, setAll] = useState(app.scope_all);
@@ -90,6 +92,16 @@ function ConfTab({ app }: { app: AppInfo }) {
         showOnce(modal, "新的 App Secret", [["App Key", r.app.app_key ?? ""], ["App Secret", r.app_secret]], "App Secret 只显示这一次，只能保存在应用后端。");
       },
     });
+  async function saveCode(code: string) {
+    try {
+      await api.patch(`/apps/${app.id}`, { code: code.trim() || null, version: app.version });
+      qc.invalidateQueries({ queryKey: ["app", app.id] });
+      qc.invalidateQueries({ queryKey: ["apps"] });
+      message.success("已保存应用编码");
+    } catch (e) {
+      message.error(errorText(e));
+    }
+  }
   async function saveScope() {
     try {
       const r = await api.put<{ accessible_users: number }>(`/apps/${app.id}/scope`, { all, dept_ids: all ? [] : depts });
@@ -103,8 +115,20 @@ function ConfTab({ app }: { app: AppInfo }) {
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, alignItems: "start" }}>
       <Space direction="vertical" size={16} style={{ width: "100%" }}>
+        {can("app:manage") && (
         <Card size="small" title="应用凭据" extra={<Tag color="blue">服务端调用开放接口</Tag>}>
           <Descriptions column={1} size="small" styles={{ label: { width: 100 } }}>
+            <Descriptions.Item label="应用编码">
+              <Typography.Text
+                code
+                editable={{
+                  tooltip: "内网服务调用开放接口时，请求头 X-Caller-App 写它",
+                  onChange: (v) => void saveCode(v),
+                }}
+              >
+                {app.code ?? ""}
+              </Typography.Text>
+            </Descriptions.Item>
             <Descriptions.Item label="App Key">
               <Typography.Text code copyable>
                 {app.app_key}
@@ -121,6 +145,7 @@ function ConfTab({ app }: { app: AppInfo }) {
           </Descriptions>
           <div className="uc-muted">Secret 只在生成时显示一次；只能保存在应用后端，不能下发到浏览器。</div>
         </Card>
+        )}
         <Card size="small" title="开放接口">
           <Descriptions column={1} size="small" styles={{ label: { width: 100 } }}>
             <Descriptions.Item label="Base URL">
@@ -128,13 +153,14 @@ function ConfTab({ app }: { app: AppInfo }) {
             </Descriptions.Item>
             <Descriptions.Item label="获取令牌">
               <span className="uc-mono">POST /auth/token</span>
+              <span className="uc-muted">（带 tenant_code：令牌绑定到该租户）</span>
             </Descriptions.Item>
             <Descriptions.Item label="主要接口">用户与部门查询、授权快照（can_access / 角色 / 操作码 / 菜单）、实时校验、数据权限</Descriptions.Item>
           </Descriptions>
           <Alert type="info" showIcon message="统一登录（SSO）暂不提供：应用自行处理登录，按账号与用户中心对齐身份；以后引入 Keycloak。" />
         </Card>
       </Space>
-      <Card size="small" title="可访问范围" extra={<span className="uc-muted">当前 {app.accessible_users ?? 0} 人可访问</span>}>
+      <Card size="small" title="可访问范围（本租户）" extra={<span className="uc-muted">当前 {app.accessible_users ?? 0} 人可访问</span>}>
         <Radio.Group value={all} onChange={(e) => setAll(e.target.value)} style={{ marginBottom: 12 }}>
           <Radio value>全员</Radio>
           <Radio value={false}>指定部门（含其子部门）</Radio>
@@ -683,21 +709,11 @@ function DataTypesTab({ app }: { app: AppInfo }) {
   const qc = useQueryClient();
   const { message, modal } = App.useApp();
   const list = useQuery({ queryKey: ["app", app.id, "dtypes"], queryFn: () => api.get<DataTypeInfo[]>(`/apps/${app.id}/data-types`) });
-  const ops = useQuery({ queryKey: ["app", app.id, "ops"], queryFn: () => api.get<Operation[]>(`/apps/${app.id}/operations`) });
-  const opOptions = (ops.data ?? []).map((o) => ({ value: o.code, label: `${o.code} · ${o.name}` }));
   const [open, setOpen] = useState(false);
+  const [typeAcl, setTypeAcl] = useState<DataTypeInfo | null>(null);
   const [form] = Form.useForm();
   const refresh = () => qc.invalidateQueries({ queryKey: ["app", app.id] });
-  async function setAdminOp(d: DataTypeInfo, code: string | undefined) {
-    try {
-      await api.patch(`/data-types/${d.id}`, { admin_operation_code: code ?? null });
-      refresh();
-      message.success("已保存");
-    } catch (e) {
-      message.error(errorText(e));
-    }
-  }
-  async function create(v: { code: string; name: string; description?: string; admin_operation_code?: string }) {
+  async function create(v: { code: string; name: string; description?: string }) {
     try {
       await api.post(`/apps/${app.id}/data-types`, v);
       refresh();
@@ -721,9 +737,11 @@ function DataTypesTab({ app }: { app: AppInfo }) {
             { title: "名称", dataIndex: "name" },
             { title: "数据条数", dataIndex: "data_count" },
             {
-              title: "数据管理员操作码",
+              title: "全部数据授权",
               render: (_, d) => (
-                <Select size="small" allowClear placeholder="无" style={{ width: 220 }} value={d.admin_operation_code ?? undefined} options={opOptions} onChange={(v) => setAdminOp(d, v)} />
+                <Button size="small" onClick={() => setTypeAcl(d)}>
+                  查看 / 管理
+                </Button>
               ),
             },
             { title: "说明", dataIndex: "description" },
@@ -751,6 +769,8 @@ function DataTypesTab({ app }: { app: AppInfo }) {
         />
         <div className="uc-muted" style={{ marginTop: 8 }}>
           权限级别：只读 &lt; 读写 &lt; Owner（Owner 还能管理这条数据的授权）。「只读 / 读写」在数据上能做什么由应用自己解释。
+          <br />
+          全部数据授权：对该编码下<b>全部</b>数据的级别（如「全部智能体 · Owner」），与单条数据的授权取高；它不经角色表达，也不计入单条数据的 Owner。
         </div>
       </Card>
       <Card size="small" title="接口（应用调用）">
@@ -769,6 +789,10 @@ GET /open/v1/data-permissions/accessible?data_code=${code}&user_id=<用户 uuid>
 // ④ 数据删除后清理
 DELETE /open/v1/data-permissions?data_code=${code}&data_id=xxx_7f3a21
 
+// ⑤ 用户对该编码下全部数据的级别（数据编码级授权）—— 判断「能不能看 / 管全部」
+GET /open/v1/data-permissions/type?data_code=${code}&user_id=<用户 uuid>
+→ { "permission": "OWNER", "sources": [...] }
+
 // 已有授权的数据，应用代表用户修改时须带 operator_id（且其为 Owner）`}</pre>
       </Card>
       <Modal open={open} title={`登记数据编码 · ${app.name}`} onCancel={() => setOpen(false)} onOk={() => form.submit()} okText="保存">
@@ -782,11 +806,112 @@ DELETE /open/v1/data-permissions?data_code=${code}&data_id=xxx_7f3a21
           <Form.Item name="description" label="说明">
             <Input />
           </Form.Item>
-          <Form.Item name="admin_operation_code" label="数据管理员操作码" extra="拥有该操作的用户可修改此编码下任一数据的授权（如 Owner 全部离职时由平台管理员接手）">
-            <Select allowClear placeholder="不设置" options={opOptions} />
-          </Form.Item>
         </Form>
       </Modal>
+      {typeAcl && <TypeAclModal dt={typeAcl} onClose={() => setTypeAcl(null)} />}
     </Space>
+  );
+}
+
+const LEVEL_OPTS = (["READ", "WRITE", "OWNER"] as const).map((l) => ({ value: l, label: LEVEL[l].label }));
+
+interface TypeAclView {
+  data_type: { id: string; code: string; name: string; app: string };
+  my_level: Level;
+  can_manage: boolean;
+  acl: {
+    id: string;
+    permission: Level;
+    subject: { type: "USER" | "DEPT"; id: string; name: string; account?: string; status?: string };
+    include_sub: boolean;
+    granted_at: string;
+  }[];
+}
+
+/** 数据编码级授权：对该编码下全部数据的级别。属于数据权限领域，与角色无关。 */
+function TypeAclModal({ dt, onClose }: { dt: DataTypeInfo; onClose: () => void }) {
+  const qc = useQueryClient();
+  const { message } = App.useApp();
+  const key = ["data-type-acl", dt.id];
+  const q = useQuery({ queryKey: key, queryFn: () => api.get<TypeAclView>(`/data-types/${dt.id}/acl`) });
+  const [level, setLevel] = useState<Level>("OWNER");
+  const [value, setValue] = useState<SubjectValue>({ depts: [], users: [], includeSub: true });
+  const act = async (fn: () => Promise<unknown>, ok: string) => {
+    try {
+      await fn();
+      await qc.invalidateQueries({ queryKey: key });
+      message.success(ok);
+    } catch (e) {
+      message.error(errorText(e));
+    }
+  };
+  async function add() {
+    const subjects = toSubjects(value);
+    if (!subjects.length) return message.warning("请选择组织或用户");
+    await act(() => api.post(`/data-types/${dt.id}/acl`, { level, subjects, include_sub: value.includeSub }), "已授权");
+    setValue({ depts: [], users: [], includeSub: true });
+  }
+  const v = q.data;
+  return (
+    <Modal open title={`全部数据授权 · ${dt.name}（${dt.code}）`} onCancel={onClose} footer={null} width={720}>
+      <div className="uc-muted" style={{ marginBottom: 12 }}>
+        对「{dt.name}」下<b>全部</b>数据的级别，与单条数据的授权取高。由用户中心的权限管理员或该编码的 Owner 维护。
+      </div>
+      <Table
+        size="small"
+        rowKey="id"
+        loading={q.isLoading}
+        pagination={false}
+        dataSource={v?.acl ?? []}
+        locale={{ emptyText: "尚无全部数据授权" }}
+        columns={[
+          {
+            title: "授权对象",
+            render: (_, a) =>
+              a.subject.type === "USER" ? (
+                <Space>
+                  <b>{a.subject.name}</b>
+                  <span className="uc-muted">{a.subject.account}</span>
+                  {a.subject.status === "disabled" && <Tag>已停用</Tag>}
+                </Space>
+              ) : (
+                <b>🏢 {a.subject.name}</b>
+              ),
+          },
+          {
+            title: "权限",
+            render: (_, a) =>
+              v?.can_manage ? (
+                <Select size="small" value={a.permission} style={{ width: 100 }} options={LEVEL_OPTS} onChange={(lv) => act(() => api.patch(`/data-type-acl/${a.id}`, { level: lv }), "已调整")} />
+              ) : (
+                <LevelTag level={a.permission} />
+              ),
+          },
+          { title: "范围", render: (_, a) => (a.subject.type === "USER" ? "本人" : a.include_sub ? "本部门及下级部门" : "仅本部门") },
+          { title: "时间", render: (_, a) => <span className="uc-muted">{fmtTime(a.granted_at)}</span> },
+          {
+            title: "",
+            align: "right",
+            render: (_, a) =>
+              v?.can_manage && (
+                <Button type="link" size="small" danger onClick={() => act(() => api.del(`/data-type-acl/${a.id}`), "已移除")}>
+                  移除
+                </Button>
+              ),
+          },
+        ]}
+      />
+      {v?.can_manage && (
+        <Card size="small" title="添加" style={{ marginTop: 12 }}>
+          <Space direction="vertical" style={{ width: "100%" }}>
+            <Radio.Group value={level} onChange={(e) => setLevel(e.target.value)} options={LEVEL_OPTS} />
+            <SubjectPicker value={value} onChange={setValue} />
+            <Button type="primary" onClick={add}>
+              授权
+            </Button>
+          </Space>
+        </Card>
+      )}
+    </Modal>
   );
 }

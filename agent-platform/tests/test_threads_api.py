@@ -11,9 +11,9 @@ from uuid import UUID
 
 import httpx
 import pytest
-from atlas_server.db.session import get_sessionmaker
-from atlas_server.main import create_app
-from atlas_server.repositories.thread import ThreadRepository
+from atlas_agent.db.session import get_sessionmaker
+from atlas_agent.main import create_app
+from atlas_agent.repositories.thread import ThreadRepository
 from httpx import ASGITransport
 
 

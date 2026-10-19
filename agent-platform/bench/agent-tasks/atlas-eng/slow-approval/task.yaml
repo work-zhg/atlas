@@ -1,0 +1,12 @@
+category: eng
+tags: [eng, approval, slow]
+instruction: |
+  用 execute 运行 `python3 -c 'print(6*7)'`，把命令输出写入 out.txt（只写输出）。
+# 审批 120 秒后才批：平台不设审批等待上限，批准后应正常继续
+approval_policy: delay:120
+expect:
+  - desc: 经过了审批
+    gate: false
+    metric: approvals
+    count: ">=1"
+budget: {wall_s: 900}

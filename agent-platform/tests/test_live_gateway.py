@@ -12,9 +12,9 @@ import os
 from uuid import UUID
 
 import pytest
-from atlas_server.domain.events import EventType
-from atlas_server.domain.spec import AgentSpec, LimitSpec, ModelSpec
-from atlas_server.providers.llm.factory import build_chat_model
+from atlas_agent.domain.events import EventType
+from atlas_agent.domain.spec import AgentSpec, LimitSpec, ModelSpec
+from atlas_agent.providers.llm.factory import build_chat_model
 
 from tests.graphs import run_agent as run
 
@@ -137,7 +137,7 @@ async def test_live_mcp_web_search_via_higress() -> None:
     import uuid
 
     import httpx
-    from atlas_server.providers.mcp import (
+    from atlas_agent.providers.mcp import (
         CallContext,
         McpServerConfig,
         NativeMcpTools,
