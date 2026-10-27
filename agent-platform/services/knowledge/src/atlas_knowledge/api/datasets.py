@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 from datetime import datetime
 from typing import Annotated, Any, Literal
@@ -42,6 +43,7 @@ from .serializers import (
 )
 
 router = APIRouter(prefix="/v1")
+logger = logging.getLogger(__name__)
 
 Page = Annotated[int, Query(ge=1)]
 Limit = Annotated[int, Query(ge=1, le=100)]
@@ -50,8 +52,30 @@ Limit = Annotated[int, Query(ge=1, le=100)]
 # ───────────────────────────────────────────── 元信息
 
 
+async def _remote_options(rt: Any) -> tuple[list[str], list[str]]:
+    """可选的远程嵌入、重排模型。经模型网关时是平台用途 kb_embedding / kb_rerank 的允许范围
+    （doc/model-design.html §6.7）；网关暂时不可用就只给本地模型。没接时照旧按部署配置。"""
+    if rt.model_purposes is None:
+        return (
+            list(rt.settings.embedding_remote_models) if rt.settings.embedding_base_url else [],
+            list(rt.settings.rerank_remote_models) if rt.settings.rerank_base_url else [],
+        )
+    try:
+        return (
+            await rt.model_purposes.options("kb_embedding"),
+            await rt.model_purposes.options("kb_rerank"),
+        )
+    except Exception:
+        logger.warning("模型网关不可用，建库时只列本地模型", exc_info=True)
+        return [], []
+
+
 @router.get("/meta")
 async def meta(rt: RuntimeDep, p: PrincipalDep) -> dict[str, Any]:
+    embeddings, rerankers = await _remote_options(rt)
+    rerank_provider = (
+        "cohere_compatible" if rt.model_purposes is not None else rt.settings.rerank_remote_provider
+    )
     return {
         "supported_extensions": sorted(SUPPORTED_EXTENSIONS),
         "upload_max_bytes": rt.settings.upload_max_bytes,
@@ -62,19 +86,11 @@ async def meta(rt: RuntimeDep, p: PrincipalDep) -> dict[str, Any]:
         "default_retrieval_config": DEFAULT_RETRIEVAL_CONFIG,
         "embedding_models": [
             {"provider": "fastembed", "model": rt.settings.embedding_model},
-            *(
-                {"provider": "openai_compatible", "model": m}
-                for m in rt.settings.embedding_remote_models
-                if rt.settings.embedding_base_url
-            ),
+            *({"provider": "openai_compatible", "model": m} for m in embeddings),
         ],
         "rerank_models": [
             {"provider": "fastembed", "model": rt.settings.rerank_model},
-            *(
-                {"provider": rt.settings.rerank_remote_provider, "model": m}
-                for m in rt.settings.rerank_remote_models
-                if rt.settings.rerank_base_url
-            ),
+            *({"provider": rerank_provider, "model": m} for m in rerankers),
         ],
         "operations": sorted(p.operations & {"kb:create", "kb:review"}),
         "trace_url_template": rt.settings.trace_url_template,

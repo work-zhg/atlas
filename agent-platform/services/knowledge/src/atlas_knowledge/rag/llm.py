@@ -47,12 +47,17 @@ class OpenAICompatibleChat:
         timeout_s: float = 60.0,
         max_retries: int = 3,
         transport: httpx.AsyncBaseTransport | None = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         self.model = model
         self._retries = max_retries
         self._client = httpx.AsyncClient(
             base_url=base_url.rstrip("/"),
-            headers={"Authorization": f"Bearer {api_key}"},
+            # headers：经模型网关时的平台用途（X-Model-Purpose、X-Caller-App），不带 Key
+            headers={
+                **({"Authorization": f"Bearer {api_key}"} if api_key else {}),
+                **(headers or {}),
+            },
             timeout=timeout_s,
             transport=transport,
         )

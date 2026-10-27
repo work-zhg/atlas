@@ -1,5 +1,5 @@
 .PHONY: up down sync lint types arch test migrate serve check smoke regress config-migrate config-serve \
-        memory-migrate memory-serve mcpgw-migrate mcpgw-serve memory-scopes \
+        memory-migrate memory-serve mcpgw-migrate mcpgw-serve modelgw-migrate modelgw-serve memory-scopes \
         uc-migrate uc-serve uc-bootstrap uc-web-install uc-web-dev uc-dev \
         tf-migrate tf-serve tf-worker tf-register-uc tf-web-install tf-web-dev tf-dev \
         web-install web-dev web-build web-check web-gen dev
@@ -28,6 +28,12 @@ memory-scopes:  ; uv run python -m atlas_memory scope add user --key uid --descr
 #   atlas-server 配 MCP_GATEWAY_URL=http://127.0.0.1:8070（Atlas 只经网关调 MCP）
 mcpgw-migrate: ; uv run python -m atlas_mcpgateway migrate
 mcpgw-serve:   ; uv run python -m atlas_mcpgateway serve
+# 模型网关（doc/model-design.html）。库是同一 PG 上的 atlas_modelgateway（make up 会建）。
+#   首次：make modelgw-migrate；python -m atlas_modelgateway register-uc --account admin；
+#   Higress 上配模型路由（deploy/local/higress/models.py）；登记模型（model add / import）。
+#   atlas-server、知识库配 MODEL_GATEWAY_URL=http://127.0.0.1:8090 才经网关（不配照旧直连）
+modelgw-migrate: ; uv run python -m atlas_modelgateway migrate
+modelgw-serve:   ; uv run python -m atlas_modelgateway serve
 # 用户中心（独立系统，prototype/usercenter/docs/）。库是同一 PG 上的 atlas_usercenter（make up 会建）。
 #   首次：make uc-migrate && make uc-bootstrap ACCOUNT=admin NAME=管理员 EMAIL=admin@example.com COMPANY=星海科技
 uc-migrate:   ; uv run python -m atlas_usercenter migrate

@@ -44,6 +44,7 @@ COPY agent-platform/services/config/ config/
 COPY agent-platform/services/knowledge/ knowledge/
 COPY agent-platform/services/memory/ memory/
 COPY agent-platform/services/mcpgateway/ mcpgateway/
+COPY agent-platform/services/modelgateway/ modelgateway/
 COPY agent-platform/services/agent/ server/
 # 用户中心与 AI TeamFlow 后端：与 Atlas 共用依赖树（fastapi / sqlalchemy / httpx），同一个镜像、各自的 Deployment
 COPY usercenter/services/usercenter/ usercenter/
@@ -65,6 +66,7 @@ COPY docker/app/constraints.txt /tmp/constraints.txt
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -c /tmp/constraints.txt \
                 ./jsonrpc ./host ./acp ./engine ./redislock ./config ./knowledge ./memory ./mcpgateway \
+                ./modelgateway \
                 ./server \
                 ./usercenter ./teamflow
 
@@ -72,7 +74,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # alembic.ini 与 migrations/ 在包外（server/ 目录下），迁移要从这里跑。
 WORKDIR /app/server
 
-EXPOSE 8000 8020 8030 8040 8050 8060 8070
+EXPOSE 8000 8020 8030 8040 8050 8060 8070 8090
 
 # server 的入口。config 由 Deployment 覆盖成 python -m atlas_config serve（迁移：python -m atlas_config migrate，
 # 迁移脚本在包内，不依赖工作目录）。

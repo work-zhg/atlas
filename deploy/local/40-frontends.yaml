@@ -5,6 +5,7 @@
 #   /v1/previews/*       → atlas-server（会话文件预览站点）
 #   /atlas-api/*         → atlas-server（集群内）            /atlas-config-api/* → atlas-config（集群内）
 #   /atlas-knowledge-api/* → atlas-knowledge（集群内；/internal、/mcp 不对外）
+#   /model-gateway-api/*   → atlas-modelgateway 的管理端（集群内；/internal、/v1 不对外）
 #   /uc/*                → uc-web（basePath=/uc）           /uc/api/*           → 用户中心后端（atlas-usercenter）
 #   /teamflow/*          → tf-web（basePath=/teamflow）     /teamflow/api/*     → TeamFlow 后端（atlas-teamflow）
 #
@@ -147,6 +148,14 @@ data:
       location ^~ /mcp-gateway-api/ {
         include /etc/nginx/conf.d/identity.inc;
         proxy_pass http://atlas-mcpgateway.atlas-system.svc.cluster.local:8070/;
+      }
+      # 模型网关的管理端接口（doc/model-design.html §11）。/internal 给 Atlas、知识库，/v1 是数据面
+      # （Atlas、会话 Pod 带主体 Key 调，平台功能带应用 + 用途调），都只走集群内地址
+      location ^~ /model-gateway-api/internal/ { return 404; }
+      location ^~ /model-gateway-api/v1/ { return 404; }
+      location ^~ /model-gateway-api/ {
+        include /etc/nginx/conf.d/identity.inc;
+        proxy_pass http://atlas-modelgateway.atlas-system.svc.cluster.local:8090/;
       }
       location ~ ^/atlas(/|$) {
         proxy_pass http://127.0.0.1:3000;

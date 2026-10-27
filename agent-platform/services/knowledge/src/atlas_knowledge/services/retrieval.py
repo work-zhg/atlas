@@ -198,7 +198,7 @@ class KnowledgeRetrieval:
             if (
                 threshold
                 and top < threshold
-                and self._rt.llm is not None
+                and (self._rt.query_llm or self._rt.llm) is not None
                 and len(plan.variants) == 1
                 and not plan.sub_questions
             ):
@@ -302,7 +302,7 @@ class KnowledgeRetrieval:
             plan = await understand(
                 query,
                 cfg=cfg,
-                llm=self._rt.llm,
+                llm=self._rt.query_llm or self._rt.llm,
                 redis=self._rt.redis,
                 history=opts.history,
                 fields={k: f for k, f in fields.items() if f.llm_extract},

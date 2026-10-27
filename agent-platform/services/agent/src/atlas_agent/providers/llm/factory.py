@@ -12,6 +12,8 @@ LangGraph，要的就是这个类型 —— 现在建对，P4 不用重写。
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from atlas_engine.contracts import UnsupportedProvider
 from langchain_core.language_models import BaseChatModel
 
@@ -23,20 +25,31 @@ apply_litellm_compat()
 
 
 def build_chat_model(
-    spec: ModelSpec, *, base_url: str, api_key: str, callbacks: list | None = None
+    spec: ModelSpec,
+    *,
+    base_url: str,
+    api_key: str,
+    callbacks: list | None = None,
+    headers: Mapping[str, str] | None = None,
 ) -> BaseChatModel:
     """callbacks 走构造器，不是事后改属性、也不是 with_config。
 
     ★ with_config 会把模型包成 RunnableBinding，而图要对它调 bind_tools ——
       包一层之后那条路不可靠。构造器参数是 LangChain 原生支持的，且对
       下游完全透明。
+    ★ headers：经模型网关时的平台用途、用量归属参考（providers/llm/modelgateway.py），
+      每个请求都带上。
     """
     spec.validate()
 
     if spec.provider == "anthropic":
-        return _build_anthropic(spec, base_url=base_url, api_key=api_key, callbacks=callbacks)
+        return _build_anthropic(
+            spec, base_url=base_url, api_key=api_key, callbacks=callbacks, headers=headers
+        )
     if spec.provider == "openai":
-        return _build_openai(spec, base_url=base_url, api_key=api_key, callbacks=callbacks)
+        return _build_openai(
+            spec, base_url=base_url, api_key=api_key, callbacks=callbacks, headers=headers
+        )
     raise UnsupportedProvider(f"未知 provider: {spec.provider!r}", provider=spec.provider)
 
 
@@ -47,7 +60,12 @@ def _request_timeout_s() -> float:
 
 
 def _build_anthropic(
-    spec: ModelSpec, *, base_url: str, api_key: str, callbacks: list | None = None
+    spec: ModelSpec,
+    *,
+    base_url: str,
+    api_key: str,
+    callbacks: list | None = None,
+    headers: Mapping[str, str] | None = None,
 ) -> BaseChatModel:
     from langchain_anthropic import ChatAnthropic
 
@@ -92,11 +110,18 @@ def _build_anthropic(
 
     if callbacks:
         kwargs["callbacks"] = callbacks
+    if headers:
+        kwargs["default_headers"] = dict(headers)
     return ChatAnthropic(**kwargs)  # type: ignore[arg-type]
 
 
 def _build_openai(
-    spec: ModelSpec, *, base_url: str, api_key: str, callbacks: list | None = None
+    spec: ModelSpec,
+    *,
+    base_url: str,
+    api_key: str,
+    callbacks: list | None = None,
+    headers: Mapping[str, str] | None = None,
 ) -> BaseChatModel:
     """OpenAI 协议分支：thinking / effort / prompt_cache 在此降级为 no-op。"""
     try:
@@ -118,4 +143,6 @@ def _build_openai(
         kwargs["temperature"] = spec.temperature
     if callbacks:
         kwargs["callbacks"] = callbacks
+    if headers:
+        kwargs["default_headers"] = dict(headers)
     return ChatOpenAI(**kwargs)  # type: ignore[arg-type]

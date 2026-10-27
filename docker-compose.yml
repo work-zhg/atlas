@@ -120,6 +120,20 @@ services:
         psql "postgresql://atlas:atlas@postgres:5432/atlas" -c "CREATE DATABASE atlas_mcpgateway"
     restart: "no"
 
+  # 模型网关（atlas-modelgateway，doc/model-design.html）的库：同一实例上的独立 database，同款幂等写法。
+  modelgateway-init-db:
+    image: postgres:16-alpine
+    container_name: atlas-modelgateway-initdb
+    depends_on:
+      postgres: {condition: service_healthy}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        psql "postgresql://atlas:atlas@postgres:5432/atlas"
+        -tc "SELECT 1 FROM pg_database WHERE datname='atlas_modelgateway'" | grep -q 1 ||
+        psql "postgresql://atlas:atlas@postgres:5432/atlas" -c "CREATE DATABASE atlas_modelgateway"
+    restart: "no"
+
   # 用户中心（atlas-usercenter）的库：同一实例上的独立 database，与 config-init-db 同款幂等写法。
   usercenter-init-db:
     image: postgres:16-alpine

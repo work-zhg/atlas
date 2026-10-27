@@ -45,6 +45,38 @@ _TEMPERATURE_OK: frozenset[str] = frozenset({"claude-haiku-4-5"})
 
 # thinking=off 在 opus-5 上仅 effort <= high 合法，xhigh/max 会 400。
 _EFFORT_FORBIDS_THINKING_OFF: frozenset[str] = frozenset({"xhigh", "max"})
+_EFFORT_ORDER: tuple[Effort, ...] = ("low", "medium", "high", "xhigh", "max")
+
+
+@dataclass(frozen=True)
+class ModelCaps:
+    """模型目录给出的能力与参数规则（doc/model-design.html §5.2）。
+
+    ★ 经模型网关时由装配按目录填进 ModelSpec.caps，取代上面那几份按模型名写死的集合；
+      没接模型网关（caps 为空）时照旧按写死的规则判断。
+    """
+
+    thinking: bool = False
+    adaptive_thinking: bool = False
+    thinking_always_on: bool = False
+    effort: bool = False
+    #: 关闭思考时档位不能超过它。None = 没有这条约束
+    thinking_off_max_effort: Effort | None = None
+    temperature: bool = False
+    prompt_cache: bool = False
+
+    @classmethod
+    def from_catalog(cls, caps: Mapping[str, object]) -> ModelCaps:
+        max_effort = caps.get("thinking_off_max_effort")
+        return cls(
+            thinking=bool(caps.get("thinking")),
+            adaptive_thinking=bool(caps.get("adaptive_thinking")),
+            thinking_always_on=bool(caps.get("thinking_always_on")),
+            effort=bool(caps.get("effort")),
+            thinking_off_max_effort=max_effort if max_effort in _EFFORT_ORDER else None,  # type: ignore[arg-type]
+            temperature=bool(caps.get("temperature")),
+            prompt_cache=bool(caps.get("prompt_cache")),
+        )
 
 
 @dataclass(frozen=True)
@@ -61,11 +93,37 @@ class ModelSpec:
     # ⚠️ 仅当 model_catalog.supports_temperature 为真时可设（实质只有 haiku-4-5）。
     #    None = 不发送该参数，这也是 opus/sonnet/fable 唯一合法的取值。
     temperature: float | None = None
+    #: 模型目录给出的能力（经模型网关时由装配填入，不进配置快照）。None = 按上面写死的规则
+    caps: ModelCaps | None = None
+
+    def _supports_effort(self) -> bool:
+        return self.caps.effort if self.caps is not None else self.model in _EFFORT_OK
+
+    def _supports_adaptive(self) -> bool:
+        if self.caps is not None:
+            return self.caps.adaptive_thinking
+        return self.model in _ADAPTIVE_THINKING_OK
+
+    def _thinking_always_on(self) -> bool:
+        if self.caps is not None:
+            return self.caps.thinking_always_on
+        return self.model in _THINKING_ALWAYS_ON
+
+    def _supports_temperature(self) -> bool:
+        return self.caps.temperature if self.caps is not None else self.model in _TEMPERATURE_OK
+
+    def _effort_too_high_without_thinking(self, effort: Effort | None) -> bool:
+        if effort is None:
+            return False
+        if self.caps is None:
+            return effort in _EFFORT_FORBIDS_THINKING_OFF
+        limit = self.caps.thinking_off_max_effort
+        return limit is not None and _EFFORT_ORDER.index(effort) > _EFFORT_ORDER.index(limit)
 
     def resolve_effort(self) -> Effort | None:
         """None 表示**完全不发送 effort 参数**（haiku-4-5 只能这样）。"""
         if self.effort is None:
-            return "high" if self.model in _EFFORT_OK else None
+            return "high" if self._supports_effort() else None
         return self.effort
 
     def resolve_thinking(self) -> Literal["adaptive", "off", "none"]:
@@ -75,35 +133,35 @@ class ModelSpec:
         （如 haiku-4-5）唯一安全的选择。
         """
         if self.thinking == "auto":
-            return "adaptive" if self.model in _ADAPTIVE_THINKING_OK else "none"
+            return "adaptive" if self._supports_adaptive() else "none"
         return self.thinking
 
     def validate(self) -> None:
-        if self.temperature is not None and self.model not in _TEMPERATURE_OK:
+        if self.temperature is not None and not self._supports_temperature():
             raise InvalidSpec(
                 f"model {self.model!r} 不接受 temperature（网关返回 400）；"
                 "请改用 effort 控制，或把 temperature 置为 None",
                 model=self.model,
             )
         # 显式要 adaptive 但模型不支持 —— 报错而不是悄悄降级（§13.2）
-        if self.thinking == "adaptive" and self.model not in _ADAPTIVE_THINKING_OK:
+        if self.thinking == "adaptive" and not self._supports_adaptive():
             raise InvalidSpec(
                 f"model {self.model!r} 不支持 adaptive thinking（网关返回 400）；"
                 "用 thinking='auto' 让 engine 按模型能力选择",
                 model=self.model,
             )
-        if self.thinking == "off" and self.model in _THINKING_ALWAYS_ON:
+        if self.thinking == "off" and self._thinking_always_on():
             raise InvalidSpec(
                 f"model {self.model!r} 的思考无法关闭（网关返回 400）",
                 model=self.model,
             )
-        if self.effort is not None and self.model not in _EFFORT_OK:
+        if self.effort is not None and not self._supports_effort():
             raise InvalidSpec(
                 f"model {self.model!r} 不支持 effort 参数（网关返回 400）；"
                 "把 effort 置为 None 让 engine 按模型能力决定",
                 model=self.model,
             )
-        if self.thinking == "off" and self.resolve_effort() in _EFFORT_FORBIDS_THINKING_OFF:
+        if self.thinking == "off" and self._effort_too_high_without_thinking(self.resolve_effort()):
             raise InvalidSpec(
                 f"thinking=off 与 effort={self.resolve_effort()!r} 冲突（网关返回 400）；"
                 "effort 需 <= high，或开启 thinking",

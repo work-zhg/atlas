@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -22,6 +22,32 @@ class ModelInfo(BaseModel):
     supports_temperature: bool
     min_cacheable_tokens: int
     is_available: bool = Field(description="网关巡检结果；false 时编辑器标灰不可选")
+    # ── 以下只在接了模型网关时有意义（doc/model-design.html §5、§11.2）
+    #: onboarding | available | deprecated | retired；没接模型网关时恒为 available
+    status: str = "available"
+    #: 能在编辑器里新选（可用、没停用；弃用的不能新选，§5.3）
+    selectable: bool = True
+    description: str = ""
+    tags: list[str] = []
+    input_modalities: list[str] = ["text"]
+    #: 弃用：替代模型、计划下线时间
+    replacement: str | None = None
+    retire_at: str | None = None
+    #: 部署方式、区域、数据政策（编辑器里展示给选的人，§11.1）
+    data_policy: dict[str, Any] = {}
+    #: 当前价目（每百万 token 的单价）；没有为空
+    price: dict[str, Any] | None = None
+
+
+class ModelSubjectOut(BaseModel):
+    """编辑器里模型按谁的权限列出（doc/model-design.html §11.2）。只在经模型网关时给出。"""
+
+    kind: Literal["user", "agent"]
+    #: 权限主体（用户中心 uid）。以 Agent 为权限、还没有数字员工时为空
+    uid: UUID | None = None
+    #: 主体没有权限的对话模型个数（不列出它们，只显示个数）
+    hidden_models: int = 0
+    notes: list[str] = []
 
 
 class ModelListResponse(BaseModel):
@@ -29,6 +55,8 @@ class ModelListResponse(BaseModel):
     gateway_reachable: bool = Field(
         description="false 表示巡检失败，is_available 退化为 catalog 中的存量值"
     )
+    #: 经模型网关时：按谁的权限列出
+    subject: ModelSubjectOut | None = None
 
 
 class ToolInfo(BaseModel):

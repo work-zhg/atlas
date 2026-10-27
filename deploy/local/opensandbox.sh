@@ -82,7 +82,14 @@ kubectl -n atlas-system create secret generic atlas-opensandbox \
   --dry-run=client -o yaml | kubectl apply -f -
 # ACP Pod 的模型 key：ACP 模板把它以文件挂进 Pod（/run/secrets/atlas/model_api_key）
 MODEL_KEY="${ATLAS_ACP_MODEL_API_KEY:-${ATLAS_CLUSTER_MODEL_API_KEY:-}}"
-[ -n "$MODEL_KEY" ] || echo "⚠ 没有 ACP 模型 key：ACP 会话的 CLI 将无法调用模型"
+# ★ 已切到模型网关（ConfigMap atlas-model-gateway 在）：Pod 拿网关地址和主体 Key，不再放供应商 Key
+#   （doc/model-design.html §8.1、deploy/server/model-cutover.sh）
+if kubectl -n atlas-system get configmap atlas-model-gateway >/dev/null 2>&1; then
+  MODEL_KEY=""
+  echo "· 已经经模型网关：ACP Pod 里不放供应商 Key"
+elif [ -z "$MODEL_KEY" ]; then
+  echo "⚠ 没有 ACP 模型 key：ACP 会话的 CLI 将无法调用模型"
+fi
 kubectl -n atlas-acp create secret generic atlas-acp-model \
   --from-literal=model_api_key="${MODEL_KEY}" --dry-run=client -o yaml | kubectl apply -f -
 

@@ -111,6 +111,17 @@ class KnowledgeSettings(BaseSettings):
     #: 查询向量缓存秒数（同 Dify）
     query_embedding_ttl_s: int = 600
 
+    # ── 模型网关（doc/model-design.html §6.7）────────────────────────────
+    #: 配了就按平台用途调模型网关：入库增强 kb_enrich、查询理解 kb_query、远程嵌入 kb_embedding、
+    #: 远程重排 kb_rerank。模型由模型管理员在网关里按用途配置，这里不写死模型名，
+    #: 也不持有供应商 Key。
+    #: 空 = 照旧按下面的 llm_* / embedding_* / rerank_* 直连（过渡期）
+    model_gateway_url: str | None = Field(
+        default=None, validation_alias=_alias("ATLAS_KB_MODEL_GATEWAY_URL", "MODEL_GATEWAY_URL")
+    )
+    #: 平台用途的模型配置缓存多久（秒）
+    model_catalog_ttl_s: float = 60.0
+
     # ── LLM（上下文补全、表格摘要、查询理解；doc/knowledge-enterprise-design.html）──
     #: OpenAI 兼容的 chat/completions 地址（如 https://api.deepseek.com/v1）。空 = 不用 LLM，
     #: 依赖它的增强全部降级为不做

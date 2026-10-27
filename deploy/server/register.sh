@@ -40,4 +40,6 @@ in_pod atlas-mcpgateway "python -m atlas_mcpgateway register-uc --account admin"
 uv run python -m atlas_agent register-uc --account admin --uc-url "$UC"
 uv run python -m atlas_teamflow register-uc --account admin --uc-url "$UC"
 in_pod atlas-memory "python -m atlas_memory register-uc --account admin"
+# 模型网关（doc/model-design.html §6.3）：应用 model-gateway、操作码 model:manage、角色 MODEL_ADMIN、数据编码 Model
+in_pod atlas-modelgateway "python -m atlas_modelgateway register-uc --account admin"
 echo "✓ 已登记。用 admin 登录 http://atlas.${SERVER_IP}.nip.io/atlas 即可使用"

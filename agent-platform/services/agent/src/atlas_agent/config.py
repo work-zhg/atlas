@@ -324,6 +324,19 @@ class Settings(BaseSettings):
     #: （80 000 字符），否则会抢先裁掉本可完整转存到工作区的内容。
     mcp_max_result_chars: int = 100_000
 
+    # ── 模型网关（doc/model-design.html）──────────────────────────────
+    #: 模型网关地址。配了就只连它：Native 的模型调用、ACP Pod 里的 CLI、会话标题、记忆补记都经它，
+    #: 带这一轮权限主体的 Key（平台功能带应用身份 + 用途）；
+    #: 模型目录（能力、上限、生命周期）也从它读，
+    #: 不再用 model_catalog 表和代码里写死的规则。
+    #: 空 = 没接入（过渡期）：照旧直连 litellm_base_url、按 model_catalog 表判断能力
+    model_gateway_url: str | None = None
+    #: 模型目录的进程内缓存时间。另在 Redis 留一份：网关暂时不可用时编辑器、装配照样能读
+    model_catalog_ttl_s: float = 60.0
+    #: 「主体能用哪些模型 + 主体的 Key」的进程内缓存时间。★ 只在内存里，不进 Redis。
+    #: 取短：Key 被重置后，旧 Key 最多被用这么久（§7.3 ③）
+    model_access_ttl_s: float = 10.0
+
     # ── 配置服务（atlas-config）────────────────────────────────────────
     #: 技能目录的来源。空 = 未接入：
     #:   · 技能引用必须带版本号，保存时不做存在性校验（兼容接入前的行为）

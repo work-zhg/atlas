@@ -44,9 +44,14 @@ def _post(client: httpx.Client, path: str, body: dict[str, Any], retries: int) -
 
 
 def _client(
-    base_url: str, api_key: str | None, timeout_s: float, transport: httpx.BaseTransport | None
+    base_url: str,
+    api_key: str | None,
+    timeout_s: float,
+    transport: httpx.BaseTransport | None,
+    headers: dict[str, str] | None = None,
 ) -> httpx.Client:
-    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    """headers：经模型网关时的平台用途（X-Model-Purpose、X-Caller-App），不带 Key。"""
+    headers = {**({"Authorization": f"Bearer {api_key}"} if api_key else {}), **(headers or {})}
     return httpx.Client(
         base_url=base_url.rstrip("/"), headers=headers, timeout=timeout_s, transport=transport
     )
@@ -64,10 +69,11 @@ class OpenAICompatibleEmbedding:
         timeout_s: float = 60.0,
         max_retries: int = 3,
         transport: httpx.BaseTransport | None = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         self.model = model
         self._retries = max_retries
-        self._c = _client(base_url, api_key, timeout_s, transport)
+        self._c = _client(base_url, api_key, timeout_s, transport, headers)
         self._lock = threading.Lock()
         self.tokens = 0
         self.dim = len(self.embed_query("dim"))
@@ -102,13 +108,14 @@ class RemoteReranker:
         timeout_s: float = 60.0,
         max_retries: int = 3,
         transport: httpx.BaseTransport | None = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         if provider not in ("cohere_compatible", "tei"):
             raise ValueError(f"不支持的重排提供方：{provider}")
         self.model = model
         self.provider = provider
         self._retries = max_retries
-        self._c = _client(base_url, api_key, timeout_s, transport)
+        self._c = _client(base_url, api_key, timeout_s, transport, headers)
 
     def rerank(self, query: str, texts: list[str]) -> list[float]:
         if not texts:

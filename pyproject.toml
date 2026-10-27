@@ -3,7 +3,7 @@ name = "atlas"
 version = "0.1.0"
 description = "Atlas — agent platform (workspace root)"
 requires-python = ">=3.13"
-dependencies = ["atlas-acp", "atlas-agent", "atlas-bench", "atlas-bridge", "atlas-config", "atlas-engine", "atlas-host", "atlas-jsonrpc", "atlas-knowledge", "atlas-mcpgateway", "atlas-memory", "atlas-redislock", "atlas-teamflow", "atlas-usercenter"]
+dependencies = ["atlas-acp", "atlas-agent", "atlas-bench", "atlas-bridge", "atlas-config", "atlas-engine", "atlas-host", "atlas-jsonrpc", "atlas-knowledge", "atlas-mcpgateway", "atlas-memory", "atlas-modelgateway", "atlas-redislock", "atlas-teamflow", "atlas-usercenter"]
 
 # Workspace root is a container, not an installable package.
 [tool.uv]
@@ -23,6 +23,7 @@ members = [
   "agent-platform/services/knowledge",
   "agent-platform/services/mcpgateway",
   "agent-platform/services/memory",
+  "agent-platform/services/modelgateway",
   "teamflow/services/teamflow",
   "usercenter/services/usercenter",
 ]
@@ -39,6 +40,7 @@ atlas-jsonrpc = { workspace = true }
 atlas-knowledge = { workspace = true }
 atlas-mcpgateway = { workspace = true }
 atlas-memory = { workspace = true }
+atlas-modelgateway = { workspace = true }
 atlas-redislock = { workspace = true }
 atlas-teamflow = { workspace = true }
 atlas-usercenter = { workspace = true }
@@ -62,7 +64,7 @@ dev = [
 # ★ 依赖单向的硬约束（文档 §2.1）。engine 一旦 import server/db/web 就 CI 红。
 # ---------------------------------------------------------------------------
 [tool.importlinter]
-root_packages = ["atlas_acp", "atlas_agent", "atlas_bench", "atlas_bridge", "atlas_config", "atlas_engine", "atlas_host", "atlas_jsonrpc", "atlas_knowledge", "atlas_mcpgateway", "atlas_memory", "atlas_redislock", "atlas_teamflow", "atlas_usercenter"]
+root_packages = ["atlas_acp", "atlas_agent", "atlas_bench", "atlas_bridge", "atlas_config", "atlas_engine", "atlas_host", "atlas_jsonrpc", "atlas_knowledge", "atlas_mcpgateway", "atlas_memory", "atlas_modelgateway", "atlas_redislock", "atlas_teamflow", "atlas_usercenter"]
 # forbidden_modules 里有第三方包（fastapi/sqlalchemy/...），必须打开这个开关
 include_external_packages = true
 
@@ -368,6 +370,49 @@ source_modules = [
 ]
 forbidden_modules = ["atlas_mcpgateway"]
 
+# 模型网关是独立部署物（doc/model-design.html §3）：所有模型调用的唯一入口。Atlas、知识库只经
+# HTTP 调它（内部接口 + 数据面 /v1/*），双方互不 import；和 MCP 网关也互不 import（各自一份）。
+[[tool.importlinter.contracts]]
+name = "atlas_modelgateway 不认识 atlas 其它包"
+type = "forbidden"
+source_modules = ["atlas_modelgateway"]
+forbidden_modules = [
+  "atlas_acp",
+  "atlas_bridge",
+  "atlas_config",
+  "atlas_engine",
+  "atlas_host",
+  "atlas_jsonrpc",
+  "atlas_agent",
+  "atlas_knowledge",
+  "atlas_mcpgateway",
+  "atlas_memory",
+  "atlas_teamflow",
+  "atlas_usercenter",
+  "redis",
+  "langchain",
+  "langgraph",
+]
+
+[[tool.importlinter.contracts]]
+name = "atlas 其它包不认识 atlas_modelgateway"
+type = "forbidden"
+source_modules = [
+  "atlas_acp",
+  "atlas_bridge",
+  "atlas_config",
+  "atlas_engine",
+  "atlas_host",
+  "atlas_jsonrpc",
+  "atlas_agent",
+  "atlas_knowledge",
+  "atlas_mcpgateway",
+  "atlas_memory",
+  "atlas_teamflow",
+  "atlas_usercenter",
+]
+forbidden_modules = ["atlas_modelgateway"]
+
 # 评测框架只走被测平台的公开 HTTP 接口（doc/rag-eval-design.html §2）：对 Atlas 与竞品一视同仁。
 [[tool.importlinter.contracts]]
 name = "atlas_bench 不认识 atlas 其它包"
@@ -448,7 +493,7 @@ exclude = ["agent-platform/libs/engine/src/atlas_engine/kernel/**"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["agent-platform/tests", "agent-platform/services/config/tests", "usercenter/services/usercenter/tests", "teamflow/services/teamflow/tests", "agent-platform/services/knowledge/tests", "agent-platform/services/memory/tests", "agent-platform/services/mcpgateway/tests", "agent-platform/bench/tests", "infra-platform/libs/redislock/tests"]
+testpaths = ["agent-platform/tests", "agent-platform/services/config/tests", "usercenter/services/usercenter/tests", "teamflow/services/teamflow/tests", "agent-platform/services/knowledge/tests", "agent-platform/services/memory/tests", "agent-platform/services/mcpgateway/tests", "agent-platform/services/modelgateway/tests", "agent-platform/bench/tests", "infra-platform/libs/redislock/tests"]
 addopts = "-ra"
 
 [tool.mypy]

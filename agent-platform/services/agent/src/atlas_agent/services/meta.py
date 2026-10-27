@@ -19,6 +19,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from atlas_agent.domain.tool_registry import BASH_TOOL, BUILTIN_TOOLS, MEMORY_TOOL
 from atlas_agent.providers.llm.gateway import GatewayConfig, list_models
+from atlas_agent.providers.llm.modelgateway import (
+    CatalogModel,
+    model_catalog,
+    model_subject_access,
+    uses_model_gateway,
+)
 
 from ..config import Settings
 from ..errors import CapabilityUnavailable
@@ -28,6 +34,7 @@ from ..schemas.meta import (
     McpSubjectOut,
     ModelInfo,
     ModelListResponse,
+    ModelSubjectOut,
     ToolInfo,
     ToolListResponse,
 )
@@ -106,7 +113,9 @@ class MetaService:
             logger.warning("redis unavailable while writing models cache", exc_info=True)
         return set(models)
 
-    async def list_models(self) -> ModelListResponse:
+    async def list_models(self, *, subject: McpSubject | None = None) -> ModelListResponse:
+        if uses_model_gateway(self._settings):
+            return await self._gateway_models(subject)
         available = await self._available_models()
         if available is not None:
             await self._repo.sync_availability(available)
@@ -131,6 +140,48 @@ class MetaService:
                 for r in rows
             ],
             gateway_reachable=available is not None,
+        )
+
+    async def _gateway_models(self, subject: McpSubject | None) -> ModelListResponse:
+        """经模型网关：只列这个主体能用的对话模型（doc/model-design.html §6.4、§11.2）。
+
+        ★ 弃用的也列出（已选的要看得见替代模型），但标为不能新选；没权限的只给个数。
+        ★ 以 Agent 为权限、还没有数字员工（第一次保存之前）：列出全部可用的对话模型，并提示
+          保存后要请模型所有者给数字员工授权（§6.4）。
+        """
+        out = ModelSubjectOut(
+            kind=subject.kind if subject else "user", uid=subject.uid if subject else None
+        )
+        try:
+            catalog = await model_catalog(self._settings, self._redis)
+        except CapabilityUnavailable as exc:
+            logger.warning("模型网关不可用，模型列表为空：%s", exc)
+            out.notes.append(f"模型网关暂时不可用：{exc}")
+            return ModelListResponse(data=[], gateway_reachable=False, subject=out)
+        live = [m for m in catalog.models.values() if m.kind == "chat" and m.usable]
+        if subject is None or subject.uid is None:
+            if subject is not None:
+                out.notes.append(
+                    "保存后请模型所有者给这个 Agent 的数字员工授权模型，授权之前它不能运行"
+                )
+            visible = live
+        else:
+            try:
+                access = await model_subject_access(self._settings, subject.uid)
+            except CapabilityUnavailable as exc:
+                out.notes.append(f"模型网关暂时不可用：{exc}")
+                return ModelListResponse(data=[], gateway_reachable=False, subject=out)
+            visible = [m for m in live if access.allows(m.name)]
+            out.hidden_models = len(live) - len(visible)
+            if not visible:
+                who = "这个 Agent 的数字员工" if subject.kind == "agent" else "你"
+                out.notes.append(f"{who}还没有被授权任何模型：请联系模型所有者或模型管理员")
+            if access.key is None and access.key_status == "disabled":
+                out.notes.append("模型 Key 已被停用：运行时会失败，请联系模型管理员")
+        return ModelListResponse(
+            data=[_model_info(m) for m in sorted(visible, key=lambda m: m.name)],
+            gateway_reachable=True,
+            subject=out,
         )
 
     async def list_tools(self, *, mcp_subject: McpSubject | None = None) -> ToolListResponse:
@@ -216,3 +267,30 @@ class MetaService:
             )
         return out
 
+
+def _model_info(m: CatalogModel) -> ModelInfo:
+    """模型目录 → 编辑器原来认的形状（能力字段一一对应，见 catalog.Capabilities）。"""
+    caps = m.caps()
+    return ModelInfo(
+        model=m.name,
+        provider=m.protocol() or "anthropic",
+        display_name=m.display_name,
+        context_window=m.context_window or 0,
+        max_output_tokens=m.max_output_tokens or 0,
+        supports_thinking=caps.thinking,
+        supports_adaptive_thinking=caps.adaptive_thinking,
+        supports_effort=caps.effort,
+        supports_cache=caps.prompt_cache,
+        supports_temperature=caps.temperature,
+        min_cacheable_tokens=int(m.capabilities.get("min_cacheable_tokens") or 0),
+        is_available=m.usable,
+        status=m.status,
+        selectable=m.selectable,
+        description=m.description,
+        tags=list(m.tags),
+        input_modalities=list(m.input_modalities),
+        replacement=m.replacement,
+        retire_at=m.retire_at,
+        data_policy=dict(m.data_policy),
+        price=dict(m.price) if m.price else None,
+    )

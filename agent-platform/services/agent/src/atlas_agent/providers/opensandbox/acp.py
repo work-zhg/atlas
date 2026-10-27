@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from ..pods import PodEndpoint
+from ..pods import AcpModel, PodEndpoint
 from .lifecycle import LifecycleError
 from .provision import Provisioner, SandboxEndpoint, pvc_volume
 
@@ -63,15 +63,24 @@ class GitProfileDenied(PermissionError):
     """请求的 git 凭据档案不存在，或会话无权使用它。"""
 
 
-def _entrypoint(*, model_key: bool) -> list[str]:
+#: 经模型网关时，主体 Key 随 Pod 的环境变量进来（entrypoint 转成 CLI 认的变量）
+MODEL_KEY_ENV = "ATLAS_MODEL_KEY"
+
+
+def _entrypoint(*, model_key: bool, gateway_key: bool = False) -> list[str]:
     script = f'umask 077; printf %s "$ATLAS_BRIDGE_TOKEN" > {TOKEN_FILE}; umask 022; '
-    if model_key:
+    unset = "-u ATLAS_BRIDGE_TOKEN"
+    if gateway_key:
+        # 模型网关的主体 Key（doc/model-design.html §8.1）：不再是挂进来的供应商 Key
+        script += f'ANTHROPIC_AUTH_TOKEN="${MODEL_KEY_ENV}"; export ANTHROPIC_AUTH_TOKEN; '
+        unset += f" -u {MODEL_KEY_ENV}"
+    elif model_key:
         script += (
             f'if [ -r {MODEL_KEY_FILE} ]; then ANTHROPIC_AUTH_TOKEN="$(cat {MODEL_KEY_FILE})"; '
             "export ANTHROPIC_AUTH_TOKEN; fi; "
         )
     # ★ 令牌不留在 bridge 的环境里（它已经在文件里了）
-    return ["/bin/sh", "-c", script + "exec env -u ATLAS_BRIDGE_TOKEN python -m atlas_bridge"]
+    return ["/bin/sh", "-c", script + f"exec env {unset} python -m atlas_bridge"]
 
 
 def _git_env(profile: GitProfile) -> dict[str, str]:
@@ -105,11 +114,27 @@ def acp_spec(
     token: str,
     cli: CliSpec,
     profile: GitProfile | None,
+    model: AcpModel | None = None,
 ) -> dict[str, Any]:
-    """ACP Pod 的创建请求（设计 §11.1）。三个前缀与 cluster 时代完全一致，存量数据不用迁移。"""
-    claude = cli.cli_type == "claude-code" and bool(settings.acp_model_base_url)
+    """ACP Pod 的创建请求（设计 §11.1）。三个前缀与 cluster 时代完全一致，存量数据不用迁移。
+
+    model：经模型网关时的模型接入（网关地址、主体 Key、模型名）；None = 照旧按部署配置。
+    """
+    claude = cli.cli_type == "claude-code" and bool(settings.acp_model_base_url) and model is None
     agent_env: dict[str, str] = {}
+    secret_env: dict[str, str] = {}
     allow = list(_AGENT_ENV_BASE)
+    if model is not None:
+        agent_env["ANTHROPIC_BASE_URL"] = model.base_url
+        agent_env["ANTHROPIC_MODEL"] = model.model
+        agent_env["ANTHROPIC_SMALL_FAST_MODEL"] = model.small_model
+        if model.headers:
+            # Claude Code 每个请求都带上（一行一个）：只作用量归属参考
+            agent_env["ANTHROPIC_CUSTOM_HEADERS"] = "\n".join(
+                f"{k}: {v}" for k, v in model.headers.items()
+            )
+        secret_env[MODEL_KEY_ENV] = model.key
+        allow.append("ANTHROPIC_AUTH_TOKEN")  # entrypoint 从 ATLAS_MODEL_KEY 转过来
     if claude:
         # ★ base_url 指向任何 Anthropic 兼容端点即可（DeepSeek 的 /anthropic 能驱动真 Claude Code）
         agent_env["ANTHROPIC_BASE_URL"] = settings.acp_model_base_url
@@ -125,7 +150,7 @@ def acp_spec(
 
     spec: dict[str, Any] = {
         "image": {"uri": cli.image},
-        "entrypoint": _entrypoint(model_key=claude),
+        "entrypoint": _entrypoint(model_key=claude, gateway_key=model is not None),
         "timeout": None,
         "resourceLimits": {"cpu": settings.acp_cpu_limit, "memory": settings.acp_memory_limit},
         "resourceRequests": {
@@ -146,6 +171,7 @@ def acp_spec(
             "ATLAS_BRIDGE_AGENT_ENV_ALLOW": ",".join(dict.fromkeys(allow)),
             "HOME": STATE_MOUNT,
             **agent_env,
+            **secret_env,
         },
         "metadata": {
             "atlas.managed": "true",
@@ -178,7 +204,9 @@ class AcpProvisioner(Provisioner):
     def port(self) -> int:  # type: ignore[override]
         return self._settings.acp_bridge_port
 
-    async def ensure(self, thread: Thread, cli: CliSpec) -> SandboxEndpoint:
+    async def ensure(
+        self, thread: Thread, cli: CliSpec, *, model: AcpModel | None = None
+    ) -> SandboxEndpoint:
         if not cli.image:
             raise LifecycleError("acp agent 的 cli.image 为空，无法创建 Pod")
         key = str(thread.id)
@@ -200,6 +228,7 @@ class AcpProvisioner(Provisioner):
                     token=token,
                     cli=cli,
                     profile=profile,
+                    model=model,
                 ),
                 after_create=(lambda sid: self._bind_git(sid, profile)) if profile else None,
             )
@@ -312,6 +341,8 @@ class OpenSandboxPods:
     ) -> None:
         self._p = AcpProvisioner(settings, redis, transport=transport)
 
-    async def ensure(self, thread: Thread, cli: CliSpec) -> PodEndpoint:
-        ep = await self._p.ensure(thread, cli)
+    async def ensure(
+        self, thread: Thread, cli: CliSpec, *, model: AcpModel | None = None
+    ) -> PodEndpoint:
+        ep = await self._p.ensure(thread, cli, model=model)
         return PodEndpoint(url="ws://" + ep.url.removeprefix("http://"), token=ep.token)

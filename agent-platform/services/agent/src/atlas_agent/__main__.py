@@ -4,6 +4,9 @@
   python -m atlas_agent reassign-threads map.json      TeamFlow 的存量会话改归真实的人（§14）
   python -m atlas_agent backfill-agent-identity        存量 Agent 补数字员工、登记 AtlasAgent
                                                        （数字员工设计 §12，迁移 0023 之后）
+  python -m atlas_agent export-models > models.json    导出模型目录、数字员工用到的模型、
+                                                       平台用途，交给模型网关的 import
+                                                       （模型管理方案设计 §6.3）
 """
 
 from __future__ import annotations
@@ -34,6 +37,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     bf.add_argument("--uc-url", default=None)
     bf.add_argument("--dry-run", action="store_true", help="只统计，不写")
+    sub.add_parser(
+        "export-models",
+        help="导出模型目录、数字员工用到的模型、平台用途（给模型网关的 import 用）",
+    )
     args = parser.parse_args(argv)
 
     if args.command == "register-uc":
@@ -75,6 +82,21 @@ def main(argv: list[str] | None = None) -> int:
                 await uc.aclose()
 
         print(json.dumps(asyncio.run(_run()), ensure_ascii=False, indent=2))
+    elif args.command == "export-models":
+        import asyncio
+        import json
+
+        from .config import get_settings
+        from .db.session import get_engine, get_sessionmaker
+        from .providers.llm.export import export_models
+
+        async def _export() -> dict[str, object]:
+            try:
+                return await export_models(get_sessionmaker(), get_settings())
+            finally:
+                await get_engine().dispose()
+
+        print(json.dumps(asyncio.run(_export()), ensure_ascii=False, indent=2))
     return 0
 
 

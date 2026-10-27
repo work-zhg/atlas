@@ -36,6 +36,7 @@ from ..db.models import MemoryBackfill, Message, Run, Thread, ThreadMemory
 from ..domain.messages import KIND_CHAT
 from ..domain.spec import ModelSpec
 from ..domain.translator import extract_text
+from ..providers.llm.modelgateway import resolve_purpose
 from .client import MemoryEntry, MemoryRejected, MemoryTopic, MemoryUnavailable, ScopeRef
 from .prompts import EXTRACT_PROMPT, SOURCE_LABELS, SPLIT_PROMPT
 from .runtime import SOURCE_AGENT, SOURCE_BACKFILL, SOURCE_USER, MemoryRuntime
@@ -416,10 +417,22 @@ class Backfiller:
 
     async def _ask_json(self, prompt: str) -> Any:
         s = self.settings
+        # 经模型网关时是平台用途「记忆补记」（doc/model-design.html §6.7），模型由模型管理员指定
+        found = await resolve_purpose(
+            s, None, "memory_backfill", legacy_model=s.memory_backfill_model or s.summarizer_model
+        )
+        if found is None:
+            raise RuntimeError("平台用途「记忆补记」没有可用的模型")
         chat = self._build_model(
-            ModelSpec(model=s.memory_backfill_model or s.summarizer_model, max_output_tokens=2_048),
-            base_url=str(s.litellm_base_url),
-            api_key=s.litellm_key.get_secret_value(),
+            ModelSpec(
+                model=found.model,
+                provider=found.provider,  # type: ignore[arg-type]
+                max_output_tokens=2_048,
+                caps=found.caps,
+            ),
+            base_url=found.endpoint.base_url,
+            api_key=found.endpoint.api_key,
+            headers=found.endpoint.headers,
         )
         # ★ 消息用 dict 传：不在 server 里新增 langchain 类型的 import（server 不依赖框架的方向）
         result = await chat.ainvoke([{"role": "user", "content": prompt}])

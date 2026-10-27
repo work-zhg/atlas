@@ -20,8 +20,11 @@ from atlas_agent.domain.spec import ModelSpec
 from atlas_agent.domain.translator import extract_text
 
 from ..config import Settings
+from ..providers.llm.modelgateway import resolve_purpose
 
 if TYPE_CHECKING:
+    import redis.asyncio as aioredis
+
     from ..executor.assembly import ModelBuilder
 
 logger = logging.getLogger(__name__)
@@ -98,9 +101,16 @@ class TitleService:
       于是每个 run 都真去打网关、超时几秒再降级。踩过一次。
     """
 
-    def __init__(self, settings: Settings, model_builder: ModelBuilder) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        model_builder: ModelBuilder,
+        redis: aioredis.Redis | None = None,
+    ) -> None:
         self._settings = settings
         self._build_model = model_builder
+        #: 读模型目录的缓存副本用（经模型网关时）
+        self._redis = redis
 
     async def generate(self, question: str, answer: str) -> dict[str, Any]:
         """返回 `thread.title_generated` 的 data。
@@ -120,12 +130,24 @@ class TitleService:
         return {"title": fallback_title(question), "degraded": True}
 
     async def _ask_model(self, question: str, answer: str) -> str:
-        # ★ 固定用 summarizer_model（haiku），不跟随 agent 配置：
-        #   用 opus 生成 20 字标题是纯浪费，且 opus 的 effort 参数在这里毫无意义。
+        # ★ 不跟随 agent 配置：用大模型生成 20 字标题是纯浪费，effort 在这里也毫无意义。
+        #   经模型网关时是平台用途「会话标题」（doc/model-design.html §6.7），模型由模型管理员指定；
+        #   没接时用部署配置里的 summarizer_model。
+        found = await resolve_purpose(
+            self._settings, self._redis, "title", legacy_model=self._settings.summarizer_model
+        )
+        if found is None:
+            raise RuntimeError("平台用途「会话标题」没有可用的模型")
         chat = self._build_model(
-            ModelSpec(model=self._settings.summarizer_model, max_output_tokens=64),
-            base_url=str(self._settings.litellm_base_url),
-            api_key=self._settings.litellm_key.get_secret_value(),
+            ModelSpec(
+                model=found.model,
+                provider=found.provider,  # type: ignore[arg-type]
+                max_output_tokens=64,
+                caps=found.caps,
+            ),
+            base_url=found.endpoint.base_url,
+            api_key=found.endpoint.api_key,
+            headers=found.endpoint.headers,
         )
         prompt = _PROMPT.format(question=question, answer=answer[:_ANSWER_LIMIT])
         result = await chat.ainvoke([HumanMessage(content=prompt)])

@@ -16,7 +16,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal, Protocol
@@ -50,6 +50,15 @@ from ..providers.filesystem.skill_copy import (
     seed_session_skills,
     skill_refs_for,
 )
+from ..providers.llm.modelgateway import (
+    CatalogModel,
+    ModelCatalog,
+    ModelEndpoint,
+    admit_models,
+    direct_endpoint,
+    subject_endpoint,
+    uses_model_gateway,
+)
 from ..providers.mcp import (
     MCP_PREFIX,
     CallContext,
@@ -75,10 +84,19 @@ logger = logging.getLogger(__name__)
 
 
 class ModelBuilder(Protocol):
-    def __call__(self, model_spec: Any, *, base_url: str, api_key: str) -> Any: ...
+    def __call__(
+        self,
+        model_spec: Any,
+        *,
+        base_url: str,
+        api_key: str,
+        headers: Mapping[str, str] | None = None,
+    ) -> Any: ...
 
 
-def default_model_builder(model_spec: Any, *, base_url: str, api_key: str) -> Any:
+def default_model_builder(
+    model_spec: Any, *, base_url: str, api_key: str, headers: Mapping[str, str] | None = None
+) -> Any:
     """★ 遥测回调挂在这里，因为**全部**模型构造都过这一个函数：主对话、
     标题生成、上下文摘要。挂在这里三处一并覆盖，而且不用碰 runner ——
     它是纯计算层，往那里塞回调会让「run 一轮」不再能脱离基础设施单测。
@@ -89,7 +107,11 @@ def default_model_builder(model_spec: Any, *, base_url: str, api_key: str) -> An
     未启用遥测时回调照常挂着，但它拿到的是 no-op span —— 不写 if 分支。
     """
     return build_chat_model(
-        model_spec, base_url=base_url, api_key=api_key, callbacks=[ModelSpanHandler()]
+        model_spec,
+        base_url=base_url,
+        api_key=api_key,
+        callbacks=[ModelSpanHandler()],
+        headers=headers,
     )
 
 
@@ -113,6 +135,21 @@ def _deferred_mcp_tools(tools: list[Any], settings: Settings) -> list[Any]:
 
 class SandboxNotEnabled(CapabilityUnavailable):
     """勾了 Shell 但部署没开沙箱 —— 明确报错（§13.2），不静默少装 execute。"""
+
+
+@dataclass(frozen=True)
+class RunModels:
+    """这一轮的模型从哪来（with_models 解析好）：主模型、压缩模型都用这个端点。
+
+    endpoint  经模型网关时带这一轮权限主体的 Key；没接时直连 litellm（过渡期）
+    catalog   模型目录（经模型网关时）；None = 没接，能力与上限照旧读 model_catalog 表
+    """
+
+    endpoint: ModelEndpoint
+    catalog: ModelCatalog | None = None
+
+    def entry(self, model: str) -> CatalogModel | None:
+        return self.catalog.get(model) if self.catalog is not None else None
 
 
 class MemoryNotConfigured(CapabilityUnavailable):
@@ -168,6 +205,8 @@ class PreparedRun:
     approval_mode: str | None = None
     #: 本轮用户消息的时间。Agent 在这一轮写入记忆时用它作为「信息成立的时间」（记忆设计 §6.4）
     input_at: datetime | None = None
+    #: 这一轮的模型端点与目录（HookAssembly.with_models 填）。None = 还没解析，按直连处理
+    models: RunModels | None = None
 
     @property
     def thread_id(self) -> UUID:
@@ -310,10 +349,12 @@ class HookAssembly:
                 # ★ 删掉本会话里的副本：只从索引里拿掉的话，模型仍可能凭记忆去读
                 await workspace.adelete(f"/skills/{item['slug']}", recursive=True)
 
+        endpoint = self._models(prepared).endpoint
         chat = self._build_model(
             prepared.spec.model,
-            base_url=str(self._settings.litellm_base_url),
-            api_key=self._settings.litellm_key.get_secret_value(),
+            base_url=endpoint.base_url,
+            api_key=endpoint.api_key,
+            headers=endpoint.headers,
         )
 
         # 持久指令（L1）：服务不可用时跳过，不让本轮失败
@@ -344,7 +385,59 @@ class HookAssembly:
             spawner=self._subagent_spawner(prepared, run_id=run_id, relay=relay),
             prompt_cache_ttl=await self._prompt_cache_ttl(prepared),
         )
-        return graph, self._titler(prepared)
+        return graph, self._titler(prepared, redis)
+
+    def _models(self, prepared: PreparedRun) -> RunModels:
+        return prepared.models or RunModels(direct_endpoint(self._settings))
+
+    async def with_models(
+        self,
+        prepared: PreparedRun,
+        *,
+        run_id: UUID,
+        redis: aioredis.Redis,
+        notices: list[tuple[EventType, dict[str, Any]]] | None = None,
+    ) -> PreparedRun:
+        """这一轮用到的模型能不能用、怎么连（doc/model-design.html §7.1）。
+
+        经模型网关时：按这一轮的权限主体问网关「能用哪些模型、Key 是什么」，检查主模型和压缩模型
+        （授权、停用、下线、是否在目录里），用不了就本轮不开始（ModelNotAllowed）；弃用的照常运行、
+        对话里提示。模型规格换上目录给出的能力和协议（ModelSpec.caps / provider），之后的参数
+        翻译、保存时的校验都按目录来。
+        ★ SubAgent 的模型只补上能力（校验参数用）：它们在自己的 Run 开始时按自己的主体检查。
+        """
+        s = self._settings
+        if not uses_model_gateway(s):
+            return dataclasses.replace(prepared, models=RunModels(direct_endpoint(s)))
+        spec = prepared.spec
+        needed = [spec.model.model]
+        if spec.compaction.enabled:
+            cfg = spec.compaction
+            needed.append(resolve_summarizer_model(cfg.summarizer_model, spec.model.model))
+        ident = current_identity()
+        catalog, access = await admit_models(
+            s,
+            redis,
+            needed,
+            subject=ident.auth_uid if ident else prepared.thread.created_by,
+            acts_as_agent=ident is not None and ident.auth_uid != ident.uid,
+            notices=notices,
+        )
+        assert access.key is not None
+        spec = dataclasses.replace(
+            spec,
+            model=_with_catalog(spec.model, catalog.get(spec.model.model)),
+            subagents=tuple(
+                dataclasses.replace(
+                    sub, model=_with_catalog(sub.model, catalog.get(sub.model.model))
+                )
+                for sub in spec.subagents
+            ),
+        )
+        endpoint = subject_endpoint(
+            s, access.key, agent_id=str(prepared.thread.agent_id), run_id=str(run_id)
+        )
+        return dataclasses.replace(prepared, spec=spec, models=RunModels(endpoint, catalog))
 
     async def with_knowledge(self, prepared: PreparedRun, *, run_id: UUID) -> PreparedRun:
         """auto 模式：先用本轮提问检索，参考资料并入**这一轮**的输入（同 Dify 对话应用的上下文）。
@@ -503,7 +596,7 @@ class HookAssembly:
 
     # ------------------------------------------------------------------ 各能力
 
-    def _titler(self, prepared: PreparedRun) -> Titler | None:
+    def _titler(self, prepared: PreparedRun, redis: aioredis.Redis | None = None) -> Titler | None:
         """仅当会话还没有标题时才返回生成器（§8.1）。
 
         返回 None 时 engine 直接跳过，不产出 thread.title_generated ——
@@ -514,7 +607,7 @@ class HookAssembly:
             return None
 
         question = extract_text(prepared.input_content)
-        service = TitleService(self._settings, self._build_model)
+        service = TitleService(self._settings, self._build_model, redis)
 
         async def titler(answer: str) -> dict[str, Any] | None:
             return await service.generate(question, answer)
@@ -529,6 +622,9 @@ class HookAssembly:
         """
         if not prepared.spec.model.prompt_cache:
             return None
+        caps = prepared.spec.model.caps
+        if caps is not None:  # 经模型网关：按目录
+            return self._settings.prompt_cache_ttl if caps.prompt_cache else None
         async with self._sessionmaker() as session:
             if not await ModelCatalogRepository(session).supports_cache(prepared.spec.model.model):
                 return None
@@ -551,8 +647,17 @@ class HookAssembly:
         if not cfg.enabled:
             return None
 
-        async with self._sessionmaker() as session:
-            limits = await ModelCatalogRepository(session).limits(spec.model.model)
+        models = self._models(prepared)
+        entry = models.entry(spec.model.model)
+        if models.catalog is not None:  # 经模型网关：上限来自目录
+            limits = (
+                (entry.context_window, entry.max_output_tokens)
+                if entry is not None and entry.context_window and entry.max_output_tokens
+                else None
+            )
+        else:
+            async with self._sessionmaker() as session:
+                limits = await ModelCatalogRepository(session).limits(spec.model.model)
         if limits is None:
             # 目录里没有这个模型 —— 不猜一个窗口值：猜大了压缩永不触发，
             # 猜小了每轮都压。宁可不压，让 token 上限去兜底。
@@ -587,12 +692,32 @@ class HookAssembly:
             ),
             failure_count=int(state.get("compaction_failures") or 0),
             on_failed=make_failure_hook(self._sessionmaker, prepared.thread_id),
-            summarizer=ThreadSummarizer(
-                self._settings,
-                self._build_model,
-                model=resolve_summarizer_model(cfg.summarizer_model, spec.model.model),
-            ),
+            summarizer=self._summarizer(prepared),
             on_compacted=make_persist_hook(
                 self._sessionmaker, prepared.thread_id, prepared.history_upto
             ),
         )
+
+    def _summarizer(self, prepared: PreparedRun) -> ThreadSummarizer:
+        """压缩用的摘要器：Agent 的推理，和主模型同一个端点（Run 开始时已检查过授权）。"""
+        spec = prepared.spec
+        name = resolve_summarizer_model(spec.compaction.summarizer_model, spec.model.model)
+        models = self._models(prepared)
+        entry = models.entry(name)
+        return ThreadSummarizer(
+            self._settings,
+            self._build_model,
+            model=name,
+            endpoint=models.endpoint,
+            caps=entry.caps() if entry is not None else None,
+            provider=(entry.protocol() if entry is not None else None) or spec.model.provider,
+        )
+
+
+def _with_catalog(model: Any, entry: CatalogModel | None) -> Any:
+    """模型规格换上目录给出的能力与协议（目录里没有就原样）。"""
+    if entry is None:
+        return model
+    return dataclasses.replace(
+        model, caps=entry.caps(), provider=entry.protocol() or model.provider
+    )

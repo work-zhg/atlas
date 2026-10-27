@@ -53,9 +53,11 @@ from ..domain.spec import ACP_MODE_ID, PLATFORM_MODE, acp_permission_mode
 from ..errors import CapabilityUnavailable
 from ..outbound import current_identity
 from ..providers.knowledge import mcp_server_entry, require_client
+from ..providers.llm.modelgateway import admit_models, uses_model_gateway
 from ..providers.mcp import GatewayUnavailable, make_mcp_catalog, mcp_subject_access
 from ..providers.mcp.acp import acp_mcp_servers
 from ..providers.mcp.gateway import servers_in
+from ..providers.pods import AcpModel
 from ..repositories.approval import ApprovalRepository
 from ..services.approval import RedisApprovalGate
 from .approvals import ApprovalPort, PermissionDesk
@@ -237,13 +239,23 @@ class HostRuntime:
             return
         for kind, data in notices:
             yield events.make(kind, data)
+        # 模型（doc/model-design.html §8.1）：经模型网关时检查授权、下发网关地址和主体 Key
+        model_notices: list[tuple[EventType, dict[str, Any]]] = []
         try:
-            endpoint = await self._pods.ensure(prepared.thread, spec.cli)
+            model = await self._acp_model(prepared, redis, model_notices)
+        except CapabilityUnavailable as exc:
+            yield events.make(*_failed(CapabilityUnavailable.kind, str(exc)))
+            return
+        for kind, data in model_notices:
+            yield events.make(kind, data)
+        try:
+            endpoint = await self._pods.ensure(prepared.thread, spec.cli, model=model)
         except Exception as exc:
             yield events.make(*_failed("pod_unavailable", f"会话 Pod 不可用：{exc}"))
             return
 
         turn = _Turn(str(run_id))
+        turn.model = model
         desk = PermissionDesk(
             self._approvals(run_id, redis),
             emit=lambda kind, data: turn.queue.put_nowait(("event", kind, data)),
@@ -389,6 +401,46 @@ class HostRuntime:
                 ),
             ]
         return servers, notices
+
+    async def _acp_model(
+        self,
+        prepared: PreparedRun,
+        redis: aioredis.Redis,
+        notices: list[tuple[EventType, dict[str, Any]]],
+    ) -> AcpModel | None:
+        """经模型网关时 Pod 里 CLI 的模型接入（§8.1）。没接模型网关、不是 Claude Code → None
+        （照旧按部署配置）。用不了的模型抛 ModelNotAllowed：本轮不开始。
+
+        ★ Claude Code 只会 Anthropic Messages：模型要支持这种协议（原生或经转换且探测通过）。
+        ★ CLI 的轻量模型也指向同一个模型：不指的话 CLI 会去找一个它默认的、平台上未必有的模型。
+        """
+        spec = prepared.spec
+        if not uses_model_gateway(self._settings) or spec.cli is None:
+            return None
+        if spec.cli.cli_type != "claude-code":
+            return None
+        ident = current_identity()
+        subject = ident.auth_uid if ident else prepared.thread.created_by
+        _, access = await admit_models(
+            self._settings,
+            redis,
+            [spec.model.model],
+            subject=subject,
+            acts_as_agent=ident is not None and ident.auth_uid != ident.uid,
+            notices=notices,
+            protocol="anthropic",
+        )
+        assert access.key is not None and self._settings.model_gateway_url
+        headers = {"X-Agent-Id": str(prepared.thread.agent_id)}
+        if ident is not None:
+            headers["X-Uid"] = str(ident.uid)
+        return AcpModel(
+            base_url=self._settings.model_gateway_url,
+            key=access.key,
+            model=spec.model.model,
+            small_model=spec.model.model,
+            headers=headers,
+        )
 
     async def _mcp_from_gateway(
         self, prepared: PreparedRun, redis: aioredis.Redis
@@ -545,7 +597,9 @@ class HostRuntime:
                 return False
             try:
                 assert prepared.spec.cli is not None
-                endpoint = await self._pods.ensure(prepared.thread, prepared.spec.cli)
+                endpoint = await self._pods.ensure(
+                    prepared.thread, prepared.spec.cli, model=turn.model
+                )
                 link.retarget(_host_url(endpoint.url), endpoint.token)
                 await link.connect()
                 result = await self._attach(link, known.instance, turn.last_seq)
@@ -713,6 +767,8 @@ class _Turn:
 
     def __init__(self, turn_id: str) -> None:
         self.turn_id = turn_id
+        #: 这一轮的模型接入：断线重连时 Pod 可能被重建，要下发同一份
+        self.model: AcpModel | None = None
         self.queue: asyncio.Queue[tuple[Any, ...]] = asyncio.Queue()
         self.last_seq = 0
         self._acked = 0

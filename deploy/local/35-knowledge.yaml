@@ -57,6 +57,10 @@ spec:
             - {name: ATLAS_KB_LLM_MODEL, value: deepseek-chat}
             - name: ATLAS_KB_LLM_API_KEY
               valueFrom: {secretKeyRef: {name: atlas-server-creds, key: litellm_key}}
+            # 模型网关（doc/model-design.html §6.7）：ConfigMap atlas-model-gateway 有了就按平台用途调它，
+            #   上面的 LLM 地址、模型、Key 不再用（model-cutover.sh 建 ConfigMap）
+            - name: ATLAS_KB_MODEL_GATEWAY_URL
+              valueFrom: {configMapKeyRef: {name: atlas-model-gateway, key: url, optional: true}}
       containers:
         - name: api
           image: atlas-app:dev
@@ -124,6 +128,10 @@ spec:
             - {name: ATLAS_KB_LLM_MODEL, value: deepseek-chat}
             - name: ATLAS_KB_LLM_API_KEY
               valueFrom: {secretKeyRef: {name: atlas-server-creds, key: litellm_key}}
+            # 模型网关（doc/model-design.html §6.7）：ConfigMap atlas-model-gateway 有了就按平台用途调它，
+            #   上面的 LLM 地址、模型、Key 不再用（model-cutover.sh 建 ConfigMap）
+            - name: ATLAS_KB_MODEL_GATEWAY_URL
+              valueFrom: {configMapKeyRef: {name: atlas-model-gateway, key: url, optional: true}}
           resources:
             requests: {cpu: 200m, memory: 1Gi}
 ---

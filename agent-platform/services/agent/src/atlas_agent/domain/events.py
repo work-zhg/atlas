@@ -100,6 +100,10 @@ class EventType(StrEnum):
     #: data: {server, tools, reason: forbidden | no_key, subject, message}
     #: ★ 必须是事件：静默少一个工具，模型照常做事、只是做不好，用户不知道为什么。
     MCP_TOOL_SKIPPED = "mcp.tool_skipped"
+    #: 经模型网关时，这一轮用的模型已弃用：照常运行，提示替代模型和下线日期
+    #: （模型管理方案设计 §5.3）。
+    #: data: {model, replacement, retire_at, message}
+    MODEL_DEPRECATED = "model.deprecated"
 
 
 #: run 的终止事件。SSE 发送后即关闭连接。

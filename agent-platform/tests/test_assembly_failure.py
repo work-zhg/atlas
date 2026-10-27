@@ -35,6 +35,9 @@ class _FailingAssembly:
     def __init__(self, exc: BaseException) -> None:
         self._exc = exc
 
+    async def with_models(self, prepared: Any, **_kw: Any) -> Any:
+        return prepared  # 本文件测的是 build 失败；模型检查不参与
+
     async def with_knowledge(self, prepared: Any, **_kw: Any) -> Any:
         return prepared  # 本文件测的是 build 失败；知识库注入不参与
 

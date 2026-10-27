@@ -119,6 +119,10 @@ class NativeRuntime:
         closers: list[Callable[[], Awaitable[None]]] = []
         try:
             try:
+                # 模型先于一切：用不了（无权、停用、下线）就本轮不开始（doc/model-design.html §7.1）
+                prepared = await self._assembly.with_models(
+                    prepared, run_id=run_id, redis=redis, notices=notices
+                )
                 prepared = await self._assembly.with_knowledge(prepared, run_id=run_id)
                 graph, titler = await self._assembly.build(
                     prepared,

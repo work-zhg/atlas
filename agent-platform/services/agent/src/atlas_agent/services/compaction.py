@@ -21,11 +21,12 @@ from langchain_core.messages import BaseMessage, HumanMessage
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from atlas_agent.domain.spec import ModelSpec
+from atlas_agent.domain.spec import ModelCaps, ModelSpec
 from atlas_agent.domain.translator import extract_text
 
 from ..config import Settings
 from ..db.models import Thread
+from ..providers.llm.modelgateway import ModelEndpoint, direct_endpoint
 
 logger = logging.getLogger(__name__)
 
@@ -102,12 +103,26 @@ class ThreadSummarizer:
     自己调 build_chat_model 会绕过它，单测里就变成真打网关（P5 踩过）。
     """
 
-    def __init__(self, settings: Settings, model_builder: Any, model: str | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        model_builder: Any,
+        model: str | None = None,
+        *,
+        endpoint: ModelEndpoint | None = None,
+        caps: ModelCaps | None = None,
+        provider: str = "anthropic",
+    ) -> None:
         self._settings = settings
         self._build_model = model_builder
         #: 摘要模型：智能体配置的 summarizer_model，空则用智能体自己的模型（assembly 决定）。
         #: ★ 不再写死 haiku：网关上未必有它，摘要一失败就只能降级丢弃早期对话
         self._model = model or settings.summarizer_model
+        #: 经模型网关时：这一轮主体的端点、目录给出的能力与协议（Run 开始时已检查过授权）。
+        #: 空 = 没接模型网关，直连 litellm
+        self._endpoint = endpoint or direct_endpoint(settings)
+        self._caps = caps
+        self._provider = provider
 
     @property
     def model(self) -> str:
@@ -116,9 +131,15 @@ class ThreadSummarizer:
     async def __call__(self, messages: Sequence[BaseMessage], *, focus: str = "") -> str:
         chat = self._build_model(
             # 八段摘要 + 分析草稿，2048 不够
-            ModelSpec(model=self._model, max_output_tokens=8192),
-            base_url=str(self._settings.litellm_base_url),
-            api_key=self._settings.litellm_key.get_secret_value(),
+            ModelSpec(
+                model=self._model,
+                provider=self._provider,  # type: ignore[arg-type]
+                max_output_tokens=8192,
+                caps=self._caps,
+            ),
+            base_url=self._endpoint.base_url,
+            api_key=self._endpoint.api_key,
+            headers=self._endpoint.headers,
         )
         prompt = _PROMPT.format(conversation=_render(messages))
         if focus.strip():

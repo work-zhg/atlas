@@ -25,6 +25,7 @@ members = [
     "atlas-knowledge",
     "atlas-mcpgateway",
     "atlas-memory",
+    "atlas-modelgateway",
     "atlas-redislock",
     "atlas-teamflow",
     "atlas-usercenter",
@@ -340,6 +341,7 @@ dependencies = [
     { name = "atlas-knowledge" },
     { name = "atlas-mcpgateway" },
     { name = "atlas-memory" },
+    { name = "atlas-modelgateway" },
     { name = "atlas-redislock" },
     { name = "atlas-teamflow" },
     { name = "atlas-usercenter" },
@@ -370,6 +372,7 @@ requires-dist = [
     { name = "atlas-knowledge", editable = "agent-platform/services/knowledge" },
     { name = "atlas-mcpgateway", editable = "agent-platform/services/mcpgateway" },
     { name = "atlas-memory", editable = "agent-platform/services/memory" },
+    { name = "atlas-modelgateway", editable = "agent-platform/services/modelgateway" },
     { name = "atlas-redislock", editable = "infra-platform/libs/redislock" },
     { name = "atlas-teamflow", editable = "teamflow/services/teamflow" },
     { name = "atlas-usercenter", editable = "usercenter/services/usercenter" },
@@ -671,6 +674,31 @@ requires-dist = [
 name = "atlas-memory"
 version = "0.1.0"
 source = { editable = "agent-platform/services/memory" }
+dependencies = [
+    { name = "alembic" },
+    { name = "asyncpg" },
+    { name = "fastapi" },
+    { name = "httpx" },
+    { name = "pydantic-settings" },
+    { name = "sqlalchemy", extra = ["asyncio"] },
+    { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "alembic", specifier = ">=1.14" },
+    { name = "asyncpg", specifier = ">=0.30" },
+    { name = "fastapi", specifier = ">=0.115" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "pydantic-settings", specifier = ">=2.6" },
+    { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.36" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
+]
+
+[[package]]
+name = "atlas-modelgateway"
+version = "0.1.0"
+source = { editable = "agent-platform/services/modelgateway" }
 dependencies = [
     { name = "alembic" },
     { name = "asyncpg" },

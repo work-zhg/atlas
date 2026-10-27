@@ -1,0 +1,29 @@
+[project]
+name = "atlas-modelgateway"
+version = "0.1.0"
+description = "Model gateway — the only entry to models: catalog, probing, keys, authz, metering and forwarding (doc/model-design.html)."
+requires-python = ">=3.13"
+
+# ★ 为什么独立成服务（模型管理方案设计 §3.4）：所有模型调用（Atlas 的 Native、Pod 里的 CLI、
+#   平台功能）都经过它；认人、判权、计量都在这里。它在用户中心里是独立应用，「谁能用哪个模型」
+#   这个数据编码属于它。和 MCP 网关分开部署：流量特征、故障面、扩缩容节奏都不同。
+#
+# ★ 不依赖 Redis：多副本之间没有要共享的状态 —— Key、模型、用途每个请求查库，
+#   判权结果在进程内短时缓存（§6.8），用量记录异步写库（§9.2）。
+# ★ 与其它包互不 import（根 pyproject 的 import-linter 守着）：Atlas、知识库只经 HTTP 调本服务。
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.32",
+  "sqlalchemy[asyncio]>=2.0.36",
+  "asyncpg>=0.30",
+  "alembic>=1.14",
+  "pydantic-settings>=2.6",
+  "httpx>=0.27",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/atlas_modelgateway"]
