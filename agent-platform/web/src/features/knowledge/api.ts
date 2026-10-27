@@ -286,7 +286,14 @@ export function useKbMutation<A, R>(fn: (args: A) => Promise<R>) {
 export interface KbGrant {
   id: string;
   permission: Exclude<KbLevel, "NONE">;
-  subject: { type: "USER" | "DEPT"; id: string; name?: string; account?: string; status?: string };
+  subject: {
+    type: "USER" | "DEPT";
+    id: string;
+    name?: string;
+    account?: string;
+    status?: string;
+    user_type?: "human" | "digital";
+  };
   include_sub: boolean;
   source?: string;
   granted_at?: string;
@@ -303,6 +310,8 @@ export interface DirUser {
   id: string;
   name: string;
   account: string;
+  /** digital = 数字员工（某个 Agent 的身份，数字员工设计 §3） */
+  user_type?: "human" | "digital";
 }
 
 export interface DirDept {
@@ -317,7 +326,9 @@ export function useGrants(id: string) {
 
 /** 通讯录（atlas-server 转发用户中心）：共享时选人、选部门 */
 export const directory = {
-  users: (q: string) => http.get<DirUser[]>("/v1/directory/users", { q, limit: 20 }),
+  /** digital：连数字员工一起（把知识库共享给某个 Agent） */
+  users: (q: string, digital = false) =>
+    http.get<DirUser[]>("/v1/directory/users", { q, limit: 20, digital: digital ? "true" : undefined }),
   depts: () => http.get<DirDept[]>("/v1/directory/depts"),
 };
 

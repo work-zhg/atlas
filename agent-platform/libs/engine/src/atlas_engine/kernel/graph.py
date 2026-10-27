@@ -48,7 +48,6 @@ from langgraph.store.base import BaseStore
 from langgraph.types import Checkpointer
 from langgraph.typing import ContextT
 
-from atlas_engine.kernel._models import resolve_model
 from atlas_engine.contracts import FilesystemProtocol, SubAgentSpawner
 from atlas_engine.kernel.middleware.filesystem import FilesystemMiddleware, FilesystemPermission
 from atlas_engine.kernel.middleware.patch_tool_calls import PatchToolCallsMiddleware
@@ -176,7 +175,7 @@ def _apply_custom_middleware(
 
 
 def create_deep_agent(  # noqa: C901, PLR0912, PLR0915  # Complex graph assembly logic with many conditional branches
-    model: str | BaseChatModel | None = None,
+    model: BaseChatModel,
     tools: Sequence[BaseTool | Callable | dict[str, Any]] | None = None,
     *,
     system_prompt: str | SystemMessage | None = None,
@@ -199,30 +198,10 @@ def create_deep_agent(  # noqa: C901, PLR0912, PLR0915  # Complex graph assembly
     `SandboxMiddleware` via `middleware=`.
 
     Args:
-        model: The model to use. **Required** — passing `None` raises
-            `ValueError`.
-
-            The default-model fallback was removed: silently falling back to a
-            hardcoded model contradicts the no-silent-degradation rule (§13.2).
-            The parameter keeps its `| None` type only so the error can be
-            raised with a clear message instead of a `TypeError`.
-
-            Accepts a `provider:model` string (e.g., `openai:gpt-5.5`); see
-            [`init_chat_model`][langchain.chat_models.init_chat_model(model_provider)]
-            for supported values. You can also pass a pre-initialized
-            [`BaseChatModel`][langchain.chat_models.BaseChatModel] instance directly.
-
-            !!! note "OpenAI Models and Data Retention"
-
-                If an `openai:` model is used, the agent will use the OpenAI
-                Responses API by default. To use OpenAI chat completions
-                instead, initialize the model with
-                `init_chat_model("openai:...", use_responses_api=False)` and
-                pass the initialized model instance here.
-
-                To disable data retention with the Responses API, use
-                `init_chat_model("openai:...", use_responses_api=True, store=False, include=["reasoning.encrypted_content"])`
-                and pass the initialized model instance here.
+        model: A constructed `BaseChatModel`. Atlas builds it in
+            `providers/llm/factory.py` (gateway endpoint, effort / thinking
+            gates); the kernel neither resolves model strings nor falls back
+            to a default model.
         tools: Additional tools the agent should have access to.
 
             These are merged with the built-in tools listed above
@@ -309,18 +288,7 @@ def create_deep_agent(  # noqa: C901, PLR0912, PLR0915  # Complex graph assembly
 
     Returns:
         A configured deep agent.
-
-    Raises:
-        ValueError: If `model` is `None`.
     """
-    # ★ model 必填。原本的 model=None → 默认 ChatAnthropic 回落
-    #   连同整个 _api 弃用告警机制一起删除：kernel 没有外部用户，弃用期
-    #   服务的对象不存在，静默回落一个硬编码模型则与 §13.2 相悖。
-    if model is None:
-        msg = "create_deep_agent 需要显式的 model —— 默认模型回落已删除"
-        raise ValueError(msg)
-    model = resolve_model(model)
-
     # ★ 没有 filesystem 配置就**没有文件能力** —— 不再回落到内存里的临时存储。
     #   回落意味着模型以为自己有持久工作区，写进去的东西 run 结束即弃，
     #   而它不会收到任何提示。宁可结构性地没有这些工具。
@@ -363,7 +331,7 @@ def create_deep_agent(  # noqa: C901, PLR0912, PLR0915  # Complex graph assembly
             AnthropicPromptCachingMiddleware(ttl=prompt_cache_ttl, unsupported_model_behavior="ignore")
         )
     # ★ 不装 HumanInTheLoopMiddleware：它靠 LangGraph 的 interrupt() + checkpointer，
-    #   而 Atlas 不用 checkpointer —— 人工审批走调用方的 ApprovalMiddleware（挂起）。
+    #   而 Atlas 不用 checkpointer —— 人工审批走调用方的 PermissionMiddleware（挂起）。
     # ★ SubAgentMiddleware 跟在调用方中间件后面（见模块文档）：它的 awrap_tool_call
     #   因此在审批与续跑去重**之内**，起子 run 是 `task` 最后一步。
     deepagent_middleware = _apply_custom_middleware(

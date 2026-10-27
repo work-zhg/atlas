@@ -123,7 +123,6 @@ class Agent(Base, TimestampMixin):
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     avatar_key: Mapped[str] = mapped_column(String(32), nullable=False, server_default="general")
     status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="draft")
-    is_builtin: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     current_version_id: Mapped[UUID | None] = mapped_column(
         UUIDType,
         nullable=True,
@@ -131,10 +130,24 @@ class Agent(Base, TimestampMixin):
     created_by: Mapped[UUID] = mapped_column(
         UUIDType, nullable=False
     )
+    #: 权限类型（迁移 0023，数字员工设计 §7.1）：只决定这个 Agent 的 run 发出的调用
+    #: X-Auth-Uid 写谁。
+    #:   user   以人为权限：X-Auth-Uid = 使用者，能做的就是使用者自己能做的
+    #:   agent  以 Agent 为权限：X-Auth-Uid = 数字员工，只看数字员工在用户中心的授权，
+    #:          不与使用者取交集或并集 —— 谁来用结果都一样
+    auth_subject: Mapped[str] = mapped_column(String(8), nullable=False, server_default="user")
+    #: 用户中心里这个 Agent 的数字员工（两种类型都有：审计、切换类型都用它）。回填前为空
+    digital_employee_uid: Mapped[UUID | None] = mapped_column(UUIDType, nullable=True)
 
     __table_args__ = (
         CheckConstraint("status IN ('draft','enabled','archived')", name="status_enum"),
+        CheckConstraint("auth_subject IN ('user','agent')", name="auth_subject_enum"),
     )
+
+    @property
+    def acts_as_itself(self) -> bool:
+        """以 Agent 为权限：run 按数字员工判，而不是按使用者。"""
+        return self.auth_subject == "agent"
 
 
 class AgentVersion(Base):
@@ -197,6 +210,9 @@ class Thread(Base, TimestampMixin):
     source_app: Mapped[str | None] = mapped_column(String(32), nullable=True)
     #: 用户记忆：on | off。off = 不抽取、不注入、不挂检索工具（业务应用建的会话默认 off）
     memory: Mapped[str] = mapped_column(String(8), nullable=False, server_default="on")
+    #: 用户在会话里选的审批模式 plan | manual | auto（迁移 0022），作用于下一个 run。
+    #: NULL = 用智能体的默认模式（doc/native-approval-mode-design.html）
+    approval_mode: Mapped[str | None] = mapped_column(String(8), nullable=True)
     created_by: Mapped[UUID] = mapped_column(
         UUIDType, nullable=False
     )
@@ -319,8 +335,11 @@ class Run(Base):
     #: 业务应用（TeamFlow）的节点会话里，团队其他执行人也能经它发指令。存量可能为空
     created_by: Mapped[UUID | None] = mapped_column(UUIDType, nullable=True)
     #: 这一轮按谁的权限判（X-Auth-Uid，内网身份传递 §7.2）：执行时发出的一切调用都带它。
-    #: P1 = 发起人；P2 = 当时 Agent 的数字员工。记下来用于审计与复现（接管的实例也按它）
+    #: 以人为权限 = 发起人；以 Agent 为权限 = 当时 Agent 的数字员工（数字员工设计 §7.3）。
+    #: 记下来用于审计与复现（接管的实例也按它；切换权限类型不影响进行中的 run）
     auth_uid: Mapped[UUID | None] = mapped_column(UUIDType, nullable=True)
+    #: 建 run 时 Agent 的权限类型 user | agent（迁移 0023）。NULL = 旧数据（都是 user）
+    auth_subject: Mapped[str | None] = mapped_column(String(8), nullable=True)
     status: Mapped[str] = mapped_column(String(24), nullable=False, server_default="queued")
     #: 挂起时「在等什么」（迁移 0012）。与图的 state.waiting_on 同形
     #: （contracts/suspension.py）：
@@ -331,6 +350,9 @@ class Run(Base):
     #:   而审批挂起时**没有子 run** —— barrier 立刻满足，于是续跑、又挂起、
     #:   再续跑，死循环。两种 reason 的等待条件不同，必须显式记下来。
     waiting_on: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    #: 这个 run 当前的审批模式（迁移 0022）：建 run 时取自会话，计划获批时更新，续跑与接管时
+    #: 从这里读。子 run 记的是派活那一刻父 run 的模式。NULL = 旧数据，按智能体默认
+    approval_mode: Mapped[str | None] = mapped_column(String(8), nullable=True)
     error_kind: Mapped[str | None] = mapped_column(String(48), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_seq: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
@@ -457,6 +479,15 @@ class Approval(Base):
     #: 触发这次审批的工具调用（迁移 0012）。审计用 —— approval.id 本身就由
     #: (run_id, tool_call_id) 派生，存一份省去排查时反推。
     tool_call_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    #: 迁移 0022（doc/native-approval-mode-design.html）：
+    #:   kind     tool = 工具调用的确认；plan = 规划模式提交的计划
+    #:   source   为什么问：manual_mode / auto_uncertain / plan_mode
+    #:   reason   给用户看的一句话
+    #:   outcome  决策带回的附加信息：{"mode": 计划审批选的执行模式, "feedback": 拒绝原因}
+    kind: Mapped[str] = mapped_column(String(8), nullable=False, server_default="tool")
+    source: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    outcome: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
     decided_by: Mapped[UUID | None] = mapped_column(
         UUIDType, nullable=True
     )
@@ -491,3 +522,76 @@ class SkillUsageDaily(Base):
     loads: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     #: 其中正常结束（succeeded）的 run 数
     completed_runs: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+
+
+class ThreadMemory(Base):
+    """会话的记忆状态（doc/memory-design.html §4.1、§5.3、§5.5、§4.5；迁移 0025）。
+
+    一个会话一行，按需建出。随会话保存而不是放进程内存：换副本接管会话后仍然有效。
+
+      registered_at   本会话用到的实例已在记忆服务登记归属的时刻
+                      （建会话时登记；失败则下个 Run 开始时再试）
+      snapshot        常驻快照：{block, catalog: {作用域: {主题: 版本}}, resident: {作用域: {主题:
+                      {version, entries}}}, epoch, compact_count, built_at}。只在缓存本来就会失效、
+                      或用户明确操作过时才重建（§5.3）
+      known           已知版本：{作用域: {主题: 版本}} —— Agent 在上下文里看到的内容（常驻块 +
+                      对话历史里的加载、写入结果）合起来是哪个版本（§5.5）
+      backfill_upto   会话后补记处理到哪条消息（created_at）—— 每次只处理之后新增的内容
+      backfill_seen   上次补记时会话的 updated_at：会话之后没有变化就不再扫描它
+    """
+
+    __tablename__ = "thread_memory"
+
+    thread_id: Mapped[UUID] = mapped_column(UUIDType, primary_key=True)
+    registered_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    snapshot: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    known: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    backfill_upto: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    backfill_seen: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    backfill_failures: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    backfill_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class MemoryUserSetting(Base):
+    """用户级的记忆设置（§7；迁移 0025）。
+
+      paused  暂停：两条写入路径都停止写入；已有记忆照常常驻、照常可以加载（「暂停优于删除」）
+      epoch   用户在管理界面每做一次影响记忆的操作就加一：会话的常驻快照记着它，
+              不一致就在下一轮刷新（§5.3「用户明确的意图，必须在下一轮生效」）
+    """
+
+    __tablename__ = "memory_user_setting"
+
+    user_id: Mapped[UUID] = mapped_column(UUIDType, primary_key=True)
+    paused: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    epoch: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class MemoryBackfill(Base):
+    """一次会话后补记的结果（§4.3「下次会话开始时提示：上次会话补记了 2 条［查看］」；迁移 0025）。
+
+    只记写入了东西（或拆分了主题）的那些。seen_at 为空 = 用户还没看过。
+    written: [{scope, topic, number, content, revision}]；split: [{scope, topic, into}]
+    """
+
+    __tablename__ = "memory_backfill"
+
+    id: Mapped[UUID] = _uuid_pk()
+    thread_id: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
+    user_id: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
+    written: Mapped[list] = mapped_column(JSONType, nullable=False, default=list)
+    split: Mapped[list] = mapped_column(JSONType, nullable=False, default=list)
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime, server_default=func.now(), nullable=False
+    )
+    seen_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+    __table_args__ = (Index("ix_memory_backfill_user", "user_id", "created_at"),)

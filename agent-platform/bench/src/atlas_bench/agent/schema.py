@@ -1,4 +1,4 @@
-"""统一任务模型与实验配置（doc/agent-eval-design.html §7 / §10）。"""
+"""统一任务模型与实验配置（doc/agent-eval-design.html §14.2 / §16）。"""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ __all__ = [
     "AgentExperimentConfig",
     "Budget",
     "Expectation",
+    "SimulatedUser",
     "Task",
     "TrialResult",
     "VariantConfig",
@@ -78,6 +79,17 @@ class Expectation(BaseModel):
         return v.replace(" ", "")
 
 
+class SimulatedUser(BaseModel):
+    """模拟用户（doc/ask-user-question-design.html §12）：智能体用 ask_user_question 提问时，
+    由评测侧的模型扮演用户、只依据 brief 作答（agent/user.py）。
+
+    ★ brief 是用户心里的**完整**需求，Agent 看不到 —— 指令里只给一句话，它不问就无从知道。
+      没有 user 的任务：问题按推荐项回答（不带答案的批准，服务端填推荐项），与原来的行为一致。
+    """
+
+    brief: str
+
+
 class Task(BaseModel):
     id: str  # <套件>/<任务>
     suite: str
@@ -108,6 +120,8 @@ class Task(BaseModel):
     serial: bool = False
     #: SSE 断线重连检测（E18）：收到这么多条事件后主动断开，稍后带游标重连
     sse_disconnect_after: int | None = None
+    #: 模拟用户：Agent 提问时按它回答（需求澄清评测，tags 里用 ambiguous / clear 标成对的两题）
+    user: SimulatedUser | None = None
 
     @field_validator("approval_policy")
     @classmethod
@@ -134,6 +148,8 @@ class AgentExperimentConfig(BaseModel):
     concurrency: int = 3
     #: approve_all：能力评测，不让审批成为变量（次数与等待仍计入指标）
     approval_policy: str = "approve_all"
+    #: 扮演模拟用户的模型（OpenAI 兼容接口，同裁判的地址与密钥）。有任务带 user 时必填
+    user_model: str | None = None
     variants: dict[str, VariantConfig]
     #: 报告里要做的配对比较：[基线, 对照]
     comparisons: list[tuple[str, str]] = Field(default_factory=list)

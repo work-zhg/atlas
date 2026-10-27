@@ -1,5 +1,20 @@
 import type { AgentSpecIn, ModelInfo } from "@/api/types";
 
+/** 向用户提问的内置工具名（与后端 tool_registry.ASK_USER_TOOL 一致） */
+export const ASK_USER_TOOL = "ask_user_question";
+
+/**
+ * 系统提示词里的「需求澄清」模板（设计 6.2）。通用的「何时问、怎么问」已经在工具说明里，
+ * 这里只放这个领域该问哪几项 —— 作者把占位换成自己领域的清单。
+ */
+export const CLARIFY_TEMPLATE = `## 需求澄清
+你做的东西可选方案很多。用户的需求只有一两句话时，开工前先用 ask_user_question 确认下面几项里还不清楚的
+（最多 4 项，挑对结果影响最大的；用户已经说清楚的不要再问）：
+- 【维度一】：选项 A / 选项 B / 选项 C
+- 【维度二】：……
+- 【维度三】：……
+需求已经足够具体时直接做，在回复开头列出你做的假设。`;
+
 /**
  * 编辑器内部用的 spec —— 把 tool_names / subagents / limits / compaction
  * 的可选性去掉。
@@ -14,6 +29,7 @@ export type ResolvedSpec = AgentSpecIn & {
   subagents: NonNullable<AgentSpecIn["subagents"]>;
   limits: NonNullable<AgentSpecIn["limits"]>;
   compaction: NonNullable<AgentSpecIn["compaction"]>;
+  approval: NonNullable<AgentSpecIn["approval"]>;
 };
 
 /** 与后端 schemas/agent.py 的默认值保持一致 —— 两边不一致会让新建的智能体
@@ -33,7 +49,9 @@ export function defaultSpec(model = "claude-sonnet-5"): ResolvedSpec {
       prompt_cache: true,
       temperature: null,
     },
-    tool_names: [],
+    // 向用户提问默认开着：有界面的智能体需求不清楚时该先问（doc/ask-user-question-design.html D9）。
+    // 接口创建的智能体默认不开 —— 没有人在线回答的场景不该有它
+    tool_names: [ASK_USER_TOOL],
     subagents: [],
     skills: [],
     // 服务端保存时填写（记录当时的 MCP 工具定义指纹），这里给空即可
@@ -44,7 +62,6 @@ export function defaultSpec(model = "claude-sonnet-5"): ResolvedSpec {
       timeout_s: 300,
       max_total_tokens: 500_000,
       tool_concurrency: 4,
-      require_approval_for: [],
     },
     compaction: {
       enabled: true,
@@ -52,6 +69,16 @@ export function defaultSpec(model = "claude-sonnet-5"): ResolvedSpec {
       target_ratio: 0.4,
       keep_recent_turns: 3,
       summarizer_model: "claude-haiku-4-5",
+      clear_ratio: 0.6,
+      warn_ratio: 0.9,
+      keep_recent_tool_results: 5,
+      restore_files: 5,
+      attachment_budget_ratio: 0.1,
+    },
+    // 审批模式：作者定默认与允许范围，用户在会话里选（doc/native-approval-mode-design.html）
+    approval: {
+      default_mode: "auto",
+      allowed_modes: ["plan", "manual", "auto"],
     },
   };
 }

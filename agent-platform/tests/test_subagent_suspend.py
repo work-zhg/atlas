@@ -17,7 +17,7 @@ from uuid import UUID
 
 from atlas_agent.domain.events import EventType
 from atlas_agent.domain.messages import KIND_TOOL_RESULT, Transcript, to_storage
-from atlas_agent.domain.spec import AgentSpec, LimitSpec, ModelSpec, SubAgentSpec
+from atlas_agent.domain.spec import AgentSpec, ApprovalSpec, LimitSpec, ModelSpec, SubAgentSpec
 from atlas_engine.contracts import ApprovalState
 from atlas_engine.kernel.middleware.approval import approval_id_for
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
@@ -262,27 +262,30 @@ class ScriptedGate:
         self.asked = 0
 
     async def check(
-        self, *, approval_id: str, tool_name: str, args: dict[str, Any]
+        self, *, approval_id: str, tool_name: str, args: dict[str, Any], **_: Any
     ) -> ApprovalState:
         self.asked += 1
         return self.state
 
 
 async def test_a_guarded_task_is_approved_before_the_sub_run_starts() -> None:
-    """★ `task` 被配成需审批：先审批、批准后才起子 run —— 等待从 approval 换成 subagent。
+    """★ 手动模式下 `task` 要请示：先审批、批准后才起子 run —— 等待从 approval 换成 subagent。
 
-    SubAgentMiddleware 排在 ApprovalMiddleware 之内，起子 run 是最后一步；换等待项时
-    审批中间件的「删掉这一项」不能把新登记的 subagent 等待项抹掉（release_wait）。
+    SubAgentMiddleware 排在 PermissionMiddleware 之内，起子 run 是最后一步；换等待项时
+    权限中间件的「删掉这一项」不能把新登记的 subagent 等待项抹掉（release_wait）。
     """
-    spec = _spec(limits=LimitSpec(timeout_s=30, require_approval_for=frozenset({"task"})))
+    spec = _spec(approval=ApprovalSpec(default_mode="manual", allowed_modes=("manual",)))
     spawner = Spawner()
     parent = _parent()
 
     # 段 1：审批 pending → 不起子 run，只等审批
-    first = await _segment(spec, parent, spawner, approvals=ScriptedGate("pending"))
+    first = await _segment(
+        spec, parent, spawner, approvals=ScriptedGate("pending"), approval_mode="manual"
+    )
     assert spawner.calls == []
+    token = approval_id_for(str(RUN_ID), "call_1")
     assert first[-1].data["waiting_on"] == [
-        {"tool_call_id": "call_1", "reason": "approval", "token": approval_id_for("", "call_1")}
+        {"tool_call_id": "call_1", "reason": "approval", "token": token}
     ]
 
     # 段 2：批准 → 起子 run，等待换成 subagent
@@ -299,7 +302,6 @@ async def test_a_guarded_task_is_approved_before_the_sub_run_starts() -> None:
             ],
         ),
     ]
-    token = approval_id_for("", "call_1")
     second = await _segment(
         spec,
         parent,
@@ -309,9 +311,12 @@ async def test_a_guarded_task_is_approved_before_the_sub_run_starts() -> None:
         input_content=None,
         resume=True,
         waiting_on={"call_1": {"reason": "approval", "token": token}},
-        decisions={token: "approved"},
+        decisions={token: {"status": "approved"}},
+        approval_mode="manual",
     )
     assert spawner.calls == [("researcher", "查一下 X", False)]
+    # 子 run 记下派活那一刻父 run 的模式（设计 D6）
+    assert spawner.modes == ["manual"]
     assert second[-1].type is EventType.RUN_SUSPENDED
     assert second[-1].data["waiting_on"] == [
         {"tool_call_id": "call_1", "reason": "subagent", "token": "sub-1"}

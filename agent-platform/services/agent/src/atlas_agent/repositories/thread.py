@@ -7,7 +7,7 @@ from uuid import UUID
 from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..db.models import Agent, Message, Thread
+from ..db.models import Agent, Message, Run, Thread
 from ..domain.messages import KIND_CHAT, StoredMessage
 
 
@@ -97,9 +97,17 @@ class ThreadRepository:
 
     # ------------------------------------------------------------------ 写
 
-    async def all_ids(self) -> list[UUID]:
-        """全部会话 id —— 沙箱孤儿清理用（启动时一次，量级可控）。"""
-        return list((await self._session.execute(select(Thread.id))).scalars())
+    async def live_ids(self) -> list[UUID]:
+        """沙箱回收眼里「还活着」的会话：没归档的，加上归档了但还有没结束的 run 的。
+
+        ★ 归档的会话不算活：task 的 fresh=true 丢弃的子会话不会再被复用，它的沙箱（ACP Pod）
+          不回收就一直占着配额。用户手动恢复归档会话时，下一轮重新建沙箱（CLI 从 /state resume）。
+        """
+        from .run import _UNFINISHED
+
+        unfinished = select(Run.thread_id).where(Run.status.in_(_UNFINISHED))
+        stmt = select(Thread.id).where(or_(Thread.status != "archived", Thread.id.in_(unfinished)))
+        return list((await self._session.execute(stmt)).scalars())
 
     async def create(
         self,

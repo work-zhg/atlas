@@ -1,4 +1,5 @@
 .PHONY: up down sync lint types arch test migrate serve check smoke regress config-migrate config-serve \
+        memory-migrate memory-serve mcpgw-migrate mcpgw-serve memory-scopes \
         uc-migrate uc-serve uc-bootstrap uc-web-install uc-web-dev uc-dev \
         tf-migrate tf-serve tf-worker tf-register-uc tf-web-install tf-web-dev tf-dev \
         web-install web-dev web-build web-check web-gen dev
@@ -16,6 +17,17 @@ serve:   ; uv run uvicorn atlas_agent.main:app --reload --port 8000
 # 配置服务（技能 / MCP 注册表）。库是同一 PG 上的 atlas_config（make up 会建）。
 config-migrate: ; uv run python -m atlas_config migrate
 config-serve:   ; ATLAS_CONFIG_ALLOW_SELF_REVIEW=true uv run python -m atlas_config serve
+# 记忆服务（doc/memory-design.html §3）。库是同一 PG 上的 atlas_memory（make up 会建）。
+#   首次：make memory-migrate && make memory-scopes；atlas-server 配 MEMORY_BASE_URL=http://127.0.0.1:8060
+#   ★ 「用户」作用域打开了数据权限开关：要先 python -m atlas_memory register-uc --account admin
+memory-migrate: ; uv run python -m atlas_memory migrate
+memory-serve:   ; uv run python -m atlas_memory serve
+memory-scopes:  ; uv run python -m atlas_memory scope add user --key uid --description 用户 --check-permission --if-missing
+# MCP 网关（doc/mcp-design.html 第二版）。库是同一 PG 上的 atlas_mcpgateway（make up 会建）。
+#   首次：make mcpgw-migrate；python -m atlas_mcpgateway register-uc --account admin
+#   atlas-server 配 MCP_GATEWAY_URL=http://127.0.0.1:8070（Atlas 只经网关调 MCP）
+mcpgw-migrate: ; uv run python -m atlas_mcpgateway migrate
+mcpgw-serve:   ; uv run python -m atlas_mcpgateway serve
 # 用户中心（独立系统，prototype/usercenter/docs/）。库是同一 PG 上的 atlas_usercenter（make up 会建）。
 #   首次：make uc-migrate && make uc-bootstrap ACCOUNT=admin NAME=管理员 EMAIL=admin@example.com COMPANY=星海科技
 uc-migrate:   ; uv run python -m atlas_usercenter migrate

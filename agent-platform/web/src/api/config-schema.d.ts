@@ -89,15 +89,15 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/internal/mcp/servers": {
+    "/internal/instructions": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Mcp Servers */
-        get: operations["mcp_servers_internal_mcp_servers_get"];
+        /** Runtime Instructions */
+        get: operations["runtime_instructions_internal_instructions_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -106,16 +106,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/internal/mcp/reviews": {
+    "/config/instructions/me": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Mcp Reviews */
-        get: operations["mcp_reviews_internal_mcp_reviews_get"];
-        put?: never;
+        /** Get Mine */
+        get: operations["get_mine_config_instructions_me_get"];
+        /** Put Mine */
+        put: operations["put_mine_config_instructions_me_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/instructions/platform": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Platform */
+        get: operations["get_platform_config_instructions_platform_get"];
+        /** Put Platform */
+        put: operations["put_platform_config_instructions_platform_put"];
         post?: never;
         delete?: never;
         options?: never;
@@ -246,60 +265,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/config/mcp/servers": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Servers */
-        get: operations["list_servers_config_mcp_servers_get"];
-        put?: never;
-        /** Create Server */
-        post: operations["create_server_config_mcp_servers_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/config/mcp/servers/{name}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Server */
-        get: operations["get_server_config_mcp_servers__name__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        /** Patch Server */
-        patch: operations["patch_server_config_mcp_servers__name__patch"];
-        trace?: never;
-    };
-    "/config/mcp/servers/{name}/reviews": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Reviews */
-        get: operations["list_reviews_config_mcp_servers__name__reviews_get"];
-        put?: never;
-        /** Review Tool */
-        post: operations["review_tool_config_mcp_servers__name__reviews_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/config/audit": {
         parameters: {
             query?: never;
@@ -367,123 +332,29 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
-        /** McpServerIn */
-        McpServerIn: {
-            /** Name */
-            name: string;
+        /** InstructionIn */
+        InstructionIn: {
             /**
-             * Display Name
+             * Content
              * @default
              */
-            display_name: string;
-            /**
-             * Description
-             * @default
-             */
-            description: string;
-            /**
-             * Transport
-             * @default streamable_http
-             * @enum {string}
-             */
-            transport: "streamable_http" | "sse";
-            /** Url */
-            url: string;
-            /** Headers */
-            headers?: {
-                [key: string]: string;
-            };
-            /**
-             * Credential Scope
-             * @default platform
-             * @constant
-             */
-            credential_scope: "platform";
-            /** Call Timeout S */
-            call_timeout_s?: number | null;
-            /**
-             * Review Required
-             * @default true
-             */
-            review_required: boolean;
-            /**
-             * Status
-             * @default enabled
-             * @enum {string}
-             */
-            status: "enabled" | "disabled";
+            content: string;
         };
-        /**
-         * McpServerOut
-         * @description 与运行时 McpServerConfig 同构的字段（name/url/transport/headers/enabled/
-         *     call_timeout_s），外加注册表自己的元数据。headers 里只有占位符。
-         */
-        McpServerOut: {
-            /** Name */
-            name: string;
-            /**
-             * Display Name
-             * @default
-             */
-            display_name: string;
-            /**
-             * Description
-             * @default
-             */
-            description: string;
-            /** Transport */
-            transport: string;
-            /** Url */
-            url: string;
-            /** Headers */
-            headers?: {
-                [key: string]: string;
-            };
-            /**
-             * Credential Scope
-             * @default platform
-             */
-            credential_scope: string;
-            /** Call Timeout S */
-            call_timeout_s?: number | null;
-            /**
-             * Review Required
-             * @default true
-             */
-            review_required: boolean;
-            /**
-             * Enabled
-             * @default true
-             */
-            enabled: boolean;
-            /** Updated By */
-            updated_by?: string | null;
+        /** InstructionOut */
+        InstructionOut: {
+            /** Scope */
+            scope: string;
+            /** Content */
+            content: string;
             /** Updated At */
             updated_at?: string | null;
-        };
-        /**
-         * McpServerPatch
-         * @description name 不可改：它是工具前缀，改名 = 另一个 server。
-         */
-        McpServerPatch: {
-            /** Display Name */
-            display_name?: string | null;
-            /** Description */
-            description?: string | null;
-            /** Transport */
-            transport?: ("streamable_http" | "sse") | null;
-            /** Url */
-            url?: string | null;
-            /** Headers */
-            headers?: {
-                [key: string]: string;
-            } | null;
-            /** Call Timeout S */
-            call_timeout_s?: number | null;
-            /** Review Required */
-            review_required?: boolean | null;
-            /** Status */
-            status?: ("enabled" | "disabled") | null;
+            /** Updated By */
+            updated_by?: string | null;
+            /**
+             * Max Chars
+             * @default 10000
+             */
+            max_chars: number;
         };
         /** ReviewDecisionIn */
         ReviewDecisionIn: {
@@ -682,49 +553,6 @@ export interface components {
             /** Reason */
             reason?: string | null;
         };
-        /** ToolReviewIn */
-        ToolReviewIn: {
-            /** Tool Name */
-            tool_name: string;
-            /** Digest */
-            digest: string;
-            /**
-             * Decision
-             * @enum {string}
-             */
-            decision: "approved" | "rejected";
-            /**
-             * Note
-             * @default
-             */
-            note: string;
-        };
-        /** ToolReviewOut */
-        ToolReviewOut: {
-            /** Server */
-            server: string;
-            /** Tool Name */
-            tool_name: string;
-            /** Digest */
-            digest: string;
-            /**
-             * Decision
-             * @enum {string}
-             */
-            decision: "approved" | "rejected";
-            /** Decided By */
-            decided_by: string;
-            /**
-             * Decided At
-             * Format: date-time
-             */
-            decided_at: string;
-            /**
-             * Note
-             * @default
-             */
-            note: string;
-        };
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -772,9 +600,7 @@ export interface operations {
     catalog_internal_skills_catalog_get: {
         parameters: {
             query?: never;
-            header?: {
-                authorization?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -789,23 +615,12 @@ export interface operations {
                     "application/json": components["schemas"]["SkillCatalogItem"][];
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     revoked_internal_skills_revoked_get: {
         parameters: {
             query?: never;
-            header?: {
-                authorization?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -820,23 +635,12 @@ export interface operations {
                     "application/json": components["schemas"]["RevokedSkill"][];
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     versions_internal_skills__slug__versions_get: {
         parameters: {
             query?: never;
-            header?: {
-                authorization?: string | null;
-            };
+            header?: never;
             path: {
                 slug: string;
             };
@@ -867,9 +671,7 @@ export interface operations {
     version_internal_skills__slug__versions__version__get: {
         parameters: {
             query?: never;
-            header?: {
-                authorization?: string | null;
-            };
+            header?: never;
             path: {
                 slug: string;
                 version: number;
@@ -898,12 +700,12 @@ export interface operations {
             };
         };
     };
-    mcp_servers_internal_mcp_servers_get: {
+    runtime_instructions_internal_instructions_get: {
         parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
+            query: {
+                user_id: string;
             };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -915,7 +717,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["McpServerOut"][];
+                    "application/json": {
+                        [key: string]: string;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -929,14 +733,10 @@ export interface operations {
             };
         };
     };
-    mcp_reviews_internal_mcp_reviews_get: {
+    get_mine_config_instructions_me_get: {
         parameters: {
-            query: {
-                server: string;
-            };
-            header?: {
-                authorization?: string | null;
-            };
+            query?: never;
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -948,7 +748,84 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ToolReviewOut"][];
+                    "application/json": components["schemas"]["InstructionOut"];
+                };
+            };
+        };
+    };
+    put_mine_config_instructions_me_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InstructionIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InstructionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_platform_config_instructions_platform_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InstructionOut"];
+                };
+            };
+        };
+    };
+    put_platform_config_instructions_platform_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InstructionIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InstructionOut"];
                 };
             };
             /** @description Validation Error */
@@ -965,9 +842,7 @@ export interface operations {
     list_skills_config_skills_get: {
         parameters: {
             query?: never;
-            header?: {
-                "x-user-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -982,23 +857,12 @@ export interface operations {
                     "application/json": components["schemas"]["SkillDetailOut"][];
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     upload_skill_config_skills_post: {
         parameters: {
             query?: never;
-            header?: {
-                "x-user-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -1031,9 +895,7 @@ export interface operations {
     get_skill_config_skills__slug__get: {
         parameters: {
             query?: never;
-            header?: {
-                "x-user-id"?: string | null;
-            };
+            header?: never;
             path: {
                 slug: string;
             };
@@ -1064,9 +926,7 @@ export interface operations {
     read_published_file_config_skills__slug__versions__version__files__path__get: {
         parameters: {
             query?: never;
-            header?: {
-                "x-user-id"?: string | null;
-            };
+            header?: never;
             path: {
                 slug: string;
                 version: number;
@@ -1099,9 +959,7 @@ export interface operations {
     read_upload_file_config_skill_uploads__upload_id__files__path__get: {
         parameters: {
             query?: never;
-            header?: {
-                "x-user-id"?: string | null;
-            };
+            header?: never;
             path: {
                 upload_id: string;
                 path: string;
@@ -1133,9 +991,7 @@ export interface operations {
     approve_config_skill_uploads__upload_id__approve_post: {
         parameters: {
             query?: never;
-            header?: {
-                "x-user-id"?: string | null;
-            };
+            header?: never;
             path: {
                 upload_id: string;
             };
@@ -1170,9 +1026,7 @@ export interface operations {
     reject_config_skill_uploads__upload_id__reject_post: {
         parameters: {
             query?: never;
-            header?: {
-                "x-user-id"?: string | null;
-            };
+            header?: never;
             path: {
                 upload_id: string;
             };
@@ -1207,9 +1061,7 @@ export interface operations {
     change_status_config_skills__slug__versions__version___action__post: {
         parameters: {
             query?: never;
-            header?: {
-                "x-user-id"?: string | null;
-            };
+            header?: never;
             path: {
                 slug: string;
                 version: number;
@@ -1243,212 +1095,6 @@ export interface operations {
             };
         };
     };
-    list_servers_config_mcp_servers_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "x-user-id"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["McpServerOut"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    create_server_config_mcp_servers_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "x-user-id"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["McpServerIn"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["McpServerOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_server_config_mcp_servers__name__get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "x-user-id"?: string | null;
-            };
-            path: {
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["McpServerOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    patch_server_config_mcp_servers__name__patch: {
-        parameters: {
-            query?: never;
-            header?: {
-                "x-user-id"?: string | null;
-            };
-            path: {
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["McpServerPatch"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["McpServerOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_reviews_config_mcp_servers__name__reviews_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "x-user-id"?: string | null;
-            };
-            path: {
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ToolReviewOut"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    review_tool_config_mcp_servers__name__reviews_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "x-user-id"?: string | null;
-            };
-            path: {
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ToolReviewIn"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ToolReviewOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     list_audit_config_audit_get: {
         parameters: {
             query?: {
@@ -1456,9 +1102,7 @@ export interface operations {
                 target_id?: string | null;
                 limit?: number;
             };
-            header?: {
-                "x-user-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };

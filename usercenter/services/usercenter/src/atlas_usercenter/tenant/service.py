@@ -82,7 +82,7 @@ class TenantService:
                 (
                     await self.session.execute(
                         select(User.tenant_uuid, func.count())
-                        .where(User.status == "active")
+                        .where(User.status == "active", User.user_type == "human")
                         .group_by(User.tenant_uuid)
                     )
                 ).all()

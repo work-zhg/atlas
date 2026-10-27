@@ -18,7 +18,7 @@ from ...schemas.run import (
     RunOut,
     RunTraceOut,
 )
-from ...services.approval import submit_decision
+from ...services.approval import decision_outcome, submit_decision
 
 router = APIRouter(prefix="/runs", tags=["runs"])
 
@@ -66,7 +66,14 @@ async def list_pending_approvals(
     rows = await ApprovalRepository(session).list_pending(run_id)
     return PendingApprovalList(
         data=[
-            PendingApproval(id=r.id, tool_name=r.tool_name, args=r.args, created_at=r.created_at)
+            PendingApproval(
+                id=r.id,
+                tool_name=r.tool_name,
+                args=r.args,
+                kind=r.kind,
+                reason=r.reason,
+                created_at=r.created_at,
+            )
             for r in rows
         ]
     )
@@ -81,20 +88,35 @@ async def decide_approval(
     principal: PrincipalDep,
     executor: ExecutorDep,
 ) -> ApprovalOut:
-    """批准或拒绝一次高风险工具调用（§12.2）。
+    """批准或拒绝一次工具调用、规划模式提交的计划（doc/native-approval-mode-design.html），
+    或回答智能体提的问题（doc/ask-user-question-design.html）。
 
-    拒绝**不终止 run** —— agent 会收到"用户拒绝"作为工具结果，
-    可以换个方案继续，而不是整轮白跑。
+    拒绝**不终止 run** —— agent 会收到"用户拒绝"（连同用户给的原因）作为工具结果，
+    可以换个方案继续，而不是整轮白跑。批准计划时要选执行模式（手动 / 自动）。
     """
     # ★ 归属按审批**实际所在**的 run 判：只看路径里的 run 会让人拿自己的 run id
     #   去批别人的审批（子智能体的审批可能挂在子 run 上，所以不要求两者相等）
     await ensure_run_owner(session, run_id, principal, write=True)
-    approval_run = await session.scalar(select(Approval.run_id).where(Approval.id == approval_id))
-    if approval_run is None:
+    approval = await session.scalar(select(Approval).where(Approval.id == approval_id))
+    if approval is None:
         raise NotFound("确认项不存在", approval_id=str(approval_id))
-    await ensure_run_owner(session, approval_run, principal, write=True)
+    await ensure_run_owner(session, approval.run_id, principal, write=True)
+    outcome = await decision_outcome(
+        session,
+        approval,
+        decision=payload.decision,
+        approval_mode=payload.approval_mode,
+        feedback=payload.feedback,
+        answers=(
+            [a.model_dump() for a in payload.answers] if payload.answers is not None else None
+        ),
+    )
     ok = await submit_decision(
-        session, approval_id=approval_id, decision=payload.decision, user_id=principal.uid
+        session,
+        approval_id=approval_id,
+        decision=payload.decision,
+        user_id=principal.uid,
+        outcome=outcome,
     )
     if not ok:
         raise Conflict("该确认已被处理过或已超时", approval_id=str(approval_id))

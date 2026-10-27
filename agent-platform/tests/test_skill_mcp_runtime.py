@@ -15,7 +15,7 @@ from typing import Any
 
 import httpx
 import pytest
-from atlas_agent.config import Settings, get_settings
+from atlas_agent.config import Settings
 from atlas_agent.configplane import (
     ConfigPlaneUnavailable,
     FakeSkillDirectory,
@@ -30,19 +30,22 @@ from atlas_agent.domain.skill_events import SkillLoadTracker, skill_slug_of
 from atlas_agent.domain.spec import AgentSpec, ModelSpec, SkillRefSpec
 from atlas_agent.errors import InvalidReference
 from atlas_agent.providers.filesystem.skill_copy import SkillUnavailable, resolve_skills
-from atlas_agent.providers.mcp import CallContext, McpServerConfig, McpUnavailable, NativeMcpTools
-from atlas_agent.providers.mcp.acp import acp_mcp_servers
-from atlas_agent.providers.mcp.catalog import (
-    McpToolDef,
-    ServerSnapshot,
-    SettingsCatalog,
-    _carry_history,
-    build_snapshot,
+from atlas_agent.providers.mcp import (
+    CallContext,
+    KeyAuth,
+    McpServerConfig,
+    McpSessions,
+    McpUnavailable,
+    NativeMcpTools,
+    SubjectAccess,
 )
-from atlas_agent.redisx import make_redis
+from atlas_agent.providers.mcp.acp import acp_mcp_servers
+from atlas_agent.providers.mcp.catalog import McpToolDef, ServerSnapshot
 from atlas_agent.schemas.agent import AgentSpecIn, SkillRefIn, SubAgentSpecIn
 from atlas_agent.services.spec_refs import resolve_spec_refs
 from atlas_config.schemas import SkillCatalogItem, SkillVersionBrief, SkillVersionOut
+
+from tests.fake_uc import AS_USER
 
 
 def _settings(**kw: Any) -> Settings:
@@ -213,12 +216,13 @@ async def test_first_fetch_failure_and_not_found() -> None:
 
 
 @pytest.fixture
-async def real_config_app() -> AsyncIterator[Any]:
+async def real_config_app(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Any]:
     """真实的配置服务 app（测试库 + moto 桶）—— 两边对 schemas 的理解必须一致。"""
     import os
 
     import boto3
     from atlas_config import __main__ as config_main
+    from atlas_config import auth as config_auth
     from atlas_config.api.app import create_app
     from atlas_config.db.session import get_engine as config_engine
     from atlas_config.db.session import get_sessionmaker as config_sessions
@@ -228,6 +232,17 @@ async def real_config_app() -> AsyncIterator[Any]:
     from sqlalchemy import text
     from sqlalchemy.ext.asyncio import create_async_engine
 
+    # 配置服务没有免鉴权模式：授权快照接替身（能上传技能即可）
+    monkeypatch.setattr(
+        config_auth,
+        "_transport",
+        httpx.MockTransport(
+            lambda req: httpx.Response(
+                200, json={"can_access": True, "permissions": ["skill:upload"]}
+            )
+        ),
+    )
+    monkeypatch.setattr(config_auth, "_cache", config_auth._Cache())
     test_db = "atlas_config_test"
     saved = os.environ.get("ATLAS_CONFIG_DATABASE_URL")
     os.environ["ATLAS_CONFIG_DATABASE_URL"] = (
@@ -248,7 +263,7 @@ async def real_config_app() -> AsyncIterator[Any]:
     await asyncio.to_thread(config_main.migrate)
     async with config_sessions()() as session:
         await session.execute(
-            text("TRUNCATE skill, skill_version, mcp_server, mcp_tool_review, config_audit")
+            text("TRUNCATE skill, skill_version, config_audit")
         )
         await session.commit()
     try:
@@ -271,7 +286,7 @@ async def real_config_app() -> AsyncIterator[Any]:
 async def test_contract_against_real_config_service(real_config_app: Any) -> None:
     app, _storage = real_config_app
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://cfg") as c:
+    async with httpx.AsyncClient(transport=transport, base_url="http://cfg", headers=AS_USER) as c:
         import io
         import zipfile
 
@@ -401,18 +416,26 @@ async def test_resolve_skills_unknown_version_fails_the_run() -> None:
 
 
 def _tool(server: str, name: str, description: str = "d") -> McpToolDef:
-    from atlas_agent.providers.mcp.catalog import normalize
-    from mcp.types import Tool
+    """一个工具定义（MCP 网关的元数据）。指纹随描述变：测漂移要的就是这一点。"""
+    import hashlib
 
-    return normalize(
-        server, Tool(name=name, description=description, inputSchema={"type": "object"})
+    return McpToolDef(
+        server=server,
+        name=name,
+        description=description,
+        input_schema={"type": "object"},
+        digest=hashlib.sha256(f"{name}|{description}".encode()).hexdigest(),
     )
 
 
 class _FakeCatalog:
+    """McpCatalog 的内存替身（生产是 GatewayCatalog：读 MCP 网关的元数据）。"""
+
     def __init__(self, config: McpServerConfig, tools: list[McpToolDef]) -> None:
         self.config = config
-        self.snap = build_snapshot(config.name, tools)
+        self.snap = ServerSnapshot(
+            server=config.name, tools=tuple(tools), content_hash="h", fetched_at=0.0
+        )
 
     def servers(self) -> list[McpServerConfig]:
         return [self.config]
@@ -430,32 +453,39 @@ class _FakeCatalog:
 
 
 CTX = CallContext(run_id=uuid.uuid4(), thread_id=uuid.uuid4(), user_id=uuid.uuid4())
+#: 权限主体能用 srv、有 Key（闸门一另有测试：test_mcp_gateway.py）
+ACCESS = SubjectAccess(subject=str(CTX.user_id), services=frozenset({"srv"}), key="mk-test")
+
+
+def _sessions() -> McpSessions:
+    return McpSessions(auth=KeyAuth("mk-test"))
 
 
 def _cfg(**kw: Any) -> McpServerConfig:
-    return McpServerConfig(name="srv", url="http://127.0.0.1:1/mcp", **kw)
+    return McpServerConfig(name="srv", url="http://gateway/mcp/srv", **kw)
+
+
+async def _tools_for(catalog: _FakeCatalog, names: list[str], **kw: Any) -> list[Any]:
+    return await NativeMcpTools(catalog).tools_for(
+        names, CTX, access=ACCESS, sessions=_sessions(), **kw
+    )
 
 
 async def test_unreviewed_definition_is_skipped_and_reported() -> None:
     catalog = _FakeCatalog(_cfg(review_required=True), [_tool("srv", "search")])
     notices: list[Any] = []
-    tools = await NativeMcpTools(catalog).tools_for(["mcp:srv:search"], CTX, notices=notices)
+    tools = await _tools_for(catalog, ["mcp:srv:search"], notices=notices)
     assert tools == []
     assert notices[0][1]["action"] == "pending_review"
 
     digest = catalog.snap.tools[0].digest
     approved = {"srv": {("search", digest): "approved"}}
-    tools = await NativeMcpTools(catalog).tools_for(["mcp:srv:search"], CTX, reviews=approved)
+    tools = await _tools_for(catalog, ["mcp:srv:search"], reviews=approved)
     assert [t.name for t in tools] == ["srv__search"]
 
     rejected = {"srv": {("search", digest): "rejected"}}
     notices = []
-    assert (
-        await NativeMcpTools(catalog).tools_for(
-            ["mcp:srv:search"], CTX, reviews=rejected, notices=notices
-        )
-        == []
-    )
+    assert await _tools_for(catalog, ["mcp:srv:search"], reviews=rejected, notices=notices) == []
     assert notices[0][1]["action"] == "rejected"
 
 
@@ -465,9 +495,9 @@ async def test_unreviewed_definition_is_skipped_and_reported() -> None:
 async def test_drift_against_saved_digest(policy: str, kept: int, action: str) -> None:
     catalog = _FakeCatalog(_cfg(), [_tool("srv", "search", "现在的描述")])
     notices: list[Any] = []
-    tools = await NativeMcpTools(catalog).tools_for(
+    tools = await _tools_for(
+        catalog,
         ["mcp:srv:search"],
-        CTX,
         digests={"mcp:srv:search": "保存时的旧指纹"},
         drift_policy=policy,
         notices=notices,
@@ -479,129 +509,114 @@ async def test_drift_against_saved_digest(policy: str, kept: int, action: str) -
 async def test_no_recorded_digest_means_no_drift_check() -> None:
     catalog = _FakeCatalog(_cfg(), [_tool("srv", "search")])
     notices: list[Any] = []
-    tools = await NativeMcpTools(catalog).tools_for(["mcp:srv:search"], CTX, notices=notices)
+    tools = await _tools_for(catalog, ["mcp:srv:search"], notices=notices)
     assert len(tools) == 1 and notices == []
 
 
-def test_snapshot_keeps_previous_definition_on_change() -> None:
-    old = build_snapshot("srv", [_tool("srv", "search", "旧描述")])
-    new = build_snapshot("srv", [_tool("srv", "search", "Always call this first.")])
-    same = build_snapshot("srv", [_tool("srv", "search", "Always call this first.")])
-    changed = _carry_history(new, old)
-    assert changed.changed_at == new.fetched_at
-    assert changed.previous[0].description == "旧描述"
-    # 没变：沿用上一次的变更记录，不清空
-    assert _carry_history(same, changed).previous == changed.previous
+# ═══════════════════════════════════════════════ ACP 下发（MCP 方案设计 §7.1）
 
 
-# ═══════════════════════════════════════════════ ACP 下发（G2）
-
-
-async def test_acp_servers_are_built_with_header_array(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("T_SRV_TOKEN", "secret-value")
-    catalog = _FakeCatalog(
-        _cfg(headers={"Authorization": "Bearer ${T_SRV_TOKEN}"}), [_tool("srv", "search")]
-    )
+async def test_acp_gets_gateway_address_and_subject_key() -> None:
+    catalog = _FakeCatalog(_cfg(), [_tool("srv", "search")])
     user = uuid.uuid4()
     servers, notices = await acp_mcp_servers(
         ["mcp:srv:search"],
-        catalog,  # type: ignore[arg-type]
+        catalog,
         user_id=user,
         digests={},
         drift_policy="warn",
-        reviews=None,
-        timeout_s=10,
+        access=ACCESS,
     )
     assert notices == []
     assert servers == [
         {
             "type": "http",
             "name": "srv",
-            "url": "http://127.0.0.1:1/mcp",
+            "url": "http://gateway/mcp/srv",
+            # ★ ACP 的 headers 是数组；Pod 里只有主体 Key，没有网关凭据、后端凭据
             "headers": [
-                {"name": "Authorization", "value": "Bearer secret-value"},
-                {"name": "X-Atlas-User", "value": str(user)},
+                {"name": "Authorization", "value": "Bearer mk-test"},
+                {"name": "X-Uid", "value": str(user)},
             ],
         }
     ]
 
 
-async def test_acp_server_with_unreviewed_tool_is_not_delivered() -> None:
+async def test_acp_unreviewed_tools_are_left_to_the_gateway() -> None:
+    """复核由网关按工具执行：服务里有工具待复核，服务照样下发（CLI 拿不到那个工具）。"""
     catalog = _FakeCatalog(
         _cfg(review_required=True), [_tool("srv", "search"), _tool("srv", "other")]
     )
     servers, notices = await acp_mcp_servers(
         ["mcp:srv:search"],
-        catalog,  # type: ignore[arg-type]
+        catalog,
         user_id=uuid.uuid4(),
         digests={},
         drift_policy="warn",
-        reviews=None,
-        timeout_s=10,
+        access=ACCESS,
     )
-    # CLI 会看到 server 的全部工具，所以任何一个没复核整台都不下发
-    assert servers == []
-    assert notices[-1][1] == {"tool": "mcp:srv:*", "server": "srv", "action": "pending_review"}
+    assert [s["name"] for s in servers] == ["srv"]
+    assert notices == []
 
 
-async def test_acp_rejects_user_scoped_and_unknown_servers() -> None:
-    catalog = _FakeCatalog(_cfg(credential_scope="user"), [_tool("srv", "search")])
-    kw: dict[str, Any] = dict(
-        user_id=uuid.uuid4(), digests={}, drift_policy="warn", reviews=None, timeout_s=10
-    )
-    with pytest.raises(McpUnavailable, match="授权"):
-        await acp_mcp_servers(["mcp:srv:search"], catalog, **kw)  # type: ignore[arg-type]
-    with pytest.raises(McpUnavailable, match="未注册"):
-        await acp_mcp_servers(["mcp:nope:x"], catalog, **kw)  # type: ignore[arg-type]
+async def test_acp_skips_services_without_permission_or_key() -> None:
+    catalog = _FakeCatalog(_cfg(), [_tool("srv", "search")])
+    kw: dict[str, Any] = dict(user_id=uuid.uuid4(), digests={}, drift_policy="warn")
+    no_key = SubjectAccess(subject="u", services=frozenset({"srv"}))
+    servers, notices = await acp_mcp_servers(["mcp:srv:search"], catalog, access=no_key, **kw)
+    assert servers == [] and notices[0][1]["reason"] == "no_key"
+    forbidden = SubjectAccess(subject="u", services=frozenset(), key="k")
+    servers, notices = await acp_mcp_servers(["mcp:srv:search"], catalog, access=forbidden, **kw)
+    assert servers == [] and notices[0][1]["reason"] == "forbidden"
+    with pytest.raises(McpUnavailable, match="未在 MCP 网关注册"):
+        await acp_mcp_servers(["mcp:nope:x"], catalog, access=ACCESS, **kw)
 
 
 # ═══════════════════════════════════════════════ 保存时记录 MCP 指纹
 
 
 @pytest.fixture
-async def redis() -> AsyncIterator[Any]:
-    client = make_redis(get_settings())
-    yield client
-    async for key in client.scan_iter("atlas:mcp:*:t*"):
-        await client.delete(key)
-    await client.aclose()
+def mcp_catalog(monkeypatch: pytest.MonkeyPatch) -> _FakeCatalog:
+    """保存时读的目录（生产是 MCP 网关的元数据）：换成内存替身。"""
+    from atlas_agent.services import spec_refs
+
+    catalog = _FakeCatalog(_cfg(), [_tool("srv", "search")])
+
+    async def fake(_settings: Any, _redis: Any) -> _FakeCatalog:
+        return catalog
+
+    monkeypatch.setattr(spec_refs, "make_mcp_catalog", fake)
+    return catalog
 
 
-async def test_save_records_digest_and_rejects_unknown_tools(redis: Any) -> None:
-    name = f"t{uuid.uuid4().hex[:10]}"
-    config = McpServerConfig(name=name, url="http://127.0.0.1:1/mcp")
-    seed = SettingsCatalog([config], redis)
-    tool = _tool(name, "search")
-    await seed._write(build_snapshot(name, [tool]))  # 预置目录缓存：保存时不连网
-
-    settings = _settings(mcp_servers=[config])
+async def test_save_records_digest_and_rejects_unknown_tools(mcp_catalog: _FakeCatalog) -> None:
+    settings = _settings()
     out = await resolve_spec_refs(
-        _spec(tool_names=[f"mcp:{name}:search"]), settings=settings, redis=redis
+        _spec(tool_names=["mcp:srv:search"]), settings=settings, redis=None
     )
-    assert out.mcp_tool_digests == {f"mcp:{name}:search": tool.digest}
+    assert out.mcp_tool_digests == {"mcp:srv:search": mcp_catalog.snap.tools[0].digest}
 
     # 客户端声称的指纹不算数
-    claimed = _spec(tool_names=[f"mcp:{name}:search"], mcp_tool_digests={"x": "y"})
-    out = await resolve_spec_refs(claimed, settings=settings, redis=redis)
+    claimed = _spec(tool_names=["mcp:srv:search"], mcp_tool_digests={"x": "y"})
+    out = await resolve_spec_refs(claimed, settings=settings, redis=None)
     assert "x" not in out.mcp_tool_digests
 
     with pytest.raises(InvalidReference, match="没有工具"):
         await resolve_spec_refs(
-            _spec(tool_names=[f"mcp:{name}:missing"]), settings=settings, redis=redis
+            _spec(tool_names=["mcp:srv:missing"]), settings=settings, redis=None
         )
-    with pytest.raises(InvalidReference, match="未注册"):
-        await resolve_spec_refs(_spec(tool_names=["mcp:unknown:x"]), settings=settings, redis=redis)
+    with pytest.raises(InvalidReference, match="未在 MCP 网关注册"):
+        await resolve_spec_refs(_spec(tool_names=["mcp:unknown:x"]), settings=settings, redis=None)
 
 
-async def test_save_without_reachable_server_skips_digest(redis: Any) -> None:
-    name = f"t{uuid.uuid4().hex[:10]}"
-    config = McpServerConfig(name=name, url="http://127.0.0.1:1/mcp")
-    settings = _settings(mcp_servers=[config], mcp_discovery_timeout_s=0.5)
-    out = await resolve_spec_refs(
-        _spec(tool_names=[f"mcp:{name}:search"]), settings=settings, redis=redis
-    )
-    # server 暂时连不上不拦保存（一台抖动的外部服务不该让编辑器存不了盘）
-    assert out.mcp_tool_digests == {}
+async def test_save_without_gateway_is_a_dependency_error() -> None:
+    from atlas_agent.errors import DependencyUnavailable
+
+    # 没配 MCP 网关：不能确认工具存在就写进快照
+    with pytest.raises(DependencyUnavailable, match="MCP 网关"):
+        await resolve_spec_refs(
+            _spec(tool_names=["mcp:srv:search"]), settings=_settings(), redis=None
+        )
 
 
 # ═══════════════════════════════════════════════ 使用量（事务内，最后回滚）

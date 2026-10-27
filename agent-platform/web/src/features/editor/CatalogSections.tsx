@@ -11,6 +11,7 @@ import { Alert, Button, Checkbox, Input, Progress, Select, Tag } from "antd";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 
+import type { McpSubjectInfo } from "@/api/meta";
 import type { McpServerSummary, SkillListOut, SkillRefIn, ToolInfo } from "@/api/types";
 import styles from "./editor.module.css";
 import { SKILL_INDEX_BUDGET } from "./spec-defaults";
@@ -203,8 +204,41 @@ function serverOf(t: ToolInfo): string {
   return t.server ?? t.name.split(":")[1] ?? "?";
 }
 
+const KEY_STATUS: Record<string, string> = {
+  active: "API Key 已发放",
+  disabled: "API Key 已停用",
+  none: "API Key 未发放",
+};
+
+/** 经 MCP 网关时：说明按谁的权限列出、Key 的状态、没权限的服务个数（doc/mcp-design.html §9.2） */
+function McpSubjectBanner({ subject }: { subject: McpSubjectInfo }) {
+  const who = subject.kind === "agent" ? "这个 Agent 的数字员工" : "你";
+  const keyOk = subject.key_status === "active";
+  return (
+    <div style={{ marginBottom: 12, fontSize: 12, color: "var(--fg-2)" }}>
+      <div>
+        MCP 服务按{subject.kind === "agent" ? "数字员工" : "你"}的权限列出 ·{" "}
+        <Tag color={keyOk ? "success" : "warning"} style={{ marginInlineEnd: 0 }}>
+          {KEY_STATUS[subject.key_status] ?? subject.key_status}
+        </Tag>
+      </div>
+      {subject.hidden_servers > 0 && (
+        <div style={{ marginTop: 4 }}>
+          另有 {subject.hidden_servers} 个 MCP 服务{who}没有权限，需要的话请联系服务所有者或 MCP 管理员
+        </div>
+      )}
+      {subject.notes.map((n) => (
+        <div key={n} style={{ marginTop: 4 }}>
+          ⚠ {n}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function McpToolsSection({
   tools,
+  subject,
   servers,
   picked,
   digests,
@@ -214,6 +248,8 @@ export function McpToolsSection({
   onPolicy,
 }: {
   tools: ToolInfo[];
+  /** 经 MCP 网关时才有 */
+  subject?: McpSubjectInfo | null;
   servers: McpServerSummary[];
   picked: string[];
   digests: Record<string, string>;
@@ -238,18 +274,23 @@ export function McpToolsSection({
       title="MCP"
       desc="外部服务提供的工具，模型侧名为 server__tool。保存时记录每个工具当时的定义指纹，之后定义变了运行时会提示。"
     >
-      {groups.length === 0 && (
+      {subject && <McpSubjectBanner subject={subject} />}
+      {groups.length === 0 && !subject && (
         <p className={styles.toolDesc}>
           还没有可用的 MCP server —— 到 <Link href="/mcp">MCP 页</Link> 查看。
         </p>
       )}
       {missing.length > 0 && (
         <Alert
-          type="error"
+          type={subject ? "warning" : "error"}
           showIcon
           style={{ marginBottom: 12 }}
-          message="引用的 MCP 工具已不在目录里"
-          description={`${missing.join("、")} —— server 被停用或工具被删除，保存会被拒绝，请取消勾选。`}
+          message="引用的 MCP 工具不在目录里"
+          description={
+            subject
+              ? `${missing.join("、")} —— 服务被停用、工具被删除，或权限主体没有这个服务的权限：运行时会跳过并提示。`
+              : `${missing.join("、")} —— server 被停用或工具被删除，保存会被拒绝，请取消勾选。`
+          }
         />
       )}
       {groups.map(([server, list]) => {
@@ -259,7 +300,13 @@ export function McpToolsSection({
           <div key={server} style={{ marginBottom: 12, border: "1px solid var(--line)", borderRadius: 8 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px" }}>
               <b>{server}</b>
-              {info?.credential_scope === "user" ? <Tag color="blue">用户授权</Tag> : <Tag>平台凭据</Tag>}
+              {info?.credential_scope === "user" ? (
+                <Tag color="blue">用户授权</Tag>
+              ) : info?.credential_scope === "subject" ? (
+                <Tag>经 MCP 网关</Tag>
+              ) : (
+                <Tag>平台凭据</Tag>
+              )}
               {info?.status === "changed" && <Tag color="warning">定义有变化</Tag>}
               {info?.status === "stale" && <Tag color="warning">刷新失败·用缓存</Tag>}
               <span style={{ flex: 1 }} />

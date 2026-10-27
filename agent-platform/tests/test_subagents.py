@@ -71,7 +71,9 @@ def _delegating_parent() -> TurnModel:
         scripts=[
             [
                 tool_call_chunk(
-                    "task", '{"description":"查一下 X","subagent_type":"researcher"}', "call_1"
+                    "task",
+                    '{"description":"查 X","prompt":"查一下 X","subagent_type":"researcher"}',
+                    "call_1",
                 )
             ],
             [AIMessageChunk(content="子智能体查完了。")],
@@ -103,13 +105,16 @@ async def test_delegation_emits_subagent_boundary_events() -> None:
     finished = next(e for e in events if e.type is EventType.SUBAGENT_FINISHED)
 
     assert started.data["name"] == "researcher"
+    # task 是 SubAgent 收到的任务书（prompt），title 是短标题（description）
     assert started.data["task"] == "查一下 X"
+    assert started.data["title"] == "查 X"
     # 用 tool_call_id 配对 —— 它同时出现在 task 的调用与返回上
     assert started.data["subagent_run_id"] == finished.data["subagent_run_id"] == "call_1"
 
 
 async def test_the_spawner_receives_the_brief() -> None:
-    """任务书原样到达 spawner —— 这是派 SubAgent 唯一携带的输入（设计 §02）。
+    """任务书（prompt，不是标题 description）原样到达 spawner —— 这是派 SubAgent
+    唯一携带的输入（设计 §02）。
 
     ★ 只派一次：续跑那一段 task 被再执行一遍时直接填结论，不会再起一个子 run。
     """

@@ -4,22 +4,24 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..auth.authz import can_use_agent
+from ..auth.agent_access import AgentAccess
 from ..auth.principal import Principal
+from ..auth.uc import UCClient
 from ..config import Settings
 from ..configplane import skill_directory
 from ..db.models import Agent, AgentVersion, Message, Thread
 from ..errors import AppError, BadCursor, NotFound
 from ..pagination import InvalidCursor, decode_cursor, encode_cursor
-from ..providers.cluster import ClusterPods
 from ..providers.filesystem import make_workspace
 from ..providers.filesystem.oss import PathEscape, WorkspaceListing
 from ..providers.filesystem.skill_copy import resolve_skills, seed_session_skills
+from ..providers.opensandbox import AcpProvisioner, SandboxProvisioner
+from ..redisx import make_redis
 from ..repositories.agent import AgentRepository
 from ..repositories.run import RunRepository
 from ..repositories.thread import ThreadRepository
@@ -27,12 +29,16 @@ from ..schemas.agent import AgentSpecIn
 from ..schemas.thread import (
     MessageListOut,
     MessageOut,
+    ThreadApprovalOut,
     ThreadCreate,
     ThreadListOut,
     ThreadOut,
     ThreadUpdate,
     WorkspaceFilesOut,
 )
+
+if TYPE_CHECKING:
+    from ..memory import MemoryRuntime
 
 
 def _fold_assistant_turns(rows: list[Message]) -> list[MessageOut]:
@@ -96,6 +102,7 @@ def _to_out(
     subagent_thread_count: int = 0,
     active_run_id: UUID | None = None,
     last_run: dict[str, Any] | None = None,
+    approval: ThreadApprovalOut | None = None,
 ) -> ThreadOut:
     return ThreadOut(
         id=thread.id,
@@ -110,6 +117,8 @@ def _to_out(
         subagent_name=thread.subagent_name,
         git_profile=thread.git_profile,
         memory=thread.memory,
+        approval_mode=thread.approval_mode,
+        approval=approval,
         source_app=thread.source_app,
         subagent_thread_count=subagent_thread_count,
         active_run_id=active_run_id,
@@ -140,11 +149,21 @@ class BadRequest(AppError):
 
 
 class ThreadService:
-    def __init__(self, session: AsyncSession, settings: Settings) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        settings: Settings,
+        uc: UCClient | None = None,
+        memory: MemoryRuntime | None = None,
+    ) -> None:
         self._session = session
         self._settings = settings
+        #: 记忆（doc/memory-design.html）。None = 没接入记忆服务
+        self._memory = memory
         self._repo = ThreadRepository(session)
         self._agents = AgentRepository(session)
+        #: 谁能用这个 Agent（AtlasAgent 数据权限）。没接用户中心时不限制
+        self._access = AgentAccess(uc)
 
     # ------------------------------------------------------------------ 读
 
@@ -177,6 +196,24 @@ class ThreadService:
             last_run=(await RunRepository(self._session).latest_runs_of([thread_id])).get(
                 thread_id
             ),
+            approval=await self._approval_of(thread, agent),
+        )
+
+    async def _approval_of(self, thread: Thread, agent: Agent) -> ThreadApprovalOut | None:
+        """会话当前的审批模式与可选范围，取自智能体**当前版本**（下一条消息就用它）。"""
+        if agent.current_version_id is None:
+            return None
+        version = await self._session.get(AgentVersion, agent.current_version_id)
+        if version is None:
+            return None
+        parsed = AgentSpecIn.model_validate(version.spec)
+        if parsed.kind != "native":
+            return None
+        approval = parsed.approval.to_engine()
+        return ThreadApprovalOut(
+            mode=approval.resolve(thread.approval_mode),
+            default_mode=approval.default_mode,
+            allowed_modes=list(approval.allowed_modes),
         )
 
     async def list_messages(
@@ -206,10 +243,11 @@ class ThreadService:
                 raise TypeError("需要 principal 或 user_id")
             principal = Principal(uid=user_id)
         found = await self._agents.get(payload.agent_id)
-        # 不可用的智能体与不存在的一样返回 404（不泄露存在性，权限设计 §7.5）
-        if found is None or not can_use_agent(principal, found[0]):
+        if found is None:
             raise NotFound(f"智能体 {payload.agent_id} 不存在", agent_id=str(payload.agent_id))
         agent, version = found
+        # 能用 = 看得到（已启用 READ、草稿 WRITE 试跑）；看不到的与不存在一样 404（权限设计 §7.5）
+        await self._access.require(principal, agent)
         user_id = principal.uid
         # 业务应用（TeamFlow、评测…）建的会话默认关闭用户记忆：节点会话不是人的私人对话。
         # 调用方可以显式指定（评测的跨会话记忆用例要打开）
@@ -224,6 +262,10 @@ class ThreadService:
         )
         await self._session.refresh(thread)
         await self._seed_skills(version, thread_id=thread.id, user_id=user_id)
+        if memory == "on" and self._memory is not None:
+            # 建会话时登记本会话用到的记忆实例（§4.1）。失败不阻塞会话：本会话暂时不用记忆，
+            # 下一个 Run 开始时再登记
+            await self._memory.register_thread(thread.id, user_id)
         return _to_out(thread, agent)
 
     async def _seed_skills(self, version: AgentVersion, *, thread_id: UUID, user_id: UUID) -> None:
@@ -273,9 +315,15 @@ class ThreadService:
     async def delete(self, thread_id: UUID) -> None:
         thread, _ = await self._require(thread_id)
         await self._repo.delete(thread)
-        # Pod 级联：清理失败不该挡住会话删除 —— 残留由 cluster 的 reap 兜底
-        # （启动时按「还活着的会话」名单清）。
-        await ClusterPods(self._settings).release(str(thread_id))
+        # 沙箱级联：清理失败不该挡住会话删除（只记日志），残留由维护者的孤儿回收兜底
+        redis = make_redis(self._settings)
+        try:
+            await AcpProvisioner(self._settings, redis).release(str(thread_id))
+            if self._settings.sandbox_enabled:
+                # 原生沙箱按工作区建：删的是工作区所有者时它才有沙箱
+                await SandboxProvisioner(self._settings, redis).release(str(thread_id))
+        finally:
+            await redis.aclose()
 
     # ------------------------------------------------------------------ 工作区文件
 

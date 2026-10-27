@@ -1,0 +1,28 @@
+[project]
+name = "atlas-memory"
+version = "0.1.0"
+description = "Atlas memory service — scoped topics and entries (doc/memory-design.html §3)."
+requires-python = ">=3.13"
+
+# ★ 为什么独立成服务（记忆设计 §2）：它只定义作用域、作用域实例、主题、条目这几个逻辑对象和
+#   它们的规则，不关心存的是不是「记忆」—— 存什么、怎么取、冲突怎么判断都归客户端（Atlas）。
+#   其他应用也能用同一份数据，所以不放进 atlas-server。
+#
+# ★ 不依赖 Redis：实例锁用数据库行锁（SELECT … FOR UPDATE），和事务同生共死，多副本同样有效。
+# ★ 与其它包互不 import（根 pyproject 的 import-linter 守着）：atlas-server 只经 HTTP 调本服务。
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.32",
+  "sqlalchemy[asyncio]>=2.0.36",
+  "asyncpg>=0.30",
+  "alembic>=1.14",
+  "pydantic-settings>=2.6",
+  "httpx>=0.27",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/atlas_memory"]

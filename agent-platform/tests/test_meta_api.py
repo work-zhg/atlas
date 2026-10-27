@@ -10,6 +10,8 @@ import pytest
 from atlas_agent.main import create_app
 from httpx import ASGITransport
 
+from tests.fake_uc import AS_USER
+
 #: 迁移种子里的全部模型（0001 的 claude-* + 0008 的 deepseek-*）。
 #:
 #: ★ 钉的是**产品知道哪些模型的能力**，不是"这个部署能用哪些" —— 后者是
@@ -28,7 +30,7 @@ EXPECTED_MODELS = {
 async def client() -> httpx.AsyncClient:
     app = create_app()
     transport = ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=AS_USER) as c:
         yield c
 
 

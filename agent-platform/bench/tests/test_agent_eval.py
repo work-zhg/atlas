@@ -44,7 +44,9 @@ def test_demo_suite_loads() -> None:
 
 @pytest.mark.skipif(not _docker_ok(), reason="需要 docker 与 python:3.12-slim 镜像")
 @pytest.mark.parametrize(
-    "task", [*load_suite("demo"), *load_suite("atlas-eng")], ids=lambda t: t.id
+    "task",
+    [*load_suite("demo"), *load_suite("atlas-eng"), *load_suite("clarify")],
+    ids=lambda t: t.id,
 )
 def test_verifier_rejects_initial_and_accepts_solution(task: Task) -> None:
     """初始状态校验不过（题目有意义），参考答案校验通过（校验脚本没写错）。"""

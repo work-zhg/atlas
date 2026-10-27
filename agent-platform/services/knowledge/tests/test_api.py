@@ -467,8 +467,8 @@ async def test_mcp_knowledge_search(client: Any, rt: Any) -> None:
     app = create_app(runtime=rt)
     headers = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
 
-    async def call(c: Any, token: str) -> str:
-        h = {**headers, "X-Atlas-Knowledge-Token": token}
+    async def call(c: Any, token: str, header: str = "X-Knowledge-Token") -> str:
+        h = {**headers, header: token}
         init = {
             "jsonrpc": "2.0",
             "id": 1,
@@ -507,6 +507,9 @@ async def test_mcp_knowledge_search(client: Any, rt: Any) -> None:
             text = await call(c, _sign("s3cret", [ds["id"]]))
             assert "退款政策" in text and "faq.txt" in text
             assert "凭据无效" in await call(c, _sign("wrong", [ds["id"]]))
+            # 旧名（带应用名）过渡一个版本仍然认：已打开的会话里 MCP 配置还是它（数字员工设计 §7.4）
+            legacy = await call(c, _sign("s3cret", [ds["id"]]), "X-Atlas-Knowledge-Token")
+            assert "退款政策" in legacy
 
 
 RESUME_MD = """# 张三

@@ -27,11 +27,14 @@ def user_brief(u: User | None) -> dict[str, Any] | None:
 def user_view(u: User, cred: Credential | None, **extra: Any) -> dict[str, Any]:
     return {
         "id": str(u.uuid),
+        "user_type": u.user_type,
         "account": u.account,
         "name": u.name,
         "email": u.email,
         "phone": u.phone,
-        "dept_id": str(u.dept_uuid),
+        "dept_id": str(u.dept_uuid) if u.dept_uuid else None,
+        "external_ref": u.external_ref,
+        "description": u.description,
         "status": display_status(u, cred),
         "must_change_password": bool(
             cred and cred.must_change_password and u.activated_at is not None

@@ -34,7 +34,8 @@ dependencies = [
   "pdfplumber>=0.11",
   "python-pptx>=1.0",
   "charset-normalizer>=3.3",
-  "mcp>=1.10",
+  # ★ 2.x：FastMCP 改名 MCPServer（mcp.server.mcpserver）；与 atlas-agent 共用一份锁，跟着它升
+  "mcp>=2.3,<3",
   # 遥测（与 atlas-server 同一套：OTLP/HTTP → Collector → Jaeger / Langfuse）
   "opentelemetry-api>=1.30",
   "opentelemetry-sdk>=1.30",

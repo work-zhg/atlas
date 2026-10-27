@@ -1,0 +1,35 @@
+# 原生沙箱的 BatchSandbox 模板（doc/sandbox-opensandbox-design.html §7），opensandbox-sbx 用。
+# server 把它与每次创建请求合并（上游 batchsandbox_provider._merge_pod_spec_extras）：
+#   · pod 级字段（securityContext、restartPolicy、terminationGracePeriodSeconds）取模板 —— 运行时不设它们
+#   · volumes、主容器（名为 sandbox）的 volumeMounts 按名字追加
+#   · 主容器的 securityContext 与运行时的合并（运行时优先；没有 networkPolicy 时运行时不设，模板整份生效）
+#   · ★ 其余列表字段（containers、initContainers）被运行时整体覆盖：模板里加 sidecar 没用
+# ★ strict 档：UID 1000、根只读、drop ALL、seccomp RuntimeDefault、禁止提权。
+#   可写区只有 emptyDir（/tmp、/home/agent、/repos）和创建请求挂进来的 /workspace。
+metadata: {}
+spec:
+  replicas: 1
+  template:
+    spec:
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 30
+      enableServiceLinks: false
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: sandbox
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            - {name: home, mountPath: /home/agent}
+            - {name: repos, mountPath: /repos}
+      volumes:
+        - {name: tmp, emptyDir: {sizeLimit: 2Gi}}
+        - {name: home, emptyDir: {sizeLimit: 5Gi}}
+        - {name: repos, emptyDir: {sizeLimit: 10Gi}}

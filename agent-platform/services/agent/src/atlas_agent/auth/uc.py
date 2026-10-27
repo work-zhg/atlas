@@ -77,11 +77,145 @@ class UCClient:
     async def user(self, user_id: UUID) -> dict[str, Any]:
         return await self._call("GET", f"/open/v1/users/{user_id}")
 
-    async def search_users(self, q: str | None, *, size: int = 20) -> list[dict[str, Any]]:
-        """选人：本应用可访问范围内、未停用的用户 → [{id, account, name, dept_id}]。"""
-        r = await self._call("GET", "/open/v1/users", params={"q": q or "", "size": size})
+    async def search_users(
+        self, q: str | None, *, size: int = 20, digital: bool = False
+    ) -> list[dict[str, Any]]:
+        """选人：本应用可访问范围内、未停用的用户 → [{id, user_type, account, name, dept_id}]。
+
+        digital=True 连数字员工一起（共享知识库给 Agent 时要能选到它）。
+        """
+        params: dict[str, Any] = {"q": q or "", "size": size}
+        if digital:
+            params["types"] = "human,digital"
+        r = await self._call("GET", "/open/v1/users", params=params)
         return list(r["items"])
 
     async def depts_tree(self) -> list[dict[str, Any]]:
         """→ [{id, parent_id, name, leader_id}]（全部部门，按层级排序）"""
         return await self._call("GET", "/open/v1/depts/tree")
+
+    # ───────────────────────────── 数字员工（数字员工设计 §4）
+
+    async def create_digital_employee(
+        self, *, external_ref: str, name: str, owner_id: UUID, description: str | None = None
+    ) -> dict[str, Any]:
+        """幂等：同一 external_ref（agent id）重复调用返回同一个 → {id, account, name, status…}"""
+        return await self._call(
+            "POST",
+            "/open/v1/digital-employees",
+            json={
+                "external_ref": external_ref,
+                "name": name,
+                "owner_id": str(owner_id),
+                "description": description,
+            },
+        )
+
+    async def digital_employee(self, uid: UUID) -> dict[str, Any]:
+        return await self._call("GET", f"/open/v1/digital-employees/{uid}")
+
+    async def update_digital_employee(self, uid: UUID, **fields: Any) -> dict[str, Any]:
+        body = {k: (str(v) if isinstance(v, UUID) else v) for k, v in fields.items()}
+        return await self._call("PATCH", f"/open/v1/digital-employees/{uid}", json=body)
+
+    async def set_digital_employee_enabled(self, uid: UUID, enabled: bool) -> dict[str, Any]:
+        action = "enable" if enabled else "disable"
+        return await self._call("POST", f"/open/v1/digital-employees/{uid}/{action}")
+
+    # ───────────────────────────── 数据权限（AtlasAgent 等，权限设计 §7.2）
+
+    async def data_check(self, data_code: str, data_id: str, user_id: UUID) -> str:
+        """用户对某条数据的有效级别（含编码级授权）→ NONE | READ | WRITE | OWNER"""
+        r = await self._call(
+            "GET",
+            "/open/v1/data-permissions/check",
+            params={"data_code": data_code, "data_id": data_id, "user_id": str(user_id)},
+        )
+        return str(r["permission"])
+
+    async def data_accessible(
+        self, data_code: str, user_id: UUID, *, min_level: str = "READ"
+    ) -> tuple[dict[str, str], str]:
+        """→ ({data_id: 级别}, 编码级授权给的级别)。翻页取全。"""
+        out: dict[str, str] = {}
+        page, type_level = 1, "NONE"
+        while True:
+            r = await self._call(
+                "GET",
+                "/open/v1/data-permissions/accessible",
+                params={
+                    "data_code": data_code,
+                    "user_id": str(user_id),
+                    "min": min_level,
+                    "page": page,
+                    "size": 500,
+                },
+            )
+            type_level = str(r.get("type_permission") or "NONE")
+            out.update({i["data_id"]: i["permission"] for i in r["items"]})
+            if len(out) >= int(r.get("total") or 0) or not r["items"]:
+                return out, type_level
+            page += 1
+
+    async def data_grant(
+        self,
+        data_code: str,
+        data_id: str,
+        grants: list[dict[str, Any]],
+        *,
+        data_name: str | None = None,
+        operator_id: UUID | None = None,
+    ) -> Any:
+        """批量写授权：首写（数据还没登记）必须含一名 OWNER；之后要 operator_id 是 Owner。
+
+        grants：[{permission, subject_type: USER|DEPT, subject_id, include_sub}]
+        """
+        body: dict[str, Any] = {"data_code": data_code, "data_id": data_id, "grants": grants}
+        if data_name is not None:
+            body["data_name"] = data_name
+        if operator_id is not None:
+            body["operator_id"] = str(operator_id)
+        return await self._call("POST", "/open/v1/data-permissions/batch", json=body)
+
+    async def data_acl(self, data_code: str, data_id: str) -> list[dict[str, Any]]:
+        """这条数据的授权明细；还没登记 → []"""
+        try:
+            return list(
+                await self._call(
+                    "GET",
+                    "/open/v1/data-permissions/acl",
+                    params={"data_code": data_code, "data_id": data_id},
+                )
+            )
+        except UCError as exc:
+            if exc.status_code == 404:
+                return []
+            raise
+
+    async def data_acl_update(
+        self, acl_id: str, operator_id: UUID, *, level: str | None, include_sub: bool | None
+    ) -> None:
+        body: dict[str, Any] = {"operator_id": str(operator_id)}
+        if level is not None:
+            body["permission"] = level
+        if include_sub is not None:
+            body["include_sub"] = include_sub
+        await self._call("PATCH", f"/open/v1/data-permissions/acl/{acl_id}", json=body)
+
+    async def data_acl_delete(self, acl_id: str, operator_id: UUID) -> None:
+        await self._call(
+            "DELETE",
+            f"/open/v1/data-permissions/acl/{acl_id}",
+            params={"operator_id": str(operator_id)},
+        )
+
+    async def data_rename(self, data_code: str, data_id: str, data_name: str) -> None:
+        try:
+            await self._call(
+                "PATCH",
+                "/open/v1/data-objects",
+                json={"data_code": data_code, "data_id": data_id, "data_name": data_name},
+            )
+        except UCError as exc:
+            if exc.status_code != 404:  # 还没登记：无事可做
+                raise

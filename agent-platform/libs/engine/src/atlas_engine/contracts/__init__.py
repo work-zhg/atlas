@@ -62,6 +62,15 @@ from .filesystem import (
     normalize_read_bounds,
     slice_read_response,
 )
+from .permission import (
+    APPROVAL_MODES,
+    AnswerSource,
+    ApprovalKind,
+    ApprovalMode,
+    ApprovalOutcome,
+    QuestionAnswer,
+    ToolEffect,
+)
 from .sandbox import (
     DEFAULT_WORKDIR,
     ExecuteArtifact,
@@ -74,11 +83,16 @@ from .subagent import SubAgentSpawner
 from .suspension import SuspensionReason, Wait, WaitingOn, merge_waits
 
 __all__ = [
+    "APPROVAL_MODES",
     "DEFAULT_WORKDIR",
     "EDIT_MAX_BYTES",
     "REFUSAL_STOP_REASONS",
     "SEARCH_MAX_KEYS",
+    "AnswerSource",
     "ApprovalGate",
+    "ApprovalKind",
+    "ApprovalMode",
+    "ApprovalOutcome",
     "ApprovalState",
     "ContextOverflow",
     "Decision",
@@ -94,6 +108,7 @@ __all__ = [
     "ModelRateLimited",
     "ModelRefused",
     "ModelUnavailable",
+    "QuestionAnswer",
     "ReadResult",
     "SandboxProtocol",
     "SandboxUnavailable",
@@ -101,6 +116,7 @@ __all__ = [
     "SkillRef",
     "SubAgentSpawner",
     "SuspensionReason",
+    "ToolEffect",
     "UnsupportedProvider",
     "Wait",
     "WaitingOn",

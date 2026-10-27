@@ -1,187 +1,197 @@
-"""对象存储、rclone FUSE 挂载器、barrier sidecar（doc/native-sandbox-design.html §7）。
+"""基础设施（内存模拟）：对象存储、写穿式 CSI 挂载、Redis。
 
-    文件工具 ── 对象存储 API ──▶ ObjectStorage   {user}/{workspace_thread}/workspace/…
-    命令     ── 本地文件系统 ──▶ /workspace（FuseMount 的本地目录）── 缓存 / 写回 ──▶ 同一个前缀
+    文件工具（无沙箱）── 对象存储 API ──▶ ObjectStorage    {user}/{ws}/workspace/…
+    Pod 里的 /workspace ── CsiMount（本地目录）── 写穿 / 元数据缓存 ──▶ 同一个前缀
 
-两条路看到的是同一份数据，中间隔着挂载器的两个缓存窗口：
+CsiMount 模拟的是设计 §6 的「整桶静态 PVC + 按请求 subPath」，驱动是 s3fs 系（写穿式）：
 
-    读  命令读到的是挂载器缓存里的版本。文件工具在对象存储上改了，挂载器不知道 ——
-        真实 rclone 过了 dir-cache-time（5 秒）才会去看，窗口内读到的甚至是「新内容按旧长度截断」
-        的错数据（§7.1 实测）。demo 简化成：没有 forget 就一直是旧的
-    写  命令写的文件先进写回队列，--vfs-write-back（1 秒）之后才上传，之前文件工具读不到
+    写  文件 close 时同步上传（写穿）。demo 用「每 20 毫秒扫一次本地目录
+        + 命令退出 / 文件 API 写完时
+        再刷一次」来近似 —— 所以工具结果返回时，产物已经在对象存储里
+    读  别人（界面上传、别的 Pod）在对象存储上改了文件，挂载要等元数据缓存过期才看得到：
+        demo 固定为 CACHE_TTL_S 之后可见（最坏情况），真实系统靠短缓存把它压到 1 秒左右
 
-所以 sandboxd 在每条命令的边界上加屏障：执行前 forget，执行后等写回队列清空（sandboxd.py）。
-
-★ 挂载器的远程控制（rc）能调 operations/*、config/*，等于整桶凭据。所以 rc 要口令，口令只给
-  挂载器和 barrier 两个 sidecar；sandboxd 和命令所在的主容器拿不到（§7.2）。
-  demo 里「容器边界」就是对象引用：sandboxd 手里只有 Barrier，没有 FuseMount，也没有口令。
-
-模拟方式：挂载点是一个真实的本地目录（命令就在里面跑），挂载器的线程定时比对它和对象存储。
+★ 对象存储凭据只在 CSI 驱动手里（真实：nodePublishSecretRef）。Pod 和 Atlas 都碰不到挂载器 ——
+  这正是 Atlas 不能再「执行前 forget、执行后等写回」的原因，一致性改由路由（workspace.py）保证。
+★ 真实的 CSI 挂载在节点上，同一节点的 Pod 可能共用一个；demo 简化成每个 Pod 一个。
 """
 
 from __future__ import annotations
 
-import os
-import threading
+import asyncio
+import contextlib
+import contextvars
 import time
+from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 
 from tracing import say
 
-WRITE_BACK_S = 0.3  # 本地改动多久后上传。rclone 是 --vfs-write-back 1s
-UPLOAD_S = 0.05  # 上传一个文件的耗时
-SCAN_S = 0.05  # 挂载器多久看一次本地改动（真实 rclone 在 FUSE 的写调用里直接知道）
+SCAN_S = 0.02
+CACHE_TTL_S = 0.6  # 外部写入在挂载里的可见延迟。真实目标 ≤ 1 秒（设计 §10）
+
+
+@dataclass
+class Obj:
+    data: bytes
+    version: int
+    origin: str  # 谁写的：某个挂载、对象存储 API、界面上传
 
 
 class ObjectStorage:
-    """对象存储（内存模拟）：所有 Pod、所有 server 实例共用，Pod 删了它还在。"""
+    """对象存储：所有 Pod、所有 server 实例共用，沙箱删了它还在。"""
 
     def __init__(self) -> None:
-        self._objects: dict[str, bytes] = {}
-        self._lock = threading.Lock()
+        self._objects: dict[str, Obj] = {}
+        self._version = 0
 
-    def put(self, key: str, data: bytes) -> None:
-        with self._lock:
-            self._objects[key] = data
+    def put(self, key: str, data: bytes, *, origin: str) -> int:
+        self._version += 1
+        self._objects[key] = Obj(data, self._version, origin)
+        return self._version
 
     def get(self, key: str) -> bytes | None:
-        with self._lock:
-            return self._objects.get(key)
+        obj = self._objects.get(key)
+        return obj.data if obj else None
 
     def delete(self, key: str) -> None:
-        with self._lock:
-            self._objects.pop(key, None)
+        self._objects.pop(key, None)
 
-    def under(self, prefix: str) -> dict[str, bytes]:
+    def under(self, prefix: str) -> dict[str, Obj]:
         """前缀下的全部对象，键是相对路径。"""
-        with self._lock:
-            return {k[len(prefix) :]: v for k, v in self._objects.items() if k.startswith(prefix)}
+        return {k[len(prefix) :]: v for k, v in self._objects.items() if k.startswith(prefix)}
 
 
-class FuseMount:
-    """rclone mount（oss-workspace 容器）。本地目录 ↔ 对象存储前缀，带读缓存和写回队列。"""
+class CsiMount:
+    """一个 Pod 里看到的 PVC subPath。挂载点是真实的本地目录，命令就在里面读写。"""
 
-    def __init__(self, storage: ObjectStorage, prefix: str, local: Path, rc_pass: str) -> None:
-        self._storage = storage
-        self._prefix = prefix
-        self.local = local
-        self._rc_pass = rc_pass
-        self._synced: dict[str, bytes] = {}  # 相对路径 → 最后一次和对象存储一致时的内容
-        self._dirty: dict[str, float] = {}  # 写回队列：相对路径 → 第一次发现改动的时刻
-        self._lock = threading.Lock()
-        self._stop = threading.Event()
-        self._pull()  # 挂载时列一遍
-        threading.Thread(target=self._uploader, name="rclone-upload", daemon=True).start()
+    def __init__(
+        self,
+        storage: ObjectStorage,
+        prefix: str,
+        local: Path,
+        *,
+        owner: str,
+        read_only: bool = False,
+    ) -> None:
+        self.storage, self.prefix, self.local = storage, prefix, local
+        self.owner, self.read_only = owner, read_only
+        self._sig: dict[str, tuple[int, int]] = {}  # 本地文件上次同步时的 (mtime, size)
+        self._seen: dict[str, int] = {}  # 本地内容对应的对象版本
+        self._pending: dict[str, tuple[int, float]] = {}  # 外部改写：(版本, 何时可见)
+        self._ticker: asyncio.Task[None] | None = None
+        self._closed = False
 
-    def rc(self, password: str, command: str) -> list[str]:
-        """远程控制。要口令：这个口理论上能调 operations/* 读写整桶，demo 只实现屏障要的两个。"""
-        if password != self._rc_pass:
-            raise PermissionError("rclone rc 401：口令不对")
-        if command == "vfs/forget":
-            return self._pull()
-        if command == "vfs/queue":
-            with self._lock:
-                self._scan()
-                return list(self._dirty)
-        raise ValueError(f"demo 没有实现 rc 命令 {command}")
+    async def mount(self) -> None:
+        """kubelet 启动容器前，CSI 节点插件就把挂载建好了。
 
-    def unmount(self) -> None:
-        self._stop.set()
+        一个新挂载看到的就是对象存储的当前内容。
+        """
+        self.local.mkdir(parents=True, exist_ok=True)
+        for rel, obj in self.storage.under(self.prefix).items():
+            self._write_local(rel, obj)
+        # 挂载活得比任何一个 run 都长：不继承创建它的那个 run 的上下文（否则日志的 run 标签会错）
+        self._ticker = asyncio.create_task(self._tick(), context=contextvars.Context())
+
+    async def unmount(self) -> None:
+        """Pod 删除。写穿：已经 close 的文件都在对象存储里了，这里只是把最后一轮扫描补完。"""
+        if self._ticker:
+            self._ticker.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._ticker
+        self.flush()
+        self._closed = True  # 卸载之后本地目录会被删掉：再 flush 会把「全没了」当成删除传上去
+
+    def flush(self, *, background: bool = False) -> None:
+        """把本地改动传上去（写穿的 close）。
+
+        background = 后台扫描发现的（只报新文件，免得刷屏）。
+        """
+        if self.read_only or self._closed:
+            return
+        uploaded = []
+        now = self._scan()
+        for rel, sig in now.items():
+            if self._sig.get(rel) != sig:
+                new = rel not in self._sig
+                data = (self.local / rel).read_bytes()
+                self._seen[rel] = self.storage.put(self.prefix + rel, data, origin=self.owner)
+                self._sig[rel] = sig
+                if new or not background:
+                    uploaded.append(rel)
+        for rel in set(self._sig) - set(now):  # 本地删掉了
+            self.storage.delete(self.prefix + rel)
+            del self._sig[rel]
+            self._seen.pop(rel, None)
+            uploaded.append(f"{rel}（删除）")
+        if uploaded:
+            say("CSI 挂载", f"{self.owner} 写穿 → 对象存储：{'、'.join(uploaded)}")
 
     # ------------------------------------------------------------------ 内部
 
-    def _local_files(self) -> dict[str, bytes]:
-        files = {}
+    async def _tick(self) -> None:
+        while True:
+            await asyncio.sleep(SCAN_S)
+            self.flush(background=True)
+            self._pull(time.monotonic())
+
+    def _pull(self, now: float) -> None:
+        """对象存储上别人写的新版本：元数据缓存过期之后才进挂载。"""
+        for rel, obj in self.storage.under(self.prefix).items():
+            if obj.origin == self.owner or self._seen.get(rel) == obj.version:
+                continue
+            pending = self._pending.get(rel)
+            if pending is None or pending[0] != obj.version:
+                self._pending[rel] = (obj.version, now + CACHE_TTL_S)
+                say(
+                    "CSI 挂载",
+                    f"{rel} 在对象存储上被 {obj.origin} 改写 → "
+                    f"{self.owner} 的挂载 {CACHE_TTL_S:g} 秒内"
+                    "还是旧的（元数据缓存）",
+                )
+            elif now >= pending[1]:
+                self._write_local(rel, obj)
+                del self._pending[rel]
+                say("CSI 挂载", f"缓存过期 → {self.owner} 的挂载里 {rel} 换成新版本")
+
+    def _write_local(self, rel: str, obj: Obj) -> None:
+        path = self.local / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(obj.data)
+        st = path.stat()
+        self._sig[rel] = (st.st_mtime_ns, st.st_size)
+        self._seen[rel] = obj.version
+
+    def _scan(self) -> dict[str, tuple[int, int]]:
+        out = {}
         for path in self.local.rglob("*"):
             if path.is_file():
-                try:
-                    files[path.relative_to(self.local).as_posix()] = path.read_bytes()
-                except OSError:  # 命令正在删它
-                    continue
-        return files
-
-    def _scan(self) -> None:
-        """比对本地目录和上次同步的内容，有改动的进写回队列。调用方持锁。"""
-        local, now = self._local_files(), time.monotonic()
-        for rel, data in local.items():
-            if self._synced.get(rel) != data:
-                self._dirty.setdefault(rel, now)
-            else:
-                self._dirty.pop(rel, None)  # 又改回去了
-        for rel in self._synced:
-            if rel not in local:
-                self._dirty.setdefault(rel, now)  # 命令删了它
-
-    def _pull(self) -> list[str]:
-        """vfs/forget：丢掉缓存，按对象存储的现状刷新本地。返回刷新了哪些路径。"""
-        with self._lock:
-            self._scan()
-            remote = self._storage.under(self._prefix)
-            changed = []
-            for rel, data in remote.items():
-                if rel in self._dirty:
-                    continue  # 本地有还没上传的改动：不覆盖
-                if self._synced.get(rel) != data:
-                    path = self.local / rel
-                    path.parent.mkdir(parents=True, exist_ok=True)
-                    path.write_bytes(data)
-                    self._synced[rel] = data
-                    changed.append(rel)
-            for rel in [r for r in self._synced if r not in remote and r not in self._dirty]:
-                (self.local / rel).unlink(missing_ok=True)  # 文件工具删了它
-                del self._synced[rel]
-                changed.append(rel)
-            return changed
-
-    def _uploader(self) -> None:
-        while not self._stop.wait(SCAN_S):
-            with self._lock:
-                self._scan()
-                now = time.monotonic()
-                due = [rel for rel, t in self._dirty.items() if now - t >= WRITE_BACK_S]
-            for rel in due:
-                time.sleep(UPLOAD_S)
-                with self._lock:
-                    if rel not in self._dirty:
-                        continue
-                    path = self.local / rel
-                    if path.is_file():
-                        data = path.read_bytes()
-                        self._storage.put(self._prefix + rel, data)
-                        self._synced[rel] = data
-                    else:
-                        self._storage.delete(self._prefix + rel)
-                        self._synced.pop(rel, None)
-                    del self._dirty[rel]
+                st = path.stat()
+                out[str(path.relative_to(self.local))] = (st.st_mtime_ns, st.st_size)
+        return out
 
 
-class Barrier:
-    """barrier sidecar：和挂载器拿同一个 rc 口令，对外只有两个无害的操作。
+class FakeRedis:
+    """Redis：路由表、端点缓存、令牌、活动记录、分布式锁。所有 server 实例共用。"""
 
-    命令就算直接连上它，也只能让缓存失效、看队列长度。真实的它监听 127.0.0.1:5573。
-    """
+    def __init__(self) -> None:
+        self.kv: dict[str, object] = {}
+        self.sets: dict[str, set[str]] = defaultdict(set)
+        self._locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
-    def __init__(self, mount: FuseMount, rc_pass: str) -> None:
-        self._mount = mount
-        self._pass = rc_pass
+    def get(self, key: str) -> object | None:
+        return self.kv.get(key)
 
-    def forget(self) -> None:
-        changed = self._mount.rc(self._pass, "vfs/forget")
-        if changed:
-            say("barrier", f"forget → 按对象存储刷新了 {', '.join(sorted(changed))}")
+    def set(self, key: str, value: object) -> None:
+        self.kv[key] = value
 
-    def queue(self) -> int:
-        return len(self._mount.rc(self._pass, "vfs/queue"))
+    def delete(self, key: str) -> None:
+        self.kv.pop(key, None)
 
+    def keys(self, prefix: str) -> list[str]:
+        return sorted(k for k in self.kv if k.startswith(prefix))
 
-def tree(root: Path) -> str:
-    """列一个目录（打印用）。"""
-    if not root.exists():
-        return "（目录已不存在）"
-    names = sorted(p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file())
-    return "、".join(names) or "（空）"
-
-
-def ensure_dir(path: Path) -> Path:
-    os.makedirs(path, exist_ok=True)
-    return path
+    def lock(self, name: str) -> asyncio.Lock:
+        """分布式锁的替身（真实：infra-platform/libs/redislock，设计 §13 借此接入）。"""
+        return self._locks[name]

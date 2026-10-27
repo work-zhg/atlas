@@ -140,6 +140,14 @@ data:
         client_max_body_size 60m;
         proxy_read_timeout 300s;
       }
+      # MCP 网关的管理端接口（doc/mcp-design.html §9）。/internal 给 Atlas、/mcp 是数据面
+      # （Atlas 与会话 Pod 带主体 Key 调），都只走集群内地址
+      location ^~ /mcp-gateway-api/internal/ { return 404; }
+      location ^~ /mcp-gateway-api/mcp { return 404; }
+      location ^~ /mcp-gateway-api/ {
+        include /etc/nginx/conf.d/identity.inc;
+        proxy_pass http://atlas-mcpgateway.atlas-system.svc.cluster.local:8070/;
+      }
       location ~ ^/atlas(/|$) {
         proxy_pass http://127.0.0.1:3000;
       }

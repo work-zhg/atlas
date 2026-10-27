@@ -16,6 +16,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from atlas_engine.kernel.middleware.ask_user import ASK_USER_QUESTION
 from langchain_core.messages import BaseMessage, HumanMessage
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -43,7 +44,7 @@ _PROMPT = """把下面这段对话压缩成结构化摘要，供后续对话作�
 3. 已做出的决定，以及**已排除的方案和排除理由**
 4. 涉及的文件、命令与关键片段（路径、函数名、关键代码或配置原文）
 5. 遇到的错误与修复方式 —— **尤其是用户的纠正与反馈**
-6. 全部用户消息（逐条列出，不含工具结果；可略去寒暄）
+6. 全部用户消息，包括「用户（回答提问）」那几条（逐条列出，不含工具结果；可略去寒暄）
 7. 未完成的事项
 8. 当前正在做什么，以及下一步（必须与用户最近的明确请求一致，不要擅自开启新方向）
 
@@ -77,9 +78,21 @@ def _render(messages: Sequence[BaseMessage]) -> str:
     lines: list[str] = []
     for message in messages:
         text = extract_text(message.content)
-        role = {"human": "用户", "ai": "助手", "tool": "工具返回"}.get(message.type, message.type)
-        lines.append(f"[{role}] {text[:_PER_MESSAGE_LIMIT]}")
+        lines.append(f"[{_role_of(message)}] {text[:_PER_MESSAGE_LIMIT]}")
     return "\n".join(lines)
+
+
+def _role_of(message: BaseMessage) -> str:
+    """摘要里这一条算谁说的。
+
+    ★ 用户对 ask_user_question 的回答在对话里是一条**工具结果**，但内容是用户说的话
+      （doc/ask-user-question-design.html）。标成「工具返回」的话，摘要第 6 段「全部用户消息
+      （不含工具结果）」恰好把它排除在外 —— 长对话压缩之后，用户确认过的需求就没了。
+      按工具名（ToolMessage.name，随消息落库，见 domain/messages.py 的 atlas_name）标成用户。
+    """
+    if message.type == "tool" and getattr(message, "name", None) == ASK_USER_QUESTION:
+        return "用户（回答提问）"
+    return {"human": "用户", "ai": "助手", "tool": "工具返回"}.get(message.type, message.type)
 
 
 class ThreadSummarizer:

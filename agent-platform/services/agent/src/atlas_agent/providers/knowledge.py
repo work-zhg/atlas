@@ -50,6 +50,8 @@ logger = logging.getLogger(__name__)
 
 KNOWLEDGE_SEARCH_TOOL = "knowledge_search"
 MCP_SERVER_NAME = "atlas-knowledge"
+#: Pod → 知识库 MCP 的签名令牌头
+KNOWLEDGE_TOKEN_HEADER = "X-Knowledge-Token"
 
 
 class KnowledgeUnavailable(CapabilityUnavailable):
@@ -229,6 +231,8 @@ def make_knowledge_tool(
             f"只读。{scope}"
         ),
         args_schema=_Args,
+        # 按 MCP 的注解约定声明只读：审批模式据此判定（domain/tool_registry.py::tool_effects）
+        metadata={"readOnlyHint": True},
     )
 
 
@@ -275,6 +279,10 @@ def mcp_server_entry(
         "type": "http",
         "name": MCP_SERVER_NAME,
         "url": f"{client.base_url}/mcp/",
-        # ★ ACP 的 headers 是数组，不是对象
-        "headers": [{"name": "X-Atlas-Knowledge-Token", "value": token}],
+        # ★ ACP 的 headers 是数组，不是对象。名称不带应用名（数字员工设计 §7.4）；
+        #   X-Atlas-Knowledge-Token 过渡一个版本（知识库还没升级时它只认旧名）后删
+        "headers": [
+            {"name": KNOWLEDGE_TOKEN_HEADER, "value": token},
+            {"name": "X-Atlas-Knowledge-Token", "value": token},
+        ],
     }

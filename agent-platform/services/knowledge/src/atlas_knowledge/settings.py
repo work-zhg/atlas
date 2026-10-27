@@ -74,9 +74,7 @@ class KnowledgeSettings(BaseSettings):
     oss_prefix: str = "_knowledge"
 
     # ── 认证（内网身份传递 §3、§8；见 auth.py）────────────────────────────
-    #: dev = 缺 X-Uid 用 default_user，操作码全有；uc = 缺 X-Uid 一律 401，操作码按 X-Auth-Uid
-    #: 取用户中心授权快照
-    auth_mode: Literal["dev", "uc"] = "dev"
+    #: 缺 X-Uid 一律 401，操作码按 X-Auth-Uid 取用户中心授权快照（没有免鉴权的模式）
     #: atlas-server（文档级权限的主体展开 /internal/v1/auth/principals）
     server_url: str = "http://127.0.0.1:8000"
     #: 知识库 MCP 令牌的签名密钥（与 atlas-server 的 KNOWLEDGE_MCP_SECRET 一致）。
@@ -85,9 +83,10 @@ class KnowledgeSettings(BaseSettings):
     #: 授权快照（操作码）的进程内缓存
     authz_ttl_s: float = 30.0
     #: 用户中心（库级权限 = 数据编码 AtlasKnowledgeBase，见 perms.py）。内网免令牌：
-    #: 请求头 X-Caller-App: atlas 即应用身份。uc 模式必需；dev 模式不接 = 人人 OWNER
+    #: 请求头 X-Caller-App: atlas 即应用身份
     uc_base_url: str = "http://127.0.0.1:8030"
-    default_user: str = "00000000-0000-0000-0000-000000000001"
+    #: Atlas 在用户中心的应用编码（知识库属于 Atlas 应用），出站请求头 X-Caller-App 写它
+    uc_app_code: str = "atlas"
     cors_origins: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
 
     # ── 模型 ─────────────────────────────────────────────────────────────

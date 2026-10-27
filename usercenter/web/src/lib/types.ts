@@ -44,11 +44,13 @@ export interface TenantInfo {
 
 export interface User {
   id: string;
+  /** digital = 数字员工：由接入应用经开放接口创建，不能登录、不进组织树（数字员工设计 §3） */
+  user_type: "human" | "digital";
   account: string;
   name: string;
-  email: string;
+  email: string | null;
   phone: string | null;
-  dept_id: string;
+  dept_id: string | null;
   status: UserStatus;
   must_change_password: boolean;
   last_login_at: string | null;
@@ -60,6 +62,11 @@ export interface User {
   uc_roles?: string[];
   manager?: (UserBrief & { source: string }) | null;
   is_leader?: boolean;
+  /** 数字员工：负责人、来源应用、来源应用里的对象 id（Atlas = agent id） */
+  owner?: UserBrief | null;
+  source_app?: { id: string; name: string; code: string | null } | null;
+  external_ref?: string | null;
+  description?: string | null;
 }
 
 export interface DeptNode {

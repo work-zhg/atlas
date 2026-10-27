@@ -1,6 +1,7 @@
 """/mcp：给 Pod 里 ACP CLI 用的 MCP 端点（streamable HTTP，无状态），工具 knowledge_search。
 
-鉴权：请求头 X-Atlas-Knowledge-Token，由 atlas-server 在打开 ACP 会话时签发：
+鉴权：请求头 X-Knowledge-Token（旧名 X-Atlas-Knowledge-Token 过渡一个版本），由 atlas-server
+在打开 ACP 会话时签发：
     base64url({"d": [库 id], "t": 会话 id, "u": auth-uid, "o": 发起人})
     + "." + HMAC-SHA256(mcp_secret)
 能查哪些库只看令牌里的 d —— 与原生工具一样，库 id 不进工具参数。文档级权限按 u（按谁判），
@@ -8,8 +9,11 @@
 
 ★ 会话 Pod 跑的是不可信代码：这里只认令牌，不认任何身份请求头（内网身份传递 §5.3）。
 
-★ 关掉 FastMCP 的 DNS rebinding 防护：它默认只放行 localhost 的 Host 头，而 Pod 用集群内
+★ 关掉 MCPServer 的 DNS rebinding 防护：它默认只放行 localhost 的 Host 头，而 Pod 用集群内
   Service 域名访问。这里的防线是令牌，不是 Host 头。
+
+★ mcp 2.x 的 server 两代握手都接（initialize 与 server/discover）：Pod 里的 CLI 多数还是
+  1.x 的客户端，tests/test_api.py 按 initialize 握手验证。
 """
 
 from __future__ import annotations
@@ -22,7 +26,7 @@ import logging
 from typing import Any
 from uuid import UUID
 
-from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 
 from ..auth import use_identity
@@ -31,11 +35,13 @@ from ..errors import KnowledgeError
 from ..runtime import Runtime
 from ..services.retrieval import KnowledgeRetrieval
 
-__all__ = ["build_mcp", "verify_token"]
+__all__ = ["build_mcp", "mcp_app", "verify_token"]
 
 logger = logging.getLogger(__name__)
 
-TOKEN_HEADER = "x-atlas-knowledge-token"
+TOKEN_HEADER = "x-knowledge-token"
+#: 改名前的头（名字带应用名，数字员工设计 §7.4）：已打开的会话里 MCP 配置还是它，过渡一个版本后删
+LEGACY_TOKEN_HEADER = "x-atlas-knowledge-token"
 
 
 class TokenInvalid(Exception):
@@ -72,15 +78,24 @@ def _format(query: str, records: list[dict[str, Any]]) -> str:
     )
 
 
-def build_mcp(runtime_of: Any) -> FastMCP:
+def mcp_app(mcp: MCPServer) -> Any:
+    """挂到 /mcp 的 ASGI 应用（streamable HTTP，无状态，JSON 响应）。
+
+    ★ 调过它之后 mcp.session_manager 才存在 —— 应用的 lifespan 要 run() 它。
+    """
+    return mcp.streamable_http_app(
+        streamable_http_path="/",
+        json_response=True,
+        stateless_http=True,
+        transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+    )
+
+
+def build_mcp(runtime_of: Any) -> MCPServer:
     """runtime_of：() -> Runtime（应用启动后才有 Runtime，所以传取值函数）。"""
-    mcp = FastMCP(
+    mcp = MCPServer(
         "atlas-knowledge",
         instructions="Atlas 知识库：为这个智能体配置的领域知识（文档、制度、FAQ）。",
-        stateless_http=True,
-        json_response=True,
-        streamable_http_path="/",
-        transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
     )
 
     @mcp.tool(
@@ -92,8 +107,8 @@ def build_mcp(runtime_of: Any) -> FastMCP:
     )
     async def knowledge_search(query: str, ctx: Context) -> str:  # type: ignore[type-arg]
         rt: Runtime = runtime_of()
-        request = ctx.request_context.request
-        token = request.headers.get(TOKEN_HEADER, "") if request is not None else ""
+        headers = ctx.headers or {}
+        token = headers.get(TOKEN_HEADER) or headers.get(LEGACY_TOKEN_HEADER, "")
         secret = rt.settings.mcp_secret.get_secret_value() if rt.settings.mcp_secret else ""
         try:
             claims = verify_token(secret, token)

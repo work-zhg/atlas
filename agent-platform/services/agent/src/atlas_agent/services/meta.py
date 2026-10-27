@@ -7,25 +7,44 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
+from dataclasses import dataclass
+from typing import Any, Literal
+from uuid import UUID
 
 import redis.asyncio as aioredis
 from atlas_engine.contracts import ModelUnavailable
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from atlas_agent.domain.tool_registry import BASH_TOOL, BUILTIN_TOOLS
+from atlas_agent.domain.tool_registry import BASH_TOOL, BUILTIN_TOOLS, MEMORY_TOOL
 from atlas_agent.providers.llm.gateway import GatewayConfig, list_models
 
 from ..config import Settings
-from ..configplane import ConfigPlaneUnavailable
-from ..configplane.mcp import make_mcp_catalog, mcp_reviews
-from ..providers.mcp import review_status, tool_id
+from ..errors import CapabilityUnavailable
+from ..providers.mcp import make_mcp_catalog, mcp_subject_access, review_status, tool_id
 from ..repositories.model_catalog import ModelCatalogRepository
-from ..schemas.meta import ModelInfo, ModelListResponse, ToolInfo, ToolListResponse
+from ..schemas.meta import (
+    McpSubjectOut,
+    ModelInfo,
+    ModelListResponse,
+    ToolInfo,
+    ToolListResponse,
+)
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class McpSubject:
+    """编辑器按谁的权限列 MCP 工具（MCP 方案设计 §5.2）。
+
+    uid 为空 = 以 Agent 为权限、还没有数字员工。
+    """
+
+    kind: Literal["user", "agent"]
+    uid: UUID | None
+
 
 _MODELS_CACHE_KEY = "models:available"
 
@@ -40,7 +59,7 @@ _BUILTIN_TOOLS: tuple[ToolInfo, ...] = tuple(
         description=t.description,
         available=t.implemented,
         note=t.note,
-        model_tool_names=list(t.approval_targets()),
+        model_tool_names=list(t.model_names()),
     )
     for t in BUILTIN_TOOLS
 )
@@ -114,63 +133,86 @@ class MetaService:
             gateway_reachable=available is not None,
         )
 
-    async def list_tools(self) -> ToolListResponse:
-        # Shell 是否可用取决于部署是否开启了沙箱 —— 目录不能说谎
+    async def list_tools(self, *, mcp_subject: McpSubject | None = None) -> ToolListResponse:
+        # Shell / 记忆是否可用取决于部署是否开启了沙箱、接入了记忆服务 —— 目录不能说谎
+        off = set()
+        if not self._settings.sandbox_enabled:
+            off.add(BASH_TOOL)
+        if not self._settings.memory_base_url:
+            off.add(MEMORY_TOOL)
         tools = [
-            t.model_copy(update={"available": False})
-            if t.name == BASH_TOOL and not self._settings.sandbox_enabled
-            else t
+            t.model_copy(update={"available": False}) if t.name in off else t
             for t in _BUILTIN_TOOLS
         ]
-        tools.extend(await self._mcp_tools())
-        return ToolListResponse(data=tools)
+        if mcp_subject is None or not self._settings.mcp_gateway_url:
+            return ToolListResponse(data=tools)
+        mcp, subject_out = await self._mcp_tools_for(mcp_subject)
+        tools.extend(mcp)
+        return ToolListResponse(data=tools, mcp_subject=subject_out)
 
-    async def _mcp_tools(self) -> list[ToolInfo]:
-        """远程 MCP server 上的工具，读目录缓存（MCP 详设 §05）。
+    async def _mcp_tools_for(self, subject: McpSubject) -> tuple[list[ToolInfo], McpSubjectOut]:
+        """只列权限主体能用的服务里的工具；没权限的服务只给个数（MCP 方案设计 §9.2）。
 
-        单个 server 不可用不会让整张目录挂掉：有缓存就照常列出（note 里带上
-        最近一次刷新的错误），冷缓存又连不上的那台不出现，其余照常。
+        ★ 按主体问网关：编辑器里看到的和运行时装配的是同一个闸门（§5.4）。
         """
+        out = McpSubjectOut(kind=subject.kind, uid=subject.uid)
         try:
             catalog = await make_mcp_catalog(self._settings, self._redis)
-            reviews = await mcp_reviews(self._settings, catalog.servers())
-        except ConfigPlaneUnavailable as exc:
-            # 注册表拉不到：内置工具照常列出，MCP 那部分缺席（并说明原因）
-            logger.warning("MCP 注册表不可用，工具目录里暂缺 MCP 工具：%s", exc)
-            return []
-        names = [c.name for c in catalog.servers()]
-        results = await asyncio.gather(
-            *(catalog.snapshot(n) for n in names), return_exceptions=True
-        )
-        out: list[ToolInfo] = []
-        for name, snap in zip(names, results, strict=True):
-            if isinstance(snap, BaseException):
-                logger.warning("MCP server %s 不可用：%s", name, snap)
-                continue
+            reviews = catalog.reviews()
+        except CapabilityUnavailable as exc:
+            logger.warning("MCP 网关不可用，工具目录里暂缺 MCP 工具：%s", exc)
+            out.notes.append(f"MCP 网关暂时不可用：{exc}")
+            return [], out
+        enabled = [c.name for c in catalog.servers()]
+        if subject.uid is None:
+            out.hidden_servers = len(enabled)
+            out.notes.append(
+                "保存后在 MCP 管理端给这个 Agent 的数字员工发放 API Key、授权 MCP 服务"
+            )
+            return [], out
+        try:
+            access = await mcp_subject_access(self._settings, subject.uid)
+        except CapabilityUnavailable as exc:
+            out.notes.append(f"MCP 网关暂时不可用：{exc}")
+            return [], out
+        out.key_status = access.key_status
+        out.hidden_servers = sum(1 for name in enabled if not access.allows(name))
+        if access.key is None:
+            out.notes.append("还没有可用的 API Key：可以先选，运行时会跳过，并在对话里提示")
+        allowed = [name for name in enabled if access.allows(name)]
+        tools: list[ToolInfo] = []
+        for name in allowed:
             config = catalog.server(name)
-            for d in snap.tools:
-                status = review_status(config, d, reviews) if config else "invalid"
-                notes = [f"来自 MCP server {name}", *d.issues]
-                if status == "pending_review":
-                    notes.append("定义未经复核，暂不可用")
-                elif status == "rejected":
-                    notes.append("定义复核未通过")
-                if snap.error:
-                    notes.append(f"最近一次刷新失败：{snap.error}")
-                out.append(
-                    ToolInfo(
-                        name=tool_id(name, d.name),
-                        kind="mcp",
-                        display_name=d.name,
-                        description=d.description[:500],
-                        available=status == "ok",
-                        note="；".join(notes),
-                        # ★ require_approval_for 匹配的是模型侧名 —— 此前这里
-                        #   为空，编辑器里根本选不到 MCP 工具做审批
-                        model_tool_names=[d.model_name] if d.model_name else [],
-                        server=name,
-                        digest=d.digest,
-                        review_status=status,
-                    )
+            snap = await catalog.snapshot(name)
+            assert config is not None
+            tools.extend(self._tool_infos(name, config, snap, reviews))
+        return tools, out
+
+    @staticmethod
+    def _tool_infos(name: str, config: Any, snap: Any, reviews: Any) -> list[ToolInfo]:
+        out: list[ToolInfo] = []
+        for d in snap.tools:
+            status = review_status(config, d, reviews)
+            notes = [f"来自 MCP server {name}", *d.issues]
+            if status == "pending_review":
+                notes.append("定义未经复核，暂不可用")
+            elif status == "rejected":
+                notes.append("定义复核未通过")
+            if snap.error:
+                notes.append(f"最近一次刷新失败：{snap.error}")
+            out.append(
+                ToolInfo(
+                    name=tool_id(name, d.name),
+                    kind="mcp",
+                    display_name=d.name,
+                    description=d.description[:500],
+                    available=status == "ok",
+                    note="；".join(notes),
+                    model_tool_names=[d.model_name] if d.model_name else [],
+                    server=name,
+                    digest=d.digest,
+                    review_status=status,
                 )
+            )
         return out
+

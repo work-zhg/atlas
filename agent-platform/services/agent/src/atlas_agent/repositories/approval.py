@@ -52,6 +52,9 @@ class ApprovalRepository:
         tool_name: str,
         args: dict[str, Any],
         tool_call_id: str | None = None,
+        kind: str = "tool",
+        source: str | None = None,
+        reason: str | None = None,
     ) -> Approval:
         """id 由 engine 生成并一同发进 approval.required 事件 ——
         前端拿到事件就能直接构造决策 URL，不必再查一次。
@@ -67,6 +70,9 @@ class ApprovalRepository:
             args=args,
             status="pending",
             tool_call_id=tool_call_id,
+            kind=kind,
+            source=source,
+            reason=reason,
         )
         self._session.add(row)
         await self._session.flush()
@@ -84,16 +90,30 @@ class ApprovalRepository:
         )
         return list((await self._session.execute(stmt)).scalars())
 
-    async def decide(self, approval_id: UUID, *, decision: str, user_id: UUID) -> bool:
+    async def decide(
+        self,
+        approval_id: UUID,
+        *,
+        decision: str,
+        user_id: UUID,
+        outcome: dict[str, Any] | None = None,
+    ) -> bool:
         """★ WHERE status='pending' 保证只有第一次决策生效。
 
         多标签页、重复点击、以及「用户点批准的同时后端刚好判定超时」都会
         产生并发决策；先查后写有窗口，条件写进 UPDATE 才安全。
+
+        outcome：决策带回的附加信息 —— 计划审批选的执行模式、拒绝原因（续跑时交给图）。
         """
         stmt = (
             update(Approval)
             .where(Approval.id == approval_id, Approval.status == "pending")
-            .values(status=decision, decided_by=user_id, decided_at=datetime.now(UTC))
+            .values(
+                status=decision,
+                decided_by=user_id,
+                decided_at=datetime.now(UTC),
+                outcome=outcome or None,
+            )
         )
         return bool((await self._session.execute(stmt)).rowcount)
 

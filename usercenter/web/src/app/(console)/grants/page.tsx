@@ -112,7 +112,7 @@ function BySubject({ initial }: { initial: Subject | null }) {
             />
           )
         ) : (
-          <UserSelect value={current?.type === "user" ? current.id : undefined} onChange={(v) => v && setSubject({ type: "user", id: v as string })} />
+          <UserSelect digital value={current?.type === "user" ? current.id : undefined} onChange={(v) => v && setSubject({ type: "user", id: v as string })} />
         )}
       </Card>
       {current ? <SubjectPanel subject={current} onJump={(s) => (setMode(s.type), setSubject(s))} /> : <Card><Empty description="请选择用户" /></Card>}

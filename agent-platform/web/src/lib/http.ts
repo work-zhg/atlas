@@ -3,7 +3,7 @@
  *
  * 两件事集中在这里，别在别处重复：
  *   1. 请求头（authHeaders）。身份由网关按用户中心的登录态写入（doc/identity-propagation-design.html
- *      §4），前端只带 CSRF 双提交头；本机 dev 模式才自己写 X-Uid。
+ *      §4），前端只带 CSRF 双提交头，从不自己写 X-Uid。
  *   2. Atlas 自己的接口端点（API_BASE / 配置服务）。错误信封解包、URL 拼接、请求本身在
  *      共享包 @atlas/chat-ui 的 lib/http.ts（对话组件与 AI TeamFlow 共用同一份）。
  */
@@ -32,18 +32,21 @@ export const CONFIG_API_BASE =
 /** 知识库服务（atlas-knowledge，doc/atlas-rag-design.html）。同样浏览器直连、经网关同源。 */
 export const KNOWLEDGE_API_BASE =
   process.env.NEXT_PUBLIC_KNOWLEDGE_API_BASE ?? "http://127.0.0.1:8050";
+/**
+ * MCP 网关（atlas-mcpgateway，doc/mcp-design.html 第二版）的管理端接口：服务、复核、API Key、
+ * 授权、访问日志。同样浏览器直连、经网关同源（/mcp-gateway-api）。
+ */
+export const MCP_GATEWAY_API_BASE =
+  process.env.NEXT_PUBLIC_MCP_GATEWAY_API_BASE ?? "http://127.0.0.1:8070";
 
 /**
- * 请求头（doc/identity-propagation-design.html §4）。
- *   · 经网关：身份在用户中心的 HttpOnly 会话 Cookie 里（同源请求自动带上），网关校验后写成
- *     X-Uid；写请求带 CSRF 双提交头（值取自可读的 uc_csrf Cookie，由网关交给用户中心校验）。
- *   · 本机 dev 模式（不经网关）：构建期的 NEXT_PUBLIC_USER_ID 写进 X-Uid（后端缺省回落 default_user_id）。
+ * 请求头（doc/identity-propagation-design.html §4）：身份在用户中心的 HttpOnly 会话 Cookie 里
+ * （同源请求自动带上），网关校验后写成 X-Uid —— 前端从不自己写身份。写请求带 CSRF 双提交头
+ * （值取自可读的 uc_csrf Cookie，由网关交给用户中心校验）。
  * SSE 也要用这份 header，故导出（这正是不用原生 EventSource 的原因）。
  */
 export function authHeaders(): Record<string, string> {
   const headers: Record<string, string> = {};
-  const uid = process.env.NEXT_PUBLIC_USER_ID;
-  if (uid) headers["X-Uid"] = uid;
   const csrf = readCookie("uc_csrf");
   if (csrf) headers["X-UC-CSRF"] = csrf;
   return headers;
@@ -59,6 +62,7 @@ function readCookie(name: string): string | undefined {
 export const atlasClient: AtlasClientConfig = { apiBase: API_BASE, headers: authHeaders };
 const configClient: AtlasClientConfig = { apiBase: CONFIG_API_BASE, headers: authHeaders };
 const knowledgeClient: AtlasClientConfig = { apiBase: KNOWLEDGE_API_BASE, headers: authHeaders };
+const mcpGatewayClient: AtlasClientConfig = { apiBase: MCP_GATEWAY_API_BASE, headers: authHeaders };
 
 export function apiUrl(
   path: string,
@@ -93,3 +97,6 @@ export const configHttp = {
 
 /** 知识库服务（atlas-knowledge）的请求出口。 */
 export const knowledgeHttp = makeHttp(knowledgeClient);
+
+/** MCP 网关管理端接口的请求出口。 */
+export const mcpGatewayHttp = makeHttp(mcpGatewayClient);

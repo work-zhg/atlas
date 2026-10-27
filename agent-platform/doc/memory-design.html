@@ -1,0 +1,1266 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Atlas 记忆方案设计</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --border: #d1d9e0; --head: #f6f8fa;
+    --accent: #0969da; --ok: #1a7f37; --ok-bg: #dafbe1; --warn: #9a6700; --warn-bg: #fff8c5;
+    --bad: #cf222e; --bad-bg: #ffebe9; --code-bg: #f6f8fa;
+    --b1: #ddf4ff; --b1d: #54aeff; --b2: #fbefff; --b2d: #c297ff; --b3: #dafbe1; --b3d: #4ac26b;
+    --b4: #fff8c5; --b4d: #d4a72c; --b5: #ffebe9; --b5d: #ff8182;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --border: #3d444d; --head: #151b23;
+      --accent: #4493f8; --ok: #3fb950; --ok-bg: #12261e; --warn: #d29922; --warn-bg: #2b2111;
+      --bad: #f85149; --bad-bg: #2d1214; --code-bg: #151b23;
+      --b1: #12263f; --b1d: #1f6feb; --b2: #271a36; --b2d: #8957e5; --b3: #12261e; --b3d: #2ea043;
+      --b4: #2b2111; --b4d: #9e6a03; --b5: #2d1214; --b5d: #da3633;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 32px; background: var(--bg); color: var(--fg);
+         font: 14px/1.75 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif; }
+  main { max-width: 1120px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 44px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 15.5px; margin: 24px 0 8px; }
+  .sub { color: var(--muted); margin: 0 0 14px; }
+  code { font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code-bg); padding: 1px 4px; border-radius: 4px; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px 14px; overflow-x: auto; font-size: 12.5px; }
+  pre code { background: none; padding: 0; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0 16px; }
+  th, td { border: 1px solid var(--border); padding: 7px 10px; vertical-align: top; text-align: left; }
+  th { background: var(--head); white-space: nowrap; }
+  td.c { text-align: center; }
+  .src { color: var(--muted); font-size: 12.5px; }
+  .callout { border-left: 4px solid var(--accent); background: var(--head); padding: 10px 14px; border-radius: 4px; margin: 14px 0; }
+  .callout.warn { border-color: var(--warn); background: var(--warn-bg); }
+  .tag { display: inline-block; padding: 0 7px; border-radius: 9px; font-size: 12px; font-weight: 600; border: 1px solid; white-space: nowrap; }
+  .tag.warn { color: var(--warn); background: var(--warn-bg); border-color: var(--warn); }
+  .toc { columns: 2; padding-left: 18px; }
+  .fig { border: 1px solid var(--border); border-radius: 6px; padding: 10px; overflow-x: auto; margin: 10px 0 6px; }
+  .cap { color: var(--muted); font-size: 12.5px; margin: 0 0 16px; text-align: center; }
+  svg text { fill: var(--fg); font-size: 12px; font-family: -apple-system, "PingFang SC", sans-serif; }
+  svg .s { font-size: 11px; fill: var(--muted); }
+  svg .b { font-weight: 600; }
+  svg .c1 { fill: var(--b1); stroke: var(--b1d); } svg .c2 { fill: var(--b2); stroke: var(--b2d); }
+  svg .c3 { fill: var(--b3); stroke: var(--b3d); } svg .c4 { fill: var(--b4); stroke: var(--b4d); }
+  svg .c5 { fill: var(--b5); stroke: var(--b5d); }
+  svg .inner { fill: var(--bg); stroke: var(--border); }
+  svg .frame { fill: none; stroke: var(--muted); }
+  svg .dot { fill: var(--fg); }
+  svg .ln { stroke: var(--fg); stroke-width: 1.3; fill: none; }
+  svg .dash { stroke-dasharray: 5 4; }
+  svg .arw { fill: var(--fg); }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <marker id="ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="arw" d="M0,0 L8,4 L0,8 z"/></marker>
+</defs></svg>
+<main>
+<h1>Atlas 记忆方案设计</h1>
+<p class="sub">日期：2026-10-24（第三版）· 状态：<span class="tag warn">方案设计；服务端、Atlas 后端与前端已实现（2026-10-27），未部署</span><br>
+本文只讲方案：<b>服务端和客户端怎么分工、数据怎么规划、怎么入库、怎么读取、冲突怎么解决</b>。接口、表结构、配置、分期等内容在方案确定后的详细设计中展开（见 §9）。<br>
+本文取代 <a href="memory.html">记忆设计（基于 Mem0）</a> 中的方案部分。该文的以下结论保持不变：§01 信任模型（Agent 知识不走记忆）；§09 隔离原则（落在 Atlas 一侧：关联主键由 Atlas 按会话确定，不出现在工具参数里）；§10 用户权利。</p>
+
+<div class="callout"><b>本版相对 10-23 版的主要变化</b>
+<ul>
+  <li>方案拆成两块：<b>服务端</b>是独立的记忆服务，只定义作用域、主题、条目这几个逻辑对象和它们的规则，不关心存的是不是"记忆"；<b>客户端</b>是 Atlas，决定存什么、怎么取、冲突怎么解决。</li>
+  <li>作用域实例由"作用域编码 + 关联主键"定位，两个值都由调用方通过接口传入。作用域之间没有关联关系，人和项目的组合单独配成"用户项目"作用域。</li>
+  <li>主题由客户端通过接口创建、自行管理。主题大小上限也由客户端自己定、自己保证（不同使用场景可以不同），服务端不管上限；超限的主题由 Atlas 在会话后补记时拆小，服务端只负责把拆分在一个事务里提交，不扫描、不调用 LLM。</li>
+  <li>读取改为按主题整块加载：主题目录和常驻主题放进系统提示词，其余主题由 Agent 按需加载。去掉了语义检索、按上下文标签常驻和后台整理。</li>
+  <li>并发：服务端按作用域实例加分布式锁，串行写入；每次写入都带时间，以时间晚的为准；一次写入（删除 + 新增）在一个事务里完成。</li>
+  <li>数据权限：作用域可以打开数据权限开关，打开后记忆服务按用户中心的数据权限校验调用用户。Atlas 建会话时请记忆服务登记实例归属，用户的记忆只有本人能读写。</li>
+</ul></div>
+
+<div class="callout warn"><b>实现记录（2026-10-26 / 10-27）</b>：记忆服务、Atlas 后端（10-26）与前端（10-27：记忆页按主题浏览、更正、移动、恢复、彻底删除、修订历史撤销、暂停与全部删除；对话里保存 / 遗忘记忆后当场显示「已记住 #N［撤销］」；对话页显示「会话结束后补记了 N 条［查看］」）已按本方案实现，未部署。与方案的差异：
+<ul>
+  <li><b>实例锁用数据库行锁</b>：同一实例的写入在事务里先锁实例行，锁随事务提交释放，多副本同样有效；记忆服务因此不依赖 Redis。条目编号、版本号都在这把锁里递增。</li>
+  <li><b>版本号按实例统一递增</b>（§9.1 的选项）：主题拆掉后再建同名主题，版本号也不会和客户端记着的旧值撞上。主题的描述、扩展属性变了也换版本号（常驻快照里有它们）。</li>
+  <li><b>本期只接「用户」作用域</b>：项目身份（Q1）未定，「用户项目」作用域等项目实体有了再接。记忆服务本身支持多字段关联主键和按部分主键列实例。</li>
+  <li><b>读取对所有开启记忆的原生会话生效</b>（常驻块 + 加载主题，SubAgent 也有）；<b>写入</b>（保存、遗忘）要在智能体里勾选「记忆」，SubAgent 勾了也不挂。写入不走审批（当场可见、可撤销）。</li>
+  <li><b>ACP 会话只有会话后补记</b>：常驻块怎么注入 CLI、记忆工具怎么给（§9.2）留到下一期。</li>
+  <li><b>更新提示</b>（§5.5）附在请求末尾，随上下文管理一起工作：智能体关了上下文管理时不附提示（写入前的版本检查照常）。</li>
+  <li><b>补记一次调用</b>：把整个实例在篇幅内的主题条目一起交给抽取模型；超出篇幅、没展开的主题这一轮不往里写。触发：空闲 30 分钟或归档、且有新变化；连续失败 3 次后等会话有新消息再试。</li>
+  <li>写入的目标主题<b>不存在</b>与<b>已被拆分</b>分开报（前者 404、后者 409），两种都带当前主题目录。删除主题只允许删空主题。</li>
+  <li>Mem0 与它的抽取、收敛、语义注入、只读检索工具已移除（Q5：旧记忆不迁移）。</li>
+</ul></div>
+
+<ol class="toc" start="0">
+  <li><a href="#s0">方案概览</a></li>
+  <li><a href="#s1">背景与目标</a></li>
+  <li><a href="#s2">分层：服务端与客户端</a></li>
+  <li><a href="#s3">服务端：记忆服务</a></li>
+  <li><a href="#s4">客户端：Atlas 怎么存</a></li>
+  <li><a href="#s5">客户端：Atlas 怎么取</a></li>
+  <li><a href="#s6">客户端：冲突解决</a></li>
+  <li><a href="#s7">用户控制</a></li>
+  <li><a href="#s8">风险与待决问题</a></li>
+  <li><a href="#s9">留给详细设计的内容</a></li>
+  <li><a href="#s10">业界参照</a></li>
+</ol>
+
+<!-- ====================================================================== -->
+<h2 id="s0">0. 方案概览</h2>
+<div class="fig">
+<svg viewBox="0 0 1080 440" width="100%" role="img" aria-label="方案总览">
+  <rect x="10" y="10" width="530" height="420" rx="8" class="inner"/>
+  <text x="26" y="34" class="b">客户端：Atlas</text>
+  <text x="112" y="34" class="s">记忆的语义：存什么、怎么取、怎么判冲突</text>
+  <rect x="570" y="10" width="500" height="420" rx="8" class="inner"/>
+  <text x="586" y="34" class="b">服务端：记忆服务</text>
+  <text x="690" y="34" class="s">只认作用域、主题、条目，不关心存的是什么</text>
+
+  <rect x="30" y="150" width="100" height="60" rx="6" class="c1"/>
+  <text x="80" y="176" text-anchor="middle" class="b">用户</text>
+  <text x="80" y="195" text-anchor="middle" class="s">对话 · 管理</text>
+
+  <rect x="180" y="50" width="330" height="110" rx="6" class="c2"/>
+  <text x="345" y="76" text-anchor="middle" class="b">Agent（对话中）</text>
+  <text x="345" y="100" text-anchor="middle" class="s">系统提示词里带着主题目录和常驻主题</text>
+  <text x="345" y="120" text-anchor="middle" class="s">需要时加载某个主题的全部条目</text>
+  <text x="345" y="140" text-anchor="middle" class="s">判断值得记 → 保存（删除旧的 + 新增）</text>
+
+  <rect x="180" y="190" width="330" height="80" rx="6" class="c2"/>
+  <text x="345" y="214" text-anchor="middle" class="b">会话后补记</text>
+  <text x="345" y="235" text-anchor="middle" class="s">会话空闲后读完整段对话，只补 Agent 漏记的</text>
+  <text x="345" y="254" text-anchor="middle" class="s">再把超过上限的主题拆小</text>
+  <path d="M345,160 V 190" class="ln" marker-end="url(#ar)"/>
+  <text x="353" y="180" class="s">对话记录</text>
+
+  <rect x="180" y="290" width="330" height="60" rx="6" class="c5"/>
+  <text x="345" y="315" text-anchor="middle" class="b">用户管理</text>
+  <text x="345" y="335" text-anchor="middle" class="s">查看 · 撤销 · 更正 · 删除 · 暂停</text>
+
+  <path d="M130,170 H 155 V 105 H 180" class="ln" marker-start="url(#ar)" marker-end="url(#ar)"/>
+  <path d="M130,195 H 155 V 320 H 180" class="ln" marker-end="url(#ar)"/>
+
+  <text x="26" y="388" class="s">Atlas 决定：用哪些作用域、关联主键传什么、建哪些主题、</text>
+  <text x="26" y="408" class="s">哪些主题常驻、主题怎么拆、冲突怎么判断、谁能取代谁</text>
+
+  <rect x="590" y="50" width="230" height="95" rx="6" class="c3"/>
+  <text x="705" y="76" text-anchor="middle" class="b">读取</text>
+  <text x="705" y="98" text-anchor="middle" class="s">列出实例下的主题</text>
+  <text x="705" y="116" text-anchor="middle" class="s">（描述 · 大小 · 版本号）</text>
+  <text x="705" y="134" text-anchor="middle" class="s">按主题取出全部条目</text>
+
+  <rect x="590" y="165" width="230" height="175" rx="6" class="c4"/>
+  <text x="705" y="194" text-anchor="middle" class="b">写入</text>
+  <text x="705" y="220" text-anchor="middle" class="s">按作用域实例加分布式锁</text>
+  <text x="705" y="240" text-anchor="middle" class="s">时间晚的为准</text>
+  <text x="705" y="260" text-anchor="middle" class="s">删除 + 新增在一个事务里</text>
+  <text x="705" y="292" text-anchor="middle" class="s">拆分主题：按客户端给的分组</text>
+  <text x="705" y="312" text-anchor="middle" class="s">移动条目，同样加锁、一个事务</text>
+
+  <rect x="850" y="50" width="200" height="290" rx="6" class="c4"/>
+  <text x="950" y="76" text-anchor="middle" class="b">存储</text>
+  <rect x="866" y="92" width="168" height="40" rx="6" class="inner"/>
+  <text x="950" y="117" text-anchor="middle" class="b">作用域实例</text>
+  <rect x="866" y="150" width="168" height="40" rx="6" class="inner"/>
+  <text x="950" y="175" text-anchor="middle" class="b">主题</text>
+  <rect x="866" y="208" width="168" height="40" rx="6" class="inner"/>
+  <text x="950" y="233" text-anchor="middle" class="b">条目</text>
+  <path d="M950,132 V 150" class="ln" marker-end="url(#ar)"/>
+  <path d="M950,190 V 208" class="ln" marker-end="url(#ar)"/>
+  <text x="950" y="272" text-anchor="middle" class="s">实例之间隔离</text>
+  <text x="950" y="292" text-anchor="middle" class="s">删除的条目保留历史</text>
+  <text x="950" y="312" text-anchor="middle" class="s">可撤销、可追溯</text>
+
+  <rect x="590" y="360" width="240" height="56" rx="6" class="c1"/>
+  <text x="710" y="383" text-anchor="middle" class="b">管理平台：配置作用域</text>
+  <text x="710" y="403" text-anchor="middle" class="s">编码 · 描述 · 数据权限开关</text>
+  <path d="M705,360 V 340" class="ln" marker-end="url(#ar)"/>
+
+  <rect x="850" y="360" width="200" height="56" rx="6" class="c3"/>
+  <text x="950" y="383" text-anchor="middle" class="b">用户中心</text>
+  <text x="950" y="403" text-anchor="middle" class="s">数据权限：实例只有本人可读写</text>
+  <path d="M820,325 H 835 V 388 H 850" class="ln" marker-end="url(#ar)"/>
+  <text x="856" y="354" class="s">登记 · 校验</text>
+
+  <path d="M850,97 H 820" class="ln" marker-end="url(#ar)"/>
+  <path d="M820,212 H 850" class="ln" marker-end="url(#ar)"/>
+
+  <path d="M590,97 H 510" class="ln" marker-end="url(#ar)"/>
+  <text x="535" y="90" class="s">加载</text>
+  <path d="M510,140 H 550 V 190 H 590" class="ln" marker-end="url(#ar)"/>
+  <text x="520" y="133" class="s">保存</text>
+  <path d="M510,225 H 590" class="ln" marker-end="url(#ar)"/>
+  <text x="530" y="218" class="s">补记</text>
+  <path d="M510,320 H 590" class="ln" marker-end="url(#ar)"/>
+</svg>
+</div>
+<p class="cap">图 0　方案总览：Atlas 负责记忆的语义（包括超限主题怎么拆），记忆服务只提供按作用域实例隔离的主题与条目存储，并负责并发和事务</p>
+
+<table>
+  <tr><th>问题</th><th>方案</th></tr>
+  <tr><td>怎么分工</td><td><b>服务端</b>（记忆服务）：定义作用域、作用域实例、主题、条目；保证实例之间隔离；负责并发、事务和修订历史。不解释条目内容，也不解释关联主键。<br>
+    <b>客户端</b>（Atlas）：决定用哪些作用域、传什么关联主键、建哪些主题、哪些常驻、存什么、冲突怎么判断、超限的主题怎么拆</td></tr>
+  <tr><td>数据怎么规划</td><td>作用域 → 作用域实例（作用域编码 + 关联主键）→ 主题 → 条目。Atlas 使用<b>用户</b>（关联主键是 uid）和<b>用户项目</b>（关联主键是 uid + 项目编码）两个作用域</td></tr>
+  <tr><td>怎么入库</td><td>两条路径：<b>过程中存</b>（主路径，当轮生效、当场提示）和<b>会话后补记</b>（补漏，下次会话提示）。写之前先看完目标主题的全部条目；一次写入 = 删除旧条目 + 新增一条，在一个事务里完成</td></tr>
+  <tr><td>怎么读取</td><td><b>常驻</b>：主题目录和标为常驻的主题放进系统提示词，按会话存快照。<b>按需</b>：Agent 根据主题目录自行决定加载哪个主题，一次取出全部条目。不做语义检索。本地的主题内容是否最新，按服务端的版本号判断</td></tr>
+  <tr><td>谁能读写</td><td>作用域可以打开<b>数据权限开关</b>。打开后，记忆服务按用户中心的数据权限校验调用用户对实例的权限，没登记的实例一律拒绝。Atlas 的两个作用域都打开开关，建会话时请记忆服务登记"这个实例归这个用户"，所以用户的记忆只有本人能读写</td></tr>
+  <tr><td>冲突怎么解决</td><td>主题有大小上限，写入方能看到主题的全部条目，在此基础上判断。取代只在同一作用域实例内进行，按来源规定谁能取代谁。并发写入由服务端加锁串行，以时间晚的为准</td></tr>
+  <tr><td>主题太大怎么办</td><td>大小上限由客户端按自己的使用场景定、自己保证，服务端不管上限，只报告每个主题的当前大小。Atlas 的上限是给 LLM 的软上限，超了也能写入；Agent 在对话中可以自己把大主题拆小，没拆的由会话后补记拆分。服务端只负责把客户端给的拆分在一个事务里提交</td></tr>
+</table>
+
+<!-- ====================================================================== -->
+<h2 id="s1">1. 背景与目标</h2>
+<h3>1.1 现状的问题</h3>
+<table>
+  <tr><th>问题</th><th>说明</th></tr>
+  <tr><td>写入只有后台抽取这一条路</td><td>现在每个 Run 结束后，由 Mem0 在后台抽取记忆。用户看不到写入了什么，也没法当场纠正；"记住这个"这类明确要求，要等到下次会话才生效；每个 Run 都要多调用一次 LLM</td></tr>
+  <tr><td>没有稳定的"项目"</td><td>现在的"项目"其实是会话的工作区，每个新会话都不一样，所以项目记忆没法跨会话复用</td></tr>
+  <tr><td>记忆没有分层</td><td>不区分用户级和项目级，也没有主题。结果是：每次都需要的记忆不能保证出现，也做不到"写 Java 代码时才加载 Java 相关的记忆"</td></tr>
+  <tr><td>检索效果差</td><td>Mem0 的关键词检索对中文基本无效。另外现在是每轮用用户的提问去检索，但偏好类记忆和提问在语义上并不接近，所以经常召回不到</td></tr>
+  <tr><td>冲突看不全、处理粗糙</td><td>写入时只能看到检索出来的几条，相关的旧记忆没检索到就发现不了冲突；只能新增，冲突靠事后硬删除来解决：判断错了无法恢复，还可能跨项目误删</td></tr>
+</table>
+<h3>1.2 目标</h3>
+<ul>
+  <li><b>存储做成独立服务</b>：只按作用域隔离、按主题组织数据，不关心存的是不是记忆，其他应用也能使用。</li>
+  <li><b>记住两类信息</b>：跨项目都成立的用户偏好和事实；只在某个项目里成立的约定和决策。</li>
+  <li><b>两条写入路径</b>：用户明确要求的当轮生效；Agent 漏掉的由补记补上。两条路径写入的内容都对用户可见，都可以撤销。</li>
+  <li><b>常驻 + 按需</b>：每次都需要的记忆稳定出现，不依赖检索；其余的按主题整块按需加载。</li>
+  <li><b>冲突看得全、可控</b>：写入方能看到目标主题的全部内容；冲突能判定、能追溯、能恢复。用户能查看、更正、删除自己的记忆，删除就是彻底删除。</li>
+</ul>
+<h3>1.3 为什么有了抽取，仍然不用 Mem0</h3>
+<ul>
+  <li><b>补记必须知道"已经写了什么"</b>：它要先知道本会话里 Agent 已经写入了哪些记忆，只补缺的部分。</li>
+  <li><b>两条路径必须用同一套规则</b>：作用域、主题、取代限制、来源标记、通知和撤销，都要和过程中存保持一致。</li>
+  <li><b>Mem0 的数据模型不够</b>：它只会新增，作用域只有 <code>user_id</code>，没有主题，也没有"已取代 / 已遗忘"这样的状态。</li>
+</ul>
+<h3>1.4 非目标</h3>
+<ul>
+  <li><b>跨用户共享的知识</b>：团队约定写进仓库的 <code>ATLAS.md</code>（经过评审，会作为持久指令加载）；Agent 知识走知识库。记忆服务本身支持按项目共享的作用域，但 Atlas 本期不用（Q2）。</li>
+  <li><b>语义检索</b>：本期不做，靠主题目录 + 整主题加载（5.4）。</li>
+  <li><b>知识图谱、多跳推理、自动遗忘</b>：本方案不涉及。</li>
+</ul>
+
+<!-- ====================================================================== -->
+<h2 id="s2">2. 分层：服务端与客户端</h2>
+<p>记忆方案分成两块。<b>服务端</b>是独立的记忆服务，它只定义逻辑对象（作用域、主题、条目）和这些对象的规则，不关心条目里存的是什么，所以它存的不一定是记忆。<b>客户端</b>是 Atlas，决定存什么、什么时候取、冲突怎么判断。</p>
+<table>
+  <tr><th>方面</th><th>服务端（记忆服务）</th><th>客户端（Atlas）</th></tr>
+  <tr><td>作用域</td><td>在管理平台配置：编码、描述、是否校验数据权限</td><td>决定用哪些作用域；每次调用都传入作用域编码和关联主键</td></tr>
+  <tr><td>隔离</td><td>作用域实例之间数据隔离；合并、取代只在实例内进行</td><td>保证只传当前用户有权访问的关联主键</td></tr>
+  <tr><td>数据权限</td><td>作用域打开开关时：代客户端在用户中心登记实例归属；每次读写按用户中心校验调用用户</td><td>建会话时登记本会话用到的实例；调用时带上调用用户</td></tr>
+  <tr><td>主题</td><td>提供创建、列出、读取、移动条目、拆分；拆分只按客户端给的分组执行</td><td>决定建哪些主题、写到哪个主题、哪些常驻、什么时候加载；定主题的大小上限，超限的主题怎么拆</td></tr>
+  <tr><td>条目</td><td>保存内容、时间、来源；删除的条目保留历史，可以恢复，也可以彻底删除</td><td>决定写什么、删除哪几条；根据来源判断谁能取代谁</td></tr>
+  <tr><td>并发</td><td>按作用域实例加分布式锁，串行写入；以时间晚的为准；一次写入在一个事务里完成；主题每次变化都更新版本号</td><td>每次写入带上时间；根据主题的版本号判断本地内容是否最新</td></tr>
+  <tr><td>写入路径</td><td>—</td><td>过程中存、会话后补记（补记时顺带拆分超限的主题）</td></tr>
+  <tr><td>用户控制</td><td>提供撤销、恢复、彻底删除的能力</td><td>管理界面；对话里的提示和撤销入口</td></tr>
+</table>
+
+<!-- ====================================================================== -->
+<h2 id="s3">3. 服务端：记忆服务</h2>
+
+<h3>3.1 逻辑对象</h3>
+<div class="fig">
+<svg viewBox="0 0 1080 365" width="100%" role="img" aria-label="逻辑对象">
+  <text x="20" y="26" class="b">作用域</text>
+  <text x="60" y="26" class="s">（管理平台配置）</text>
+  <text x="250" y="26" class="b">作用域实例</text>
+  <text x="314" y="26" class="s">（作用域编码 + 关联主键）</text>
+  <text x="520" y="26" class="b">主题</text>
+  <text x="548" y="26" class="s">（实例"用户 · u1001"下，接口创建）</text>
+  <text x="790" y="26" class="b">条目</text>
+  <text x="818" y="26" class="s">（主题"编码-java"下）</text>
+
+  <rect x="20" y="45" width="190" height="60" rx="6" class="c1"/>
+  <text x="115" y="70" text-anchor="middle" class="b">用户</text>
+  <text x="115" y="90" text-anchor="middle" class="s">关联主键：uid</text>
+  <rect x="20" y="150" width="190" height="60" rx="6" class="c1"/>
+  <text x="115" y="175" text-anchor="middle" class="b">项目</text>
+  <text x="115" y="195" text-anchor="middle" class="s">关联主键：项目编码</text>
+  <rect x="20" y="255" width="190" height="60" rx="6" class="c1"/>
+  <text x="115" y="280" text-anchor="middle" class="b">用户项目</text>
+  <text x="115" y="300" text-anchor="middle" class="s">关联主键：uid + 项目编码</text>
+
+  <rect x="250" y="40" width="230" height="36" rx="6" class="c2"/>
+  <text x="365" y="62" text-anchor="middle">用户 · u1001</text>
+  <rect x="250" y="84" width="230" height="36" rx="6" class="inner"/>
+  <text x="365" y="106" text-anchor="middle">用户 · u1002</text>
+  <rect x="250" y="163" width="230" height="36" rx="6" class="inner"/>
+  <text x="365" y="185" text-anchor="middle">项目 · atlas</text>
+  <rect x="250" y="250" width="230" height="36" rx="6" class="inner"/>
+  <text x="365" y="272" text-anchor="middle">用户项目 · u1001 + atlas</text>
+  <rect x="250" y="294" width="230" height="36" rx="6" class="inner"/>
+  <text x="365" y="316" text-anchor="middle">用户项目 · u1002 + atlas</text>
+  <text x="365" y="352" text-anchor="middle" class="s">实例之间数据隔离；作用域之间没有关联关系</text>
+
+  <path d="M210,75 H 230 V 58 H 250" class="ln" marker-end="url(#ar)"/>
+  <path d="M230,75 V 102 H 250" class="ln" marker-end="url(#ar)"/>
+  <path d="M210,181 H 250" class="ln" marker-end="url(#ar)"/>
+  <path d="M210,285 H 230 V 268 H 250" class="ln" marker-end="url(#ar)"/>
+  <path d="M230,285 V 312 H 250" class="ln" marker-end="url(#ar)"/>
+
+  <rect x="520" y="40" width="240" height="215" rx="8" class="inner"/>
+  <rect x="535" y="52" width="210" height="40" rx="6" class="c1"/>
+  <text x="547" y="77" class="b">身份与背景</text><text x="733" y="77" text-anchor="end" class="s">2 条</text>
+  <rect x="535" y="102" width="210" height="40" rx="6" class="c1"/>
+  <text x="547" y="127" class="b">沟通偏好</text><text x="733" y="127" text-anchor="end" class="s">2 条</text>
+  <rect x="535" y="152" width="210" height="40" rx="6" class="c2"/>
+  <text x="547" y="177" class="b">编码-java</text><text x="733" y="177" text-anchor="end" class="s">3 条</text>
+  <rect x="535" y="202" width="210" height="40" rx="6" class="c1"/>
+  <text x="547" y="227" class="b">编码-js</text><text x="733" y="227" text-anchor="end" class="s">2 条</text>
+  <text x="640" y="275" text-anchor="middle" class="s">编码 · 描述 · 扩展属性 · 大小 · 版本号</text>
+  <path d="M480,58 H 520" class="ln" marker-end="url(#ar)"/>
+
+  <rect x="790" y="40" width="280" height="215" rx="8" class="inner"/>
+  <rect x="805" y="52" width="250" height="50" rx="6" class="c3"/>
+  <text x="817" y="72" class="b">#40 偏好构造器注入</text>
+  <text x="817" y="92" class="s">2026-09-18 · Agent 写入</text>
+  <rect x="805" y="112" width="250" height="50" rx="6" class="c3"/>
+  <text x="817" y="132" class="b">#57 单元测试用 JUnit 5</text>
+  <text x="817" y="152" class="s">2026-10-02 · 用户亲自</text>
+  <rect x="805" y="172" width="250" height="50" rx="6" class="c3"/>
+  <text x="817" y="192" class="b">#88 不使用 Lombok</text>
+  <text x="817" y="212" class="s">2026-10-15 · 会话后补记</text>
+  <text x="930" y="275" text-anchor="middle" class="s">内容 · 编号 · 时间 · 来源 · 出处</text>
+  <path d="M745,172 H 790" class="ln" marker-end="url(#ar)"/>
+</svg>
+</div>
+<p class="cap">图 1　逻辑对象：作用域在管理平台配置；"作用域编码 + 关联主键"确定一个实例，实例之间隔离；实例下的主题由客户端通过接口创建；主题下是一条条条目</p>
+<table>
+  <tr><th>对象</th><th>由谁创建</th><th>包含什么</th><th>规则</th></tr>
+  <tr><td>作用域</td><td>管理员在管理平台配置</td><td>编码、描述、数据权限开关</td><td>作用域之间没有关联关系</td></tr>
+  <tr><td>作用域实例</td><td>不用单独创建，由"作用域编码 + 关联主键"定位</td><td>若干主题</td><td>实例之间数据完全隔离；合并、取代只在实例内进行</td></tr>
+  <tr><td>主题</td><td>客户端通过接口创建</td><td>编码、描述、扩展属性、当前大小、版本号</td><td>编码在实例内唯一；服务端不限制大小</td></tr>
+  <tr><td>条目</td><td>客户端写入</td><td>内容、编号、时间、来源、出处</td><td>编号在实例内递增，之后不再改变；删除的条目保留历史</td></tr>
+</table>
+
+<h3>3.2 作用域与作用域实例</h3>
+<ul>
+  <li>作用域由管理员在管理平台配置：编码、描述，以及是否校验数据权限（3.7）。主题大小上限不在作用域上配置，由客户端自己定（3.3）。</li>
+  <li>读写某个作用域的数据时，调用方在接口参数里传两个值：<b>作用域编码</b>和<b>关联主键</b>。这两个值一起确定一个作用域实例。</li>
+  <li>关联主键是什么，由作用域的用途决定、由调用方传入，服务端不解释它。例如：
+    <table>
+      <tr><th>作用域</th><th>关联主键</th><th>数据属于</th></tr>
+      <tr><td>用户</td><td>用户 uid</td><td>某个人，跨项目都成立</td></tr>
+      <tr><td>项目</td><td>项目编码</td><td>某个项目，项目成员共用</td></tr>
+      <tr><td>用户项目</td><td>uid + 项目编码</td><td>某个人在某个项目里</td></tr>
+    </table></li>
+  <li><b>作用域之间没有关联关系。</b>用户作用域和项目作用域互不影响；需要"人 × 项目"的数据，就单独配一个用户项目作用域，而不是让两个作用域互相引用。</li>
+  <li>同一个作用域实例允许多个应用、多个会话同时读写。同一个应用的多个会话本来就会并发读写，所以统一用 3.5 的并发规则处理，不按应用做访问控制。</li>
+</ul>
+<div class="callout warn"><b>服务端默认不校验关联主键属于谁。</b>服务端是抽象服务，不知道关联主键是用户 uid、项目编码还是别的东西，只按调用方传入的值定位实例。"这个调用方能不能访问这个实例"默认由客户端负责，例如 Atlas 只传当前会话所属用户的 uid，以及当前会话关联的项目编码（4.1）。需要服务端把关的作用域，打开数据权限开关，由记忆服务按用户中心的数据权限校验（3.7）。</div>
+
+<h3>3.3 主题</h3>
+<ul>
+  <li><b>由客户端管理</b>：客户端通过接口创建主题，建哪些、叫什么、多大算满、什么时候拆，都由客户端决定。</li>
+  <li><b>主题包含</b>：
+    <ul>
+      <li>编码：实例内唯一。</li>
+      <li>描述：说明这个主题收什么内容，客户端据此选择写到哪个主题、决定要不要加载。</li>
+      <li>扩展属性：由客户端定义，服务端原样保存、不解释。例如 Atlas 用它标记"常驻"。</li>
+      <li>当前大小、版本号：主题里的条目有任何变化（新增、删除、移动、撤销、恢复），版本号就会变。</li>
+    </ul></li>
+  <li><b>版本号由服务端分配</b>：在实例锁内分配，只增不减，不依赖任何时钟。列出主题目录、加载主题时，返回每个主题的当前版本号；写入、拆分时，返回目标主题写入前和写入后的版本号。客户端靠这些判断本地的内容是否最新（5.5）。</li>
+  <li><b>为什么不用更新时间</b>：条目的时间由客户端给出，表示信息成立的时间，补记写入的时间还可能早于已有条目（6.4），用它看不出主题变没变；服务端多副本的时钟也不严格一致。</li>
+  <li><b>服务端不管大小上限</b>：同一个作用域可能被不同客户端、不同场景使用，合适的上限不一样，所以上限由客户端自己定、自己保证。服务端只报告每个主题的当前大小，写入不会因为主题大小被拒绝，服务端也不主动拆分。超限的主题由客户端拆分（3.6）；Atlas 的做法见 4.2。</li>
+  <li><b>为什么客户端要限制大小</b>：主题小，客户端才能一次取出全部条目。写入方能看到主题的全部内容，冲突就不会因为"没检索到"而漏掉；读取也不需要语义检索。</li>
+  <li><b>移动条目</b>：服务端提供把条目从一个主题移到另一个主题的操作，用户在管理界面调整主题时用它。移动不改变条目的内容、编号、时间和来源。</li>
+</ul>
+
+<h3>3.4 条目</h3>
+<table>
+  <tr><th>属性</th><th>说明</th></tr>
+  <tr><td>内容</td><td>一段文本，服务端不解释。对 Atlas 来说是一个原子事实</td></tr>
+  <tr><td>编号</td><td>实例内递增，例如 <code>#131</code>，移动、拆分后都不变。客户端引用某一条（例如要删除它）时用编号</td></tr>
+  <tr><td>时间</td><td>客户端写入时给出，表示这条信息成立的时间，用来判断先后（3.5）。服务端另外记录入库时间，用于追溯</td></tr>
+  <tr><td>来源</td><td>客户端给的标签，服务端原样保存、不解释。Atlas 用它区分"用户亲自 / Agent 写入 / 会话后补记"</td></tr>
+  <tr><td>出处</td><td>客户端给的说明（可选），例如在哪个会话、哪一轮写入的</td></tr>
+  <tr><td>修订历史</td><td>每次写入删除了哪些、新增了哪一条，都留下记录，用于撤销、恢复和追溯</td></tr>
+</table>
+<div class="fig">
+<svg viewBox="0 0 1080 135" width="100%" role="img" aria-label="条目的生命周期">
+  <circle cx="30" cy="85" r="7" class="dot"/>
+  <path d="M37,85 H 110" class="ln" marker-end="url(#ar)"/>
+  <text x="50" y="77" class="s">写入</text>
+  <rect x="110" y="55" width="170" height="60" rx="6" class="c3"/>
+  <text x="195" y="80" text-anchor="middle" class="b">有效</text>
+  <text x="195" y="100" text-anchor="middle" class="s">会被列出和加载</text>
+
+  <rect x="440" y="55" width="240" height="60" rx="6" class="c4"/>
+  <text x="560" y="80" text-anchor="middle" class="b">已删除</text>
+  <text x="560" y="100" text-anchor="middle" class="s">被取代 / 被遗忘，保留在历史里</text>
+  <path d="M280,75 H 440" class="ln" marker-end="url(#ar)"/>
+  <text x="305" y="68" class="s">写入时删除</text>
+  <path d="M440,100 H 280" class="ln dash" marker-end="url(#ar)"/>
+  <text x="305" y="118" class="s">撤销 / 恢复</text>
+
+  <rect x="860" y="55" width="200" height="60" rx="6" class="c5"/>
+  <text x="960" y="80" text-anchor="middle" class="b">彻底删除</text>
+  <text x="960" y="100" text-anchor="middle" class="s">连同历史，不可恢复</text>
+  <path d="M680,85 H 860" class="ln" marker-end="url(#ar)"/>
+  <text x="715" y="77" class="s">用户要求删除</text>
+  <path d="M195,55 V 25 H 960 V 55" class="ln" marker-end="url(#ar)"/>
+  <text x="540" y="19" class="s">用户要求删除</text>
+</svg>
+</div>
+<p class="cap">图 2　条目的生命周期：只有"有效"的条目会被列出和加载；删除的条目保留在修订历史里，可以撤销；彻底删除只在用户要求时由客户端调用</p>
+
+<h3>3.5 写入：事务、锁与时间</h3>
+<p><b>一次写入对应一条记忆</b>，可以同时包含"删除若干旧条目"和"新增一条"，两部分在一个事务里完成：要么都生效，要么都不生效。例如把"测试命令是 pytest"（#96）改成"测试命令是 make test"，就是一次写入：删除 #96，再新增一条。</p>
+<ul>
+  <li><b>串行</b>：服务端按作用域实例加分布式锁，同一个实例的写入（包括拆分主题的提交）一次只执行一个。服务端多副本部署时同样有效。</li>
+  <li><b>先后</b>：每次写入都带时间，由客户端给出，服务端落库时一并保存。以时间晚的为准：已经写入了 11 点的数据，10 点的同一件事再到达时就丢弃。</li>
+</ul>
+<div class="fig">
+<svg viewBox="0 0 1080 310" width="100%" role="img" aria-label="写入流程">
+  <rect x="10" y="85" width="180" height="110" rx="6" class="c1"/>
+  <text x="100" y="110" text-anchor="middle" class="b">一次写入</text>
+  <text x="100" y="134" text-anchor="middle" class="s">作用域实例 · 主题</text>
+  <text x="100" y="154" text-anchor="middle" class="s">时间 T</text>
+  <text x="100" y="174" text-anchor="middle" class="s">要删除的编号 + 新增一条</text>
+  <path d="M190,140 H 220" class="ln" marker-end="url(#ar)"/>
+
+  <rect x="220" y="110" width="150" height="60" rx="6" class="c2"/>
+  <text x="295" y="136" text-anchor="middle" class="b">加实例锁</text>
+  <text x="295" y="156" text-anchor="middle" class="s">同一实例串行</text>
+  <path d="M370,140 H 380" class="ln" marker-end="url(#ar)"/>
+
+  <polygon points="480,95 580,140 480,185 380,140" class="c4"/>
+  <text x="480" y="136" text-anchor="middle" class="b">要删除的</text>
+  <text x="480" y="154" text-anchor="middle" class="b">都还有效？</text>
+
+  <path d="M580,140 H 615 V 48 H 660" class="ln" marker-end="url(#ar)"/>
+  <text x="590" y="132" class="s">是</text>
+  <rect x="660" y="20" width="400" height="56" rx="6" class="c3"/>
+  <text x="860" y="44" text-anchor="middle" class="b">执行：删除 + 新增，一个事务提交</text>
+  <text x="860" y="64" text-anchor="middle" class="s">没有要删除的条目时，直接新增</text>
+
+  <path d="M480,185 V 215" class="ln" marker-end="url(#ar)"/>
+  <text x="488" y="205" class="s">否，已被别的写入删除</text>
+  <rect x="380" y="215" width="200" height="50" rx="6" class="c2"/>
+  <text x="480" y="236" text-anchor="middle" class="b">顺着取代关系</text>
+  <text x="480" y="254" text-anchor="middle" class="s">找到它现在对应的那一条</text>
+  <path d="M580,240 H 620" class="ln" marker-end="url(#ar)"/>
+
+  <polygon points="700,200 780,240 700,280 620,240" class="c4"/>
+  <text x="700" y="236" text-anchor="middle" class="b">那一条的时间</text>
+  <text x="700" y="254" text-anchor="middle" class="b">晚于 T？</text>
+
+  <path d="M780,240 H 810 V 178 H 840" class="ln" marker-end="url(#ar)"/>
+  <text x="788" y="232" class="s">是</text>
+  <rect x="840" y="150" width="220" height="56" rx="6" class="c5"/>
+  <text x="950" y="174" text-anchor="middle" class="b">丢弃本次写入</text>
+  <text x="950" y="194" text-anchor="middle" class="s">已经有更新的信息</text>
+  <path d="M810,240 V 268 H 840" class="ln" marker-end="url(#ar)"/>
+  <text x="816" y="262" class="s">否</text>
+  <rect x="840" y="240" width="220" height="56" rx="6" class="c4"/>
+  <text x="950" y="264" text-anchor="middle" class="b">改为取代那一条</text>
+  <text x="950" y="284" text-anchor="middle" class="s">删除它 + 新增，一个事务</text>
+</svg>
+</div>
+<p class="cap">图 3　写入：同一作用域实例的写入串行执行；要删除的条目已被别的写入处理过时，按时间决定本次写入是作废还是继续</p>
+<ul>
+  <li><b>取代关系</b>：一次写入删除了 #96、新增了 #131，就记下"#96 被 #131 取代"。要删除的条目已经被取代过，就沿着这条关系找到它现在对应的有效条目再比较时间。如果它是被遗忘的（只删除、没有新增），就和那次遗忘的时间比较：遗忘更晚就丢弃本次写入，否则只做新增。</li>
+  <li><b>只管"针对同一批旧条目"的先后</b>：两次写入如果互相没看到对方，又都只做新增，两条会同时存在。读取时按时间以新的为准，下一次写入这个主题时由写入方清理（6.2）。</li>
+  <li><b>时间由客户端给出</b>，依赖各客户端的时钟基本一致。Atlas 各场景下时间取什么，见 6.4。</li>
+</ul>
+
+<h3>3.6 拆分主题</h3>
+<p>服务端不管大小上限（3.3），也就判断不了哪个主题该拆。什么时候拆由客户端按自己的上限决定；怎么拆（分几组、每组叫什么、条目归哪组）属于语义判断，也由客户端决定。Atlas 在会话后补记里做（4.5）。服务端只提供拆分操作，保证它和其他写入不冲突：</p>
+<ul>
+  <li><b>一个事务提交</b>：客户端给出分组（每组的编码、描述、扩展属性和条目编号），服务端加实例锁，新建子主题、移动条目、删除原主题，要么都生效，要么都不生效。</li>
+  <li><b>提交时确认主题没变</b>：客户端分组时看到的是主题在某一时刻的内容。提交时主题的版本号和客户端分组时看到的不一致（分组期间有新的写入），或者分组没有正好覆盖原主题的全部有效条目，服务端就拒绝这次拆分。</li>
+  <li><b>只移动，不改写</b>：条目的内容、编号、时间、来源都不变，只是换了所属主题。</li>
+  <li><b>写入的目标主题已被拆掉</b>：服务端拒绝这次写入，并返回当前的主题目录，由客户端重新选择主题。要删除的条目按编号定位，拆分后仍然有效。</li>
+</ul>
+
+<h3>3.7 数据权限</h3>
+<p>服务端默认不校验关联主键属于谁（3.2）。需要服务端把关的作用域，可以在管理平台打开<b>数据权限开关</b>：打开后，记忆服务按用户中心的数据权限，校验调用用户能不能访问这个实例；关闭时行为和现在一样。</p>
+<div class="fig">
+<svg viewBox="0 0 1080 330" width="100%" role="img" aria-label="数据权限的登记与校验">
+  <rect x="60" y="15" width="180" height="36" rx="6" class="c1"/>
+  <text x="150" y="38" text-anchor="middle" class="b">客户端（Atlas）</text>
+  <rect x="450" y="15" width="180" height="36" rx="6" class="c4"/>
+  <text x="540" y="38" text-anchor="middle" class="b">记忆服务</text>
+  <rect x="840" y="15" width="180" height="36" rx="6" class="c3"/>
+  <text x="930" y="38" text-anchor="middle" class="b">用户中心</text>
+  <path d="M150,51 V 320" class="ln dash"/>
+  <path d="M540,51 V 280" class="ln dash"/>
+  <path d="M930,51 V 320" class="ln dash"/>
+
+  <text x="14" y="82" class="b">① 创建会话</text>
+  <path d="M150,100 H 540" class="ln" marker-end="url(#ar)"/>
+  <text x="345" y="92" text-anchor="middle" class="s">登记实例归属：实例 + Owner（会话所属用户）</text>
+  <path d="M540,130 H 930" class="ln" marker-end="url(#ar)"/>
+  <text x="735" y="122" text-anchor="middle" class="s">开关打开：写入第一个 Owner；已登记的跳过</text>
+  <rect x="10" y="110" width="128" height="44" rx="6" class="c5"/>
+  <text x="74" y="128" text-anchor="middle" class="s">失败不阻塞会话</text>
+  <text x="74" y="145" text-anchor="middle" class="s">下个 Run 再登记</text>
+
+  <text x="14" y="194" class="b">② 读写记忆</text>
+  <path d="M150,210 H 540" class="ln" marker-end="url(#ar)"/>
+  <text x="345" y="202" text-anchor="middle" class="s">读写请求：实例（接口参数）+ 调用用户</text>
+  <path d="M540,236 H 930" class="ln" marker-end="url(#ar)"/>
+  <text x="735" y="228" text-anchor="middle" class="s">查调用用户对这个实例的级别</text>
+  <path d="M930,262 H 540" class="ln dash" marker-end="url(#ar)"/>
+  <text x="735" y="256" text-anchor="middle" class="s">只读 / 读写 / Owner / 无</text>
+  <rect x="400" y="280" width="280" height="40" rx="6" class="c2"/>
+  <text x="540" y="305" text-anchor="middle">级别够 → 执行；不够或查不到 → 拒绝</text>
+</svg>
+</div>
+<p class="cap">图 4　数据权限：客户端建会话时请记忆服务登记实例归属，记忆服务在用户中心写入 Owner；之后每次读写，记忆服务按调用用户在用户中心的级别放行或拒绝</p>
+<ul>
+  <li><b>实例就是用户中心里的一条数据</b>：打开开关的作用域，对应用户中心里的一个数据编码，挂在记忆服务名下；作用域下的每个实例，是这个编码下的一条数据。级别沿用用户中心的只读 / 读写 / Owner。</li>
+  <li><b>由记忆服务代为登记</b>：用户中心只允许数据编码的所属应用登记和查询授权，所以客户端不直接调用用户中心，而是调用记忆服务的"登记实例归属"，显式给出实例（作用域编码 + 关联主键）和 Owner 用户；记忆服务去用户中心写入第一个 Owner。已登记的实例不再改动（用户中心规定已有授权的数据只能由 Owner 修改），直接返回成功。开关关闭的作用域，登记什么也不做。</li>
+  <li><b>"谁在访问"和"访问哪个实例"分开</b>：实例仍由接口参数给出（3.2）；调用用户按内网身份传递的约定从请求里取。</li>
+  <li><b>没登记的实例一律拒绝</b>：用户中心里没有这条数据，普通用户对它没有任何权限。所以客户端要先登记，再读写。</li>
+  <li><b>彻底删除实例时一并清理</b>：用户删除某个项目或全部记忆、整个实例被删除时，记忆服务同时清理用户中心里这条数据的授权。</li>
+  <li><b>用户中心不可用时拒绝</b>：打开开关的作用域在无法校验时一律拒绝，不放行。</li>
+</ul>
+<table>
+  <tr><th>操作</th><th>调用用户需要的级别</th></tr>
+  <tr><td>列出主题目录、加载主题</td><td>只读</td></tr>
+  <tr><td>写入、新建主题、拆分、移动条目、撤销、恢复</td><td>读写</td></tr>
+  <tr><td>彻底删除（单条，或整个实例）</td><td>Owner</td></tr>
+  <tr><td>登记实例归属</td><td>不校验：第一次登记的 Owner 生效，之后的登记不改动</td></tr>
+</table>
+
+<!-- ====================================================================== -->
+<h2 id="s4">4. 客户端：Atlas 怎么存</h2>
+
+<h3>4.1 Atlas 使用的作用域</h3>
+<table>
+  <tr><th>作用域</th><th>关联主键</th><th>放什么</th><th>判定口径</th></tr>
+  <tr><td>用户</td><td>用户 uid</td><td>身份、沟通偏好、工作习惯、个人在各技术栈上的偏好</td><td>换一个项目仍然成立</td></tr>
+  <tr><td>用户项目</td><td>uid + 项目编码</td><td>这个人在本项目的命令、目录、规范、技术选型、决策</td><td>只在这个项目里成立；拿不准时也放这里（选最窄的范围）</td></tr>
+</table>
+<ul>
+  <li><b>关联主键由 Atlas 按当前会话确定</b>：uid 取会话所属的用户（以数字员工身份运行的 Agent 也取使用者本人，否则同一个数字员工的所有使用者会共用一份用户记忆）；项目编码取会话关联的项目。Agent 和抽取模型都不能指定关联主键，工具参数里也没有这一项。</li>
+  <li>没有关联项目的会话，只用用户作用域。</li>
+  <li><b>两个作用域都打开数据权限开关</b>（3.7）：用户的记忆只有本人能读写，服务端也会把关，不只靠 Atlas 传对关联主键。</li>
+  <li><b>建会话时登记实例归属</b>：创建会话时，Atlas 请记忆服务登记本会话用到的实例：用户实例，有关联项目时再加用户项目实例；Owner 是会话所属用户。会话中途换了项目，就登记新的用户项目实例。登记是幂等的，已登记的直接返回。</li>
+  <li><b>调用用户取会话所属用户</b>：Atlas 访问记忆服务时，调用用户一律取会话所属用户，和关联主键保持一致。权限类型是"以 Agent 为权限"的数字员工 Agent 也一样，否则数字员工对使用者的记忆没有权限。会话后补记在后台运行，也以会话所属用户的身份调用。</li>
+  <li><b>登记失败不阻塞会话</b>：用户中心或记忆服务不可用时，会话照常创建，本会话暂时不用记忆（不加载、不写入）；下一个 Run 开始时再登记。</li>
+  <li>按项目编码、由项目成员共用的项目作用域，Atlas 本期不用（Q2）。</li>
+  <li><b>项目要有稳定的编码</b>：现在的"项目"是会话的工作区，每个新会话都不一样。Atlas 需要新增项目实体（带编码），建会话时关联项目；业务应用也可以在建会话时直接传入项目（Q1）。</li>
+</ul>
+
+<h3>4.2 主题怎么管</h3>
+<ul>
+  <li><b>先复用，再新建</b>：主题目录本来就常驻在系统提示词里。写入前先从目录里选，都不合适才通过接口新建。</li>
+  <li><b>命名和描述</b>：编码写成"大类-细分"的形式，例如 <code>编码-java</code>、<code>编码-js</code>；描述写清楚收什么、不收什么。描述是 Agent 选主题、决定是否加载的唯一依据。</li>
+  <li><b>建议的初始主题</b>写在给 Agent 的写入指引里，不写死在代码里：
+    <ul>
+      <li>用户作用域：身份与背景、沟通偏好、工作方式、编码。</li>
+      <li>用户项目作用域：项目约定、项目决策、工作方式。</li>
+    </ul></li>
+  <li><b>常驻标记</b>：建主题时决定，记在主题的扩展属性里。每次对话都用得上的（身份、沟通偏好、工作方式、项目约定）标为常驻，其余不标。</li>
+  <li><b>大小上限</b>：Atlas 自己定一个上限，写在给 Agent 的写入指引里。它是给 LLM 的软上限，超了也能写入，由会话后补记拆小。</li>
+  <li><b>主题快满时</b>：主题目录里能看到每个主题的当前大小（服务端给出），和 Atlas 的上限比较。写入方可以自己把它拆成两个更细的主题（例如"编码"拆成"编码-java"和"编码-js"），没来得及拆的，由会话后补记拆分（4.5）。</li>
+</ul>
+
+<h3>4.3 两条写入路径</h3>
+<div class="fig">
+<svg viewBox="0 0 1080 245" width="100%" role="img" aria-label="两条写入路径">
+  <text x="14" y="22" class="b">过程中存（主路径）</text>
+  <rect x="20" y="35" width="170" height="60" rx="6" class="c1"/>
+  <text x="105" y="60" text-anchor="middle" class="b">用户在对话中</text>
+  <text x="105" y="80" text-anchor="middle" class="s">说了值得记的话</text>
+  <rect x="230" y="35" width="230" height="60" rx="6" class="c2"/>
+  <text x="345" y="60" text-anchor="middle" class="b">Agent 判断并调用"保存记忆"</text>
+  <text x="345" y="80" text-anchor="middle" class="s">当轮生效 · 当场提示</text>
+
+  <text x="14" y="152" class="b">会话后补记（补漏）</text>
+  <rect x="20" y="165" width="170" height="60" rx="6" class="c1"/>
+  <text x="105" y="190" text-anchor="middle" class="b">会话空闲 / 归档</text>
+  <text x="105" y="210" text-anchor="middle" class="s">例如 30 分钟没有新消息</text>
+  <rect x="230" y="165" width="230" height="60" rx="6" class="c2"/>
+  <text x="345" y="190" text-anchor="middle" class="b">抽取模型找出漏记的</text>
+  <text x="345" y="210" text-anchor="middle" class="s">延后生效 · 下次会话提示</text>
+
+  <path d="M345,95 V 165" class="ln dash" marker-end="url(#ar)"/>
+  <text x="353" y="135" class="s">本会话已写入的（避免重复）</text>
+
+  <rect x="530" y="90" width="280" height="80" rx="6" class="c4"/>
+  <text x="670" y="114" text-anchor="middle" class="b">同一套写入规则</text>
+  <text x="670" y="136" text-anchor="middle" class="s">先看完目标主题 · 删除旧的 + 新增</text>
+  <text x="670" y="156" text-anchor="middle" class="s">标记来源和时间 · 通知 · 可撤销</text>
+  <rect x="870" y="100" width="190" height="60" rx="6" class="c4"/>
+  <text x="965" y="135" text-anchor="middle" class="b">记忆服务</text>
+
+  <path d="M190,65 H 230" class="ln" marker-end="url(#ar)"/>
+  <path d="M190,195 H 230" class="ln" marker-end="url(#ar)"/>
+  <path d="M460,65 H 495 V 115 H 530" class="ln" marker-end="url(#ar)"/>
+  <path d="M460,195 H 495 V 145 H 530" class="ln" marker-end="url(#ar)"/>
+  <path d="M810,130 H 870" class="ln" marker-end="url(#ar)"/>
+</svg>
+</div>
+<p class="cap">图 5　两条写入路径：触发方式不同，写入规则相同</p>
+<table>
+  <tr><th></th><th>过程中存（主路径）</th><th>会话后补记（补漏）</th></tr>
+  <tr><td>负责什么</td><td>用户明确要求记住的；用户对 Agent 的纠正；当场确定下来的项目约定和决策</td><td>Agent 漏记的：隐含的偏好、Agent 没顾上记的事实；以及不会主动调用工具的 Agent（如 ACP 里的 CLI）所在的会话。另外负责把超限的主题拆小</td></tr>
+  <tr><td>什么时候</td><td>对话进行中，当轮生效</td><td>会话空闲后（例如 30 分钟没有新消息）或会话归档时，每次只处理上次补记之后新增的内容</td></tr>
+  <tr><td>由谁判断</td><td>主模型。它掌握完整上下文，知道用户哪句是认真说的</td><td>专门的抽取模型，可以单独选型、单独调优提示词</td></tr>
+  <tr><td>判断依据</td><td>当前对话 + 常驻主题 + 写入前加载的目标主题</td><td>整段会话的正文（不含工具输出）+ 本会话 Agent 已经写入的记忆 + 要写入的主题的全部条目</td></tr>
+  <tr><td>用户如何感知</td><td>当场提示"已记住 #131 ［撤销］"</td><td>下次会话开始时提示"上次会话补记了 2 条 ［查看］"，可以逐条撤销</td></tr>
+  <tr><td>来源标记</td><td>Agent 写入</td><td>会话后补记</td></tr>
+  <tr><td>覆盖哪些会话</td><td>挂载了写入工具的 Agent（主会话）</td><td>所有开启记忆的用户会话，包括 ACP 会话；不包括 SubAgent 会话</td></tr>
+  <tr><td>成本</td><td>只在真正写入时多一到两次工具调用（可能要先加载目标主题）</td><td>每个有新内容的会话调用一次 LLM；太短、或没有新内容的会话直接跳过。有超限主题时，每个主题再调用一次</td></tr>
+</table>
+<p><b>为什么两种都要</b>：两者正好互补。</p>
+<ul>
+  <li><b>过程中存</b>：准确、即时、用户可控；短板是容易漏记，且依赖主模型是否主动去记。</li>
+  <li><b>会话后补记</b>：不容易漏记，不干扰主任务，能覆盖所有类型的 Agent，提示词改进后还能拿历史对话重跑；短板是有延迟，并且写入时用户不在场。</li>
+</ul>
+<p>以过程中存为主、补记为辅：既保证明确的要求能当场生效，也能兜住漏记的部分。补记按<b>会话</b>执行，不按 Run 执行：能看到会话的完整过程，用户中途改口时只记最终说法；不会和对话中正在进行的写入冲突；调用 LLM 的次数也比现在"每个 Run 一次"少得多。</p>
+
+<h3>4.4 过程中存的流程</h3>
+<div class="fig">
+<svg viewBox="0 0 1080 690" width="100%" role="img" aria-label="过程中存的流程">
+  <rect x="300" y="15" width="260" height="46" rx="6" class="c1"/>
+  <text x="430" y="43" text-anchor="middle" class="b">用户在对话中说了一句话</text>
+  <path d="M430,61 V 85" class="ln" marker-end="url(#ar)"/>
+
+  <polygon points="430,85 560,125 430,165 300,125" class="c4"/>
+  <text x="430" y="129" text-anchor="middle" class="b">值得长期记住吗？</text>
+  <path d="M300,125 H 220" class="ln" marker-end="url(#ar)"/>
+  <text x="252" y="118" class="s">否</text>
+  <rect x="60" y="103" width="160" height="44" rx="6" class="c1"/>
+  <text x="140" y="121" text-anchor="middle" class="b">不写入</text>
+  <text x="140" y="139" text-anchor="middle" class="s">寒暄 / 临时说法 / 推测</text>
+
+  <path d="M430,165 V 190" class="ln" marker-end="url(#ar)"/>
+  <text x="438" y="182" class="s">是</text>
+  <rect x="280" y="190" width="300" height="50" rx="6" class="c2"/>
+  <text x="430" y="211" text-anchor="middle" class="b">选作用域和主题</text>
+  <text x="430" y="229" text-anchor="middle" class="s">从主题目录里选；都不合适就新建</text>
+  <path d="M430,240 V 262" class="ln" marker-end="url(#ar)"/>
+
+  <rect x="260" y="262" width="340" height="56" rx="6" class="c2"/>
+  <text x="430" y="285" text-anchor="middle" class="b">看完这个主题的全部条目</text>
+  <text x="430" y="304" text-anchor="middle" class="s">已在上下文里、且版本号没变的直接用，否则先加载</text>
+  <path d="M430,318 V 345" class="ln" marker-end="url(#ar)"/>
+
+  <polygon points="430,345 580,390 430,435 280,390" class="c4"/>
+  <text x="430" y="386" text-anchor="middle" class="b">与已有条目比较</text>
+  <text x="430" y="404" text-anchor="middle" class="s">（同一作用域实例内）</text>
+  <path d="M580,390 H 680" class="ln" marker-end="url(#ar)"/>
+  <text x="596" y="382" class="s">完全相同</text>
+  <rect x="680" y="368" width="280" height="44" rx="6" class="c1"/>
+  <text x="820" y="395" text-anchor="middle" class="b">不写入，告知"已有 #96"</text>
+
+  <path d="M430,435 V 465" class="ln" marker-end="url(#ar)"/>
+  <text x="438" y="454" class="s">其他情况（按图 12 判断）</text>
+  <rect x="260" y="465" width="340" height="64" rx="6" class="c2"/>
+  <text x="430" y="488" text-anchor="middle" class="b">调用"保存记忆"</text>
+  <text x="430" y="507" text-anchor="middle" class="s">内容 · 作用域 · 主题 · 要删除的编号（可为空）</text>
+  <text x="430" y="523" text-anchor="middle" class="s">时间由 Atlas 自动填写</text>
+  <path d="M430,529 V 555" class="ln" marker-end="url(#ar)"/>
+
+  <rect x="260" y="555" width="340" height="56" rx="6" class="c4"/>
+  <text x="430" y="578" text-anchor="middle" class="b">记忆服务执行（3.5）</text>
+  <text x="430" y="597" text-anchor="middle" class="s">加锁 · 按时间判断先后 · 一个事务</text>
+  <path d="M600,583 H 680" class="ln" marker-end="url(#ar)"/>
+  <text x="608" y="575" class="s">被丢弃</text>
+  <rect x="680" y="558" width="280" height="50" rx="6" class="c5"/>
+  <text x="820" y="579" text-anchor="middle" class="b">告知 Agent：已有更新的记忆</text>
+  <text x="820" y="597" text-anchor="middle" class="s">重新加载该主题后再判断</text>
+  <path d="M960,583 H 1000 V 290 H 600" class="ln dash" marker-end="url(#ar)"/>
+
+  <path d="M430,611 V 635" class="ln" marker-end="url(#ar)"/>
+  <rect x="280" y="635" width="300" height="40" rx="6" class="c1"/>
+  <text x="430" y="660" text-anchor="middle" class="b">当场提示：已记住 #131 ［撤销］</text>
+
+  <rect x="680" y="100" width="380" height="160" rx="8" class="inner"/>
+  <text x="695" y="125" class="b">Atlas 的写入规则（两条路径共用）</text>
+  <text x="695" y="150" class="s">· 关联主键由系统确定：只能写当前用户、当前项目</text>
+  <text x="695" y="172" class="s">· 写之前必须看过目标主题的全部条目</text>
+  <text x="695" y="194" class="s">· 每轮写入次数有上限</text>
+  <text x="695" y="216" class="s">· 只能删除（可撤销），不能彻底删除</text>
+  <text x="695" y="238" class="s">· 删除旧条目受来源限制（6.3）</text>
+</svg>
+</div>
+<p class="cap">图 6　过程中存：Agent 先看完目标主题再判断，记忆服务把守并发与先后，用户能看到每一次写入</p>
+<ul>
+  <li><b>写之前必须看过目标主题</b>：本会话还没看过目标主题，或者看过之后主题的版本号变了（其他会话写入、会话后补记写入或拆分，见 5.5），"保存记忆"会先把该主题的最新条目返回给 Agent，Agent 判断后再保存。这样冲突判断总是基于最新、完整的内容。</li>
+  <li><b>顺手清理</b>：Agent 看完整个主题时，如果发现已有重复或过时的条目，可以在这次写入里一并删除。</li>
+</ul>
+
+<h3>4.5 会话后补记的流程</h3>
+<div class="fig">
+<svg viewBox="0 0 1080 385" width="100%" role="img" aria-label="会话后补记的流程">
+  <rect x="10" y="55" width="170" height="70" rx="6" class="c1"/>
+  <text x="95" y="83" text-anchor="middle" class="b">会话空闲 / 归档</text>
+  <text x="95" y="103" text-anchor="middle" class="s">例如 30 分钟没有新消息</text>
+  <path d="M180,90 H 210" class="ln" marker-end="url(#ar)"/>
+
+  <polygon points="295,45 380,90 295,135 210,90" class="c4"/>
+  <text x="295" y="87" text-anchor="middle" class="b">有新内容吗？</text>
+  <text x="295" y="104" text-anchor="middle" class="s">上次补记之后</text>
+  <path d="M295,135 V 210" class="ln" marker-end="url(#ar)"/>
+  <text x="303" y="175" class="s">没有 / 太短</text>
+  <rect x="215" y="210" width="160" height="50" rx="6" class="c1"/>
+  <text x="295" y="240" text-anchor="middle" class="b">跳过抽取</text>
+  <path d="M375,235 H 420" class="ln" marker-end="url(#ar)"/>
+  <path d="M380,90 H 420" class="ln" marker-end="url(#ar)"/>
+  <text x="390" y="82" class="s">有</text>
+
+  <rect x="420" y="20" width="300" height="140" rx="6" class="c2"/>
+  <text x="570" y="44" text-anchor="middle" class="b">准备输入</text>
+  <text x="435" y="68" class="s">· 上次补记之后的用户与助手正文</text>
+  <text x="435" y="86" class="s">　（不含工具输出，不含 SubAgent 会话）</text>
+  <text x="435" y="106" class="s">· 本会话中 Agent 已经写入的记忆</text>
+  <text x="435" y="126" class="s">· 相关作用域实例的主题目录</text>
+  <path d="M720,90 H 760" class="ln" marker-end="url(#ar)"/>
+
+  <rect x="760" y="45" width="300" height="90" rx="6" class="c2"/>
+  <text x="910" y="70" text-anchor="middle" class="b">LLM 判断</text>
+  <text x="910" y="92" text-anchor="middle" class="s">先找出漏记的、定好主题</text>
+  <text x="910" y="112" text-anchor="middle" class="s">再看完这些主题的全部条目后决定</text>
+  <path d="M910,135 V 200" class="ln" marker-end="url(#ar)"/>
+
+  <rect x="760" y="200" width="300" height="70" rx="6" class="c4"/>
+  <text x="910" y="226" text-anchor="middle" class="b">按同一套写入规则写入</text>
+  <text x="910" y="248" text-anchor="middle" class="s">来源：会话后补记 · 时间取原消息的时间</text>
+  <path d="M760,235 H 720" class="ln" marker-end="url(#ar)"/>
+
+  <rect x="420" y="200" width="300" height="70" rx="6" class="c2"/>
+  <text x="570" y="226" text-anchor="middle" class="b">拆分超限的主题（图 8）</text>
+  <text x="570" y="248" text-anchor="middle" class="s">本会话相关实例里超过上限的主题</text>
+  <path d="M570,270 V 300" class="ln" marker-end="url(#ar)"/>
+
+  <rect x="420" y="300" width="300" height="70" rx="6" class="c3"/>
+  <text x="570" y="326" text-anchor="middle" class="b">记录进度；下次会话开始时提示用户</text>
+  <text x="570" y="348" text-anchor="middle" class="s">"上次会话补记了 2 条 ［查看］"</text>
+</svg>
+</div>
+<p class="cap">图 7　会话后补记：只处理新增内容，只补漏记的部分，结果用户可见、可撤销；最后把超限的主题拆小</p>
+<ul>
+  <li><b>宁缺毋滥</b>：补记时用户不在场，判断标准要比过程中存更严。只记有明确依据的内容，拿不准的就不记。</li>
+  <li><b>时间取原消息的时间</b>：补记写入的时间是它所依据的那条用户消息的时间，而不是补记执行的时间。这样补记即使晚到，也不会盖掉用户之后在别的会话里说的新情况（6.4）。</li>
+  <li><b>不补 SubAgent 会话</b>：那是 Agent 之间的对话，里面没有用户本人说的话。</li>
+  <li><b>按进度处理</b>：每次只处理上次补记之后新增的内容，同一段对话不会被重复处理。</li>
+</ul>
+<p><b>拆分超限的主题</b>是补记的最后一步：检查本会话相关的作用域实例（用户、用户项目）里超过 Atlas 上限（4.2）的主题，逐个拆小。抽取被跳过时也照常检查；主题不管是被 Agent、补记还是用户在管理界面写满的，都在这一步处理。</p>
+<div class="fig">
+<svg viewBox="0 0 1080 255" width="100%" role="img" aria-label="拆分超限的主题">
+  <rect x="10" y="10" width="445" height="235" rx="8" class="inner"/>
+  <text x="26" y="34" class="b">Atlas：会话后补记</text>
+  <rect x="470" y="10" width="600" height="235" rx="8" class="inner"/>
+  <text x="486" y="34" class="b">记忆服务（3.6）</text>
+
+  <rect x="25" y="60" width="170" height="110" rx="6" class="c1"/>
+  <text x="110" y="92" text-anchor="middle" class="b">找出超限的主题</text>
+  <text x="110" y="116" text-anchor="middle" class="s">用户、用户项目实例里</text>
+  <text x="110" y="136" text-anchor="middle" class="s">当前大小超过 Atlas 上限的</text>
+
+  <rect x="230" y="60" width="210" height="110" rx="6" class="c2"/>
+  <text x="335" y="84" text-anchor="middle" class="b">LLM 分组（不加锁）</text>
+  <text x="335" y="108" text-anchor="middle" class="s">按内容把条目分成几组</text>
+  <text x="335" y="128" text-anchor="middle" class="s">每组起编码、写描述</text>
+  <text x="335" y="148" text-anchor="middle" class="s">沿用原主题的常驻标记</text>
+
+  <rect x="485" y="60" width="270" height="110" rx="6" class="c4"/>
+  <text x="620" y="84" text-anchor="middle" class="b">加实例锁，一个事务提交</text>
+  <text x="620" y="108" text-anchor="middle" class="s">确认版本号没变、条目全覆盖</text>
+  <text x="620" y="128" text-anchor="middle" class="s">新建子主题，移动条目</text>
+  <text x="620" y="148" text-anchor="middle" class="s">删除原主题</text>
+
+  <rect x="790" y="60" width="265" height="110" rx="6" class="c3"/>
+  <text x="922" y="92" text-anchor="middle" class="b">相关主题的版本号变化</text>
+  <text x="922" y="116" text-anchor="middle" class="s">其他会话按版本号发现更新（5.5）</text>
+  <text x="922" y="136" text-anchor="middle" class="s">常驻块下次刷新时更新（5.3）</text>
+
+  <path d="M195,115 H 230" class="ln" marker-end="url(#ar)"/>
+  <path d="M440,115 H 485" class="ln" marker-end="url(#ar)"/>
+  <path d="M755,115 H 790" class="ln" marker-end="url(#ar)"/>
+
+  <path d="M335,170 V 195" class="ln dash" marker-end="url(#ar)"/>
+  <rect x="25" y="195" width="415" height="36" rx="6" class="c5"/>
+  <text x="232" y="218" text-anchor="middle">条目都是同一件事、分不出组 → 不拆，记录下来</text>
+  <path d="M620,170 V 195" class="ln dash" marker-end="url(#ar)"/>
+  <rect x="485" y="195" width="270" height="36" rx="6" class="c5"/>
+  <text x="620" y="218" text-anchor="middle">分组期间有变化 → 拒绝，下次补记再拆</text>
+</svg>
+</div>
+<p class="cap">图 8　拆分超限的主题：怎么拆由 Atlas 决定，分组在锁外进行，不阻塞对话中的写入；记忆服务加锁提交，并确认主题在分组期间没有变化</p>
+<ul>
+  <li><b>只移动，不合并、不删除</b>：拆分只是重新归类。如果拆分时顺带合并或删除条目，就绕开了 6.3 的取代限制（补记不能推翻用户亲自写的）。重复和过时的条目，由写入方下次写入这个主题时清理（6.2）。</li>
+  <li><b>子主题沿用常驻标记</b>：原主题标为常驻，拆出来的子主题也标为常驻。</li>
+  <li><b>拆不开的不拆</b>：条目都是同一件事、分不出组时，保持原样并记录下来，供观察。</li>
+  <li><b>提交被拒绝就放弃</b>：分组期间主题有新的写入，或者另一个会话的补记已经把它拆了，记忆服务会拒绝这次拆分，本次不重试，下次补记再拆。</li>
+</ul>
+<p><b>为什么放在补记里，而不是服务端后台</b>：上限只有客户端知道，不同客户端、不同场景的上限可能不一样，服务端判断不了哪个主题超限；补记本来就在会话空闲后运行、本来就要调用 LLM；记忆服务不用为了拆分去理解条目内容、调用 LLM，保持"不关心存的是什么"；也不再需要后台定期扫描。代价是超限的主题要等到下一次补记才拆小，见 8.1。</p>
+
+<h3>4.6 写什么、不写什么（两条路径共用）</h3>
+<table>
+  <tr><th>写</th><th>不写</th></tr>
+  <tr><td>
+    <ul>
+      <li>用户明确说"记住……"</li>
+      <li>长期有效的偏好、习惯、身份信息（包括用户没有明说、但反复体现出来的偏好，这是补记的重点）</li>
+      <li>用户对 Agent 做法的纠正</li>
+      <li>和用户确定下来的项目约定、决策（命令、目录、规范、选型）</li>
+    </ul></td><td>
+    <ul>
+      <li>一次性的任务细节、寒暄</li>
+      <li>临时性的说法，例如"这次先用 npm"</li>
+      <li>Agent 自己的推测、只是助手提出但用户没有采纳的建议</li>
+      <li>文件、网页、工具输出里的内容</li>
+      <li>敏感信息（健康、政治倾向等），除非用户主动要求</li>
+    </ul></td></tr>
+</table>
+<ul>
+  <li><b>作用域</b>：换了项目仍然成立的写进用户作用域；只在本项目成立的写进用户项目作用域；拿不准就写用户项目（范围最窄）。会话没有关联项目时，只能写用户作用域。</li>
+  <li><b>写法</b>：一条只写一个事实，用陈述句，单独拿出来也能看懂，日期写成绝对日期。例如"2026-10 起 JS/TS 项目改用 bun"。</li>
+  <li><b>控制主题大小</b>：写入指引里告诉 Agent 主题的上限；接近上限时优先合并重复和过时的条目，其次再拆主题。</li>
+</ul>
+
+<h3>4.7 用户可见、可撤销</h3>
+<table>
+  <tr><th>路径</th><th>用户在哪里看到</th><th>撤销</th></tr>
+  <tr><td>过程中存</td><td>对话里当场提示"已记住 #131 ［撤销］"或"已遗忘 #96 ［撤销］"</td><td rowspan="2">按修订历史把这次写入反向执行：<br>
+    <ul>
+      <li>撤销新增：删除新条目。</li>
+      <li>撤销取代：恢复旧条目，删除新条目。</li>
+    </ul></td></tr>
+  <tr><td>会话后补记</td><td>下次会话开始时提示"上次会话补记了 2 条 ［查看］"；管理界面里也能按"会话后补记"这个来源筛选</td></tr>
+</table>
+
+<h3>4.8 安全边界</h3>
+<ul>
+  <li><b>只认用户本人的话</b>：两条路径都只根据用户本人在对话里说的话来写入。文件、网页、工具输出中要求修改记忆的内容，一律忽略。补记的输入里本来就不包含工具输出。</li>
+  <li><b>关联主键由系统确定</b>：写入哪个用户、哪个项目由 Atlas 按会话决定，Agent 和抽取模型都没法指定。记忆服务还会按数据权限再校验一次（3.7），但那是第二道防线，Atlas 这一侧仍然要守住。</li>
+  <li><b>限制写入方和次数</b>：SubAgent 不能写，它的会话也不会被补记；每轮、每次补记的写入次数都有上限。</li>
+  <li><b>只做可恢复的操作</b>：Agent 和抽取模型都没有彻底删除的能力，只能取代或遗忘，这些操作都可以恢复。</li>
+  <li><b>可见可撤销</b>：每次写入用户都能看到，并且可以撤销。</li>
+</ul>
+
+<!-- ====================================================================== -->
+<h2 id="s5">5. 客户端：Atlas 怎么取</h2>
+
+<h3>5.1 两条读取路径</h3>
+<table>
+  <tr><th>路径</th><th>读什么</th><th>什么时候读</th><th>为什么这样设计</th></tr>
+  <tr><td><b>常驻</b></td><td>主题目录（每个主题的编码、描述、大小），加上标为常驻的主题的全部条目</td><td>会话开始时；以及需要刷新时（5.3）</td><td>偏好类记忆和用户的提问在语义上并不接近，靠检索召回不到，但每次对话都要用到。主题有大小上限，可以整块放进上下文</td></tr>
+  <tr><td><b>按需</b></td><td>某个主题的全部条目</td><td>Agent 认为需要时主动加载，例如开始写 Java 代码前加载"编码-java"</td><td>只在用得上时才占用上下文；主题有上限，一次就能取完，不需要检索</td></tr>
+</table>
+<div class="callout">是否加载、加载哪个主题，由 Agent 根据主题目录里的描述自己判断，不按工作区里的文件写死规则。代价是 Agent 可能漏加载，见 8.1。</div>
+
+<h3>5.2 常驻：组装流程</h3>
+<div class="fig">
+<svg viewBox="0 0 1080 270" width="100%" role="img" aria-label="常驻组装流程">
+  <rect x="10" y="30" width="220" height="110" rx="6" class="c1"/>
+  <text x="120" y="58" text-anchor="middle" class="b">会话上下文</text>
+  <text x="120" y="84" text-anchor="middle" class="s">所属用户</text>
+  <text x="120" y="106" text-anchor="middle" class="s">关联的项目（可以没有）</text>
+
+  <rect x="270" y="45" width="230" height="80" rx="6" class="c2"/>
+  <text x="385" y="70" text-anchor="middle" class="b">列出主题</text>
+  <text x="385" y="92" text-anchor="middle" class="s">用户、用户项目两个实例</text>
+  <text x="385" y="112" text-anchor="middle" class="s">得到主题目录</text>
+
+  <rect x="540" y="45" width="230" height="80" rx="6" class="c2"/>
+  <text x="655" y="70" text-anchor="middle" class="b">取出常驻主题</text>
+  <text x="655" y="92" text-anchor="middle" class="s">扩展属性标了常驻的</text>
+  <text x="655" y="112" text-anchor="middle" class="s">整块取出全部条目</text>
+
+  <rect x="810" y="45" width="250" height="80" rx="6" class="c4"/>
+  <text x="935" y="70" text-anchor="middle" class="b">按总预算检查</text>
+  <text x="935" y="92" text-anchor="middle" class="s">超出预算的主题改为按需</text>
+  <text x="935" y="112" text-anchor="middle" class="s">并在目录里注明</text>
+
+  <path d="M230,85 H 270" class="ln" marker-end="url(#ar)"/>
+  <path d="M500,85 H 540" class="ln" marker-end="url(#ar)"/>
+  <path d="M770,85 H 810" class="ln" marker-end="url(#ar)"/>
+  <path d="M935,125 V 175" class="ln" marker-end="url(#ar)"/>
+
+  <rect x="810" y="175" width="250" height="70" rx="6" class="c3"/>
+  <text x="935" y="202" text-anchor="middle" class="b">常驻块</text>
+  <text x="935" y="224" text-anchor="middle" class="s">主题目录 + 常驻主题，放进系统提示词</text>
+  <path d="M810,210 H 770" class="ln dash" marker-end="url(#ar)"/>
+  <rect x="500" y="185" width="270" height="50" rx="6" class="c1"/>
+  <text x="635" y="206" text-anchor="middle" class="b">存为会话快照</text>
+  <text x="635" y="224" text-anchor="middle" class="s">记下各主题的版本号，见 5.5</text>
+</svg>
+</div>
+<p class="cap">图 9　常驻组装：会话上下文 → 主题目录 → 常驻主题 → 预算检查 → 常驻块</p>
+<p>单个主题有上限，不代表常驻的总量有上限，所以 Atlas 还要控制常驻总预算。常驻块排在持久指令之后，样子如下，每条记忆都带编号，方便 Agent 引用：</p>
+<pre><code>&lt;memory&gt;
+以下是你和这位用户在过往会话中积累的记忆，不是用户这一轮说的话。
+记忆可能已经过时：与用户当前的说法、持久指令或工作区实际情况冲突时，以后者为准；项目记忆优先于用户记忆。
+当前项目：atlas
+
+## 主题目录（需要时用"加载主题"取出全部条目）
+用户：身份与背景（常驻）· 沟通偏好（常驻）· 编码-java：Java 相关的编码偏好 · 编码-js：JS/TS 相关的编码偏好
+用户项目（atlas）：项目约定（常驻）· 项目决策：表设计、技术选型等已定的决定
+
+## 用户记忆
+### 沟通偏好
+- 回复使用中文，技术术语保留英文（2026-10-02）#12
+
+## 项目记忆：atlas
+### 项目约定
+- 测试命令是 make test（2026-10-20）#131
+&lt;/memory&gt;</code></pre>
+
+<h3>5.3 常驻：会话快照与刷新</h3>
+<p>常驻块放在系统提示词里，内容一变，后面整段对话历史的前缀缓存就全部失效。所以常驻块<b>按会话存成快照</b>，只在缓存本来就会失效、或者用户明确做了操作时才刷新。</p>
+<div class="fig">
+<svg viewBox="0 55 1080 205" width="100%" role="img" aria-label="常驻快照与刷新">
+  <rect x="10" y="95" width="120" height="50" rx="6" class="c1"/>
+  <text x="70" y="124" text-anchor="middle" class="b">Run 开始</text>
+  <path d="M130,120 H 170" class="ln" marker-end="url(#ar)"/>
+
+  <polygon points="250,82 330,120 250,158 170,120" class="c4"/>
+  <text x="250" y="124" text-anchor="middle" class="b">有快照吗？</text>
+  <path d="M330,120 H 380" class="ln" marker-end="url(#ar)"/>
+  <text x="345" y="112" class="s">有</text>
+
+  <polygon points="490,76 600,120 490,164 380,120" class="c4"/>
+  <text x="490" y="117" text-anchor="middle" class="b">需要刷新吗？</text>
+  <text x="490" y="135" text-anchor="middle" class="s">见下表</text>
+  <path d="M600,120 H 650" class="ln" marker-end="url(#ar)"/>
+  <text x="606" y="112" class="s">不需要</text>
+
+  <rect x="650" y="92" width="220" height="56" rx="6" class="c3"/>
+  <text x="760" y="114" text-anchor="middle" class="b">复用快照</text>
+  <text x="760" y="134" text-anchor="middle" class="s">文本逐字不变，缓存可以命中</text>
+  <path d="M870,120 H 900" class="ln" marker-end="url(#ar)"/>
+
+  <rect x="900" y="92" width="170" height="56" rx="6" class="c2"/>
+  <text x="985" y="124" text-anchor="middle" class="b">放进系统提示词</text>
+
+  <path d="M250,158 V 215 H 330" class="ln" marker-end="url(#ar)"/>
+  <text x="258" y="190" class="s">没有</text>
+  <path d="M490,164 V 190" class="ln" marker-end="url(#ar)"/>
+  <text x="498" y="182" class="s">需要</text>
+  <rect x="330" y="190" width="320" height="50" rx="6" class="c2"/>
+  <text x="490" y="212" text-anchor="middle" class="b">重新组装常驻块，存为新快照</text>
+  <text x="490" y="230" text-anchor="middle" class="s">按 5.2；版本号没变的主题沿用快照内容</text>
+  <path d="M650,215 H 985 V 148" class="ln" marker-end="url(#ar)"/>
+</svg>
+</div>
+<p class="cap">图 10　常驻快照：能复用就复用，只在缓存本来就会失效、或用户明确操作时才刷新</p>
+<table>
+  <tr><th>需要刷新的情况</th><th>理由</th></tr>
+  <tr><td>会话发生过压缩</td><td>历史已经被改写，缓存本来就失效了，顺带刷新</td></tr>
+  <tr><td>距离上次使用已经超过缓存有效期</td><td>缓存已经过期，刷新没有额外代价。会话后补记写入和拆分的结果，通常就是在这个时候带进来的</td></tr>
+  <tr><td>用户在管理界面撤销、更正、删除、恢复或暂停过记忆，或者改过主题</td><td>这是用户明确的意图，必须在下一轮生效</td></tr>
+  <tr><td>会话关联的项目变了</td><td>用户项目作用域换了一个实例</td></tr>
+</table>
+<p>刷新时先比对各主题的版本号（5.5）：没变的主题直接沿用快照里的内容，变了的才重新拉取。</p>
+<div class="callout"><b>Agent 在本会话里写入记忆，不会触发刷新。</b>写入时的工具结果已经留在对话历史里，Agent 已经知道这条记忆。其他会话的写入、会话后补记的写入和拆分，要等下一次刷新才会出现在常驻块里；在那之前，Run 开始时的版本检查会提示 Agent 哪些主题有更新（5.5），Agent 往某个主题写入前也会检查版本号（4.4），不会基于过时的内容写入。</div>
+
+<h3>5.4 按需加载</h3>
+<ul>
+  <li>Agent 看主题目录，调用"加载主题"，取出该主题的全部有效条目。</li>
+  <li>本会话已经看过、之后版本号没有变的主题，不再重复返回内容（5.5）；会话压缩后需要重新加载。</li>
+  <li><b>不做语义检索</b>：主题有上限、目录常驻，Agent 按描述就能找到主题。不知道一件事在哪个主题时会吃亏，见 8.1。</li>
+</ul>
+<pre><code>主题 [用户 · 编码-java] 共 3 条（历史信息，可能已过时）：
+- 偏好构造器注入，不用字段注入（2026-09-18）#40
+- 单元测试用 JUnit 5 + AssertJ（2026-10-02）#57
+- 不使用 Lombok（2026-10-15）#88</code></pre>
+
+<h3>5.5 本地内容是否最新：版本检查</h3>
+<p>Atlas 的上下文里有两种主题内容的拷贝：常驻快照里的，和 Agent 按需加载后留在对话历史里的。服务端的主题随时可能被改动：其他会话写入、会话后补记写入或拆分、用户在管理界面操作。Atlas 不比对内容，只比对服务端给的版本号（3.3）。</p>
+<p><b>会话的主题版本表</b>：每个会话记一张表，列出上下文里有哪些主题，每个主题记两个版本号：</p>
+<table>
+  <tr><th>版本号</th><th>含义</th><th>用途</th></tr>
+  <tr><td>快照版本</td><td>常驻快照里这个主题的内容是哪个版本；只有常驻主题有</td><td>刷新常驻块时，决定沿用快照还是重新拉取（5.3）</td></tr>
+  <tr><td>已知版本</td><td>Agent 在上下文里看到的内容（常驻块，加上对话历史里的加载结果和写入结果）合起来是哪个版本</td><td>判断要不要提示 Agent、加载时要不要重新返回条目、能不能直接写入</td></tr>
+</table>
+<div class="fig">
+<svg viewBox="0 0 1080 310" width="100%" role="img" aria-label="版本比对">
+  <rect x="10" y="10" width="395" height="290" rx="8" class="inner"/>
+  <text x="26" y="34" class="b">Atlas：会话的主题版本表</text>
+  <text x="32" y="58" class="s">主题</text>
+  <text x="250" y="58" text-anchor="middle" class="s">快照版本</text>
+  <text x="305" y="58" text-anchor="middle" class="s">已知版本</text>
+  <text x="360" y="58" text-anchor="middle" class="s">在哪</text>
+  <rect x="20" y="70" width="380" height="46" rx="6" class="c1"/>
+  <text x="32" y="98">用户 · 沟通偏好</text><text x="250" y="98" text-anchor="middle">12</text><text x="305" y="98" text-anchor="middle">12</text><text x="360" y="98" text-anchor="middle" class="s">常驻块</text>
+  <rect x="20" y="126" width="380" height="46" rx="6" class="c1"/>
+  <text x="32" y="154">用户项目 · 项目约定</text><text x="250" y="154" text-anchor="middle">30</text><text x="305" y="154" text-anchor="middle" class="b">31</text><text x="360" y="154" text-anchor="middle" class="s">常驻块</text>
+  <rect x="20" y="182" width="380" height="46" rx="6" class="c1"/>
+  <text x="32" y="210">用户 · 编码-java</text><text x="250" y="210" text-anchor="middle">—</text><text x="305" y="210" text-anchor="middle">17</text><text x="360" y="210" text-anchor="middle" class="s">对话历史</text>
+  <rect x="20" y="238" width="380" height="46" rx="6" class="ln dash"/>
+  <text x="210" y="266" text-anchor="middle" class="s">（表里没有）</text>
+
+  <rect x="425" y="10" width="265" height="290" rx="8" class="inner"/>
+  <text x="441" y="34" class="b">记忆服务：当前版本号</text>
+  <text x="441" y="58" class="s">Run 开始时列出主题目录得到</text>
+  <rect x="435" y="70" width="245" height="46" rx="6" class="c4"/>
+  <text x="451" y="98">用户 · 沟通偏好</text><text x="664" y="98" text-anchor="end">12</text>
+  <rect x="435" y="126" width="245" height="46" rx="6" class="c4"/>
+  <text x="451" y="154">用户项目 · 项目约定</text><text x="664" y="154" text-anchor="end">31</text>
+  <rect x="435" y="182" width="245" height="46" rx="6" class="c4"/>
+  <text x="451" y="210">用户 · 编码-java</text><text x="664" y="210" text-anchor="end">23</text>
+  <rect x="435" y="238" width="245" height="46" rx="6" class="c4"/>
+  <text x="451" y="266">用户 · 工具偏好</text><text x="664" y="266" text-anchor="end">40</text>
+
+  <rect x="710" y="10" width="360" height="290" rx="8" class="inner"/>
+  <text x="726" y="34" class="b">和已知版本比对</text>
+  <rect x="720" y="70" width="340" height="46" rx="6" class="c3"/>
+  <text x="736" y="89" class="b">一致：本地最新</text>
+  <text x="736" y="106" class="s">常驻块里的内容就是最新的</text>
+  <rect x="720" y="126" width="340" height="46" rx="6" class="c3"/>
+  <text x="736" y="145" class="b">一致：本地最新</text>
+  <text x="736" y="162" class="s">Agent 刚写过；快照版本落后，下次刷新时重新拉取</text>
+  <rect x="720" y="182" width="340" height="46" rx="6" class="c5"/>
+  <text x="736" y="201" class="b">不一致：本地过时</text>
+  <text x="736" y="218" class="s">别处写过；提示 Agent 用到时重新加载</text>
+  <rect x="720" y="238" width="340" height="46" rx="6" class="c2"/>
+  <text x="736" y="257" class="b">新主题：本地目录过时</text>
+  <text x="736" y="274" class="s">刷新时进入目录；不是刷新时机就先提示</text>
+</svg>
+</div>
+<p class="cap">图 11　版本比对：Atlas 为每个会话记下上下文里各主题的版本号，和服务端的当前版本号比对；Agent 自己写入会推进已知版本，不会被当成别处的更新</p>
+<ul>
+  <li><b>Agent 自己写入后</b>：写入返回目标主题写入前、写入后的版本号。写入前的版本号等于已知版本，说明中间没有别人写过，上下文里的内容加上这次写入就是最新的，已知版本更新为写入后的版本号；不相等，说明中间有别人写过，已知版本保持原值，下次检查时会被当作过时。快照版本不动，所以下次刷新时会重新拉取这个主题，不会丢掉 Agent 刚写的内容。</li>
+  <li><b>会话压缩后</b>：对话历史里的加载结果和写入结果没有了。常驻块在压缩时刷新，已知版本重置为新的快照版本；按需加载过的主题从表里去掉，用到时重新加载（5.4）。</li>
+  <li><b>随会话保存</b>：版本表和常驻快照存在一起，不放在进程内存里，换副本接管会话后仍然有效。</li>
+</ul>
+<p><b>什么时候检查</b>（版本表里没有的主题，一律按"不一致"处理）：</p>
+<table>
+  <tr><th>时机</th><th>怎么拿到服务端的版本号</th><th>一致</th><th>不一致</th></tr>
+  <tr><td>Run 开始</td><td>列出本会话两个作用域实例（用户、用户项目）的主题目录，和已知版本逐个比对；顺带发现新增和消失（例如被拆分）的主题</td><td>什么也不做</td><td>本轮是刷新时机（5.3）：重新组装常驻块，只重新拉取快照版本落后的主题。<br>不是刷新时机：常驻块不动，保住缓存；在请求末尾附一条更新提示（见下），由 Agent 决定是否重新加载</td></tr>
+  <tr><td>Agent 加载主题</td><td>加载结果里带版本号</td><td>只告诉 Agent"已在上下文中，没有变化"，不重复返回条目</td><td>返回全部条目，已知版本更新为当前版本号</td></tr>
+  <tr><td>Agent 保存记忆</td><td>写入前取目标主题的当前版本号</td><td>写入</td><td>不写入，先把最新条目返回给 Agent，由它重新判断（4.4）</td></tr>
+</table>
+<pre><code>&lt;system-reminder name="memory_updates"&gt;
+以下记忆主题在本会话之外有变化，上下文里的内容可能已过时，用到时请先"加载主题"：
+- 用户 · 编码-java：有更新
+- 用户 · 工具偏好：新主题
+&lt;/system-reminder&gt;</code></pre>
+<ul>
+  <li><b>提示只列主题，不带内容</b>：只有几十个 token，附在请求末尾，不影响前面的缓存。Agent 重新加载了该主题，或者常驻块刷新之后，提示里就不再列出它。</li>
+  <li><b>开销</b>：每个 Run 开始时多两次列目录的调用，不调用 LLM。Run 进行中不再检查，期间别处的更新要到下一个 Run 才会提示；写入前的检查（4.4）不受影响。</li>
+</ul>
+
+<h3>5.6 读取时的优先级</h3>
+<table>
+  <tr><th>规则</th><th>例子</th></tr>
+  <tr><td>当前情况优先于记忆</td><td>记忆里写着"用 pnpm"，但用户这一轮说用 npm，或者仓库里只有 <code>yarn.lock</code>，那就以当前情况为准</td></tr>
+  <tr><td>项目记忆优先于用户记忆</td><td>用户记忆是"用 pnpm"，用户项目记忆是"这个仓库用 yarn"：在这个项目里用 yarn</td></tr>
+  <tr><td>持久指令优先于记忆</td><td>指令是人明确写下的，记忆是系统积累的</td></tr>
+  <tr><td>新的优先于旧的</td><td>每条记忆都带时间。并发写入偶尔留下的新旧两条，也按这条规则处理</td></tr>
+</table>
+
+<!-- ====================================================================== -->
+<h2 id="s6">6. 客户端：冲突解决</h2>
+
+<h3>6.1 先分类：看起来矛盾，不一定是冲突</h3>
+<table>
+  <tr><th>类型</th><th>例子</th><th>处理方式</th></tr>
+  <tr><td>事实更新</td><td>用 pnpm → 改用 bun</td><td>删除旧条目，新增新条目（取代）</td></tr>
+  <tr><td>用户纠正</td><td>"我从来没说过我用 Java"</td><td>遗忘这条记忆，或用正确的内容取代它</td></tr>
+  <tr><td>作用域不同</td><td>用户记忆"用 pnpm"，用户项目 A 的记忆"这个仓库用 yarn"</td><td><b>不算冲突</b>，两条都保留，读取时项目优先</td></tr>
+  <tr><td>前提条件不同</td><td>工作项目用 TS，个人项目用 Python</td><td><b>不算冲突</b>，都保留，或者合并成一条带条件的记忆</td></tr>
+  <tr><td>临时说法</td><td>"这次先用 npm"</td><td>不写入</td></tr>
+  <tr><td>重复</td><td>同一件事换了个说法；或者过程中已经存过，补记又找到了同一件事</td><td>写入方看完整个主题后就能发现；仍然留下的，下次写入这个主题时顺手清理</td></tr>
+  <tr><td>记忆和当前情况不符</td><td>记忆说用 pnpm，仓库里只有 <code>yarn.lock</code></td><td>以当前情况为准（5.6），记忆本身不改；用户确认后再更新</td></tr>
+</table>
+
+<h3>6.2 写入时的判定</h3>
+<div class="fig">
+<svg viewBox="0 0 1080 350" width="100%" role="img" aria-label="冲突判定">
+  <rect x="10" y="150" width="150" height="60" rx="6" class="c1"/>
+  <text x="85" y="175" text-anchor="middle" class="b">新事实</text>
+  <text x="85" y="195" text-anchor="middle" class="s">和一条已有条目对比</text>
+  <path d="M160,180 H 195" class="ln" marker-end="url(#ar)"/>
+
+  <polygon points="275,140 355,180 275,220 195,180" class="c4"/>
+  <text x="275" y="176" text-anchor="middle" class="b">同一作用域</text>
+  <text x="275" y="194" text-anchor="middle" class="b">实例？</text>
+  <path d="M275,220 V 270" class="ln" marker-end="url(#ar)"/>
+  <text x="283" y="250" class="s">否</text>
+  <rect x="185" y="270" width="180" height="60" rx="6" class="c1"/>
+  <text x="275" y="295" text-anchor="middle" class="b">不冲突，两条并存</text>
+  <text x="275" y="315" text-anchor="middle" class="s">读取时项目优先于用户</text>
+
+  <path d="M355,180 H 390" class="ln" marker-end="url(#ar)"/>
+  <text x="362" y="172" class="s">是</text>
+  <polygon points="495,134 600,180 495,226 390,180" class="c4"/>
+  <text x="495" y="176" text-anchor="middle" class="b">同一主体</text>
+  <text x="495" y="194" text-anchor="middle" class="b">同一属性？</text>
+  <path d="M495,226 V 270" class="ln" marker-end="url(#ar)"/>
+  <text x="503" y="250" class="s">否</text>
+  <rect x="405" y="270" width="180" height="60" rx="6" class="c1"/>
+  <text x="495" y="295" text-anchor="middle" class="b">不冲突，正常新增</text>
+  <text x="495" y="315" text-anchor="middle" class="s">说的不是同一件事</text>
+
+  <path d="M600,180 H 640" class="ln" marker-end="url(#ar)"/>
+  <text x="608" y="172" class="s">是</text>
+  <rect x="640" y="150" width="130" height="60" rx="6" class="c2"/>
+  <text x="705" y="185" text-anchor="middle" class="b">看新旧关系</text>
+
+  <rect x="830" y="15" width="240" height="50" rx="6" class="c1"/>
+  <text x="950" y="45" text-anchor="middle" class="b">完全相同 → 不写入</text>
+  <rect x="830" y="80" width="240" height="50" rx="6" class="c3"/>
+  <text x="950" y="101" text-anchor="middle" class="b">新的推翻了旧的 → 取代</text>
+  <text x="950" y="119" text-anchor="middle" class="s">前提：允许取代该条（6.3）</text>
+  <rect x="830" y="145" width="240" height="50" rx="6" class="c3"/>
+  <text x="950" y="166" text-anchor="middle" class="b">补充、细化 → 合并后取代</text>
+  <text x="950" y="184" text-anchor="middle" class="s">例：pnpm → pnpm 9 + workspace</text>
+  <rect x="830" y="210" width="240" height="50" rx="6" class="c1"/>
+  <text x="950" y="231" text-anchor="middle" class="b">前提条件不同 → 并存</text>
+  <text x="950" y="249" text-anchor="middle" class="s">或合并成一条带条件的</text>
+  <rect x="830" y="275" width="240" height="50" rx="6" class="c5"/>
+  <text x="950" y="296" text-anchor="middle" class="b">拿不准 → 新增，不取代</text>
+  <text x="950" y="314" text-anchor="middle" class="s">宁可多一条，也不误伤</text>
+
+  <path d="M770,180 H 800 V 40 H 830" class="ln" marker-end="url(#ar)"/>
+  <path d="M800,105 H 830" class="ln" marker-end="url(#ar)"/>
+  <path d="M800,170 H 830" class="ln" marker-end="url(#ar)"/>
+  <path d="M800,180 V 235 H 830" class="ln" marker-end="url(#ar)"/>
+  <path d="M800,235 V 300 H 830" class="ln" marker-end="url(#ar)"/>
+</svg>
+</div>
+<p class="cap">图 12　冲突判定：只有同一作用域实例、同一主体、同一属性的记忆才可能互相取代；两条写入路径都用这一套规则</p>
+<table>
+  <tr><th>谁来判定</th><th>做什么</th></tr>
+  <tr><td>Agent（过程中存）</td><td>看完目标主题的全部条目后，按图 12 判断；需要取代时，明确给出要删除的编号；顺手删除发现的重复和过时条目</td></tr>
+  <tr><td>抽取模型（会话后补记）</td><td>同样按图 12 判断。由于用户不在场，要比 Agent 更保守：拿不准就不写</td></tr>
+  <tr><td>记忆服务</td><td>不判断语义，只保证：取代只在同一作用域实例内进行；一次写入在一个事务里完成；并发写入按时间先后处理（3.5）</td></tr>
+</table>
+<p><b>为什么冲突不再"看不见"</b>：旧方案里写入方只能看到检索出来的几条，相关的旧记忆没检索到，就发现不了冲突，只能靠后台整理事后补救。现在主题有大小上限，写入方能看到目标主题的全部条目，同一主题内的冲突在写入时就能发现。跨主题的冲突仍然可能漏掉，见 8.1。</p>
+
+<h3>6.3 谁可以取代谁</h3>
+<p>Atlas 用条目的来源标签区分三种写入方。下面的规则保证：<b>可信度低的写入方，不能推翻可信度高的</b>。这是 Atlas 的规则，记忆服务只保存来源标签，不执行这条规则。</p>
+<table>
+  <tr><th>写入方 ＼ 被取代的条目来源</th><th>用户亲自</th><th>Agent 写入</th><th>会话后补记</th></tr>
+  <tr><td><b>Agent（过程中存）</b></td><td class="c">✓<br><span class="src">用户在对话中当场说的；对用户可见，可以撤销</span></td><td class="c">✓</td><td class="c">✓</td></tr>
+  <tr><td><b>会话后补记</b></td><td class="c">✗</td><td class="c">只能取代<b>更早会话</b>中写入的<br><span class="src">本会话中 Agent 刚写的不能动：当时 Agent 的上下文更完整</span></td><td class="c">✓</td></tr>
+</table>
+<p>来源可信度从高到低依次为：用户亲自 → Agent 写入 → 会话后补记。</p>
+
+<h3>6.4 并发与先后</h3>
+<p>Atlas 写入时给出的时间，表示"这条信息成立的时间"：</p>
+<table>
+  <tr><th>写入方</th><th>时间取什么</th></tr>
+  <tr><td>Agent（过程中存）</td><td>用户说这句话的那一轮的时间</td></tr>
+  <tr><td>会话后补记</td><td>所依据的那条用户消息的时间，而不是补记执行的时间</td></tr>
+  <tr><td>用户在管理界面添加、更正</td><td>操作时间</td></tr>
+</table>
+<p><b>例子</b>：</p>
+<ul>
+  <li>10:00，用户在会话 A 里说"测试命令改用 tox"，Agent 没有记。</li>
+  <li>11:00，用户在会话 B 里说"测试命令是 make test"，Agent 写入：删除 #96（pytest），新增 #131，时间 11:00。</li>
+  <li>11:30，会话 A 的补记想删除 #96、新增"tox"，时间是 10:00。#96 已经被 11:00 的写入取代，本次补记被丢弃，结果仍然是 make test。</li>
+</ul>
+<table>
+  <tr><th>记忆服务返回</th><th>Atlas 怎么处理</th></tr>
+  <tr><td>已有更新的信息，本次写入被丢弃</td><td>过程中存：告诉 Agent，Agent 重新加载该主题后再判断。补记：直接放弃这一条</td></tr>
+  <tr><td>目标主题已被拆分</td><td>按返回的主题目录重新选择主题后再写</td></tr>
+</table>
+
+<h3>6.5 只取代，不彻底删除</h3>
+<div class="fig">
+<svg viewBox="0 0 1080 120" width="100%" role="img" aria-label="取代链示例">
+  <rect x="20" y="30" width="300" height="60" rx="6" class="c4"/>
+  <text x="170" y="55" text-anchor="middle" class="b">#96　本仓库的测试命令是 pytest</text>
+  <text x="170" y="75" text-anchor="middle" class="s">已删除 · 2026-09-30 写入</text>
+  <path d="M320,60 H 500" class="ln" marker-end="url(#ar)"/>
+  <text x="410" y="50" text-anchor="middle" class="s">被 #131 取代（2026-10-20）</text>
+  <rect x="500" y="30" width="320" height="60" rx="6" class="c3"/>
+  <text x="660" y="55" text-anchor="middle" class="b">#131　本仓库的测试命令是 make test</text>
+  <text x="660" y="75" text-anchor="middle" class="s">有效 · 出处：某会话的第 N 轮</text>
+  <text x="860" y="48" class="s">旧条目不彻底删除：</text>
+  <text x="860" y="68" class="s">· 能看到演变过程</text>
+  <text x="860" y="88" class="s">· 判错可以恢复</text>
+</svg>
+</div>
+<p class="cap">图 13　取代链：旧条目不再被列出和加载，但保留在修订历史里，可以追溯、可以恢复</p>
+<p>Agent 和抽取模型的"删除"只把条目从有效状态移到历史里，用户可以在管理界面查看它的演变过程，也可以恢复。用户彻底删除某条记忆时，它所在的整条取代链会一起删除。否则用户删掉"改用 bun"之后，旧的"用 pnpm"还会留在库里。</p>
+
+<!-- ====================================================================== -->
+<h2 id="s7">7. 用户控制</h2>
+<table>
+  <tr><th>用户的操作</th><th>效果</th></tr>
+  <tr><td>查看</td><td>按作用域、项目、主题、来源、状态浏览；每条记忆都能看到出处和演变过程；可以预览在某个项目里会常驻哪些记忆</td></tr>
+  <tr><td>撤销</td><td>对一次写入、补记、取代或遗忘做反向操作（4.7）</td></tr>
+  <tr><td>添加 / 更正</td><td>来源记为"用户亲自"，补记不会改动这类记忆</td></tr>
+  <tr><td>恢复</td><td>把已删除的条目恢复为有效</td></tr>
+  <tr><td>调整主题</td><td>修改主题的描述和常驻标记；把条目移到别的主题</td></tr>
+  <tr><td>删除</td><td>彻底删除，连同取代链和修订历史，不可恢复。可以按单条、按项目（删除对应的用户项目实例）或全部（删除该用户的用户实例和所有用户项目实例）删除</td></tr>
+  <tr><td>暂停</td><td>暂停期间，两条写入路径都停止写入；已有的记忆照常常驻、照常可以加载（"暂停优于删除"）</td></tr>
+</table>
+<p>这些操作只能由用户在 Atlas 的管理界面完成，Atlas 调用记忆服务提供的能力实现，<b>不会作为工具开放给 Agent</b>。影响常驻内容的操作，会在下一轮生效（5.3）。</p>
+
+<!-- ====================================================================== -->
+<h2 id="s8">8. 风险与待决问题</h2>
+<h3>8.1 风险</h3>
+<table>
+  <tr><th>风险</th><th>应对</th></tr>
+  <tr><td>过程中存漏记</td><td>由会话后补记兜底；同时在评测里统计"过程中存的漏记率"，用来改进对 Agent 的写入指引</td></tr>
+  <tr><td>补记记多了或记错了（写入时用户不在场）</td><td>补记的标准比过程中存更严，拿不准就不写；补记写入的记忆可信度最低，不能推翻用户亲自写的，也不能推翻本会话刚写的（6.3）；下次会话开始时提示用户，可以撤销；把用户对补记结果的撤销率作为质量信号</td></tr>
+  <tr><td>Agent 没有加载该加载的主题</td><td>主题目录常驻，描述写清楚用途；写入指引里提示"开始写代码前先加载相关的编码主题"；评测里统计漏加载率；必要时把主题标为常驻</td></tr>
+  <tr><td>不知道一件事在哪个主题</td><td>没有语义检索，只能按描述去猜，或者逐个加载。数据量小时问题不大；如果评测显示问题明显，再考虑给记忆服务加关键词检索</td></tr>
+  <tr><td>跨主题的重复和冲突看不见</td><td>一件事可能同时适合两个主题，例如"JS 项目用 bun"放在"编码-js"还是"工具偏好"。主题描述写清收什么、不收什么；写入时顺带看一眼描述相近的主题；剩下的靠用户更正</td></tr>
+  <tr><td>两次写入互相没看到对方，留下重复</td><td>写入前按版本号检查并重新加载（4.4）；记忆服务按时间丢弃过时的写入（3.5）；仍然留下的，读取时新的优先，下次写入时清理</td></tr>
+  <tr><td>主题越来越多、越拆越细</td><td>主题目录常驻，占用随主题数增长。建主题前先复用；接近上限时先合并、再拆分；用户可以在管理界面调整</td></tr>
+  <tr><td>主题拆不开</td><td>同一件事的条目太多时，拆分无效。补记拆分时保持原样并记录下来；由写入方在写入时合并压缩</td></tr>
+  <tr><td>超限的主题要等到补记才拆</td><td>主题在对话中超限后，要等会话空闲、补记执行时才拆小，期间主题偏大，加载时多占上下文；上限本来就是软上限，允许短时超出。用户在管理界面添加导致超限的，要等该用户（或该项目）下一个会话的补记</td></tr>
+  <tr><td>关联主键由调用方传入</td><td>作用域没打开数据权限开关时，客户端传错了就会读写别人的数据。Atlas 按会话确定关联主键，Agent 不能指定（4.8），并且 Atlas 的作用域都打开了开关（3.7）。打开后仍然依赖内网身份传递：请求里的调用用户可以被伪造，在内网信任模型下接受这一点</td></tr>
+  <tr><td>用户中心不可用</td><td>打开开关的作用域无法校验，一律拒绝。Atlas 把它当作记忆暂时不可用：会话照常进行，不加载、不写入记忆</td></tr>
+  <tr><td>每次读写多一次权限查询</td><td>记忆服务可以短时缓存校验结果；代价是授权变更要过一会儿才生效</td></tr>
+  <tr><td>编码级授权能看到所有人的记忆</td><td>用户中心里"全部 xx"这种编码级授权，会让被授权的人读写所有用户的记忆。只用于审计等特殊场景，默认不授</td></tr>
+  <tr><td>客户端时钟不一致</td><td>时间先后依赖各客户端的时钟；部署环境统一做时间同步。只有"同一件事几乎同时写入"时才可能判错</td></tr>
+  <tr><td>过程中存写得太多</td><td>每轮写入次数设上限；明确告诉 Agent 哪些不要写；把撤销率作为质量信号</td></tr>
+  <tr><td>提示词注入</td><td>见 4.8；最后的兜底是每次写入都可见、可撤销</td></tr>
+  <tr><td>成本</td><td>补记每个会话调用一次 LLM，太短或没有新内容的直接跳过；拆分只在有超限主题时才调用 LLM。总体比现在"每个 Run 抽取一次"更省</td></tr>
+</table>
+<h3>8.2 待决问题</h3>
+<table>
+  <tr><th>#</th><th>问题</th><th>建议</th></tr>
+  <tr><td>Q1</td><td>项目的身份如何确定</td><td>做成项目实体，带稳定的项目编码，建会话时关联项目；用仓库地址识别作为自动建议</td></tr>
+  <tr><td>Q2</td><td>Atlas 是否使用按项目编码共享的项目作用域</td><td>本期不用。团队约定写进 <code>ATLAS.md</code>（经过评审）。共享记忆里一个人写入会影响项目里所有人，注入的内容也会扩散给其他人，打破了 <a href="memory.html#s9">记忆设计 §09</a> 中"一个用户说的话影响不到别人"这条性质</td></tr>
+  <tr><td>Q3</td><td>会话后补记的结果是直接生效，还是先进入"待确认"</td><td>直接生效，同时在下次会话开始时提示，并允许撤销。如果要求用户逐条确认，很多人会不处理，补记的结果就永远用不上</td></tr>
+  <tr><td>Q4</td><td>会话空闲多久后触发补记</td><td>先按 30 分钟左右，会话归档时也触发一次；具体数值在详细设计里确定</td></tr>
+  <tr><td>Q5</td><td>Mem0 里的旧记忆如何处理</td><td>不迁移</td></tr>
+  <tr><td>Q6</td><td>助理类 Agent（ACP）的 CLI 自带记忆功能，是否关闭</td><td>建议关闭。ACP 会话由会话后补记覆盖，统一使用平台记忆</td></tr>
+  <tr><td>Q7</td><td>主题大小上限、常驻总预算各取多少</td><td>先取较小的值试运行，再根据拆分频率和因预算改为按需的主题数调整；具体数值在详细设计里确定</td></tr>
+</table>
+
+<!-- ====================================================================== -->
+<h2 id="s9">9. 留给详细设计的内容</h2>
+<p>方案确定后，在详细设计里展开以下内容：</p>
+<h3>9.1 服务端（记忆服务）</h3>
+<ul>
+  <li>存储选型与数据结构：作用域、主题、条目、修订历史和取代关系。</li>
+  <li>组合关联主键（如 uid + 项目编码）的表示方式，以及按其中一部分列出实例（删除某个用户的全部数据时需要）。</li>
+  <li>接口定义：登记实例归属；主题的创建、列出、读取、移动条目、拆分；写入；撤销、恢复、彻底删除。</li>
+  <li>分布式锁的粒度与超时；时间的精度，以及时间相同时怎么处理。</li>
+  <li>版本号的分配方式：按实例统一递增，还是每个主题各自递增。</li>
+  <li>数据权限：作用域与用户中心数据编码的对应方式；实例在用户中心的数据标识（用户中心限 64 个字符，uid + 项目编码可能超长）；调用用户从哪个请求头取；校验结果的缓存时长。</li>
+  <li>管理平台的作用域配置页面；服务的部署与鉴权接入。</li>
+</ul>
+<h3>9.2 客户端（Atlas）</h3>
+<ul>
+  <li>工具定义：加载主题、保存记忆、遗忘记忆；建主题是否单独做成工具。</li>
+  <li>接入位置：常驻块在 Agent 运行链路的哪一步组装；是否需要中间件（初步结论是不需要，由装配层负责）。</li>
+  <li>会话后补记：触发机制、处理进度的记录方式、抽取模型选型、失败重试；拆分超限主题的提示词，拆不开时怎么记录。</li>
+  <li>助理类 Agent（ACP）的接入：会话开始时如何注入常驻块，记忆工具怎么提供。</li>
+  <li>版本检查：会话版本表和常驻快照的存放位置，更新提示的格式。</li>
+  <li>登记实例归属：失败后的重试；是否在 Atlas 侧记住已登记的实例，避免每次建会话都调用。</li>
+  <li>项目实体与会话关联项目。</li>
+  <li>各类阈值：主题大小上限、常驻总预算、写入次数上限、空闲时长。</li>
+  <li>可观测与评测指标、迁移与分期、旧数据的清理。</li>
+</ul>
+
+<!-- ====================================================================== -->
+<h2 id="s10">10. 业界参照</h2>
+<table>
+  <tr><th>方案要点</th><th>业界做法</th></tr>
+  <tr><td>按主题整块加载，主题有大小上限</td><td>Letta memory block：每个块有标签、描述和字符上限，整块放进上下文，由 Agent 自己编辑</td></tr>
+  <tr><td>目录常驻、正文按需</td><td>Claude Code auto memory：索引文件常驻，主题文件按需读取</td></tr>
+  <tr><td>按"作用域 + 关联主键"定位数据</td><td>AWS AgentCore Memory 的命名空间（按 actor、session 等变量组织）；Vertex AI Memory Bank 的 scope</td></tr>
+  <tr><td>两条写入路径结合</td><td>ChatGPT：对话中保存记忆（bio 工具）+ 后台参考聊天历史；Letta：Agent 编辑记忆块 + sleep-time agent 在后台处理；LangMem：同时提供对话中写入（hot path）和后台抽取（background）两种模式</td></tr>
+  <tr><td>只在同一作用域内处理冲突</td><td>Vertex AI Memory Bank：只和同一 scope 的已有记忆合并</td></tr>
+  <tr><td>标记失效而不删除</td><td>Zep / Graphiti：给旧事实打上失效时间，保留历史</td></tr>
+</table>
+
+</main>
+</body>
+</html>

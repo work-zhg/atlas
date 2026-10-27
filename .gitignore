@@ -30,3 +30,6 @@ atlas-architecture.archify.json
 
 # 运行时的本地缓存（配置服务的技能版本等），可随时删除
 var/
+
+# app 镜像的依赖约束：构建前由 uv.lock 导出（deploy/server/images.sh），不入库以免与锁文件不同步
+docker/app/constraints.txt

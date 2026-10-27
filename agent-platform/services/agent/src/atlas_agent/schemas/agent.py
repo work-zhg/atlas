@@ -11,11 +11,12 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from atlas_engine.contracts import InvalidSpec
-from pydantic import BaseModel, Field, field_validator, model_validator
+from atlas_engine.contracts import APPROVAL_MODES, ApprovalMode, InvalidSpec
+from pydantic import BaseModel, Field, field_validator
 
 from atlas_agent.domain.spec import (
     AgentSpec,
+    ApprovalSpec,
     CliSpec,
     CompactionSpec,
     KnowledgeSpec,
@@ -26,11 +27,12 @@ from atlas_agent.domain.spec import (
     SkillRefSpec,
     SubAgentSpec,
 )
-from atlas_agent.domain.tool_registry import BASH_TOOL
 
 Effort = Literal["low", "medium", "high", "xhigh", "max"]
 Thinking = Literal["auto", "adaptive", "off"]
 AgentStatus = Literal["draft", "enabled", "archived"]
+#: 权限类型（数字员工设计 §7.1）：user = 以人为权限，agent = 以 Agent 为权限
+AuthSubject = Literal["user", "agent"]
 SessionMode = Literal["persistent", "ephemeral"]
 
 SLUG_PATTERN = r"^[a-z][a-z0-9-]{1,62}[a-z0-9]$"
@@ -139,7 +141,8 @@ class LimitSpecIn(BaseModel):
     timeout_s: int = Field(default=300, gt=0)
     max_total_tokens: int = Field(default=500_000, gt=0)
     tool_concurrency: int = Field(default=4, gt=0)
-    require_approval_for: list[str] = Field(default_factory=list)
+    # ★ require_approval_for 已删除（问不问人改由审批模式决定，见 ApprovalSpecIn）。
+    #   历史快照里带着它也能照常读：pydantic 默认忽略多余字段，再保存时自然丢掉
 
     def to_engine(self) -> LimitSpec:
         return LimitSpec(
@@ -147,8 +150,22 @@ class LimitSpecIn(BaseModel):
             timeout_s=self.timeout_s,
             max_total_tokens=self.max_total_tokens,
             tool_concurrency=self.tool_concurrency,
-            require_approval_for=frozenset(self.require_approval_for),
         )
+
+
+class ApprovalSpecIn(BaseModel):
+    """审批模式的默认值与允许范围（doc/native-approval-mode-design.html）。
+
+    快照纪律：字段都有默认值 —— 历史快照没有这一段，按「默认自动、允许全部」处理（D8）。
+    """
+
+    default_mode: ApprovalMode = "auto"
+    allowed_modes: list[ApprovalMode] = Field(default_factory=lambda: list(APPROVAL_MODES))
+
+    def to_engine(self) -> ApprovalSpec:
+        # 按严格程度排好、去重：前端与判定都依赖这个顺序
+        allowed = tuple(m for m in APPROVAL_MODES if m in self.allowed_modes)
+        return ApprovalSpec(default_mode=self.default_mode, allowed_modes=allowed)
 
 
 class CliSpecIn(BaseModel):
@@ -213,18 +230,10 @@ class AgentSpecIn(BaseModel):
     mcp_drift_policy: McpDriftPolicy = "warn"
     #: 绑定的知识库（默认不绑定 —— 历史快照没有这个字段）
     knowledge: KnowledgeSpecIn = Field(default_factory=KnowledgeSpecIn)
-
-    @model_validator(mode="after")
-    def _bash_requires_approval(self) -> AgentSpecIn:
-        """勾了 bash 强制 execute 进审批列表（docs/sandbox.md D2，S1 收紧版）。
-
-        写在 schema 层而不是编辑器默认值：提示词不是访问控制，前端默认值
-        也不是 —— 绕过编辑器直接调 API 的请求同样要被拦住。
-        模型侧的工具名是 execute（D4），审批中间件按它匹配。
-        """
-        if BASH_TOOL in self.tool_names and "execute" not in self.limits.require_approval_for:
-            self.limits.require_approval_for = [*self.limits.require_approval_for, "execute"]
-        return self
+    #: 审批模式（默认自动、允许全部 —— 历史快照没有这个字段）。
+    #: ★ 原先「勾了 bash 强制 execute 进必审列表」的校验已删除：命令执行由审批模式管 ——
+    #:   手动请示、自动交判断器、规划拦下，都在中间件里强制执行，不靠提示词（设计 D7）
+    approval: ApprovalSpecIn = Field(default_factory=ApprovalSpecIn)
 
     def to_engine(self, *, slug: str, name: str) -> AgentSpec:
         return AgentSpec(
@@ -242,6 +251,7 @@ class AgentSpecIn(BaseModel):
             mcp_tool_digests=dict(self.mcp_tool_digests),
             mcp_drift_policy=self.mcp_drift_policy,
             knowledge=self.knowledge.to_engine(),
+            approval=self.approval.to_engine(),
         )
 
 
@@ -251,6 +261,8 @@ class AgentCreate(BaseModel):
     description: str = Field(default="", max_length=2048)
     avatar_key: str = Field(default="general", max_length=32)
     spec: AgentSpecIn
+    #: 创建时选；界面必选（默认选中 user）。接口缺省 user，已有调用方（TeamFlow、评测）不受影响
+    auth_subject: AuthSubject = "user"
 
 
 class AgentUpdate(BaseModel):
@@ -274,6 +286,51 @@ class AgentStatusUpdate(BaseModel):
     status: AgentStatus
 
 
+class AuthSubjectUpdate(BaseModel):
+    auth_subject: AuthSubject
+
+
+class DigitalEmployeeOut(BaseModel):
+    id: UUID
+    account: str | None = None
+    name: str | None = None
+    status: str | None = None
+    owner_id: UUID | None = None
+
+
+class KnowledgeAccessOut(BaseModel):
+    id: str
+    name: str | None = None
+    #: 按这个 Agent 的权限类型判：以 Agent 为权限 = 数字员工能不能读；以人为权限 = 不适用（None）
+    readable: bool | None = None
+
+
+class AgentIdentityOut(BaseModel):
+    """「身份」页签（数字员工设计 §6.1）：数字员工、权限类型、有效权限摘要。"""
+
+    auth_subject: AuthSubject
+    digital_employee: DigitalEmployeeOut | None = None
+    #: Agent 配了哪些知识库、按权限类型能不能读（以人为权限时因人而异，readable 为空）
+    knowledge: list[KnowledgeAccessOut] = []
+    notices: list[str] = []
+
+
+class GrantSubject(BaseModel):
+    type: Literal["user", "dept"]
+    id: str
+
+
+class AgentGrantCreate(BaseModel):
+    level: Literal["READ", "WRITE", "OWNER"]
+    subjects: list[GrantSubject] = Field(min_length=1)
+    include_sub: bool = True
+
+
+class AgentGrantPatch(BaseModel):
+    level: Literal["READ", "WRITE", "OWNER"] | None = None
+    include_sub: bool | None = None
+
+
 class AgentVersionOut(BaseModel):
     id: UUID
     version: int
@@ -288,7 +345,6 @@ class AgentOut(BaseModel):
     description: str
     avatar_key: str
     status: AgentStatus
-    is_builtin: bool
     version: int
     # 列表页要展示的摘要，避免前端为每张卡片再拉一次 spec
     model: str
@@ -303,12 +359,17 @@ class AgentOut(BaseModel):
     mcp_servers: list[str] = []
     #: 委派关系：[{name, kind, permission_mode}] —— 卡片上显示「→ claude-code · Auto」
     subagents: list[dict[str, Any]] = []
+    #: 权限类型（数字员工设计 §7.1）
+    auth_subject: AuthSubject = "user"
+    digital_employee_uid: UUID | None = None
     created_at: datetime
     updated_at: datetime
 
 
 class AgentDetailOut(AgentOut):
     spec: dict[str, Any]
+    #: 当前主体对它的有效级别（READ / WRITE / OWNER）：前端据此决定能不能编辑、共享
+    my_level: str | None = None
 
 
 class AgentListOut(BaseModel):

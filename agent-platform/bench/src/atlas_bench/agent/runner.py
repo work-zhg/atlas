@@ -1,4 +1,4 @@
-"""运行器（doc/agent-eval-design.html §10）：variant × task × trial 矩阵。
+"""运行器（doc/agent-eval-design.html §14、§16）：variant × task × trial 矩阵。
 
     var/bench/runs/<时间>-<实验名>/
       manifest.json                 实验配置、git commit、任务清单、各 variant 的智能体与配置版本
@@ -23,7 +23,7 @@ from typing import Any
 
 from ..runner import _git_commit
 from ..settings import BenchSettings
-from .platforms.atlas import AtlasAgentPlatform, AtlasError, TrialRun
+from .platforms.atlas import Answerer, AtlasAgentPlatform, AtlasError, TrialRun
 from .schema import AgentExperimentConfig, Task, TrialResult, VariantConfig
 from .tasks import select_tasks
 from .trajectory import check_expectations, metrics_from_trace
@@ -120,6 +120,10 @@ def sse_metrics(tr: TrialRun, trace: list[dict[str, Any]]) -> dict[str, int]:
 
 
 def _classify(tr: TrialRun, passed: bool, metrics: dict[str, Any]) -> str:
+    if metrics.get("simulated_user_errors"):
+        # ★ 模拟用户出错时问题按推荐回答了（不让 run 卡住），但这已经不是要测的那次对话 ——
+        #   评测侧的问题：不进分母，续跑时重做（不能悄悄算成 Agent 没问到 / 碰巧做对）
+        return "infra_error"
     if tr.budget_exceeded:
         return "budget_exceeded"
     if passed:
@@ -133,6 +137,13 @@ def _classify(tr: TrialRun, passed: bool, metrics: dict[str, Any]) -> str:
     return "failure"
 
 
+def _user_error(tr: TrialRun) -> str | None:
+    errors = [q["error"] for q in tr.questions if q["error"]]
+    if not errors:
+        return None
+    return f"模拟用户出错（问题已按推荐回答，本次不计入、续跑时重做）：{errors[0]}"
+
+
 async def _trial(
     platform: AtlasAgentPlatform,
     agent: dict[str, Any],
@@ -141,12 +152,13 @@ async def _trial(
     trial: int,
     cfg: AgentExperimentConfig,
     run_dir: Path,
+    answerer: Answerer | None = None,
 ) -> TrialResult:
     """一个 trial；平台错误按协议重跑一次（新会话），重跑仍失败才记 platform_error。"""
-    res = await _attempt(platform, agent, variant, task, trial, cfg, run_dir)
+    res = await _attempt(platform, agent, variant, task, trial, cfg, run_dir, answerer)
     if res.outcome == "platform_error":
         logger.info("%s %s#%d 平台错误，按协议重跑一次：%s", variant, task.id, trial, res.error)
-        res = await _attempt(platform, agent, variant, task, trial, cfg, run_dir)
+        res = await _attempt(platform, agent, variant, task, trial, cfg, run_dir, answerer)
         res.retried = True
     return res
 
@@ -159,12 +171,15 @@ async def _attempt(
     trial: int,
     cfg: AgentExperimentConfig,
     run_dir: Path,
+    answerer: Answerer | None = None,
 ) -> TrialResult:
     t0 = time.monotonic()
     base = {"task_id": task.id, "variant": variant, "trial": trial}
     policy = task.approval_policy or cfg.approval_policy
     try:
-        tr = await platform.run_trial(agent, task, trial=trial, approval_policy=policy)
+        tr = await platform.run_trial(
+            agent, task, trial=trial, approval_policy=policy, answerer=answerer
+        )
     except (AtlasError, OSError) as exc:  # 建会话 / 上传 / 发消息失败：评测侧拿不到现场
         return TrialResult(**base, outcome="infra_error", error=str(exc))
     refs = {"thread_id": tr.thread_id, "run_id": tr.run_id, "agent_slug": agent["slug"]}
@@ -177,12 +192,18 @@ async def _attempt(
     raw = run_dir / "raw" / variant / f"{task.id.replace('/', '__')}#{trial}.json"
     raw.parent.mkdir(parents=True, exist_ok=True)
     raw.write_text(
-        json.dumps({"trace": trace, "runs": runs, "approvals": tr.approvals}, ensure_ascii=False),
+        json.dumps(
+            {"trace": trace, "runs": runs, "approvals": tr.approvals, "questions": tr.questions},
+            ensure_ascii=False,
+        ),
         encoding="utf-8",
     )
     metrics = metrics_from_trace(trace, runs)
     metrics["approval_wait_ms"] = sum(a["latency_ms"] for a in tr.approvals)
     metrics["approvals_rejected"] = sum(1 for a in tr.approvals if a["decision"] == "rejected")
+    if tr.questions:
+        # 模拟用户出错时退回了按推荐：结果仍有效，但要看得见（报告「需求澄清」一节）
+        metrics["simulated_user_errors"] = sum(1 for q in tr.questions if q["error"])
     if skipped:
         metrics["skipped_files"] = skipped
     if task.sse_disconnect_after:
@@ -204,7 +225,7 @@ async def _attempt(
         passed=v.passed and not tr.budget_exceeded,
         score=v.score if not tr.budget_exceeded else 0.0,
         verifier_output=v.output,
-        error=tr.budget_exceeded or tr.error or v.infra_error,
+        error=tr.budget_exceeded or tr.error or v.infra_error or _user_error(tr),
         metrics=metrics,
         final_message=_final_message(trace),
         wall_s=round(time.monotonic() - t0, 1),
@@ -221,10 +242,15 @@ async def run_agent_experiment(
     *,
     run_dir: Path | None = None,
     limit: int | None = None,
+    answerer: Answerer | None = None,
 ) -> Path:
+    """answerer：模拟用户（agent/user.py）。选中的任务里有带 user 的就必须给 —— 否则问题会按推荐项
+    回答，需求澄清评测的结果就没有意义了，宁可早报。"""
     tasks = select_tasks(cfg, limit)
     if not tasks:
         raise SystemExit("没有选中任何任务")
+    if answerer is None and any(t.user for t in tasks):
+        raise SystemExit("有任务需要模拟用户回答提问：在实验配置里设置 user_model")
     if run_dir is None:
         stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
         run_dir = settings.runs_dir / f"{stamp}-{cfg.name}"
@@ -289,7 +315,7 @@ async def run_agent_experiment(
             if task.id in serial_locks:  # 先排 serial 锁再占并发名额，不白占名额
                 await stack.enter_async_context(serial_locks[task.id])
             await stack.enter_async_context(sem)
-            res = await _trial(platform, agent, variant, task, n, cfg, run_dir)
+            res = await _trial(platform, agent, variant, task, n, cfg, run_dir, answerer)
         async with lock:
             path = trials_path(run_dir, variant)
             path.parent.mkdir(parents=True, exist_ok=True)

@@ -166,7 +166,9 @@ class OrgService:
     # ───────────────────────────── 直属上级
 
     async def manager_of(self, user: User) -> tuple[User | None, str | None]:
-        """返回 (直属上级, 来源 own_dept | ancestor)。根部门负责人没有直属上级。"""
+        """返回 (直属上级, 来源 own_dept | ancestor)。根部门负责人、数字员工没有直属上级。"""
+        if user.dept_uuid is None:
+            return None, None
         ids = [UUID(p) for p in (await self.get(user.dept_uuid)).path.strip("/").split("/")]
         depts = {
             d.uuid: d for d in await self.session.scalars(select(Dept).where(Dept.uuid.in_(ids)))
@@ -189,7 +191,9 @@ class OrgService:
             raise Invalid("SUBJECT_NOT_FOUND", "用户不存在")
         if leader.status == "disabled":
             raise Invalid("LEADER_DISABLED", "不能把已停用的用户设为负责人")
-        if not await self.in_subtree(leader.dept_uuid, dept):
+        if leader.is_digital:
+            raise Invalid("DIGITAL_NOT_ALLOWED", "数字员工不能做部门负责人")
+        if leader.dept_uuid is None or not await self.in_subtree(leader.dept_uuid, dept):
             raise Invalid("LEADER_NOT_IN_DEPT", "负责人必须是本部门或其下级部门的成员")
 
     async def fix_leaders(self) -> list[str]:
@@ -426,6 +430,8 @@ class OrgService:
         users = list(await self.session.scalars(select(User).where(User.uuid.in_(user_uuids))))
         if len(users) != len(set(user_uuids)):
             raise Invalid("SUBJECT_NOT_FOUND", "有用户不存在")
+        if any(u.is_digital for u in users):
+            raise Invalid("DIGITAL_NOT_ALLOWED", "数字员工不进组织树，不能调入部门")
         nested = await self.session.begin_nested()
         async with super_guard(self.session):
             for u in users:

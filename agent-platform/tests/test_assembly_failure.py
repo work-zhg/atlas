@@ -17,8 +17,8 @@ from typing import Any
 import pytest
 from atlas_agent.domain.events import EventType
 from atlas_agent.domain.spec import AgentSpec, ModelSpec
+from atlas_agent.executor.assembly import MemoryNotConfigured
 from atlas_agent.executor.runtime import NativeRuntime
-from atlas_agent.memory.tool import MemoryUnavailable
 from atlas_agent.providers.mcp import MissingTool
 from atlas_engine.contracts import InvalidSpec
 
@@ -72,10 +72,10 @@ async def test_capability_error_becomes_visible_run_failed() -> None:
 
 
 async def test_existing_capability_errors_share_the_path() -> None:
-    """记忆未开启此前也走「内部错误」那条路。"""
-    events = await _turn(MemoryUnavailable("勾选了 search_memory 但服务端未开启记忆"))
+    """记忆未接入此前也走「内部错误」那条路。"""
+    events = await _turn(MemoryNotConfigured("勾选了「记忆」但服务端未接入记忆服务"))
     assert events[-1].data["error_kind"] == "capability_unavailable"
-    assert "未开启记忆" in events[-1].data["message"]
+    assert events[-1].data["message"] == "勾选了「记忆」但服务端未接入记忆服务"
 
 
 async def test_engine_error_keeps_its_kind() -> None:

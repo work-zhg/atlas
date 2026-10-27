@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import type { AnyTraceEvent } from "../lib/events";
+import type { AnyTraceEvent, ApprovalMode } from "../lib/events";
 import { useAtlasHttp } from "../client";
 import { applyEvents, initialRunState, type RunState } from "../lib/run-reducer";
 import { qk } from "./keys";
@@ -13,16 +13,18 @@ export interface SendMessageInput {
   content: { type: string; text?: string; [k: string]: unknown }[];
   /** 幂等键：网络抖动重发时不会变成两条消息（§11.2）。调用方每次发送生成一个。 */
   idempotencyKey?: string;
+  /** 用户在选择器里选的审批模式；不传 = 沿用会话记住的模式（没有就用智能体默认） */
+  approvalMode?: ApprovalMode;
 }
 
 export function useSendMessage() {
   const qc = useQueryClient();
   const http = useAtlasHttp();
   return useMutation({
-    mutationFn: ({ threadId, content, idempotencyKey }: SendMessageInput) =>
+    mutationFn: ({ threadId, content, idempotencyKey, approvalMode }: SendMessageInput) =>
       http.post<RunAccepted>(
         `/v1/threads/${threadId}/runs`,
-        { content },
+        approvalMode ? { content, approval_mode: approvalMode } : { content },
         idempotencyKey ? { "Idempotency-Key": idempotencyKey } : undefined,
       ),
     onSuccess: (_data, vars) => {
@@ -89,15 +91,33 @@ export interface DecideApprovalInput {
   runId: string;
   approvalId: string;
   decision: "approved" | "rejected";
+  /** 批准计划时必填：用户选的执行模式（须在智能体允许的范围里，否则 400） */
+  approvalMode?: Exclude<ApprovalMode, "plan">;
+  /** 拒绝原因 / 计划的修改意见，作为工具结果交给智能体 */
+  feedback?: string;
+  /** 问题（kind=question）的答案，与问题一一对应；某题两项都空 = 跳过，交给智能体定 */
+  answers?: { selected: string[]; other: string | null }[];
 }
 
-/** 提交高风险工具的人工确认（§12.2）。409 = 已被别处决策过。 */
+/** 提交人工确认：工具调用、规划模式提交的计划，或回答智能体的问题。409 = 已被别处决策过。 */
 export function useDecideApproval() {
   const qc = useQueryClient();
   const http = useAtlasHttp();
   return useMutation({
-    mutationFn: ({ runId, approvalId, decision }: DecideApprovalInput) =>
-      http.post<{ decision: string }>(`/v1/runs/${runId}/approvals/${approvalId}`, { decision }),
+    mutationFn: ({
+      runId,
+      approvalId,
+      decision,
+      approvalMode,
+      feedback,
+      answers,
+    }: DecideApprovalInput) =>
+      http.post<{ decision: string }>(`/v1/runs/${runId}/approvals/${approvalId}`, {
+        decision,
+        ...(approvalMode ? { approval_mode: approvalMode } : {}),
+        ...(feedback ? { feedback } : {}),
+        ...(answers ? { answers } : {}),
+      }),
     onSuccess: (_d, vars) => {
       void qc.invalidateQueries({ queryKey: qk.runs.detail(vars.runId) });
       void qc.invalidateQueries({ queryKey: qk.runs.approvals(vars.runId, vars.approvalId) });

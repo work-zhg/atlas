@@ -278,7 +278,7 @@ class FilesystemPermission:
 
     ★ 没有 `"interrupt"`（原实现经 HumanInTheLoopMiddleware 暂停等人确认）：它靠
       LangGraph 的 interrupt() + checkpointer，而 Atlas 不用 checkpointer，审批走
-      ApprovalMiddleware 的挂起（contracts/suspension.py）。要按路径审批，在那里加。
+      PermissionMiddleware 的挂起（contracts/suspension.py）。要按路径审批，在那里加。
     """
 
     def __post_init__(self) -> None:

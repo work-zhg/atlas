@@ -10,6 +10,8 @@ TeamFlow 的执行角色校验），不再要求 uid 就是所有者 —— 团�
 从别处（网关）来的只能看、不能写：续聊要回到 TeamFlow，不能绕过它的流程状态。
 
 管理员默认也不能读别人的会话（对话是个人数据）。
+
+智能体本身的权限（谁能用、谁能改）是用户中心的数据权限 AtlasAgent，见 agent_access.py。
 """
 
 from __future__ import annotations
@@ -22,16 +24,13 @@ from fastapi import Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..db.models import Agent, Run, Thread
+from ..db.models import Run, Thread
 from ..errors import Forbidden, NotFound
-from .catalog import AGENT_DATA
 from .dependency import current_principal
 from .principal import Principal
 
 __all__ = [
     "PrincipalDep",
-    "can_use_agent",
-    "ensure_agent_editable",
     "ensure_run_owner",
     "ensure_thread_owner",
     "require",
@@ -87,27 +86,3 @@ async def ensure_run_owner(
     ).one_or_none()
     owner, source_app = (row.created_by, row.source_app) if row else (None, None)
     _check_owner(owner, source_app, principal, write=write, what="运行")
-
-
-async def ensure_agent_editable(
-    session: AsyncSession, agent_id: UUID, principal: Principal
-) -> None:
-    """编辑 / 改状态 / 归档：创建者，或对全部智能体有 Owner；内置智能体只有后者（权限设计 §8）。
-
-    「全部智能体 · Owner」是用户中心的数据编码级授权（数据权限领域），不是角色上的操作码。
-    P2 单个智能体也改为用户中心数据权限（WRITE / OWNER）。
-    """
-    agent = await session.get(Agent, agent_id)
-    if agent is None:
-        raise NotFound(f"智能体 {agent_id} 不存在", agent_id=str(agent_id))
-    if principal.has_all_data(AGENT_DATA, "OWNER"):
-        return
-    if agent.is_builtin:
-        raise Forbidden("内置智能体只有管理员可以修改")
-    if agent.created_by != principal.uid:
-        raise Forbidden("只有智能体的创建者或管理员可以修改")
-
-
-def can_use_agent(principal: Principal, agent: Agent) -> bool:
-    """P1：用户可用全部智能体。P2 换成用户中心数据权限（AtlasAgent READ）。"""
-    return True

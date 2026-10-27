@@ -20,13 +20,10 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from atlas_engine.contracts import ApprovalState, merge_waits
-from atlas_engine.kernel.middleware.approval import (
-    REJECTED_RESULT,
-    ApprovalMiddleware,
-    approval_id_for,
-)
+from atlas_engine.contracts import ApprovalState, ToolEffect, merge_waits
+from atlas_engine.kernel.middleware.approval import REJECTED_RESULT, approval_id_for
 from atlas_engine.kernel.middleware.patch_tool_calls import PatchToolCallsMiddleware
+from atlas_engine.kernel.middleware.permission import PermissionMiddleware
 from atlas_engine.kernel.middleware.suspension import SuspensionMiddleware, release_wait
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
@@ -141,14 +138,17 @@ class ScriptedGate:
         self.asked = 0
 
     async def check(
-        self, *, approval_id: str, tool_name: str, args: dict[str, Any]
+        self, *, approval_id: str, tool_name: str, args: dict[str, Any], **_: Any
     ) -> ApprovalState:
         self.asked += 1
         return self.state
 
 
 def _agent(model: TurnModel, gate: ScriptedGate, executed: list[str]) -> Any:
-    """与 create_deep_agent 同序：Patch（核心栈）→ Suspension → Approval。"""
+    """与 create_deep_agent 同序：Patch（核心栈）→ Suspension → Permission。
+
+    自动模式：danger 是外部副作用（P1 没有判断器 → 请示），write 是工作区写入（放行）。
+    """
 
     def danger(path: str) -> str:
         executed.append(path)
@@ -168,7 +168,11 @@ def _agent(model: TurnModel, gate: ScriptedGate, executed: list[str]) -> Any:
         middleware=[
             PatchToolCallsMiddleware(),
             SuspensionMiddleware(),
-            ApprovalMiddleware(frozenset({"danger"}), gate),
+            PermissionMiddleware(
+                effects={"danger": ToolEffect.EXTERNAL, "write": ToolEffect.WRITE},
+                default_mode="auto",
+                gate=gate,
+            ),
         ],
     )
 
@@ -194,7 +198,7 @@ def _results(messages: list[Any]) -> dict[str, list[str]]:
     return out
 
 
-#: 这些测试里的图没有 run_id，approval_id 只由 tool_call_id 决定（approval._run_id_of）
+#: 这些测试里的图没有 run_id，approval_id 只由 tool_call_id 决定（approval.run_id_of）
 TOKEN = approval_id_for("", "c1")
 
 
@@ -234,7 +238,7 @@ async def test_resume_starts_at_tools_without_a_checkpointer() -> None:
         {
             "messages": list(_DANGLING),
             "waiting_on": {"c1": _wait("approval", TOKEN)},
-            "decisions": {TOKEN: "approved"},
+            "decisions": {TOKEN: {"status": "approved"}},
         }
     )
 
@@ -271,7 +275,7 @@ async def test_a_rejected_decision_does_not_execute() -> None:
         {
             "messages": list(_DANGLING),
             "waiting_on": {"c1": _wait("approval", TOKEN)},
-            "decisions": {TOKEN: "rejected"},
+            "decisions": {TOKEN: {"status": "rejected"}},
         }
     )
 
@@ -300,7 +304,7 @@ async def test_parallel_batch_only_runs_the_released_call() -> None:
         {
             "messages": history,
             "waiting_on": {"c1": _wait("approval", TOKEN)},
-            "decisions": {TOKEN: "approved"},
+            "decisions": {TOKEN: {"status": "approved"}},
         }
     )
 

@@ -1,29 +1,65 @@
-"""跨会话记忆（记忆设计）。
+"""跨会话记忆的 Atlas 一侧（doc/memory-design.html §4–§7）。
 
-本轮只做**写入与存储**，不向任何 Agent 暴露 —— 这是文档 §12 明确的上线
-顺序，理由是记忆有个不对称风险：记对了是锦上添花，**记错了是持续伤害**。
-一条被错误提炼的「事实」会在之后每一轮被注入，让模型反复基于错误前提
-作答，而用户往往不知道问题出在哪。
+存储在记忆服务（atlas-memory）：它只按作用域实例隔离、按主题组织条目，负责并发、事务和
+修订历史。存什么、怎么取、冲突怎么判断都在这里：
 
-所以先纯观察提炼质量（靠 GET /v1/memories 看），达标之后再开检索工具，
-最后才开自动注入。检索工具与注入中间件本轮**都不存在**。
+    client     记忆服务的 HTTP 客户端
+    runtime    登记实例归属、常驻块与快照、版本表、load_memory / save_memory / forget_memory
+    backfill   会话后补记（补漏 + 拆分超限的主题）
+    render     给模型看的文本
+    prompts    补记用的提示词
+
+★ 记忆绝不能成为会话的硬依赖：记忆服务或用户中心不可用时，本会话暂时不用记忆，对话照常。
+★ 关联主键由 Atlas 按会话确定（会话所属用户），Agent 和抽取模型都没法指定（§4.8）。
 """
 
 from __future__ import annotations
 
-from .client import MemoryClient, make_memory
-from .converge import converge
-from .extractor import ExtractionJob, build_job
-from .queue import DEAD_KEY, QUEUE_KEY, enqueue, run_worker
+from .backfill import Backfiller
+from .client import (
+    MemoryClient,
+    MemoryEntry,
+    MemoryRejected,
+    MemoryTopic,
+    MemoryUnavailable,
+    ScopeRef,
+    make_memory_client,
+)
+from .runtime import (
+    FORGET_MEMORY_TOOL,
+    LOAD_MEMORY_TOOL,
+    SAVE_MEMORY_TOOL,
+    SOURCE_AGENT,
+    SOURCE_BACKFILL,
+    SOURCE_USER,
+    MemoryRuntime,
+    MemoryTurn,
+)
 
 __all__ = [
-    "DEAD_KEY",
-    "QUEUE_KEY",
-    "ExtractionJob",
+    "FORGET_MEMORY_TOOL",
+    "LOAD_MEMORY_TOOL",
+    "SAVE_MEMORY_TOOL",
+    "SOURCE_AGENT",
+    "SOURCE_BACKFILL",
+    "SOURCE_USER",
+    "Backfiller",
     "MemoryClient",
-    "build_job",
-    "converge",
-    "enqueue",
-    "make_memory",
-    "run_worker",
+    "MemoryEntry",
+    "MemoryRejected",
+    "MemoryRuntime",
+    "MemoryTopic",
+    "MemoryTurn",
+    "MemoryUnavailable",
+    "ScopeRef",
+    "make_memory_client",
+    "make_memory_runtime",
 ]
+
+
+def make_memory_runtime(settings: object, sessionmaker: object) -> MemoryRuntime | None:
+    """没接入记忆服务（memory_base_url 为空）就返回 None：调用方据此完全跳过记忆。"""
+    client = make_memory_client(settings)
+    if client is None:
+        return None
+    return MemoryRuntime(settings, sessionmaker, client)  # type: ignore[arg-type]

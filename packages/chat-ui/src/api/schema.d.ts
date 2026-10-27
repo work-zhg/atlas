@@ -51,6 +51,10 @@ export interface paths {
         /**
          * List Tools
          * @description 内置工具 + 已接入 MCP 工具。bash 返回 available=false（决策 2）。
+         *
+         *     经 MCP 网关时，MCP 工具按这个 Agent 的权限主体列出（MCP 方案设计 §5.4、§9.2）：
+         *     以人为权限 = 当前用户自己的权限；以 Agent 为权限 = 它的数字员工的权限。
+         *     agent_id：编辑已有的 Agent；新建时不给，按 auth_subject（缺省 = 以人为权限）。
          */
         get: operations["list_tools_v1_tools_get"];
         put?: never;
@@ -73,7 +77,7 @@ export interface paths {
         put?: never;
         /**
          * Create Agent
-         * @description 创建时同时写入 version 1，status=draft。
+         * @description 创建时同时写入 version 1，status=draft；建数字员工、创建者 = OWNER（数字员工设计 §5.1）。
          */
         post: operations["create_agent_v1_agents_post"];
         delete?: never;
@@ -95,10 +99,9 @@ export interface paths {
         post?: never;
         /**
          * Delete Agent
-         * @description 归档语义：agent 置 archived、其会话一并归档。
+         * @description 归档语义：agent 置 archived、其会话一并归档，数字员工停用。
          *
          *     不是物理删除 —— run.agent_version_id 需要 agent_version 存活才能解释历史会话（§5.4）。
-         *     内置智能体返回 409。
          */
         delete: operations["delete_agent_v1_agents__agent_id__delete"];
         options?: never;
@@ -127,6 +130,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/agents/{agent_id}/auth-subject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set Auth Subject
+         * @description 切换权限类型（数字员工设计 §7.1）：只有 OWNER；只影响之后新建的 run。
+         */
+        put: operations["set_auth_subject_v1_agents__agent_id__auth_subject_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/agents/{agent_id}/identity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Identity
+         * @description 「身份」页签：能用它的人都能看 —— 用户有权知道替他干活的 Agent 能碰什么（§8.2）。
+         */
+        get: operations["get_identity_v1_agents__agent_id__identity_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/agents/{agent_id}/versions": {
         parameters: {
             query?: never;
@@ -142,6 +185,45 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/v1/agents/{agent_id}/grants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Grants
+         * @description 谁能用 / 改这个 Agent。能看到它的人都能看；改要 OWNER（用户中心按 operator 再校验一次）。
+         */
+        get: operations["list_grants_v1_agents__agent_id__grants_get"];
+        put?: never;
+        /** Add Grants */
+        post: operations["add_grants_v1_agents__agent_id__grants_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/agents/{agent_id}/grants/{acl_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Revoke Grant */
+        delete: operations["revoke_grant_v1_agents__agent_id__grants__acl_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Grant */
+        patch: operations["update_grant_v1_agents__agent_id__grants__acl_id__patch"];
         trace?: never;
     };
     "/v1/threads": {
@@ -202,7 +284,13 @@ export interface paths {
          * @description 会话工作区里的文件 —— 直接列对象存储，包括 acp 子智能体在 Pod 里写的产物。
          */
         get: operations["list_files_v1_threads__thread_id__files_get"];
-        put?: never;
+        /**
+         * Upload File
+         * @description 把请求体原样写成工作区里的一个文件（覆盖同名）。与 download 对称。
+         *
+         *     用途：用户给智能体准备输入文件；评测给任务准备初始工作区（doc/agent-eval-design.html）。
+         */
+        put: operations["upload_file_v1_threads__thread_id__files_put"];
         post?: never;
         delete?: never;
         options?: never;
@@ -246,6 +334,46 @@ export interface paths {
         get: operations["download_file_v1_threads__thread_id__files_download_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/threads/{thread_id}/context": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Context
+         * @description 会话的上下文状态：最近一次模型调用的构成与用量、摘要、熔断（上下文管理 §16）。
+         */
+        get: operations["get_context_v1_threads__thread_id__context_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/threads/{thread_id}/compact": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Compact Thread
+         * @description 手动压缩：把摘要之后的全部历史并入新摘要，下一轮生效（上下文管理 §16）。
+         */
+        post: operations["compact_thread_v1_threads__thread_id__compact_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -421,12 +549,178 @@ export interface paths {
         put?: never;
         /**
          * Decide Approval
-         * @description 批准或拒绝一次高风险工具调用（§12.2）。
+         * @description 批准或拒绝一次工具调用、规划模式提交的计划（doc/native-approval-mode-design.html），
+         *     或回答智能体提的问题（doc/ask-user-question-design.html）。
          *
-         *     拒绝**不终止 run** —— agent 会收到"用户拒绝"作为工具结果，
-         *     可以换个方案继续，而不是整轮白跑。
+         *     拒绝**不终止 run** —— agent 会收到"用户拒绝"（连同用户给的原因）作为工具结果，
+         *     可以换个方案继续，而不是整轮白跑。批准计划时要选执行模式（手动 / 自动）。
          */
         post: operations["decide_approval_v1_runs__run_id__approvals__approval_id__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/memories/topics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Topics */
+        get: operations["list_topics_v1_memories_topics_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/memories/topics/{code}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Topic */
+        get: operations["get_topic_v1_memories_topics__code__get"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete Topic
+         * @description 删除空主题（有条目的先移走或删除）。
+         */
+        delete: operations["delete_topic_v1_memories_topics__code__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Update Topic
+         * @description 修改主题的描述和常驻标记（§7「调整主题」）。
+         */
+        patch: operations["update_topic_v1_memories_topics__code__patch"];
+        trace?: never;
+    };
+    "/v1/memories/entries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Entries
+         * @description 按主题、来源、状态浏览（§7「查看」）。
+         */
+        get: operations["list_entries_v1_memories_entries_get"];
+        put?: never;
+        /**
+         * Add Entry
+         * @description 手动添加（来源记为用户亲自，补记不会改动这类记忆）。主题不存在时按给出的描述新建。
+         */
+        post: operations["add_entry_v1_memories_entries_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/memories/entries/{number}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Entry
+         * @description 一条记忆和它的演变过程（出处、取代链）。
+         */
+        get: operations["get_entry_v1_memories_entries__number__get"];
+        put?: never;
+        post?: never;
+        /**
+         * Purge Entry
+         * @description 彻底删除：连同取代链和修订历史，不可恢复（§6.5）。
+         */
+        delete: operations["purge_entry_v1_memories_entries__number__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Correct Entry
+         * @description 更正：删除这一条、写入新内容，在一次写入里完成（来源记为用户亲自）。
+         */
+        patch: operations["correct_entry_v1_memories_entries__number__patch"];
+        trace?: never;
+    };
+    "/v1/memories/entries/{number}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Restore Entry */
+        post: operations["restore_entry_v1_memories_entries__number__restore_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/memories/moves": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Move Entries */
+        post: operations["move_entries_v1_memories_moves_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/memories/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Revisions */
+        get: operations["list_revisions_v1_memories_revisions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/memories/revisions/{revision_id}/undo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Undo Revision
+         * @description 撤销一次写入：撤销新增 = 删除新条目；撤销取代 = 恢复旧条目、删除新条目（§4.7）。
+         */
+        post: operations["undo_revision_v1_memories_revisions__revision_id__undo_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -440,15 +734,52 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        get?: never;
+        put?: never;
+        post?: never;
         /**
-         * List Memories
-         * @description 列出**当前用户**的记忆。
-         *
-         *     ★ user_id 由服务端从会话取，**不接受参数传入**（§09）。Mem0 的
-         *       filters 决定了能读到谁的记忆 —— 一旦它可以由调用方指定，就等于
-         *       开了一个读取他人记忆的口子。
+         * Purge All
+         * @description 删除这位用户的全部记忆（整个用户实例，连同用户中心里的授权），不可恢复。
          */
-        get: operations["list_memories_v1_memories_get"];
+        delete: operations["purge_all_v1_memories_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/memories/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Settings */
+        get: operations["get_settings__v1_memories_settings_get"];
+        /**
+         * Put Settings
+         * @description 暂停优于删除：暂停期间两条写入路径都停止写入，已有记忆照常常驻、照常可以加载。
+         */
+        put: operations["put_settings_v1_memories_settings_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/memories/backfills": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Backfills
+         * @description 会话后补记写入了什么（§4.3「上次会话补记了 2 条［查看］」）。unseen=true 只列没看过的。
+         */
+        get: operations["list_backfills_v1_memories_backfills_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -457,7 +788,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/memories/{memory_id}": {
+    "/v1/memories/backfills/seen": {
         parameters: {
             query?: never;
             header?: never;
@@ -466,19 +797,9 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        post?: never;
-        /**
-         * Delete Memory
-         * @description 删除单条。
-         *
-         *     ★ 先确认这条属于当前用户再删 —— Mem0 的 delete(memory_id) 不带作用域，
-         *       直接透传等于任何人都能删别人的记忆。
-         *
-         *     ★ 措辞上**不承诺「彻底删除」**：delete() 到底是真把向量与原文清掉、
-         *       还是只标记为不可见，属于 §12 第 7 项的待验证项。在验证之前对用户
-         *       说「已彻底删除」是不诚实的 —— 而用户删记忆往往正是因为它敏感。
-         */
-        delete: operations["delete_memory_v1_memories__memory_id__delete"];
+        /** Mark Backfills Seen */
+        post: operations["mark_backfills_seen_v1_memories_backfills_seen_post"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -598,6 +919,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/directory/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Users
+         * @description digital=true：连数字员工一起（把知识库共享给某个 Agent 时选它，数字员工设计 §6）。
+         */
+        get: operations["users_v1_directory_users_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/directory/depts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Depts */
+        get: operations["depts_v1_directory_depts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -619,6 +977,12 @@ export interface components {
              */
             avatar_key: string;
             spec: components["schemas"]["AgentSpecIn"];
+            /**
+             * Auth Subject
+             * @default user
+             * @enum {string}
+             */
+            auth_subject: "user" | "agent";
         };
         /** AgentDetailOut */
         AgentDetailOut: {
@@ -640,8 +1004,6 @@ export interface components {
              * @enum {string}
              */
             status: "draft" | "enabled" | "archived";
-            /** Is Builtin */
-            is_builtin: boolean;
             /** Version */
             version: number;
             /** Model */
@@ -678,6 +1040,14 @@ export interface components {
                 [key: string]: unknown;
             }[];
             /**
+             * Auth Subject
+             * @default user
+             * @enum {string}
+             */
+            auth_subject: "user" | "agent";
+            /** Digital Employee Uid */
+            digital_employee_uid?: string | null;
+            /**
              * Created At
              * Format: date-time
              */
@@ -691,6 +1061,52 @@ export interface components {
             spec: {
                 [key: string]: unknown;
             };
+            /** My Level */
+            my_level?: string | null;
+        };
+        /** AgentGrantCreate */
+        AgentGrantCreate: {
+            /**
+             * Level
+             * @enum {string}
+             */
+            level: "READ" | "WRITE" | "OWNER";
+            /** Subjects */
+            subjects: components["schemas"]["GrantSubject"][];
+            /**
+             * Include Sub
+             * @default true
+             */
+            include_sub: boolean;
+        };
+        /** AgentGrantPatch */
+        AgentGrantPatch: {
+            /** Level */
+            level?: ("READ" | "WRITE" | "OWNER") | null;
+            /** Include Sub */
+            include_sub?: boolean | null;
+        };
+        /**
+         * AgentIdentityOut
+         * @description 「身份」页签（数字员工设计 §6.1）：数字员工、权限类型、有效权限摘要。
+         */
+        AgentIdentityOut: {
+            /**
+             * Auth Subject
+             * @enum {string}
+             */
+            auth_subject: "user" | "agent";
+            digital_employee?: components["schemas"]["DigitalEmployeeOut"] | null;
+            /**
+             * Knowledge
+             * @default []
+             */
+            knowledge: components["schemas"]["KnowledgeAccessOut"][];
+            /**
+             * Notices
+             * @default []
+             */
+            notices: string[];
         };
         /** AgentListOut */
         AgentListOut: {
@@ -719,8 +1135,6 @@ export interface components {
              * @enum {string}
              */
             status: "draft" | "enabled" | "archived";
-            /** Is Builtin */
-            is_builtin: boolean;
             /** Version */
             version: number;
             /** Model */
@@ -756,6 +1170,14 @@ export interface components {
             subagents: {
                 [key: string]: unknown;
             }[];
+            /**
+             * Auth Subject
+             * @default user
+             * @enum {string}
+             */
+            auth_subject: "user" | "agent";
+            /** Digital Employee Uid */
+            digital_employee_uid?: string | null;
             /**
              * Created At
              * Format: date-time
@@ -808,6 +1230,7 @@ export interface components {
              */
             mcp_drift_policy: "warn" | "block";
             knowledge?: components["schemas"]["KnowledgeSpecIn"];
+            approval?: components["schemas"]["ApprovalSpecIn"];
         };
         /** AgentStatusUpdate */
         AgentStatusUpdate: {
@@ -866,6 +1289,12 @@ export interface components {
              * @enum {string}
              */
             decision: "approved" | "rejected";
+            /** Approval Mode */
+            approval_mode?: ("manual" | "auto") | null;
+            /** Feedback */
+            feedback?: string | null;
+            /** Answers */
+            answers?: components["schemas"]["QuestionAnswerIn"][] | null;
         };
         /** ApprovalOut */
         ApprovalOut: {
@@ -881,6 +1310,65 @@ export interface components {
             run_id: string;
             /** Decision */
             decision: string;
+        };
+        /**
+         * ApprovalSpecIn
+         * @description 审批模式的默认值与允许范围（doc/native-approval-mode-design.html）。
+         *
+         *     快照纪律：字段都有默认值 —— 历史快照没有这一段，按「默认自动、允许全部」处理（D8）。
+         */
+        ApprovalSpecIn: {
+            /**
+             * Default Mode
+             * @default auto
+             * @enum {string}
+             */
+            default_mode: "plan" | "manual" | "auto";
+            /** Allowed Modes */
+            allowed_modes?: ("plan" | "manual" | "auto")[];
+        };
+        /** AuthSubjectUpdate */
+        AuthSubjectUpdate: {
+            /**
+             * Auth Subject
+             * @enum {string}
+             */
+            auth_subject: "user" | "agent";
+        };
+        /** BackfillListOut */
+        BackfillListOut: {
+            /** Data */
+            data: components["schemas"]["BackfillOut"][];
+        };
+        /** BackfillOut */
+        BackfillOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Thread Id
+             * Format: uuid
+             */
+            thread_id: string;
+            /** Created At */
+            created_at: string;
+            /** Seen At */
+            seen_at: string | null;
+            /** Written */
+            written: {
+                [key: string]: unknown;
+            }[];
+            /** Split */
+            split: {
+                [key: string]: unknown;
+            }[];
+        };
+        /** BackfillSeenIn */
+        BackfillSeenIn: {
+            /** Ids */
+            ids?: string[] | null;
         };
         /**
          * CliSpecIn
@@ -906,6 +1394,14 @@ export interface components {
              */
             permission_mode: "manual" | "accept_edits" | "auto" | "plan";
         };
+        /** CompactIn */
+        CompactIn: {
+            /**
+             * Focus
+             * @default
+             */
+            focus: string;
+        };
         /** CompactionSpecIn */
         CompactionSpecIn: {
             /**
@@ -915,7 +1411,7 @@ export interface components {
             enabled: boolean;
             /**
              * Trigger Ratio
-             * @default 0.75
+             * @default 0.8
              */
             trigger_ratio: number;
             /**
@@ -930,19 +1426,146 @@ export interface components {
             keep_recent_turns: number;
             /**
              * Summarizer Model
-             * @default claude-haiku-4-5
+             * @default
              */
             summarizer_model: string;
+            /**
+             * Clear Ratio
+             * @default 0.6
+             */
+            clear_ratio: number;
+            /**
+             * Warn Ratio
+             * @default 0.9
+             */
+            warn_ratio: number;
+            /**
+             * Keep Recent Tool Results
+             * @default 5
+             */
+            keep_recent_tool_results: number;
+            /**
+             * Restore Files
+             * @default 5
+             */
+            restore_files: number;
+            /**
+             * Attachment Budget Ratio
+             * @default 0.1
+             */
+            attachment_budget_ratio: number;
+        };
+        /** DigitalEmployeeOut */
+        DigitalEmployeeOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Account */
+            account?: string | null;
+            /** Name */
+            name?: string | null;
+            /** Status */
+            status?: string | null;
+            /** Owner Id */
+            owner_id?: string | null;
+        };
+        /** EntryCreate */
+        EntryCreate: {
+            /** Topic */
+            topic: string;
+            /** Content */
+            content: string;
+            /** Topic Description */
+            topic_description?: string | null;
+            /**
+             * Resident
+             * @default false
+             */
+            resident: boolean;
+        };
+        /** EntryDetailOut */
+        EntryDetailOut: {
+            entry: components["schemas"]["EntryOut"];
+            /** Chain */
+            chain: components["schemas"]["EntryOut"][];
+        };
+        /** EntryListOut */
+        EntryListOut: {
+            /** Data */
+            data: components["schemas"]["EntryOut"][];
+            /** Total */
+            total: number;
+        };
+        /** EntryOut */
+        EntryOut: {
+            /** Number */
+            number: number;
+            /** Content */
+            content: string;
+            /** Topic */
+            topic: string | null;
+            /** Occurred At */
+            occurred_at: string;
+            /** Source */
+            source: string;
+            /** Origin */
+            origin?: {
+                [key: string]: unknown;
+            } | null;
+            /** Status */
+            status: string;
+            /** Superseded By */
+            superseded_by?: number | null;
+            /** Retired At */
+            retired_at?: string | null;
+            /** Created At */
+            created_at?: string | null;
+        };
+        /** EntryRestoreIn */
+        EntryRestoreIn: {
+            /** Topic */
+            topic?: string | null;
+        };
+        /**
+         * EntryUpdate
+         * @description 更正：用新内容取代这一条（来源记为用户亲自，补记不会改动它）。
+         */
+        EntryUpdate: {
+            /** Content */
+            content: string;
+            /** Topic */
+            topic?: string | null;
         };
         /**
          * EventType
          * @enum {string}
          */
-        EventType: "run.started" | "run.finished" | "run.failed" | "run.cancelled" | "run.suspended" | "thinking.delta" | "message.delta" | "message.completed" | "todos.updated" | "tool.started" | "tool.completed" | "tool.failed" | "subagent.started" | "subagent.step" | "subagent.finished" | "file.written" | "file.deleted" | "usage.updated" | "approval.required" | "context.compacted" | "session.lost" | "agent.mode" | "thread.title_generated" | "skill.loaded" | "skill.skipped" | "mcp.tool_drift";
+        EventType: "run.started" | "run.finished" | "run.failed" | "run.cancelled" | "run.suspended" | "run.resumed" | "thinking.delta" | "message.delta" | "message.completed" | "todos.updated" | "tool.started" | "tool.updated" | "tool.completed" | "tool.failed" | "subagent.started" | "subagent.step" | "subagent.finished" | "file.written" | "file.deleted" | "usage.updated" | "approval.required" | "question.answered" | "context.compacted" | "context.cleared" | "context.usage" | "session.lost" | "agent.mode" | "thread.title_generated" | "skill.loaded" | "skill.skipped" | "mcp.tool_drift" | "mcp.tool_skipped";
+        /** GrantSubject */
+        GrantSubject: {
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "user" | "dept";
+            /** Id */
+            id: string;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /** KnowledgeAccessOut */
+        KnowledgeAccessOut: {
+            /** Id */
+            id: string;
+            /** Name */
+            name?: string | null;
+            /** Readable */
+            readable?: boolean | null;
         };
         /** KnowledgeSpecIn */
         KnowledgeSpecIn: {
@@ -989,8 +1612,6 @@ export interface components {
              * @default 4
              */
             tool_concurrency: number;
-            /** Require Approval For */
-            require_approval_for?: string[];
         };
         /** McpServerDetailOut */
         McpServerDetailOut: {
@@ -1109,6 +1730,34 @@ export interface components {
              */
             references: number;
         };
+        /**
+         * McpSubjectOut
+         * @description 编辑器里 MCP 工具按谁的权限列出（MCP 方案设计 §9.2）。只在经 MCP 网关时给出。
+         */
+        McpSubjectOut: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "user" | "agent";
+            /** Uid */
+            uid?: string | null;
+            /**
+             * Key Status
+             * @default none
+             */
+            key_status: string;
+            /**
+             * Hidden Servers
+             * @default 0
+             */
+            hidden_servers: number;
+            /**
+             * Notes
+             * @default []
+             */
+            notes: string[];
+        };
         /** McpToolOut */
         McpToolOut: {
             /** Name */
@@ -1130,27 +1779,17 @@ export interface components {
             /** Previous Description */
             previous_description?: string | null;
         };
-        /** MemoryListOut */
-        MemoryListOut: {
-            /** Data */
-            data: components["schemas"]["MemoryOut"][];
+        /** MemorySettingsIn */
+        MemorySettingsIn: {
+            /** Paused */
+            paused: boolean;
         };
-        /** MemoryOut */
-        MemoryOut: {
-            /** Id */
-            id: string;
-            /** Memory */
-            memory: string;
-            /** Created At */
-            created_at?: string | null;
-            /** Updated At */
-            updated_at?: string | null;
-            /** Workspace */
-            workspace?: string | null;
-            /** Source Session */
-            source_session?: string | null;
-            /** Source Run */
-            source_run?: string | null;
+        /** MemorySettingsOut */
+        MemorySettingsOut: {
+            /** Paused */
+            paused: boolean;
+            /** Enabled */
+            enabled: boolean;
         };
         /**
          * MessageListOut
@@ -1242,7 +1881,7 @@ export interface components {
              */
             provider: "anthropic" | "openai";
             /** Effort */
-            effort?: ("max" | "xhigh" | "high" | "medium" | "low") | null;
+            effort?: ("low" | "medium" | "high" | "xhigh" | "max") | null;
             /**
              * Thinking
              * @default auto
@@ -1262,6 +1901,13 @@ export interface components {
             /** Temperature */
             temperature?: number | null;
         };
+        /** MoveIn */
+        MoveIn: {
+            /** Entries */
+            entries: number[];
+            /** To Topic */
+            to_topic: string;
+        };
         /**
          * PendingApproval
          * @description 挂起中的确认。刷新页面后前端靠它把弹窗恢复出来。
@@ -1278,6 +1924,13 @@ export interface components {
             args: {
                 [key: string]: unknown;
             };
+            /**
+             * Kind
+             * @default tool
+             */
+            kind: string;
+            /** Reason */
+            reason?: string | null;
             /**
              * Created At
              * Format: date-time
@@ -1301,6 +1954,53 @@ export interface components {
              * Format: date-time
              */
             expires_at: string;
+        };
+        /** PurgeOut */
+        PurgeOut: {
+            /** Purged */
+            purged: number[];
+        };
+        /**
+         * QuestionAnswerIn
+         * @description ask_user_question 一题的答案。两项都空 = 这题跳过，交给智能体定。
+         */
+        QuestionAnswerIn: {
+            /** Selected */
+            selected?: string[];
+            /** Other */
+            other?: string | null;
+        };
+        /** RevisionListOut */
+        RevisionListOut: {
+            /** Data */
+            data: components["schemas"]["RevisionOut"][];
+        };
+        /** RevisionOut */
+        RevisionOut: {
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /** Topic */
+            topic: string | null;
+            /** Removed */
+            removed: number[];
+            /** Added */
+            added: number[];
+            /** Occurred At */
+            occurred_at: string;
+            /** Source */
+            source: string | null;
+            /** Origin */
+            origin?: {
+                [key: string]: unknown;
+            } | null;
+            /** Undoes */
+            undoes?: string | null;
+            /** Undone By */
+            undone_by?: string | null;
+            /** Created At */
+            created_at: string;
         };
         /** RunAccepted */
         RunAccepted: {
@@ -1332,6 +2032,8 @@ export interface components {
             content: {
                 [key: string]: unknown;
             }[];
+            /** Approval Mode */
+            approval_mode?: ("plan" | "manual" | "auto") | null;
         };
         /** RunOut */
         RunOut: {
@@ -1545,6 +2247,18 @@ export interface components {
             /** Source Agent Id */
             source_agent_id?: string | null;
         };
+        /**
+         * ThreadApprovalOut
+         * @description 审批模式（doc/native-approval-mode-design.html）：输入框旁的选择器据此渲染。
+         */
+        ThreadApprovalOut: {
+            /** Mode */
+            mode: string;
+            /** Default Mode */
+            default_mode: string;
+            /** Allowed Modes */
+            allowed_modes: string[];
+        };
         /** ThreadCreate */
         ThreadCreate: {
             /**
@@ -1610,6 +2324,9 @@ export interface components {
              * @default on
              */
             memory: string;
+            /** Approval Mode */
+            approval_mode?: string | null;
+            approval?: components["schemas"]["ThreadApprovalOut"] | null;
             /** Source App */
             source_app?: string | null;
             /**
@@ -1702,6 +2419,46 @@ export interface components {
         ToolListResponse: {
             /** Data */
             data: components["schemas"]["ToolInfo"][];
+            mcp_subject?: components["schemas"]["McpSubjectOut"] | null;
+        };
+        /** TopicDetailOut */
+        TopicDetailOut: {
+            topic: components["schemas"]["TopicOut"];
+            /** Entries */
+            entries: components["schemas"]["EntryOut"][];
+        };
+        /** TopicListOut */
+        TopicListOut: {
+            /** Data */
+            data: components["schemas"]["TopicOut"][];
+            /** Topic Max Chars */
+            topic_max_chars: number;
+        };
+        /** TopicOut */
+        TopicOut: {
+            /** Scope */
+            scope: string;
+            /** Code */
+            code: string;
+            /** Description */
+            description: string;
+            /** Resident */
+            resident: boolean;
+            /** Version */
+            version: number;
+            /** Entry Count */
+            entry_count: number;
+            /** Char Count */
+            char_count: number;
+            /** Over Limit */
+            over_limit: boolean;
+        };
+        /** TopicPatch */
+        TopicPatch: {
+            /** Description */
+            description?: string | null;
+            /** Resident */
+            resident?: boolean | null;
         };
         /** TraceEvent */
         TraceEvent: {
@@ -1777,6 +2534,15 @@ export interface components {
              */
             truncated: boolean;
         };
+        /** WriteOut */
+        WriteOut: {
+            /** Number */
+            number: number | null;
+            /** Revision */
+            revision: string | null;
+            /** Removed */
+            removed: number[];
+        };
     };
     responses: never;
     parameters: never;
@@ -1806,15 +2572,6 @@ export interface operations {
                     };
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     list_models_v1_models_get: {
@@ -1835,20 +2592,14 @@ export interface operations {
                     "application/json": components["schemas"]["ModelListResponse"];
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     list_tools_v1_tools_get: {
         parameters: {
-            query?: never;
+            query?: {
+                agent_id?: string | null;
+                auth_subject?: ("user" | "agent") | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -2078,6 +2829,72 @@ export interface operations {
             };
         };
     };
+    set_auth_subject_v1_agents__agent_id__auth_subject_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AuthSubjectUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentDetailOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_identity_v1_agents__agent_id__identity_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentIdentityOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_agent_versions_v1_agents__agent_id__versions_get: {
         parameters: {
             query?: never;
@@ -2096,6 +2913,144 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AgentVersionListOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_grants_v1_agents__agent_id__grants_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    add_grants_v1_agents__agent_id__grants_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentGrantCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: boolean;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_grant_v1_agents__agent_id__grants__acl_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+                acl_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_grant_v1_agents__agent_id__grants__acl_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+                acl_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentGrantPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: boolean;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -2301,6 +3256,41 @@ export interface operations {
             };
         };
     };
+    upload_file_v1_threads__thread_id__files_put: {
+        parameters: {
+            query: {
+                path: string;
+            };
+            header?: never;
+            path: {
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     create_preview_v1_threads__thread_id__files_preview_post: {
         parameters: {
             query?: never;
@@ -2352,6 +3342,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_context_v1_threads__thread_id__context_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    compact_thread_v1_threads__thread_id__compact_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompactIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -2631,13 +3691,9 @@ export interface operations {
             };
         };
     };
-    list_memories_v1_memories_get: {
+    list_topics_v1_memories_topics_get: {
         parameters: {
-            query?: {
-                limit?: number;
-                workspace?: string | null;
-                source_session?: string | null;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -2650,7 +3706,29 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MemoryListOut"];
+                    "application/json": components["schemas"]["TopicListOut"];
+                };
+            };
+        };
+    };
+    get_topic_v1_memories_topics__code__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                code: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TopicDetailOut"];
                 };
             };
             /** @description Validation Error */
@@ -2664,12 +3742,12 @@ export interface operations {
             };
         };
     };
-    delete_memory_v1_memories__memory_id__delete: {
+    delete_topic_v1_memories_topics__code__delete: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                memory_id: string;
+                code: string;
             };
             cookie?: never;
         };
@@ -2681,6 +3759,473 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_topic_v1_memories_topics__code__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                code: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TopicPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TopicOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_entries_v1_memories_entries_get: {
+        parameters: {
+            query?: {
+                status?: string;
+                topic?: string | null;
+                source?: string | null;
+                q?: string | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EntryListOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    add_entry_v1_memories_entries_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EntryCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WriteOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_entry_v1_memories_entries__number__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                number: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EntryDetailOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    purge_entry_v1_memories_entries__number__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                number: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PurgeOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    correct_entry_v1_memories_entries__number__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                number: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EntryUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WriteOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    restore_entry_v1_memories_entries__number__restore_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                number: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["EntryRestoreIn"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EntryOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    move_entries_v1_memories_moves_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MoveIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_revisions_v1_memories_revisions_get: {
+        parameters: {
+            query?: {
+                source?: string | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevisionListOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    undo_revision_v1_memories_revisions__revision_id__undo_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                revision_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    purge_all_v1_memories_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_settings__v1_memories_settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemorySettingsOut"];
+                };
+            };
+        };
+    };
+    put_settings_v1_memories_settings_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MemorySettingsIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemorySettingsOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_backfills_v1_memories_backfills_get: {
+        parameters: {
+            query?: {
+                unseen?: boolean;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackfillListOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    mark_backfills_seen_v1_memories_backfills_seen_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BackfillSeenIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: number;
+                    };
+                };
             };
             /** @description Validation Error */
             422: {
@@ -2709,15 +4254,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SkillListOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -2802,15 +4338,6 @@ export interface operations {
                     "application/json": components["schemas"]["McpServerListOut"];
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     get_mcp_server_v1_mcp_servers__name__get: {
@@ -2871,6 +4398,63 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    users_v1_directory_users_get: {
+        parameters: {
+            query?: {
+                q?: string | null;
+                limit?: number;
+                digital?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    depts_v1_directory_depts_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
                 };
             };
         };

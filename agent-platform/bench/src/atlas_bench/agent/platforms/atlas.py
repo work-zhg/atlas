@@ -1,4 +1,4 @@
-"""Atlas 智能体的适配器：只用 atlas-server 的公开 API（doc/agent-eval-design.html §9.1）。
+"""Atlas 智能体的适配器：只用 atlas-server 的公开 API（doc/agent-eval-design.html §15）。
 
     建智能体  POST /v1/agents（每个 variant 一个，slug = bench-<variant>-<配置指纹>，复用）
     新会话    POST /v1/threads（每个 trial 一个 → 全新工作区 / 沙箱）
@@ -7,6 +7,8 @@
     审批      GET  /v1/threads/{id}/events（SSE）里的 approval.required
               → POST /v1/runs/{rid}/approvals/{aid}
               （子智能体的审批挂在子 run 上，所以按会话流而不是按主 run 收）
+    提问      approval_kind = question 的同一个事件：不按审批策略，由模拟用户作答（带 answers）；
+              任务没有模拟用户时不带答案批准 = 按推荐项（doc/ask-user-question-design.html）
     等终态    GET  /v1/runs/{id} 轮询；超预算 → POST /v1/runs/{id}/cancel
     取轨迹    GET  /v1/runs/{id}/trace（含子 run）+ 各 run 的用量
     取产物    GET  /v1/threads/{id}/files + download
@@ -26,12 +28,12 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol
 from urllib.parse import quote
 
 import httpx
 
-from ..schema import Task, VariantConfig
+from ..schema import SimulatedUser, Task, VariantConfig
 
 __all__ = ["AGENT_PREFIX", "AtlasAgentPlatform", "TrialRun"]
 
@@ -48,6 +50,12 @@ class AtlasError(RuntimeError):
     pass
 
 
+class Answerer(Protocol):
+    """模拟用户（agent/user.py）：按用户心里的需求回答 Agent 的问题。"""
+
+    async def answer(self, brief: str, questions: list[dict[str, Any]]) -> list[dict[str, Any]]: ...
+
+
 @dataclass
 class TrialRun:
     """一次 trial 在 Atlas 上的现场：会话、主 run、审批记录、终态。"""
@@ -60,6 +68,9 @@ class TrialRun:
     error_kind: str | None = None
     budget_exceeded: str | None = None
     approvals: list[dict[str, Any]] = field(default_factory=list)
+    #: Agent 提的问题（ask_user_question）：每次一条 {n, headers, answers, by, error, latency_ms}。
+    #: 不进 approvals —— 问题不是审批，审批策略也管不到它
+    questions: list[dict[str, Any]] = field(default_factory=list)
     started: float = field(default_factory=time.monotonic)
     #: 前置会话（W4）：会话 id、失败原因、开始前已有的记忆 id（None = 本题不碰记忆）
     setup_threads: list[str] = field(default_factory=list)
@@ -153,7 +164,13 @@ class AtlasAgentPlatform:
     # ------------------------------------------------------------------ 一次 trial
 
     async def run_trial(
-        self, agent: dict[str, Any], task: Task, *, trial: int, approval_policy: str
+        self,
+        agent: dict[str, Any],
+        task: Task,
+        *,
+        trial: int,
+        approval_policy: str,
+        answerer: Answerer | None = None,
     ) -> TrialRun:
         thread = await self._req(
             "POST",
@@ -189,7 +206,9 @@ class AtlasAgentPlatform:
                 content=content.encode("utf-8"),
             )
         listener = asyncio.create_task(
-            self._approve_from_stream(tr, approval_policy, task.sse_disconnect_after)
+            self._approve_from_stream(
+                tr, approval_policy, task.sse_disconnect_after, task.user, answerer
+            )
         )
         try:
             accepted = await self._req(
@@ -231,7 +250,12 @@ class AtlasAgentPlatform:
             await asyncio.sleep(_POLL_S)
 
     async def _approve_from_stream(
-        self, tr: TrialRun, policy: str, disconnect_after: int | None = None
+        self,
+        tr: TrialRun,
+        policy: str,
+        disconnect_after: int | None = None,
+        user: SimulatedUser | None = None,
+        answerer: Answerer | None = None,
     ) -> None:
         """跟着会话事件流批审批（主 run 与子 run 的都在这条流上）。断了就带游标重连。
 
@@ -280,6 +304,9 @@ class AtlasAgentPlatform:
                         if not aid or aid in decided:
                             continue
                         decided.add(aid)
+                        if data.get("approval_kind") == "question":
+                            await self._answer_question(tr, event, data, user, answerer)
+                            continue
                         t0 = time.monotonic()
                         decision = _decide(policy, len(tr.approvals))
                         if delay:
@@ -303,6 +330,37 @@ class AtlasAgentPlatform:
                 logger.debug("会话事件流断开：%s", exc)
             # 流结束（正常不会）或断开：都稍等再带游标重连，不空转
             await asyncio.sleep(2.0 if tr.sse_reconnects else 1.0)
+
+    async def _answer_question(
+        self,
+        tr: TrialRun,
+        event: dict[str, Any],
+        data: dict[str, Any],
+        user: SimulatedUser | None,
+        answerer: Answerer | None,
+    ) -> None:
+        """回答 Agent 的问题。模拟用户出错或答案被拒（400）时退回按推荐 —— 不能让 trial 卡住。"""
+        questions = (data.get("args") or {}).get("questions") or []
+        url = f"/v1/runs/{event['run_id']}/approvals/{data['approval_id']}"
+        t0 = time.monotonic()
+        record: dict[str, Any] = {
+            "n": len(questions),
+            "headers": [q.get("header") for q in questions],
+            "answers": None,
+            "by": "recommended",
+            "error": None,
+        }
+        if user is not None and answerer is not None:
+            try:
+                answers = await answerer.answer(user.brief, questions)
+                await self._req("POST", url, json={"decision": "approved", "answers": answers})
+                record.update(answers=answers, by="simulated")
+            except Exception as exc:  # 记下来，退回按推荐
+                record["error"] = str(exc)[:300]
+        if record["by"] == "recommended":
+            await self._req("POST", url, json={"decision": "approved"})
+        record["latency_ms"] = int((time.monotonic() - t0) * 1000)
+        tr.questions.append(record)
 
     # ------------------------------------------------------------------ 前置会话与记忆（W4）
 
@@ -340,7 +398,8 @@ class AtlasAgentPlatform:
                 )
                 return
         if task.wait_memory_s and tr.memories_before is not None:
-            # 记忆是 run 结束后异步抽取的：轮询到出现新记忆为止
+            # 记忆由 Agent 在对话中保存（要勾「记忆」工具），没勾的要等会话空闲后的补记：
+            # 轮询到出现新记忆为止
             until = time.monotonic() + task.wait_memory_s
             while time.monotonic() < until:
                 tr.memories_new = len(await self._memory_ids() - tr.memories_before)
@@ -350,8 +409,9 @@ class AtlasAgentPlatform:
             tr.setup_error = f"前置会话结束后 {task.wait_memory_s:.0f}s 内没有抽取出记忆"
 
     async def _memory_ids(self) -> set[str]:
-        page = await self._req("GET", "/v1/memories", params={"limit": 200})
-        return {str(m["id"]) for m in page.get("data") or []}
+        """当前有效的记忆条目编号（doc/memory-design.html §7 的管理接口）。"""
+        page = await self._req("GET", "/v1/memories/entries", params={"limit": 200})
+        return {str(m["number"]) for m in page.get("data") or []}
 
     async def cleanup_memories(self, tr: TrialRun) -> int:
         """删掉本 trial 期间新增的记忆（服务账号的记忆在所有评测之间共享，留着会污染别的题）。"""
@@ -359,8 +419,9 @@ class AtlasAgentPlatform:
             return 0
         removed = 0
         with contextlib.suppress(AtlasError):
-            for mid in await self._memory_ids() - tr.memories_before:
-                await self._req("DELETE", f"/v1/memories/{quote(mid)}")
+            for number in await self._memory_ids() - tr.memories_before:
+                # 彻底删除（连同取代链）：评测账号的记忆在各题之间共享，不能留下可恢复的副本
+                await self._req("DELETE", f"/v1/memories/entries/{quote(number)}")
                 removed += 1
         return removed
 

@@ -68,14 +68,23 @@ async def get_run_service(
 RunServiceDep = Annotated[RunService, Depends(get_run_service)]
 
 
+def _uc(request: Request):  # type: ignore[no-untyped-def]
+    """进程级用户中心客户端（create_app 里建）。"""
+    return request.app.state.uc
+
+
 async def get_agent_service(
-    session: SessionDep, settings: SettingsDep, redis: RedisDep
+    request: Request, session: SessionDep, settings: SettingsDep, redis: RedisDep
 ) -> AgentService:
-    return AgentService(session, settings, redis)
+    return AgentService(session, settings, redis, uc=_uc(request))
 
 
-async def get_thread_service(session: SessionDep, settings: SettingsDep) -> ThreadService:
-    return ThreadService(session, settings)
+async def get_thread_service(
+    request: Request, session: SessionDep, settings: SettingsDep
+) -> ThreadService:
+    return ThreadService(
+        session, settings, uc=_uc(request), memory=getattr(request.app.state, "memory", None)
+    )
 
 
 AgentServiceDep = Annotated[AgentService, Depends(get_agent_service)]

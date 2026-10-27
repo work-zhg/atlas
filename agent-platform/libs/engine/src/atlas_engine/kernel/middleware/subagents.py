@@ -50,6 +50,7 @@ __all__ = [
     "SubAgent",
     "SubAgentMiddleware",
     "TaskToolSchema",
+    "task_brief",
 ]
 
 
@@ -77,12 +78,23 @@ class SubAgent(TypedDict):
 
 
 class TaskToolSchema(BaseModel):
-    """Input schema for the `task` tool."""
+    """Input schema for the `task` tool.
 
-    description: str = Field(
+    ★ 标题与任务书分成两个字段，照 Claude Code 的 Task 工具：`description` 是短标题，
+      `prompt` 才是交给 SubAgent 的全部输入。原先只有一个 `description`（字段说明写着
+      "A detailed description"），deepseek-v4-pro 照样把它当标题填 —— 112 上的会话三次
+      派活都只交出一句话，thinking 里写好的任务书没进参数。回放同一请求各 5 次：
+      只有 description 时任务书 26–33 字（关掉 thinking 也一样），拆出 prompt 后
+      1975–2759 字、需求要点全覆盖。字段说明改动前先重跑这组对照。
+    """
+
+    description: str = Field(description="A short (3-5 word) description of the task, shown to the user as a title.")
+
+    prompt: str = Field(
         description=(
-            "A detailed description of the task for the subagent to perform autonomously. "
-            "Include all necessary context and specify the expected output format."
+            "The complete task brief for the subagent. The subagent has NOT seen this conversation: "
+            "this text is the only input it gets. Include every requirement, constraint and piece of "
+            "context it needs, and the expected output."
         )
     )
 
@@ -153,12 +165,12 @@ def _build_task_tool(subagents: Sequence[SubAgent]) -> BaseTool:
     """
     description = SESSION_TASK_TOOL_DESCRIPTION.format(available_agents=_agents_block(subagents))
 
-    def task(description: str, subagent_type: str, fresh: bool = False) -> str:
+    def task(description: str, prompt: str, subagent_type: str, fresh: bool = False) -> str:
         msg = "task 不会被直接执行：SubAgentMiddleware 在 awrap_tool_call 里接管"
         raise RuntimeError(msg)
 
-    async def atask(description: str, subagent_type: str, fresh: bool = False) -> str:
-        return task(description, subagent_type, fresh)
+    async def atask(description: str, prompt: str, subagent_type: str, fresh: bool = False) -> str:
+        return task(description, prompt, subagent_type, fresh)
 
     return StructuredTool.from_function(
         name=SUBAGENT_TOOL,
@@ -178,7 +190,7 @@ class SubAgentMiddleware(AgentMiddleware[Any, ContextT, ResponseT]):
         续跑    这个调用的结论已在 decisions 里 → 作为 `task` 的结果交出，删掉那一项
 
     ★ 它排在调用方中间件**之后**（create_deep_agent）：已经有结果的兄弟调用由外层的
-      SuspensionMiddleware 原样返回，`task` 被配成需审批时由外层的 ApprovalMiddleware
+      SuspensionMiddleware 原样返回，`task` 需要请示时（手动模式等）由外层的 PermissionMiddleware
       先放行 —— 起子 run 永远是最后一步，不会重复起、也不会绕过审批。
 
     ★ SubAgent 的 SubAgent：子 run 的图装的是同一个中间件（server 侧的
@@ -269,8 +281,12 @@ class SubAgentMiddleware(AgentMiddleware[Any, ContextT, ResponseT]):
             allowed = ", ".join(f"`{n}`" for n in self._names)
             return _failed(call_id, f"SubAgent {name!r} 不存在，可用的是：{allowed}")
         try:
+            # ★ 模式取图的 state 里的**当前值**：计划获批后它可能已和 run 开始时不同
             sub_run_id = await self._spawner.spawn(
-                name, str(args.get("description") or ""), fresh=bool(args.get("fresh", False))
+                name,
+                task_brief(args),
+                fresh=bool(args.get("fresh", False)),
+                approval_mode=state.get("approval_mode"),
             )
         except Exception as exc:  # noqa: BLE001
             # ★ 撞上限、同轮同名、会话被占都回成**失败的工具结果**，不冒泡：一次派不出去是
@@ -282,6 +298,15 @@ class SubAgentMiddleware(AgentMiddleware[Any, ContextT, ResponseT]):
         return Command(
             update={"waiting_on": {call_id: {"reason": "subagent", "token": str(sub_run_id)}}}
         )
+
+
+def task_brief(args: dict[str, Any]) -> str:
+    """`task` 调用交给 SubAgent 的任务书：`prompt`，没有时回落 `description`。
+
+    回落给只认旧形态的调用方（拆字段之前的调用、脚本化的假模型）—— 宁可交出一个标题，
+    也不交出空串让 SubAgent 无从下手。
+    """
+    return str(args.get("prompt") or args.get("description") or "")
 
 
 def _failed(call_id: str, text: str) -> ToolMessage:

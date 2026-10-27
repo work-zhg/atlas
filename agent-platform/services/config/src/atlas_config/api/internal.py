@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from ..schemas import McpServerOut, RevokedSkill, SkillCatalogItem, SkillVersionOut, ToolReviewOut
-from .deps import RegistryDep, SkillServiceDep
+from ..schemas import RevokedSkill, SkillCatalogItem, SkillVersionOut
+from .deps import SkillServiceDep
 
 router = APIRouter(prefix="/internal", tags=["internal"])
 
@@ -33,13 +33,3 @@ async def versions(slug: str, service: SkillServiceDep) -> list[SkillVersionOut]
 @router.get("/skills/{slug}/versions/{version}", response_model=SkillVersionOut)
 async def version(slug: str, version: int, service: SkillServiceDep) -> SkillVersionOut:
     return await service.runtime_version(slug, version)
-
-
-@router.get("/mcp/servers", response_model=list[McpServerOut])
-async def mcp_servers(registry: RegistryDep) -> list[McpServerOut]:
-    return await registry.list(enabled_only=True)
-
-
-@router.get("/mcp/reviews", response_model=list[ToolReviewOut])
-async def mcp_reviews(server: str, registry: RegistryDep) -> list[ToolReviewOut]:
-    return await registry.reviews(server)

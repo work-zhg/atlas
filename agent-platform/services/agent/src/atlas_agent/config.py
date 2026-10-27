@@ -3,12 +3,9 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
-from uuid import UUID
 
-from pydantic import AnyHttpUrl, SecretStr, field_validator
+from pydantic import AnyHttpUrl, BaseModel, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
-from .providers.mcp.config import McpServerConfig
 
 
 # .env 在仓库根，但 alembic 是从 server/ 目录运行的 —— 相对路径会读不到。
@@ -22,6 +19,28 @@ def _repo_root() -> Path:
 _REPO_ROOT = _repo_root()
 
 
+class GitProfile(BaseModel):
+    """一个 git 凭据档案（doc/sandbox-opensandbox-design.html §12）：凭据 + 允许使用它的身份。
+
+    ★ 凭据不进 Pod：ensure 之后经 Credential Vault 交给 ACP Pod 的 egress sidecar，由它在发往
+      hosts 的 HTTPS 请求上注入 Basic 认证（透明 MITM）。Pod 里没有凭据文件，也没有环境变量。
+    ★ 整个 git_profiles 来自 Secret（GIT_PROFILES 环境变量，JSON），不进任何 YAML。
+    """
+
+    username: str
+    token: SecretStr
+    #: 凭据注入到哪些主机（只认 HTTPS）
+    hosts: list[str] = ["gitee.com"]
+    #: 提交作者（原来写在 gitconfig 里，现在经 GIT_AUTHOR_* / GIT_COMMITTER_* 交给 CLI）
+    author_name: str = "Atlas Agent"
+    author_email: str = ""
+    #: 允许使用该档案的会话创建者（Atlas 用户 id）。空 = 不限
+    allowed_users: list[str] = []
+    #: 允许使用该档案的业务应用（会话的 source_app，如 teamflow）。空 = 不限。
+    #: ★ 共享机器人账号的档案用它限定「只有 TeamFlow 建的会话能用」（内网身份传递 §9）
+    allowed_apps: list[str] = []
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=_REPO_ROOT / ".env", extra="ignore")
 
@@ -33,14 +52,13 @@ class Settings(BaseSettings):
     litellm_timeout_s: float = 120.0
 
     # ── 身份与鉴权（doc/auth-permission-design.html、doc/identity-propagation-design.html）──
-    #: 身份一律来自请求头（网关按登录态写入 X-Uid；业务应用调用时写它的用户），见 auth/dependency.py
-    #: dev = 缺 X-Uid 用 default_user_id，操作码全有（本机开发、单测）；
-    #: uc  = 缺 X-Uid 一律 401；操作码与数据权限按 X-Auth-Uid 取用户中心授权快照
-    auth_mode: Literal["dev", "uc"] = "dev"
-    #: dev 模式的回落身份
-    default_user_id: UUID
-    #: 用户中心开放接口（uc 模式必需）。内网免令牌：请求头 X-Caller-App: atlas 即应用身份
+    #: 身份一律来自请求头（网关按登录态写入 X-Uid；业务应用调用时写它的用户），缺 X-Uid 一律 401；
+    #: 操作码与数据权限按 X-Auth-Uid 取用户中心授权快照（见 auth/dependency.py）。没有免鉴权的模式
+    #: 用户中心开放接口。内网免令牌：请求头 X-Caller-App 即应用身份
     uc_base_url: str = "http://127.0.0.1:8030"
+    #: 本应用在用户中心的应用编码（uc_app.code），出站请求头 X-Caller-App 写它。
+    #: 编码不是显示名：产品改名不必改它；要改时与用户中心里的编码一起改（数字员工设计 §7.4）
+    uc_app_code: str = "atlas"
     #: 授权快照（操作码 / 菜单 / 账号状态）的进程内缓存
     authz_snapshot_ttl_s: float = 300.0
 
@@ -104,17 +122,60 @@ class Settings(BaseSettings):
     #: 孤儿 Pod 回收的间隔（只有维护者做）。
     pod_reap_interval_s: float = 600.0
 
-    # ── cluster 服务（K8s 模板与 Pod 生命周期的唯一所有者）──────────
-    #: ★ server 不自己碰 K8s：那份 RBAC 只发给 cluster 一个进程。
-    cluster_base_url: AnyHttpUrl = AnyHttpUrl("http://atlas-cluster:8010")
-    # ★ 要盖过 cluster 侧的 pod_ready_timeout_s（默认 120s）：ensure 现在会
-    #   等 Pod 就绪才返回，这个超时短于它的话，server 会在 Pod 正常启动的
-    #   途中放弃，而 cluster 那边还在好好地等 —— 表现是"新建会话总是超时，
-    #   但 kubectl 看过去 Pod 好好的"。
-    cluster_timeout_s: float = 180.0
-    #: 原生智能体的 Shell 沙箱（doc/native-sandbox-design.html）：Pod 由 cluster 创建。
-    #: 关闭时勾了 bash 的智能体在装配期明确报错，不静默少装 execute（§13.2）
+    #: 原生智能体的 Shell 沙箱。关闭时勾了 bash 的智能体在装配期明确报错，
+    #: 不静默少装 execute（§13.2）
     sandbox_enabled: bool = False
+
+    # ── 原生沙箱：OpenSandbox（doc/sandbox-opensandbox-design.html）────────
+    #: ★ 沙箱的建删交给 OpenSandbox 的 lifecycle server（opensandbox-sbx 实例）；按会话的判断
+    #:   （复用、配额、镜像、回收）在 Atlas。server 自己仍不碰 K8s。
+    opensandbox_sbx_url: AnyHttpUrl = AnyHttpUrl("http://opensandbox-sbx:8080")
+    opensandbox_sbx_api_key: SecretStr = SecretStr("")
+    #: 创建会等到沙箱 Running 才返回（OpenSandbox 侧 sandbox_create_timeout_seconds），这里要盖过它
+    opensandbox_timeout_s: float = 200.0
+    #: 整桶的静态 PVC（运维预建，写穿式 S3 CSI）。每个沙箱按 subPath 挂自己的前缀（§6）
+    sandbox_pvc: str = "atlas-oss"
+    sandbox_default_image: str = "atlas-sandbox:dev"
+    #: 智能体可指定的沙箱镜像前缀。★ 任意镜像 = 任意代码以会话身份跑在集群里
+    sandbox_image_allow_prefixes: list[str] = []
+    sandbox_cpu_request: str = "250m"
+    sandbox_cpu_limit: str = "2"
+    sandbox_memory_request: str = "512Mi"
+    sandbox_memory_limit: str = "4Gi"
+    #: 每用户同时存在的沙箱上限，原生沙箱与 ACP Pod 合计。★ 先数再建：软上限（§13）
+    sandbox_quota_per_user: int = 10
+    #: 原生沙箱闲置多久回收（没有运行中的命令、最近没有命令和文件操作）
+    sandbox_idle_ttl_s: float = 1800.0
+    #: 孤儿回收只回收建好超过这么久的 —— 取活会话名单与回收之间新建的沙箱还很年轻
+    sandbox_reap_min_age_s: float = 600.0
+    #: 命令轮询节奏：有输出时贴着最小值，没有输出时逐步放慢到最大值（§8.2）
+    sandbox_poll_min_s: float = 0.3
+    sandbox_poll_max_s: float = 2.0
+    #: 回给模型的命令输出：头尾各一半
+    sandbox_output_limit_bytes: int = 100_000
+    #: 卡死判定：本命令连续 acp_tool_idle_timeout_s 没有新输出，且这段时间容器 CPU 一直低于它
+    sandbox_stall_cpu_pct: float = 2.0
+    #: 路由表在进程内缓存多久（§9）。操作失败时立即作废
+    sandbox_route_cache_s: float = 2.0
+
+    # ── ACP Pod：OpenSandbox 的 opensandbox-acp 实例（doc/sandbox-opensandbox-design.html §11）──
+    opensandbox_acp_url: AnyHttpUrl = AnyHttpUrl("http://opensandbox-acp:8080")
+    opensandbox_acp_api_key: SecretStr = SecretStr("")
+    #: bridge 在 Pod 内监听的端口
+    acp_bridge_port: int = 8900
+    acp_cpu_request: str = "250m"
+    acp_cpu_limit: str = "2"
+    acp_memory_request: str = "512Mi"
+    acp_memory_limit: str = "4Gi"
+    #: 等 bridge 就绪（/readyz：拉起 agent + initialize 完成）的上限。★ 模板合并会丢掉容器的
+    #: readinessProbe，所以由 Atlas 自己等；不等的话第一轮必然连不上 bridge
+    acp_ready_timeout_s: float = 120.0
+    #: 真 CLI 的模型接入（claude-code 认 ANTHROPIC_*）。key 不在这里：在 atlas-acp 命名空间的
+    #: Secret atlas-acp-model 里，由 ACP 模板以文件挂进 Pod，entrypoint 读出后交给 bridge
+    acp_model_base_url: str = ""
+    acp_model_name: str = ""
+    #: git 凭据档案：名字 → GitProfile（JSON，来自 Secret）
+    git_profiles: dict[str, GitProfile] = {}
 
     # ── acp 执行环境（acp 详设 §11）────────────────────────────────
     #: 握手超时。Pod 刚被调度时会慢（镜像拉取），比普通 HTTP 宽松。
@@ -171,53 +232,41 @@ class Settings(BaseSettings):
         """对象存储是否可用。假则整个文件能力关闭。"""
         return bool(self.oss_bucket)
 
-    # ── 跨会话记忆（记忆设计）──────────────────────────────────────
+    # ── 跨会话记忆（doc/memory-design.html §4–§6）─────────────────────
     #
-    # ★ 默认关。记忆有个不对称风险：记对了是锦上添花，**记错了是持续伤害**
-    #   —— 一条被错误提炼的「事实」会在之后每一轮被注入，让模型反复基于
-    #   错误前提作答，而用户往往不知道问题出在哪（§12 第 1 项）。
-    #   所以上线顺序是：先只抽取与存储、纯观察质量，再开检索工具，最后才
-    #   开自动注入。本轮只到第一步。
-    #
-    # ★ 记忆**绝不能成为会话的硬依赖**（§11）：Mem0 不可用时安静降级，
-    #   不能让用户发不出消息。
-    memory_enabled: bool = False
+    # ★ 存储在记忆服务（atlas-memory）；Atlas 决定存什么、怎么取、冲突怎么解决。
+    # ★ 记忆**绝不能成为会话的硬依赖**：记忆服务 / 用户中心不可用时，本会话暂时不用记忆
+    #   （不加载、不写入），对话照常进行。
+    #: 记忆服务地址。空 = 未接入：不登记、不加载、不补记，「记忆」工具标为不可用
+    memory_base_url: str | None = None
+    memory_timeout_s: float = 10.0
+    #: 「用户」作用域的编码（记忆服务里配置，关联主键字段 uid，打开数据权限开关）
+    memory_user_scope: str = "user"
+    #: 单个主题的大小上限（字符）。★ 给 LLM 的软上限：超了照样能写，由会话后补记拆小（§4.2）
+    memory_topic_max_chars: int = 2_000
+    #: 常驻总预算（字符）：常驻主题合计超过它时，排在后面的改为按需加载（§5.2）
+    memory_resident_budget_chars: int = 6_000
+    #: 每轮最多写入几次（保存 + 遗忘），防止过程中存写得太多（§4.8）
+    memory_max_writes_per_run: int = 8
 
-    #: 抽取用的模型。★ 走 DeepSeek 的 **OpenAI 兼容**端点，与平台自己用的
-    #: Anthropic 端点是两码事 —— mem0 的 openai provider 认的是前者。
-    memory_llm_base_url: str = "https://api.deepseek.com/v1"
-    memory_llm_model: str = "deepseek-flash"
-    #: 抽取用的 key。留空则复用 litellm_key（同一个 DeepSeek 账号）。
-    memory_llm_api_key: SecretStr | None = None
-
-    #: Embedding 模型（FastEmbed，本地 ONNX）。
-    #:
-    #: ★ 不用 fastembed 的默认 thenlper/gte-large —— 那个 1.2GB，塞进
-    #:   镜像不合算。bge-small-zh 只有 90MB，且针对中文，与本平台的
-    #:   实际内容（中文技术对话）对得上。
-    #: ★ 换模型要同时改 docker/app/Dockerfile 的预置步骤，否则容器首启
-    #:   会去 HuggingFace 下载 —— 在受限网络下那是一次必然失败，而表现
-    #:   是「记忆悄悄不工作」。
-    memory_embed_model: str = "BAAI/bge-small-zh-v1.5"
-
-    #: 向量库。docker-compose 里的 qdrant。
-    memory_qdrant_url: str = "http://127.0.0.1:6333"
-    memory_collection: str = "atlas_memory"
-    #: Mem0 的变更史库（SQLite）。★ 默认在 ~/.mem0/history.db —— 容器里
-    #: 那是易失的，重启即丢。指到挂卷路径上，否则 §10 的「变更史」等于没有。
-    memory_history_db: str = "/tmp/atlas-mem0-history.db"
-
-    #: 入队前的廉价过滤（§04）：正文短于这个字数就不值一次抽取的 LLM 调用。
-    #: 纯工具执行、一句「好的」，都会被它挡掉 —— 否则记忆服务的成本随会话
-    #: 量线性增长而收益极低。
-    memory_min_chars: int = 40
-    #: 记忆自动注入（上下文管理 §11）：每轮按提问检索相关记忆，作为附件附在请求末尾（不落库）
-    memory_auto_inject: bool = True
-    memory_inject_top_k: int = 5
-    memory_inject_threshold: float = 0.5
-    memory_inject_max_chars: int = 5_000
-    #: 抽取失败的重试上限，超过进死信（§11）。
-    memory_max_attempts: int = 3
+    # 会话后补记（§4.5）
+    #: 会话空闲多久后补记（归档的会话不等）
+    memory_backfill_idle_s: float = 1_800.0
+    #: 维护者多久扫一次需要补记的会话
+    memory_backfill_scan_s: float = 60.0
+    #: 一次扫描最多处理几个会话
+    memory_backfill_batch: int = 20
+    #: 新内容（用户与助手正文）短于这个字数就跳过，不值一次 LLM 调用。
+    #: ★ 按字符数算，中文很密：「以后回复都用中文」只有 8 个字，却正是要记的那类话
+    memory_backfill_min_chars: int = 12
+    #: 送给抽取模型的会话正文上限（字符，取最近的部分）
+    memory_backfill_input_chars: int = 24_000
+    #: 一次补记最多写入几条
+    memory_backfill_max_writes: int = 8
+    #: 连续失败这么多次就不再自动重试这个会话（避免反复烧 LLM）；有新消息后重新计数
+    memory_backfill_max_failures: int = 3
+    #: 抽取 / 拆分用的模型。空 = summarizer_model
+    memory_backfill_model: str | None = None
 
     # ── 遥测（可观测性设计 §02）────────────────────────────────────
     #
@@ -257,33 +306,30 @@ class Settings(BaseSettings):
             return "full" if value.strip().lower() in ("true", "1") else "off"
         return value
 
-    # 远程 MCP server 列表（JSON 数组）。凭据写 ${ENV_VAR} 占位符，
-    # 真值放环境变量 —— §14 要求凭据不落配置、不进 agent_version.spec。
-    # 例：[{"name":"weather","url":"https://x/mcp",
-    #      "headers":{"Authorization":"Bearer ${WEATHER_TOKEN}"}}]
-    mcp_servers: list[McpServerConfig] = []
-    #: 单次 tools/call 的上限（全局默认，单个 server 可用 call_timeout_s 覆盖）。
+    # ── MCP（doc/mcp-design.html 第二版）──────────────────────────────
+    #: MCP 网关地址。Atlas 和 Pod 里的 CLI 都只连它：服务地址是 {mcp_gateway_url}/mcp/{服务名}，
+    #: 看不到 Higress。服务、工具定义、复核结论都从网关读，Atlas 不自己发现工具；调用带这一轮
+    #: 权限主体的 API Key。空 = 没接入：引用了 MCP 工具的 Agent 保存与运行都明确报错
+    mcp_gateway_url: str | None = None
+    #: 网关元数据（服务、工具定义、复核结论）的进程内缓存时间。另在 Redis 留一份：网关暂时不可用
+    #: 时装配照样能用缓存的定义
+    mcp_metadata_ttl_s: float = 60.0
+    #: 「主体能用哪些服务 + 主体的 Key」的进程内缓存时间。★ 只在内存里，不进 Redis
+    mcp_access_ttl_s: float = 30.0
+    #: 单次 tools/call 的上限（全局默认，单个服务可用 call_timeout_s 覆盖）。
     #: 超时交给模型（「稍后重试或换一种方式」），不打死整个 run ——
-    #: 一个 MCP server 抖一下不该让整轮失败（MCP 详设 §06）。
+    #: 一个 MCP 服务抖一下不该让整轮失败（MCP 详设 §06）。
     mcp_call_timeout_s: float = 60.0
-    #: tools/list 的上限。只在冷缓存与软过期刷新时发生。
-    mcp_discovery_timeout_s: float = 10.0
-    #: 工具定义缓存的软过期：过了之后下一个调用方刷新一次，失败则继续用旧的。
-    mcp_cache_soft_ttl_s: float = 600.0
     #: 单个文本结果的上限。★ 必须大于 FilesystemMiddleware 的转存阈值
     #: （80 000 字符），否则会抢先裁掉本可完整转存到工作区的内容。
     mcp_max_result_chars: int = 100_000
-    #: MCP server 定义从哪来。env = 上面的 mcp_servers（过渡期）；config = 配置服务的
-    #: 注册表（doc/skill-mcp-backend-design.html §8.1）。工具发现两种都在本进程做 ——
-    #: 凭据只在运行时进程里。
-    mcp_registry: Literal["env", "config"] = "env"
 
     # ── 配置服务（atlas-config）────────────────────────────────────────
-    #: 技能目录与 MCP 注册表的来源。空 = 未接入：
+    #: 技能目录的来源。空 = 未接入：
     #:   · 技能引用必须带版本号，保存时不做存在性校验（兼容接入前的行为）
     #:   · 描述以 slug 兜底
     config_base_url: str | None = None
-    #: 可变状态（技能 status、下架清单、MCP 定义与复核结论）的缓存时间。
+    #: 可变状态（技能 status、下架清单）的缓存时间。
     #: ★ 已发布技能版本的内容不受它影响 —— 版本不可变，永久缓存。
     configplane_status_ttl_s: float = 60.0
     #: 技能版本内容的磁盘缓存。进程重启不该让全部会话重新拉配置。

@@ -1,0 +1,45 @@
+# 服务器上的 OTel Collector 配置：与 deploy/local/otel/collector-langfuse.yaml 相同的分流（Jaeger + Langfuse），
+# 只是 Langfuse 的认证头来自 Secret（环境变量 LANGFUSE_OTLP_AUTH，deploy.sh 随机生成的 pk/sk），不写进文件。
+receivers:
+  otlp:
+    protocols:
+      http: {endpoint: 0.0.0.0:4318}
+      grpc: {endpoint: 0.0.0.0:4317}
+processors:
+  # Jaeger 那一路去掉 LLM 的输入输出（它是 APM，不该存提示词）；Langfuse 那一路保留
+  attributes/strip-content:
+    actions:
+      - {key: gen_ai.input.messages, action: delete}
+      - {key: gen_ai.output.messages, action: delete}
+      - {key: gen_ai.prompt, action: delete}
+      - {key: gen_ai.completion, action: delete}
+      - {key: langfuse.trace.input, action: delete}
+      - {key: langfuse.trace.output, action: delete}
+      - {key: langfuse.observation.input, action: delete}
+      - {key: langfuse.observation.output, action: delete}
+  resource:
+    attributes:
+      - {key: deployment.environment, value: server, action: upsert}
+  batch:
+    timeout: 2s
+exporters:
+  otlp_grpc/jaeger:
+    endpoint: jaeger:4317
+    tls: {insecure: true}
+  otlp_http/langfuse:
+    endpoint: http://langfuse-web:3000/api/public/otel
+    headers:
+      Authorization: "${env:LANGFUSE_OTLP_AUTH}"
+      x-langfuse-ingestion-version: "4"
+service:
+  pipelines:
+    traces/jaeger:
+      receivers: [otlp]
+      processors: [attributes/strip-content, resource, batch]
+      exporters: [otlp_grpc/jaeger]
+    traces/langfuse:
+      receivers: [otlp]
+      processors: [resource, batch]
+      exporters: [otlp_http/langfuse]
+  telemetry:
+    logs: {level: info}

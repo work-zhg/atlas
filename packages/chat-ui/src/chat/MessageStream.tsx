@@ -8,12 +8,13 @@ import type { Message } from "../api/types";
 import { Icon } from "../components/Icon";
 import { Markdown } from "../components/Markdown";
 import { relativeTime } from "../lib/format";
-import type { AgentModeData } from "../lib/events";
+import { APPROVAL_MODE_LABEL, type AgentModeData, type ApprovalMode } from "../lib/events";
 import { isStreamDone, type Notice, type RunState, type TimelineItem } from "../lib/run-reducer";
 import { avatarBackground, avatarLetter } from "../lib/avatar";
 import { ApprovalCard } from "./ApprovalCard";
 import { CompactionDivider } from "./CompactionDivider";
 import styles from "./chat.module.css";
+import { QuestionCard } from "./QuestionCard";
 import { SubAgentCard } from "./SubAgentCard";
 import { TodoCard } from "./TodoCard";
 import { ToolCallRow } from "./ToolCallRow";
@@ -85,6 +86,10 @@ function LiveItem({ item, live, isLast }: { item: TimelineItem; live: RunState; 
       );
     }
     case "tool": {
+      // 向用户提问的那次调用由问题卡片完整呈现，不再单独显示一行（按 tool_call_id 关联）
+      if (live.approvals.some((a) => a.kind === "question" && a.toolCallId === item.callId)) {
+        return null;
+      }
       const call = live.toolCalls.find((c) => c.callId === item.callId);
       return call ? <ToolCallRow call={call} /> : null;
     }
@@ -96,6 +101,15 @@ function LiveItem({ item, live, isLast }: { item: TimelineItem; live: RunState; 
       const approval = live.approvals.find((a) => a.approvalId === item.approvalId);
       if (!approval) return null;
       const waiting = live.pendingApprovals.some((a) => a.approvalId === item.approvalId);
+      if (approval.kind === "question") {
+        return (
+          <QuestionCard
+            approval={approval}
+            waiting={waiting}
+            answered={live.answers[approval.approvalId]}
+          />
+        );
+      }
       return <ApprovalCard approval={approval} waiting={waiting} />;
     }
     case "todos":
@@ -149,6 +163,15 @@ function NoticeRow({ notice }: { notice: Notice }) {
       </div>
     );
   }
+  if (notice.type === "mcp.tool_skipped") {
+    return (
+      <div className={styles.modeBadge}>
+        <Icon name="plug" size={13} />
+        MCP <Tag color="error" style={{ marginInlineEnd: 0 }}>{notice.data.server}</Tag>
+        <span className={styles.modeHint}>{notice.data.message}</span>
+      </div>
+    );
+  }
   const used = notice.data.action === "used";
   return (
     <div className={styles.modeBadge}>
@@ -174,6 +197,18 @@ const modeLabel = (m: string | null) => (m ? (MODE_LABEL[m] ?? m) : "不支持")
  *   不说清楚，用户会以为 Auto 坏了。
  */
 function ModeBadge({ mode }: { mode: AgentModeData }) {
+  // native：计划获批，换成用户选的执行模式（doc/native-approval-mode-design.html §7）
+  if (mode.source === "plan_approved") {
+    return (
+      <div className={styles.modeBadge}>
+        计划已批准，以
+        <Tag color="processing" style={{ marginInlineEnd: 0 }}>
+          {APPROVAL_MODE_LABEL[mode.effective as ApprovalMode] ?? mode.effective}
+        </Tag>
+        模式执行
+      </div>
+    );
+  }
   if (!mode.degraded) {
     return (
       <div className={styles.modeBadge}>

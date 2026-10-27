@@ -15,6 +15,9 @@ export type AgentUpdate = S["AgentUpdate"];
 export type AgentSpecIn = S["AgentSpecIn"];
 export type AgentVersion = S["AgentVersionOut"];
 export type AgentStatus = Agent["status"];
+/** 权限类型（数字员工设计 §7.1）：user = 以人为权限，agent = 以 Agent 为权限 */
+export type AuthSubject = Agent["auth_subject"];
+export type AgentIdentity = S["AgentIdentityOut"];
 
 export type Thread = S["ThreadOut"];
 export type ThreadCreate = S["ThreadCreate"];
@@ -62,7 +65,17 @@ export type McpServerDetail = S["McpServerDetailOut"];
 export type McpTool = S["McpToolOut"];
 export type SkillRefIn = S["SkillRefIn"];
 
-export type Memory = S["MemoryOut"];
+// ---------- 记忆（doc/memory-design.html §7：管理接口 /v1/memories）
+
+export type MemoryTopic = S["TopicOut"];
+export type MemoryTopicDetail = S["TopicDetailOut"];
+export type MemoryEntry = S["EntryOut"];
+export type MemoryEntryDetail = S["EntryDetailOut"];
+export type MemoryEntryList = S["EntryListOut"];
+export type MemoryWrite = S["WriteOut"];
+export type MemoryRevision = S["RevisionOut"];
+export type MemorySettings = S["MemorySettingsOut"];
+export type MemoryBackfill = S["BackfillOut"];
 export type WorkspaceFile = S["WorkspaceFile"];
 export type WorkspaceFilesOut = S["WorkspaceFilesOut"];
 export type PreviewSessionOut = S["PreviewSessionOut"];

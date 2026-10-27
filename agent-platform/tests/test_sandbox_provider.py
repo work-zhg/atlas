@@ -1,215 +1,307 @@
-"""server 侧的 Shell 沙箱：PodSandbox 对着进程内真起的 sandboxd。
+"""server 侧的 Shell 沙箱：PodSandbox 对着假 OpenSandbox（doc/sandbox-opensandbox-design.html §8）。
 
-doc/native-sandbox-design.html §8。
+假 lifecycle + 假 execd 在进程内（tests/opensandbox_fake.py），命令真跑在 bash 里；
+路由表、令牌、锁用测试库的 Redis。
 
-不连 K8s：cluster 用假的 ensure_sandbox，直接指向本地 sandboxd —— 被测的是协议、幂等、
-断线重连、取消、重建提示与错误语义；Pod 本身由 test_cluster_sandbox 与真集群冒烟覆盖。
+被测的是协议与语义：后台提交、重放不重跑、断线用同一个游标接上、沙箱重启 / 替换、
+init 前断线、卡死、取消、截断、重建提示与错误语义。
+真集群上的行为由 P0 验证与部署后冒烟覆盖。
 """
 
 from __future__ import annotations
 
 import asyncio
-import socket
-import threading
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
-import httpx
 import pytest
-from atlas_agent.providers.cluster import ClusterUnavailable
-from atlas_agent.providers.pods import PodEndpoint
+from atlas_agent.config import get_settings
+from atlas_agent.providers import sandbox as sandbox_mod
+from atlas_agent.providers.opensandbox import SandboxProvisioner
 from atlas_agent.providers.sandbox import PodSandbox
+from atlas_agent.redisx import make_redis
 from atlas_engine.contracts import SandboxUnavailable
-from atlas_sandboxd.config import ServeConfig
-from atlas_sandboxd.execs import ExecManager
-from atlas_sandboxd.server import make_server
 
-WS = "ws-thread"
+from tests.opensandbox_fake import FakeOpenSandbox, fake_settings, wipe
 
-
-class _Daemon:
-    def __init__(self, tmp: Path, name: str) -> None:
-        ws = tmp / "ws"
-        ws.mkdir(exist_ok=True)
-        token = tmp / f"{name}.token"
-        token.write_text("tok")
-        cfg = ServeConfig(
-            port=0,
-            host="127.0.0.1",
-            token_file=str(token),
-            session_id=WS,
-            workspace=str(ws),
-            log_dir=str(tmp / f"{name}-logs"),
-            idle_s=0,
-            kill_grace_s=0.3,
-            heartbeat_s=0.5,
-        )
-        self.workspace = ws
-        self.manager = ExecManager(cfg)
-        self.server = make_server(cfg, self.manager)
-        threading.Thread(target=self.server.serve_forever, daemon=True).start()
-        self.endpoint = PodEndpoint(
-            url=f"http://127.0.0.1:{self.server.server_address[1]}", token="tok"
-        )
-
-    def stop(self) -> None:
-        self.server.shutdown()
-        self.server.server_close()
-        self.manager.close()
-
-
-class _Pods:
-    """假的 cluster：按顺序返回端点；记录调用次数。"""
-
-    def __init__(self, *endpoints: PodEndpoint | Exception) -> None:
-        self._eps = list(endpoints)
-        self.calls: list[dict[str, Any]] = []
-
-    async def ensure_sandbox(self, **kw: Any) -> PodEndpoint:
-        self.calls.append(kw)
-        ep = self._eps[0] if len(self._eps) == 1 else self._eps.pop(0)
-        if isinstance(ep, Exception):
-            raise ep
-        return ep
+USER = "u-1"
 
 
 @pytest.fixture
-def daemon(tmp_path: Path) -> Iterator[_Daemon]:
-    d = _Daemon(tmp_path, "a")
-    yield d
-    d.stop()
+def fake(tmp_path: Path) -> Iterator[FakeOpenSandbox]:
+    f = FakeOpenSandbox(tmp_path)
+    yield f
+    f.close()
 
 
-def _sandbox(pods: _Pods, run: str = "run-1") -> PodSandbox:
-    return PodSandbox(pods=pods, workspace_thread_id=WS, user_id="u-1", run_id=run)  # type: ignore[arg-type]
+@pytest.fixture
+def ws() -> str:
+    return f"ws-{uuid4().hex[:10]}"
 
 
-def _dead_endpoint() -> PodEndpoint:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        port = s.getsockname()[1]
-    return PodEndpoint(url=f"http://127.0.0.1:{port}", token="tok")
+@pytest.fixture
+async def redis(fake: FakeOpenSandbox, ws: str) -> AsyncIterator[Any]:
+    client = make_redis(get_settings())
+    yield client
+    await wipe(client, ws, fake.prefix)
+    await client.aclose()
 
 
-async def test_execute_creates_pod_once_and_returns_output(daemon: _Daemon) -> None:
-    pods = _Pods(daemon.endpoint)
-    sbx = _sandbox(pods)
-    r1 = await sbx.aexecute("echo hello; exit 2", exec_id="c1")
-    r2 = await sbx.aexecute("pwd", exec_id="c2")
-    assert r1.exit_code == 2 and "hello" in r1.output
-    assert str(daemon.workspace) in r2.output
-    assert len(pods.calls) == 1  # 按需创建，一个 run 内只 ensure 一次
-    assert pods.calls[0]["workspace_thread_id"] == WS
+def _provisioner(fake: FakeOpenSandbox, redis: Any, **settings: Any) -> SandboxProvisioner:
+    return SandboxProvisioner(fake_settings(**settings), redis, transport=fake.async_transport)
 
 
-async def test_same_tool_call_is_not_executed_twice(daemon: _Daemon) -> None:
-    marker = daemon.workspace / "n"
-    sbx = _sandbox(_Pods(daemon.endpoint))
-    cmd = f"echo x >> {marker}"
-    await sbx.aexecute(cmd, exec_id="same")
-    again = _sandbox(_Pods(daemon.endpoint))  # 例如 server 重启后重放同一个 tool_call
-    await again.aexecute(cmd, exec_id="same")
-    assert marker.read_text().count("x") == 1
+def _sandbox(fake: FakeOpenSandbox, redis: Any, ws: str, **kw: Any) -> PodSandbox:
+    """run_id 随工作区唯一：命令映射是进程级的，用例之间不能共用 {run}:{tool_call}。"""
+    kw.setdefault("poll_min_s", 0.02)
+    kw.setdefault("poll_max_s", 0.05)
+    return PodSandbox(
+        provisioner=_provisioner(fake, redis),
+        workspace_thread_id=ws,
+        user_id=USER,
+        run_id=f"run-{ws}",
+        transport=fake.async_transport,
+        **kw,
+    )
 
 
-async def test_reconnects_when_pod_address_was_stale(daemon: _Daemon) -> None:
-    # 第一次拿到的地址已失效（Pod 重建换了 IP）→ 重新 ensure 后接上
-    pods = _Pods(_dead_endpoint(), daemon.endpoint)
-    r = await _sandbox(pods).aexecute("echo ok", exec_id="c")
-    assert "ok" in r.output and len(pods.calls) == 2
+async def _until(cond: Any, timeout: float = 5.0) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not cond():
+        assert asyncio.get_running_loop().time() < deadline, "等待超时"
+        await asyncio.sleep(0.02)
 
 
-async def test_cluster_failure_becomes_tool_error_not_run_failure() -> None:
-    pods = _Pods(ClusterUnavailable("该用户已有 10 个会话 Pod（上限 10）"))
-    with pytest.raises(SandboxUnavailable, match="上限"):
-        await _sandbox(pods).aexecute("true", exec_id="c")
+# ──────────────────────────────────────────────── 正常路径
 
 
-async def test_rebuilt_sandbox_is_announced(tmp_path: Path, daemon: _Daemon) -> None:
-    await _sandbox(_Pods(daemon.endpoint)).aexecute("true", exec_id="c1")
-    rebuilt = _Daemon(tmp_path, "b")  # 新的 boot_id
-    try:
-        r = await _sandbox(_Pods(rebuilt.endpoint), run="run-2").aexecute("echo hi", exec_id="c2")
-    finally:
-        rebuilt.stop()
+async def test_first_execute_creates_the_sandbox_and_later_ones_reuse_it(
+    fake: FakeOpenSandbox, redis: Any, ws: str
+) -> None:
+    sbx = _sandbox(fake, redis, ws)
+    first = await sbx.aexecute("echo hi > a.txt; echo hi")
+    second = await sbx.aexecute("cat a.txt; exit 3")
+    assert (first.output, first.exit_code) == ("hi\n", 0)
+    assert (second.output, second.exit_code) == ("hi\n", 3)
+    assert len(fake.created) == 1
+    assert (fake.workspace(ws) / "a.txt").read_text() == "hi\n"  # cwd 是 /workspace
+
+
+async def test_create_request_matches_the_design(
+    fake: FakeOpenSandbox, redis: Any, ws: str
+) -> None:
+    """§8.1：不过期、元数据可按会话 / 用户查、令牌经 env 下发、
+    工作区与技能区按 subPath 挂同一个 PVC。
+    """
+    await _sandbox(fake, redis, ws).aexecute("true")
+    (sb,) = fake.created
+    spec = sb.spec
+    assert spec["timeout"] is None
+    assert spec["image"] == {"uri": get_settings().sandbox_default_image}
+    assert spec["metadata"] == {
+        "atlas.managed": "true",
+        "atlas.kind": "sbx",
+        "atlas.thread": ws,
+        "atlas.user": USER,
+    }
+    mounts = {v["mountPath"]: v for v in spec["volumes"]}
+    assert mounts["/workspace"]["subPath"] == f"{USER}/{ws}/workspace"
+    assert mounts["/workspace"]["readOnly"] is False
+    assert mounts["/skills"]["subPath"] == f"{USER}/{ws}/skills"
+    assert mounts["/skills"]["readOnly"] is True
+    assert {v["pvc"]["createIfNotExists"] for v in spec["volumes"]} == {False}
+    token = spec["env"]["EXECD_ACCESS_TOKEN"]
+    assert len(token) >= 24
+    assert await redis.get(f"atlas:sbx:token:{sb.id}") == token  # GET 不回 env：只能 Atlas 自己存
+
+
+async def test_running_set_is_empty_after_the_command(
+    fake: FakeOpenSandbox, redis: Any, ws: str
+) -> None:
+    sbx = _sandbox(fake, redis, ws)
+    task = asyncio.create_task(sbx.aexecute("sleep 0.5"))
+    for _ in range(100):  # 跑着的时候闲置回收看得见它
+        if await sbx._p.routes.running(ws):
+            break
+        await asyncio.sleep(0.02)
+    else:
+        pytest.fail("运行中的命令没有记进路由表")
+    await task
+    assert await sbx._p.routes.running(ws) == set()
+
+
+async def test_output_keeps_head_and_tail(fake: FakeOpenSandbox, redis: Any, ws: str) -> None:
+    r = await _sandbox(fake, redis, ws, output_limit=40).aexecute("seq 1 5000")
+    assert r.truncated is True
+    assert r.output.startswith("1\n2\n3\n")
+    assert r.output.endswith("4999\n5000\n")
+    assert "省略中间" in r.output
+
+
+# ──────────────────────────────────────────────── 重放不重跑
+
+
+async def test_replayed_tool_call_is_not_run_again(
+    fake: FakeOpenSandbox, redis: Any, ws: str
+) -> None:
+    """跑完了、checkpoint 却没落下 → 同一个 tool_call 再来：从 execd 重读原结果，不重跑。"""
+    sbx = _sandbox(fake, redis, ws)
+    cmd = "echo x >> marker; echo done; exit 4"
+    first = await sbx.aexecute(cmd, exec_id="call-1")
+    again = await sbx.aexecute(cmd, exec_id="call-1")
+    assert (again.output, again.exit_code) == (first.output, first.exit_code) == ("done\n", 4)
+    assert (fake.workspace(ws) / "marker").read_text() == "x\n"
+    other = await sbx.aexecute(cmd, exec_id="call-2")  # 另一个调用照常执行
+    assert other.exit_code == 4
+    assert (fake.workspace(ws) / "marker").read_text() == "x\nx\n"
+
+
+async def test_replay_while_running_attaches_to_the_same_command(
+    fake: FakeOpenSandbox, redis: Any, ws: str
+) -> None:
+    sbx = _sandbox(fake, redis, ws)
+    cmd = "echo x >> marker; sleep 0.4; echo done"
+    first = asyncio.create_task(sbx.aexecute(cmd, exec_id="call-1"))
+    await _until(lambda: (fake.workspace(ws) / "marker").exists())
+    second = await _sandbox(fake, redis, ws).aexecute(cmd, exec_id="call-1")
+    assert second.output == "done\n"
+    assert (await first).output == "done\n"
+    assert (fake.workspace(ws) / "marker").read_text() == "x\n"
+
+
+# ──────────────────────────────────────────────── 断线与沙箱变化
+
+
+async def test_reconnect_continues_from_the_same_cursor(
+    fake: FakeOpenSandbox, redis: Any, ws: str
+) -> None:
+    """execd 一时连不上：重新 ensure，同一个命令 id、同一个游标接着读 —— 输出不重不漏。"""
+    sbx = _sandbox(fake, redis, ws)
+    task = asyncio.create_task(sbx.aexecute("for i in 1 2 3 4 5; do echo line$i; sleep 0.15; done"))
+    await _until(lambda: fake.created and fake.created[0].commands)
+    await asyncio.sleep(0.25)
+    fake.break_execd(1)
+    r = await task
+    assert r.output == "".join(f"line{i}\n" for i in range(1, 6))
+    assert r.exit_code == 0
+    assert len(fake.created) == 1
+
+
+async def test_execd_restart_mid_command_is_reported_not_rerun(
+    fake: FakeOpenSandbox, redis: Any, ws: str
+) -> None:
+    sbx = _sandbox(fake, redis, ws)
+    task = asyncio.create_task(sbx.aexecute("echo x >> marker; sleep 5"))
+    await _until(lambda: (fake.workspace(ws) / "marker").exists())
+    fake.restart_execd(fake.created[0].id)
+    with pytest.raises(SandboxUnavailable, match="沙箱重启"):
+        await task
+    assert (fake.workspace(ws) / "marker").read_text() == "x\n"
+
+
+async def test_replaced_sandbox_fails_the_command_and_is_announced_next_time(
+    fake: FakeOpenSandbox, redis: Any, ws: str
+) -> None:
+    sbx = _sandbox(fake, redis, ws)
+    await sbx.aexecute("true")
+    task = asyncio.create_task(sbx.aexecute("sleep 5"))
+    await _until(lambda: len(fake.created[0].commands) == 2)
+    fake.vanish(fake.created[0].id)  # Pod 被驱逐：重连时 ensure 建了新沙箱
+    with pytest.raises(SandboxUnavailable, match="沙箱重启"):
+        await task
+    assert len(fake.created) == 2
+    r = await sbx.aexecute("echo ok")
     assert r.output.startswith("[沙箱环境已重建")
-    assert "hi" in r.output
+    assert r.output.endswith("ok\n")
+    assert (await sbx.aexecute("echo ok")).output == "ok\n"  # 只提示一次
 
 
-async def test_cancel_kills_the_command(daemon: _Daemon) -> None:
-    child = daemon.workspace / "late"
-    sbx = _sandbox(_Pods(daemon.endpoint), run="run-c")
-    task = asyncio.create_task(sbx.aexecute(f"sleep 2; touch {child}", exec_id="long"))
-    await asyncio.sleep(0.5)
+async def test_disconnect_before_init_reports_unknown_result(
+    fake: FakeOpenSandbox, redis: Any, ws: str
+) -> None:
+    fake.drop_init = True
+    with pytest.raises(SandboxUnavailable, match="结果未知"):
+        await _sandbox(fake, redis, ws).aexecute("echo x >> marker", exec_id="c")
+    await _until(lambda: (fake.workspace(ws) / "marker").exists())
+    assert (fake.workspace(ws) / "marker").read_text() == "x\n"  # 命令确实跑了 —— 所以不能重跑
+
+
+async def test_sandbox_start_failure_becomes_tool_error(
+    fake: FakeOpenSandbox, redis: Any, ws: str
+) -> None:
+    fake.create_state = "Failed"
+    with pytest.raises(SandboxUnavailable, match="沙箱启动失败"):
+        await _sandbox(fake, redis, ws).aexecute("true")
+    assert fake.deleted == [fake.created[0].id]  # 起不来的当场删掉
+
+
+# ──────────────────────────────────────────────── 卡死与取消
+
+
+async def test_quiet_and_idle_command_is_judged_stalled(
+    fake: FakeOpenSandbox, redis: Any, ws: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sandbox_mod, "_CPU_SAMPLE_S", 0.1)
+    fake.cpu_pct = 0.5
+    r = await _sandbox(fake, redis, ws, idle_s=0.2).aexecute("echo start; sleep 30")
+    assert r.output.startswith("start\n")
+    assert "判定为卡死" in r.output
+    assert r.exit_code != 0
+
+
+async def test_quiet_but_busy_command_is_not_killed(
+    fake: FakeOpenSandbox, redis: Any, ws: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sandbox_mod, "_CPU_SAMPLE_S", 0.1)
+    fake.cpu_pct = 90.0
+    r = await _sandbox(fake, redis, ws, idle_s=0.1).aexecute("sleep 0.6; echo done")
+    assert (r.output, r.exit_code) == ("done\n", 0)
+
+
+async def test_unknown_cpu_never_kills(
+    fake: FakeOpenSandbox, redis: Any, ws: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sandbox_mod, "_CPU_SAMPLE_S", 0.1)
+    fake.cpu_pct = None
+    r = await _sandbox(fake, redis, ws, idle_s=0.1).aexecute("sleep 0.6; echo done")
+    assert (r.output, r.exit_code) == ("done\n", 0)
+
+
+async def test_cancel_interrupts_the_command(fake: FakeOpenSandbox, redis: Any, ws: str) -> None:
+    sbx = _sandbox(fake, redis, ws)
+    task = asyncio.create_task(sbx.aexecute("sleep 30", exec_id="c"))
+    await _until(lambda: fake.created and fake.created[0].commands)
+    (cmd,) = fake.created[0].commands.values()
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    await asyncio.sleep(2.5)
-    assert not child.exists()
-    ex = daemon.manager.get("run-c:long")
-    assert ex is not None and ex.result is not None and ex.result["killed"]
+    await _until(lambda: cmd.proc.poll() is not None)
+    assert f"run-{ws}:c" not in sandbox_mod._EXECS  # 中断过的调用再来一次就是新的执行
 
 
-class _BreakOnceAfterStart(httpx.AsyncBaseTransport):
-    """第一条流在收到 started 之后断开（模拟网络中断 / Pod 消失）；之后的请求正常转发。"""
+async def test_cancel_during_submit_still_interrupts(
+    fake: FakeOpenSandbox, redis: Any, ws: str
+) -> None:
+    """取消落在「execd 已经开跑、init 还没回来」之间：拿到 id 后照样中断。
 
-    def __init__(self) -> None:
-        self._inner = httpx.AsyncHTTPTransport()
-        self._broken = False
-
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        resp = await self._inner.handle_async_request(request)
-        if self._broken:
-            return resp
-        self._broken = True
-        inner = resp.stream
-
-        class _Stream(httpx.AsyncByteStream):
-            async def __aiter__(self):  # type: ignore[override]
-                async for chunk in inner:  # type: ignore[union-attr]
-                    yield chunk
-                    if b'"started"' in chunk:
-                        raise httpx.ReadError("连接被重置")
-
-            async def aclose(self) -> None:
-                await inner.aclose()  # type: ignore[union-attr]
-
-        return httpx.Response(resp.status_code, headers=resp.headers, stream=_Stream())
+    否则命令会在沙箱里一直跑下去，没人管（不设运行上限）。
+    """
+    fake.submit_delay_s = 0.3
+    sbx = _sandbox(fake, redis, ws)
+    await sbx.aexecute("true")  # 先把沙箱建好：取消要落在提交上，而不是 ensure 上
+    task = asyncio.create_task(sbx.aexecute("sleep 30", exec_id="c"))
+    await _until(lambda: len(fake.created[0].commands) == 2)
+    cmd = list(fake.created[0].commands.values())[-1]
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await _until(lambda: cmd.proc.poll() is not None)
+    assert f"run-{ws}:c" not in sandbox_mod._EXECS
 
 
-async def test_restart_mid_command_is_not_rerun(tmp_path: Path, daemon: _Daemon) -> None:
-    """流断后重连，发现 Pod 已重建（新 boot_id、不认识这条命令）→ 报错，而不是再跑一遍。"""
-    rebuilt = _Daemon(tmp_path, "c")
-    try:
-        pods = _Pods(daemon.endpoint, rebuilt.endpoint)
-        sbx = PodSandbox(
-            pods=pods,  # type: ignore[arg-type]
-            workspace_thread_id=WS,
-            user_id="u-1",
-            run_id="run-r",
-            transport=_BreakOnceAfterStart(),
-        )
-        with pytest.raises(SandboxUnavailable, match="重启"):
-            await sbx.aexecute("sleep 5", exec_id="x")
-        assert rebuilt.manager.get("run-r:x") is None  # 新 Pod 上没有重跑
-    finally:
-        rebuilt.stop()
-
-
-async def test_reconnect_resumes_the_same_command(daemon: _Daemon) -> None:
-    """流断后重连到同一个 Pod：接上原命令，不重跑。"""
-    marker = daemon.workspace / "once"
-    sbx = PodSandbox(
-        pods=_Pods(daemon.endpoint),  # type: ignore[arg-type]
-        workspace_thread_id=WS,
-        user_id="u-1",
-        run_id="run-s",
-        transport=_BreakOnceAfterStart(),
-    )
-    r = await sbx.aexecute(f"echo x >> {marker}; sleep 1; echo done", exec_id="y")
-    assert "done" in r.output and r.exit_code == 0
-    assert marker.read_text().count("x") == 1
+# ──────────────────────────────────────────────── 装配
 
 
 async def test_assembly_refuses_bash_when_sandbox_disabled() -> None:
@@ -222,11 +314,18 @@ async def test_assembly_refuses_bash_when_sandbox_disabled() -> None:
 def test_execute_tool_gets_runtime_injected() -> None:
     """execute 的 runtime 参数必须被 LangChain 识别为注入参数。
 
-    sandbox 中间件曾带着 `from __future__ import annotations`：注解变成字符串，ToolRuntime 识别不到，
-    工具一被调用就报 missing positional argument —— 沙箱接入前它从没真正装配过，评测冒烟才撞出来。
+    sandbox 中间件曾带着 `from __future__ import annotations`：注解变成字符串，
+    ToolRuntime 识别不到，工具一被调用就报 missing positional argument ——
+    沙箱接入前它从没真正装配过，评测冒烟才撞出来。
     """
     from atlas_engine.kernel.middleware.sandbox import SandboxMiddleware
 
-    tool = SandboxMiddleware(sandbox=_sandbox(_Pods(_dead_endpoint()))).tools[0]
+    box = PodSandbox(
+        provisioner=None,  # type: ignore[arg-type]
+        workspace_thread_id="ws",
+        user_id=USER,
+        run_id="r",
+    )
+    tool = SandboxMiddleware(sandbox=box).tools[0]
     assert "runtime" in tool._injected_args_keys
     assert set(tool.tool_call_schema.model_json_schema()["properties"]) == {"command", "timeout"}

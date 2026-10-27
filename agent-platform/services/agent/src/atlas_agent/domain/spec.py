@@ -14,7 +14,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Literal
 
-from atlas_engine.contracts import InvalidSpec
+from atlas_engine.contracts import APPROVAL_MODES, ApprovalMode, InvalidSpec
+from atlas_engine.kernel.middleware.ask_user import ASK_USER_QUESTION
 from atlas_engine.kernel.middleware.subagents import SUBAGENT_TOOL
 
 Effort = Literal["low", "medium", "high", "xhigh", "max"]
@@ -172,7 +173,49 @@ class LimitSpec:
     timeout_s: int = 300
     max_total_tokens: int = 500_000
     tool_concurrency: int = 4
-    require_approval_for: frozenset[str] = frozenset()
+    # ★ require_approval_for（作者逐个勾选的必审工具）已删除：问不问人改由审批模式决定
+    #   （ApprovalSpec，doc/native-approval-mode-design.html D7）。历史快照里的这个字段读取时忽略。
+
+
+@dataclass(frozen=True)
+class ApprovalSpec:
+    """审批模式（doc/native-approval-mode-design.html）：作者定默认模式与允许范围，用户在会话里选。
+
+    ★ 有默认值是快照纪律：历史 agent_version.spec 里没有这个字段 —— 默认自动、允许全部三种（D8）。
+    ★ 只对 native 生效。acp 的权限由 CliSpec.permission_mode 管；作为 SubAgent 时与父 run 的
+      模式取更严格的那个（acp_permission_mode）。
+    """
+
+    default_mode: ApprovalMode = "auto"
+    #: 按严格程度从高到低排列（与 APPROVAL_MODES 同序），前端按这个顺序展示
+    allowed_modes: tuple[ApprovalMode, ...] = APPROVAL_MODES
+
+    def validate(self) -> None:
+        unknown = [m for m in self.allowed_modes if m not in APPROVAL_MODES]
+        if unknown or not self.allowed_modes:
+            raise InvalidSpec(
+                "allowed_modes 至少要有一个，且只能取 plan / manual / auto", modes=unknown
+            )
+        if self.default_mode not in self.allowed_modes:
+            raise InvalidSpec(
+                "默认审批模式必须在允许的模式里",
+                default_mode=self.default_mode,
+                allowed_modes=list(self.allowed_modes),
+            )
+        # 只许规划的话，提交的计划没有执行模式可选，永远批不下来
+        if not self.execution_modes():
+            raise InvalidSpec("只允许规划模式时计划无法执行，至少再允许手动或自动")
+
+    def resolve(self, requested: str | None) -> ApprovalMode:
+        """用户要的模式在允许范围里就用它，否则用默认。"""
+        for mode in self.allowed_modes:
+            if mode == requested:
+                return mode
+        return self.default_mode
+
+    def execution_modes(self) -> tuple[ApprovalMode, ...]:
+        """计划获批时用户可选的执行模式：允许范围里除了规划之外的。"""
+        return tuple(m for m in self.allowed_modes if m != "plan")
 
 
 @dataclass(frozen=True)
@@ -221,6 +264,27 @@ ACP_MODE_ID: dict[str, str] = {
 }
 #: ACP modeId → 平台取值（回报实际生效的模式时用；不认识的原样返回）
 PLATFORM_MODE: dict[str, str] = {v: k for k, v in ACP_MODE_ID.items()}
+
+#: acp 权限模式按严格程度从低到高
+_ACP_STRICTNESS: tuple[PermissionMode, ...] = ("auto", "accept_edits", "manual", "plan")
+#: 父 run 的审批模式 → acp 权限模式（native 审批模式设计第 12 节）
+ACP_MODE_FOR_APPROVAL: dict[str, PermissionMode] = {
+    "plan": "plan",
+    "manual": "manual",
+    "auto": "auto",
+}
+
+
+def acp_permission_mode(cli_mode: PermissionMode, parent_mode: str | None) -> PermissionMode:
+    """acp 作为 SubAgent 时实际下发的权限模式：父 run 的模式映射后，与它自己的配置取更严格的（D6）。
+
+    ★ 用户在父会话选了手动，就是要逐项把关 —— 不能因为派给了 acp 子智能体就绕过去；反过来子智能体
+      作者要求更严格时也要尊重。直接对话的 acp 智能体没有父 run，parent_mode 为空，只看自己的配置。
+    """
+    inherited = ACP_MODE_FOR_APPROVAL.get(parent_mode) if parent_mode else None
+    if inherited is None:
+        return cli_mode
+    return max(cli_mode, inherited, key=_ACP_STRICTNESS.index)
 
 
 @dataclass(frozen=True)
@@ -354,6 +418,8 @@ class AgentSpec:
     mcp_drift_policy: McpDriftPolicy = "warn"
     #: 绑定的知识库。★ 有默认值（快照纪律）；子智能体不继承 —— 要用就在子智能体自己配。
     knowledge: KnowledgeSpec = field(default_factory=KnowledgeSpec)
+    #: 审批模式的默认值与允许范围。★ 有默认值（快照纪律）
+    approval: ApprovalSpec = field(default_factory=ApprovalSpec)
 
     def subagent(self, name: str) -> SubAgentSpec | None:
         """按名字取子智能体配置。子会话执行时用它派生出独立的 AgentSpec。"""
@@ -366,6 +432,7 @@ class AgentSpec:
         self.model.validate()
         self.compaction.validate()
         self.knowledge.validate()
+        self.approval.validate()
         if self.kind == "acp" and self.knowledge.enabled and self.knowledge.mode != "tool":
             raise InvalidSpec("acp agent 的知识库只能以工具方式接入（mode='tool'）")
         if self.kind == "acp" and self.cli is None:
@@ -426,7 +493,9 @@ def spec_for_subagent(parent: AgentSpec, name: str) -> AgentSpec:
     native = sub.kind == "native"
     # 带着名录就带着 task：与根 agent「勾了 task 才有」的约定一致，run.started 的
     # tools 也因此如实反映装出来的工具
-    tool_names = sub.tool_names
+    # ★ 子智能体不向用户提问（doc/ask-user-question-design.html D6）：用户看到的会是一个没有上下文的
+    #   问题，而且任务书本该完整 —— 该问的由主智能体在委派前问清。子智能体缺信息时在结论里写明
+    tool_names = tuple(name for name in sub.tool_names if name != ASK_USER_QUESTION)
     if native and SUBAGENT_TOOL not in tool_names:
         tool_names = (*tool_names, SUBAGENT_TOOL)
     return AgentSpec(
@@ -446,4 +515,6 @@ def spec_for_subagent(parent: AgentSpec, name: str) -> AgentSpec:
         cli=sub.cli,
         mcp_tool_digests=sub.mcp_tool_digests,
         mcp_drift_policy=sub.mcp_drift_policy,
+        # 子 run 的模式由派活那一刻父 run 的模式决定（run.approval_mode），这里只为装配取默认值
+        approval=parent.approval,
     )

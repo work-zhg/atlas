@@ -147,7 +147,7 @@ def _caller(**over) -> object:
 
     from .fakes import TurnModel, tool_call_chunk
 
-    args = {"description": "修那三个用例", "subagent_type": "coder", **over}
+    args = {"description": "修用例", "prompt": "修那三个用例", "subagent_type": "coder", **over}
     return TurnModel(
         scripts=[
             [tool_call_chunk("task", json.dumps(args, ensure_ascii=False), "c1")],
@@ -210,7 +210,47 @@ async def test_the_task_tool_body_never_runs() -> None:
 
     agent = build_graph(_parent(), GenericFakeChatModel(messages=iter([])), spawner=Spawner())
     with pytest.raises(RuntimeError, match="SubAgentMiddleware"):
-        await _task_tool(agent).ainvoke({"description": "x", "subagent_type": "coder"})
+        await _task_tool(agent).ainvoke(
+            {"description": "x", "prompt": "x", "subagent_type": "coder"}
+        )
+
+
+def test_task_schema_separates_title_and_brief() -> None:
+    """标题（description）与任务书（prompt）是两个必填字段。
+
+    ★ 只有一个 description 时，deepseek-v4-pro 把它当标题填，SubAgent 只收到一句话
+      （回放对照见 TaskToolSchema 的说明）。红了说明有人把两个字段又并了回去。
+    """
+    from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+
+    from .fakes import Spawner
+    from .graphs import build_graph
+
+    agent = build_graph(_parent(), GenericFakeChatModel(messages=iter([])), spawner=Spawner())
+    schema = _task_tool(agent).tool_call_schema.model_json_schema()
+    assert {"description", "prompt", "subagent_type"} <= set(schema["required"])
+
+
+@pytest.mark.anyio
+async def test_brief_falls_back_to_description_without_prompt() -> None:
+    """只给了 description 的调用（拆字段之前的形态）：把它当任务书交出，不交空串。"""
+    import json
+    from uuid import uuid4
+
+    from .fakes import Spawner, TurnModel, tool_call_chunk
+    from .graphs import run_agent
+
+    old = json.dumps({"description": "修那三个用例", "subagent_type": "coder"}, ensure_ascii=False)
+    spawner = Spawner()
+    async for _ in run_agent(
+        _parent(),
+        TurnModel(scripts=[[tool_call_chunk("task", old, "c1")]]),
+        run_id=uuid4(),
+        input_content="修一下",
+        spawner=spawner,
+    ):
+        pass
+    assert spawner.calls == [("coder", "修那三个用例", False)]
 
 
 def _task_tool(agent) -> object:

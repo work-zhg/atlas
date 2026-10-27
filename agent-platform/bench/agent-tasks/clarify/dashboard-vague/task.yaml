@@ -1,0 +1,8 @@
+category: dialog
+tags: [clarify, ambiguous, dashboard]
+instruction: |
+  帮我做一个数据看板原型，写成单个 HTML 文件 dashboard.html，放在工作区根目录。
+# 模拟用户心里的完整需求（Agent 看不到）：Agent 提问时只依据它作答
+user:
+  brief: 我要的是连锁门店的运营看板（不是销售看板）：指标是今日客流量、坪效（元/平方米）、会员复购率，下面放各门店客流对比的柱状图。给店长看的，线框风格就行，图表用静态的即可。
+budget: {wall_s: 900}

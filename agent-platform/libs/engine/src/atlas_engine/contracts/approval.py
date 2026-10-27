@@ -1,6 +1,6 @@
 """ApprovalGate —— 高风险工具人工确认的契约。
 
-第四个能力协议。kernel 的 ApprovalMiddleware 在工具执行前问它「这次批了吗」；
+第四个能力协议。kernel 的 PermissionMiddleware 在工具执行前问它「这次批了吗」；
 server 注入 DB + Redis 实现（RedisApprovalGate），测试注入假的。
 engine 因此不知道 Postgres 与 Redis 的存在。
 
@@ -46,7 +46,14 @@ class ApprovalGate(Protocol):
     """查询一次审批的状态；首次查询时顺便把它登记下来。"""
 
     async def check(
-        self, *, approval_id: str, tool_name: str, args: dict[str, Any]
+        self,
+        *,
+        approval_id: str,
+        tool_name: str,
+        args: dict[str, Any],
+        kind: str = "tool",
+        source: str | None = None,
+        reason: str | None = None,
     ) -> ApprovalState:
         """这次调用批了吗？**立刻返回，不阻塞**。
 
@@ -54,10 +61,15 @@ class ApprovalGate(Protocol):
           · 首次见到这个 approval_id 时登记它（落库），返回 "pending"
           · 之后返回它的真实状态
 
+        kind / source / reason 只在登记时落库（审计与界面用）：
+          kind    tool = 工具调用的确认；plan = 规划模式提交的计划（contracts/permission.py）
+          source  为什么问：manual_mode / auto_uncertain / plan_mode
+          reason  给用户看的一句话
+
         ★ approval_id 必须由调用方**可复现地**派生，否则续跑时算出一个新 id、
           查到 pending、再挂起一次 —— 死循环。kernel 用
           `uuid5(NS, "{run_id}:{tool_call_id}")`，两者在一个 run 内唯一且跨段
-          稳定（ApprovalMiddleware）。
+          稳定（kernel/middleware/approval.py）。
 
         ★ expired 由实现方判定（超时即拒）。挂起之后没有进程在等，所以判定
           发生在恢复扫描里，而不是某个 await 的超时分支上。

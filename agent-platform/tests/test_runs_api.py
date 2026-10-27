@@ -19,6 +19,7 @@ from atlas_agent.executor.inprocess import InProcessExecutor
 from atlas_agent.main import create_app
 from httpx import ASGITransport
 
+from tests.fake_uc import AS_USER
 from tests.fakes import ScriptedChatModel, text_model, usage_model
 
 
@@ -48,7 +49,7 @@ def make_app(chunks: list[str] | None = None, delay: float = 0.0):
 @pytest.fixture
 async def client() -> httpx.AsyncClient:
     transport = ASGITransport(app=make_app())
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=AS_USER) as c:
         yield c
 
 
@@ -143,7 +144,9 @@ async def test_run_persists_assistant_message_and_usage(
 async def test_second_run_on_same_thread_conflicts(clean_db: None) -> None:
     """同一会话串行：已有运行中的 run 时返回 409（§9）。"""
     transport = ASGITransport(app=make_app(chunks=["a"] * 6, delay=0.15))
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://test", headers=AS_USER
+    ) as client:
         tid = await setup_thread(client)
         first = await client.post(
             f"/v1/threads/{tid}/runs", json={"content": [{"type": "text", "text": "1"}]}
@@ -179,7 +182,9 @@ async def test_idempotency_key_returns_same_run(client: httpx.AsyncClient, clean
 
 async def test_cancel_marks_run_cancelled(clean_db: None) -> None:
     transport = ASGITransport(app=make_app(chunks=["x"] * 20, delay=0.1))
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://test", headers=AS_USER
+    ) as client:
         tid = await setup_thread(client)
         rid = (
             await client.post(

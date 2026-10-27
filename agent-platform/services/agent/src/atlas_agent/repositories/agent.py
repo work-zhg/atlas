@@ -39,9 +39,13 @@ class AgentRepository:
         status: str | None = None,
         model: str | None = None,
         limit: int = 50,
+        visible: Any = None,
     ) -> list[tuple[Agent, AgentVersion]]:
+        """visible：可见范围的 SQL 条件（auth/agent_access.Visibility）。None = 不过滤。"""
         cv = aliased(AgentVersion)
         stmt = select(Agent, cv).join(cv, cv.id == Agent.current_version_id)
+        if visible is not None:
+            stmt = stmt.where(visible)
 
         if status:
             stmt = stmt.where(Agent.status == status)
@@ -80,6 +84,7 @@ class AgentRepository:
         avatar_key: str,
         spec: dict[str, Any],
         created_by: UUID,
+        auth_subject: str = "user",
     ) -> tuple[Agent, AgentVersion]:
         agent = Agent(
             slug=slug,
@@ -88,6 +93,7 @@ class AgentRepository:
             avatar_key=avatar_key,
             status="draft",
             created_by=created_by,
+            auth_subject=auth_subject,
         )
         self._session.add(agent)
         await self._session.flush()  # 拿到 agent.id

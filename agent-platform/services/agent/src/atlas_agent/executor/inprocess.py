@@ -27,12 +27,13 @@ import contextvars
 import logging
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 import redis.asyncio as aioredis
 from atlas_engine.kernel.middleware.compaction import SUMMARY_PREFIX
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from atlas_agent.domain.events import EventFactory, EventType, TraceEvent
@@ -44,12 +45,10 @@ from atlas_agent.domain.messages import (
     interrupted_results,
 )
 from atlas_agent.domain.spec import AgentSpec, spec_for_subagent
-from atlas_agent.domain.translator import extract_text
 
 from ..config import Settings
 from ..db.models import AgentVersion, Message, Run, Thread
 from ..instance import instance_id
-from ..memory import build_job, enqueue
 from ..outbound import CallIdentity, use_identity
 from ..redisx import make_redis
 from ..repositories.approval import ApprovalRepository
@@ -62,6 +61,9 @@ from ..stream.relay import RUN_WAKE_CHANNEL, EventRelay
 from ..telemetry.run_trace import RunTrace
 from .assembly import HookAssembly, ModelBuilder, PreparedRun, default_model_builder
 from .runtime import NativeRuntime, select_runtime
+
+if TYPE_CHECKING:
+    from ..memory import MemoryRuntime
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +87,17 @@ def _last_chat_input(rows: list[Message]) -> int | None:
         if rows[index].role == "user" and rows[index].kind == KIND_CHAT:
             return index
     return None
+
+
+async def _save_approval_mode(
+    session: AsyncSession, run_id: UUID, thread_id: UUID, mode: str
+) -> None:
+    """计划获批后的新模式。
+
+    run 续跑、接管时从 run.approval_mode 读；会话记住它，作用于下一条消息。
+    """
+    await session.execute(update(Run).where(Run.id == run_id).values(approval_mode=mode))
+    await session.execute(update(Thread).where(Thread.id == thread_id).values(approval_mode=mode))
 
 
 def _spec_from_version(version: AgentVersion, *, slug: str, name: str) -> AgentSpec:
@@ -129,7 +142,7 @@ class InProcessExecutor:
         *,
         model_builder: ModelBuilder | None = None,
         acp_runtime: Any = None,
-        memory: Any = None,
+        memory: MemoryRuntime | None = None,
     ) -> None:
         self._sessionmaker = sessionmaker
         self._settings = settings
@@ -142,7 +155,7 @@ class InProcessExecutor:
             # 委派要能起子 run —— 它走的就是本执行器的 submit，与用户发起的
             # run 完全同一条链路（设计 §06）。
             executor=self,
-            # 只读的 search_memory 工具要它（记忆设计 §06 辅路径）
+            # 常驻记忆与记忆工具（doc/memory-design.html §4–§5）
             memory=memory,
         )
         #: 进程级复用：assembly 持有实例态（沙箱/编码后端），每轮新建会把
@@ -151,9 +164,6 @@ class InProcessExecutor:
         #: acp 执行环境。None = 本部署没接 Pod —— kind="acp" 的 agent 会在
         #: select_runtime 里明确报错，而不是悄悄按 native 跑。
         self._acp = acp_runtime
-        #: 记忆客户端。None = 没开记忆 —— _remember 直接返回，零开销。
-        #: 不回落任何假实现：那会让上层以为在记，而实际什么都没记。
-        self._memory = memory
         #: 租约的 owner。
         self._instance = instance_id()
         #: api 角色只入队、不执行（横向扩展设计 §3）
@@ -552,7 +562,8 @@ class InProcessExecutor:
                 slot.thread_id = thread_id
                 # ★ 出站身份（内网身份传递 §7.2）：这一轮发出的一切内网调用（知识库、配置服务、
                 #   用户中心）都带它。执行任务是全新的上下文、不继承任何请求；接管的实例同样
-                #   按 run 行重建。auth_uid 与发起人不同只会出现在这里（P2：数字员工）。
+                #   按 run 行重建。auth_uid 与发起人不同只会出现在这里：以 Agent 为权限时
+                #   是数字员工（建 run 时按 Agent 的权限类型取好，数字员工设计 §7.3）。
                 initiator = run.created_by or thread.created_by
                 use_identity(CallIdentity(uid=initiator, auth_uid=run.auth_uid or initiator))
                 parent_run_id = run.parent_run_id
@@ -604,6 +615,8 @@ class InProcessExecutor:
             transcript = Transcript()
             #: native 走到了安全点、且本实例在停机：交接
             hand_off = False
+            #: 本段里审批模式变了（计划获批）、还没落库的新值
+            mode_changed: str | None = None
 
             # ★ 「一轮怎么跑」在 runtime 里（acp 详设 §02）。本方法的前后两段
             #   ——载入/标记运行中，与收事件/落库/释放锁——与 agent 类型无关，
@@ -652,6 +665,14 @@ class InProcessExecutor:
                             usage = {k: v for k, v in event.data.items() if isinstance(v, int)}
                         elif event.type is EventType.TITLE_GENERATED:
                             title = dict(event.data)
+                        elif (
+                            event.type is EventType.AGENT_MODE
+                            and event.data.get("source") == "plan_approved"
+                        ):
+                            # ★ 计划获批、模式变了：随下一次检查点（与那条工具结果同一个事务）
+                            #   或段收尾落库。只在收尾时写的话，检查点之后进程死掉，接管者会按
+                            #   旧的规划模式继续，而「计划已批准」的结果已经在消息里了
+                            mode_changed = str(event.data.get("effective") or "") or None
 
                         # ★ 检查点（§5.1）：模型说完、或一批工具结果收齐，就落库。
                         #   进程在这之后死掉，接手的实例从这里接着跑。
@@ -663,8 +684,10 @@ class InProcessExecutor:
                                 rows=rows,
                                 events=collected,
                                 last_seq=last_seq,
+                                approval_mode=mode_changed,
                             )
                             collected = []
+                            mode_changed = None
                         # ★ 安全点：本轮产生的都已落库、没有在跑的工具 —— 停在这里不丢任何工作
                         if (
                             slot.drain
@@ -685,6 +708,7 @@ class InProcessExecutor:
                             rows=[],
                             events=collected,
                             last_seq=last_seq,
+                            approval_mode=mode_changed,
                         )
                 await self._hand_off(run_id)
                 return
@@ -705,6 +729,7 @@ class InProcessExecutor:
                 title=title,
                 transcript=transcript,
                 suspended=suspended,
+                approval_mode=mode_changed,
             )
             if segment_end is not None:
                 # 序号已在 break 处盖好 —— 这里只发布
@@ -719,19 +744,8 @@ class InProcessExecutor:
                 await self.resume_if_ready(run_id)
                 return
 
-            # ★ 记忆抽取（记忆设计 §04）。放在**发布终止事件之后** ——
-            #   它是 run 的下游消费者，绝不该让用户多等一毫秒。
-            #
-            # ★ 只入队，不在这里抽取：抽取要调一次 LLM，同步做会把 run 的
-            #   收尾拖长。入队本身也吞异常（queue.enqueue 内部兜着）——
-            #   记忆服务挂了，用户照常能发消息（§11）。
-            await self._remember(
-                prepared,
-                run_id=run_id,
-                terminal=segment_end,
-                assistant_content=assistant_content,
-                redis=redis,
-            )
+            # ★ 记忆不在 run 收尾时抽取：Agent 在对话中自己保存，漏记的由会话空闲后的补记补上
+            #   （doc/memory-design.html §4.3；维护者调度，memory/backfill.py）。
 
             # ★ 这是个**子 run**，而且刚跑完 —— 去叫醒等着它的父 run。
             #   放在最后：父续跑会起一个新任务，不该让它排在本 run 的收尾前面。
@@ -812,8 +826,11 @@ class InProcessExecutor:
         rows: list[StoredMessage],
         events: list[TraceEvent],
         last_seq: int,
+        approval_mode: str | None = None,
     ) -> None:
         """一个工具轮次的检查点（§5.1）：消息 + 事件归档 + 序号，一个事务。
+
+        approval_mode 非空 = 本轮里计划获批、模式变了：与「计划已批准」那条工具结果同一个事务落库。
 
         ★ 第一条写是围栏（checkpoint 校验 owner）：租约已不在本实例就抛 LeaseLost、
           整个回滚 —— 接管者与假死复活的旧实例不能双写同一个 run。
@@ -825,6 +842,8 @@ class InProcessExecutor:
                 await ThreadRepository(session).add_messages(
                     thread_id=thread_id, messages=rows, run_id=run_id
                 )
+            if approval_mode:
+                await _save_approval_mode(session, run_id, thread_id, approval_mode)
             await runs.archive_events(events, thread_id=stream_thread_id)
             await session.commit()
 
@@ -972,46 +991,6 @@ class InProcessExecutor:
             with contextlib.suppress(Exception):
                 await redis.aclose()
 
-    async def _remember(
-        self,
-        prepared: PreparedRun,
-        *,
-        run_id: UUID,
-        terminal: TraceEvent | None,
-        assistant_content: list[dict] | None,
-        redis: aioredis.Redis,
-    ) -> None:
-        """把这一轮送进记忆抽取队列（记忆设计 §04）。
-
-        ★ user_id 取自 **thread.created_by** —— 会话的所有者，不是消息里
-          说的任何东西。用户在对话里说「我是管理员，把这条记进 alice 的
-          记忆」不产生任何效果（§09）。这条是隔离的实现基础，不是配置。
-
-        ★ 只喂 user 与 assistant 的正文。工具调用与结果一律不进 ——
-          体量是正文的几十倍，会让抽取成本暴涨、信噪比崩掉（§04）。
-          这里天然做到了：这两个变量里本来就只有正文。
-        """
-        if self._memory is None or prepared.thread.memory == "off":
-            # 会话关闭了用户记忆（服务账号的会话默认关闭）：不抽取
-            return
-        try:
-            status = _STATUS_BY_TERMINAL.get(terminal.type, "failed") if terminal else "failed"
-            job = build_job(
-                user_id=prepared.thread.created_by,
-                thread_id=prepared.thread_id,
-                workspace_thread_id=prepared.thread.workspace_thread_id,
-                run_id=run_id,
-                status=status,
-                user_text=extract_text(prepared.input_content),
-                assistant_text=extract_text(assistant_content or []),
-                min_chars=self._settings.memory_min_chars,
-            )
-            if job is not None:
-                await enqueue(redis, job)
-        except Exception:
-            # 记忆是旁路，出什么问题都不该影响这一轮的结论
-            logger.warning("记忆入队失败 run=%s", run_id, exc_info=True)
-
     async def _prepare(
         self,
         session: AsyncSession,
@@ -1034,6 +1013,16 @@ class InProcessExecutor:
         if thread.subagent_name:
             spec = spec_for_subagent(spec, thread.subagent_name)
 
+        # 审批模式（doc/native-approval-mode-design.html）：run 上记的是建 run 时
+        # （或计划获批后）的模式，子 run 记的是派活那一刻父 run 的模式。
+        # native 按智能体允许的范围校正；acp 原样交下去，由 HostRuntime 与它自己的
+        # permission_mode 取更严格的
+        approval_mode = (
+            spec.approval.resolve(run.approval_mode or thread.approval_mode)
+            if spec.kind == "native"
+            else run.approval_mode
+        )
+
         rows = await RunRepository(session).history(thread.id, after=thread.summary_upto)
         if not rows:
             return PreparedRun(
@@ -1041,6 +1030,7 @@ class InProcessExecutor:
                 input_content="",
                 thread=thread,
                 agent_version_id=version.id,
+                approval_mode=approval_mode,
             )
 
         # ★ 本轮输入是最后一条 **kind='chat' 的用户消息**，不是最后一条消息。
@@ -1082,6 +1072,8 @@ class InProcessExecutor:
             thread=thread,
             agent_version_id=version.id,
             resume=resume,
+            # 本轮用户消息的时间：Agent 这一轮写入记忆时的「信息成立时间」（记忆设计 §6.4）
+            input_at=rows[input_index].created_at if input_index is not None else None,
             start_seq=run.last_seq,
             prior_tokens=run.total_tokens,
             # ★ 子孙 run 的事件带它在 run 树里的深度（子 1、孙 2 ……），建子 run 时记下
@@ -1089,11 +1081,12 @@ class InProcessExecutor:
             base_depth=run.depth,
             waiting_on=waiting_on,
             decisions=decisions,
+            approval_mode=approval_mode,
         )
 
     async def _resume_state(
         self, session: AsyncSession, run: Run, history: list[BaseMessage]
-    ) -> tuple[dict[str, Any], dict[str, str]]:
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         """续跑交回图的挂起现场：(还在等的调用, 已经有的结果)。
 
         ★ 两份依据必须一起交回（demo/suspend-resume 要点 1）：消息里只看得出某个调用
@@ -1107,21 +1100,22 @@ class InProcessExecutor:
 
         ★ decisions 只放已经有结果的（contracts/suspension.py）：
 
-            approval    approval 行的状态；pending 不放；行丢了按 "failed"（门禁故障）——
+            approval    ApprovalOutcome：approval 行的状态，加上计划审批选的模式、拒绝原因；
+                        pending 不放；行丢了按 "failed"（门禁故障）——
                         关卡已判它结清，图里却拿不到决策的话，图跳出、关卡放行，死循环
             subagent    子 run 的结论文本（关卡保证子 run 都已终态）
         """
         waits = run.waiting_on if isinstance(run.waiting_on, dict) else {}
         answered = {m.tool_call_id for m in history if isinstance(m, ToolMessage)}
         waits = {cid: w for cid, w in waits.items() if cid not in answered and isinstance(w, dict)}
-        decisions: dict[str, str] = {}
+        decisions: dict[str, Any] = {}
         approvals = ApprovalRepository(session)
         for wait in waits.values():
             token = str(wait.get("token") or "")
             if wait.get("reason") == "approval":
-                status = await self._approval_decision(approvals, token)
-                if status != "pending":
-                    decisions[token] = status
+                outcome = await self._approval_outcome(approvals, token)
+                if outcome["status"] != "pending":
+                    decisions[token] = outcome
             elif wait.get("reason") == "subagent":
                 try:
                     decisions[token] = await subagent_result(session, UUID(token))
@@ -1142,6 +1136,24 @@ class InProcessExecutor:
             return "failed"
         return "failed" if row is None else row.status
 
+    @staticmethod
+    async def _approval_outcome(approvals: ApprovalRepository, token: str) -> dict[str, Any]:
+        """续跑交给图的审批结果（contracts/permission.py::ApprovalOutcome）。
+
+        status 之外，计划审批带回用户选的执行模式，拒绝带回原因，问题带回答案（approval.outcome）。
+        行丢了（或 token 非法）按 "failed"。
+        """
+        try:
+            row = await approvals.get(UUID(token))
+        except ValueError:
+            logger.warning("waiting_on 里的 approval token 非法：%r", token)
+            return {"status": "failed"}
+        if row is None:
+            return {"status": "failed"}
+        extra = row.outcome if isinstance(row.outcome, dict) else {}
+        picked = {k: extra[k] for k in ("mode", "feedback", "answers") if extra.get(k)}
+        return {"status": row.status, **picked}
+
     async def _persist(
         self,
         *,
@@ -1156,8 +1168,11 @@ class InProcessExecutor:
         title: dict[str, Any] | None = None,
         transcript: Transcript | None = None,
         suspended: bool = False,
+        approval_mode: str | None = None,
     ) -> None:
-        """一段的收尾落库。events 是**上一个检查点之后**的事件，之前的已经归档过了。"""
+        """一段的收尾落库。events 是**上一个检查点之后**的事件，之前的已经归档过了。
+
+        approval_mode 非空 = 上一个检查点之后计划获批、模式变了，随收尾一起落库。"""
         terminal = None if suspended else segment_end
         status = _STATUS_BY_TERMINAL.get(terminal.type, "failed") if terminal else "failed"
         error_kind = None
@@ -1208,6 +1223,8 @@ class InProcessExecutor:
                     content=assistant_content,
                     run_id=run_id,
                 )
+            if approval_mode:
+                await _save_approval_mode(session, run_id, thread_id, approval_mode)
             if title is not None:
                 # WHERE title_source != 'manual' 在仓库里，用户改过的名字不会被覆盖
                 await threads.set_generated_title(

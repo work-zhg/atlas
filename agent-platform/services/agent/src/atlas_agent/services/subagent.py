@@ -93,8 +93,18 @@ class SubAgentService:
 
     # ------------------------------------------------------------------ 入口
 
-    async def spawn(self, name: str, task: str, *, fresh: bool = False) -> str:
+    async def spawn(
+        self,
+        name: str,
+        task: str,
+        *,
+        fresh: bool = False,
+        approval_mode: str | None = None,
+    ) -> str:
         """`SubAgentSpawner` 的唯一实现：起一个子 run，立刻返回它的 id，不等它跑完。
+
+        approval_mode 是派活那一刻父 run 的审批模式，记到子 run 上（设计 D6）：native 子 run
+        直接沿用；acp 子 run 由 HostRuntime 与它自己的 permission_mode 取更严格的。
 
         签名与 `atlas_engine.contracts.SubAgentSpawner` 保持一字不差 ——
         runtime_checkable 只查方法存在，参数形状靠 tests/test_seam_contracts.py
@@ -130,7 +140,11 @@ class SubAgentService:
                 parent = (
                     await session.execute(
                         select(
-                            Run.created_by, Run.auth_uid, Run.root_run_id, Run.depth
+                            Run.created_by,
+                            Run.auth_uid,
+                            Run.auth_subject,
+                            Run.root_run_id,
+                            Run.depth,
                         ).where(Run.id == self._parent_run_id)
                     )
                 ).one_or_none()
@@ -145,6 +159,8 @@ class SubAgentService:
                 depth=(parent.depth if parent else 0) + 1,
                 created_by=parent.created_by if parent else None,
                 auth_uid=parent.auth_uid if parent else None,
+                auth_subject=parent.auth_subject if parent else None,
+                approval_mode=approval_mode,
             )
             return str(run_id)
         finally:
@@ -188,6 +204,8 @@ class SubAgentService:
         depth: int,
         created_by: UUID | None,
         auth_uid: UUID | None,
+        auth_subject: str | None = None,
+        approval_mode: str | None = None,
     ) -> UUID:
         thread_id = await self._resolve_thread(sub, fresh=fresh)
 
@@ -216,10 +234,13 @@ class SubAgentService:
                     parent_run_id=self._parent_run_id,
                     root_run_id=root_run_id,
                     depth=depth,
-                    # 子 run 的发起人 = 父 run 的发起人（权限设计 §11）；按谁判也沿用父 run
-                    # （P2：子 Agent 自己的数字员工，内网身份传递 §6）
+                    # 子 run 的发起人 = 父 run 的发起人（权限设计 §11）；按谁判也沿用父 run：
+                    # 内联的 SubAgent 是父 Agent 配置的一部分，没有自己的权限类型
+                    # （数字员工设计 §5.2；跨 Agent 委派以后按目标 Agent 自己的类型重取）
                     created_by=created_by,
                     auth_uid=auth_uid,
+                    auth_subject=auth_subject,
+                    approval_mode=approval_mode,
                 )
                 await session.commit()
         except Exception:

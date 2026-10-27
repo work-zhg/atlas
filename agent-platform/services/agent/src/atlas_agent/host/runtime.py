@@ -45,15 +45,17 @@ from atlas_host import CloseCode, HostErrorCode, methods
 from atlas_jsonrpc import ChannelClosed, ErrorCode, RpcFault
 from sqlalchemy import update as sql_update
 
-from ..configplane.mcp import make_mcp_catalog, mcp_reviews
 from ..db.models import Thread
 from ..domain.events import EventFactory, EventType, TraceEvent
 from ..domain.mcp_naming import MCP_PREFIX
 from ..domain.skill_events import SkillLoadTracker
-from ..domain.spec import ACP_MODE_ID, PLATFORM_MODE
+from ..domain.spec import ACP_MODE_ID, PLATFORM_MODE, acp_permission_mode
 from ..errors import CapabilityUnavailable
+from ..outbound import current_identity
 from ..providers.knowledge import mcp_server_entry, require_client
+from ..providers.mcp import GatewayUnavailable, make_mcp_catalog, mcp_subject_access
 from ..providers.mcp.acp import acp_mcp_servers
+from ..providers.mcp.gateway import servers_in
 from ..repositories.approval import ApprovalRepository
 from ..services.approval import RedisApprovalGate
 from .approvals import ApprovalPort, PermissionDesk
@@ -213,7 +215,15 @@ class HostRuntime:
                 "thinking": "none",
                 "tools": sorted(spec.tool_names),
                 # 审计：这一轮按什么权限模式要求 CLI（实际生效的见 agent.mode 事件）
-                **({"permission_mode": spec.cli.permission_mode} if spec.cli else {}),
+                **(
+                    {
+                        "permission_mode": acp_permission_mode(
+                            spec.cli.permission_mode, prepared.approval_mode
+                        )
+                    }
+                    if spec.cli
+                    else {}
+                ),
             },
         )
         if spec.cli is None:
@@ -367,16 +377,7 @@ class HostRuntime:
         servers: list[dict[str, Any]] = []
         notices: list[tuple[EventType, dict[str, Any]]] = []
         if any(name.startswith(MCP_PREFIX) for name in spec.tool_names):
-            catalog = await make_mcp_catalog(self._settings, redis)
-            servers, notices = await acp_mcp_servers(
-                spec.tool_names,
-                catalog,
-                user_id=prepared.thread.created_by,
-                digests=spec.mcp_tool_digests,
-                drift_policy=spec.mcp_drift_policy,
-                reviews=await mcp_reviews(self._settings, catalog.servers()),
-                timeout_s=self._settings.mcp_call_timeout_s,
-            )
+            servers, notices = await self._mcp_from_gateway(prepared, redis)
         # 知识库：Pod 里的 CLI 经 MCP 调 knowledge_search（doc/atlas-rag-design.html §10）
         if spec.knowledge.enabled:
             servers = [
@@ -388,6 +389,41 @@ class HostRuntime:
                 ),
             ]
         return servers, notices
+
+    async def _mcp_from_gateway(
+        self, prepared: PreparedRun, redis: aioredis.Redis
+    ) -> tuple[list[dict[str, Any]], list[tuple[EventType, dict[str, Any]]]]:
+        spec = prepared.spec
+        catalog = await make_mcp_catalog(self._settings, redis)
+        # 按这一轮的权限主体过滤、下发它的 Key（MCP 方案设计 §7.1）
+        ident = current_identity()
+        subject = ident.auth_uid if ident else prepared.thread.created_by
+        try:
+            access = await mcp_subject_access(self._settings, subject)
+        except GatewayUnavailable as exc:
+            # 网关不可用 = 这些服务此刻用不了：不下发并提示，会话照常（§6.7 ③）
+            logger.warning("建会话时 MCP 网关不可用，本会话不下发 MCP 服务：%s", exc)
+            return [], [
+                (
+                    EventType.MCP_TOOL_SKIPPED,
+                    {
+                        "server": server,
+                        "tools": [f"mcp:{server}:*"],
+                        "reason": "unavailable",
+                        "subject": str(subject),
+                        "message": f"{exc}，本会话不下发这个服务",
+                    },
+                )
+                for server in sorted(servers_in(spec.tool_names))
+            ]
+        return await acp_mcp_servers(
+            spec.tool_names,
+            catalog,
+            user_id=prepared.thread.created_by,
+            digests=spec.mcp_tool_digests,
+            drift_policy=spec.mcp_drift_policy,
+            access=access,
+        )
 
     # ------------------------------------------------------------------ 接上会话
 
@@ -549,8 +585,10 @@ class HostRuntime:
         }
         cli = prepared.spec.cli
         if cli is not None:
-            # ★ 每一轮都带：agent 每次新建 / 恢复会话都会把模式重置，bridge 据此按需重设
-            params["mode"] = ACP_MODE_ID[cli.permission_mode]
+            # ★ 每一轮都带：agent 每次新建 / 恢复会话都会把模式重置，bridge 据此按需重设。
+            #   作为 SubAgent 时与父 run 的审批模式取更严格的（native 审批模式设计 D6）
+            mode = acp_permission_mode(cli.permission_mode, prepared.approval_mode)
+            params["mode"] = ACP_MODE_ID[mode]
         loop = asyncio.get_running_loop()
         until = loop.time() + _START_RETRY_S
         cancelled_other: set[str] = set()
@@ -822,7 +860,7 @@ def _failed(kind: str, message: str) -> tuple[EventType, dict[str, Any]]:
 
 
 def _host_url(url: str) -> str:
-    """cluster 给的是 Pod 的基地址；上游协议的路径是 /host。"""
+    """PodProvider 给的是 Pod 的基地址；上游协议的路径是 /host。"""
     return url.rstrip("/") + "/host" if urlparse(url).path in ("", "/") else url
 
 

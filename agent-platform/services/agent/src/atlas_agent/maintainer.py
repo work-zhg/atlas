@@ -2,9 +2,12 @@
 
 每个执行器都参与竞选（Redis SET NX PX + 续租），持有者定期执行，进程退出后别的实例接任：
 
-    孤儿 Pod 回收     每 pod_reap_interval_s（原来每个副本启动时各跑一遍）
-    记忆处理中回收    所属实例已不在的处理中列表搬回主队列（§7.2）
-    记忆死信复活      按轮次重新入队，有上限
+    孤儿沙箱回收     每 pod_reap_interval_s：会话已不存在或已归档的 ACP Pod 与原生沙箱
+    沙箱闲置回收     每分钟：没有运行中的命令且闲置超过 sandbox_idle_ttl_s 的原生沙箱
+                     （先删路由再删沙箱）
+    会话后补记       每 memory_backfill_scan_s：空闲 / 归档的会话补上漏记的记忆、拆小超限的主题
+                     （doc/memory-design.html §4.5）。★ 另起任务跑：一批要调几次 LLM，不能挡住
+                     上面几项；上一批没跑完就不起下一批
 
 另外每个实例都写心跳（atlas:instance:{id}）—— 「所属实例还在不在」靠它判断。
 
@@ -20,7 +23,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from .instance import instance_id
-from .memory.queue import recover_orphaned, revive_dead
+from .providers.opensandbox import AcpProvisioner, SandboxProvisioner
 from .redisx import make_redis
 from .repositories.thread import ThreadRepository
 
@@ -28,6 +31,7 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from .config import Settings
+    from .memory import Backfiller
 
 logger = logging.getLogger(__name__)
 
@@ -35,8 +39,7 @@ __all__ = ["Maintainer"]
 
 LEADER_KEY = "atlas:maintainer"
 INSTANCE_PREFIX = "atlas:instance:"
-_MEMORY_RECOVER_S = 60.0
-_MEMORY_REVIVE_S = 1800.0
+_SANDBOX_IDLE_S = 60.0
 
 #: 只续自己持有的（GET 与 PEXPIRE 之间不能有窗口）
 _RENEW = (
@@ -54,14 +57,14 @@ class Maintainer:
         self,
         settings: Settings,
         sessionmaker: async_sessionmaker[AsyncSession],
-        pods: Any,
         *,
-        memory_enabled: bool,
+        backfiller: Backfiller | None = None,
     ) -> None:
         self._settings = settings
         self._sessionmaker = sessionmaker
-        self._pods = pods
-        self._memory_enabled = memory_enabled
+        #: 会话后补记。None = 没接入记忆服务
+        self._backfiller = backfiller
+        self._backfill_task: asyncio.Task[int] | None = None
         self._me = instance_id()
         self._lease_ms = int(settings.maintainer_lease_s * 1000)
         self._leader = False
@@ -108,8 +111,8 @@ class Maintainer:
             # ★ Pod 回收不在接任的那一刻做：刚起来的集群里会话正在建 Pod，等一个周期再说
             self._due = {
                 "pods": now + self._settings.pod_reap_interval_s,
-                "memory_recover": now,
-                "memory_revive": now + _MEMORY_REVIVE_S,
+                "sandbox_idle": now + _SANDBOX_IDLE_S,
+                "memory_backfill": now + self._settings.memory_backfill_scan_s,
             }
         elif not held and self._leader:
             logger.info("本实例不再是维护者")
@@ -119,28 +122,38 @@ class Maintainer:
         now = time.monotonic()
         if now >= self._due.get("pods", now + 1):
             self._due["pods"] = now + self._settings.pod_reap_interval_s
-            await self._reap_pods()
-        if self._memory_enabled and now >= self._due.get("memory_recover", now + 1):
-            self._due["memory_recover"] = now + _MEMORY_RECOVER_S
-            await recover_orphaned(redis, await self._live_instances(redis))
-        if self._memory_enabled and now >= self._due.get("memory_revive", now + 1):
-            self._due["memory_revive"] = now + _MEMORY_REVIVE_S
-            await revive_dead(redis)
+            await self._reap_pods(redis)
+        if self._settings.sandbox_enabled and now >= self._due.get("sandbox_idle", now + 1):
+            self._due["sandbox_idle"] = now + _SANDBOX_IDLE_S
+            await SandboxProvisioner(self._settings, redis).reap_idle()
+        if self._backfiller is not None and now >= self._due.get("memory_backfill", now + 1):
+            self._due["memory_backfill"] = now + self._settings.memory_backfill_scan_s
+            if self._backfill_task is None or self._backfill_task.done():
+                self._backfill_task = asyncio.create_task(
+                    self._backfiller.run_due(), name="memory-backfill"
+                )
 
-    async def _reap_pods(self) -> None:
-        """把还活着的会话交给 cluster，其余的它自己清。
+    async def stop(self) -> None:
+        """停机：取消正在跑的补记（进度只在一个会话处理完后推进，取消不会丢东西）。"""
+        task = self._backfill_task
+        if task is not None and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
 
-        ★ 名单是**取完马上用**的：取名单与回收之间新建的会话，其 Pod 还很年轻，
-          cluster 只回收存在超过保留期的孤儿（reap_min_age_s），不会误删。
+    async def _reap_pods(self, redis: Any) -> None:
+        """会话已不存在（或已归档）的 ACP Pod 与原生沙箱一律删掉。
+
+        ★ 名单是**取完马上用**的：取名单与回收之间新建的会话，其沙箱还很年轻，
+          只回收建好超过 sandbox_reap_min_age_s 的，不会误删。
+        ★ 归档的会话不算活（ThreadRepository.live_ids）：task 的 fresh=true 每丢一次子会话，
+          就会留下一个再也用不上的 ACP Pod。
         """
         async with self._sessionmaker() as session:
-            live = await ThreadRepository(session).all_ids()
-        await self._pods.reap([str(thread_id) for thread_id in live])
-
-    @staticmethod
-    async def _live_instances(redis: Any) -> set[str]:
-        live: set[str] = set()
-        async for key in redis.scan_iter(match=f"{INSTANCE_PREFIX}*"):
-            name = key.decode() if isinstance(key, bytes) else str(key)
-            live.add(name.removeprefix(INSTANCE_PREFIX))
-        return live
+            live = {str(thread_id) for thread_id in await ThreadRepository(session).live_ids()}
+        try:
+            await AcpProvisioner(self._settings, redis).reap_orphans(live)
+        except Exception:
+            logger.warning("ACP Pod 孤儿回收失败", exc_info=True)
+        if self._settings.sandbox_enabled:
+            await SandboxProvisioner(self._settings, redis).reap_orphans(live)

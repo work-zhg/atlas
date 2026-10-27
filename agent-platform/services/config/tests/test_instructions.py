@@ -13,7 +13,9 @@ from atlas_config.api.app import create_app
 @pytest.fixture
 async def client(storage) -> AsyncIterator[httpx.AsyncClient]:  # type: ignore[no-untyped-def]
     transport = httpx.ASGITransport(app=create_app(storage=storage))
-    async with httpx.AsyncClient(transport=transport, base_url="http://cfg") as c:
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://cfg", headers={"X-Uid": "tester"}
+    ) as c:
         yield c
 
 ALICE = {"X-Uid": "alice"}

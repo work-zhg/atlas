@@ -1,0 +1,59 @@
+# MCP 网关（atlas-mcpgateway，doc/mcp-design.html 第二版）：所有 MCP 调用的唯一入口。
+#
+#   Atlas / Pod 里的 CLI ──主体 Key──▶ MCP 网关 ──网关凭据──▶ Higress ──后端凭据──▶ 业务系统
+#
+# ★ 库是宿主 Postgres 上的独立 database atlas_mcpgateway（docker compose 的 mcpgateway-init-db；
+#   服务器部署由 deploy/server/deploy.sh 建）。不用 Redis：会话标识透传给 Higress，判权结果进程内缓存。
+# ★ 网关凭据（Secret atlas-mcpgateway-creds，apply.sh 建）只在网关和 Higress 里：不下发给 Atlas 和 Pod。
+#   Higress 上的服务要配成只认它（§8.3）—— 在那之前登记服务会因「接入检查不通过」被拒。
+# ★ 管理端接口经网关（nginx）登录后访问；/internal（给 Atlas）与 /mcp（数据面）只在集群内，网关不转发。
+#   多副本、无状态：/health 就绪即可接流量。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atlas-mcpgateway
+  namespace: atlas-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: atlas-mcpgateway}
+  template:
+    metadata:
+      labels: {app: atlas-mcpgateway}
+    spec:
+      # ★ MCP 网关不碰 K8s：默认 SA，没有任何权限
+      initContainers:
+        # 先迁移再起服务。迁移脚本在包内，不依赖工作目录。
+        - name: migrate
+          image: atlas-app:dev
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "atlas_mcpgateway", "migrate"]
+          env: &mcpgw-env
+            - {name: ATLAS_MCPGW_DATABASE_URL, value: "postgresql+asyncpg://atlas:atlas@__HOST_IP__:5433/atlas_mcpgateway"}
+            - {name: ATLAS_MCPGW_UC_BASE_URL, value: "http://atlas-usercenter.atlas-system.svc.cluster.local:8030"}
+            # 上游 = Higress（本机在宿主的 compose 里，--profile higress；服务器上是集群内的服务）
+            - {name: ATLAS_MCPGW_HIGRESS_BASE_URL, value: "http://__HOST_IP__:18080"}
+            - name: ATLAS_MCPGW_GATEWAY_CREDENTIAL
+              valueFrom: {secretKeyRef: {name: atlas-mcpgateway-creds, key: gateway_credential}}
+      containers:
+        - name: mcpgateway
+          image: atlas-app:dev
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "atlas_mcpgateway", "serve"]
+          ports: [{containerPort: 8070, name: http}]
+          env: *mcpgw-env
+          readinessProbe:
+            httpGet: {path: /health, port: 8070}
+            periodSeconds: 3
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: atlas-mcpgateway
+  namespace: atlas-system
+spec:
+  type: ClusterIP
+  selector: {app: atlas-mcpgateway}
+  ports: [{port: 8070, targetPort: 8070}]

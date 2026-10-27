@@ -146,15 +146,34 @@ class Dept(Keys, Audited, TenantOwned, Base):
 
 
 class User(Keys, Audited, TenantOwned, Base):
+    """用户：人（human），或数字员工（digital，数字员工设计 §3）。
+
+    数字员工由接入应用经开放接口创建（一个 Agent 一个），和人一样可以被授角色、岗位、数据权限，
+    但没有密码（不能登录）、没有部门（不进组织树，部门授权落不到它身上）、不占人员配额。
+    """
+
     __tablename__ = "uc_user"
 
     #: 账号、邮箱在**租户内**唯一（不同租户可以同名）
     account: Mapped[str] = mapped_column(String(32), nullable=False)
     name: Mapped[str] = mapped_column(String(32), nullable=False)
-    email: Mapped[str] = mapped_column(String(128), nullable=False)
+    #: 人必填；数字员工没有
+    email: Mapped[str | None] = mapped_column(String(128))
     phone: Mapped[str | None] = mapped_column(String(20))
-    dept_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False, index=True)
+    #: 人必填；数字员工必须为空
+    dept_uuid: Mapped[UUID | None] = mapped_column(UUIDType, index=True)
     status: Mapped[str] = mapped_column(String(16), default="active", nullable=False)
+    #: human | digital
+    user_type: Mapped[str] = mapped_column(
+        String(8), default="human", server_default="human", nullable=False
+    )
+    #: 数字员工的负责人（必须是人）。出了问题找谁；不把数字员工挂到负责人的部门
+    owner_uuid: Mapped[UUID | None] = mapped_column(UUIDType)
+    #: 创建数字员工的应用：只有它能改、停用、启用
+    source_app_uuid: Mapped[UUID | None] = mapped_column(ForeignKey("uc_app.uuid"))
+    #: 来源应用里的对象 id（Atlas = agent id）：(租户, 来源应用, external_ref) 唯一，幂等创建的依据
+    external_ref: Mapped[str | None] = mapped_column(String(64))
+    description: Mapped[str | None] = mapped_column(String(200))
     activated_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     disabled_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     disabled_by: Mapped[UUID | None] = mapped_column(UUIDType)
@@ -164,6 +183,13 @@ class User(Keys, Audited, TenantOwned, Base):
 
     __table_args__ = (
         CheckConstraint("status IN ('active','disabled')", name="status_enum"),
+        CheckConstraint("user_type IN ('human','digital')", name="user_type_enum"),
+        CheckConstraint("user_type = 'digital' OR email IS NOT NULL", name="human_email"),
+        CheckConstraint("(user_type = 'digital') = (dept_uuid IS NULL)", name="digital_no_dept"),
+        CheckConstraint(
+            "(user_type = 'digital') = (owner_uuid IS NOT NULL AND source_app_uuid IS NOT NULL)",
+            name="digital_owner_app",
+        ),
         UniqueConstraint("tenant_uuid", "account", name="uq_uc_user_account"),
         UniqueConstraint("tenant_uuid", "email", name="uq_uc_user_email"),
         UniqueConstraint("tenant_uuid", "uuid", name="uq_uc_user_tenant_uuid"),
@@ -172,7 +198,25 @@ class User(Keys, Audited, TenantOwned, Base):
             ["uc_dept.tenant_uuid", "uc_dept.uuid"],
             name="fk_uc_user_dept",
         ),
+        ForeignKeyConstraint(
+            ["tenant_uuid", "owner_uuid"],
+            ["uc_user.tenant_uuid", "uc_user.uuid"],
+            name="fk_uc_user_owner",
+        ),
+        Index(
+            "uq_uc_user_digital_ref",
+            "tenant_uuid",
+            "source_app_uuid",
+            "external_ref",
+            unique=True,
+            postgresql_where=text("user_type = 'digital'"),
+        ),
+        Index("ix_uc_user_type_status", "user_type", "status"),
     )
+
+    @property
+    def is_digital(self) -> bool:
+        return self.user_type == "digital"
 
 
 class Credential(Keys, Base):

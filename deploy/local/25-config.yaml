@@ -34,7 +34,6 @@ spec:
             - {name: ATLAS_CONFIG_CORS_ORIGINS, value: '["http://localhost:3000","http://127.0.0.1:3000"]'}
             # 浏览器经网关 /atlas-config-api 访问：网关校验登录、写入 X-Uid；操作码按 X-Auth-Uid
             # 取用户中心授权快照（内网身份传递 §3）。内网免令牌
-            - {name: ATLAS_CONFIG_AUTH_MODE, value: uc}
             - {name: ATLAS_CONFIG_UC_BASE_URL, value: "http://atlas-usercenter.atlas-system.svc.cluster.local:8030"}
             - name: ATLAS_CONFIG_OSS_ACCESS_KEY_ID
               valueFrom: {secretKeyRef: {name: atlas-config-creds, key: oss_access_key_id}}

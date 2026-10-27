@@ -145,12 +145,18 @@ async def _agent(args: argparse.Namespace, settings: BenchSettings) -> int:
         cfg = AgentExperimentConfig.model_validate(
             yaml.safe_load(Path(args.experiment).read_text(encoding="utf-8"))
         )
+        answerer = None
+        if cfg.user_model:
+            from .agent.user import SimulatedUserAnswerer
+
+            answerer = SimulatedUserAnswerer(_llm(settings), cfg.user_model)
         run_dir = await run_agent_experiment(
             cfg,
             settings,
             platform,
             run_dir=Path(args.resume) if args.resume else None,
             limit=args.limit,
+            answerer=answerer,
         )
     finally:
         await platform.aclose()

@@ -139,10 +139,10 @@ def test_mcp_token_matches_knowledge_service() -> None:
         )
     finally:
         use_identity(None)
-    assert (
-        entry["url"] == "http://kb:8040/mcp/"
-        and entry["headers"][0]["name"] == "X-Atlas-Knowledge-Token"
-    )
+    # 名称不带应用名（数字员工设计 §7.4）；旧名同值过渡一个版本
+    assert entry["url"] == "http://kb:8040/mcp/"
+    assert [h["name"] for h in entry["headers"]] == ["X-Knowledge-Token", "X-Atlas-Knowledge-Token"]
+    assert entry["headers"][0]["value"] == entry["headers"][1]["value"]
     claims = verify_token("s3cret", entry["headers"][0]["value"])
     assert claims["u"] == str(auth_uid) and claims["o"] == str(uid)
 

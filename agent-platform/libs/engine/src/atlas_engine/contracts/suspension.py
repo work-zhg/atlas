@@ -16,7 +16,8 @@
                  登记，有了结果时删掉。挂起时 server 从图的最终 state 里取出来、
                  与消息**在同一个事务里**落进 run.waiting_on；续跑时原样交回
     decisions    token → 结果。续跑时 server 交进来，只进不出：
-                   approval    "approved" / "rejected" / "expired" / "failed"
+                   approval    ApprovalOutcome：{status, mode?, feedback?}
+                               （contracts/permission.py）
                    subagent    子 run 的结论文本
                  ★ 只放**已经有结果**的。放了 pending 的话 before_model 放行、
                    审批中间件又登记一次，两边来回跳到 GraphRecursionError

@@ -1,4 +1,4 @@
-"""汇总与报告（doc/agent-eval-design.html §15）。
+"""汇总与报告（doc/agent-eval-design.html §10）。
 
     成功率     每题 k 次的均值 → 题目层面平均；bootstrap（按题重采样）95% 置信区间
     pass^k     k 次全成功的题目占比；与成功率差距大 = 不稳定
@@ -50,8 +50,45 @@ def _avg(rows: list[TrialResult], key: str) -> float | None:
     return mean(vals) if vals else None
 
 
+#: 需求澄清评测的成对任务（doc/ask-user-question-design.html §12）：同一需求的一句话版与写清楚版
+_AMBIGUOUS, _CLEAR = "ambiguous", "clear"
+
+
+def _clarify(rows: list[TrialResult], tags: dict[str, set[str]]) -> dict[str, Any] | None:
+    """提问率（模糊题里问了的比例）、误问率（清晰题里也问了的比例）与两类题各自的成功率。"""
+    amb = [r for r in rows if _AMBIGUOUS in tags.get(r.task_id, set())]
+    clr = [r for r in rows if _CLEAR in tags.get(r.task_id, set())]
+    if not amb and not clr:
+        return None
+
+    def asked(rs: list[TrialResult]) -> float | None:
+        return mean(1.0 if r.metrics.get("question_rounds") else 0.0 for r in rs) if rs else None
+
+    def passed(rs: list[TrialResult]) -> float | None:
+        return mean(1.0 if r.passed else 0.0 for r in rs) if rs else None
+
+    rounds = sum(int(r.metrics.get("question_rounds") or 0) for r in rows)
+    return {
+        "ambiguous_trials": len(amb),
+        "ask_rate": asked(amb),
+        "ambiguous_success": passed(amb),
+        "clear_trials": len(clr),
+        "over_ask_rate": asked(clr),
+        "clear_success": passed(clr),
+        "questions_per_round": (
+            sum(int(r.metrics.get("questions_asked") or 0) for r in rows) / rounds
+            if rounds
+            else None
+        ),
+        "simulated_user_errors": sum(
+            int(r.metrics.get("simulated_user_errors") or 0) for r in rows
+        ),
+    }
+
+
 def summarize(run_dir: Path) -> dict[str, Any]:
     manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    tags = {t["id"]: set(t.get("tags") or []) for t in manifest["tasks"]}
     data = _load(run_dir)
     order = [v for v in manifest["config"]["variants"] if v in data]
     variants: dict[str, Any] = {}
@@ -97,6 +134,7 @@ def summarize(run_dir: Path) -> dict[str, Any]:
             "approvals": _avg(ok_rows, "approvals"),
             "compactions": _avg(ok_rows, "compactions"),
             "subagent_calls": _avg(ok_rows, "subagent_calls"),
+            "clarify": _clarify(ok_rows, tags),
             # ★ 硬门槛（doc/agent-platform-eval-plan.html §8）：平台错误、沙箱不可用、过程断言
             "platform_errors": outcomes.get("platform_error", 0),
             "retried": sum(1 for r in rows if r.retried),
@@ -271,6 +309,37 @@ def _sections(run_dir: Path, summary: dict[str, Any]) -> list[tuple[str, str | T
                         ]
                         for c in summary["comparisons"]
                     ],
+                ),
+            )
+        )
+    clarify_rows = [
+        [
+            v,
+            f"{_pct(c['ask_rate'])}（{c['ambiguous_trials']} 次）",
+            _pct(c["ambiguous_success"]),
+            f"{_pct(c['over_ask_rate'])}（{c['clear_trials']} 次）",
+            _pct(c["clear_success"]),
+            _n(c["questions_per_round"]),
+            c["simulated_user_errors"],
+        ]
+        for v in order
+        if (c := vs[v].get("clarify"))
+    ]
+    if clarify_rows:
+        secs.append(
+            (
+                "需求澄清（一句话的模糊题 vs 写清楚的清晰题）",
+                (
+                    [
+                        "配置",
+                        "模糊题：提问率",
+                        "模糊题：成功率",
+                        "清晰题：误问率",
+                        "清晰题：成功率",
+                        "每次问几题",
+                        "模拟用户出错（已按推荐）",
+                    ],
+                    clarify_rows,
                 ),
             )
         )

@@ -16,11 +16,13 @@ from atlas_agent.main import create_app
 from atlas_agent.repositories.thread import ThreadRepository
 from httpx import ASGITransport
 
+from tests.fake_uc import AS_USER
+
 
 @pytest.fixture
 async def client() -> httpx.AsyncClient:
     transport = ASGITransport(app=create_app())
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=AS_USER) as c:
         yield c
 
 

@@ -14,10 +14,10 @@ from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
 from ..configplane import ConfigPlaneUnavailable, skill_directory
-from ..configplane.mcp import make_mcp_catalog
 from ..configplane.skills import SkillNotFound
 from ..domain.mcp_naming import parse_tool_id
 from ..errors import CapabilityUnavailable, DependencyUnavailable, InvalidReference
+from ..providers.mcp import make_mcp_catalog
 from ..schemas.agent import AgentSpecIn, SkillRefIn
 
 if TYPE_CHECKING:
@@ -131,13 +131,13 @@ async def _digests(
         return {}
     try:
         catalog = await make_mcp_catalog(settings, redis)
-    except ConfigPlaneUnavailable as exc:
-        raise DependencyUnavailable(f"MCP 注册表暂时不可用，无法保存：{exc}") from exc
+    except CapabilityUnavailable as exc:
+        raise DependencyUnavailable(f"MCP 网关暂时不可用，无法保存：{exc}") from exc
 
     out: dict[str, str] = {}
     for server, tools in sorted(wanted.items()):
         if catalog.server(server) is None:
-            raise InvalidReference(f"MCP server {server} 未注册或已停用", server=server)
+            raise InvalidReference(f"MCP 服务 {server} 未在 MCP 网关注册或已停用", server=server)
         try:
             snap = await catalog.snapshot(server)
         except CapabilityUnavailable as exc:

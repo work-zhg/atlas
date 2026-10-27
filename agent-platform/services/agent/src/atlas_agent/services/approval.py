@@ -21,8 +21,13 @@ from uuid import UUID
 
 import redis.asyncio as aioredis
 from atlas_engine.contracts import ApprovalState, Decision
+from atlas_engine.kernel.middleware.ask_user import resolve_answers
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from ..db.models import Approval
+from ..domain.spec import ApprovalSpec
+from ..errors import InvalidAnswers, InvalidApprovalMode
 from ..repositories.approval import ApprovalRepository
 from ..repositories.run import RunRepository
 from ..telemetry import semconv as _sc
@@ -54,7 +59,14 @@ class RedisApprovalGate:
         self._run_id = run_id
 
     async def check(
-        self, *, approval_id: str, tool_name: str, args: dict[str, Any]
+        self,
+        *,
+        approval_id: str,
+        tool_name: str,
+        args: dict[str, Any],
+        kind: str = "tool",
+        source: str | None = None,
+        reason: str | None = None,
     ) -> ApprovalState:
         """查一次状态。**立刻返回，不阻塞**。
 
@@ -81,6 +93,9 @@ class RedisApprovalGate:
                     tool_name=tool_name,
                     args=args,
                     tool_call_id=_tool_call_id_of(args),
+                    kind=kind,
+                    source=source,
+                    reason=reason,
                 )
                 # ★ 仍然把 run 标成 awaiting_approval —— 它是 suspended 的一个
                 #   细分。UI 要区分「在等机器」和「在等你」：前者用户只能干等，
@@ -127,6 +142,7 @@ async def submit_decision(
     approval_id: UUID,
     decision: Decision,
     user_id: UUID,
+    outcome: dict[str, Any] | None = None,
 ) -> bool:
     """HTTP 侧写入决策。返回是否成功（重复决策返回 False）。
 
@@ -137,7 +153,7 @@ async def submit_decision(
     ★ redis 参数删掉了：那个决策队列没有消费者了（见模块开头）。
     """
     updated = await ApprovalRepository(session).decide(
-        approval_id, decision=decision, user_id=user_id
+        approval_id, decision=decision, user_id=user_id, outcome=outcome
     )
     if not updated:
         return False
@@ -150,3 +166,53 @@ async def submit_decision(
     #   而真正的唤醒发生在 HTTP 端点里（api/v1/runs.py::decide_approval 调
     #   executor.resume_if_ready）。决策的权威记录始终是 Approval.status。
     return True
+
+
+async def approval_spec_of_run(session: AsyncSession, run_id: UUID) -> ApprovalSpec:
+    """这个 run 所用版本快照里的审批模式配置（默认值与允许范围）。"""
+    from ..db.models import AgentVersion, Run
+    from ..schemas.agent import AgentSpecIn
+
+    spec = await session.scalar(
+        select(AgentVersion.spec).join(Run, Run.agent_version_id == AgentVersion.id).where(
+            Run.id == run_id
+        )
+    )
+    return AgentSpecIn.model_validate(spec or {"model": {"model": "unknown"}}).approval.to_engine()
+
+
+async def decision_outcome(
+    session: AsyncSession,
+    approval: Approval,
+    *,
+    decision: Decision,
+    approval_mode: str | None,
+    feedback: str | None,
+    answers: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """决策带回的附加信息（approval.outcome），续跑时交给图（contracts/permission.py::ApprovalOutcome）。
+
+    ★ 计划审批批准时必须带执行模式，且在智能体允许的范围里 —— 模式是权限，不能由请求随便指定。
+    ★ 问题批准时校验答案并补上每题的来源；不带答案 = 全部按推荐
+      （doc/ask-user-question-design.html D8），由这里**显式**写进 outcome ——
+      审计看得到当时按什么继续的。
+    """
+    outcome: dict[str, Any] = {}
+    if feedback and feedback.strip():
+        outcome["feedback"] = feedback.strip()
+    if approval.kind == "question" and decision == "approved":
+        questions = (approval.args or {}).get("questions") or []
+        try:
+            outcome["answers"] = resolve_answers(questions, answers)
+        except ValueError as exc:
+            raise InvalidAnswers(str(exc)) from exc
+    if approval.kind == "plan" and decision == "approved":
+        allowed = (await approval_spec_of_run(session, approval.run_id)).execution_modes()
+        if approval_mode not in allowed:
+            raise InvalidApprovalMode(
+                "批准计划时要选一个执行模式，且必须在智能体允许的范围里",
+                approval_mode=approval_mode,
+                allowed=list(allowed),
+            )
+        outcome["mode"] = approval_mode
+    return outcome

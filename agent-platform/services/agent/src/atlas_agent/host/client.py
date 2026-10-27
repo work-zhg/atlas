@@ -14,7 +14,7 @@ import contextlib
 import logging
 from typing import Any
 
-from atlas_host import HEADER_SESSION, SUBPROTOCOL_V1
+from atlas_host import HEADER_SESSION, LEGACY_HEADER_SESSION, SUBPROTOCOL_V1
 from atlas_jsonrpc import ChannelClosed, NotificationHandler, RequestHandler, RpcEndpoint
 from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import ConnectionClosed
@@ -82,6 +82,8 @@ class HostClient:
                     additional_headers={
                         "Authorization": f"Bearer {self._token}",
                         HEADER_SESSION: self._session_id,
+                        # 旧镜像的 bridge 只认旧名，过渡一个版本后删
+                        LEGACY_HEADER_SESSION: self._session_id,
                     },
                     subprotocols=[SUBPROTOCOL_V1],  # type: ignore[list-item]
                     compression=None,

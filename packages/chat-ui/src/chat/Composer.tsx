@@ -1,7 +1,7 @@
 "use client";
 
 import { Button } from "antd";
-import { useRef, useState, type KeyboardEvent } from "react";
+import { useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 
 import { Icon } from "../components/Icon";
 import styles from "./chat.module.css";
@@ -12,9 +12,11 @@ interface Props {
   running: boolean;
   onSend: (text: string) => void;
   onCancel: () => void;
+  /** 输入框底栏左侧的附加控件（如审批模式选择器） */
+  toolbar?: ReactNode;
 }
 
-export function Composer({ disabled, running, onSend, onCancel }: Props) {
+export function Composer({ disabled, running, onSend, onCancel, toolbar }: Props) {
   const [value, setValue] = useState("");
   const ref = useRef<HTMLTextAreaElement>(null);
 
@@ -55,6 +57,7 @@ export function Composer({ disabled, running, onSend, onCancel }: Props) {
           aria-label="消息输入框"
         />
         <div className={styles.composerBar}>
+          {toolbar}
           <span className={styles.composerHint}>
             {running ? "正在生成…" : "Enter 发送 · Shift+Enter 换行"}
           </span>

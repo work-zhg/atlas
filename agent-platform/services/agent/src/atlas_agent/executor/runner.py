@@ -40,8 +40,14 @@ from atlas_engine.contracts import (
     WaitingOn,
     classify,
 )
-from atlas_engine.kernel.middleware.subagents import SUBAGENT_TOOL
-from langchain_core.messages import AIMessageChunk, BaseMessage, HumanMessage, ToolMessage
+from atlas_engine.kernel.middleware.subagents import SUBAGENT_TOOL, task_brief
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    BaseMessage,
+    HumanMessage,
+    ToolMessage,
+)
 
 from ..domain.events import Answer, EventFactory, EventType, TraceEvent
 from ..domain.messages import Transcript
@@ -82,7 +88,9 @@ def _graph_input(
     *,
     resume: bool = False,
     waiting_on: Mapping[str, Any] | None = None,
-    decisions: Mapping[str, str] | None = None,
+    decisions: Mapping[str, Any] | None = None,
+    approval_mode: str | None = None,
+    run_id: UUID | None = None,
 ) -> dict[str, Any]:
     """system_prompt 交给 agent 自己拼，这里**不再重复塞 SystemMessage**。
 
@@ -98,6 +106,12 @@ def _graph_input(
     if not resume:
         messages.append(HumanMessage(content=input_content))  # type: ignore[arg-type]
     graph_input: dict[str, Any] = {"messages": messages}
+    # 审批 / 提问的 id 由 (run_id, tool_call_id) 派生（kernel approval.run_id_of）
+    if run_id is not None:
+        graph_input["run_id"] = str(run_id)
+    # 本段开始时的审批模式（run.approval_mode）。不传则由 PermissionMiddleware 取智能体默认
+    if approval_mode:
+        graph_input["approval_mode"] = approval_mode
     if waiting_on:
         graph_input["waiting_on"] = dict(waiting_on)
         graph_input["decisions"] = dict(decisions or {})
@@ -116,10 +130,14 @@ _CUSTOM_EVENTS = {
     "context.usage": EventType.CONTEXT_USAGE,
     # 文件不走 graph state 时的补发通道（OssFilesystem 的写路径经此）
     "file.written": EventType.FILE_WRITTEN,
+    # 审批模式变了（规划模式下计划获批）：执行器据此把新模式随检查点落库
+    "agent.mode": EventType.AGENT_MODE,
+    # 用户回答了 ask_user_question：卡片据此显示答案（进轨迹，刷新后也在）
+    "question.answered": EventType.QUESTION_ANSWERED,
 }
 
 
-def _started_data(spec: AgentSpec) -> dict[str, Any]:
+def _started_data(spec: AgentSpec, approval_mode: str | None = None) -> dict[str, Any]:
     started: dict[str, Any] = {
         "agent_slug": spec.slug,
         "agent_name": spec.name,
@@ -127,6 +145,8 @@ def _started_data(spec: AgentSpec) -> dict[str, Any]:
         "effort": spec.model.resolve_effort(),
         "thinking": spec.model.resolve_thinking(),
         "tools": sorted(spec.tool_names),
+        # 审计与前端展示：这一段开始时的审批模式
+        "approval_mode": approval_mode or spec.approval.default_mode,
     }
     # 请求了但本期未接的工具要报出来，不能静默忽略（§13.2）
     if missing := unsupported_tools(spec):
@@ -181,7 +201,8 @@ async def run(
     base_depth: int = 0,
     notices: Sequence[tuple[EventType, dict[str, Any]]] = (),
     waiting_on: Mapping[str, Any] | None = None,
-    decisions: Mapping[str, str] | None = None,
+    decisions: Mapping[str, Any] | None = None,
+    approval_mode: str | None = None,
 ) -> AsyncIterator[TraceEvent]:
     """驱动一张**已装配好的图**，产出 TraceEvent 流。
 
@@ -215,6 +236,9 @@ async def run(
 
     waiting_on / decisions: 续跑时交回图的挂起现场（contracts/suspension.py）——
         上一段落在 run.waiting_on 里的等待项，和 server 查好的结果。首段不传。
+
+    approval_mode: 本段开始时的审批模式（run.approval_mode）。计划获批时图内会改它，
+        改动经 agent.mode 事件交给执行器落库。
     """
     spec.validate()
 
@@ -222,7 +246,7 @@ async def run(
     transcript = transcript if transcript is not None else Transcript()
     events = EventFactory(run_id, clock or _utcnow, start_seq=start_seq, base_depth=base_depth)
 
-    yield events.make(EventType.RUN_STARTED, _started_data(spec))
+    yield events.make(EventType.RUN_STARTED, _started_data(spec, approval_mode))
     for kind, data in notices:
         yield events.make(kind, data)
 
@@ -236,6 +260,21 @@ async def run(
     # ★ 这一段里新拿到真实结果的调用也加进来（见下面 updates 分支）：同一个调用的结果
     #   若在后续帧里再出现一次，就是重复，不再发事件、不再落库
     settled = {m.tool_call_id for m in history if isinstance(m, ToolMessage)}
+    # 历史里已经发起过的调用（含参数解析失败的）：它们的 started 在之前的 run / 段里报过。
+    # 中间件整段写回历史时（补丁给悬空调用补结果、压缩）它们会原样再出现在 updates 里，
+    # 不能再报一遍 —— 112 上会话 e3ced303 的第 2 个 run 就因此多出两个委派框。
+    # ★ 本段每报一条 started 也记进来（_from_updates 就地更新）：压缩在 run 中途
+    #   改写历史时，本段早先的调用同样会再出现
+    announced = {
+        str(call["id"])
+        for m in history
+        if isinstance(m, AIMessage)
+        for call in (*m.tool_calls, *m.invalid_tool_calls)
+        if call.get("id")
+    }
+    # 被放弃的调用：历史里发起了、没有结果、本段也不在等（不在 waiting_on 里）。
+    # PatchToolCallsMiddleware 给它们补的「已取消」是给模型看的占位，不是本段的工具结果
+    abandoned = announced - settled - set(waiting_on or {})
     # 「模型读了某个技能的 SKILL.md」→ skill.loaded（技能 / MCP 设计 §7.4）
     skills = SkillLoadTracker(spec.skills)
     # 图最终的 waiting_on —— 非空说明图是因为挂起才跳出的（取自 values 流的最后一帧）
@@ -250,7 +289,13 @@ async def run(
         #   ('tools:<id>',)。这是 TraceEvent.depth 的唯一来源。
         async for ns, mode, chunk in graph.astream(
             _graph_input(
-                history, input_content, resume=resume, waiting_on=waiting_on, decisions=decisions
+                history,
+                input_content,
+                resume=resume,
+                waiting_on=waiting_on,
+                decisions=decisions,
+                approval_mode=approval_mode,
+                run_id=run_id,
             ),
             # custom 是审批中间件把「需要确认」送出来的通道 ——
             # 它在图内部执行，够不到 runner 的事件工厂（§12.2）。
@@ -300,7 +345,15 @@ async def run(
                         if not (isinstance(m, ToolMessage) and m.tool_call_id in settled)
                     ]
                     transcript.extend(fresh)
-                for event in _from_updates(chunk, events, local_depth, answer, settled):
+                for event in _from_updates(
+                    chunk,
+                    events,
+                    local_depth,
+                    answer,
+                    settled,
+                    announced=announced,
+                    abandoned=abandoned,
+                ):
                     yield event
                     for kind, data in skills.observe(event.type, event.data):
                         yield events.make(kind, data, local_depth)
@@ -504,15 +557,20 @@ def _subagent_started(call: dict[str, Any]) -> dict[str, Any]:
     """task 工具调用 → subagent.started 的 data（文档 §4.2）。"""
     args = call.get("args")
     task = ""
+    title = ""
     name = ""
     if isinstance(args, dict):
-        task = str(args.get("description", ""))
+        # task 是 SubAgent 真正收到的任务书（与 SubAgentMiddleware 交给 spawner 的同一份），
+        # title 是模型给的短标题
+        task = task_brief(args)
+        title = str(args.get("description", ""))
         name = str(args.get("subagent_type", ""))
     return {
         # 用 tool_call_id 当 subagent_run_id：它同时出现在 task 的调用与返回上，
         # 是唯一能把 started/finished 可靠配对的键（子图命名空间不行，见文档）。
         "subagent_run_id": call.get("call_id", ""),
         "name": name,
+        "title": title,
         "task": task,
     }
 
@@ -523,16 +581,32 @@ def _from_updates(
     depth: int,
     answer: Answer,
     settled: Collection[str] = frozenset(),
+    *,
+    announced: set[str] | None = None,
+    abandoned: Collection[str] = frozenset(),
 ) -> list[TraceEvent]:
     """节点状态更新 → 工具 / 待办 / 子智能体事件。
+
+    事件只描述**本段发起的调用**，按 tool_call_id 判断（三个集合的来历见 run()）：
+      started  已在 announced 里的不报；报了就记进 announced（就地更新）
+      结果     settled 里的（已报过）与 abandoned 里的（被放弃的历史调用）不报
+
+    ★ 不按节点名过滤：TodoListMiddleware.after_model 会**新增**并行 write_todos 的错误
+      结果，它们属于本段的调用，必须照常发 tool.failed。
 
     file.written 不在这里：文件写入不经过 graph state（工作区在对象存储），
     由 FilesystemMiddleware 经 custom stream 补发。
     """
+    if announced is None:
+        announced = set()
     out: list[TraceEvent] = []
     for _node, payload in _node_updates(chunk):
         for message in payload.get("messages") or []:
             for call in tool_calls_from(message):
+                if call_id := call.get("call_id"):
+                    if call_id in announced:
+                        continue  # 之前的 run / 段或本段早先报过（见 run() 里 announced 的说明）
+                    announced.add(call_id)
                 # ★ 调工具 = 这一轮说完了。主 agent 的话才分段：depth>0 是
                 #   子智能体的内部工具，它的文本压根不进主正文。
                 if depth == 0:
@@ -547,6 +621,8 @@ def _from_updates(
 
             if (result := tool_result_from(message)) and result.get("call_id") in settled:
                 continue  # 续跑时原样返回的已完成调用（见 run() 里 settled 的说明）
+            if result and result.get("call_id") in abandoned:
+                continue  # 补丁给被放弃的历史调用补的「已取消」（见 run() 里 abandoned 的说明）
             if result:
                 failed = result.get("status") == "error"
                 if depth == 0 and result.get("name") == SUBAGENT_TOOL:

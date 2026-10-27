@@ -3,7 +3,7 @@
     CallIdentity        这一次调用代表谁：uid（谁在用）、auth_uid（按谁判）、租户
     use_identity()      之后本任务发出的内网调用都带这组请求头
     outbound_headers()  出站请求头：X-Uid / X-Auth-Uid / X-Tenant-Id 原样透传，
-                        X-Caller-App 换成 atlas
+                        X-Caller-App 换成本应用的编码（配置 uc_app_code，缺省 atlas）
 
 ★ 请求里由主体解析设置；run 执行时由执行器按 run 记下的身份设置（执行任务是全新的上下文，
   不继承任何请求）。只有执行器那一处会让 auth_uid 与 uid 不同（P2：Agent 的数字员工）。
@@ -19,16 +19,23 @@ from typing import Any
 from uuid import UUID
 
 __all__ = [
-    "CALLER_APP",
     "CallIdentity",
     "IdentityScopeMiddleware",
+    "caller_app",
     "current_identity",
     "outbound_headers",
     "use_identity",
 ]
 
-#: 本服务在内网里的应用编码（用户中心 uc_app.code）。知识库、配置服务属于同一个应用
-CALLER_APP = "atlas"
+
+def caller_app() -> str:
+    """本服务在内网里的应用编码（用户中心 uc_app.code）。知识库、配置服务属于同一个应用。
+
+    ★ 从配置读，不写死：请求头的**名字**不带应用名，应用编码只出现在 X-Caller-App 的值里。
+    """
+    from .config import get_settings
+
+    return get_settings().uc_app_code
 
 
 @dataclass(frozen=True)
@@ -58,7 +65,7 @@ def current_identity() -> CallIdentity | None:
 
 def outbound_headers() -> dict[str, str]:
     ident = _current.get()
-    return {**(ident.headers() if ident else {}), "X-Caller-App": CALLER_APP}
+    return {**(ident.headers() if ident else {}), "X-Caller-App": caller_app()}
 
 
 class IdentityScopeMiddleware:

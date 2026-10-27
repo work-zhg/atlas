@@ -605,6 +605,65 @@
   overflow-y: auto;
 }
 
+/* ---------- 记忆写入的当场提示（doc/memory-design.html §4.7） ---------- */
+.memoryNotice {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: calc(-1 * var(--s-1)) 0 var(--s-2);
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--primary);
+  border-radius: var(--r-md);
+  background: var(--bg-1);
+  font-size: 12.5px;
+}
+
+.memoryIcon {
+  color: var(--primary-text);
+  flex: none;
+}
+
+.memoryText {
+  color: var(--fg);
+  min-width: 0;
+}
+
+.memoryContent {
+  color: var(--fg-2);
+  margin-left: 4px;
+}
+
+.memoryMeta {
+  color: var(--fg-3);
+  font-size: 12px;
+}
+
+.memoryUndo {
+  margin-left: auto;
+  border: none;
+  background: none;
+  padding: 0 4px;
+  color: var(--primary-text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.memoryUndo:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.memoryUndo:disabled {
+  color: var(--fg-3);
+  cursor: default;
+}
+
+.memoryError {
+  color: var(--danger);
+  font-size: 12px;
+}
+
 /* ---------- 子智能体卡片（P5） ---------- */
 .subagent {
   border: 1px solid var(--line);
@@ -641,6 +700,15 @@
 .saName {
   font-size: 12.5px;
   font-weight: 600;
+}
+
+.saTitle {
+  font-size: 12px;
+  color: var(--fg-3);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .saBody {
@@ -847,6 +915,87 @@
   font-size: 12px;
   color: var(--fg-3);
   margin-right: auto;
+}
+
+/* 调用参数：按工具渲染（命令、路径、修改前后、任务书），长内容在框内滚动 */
+.approvalArgs {
+  margin: var(--s-2) 0 0;
+  font-size: 12px;
+  color: var(--fg-2);
+}
+
+.approvalArgs summary {
+  cursor: pointer;
+}
+
+.approvalCode {
+  margin: 4px 0 0;
+  padding: 8px 10px;
+  border-radius: var(--r-sm);
+  background: var(--bg-code);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.approvalBefore {
+  background: var(--danger-soft);
+}
+
+.approvalAfter {
+  background: var(--success-soft);
+}
+
+.approvalPlan {
+  max-height: 480px;
+  overflow-y: auto;
+}
+
+.approvalFeedback {
+  margin-top: var(--s-3);
+}
+
+/* ── 问题卡片（ask_user_question）：与审批卡片同一套骨架 ── */
+.questionItem {
+  margin-bottom: var(--s-4);
+}
+
+.questionTitle {
+  margin: 0 0 6px;
+  font-size: 12.5px;
+  color: var(--fg);
+}
+
+.questionChip {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg-2);
+  font-size: 11px;
+  color: var(--fg-3);
+}
+
+.questionOptions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12.5px;
+}
+
+.questionDesc {
+  margin-left: 8px;
+  font-size: 12px;
+  color: var(--fg-3);
+}
+
+.questionOther {
+  margin-top: 6px;
+  max-width: 360px;
 }
 
 /* ── acp：CLI 权限模式标签；被 Auto 模式拦截的工具行 ── */

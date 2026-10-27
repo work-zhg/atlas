@@ -43,15 +43,32 @@ spec:
             - {name: OSS_BUCKET, value: atlas-dev}
             - {name: OSS_ADDRESSING_STYLE, value: path}
             - {name: OSS_REGION, value: us-east-1}
-            - {name: CLUSTER_BASE_URL, value: "http://atlas-cluster.atlas-system.svc.cluster.local:8010"}
-            # 配置服务：技能目录（与 MCP 注册表，MCP_REGISTRY=config 时）。
-            # ★ MCP 先保持 env：注册表要先用 `python -m atlas_config mcp import-env`
-            #   导入，再把 MCP_REGISTRY 切成 config。
+            # 配置服务：技能目录（MCP 注册表已迁到 MCP 网关）
             - {name: CONFIG_BASE_URL, value: "http://atlas-config.atlas-system.svc.cluster.local:8020"}
             # 知识库服务（doc/atlas-rag-design.html §10）；内网免令牌，带身份请求头
             - {name: KNOWLEDGE_BASE_URL, value: "http://atlas-knowledge.atlas-system.svc.cluster.local:8050"}
-            # 原生智能体的 Shell 沙箱（doc/native-sandbox-design.html）：Pod 由 atlas-cluster 创建
+            # 原生智能体的 Shell 沙箱（doc/sandbox-opensandbox-design.html）：由 OpenSandbox 的 opensandbox-sbx 创建。
+            # ★ 前提：deploy/local/opensandbox.sh 已执行（CSI 驱动、整桶 PVC atlas-oss、控制器、
+            #   opensandbox-sbx）；API key 由它写进 Secret atlas-opensandbox
             - {name: SANDBOX_ENABLED, value: "true"}
+            # 沙箱与 ACP Pod 的 CPU request（limit 仍是 2 核）。★ 小机器（4 核）上 250m 只够同时开三四个会话
+            - {name: SANDBOX_CPU_REQUEST, value: 100m}
+            - {name: ACP_CPU_REQUEST, value: 100m}
+            - {name: OPENSANDBOX_SBX_URL, value: "http://opensandbox-sbx.opensandbox-system.svc.cluster.local"}
+            - name: OPENSANDBOX_SBX_API_KEY
+              valueFrom: {secretKeyRef: {name: atlas-opensandbox, key: sbx_api_key}}
+            # ACP 智能体的 CLI Pod：OpenSandbox 的 opensandbox-acp（设计 §11）。模型 key 不在这里：
+            # 在 atlas-acp 的 Secret atlas-acp-model 里，由 ACP 模板以文件挂进 Pod
+            - {name: OPENSANDBOX_ACP_URL, value: "http://opensandbox-acp.opensandbox-system.svc.cluster.local"}
+            - name: OPENSANDBOX_ACP_API_KEY
+              valueFrom: {secretKeyRef: {name: atlas-opensandbox, key: acp_api_key}}
+            - {name: ACP_MODEL_NAME, value: deepseek-chat}
+            - name: ACP_MODEL_BASE_URL
+              valueFrom: {secretKeyRef: {name: atlas-server-creds, key: acp_model_base_url}}
+            # git 凭据档案（JSON：名字 → 凭据 + 允许使用的业务应用），git-profile.sh 从 .env 建。
+            # 凭据经 Credential Vault 交给 Pod 的 egress sidecar，Pod 里看不到（设计 §12）
+            - name: GIT_PROFILES
+              valueFrom: {secretKeyRef: {name: atlas-git-profiles, key: profiles, optional: true}}
             # 知识库 MCP 令牌的签名密钥：给会话 Pod（不可信代码）的能力凭据，不是服务间令牌
             # （内网身份传递 §5.3）。与知识库的 ATLAS_KB_MCP_SECRET 是同一个
             - name: KNOWLEDGE_MCP_SECRET
@@ -63,25 +80,19 @@ spec:
             # Docker Desktop 转发到宿主 loopback，命中不了 compose 的监听。
             - {name: OTEL_ENABLED, value: "true"}
             - {name: OTEL_ENDPOINT, value: "http://__HOST_IP__:4318"}
-            # 跨会话记忆（记忆设计）。本轮只抽取与存储，不向任何 Agent 暴露。
-            - {name: MEMORY_ENABLED, value: "true"}
-            - {name: MEMORY_QDRANT_URL, value: "http://__HOST_IP__:6333"}
-            # ★ Mem0 的变更史库。默认在 ~/.mem0，容器里是易失的。
-            - {name: MEMORY_HISTORY_DB, value: "/tmp/mem0-history.db"}
-            - {name: DEFAULT_USER_ID, value: "00000000-0000-0000-0000-000000000001"}
+            # 跨会话记忆（doc/memory-design.html）：存储在记忆服务（36-memory.yaml）
+            - {name: MEMORY_BASE_URL, value: "http://atlas-memory.atlas-system.svc.cluster.local:8060"}
             # 身份与鉴权（doc/identity-propagation-design.html）：网关校验用户中心登录态、写入 X-Uid；
             # 缺 X-Uid 一律 401。操作码按 X-Auth-Uid 取用户中心授权快照（内网免令牌）
-            - {name: AUTH_MODE, value: uc}
             - {name: UC_BASE_URL, value: "http://atlas-usercenter.atlas-system.svc.cluster.local:8030"}
-            # MCP 经 Higress 收口（MCP 详设 §08）。Higress 跑在宿主的 compose 里
-            # （--profile higress），配置见 deploy/local/higress/setup.py。
-            # ★ 后端 key 只在网关里，这里只有网关地址 —— 没有任何 serpapi 凭据。
-            # ★ serpapi 单独给 90s：没有缓存的查询偶尔 50s+，全局 60s 会误判超时。
-            - name: MCP_SERVERS
-              value: '[{"name":"serpapi","url":"http://__HOST_IP__:18080/mcp-servers/serpapi","call_timeout_s":90}]'
+            # MCP 只经自研 MCP 网关（doc/mcp-design.html 第二版，37-mcpgateway.yaml）：服务、工具定义、
+            # 复核结论都从网关读，调用带这一轮权限主体的 API Key。★ 这里只有网关地址 —— 没有 Higress
+            # 的地址，也没有任何后端凭据。serpapi 的 90s 调用超时在网关登记时定（mcp-cutover.sh）
+            - {name: MCP_GATEWAY_URL, value: "http://atlas-mcpgateway.atlas-system.svc.cluster.local:8070"}
             # ★ 会话文件预览的 frame-ancestors（previews.py）：经前端网关（:8080，见 40-frontends.yaml）
             #   打开的预览页要能 iframe 嵌入预览站点
-            - {name: CORS_ORIGINS, value: '["http://localhost:3000","http://127.0.0.1:3000","http://localhost:8080","http://127.0.0.1:8080"]'}
+            #   __PUBLIC_ORIGIN__ = 前端网关的对外地址（apply.sh 替换；本机 http://localhost:8080）
+            - {name: CORS_ORIGINS, value: '["http://localhost:3000","http://127.0.0.1:3000","__PUBLIC_ORIGIN__","http://127.0.0.1:8080"]'}
             - name: OSS_ACCESS_KEY_ID
               valueFrom: {secretKeyRef: {name: atlas-server-creds, key: oss_access_key_id}}
             - name: OSS_ACCESS_KEY_SECRET

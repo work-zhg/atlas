@@ -1,4 +1,4 @@
-"""任务加载：bench/agent-tasks/<套件>/<任务>/（doc/agent-eval-design.html §7）。
+"""任务加载：bench/agent-tasks/<套件>/<任务>/（doc/agent-eval-design.html §14.2）。
 
     <任务>/task.yaml     instruction、category、tags、verifier、budget
     <任务>/files/        初始工作区（原样上传）

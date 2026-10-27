@@ -1,22 +1,14 @@
 "use client";
 
 /**
- * 配置服务（atlas-config）：技能的上传 / 审查 / 发布 / 下架，MCP 注册表与工具复核。
+ * 配置服务（atlas-config）：技能的上传 / 审查 / 发布 / 下架。
+ * ★ MCP 注册表与工具复核已迁到 MCP 网关（api/mcp-gateway.ts，doc/mcp-design.html 第二版）。
  * 浏览器直连（BFF 上线前，见 lib/http.ts 的 CONFIG_API_BASE）。
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { configHttp } from "@/lib/http";
-import type {
-  AuditEntry,
-  ConfigMcpServer,
-  ConfigSkill,
-  ConfigSkillVersion,
-  McpServerIn,
-  McpServerPatch,
-  ToolReview,
-  ToolReviewIn,
-} from "./config-types";
+import type { AuditEntry, ConfigSkill, ConfigSkillVersion } from "./config-types";
 import { qk } from "./keys";
 
 export function useConfigSkills() {
@@ -90,54 +82,6 @@ export function useSkillAction() {
         input.reason ? { reason: input.reason } : {},
       ),
     onSuccess: done,
-  });
-}
-
-export function useConfigMcpServers(enabled = true) {
-  return useQuery({
-    queryKey: qk.config.mcp,
-    queryFn: () => configHttp.get<ConfigMcpServer[]>("/config/mcp/servers"),
-    enabled,
-    retry: 1,
-  });
-}
-
-function useInvalidateMcp() {
-  const qc = useQueryClient();
-  return () => {
-    void qc.invalidateQueries({ queryKey: qk.config.mcp });
-    void qc.invalidateQueries({ queryKey: qk.catalog.mcp });
-    void qc.invalidateQueries({ queryKey: qk.tools });
-  };
-}
-
-export function useCreateMcpServer() {
-  const done = useInvalidateMcp();
-  return useMutation({
-    mutationFn: (body: McpServerIn) => configHttp.post<ConfigMcpServer>("/config/mcp/servers", body),
-    onSuccess: done,
-  });
-}
-
-export function usePatchMcpServer() {
-  const done = useInvalidateMcp();
-  return useMutation({
-    mutationFn: (input: { name: string; patch: McpServerPatch }) =>
-      configHttp.patch<ConfigMcpServer>(`/config/mcp/servers/${input.name}`, input.patch),
-    onSuccess: done,
-  });
-}
-
-export function useReviewTool(server: string) {
-  const done = useInvalidateMcp();
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (body: ToolReviewIn) =>
-      configHttp.post<ToolReview>(`/config/mcp/servers/${server}/reviews`, body),
-    onSuccess: () => {
-      done();
-      void qc.invalidateQueries({ queryKey: qk.catalog.mcpServer(server) });
-    },
   });
 }
 

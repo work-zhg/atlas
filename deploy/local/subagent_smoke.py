@@ -190,7 +190,7 @@ def main() -> None:
         print(f"  thread={tid}\n    子智能体={sub_name}  标题={title}\n    CLI 会话={cli_session}")
 
     print("\n=== 两个会话各自的 Pod ===")
-    subprocess.run(["kubectl", "-n", "atlas-sessions", "get", "pods", "--no-headers"], check=False)
+    subprocess.run(["kubectl", "-n", "atlas-acp", "get", "pods", "--no-headers"], check=False)
 
 
 if __name__ == "__main__":

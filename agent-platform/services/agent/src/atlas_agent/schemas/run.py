@@ -8,6 +8,9 @@ from pydantic import BaseModel, Field
 
 from atlas_agent.domain.events import TraceEvent
 
+#: 审批模式（doc/native-approval-mode-design.html）
+ApprovalModeIn = Literal["plan", "manual", "auto"]
+
 #: ★ 'suspended' 是**非终态**：这一轮还没结束，只是在等子智能体的结果
 #:   （可能等一小时）。前端应当显示「等待中」而不是把这一轮标成完成 ——
 #:   真正的结论要等续跑那一段（domain/events.py::RUN_SUSPENDED）。
@@ -29,12 +32,30 @@ class RunCreate(BaseModel):
     content: list[dict[str, Any]] = Field(
         min_length=1, description="Anthropic content blocks，如 [{'type':'text','text':'...'}]"
     )
+    #: 用户在输入框旁选的审批模式。必须在智能体允许的范围里；会话会记住它，作用于之后的消息。
+    #: 不传 = 沿用会话上次的选择（没有就用智能体默认）
+    approval_mode: ApprovalModeIn | None = None
+
+
+class QuestionAnswerIn(BaseModel):
+    """ask_user_question 一题的答案。两项都空 = 这题跳过，交给智能体定。"""
+
+    #: 选中的选项 label（单选题最多一个）
+    selected: list[str] = Field(default_factory=list, max_length=4)
+    #: 「其他」里填的话（单选题填了它就不能再选选项）
+    other: str | None = Field(default=None, max_length=500)
 
 
 class ApprovalDecision(BaseModel):
     """§12.2：批准或拒绝。expired 由服务端判定，不接受客户端提交。"""
 
     decision: Literal["approved", "rejected"]
+    #: 计划审批（kind=plan）批准时必填：用户选的执行模式（手动 / 自动，须在智能体允许的范围里）
+    approval_mode: Literal["manual", "auto"] | None = None
+    #: 拒绝原因 / 计划的修改意见，作为工具结果交给模型 —— 比只说「不行」更容易改对
+    feedback: str | None = Field(default=None, max_length=4000)
+    #: 问题（kind=question）的答案，与问题一一对应。批准时不带 = 全部按推荐（不认识问题的调用方）
+    answers: list[QuestionAnswerIn] | None = Field(default=None, max_length=4)
 
 
 class PendingApproval(BaseModel):
@@ -43,6 +64,9 @@ class PendingApproval(BaseModel):
     id: UUID
     tool_name: str
     args: dict[str, Any]
+    #: tool = 工具调用的确认；plan = 规划模式提交的计划；question = 向用户提的问题（args.questions）
+    kind: str = "tool"
+    reason: str | None = None
     created_at: datetime
 
 

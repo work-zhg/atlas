@@ -44,11 +44,10 @@ _TABLES = (
 def _test_env() -> Iterator[None]:
     saved = {
         k: os.environ.get(k)
-        for k in ("ATLAS_KB_DATABASE_URL", "ATLAS_KB_REDIS_URL", "ATLAS_KB_AUTH_MODE")
+        for k in ("ATLAS_KB_DATABASE_URL", "ATLAS_KB_REDIS_URL")
     }
     os.environ["ATLAS_KB_DATABASE_URL"] = TEST_URL
     os.environ["ATLAS_KB_REDIS_URL"] = TEST_REDIS
-    os.environ["ATLAS_KB_AUTH_MODE"] = "dev"
     get_settings.cache_clear()
 
     async def _ensure() -> None:
@@ -272,6 +271,33 @@ class FakeDataPermissions:
         return "root"
 
 
+#: 用户中心授权快照的替身：没有免鉴权模式（dev 模式已删），谁都能用、操作码全有
+_ANYONE = {
+    "can_access": True,
+    "permissions": ["kb:create", "kb:review", "chat:use", "agent:create"],
+    "user": {"status": "active"},
+}
+
+
+@pytest.fixture(autouse=True)
+def _fake_user_center(monkeypatch: pytest.MonkeyPatch) -> None:
+    """授权快照（auth._authz）走替身；测权限的用例自己再换 auth._transport。"""
+    import httpx
+    from atlas_knowledge import auth
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        assert req.url.path.endswith("/authz"), req.url.path
+        return httpx.Response(200, json=_ANYONE)
+
+    monkeypatch.setattr(auth, "_transport", httpx.MockTransport(handler))
+    monkeypatch.setattr(auth, "_cache", auth._Cache())
+
+
+async def own_tags(user_id: str) -> list[str]:
+    """主体展开的替身：只有 u:用户（展开部门与角色要 atlas-server，测试里不接）。"""
+    return [f"u:{user_id}"]
+
+
 @pytest.fixture
 async def rt() -> AsyncIterator[Any]:
     import redis.asyncio as aioredis
@@ -300,6 +326,7 @@ async def rt() -> AsyncIterator[Any]:
         dispatcher=RecordingDispatcher(),
         storage_factory=lambda: storage,
         data_permissions=FakeDataPermissions(),
+        principal_resolver=own_tags,
     )
     try:
         yield runtime

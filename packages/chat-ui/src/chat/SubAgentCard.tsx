@@ -52,6 +52,12 @@ export function SubAgentCard({ run }: { run: SubagentRun }) {
           {avatarLetter(run.name)}
         </span>
         <span className={styles.saName}>{run.name}</span>
+        {/* 只给了标题的旧调用：task 就是标题，别重复显示 */}
+        {run.title && run.title !== run.task && (
+          <span className={styles.saTitle} title={run.title}>
+            {run.title}
+          </span>
+        )}
         <Tag color={status.color} style={{ marginInlineEnd: 0 }}>
           {status.label}
         </Tag>

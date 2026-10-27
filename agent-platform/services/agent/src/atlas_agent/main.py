@@ -25,9 +25,9 @@ from .executor.inprocess import InProcessExecutor
 from .host.runtime import HostRuntime
 from .instance import instance_id
 from .maintainer import Maintainer
-from .memory import make_memory, run_worker
+from .memory import Backfiller, make_memory_runtime
 from .outbound import IdentityScopeMiddleware
-from .providers.cluster import ClusterPods
+from .providers.opensandbox import OpenSandboxPods
 from .redisx import make_redis
 from .stream.gate import StreamGate, StreamsBusy
 from .telemetry import setup_telemetry, shutdown_telemetry
@@ -68,22 +68,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     executes = settings.server_role != "api"
     logger.info("atlas-server 启动：角色=%s 实例=%s", settings.server_role, instance_id())
-    # 用户中心客户端（权限设计 §4）：uc 模式取授权快照用；内网免令牌，不需要应用凭据
-    app.state.uc = UCClient(settings) if settings.auth_mode == "uc" else None
-    if settings.auth_mode == "dev":
-        logging.getLogger(__name__).warning(
-            "AUTH_MODE=dev：缺 X-Uid 时用默认用户、操作码全有，只能用于本机开发"
-        )
     # ★ 遥测要在任何 span 产生之前装好。装不上不拦着进程起（它是旁路），
     #   但会把失败喊出来 —— 否则就成了「以为在采集其实没有」。
     setup_telemetry(settings)
-    # acp 的执行环境。Pod 生命周期归 cluster 服务 —— server 不碰 K8s。
-    pods = ClusterPods(settings)
-    # 跨会话记忆（记忆设计）。★ 没开就是 None —— 执行器据此完全跳过，
-    #   不回落任何假实现。
-    memory = make_memory(settings)
-    # 管理 API 从 app.state 取同一个实例 —— 构造很贵（要加载
-    # embedding 模型），不能每个请求新建一个。
+    # acp 的执行环境：OpenSandbox 的 opensandbox-acp 建 Pod
+    # （doc/sandbox-opensandbox-design.html §11）。
+    # server 自己仍不碰 K8s。★ 进程级的 Redis 客户端：ensure 的锁与令牌在 Redis
+    pods_redis = make_redis(settings)
+    pods = OpenSandboxPods(settings, pods_redis)
+    # 跨会话记忆（doc/memory-design.html）。★ 没接入记忆服务就是 None —— 执行器、管理接口、
+    #   补记据此完全跳过，不回落任何假实现。
+    memory = make_memory_runtime(settings, get_sessionmaker())
     app.state.memory = memory
     app.state.executor = InProcessExecutor(
         get_sessionmaker(),
@@ -124,29 +119,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     ]
     maintainer = None
     if executes:
-        # 全局单例任务（Pod 回收、记忆队列兜底）：所有执行器竞选，一个在做（§7.1）
+        # 全局单例任务（Pod 回收、会话后补记）：所有执行器竞选，一个在做（§7.1）
         maintainer = Maintainer(
-            settings, get_sessionmaker(), pods, memory_enabled=memory is not None
+            settings,
+            get_sessionmaker(),
+            backfiller=(
+                Backfiller(memory, executor.model_builder, lambda: make_redis(settings))
+                if memory is not None
+                else None
+            ),
         )
         background.append(asyncio.create_task(maintainer.run_forever(), name="maintainer"))
-
-    # 抽取 worker（只在执行器上跑）。★ 自建 Redis 连接：BLMOVE 会长时间阻塞。
-    #   ★ 抽取跑在这里而不是 run 的收尾路径上 —— 它要调一次 LLM，同步做
-    #     会把每一轮的收尾拖长（§11：记忆绝不能成为会话的硬依赖）。
-    worker_redis = None
-    if memory is not None and executes:
-        worker_redis = make_redis(settings)
-        background.append(
-            asyncio.create_task(
-                run_worker(
-                    worker_redis,
-                    memory,
-                    max_attempts=settings.memory_max_attempts,
-                    instance=instance_id(),
-                ),
-                name="memory-worker",
-            )
-        )
 
     try:
         yield
@@ -158,13 +141,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         for task in background:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
-        if worker_redis is not None:
-            with contextlib.suppress(Exception):
-                await worker_redis.aclose()
+        with contextlib.suppress(Exception):
+            await pods_redis.aclose()
         if maintainer is not None:
+            await maintainer.stop()
             await maintainer.release()
-        if app.state.uc is not None:
-            await app.state.uc.aclose()
+        await app.state.uc.aclose()
         # ★ executor 停完再 flush：最后那批 span 往往正是收尾阶段产生的，
         #   顺序反过来就会把它们丢在缓冲里。
         shutdown_telemetry()
@@ -172,6 +154,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Atlas", version="0.1.0", lifespan=lifespan)
+    # 用户中心客户端（权限设计 §4）：每个请求按 X-Auth-Uid 取授权快照；内网免令牌，不需要应用凭据。
+    # ★ 建在这里而不是 lifespan：app 一建出来鉴权就可用（lifespan 结束时关闭）
+    app.state.uc = UCClient(get_settings())
 
     # web 前端跨源直连（含 SSE）。allow_headers 必须显式列出自定义头 ——
     # 尤其 Last-Event-ID：断线续传靠它，漏了会静默退化成"每次重连都从头拉"。

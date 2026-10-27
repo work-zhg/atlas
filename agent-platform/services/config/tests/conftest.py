@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 TEST_DB = "atlas_config_test"
 _ADMIN_URL = "postgresql+asyncpg://atlas:atlas@localhost:5433/atlas"
 TEST_URL = f"postgresql+asyncpg://atlas:atlas@localhost:5433/{TEST_DB}"
-_TABLES = ("skill", "skill_version", "mcp_server", "mcp_tool_review", "config_audit", "instruction")
+_TABLES = ("skill", "skill_version", "config_audit", "instruction")
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -51,6 +51,33 @@ def _test_database() -> Iterator[None]:
         else:
             os.environ["ATLAS_CONFIG_DATABASE_URL"] = saved
         get_settings.cache_clear()
+
+
+#: 用户中心授权快照的替身：没有免鉴权模式（dev 模式已删），谁都能用、操作码全有
+ANYONE = {
+    "can_access": True,
+    "permissions": [
+        "chat:use",
+        "agent:create",
+        "skill:upload",
+        "skill:review",
+        "model:manage",
+        "audit:view",
+    ],
+    "user": {"status": "active"},
+}
+
+
+@pytest.fixture(autouse=True)
+def _fake_user_center(monkeypatch: pytest.MonkeyPatch) -> None:
+    """授权快照走替身；测权限的用例（test_auth_uc.py）自己再换 auth._transport。"""
+    import httpx
+    from atlas_config import auth
+
+    monkeypatch.setattr(
+        auth, "_transport", httpx.MockTransport(lambda req: httpx.Response(200, json=ANYONE))
+    )
+    monkeypatch.setattr(auth, "_cache", auth._Cache())
 
 
 @pytest.fixture(autouse=True)

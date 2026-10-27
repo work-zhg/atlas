@@ -128,27 +128,26 @@ async def test_live_tools_produce_inspector_data() -> None:
     assert [e.seq for e in events] == list(range(1, len(events) + 1))
 
 
-async def test_live_mcp_web_search_via_higress() -> None:
-    """网页搜索的真实链路：模型 → MCP 工具 → Higress → serpapi。
+async def test_live_mcp_web_search_via_gateway() -> None:
+    """网页搜索的真实链路：模型 → MCP 工具 → MCP 网关 → Higress → serpapi。
 
-    前提：本机 Higress 已按 deploy/local/higress/setup.py 配好 serpapi。
-    地址可用 ATLAS_LIVE_MCP_URL 覆盖（默认本机 18080）。
+    前提：MCP 网关在跑、serpapi 已在网关登记（Higress 上只认网关凭据），主体有授权、有 Key。
+    ATLAS_LIVE_MCP_GATEWAY_URL（默认本机 8070）、ATLAS_LIVE_MCP_SUBJECT（主体的用户中心 uid）。
     """
     import uuid
 
     import httpx
-    from atlas_agent.providers.mcp import (
-        CallContext,
-        McpServerConfig,
-        NativeMcpTools,
-        SettingsCatalog,
-    )
+    from atlas_agent.providers.mcp import CallContext, KeyAuth, McpSessions, NativeMcpTools
+    from atlas_agent.providers.mcp.gateway import gateway_catalog, subject_access
 
-    url = os.getenv("ATLAS_LIVE_MCP_URL", "http://127.0.0.1:18080/mcp-servers/serpapi")
+    gateway = os.getenv("ATLAS_LIVE_MCP_GATEWAY_URL", "http://127.0.0.1:8070")
+    subject = os.getenv("ATLAS_LIVE_MCP_SUBJECT")
+    if not subject:
+        pytest.skip("需要 ATLAS_LIVE_MCP_SUBJECT（有 serpapi 授权和 API Key 的主体）")
     try:
-        httpx.get(url.rsplit("/mcp-servers", 1)[0], timeout=3)
+        httpx.get(f"{gateway}/health", timeout=3)
     except httpx.HTTPError:
-        pytest.skip(f"Higress 不可达：{url}")
+        pytest.skip(f"MCP 网关不可达：{gateway}")
 
     base, key = _creds()
     spec = AgentSpec(
@@ -159,13 +158,17 @@ async def test_live_mcp_web_search_via_higress() -> None:
         tool_names=("mcp:serpapi:google_search",),
         limits=LimitSpec(timeout_s=180),
     )
-    catalog = SettingsCatalog(
-        [McpServerConfig(name="serpapi", url=url, call_timeout_s=90)], redis=None
-    )
+    catalog = await gateway_catalog(gateway, ttl_s=0, redis=None)
+    access = await subject_access(gateway, subject, ttl_s=0)
+    sessions = McpSessions(auth=KeyAuth(access.key) if access.key else None)
     tools = await NativeMcpTools(catalog).tools_for(
         spec.tool_names,
-        CallContext(run_id=RUN_ID, thread_id=uuid.uuid4(), user_id=uuid.uuid4()),
+        CallContext(run_id=RUN_ID, thread_id=uuid.uuid4(), user_id=uuid.UUID(subject)),
+        reviews=catalog.reviews(),
+        access=access,
+        sessions=sessions,
     )
+    assert tools, "serpapi 没装上：主体没有授权或没有 Key"
     chat = build_chat_model(spec.model, base_url=base, api_key=key)
     events = [
         e
@@ -188,3 +191,4 @@ async def test_live_mcp_web_search_via_higress() -> None:
         if e.type is EventType.TOOL_STARTED and e.data.get("name") == "serpapi__google_search"
     ]
     assert searches, "模型没有调用 serpapi__google_search"
+    await sessions.aclose()

@@ -7,7 +7,10 @@ SubAgentMiddleware 在 `task` 调用时问它要一个子 run；server 的 SubAg
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from .permission import ApprovalMode
 
 __all__ = ["SubAgentSpawner"]
 
@@ -27,8 +30,18 @@ class SubAgentSpawner(Protocol):
       —— 有哪些 SubAgent 由 spec（版本快照）回答，本协议只负责起子 run。
     """
 
-    async def spawn(self, name: str, task: str, *, fresh: bool = False) -> str:
+    async def spawn(
+        self,
+        name: str,
+        task: str,
+        *,
+        fresh: bool = False,
+        approval_mode: ApprovalMode | None = None,
+    ) -> str:
         """把任务书交给名为 `name` 的 SubAgent，起一个子 run，返回它的 id。
+
+        approval_mode 是派活那一刻父 run 的审批模式（图的 state 里的当前值，
+        计划获批后可能已经和 run 开始时不同）。子 run 据此定自己的模式（设计 D6）。
 
         起不了（撞上限、同轮同名、会话被占）就抛异常，消息是**给模型看的**：
         调用方把它接成一条失败的工具结果 —— 一次派不出去是可恢复的局部问题，

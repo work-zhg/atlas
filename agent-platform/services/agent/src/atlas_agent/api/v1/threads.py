@@ -7,9 +7,13 @@ from uuid import UUID
 from fastapi import APIRouter, Header, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from starlette.concurrency import iterate_in_threadpool
 
+from ...auth.agent_access import AgentAccess
 from ...auth.authz import PrincipalDep, ensure_thread_owner
+from ...auth.dependency import uc_client
+from ...db.models import Agent, Thread
 from ...deps import (
     ExecutorDep,
     RedisDep,
@@ -210,6 +214,7 @@ async def compact_thread(
 async def create_run(
     thread_id: UUID,
     payload: RunCreate,
+    request: Request,
     service: RunServiceDep,
     session: SessionDep,
     principal: PrincipalDep,
@@ -221,6 +226,13 @@ async def create_run(
     带 Idempotency-Key 时重复提交返回同一个 run，不会变成两条消息（§11.2）。
     """
     await ensure_thread_owner(session, thread_id, principal, write=True)
+    # 发消息也要能用这个 Agent（数字员工设计 §8.1）：收回使用权后不能在已有会话里接着用
+    # —— 以 Agent 为权限时这道闸门就是全部的人这一侧
+    agent = await session.scalar(
+        select(Agent).join(Thread, Thread.agent_id == Agent.id).where(Thread.id == thread_id)
+    )
+    if agent is not None:
+        await AgentAccess(uc_client(request)).require_use(principal, agent)
     # 幂等键按使用者隔离：否则别人用同一个键能拿到这个 run
     key = f"{principal.uid}:{idempotency_key}" if idempotency_key else None
     return await service.create(

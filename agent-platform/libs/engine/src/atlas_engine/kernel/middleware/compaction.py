@@ -168,6 +168,7 @@ class CompactionMiddleware(AgentMiddleware):
         on_failed: Callable[[int], Awaitable[None]] | None = None,
         max_output_cap: int | None = None,
         attachments: Sequence[tuple[str, str]] = (),
+        dynamic_attachments: Callable[[], Sequence[tuple[str, str]]] | None = None,
         attachment_budget_tokens: int | None = None,
         todo_reminder_after: int = 8,
     ) -> None:
@@ -194,6 +195,8 @@ class CompactionMiddleware(AgentMiddleware):
         self._on_failed = on_failed
         self._max_output_cap = max_output_cap
         self._attachments = list(attachments)
+        #: 每次调模型时现取的附件（如记忆的更新提示：Agent 重新加载过的主题就不再列出）
+        self._dynamic_attachments = dynamic_attachments
         self._attachment_budget = attachment_budget_tokens or max(1_000, self._effective // 10)
         self._todo_after = todo_reminder_after
         self._summarize = summarizer
@@ -463,6 +466,8 @@ class CompactionMiddleware(AgentMiddleware):
     def _reminders(self, request: Any, tokens: int) -> list[tuple[str, str]]:
         """本次调用要附加的 <system-reminder>（§12），按优先级在预算内取。"""
         out: list[tuple[str, str]] = list(self._attachments)
+        if self._dynamic_attachments is not None:
+            out.extend(self._dynamic_attachments())
         warn_at = self._threshold(self._warn_ratio)
         if warn_at and tokens >= warn_at:
             pct = int(tokens * 100 / self._effective)

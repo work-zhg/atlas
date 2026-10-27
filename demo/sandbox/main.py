@@ -1,62 +1,74 @@
-"""沙箱：原生智能体在会话级 Pod 里执行命令。
+"""执行环境迁移到 OpenSandbox：原生沙箱与 ACP Pod（doc/sandbox-opensandbox-design.html）。
 
-按需建 Pod、经 sandboxd 执行、文件一致性屏障、断联恢复。
+按需建沙箱、工作区读写路由、后台命令 + 游标轮询、写穿、闲置回收、ACP 的 Credential Vault。
 
-运行：  .venv/bin/python demo/sandbox/main.py   （不需要 API key，约 8 秒）
+运行：  .venv/bin/python demo/sandbox/main.py   （不需要 API key，约 6 秒）
 说明：  demo/sandbox/README.html（原理、文件结构、时序图、动手实验）
 
-★ 真实的部分：命令真的由 bash 执行（setsid 进程组、stdin=/dev/null、杀整组）；
-  sandboxd 是 127.0.0.1 上真实的 HTTP 服务，server 用 httpx 读它的 NDJSON 流。
-  内存模拟的部分：K8s、cluster、对象存储、rclone 挂载器（挂载点是真实的本地目录）。
+★ 真实的部分：命令真的由 bash 执行（独立进程组、stdin=/dev/null、杀整组）；所有组件之间走 HTTP
+  （httpx，经一个模拟的「集群网络」分发）；模板合并逻辑照搬 OpenSandbox 上游。
+  内存模拟的部分：OpenSandbox 的 server / 控制器 / execd / egress、K8s、对象存储、CSI 挂载（挂载点是
+  真实的本地目录）、Redis、bridge 与 CLI、Gitee。
 
-场景：用户 u1 在会话 t1 里，和一个勾了 Shell 的原生智能体说了六句话。
+场景：用户 u1 在会话 t1 里和一个勾了 Shell 的原生智能体说了五句话，
+      最后 TeamFlow 的会话 t2 跑了一轮 ACP。
 
-    r1  首次执行    同一批两个 execute → 两个 ensure 串行，只建一个 Pod；文件工具写进对象存储 →
-                    执行前 forget，命令看得到；执行后等写回，read_file 读得到命令的产物
-    r2  长命令      事件流断了一下 → POST 同一个 exec_id 带 after 接上，不重跑；安静的计算不算卡死，
-                    sleep 30 算；一直有输出的死循环靠模型给的 timeout；大输出只留头尾
-    r3  后台与取消  命令以 shell 退出为准，后台进程不挡结果；编译时闲置回收不回收；
-                    用户取消 → 杀整个进程组
-    r4  闲置回收    Pod 闲置被删 → 下一次 execute 重建 → 结果前提示「环境已重建」：
-                    工作区还在，HOME 没了
-    r5  Pod 消失    执行中 Pod 被删 → 重连拿到 409 → 工具错误回给模型（不重跑、整轮不失败）
-                    → 模型重跑
-    r6  server 崩溃 实例 A 执行中崩溃 → 实例 B 接管、重放同一个 tool_call → 同一个 exec_id
-                    → 接上原命令
+    r1  按需建沙箱  文件工具先直连对象存储；同一批两个 execute → 两个 ensure，只建一个沙箱
+                    → 写路由表；之后的文件工具走沙箱：刚写的 count.py 命令马上看得到，
+                    命令的产物 read_file 马上读得到
+    r2  后台与断线  后台进程正在写的文件，read_file 读得到此刻的内容；
+                    轮询中连接被重置 → 同一个命令 id、
+                    同一个游标接上，不重跑；模型给的 timeout 由 execd 执行；大输出只留头尾
+    r3  外部写入    用户在界面上传新的 notes.txt：对象存储立刻是新的，沙箱的挂载要等元数据缓存过期
+                    （换实例 B 跑：路由表在 Redis，B 也知道该走沙箱）
+    r4  闲置回收    沙箱闲置被回收（先删路由）→ read_file 自动回到对象存储；下一次 execute 重建 →
+                    「环境已重建」：工作区还在，HOME 没了
+    r5  沙箱消失    执行中 Pod 没了 → 重新 ensure 得到新沙箱 → 它的 execd 不认识这个命令
+                    → 工具错误 → 模型重跑
+    r6  ACP        opensandbox-acp 建 ACP 的 Pod：模型 key 是模板挂的文件、
+                    git 凭据在 Credential Vault；
+                    CLI 推送时由 egress 注入认证；Pod 里找不到任何 git 凭据
 
 文件按功能拆分（依赖方向从上到下）：
-    main.py            剧本：六轮对话，中途按剧本注入故障，最后打印各处状态
-    executor.py        server 进程：跑一轮（建图、装 PodSandbox、落库）；模拟进程崩溃
-    agent.py           kernel：SandboxProtocol 契约、execute 工具、文件工具、组装图
-    scripted.py        假模型（剧本）
-    sandbox_client.py  server：PodSandbox —— 按需 ensure、NDJSON 流、断线接上、boot_id、取消
-    cluster.py         cluster 服务（ensure / release / 闲置回收）+ K8s（内存模拟）
-    pod.py             一个沙箱 Pod：挂载器 + barrier + sandboxd
-    sandboxd.py        Pod 里的守护进程：HTTP 接口 + 真实地执行命令
-    storage.py         对象存储、rclone 挂载器（缓存与写回队列）、barrier sidecar
-    tracing.py         输出：每行带上是哪一层在说话
+    main.py               剧本：六幕，中途注入故障，最后打印各处状态
+    executor.py           server 进程：跑一轮（建图、装 PodSandbox 与 WorkspaceFilesystem）
+    agent.py              kernel：两个契约、execute、文件工具、组装图
+    scripted.py           假模型（剧本）
+    sandbox_client.py     server：PodSandbox —— 后台命令、游标轮询、断线接上、环境已重建、头尾截断
+    workspace.py          server：工作区读写路由 —— 两套底层（对象存储 / execd）
+    acp.py                server：OpenSandboxPods、git 档案与 Credential Vault、HostRuntime
+    provision.py          server：路由表、ensure（复用 / 锁 / 配额 / 镜像）、闲置回收与孤儿回收
+    opensandbox_client.py server：lifecycle 与 execd 的薄客户端
+    opensandbox.py        OpenSandbox：两个 lifecycle server、控制器、Pod、egress；集群网络
+    execd.py              Pod 里的 execd：HTTP 接口 + 真实执行命令 + 文件 API
+    images.py             ACP 镜像里的 bridge 与 CLI；Gitee
+    storage.py            对象存储、写穿式 CSI 挂载、Redis
+    tracing.py            输出：每行带上是哪一层在说话
 """
 
 from __future__ import annotations
 
 import asyncio
-import contextlib
-import os
+import shutil
+import tempfile
 import time
 from collections.abc import Callable
+from pathlib import Path
 
-from cluster import IDLE_TTL_S, FakeK8s, PodManager, pod_name
-from executor import Conversation, InstanceCrashed, ServerInstance
+from acp import GIT_PROFILES, AcpRuntime, AcpThread, OpenSandboxPods
+from executor import Conversation, ServerInstance
+from images import FakeGitee
 from langchain_core.messages import HumanMessage
-from sandboxd import Exec
-from scripted import R1, R2, R3, R4, R5, R6
-from storage import ObjectStorage
-from tracing import say
-
-THREAD, USER = "t1", "u1"
+from opensandbox import ACP_TEMPLATE, API_KEYS, SBX_TEMPLATE, Controller, LifecycleServer, Network
+from opensandbox_client import LifecycleClient
+from provision import ACP, IDLE_TTL_S, SBX, Ensurer, Maintainer, SandboxRoutes, sbx_spec
+from scripted import NOTES_V2, R1, R2, R3, R4, R5
+from storage import FakeRedis, ObjectStorage
+from tracing import enter, say
 
 
 def scene(title: str) -> None:
+    enter("")
     print(f"\n== {title} ==")
 
 
@@ -68,122 +80,126 @@ async def until(check: Callable[[], object], what: str, timeout: float = 5.0) ->
         await asyncio.sleep(0.01)
 
 
-def find_exec(k8s: FakeK8s, exec_id: str) -> Exec | None:
-    """按 exec_id 找；找不到就按前缀找（实验里 tool_call id 可能被改成带后缀的）。"""
-    pod = k8s.pods.get(pod_name(THREAD))
-    if not pod or not pod.manager:
-        return None
-    return pod.manager.get(exec_id) or next(
-        (e for e in pod.manager.list() if e.id.startswith(exec_id)), None
-    )
-
-
-def outputs(k8s: FakeK8s, exec_id: str) -> int:
-    ex = find_exec(k8s, exec_id)
-    return sum(e["t"] == "output" for e in ex.events) if ex else 0
-
-
-def group_alive(pgid: int) -> bool:
-    try:
-        os.killpg(pgid, 0)  # 信号 0：只检查进程组里还有没有进程
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-
-
 def user_says(db: Conversation, run_id: str, text: str) -> None:
     print(f"\n用户（{run_id}）：「{text}」")
     db.messages.append(HumanMessage(text))
 
 
 async def main() -> None:
-    storage = ObjectStorage()
-    k8s = FakeK8s(storage)
-    cluster = PodManager(k8s)
-    db = Conversation(THREAD, USER)
-    a = ServerInstance("A", cluster, storage, db)
-    b = ServerInstance("B", cluster, storage, db)
+    base = Path(tempfile.mkdtemp(prefix="osb-demo-"))
+    storage, redis, network = ObjectStorage(), FakeRedis(), Network()
+    controller = Controller(network, storage, base)
+    for name, ns, template in (
+        ("opensandbox-sbx", "atlas-sbx", SBX_TEMPLATE),
+        ("opensandbox-acp", "atlas-acp", ACP_TEMPLATE),
+    ):
+        network.hosts[name] = LifecycleServer(name, ns, template, controller).handle
+    profile = GIT_PROFILES["teamflow-gitee"]
+    network.hosts["gitee.com"] = FakeGitee(profile["username"], profile["token"]).handle
+    transport = network.transport()
+    servers = {
+        SBX: LifecycleClient("http://opensandbox-sbx", API_KEYS["opensandbox-sbx"], transport),
+        ACP: LifecycleClient("http://opensandbox-acp", API_KEYS["opensandbox-acp"], transport),
+    }
+    routes = SandboxRoutes(redis)
+    ensurer = Ensurer(redis, servers, routes)
+    maintainer = Maintainer(ensurer)
+    db = Conversation("t1", "u1")
+    a = ServerInstance("A", ensurer=ensurer, storage=storage, transport=transport)
+    b = ServerInstance("B", ensurer=ensurer, storage=storage, transport=transport)
+
+    def lines(name: str, prefix: str = db.prefix) -> int:
+        data = storage.get(prefix + name)
+        return data.decode().count("\n") if data else 0
+
     started = time.monotonic()
 
-    scene("r1 首次执行：按需建 Pod、两个 ensure 串行、文件一致性屏障")
+    scene("r1 按需建沙箱：路由从对象存储切到沙箱")
     user_says(db, "r1", R1)
-    await asyncio.create_task(a.run_turn("r1"))
+    await a.run_turn(db, "r1")
 
-    scene("r2 长命令：断线接上、卡死判定、显式超时、输出截断")
-    k8s.faults.cut_after["r2:c7"] = 3
-    say("剧本", "r2:c7 的事件流发到 seq 3 时让网络断一下")
+    scene("r2 后台进程与断线：同一个命令 id、同一个游标接上")
+    network.cut_once(lambda: lines("ran.log") >= 2, "r2 的测试写到第 2 行时")
     user_says(db, "r2", R2)
-    await asyncio.create_task(a.run_turn("r2"))
+    await a.run_turn(db, "r2")
+    say(
+        "剧本",
+        f"对象存储里 ran.log 共 {lines('ran.log')} 行（只跑了一次）；"
+        f"progress.log 共 {lines('progress.log')} 行",
+    )
 
-    scene("r3 后台进程与取消：命令以 shell 退出为准；有命令在跑不回收；取消就杀整个进程组")
+    scene("r3 外部写入：界面上传立刻进对象存储，沙箱的挂载要等缓存过期")
+    storage.put(db.prefix + "notes.txt", NOTES_V2.encode(), origin="界面上传")
+    say("界面", f"用户上传 notes.txt（新版）；界面的文件面板直接读对象存储：{NOTES_V2.strip()!r}")
     user_says(db, "r3", R3)
-    task = asyncio.create_task(a.run_turn("r3"))
-    await until(lambda: (ex := find_exec(k8s, "r3:c13")) and ex.state == "running", "r3:c13 开始")
-    await asyncio.sleep(0.2)
-    await cluster.reap_idle()
-    compile_exec = find_exec(k8s, "r3:c13")
-    assert compile_exec is not None and compile_exec.pgid is not None
-    pgid = compile_exec.pgid
-    say("用户", "点了「停止」→ 取消 r3")
-    task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await task
-    await until(lambda: not group_alive(pgid), f"进程组 {pgid} 清空", timeout=2)
-    say("剧本", f"r3:c13 的进程组 {pgid} 已清空：shell 和它起的 sh -c 'sleep 30' 都没了")
-    watcher = find_exec(k8s, "r3:c12")
-    assert watcher is not None
-    await until(lambda: "后台进程" in watcher.log_path.read_text(), "c12 的后台进程打完它那一行")
-    log = " / ".join(watcher.log_path.read_text().split("\n")).strip(" /")
-    say("剧本", f"r3:c12 的完整日志（{watcher.log_path.name}）：{log}")
+    await b.run_turn(db, "r3")
 
-    scene("r4 闲置回收：Pod 被删，下一次 execute 重建；工作区还在，HOME 没了")
-    await asyncio.sleep(IDLE_TTL_S)
-    await cluster.reap_idle()
+    scene("r4 闲置回收：路由先删、沙箱后删；之后读文件不需要沙箱，执行命令再重建")
+    await asyncio.sleep(IDLE_TTL_S + 0.1)
+    await maintainer.reap_idle()
     user_says(db, "r4", R4)
-    await asyncio.create_task(a.run_turn("r4"))
+    await a.run_turn(db, "r4")
 
-    scene("r5 Pod 在命令执行中消失：重连拿到 409，不重跑；工具错误回给模型")
+    scene("r5 沙箱在命令执行中消失：新沙箱不认识这个命令 → 工具错误 → 模型重跑")
     user_says(db, "r5", R5)
-    task = asyncio.create_task(a.run_turn("r5"))
-    await until(lambda: outputs(k8s, "r5:c15") >= 3, "r5:c15 输出 3 行")
-    say("剧本", f"节点故障：{pod_name(THREAD)} 被删（r5:c15 执行到一半）")
-    await k8s.delete_pod(pod_name(THREAD))
+    task = asyncio.create_task(a.run_turn(db, "r5"))
+    await until(lambda: lines("reg.log") >= 3, "r5 的回归测试写出 3 行")
+    route = routes.get(db.thread_id)
+    assert route is not None
+    await controller.fail(route.sandbox_id, "节点故障")
     await task
+    say(
+        "剧本",
+        f"对象存储里 reg.log 共 {lines('reg.log')} 行：第一次跑到一半留下的，"
+        "加上重跑的 8 行（不撤销已发生的副作用）",
+    )
 
-    scene("r6 server 崩溃：实例 B 接管，重放同一个 tool_call → 同一个 exec_id → 接上原命令")
-    user_says(db, "r6", R6)
-    task = asyncio.create_task(a.run_turn("r6"))
-    await until(lambda: outputs(k8s, "r6:c17") >= 2, "r6:c17 输出 2 行")
-    say("剧本", "实例 A 崩溃（进程被 OOM 杀掉）")
-    a.crash()
-    with contextlib.suppress(InstanceCrashed):
-        await task
-    db.runs["r6"] = "running（实例 A 已死，等接管）"
-    await asyncio.sleep(0.25)
-    say("剧本", "实例 B 接管 r6：从库里读历史，重放这一轮（前提见 README §7.6）")
-    await asyncio.create_task(b.run_turn("r6"))
+    scene("r6 ACP：opensandbox-acp 建 Pod；模型 key 是模板挂的文件，git 凭据在 Credential Vault")
+    enter("r6")
+    t2 = AcpThread(
+        id="t2",
+        workspace_id="t2",
+        user_id="u1",
+        source_app="teamflow",
+        git_profile="teamflow-gitee",
+    )
+    acp = AcpRuntime(OpenSandboxPods(ensurer), transport)
+    reply = await acp.run_turn(t2, "把 RELEASE.md 写好并推到 Gitee")
+    say("HostRuntime", f"bridge 回复：{reply}")
+    release = storage.get("u1/t2/workspace/RELEASE.md")
+    say(
+        "界面",
+        f"t2 的文件面板（对象存储）：RELEASE.md {'在' if release else '不在'}"
+        "（写穿：CLI close 时就上传了）",
+    )
 
     print(f"\n整轮用时约 {time.monotonic() - started:.1f} 秒")
     scene("最终状态")
     print("  run 表")
     for run_id, status in db.runs.items():
         print(f"    {run_id}  {status}")
-    prefix = f"{USER}/{THREAD}/workspace/"
-    files = [
-        f"{name}（{data.decode().count(chr(10))} 行）" if name.endswith(".log") else name
-        for name, data in sorted(storage.under(prefix).items())
-    ]
-    print(f"  对象存储 {prefix}：{'、'.join(files)}")
-    pod = k8s.pods[pod_name(THREAD)]
-    secret_names = "、".join(k8s.secrets)
-    print(f"  K8s：Pod {pod.name}（boot {pod.boot_id}），Secret {secret_names}")
-    print(f"  先后一共建过 {k8s._n} 个 Pod：r1 首次执行、r4 闲置回收之后、r5 执行中被删之后")
-    say("剧本", "会话删除 → cluster.release：删 Pod 和 Secret")
-    await cluster.release(THREAD)
-    print(f"  K8s：Pod {len(k8s.pods)} 个，Secret {len(k8s.secrets)} 个")
-    k8s.close()
+    print(f"  路由表：{ {ws: routes.get(ws).sandbox_id for ws in routes.workspaces()} }")
+    for kind, client in servers.items():
+        items = [
+            f"{sb['id']}（{sb['status']['state']}，会话 {sb['metadata']['atlas.thread']}）"
+            for sb in await client.list({})
+        ]
+        print(f"  opensandbox-{kind}：{'、'.join(items) or '无'}")
+    print(f"  控制器先后起过 {controller.created} 个 Pod")
+    for sid, pod in controller.pods.items():
+        print(f"  {sid}：{pod.describe()}")
+    files = sorted(storage.under(db.prefix))
+    print(f"  对象存储 {db.prefix}：{'、'.join(files)}")
+
+    say("剧本", "上次 server 崩溃留下一个没人认领的沙箱（会话 t9）")
+    await servers[SBX].create(sbx_spec(ws="t9", user="u9", token="x", image="atlas-sandbox:dev"))
+    await maintainer.reap_orphans(live_threads={"t1", "t2"})
+    say("剧本", "会话 t1、t2 删除 → release：两种沙箱、路由、端点缓存都清掉")
+    await maintainer.release("t1")
+    await maintainer.release("t2")
+    left = sum([len(await c.list({})) for c in servers.values()])
+    print(f"  剩余沙箱 {left} 个，路由 {len(routes.workspaces())} 条")
+    shutil.rmtree(base, ignore_errors=True)
 
 
 if __name__ == "__main__":

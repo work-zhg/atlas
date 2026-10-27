@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Demo：沙箱——会话级 Pod 里执行命令：按需创建、断联恢复、文件一致性屏障</title>
+<title>Demo：执行环境迁移到 OpenSandbox——按需建沙箱、工作区读写路由、后台命令与断线接上、ACP 的 Credential Vault</title>
 <style>
   :root {
     --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --border: #d1d9e0; --head: #f6f8fa;
@@ -81,755 +81,446 @@
 </head>
 <body>
 <main>
-
-<h1>Demo：沙箱——会话级 Pod 里执行命令：按需创建、断联恢复、文件一致性屏障</h1>
+<h1>Demo：执行环境迁移到 OpenSandbox</h1>
 <p class="sub">
-  代码：<code>demo/sandbox/</code>（按功能拆成 10 个文件，约 1900 行，一半是注释）　·
-  运行：<code>.venv/bin/python demo/sandbox/main.py</code>（不需要 API key，约 8 秒）<br>
-  设计文档：<code>doc/native-sandbox-design.html</code>。真实代码：<code>agent-platform/pod/sandboxd/</code>、<code>services/agent/…/providers/sandbox.py</code>、<code>infra-platform/services/cluster/</code><br>
-  <b>真实的部分</b>：命令真的由 bash 执行（独立进程组、stdin=/dev/null、杀整组）；sandboxd 是 127.0.0.1 上真实的 HTTP 服务，server 用 httpx 读它的 NDJSON 流。
-  <b>内存模拟的部分</b>：K8s、cluster、对象存储、rclone 挂载器（挂载点是真实的本地目录）。
+  按需建沙箱 · 工作区读写路由 · 后台命令与断线接上 · 写穿与外部写入的窗口 · 闲置回收 · ACP 的 Credential Vault<br>
+  运行：<code>.venv/bin/python demo/sandbox/main.py</code>（不需要 API key，约 6 秒）·
+  设计：<a href="../../agent-platform/doc/sandbox-opensandbox-design.html">执行环境迁移到 OpenSandbox</a>（第三版）·
+  本 demo 取代了旧的 sandboxd demo（旧版在提交 <code>c6abf09</code> 里）
 </p>
 
-<div class="toc">
-  <b>目录</b>
-  <ol>
-    <li><a href="#problem">要解决什么问题</a></li>
-    <li><a href="#basics">读懂这个 demo 需要的四个概念</a></li>
-    <li><a href="#idea">核心思路：一句话 + 四个要点</a></li>
-    <li><a href="#files">文件结构：按功能模块拆分</a></li>
-    <li><a href="#seq">时序图</a></li>
-    <li><a href="#life">一条命令的一生、一个 Pod 的一生</a></li>
-    <li><a href="#why">几个「为什么」</a></li>
-    <li><a href="#code">代码导读</a></li>
-    <li><a href="#lab">动手实验</a></li>
-    <li><a href="#gap">demo 和真实系统的差别</a></li>
-    <li><a href="#found">顺带发现的问题</a></li>
-  </ol>
-</div>
+<div class="toc"><b>目录</b>
+<ol>
+  <li><a href="#problem">要解决什么问题</a></li>
+  <li><a href="#concepts">读懂这个 demo 需要的五个概念</a></li>
+  <li><a href="#idea">核心思路：一句话 + 四个要点</a></li>
+  <li><a href="#files">文件结构：按功能模块拆分</a></li>
+  <li><a href="#seq">时序图</a></li>
+  <li><a href="#life">一个工作区的一生</a></li>
+  <li><a href="#why">几个「为什么」</a></li>
+  <li><a href="#code">代码导读与正常运行的输出</a></li>
+  <li><a href="#lab">动手实验</a></li>
+  <li><a href="#gap">demo 和真实系统的差别</a></li>
+  <li><a href="#found">顺带发现的问题（回写设计）</a></li>
+</ol></div>
 
 <!-- ================================================================== -->
 <h2 id="problem">1. 要解决什么问题</h2>
-<p>
-  原生智能体勾了「Shell」之后多一个 <code>execute</code> 工具：模型给一行命令，平台在隔离环境里跑完，把输出交回去。
-  这件事放进真实环境，要同时满足：
-</p>
+<p>原来的执行环境有三块自研代码：Pod 里的守护进程 <code>sandboxd</code>、持有 rclone 口令的 barrier sidecar，以及唯一有 K8s 权限、负责建删 Pod 的 <code>cluster</code> 服务。迁移到 OpenSandbox 之后：</p>
 <table>
-  <tr><th>要求</th><th>意思</th></tr>
-  <tr><td>和工作区是同一份数据</td><td>文件工具写的，命令读得到；命令写的，文件工具读得到。工作区在对象存储上，不在某台机器的磁盘上</td></tr>
-  <tr><td>按需、会话级</td><td>多数会话用不到 Shell，不能一建会话就起 Pod；一个会话（连同它的子智能体）共用一个环境，装的依赖、起的服务下一条命令还在</td></tr>
-  <tr><td>不设时长上限</td><td>编译、测试、数据处理常常跑几十分钟。只要还在干活就不中断，只处理真正卡死的</td></tr>
-  <tr><td>断联不丢不重</td><td>server 发布、崩溃、网络抖一下，命令照跑；接回来的输出不丢也不重复，命令也不能被再跑一遍（副作用会发生两次）</td></tr>
-  <tr><td>默认安全</td><td>server 没有 K8s 权限；命令所在的容器里没有任何凭据；Pod 的接口要令牌</td></tr>
-  <tr><td>失败可恢复</td><td>Pod 起不来、配额满、执行中途 Pod 没了 —— 模型要看到原因并能换个办法，而不是整轮失败</td></tr>
+  <tr><th>原来</th><th>现在</th><th>demo 里对应</th></tr>
+  <tr><td><code>sandboxd</code>（执行、幂等、断线接上）</td><td>OpenSandbox 的 <b>execd</b>（后台命令 + 游标日志）；幂等、截断等由 Atlas 的 <code>PodSandbox</code> 补齐</td><td><code>execd.py</code>、<code>sandbox_client.py</code></td></tr>
+  <tr><td>rclone sidecar + barrier（执行前 forget、执行后等写回）</td><td>整桶 PVC + 按会话 subPath（写穿式 CSI）；文件工具在沙箱运行期间<b>路由进沙箱</b>，和命令共用一个挂载</td><td><code>storage.py</code>、<code>workspace.py</code></td></tr>
+  <tr><td><code>cluster</code>（建删 Pod、幂等、配额、孤儿回收、git 档案）</td><td>OpenSandbox 的 <b>lifecycle server（两个实例）+ BatchSandbox 控制器</b>；按会话的判断搬进 Atlas</td><td><code>opensandbox.py</code>、<code>provision.py</code>、<code>acp.py</code></td></tr>
 </table>
-<p>
-  做法：<b>每个会话一个 Pod，第一次 execute 时才建</b>；Pod 里跑平台自己的守护进程 <b>sandboxd</b>，server 经 HTTP 让它执行命令，
-  事件按序号流回来。命令属于 sandboxd、不属于那条连接，所以断线、server 崩溃都只是「接上」；只有 Pod 本身没了才算丢失。
-</p>
-<p>场景：用户 u1 在会话 t1 里，和一个勾了 Shell 的原生智能体说了六句话，每句话是一个 run：</p>
-<table>
-  <tr><th>run</th><th>用户说</th><th>演示什么</th></tr>
-  <tr><td>r1</td><td>统计 notes.txt 里出现最多的词</td><td>同一批两个 execute → 两个 ensure 串行，只建一个 Pod；文件工具写 → 命令读 → 命令写 → 文件工具读（屏障）</td></tr>
-  <tr><td>r2</td><td>跑一下测试</td><td>事件流断了一下 → 带游标接上，不重跑；安静的计算不算卡死、<code>sleep 30</code> 算；死循环靠模型给的 timeout；大输出只留头尾</td></tr>
-  <tr><td>r3</td><td>后台起个 watcher，再全量编译一遍</td><td>后台进程不挡命令结束；编译时闲置回收不回收；用户取消 → 杀整个进程组</td></tr>
-  <tr><td>r4</td><td>再统计一次</td><td>Pod 闲置被删 → 下一次 execute 重建 → 结果前提示「环境已重建」：工作区还在，HOME 没了</td></tr>
-  <tr><td>r5</td><td>跑一遍回归测试</td><td>执行中 Pod 被删 → 重连拿到 409 → 工具错误回给模型（不重跑、整轮不失败）→ 模型自己重跑</td></tr>
-  <tr><td>r6</td><td>把测试报告打包</td><td>server 实例 A 执行中崩溃 → 实例 B 接管、重放同一个 tool_call → 同一个 exec_id → 接上原命令</td></tr>
-</table>
+<p>迁移要守住的语义：不设命令时长上限；重放同一个 tool_call 不重跑；断线后接上，输出不丢、不重复；文件工具与命令看到同一份数据；工具结果返回时产物已在对象存储里；沙箱的任何故障都是工具错误、不让整轮失败；凭据不进沙箱。</p>
+<p><b>不在 demo 里</b>：卡死判定（无输出且容器 CPU≈0）、<code>network: none</code> / 白名单、暂停 / 恢复、预热池、ACP 的协议细节。</p>
 
 <!-- ================================================================== -->
-<h2 id="basics">2. 读懂这个 demo 需要的四个概念</h2>
+<h2 id="concepts">2. 读懂这个 demo 需要的五个概念</h2>
 
-<h3>① 会话级沙箱 Pod</h3>
+<h3>① OpenSandbox 的三层，以及为什么有两个 server 实例</h3>
 <table>
-  <tr><th>问题</th><th>答案</th><th>demo 里</th></tr>
-  <tr><td>键是什么</td><td><code>workspace_thread_id</code>：子智能体传的是父会话的，所以和父会话共用一个 Pod</td><td>Pod 名 <code>atlas-sbx-t1</code></td></tr>
-  <tr><td>谁建</td><td>cluster 服务：全仓唯一有 K8s 写权限的进程。server 只拿到「地址 + 令牌」</td><td><code>cluster.PodManager</code> + <code>FakeK8s</code></td></tr>
-  <tr><td>什么时候建</td><td>第一次 execute（<code>ensure</code>，幂等）。建会话时不建</td><td>r1 的 c1、c2</td></tr>
-  <tr><td>里面有什么</td><td>挂载器（rclone，把对象存储前缀挂到 <code>/workspace</code>）、barrier（缓存控制）、主容器 sandboxd（没有任何凭据）</td><td><code>pod.SandboxPod</code></td></tr>
-  <tr><td>什么时候没</td><td>闲置回收、会话删除；或者意外：节点故障、OOM</td><td>r3 之后回收、r5 中途被删、最后 release</td></tr>
+  <tr><th>层</th><th>做什么</th><th>Atlas 怎么用</th></tr>
+  <tr><td>lifecycle server</td><td>REST：<code>POST/GET/DELETE /v1/sandboxes</code>、<code>GET …/endpoints/{port}</code>、<code>POST …/credential-vault</code>；把请求和模板合并成 BatchSandbox CR</td><td>部署两个：<code>opensandbox-sbx</code>（原生沙箱，strict 模板）和 <code>opensandbox-acp</code>（ACP，模板里挂模型 key）。<b>模板是 server 级全局的</b>，所以只能按 kind 分实例</td></tr>
+  <tr><td>BatchSandbox 控制器</td><td>CR → Pod；所有 Pod 都注入 execd；<code>restartPolicy: Never</code>（容器崩了 → Failed，不原地重启）</td><td>一个，管两个命名空间</td></tr>
+  <tr><td>execd（Pod 里）</td><td>命令、文件、指标、反向代理</td><td>原生沙箱的命令和文件都经它；ACP 的 Pod 里也有，但不用</td></tr>
+  <tr><td>egress（可选 sidecar）</td><td>网络策略、Credential Vault（按域名注入凭据）</td><td>ACP 有 git 档案时开</td></tr>
 </table>
 
-<h3>② sandboxd 的接口：一条命令 = 一个 POST + 一条 NDJSON 流</h3>
-<pre><code>POST /v1/execs   {exec_id, command, run_id, timeout_s?, after?, expect_boot_id?}
-  → 200  application/x-ndjson，响应头 X-Sandbox-Boot-Id
-     {"seq":1, "t":"started",  "pid":97337, "boot_id":"9c0939"}
-     {"seq":2, "t":"output",   "data":"case 1 ok\n"}            stdout + stderr 合并
-     {"t":"heartbeat", "cpu_s":0.43, "output_bytes":0}          没有事件时每隔一会儿一条，不占 seq
-     {"seq":3, "t":"flushing", "pending":1}                     命令已退出，在等写回
-     {"seq":4, "t":"exited",   "exit_code":0, "output":"…", "truncated":false,
-                               "stalled":false, "timed_out":false, "killed":false, "flushed":true, "notes":[]}
-POST /v1/execs/{exec_id}/kill     结束进程组
-GET  /v1/info                     {boot_id, running, idle_s}：cluster 的闲置回收看它</code></pre>
-<p>没有单独的「重连」接口：重连就是<b>再 POST 一次同一个 exec_id</b>，带上 <code>after</code>。没开始就开始，开始了就接上。</p>
+<h3>② 工作区怎么挂：整桶 PVC + 按会话 subPath</h3>
+<p>运维建一个覆盖整个桶的静态 PVC（<code>atlas-oss</code>），每个沙箱在创建请求里用 <code>volumes[].subPath</code> 只挂自己的前缀，比如 <code>u1/t1/workspace</code>。对象存储凭据只在 CSI 驱动手里，Pod 里没有。驱动是 s3fs 系的写穿式：</p>
+<ul>
+  <li><b>写</b>：文件 close 时同步上传。工具结果返回时，产物已经在对象存储里，界面马上看得到。</li>
+  <li><b>读别人的写入</b>：界面上传、别的 Pod 改了对象存储，这个挂载要等元数据缓存过期才看得到。demo 固定为 <code>CACHE_TTL_S = 0.6</code> 秒，真实系统的目标是 1 秒以内。</li>
+</ul>
+<p>Atlas <b>碰不到</b>挂载器（它在节点上），所以不能再做「执行前 forget、执行后等写回」。一致性改由下面这条保证。</p>
 
-<h3>③ 三个标识</h3>
+<h3>③ 工作区读写路由：文件系统的两套实现</h3>
+<pre><code>文件工具 ─▶ WorkspaceFilesystem ── 查 Redis 路由表 sbx:route:{ws}
+              ├─ 没有记录（多数会话） ─▶ OssStore    直连对象存储
+              └─ 有记录（沙箱在跑）   ─▶ ExecdStore  经 execd 的文件 API 读写 Pod 里的 /workspace
+                                                   ↑ 和命令是同一个挂载</code></pre>
+<p>路由表由 ensure 写入（建好或复用到沙箱时），由回收删除。所有 server 实例共用这张表：r3 换实例 B 来跑，它没 ensure 过，但照样知道该走沙箱。</p>
+
+<h3>④ execd 的后台命令</h3>
 <table>
-  <tr><th>标识</th><th>是什么</th><th>用来干什么</th></tr>
-  <tr><td><code>exec_id</code></td><td><code>{run_id}:{tool_call_id}</code>，如 <code>r2:c7</code></td><td>幂等键：同一个 id 再来一次是「接上」，不是「再跑一遍」</td></tr>
-  <tr><td><code>seq</code></td><td>每条命令内从 1 递增的事件序号</td><td>游标：重连带 <code>after</code> = 见过的最后一个 seq，接着给，不丢不重</td></tr>
-  <tr><td><code>boot_id</code></td><td>sandboxd 启动时随机生成</td><td>变了 = Pod 重建过：重连时 <code>expect_boot_id</code> 对不上就 409；工具结果前提示「环境已重建」</td></tr>
+  <tr><th>接口</th><th>要点</th></tr>
+  <tr><td><code>POST /command {background: true}</code></td><td>回一个 SSE 的 <code>init</code> 事件，里面是命令 id（由 execd 生成，客户端不能指定），然后连接就结束了。命令和这条连接从此无关</td></tr>
+  <tr><td><code>GET /command/{id}/logs?cursor=</code></td><td>游标之后的全部输出，新游标在响应头 <code>EXECD-COMMANDS-TAIL-CURSOR</code>。<b>游标是字节偏移</b>（规范写的是行号），客户端只用服务端给的值</td></tr>
+  <tr><td><code>GET /command/status/{id}</code></td><td>running / exit_code。不认识的 id → 404：命令记录只在 execd 的内存里</td></tr>
+  <tr><td><code>POST /command {background: false}</code></td><td>前台：输出跟着 SSE 走，<b>连接一断 execd 就 SIGKILL 整个进程组</b>（实验 1）</td></tr>
 </table>
 
-<h3>④ 屏障：文件和命令之间的两个缓存窗口</h3>
-<p>
-  文件工具经对象存储 API 读写，命令经 rclone FUSE 挂载读写同一个前缀。挂载器有缓存：
-  读方向有 <code>dir-cache-time</code>（5 秒；设计文档 §7.1 实测窗口内读到的是「新内容按旧长度截断」的<b>错数据</b>），
-  写方向有 <code>--vfs-write-back</code>（1 秒 + 上传耗时）。sandboxd 在每条命令的边界上收口：
-</p>
+<h3>⑤ 四个标识</h3>
 <table>
-  <tr><th>时机</th><th>做什么</th><th>保证什么</th></tr>
-  <tr><td>执行前</td><td>经 barrier 调 rclone 的 <code>vfs/forget</code></td><td>文件工具刚写的，命令看得到</td></tr>
-  <tr><td>执行后</td><td>经 barrier 轮询 <code>vfs/queue</code> 直到为空，才发 <code>exited{flushed: true}</code></td><td>命令刚写的，文件工具读得到</td></tr>
+  <tr><th>标识</th><th>谁生成</th><th>存在哪</th><th>用来做什么</th></tr>
+  <tr><td>沙箱 id（<code>sbx-1</code>）</td><td>lifecycle server</td><td>CR 名；Redis 的端点缓存与路由表</td><td>变了 = 环境重建过，结果前提示</td></tr>
+  <tr><td>命令 id（<code>cmd-5</code>）</td><td>execd</td><td>server 进程内存：<code>{run}:{tool_call} → (沙箱, 命令 id, 游标)</code></td><td>重放、断线后接上</td></tr>
+  <tr><td><code>{run}:{tool_call}</code>（<code>r2:c9</code>）</td><td>Atlas</td><td>同上</td><td>同一个调用不重跑</td></tr>
+  <tr><td>令牌</td><td>Atlas</td><td>创建请求的 env 里；Redis 的 <code>token:{沙箱 id}</code></td><td>连 execd / bridge。<code>GET /sandboxes</code> 不会把 env 还回来，<b>只能 Atlas 自己存</b>（实验 8）</td></tr>
 </table>
 
 <!-- ================================================================== -->
 <h2 id="idea">3. 核心思路：一句话 + 四个要点</h2>
-<div class="callout">
-  <b>一句话：</b>模型的 <code>execute</code> 经 PodSandbox 变成一次 <code>POST /v1/execs</code>（<code>exec_id = run_id:tool_call_id</code>），
-  Pod 里的 sandboxd 用 bash 在独立进程组里执行，把事件按 seq 流回来。<b>命令的生命周期属于 sandboxd，不属于连接</b>：
-  断线、server 崩溃都只是带着 exec_id 和游标「接上」；只有 Pod 本身没了（boot_id 变了）才算丢失，而那也只是一个工具错误。
-</div>
-
-<h3>要点 1：命令属于 sandboxd，不属于连接</h3>
-<p>
-  K8s exec API 把命令绑在那条连接上，连接断了命令就没了。sandboxd 把命令登记在自己的表里（按 exec_id），事件按 seq 存下来，
-  连接只是一个「订阅」：断了可以再订，换个 server 实例也可以订。r2 网络断了一下、r6 server 崩溃，命令都只跑了一次（<code>ran.log</code> 5 行、<code>pack.log</code> 6 行）。
-</p>
-
-<h3>要点 2：文件与命令走两条路，在执行边界上对齐</h3>
-<p>
-  文件工具不经过沙箱（没有沙箱的会话照样能用，读个文件也不必起 Pod）。代价是两条路之间有缓存窗口，所以屏障放在每条命令的开始和结束：
-  r1 里 c3/c4 用文件工具写 <code>count.py</code>，c5 执行前 forget 让命令看得到；c5 写的 <code>top.txt</code> 等写回之后，c6 的 read_file 才读得到。
-</p>
-
-<h3>要点 3：不设时长上限，但每一种「停」都有明确的主人</h3>
-<table>
-  <tr><th>谁</th><th>什么时候停</th><th>demo 里</th></tr>
-  <tr><td>模型</td><td>自己给了 <code>timeout</code>：sandboxd 内部计时，到点结束进程组</td><td>r2:c10 死循环一直有输出，1 秒到点结束（exit 143，timed_out）</td></tr>
-  <tr><td>sandboxd</td><td>静默卡死：连续 N 秒<b>既没有输出、进程组的 CPU 时间也没涨</b></td><td>r2:c9 <code>sleep 30</code> 0.6 秒判卡死；r2:c8 安静地算 1 秒，CPU 在涨，不算</td></tr>
-  <tr><td>用户</td><td>取消这一轮：server 通知 sandboxd 结束这条命令的进程组</td><td>r3:c13 编译中取消，shell 和它起的子进程一个不剩</td></tr>
-  <tr><td>cluster</td><td>闲置回收：<b>没有命令在跑</b>且闲置超过阈值</td><td>r3 编译中「有 1 条命令在跑 → 不回收」；r3 之后回收</td></tr>
-</table>
-
-<h3>要点 4：沙箱的任何故障都是工具错误，不是整轮失败</h3>
-<table>
-  <tr><th>故障</th><th>模型看到的</th></tr>
-  <tr><td>配额满（实验 9）</td><td><code>Error: Sandbox unavailable. 沙箱启动失败：该用户已有 N 个会话 Pod（上限 N）…</code></td></tr>
-  <tr><td>执行中 Pod 没了（r5:c15）</td><td><code>Error: Sandbox unavailable. 沙箱在命令执行期间重启（可能内存不足或被回收），命令已中断、结果丢失；/workspace 内已写入的文件仍在</code></td></tr>
-  <tr><td>Pod 在两条命令之间重建过（r4:c14、r5:c16）</td><td>结果前多一行 <code>[沙箱环境已重建：/workspace 内的文件仍在；装进 HOME 的依赖、后台进程已丢失]</code></td></tr>
-  <tr><td>命令自己失败 / 被结束</td><td>输出 + <code>[Command failed with exit code 143]</code> + 原因（卡死 / 超时 / 已取消）</td></tr>
-</table>
+<div class="callout"><b>一句话</b>：命令交给 execd 的后台模式，文件跟着命令走同一个挂载，Pod 的生命周期交给 OpenSandbox；Atlas 只保留认识会话的判断，也就是复用、配额、回收和凭据授权。</div>
+<h3>要点 1：命令属于 execd，不属于连接</h3>
+<p>提交用后台模式，拿到命令 id 后只轮询。连接断了、Pod 换了 IP，都是用同一个 id 和游标接着读（r2）；只有「新沙箱不认识这个 id」才算命令丢了（r5）。</p>
+<h3>要点 2：一致性靠结构，不靠对账</h3>
+<p>旧方案是两个客户端（文件工具直连对象存储、命令走 FUSE）在执行边界上对账（屏障）。新方案让沙箱运行期间只剩一个客户端：同一个挂载、一个缓存、一个写入顺序。刚写的 <code>count.py</code> 命令马上看得到（r1），后台进程正在写的 <code>progress.log</code> 文件工具读得到此刻的内容（r2）。剩下的窗口只有「外部写入」这一种（r3）。</p>
+<h3>要点 3：cluster 的判断搬进 Atlas，metadata 是索引，锁保证一个会话一个沙箱</h3>
+<p>按 <code>atlas.kind</code> / <code>atlas.thread</code> / <code>atlas.user</code> 这几个 metadata（会成为 Pod 的 label）查找，就能做复用、配额和孤儿回收。创建请求不能由客户端指定 id，所以 ensure 必须在会话级锁里「查了再建」（实验 2）。</p>
+<h3>要点 4：凭据不进沙箱</h3>
+<p>对象存储凭据在 CSI 驱动里；git 凭据在 egress 的 Credential Vault 里，出站时注入（r6）；模型 key 只以文件形式挂在 ACP 的命名空间里，原生沙箱拿不到。</p>
 
 <!-- ================================================================== -->
 <h2 id="files">4. 文件结构：按功能模块拆分</h2>
-<p>拆分的依据是 Atlas 的分层：图这一侧（kernel）只认 <code>SandboxProtocol</code>；server 侧实现它；cluster 管 Pod；Pod 里的 sandboxd 管执行。依赖只从上往下：</p>
-<pre><code>main.py                       剧本：六轮对话，中途按剧本注入故障，最后打印各处状态
-└─ executor.py                server 进程：跑一轮（建图、装 PodSandbox、落库）；模拟进程崩溃
-   ├─ agent.py                kernel：SandboxProtocol 契约、execute 工具、文件工具、组装图
-   │  └─ scripted.py          假模型（剧本）
-   └─ sandbox_client.py       server：PodSandbox —— 按需 ensure、NDJSON 流、断线接上、boot_id、取消
-      └─ cluster.py           cluster 服务（ensure / release / 闲置回收）+ K8s（内存模拟）
-         └─ pod.py            一个沙箱 Pod：挂载器 + barrier + sandboxd
-            ├─ sandboxd.py    Pod 里的守护进程：HTTP 接口 + 真实地执行命令
-            └─ storage.py     对象存储、rclone 挂载器（缓存与写回队列）、barrier sidecar
-tracing.py                    输出：每行带上是哪一层在说话（谁都可以用）</code></pre>
+<p>拆分的依据是分层：图这一侧（kernel）只认两个契约；server 侧实现它们，并接手 cluster 的判断；OpenSandbox 管 Pod；Pod 里的 execd 管执行。依赖只从上往下：</p>
+<pre><code>main.py                         剧本：六幕，中途注入故障，最后打印各处状态
+└─ executor.py                  server 进程：跑一轮（建图、装 PodSandbox 与 WorkspaceFilesystem）
+   ├─ agent.py                  kernel：SandboxProtocol / FilesystemProtocol、execute、文件工具、组装图
+   │  └─ scripted.py            假模型（剧本）
+   ├─ sandbox_client.py         server：PodSandbox —— 后台命令、游标轮询、断线接上、环境已重建、头尾截断
+   ├─ workspace.py              server：工作区读写路由 —— 两套底层（对象存储 / execd）
+   ├─ acp.py                    server：OpenSandboxPods、git 档案授权与 Credential Vault、HostRuntime
+   └─ provision.py              server：路由表、ensure（复用 / 锁 / 配额 / 镜像）、闲置回收与孤儿回收
+      └─ opensandbox_client.py  server：lifecycle 与 execd 的薄客户端
+opensandbox.py                  OpenSandbox：两个 lifecycle server、控制器、Pod、egress；集群网络
+├─ execd.py                     Pod 里的 execd：HTTP 接口 + 真实执行命令 + 文件 API
+├─ images.py                    ACP 镜像里的 bridge 与 CLI；Gitee
+└─ storage.py                   对象存储、写穿式 CSI 挂载、Redis
+tracing.py                      输出：每行带上是哪一层在说话（谁都可以用）</code></pre>
 <table>
-  <tr><th>文件</th><th>层</th><th>负责什么</th><th>不知道什么</th></tr>
-  <tr><td><code>agent.py</code></td><td>kernel</td><td>契约（<code>SandboxProtocol</code> / <code>ExecuteResponse</code> / <code>SandboxUnavailable</code>）；<code>execute</code> 把 tool_call_id 当 exec_id 交出去、把 SandboxUnavailable 转成工具错误；文件工具直连对象存储</td><td>Pod、cluster、HTTP</td></tr>
-  <tr><td><code>sandbox_client.py</code></td><td>server</td><td><code>PodSandbox</code>：按需 ensure、POST 并读 NDJSON、断线接上（after + expect_boot_id）、boot 变了提示、取消转 kill</td><td>命令怎么执行、Pod 怎么建</td></tr>
-  <tr><td><code>executor.py</code></td><td>server</td><td>一个 server 进程：每轮建图、落库、取消时补「已取消」；<code>InstanceCrashed</code> 模拟崩溃</td><td>沙箱的协议</td></tr>
-  <tr><td><code>cluster.py</code></td><td>cluster</td><td>ensure（串行、Secret 先于 Pod、等就绪、配额）、release、闲置回收；K8s 的 Secret / Pod（内存）</td><td>命令、run</td></tr>
-  <tr><td><code>pod.py</code></td><td>Pod</td><td>按 manifest 把三个「容器」接起来：挂载器、barrier、sandboxd；删 Pod = 进程全没、目录清掉</td><td>谁在调用它</td></tr>
-  <tr><td><code>sandboxd.py</code></td><td>Pod</td><td>执行语义（bash -lc、setsid、stdin、环境、截断、卡死、超时、杀组、并发上限、屏障）；HTTP 接口（令牌、409、流）</td><td>run、模型、cluster</td></tr>
-  <tr><td><code>storage.py</code></td><td>Pod / 基础设施</td><td>对象存储；挂载器（本地目录 ↔ 前缀，forget 与写回队列）；barrier（只有 forget / queue）</td><td>命令</td></tr>
-  <tr><td><code>scripted.py</code></td><td>—</td><td>假模型：按剧本分批发 tool_call；id 按会话里已有的调用数编号（同样的历史 → 同样的 id）</td><td>—</td></tr>
-  <tr><td><code>main.py</code></td><td>—</td><td>六幕剧本；注入网络抖动、删 Pod、取消、崩溃；打印最终状态</td><td>—</td></tr>
+  <tr><th>文件</th><th>行数</th><th>层</th><th>负责什么</th><th>不知道什么</th></tr>
+  <tr><td><code>agent.py</code></td><td>142</td><td>kernel</td><td>两个契约；<code>execute</code> 把 tool_call_id 当 exec_id 交出去，把 <code>SandboxUnavailable</code> 转成工具错误。<b>迁移前后一字不改</b></td><td>OpenSandbox、路由</td></tr>
+  <tr><td><code>sandbox_client.py</code></td><td>222</td><td>server</td><td><code>PodSandbox</code>：ensure → 后台提交 → 轮询 → 断线重新 ensure → 404 判丢；头尾截断；「环境已重建」</td><td>Pod 怎么建、命令怎么跑</td></tr>
+  <tr><td><code>workspace.py</code></td><td>114</td><td>server</td><td><code>WorkspaceFilesystem</code>：路径归一（越界检查）、按路由表选 <code>OssStore</code> / <code>ExecdStore</code>；沙箱不在了就删路由、改走对象存储</td><td>命令</td></tr>
+  <tr><td><code>provision.py</code></td><td>305</td><td>server</td><td>路由表、ensure（端点缓存 → 锁 → 按 metadata 复用 → 配额 / 镜像 → 创建 → 存令牌 → 写路由）、闲置回收、孤儿回收、会话删除；两种沙箱的创建请求</td><td>命令、模型</td></tr>
+  <tr><td><code>acp.py</code></td><td>120</td><td>server</td><td><code>OpenSandboxPods</code>（替代 <code>ClusterPods</code>）：git 档案授权、Credential Vault；极简 HostRuntime</td><td>ACP 协议细节</td></tr>
+  <tr><td><code>opensandbox_client.py</code></td><td>151</td><td>server</td><td>lifecycle 与 execd 的薄客户端（不用官方 SDK，设计 D10）</td><td>—</td></tr>
+  <tr><td><code>opensandbox.py</code></td><td>481</td><td>OpenSandbox</td><td>lifecycle server（模板合并照搬上游）、控制器（CR → Pod、Failed）、Pod（卷、execd、bridge、egress）、集群网络（按 host 分发，可注入一次连接重置）</td><td>会话、run</td></tr>
+  <tr><td><code>execd.py</code></td><td>234</td><td>Pod</td><td>命令（bash、进程组、stdin、timeout、前台断开即杀）、状态、字节游标日志、中断、文件上传 / 下载</td><td>run、模型</td></tr>
+  <tr><td><code>images.py</code></td><td>114</td><td>Pod / 外部</td><td>bridge（令牌从 env、模型 key 从文件）、CLI（写文件、git push 经 egress）、Gitee</td><td>—</td></tr>
+  <tr><td><code>storage.py</code></td><td>197</td><td>基础设施</td><td>对象存储（带版本和写入方）；CSI 挂载（本地目录，写穿，外部写入延迟可见）；Redis</td><td>—</td></tr>
+  <tr><td><code>scripted.py</code></td><td>151</td><td>—</td><td>假模型：按剧本分批发 tool_call</td><td>—</td></tr>
+  <tr><td><code>main.py</code></td><td>206</td><td>—</td><td>六幕剧本；故障注入；最终状态</td><td>—</td></tr>
 </table>
-<p>
-  模块之间用裸模块名互相导入（<code>from sandboxd import …</code>），因为脚本所在目录会被放进 <code>sys.path</code> 第一位，这是 demo 的简化。
-  <code>agent.py</code> 不能写 <code>from __future__ import annotations</code>：LangChain 靠运行时的注解类型认出要注入的 <code>runtime: ToolRuntime</code> 参数（真实代码踩过）。
-</p>
+<p>模块之间用裸模块名互相导入（<code>from execd import …</code>），因为脚本所在目录会被放进 <code>sys.path</code> 第一位，这是 demo 的简化。<code>agent.py</code> 不能写 <code>from __future__ import annotations</code>（LangChain 要在运行时认出 <code>ToolRuntime</code> 参数）。</p>
 
 <!-- ================================================================== -->
 <h2 id="seq">5. 时序图</h2>
-<h3>5.1 一次 execute 的完整链路（r1）</h3>
-<p>
-  参与者：<b>图</b>（模型、execute、文件工具）；server 侧的 <b>PodSandbox</b>；<b>cluster</b>；<b>K8s</b>；Pod 里的 <b>sandboxd</b>、<b>barrier + 挂载器</b>；<b>对象存储</b>。虚线箭头表示返回。
-</p>
-<div class="scroll"><div id="seq-exec"></div></div>
+<h3>5.1 r1：按需建沙箱，路由从对象存储切到沙箱</h3>
+<p>参与者：<b>图</b>（模型、execute、文件工具）、<b>路由</b>（WorkspaceFilesystem）、<b>PodSandbox + ensure</b>、<b>opensandbox-sbx</b>、<b>控制器</b>、Pod 里的 <b>execd</b>、<b>CSI 挂载 + 对象存储</b>。虚线表示返回。</p>
+<div class="scroll"><div id="seq-r1"></div></div>
 
-<h3>5.2 断联恢复的三种情况（r2、r5、r6）</h3>
-<p>三种情况走的是同一个动作 —— <b>POST 同一个 exec_id</b>，区别只在 sandboxd 那一侧：命令还在（接上），还是 Pod 换过了（409）。</p>
+<h3>5.2 断线接上（r2）与沙箱消失（r5）</h3>
+<p>两种情况走的是同一个动作：重新 ensure，再用同一个命令 id 去问。区别只在拿回来的是不是原来那个沙箱。</p>
 <div class="scroll"><div id="seq-recover"></div></div>
 
-<!-- ================================================================== -->
-<h2 id="life">6. 一条命令的一生、一个 Pod 的一生</h2>
-<h3>6.1 r2:c7 的事件流：网络在 seq 3 之后断了一下</h3>
-<table>
-  <tr><th>seq</th><th>事件</th><th>第一条连接</th><th>重连（after=3）</th></tr>
-  <tr><td>1</td><td><code>started {pid, boot_id}</code></td><td>收到；记下 boot_id</td><td>—</td></tr>
-  <tr><td>2</td><td><code>output "case 1 ok"</code></td><td>收到</td><td>—</td></tr>
-  <tr><td>3</td><td><code>output "case 2 ok"</code></td><td>收到，随后连接断开（<code>RemoteProtocolError</code>）</td><td>—</td></tr>
-  <tr><td></td><td colspan="3">PodSandbox：退避 → 重新 ensure → POST <code>{exec_id: r2:c7, after: 3, expect_boot_id}</code>；sandboxd：「已存在（running）→ 接上，不重跑」</td></tr>
-  <tr><td>4–6</td><td><code>output "case 3/4/5 ok"</code>、<code>"ran.log 共 5 行"</code></td><td></td><td>收到，从 4 开始，不重复</td></tr>
-  <tr><td>7…</td><td><code>flushing {pending: 1}</code></td><td></td><td>收到（<code>ran.log</code> 在写回队列里；队列长度每变一次发一条，所以有一到两条）</td></tr>
-  <tr><td>最后</td><td><code>exited {exit_code: 0, flushed: true}</code></td><td></td><td>收到 → 工具结果</td></tr>
-</table>
-<p>
-  交给模型的输出<b>不是</b>把 output 事件拼起来，而是 <code>exited.output</code>：sandboxd 自己攒的头尾各一半（demo 4000 字节，Atlas 100 KB），中间写明省略了多少、完整输出在哪个日志文件里（r2:c11 的 <code>seq 1 30000</code> 输出 168894 字节）。
-  output 事件只用来显示进度，所以游标断了最多影响进度条，不影响结果。
-</p>
+<h3>5.3 r6：ACP 的 Pod 与 Credential Vault</h3>
+<div class="scroll"><div id="seq-acp"></div></div>
 
-<h3>6.2 一个 Pod 的一生：这个 demo 先后建了 3 个</h3>
+<!-- ================================================================== -->
+<h2 id="life">6. 一个工作区的一生（会话 t1）</h2>
 <table>
-  <tr><th>时刻</th><th>Pod</th><th>发生了什么</th><th>模型看到什么</th></tr>
-  <tr><td>r1 第 1 批</td><td>#1 建</td><td>c1、c2 同时 ensure：一个建、一个排队后复用。冷启动 0.3 秒（真实约 5 秒）</td><td>c1、c2 慢一点</td></tr>
-  <tr><td>r3 编译中</td><td>#1</td><td>闲置回收：「有 1 条命令在跑 → 不回收」</td><td>—</td></tr>
-  <tr><td>r3 之后</td><td>#1 删</td><td>闲置约 1 秒 &gt; 0.5 秒 → release。HOME（<code>~/.cache/pip/installed</code>）随之消失，工作区在对象存储上</td><td>—</td></tr>
-  <tr><td>r4:c14</td><td>#2 建</td><td>新 boot_id。挂载器挂上来先列一遍对象存储：<code>count.py</code>、<code>notes.txt</code> 都在</td><td>「沙箱环境已重建」+ 统计结果 +「HOME 里装过的依赖没了」</td></tr>
-  <tr><td>r5:c15 执行中</td><td>#2 删、#3 建</td><td>剧本删掉 Pod（节点故障）；PodSandbox 重连时 ensure 建了 #3，带旧 boot_id POST → 409</td><td>c15：工具错误「沙箱在命令执行期间重启…」</td></tr>
-  <tr><td>r5:c16</td><td>#3</td><td>模型重跑</td><td>「沙箱环境已重建」+ 全部通过</td></tr>
-  <tr><td>会话删除</td><td>#3 删</td><td><code>cluster.release</code>：删 Pod 和 Secret</td><td>—</td></tr>
+  <tr><th>时刻</th><th>路由表 <code>sbx:route:t1</code></th><th>沙箱</th><th>文件工具走哪</th><th>模型看到什么</th></tr>
+  <tr><td>r1 c1</td><td>无</td><td>无</td><td>对象存储</td><td>—</td></tr>
+  <tr><td>r1 c2、c3</td><td>→ sbx-1</td><td>sbx-1 建（c3 排队后复用）</td><td>—</td><td>第一次 execute 慢一点（冷启动）</td></tr>
+  <tr><td>r1 c4–c6</td><td>sbx-1</td><td>sbx-1</td><td>沙箱</td><td>刚写的 count.py 命令看得到；top.txt 马上读得到</td></tr>
+  <tr><td>r2 c8</td><td>sbx-1</td><td>sbx-1</td><td>沙箱</td><td>后台进程正在写的 progress.log：读到此刻的「step 1」</td></tr>
+  <tr><td>r2 c9 断线</td><td>sbx-1</td><td>sbx-1</td><td>—</td><td>无感：同一个 cmd、游标 10 接上，ran.log 5 行</td></tr>
+  <tr><td>r3（实例 B）</td><td>sbx-1</td><td>sbx-1</td><td>沙箱</td><td>界面上传后 0.6 秒内，命令和 read_file 都是旧 notes.txt；之后是新的</td></tr>
+  <tr><td>r3 之后</td><td>删除</td><td>sbx-1 删（闲置回收）</td><td>—</td><td>—</td></tr>
+  <tr><td>r4 c15</td><td>无</td><td>无</td><td>对象存储</td><td>top.txt 照常读到，没为它建 Pod</td></tr>
+  <tr><td>r4 c16</td><td>→ sbx-2</td><td>sbx-2 建</td><td>—</td><td>「环境已重建」+「HOME 里装过的东西没了」</td></tr>
+  <tr><td>r5 c17 执行中</td><td>sbx-2 → sbx-3</td><td>sbx-2 Failed → 删；sbx-3 建</td><td>—</td><td>工具错误「命令执行期间沙箱重启…」</td></tr>
+  <tr><td>r5 c18</td><td>sbx-3</td><td>sbx-3</td><td>—</td><td>「环境已重建」+ 全部通过；reg.log 11 行（第一次的 3 行留着）</td></tr>
+  <tr><td>会话删除</td><td>删除</td><td>sbx-3 删</td><td>—</td><td>—</td></tr>
 </table>
 
 <!-- ================================================================== -->
 <h2 id="why">7. 几个「为什么」</h2>
 
-<h3 id="why-daemon">7.1 为什么不用 K8s exec API，而在 Pod 里跑自己的守护进程？</h3>
-<table>
-  <tr><th></th><th>K8s exec API</th><th><b>sandboxd</b>（设计 D2）</th></tr>
-  <tr><td>权限</td><td>server 要有 <code>pods/exec</code> 权限</td><td>server 不碰 K8s，只拿 cluster 交出的「地址 + per-Pod 令牌」</td></tr>
-  <tr><td>连接断了</td><td>命令跟着那条连接没了</td><td>命令照跑，按 exec_id + after 接上</td></tr>
-  <tr><td>幂等</td><td>做不到：每次 exec 都是新进程</td><td>同一个 exec_id 再来是接上</td></tr>
-  <tr><td>进程管理</td><td>自己拼 <code>timeout</code>、<code>setsid</code></td><td>进程组、卡死判定、截断、日志、并发上限都在守护进程里</td></tr>
-  <tr><td>镜像</td><td>—</td><td>init 容器把自带解释器的 sandboxd 拷进共享盘，主容器可以是任意 glibc 镜像（评测用题目自带的镜像）</td></tr>
-</table>
+<h3 id="why-bg">7.1 为什么命令一律用后台模式？</h3>
+<p>execd 的前台命令把输出放在那条 SSE 连接上，连接断开时执行 <code>ctx.Done()</code> 分支，SIGKILL 整个进程组（上游 <code>runtime/command.go</code>）。实验 1 把 <code>FOREGROUND</code> 打开：r2:c9 写到第 2 行时连接被重置 → execd「是前台命令，连接断了 → SIGKILL 整个进程组」→ <code>ran.log</code> 只有 2 行，模型拿到「结果未知」。后台模式下同一处断线，c9 用同一个命令 id、游标 10 接上，<code>ran.log</code> 5 行。</p>
+<p>后台模式唯一的空窗是「提交那一刻」：<code>init</code> 事件到达之前就断了，Atlas 不知道命令 id。<code>ExecdClient.start</code> 在这种情况下报「命令可能已开始，结果未知」，不重跑。</p>
 
-<h3 id="why-ensure">7.2 为什么 Pod 按需建、ensure 还要串行？</h3>
+<h3 id="why-route">7.2 为什么沙箱在跑时，文件工具要绕进沙箱？</h3>
+<p>对 Pod 的挂载来说，经对象存储 API 写进来的就是「别人的写入」，要等元数据缓存过期才看得到。实验 3 把 <code>ROUTING</code> 关掉：c4 <code>write_file count.py</code> 直连对象存储 → 挂载「0.6 秒内还是旧的」→ c5 报 <code>python3: can't open file '…/sbx-1/workspace/count.py': [Errno 2] No such file or directory</code>，exit 2 → c6 读到一个空的 <code>top.txt</code>（重定向先建了空文件）。</p>
+<p>路由之后只有一个客户端，还附带两个好处：后台进程在命令结束之后写的文件，文件工具照样读得到（r2:c8），旧方案的屏障管不到这种情况；命令和文件工具交替写同一个文件时，也没有「写回队列里的旧版本覆盖新版本」的丢更新。</p>
+
+<h3 id="why-window">7.3 外部写入为什么有窗口？窗口多大？</h3>
+<p>r3：界面上传新的 <code>notes.txt</code>，对象存储立刻是新的（界面直接读它）；沙箱的挂载 0.6 秒内还是旧的，命令（c12）和 <code>read_file</code>（c13）<b>看到的一样旧</b>，两者之间是一致的；c14 等 1 秒后再跑，读到新版。实验 4 把 <code>CACHE_TTL_S</code> 设为 0，c12 就直接读到 <code>alpha 3</code>。</p>
+<p>真实系统靠 s3fs / ossfs 的短 stat 缓存加 <code>attr_timeout=0</code>，目标是 1 秒以内。旧方案实测过的「新内容按旧长度截断」这种错数据，在写穿式驱动上会不会出现，是设计 P0-1 的必测项，demo 模拟不了。</p>
+
+<h3 id="why-lock">7.4 为什么 ensure 要加锁？为什么 Pending 不能删？为什么要留「上次用的那个」？</h3>
+<p>创建请求不能由客户端指定 id，并发的两个 ensure 都会「查不到 → 建」。实验 2 去掉锁，并在「查」和「建」之间加 50 毫秒放大窗口：r1 的 c2、c3 各建了一个沙箱（sbx-1、sbx-2），c2 跑在 sbx-1 上，c3 跑在 sbx-2 上（HOME 被分裂了，c3 还收到一条莫须有的「环境已重建」）。两个挂载就是两个客户端，sbx-1 看 sbx-2 的写入也有 0.6 秒窗口。</p>
+<p>第一版 demo 的 <code>_reusable</code> 有两个问题，都是在这个实验里暴露的：</p>
 <ul>
-  <li><b>按需</b>：多数会话用不到 Shell。r1 前两批之前没有任何 Pod，模型只是第一次 execute 慢了冷启动那么久。</li>
-  <li><b>幂等</b>：名字由 <code>workspace_thread_id</code> 派生，Pod 在就复用。复用时令牌从 Secret 读回，<b>不重签</b>：Pod 里注入的是 Secret 里那份，换一个就对不上。</li>
-  <li><b>串行</b>：一批并行的 execute 在 Pod 还不存在时同时到达。实验 3 去掉锁：两个 ensure 各签一个令牌、先后覆盖写同一个 Secret，只有一个建出 Pod，
-    而 Pod 启动时读到的是<b>后写的</b>那份 —— 建 Pod 的 c1 手里的令牌反而对不上，固定 401。这是 2026-10-13 评测真实撞到的问题。</li>
-  <li><b>等就绪才返回</b>：Pod 还在 ContainerCreating 时就交出地址，第一次连接必然失败，而且看起来像网络问题。</li>
+  <li>把 Pending 当成坏的删掉。并发的另一个 ensure 正在等它 Running，结果拿着已经删掉的 id 去解析端点。现在改成 Pending 先等。</li>
+  <li>有多个可用沙箱时取列表里的第一个。r2 断线后重新 ensure，接到了多出来的那个 sbx-1，它的 execd 不认识原来的命令，模型收到一个假的「沙箱重启」。现在改成优先端点缓存里上次用的那个，其余的立即删掉；实验 2 里 r2 打印「会话 t1 有多个沙箱：留 sbx-2，删掉 sbx-1」。</li>
 </ul>
 
-<h3 id="why-barrier">7.3 为什么文件工具不经过沙箱？屏障又是为了什么？</h3>
-<p>
-  文件工具直连对象存储（契约拆分：沙箱只管执行）。好处是没有沙箱的会话照样能读写文件，也不用为读一个文件起 Pod；代价是两条路之间有缓存窗口，后果很隐蔽：
-</p>
-<table>
-  <tr><th>实验</th><th>去掉什么</th><th>结果</th></tr>
-  <tr><td>1</td><td>执行前的 forget</td><td>c5 <code>python3: can't open file '…/count.py'</code>，exit 2。文件工具明明刚写过</td></tr>
-  <tr><td>2</td><td>执行后的等写回</td><td>c5 正常输出了统计结果，紧接着 c6 <code>read_file top.txt</code>：「文件不存在」。<b>命令成功了，产物却读不到</b></td></tr>
-</table>
-<p>
-  真实情况比实验 1 更糟：rclone 过了 <code>dir-cache-time</code> 会自己去看，窗口内读到的是「新内容按旧长度截断」—— 不报错，只是跑了半截旧代码，最难排查。
-  屏障只覆盖「文件工具 ↔ 命令」之间；后台进程在命令结束之后写的文件，按 rclone 自己的窗口最终一致。
-</p>
+<h3 id="why-template">7.5 为什么不能用模板给沙箱加 sidecar？</h3>
+<p>这是之前「保留 rclone sidecar + 屏障」进不了 OpenSandbox 的根因。<code>opensandbox.py</code> 的 <code>deep_merge</code> 照搬上游的 <code>_deep_merge</code>：遇到列表，运行时值整体覆盖。运行时清单自带 <code>initContainers: [execd-installer]</code> 和 <code>containers: [sandbox(, egress)]</code>，模板里的同名列表整个被换掉；事后 <code>merge_pod_spec_extras</code> 只补回 volumes、主容器的挂载和 securityContext。实验 5 在 <code>SBX_TEMPLATE</code> 里加一个 <code>oss-workspace</code>（rclone）init 容器，Pod 就绪时打印的仍然是 <code>init [execd-installer]</code>。</p>
+<p>同样的原因，模型 key 能通过模板注入（它是卷 + 主容器挂载），git 档案却不能（它要按会话选）。</p>
 
-<h3 id="why-rc">7.4 为什么 rclone 的远程控制口令不能给 sandboxd？</h3>
-<p>
-  forget 和查写回队列都要调 rclone 的远程控制（rc）。但 rc 还能调 <code>operations/*</code>、<code>config/*</code>，等于挂载器手里的<b>整桶</b>凭据。
-  sandboxd 和命令是同一个用户、同一个容器，sandboxd 能读到的文件命令都能读到 —— 容器边界是唯一可靠的隔离。所以：
-  口令只注入挂载器和 barrier 两个 sidecar；barrier 对外只有 forget 和 queue 两个无害操作；sandboxd 只认 barrier。
-  demo 里「容器边界」就是对象引用：<code>ExecManager</code> 手里只有 <code>Barrier</code>，没有 <code>FuseMount</code>，也没有口令。
-</p>
+<h3 id="why-token">7.6 为什么令牌要由 Atlas 存？</h3>
+<p>令牌是 Atlas 生成、经创建请求的 env 交给沙箱的，<code>GET /sandboxes</code> 不会把 env 还回来。实验 8 在 r2 之前删掉 Redis 里的端点缓存和 <code>token:sbx-1</code>：ensure 按 metadata 找到运行中的 sbx-1，却拿不到令牌 →「用不了 → 删掉重建」→ sbx-2，模型看到「环境已重建」，HOME 里装的东西没了。令牌的存储要和路由表一样可靠（见 §11 问题 1）。</p>
 
-<h3 id="why-execid">7.5 为什么 exec_id = run_id:tool_call_id，重连还是 POST 同一个 id？</h3>
-<ul>
-  <li><b>不需要单独的 attach 接口</b>：首发和重连是同一个请求。客户端不用判断「上次发出去没有」—— 没开始就开始，开始了就接上。</li>
-  <li><b>tool_call_id 是天然的幂等键</b>：同一个调用不管被谁、被重放几次，都对应同一条命令。前面加 run_id，因为 tool_call_id 只在一个会话里唯一，regenerate 产生的新 run 应该重新执行。</li>
-  <li><b>after 是游标</b>：r2:c7 重连带 <code>after=3</code>，从 #4 接着给，输出不丢不重；<code>ran.log</code> 5 行说明命令只跑了一次。</li>
-</ul>
+<h3 id="why-reap">7.7 回收为什么先删路由、再删沙箱？为什么不用排空？</h3>
+<p>先删路由，之后的文件操作就走对象存储（r4:c15 读 <code>top.txt</code> 不需要沙箱）。如果先删沙箱，正在路过的文件操作会打到一个不存在的 Pod；<code>WorkspaceFilesystem</code> 会问 lifecycle server，确认沙箱确实不在了，再删路由、改走对象存储重试，但这是兜底，不是主路径。写穿下挂载里没有待上传的数据，所以不需要旧方案的「排空写回队列」。回收和 ensure 拿同一把会话级锁，避免一边回收、一边复用。</p>
 
-<h3 id="why-replay">7.6 server 崩溃后的重放：前提是什么？</h3>
-<p>
-  r6 里实例 A 在 c17 执行中崩溃。实例 B 接管、重放这一轮，模型发出的还是 <code>c17</code>，exec_id 还是 <code>r6:c17</code>，于是 sandboxd「已存在 → 接上」，从 #1 回放，<code>pack.log</code> 6 行。
-</p>
-<div class="callout warn">
-  <b>前提：重放的必须是同一个 tool_call。</b>demo 的假模型是确定性的，同样的历史给出同样的 id，相当于「那条 ai 消息在执行工具之前已经落库」。
-  真实模型重新调用一次，tool_call id 一定是新的。实验 4 模拟这一点：B 发出的 <code>c17-5889</code> ≠ A 的 <code>c17-b9c6</code>，sandboxd 当成新命令，
-  <b>两条同时在跑，<code>pack.log</code> 12 行</b>。而 Atlas 水平扩展设计 §5.1 写的恰恰是「工具执行中被接管：这一轮的 tool_use 没有落库，整轮作废，重新调用模型」——
-  和沙箱设计 §11「server 重启 → 重放同一个 tool_call → 接上」的前提冲突。详见 <a href="#found">§11</a>。
-</div>
-<p>
-  demo 怎么模拟崩溃：<code>InstanceCrashed</code> 继承 <code>BaseException</code>，在 A 读流的下一个数据块处抛出。任何 <code>except Exception</code>（PodSandbox 的重连、中间件的错误转换）都接不住它，
-  取消路径也不会走（所以<b>不会</b>发 kill）；只有 <code>async with</code> 的收尾会跑 —— 相当于操作系统替死掉的进程关掉连接。sandboxd 那边只看到「事件流断开（对端不在了）→ 命令照跑」。
-</p>
+<h3 id="why-gone">7.8 为什么沙箱消失是工具错误？为什么不撤销副作用？</h3>
+<p>r5 执行到一半，Pod 被删（节点故障），BatchSandbox 进入 Failed（<code>restartPolicy: Never</code>，不会原地重启）。<code>PodSandbox</code> 连不上 → 重新 ensure：Failed 的删掉，建 sbx-3 → 去 sbx-3 的 execd 查 <code>cmd-2</code> → 404 → <code>SandboxUnavailable</code> → 工具错误。模型决定重跑（c18），这一轮继续，不会整轮失败。第一次跑到一半写的 3 行还在 <code>reg.log</code> 里（共 11 行）：平台不撤销已经发生的副作用，与 native 设计 §08 的 regenerate 语义一致。</p>
 
-<h3 id="why-boot">7.7 为什么重连要带 expect_boot_id？</h3>
-<p>
-  r5:c15 执行到一半 Pod 被删，PodSandbox 重连时 ensure 已经建好了新 Pod。新的 sandboxd 不认识 <code>r5:c15</code> —— 如果它照「没开始就开始」处理，命令会在新 Pod 上<b>从头再跑一遍</b>。
-  带上见过的 boot_id，sandboxd 发现「对端见过 boot X，我是 Y，也不认识这条命令」，回 409；PodSandbox 转成工具错误，让模型决定要不要重跑（r5:c16）。
-</p>
-<p>
-  实验 5 去掉它：命令在新 Pod 上悄悄又跑了一遍，模型读到的是「环境已重建 + 成功」，完全不知道跑了两遍。还有一个连带问题：客户端带着<b>旧命令</b>的游标 <code>after=4</code> 去读<b>新命令</b>的流，新命令的 #1–#10 全被跳过，进度一条都看不到。
-  boot_id 同时用于提示：PodSandbox 在进程内记住每个工作区最近见到的 boot_id，变了就在结果前加「环境已重建」，r4:c14、r5:c16 都有。
-</p>
+<h3 id="why-vault">7.9 git 凭据怎么做到不进 Pod？</h3>
+<p>r6：<code>OpenSandboxPods</code> 先判定档案能不能用（<code>teamflow-gitee</code> 只给 <code>source_app=teamflow</code> 的会话），创建请求带上 <code>networkPolicy</code> 和 <code>credentialProxy</code>（于是 Pod 里有 egress sidecar），建好后把凭据写进 Credential Vault。CLI 的环境里有模型 key（bridge 从模板挂的文件读的），<b>没有任何 git 凭据</b>；git push 的请求不带认证，经过 egress 时命中 <code>gitee.com</code> 的绑定，被注入 Basic 认证。实验 6 不写 Vault：Gitee 返回 401，CLI 报「git push 失败」。</p>
 
-<h3 id="why-stall">7.8 为什么不设时长上限？卡死为什么要同时看输出和 CPU？</h3>
-<p>
-  「只要在干活就不中断」是平台原则：编译、测试常常几十分钟，任何固定上限都会误杀。真正要处理的是卡死（等网络、等锁、死等输入），它的特征是<b>既没有输出、进程组的 CPU 时间也不涨</b>：
-</p>
-<table>
-  <tr><th>命令</th><th>输出</th><th>CPU</th><th>结果</th></tr>
-  <tr><td>r2:c8 安静地算 1 秒</td><td>没有</td><td>涨（心跳里约 0.2 → 0.4 → 0.6 秒）</td><td>跑完，exit 0</td></tr>
-  <tr><td>r2:c9 <code>sleep 30</code></td><td>没有</td><td>不涨</td><td>0.6 秒判卡死，exit 143</td></tr>
-  <tr><td>r2:c10 死循环 + <code>timeout=1</code></td><td>一直有</td><td>—</td><td>卡死判定管不了它；模型给了 timeout，1 秒到点结束</td></tr>
-</table>
-<p>
-  实验 6 只看输出：c8 在 0.6 秒被判卡死杀掉，心跳里 CPU 明明在涨。<code>timeout</code> 必须在 sandboxd 内部计时、由它结束进程组：只在客户端放弃的话，命令会在 Pod 里一直跑下去。
-  PodSandbox 的读超时（demo 1 秒，Atlas 60 秒）大于心跳间隔，它只用来发现「连接死了」，不是命令时长上限。
-</p>
-
-<h3 id="why-exit">7.9 为什么以 shell 退出为「命令结束」，而不是读到 EOF？</h3>
-<p>
-  r3:c12 是 <code>(sleep 1; echo …) &amp; echo "watcher 已在后台启动"</code>：shell 立刻退出，但后台进程继承了 stdout，管道要 1 秒后才关。sandboxd 等 shell 退出、再给读线程一小会儿收尾，就交出结果；
-  之后后台进程的输出只进日志文件（剧本最后从 <code>r3_c12.log</code> 里读到了「watcher：后台进程的输出」）。
-</p>
-<p>
-  实验 7 改成等 EOF：命令一直「在跑」，没有输出、CPU 也不涨，0.6 秒后被判卡死 —— <b>连后台进程一起杀掉</b>，那行输出永远不会出现。
-  换成真实场景就是：模型起一个后台服务再去测试，这条命令要挂到卡死阈值（Atlas 600 秒），然后服务被一起杀掉。
-</p>
-
-<h3 id="why-pgroup">7.10 为什么要杀整个进程组？取消是怎么传到沙箱的？</h3>
-<ul>
-  <li>每条命令以 <code>start_new_session=True</code>（setsid）启动，自成一个进程组，pgid = shell 的 pid。结束时 <code>killpg</code> 先 SIGTERM，宽限之后还在就 SIGKILL。</li>
-  <li>取消的路径：用户点停止 → run 的任务被 cancel → <code>CancelledError</code> 到达 PodSandbox 正在 await 的地方 → 它发出 <code>POST /v1/execs/{id}/kill</code>（发出去就走，不等）后继续往上抛。r3:c13 的进程组随即清空。</li>
-  <li>实验 8 只杀 shell（<code>os.kill</code>）：shell 死了，<code>sh -c 'sleep 30'</code> 和 <code>sleep 30</code> 还在原来的进程组里，ps 能看到，30 秒后才自己退出。在 Pod 里它们会一直占着 CPU、内存和端口。</li>
-  <li>取消只结束<b>这一条</b>命令；之前命令起的后台进程（r3:c12 的 watcher）在另一个进程组，不受影响 —— 这是设计 §11 的语义。</li>
-  <li>stdin 接 <code>/dev/null</code> 是同一类考虑：等输入的命令（apt 的确认、git 的口令提示）立即失败，而不是永远挂着、最后只能靠卡死判定或用户取消。</li>
-</ul>
-
-<h3 id="why-toolerr">7.11 为什么沙箱的任何故障都是工具错误？</h3>
-<p>
-  PodSandbox 把所有失败（建不出 Pod、连不上、409）都抛成 <code>SandboxUnavailable</code>，<code>execute</code> 把它转成 <code>status="error"</code> 的工具结果。
-  模型通常能换个办法（r5 里重跑了一遍），或者明确告诉用户做不了 —— 都比一个技术错误强。实验 9 配额设为 0：c1、c2、c5 都回成「沙箱启动失败：该用户已有 0 个会话 Pod」，文件工具照常，模型走完这一轮。
-  实验 10 不转换：r5:c15 的 409 一路抛出图，<b>r5 整轮失败</b>，模型没有机会重跑。
-  只有「平台根本没开沙箱」不走这条路：那是装配期的错误（<code>SandboxNotEnabled</code>），勾了 Shell 的智能体直接建不出来。
-</p>
-
-<h3 id="why-reap">7.12 闲置回收为什么要问 sandboxd？</h3>
-<p>
-  cluster 不认识 run，也不知道命令在不在跑；「闲置」只能由 sandboxd 回答。<code>GET /v1/info</code> 返回 <code>running</code> 和 <code>idle_s</code>，
-  有命令在跑时 <code>idle_s</code> 恒为 0 —— 这是「不设运行上限」在回收这一侧的体现：r3 编译中回收一次，「有 1 条命令在跑 → 不回收」。
-  回收是无损的：工作区在对象存储上，下一次 execute 重新 ensure，代价是冷启动和 HOME 里的东西（r4 里「HOME 里装过的依赖没了」）。
-  真实 cluster 的闲置回收还没实现（设计 §9，P2）；demo 由剧本手动调。
-</p>
-
-<h3 id="why-env">7.13 为什么命令的环境里没有凭据？</h3>
-<p>
-  r1:c2 打印的是命令能看到的全部环境变量名：<code>HOME LANG PATH PWD SHLVL TMPDIR _</code>。主容器的环境由 cluster 的模板决定，本来就只有 HOME 和 sandboxd 自己的几个配置；
-  sandboxd 再去掉 <code>SANDBOXD_*</code>（令牌文件路径、会话 id）。模型凭据在 server，对象存储凭据只在挂载器 sidecar，rc 口令只在挂载器和 barrier。
-  默认可以出网（装依赖、拉代码是最常见的用途），所以控制点放在「凭据不进容器、按需挂载」上（设计 D9）。
-</p>
+<h3 id="why-quota">7.10 配额为什么是软上限？超额为什么只是工具错误？</h3>
+<p>配额（两种沙箱合计）是「先数再建」，同一时刻并发的两个 ensure 可能一起通过。这与现在子智能体准入的已知问题同类，靠会话级锁只能挡住同一会话的并发。实验 7 把 <code>QUOTA_PER_USER</code> 设为 0：r1 的三个 execute 都是「沙箱启动失败：该用户已有 0 个沙箱（上限 0）…」，文件工具照常走对象存储，r1 正常结束。</p>
 
 <!-- ================================================================== -->
-<h2 id="code">8. 代码导读</h2>
+<h2 id="code">8. 代码导读与正常运行的输出</h2>
 <table>
-  <tr><th>代码</th><th>作用</th><th>对应的真实代码</th></tr>
-  <tr><td><code>agent.SandboxProtocol</code> / <code>ExecuteResponse</code> / <code>SandboxUnavailable</code></td><td>图侧唯一认识的契约</td><td><code>agent-platform/libs/engine/…/contracts/sandbox.py</code></td></tr>
-  <tr><td><code>agent.SandboxMiddleware</code></td><td><code>execute</code>：tool_call_id → exec_id；SandboxUnavailable → 工具错误；退出码显式写给模型</td><td><code>libs/engine/…/kernel/middleware/sandbox.py</code></td></tr>
-  <tr><td><code>agent.FilesystemMiddleware</code></td><td>文件工具直连对象存储</td><td><code>kernel/middleware/filesystem.py</code> + <code>FilesystemProtocol</code>（demo 直接拿 ObjectStorage）</td></tr>
-  <tr><td><code>sandbox_client.PodSandbox</code></td><td>按需 ensure、POST + NDJSON、重连（after / expect_boot_id）、409 → SandboxUnavailable、boot 提示、取消 → kill</td><td><code>services/agent/…/providers/sandbox.py</code>（几乎逐段对应）</td></tr>
-  <tr><td><code>executor.ServerInstance</code></td><td>一个 server 进程：每个 run 一个 PodSandbox，boots 在进程内存里</td><td><code>executor/assembly.py</code> 构造 <code>PodSandbox</code>；<code>_BOOTS</code> 是模块级字典</td></tr>
-  <tr><td><code>cluster.PodManager.ensure</code> / <code>release</code></td><td>同一会话串行、Secret 先于 Pod、复用读回令牌、等就绪、配额</td><td><code>infra-platform/services/cluster/…/manager.py</code></td></tr>
-  <tr><td><code>cluster.PodManager.reap_idle</code></td><td>闲置回收：有命令在跑永远不回收</td><td>未实现（设计 §9，P2）；已有的是按活会话回收孤儿 Pod 的 <code>reap</code></td></tr>
-  <tr><td><code>cluster.sandbox_pod_manifest</code></td><td>Pod 模板（只留 demo 用得到的字段）</td><td><code>atlas_cluster/template.py</code> 的 <code>sandbox_pod_manifest</code></td></tr>
-  <tr><td><code>pod.SandboxPod</code></td><td>容器编排：挂载器、barrier、sandboxd；删除 = 进程全没、emptyDir 清掉</td><td>K8s 本身</td></tr>
-  <tr><td><code>sandboxd.ExecManager</code></td><td>exec_id 幂等、bash -lc + setsid、环境过滤、头尾截断 + 日志、卡死 / 超时、杀组、并发上限、屏障</td><td><code>agent-platform/pod/sandboxd/…/execs.py</code></td></tr>
-  <tr><td><code>sandboxd.Exec.stream</code></td><td>从 after 之后给事件，等待时发心跳</td><td><code>execs.py</code> 的 <code>Exec.stream</code></td></tr>
-  <tr><td><code>sandboxd.serve</code></td><td>HTTP：令牌 + 会话头、409、chunked NDJSON、kill、info</td><td><code>pod/sandboxd/…/server.py</code></td></tr>
-  <tr><td><code>sandboxd.group_cpu_seconds</code></td><td>进程组累计 CPU</td><td><code>procfs.py</code>（只读 /proc；demo 在 macOS 上退回 ps）</td></tr>
-  <tr><td><code>storage.FuseMount</code></td><td>rclone mount：forget、写回队列</td><td>Pod 里的 <code>oss-workspace</code> sidecar（rclone，<code>--attr-timeout 0 --rc</code>）</td></tr>
-  <tr><td><code>storage.Barrier</code></td><td>持口令，只暴露 forget / queue</td><td><code>pod/sandboxd/…/barrier.py</code>（独立 sidecar，127.0.0.1:5573）</td></tr>
-  <tr><td><code>sandboxd.LinkFaults</code>、<code>executor.InstanceCrashed</code></td><td>剧本注入网络抖动、进程崩溃</td><td>真实系统里没有</td></tr>
+  <tr><th>想看什么</th><th>去哪里</th></tr>
+  <tr><td>一次 execute 的全过程</td><td><code>sandbox_client.py</code> 的 <code>PodSandbox.aexecute</code> → <code>_follow</code></td></tr>
+  <tr><td>断线怎么接上、沙箱换了怎么判</td><td><code>_follow</code> 的 <code>except httpx.TransportError</code> 分支</td></tr>
+  <tr><td>文件工具走哪</td><td><code>workspace.py</code> 的 <code>WorkspaceFilesystem._io</code></td></tr>
+  <tr><td>ensure 的复用、锁、配额</td><td><code>provision.py</code> 的 <code>Ensurer.ensure</code> → <code>_reusable</code> → <code>_admit</code></td></tr>
+  <tr><td>两种沙箱的创建请求</td><td><code>provision.py</code> 的 <code>sbx_spec</code> / <code>acp_spec</code>（对照设计 §8.1、§11.1）</td></tr>
+  <tr><td>回收</td><td><code>provision.py</code> 的 <code>Maintainer</code></td></tr>
+  <tr><td>模板合并为什么丢 sidecar</td><td><code>opensandbox.py</code> 的 <code>deep_merge</code>、<code>merge_pod_spec_extras</code>、<code>LifecycleServer._build_cr</code></td></tr>
+  <tr><td>execd 的后台 / 前台、游标</td><td><code>execd.py</code> 的 <code>handle</code>、<code>_events</code>、<code>_wait</code></td></tr>
+  <tr><td>写穿与外部写入的窗口</td><td><code>storage.py</code> 的 <code>CsiMount.flush</code>、<code>_pull</code></td></tr>
+  <tr><td>ACP 与 Credential Vault</td><td><code>acp.py</code> 的 <code>OpenSandboxPods.ensure</code>；<code>opensandbox.py</code> 的 <code>Egress.request</code>；<code>images.py</code> 的 <code>FakeBridge</code></td></tr>
 </table>
-
 <h3>正常运行的输出</h3>
-<p>
-  每行开头的 <code>[r1]</code> 是当前 run，后面是哪一层在说话；没有 run 的是 sandboxd / barrier（它们在 Pod 里，只认 exec_id）、cluster 的周期任务和剧本。
-  端口、pid、boot_id 每次都不同；同一批并行的那几行（r1 的 c1/c2、r2 的 c8–c11）先后顺序每次可能不同，这是并行本身的性质。
-</p>
-<details>
-<summary>展开完整输出（约 240 行）</summary>
-<pre><code>
-== r1 首次执行：按需建 Pod、两个 ensure 串行、文件一致性屏障 ==
+<p class="caption">进程组号每次不同；行首的 [r1] 是当前 run，空的是 OpenSandbox / 挂载自己的后台活动。</p>
+<pre><code>== r1 按需建沙箱：路由从对象存储切到沙箱 ==
 
 用户（r1）：「统计 notes.txt 里出现最多的词」
-[r1] 模型       │ 同一批发出 2 个调用：c1 execute「python3 --version」、c2 execute「mkdir -p ~/.cache/pip &amp;&amp; echo…」
-[r1] PodSandbox │ r1:c1 这个 run 还没拿过 Pod 地址 → cluster.ensure
-[r1] PodSandbox │ r1:c2 这个 run 还没拿过 Pod 地址 → cluster.ensure
-[r1] cluster    │ ensure t1：同一会话已有 ensure 在进行 → 排队等它
-[r1] cluster    │ ensure t1：没有 Pod → 签令牌，先写 Secret 再建 Pod atlas-sbx-t1
-[r1] K8s        │ atlas-sbx-t1 就绪：sandboxd 监听 http://127.0.0.1:65196，boot b5bdaf
-[r1] cluster    │ atlas-sbx-t1 冷启动 0.3 秒 → 交出地址和令牌
-[r1] PodSandbox │ POST http://127.0.0.1:65196/v1/execs  exec_id=r1:c1
-     sandboxd   │ r1:c1 开始：bash -lc 'python3 --version'（进程组 1401）
-[r1] PodSandbox │ r1:c1 #1 started：pid 1401，boot b5bdaf
-[r1] cluster    │ ensure t1：atlas-sbx-t1 已在 → 复用（令牌从 Secret 读回，不重签）
-[r1] PodSandbox │ POST http://127.0.0.1:65196/v1/execs  exec_id=r1:c2
-     sandboxd   │ r1:c2 开始：bash -lc 'mkdir -p ~/.cache/pip &amp;&amp; echo wordfreq &gt; ~/.cac…'（进程组 1404）
-[r1] PodSandbox │ r1:c2 #1 started：pid 1404，boot b5bdaf
-[r1] PodSandbox │ r1:c1 #2 output：Python 3.9.6
-     sandboxd   │ r1:c1 结束：exit_code=0，输出 13 字节
-[r1] PodSandbox │ r1:c1 #3 exited：exit_code=0，flushed=True
-[r1] PodSandbox │ r1:c2 #2 output：HOME LANG PATH PWD SHLVL TMPDIR _
-     sandboxd   │ r1:c2 结束：exit_code=0，输出 34 字节
-[r1] PodSandbox │ r1:c2 #3 exited：exit_code=0，flushed=True
-[r1] 模型       │ 读到 c1：Python 3.9.6 …（共 2 行）… [Command succeeded with exit code 0]
-[r1] 模型       │ 读到 c2：HOME LANG PATH PWD SHLVL TMPDIR _ …（共 2 行）… [Command succeeded with exit code 0]
-[r1] 模型       │ 同一批发出 2 个调用：c3 write_file notes.txt、c4 write_file count.py
-[r1] 文件工具   │ write_file notes.txt → 对象存储 u1/t1/workspace/notes.txt
-[r1] 文件工具   │ write_file count.py → 对象存储 u1/t1/workspace/count.py
-[r1] 模型       │ 读到 c3：已写入 notes.txt
-[r1] 模型       │ 读到 c4：已写入 count.py
-[r1] 模型       │ 同一批发出 1 个调用：c5 execute「python3 count.py notes.txt &gt; …」
-[r1] PodSandbox │ POST http://127.0.0.1:65196/v1/execs  exec_id=r1:c5
-     barrier    │ forget → 按对象存储刷新了 count.py, notes.txt
-     sandboxd   │ r1:c5 开始：bash -lc 'python3 count.py notes.txt &gt; top.txt &amp;&amp; cat top…'（进程组 1412）
-[r1] PodSandbox │ r1:c5 #1 started：pid 1412，boot b5bdaf
-[r1] PodSandbox │ r1:c5 #2 output：the 3
-     barrier    │ r1:c5 已退出，等写回：还有 1 个文件没上传
-     barrier    │ r1:c5 写回队列已清空
-     sandboxd   │ r1:c5 结束：exit_code=0，输出 20 字节
-[r1] PodSandbox │ r1:c5 #4 exited：exit_code=0，flushed=True
-[r1] 模型       │ 读到 c5：the 3 …（共 4 行）… [Command succeeded with exit code 0]
-[r1] 模型       │ 同一批发出 1 个调用：c6 read_file top.txt
-[r1] 文件工具   │ read_file top.txt ← 对象存储：读到了
-[r1] 模型       │ 读到 c6：the 3 …（共 3 行）… quick 1
-[r1] 模型       │ 最终答复：出现最多的是 the（3 次），其次是 fox（2 次）。
-[r1] 执行器     │ r1 结束，消息落库
+[r1] 模型         │ 同一批发出 1 个调用：c1 write_file notes.txt
+[r1] 路由         │ write notes.txt → 对象存储（工作区没有运行中的沙箱）
+[r1] 模型         │ 读到 c1：已写入 notes.txt
+[r1] 模型         │ 同一批发出 2 个调用：c2 execute「python3 --version」、c3 execute「mkdir -p ~/.cache &amp;&amp; echo wor…」
+[r1] lifecycle    │ opensandbox-sbx 创建 sbx-1（sbx / 会话 t1）→ 控制器
+[r1] 控制器       │ sbx-1 的 Pod 就绪（10.0.0.1，冷启动 0.2 秒）：init [execd-installer]  容器 [sandbox]  主容器挂载 [/opt/opensandbox、/workspace、/skills、/tmp、/home/agent、/repos]
+[r1] ensure       │ sbx 会话 t1：没有可用的沙箱 → 建了 sbx-1
+[r1] ensure       │ 路由表 sbx:route:t1 → sbx-1（文件工具从此走沙箱）
+[r1] execd        │ sbx-1 cmd-1 开始（后台，进程组 N）
+[r1] PodSandbox   │ r1:c2 提交到 sbx-1，命令 id cmd-1（后台：命令不随连接走）
+[r1] execd        │ sbx-1 cmd-2 开始（后台，进程组 N）
+[r1] PodSandbox   │ r1:c3 提交到 sbx-1，命令 id cmd-2（后台：命令不随连接走）
+[r1] execd        │ sbx-1 cmd-2 退出，exit 0
+[r1] execd        │ sbx-1 cmd-1 退出，exit 0
+[r1] 模型         │ 读到 c2：Python 3.9.6 …（共 2 行）… [Command succeeded with exit code 0]
+[r1] 模型         │ 读到 c3：HOME 里装好了 wordfreq …（共 2 行）… [Command succeeded with exit code 0]
+[r1] 模型         │ 同一批发出 1 个调用：c4 write_file count.py
+[r1] 路由         │ write count.py → 沙箱 sbx-1（与命令同一个挂载）
+[r1] CSI 挂载     │ sbx-1 写穿 → 对象存储：count.py
+[r1] 模型         │ 读到 c4：已写入 count.py
+[r1] 模型         │ 同一批发出 1 个调用：c5 execute「python3 count.py notes.txt &gt; …」
+[r1] execd        │ sbx-1 cmd-3 开始（后台，进程组 N）
+[r1] PodSandbox   │ r1:c5 提交到 sbx-1，命令 id cmd-3（后台：命令不随连接走）
+     CSI 挂载     │ sbx-1 写穿 → 对象存储：top.txt
+[r1] CSI 挂载     │ sbx-1 写穿 → 对象存储：top.txt
+[r1] execd        │ sbx-1 cmd-3 退出，exit 0
+[r1] 模型         │ 读到 c5：the 3 …（共 3 行）… [Command succeeded with exit code 0]
+[r1] 模型         │ 同一批发出 1 个调用：c6 read_file top.txt
+[r1] 路由         │ read top.txt → 沙箱 sbx-1（与命令同一个挂载）
+[r1] 模型         │ 读到 c6：the 3 …（共 2 行）… fox 2
+[r1] 模型         │ 最终答复：出现最多的是 the（3 次），其次是 fox（2 次）。
+[r1] 执行器       │ r1 结束（实例 A），消息落库
 
-== r2 长命令：断线接上、卡死判定、显式超时、输出截断 ==
-     剧本       │ r2:c7 的事件流发到 seq 3 时让网络断一下
+== r2 后台进程与断线：同一个命令 id、同一个游标接上 ==
 
 用户（r2）：「跑一下测试」
-[r2] 模型       │ 同一批发出 1 个调用：c7 execute「for i in 1 2 3 4 5; do echo "…」
-[r2] PodSandbox │ r2:c7 这个 run 还没拿过 Pod 地址 → cluster.ensure
-[r2] cluster    │ ensure t1：atlas-sbx-t1 已在 → 复用（令牌从 Secret 读回，不重签）
-[r2] PodSandbox │ POST http://127.0.0.1:65196/v1/execs  exec_id=r2:c7
-     sandboxd   │ r2:c7 开始：bash -lc 'for i in 1 2 3 4 5; do echo "case $i ok"; echo …'（进程组 1426）
-[r2] PodSandbox │ r2:c7 #1 started：pid 1426，boot b5bdaf
-[r2] PodSandbox │ r2:c7 #2 output：case 1 ok
-     剧本       │ r2:c7 的事件流发到 seq 3 时，网络断了一下
-[r2] PodSandbox │ r2:c7 #3 output：case 2 ok
-[r2] PodSandbox │ r2:c7 连接断了（RemoteProtocolError）
-[r2] PodSandbox │ r2:c7 第 1 次重连：重新 ensure，POST 同一个 exec_id（after=3、expect_boot_id=b5bdaf）
-[r2] cluster    │ ensure t1：atlas-sbx-t1 已在 → 复用（令牌从 Secret 读回，不重签）
-     sandboxd   │ r2:c7 已存在（running）→ 接上，不重跑（after=3）
-[r2] PodSandbox │ r2:c7 #4 output：case 3 ok（后面的输出不再逐条打印）
-     barrier    │ r2:c7 已退出，等写回：还有 1 个文件没上传
-     barrier    │ r2:c7 写回队列已清空
-     sandboxd   │ r2:c7 结束：exit_code=0，输出 68 字节
-[r2] PodSandbox │ r2:c7 #9 exited：exit_code=0，flushed=True
-[r2] 模型       │ 读到 c7：case 1 ok …（共 7 行）… [Command succeeded with exit code 0]
-[r2] 模型       │ 同一批发出 4 个调用：c8 execute「python3 -c ' import time end …」、c9 execute「sleep 30」、c10 execute「while true; do echo tick; sle…」，timeout=1、c11 execute「seq 1 30000」
-[r2] PodSandbox │ POST http://127.0.0.1:65196/v1/execs  exec_id=r2:c8
-[r2] PodSandbox │ POST http://127.0.0.1:65196/v1/execs  exec_id=r2:c9
-[r2] PodSandbox │ POST http://127.0.0.1:65196/v1/execs  exec_id=r2:c10
-[r2] PodSandbox │ POST http://127.0.0.1:65196/v1/execs  exec_id=r2:c11
-     sandboxd   │ r2:c8 开始：bash -lc 'python3 -c ' import time end = time.time() + 1 …'（进程组 1451）
-[r2] PodSandbox │ r2:c8 #1 started：pid 1451，boot b5bdaf
-     sandboxd   │ r2:c9 开始：bash -lc 'sleep 30'（进程组 1452）
-[r2] PodSandbox │ r2:c9 #1 started：pid 1452，boot b5bdaf
-     sandboxd   │ r2:c10 开始：bash -lc 'while true; do echo tick; sleep 0.1; done'（进程组 1455）
-[r2] PodSandbox │ r2:c10 #1 started：pid 1455，boot b5bdaf
-     sandboxd   │ r2:c11 开始：bash -lc 'seq 1 30000'（进程组 1458）
-[r2] PodSandbox │ r2:c11 #1 started：pid 1458，boot b5bdaf
-[r2] PodSandbox │ r2:c10 #2 output：tick
-[r2] PodSandbox │ r2:c11 #2 output：1
-[r2] PodSandbox │ r2:c11 #3 output：499
-[r2] PodSandbox │ r2:c11 #4 output：6776（后面的输出不再逐条打印）
-     sandboxd   │ r2:c11 结束：exit_code=0，输出 168894 字节
-[r2] PodSandbox │ r2:c11 #13 exited：exit_code=0，truncated，flushed=True
-[r2] PodSandbox │ r2:c10 #3 output：tick
-[r2] PodSandbox │ r2:c9    heartbeat：进程组 CPU 0.00 秒，输出 0 字节
-[r2] PodSandbox │ r2:c8    heartbeat：进程组 CPU 0.21 秒，输出 0 字节
-[r2] PodSandbox │ r2:c10 #4 output：tick（后面的输出不再逐条打印）
-[r2] PodSandbox │ r2:c9    heartbeat：进程组 CPU 0.00 秒，输出 0 字节
-[r2] PodSandbox │ r2:c8    heartbeat：进程组 CPU 0.42 秒，输出 0 字节
-[r2] PodSandbox │ r2:c9    heartbeat：进程组 CPU 0.00 秒，输出 0 字节
-[r2] PodSandbox │ r2:c8    heartbeat：进程组 CPU 0.65 秒，输出 0 字节
-     sandboxd   │ r2:c9 连续 0.6 秒没有输出、CPU 也没涨 → 判定卡死，结束进程组
-     sandboxd   │ r2:c9 结束：exit_code=143（stalled），输出 0 字节
-[r2] PodSandbox │ r2:c9 #2 exited：exit_code=143，stalled，flushed=True
-[r2] PodSandbox │ r2:c8 #2 output：算了 1 秒，期间没有任何输出
-     sandboxd   │ r2:c8 结束：exit_code=0，输出 40 字节
-[r2] PodSandbox │ r2:c8 #3 exited：exit_code=0，flushed=True
-     sandboxd   │ r2:c10 超过模型指定的 1 秒 → 结束进程组
-     sandboxd   │ r2:c10 结束：exit_code=143（timeout），输出 50 字节
-[r2] PodSandbox │ r2:c10 #12 exited：exit_code=143，timed_out，flushed=True
-[r2] 模型       │ 读到 c8：算了 1 秒，期间没有任何输出 …（共 2 行）… [Command succeeded with exit code 0]
-[r2] 模型       │ 读到 c9：[命令连续 0.6 秒既无输出、也无 CPU 活动，判定为卡死，已结束] …（共 2 行）… [Command failed with exit code 143]
-[r2] 模型       │ 读到 c10：tick …（共 12 行）… [Command failed with exit code 143]
-[r2] 模型       │ 读到 c11：1 …（共 864 行）… [Output was truncated due to size l…
-[r2] 模型       │ 最终答复：5 个用例都过了。安静的计算正常跑完；sleep 30 被判卡死；死循环到 1 秒被结束；seq 的输出被截断。
-[r2] 执行器     │ r2 结束，消息落库
+[r2] 模型         │ 同一批发出 1 个调用：c7 execute「(for i in 1 2 3 4 5 6; do ech…」
+[r2] execd        │ sbx-1 cmd-4 开始（后台，进程组 N）
+[r2] PodSandbox   │ r2:c7 提交到 sbx-1，命令 id cmd-4（后台：命令不随连接走）
+[r2] CSI 挂载     │ sbx-1 写穿 → 对象存储：progress.log
+[r2] execd        │ sbx-1 cmd-4 退出，exit 0
+[r2] 模型         │ 读到 c7：后台任务已启动 …（共 2 行）… [Command succeeded with exit code 0]
+[r2] 模型         │ 同一批发出 1 个调用：c8 read_file progress.log
+[r2] 路由         │ read progress.log → 沙箱 sbx-1（与命令同一个挂载）
+[r2] 模型         │ 读到 c8：step 1
+[r2] 模型         │ 同一批发出 1 个调用：c9 execute「for i in 1 2 3 4 5; do echo "…」
+[r2] execd        │ sbx-1 cmd-5 开始（后台，进程组 N）
+[r2] PodSandbox   │ r2:c9 提交到 sbx-1，命令 id cmd-5（后台：命令不随连接走）
+     CSI 挂载     │ sbx-1 写穿 → 对象存储：ran.log
+[r2] 网络         │ 剧本注入：r2 的测试写到第 2 行时 → 这个请求的连接被重置
+[r2] PodSandbox   │ r2:c9 轮询失败（Connection reset by peer）→ 重新 ensure，用同一个命令 id、游标 10 接上
+[r2] ensure       │ sbx 会话 t1：按 metadata 找到运行中的 sbx-1 → 复用
+[r2] execd        │ sbx-1 cmd-5 退出，exit 0
+[r2] 模型         │ 读到 c9：case 1 ok …（共 7 行）… [Command succeeded with exit code 0]
+[r2] 模型         │ 同一批发出 2 个调用：c10 execute「while true; do echo tick; sle…」，timeout=1、c11 execute「seq 1 30000」
+[r2] execd        │ sbx-1 cmd-6 开始（后台，进程组 N）
+[r2] PodSandbox   │ r2:c10 提交到 sbx-1，命令 id cmd-6（后台：命令不随连接走）
+[r2] execd        │ sbx-1 cmd-7 开始（后台，进程组 N）
+[r2] PodSandbox   │ r2:c11 提交到 sbx-1，命令 id cmd-7（后台：命令不随连接走）
+[r2] execd        │ sbx-1 cmd-7 退出，exit 0
+[r2] execd        │ sbx-1 cmd-6 到了调用方给的 timeout（1 秒）→ 杀整个进程组
+[r2] execd        │ sbx-1 cmd-6 退出，exit 137
+[r2] 模型         │ 读到 c10：tick …（共 11 行）… [Command failed with exit code 137]
+[r2] 模型         │ 读到 c11：1 …（共 864 行）… [Output was truncated due to size l…
+[r2] 模型         │ 最终答复：5 个用例都过了；死循环到 1 秒被结束；seq 的输出很大，只看了头尾。
+[r2] 执行器       │ r2 结束（实例 A），消息落库
+[r2] 剧本         │ 对象存储里 ran.log 共 5 行（只跑了一次）；progress.log 共 6 行
 
-== r3 后台进程与取消：命令以 shell 退出为准；有命令在跑不回收；取消就杀整个进程组 ==
+== r3 外部写入：界面上传立刻进对象存储，沙箱的挂载要等缓存过期 ==
+     界面         │ 用户上传 notes.txt（新版）；界面的文件面板直接读对象存储：'alpha beta alpha gamma alpha beta'
 
-用户（r3）：「后台起个 watcher，再全量编译一遍」
-[r3] 模型       │ 同一批发出 1 个调用：c12 execute「(sleep 1; echo "watcher：后台进程的…」
-[r3] PodSandbox │ r3:c12 这个 run 还没拿过 Pod 地址 → cluster.ensure
-[r3] cluster    │ ensure t1：atlas-sbx-t1 已在 → 复用（令牌从 Secret 读回，不重签）
-[r3] PodSandbox │ POST http://127.0.0.1:65196/v1/execs  exec_id=r3:c12
-     sandboxd   │ r3:c12 开始：bash -lc '(sleep 1; echo "watcher：后台进程的输出") &amp; echo "watch…'（进程组 1508）
-[r3] PodSandbox │ r3:c12 #1 started：pid 1508，boot b5bdaf
-[r3] PodSandbox │ r3:c12 #2 output：watcher 已在后台启动
-     sandboxd   │ r3:c12 shell 已退出，但后台进程还占着输出管道 → 不等它
-     sandboxd   │ r3:c12 结束：exit_code=0，输出 27 字节
-[r3] PodSandbox │ r3:c12    heartbeat：进程组 CPU 0.00 秒，输出 27 字节
-[r3] PodSandbox │ r3:c12 #3 exited：exit_code=0，flushed=True
-[r3] 模型       │ 读到 c12：watcher 已在后台启动 …（共 2 行）… [Command succeeded with exit code 0]
-[r3] 模型       │ 同一批发出 1 个调用：c13 execute「sh -c 'sleep 30' &amp; sleep 30」
-[r3] PodSandbox │ POST http://127.0.0.1:65196/v1/execs  exec_id=r3:c13
-     sandboxd   │ r3:c13 开始：bash -lc 'sh -c 'sleep 30' &amp; sleep 30'（进程组 1519）
-[r3] PodSandbox │ r3:c13 #1 started：pid 1519，boot b5bdaf
-     cluster    │ 闲置回收：atlas-sbx-t1 有 1 条命令在跑 → 不回收（不设运行上限）
-     用户       │ 点了「停止」→ 取消 r3
-[r3] PodSandbox │ r3:c13 这一轮被取消 → POST /v1/execs/r3:c13/kill
-     sandboxd   │ kill r3:c13 → 向进程组发 SIGTERM
-     sandboxd   │ r3:c13 结束：exit_code=143（killed），输出 0 字节
-     sandboxd   │ r3:c13 的事件流断开（对端不在了）→ 命令照跑
-     剧本       │ r3:c13 的进程组 1519 已清空：shell 和它起的 sh -c 'sleep 30' 都没了
-     剧本       │ r3:c12 的完整日志（r3_c12.log）：watcher 已在后台启动 / watcher：后台进程的输出
+用户（r3）：「我在界面上传了新的 notes.txt，再统计一次」
+[r3] 模型         │ 同一批发出 1 个调用：c12 execute「python3 count.py notes.txt」
+     CSI 挂载     │ notes.txt 在对象存储上被 界面上传 改写 → sbx-1 的挂载 0.6 秒内还是旧的（元数据缓存）
+[r3] execd        │ sbx-1 cmd-8 开始（后台，进程组 N）
+[r3] PodSandbox   │ r3:c12 提交到 sbx-1，命令 id cmd-8（后台：命令不随连接走）
+[r3] execd        │ sbx-1 cmd-8 退出，exit 0
+[r3] 模型         │ 读到 c12：the 3 …（共 3 行）… [Command succeeded with exit code 0]
+[r3] 模型         │ 同一批发出 1 个调用：c13 read_file notes.txt
+[r3] 路由         │ read notes.txt → 沙箱 sbx-1（与命令同一个挂载）
+[r3] 模型         │ 读到 c13：the quick brown fox jumps over the … …（共 2 行）… the fox sleeps
+[r3] 模型         │ 同一批发出 1 个调用：c14 execute「sleep 1 &amp;&amp; python3 count.py n…」
+[r3] execd        │ sbx-1 cmd-9 开始（后台，进程组 N）
+[r3] PodSandbox   │ r3:c14 提交到 sbx-1，命令 id cmd-9（后台：命令不随连接走）
+     CSI 挂载     │ 缓存过期 → sbx-1 的挂载里 notes.txt 换成新版本
+[r3] execd        │ sbx-1 cmd-9 退出，exit 0
+[r3] 模型         │ 读到 c14：alpha 3 …（共 3 行）… [Command succeeded with exit code 0]
+[r3] 模型         │ 最终答复：按新上传的数据：alpha 出现 3 次，beta 2 次。
+[r3] 执行器       │ r3 结束（实例 B），消息落库
 
-== r4 闲置回收：Pod 被删，下一次 execute 重建；工作区还在，HOME 没了 ==
-     cluster    │ 闲置回收：atlas-sbx-t1 已闲置 1.08 秒 &gt; 0.5 → 删 Pod
+== r4 闲置回收：路由先删、沙箱后删；之后读文件不需要沙箱，执行命令再重建 ==
+     lifecycle    │ opensandbox-sbx 删除 sbx-1
+     回收         │ 工作区 t1 闲置 0.6 秒 → 删路由、删沙箱 sbx-1
 
-用户（r4）：「再统计一次」
-[r4] 模型       │ 同一批发出 1 个调用：c14 execute「python3 count.py notes.txt; c…」
-[r4] PodSandbox │ r4:c14 这个 run 还没拿过 Pod 地址 → cluster.ensure
-[r4] cluster    │ ensure t1：没有 Pod → 签令牌，先写 Secret 再建 Pod atlas-sbx-t1
-[r4] K8s        │ atlas-sbx-t1 就绪：sandboxd 监听 http://127.0.0.1:65216，boot 2bd5cf
-[r4] cluster    │ atlas-sbx-t1 冷启动 0.3 秒 → 交出地址和令牌
-[r4] PodSandbox │ POST http://127.0.0.1:65216/v1/execs  exec_id=r4:c14
-     sandboxd   │ r4:c14 开始：bash -lc 'python3 count.py notes.txt; cat ~/.cache/pip/in…'（进程组 1533）
-[r4] PodSandbox │ r4:c14 #1 started：pid 1533，boot 2bd5cf
-[r4] PodSandbox │ r4:c14 #2 output：the 3
-[r4] PodSandbox │ r4:c14 #3 output：HOME 里装过的依赖没了
-     sandboxd   │ r4:c14 结束：exit_code=0，输出 50 字节
-[r4] PodSandbox │ r4:c14 #4 exited：exit_code=0，flushed=True
-[r4] PodSandbox │ r4:c14 boot 变了 → 工具结果前加一句「环境已重建」
-[r4] 模型       │ 读到 c14：[沙箱环境已重建：/workspace 内的文件仍在；装进 HOME … …（共 6 行）… [Command succeeded with exit code 0]
-[r4] 模型       │ 最终答复：结果没变：the 3 次、fox 2 次。沙箱重建过，之前装的依赖需要重装。
-[r4] 执行器     │ r4 结束，消息落库
+用户（r4）：「再看一下 top.txt，顺便确认环境」
+[r4] 模型         │ 同一批发出 1 个调用：c15 read_file top.txt
+[r4] 路由         │ read top.txt → 对象存储（工作区没有运行中的沙箱）
+[r4] 模型         │ 读到 c15：the 3 …（共 2 行）… fox 2
+[r4] 模型         │ 同一批发出 1 个调用：c16 execute「cat ~/.cache/installed 2&gt;/dev…」
+[r4] lifecycle    │ opensandbox-sbx 创建 sbx-2（sbx / 会话 t1）→ 控制器
+[r4] 控制器       │ sbx-2 的 Pod 就绪（10.0.0.2，冷启动 0.2 秒）：init [execd-installer]  容器 [sandbox]  主容器挂载 [/opt/opensandbox、/workspace、/skills、/tmp、/home/agent、/repos]
+[r4] ensure       │ sbx 会话 t1：没有可用的沙箱 → 建了 sbx-2
+[r4] ensure       │ 路由表 sbx:route:t1 → sbx-2（文件工具从此走沙箱）
+[r4] PodSandbox   │ 沙箱从 sbx-1 换成了 sbx-2 → 结果前提示「环境已重建」
+[r4] execd        │ sbx-2 cmd-1 开始（后台，进程组 N）
+[r4] PodSandbox   │ r4:c16 提交到 sbx-2，命令 id cmd-1（后台：命令不随连接走）
+[r4] execd        │ sbx-2 cmd-1 退出，exit 0
+[r4] 模型         │ 读到 c16：[沙箱环境已重建：/workspace 内的文件仍在；HOME、/re… …（共 5 行）… [Command succeeded with exit code 0]
+[r4] 模型         │ 最终答复：top.txt 还在；沙箱重建过，之前装的东西需要重装。
+[r4] 执行器       │ r4 结束（实例 A），消息落库
 
-== r5 Pod 在命令执行中消失：重连拿到 409，不重跑；工具错误回给模型 ==
+== r5 沙箱在命令执行中消失：新沙箱不认识这个命令 → 工具错误 → 模型重跑 ==
 
 用户（r5）：「跑一遍回归测试」
-[r5] 模型       │ 同一批发出 1 个调用：c15 execute「for i in 1 2 3 4 5 6 7 8; do …」
-[r5] PodSandbox │ r5:c15 这个 run 还没拿过 Pod 地址 → cluster.ensure
-[r5] cluster    │ ensure t1：atlas-sbx-t1 已在 → 复用（令牌从 Secret 读回，不重签）
-[r5] PodSandbox │ POST http://127.0.0.1:65216/v1/execs  exec_id=r5:c15
-     sandboxd   │ r5:c15 开始：bash -lc 'for i in 1 2 3 4 5 6 7 8; do echo "regression $…'（进程组 1539）
-[r5] PodSandbox │ r5:c15 #1 started：pid 1539，boot 2bd5cf
-[r5] PodSandbox │ r5:c15 #2 output：regression 1 ok
-[r5] PodSandbox │ r5:c15 #3 output：regression 2 ok
-[r5] PodSandbox │ r5:c15 #4 output：regression 3 ok（后面的输出不再逐条打印）
-     剧本       │ 节点故障：atlas-sbx-t1 被删（r5:c15 执行到一半）
-[r5] PodSandbox │ r5:c15 连接断了（RemoteProtocolError）
-[r5] PodSandbox │ r5:c15 第 1 次重连：重新 ensure，POST 同一个 exec_id（after=4、expect_boot_id=2bd5cf）
-[r5] cluster    │ ensure t1：没有 Pod → 签令牌，先写 Secret 再建 Pod atlas-sbx-t1
-[r5] K8s        │ atlas-sbx-t1 就绪：sandboxd 监听 http://127.0.0.1:65220，boot e24532
-[r5] cluster    │ atlas-sbx-t1 冷启动 0.3 秒 → 交出地址和令牌
-     sandboxd   │ r5:c15：对端见过 boot 2bd5cf，我是 e24532，也不认识这条命令 → 409，不重跑
-[r5] PodSandbox │ r5:c15 409：Pod 重建过，这条命令已经没了 → 不重跑
-[r5] execute    │ c15 SandboxUnavailable → 转成工具错误回给模型（这一轮继续）
-[r5] 模型       │ 读到 c15：Error: Sandbox unavailable. 沙箱在命令执行期间重启（可能内存不足或被回收），命令已中断、结果丢失；/works…
-[r5] 模型       │ 同一批发出 1 个调用：c16 execute「for i in 1 2 3 4 5 6 7 8; do …」
-[r5] PodSandbox │ POST http://127.0.0.1:65220/v1/execs  exec_id=r5:c16
-     sandboxd   │ r5:c16 开始：bash -lc 'for i in 1 2 3 4 5 6 7 8; do echo "regression $…'（进程组 1550）
-[r5] PodSandbox │ r5:c16 #1 started：pid 1550，boot e24532
-[r5] PodSandbox │ r5:c16 #2 output：regression 1 ok
-[r5] PodSandbox │ r5:c16 #3 output：regression 2 ok
-[r5] PodSandbox │ r5:c16 #4 output：regression 3 ok（后面的输出不再逐条打印）
-     sandboxd   │ r5:c16 结束：exit_code=0，输出 141 字节
-[r5] PodSandbox │ r5:c16 #11 exited：exit_code=0，flushed=True
-[r5] PodSandbox │ r5:c16 boot 变了 → 工具结果前加一句「环境已重建」
-[r5] 模型       │ 读到 c16：[沙箱环境已重建：/workspace 内的文件仍在；装进 HOME … …（共 11 行）… [Command succeeded with exit code 0]
-[r5] 模型       │ 最终答复：回归测试全部通过（第一次执行时沙箱重启，重跑了一遍）。
-[r5] 执行器     │ r5 结束，消息落库
+[r5] 模型         │ 同一批发出 1 个调用：c17 execute「for i in 1 2 3 4 5 6 7 8; do …」
+[r5] execd        │ sbx-2 cmd-2 开始（后台，进程组 N）
+[r5] PodSandbox   │ r5:c17 提交到 sbx-2，命令 id cmd-2（后台：命令不随连接走）
+     CSI 挂载     │ sbx-2 写穿 → 对象存储：reg.log
+     控制器       │ sbx-2 的 Pod 消失（节点故障）→ Failed（restartPolicy: Never，不原地重启）
+[r5] execd        │ sbx-2 cmd-2 退出，exit 137
+[r5] PodSandbox   │ r5:c17 轮询失败（连不上 10.0.0.2（Pod 已经不在了））→ 重新 ensure，用同一个命令 id、游标 32 接上
+[r5] ensure       │ sbx-2 是 Failed，用不了（restartPolicy: Never）→ 删掉重建
+[r5] lifecycle    │ opensandbox-sbx 删除 sbx-2
+[r5] lifecycle    │ opensandbox-sbx 创建 sbx-3（sbx / 会话 t1）→ 控制器
+[r5] 控制器       │ sbx-3 的 Pod 就绪（10.0.0.3，冷启动 0.2 秒）：init [execd-installer]  容器 [sandbox]  主容器挂载 [/opt/opensandbox、/workspace、/skills、/tmp、/home/agent、/repos]
+[r5] ensure       │ sbx 会话 t1：没有可用的沙箱 → 建了 sbx-3
+[r5] ensure       │ 路由表 sbx:route:t1 → sbx-3（文件工具从此走沙箱）
+[r5] PodSandbox   │ r5:c17 现在是 sbx-3，它的 execd 查 cmd-2 → 404
+[r5] execute      │ c17 SandboxUnavailable → 转成工具错误回给模型（这一轮继续）
+[r5] 模型         │ 读到 c17：Error: Sandbox unavailable. 命令执行期间沙箱重启（可能被回收或节点故障），命令已中断、结果丢失；/worksp…
+[r5] 模型         │ 同一批发出 1 个调用：c18 execute「for i in 1 2 3 4 5 6 7 8; do …」
+[r5] PodSandbox   │ 沙箱从 sbx-2 换成了 sbx-3 → 结果前提示「环境已重建」
+[r5] execd        │ sbx-3 cmd-1 开始（后台，进程组 N）
+[r5] PodSandbox   │ r5:c18 提交到 sbx-3，命令 id cmd-1（后台：命令不随连接走）
+[r5] execd        │ sbx-3 cmd-1 退出，exit 0
+[r5] 模型         │ 读到 c18：[沙箱环境已重建：/workspace 内的文件仍在；HOME、/re… …（共 11 行）… [Command succeeded with exit code 0]
+[r5] 模型         │ 最终答复：回归测试全部通过（第一次执行时沙箱重启，重跑了一遍）。
+[r5] 执行器       │ r5 结束（实例 A），消息落库
+     剧本         │ 对象存储里 reg.log 共 11 行：第一次跑到一半留下的，加上重跑的 8 行（不撤销已发生的副作用）
 
-== r6 server 崩溃：实例 B 接管，重放同一个 tool_call → 同一个 exec_id → 接上原命令 ==
+== r6 ACP：opensandbox-acp 建 Pod；模型 key 是模板挂的文件，git 凭据在 Credential Vault ==
+[r6] lifecycle    │ opensandbox-acp 创建 acp-1（acp / 会话 t2）→ 控制器
+[r6] 控制器       │ acp-1 的 Pod 就绪（10.0.0.4，冷启动 0.2 秒）：init [execd-installer]  容器 [sandbox、egress]  主容器挂载 [/opt/opensandbox、/workspace、/skills、/state、/tmp、/repos、/run/secrets/atlas]
+[r6] ACP          │ acp-1 写入 Credential Vault：gitee.com → 档案 teamflow-gitee
+[r6] ensure       │ acp 会话 t2：没有可用的沙箱 → 建了 acp-1
+[r6] CLI          │ acp-1 收到「把 RELEASE.md 写好并推到 Gitee」；环境里有模型 key：True，git 凭据：没有
+[r6] CSI 挂载     │ acp-1 写穿 → 对象存储：RELEASE.md
+[r6] CLI          │ acp-1 写了 /workspace/RELEASE.md；git push（仓库地址不带凭据）
+[r6] egress       │ acp-1 出站 gitee.com 命中 Credential Vault 绑定 → 注入认证头（沙箱里看不到明文）
+[r6] Gitee        │ 收到 push，认证通过
+[r6] HostRuntime  │ bridge 回复：RELEASE.md 已写好并推送
+[r6] 界面         │ t2 的文件面板（对象存储）：RELEASE.md 在（写穿：CLI close 时就上传了）
 
-用户（r6）：「把测试报告打包」
-[r6] 模型       │ 同一批发出 1 个调用：c17 execute「for i in 1 2 3 4 5 6; do echo…」
-[r6] PodSandbox │ r6:c17 这个 run 还没拿过 Pod 地址 → cluster.ensure
-[r6] cluster    │ ensure t1：atlas-sbx-t1 已在 → 复用（令牌从 Secret 读回，不重签）
-[r6] PodSandbox │ POST http://127.0.0.1:65220/v1/execs  exec_id=r6:c17
-     sandboxd   │ r6:c17 开始：bash -lc 'for i in 1 2 3 4 5 6; do echo "packing part $i"…'（进程组 1572）
-[r6] PodSandbox │ r6:c17 #1 started：pid 1572，boot e24532
-[r6] PodSandbox │ r6:c17 #2 output：packing part 1
-[r6] PodSandbox │ r6:c17 #3 output：packing part 2
-     剧本       │ 实例 A 崩溃（进程被 OOM 杀掉）
-     sandboxd   │ r6:c17 的事件流断开（对端不在了）→ 命令照跑
-     剧本       │ 实例 B 接管 r6：从库里读历史，重放这一轮（前提见 README §7.6）
-[r6] 模型       │ 同一批发出 1 个调用：c17 execute「for i in 1 2 3 4 5 6; do echo…」
-[r6] PodSandbox │ r6:c17 这个 run 还没拿过 Pod 地址 → cluster.ensure
-[r6] cluster    │ ensure t1：atlas-sbx-t1 已在 → 复用（令牌从 Secret 读回，不重签）
-[r6] PodSandbox │ POST http://127.0.0.1:65220/v1/execs  exec_id=r6:c17
-     sandboxd   │ r6:c17 已存在（running）→ 接上，不重跑（after=0）
-[r6] PodSandbox │ r6:c17 #1 started：pid 1572，boot e24532
-[r6] PodSandbox │ r6:c17 #2 output：packing part 1
-[r6] PodSandbox │ r6:c17 #3 output：packing part 2
-[r6] PodSandbox │ r6:c17 #4 output：packing part 3（后面的输出不再逐条打印）
-     barrier    │ r6:c17 已退出，等写回：还有 1 个文件没上传
-     barrier    │ r6:c17 写回队列已清空
-     sandboxd   │ r6:c17 结束：exit_code=0，输出 109 字节
-[r6] PodSandbox │ r6:c17 #10 exited：exit_code=0，flushed=True
-[r6] 模型       │ 读到 c17：packing part 1 …（共 8 行）… [Command succeeded with exit code 0]
-[r6] 模型       │ 最终答复：打包好了。
-[r6] 执行器     │ r6 结束，消息落库
-
-整轮用时约 7.8 秒
+整轮用时约 6.3 秒
 
 == 最终状态 ==
   run 表
     r1  succeeded（实例 A）
     r2  succeeded（实例 A）
-    r3  cancelled
+    r3  succeeded（实例 B）
     r4  succeeded（实例 A）
     r5  succeeded（实例 A）
-    r6  succeeded（实例 B）
-  对象存储 u1/t1/workspace/：count.py、notes.txt、pack.log（6 行）、ran.log（5 行）、top.txt
-  K8s：Pod atlas-sbx-t1（boot e24532），Secret atlas-sbx-t1-token
-  先后一共建过 3 个 Pod：r1 首次执行、r4 闲置回收之后、r5 执行中被删之后
-     剧本       │ 会话删除 → cluster.release：删 Pod 和 Secret
-  K8s：Pod 0 个，Secret 0 个</code></pre>
-</details>
-<p>
-  留意几点：r1 两个 ensure 一个「排队等它」、一个建 Pod；c5 前面的「forget → 按对象存储刷新了 count.py, notes.txt」和后面的「写回队列已清空」；
-  r2:c7 断开后「接上，不重跑（after=3）」，下一条就是 #4；r2:c8 的心跳里 CPU 在涨、c9 的不涨；r3 的「有 1 条命令在跑 → 不回收」；
-  r5:c15 的 409 和 c16 结果前的「环境已重建」；r6 里实例 B 发出的还是 c17，sandboxd「接上，不重跑（after=0）」。
-</p>
+  路由表：{'t1': 'sbx-3'}
+  opensandbox-sbx：sbx-3（Running，会话 t1）
+  opensandbox-acp：acp-1（Running，会话 t2）
+  控制器先后起过 4 个 Pod
+  sbx-3：init [execd-installer]  容器 [sandbox]  主容器挂载 [/opt/opensandbox、/workspace、/skills、/tmp、/home/agent、/repos]
+  acp-1：init [execd-installer]  容器 [sandbox、egress]  主容器挂载 [/opt/opensandbox、/workspace、/skills、/state、/tmp、/repos、/run/secrets/atlas]
+  对象存储 u1/t1/workspace/：count.py、notes.txt、progress.log、ran.log、reg.log、top.txt
+     剧本         │ 上次 server 崩溃留下一个没人认领的沙箱（会话 t9）
+     lifecycle    │ opensandbox-sbx 创建 sbx-4（sbx / 会话 t9）→ 控制器
+     控制器       │ sbx-4 的 Pod 就绪（10.0.0.5，冷启动 0.2 秒）：init [execd-installer]  容器 [sandbox]  主容器挂载 [/opt/opensandbox、/workspace、/skills、/tmp、/home/agent、/repos]
+     回收         │ 孤儿 sbx-4（会话 t9）→ 删除
+     lifecycle    │ opensandbox-sbx 删除 sbx-4
+     剧本         │ 会话 t1、t2 删除 → release：两种沙箱、路由、端点缓存都清掉
+     lifecycle    │ opensandbox-sbx 删除 sbx-3
+     lifecycle    │ opensandbox-acp 删除 acp-1
+  剩余沙箱 0 个，路由 0 条</code></pre>
 
 <!-- ================================================================== -->
 <h2 id="lab">9. 动手实验</h2>
 <p>每个实验只改一两处，结果都是实际运行得到的（把 <code>demo/sandbox/</code> 拷到临时目录改完再跑，不动工作区）。改动之后剧本后面的幕可能等不到它要的条件而超时退出，只看相关的那一幕。</p>
 <table>
   <tr><th>#</th><th>改动</th><th>观察到的现象</th><th>说明了什么</th></tr>
-  <tr>
-    <td>1</td>
-    <td><code>sandboxd.py</code> 的 <code>_run</code>：<code>self._barrier.forget()</code> 换成 <code>pass</code></td>
-    <td>r1:c5 <code>python3: can't open file '…/count.py': [Errno 2] No such file or directory</code>，exit 2；c6 读到空的 <code>top.txt</code>（重定向先建了空文件）</td>
-    <td rowspan="2"><a href="#why-barrier">§7.3</a>：两个方向的窗口都要收口</td>
-  </tr>
-  <tr>
-    <td>2</td>
-    <td><code>_run</code>：<code>flushed = self._wait_flushed(ex) if …</code> 改成 <code>flushed = None</code></td>
-    <td>r1:c5 正常（<code>the 3 …</code>），紧接着 c6「Error: 文件不存在：top.txt」</td>
-  </tr>
-  <tr>
-    <td>3</td>
-    <td><code>cluster.py</code> 的 <code>PodManager.ensure</code>：去掉 <code>async with lock:</code>，直接 <code>return await self._ensure(...)</code></td>
-    <td>两个 ensure 都打印「没有 Pod → 签令牌…」；sandboxd「令牌不对 → 401」；c1 读到「沙箱返回 401」，c2 正常。两次运行都是 c1（建 Pod 的那一个）401</td>
-    <td><a href="#why-ensure">§7.2</a>：并发 ensure 覆盖写 Secret</td>
-  </tr>
-  <tr>
-    <td>4</td>
-    <td><code>scripted.py</code>：r6 的 tool_call id 加随机后缀（模拟接管时重新调用模型、拿到新 id）</td>
-    <td>sandboxd 先后「r6:c17-b9c6 开始」「r6:c17-5889 开始」，两个进程组同时在跑；<code>pack.log</code> 12 行（正常 6 行）</td>
-    <td><a href="#why-replay">§7.6</a>：重放必须是同一个 tool_call</td>
-  </tr>
-  <tr>
-    <td>5</td>
-    <td><code>sandbox_client.py</code> 的 <code>_run_exec</code>：不带 <code>expect_boot_id</code></td>
-    <td>r5:c15 在新 Pod 上「开始」第二次（另一个进程组），客户端只收到 #11 exited；模型读到「环境已重建 + 成功」</td>
-    <td><a href="#why-boot">§7.7</a>：不带就悄悄重跑；旧游标还会跳过新命令的进度</td>
-  </tr>
-  <tr>
-    <td>6</td>
-    <td><code>sandboxd.py</code> 的 <code>_check</code>：<code>if cpu is not None and cpu != ex.last_cpu:</code> 改成 <code>if False:</code></td>
-    <td>r2:c8（安静地算 1 秒）「连续 0.6 秒没有输出、CPU 也没涨 → 判定卡死」，exit 143；前一条心跳里 CPU 已经涨到 0.42 秒</td>
-    <td><a href="#why-stall">§7.8</a>：只看输出会误杀安静的长任务</td>
-  </tr>
-  <tr>
-    <td>7</td>
-    <td><code>_run</code>：<code>reader.join(timeout=DETACH_S)</code> 改成 <code>reader.join()</code>（等管道 EOF）</td>
-    <td>r3:c12 被判卡死（exit_code=0，stalled），后台进程被一起杀掉，「watcher：后台进程的输出」永远没出现，剧本等到超时</td>
-    <td><a href="#why-exit">§7.9</a>：后台服务会让命令挂到卡死阈值，然后被连带杀掉</td>
-  </tr>
-  <tr>
-    <td>8</td>
-    <td><code>_terminate</code>：两处 <code>os.killpg(pgid, …)</code> 改成 <code>os.kill(pgid, …)</code>（只杀 shell）</td>
-    <td>取消后「shell 已退出，但后台进程还占着输出管道」；ps 里两个 <code>sleep 30</code> 还在原进程组；剧本「等了 2 秒，进程组 … 清空 还没发生」</td>
-    <td><a href="#why-pgroup">§7.10</a></td>
-  </tr>
-  <tr>
-    <td>9</td>
-    <td><code>cluster.py</code>：<code>QUOTA_PER_USER = 0</code></td>
-    <td>r1 的 c1、c2、c5 都是「Error: Sandbox unavailable. 沙箱启动失败：该用户已有 0 个会话 Pod（上限 0），先关掉一些旧会话再试」；文件工具照常，r1 正常结束</td>
-    <td rowspan="2"><a href="#why-toolerr">§7.11</a>：工具错误 vs 整轮失败</td>
-  </tr>
-  <tr>
-    <td>10</td>
-    <td><code>agent.py</code> 的 execute：<code>except SandboxUnavailable</code> 改成 <code>except ZeroDivisionError</code>（不转换）</td>
-    <td>r5:c15 拿到 409 后，<code>agent.SandboxUnavailable: 沙箱在命令执行期间重启…</code> 一路抛出图，r5 整轮失败，没有 c16</td>
-  </tr>
+  <tr><td>1</td><td><code>sandbox_client.py</code>：<code>FOREGROUND = True</code></td><td>r2:c9 写到第 2 行时连接被重置 → execd「cmd-5 是前台命令，连接断了 → SIGKILL 整个进程组」，exit 137；c9「连接中断，前台命令已被结束，结果未知」；<code>ran.log</code> 共 2 行</td><td><a href="#why-bg">§7.1</a></td></tr>
+  <tr><td>2</td><td><code>provision.py</code> 的 <code>ensure</code>：<code>async with self._r.lock(…)</code> 改成 <code>if True:</code>，并在 <code>_reusable(…)</code> 之后加 <code>await asyncio.sleep(0.05)</code></td><td>r1 建了 sbx-1、sbx-2，路由表先后指向两者；c2 跑在 sbx-1、c3 跑在 sbx-2（c3 收到「环境已重建」）；sbx-1 看 sbx-2 的写入有 0.6 秒窗口；r2 断线重新 ensure 时「会话 t1 有多个沙箱：留 sbx-2，删掉 sbx-1」</td><td><a href="#why-lock">§7.4</a></td></tr>
+  <tr><td>3</td><td><code>workspace.py</code>：<code>ROUTING = False</code></td><td>r1:c4 count.py 写进对象存储 → 挂载「0.6 秒内还是旧的」→ c5 <code>can't open file '…/count.py'</code>，exit 2；c6 读到空的 top.txt</td><td><a href="#why-route">§7.2</a></td></tr>
+  <tr><td>4</td><td><code>storage.py</code>：<code>CACHE_TTL_S = 0</code></td><td>r3:c12 直接读到 <code>alpha 3</code>，c13 读到新的 notes.txt</td><td><a href="#why-window">§7.3</a>：窗口就是元数据缓存</td></tr>
+  <tr><td>5</td><td><code>opensandbox.py</code>：<code>SBX_TEMPLATE</code> 里加 <code>initContainers: [{name: oss-workspace, image: rclone/rclone}]</code></td><td>sbx-1 就绪时仍是 <code>init [execd-installer]</code>，rclone 容器消失</td><td><a href="#why-template">§7.5</a></td></tr>
+  <tr><td>6</td><td><code>acp.py</code> 的 <code>write_vault</code>：开头直接 <code>return</code></td><td>r6 Gitee「收到 push，没有认证 → 401」；bridge 回复「git push 失败：Gitee 返回 401」；CLI 的环境里照样没有 git 凭据</td><td><a href="#why-vault">§7.9</a></td></tr>
+  <tr><td>7</td><td><code>provision.py</code>：<code>QUOTA_PER_USER = 0</code></td><td>r1 的 c2、c3、c5 都是「沙箱启动失败：该用户已有 0 个沙箱（上限 0），先关掉一些旧会话再试」；c1、c4 文件工具照常；r1 正常结束（r5 之后等不到 reg.log 而超时）</td><td><a href="#why-quota">§7.10</a></td></tr>
+  <tr><td>8</td><td><code>main.py</code>：r2 之前 <code>redis.delete("ep:sbx:t1")</code>、<code>redis.delete("token:sbx-1")</code></td><td>r2:c7「sbx-1 是 令牌不在…，用不了 → 删掉重建」→ sbx-2；c7 结果前「环境已重建」</td><td><a href="#why-token">§7.6</a></td></tr>
 </table>
 
 <!-- ================================================================== -->
 <h2 id="gap">10. demo 和真实系统的差别</h2>
 <table>
   <tr><th>方面</th><th>demo</th><th>真实系统</th></tr>
-  <tr><td>K8s、cluster</td><td>内存模拟；server 直接调用 PodManager</td><td>cluster 是独立服务（HTTP API，配额 429 → ClusterUnavailable），单副本，唯一有 K8s 写权限</td></tr>
-  <tr><td>容器隔离</td><td><b>没有</b>：命令以当前用户跑在本机，只有 cwd、HOME、TMPDIR 换成了临时目录</td><td>非 root（UID 1000）、根只读、drop ALL、seccomp、资源 limit、emptyDir 上限；默认可出网，可设 network: none</td></tr>
-  <tr><td>Pod 地址</td><td>127.0.0.1:随机端口</td><td>Pod IP:8910（每次 ensure 拿最新的，Pod 重建 IP 会变）</td></tr>
-  <tr><td>挂载器</td><td>本地目录 + 线程定时比对；没 forget 就一直是旧的</td><td>rclone FUSE（<code>--attr-timeout 0</code>）；窗口内是错数据；多级新目录要 forget 最近的已有祖先</td></tr>
-  <tr><td>barrier</td><td>对象引用</td><td>独立 sidecar，HTTP 127.0.0.1:5573，rc 带口令（secretKeyRef）</td></tr>
-  <tr><td>sandboxd 注入</td><td>直接 import</td><td>init 容器把自带 CPython + tini 的 sandboxd 拷进 emptyDir；tini 做 1 号进程收孤儿</td></tr>
-  <tr><td>事件保留</td><td>全部留在内存</td><td>output 事件总量 1 MB 封顶（超了先裁旧的），结束后保留 1 小时供重连</td></tr>
-  <tr><td>数值</td><td>心跳 0.2 秒、卡死 0.6 秒、读超时 1 秒、回收 0.5 秒、输出 4000 字节、冷启动 0.3 秒</td><td>15 秒、600 秒、60 秒、1800 秒、100 KB、约 5 秒</td></tr>
-  <tr><td>审批</td><td>没有</td><td>勾了 Shell 强制 execute 进审批列表（D10）；挂起与恢复见 <code>demo/suspend-resume</code></td></tr>
-  <tr><td>闲置回收</td><td>剧本手动调</td><td>设计是 cluster 的周期任务，<b>未实现</b>（P2）</td></tr>
-  <tr><td>进程崩溃</td><td><code>InstanceCrashed</code>（BaseException）</td><td>真的进程退出；接管由租约过期触发</td></tr>
-  <tr><td>重放</td><td>假模型确定性 → 同一个 tool_call id</td><td>见 <a href="#found">§11</a> 问题 1</td></tr>
-  <tr><td>子智能体</td><td>没演示（只在注释里说明）</td><td>原生子智能体传父会话的 workspace_thread_id，共用一个 Pod；并行时共享文件与进程空间，平台不加锁</td></tr>
-  <tr><td>没演示的模式</td><td>—</td><td>安全档位 strict / task、network: none、git 凭据档案按需挂载、镜像白名单、/skills 只读挂载、/repos 本地盘</td></tr>
-  <tr><td>可观测</td><td>打印</td><td><code>sandbox.ensure</code> / <code>sandbox.exec</code> span（exit_code、duration、truncated、stalled、flushed…）</td></tr>
+  <tr><td>OpenSandbox server / 控制器</td><td>内存模拟；REST 经 <code>httpx.MockTransport</code> 分发；模板合并照搬上游（简化）</td><td>两个 FastAPI 实例 + Go 控制器 + CRD；server 单副本；创建默认最多等 60 秒（Atlas 调到 180）</td></tr>
+  <tr><td>execd</td><td>Python 写的子集；命令真的由 bash 执行；文件上传用 JSON</td><td>Go 静态二进制；multipart；还有 PTY、metrics、隔离会话；EXECD_INIT 作 PID 1</td></tr>
+  <tr><td>容器隔离</td><td><b>没有</b>：命令以当前用户跑在本机，只有 cwd、HOME、TMPDIR 换成了临时目录</td><td>strict 档：UID 1000、根只读、drop ALL、seccomp</td></tr>
+  <tr><td>CSI 挂载</td><td>本地目录 + 每 20 毫秒扫描 + 命令退出 / 文件 API 写完时再刷一次；外部写入固定 0.6 秒后可见；每个 Pod 一个</td><td>s3fs / ossfs 写穿（close 同步上传）；stat 缓存（目标 ≤ 1 秒）；节点级挂载可能被同节点的 Pod 共用；截断读、目录标记、写性能都是 P0 实测项</td></tr>
+  <tr><td>网络</td><td>按 host 分发；Pod IP 是 <code>10.0.0.N</code>；Pod 没了 → <code>ConnectError</code></td><td>集群网络，直连 Pod IP</td></tr>
+  <tr><td>egress / Vault</td><td>只模拟「按 host 注入 Basic 认证」；CLI 显式经它发请求</td><td>透明拦截（<code>dns+nft</code> + MITM），CA 装进镜像的信任库；绑定只匹配 80 / 443</td></tr>
+  <tr><td>分布式锁、Redis</td><td><code>asyncio.Lock</code>、字典</td><td>redislock、真实 Redis（路由表和令牌要持久）</td></tr>
+  <tr><td>卡死判定、网络策略</td><td>没做</td><td>无输出且容器 CPU≈0；<code>network: none / allowlist</code></td></tr>
+  <tr><td>数字</td><td>轮询 0.05–0.3 秒；冷启动 0.2 秒；闲置 0.5 秒；输出上限 4000 字节</td><td>0.3–2 秒；约 5 秒；30 分钟；100 KB</td></tr>
 </table>
 
 <!-- ================================================================== -->
-<h2 id="found">11. 顺带发现的问题</h2>
-
-<h3>问题 1（设计冲突）：server 崩溃后的「接上原命令」，在现有的接管方式下不成立</h3>
-<table>
-  <tr><th>文档</th><th>怎么说</th></tr>
-  <tr><td>沙箱设计 §8 / §11</td><td>exec_id = <code>{run_id}:{tool_call_id}</code>；「server 重启：run 恢复执行时重放同一个 tool_call → 同一 exec_id → 接上原命令（依赖 run 的恢复机制）」</td></tr>
-  <tr><td>水平扩展设计 §5.1</td><td>「工具执行中（已拿到部分结果）：这一轮的 tool_use 没有落库，整轮作废，重新调用模型 —— 模型通常会再发起同样的调用」</td></tr>
-</table>
-<p>
-  重新调用模型得到的是新的 tool_call id → 新的 exec_id → sandboxd 当成新命令。结果不是「接上」，而是<b>同一个 Pod 里两条命令同时在跑</b>（实验 4：<code>pack.log</code> 12 行）；
-  原来那条还没人管，它跑完的结果也没人取。水平扩展设计 §13 提到的缓解「执行前写意图」，在 <code>services/agent</code> 里目前没有找到对应实现。
-</p>
-<table>
-  <tr><th>方案</th><th>做法</th><th>权衡</th></tr>
-  <tr><td><b>A（推荐）</b></td><td>执行有副作用的工具之前，先把这一轮的 ai 消息（tool_use）落库；接管时从工具节点重跑，tool_call id 不变</td><td>与沙箱设计的前提一致，ACP 之外的副作用工具也受益；多一次写库（只在有副作用的工具前）</td></tr>
-  <tr><td>B</td><td>接管时先调 <code>POST /v1/execs/kill?run_id=</code>（sandboxd 已有）结束这个 run 遗留的命令，再重新调用模型</td><td>改动最小；但已经跑了一半的副作用照样会再来一遍，长命令白跑</td></tr>
-  <tr><td>C</td><td>exec_id 改用不依赖 tool_call id 的键（如 run_id + 工具轮次 + 批内序号）</td><td>重新调用的模型不一定发出同样的命令，按位置对上可能把<b>不同</b>的命令接到旧结果上，更危险</td></tr>
-</table>
-
-<h3>问题 2（小）：真实 sandboxd 的 exited 事件有一个竞态</h3>
-<p>
-  <code>execs.py</code> 的 <code>_finish</code> 先在一把锁里把状态改成 exited，再在<b>另一次</b>加锁里 emit exited 事件。读流的线程如果恰好在两次之间检查，
-  会看到「已结束、但没有 exited 事件」，于是正常结束这条流；PodSandbox 把「流在 exited 之前结束」当成断线，退避 1 秒后重连才拿到结果。
-  结果不会错，只是偶尔慢 1 秒、多一次重连。demo 的 <code>Exec.emit(…, final=True)</code> 把两件事放在同一把锁里。
-</p>
-
-<h3>问题 3（小）：server 重启后，第一次 execute 发现不了 Pod 已重建</h3>
-<p>
-  「环境已重建」靠 PodSandbox 进程内的 <code>_BOOTS</code> 比较前后 boot_id。server 重启（或请求落到另一个实例）后这个字典是空的，Pod 在此期间被回收重建的话，
-  第一次 execute 不会提示 —— 模型以为之前装的依赖还在。多副本部署后这会变得常见。可以把最近一次的 boot_id 记在会话上（数据库），或由 cluster 在 ensure 的返回里带上「是否新建」。
-</p>
-
+<h2 id="found">11. 顺带发现的问题（回写设计）</h2>
+<p><b>状态（2026-10-20）</b>：三条都已回写设计 §13 / §14，并在 Atlas 代码里实现（<code>providers/opensandbox/provision.py</code>），单测见 <code>agent-platform/tests/test_sandbox_provisioner.py</code>。</p>
+<h3>问题 1：令牌的持久化没写进设计</h3>
+<p>设计 §12 只写了「bridge 和 execd 的令牌由 Atlas 生成、经 env 传入」。但 <code>GET /sandboxes</code> 不会返回 env，Atlas 不存就再也拿不回来，丢了只能删掉重建，用户的 HOME 跟着丢（实验 8）。建议在 §13 / §14 补上：令牌按沙箱 id 存进 Redis（或数据库），与路由表同级的可靠性；随沙箱删除一起清理。</p>
+<h3>问题 2：ensure 遇到 Pending 不能当坏的删</h3>
+<p>设计 §14 的流程只写了「有但 Failed / Terminated → DELETE 后重建」，没说 Pending。Pending 可能是并发的另一个 ensure 正在建（锁失效时），也可能是建到一半崩掉的进程留下的；直接删会让前者拿着已删的 id 去解析端点。demo 的做法：先等它离开 Pending，Running 且令牌在就复用，否则删掉。</p>
+<h3>问题 3：一个会话有多个沙箱时，选哪个</h3>
+<p>设计 §13 写的是「万一出现重复，由孤儿回收删掉多余的」。实验 2 说明这不够：在回收之前，断线重连按列表顺序可能接到另一个沙箱，命令就「丢」了。而且两个挂载就是两个客户端，又回到了缓存不一致。建议在 §14 的复用规则里写明：优先端点缓存里上次用的那个，其余的当场删掉。</p>
 </main>
-
 <script>
+
 /* 极简时序图渲染：用数据描述参与者和步骤，生成 SVG。改图只改数据，不用算坐标。
    步骤类型：
      {phase: "标题"}                                   阶段色带
@@ -916,85 +607,97 @@ function renderSeq(container, spec) {
   svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
   container.appendChild(svg);
 }
-renderSeq(document.getElementById("seq-exec"), {
-  laneWidth: 172,
+renderSeq(document.getElementById("seq-r1"), {
+  laneWidth: 165,
   lanes: [
     {id: "g", name: "图（kernel）", sub: "模型 · execute · 文件工具"},
-    {id: "s", name: "PodSandbox", sub: "server · 一个 run 一个"},
-    {id: "c", name: "cluster", sub: "唯一有 K8s 写权限"},
-    {id: "k", name: "K8s", sub: "Secret · Pod"},
-    {id: "d", name: "sandboxd", sub: "Pod 主容器"},
-    {id: "b", name: "barrier + 挂载器", sub: "Pod 的两个 sidecar"},
-    {id: "o", name: "对象存储", sub: "u1/t1/workspace/"},
+    {id: "w", name: "路由", sub: "WorkspaceFilesystem"},
+    {id: "s", name: "PodSandbox · ensure", sub: "server · Redis 路由表"},
+    {id: "l", name: "opensandbox-sbx", sub: "lifecycle server"},
+    {id: "c", name: "控制器", sub: "BatchSandbox → Pod"},
+    {id: "e", name: "execd", sub: "Pod 主容器"},
+    {id: "o", name: "CSI 挂载 · 对象存储", sub: "u1/t1/workspace/"},
   ],
   steps: [
-    {phase: "r1 第 1 批：c1、c2 并行，此时还没有 Pod"},
-    {from: "g", to: "s", text: "aexecute(exec_id=c1)、aexecute(exec_id=c2) 同时"},
-    {from: "s", to: "c", text: "ensure(t1) ×2，同时到达"},
-    {self: "c", text: "同一会话串行：第 2 个排队"},
-    {from: "c", to: "k", text: "签令牌；先写 Secret，再建 Pod"},
-    {self: "k", text: "init 注入 sandboxd → 挂载器（列一遍对象存储）\n→ barrier → 主容器（读 Secret 卷里的令牌）"},
-    {from: "k", to: "c", text: "就绪（demo 0.3 秒，真实约 5 秒）", reply: true},
-    {from: "c", to: "s", text: "地址 + 令牌；第 2 个复用，令牌从 Secret 读回", reply: true},
-    {from: "s", to: "d", text: "POST /v1/execs {exec_id: r1:c1}\nBearer 令牌 + X-Atlas-Sandbox: t1"},
-    {from: "d", to: "s", text: "NDJSON：started → output → exited", reply: true},
+    {phase: "r1 第 1 批：还没有沙箱"},
+    {from: "g", to: "w", text: "c1 write_file notes.txt"},
+    {from: "w", to: "o", text: "路由表没有记录 → 直连对象存储 API"},
 
-    {phase: "r1 第 2–4 批：文件工具写 → 命令读 → 命令写 → 文件工具读"},
-    {from: "g", to: "o", text: "c3、c4 write_file notes.txt、count.py（直连对象存储，不经过沙箱）"},
-    {note: ["b", "o"], text: "挂载器的缓存里还没有这两个文件：\n这时执行会 No such file（实验 1）", cls: "bad"},
-    {from: "g", to: "s", text: "c5 aexecute('python3 count.py …', exec_id=c5)"},
-    {from: "s", to: "d", text: "POST /v1/execs {exec_id: r1:c5}"},
-    {from: "d", to: "b", text: "执行前：forget"},
-    {from: "b", to: "o", text: "vfs/forget：按对象存储刷新"},
-    {self: "d", text: "bash -lc：setsid 自成进程组、stdin=/dev/null、\n环境去掉 SANDBOXD_*、cwd=/workspace"},
-    {from: "d", to: "s", text: "#1 started {pid, boot_id}  #2 output", reply: true},
-    {self: "d", text: "shell 退出 = 命令结束（写了 top.txt）"},
-    {from: "d", to: "b", text: "执行后：轮询 vfs/queue 直到为空"},
-    {from: "b", to: "o", text: "写回 top.txt", cls: "ok"},
-    {from: "d", to: "s", text: "#4 exited {exit_code: 0, flushed: true, output: 头尾截断}", reply: true},
-    {from: "s", to: "g", text: "ToolMessage「the 3 …\n[Command succeeded with exit code 0]」", reply: true},
-    {from: "g", to: "o", text: "c6 read_file top.txt：读得到（实验 2：不等写回就读不到）", cls: "ok"},
+    {phase: "第 2 批：c2、c3 并行 execute → 只建一个沙箱"},
+    {from: "g", to: "s", text: "aexecute(c2)、aexecute(c3) 同时"},
+    {self: "s", text: "会话级锁：c3 排队\nc2 按 metadata 查 → 没有；配额、镜像校验"},
+    {from: "s", to: "l", text: "POST /v1/sandboxes\nmetadata · PVC subPath · env 里的令牌"},
+    {from: "l", to: "c", text: "运行时清单 + 模板 → BatchSandbox CR"},
+    {self: "c", text: "注入 execd；CSI 已挂好 subPath\n（新挂载看到 notes.txt）"},
+    {from: "c", to: "l", text: "Running", reply: true},
+    {from: "l", to: "s", text: "sbx-1", reply: true},
+    {self: "s", text: "令牌存 Redis；解析端点\n写路由表 sbx:route:t1 → sbx-1"},
+    {note: ["s", "l"], text: "c3 拿到锁：端点缓存命中 → 复用 sbx-1"},
+    {from: "s", to: "e", text: "POST /command {background: true}"},
+    {from: "e", to: "s", text: "init {cmd-1}（连接到此结束）", reply: true},
+    {from: "s", to: "e", text: "轮询 GET logs?cursor= · GET status"},
+    {from: "e", to: "s", text: "输出 + 新游标；running=false，exit 0", reply: true},
+
+    {phase: "第 3–5 批：沙箱在跑，文件工具走沙箱"},
+    {from: "g", to: "w", text: "c4 write_file count.py"},
+    {from: "w", to: "e", text: "路由表 → sbx-1：POST /files/upload"},
+    {from: "e", to: "o", text: "close → 写穿", cls: "ok"},
+    {from: "g", to: "s", text: "c5 execute python3 count.py … > top.txt"},
+    {note: ["e", "o"], text: "同一个挂载：count.py 已经在\n（实验 3 直连对象存储：can't open file）", cls: ""},
+    {from: "e", to: "o", text: "top.txt close → 写穿", cls: "ok"},
+    {from: "g", to: "w", text: "c6 read_file top.txt"},
+    {from: "w", to: "e", text: "GET /files/download（同一个挂载）", cls: "ok"},
   ],
 });
 renderSeq(document.getElementById("seq-recover"), {
   laneWidth: 215,
   lanes: [
-    {id: "a", name: "server 实例 A", sub: "PodSandbox"},
-    {id: "b", name: "server 实例 B", sub: "接管者"},
-    {id: "c", name: "cluster", sub: "ensure"},
-    {id: "p", name: "sandboxd", sub: "原来的 Pod · boot X"},
-    {id: "n", name: "sandboxd", sub: "重建的 Pod · boot Y"},
+    {id: "s", name: "PodSandbox", sub: "server 进程内存：命令映射"},
+    {id: "l", name: "ensure · opensandbox-sbx", sub: "按 metadata 查"},
+    {id: "a", name: "execd", sub: "原来的沙箱"},
+    {id: "b", name: "execd", sub: "新建的沙箱"},
   ],
   steps: [
-    {phase: "① 网络抖动（r2:c7）：同一个客户端带游标接上"},
-    {from: "a", to: "p", text: "POST {exec_id: r2:c7}"},
-    {from: "p", to: "a", text: "#1 started  #2 #3 output", reply: true},
-    {note: ["a", "p"], text: "连接断了（RemoteProtocolError）。命令照跑：它属于 sandboxd，不属于这条连接", cls: "bad"},
-    {from: "a", to: "c", text: "退避，重新 ensure（Pod 可能换了地址）"},
-    {from: "a", to: "p", text: "POST {exec_id: r2:c7, after: 3, expect_boot_id: X}"},
-    {self: "p", text: "已存在 → 接上，不重跑", cls: "ok"},
-    {from: "p", to: "a", text: "#4 … exited（不丢不重；ran.log 5 行）", reply: true, cls: "ok"},
+    {phase: "① r2:c9 轮询中连接被重置：同一个命令 id、同一个游标"},
+    {from: "s", to: "a", text: "GET /command/cmd-5/logs?cursor=10"},
+    {note: ["s", "a"], text: "连接被重置（ReadError）。命令照跑：后台命令不属于任何连接", cls: "bad"},
+    {from: "s", to: "l", text: "重新 ensure（fresh）：sbx-1 仍 Running → 复用"},
+    {from: "s", to: "a", text: "GET logs?cursor=10（还是 cmd-5）"},
+    {from: "a", to: "s", text: "case 3…5 + exit 0（ran.log 5 行，不重跑）", reply: true, cls: "ok"},
 
-    {phase: "② Pod 在执行中消失（r5:c15）：409，不重跑"},
-    {from: "a", to: "p", text: "POST {exec_id: r5:c15}"},
-    {from: "p", to: "a", text: "#1 started（boot X）  #2–#4 output", reply: true},
-    {note: ["p", "n"], text: "节点故障：Pod 被删，里面的进程全没了。\n连接断开，不会有 exited", cls: "bad"},
-    {from: "a", to: "c", text: "退避，重新 ensure"},
-    {from: "c", to: "n", text: "没有 Pod → 建新的（boot Y）"},
-    {from: "a", to: "n", text: "POST {exec_id: r5:c15, after: 4, expect_boot_id: X}"},
-    {self: "n", text: "boot 对不上，也不认识这条命令\n→ 409，不重跑（实验 5：不带就从头再跑）", cls: "bad"},
-    {from: "n", to: "a", text: "409", reply: true, cls: "bad"},
-    {self: "a", text: "SandboxUnavailable → 工具错误回给模型\n模型重跑 → c16，结果前提示「环境已重建」"},
-
-    {phase: "③ server 崩溃（r6:c17）：另一个实例重放同一个 tool_call"},
-    {from: "a", to: "n", text: "POST {exec_id: r6:c17}"},
-    {from: "n", to: "a", text: "#1 started  #2 #3 output", reply: true},
-    {note: ["a", "b"], text: "实例 A 崩溃：连接被操作系统关掉，不发 kill", cls: "bad"},
-    {self: "n", text: "事件流断开 → 命令照跑"},
-    {self: "b", text: "接管 r6：读历史、重放这一轮\n→ 还是 tool_call c17（前提见 §7.6）"},
-    {from: "b", to: "n", text: "POST {exec_id: r6:c17, after: 0}"},
-    {self: "n", text: "已存在 → 接上，从 #1 回放", cls: "ok"},
-    {from: "n", to: "b", text: "#1 … exited（只跑了一次：pack.log 6 行）", reply: true, cls: "ok"},
+    {phase: "② r5:c17 执行中 Pod 消失：新沙箱不认识这个命令"},
+    {from: "s", to: "a", text: "轮询 cmd-2"},
+    {note: ["a", "b"], text: "节点故障：Pod 没了 → BatchSandbox Failed\n（restartPolicy: Never，不原地重启）", cls: "bad"},
+    {from: "s", to: "l", text: "ConnectError → 重新 ensure"},
+    {self: "l", text: "sbx-2 Failed → 删；配额 → 建 sbx-3\n路由表 → sbx-3"},
+    {from: "s", to: "b", text: "GET /command/status/cmd-2"},
+    {from: "b", to: "s", text: "404：命令记录只在原来那个 execd 的内存里", reply: true, cls: "bad"},
+    {self: "s", text: "SandboxUnavailable → 工具错误回给模型\n模型重跑 c18 → 结果前「环境已重建」"},
+  ],
+});
+renderSeq(document.getElementById("seq-acp"), {
+  laneWidth: 185,
+  lanes: [
+    {id: "h", name: "HostRuntime", sub: "OpenSandboxPods"},
+    {id: "l", name: "opensandbox-acp", sub: "lifecycle server"},
+    {id: "c", name: "控制器", sub: "ACP 模板"},
+    {id: "b", name: "bridge + CLI", sub: "ACP Pod 主容器"},
+    {id: "x", name: "egress", sub: "Credential Vault"},
+    {id: "gi", name: "Gitee", sub: "代码托管"},
+  ],
+  steps: [
+    {self: "h", text: "git 档案授权：teamflow-gitee\n只给 source_app=teamflow 的会话"},
+    {from: "h", to: "l", text: "POST /v1/sandboxes：ACP 镜像 · env 里的 bridge 令牌\n· networkPolicy + credentialProxy · 三个 subPath"},
+    {from: "l", to: "c", text: "合并 ACP 模板：模型 key Secret → /run/secrets/atlas"},
+    {from: "c", to: "l", text: "Running（主容器 + egress sidecar）", reply: true},
+    {from: "h", to: "l", text: "POST …/credential-vault {gitee.com → 档案凭据}"},
+    {from: "l", to: "x", text: "凭据只进 egress 的内存"},
+    {from: "h", to: "b", text: "GET /readyz；POST /prompt\nBearer 令牌 + X-Atlas-Session"},
+    {self: "b", text: "bridge 读模型 key 文件 → adapter 的环境\nCLI 写 RELEASE.md（close → 写穿）"},
+    {from: "b", to: "x", text: "git push（URL 里没有凭据）"},
+    {from: "x", to: "gi", text: "命中 gitee.com 绑定 → 注入 Authorization"},
+    {from: "gi", to: "x", text: "200（实验 6 不写 Vault：401）", reply: true, cls: "ok"},
+    {from: "b", to: "h", text: "RELEASE.md 已写好并推送", reply: true},
   ],
 });
 </script>

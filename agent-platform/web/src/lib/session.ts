@@ -11,7 +11,6 @@ import { useQuery } from "@tanstack/react-query";
 import { http } from "@/lib/http";
 
 export interface Me {
-  auth_mode: "dev" | "uc";
   id: string;
   name: string;
   account?: string | null;

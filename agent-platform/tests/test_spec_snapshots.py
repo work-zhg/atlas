@@ -16,10 +16,10 @@ from __future__ import annotations
 
 from atlas_agent.schemas.agent import (
     AgentSpecIn,
-    SkillRefIn,
     CompactionSpecIn,
     LimitSpecIn,
     ModelSpecIn,
+    SkillRefIn,
     SubAgentSpecIn,
 )
 
@@ -98,3 +98,19 @@ def test_v1_snapshot_still_loads() -> None:
         spec = AgentSpecIn.model_validate(raw).to_engine(slug="legacy", name="旧快照")
         spec.validate()
         assert spec.model.model.startswith("claude-")
+
+
+def test_snapshots_without_approval_modes_default_to_auto_with_all_modes() -> None:
+    """审批模式是新字段：老快照按「默认自动、允许全部」处理（设计 D8）。
+
+    ★ 老快照里的 limits.require_approval_for（已删除的作者必审列表）读取时忽略，
+      带着它也能照常加载、校验 —— 再保存时自然丢掉。
+    """
+    raw = {**_V1_BUILTIN_SPEC, "tool_names": ["bash", "filesystem"]}
+    raw["limits"] = {**_V1_BUILTIN_SPEC["limits"], "require_approval_for": ["execute"]}
+    parsed = AgentSpecIn.model_validate(raw)
+    spec = parsed.to_engine(slug="legacy", name="旧快照")
+    spec.validate()
+    assert spec.approval.default_mode == "auto"
+    assert spec.approval.allowed_modes == ("plan", "manual", "auto")
+    assert "require_approval_for" not in parsed.model_dump()["limits"]

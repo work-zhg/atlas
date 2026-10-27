@@ -1,0 +1,37 @@
+# ACP Pod 的 BatchSandbox 模板（doc/sandbox-opensandbox-design.html §7），opensandbox-acp 用。合并规则见 sbx-template.yaml。
+#
+# ★ UID 1000 只设在主容器上，不设在 pod 级：有 git 档案的会话会带 egress sidecar（Credential Vault），
+#   它要以 root 跑 nft（只加了 NET_ADMIN）。pod 级 runAsUser 会让 sidecar 也变成 1000，nft 配不上。
+# ★ 带 networkPolicy 时运行时会给主容器设 capabilities.drop: [NET_ADMIN]，列表以运行时为准，
+#   这里的 drop: [ALL] 会被它替换；主容器非 root、禁止提权，默认能力本来不生效。
+# ★ 模型 key：Secret atlas-acp-model 以文件挂在 /run/secrets/atlas，bridge 读出后交给 adapter
+#   （ATLAS_BRIDGE_AGENT_ENV_FILES）—— key 不进 Pod spec / CR。
+metadata: {}
+spec:
+  replicas: 1
+  template:
+    spec:
+      restartPolicy: Never
+      # bridge 的三步终止：拒新请求 → 上报中断 → 刷 span
+      terminationGracePeriodSeconds: 30
+      enableServiceLinks: false
+      securityContext:
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: sandbox
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            - {name: repos, mountPath: /repos}
+            - {name: model, mountPath: /run/secrets/atlas, readOnly: true}
+      volumes:
+        - {name: tmp, emptyDir: {sizeLimit: 2Gi}}
+        - {name: repos, emptyDir: {sizeLimit: 5Gi}}
+        - name: model
+          secret: {secretName: atlas-acp-model, defaultMode: 0444, optional: true}

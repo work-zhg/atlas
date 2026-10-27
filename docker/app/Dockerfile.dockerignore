@@ -12,12 +12,16 @@
 !agent-platform/libs/jsonrpc/
 !agent-platform/libs/host/
 !agent-platform/libs/engine/
-!infra-platform/services/cluster/
+!infra-platform/libs/redislock/
 !agent-platform/services/config/
 !agent-platform/services/knowledge/
+!agent-platform/services/memory/
+!agent-platform/services/mcpgateway/
 !agent-platform/services/agent/
 !usercenter/services/usercenter/
 !teamflow/services/teamflow/
+# 由 uv.lock 导出的依赖版本约束（构建前生成，见 Dockerfile）
+!docker/app/constraints.txt
 **/__pycache__/
 **/*.pyc
 .venv/

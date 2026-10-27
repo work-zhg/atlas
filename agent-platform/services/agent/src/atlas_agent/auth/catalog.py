@@ -4,7 +4,7 @@
 角色只是操作码的打包（用户中心里可以调整）。
 
 ★ 角色归角色、数据权限归数据权限：操作码只表达「能不能做某类事」，不表达「对哪些数据」。
-  「管理全部智能体 / MCP 服务」是数据权限 —— 在用户中心给人授该数据编码的全部数据授权
+  「管理全部智能体 / 知识库」是数据权限 —— 在用户中心给人授该数据编码的全部数据授权
   （如「全部智能体 · Owner」），不再有 agent:manage_all、mcp:manage_all 这类操作码。
 """
 
@@ -15,7 +15,7 @@ from typing import Any
 APP_NAME = "Atlas"
 #: 应用编码：内网调用用户中心开放接口时 X-Caller-App 写它（内网身份传递 §3）
 APP_CODE = "atlas"
-APP_DESCRIPTION = "AI Agent 平台：智能体、对话、技能、知识库与 MCP"
+APP_DESCRIPTION = "AI Agent 平台：智能体、对话、技能、知识库"
 APP_ICON = "🤖"
 
 #: (模块, 编码, 名称)
@@ -24,7 +24,6 @@ OPERATIONS: list[tuple[str, str, str]] = [
     ("智能体", "agent:create", "新建智能体"),
     ("技能", "skill:upload", "上传技能"),
     ("技能", "skill:review", "审核技能"),
-    ("MCP", "mcp:manage", "维护 MCP 服务"),
     ("知识库", "kb:create", "新建知识库"),
     ("知识库", "kb:review", "审核入库文档"),
     ("系统", "model:manage", "模型目录"),
@@ -40,7 +39,6 @@ MENUS: list[dict[str, Any]] = [
     {"type": "menu", "code": "memories", "name": "记忆", "icon": "🧠", "path": "/memories"},
     {"type": "menu", "code": "skills", "name": "技能", "icon": "🧩", "path": "/skills"},
     {"type": "menu", "code": "knowledge", "name": "知识库", "icon": "📚", "path": "/knowledge"},
-    {"type": "menu", "code": "mcp", "name": "MCP", "icon": "🔌", "path": "/mcp"},
 ]
 
 _MEMBER_OPS = ["chat:use"]
@@ -65,7 +63,7 @@ ROLES: list[dict[str, Any]] = [
         "code": "ATLAS_ADMIN",
         "name": "管理员",
         "description": (
-            "平台负责人：技能审核、MCP、模型目录、审计"
+            "平台负责人：技能审核、模型目录、审计"
             "（管理全部智能体 / 知识库另授数据权限「全部智能体 / 全部知识库 · Owner」）"
         ),
         "operations": sorted(ALL_OPERATIONS),
@@ -75,7 +73,6 @@ ROLES: list[dict[str, Any]] = [
             "memories",
             "skills",
             "knowledge",
-            "mcp",
         ],
     },
 ]
@@ -86,11 +83,6 @@ DATA_TYPES: list[dict[str, Any]] = [
         "code": "AtlasAgent",
         "name": "智能体",
         "description": "一个智能体一条：使用（READ）/ 编辑（WRITE）/ 所有者（OWNER）",
-    },
-    {
-        "code": "AtlasMcpServer",
-        "name": "MCP 服务",
-        "description": "平台凭据的 MCP 服务：使用（READ）/ 所有者（OWNER）",
     },
     {
         "code": "AtlasKnowledgeBase",
@@ -105,8 +97,18 @@ DATA_TYPES: list[dict[str, Any]] = [
 #: 角色授权（含岗位）换成该编码的「全部数据 · Owner」，迁移前后能管的库不变
 RETIRED_ADMIN_OPS: dict[str, str] = {"kb:manage_all": "AtlasKnowledgeBase"}
 
+#: 交给 MCP 网关（doc/mcp-design.html 第二版 §5.3）：MCP 的管理、「谁能用哪个 MCP 服务」都归
+#: MCP 网关这个应用（用户中心里的独立应用）。register-uc 删除下面两项之前，把授权搬过去
+#: （auth/register.py::_retire_mcp）；网关还没登记到用户中心时先保留，不删
+MCP_GATEWAY_APP = "mcp-gateway"
+#: Atlas 名下的「维护 MCP 服务」→ 网关的角色 MCP_ADMIN +「全部 MCP 服务 · 所有者」
+RETIRED_MCP_OPERATION = "mcp:manage"
+#: Atlas 名下的数据编码「MCP 服务」→ 网关的数据编码 McpServer（数据标识都是服务名）
+RETIRED_MCP_DATA = "AtlasMcpServer"
+MCP_GATEWAY_ADMIN_ROLE = "MCP_ADMIN"
+MCP_GATEWAY_DATA = "McpServer"
+
 #: 登录时向用户中心取「全部数据授权」级别的数据编码
 DATA_TYPE_CODES: tuple[str, ...] = tuple(d["code"] for d in DATA_TYPES)
 AGENT_DATA = "AtlasAgent"
-MCP_DATA = "AtlasMcpServer"
 KNOWLEDGE_DATA = "AtlasKnowledgeBase"

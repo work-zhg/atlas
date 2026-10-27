@@ -112,10 +112,16 @@ class TurnModel(BaseChatModel):
 
     scripts: list[list[AIMessageChunk]] = Field(default_factory=list)
     _calls: int = PrivateAttr(default=0)
+    #: 每次调用收到的消息（验证请求里追加了什么，比如规划提醒）
+    _seen: list[list[BaseMessage]] = PrivateAttr(default_factory=list)
 
     @property
     def _llm_type(self) -> str:
         return "turn-fake"
+
+    @property
+    def seen(self) -> list[list[BaseMessage]]:
+        return self._seen
 
     def bind_tools(self, tools: Sequence[Any], **kwargs: Any) -> Any:
         return self
@@ -136,6 +142,7 @@ class TurnModel(BaseChatModel):
         run_manager: AsyncCallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[ChatGenerationChunk]:
+        self._seen.append(list(messages))
         for chunk in self._script():
             yield ChatGenerationChunk(message=chunk)
 
@@ -146,6 +153,7 @@ class TurnModel(BaseChatModel):
         run_manager: CallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> ChatResult:
+        self._seen.append(list(messages))
         text = "".join(c.content if isinstance(c.content, str) else "" for c in self._script())
         return ChatResult(generations=[ChatGeneration(message=AIMessage(content=text))])
 
@@ -213,11 +221,16 @@ class Spawner:
         self.reply = reply
         self.error = error
         self.calls: list[tuple[str, str, bool]] = []
+        #: 每次派活时父 run 的审批模式（与 calls 一一对应）
+        self.modes: list[str | None] = []
 
-    async def spawn(self, name: str, task: str, *, fresh: bool = False) -> str:
+    async def spawn(
+        self, name: str, task: str, *, fresh: bool = False, approval_mode: str | None = None
+    ) -> str:
         if self.error is not None:
             raise self.error
         self.calls.append((name, task, fresh))
+        self.modes.append(approval_mode)
         return f"sub-{len(self.calls)}"
 
     def result(self, sub_run_id: str) -> str:

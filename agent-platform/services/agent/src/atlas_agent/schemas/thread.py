@@ -52,6 +52,16 @@ class ThreadRunState(BaseModel):
     needs_approval: bool = False
 
 
+class ThreadApprovalOut(BaseModel):
+    """审批模式（doc/native-approval-mode-design.html）：输入框旁的选择器据此渲染。"""
+
+    #: 下一条消息将用的模式：会话记住的选择（仍在允许范围里），否则智能体默认
+    mode: str
+    default_mode: str
+    #: 按严格程度从高到低：plan / manual / auto 的子集
+    allowed_modes: list[str]
+
+
 class ThreadOut(BaseModel):
     id: UUID
     agent_id: UUID
@@ -68,6 +78,10 @@ class ThreadOut(BaseModel):
     #: git 凭据档案名（不含凭据）；子会话继承父会话
     git_profile: str | None = None
     memory: str = "on"
+    #: 会话记住的审批模式选择（NULL = 没选过，用智能体默认）
+    approval_mode: str | None = None
+    #: 审批模式的可选范围与当前值。只在单条详情上计算；acp 智能体为空（权限由 CLI 管）
+    approval: ThreadApprovalOut | None = None
     #: 建会话的业务应用（如 teamflow）；人直接建的为空。非空时从 Atlas 侧只读（内网身份传递 §7.3）
     source_app: str | None = None
     #: 本会话下的子会话数。★ 删除确认要显示它：删父会话会**级联删掉**所有

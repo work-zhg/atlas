@@ -45,6 +45,8 @@ export const EventType = {
   FileDeleted: "file.deleted",
   UsageUpdated: "usage.updated",
   ApprovalRequired: "approval.required",
+  /** 用户回答了 ask_user_question（doc/ask-user-question-design.html）。问题卡片据此显示答案 */
+  QuestionAnswered: "question.answered",
   /** acp：这一轮 CLI 实际生效的权限模式（可能被降级，必须让用户看见） */
   AgentMode: "agent.mode",
   ContextCompacted: "context.compacted",
@@ -59,6 +61,8 @@ export const EventType = {
   SkillSkipped: "skill.skipped",
   /** MCP 工具定义与保存时不一致，或尚未复核 */
   McpToolDrift: "mcp.tool_drift",
+  /** 经 MCP 网关时，这一轮的权限主体用不了某个服务（没权限 / 没 Key / 网关不可用），本轮跳过 */
+  McpToolSkipped: "mcp.tool_skipped",
 } as const;
 
 export type EventTypeValue = (typeof EventType)[keyof typeof EventType];
@@ -177,6 +181,24 @@ export interface ToolCompletedData {
   result_preview?: string;
   result?: unknown;
   status?: string;
+  /** 工具给界面的结构化结果（不给模型看），如保存记忆后的条目编号与修订 id */
+  artifact?: ToolArtifact;
+}
+
+/** 记忆工具（save_memory / forget_memory）的结果（doc/memory-design.html §4.7） */
+export interface MemoryArtifact {
+  action: "saved" | "forgotten";
+  scope: string;
+  topic?: string;
+  number?: number;
+  content?: string;
+  removed: number[];
+  /** 这次写入的修订 id：撤销用 */
+  revision?: string | null;
+}
+
+export interface ToolArtifact {
+  memory?: MemoryArtifact;
 }
 
 export interface ToolFailedData {
@@ -200,7 +222,18 @@ export interface AgentModeData {
   /** null = CLI 不支持权限模式 */
   effective: PermissionMode | null;
   degraded: boolean;
+  /** 为什么变：plan_approved = 计划获批、换成用户选的执行模式（native）。缺省 = run 开始时协商的结果（acp） */
+  source?: string;
 }
+
+/** native 智能体的审批模式（doc/native-approval-mode-design.html） */
+export type ApprovalMode = "plan" | "manual" | "auto";
+
+export const APPROVAL_MODE_LABEL: Record<ApprovalMode, string> = {
+  plan: "规划",
+  manual: "手动",
+  auto: "自动",
+};
 
 export interface FileWrittenData {
   path: string;
@@ -224,6 +257,9 @@ export interface UsageUpdatedData {
 export interface SubagentStartedData {
   subagent_run_id: string;
   name: string;
+  /** 短标题（task 调用的 description）；旧事件没有 */
+  title?: string;
+  /** 任务书：SubAgent 收到的全部输入 */
   task: string;
 }
 
@@ -287,12 +323,63 @@ export interface ApprovalRequiredData {
   args: unknown;
   reason: string;
   /**
+   * tool = 工具调用的确认；plan = 规划模式提交的计划（args.plan）；
+   * question = 智能体向用户提的问题（args.questions，见 AskUserQuestionArgs）。缺省 = tool
+   */
+  approval_kind?: "tool" | "plan" | "question";
+  /** 对应的工具调用。问题卡片据此把那一行工具调用收起来（卡片就是它的完整呈现） */
+  tool_call_id?: string;
+  /** 为什么问：manual_mode / auto_uncertain / plan_mode。acp 没有这一项 */
+  source?: string;
+  /** 计划获批时可选的执行模式（作者允许的范围），只在 approval_kind = plan 时有 */
+  execution_modes?: ApprovalMode[];
+  /** 拒绝原因 / 修改意见会交给模型。acp 的权限应答带不了原因，没有这一项 */
+  accepts_feedback?: boolean;
+  /**
    * 决策要提交到哪个 run。**委派场景下不等于当前流的 run** ——
    * 子智能体的审批发生在子 run 上，由父 run 的流代为转发（server 的
    * services/subagent.py::_forward_approvals），提交时必须回到子 run 的
    * 端点。缺省 = 当前流的 run（native 的普通审批就是这种）。
    */
   run_id?: string;
+}
+
+/** ask_user_question 的参数（kernel/middleware/ask_user.py）。推荐项是选项的属性，不是文字标记 */
+export interface QuestionOption {
+  label: string;
+  description: string;
+  recommended?: boolean;
+}
+
+export interface QuestionSpec {
+  question: string;
+  /** ≤ 12 字的短标签 */
+  header: string;
+  options: QuestionOption[];
+  multi_select?: boolean;
+}
+
+export interface AskUserQuestionArgs {
+  questions: QuestionSpec[];
+}
+
+/** 一题的答案从哪来：用户选 / 用户没逐题作答、按推荐 / 跳过（交给智能体定） */
+export type AnswerSource = "user" | "recommended" | "skipped";
+
+export interface QuestionAnswerData {
+  header: string;
+  question: string;
+  selected: string[];
+  other: string | null;
+  by: AnswerSource;
+}
+
+export interface QuestionAnsweredData {
+  approval_id: string;
+  tool_call_id: string;
+  /** 与问题一一对应；用户没按选项回答（rejected）时为空，原话在 feedback */
+  answers: QuestionAnswerData[];
+  feedback?: string | null;
 }
 
 // ---------- 事件信封 ----------
@@ -344,6 +431,18 @@ export interface McpToolDriftData {
   action: "used" | "blocked" | "pending_review" | "rejected";
 }
 
+export interface McpToolSkippedData {
+  server: string;
+  /** spec 标识 mcp:server:tool；ACP 按服务下发时是 mcp:server:* */
+  tools: string[];
+  /** forbidden = 没被授权；no_key = 没有 API Key；unavailable = MCP 网关暂时不可用 */
+  reason: "forbidden" | "no_key" | "unavailable";
+  /** 权限主体（用户中心 uid） */
+  subject: string;
+  /** 给人看的说明（后端写好） */
+  message: string;
+}
+
 export type TraceEvent =
   | Envelope<typeof EventType.RunStarted, RunStartedData>
   | Envelope<typeof EventType.RunFinished, RunFinishedData>
@@ -366,6 +465,7 @@ export type TraceEvent =
   | Envelope<typeof EventType.FileDeleted, FileDeletedData>
   | Envelope<typeof EventType.UsageUpdated, UsageUpdatedData>
   | Envelope<typeof EventType.ApprovalRequired, ApprovalRequiredData>
+  | Envelope<typeof EventType.QuestionAnswered, QuestionAnsweredData>
   | Envelope<typeof EventType.AgentMode, AgentModeData>
   | Envelope<typeof EventType.ContextCompacted, ContextCompactedData>
   | Envelope<typeof EventType.ContextCleared, ContextClearedData>
@@ -373,7 +473,8 @@ export type TraceEvent =
   | Envelope<typeof EventType.TitleGenerated, TitleGeneratedData>
   | Envelope<typeof EventType.SkillLoaded, SkillLoadedData>
   | Envelope<typeof EventType.SkillSkipped, SkillSkippedData>
-  | Envelope<typeof EventType.McpToolDrift, McpToolDriftData>;
+  | Envelope<typeof EventType.McpToolDrift, McpToolDriftData>
+  | Envelope<typeof EventType.McpToolSkipped, McpToolSkippedData>;
 
 /** 后端将来新增的事件类型（规则 3）—— 解析后但本前端还不认识的，走这里。 */
 export type UnknownTraceEvent = Envelope<string, Record<string, unknown>>;

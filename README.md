@@ -8,7 +8,7 @@
 这一轮的全过程，底部是本轮 token 消耗。运行中可随时停止 —— 取消是协作式的，不会切断
 进行中的工具调用。
 
-> 📊 **[交互式架构图](./doc/atlas-overview.html)** —— 下载后用浏览器打开，支持明暗主题切换，
+> 📊 **[交互式架构图](agent-platform/doc/atlas-overview.html)** —— 下载后用浏览器打开，支持明暗主题切换，
 > 可单独点亮「请求主链路」「事件回传通道」「会话 Pod 执行路径」三条链路。
 
 ---
@@ -30,7 +30,7 @@ flowchart LR
 
   engine["engine · atlas_engine<br/>kernel（图+中间件）· contracts"]
   bridge["bridge<br/>Pod 内 1 号进程"]
-  cluster["cluster 服务<br/>唯一持 K8s 写权限"]
+  osb["OpenSandbox<br/>lifecycle server + 控制器"]
   gw["Higress AI 网关<br/>模型调用 · MCP 代理"]
   oss[("对象存储 · S3<br/>会话工作区")]
   pg[("PostgreSQL 16")]
@@ -39,8 +39,8 @@ flowchart LR
   web -->|"HTTP · SSE"| api
   runtime -->|"native：装配 kernel 图"| engine
   runtime -->|"ACP over WS"| bridge
-  runtime -->|"ensure Pod（幂等）"| cluster
-  cluster -->|"建 Pod · 配对 Secret"| bridge
+  runtime -->|"ensure Pod（幂等）"| osb
+  osb -->|"建 Pod"| bridge
   engine -->|"模型调用（stream）"| gw
   engine -.->|"FilesystemProtocol"| oss
   bridge -->|"挂载 /workspace"| oss
@@ -100,13 +100,13 @@ import 就红；`server` 的纯计算层同样有 contract 拦着，「run 一�
 
 ### 隔离执行 · 会话 Pod
 
-每个会话对应 `atlas-sessions` 命名空间里的一个 Pod，闲置回收。Pod 由 `cluster` 服务
-幂等供给 —— **它是全仓唯一持有 K8s 写权限的组件**，`server` 只认它的 API 契约、
-不碰内部实现，这样「Pod 生命周期归谁」只有一个答案。
+ACP 会话对应 `atlas-acp` 命名空间里的一个 Pod，原生智能体的 Shell 沙箱在 `atlas-sbx`。
+两种 Pod 都由开源的 [OpenSandbox](https://github.com/opensandbox-group/OpenSandbox) 创建
+（`agent-platform/doc/sandbox-opensandbox-design.html`）：复用、配额、git 档案授权、回收这些按会话的判断在
+`server`，**Atlas 的服务都不持有 K8s 权限**。
 
-工作区是挂进 Pod 的 `/workspace`，背后是对象存储；模型凭据经 Secret 注入，随 Pod 生灭。
-`server` 与 `cluster` 同在 `atlas-system`，会话 Pod 起在 `atlas-sessions` ——
-两个 namespace 是为了让「唯一写权限」在 RBAC 上真正成立，而不只是约定。
+工作区是挂进 Pod 的 `/workspace`，背后是对象存储（整桶的写穿式 S3 CSI 卷，按会话 subPath 挂载）；
+对象存储凭据只在 CSI 驱动里，git 凭据经 Credential Vault 注入，Pod 里都看不到。
 
 ### 子智能体委派
 
@@ -156,10 +156,11 @@ flowchart LR
 
   subgraph sys["K8s · atlas-system"]
     server["atlas-server<br/>FastAPI :8000"]
-    clu["atlas-cluster<br/>FastAPI :8010"]
   end
 
-  subgraph sess["K8s · atlas-sessions（每会话一个，闲置回收）"]
+  osb["K8s · opensandbox-system<br/>lifecycle server ×2 + 控制器"]
+
+  subgraph sess["K8s · atlas-acp（每会话一个）"]
     bridge["bridge<br/>WS 服务端"]
     cli["CLI adapter<br/>+ 真 CLI（黑盒）"]
   end
@@ -180,8 +181,8 @@ flowchart LR
   gw["Higress AI 网关"]
 
   browser -->|"HTTP · SSE"| server
-  server -->|"ensure / delete / reap"| clu
-  clu -->|"建 Pod · 配对 Secret"| bridge
+  server -->|"ensure / delete / reap"| osb
+  osb -->|"建 Pod"| bridge
   server -->|"ACP over WS（per-Pod token）"| bridge
   bridge -->|"ACP over stdio"| cli
   cli -->|"模型调用"| gw
@@ -192,7 +193,7 @@ flowchart LR
   bridge -->|"挂载 /workspace"| minio
 ```
 
-**ACP 是两段传输**：`server ↔ bridge` 走 WebSocket（不经过 `cluster`），
+**ACP 是两段传输**：`server ↔ bridge` 走 WebSocket（不经过 OpenSandbox），
 `bridge ↔ CLI adapter` 走 stdio 上的行分隔 JSON。两端共用同一份帧模型（`atlas_acp`），
 理解漂移会在类型层当场暴露，而不是到线上才发现。
 
@@ -215,15 +216,12 @@ agent-platform/            Agent 平台（Atlas）
 │   ├── host/              server ⇄ bridge 上游协议（atlas_host）
 │   ├── acp/               ACP 协议（atlas_acp）
 │   └── jsonrpc/           JSON-RPC 2.0（atlas_jsonrpc）
-├── pod/                   跑在会话 / 沙箱 Pod 里的进程
-│   ├── bridge/            ACP bridge（atlas_bridge）
-│   └── sandboxd/          原生沙箱守护进程（atlas_sandboxd）
+├── pod/                   跑在会话 Pod 里的进程
+│   └── bridge/            ACP bridge（atlas_bridge）
 ├── web/                   控制台前端
 ├── bench/                 评测（RAG + Agent）
-└── tests/                 平台的测试（agent / engine / cluster / bridge）
+└── tests/                 平台的测试（agent / engine / bridge）
 infra-platform/            基础设施平台（跨产品共用）
-├── services/
-│   └── cluster/           会话 / 沙箱 Pod 生命周期（atlas_cluster）
 └── libs/
     └── redislock/         Redis 分布式锁（atlas_redislock）
 usercenter/                用户中心
@@ -289,25 +287,24 @@ make web-gen      # 从运行中的后端重新生成 API 类型（结果需提�
 > DATABASE_URL='postgresql+asyncpg://atlas:atlas@localhost:5433/atlas_test' uv run pytest
 > ```
 
-### 本机跑一个最小 K8s 集群
+### 本机的 OpenSandbox
 
-`cluster` 服务的 `KubernetesBackend` 有一组**对着真集群**的测试
-（`agent-platform/tests/test_cluster_k8s.py`），没有集群时整体跳过。本机验证：
+会话 Pod 由 OpenSandbox 创建。本机（Docker Desktop K8s）装 CSI 驱动、控制器与两个 lifecycle server：
+`deploy/local/opensandbox.sh`；对真 OpenSandbox 的实测：`deploy/local/opensandbox_probe.sh`。
+单测用进程内的假 OpenSandbox（`agent-platform/tests/opensandbox_fake.py`），不需要集群。
+
+### 部署到服务器
+
+单节点 K8s（默认 192.168.0.112），全套一起：依赖服务（PG / Redis / MinIO / Qdrant / OTel + Jaeger / Langfuse /
+Higress）放在 `atlas-infra`，只开 ClusterIP；对外只有 traefik 上的 `atlas.<IP>.nip.io` 与 `langfuse.<IP>.nip.io`。
 
 ```bash
-curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="server \
-    --disable=traefik --disable=servicelb --disable=metrics-server \
-    --disable=local-storage --write-kubeconfig-mode=644" sh -
-pip install kubernetes-asyncio          # cluster 的可选依赖
-pytest agent-platform/tests/test_cluster_k8s.py -q     # 自动发现 /etc/rancher/k3s/k3s.yaml
+deploy/server/images.sh            # 自建镜像构建 amd64 并导入节点；third = 第三方镜像
+deploy/server/deploy.sh            # 依赖服务 → OpenSandbox → server 迁移 → 后端 → 前端 → Ingress → MCP → 首个管理员
+deploy/server/register.sh          # 首次：admin 改过密码后，把 Atlas、TeamFlow 登记到用户中心
 ```
 
-约 1.5GB 内存即可（k3s 裁掉了 traefik / servicelb / metrics-server）。
-卸载：`/usr/local/bin/k3s-uninstall.sh`。
-
-**为什么这组测试不可省**：内存后端覆盖主体逻辑（模板、配额、幂等、孤儿判定），
-但它有一处刻意不对齐 —— delete 立即生效，而 K8s 是异步的优雅终止。
-第一次对着真集群冒烟就抓到三个被它掩盖的 bug。
+应用清单与本机共用 `deploy/local/*.yaml`，差别只在依赖服务的地址（`apply.sh` 的 `render`）。
 
 ---
 
@@ -322,7 +319,7 @@ pytest agent-platform/tests/test_cluster_k8s.py -q     # 自动发现 /etc/ranch
 | 子智能体委派（持有会话） | ✅ 可用 | 深度封顶 1，串行锁生效 |
 | 人工确认（HITL） | ✅ 可用 | schema 层强制，API 直调同样拦 |
 | 上下文压缩 | ✅ 可用 | |
-| ACP 执行形态（`bridge` / `cluster`） | ✅ 可用 | 含对真 k3s 集群的测试 |
+| ACP 执行形态（`bridge` / OpenSandbox） | ✅ 可用 | 会话 Pod 由 OpenSandbox 创建；集群内实测见 `deploy/local/opensandbox_probe.sh` |
 | 跨会话记忆（Mem0 + Qdrant） | ✅ 可用 | 默认关，见 `.env.example` |
 | 可观测性（OTel / Jaeger / Langfuse） | ✅ 可用 | 默认关 |
 | 技能投送 · MCP 接入 | ✅ 可用 | MCP 经 Higress 收口（本机：`docker compose --profile higress up -d higress` + `deploy/local/higress/setup.py`）；网页搜索即 Higress 上的 serpapi MCP，不再是内置工具 |
@@ -334,9 +331,9 @@ pytest agent-platform/tests/test_cluster_k8s.py -q     # 自动发现 /etc/ranch
 
 ## 文档
 
-设计文档在 [`doc/`](./doc/README.md)，浏览器直接打开 HTML 即可，不需要起服务。
+设计文档在 [`agent-platform/doc/`](agent-platform/doc/README.md)，浏览器直接打开 HTML 即可，不需要起服务。
 顶层一个系统一页，讲清楚它解决什么问题、边界在哪、哪些做法被否决过以及为什么；
-[`doc/detail/`](./doc/detail/index.html) 是几处需要展开推导的深水区。
+[`agent-platform/doc/detail/`](agent-platform/doc/detail/index.html) 是几处需要展开推导的深水区。
 
 **这些文档会被修正** —— 设计先写、实现后跑，跑通之后发现设计错了的地方会回来改文档，
 并且写明原来错在哪。

@@ -5,6 +5,7 @@ import { Popover } from "antd";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+import { useGwMe } from "@/api/mcp-gateway";
 import { authHeaders } from "@/lib/http";
 import { can, useMe } from "@/lib/session";
 
@@ -19,6 +20,11 @@ interface NavItem {
   match: string;
   /** 有其中任一操作码才显示（权限设计 §6.2；只是体验，权限在服务端） */
   ops: string[];
+  /**
+   * 由 MCP 网关决定显不显示（MCP 网关是用户中心里的独立应用，操作码不在 Atlas 名下）：
+   * MCP 管理员，或某个 MCP 服务的所有者
+   */
+  mcpGateway?: boolean;
 }
 
 const NAV: NavItem[] = [
@@ -38,7 +44,7 @@ const NAV: NavItem[] = [
     match: "/knowledge",
     ops: ["kb:create", "kb:review", "agent:create"],
   },
-  { href: "/mcp", icon: "plug", label: "MCP", match: "/mcp", ops: ["mcp:manage"] },
+  { href: "/mcp", icon: "plug", label: "MCP", match: "/mcp", ops: [], mcpGateway: true },
   { href: "/memories", icon: "brain", label: "记忆", match: "/memories", ops: ["chat:use"] },
   {
     href: "/settings/instructions",
@@ -53,6 +59,8 @@ export function Rail() {
   const pathname = usePathname();
   const qc = useQueryClient();
   const { data: me } = useMe();
+  const { data: gwMe } = useGwMe();
+  const mcpVisible = !!gwMe && (gwMe.can_manage || gwMe.owned_services.length > 0 || gwMe.owns_all);
   // 文件预览页在新标签里单独打开，是一个整页查看器，不需要主导航；登录页也不要
   if (pathname.startsWith("/files/") || pathname === "/login") return null;
 
@@ -69,7 +77,7 @@ export function Rail() {
         A
       </div>
 
-      {NAV.filter((item) => can(me, ...item.ops)).map((item) => {
+      {NAV.filter((item) => (item.mcpGateway ? mcpVisible : can(me, ...item.ops))).map((item) => {
         const active = pathname === item.match || pathname.startsWith(`${item.match}/`);
         return (
           <Link
@@ -94,13 +102,9 @@ export function Rail() {
             <div style={{ fontWeight: 600 }}>{me?.name ?? "—"}</div>
             {me?.account && <div style={{ color: "var(--fg-3)" }}>{me.account}</div>}
             {me?.dept && <div style={{ color: "var(--fg-3)" }}>{me.dept}</div>}
-            {me?.auth_mode === "uc" ? (
-              <a onClick={() => void logout()} style={{ display: "inline-block", marginTop: 8 }}>
-                退出登录
-              </a>
-            ) : (
-              <div style={{ color: "var(--fg-3)", marginTop: 8 }}>本机开发模式（未接入登录）</div>
-            )}
+            <a onClick={() => void logout()} style={{ display: "inline-block", marginTop: 8 }}>
+              退出登录
+            </a>
           </div>
         }
       >

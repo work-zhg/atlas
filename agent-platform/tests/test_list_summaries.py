@@ -90,7 +90,6 @@ def test_agent_summary_exposes_capabilities() -> None:
         description="",
         avatar_key="general",
         status="enabled",
-        is_builtin=False,
         created_by=uuid.uuid4(),
         created_at=now,
         updated_at=now,

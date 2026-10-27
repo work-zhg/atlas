@@ -5,12 +5,13 @@ description = "Atlas agent 服务 — FastAPI, Postgres, Redis."
 requires-python = ">=3.13"
 dependencies = [
   "atlas-acp",
-  "atlas-cluster",
   # 只用 atlas_config.schemas（对外契约）—— import-linter 守着
   "atlas-config",
   "atlas-engine",
   "atlas-host",
   "atlas-jsonrpc",
+  # 沙箱 ensure 的会话级锁（doc/sandbox-opensandbox-design.html §13）
+  "atlas-redislock",
   "fastapi>=0.115",
   "uvicorn[standard]>=0.32",
   "sqlalchemy[asyncio]>=2.0.36",
@@ -19,7 +20,12 @@ dependencies = [
   "pydantic-settings>=2.6",
   "redis>=5.2",
   "httpx>=0.27",
-  "langchain-mcp-adapters>=0.1",
+  # MCP 客户端：langchain.mcp（langchain 主包，beta）+ FastMCP 的 client。
+  #   langchain[mcp] 拉的是整个 fastmcp（含 server 那一套），这里只要 client。
+  "fastmcp-slim[client]>=4.0.11,<5",
+  "mcp>=2.3,<3",
+  # 调 MCP 工具前按参数定义校验参数（MCP 方案设计 §6.2）。mcp 本来就依赖它，这里写明
+  "jsonschema>=4.20",
   # 对象存储走 S3 协议：阿里云 OSS 的 S3 兼容端点、MinIO、AWS S3 同一份
   # 实现。测试用 moto 的内存桶，三种环境的断言等价。
   "boto3>=1.35",
@@ -32,8 +38,8 @@ dependencies = [
   "opentelemetry-api>=1.30",
   "opentelemetry-sdk>=1.30",
   "opentelemetry-exporter-otlp-proto-http>=1.30",
-  "mem0ai>=2.1.0",
-  "fastembed>=0.8.0",
+  # ★ 跨会话记忆走记忆服务（atlas-memory，doc/memory-design.html），只经 HTTP：
+  #   mem0 / fastembed 已不再需要（旧记忆不迁移，设计 Q5）
 ]
 
 [build-system]

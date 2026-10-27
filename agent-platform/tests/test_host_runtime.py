@@ -77,7 +77,12 @@ class Relay:
 
 
 def prepared(
-    thread: Any, *, text: str = "hi", timeout_s: int = 60, permission_mode: str = "auto"
+    thread: Any,
+    *,
+    text: str = "hi",
+    timeout_s: int = 60,
+    permission_mode: str = "auto",
+    approval_mode: str | None = None,
 ) -> Any:
     cli = CliSpec(
         cli_type="claude-code",
@@ -104,6 +109,8 @@ def prepared(
         takeover=None,
         acp_bridge_instance=None,
         acp_acked_seq=0,
+        # 作为 SubAgent 时父 run 的审批模式；直接对话为 None
+        approval_mode=approval_mode,
     )
 
 
@@ -515,6 +522,17 @@ async def test_auto_is_the_default_and_reaches_the_agent(env: Any) -> None:
     assert events[0].data["permission_mode"] == "auto"  # run.started 留审计记录
     assert mode_events(events) == [{"requested": "auto", "effective": "auto", "degraded": False}]
     assert e.app.host._mode_current == "auto"
+
+
+async def test_a_stricter_parent_mode_tightens_the_cli(env: Any) -> None:
+    """作为 SubAgent 时与父 run 的模式取更严格的（设计 D6）。
+
+    父会话选了手动，CLI 自己配的 auto 不能把它绕过去。
+    """
+    e = await env()
+    events = await e.run(approval_mode="manual")
+    assert events[0].data["permission_mode"] == "manual"
+    assert e.app.host._mode_current == "default"  # 手动 = ACP 的 default modeId
 
 
 async def test_platform_mode_names_are_mapped_both_ways(env: Any) -> None:

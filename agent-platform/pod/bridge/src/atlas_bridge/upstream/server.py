@@ -4,7 +4,7 @@
   /healthz、/readyz  → 直接回 HTTP，不升级（健康检查不在日志里留下连接噪音）
   路径               → 只有 /host 可以升级，其余 404
   token              → 常数时间比较，失败 401
-  X-Atlas-Session    → 必须等于本 Pod 的会话，失败 403
+  X-Session-Id       → 必须等于本 Pod 的会话，失败 403（旧名 X-Atlas-Session 过渡一个版本）
   子协议             → server 报出的版本里没有 bridge 支持的，426
 """
 
@@ -15,7 +15,7 @@ import hmac
 import logging
 from http import HTTPStatus
 
-from atlas_host import HEADER_SESSION, SUBPROTOCOL_V1, CloseCode
+from atlas_host import HEADER_SESSION, LEGACY_HEADER_SESSION, SUBPROTOCOL_V1, CloseCode
 from websockets.asyncio.server import Server, ServerConnection, serve
 from websockets.datastructures import Headers
 from websockets.http11 import Request, Response
@@ -94,8 +94,9 @@ class UpstreamServer:
         if not self._token_ok(headers):
             logger.warning("上游握手鉴权失败，来源 %s", conn.remote_address)
             return conn.respond(HTTPStatus.UNAUTHORIZED, "unauthorized\n")
-        if headers.get(HEADER_SESSION) != self._session_id:
-            logger.warning("上游握手的会话不匹配：%r", headers.get(HEADER_SESSION))
+        session = headers.get(HEADER_SESSION) or headers.get(LEGACY_HEADER_SESSION)
+        if session != self._session_id:
+            logger.warning("上游握手的会话不匹配：%r", session)
             return conn.respond(HTTPStatus.FORBIDDEN, "session mismatch\n")
         offered = [
             p.strip()

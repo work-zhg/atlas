@@ -17,10 +17,13 @@ from __future__ import annotations
 
 import asyncio
 import fnmatch
+import logging
 import posixpath
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol, TypeVar
 
+import httpx
 from atlas_engine.contracts import (
     EDIT_MAX_BYTES,
     SEARCH_MAX_KEYS,
@@ -33,8 +36,15 @@ from atlas_engine.contracts import (
     slice_read_response,
 )
 
+from ..opensandbox.execd import ExecdFiles
+
 if TYPE_CHECKING:
     from uuid import UUID
+
+    from ..opensandbox import SandboxEndpoint, SandboxProvisioner
+
+logger = logging.getLogger(__name__)
+T = TypeVar("T")
 
 __all__ = [
     "READ_MAX_BYTES",
@@ -42,6 +52,7 @@ __all__ = [
     "WORKSPACE_MOUNT",
     "OssFilesystem",
     "PathEscape",
+    "WorkspaceRouting",
 ]
 
 #: 单次 `read` 允许取回的对象大小。对象存储没有按行的服务端分页，
@@ -78,14 +89,125 @@ def _under_workspace_mount(norm: str) -> bool:
     return norm == WORKSPACE_MOUNT or norm.startswith(f"{WORKSPACE_MOUNT}/")
 
 
+class _Store(Protocol):
+    """工作区的存储原语。OssFilesystem 的上层语义（路径、切行、edit、隐藏文件、截断）只写一份，
+    底层按路由选：对象存储（_OssStore），或沙箱里的挂载
+    （_ExecdStore，doc/sandbox-opensandbox-design.html §9）。"""
+
+    def size(self, key: str) -> int | None: ...
+    def get(self, key: str) -> bytes: ...
+    def put(self, key: str, data: bytes) -> None: ...
+    def remove(self, keys: list[str]) -> None: ...
+    def pages(self, prefix: str, *, recursive: bool) -> Iterator[tuple[list[str], list[str]]]: ...
+
+
+class _OssStore:
+    def __init__(self, client: Any, bucket: str) -> None:
+        self._s3, self._bucket = client, bucket
+
+    def size(self, key: str) -> int | None:
+        try:
+            head = self._s3.head_object(Bucket=self._bucket, Key=key)
+        except Exception:
+            return None
+        return int(head.get("ContentLength", 0))
+
+    def get(self, key: str) -> bytes:
+        return self._s3.get_object(Bucket=self._bucket, Key=key)["Body"].read()
+
+    def put(self, key: str, data: bytes) -> None:
+        self._s3.put_object(Bucket=self._bucket, Key=key, Body=data)
+
+    def remove(self, keys: list[str]) -> None:
+        if len(keys) == 1:
+            self._s3.delete_object(Bucket=self._bucket, Key=keys[0])
+            return
+        for i in range(0, len(keys), _DELETE_BATCH):
+            batch = keys[i : i + _DELETE_BATCH]
+            self._s3.delete_objects(
+                Bucket=self._bucket, Delete={"Objects": [{"Key": k} for k in batch]}
+            )
+
+    def pages(self, prefix: str, *, recursive: bool) -> Iterator[tuple[list[str], list[str]]]:
+        """不递归时用 delimiter 模拟「一层」—— 对象存储没有真正的目录。"""
+        kwargs: dict[str, Any] = {"Bucket": self._bucket, "Prefix": prefix, "MaxKeys": 1000}
+        if not recursive:
+            kwargs["Delimiter"] = "/"
+        token: str | None = None
+        while True:
+            if token:
+                kwargs["ContinuationToken"] = token
+            page = self._s3.list_objects_v2(**kwargs)
+            yield (
+                [item["Key"] for item in page.get("Contents", ())],
+                [cp["Prefix"] for cp in page.get("CommonPrefixes", ())],
+            )
+            token = page.get("NextContinuationToken")
+            if not page.get("IsTruncated") or not token:
+                return
+
+
+class _ExecdStore:
+    """沙箱运行期间的工作区：经 execd 的文件 API 读写 Pod 里的 /workspace —— 与命令是同一个挂载。
+
+    key（{ws}/a/b.txt）↔ Pod 路径（/workspace/a/b.txt）。只服务工作区的 key，技能区永远走对象存储。
+    ★ 列举语义与对象存储对齐：execd 列出的是真实目录树，
+      这里把它换算成「前缀匹配 + delimiter 分组」，
+      空目录因此不出现（对象存储里没有空目录）。
+    """
+
+    def __init__(self, files: ExecdFiles, ws_prefix: str) -> None:
+        self._f, self._ws = files, ws_prefix
+
+    def _path(self, key: str) -> str:
+        return WORKSPACE_MOUNT + key[len(self._ws) :]
+
+    def _key(self, path: str) -> str:
+        return self._ws + path[len(WORKSPACE_MOUNT) :]
+
+    def size(self, key: str) -> int | None:
+        return self._f.size(self._path(key))
+
+    def get(self, key: str) -> bytes:
+        data = self._f.download(self._path(key))
+        if data is None:
+            raise FileNotFoundError(key)
+        return data
+
+    def put(self, key: str, data: bytes) -> None:
+        self._f.upload(self._path(key), data)  # 返回时已 close：写穿式挂载下已经落盘
+
+    def remove(self, keys: list[str]) -> None:
+        self._f.remove([self._path(k) for k in keys])
+
+    def pages(self, prefix: str, *, recursive: bool) -> Iterator[tuple[list[str], list[str]]]:
+        directory = prefix.rsplit("/", 1)[0]  # 前缀可以停在半个文件名上（reports/q）
+        keys = sorted(
+            key
+            for f in self._f.search(self._path(directory))
+            if (key := self._key(str(f["path"]))).startswith(prefix)
+        )
+        if recursive:
+            yield keys, []
+            return
+        direct, groups = [], set()
+        for key in keys:
+            rest = key[len(prefix) :]
+            if "/" in rest:
+                groups.add(prefix + rest.split("/", 1)[0] + "/")
+            else:
+                direct.append(key)
+        yield direct, sorted(groups)
+
+
 class OssFilesystem:
     """一个会话的工作区。
 
-    Args:
-        client: boto3 的 S3 client（`boto3.client("s3", endpoint_url=...)`）。
-        bucket: 桶名。
-        root: 桶内的环境前缀，如 `"prod"`。
-        session_id: 会话 id —— 工作区前缀由它派生。
+    ★ 两条路（doc/sandbox-opensandbox-design.html §9）：
+      · 同步方法、以及工作区没有运行中的沙箱时 —— 直连对象存储
+      · 异步方法 + routing 告诉我们沙箱在跑 —— 工作区的 key 经 execd 走 Pod 里的挂载，
+        与命令共用一个挂载（技能区仍走对象存储）
+      kernel 中间件在 Atlas 里走异步方法；同步方法只给图外的调用方（测试、脚本）。
     """
 
     def __init__(
@@ -96,6 +218,7 @@ class OssFilesystem:
         user_id: UUID | str,
         thread_id: UUID | str,
         workspace_thread_id: UUID | str | None = None,
+        routing: WorkspaceRouting | None = None,
     ) -> None:
         """
         Args:
@@ -104,9 +227,12 @@ class OssFilesystem:
             workspace_thread_id: 工作区归属的会话。None = 自己（主 agent）；
                 子智能体传**父会话**的 id —— 它与主 agent 共享同一份工作区
                 （委派常常就是「帮我处理这批文件」，产物要互相看得见）。
+            routing: 工作区的沙箱路由。None = 永远直连对象存储（没开沙箱的部署）。
         """
         self._s3 = client
         self._bucket = bucket
+        self._oss = _OssStore(client, bucket)
+        self._routing = routing
         base = f"{user_id}/{thread_id}"
         ws_base = f"{user_id}/{workspace_thread_id or thread_id}"
 
@@ -192,20 +318,30 @@ class OssFilesystem:
         rel = key.removeprefix(f"{base}/")
         return f"{shown_root}/{rel}" if shown_root else rel
 
+    def _store(self, key: str, ws_store: _Store | None) -> _Store:
+        """工作区的 key 在沙箱运行期间走沙箱；其余（技能区）永远走对象存储。"""
+        if ws_store is not None and key.startswith(f"{self._ws}/"):
+            return ws_store
+        return self._oss
+
     # ------------------------------------------------------------------ 读
 
     def read(self, path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
+        return self._read(path, offset, limit, None)
+
+    async def aread(self, path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
+        return await self._routed(lambda ws: self._read(path, offset, limit, ws), writes=False)
+
+    def _read(self, path: str, offset: int, limit: int, ws: _Store | None) -> ReadResult:
         # ★ 越界 / 指向工作区根返回错误结果，不抛：抛出去会打断整个 run（模型读个目录就失败）
         try:
             key = self._to_key(path)
         except PathEscape as exc:
             return ReadResult(error=str(exc))
-        try:
-            head = self._s3.head_object(Bucket=self._bucket, Key=key)
-        except Exception:
+        store = self._store(key, ws)
+        size = store.size(key)
+        if size is None:
             return ReadResult(error=f"File '{path}' not found")
-
-        size = int(head.get("ContentLength", 0))
         if size > READ_MAX_BYTES:
             return ReadResult(
                 error=(
@@ -215,7 +351,7 @@ class OssFilesystem:
                 )
             )
 
-        body = self._s3.get_object(Bucket=self._bucket, Key=key)["Body"].read()
+        body = store.get(key)
         try:
             content = body.decode("utf-8")
         except UnicodeDecodeError:
@@ -228,9 +364,6 @@ class OssFilesystem:
                 )
             )
         return slice_read_response(create_file_data(content), offset, limit)
-
-    async def aread(self, path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
-        return await asyncio.to_thread(self.read, path, offset, limit)
 
     def search(
         self,
@@ -247,6 +380,22 @@ class OssFilesystem:
         子目录以 `common_prefixes` 返回 —— 后者是用 delimiter 模拟出来的，
         对象存储没有真正的目录。
         """
+        return self._search(prefix, pattern, max_keys, None)
+
+    async def asearch(
+        self,
+        prefix: str,
+        *,
+        pattern: str | None = None,
+        max_keys: int = SEARCH_MAX_KEYS,
+    ) -> SearchResult:
+        return await self._routed(
+            lambda ws: self._search(prefix, pattern, max_keys, ws), writes=False
+        )
+
+    def _search(
+        self, prefix: str, pattern: str | None, max_keys: int, ws: _Store | None
+    ) -> SearchResult:
         try:
             abs_prefix, base, shown_root = self._to_prefix(prefix)
         except PathEscape as exc:
@@ -255,23 +404,15 @@ class OssFilesystem:
         recursive = bool(pattern and "**" in pattern)
         # 显式指定了点开头的前缀就是要看它 —— 此时不再过滤
         include_hidden = _is_hidden(prefix.lstrip("/"))
-        kwargs: dict[str, Any] = {"Bucket": self._bucket, "Prefix": abs_prefix}
-        if not recursive:
-            kwargs["Delimiter"] = "/"
-
         keys: list[str] = []
         prefixes: list[str] = []
         truncated = False
-        token: str | None = None
-        while True:
-            if token:
-                kwargs["ContinuationToken"] = token
-            # 多取一个，用来区分"正好取满"与"还有更多"
-            kwargs["MaxKeys"] = min(1000, max_keys - len(keys) + 1)
-            page = self._s3.list_objects_v2(**kwargs)
-
-            for item in page.get("Contents", ()):
-                rel = self._to_path(item["Key"], base, shown_root)
+        store = self._store(abs_prefix, ws)
+        for page_keys, page_prefixes in store.pages(abs_prefix, recursive=recursive):
+            for key in page_keys:
+                if key.endswith("/"):
+                    continue  # 目录标记对象（s3fs 建目录时会写一个）—— 不是文件
+                rel = self._to_path(key, base, shown_root)
                 # ★ 默认跳过点开头的条目（.skills/ 等）。技能包动辄几十个
                 #   文件（ui-ux-pro-max 有 76 个），不过滤的话模型每次
                 #   search("") 都会被技能文件淹没，看不见自己的产物。
@@ -284,38 +425,30 @@ class OssFilesystem:
                     truncated = True
                     break
                 keys.append(rel)
-            for cp in page.get("CommonPrefixes", ()):
-                rel_prefix = self._to_path(cp["Prefix"], base, shown_root)
+            for cp in page_prefixes:
+                rel_prefix = self._to_path(cp, base, shown_root)
                 if include_hidden or not _is_hidden(rel_prefix):
                     prefixes.append(rel_prefix)
-
-            token = page.get("NextContinuationToken")
-            if truncated or not page.get("IsTruncated") or not token:
+            if truncated:
                 break
 
         return SearchResult(keys=keys, common_prefixes=prefixes, truncated=truncated)
 
-    async def asearch(
-        self,
-        prefix: str,
-        *,
-        pattern: str | None = None,
-        max_keys: int = SEARCH_MAX_KEYS,
-    ) -> SearchResult:
-        return await asyncio.to_thread(self.search, prefix, pattern=pattern, max_keys=max_keys)
-
     # ------------------------------------------------------------------ 写
 
     def write(self, path: str, content: str) -> WriteResult:
+        return self._write(path, content, None)
+
+    async def awrite(self, path: str, content: str) -> WriteResult:
+        return await self._routed(lambda ws: self._write(path, content, ws), writes=WriteResult)
+
+    def _write(self, path: str, content: str, ws: _Store | None) -> WriteResult:
         try:
             key = self._to_key(path)
         except PathEscape as exc:
             return WriteResult(error=str(exc))
-        self._s3.put_object(Bucket=self._bucket, Key=key, Body=content.encode("utf-8"))
+        self._store(key, ws).put(key, content.encode("utf-8"))
         return WriteResult(path=path)
-
-    async def awrite(self, path: str, content: str) -> WriteResult:
-        return await asyncio.to_thread(self.write, path, content)
 
     def edit(
         self, path: str, old_string: str, new_string: str, *, replace_all: bool = False
@@ -326,16 +459,26 @@ class OssFilesystem:
           因此有 EDIT_MAX_BYTES 上限，超过时给出可执行的替代方案而不是
           默默把一个大对象拉进内存。
         """
+        return self._edit(path, old_string, new_string, replace_all, None)
+
+    async def aedit(
+        self, path: str, old_string: str, new_string: str, *, replace_all: bool = False
+    ) -> EditResult:
+        return await self._routed(
+            lambda ws: self._edit(path, old_string, new_string, replace_all, ws), writes=EditResult
+        )
+
+    def _edit(
+        self, path: str, old_string: str, new_string: str, replace_all: bool, ws: _Store | None
+    ) -> EditResult:
         try:
             key = self._to_key(path)
         except PathEscape as exc:
             return EditResult(error=str(exc))
-        try:
-            head = self._s3.head_object(Bucket=self._bucket, Key=key)
-        except Exception:
+        store = self._store(key, ws)
+        size = store.size(key)
+        if size is None:
             return EditResult(error=f"File '{path}' not found")
-
-        size = int(head.get("ContentLength", 0))
         if size > EDIT_MAX_BYTES:
             return EditResult(
                 error=(
@@ -345,7 +488,7 @@ class OssFilesystem:
                 )
             )
 
-        body = self._s3.get_object(Bucket=self._bucket, Key=key)["Body"].read()
+        body = store.get(key)
         try:
             content = body.decode("utf-8")
         except UnicodeDecodeError:
@@ -363,15 +506,8 @@ class OssFilesystem:
             )
 
         updated = content.replace(old_string, new_string) if replace_all else content.replace(old_string, new_string, 1)
-        self._s3.put_object(Bucket=self._bucket, Key=key, Body=updated.encode("utf-8"))
+        store.put(key, updated.encode("utf-8"))
         return EditResult(path=path, occurrences=count if replace_all else 1)
-
-    async def aedit(
-        self, path: str, old_string: str, new_string: str, *, replace_all: bool = False
-    ) -> EditResult:
-        return await asyncio.to_thread(
-            self.edit, path, old_string, new_string, replace_all=replace_all
-        )
 
     def delete(self, path: str, *, recursive: bool = False) -> DeleteResult:
         """删除对象；`recursive` 时先列举前缀再分批删。
@@ -379,35 +515,99 @@ class OssFilesystem:
         对象存储没有"目录"，删目录 = 删掉该前缀下的全部 key。批量删除单次
         有 1000 个的上限，所以要分批。
         """
+        return self._delete(path, recursive, None)
+
+    async def adelete(self, path: str, *, recursive: bool = False) -> DeleteResult:
+        return await self._routed(lambda ws: self._delete(path, recursive, ws), writes=DeleteResult)
+
+    def _delete(self, path: str, recursive: bool, ws: _Store | None) -> DeleteResult:
         if not recursive:
             try:
                 key = self._to_key(path)
             except PathEscape as exc:
                 return DeleteResult(error=str(exc))
-            try:
-                self._s3.head_object(Bucket=self._bucket, Key=key)
-            except Exception:
+            store = self._store(key, ws)
+            if store.size(key) is None:
                 return DeleteResult(error=f"File '{path}' not found")
-            self._s3.delete_object(Bucket=self._bucket, Key=key)
+            store.remove([key])
             return DeleteResult(path=path)
 
         prefix, _base, _shown = self._to_prefix(path if path.endswith("/") else f"{path}/")
-        victims = [
-            item["Key"]
-            for page in _paginate(self._s3, self._bucket, prefix)
-            for item in page.get("Contents", ())
-        ]
+        store = self._store(prefix, ws)
+        victims = [key for page_keys, _ in store.pages(prefix, recursive=True) for key in page_keys]
         if not victims:
             return DeleteResult(error=f"Nothing to delete under '{path}'")
-        for i in range(0, len(victims), _DELETE_BATCH):
-            batch = victims[i : i + _DELETE_BATCH]
-            self._s3.delete_objects(
-                Bucket=self._bucket, Delete={"Objects": [{"Key": k} for k in batch]}
-            )
+        store.remove(victims)
         return DeleteResult(path=path)
 
-    async def adelete(self, path: str, *, recursive: bool = False) -> DeleteResult:
-        return await asyncio.to_thread(self.delete, path, recursive=recursive)
+    # ------------------------------------------------------------------ 路由
+
+    async def _routed(self, fn: Callable[[_Store | None], T], *, writes: type | bool) -> T:
+        """按路由表选底层，然后在线程里跑同步核心。
+
+        沙箱请求失败时：沙箱确实不在了 → 删路由、改走对象存储重试；沙箱还在但不响应 →
+        读降级到对象存储，写**不降级**（悄悄改写对象存储就多了一个写入方）。
+        """
+        routing = self._routing
+        ep = await routing.current() if routing else None
+        if routing is None or ep is None:
+            return await asyncio.to_thread(fn, None)
+        store = routing.store(ep, self._ws)
+        try:
+            result = await asyncio.to_thread(fn, store)
+        except httpx.HTTPError as exc:
+            if await routing.gone(ep):
+                logger.info("沙箱 %s 已不在，工作区改走对象存储：%s", ep.sandbox_id, exc)
+                return await asyncio.to_thread(fn, None)
+            if writes is False:
+                logger.warning("沙箱 %s 不响应，这次读降级到对象存储：%s", ep.sandbox_id, exc)
+                return await asyncio.to_thread(fn, None)
+            return writes(error="工作区暂时不可写：沙箱没有响应，请稍后重试")  # type: ignore[operator, return-value]
+        finally:
+            store.close()
+        await routing.touch()
+        return result
+
+
+class WorkspaceRouting:
+    """工作区的沙箱路由（doc/sandbox-opensandbox-design.html §9）：
+    问路由表、确认沙箱是否还在、记活动。
+
+    ★ 文件操作不会触发建沙箱：没有运行中的沙箱就走对象存储（多数会话一直是这样）。
+    """
+
+    def __init__(
+        self,
+        provisioner: SandboxProvisioner,
+        workspace_thread_id: str,
+        *,
+        transport: httpx.BaseTransport | None = None,
+    ) -> None:
+        self._p = provisioner
+        self._ws = workspace_thread_id
+        self._transport = transport
+
+    async def current(self) -> SandboxEndpoint | None:
+        return await self._p.routes.get(self._ws)
+
+    def store(self, ep: SandboxEndpoint, ws_prefix: str) -> _RoutedStore:
+        return _RoutedStore(ExecdFiles(ep.url, ep.token, transport=self._transport), ws_prefix)
+
+    async def gone(self, ep: SandboxEndpoint) -> bool:
+        """请求失败后问一句：沙箱确实不在了就删路由（返回 True）。"""
+        self._p.routes.forget_cached(self._ws)
+        if await self._p.is_gone(ep):
+            await self._p.forget(self._ws, ep)
+            return True
+        return False
+
+    async def touch(self) -> None:
+        await self._p.routes.touch(self._ws)
+
+
+class _RoutedStore(_ExecdStore):
+    def close(self) -> None:
+        self._f.close()
 
 
 class WorkspaceListing:
@@ -428,7 +628,7 @@ class WorkspaceListing:
         for page in _paginate(self._fs._s3, self._fs._bucket, prefix):
             for item in page.get("Contents", ()):
                 rel = item["Key"].removeprefix(prefix)
-                if not rel or _is_hidden(rel):
+                if not rel or rel.endswith("/") or _is_hidden(rel):  # 目录标记对象不是文件
                     continue
                 if len(files) >= max_keys:
                     return files, True

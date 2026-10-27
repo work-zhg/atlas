@@ -31,6 +31,8 @@ from httpx import ASGITransport
 from langchain_core.messages import AIMessageChunk
 from sqlalchemy import select
 
+from tests.fake_uc import AS_USER
+
 from .fakes import TurnModel, tool_call_chunk
 
 pytestmark = pytest.mark.usefixtures("clean_db")
@@ -68,7 +70,9 @@ async def client_factory():
         parent: TurnModel, child: TurnModel
     ) -> tuple[httpx.AsyncClient, InProcessExecutor]:
         app = make_app(parent, child)
-        c = httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+        c = httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test", headers=AS_USER
+        )
         clients.append(c)
         executors.append(app.state.executor)
         return c, app.state.executor

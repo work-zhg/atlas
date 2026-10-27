@@ -19,16 +19,20 @@ import {
   type ContextUsageData,
   type FileWrittenData,
   type McpToolDriftData,
+  type McpToolSkippedData,
   type SkillLoadedData,
   type SkillSkippedData,
   type MessageCompletedData,
   type MessageDeltaData,
   type RunFailedData,
   type RunResumedData,
+  type ApprovalMode,
   type ApprovalRequiredData,
+  type QuestionAnsweredData,
   type RunStartedData,
   type SubagentStartedData,
   type Todo,
+  type ToolArtifact,
   type TodosUpdatedData,
   type ToolCompletedData,
   type ToolFailedData,
@@ -58,6 +62,8 @@ export interface ToolCall {
   durationMs?: number;
   resultPreview?: string;
   result?: unknown;
+  /** 工具给界面的结构化结果（tool.completed 的 artifact） */
+  artifact?: ToolArtifact;
   error?: string;
   errorKind?: string;
   /** errorKind = "auto_mode_denied" 时：auto 模式的拦截类别 */
@@ -93,6 +99,8 @@ export interface SubagentRun {
   /** = 主 agent 那次 task 调用的 tool_call_id，started/finished 靠它配对 */
   runId: string;
   name: string;
+  /** 模型给的短标题；task 才是 SubAgent 收到的任务书 */
+  title?: string;
   task: string;
   status: "running" | "ok" | "error";
   result?: string;
@@ -101,9 +109,16 @@ export interface SubagentRun {
 
 export interface PendingApproval {
   approvalId: string;
+  kind: "tool" | "plan" | "question";
+  /** 对应的工具调用（问题卡片据此收起那一行工具调用） */
+  toolCallId?: string;
   toolName: string;
   args: unknown;
   reason: string;
+  /** 计划获批时可选的执行模式；kind = tool 时为空 */
+  executionModes: ApprovalMode[];
+  /** 拒绝时可以带原因（交给模型）。acp 的审批为 false */
+  acceptsFeedback: boolean;
   /** 提交决策的目标 run。委派来的审批属于子 run，与当前流的 run 不同。 */
   runId?: string;
 }
@@ -132,7 +147,8 @@ export type TimelineItem =
 export type Notice =
   | { seq: number; type: "skill.loaded"; data: SkillLoadedData }
   | { seq: number; type: "skill.skipped"; data: SkillSkippedData }
-  | { seq: number; type: "mcp.tool_drift"; data: McpToolDriftData };
+  | { seq: number; type: "mcp.tool_drift"; data: McpToolDriftData }
+  | { seq: number; type: "mcp.tool_skipped"; data: McpToolSkippedData };
 
 export interface CompactionMark {
   seq: number;
@@ -204,6 +220,8 @@ export interface RunState {
    * 处理完显示结果，而不是消失。
    */
   approvals: PendingApproval[];
+  /** 已回答的问题，按 approvalId（question.answered；进轨迹，刷新后也在） */
+  answers: Record<string, QuestionAnsweredData>;
   /** 出现顺序，渲染以它为准 */
   timeline: TimelineItem[];
   /** acp：每个 run（主 run 或子 run）实际生效的权限模式 */
@@ -234,6 +252,7 @@ export const initialRunState: RunState = {
   notices: [],
   pendingApprovals: [],
   approvals: [],
+  answers: {},
   timeline: [],
   modes: {},
   blockOffset: 0,
@@ -279,6 +298,29 @@ function appendOnce(timeline: TimelineItem[], item: TimelineItem): TimelineItem[
  * 记下一条审批：进「全部」与「待决定」两张表，并在时间线上占位。
  * ★ 同一个 approval_id 只记一次 —— 断线重连后可能再收到一遍。
  */
+/** 事件 → 卡片要的字段（runId 由调用方按流的上下文补） */
+function approvalOf(a: ApprovalRequiredData): Omit<PendingApproval, "runId"> {
+  return {
+    approvalId: a.approval_id,
+    kind: a.approval_kind ?? "tool",
+    toolCallId: a.tool_call_id,
+    toolName: a.tool_name,
+    args: a.args,
+    reason: a.reason ?? "",
+    executionModes: a.execution_modes ?? [],
+    acceptsFeedback: a.accepts_feedback ?? false,
+  };
+}
+
+/** 问题回答了：记下答案，并从「还在等」里拿掉 —— run 继续跑，头部不该还显示「待回答」 */
+function withAnswer(base: RunState, answered: QuestionAnsweredData): RunState {
+  return {
+    ...base,
+    answers: { ...base.answers, [answered.approval_id]: answered },
+    pendingApprovals: base.pendingApprovals.filter((a) => a.approvalId !== answered.approval_id),
+  };
+}
+
 function withApproval(base: RunState, approval: PendingApproval): RunState {
   if (base.approvals.some((a) => a.approvalId === approval.approvalId)) return base;
   return {
@@ -365,15 +407,15 @@ function applySubEvent(
     case EventType.ApprovalRequired: {
       const a = d as unknown as ApprovalRequiredData;
       return withApproval(base, {
-        approvalId: a.approval_id,
-        toolName: a.tool_name,
-        args: a.args,
-        reason: a.reason ?? "",
+        ...approvalOf(a),
         // ★ 会话流里每个事件都带 run_id，不需要 data 里再给一份 ——
         //   决策必须 POST 到**子** run 的端点。
         runId: a.run_id ?? event.run_id,
       });
     }
+
+    case EventType.QuestionAnswered:
+      return withAnswer(base, d as unknown as QuestionAnsweredData);
 
     case EventType.ToolStarted: {
       const t = d as unknown as ToolStartedData;
@@ -414,6 +456,7 @@ function applySubEvent(
           durationMs: t.duration_ms,
           resultPreview: t.result_preview,
           result: t.result,
+          artifact: t.artifact,
           error: t.error,
           errorKind: t.error_kind,
           deniedReason: t.denied_reason,
@@ -597,6 +640,7 @@ export function applyEvent(state: RunState, event: AnyTraceEvent): RunState {
           durationMs: t.duration_ms,
           resultPreview: t.result_preview,
           result: t.result,
+          artifact: t.artifact,
         }),
       };
     }
@@ -626,6 +670,7 @@ export function applyEvent(state: RunState, event: AnyTraceEvent): RunState {
         subagents: upsertSubagent(base.subagents, s.subagent_run_id, {
           runId: s.subagent_run_id,
           name: s.name || "子智能体",
+          title: s.title || undefined,
           task: s.task ?? "",
           status: "running",
         }),
@@ -686,7 +731,8 @@ export function applyEvent(state: RunState, event: AnyTraceEvent): RunState {
 
     case EventType.SkillLoaded:
     case EventType.SkillSkipped:
-    case EventType.McpToolDrift: {
+    case EventType.McpToolDrift:
+    case EventType.McpToolSkipped: {
       const notice = { seq: event.thread_seq, type: event.type, data: d } as unknown as Notice;
       return {
         ...base,
@@ -752,15 +798,15 @@ export function applyEvent(state: RunState, event: AnyTraceEvent): RunState {
     case EventType.ApprovalRequired: {
       const a = d as unknown as ApprovalRequiredData;
       return withApproval(base, {
-        approvalId: a.approval_id,
-        toolName: a.tool_name,
-        args: a.args,
-        reason: a.reason ?? "",
+        ...approvalOf(a),
         // ★ native 的事件 data 里没有 run_id —— 回落到事件自身的 run_id，
         //   否则终态出列（withoutApprovalsOf）按 runId 匹配不上它。
         runId: a.run_id ?? event.run_id,
       });
     }
+
+    case EventType.QuestionAnswered:
+      return withAnswer(base, d as unknown as QuestionAnsweredData);
 
     case EventType.TitleGenerated:
       return { ...base, generatedTitle: String(d.title ?? "") };

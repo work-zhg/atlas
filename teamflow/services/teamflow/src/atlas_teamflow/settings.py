@@ -55,8 +55,9 @@ class TFSettings(BaseSettings):
     #: 仓库所在的命名空间（个人或组织）；空 = 令牌本人
     gitee_namespace: str = ""
     gitee_repo_prefix: str = "teamflow-"
-    #: 节点会话使用的 Atlas git 凭据档案（atlas-cluster 的 git_profiles 里的名字）：
-    #: Pod 内的 git CLI 用它 push。档案里放的是 Agent 写入用的机器人账号凭据。
+    #: 节点会话使用的 Atlas git 凭据档案（atlas-server 的 git_profiles 里的名字）：
+    #: Pod 内的 git CLI 用它 push（凭据经 Credential Vault 注入）。
+    #: 档案里放的是 Agent 写入用的机器人账号凭据。
     atlas_git_profile: str = "teamflow-gitee"
     #: 成员绑定 Gitee 账号（OAuth，只为证明账号归属，scope=user_info）
     gitee_oauth_client_id: str = ""

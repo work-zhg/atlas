@@ -10,7 +10,7 @@
     都还没有结果                             → jump_to "end"（本段到此为止）
 
 这个中间件因此不需要知道 SubAgent 和审批的存在 —— 它们是 waiting_on 的两个生产者，
-各自在拿到结果时把自己那一项删掉（ApprovalMiddleware / SubAgentMiddleware）。
+各自在拿到结果时把自己那一项删掉（PermissionMiddleware / SubAgentMiddleware）。
 
 ★ 为什么落在 `before_model` 而不是「工具执行之后」。middleware 没有 after_tools
   钩子。工具节点的出边指向第一个 before_model 节点 —— 那里正是「整批工具执行
@@ -53,7 +53,11 @@ class SuspensionState(AgentState):
     #: 不加可见性标注：挂起时 runner 要从最终 state 里取出来落库，续跑时原样交回。
     waiting_on: NotRequired[Annotated[WaitingOn, merge_waits]]
     #: 只进不出：续跑时由 server 交进来，不需要再带回去。
-    decisions: NotRequired[Annotated[dict[str, str], OmitFromOutput]]
+    #: approval → ApprovalOutcome（结构体）；subagent → 结论文本
+    decisions: NotRequired[Annotated[dict[str, Any], OmitFromOutput]]
+    #: 这一段属于哪个 run（runner 每段交进来）。审批 / 提问的 id 由 (run_id, tool_call_id) 派生
+    #: （approval.approval_id_for）—— 没有它的话不同 run 里同名的 tool_call_id 会撞成同一条审批
+    run_id: NotRequired[Annotated[str, OmitFromOutput]]
 
 
 class SuspensionMiddleware(AgentMiddleware):

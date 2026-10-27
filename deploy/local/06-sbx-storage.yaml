@@ -1,0 +1,43 @@
+# 原生沙箱的工作区存储：一个整桶的静态 RWX PV + atlas-sbx 里的 PVC（doc/sandbox-opensandbox-design.html §6）。
+# 每个沙箱在创建请求里用 volumes.pvc + subPath 挂自己的前缀（{user}/{thread}/workspace 等）。
+#
+# ★ 对象存储凭据只在 Secret atlas-oss-csi（kube-system，opensandbox.sh 从 .env 建）里，任何沙箱 Pod 里都没有。
+# ★ 挂载参数（§6.2）：
+#     uid / gid / umask           文件属主是沙箱用户（UID 1000）
+#     stat_cache_expire=1         外部改写后最多 1 秒看到新长度（rclone 的「按旧长度截断读」）
+#     attr_timeout / entry_timeout=0   内核不缓存属性与目录项
+#   s3fs 本身是写穿的：flush / close 时同步上传。
+# ★ 桶名写死成本机 MinIO 的 atlas-dev（与 30-server.yaml 一致）；volumeHandle = 桶名 = 整桶。
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: atlas-oss-atlas-sbx
+spec:
+  storageClassName: ""
+  capacity: {storage: 1Ti}
+  accessModes: [ReadWriteMany]
+  persistentVolumeReclaimPolicy: Retain
+  claimRef: {namespace: atlas-sbx, name: atlas-oss}
+  csi:
+    driver: ru.yandex.s3.csi
+    volumeHandle: atlas-dev
+    nodeStageSecretRef: {name: atlas-oss-csi, namespace: kube-system}
+    nodePublishSecretRef: {name: atlas-oss-csi, namespace: kube-system}
+    volumeAttributes:
+      capacity: 1Ti
+      mounter: s3fs
+      options: >-
+        -o uid=1000 -o gid=1000 -o umask=0022
+        -o stat_cache_expire=1 -o attr_timeout=0 -o entry_timeout=0
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: atlas-oss
+  namespace: atlas-sbx
+spec:
+  storageClassName: ""
+  volumeName: atlas-oss-atlas-sbx
+  accessModes: [ReadWriteMany]
+  resources:
+    requests: {storage: 1Ti}

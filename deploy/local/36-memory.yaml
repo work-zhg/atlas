@@ -1,0 +1,73 @@
+# 记忆服务（atlas-memory，doc/memory-design.html §3）：按作用域实例隔离的主题与条目存储。
+#
+# ★ 库是宿主 Postgres 上的独立 database atlas_memory（docker compose 的 memory-init-db；
+#   服务器部署由 deploy/server/deploy.sh 建）。不用 Redis：实例锁是数据库行锁。
+# ★ 内网免令牌（内网身份传递 §3）：实例由接口参数定位，调用用户在请求头里；打开数据权限开关的
+#   作用域按用户中心的数据权限校验（数据编码挂在本服务的应用 memory 名下，register-uc 登记）。
+# ★ 只有 atlas-server 调它（管理界面也经 atlas-server 的 /v1/memories），Service 只需 ClusterIP，
+#   网关不转发。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atlas-memory
+  namespace: atlas-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: atlas-memory}
+  template:
+    metadata:
+      labels: {app: atlas-memory}
+    spec:
+      # ★ 记忆服务不碰 K8s：默认 SA，没有任何权限
+      initContainers:
+        # 先迁移再起服务。迁移脚本在包内，不依赖工作目录。
+        - name: migrate
+          image: atlas-app:dev
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "atlas_memory", "migrate"]
+          env: &memory-env
+            - {name: ATLAS_MEMORY_DATABASE_URL, value: "postgresql+asyncpg://atlas:atlas@__HOST_IP__:5433/atlas_memory"}
+            - {name: ATLAS_MEMORY_UC_BASE_URL, value: "http://atlas-usercenter.atlas-system.svc.cluster.local:8030"}
+        # Atlas 用的「用户」作用域（§4.1）：已存在就不动（作用域归管理员管，不覆盖它的设置）。
+        # ★ 数据编码 MemoryUser 要管理员跑一次 register-uc 才登记到用户中心（deploy/server/register.sh）；
+        #   在那之前登记实例会失败，Atlas 当作「记忆暂时不可用」，对话照常
+        - name: scopes
+          image: atlas-app:dev
+          imagePullPolicy: IfNotPresent
+          command:
+            - python
+            - -m
+            - atlas_memory
+            - scope
+            - add
+            - user
+            - --key
+            - uid
+            - --description
+            - 用户
+            - --check-permission
+            - --if-missing
+          env: *memory-env
+      containers:
+        - name: memory
+          image: atlas-app:dev
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "atlas_memory", "serve"]
+          ports: [{containerPort: 8060, name: http}]
+          env: *memory-env
+          readinessProbe:
+            httpGet: {path: /health, port: 8060}
+            periodSeconds: 3
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: atlas-memory
+  namespace: atlas-system
+spec:
+  type: ClusterIP
+  selector: {app: atlas-memory}
+  ports: [{port: 8060, targetPort: 8060}]

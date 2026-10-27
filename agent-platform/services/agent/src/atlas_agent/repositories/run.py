@@ -440,12 +440,16 @@ class RunRepository:
         depth: int = 0,
         created_by: UUID | None = None,
         auth_uid: UUID | None = None,
+        auth_subject: str | None = None,
+        approval_mode: str | None = None,
     ) -> Run:
         """run_id 可由调用方预生成：会话串行锁的 owner 值是 run_id，而锁必须
         先于 run 行拿到（拿不到就不该插行）—— 见 RunService.create。
 
         parent_run_id 非空即「这是 SubAgent 的子 run」；root_run_id / depth 是它在
         run 树里的位置（SubAgentService 按父 run 推出来）。
+
+        approval_mode：根 run 取自会话 / 请求；子 run 是派活那一刻父 run 的模式。
         """
         run = Run(
             thread_id=thread_id,
@@ -455,7 +459,9 @@ class RunRepository:
             depth=depth,
             created_by=created_by,
             auth_uid=auth_uid or created_by,
+            auth_subject=auth_subject,
             status="queued",
+            approval_mode=approval_mode,
         )
         if run_id is not None:
             run.id = run_id

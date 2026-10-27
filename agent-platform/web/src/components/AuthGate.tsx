@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * 登录守卫：GET /v1/me 401 → 整页跳到用户中心登录页（带回跳地址，doc/identity-propagation-design.html §4）；
- * dev 模式后端直接返回 dev 身份，不需要登录。后端不可达时给出明确的错误和重试，而不是一直转圈。
+ * 登录守卫：GET /v1/me 401 → 整页跳到用户中心登录页（带回跳地址，doc/identity-propagation-design.html §4）。
+ * 后端不可达时给出明确的错误和重试，而不是一直转圈。
  */
 import { Button, Result, Spin } from "antd";
 import { usePathname } from "next/navigation";

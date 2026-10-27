@@ -92,6 +92,34 @@ services:
         psql "postgresql://atlas:atlas@postgres:5432/atlas" -c "CREATE DATABASE atlas_knowledge"
     restart: "no"
 
+  # 记忆服务（atlas-memory，doc/memory-design.html）的库：同一实例上的独立 database，同款幂等写法。
+  memory-init-db:
+    image: postgres:16-alpine
+    container_name: atlas-memory-initdb
+    depends_on:
+      postgres: {condition: service_healthy}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        psql "postgresql://atlas:atlas@postgres:5432/atlas"
+        -tc "SELECT 1 FROM pg_database WHERE datname='atlas_memory'" | grep -q 1 ||
+        psql "postgresql://atlas:atlas@postgres:5432/atlas" -c "CREATE DATABASE atlas_memory"
+    restart: "no"
+
+  # MCP 网关（atlas-mcpgateway，doc/mcp-design.html 第二版）的库：同一实例上的独立 database，同款幂等写法。
+  mcpgateway-init-db:
+    image: postgres:16-alpine
+    container_name: atlas-mcpgateway-initdb
+    depends_on:
+      postgres: {condition: service_healthy}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        psql "postgresql://atlas:atlas@postgres:5432/atlas"
+        -tc "SELECT 1 FROM pg_database WHERE datname='atlas_mcpgateway'" | grep -q 1 ||
+        psql "postgresql://atlas:atlas@postgres:5432/atlas" -c "CREATE DATABASE atlas_mcpgateway"
+    restart: "no"
+
   # 用户中心（atlas-usercenter）的库：同一实例上的独立 database，与 config-init-db 同款幂等写法。
   usercenter-init-db:
     image: postgres:16-alpine

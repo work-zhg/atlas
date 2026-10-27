@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Demo：MCP 方案主流程（自研 MCP 网关 + Higress）</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --border: #d1d9e0; --head: #f6f8fa;
+    --lane: #8c959f; --phase-bg: #eef2f6; --note-bg: #fff8c5; --note-bd: #d4a72c;
+    --ok: #1a7f37; --ok-bg: #dafbe1; --bad: #cf222e; --bad-bg: #ffebe9; --warn: #9a6700; --warn-bg: #fff8c5;
+    --box: #ddf4ff; --box-bd: #54aeff; --accent: #0969da;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --border: #3d444d; --head: #151b23;
+      --lane: #6e7681; --phase-bg: #1c2430; --note-bg: #2b2111; --note-bd: #9e6a03;
+      --ok: #3fb950; --ok-bg: #12261e; --bad: #f85149; --bad-bg: #2d1214; --warn: #d29922; --warn-bg: #2b2111;
+      --box: #12263f; --box-bd: #1f6feb; --accent: #4493f8;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 28px; background: var(--bg); color: var(--fg);
+         font: 15px/1.75 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif; }
+  main { max-width: 1240px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 20px; margin: 44px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 16px; margin: 24px 0 6px; }
+  .sub { color: var(--muted); margin: 0 0 18px; }
+  code { font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--head);
+         padding: 1px 5px; border-radius: 4px; }
+  pre { background: var(--head); border: 1px solid var(--border); border-radius: 6px; padding: 12px 14px;
+        overflow-x: auto; font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 14px; }
+  th, td { border: 1px solid var(--border); padding: 7px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--head); white-space: nowrap; }
+  .toc { background: var(--head); border: 1px solid var(--border); border-radius: 6px; padding: 10px 18px; }
+  .toc ol { margin: 4px 0; padding-left: 20px; }
+  .callout { border-left: 4px solid var(--accent); background: var(--head); padding: 10px 14px; margin: 14px 0;
+             border-radius: 0 6px 6px 0; }
+  .callout.warn { border-color: var(--warn); }
+  .callout.bad { border-color: var(--bad); }
+  .scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: 6px; margin: 12px 0; }
+  .caption { color: var(--muted); font-size: 13px; margin-top: -4px; }
+  /* 消息「气泡」 */
+  .msg { display: inline-block; margin: 2px 4px 2px 0; padding: 1px 8px; border-radius: 10px; border: 1px solid;
+         font: 12.5px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap; }
+  .msg.h { color: var(--accent); border-color: var(--box-bd); background: var(--box); }
+  .msg.a { color: var(--fg); border-color: var(--lane); background: var(--head); }
+  .msg.t { color: var(--ok); border-color: var(--ok); background: var(--ok-bg); }
+  .msg.s { color: var(--warn); border-color: var(--warn); background: var(--warn-bg); }
+  .msg.r { color: var(--bad); border-color: var(--bad); background: var(--bad-bg); }
+  .msg.gone { opacity: .45; text-decoration: line-through; }
+  /* SVG */
+  svg { display: block; font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif; }
+  svg text { fill: var(--fg); font-size: 12.5px; }
+  svg .lane-line { stroke: var(--lane); stroke-dasharray: 4 4; }
+  svg .lane-box { fill: var(--box); stroke: var(--box-bd); }
+  svg .lane-name { font-weight: 600; font-size: 13px; }
+  svg .lane-sub { fill: var(--muted); font-size: 11px; }
+  svg .arrow { stroke: var(--fg); stroke-width: 1.3; fill: none; }
+  svg .arrow.reply { stroke-dasharray: 5 4; }
+  svg .arrow.bad { stroke: var(--bad); }
+  svg .arrow.ok { stroke: var(--ok); }
+  svg .head { fill: var(--fg); }
+  svg .head.bad { fill: var(--bad); }
+  svg .head.ok { fill: var(--ok); }
+  svg .phase-band { fill: var(--phase-bg); }
+  svg .phase-text { font-weight: 600; font-size: 13px; }
+  svg .note-box { fill: var(--note-bg); stroke: var(--note-bd); }
+  svg .note-box.bad { fill: var(--bad-bg); stroke: var(--bad); }
+  svg .node { fill: var(--box); stroke: var(--box-bd); }
+  svg .node.term { fill: var(--head); stroke: var(--lane); }
+  svg .node.hook { fill: var(--warn-bg); stroke: var(--warn); }
+  svg .arrow.warn { stroke: var(--warn); }
+  svg .head.warn { fill: var(--warn); }
+  svg .lbl.warn { fill: var(--warn); font-weight: 600; }
+  svg .note-box.warn { fill: var(--warn-bg); stroke: var(--warn); }
+  svg .note-box.key { fill: var(--box); stroke: var(--box-bd); }
+  svg .arrow.bad { stroke: var(--bad); }\n  svg .lbl.bad { fill: var(--bad); font-weight: 600; }\n</style>
+</head>
+<body>
+<main>
+<h1>Demo：MCP 方案主流程 · Atlas / Pod → 自研 MCP 网关 → Higress → 业务系统</h1>
+<p class="sub">按 <a href="../../agent-platform/doc/mcp-design.html">MCP 方案设计</a> 第二版（10-26，只有 MCP 网关能调 Higress）写的最小主流程，用来对照<b>各模块的职责划分</b>。一个模块一个文件，模块之间按真实边界走 HTTP；数据库都是内存里的字典，模型是 engine 里的 mock。<b>依赖方向：server → engine → langchain / langgraph，server 不依赖 langchain</b>（§2）。用仓库的 <code>.venv</code>（langchain 1.4.7 + FastMCP 4 + mcp 2.3），不需要模型 key、不需要真的 Higress，约 3 秒跑完。</p>
+
+<div class="toc"><ol>
+<li><a href="#modules">模块职责</a></li>
+<li><a href="#layers">依赖方向</a></li>
+<li><a href="#creds">三种凭据、两种身份</a></li>
+<li><a href="#scenes">场景</a></li>
+<li><a href="#seq-native">时序图：Native（场景 ③）</a></li>
+<li><a href="#seq-acp">时序图：ACP 与绕过（场景 ⑤）</a></li>
+<li><a href="#findings">写 demo 时发现的、可能要改的设计</a></li>
+<li><a href="#run">运行</a></li>
+<li><a href="#result">实测输出</a></li>
+<li><a href="#not">没覆盖的</a></li>
+</ol></div>
+
+<h2 id="modules">1. 模块职责</h2>
+<table><tr><th>模块</th><th>文件</th><th>在 demo 里负责</th><th>不负责</th><th>设计稿</th></tr><tr><td><b>MCP 网关 · 控制面</b></td><td><code>gateway_control.py</code><br><code>gateway_store.py</code></td><td>登记服务：接入检查 → 用户中心登记数据对象（登记人 = 所有者）→ 带网关凭据拉工具定义存库（机械检查、指纹）；复核（按指纹批准）；发 Key；授权（转交用户中心）；给 Atlas 的内部接口（元数据、主体能用的服务、主体 Key）</td><td>不判断授权（问用户中心）；不保管后端凭据</td><td>2.1、3.2、4.1–4.3、5.5、8.1、8.3</td></tr><tr><td><b>MCP 网关 · 数据面</b></td><td><code>gateway_proxy.py</code></td><td>每个请求：Key → 主体 → 判权（短缓存）→ tools/call 复核 → 去掉调用方的 X-Auth-Uid、写入主体 → 主体 Key 换成网关凭据转发 → tools/list 按实时指纹去掉未复核的 → 访问日志；拒绝时回 JSON-RPC 错误体</td><td>不做 REST 转 MCP；不解析 tools/call、tools/list 以外的消息</td><td>5.4、5.7、5.8、8.1、8.2</td></tr><tr><td><b>用户中心</b></td><td><code>usercenter.py</code></td><td>数据对象登记、授权（只有所有者能授）、按主体查能用的服务</td><td>不知道 MCP 怎么调用</td><td>5.3</td></tr><tr><td><b>Higress</b></td><td><code>higress.py</code></td><td>只接受带网关凭据的请求，验完去掉；REST 转 MCP；保管后端凭据；把身份请求头转给后端；拒绝的请求记日志、告警</td><td>不认人、不判权、不复核</td><td>8.3</td></tr><tr><td><b>业务系统</b></td><td><code>backends.py</code></td><td>只认后端凭据；按 X-Auth-Uid 记提交人，X-Uid 只作审计</td><td>不拿调用方自带的身份做授权</td><td>5.6、5.7</td></tr><tr><td><b>atlas-server</b></td><td><code>atlas_server/server.py</code><br><code>atlas_server/mcp_tools.py</code></td><td>Agent 的权限类型 → 权限主体；元数据缓存（读网关）；编辑器按主体列工具；装配：问网关可用服务和 Key、过权限 / Key / 复核闸门、读缓存造 ToolSpec；MCP 协议（FastMCP client，Key 和身份请求头写在传输层）、会话池（Run 内复用）、MCP 结果转 ToolResult；ACP 按服务下发网关地址和主体 Key</td><td><b>不依赖 langchain / langgraph</b>；不连 Higress、不知道它的地址；不自己发现工具；不保管后端凭据</td><td>2.1、5.2、5.4、6.1、6.3、7.1</td></tr><tr><td><b>atlas-engine</b></td><td><code>atlas_engine/</code></td><td>和 server 的契约（ToolSpec / ToolResult / ModelSpec / TurnResult）；ToolSpec → LangChain 工具；ModelSpec → 模型；组装图、驱动“模型 ↔ 工具”循环；中间件</td><td><b>不认识 MCP</b>（不 import mcp / fastmcp / httpx）；不知道凭据、工具来自哪个服务</td><td>2.2</td></tr><tr><td><b>Pod 里的 CLI</b></td><td><code>pod_cli.py</code></td><td>拿下发的配置自己连网关；演示硬调、伪造身份、直连 Higress</td><td>—</td><td>7.1、7.2</td></tr><tr><td>模型（mock）</td><td><code>atlas_engine/models.py</code></td><td>engine 按 ModelSpec(provider=mock) 建的进程内模型，按规则发 tool_call</td><td>—</td><td>—</td></tr></table>
+<p>凭据的边界用 grep 核对过：<code>atlas_server/</code> 里没有 Higress 地址和网关凭据（只有网关的地址）；后端凭据只出现在 <code>higress.py</code>、<code>backends.py</code> 和负责接线的 <code>main.py</code>。依赖方向见下一节。</p>
+
+<h2 id="layers">2. 依赖方向：server → engine → langchain / langgraph</h2>
+<pre><code>atlas_server ──▶ atlas_engine ──▶ langchain · langgraph
+     │                 ▲
+     │                 └─ 契约（contracts.py，只有标准库类型）：ToolSpec · ToolResult · ModelSpec · TurnResult
+     └──▶ fastmcp · mcp · httpx      MCP 协议、传输、凭据、会话都在 server</code></pre>
+<table><tr><th>契约</th><th>谁给谁</th><th>内容</th></tr>
+<tr><td><code>ToolSpec</code></td><td>server → engine</td><td>模型看到的名字、描述、参数定义（JSON Schema）、副作用类别、<code>call(arguments) → ToolResult</code>。call 是 server 的代码：持有会话 → tools/call → MCP 结果转成 ToolResult</td></tr>
+<tr><td><code>ToolResult</code></td><td>server → engine</td><td>文本 + is_error。is_error 时 engine 把它变成失败的工具结果交给模型，不打断这一轮</td></tr>
+<tr><td><code>ModelSpec</code></td><td>server → engine</td><td>用哪个模型。模型客户端由 engine 建（真实环境里按 provider 建 Anthropic / OpenAI 客户端），server 不碰 LangChain 的模型类</td></tr>
+<tr><td><code>TurnResult</code></td><td>engine → server</td><td>最终回复 + 消息摘要。不把 LangChain 的消息对象交出去</td></tr></table>
+<p><code>check_layers.py</code> 看 import 语句静态检查依赖方向（故意在 server 里加一行 <code>import langchain_core</code> 试过，会报 ✗、退出码 1）：</p>
+<pre><code>✓ atlas_server 不依赖 langchain / langgraph（3 个文件）
+✓ atlas_engine 不认识 MCP、不依赖 server（5 个文件）
+✓ atlas_engine/contracts.py 只用标准库（1 个文件）
+✓ 网关、Higress 等外围模块不依赖 Atlas（9 个文件）</code></pre>
+<p><b>为什么不再用 langchain.mcp</b>：它把"MCP 协议"和"转成 LangChain 工具"做在一起。放在 server 违反"server 不依赖 langchain"；放进 engine 又违反设计稿 2.2 的"engine 不认识 MCP、不知道凭据"。所以拆成两半：协议用 FastMCP 的 client 放在 server，转换写成通用的 ToolSpec → LangChain 工具放在 engine。</p>
+<table><tr><th>做法</th><th>server</th><th>engine</th><th>问题</th></tr>
+<tr><td><b>A（本例）</b></td><td>FastMCP client 直接调；交 ToolSpec</td><td>ToolSpec → LangChain 工具</td><td>MCP 结果转 ToolResult 要自己写（本例只取文本）</td></tr>
+<tr><td>B</td><td>交连接信息（地址、请求头）+ 工具定义</td><td>用 langchain.mcp 建客户端和工具</td><td>engine 拿到主体 Key、要管会话，等于认识了 MCP</td></tr>
+<tr><td>C</td><td>建好 FastMCP client，连同工具定义交给 engine</td><td>用 langchain.mcp 转换</td><td>server 的会话池、错误转换要插进 engine 执行工具的过程，得给 engine 开钩子</td></tr></table>
+
+<h2 id="creds">3. 三种凭据、两种身份</h2>
+<table><tr><th>凭据 / 身份</th><th>谁持有</th><th>从哪到哪</th><th>demo 里在哪</th></tr><tr><td>主体 Key</td><td>MCP 网关（原文存库）；Atlas 运行时取；ACP 会话的 Pod</td><td>Atlas / Pod 里的 CLI → MCP 网关</td><td><code>atlas_server/mcp_tools.py</code> 写进传输层；<code>gateway_proxy.py</code> 认人后换掉</td></tr><tr><td>网关凭据</td><td>只有 MCP 网关和 Higress</td><td>MCP 网关 → Higress（转发调用、拉工具定义）</td><td><code>main.py</code> 只交给 <code>Gateway</code> 和 <code>higress.app</code></td></tr><tr><td>后端凭据</td><td>只有 Higress 和业务系统</td><td>Higress → 业务系统</td><td><code>main.py</code> 只交给 <code>higress.app</code> 和 <code>backends.app</code></td></tr><tr><td>X-Auth-Uid（权限主体）</td><td>MCP 网关写入</td><td>网关 → Higress → 业务系统</td><td>调用方自带的会被网关丢掉（场景 ⑤-③）</td></tr><tr><td>X-Uid（使用者）</td><td>调用方自带，网关照转</td><td>Atlas / Pod → … → 业务系统</td><td>只作审计（场景 ④ 里是 bob，主体是数字员工）</td></tr></table>
+
+<h2 id="scenes">4. 场景</h2>
+<table><tr><th>场景</th><th>看什么</th><th>输出</th></tr><tr><td>① 登记、复核、发 Key、授权</td><td>接入检查：weather、ticket 不带网关凭据被拒 → 通过；report 在 Higress 上漏开了认证 → 不允许登记。ticket 要求复核，只批准 create_ticket</td><td>①–⑳</td></tr><tr><td>② 编辑器</td><td>同一个工具目录，按权限主体列出：alice 看到两个服务；「行政助手」按数字员工 de-admin 的权限，只有 ticket</td><td>㉑–㉖</td></tr><tr><td>③ Native · 以人为权限</td><td>装配时跳过待复核的 delete_ticket 并提示；第一次调用才建会话、Run 内复用；后端看到 X-Auth-Uid=u-alice</td><td>㉗–(56)</td></tr><tr><td>④ Native · 以 Agent 为权限</td><td>bob 用「行政助手」，主体是 de-admin：weather 没授权 → 跳过并提示；后端看到提交人 de-admin、使用者 u-bob</td><td>(57)–(77)</td></tr><tr><td>⑤ ACP</td><td>Pod 里的 CLI 直接连网关：列表里没有 delete_ticket；硬调被网关拒；伪造 X-Auth-Uid 被丢掉；直连 Higress 被拒</td><td>(78)–(107)</td></tr></table>
+
+<h2 id="seq-native">5. 时序图：Native（场景 ③）</h2>
+<div class="scroll">
+<svg viewBox="0 0 1180 930" width="1180" height="930" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="hd" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="head" d="M0,0 L8,4 L0,8 z"/></marker><marker id="hdbad" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="head bad" d="M0,0 L8,4 L0,8 z"/></marker></defs>
+<rect class="phase-band" x="0" y="84" width="1180" height="260"/>
+<text class="phase-text" x="6" y="100">装配（每个 Run 一次）</text>
+<rect class="phase-band" x="0" y="350" width="1180" height="440"/>
+<text class="phase-text" x="6" y="366">调用（每个 tool_call）</text>
+<rect class="phase-band" x="0" y="796" width="1180" height="124"/>
+<text class="phase-text" x="6" y="812">收尾</text>
+<line class="lane-line" x1="75" y1="58" x2="75" y2="926"/>
+<rect class="lane-box" x="5" y="10" width="140" height="46" rx="6"/>
+<text class="lane-name" x="75" y="30" text-anchor="middle">用户</text>
+<text class="lane-sub" x="75" y="47" text-anchor="middle">alice</text>
+<line class="lane-line" x1="240" y1="58" x2="240" y2="926"/>
+<rect class="lane-box" x="170" y="10" width="140" height="46" rx="6"/>
+<text class="lane-name" x="240" y="30" text-anchor="middle">Atlas</text>
+<text class="lane-sub" x="240" y="47" text-anchor="middle">atlas-server · 会话池</text>
+<line class="lane-line" x1="405" y1="58" x2="405" y2="926"/>
+<rect class="lane-box" x="335" y="10" width="140" height="46" rx="6"/>
+<text class="lane-name" x="405" y="30" text-anchor="middle">engine · 模型</text>
+<text class="lane-sub" x="405" y="47" text-anchor="middle">atlas-engine · LangChain</text>
+<line class="lane-line" x1="590" y1="58" x2="590" y2="926"/>
+<rect class="lane-box" x="520" y="10" width="140" height="46" rx="6"/>
+<text class="lane-name" x="590" y="30" text-anchor="middle">MCP 网关</text>
+<text class="lane-sub" x="590" y="47" text-anchor="middle">控制面 · 数据面</text>
+<line class="lane-line" x1="770" y1="58" x2="770" y2="926"/>
+<rect class="lane-box" x="700" y="10" width="140" height="46" rx="6"/>
+<text class="lane-name" x="770" y="30" text-anchor="middle">用户中心</text>
+<text class="lane-sub" x="770" y="47" text-anchor="middle">数据权限</text>
+<line class="lane-line" x1="935" y1="58" x2="935" y2="926"/>
+<rect class="lane-box" x="865" y="10" width="140" height="46" rx="6"/>
+<text class="lane-name" x="935" y="30" text-anchor="middle">Higress</text>
+<text class="lane-sub" x="935" y="47" text-anchor="middle">只认网关凭据</text>
+<line class="lane-line" x1="1100" y1="58" x2="1100" y2="926"/>
+<rect class="lane-box" x="1030" y="10" width="140" height="46" rx="6"/>
+<text class="lane-name" x="1100" y="30" text-anchor="middle">业务系统</text>
+<text class="lane-sub" x="1100" y="47" text-anchor="middle">只认后端凭据</text>
+<path class="arrow" d="M75,126 H 240" marker-end="url(#hd)"/>
+<text x="158" y="120" text-anchor="middle">发消息（出行助理，以人为权限）</text>
+<path class="arrow" d="M240,154 H 590" marker-end="url(#hd)"/>
+<text x="415" y="148" text-anchor="middle">主体 u-alice 能用哪些服务？Key？（内部接口）</text>
+<path class="arrow" d="M590,182 H 770" marker-end="url(#hd)"/>
+<text x="680" y="176" text-anchor="middle">u-alice 能用的 McpServer</text>
+<path class="arrow reply" d="M770,210 H 590" marker-end="url(#hd)"/>
+<text x="680" y="204" text-anchor="middle">[ticket, weather]（网关缓存 30s）</text>
+<path class="arrow reply" d="M590,238 H 240" marker-end="url(#hd)"/>
+<text x="415" y="232" text-anchor="middle">可用服务 + 主体 Key</text>
+<rect class="note-box " x="90" y="252" width="300" height="24" rx="4"/>
+<text x="240" y="269" text-anchor="middle">过闸门：delete_ticket 待复核 → 跳过并提示</text>
+<rect class="note-box " x="115" y="284" width="250" height="24" rx="4"/>
+<text x="240" y="301" text-anchor="middle">读元数据缓存造 ToolSpec（不连网）</text>
+<path class="arrow" d="M240,330 H 405" marker-end="url(#hd)"/>
+<text x="322" y="324" text-anchor="middle">ToolSpec + ModelSpec（中立契约）</text>
+<rect class="note-box " x="255" y="378" width="300" height="24" rx="4"/>
+<text x="405" y="395" text-anchor="middle">ToolSpec → LangChain 工具；模型返回 tool_call</text>
+<path class="arrow" d="M405,424 H 240" marker-end="url(#hd)"/>
+<text x="322" y="418" text-anchor="middle">ToolSpec.call（server 的代码）：会话池建会话</text>
+<path class="arrow" d="M240,452 H 590" marker-end="url(#hd)"/>
+<text x="415" y="446" text-anchor="middle">initialize · tools/call（主体 Key、X-Uid）</text>
+<rect class="note-box " x="460" y="466" width="260" height="24" rx="4"/>
+<text x="590" y="483" text-anchor="middle">认人 · 判权 · 复核 · 写 X-Auth-Uid</text>
+<path class="arrow" d="M590,512 H 935" marker-end="url(#hd)"/>
+<text x="762" y="506" text-anchor="middle">tools/call（换成网关凭据）</text>
+<rect class="note-box " x="815" y="526" width="240" height="24" rx="4"/>
+<text x="935" y="543" text-anchor="middle">验网关凭据并去掉；REST 转 MCP</text>
+<path class="arrow" d="M935,572 H 1100" marker-end="url(#hd)"/>
+<text x="1018" y="566" text-anchor="middle">POST /weather（后端凭据 + 身份请求头）</text>
+<path class="arrow reply" d="M1100,600 H 935" marker-end="url(#hd)"/>
+<text x="1018" y="594" text-anchor="middle">结果</text>
+<path class="arrow reply" d="M935,628 H 590" marker-end="url(#hd)"/>
+<text x="762" y="622" text-anchor="middle">结果</text>
+<path class="arrow reply" d="M590,656 H 240" marker-end="url(#hd)"/>
+<text x="415" y="650" text-anchor="middle">结果</text>
+<path class="arrow" d="M240,684 H 590" marker-end="url(#hd)"/>
+<text x="415" y="678" text-anchor="middle">tools/list（SDK 补拉，用来校验结果）</text>
+<rect class="note-box " x="465" y="698" width="250" height="24" rx="4"/>
+<text x="590" y="715" text-anchor="middle">返回里去掉未复核的 delete_ticket</text>
+<path class="arrow reply" d="M240,744 H 405" marker-end="url(#hd)"/>
+<text x="322" y="738" text-anchor="middle">ToolResult</text>
+<rect class="note-box " x="240" y="758" width="330" height="24" rx="4"/>
+<text x="405" y="775" text-anchor="middle">create_ticket 同上（ticket 另建会话）→ 模型回复</text>
+<path class="arrow reply" d="M405,838 H 240" marker-end="url(#hd)"/>
+<text x="322" y="832" text-anchor="middle">TurnResult</text>
+<rect class="note-box " x="160" y="852" width="160" height="24" rx="4"/>
+<text x="240" y="869" text-anchor="middle">Run 结束：关会话池</text>
+<path class="arrow reply" d="M240,898 H 75" marker-end="url(#hd)"/>
+<text x="158" y="892" text-anchor="middle">回复 + 跳过提示</text>
+</svg>
+</div>
+<p class="caption">一个 Run 只问网关一次（可用服务 + Key），装配不连 MCP；每个 MCP 请求都经过网关的认人、判权，tools/call 再加复核；网关把主体 Key 换成网关凭据，Higress 再换成后端凭据。</p>
+
+<h2 id="seq-acp">6. 时序图：ACP 与绕过（场景 ⑤）</h2>
+<div class="scroll">
+<svg viewBox="0 0 1040 754" width="1040" height="754" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="hd" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="head" d="M0,0 L8,4 L0,8 z"/></marker><marker id="hdbad" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="head bad" d="M0,0 L8,4 L0,8 z"/></marker></defs>
+<rect class="phase-band" x="0" y="84" width="1040" height="112"/>
+<text class="phase-text" x="6" y="100">建会话</text>
+<rect class="phase-band" x="0" y="202" width="1040" height="200"/>
+<text class="phase-text" x="6" y="218">① 正常用</text>
+<rect class="phase-band" x="0" y="408" width="1040" height="84"/>
+<text class="phase-text" x="6" y="424">② 硬调未复核的工具</text>
+<rect class="phase-band" x="0" y="498" width="1040" height="144"/>
+<text class="phase-text" x="6" y="514">③ 伪造 X-Auth-Uid=u-admin</text>
+<rect class="phase-band" x="0" y="648" width="1040" height="96"/>
+<text class="phase-text" x="6" y="664">④ 绕过网关直连 Higress</text>
+<line class="lane-line" x1="80" y1="58" x2="80" y2="750"/>
+<rect class="lane-box" x="10" y="10" width="140" height="46" rx="6"/>
+<text class="lane-name" x="80" y="30" text-anchor="middle">Atlas</text>
+<text class="lane-sub" x="80" y="47" text-anchor="middle">atlas-server</text>
+<line class="lane-line" x1="290" y1="58" x2="290" y2="750"/>
+<rect class="lane-box" x="220" y="10" width="140" height="46" rx="6"/>
+<text class="lane-name" x="290" y="30" text-anchor="middle">Pod 里的 CLI</text>
+<text class="lane-sub" x="290" y="47" text-anchor="middle">会话 Pod · 不可信代码</text>
+<line class="lane-line" x1="520" y1="58" x2="520" y2="750"/>
+<rect class="lane-box" x="450" y="10" width="140" height="46" rx="6"/>
+<text class="lane-name" x="520" y="30" text-anchor="middle">MCP 网关</text>
+<text class="lane-sub" x="520" y="47" text-anchor="middle">控制面 · 数据面</text>
+<line class="lane-line" x1="750" y1="58" x2="750" y2="750"/>
+<rect class="lane-box" x="680" y="10" width="140" height="46" rx="6"/>
+<text class="lane-name" x="750" y="30" text-anchor="middle">Higress</text>
+<text class="lane-sub" x="750" y="47" text-anchor="middle">只认网关凭据</text>
+<line class="lane-line" x1="950" y1="58" x2="950" y2="750"/>
+<rect class="lane-box" x="880" y="10" width="140" height="46" rx="6"/>
+<text class="lane-name" x="950" y="30" text-anchor="middle">业务系统</text>
+<text class="lane-sub" x="950" y="47" text-anchor="middle">只认后端凭据</text>
+<path class="arrow" d="M80,126 H 520" marker-end="url(#hd)"/>
+<text x="300" y="120" text-anchor="middle">主体 u-alice 能用哪些服务？Key？</text>
+<path class="arrow reply" d="M520,154 H 80" marker-end="url(#hd)"/>
+<text x="300" y="148" text-anchor="middle">[ticket, weather] + Key</text>
+<path class="arrow" d="M80,182 H 290" marker-end="url(#hd)"/>
+<text x="185" y="176" text-anchor="middle">session/new：每个服务的网关地址 + 主体 Key + X-Uid</text>
+<path class="arrow" d="M290,244 H 520" marker-end="url(#hd)"/>
+<text x="405" y="238" text-anchor="middle">tools/list（主体 Key）</text>
+<rect class="note-box " x="395" y="258" width="250" height="24" rx="4"/>
+<text x="520" y="275" text-anchor="middle">返回里去掉未复核的 delete_ticket</text>
+<path class="arrow reply" d="M520,304 H 290" marker-end="url(#hd)"/>
+<text x="405" y="298" text-anchor="middle">[create_ticket]</text>
+<path class="arrow" d="M290,332 H 520" marker-end="url(#hd)"/>
+<text x="405" y="326" text-anchor="middle">tools/call get_weather</text>
+<path class="arrow" d="M520,360 H 750" marker-end="url(#hd)"/>
+<text x="635" y="354" text-anchor="middle">网关凭据</text>
+<path class="arrow" d="M750,388 H 950" marker-end="url(#hd)"/>
+<text x="850" y="382" text-anchor="middle">后端凭据</text>
+<path class="arrow" d="M290,450 H 520" marker-end="url(#hd)"/>
+<text x="405" y="444" text-anchor="middle">tools/call delete_ticket</text>
+<path class="arrow bad" d="M520,478 H 290" marker-end="url(#hdbad)"/>
+<text x="405" y="472" text-anchor="middle" class="lbl bad">403：没有通过复核</text>
+<path class="arrow" d="M290,540 H 520" marker-end="url(#hd)"/>
+<text x="405" y="534" text-anchor="middle">tools/call create_ticket（X-Auth-Uid: u-admin）</text>
+<rect class="note-box " x="390" y="554" width="260" height="24" rx="4"/>
+<text x="520" y="571" text-anchor="middle">丢掉伪造的，写入 Key 认出的 u-alice</text>
+<path class="arrow" d="M520,600 H 750" marker-end="url(#hd)"/>
+<text x="635" y="594" text-anchor="middle">X-Auth-Uid=u-alice</text>
+<path class="arrow" d="M750,628 H 950" marker-end="url(#hd)"/>
+<text x="850" y="622" text-anchor="middle">提交人 = u-alice</text>
+<path class="arrow bad" d="M290,690 H 750" marker-end="url(#hdbad)"/>
+<text x="520" y="684" text-anchor="middle" class="lbl bad">tools/list（只有主体 Key）</text>
+<rect class="note-box bad" x="625" y="704" width="250" height="24" rx="4"/>
+<text x="750" y="721" text-anchor="middle">401：没有网关凭据 → 记日志、告警</text>
+</svg>
+</div>
+<p class="caption">Atlas 拦不到 Pod 里的单次调用，网关是唯一的治理点：工具级复核、身份改写对 CLI 一样生效；Pod 只有主体 Key，没有网关凭据，直连 Higress 调不通。</p>
+
+<h2 id="findings">7. 写 demo 时发现的、可能要改的设计</h2>
+<p>这几条是写和跑 demo 的过程中冒出来的，设计稿里还没写或写得不够准。都没有改进设计稿，等你看完再定。</p>
+<table><tr><th>#</th><th>发现</th><th>设计稿现在怎么写</th><th>建议</th></tr><tr><td>F1</td><td><b>接入检查会触发“直连告警”</b>：网关登记服务时发的那个不带凭据的请求，在 Higress 看来就是一个“想绕过网关”的请求（输出 ②、⑦）</td><td>8.3、10：“正常情况下 Higress 上不会有被拒绝的请求，出现即告警”</td><td>告警规则改为“被拒且来源不是 MCP 网关”；接入检查本身由网关记录</td></tr><tr><td>F2</td><td><b>tools/call 只能按工具名判复核</b>：tools/list 的返回带着定义，能按实时指纹去掉被改过的；tools/call 只带名字，网关只能查库里的结论。上游改了定义、网关还没刷新时，知道名字的 CLI 仍能调到新定义</td><td>8.1 只写了“工具列表里去掉、调用直接拒绝”，没说按什么判</td><td>数据面在 tools/list 里发现指纹对不上时，立即在网关库里把这个工具标为“定义已变、待复核”，之后的 tools/call 一并拒绝（数据面要写控制面的库）。demo 没实现这一条</td></tr><tr><td>F3</td><td><b>tools/list 要读完整返回再改写</b>：过滤工具必须拿到整个列表；上游如果回的是 SSE，还要先解析事件流</td><td>8.2：“流式转发、不缓冲”</td><td>改成“tools/call 等流式转发、不缓冲；tools/list 读完整返回、改写后再回”（列表一般不大）</td></tr><tr><td>F4</td><td><b>拒绝必须带 JSON-RPC 错误体</b>：mcp 2.x 客户端遇到只有状态码的 4xx，只会报 <code>Server returned an error response</code>，看不到原因。demo 的网关回了错误体，Pod CLI 才拿到“没有通过复核”</td><td>6.2 按“Key 无效 / 无权 / …”给模型不同的提示，但没说网关怎么把原因带回来</td><td>8.2 加一条：拒绝时回 JSON-RPC 错误体（原因 + 区分得开的错误码），Atlas 按错误码转成 6.2 的提示</td></tr><tr><td>F5</td><td><b>Atlas 每个 Run 问网关两次</b>：主体能用哪些服务、主体的 Key。两者总是一起用</td><td>6.1：“向 MCP 网关查可用服务，同时取主体 Key”</td><td>合成一个内部接口，一次返回；ACP 建会话同样只问一次</td></tr></table>
+
+<h2 id="run">8. 运行</h2>
+<pre><code>.venv/bin/python demo/mcp-gateway/main.py
+.venv/bin/python demo/mcp-gateway/check_layers.py   # 依赖方向</code></pre>
+<p>每个服务在后台线程里起一个 uvicorn（随机端口）；输出按链路的真实顺序编号。开着 HTTP(S)_PROXY 的机器上，<code>main.py</code> 已把 127.0.0.1 加进 NO_PROXY。</p>
+
+<h2 id="result">9. 实测输出</h2>
+<p class="caption">端口、Key、Run 编号、指纹已替换成占位符。</p>
+<pre><code>── ① MCP 管理员在 MCP 网关登记服务、复核、发 Key、授权
+① [MCP 网关] 登记服务 weather（上游 Higress:weather，不要求复核）
+② [Higress] 拒绝 POST /mcp-servers/weather/：没有网关凭据（来源 127.0.0.1，什么凭据都没带）→ 记日志、告警
+③ [MCP 网关] 接入检查通过：不带网关凭据被拒
+④ [用户中心] 登记数据对象 McpServer/weather（应用 mcp-gateway），所有者 u-admin
+⑤ [MCP 网关] 带网关凭据拉 weather 的工具定义存库：get_weather=available
+⑥ [MCP 网关] 登记服务 ticket（上游 Higress:ticket，要求复核）
+⑦ [Higress] 拒绝 POST /mcp-servers/ticket/：没有网关凭据（来源 127.0.0.1，什么凭据都没带）→ 记日志、告警
+⑧ [MCP 网关] 接入检查通过：不带网关凭据被拒
+⑨ [用户中心] 登记数据对象 McpServer/ticket（应用 mcp-gateway），所有者 u-admin
+⑩ [MCP 网关] 带网关凭据拉 ticket 的工具定义存库：create_ticket=pending_review、delete_ticket=pending_review
+⑪ [MCP 网关] 登记服务 report（上游 Higress:report，不要求复核）
+⑫ [MCP 网关] 接入检查不通过：不带网关凭据也能调通 report → 不允许登记（Higress 上漏开了认证）
+⑬ [MCP 网关] u-admin 复核批准 ticket.create_ticket（指纹 xxxxxxxx）
+⑭ [MCP 网关] 给 u-alice 发 API Key mk-xxxx…
+⑮ [MCP 网关] 给 de-admin 发 API Key mk-xxxx…
+⑯ [用户中心] u-admin 把 weather 的「使用」授给 u-alice
+⑰ [用户中心] u-admin 把 ticket 的「使用」授给 u-alice
+⑱ [用户中心] u-admin 把 ticket 的「使用」授给 de-admin
+⑲ [MCP 网关] 内部接口：给 Atlas 元数据（2 个服务，含复核结论）
+⑳ [Atlas] 元数据缓存已刷新：[&#x27;weather&#x27;, &#x27;ticket&#x27;]
+
+── ② 编辑器：按权限主体列出可选的 MCP 工具
+㉑ [Atlas] 编辑器打开「出行助理」（native，以人为权限），使用者 u-alice → 权限主体 u-alice
+㉒ [用户中心] u-alice 能用的 McpServer：[&#x27;ticket&#x27;, &#x27;weather&#x27;]
+㉓ [MCP 网关] 内部接口：u-alice 能用的服务 [&#x27;ticket&#x27;, &#x27;weather&#x27;]
+      工具 · MCP 服务按 u-alice 的权限列出
+        ☐ weather  get_weather
+        ☐ ticket   create_ticket
+㉔ [Atlas] 编辑器打开「行政助手」（native，以 Agent 为权限），使用者 u-bob → 权限主体 de-admin
+㉕ [用户中心] de-admin 能用的 McpServer：[&#x27;ticket&#x27;]
+㉖ [MCP 网关] 内部接口：de-admin 能用的服务 [&#x27;ticket&#x27;]
+      工具 · MCP 服务按 de-admin 的权限列出
+        ☐ ticket   create_ticket
+        另有 1 个 MCP 服务 de-admin 没有权限
+
+── ③ Native · 以人为权限：alice 用自己的「出行助理」
+㉗ [用户 alice] 上海今天下雨吗？下雨就建一张提醒带伞的工单
+㉘ [Atlas] run-xxxxxx：「出行助理」（native，以人为权限），使用者 u-alice → 权限主体 u-alice
+㉙ [MCP 网关] 内部接口：u-alice 能用的服务 [&#x27;ticket&#x27;, &#x27;weather&#x27;]
+㉚ [MCP 网关] 内部接口：u-alice 的 Key → mk-xxxx…
+㉛ [Atlas] 对话里提示：跳过 ticket.delete_ticket：工具定义待复核
+㉜ [Atlas] 装配完成：[&#x27;weather__get_weather&#x27;, &#x27;ticket__create_ticket&#x27;]（读元数据缓存造 ToolSpec，没连 MCP） → 连同 ModelSpec(mock) 交给 engine
+㉝ [engine] 调模型：1 条消息、2 个工具
+㉞ [模型（mock）] 返回 tool_call：weather__get_weather({&#x27;city&#x27;: &#x27;上海&#x27;})
+㉟ [engine] 执行工具 weather__get_weather({&#x27;city&#x27;: &#x27;上海&#x27;}) → ToolSpec.call
+㊱ [Atlas 会话池] weather 第一次被调用 → 建会话（本 Run 内复用）
+㊲ [MCP 网关] initialize               weather ← Key→u-alice · 判权 ✓ → X-Auth-Uid=u-alice、换网关凭据 → Higress
+㊳ [MCP 网关] tools/call get_weather   weather ← Key→u-alice · 判权 ✓ · 复核 ✓ → X-Auth-Uid=u-alice、换网关凭据 → Higress
+㊴ [Higress] REST 转 MCP：get_weather → POST /weather（带后端凭据）
+㊵ [业务系统 weather] POST /weather city=上海 → 小雨，20~24℃（后端凭据 ✓）
+㊶ [MCP 网关] tools/list               weather ← Key→u-alice · 判权 ✓ → X-Auth-Uid=u-alice、换网关凭据 → Higress
+㊷ [engine] 调模型：3 条消息、2 个工具
+㊸ [模型（mock）] 返回 tool_call：ticket__create_ticket({&#x27;title&#x27;: &#x27;上海有雨，提醒带伞&#x27;})
+㊹ [engine] 执行工具 ticket__create_ticket({&#x27;title&#x27;: &#x27;上海有雨，提醒带伞&#x27;}) → ToolSpec.call
+㊺ [Atlas 会话池] ticket 第一次被调用 → 建会话（本 Run 内复用）
+㊻ [MCP 网关] initialize               ticket  ← Key→u-alice · 判权 ✓ → X-Auth-Uid=u-alice、换网关凭据 → Higress
+㊼ [MCP 网关] tools/call create_ticket ticket  ← Key→u-alice · 判权 ✓ · 复核 ✓ → X-Auth-Uid=u-alice、换网关凭据 → Higress
+㊽ [Higress] REST 转 MCP：create_ticket → POST /tickets（带后端凭据，转交身份请求头 {&#x27;x-auth-uid&#x27;: &#x27;u-alice&#x27;, &#x27;x-uid&#x27;: &#x27;u-alice&#x27;, &#x27;x-run-id&#x27;: &#x27;run-xxxxxx&#x27;}）
+㊾ [业务系统 ticket] POST /tickets → T-001（后端凭据 ✓；提交人 = X-Auth-Uid u-alice，使用者 X-Uid u-alice 仅审计）
+㊿ [MCP 网关] tools/list               ticket  ← Key→u-alice · 判权 ✓ → X-Auth-Uid=u-alice、换网关凭据 → Higress
+(51) [MCP 网关] tools/list 的返回里去掉未通过复核的 [&#x27;delete_ticket&#x27;]
+(52) [engine] 调模型：5 条消息、2 个工具
+(53) [模型（mock）] 返回回复：上海小雨，20~24℃；已建工单 T-001「上海有雨，提醒带伞」，提交人 u-alice。
+(54) [engine] 本轮结束：模型没有再发 tool_call
+(55) [Atlas 会话池] Run 结束，关会话 [&#x27;weather&#x27;, &#x27;ticket&#x27;]
+(56) [用户 alice] 收到回复：上海小雨，20~24℃；已建工单 T-001「上海有雨，提醒带伞」，提交人 u-alice。
+
+── ④ Native · 以 Agent 为权限：bob 用「行政助手」，按数字员工 de-admin 的权限
+(57) [用户 bob] 会议室投影仪坏了，帮我建一张报修工单
+(58) [Atlas] run-xxxxxx：「行政助手」（native，以 Agent 为权限），使用者 u-bob → 权限主体 de-admin
+(59) [MCP 网关] 内部接口：de-admin 能用的服务 [&#x27;ticket&#x27;]
+(60) [MCP 网关] 内部接口：de-admin 的 Key → mk-xxxx…
+(61) [Atlas] 对话里提示：跳过 weather：de-admin 没有被授权使用这个 MCP 服务
+(62) [Atlas] 装配完成：[&#x27;ticket__create_ticket&#x27;]（读元数据缓存造 ToolSpec，没连 MCP） → 连同 ModelSpec(mock) 交给 engine
+(63) [engine] 调模型：1 条消息、1 个工具
+(64) [模型（mock）] 返回 tool_call：ticket__create_ticket({&#x27;title&#x27;: &#x27;会议室投影仪坏了&#x27;})
+(65) [engine] 执行工具 ticket__create_ticket({&#x27;title&#x27;: &#x27;会议室投影仪坏了&#x27;}) → ToolSpec.call
+(66) [Atlas 会话池] ticket 第一次被调用 → 建会话（本 Run 内复用）
+(67) [MCP 网关] initialize               ticket  ← Key→de-admin · 判权 ✓ → X-Auth-Uid=de-admin、换网关凭据 → Higress
+(68) [MCP 网关] tools/call create_ticket ticket  ← Key→de-admin · 判权 ✓ · 复核 ✓ → X-Auth-Uid=de-admin、换网关凭据 → Higress
+(69) [Higress] REST 转 MCP：create_ticket → POST /tickets（带后端凭据，转交身份请求头 {&#x27;x-auth-uid&#x27;: &#x27;de-admin&#x27;, &#x27;x-uid&#x27;: &#x27;u-bob&#x27;, &#x27;x-run-id&#x27;: &#x27;run-xxxxxx&#x27;}）
+(70) [业务系统 ticket] POST /tickets → T-002（后端凭据 ✓；提交人 = X-Auth-Uid de-admin，使用者 X-Uid u-bob 仅审计）
+(71) [MCP 网关] tools/list               ticket  ← Key→de-admin · 判权 ✓ → X-Auth-Uid=de-admin、换网关凭据 → Higress
+(72) [MCP 网关] tools/list 的返回里去掉未通过复核的 [&#x27;delete_ticket&#x27;]
+(73) [engine] 调模型：3 条消息、1 个工具
+(74) [模型（mock）] 返回回复：已建工单 T-002「会议室投影仪坏了」，提交人 de-admin。
+(75) [engine] 本轮结束：模型没有再发 tool_call
+(76) [Atlas 会话池] Run 结束，关会话 [&#x27;ticket&#x27;]
+(77) [用户 bob] 收到回复：已建工单 T-002「会议室投影仪坏了」，提交人 de-admin。
+
+── ⑤ ACP：alice 打开「命令行助手」，Pod 里的 CLI 自己连 MCP 网关
+(78) [Atlas] 建 ACP 会话：「命令行助手」（acp，以人为权限），使用者 u-alice → 权限主体 u-alice
+(79) [MCP 网关] 内部接口：u-alice 能用的服务 [&#x27;ticket&#x27;, &#x27;weather&#x27;]
+(80) [MCP 网关] 内部接口：u-alice 的 Key → mk-xxxx…
+(81) [Atlas] session/new 下发 mcpServers：[&#x27;http://127.0.0.1:…/mcp/weather&#x27;, &#x27;http://127.0.0.1:…/mcp/ticket&#x27;]（带主体 Key 和 X-Uid）
+(82) [Pod CLI] ① 连上下发的每个服务，拉工具列表
+(83) [MCP 网关] initialize               weather ← Key→u-alice · 判权 ✓ → X-Auth-Uid=u-alice、换网关凭据 → Higress
+(84) [MCP 网关] initialize               ticket  ← Key→u-alice · 判权 ✓ → X-Auth-Uid=u-alice、换网关凭据 → Higress
+(85) [MCP 网关] tools/list               weather ← Key→u-alice · 判权 ✓ → X-Auth-Uid=u-alice、换网关凭据 → Higress
+(86) [Pod CLI] weather 的工具：[&#x27;get_weather&#x27;]
+(87) [MCP 网关] tools/list               ticket  ← Key→u-alice · 判权 ✓ → X-Auth-Uid=u-alice、换网关凭据 → Higress
+(88) [MCP 网关] tools/list 的返回里去掉未通过复核的 [&#x27;delete_ticket&#x27;]
+(89) [Pod CLI] ticket 的工具：[&#x27;create_ticket&#x27;]
+(90) [MCP 网关] tools/call get_weather   weather ← Key→u-alice · 判权 ✓ · 复核 ✓ → X-Auth-Uid=u-alice、换网关凭据 → Higress
+(91) [Higress] REST 转 MCP：get_weather → POST /weather（带后端凭据）
+(92) [业务系统 weather] POST /weather city=北京 → 晴，18~26℃（后端凭据 ✓）
+(93) [Pod CLI] 调 weather.get_weather → 晴，18~26℃
+(94) [Pod CLI] ② 硬调列表里没有的 ticket.delete_ticket
+(95) [MCP 网关] tools/call delete_ticket ticket  ← 拒绝（HTTP 403）：工具 delete_ticket 没有通过复核
+(96) [Pod CLI] 被拒：工具 delete_ticket 没有通过复核
+(97) [Pod CLI] ③ 伪造 X-Auth-Uid=u-admin 调 ticket.create_ticket
+(98) [MCP 网关] initialize               ticket  ← Key→u-alice · 判权 ✓ → X-Auth-Uid=u-alice（丢掉调用方自带的 u-admin）、换网关凭据 → Higress
+(99) [MCP 网关] tools/call create_ticket ticket  ← Key→u-alice · 判权 ✓ · 复核 ✓ → X-Auth-Uid=u-alice（丢掉调用方自带的 u-admin）、换网关凭据 → Higress
+(100) [Higress] REST 转 MCP：create_ticket → POST /tickets（带后端凭据，转交身份请求头 {&#x27;x-auth-uid&#x27;: &#x27;u-alice&#x27;, &#x27;x-uid&#x27;: &#x27;u-alice&#x27;}）
+(101) [业务系统 ticket] POST /tickets → T-003（后端凭据 ✓；提交人 = X-Auth-Uid u-alice，使用者 X-Uid u-alice 仅审计）
+(102) [MCP 网关] tools/list               ticket  ← Key→u-alice · 判权 ✓ → X-Auth-Uid=u-alice（丢掉调用方自带的 u-admin）、换网关凭据 → Higress
+(103) [MCP 网关] tools/list 的返回里去掉未通过复核的 [&#x27;delete_ticket&#x27;]
+(104) [Pod CLI] 结果：已建工单 T-003「伪造身份试试」，提交人 u-alice
+(105) [Pod CLI] ④ 绕过网关，直连集群里的 Higress（只有主体 Key，没有网关凭据）
+(106) [Higress] 拒绝 POST /mcp-servers/ticket/：没有网关凭据（来源 127.0.0.1，带的是 Bearer mk-xxxxxx…）→ 记日志、告警
+(107) [Pod CLI] 直连 Higress → HTTP 401 {&quot;error&quot;:&quot;gateway credential required&quot;}
+
+── MCP 网关的访问日志
+      u-alice   weather  initialize                 ok
+      u-alice   weather  tools/call get_weather     ok
+      u-alice   weather  tools/list                 ok
+      u-alice   ticket   initialize                 ok
+      u-alice   ticket   tools/call create_ticket   ok
+      u-alice   ticket   tools/list                 ok
+      de-admin  ticket   initialize                 ok
+      de-admin  ticket   tools/call create_ticket   ok
+      de-admin  ticket   tools/list                 ok
+      u-alice   weather  initialize                 ok
+      u-alice   ticket   initialize                 ok
+      u-alice   weather  tools/list                 ok
+      u-alice   ticket   tools/list                 ok
+      u-alice   weather  tools/call get_weather     ok
+      u-alice   ticket   tools/call delete_ticket   工具 delete_ticket 没有通过复核
+      u-alice   ticket   initialize                 ok
+      u-alice   ticket   tools/call create_ticket   ok
+      u-alice   ticket   tools/list                 ok</code></pre>
+
+<h2 id="not">10. 没覆盖的</h2>
+<ul>
+<li>Atlas 调用链里的参数校验、错误转换、超时、结果截断：已在仓库的 <code>providers/mcp/native.py</code> 实现，demo 里没放。</li>
+<li>部门授权、“全部 MCP 服务”这类编码级授权：用户中心 mock 只有直接授给主体的。</li>
+<li>Agent 侧的指纹比对和变更提示（4.4）、保存校验（5.4）、延迟加载（6.5）、审批（6.4）。</li>
+<li>Key 重置 / 停用、服务停用、判权缓存过期、网关凭据轮换、元数据定期刷新与接入检查复查。</li>
+<li>Higress 代理已有的远程 MCP 服务：mock 只做了 REST 转 MCP。</li>
+<li>多副本、会话粘性（V5）；知识库给 Pod 的 MCP 端点（7.4，不经网关）。</li>
+</ul>
+</main>
+</body>
+</html>

@@ -1,7 +1,8 @@
 """技能 / MCP 的只读视图（技能 / MCP 设计 §13.3）。
 
-管理页要的东西分在两边：内容与审查在配置服务，「谁在用」「用得怎样」「MCP 此刻
-的工具定义」在运行时。这里提供后一半 —— 配置服务不反向调运行时。
+管理页要的东西分在几处：技能的内容与审查在配置服务；MCP 的注册表、工具定义、复核、授权在
+MCP 网关（doc/mcp-design.html 第二版）；「谁在用」「用得怎样」只有运行时知道。这里提供最后
+这一半 —— 配置服务、MCP 网关都不反向调运行时。MCP 的工具定义读网关的元数据（缓存）。
 """
 
 from __future__ import annotations
@@ -10,21 +11,18 @@ import time
 from collections import Counter
 from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID
 
-from atlas_config.schemas import SENSITIVE_HEADER
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from ..configplane import ConfigPlaneUnavailable, skill_directory
-from ..configplane.mcp import make_mcp_catalog, mcp_reviews
 from ..db.models import Agent, AgentVersion, Thread
 from ..domain.mcp_naming import parse_tool_id, tool_id
-from ..errors import AppError, DependencyUnavailable, NotFound
-from ..providers.mcp import McpUnavailable, review_status
-from ..providers.mcp.catalog import McpToolDef, ServerSnapshot, describe_error
+from ..errors import AppError, CapabilityUnavailable, DependencyUnavailable, NotFound
+from ..providers.mcp import GatewayCatalog, make_mcp_catalog, review_status
+from ..providers.mcp.catalog import McpToolDef, ServerSnapshot
 from ..providers.mcp.config import McpServerConfig
 from ..repositories.skill_usage import SkillUsageRepository
 from ..schemas.catalog import (
@@ -64,21 +62,6 @@ def _today() -> date:
 
 def _ts(value: float | None) -> datetime | None:
     return datetime.fromtimestamp(value, UTC) if value else None
-
-
-def _public_url(url: str) -> str:
-    """去掉 userinfo 与 query —— 两处都可能夹带凭据。"""
-    parts = urlsplit(url)
-    netloc = parts.hostname or ""
-    if parts.port:
-        netloc = f"{netloc}:{parts.port}"
-    return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
-
-
-def _public_headers(headers: dict[str, str]) -> dict[str, str]:
-    return {
-        k: (v if "${" in v or not SENSITIVE_HEADER.match(k) else "••••") for k, v in headers.items()
-    }
 
 
 class CatalogService:
@@ -129,20 +112,20 @@ class CatalogService:
 
     async def list_mcp_servers(self) -> McpServerListOut:
         configs, catalog = await self._mcp_configs()
-        reviews = await self._reviews(configs)
+        reviews = self._reviews(catalog)
         refs = Counter(server for server, _ in await self._mcp_refs())
         out = []
         for config in configs:
             snap = await catalog.cached(config.name) if config.enabled else None
             out.append(self._summary(config, snap, reviews, refs.get(config.name, 0)))
-        return McpServerListOut(registry=self._settings.mcp_registry, data=out)
+        return McpServerListOut(registry="gateway", data=out)
 
     async def mcp_server(self, name: str) -> McpServerDetailOut:
         configs, catalog = await self._mcp_configs()
         config = next((c for c in configs if c.name == name), None)
         if config is None:
             raise NotFound(f"MCP server {name} 不存在", server=name)
-        reviews = await self._reviews([config])
+        reviews = self._reviews(catalog)
         snap = await catalog.cached(name) if config.enabled else None
         refs = [r for r in await self._mcp_refs() if r[0] == name]
         detail = McpServerDetailOut(
@@ -153,7 +136,9 @@ class CatalogService:
             previous = {t.name: t for t in snap.previous}
             detail.tools = [self._tool(config, t, previous, reviews) for t in snap.tools]
             current = {t.name for t in snap.tools}
-            detail.removed_tools = sorted(n for n in previous if n not in current)
+            detail.removed_tools = sorted(
+                {n for n in previous if n not in current} | set(snap.removed)
+            )
         return detail
 
     async def refresh_mcp_server(self, name: str) -> McpServerDetailOut:
@@ -166,29 +151,23 @@ class CatalogService:
             raise RefreshTooSoon(f"{_REFRESH_EVERY_S} 秒内只能刷新一次", server=name)
         try:
             await catalog.refresh(name)
-        except McpUnavailable as exc:
+        except CapabilityUnavailable as exc:
             raise DependencyUnavailable(str(exc), server=name) from exc
-        except Exception as exc:  # 发现失败的细节给管理员看，不是 500
-            raise DependencyUnavailable(describe_error(exc), server=name) from exc
         return await self.mcp_server(name)
 
     # ================================================================ 内部
 
-    async def _mcp_configs(self) -> tuple[list[McpServerConfig], Any]:
+    async def _mcp_configs(self) -> tuple[list[McpServerConfig], GatewayCatalog]:
+        """MCP 网关上的服务（含停用的：列表里也要看见它们）。"""
         try:
             catalog = await make_mcp_catalog(self._settings, self._redis)
-        except ConfigPlaneUnavailable as exc:
-            raise DependencyUnavailable(f"MCP 注册表暂时不可用：{exc}") from exc
-        if self._settings.mcp_registry == "env":
-            # 列表里也要看见被停用的 server（catalog 只认 enabled 的）
-            return list(self._settings.mcp_servers), catalog
-        return catalog.servers(), catalog
+        except CapabilityUnavailable as exc:
+            raise DependencyUnavailable(f"MCP 网关暂时不可用：{exc}") from exc
+        return catalog.all_servers(), catalog
 
-    async def _reviews(self, configs: list[McpServerConfig]) -> Any:
-        try:
-            return await mcp_reviews(self._settings, configs)
-        except ConfigPlaneUnavailable:
-            return {}
+    @staticmethod
+    def _reviews(catalog: GatewayCatalog) -> Any:
+        return catalog.reviews()
 
     def _summary(
         self,
@@ -210,10 +189,11 @@ class CatalogService:
             status, error = "ok", None
         return McpServerSummary(
             name=config.name,
-            url=_public_url(config.url),
-            transport=config.transport,
-            credential_scope=config.credential_scope,
-            headers=_public_headers(config.headers),
+            url=config.url,
+            transport="streamable_http",
+            # 经 MCP 网关、带权限主体的 API Key（MCP 方案设计 §5.6）
+            credential_scope="subject",
+            headers={},
             call_timeout_s=config.call_timeout_s,
             enabled=config.enabled,
             review_required=config.review_required,

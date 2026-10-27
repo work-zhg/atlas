@@ -8,7 +8,6 @@ import sys
 FORBIDDEN = (
     "atlas_agent",
     "atlas_engine",
-    "atlas_cluster",
     "sqlalchemy",
     "fastapi",
     "redis",

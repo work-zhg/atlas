@@ -17,34 +17,24 @@ from ..auth import Principal, require_any
 from ..db.models import ConfigAudit
 from ..schemas import (
     AuditOut,
-    McpServerIn,
-    McpServerOut,
-    McpServerPatch,
     ReviewDecisionIn,
     SkillDetailOut,
     SkillVersionAdminOut,
     StatusChangeIn,
-    ToolReviewIn,
-    ToolReviewOut,
 )
 from ..skill.package import ScanBlocked, load_zip
 from ..skill.service import limits_of
-from .deps import RegistryDep, SessionDep, SkillServiceDep
+from .deps import SessionDep, SkillServiceDep
 
 router = APIRouter(prefix="/config", tags=["config"])
 
-#: 按操作码鉴权（权限设计 §6.1）。查看目录：编辑智能体时要选技能 / MCP，所以构建类操作码都可以看
+#: 按操作码鉴权（权限设计 §6.1）。查看目录：编辑智能体时要选技能，所以构建类操作码都可以看
 SkillReader = Annotated[
     Principal,
     Depends(require_any("skill:upload", "skill:review", "agent:create")),
 ]
 SkillUploader = Annotated[Principal, Depends(require_any("skill:upload", "skill:review"))]
 SkillReviewer = Annotated[Principal, Depends(require_any("skill:review"))]
-McpReader = Annotated[
-    Principal,
-    Depends(require_any("mcp:manage", "agent:create")),
-]
-McpManager = Annotated[Principal, Depends(require_any("mcp:manage"))]
 Auditor = Annotated[Principal, Depends(require_any("audit:view"))]
 
 
@@ -144,45 +134,6 @@ async def change_status(
             slug, version, action=action, actor=principal.user, reason=body.reason if body else None
         )
     return _admin_out(row)
-
-
-# ───────────────────────────────────────────── MCP
-
-
-@router.get("/mcp/servers", response_model=list[McpServerOut])
-async def list_servers(registry: RegistryDep, _: McpReader) -> list[McpServerOut]:
-    return await registry.list()
-
-
-@router.post("/mcp/servers", response_model=McpServerOut, status_code=201)
-async def create_server(
-    body: McpServerIn, registry: RegistryDep, principal: McpManager
-) -> McpServerOut:
-    return await registry.create(body, actor=principal.user)
-
-
-@router.get("/mcp/servers/{name}", response_model=McpServerOut)
-async def get_server(name: str, registry: RegistryDep, _: McpReader) -> McpServerOut:
-    return await registry.get(name)
-
-
-@router.patch("/mcp/servers/{name}", response_model=McpServerOut)
-async def patch_server(
-    name: str, body: McpServerPatch, registry: RegistryDep, principal: McpManager
-) -> McpServerOut:
-    return await registry.patch(name, body, actor=principal.user)
-
-
-@router.get("/mcp/servers/{name}/reviews", response_model=list[ToolReviewOut])
-async def list_reviews(name: str, registry: RegistryDep, _: McpReader) -> list[ToolReviewOut]:
-    return await registry.reviews(name)
-
-
-@router.post("/mcp/servers/{name}/reviews", response_model=ToolReviewOut, status_code=201)
-async def review_tool(
-    name: str, body: ToolReviewIn, registry: RegistryDep, principal: McpManager
-) -> ToolReviewOut:
-    return await registry.review(name, body, actor=principal.user)
 
 
 # ───────────────────────────────────────────── 审计

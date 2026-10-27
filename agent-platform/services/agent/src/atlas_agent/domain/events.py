@@ -68,6 +68,10 @@ class EventType(StrEnum):
 
     USAGE_UPDATED = "usage.updated"
     APPROVAL_REQUIRED = "approval.required"
+    #: 用户回答了 ask_user_question（doc/ask-user-question-design.html）。
+    #: data: {approval_id, tool_call_id, feedback?,
+    #:        answers: [{header, question, selected, other, by}]}
+    QUESTION_ANSWERED = "question.answered"
 
     CONTEXT_COMPACTED = "context.compacted"  # 文档 §7.5，必须对用户可见
     CONTEXT_CLEARED = "context.cleared"  # 旧工具结果被清除（上下文管理 §8 ②）
@@ -92,6 +96,10 @@ class EventType(StrEnum):
     #: MCP 工具的定义与 agent 保存时记录的不一致，或尚未复核（§9）。
     #: data: {tool, server, old_digest, new_digest, action}
     MCP_TOOL_DRIFT = "mcp.tool_drift"
+    #: 经 MCP 网关时，这一轮的权限主体用不了某个服务，本轮跳过（MCP 方案设计 §6.1）。
+    #: data: {server, tools, reason: forbidden | no_key, subject, message}
+    #: ★ 必须是事件：静默少一个工具，模型照常做事、只是做不好，用户不知道为什么。
+    MCP_TOOL_SKIPPED = "mcp.tool_skipped"
 
 
 #: run 的终止事件。SSE 发送后即关闭连接。

@@ -20,9 +20,4 @@ export type ConfigSkillVersion = C["SkillVersionAdminOut"] & {
 export type ConfigSkill = Omit<C["SkillDetailOut"], "versions"> & {
   versions: ConfigSkillVersion[];
 };
-export type ConfigMcpServer = C["McpServerOut"];
-export type McpServerIn = C["McpServerIn"];
-export type McpServerPatch = C["McpServerPatch"];
-export type ToolReview = C["ToolReviewOut"];
-export type ToolReviewIn = C["ToolReviewIn"];
 export type AuditEntry = C["AuditOut"];

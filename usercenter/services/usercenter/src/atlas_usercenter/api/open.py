@@ -13,20 +13,21 @@ from __future__ import annotations
 from typing import Any, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Response
 from pydantic import BaseModel
 from sqlalchemy import func, or_, select
 
 from ..app.service import AppService
 from ..audit import Actor
 from ..common import Page, iso
-from ..db.models import AppScopeDept, Dept, Tenant, TenantApp, User
+from ..db.models import App, AppScopeDept, Dept, Tenant, TenantApp, User
 from ..db.tenancy import platform_scope
 from ..errors import Invalid, NotFound
 from ..org.service import OrgService
 from ..perm.data import DataService
 from ..perm.effective import authz_snapshot, can_access
 from ..perm.service import GrantService  # noqa: F401  (保持模块加载顺序，避免循环导入)
+from ..user.digital import DigitalEmployeeService, digital_view
 from .deps import OpenActorDep, OpenAppDep, SessionDep, SettingsDep
 
 router = APIRouter(prefix="/open/v1", tags=["open"])
@@ -93,19 +94,31 @@ async def _user(session: SessionDep, user_id: UUID) -> User:
 
 async def _user_info(session: SessionDep, u: User) -> dict[str, Any]:
     org = OrgService(session, Actor.system())
-    dept = await org.get(u.dept_uuid)
+    dept = await org.get(u.dept_uuid) if u.dept_uuid else None
     manager, source = await org.manager_of(u)
+    source_app = (
+        await session.scalar(select(App.code).where(App.uuid == u.source_app_uuid))
+        if u.source_app_uuid
+        else None
+    )
     return {
         "id": str(u.uuid),
         "tenant_id": str(u.tenant_uuid),
+        "user_type": u.user_type,
         "account": u.account,
         "name": u.name,
         "email": u.email,
         "status": u.status,
+        # 数字员工不进组织树：没有部门、没有直属上级
         "dept": {
             "id": str(dept.uuid),
             "path": " / ".join((await org.path_names(dept))[1:]) or dept.name,
-        },
+        }
+        if dept
+        else None,
+        "owner_id": str(u.owner_uuid) if u.owner_uuid else None,
+        "source_app": source_app,
+        "external_ref": u.external_ref,
         "manager": {
             "id": str(manager.uuid),
             "name": manager.name,
@@ -173,12 +186,25 @@ async def list_users(
     q: str | None = None,
     dept_id: UUID | None = None,
     include_sub: bool = True,
+    types: str = "human",
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
 ) -> dict[str, Any]:
-    """选人：只返回本应用可访问范围内的未停用用户。"""
+    """选人：只返回本应用可访问范围内的未停用用户。
+
+    types：human（缺省）、digital，逗号分隔 —— 缺省只有人，已接入应用的选人器行为不变，
+    想选数字员工的应用显式开启。应用的部门范围只约束人；数字员工没有部门，本租户开通了应用
+    就都可见。按部门查询（dept_id）永远不返回数字员工。
+    """
     pg = Page(page, size)
-    stmt = select(User).join(Dept, Dept.uuid == User.dept_uuid).where(User.status == "active")
+    wanted = {t.strip() for t in types.split(",") if t.strip()}
+    if not wanted <= {"human", "digital"}:
+        raise Invalid("VALIDATION_FAILED", "types 只能是 human、digital")
+    stmt = (
+        select(User)
+        .outerjoin(Dept, Dept.uuid == User.dept_uuid)
+        .where(User.status == "active", User.user_type.in_(wanted))
+    )
     opened = await AppService(session, Actor.system()).tenant_app(app.uuid)
     if opened is None or not opened.scope_all:
         scope = list(
@@ -188,9 +214,8 @@ async def list_users(
                 .where(AppScopeDept.app_uuid == app.uuid)
             )
         )
-        if not scope:
-            return {"total": 0, "items": []}
-        stmt = stmt.where(or_(*[Dept.path.like(d.path + "%") for d in scope]))
+        in_scope = [Dept.path.like(d.path + "%") for d in scope]
+        stmt = stmt.where(or_(User.user_type == "digital", *in_scope))
     if dept_id:
         d = await OrgService(session, Actor.system()).get(dept_id)
         stmt = (
@@ -208,10 +233,101 @@ async def list_users(
     return {
         "total": total,
         "items": [
-            {"id": str(u.uuid), "account": u.account, "name": u.name, "dept_id": str(u.dept_uuid)}
+            {
+                "id": str(u.uuid),
+                "user_type": u.user_type,
+                "account": u.account,
+                "name": u.name,
+                "dept_id": str(u.dept_uuid) if u.dept_uuid else None,
+            }
             for u in users
         ],
     }
+
+
+# ───────────────────────────── 数字员工（数字员工设计 §4）
+
+
+class DigitalCreate(BaseModel):
+    external_ref: str
+    name: str
+    owner_id: UUID
+    description: str | None = None
+
+
+class DigitalPatch(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    owner_id: UUID | None = None
+
+
+async def _digital_out(session: SessionDep, u: User) -> dict[str, Any]:
+    app = await session.scalar(select(App).where(App.uuid == u.source_app_uuid))
+    return digital_view(u, app)
+
+
+@router.post("/digital-employees")
+async def digital_create(
+    body: DigitalCreate,
+    app: OpenAppDep,
+    actor: OpenActorDep,
+    session: SessionDep,
+    response: Response,
+) -> dict[str, Any]:
+    """幂等：(调用应用, external_ref) 已有就返回已有的（200），否则新建（201）。"""
+    user, created = await DigitalEmployeeService(session, actor).create(
+        app,
+        external_ref=body.external_ref,
+        name=body.name,
+        owner_uuid=body.owner_id,
+        description=body.description,
+    )
+    response.status_code = 201 if created else 200
+    return await _digital_out(session, user)
+
+
+@router.get("/digital-employees")
+async def digital_find(
+    external_ref: str, app: OpenAppDep, actor: OpenActorDep, session: SessionDep
+) -> dict[str, Any]:
+    """按外部引用查本应用建的数字员工（不确定是否已建成时先查，用于补偿）。"""
+    user = await DigitalEmployeeService(session, actor).find(app, external_ref)
+    if user is None:
+        raise NotFound("DIGITAL_EMPLOYEE_NOT_FOUND", "数字员工不存在")
+    return await _digital_out(session, user)
+
+
+@router.get("/digital-employees/{user_id}")
+async def digital_get(
+    user_id: UUID, app: OpenAppDep, actor: OpenActorDep, session: SessionDep
+) -> dict[str, Any]:
+    return await _digital_out(session, await DigitalEmployeeService(session, actor).get(user_id))
+
+
+@router.patch("/digital-employees/{user_id}")
+async def digital_patch(
+    user_id: UUID, body: DigitalPatch, app: OpenAppDep, actor: OpenActorDep, session: SessionDep
+) -> dict[str, Any]:
+    user = await DigitalEmployeeService(session, actor).update(
+        app, user_id, name=body.name, description=body.description, owner_uuid=body.owner_id
+    )
+    return await _digital_out(session, user)
+
+
+@router.post("/digital-employees/{user_id}/disable")
+async def digital_disable(
+    user_id: UUID, app: OpenAppDep, actor: OpenActorDep, session: SessionDep
+) -> dict[str, Any]:
+    user = await DigitalEmployeeService(session, actor).set_status(app, user_id, "disabled")
+    return await _digital_out(session, user)
+
+
+@router.post("/digital-employees/{user_id}/enable")
+async def digital_enable(
+    user_id: UUID, app: OpenAppDep, actor: OpenActorDep, session: SessionDep
+) -> dict[str, Any]:
+    user = await DigitalEmployeeService(session, actor).set_status(app, user_id, "active")
+    return await _digital_out(session, user)
 
 
 @router.get("/depts/tree")

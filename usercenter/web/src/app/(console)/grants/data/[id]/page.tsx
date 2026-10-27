@@ -210,7 +210,7 @@ function AddAcl({ id, name, onClose, onDone }: { id: string; name: string; onClo
           授予 Owner 后，对方也能管理这条数据的授权
         </div>
       </div>
-      <SubjectPicker value={value} onChange={setValue} />
+      <SubjectPicker digital value={value} onChange={setValue} />
       <div className="uc-muted" style={{ marginTop: 8 }}>
         对象已有授权时，按本次选择更新级别（和部门范围）。
       </div>

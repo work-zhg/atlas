@@ -15,7 +15,7 @@ from ..settings import get_settings
 from ..storage import StorageNotConfigured
 from ..telemetry import setup_telemetry, shutdown_telemetry, trace_requests
 from . import datasets, internal
-from .mcp import build_mcp
+from .mcp import build_mcp, mcp_app
 
 __all__ = ["create_app"]
 
@@ -74,5 +74,5 @@ def create_app(*, runtime: Runtime | None = None, cors_origins: list[str] | None
     app.include_router(internal.router)
     app.include_router(datasets.router)
     # Pod 里的 ACP CLI 经它调 knowledge_search（令牌鉴权，见 api/mcp.py）
-    app.mount("/mcp", mcp.streamable_http_app())
+    app.mount("/mcp", mcp_app(mcp))
     return app

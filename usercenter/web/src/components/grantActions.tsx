@@ -69,7 +69,7 @@ export function GrantToModal({ kind, target, onClose }: { kind: "role" | "positi
   }
   return (
     <Modal open title={`授权 · ${kind === "role" ? "角色" : "岗位"}「${target.name}」`} onCancel={onClose} onOk={ok} okText="授权" width={560}>
-      <SubjectPicker value={value} onChange={setValue} />
+      <SubjectPicker digital value={value} onChange={setValue} />
       <div className="uc-muted" style={{ marginTop: 8 }}>
         已授权的对象会跳过；部门已授权时按本次的「包含下级部门」更新范围。
       </div>

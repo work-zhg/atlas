@@ -1,0 +1,39 @@
+# ACP Pod 的存储：同一个桶的第二个静态 PV + atlas-acp 里的 PVC（doc/sandbox-opensandbox-design.html §6.1）。
+# 每个 ACP Pod 挂三个 subPath：{user}/{workspace_thread}/workspace、{user}/{thread}/skills（只读）、
+# {user}/{thread}/system/cli-home（CLI 的 HOME，resume 靠它）。
+#
+# ★ volumeHandle 写 atlas-dev/（不是 atlas-dev）：两个 PV 的 volumeHandle 要不同，否则 kubelet 当成
+#   同一个卷；csi-s3 把 atlas-dev/ 解析成「桶 atlas-dev、前缀为空」，仍是整桶。挂载参数与 06 相同。
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: atlas-oss-atlas-acp
+spec:
+  storageClassName: ""
+  capacity: {storage: 1Ti}
+  accessModes: [ReadWriteMany]
+  persistentVolumeReclaimPolicy: Retain
+  claimRef: {namespace: atlas-acp, name: atlas-oss}
+  csi:
+    driver: ru.yandex.s3.csi
+    volumeHandle: atlas-dev/
+    nodeStageSecretRef: {name: atlas-oss-csi, namespace: kube-system}
+    nodePublishSecretRef: {name: atlas-oss-csi, namespace: kube-system}
+    volumeAttributes:
+      capacity: 1Ti
+      mounter: s3fs
+      options: >-
+        -o uid=1000 -o gid=1000 -o umask=0022
+        -o stat_cache_expire=1 -o attr_timeout=0 -o entry_timeout=0
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: atlas-oss
+  namespace: atlas-acp
+spec:
+  storageClassName: ""
+  volumeName: atlas-oss-atlas-acp
+  accessModes: [ReadWriteMany]
+  resources:
+    requests: {storage: 1Ti}

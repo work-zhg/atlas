@@ -4,6 +4,7 @@ from __future__ import annotations
 
 __all__ = [
     "HEADER_SESSION",
+    "LEGACY_HEADER_SESSION",
     "SUBPROTOCOLS",
     "SUBPROTOCOL_V1",
     "CloseCode",
@@ -16,8 +17,10 @@ SUBPROTOCOL_V1 = "atlas.host.v1"
 #: server 按偏好顺序报出的全部版本
 SUBPROTOCOLS: tuple[str, ...] = (SUBPROTOCOL_V1,)
 
-#: 握手头：本 Pod 只服务这一个会话
-HEADER_SESSION = "X-Atlas-Session"
+#: 握手头：本 Pod 只服务这一个会话。名称不带应用名（数字员工设计 §7.4）
+HEADER_SESSION = "X-Session-Id"
+#: 改名前的握手头：升级时还有旧镜像的 Pod 在跑。过渡一个版本 server 新旧都发、bridge 新旧都认
+LEGACY_HEADER_SESSION = "X-Atlas-Session"
 
 
 class HostErrorCode:

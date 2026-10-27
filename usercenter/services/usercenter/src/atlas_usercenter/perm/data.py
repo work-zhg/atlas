@@ -59,8 +59,12 @@ class DataService:
     async def type_level_of(
         self, user: User, data_type_uuid: UUID
     ) -> tuple[int, list[DataTypeAcl]]:
-        """数据编码级：用户对该编码下全部数据的级别。"""
-        if user.status == "disabled":
+        """数据编码级：用户对该编码下全部数据的级别。
+
+        ★ 数字员工一律没有（数字员工设计 §3.1）：「全部智能体 · Owner」交给 Agent 等于让 Agent
+          管 Agent。授权时已拒绝，这里再兜一次（例如存量数据）。
+        """
+        if user.status == "disabled" or user.is_digital:
             return 0, []
         hits = list(
             await self.session.scalars(
@@ -401,7 +405,7 @@ class DataService:
             holders.append(
                 {
                     "user": {"id": str(u.uuid), "name": u.name, "account": u.account},
-                    "dept": depts[u.dept_uuid].name,
+                    "dept": depts[u.dept_uuid].name if u.dept_uuid else "数字员工",
                     "level": level_name(max(r.level for r in rows)),
                     "sources": await self._sources(rows),
                 }
@@ -647,6 +651,8 @@ class DataService:
                     "account": u.account,
                     "name": u.name,
                     "status": u.status,
+                    # 数字员工（Agent）：共享面板据此标出、提示「等于共享给它的所有使用者」
+                    "user_type": u.user_type,
                 }
             else:
                 d = depts[a.dept_uuid]  # type: ignore[index]
@@ -869,6 +875,11 @@ class DataService:
         await self._require_type_manager(me, dt, can_grant)
         lv = _parse_level(level)
         names = await self._subjects(subjects)
+        user_ids = [sid for st, sid in subjects if st == "user"]
+        if user_ids and await self.session.scalar(
+            select(User.uuid).where(User.uuid.in_(user_ids), User.user_type == "digital").limit(1)
+        ):
+            raise Invalid("DIGITAL_NOT_ALLOWED", "全部数据授权不能授给数字员工，请按单条数据共享")
         added = updated = 0
         for st, sid in subjects:
             col = DataTypeAcl.user_uuid if st == "user" else DataTypeAcl.dept_uuid

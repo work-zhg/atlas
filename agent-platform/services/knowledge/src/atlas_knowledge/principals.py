@@ -4,7 +4,7 @@
 文档的 acl 与它有交集（或文档为 public）才能被检索到。
 
 uc 模式问 atlas-server（/internal/v1/auth/principals，它从用户中心展开部门树与角色），结果在
-进程内缓存一小段时间；dev 模式只有 u:用户。展开失败时只用 u:用户（只会少看到，不会多看到）。
+进程内缓存一小段时间。展开失败时只用 u:用户（只会少看到，不会多看到）。
 内网免令牌：带本次调用的身份请求头（auth.outbound_headers）。
 """
 
@@ -29,13 +29,6 @@ PrincipalResolver = Callable[[str], Awaitable[list[str]]]
 def make_resolver(
     settings: KnowledgeSettings, transport: httpx.AsyncBaseTransport | None = None
 ) -> PrincipalResolver:
-    if settings.auth_mode != "uc":
-
-        async def dev(user_id: str) -> list[str]:
-            return [f"u:{user_id}"]
-
-        return dev
-
     cache: dict[str, tuple[float, list[str]]] = {}
     ttl = settings.principals_ttl_s
     url = f"{settings.server_url.rstrip('/')}/internal/v1/auth/principals"

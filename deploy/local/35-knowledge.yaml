@@ -32,7 +32,6 @@ spec:
             - {name: ATLAS_KB_OSS_BUCKET, value: atlas-dev}
             - {name: ATLAS_KB_OSS_ADDRESSING_STYLE, value: path}
             - {name: ATLAS_KB_OSS_REGION, value: us-east-1}
-            - {name: ATLAS_KB_AUTH_MODE, value: uc}
             - {name: ATLAS_KB_SERVER_URL, value: "http://atlas-server.atlas-system.svc.cluster.local:8000"}
             # 库级权限 = 用户中心数据权限（AtlasKnowledgeBase）：以 Atlas 应用的身份调用户中心，
             # 与 atlas-server 同一对 App Key / Secret。用户中心后端在集群里（15-usercenter.yaml）
@@ -100,7 +99,6 @@ spec:
             - {name: ATLAS_KB_OSS_BUCKET, value: atlas-dev}
             - {name: ATLAS_KB_OSS_ADDRESSING_STYLE, value: path}
             - {name: ATLAS_KB_OSS_REGION, value: us-east-1}
-            - {name: ATLAS_KB_AUTH_MODE, value: uc}
             - {name: ATLAS_KB_SERVER_URL, value: "http://atlas-server.atlas-system.svc.cluster.local:8000"}
             # 库级权限 = 用户中心数据权限（AtlasKnowledgeBase）：以 Atlas 应用的身份调用户中心，
             # 与 atlas-server 同一对 App Key / Secret。用户中心后端在集群里（15-usercenter.yaml）

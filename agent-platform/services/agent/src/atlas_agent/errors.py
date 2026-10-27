@@ -47,10 +47,6 @@ class SlugTaken(Conflict):
     kind = "slug_taken"
 
 
-class BuiltinAgentProtected(Conflict):
-    kind = "builtin_agent_protected"
-
-
 class ThreadLocked(Conflict):
     kind = "thread_locked"
 
@@ -60,6 +56,20 @@ class InvalidReference(AppError):
 
     status_code = 400
     kind = "invalid_reference"
+
+
+class InvalidApprovalMode(AppError):
+    """审批模式不在智能体允许的范围里（doc/native-approval-mode-design.html）。"""
+
+    status_code = 400
+    kind = "invalid_approval_mode"
+
+
+class InvalidAnswers(AppError):
+    """ask_user_question 的答案和问题对不上（doc/ask-user-question-design.html）。"""
+
+    status_code = 400
+    kind = "invalid_answers"
 
 
 class DependencyUnavailable(AppError):

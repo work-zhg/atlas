@@ -61,6 +61,12 @@ uv run python -m atlas_bench agent cleanup                                 # 删
   `verifier/verify.py`（校验，Agent 看不到）、`solution/`（参考答案，只给单测用）。
 - 校验：最终工作区拷进 `python:3.12-slim` 容器（无网络）跑校验脚本；退出码 0 = 通过，最后一行 `SCORE=x` 给部分得分。需要本机 docker。
 - 审批：勾了 Shell 的智能体每条命令都要审批，评测按 `approve_all` 自动批准（次数与等待计入指标）。
+- 提问（`ask_user_question`，doc/ask-user-question-design.html）：不按审批策略处理。任务带 `user.brief`（用户心里的完整需求，
+  Agent 看不到）时由模拟用户作答 —— 实验配置的 `user_model` 扮演用户，只依据 brief 回答；没带的任务按推荐项回答。
+  模拟用户出错时退回按推荐，记在 `simulated_user_errors`。
+- 需求澄清：`clarify` 套件是 3 对「一句话的模糊题 / 写清楚的清晰题」（tag `ambiguous` / `clear`），
+  `experiments/clarify.yaml` 比较「能提问 / 能提问 + 澄清清单 / 不能提问」；报告的「需求澄清」一节给出
+  模糊题的提问率与成功率、清晰题的误问率与成功率。
 - 结果：`var/bench/runs/<时间>-<实验名>/` 下 `trials/<配置>.jsonl`（逐次结果）、`raw/`（原始轨迹）、`summary.json`、`report.md` / `report.html`。
 - 自带的 `demo` 是走通流程用的 7 题（代码修复、重构、数据处理、多步小工具）；Terminal-Bench 等公开任务集的导入器是下一步。
 

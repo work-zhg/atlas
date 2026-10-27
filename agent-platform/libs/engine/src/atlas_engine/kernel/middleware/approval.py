@@ -1,43 +1,25 @@
-"""高风险工具的人工确认（文档 §12.2）。
+"""人工确认的共用部分：approval_id 的派生、给模型的几段结果文案、取 run_id。
 
-拦截点是 langchain middleware 的 `awrap_tool_call`，不是 LangGraph 的
-`interrupt()` —— 后者要求 checkpointer，而本项目刻意没有第二个状态源
-（doc/detail/suspension.html §03）。
+判定「问不问人」的中间件是 permission.py 的 PermissionMiddleware（按审批模式 × 工具的副作用类别）。
+原先这里的 ApprovalMiddleware（按作者配置的必审工具名单拦截）已被它取代，名单本身也已删除
+（doc/native-approval-mode-design.html D7）。
 
-★ 等待方式从「在线阻塞」改成「挂起」（§06）。
-
-  原先这里 `await gate.request(...)` 一路等到有人点头或 600s 超时：一个
-  asyncio.Task 全程挂着，进程重启即丢。现在问一次 `gate.check(...)`，还没
-  结果就在 state.waiting_on 里登记一项让本段结束 —— 等待交给数据库，决策到达后续跑。
-
-  ★ 挂起时**不执行、也不写任何 tool 消息**，tool_call 留着悬空（contracts/suspension.py）。
-    续跑时 server 把决策放进 state.decisions，SuspensionMiddleware 看到就跳去
-    tools，这里按决策执行或拒绝，并把这一项从 waiting_on 里删掉。
-
-等待逻辑由调用方经 `contracts.ApprovalGate` 注入 —— kernel 不知道
-Postgres 与 Redis 的存在。
+★ 等待方式是「挂起」（doc/detail/suspension.html §06）：问一次 `gate.check(...)`，还没结果就在
+  state.waiting_on 里登记一项让本段结束 —— 等待交给数据库，决策到达后续跑。挂起时**不执行、也不写
+  任何 tool 消息**，tool_call 留着悬空（contracts/suspension.py）。
 """
 
 from __future__ import annotations
 
 import uuid
-from collections.abc import Awaitable, Callable
 from typing import Any
-
-from langchain.agents.middleware import AgentMiddleware
-from langchain.agents.middleware.types import ToolCallRequest
-from langchain_core.messages import ToolMessage
-from langgraph.types import Command
-
-from atlas_engine.contracts import ApprovalGate
-from atlas_engine.kernel.middleware.suspension import SuspensionState, release_wait
 
 __all__ = [
     "EXPIRED_RESULT",
     "GATE_FAILED_RESULT",
     "REJECTED_RESULT",
-    "ApprovalMiddleware",
     "approval_id_for",
+    "run_id_of",
 ]
 
 #: 被拒绝时回给 agent 的工具结果。★ 不是抛异常 ——
@@ -79,93 +61,14 @@ def approval_id_for(run_id: str, tool_call_id: str) -> str:
     return str(uuid.uuid5(_NS, f"{run_id}:{tool_call_id}"))
 
 
-class ApprovalMiddleware(AgentMiddleware):
-    """对 `require_approval_for` 里的工具，执行前先确认批过了。"""
+def run_id_of(request: Any) -> str:
+    """从工具调用的上下文里取 run_id —— runner 每段都把它放进图的 state（SuspensionState.run_id）。
 
-    state_schema = SuspensionState
-
-    def __init__(self, tool_names: frozenset[str], gate: ApprovalGate) -> None:
-        super().__init__()
-        self._guarded = tool_names
-        self._gate = gate
-
-    async def awrap_tool_call(
-        self,
-        request: ToolCallRequest,
-        handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
-    ) -> ToolMessage | Command[Any]:
-        call = request.tool_call or {}
-        name = str(call.get("name", ""))
-        if name not in self._guarded:
-            return await handler(request)
-
-        from langgraph.config import get_stream_writer
-
-        tool_call_id = str(call.get("id", ""))
-        args = call.get("args") or {}
-        graph_state = getattr(request, "state", None) or {}
-        wait = (graph_state.get("waiting_on") or {}).get(tool_call_id)
-        waiting = wait is not None
-        # ★ 续跑时用挂起时登记的那个 id，不重新派生：两段之间派生规则若有变化（部署跨越
-        #   挂起期），重算出的新 id 查不到决策，用户就得再批一次。
-        approval_id = (
-            str(wait.get("token"))
-            if waiting and wait.get("reason") == "approval" and wait.get("token")
-            else approval_id_for(_run_id_of(request), tool_call_id)
-        )
-
-        # ★ 续跑时决策由 server 从审批表读好交进来，图的行为只由输入决定；
-        #   没有（首次见到这个调用）才问 gate —— 它顺便把这次审批登记下来。
-        decision = (graph_state.get("decisions") or {}).get(approval_id)
-        if decision is None:
-            decision = await self._gate.check(approval_id=approval_id, tool_name=name, args=args)
-
-        if decision == "approved":
-            result = await handler(request)
-            return release_wait(result, tool_call_id) if waiting else result
-
-        # ★ 都不放行，但给模型的说法不同 —— 见 GATE_FAILED_RESULT 的注释。
-        #   认不出的值按「门禁故障」处理：当成 pending 会再登记一次，而它的 token 已经
-        #   在 decisions 里 —— before_model 又放行，两边来回跳到 GraphRecursionError。
-        if decision != "pending":
-            refused = ToolMessage(
-                content={
-                    "rejected": REJECTED_RESULT,
-                    "expired": EXPIRED_RESULT,
-                }.get(decision, GATE_FAILED_RESULT),
-                tool_call_id=tool_call_id,
-                name=name,
-                status="error",
-            )
-            return release_wait(refused, tool_call_id) if waiting else refused
-
-        # pending：把「需要确认」发出去，然后挂起本段。
-        #
-        # ★ 事件必须发 —— 前端的弹窗正是由它驱动的。不发的话没有任何人知道有
-        #   审批在等，run 会停在 suspended 直到超时判定（等同拒绝）。
-        get_stream_writer()(
-            {
-                "kind": "approval.required",
-                "approval_id": approval_id,
-                "tool_name": name,
-                "args": args,
-                "reason": f"{name} 在该智能体的高风险工具列表中",
-            }
-        )
-
-        # ★ 只登记、不 await、不写 tool 消息。工具**不执行**，tool_call 留着悬空；
-        #   SuspensionMiddleware 在 before_model 看到 waiting_on 非空就跳出本段。
-        return Command(
-            update={"waiting_on": {tool_call_id: {"reason": "approval", "token": approval_id}}}
-        )
-
-
-def _run_id_of(request: ToolCallRequest) -> str:
-    """从工具调用的上下文里取 run_id。
-
-    ★ 取不到时回落成空串：approval_id 于是只由 tool_call_id 决定。那仍然是
-      **可复现**的（这是不死循环的唯一要求），只是不同 run 之间可能撞 id。
-      宁可如此也不抛异常 —— 拿不到 run_id 不该让一次工具调用炸掉整轮。
+    ★ 2026-10-22 之前 runner 没有传，这里永远回落成空串：approval_id 只由 tool_call_id 决定，
+      不同 run 里同名的 tool_call_id 撞成同一条审批（测试里的假模型固定用 c1，连跑时互相污染）。
+      续跑用的是 waiting_on 里存下的 token，不重新派生，所以修复前挂起的 run 不受影响。
+    ★ 取不到时仍回落成空串（直接调中间件的单测没有 state）：那仍然是**可复现**的，
+      不该让一次工具调用炸掉整轮。
     """
     for holder in (getattr(request, "runtime", None), getattr(request, "state", None)):
         if holder is None:

@@ -126,6 +126,7 @@ export interface Http {
   get: <T>(path: string, query?: Query, signal?: AbortSignal) => Promise<T>;
   post: <T>(path: string, body?: unknown, headers?: Record<string, string>) => Promise<T>;
   patch: <T>(path: string, body?: unknown) => Promise<T>;
+  put: <T>(path: string, body?: unknown) => Promise<T>;
   del: <T>(path: string) => Promise<T>;
 }
 
@@ -135,6 +136,7 @@ export function makeHttp(client: AtlasClientConfig): Http {
     post: <T,>(path: string, body?: unknown, headers?: Record<string, string>) =>
       request<T>(client, path, { method: "POST", body, headers }),
     patch: <T,>(path: string, body?: unknown) => request<T>(client, path, { method: "PATCH", body }),
+    put: <T,>(path: string, body?: unknown) => request<T>(client, path, { method: "PUT", body }),
     del: <T,>(path: string) => request<T>(client, path, { method: "DELETE" }),
   };
 }

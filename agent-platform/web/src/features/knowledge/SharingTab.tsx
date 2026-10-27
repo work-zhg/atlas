@@ -4,6 +4,8 @@
  * 知识库共享 = 用户中心数据权限（数据编码 AtlasKnowledgeBase）。
  * 只读：检索、召回测试；可编辑：上传、编辑分段、改检索设置；所有者：删除、调整共享。
  * 授给部门时可含下级；「全部知识库」的授权在用户中心维护，不在这里。
+ * 也可以共享给数字员工（某个智能体的身份，doc/digital-employee-design.html §6）：
+ * 以 Agent 为权限的智能体按它检索 —— 共享给它 = 共享给这个智能体的所有使用者，所以选到时强提示。
  */
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, App, Button, Card, Checkbox, Radio, Select, Space, Table, Tag, TreeSelect, Typography } from "antd";
@@ -34,12 +36,19 @@ export function SharingTab({ ds }: { ds: Dataset }) {
   const grants = useGrants(ds.id);
   const depts = useQuery({ queryKey: ["directory", "depts"], queryFn: directory.depts, staleTime: 60_000 });
   const [q, setQ] = useState("");
-  const users = useQuery({ queryKey: ["directory", "users", q], queryFn: () => directory.users(q), staleTime: 30_000 });
+  const users = useQuery({
+    queryKey: ["directory", "users", q, "digital"],
+    queryFn: () => directory.users(q, true),
+    staleTime: 30_000,
+  });
   const [level, setLevel] = useState<Level>("READ");
   const [pickedUsers, setPickedUsers] = useState<string[]>([]);
   const [pickedDepts, setPickedDepts] = useState<string[]>([]);
   const [includeSub, setIncludeSub] = useState(true);
   const tree = useMemo(() => deptTree(depts.data ?? []), [depts.data]);
+  const people = (users.data ?? []).filter((u) => u.user_type !== "digital");
+  const agents = (users.data ?? []).filter((u) => u.user_type === "digital");
+  const pickedAgent = pickedUsers.some((id) => agents.some((a) => a.id === id));
   const g = grants.data;
   const manage = !!g?.can_manage;
 
@@ -86,7 +95,10 @@ export function SharingTab({ ds }: { ds: Dataset }) {
             render: (_, r) =>
               r.subject.type === "USER" ? (
                 <Space>
-                  <b>{r.subject.name ?? r.subject.id}</b>
+                  <b>
+                    {r.subject.user_type === "digital" && "🤖 "}
+                    {r.subject.name ?? r.subject.id}
+                  </b>
                   {r.subject.account && <span style={{ color: "var(--fg-3)" }}>{r.subject.account}</span>}
                   {r.subject.status === "disabled" && <Tag>已停用</Tag>}
                 </Space>
@@ -144,12 +156,26 @@ export function SharingTab({ ds }: { ds: Dataset }) {
               showSearch
               filterOption={false}
               onSearch={setQ}
-              placeholder="搜索人员（姓名 / 账号）"
+              placeholder="搜索人员或数字员工（姓名 / 账号）"
               style={{ width: "100%" }}
               value={pickedUsers}
               onChange={setPickedUsers}
-              options={(users.data ?? []).map((u) => ({ value: u.id, label: `${u.name}（${u.account}）` }))}
+              options={[
+                { label: "人员", options: people.map((u) => ({ value: u.id, label: `${u.name}（${u.account}）` })) },
+                {
+                  label: "数字员工（智能体）",
+                  options: agents.map((u) => ({ value: u.id, label: `${u.name}（${u.account}）` })),
+                },
+              ].filter((g) => g.options.length)}
             />
+            {pickedAgent && (
+              <Alert
+                type="warning"
+                showIcon
+                message="共享给数字员工 = 共享给这个智能体的所有使用者"
+                description="以 Agent 为权限的智能体按数字员工检索：能用它的人都能经它检索到本库，包括本来无权直接查看本库的人。请确认后再共享。"
+              />
+            )}
             <Button type="primary" onClick={add}>
               共享
             </Button>

@@ -10,7 +10,7 @@ from datetime import timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import case, delete, func, or_, select
+from sqlalchemy import and_, case, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..audit import Actor, mask_email, mask_phone, record
@@ -22,6 +22,13 @@ from ..security import check_policy, hash_password, temp_password, verify_passwo
 from ..settings import UCSettings
 
 __all__ = ["UserService"]
+
+
+def _human(user: User, why: str) -> User:
+    """只对人开放的管理台操作：数字员工的资料由来源应用维护，管理台只能停用 / 启用。"""
+    if user.is_digital:
+        raise Conflict("DIGITAL_READONLY", why)
+    return user
 
 
 class UserService:
@@ -50,15 +57,26 @@ class UserService:
         return case(
             (User.status == "disabled", "disabled"),
             (Credential.locked_until > now, "locked"),
-            (User.activated_at.is_(None), "pending"),
+            (and_(User.activated_at.is_(None), User.user_type == "human"), "pending"),
             else_="active",
         )
 
     async def list(
-        self, *, status: str | None, dept_uuid: UUID | None, q: str | None, page: Page
+        self,
+        *,
+        status: str | None,
+        dept_uuid: UUID | None,
+        q: str | None,
+        page: Page,
+        user_type: str = "human",
     ) -> dict[str, Any]:
+        """人和数字员工分开列（数字员工不进组织树，管理台单独一个入口）。"""
         st = self._status_expr().label("display_status")
-        base = select(User, Credential, st).outerjoin(Credential, Credential.user_uuid == User.uuid)
+        base = (
+            select(User, Credential, st)
+            .outerjoin(Credential, Credential.user_uuid == User.uuid)
+            .where(User.user_type == user_type)
+        )
         if dept_uuid is not None:
             path = await self.session.scalar(select(Dept.path).where(Dept.uuid == dept_uuid))
             if path is None:
@@ -149,7 +167,7 @@ class UserService:
     # ───────────────────────────── 写操作
 
     async def _check_quota(self) -> None:
-        """租户人员配额（未停用的人）。空 = 不限（租户设计 §14）。"""
+        """租户人员配额（未停用的人；数字员工不计）。空 = 不限（租户设计 §14）。"""
         from ..db.tenancy import current_tenant
         from ..tenant.service import get_tenant
 
@@ -160,7 +178,9 @@ class UserService:
         if quota is None:
             return
         active = await self.session.scalar(
-            select(func.count()).select_from(User).where(User.status == "active")
+            select(func.count())
+            .select_from(User)
+            .where(User.status == "active", User.user_type == "human")
         )
         if int(active or 0) >= quota:
             raise Conflict("TENANT_QUOTA_EXCEEDED", f"已达到租户人员上限（{quota} 人）")
@@ -205,7 +225,7 @@ class UserService:
         from ..org.service import OrgService
         from ..perm.effective import super_guard
 
-        user = await self.get(uuid)
+        user = _human(await self.get(uuid), "数字员工的资料由来源应用维护")
         if version is not None and version != user.version:
             raise Conflict("VERSION_CONFLICT", "该用户已被他人修改，请刷新后重试")
         clean = self._check_profile(data, creating=False)
@@ -284,7 +304,8 @@ class UserService:
         user = await self.get(uuid)
         if user.status != "disabled":
             return user
-        await self._check_quota()
+        if not user.is_digital:
+            await self._check_quota()
         user.status = "active"
         user.disabled_at = user.disabled_by = user.disabled_reason = None
         user.version += 1
@@ -304,7 +325,7 @@ class UserService:
         return user
 
     async def unlock(self, uuid: UUID) -> User:
-        user = await self.get(uuid)
+        user = _human(await self.get(uuid), "数字员工不能登录，没有锁定")
         if user.status == "disabled":
             raise Conflict("USER_DISABLED", "已停用的用户请先启用")
         cred = await self.credential(user.uuid)
@@ -323,7 +344,8 @@ class UserService:
         return user
 
     async def reset_password(self, uuid: UUID) -> tuple[User, str, Any]:
-        user = await self.get(uuid)
+        # ★ 数字员工没有凭据就不能登录 —— 重置密码会给它建一份，必须挡住
+        user = _human(await self.get(uuid), "数字员工不能登录，没有密码")
         if user.status == "disabled":
             raise Conflict("USER_DISABLED", "已停用的用户不能重置密码，请先启用")
         temp = temp_password(self.settings)

@@ -4,7 +4,7 @@
 #   native-minimal  原生智能体：只有文件 + Shell（消融：去掉待办清单）
 #   acp-claude      ACP：在 Atlas 的 Pod 里跑 Claude Code
 #
-# ★ 模型统一用 deepseek-chat：ACP 的 Claude Code 由 cluster 配置的模型驱动（ATLAS_CLUSTER_MODEL_NAME），
+# ★ 模型统一用 deepseek-chat：ACP 的 Claude Code 由 atlas-server 配置的模型驱动（ACP_MODEL_NAME），
 #   原生智能体也选同一个，才算「固定模型、只换 harness」。
 # ★ 勾了 Shell 会强制 execute 进审批：评测按 approve_all 自动批准，次数与等待时间计入指标。
 name: agent-demo

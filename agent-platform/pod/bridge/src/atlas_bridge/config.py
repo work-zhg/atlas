@@ -25,7 +25,7 @@ _OPTIONAL = frozenset({"agent_uid", "agent_gid", "agent_oom_score_adj"})
 class BridgeConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    #: 本 Pod 服务的会话（握手头 X-Atlas-Session 必须等于它，§4.3）
+    #: 本 Pod 服务的会话（握手头 X-Session-Id 必须等于它，§4.3）
     session_id: str = Field(min_length=1)
     token_file: Path = Path("/run/secrets/bridge-token")
     listen_host: str = "0.0.0.0"

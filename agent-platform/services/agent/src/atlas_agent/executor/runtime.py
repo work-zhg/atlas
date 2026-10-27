@@ -24,10 +24,11 @@ SSE 回放、孤儿回收全部原样生效，因为它们都挂在 **run 的生
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from uuid import UUID
 
+import anyio
 from atlas_engine.contracts import EngineError, InvalidSpec
 
 from atlas_agent.executor.runner import failed_before_start
@@ -113,45 +114,67 @@ class NativeRuntime:
         # 图在 server 侧装配（build.py 是策略，assembly 收集 IO 能力），
         # runner 只驱动已装好的图 —— cancel / titler 是 runner 自己的注入点。
         notices: list[tuple[EventType, dict[str, Any]]] = []
+        # ★ 本 Run 段结束（完成、挂起、取消、被接管、装配失败）时收尾：MCP 会话在段内复用，
+        #   这里关掉（MCP 方案设计 §6.3）。恢复后的下一段重新建立，不跨段、不跨进程
+        closers: list[Callable[[], Awaitable[None]]] = []
         try:
-            prepared = await self._assembly.with_knowledge(prepared, run_id=run_id)
-            graph, titler = await self._assembly.build(
-                prepared, run_id=run_id, redis=redis, relay=relay, notices=notices
-            )
-        except Exception as exc:
-            # ★ 装配失败也要有 run.started → run.failed，否则 SSE 上一个事件都
-            #   没有，用户只能干等（见 failed_before_start）。CancelledError 是
-            #   BaseException，不在这里 —— 取消照常穿透。
-            kind, message, details = _classify_assembly_error(exc)
-            for event in failed_before_start(
+            try:
+                prepared = await self._assembly.with_knowledge(prepared, run_id=run_id)
+                graph, titler = await self._assembly.build(
+                    prepared,
+                    run_id=run_id,
+                    redis=redis,
+                    relay=relay,
+                    notices=notices,
+                    closers=closers,
+                )
+            except Exception as exc:
+                # ★ 装配失败也要有 run.started → run.failed，否则 SSE 上一个事件都
+                #   没有，用户只能干等（见 failed_before_start）。CancelledError 是
+                #   BaseException，不在这里 —— 取消照常穿透。
+                kind, message, details = _classify_assembly_error(exc)
+                for event in failed_before_start(
+                    prepared.spec,
+                    run_id=run_id,
+                    kind=kind,
+                    message=message,
+                    details=details,
+                    start_seq=prepared.start_seq,
+                    base_depth=prepared.base_depth,
+                ):
+                    yield event
+                return
+            async for event in engine_run(
                 prepared.spec,
                 run_id=run_id,
-                kind=kind,
-                message=message,
-                details=details,
+                graph=graph,
+                input_content=prepared.input_content,
+                history=prepared.history,
+                cancel=RedisCancelToken(relay, run_id),
+                titler=titler,
+                transcript=transcript,
                 start_seq=prepared.start_seq,
+                resume=prepared.resume,
+                prior_tokens=prepared.prior_tokens,
                 base_depth=prepared.base_depth,
+                notices=notices,
+                waiting_on=prepared.waiting_on,
+                decisions=prepared.decisions,
+                approval_mode=prepared.approval_mode,
             ):
                 yield event
-            return
-        async for event in engine_run(
-            prepared.spec,
-            run_id=run_id,
-            graph=graph,
-            input_content=prepared.input_content,
-            history=prepared.history,
-            cancel=RedisCancelToken(relay, run_id),
-            titler=titler,
-            transcript=transcript,
-            start_seq=prepared.start_seq,
-            resume=prepared.resume,
-            prior_tokens=prepared.prior_tokens,
-            base_depth=prepared.base_depth,
-            notices=notices,
-            waiting_on=prepared.waiting_on,
-            decisions=prepared.decisions,
-        ):
-            yield event
+        finally:
+            await _close_all(closers)
+
+
+async def _close_all(closers: list[Callable[[], Awaitable[None]]]) -> None:
+    """收尾不能被取消打断（段结束常常就是因为取消），一个失败不影响别的。"""
+    with anyio.CancelScope(shield=True):
+        for close in reversed(closers):
+            try:
+                await close()
+            except Exception:
+                logger.warning("Run 段收尾失败", exc_info=True)
 
 
 def _classify_assembly_error(exc: Exception) -> tuple[str, str, dict[str, object]]:

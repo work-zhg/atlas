@@ -15,9 +15,12 @@ _middleware_for 的 if 链、server/services/meta.py 手写的目录条目。
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
+
+from atlas_engine.contracts import ToolEffect
+from atlas_engine.kernel.middleware.ask_user import ASK_USER_QUESTION
 
 if TYPE_CHECKING:
     from .spec import AgentSpec
@@ -33,7 +36,10 @@ from atlas_engine.kernel.middleware.subagents import (
 TODO_TOOL = "write_todos"
 FILESYSTEM_TOOL = "filesystem"
 BASH_TOOL = "bash"
-MEMORY_SEARCH_TOOL = "search_memory"
+#: 记忆的写入工具（doc/memory-design.html §4.3）。读取（常驻块 + load_memory）不用勾，开着记忆就有
+MEMORY_TOOL = "memory"
+#: 向用户提问（doc/ask-user-question-design.html）。注册名与模型侧名相同
+ASK_USER_TOOL = ASK_USER_QUESTION
 
 
 def _todo_middleware() -> Any:
@@ -86,8 +92,11 @@ class ToolDef:
     model_tool_names:
                  该注册项在**模型侧**实际出现的工具名。多数情况与 name 相同，
                  两处例外：bash 的模型侧名是 execute（D4），filesystem 展开成
-                 7 个文件工具。★ require_approval_for 匹配的是这些名字，
-                 不是注册项的 name —— 编辑器要按它渲染审批勾选项。
+                 5 个文件工具。
+    effects:     模型侧工具名 → 副作用类别，审批模式据此判定
+                 （doc/native-approval-mode-design.html）。
+                 按模型侧名声明：filesystem 展开后读写各不相同
+    irreversible:不可逆的模型侧工具（delete）。自动模式下不直接放行
     """
 
     name: str
@@ -98,9 +107,11 @@ class ToolDef:
     middleware: Callable[[], Any] | None = None
     requires: Callable[[AgentSpec], bool] | None = None
     model_tool_names: tuple[str, ...] = ()
+    effects: Mapping[str, ToolEffect] = field(default_factory=dict)
+    irreversible: frozenset[str] = frozenset()
 
-    def approval_targets(self) -> tuple[str, ...]:
-        """可作为审批目标的模型侧工具名；未显式声明时就是 name 本身。"""
+    def model_names(self) -> tuple[str, ...]:
+        """模型侧工具名；未显式声明时就是 name 本身。"""
         return self.model_tool_names or (self.name,)
 
 
@@ -112,10 +123,29 @@ BUILTIN_TOOLS: tuple[ToolDef, ...] = (
         description="内核计划能力，TodoCard 的数据源",
         implemented=True,
         middleware=_todo_middleware,
+        effects={TODO_TOOL: ToolEffect.PLAN},
+    ),
+    ToolDef(
+        name=ASK_USER_TOOL,
+        display_name="向用户提问",
+        description="需求不清楚时向用户提选择题（带推荐项），用户回答后在同一轮继续",
+        implemented=True,
+        note="子智能体里不生效；没有人在线回答的场景（纯接口调用）不要勾选",
+        # 问用户不改变任何东西：任何审批模式下都允许（它装在 PermissionMiddleware 外层，自己处理）
+        effects={ASK_USER_TOOL: ToolEffect.PLAN},
+        # middleware=None：要注入审批门禁，由 build.py 装配
     ),
     ToolDef(
         name=FILESYSTEM_TOOL,
         model_tool_names=FS_TOOL_NAMES,
+        effects={
+            "read_file": ToolEffect.READ,
+            "search": ToolEffect.READ,
+            "write_file": ToolEffect.WRITE,
+            "edit_file": ToolEffect.WRITE,
+            "delete": ToolEffect.WRITE,
+        },
+        irreversible=frozenset({"delete"}),
         display_name="虚拟文件系统",
         description="read_file / write_file / ls，中间产物落盘",
         implemented=True,
@@ -131,27 +161,38 @@ BUILTIN_TOOLS: tuple[ToolDef, ...] = (
         note="需要在下方配置至少一个子智能体，否则勾选无效",
         # 勾了 task 却没配子智能体 = 等于没开，必须报出来
         requires=lambda spec: bool(spec.subagents),
+        effects={SUBAGENT_TOOL: ToolEffect.DELEGATE},
     ),
     ToolDef(
-        name=MEMORY_SEARCH_TOOL,
-        display_name="记忆检索",
-        description="回忆该用户在之前会话里提到过的偏好、习惯与项目约定",
+        name=MEMORY_TOOL,
+        model_tool_names=("save_memory", "forget_memory"),
+        display_name="记忆（保存 / 遗忘）",
+        description=(
+            "在对话中保存、遗忘关于用户的长期记忆：用户要求记住的、对 Agent 的纠正、"
+            "确定下来的约定。读取不用勾选：开着记忆的会话都有常驻记忆和按需加载"
+        ),
         implemented=True,
-        # ★ 只读。不提供 add / update / delete：写记忆会随 regenerate 重复
-        #   执行（记忆设计 §05），管理操作是用户的权利而不是 Agent 的能力
-        #   （§10）。纯读取则重跑多少次都不改变状态，可以安全挂上。
-        note="需要服务端开启记忆（MEMORY_ENABLED）",
-        # middleware=None：经 hooks.extra_tools 注入
-        #   —— user_id 要从会话上下文闭包捕获，那是 server 才有的东西。
+        note="需要服务端接入记忆服务（MEMORY_BASE_URL）；子智能体里不生效（只读）",
+        # ★ 记忆的写入不走审批：每次写入用户当场可见、可以撤销（记忆设计 §4.7），
+        #   也不改会话工作区 —— 按 PLAN 归类，任何审批模式下都放行。
+        #   load_memory 不在本项的模型侧名里（它随记忆自动挂上），副作用一并在这里声明
+        effects={
+            "save_memory": ToolEffect.PLAN,
+            "forget_memory": ToolEffect.PLAN,
+            "load_memory": ToolEffect.READ,
+        },
+        # middleware=None：经 hooks.extra_tools 注入 —— 关联主键（会话所属用户）
+        #   要从会话上下文闭包捕获，那是 server 才有的东西。
     ),
     ToolDef(
         name=BASH_TOOL,
-        # 模型看到的是 execute，审批中间件也按它匹配（D4）
+        # 模型看到的是 execute（D4）
         model_tool_names=("execute",),
+        effects={"execute": ToolEffect.EXECUTE},
         display_name="Shell",
         description="在会话专属的沙箱内执行命令（模型侧工具名为 execute）",
         # K8s Pod 沙箱（doc/native-sandbox-design.html）。可用性还取决于服务端是否开启
-        # （SANDBOX_ENABLED）：没开时装配期明确报错，工具目录也标不可用（同 search_memory）。
+        # （SANDBOX_ENABLED）：没开时装配期明确报错，工具目录也标不可用（同记忆）。
         implemented=True,
         note="需要服务端开启沙箱（SANDBOX_ENABLED）",
         requires=lambda spec: FILESYSTEM_TOOL in spec.tool_names,
@@ -159,6 +200,29 @@ BUILTIN_TOOLS: tuple[ToolDef, ...] = (
 )
 
 _BY_NAME: dict[str, ToolDef] = {t.name: t for t in BUILTIN_TOOLS}
+
+
+def tool_effects(extra_tools: Iterable[Any] = ()) -> dict[str, ToolEffect]:
+    """模型可能调用的工具名 → 副作用类别。审批模式按它判定。
+
+    内置工具取注册表的声明；其余工具（MCP、知识库检索等）按 MCP 的约定看 metadata 里的
+    readOnlyHint —— MCP 工具的注解由 providers/mcp/native.py 放进 metadata，平台自己造的只读工具
+    也照此声明。
+    没声明只读的一律 EXTERNAL（最保守）；不在这张表里的工具，中间件同样按 EXTERNAL 处理。
+    """
+    out: dict[str, ToolEffect] = {}
+    for tool in BUILTIN_TOOLS:
+        out.update(tool.effects)
+    for tool in extra_tools:
+        metadata = getattr(tool, "metadata", None) or {}
+        read_only = metadata.get("readOnlyHint") is True
+        out.setdefault(tool.name, ToolEffect.READ if read_only else ToolEffect.EXTERNAL)
+    return out
+
+
+def irreversible_tools() -> frozenset[str]:
+    """不可逆的模型侧工具名（自动模式下不直接放行）。"""
+    return frozenset().union(*(t.irreversible for t in BUILTIN_TOOLS))
 
 
 def middleware_for(tool_names: frozenset[str] | set[str]) -> list[Any]:

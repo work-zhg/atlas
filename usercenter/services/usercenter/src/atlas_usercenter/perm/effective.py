@@ -53,18 +53,28 @@ __all__ = [
 ]
 
 
-async def dept_chain(session: AsyncSession, dept_uuid: UUID) -> list[UUID]:
-    """部门链：根在前，自己在最后（由物化路径解析）。"""
+async def dept_chain(session: AsyncSession, dept_uuid: UUID | None) -> list[UUID]:
+    """部门链：根在前，自己在最后（由物化路径解析）。数字员工没有部门 → 空。"""
+    if dept_uuid is None:
+        return []
     path = await session.scalar(select(Dept.path).where(Dept.uuid == dept_uuid))
     if not path:
         return []
     return [UUID(p) for p in path.strip("/").split("/")]
 
 
-def subject_filter(model: Any, user_uuid: UUID, dept_uuid: UUID, ancestors: Iterable[UUID]):  # type: ignore[no-untyped-def]
-    """角色授权与数据授权共用的命中条件。"""
+def subject_filter(  # type: ignore[no-untyped-def]
+    model: Any, user_uuid: UUID, dept_uuid: UUID | None, ancestors: Iterable[UUID]
+):
+    """角色授权与数据授权共用的命中条件。
+
+    ★ 没有部门（数字员工）时只剩「授予本人」：不能写成 dept_uuid == None —— 那是
+      IS NULL，会命中所有授给用户的行。
+    """
     anc = list(ancestors)
-    cond = [model.user_uuid == user_uuid, model.dept_uuid == dept_uuid]
+    cond = [model.user_uuid == user_uuid]
+    if dept_uuid is not None:
+        cond.append(model.dept_uuid == dept_uuid)
     if anc:
         cond.append(and_(model.include_sub.is_(True), model.dept_uuid.in_(anc)))
     return or_(*cond)
@@ -140,7 +150,11 @@ async def _tenant(session: AsyncSession, user: User) -> Tenant:
 
 
 async def can_access(session: AsyncSession, user: User, app: App) -> bool:
-    """租户可用 ∧ 租户开通了该应用 ∧ 用户未停用 ∧ 在本租户为该应用设的范围内（租户设计 §10）。"""
+    """租户可用 ∧ 租户开通了该应用 ∧ 用户未停用 ∧ 在本租户为该应用设的范围内（租户设计 §10）。
+
+    ★ 应用的可访问范围按部门设，只约束人。数字员工没有部门：本租户开通了该应用即可
+      （数字员工设计 §4、待确认 #5）—— 它能干什么由直接授给它的权限决定。
+    """
     from ..tenant.service import tenant_usable
 
     if user.status == "disabled" or app.status != "active":
@@ -158,7 +172,7 @@ async def can_access(session: AsyncSession, user: User, app: App) -> bool:
     ).scalar_one_or_none()
     if opened is None or opened.status != "active":
         return False
-    if opened.scope_all:
+    if opened.scope_all or user.is_digital:
         return True
     chain = await dept_chain(session, user.dept_uuid)
     hit = await session.scalar(

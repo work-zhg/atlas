@@ -1,0 +1,494 @@
+# 服务器（单节点 K8s）上的依赖服务：本机 docker-compose.yml 那一套，搬进 atlas-infra 命名空间。
+#
+#   postgres · redis · minio · qdrant · jaeger · otel-collector · langfuse（clickhouse / redis / worker / web）· higress
+#
+# ★ Service 名与 compose 的服务名一致（redis、jaeger、langfuse-web …）：Higress 的 setup.py、collector 的配置里
+#   写的就是这些名字，原样可用。
+# ★ 只开 ClusterIP：局域网访问不到这些依赖；对外只有 traefik 上的 Ingress（20-ingress.yaml）。
+# ★ 数据卷用 local-path-retain：误删 PVC 时数据还在节点的 /opt/local-path-provisioner 下。
+# ★ 凭据：PG 沿用 atlas/atlas（应用清单里写死的连接串，且 PG 只在集群内可达）；MinIO 的口令 = .env 的 OSS_*；
+#   Langfuse 的密钥由 deploy.sh 随机生成（Secret langfuse）—— 它的 UI 经 Ingress 对局域网开放，trace 里有提示词。
+# ★ 4 核的机器：requests 都压得很低，limits 留出突发余量。
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: atlas-infra
+---
+# ── PostgreSQL ──────────────────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: postgres-init, namespace: atlas-infra}
+data:
+  # 只在数据目录为空时执行（首次部署）。与 compose 的 *-init-db 同一组库
+  10-databases.sql: |
+    CREATE DATABASE atlas_config;
+    CREATE DATABASE atlas_knowledge;
+    CREATE DATABASE atlas_memory;
+    CREATE DATABASE atlas_mcpgateway;
+    CREATE DATABASE atlas_usercenter;
+    CREATE DATABASE atlas_teamflow;
+    CREATE DATABASE langfuse;
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: postgres, namespace: atlas-infra}
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector: {matchLabels: {app: postgres}}
+  template:
+    metadata: {labels: {app: postgres}}
+    spec:
+      containers:
+        - name: postgres
+          image: docker.io/library/postgres:16-alpine
+          env:
+            - {name: POSTGRES_USER, value: atlas}
+            - {name: POSTGRES_PASSWORD, value: atlas}
+            - {name: POSTGRES_DB, value: atlas}
+            - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
+          args: ["-c", "max_connections=300", "-c", "shared_buffers=512MB"]
+          ports: [{containerPort: 5432}]
+          readinessProbe:
+            exec: {command: ["pg_isready", "-U", "atlas", "-d", "atlas"]}
+            periodSeconds: 3
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 2Gi}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql/data}
+            - {name: init, mountPath: /docker-entrypoint-initdb.d}
+      volumes:
+        - name: init
+          configMap: {name: postgres-init}
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        storageClassName: local-path-retain
+        accessModes: [ReadWriteOnce]
+        resources: {requests: {storage: 20Gi}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: postgres, namespace: atlas-infra}
+spec:
+  selector: {app: postgres}
+  ports: [{port: 5432, targetPort: 5432}]
+---
+# ── Redis ───────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: redis, namespace: atlas-infra}
+spec:
+  serviceName: redis
+  replicas: 1
+  selector: {matchLabels: {app: redis}}
+  template:
+    metadata: {labels: {app: redis}}
+    spec:
+      containers:
+        - name: redis
+          image: docker.io/library/redis:7-alpine
+          args: ["redis-server", "--appendonly", "yes"]
+          ports: [{containerPort: 6379}]
+          readinessProbe:
+            exec: {command: ["redis-cli", "ping"]}
+            periodSeconds: 3
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {memory: 1Gi}
+          volumeMounts: [{name: data, mountPath: /data}]
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        storageClassName: local-path-retain
+        accessModes: [ReadWriteOnce]
+        resources: {requests: {storage: 5Gi}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: redis, namespace: atlas-infra}
+spec:
+  selector: {app: redis}
+  ports: [{port: 6379, targetPort: 6379}]
+---
+# ── MinIO（对象存储；S3 CSI 驱动与各服务都连它）──────────────────────
+# ★ 官方镜像已拉不到（quay.io/minio 要登录、Docker Hub 的被拒，2026-10 实测）：用 Chainguard 从上游源码
+#   构建的镜像（RELEASE.2026-09-22），按 digest 固定。它以 UID 65532 运行、没有 shell。
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: minio, namespace: atlas-infra}
+spec:
+  serviceName: minio
+  replicas: 1
+  selector: {matchLabels: {app: minio}}
+  template:
+    metadata: {labels: {app: minio}}
+    spec:
+      securityContext: {fsGroup: 65532}
+      containers:
+        - name: minio
+          image: cgr.dev/chainguard/minio@sha256:cff197fef764642223ef9f4444c903d51aee9b544a7be8bc007fef6b7b00d136
+          args: ["server", "/data", "--console-address", ":9001"]
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom: {secretKeyRef: {name: minio, key: user}}
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom: {secretKeyRef: {name: minio, key: password}}
+          ports: [{containerPort: 9000}, {containerPort: 9001}]
+          readinessProbe:
+            httpGet: {path: /minio/health/ready, port: 9000}
+            periodSeconds: 3
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 2Gi}
+          volumeMounts: [{name: data, mountPath: /data}]
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        storageClassName: local-path-retain
+        accessModes: [ReadWriteOnce]
+        resources: {requests: {storage: 100Gi}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: minio, namespace: atlas-infra}
+spec:
+  selector: {app: minio}
+  ports:
+    - {name: s3, port: 9000, targetPort: 9000}
+    - {name: console, port: 9001, targetPort: 9001}
+---
+# 一次性建桶（幂等）。桶名与本机一致（应用清单、PV 的 volumeHandle 都写的 atlas-dev）
+apiVersion: batch/v1
+kind: Job
+metadata: {name: minio-init, namespace: atlas-infra}
+spec:
+  backoffLimit: 20
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: mc
+          # 没有 shell：连接经 MC_HOST_<别名> 给出（K8s 的 $(VAR) 引用前面的变量）
+          image: cgr.dev/chainguard/minio-client@sha256:0d96f662c23c9823874b47b6598cd7352edd9037891cba302d8fd3323dad295b
+          args: ["mb", "--ignore-existing", "atlas/atlas-dev"]
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom: {secretKeyRef: {name: minio, key: user}}
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom: {secretKeyRef: {name: minio, key: password}}
+            - {name: MC_HOST_atlas, value: "http://$(MINIO_ROOT_USER):$(MINIO_ROOT_PASSWORD)@minio:9000"}
+---
+# ── Qdrant（mem0 的向量库、知识库的向量检索）────────────────────────
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: qdrant, namespace: atlas-infra}
+spec:
+  serviceName: qdrant
+  replicas: 1
+  selector: {matchLabels: {app: qdrant}}
+  template:
+    metadata: {labels: {app: qdrant}}
+    spec:
+      containers:
+        - name: qdrant
+          image: docker.io/qdrant/qdrant:v1.19.1
+          ports: [{containerPort: 6333}]
+          readinessProbe:
+            httpGet: {path: /readyz, port: 6333}
+            periodSeconds: 3
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {memory: 2Gi}
+          volumeMounts: [{name: data, mountPath: /qdrant/storage}]
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        storageClassName: local-path-retain
+        accessModes: [ReadWriteOnce]
+        resources: {requests: {storage: 10Gi}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: qdrant, namespace: atlas-infra}
+spec:
+  selector: {app: qdrant}
+  ports: [{port: 6333, targetPort: 6333}]
+---
+# ── Jaeger（APM；内存存储，重启即清 —— 与本机一致）────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: jaeger, namespace: atlas-infra}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: jaeger}}
+  template:
+    metadata: {labels: {app: jaeger}}
+    spec:
+      containers:
+        - name: jaeger
+          image: docker.io/jaegertracing/jaeger:2.21.0
+          ports: [{containerPort: 16686}, {containerPort: 4317}]
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {memory: 1Gi}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: jaeger, namespace: atlas-infra}
+spec:
+  selector: {app: jaeger}
+  ports:
+    - {name: ui, port: 16686, targetPort: 16686}
+    - {name: otlp-grpc, port: 4317, targetPort: 4317}
+---
+# ── OTel Collector（唯一收口：Jaeger + Langfuse 分流）────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: otel-collector, namespace: atlas-infra}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: otel-collector}}
+  template:
+    metadata: {labels: {app: otel-collector}}
+    spec:
+      containers:
+        - name: collector
+          image: docker.io/otel/opentelemetry-collector:0.160.0
+          args: ["--config=/etc/otelcol/config.yaml"]
+          env:
+            - name: LANGFUSE_OTLP_AUTH
+              valueFrom: {secretKeyRef: {name: langfuse, key: otlp_auth}}
+          ports: [{containerPort: 4318}, {containerPort: 4317}]
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {memory: 512Mi}
+          volumeMounts: [{name: config, mountPath: /etc/otelcol}]
+      volumes:
+        - name: config
+          configMap: {name: otel-collector}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: otel-collector, namespace: atlas-infra}
+spec:
+  selector: {app: otel-collector}
+  ports:
+    - {name: otlp-http, port: 4318, targetPort: 4318}
+    - {name: otlp-grpc, port: 4317, targetPort: 4317}
+---
+# ── Langfuse（LLM 维度的观测；结构照本机 compose）────────────────────
+# ★ ClickHouse 自己的系统日志表默认没有 TTL，查询剖析器持续往 trace_log 写：2026-10-21 实测一天 2.9G
+#   （trace_log 1.37G、text_log 474M），Langfuse 自己的数据只有 8 MiB，20Gi 的盘约 8 天写满。
+#   照 Langfuse 官方方案一（self-hosting/configuration/scaling，其 Terraform 模块的默认做法）关掉它不读的表；
+#   它要读的 query_log 与排障用的 part_log 留着，加保留期。
+#   已有的数据不会因此消失，要手工 DROP 才回收空间：已关掉的表，以及改了表定义后 ClickHouse
+#   把旧表重命名留下的 *_log_N（它们没有 TTL）。
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: langfuse-clickhouse-config, namespace: atlas-infra}
+data:
+  z_atlas_system_logs.xml: |
+    <clickhouse>
+        <trace_log remove="1"/>
+        <text_log remove="1"/>
+        <opentelemetry_span_log remove="1"/>
+        <asynchronous_metric_log remove="1"/>
+        <metric_log remove="1"/>
+        <latency_log remove="1"/>
+        <processors_profile_log remove="1"/>
+        <query_log><ttl>event_date + INTERVAL 30 DAY DELETE</ttl></query_log>
+        <part_log><ttl>event_date + INTERVAL 30 DAY DELETE</ttl></part_log>
+    </clickhouse>
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: langfuse-clickhouse, namespace: atlas-infra}
+spec:
+  serviceName: langfuse-clickhouse
+  replicas: 1
+  selector: {matchLabels: {app: langfuse-clickhouse}}
+  template:
+    metadata: {labels: {app: langfuse-clickhouse}}
+    spec:
+      containers:
+        - name: clickhouse
+          image: docker.io/clickhouse/clickhouse-server:25.8
+          env:
+            - {name: CLICKHOUSE_USER, value: clickhouse}
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom: {secretKeyRef: {name: langfuse, key: clickhouse_password}}
+            - {name: CLICKHOUSE_DB, value: default}
+          ports: [{containerPort: 8123}, {containerPort: 9000}]
+          readinessProbe:
+            httpGet: {path: /ping, port: 8123}
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 100m, memory: 512Mi}
+            limits: {memory: 3Gi}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/clickhouse}
+            # subPath：只放一个文件进 config.d，镜像自带的其它配置照常生效
+            - {name: config, mountPath: /etc/clickhouse-server/config.d/z_atlas_system_logs.xml,
+               subPath: z_atlas_system_logs.xml}
+      volumes:
+        - name: config
+          configMap: {name: langfuse-clickhouse-config}
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        storageClassName: local-path-retain
+        accessModes: [ReadWriteOnce]
+        resources: {requests: {storage: 20Gi}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: langfuse-clickhouse, namespace: atlas-infra}
+spec:
+  selector: {app: langfuse-clickhouse}
+  ports:
+    - {name: http, port: 8123, targetPort: 8123}
+    - {name: native, port: 9000, targetPort: 9000}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: langfuse-redis, namespace: atlas-infra}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: langfuse-redis}}
+  template:
+    metadata: {labels: {app: langfuse-redis}}
+    spec:
+      containers:
+        - name: redis
+          image: docker.io/library/redis:7-alpine
+          command: ["/bin/sh", "-c", 'exec redis-server --requirepass "$REDIS_AUTH"']
+          env:
+            - name: REDIS_AUTH
+              valueFrom: {secretKeyRef: {name: langfuse, key: redis_password}}
+          ports: [{containerPort: 6379}]
+          resources:
+            requests: {cpu: 20m, memory: 32Mi}
+            limits: {memory: 512Mi}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: langfuse-redis, namespace: atlas-infra}
+spec:
+  selector: {app: langfuse-redis}
+  ports: [{port: 6379, targetPort: 6379}]
+---
+# Langfuse 的公共环境（web 与 worker 同一份）：非敏感的写在这里，敏感的从 Secret langfuse 来
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: langfuse-env, namespace: atlas-infra}
+data:
+  TELEMETRY_ENABLED: "false"
+  CLICKHOUSE_URL: http://langfuse-clickhouse:8123
+  CLICKHOUSE_MIGRATION_URL: clickhouse://langfuse-clickhouse:9000
+  CLICKHOUSE_USER: clickhouse
+  CLICKHOUSE_CLUSTER_ENABLED: "false"
+  REDIS_HOST: langfuse-redis
+  REDIS_PORT: "6379"
+  LANGFUSE_S3_EVENT_UPLOAD_BUCKET: atlas-dev
+  LANGFUSE_S3_EVENT_UPLOAD_PREFIX: langfuse-events/
+  LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+  LANGFUSE_S3_EVENT_UPLOAD_REGION: us-east-1
+  LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+  LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: atlas-dev
+  LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: langfuse-media/
+  LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://minio:9000
+  LANGFUSE_S3_MEDIA_UPLOAD_REGION: us-east-1
+  LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+  LANGFUSE_INIT_ORG_ID: atlas
+  LANGFUSE_INIT_ORG_NAME: Atlas
+  LANGFUSE_INIT_PROJECT_ID: atlas
+  LANGFUSE_INIT_PROJECT_NAME: Atlas
+  LANGFUSE_INIT_USER_EMAIL: admin@atlas.local
+  LANGFUSE_INIT_USER_NAME: admin
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: langfuse-worker, namespace: atlas-infra}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: langfuse-worker}}
+  template:
+    metadata: {labels: {app: langfuse-worker}}
+    spec:
+      containers:
+        - name: worker
+          image: docker.io/langfuse/langfuse-worker:3
+          envFrom:
+            - configMapRef: {name: langfuse-env}
+            - secretRef: {name: langfuse-runtime}
+          resources:
+            requests: {cpu: 100m, memory: 384Mi}
+            limits: {memory: 2Gi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: langfuse-web, namespace: atlas-infra}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: langfuse-web}}
+  template:
+    metadata: {labels: {app: langfuse-web}}
+    spec:
+      containers:
+        - name: web
+          image: docker.io/langfuse/langfuse:3
+          envFrom:
+            - configMapRef: {name: langfuse-env}
+            - secretRef: {name: langfuse-runtime}
+          ports: [{containerPort: 3000}]
+          readinessProbe:
+            httpGet: {path: /api/public/health, port: 3000}
+            periodSeconds: 5
+            failureThreshold: 60
+          resources:
+            requests: {cpu: 100m, memory: 384Mi}
+            limits: {memory: 2Gi}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: langfuse-web, namespace: atlas-infra}
+spec:
+  selector: {app: langfuse-web}
+  ports: [{port: 3000, targetPort: 3000}]
+---
+# ── Higress（MCP 网关；all-in-one，配置在 /data，setup.py 经控制台写入）──────
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: higress, namespace: atlas-infra}
+spec:
+  serviceName: higress
+  replicas: 1
+  selector: {matchLabels: {app: higress}}
+  template:
+    metadata: {labels: {app: higress}}
+    spec:
+      containers:
+        - name: higress
+          image: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/all-in-one:2.2.4
+          ports: [{containerPort: 8080}, {containerPort: 8001}]
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 2Gi}
+          volumeMounts: [{name: data, mountPath: /data}]
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        storageClassName: local-path-retain
+        accessModes: [ReadWriteOnce]
+        resources: {requests: {storage: 2Gi}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: higress, namespace: atlas-infra}
+spec:
+  selector: {app: higress}
+  ports:
+    - {name: gateway, port: 8080, targetPort: 8080}
+    - {name: console, port: 8001, targetPort: 8001}

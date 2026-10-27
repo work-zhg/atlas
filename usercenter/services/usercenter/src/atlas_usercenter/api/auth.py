@@ -164,19 +164,37 @@ async def update_me(
 
 @router.get("/directory/users")
 async def directory_users(
-    principal: PrincipalDep, session: SessionDep, q: str | None = None, limit: int = 20
+    principal: PrincipalDep,
+    session: SessionDep,
+    q: str | None = None,
+    limit: int = 20,
+    digital: bool = False,
 ) -> list[dict[str, Any]]:
-    """通讯录：选人用（数据授权的 Owner 也要能选人），只含未停用用户与姓名、账号、部门名。"""
+    """通讯录：选人用（数据授权的 Owner 也要能选人），只含未停用用户与姓名、账号、部门名。
+
+    digital=true：连数字员工一起（授权时可以选到它，部门名为空、带 user_type 供选人器分组）。
+    """
     stmt = (
         select(User, Dept.name)
-        .join(Dept, Dept.uuid == User.dept_uuid)
+        .outerjoin(Dept, Dept.uuid == User.dept_uuid)
         .where(User.status == "active")
     )
+    if not digital:
+        stmt = stmt.where(User.user_type == "human")
     if q:
         like = f"%{q.strip().lower()}%"
         stmt = stmt.where(or_(func.lower(User.name).like(like), User.account.like(like)))
     rows = (await session.execute(stmt.order_by(User.account).limit(min(max(limit, 1), 50)))).all()
-    return [{"id": str(u.uuid), "name": u.name, "account": u.account, "dept": d} for u, d in rows]
+    return [
+        {
+            "id": str(u.uuid),
+            "name": u.name,
+            "account": u.account,
+            "dept": d,
+            "user_type": u.user_type,
+        }
+        for u, d in rows
+    ]
 
 
 @router.get("/directory/depts")

@@ -11,7 +11,9 @@ dependencies = [
   # ★ P4 升到 1.x：kernel 要求 langchain-core>=1.5.0、
   #   langchain-anthropic>=1.5.4，0.3.* 与之不兼容（主版本级差距）。
   #   版本钉死，见文档 §4.7 / 风险 R1。
-  "langchain-core==1.5.*",
+  # ★ 1.7：server 的 MCP 改用 langchain.mcp（langchain 1.4 起才有），
+  #   它要求 langchain-core>=1.6.13。langchain-anthropic 1.5 接受 core <2，不跟着升。
+  "langchain-core==1.7.*",
   "langchain-anthropic==1.5.*",
   # ★ kernel/ 所需的运行时依赖。全部钉死。
   #
@@ -27,7 +29,7 @@ dependencies = [
   #   不兼容真实发生过：langchain-core 0.3.* → 1.5.* 是断裂升级（文档 §4.7 /
   #   风险 R1）。钉死换的是「升级只在明确要升的时候发生」，
   #   不是在防某个具体符号。
-  "langchain==1.3.*",
+  "langchain==1.4.*",
   "langgraph==1.2.*",
   "langsmith>=0.10.9",
   "wcmatch>=11.0",

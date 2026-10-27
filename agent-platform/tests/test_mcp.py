@@ -1,241 +1,177 @@
-"""MCP 工具接入（MCP 详设）。
+"""MCP 工具接入：Atlas 的装配与调用链（doc/mcp-design.html 第二版 §6）。
 
-对**真实的本地 MCP server** 测（tests/mcp_server.py，streamable_http）——
-mock 掉 MCP 协议就等于什么都没测：这块的风险全在协议握手与工具 schema 转换上。
-
-目录缓存用真实 Redis。每个测试用独立的 server 名，互不串缓存。
+全部经真实的 MCP 网关（进程内）→ Higress 替身（tests/gateway_env.py）。mock 掉 MCP 协议就等于
+什么都没测：这块的风险在协议握手、工具 schema 转换和错误转换上。网关自身的认人、判权、复核在
+它自己的测试里（services/mcpgateway/tests），经网关的权限与失败处理见 test_mcp_gateway.py。
 """
 
 from __future__ import annotations
 
-import os
-import socket
-import subprocess
-import sys
+import asyncio
 import time
-import uuid
-from collections.abc import AsyncIterator, Iterator
-from pathlib import Path
+from typing import Any
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
-from atlas_agent.config import get_settings
-from atlas_agent.domain.mcp_naming import approval_target
 from atlas_agent.providers.mcp import (
     CallContext,
     McpServerConfig,
-    McpUnavailable,
-    MissingCredential,
     MissingTool,
-    NativeMcpTools,
-    SettingsCatalog,
     model_name,
     parse_tool_id,
-    resolve_env_refs,
     tool_id,
 )
-from atlas_agent.redisx import make_redis
 from pydantic import ValidationError
 
+from tests.fake_uc import AS_USER, TEST_USER
+from tests.gateway_env import (
+    ALICE,
+    GATEWAY,
+    FakeHigress,
+    FakeService,
+    ToolFailure,
+    assemble,
+    call,
+    issue_key,
+    register,
+    text_of,
+)
 
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return int(s.getsockname()[1])
+pytestmark = pytest.mark.usefixtures("gateway_environment")
+
+SRV = "srv"
 
 
-def _name() -> str:
-    """每个测试一个 server 名：缓存按 server 名存，共用会互相污染。"""
-    return f"t{uuid.uuid4().hex[:10]}"
-
-
-CTX = CallContext(run_id=uuid.uuid4(), thread_id=uuid.uuid4(), user_id=uuid.uuid4())
-
-
-@pytest.fixture(scope="module")
-def mcp_port() -> Iterator[int]:
-    """起一个真实的 MCP server 子进程。
-
-    不塞进测试进程：它自带 event loop 与 ASGI 栈，会和 pytest-asyncio 打架。
-    """
-    port = _free_port()
-    proc = subprocess.Popen(
-        [sys.executable, "-m", "tests.mcp_server", str(port)],
-        # tests 包在 agent-platform/ 下：从那里起，-m tests.mcp_server 才找得到
-        cwd=Path(__file__).resolve().parents[1],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+def _service() -> FakeService:
+    srv = FakeService()
+    num = {"type": "integer"}
+    srv.tool(
+        "add", "两数相加。", lambda a, _h: str(a["a"] + a["b"]), properties={"a": num, "b": num}
     )
-    # 等到端口真的能连上，而不是固定 sleep —— 固定值在慢机器上必然 flaky
-    deadline = time.monotonic() + 30
-    while time.monotonic() < deadline:
-        try:
-            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
-                break
-        except OSError:
-            time.sleep(0.2)
-    else:
-        proc.kill()
-        pytest.skip("本地 MCP server 未能启动")
+    srv.tool(
+        "read_file", "与内置文件工具同名 —— 模型侧名有命名空间，不会撞车。", lambda a, _h: "remote"
+    )
 
-    yield port
-    proc.terminate()
-    proc.wait(timeout=10)
+    async def slow(args: dict[str, Any], _h: dict[str, str]) -> str:
+        await asyncio.sleep(float(args["seconds"]))
+        return "done"
+
+    srv.tool("slow", "睡一会儿再返回。", slow, properties={"seconds": {"type": "number"}})
+    srv.tool("big", "返回 n 个字符。", lambda a, _h: "x" * int(a["n"]), properties={"n": num})
+    srv.tool(
+        "whoami",
+        "回显身份请求头。",
+        lambda _a, h: f"user={h.get('x-uid')} run={h.get('x-run-id')} auth={h.get('x-auth-uid')}",
+    )
+    srv.tool("verbose", "描述超长的工具。" + "填充" * 1200, lambda _a, _h: "never")
+    srv.tool("lookup", "声明了只读的工具。", lambda a, _h: "value", read_only=True)
+
+    def fail(args: dict[str, Any], _h: dict[str, str]) -> str:
+        raise ToolFailure(str(args["reason"]))
+
+    srv.tool("fail", "总是失败（isError）。", fail, properties={"reason": {"type": "string"}})
+    return srv
 
 
 @pytest.fixture
-async def redis() -> AsyncIterator[object]:
-    client = make_redis(get_settings())
-    yield client
-    async for key in client.scan_iter("atlas:mcp:*:t*"):
-        await client.delete(key)
-    await client.aclose()
+async def env(gateway: Any, higress: FakeHigress) -> Any:
+    """服务 srv 已登记（不要求复核），alice 有权限、有 Key。"""
+    app, perms, c = gateway
+    higress.services[SRV] = _service()
+    await register(c, SRV, higress=higress)
+    perms.allow(SRV, str(ALICE))
+    await issue_key(c, ALICE)
+    return app, perms, c
 
 
-def _live(port: int, name: str) -> McpServerConfig:
-    return McpServerConfig(name=name, url=f"http://127.0.0.1:{port}/mcp")
+# ---------------------------------------------------------------- 装配
 
 
-def _dead(name: str) -> McpServerConfig:
-    return McpServerConfig(name=name, url=f"http://127.0.0.1:{_free_port()}/mcp")
-
-
-def _tools(catalog: SettingsCatalog, **kw: object) -> NativeMcpTools:
-    return NativeMcpTools(catalog, **kw)  # type: ignore[arg-type]
-
-
-# ---------------------------------------------------------------- 目录与缓存
-
-
-async def test_discovers_tools_with_model_names(mcp_port: int, redis: object) -> None:
-    name = _name()
-    snap = await SettingsCatalog([_live(mcp_port, name)], redis).snapshot(name)  # type: ignore[arg-type]
-
-    add = snap.tool("add")
-    assert add is not None
-    assert "相加" in add.description  # 描述来自 server 端 docstring，编辑器要显示它
-    assert add.model_name == f"{name}__add"
-    assert add.usable
-    assert len(add.digest) == 64
-
-
-async def test_cached_snapshot_needs_no_network(mcp_port: int, redis: object) -> None:
-    """★ 装配期读缓存：server 宕了，只要缓存在，照样能装配（调用期再报错）。"""
-    name = _name()
-    await SettingsCatalog([_live(mcp_port, name)], redis).snapshot(name)  # type: ignore[arg-type]
-
-    down = SettingsCatalog([_dead(name)], redis)  # type: ignore[arg-type]
-    snap = await down.snapshot(name)
-    assert snap.tool("add") is not None
-    assert snap.error is None
-
-
-async def test_stale_cache_survives_failed_refresh(mcp_port: int, redis: object) -> None:
-    """★ 软过期后刷新失败：保留旧定义并记下原因，而不是让工具消失。"""
-    name = _name()
-    await SettingsCatalog([_live(mcp_port, name)], redis).snapshot(name)  # type: ignore[arg-type]
-
-    down = SettingsCatalog([_dead(name)], redis, soft_ttl_s=0)  # type: ignore[arg-type]
-    snap = await down.snapshot(name)
-    assert snap.tool("add") is not None
-    assert snap.error and "ConnectError" in snap.error
-
-
-async def test_cold_miss_on_dead_server_raises(redis: object) -> None:
-    name = _name()
-    with pytest.raises(McpUnavailable, match=name):
-        await SettingsCatalog([_dead(name)], redis).snapshot(name)  # type: ignore[arg-type]
-
-
-async def test_unregistered_server_raises(redis: object) -> None:
-    with pytest.raises(McpUnavailable, match="未注册或已禁用"):
-        await SettingsCatalog([], redis).snapshot("nope")  # type: ignore[arg-type]
-
-
-async def test_disabled_server_is_not_listed(mcp_port: int, redis: object) -> None:
-    name = _name()
-    disabled = McpServerConfig(name=name, url=f"http://127.0.0.1:{mcp_port}/mcp", enabled=False)
-    assert SettingsCatalog([disabled], redis).servers() == []  # type: ignore[arg-type]
-
-
-async def test_overlong_description_is_unusable(mcp_port: int, redis: object) -> None:
-    """★ 描述超长本身就是可疑信号：标不可用，不让它悄悄进模型上下文。"""
-    name = _name()
-    snap = await SettingsCatalog([_live(mcp_port, name)], redis).snapshot(name)  # type: ignore[arg-type]
-    verbose = snap.tool("verbose")
-    assert verbose is not None and not verbose.usable
-    assert "描述过长" in verbose.issues[0]
-
-
-# ---------------------------------------------------------------- native 装配
-
-
-async def test_loads_only_requested_tools_with_namespace(mcp_port: int, redis: object) -> None:
-    """一个 server 可能有十几个工具，用户只勾了其中几个；模型看到的名字带前缀。"""
-    name = _name()
-    catalog = SettingsCatalog([_live(mcp_port, name)], redis)  # type: ignore[arg-type]
-    tools = await _tools(catalog).tools_for(
-        [tool_id(name, "add"), tool_id(name, "read_file"), "write_todos", "filesystem"], CTX
+async def test_loads_only_requested_tools_with_namespace(env: Any) -> None:
+    """一个服务可能有十几个工具，用户只勾了其中几个；模型看到的名字带前缀。"""
+    tools, _, sessions = await assemble(
+        [tool_id(SRV, "add"), tool_id(SRV, "read_file"), "write_todos", "filesystem"]
     )
+    await sessions.aclose()
     # ★ read_file 与内置文件工具同名 —— 此前模型看到的就是裸 read_file
-    assert sorted(t.name for t in tools) == [f"{name}__add", f"{name}__read_file"]
+    assert sorted(t.name for t in tools) == [f"{SRV}__add", f"{SRV}__read_file"]
 
 
-async def test_tool_actually_executes(mcp_port: int, redis: object) -> None:
+async def test_tool_actually_executes(env: Any) -> None:
     """★ 真的调过去并拿到结果 —— 改了 LangChain 侧名字，线上名必须不受影响。"""
-    name = _name()
-    catalog = SettingsCatalog([_live(mcp_port, name)], redis)  # type: ignore[arg-type]
-    [add] = await _tools(catalog).tools_for([tool_id(name, "add")], CTX)
-    assert "42" in str(await add.ainvoke({"a": 17, "b": 25}))
+    tools, _, sessions = await assemble([tool_id(SRV, "add")])
+    try:
+        assert text_of(await call(tools, f"{SRV}__add", a=17, b=25)) == "42"
+    finally:
+        await sessions.aclose()
 
 
-async def test_unknown_tool_raises(mcp_port: int, redis: object) -> None:
-    """★ 勾了 server 上没有的工具要明确报错，而不是少装一个就默默跑（§13.2）。"""
-    name = _name()
-    catalog = SettingsCatalog([_live(mcp_port, name)], redis)  # type: ignore[arg-type]
+async def test_unknown_tool_raises(env: Any) -> None:
+    """★ 勾了服务上没有的工具要明确报错，而不是少装一个就默默跑（§13.2）。"""
     with pytest.raises(MissingTool, match="nope"):
-        await _tools(catalog).tools_for([tool_id(name, "nope")], CTX)
+        await assemble([tool_id(SRV, "nope")])
 
 
-async def test_unusable_tool_raises(mcp_port: int, redis: object) -> None:
-    name = _name()
-    catalog = SettingsCatalog([_live(mcp_port, name)], redis)  # type: ignore[arg-type]
-    with pytest.raises(MissingTool, match="不可用"):
-        await _tools(catalog).tools_for([tool_id(name, "verbose")], CTX)
+async def test_unusable_tool_raises(env: Any) -> None:
+    """★ 描述超长本身就是可疑信号：网关标不可用，不让它悄悄进模型上下文。"""
+    with pytest.raises(MissingTool, match="描述过长"):
+        await assemble([tool_id(SRV, "verbose")])
+
+
+async def test_read_only_annotation_reaches_approval(env: Any) -> None:
+    """★ 审批按 metadata["readOnlyHint"] 判只读。langchain.mcp 把注解收在
+    metadata["mcp"] 下、键是 snake_case；装配时要平铺回来，否则只读工具全被当成外部。"""
+    from atlas_agent.domain.tool_registry import tool_effects
+    from atlas_engine.contracts import ToolEffect
+
+    tools, _, sessions = await assemble([tool_id(SRV, "lookup"), tool_id(SRV, "add")])
+    await sessions.aclose()
+    effects = tool_effects(tools)
+    assert effects[f"{SRV}__lookup"] is ToolEffect.READ
+    assert effects[f"{SRV}__add"] is ToolEffect.EXTERNAL
 
 
 # ---------------------------------------------------------------- 调用期
 
 
-async def test_identity_headers_are_sent(mcp_port: int, redis: object) -> None:
-    name = _name()
-    catalog = SettingsCatalog([_live(mcp_port, name)], redis)  # type: ignore[arg-type]
-    [who] = await _tools(catalog).tools_for([tool_id(name, "whoami")], CTX)
-    out = str(await who.ainvoke({}))
-    assert f"user={CTX.user_id}" in out
-    assert f"run={CTX.run_id}" in out
+async def test_identity_headers_reach_the_backend(env: Any) -> None:
+    """使用者（X-Uid）照转、只作审计；权限主体（X-Auth-Uid）由网关按 Key 写入。"""
+    run = uuid4()
+    caller = CallContext(run_id=run, thread_id=uuid4(), user_id=UUID(TEST_USER))
+    tools, _, sessions = await assemble([tool_id(SRV, "whoami")], call_ctx=caller)
+    try:
+        out = text_of(await call(tools, f"{SRV}__whoami"))
+    finally:
+        await sessions.aclose()
+    assert out == f"user={TEST_USER} run={run} auth={ALICE}"
 
 
-async def test_timeout_goes_to_model_not_run(mcp_port: int, redis: object) -> None:
-    """★ 超时变成给模型的工具错误，而不是打死整个 run。"""
-    name = _name()
-    catalog = SettingsCatalog([_live(mcp_port, name)], redis)  # type: ignore[arg-type]
-    [slow] = await _tools(catalog, call_timeout_s=0.5).tools_for([tool_id(name, "slow")], CTX)
+async def test_timeout_goes_to_model_not_run(env: Any) -> None:
+    """★ 超时变成给模型的工具结果，而不是打死整个 run；有副作用的要说结果未知。"""
+    tools, _, sessions = await assemble([tool_id(SRV, "slow")], call_timeout_s=0.5)
     started = time.monotonic()
-    out = str(await slow.ainvoke({"seconds": 5}))
+    try:
+        out = text_of(await call(tools, f"{SRV}__slow", seconds=5))
+    finally:
+        await sessions.aclose()
     assert time.monotonic() - started < 3
-    assert "超时" in out
+    assert "超时（0.5s）" in out
+    assert "结果未知" in out
 
 
-async def test_per_server_timeout_overrides_global(mcp_port: int, redis: object) -> None:
-    """★ server 级的 call_timeout_s 优先于全局：全局 60s，这台只给 0.5s。"""
-    name = _name()
-    cfg = McpServerConfig(name=name, url=f"http://127.0.0.1:{mcp_port}/mcp", call_timeout_s=0.5)
-    catalog = SettingsCatalog([cfg], redis)  # type: ignore[arg-type]
-    [slow] = await _tools(catalog, call_timeout_s=60).tools_for([tool_id(name, "slow")], CTX)
-    started = time.monotonic()
-    out = str(await slow.ainvoke({"seconds": 5}))
-    assert time.monotonic() - started < 3
+async def test_per_server_timeout_overrides_global(gateway: Any, higress: FakeHigress) -> None:
+    """★ 服务级的 call_timeout_s（网关登记时定）优先于全局：全局 60s，这台只给 0.5s。"""
+    _app, perms, c = gateway
+    higress.services[SRV] = _service()
+    await register(c, SRV, call_timeout_s=0.5, higress=higress)
+    perms.allow(SRV, str(ALICE))
+    await issue_key(c, ALICE)
+    tools, _, sessions = await assemble([tool_id(SRV, "slow")], call_timeout_s=60)
+    try:
+        out = text_of(await call(tools, f"{SRV}__slow", seconds=5))
+    finally:
+        await sessions.aclose()
     assert "超时（0.5s）" in out
 
 
@@ -244,65 +180,55 @@ def test_per_server_timeout_must_be_positive() -> None:
         McpServerConfig(name="x", url="https://x/mcp", call_timeout_s=0)
 
 
-async def test_cancellation_is_not_swallowed(mcp_port: int, redis: object) -> None:
+async def test_cancellation_is_not_swallowed(env: Any) -> None:
     """★ 取消 run 时，进行中的 MCP 调用必须立即中止 —— 错误转换不能把
     CancelledError 当成「服务不可用」吞掉，否则取消按钮失效。"""
-    import asyncio
-
-    name = _name()
-    catalog = SettingsCatalog([_live(mcp_port, name)], redis)  # type: ignore[arg-type]
-    [slow] = await _tools(catalog).tools_for([tool_id(name, "slow")], CTX)
-    task = asyncio.create_task(slow.ainvoke({"seconds": 10}))
+    tools, _, sessions = await assemble([tool_id(SRV, "slow")])
+    task = asyncio.create_task(call(tools, f"{SRV}__slow", seconds=10))
     await asyncio.sleep(0.5)
     task.cancel()
     started = time.monotonic()
     with pytest.raises(asyncio.CancelledError):
         await task
     assert time.monotonic() - started < 3
+    await sessions.aclose()
 
 
-async def test_dead_server_at_call_time_goes_to_model(mcp_port: int, redis: object) -> None:
-    """★ 缓存在、server 宕了：装配成功，调用返回错误文本，不抛异常。"""
-    name = _name()
-    await SettingsCatalog([_live(mcp_port, name)], redis).snapshot(name)  # type: ignore[arg-type]
-    down = SettingsCatalog([_dead(name)], redis)  # type: ignore[arg-type]
-    [add] = await _tools(down).tools_for([tool_id(name, "add")], CTX)
-    out = str(await add.ainvoke({"a": 1, "b": 2}))
-    assert "暂时不可用" in out
+async def test_upstream_down_at_call_time_goes_to_model(
+    env: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """★ 定义在、上游宕了：装配成功，调用返回错误文本，不抛异常。"""
+    from atlas_mcpgateway.settings import get_settings as gateway_settings
+
+    tools, _, sessions = await assemble([tool_id(SRV, "add")])
+    monkeypatch.setattr(gateway_settings(), "higress_base_url", "http://127.0.0.1:9")
+    try:
+        result = await call(tools, f"{SRV}__add", a=1, b=2)
+    finally:
+        await sessions.aclose()
+    assert result.status == "error"
+    assert "暂时不可用" in text_of(result)
 
 
-async def test_huge_result_is_clipped(mcp_port: int, redis: object) -> None:
-    name = _name()
-    catalog = SettingsCatalog([_live(mcp_port, name)], redis)  # type: ignore[arg-type]
-    [big] = await _tools(catalog, max_result_chars=1000).tools_for([tool_id(name, "big")], CTX)
-    out = str(await big.ainvoke({"n": 50_000}))
+async def test_business_error_goes_to_model(env: Any) -> None:
+    """服务返回的 isError 原样交给模型（它要看到内容），不打断 run。"""
+    tools, _, sessions = await assemble([tool_id(SRV, "fail")])
+    try:
+        result = await call(tools, f"{SRV}__fail", reason="库存不足")
+    finally:
+        await sessions.aclose()
+    assert result.status == "error"
+    assert "库存不足" in text_of(result)
+
+
+async def test_huge_result_is_clipped(env: Any) -> None:
+    tools, _, sessions = await assemble([tool_id(SRV, "big")], max_result_chars=1000)
+    try:
+        out = text_of(await call(tools, f"{SRV}__big", n=50_000))
+    finally:
+        await sessions.aclose()
     assert "结果过长" in out
     assert len(out) < 2000
-
-
-# ---------------------------------------------------------------- 凭据
-
-
-def test_env_placeholder_resolved() -> None:
-    os.environ["ATLAS_TEST_MCP_TOKEN"] = "secret-123"
-    try:
-        assert resolve_env_refs("Bearer ${ATLAS_TEST_MCP_TOKEN}") == "Bearer secret-123"
-    finally:
-        del os.environ["ATLAS_TEST_MCP_TOKEN"]
-
-
-def test_missing_env_raises_instead_of_empty() -> None:
-    """★ 不能把缺失的环境变量当空串：那会拿空 token 去连，报错指向「认证失败」。"""
-    with pytest.raises(MissingCredential, match="ATLAS_TEST_ABSENT"):
-        resolve_env_refs("Bearer ${ATLAS_TEST_ABSENT}")
-
-
-def test_credentials_never_appear_in_config() -> None:
-    """★ §14：凭据不落配置。配置对象里只该有占位符。"""
-    cfg = McpServerConfig(name="x", url="https://x/mcp", headers={"Authorization": "Bearer ${TOK}"})
-    dumped = cfg.model_dump_json()
-    assert "${TOK}" in dumped
-    assert "secret" not in dumped.lower()
 
 
 # ---------------------------------------------------------------- 命名
@@ -320,7 +246,7 @@ def test_parse_ignores_builtin_tools() -> None:
 
 
 def test_server_name_must_not_contain_underscore() -> None:
-    """★ server 名含 `_` 的话，`server__tool` 的分隔点就不唯一了。"""
+    """★ 服务名含 `_` 的话，`server__tool` 的分隔点就不唯一了。"""
     with pytest.raises(ValidationError):
         McpServerConfig(name="my_server", url="https://x/mcp")
     McpServerConfig(name="my-server", url="https://x/mcp")
@@ -332,52 +258,55 @@ def test_model_name_rejects_illegal_tool_names() -> None:
     assert model_name("srv", "x" * 70) is None
 
 
-def test_approval_target_translates_spec_ids() -> None:
-    """★ 编辑器此前提示手填 mcp:server:tool —— 那种写法从没匹配上过，现在翻译过来。"""
-    assert approval_target("mcp:github:search") == "github__search"
-    assert approval_target("github__search") == "github__search"
-    assert approval_target("execute") == "execute"
-
-
 # ---------------------------------------------------------------- 目录端点
 
 
-async def test_catalog_endpoint_includes_mcp(mcp_port: int, redis: object) -> None:
-    """★ 端到端：/v1/tools 里同时有内置工具与 MCP 工具，且 MCP 工具可选作审批目标。"""
-    from atlas_agent.config import Settings
+def _app_with_gateway(url: str) -> Any:
+    from atlas_agent.config import Settings, get_settings
     from atlas_agent.main import create_app
-    from httpx import ASGITransport
 
-    name = _name()
-    base = get_settings()
-    patched = Settings(**{**base.model_dump(), "mcp_servers": [_live(mcp_port, name)]})
-
+    patched = Settings(**{**get_settings().model_dump(), "mcp_gateway_url": url})
     app = create_app()
     app.dependency_overrides[get_settings] = lambda: patched
-    transport = ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
-        res = await c.get("/v1/tools")
+    return app
 
+
+async def test_catalog_endpoint_includes_mcp(gateway: Any, higress: FakeHigress) -> None:
+    """★ 端到端：/v1/tools 里同时有内置工具与 MCP 工具（按请求人的权限）。"""
+    _app, perms, c = gateway
+    higress.services[SRV] = _service()
+    await register(c, SRV, higress=higress)
+    perms.allow(SRV, TEST_USER)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=_app_with_gateway(GATEWAY)),
+        base_url="http://test",
+        headers=AS_USER,
+    ) as client:
+        res = await client.get("/v1/tools")
     assert res.status_code == 200, res.text
-    by_name = {t["name"]: t for t in res.json()["data"]}
+    body = res.json()
+    by_name = {t["name"]: t for t in body["data"]}
     assert "write_todos" in by_name, "内置工具不见了"
-    add = by_name.get(tool_id(name, "add"))
+    add = by_name.get(tool_id(SRV, "add"))
     assert add is not None, "MCP 工具没并进目录"
-    assert add["model_tool_names"] == [f"{name}__add"]
-    assert by_name[tool_id(name, "verbose")]["available"] is False
+    assert add["model_tool_names"] == [f"{SRV}__add"]
+    assert by_name[tool_id(SRV, "verbose")]["available"] is False
+    assert body["mcp_subject"]["kind"] == "user"
+    assert body["mcp_subject"]["key_status"] == "none"
 
 
-async def test_unreachable_server_does_not_break_catalog(redis: object) -> None:
-    """★ 一台 server 挂了（且无缓存），目录照常返回其余内容。"""
-    from atlas_agent.config import Settings
-    from atlas_agent.main import create_app
-    from httpx import ASGITransport
+async def test_unreachable_gateway_does_not_break_catalog() -> None:
+    """★ MCP 网关挂了（且没有缓存），目录照常返回内置工具，并说明 MCP 暂时不可用。"""
+    from atlas_agent.providers.mcp.gateway import reset_gateway_cache
 
-    base = get_settings()
-    patched = Settings(**{**base.model_dump(), "mcp_servers": [_dead(_name())]})
-    app = create_app()
-    app.dependency_overrides[get_settings] = lambda: patched
-    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-        res = await c.get("/v1/tools")
+    reset_gateway_cache()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=_app_with_gateway("http://127.0.0.1:9")),
+        base_url="http://test",
+        headers=AS_USER,
+    ) as client:
+        res = await client.get("/v1/tools")
     assert res.status_code == 200, res.text
-    assert all(t["kind"] != "mcp" for t in res.json()["data"])
+    body = res.json()
+    assert all(t["kind"] != "mcp" for t in body["data"])
+    assert "MCP 网关暂时不可用" in body["mcp_subject"]["notes"][0]

@@ -34,9 +34,11 @@ export default function UserDetailPage() {
   const actions = useUserActions();
   const [edit, setEdit] = useState(false);
   const user = useQuery({ queryKey: ["user", id], queryFn: () => api.get<User>(`/users/${id}`) });
+  const digital = user.data?.user_type === "digital";
   const logs = useQuery({
     queryKey: ["user", id, "logs"],
     queryFn: () => api.get<{ time: string; ip: string | null; ok: boolean; reason: string | null }[]>(`/users/${id}/login-logs`),
+    enabled: user.data !== undefined && !digital,
   });
   const apps = useQuery({ queryKey: ["user", id, "apps"], queryFn: () => api.get<AppInfo[]>(`/users/${id}/apps`) });
   const eff = useQuery({
@@ -52,29 +54,32 @@ export default function UserDetailPage() {
     <>
       <div style={{ display: "flex", marginBottom: 12 }}>
         <div className="uc-grow" />
-        <Button onClick={() => router.push("/users")}>← 返回用户列表</Button>
+        <Button onClick={() => router.push(digital ? "/users?type=digital" : "/users")}>← 返回{digital ? "数字员工" : "用户"}列表</Button>
       </div>
       <Card>
         <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
-          <Avatar size={56} style={{ background: "#6366f1", fontSize: 22 }}>
-            {u.name.slice(-1)}
+          <Avatar size={56} style={{ background: digital ? "#0ea5e9" : "#6366f1", fontSize: 22 }}>
+            {digital ? "🤖" : u.name.slice(-1)}
           </Avatar>
           <div>
             <Space>
               <span style={{ fontSize: 20, fontWeight: 650 }}>{u.name}</span>
               <StatusTag status={u.status} />
+              {digital && <Tag color="cyan">数字员工</Tag>}
               {u.must_change_password && <Tag color="gold">须改密</Tag>}
               {u.uc_roles?.map((r) => <Tag key={r} color="purple">{r}</Tag>)}
             </Space>
             <div className="uc-muted" style={{ marginTop: 4 }}>
-              {u.account} · {u.dept_path?.join(" / ")} {u.positions?.length ? `· ${u.positions.join("、")}` : ""}
+              {u.account} · {digital ? `来源：${u.source_app?.name ?? "—"}` : u.dept_path?.join(" / ")}{" "}
+              {u.positions?.length ? `· ${u.positions.join("、")}` : ""}
             </div>
           </div>
           <div className="uc-grow" />
           <Space>
-            {can("user:edit") && <Button onClick={() => setEdit(true)}>编辑</Button>}
-            {can("user:reset_pwd") && u.status !== "disabled" && <Button onClick={() => actions.reset(u)}>重置密码</Button>}
-            {can("user:disable") && u.status === "locked" && <Button onClick={() => actions.unlock(u)}>解锁</Button>}
+            {/* 数字员工的资料由来源应用维护，这里只能停用 / 启用（紧急止血） */}
+            {can("user:edit") && !digital && <Button onClick={() => setEdit(true)}>编辑</Button>}
+            {can("user:reset_pwd") && !digital && u.status !== "disabled" && <Button onClick={() => actions.reset(u)}>重置密码</Button>}
+            {can("user:disable") && !digital && u.status === "locked" && <Button onClick={() => actions.unlock(u)}>解锁</Button>}
             {can("user:disable") &&
               (u.status === "disabled" ? (
                 <Button onClick={() => actions.enable(u)}>启用</Button>
@@ -89,7 +94,25 @@ export default function UserDetailPage() {
             {
               key: "info",
               label: "基本信息",
-              children: (
+              children: digital ? (
+                <Descriptions column={1} size="small" styles={{ label: { width: 110 } }}>
+                  <Descriptions.Item label="类型">数字员工 · 不能登录、不在组织架构里，权限只来自直接授给它的</Descriptions.Item>
+                  <Descriptions.Item label="负责人">
+                    {u.owner ? <Link href={`/users/${u.owner.id}`}>{u.owner.name}</Link> : "—"}
+                    {u.owner?.status === "disabled" && <Tag style={{ marginLeft: 8 }}>负责人已停用</Tag>}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="来源应用">{u.source_app?.name ?? "—"}</Descriptions.Item>
+                  <Descriptions.Item label="外部引用">
+                    <span className="uc-muted">{u.external_ref ?? "—"}</span>
+                  </Descriptions.Item>
+                  {u.description && <Descriptions.Item label="说明">{u.description}</Descriptions.Item>}
+                  <Descriptions.Item label="岗位">
+                    {u.positions?.join("、") || "—"} <span className="uc-muted">（在权限管理中授权）</span>
+                  </Descriptions.Item>
+                  {u.disabled_reason && <Descriptions.Item label="停用原因">{u.disabled_reason}</Descriptions.Item>}
+                  <Descriptions.Item label="创建时间">{fmtTime(u.created_at)}</Descriptions.Item>
+                </Descriptions>
+              ) : (
                 <Descriptions column={1} size="small" styles={{ label: { width: 110 } }}>
                   <Descriptions.Item label="邮箱">{u.email}</Descriptions.Item>
                   <Descriptions.Item label="手机">{u.phone || "—"}</Descriptions.Item>
@@ -190,7 +213,8 @@ export default function UserDetailPage() {
                   },
                 ]
               : []),
-            {
+            // 数字员工不能登录，没有登录记录
+            ...(digital ? [] : [{
               key: "logs",
               label: `登录记录（${logs.data?.length ?? 0}）`,
               children: (
@@ -206,7 +230,7 @@ export default function UserDetailPage() {
                   ]}
                 />
               ),
-            },
+            }]),
             {
               key: "apps",
               label: "可访问的应用",

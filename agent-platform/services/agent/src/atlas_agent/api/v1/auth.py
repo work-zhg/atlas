@@ -8,16 +8,15 @@ from fastapi import APIRouter
 
 from ...auth.authz import PrincipalDep
 from ...db.models import AppUser
-from ...deps import SessionDep, SettingsDep
+from ...deps import SessionDep
 
 router = APIRouter(tags=["auth"])
 
 
 @router.get("/me")
-async def me(principal: PrincipalDep, session: SessionDep, settings: SettingsDep) -> dict[str, Any]:
+async def me(principal: PrincipalDep, session: SessionDep) -> dict[str, Any]:
     p = principal
     out: dict[str, Any] = {
-        "auth_mode": settings.auth_mode,
         "id": str(p.uid),
         "name": p.name,
         "operations": sorted(p.operations),

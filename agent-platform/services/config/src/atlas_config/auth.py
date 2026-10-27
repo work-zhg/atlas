@@ -2,11 +2,9 @@
 
 内网免令牌：身份在请求头里（网关按登录态写入 X-Uid；atlas-server 运行时调用时写这一轮的身份）。
 
-  /config/*    用户（经网关）。
-               dev 模式：缺 X-Uid 用默认用户，操作码全有（与运行时同规则）。
-               uc 模式：缺 X-Uid 一律 401；操作码按 X-Auth-Uid（缺省 = X-Uid）取用户中心
-               授权快照（以 Atlas 应用的身份：X-Caller-App: atlas）。登录、CSRF 在网关 +
-               用户中心，这里不再处理。
+  /config/*    用户（经网关）。缺 X-Uid 一律 401；操作码按 X-Auth-Uid（缺省 = X-Uid）取
+               用户中心授权快照（以 Atlas 应用的身份：X-Caller-App: atlas）。没有免鉴权的
+               模式（原 dev 模式已删除）。登录、CSRF 在网关 + 用户中心，这里不再处理。
   /internal/*  运行时进程。网关一律 404（只在内网可达）；不再要服务间令牌。
 
 ★ 与运行时各自实现，不抽公共包：规则只有几十行，抽出来就是第三个所有服务都
@@ -32,20 +30,6 @@ __all__ = ["Principal", "current_principal", "require_any"]
 #: 调用户中心时的应用编码（配置服务属于 Atlas 应用，操作码登记在它名下）
 CALLER_APP = "atlas"
 _FORWARD = {"x-uid": "X-Uid", "x-auth-uid": "X-Auth-Uid", "x-tenant-id": "X-Tenant-Id"}
-
-#: dev 模式的全部操作码（与 atlas-server auth/catalog.py 的目录一致）
-DEV_OPERATIONS = frozenset(
-    {
-        "chat:use",
-        "agent:create",
-        "skill:upload",
-        "skill:review",
-        "mcp:manage",
-        "model:manage",
-        "audit:view",
-    }
-)
-
 
 @dataclass(frozen=True)
 class Principal:
@@ -118,12 +102,10 @@ async def current_principal(
     request: Request, settings: Annotated[ConfigSettings, Depends(get_settings)]
 ) -> Principal:
     uid = (request.headers.get("x-uid") or "").strip()
-    if settings.auth_mode == "uc":
-        if not uid:
-            raise HTTPException(status_code=401, detail="请先登录")
-        auth_uid = (request.headers.get("x-auth-uid") or "").strip() or uid
-        return Principal(user=uid, operations=await _operations(settings, request, auth_uid))
-    return Principal(user=uid or settings.default_user, operations=DEV_OPERATIONS)
+    if not uid:
+        raise HTTPException(status_code=401, detail="请先登录")
+    auth_uid = (request.headers.get("x-auth-uid") or "").strip() or uid
+    return Principal(user=uid, operations=await _operations(settings, request, auth_uid))
 
 
 def require_any(*ops: str):  # type: ignore[no-untyped-def]

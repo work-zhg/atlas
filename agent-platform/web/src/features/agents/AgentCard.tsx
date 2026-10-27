@@ -48,7 +48,6 @@ export function AgentCard({ agent }: { agent: Agent }) {
         <div style={{ flex: 1, minWidth: 0 }}>
           <div className={styles.cardName}>
             {agent.name}
-            {agent.is_builtin && <Tag style={{ marginInlineEnd: 0 }}>内置</Tag>}
           </div>
           <div className={styles.cardSlug}>
             {agent.slug} · v{agent.version}
@@ -74,6 +73,11 @@ export function AgentCard({ agent }: { agent: Agent }) {
         <Tag className={styles.mono} style={{ marginInlineEnd: 0 }}>
           {agent.model}
         </Tag>
+        {agent.auth_subject === "agent" && (
+          <Tag color="geekblue" style={{ marginInlineEnd: 0 }} title="按数字员工的授权干活，谁来用结果都一样">
+            以 Agent 为权限
+          </Tag>
+        )}
         {agent.builtin_tool_count > 0 && (
           <Tag style={{ marginInlineEnd: 0 }}>工具 {agent.builtin_tool_count}</Tag>
         )}

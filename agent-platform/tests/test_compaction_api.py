@@ -18,6 +18,7 @@ from atlas_agent.services.compaction import ThreadSummarizer, make_persist_hook
 from httpx import ASGITransport
 from sqlalchemy import select
 
+from tests.fake_uc import AS_USER
 from tests.fakes import text_model
 from tests.test_runs_api import wait_for_status
 
@@ -35,7 +36,7 @@ def make_app():
 @pytest.fixture
 async def client() -> httpx.AsyncClient:
     transport = ASGITransport(app=make_app())
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=AS_USER) as c:
         yield c
 
 

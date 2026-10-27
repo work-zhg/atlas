@@ -1,15 +1,17 @@
 """会话工作区的实现。"""
 
-from atlas_agent.providers.filesystem.oss import OssFilesystem, PathEscape
+from atlas_agent.providers.filesystem.oss import OssFilesystem, PathEscape, WorkspaceRouting
 
-__all__ = ["OssFilesystem", "PathEscape", "make_workspace"]
+__all__ = ["OssFilesystem", "PathEscape", "WorkspaceRouting", "make_workspace"]
 
 
-def make_workspace(settings, user_id, thread_id, workspace_thread_id=None):
+def make_workspace(settings, user_id, thread_id, workspace_thread_id=None, *, routing=None):
     """按配置构造会话工作区；没配对象存储则返回 None。
 
     workspace_thread_id: 工作区归属的会话。None = 自己；子智能体传父会话的 id
         —— 它与主 agent 共享同一份工作区，而 skills / system 仍是自己的。
+    routing: 工作区的沙箱路由（doc/sandbox-opensandbox-design.html §9）。沙箱在跑时，
+        工作区的读写经它走 Pod 里的挂载；None = 永远直连对象存储。
 
     ★ 返回 None 不是降级，是**关闭文件能力**：build_agent 会让文件工具
       一个都不注册、大结果外置一并关闭。回落到某个内存实现才是有害的 ——
@@ -58,4 +60,5 @@ def make_workspace(settings, user_id, thread_id, workspace_thread_id=None):
         user_id=user_id,
         thread_id=thread_id,
         workspace_thread_id=workspace_thread_id,
+        routing=routing,
     )

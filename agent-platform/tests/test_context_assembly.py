@@ -82,47 +82,6 @@ async def test_long_layers_are_clipped() -> None:
     assert len(text) < 11_000 and "已截断" in text
 
 
-class _Mem:
-    def __init__(self, hits: list[dict[str, Any]] | None = None, fail: bool = False) -> None:
-        self.hits, self.fail, self.queries = hits or [], fail, []
-
-    async def search(self, q: str, **kw: Any) -> list[dict[str, Any]]:
-        self.queries.append(q)
-        if self.fail:
-            raise RuntimeError("mem down")
-        return self.hits
-
-
-async def test_memory_attachment_from_current_question() -> None:
-    mem = _Mem([{"id": "abcdef123456", "memory": "用户偏好用 bun"}])
-    out = await ctx.memory_attachments(
-        _settings(), mem, user_id=uuid4(),
-        input_content=[{"type": "text", "text": "帮我装依赖"}], thread_memory="on",
-    )  # fmt: skip
-    assert out[0][0] == "memory" and "用户偏好用 bun" in out[0][1] and "可能已过期" in out[0][1]
-    assert mem.queries == ["帮我装依赖"]
-
-
-@pytest.mark.parametrize(
-    ("mem", "content", "thread_memory", "settings_kw"),
-    [
-        (None, "问题", "on", {}),
-        (_Mem([{"memory": "x"}]), "问题", "off", {}),
-        (_Mem([{"memory": "x"}]), "", "on", {}),
-        (_Mem([{"memory": "x"}]), "问题", "on", {"memory_auto_inject": False}),
-        (_Mem(fail=True), "问题", "on", {}),
-    ],
-)
-async def test_memory_attachment_skips(
-    mem: Any, content: str, thread_memory: str, settings_kw: Any
-) -> None:
-    out = await ctx.memory_attachments(
-        _settings(**settings_kw), mem, user_id=uuid4(), input_content=content,
-        thread_memory=thread_memory,
-    )  # fmt: skip
-    assert out == []
-
-
 def test_extract_summary_falls_back_to_unclosed_analysis() -> None:
     from atlas_agent.services.compaction import _extract_summary
 

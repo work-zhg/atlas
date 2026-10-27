@@ -6,12 +6,11 @@ from fastapi import Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.session import get_session
-from ..mcp.service import McpRegistry
 from ..settings import ConfigSettings, get_settings
 from ..skill.service import SkillService
 from ..storage import SkillStorage, StorageNotConfigured, make_storage
 
-__all__ = ["RegistryDep", "SessionDep", "SkillServiceDep"]
+__all__ = ["SessionDep", "SkillServiceDep"]
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
@@ -38,9 +37,4 @@ def get_skill_service(
     return SkillService(session=session, storage=storage, settings=settings)
 
 
-def get_registry(session: SessionDep) -> McpRegistry:
-    return McpRegistry(session=session)
-
-
 SkillServiceDep = Annotated[SkillService, Depends(get_skill_service)]
-RegistryDep = Annotated[McpRegistry, Depends(get_registry)]

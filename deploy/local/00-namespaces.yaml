@@ -1,14 +1,21 @@
-# 本机 K8s（Docker Desktop）上的 acp 全链路验证。
+# Atlas 的命名空间。
 #
-# ★ 两个 namespace 而不是一个：cluster 的 Role 只覆盖 atlas-sessions，
-#   它对自己所在的 atlas-system 没有任何写权限 —— 「唯一持有 K8s 写权限
-#   的进程」这句话要在 RBAC 上成立，而不只是在文档里。
+# ★ 服务与会话 Pod 分开：会话 Pod（原生沙箱、ACP）由 OpenSandbox 在 atlas-sbx / atlas-acp 里建，
+#   Atlas 的服务都不持有 K8s 权限（doc/sandbox-opensandbox-design.html §13）。
+#   opensandbox-system 由 OpenSandbox 的 base chart 自己建（opensandbox.sh）。
 apiVersion: v1
 kind: Namespace
 metadata:
   name: atlas-system
 ---
+# 原生沙箱（doc/sandbox-opensandbox-design.html §7）：OpenSandbox 的 opensandbox-sbx 在这里建沙箱 Pod
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: atlas-sessions
+  name: atlas-sbx
+---
+# ACP 智能体的 CLI Pod（doc/sandbox-opensandbox-design.html §7、§11）：opensandbox-acp 在这里建
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: atlas-acp

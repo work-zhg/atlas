@@ -16,9 +16,10 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 from uuid import UUID
 
 import redis.asyncio as aioredis
@@ -27,36 +28,48 @@ from langchain_core.messages import BaseMessage
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from atlas_agent.domain.spec import AgentSpec, resolve_summarizer_model
-from atlas_agent.domain.tool_registry import BASH_TOOL, MEMORY_SEARCH_TOOL
+from atlas_agent.domain.tool_registry import BASH_TOOL, MEMORY_TOOL
 from atlas_agent.domain.translator import extract_text
 from atlas_agent.errors import CapabilityUnavailable
-from atlas_agent.executor.context import load_instructions, memory_attachments
+from atlas_agent.executor.context import load_instructions
 from atlas_agent.executor.runner import Titler
-from atlas_agent.memory.tool import MemoryUnavailable, make_memory_search_tool
-from atlas_agent.providers.cluster import ClusterPods
 from atlas_agent.providers.knowledge import format_context, make_knowledge_tool, require_client
 from atlas_agent.providers.llm.factory import build_chat_model
+from atlas_agent.providers.opensandbox import SandboxProvisioner
 from atlas_agent.providers.sandbox import PodSandbox
 from atlas_agent.telemetry.model_callback import ModelSpanHandler
 
 from ..config import Settings
 from ..configplane import skill_directory
-from ..configplane.mcp import make_mcp_catalog, mcp_reviews
 from ..db.models import Thread
 from ..domain.events import EventType
-from ..providers.filesystem import make_workspace
+from ..outbound import current_identity
+from ..providers.filesystem import WorkspaceRouting, make_workspace
 from ..providers.filesystem.skill_copy import (
     resolve_skills,
     seed_session_skills,
     skill_refs_for,
 )
-from ..providers.mcp import MCP_PREFIX, CallContext, NativeMcpTools
+from ..providers.mcp import (
+    MCP_PREFIX,
+    CallContext,
+    GatewayUnavailable,
+    KeyAuth,
+    McpSessions,
+    NativeMcpTools,
+    make_mcp_catalog,
+    mcp_subject_access,
+)
+from ..providers.mcp.gateway import forget_access, servers_in
 from ..repositories.model_catalog import ModelCatalogRepository
 from ..services.approval import RedisApprovalGate
 from ..services.compaction import ThreadSummarizer, make_failure_hook, make_persist_hook
 from ..services.title import TitleService
 from ..stream.relay import EventRelay
 from .build import build_graph
+
+if TYPE_CHECKING:
+    from ..memory import MemoryRuntime
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +115,14 @@ class SandboxNotEnabled(CapabilityUnavailable):
     """勾了 Shell 但部署没开沙箱 —— 明确报错（§13.2），不静默少装 execute。"""
 
 
+class MemoryNotConfigured(CapabilityUnavailable):
+    """勾了「记忆」但部署没接入记忆服务 —— 明确报错（§13.2），不静默少装写入工具。
+
+    ★ 只管「没配置」。记忆服务**运行时**不可用不报错：本轮不用记忆，对话照常
+      （记忆设计 §4.1：记忆不能成为会话的硬依赖）。
+    """
+
+
 @dataclass(frozen=True)
 class PreparedRun:
     """从库里还原出的「任务是什么」。
@@ -140,7 +161,13 @@ class PreparedRun:
     #: 续跑时交回图的挂起现场（contracts/suspension.py）：上一段还在等的调用
     #: （run.waiting_on，已剪掉历史里有结果的），和 server 查好的结果。首段都为空。
     waiting_on: dict[str, Any] = field(default_factory=dict)
-    decisions: dict[str, str] = field(default_factory=dict)
+    #: approval → ApprovalOutcome（结构体）；subagent → 结论文本
+    decisions: dict[str, Any] = field(default_factory=dict)
+    #: 本段开始时的审批模式（run.approval_mode；doc/native-approval-mode-design.html）。
+    #: native 交给图；acp 子智能体据此与自己的 permission_mode 取更严格的
+    approval_mode: str | None = None
+    #: 本轮用户消息的时间。Agent 在这一轮写入记忆时用它作为「信息成立的时间」（记忆设计 §6.4）
+    input_at: datetime | None = None
 
     @property
     def thread_id(self) -> UUID:
@@ -156,7 +183,7 @@ class HookAssembly:
         settings: Settings,
         model_builder: ModelBuilder,
         executor: Any = None,
-        memory: Any = None,
+        memory: MemoryRuntime | None = None,
     ) -> None:
         #: 委派要能起子 run。循环引用是刻意的且只有一层：执行器持有本对象，
         #: 本对象只在构造委派回调时回调它的 submit —— 不在初始化期用到。
@@ -164,8 +191,7 @@ class HookAssembly:
         self._sessionmaker = sessionmaker
         self._settings = settings
         self._build_model = model_builder
-        #: 记忆客户端。None = 没开记忆 —— 勾了 search_memory 也不会注入
-        #: 那个工具，而是进 unsupported_tools 明确报出来（§13.2）。
+        #: 记忆（doc/memory-design.html）。None = 没接入记忆服务
         self._memory = memory
 
     async def build(
@@ -176,18 +202,20 @@ class HookAssembly:
         redis: aioredis.Redis,
         relay: EventRelay,
         notices: list[tuple[EventType, dict[str, Any]]] | None = None,
+        closers: list[Callable[[], Awaitable[None]]] | None = None,
     ) -> tuple[Any, Titler | None]:
         """收集本次 run 的全部能力对象，装配出图。返回 (graph, titler)。
 
         策略（装什么、什么顺序）在 build.py::build_graph —— 那里是纯函数；
         这里只做 IO：解析 MCP、起沙箱容器、连对象存储、建 Redis 门禁。
         titler 单独返回：它是 runner 的注入点，不进图。
+        closers: 本 Run 段结束时要收尾的（MCP 会话），由调用方在段结束时执行。
         """
         # MCP 工具在这里解析成 BaseTool —— engine 不认识 MCP 的传输与凭据
         # （§14）。解析失败要冒泡成 run.failed，而不是少装几个工具就默默跑
         # （§13.2）。工具定义读目录缓存，命中时装配不连网（MCP 详设 §05）。
         extra_tools = await self._mcp_tool_list(
-            prepared, run_id=run_id, redis=redis, notices=notices
+            prepared, run_id=run_id, redis=redis, notices=notices, closers=closers
         )
         # MCP 工具多时改为按需加载：定义不常驻上下文，模型用 tool_search 加载（上下文管理 §13）
         deferred = _deferred_mcp_tools(extra_tools, self._settings)
@@ -195,22 +223,26 @@ class HookAssembly:
         # ★ 网页搜索不再是内置工具：它经 Higress 以 MCP 提供
         #   （mcp:serpapi:google_search），后端 key 只在网关里，走上面那条路。
 
-        # 记忆检索（只读）。★ user_id 从**会话所有者**闭包捕获，不进工具
-        #   的参数 schema —— 一旦它可由模型指定，就是一个读取他人记忆的
-        #   口子，而提示词注入是真实存在的攻击面（记忆设计 §09）。
-        # 会话关闭了用户记忆（如服务账号的会话）→ 不挂检索工具：这是会话的设定，不是缺前提
-        if MEMORY_SEARCH_TOOL in prepared.spec.tool_names and prepared.thread.memory != "off":
-            # ★ 缺前提要**明确失败**，不能静默少装一个工具（§13.2）。
-            #   静默跳过的话，模型会
-            #   以为自己没有记忆可查，而用户以为记忆在工作。
-            if self._memory is None:
-                raise MemoryUnavailable(
-                    "勾选了 search_memory 但服务端未开启记忆（MEMORY_ENABLED=false）"
-                )
-            extra_tools = [
-                *extra_tools,
-                make_memory_search_tool(self._memory, user_id=prepared.thread.created_by),
-            ]
+        # 记忆（doc/memory-design.html §4–§5）：常驻块进系统提示词，load_memory 随记忆挂上；
+        # 勾了「记忆」的主会话再挂 save_memory / forget_memory。★ 关联主键（会话所属用户）
+        # 闭包捕获，不进工具参数 —— 一旦可由模型指定，提示词注入就能读写别人的记忆（§4.8）。
+        wants_write = MEMORY_TOOL in prepared.spec.tool_names
+        if wants_write and self._memory is None and prepared.thread.memory != "off":
+            raise MemoryNotConfigured("勾选了「记忆」但服务端未接入记忆服务（MEMORY_BASE_URL）")
+        memory = (
+            await self._memory.turn(
+                prepared.thread,
+                run_id=run_id,
+                writable=wants_write,
+                resume=prepared.resume,
+                history_upto=prepared.history_upto,
+                occurred_at=prepared.input_at,
+            )
+            if self._memory is not None
+            else None
+        )
+        if memory is not None:
+            extra_tools = [*extra_tools, *memory.tools()]
 
         # 知识库（tool 模式）：库 id 闭包捕获，不进参数（doc/atlas-rag-design.html §10）
         knowledge = prepared.spec.knowledge
@@ -225,34 +257,44 @@ class HookAssembly:
                 ),
             ]
 
-        # Shell 沙箱（doc/native-sandbox-design.html）。★ 这里只构造客户端，不建 Pod ——
-        #   Pod 在第一次 execute 时才按需创建（多数原生会话用不到沙箱）。
+        # Shell 沙箱（doc/sandbox-opensandbox-design.html）。★ 这里只构造客户端，不建沙箱 ——
+        #   沙箱在第一次 execute 时才按需创建（多数原生会话用不到）。
         #   按工作区建：子智能体（workspace_thread_id = 父会话）与父会话共用一个。
+        ws_thread = str(prepared.thread.workspace_thread_id)
+        provisioner = (
+            SandboxProvisioner(self._settings, redis) if self._settings.sandbox_enabled else None
+        )
         sandbox = None
         if BASH_TOOL in prepared.spec.tool_names:
-            if not self._settings.sandbox_enabled:
+            if provisioner is None:
                 raise SandboxNotEnabled(
                     "勾选了 Shell（bash）但服务端未开启沙箱（SANDBOX_ENABLED=false）"
                 )
+            settings = self._settings
             sandbox = PodSandbox(
-                pods=ClusterPods(self._settings),
-                workspace_thread_id=str(prepared.thread.workspace_thread_id),
+                provisioner=provisioner,
+                workspace_thread_id=ws_thread,
                 user_id=str(prepared.thread.created_by),
                 run_id=str(run_id),
-                git_profile=prepared.thread.git_profile or "",
-                source_app=prepared.thread.source_app or "",
-                idle_s=self._settings.acp_tool_idle_timeout_s,
+                poll_min_s=settings.sandbox_poll_min_s,
+                poll_max_s=settings.sandbox_poll_max_s,
+                output_limit=settings.sandbox_output_limit_bytes,
+                idle_s=settings.acp_tool_idle_timeout_s,
+                stall_cpu_pct=settings.sandbox_stall_cpu_pct,
             )
 
         # ★ workspace 挂**父会话的**前缀，skills / system 仍按自己的 thread 走
         #   （Thread.workspace_thread_id 是 parent_thread_id or id）。
         #   没配对象存储 = **没有文件能力**（make_workspace 返回 None，
         #   不回落任何内存实现）：文件工具届时一个都不注册。
+        #   ★ 工作区的读写路由跟着**工作区**走，不跟着本智能体有没有 bash 走：没勾 bash 的子智能体
+        #     与父会话共用工作区，父会话的沙箱在跑时它的文件工具也要进沙箱（与命令同一个挂载，§9）。
         workspace = make_workspace(
             self._settings,
             prepared.thread.created_by,
             prepared.thread_id,
             workspace_thread_id=prepared.thread.workspace_thread_id,
+            routing=WorkspaceRouting(provisioner, ws_thread) if provisioner else None,
         )
 
         approvals = RedisApprovalGate(self._sessionmaker, redis, run_id)
@@ -274,27 +316,26 @@ class HookAssembly:
             api_key=self._settings.litellm_key.get_secret_value(),
         )
 
-        # 持久指令（L1）与本轮记忆附件（L4）：服务不可用时跳过，不让本轮失败
+        # 持久指令（L1）：服务不可用时跳过，不让本轮失败
         instructions = await load_instructions(
             self._settings, workspace, prepared.thread.created_by
-        )
-        attachments = await memory_attachments(
-            self._settings,
-            self._memory,
-            user_id=prepared.thread.created_by,
-            input_content=prepared.input_content,
-            thread_memory=prepared.thread.memory,
         )
 
         graph = build_graph(
             prepared.spec,
             chat,
             instructions=instructions,
+            memory=memory.block if memory is not None else None,
             deferred_tools=deferred,
             filesystem=workspace,
             sandbox=sandbox,
             approvals=approvals,
-            compactor=await self._compactor(prepared, workspace=workspace, attachments=attachments),
+            compactor=await self._compactor(
+                prepared,
+                workspace=workspace,
+                # 记忆的更新提示（§5.5）：每次调模型时现取，Agent 重新加载过的主题不再列出
+                dynamic_attachments=memory.reminders if memory is not None else None,
+            ),
             # ★ 技能在**会话创建**时就已拷进 skills 前缀（见 skill_copy），
             #   这里只把清单渲染给中间件 —— 不扫描、不读文件。
             skills=skill_refs_for(skill_metas),
@@ -336,12 +377,52 @@ class HookAssembly:
         run_id: UUID,
         redis: aioredis.Redis,
         notices: list[tuple[EventType, dict[str, Any]]] | None,
+        closers: list[Callable[[], Awaitable[None]]] | None = None,
     ) -> list[Any]:
-        """spec 里的 mcp:* → BaseTool。未复核 / 漂移的定义经 notices 告知用户（§9）。"""
+        """spec 里的 mcp:* → BaseTool。未复核 / 漂移 / 没权限 / 没 Key 的经 notices 告知用户。
+
+        经 MCP 网关（MCP 方案设计 §6.1）：按这一轮的权限主体问网关「能用哪些服务、Key 是什么」
+        （一次），没权限、没 Key 的服务跳过并提示；工具定义读缓存的元数据，装配不连 MCP 服务。
+        同一个 Run 段对同一个服务复用一个会话（§6.3），段结束时经 closers 关掉。
+        """
         if not any(name.startswith(MCP_PREFIX) for name in prepared.spec.tool_names):
             return []  # 不碰注册表：没用 MCP 的 agent 不该因为配置服务不可用而失败
         s = self._settings
+        ident = current_identity()
+        ctx = CallContext(
+            run_id=run_id,
+            thread_id=prepared.thread_id,
+            user_id=prepared.thread.created_by,
+            # 执行器在 run 开始时设好的出站身份（以 Agent 为权限时是数字员工）
+            auth_uid=ident.auth_uid if ident else None,
+        )
         catalog = await make_mcp_catalog(s, redis)
+        subject = ctx.auth_uid or ctx.user_id
+        try:
+            access = await mcp_subject_access(s, subject)
+        except GatewayUnavailable as exc:
+            # 网关不可用 = 这些服务此刻用不了：跳过并提示，对话照常（§6.7 ③）
+            for server in sorted(servers_in(prepared.spec.tool_names)):
+                if notices is not None:
+                    notices.append(
+                        (
+                            EventType.MCP_TOOL_SKIPPED,
+                            {
+                                "server": server,
+                                "tools": [],
+                                "reason": "unavailable",
+                                "subject": str(subject),
+                                "message": f"{exc}，本轮不装这个服务的工具",
+                            },
+                        )
+                    )
+            return []
+        sessions = McpSessions(
+            auth=KeyAuth(access.key) if access.key else None,
+            fetch_key=self._key_fetcher(subject),
+        )
+        if closers is not None:
+            closers.append(sessions.aclose)
         tools = NativeMcpTools(
             catalog,
             call_timeout_s=s.mcp_call_timeout_s,
@@ -349,16 +430,26 @@ class HookAssembly:
         )
         return await tools.tools_for(
             prepared.spec.tool_names,
-            CallContext(
-                run_id=run_id,
-                thread_id=prepared.thread_id,
-                user_id=prepared.thread.created_by,
-            ),
+            ctx,
             digests=prepared.spec.mcp_tool_digests,
             drift_policy=prepared.spec.mcp_drift_policy,
-            reviews=await mcp_reviews(s, catalog.servers()),
+            reviews=catalog.reviews(),
             notices=notices,
+            access=access,
+            sessions=sessions,
         )
+
+    def _key_fetcher(self, subject: UUID) -> Callable[[], Awaitable[str | None]]:
+        """Key 被网关拒绝时重新取一次（§6.7 ④）。取不到（网关也不可用）当作没有新 Key。"""
+
+        async def fetch() -> str | None:
+            forget_access(subject)
+            try:
+                return (await mcp_subject_access(self._settings, subject)).key
+            except GatewayUnavailable:
+                return None
+
+        return fetch
 
     def _subagent_spawner(self, prepared: PreparedRun, *, run_id: UUID, relay: EventRelay) -> Any:
         """构造本段派 SubAgent 的入口（SubAgentSpawner 的实现）。
@@ -448,7 +539,7 @@ class HookAssembly:
         prepared: PreparedRun,
         *,
         workspace: Any = None,
-        attachments: list[tuple[str, str]] | None = None,
+        dynamic_attachments: Any = None,
     ) -> CompactionMiddleware | None:
         """按 spec 与模型目录构造上下文管理中间件（doc/context-management-design.html）。
 
@@ -490,7 +581,7 @@ class HookAssembly:
             cache_ttl_s=self._settings.prompt_cache_ttl_s,
             filesystem=workspace,
             restore_files=cfg.restore_files,
-            attachments=attachments or [],
+            dynamic_attachments=dynamic_attachments,
             attachment_budget_tokens=int(
                 (window - min(effective_max_output, 20_000)) * cfg.attachment_budget_ratio
             ),

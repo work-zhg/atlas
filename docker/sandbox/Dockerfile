@@ -1,10 +1,10 @@
-# 原生智能体的默认沙箱镜像（doc/native-sandbox-design.html §5）。
+# 原生智能体的默认沙箱镜像（doc/sandbox-opensandbox-design.html §8）。
 #
 #   docker build -f docker/sandbox/Dockerfile -t atlas-sandbox:dev \
 #     --build-arg HTTP_PROXY=http://host.docker.internal:58591 \
 #     --build-arg HTTPS_PROXY=http://host.docker.internal:58591 docker/sandbox
 #
-# ★ 不含任何守护进程：sandboxd 由 init 容器注入（任意 glibc 镜像都能当沙箱）。
+# ★ 不含任何守护进程：OpenSandbox 的 execd 由 init 容器注入（任意 glibc 镜像都能当沙箱）。
 #   这里只是「模型常用的工具都在」的一个合理默认。
 # ★ 以 UID 1000 运行、根只读：可写区是 /workspace、/home/agent、/repos、/tmp（Pod 挂进来）。
 FROM debian:trixie-slim

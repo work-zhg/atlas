@@ -1,11 +1,10 @@
 """MCP 工具的三种名字（MCP 详设 §04）。
 
   spec 标识   mcp:github:search   spec.tool_names、/v1/tools.name
-  模型侧名    github__search      LLM 工具定义、require_approval_for、tool.* 事件
+  模型侧名    github__search      LLM 工具定义、审批判定、tool.* 事件
   线上名      search              tools/call 发给 server
 
-此前模型看到的是裸线上名：两个 server 的同名工具互相覆盖，与内置工具
-撞名，而且 require_approval_for 永远匹配不到 MCP 工具。
+此前模型看到的是裸线上名：两个 server 的同名工具互相覆盖，与内置工具撞名。
 """
 
 from __future__ import annotations
@@ -41,15 +40,3 @@ def model_name(server: str, tool: str) -> str | None:
     name = f"{server}{SEP}{tool}"
     return name if _MODEL_NAME.match(name) else None
 
-
-def approval_target(name: str) -> str:
-    """require_approval_for 的一项 → 审批中间件实际匹配的模型侧名。
-
-    约定存的是模型侧名（编辑器从 /v1/tools 的 model_tool_names 取）。但编辑器
-    此前提示用户手填 `mcp:server:tool` —— 那种写法从来没匹配上过任何调用。
-    这里把它翻译过来，让既有配置按用户本意生效，而不是继续静默失效。
-    """
-    parsed = parse_tool_id(name)
-    if parsed is None:
-        return name
-    return model_name(*parsed) or name

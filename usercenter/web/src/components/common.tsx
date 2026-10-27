@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { Alert, Checkbox, Modal, Select, Space, Tag, TreeSelect, Typography } from "antd";
+import { Alert, Checkbox, Modal, Select, type SelectProps, Space, Tag, TreeSelect, Typography } from "antd";
 import { useState, type ReactNode } from "react";
 
 import { api } from "@/lib/api";
@@ -119,23 +119,38 @@ interface DirUser {
   id: string;
   name: string;
   account: string;
-  dept: string;
+  dept: string | null;
+  user_type?: "human" | "digital";
 }
 
+/**
+ * 选人。digital：连数字员工一起，单独一组（授权时可以选到 Agent 的身份；它们不在组织树里，
+ * 数字员工设计 §3.4）。
+ */
 export function UserSelect({
   value,
   onChange,
   multiple,
+  digital,
 }: {
   value?: string | string[];
   onChange?: (v: string | string[]) => void;
   multiple?: boolean;
+  digital?: boolean;
 }) {
   const [q, setQ] = useState("");
   const { data = [], isFetching } = useQuery({
-    queryKey: ["directory", "users", q],
-    queryFn: () => api.get<DirUser[]>("/directory/users", { q, limit: 30 }),
+    queryKey: ["directory", "users", q, digital ? "digital" : "human"],
+    queryFn: () => api.get<DirUser[]>("/directory/users", { q, limit: 30, digital: digital ? "true" : undefined }),
   });
+  const people = data.filter((u) => u.user_type !== "digital");
+  const agents = data.filter((u) => u.user_type === "digital");
+  const options: SelectProps["options"] = digital
+    ? [
+        { label: "人员", options: people.map((u) => ({ value: u.id, label: `${u.name}（${u.account}）· ${u.dept}` })) },
+        { label: "数字员工", options: agents.map((u) => ({ value: u.id, label: `🤖 ${u.name}（${u.account}）` })) },
+      ].filter((g) => g.options.length)
+    : people.map((u) => ({ value: u.id, label: `${u.name}（${u.account}）· ${u.dept}` }));
   return (
     <Select
       value={value}
@@ -146,9 +161,9 @@ export function UserSelect({
       onSearch={setQ}
       loading={isFetching}
       allowClear
-      placeholder="搜索姓名或账号"
+      placeholder={digital ? "搜索姓名或账号（含数字员工）" : "搜索姓名或账号"}
       style={{ width: "100%" }}
-      options={data.map((u) => ({ value: u.id, label: `${u.name}（${u.account}）· ${u.dept}` }))}
+      options={options}
     />
   );
 }
@@ -159,8 +174,16 @@ export interface SubjectValue {
   includeSub: boolean;
 }
 
-/** 授权对象：多个部门（可含下级）+ 多个用户。 */
-export function SubjectPicker({ value, onChange }: { value: SubjectValue; onChange: (v: SubjectValue) => void }) {
+/** 授权对象：多个部门（可含下级）+ 多个用户。digital：用户里也能选数字员工。 */
+export function SubjectPicker({
+  value,
+  onChange,
+  digital,
+}: {
+  value: SubjectValue;
+  onChange: (v: SubjectValue) => void;
+  digital?: boolean;
+}) {
   return (
     <Space direction="vertical" style={{ width: "100%" }}>
       <div>
@@ -180,7 +203,7 @@ export function SubjectPicker({ value, onChange }: { value: SubjectValue; onChan
         <div className="uc-muted" style={{ marginBottom: 4 }}>
           用户
         </div>
-        <UserSelect multiple value={value.users} onChange={(v) => onChange({ ...value, users: v as string[] })} />
+        <UserSelect multiple digital={digital} value={value.users} onChange={(v) => onChange({ ...value, users: v as string[] })} />
       </div>
     </Space>
   );

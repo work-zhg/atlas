@@ -26,15 +26,20 @@ from atlas_agent.main import create_app
 from httpx import ASGITransport
 from langchain_core.messages import AIMessageChunk
 
+from tests.fake_uc import AS_USER
 from tests.fakes import TurnModel, tool_call_chunk
 from tests.test_runs_api import wait_for_status
 
+#: 规划模式：模型提交计划（exit_plan_mode）→ 一次 kind=plan 的审批。它在任何 native 智能体上
+#: 都存在，不依赖文件系统 / 沙箱，最适合测审批的接口链路（doc/native-approval-mode-design.html）
 GUARDED_SPEC = {
     "system_prompt": "p",
     "model": {"model": "claude-opus-5"},
     "tool_names": ["write_todos"],
-    "limits": {"require_approval_for": ["write_todos"]},
+    "approval": {"default_mode": "plan"},
 }
+#: 批准计划必须带执行模式（且在允许范围里）
+APPROVE = {"decision": "approved", "approval_mode": "auto"}
 
 
 def make_app():
@@ -44,7 +49,7 @@ def make_app():
         get_settings(),
         model_builder=lambda *_a, **_k: TurnModel(
             scripts=[
-                [tool_call_chunk("write_todos", '{"todos":[]}', "c1")],
+                [tool_call_chunk("exit_plan_mode", '{"plan":"先记待办"}', "c1")],
                 [AIMessageChunk(content="办完了")],
             ]
         ),
@@ -55,7 +60,7 @@ def make_app():
 @pytest.fixture
 async def client() -> httpx.AsyncClient:
     transport = ASGITransport(app=make_app())
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=AS_USER) as c:
         yield c
 
 
@@ -105,12 +110,45 @@ async def test_approve_resumes_the_run(client: httpx.AsyncClient) -> None:
     run_id, approval_id = await _start_guarded_run(client)
 
     res = await client.post(
-        f"/v1/runs/{run_id}/approvals/{approval_id}", json={"decision": "approved"}
+        f"/v1/runs/{run_id}/approvals/{approval_id}", json=APPROVE
     )
     assert res.status_code == 200, res.text
 
     run = await wait_for_status(client, run_id)
     assert run["status"] == "succeeded", run
+    # ★ 计划获批 → 模式改成用户选的「自动」，并落到会话上（下一条消息就用它）
+    thread = (await client.get(f"/v1/threads/{run['thread_id']}")).json()
+    assert thread["approval_mode"] == "auto", thread
+    assert thread["approval"]["mode"] == "auto"
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_approving_a_plan_requires_an_allowed_execution_mode(
+    client: httpx.AsyncClient,
+) -> None:
+    """批准计划必须选执行模式，且在智能体允许的范围里 —— 模式是权限，不能由请求随便指定。"""
+    run_id, approval_id = await _start_guarded_run(client)
+    url = f"/v1/runs/{run_id}/approvals/{approval_id}"
+    missing = await client.post(url, json={"decision": "approved"})
+    assert missing.status_code == 400, missing.text
+    assert (await client.get(f"/v1/runs/{run_id}/approvals")).json()["data"], "被错误地消费了"
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_a_mode_outside_the_allowed_range_is_refused(client: httpx.AsyncClient) -> None:
+    """发消息时选的模式必须在智能体允许的范围里；选过的模式会话会记住。"""
+    spec = {**GUARDED_SPEC, "approval": {"default_mode": "auto", "allowed_modes": ["auto"]}}
+    agent = await client.post(
+        "/v1/agents", json={"slug": "auto-only", "name": "只许自动", "spec": spec}
+    )
+    thread = (await client.post("/v1/threads", json={"agent_id": agent.json()["id"]})).json()
+    bad = await client.post(
+        f"/v1/threads/{thread['id']}/runs",
+        json={"content": [{"type": "text", "text": "x"}], "approval_mode": "manual"},
+    )
+    assert bad.status_code == 400, bad.text
+    detail = (await client.get(f"/v1/threads/{thread['id']}")).json()
+    assert detail["approval"] == {"mode": "auto", "default_mode": "auto", "allowed_modes": ["auto"]}
 
 
 @pytest.mark.usefixtures("clean_db")
@@ -129,7 +167,7 @@ async def test_second_decision_conflicts(client: httpx.AsyncClient) -> None:
     run_id, approval_id = await _start_guarded_run(client)
 
     first = await client.post(
-        f"/v1/runs/{run_id}/approvals/{approval_id}", json={"decision": "approved"}
+        f"/v1/runs/{run_id}/approvals/{approval_id}", json=APPROVE
     )
     second = await client.post(
         f"/v1/runs/{run_id}/approvals/{approval_id}", json={"decision": "rejected"}
@@ -164,7 +202,7 @@ async def test_an_approval_survives_a_process_restart(client: httpx.AsyncClient)
         get_settings(),
         model_builder=lambda *_a, **_k: TurnModel(
             scripts=[
-                [tool_call_chunk("write_todos", '{"todos":[]}', "c1")],
+                [tool_call_chunk("exit_plan_mode", '{"plan":"先记待办"}', "c1")],
                 [AIMessageChunk(content="重启后办完了")],
             ]
         ),
@@ -176,7 +214,7 @@ async def test_an_approval_survives_a_process_restart(client: httpx.AsyncClient)
 
     # 决策到了 —— 新进程把它续起来
     res = await client.post(
-        f"/v1/runs/{run_id}/approvals/{approval_id}", json={"decision": "approved"}
+        f"/v1/runs/{run_id}/approvals/{approval_id}", json=APPROVE
     )
     assert res.status_code == 200, res.text
 
@@ -229,7 +267,7 @@ async def test_an_old_approval_never_expires(client: httpx.AsyncClient) -> None:
 
     # 人终于做了决定 —— 照样生效
     res = await client.post(
-        f"/v1/runs/{run_id}/approvals/{approval_id}", json={"decision": "approved"}
+        f"/v1/runs/{run_id}/approvals/{approval_id}", json=APPROVE
     )
     assert res.status_code == 200, res.text
     final = await wait_for_status(client, run_id)

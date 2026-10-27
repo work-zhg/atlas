@@ -9,6 +9,7 @@ import { ThreadConversation, type ConversationStreamState } from "@atlas/chat-ui
 import { useAgents } from "@/api/agents";
 import { useCreateThread, useThread, useThreads } from "@/api/threads";
 import { Icon } from "@/components/Icon";
+import { BackfillNotice } from "@/features/memory/BackfillNotice";
 import { appName, ThreadList } from "./ThreadList";
 import type { ContextUsageData } from "@atlas/chat-ui/src/lib/events";
 
@@ -89,6 +90,8 @@ export function ChatWorkbench({ threadId }: { threadId?: string }) {
           readOnlyHint={
             agent?.source_app && `这个会话来自 ${appName(agent.source_app)}，请回到 ${appName(agent.source_app)} 里继续`
           }
+          // 会话后补记写了什么，下次见到用户时告诉他（doc/memory-design.html §4.3）
+          notice={<BackfillNotice linkToPage />}
           headerExtra={
             agent && (
               <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
@@ -110,7 +113,10 @@ export function ChatWorkbench({ threadId }: { threadId?: string }) {
           <header className={`${styles.paneHead} ${styles.chatHead}`}>
             <span style={{ color: "var(--fg-3)", fontSize: 13 }}>未选择会话</span>
           </header>
-          <div style={{ flex: 1, display: "grid", placeItems: "center" }}>
+          <div style={{ flex: 1, display: "grid", placeItems: "center", alignContent: "center" }}>
+            <div style={{ maxWidth: 560, width: "100%" }}>
+              <BackfillNotice linkToPage />
+            </div>
             <Empty description="选择左侧会话，或新建一个">
               <Button type="primary" icon={<Icon name="plus" size={14} />} onClick={() => setNewOpen(true)}>
                 新建会话

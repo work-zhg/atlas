@@ -164,12 +164,14 @@ class GrantService:
             if user is None:
                 raise NotFound("USER_NOT_FOUND", "用户不存在")
             own = list(await self.session.scalars(select(Grant).where(Grant.user_uuid == uuid)))
-            chain = await dept_chain(self.session, user.dept_uuid)
-            anc = chain[:-1]
-            cond = [Grant.dept_uuid == user.dept_uuid]
-            if anc:
-                cond.append(and_(Grant.include_sub.is_(True), Grant.dept_uuid.in_(anc)))
-            inherited = list(await self.session.scalars(select(Grant).where(or_(*cond))))
+            inherited = []
+            if user.dept_uuid is not None:  # 数字员工没有部门，也就没有继承
+                chain = await dept_chain(self.session, user.dept_uuid)
+                anc = chain[:-1]
+                cond = [Grant.dept_uuid == user.dept_uuid]
+                if anc:
+                    cond.append(and_(Grant.include_sub.is_(True), Grant.dept_uuid.in_(anc)))
+                inherited = list(await self.session.scalars(select(Grant).where(or_(*cond))))
         elif subject_type == "dept":
             dept = (
                 await self.session.execute(select(Dept).where(Dept.uuid == uuid))
@@ -192,6 +194,30 @@ class GrantService:
         return {"own": await self.describe(own), "inherited": await self.describe(inherited)}
 
     # ───────────────────────────── 写操作
+
+    async def _check_digital_targets(self, kind: str, targets: list[Any], user: User) -> None:
+        """用户中心自身（内置应用）的角色不能授给数字员工，经岗位也不行（数字员工设计 §3.1）：
+        Agent 不能管理权限体系本身，否则一次提示注入就能改掉所有授权。"""
+        from ..builtin import uc_app_uuid
+
+        uc_app = await uc_app_uuid(self.session)
+        if kind == "role":
+            hit = any(t.app_uuid == uc_app for t in targets)
+        else:
+            hit = (
+                await self.session.scalar(
+                    select(Role.uuid)
+                    .join(PositionRole, PositionRole.role_uuid == Role.uuid)
+                    .where(
+                        PositionRole.position_uuid.in_([t.uuid for t in targets]),
+                        Role.app_uuid == uc_app,
+                    )
+                    .limit(1)
+                )
+                is not None
+            )
+        if hit:
+            raise Invalid("DIGITAL_NOT_ALLOWED", f"用户中心的角色不能授给数字员工：{user.name}")
 
     async def add(
         self,
@@ -221,6 +247,8 @@ class GrantService:
                     raise Invalid("SUBJECT_NOT_FOUND", "用户不存在")
                 if u.status == "disabled":
                     raise Invalid("USER_DISABLED", f"不能授权给已停用的用户：{u.name}")
+                if u.is_digital:
+                    await self._check_digital_targets(kind, list(targets.values()), u)
                 names.append(u.name)
             elif st == "dept":
                 d = (
@@ -356,7 +384,7 @@ class GrantService:
                         "account": u.account,
                         "status": u.status,
                     },
-                    "dept": depts[u.dept_uuid].name,
+                    "dept": depts[u.dept_uuid].name if u.dept_uuid else "数字员工",
                     "sources": sorted(set(sources)),
                 }
             )

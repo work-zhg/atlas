@@ -22,8 +22,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from atlas_agent.domain.events import TraceEvent
 
 from ..config import Settings
-from ..db.models import Run
-from ..errors import Conflict, NotFound, ThreadLocked
+from ..db.models import Agent, Run
+from ..errors import Conflict, InvalidApprovalMode, NotFound, ThreadLocked
 from ..executor.base import RunExecutor
 from ..repositories.agent import AgentRepository
 from ..repositories.run import RunRepository
@@ -54,6 +54,23 @@ def _to_out(run: Run) -> RunOut:
         finished_at=run.finished_at,
         created_at=run.created_at,
     )
+
+
+def run_auth_uid(agent: Agent, requested: UUID | None) -> UUID | None:
+    """这一轮按谁的权限判（数字员工设计 §7.1、§7.3）—— 权限类型只在这一处起作用。
+
+    以人为权限：请求里的 auth-uid（人直接操作时就是发起人）。
+    以 Agent 为权限：数字员工，与发起人无关；还没有数字员工时拒绝（不回退到发起人 ——
+    回退会让「行为一致」悄悄失效）。
+    """
+    if not agent.acts_as_itself:
+        return requested
+    if agent.digital_employee_uid is None:
+        raise Conflict(
+            "这个智能体以 Agent 为权限，但还没有数字员工，暂时不能使用，请联系管理员",
+            agent_id=str(agent.id),
+        )
+    return agent.digital_employee_uid
 
 
 class RunService:
@@ -98,12 +115,16 @@ class RunService:
         found = await self._threads.get(thread_id)
         if found is None:
             raise NotFound(f"会话 {thread_id} 不存在", thread_id=str(thread_id))
-        _thread, agent = found
+        thread, agent = found
 
         agent_row = await self._agents.get(agent.id)
         if agent_row is None or agent_row[0].current_version_id is None:
             raise NotFound(f"智能体 {agent.id} 无可用版本", agent_id=str(agent.id))
         version = agent_row[1]
+        auth_uid = run_auth_uid(agent_row[0], auth_uid or initiator)
+        approval_mode = _approval_mode_for(
+            version.spec, thread.approval_mode, payload.approval_mode
+        )
 
         # 同一会话串行，防止并发 run 撕裂 state（§9）。
         #
@@ -139,12 +160,17 @@ class RunService:
             message = await self._threads.add_message(
                 thread_id=thread_id, role="user", content=payload.content
             )
+            if payload.approval_mode is not None:
+                # 会话记住用户的选择，作用于之后的消息（输入框旁的模式选择器）
+                thread.approval_mode = payload.approval_mode
             run = await self._runs.create(
                 run_id=run_id,
                 thread_id=thread_id,
                 agent_version_id=version.id,
                 created_by=initiator,
-                auth_uid=auth_uid or initiator,
+                auth_uid=auth_uid,
+                auth_subject=agent_row[0].auth_subject,
+                approval_mode=approval_mode,
             )
             await self._session.commit()
         except Exception:
@@ -320,3 +346,29 @@ class RunService:
 
 
 __all__ = ["RunService", "TraceEvent"]
+
+
+def _approval_mode_for(spec: dict, remembered: str | None, requested: str | None) -> str | None:
+    """新 run 的审批模式：请求里选的 > 会话记住的 > 智能体默认。
+
+    设计见 doc/native-approval-mode-design.html。
+
+    ★ 请求里选的必须在智能体允许的范围里 —— 模式是权限，不能绕过作者的限制。会话记住的值可能
+      已经不在范围里（作者后来收窄了），那就回落到默认，不报错。acp 智能体的权限由 CLI 的
+      permission_mode 管，没有审批模式。
+    """
+    from ..schemas.agent import AgentSpecIn
+
+    parsed = AgentSpecIn.model_validate(spec)
+    if parsed.kind != "native":
+        if requested is not None:
+            raise InvalidApprovalMode("acp 智能体的权限由 CLI 的权限模式决定，不支持审批模式")
+        return None
+    approval = parsed.approval.to_engine()
+    if requested is not None and requested not in approval.allowed_modes:
+        raise InvalidApprovalMode(
+            "所选的审批模式不在该智能体允许的范围里",
+            approval_mode=requested,
+            allowed=list(approval.allowed_modes),
+        )
+    return approval.resolve(requested or remembered)

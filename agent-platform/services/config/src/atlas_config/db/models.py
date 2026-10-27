@@ -15,7 +15,6 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
-    Float,
     Index,
     Integer,
     MetaData,
@@ -114,55 +113,6 @@ class SkillVersion(Base):
             name="released_has_version",
         ),
     )
-
-
-class McpServer(Base):
-    """MCP server 定义（设计 §8.1）。
-
-    ★ headers 的值只存 `${ENV}` 占位符（或不含凭据的固定值）。配置服务**永远
-      看不到真凭据** —— 解析发生在运行时进程里。
-    """
-
-    __tablename__ = "mcp_server"
-
-    name: Mapped[str] = mapped_column(String(24), primary_key=True)
-    display_name: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    transport: Mapped[str] = mapped_column(String(24), nullable=False)
-    url: Mapped[str] = mapped_column(Text, nullable=False)
-    headers: Mapped[dict[str, str]] = mapped_column(JSONType, nullable=False, default=dict)
-    credential_scope: Mapped[str] = mapped_column(String(16), nullable=False)
-    call_timeout_s: Mapped[float | None] = mapped_column(Float, nullable=True)
-    review_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    status: Mapped[str] = mapped_column(String(16), nullable=False)
-    created_by: Mapped[str] = mapped_column(String(255), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, nullable=False)
-    updated_by: Mapped[str] = mapped_column(String(255), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(
-        UTCDateTime, default=utcnow, onupdate=utcnow, nullable=False
-    )
-
-    __table_args__ = (
-        CheckConstraint("status IN ('enabled','disabled')", name="status_enum"),
-        CheckConstraint("credential_scope IN ('platform','user')", name="scope_enum"),
-        CheckConstraint("transport IN ('streamable_http','sse')", name="transport_enum"),
-    )
-
-
-class McpToolReview(Base):
-    """工具定义复核结论（设计 §8.3）。按 digest 记 —— 定义一变就是另一行。"""
-
-    __tablename__ = "mcp_tool_review"
-
-    server: Mapped[str] = mapped_column(String(24), primary_key=True)
-    tool_name: Mapped[str] = mapped_column(String(128), primary_key=True)
-    digest: Mapped[str] = mapped_column(String(80), primary_key=True)
-    decision: Mapped[str] = mapped_column(String(16), nullable=False)
-    decided_by: Mapped[str] = mapped_column(String(255), nullable=False)
-    decided_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, nullable=False)
-    note: Mapped[str] = mapped_column(Text, nullable=False, default="")
-
-    __table_args__ = (CheckConstraint("decision IN ('approved','rejected')", name="decision_enum"),)
 
 
 class ConfigAudit(Base):

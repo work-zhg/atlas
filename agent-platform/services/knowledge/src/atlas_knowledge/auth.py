@@ -6,8 +6,8 @@
   X-Tenant-Id   租户，原样透传给用户中心
   X-Caller-App  直接调用方：gateway / atlas …
 
-  uc 模式：缺 X-Uid → 401；操作码按 auth-uid 取用户中心授权快照（以 Atlas 应用的身份）
-  dev 模式：缺 X-Uid 用 default_user，操作码全有
+  缺 X-Uid → 401；操作码按 auth-uid 取用户中心授权快照（以 Atlas 应用的身份）。
+  没有免鉴权的模式（原 dev 模式已删除）：测试里用户中心是替身（tests/conftest.py）。
 
 /internal/*：网关一律 404，不再要服务间令牌。/mcp：会话 Pod（不可信）调用，仍凭签名令牌。
 
@@ -32,8 +32,6 @@ from .settings import KnowledgeSettings, get_settings
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    "CALLER_APP",
-    "DEV_OPERATIONS",
     "IdentityHeadersMiddleware",
     "Principal",
     "current_principal",
@@ -41,16 +39,12 @@ __all__ = [
     "use_identity",
 ]
 
-#: 本服务调用户中心 / atlas-server 时的应用编码（知识库属于 Atlas 应用）
-CALLER_APP = "atlas"
 #: 入站（小写）→ 出站请求头
 _IDENTITY_HEADERS = {"x-uid": "X-Uid", "x-auth-uid": "X-Auth-Uid", "x-tenant-id": "X-Tenant-Id"}
 
 #: 本服务关心的操作码（在 atlas-server auth/catalog.py 登记到用户中心）。
 #: ★ 没有「管理全部知识库」的操作码：那是数据权限（用户中心的「全部知识库」授权，perms.py）
 KB_OPERATIONS = frozenset({"kb:create", "kb:review"})
-#: dev 模式的操作码
-DEV_OPERATIONS = KB_OPERATIONS | {"chat:use", "agent:create"}
 
 
 @dataclass(frozen=True)
@@ -88,7 +82,7 @@ def use_identity(uid: str | None, auth_uid: str | None = None, tenant: str | Non
 
 
 def outbound_headers() -> dict[str, str]:
-    return {**(_outbound.get() or {}), "X-Caller-App": CALLER_APP}
+    return {**(_outbound.get() or {}), "X-Caller-App": get_settings().uc_app_code}
 
 
 class IdentityHeadersMiddleware:
@@ -113,7 +107,7 @@ class IdentityHeadersMiddleware:
             _outbound.reset(token)
 
 
-# ───────────────────────────── 授权快照（uc 模式）
+# ───────────────────────────── 授权快照
 
 
 class _Cache:
@@ -170,18 +164,13 @@ async def current_principal(
     uid = (h.get("x-uid") or "").strip()
     auth_uid = (h.get("x-auth-uid") or "").strip() or uid
     caller = (h.get("x-caller-app") or "").strip() or "unknown"
-    if settings.auth_mode == "uc":
-        if not uid:
-            raise HTTPException(status_code=401, detail="请先登录")
-        snap = await _authz(settings, auth_uid)
-        user = snap.get("user") or {}
-        if user.get("status") == "disabled":
-            raise HTTPException(status_code=401, detail="账号已停用")
-        if not snap.get("can_access"):
-            raise HTTPException(status_code=403, detail="没有使用 Atlas 的权限")
-        ops = frozenset(snap.get("permissions") or [])
-        return Principal(uid=uid, auth_uid=auth_uid, caller_app=caller, operations=ops)
-    uid = uid or settings.default_user
-    return Principal(
-        uid=uid, auth_uid=auth_uid or uid, caller_app=caller, operations=DEV_OPERATIONS
-    )
+    if not uid:
+        raise HTTPException(status_code=401, detail="请先登录")
+    snap = await _authz(settings, auth_uid)
+    user = snap.get("user") or {}
+    if user.get("status") == "disabled":
+        raise HTTPException(status_code=401, detail="账号已停用")
+    if not snap.get("can_access"):
+        raise HTTPException(status_code=403, detail="没有使用 Atlas 的权限")
+    ops = frozenset(snap.get("permissions") or [])
+    return Principal(uid=uid, auth_uid=auth_uid, caller_app=caller, operations=ops)

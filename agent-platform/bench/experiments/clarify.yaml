@@ -1,0 +1,50 @@
+# 需求澄清评测（doc/ask-user-question-design.html §12）：clarify 任务集（3 对模糊 / 清晰题）× 3 个配置 × 每题 3 次。
+#
+#   ask            能向用户提问（ask_user_question，工具说明里是通用的「何时问、怎么问」）
+#   ask-checklist  同上 + 系统提示词里的原型澄清清单（设计 6.2 的模板）
+#   no-ask         基线：不能提问 —— 只能猜，或者用文字问（评测里没有人回复，等于没问）
+#
+# ★ 模拟用户：Agent 提问时，由 user_model 扮演用户、只依据任务里的 user.brief 作答（agent/user.py）。
+#   它是评测的「标准答案」来源，用强一点的模型，减少答偏带来的噪声。
+# ★ 看两个比例而不只是成功率：模糊题的提问率（该问时问了）、清晰题的误问率（不该问时也问了）。
+name: clarify
+suites: [clarify]
+trials: 3
+concurrency: 3
+approval_policy: approve_all
+user_model: deepseek-v4-pro
+comparisons:
+  - [no-ask, ask]            # 能提问的边际贡献
+  - [ask, ask-checklist]     # 领域澄清清单的边际贡献
+variants:
+  ask:
+    description: 能提问（工具说明）
+    agent:
+      system_prompt: 你帮用户做产品原型，产出写进工作区。做完用一两句话说明结果。
+      model: {model: deepseek-v4-pro, provider: anthropic}
+      tool_names: [filesystem, write_todos, ask_user_question]
+      limits: {max_steps: 60}
+  ask-checklist:
+    description: 能提问 + 原型澄清清单
+    agent:
+      system_prompt: |
+        你帮用户做产品原型，产出写进工作区。做完用一两句话说明结果。
+
+        ## 需求澄清
+        你做的是原型，可选方案很多。用户的需求只有一两句话时，开工前先用 ask_user_question 确认下面几项里还不清楚的
+        （最多 4 项，挑对结果影响最大的；用户已经说清楚的不要再问）：
+        - 业务场景：这个原型服务哪类业务、解决什么问题
+        - 使用者与角色：谁用、谁发起、谁处理
+        - 关键内容：必须出现的功能、指标或环节
+        - 原型形态与保真度：静态图 / 可点击页面；线框（推荐，先定方向）/ 高保真
+        需求已经足够具体时直接做，在回复开头列出你做的假设。
+      model: {model: deepseek-v4-pro, provider: anthropic}
+      tool_names: [filesystem, write_todos, ask_user_question]
+      limits: {max_steps: 60}
+  no-ask:
+    description: 不能提问（基线）
+    agent:
+      system_prompt: 你帮用户做产品原型，产出写进工作区。做完用一两句话说明结果。
+      model: {model: deepseek-v4-pro, provider: anthropic}
+      tool_names: [filesystem, write_todos]
+      limits: {max_steps: 60}

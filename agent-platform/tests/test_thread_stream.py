@@ -29,6 +29,8 @@ from atlas_agent.main import create_app
 from atlas_agent.stream.gate import StreamGate, StreamsBusy
 from httpx import ASGITransport
 
+from tests.fake_uc import AS_USER
+
 from .fakes import text_model
 
 pytestmark = pytest.mark.usefixtures("clean_db")
@@ -46,7 +48,7 @@ def make_app(*, chunks: list[str] | None = None):
 @pytest.fixture
 async def client():
     transport = ASGITransport(app=make_app())
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=AS_USER) as c:
         yield c
 
 
@@ -310,7 +312,7 @@ async def test_first_connect_is_capped(clean_db: None) -> None:
     )
 
     transport = ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=AS_USER) as c:
         tid = await setup_thread(c)
         for _ in range(3):
             await run_once(c, tid)

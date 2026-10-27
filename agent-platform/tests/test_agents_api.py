@@ -12,16 +12,15 @@ from typing import Any
 import httpx
 import pytest
 from atlas_agent.main import create_app
-from atlas_agent.schemas.agent import AgentSpecIn
 from httpx import ASGITransport
 
-BUILTIN_SLUG = "general"
+from tests.fake_uc import AS_USER
 
 
 @pytest.fixture
 async def client() -> httpx.AsyncClient:
     transport = ASGITransport(app=create_app())
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=AS_USER) as c:
         yield c
 
 
@@ -61,7 +60,6 @@ async def test_create_agent_starts_at_version_1_draft(
     body = r.json()
     assert body["version"] == 1
     assert body["status"] == "draft"
-    assert body["is_builtin"] is False
     assert body["model"] == "claude-opus-5"
     assert body["tool_count"] == 2
     assert body["subagent_count"] == 0
@@ -187,7 +185,7 @@ async def test_list_filters(client: httpx.AsyncClient, clean_db: None) -> None:
 
     all_ = (await client.get("/v1/agents")).json()["data"]
     slugs = {a["slug"] for a in all_}
-    assert {"data-analyst", "doc-writer", BUILTIN_SLUG} <= slugs
+    assert {"data-analyst", "doc-writer"} <= slugs
 
     by_model = (await client.get("/v1/agents", params={"model": "claude-opus-5"})).json()
     assert {a["slug"] for a in by_model["data"]} == {"data-analyst"}
@@ -195,8 +193,9 @@ async def test_list_filters(client: httpx.AsyncClient, clean_db: None) -> None:
     by_q = (await client.get("/v1/agents", params={"q": "文档"})).json()
     assert {a["slug"] for a in by_q["data"]} == {"doc-writer"}
 
+    await client.post(f"/v1/agents/{all_[0]['id']}/status", json={"status": "enabled"})
     by_status = (await client.get("/v1/agents", params={"status": "enabled"})).json()
-    assert {a["slug"] for a in by_status["data"]} == {BUILTIN_SLUG}
+    assert {a["slug"] for a in by_status["data"]} == {all_[0]["slug"]}
 
 
 # ---------------------------------------------------------------------------
@@ -209,14 +208,6 @@ async def test_status_transition(client: httpx.AsyncClient, clean_db: None) -> N
     r = await client.post(f"/v1/agents/{aid}/status", json={"status": "enabled"})
     assert r.status_code == 200
     assert r.json()["status"] == "enabled"
-
-
-async def test_builtin_agent_cannot_be_deleted(client: httpx.AsyncClient, clean_db: None) -> None:
-    listed = (await client.get("/v1/agents", params={"q": BUILTIN_SLUG})).json()["data"]
-    builtin = next(a for a in listed if a["slug"] == BUILTIN_SLUG)
-    r = await client.delete(f"/v1/agents/{builtin['id']}")
-    assert r.status_code == 409
-    assert r.json()["error"]["kind"] == "builtin_agent_protected"
 
 
 async def test_delete_archives_agent_and_its_threads(
@@ -243,18 +234,3 @@ async def test_get_missing_agent_404(client: httpx.AsyncClient, clean_db: None) 
     r = await client.get("/v1/agents/00000000-0000-0000-0000-0000000000ff")
     assert r.status_code == 404
     assert r.json()["error"]["kind"] == "not_found"
-
-
-# ---------------------------------------------------------------------------
-# 内置 agent 的 spec 必须能被 schema 解回来（迁移与 schema 不能漂移）
-# ---------------------------------------------------------------------------
-
-
-async def test_builtin_agent_spec_is_loadable(client: httpx.AsyncClient, clean_db: None) -> None:
-    listed = (await client.get("/v1/agents", params={"q": BUILTIN_SLUG})).json()["data"]
-    builtin = next(a for a in listed if a["slug"] == BUILTIN_SLUG)
-    detail = (await client.get(f"/v1/agents/{builtin['id']}")).json()
-
-    parsed = AgentSpecIn.model_validate(detail["spec"])
-    parsed.to_engine(slug=BUILTIN_SLUG, name=detail["name"]).validate()
-    assert parsed.model.model == "claude-sonnet-5"

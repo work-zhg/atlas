@@ -1,6 +1,7 @@
 """Pod 供给的接缝：HostRuntime 通过它拿到会话 Pod 里 bridge 的地址与凭据。
 
-生产实现是 providers/cluster.py 的 ClusterPods（经 cluster 服务创建 K8s Pod）；
+生产实现是 providers/opensandbox/acp.py 的 OpenSandboxPods
+（经 OpenSandbox 的 opensandbox-acp 建 Pod）；
 测试用假实现直接指向一个本地起的 bridge，端到端链路因此不依赖 K8s。
 """
 
@@ -34,7 +35,7 @@ class PodProvider(Protocol):
         ★ cli 走参数而不是构造器：provider 是**进程级**的，而镜像与 adapter
           来自这一轮的 agent 版本快照 —— 绑在实例上就等于全进程共用一个
           镜像，换 agent 时静默用错版本。
-        ★ 幂等：同一个 thread 反复调应当复用同一个 Pod（按 K8s label 查，
+        ★ 幂等：同一个 thread 反复调应当复用同一个 Pod（按沙箱的 metadata 查，
           不建 pod 表 —— 两处真相必然漂移）。
         """
         ...

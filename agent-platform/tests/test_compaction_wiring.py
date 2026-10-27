@@ -214,6 +214,32 @@ async def test_emits_context_compacted_event() -> None:
     assert "摘要" in data["summary"]
 
 
+async def test_compaction_does_not_replay_kept_tool_calls() -> None:
+    """压缩整段写回历史（摘要 + 保留区）。保留区里的工具调用早就发过事件 ——
+    这一轮模型只回了一句话，不该冒出任何 tool.started（test_event_mapping 的
+    test_patched_history_is_not_replayed 是同一个问题的另一个入口）。
+    """
+    events = [
+        e
+        async for e in run(
+            _spec(),
+            run_id=RUN_ID,
+            model=TurnModel(scripts=[[AIMessageChunk(content="好的。")]]),
+            input_content="继续",
+            history=build_history(30),
+            compactor=CompactionMiddleware(
+                context_window=_TIGHT_WINDOW,
+                trigger_ratio=0.75,
+                keep_recent_turns=3,
+                summarizer=RecordingSummarizer(),
+            ),
+        )
+    ]
+
+    assert any(e.type is EventType.CONTEXT_COMPACTED for e in events), "没有触发压缩"
+    assert [e.data for e in events if e.type is EventType.TOOL_STARTED] == []
+
+
 async def test_summary_failure_degrades_but_continues() -> None:
     """§7.6：摘要失败降级为丢弃早期消息，标记 degraded，run 继续。"""
 
@@ -281,9 +307,9 @@ def test_disabled_spec_means_no_middleware_at_all() -> None:
       None，图里连这个节点都没有 —— 比装一个每轮空转的中间件更诚实。
       这里钉住装配层真的这么做了。
     """
-    from atlas_agent.executor.assembly import HookAssembly
-
     import inspect
+
+    from atlas_agent.executor.assembly import HookAssembly
 
     src = inspect.getsource(HookAssembly._compactor)
     assert "enabled" in src, "装配层不再检查 enabled，禁用压缩的开关失效了"

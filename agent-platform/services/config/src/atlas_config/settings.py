@@ -69,15 +69,11 @@ class ConfigSettings(BaseSettings):
     )
 
     # ── 认证（内网身份传递 §3；见 auth.py）────────────────────────────────
-    #: dev = 缺 X-Uid 用 default_user，操作码全有；
-    #: uc  = 缺 X-Uid 一律 401；操作码按 X-Auth-Uid 取用户中心授权快照
-    auth_mode: Literal["dev", "uc"] = "dev"
-    #: 用户中心开放接口（uc 模式取授权快照）。内网免令牌：X-Caller-App: atlas 即应用身份
+    #: 缺 X-Uid 一律 401；操作码按 X-Auth-Uid 取用户中心授权快照（没有免鉴权的模式）
+    #: 用户中心开放接口。内网免令牌：X-Caller-App: atlas 即应用身份
     uc_base_url: str = "http://127.0.0.1:8030"
     #: 授权快照的缓存时间（权限收回最多滞后这么久）
     authz_ttl_s: float = 30.0
-    #: 没带 X-Uid 时的身份（dev 模式，与运行时同规则）
-    default_user: str = "local-dev"
     #: 允许上传人审查自己的技能。★ 默认关：四眼原则（设计 §5.2）。
     #: 本机单人开发时可以打开。
     allow_self_review: bool = False

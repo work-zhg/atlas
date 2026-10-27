@@ -16,7 +16,7 @@ import { join, relative } from "node:path";
 /** 扫描范围：Atlas 前端源码 + 共享对话组件包（对话代码在那里，嵌入方也会跑到）。 */
 const ROOTS = [
   { dir: join(import.meta.dirname, "..", "src"), label: "src" },
-  { dir: join(import.meta.dirname, "..", "..", "packages", "chat-ui", "src"), label: "packages/chat-ui/src" },
+  { dir: join(import.meta.dirname, "..", "..", "..", "packages", "chat-ui", "src"), label: "packages/chat-ui/src" },
 ];
 
 /** 只在安全上下文可用的 API —— 裸用即报错。 */

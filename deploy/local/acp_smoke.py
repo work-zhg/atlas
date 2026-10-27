@@ -1,7 +1,7 @@
 """acp 全链路冒烟：建 agent → 建会话 → 跑一轮 → 读事件流。
 
     POST /v1/agents (kind=acp) → POST /v1/threads → POST /threads/{id}/runs
-      → server 向 cluster ensure Pod → Pod 起来（rclone 挂 MinIO + 真 CLI）
+      → server 向 OpenSandbox ensure Pod → Pod 起来（CSI 挂 MinIO + 真 CLI）
       → server 连 ws://<podIP>:8900/host（上游协议）→ turn.start → agent.update 流
       → TraceEvent → GET /v1/threads/{id}/events (SSE)
 

@@ -4,6 +4,7 @@ import { Icon } from "../components/Icon";
 import { durationMs } from "../lib/format";
 import type { ToolCall } from "../lib/run-reducer";
 import styles from "./chat.module.css";
+import { MemoryNotice } from "./MemoryNotice";
 
 function preview(call: ToolCall): string {
   if (call.argsPreview) return call.argsPreview;
@@ -46,6 +47,7 @@ export function ToolCallRow({ call }: { call: ToolCall }) {
           : styles.dotRun;
 
   return (
+    <>
     <details className={styles.tool} style={call.depth > 0 ? { marginLeft: 16 } : undefined}>
       <summary>
         <Icon name="right" size={12} className={styles.caret} />
@@ -68,5 +70,8 @@ export function ToolCallRow({ call }: { call: ToolCall }) {
       </summary>
       <div className={styles.toolBody}>{detail(call)}</div>
     </details>
+    {/* 保存 / 遗忘记忆：当场提示，可以撤销（doc/memory-design.html §4.7） */}
+    {call.artifact?.memory && <MemoryNotice memory={call.artifact.memory} />}
+    </>
   );
 }

@@ -70,7 +70,7 @@ class _FakeApprovals:
 
     async def get(self, approval_id: UUID) -> Any:
         status = self.rows.get(str(approval_id))
-        return None if status is None else SimpleNamespace(status=status)
+        return None if status is None else SimpleNamespace(status=status, outcome=None)
 
 
 @pytest.fixture
@@ -105,7 +105,7 @@ async def test_second_resume_drops_waits_that_already_have_a_result(approvals: A
     }
     waiting_on, decisions = await _resume_state(waits, history)
     assert waiting_on == {"c2": {"reason": "approval", "token": AP_2}}
-    assert decisions == {AP_2: "approved"}
+    assert decisions == {AP_2: {"status": "approved"}}
 
 
 async def test_only_settled_approvals_go_into_decisions(approvals: Any) -> None:
@@ -122,7 +122,7 @@ async def test_only_settled_approvals_go_into_decisions(approvals: Any) -> None:
     }
     waiting_on, decisions = await _resume_state(waits, history)
     assert set(waiting_on) == {"c1", "c2"}
-    assert decisions == {AP_2: "failed"}
+    assert decisions == {AP_2: {"status": "failed"}}
 
 
 async def test_old_array_shaped_waiting_on_is_ignored(approvals: Any) -> None:

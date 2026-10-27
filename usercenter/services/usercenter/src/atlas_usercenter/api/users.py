@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Query
@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 
 from ..common import Page, iso
-from ..db.models import App, DataObject, DataType, Dept
+from ..db.models import App, DataObject, DataType, Dept, User
 from ..org.service import OrgService
 from ..perm.data import DataService, level_name
 from ..perm.effective import authz_snapshot, can_access, effective_roles
@@ -51,6 +51,20 @@ async def _dept_paths(session: SessionDep) -> dict[UUID, list[str]]:
     }
 
 
+async def _digital_extra(session: SessionDep, user: User) -> dict[str, Any]:
+    """数字员工：负责人、来源应用（数字员工设计 §3.4）。人没有这些。"""
+    if not user.is_digital:
+        return {}
+    owner = (
+        await session.execute(select(User).where(User.uuid == user.owner_uuid))
+    ).scalar_one_or_none()
+    app = await session.scalar(select(App).where(App.uuid == user.source_app_uuid))
+    return {
+        "owner": user_brief(owner),
+        "source_app": {"id": str(app.uuid), "name": app.name, "code": app.code} if app else None,
+    }
+
+
 @router.get("")
 async def list_users(
     session: SessionDep,
@@ -58,12 +72,14 @@ async def list_users(
     status: str | None = None,
     dept_id: UUID | None = None,
     q: str | None = None,
+    type: Literal["human", "digital"] = "human",
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=200),
     p: Principal = require("user:view"),
 ) -> dict[str, Any]:
+    """type=digital：数字员工单独列（不进组织树，与组织架构并列的入口）。"""
     res = await UserService(session, p.actor, settings).list(
-        status=status, dept_uuid=dept_id, q=q, page=Page(page, size)
+        status=status, dept_uuid=dept_id, q=q, page=Page(page, size), user_type=type
     )
     paths = await _dept_paths(session)
     items = []
@@ -74,9 +90,10 @@ async def list_users(
             user_view(
                 user,
                 cred,
-                dept_path=paths.get(user.dept_uuid, []),
+                dept_path=paths.get(user.dept_uuid, []) if user.dept_uuid else [],
                 positions=await positions_of(session, user),
                 uc_roles=uc_roles,
+                **await _digital_extra(session, user),
             )
         )
     return {"total": res["total"], "counts": res["counts"], "items": items}
@@ -109,10 +126,11 @@ async def get_user(
     return user_view(
         user,
         await svc.credential(user.uuid),
-        dept_path=paths.get(user.dept_uuid, []),
+        dept_path=paths.get(user.dept_uuid, []) if user.dept_uuid else [],
         positions=await positions_of(session, user),
         uc_roles=[e.role.name for e in eff.values() if e.role.is_builtin],
         manager={**user_brief(manager), "source": source} if manager else None,  # type: ignore[dict-item]
+        **await _digital_extra(session, user),
     )
 
 

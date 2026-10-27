@@ -108,13 +108,19 @@ def tool_result_from(message: Any) -> dict[str, Any] | None:
         return None
     content = getattr(message, "content", "")
     text = content if isinstance(content, str) else str(content)
-    return {
+    data: dict[str, Any] = {
         "call_id": tool_call_id,
         "name": getattr(message, "name", "") or "",
         "status": getattr(message, "status", "success") or "success",
         "result": text,
         "result_preview": text[:200],
     }
+    # 工具给界面的结构化结果（不给模型看）：如保存记忆后的「已记住 #131［撤销］」要的条目编号
+    # 与修订 id（doc/memory-design.html §4.7）
+    artifact = getattr(message, "artifact", None)
+    if isinstance(artifact, dict):
+        data["artifact"] = artifact
+    return data
 
 
 def preview_args(args: Any, limit: int = 120) -> str:

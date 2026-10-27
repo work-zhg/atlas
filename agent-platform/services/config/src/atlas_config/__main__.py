@@ -7,7 +7,6 @@
     python -m atlas_config skill disable|enable|revoke|rescan <slug> <version> [--reason …]
     python -m atlas_config skill adopt <slug> <version> 登记源仓库里已有的技能
     python -m atlas_config skill list
-    python -m atlas_config mcp import-env [--json …]  从 MCP_SERVERS 导入注册表
 
 ★ 命令行与 HTTP 调同一个 SkillService —— 发布规则只有一份实现。
 """
@@ -28,7 +27,6 @@ from uuid import UUID
 
 from .db.session import get_engine, get_sessionmaker
 from .errors import ConfigError
-from .mcp.service import McpRegistry
 from .settings import get_settings
 from .skill.package import ScanBlocked, load_dir, load_zip
 from .skill.service import SkillService, limits_of
@@ -72,7 +70,7 @@ def migrate(revision: str = "head") -> None:
     command.upgrade(cfg, revision)
 
 
-# ───────────────────────────────────────────── skill / mcp
+# ───────────────────────────────────────────── skill
 
 
 def _actor(args: argparse.Namespace) -> str:
@@ -85,16 +83,6 @@ async def _with_service(fn: Callable[[SkillService], Awaitable[Any]]) -> Any:
     try:
         async with get_sessionmaker()() as session:
             result = await fn(SkillService(session=session, storage=storage, settings=settings))
-            await session.commit()
-            return result
-    finally:
-        await get_engine().dispose()
-
-
-async def _with_registry(fn: Callable[[McpRegistry], Awaitable[Any]]) -> Any:
-    try:
-        async with get_sessionmaker()() as session:
-            result = await fn(McpRegistry(session=session))
             await session.commit()
             return result
     finally:
@@ -199,28 +187,6 @@ def skill_command(args: argparse.Namespace) -> int:
     raise AssertionError(args.action)
 
 
-def _mcp_servers_json(explicit: str | None) -> str:
-    if explicit:
-        return explicit
-    if raw := os.environ.get("MCP_SERVERS"):
-        return raw
-    from .settings import _REPO_ENV as env_file
-
-    if env_file.exists():
-        for line in env_file.read_text(encoding="utf-8").splitlines():
-            key, _, value = line.partition("=")
-            if key.strip() == "MCP_SERVERS":
-                return value.strip().strip("'\"")
-    raise SystemExit("找不到 MCP_SERVERS（环境变量或仓库根 .env），也没有给 --json")
-
-
-def mcp_command(args: argparse.Namespace) -> int:
-    raw = _mcp_servers_json(args.json)
-    created = asyncio.run(_with_registry(lambda reg: reg.import_env(raw, actor=_actor(args))))
-    print("已导入：" + (", ".join(created) if created else "（无，全部已存在）"))
-    return 0
-
-
 # ───────────────────────────────────────────── argparse
 
 
@@ -250,10 +216,6 @@ def _parser() -> argparse.ArgumentParser:
         if name in ("disable", "enable", "revoke"):
             p.add_argument("--reason", required=name == "revoke")
     skill.add_parser("list")
-
-    mcp = sub.add_parser("mcp").add_subparsers(dest="action", required=True)
-    imp = mcp.add_parser("import-env")
-    imp.add_argument("--json", help="MCP_SERVERS 的 JSON；不给则读环境变量 / 仓库 .env")
     return parser
 
 
@@ -269,8 +231,6 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "skill":
             return skill_command(args)
-        if args.command == "mcp":
-            return mcp_command(args)
     except ScanBlocked as exc:
         print(f"✗ {exc.layer} 检查未通过：", file=sys.stderr)
         for hit in exc.hits:

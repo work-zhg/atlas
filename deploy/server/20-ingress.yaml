@@ -1,0 +1,36 @@
+# 对外入口：服务器上已有的 traefik（IngressClass traefik），按主机名路由 —— 与 gitea 的 *.nip.io 约定一致，
+# 不占根路径。__PUBLIC_HOST__ 由 deploy.sh 替换（默认 192.168.0.112）。
+#
+#   atlas.__PUBLIC_HOST__.nip.io     Atlas / 用户中心 / TeamFlow（前端网关 atlas-frontends，唯一校验登录的地方）
+#   langfuse.__PUBLIC_HOST__.nip.io  Langfuse（自带登录）
+#
+# ★ Jaeger、Higress 控制台、MinIO 控制台不对外（没有登录或口令弱）：用 kubectl port-forward。
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: atlas
+  namespace: atlas-system
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: atlas.__PUBLIC_HOST__.nip.io
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: {service: {name: atlas-frontends, port: {number: 8080}}}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: langfuse
+  namespace: atlas-infra
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: langfuse.__PUBLIC_HOST__.nip.io
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: {service: {name: langfuse-web, port: {number: 3000}}}

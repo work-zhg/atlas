@@ -73,7 +73,7 @@ def display_status(user: User, cred: Credential | None) -> str:
         return "disabled"
     if cred is not None and cred.locked_until is not None and cred.locked_until > utcnow():
         return "locked"
-    if user.activated_at is None:
+    if user.activated_at is None and not user.is_digital:  # 数字员工不登录，没有激活这一步
         return "pending"
     return "active"
 

@@ -10,6 +10,7 @@ import {
   Select,
   Skeleton,
   Slider,
+  Space,
   Switch,
   Tag,
   App as AntdApp,
@@ -28,7 +29,7 @@ import {
 } from "@/api/agents";
 import { useMcpServers, useSkillCatalog } from "@/api/catalog";
 import { useModels, useTools } from "@/api/meta";
-import type { AgentDetail, AgentStatus, AgentVersion } from "@/api/types";
+import type { AgentDetail, AgentStatus, AgentVersion, AuthSubject } from "@/api/types";
 import { relativeTime } from "@/lib/format";
 import { qk } from "@/api/keys";
 import { http } from "@/lib/http";
@@ -37,9 +38,12 @@ import { ApiError } from "@/lib/http";
 import { AVATAR_KEYS, avatarBackground, avatarLetter } from "@/features/agents/avatar";
 import { AGENT_STATUS_META } from "@/features/agents/status";
 import styles from "./editor.module.css";
+import { AuthSubjectPicker, AuthSubjectSwitch, IdentityPanel, SharingPanel } from "./AccessSections";
 import { McpToolsSection, SkillsSection } from "./CatalogSections";
 import { DEFAULT_KNOWLEDGE, KnowledgeSection } from "./KnowledgeSection";
 import {
+  ASK_USER_TOOL,
+  CLARIFY_TEMPLATE,
   defaultSpec,
   effortForbidsThinkingOff,
   reconcileModelSpec,
@@ -51,6 +55,7 @@ const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 /** 左侧锚点导航（prototype/atlas-v2.html 编辑器） */
 const NAV: [string, string][] = [
   ["e-basic", "基本信息"],
+  ["e-access", "权限类型"],
   ["e-kind", "执行形态"],
   ["e-prompt", "系统提示词"],
   ["e-model", "模型"],
@@ -59,8 +64,9 @@ const NAV: [string, string][] = [
   ["e-mcp", "MCP"],
   ["e-knowledge", "知识库"],
   ["e-subs", "子智能体"],
-  ["e-approval", "人工确认"],
+  ["e-approval", "审批模式"],
   ["e-limits", "限制"],
+  ["e-share", "共享"],
 ];
 
 /** 后端存的 spec → 编辑器的 spec。旧快照没有后加的字段：补默认值，免得各处判空 */
@@ -72,6 +78,8 @@ function normalizeSpec(raw: unknown): ResolvedSpec {
     mcp_tool_digests: spec.mcp_tool_digests ?? {},
     mcp_drift_policy: spec.mcp_drift_policy ?? "warn",
     knowledge: spec.knowledge ?? DEFAULT_KNOWLEDGE,
+    // 旧快照没有审批模式：后端按「默认自动、允许全部」处理（设计 D8），这里与之一致
+    approval: spec.approval ?? defaultSpec().approval,
   };
 }
 
@@ -132,6 +140,8 @@ interface Draft {
   description: string;
   avatar_key: string;
   spec: ResolvedSpec;
+  /** 权限类型：只在新建时随表单提交；之后由所有者单独切换（数字员工设计 §7.1） */
+  auth_subject: AuthSubject;
 }
 
 function Section({
@@ -164,6 +174,22 @@ const PERMISSION_MODE_OPTIONS: { value: PermissionModeValue; label: string }[] =
   { value: "plan", label: "仅规划 · 不执行任何操作" },
 ];
 
+type ApprovalModeValue = "plan" | "manual" | "auto";
+
+/**
+ * Native 的审批模式（doc/native-approval-mode-design.html §4）。顺序 = 严格程度从高到低，
+ * 与后端 APPROVAL_MODES 一致。只读与写待办在任何模式下都不问。
+ */
+const APPROVAL_MODE_OPTIONS: { value: ApprovalModeValue; label: string; desc: string }[] = [
+  { value: "plan", label: "规划", desc: "只读调研，提交计划经用户批准后再执行" },
+  { value: "manual", label: "手动", desc: "写文件、删除、执行命令、外部工具、委派，每次都问" },
+  {
+    value: "auto",
+    label: "自动",
+    desc: "工作区内读写与委派直接执行；执行命令、删除、外部工具先请示（判断器上线后由它判断）",
+  },
+];
+
 export function AgentEditor({ agentId }: { agentId?: string }) {
   const router = useRouter();
   const { message } = AntdApp.useApp();
@@ -171,7 +197,6 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
 
   const detailQ = useAgent(agentId);
   const modelsQ = useModels();
-  const toolsQ = useTools();
   const skillCatalogQ = useSkillCatalog();
   const mcpServersQ = useMcpServers();
 
@@ -190,7 +215,11 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
     description: "",
     avatar_key: "general",
     spec: defaultSpec(),
+    auth_subject: "user",
   });
+  // MCP 工具按权限主体列出：编辑已有的按 agentId；新建的随「权限类型」切换（以 Agent 为权限、
+  // 没保存时还没有数字员工，MCP 部分为空 —— doc/mcp-design.html §9.2）
+  const toolsQ = useTools({ agentId, authSubject: draft.auth_subject });
 
   // 载入已有智能体。spec 在 OpenAPI 里是自由 dict（后端存的是 JSONB），
   // 这里断言成 ResolvedSpec —— 它由同一份 pydantic 模型序列化而来，结构一致。
@@ -203,6 +232,7 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
       description: d.description,
       avatar_key: d.avatar_key,
       spec: normalizeSpec(d.spec),
+      auth_subject: d.auth_subject,
     });
   }, [detailQ.data]);
 
@@ -225,27 +255,28 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
     setDraft((d) => ({ ...d, spec: { ...d.spec, limits: { ...d.spec.limits, ...patch } } }));
 
   /**
-   * 审批候选项：只列**已勾选**工具的模型侧名字 —— 没勾的工具列出来也拦不到。
-   * MCP 工具的模型侧名是 server__tool，同样由 model_tool_names 给出。
+   * 改允许的模式。默认模式被去掉时改成剩下里最宽松的那个（列表按严格程度排，取最后一个）——
+   * 默认不在允许范围里后端会拒绝保存。
    */
-  const approvalOptions = useMemo(() => {
-    const picked = new Set(draft.spec.tool_names);
-    return (toolsQ.data?.data ?? [])
-      .filter((t) => picked.has(t.name))
-      .flatMap((t) =>
-        (t.model_tool_names ?? [t.name]).map((n) => ({
-          value: n,
-          label: n === t.name ? n : `${n}（来自 ${t.name}）`,
-        })),
-      );
-  }, [toolsQ.data, draft.spec.tool_names]);
-
-  /** 后端 schema 校验会强制加入的项（bash→execute），UI 上标出来且不可取消。 */
-  const forcedApprovals = useMemo(() => {
-    const out: string[] = [];
-    if (draft.spec.tool_names.includes("bash")) out.push("execute");
-    return out;
-  }, [draft.spec.tool_names]);
+  const setAllowedModes = (picked: ApprovalModeValue[]) => {
+    const allowed = APPROVAL_MODE_OPTIONS.map((o) => o.value).filter((m) => picked.includes(m));
+    // 至少留一种能执行的模式（复选框已禁用最后一项，这里再兜一次）
+    if (!allowed.some((m) => m !== "plan")) return;
+    setDraft((d) => {
+      const current = d.spec.approval.default_mode;
+      const fallback = allowed[allowed.length - 1] ?? "auto";
+      return {
+        ...d,
+        spec: {
+          ...d.spec,
+          approval: {
+            allowed_modes: allowed,
+            default_mode: allowed.includes(current) ? current : fallback,
+          },
+        },
+      };
+    });
+  };
 
   const onModelChange = (model: string) => {
     const info = models.find((m) => m.model === model);
@@ -315,6 +346,7 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
           description: draft.description,
           avatar_key: draft.avatar_key,
           spec: draft.spec,
+          auth_subject: draft.auth_subject,
         },
         {
           onSuccess: (a) => {
@@ -348,7 +380,11 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
   }
 
   const detail = detailQ.data;
-  const readOnly = detail?.is_builtin ?? false;
+  // 编辑以人为权限的要「编辑」，以 Agent 为权限的要「所有者」（谁能改它，谁就间接握有数字员工
+  // 的全部权限，数字员工设计 §8.2）；启用 / 归档、共享只有所有者
+  const isOwner = detail?.my_level === "OWNER";
+  const canEdit = isOwner || (detail?.my_level === "WRITE" && detail.auth_subject === "user");
+  const readOnly = !!detail && !canEdit;
 
   return (
     <div className={styles.page}>
@@ -389,7 +425,7 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
           {/* ★ 三态各有各的出口，不能写成「archived ? 恢复 : 归档」的二态开关 ——
               那样 draft 只会看到「归档」，新建的智能体就永远出不了草稿态：
               既不能启用，也就选不进新建会话的下拉。 */}
-          {detail && !detail.is_builtin && detail.status !== "enabled" && (
+          {detail && isOwner && detail.status !== "enabled" && (
             <Button
               type={detail.status === "draft" ? "primary" : "default"}
               ghost={detail.status === "draft"}
@@ -399,7 +435,7 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
               {detail.status === "draft" ? "启用" : "恢复启用"}
             </Button>
           )}
-          {detail && !detail.is_builtin && detail.status !== "archived" && (
+          {detail && isOwner && detail.status !== "archived" && (
             <Button onClick={() => setStatus.mutate("archived" as AgentStatus)} loading={setStatus.isPending}>
               归档
             </Button>
@@ -418,7 +454,7 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
 
       <div className={styles.layout}>
         <nav className={styles.nav} aria-label="配置分节">
-          {NAV.map(([id, label]) => (
+          {NAV.filter(([id]) => detail || id !== "e-share").map(([id, label]) => (
             <a key={id} href={`#${id}`} className={styles.navLink}>
               {label}
             </a>
@@ -431,8 +467,12 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
               type="info"
               showIcon
               style={{ marginBottom: 16 }}
-              message="这是内置智能体，不可修改"
-              description="如需定制，请新建一个智能体。"
+              message="你可以使用这个智能体，但不能修改它"
+              description={
+                detail?.auth_subject === "agent"
+                  ? "以 Agent 为权限的智能体只有所有者能修改。"
+                  : "需要所有者共享「编辑」权限。"
+              }
             />
           )}
 
@@ -521,6 +561,24 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
           </Section>
 
           <Section
+            id="e-access"
+            title="权限类型"
+            desc="决定运行时按谁的权限访问知识库、MCP 等资源。能不能用这个智能体，另由「共享」决定。"
+          >
+            {isNew || !detail ? (
+              <AuthSubjectPicker
+                value={draft.auth_subject}
+                onChange={(v) => setDraft((d) => ({ ...d, auth_subject: v }))}
+              />
+            ) : (
+              <Space direction="vertical" size={12} style={{ width: "100%" }}>
+                <AuthSubjectSwitch detail={detail} />
+                <IdentityPanel agentId={detail.id} />
+              </Space>
+            )}
+          </Section>
+
+          <Section
             id="e-kind"
             title="执行形态"
             desc="type 是机制不是角色：Native 在平台内运行、可以委派子智能体；ACP 在会话 Pod 里驱动 CLI，工具由 CLI 自带。"
@@ -560,6 +618,23 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
               onChange={(e) => patchSpec({ system_prompt: e.target.value })}
               placeholder="你是……"
             />
+            {draft.spec.tool_names.includes(ASK_USER_TOOL) && !readOnly && (
+              <p className={styles.capNote}>
+                已开启「向用户提问」：何时问、怎么问写在工具说明里；这个领域该问哪几项，建议在提示词里列出来。{" "}
+                <Button
+                  size="small"
+                  type="link"
+                  style={{ padding: 0 }}
+                  onClick={() =>
+                    patchSpec({
+                      system_prompt: `${draft.spec.system_prompt.trimEnd()}\n\n${CLARIFY_TEMPLATE}`.trim(),
+                    })
+                  }
+                >
+                  插入澄清清单模板
+                </Button>
+              </p>
+            )}
           </Section>
 
           <Section
@@ -729,6 +804,7 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
 
           <McpToolsSection
             tools={(toolsQ.data?.data ?? []).filter((t) => t.kind === "mcp")}
+            subject={toolsQ.data?.mcp_subject ?? null}
             servers={mcpServersQ.data?.data ?? []}
             picked={draft.spec.tool_names}
             digests={draft.spec.mcp_tool_digests ?? {}}
@@ -760,7 +836,7 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
                 而且是静默的 —— 所以两种不匹配都要当场说清楚。 */}
             <Select
               style={{ width: "100%", marginBottom: 12 }}
-              placeholder={readOnly ? "内置智能体不可修改" : "选择一个已启用的智能体加入…"}
+              placeholder={readOnly ? "没有编辑权限" : "选择一个已启用的智能体加入…"}
               value={null}
               disabled={readOnly}
               loading={candidatesQ.isPending || adding}
@@ -909,38 +985,58 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
 
           <Section
             id="e-approval"
-            title="人工确认"
-            desc="列出的工具在执行前会挂起，等用户点头。拒绝不终止本轮 —— 作为工具结果回给智能体，它可以换个方案继续。"
+            title="审批模式"
+            desc="作者定默认模式和允许的范围，用户在对话里从允许的模式中选。拒绝不终止本轮 —— 连同用户给的原因作为工具结果回给智能体，它可以换个方案继续。"
           >
-            <Select
-              mode="tags"
-              style={{ width: "100%" }}
-              disabled={readOnly}
-              placeholder="选择需要人工确认的工具（先在上方勾选工具）"
-              value={draft.spec.limits.require_approval_for}
-              onChange={(v: string[]) =>
-                // 强制项去不掉：后端 schema 校验会再加回来，UI 上先兜住，
-                // 免得用户以为取消成功了、保存后又冒出来
-                patchLimits({ require_approval_for: [...new Set([...v, ...forcedApprovals])] })
-              }
-              options={approvalOptions}
-            />
-            {forcedApprovals.length > 0 && (
-              <p style={{ margin: "8px 0 0", fontSize: 12, color: "var(--fg-3)" }}>
-                {forcedApprovals.map((n) => (
-                  <Tag key={n} color="warning" style={{ marginInlineEnd: 4 }}>
-                    {n}
-                  </Tag>
-                ))}
-                由所勾工具<b>强制进入</b>审批，不可取消 —— 这条写在 schema 层而不是编辑器默认值，
-                绕过编辑器直接调 API 同样会被加上。
+            {draft.spec.kind === "acp" ? (
+              <p className={styles.capNote}>
+                ACP 智能体的权限由 CLI 的权限模式决定（见「执行形态」）；作为子智能体时与父智能体的模式取更严格的那个。
               </p>
+            ) : (
+              <>
+                <label style={{ fontSize: 12, color: "var(--fg-2)" }}>允许的模式</label>
+                <Checkbox.Group
+                  style={{ display: "flex", flexDirection: "column", gap: 6, margin: "6px 0 12px" }}
+                  disabled={readOnly}
+                  value={draft.spec.approval.allowed_modes}
+                  onChange={(v) => setAllowedModes(v as ApprovalModeValue[])}
+                >
+                  {APPROVAL_MODE_OPTIONS.map((o) => {
+                    const allowed = draft.spec.approval.allowed_modes ?? [];
+                    // 至少留一种能执行的模式：只剩规划时计划永远批不下来（后端同样会拒绝）
+                    const lastExecution =
+                      o.value !== "plan" &&
+                      allowed.includes(o.value) &&
+                      allowed.filter((m) => m !== "plan").length === 1;
+                    return (
+                      <Checkbox key={o.value} value={o.value} disabled={lastExecution}>
+                        <b>{o.label}</b>
+                        <span style={{ marginLeft: 8, fontSize: 12, color: "var(--fg-3)" }}>{o.desc}</span>
+                      </Checkbox>
+                    );
+                  })}
+                </Checkbox.Group>
+                <label style={{ fontSize: 12, color: "var(--fg-2)" }}>默认模式</label>
+                <div style={{ marginTop: 6 }}>
+                  <Segmented
+                    disabled={readOnly}
+                    value={draft.spec.approval.default_mode}
+                    options={APPROVAL_MODE_OPTIONS.filter((o) =>
+                      (draft.spec.approval.allowed_modes ?? []).includes(o.value),
+                    ).map((o) => ({ value: o.value, label: o.label }))}
+                    onChange={(v) =>
+                      patchSpec({
+                        approval: { ...draft.spec.approval, default_mode: v as ApprovalModeValue },
+                      })
+                    }
+                  />
+                </div>
+                <p style={{ margin: "8px 0 0", fontSize: 12, color: "var(--fg-3)" }}>
+                  工具属于哪一类由工具自己声明（MCP 工具按 <code>readOnlyHint</code> 注解，没有注解的按外部工具处理），
+                  不再逐个勾选。子智能体与父智能体的模式取更严格的那个。审批没有等待上限。
+                </p>
+              </>
             )}
-            <p style={{ margin: "8px 0 0", fontSize: 12, color: "var(--fg-3)" }}>
-              匹配的是<b>模型侧</b>的工具名：勾选 <code>bash</code> 时模型看到的是{" "}
-              <code>execute</code>；<code>filesystem</code> 展开成 7 个文件工具，可只拦写入类。
-              等待超时按 expired 处理，同样作为工具结果返回。
-            </p>
           </Section>
 
           <Section
@@ -983,6 +1079,12 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
               </div>
             </div>
           </Section>
+
+          {detail && (
+            <Section id="e-share" title="共享" desc="谁能使用、编辑这个智能体（用户中心数据权限）。新建后只有你是所有者。">
+              <SharingPanel detail={detail} />
+            </Section>
+          )}
 
           {detail && (
             <p style={{ fontSize: 12, color: "var(--fg-3)" }}>

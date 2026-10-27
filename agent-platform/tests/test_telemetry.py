@@ -102,7 +102,7 @@ def test_disabled_setup_installs_nothing() -> None:
     from atlas_agent.config import Settings
     from atlas_agent.telemetry import setup_telemetry, shutdown_telemetry
 
-    settings = Settings(litellm_key="x", default_user_id=RUN_ID, database_url="x", redis_url="x")
+    settings = Settings(litellm_key="x", database_url="x", redis_url="x")
     assert settings.otel_enabled is False
 
     setup_telemetry(settings)  # 不抛
@@ -613,7 +613,7 @@ def test_capture_content_accepts_the_old_boolean(monkeypatch) -> None:
     from atlas_agent.config import Settings
 
     for raw, expected in ((True, "full"), (False, "off"), ("true", "full"), ("io", "io")):
-        s = Settings(litellm_key="x", default_user_id=USER, otel_capture_content=raw)  # type: ignore[arg-type]
+        s = Settings(litellm_key="x", otel_capture_content=raw)  # type: ignore[arg-type]
         assert s.otel_capture_content == expected
 
 

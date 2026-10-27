@@ -31,6 +31,8 @@ from langchain_core.outputs import ChatGenerationChunk
 from pydantic import PrivateAttr
 from sqlalchemy import select, update
 
+from tests.fake_uc import AS_USER
+
 from .fakes import TurnModel, tool_call_chunk
 
 SPEC = {
@@ -395,7 +397,9 @@ async def test_lost_lease_stops_local_execution_without_touching_the_run(
 def _client(executor: InProcessExecutor) -> httpx.AsyncClient:
     app = create_app()
     app.state.executor = executor
-    return httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+    return httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test", headers=AS_USER
+    )
 
 
 async def _start(client: httpx.AsyncClient) -> UUID:

@@ -1,8 +1,7 @@
 """假模型：按剧本发 tool_call，不需要 API key。
 
 PLANS：用户说的话 → 若干批 tool_call（同一批的并行执行）+ 最终答复。
-tool_call id 按会话里已有的调用数接着编号（c1、c2 …），所以同样的历史一定得到同样的 id ——
-实例 B 接管崩溃的 r6、重放这一轮时，发出的还是 c17（见 main.py 第 6 幕的前提说明）。
+tool_call id 按会话里已有的调用数接着编号（c1、c2 …），同样的历史一定得到同样的 id。
 """
 
 from __future__ import annotations
@@ -16,26 +15,27 @@ from tracing import say
 
 R1 = "统计 notes.txt 里出现最多的词"
 R2 = "跑一下测试"
-R3 = "后台起个 watcher，再全量编译一遍"
-R4 = "再统计一次"
+R3 = "我在界面上传了新的 notes.txt，再统计一次"
+R4 = "再看一下 top.txt，顺便确认环境"
 R5 = "跑一遍回归测试"
-R6 = "把测试报告打包"
 
 NOTES = "the quick brown fox jumps over the lazy dog\nthe fox sleeps\n"
+NOTES_V2 = "alpha beta alpha gamma alpha beta\n"
 COUNT_PY = """import collections
 import sys
 
 words = open(sys.argv[1]).read().split()
-for word, n in collections.Counter(words).most_common(3):
+for word, n in collections.Counter(words).most_common(2):
     print(word, n)
 """
-QUIET_CPU = """python3 -c '
-import time
-end = time.time() + 1
-while time.time() < end:
-    pass
-print("算了 1 秒，期间没有任何输出")'"""
-REGRESSION = 'for i in 1 2 3 4 5 6 7 8; do echo "regression $i ok"; sleep 0.1; done; echo 全部通过'
+TESTS = (
+    'for i in 1 2 3 4 5; do echo "case $i ok"; echo $i >> ran.log; sleep 0.1; done;'
+    ' echo "ran.log 共 $(grep -c . ran.log) 行"'
+)
+REGRESSION = (
+    'for i in 1 2 3 4 5 6 7 8; do echo "regression $i ok"; echo $i >> reg.log; sleep 0.1; done;'
+    " echo 全部通过"
+)
 
 
 def sh(command: str, timeout: int | None = None) -> tuple[str, dict[str, Any]]:
@@ -48,61 +48,53 @@ def fs(name: str, path: str, content: str | None = None) -> tuple[str, dict[str,
 
 PLANS: dict[str, list] = {
     R1: [
-        [  # 同一批两个 execute：此时还没有 Pod，两个 ensure 同时到达 cluster
+        [fs("write_file", "notes.txt", NOTES)],  # 此时还没有沙箱：直连对象存储
+        [  # 同一批两个 execute：两个 ensure 同时到达，只建一个沙箱
             sh("python3 --version"),
             sh(
-                "mkdir -p ~/.cache/pip && echo wordfreq > ~/.cache/pip/installed"
-                " && env | cut -d= -f1 | sort | tr '\\n' ' '"
+                "mkdir -p ~/.cache && echo wordfreq > ~/.cache/installed"
+                " && echo 'HOME 里装好了 wordfreq'"
             ),
         ],
-        [fs("write_file", "notes.txt", NOTES), fs("write_file", "count.py", COUNT_PY)],
-        [sh("python3 count.py notes.txt > top.txt && cat top.txt")],  # 刚写的文件，命令要看得到
-        [fs("read_file", "top.txt")],  # 命令写的文件，文件工具要读得到
+        [fs("write_file", "count.py", COUNT_PY)],  # 沙箱在跑了：经 execd 写进同一个挂载
+        [
+            sh("python3 count.py notes.txt > top.txt && cat top.txt")
+        ],  # 刚写的 count.py，命令马上看得到
+        [fs("read_file", "top.txt")],  # 命令写的文件，文件工具马上读得到
         "出现最多的是 the（3 次），其次是 fox（2 次）。",
     ],
     R2: [
         [
             sh(
-                'for i in 1 2 3 4 5; do echo "case $i ok"; echo $i >> ran.log; sleep 0.1; done;'
-                ' echo "ran.log 共 $(grep -c . ran.log) 行"'
+                '(for i in 1 2 3 4 5 6; do echo "step $i" >> progress.log; sleep 0.15; done)'
+                ' & echo "后台任务已启动"'
             )
         ],
-        [
-            sh(QUIET_CPU),  # 安静地算：没有输出，但 CPU 在涨
-            sh("sleep 30"),  # 卡住：没有输出，CPU 也不涨
-            sh("while true; do echo tick; sleep 0.1; done", timeout=1),  # 死循环但一直有输出
-            sh("seq 1 30000"),  # 输出很大
-        ],
-        "5 个用例都过了。安静的计算正常跑完；sleep 30 被判卡死；"
-        "死循环到 1 秒被结束；seq 的输出被截断。",
+        [fs("read_file", "progress.log")],  # 后台进程还在写：同一个挂载，读到的是此刻的内容
+        [sh(TESTS)],  # 剧本在它写到第 2 行时把连接断一次
+        [sh("while true; do echo tick; sleep 0.1; done", timeout=1), sh("seq 1 30000")],
+        "5 个用例都过了；死循环到 1 秒被结束；seq 的输出很大，只看了头尾。",
     ],
     R3: [
-        [sh('(sleep 1; echo "watcher：后台进程的输出") & echo "watcher 已在后台启动"')],
-        [sh("sh -c 'sleep 30' & sleep 30")],  # 编译，很久
-        "编译完成。",
+        [sh("python3 count.py notes.txt")],  # 上传刚发生：挂载的缓存还没过期
+        [fs("read_file", "notes.txt")],  # 文件工具与命令看到的一样（同一个挂载）
+        [sh("sleep 1 && python3 count.py notes.txt")],  # 结果没变，等一下再跑
+        "按新上传的数据：alpha 出现 3 次，beta 2 次。",
     ],
     R4: [
+        [fs("read_file", "top.txt")],  # 沙箱已被回收：路由表没有记录，直连对象存储
         [
             sh(
-                "python3 count.py notes.txt;"
-                ' cat ~/.cache/pip/installed 2>/dev/null || echo "HOME 里装过的依赖没了"'
+                "cat ~/.cache/installed 2>/dev/null || echo 'HOME 里装过的东西没了';"
+                " python3 count.py notes.txt"
             )
         ],
-        "结果没变：the 3 次、fox 2 次。沙箱重建过，之前装的依赖需要重装。",
+        "top.txt 还在；沙箱重建过，之前装的东西需要重装。",
     ],
     R5: [
         [sh(REGRESSION)],
-        [sh(REGRESSION)],  # 上一次沙箱中途重启、结果丢了：模型决定重跑
+        [sh(REGRESSION)],  # 上一次执行中沙箱没了、结果丢失：模型决定重跑
         "回归测试全部通过（第一次执行时沙箱重启，重跑了一遍）。",
-    ],
-    R6: [
-        [
-            sh(
-                'for i in 1 2 3 4 5 6; do echo "packing part $i"; echo $i >> pack.log;'
-                ' sleep 0.1; done; echo "pack.log 共 $(grep -c . pack.log) 行"'
-            )
-        ],
-        "打包好了。",
     ],
 }
 
@@ -150,7 +142,6 @@ class ScriptedModel(BaseChatModel):
         if len(sent) == len(batches):
             say("模型", f"最终答复：{answer}")
             return ChatResult(generations=[ChatGeneration(message=AIMessage(answer))])
-        # tool_call id 在整个会话里唯一：接着已有的调用往下编号
         n = sum(len(m.tool_calls) for m in messages if isinstance(m, AIMessage))
         calls = [
             {"name": name, "args": args, "id": f"c{n + i}"}

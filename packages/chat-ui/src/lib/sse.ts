@@ -1,8 +1,8 @@
 /**
  * SSE 客户端 —— fetch 流式，手写帧解析与重连。
  *
- * 为什么不用原生 EventSource：请求头由调用方注入（CSRF 头、本机 dev 模式的 X-Uid、
- * TeamFlow 代理的自有头），EventSource 设不了任何自定义 header。
+ * 为什么不用原生 EventSource：请求头由调用方注入（CSRF 头、TeamFlow 代理的自有头），
+ * EventSource 设不了任何自定义 header。
  *
  * 为什么不用 @microsoft/fetch-event-source：它引用 window/document，
  * 在 Node 里直接 ReferenceError —— 意味着这段最吃契约的逻辑只能靠手点浏览器

@@ -8,9 +8,8 @@
   X-Tenant-Id（auth.outbound_headers；用户中心据此建立租户上下文）。
 ★ 文档级权限（主体标签 u:/d:/r:）不在这里：它走 atlas-server 的主体展开，本来就接着用户中心。
 
-三个实现：
-  UCDataPermissions   用户中心（uc 模式）
-  AllowAll            dev 模式且没配用户中心：人人 OWNER（与 dev 模式操作码全有一致）
+两个实现：
+  UCDataPermissions   用户中心
   测试里的内存实现      tests/conftest.py
 """
 
@@ -30,7 +29,6 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "DATA_CODE",
     "LEVEL_RANK",
-    "AllowAll",
     "DataPermissions",
     "Grant",
     "UCDataPermissions",
@@ -79,42 +77,6 @@ class DataPermissions(Protocol):
     async def root_dept(self) -> str:
         """根部门 id（「全员可见」= 根部门含下级只读）。"""
         ...
-
-
-class AllowAll:
-    """dev 模式且没接用户中心：人人对一切 OWNER，共享是空操作。"""
-
-    async def level(self, user_id: str, dataset_id: str) -> str:
-        return "OWNER"
-
-    async def accessible(self, user_id: str, min_level: str = "READ") -> tuple[dict[str, str], str]:
-        return {}, "OWNER"
-
-    async def create(self, dataset_id: str, name: str, grants: list[Grant]) -> None:
-        return None
-
-    async def acl(self, dataset_id: str) -> list[dict[str, Any]]:
-        return []
-
-    async def grant(self, dataset_id: str, operator: str, grants: list[Grant]) -> None:
-        raise Conflict("dev 模式没有接用户中心，不能共享")
-
-    async def update(
-        self, acl_id: str, operator: str, *, level: str | None, include_sub: bool | None
-    ) -> None:
-        raise Conflict("dev 模式没有接用户中心，不能共享")
-
-    async def revoke(self, acl_id: str, operator: str) -> None:
-        raise Conflict("dev 模式没有接用户中心，不能共享")
-
-    async def rename(self, dataset_id: str, name: str) -> None:
-        return None
-
-    async def cleanup(self, dataset_id: str) -> None:
-        return None
-
-    async def root_dept(self) -> str:
-        return "root"
 
 
 class UCDataPermissions:
@@ -269,7 +231,4 @@ def _unavailable() -> Exception:
 
 
 def make_data_permissions(settings: Any) -> DataPermissions:
-    """uc 模式接用户中心；dev 模式不接（人人 OWNER）。"""
-    if settings.auth_mode == "uc":
-        return UCDataPermissions(settings.uc_base_url)
-    return AllowAll()
+    return UCDataPermissions(settings.uc_base_url)

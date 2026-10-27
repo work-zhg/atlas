@@ -19,6 +19,11 @@ import pytest
 from atlas_agent.config import Settings, get_settings
 from atlas_agent.db.session import get_engine, get_sessionmaker
 
+from tests.fake_uc import FakeUC
+
+# MCP 网关的测试环境（进程内网关 + Higress 替身）：用到才起，见 tests/gateway_env.py
+from tests.gateway_env import gateway, gateway_environment, higress  # noqa: F401
+
 REPO_ROOT = Path(__file__).resolve().parents[2]  # agent-platform/tests → 仓库根
 
 #: 仓库根 .env 里属于**对象存储**的那些键。
@@ -122,6 +127,32 @@ def _object_storage_is_not_inherited_from_the_developer(tmp_path_factory) -> Ite
 
 
 @pytest.fixture(autouse=True)
+def fake_user_center(monkeypatch: pytest.MonkeyPatch) -> Iterator[FakeUC]:
+    """没有免鉴权模式（dev 模式已删）：每个 create_app() 都接一个用户中心替身。
+
+    没登记过的用户什么都能做 —— 大多数测试只要请求带上 AS_USER（X-Uid）。测权限的用例
+    用返回的替身 add() 登记具体的人，或自己给 app.state.uc 换一个。
+    """
+    import httpx
+    from atlas_agent import main
+    from atlas_agent.auth.service import data_level_cache, snapshot_cache
+    from atlas_agent.auth.uc import UCClient
+
+    fake = FakeUC()
+    monkeypatch.setattr(
+        main,
+        "UCClient",
+        lambda settings: UCClient(settings, transport=httpx.MockTransport(fake.handler)),
+    )
+    # 授权快照是进程级缓存：上一个用例的替身给的快照不能漏到这一个
+    snapshot_cache.clear()
+    data_level_cache.clear()
+    yield fake
+    snapshot_cache.clear()
+    data_level_cache.clear()
+
+
+@pytest.fixture(autouse=True)
 async def _reset_db_singletons() -> AsyncIterator[None]:
     yield
     engine = get_engine()
@@ -132,7 +163,7 @@ async def _reset_db_singletons() -> AsyncIterator[None]:
 
 @pytest.fixture
 async def clean_db() -> AsyncIterator[None]:
-    """清掉测试造的数据，保留迁移种子（内置 agent / model_catalog / 默认用户）。
+    """清掉测试造的数据，保留迁移种子（model_catalog 等）。
 
     thread 删除会级联带走 message / run / run_file；
     agent 删除会级联带走 agent_version。内置 agent 必须留着 —— 它是产品的一部分。
@@ -151,10 +182,9 @@ async def clean_db() -> AsyncIterator[None]:
             #   （1451）。两步删就够 —— 委派深度结构性封顶在 1。
             await session.execute(text("DELETE FROM thread WHERE parent_thread_id IS NOT NULL"))
             await session.execute(text("DELETE FROM thread"))
-            await session.execute(
-                text("UPDATE agent SET current_version_id = NULL WHERE is_builtin = false")
-            )
-            await session.execute(text("DELETE FROM agent WHERE is_builtin = false"))
+            await session.execute(text("UPDATE agent SET current_version_id = NULL"))
+            await session.execute(text("DELETE FROM agent_version"))
+            await session.execute(text("DELETE FROM agent"))
             await session.commit()
 
     await _wipe()

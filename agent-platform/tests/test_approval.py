@@ -1,33 +1,37 @@
-"""P7 · 高风险工具的人工确认（文档 §12.2）。
+"""审批模式：规划 / 手动 / 自动下的判定、请示、挂起与续跑（doc/native-approval-mode-design.html）。
 
-★ 等待方式从「在线阻塞」改成「挂起」（doc/detail/suspension.html §06）。
+问不问人由「会话的审批模式 × 工具的副作用类别」决定（PermissionMiddleware），不再由作者逐个勾选
+必审工具。请示的等待方式是「挂起」（doc/detail/suspension.html §06）：pending 时工具**不执行**、
+本段挂起、approval_id 可复现（否则续跑会死循环）。
 
-  原先 gate 一路 await 到有人点头或 600s 超时，于是最危险的失败是**死锁**：
-  审批事件必须在 gate 阻塞**之前**送出，否则用户看不到弹窗而后端在等一个
-  永远不会来的决策。那条时序测试（test_event_arrives_before_gate_blocks）
-  刻意构造成「事件没先到就必然超时」。
-
-  现在 gate 不阻塞了 —— 死锁在结构上不可能发生，那个测试随之消失。取而代之
-  的是另一组性质：pending 时工具**不执行**、本段挂起、approval_id 可复现
-  （否则续跑会死循环）。
+被测的工具 `send_report` 没有只读注解 → 外部副作用：手动模式请示、自动模式交判断器（P1 还没有
+判断器，请示）、规划模式拦下。
 """
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 from uuid import UUID
 
 import pytest
 from atlas_agent.domain.events import EventType
-from atlas_agent.domain.spec import AgentSpec, LimitSpec, ModelSpec
-from atlas_engine.contracts import ApprovalState
+from atlas_agent.domain.spec import AgentSpec, ApprovalSpec, LimitSpec, ModelSpec
+from atlas_engine.contracts import ApprovalState, InvalidSpec, ToolEffect
 from atlas_engine.kernel.middleware.approval import (
     EXPIRED_RESULT,
     GATE_FAILED_RESULT,
     REJECTED_RESULT,
     approval_id_for,
 )
-from langchain_core.messages import AIMessageChunk
+from atlas_engine.kernel.middleware.permission import (
+    EXIT_PLAN_MODE,
+    PLAN_BLOCKED_RESULT,
+    PLAN_REMINDER,
+    PermissionMiddleware,
+)
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
+from langchain_core.tools import StructuredTool
 
 from tests.graphs import run_agent as run
 
@@ -35,299 +39,474 @@ from .fakes import TurnModel, tool_call_chunk
 
 RUN_ID = UUID("77777777-7777-7777-7777-777777777777")
 
+#: send_report 真正执行过的入参 —— 「工具有没有跑」的唯一证据
+EXECUTED: list[str] = []
+
+
+@pytest.fixture(autouse=True)
+def _reset() -> None:
+    EXECUTED.clear()
+
+
+def _send_report(text: str) -> str:
+    EXECUTED.append(text)
+    return "已发送"
+
+
+#: 没有只读注解 → 外部副作用
+SEND_REPORT = StructuredTool.from_function(
+    _send_report, name="send_report", description="把报告发给外部系统。"
+)
+#: 按 MCP 的约定声明只读 → 任何模式都放行
+LOOKUP = StructuredTool.from_function(
+    lambda q: "查到了", name="lookup", description="查资料。", metadata={"readOnlyHint": True}
+)
+
 
 class ScriptedGate:
-    """按预设状态回应；记录被问过什么。
-
-    ★ `check` 而不是 `request` —— 它**立刻返回**，不阻塞（contracts/approval.py）。
-    """
+    """按预设状态回应；记录被问过什么。`check` 立刻返回，不阻塞（contracts/approval.py）。"""
 
     def __init__(self, state: ApprovalState = "approved") -> None:
         self.state = state
         self.asked: list[dict[str, Any]] = []
 
     async def check(
-        self, *, approval_id: str, tool_name: str, args: dict[str, Any]
+        self, *, approval_id: str, tool_name: str, args: dict[str, Any], **extra: Any
     ) -> ApprovalState:
-        self.asked.append({"approval_id": approval_id, "tool_name": tool_name, "args": args})
+        self.asked.append(
+            {"approval_id": approval_id, "tool_name": tool_name, "args": args, **extra}
+        )
         return self.state
 
 
-def _spec(*, guard: tuple[str, ...] = ("write_todos",)) -> AgentSpec:
+def _spec(mode: str = "manual") -> AgentSpec:
     return AgentSpec(
-        slug="guarded",
-        name="受管控",
+        slug="modes",
+        name="审批模式",
         system_prompt="p",
         model=ModelSpec(model="claude-sonnet-5"),
-        tool_names=("write_todos",),
-        limits=LimitSpec(timeout_s=20, require_approval_for=frozenset(guard)),
+        limits=LimitSpec(timeout_s=20),
+        approval=ApprovalSpec(default_mode=mode),  # type: ignore[arg-type]
     )
 
 
-def _tool_using_model() -> TurnModel:
-    return TurnModel(
-        scripts=[
-            [
-                tool_call_chunk(
-                    "write_todos", '{"todos":[{"content":"做事","status":"pending"}]}', "c1"
-                )
-            ],
-            [AIMessageChunk(content="办完了。")],
-        ]
+def _calls(*calls: tuple[str, str], reply: str = "办完了。") -> TurnModel:
+    """模型依次调用这些工具（每轮一个），最后回复。"""
+    scripts = [[tool_call_chunk(name, args, f"c{i}")] for i, (name, args) in enumerate(calls, 1)]
+    return TurnModel(scripts=[*scripts, [AIMessageChunk(content=reply)]])
+
+
+def _report_model() -> TurnModel:
+    return _calls(("send_report", '{"text":"周报"}'))
+
+
+async def _collect(
+    spec: AgentSpec, gate: Any, *, model: Any = None, mode: str | None = None, **kw: Any
+) -> list:
+    return [
+        e
+        async for e in run(
+            spec,
+            run_id=kw.pop("run_id", RUN_ID),
+            model=model or _report_model(),
+            input_content=kw.pop("input_content", "发周报"),
+            approvals=gate,
+            extra_tools=[SEND_REPORT, LOOKUP],
+            approval_mode=mode,
+            **kw,
+        )
+    ]
+
+
+def _failed_results(events: list) -> list[str]:
+    return [str(e.data.get("result", "")) for e in events if e.type is EventType.TOOL_FAILED]
+
+
+# ---------------------------------------------------------------- 判定矩阵（设计 5.2）
+
+_MATRIX = {
+    #            read     plan     write    execute  external delegate
+    "plan": ("allow", "allow", "block", "block", "block", "block"),
+    "manual": ("allow", "allow", "ask", "ask", "ask", "ask"),
+    # P1 没有判断器：execute / external 请示；delegate 放行（子 run 继承模式，动作照样受管）
+    "auto": ("allow", "allow", "allow", "ask", "ask", "allow"),
+}
+_EFFECTS = (
+    ToolEffect.READ,
+    ToolEffect.PLAN,
+    ToolEffect.WRITE,
+    ToolEffect.EXECUTE,
+    ToolEffect.EXTERNAL,
+    ToolEffect.DELEGATE,
+)
+
+
+async def _verdict(
+    mode: str, tool: str, effects: dict[str, ToolEffect], irreversible: tuple[str, ...] = ()
+) -> str:
+    """直接调中间件：handler 被调 = 放行；gate 被问 = 请示；都没有 = 拦下。"""
+    gate = ScriptedGate("approved")  # 已批：不走 pending，不需要图的 stream writer
+    middleware = PermissionMiddleware(
+        effects=effects, default_mode="auto", gate=gate, irreversible=irreversible
     )
+    request = SimpleNamespace(
+        tool_call={"id": "c1", "name": tool, "args": {}},
+        tool=object(),
+        state={"approval_mode": mode, "messages": []},
+        runtime=None,
+    )
+    ran: list[bool] = []
+
+    async def handler(_req: Any) -> ToolMessage:
+        ran.append(True)
+        return ToolMessage(content="ok", tool_call_id="c1")
+
+    result = await middleware.awrap_tool_call(request, handler)
+    if gate.asked:
+        return "ask"
+    if ran:
+        return "allow"
+    assert isinstance(result, ToolMessage) and result.status == "error"
+    return "block"
 
 
-async def _collect(spec: AgentSpec, gate: Any, *, model: Any = None) -> list:
+@pytest.mark.parametrize("mode", ["plan", "manual", "auto"])
+@pytest.mark.parametrize("index", range(len(_EFFECTS)))
+async def test_the_decision_matrix(mode: str, index: int) -> None:
+    """★ 模式 × 类别的判定就是设计文档 5.2 那张表。改这张表之前先改设计 —— 它是对用户的承诺。"""
+    effect = _EFFECTS[index]
+    assert await _verdict(mode, "tool_x", {"tool_x": effect}) == _MATRIX[mode][index]
+
+
+async def test_an_unknown_tool_is_treated_as_external() -> None:
+    """查不到类别的工具按最保守的「外部副作用」判定。"""
+    assert await _verdict("manual", "mystery", {}) == "ask"
+    assert await _verdict("plan", "mystery", {}) == "block"
+
+
+async def test_an_irreversible_write_is_not_auto_approved() -> None:
+    """删除是不可逆的写入：自动模式下不直接放行（P1 请示）；普通写入照常放行。"""
+    effects = {"delete": ToolEffect.WRITE, "write_file": ToolEffect.WRITE}
+    assert await _verdict("auto", "delete", effects, irreversible=("delete",)) == "ask"
+    assert await _verdict("auto", "write_file", effects, irreversible=("delete",)) == "allow"
+
+
+# ---------------------------------------------------------------- 请示：挂起与续跑
+
+
+async def test_pending_suspends_without_executing_the_tool() -> None:
+    """★ 核心性质：还没批就**不执行**，本段挂起，且发出审批事件。
+
+    没人知道有审批在等的话，run 会一直挂着。
+    """
+    events = await _collect(_spec("manual"), ScriptedGate("pending"))
+    types = [e.type for e in events]
+
+    assert EventType.APPROVAL_REQUIRED in types
+    assert EventType.RUN_SUSPENDED in types, types
+    assert EXECUTED == []
+    assert EventType.RUN_FINISHED not in types
+
+
+async def test_the_suspension_records_the_approval_it_waits_on() -> None:
+    """挂起时要说清楚在等什么 —— 续跑的 barrier 按 reason 分派。"""
+    events = await _collect(_spec("manual"), ScriptedGate("pending"))
+    suspended = next(e for e in events if e.type is EventType.RUN_SUSPENDED)
+    waits = suspended.data["waiting_on"]
+    assert len(waits) == 1
+    assert waits[0]["reason"] == "approval"
+    assert waits[0]["token"] == approval_id_for(str(RUN_ID), "c1")
+    assert waits[0]["tool_call_id"] == "c1"
+
+
+async def test_pending_writes_no_tool_result() -> None:
+    """挂起时不写任何 tool 结果：调用留着悬空，只在 waiting_on 里登记。
+
+    见 contracts/suspension.py。
+    """
+    model = _report_model()
+    events = await _collect(_spec("manual"), ScriptedGate("pending"), model=model)
+    types = [e.type for e in events]
+    assert model.call_count == 1, "挂起之后不该再有模型调用"
+    assert EventType.TOOL_COMPLETED not in types and EventType.TOOL_FAILED not in types
+
+
+def _resume_history(name: str, args: dict[str, Any]) -> list:
+    return [
+        HumanMessage(content="发周报"),
+        AIMessage(content="", tool_calls=[{"id": "c1", "name": name, "args": args}]),
+    ]
+
+
+async def _resume(
+    spec: AgentSpec,
+    outcome: dict[str, Any],
+    *,
+    model: TurnModel,
+    mode: str,
+    name: str = "send_report",
+    args: dict[str, Any] | None = None,
+    gate: ScriptedGate | None = None,
+) -> list:
+    token = approval_id_for(str(RUN_ID), "c1")
     return [
         e
         async for e in run(
             spec,
             run_id=RUN_ID,
-            model=model or _tool_using_model(),
-            input_content="记个待办",
-            approvals=gate,
+            model=model,
+            input_content=None,
+            history=_resume_history(name, args or {"text": "周报"}),
+            resume=True,
+            approvals=gate or ScriptedGate("pending"),
+            extra_tools=[SEND_REPORT, LOOKUP],
+            waiting_on={"c1": {"reason": "approval", "token": token}},
+            decisions={token: outcome},
+            approval_mode=mode,
         )
     ]
-
-
-# ---------------------------------------------------------------- 核心时序
-
-
-async def test_pending_suspends_without_executing_the_tool() -> None:
-    """★ 核心性质：还没批就**不执行**，本段挂起。
-
-    执行了再问等于门禁不存在；而阻塞等待（旧行为）会占住一个 asyncio.Task，
-    进程重启即丢，且 600s 对小时级任务根本不够。
-    """
-    gate = ScriptedGate("pending")
-    events = await _collect(_spec(), gate)
-    types = [e.type for e in events]
-
-    assert EventType.APPROVAL_REQUIRED in types, "弹窗事件没发出去 —— 没人知道有审批在等"
-    assert EventType.RUN_SUSPENDED in types, types
-    # 工具没跑：todos 快照是它执行过的唯一证据
-    assert EventType.TODOS_UPDATED not in types
-    # 挂起不是终态 —— 这一轮还会续
-    assert EventType.RUN_FINISHED not in types
-
-
-async def test_the_suspension_records_the_approval_it_waits_on() -> None:
-    """挂起时要说清楚在等什么 —— 续跑的 barrier 按 reason 分派。
-
-    只记 token 的话审批挂起会被当成委派：那种 barrier 是「子 run 终态」，而
-    审批挂起时没有子 run —— barrier 立刻满足，于是续跑、又挂起，死循环。
-    """
-    events = await _collect(_spec(), ScriptedGate("pending"))
-    suspended = next(e for e in events if e.type is EventType.RUN_SUSPENDED)
-
-    waits = suspended.data["waiting_on"]
-    assert len(waits) == 1
-    assert waits[0]["reason"] == "approval"
-    assert waits[0]["token"], "没记下 approval_id，续跑时无从查状态"
-    # 没记下是哪个调用在等的话，续跑时 Patch 会把它补成 cancelled
-    assert waits[0]["tool_call_id"] == "c1"
-
-
-async def test_pending_writes_no_tool_result() -> None:
-    """挂起时不写任何 tool 结果：调用留着悬空，只在 waiting_on 里登记（contracts/suspension.py）。
-
-    写了占位的话，续跑执行工具前还得先删掉它，否则同一个调用有两份结果；
-    续跑漏传 waiting_on 时，模型还会把占位当成工具的真实返回往下说。
-    """
-    model = _tool_using_model()
-    events = await _collect(_spec(), ScriptedGate("pending"), model=model)
-    types = [e.type for e in events]
-
-    assert model.call_count == 1, "挂起之后不该再有模型调用"
-    assert EventType.TOOL_STARTED in types
-    assert EventType.TOOL_COMPLETED not in types and EventType.TOOL_FAILED not in types
 
 
 async def test_resume_executes_the_approved_call_without_asking_again() -> None:
     """续跑段：消息原样 + waiting_on + decisions → 直接执行，不再问 gate、不再弹窗。"""
-    from langchain_core.messages import AIMessage, HumanMessage
-
     gate = ScriptedGate("pending")
-    token = approval_id_for("", "c1")
-    history = [
-        HumanMessage(content="记个待办"),
-        AIMessage(
-            content="",
-            tool_calls=[
-                {
-                    "id": "c1",
-                    "name": "write_todos",
-                    "args": {"todos": [{"content": "做事", "status": "pending"}]},
-                }
-            ],
-        ),
-    ]
-    model = TurnModel(scripts=[[AIMessageChunk(content="办完了。")]])
-    events = [
-        e
-        async for e in run(
-            _spec(),
-            run_id=RUN_ID,
-            model=model,
-            input_content=None,
-            history=history,
-            resume=True,
-            approvals=gate,
-            waiting_on={"c1": {"reason": "approval", "token": token}},
-            decisions={token: "approved"},
-        )
-    ]
+    model = TurnModel(scripts=[[AIMessageChunk(content="发完了。")]])
+    events = await _resume(
+        _spec("manual"), {"status": "approved"}, model=model, mode="manual", gate=gate
+    )
     types = [e.type for e in events]
-
     assert gate.asked == [], "决策已经交进来了，不该再问 gate"
     assert EventType.APPROVAL_REQUIRED not in types
-    assert EventType.TODOS_UPDATED in types, "被批准的工具没有执行"
+    assert EXECUTED == ["周报"]
     assert types[-1] is EventType.RUN_FINISHED
 
 
-def test_the_approval_id_is_reproducible() -> None:
-    """★ 这是审批能挂起的前提。
+async def test_a_rejection_with_a_reason_reaches_the_model() -> None:
+    """拒绝时带的原因作为工具结果交给模型 —— 比只说「不行」更容易改对。"""
+    model = TurnModel(scripts=[[AIMessageChunk(content="好，不发了。")]])
+    events = await _resume(
+        _spec("manual"), {"status": "rejected", "feedback": "周报还没定稿"}, model=model,
+        mode="manual",
+    )  # fmt: skip
+    assert EXECUTED == []
+    assert any("周报还没定稿" in r for r in _failed_results(events))
 
-    随机 id 在续跑时会算出一个**新的**：gate 查不到记录 → 当成首次 → 返回
-    pending → 再挂起一次。死循环，而且看起来像「批准了但没反应」。
-    """
+
+def test_the_approval_id_is_reproducible() -> None:
+    """★ 审批能挂起的前提：续跑时算出同一个 id，否则查不到记录 → 当成首次 → 再挂起，死循环。"""
     first = approval_id_for("run-1", "call-1")
     assert first == approval_id_for("run-1", "call-1")
-    # 不同 run 里出现同一个 tool_call_id 不该撞
     assert first != approval_id_for("run-2", "call-1")
     assert first != approval_id_for("run-1", "call-2")
 
 
-async def test_the_gate_is_asked_with_a_reproducible_id() -> None:
-    """中间件问 gate 时用的就是那个可复现的 id。"""
+async def test_the_gate_is_asked_with_a_reproducible_id_and_the_reason() -> None:
+    """问 gate 时用的是可复现的 id，并带上种类、来源与给用户看的原因（落进审批表）。"""
     gate = ScriptedGate("pending")
-    await _collect(_spec(), gate)
+    await _collect(_spec("manual"), gate)
     assert len(gate.asked) == 1
-    # tool_call_id 是 "c1"（_tool_using_model 的脚本）
-    assert gate.asked[0]["approval_id"].count("-") == 4, gate.asked[0]["approval_id"]
-    assert gate.asked[0]["approval_id"] == approval_id_for("", "c1")
+    asked = gate.asked[0]
+    assert asked["approval_id"] == approval_id_for(str(RUN_ID), "c1")
+    assert asked["kind"] == "tool"
+    assert asked["source"] == "manual_mode"
+    assert "手动模式" in asked["reason"]
+
+
+async def test_the_same_tool_call_id_in_another_run_is_another_approval() -> None:
+    """★ approval_id 带上 run_id：两个 run 里同名的 tool_call_id 不能撞成同一条审批。
+
+    修复前 runner 没把 run_id 交进图，id 只由 tool_call_id 派生 —— 后一个 run 查到前一个 run
+    的审批行，直接沿用它的状态（测试里假模型固定用 c1，连跑时互相污染）。
+    """
+    gate = ScriptedGate("pending")
+    await _collect(_spec("manual"), gate)
+    await _collect(_spec("manual"), gate, run_id=UUID("88888888-8888-8888-8888-888888888888"))
+    first, second = (a["approval_id"] for a in gate.asked)
+    assert first != second
 
 
 # ---------------------------------------------------------------- 决策路径
 
 
 async def test_approved_tool_executes() -> None:
-    """已经批过的（续跑段看到的状态）直接执行。"""
-    gate = ScriptedGate("approved")
-    events = await _collect(_spec(), gate)
-    types = [e.type for e in events]
-
-    assert len(gate.asked) == 1
-    assert gate.asked[0]["tool_name"] == "write_todos"
-    assert EventType.TOOL_COMPLETED in types
-    # 批准后工具真的跑了 —— todos 快照出现即为证据
-    assert EventType.TODOS_UPDATED in types
+    events = await _collect(_spec("manual"), ScriptedGate("approved"))
+    assert EXECUTED == ["周报"]
+    assert EventType.TOOL_COMPLETED in [e.type for e in events]
 
 
 async def test_rejection_does_not_kill_the_run() -> None:
-    """★ §12.2：拒绝不终止 run，而是把拒绝当作工具结果回给 agent，
-    这样它可以换个方案继续，而不是整轮白跑。"""
-    events = await _collect(_spec(), ScriptedGate("rejected"))
-    types = [e.type for e in events]
-
-    assert types[-1] is EventType.RUN_FINISHED, "拒绝把 run 弄失败了"
-    failed = [e for e in events if e.type is EventType.TOOL_FAILED]
-    assert failed, "拒绝应当体现为一次失败的工具调用"
-    assert REJECTED_RESULT in str(failed[0].data.get("result", ""))
-    # 工具没真跑，所以不该有 todos 快照
-    assert EventType.TODOS_UPDATED not in types
+    """★ 拒绝不终止 run，而是作为工具结果回给 agent，它可以换个方案继续。"""
+    events = await _collect(_spec("manual"), ScriptedGate("rejected"))
+    assert [e.type for e in events][-1] is EventType.RUN_FINISHED
+    assert any(REJECTED_RESULT in r for r in _failed_results(events))
+    assert EXECUTED == []
 
 
 async def test_expired_is_treated_as_reject() -> None:
-    events = await _collect(_spec(), ScriptedGate("expired"))
-    types = [e.type for e in events]
-
-    assert types[-1] is EventType.RUN_FINISHED
-    failed = [e for e in events if e.type is EventType.TOOL_FAILED]
-    assert EXPIRED_RESULT in str(failed[0].data.get("result", ""))
+    events = await _collect(_spec("manual"), ScriptedGate("expired"))
+    assert [e.type for e in events][-1] is EventType.RUN_FINISHED
+    assert any(EXPIRED_RESULT in r for r in _failed_results(events))
 
 
 async def test_a_broken_gate_does_not_let_the_tool_through() -> None:
-    """★ 门禁自己坏了 → 仍然**不放行**（§12.2 的红线）。
-
-    这个方向不能搞反：无人把关地执行高风险工具，比多挡一次严重得多。
-    """
-    events = await _collect(_spec(), ScriptedGate("failed"))
-    types = [e.type for e in events]
-
-    assert types[-1] is EventType.RUN_FINISHED, "门禁故障不该炸掉整个 run"
-    assert EventType.TODOS_UPDATED not in types, "门禁故障时工具竟然执行了"
+    """★ 门禁自己坏了 → 仍然**不放行**：无人把关地执行，比多挡一次严重得多。"""
+    events = await _collect(_spec("manual"), ScriptedGate("failed"))
+    assert [e.type for e in events][-1] is EventType.RUN_FINISHED
+    assert EXECUTED == []
 
 
 async def test_a_broken_gate_says_it_is_broken_not_that_you_refused() -> None:
-    """★ 「系统坏了」必须和「用户拒绝了」说成两回事。
-
-    两者都不放行，但给模型的指令相反：拒绝 → 换个方案；故障 → 如实报告，
-    别绕路。说错的代价在真机上见过 —— 一次 tool_name 超列宽被当成用户拒绝，
-    模型于是认真排查起「子智能体为什么不说话」，而真因是一列 varchar(128)
-    （doc/detail/suspension.html §12 修正记录 12）。
-    """
-    events = await _collect(_spec(), ScriptedGate("failed"))
-    failed = [e for e in events if e.type is EventType.TOOL_FAILED]
-    assert failed, "门禁故障应当体现为一次失败的工具调用"
-
-    result = str(failed[0].data.get("result", ""))
-    assert GATE_FAILED_RESULT in result
-    assert REJECTED_RESULT not in result, "把系统故障说成了用户拒绝"
+    """★ 「系统坏了」和「用户拒绝了」给模型的指令相反：拒绝 → 换方案；故障 → 如实报告，别绕路。"""
+    results = _failed_results(await _collect(_spec("manual"), ScriptedGate("failed")))
+    assert any(GATE_FAILED_RESULT in r for r in results)
+    assert not any(REJECTED_RESULT in r for r in results)
 
 
-# ---------------------------------------------------------------- 门禁范围
+async def test_without_a_gate_a_question_is_not_let_through() -> None:
+    """没注入门禁时请示无从登记：按门禁故障处理（不放行、也不挂起），run 照常结束。"""
+    events = await _collect(_spec("manual"), None)
+    assert EXECUTED == []
+    assert EventType.RUN_SUSPENDED not in [e.type for e in events]
+    assert any(GATE_FAILED_RESULT in r for r in _failed_results(events))
 
 
-async def test_unguarded_tool_is_not_gated() -> None:
-    """没列进 require_approval_for 的工具不该被拦 —— 每个工具都弹窗等于没有门禁。"""
+async def test_a_read_only_tool_is_never_gated() -> None:
+    """只读工具（MCP 约定的 readOnlyHint）任何模式都放行 —— 每个工具都弹窗等于没有门禁。"""
     gate = ScriptedGate("approved")
-    events = await _collect(_spec(guard=("some_other_tool",)), gate)
-
-    assert gate.asked == []
-    assert EventType.APPROVAL_REQUIRED not in [e.type for e in events]
-    assert EventType.TODOS_UPDATED in [e.type for e in events]
-
-
-async def test_no_gate_injected_means_no_gating() -> None:
-    """server 没注入 gate 时不该卡住 —— 宁可不拦也不能挂死。"""
-    events = [
-        e
-        async for e in run(
-            _spec(),
-            run_id=RUN_ID,
-            model=_tool_using_model(),
-            input_content="记个待办",
+    for mode in ("plan", "manual", "auto"):
+        events = await _collect(
+            _spec(mode), gate, model=_calls(("lookup", '{"q":"x"}')), mode=mode
         )
-    ]
-    types = [e.type for e in events]
-    assert EventType.APPROVAL_REQUIRED not in types
-    assert types[-1] is EventType.RUN_FINISHED
+        assert EventType.TOOL_COMPLETED in [e.type for e in events], mode
+    assert gate.asked == []
 
 
 async def test_seq_gapless_with_approval_events() -> None:
     """契约规则 2：custom 通道插进来的事件也要在同一条 seq 序列上。"""
-    events = await _collect(_spec(), ScriptedGate("approved"))
+    events = await _collect(_spec("manual"), ScriptedGate("pending"))
     assert [e.seq for e in events] == list(range(1, len(events) + 1))
 
 
-async def test_approval_event_carries_tool_and_args() -> None:
-    """前端弹窗要展示工具名 + 完整参数（§12.2）。
-
-    ★ 事件**只在 pending 时发**。已经有结论的（approved/rejected/expired）不
-      需要弹窗 —— 那是续跑段每次都会经过的路径，重发只会让前端反复开关弹窗。
-    """
-    events = await _collect(_spec(), ScriptedGate("pending"))
+async def test_approval_event_carries_tool_args_and_why() -> None:
+    """前端卡片要展示工具名、完整参数和「为什么问」。事件只在 pending 时发。"""
+    events = await _collect(_spec("manual"), ScriptedGate("pending"))
     event = next(e for e in events if e.type is EventType.APPROVAL_REQUIRED)
-
-    assert event.data["tool_name"] == "write_todos"
-    assert event.data["approval_id"]
-    assert "todos" in event.data["args"]
+    assert event.data["tool_name"] == "send_report"
+    assert event.data["args"] == {"text": "周报"}
+    assert event.data["approval_kind"] == "tool"
+    assert event.data["source"] == "manual_mode"
     assert event.data["reason"]
+    assert event.data["accepts_feedback"] is True, "拒绝原因会交给模型，前端据此显示输入框"
 
 
 @pytest.mark.parametrize("state", ["approved", "rejected", "expired", "failed"])
 async def test_a_settled_approval_does_not_re_prompt(state: ApprovalState) -> None:
-    """续跑段不该再弹一次窗 —— 结论已经有了。"""
-    events = await _collect(_spec(), ScriptedGate(state))
+    """已经有结论的不再弹窗 —— 那是续跑段每次都会经过的路径。"""
+    events = await _collect(_spec("manual"), ScriptedGate(state))
     assert EventType.APPROVAL_REQUIRED not in [e.type for e in events]
+
+
+# ---------------------------------------------------------------- 三种模式
+
+
+async def test_plan_mode_blocks_side_effects_without_suspending() -> None:
+    """规划模式下有副作用的调用被拦下：不执行、不问人、不挂起，回一条说明让模型先提交计划。"""
+    gate = ScriptedGate("approved")
+    events = await _collect(_spec("plan"), gate, mode="plan")
+    assert EXECUTED == []
+    assert gate.asked == []
+    assert EventType.RUN_SUSPENDED not in [e.type for e in events]
+    assert any(PLAN_BLOCKED_RESULT in r for r in _failed_results(events))
+
+
+async def test_auto_mode_asks_for_external_tools_until_the_classifier_exists() -> None:
+    """自动模式下外部副作用交判断器；P1 还没有判断器，请示，并写明原因。"""
+    gate = ScriptedGate("pending")
+    events = await _collect(_spec("auto"), gate, mode="auto")
+    assert EventType.RUN_SUSPENDED in [e.type for e in events]
+    assert gate.asked[0]["source"] == "auto_uncertain"
+
+
+async def test_plan_mode_appends_a_reminder_to_the_request_only() -> None:
+    """★ 规划提醒附在用户本轮那条消息上，只进请求：系统提示词与工具定义不变（prompt 缓存的前缀），
+    也不进 transcript（不落库）。"""
+    from atlas_agent.domain.messages import Transcript
+
+    model = _calls(("lookup", '{"q":"x"}'))
+    transcript = Transcript()
+    await _collect(_spec("plan"), ScriptedGate(), model=model, mode="plan", transcript=transcript)
+    first_request = model.seen[0]
+    user = [m for m in first_request if isinstance(m, HumanMessage)][-1]
+    assert PLAN_REMINDER in str(user.content)
+    assert not any(PLAN_REMINDER in str(m.content) for m in transcript.messages)
+
+
+async def test_no_reminder_outside_plan_mode() -> None:
+    model = _calls(("lookup", '{"q":"x"}'))
+    await _collect(_spec("auto"), ScriptedGate(), model=model, mode="auto")
+    assert not any(PLAN_REMINDER in str(m.content) for m in model.seen[0])
+
+
+# ---------------------------------------------------------------- 计划审批
+
+
+_PLAN = "目标：发周报。步骤：1) 整理 2) 发送。"
+
+
+async def test_submitting_a_plan_suspends_for_approval() -> None:
+    """exit_plan_mode 登记一次 kind=plan 的审批并挂起；事件带上计划与可选的执行模式。"""
+    gate = ScriptedGate("pending")
+    model = _calls((EXIT_PLAN_MODE, f'{{"plan":"{_PLAN}"}}'))
+    events = await _collect(_spec("plan"), gate, model=model, mode="plan")
+    required = next(e for e in events if e.type is EventType.APPROVAL_REQUIRED)
+    assert required.data["approval_kind"] == "plan"
+    assert required.data["args"] == {"plan": _PLAN}
+    assert required.data["execution_modes"] == ["manual", "auto"]
+    assert gate.asked[0]["kind"] == "plan"
+    assert events[-1].type is EventType.RUN_SUSPENDED
+
+
+async def test_an_approved_plan_switches_to_the_mode_the_user_picked() -> None:
+    """★ 计划获批 → 模式改成用户选的执行模式，同一轮接着按新模式判定。
+
+    续跑后模型调 send_report：规划模式下它会被拦下；切到自动后改为交判断器（P1 请示），
+    所以看到的是一次 auto_uncertain 的请示 —— 证明模式真的变了。
+    """
+    gate = ScriptedGate("pending")
+    model = _calls(("send_report", '{"text":"周报"}'))
+    events = await _resume(
+        _spec("plan"), {"status": "approved", "mode": "auto"}, model=model, mode="plan",
+        name=EXIT_PLAN_MODE, args={"plan": _PLAN}, gate=gate,
+    )  # fmt: skip
+    mode_events = [e for e in events if e.type is EventType.AGENT_MODE]
+    assert [e.data["effective"] for e in mode_events] == ["auto"]
+    assert mode_events[0].data["source"] == "plan_approved"
+    assert gate.asked and gate.asked[0]["source"] == "auto_uncertain"
+    assert not any(PLAN_BLOCKED_RESULT in r for r in _failed_results(events))
+
+
+async def test_a_rejected_plan_stays_in_plan_mode_with_the_feedback() -> None:
+    """提了修改意见：意见交给模型，模式不变（还是规划）。"""
+    model = TurnModel(scripts=[[AIMessageChunk(content="好，我改。")]])
+    events = await _resume(
+        _spec("plan"), {"status": "rejected", "feedback": "先补上验收标准"}, model=model,
+        mode="plan", name=EXIT_PLAN_MODE, args={"plan": _PLAN},
+    )  # fmt: skip
+    assert not [e for e in events if e.type is EventType.AGENT_MODE]
+    assert any("先补上验收标准" in r for r in _failed_results(events))
+
+
+async def test_submitting_a_plan_outside_plan_mode_is_refused() -> None:
+    """不在规划模式时调 exit_plan_mode：回错误、不登记审批（工具在所有模式下都可见）。"""
+    gate = ScriptedGate("pending")
+    model = _calls((EXIT_PLAN_MODE, f'{{"plan":"{_PLAN}"}}'))
+    events = await _collect(_spec("auto"), gate, model=model, mode="auto")
+    assert gate.asked == []
+    assert any("不在规划模式" in r for r in _failed_results(events))
+
+
+def test_a_plan_only_agent_is_refused() -> None:
+    """只许规划的智能体，计划没有执行模式可选，永远批不下来 —— 保存时就拦住。"""
+    with pytest.raises(InvalidSpec):
+        ApprovalSpec(default_mode="plan", allowed_modes=("plan",)).validate()
+    ApprovalSpec(default_mode="plan", allowed_modes=("plan", "manual")).validate()

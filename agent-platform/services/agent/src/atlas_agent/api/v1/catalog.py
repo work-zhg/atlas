@@ -3,8 +3,7 @@
 技能的内容、审查、发布在配置服务（atlas-config 的 /config/*）；这里只有运行时
 才知道的那一半：被谁引用、用得怎样、MCP server 此刻的工具定义。
 
-★ 角色检查（builder+ / 刷新 admin）等用户模块上线后加：现在的身份只有 dev 模式
-  （identity.py），没有角色可判。
+★ 角色检查（builder+ / 刷新 admin）还没加：这几个接口只要登录即可。
 """
 
 from __future__ import annotations

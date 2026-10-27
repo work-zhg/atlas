@@ -7,6 +7,7 @@ from . import methods
 from ._model import JsonObject, Model
 from .codes import (
     HEADER_SESSION,
+    LEGACY_HEADER_SESSION,
     SUBPROTOCOL_V1,
     SUBPROTOCOLS,
     CloseCode,
@@ -31,6 +32,7 @@ from .outcomes import (
 __all__ = [
     "DEFAULT_LIMITS",
     "HEADER_SESSION",
+    "LEGACY_HEADER_SESSION",
     "SUBPROTOCOLS",
     "SUBPROTOCOL_V1",
     "CancelCause",
