@@ -3,7 +3,7 @@
 走用户中心管理 API（需要一个有 app:manage + role:manage 的管理员账号）：
 - 应用「记忆服务」不存在则创建（应用编码 memory：内网调开放接口时 X-Caller-App 写它）；
   可访问范围只在创建时设为全员；
-- 操作码 memory:scope:manage（配置作用域）与角色 MEMORY_ADMIN；
+- 操作码 memory_scope:manage（配置作用域）与角色 MEMORY_ADMIN；
 - 数据编码：每个 check_permission=true 的作用域一个（§3.7）。新打开开关后要再跑一次。
 
 ★ 与 Atlas、AI TeamFlow 的同名脚本同一套做法，各自一份（不为几十行抽公共包）。

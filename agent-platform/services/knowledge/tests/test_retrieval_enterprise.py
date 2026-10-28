@@ -119,7 +119,8 @@ async def test_document_acl_enforced_for_agent_calls(client: Any, rt: Any) -> No
         return tags.get(user_id, [f"u:{user_id}"])
 
     rt.principal_resolver = resolver
-    ds = await _dataset(client)
+    # 全员只读：库级都能读，这里只看文档级
+    ds = await _dataset(client, permission="all_team")
     await _upload(client, rt, ds["id"], "薪酬调整方案：人力资源部内部。", "hr.txt", acl=["d:hr"])
     await _upload(client, rt, ds["id"], "差旅报销制度：全员适用。", "public.txt")
     sales = await _upload(
@@ -136,10 +137,10 @@ async def test_document_acl_enforced_for_agent_calls(client: Any, rt: Any) -> No
         assert r.status_code == 200, r.text
         return {x["document_name"] for x in r.json()["records"]}
 
-    # 按 auth-uid：bob 在销售部（上级部门 company 的授权也算）；carol 在人力；都没有只看公开
+    # 按 auth-uid：bob 在销售部（上级部门 company 的授权也算）；carol 在人力；没有主体什么都读不到
     assert await internal("bob") == {"public.txt", "sales.txt"}
     assert await internal("carol") == {"public.txt", "hr.txt"}
-    assert await internal(None) == {"public.txt"}
+    assert await internal(None) == set()
     # 库管理员调试（hit-testing）不受文档级权限限制
     assert _docs(await _hit(client, ds["id"], "方案")) == {"hr.txt", "public.txt", "sales.txt"}
 

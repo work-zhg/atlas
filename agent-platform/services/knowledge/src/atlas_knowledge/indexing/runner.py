@@ -11,6 +11,9 @@
   大文件中途失败或被暂停，不必重新解析。
 ★ 不设到点结束的超时（Atlas 原则）：慢就慢，用暂停 / 删除控制。
 ★ 每个阶段一个短事务：状态变化要让 API 立刻看得到。
+★ 进程被杀（部署、OOM）：锁一个 TTL 内自然释放，文档停在中间状态 —— 由巡检 recover_stalled
+  重新投递，从已完成的阶段之后续跑。不靠 Celery 重新投递：整个 Pod 被杀时，消息要等
+  visibility_timeout（7 天）才回到队列。
 """
 
 from __future__ import annotations
@@ -22,6 +25,7 @@ import time
 from typing import Any
 from uuid import UUID
 
+from atlas_redislock import LockBusy, LockLost, RedisLock
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -42,11 +46,15 @@ from ..telemetry import tracer
 from .loader import index_segments, sync_doc_payload
 from .versions import stores
 
-__all__ = ["DocumentPaused", "IndexingRunner", "is_paused", "pause_key"]
+__all__ = ["DocumentPaused", "IndexingRunner", "is_paused", "pause_key", "recover_stalled"]
 
 logger = logging.getLogger(__name__)
 
 _LOAD_BATCH = 64
+#: 入库锁的 TTL。不是工作时长上限：持有期间看门狗每 TTL/3 续一次，它只决定进程死后锁空悬多久
+LOCK_TTL_S = 60.0
+#: 只有持锁的入库任务才会把文档写成这些状态 —— 处在其中而锁不在，说明那个任务的进程已经死了
+IN_PROGRESS = ("parsing", "splitting", "indexing")
 
 
 def pause_key(document_uuid: str | UUID) -> str:
@@ -63,6 +71,29 @@ async def is_paused(redis: Any, document_uuid: str | UUID) -> bool:
 
 class DocumentPaused(Exception):
     pass
+
+
+async def recover_stalled(rt: Runtime, sm: async_sessionmaker[AsyncSession]) -> list[str]:
+    """巡检：处在入库中间状态、却没有任务持锁的文档重新投递，返回它们的 uuid。
+
+    ★ 不看 waiting：排队中的文档本来就没有锁，重复投递只会在队列里堆消息。
+    ★ 多个实例同时巡检、或刚好赶上任务结束，都只会多投一次：多出来的任务拿不到锁就跳过，
+      已完成的文档直接返回。
+    """
+    redis = rt.redis
+    if redis is None:
+        return []
+    async with sm() as s:
+        uuids = (
+            await s.scalars(select(Document.uuid).where(Document.indexing_status.in_(IN_PROGRESS)))
+        ).all()
+    stalled = [str(u) for u in uuids if not await redis.exists(lock_key(u))]
+    if stalled:
+        logger.warning("%d 个文档的入库任务已中断，重新投递：%s", len(stalled), stalled)
+        # 一个文档一个任务：分散到各个 worker，不在一个任务里串行续跑
+        for doc_uuid in stalled:
+            rt.dispatcher.indexing([doc_uuid])
+    return stalled
 
 
 class IndexingRunner:
@@ -86,10 +117,21 @@ class IndexingRunner:
     async def run(self, document_uuid: str | UUID) -> None:
         doc_uuid = UUID(str(document_uuid))
         redis = self._rt.redis
-        # ★ 同一文档同时只有一个入库任务；锁的过期只是兜底（进程被杀时自动释放），不是超时
-        if redis is not None and not await redis.set(lock_key(doc_uuid), "1", nx=True, ex=6 * 3600):
-            logger.info("文档 %s 已有入库任务在跑，跳过", doc_uuid)
+        if redis is None:
+            await self._guarded(doc_uuid)
             return
+        # ★ 同一文档同时只有一个入库任务。短 TTL + 看门狗续租，放锁校验 owner：
+        #   不会删掉别人后来拿到的锁
+        try:
+            async with RedisLock(redis, lock_key(doc_uuid), ttl_s=LOCK_TTL_S).hold():
+                await self._guarded(doc_uuid)
+        except LockBusy:
+            logger.info("文档 %s 已有入库任务在跑，跳过", doc_uuid)
+        except LockLost:
+            # 不改状态：锁可能已在接手的任务手里；没人接手时由巡检重新投递
+            logger.warning("文档 %s 入库中途失去锁，已中断", doc_uuid)
+
+    async def _guarded(self, doc_uuid: UUID) -> None:
         try:
             # ★ 入库是独立链路（任务经 Celery 异步投递，不挂在上传请求下）；按文档 id 查
             with tracer().start_as_current_span("knowledge.ingest") as span:
@@ -101,9 +143,6 @@ class IndexingRunner:
         except Exception as exc:
             logger.exception("文档 %s 入库失败", doc_uuid)
             await self._set(doc_uuid, indexing_status="error", error=str(exc)[:2000])
-        finally:
-            if redis is not None:
-                await redis.delete(lock_key(doc_uuid))
 
     async def _run(self, doc_uuid: UUID) -> None:
         async with self._sm() as s:

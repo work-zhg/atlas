@@ -124,6 +124,9 @@ class ExperimentConfig(BaseModel):
     #: 生成重复次数（检索是确定的，只跑一次）
     repeats: int = 1
     concurrency: int = 4
+    #: 等入库完成的上限（秒）。10 万段的公开检索集在 CPU 上向量化可能超过一小时；超时后
+    #: --resume 会复用入库中的库接着等
+    ingest_timeout_s: float = 3600
     #: unified = 取平台检索结果，用同一提示词与模型生成；none = 只评检索
     generation: Literal["unified", "none"] = "unified"
     generator_model: str = "deepseek-flash"

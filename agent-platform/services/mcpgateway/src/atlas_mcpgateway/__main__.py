@@ -163,15 +163,17 @@ def key_command(args: argparse.Namespace) -> int:
         from .migrate import issue_missing
 
         async def _missing(session: Any) -> Any:
-            use_outbound({"X-Uid": args.actor, "X-Auth-Uid": args.actor})
             perms = UCPermissions(settings.uc_base_url)
             try:
+                # ★ 部署脚本只知道账号（--actor-account）：先换成 uid，同 grant
+                actor = await _uid(perms, args.actor, args.actor_account)
+                use_outbound({"X-Uid": actor, "X-Auth-Uid": actor})
                 names = args.service or [
                     r.name
                     for r in await Registry(session, settings).list()
                     if r.status == "enabled"
                 ]
-                return await issue_missing(session, perms, names, actor=args.actor)
+                return await issue_missing(session, perms, names, actor=actor)
             finally:
                 await perms.aclose()
 
@@ -182,9 +184,10 @@ def key_command(args: argparse.Namespace) -> int:
         return 0
 
     async def _issue(session: Any) -> Any:
-        use_outbound({"X-Uid": args.actor, "X-Auth-Uid": args.actor})
         perms = UCPermissions(settings.uc_base_url)
         try:
+            actor = await _uid(perms, args.actor, args.actor_account)
+            use_outbound({"X-Uid": actor, "X-Auth-Uid": actor})
             user = await perms.user(args.subject)
         finally:
             await perms.aclose()
@@ -194,7 +197,7 @@ def key_command(args: argparse.Namespace) -> int:
             UUID(args.subject),
             subject_type=str(user.get("user_type") or "human"),
             subject_name=str(user.get("name") or ""),
-            actor=args.actor,
+            actor=actor,
         )
 
     row = asyncio.run(_with_session(_issue))
@@ -323,7 +326,7 @@ def _parser() -> argparse.ArgumentParser:
     key = sub.add_parser("key").add_subparsers(dest="action", required=True)
     issue = key.add_parser("issue")
     issue.add_argument("subject", help="持有人（用户中心 uid，人或数字员工）")
-    issue.add_argument("--actor", required=True)
+    _add_actor(issue)
     missing = key.add_parser("issue-missing", help="给有授权但没有 Key 的人批量发 Key")
     _add_actor(missing)
     missing.add_argument(

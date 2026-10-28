@@ -21,6 +21,12 @@ from ..db.models import Agent, AgentVersion, RunEvent, Thread
 from ..domain.messages import from_storage
 from ..domain.spec import resolve_summarizer_model
 from ..errors import Conflict, NotFound
+from ..providers.llm.model_platform import (
+    admit_models,
+    agent_key,
+    key_endpoint,
+    uses_model_platform,
+)
 from ..repositories.run import RunRepository
 from .compaction import ThreadSummarizer
 
@@ -91,7 +97,16 @@ class ContextService:
             model = resolve_summarizer_model(
                 comp.get("summarizer_model"), (spec.get("model") or {}).get("model") or ""
             )
-        summarizer = ThreadSummarizer(self._settings, self._build_model, model=model or None)
+        endpoint = None
+        if uses_model_platform(self._settings) and agent is not None:
+            # 经模型管理平台：智能体的客户端 Key，摘要模型要在它的可用模型里（同 Run 开始的检查）
+            key = await agent_key(self._settings, agent.id, agent.name)
+            admit_models(key, [model or self._settings.summarizer_model])
+            assert key.key is not None
+            endpoint = key_endpoint(self._settings, key.key)
+        summarizer = ThreadSummarizer(
+            self._settings, self._build_model, model=model or None, endpoint=endpoint
+        )
         summary = await summarizer([*prior, *history], focus=focus)
 
         await self._s.execute(

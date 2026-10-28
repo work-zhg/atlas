@@ -4,8 +4,8 @@
 必审工具。请示的等待方式是「挂起」（doc/detail/suspension.html §06）：pending 时工具**不执行**、
 本段挂起、approval_id 可复现（否则续跑会死循环）。
 
-被测的工具 `send_report` 没有只读注解 → 外部副作用：手动模式请示、自动模式交判断器（P1 还没有
-判断器，请示）、规划模式拦下。
+被测的工具 `send_report` 没有只读注解 → 外部副作用：手动模式请示、自动模式交判断器（这里都没装
+判断器，请示；装了判断器的见 test_auto_judge.py）、规划模式拦下。
 """
 
 from __future__ import annotations
@@ -128,7 +128,7 @@ _MATRIX = {
     #            read     plan     write    execute  external delegate
     "plan": ("allow", "allow", "block", "block", "block", "block"),
     "manual": ("allow", "allow", "ask", "ask", "ask", "ask"),
-    # P1 没有判断器：execute / external 请示；delegate 放行（子 run 继承模式，动作照样受管）
+    # 没有判断器：execute / external 请示；delegate 放行（子 run 继承模式，动作照样受管）
     "auto": ("allow", "allow", "allow", "ask", "ask", "allow"),
 }
 _EFFECTS = (
@@ -185,7 +185,7 @@ async def test_an_unknown_tool_is_treated_as_external() -> None:
 
 
 async def test_an_irreversible_write_is_not_auto_approved() -> None:
-    """删除是不可逆的写入：自动模式下不直接放行（P1 请示）；普通写入照常放行。"""
+    """删除是不可逆的写入：自动模式下不直接放行（交判断器，没有判断器时请示）；普通写入照常放行。"""
     effects = {"delete": ToolEffect.WRITE, "write_file": ToolEffect.WRITE}
     assert await _verdict("auto", "delete", effects, irreversible=("delete",)) == "ask"
     assert await _verdict("auto", "write_file", effects, irreversible=("delete",)) == "allow"
@@ -420,7 +420,7 @@ async def test_plan_mode_blocks_side_effects_without_suspending() -> None:
 
 
 async def test_auto_mode_asks_for_external_tools_until_the_classifier_exists() -> None:
-    """自动模式下外部副作用交判断器；P1 还没有判断器，请示，并写明原因。"""
+    """自动模式下外部副作用交判断器；没有配置判断器时请示，并写明原因。"""
     gate = ScriptedGate("pending")
     events = await _collect(_spec("auto"), gate, mode="auto")
     assert EventType.RUN_SUSPENDED in [e.type for e in events]
@@ -469,7 +469,7 @@ async def test_submitting_a_plan_suspends_for_approval() -> None:
 async def test_an_approved_plan_switches_to_the_mode_the_user_picked() -> None:
     """★ 计划获批 → 模式改成用户选的执行模式，同一轮接着按新模式判定。
 
-    续跑后模型调 send_report：规划模式下它会被拦下；切到自动后改为交判断器（P1 请示），
+    续跑后模型调 send_report：规划模式下它会被拦下；切到自动后改为交判断器（没有判断器，请示），
     所以看到的是一次 auto_uncertain 的请示 —— 证明模式真的变了。
     """
     gate = ScriptedGate("pending")

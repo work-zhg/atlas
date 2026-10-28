@@ -2,7 +2,7 @@
 
 GET   /v1/scopes                 列出作用域（不需要身份：配置不敏感，客户端据此知道字段）
 GET   /v1/scopes/{scope}
-POST  /v1/admin/scopes           新建（要 memory:scope:manage）
+POST  /v1/admin/scopes           新建（要 memory_scope:manage）
 PATCH /v1/admin/scopes/{scope}   改描述、数据权限开关、数据编码（字段不能改）
 """
 

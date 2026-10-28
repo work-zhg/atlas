@@ -38,6 +38,12 @@ export const KNOWLEDGE_API_BASE =
  */
 export const MCP_GATEWAY_API_BASE =
   process.env.NEXT_PUBLIC_MCP_GATEWAY_API_BASE ?? "http://127.0.0.1:8070";
+/**
+ * 模型管理平台（atlas-modelgateway，agent-platform/doc/design/model-design.html）的管理端接口：
+ * 模型、授权、API Key。同样浏览器直连、经网关同源（/model-gateway-api）。
+ */
+export const MODEL_GATEWAY_API_BASE =
+  process.env.NEXT_PUBLIC_MODEL_GATEWAY_API_BASE ?? "http://127.0.0.1:8090";
 
 /**
  * 请求头（doc/identity-propagation-design.html §4）：身份在用户中心的 HttpOnly 会话 Cookie 里
@@ -63,6 +69,7 @@ export const atlasClient: AtlasClientConfig = { apiBase: API_BASE, headers: auth
 const configClient: AtlasClientConfig = { apiBase: CONFIG_API_BASE, headers: authHeaders };
 const knowledgeClient: AtlasClientConfig = { apiBase: KNOWLEDGE_API_BASE, headers: authHeaders };
 const mcpGatewayClient: AtlasClientConfig = { apiBase: MCP_GATEWAY_API_BASE, headers: authHeaders };
+const modelGatewayClient: AtlasClientConfig = { apiBase: MODEL_GATEWAY_API_BASE, headers: authHeaders };
 
 export function apiUrl(
   path: string,
@@ -100,3 +107,6 @@ export const knowledgeHttp = makeHttp(knowledgeClient);
 
 /** MCP 网关管理端接口的请求出口。 */
 export const mcpGatewayHttp = makeHttp(mcpGatewayClient);
+
+/** 模型网关管理端接口的请求出口。 */
+export const modelGatewayHttp = makeHttp(modelGatewayClient);

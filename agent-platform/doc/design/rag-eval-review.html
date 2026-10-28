@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Atlas RAG 评测：现状与业界对标</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --border: #d1d9e0; --head: #f6f8fa;
+    --accent: #0969da; --ok: #1a7f37; --ok-bg: #dafbe1; --warn: #9a6700; --warn-bg: #fff8c5;
+    --bad: #cf222e; --bad-bg: #ffebe9; --code-bg: #f6f8fa;
+    --b1: #ddf4ff; --b1d: #54aeff; --b2: #fbefff; --b2d: #c297ff; --b3: #dafbe1; --b3d: #4ac26b;
+    --b4: #fff8c5; --b4d: #d4a72c; --b5: #ffebe9; --b5d: #ff8182;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --border: #3d444d; --head: #151b23;
+      --accent: #4493f8; --ok: #3fb950; --ok-bg: #12261e; --warn: #d29922; --warn-bg: #2b2111;
+      --bad: #f85149; --bad-bg: #2d1214; --code-bg: #151b23;
+      --b1: #12263f; --b1d: #1f6feb; --b2: #271a36; --b2d: #8957e5; --b3: #12261e; --b3d: #2ea043;
+      --b4: #2b2111; --b4d: #9e6a03; --b5: #2d1214; --b5d: #da3633;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 32px; background: var(--bg); color: var(--fg);
+         font: 14px/1.75 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif; }
+  main { max-width: 1120px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 44px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 15.5px; margin: 24px 0 8px; }
+  a { color: var(--accent); }
+  .sub { color: var(--muted); margin: 0 0 14px; }
+  code { font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code-bg); padding: 1px 4px; border-radius: 4px; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0 16px; }
+  th, td { border: 1px solid var(--border); padding: 7px 10px; vertical-align: top; text-align: left; }
+  th { background: var(--head); white-space: nowrap; }
+  td.c { text-align: center; }
+  td.n { white-space: nowrap; }
+  .src { color: var(--muted); font-size: 12.5px; }
+  .callout { border-left: 4px solid var(--accent); background: var(--head); padding: 10px 14px; border-radius: 4px; margin: 14px 0; }
+  .callout.warn { border-color: var(--warn); background: var(--warn-bg); }
+  .callout.bad { border-color: var(--bad); background: var(--bad-bg); }
+  .tag { display: inline-block; padding: 0 7px; border-radius: 9px; font-size: 12px; font-weight: 600; border: 1px solid; white-space: nowrap; }
+  .tag.ok { color: var(--ok); background: var(--ok-bg); border-color: var(--ok); }
+  .tag.warn { color: var(--warn); background: var(--warn-bg); border-color: var(--warn); }
+  .tag.bad { color: var(--bad); background: var(--bad-bg); border-color: var(--bad); }
+  .tag.lead { color: var(--accent); background: var(--b1); border-color: var(--accent); }
+  .toc { columns: 2; padding-left: 18px; }
+  .fig { border: 1px solid var(--border); border-radius: 6px; padding: 10px; overflow-x: auto; margin: 10px 0 6px; }
+  .cap { color: var(--muted); font-size: 12.5px; margin: 0 0 16px; text-align: center; }
+  ol.refs { font-size: 13px; }
+  ol.refs li { margin: 2px 0; }
+  svg text { fill: var(--fg); font-size: 12px; font-family: -apple-system, "PingFang SC", sans-serif; }
+  svg .s { font-size: 11px; fill: var(--muted); }
+  svg .b { font-weight: 600; }
+  svg .c1 { fill: var(--b1); stroke: var(--b1d); } svg .c2 { fill: var(--b2); stroke: var(--b2d); }
+  svg .c3 { fill: var(--b3); stroke: var(--b3d); } svg .c4 { fill: var(--b4); stroke: var(--b4d); }
+  svg .c5 { fill: var(--b5); stroke: var(--b5d); }
+  svg .inner { fill: var(--bg); stroke: var(--border); }
+  svg .ln { stroke: var(--fg); stroke-width: 1.3; fill: none; }
+  svg .lnok { stroke: var(--ok); stroke-width: 1.6; fill: none; }
+  svg .dash { stroke-dasharray: 5 4; }
+  svg .badline { stroke: var(--bad); stroke-width: 1.4; fill: none; stroke-dasharray: 5 4; }
+  svg .arw { fill: var(--fg); }
+  svg .arwok { fill: var(--ok); }
+  svg .tbad { fill: var(--bad); }
+  svg .tok { fill: var(--ok); }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <marker id="ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="arw" d="M0,0 L8,4 L0,8 z"/></marker>
+  <marker id="arok" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="arwok" d="M0,0 L8,4 L0,8 z"/></marker>
+</defs></svg>
+<main>
+<h1>Atlas RAG 评测：现状与业界对标</h1>
+<p class="sub">日期：2026-10-28 · 范围：知识库（RAG）的离线评测、线上评测与专项评测；Agent 工程能力评测不在本文范围<br>
+图例：<span class="tag ok">对齐</span> 与业界主流做法一致 · <span class="tag lead">领先</span> 比常见做法更严谨 · <span class="tag warn">部分</span> 有，但有明显缺口 · <span class="tag bad">缺失</span> 没有</p>
+
+<ol class="toc" start="0">
+  <li><a href="#s0">结论</a></li>
+  <li><a href="#s1">评测要回答的问题</a></li>
+  <li><a href="#s2">业界做法</a></li>
+  <li><a href="#s3">Atlas 现状</a></li>
+  <li><a href="#s4">逐项对标</a></li>
+  <li><a href="#s5">改进路线</a></li>
+  <li><a href="#s6">参考资料</a></li>
+</ol>
+
+<!-- ====================================================================== -->
+<h2 id="s0">0. 结论</h2>
+
+<div class="callout">
+<b>框架骨架与业界一致，部分做法更严谨；但「能证明 RAG 能力」的三个前提都还没具备。</b><br>
+骨架：只通过 HTTP 评测、跑题与判分分离、检索与生成分开评、出处按原文片段匹配、CRAG 三值计分、bootstrap 置信区间与配对比较 —— 这些和 RAGAS / TREC RAG / 云厂商的做法一致；其中出处匹配不依赖分段 ID，换分段方式后标注不会失效，比 Dify 内置的 golden question（按分段判定）更适合比较分段方式。<br>
+缺的三个前提：
+<ol style="margin:6px 0 0">
+  <li><b>评测集</b>：只有 20 题自建样例集，按标题分段后检索和生成都是 100%，已饱和。按配对估算，20 题只能检出 24 个百分点以上的差距（§3.3）。</li>
+  <li><b>裁判可信度</b>：裁判（deepseek-v4-pro）和生成模型（deepseek-flash）是同一家的模型，没有和人工标注做过一致性校准；RAGAS 提示词仍是英文。</li>
+  <li><b>评测对象</b>：评测直接调单库的召回测试接口，生成用的是评测自己的提示词。智能体决策、多库路由、对话改写、权限、引用这些用户实际会走到的环节，都没有被评到（§3.1 图 2）。</li>
+</ol>
+</div>
+
+<table>
+  <tr><th>优先级</th><th>做什么</th><th>解决的问题</th></tr>
+  <tr><td class="n">P0</td><td>补评测集：中文公开集 + 企业文档合成出题（人工审核），先做到约 500 题；裁判换另一家的模型，抽 100 题人工标注做校准；比较时按相同上下文长度对齐</td><td>结论可信</td></tr>
+  <tr><td class="n">P1</td><td>经智能体的端到端评测；引用评测；上下文充分性判定与细粒度归因；RAG 回归门槛（含索引版本切换前对比）；权限泄漏专项</td><td>测到用户实际走的链路</td></tr>
+  <tr><td class="n">P2</td><td>多轮、解析、文档注入专项；线上抽样评测 + 人工复核队列 + 错题回流；与 Dify / RAGFlow 横比</td><td>覆盖面与持续化</td></tr>
+</table>
+
+<!-- ====================================================================== -->
+<h2 id="s1">1. 评测要回答的问题</h2>
+<p>不同用途需要的评测集、指标和频率都不一样。业界通常不会用一套评测回答全部问题，而是分开建。</p>
+<table>
+  <tr><th>用途</th><th>要回答的问题</th><th>需要的评测</th><th>频率</th></tr>
+  <tr><td>选型与调参</td><td>分段方式、向量 / 重排模型、检索方式、入库增强、查询理解，哪个更好？好多少？</td><td>组件级离线评测；有标注的评测集；同等条件的配对比较</td><td>做决策时</td></tr>
+  <tr><td>发布回归</td><td>改代码、换模型、切索引版本之后，效果有没有退化？</td><td>固定的回归小样本 + 门槛；结果与基线对比</td><td>每次发布、每次切换索引版本</td></tr>
+  <tr><td>能力证明与横比</td><td>Atlas 比朴素基线、比 Dify / RAGFlow 强在哪、弱在哪？</td><td>公开评测集 + 官方口径；统一模型与上下文长度</td><td>阶段性</td></tr>
+  <tr><td>线上质量</td><td>真实用户的问题答得怎么样？哪些库、哪类问题差？</td><td>不需要参考答案的指标；线上抽样评测 + 人工复核</td><td>持续</td></tr>
+  <tr><td>安全</td><td>会不会把无权限的文档内容答出来？文档里藏的指令会不会被执行？</td><td>专项测试：泄漏率、攻击成功率</td><td>每次改权限 / 检索链路</td></tr>
+</table>
+
+<!-- ====================================================================== -->
+<h2 id="s2">2. 业界做法</h2>
+
+<h3>2.1 共识：分层评测</h3>
+<p>各方（RAGAS、TREC RAG、Bedrock、Microsoft Foundry、RAGChecker）的共同做法：把链路拆成几层分别评，再加一层端到端与线上。分层评的好处是能定位问题 —— 检索没找到，生成不可能答对；检索找到了还答错，是生成的问题。</p>
+
+<div class="fig">
+<svg viewBox="0 0 1080 360" width="100%" role="img" aria-label="业界 RAG 分层评测">
+  <rect x="10" y="10" width="200" height="250" rx="8" class="c4"/>
+  <text x="110" y="34" text-anchor="middle" class="b">① 解析</text>
+  <text x="24" y="60">文本 / 表格 / 公式准确度</text>
+  <text x="24" y="82">版面与阅读顺序</text>
+  <text x="24" y="104">入库成功率</text>
+  <text x="24" y="140" class="s">OmniDocBench（中英）</text>
+  <text x="24" y="158" class="s">ViDoRe v3（视觉文档检索）</text>
+  <text x="24" y="176" class="s">CHaystack（中文文档）</text>
+
+  <rect x="225" y="10" width="200" height="250" rx="8" class="c1"/>
+  <text x="325" y="34" text-anchor="middle" class="b">② 检索</text>
+  <text x="239" y="60">有标注：Recall / MRR / nDCG</text>
+  <text x="239" y="82">无标注：相关性分级</text>
+  <text x="239" y="104">覆盖：上下文召回</text>
+  <text x="239" y="126">上下文是否充分</text>
+  <text x="239" y="162" class="s">BEIR / MTEB / C-MTEB</text>
+  <text x="239" y="180" class="s">UMBRELA（0–3 分级）</text>
+  <text x="239" y="198" class="s">Google Sufficient Context</text>
+
+  <rect x="440" y="10" width="200" height="250" rx="8" class="c3"/>
+  <text x="540" y="34" text-anchor="middle" class="b">③ 生成</text>
+  <text x="454" y="60">正确性 / 完整性</text>
+  <text x="454" y="82">忠实度（有无依据）</text>
+  <text x="454" y="104">引用准确率 / 覆盖率</text>
+  <text x="454" y="126">拒答（该拒 / 误拒）</text>
+  <text x="454" y="162" class="s">CRAG 三值计分</text>
+  <text x="454" y="180" class="s">TREC nugget 召回</text>
+  <text x="454" y="198" class="s">RAGAS · RAGChecker 诊断</text>
+
+  <rect x="655" y="10" width="200" height="250" rx="8" class="c2"/>
+  <text x="755" y="34" text-anchor="middle" class="b">④ 端到端</text>
+  <text x="669" y="60">经真实应用 / 智能体</text>
+  <text x="669" y="82">多轮对话</text>
+  <text x="669" y="104">智能体的检索决策</text>
+  <text x="669" y="126">权限、注入等安全</text>
+  <text x="669" y="162" class="s">MTRAG / MTRAG-UN</text>
+  <text x="669" y="180" class="s">BrowseComp-Plus</text>
+  <text x="669" y="198" class="s">OpenRAG-Soc（注入）</text>
+
+  <rect x="870" y="10" width="200" height="250" rx="8" class="c5"/>
+  <text x="970" y="34" text-anchor="middle" class="b">⑤ 线上</text>
+  <text x="884" y="60">链路追踪上抽样打分</text>
+  <text x="884" y="82">不需要参考答案的指标</text>
+  <text x="884" y="104">人工复核队列</text>
+  <text x="884" y="126">错题回流成评测题</text>
+  <text x="884" y="162" class="s">Langfuse / Phoenix</text>
+  <text x="884" y="180" class="s">MLflow 裁判对齐</text>
+  <text x="884" y="198" class="s">Dify 检索记录</text>
+
+  <path d="M210,135 L225,135" class="ln" marker-end="url(#ar)"/>
+  <path d="M425,135 L440,135" class="ln" marker-end="url(#ar)"/>
+  <path d="M640,135 L655,135" class="ln" marker-end="url(#ar)"/>
+  <path d="M855,135 L870,135" class="ln" marker-end="url(#ar)"/>
+  <path d="M970,260 L970,280 L110,280 L110,262" class="ln dash" marker-end="url(#ar)"/>
+  <text x="540" y="274" text-anchor="middle" class="s">线上发现的错题 → 回流进各层评测集</text>
+
+  <rect x="10" y="296" width="1060" height="54" rx="8" class="inner"/>
+  <text x="26" y="318" class="b">横跨各层</text>
+  <text x="100" y="318">裁判：LLM-as-judge 为主，结构化评分标准、与生成模型不同家、多裁判集成，并与人工标注校准一致率</text>
+  <text x="100" y="340">统计：标准误 / 置信区间，同一文档多题按簇计算，配对比较，按功效分析定样本量</text>
+</svg>
+</div>
+<p class="cap">图 1　业界 RAG 评测的分层与代表做法</p>
+
+<h3>2.2 指标</h3>
+<table>
+  <tr><th>层</th><th>指标</th><th>做法</th><th>代表实现</th></tr>
+  <tr><td rowspan="4">检索</td><td>命中率 / 召回率@k、MRR、nDCG@10</td><td>有标注（相关文档或段落）时用标准 IR 公式；口径与 pytrec_eval 一致</td><td>BEIR、MTEB / C-MTEB、ranx、Microsoft Document Retrieval、Dify golden question（按分段二值通过）</td></tr>
+  <tr><td>相关性分级（无标注）</td><td>大模型逐段打 0–3 分，再算 precision / nDCG；不需要标准出处，适合线上和私有文档</td><td>UMBRELA（TREC 2024–2025 用来替代人工相关性判断）、RAGAS 上下文精确率、Microsoft Retrieval、Bedrock Context relevance</td></tr>
+  <tr><td>上下文召回 / 覆盖</td><td>把参考答案拆成陈述，看检索结果覆盖了几成</td><td>RAGAS Context recall、Bedrock Context coverage、RAGChecker Claim recall</td></tr>
+  <tr><td>上下文是否充分</td><td>判断「只看这些段落能否给出确定答案」；把「检索命中但信息不全」和「信息全了还答错」分开</td><td>Google Sufficient Context（ICLR 2025，自动判定准确率约 93%）</td></tr>
+  <tr><td rowspan="5">生成</td><td>正确性 / 完整性</td><td>与参考答案比对；三值计分惩罚编造；或把参考答案拆成要点（nugget），算必备要点的召回</td><td>CRAG（正确 +1 / 没答 0 / 答错 −1）、TREC RAG（strict vital nugget recall）、RAGAS Factual correctness、Bedrock Correctness + Completeness、Microsoft Response Completeness</td></tr>
+  <tr><td>忠实度 / 幻觉</td><td>回答的每条陈述是否都能在检索结果中找到依据（不看对错）</td><td>RAGAS Faithfulness、Microsoft Groundedness（Pro 版用内容安全服务，不需要部署模型）、Vectara HHEM、MiniCheck 等小模型</td></tr>
+  <tr><td>引用</td><td>引用准确率（标的出处是否真支持这句话）+ 引用覆盖率（该标的有没有标）；两者要一起看</td><td>Bedrock Citation precision / coverage、Open RAG Eval 引用忠实度、TREC 逐句支持度评估、ALCE</td></tr>
+  <tr><td>拒答</td><td>资料里没有答案时拒答的比例；有答案时误拒的比例</td><td>RGB 拒答测试、CRAG「没答」、MTRAG-UN 无答案题、Microsoft Quality Grader 的 abstention</td></tr>
+  <tr><td>细粒度诊断</td><td>陈述级比对：上下文利用率、对相关 / 无关噪声的敏感度、靠模型自身知识答对的比例</td><td>RAGChecker（实验显示上下文利用率与总体 F1 相关性最高）</td></tr>
+  <tr><td>工程</td><td>入库耗时与成功率、检索 / 生成延迟 p50 / p95、token 与成本</td><td>各平台自带；BrowseComp-Plus 等评测会固定上下文长度（每段 512 token × 前 5 段），避免「返回越多越好」</td><td>—</td></tr>
+</table>
+
+<h3>2.3 评测集</h3>
+<table>
+  <tr><th>类别</th><th>评测集</th><th>语言</th><th>规模与内容</th><th>适合评什么</th></tr>
+  <tr><td rowspan="3">检索 / 向量模型</td><td>C-MTEB（MTEB cmn v1）检索子集</td><td>中</td><td>DuRetrieval、T2Retrieval 等 8 个子集，nDCG@10</td><td>中文向量 / 重排模型选型；可与公开榜单对照</td></tr>
+  <tr><td>BEIR、MTEB / MMTEB v2</td><td>英 / 多语</td><td>多领域检索；MMTEB 覆盖上百种语言</td><td>英文与多语检索</td></tr>
+  <tr><td>BRIGHT</td><td>英</td><td>需要推理才能找对的检索题</td><td>检索模型的推理能力</td></tr>
+  <tr><td rowspan="8">端到端问答</td><td>CRUD-RAG</td><td>中</td><td>8 万余篇新闻；问答（1–3 文档）、续写、摘要、纠错</td><td>中文端到端主力</td></tr>
+  <tr><td>RGB</td><td>中英</td><td>抗噪声、拒答、信息整合、反事实四个测试集</td><td>拒答与鲁棒性</td></tr>
+  <tr><td>MultiHop-RAG</td><td>英</td><td>2556 题，证据分布在 2–4 篇文档</td><td>多跳、跨文档</td></tr>
+  <tr><td>CRAG</td><td>英</td><td>4409 题，五大领域；简单、比较、聚合、多跳、时效、错误前提</td><td>综合与可信度（非商用许可）</td></tr>
+  <tr><td>FRAMES</td><td>英</td><td>824 题，每题需要多篇维基文章</td><td>多跳推理与汇总</td></tr>
+  <tr><td>LiveRAG</td><td>英</td><td>895 题（SIGIR 2025 竞赛题），每题带难度与区分度（IRT 标定）</td><td>按难度分层分析</td></tr>
+  <tr><td>EnterpriseRAG-Bench（Onyx）</td><td>英</td><td>约 51 万篇模拟公司内部文档（wiki、工单、邮件、会议纪要、代码评审等）、500 道专家核验题；附生成工具</td><td>企业内部知识场景；可借它的生成工具做中文版</td></tr>
+  <tr><td>EnterpriseRAG（2026）</td><td>中</td><td>来自国内企业真实运行日志</td><td>多约束指令遵循 + 噪声检索下的鲁棒性</td></tr>
+  <tr><td rowspan="2">多轮</td><td>MTRAG</td><td>英</td><td>110 段对话、842 轮任务（平均 7.7 轮）</td><td>对话改写、后续轮次、无答案题</td></tr>
+  <tr><td>MTRAG-UN（SemEval 2026 Task 8）</td><td>英</td><td>666 题：无答案、问题不完整、依赖上文、回答不清</td><td>多轮的难点专项</td></tr>
+  <tr><td>智能体检索</td><td>BrowseComp-Plus</td><td>英</td><td>830 题，固定约 10 万篇文档语料（含人工核验的证据与难负例）</td><td>智能体 + 检索器组合；整个轨迹的证据召回、检索次数</td></tr>
+  <tr><td rowspan="3">解析 / 文档</td><td>OmniDocBench v1.5 / v1.6</td><td>中英</td><td>1355 / 1651 页，9–10 类文档；文字、表格、公式</td><td>PDF 解析器选型（不同版本的分数不能比）</td></tr>
+  <tr><td>ViDoRe v3</td><td>6 种语言</td><td>10 个行业文档集、2.6 万页、3099 题，带证据框；保留 2 个私有集防过拟合</td><td>表格、图表多的企业文档检索与问答</td></tr>
+  <tr><td>FinanceBench</td><td>英</td><td>开源 150 题，财报 PDF + 页级证据</td><td>长 PDF、表格、数值</td></tr>
+  <tr><td rowspan="2">安全</td><td>OpenRAG-Soc、RAG Security Bench、PoisonedRAG</td><td>英</td><td>文档中藏指令、知识库投毒；攻击成功率与排名变化</td><td>文档注入防护</td></tr>
+  <tr><td>权限泄漏</td><td>—</td><td>没有公认基准。常见做法：每篇受限文档埋唯一标记串，检查检索结果、上下文、引用、回答里是否出现</td><td>泄漏率要和授权用户的召回率一起看（全部拒绝也能做到零泄漏）</td></tr>
+</table>
+
+<h3>2.4 评测题从哪来</h3>
+<table>
+  <tr><th>来源</th><th>做法</th><th>优点</th><th>问题</th></tr>
+  <tr><td>公开集</td><td>导入并统一格式；固定版本；按场景分层抽样</td><td>人工标注、可对照论文与榜单</td><td>与业务分布不同；可能已被模型训练过（数据污染）</td></tr>
+  <tr><td>合成出题</td><td>RAGAS TestsetGenerator（从文档建知识图谱，按比例出单跳 / 多跳题）；DataMorgana（用户画像 × 问题类别组合，控制问法的多样性）；生成后人工审核</td><td>能覆盖私有文档；成本低</td><td>题目偏「照着原文问」；必须人工审核；需要单独补拒答题</td></tr>
+  <tr><td>线上沉淀</td><td>从线上链路追踪里挑题加入评测集（Langfuse / Phoenix 数据集）；Dify 在召回测试页一键「保留为 golden question」</td><td>最贴近真实分布</td><td>需要人补参考答案或标准出处</td></tr>
+  <tr><td>难度标定</td><td>LiveRAG 用项目反应理论给每题估难度与区分度</td><td>剔除没有区分度的题，避免饱和</td><td>需要多个系统的作答结果</td></tr>
+</table>
+
+<h3>2.5 裁判</h3>
+<table>
+  <tr><th>做法</th><th>说明</th></tr>
+  <tr><td>大模型裁判为主</td><td>正确性、忠实度、引用基本都由大模型判；评分标准写成结构化细则，输出 JSON，温度 0。</td></tr>
+  <tr><td>裁判与被测模型不同家</td><td>避免裁判偏向同类回答。TREC 2025 用多个模型（GPT-4.1、Gemini 2.5 Pro、Qwen3 等）分别生成要点再合并。</td></tr>
+  <tr><td>与人工校准</td><td>Langfuse：标注队列收集人工打分，在分数分析里和裁判对比；MLflow：<code>align()</code> 按人工反馈自动改写裁判，至少 10 条、建议 50–100 条。</td></tr>
+  <tr><td>只在配置级下结论</td><td>TREC 的结论：自动评估与人工在<b>系统排名</b>上一致性高（nugget 自动评估与人工后编辑相比 Kendall τ 约 0.89），但<b>单题</b>上噪声明显大于人工。另有研究指出循环问题：被测系统用同一个大模型做重排时，自动评估的排名一致性明显下降。</td></tr>
+  <tr><td>小模型裁判</td><td>HHEM、MiniCheck、ARES（训练轻量裁判 + 少量人工标注修正）用于线上大流量、低成本的忠实度判断。</td></tr>
+</table>
+
+<h3>2.6 统计</h3>
+<p>Anthropic《Adding Error Bars to Evals》给出的做法已成为常用口径：</p>
+<table>
+  <tr><th>做法</th><th>说明</th></tr>
+  <tr><td>报告标准误 / 置信区间</td><td>不只报平均分。</td></tr>
+  <tr><td>按簇计算标准误</td><td>同一篇文档出了多道题时，题目之间不独立。按簇计算后，标准误可能比按题独立计算的大好几倍（论文里 DROP 上约 3 倍）。</td></tr>
+  <tr><td>重复采样降方差</td><td>同一题多次生成取平均，降低生成随机性带来的波动。</td></tr>
+  <tr><td>配对比较</td><td>两个配置在同一批题上比较时，用逐题差值算区间，比两个平均分各自算区间再比更灵敏。</td></tr>
+  <tr><td>功效分析定样本量</td><td>先定「要检出多大的差距」，再算需要多少题。</td></tr>
+</table>
+
+<h3>2.7 平台与工具的内置能力</h3>
+<table>
+  <tr><th>平台 / 工具</th><th>检索评测</th><th>生成评测</th><th>持续化</th><th>备注</th></tr>
+  <tr><td>Dify</td><td>golden question：问题 + 必须召回的分段（全部或任一），二值通过；可从召回测试一键沉淀、CSV 导入</td><td>无</td><td>每次运行留记录，可对比改设置前后</td><td>按分段判定，换分段方式后标注要重做（推断）</td></tr>
+  <tr><td>RAGFlow</td><td colspan="3">没有内置评测（评测与回归的需求 issue #15033 在 2026-05 提出，仍未关闭）；只有分段可视化与可追溯引用，靠人工检查</td><td>官方讨论建议用 RAGAS</td></tr>
+  <tr><td>Amazon Bedrock</td><td>只检索：上下文相关性、上下文覆盖率</td><td>正确性、完整性、有用性、逻辑连贯、忠实度、引用准确率 / 覆盖率、有害性、拒答</td><td>评测任务；可带入外部系统的结果（BYOI）</td><td>全部由大模型判</td></tr>
+  <tr><td>Microsoft Foundry</td><td>Retrieval（无标注）、Document Retrieval（有标注，不用大模型）</td><td>Groundedness / Groundedness Pro、Relevance、Response Completeness、Quality Grader</td><td>云上评测；可接 CI</td><td>智能体评测不会自动带上 RAG 指标，要自己映射字段</td></tr>
+  <tr><td>Open RAG Eval（Vectara）</td><td>UMBRELA 相关性分级</td><td>AutoNuggetizer、引用忠实度、HHEM 幻觉检测</td><td>多次运行对比、绘图</td><td>不需要标准答案；方法来自 TREC RAG</td></tr>
+  <tr><td>RAGAS</td><td>上下文精确率 / 召回率</td><td>忠实度、事实正确性、回答相关性、噪声敏感度等</td><td>出题器</td><td>事实标准指标库；0.4.3（2026-01）之后未再发版，主分支最后提交 2026-02</td></tr>
+  <tr><td>RAGChecker</td><td>陈述级召回、上下文精确率</td><td>上下文利用率、噪声敏感度、幻觉、自身知识、忠实度</td><td>—</td><td>诊断粒度最细</td></tr>
+  <tr><td>Langfuse</td><td colspan="2">在线评测：对线上链路的检索 / 生成节点按规则抽样，跑大模型裁判（含 RAGAS 提供的模板）</td><td>标注队列、数据集、实验对比</td><td>Atlas 已接入它做链路追踪</td></tr>
+</table>
+
+<!-- ====================================================================== -->
+<h2 id="s3">3. Atlas 现状</h2>
+
+<h3>3.1 评测的是哪一段</h3>
+<p>评测框架（atlas-bench）只通过知识库服务的公开接口工作：建库入库，然后对每道题调单库的召回测试接口取检索结果，用评测自己的提示词和模型统一生成回答，最后离线判分。下图对照用户实际走的链路：</p>
+
+<div class="fig">
+<svg viewBox="0 0 1080 330" width="100%" role="img" aria-label="生产链路与评测链路">
+  <text x="20" y="26" class="b">用户实际走的链路</text>
+  <rect x="20" y="40" width="120" height="70" rx="6" class="c1"/>
+  <text x="80" y="70" text-anchor="middle" class="b">用户提问</text>
+  <text x="80" y="90" text-anchor="middle" class="s">多轮对话</text>
+
+  <rect x="170" y="40" width="190" height="70" rx="6" class="c5"/>
+  <text x="265" y="64" text-anchor="middle" class="b">智能体</text>
+  <text x="265" y="83" text-anchor="middle" class="s">自动注入 / 工具调用</text>
+  <text x="265" y="99" text-anchor="middle" class="s">ACP 经 MCP</text>
+
+  <rect x="390" y="40" width="210" height="70" rx="6" class="c5"/>
+  <text x="495" y="64" text-anchor="middle" class="b">检索入口</text>
+  <text x="495" y="83" text-anchor="middle" class="s">多库路由 · 对话改写</text>
+  <text x="495" y="99" text-anchor="middle" class="s">库级 / 文档级权限</text>
+
+  <rect x="630" y="40" width="210" height="70" rx="6" class="c3"/>
+  <text x="735" y="64" text-anchor="middle" class="b">检索内核</text>
+  <text x="735" y="83" text-anchor="middle" class="s">分段索引 · 语义 / 全文 / 混合</text>
+  <text x="735" y="99" text-anchor="middle" class="s">重排 · 多查询 / HyDE · MMR</text>
+
+  <rect x="870" y="40" width="190" height="70" rx="6" class="c5"/>
+  <text x="965" y="64" text-anchor="middle" class="b">智能体生成</text>
+  <text x="965" y="83" text-anchor="middle" class="s">Agent 的模型与提示词</text>
+  <text x="965" y="99" text-anchor="middle" class="s">回答 + 引用</text>
+
+  <path d="M140,75 L170,75" class="ln" marker-end="url(#ar)"/>
+  <path d="M360,75 L390,75" class="ln" marker-end="url(#ar)"/>
+  <path d="M600,75 L630,75" class="ln" marker-end="url(#ar)"/>
+  <path d="M840,75 L870,75" class="ln" marker-end="url(#ar)"/>
+
+  <text x="20" y="168" class="b">评测走的链路</text>
+  <rect x="20" y="182" width="120" height="70" rx="6" class="c4"/>
+  <text x="80" y="212" text-anchor="middle" class="b">评测题</text>
+  <text x="80" y="232" text-anchor="middle" class="s">单轮 · 20 题</text>
+
+  <rect x="390" y="182" width="210" height="70" rx="6" class="c4"/>
+  <text x="495" y="206" text-anchor="middle" class="b">召回测试接口</text>
+  <text x="495" y="225" text-anchor="middle" class="s">单库 · 无对话历史</text>
+  <text x="495" y="241" class="s" text-anchor="middle">评测用户是库所有者</text>
+
+  <rect x="870" y="182" width="190" height="70" rx="6" class="c4"/>
+  <text x="965" y="206" text-anchor="middle" class="b">评测统一生成</text>
+  <text x="965" y="225" text-anchor="middle" class="s">固定提示词</text>
+  <text x="965" y="241" text-anchor="middle" class="s">deepseek-flash</text>
+
+  <path d="M140,217 L390,217" class="ln" marker-end="url(#ar)"/>
+  <path d="M600,217 L690,217 L690,112" class="lnok" marker-end="url(#arok)"/>
+  <path d="M780,112 L780,217 L870,217" class="lnok" marker-end="url(#arok)"/>
+  <text x="735" y="140" text-anchor="middle" class="tok b">被评到</text>
+
+  <text x="265" y="140" text-anchor="middle" class="tbad b">没评到</text>
+  <text x="265" y="158" text-anchor="middle" class="s">何时检索、怎么写查询</text>
+  <text x="495" y="140" text-anchor="middle" class="tbad b">基本没评到</text>
+  <text x="495" y="158" text-anchor="middle" class="s">路由、改写不经过；权限等于不测</text>
+  <text x="965" y="140" text-anchor="middle" class="tbad b">没评到</text>
+  <text x="965" y="158" text-anchor="middle" class="s">真实提示词、模型、引用</text>
+
+  <rect x="20" y="272" width="1040" height="46" rx="6" class="inner"/>
+  <text x="36" y="292">判分：出处原文匹配 + ranx 算检索指标；裁判 deepseek-v4-pro 判 CRAG 三值与拒答；RAGAS 忠实度、事实正确性</text>
+  <text x="36" y="310">统计与报告：bootstrap 95% 置信区间、与基线配置的配对比较、分题型、错题归因、错题清单、延迟与 token</text>
+</svg>
+</div>
+<p class="cap">图 2　评测只覆盖检索内核（绿色），其余环节没有被评到</p>
+
+<p>这样设计有它的道理：先把检索内核评准，排除提示词差异，才能比较分段与检索方式。但它回答不了「用户在 Atlas 里问知识库，答得怎么样」。</p>
+
+<h3>3.2 已实现与只在设计里</h3>
+<table>
+  <tr><th>能力</th><th>状态</th><th>说明</th></tr>
+  <tr><td>统一数据格式（语料 + 题目 + 原文片段出处 + 标签 + 拒答标记）</td><td class="c"><span class="tag ok">已实现</span></td><td>出处的页码 / 段落 ID 粒度有字段，判分还没用上</td></tr>
+  <tr><td>Atlas 适配器：按（语料, 入库配置）指纹复用库；同一入库配置的多种检索方式共用一个库</td><td class="c"><span class="tag ok">已实现</span></td><td>—</td></tr>
+  <tr><td>断点续跑；跑题与判分分离、离线重判；裁判与 RAGAS 结果缓存</td><td class="c"><span class="tag ok">已实现</span></td><td>—</td></tr>
+  <tr><td>出处匹配（归一化后包含 → 命中；跨段拼接或模糊匹配 → 部分命中）+ ranx 指标</td><td class="c"><span class="tag ok">已实现</span></td><td>部分命中算命中，报告单列</td></tr>
+  <tr><td>CRAG 三值计分与拒答判断（一次裁判调用）；RAGAS 忠实度、事实正确性（recall 模式）</td><td class="c"><span class="tag ok">已实现</span></td><td>RAGAS 提示词未中文化</td></tr>
+  <tr><td>错题归因（检索未命中 / 误拒 / 模型编造 / 理解或推理错误 / 该拒未拒）</td><td class="c"><span class="tag ok">已实现</span></td><td>规则判断：看是否命中出处和忠实度是否低于 0.5</td></tr>
+  <tr><td>bootstrap 置信区间、配对比较、报告</td><td class="c"><span class="tag ok">已实现</span></td><td>—</td></tr>
+  <tr><td>公开评测集导入器（CRUD-RAG、MultiHop-RAG、C-MTEB、RGB…）</td><td class="c"><span class="tag bad">未做</span></td><td>原设计的 P1 主体</td></tr>
+  <tr><td>私有文档出题 + 人工审核</td><td class="c"><span class="tag bad">未做</span></td><td>—</td></tr>
+  <tr><td>裁判与人工校准、人工复核导出 / 回填</td><td class="c"><span class="tag bad">未做</span></td><td>—</td></tr>
+  <tr><td>Dify / RAGFlow 适配器、平台原生问答模式、两两盲评</td><td class="c"><span class="tag bad">未做</span></td><td>—</td></tr>
+  <tr><td>回答相关性、上下文精确率 / 召回率、噪声敏感度、引用正确率</td><td class="c"><span class="tag bad">未做</span></td><td>生成提示词要求标 [编号]，但没有判分</td></tr>
+  <tr><td>RAG 回归接入发布流程</td><td class="c"><span class="tag bad">未做</span></td><td>Agent 评测已有 smoke / regress，RAG 没有</td></tr>
+</table>
+
+<p>平台里已有、但评测还没用上的能力：</p>
+<ul>
+  <li><b>检索漏斗记录</b>：每次检索记下各环节的候选、名次与分数，能看出某个分段是没召回、重排后被截断，还是被阈值滤掉；同一份数据也挂在 OpenTelemetry span 上，进 Langfuse。错题归因目前只看最终结果，没用到漏斗。</li>
+  <li><b>按索引版本做召回测试</b>：切换索引版本前可以用新版本检索对比。这正是回归评测的天然接入点。</li>
+  <li><b>查询记录</b>：库的检索请求有记录，可作为线上题目的来源。</li>
+</ul>
+
+<h3>3.3 已有结果与能说明什么</h3>
+<p>RAG 评测共跑过两次，都在样例集 demo-zh（3 篇虚构公司制度、20 题）上，top_k = 3，每题生成 1 次：</p>
+<table>
+  <tr><th>运行</th><th>配置</th><th>命中率@3</th><th>CRAG 分</th><th>返回字数</th><th>检索 p50</th></tr>
+  <tr><td rowspan="3">10-12 分段与检索方式</td><td>naive：自动分段 + 语义检索</td><td>76.5%</td><td>0.65</td><td>131</td><td>30 ms</td></tr>
+  <tr><td>structure：按标题父子分段 + 语义检索</td><td>100%</td><td>1.00</td><td>370</td><td>20 ms</td></tr>
+  <tr><td>hybrid：按标题 + 混合检索</td><td>100%</td><td>1.00</td><td>365</td><td>28 ms</td></tr>
+  <tr><td rowspan="2">10-14 增强与查询理解</td><td>structure / enhanced</td><td>100%</td><td>1.00</td><td>370</td><td>36 / 21 ms</td></tr>
+  <tr><td>query（多查询 + HyDE）/ full</td><td>100%</td><td>1.00</td><td>377 / 371</td><td>1709 / 1224 ms</td></tr>
+</table>
+
+<table>
+  <tr><th>能说明的</th><th>不能说明的</th></tr>
+  <tr><td>
+    <ul style="margin:0;padding-left:18px">
+      <li>流程走通了：入库、检索、生成、判分、统计、报告</li>
+      <li>按标题分段比朴素分段命中率高 23.5 个百分点、CRAG 分高 0.35，配对比较显著</li>
+      <li>查询理解让检索延迟从几十毫秒涨到 1–2 秒</li>
+    </ul>
+  </td><td>
+    <ul style="margin:0;padding-left:18px">
+      <li><b>分段方式的提升有多少来自「返回更多文字」</b>：两者 top_k 相同，但 structure 返回的字数是 naive 的 2.8 倍，没有在相同上下文长度下比较</li>
+      <li><b>增强、查询理解、混合检索有没有用</b>：全部 100%，评测集已饱和，比不出差别</li>
+      <li><b>真实文档、真实问法下的能力</b>：题是照着自己写的文档出的，问法贴近原文</li>
+    </ul>
+  </td></tr>
+</table>
+
+<div class="callout warn">
+<b>样本量估算</b>（假设：配对比较，两种配置结论不一致的题约占 15%；双侧 95% 置信、80% 功效）：最小可检出差距 ≈ 2.8 × √(0.15 / n)。<br>
+n = 20 → 约 24 个百分点；n = 100 → 约 11；n = 300 → 约 6；n = 500 → 约 5。<br>
+要分辨入库增强、查询理解这类通常只差几个百分点的改动，至少需要数百题；同一篇文档出多题时还要按簇计算，需要的题更多。
+</div>
+
+<!-- ====================================================================== -->
+<h2 id="s4">4. 逐项对标</h2>
+<table>
+  <tr><th>维度</th><th>业界做法</th><th>Atlas 现状</th><th>判断</th></tr>
+  <tr><td>被测方中立</td><td>Bedrock 可带入外部系统结果；Open RAG Eval 通过连接器接各框架</td><td>只通过 HTTP，不依赖平台内部代码；适配器接口为 Dify / RAGFlow 预留</td><td class="c"><span class="tag ok">对齐</span></td></tr>
+  <tr><td>评测分层</td><td>解析 / 检索 / 生成 / 端到端 / 线上</td><td>只有检索与生成两层</td><td class="c"><span class="tag warn">部分</span></td></tr>
+  <tr><td>检索指标（有标注）</td><td>ranx / pytrec_eval；Dify 按分段二值判定</td><td>原文片段归一化匹配 + 跨段拼接 / 模糊兜底，再用 ranx 计算；换分段方式不影响标注</td><td class="c"><span class="tag lead">领先</span></td></tr>
+  <tr><td>检索指标（无标注）</td><td>UMBRELA、RAGAS 上下文精确率、Microsoft Retrieval</td><td>无。线上题、没有标准出处的私有文档题都没法评检索</td><td class="c"><span class="tag bad">缺失</span></td></tr>
+  <tr><td>上下文长度控制</td><td>固定上下文预算比较（如每段 512 token × 前 5 段）</td><td>记录了返回字数，但比较按 top_k；分段方式之间返回字数差 2.8 倍</td><td class="c"><span class="tag warn">部分</span></td></tr>
+  <tr><td>答案正确性</td><td>CRAG 三值；nugget 召回；正确性 + 完整性</td><td>CRAG 三值 + RAGAS 事实正确性（recall 模式，避免参考答案简短时误判）</td><td class="c"><span class="tag ok">对齐</span></td></tr>
+  <tr><td>忠实度</td><td>RAGAS Faithfulness、Groundedness、HHEM</td><td>RAGAS Faithfulness；英文提示词判中文</td><td class="c"><span class="tag ok">对齐</span></td></tr>
+  <tr><td>引用</td><td>引用准确率 + 覆盖率（Bedrock、Open RAG Eval、TREC）</td><td>要求模型标 [编号]，但不判分</td><td class="c"><span class="tag bad">缺失</span></td></tr>
+  <tr><td>拒答与上下文充分性</td><td>拒答 / 误拒；Sufficient Context 区分「检索命中但信息不全」</td><td>有拒答准确率、误拒率；没有充分性判定，归因只看是否命中出处</td><td class="c"><span class="tag warn">部分</span></td></tr>
+  <tr><td>细粒度诊断</td><td>RAGChecker：上下文利用率、噪声敏感度、自身知识</td><td>5 类规则归因；没用检索漏斗</td><td class="c"><span class="tag warn">部分</span></td></tr>
+  <tr><td>评测集规模与来源</td><td>公开集 + 合成（审核）+ 线上沉淀；数百到数千题</td><td>20 题自建，已饱和</td><td class="c"><span class="tag bad">缺失</span></td></tr>
+  <tr><td>防过拟合</td><td>dev / test 分开；ViDoRe v3 保留私有测试集</td><td>题目有 dev / test 字段，但实验都用 all 跑</td><td class="c"><span class="tag warn">部分</span></td></tr>
+  <tr><td>多轮</td><td>MTRAG、MTRAG-UN</td><td>无（Atlas 有对话改写，没被评过）</td><td class="c"><span class="tag bad">缺失</span></td></tr>
+  <tr><td>解析</td><td>OmniDocBench、ViDoRe v3</td><td>无（Atlas 有 PDF 版面、PPTX、表格摘要，没被评过）</td><td class="c"><span class="tag bad">缺失</span></td></tr>
+  <tr><td>经智能体的端到端</td><td>BrowseComp-Plus：整个轨迹的证据召回、检索次数、答案正确率</td><td>绕过智能体；生成用评测自己的提示词</td><td class="c"><span class="tag bad">缺失</span></td></tr>
+  <tr><td>权限泄漏</td><td>埋标记串测泄漏率，同时看授权召回与撤权生效</td><td>只有单元测试</td><td class="c"><span class="tag bad">缺失</span></td></tr>
+  <tr><td>文档注入</td><td>攻击成功率、被投毒内容的排名变化</td><td>无</td><td class="c"><span class="tag bad">缺失</span></td></tr>
+  <tr><td>裁判</td><td>与生成模型不同家、结构化细则、多裁判集成、人工校准</td><td>结构化 JSON、温度 0、有缓存；但裁判与生成同为 DeepSeek，未校准</td><td class="c"><span class="tag warn">部分</span></td></tr>
+  <tr><td>统计</td><td>置信区间、按簇、重复采样、配对、功效分析</td><td>bootstrap 置信区间 + 配对比较；生成只跑 1 次；不按簇；没有功效分析</td><td class="c"><span class="tag warn">部分</span></td></tr>
+  <tr><td>回归门槛</td><td>CI 质量门槛；Dify 每次运行留记录对比</td><td>RAG 没有回归目标和门槛</td><td class="c"><span class="tag bad">缺失</span></td></tr>
+  <tr><td>线上评测</td><td>按规则抽样在线打分 + 标注队列 + 错题回流</td><td>有检索漏斗和 Langfuse 链路，没有在线打分；聊天界面没有用户反馈</td><td class="c"><span class="tag warn">部分</span></td></tr>
+  <tr><td>竞品横比</td><td>同语料、同模型、同上下文长度</td><td>Dify / RAGFlow 适配器未做</td><td class="c"><span class="tag bad">缺失</span></td></tr>
+  <tr><td>工程指标</td><td>延迟、token、成本、入库耗时</td><td>检索 / 生成 p50 / p95、token、入库耗时</td><td class="c"><span class="tag ok">对齐</span></td></tr>
+</table>
+
+<!-- ====================================================================== -->
+<h2 id="s5">5. 改进路线</h2>
+<p>原则：先让结论可信，再扩大覆盖面；能复用已有的就不新建（Agent 评测框架、检索漏斗、索引版本对比、Langfuse 都已存在）。</p>
+
+<h3>5.1 P0：让结论可信</h3>
+<table>
+  <tr><th>做什么</th><th>为什么</th><th>取舍</th></tr>
+  <tr><td><b>评测集扩到约 500 题</b>，分三块：
+    <ul style="margin:4px 0 0;padding-left:18px">
+      <li>CRUD-RAG 问答子集抽样 + 干扰文档抽样（中文端到端）</li>
+      <li>C-MTEB 检索子集，段落不切分（向量 / 重排选型，可对照公开榜单）</li>
+      <li>企业风格文档（制度、手册、带表格的 PDF）合成出题：用户画像 × 问题类别控制问法，人工审核后入库；单独补拒答题</li>
+    </ul>
+  </td><td>样本量决定能检出的差距（§3.3）；中文企业文档没有合适的公开集，只能合成补</td><td>CRUD-RAG 不全量入库（8 万篇成本高），按「证据文档 + N 倍干扰文档」抽样；MultiHop-RAG 等英文集放到后面</td></tr>
+  <tr><td><b>裁判换另一家的模型</b>（与生成模型不同厂商）；抽 100 题人工标注，算裁判与人工的一致率，低了就改评分细则；RAGAS 提示词中文化并人工校对</td><td>同家族裁判有偏向；没校准的裁判分数无法解释</td><td>多裁判集成先不做，成本翻倍；一致率不够时再加</td></tr>
+  <tr><td><b>相同上下文长度下比较</b>：报告增加「返回前 N 字时的召回率」，或按字数截断后再生成</td><td>分段方式、父子分段、合并相邻分段都会改变返回字数，不对齐就比不出检索本身的好坏</td><td>top_k 口径保留，两种都报</td></tr>
+  <tr><td><b>统计补齐</b>：每题生成 3 次；同一文档多题时按簇计算区间；实验前按目标差距估算题量；调参只用 dev，出分只用 test</td><td>与 §2.6 的口径一致</td><td>生成重复 3 次，生成与裁判成本约 ×3</td></tr>
+</table>
+
+<h3>5.2 P1：测到用户实际走的链路</h3>
+<table>
+  <tr><th>做什么</th><th>为什么</th><th>取舍</th></tr>
+  <tr><td><b>经智能体的端到端评测</b>：复用 Agent 评测框架，加知识库问答任务；Agent 绑定评测库，分别跑自动注入、工具调用、ACP 三种模式；指标：答案正确率、引用正确率、整个轨迹的证据召回、检索次数</td><td>当前评测绕过了智能体、真实提示词与模型；ACP 经 MCP 的检索路径还没在真实 Pod 里验证过</td><td>与检索内核评测并存：内核评测用来调参，端到端评测用来回答「用户体验如何」</td></tr>
+  <tr><td><b>引用评测</b>：引用准确率 + 覆盖率，一起报</td><td>企业场景要能溯源；只看忠实度发现不了标错出处</td><td>由裁判判，每题多 1–2 次调用</td></tr>
+  <tr><td><b>上下文充分性判定 + 细粒度归因</b>：判断检索结果是否足以回答；错题归因接入检索漏斗，细分为「没召回 / 重排截断 / 阈值滤掉 / 信息不全 / 信息全但答错」</td><td>现在「检索未命中」一类里混着几种原因，指不出该改哪一环；漏斗已经记录了各环节候选，只差和评测对上</td><td>RAGChecker 全套陈述级指标暂不做，先用充分性 + 漏斗覆盖主要诊断需求</td></tr>
+  <tr><td><b>RAG 回归门槛</b>：固定约 100 题回归集；发布前、切换索引版本前跑，与基线配对比较，命中率或 CRAG 分显著下降则不通过</td><td>Agent 评测已有 smoke / regress，RAG 没有；索引版本切换缺一个客观依据</td><td>回归集要从 test 里固定抽，不参与调参</td></tr>
+  <tr><td><b>权限泄漏专项</b>：受限文档埋唯一标记串；用不同身份提问，检查检索结果、上下文、引用、回答里有没有标记；同时测授权用户的召回和撤权后多久生效</td><td>「绑定不是授权」、按请求头身份判库级 / 文档级权限，这些改动正在上线；泄漏是企业场景的一票否决项</td><td>泄漏率门槛为 0，必须和授权召回一起看</td></tr>
+</table>
+
+<h3>5.3 P2：覆盖面与持续化</h3>
+<table>
+  <tr><th>做什么</th><th>为什么</th></tr>
+  <tr><td><b>多轮</b>：自建 50 段中文对话（指代、省略、追问、无答案），或改写 MTRAG 子集</td><td>Atlas 的对话改写没被评过；多轮里的无答案题和后续轮次是公开评测里普遍表现最差的部分</td></tr>
+  <tr><td><b>解析</b>：OmniDocBench 子集评解析器；带表格 / 版面的中文 PDF 出题评端到端</td><td>PDF 版面解析、PPTX、表格摘要都没被评过</td></tr>
+  <tr><td><b>文档注入</b>：在评测库里放带隐藏指令的文档，测攻击成功率</td><td>智能体会执行工具，文档里的指令风险比纯问答高</td></tr>
+  <tr><td><b>线上评测</b>：在 Langfuse 里对检索节点抽样跑相关性判断、对生成节点跑忠实度；人工复核队列；复核过的错题回流进评测集；聊天界面加反馈按钮</td><td>离线评测集总会和真实分布有差距；链路追踪已接好，主要是配置和流程</td></tr>
+  <tr><td><b>竞品横比</b>：Dify、RAGFlow 适配器；同语料、同向量模型、同生成模型、同上下文长度；分「开箱即用」和「各自调优」两组</td><td>能力证明需要参照系</td></tr>
+</table>
+
+<h3>5.4 暂不建议做</h3>
+<table>
+  <tr><th>事项</th><th>原因</th></tr>
+  <tr><td>训练自己的小裁判模型</td><td>需要大量人工标注；线上流量还不足以抵消成本。先用大模型裁判 + 抽样</td></tr>
+  <tr><td>全量导入 CRUD-RAG 8 万篇</td><td>入库成本高；抽样语料足够做配置比较。规模压力测试单独做</td></tr>
+  <tr><td>自研一套 nugget 评估</td><td>CRAG 三值 + RAGAS 事实正确性已覆盖问答题；只有汇总 / 长回答题多了以后才需要</td></tr>
+  <tr><td>深度依赖 RAGAS 新特性</td><td>RAGAS 自 2026-01 起停止发版；保持固定版本、只用少数稳定指标，替换时只换判分这一层</td></tr>
+</table>
+
+<!-- ====================================================================== -->
+<h2 id="s6">6. 参考资料</h2>
+<ol class="refs">
+  <li><a href="https://arxiv.org/abs/2603.09891">Overview of the TREC 2025 Retrieval Augmented Generation (RAG) Track</a></li>
+  <li><a href="https://arxiv.org/abs/2504.15068">The Great Nugget Recall: Automating Fact Extraction and RAG Evaluation with LLMs（SIGIR 2025）</a></li>
+  <li><a href="https://arxiv.org/abs/2412.17156">LLM-based Relevance Assessment Still Can't Replace Human Relevance Assessment（Clarke 等）</a></li>
+  <li><a href="https://github.com/vectara/open-rag-eval">Vectara Open RAG Eval</a></li>
+  <li><a href="https://github.com/amazon-science/RAGChecker">RAGChecker（Amazon Science）</a></li>
+  <li><a href="https://pypi.org/project/ragas/">RAGAS（PyPI）</a> · <a href="https://docs.ragas.io/en/stable/howtos/migrations/migrate_from_v03_to_v04/">从 0.3 迁移到 0.4</a></li>
+  <li><a href="https://docs.aws.amazon.com/bedrock/latest/userguide/knowledge-base-evaluation-metrics.html">Amazon Bedrock：RAG 评测指标</a></li>
+  <li><a href="https://learn.microsoft.com/en-us/azure/foundry/concepts/evaluation-evaluators/rag-evaluators">Microsoft Foundry：RAG evaluators</a></li>
+  <li><a href="https://docs.dify.ai/en/cloud/use-dify/knowledge-base/test-and-tune">Dify：Test and Tune Retrieval</a></li>
+  <li><a href="https://github.com/infiniflow/ragflow/issues/15033">RAGFlow issue #15033：RAG Evaluation &amp; regression testing</a></li>
+  <li><a href="https://langfuse.com/docs/evaluation/evaluation-methods/llm-as-a-judge">Langfuse：LLM-as-a-Judge 与在线评测</a></li>
+  <li><a href="https://mlflow.org/docs/latest/genai/eval-monitor/scorers/llm-judge/alignment/">MLflow：Judge Alignment</a></li>
+  <li><a href="https://arxiv.org/abs/2411.00640">Adding Error Bars to Evals（Anthropic）</a></li>
+  <li><a href="https://arxiv.org/abs/2411.06037">Sufficient Context: A New Lens on RAG Systems（Google，ICLR 2025）</a></li>
+  <li><a href="https://arxiv.org/abs/2501.03468">MTRAG</a> · <a href="https://aclanthology.org/2026.findings-acl.503/">MTRAG-UN</a></li>
+  <li><a href="https://arxiv.org/abs/2508.06600">BrowseComp-Plus</a></li>
+  <li><a href="https://arxiv.org/abs/2501.12789">DataMorgana</a> · <a href="https://www.researchgate.net/publication/397739482_LiveRAG_A_diverse_QA_dataset_with_varying_difficulty_level_for_RAG_evaluation">LiveRAG 数据集</a></li>
+  <li><a href="https://arxiv.org/abs/2605.05253">EnterpriseRAG-Bench（Onyx）</a> · <a href="https://arxiv.org/abs/2608.11584">EnterpriseRAG（中文企业日志）</a></li>
+  <li><a href="https://arxiv.org/abs/2601.08620">ViDoRe V3</a> · <a href="https://www.emergentmind.com/topics/omnidocbench-v1-5">OmniDocBench v1.5</a> · <a href="https://arxiv.org/abs/2607.24760">CHaystack</a></li>
+  <li><a href="https://arxiv.org/abs/2401.17043">CRUD-RAG</a> · <a href="https://pypi.org/project/C-MTEB/">C-MTEB</a></li>
+  <li><a href="https://arxiv.org/abs/2601.10923">OpenRAG-Soc（Hidden-in-Plain-Text）</a> · <a href="https://arxiv.org/abs/2512.20535">ARBITER（RAG 访问控制，指出尚无基准）</a></li>
+</ol>
+
+</main>
+</body>
+</html>

@@ -69,8 +69,12 @@ def _sections(
                         ),
                     ],
                     ["划分 / top_k / 重复", f"{cfg['split']} / {cfg['top_k']} / {cfg['repeats']}"],
-                    ["生成", f"{cfg['generation']} · {cfg['generator_model']}"],
-                    ["裁判", f"{cfg['judge_model']}（与生成模型不同）"],
+                    ["生成", f"{cfg['generation']} · {cfg['generator_model']}"]
+                    if cfg["generation"] != "none"
+                    else ["生成", "无（只评检索）"],
+                    ["裁判", f"{cfg['judge_model']}（与生成模型不同）"]
+                    if cfg["generation"] != "none"
+                    else ["裁判", "—"],
                     [
                         "平台",
                         "、".join(
@@ -154,11 +158,14 @@ def _sections(
             other = _per_q(run_dir, k)
             for label, getter, pct in (
                 ("命中率", lambda r: r["retrieval"].get("hit"), True),
+                ("nDCG", lambda r: r["retrieval"].get("ndcg"), False),
                 ("CRAG 分", _crag, False),
             ):
                 a = {q: getter(r) for q, r in base.items()}
                 b = {q: getter(r) for q, r in other.items()}
                 diff, sig = paired_diff(a, b)
+                if diff.n == 0:  # 这项没有可配对的分数（如只评检索时的 CRAG 分）
+                    continue
                 comp_rows.append(
                     [f"{k} 对比 {ks[0]}", label, diff.fmt(pct), "显著" if sig else "无显著差异"]
                 )

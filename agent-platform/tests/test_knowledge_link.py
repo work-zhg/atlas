@@ -148,28 +148,97 @@ def test_mcp_token_matches_knowledge_service() -> None:
 
 
 async def test_agent_save_checks_new_bindings(monkeypatch: pytest.MonkeyPatch) -> None:
-    from atlas_agent.auth.principal import Principal
+    """新绑定的库按权限主体校验（同 MCP）：以人为权限 = 保存的人；以 Agent 为权限 = 数字员工。"""
     from atlas_agent.errors import InvalidReference
+    from atlas_agent.providers import knowledge as knowledge_mod
     from atlas_agent.services import agent as agent_mod
 
     seen: list[dict[str, Any]] = []
-    monkeypatch.setattr(agent_mod, "make_knowledge_client", lambda _s: _client(seen))
+    monkeypatch.setattr(knowledge_mod, "make_knowledge_client", lambda _s: _client(seen))
     svc = agent_mod.AgentService(session=None, settings=object())  # type: ignore[arg-type]
-    p = Principal(uid=uuid4(), operations=frozenset({"agent:create"}))
+    editor, employee = uuid4(), uuid4()
 
     def spec(*ids: str) -> AgentSpecIn:
         return AgentSpecIn.model_validate(
             {"model": {"model": "claude-sonnet-5"}, "knowledge": {"dataset_ids": list(ids)}}
         )
 
-    await svc._check_knowledge(spec("ds-ok"), previous=None, principal=p)
-    assert seen[-1]["body"]["dataset_ids"] == ["ds-ok"]
-    with pytest.raises(InvalidReference):
-        await svc._check_knowledge(spec("ds-ok", "ds-secret"), previous=None, principal=p)
-    # 沿用旧版本已绑定的库不重新判
-    seen.clear()
-    await svc._check_knowledge(spec("ds-secret"), previous=spec("ds-secret"), principal=p)
-    assert seen == []
+    use_identity(CallIdentity(uid=editor, auth_uid=editor))
+    try:
+        await svc._check_knowledge(spec("ds-ok"), previous=None, subject=editor)
+        assert seen[-1]["body"]["dataset_ids"] == ["ds-ok"]
+        assert seen[-1]["headers"]["x-auth-uid"] == str(editor)
+        with pytest.raises(InvalidReference):
+            await svc._check_knowledge(spec("ds-ok", "ds-secret"), previous=None, subject=editor)
+        # 以 Agent 为权限：按数字员工判，谁在用仍是编辑者
+        await svc._check_knowledge(spec("ds-ok"), previous=None, subject=employee)
+        assert seen[-1]["headers"]["x-auth-uid"] == str(employee)
+        assert seen[-1]["headers"]["x-uid"] == str(editor)
+        # 还没有数字员工：新绑定一律拒绝，不问知识库
+        seen.clear()
+        with pytest.raises(InvalidReference):
+            await svc._check_knowledge(spec("ds-ok"), previous=None, subject=None)
+        # 沿用旧版本已绑定的库不重新判
+        await svc._check_knowledge(spec("ds-secret"), previous=spec("ds-secret"), subject=editor)
+        assert seen == []
+    finally:
+        use_identity(None)
+
+
+async def test_skipped_datasets_are_reported() -> None:
+    """权限主体读不到的库由知识库跳过：工具结果里说明，不静默少资料。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"records": RECORDS[:1], "skipped": ["d2"]})
+
+    client = KnowledgeClient("http://kb", transport=httpx.MockTransport(handler))
+    k = KnowledgeSpec(dataset_ids=("d1", "d2"), mode="tool")
+    got = await client.retrieve(k, "退款", source="agent", source_ref=None)
+    assert got.skipped == ["d2"] and len(got.records) == 1
+    tool = make_knowledge_tool(client, k, names=None, source_ref="x")
+    text = await tool.ainvoke({"query": "退款"})
+    assert "退款七天内可申请" in text and "1 个知识库没有访问权限" in text
+
+
+async def test_auto_mode_notice_when_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
+    """auto 模式：有库被跳过时发 knowledge.skipped，说明是谁（数字员工 / 你）没有权限。"""
+    import dataclasses
+    from types import SimpleNamespace
+
+    from atlas_agent.domain.events import EventType
+    from atlas_agent.executor import assembly as asm
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"records": [], "skipped": ["d2"]})
+
+    client = KnowledgeClient("http://kb", transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(asm, "require_client", lambda _s: client)
+
+    @dataclasses.dataclass
+    class Prepared:
+        spec: Any
+        input_content: Any
+        thread_id: Any
+        resume: bool = False
+
+    hook = object.__new__(asm.HookAssembly)
+    hook._settings = object()  # type: ignore[assignment]
+    spec = SimpleNamespace(knowledge=KnowledgeSpec(dataset_ids=("d2",), mode="auto"))
+    notices: list[Any] = []
+    employee = uuid4()
+    use_identity(CallIdentity(uid=uuid4(), auth_uid=employee))
+    try:
+        out = await hook.with_knowledge(
+            Prepared(spec, "怎么退款", uuid4()),  # type: ignore[arg-type]
+            run_id=uuid4(),
+            notices=notices,
+        )
+    finally:
+        use_identity(None)
+    assert out.input_content == "怎么退款"
+    [(kind, data)] = notices
+    assert kind is EventType.KNOWLEDGE_SKIPPED and data["dataset_ids"] == ["d2"]
+    assert data["subject"] == str(employee) and "数字员工" in data["message"]
 
 
 def test_context_shows_title_path() -> None:
@@ -207,3 +276,22 @@ async def test_client_propagates_trace(monkeypatch: pytest.MonkeyPatch) -> None:
     trace_id = format(span.context.trace_id, "032x")
     span_id = format(span.context.span_id, "016x")
     assert len(headers) == 1 and (headers[0] or "").startswith(f"00-{trace_id}-{span_id}-")
+
+
+async def test_editor_lists_by_auth_subject(monkeypatch: pytest.MonkeyPatch) -> None:
+    """编辑器可选的库按权限主体列出；以 Agent 为权限还没有数字员工时一个都不列。"""
+    from atlas_agent.providers import knowledge as knowledge_mod
+    from atlas_agent.services import meta as meta_mod
+
+    seen: list[dict[str, Any]] = []
+    monkeypatch.setattr(knowledge_mod, "make_knowledge_client", lambda _s: _client(seen))
+    svc = meta_mod.MetaService(session=None, redis=None, settings=object())  # type: ignore[arg-type]
+    employee = uuid4()
+
+    out = await svc.list_knowledge(meta_mod.McpSubject(kind="agent", uid=employee))
+    assert [d.id for d in out.data] == ["ds-ok"] and out.subject.uid == employee
+    assert seen[-1]["headers"]["x-auth-uid"] == str(employee)
+
+    seen.clear()
+    out = await svc.list_knowledge(meta_mod.McpSubject(kind="agent", uid=None))
+    assert out.data == [] and out.subject.notes and seen == []

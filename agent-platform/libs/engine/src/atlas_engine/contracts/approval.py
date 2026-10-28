@@ -63,7 +63,8 @@ class ApprovalGate(Protocol):
 
         kind / source / reason 只在登记时落库（审计与界面用）：
           kind    tool = 工具调用的确认；plan = 规划模式提交的计划（contracts/permission.py）
-          source  为什么问：manual_mode / auto_uncertain / plan_mode
+          source  为什么问：manual_mode / plan_mode / auto_uncertain（没有配置判断器）/
+                  judge_failed（判断器出错）
           reason  给用户看的一句话
 
         ★ approval_id 必须由调用方**可复现地**派生，否则续跑时算出一个新 id、

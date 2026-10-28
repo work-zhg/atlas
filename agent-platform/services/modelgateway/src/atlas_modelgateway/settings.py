@@ -1,11 +1,11 @@
-"""模型网关的设置（环境变量前缀 ATLAS_MODELGW_）。"""
+"""模型管理平台的设置（环境变量前缀 ATLAS_MODELGW_）。"""
 
 from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import SecretStr
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 __all__ = ["GatewaySettings", "get_settings"]
@@ -28,39 +28,44 @@ class GatewaySettings(BaseSettings):
         populate_by_name=True,
     )
 
-    #: 网关库：同一 PG 实例上的独立 database
+    #: 平台库：同一 PG 实例上的独立 database
     database_url: str = "postgresql+asyncpg://atlas:atlas@localhost:5433/atlas_modelgateway"
 
-    # ── 上游（本期只有 Higress 上的 AI 路由，§9.5）─────────────────────────
-    #: Higress 网关地址。转发 = {higress_base_url}{同一个路径}，Higress 按请求里的模型名选路由
-    higress_base_url: str = "http://127.0.0.1:18080"
-    #: 网关凭据（§9.3）：调 Higress 时带上，Higress 只认它。只在本服务和 Higress 里，
-    #: 不下发给 Atlas 和 Pod，不进日志。空 = 没配置：转发、探测一律失败
-    gateway_credential: SecretStr | None = None
-    #: 转发时连上游的超时。★ 不设读超时：思考型模型的一次调用可能要好几分钟；
-    #:   卡死由调用方按两段数据之间的静默判断（§7.2）
-    connect_timeout_s: float = 10.0
-    #: 能力探测、接入检查的单次请求超时
-    probe_timeout_s: float = 60.0
-    #: 请求体上限（长上下文、图片会让请求体有几 MB）
-    max_body_bytes: int = 64 * 1024 * 1024
-    #: 非流式响应最多读多少用来取用量；超过就不取（用量标为未回报）
-    max_meter_bytes: int = 16 * 1024 * 1024
+    # ── LiteLLM（模型网关）：平台只调它的管理接口，不转发模型调用 ─────────────
+    litellm_base_url: str = "http://127.0.0.1:4000"
+    #: LiteLLM 的 master key：只在本服务里，不下发给应用、不进日志。空 = 没配置，管理操作一律失败
+    litellm_master_key: SecretStr | None = None
+    litellm_timeout_s: float = 30.0
+    #: LiteLLM 里有哪些模型的缓存时间（合并展示、算有效模型用）
+    litellm_models_ttl_s: float = 30.0
+    #: 用户 Key 调 LiteLLM 用的地址（页面上的调用示例）。空 = 还没对集群外开放
+    litellm_public_url: str | None = None
 
-    # ── 用户中心（§6.3）────────────────────────────────────────────────
+    # ── 用户中心 ────────────────────────────────────────────────────────
     uc_base_url: str = "http://127.0.0.1:8030"
-    #: 本服务在用户中心的应用编码：内网调开放接口时写进 X-Caller-App。数据编码挂在它名下
+    #: 本服务在用户中心的应用编码：内网调开放接口时写进 X-Caller-App。数据编码 Model 挂在它名下
     uc_app_code: str = "model-gateway"
-    #: 「主体能用哪些模型」的缓存时间：收回授权最多滞后这么久
+    #: 「用户能用哪些私有模型」的缓存时间：收回授权最多滞后这么久
     perm_cache_ttl_s: float = 30.0
-    #: 用户中心不可用时，最多沿用多久以前的判权结果（§6.8）。超过就拒绝
+    #: 用户中心不可用时，最多沿用多久以前的结果。超过就按暂时不可用处理
     perm_stale_max_s: float = 3600.0
     #: 管理接口的授权快照（操作码）缓存时间
     authz_ttl_s: float = 30.0
 
-    # ── 维护任务 ────────────────────────────────────────────────────────
-    #: 多久跑一次：补写暂存的用量、到期下线、额度预警。0 = 不起维护任务（测试、命令行）
-    maintainer_tick_s: float = 30.0
+    # ── 客户端 Key ──────────────────────────────────────────────────────
+    #: 客户端类型 → 能创建、获取、删除这一类型的应用（用户中心应用编码，即 X-Caller-App）。
+    #: 管理员在页面上可以给任何已登记的类型建 Key
+    client_types: dict[str, list[str]] = Field(
+        default_factory=lambda: {
+            "Agent": ["atlas"],
+            "Service": ["atlas"],
+        }
+    )
+
+    # ── 对账 ────────────────────────────────────────────────────────────
+    #: 多久对一次账：重算每把 Key 的有效模型，和 LiteLLM 里的不一致就以平台为准修正。
+    #: 0 = 不起对账任务（测试、命令行）
+    reconcile_interval_s: float = 300.0
 
 
 @lru_cache

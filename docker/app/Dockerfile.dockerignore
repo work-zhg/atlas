@@ -17,6 +17,7 @@
 !agent-platform/services/knowledge/
 !agent-platform/services/memory/
 !agent-platform/services/mcpgateway/
+!agent-platform/services/modelgateway/
 !agent-platform/services/agent/
 !usercenter/services/usercenter/
 !teamflow/services/teamflow/

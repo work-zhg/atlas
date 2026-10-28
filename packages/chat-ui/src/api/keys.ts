@@ -6,6 +6,7 @@
 export const qk = {
   models: ["models"] as const,
   tools: ["tools"] as const,
+  knowledgeBases: ["knowledge-bases"] as const,
 
   agents: {
     all: ["agents"] as const,

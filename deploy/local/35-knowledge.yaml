@@ -57,10 +57,18 @@ spec:
             - {name: ATLAS_KB_LLM_MODEL, value: deepseek-chat}
             - name: ATLAS_KB_LLM_API_KEY
               valueFrom: {secretKeyRef: {name: atlas-server-creds, key: litellm_key}}
-            # 模型网关（doc/model-design.html §6.7）：ConfigMap atlas-model-gateway 有了就按平台用途调它，
-            #   上面的 LLM 地址、模型、Key 不再用（model-cutover.sh 建 ConfigMap）
-            - name: ATLAS_KB_MODEL_GATEWAY_URL
-              valueFrom: {configMapKeyRef: {name: atlas-model-gateway, key: url, optional: true}}
+            # 模型管理平台（agent-platform/doc/design/model-design.html 第 9 章）：ConfigMap
+            #   atlas-model-platform 有了就带着平台上的服务级客户端 Key 直连 LiteLLM，上面的 LLM 地址、
+            #   模型、Key 不再用（model-cutover.sh 建 ConfigMap 和这几把 Key）
+            - name: ATLAS_KB_MODEL_PLATFORM_URL
+              valueFrom: {configMapKeyRef: {name: atlas-model-platform, key: platform_url, optional: true}}
+            - name: ATLAS_KB_MODEL_LITELLM_URL
+              valueFrom: {configMapKeyRef: {name: atlas-model-platform, key: litellm_url, optional: true}}
+            - {name: ATLAS_KB_CHAT_CLIENT, value: "Service:knowledge-chat"}
+            - name: ATLAS_KB_ENRICH_MODEL
+              valueFrom: {configMapKeyRef: {name: atlas-model-platform, key: kb_enrich_model, optional: true}}
+            - {name: ATLAS_KB_EMBEDDING_CLIENT, value: "Service:knowledge-embedding"}
+            - {name: ATLAS_KB_RERANK_CLIENT, value: "Service:knowledge-rerank"}
       containers:
         - name: api
           image: atlas-app:dev
@@ -128,10 +136,18 @@ spec:
             - {name: ATLAS_KB_LLM_MODEL, value: deepseek-chat}
             - name: ATLAS_KB_LLM_API_KEY
               valueFrom: {secretKeyRef: {name: atlas-server-creds, key: litellm_key}}
-            # 模型网关（doc/model-design.html §6.7）：ConfigMap atlas-model-gateway 有了就按平台用途调它，
-            #   上面的 LLM 地址、模型、Key 不再用（model-cutover.sh 建 ConfigMap）
-            - name: ATLAS_KB_MODEL_GATEWAY_URL
-              valueFrom: {configMapKeyRef: {name: atlas-model-gateway, key: url, optional: true}}
+            # 模型管理平台（agent-platform/doc/design/model-design.html 第 9 章）：ConfigMap
+            #   atlas-model-platform 有了就带着平台上的服务级客户端 Key 直连 LiteLLM，上面的 LLM 地址、
+            #   模型、Key 不再用（model-cutover.sh 建 ConfigMap 和这几把 Key）
+            - name: ATLAS_KB_MODEL_PLATFORM_URL
+              valueFrom: {configMapKeyRef: {name: atlas-model-platform, key: platform_url, optional: true}}
+            - name: ATLAS_KB_MODEL_LITELLM_URL
+              valueFrom: {configMapKeyRef: {name: atlas-model-platform, key: litellm_url, optional: true}}
+            - {name: ATLAS_KB_CHAT_CLIENT, value: "Service:knowledge-chat"}
+            - name: ATLAS_KB_ENRICH_MODEL
+              valueFrom: {configMapKeyRef: {name: atlas-model-platform, key: kb_enrich_model, optional: true}}
+            - {name: ATLAS_KB_EMBEDDING_CLIENT, value: "Service:knowledge-embedding"}
+            - {name: ATLAS_KB_RERANK_CLIENT, value: "Service:knowledge-rerank"}
           resources:
             requests: {cpu: 200m, memory: 1Gi}
 ---

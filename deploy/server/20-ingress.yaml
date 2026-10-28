@@ -3,8 +3,10 @@
 #
 #   atlas.__PUBLIC_HOST__.nip.io     Atlas / 用户中心 / TeamFlow（前端网关 atlas-frontends，唯一校验登录的地方）
 #   langfuse.__PUBLIC_HOST__.nip.io  Langfuse（自带登录）
+#   higress.__PUBLIC_HOST__.nip.io   Higress 控制台（自带登录；口令是 deploy/local/higress/setup.py 里写死的，
+#                                    整个局域网都能访问 —— 112 是本地环境，用户要求开放，10-27）
 #
-# ★ Jaeger、Higress 控制台、MinIO 控制台不对外（没有登录或口令弱）：用 kubectl port-forward。
+# ★ Jaeger、MinIO 控制台不对外（没有登录或口令弱）：用 kubectl port-forward。
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -34,3 +36,18 @@ spec:
           - path: /
             pathType: Prefix
             backend: {service: {name: langfuse-web, port: {number: 3000}}}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: higress-console
+  namespace: atlas-infra
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: higress.__PUBLIC_HOST__.nip.io
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: {service: {name: higress, port: {number: 8001}}}

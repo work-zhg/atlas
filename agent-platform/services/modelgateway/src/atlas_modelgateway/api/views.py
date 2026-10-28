@@ -1,169 +1,119 @@
-"""库里的行 → 接口里的形状。"""
+"""库里的行、LiteLLM 的部署 → 接口里的形状。"""
 
 from __future__ import annotations
 
-from ..catalog import PURPOSES
-from ..db.models import GwModel, GwModelCall, GwModelKey, GwModelPrice, GwModelProbe, GwPurpose
+from typing import Any
+
+from ..db.models import GwApiKey, GwModel
 from ..keys import mask
-from .schemas import (
-    AccessCheckOut,
-    CallOut,
-    CatalogModelOut,
-    KeyOut,
-    ModelOut,
-    PriceOut,
-    ProbeOut,
-    PurposeOut,
-)
+from ..registry import ModelView
+from .schemas import GrantOut, InternalModelOut, KeyModelOut, KeyOut, KeySecretOut, ModelOut
 
 
-def price_out(row: GwModelPrice | None) -> PriceOut | None:
-    if row is None:
-        return None
-    return PriceOut(
-        id=row.uuid,
-        currency=row.currency,
-        input=row.input,
-        output=row.output,
-        cache_read=row.cache_read,
-        cache_write=row.cache_write,
-        per_request=row.per_request,
-        tiers=list(row.tiers or []),
-        effective_from=row.effective_from,
-        created_by=row.created_by,
-        created_at=row.created_at,
-    )
+def _price(per_token: float | None) -> float | None:
+    """美元 / token → 美元 / 百万 token（保留到分以下两位，避免 0.28 变成 0.27999999）。"""
+    return None if per_token is None else round(per_token * 1e6, 6)
 
 
-def model_out(row: GwModel, price: GwModelPrice | None = None) -> ModelOut:
+def model_out(
+    view: ModelView,
+    *,
+    admin: bool,
+    grants: list[GrantOut] | None = None,
+    access: str | None = None,
+) -> ModelOut:
+    row, dep = view.row, view.primary
+    status = "unknown" if view.unknown else "missing" if view.missing else "ok"
     return ModelOut(
+        uuid=row.uuid if row is not None else None,
+        name=view.name,
+        display_name=(row.display_name if row is not None else view.name) or view.name,
+        provider=(row.provider if row is not None else dep.provider if dep else "") or "",
+        visibility=row.visibility if row is not None else None,  # type: ignore[arg-type]
+        description=row.description if row is not None else "",
+        source=view.source,  # type: ignore[arg-type]
+        status=status,  # type: ignore[arg-type]
+        managed=row is not None and row.litellm_model_id is not None,
+        origin=None if row is not None or dep is None else "db" if dep.db_model else "config",
+        deployments=len(view.deployments),
+        api_base=(dep.api_base or None) if admin and dep is not None else None,
+        max_input_tokens=dep.max_input_tokens if dep else None,
+        max_output_tokens=dep.max_output_tokens if dep else None,
+        input_price=_price(dep.input_cost_per_token) if dep else None,
+        output_price=_price(dep.output_cost_per_token) if dep else None,
+        grants=grants,
+        access=access,  # type: ignore[arg-type]
+        created_by=row.created_by if row is not None and admin else None,
+        created_at=row.created_at if row is not None else None,
+    )
+
+
+def grant_out(raw: dict[str, Any]) -> GrantOut:
+    """用户中心的一条 ACL → 授权行。"""
+    subject = raw.get("subject") or {}
+    return GrantOut(
+        id=str(raw.get("id") or raw.get("acl_id") or ""),
+        subject_type=str(raw.get("subject_type") or subject.get("type") or "").lower(),
+        subject_id=str(raw.get("subject_id") or subject.get("id") or ""),
+        subject_name=str(raw.get("subject_name") or subject.get("name") or ""),
+        permission=str(raw.get("permission") or raw.get("level") or ""),
+        include_sub=bool(raw.get("include_sub")),
+    )
+
+
+def internal_model_out(view: ModelView) -> InternalModelOut:
+    row, dep = view.row, view.primary
+    assert row is not None
+    return InternalModelOut(
         name=row.name,
-        display_name=row.display_name,
-        description=row.description,
+        display_name=row.display_name or row.name,
         provider=row.provider,
-        tags=list(row.tags or []),
-        kind=row.kind,
-        upstream_kind=row.upstream_kind,
-        upstream_model=row.upstream_model,
-        protocols=list(row.protocols or []),
-        input_modalities=list(row.input_modalities or []),
-        capabilities=dict(row.capabilities or {}),
-        context_window=row.context_window,
-        max_output_tokens=row.max_output_tokens,
-        dimensions=row.dimensions,
-        max_batch=row.max_batch,
-        data_policy=dict(row.data_policy or {}),
-        capacity=dict(row.capacity or {}),
-        status=row.status,
-        disabled=row.disabled,
-        disabled_reason=row.disabled_reason,
-        deprecated_at=row.deprecated_at,
-        retire_at=row.retire_at,
-        retired_at=row.retired_at,
-        replacement=row.replacement,
-        access_check=AccessCheckOut(
-            ok=row.access_check_ok, detail=row.access_check_detail, checked_at=row.access_checked_at
-        ),
-        price=price_out(price),
-        created_by=row.created_by,
-        updated_by=row.updated_by,
-        created_at=row.created_at,
-        updated_at=row.updated_at,
+        max_input_tokens=dep.max_input_tokens if dep else None,
+        max_output_tokens=dep.max_output_tokens if dep else None,
     )
 
 
-def catalog_model_out(row: GwModel, price: GwModelPrice | None) -> CatalogModelOut:
-    return CatalogModelOut(
-        name=row.name,
-        display_name=row.display_name,
-        description=row.description,
-        provider=row.provider,
-        tags=list(row.tags or []),
-        kind=row.kind,
-        protocols=list(row.protocols or []),
-        input_modalities=list(row.input_modalities or []),
-        capabilities=dict(row.capabilities or {}),
-        context_window=row.context_window,
-        max_output_tokens=row.max_output_tokens,
-        dimensions=row.dimensions,
-        max_batch=row.max_batch,
-        data_policy=dict(row.data_policy or {}),
-        status=row.status,
-        disabled=row.disabled,
-        deprecated_at=row.deprecated_at,
-        retire_at=row.retire_at,
-        replacement=row.replacement,
-        price=price_out(price),
-    )
+def key_out(
+    key: GwApiKey,
+    *,
+    allowed: set[str],
+    callable_names: set[str],
+    platform_names: set[str],
+    secret: str | None = None,
+) -> KeySecretOut | KeyOut:
+    """allowed：这把 Key 能选的模型；callable_names：平台登记且 LiteLLM 里有的；
+    platform_names：平台登记的（含 LiteLLM 中缺失的）。"""
+
+    def state(name: str) -> str:
+        if name not in platform_names:
+            return "deleted"
+        if name not in callable_names:
+            return "missing"
+        return "ok" if name in allowed else "revoked"
+
+    models = [KeyModelOut(name=m, state=state(m)) for m in key.models or []]  # type: ignore[arg-type]
+    effective = [m.name for m in models if m.state == "ok"]
+    body = {
+        "uuid": key.uuid,
+        "key_type": key.key_type,
+        "user_uuid": key.user_uuid,
+        "client_type": key.client_type,
+        "client_code": key.client_code,
+        "name": key.name,
+        "status": key.status,
+        "masked": mask(key.secret),
+        "models": models,
+        "effective": effective,
+        "no_models": key.status != "pending" and not effective,
+        "sync_error": key.sync_error,
+        "created_by": key.created_by,
+        "created_at": key.created_at,
+        "rotated_at": key.rotated_at,
+    }
+    if secret is not None:
+        return KeySecretOut(**body, secret=secret)
+    return KeyOut(**body)
 
 
-def purpose_out(row: GwPurpose) -> PurposeOut:
-    spec = PURPOSES[row.code]
-    return PurposeOut(
-        code=spec.code,
-        name=spec.name,
-        kind=spec.kind,
-        description=spec.description,
-        callable=spec.callable,
-        default_model=row.default_model,
-        allowed_models=list(row.allowed_models or []),
-    )
-
-
-def probe_out(row: GwModelProbe) -> ProbeOut:
-    return ProbeOut(
-        id=row.uuid,
-        created_at=row.created_at,
-        created_by=row.created_by,
-        results=list(row.results or []),
-        suggested=dict(row.suggested or {}),
-        differences=dict(row.differences or {}),
-        applied_by=row.applied_by,
-        applied_at=row.applied_at,
-    )
-
-
-def key_out(row: GwModelKey) -> KeyOut:
-    return KeyOut(
-        id=row.uuid,
-        subject_uid=row.subject_uid,
-        subject_type=row.subject_type,
-        subject_name=row.subject_name,
-        masked=mask(row.api_key),
-        status=row.status,
-        issued_by=row.issued_by,
-        created_at=row.created_at,
-        rotated_at=row.rotated_at,
-        disabled_at=row.disabled_at,
-    )
-
-
-def call_out(r: GwModelCall) -> CallOut:
-    return CallOut(
-        id=r.id,
-        at=r.created_at,
-        model=r.model,
-        upstream_model=r.upstream_model,
-        endpoint=r.endpoint,
-        stream=r.stream,
-        subject_uid=r.subject_uid,
-        dept_id=r.dept_id,
-        purpose=r.purpose,
-        caller_app=r.caller_app,
-        user_uid=r.user_uid,
-        agent_id=r.agent_id,
-        run_id=r.run_id,
-        outcome=r.outcome,
-        status=r.status,
-        forwarded=r.forwarded,
-        input_tokens=r.input_tokens,
-        output_tokens=r.output_tokens,
-        cache_read_tokens=r.cache_read_tokens,
-        cache_write_tokens=r.cache_write_tokens,
-        reasoning_tokens=r.reasoning_tokens,
-        usage_reported=r.usage_reported,
-        cost=r.cost,
-        currency=r.currency,
-        ttft_ms=r.ttft_ms,
-        duration_ms=r.duration_ms,
-    )
+def model_rows_by_name(rows: list[GwModel]) -> dict[str, GwModel]:
+    return {r.name: r for r in rows}

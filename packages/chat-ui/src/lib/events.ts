@@ -63,6 +63,8 @@ export const EventType = {
   McpToolDrift: "mcp.tool_drift",
   /** 经 MCP 网关时，这一轮的权限主体用不了某个服务（没权限 / 没 Key / 网关不可用），本轮跳过 */
   McpToolSkipped: "mcp.tool_skipped",
+  /** 这一轮的权限主体读不到某些已绑定的知识库，本轮跳过（auto 模式检索时） */
+  KnowledgeSkipped: "knowledge.skipped",
 } as const;
 
 export type EventTypeValue = (typeof EventType)[keyof typeof EventType];
@@ -329,7 +331,7 @@ export interface ApprovalRequiredData {
   approval_kind?: "tool" | "plan" | "question";
   /** 对应的工具调用。问题卡片据此把那一行工具调用收起来（卡片就是它的完整呈现） */
   tool_call_id?: string;
-  /** 为什么问：manual_mode / auto_uncertain / plan_mode。acp 没有这一项 */
+  /** 为什么问：manual_mode / auto_uncertain / judge_failed / plan_mode。acp 没有这一项 */
   source?: string;
   /** 计划获批时可选的执行模式（作者允许的范围），只在 approval_kind = plan 时有 */
   execution_modes?: ApprovalMode[];
@@ -443,6 +445,15 @@ export interface McpToolSkippedData {
   message: string;
 }
 
+export interface KnowledgeSkippedData {
+  /** 被跳过的知识库 id（权限主体读不到，就不给库名） */
+  dataset_ids: string[];
+  /** 权限主体（用户中心 uid） */
+  subject: string | null;
+  /** 给人看的说明（后端写好） */
+  message: string;
+}
+
 export type TraceEvent =
   | Envelope<typeof EventType.RunStarted, RunStartedData>
   | Envelope<typeof EventType.RunFinished, RunFinishedData>
@@ -474,7 +485,8 @@ export type TraceEvent =
   | Envelope<typeof EventType.SkillLoaded, SkillLoadedData>
   | Envelope<typeof EventType.SkillSkipped, SkillSkippedData>
   | Envelope<typeof EventType.McpToolDrift, McpToolDriftData>
-  | Envelope<typeof EventType.McpToolSkipped, McpToolSkippedData>;
+  | Envelope<typeof EventType.McpToolSkipped, McpToolSkippedData>
+  | Envelope<typeof EventType.KnowledgeSkipped, KnowledgeSkippedData>;
 
 /** 后端将来新增的事件类型（规则 3）—— 解析后但本前端还不认识的，走这里。 */
 export type UnknownTraceEvent = Envelope<string, Record<string, unknown>>;

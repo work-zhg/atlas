@@ -46,6 +46,16 @@ def test_match_full_partial_and_miss() -> None:
     assert (p.rank, p.kind) == (1, "partial")
 
 
+def test_match_passage_mode_requires_equality() -> None:
+    # 短标题被别的段包含：按片段判会在第 1 名误命中，按整段只认第 2 名
+    chunks = ["苹果手机壳 透明防摔款", "苹果手机壳"]
+    assert match_evidence(["苹果手机壳"], chunks)[0].rank == 1
+    (m,) = match_evidence(["苹果手机壳"], chunks, mode="passage")
+    assert (m.rank, m.kind) == (2, "full")
+    (miss,) = match_evidence(["苹果手机"], chunks, mode="passage")
+    assert (miss.rank, miss.kind) == (None, "miss")
+
+
 def _q(qid: str, quotes: list[str], **kw: Any) -> Question:
     from atlas_bench.schema import Evidence
 
@@ -98,6 +108,55 @@ def test_demo_dataset_quotes_are_verbatim() -> None:
         for e in q.evidence:
             assert e.quote in docs[e.doc_id], (q.id, e.quote)
     assert sum(q.unanswerable for q in ds.questions) == 3
+
+
+def test_cmteb_write_dataset_one_passage_per_segment(tmp_path: Path) -> None:
+    from atlas_bench.importers.cmteb import write_dataset
+
+    passages = [
+        ("p1", "第一段\n\n\n段内空行"),
+        ("p2", "  "),  # 空段：跳过
+        ("p3", "长" * 30),  # 超长：截断到 max_chars
+        ("p4", "第一段\n段内空行"),  # 与 p1 清洗后相同
+        ("p5", "第五段"),
+    ]
+    queries = [("q1", "问一"), ("q2", "问二"), ("q3", "问三")]
+    qrels = [("q1", "p1", 1), ("q1", "p5", 1), ("q2", "p2", 1), ("q3", "p9", 1), ("q1", "p3", 0)]
+    root = tmp_path / "cmteb-x"
+    stats = write_dataset(
+        root,
+        name="cmteb-x",
+        version="abc",
+        source={"repo": "C-MTEB/X"},
+        passages=passages,
+        queries=queries,
+        qrels=qrels,
+        per_file=2,
+        max_chars=20,
+    )
+    assert stats["passages"] == 4 and stats["files"] == 2 and stats["queries"] == 1
+    assert stats["empty_passages"] == 1 and stats["truncated_passages"] == 1
+    assert stats["duplicate_passages"] == 1
+    assert stats["queries_skipped"] == 2 and stats["qrels_missing_passage"] == 2
+
+    ds = load_dataset(root)
+    assert ds.evidence_match == "passage" and len(ds.corpus.documents) == 2
+    # 平台按 "\n\n" 切：每个文件切出来的就是写进去的段，出处与其中一段完全相同
+    pieces = {
+        d.doc_id: [t.strip() for t in Path(d.path).read_text(encoding="utf-8").split("\n\n")]
+        for d in ds.corpus.documents
+    }
+    assert sum(len(v) for v in pieces.values()) == 4
+    assert all(len(t) <= 20 for v in pieces.values() for t in v)
+    (q,) = ds.questions
+    assert q.id == "q1" and q.task == "retrieval" and not q.unanswerable
+    assert [e.passage_id for e in q.evidence] == ["p1", "p5"]
+    for e in q.evidence:
+        assert e.quote in pieces[e.doc_id]
+    with pytest.raises(FileExistsError):
+        write_dataset(
+            root, name="cmteb-x", version="abc", source={}, passages=[], queries=[], qrels=[]
+        )
 
 
 # ───────────────────────────────────────────── 端到端（假平台 + 假模型）

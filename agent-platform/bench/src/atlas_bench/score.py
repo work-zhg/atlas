@@ -71,7 +71,9 @@ async def score_run(
         for raw in [f for f in files if f.exists()]:
             platform, variant = raw.stem.split("__", 1)
             rows = load_rows(raw, set(questions))
-            retrieval = score_retrieval(questions, rows, top_k=cfg.top_k)
+            retrieval = score_retrieval(
+                questions, rows, top_k=cfg.top_k, match=ds.evidence_match
+            )
 
             async def judge(
                 qid: str,

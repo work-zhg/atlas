@@ -8,6 +8,9 @@
   3. 出处被分段边界切开：相邻两段拼起来包含，或与某段的局部相似度 ≥ 阈值 → 部分命中（partial）
 
 部分命中也算命中（计入指标），但在报告里单列，方便抽查。
+
+按段落标注的检索集（C-MTEB，数据集清单写 evidence_match: passage）：出处就是整段语料、一段
+正好入库成一个分段，只认「归一化后相等」—— 短标题常被别的段包含，按包含判会误命中。
 """
 
 from __future__ import annotations
@@ -15,10 +18,14 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass
+from typing import Literal
 
 from rapidfuzz import fuzz
 
-__all__ = ["EvidenceMatch", "match_evidence", "normalize"]
+__all__ = ["EvidenceMatch", "MatchMode", "match_evidence", "normalize"]
+
+#: quote = 出处是原文片段（包含 / 拼接 / 模糊）；passage = 出处是整段语料（相等）
+MatchMode = Literal["quote", "passage"]
 
 #: 局部相似度阈值（rapidfuzz partial_ratio，0~100）
 FUZZY_THRESHOLD = 90
@@ -48,7 +55,9 @@ class EvidenceMatch:
     kind: str  # full | partial | miss
 
 
-def match_evidence(quotes: list[str], chunks: list[str]) -> list[EvidenceMatch]:
+def match_evidence(
+    quotes: list[str], chunks: list[str], *, mode: MatchMode = "quote"
+) -> list[EvidenceMatch]:
     """每条出处 → 最早命中它的段落排名。chunks 按检索排名排列。"""
     norm_chunks = [normalize(c) for c in chunks]
     out: list[EvidenceMatch] = []
@@ -56,6 +65,10 @@ def match_evidence(quotes: list[str], chunks: list[str]) -> list[EvidenceMatch]:
         q = normalize(quote)
         if not q:
             out.append(EvidenceMatch(i, None, "miss"))
+            continue
+        if mode == "passage":
+            rank = next((r for r, c in enumerate(norm_chunks, 1) if c == q), None)
+            out.append(EvidenceMatch(i, rank, "full" if rank else "miss"))
             continue
         found: EvidenceMatch | None = None
         for rank, c in enumerate(norm_chunks, 1):

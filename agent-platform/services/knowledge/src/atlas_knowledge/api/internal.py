@@ -2,8 +2,8 @@
 
 内网免令牌（内网身份传递 §3）：调用方带身份请求头，X-Uid 谁在用、X-Auth-Uid 按谁判。
 
-POST /internal/v1/retrieve            智能体运行时检索（库级权限已在运行时按智能体绑定判过；
-                                      文档级权限按 X-Auth-Uid）
+POST /internal/v1/retrieve            智能体运行时检索（库级、文档级权限都按 X-Auth-Uid；
+                                      读不到的库跳过，返回的 skipped 里列出）
 POST /internal/v1/datasets/readable   绑定知识库时校验：auth-uid 能读哪些库（返回名称与描述）
 """
 

@@ -98,7 +98,6 @@ async def run_experiment(
     llm: LlmClient | None,
     run_dir: Path | None = None,
     limit: int | None = None,
-    ingest_timeout_s: float = 3600,
 ) -> Path:
     if run_dir is None:
         stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
@@ -146,7 +145,7 @@ async def run_experiment(
                 ingest_key = json.dumps(variant.ingest, sort_keys=True, ensure_ascii=False)
                 if ingest_key not in kbs:
                     kb = await platform.ingest(ds.corpus, variant.ingest)
-                    report = await platform.wait_ready(kb, timeout_s=ingest_timeout_s)
+                    report = await platform.wait_ready(kb, timeout_s=cfg.ingest_timeout_s)
                     if report.failed:
                         raise RuntimeError(f"{pcfg.adapter} 有文档入库失败：{report.failed[:3]}")
                     logger.info(

@@ -73,12 +73,12 @@ def perms() -> FakePermissions:
 
 @pytest.fixture(autouse=True)
 def _fake_authz(monkeypatch: pytest.MonkeyPatch) -> None:
-    """作用域管理接口的授权快照：用户 admin 有 memory:scope:manage，其他人没有。"""
+    """作用域管理接口的授权快照：用户 admin 有 memory_scope:manage，其他人没有。"""
     from atlas_memory import auth
 
     def handler(request: httpx.Request) -> httpx.Response:
         uid = request.url.path.split("/")[-2]
-        ops = ["memory:scope:manage"] if uid == "admin" else []
+        ops = ["memory_scope:manage"] if uid == "admin" else []
         return httpx.Response(
             200, json={"can_access": True, "permissions": ops, "user": {"status": "active"}}
         )

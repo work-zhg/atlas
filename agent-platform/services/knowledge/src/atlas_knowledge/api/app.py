@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -9,7 +11,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from ..auth import IdentityHeadersMiddleware
+from ..db.session import get_sessionmaker
 from ..errors import KnowledgeError
+from ..indexing.runner import recover_stalled
 from ..runtime import Runtime, build_runtime
 from ..settings import get_settings
 from ..storage import StorageNotConfigured
@@ -20,6 +24,16 @@ from .mcp import build_mcp, mcp_app
 __all__ = ["create_app"]
 
 logger = logging.getLogger(__name__)
+
+
+async def _sweep_ingest(rt: Runtime, interval_s: float) -> None:
+    """入库巡检（runner.recover_stalled）。每个 API 副本各跑一份：重复投递是无害的。"""
+    while True:
+        await asyncio.sleep(interval_s)
+        try:
+            await recover_stalled(rt, get_sessionmaker())
+        except Exception:
+            logger.warning("入库巡检失败，下一轮再试", exc_info=True)
 
 
 def create_app(*, runtime: Runtime | None = None, cors_origins: list[str] | None = None) -> FastAPI:
@@ -33,10 +47,20 @@ def create_app(*, runtime: Runtime | None = None, cors_origins: list[str] | None
         app.state.runtime = runtime or build_runtime(get_settings())
         if owned:
             setup_telemetry(app.state.runtime.settings)
+        interval = app.state.runtime.settings.ingest_sweep_interval_s
+        sweeper = (
+            asyncio.create_task(_sweep_ingest(app.state.runtime, interval), name="kb-ingest-sweep")
+            if interval > 0
+            else None
+        )
         try:
             async with mcp.session_manager.run():
                 yield
         finally:
+            if sweeper is not None:
+                sweeper.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await sweeper
             if owned:
                 await app.state.runtime.aclose()
                 shutdown_telemetry()

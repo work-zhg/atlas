@@ -44,7 +44,9 @@ _SAFE = {"GET", "HEAD", "OPTIONS"}
 #: 须改密时仍可访问的接口
 _CHANGE_ALLOWED = {"/api/v1/auth/me", "/api/v1/auth/password", "/api/v1/auth/logout"}
 
-SessionDep = Annotated[AsyncSession, Depends(get_session)]
+# ★ scope="function"：请求事务在响应发出之前提交。默认（request）是响应发出之后才执行 yield 后面的
+#   commit —— 客户端拿到 200 立刻发下一个请求，会查不到刚写的数据（登录后立即调接口报「登录已过期」）
+SessionDep = Annotated[AsyncSession, Depends(get_session, scope="function")]
 SettingsDep = Annotated[UCSettings, Depends(get_settings)]
 
 

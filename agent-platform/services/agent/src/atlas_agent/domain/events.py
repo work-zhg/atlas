@@ -100,6 +100,10 @@ class EventType(StrEnum):
     #: data: {server, tools, reason: forbidden | no_key, subject, message}
     #: ★ 必须是事件：静默少一个工具，模型照常做事、只是做不好，用户不知道为什么。
     MCP_TOOL_SKIPPED = "mcp.tool_skipped"
+    #: 这一轮的权限主体（X-Auth-Uid）读不到某些已绑定的知识库，本轮跳过（auto 模式检索时）。
+    #: data: {dataset_ids, subject, message}。不给库名：主体读不到，就不该看到它叫什么
+    #: ★ 必须是事件：静默少一个库，回答照常、只是缺了资料，用户不知道为什么。
+    KNOWLEDGE_SKIPPED = "knowledge.skipped"
     #: 经模型网关时，这一轮用的模型已弃用：照常运行，提示替代模型和下线日期
     #: （模型管理方案设计 §5.3）。
     #: data: {model, replacement, retire_at, message}

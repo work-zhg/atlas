@@ -4,9 +4,13 @@
   python -m atlas_agent reassign-threads map.json      TeamFlow 的存量会话改归真实的人（§14）
   python -m atlas_agent backfill-agent-identity        存量 Agent 补数字员工、登记 AtlasAgent
                                                        （数字员工设计 §12，迁移 0023 之后）
-  python -m atlas_agent export-models > models.json    导出模型目录、数字员工用到的模型、
-                                                       平台用途，交给模型网关的 import
-                                                       （模型管理方案设计 §6.3）
+  python -m atlas_agent register-agent-keys             存量智能体在模型管理平台上补建客户端 Key
+                                                       （「待分配」；已有的不动），
+                                                       每行打印 id 与状态
+  python -m atlas_agent service-model list              平台服务（会话标题、记忆补记）用哪个模型
+  python -m atlas_agent service-model set title --client-type Service --client-code session-title \
+                        --model deepseek-flash          配置（要先在模型管理平台建好 Key、分配模型）
+  python -m atlas_agent service-model clear title
 """
 
 from __future__ import annotations
@@ -38,9 +42,20 @@ def main(argv: list[str] | None = None) -> int:
     bf.add_argument("--uc-url", default=None)
     bf.add_argument("--dry-run", action="store_true", help="只统计，不写")
     sub.add_parser(
-        "export-models",
-        help="导出模型目录、数字员工用到的模型、平台用途（给模型网关的 import 用）",
+        "register-agent-keys",
+        help="存量智能体在模型管理平台上补建客户端 Key（待分配；已有的不动）",
     )
+    sm = sub.add_parser(
+        "service-model",
+        help="平台服务（会话标题、记忆补记、自动模式判断器）用模型管理平台上的哪把 Key、哪个模型",
+    ).add_subparsers(dest="action", required=True)
+    sm.add_parser("list")
+    sm_set = sm.add_parser("set")
+    sm_set.add_argument("purpose", help="title | memory_backfill | approval_judge")
+    sm_set.add_argument("--client-type", required=True)
+    sm_set.add_argument("--client-code", required=True)
+    sm_set.add_argument("--model", required=True)
+    sm.add_parser("clear").add_argument("purpose")
     args = parser.parse_args(argv)
 
     if args.command == "register-uc":
@@ -82,21 +97,63 @@ def main(argv: list[str] | None = None) -> int:
                 await uc.aclose()
 
         print(json.dumps(asyncio.run(_run()), ensure_ascii=False, indent=2))
-    elif args.command == "export-models":
+    elif args.command == "register-agent-keys":
         import asyncio
-        import json
+
+        from sqlalchemy import select
+
+        from .config import get_settings
+        from .db.models import Agent
+        from .db.session import get_engine, get_sessionmaker
+        from .providers.llm.model_platform import agent_key, uses_model_platform
+
+        async def _register() -> int:
+            settings = get_settings()
+            if not uses_model_platform(settings):
+                print("✗ 没有接入模型管理平台（MODEL_PLATFORM_URL）", file=sys.stderr)
+                return 1
+            try:
+                async with get_sessionmaker()() as session:
+                    live = select(Agent).where(Agent.status != "archived")
+                    rows = list(await session.scalars(live))
+            finally:
+                await get_engine().dispose()
+            for agent in rows:
+                key = await agent_key(settings, agent.id, agent.name)
+                print(f"{agent.id}\t{key.status}\t{agent.name}")
+            return 0
+
+        return asyncio.run(_register())
+    elif args.command == "service-model":
+        import asyncio
 
         from .config import get_settings
         from .db.session import get_engine, get_sessionmaker
-        from .providers.llm.export import export_models
+        from .services.service_models import ServiceModelService
 
-        async def _export() -> dict[str, object]:
+        async def _service_model() -> None:
             try:
-                return await export_models(get_sessionmaker(), get_settings())
+                async with get_sessionmaker()() as session:
+                    service = ServiceModelService(session, get_settings())
+                    if args.action == "set":
+                        await service.set(
+                            args.purpose,
+                            client_type=args.client_type,
+                            client_code=args.client_code,
+                            model=args.model,
+                            actor=None,
+                        )
+                    elif args.action == "clear":
+                        await service.clear(args.purpose)
+                    await session.commit()
+                    for v in await service.list():
+                        where = f"{v.client_type}:{v.client_code} / {v.model}" if v.model else "—"
+                        state = "✓" if v.ready else f"✗ {v.problem}"
+                        print(f"{v.name}（{v.purpose}）  {where}  {state}")
             finally:
                 await get_engine().dispose()
 
-        print(json.dumps(asyncio.run(_export()), ensure_ascii=False, indent=2))
+        asyncio.run(_service_model())
     return 0
 
 

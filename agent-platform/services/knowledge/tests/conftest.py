@@ -44,10 +44,12 @@ _TABLES = (
 def _test_env() -> Iterator[None]:
     saved = {
         k: os.environ.get(k)
-        for k in ("ATLAS_KB_DATABASE_URL", "ATLAS_KB_REDIS_URL")
+        for k in ("ATLAS_KB_DATABASE_URL", "ATLAS_KB_REDIS_URL", "ATLAS_KB_INGEST_SWEEP_INTERVAL_S")
     }
     os.environ["ATLAS_KB_DATABASE_URL"] = TEST_URL
     os.environ["ATLAS_KB_REDIS_URL"] = TEST_REDIS
+    # 入库巡检不在后台跑：用例显式调 recover_stalled
+    os.environ["ATLAS_KB_INGEST_SWEEP_INTERVAL_S"] = "0"
     get_settings.cache_clear()
 
     async def _ensure() -> None:

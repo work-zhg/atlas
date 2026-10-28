@@ -13,7 +13,9 @@
       delegate        拦下    请示    判断
 
     拦下  不执行，回一条失败的工具结果说明原因，不挂起
-    判断  交给判断器（P2）；P1 还没有判断器：派活放行（子 run 继承模式，动作照样受管），其余请示
+    判断  交给判断器（auto_judge.py）：放行就执行；拦下就把规则和理由作为失败的工具结果交回、要求不要
+          换写法绕过，不挂起；判断器出错退回请示用户。
+          没有配置判断器时：派活放行（子 run 继承模式，动作照样受管），其余请示
 
 ★ 工具列表在所有模式下完全一样（exit_plan_mode 也一直在）：判定发生在调用时。切模式不改系统提示词和
   工具定义 —— 它们是 prompt 缓存的前缀。规划模式的说明附在用户本轮那条消息上，只进请求、不进 state。
@@ -24,6 +26,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable, Collection, Mapping
 from typing import Any, Literal, NotRequired
 
@@ -41,8 +44,12 @@ from atlas_engine.kernel.middleware.approval import (
     approval_id_for,
     run_id_of,
 )
+from atlas_engine.kernel.middleware.ask_user import ASK_USER_QUESTION
+from atlas_engine.kernel.middleware.auto_judge import AutoJudge, blocked_result
 from atlas_engine.kernel.middleware.suspension import SuspensionState, release_wait
 from atlas_engine.kernel.middleware.tool_search import TOOL_SEARCH
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "EXIT_PLAN_MODE",
@@ -97,6 +104,9 @@ _KERNEL_TOOLS: dict[str, ToolEffect] = {
     TOOL_SEARCH: ToolEffect.READ,  # 按需加载 MCP 工具的定义
     EXIT_PLAN_MODE: ToolEffect.PLAN,
 }
+
+#: 结果代表用户决定的工具：判断器的记录里带上用户的决定（批准的计划、对提问的回答）
+_USER_DECISION_TOOLS = frozenset({EXIT_PLAN_MODE, ASK_USER_QUESTION})
 
 _EFFECT_LABEL = {
     ToolEffect.WRITE: "写入工作区文件",
@@ -165,6 +175,7 @@ class PermissionMiddleware(AgentMiddleware):
         gate: ApprovalGate | None,
         execution_modes: tuple[ApprovalMode, ...] = ("manual", "auto"),
         irreversible: Collection[str] = (),
+        judge: AutoJudge | None = None,
     ) -> None:
         """
         effects          模型侧工具名 → 副作用类别。查不到的按 EXTERNAL（最保守）
@@ -172,12 +183,14 @@ class PermissionMiddleware(AgentMiddleware):
         gate             审批门禁；None 时请示一律按「门禁故障」不放行
         execution_modes  计划获批时用户可选的执行模式（作者允许的范围），随 approval.required 发给前端
         irreversible     不可逆的工具（delete）：自动模式下即使属于工作区写入也不直接放行
+        judge            自动模式的判断器；None = 没有配置
         """
         super().__init__()
         self._effects = {**effects, **_KERNEL_TOOLS}
         self._irreversible = frozenset(irreversible)
         self._default_mode = default_mode
         self._gate = gate
+        self._judge = judge
         self._execution_modes = execution_modes
         self.tools = [_exit_plan_mode_tool()]
 
@@ -245,13 +258,32 @@ class PermissionMiddleware(AgentMiddleware):
         if verdict == _ASK:
             reason = f"手动模式：{label}需要确认"
             return await self._ask(request, handler, kind="tool", source="manual_mode", reason=reason)
-        # 判断：P1 还没有判断器（设计文档第 16 节）。
-        # ★ 派活放行，其余请示。派活本身没有直接副作用，子 run 继承本 run 的模式，它自己的命令、
-        #   外部调用照样要请示；若派活也请示，三种模式下就都无法不经批准派活（规划拦下、手动请示）。
-        #   判断器上线后派活改为审查任务书（设计 10.7）
+        # 判断：交给判断器。派活也判断 —— 审查任务书（子 run 的判断器以任务书为分工、以用户的消息为准）
+        if self._judge is not None:
+            try:
+                judged = await self._judge.judge(
+                    call,
+                    state.get("messages") or [],
+                    effects=self._effects,
+                    user_tools=_USER_DECISION_TOOLS,
+                )
+            except Exception:
+                # ★ 出错不替用户做决定：退回请示
+                logger.warning("判断器出错，退回请示用户：%s", name, exc_info=True)
+                reason = f"自动模式：判断器出错，{label}需要确认"
+                return await self._ask(request, handler, kind="tool", source="judge_failed", reason=reason)
+            if judged is not None:
+                if not judged.block:
+                    return await handler(request)
+                # ★ 拒绝并继续：不挂起，规则和理由作为失败的工具结果交回，模型换更安全的做法或停下说明
+                logger.info("判断器拦下 %s：[%s] %s", name, judged.rule, judged.reason)
+                return _failed(call_id, name, blocked_result(judged))
+        # 没有配置判断器：派活放行，其余请示。
+        # ★ 派活本身没有直接副作用，子 run 继承本 run 的模式，它自己的命令、外部调用照样要请示；
+        #   若派活也请示，三种模式下就都无法不经批准派活（规划拦下、手动请示）
         if effect is ToolEffect.DELEGATE:
             return await handler(request)
-        reason = f"自动模式：{label}需要确认（判断器尚未启用）"
+        reason = f"自动模式：{label}需要确认（没有配置判断器）"
         return await self._ask(request, handler, kind="tool", source="auto_uncertain", reason=reason)
 
     async def _ask(

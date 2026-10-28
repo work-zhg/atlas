@@ -47,6 +47,7 @@ THIRD=(
   docker.io/langfuse/langfuse:3
   docker.io/langfuse/langfuse-worker:3
   higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/all-in-one:2.2.4
+  ghcr.io/berriai/litellm:main-stable
   registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.16.0
   sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/server:release-1.1.1
   sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/controller:release-1.1.1

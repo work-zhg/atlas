@@ -119,6 +119,7 @@ async def test_multi_dataset_stages(client: Any, rt: Any) -> None:
             "source_ref": "thread-1",
             "retrieval_config": {"top_k": 1},
         },
+        headers=ALICE,
     )
     rid = r.json()["retrieval_id"]
     f = (await client.get(f"/v1/retrievals/{rid}", headers=ALICE)).json()

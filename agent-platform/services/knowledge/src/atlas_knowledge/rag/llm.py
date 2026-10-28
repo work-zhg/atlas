@@ -53,7 +53,7 @@ class OpenAICompatibleChat:
         self._retries = max_retries
         self._client = httpx.AsyncClient(
             base_url=base_url.rstrip("/"),
-            # headers：经模型网关时的平台用途（X-Model-Purpose、X-Caller-App），不带 Key
+            # headers：额外的请求头
             headers={
                 **({"Authorization": f"Bearer {api_key}"} if api_key else {}),
                 **(headers or {}),
@@ -64,6 +64,13 @@ class OpenAICompatibleChat:
 
     async def aclose(self) -> None:
         await self._client.aclose()
+
+    def set_api_key(self, api_key: str) -> None:
+        """换 Key（经模型管理平台时，客户端 Key 随时可能被重置）。"""
+        if api_key:
+            self._client.headers["Authorization"] = f"Bearer {api_key}"
+        else:
+            self._client.headers.pop("Authorization", None)
 
     async def complete(
         self,

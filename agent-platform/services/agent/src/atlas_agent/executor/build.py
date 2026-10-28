@@ -37,6 +37,7 @@ if TYPE_CHECKING:
         SkillRef,
         SubAgentSpawner,
     )
+    from atlas_engine.kernel.middleware.auto_judge import AutoJudge
     from langchain_core.language_models import BaseChatModel
 
     from atlas_agent.domain.spec import AgentSpec
@@ -79,6 +80,7 @@ def build_graph(
     filesystem: FilesystemProtocol | None = None,
     sandbox: SandboxProtocol | None = None,
     approvals: ApprovalGate | None = None,
+    judge: AutoJudge | None = None,
     compactor: Any = None,
     skills: list[SkillRef] | None = None,
     extra_tools: list[Any] | None = None,
@@ -95,6 +97,8 @@ def build_graph(
 
     prompt_cache_ttl 为 None 时不打缓存标记。是否传由 assembly 按「spec 开了缓存 且
     模型目录实测支持」决定 —— 本模块不碰 DB 与 Settings。
+
+    judge 是自动模式的判断器（None = 没有配置：判断格按没有判断器处理，见 PermissionMiddleware）。
     """
     from atlas_engine.kernel.graph import FilesystemConfig, SubAgentConfig, create_deep_agent
 
@@ -174,6 +178,7 @@ def build_graph(
             gate=approvals,
             execution_modes=spec.approval.execution_modes(),
             irreversible=irreversible_tools(),
+            judge=judge,
         )
     )
     if compactor is not None:

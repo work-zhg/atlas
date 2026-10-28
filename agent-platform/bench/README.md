@@ -18,6 +18,7 @@
 
 ```bash
 uv run python -m atlas_bench datasets                          # 可用数据集
+uv run python -m atlas_bench import cmteb EcomRetrieval        # 导入 C-MTEB 检索子集到 var/bench/datasets/cmteb-ecom
 uv run python -m atlas_bench run agent-platform/bench/experiments/demo.yaml   # 入库 → 检索 → 生成 → 判分 → 报告
 uv run python -m atlas_bench run agent-platform/bench/experiments/demo.yaml --limit 5          # 只跑前 5 题
 uv run python -m atlas_bench run agent-platform/bench/experiments/demo.yaml --resume <运行目录>  # 断点续跑
@@ -42,6 +43,10 @@ uv run python -m atlas_bench cleanup                           # 删除评测在
 - `evidence.quote` 必须逐字出现在文档里（测试会校验）；用原文片段判断是否命中，不依赖平台的分段 ID。
 - `reference` 写成完整的句子：RAGAS 按陈述判断，过短的参考答案（如只写「每周三」）会让判分失真。
 - 仓库自带的 `demo-zh` 是走通流程用的样例集（虚构公司制度，20 题）；公开评测集由导入器转成同一格式后放在 `var/bench/datasets/`。
+- 按段落标注的检索集（C-MTEB）清单写 `evidence_match: passage`：出处是整段语料，检索结果归一化后与它相等才算命中
+  （默认 `quote` 按包含 / 拼接 / 模糊判断，短标题会被别的段包含而误命中）。
+- C-MTEB（`importers/cmteb.py`）：语料、查询全量，nDCG@10 可对照公开榜单。每个文件打包 1000 段、段间空一行，
+  `experiments/cmteb.yaml` 用通用分段按 `\n\n` 切 → 一段一个分段；超过 4000 字的段截断。只评检索。
 
 ## 智能体评测（doc/agent-eval-design.html）
 
@@ -75,5 +80,5 @@ uv run python -m atlas_bench agent cleanup                                 # 删
 已实现：统一数据格式、Atlas 适配器（入库复用、多种检索方式共用一个库）、断点续跑、出处匹配 + ranx 检索指标、
 统一生成、CRAG 计分与拒答（裁判模型）、RAGAS 忠实度与事实正确性、错题归因、bootstrap 置信区间与配对比较、报告。
 
-待做（见设计 §16）：公开评测集导入器（CRUD-RAG、MultiHop-RAG、C-MTEB、RGB…）、RAGAS 提示词中文化与裁判校准、
+待做（见设计 §16）：公开评测集导入器（CRUD-RAG、MultiHop-RAG、RGB…；C-MTEB 已做）、RAGAS 提示词中文化与裁判校准、
 其余 RAGAS 指标、Dify / RAGFlow 适配器、两两盲评、人工复核工具、私有文档出题、K8s Job。

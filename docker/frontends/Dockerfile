@@ -42,7 +42,8 @@ ENV NEXT_PUBLIC_BASE_PATH=/atlas \
     NEXT_PUBLIC_API_BASE=/atlas-api \
     NEXT_PUBLIC_CONFIG_API_BASE=/atlas-config-api \
     NEXT_PUBLIC_KNOWLEDGE_API_BASE=/atlas-knowledge-api \
-    NEXT_PUBLIC_MCP_GATEWAY_API_BASE=/mcp-gateway-api
+    NEXT_PUBLIC_MCP_GATEWAY_API_BASE=/mcp-gateway-api \
+    NEXT_PUBLIC_MODEL_GATEWAY_API_BASE=/model-gateway-api
 RUN pnpm --filter atlas-web build
 
 # ── 用户中心：/uc

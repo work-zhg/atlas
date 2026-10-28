@@ -1,8 +1,8 @@
-"""元数据服务：model_catalog ⋈ 网关巡检结果（文档 §11.4）。
+"""元数据服务：编辑器里可选的模型、工具、知识库。
 
-网关不可达时**不报错** —— 退化为 catalog 中的存量 is_available，
-并在响应里把 gateway_reachable 置 false，让前端能提示"可用性未刷新"。
-这是 §13.2「不允许静默降级」的应用。
+模型：经模型管理平台时按智能体的客户端 Key 列出（模型管理方案设计 7.2）；没接平台时
+model_catalog ⋈ litellm 巡检结果（文档 §11.4）。取不到时**不报错**，把 gateway_reachable 置 false，
+让前端能提示（§13.2「不允许静默降级」）。
 """
 
 from __future__ import annotations
@@ -19,22 +19,27 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from atlas_agent.domain.tool_registry import BASH_TOOL, BUILTIN_TOOLS, MEMORY_TOOL
 from atlas_agent.providers.llm.gateway import GatewayConfig, list_models
-from atlas_agent.providers.llm.modelgateway import (
-    CatalogModel,
-    model_catalog,
-    model_subject_access,
-    uses_model_gateway,
+from atlas_agent.providers.llm.model_platform import (
+    ModelPlatformUnavailable,
+    PlatformModel,
+    agent_key,
+    platform_catalog,
+    uses_model_platform,
 )
 
 from ..config import Settings
 from ..errors import CapabilityUnavailable
+from ..providers.knowledge import KnowledgeUnavailable, readable_as
 from ..providers.mcp import make_mcp_catalog, mcp_subject_access, review_status, tool_id
 from ..repositories.model_catalog import ModelCatalogRepository
 from ..schemas.meta import (
+    KnowledgeBaseInfo,
+    KnowledgeListResponse,
+    KnowledgeSubjectOut,
     McpSubjectOut,
     ModelInfo,
+    ModelKeyOut,
     ModelListResponse,
-    ModelSubjectOut,
     ToolInfo,
     ToolListResponse,
 )
@@ -113,9 +118,12 @@ class MetaService:
             logger.warning("redis unavailable while writing models cache", exc_info=True)
         return set(models)
 
-    async def list_models(self, *, subject: McpSubject | None = None) -> ModelListResponse:
-        if uses_model_gateway(self._settings):
-            return await self._gateway_models(subject)
+    async def list_models(
+        self, *, agent_id: UUID | None = None, agent_name: str = ""
+    ) -> ModelListResponse:
+        """agent_id：编辑已有的智能体；新建时不给。"""
+        if uses_model_platform(self._settings):
+            return await self._platform_models(agent_id, agent_name)
         available = await self._available_models()
         if available is not None:
             await self._repo.sync_availability(available)
@@ -142,45 +150,68 @@ class MetaService:
             gateway_reachable=available is not None,
         )
 
-    async def _gateway_models(self, subject: McpSubject | None) -> ModelListResponse:
-        """经模型网关：只列这个主体能用的对话模型（doc/model-design.html §6.4、§11.2）。
+    async def _platform_models(self, agent_id: UUID | None, agent_name: str) -> ModelListResponse:
+        """经模型管理平台（模型管理方案设计 7.2）：智能体的客户端 Key 分配了模型就只列它们；
+        还没分配（新建、待分配、停用）就先列平台上登记的全部模型，并说明分配之前不能运行。
 
-        ★ 弃用的也列出（已选的要看得见替代模型），但标为不能新选；没权限的只给个数。
-        ★ 以 Agent 为权限、还没有数字员工（第一次保存之前）：列出全部可用的对话模型，并提示
-          保存后要请模型所有者给数字员工授权（§6.4）。
+        ★ 与权限类型无关：同一个智能体对所有使用者能用的模型相同。
+        ★ 思考、档位、温度等能力仍按 model_catalog 表（平台不登记能力）；表里没有的按不支持处理。
         """
-        out = ModelSubjectOut(
-            kind=subject.kind if subject else "user", uid=subject.uid if subject else None
-        )
+        out = ModelKeyOut(status="none")
         try:
-            catalog = await model_catalog(self._settings, self._redis)
-        except CapabilityUnavailable as exc:
-            logger.warning("模型网关不可用，模型列表为空：%s", exc)
-            out.notes.append(f"模型网关暂时不可用：{exc}")
-            return ModelListResponse(data=[], gateway_reachable=False, subject=out)
-        live = [m for m in catalog.models.values() if m.kind == "chat" and m.usable]
-        if subject is None or subject.uid is None:
-            if subject is not None:
-                out.notes.append(
-                    "保存后请模型所有者给这个 Agent 的数字员工授权模型，授权之前它不能运行"
-                )
-            visible = live
-        else:
-            try:
-                access = await model_subject_access(self._settings, subject.uid)
-            except CapabilityUnavailable as exc:
-                out.notes.append(f"模型网关暂时不可用：{exc}")
-                return ModelListResponse(data=[], gateway_reachable=False, subject=out)
-            visible = [m for m in live if access.allows(m.name)]
-            out.hidden_models = len(live) - len(visible)
-            if not visible:
-                who = "这个 Agent 的数字员工" if subject.kind == "agent" else "你"
-                out.notes.append(f"{who}还没有被授权任何模型：请联系模型所有者或模型管理员")
-            if access.key is None and access.key_status == "disabled":
-                out.notes.append("模型 Key 已被停用：运行时会失败，请联系模型管理员")
+            key = await agent_key(self._settings, agent_id, agent_name) if agent_id else None
+            if key is not None:
+                out.status = key.status  # type: ignore[assignment]
+            if key is not None and key.status == "active":
+                models = list(key.models)
+            else:
+                models = await platform_catalog(self._settings)
+                if key is None:
+                    out.notes.append("保存后由模型管理员给这个智能体分配模型，分配之前它不能运行")
+                elif (problem := key.problem()) is not None:
+                    out.notes.append(f"{problem}（这里先列出平台上登记的全部模型）")
+        except ModelPlatformUnavailable as exc:
+            logger.warning("模型管理平台不可用，模型列表为空：%s", exc)
+            out.notes.append(f"模型管理平台暂时不可用：{exc}")
+            return ModelListResponse(data=[], gateway_reachable=False, key=out)
+        rows = {r.model: r for r in await self._repo.list_all()}
         return ModelListResponse(
-            data=[_model_info(m) for m in sorted(visible, key=lambda m: m.name)],
+            data=[_platform_info(m, rows.get(m.name)) for m in models],
             gateway_reachable=True,
+            key=out,
+        )
+
+    async def list_knowledge(self, subject: McpSubject) -> KnowledgeListResponse:
+        """编辑器里可选的知识库：权限主体能读的（与运行时、保存时同一道闸门）。
+
+        ★ 以 Agent 为权限、还没有数字员工（第一次保存之前）：一个都不列，提示保存后请库的
+          所有者共享给数字员工（同 MCP）。
+        """
+        out = KnowledgeSubjectOut(kind=subject.kind, uid=subject.uid)
+        who = "这个 Agent 的数字员工" if subject.kind == "agent" else "你"
+        if subject.uid is None:
+            out.notes.append("保存后请库的所有者把知识库共享给这个 Agent 的数字员工，再回来绑定")
+            return KnowledgeListResponse(data=[], subject=out)
+        try:
+            rows = await readable_as(self._settings, subject.uid)
+        except KnowledgeUnavailable as exc:
+            out.notes.append(f"知识库服务暂时不可用：{exc}")
+            return KnowledgeListResponse(data=[], subject=out)
+        if rows is None:
+            out.notes.append("服务端未接入知识库服务，不能绑定知识库")
+            return KnowledgeListResponse(data=[], subject=out)
+        if not rows:
+            out.notes.append(f"{who}还没有能读的知识库：请库的所有者共享给{who}")
+        return KnowledgeListResponse(
+            data=[
+                KnowledgeBaseInfo(
+                    id=str(d["id"]),
+                    name=str(d.get("name") or ""),
+                    description=d.get("description"),
+                    icon=d.get("icon"),
+                )
+                for d in rows
+            ],
             subject=out,
         )
 
@@ -268,29 +299,20 @@ class MetaService:
         return out
 
 
-def _model_info(m: CatalogModel) -> ModelInfo:
-    """模型目录 → 编辑器原来认的形状（能力字段一一对应，见 catalog.Capabilities）。"""
-    caps = m.caps()
+def _platform_info(m: PlatformModel, row: Any) -> ModelInfo:
+    """平台上的模型 → 编辑器认的形状。规格先看平台（LiteLLM 里登记的），能力看 model_catalog 表。"""
     return ModelInfo(
         model=m.name,
-        provider=m.protocol() or "anthropic",
+        # 经平台一律走 Anthropic Messages（LiteLLM 转换）
+        provider="anthropic",
         display_name=m.display_name,
-        context_window=m.context_window or 0,
-        max_output_tokens=m.max_output_tokens or 0,
-        supports_thinking=caps.thinking,
-        supports_adaptive_thinking=caps.adaptive_thinking,
-        supports_effort=caps.effort,
-        supports_cache=caps.prompt_cache,
-        supports_temperature=caps.temperature,
-        min_cacheable_tokens=int(m.capabilities.get("min_cacheable_tokens") or 0),
-        is_available=m.usable,
-        status=m.status,
-        selectable=m.selectable,
-        description=m.description,
-        tags=list(m.tags),
-        input_modalities=list(m.input_modalities),
-        replacement=m.replacement,
-        retire_at=m.retire_at,
-        data_policy=dict(m.data_policy),
-        price=dict(m.price) if m.price else None,
+        context_window=m.max_input_tokens or (row.context_window if row else 0),
+        max_output_tokens=m.max_output_tokens or (row.max_output_tokens if row else 0),
+        supports_thinking=bool(row and row.supports_thinking),
+        supports_adaptive_thinking=bool(row and row.supports_adaptive_thinking),
+        supports_effort=bool(row and row.supports_effort),
+        supports_cache=bool(row and row.supports_cache),
+        supports_temperature=bool(row and row.supports_temperature),
+        min_cacheable_tokens=row.min_cacheable_tokens if row else 0,
+        is_available=True,
     )

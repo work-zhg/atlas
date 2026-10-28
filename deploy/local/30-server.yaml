@@ -89,11 +89,14 @@ spec:
             # 复核结论都从网关读，调用带这一轮权限主体的 API Key。★ 这里只有网关地址 —— 没有 Higress
             # 的地址，也没有任何后端凭据。serpapi 的 90s 调用超时在网关登记时定（mcp-cutover.sh）
             - {name: MCP_GATEWAY_URL, value: "http://atlas-mcpgateway.atlas-system.svc.cluster.local:8070"}
-            # 模型（doc/model-design.html，38-modelgateway.yaml）：ConfigMap atlas-model-gateway 有了才经模型网关
-            #   （deploy/server/model-cutover.sh 在模型登记、授权完成后建它）；没有时照旧直连 LITELLM_BASE_URL。
-            #   ★ 经模型网关时 ACP Pod 拿到的是网关地址和主体 Key，不再是供应商 Key
-            - name: MODEL_GATEWAY_URL
-              valueFrom: {configMapKeyRef: {name: atlas-model-gateway, key: url, optional: true}}
+            # 模型（agent-platform/doc/design/model-design.html）：ConfigMap atlas-model-platform 有了才经
+            #   模型管理平台（38-modelgateway.yaml）和 LiteLLM（39-litellm.yaml）—— deploy/server/model-cutover.sh
+            #   建它；没有时照旧直连 LITELLM_BASE_URL。
+            #   ★ 经平台时每个智能体一把客户端 Key，调用直连 LiteLLM；ACP Pod 拿到的是 LiteLLM 地址和这把 Key
+            - name: MODEL_PLATFORM_URL
+              valueFrom: {configMapKeyRef: {name: atlas-model-platform, key: platform_url, optional: true}}
+            - name: MODEL_LITELLM_URL
+              valueFrom: {configMapKeyRef: {name: atlas-model-platform, key: litellm_url, optional: true}}
             # ★ 会话文件预览的 frame-ancestors（previews.py）：经前端网关（:8080，见 40-frontends.yaml）
             #   打开的预览页要能 iframe 嵌入预览站点
             #   __PUBLIC_ORIGIN__ = 前端网关的对外地址（apply.sh 替换；本机 http://localhost:8080）

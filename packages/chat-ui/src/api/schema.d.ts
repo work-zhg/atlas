@@ -30,7 +30,11 @@ export interface paths {
         };
         /**
          * List Models
-         * @description model_catalog ⋈ 网关 /v1/models 巡检结果。
+         * @description 可选的模型。
+         *
+         *     经模型网关时按这个 Agent 的权限主体列出（doc/model-design.html §6.4、§11.2），参数同 /tools：
+         *     以人为权限 = 当前用户自己的权限；以 Agent 为权限 = 它的数字员工的权限。
+         *     没接模型网关时：model_catalog ⋈ 网关 /v1/models 巡检结果，不分人。
          */
         get: operations["list_models_v1_models_get"];
         put?: never;
@@ -57,6 +61,28 @@ export interface paths {
          *     agent_id：编辑已有的 Agent；新建时不给，按 auth_subject（缺省 = 以人为权限）。
          */
         get: operations["list_tools_v1_tools_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/knowledge-bases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Knowledge Bases
+         * @description 编辑器里可选的知识库，按这个 Agent 的权限主体列出（参数同 /tools）：
+         *     以人为权限 = 当前用户能读的；以 Agent 为权限 = 它的数字员工能读的。
+         *     运行时知识库按同一个主体（X-Auth-Uid）判，读不到的库跳过。
+         */
+        get: operations["list_knowledge_bases_v1_knowledge_bases_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1542,7 +1568,7 @@ export interface components {
          * EventType
          * @enum {string}
          */
-        EventType: "run.started" | "run.finished" | "run.failed" | "run.cancelled" | "run.suspended" | "run.resumed" | "thinking.delta" | "message.delta" | "message.completed" | "todos.updated" | "tool.started" | "tool.updated" | "tool.completed" | "tool.failed" | "subagent.started" | "subagent.step" | "subagent.finished" | "file.written" | "file.deleted" | "usage.updated" | "approval.required" | "question.answered" | "context.compacted" | "context.cleared" | "context.usage" | "session.lost" | "agent.mode" | "thread.title_generated" | "skill.loaded" | "skill.skipped" | "mcp.tool_drift" | "mcp.tool_skipped";
+        EventType: "run.started" | "run.finished" | "run.failed" | "run.cancelled" | "run.suspended" | "run.resumed" | "thinking.delta" | "message.delta" | "message.completed" | "todos.updated" | "tool.started" | "tool.updated" | "tool.completed" | "tool.failed" | "subagent.started" | "subagent.step" | "subagent.finished" | "file.written" | "file.deleted" | "usage.updated" | "approval.required" | "question.answered" | "context.compacted" | "context.cleared" | "context.usage" | "session.lost" | "agent.mode" | "thread.title_generated" | "skill.loaded" | "skill.skipped" | "mcp.tool_drift" | "mcp.tool_skipped" | "knowledge.skipped" | "model.deprecated";
         /** GrantSubject */
         GrantSubject: {
             /**
@@ -1567,6 +1593,26 @@ export interface components {
             /** Readable */
             readable?: boolean | null;
         };
+        /** KnowledgeBaseInfo */
+        KnowledgeBaseInfo: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description?: string | null;
+            /** Icon */
+            icon?: string | null;
+        };
+        /**
+         * KnowledgeListResponse
+         * @description 权限主体能读（≥ READ）的知识库 —— 运行时知识库按同一个主体判。
+         */
+        KnowledgeListResponse: {
+            /** Data */
+            data: components["schemas"]["KnowledgeBaseInfo"][];
+            subject: components["schemas"]["KnowledgeSubjectOut"];
+        };
         /** KnowledgeSpecIn */
         KnowledgeSpecIn: {
             /** Dataset Ids */
@@ -1589,6 +1635,24 @@ export interface components {
              * @default false
              */
             rerank: boolean;
+        };
+        /**
+         * KnowledgeSubjectOut
+         * @description 编辑器里可选的知识库按谁的权限列出（同 MCP 方案设计 §9.2）。
+         */
+        KnowledgeSubjectOut: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "user" | "agent";
+            /** Uid */
+            uid?: string | null;
+            /**
+             * Notes
+             * @default []
+             */
+            notes: string[];
         };
         /** LimitSpecIn */
         LimitSpecIn: {
@@ -1859,6 +1923,48 @@ export interface components {
              * @description 网关巡检结果；false 时编辑器标灰不可选
              */
             is_available: boolean;
+            /**
+             * Status
+             * @default available
+             */
+            status: string;
+            /**
+             * Selectable
+             * @default true
+             */
+            selectable: boolean;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /**
+             * Tags
+             * @default []
+             */
+            tags: string[];
+            /**
+             * Input Modalities
+             * @default [
+             *       "text"
+             *     ]
+             */
+            input_modalities: string[];
+            /** Replacement */
+            replacement?: string | null;
+            /** Retire At */
+            retire_at?: string | null;
+            /**
+             * Data Policy
+             * @default {}
+             */
+            data_policy: {
+                [key: string]: unknown;
+            };
+            /** Price */
+            price?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** ModelListResponse */
         ModelListResponse: {
@@ -1869,6 +1975,9 @@ export interface components {
              * @description false 表示巡检失败，is_available 退化为 catalog 中的存量值
              */
             gateway_reachable: boolean;
+            subject?: components["schemas"]["ModelSubjectOut"] | null;
+            /** Default Model */
+            default_model?: string | null;
         };
         /** ModelSpecIn */
         ModelSpecIn: {
@@ -1900,6 +2009,29 @@ export interface components {
             prompt_cache: boolean;
             /** Temperature */
             temperature?: number | null;
+        };
+        /**
+         * ModelSubjectOut
+         * @description 编辑器里模型按谁的权限列出（doc/model-design.html §11.2）。只在经模型网关时给出。
+         */
+        ModelSubjectOut: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "user" | "agent";
+            /** Uid */
+            uid?: string | null;
+            /**
+             * Hidden Models
+             * @default 0
+             */
+            hidden_models: number;
+            /**
+             * Notes
+             * @default []
+             */
+            notes: string[];
         };
         /** MoveIn */
         MoveIn: {
@@ -2576,7 +2708,10 @@ export interface operations {
     };
     list_models_v1_models_get: {
         parameters: {
-            query?: never;
+            query?: {
+                agent_id?: string | null;
+                auth_subject?: ("user" | "agent") | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -2590,6 +2725,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ModelListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -2613,6 +2757,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ToolListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_knowledge_bases_v1_knowledge_bases_get: {
+        parameters: {
+            query?: {
+                agent_id?: string | null;
+                auth_subject?: ("user" | "agent") | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KnowledgeListResponse"];
                 };
             };
             /** @description Validation Error */

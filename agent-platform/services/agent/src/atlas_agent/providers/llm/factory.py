@@ -37,7 +37,7 @@ def build_chat_model(
     ★ with_config 会把模型包成 RunnableBinding，而图要对它调 bind_tools ——
       包一层之后那条路不可靠。构造器参数是 LangChain 原生支持的，且对
       下游完全透明。
-    ★ headers：经模型网关时的平台用途、用量归属参考（providers/llm/modelgateway.py），
+    ★ headers：调用端点带的请求头（providers/llm/model_platform.py 的 ModelEndpoint），
       每个请求都带上。
     """
     spec.validate()

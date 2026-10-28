@@ -1,0 +1,671 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Atlas 模型管理方案设计</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --border: #d1d9e0; --head: #f6f8fa;
+    --accent: #0969da; --ok: #1a7f37; --ok-bg: #dafbe1; --warn: #9a6700; --warn-bg: #fff8c5;
+    --bad: #cf222e; --bad-bg: #ffebe9; --code-bg: #f6f8fa;
+    --b1: #ddf4ff; --b1d: #54aeff; --b2: #fbefff; --b2d: #c297ff; --b3: #dafbe1; --b3d: #4ac26b;
+    --b4: #fff8c5; --b4d: #d4a72c; --b5: #ffebe9; --b5d: #ff8182;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --border: #3d444d; --head: #151b23;
+      --accent: #4493f8; --ok: #3fb950; --ok-bg: #12261e; --warn: #d29922; --warn-bg: #2b2111;
+      --bad: #f85149; --bad-bg: #2d1214; --code-bg: #151b23;
+      --b1: #12263f; --b1d: #1f6feb; --b2: #271a36; --b2d: #8957e5; --b3: #12261e; --b3d: #2ea043;
+      --b4: #2b2111; --b4d: #9e6a03; --b5: #2d1214; --b5d: #da3633;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 32px; background: var(--bg); color: var(--fg);
+         font: 14px/1.75 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif; }
+  main { max-width: 1120px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 44px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 15.5px; margin: 24px 0 8px; }
+  .sub { color: var(--muted); margin: 0 0 14px; }
+  code { font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code-bg); padding: 1px 4px; border-radius: 4px; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px 14px; overflow-x: auto; font-size: 12.5px; }
+  pre code { background: none; padding: 0; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0 16px; }
+  th, td { border: 1px solid var(--border); padding: 7px 10px; vertical-align: top; text-align: left; }
+  th { background: var(--head); white-space: nowrap; }
+  td.c { text-align: center; }
+  td.k { white-space: nowrap; font-weight: 600; }
+  .src { color: var(--muted); font-size: 12.5px; }
+  .callout { border-left: 4px solid var(--accent); background: var(--head); padding: 10px 14px; border-radius: 4px; margin: 14px 0; }
+  .callout.warn { border-color: var(--warn); background: var(--warn-bg); }
+  .tag { display: inline-block; padding: 0 7px; border-radius: 9px; font-size: 12px; font-weight: 600; border: 1px solid; white-space: nowrap; }
+  .tag.warn { color: var(--warn); background: var(--warn-bg); border-color: var(--warn); }
+  .tag.ok { color: var(--ok); background: var(--ok-bg); border-color: var(--ok); }
+  .tag.mute { color: var(--muted); background: var(--head); border-color: var(--border); }
+  .toc { columns: 2; padding-left: 18px; }
+  .fig { border: 1px solid var(--border); border-radius: 6px; padding: 10px; overflow-x: auto; margin: 10px 0 6px; }
+  .cap { color: var(--muted); font-size: 12.5px; margin: 0 0 16px; text-align: center; }
+  svg text { fill: var(--fg); font-size: 12px; font-family: -apple-system, "PingFang SC", sans-serif; }
+  svg .s { font-size: 11px; fill: var(--muted); }
+  svg .b { font-weight: 600; }
+  svg .c1 { fill: var(--b1); stroke: var(--b1d); } svg .c2 { fill: var(--b2); stroke: var(--b2d); }
+  svg .c3 { fill: var(--b3); stroke: var(--b3d); } svg .c4 { fill: var(--b4); stroke: var(--b4d); }
+  svg .c5 { fill: var(--b5); stroke: var(--b5d); }
+  svg .inner { fill: var(--bg); stroke: var(--border); }
+  svg .frame { fill: none; stroke: var(--muted); }
+  svg .dot { fill: var(--fg); }
+  svg .ln { stroke: var(--fg); stroke-width: 1.3; fill: none; }
+  svg .dash { stroke-dasharray: 5 4; }
+  svg .arw { fill: var(--fg); }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <marker id="ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="arw" d="M0,0 L8,4 L0,8 z"/></marker>
+</defs></svg>
+<main>
+<h1>Atlas 模型管理方案设计</h1>
+<p class="sub">日期：2026-10-27 · 状态：<span class="tag warn">方案设计，待评审</span><br>
+LiteLLM 是唯一的模型网关；自研的模型管理平台负责登记模型、给私有模型授权、管理 API Key，并把结果同步到 LiteLLM，自己不在调用路径上。页面交互见 <a href="../prototype/model-management.html">模型管理原型</a>。</p>
+
+<ol class="toc" start="0">
+  <li><a href="#s0">方案概览</a></li>
+  <li><a href="#s1">背景与目标</a></li>
+  <li><a href="#s2">分工：模型管理平台、LiteLLM、用户中心、应用</a></li>
+  <li><a href="#s3">模型</a></li>
+  <li><a href="#s4">私有模型的授权</a></li>
+  <li><a href="#s5">API Key</a></li>
+  <li><a href="#s6">Key 与 LiteLLM 的同步</a></li>
+  <li><a href="#s7">接入：Atlas Native Agent</a></li>
+  <li><a href="#s8">接入：ACP Agent</a></li>
+  <li><a href="#s9">接入：知识库与平台服务</a></li>
+  <li><a href="#s10">日志、用量与成本</a></li>
+  <li><a href="#s11">管理界面</a></li>
+</ol>
+
+<!-- ====================================================================== -->
+<h2 id="s0">0. 方案概览</h2>
+<div class="fig">
+<svg viewBox="0 0 1080 450" width="100%" role="img" aria-label="方案总览">
+  <rect x="20" y="40" width="150" height="60" rx="6" class="c1"/>
+  <text x="95" y="65" text-anchor="middle" class="b">管理员</text>
+  <text x="95" y="85" text-anchor="middle" class="s">登记 · 授权 · 分配模型</text>
+  <rect x="20" y="130" width="150" height="60" rx="6" class="c1"/>
+  <text x="95" y="155" text-anchor="middle" class="b">用户</text>
+  <text x="95" y="175" text-anchor="middle" class="s">申请用户 Key</text>
+  <rect x="20" y="330" width="150" height="80" rx="6" class="c2"/>
+  <text x="95" y="356" text-anchor="middle" class="b">Atlas · 知识库</text>
+  <text x="95" y="376" text-anchor="middle" class="s">建客户端 Key</text>
+  <text x="95" y="394" text-anchor="middle" class="s">取 Key 后直连 LiteLLM</text>
+
+  <rect x="230" y="20" width="390" height="250" rx="8" class="inner"/>
+  <text x="246" y="44" class="b">模型管理平台（自研）</text>
+  <text x="376" y="44" class="s">管配置，不在调用路径上</text>
+  <rect x="250" y="60" width="170" height="92" rx="6" class="c3"/>
+  <text x="335" y="84" text-anchor="middle" class="b">模型</text>
+  <text x="335" y="105" text-anchor="middle" class="s">公有：所有人可选</text>
+  <text x="335" y="123" text-anchor="middle" class="s">私有：授权后可选</text>
+  <text x="335" y="141" text-anchor="middle" class="s">平台登记 + LiteLLM 直配</text>
+  <rect x="436" y="60" width="164" height="92" rx="6" class="c5"/>
+  <text x="518" y="84" text-anchor="middle" class="b">私有模型授权</text>
+  <text x="518" y="105" text-anchor="middle" class="s">用户 · 部门（可含下级）</text>
+  <text x="518" y="123" text-anchor="middle" class="s">管理员 = 全部模型</text>
+  <text x="518" y="141" text-anchor="middle" class="s">数据权限在用户中心</text>
+  <rect x="250" y="168" width="350" height="86" rx="6" class="c4"/>
+  <text x="425" y="192" text-anchor="middle" class="b">API Key（只有指定模型）</text>
+  <text x="425" y="214" text-anchor="middle" class="s">用户 Key：本人申请，从自己可选的模型里勾</text>
+  <text x="425" y="234" text-anchor="middle" class="s">客户端 Key：应用创建（类型 + 编码），管理员分配模型</text>
+
+  <rect x="690" y="40" width="190" height="70" rx="6" class="c3"/>
+  <text x="785" y="66" text-anchor="middle" class="b">用户中心</text>
+  <text x="785" y="88" text-anchor="middle" class="s">管理员角色 · 模型数据权限</text>
+
+  <rect x="690" y="320" width="200" height="120" rx="6" class="c1"/>
+  <text x="790" y="346" text-anchor="middle" class="b">LiteLLM（模型网关）</text>
+  <text x="790" y="368" text-anchor="middle" class="s">模型路由 · 协议 · 供应商凭据</text>
+  <text x="790" y="388" text-anchor="middle" class="s">校验 Key：可用模型、停用</text>
+  <text x="790" y="408" text-anchor="middle" class="s">日志 · 花费 · 预算限流</text>
+
+  <rect x="930" y="350" width="130" height="60" rx="6" class="inner"/>
+  <text x="995" y="376" text-anchor="middle" class="b">模型供应商</text>
+  <text x="995" y="395" text-anchor="middle" class="s">云厂商 · 自部署</text>
+
+  <path d="M170,70 H230" class="ln" marker-end="url(#ar)"/>
+  <path d="M170,160 H230" class="ln" marker-end="url(#ar)"/>
+  <path d="M620,75 H690" class="ln" marker-end="url(#ar)"/>
+  <text x="628" y="68" class="s">角色 · 授权</text>
+  <path d="M560,270 V295 H790 V320" class="ln" marker-end="url(#ar)"/>
+  <text x="572" y="312" class="s">登记模型 · 生成、更新、停用 Key</text>
+  <path d="M95,330 V300 H300 V270" class="ln" marker-end="url(#ar)"/>
+  <text x="104" y="322" class="s">① 建客户端 Key · 取 Key 和可用模型</text>
+  <path d="M170,380 H690" class="ln" marker-end="url(#ar)"/>
+  <text x="400" y="372" class="s">② 带 Key 调模型</text>
+  <path d="M890,380 H930" class="ln" marker-end="url(#ar)"/>
+</svg>
+</div>
+<p class="cap">图 0　方案总览：平台管「有哪些模型、谁能选、每把 Key 能用哪些」，并同步到 LiteLLM；调用只经过 LiteLLM</p>
+
+<table>
+  <tr><th>问题</th><th>方案</th></tr>
+  <tr><td>怎么分工</td><td><b>LiteLLM</b> 是唯一的模型网关：模型路由、协议、供应商凭据、校验 Key、调用日志、花费、预算限流。<br>
+    <b>模型管理平台</b>：登记模型、管理私有模型的授权和 API Key，把结论同步到 LiteLLM；不转发请求，不记调用日志。<br>
+    <b>用户中心</b>：管理员角色；私有模型的数据权限</td></tr>
+  <tr><td>模型怎么登记</td><td>管理员在平台登记显示名称、供应商、模型名、可见性、描述；地址、供应商凭据、规格和价格只交给 LiteLLM。模型名就是调用时传的模型名。列表合并展示平台登记的和 LiteLLM 里直接配置的模型</td></tr>
+  <tr><td>谁能用哪些模型</td><td><b>公有</b>模型所有人可选；<b>私有</b>模型授权给用户或部门（可含下级）后才能选；管理员拥有全部模型</td></tr>
+  <tr><td>Key 怎么分</td><td><b>用户 Key</b>：本人申请，一人一把，从自己可选的模型里勾。<br>
+    <b>客户端 Key</b>：应用调接口创建，按客户端类型 + 客户端编码唯一（Atlas 建智能体时：类型 Agent，编码 = 智能体 id）；管理员给它分配模型，公有私有都能分</td></tr>
+  <tr><td>Key 能调哪些模型</td><td>只有「指定模型」：逐个勾选，新登记的模型不会自动进任何 Key。实际生效的 = 分配的 ∩ 可选范围 ∩ LiteLLM 里存在的；为空时在 LiteLLM 停用这把 Key</td></tr>
+  <tr><td>Atlas 怎么用</td><td>编辑智能体时，按「Agent + 智能体 id」向平台取可用模型填下拉框；Run 开始时取 Key 并检查本轮用到的模型都在其中，然后带着 Key 直接调 LiteLLM。ACP 把 LiteLLM 地址和这把 Key 下发进 Pod。与智能体的权限类型无关</td></tr>
+  <tr><td>日志和花费</td><td>都在 LiteLLM，按 Key 统计：用户 Key 对应人，客户端 Key 对应智能体或平台服务（含知识库）。平台不保存调用记录</td></tr>
+</table>
+
+<!-- ====================================================================== -->
+<h2 id="s1">1. 背景与目标</h2>
+<h3>1.1 现状</h3>
+<table>
+  <tr><th>现状</th><th>带来的负担</th></tr>
+  <tr><td>两层网关：自研模型网关在前，按 Key 认人、按用户中心判权、计量、记访问日志；Higress 在后，转发供应商、多上游回退、协议转换</td><td>每次调用多经过一个自研服务，它的可用性、性能、协议兼容都要自己保证；协议转换放在 Higress 上，已知会丢掉思考内容</td></tr>
+  <tr><td>判权在调用路径上：每次调用都要确认主体能用这个模型</td><td>依赖用户中心实时可用，需要缓存和降级规则；用户中心出问题直接影响对话</td></tr>
+  <tr><td>访问日志、用量、价目、额度、告警都是自研</td><td>这些能力 LiteLLM 已经现成提供</td></tr>
+  <tr><td>标题、记忆补记、知识库按「平台用途」放行</td><td>判权规则里的特例，不按主体管</td></tr>
+  <tr><td>模型按智能体的权限类型判：以人为权限按使用者，以 Agent 为权限按数字员工</td><td>同一个智能体换个使用者，能用的模型就不同；数字员工要在用户中心单独被授权模型</td></tr>
+</table>
+<h3>1.2 目标</h3>
+<ul>
+  <li><b>网关用成熟实现</b>：LiteLLM 负责路由、协议、调用日志、计费、预算限流，不再自研。</li>
+  <li><b>平台只管配置</b>：有哪些模型、谁能选、每把 Key 能用哪些。平台不在调用路径上，平台故障不影响已经在进行的调用。</li>
+  <li><b>两类 Key 覆盖两类调用方</b>：人用用户 Key；应用里的对象（智能体）和应用自己的服务（会话标题、记忆补记、知识库）用客户端 Key，智能体的 Key 生命周期跟着智能体走。</li>
+  <li><b>公有、私有两档</b>：常用模型登记为公有，不用逐个授权；贵的、受限的模型登记为私有，按用户、部门授权。</li>
+  <li><b>智能体对所有使用者一致</b>：智能体能用哪些模型，只由它自己的 Key 决定。</li>
+</ul>
+<h3>1.3 非目标</h3>
+<ul>
+  <li><b>平台不记调用日志、不统计花费、不设额度</b>：在 LiteLLM 里看、在 LiteLLM 里配。</li>
+  <li><b>不做模型能力目录和能力探测</b>：平台不区分对话、嵌入、重排，也不登记工具调用、视觉、思考等能力。</li>
+  <li><b>不做模型别名、自动升级、跨模型回退</b>。同一个模型名有多个部署时，部署之间的重试由 LiteLLM 负责。</li>
+  <li><b>Key 不过期，不发短期令牌</b>。</li>
+</ul>
+
+<!-- ====================================================================== -->
+<h2 id="s2">2. 分工：模型管理平台、LiteLLM、用户中心、应用</h2>
+<h3>2.1 组件分工</h3>
+<table>
+  <tr><th>组件</th><th>负责</th><th>不负责</th></tr>
+  <tr><td class="k">模型管理平台</td><td>登记模型（公有 / 私有）；私有模型授权的入口；用户 Key 与客户端 Key；把模型和 Key 同步到 LiteLLM；给应用提供「取 Key 和可用模型」</td><td>转发请求；调用日志；花费；预算限流</td></tr>
+  <tr><td class="k">LiteLLM</td><td>模型路由；OpenAI 兼容与 Anthropic Messages 两种入口；保存供应商凭据；每次调用校验 Key 未停用、模型在 Key 的可用模型里；调用日志、花费、预算限流</td><td>谁能选哪些模型；Key 属于谁</td></tr>
+  <tr><td class="k">用户中心</td><td>组织架构；管理员角色；私有模型的数据权限（用户、部门、含下级）</td><td>—</td></tr>
+  <tr><td class="k">Atlas</td><td>建、删智能体时创建、删除客户端 Key；编辑时取可用模型；运行时取 Key 直连 LiteLLM</td><td>判断智能体能用哪些模型</td></tr>
+  <tr><td class="k">知识库</td><td>按部署配置取管理员事先建好的服务级客户端 Key；入库、检索时带着它直连 LiteLLM</td><td>同上</td></tr>
+</table>
+
+<h3>2.2 为什么用 LiteLLM</h3>
+<ul>
+  <li>同时提供 OpenAI 兼容和 Anthropic Messages 两种入口，能接主流供应商和 vLLM 等自部署服务。</li>
+  <li>它的 Key（虚拟 Key）自带「能用哪些模型」和停用状态，每次调用由它校验；预算、限流也挂在 Key 上。</li>
+  <li>调用日志、按 Key 的花费统计、管理界面都是现成的。</li>
+</ul>
+
+<h3>2.3 平台为什么不在调用路径上</h3>
+<ul>
+  <li><b>校验已经在 LiteLLM</b>：平台把「这把 Key 能用哪些模型、是否停用」算好同步过去，调用时不必再问平台。</li>
+  <li><b>平台故障影响面小</b>：只影响配置变更和新取 Key。Atlas 取不到时沿用上次取到的 Key（7.3），旧 Key 是否还有效由 LiteLLM 判断。</li>
+  <li><b>代价</b>：授权、分配的变化要同步到 LiteLLM 才生效；同步失败靠重试和定期对账补齐（第 6 章）。</li>
+</ul>
+
+<h3>2.4 LiteLLM 管理界面的边界</h3>
+<ul>
+  <li>管理员用它查调用日志、花费，按 Key 配预算和限流。</li>
+  <li>模型和 Key 的新增、修改走平台。在 LiteLLM 里直接配置的模型，平台只读展示，「纳入平台」后才能放进 Key（3.3）。</li>
+  <li>不在 LiteLLM 里直接建 Key：那样的 Key 不归平台管，对账时会告警（6.3）。</li>
+</ul>
+
+<!-- ====================================================================== -->
+<h2 id="s3">3. 模型</h2>
+<h3>3.1 登记什么</h3>
+<table>
+  <tr><th>信息</th><th>存在哪</th><th>说明</th></tr>
+  <tr><td>显示名称、描述</td><td>平台</td><td>给人看</td></tr>
+  <tr><td>供应商</td><td>平台、LiteLLM</td><td>决定 LiteLLM 怎么调；Atlas 也按它选协议（7.4）</td></tr>
+  <tr><td>模型名</td><td>平台、LiteLLM</td><td>供应商侧的模型名，同时就是调用时传的模型名。登记后不能改；平台内不能重名，包括 LiteLLM 里直接配置的</td></tr>
+  <tr><td>可见性</td><td>平台</td><td>公有 / 私有，登记时默认私有（3.4）</td></tr>
+  <tr><td>API 地址、供应商凭据</td><td>只在 LiteLLM</td><td>凭据由 LiteLLM 加密保存，平台不落库；编辑时留空表示不改</td></tr>
+  <tr><td>上下文窗口、最大输出、价格</td><td>LiteLLM</td><td>价格供 LiteLLM 计费</td></tr>
+  <tr><td>授权</td><td>用户中心</td><td>只有私有模型有（第 4 章）</td></tr>
+</table>
+
+<h3>3.2 登记流程</h3>
+<div class="fig">
+<svg viewBox="0 0 920 335" width="100%" role="img" aria-label="登记模型的流程">
+  <rect x="20" y="10" width="140" height="36" rx="6" class="c1"/><text x="90" y="33" text-anchor="middle" class="b">管理员</text>
+  <rect x="260" y="10" width="140" height="36" rx="6" class="c3"/><text x="330" y="33" text-anchor="middle" class="b">模型管理平台</text>
+  <rect x="510" y="10" width="140" height="36" rx="6" class="c1"/><text x="580" y="33" text-anchor="middle" class="b">LiteLLM</text>
+  <rect x="760" y="10" width="140" height="36" rx="6" class="c3"/><text x="830" y="33" text-anchor="middle" class="b">用户中心</text>
+  <path d="M90,46 V325 M330,46 V325 M580,46 V325 M830,46 V325" class="ln dash"/>
+
+  <path d="M90,80 H328" class="ln" marker-end="url(#ar)"/>
+  <text x="100" y="74" class="b">① 填写模型信息</text>
+  <text x="100" y="96" class="s">私有模型同时选授权对象</text>
+
+  <path d="M330,125 H578" class="ln" marker-end="url(#ar)"/>
+  <text x="340" y="119">② 测试连接（可选）：用填写的参数试调</text>
+  <path d="M580,147 H332" class="ln dash" marker-end="url(#ar)"/>
+  <text x="440" y="141" class="s">试调结果</text>
+
+  <path d="M330,185 H578" class="ln" marker-end="url(#ar)"/>
+  <text x="340" y="179">③ 登记模型</text>
+  <text x="340" y="201" class="s">模型名 · 地址 · 凭据 · 规格价格</text>
+  <path d="M580,222 H332" class="ln dash" marker-end="url(#ar)"/>
+  <text x="470" y="216" class="s">模型标识</text>
+
+  <rect x="240" y="238" width="180" height="28" rx="6" class="c4"/>
+  <text x="330" y="257" text-anchor="middle">④ 写平台记录</text>
+
+  <path d="M330,290 H828" class="ln" marker-end="url(#ar)"/>
+  <text x="340" y="284">⑤ 登记数据对象；私有模型写授权</text>
+  <text x="340" y="314" class="s">④⑤ 失败：删除 ③ 在 LiteLLM 里建的模型，整个登记失败</text>
+</svg>
+</div>
+<p class="cap">图 1　登记模型：先在 LiteLLM 登记，成功后再写平台记录和用户中心；后两步失败就撤回 LiteLLM 里的登记，两边不留半条</p>
+
+<h3>3.3 模型列表：平台登记与 LiteLLM 直配合并</h3>
+<p>平台记录和 LiteLLM 里的模型按 LiteLLM 的模型标识对应，合并成一张列表。LiteLLM 里同一个模型名的多个部署合并成一行。</p>
+<table>
+  <tr><th>情况</th><th>状态</th><th>能做什么</th></tr>
+  <tr><td>平台登记，LiteLLM 里也有</td><td>可调用</td><td>编辑、删除；私有的可以授权</td></tr>
+  <tr><td>平台登记，LiteLLM 里找不到（例如在 LiteLLM 界面里被删了）</td><td>LiteLLM 中缺失</td><td>不能调用，也不算进任何 Key 的有效模型。管理员可以重新登记（凭据要重新填，可见性和授权不变），或删除</td></tr>
+  <tr><td>LiteLLM 里有，平台没登记（直配）</td><td>只读</td><td>不能授权、不能放进 Key。「纳入平台」：补平台记录、在用户中心登记数据对象，不改 LiteLLM</td></tr>
+</table>
+
+<h3>3.4 公有与私有</h3>
+<ul>
+  <li><b>公有</b>：不判权，所有人都能选进自己的用户 Key，普通用户的模型列表里都能看到。</li>
+  <li><b>私有</b>：授权给用户或部门后才能选、才能看到。</li>
+  <li><b>公有只表示「谁都能选」，不会自动进入任何 Key</b>。新登记的公有模型不会出现在已有的 Key 里。</li>
+  <li><b>登记时默认私有</b>：漏选可见性时，结果是「没人能用」而不是「所有人都能用」。</li>
+  <li><b>切换可见性</b>：公有改私有，没被授权的人的用户 Key 里这个模型随之失效；私有改公有，所有人可选，原有授权保留但不再起作用。两种切换都不影响客户端 Key。</li>
+</ul>
+
+<h3>3.5 编辑与删除</h3>
+<ul>
+  <li><b>编辑</b>：显示名称、供应商、描述、可见性、地址、凭据、规格价格都能改，模型名不能改。改模型名等于换了调用方要传的名字，应当登记一个新模型。</li>
+  <li><b>删除</b>：LiteLLM 里的模型、平台记录、用户中心的数据对象和授权一起删除，并从所有 Key 里去掉（第 6 章）。</li>
+</ul>
+
+<!-- ====================================================================== -->
+<h2 id="s4">4. 私有模型的授权</h2>
+<h3>4.1 授权怎么表达</h3>
+<ul>
+  <li>每个平台登记的模型在用户中心是一条数据（数据编码 <code>Model</code>），公有模型也登记，改成私有时不用补。</li>
+  <li>级别只用一个：<b>使用</b>。授给用户或部门，部门可以选「含下级部门」。</li>
+  <li>一个人能用某个私有模型 = 授给本人，或授给他所在的部门，或授给他上级部门且含下级。</li>
+  <li>公有模型不写授权。</li>
+</ul>
+
+<h3>4.2 管理员</h3>
+<ul>
+  <li><b>能不能做管理操作</b>由角色决定：登记、编辑、删除模型，纳入平台，设公有 / 私有，授权，给客户端 Key 分配模型。</li>
+  <li><b>能用哪些模型</b>由数据权限决定：管理员持有「全部模型 · Owner」这条数据编码级授权，能用、能分配、能授权全部模型；不在单个模型上写 Owner。</li>
+</ul>
+
+<h3>4.3 授权管什么、不管什么</h3>
+<ul>
+  <li><b>管</b>：用户 Key 能选哪些私有模型；普通用户在模型列表里能看到哪些私有模型。</li>
+  <li><b>不管客户端 Key</b>：客户端 Key 由管理员直接分配模型，公有私有都行，不看智能体使用者的授权。所以，没被授权某个私有模型的人，可以通过开了这个模型的智能体用到它；给哪个智能体开哪个模型，由管理员决定。</li>
+</ul>
+
+<h3>4.4 权限矩阵</h3>
+<table>
+  <tr><th>操作</th><th>管理员</th><th>普通用户</th><th>应用（Atlas、知识库）</th></tr>
+  <tr><td>查看模型</td><td class="c">全部</td><td class="c">公有 + 授权给自己的私有</td><td class="c">—</td></tr>
+  <tr><td>登记、编辑、删除模型，纳入平台，设公有 / 私有</td><td class="c">✓</td><td class="c">✗</td><td class="c">✗</td></tr>
+  <tr><td>私有模型授权</td><td class="c">✓</td><td class="c">✗</td><td class="c">✗</td></tr>
+  <tr><td>申请、管理自己的用户 Key</td><td class="c">✓（本人）</td><td class="c">✓（本人）</td><td class="c">✗</td></tr>
+  <tr><td>创建、删除客户端 Key</td><td class="c">✓（事先配好的，如平台服务）</td><td class="c">✗</td><td class="c">✓（只限本应用的客户端类型）</td></tr>
+  <tr><td>给客户端 Key 分配模型、重置、停用、启用</td><td class="c">✓</td><td class="c">✗</td><td class="c">✗</td></tr>
+  <tr><td>获取客户端 Key 和可用模型</td><td class="c">✗</td><td class="c">✗</td><td class="c">✓（只限本应用的客户端类型）</td></tr>
+</table>
+
+<!-- ====================================================================== -->
+<h2 id="s5">5. API Key</h2>
+<h3>5.1 两种类型</h3>
+<table>
+  <tr><th></th><th>用户 Key</th><th>客户端 Key</th></tr>
+  <tr><td class="k">代表谁</td><td>一个人</td><td>应用里的一个对象，例如一个智能体</td></tr>
+  <tr><td class="k">谁创建</td><td>本人在页面申请</td><td>应用调接口创建，例如 Atlas 新建智能体时；平台服务这类事先配好的，由管理员在页面上建</td></tr>
+  <tr><td class="k">怎么识别</td><td>用户</td><td>客户端类型 + 客户端编码，唯一；另带一个名称，只用于展示，随对象改名同步</td></tr>
+  <tr><td class="k">数量</td><td>一人一把</td><td>每个客户端一把；重复创建返回同一把</td></tr>
+  <tr><td class="k">谁分配模型</td><td>本人</td><td>管理员</td></tr>
+  <tr><td class="k">可选范围</td><td>公有 + 授权给本人或所在部门的私有（管理员是全部）</td><td>全部已登记模型</td></tr>
+  <tr><td class="k">原文给谁</td><td>申请、重置时显示一次给本人</td><td>不在页面显示；应用经接口获取</td></tr>
+  <tr><td class="k">谁删除</td><td>本人</td><td>应用（删除对象时）；管理员也可以在页面上删</td></tr>
+  <tr><td class="k">用途</td><td>Claude Code、Cursor、脚本等个人工具</td><td>应用运行时调模型</td></tr>
+</table>
+<p>客户端类型：</p>
+<table>
+  <tr><th>客户端类型</th><th>所属应用</th><th>客户端编码</th><th>创建、删除时机</th></tr>
+  <tr><td><code>Agent</code></td><td>Atlas</td><td>智能体 id</td><td>新建、删除智能体</td></tr>
+  <tr><td><code>Service</code></td><td>Atlas、知识库</td><td>用途，如会话标题、记忆补记、知识库的对话、嵌入、重排</td><td>部署时</td></tr>
+</table>
+<p>只有所属应用能创建、获取、删除这一类型的客户端 Key，平台按调用方应用判断。以后有新的接入方，登记一个新的客户端类型即可。</p>
+
+<h3>5.2 Key 的模型：只有指定模型</h3>
+<ul>
+  <li>在 Key 上逐个勾选模型。「全选」只勾当前已有的；以后登记的模型不会自动加入，需要时再来勾。</li>
+  <li>实际生效的模型（有效模型）按下图计算，同步到 LiteLLM 的就是它。</li>
+  <li>勾选过但已经失效的模型（授权撤销、模型删除、LiteLLM 中缺失）在页面上标出来，先保留在分配列表里；下次保存分配时移除。授权恢复的话，它重新生效。</li>
+</ul>
+<div class="fig">
+<svg viewBox="0 0 1000 210" width="100%" role="img" aria-label="Key 的有效模型">
+  <rect x="20" y="16" width="280" height="48" rx="6" class="c4"/>
+  <text x="160" y="37" text-anchor="middle" class="b">分配的模型</text>
+  <text x="160" y="55" text-anchor="middle" class="s">Key 上逐个勾选的</text>
+  <rect x="20" y="76" width="280" height="62" rx="6" class="c5"/>
+  <text x="160" y="96" text-anchor="middle" class="b">可选范围</text>
+  <text x="160" y="114" text-anchor="middle" class="s">用户 Key：公有 + 授权给本人或部门的私有</text>
+  <text x="160" y="130" text-anchor="middle" class="s">客户端 Key：全部已登记模型</text>
+  <rect x="20" y="150" width="280" height="48" rx="6" class="c3"/>
+  <text x="160" y="171" text-anchor="middle" class="b">LiteLLM 里存在的</text>
+  <text x="160" y="189" text-anchor="middle" class="s">去掉「LiteLLM 中缺失」的</text>
+  <path d="M300,40 H330 V107 H350 M300,107 H350 M300,174 H330 V107" class="ln"/>
+  <circle cx="368" cy="107" r="18" class="inner"/>
+  <text x="368" y="113" text-anchor="middle" class="b">∩</text>
+  <path d="M386,107 H428" class="ln" marker-end="url(#ar)"/>
+  <rect x="430" y="77" width="190" height="60" rx="6" class="c1"/>
+  <text x="525" y="101" text-anchor="middle" class="b">有效模型</text>
+  <text x="525" y="121" text-anchor="middle" class="s">页面上正常显示的模型</text>
+  <path d="M620,107 H678" class="ln" marker-end="url(#ar)"/>
+  <text x="632" y="100" class="s">同步</text>
+  <rect x="680" y="46" width="300" height="122" rx="6" class="c2"/>
+  <text x="830" y="70" text-anchor="middle" class="b">LiteLLM 里的这把 Key</text>
+  <text x="830" y="92" text-anchor="middle" class="s">可用模型 = 有效模型</text>
+  <text x="830" y="112" text-anchor="middle" class="s">有效模型为空 → 停用</text>
+  <text x="830" y="130" text-anchor="middle" class="s">（空列表在 LiteLLM 里表示全部模型）</text>
+  <text x="830" y="150" text-anchor="middle" class="s">管理员停用 → 停用</text>
+</svg>
+</div>
+<p class="cap">图 2　有效模型 = 分配的 ∩ 可选范围 ∩ LiteLLM 里存在的；LiteLLM 里只放有效模型，为空就停用</p>
+
+<h3>5.3 生命周期</h3>
+<div class="fig">
+<svg viewBox="0 0 790 215" width="100%" role="img" aria-label="客户端 Key 的生命周期">
+  <circle cx="30" cy="100" r="6" class="dot"/>
+  <path d="M36,100 H88" class="ln" marker-end="url(#ar)"/>
+  <text x="40" y="92" class="s">应用创建</text>
+  <rect x="90" y="75" width="140" height="50" rx="6" class="c4"/>
+  <text x="160" y="97" text-anchor="middle" class="b">待分配模型</text>
+  <text x="160" y="115" text-anchor="middle" class="s">LiteLLM 里还没有 Key</text>
+  <path d="M230,100 H338" class="ln" marker-end="url(#ar)"/>
+  <text x="238" y="92" class="s">管理员分配模型</text>
+  <text x="238" y="118" class="s">LiteLLM 生成 Key</text>
+  <rect x="340" y="75" width="130" height="50" rx="6" class="c3"/>
+  <text x="405" y="97" text-anchor="middle" class="b">正常</text>
+  <text x="405" y="115" text-anchor="middle" class="s">可用模型 = 有效模型</text>
+  <path d="M380,75 C380,34 430,34 430,73" class="ln" marker-end="url(#ar)"/>
+  <text x="405" y="26" text-anchor="middle" class="s">重置：换新 Key</text>
+  <path d="M470,88 H530 V50 H618" class="ln" marker-start="url(#ar)" marker-end="url(#ar)"/>
+  <text x="536" y="44" class="s">停用 / 启用</text>
+  <rect x="620" y="25" width="150" height="50" rx="6" class="c5"/>
+  <text x="695" y="47" text-anchor="middle" class="b">已停用</text>
+  <text x="695" y="65" text-anchor="middle" class="s">管理员停用，LiteLLM 拒绝</text>
+  <path d="M470,112 H530 V150 H618" class="ln" marker-start="url(#ar)" marker-end="url(#ar)"/>
+  <text x="440" y="172" class="s">有效模型变空 / 恢复</text>
+  <rect x="620" y="125" width="150" height="50" rx="6" class="c5"/>
+  <text x="695" y="147" text-anchor="middle" class="b">无可用模型</text>
+  <text x="695" y="165" text-anchor="middle" class="s">LiteLLM 里停用</text>
+  <text x="20" y="205" class="s">任何状态：应用删除对象时删除客户端 Key，LiteLLM 里的 Key 一并删除</text>
+</svg>
+</div>
+<p class="cap">图 3　客户端 Key 的生命周期：创建后先「待分配模型」，管理员分配后才在 LiteLLM 生成 Key</p>
+<ul>
+  <li><b>待分配时不生成 LiteLLM 的 Key</b>：空的模型列表在 LiteLLM 里表示全部模型，提前生成等于先放开了全部模型。这期间应用取到的状态是「待分配」，没有 Key。</li>
+  <li><b>停用和「无可用模型」是两回事</b>：前者是管理员的操作，要管理员启用；后者由模型变化引起，有效模型恢复后自动解除。LiteLLM 里的停用状态 = 管理员停用，或有效模型为空。</li>
+  <li><b>用户 Key</b> 没有待分配状态：申请时必须勾至少一个模型，申请即生成，原文显示一次；之后同样可以改模型、重置、停用、启用，本人可以删除。</li>
+</ul>
+
+<h3>5.4 保管</h3>
+<ul>
+  <li><b>LiteLLM 只存 Key 的哈希</b>；平台保存一份原文，用于应用获取客户端 Key。</li>
+  <li><b>原文的展示</b>：用户 Key 只在申请、重置时显示一次，忘了就重置；客户端 Key 不在页面上显示。</li>
+  <li><b>重置</b>：生成新 Key、删除旧 Key，分配的模型和停用状态不变。正在用旧 Key 的调用会失败，应用下次获取时拿到新的。</li>
+  <li><b>停用</b>：LiteLLM 拒绝这把 Key 的所有调用，可以随时启用。</li>
+</ul>
+
+<!-- ====================================================================== -->
+<h2 id="s6">6. Key 与 LiteLLM 的同步</h2>
+<h3>6.1 平台是事实源</h3>
+<p>平台保存每把 Key 分配的模型和管理员停用状态，并据此算出有效模型；LiteLLM 里这把 Key 的可用模型和停用状态跟随平台。LiteLLM 里另外配的预算、限流不归平台管，平台更新 Key 时不覆盖它们。</p>
+
+<h3>6.2 什么时候重算</h3>
+<table>
+  <tr><th>事件</th><th>影响的 Key</th></tr>
+  <tr><td>Key 的分配被修改、停用、启用</td><td>这把 Key</td></tr>
+  <tr><td>私有模型的授权增加、撤销</td><td>被影响的人的用户 Key</td></tr>
+  <tr><td>模型公有改私有、私有改公有</td><td>用户 Key（客户端 Key 不受影响）</td></tr>
+  <tr><td>模型删除、LiteLLM 中缺失、重新登记</td><td>分配了这个模型的 Key</td></tr>
+  <tr><td>员工调部门、在用户中心被停用</td><td>这个人的用户 Key；被停用的人，他的用户 Key 一并停用</td></tr>
+</table>
+
+<h3>6.3 同步失败与对账</h3>
+<ul>
+  <li>每次重算后立即更新 LiteLLM；失败就重试。重试成功之前，LiteLLM 里的状态可能比平台多给或少给。</li>
+  <li><b>定期对账</b>：逐把 Key 比较平台算出的有效模型、停用状态和 LiteLLM 里的，不一致以平台为准修正。用户中心没有变更通知，调部门、员工停用这类变化靠对账发现。</li>
+  <li>对账时发现 LiteLLM 里有、平台不认识的 Key（在 LiteLLM 里直接建的）就告警，不自动删除。</li>
+</ul>
+
+<!-- ====================================================================== -->
+<h2 id="s7">7. 接入：Atlas Native Agent</h2>
+<h3>7.1 智能体与它的客户端 Key</h3>
+<div class="fig">
+<svg viewBox="0 0 970 525" width="100%" role="img" aria-label="Atlas 接入的时序">
+  <rect x="0" y="10" width="140" height="36" rx="6" class="c1"/><text x="70" y="33" text-anchor="middle" class="b">用户</text>
+  <rect x="180" y="10" width="140" height="36" rx="6" class="c2"/><text x="250" y="33" text-anchor="middle" class="b">Atlas</text>
+  <rect x="400" y="10" width="140" height="36" rx="6" class="c3"/><text x="470" y="33" text-anchor="middle" class="b">模型管理平台</text>
+  <rect x="620" y="10" width="140" height="36" rx="6" class="c1"/><text x="690" y="33" text-anchor="middle" class="b">管理员</text>
+  <rect x="820" y="10" width="140" height="36" rx="6" class="c1"/><text x="890" y="33" text-anchor="middle" class="b">LiteLLM</text>
+  <path d="M70,46 V520 M250,46 V520 M470,46 V520 M690,46 V520 M890,46 V520" class="ln dash"/>
+
+  <path d="M70,75 H248" class="ln" marker-end="url(#ar)"/><text x="80" y="69">新建智能体</text>
+  <path d="M250,100 H468" class="ln" marker-end="url(#ar)"/><text x="260" y="94">创建客户端 Key</text>
+  <text x="260" y="116" class="s">Agent · 智能体 id · 名称</text>
+  <path d="M470,143 H252" class="ln dash" marker-end="url(#ar)"/><text x="300" y="137" class="s">待分配模型</text>
+  <path d="M690,170 H472" class="ln" marker-end="url(#ar)"/><text x="560" y="164">分配模型</text>
+  <path d="M470,195 H888" class="ln" marker-end="url(#ar)"/><text x="480" y="189">生成 Key（可用模型）</text>
+
+  <path d="M70,235 H248" class="ln" marker-end="url(#ar)"/><text x="80" y="229">编辑智能体</text>
+  <path d="M250,258 H468" class="ln" marker-end="url(#ar)"/><text x="260" y="252">取可用模型</text>
+  <path d="M470,281 H252" class="ln dash" marker-end="url(#ar)"/><text x="270" y="275" class="s">有效模型 → 填模型下拉框</text>
+
+  <path d="M70,320 H248" class="ln" marker-end="url(#ar)"/><text x="80" y="314">发消息</text>
+  <path d="M250,343 H468" class="ln" marker-end="url(#ar)"/><text x="260" y="337">Run 开始：取 Key 和可用模型</text>
+  <path d="M470,366 H252" class="ln dash" marker-end="url(#ar)"/><text x="300" y="360" class="s">Key · 有效模型</text>
+  <rect x="170" y="380" width="160" height="26" rx="6" class="c4"/>
+  <text x="250" y="398" text-anchor="middle" class="s">检查本轮模型都在其中</text>
+  <path d="M250,430 H888" class="ln" marker-end="url(#ar)"/><text x="500" y="424">带 Key 调模型（不经过平台）</text>
+
+  <path d="M70,465 H248" class="ln" marker-end="url(#ar)"/><text x="80" y="459">删除智能体</text>
+  <path d="M250,488 H468" class="ln" marker-end="url(#ar)"/><text x="260" y="482">删除客户端 Key</text>
+  <path d="M470,511 H888" class="ln" marker-end="url(#ar)"/><text x="480" y="505">删除 LiteLLM 里的 Key</text>
+</svg>
+</div>
+<p class="cap">图 4　Atlas 接入：建智能体时创建客户端 Key，管理员分配模型后才能用；编辑、运行时按「Agent + 智能体 id」获取，调用直连 LiteLLM</p>
+<ul>
+  <li><b>新建</b>：Atlas 调平台创建客户端 Key（类型 Agent、编码 = 智能体 id、名称 = 智能体名称）。按类型 + 编码幂等，重试不会重复创建。</li>
+  <li><b>改名</b>：同步名称，只影响平台页面上的展示。</li>
+  <li><b>删除</b>：Atlas 删除智能体是归档（之后还能恢复），归档时 Key 保留不动：恢复后照样能用，不用重新分配。</li>
+  <li><b>新建后、分配前</b>：编辑器里没有可选模型，智能体不能运行。平台页面上待分配的 Key 单独计数，方便管理员处理。</li>
+</ul>
+
+<h3>7.2 编辑智能体：可选模型</h3>
+<ul>
+  <li>编辑器按「Agent + 智能体 id」向平台取可用模型，也就是这把 Key 的有效模型，带显示名称、供应商、上下文窗口，填进主模型、压缩模型的下拉框。</li>
+  <li>Key 待分配、已停用、无可用模型时列表为空，编辑器说明原因，提示联系管理员。</li>
+  <li>当前选的模型已经不在列表里（被移出 Key、被删除）时标红，提示换一个。</li>
+</ul>
+
+<h3>7.3 Run 开始</h3>
+<div class="fig">
+<svg viewBox="0 0 1000 270" width="100%" role="img" aria-label="Run 开始时的检查">
+  <rect x="20" y="105" width="110" height="56" rx="6" class="c1"/>
+  <text x="75" y="128" text-anchor="middle" class="b">Run 开始</text>
+  <text x="75" y="147" text-anchor="middle" class="s">每轮都取最新的</text>
+  <path d="M130,133 H168" class="ln" marker-end="url(#ar)"/>
+  <rect x="170" y="95" width="210" height="76" rx="6" class="c2"/>
+  <text x="275" y="120" text-anchor="middle" class="b">取 Key 和可用模型</text>
+  <text x="275" y="140" text-anchor="middle" class="s">按 Agent + 智能体 id</text>
+  <text x="275" y="158" text-anchor="middle" class="s">问模型管理平台</text>
+  <path d="M380,133 H420 M420,42 V224" class="ln"/>
+  <path d="M420,42 H458" class="ln" marker-end="url(#ar)"/>
+  <path d="M420,102 H458" class="ln" marker-end="url(#ar)"/>
+  <path d="M420,162 H458" class="ln" marker-end="url(#ar)"/>
+  <path d="M420,224 H458" class="ln" marker-end="url(#ar)"/>
+  <rect x="460" y="20" width="520" height="44" rx="6" class="c4"/>
+  <text x="476" y="38" class="b">平台暂时不可用</text>
+  <text x="476" y="56" class="s">沿用上次取到的 Key 和可用模型；从没取到过的，退避重试，用尽后本轮失败</text>
+  <rect x="460" y="80" width="520" height="44" rx="6" class="c5"/>
+  <text x="476" y="98" class="b">Key 待分配、已停用或无可用模型</text>
+  <text x="476" y="116" class="s">本轮不开始：说明原因，请管理员分配模型或启用</text>
+  <rect x="460" y="140" width="520" height="44" rx="6" class="c5"/>
+  <text x="476" y="158" class="b">本轮用到的模型不在可用模型里</text>
+  <text x="476" y="176" class="s">主模型、压缩模型逐个检查；本轮不开始，说明缺哪个</text>
+  <rect x="460" y="202" width="520" height="44" rx="6" class="c3"/>
+  <text x="476" y="220" class="b">其余：构造模型客户端</text>
+  <text x="476" y="238" class="s">地址 = LiteLLM · Key = 智能体的客户端 Key · 协议一律 Anthropic Messages</text>
+</svg>
+</div>
+<p class="cap">图 5　Run 开始时的检查：Key 和模型的问题在开始前报出来，不让模型调到一半才失败</p>
+<ul>
+  <li><b>每轮取最新的</b>：Key 被重置后，下一轮自动用新的；分配变了，下一轮立即按新的检查。</li>
+  <li><b>平台不可用时沿用上次的</b>：最终由 LiteLLM 校验，旧 Key 失效了会被拒绝，所以沿用是安全的。</li>
+  <li><b>说清楚找谁</b>：例如「智能体『工单助手』没有分配模型 claude-sonnet-5，请联系管理员」。</li>
+</ul>
+
+<h3>7.4 一次模型调用</h3>
+<ul>
+  <li><b>只经过 LiteLLM</b>：Atlas 带着 Key 和模型名调 LiteLLM；LiteLLM 校验 Key 未停用、模型在可用模型里，转发给供应商，记录日志和花费。</li>
+  <li><b>协议一律 Anthropic Messages</b>：非 Anthropic 的模型由 LiteLLM 转换。Atlas 只维护一条调用路径（提示词缓存、思考都依赖它），ACP 的 Claude Code 本来也只认这一种。思考、档位、温度等参数仍只发给支持的模型。</li>
+  <li><b>身份不进模型输入</b>：使用者、会话、Run 等标识作为请求的元数据交给 LiteLLM，只用于日志里按人、按 Run 查，不用于判权。</li>
+  <li><b>不设整次调用的时长上限</b>：沿用现有规则，只按两段数据之间的静默判断卡死。</li>
+</ul>
+
+<h3>7.5 调用失败</h3>
+<table>
+  <tr><th>#</th><th>情况</th><th>处理</th><th>自动重试</th></tr>
+  <tr><td class="c">①</td><td>Run 开始时 Key 待分配、已停用、无可用模型，或本轮模型不在其中</td><td>本轮不开始，说明原因和找谁（7.3）</td><td class="c">否</td></tr>
+  <tr><td class="c">②</td><td>平台暂时不可用</td><td>沿用上次取到的；从没取到过的退避重试，用尽后本轮失败</td><td class="c">是（退避）</td></tr>
+  <tr><td class="c">③</td><td>LiteLLM 拒绝：Key 无效（本轮进行中被重置、删除）</td><td>本轮停下，提示重发；重发的那一轮取新的 Key</td><td class="c">否</td></tr>
+  <tr><td class="c">④</td><td>LiteLLM 拒绝：Key 停用、模型被移出 Key（本轮进行中）</td><td>本轮停下，说明原因；已经完成的步骤保留</td><td class="c">否</td></tr>
+  <tr><td class="c">⑤</td><td>连不上 LiteLLM；限流（429）、过载、5xx</td><td>同一个模型名有多个部署时，LiteLLM 先在部署之间重试；仍然失败的，Atlas 退避重试，用尽后本轮失败</td><td class="c">是（退避）</td></tr>
+  <tr><td class="c">⑥</td><td>参数不被接受（400）</td><td>本轮失败</td><td class="c">否</td></tr>
+  <tr><td class="c">⑦</td><td>上下文超长</td><td>交给上下文压缩（现有处理）</td><td class="c">—</td></tr>
+  <tr><td class="c">⑧</td><td>供应商余额不足、供应商凭据失效</td><td>本轮失败；对用户说「模型服务暂时不可用」，不暴露供应商细节</td><td class="c">否</td></tr>
+</table>
+<p>对话里说清楚类别：没分配、被停用、暂时不可用、平台故障，用户分得清是「找管理员」还是「稍后再试」。</p>
+
+<h3>7.6 SubAgent、上下文压缩、会话标题、记忆补记</h3>
+<ul>
+  <li><b>内联的 SubAgent</b>：沿用父 Run 的 Key，它用的模型同样要在这把 Key 里。</li>
+  <li><b>委派给另一个智能体</b>：用目标智能体自己的客户端 Key，在它的 Run 开始时检查。</li>
+  <li><b>上下文压缩</b>：压缩模型和主模型一样，要在智能体的 Key 里，Run 开始时一起检查。</li>
+  <li><b>会话标题、记忆补记</b>：不属于某个智能体，用平台服务的客户端 Key（第 9 章）。</li>
+</ul>
+
+<h3>7.7 和权限类型的关系</h3>
+<ul>
+  <li><b>模型跟智能体走，与权限类型无关</b>：以人为权限（私人助理）和以 Agent 为权限的智能体，都按「Agent + 智能体 id」取模型和 Key。同一个智能体对所有使用者能用的模型相同，花费记在智能体的 Key 上。</li>
+  <li>权限类型仍然决定知识库、MCP 等数据权限按谁判。</li>
+</ul>
+
+<!-- ====================================================================== -->
+<h2 id="s8">8. 接入：ACP Agent</h2>
+<p>ACP Agent 的模型客户端是会话 Pod 里的 CLI，Atlas 拦不到单次调用，LiteLLM 是唯一的治理点。</p>
+<h3>8.1 下发</h3>
+<div class="fig">
+<svg viewBox="0 0 1060 170" width="100%" role="img" aria-label="ACP 下发">
+  <rect x="10" y="30" width="150" height="80" rx="6" class="c1"/>
+  <text x="85" y="62" text-anchor="middle" class="b">建会话 / 恢复会话</text>
+  <text x="85" y="84" text-anchor="middle" class="s">ACP 智能体</text>
+  <path d="M160,70 H198" class="ln" marker-end="url(#ar)"/>
+  <rect x="200" y="30" width="170" height="80" rx="6" class="c2"/>
+  <text x="285" y="56" text-anchor="middle" class="b">同样的检查</text>
+  <text x="285" y="78" text-anchor="middle" class="s">Key · 可用模型</text>
+  <text x="285" y="96" text-anchor="middle" class="s">主模型、轻量模型</text>
+  <path d="M370,70 H408" class="ln" marker-end="url(#ar)"/>
+  <rect x="410" y="20" width="230" height="100" rx="6" class="c4"/>
+  <text x="525" y="44" text-anchor="middle" class="b">下发到 Pod</text>
+  <text x="525" y="66" text-anchor="middle" class="s">LiteLLM 地址 · 智能体的 Key</text>
+  <text x="525" y="84" text-anchor="middle" class="s">主模型、轻量模型的名字</text>
+  <text x="525" y="102" text-anchor="middle" class="s">不下发供应商凭据</text>
+  <path d="M640,70 H678" class="ln" marker-end="url(#ar)"/>
+  <rect x="680" y="30" width="150" height="80" rx="6" class="c2"/>
+  <text x="755" y="62" text-anchor="middle" class="b">Pod 里的 CLI</text>
+  <text x="755" y="84" text-anchor="middle" class="s">自己调模型</text>
+  <path d="M830,70 H868" class="ln" marker-end="url(#ar)"/>
+  <rect x="870" y="30" width="180" height="80" rx="6" class="c1"/>
+  <text x="960" y="56" text-anchor="middle" class="b">LiteLLM</text>
+  <text x="960" y="78" text-anchor="middle" class="s">校验 Key · 停用即拒</text>
+  <text x="960" y="96" text-anchor="middle" class="s">日志 · 花费</text>
+  <text x="10" y="155" class="s">模型名和 Key 只在建会话、恢复会话时下发；但每个请求都经过 LiteLLM，停用 Key、把模型移出 Key 对已打开的会话立即生效</text>
+</svg>
+</div>
+<p class="cap">图 6　ACP 下发：检查规则和 Native 相同；Pod 里只有 LiteLLM 地址、智能体的 Key 和模型名，没有供应商凭据</p>
+<ul>
+  <li><b>模型从智能体配置来</b>：编辑器只列出 CLI 能用的协议对应的模型，例如 Claude Code 用 Anthropic Messages。</li>
+  <li><b>CLI 的轻量模型</b>：有的 CLI 会用另一个轻量模型做标题这类旁路工作，它也要在 Key 里。默认就是主模型，智能体配置里可以另选；不指定的话，CLI 会去找它默认的模型，然后被 LiteLLM 拒绝。</li>
+</ul>
+
+<h3>8.2 Key 进 Pod</h3>
+<p>Key 会进 Pod，这是有意接受的风险：</p>
+<ul>
+  <li>Key 会出现在这个智能体所有使用者的会话 Pod 里，使用者可以诱导智能体把它打印出来，然后在 Atlas 之外调用。</li>
+  <li>能力不超过这把 Key 分配的模型；这些调用在 LiteLLM 的日志里，花费记在这个智能体上。</li>
+  <li>发现泄露就重置。重置后已打开的会话调用都会被拒，恢复会话时重新下发新 Key。</li>
+</ul>
+
+<h3>8.3 调用失败</h3>
+<ul>
+  <li>由 CLI 自己处理，Atlas 不替它重试。LiteLLM 按调用协议的错误格式返回拒绝原因，CLI 会展示出来。</li>
+  <li>ACP 的调用和失败 Atlas 看不到，LiteLLM 的日志是唯一完整的记录。</li>
+</ul>
+
+<!-- ====================================================================== -->
+<h2 id="s9">9. 接入：知识库与平台服务</h2>
+<ul>
+  <li><b>知识库</b>：用服务级客户端 Key，所有知识库共用，按用途分三把（客户端类型 Service）：
+    <table>
+      <tr><th>用途</th><th>客户端编码</th><th>模型怎么定</th></tr>
+      <tr><td>入库增强、查询理解</td><td>knowledge-chat</td><td>部署配置里写定模型，必须在这把 Key 里</td></tr>
+      <tr><td>远程嵌入</td><td>knowledge-embedding</td><td>建库时从这把 Key 的可用模型里选</td></tr>
+      <tr><td>远程重排</td><td>knowledge-rerank</td><td>检索设置里从这把 Key 的可用模型里选</td></tr>
+    </table>
+    哪把没建或没分配模型，哪项能力就不可用：入库增强、查询理解降级为不做；远程嵌入、重排不出现在选项里，只能用本地模型。花费按这三把 Key 统计，不细分到单个知识库。</li>
+  <li><b>平台服务</b>：会话标题、记忆补记这类不属于某个智能体的调用。管理员事先在平台上建好客户端 Key（如客户端类型 Service、编码 session-title）、分配模型；Atlas 的平台配置里按用途记下用哪个客户端类型、客户端编码、模型，用的时候按它向平台取 Key。所有会话共用，花费单独记在这几把 Key 上，不算进任何智能体。配置时当场校验 Key 和模型可用，配错了直接报。</li>
+  <li><b>获取和失败处理</b>与 Atlas 相同：每次用之前取最新的，平台不可用时沿用上次的；Key 待分配或停用时，这项功能暂停并记录原因。</li>
+</ul>
+
+<!-- ====================================================================== -->
+<h2 id="s10">10. 日志、用量与成本</h2>
+<ul>
+  <li><b>调用日志、花费都在 LiteLLM</b>，按 Key 统计：用户 Key 对应人，客户端 Key 对应智能体或平台服务（含知识库）。平台页面不展示花费，管理员到 LiteLLM 管理界面查看。</li>
+  <li><b>价格</b>：登记模型时写进 LiteLLM，LiteLLM 按它计费；自部署的模型可以不填。</li>
+  <li><b>预算、限流</b>：需要时在 LiteLLM 里按 Key 配置，平台不设，也不覆盖（6.1）。</li>
+  <li><b>平台自己的操作</b>：登记、编辑、删除模型，授权，分配模型，重置、停用 Key，都记操作日志，写明谁在什么时候做了什么。</li>
+</ul>
+
+<!-- ====================================================================== -->
+<h2 id="s11">11. 管理界面</h2>
+<table>
+  <tr><th>页面</th><th>谁能用</th><th>内容</th></tr>
+  <tr><td>模型</td><td>管理员</td><td>平台登记 + LiteLLM 直配的合并列表：模型、供应商、上下文 / 最大输出、价格、可见性与授权、来源、状态；登记、编辑、授权、纳入平台、重新登记、删除</td></tr>
+  <tr><td>模型</td><td>普通用户</td><td>公有模型和授权给自己的私有模型，显示权限来源（公有，或授给了谁）</td></tr>
+  <tr><td>API Key · 我的用户 Key</td><td>所有人</td><td>申请（勾选模型，原文显示一次）、分配模型、重置、停用、启用、删除</td></tr>
+  <tr><td>API Key · 客户端 Key</td><td>管理员</td><td>按客户端类型、状态筛选，待分配单独计数；新建（平台服务这类事先配好的）、分配模型、重置、停用、启用、删除</td></tr>
+  <tr><td>Atlas 智能体编辑器</td><td>Atlas 用户</td><td>模型下拉框的选项来自平台；为空时说明原因</td></tr>
+  <tr><td>LiteLLM 管理界面</td><td>管理员</td><td>调用日志、花费、按 Key 的预算与限流</td></tr>
+</table>
+<p>各页面的交互见 <a href="../prototype/model-management.html">模型管理原型</a>。</p>
+
+</main>
+</body>
+</html>

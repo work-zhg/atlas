@@ -28,8 +28,8 @@ def get_sessionmaker() -> async_sessionmaker[AsyncSession]:
 async def get_session() -> AsyncIterator[AsyncSession]:
     """FastAPI 依赖（管理 / 内部接口）：一个请求一个事务，异常回滚。
 
-    ★ 数据面不用它：转发可能持续很久（模型的流式输出），事务不能跨着转发开着 ——
-      proxy.py 在转发前开一个短会话，用量记录由 usage.Recorder 另开会话异步写。
+    ★ 接口里用 scope="function"（api/deps.py）：提交在响应发出之前。默认的 request 作用域会在
+      响应之后才提交，写完立刻读的调用方（Atlas 建智能体后马上取 Key）就会读不到。
     """
     async with get_sessionmaker()() as session:
         try:

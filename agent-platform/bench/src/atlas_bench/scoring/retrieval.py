@@ -15,7 +15,7 @@ from typing import Any
 from ranx import Qrels, Run, evaluate
 
 from ..schema import Question
-from .matching import match_evidence
+from .matching import MatchMode, match_evidence
 
 __all__ = ["score_retrieval"]
 
@@ -25,7 +25,11 @@ def _metric_names(k: int) -> dict[str, str]:
 
 
 def score_retrieval(
-    questions: dict[str, Question], rows: dict[str, dict[str, Any]], *, top_k: int
+    questions: dict[str, Question],
+    rows: dict[str, dict[str, Any]],
+    *,
+    top_k: int,
+    match: MatchMode = "quote",
 ) -> dict[str, dict[str, Any]]:
     """→ {qid: {hit, recall, mrr, ndcg, context_chars, partial, first_rank, matches}}。"""
     per_q: dict[str, dict[str, Any]] = {}
@@ -41,7 +45,7 @@ def score_retrieval(
         if not quotes:
             per_q[qid] = item
             continue
-        matches = match_evidence(quotes, texts)
+        matches = match_evidence(quotes, texts, mode=match)
         qrels[qid] = {f"e{m.evidence_index}": 1 for m in matches}
         ranked: dict[str, float] = {}
         hit_at: dict[int, list[int]] = {}

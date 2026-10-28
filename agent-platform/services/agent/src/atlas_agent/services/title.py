@@ -20,11 +20,9 @@ from atlas_agent.domain.spec import ModelSpec
 from atlas_agent.domain.translator import extract_text
 
 from ..config import Settings
-from ..providers.llm.modelgateway import resolve_purpose
+from .service_models import resolve_service_model
 
 if TYPE_CHECKING:
-    import redis.asyncio as aioredis
-
     from ..executor.assembly import ModelBuilder
 
 logger = logging.getLogger(__name__)
@@ -94,23 +92,17 @@ def fallback_title(question: str) -> str:
 
 
 class TitleService:
-    """生成标题。**不碰数据库** —— 落库由执行器在收尾时统一做。
+    """生成标题。**不写数据库** —— 落库由执行器在收尾时统一做
+    （只读平台服务模型配置，带进程内缓存）。
 
     ★ 模型经 `model_builder` 注入，与执行器共用同一个接缝。
       自己调 build_chat_model 会绕过它：单测注入的假模型对标题生成无效，
       于是每个 run 都真去打网关、超时几秒再降级。踩过一次。
     """
 
-    def __init__(
-        self,
-        settings: Settings,
-        model_builder: ModelBuilder,
-        redis: aioredis.Redis | None = None,
-    ) -> None:
+    def __init__(self, settings: Settings, model_builder: ModelBuilder) -> None:
         self._settings = settings
         self._build_model = model_builder
-        #: 读模型目录的缓存副本用（经模型网关时）
-        self._redis = redis
 
     async def generate(self, question: str, answer: str) -> dict[str, Any]:
         """返回 `thread.title_generated` 的 data。
@@ -131,19 +123,20 @@ class TitleService:
 
     async def _ask_model(self, question: str, answer: str) -> str:
         # ★ 不跟随 agent 配置：用大模型生成 20 字标题是纯浪费，effort 在这里也毫无意义。
-        #   经模型网关时是平台用途「会话标题」（doc/model-design.html §6.7），模型由模型管理员指定；
-        #   没接时用部署配置里的 summarizer_model。
-        found = await resolve_purpose(
-            self._settings, self._redis, "title", legacy_model=self._settings.summarizer_model
+        #   经模型管理平台时按 Atlas 库里的平台服务模型配置（service_model「会话标题」）
+        #   取 Key 和模型；
+        #   没接平台时用部署配置里的 summarizer_model。
+        found = await resolve_service_model(
+            self._settings, "title", legacy_model=self._settings.summarizer_model
         )
         if found is None:
-            raise RuntimeError("平台用途「会话标题」没有可用的模型")
+            # 没配置、Key 不可用：原因 resolve_service_model 已经记了日志；这里不再打堆栈，直接降级
+            return ""
         chat = self._build_model(
             ModelSpec(
                 model=found.model,
                 provider=found.provider,  # type: ignore[arg-type]
                 max_output_tokens=64,
-                caps=found.caps,
             ),
             base_url=found.endpoint.base_url,
             api_key=found.endpoint.api_key,

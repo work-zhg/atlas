@@ -1,41 +1,21 @@
-"""模型网关的表（doc/model-design.html §4、§5、§6、§10）。
+"""模型管理平台的表（模型管理方案设计第 3、5、6 章）。
 
-    gw_model         模型目录：平台模型名、类型、上游、协议、能力、上限、合规、生命周期；
-                     接入检查的最近结果
-    gw_model_price   价目：每次改价新增一行（带生效时间），成本按请求时生效的那一行算（§10.2）
-    gw_model_probe   能力探测的结果：管理员确认后才写进目录（§4.4）
-    gw_purpose       平台用途的配置：默认模型 + 允许范围（§6.7）
-    gw_model_key     主体 Key：一个主体（人或数字员工）最多一把，原文存库，自动生成（§6.5）
-    gw_model_call    每个经过网关的请求一行（含被拒的）：兼作访问日志和用量记录（§10.1）
-    gw_budget        供应商额度：按「登记的额度 − 估算花费」预警（§10.3）
-    gw_audit         管理动作的审计（不记 Key）
+    gw_model     平台登记的模型：只落基本信息。地址、供应商凭据、规格价格在 LiteLLM
+    gw_api_key   API Key：用户 Key（本人申请）与客户端 Key（应用创建，管理员分配模型）
+    gw_audit     平台自己的操作日志（不记 Key 原文）
 
-★ 自增 id + uuid 逻辑主键；关联与 API 一律用 uuid（字段名 xxx_uuid）。
-★ 不建外键（与其它服务一致）：引用完整性由 service 层保证。
+★ 自增 id + uuid 逻辑主键；关联与 API 一律用 uuid（字段名 xxx_uuid）。不建外键。
 ★ 表名带 gw_ 前缀：model_* 和 pydantic 的保留前缀撞名，ORM 类名也就不能叫 Model。
-★ 模型没有删除：平台模型名是请求里的模型名、Agent 配置里的引用、用户中心里的数据标识，
-  下线后也不能复用（§4.2）。
+★ 模型名 = LiteLLM 的 model_name = 调用时传的 model = 用户中心里的数据标识，所以不能改、不能重名。
 """
 
 from __future__ import annotations
 
 from datetime import datetime
-from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import (
-    BigInteger,
-    Boolean,
-    CheckConstraint,
-    Float,
-    Index,
-    Integer,
-    MetaData,
-    Numeric,
-    String,
-    Text,
-)
+from sqlalchemy import BigInteger, CheckConstraint, Index, MetaData, String, Text, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from .types import JSONType, UTCDateTime, UUIDType, utcnow, uuid7
@@ -47,9 +27,9 @@ NAMING_CONVENTION = {
     "pk": "pk_%(table_name)s",
 }
 
-KEY_STATUSES = ("active", "disabled")
-#: 价格的精度：每百万 token 的单价
-PRICE = Numeric(18, 6)
+VISIBILITIES = ("public", "private")
+KEY_TYPES = ("user", "client")
+KEY_STATUSES = ("pending", "active", "blocked")
 
 
 class Base(DeclarativeBase):
@@ -68,219 +48,90 @@ class _Row:
 class GwModel(_Row, Base):
     __tablename__ = "gw_model"
 
-    #: 平台模型名（catalog.MODEL_NAME_PATTERN）
-    name: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    #: 模型名：供应商侧的模型名，同时是 LiteLLM 的 model_name 和调用时传的 model
+    name: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
     display_name: Mapped[str] = mapped_column(String(100), default="", nullable=False)
+    #: 供应商 = LiteLLM 的 custom_llm_provider
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    #: public = 所有人可选，不判权；private = 授权给用户或部门后才能选
+    visibility: Mapped[str] = mapped_column(String(16), default="private", nullable=False)
     description: Mapped[str] = mapped_column(Text, default="", nullable=False)
-    #: 提供方（DeepSeek、通义……）：展示，以及额度按它归集
-    provider: Mapped[str] = mapped_column(String(64), default="", nullable=False)
-    tags: Mapped[list[str]] = mapped_column(JSONType, default=list, nullable=False)
-    #: chat | embedding | rerank
-    kind: Mapped[str] = mapped_column(String(16), nullable=False)
-
-    # ── 上游（§9.5）：本期只有 Higress 上的 AI 路由
-    upstream_kind: Mapped[str] = mapped_column(String(16), default="higress", nullable=False)
-    #: 上游认的名字：转发时请求里的模型名换成它
-    upstream_model: Mapped[str] = mapped_column(String(128), nullable=False)
-    #: 探测通过的调用协议，按偏好排序（原生的在前，§5.2）
-    protocols: Mapped[list[str]] = mapped_column(JSONType, default=list, nullable=False)
-    input_modalities: Mapped[list[str]] = mapped_column(
-        JSONType, default=lambda: ["text"], nullable=False
-    )
-    #: catalog.Capabilities
-    capabilities: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict, nullable=False)
-
-    # ── 上限
-    context_window: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    max_output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    #: 嵌入：向量维度；单批条数
-    dimensions: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    max_batch: Mapped[int | None] = mapped_column(Integer, nullable=True)
-
-    # ── 合规与容量（只记录，不执行）
-    data_policy: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict, nullable=False)
-    capacity: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict, nullable=False)
-
-    # ── 生命周期（§5.3）
-    status: Mapped[str] = mapped_column(String(16), default="onboarding", nullable=False)
-    #: 紧急止血：和生命周期正交，恢复后回到原来的状态
-    disabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    disabled_reason: Mapped[str] = mapped_column(Text, default="", nullable=False)
-    deprecated_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
-    #: 计划下线的时间：到了由维护任务下线
-    retire_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
-    retired_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
-    #: 替代模型（平台模型名）
-    replacement: Mapped[str | None] = mapped_column(String(64), nullable=True)
-
+    #: 平台在 LiteLLM 里建的部署（= 本行 uuid）。None = 纳入平台的 LiteLLM 直配模型，平台不改它
+    litellm_model_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_by: Mapped[str] = mapped_column(String(64), default="", nullable=False)
     updated_by: Mapped[str] = mapped_column(String(64), default="", nullable=False)
 
-    # ── 接入检查（§9.3）：不带网关凭据访问上游，必须被拒
-    access_checked_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
-    #: True = 不带凭据被拒（通过）；False = 不带凭据也能调通（漏开了认证）；None = 没查成
-    access_check_ok: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
-    access_check_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    __table_args__ = (CheckConstraint("visibility IN ('public','private')", name="visibility"),)
+
+
+class GwApiKey(_Row, Base):
+    """一把 API Key。
+
+    用户 Key：一人一把（user_uuid 唯一），本人从「公有 + 授权给自己的私有」里选模型。
+    客户端 Key：client_type + client_code 唯一，应用调接口创建或管理员在页面上建，
+               管理员从全部已登记模型里分配。
+
+    status   pending  客户端 Key 刚创建、还没分配模型：LiteLLM 里还没有 Key（空列表 = 全部模型）
+             active   正常
+             blocked  管理员（或本人）停用
+    ★ 「无可用模型」不是一种状态：有效模型算下来为空时，LiteLLM 里停用这把 Key，恢复后自动解除。
+    ★ 原文存库：应用要取原文去调 LiteLLM，LiteLLM 只存哈希。加密等安全问题后续统一设计。
+    ★ models 存勾选的；失效的（授权撤销、LiteLLM 中缺失）先保留并在页面标出来，下次保存时移除。
+    """
+
+    __tablename__ = "gw_api_key"
+
+    key_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    #: 用户 Key 的持有人（用户中心 uid）
+    user_uuid: Mapped[UUID | None] = mapped_column(UUIDType, nullable=True)
+    #: 客户端类型（Agent、Service ……）与编码（智能体 id ……）
+    client_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    client_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    #: 展示用的名字：用户 Key 是持有人姓名，客户端 Key 是对象名称（随对象改名同步）
+    name: Mapped[str] = mapped_column(String(200), default="", nullable=False)
+    #: 分配的模型（模型名）
+    models: Mapped[list[str]] = mapped_column(JSONType, default=list, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    #: 原文。pending 时为空
+    secret: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    #: LiteLLM 里的标识（哈希）
+    litellm_token: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+    # ── 同步到 LiteLLM 的状态（平台是事实源，LiteLLM 跟随）
+    #: 上一次成功推给 LiteLLM 的可用模型与停用状态
+    synced_models: Mapped[list[str]] = mapped_column(JSONType, default=list, nullable=False)
+    synced_blocked: Mapped[bool | None] = mapped_column(nullable=True)
+    synced_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    #: 上一次同步失败的原因；成功后清空。对账任务据此重试
+    sync_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    created_by: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    #: 最近一次生成原文的时间（生成、重置）
+    rotated_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
     __table_args__ = (
-        CheckConstraint("kind IN ('chat','embedding','rerank')", name="kind"),
-        CheckConstraint("upstream_kind IN ('higress')", name="upstream_kind"),
+        CheckConstraint("key_type IN ('user','client')", name="key_type"),
+        CheckConstraint("status IN ('pending','active','blocked')", name="status"),
         CheckConstraint(
-            "status IN ('onboarding','available','deprecated','retired')", name="status"
+            "(key_type = 'user' AND user_uuid IS NOT NULL AND client_type IS NULL) OR "
+            "(key_type = 'client' AND user_uuid IS NULL AND client_type IS NOT NULL "
+            "AND client_code IS NOT NULL)",
+            name="owner",
+        ),
+        Index(
+            "uq_gw_api_key_user",
+            "user_uuid",
+            unique=True,
+            postgresql_where=text("key_type = 'user'"),
+        ),
+        Index(
+            "uq_gw_api_key_client",
+            "client_type",
+            "client_code",
+            unique=True,
+            postgresql_where=text("key_type = 'client'"),
         ),
     )
-
-
-class GwModelPrice(_Row, Base):
-    """一版价目（每百万 token 的单价）。改价 = 新增一行，旧的留着：历史成本不随改价变（§10.2）。
-
-    ★ 缓存读写价为空时按输入价算。分段价 tiers：[{above_input_tokens, input, output, …}]，
-      一次请求的输入（含缓存）超过阈值就用那一段的单价（取阈值最大的那段）。
-    """
-
-    __tablename__ = "gw_model_price"
-
-    model_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
-    currency: Mapped[str] = mapped_column(String(8), default="CNY", nullable=False)
-    input: Mapped[Decimal] = mapped_column(PRICE, nullable=False)
-    output: Mapped[Decimal] = mapped_column(PRICE, nullable=False)
-    cache_read: Mapped[Decimal | None] = mapped_column(PRICE, nullable=True)
-    cache_write: Mapped[Decimal | None] = mapped_column(PRICE, nullable=True)
-    #: 按次计价的部分（每次请求）
-    per_request: Mapped[Decimal | None] = mapped_column(PRICE, nullable=True)
-    tiers: Mapped[list[dict[str, Any]]] = mapped_column(JSONType, default=list, nullable=False)
-    effective_from: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
-    created_by: Mapped[str] = mapped_column(String(64), default="", nullable=False)
-
-    __table_args__ = (Index("ix_gw_model_price_model_from", "model_uuid", "effective_from"),)
-
-
-class GwModelProbe(_Row, Base):
-    """一次能力探测（§4.4）。
-
-    results：[{check, protocol, ok, detail}]；suggested：建议写进目录的属性。
-    """
-
-    __tablename__ = "gw_model_probe"
-
-    model_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
-    results: Mapped[list[dict[str, Any]]] = mapped_column(JSONType, default=list, nullable=False)
-    suggested: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict, nullable=False)
-    #: 和当前目录不一致的属性：{属性: [目录里的, 探测得出的]}
-    differences: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict, nullable=False)
-    created_by: Mapped[str] = mapped_column(String(64), default="", nullable=False)
-    applied_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    applied_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
-
-    __table_args__ = (Index("ix_gw_model_probe_model_at", "model_uuid", "created_at"),)
-
-
-class GwPurpose(_Row, Base):
-    __tablename__ = "gw_purpose"
-
-    #: catalog.PURPOSES 的键
-    code: Mapped[str] = mapped_column(String(32), unique=True, nullable=False)
-    default_model: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    #: 允许范围（平台模型名）；默认模型总在范围内
-    allowed_models: Mapped[list[str]] = mapped_column(JSONType, default=list, nullable=False)
-    updated_by: Mapped[str] = mapped_column(String(64), default="", nullable=False)
-
-
-class GwModelKey(_Row, Base):
-    """主体 Key 只表示「我是谁」，不带权限：能用什么交给用户中心的数据权限（§6.5）。
-
-    ★ 自动生成：第一次被取用时生成（issued_by = system），不需要手工发放。
-    ★ 原文存库：Atlas 代主体调用时要带原文，不能只存哈希。加密等安全问题后续统一设计。
-    ★ 不提供删除：只停用，审计记录永远能对上持有人。启用时重新生成，不恢复旧值。
-    """
-
-    __tablename__ = "gw_model_key"
-
-    subject_uid: Mapped[UUID] = mapped_column(UUIDType, unique=True, nullable=False)
-    #: human | digital（「数字员工的 Key 永远不显示」用）
-    subject_type: Mapped[str] = mapped_column(String(16), default="human", nullable=False)
-    subject_name: Mapped[str] = mapped_column(String(100), default="", nullable=False)
-    api_key: Mapped[str] = mapped_column(String(80), unique=True, nullable=False)
-    status: Mapped[str] = mapped_column(String(16), default="active", nullable=False)
-    issued_by: Mapped[str] = mapped_column(String(64), nullable=False)
-    #: 最近一次生成原文的时间（生成、重置、启用）
-    rotated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, nullable=False)
-    disabled_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
-
-    __table_args__ = (CheckConstraint("status IN ('active','disabled')", name="status"),)
-
-
-class GwModelCall(_Row, Base):
-    """一个经过网关的请求（§10.1）：所有调用都有，包括 Pod 里的 CLI、平台功能和泄露 Key 的调用。
-
-    可信的：主体（来自 Key）、应用与用途、模型、用量、结果、耗时。
-    只作参考的：使用者、Agent、Run（来自调用方的请求头）。
-    ★ 不记提示词和输出内容。
-    """
-
-    __tablename__ = "gw_model_call"
-
-    #: 请求里的平台模型名（解析不出来时为空串）
-    model: Mapped[str] = mapped_column(String(64), default="", nullable=False)
-    upstream_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    #: messages | count_tokens | chat | embeddings | rerank | models
-    endpoint: Mapped[str] = mapped_column(String(16), nullable=False)
-    stream: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    #: Key 认出的权限主体。平台用途、没 Key、Key 无效时为空
-    subject_uid: Mapped[UUID | None] = mapped_column(UUIDType, nullable=True)
-    #: 请求时主体所在的部门（部门调整不改历史）
-    dept_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    purpose: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    caller_app: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    user_uid: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    agent_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    #: ok = 已转发且上游成功；其余是拒绝原因（proxy.Reason）或 upstream_error
-    outcome: Mapped[str] = mapped_column(String(32), nullable=False)
-    status: Mapped[int] = mapped_column(Integer, nullable=False)
-    forwarded: Mapped[bool] = mapped_column(Boolean, nullable=False)
-
-    # ── 用量（归一化：input 是不含缓存的输入，output 含推理）
-    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    cache_read_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    cache_write_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    reasoning_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    #: 上游回报了用量。False = 没回报（成本未知，§10.2）
-    usage_reported: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    cost: Mapped[Decimal | None] = mapped_column(Numeric(18, 8), nullable=True)
-    currency: Mapped[str | None] = mapped_column(String(8), nullable=True)
-    price_uuid: Mapped[UUID | None] = mapped_column(UUIDType, nullable=True)
-
-    ttft_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    duration_ms: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-
-    __table_args__ = (
-        Index("ix_gw_model_call_at", "created_at"),
-        Index("ix_gw_model_call_model_at", "model", "created_at"),
-        Index("ix_gw_model_call_subject_at", "subject_uid", "created_at"),
-        Index("ix_gw_model_call_purpose_at", "purpose", "created_at"),
-    )
-
-
-class GwBudget(_Row, Base):
-    """供应商额度（§10.3）。网关不持有供应商 Key、查不了余额：剩余 = 额度 − 自 starts_at 以来
-    这个提供方的模型估算花费；低于 warn_ratio 就预警。"""
-
-    __tablename__ = "gw_budget"
-
-    name: Mapped[str] = mapped_column(String(100), nullable=False)
-    #: 归集到哪个提供方（gw_model.provider）
-    provider: Mapped[str] = mapped_column(String(64), nullable=False)
-    amount: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
-    currency: Mapped[str] = mapped_column(String(8), default="CNY", nullable=False)
-    starts_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
-    #: 剩余低于额度的这个比例时预警
-    warn_ratio: Mapped[float] = mapped_column(Float, default=0.2, nullable=False)
-    note: Mapped[str] = mapped_column(Text, default="", nullable=False)
-    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    created_by: Mapped[str] = mapped_column(String(64), default="", nullable=False)
-    updated_by: Mapped[str] = mapped_column(String(64), default="", nullable=False)
 
 
 class GwAudit(_Row, Base):

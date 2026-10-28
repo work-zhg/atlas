@@ -128,6 +128,12 @@ def acp_spec(
         agent_env["ANTHROPIC_BASE_URL"] = model.base_url
         agent_env["ANTHROPIC_MODEL"] = model.model
         agent_env["ANTHROPIC_SMALL_FAST_MODEL"] = model.small_model
+        # ★ 新版 Claude Code 按别名（sonnet / opus / haiku、SubAgent）找模型，不再只看上面两个：
+        #   不指的话它会用内置的 claude-sonnet-5 等，网关目录里没有，被拒（112 上实测，§8.1）
+        agent_env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = model.model
+        agent_env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = model.model
+        agent_env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = model.small_model
+        agent_env["CLAUDE_CODE_SUBAGENT_MODEL"] = model.model
         if model.headers:
             # Claude Code 每个请求都带上（一行一个）：只作用量归属参考
             agent_env["ANTHROPIC_CUSTOM_HEADERS"] = "\n".join(

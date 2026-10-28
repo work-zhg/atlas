@@ -1,77 +1,81 @@
 #!/usr/bin/env bash
-# 模型调用切到自研模型网关（doc/model-design.html §6.3「存量迁移」）的一次性步骤。可重复执行。
+# 模型调用切到 LiteLLM + 模型管理平台（agent-platform/doc/design/model-design.html）的一次性步骤。
+# 可重复执行。
 #
-#   deploy/server/model-cutover.sh [--no-all-users]
+#   deploy/server/model-cutover.sh
 #
 # 前置（deploy.sh 与 register.sh 已经做完）：
-#   · atlas-modelgateway 在跑；Secret atlas-modelgateway-creds 里有网关凭据
-#   · register.sh 已把模型网关登记到用户中心（应用 model-gateway、数据编码 Model）
-#   · .env 里有供应商 Key：DEEPSEEK_API_KEY（没有就用 LITELLM_KEY —— 现在直连用的就是 DeepSeek 那把）
+#   · atlas-litellm、atlas-modelgateway 在跑（模型管理平台的库已迁移到 m0002）
+#   · register.sh 已把模型管理平台登记到用户中心（应用 model-gateway、数据编码 Model）
+#   · .env 里有供应商 Key：DEEPSEEK_API_KEY（没有就用 LITELLM_KEY —— 直连时用的就是 DeepSeek 那把）
 #
-# 做五件事：
-#   1. Higress：供应商（Key 只在这里）+ AI 路由（按模型名匹配，只认模型网关的凭据）。
-#      模型名默认 deepseek-chat，可用 MODELS="deepseek-chat deepseek-v4-pro" 覆盖
-#   2. 在 Atlas 里导出模型目录、数字员工用到的模型、平台用途（export-models）
-#   3. 导入模型网关（import，注册人 / 操作人 = 用户中心的 admin）：登记模型、上线原来可用的；
-#      Higress 上没有路由的模型接入检查不过，会被跳过（报出来）。默认给根部门（含下级）授「使用」，
-#      保持切换前「谁都能用」（§6.3）；--no-all-users 只给所有者（admin），其他人在模型管理端逐个授权
-#   4. 建 ConfigMap atlas-model-gateway，滚动重启 atlas-server 与知识库：它们从此只经模型网关
-#   5. 撤掉 ACP Pod 里的供应商 Key（Secret atlas-acp-model 清空）：Pod 改拿网关地址和主体 Key
+# 环境变量（都有默认值）：
+#   MODELS          要登记的模型（DeepSeek），空格分隔，默认 "deepseek-v4-pro deepseek-flash"
+#   SERVICE_MODEL   会话标题、记忆补记、知识库入库增强与查询理解用的模型，默认 deepseek-flash
+#   AGENT_MODELS    给存量智能体的客户端 Key 分配的模型（逗号分隔，只分配还没分配过的），
+#                   默认 = MODELS；设成空串就不分配（之后在模型管理端逐个分配）
 #
-# ★ 做完之后在模型管理端给每个模型跑一次能力探测、确认（§4.4），并填上价目（不填成本显示为未知）。
-# ★ 回退：kubectl -n atlas-system delete configmap atlas-model-gateway，再滚动重启两者；
+# 做六件事：
+#   1. 在模型管理平台登记模型（公有：所有人都能选进自己的用户 Key）
+#   2. 平台服务的客户端 Key：Service:session-title、Service:memory-backfill、Service:knowledge-chat，
+#      分配 SERVICE_MODEL；Service:knowledge-embedding、Service:knowledge-rerank 只建不分配
+#      （DeepSeek 没有嵌入、重排模型；登记了再在模型管理端分配，建库时才有远程模型可选）
+#   3. 建 ConfigMap atlas-model-platform，删掉自研网关时期的 atlas-model-gateway，
+#      滚动重启 atlas-server 与知识库：都从此经平台
+#   4. Atlas 里配平台服务模型（service-model set）
+#   5. 存量智能体补建客户端 Key，按 AGENT_MODELS 分配
+#   6. ACP Pod 里不放供应商 Key（Secret atlas-acp-model 清空）：Pod 拿 LiteLLM 地址和智能体的 Key
+#
+# ★ 回退：kubectl -n atlas-system delete configmap atlas-model-platform，再滚动重启 atlas-server；
 #   ACP 的供应商 Key 要重跑 deploy/local/opensandbox.sh 恢复。
+# ★ 自研网关时期 Higress 上的模型路由（deepseek 供应商与 AI 路由）不再使用，可在 Higress 控制台删掉。
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 SERVER_IP="${ATLAS_SERVER_IP:-192.168.0.112}"
 export KUBECONFIG="${ATLAS_KUBECONFIG:-$HOME/.kube/atlas-${SERVER_IP}.yaml}"
-ALL_USERS="--all-users"
-[ "${1:-}" = "--no-all-users" ] && ALL_USERS=""
 
 [ -f .env ] || { echo "缺 .env"; exit 1; }
 # shellcheck disable=SC1091
 set -a; . ./.env; set +a
-export DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY:-${LITELLM_KEY:-}}"
+DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY:-${LITELLM_KEY:-}}"
 [ -n "$DEEPSEEK_API_KEY" ] || { echo "缺供应商 Key（DEEPSEEK_API_KEY / LITELLM_KEY）"; exit 1; }
-read -r -a MODEL_LIST <<< "${MODELS:-deepseek-chat}"
+read -r -a MODEL_LIST <<< "${MODELS:-deepseek-v4-pro deepseek-flash}"
+SERVICE_MODEL="${SERVICE_MODEL:-deepseek-flash}"
+AGENT_MODELS="${AGENT_MODELS-$(IFS=,; echo "${MODEL_LIST[*]}")}"
 
-echo "── 1. Higress：供应商与 AI 路由（只认模型网关）"
-kubectl -n atlas-infra port-forward svc/higress 28001:8001 >/dev/null 2>&1 &
-PF=$!
-trap 'kill $PF 2>/dev/null || true' EXIT
-for _ in $(seq 60); do curl -s -o /dev/null --noproxy '*' http://127.0.0.1:28001 && break; sleep 2; done
-MODEL_ARGS=()
-for m in "${MODEL_LIST[@]}"; do MODEL_ARGS+=(--model "$m"); done
-MODEL_GATEWAY_CREDENTIAL="$(kubectl -n atlas-system get secret atlas-modelgateway-creds \
-  -o jsonpath='{.data.gateway_credential}' | base64 --decode)" \
-HIGRESS_CONSOLE=http://127.0.0.1:28001 \
-  python3 deploy/local/higress/models.py --provider deepseek --type deepseek \
-    --token-env DEEPSEEK_API_KEY "${MODEL_ARGS[@]}"
-kill $PF 2>/dev/null || true
+platform() { kubectl -n atlas-system exec -i deploy/atlas-modelgateway -c modelgateway -- "$@"; }
+atlas() { kubectl -n atlas-system exec deploy/atlas-server -- "$@"; }
 
-echo "── 2. 从 Atlas 导出"
-EXPORTED="$(mktemp)"
-kubectl -n atlas-system exec deploy/atlas-server -- python -m atlas_agent export-models > "$EXPORTED"
-python3 - "$EXPORTED" <<'EOF'
-import json, sys
-data = json.load(open(sys.argv[1]))
-print(f"  模型 {len(data['models'])} 个，以 Agent 为权限的数字员工 {len(data['digital_employees'])} 个")
-if data.get("unknown_models"):
-    print("  ⚠ Agent 引用了、但模型目录里没有：" + "、".join(data["unknown_models"]))
-EOF
+echo "── 1. 在模型管理平台登记模型"
+for m in "${MODEL_LIST[@]}"; do
+  # 供应商 Key 经标准输入进 Pod 的环境变量，不出现在命令行和进程列表里
+  printf '%s' "$DEEPSEEK_API_KEY" | platform sh -c \
+    "DEEPSEEK_API_KEY=\"\$(cat)\" python -m atlas_modelgateway model add '$m' --provider deepseek \
+     --visibility public --api-key-env DEEPSEEK_API_KEY --actor-account admin"
+done
+platform python -m atlas_modelgateway model list
 
-echo "── 3. 导入模型网关"
-# shellcheck disable=SC2086
-kubectl -n atlas-system exec -i deploy/atlas-modelgateway -- sh -c \
-  "cat > /tmp/atlas-models.json && python -m atlas_modelgateway import --file /tmp/atlas-models.json \
-   --owner-account admin ${ALL_USERS}" < "$EXPORTED" || echo "⚠ 有模型没导入（见上面的 ✗）"
-rm -f "$EXPORTED"
+echo "── 2. 平台服务的客户端 Key"
+platform python -m atlas_modelgateway client-key ensure --type Service --code session-title \
+  --name 会话标题 --models "$SERVICE_MODEL" --actor-account admin
+platform python -m atlas_modelgateway client-key ensure --type Service --code memory-backfill \
+  --name 记忆补记 --models "$SERVICE_MODEL" --actor-account admin
+platform python -m atlas_modelgateway client-key ensure --type Service --code knowledge-chat \
+  --name 知识库·入库增强与查询理解 --models "$SERVICE_MODEL" --actor-account admin
+platform python -m atlas_modelgateway client-key ensure --type Service --code knowledge-embedding \
+  --name 知识库·远程嵌入 --actor-account admin
+platform python -m atlas_modelgateway client-key ensure --type Service --code knowledge-rerank \
+  --name 知识库·远程重排 --actor-account admin
 
-echo "── 4. Atlas、知识库切到模型网关"
-kubectl -n atlas-system create configmap atlas-model-gateway \
-  --from-literal=url="http://atlas-modelgateway.atlas-system.svc.cluster.local:8090" \
+echo "── 3. Atlas、知识库切到模型管理平台"
+kubectl -n atlas-system create configmap atlas-model-platform \
+  --from-literal=platform_url="http://atlas-modelgateway.atlas-system.svc.cluster.local:8090" \
+  --from-literal=litellm_url="http://atlas-litellm.atlas-system.svc.cluster.local:4000" \
+  --from-literal=kb_enrich_model="$SERVICE_MODEL" \
   --dry-run=client -o yaml | kubectl apply -f -
+# 自研网关时期的切换开关，已经没人认它
+kubectl -n atlas-system delete configmap atlas-model-gateway --ignore-not-found
 for d in atlas-server atlas-knowledge atlas-knowledge-worker; do
   kubectl -n atlas-system rollout restart "deploy/$d"
 done
@@ -79,8 +83,27 @@ for d in atlas-server atlas-knowledge atlas-knowledge-worker; do
   kubectl -n atlas-system rollout status "deploy/$d" --timeout=300s
 done
 
-echo "── 5. 撤掉 ACP Pod 里的供应商 Key"
+echo "── 4. Atlas 的平台服务模型"
+atlas python -m atlas_agent service-model set title \
+  --client-type Service --client-code session-title --model "$SERVICE_MODEL"
+atlas python -m atlas_agent service-model set memory_backfill \
+  --client-type Service --client-code memory-backfill --model "$SERVICE_MODEL"
+
+echo "── 5. 存量智能体的客户端 Key"
+AGENTS="$(atlas python -m atlas_agent register-agent-keys)"
+printf '%s\n' "$AGENTS"
+if [ -n "$AGENT_MODELS" ]; then
+  while IFS=$'\t' read -r agent_id _status _name; do
+    [ -n "$agent_id" ] || continue
+    platform python -m atlas_modelgateway client-key ensure --type Agent --code "$agent_id" \
+      --models "$AGENT_MODELS" --if-pending --actor-account admin
+  done <<< "$AGENTS"
+fi
+
+echo "── 6. 撤掉 ACP Pod 里的供应商 Key"
 kubectl -n atlas-acp create secret generic atlas-acp-model \
   --from-literal=model_api_key= --dry-run=client -o yaml | kubectl apply -f -
 
-echo "✓ 完成。到模型管理端给每个模型跑能力探测并确认、填价目：http://atlas.${SERVER_IP}.nip.io/atlas/models"
+echo "✓ 完成。新建的智能体要在模型管理端给它的客户端 Key 分配模型之后才能运行。"
+echo "  LiteLLM 管理界面（日志、花费）：kubectl -n atlas-system port-forward svc/atlas-litellm 4000:4000，"
+echo "  打开 http://127.0.0.1:4000/ui（账号 admin，密码 = Secret atlas-litellm-creds 的 master_key）"

@@ -129,8 +129,8 @@ class Env:
             acp_ws_connect_timeout_s=5.0,
             acp_prompt_idle_timeout_s=120.0,
             acp_tool_idle_timeout_s=600.0,
-            # 没接模型网关：CLI 的模型照旧按部署配置
-            model_gateway_url=None,
+            # 没接模型管理平台：CLI 的模型照旧按部署配置
+            model_platform_url=None,
         )
         self.settings = settings
         self.runtime = HostRuntime(

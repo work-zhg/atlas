@@ -1,329 +1,203 @@
-"""管理接口与内部接口的请求 / 响应。
-
-★ 内部接口（/internal/*）是给 Atlas、知识库的契约：Atlas 侧有一份对应的解析
-  （atlas_agent/providers/llm/modelgateway.py），改字段要两边一起改。
-★ 管理接口不返回 Key 原文（§6.5）：只有内部接口 /internal/subjects/{uid}/access 返回原文。
-"""
+"""管理接口与内部接口的请求、响应形状。"""
 
 from __future__ import annotations
 
 from datetime import datetime
-from decimal import Decimal
-from typing import Any, Literal
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from ..catalog import MODEL_NAME_PATTERN
-
-# ───────────────────────────── 模型
+Visibility = Literal["public", "private"]
 
 
-class _Attributes(BaseModel):
-    display_name: str | None = Field(default=None, max_length=100)
-    description: str | None = None
-    provider: str | None = Field(default=None, max_length=64)
-    tags: list[str] | None = None
-    #: 上游认的名字；缺省 = 平台模型名
-    upstream_model: str | None = Field(default=None, min_length=1, max_length=128)
-    #: 调用协议，按偏好排序（原生的在前）
-    protocols: list[Literal["anthropic", "openai", "rerank"]] | None = None
-    input_modalities: list[str] | None = None
-    #: catalog.Capabilities
-    capabilities: dict[str, Any] | None = None
-    context_window: int | None = Field(default=None, gt=0)
-    max_output_tokens: int | None = Field(default=None, gt=0)
-    dimensions: int | None = Field(default=None, gt=0)
-    max_batch: int | None = Field(default=None, gt=0)
-    #: catalog.DataPolicy
-    data_policy: dict[str, Any] | None = None
-    #: catalog.Capacity
-    capacity: dict[str, Any] | None = None
-
-
-class ModelIn(_Attributes):
-    name: str = Field(pattern=MODEL_NAME_PATTERN)
-    kind: Literal["chat", "embedding", "rerank"] = "chat"
-
-
-class ModelPatch(_Attributes):
-    pass
-
-
-class AccessCheckOut(BaseModel):
-    ok: bool | None
-    detail: str | None
-    checked_at: datetime | None
-
-
-class PriceIn(BaseModel):
-    currency: str = Field(default="CNY", min_length=3, max_length=8)
-    #: 每百万 token 的单价
-    input: Decimal = Field(ge=0)
-    output: Decimal = Field(ge=0)
-    cache_read: Decimal | None = Field(default=None, ge=0)
-    cache_write: Decimal | None = Field(default=None, ge=0)
-    per_request: Decimal | None = Field(default=None, ge=0)
-    #: [{above_input_tokens, input?, output?, cache_read?, cache_write?}]
-    tiers: list[dict[str, Any]] = []
-    #: 缺省 = 现在
-    effective_from: datetime | None = None
-
-
-class PriceOut(BaseModel):
-    id: UUID
-    currency: str
-    input: Decimal
-    output: Decimal
-    cache_read: Decimal | None
-    cache_write: Decimal | None
-    per_request: Decimal | None
-    tiers: list[dict[str, Any]]
-    effective_from: datetime
-    created_by: str
-    created_at: datetime
-
-
-class ModelOut(BaseModel):
-    name: str
-    display_name: str
-    description: str
-    provider: str
-    tags: list[str]
-    kind: str
-    upstream_kind: str
-    upstream_model: str
-    protocols: list[str]
-    input_modalities: list[str]
-    capabilities: dict[str, Any]
-    context_window: int | None
-    max_output_tokens: int | None
-    dimensions: int | None
-    max_batch: int | None
-    data_policy: dict[str, Any]
-    capacity: dict[str, Any]
-    status: str
-    disabled: bool
-    disabled_reason: str
-    deprecated_at: datetime | None
-    retire_at: datetime | None
-    retired_at: datetime | None
-    replacement: str | None
-    access_check: AccessCheckOut
-    #: 当前生效的价目；没有为空（成本显示为未知）
-    price: PriceOut | None = None
-    created_by: str
-    updated_by: str
-    created_at: datetime
-    updated_at: datetime
-
-
-class DeprecateIn(BaseModel):
-    replacement: str | None = None
-    retire_at: datetime | None = None
-
-
-class DisableIn(BaseModel):
-    reason: str = Field(default="", max_length=500)
-
-
-class ProbeOut(BaseModel):
-    id: UUID
-    created_at: datetime
-    created_by: str
-    results: list[dict[str, Any]]
-    suggested: dict[str, Any]
-    differences: dict[str, Any]
-    applied_by: str | None
-    applied_at: datetime | None
-
-
-# ───────────────────────────── 平台用途
-
-
-class PurposeOut(BaseModel):
-    code: str
-    name: str
-    kind: str
-    description: str
-    #: False = 不是调用，只是默认选项
-    callable: bool
-    default_model: str | None
-    allowed_models: list[str]
-
-
-class PurposeIn(BaseModel):
-    default_model: str | None = None
-    allowed_models: list[str] = []
-
-
-# ───────────────────────────── 授权、Key
-
-
-class SubjectRef(BaseModel):
-    type: Literal["user", "dept"]
-    id: UUID
+# ── 模型
 
 
 class GrantIn(BaseModel):
-    subjects: list[SubjectRef] = Field(min_length=1)
-    level: Literal["READ", "OWNER"] = "READ"
-    include_sub: bool = True
+    subject_type: Literal["user", "dept"]
+    subject_id: str = Field(min_length=1, max_length=64)
+    include_sub: bool = False
 
 
-class GrantPatch(BaseModel):
-    level: Literal["READ", "OWNER"] | None = None
-    include_sub: bool | None = None
+class RouteIn(BaseModel):
+    """只交给 LiteLLM 的部分。"""
+
+    api_base: str | None = Field(default=None, max_length=500)
+    #: 供应商凭据。编辑时留空 = 不改
+    api_key: str | None = Field(default=None, max_length=500)
+    max_input_tokens: int | None = Field(default=None, ge=1)
+    max_output_tokens: int | None = Field(default=None, ge=1)
+    #: 美元 / 百万 token
+    input_price: float | None = Field(default=None, ge=0)
+    output_price: float | None = Field(default=None, ge=0)
+
+
+class ModelIn(RouteIn):
+    name: str = Field(min_length=1, max_length=128)
+    display_name: str = Field(default="", max_length=100)
+    provider: str = Field(min_length=1, max_length=64)
+    visibility: Visibility = "private"
+    description: str = Field(default="", max_length=2000)
+    #: 私有模型登记时一并授权
+    grants: list[GrantIn] = Field(default_factory=list)
+
+
+class ModelUpdate(RouteIn):
+    display_name: str = Field(default="", max_length=100)
+    provider: str = Field(min_length=1, max_length=64)
+    visibility: Visibility
+    description: str = Field(default="", max_length=2000)
+
+
+class ModelReregister(RouteIn):
+    provider: str = Field(min_length=1, max_length=64)
+
+
+class ModelAdopt(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    display_name: str = Field(default="", max_length=100)
+    visibility: Visibility = "private"
+    description: str = Field(default="", max_length=2000)
+    grants: list[GrantIn] = Field(default_factory=list)
+
+
+class ConnectionTestIn(RouteIn):
+    name: str = Field(min_length=1, max_length=128)
+    provider: str = Field(min_length=1, max_length=64)
+
+
+class ConnectionTestOut(BaseModel):
+    ok: bool
+    message: str
+
+
+class GrantOut(BaseModel):
+    id: str
+    subject_type: str
+    subject_id: str
+    subject_name: str = ""
+    permission: str
+    include_sub: bool = False
+
+
+class ModelOut(BaseModel):
+    #: 平台记录的 id；LiteLLM 直配的为空
+    uuid: UUID | None
+    name: str
+    display_name: str
+    provider: str
+    #: LiteLLM 直配的为空
+    visibility: Visibility | None
+    description: str = ""
+    #: platform = 平台登记；litellm = LiteLLM 里直接配置的（只读，可纳入）
+    source: Literal["platform", "litellm"]
+    #: ok = 可调用；missing = LiteLLM 中缺失；unknown = LiteLLM 不可达，状态未知
+    status: Literal["ok", "missing", "unknown"]
+    #: 平台在 LiteLLM 里建的部署（能改地址、凭据、规格价格）；纳入平台的为 False
+    managed: bool = False
+    #: 直配模型的来源：db = LiteLLM 管理界面；config = 配置文件
+    origin: Literal["db", "config"] | None = None
+    deployments: int = 0
+    api_base: str | None = None
+    max_input_tokens: int | None = None
+    max_output_tokens: int | None = None
+    #: 美元 / 百万 token
+    input_price: float | None = None
+    output_price: float | None = None
+    #: 管理员看：私有模型的授权
+    grants: list[GrantOut] | None = None
+    #: 普通用户看：权限来源（public = 公有；granted = 授权给了你或你所在的部门）
+    access: Literal["public", "granted"] | None = None
+    created_by: str | None = None
+    created_at: datetime | None = None
+
+
+class ModelListOut(BaseModel):
+    data: list[ModelOut]
+    litellm_reachable: bool
+
+
+class ProviderOut(BaseModel):
+    code: str
+    name: str
+    needs_base: bool = False
+    key_optional: bool = False
+
+
+# ── Key
+
+
+class KeyModelOut(BaseModel):
+    name: str
+    #: ok；revoked = 授权已撤销（或不再可选）；missing = LiteLLM 中缺失；deleted = 模型已删除
+    state: Literal["ok", "revoked", "missing", "deleted"]
 
 
 class KeyOut(BaseModel):
-    id: UUID
-    subject_uid: UUID
-    subject_type: str
-    subject_name: str
-    #: 掩码。原文不经管理接口返回（数字员工的 Key 永远不显示）
-    masked: str
-    status: str
-    issued_by: str
-    created_at: datetime
-    rotated_at: datetime
-    disabled_at: datetime | None
-
-
-# ───────────────────────────── 用量、额度
-
-
-class CallOut(BaseModel):
-    id: int
-    at: datetime
-    model: str
-    upstream_model: str | None
-    endpoint: str
-    stream: bool
-    subject_uid: UUID | None
-    dept_id: str | None
-    purpose: str | None
-    caller_app: str | None
-    user_uid: str | None
-    agent_id: str | None
-    run_id: str | None
-    outcome: str
-    status: int
-    forwarded: bool
-    input_tokens: int | None
-    output_tokens: int | None
-    cache_read_tokens: int | None
-    cache_write_tokens: int | None
-    reasoning_tokens: int | None
-    usage_reported: bool
-    cost: Decimal | None
-    currency: str | None
-    ttft_ms: int | None
-    duration_ms: int
-
-
-UsageGroup = Literal["model", "subject", "dept", "purpose", "caller_app", "agent", "day"]
-
-
-class UsageRowOut(BaseModel):
-    #: 分组的值（day 是 YYYY-MM-DD；平台用途的调用在 subject 分组里为空）
-    key: str | None
-    currency: str | None
-    calls: int
-    failed: int
-    input_tokens: int
-    output_tokens: int
-    cache_read_tokens: int
-    cache_write_tokens: int
-    #: 已知价格的部分
-    cost: Decimal
-    #: 回报了用量但没有价格的调用数（成本未知，§10.2）
-    unpriced: int
-    #: 没有回报用量的成功调用数（用量未知）
-    unreported: int
-
-
-class BudgetIn(BaseModel):
-    name: str = Field(min_length=1, max_length=100)
-    provider: str = Field(min_length=1, max_length=64)
-    amount: Decimal = Field(gt=0)
-    currency: str = Field(default="CNY", min_length=3, max_length=8)
-    starts_at: datetime | None = None
-    warn_ratio: float = Field(default=0.2, gt=0, lt=1)
-    note: str = ""
-
-
-class BudgetPatch(BaseModel):
-    name: str | None = Field(default=None, min_length=1, max_length=100)
-    amount: Decimal | None = Field(default=None, gt=0)
-    starts_at: datetime | None = None
-    warn_ratio: float | None = Field(default=None, gt=0, lt=1)
-    note: str | None = None
-    active: bool | None = None
-
-
-class BudgetOut(BaseModel):
-    id: UUID
+    uuid: UUID
+    key_type: Literal["user", "client"]
+    user_uuid: UUID | None = None
+    client_type: str | None = None
+    client_code: str | None = None
     name: str
-    provider: str
-    amount: Decimal
-    currency: str
-    starts_at: datetime
-    warn_ratio: float
-    note: str
-    active: bool
-    #: 自 starts_at 以来的估算花费、剩余、剩余比例
-    spent: Decimal
-    remaining: Decimal
-    remaining_ratio: float
-    #: 回报了用量但没有价格的调用数：花费被低估
-    unpriced_calls: int
-    warning: bool
+    status: Literal["pending", "active", "blocked"]
+    #: sk-…后四位；待分配时为空
+    masked: str | None = None
+    models: list[KeyModelOut]
+    #: 有效模型：同步给 LiteLLM 的
+    effective: list[str]
+    #: 已分配过，但有效模型算下来为空（LiteLLM 里停用）
+    no_models: bool = False
+    sync_error: str | None = None
+    created_by: str
+    created_at: datetime
+    rotated_at: datetime | None = None
 
 
-class AlertOut(BaseModel):
-    kind: str
-    message: str
-    target: str | None = None
+class KeySecretOut(KeyOut):
+    #: 原文：只在申请、重置、第一次分配时返回一次
+    secret: str | None = None
 
 
-# ───────────────────────────── 内部接口（给 Atlas、知识库）
+class ModelsIn(BaseModel):
+    models: list[str] = Field(min_length=1)
 
 
-class CatalogModelOut(BaseModel):
+class ClientKeyIn(BaseModel):
+    client_type: str = Field(min_length=1, max_length=64)
+    client_code: str = Field(min_length=1, max_length=128)
+    name: str = Field(default="", max_length=200)
+
+
+class ClientTypeOut(BaseModel):
+    code: str
+    apps: list[str]
+
+
+# ── 内部接口（应用）
+
+
+class InternalModelOut(BaseModel):
     name: str
     display_name: str
-    description: str
     provider: str
-    tags: list[str]
-    kind: str
-    protocols: list[str]
-    input_modalities: list[str]
-    capabilities: dict[str, Any]
-    context_window: int | None
-    max_output_tokens: int | None
-    dimensions: int | None
-    max_batch: int | None
-    data_policy: dict[str, Any]
-    status: str
-    disabled: bool
-    deprecated_at: datetime | None
-    retire_at: datetime | None
-    replacement: str | None
-    #: 当前价目（编辑器显示价格档位）
-    price: PriceOut | None = None
+    max_input_tokens: int | None = None
+    max_output_tokens: int | None = None
 
 
-class CatalogOut(BaseModel):
-    models: list[CatalogModelOut]
-    purposes: list[PurposeOut]
+class InternalClientKeyOut(BaseModel):
+    client_type: str
+    client_code: str
+    name: str
+    #: pending_models = 待分配；active；blocked = 停用；no_models = 分配的模型都不可用了
+    status: Literal["pending_models", "active", "blocked", "no_models"]
+    #: 原文：只有 active 时给
+    key: str | None = None
+    models: list[InternalModelOut] = Field(default_factory=list)
 
 
-class SubjectAccessOut(BaseModel):
-    subject: str
-    #: 主体此刻能用的对话模型（有「使用」、可用或弃用、没停用）
-    models: list[str]
-    all_models: bool
-    #: 原文；主体不存在、已停用或 Key 被停用时为空
-    key: str | None
-    key_status: Literal["active", "disabled", "none"]
+class InternalCatalogOut(BaseModel):
+    """已登记、可调用的全部模型（客户端 Key 还没分配时，编辑器先列它们）。"""
+
+    models: list[InternalModelOut]

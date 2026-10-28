@@ -10,6 +10,7 @@ from . import (
     meta,
     previews,
     runs,
+    service_models,
     threads,
 )
 
@@ -26,5 +27,6 @@ router.include_router(memories.router, dependencies=_authed)
 router.include_router(catalog.router, dependencies=_authed)
 router.include_router(previews.router)
 router.include_router(directory.router, dependencies=_authed)
+router.include_router(service_models.router, dependencies=_authed)
 
 __all__ = ["router"]

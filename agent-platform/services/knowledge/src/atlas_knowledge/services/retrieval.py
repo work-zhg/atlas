@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
@@ -28,7 +28,7 @@ from ..rag.retrieval import RetrievalService, RetrievedSegment, normalize_retrie
 from ..runtime import Runtime
 from ..telemetry import SPAN_KIND, current_trace_id, set_content, tracer
 from .metadata import fields_of
-from .permission import DatasetAccess, load_dataset
+from .permission import DatasetAccess, load_dataset, readable_ids
 
 __all__ = ["KnowledgeRetrieval", "RetrieveResult"]
 
@@ -69,6 +69,8 @@ class RetrieveResult:
     #: 查询理解的结果（改写、多查询、子问题、抽取的过滤条件、路由）
     plan: dict[str, Any] | None = None
     sub_questions: list[str] | None = None
+    #: 内部调用里权限主体读不到（或已删除）、本次跳过的库 id。不区分两种原因：不暴露库是否存在
+    skipped: list[str] = field(default_factory=list)
 
     def as_dict(self, query: str) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -77,6 +79,7 @@ class RetrieveResult:
             "elapsed_ms": self.elapsed_ms,
             "retrieval_id": self.retrieval_id,
             "trace_id": self.trace_id,
+            "skipped": self.skipped,
         }
         if self.plan:
             out["query_plan"] = self.plan
@@ -364,34 +367,42 @@ class KnowledgeRetrieval:
         acl_subject: str | None = None,
         opts: RetrieveOptions | None = None,
     ) -> RetrieveResult:
-        """p 为 None = 内部调用（atlas-server 已按智能体绑定判过库级权限）。
+        """p 为 None = 内部调用（智能体运行时、会话 Pod 里的 MCP）。
 
-        文档级权限：内部调用按这一轮的 auth-uid（acl_subject）检索（内网身份传递 §8：Agent
-        运行时是它的数字员工，与使用者无关）；actor 只进检索记录（谁在用）。都没有只看公开文档。
+        库级、文档级权限都按这一轮的 auth-uid（acl_subject）判：以 Agent 为权限时是它的数字员工，
+        以人为权限时是使用者本人（内网身份传递 §8）。读不到的库跳过、记进 skipped，由调用方提示；
+        没有主体一个库都读不到。actor 只进检索记录（谁在用）。
         """
         query = _query(query)
         if not dataset_uuids:
             raise Invalid("请选择知识库")
         datasets: list[Dataset] = []
         principals: dict[str, list[str] | None] = {}
+        skipped: list[str] = []
         if p is not None:
             for u in dict.fromkeys(dataset_uuids):
                 access = await load_dataset(self._s, self._rt.perms, u, p)
                 datasets.append(access.ds)
                 principals[str(u)] = await self._acl(access)
         else:
-            rows = (
-                await self._s.scalars(
-                    select(Dataset).where(Dataset.uuid.in_(list(set(dataset_uuids))))
-                )
-            ).all()
-            if not rows:
-                raise NotFound("知识库不存在")
-            datasets = list(rows)
+            wanted = list(dict.fromkeys(dataset_uuids))
+            rows = {
+                d.uuid: d
+                for d in (
+                    await self._s.scalars(select(Dataset).where(Dataset.uuid.in_(wanted)))
+                ).all()
+            }
             subject = acl_subject or actor
-            tags = await self._rt.principals(subject) if subject else []
+            ok = await readable_ids(self._rt.perms, subject, [u for u in wanted if u in rows])
+            datasets = [rows[u] for u in wanted if u in ok]
+            skipped = [str(u) for u in wanted if u not in ok]
+            if not datasets or subject is None:
+                return RetrieveResult(
+                    records=[], retrieval_id="", trace_id=None, elapsed_ms=0, skipped=skipped
+                )
+            tags = await self._rt.principals(subject)
             principals = {str(d.uuid): tags for d in datasets}
-        return await self._traced(
+        res = await self._traced(
             datasets,
             query,
             retrieval_config,
@@ -402,6 +413,8 @@ class KnowledgeRetrieval:
             principals=principals,
             opts=opts,
         )
+        res.skipped = skipped
+        return res
 
     async def queries(self, access: DatasetAccess, *, page: int, limit: int) -> list[QueryLog]:
         rows = await self._s.scalars(

@@ -28,10 +28,12 @@ memory-scopes:  ; uv run python -m atlas_memory scope add user --key uid --descr
 #   atlas-server 配 MCP_GATEWAY_URL=http://127.0.0.1:8070（Atlas 只经网关调 MCP）
 mcpgw-migrate: ; uv run python -m atlas_mcpgateway migrate
 mcpgw-serve:   ; uv run python -m atlas_mcpgateway serve
-# 模型网关（doc/model-design.html）。库是同一 PG 上的 atlas_modelgateway（make up 会建）。
+# 模型管理平台（agent-platform/doc/design/model-design.html）。库是同一 PG 上的 atlas_modelgateway
+#   （make up 会建）。模型网关是 LiteLLM（deploy/local/39-litellm.yaml），平台只调它的管理接口：
+#   要配 ATLAS_MODELGW_LITELLM_BASE_URL、ATLAS_MODELGW_LITELLM_MASTER_KEY。
 #   首次：make modelgw-migrate；python -m atlas_modelgateway register-uc --account admin；
-#   Higress 上配模型路由（deploy/local/higress/models.py）；登记模型（model add / import）。
-#   atlas-server、知识库配 MODEL_GATEWAY_URL=http://127.0.0.1:8090 才经网关（不配照旧直连）
+#   在模型管理端登记模型、给客户端 Key 分配模型。
+#   atlas-server 配 MODEL_PLATFORM_URL + MODEL_LITELLM_URL 才经平台（不配照旧直连 LITELLM_BASE_URL）
 modelgw-migrate: ; uv run python -m atlas_modelgateway migrate
 modelgw-serve:   ; uv run python -m atlas_modelgateway serve
 # 用户中心（独立系统，prototype/usercenter/docs/）。库是同一 PG 上的 atlas_usercenter（make up 会建）。

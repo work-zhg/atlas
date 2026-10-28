@@ -13,6 +13,7 @@ from pathlib import Path
 import yaml
 
 from .schema import Corpus, Document, Evidence, Question
+from .scoring.matching import MatchMode
 
 __all__ = ["Dataset", "find_dataset", "load_dataset"]
 
@@ -22,6 +23,8 @@ class Dataset:
     corpus: Corpus
     questions: tuple[Question, ...]
     root: Path
+    #: 出处怎么判命中（scoring/matching.py）：清单不写 = quote
+    evidence_match: MatchMode = "quote"
 
     @property
     def name(self) -> str:
@@ -37,6 +40,9 @@ def _sha256(path: Path) -> str:
 
 def load_dataset(root: Path) -> Dataset:
     manifest = yaml.safe_load((root / "manifest.yaml").read_text(encoding="utf-8"))
+    evidence_match = manifest.get("evidence_match", "quote")
+    if evidence_match not in ("quote", "passage"):
+        raise ValueError(f"evidence_match 只能是 quote 或 passage：{evidence_match}")
     docs = []
     for d in manifest["documents"]:
         path = (root / d["path"]).resolve()
@@ -86,7 +92,9 @@ def load_dataset(root: Path) -> Dataset:
     corpus = Corpus(
         name=manifest["name"], version=str(manifest.get("version", "1")), documents=tuple(docs)
     )
-    return Dataset(corpus=corpus, questions=tuple(questions), root=root)
+    return Dataset(
+        corpus=corpus, questions=tuple(questions), root=root, evidence_match=evidence_match
+    )
 
 
 def find_dataset(name: str, dirs: list[Path]) -> Dataset:

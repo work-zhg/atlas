@@ -8,7 +8,6 @@ agent_version 并切换 current_version_id —— 这样每条历史 run 都能�
 from __future__ import annotations
 
 import logging
-from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -28,13 +27,14 @@ from ..errors import (
     NotFound,
     SlugTaken,
 )
-from ..outbound import CallIdentity, current_identity, use_identity
-from ..providers.knowledge import KnowledgeUnavailable, make_knowledge_client
-from ..providers.llm.modelgateway import (
-    ModelCatalog,
-    model_catalog,
-    model_subject_access,
-    uses_model_gateway,
+from ..providers.knowledge import KnowledgeUnavailable, readable_as
+from ..providers.llm.model_platform import (
+    ModelPlatformUnavailable,
+    agent_key,
+    platform_catalog,
+    register_agent,
+    rename_agent,
+    uses_model_platform,
 )
 from ..providers.mcp import mcp_subject_access
 from ..repositories.agent import AgentRepository
@@ -166,17 +166,15 @@ class AgentService:
         if payload.auth_subject == "agent":
             self._identity.require()
         spec = await self._resolve(payload.spec, previous=None)
-        if payload.auth_subject == "user":
-            await self._check_knowledge(spec, previous=None, principal=principal)
-        catalog = await self._model_catalog()
         if principal is not None:
             # 以 Agent 为权限：数字员工随创建才建出来，还没有任何授权（subject=None）
             subject = principal.auth_uid if payload.auth_subject == "user" else None
+            await self._check_knowledge(spec, previous=None, subject=subject)
             await self._check_mcp(spec, previous=None, subject=subject)
-            await self._check_models(spec, previous=None, subject=subject, catalog=catalog)
+        await self._check_models(spec, previous=None, agent=None)
         # ★ 在这里就跑 engine 的校验：opus-5 传 temperature 之类的错误
-        #   在点保存时被拒，而不是等到某次 run（§3 D3）。经模型网关时按目录里的能力校验
-        _with_caps(spec.to_engine(slug=payload.slug, name=payload.name), catalog).validate()
+        #   在点保存时被拒，而不是等到某次 run（§3 D3）
+        spec.to_engine(slug=payload.slug, name=payload.name).validate()
 
         agent, version = await self._repo.create(
             slug=payload.slug,
@@ -191,6 +189,10 @@ class AgentService:
         await self._identity.ensure_digital_employee(agent, owner=user_id)
         await self._identity.register(agent, owner=user_id)
         await self._session.flush()
+        # 模型管理平台上的客户端 Key（「待分配」，管理员分配模型后才能运行）。尽力而为：
+        # 平台暂时不可用不挡住建智能体，编辑器、Run 开始时会补建
+        if self._settings is not None:
+            await register_agent(self._settings, agent.id, agent.name)
         await self._session.refresh(agent)  # updated_at 是 onupdate：flush 后要重新读
         return AgentDetailOut(
             **_summarize(agent, version).model_dump(), spec=version.spec, my_level="OWNER"
@@ -218,16 +220,12 @@ class AgentService:
         if payload.spec is not None:
             previous = AgentSpecIn.model_validate(current.spec)
             spec = await self._resolve(payload.spec, previous=previous)
-            if not agent.acts_as_itself:
-                # 以 Agent 为权限时运行期只看数字员工能不能读，编辑者读不读得到无关
-                # （不阻止保存：授权可能稍后才到；身份页签列出读不到的库，§6.1）
-                await self._check_knowledge(spec, previous=previous, principal=principal)
-            catalog = await self._model_catalog()
             if principal is not None:
                 subject = agent.digital_employee_uid if agent.acts_as_itself else principal.auth_uid
+                await self._check_knowledge(spec, previous=previous, subject=subject)
                 await self._check_mcp(spec, previous=previous, subject=subject)
-                await self._check_models(spec, previous=previous, subject=subject, catalog=catalog)
-            _with_caps(spec.to_engine(slug=agent.slug, name=agent.name), catalog).validate()
+            await self._check_models(spec, previous=previous, agent=agent)
+            spec.to_engine(slug=agent.slug, name=agent.name).validate()
             version = await self._repo.add_version(
                 agent=agent, spec=spec.model_dump(mode="json"), created_by=user_id
             )
@@ -236,6 +234,8 @@ class AgentService:
             await self._session.flush()
         if renamed:
             await self._identity.renamed(agent)
+            if self._settings is not None:
+                await rename_agent(self._settings, agent.id, agent.name)
 
         await self._session.refresh(agent)
         return AgentDetailOut(**_summarize(agent, version).model_dump(), spec=version.spec)
@@ -301,7 +301,10 @@ class AgentService:
         dataset_ids = list(AgentSpecIn.model_validate(version.spec).knowledge.dataset_ids)
         out.knowledge = [KnowledgeAccessOut(id=d) for d in dataset_ids]
         if agent.acts_as_itself and agent.digital_employee_uid is not None and dataset_ids:
-            readable = await self._readable_as(agent.digital_employee_uid, dataset_ids)
+            try:
+                readable = await self._readable_as(agent.digital_employee_uid, dataset_ids)
+            except KnowledgeUnavailable:
+                readable = None
             if readable is not None:
                 names = {d["id"]: d.get("name") for d in readable}
                 out.knowledge = [
@@ -315,20 +318,10 @@ class AgentService:
         return out
 
     async def _readable_as(self, auth_uid: UUID, dataset_ids: list[str]) -> list[dict] | None:
-        """按数字员工的身份问知识库「能读哪些」。没接知识库 → None。"""
-        if self._settings is None or (client := make_knowledge_client(self._settings)) is None:
+        """权限主体能读哪些库。没接知识库 → None；知识库不可用抛 KnowledgeUnavailable。"""
+        if self._settings is None:
             return None
-        saved = current_identity()
-        uid = saved.uid if saved else auth_uid
-        use_identity(
-            CallIdentity(uid=uid, auth_uid=auth_uid, tenant_id=saved.tenant_id if saved else None)
-        )
-        try:
-            return await client.readable(dataset_ids)
-        except KnowledgeUnavailable:
-            return None
-        finally:
-            use_identity(saved)
+        return await readable_as(self._settings, auth_uid, dataset_ids)
 
     # ------------------------------------------------------------------ 共享（AtlasAgent）
 
@@ -392,30 +385,41 @@ class AgentService:
         )
 
     async def _check_knowledge(
-        self, spec: AgentSpecIn, *, previous: AgentSpecIn | None, principal: Principal | None
+        self, spec: AgentSpecIn, *, previous: AgentSpecIn | None, subject: UUID | None
     ) -> None:
-        """新绑定的知识库，保存的人必须能读（doc/atlas-rag-design.html §11.2）。
+        """新绑定的知识库，权限主体必须能读（同 MCP，MCP 方案设计 §5.4）。
 
-        ★ 只查**新增**的：沿用旧版本已绑定的库不重新判 —— 否则管理员改个提示词，会因为
-          自己读不到别人绑的库而保存失败。
-        ★ 绑定 = 间接授权：能用这个智能体的人都能经它读到库的内容（前端绑定时明示）。
+        ★ 绑定不是授权：运行时知识库按这一轮的 X-Auth-Uid 再判一次，读不到的库跳过并提示。
+          这里先挡住「绑了也用不了」的库。
+        ★ 只查**新增**的：沿用旧版本已绑定的库不重新判 —— 授权被收回以后，连改提示词都
+          保存不了就太过了；运行时会跳过并提示。
+        ★ 主体：以人为权限 = 保存的人；以 Agent 为权限 = 它的数字员工（subject=None：
+          还没有数字员工，新绑定一律拒绝）。
         """
+        if self._settings is None:
+            return
         before = set(previous.knowledge.dataset_ids) if previous else set()
         added = [d for d in spec.knowledge.dataset_ids if d not in before]
-        if not added or principal is None or self._settings is None:
+        if not added:
             return
-        client = make_knowledge_client(self._settings)
-        if client is None:
-            raise InvalidReference("服务端未接入知识库服务，不能绑定知识库")
+        if subject is None:
+            raise InvalidReference(
+                "以 Agent 为权限的 Agent 要先保存（建出数字员工），把知识库共享给数字员工后再绑定",
+                dataset_ids=",".join(added),
+            )
         try:
-            # 按谁的权限判：请求头里的 auth-uid（出站身份已在主体解析时设好）
-            readable = await client.readable(added)
+            readable = await self._readable_as(subject, added)
         except KnowledgeUnavailable as exc:
             raise DependencyUnavailable(str(exc)) from exc
+        if readable is None:
+            raise InvalidReference("服务端未接入知识库服务，不能绑定知识库")
         ok = {d["id"] for d in readable}
         missing = [d for d in added if d not in ok]
         if missing:
-            raise InvalidReference("知识库不存在或你没有读取权限", dataset_ids=",".join(missing))
+            raise InvalidReference(
+                "权限主体读不到这些知识库（不存在或没有读取权限），请库的所有者共享后再绑定",
+                dataset_ids=",".join(missing),
+            )
 
     async def _check_mcp(
         self, spec: AgentSpecIn, *, previous: AgentSpecIn | None, subject: UUID | None
@@ -451,59 +455,35 @@ class AgentService:
                 servers=",".join(denied),
             )
 
-    async def _model_catalog(self) -> ModelCatalog | None:
-        """经模型网关时的模型目录（保存时按它校验）；没接模型网关为 None。"""
-        if self._settings is None or not uses_model_gateway(self._settings):
-            return None
-        try:
-            return await model_catalog(self._settings, self._redis)
-        except CapabilityUnavailable as exc:
-            raise DependencyUnavailable(f"模型网关暂时不可用，无法保存：{exc}") from exc
-
     async def _check_models(
-        self,
-        spec: AgentSpecIn,
-        *,
-        previous: AgentSpecIn | None,
-        subject: UUID | None,
-        catalog: ModelCatalog | None,
+        self, spec: AgentSpecIn, *, previous: AgentSpecIn | None, agent: Agent | None
     ) -> None:
-        """新选的或换了的模型：要在目录里、能新选（弃用的不能），权限主体要有「使用」
-        （doc/model-design.html §6.4）。
+        """新选的或换了的模型（模型管理方案设计 7.2）：经模型管理平台时，智能体的客户端 Key 已经
+        分配了模型 → 新选的要在它的可用模型里；还没分配（新建、待分配、停用）→ 新选的要是平台上
+        登记了的模型（分配之前它不能运行，Run 开始时会说清楚）。
 
-        ★ 只校验**新选**的：旧版本已经选着的不重判 —— 授权被收回、模型弃用以后，连改提示词都
-          保存不了就太过了；运行时会明确报出来。
-        ★ 以 Agent 为权限、第一次保存（subject=None）：保存之后才有数字员工，这时还不可能有授权，
-          只校验模型本身；授权之前它不能运行（§6.4）。
+        ★ 只校验**新选**的：旧版本已经选着的不重判 —— 模型被移出 Key 以后，连改提示词都保存不了
+          就太过了；运行时会明确报出来。
         """
-        if catalog is None or self._settings is None:
+        if self._settings is None or not uses_model_platform(self._settings):
             return
         added = sorted(_models_of(spec) - (_models_of(previous) if previous else set()))
         if not added:
             return
-        for name in added:
-            entry = catalog.get(name)
-            if entry is None or entry.kind != "chat":
-                raise InvalidReference(f"模型 {name} 不在模型网关的目录里", model=name)
-            if not entry.selectable:
-                why = {
-                    "deprecated": "已弃用，不能新选",
-                    "retired": "已下线",
-                    "onboarding": "还在接入中",
-                }
-                hint = f"（替代模型：{entry.replacement}）" if entry.replacement else ""
-                reason = "已被停用" if entry.disabled else why.get(entry.status, entry.status)
-                raise InvalidReference(f"模型 {name} {reason}{hint}", model=name)
-        if subject is None:
-            return
         try:
-            access = await model_subject_access(self._settings, subject)
-        except CapabilityUnavailable as exc:
-            raise DependencyUnavailable(f"模型网关暂时不可用，无法保存：{exc}") from exc
-        denied = [m for m in added if not access.allows(m)]
+            key = await agent_key(self._settings, agent.id, agent.name) if agent else None
+            if key is not None and key.status == "active":
+                allowed = {m.name for m in key.models}
+                where = "这个智能体的模型 Key 里"
+            else:
+                allowed = {m.name for m in await platform_catalog(self._settings)}
+                where = "模型管理平台上"
+        except ModelPlatformUnavailable as exc:
+            raise DependencyUnavailable(f"模型管理平台暂时不可用，无法保存：{exc}") from exc
+        denied = [m for m in added if m not in allowed]
         if denied:
             raise InvalidReference(
-                f"权限主体没有被授权使用模型：{', '.join(denied)}，请联系模型所有者或模型管理员",
+                f"{where}没有模型：{', '.join(denied)}，请换一个，或联系模型管理员",
                 models=",".join(denied),
             )
 
@@ -520,22 +500,6 @@ def _models_of(spec: AgentSpecIn) -> set[str]:
     if spec.compaction.enabled and spec.compaction.summarizer_model:
         names.add(resolve_summarizer_model(spec.compaction.summarizer_model, spec.model.model))
     return names
-
-
-def _with_caps(engine_spec: Any, catalog: ModelCatalog | None) -> Any:
-    """校验前把模型规格换上目录给出的能力（没接模型网关、目录里没有就照旧）。"""
-    if catalog is None:
-        return engine_spec
-
-    def fill(model: Any) -> Any:
-        entry = catalog.get(model.model)
-        return replace(model, caps=entry.caps()) if entry is not None else model
-
-    return replace(
-        engine_spec,
-        model=fill(engine_spec.model),
-        subagents=tuple(replace(sub, model=fill(sub.model)) for sub in engine_spec.subagents),
-    )
 
 
 def _mcp_servers(spec: AgentSpecIn) -> set[str]:

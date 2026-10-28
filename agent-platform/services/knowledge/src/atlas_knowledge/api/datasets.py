@@ -22,6 +22,7 @@ from ..rag.index_processor import (
     HIERARCHICAL_DEFAULT_RULES,
     STRUCTURE_TEXT_DEFAULTS,
 )
+from ..rag.model_platform import parse_client
 from ..rag.parsers import SUPPORTED_EXTENSIONS
 from ..rag.retrieval import DEFAULT_RETRIEVAL_CONFIG
 from ..services.datasets import DatasetService
@@ -52,29 +53,40 @@ Limit = Annotated[int, Query(ge=1, le=100)]
 # ───────────────────────────────────────────── 元信息
 
 
+async def _key_models(rt: Any, spec: str | None) -> list[str]:
+    """服务级客户端 Key 此刻可用的模型；没配、不可用、平台暂时不可用都给空（只列本地模型）。"""
+    client = parse_client(spec)
+    if client is None:
+        return []
+    try:
+        found = await asyncio.to_thread(rt.service_keys.get, client)
+    except Exception:
+        logger.warning("模型管理平台不可用，建库时只列本地模型", exc_info=True)
+        return []
+    return list(found.models) if found.usable else []
+
+
 async def _remote_options(rt: Any) -> tuple[list[str], list[str]]:
-    """可选的远程嵌入、重排模型。经模型网关时是平台用途 kb_embedding / kb_rerank 的允许范围
-    （doc/model-design.html §6.7）；网关暂时不可用就只给本地模型。没接时照旧按部署配置。"""
-    if rt.model_purposes is None:
+    """可选的远程嵌入、重排模型。经模型管理平台时是 embedding_client / rerank_client
+    这两把客户端 Key 的可用模型（agent-platform/doc/design/model-design.html 第 9 章）。
+    没接时照旧按部署配置。"""
+    if rt.service_keys is None:
         return (
             list(rt.settings.embedding_remote_models) if rt.settings.embedding_base_url else [],
             list(rt.settings.rerank_remote_models) if rt.settings.rerank_base_url else [],
         )
-    try:
-        return (
-            await rt.model_purposes.options("kb_embedding"),
-            await rt.model_purposes.options("kb_rerank"),
-        )
-    except Exception:
-        logger.warning("模型网关不可用，建库时只列本地模型", exc_info=True)
-        return [], []
+    return (
+        await _key_models(rt, rt.settings.embedding_client),
+        await _key_models(rt, rt.settings.rerank_client),
+    )
 
 
 @router.get("/meta")
 async def meta(rt: RuntimeDep, p: PrincipalDep) -> dict[str, Any]:
     embeddings, rerankers = await _remote_options(rt)
+    # LiteLLM 的 /v1/rerank 是 Cohere 形状
     rerank_provider = (
-        "cohere_compatible" if rt.model_purposes is not None else rt.settings.rerank_remote_provider
+        "cohere_compatible" if rt.service_keys is not None else rt.settings.rerank_remote_provider
     )
     return {
         "supported_extensions": sorted(SUPPORTED_EXTENSIONS),

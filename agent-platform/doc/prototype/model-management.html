@@ -1,0 +1,1329 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>模型管理平台 — 原型</title>
+<style>
+/* 视觉与用户中心、TeamFlow 原型一致（同一套设计 token） */
+:root {
+  --bg: #f6f7f9; --surface: #ffffff; --surface-2: #fbfbfd;
+  --ink: #0f172a; --ink-2: #334155; --ink-3: #64748b; --ink-4: #94a3b8;
+  --line: #e6e8ee; --line-2: #eef0f4;
+  --primary: #4f46e5; --primary-2: #6366f1; --primary-weak: #eef0ff;
+  --secondary: #0ea5e9; --secondary-weak: #e6f6fe;
+  --success: #16a34a; --success-weak: #e7f6ec;
+  --warning: #f59e0b; --warning-weak: #fef3e2;
+  --danger: #dc2626; --danger-weak: #fdeaea;
+  --sidebar: #111827;
+  --radius: 12px; --radius-sm: 10px; --radius-xs: 8px;
+  --shadow-xs: 0 1px 2px rgba(16,24,40,.05);
+  --shadow-md: 0 6px 18px rgba(16,24,40,.08), 0 2px 6px rgba(16,24,40,.05);
+  --shadow-lg: 0 20px 48px rgba(16,24,40,.16);
+  --font: "Inter", "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { font-family: var(--font); background: var(--bg); color: var(--ink); font-size: 14px; line-height: 1.55; -webkit-font-smoothing: antialiased; }
+a { color: inherit; text-decoration: none; }
+button, input, select, textarea { font-family: inherit; font-size: inherit; color: inherit; }
+h1, h2, h3, h4 { margin: 0; color: var(--ink); }
+code { font-family: var(--mono); font-size: 12px; background: var(--line-2); padding: 1px 5px; border-radius: 5px; }
+[hidden] { display: none !important; }
+
+/* ---------- 骨架 ---------- */
+.app-shell { display: flex; min-height: 100vh; }
+.sidebar { width: 232px; flex: 0 0 232px; background: var(--sidebar); color: #cbd5e1; display: flex; flex-direction: column; padding: 16px 12px; position: sticky; top: 0; height: 100vh; }
+.brand { display: flex; gap: 10px; align-items: center; padding: 6px 8px 18px; }
+.brand-text { display: flex; flex-direction: column; line-height: 1.15; }
+.brand-text strong { color: #fff; font-size: 15px; }
+.brand-text small { color: #8592a8; font-size: 11px; }
+.nav { display: flex; flex-direction: column; gap: 3px; }
+.nav-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: var(--radius-sm); color: #aeb8cb; font-weight: 550; font-size: 13.5px; position: relative; }
+.nav-item svg { width: 17px; height: 17px; flex: none; }
+.nav-item:hover { background: rgba(255,255,255,.06); color: #e8edf6; }
+.nav-item.active { background: linear-gradient(90deg, rgba(14,165,233,.26), rgba(99,102,241,.16)); color: #fff; }
+.nav-item.active::before { content: ""; position: absolute; left: -12px; top: 8px; bottom: 8px; width: 3px; background: var(--secondary); border-radius: 0 3px 3px 0; }
+.nav-group { font-size: 11px; color: #64748b; padding: 14px 12px 4px; letter-spacing: .04em; }
+.sidebar-foot { margin-top: auto; padding-top: 12px; border-top: 1px solid rgba(255,255,255,.08); }
+.me { display: flex; align-items: center; gap: 10px; padding: 6px 8px; }
+.me strong { color: #eef2f8; font-size: 13px; display: block; }
+.me small { color: #8592a8; font-size: 11px; }
+.main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.topbar { position: sticky; top: 0; z-index: 30; background: rgba(255,255,255,.88); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); padding: 10px 26px; display: flex; align-items: center; gap: 12px; min-height: 52px; }
+.crumbs { display: flex; gap: 8px; color: var(--ink-3); font-size: 13px; }
+.crumbs .sep { color: var(--ink-4); }
+.crumbs .cur { color: var(--ink); font-weight: 650; }
+.content { padding: 24px 26px 60px; }
+
+/* ---------- 通用 ---------- */
+.page-head { display: flex; align-items: flex-end; gap: 16px; margin-bottom: 18px; flex-wrap: wrap; }
+.page-head h1 { font-size: 21px; }
+.page-head .sub { color: var(--ink-3); font-size: 13px; margin-top: 3px; }
+.grow { flex: 1; }
+.row { display: flex; align-items: center; gap: 8px; }
+.muted { color: var(--ink-3); }
+.small { font-size: 12.5px; }
+.mono { font-family: var(--mono); font-size: 12.5px; }
+.mt8 { margin-top: 8px; } .mt12 { margin-top: 12px; } .mt16 { margin-top: 16px; } .mb12 { margin-bottom: 12px; } .mb16 { margin-bottom: 16px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow-xs); }
+.card-h { display: flex; align-items: center; gap: 10px; padding: 12px 18px; border-bottom: 1px solid var(--line-2); min-height: 52px; flex-wrap: wrap; }
+.card-h h3 { font-size: 14.5px; }
+.card-b { padding: 16px 18px; }
+.grid-2c { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+
+.btn { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: var(--surface); color: var(--ink-2); padding: 7px 13px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+.btn:hover { border-color: #cfd4e2; background: var(--surface-2); }
+.btn-primary { background: var(--primary); border-color: var(--primary); color: #fff; box-shadow: 0 4px 12px rgba(79,70,229,.22); }
+.btn-primary:hover { background: var(--primary-2); border-color: var(--primary-2); }
+.btn-danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+.btn-danger:hover { background: #b91c1c; border-color: #b91c1c; }
+.btn-sm { padding: 4px 10px; font-size: 12px; border-radius: var(--radius-xs); }
+.btn-link { border: 0; background: none; color: var(--primary); padding: 2px 4px; font-size: 12.5px; cursor: pointer; font-weight: 600; }
+.btn-link:hover { text-decoration: underline; }
+.btn-link.danger { color: var(--danger); }
+.btn[disabled] { opacity: .45; cursor: not-allowed; }
+
+.badge { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 600; border: 1px solid transparent; white-space: nowrap; }
+.badge .bdot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.badge-gray { background: #f1f3f7; color: #64748b; border-color: #e6e9ef; }
+.badge-blue { background: var(--secondary-weak); color: #0369a1; border-color: #cfeafb; }
+.badge-orange { background: var(--warning-weak); color: #b45309; border-color: #fce6c0; }
+.badge-green { background: var(--success-weak); color: #15803d; border-color: #cdecd6; }
+.badge-red { background: var(--danger-weak); color: #b91c1c; border-color: #f7cfcf; }
+.badge-purple { background: var(--primary-weak); color: var(--primary); border-color: #dcdcfb; }
+.tag { display: inline-flex; align-items: center; padding: 1px 8px; border-radius: 6px; font-size: 11.5px; background: var(--surface-2); border: 1px solid var(--line); color: var(--ink-2); white-space: nowrap; margin: 1px 0; }
+.tag.mono { font-family: var(--mono); font-size: 11.5px; }
+.tag.warn { background: var(--warning-weak); border-color: #fce6c0; color: #b45309; }
+.tag.gone { color: var(--ink-4); text-decoration: line-through; }
+
+.avatar { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-weight: 700; font-size: 12.5px; flex: none; }
+
+.table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.table th { text-align: left; font-weight: 600; color: var(--ink-3); font-size: 12px; padding: 10px 12px; border-bottom: 1px solid var(--line); background: var(--surface-2); white-space: nowrap; }
+.table td { padding: 10px 12px; border-bottom: 1px solid var(--line-2); color: var(--ink-2); vertical-align: middle; }
+.table tr:last-child td { border-bottom: 0; }
+.table tr.click:hover td { background: var(--surface-2); cursor: pointer; }
+.table .nowrap { white-space: nowrap; }
+.mname { font-weight: 650; color: var(--ink); }
+
+.tabs { display: inline-flex; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 3px; gap: 2px; }
+.tabs button { border: 0; background: none; padding: 6px 12px; border-radius: var(--radius-xs); font-size: 13px; color: var(--ink-3); cursor: pointer; display: inline-flex; gap: 6px; align-items: center; }
+.tabs button.on { background: var(--primary-weak); color: var(--primary); font-weight: 650; }
+.tabs.sm button { padding: 4px 10px; font-size: 12.5px; }
+.tabs .n { font-size: 11px; border: 1px solid var(--line); border-radius: 999px; padding: 0 6px; background: var(--surface-2); }
+.tabs .n.warn { background: var(--warning-weak); border-color: #fce6c0; color: #b45309; }
+.toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.input, .select { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 7px 11px; font-size: 13px; background: #fff; outline: none; }
+.input:focus, .select:focus { border-color: var(--primary-2); box-shadow: 0 0 0 3px rgba(99,102,241,.12); }
+
+.field { margin-bottom: 14px; }
+.field > label { display: block; font-size: 12.5px; font-weight: 620; color: var(--ink-2); margin-bottom: 6px; }
+.field .req { color: var(--danger); margin-left: 2px; }
+.field .hint { color: var(--ink-4); font-size: 11.5px; margin-top: 5px; }
+.err { color: var(--danger); font-size: 11.5px; margin-top: 5px; }
+.field input[type=text], .field input[type=password], .field input[type=number], .field select, .field textarea { width: 100%; border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 8px 11px; font-size: 13px; background: #fff; outline: none; }
+.field input:focus, .field select:focus, .field textarea:focus { border-color: var(--primary-2); box-shadow: 0 0 0 3px rgba(99,102,241,.12); }
+.field input[disabled], .field select[disabled] { background: var(--surface-2); color: var(--ink-3); }
+.field textarea { resize: vertical; min-height: 60px; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
+.check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-2); margin: 6px 0; cursor: pointer; }
+.section-t { font-size: 12px; font-weight: 700; color: var(--ink-3); margin: 6px 0 12px; display: flex; align-items: center; gap: 8px; }
+.section-t::after { content: ""; flex: 1; height: 1px; background: var(--line-2); }
+
+.callout { display: flex; gap: 10px; align-items: flex-start; padding: 10px 14px; border-radius: var(--radius-sm); font-size: 12.5px; border: 1px solid; }
+.callout-info { background: var(--primary-weak); border-color: #dcdcfb; color: #3730a3; }
+.callout-warn { background: var(--warning-weak); border-color: #fce6c0; color: #92400e; }
+.empty { text-align: center; color: var(--ink-4); padding: 36px 0; font-size: 13px; }
+.kv { display: grid; grid-template-columns: 112px 1fr; gap: 9px 16px; font-size: 13px; }
+.kv .k { color: var(--ink-3); }
+
+.modelchecks { max-height: 260px; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 4px 12px; margin-top: 4px; }
+.grant-add { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.grant-box { border: 1px solid var(--line); border-radius: var(--radius-sm); overflow: hidden; }
+.keybox { font-family: var(--mono); font-size: 13px; background: #0f172a; color: #e2e8f0; border-radius: 10px; padding: 12px 14px; display: flex; align-items: center; gap: 12px; word-break: break-all; }
+.keybox span { flex: 1; }
+pre.code { background: #0f172a; color: #e2e8f0; border-radius: 10px; padding: 12px 14px; font-family: var(--mono); font-size: 12px; line-height: 1.6; overflow: auto; margin: 0; white-space: pre; }
+details.preview { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 8px 12px; background: var(--surface-2); margin-top: 6px; }
+details.preview summary { cursor: pointer; font-size: 12.5px; font-weight: 620; color: var(--ink-2); }
+details.preview .pv-t { font-size: 12px; color: var(--ink-3); margin: 10px 0 6px; }
+
+/* ---------- 弹窗 / 抽屉 / 提示 ---------- */
+.modal-mask { position: fixed; inset: 0; background: rgba(15,23,42,.42); display: grid; place-items: center; z-index: 100; padding: 24px; }
+.modal { background: #fff; border-radius: 14px; box-shadow: var(--shadow-lg); width: 580px; max-width: 100%; max-height: calc(100vh - 48px); display: flex; flex-direction: column; }
+.modal.wide { width: 800px; }
+.modal-h { padding: 15px 20px; border-bottom: 1px solid var(--line-2); display: flex; align-items: center; gap: 10px; }
+.modal-h h3 { font-size: 15.5px; }
+.modal-b { padding: 18px 20px; overflow: auto; }
+.modal-f { padding: 12px 20px; border-top: 1px solid var(--line-2); display: flex; justify-content: flex-end; gap: 8px; align-items: center; }
+.x { border: 0; background: none; font-size: 22px; color: var(--ink-4); cursor: pointer; margin-left: auto; line-height: 1; }
+.x:hover { color: var(--ink-2); }
+.drawer-mask { position: fixed; inset: 0; background: rgba(15,23,42,.30); z-index: 100; }
+.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: 560px; max-width: 100%; background: #fff; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; }
+.toast-root { position: fixed; right: 20px; bottom: 20px; display: flex; flex-direction: column; gap: 8px; z-index: 200; }
+.toast { background: #0f172a; color: #e2e8f0; padding: 10px 14px; border-radius: 10px; box-shadow: var(--shadow-md); font-size: 13px; max-width: 480px; animation: tin .18s ease-out; }
+.toast .api { display: block; font-family: var(--mono); font-size: 11.5px; color: #93c5fd; margin-top: 3px; }
+@keyframes tin { from { transform: translateY(6px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+/* ---------- 原型说明 ---------- */
+.doc ul, .doc ol { margin: 0; padding-left: 20px; }
+.doc li { margin: 5px 0; color: var(--ink-2); font-size: 13px; }
+.doc .table td { vertical-align: top; }
+.diagram { width: 100%; max-width: 900px; display: block; margin: 0 auto; }
+.diagram rect { stroke-width: 1.3; }
+.diagram .b-gray { fill: #f8fafc; stroke: #cbd5e1; }
+.diagram .b-pri { fill: var(--primary-weak); stroke: #a5b4fc; }
+.diagram .b-sec { fill: var(--secondary-weak); stroke: #7dd3fc; }
+.diagram text { font-family: var(--font); text-anchor: middle; }
+.diagram .t { font-size: 14px; font-weight: 650; fill: var(--ink); }
+.diagram .s { font-size: 11.5px; fill: var(--ink-3); }
+.diagram .lbl { font-size: 11.5px; fill: var(--ink-2); }
+.diagram .api { font-size: 10.5px; fill: var(--ink-4); font-family: var(--mono); }
+.diagram line { stroke: #94a3b8; stroke-width: 1.4; }
+</style>
+</head>
+<body>
+<div class="app-shell">
+  <aside class="sidebar">
+    <div class="brand">
+      <svg width="26" height="26" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+        <rect x="2" y="2" width="28" height="28" rx="8" fill="url(#lg)"/>
+        <path d="M16 7.5l7.5 4.2v8.6L16 24.5l-7.5-4.2v-8.6z" stroke="#fff" stroke-width="2" stroke-linejoin="round"/>
+        <path d="M16 24.5V16m7.5-4.3L16 16l-7.5-4.3" stroke="#fff" stroke-width="2" stroke-linejoin="round"/>
+        <defs><linearGradient id="lg" x1="2" y1="2" x2="30" y2="30" gradientUnits="userSpaceOnUse"><stop stop-color="#0ea5e9"/><stop offset="1" stop-color="#6366f1"/></linearGradient></defs>
+      </svg>
+      <div class="brand-text"><strong>模型管理</strong><small>模型登记 · 授权 · API Key</small></div>
+    </div>
+    <nav class="nav" id="nav"></nav>
+    <div class="sidebar-foot" id="sidebar-foot"></div>
+  </aside>
+  <div class="main">
+    <header class="topbar" id="topbar"></header>
+    <main class="content" id="content"></main>
+  </div>
+</div>
+<div id="modal-root"></div>
+<div id="toast-root" class="toast-root" aria-live="polite"></div>
+
+<script>
+/* =====================================================================
+ * 演示数据（内存态，刷新后重置）
+ * ===================================================================== */
+const LITELLM_URL = 'http://litellm.atlas:4000';
+
+// 用户中心的组织与用户；demo = 可以在右上角切换成他
+const DEPTS = [
+  { id: 'd-root', name: '总公司',   parent: null },
+  { id: 'd-plat', name: '平台部',   parent: 'd-root' },
+  { id: 'd-rd',   name: '研发中心', parent: 'd-root' },
+  { id: 'd-rd1',  name: '研发一部', parent: 'd-rd' },
+  { id: 'd-rd2',  name: '研发二部', parent: 'd-rd' },
+  { id: 'd-cs',   name: '客服中心', parent: 'd-root' },
+];
+const USERS = {
+  'sun.li':     { name: '孙丽', dept: 'd-plat', admin: true,  color: '#6366f1', demo: true },
+  'zhang.ming': { name: '张明', dept: 'd-rd1',  admin: false, color: '#0ea5e9', demo: true },
+  'li.gong':    { name: '李工', dept: 'd-cs',   admin: false, color: '#f59e0b', demo: true },
+  'wang.fang':  { name: '王芳', dept: 'd-rd2',  admin: false, color: '#10b981', demo: true },
+  'zhao.qiang': { name: '赵强', dept: 'd-rd1',  admin: false, color: '#ec4899' },
+};
+
+// 供应商编码即 LiteLLM 的 custom_llm_provider
+const PROVIDERS = {
+  deepseek:    { name: 'DeepSeek' },
+  anthropic:   { name: 'Anthropic' },
+  openai:      { name: 'OpenAI' },
+  azure:       { name: 'Azure OpenAI', needBase: true },
+  dashscope:   { name: '通义千问（DashScope）' },
+  volcengine:  { name: '火山方舟' },
+  moonshot:    { name: 'Moonshot（Kimi）' },
+  hosted_vllm: { name: 'vLLM 自部署', needBase: true, keyOptional: true },
+};
+
+// 客户端类型：接入的应用调接口创建客户端 Key（app = 调用方）
+const CLIENT_TYPES = {
+  Agent:         { name: '智能体', app: 'Atlas' },
+  KnowledgeBase: { name: '知识库', app: '知识库服务' },
+};
+
+// LiteLLM 中的模型部署（GET /model/info）。model_name 就是调用时传的 model；origin：db = 经接口或 LiteLLM 界面加入，config = 配置文件
+let deployments = [
+  { id: 'lm-7c1e', model_name: 'deepseek-chat', provider: 'deepseek', api_base: 'https://api.deepseek.com', max_in: 131072, max_out: 8192, cin: 0.28, cout: 0.42, origin: 'db' },
+  { id: 'lm-4a90', model_name: 'deepseek-reasoner', provider: 'deepseek', api_base: 'https://api.deepseek.com', max_in: 131072, max_out: 65536, cin: 0.28, cout: 0.42, origin: 'db' },
+  { id: 'lm-b2d5', model_name: 'claude-sonnet-5', provider: 'anthropic', api_base: '', max_in: 200000, max_out: 64000, cin: 3, cout: 15, origin: 'db' },
+  { id: 'lm-e813', model_name: 'claude-haiku-4-5-20251001', provider: 'anthropic', api_base: '', max_in: 200000, max_out: 64000, cin: 1, cout: 5, origin: 'db' },
+  { id: 'lm-30fa', model_name: 'bge-m3', provider: 'hosted_vllm', api_base: 'http://vllm-embed.ai:8000/v1', max_in: 8192, max_out: null, cin: 0, cout: 0, origin: 'db' },
+  { id: 'lm-6d1b', model_name: 'bge-reranker-v2-m3', provider: 'hosted_vllm', api_base: 'http://vllm-rerank.ai:8000/v1', max_in: 8192, max_out: null, cin: 0, cout: 0, origin: 'db' },
+  // 下面两个是在 LiteLLM 里直接配置的，平台没有登记
+  { id: 'lm-91d2', model_name: 'qwen-plus', provider: 'dashscope', api_base: '', max_in: 131072, max_out: 16384, cin: 0.4, cout: 1.2, origin: 'db' },
+  { id: 'lm-cf01', model_name: 'glm-4.6', provider: 'hosted_vllm', api_base: 'http://vllm-glm.ai:8000/v1', max_in: 131072, max_out: 32768, cin: 0, cout: 0, origin: 'config' },
+];
+
+// 平台登记的模型：只落基本信息。visibility：public = 公有，所有人可用，不判权；private = 私有，按 grants 判
+// grants = 用户中心数据权限（数据编码 Model，级别「使用」= READ），kind: user | dept，sub = 含下级部门
+let platformModels = [
+  { uuid: 'm-01', litellm_id: 'lm-7c1e', model_name: 'deepseek-chat', display: 'DeepSeek V3.2', provider: 'deepseek', visibility: 'public', desc: '默认对话模型，性价比高', created_by: 'sun.li', created_at: '2026-10-27 16:02', grants: [] },
+  { uuid: 'm-02', litellm_id: 'lm-4a90', model_name: 'deepseek-reasoner', display: 'DeepSeek V3.2 思考', provider: 'deepseek', visibility: 'private', desc: '思考模式，适合复杂推理', created_by: 'sun.li', created_at: '2026-10-27 16:05',
+    grants: [{ kind: 'dept', id: 'd-rd', sub: true }] },
+  { uuid: 'm-03', litellm_id: 'lm-b2d5', model_name: 'claude-sonnet-5', display: 'Claude Sonnet 5', provider: 'anthropic', visibility: 'private', desc: '编码与 Agent 任务', created_by: 'sun.li', created_at: '2026-10-27 16:10',
+    grants: [{ kind: 'user', id: 'zhang.ming', sub: false }, { kind: 'dept', id: 'd-rd2', sub: false }] },
+  { uuid: 'm-04', litellm_id: 'lm-e813', model_name: 'claude-haiku-4-5-20251001', display: 'Claude Haiku 4.5', provider: 'anthropic', visibility: 'private', desc: '轻量、低延迟', created_by: 'sun.li', created_at: '2026-10-27 16:11',
+    grants: [{ kind: 'dept', id: 'd-rd', sub: true }, { kind: 'dept', id: 'd-cs', sub: false }] },
+  { uuid: 'm-05', litellm_id: 'lm-30fa', model_name: 'bge-m3', display: 'BGE-M3 嵌入', provider: 'hosted_vllm', visibility: 'public', desc: '知识库向量化，1024 维', created_by: 'sun.li', created_at: '2026-10-27 16:20', grants: [] },
+  { uuid: 'm-06', litellm_id: 'lm-6d1b', model_name: 'bge-reranker-v2-m3', display: 'BGE 重排', provider: 'hosted_vllm', visibility: 'public', desc: '知识库检索重排', created_by: 'sun.li', created_at: '2026-10-27 16:21', grants: [] },
+  // LiteLLM 里已经没有这个部署（例如有人在 LiteLLM 界面里删掉了）
+  { uuid: 'm-07', litellm_id: 'lm-5b77', model_name: 'kimi-k2', display: 'Kimi K2', provider: 'moonshot', visibility: 'private', desc: '长上下文', created_by: 'sun.li', created_at: '2026-10-27 16:30',
+    grants: [{ kind: 'dept', id: 'd-rd1', sub: false }] },
+];
+
+// API Key 两种类型：
+//   user   = 用户本人申请，一人一把，模型由本人选
+//   client = 应用调接口创建（Atlas 新建智能体时），client_type + client_code 唯一；模型由管理员分配
+// models 只有「指定模型」；status：pending = 待分配模型（LiteLLM 里还没有 Key）| active | blocked
+let keys = [
+  { uuid: 'k-01', type: 'user', user: 'zhang.ming', last4: '3f9a', models: ['deepseek-chat', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'], status: 'active', created_at: '2026-10-20 10:12' },
+  { uuid: 'k-02', type: 'user', user: 'li.gong', last4: 'c07e', models: ['deepseek-chat', 'claude-sonnet-5'], status: 'active', created_at: '2026-10-22 09:30' },
+  { uuid: 'k-03', type: 'client', client_type: 'Agent', client_code: 'agt_7f3a21', client_name: '代码评审助手', last4: 'a1c0', models: ['deepseek-chat', 'claude-sonnet-5'], status: 'active', created_at: '2026-10-21 14:30' },
+  { uuid: 'k-04', type: 'client', client_type: 'Agent', client_code: 'agt_2c91be', client_name: '需求分析师', last4: null, models: [], status: 'pending', created_at: '2026-10-27 09:12' },
+  { uuid: 'k-05', type: 'client', client_type: 'Agent', client_code: 'agt_5d0e47', client_name: '周报生成', last4: null, models: [], status: 'pending', created_at: '2026-10-27 10:40' },
+  { uuid: 'k-06', type: 'client', client_type: 'Agent', client_code: 'agt_91aa03', client_name: '数据分析助手', last4: '77be', models: ['deepseek-chat', 'deepseek-reasoner'], status: 'blocked', created_at: '2026-10-23 11:05' },
+  { uuid: 'k-07', type: 'client', client_type: 'Agent', client_code: 'agt_e4b812', client_name: '客服质检', last4: '5d21', models: ['deepseek-chat'], status: 'active', created_at: '2026-10-24 15:40' },
+  { uuid: 'k-08', type: 'client', client_type: 'Agent', client_code: 'agt_0b5c6d', client_name: '平台巡检助手', last4: '9e44', models: ['deepseek-chat', 'kimi-k2'], status: 'active', created_at: '2026-10-25 10:00' },
+  { uuid: 'k-09', type: 'client', client_type: 'KnowledgeBase', client_code: 'kb_3a7c55', client_name: '产品文档知识库', last4: '0d42', models: ['bge-m3', 'bge-reranker-v2-m3', 'deepseek-chat'], status: 'active', created_at: '2026-10-21 16:18' },
+  { uuid: 'k-10', type: 'client', client_type: 'KnowledgeBase', client_code: 'kb_8e21d0', client_name: '客服问答知识库', last4: 'b6f3', models: ['bge-m3', 'deepseek-chat'], status: 'active', created_at: '2026-10-22 13:50' },
+];
+
+let me = 'sun.li';
+let keyTab = 'user';
+let atlasAgent = 'agt_7f3a21';
+const mf = { q: '', source: '', vis: '' };
+const kf = { type: '', status: '', q: '' };
+
+/* =====================================================================
+ * 工具
+ * ===================================================================== */
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const isAdmin = () => USERS[me].admin;
+const route = () => location.hash.slice(1) || '/models';
+const rand = n => { const a = 'abcdefghijklmnopqrstuvwxyz0123456789'; let s = ''; crypto.getRandomValues(new Uint8Array(n)).forEach(b => { s += a[b % a.length]; }); return s; };
+const genKey = () => { const a = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789'; let s = 'sk-'; crypto.getRandomValues(new Uint8Array(32)).forEach(b => { s += a[b % a.length]; }); return s; };
+const nowStr = () => { const d = new Date(), p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; };
+const num = n => String(Math.round(n * 100) / 100);
+const fmtTokens = n => n == null ? '—' : (n % 1024 === 0 ? n / 1024 : Math.round(n / 1000)) + 'K';
+const fmtPrice = d => (d.cin || d.cout) ? `$${num(d.cin)} / $${num(d.cout)}` : '<span class="muted">—</span>';
+const providerName = code => PROVIDERS[code]?.name || code;
+const avatar = u => `<span class="avatar" style="background:${USERS[u].color}">${USERS[u].name.slice(-1)}</span>`;
+
+function toast(msg, api) {
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.innerHTML = esc(msg) + (api ? `<span class="api">${esc(api)}</span>` : '');
+  $('#toast-root').appendChild(el);
+  setTimeout(() => el.remove(), 4200);
+}
+
+function openModal({ title, body, foot, wide, onMount }) {
+  $('#modal-root').innerHTML = `
+    <div class="modal-mask"><div class="modal ${wide ? 'wide' : ''}" role="dialog">
+      <div class="modal-h"><h3>${title}</h3><button class="x" data-close aria-label="关闭">×</button></div>
+      <div class="modal-b">${body}</div>
+      ${foot ? `<div class="modal-f">${foot}</div>` : ''}
+    </div></div>`;
+  const mask = $('.modal-mask');
+  mask.addEventListener('mousedown', e => { if (e.target === mask) closeModal(); });
+  $$('[data-close]', mask).forEach(b => { b.onclick = closeModal; });
+  onMount && onMount($('.modal', mask));
+}
+function openDrawer({ title, body, foot, onMount }) {
+  $('#modal-root').innerHTML = `
+    <div class="drawer-mask"><aside class="drawer">
+      <div class="modal-h">${title}<button class="x" data-close aria-label="关闭">×</button></div>
+      <div class="modal-b" style="flex:1">${body}</div>
+      ${foot ? `<div class="modal-f">${foot}</div>` : ''}
+    </aside></div>`;
+  const mask = $('.drawer-mask');
+  mask.addEventListener('mousedown', e => { if (e.target === mask) closeModal(); });
+  $$('[data-close]', mask).forEach(b => { b.onclick = closeModal; });
+  onMount && onMount($('.drawer', mask));
+}
+function closeModal() { $('#modal-root').innerHTML = ''; }
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+
+function confirmBox({ title, body, okText = '确定', danger = false, onOk }) {
+  openModal({
+    title, body,
+    foot: `<button class="btn" data-close>取消</button><button class="btn ${danger ? 'btn-danger' : 'btn-primary'}" id="cf-ok">${okText}</button>`,
+    onMount: m => { $('#cf-ok', m).onclick = () => { closeModal(); onOk(); }; },
+  });
+}
+
+/* =====================================================================
+ * 组织与授权（用户中心数据权限：本人 ∪ 所在部门 ∪ 含下级的上级部门；管理员 = 全部模型 · Owner）
+ * ===================================================================== */
+const deptOf = id => DEPTS.find(d => d.id === id);
+const ancestors = id => { const out = []; for (let d = deptOf(id); d; d = deptOf(d.parent)) out.push(d.id); return out; };
+const depth = id => ancestors(id).length - 1;
+function covers(g, uid) {
+  if (g.kind === 'user') return g.id === uid;
+  const dept = USERS[uid].dept;
+  return g.id === dept || (g.sub && ancestors(dept).includes(g.id));
+}
+const grantLabel = g => g.kind === 'user' ? USERS[g.id].name : deptOf(g.id).name + (g.sub ? '（含下级）' : '');
+const coveredUsers = grants => Object.keys(USERS).filter(u => !USERS[u].admin && grants.some(g => covers(g, u)));
+
+/* =====================================================================
+ * 模型：LiteLLM 部署与平台记录按 LiteLLM model id 合并
+ * ===================================================================== */
+function modelRows() {
+  const byId = new Map(deployments.map(d => [d.id, d]));
+  const rows = platformModels.map(p => {
+    const dep = byId.get(p.litellm_id) || null;
+    byId.delete(p.litellm_id);
+    return { key: p.uuid, model_name: p.model_name, platform: p, dep, missing: !dep };
+  });
+  for (const dep of byId.values()) rows.push({ key: dep.id, model_name: dep.model_name, platform: null, dep, missing: false });
+  return rows;
+}
+const findModel = name => modelRows().find(r => r.model_name === name);
+const rowName = r => r.platform ? r.platform.display : r.dep.model_name;
+const rowProvider = r => (r.platform || r.dep).provider;
+const isPublic = p => p.visibility === 'public';
+
+// 只有平台登记的模型才能放进 Key；公有不判权，私有按授权（管理员 = 全部模型 · Owner）
+const canUse = (r, uid) => Boolean(r.platform) && (isPublic(r.platform) || USERS[uid].admin || r.platform.grants.some(g => covers(g, uid)));
+const callableRows = () => modelRows().filter(r => r.platform && !r.missing);
+const usableRows = uid => callableRows().filter(r => canUse(r, uid));
+const permSource = (r, uid) => isPublic(r.platform) ? '公有' : USERS[uid].admin ? '管理员（全部模型 · Owner）' : r.platform.grants.filter(g => covers(g, uid)).map(grantLabel).join('、');
+
+// Key 可选的模型：用户 Key 从「公有 + 授权给本人或所在部门的私有」里选；客户端 Key 由管理员从全部已登记模型里选
+const allowedRowsForKey = k => k.type === 'user' ? usableRows(k.user) : callableRows();
+// 交给 LiteLLM 的：分配的 ∩ 仍可选 ∩ LiteLLM 里还在
+function effectiveModels(k) {
+  const allowed = allowedRowsForKey(k).map(r => r.model_name);
+  return k.models.filter(n => allowed.includes(n));
+}
+const snapshotKeys = () => new Map(keys.map(k => [k.uuid, effectiveModels(k).join(',')]));
+const changedKeys = before => keys.filter(k => k.status !== 'pending' && before.get(k.uuid) !== effectiveModels(k).join(',')).length;
+
+const visBadge = p => isPublic(p) ? '<span class="badge badge-blue">公有</span>' : '<span class="badge badge-gray">私有</span>';
+function sourceBadge(r) {
+  if (r.platform) return '<span class="badge badge-purple">平台登记</span>';
+  const where = r.dep.origin === 'config' ? 'LiteLLM 配置文件' : 'LiteLLM 管理界面';
+  return `<span class="badge badge-gray" title="在 ${where} 中直接配置">LiteLLM 直配</span>`;
+}
+function statusBadge(r) {
+  return r.missing
+    ? '<span class="badge badge-red" title="平台有记录，但 LiteLLM 中找不到对应部署"><span class="bdot"></span>LiteLLM 中缺失</span>'
+    : '<span class="badge badge-green"><span class="bdot"></span>可调用</span>';
+}
+function accessCell(p) {
+  if (isPublic(p)) return `${visBadge(p)} <span class="small muted">所有人可用</span>`;
+  if (!p.grants.length) return `${visBadge(p)} <span class="tag warn" title="除管理员外没人能用">未授权</span>`;
+  const labels = p.grants.map(grantLabel);
+  return `${visBadge(p)} ${esc(labels.slice(0, 2).join('、'))}${labels.length > 2 ? ` <span class="muted">等 ${labels.length} 项</span>` : ''}`;
+}
+function curlFor(name, key = '$MODEL_API_KEY') {
+  return `curl ${LITELLM_URL}/v1/chat/completions \\\n  -H "Authorization: Bearer ${key}" \\\n  -H "Content-Type: application/json" \\\n  -d '{\n    "model": "${name}",\n    "messages": [{"role": "user", "content": "你好"}]\n  }'`;
+}
+
+function renderModels() {
+  const admin = isAdmin();
+  const all = modelRows();
+  const nP = all.filter(r => r.platform).length;
+  const mine = all.filter(r => canUse(r, me)).length;
+  $('#content').innerHTML = `
+    <div class="page-head">
+      <div><h1>模型</h1><div class="sub">${admin
+        ? `平台登记的模型与 LiteLLM 中直接配置的模型合并展示 · 共 ${all.length} 个（平台登记 ${nP}，LiteLLM 直配 ${all.length - nP}）`
+        : `公有模型，以及授权给你或你所在部门的私有模型 · 共 ${mine} 个`}</div></div>
+      <div class="grow"></div>
+      ${admin ? '<button class="btn" id="btn-litellm">LiteLLM 管理界面 ↗</button><button class="btn btn-primary" id="btn-new">＋ 登记模型</button>' : ''}
+    </div>
+    ${admin
+      ? '<div class="callout callout-info mb16"><div>公有模型所有人可用，不需要授权；私有模型要授权给用户或部门。管理员拥有全部模型的 Owner 权限，给客户端 Key 分配模型时公有、私有都能选。LiteLLM 直配的模型「纳入平台」后才能使用。</div></div>'
+      : `<div class="callout callout-info mb16"><div>调用时把「模型名」作为 <code>model</code> 参数，带上你的用户 Key 直接请求 LiteLLM（<span class="mono">${LITELLM_URL}</span>）。需要别的私有模型请联系管理员授权。</div></div>`}
+    <div class="card">
+      <div class="card-h">
+        <input class="input" id="mq" placeholder="搜索模型名 / 显示名称" value="${esc(mf.q)}" style="width:240px">
+        ${admin ? `
+          <select class="select" id="mvis">
+            <option value="">全部可见性</option>
+            <option value="public" ${mf.vis === 'public' ? 'selected' : ''}>公有</option>
+            <option value="private" ${mf.vis === 'private' ? 'selected' : ''}>私有</option>
+          </select>
+          <select class="select" id="msrc">
+            <option value="">全部来源</option>
+            <option value="platform" ${mf.source === 'platform' ? 'selected' : ''}>平台登记</option>
+            <option value="litellm" ${mf.source === 'litellm' ? 'selected' : ''}>LiteLLM 直配</option>
+          </select>` : ''}
+        <div class="grow"></div>
+        <span class="small muted">价格：美元 / 百万 token（输入 / 输出），由 LiteLLM 计费</span>
+      </div>
+      <div id="model-table"></div>
+    </div>`;
+  $('#mq').oninput = e => { mf.q = e.target.value; renderModelTable(); };
+  if (admin) {
+    $('#mvis').onchange = e => { mf.vis = e.target.value; renderModelTable(); };
+    $('#msrc').onchange = e => { mf.source = e.target.value; renderModelTable(); };
+    $('#btn-new').onclick = () => openModelForm('new');
+    $('#btn-litellm').onclick = () => toast('原型不跳转：调用日志、花费、预算与限流在 LiteLLM 管理界面查看');
+  }
+  renderModelTable();
+}
+
+function renderModelTable() {
+  const admin = isAdmin();
+  const q = mf.q.trim().toLowerCase();
+  const rows = modelRows().filter(r =>
+    (admin || canUse(r, me)) &&
+    (!q || r.model_name.toLowerCase().includes(q) || rowName(r).toLowerCase().includes(q)) &&
+    (!admin || !mf.source || (mf.source === 'platform') === Boolean(r.platform)) &&
+    (!admin || !mf.vis || (r.platform && r.platform.visibility === mf.vis)));
+  const ops = r => {
+    if (!r.platform) return '<button class="btn-link" data-op="adopt">纳入平台</button>';
+    return (isPublic(r.platform) ? '' : '<button class="btn-link" data-op="grants">授权</button>')
+      + (r.missing ? '<button class="btn-link" data-op="reregister">重新登记</button>' : '<button class="btn-link" data-op="edit">编辑</button>')
+      + '<button class="btn-link danger" data-op="delete">删除</button>';
+  };
+  $('#model-table').innerHTML = rows.length ? `
+    <table class="table">
+      <thead><tr><th>模型</th><th>供应商</th><th>上下文 / 最大输出</th><th>价格</th>${admin ? '<th>可见性 / 授权</th><th>来源</th>' : '<th>权限来源</th>'}<th>状态</th>${admin ? '<th>操作</th>' : ''}</tr></thead>
+      <tbody>${rows.map(r => `
+        <tr class="click" data-key="${r.key}">
+          <td class="nowrap"><div class="mname">${esc(rowName(r))}</div><div class="mono muted">${esc(r.model_name)}</div></td>
+          <td>${esc(providerName(rowProvider(r)))}</td>
+          <td class="nowrap">${r.dep ? `${fmtTokens(r.dep.max_in)} / ${fmtTokens(r.dep.max_out)}` : '<span class="muted">—</span>'}</td>
+          <td class="nowrap">${r.dep ? fmtPrice(r.dep) : '<span class="muted">—</span>'}</td>
+          ${admin
+            ? `<td style="min-width:210px">${r.platform ? accessCell(r.platform) : '<span class="small muted">纳入平台后才能使用</span>'}</td><td>${sourceBadge(r)}</td>`
+            : `<td class="small">${esc(permSource(r, me))}</td>`}
+          <td>${statusBadge(r)}</td>
+          ${admin ? `<td class="nowrap">${ops(r)}</td>` : ''}
+        </tr>`).join('')}
+      </tbody>
+    </table>` : `<div class="empty">${admin || q ? '没有符合条件的模型' : '还没有你能用的模型'}</div>`;
+  $$('#model-table tr[data-key]').forEach(tr => {
+    tr.onclick = () => openModelDetail(tr.dataset.key);
+    $$('[data-op]', tr).forEach(b => b.onclick = e => {
+      e.stopPropagation();
+      const r = modelRows().find(x => x.key === tr.dataset.key);
+      ({ delete: confirmDeleteModel, grants: openGrants }[b.dataset.op] || (row => openModelForm(b.dataset.op, row)))(r);
+    });
+  });
+}
+
+function openModelDetail(key) {
+  const r = modelRows().find(x => x.key === key);
+  if (!r) return;
+  const { platform: p, dep: d } = r;
+  const admin = isAdmin();
+  const origin = !d ? '' : p ? '平台登记（经 LiteLLM 接口加入）' : d.origin === 'config' ? 'LiteLLM 配置文件' : 'LiteLLM 管理界面';
+  const covered = p ? coveredUsers(p.grants) : [];
+  const used = keys.filter(k => k.models.includes(r.model_name)).length;
+  openDrawer({
+    title: `<div><h3>${esc(rowName(r))}</h3><div class="mono muted">${esc(r.model_name)}</div></div><div class="row" style="margin-left:8px">${p ? visBadge(p) : ''}${admin ? sourceBadge(r) : ''}${statusBadge(r)}</div>`,
+    body: `
+      ${r.missing ? '<div class="callout callout-warn mb16"><div>LiteLLM 中找不到这个模型的部署（可能在 LiteLLM 界面里被删除），现在调用会失败，也不会进入任何 Key。管理员可以重新登记（需要重新填写供应商 API Key），或删除这条记录。</div></div>' : ''}
+      ${p ? `
+        <div class="section-t">平台信息</div>
+        <div class="kv mb16">
+          <div class="k">显示名称</div><div>${esc(p.display)}</div>
+          <div class="k">供应商</div><div>${esc(providerName(p.provider))}</div>
+          <div class="k">可见性</div><div>${isPublic(p) ? '公有：所有人可用，不需要授权' : '私有：授权给用户或部门后才能用'}</div>
+          <div class="k">描述</div><div>${esc(p.desc) || '<span class="muted">—</span>'}</div>
+          <div class="k">登记人</div><div>${USERS[p.created_by].name} · <span class="muted">${p.created_at}</span></div>
+        </div>` : '<div class="callout callout-info mb16"><div>这个模型在 LiteLLM 里直接配置，平台没有登记信息，下面只展示 LiteLLM 返回的字段。纳入平台后才能放进 Key。</div></div>'}
+      ${p && !isPublic(p) ? `
+        <div class="section-t">授权</div>
+        ${admin ? `
+          ${p.grants.length ? `<div class="mb12">${p.grants.map(g => `<span class="tag">${esc(grantLabel(g))}</span>`).join(' ')}</div>` : '<div class="small" style="color:#b45309">还没有授权，除管理员外没人能用。</div>'}
+          <div class="small muted mb16">实际可使用：${covered.length ? covered.map(u => USERS[u].name).join('、') + `（${covered.length} 人）` : '无'}，以及管理员（全部模型 · Owner）</div>`
+        : `<div class="small mb16">你的权限来源：${esc(permSource(r, me))}</div>`}` : ''}
+      ${d ? `
+        <div class="section-t">LiteLLM 登记信息</div>
+        <div class="kv mb16">
+          <div class="k">model id</div><div class="mono">${d.id}</div>
+          <div class="k">来源</div><div>${origin}</div>
+          ${admin ? `
+            <div class="k">API Base</div><div class="mono">${esc(d.api_base) || '<span class="muted">供应商默认地址</span>'}</div>
+            <div class="k">供应商 API Key</div><div>保存在 LiteLLM（加密），平台不保存</div>` : ''}
+          <div class="k">上下文窗口</div><div>${fmtTokens(d.max_in)}</div>
+          <div class="k">最大输出</div><div>${fmtTokens(d.max_out)}</div>
+          <div class="k">价格</div><div>${fmtPrice(d)} <span class="muted small">每百万 token（输入 / 输出）</span></div>
+        </div>` : ''}
+      <div class="section-t">调用示例</div>
+      <pre class="code">${esc(curlFor(r.model_name))}</pre>
+      <div class="small muted mt8">把 <code>$MODEL_API_KEY</code> 换成你的用户 Key。嵌入、重排模型分别调 <code>/v1/embeddings</code>、<code>/v1/rerank</code>。</div>
+      ${admin ? `<div class="small muted mt12">有 ${used} 把 Key 分配了它。</div>` : ''}`,
+    foot: !admin ? '' : p
+      ? `<button class="btn" id="dw-del">删除</button>${isPublic(p) ? '' : '<button class="btn" id="dw-grants">授权</button>'}<button class="btn btn-primary" id="dw-edit">${r.missing ? '重新登记' : '编辑'}</button>`
+      : '<button class="btn btn-primary" id="dw-adopt">纳入平台</button>',
+    onMount: el => {
+      if (!admin) return;
+      if (!p) { $('#dw-adopt', el).onclick = () => openModelForm('adopt', r); return; }
+      $('#dw-edit', el).onclick = () => openModelForm(r.missing ? 'reregister' : 'edit', r);
+      const g = $('#dw-grants', el);
+      if (g) g.onclick = () => openGrants(r);
+      $('#dw-del', el).onclick = () => confirmDeleteModel(r);
+    },
+  });
+}
+
+/* 授权编辑（只用于私有模型）：直接修改传入的 grants 数组 */
+function grantsEditor(el, grants, onChange = () => {}) {
+  const st = { kind: 'dept' };
+  const users = Object.entries(USERS).filter(([, u]) => !u.admin);
+  const draw = () => {
+    const covered = coveredUsers(grants);
+    el.innerHTML = `
+      <div class="grant-add">
+        <div class="tabs sm">${['dept', 'user'].map(k => `<button type="button" data-kind="${k}" class="${st.kind === k ? 'on' : ''}">${k === 'dept' ? '部门' : '用户'}</button>`).join('')}</div>
+        <select class="select" data-g="target" style="min-width:220px">${st.kind === 'dept'
+          ? DEPTS.map(d => `<option value="${d.id}">${'　'.repeat(depth(d.id))}${esc(d.name)}</option>`).join('')
+          : users.map(([id, u]) => `<option value="${id}">${esc(u.name)}（${esc(deptOf(u.dept).name)}）</option>`).join('')}</select>
+        ${st.kind === 'dept' ? '<label class="check"><input type="checkbox" data-g="sub" checked> 含下级部门</label>' : ''}
+        <button type="button" class="btn btn-sm" data-g="add">添加</button>
+      </div>
+      <div class="grant-box">${grants.length ? `
+        <table class="table"><thead><tr><th>授权对象</th><th>类型</th><th>级别</th><th></th></tr></thead>
+          <tbody>${grants.map((g, i) => `<tr><td>${esc(grantLabel(g))}</td><td>${g.kind === 'dept' ? '部门' : '用户'}</td><td>使用</td>
+            <td style="text-align:right"><button type="button" class="btn-link danger" data-rm="${i}">移除</button></td></tr>`).join('')}</tbody></table>`
+        : '<div class="empty" style="padding:18px 0">还没有授权：除管理员外没人能用这个模型</div>'}</div>
+      <div class="small muted mt8">实际可使用：${covered.length ? covered.map(u => USERS[u].name).join('、') + `（${covered.length} 人）` : '无'}，以及管理员（全部模型 · Owner）</div>`;
+    $$('[data-kind]', el).forEach(b => { b.onclick = () => { st.kind = b.dataset.kind; draw(); }; });
+    $('[data-g=add]', el).onclick = () => {
+      const id = $('[data-g=target]', el).value;
+      const sub = st.kind === 'dept' && $('[data-g=sub]', el).checked;
+      const same = grants.find(g => g.kind === st.kind && g.id === id);
+      if (same) same.sub = sub; else grants.push({ kind: st.kind, id, sub });
+      draw(); onChange();
+    };
+    $$('[data-rm]', el).forEach(b => { b.onclick = () => { grants.splice(Number(b.dataset.rm), 1); draw(); onChange(); }; });
+  };
+  draw();
+}
+
+function openGrants(r) {
+  const p = r.platform;
+  const draft = p.grants.map(g => ({ ...g }));
+  openModal({
+    title: `授权 · ${esc(p.display)}`, wide: true,
+    body: `<div class="callout callout-info mb16"><div>私有模型授权给用户或部门后，他们才能把它放进自己的用户 Key。管理员拥有全部模型的 Owner 权限，不用在这里授权；客户端 Key 也不看授权，由管理员直接分配。</div></div><div id="grants"></div>`,
+    foot: `<button class="btn" data-close>取消</button><button class="btn btn-primary" id="gr-ok">保存</button>`,
+    onMount: m => {
+      grantsEditor($('#grants', m), draft);
+      $('#gr-ok', m).onclick = () => {
+        const before = snapshotKeys();
+        p.grants = draft;
+        const n = changedKeys(before);
+        closeModal();
+        toast(`已保存「${p.display}」的授权`, `用户中心：写入 / 删除授权（数据编码 Model）${n ? `；${n} 把用户 Key 的可用模型随之更新（POST /key/update）` : ''}`);
+        render();
+      };
+    },
+  });
+}
+
+/* 登记 / 编辑 / 重新登记 / 纳入平台：kind = new | edit | reregister | adopt */
+function openModelForm(kind, row) {
+  const p = row?.platform, d = row?.dep;
+  const titles = { new: '登记模型', edit: '编辑模型', reregister: '重新登记模型', adopt: '纳入平台' };
+  const hasRoute = kind !== 'adopt';        // 纳入平台不改 LiteLLM
+  const hasGrants = kind === 'new' || kind === 'adopt';
+  const grants = [];
+  const vis0 = p?.visibility || 'private';
+  const provider = p?.provider || d?.provider || 'deepseek';
+  const providerOpts = Object.entries(PROVIDERS).map(([k, v]) => `<option value="${k}" ${k === provider ? 'selected' : ''}>${esc(v.name)}</option>`).join('');
+  openModal({
+    title: titles[kind], wide: true,
+    body: `
+      ${kind === 'reregister' ? '<div class="callout callout-warn mb16"><div>LiteLLM 中的部署已不存在。重新登记会用下面的参数在 LiteLLM 新建部署，并把平台记录指向它；可见性和授权不变。供应商 API Key 平台没有保存，需要重新填写。</div></div>' : ''}
+      ${kind === 'adopt' ? `<div class="callout callout-info mb16"><div>这个模型已在 LiteLLM 里配置（${d.origin === 'config' ? '配置文件' : '管理界面'}）。纳入平台只写平台记录、在用户中心登记数据对象，不改 LiteLLM；纳入后才能放进 Key。</div></div>` : ''}
+      <div class="section-t">基本信息（平台保存）</div>
+      <div class="grid2">
+        <div class="field"><label>显示名称<span class="req">*</span></label>
+          <input type="text" id="f-display" value="${esc(p?.display || (kind === 'adopt' ? d.model_name : ''))}" placeholder="如 DeepSeek V3.2"><div class="err" data-err="display"></div></div>
+        <div class="field"><label>供应商<span class="req">*</span></label><select id="f-provider" ${kind === 'adopt' ? 'disabled' : ''}>${providerOpts}</select></div>
+      </div>
+      <div class="field"><label>可见性<span class="req">*</span></label>
+        <div class="row" style="gap:22px">
+          <label class="check"><input type="radio" name="f-vis" value="private" ${vis0 === 'private' ? 'checked' : ''}> 私有 <span class="small muted">（授权给用户或部门后才能用）</span></label>
+          <label class="check"><input type="radio" name="f-vis" value="public" ${vis0 === 'public' ? 'checked' : ''}> 公有 <span class="small muted">（所有人可用，不需要授权）</span></label>
+        </div>
+        <div class="hint" id="vis-hint"></div></div>
+      <div class="field"><label>描述</label><textarea id="f-desc" placeholder="用途、特点，给使用的人看">${esc(p?.desc || '')}</textarea></div>
+      ${hasRoute ? `
+        <div class="section-t">路由（只提交给 LiteLLM）</div>
+        <div class="grid2">
+          <div class="field"><label>模型名<span class="req">*</span></label>
+            <input type="text" id="f-model_name" value="${esc(p?.model_name || '')}" placeholder="供应商侧的模型名，如 deepseek-chat" ${kind === 'new' ? '' : 'disabled'}>
+            <div class="hint">调用时传的 <code>model</code> 就是它；登记后不能修改</div><div class="err" data-err="model_name"></div></div>
+          <div class="field"><label>API Base<span class="req" id="base-req">*</span></label>
+            <input type="text" id="f-api_base" value="${esc(d?.api_base || '')}" placeholder="留空用供应商默认地址"><div class="err" data-err="api_base"></div></div>
+        </div>
+        <div class="field"><label>供应商 API Key<span class="req" id="key-req">*</span></label>
+          <input type="password" id="f-api_key" autocomplete="new-password" placeholder="${kind === 'edit' ? '留空表示不修改' : '供应商控制台申请的 Key'}">
+          <div class="hint">只提交给 LiteLLM 加密保存，平台不落库</div><div class="err" data-err="api_key"></div></div>
+        <div class="row mb16"><button class="btn btn-sm" id="f-test">测试连接</button><span class="small" id="f-test-r"></span></div>
+        <div class="section-t">规格与价格（写入 LiteLLM 的 model_info）</div>
+        <div class="grid2">
+          <div class="field"><label>上下文窗口（token）</label><input type="number" min="0" id="f-max_in" value="${d?.max_in ?? ''}" placeholder="如 131072"></div>
+          <div class="field"><label>最大输出（token）</label><input type="number" min="0" id="f-max_out" value="${d?.max_out ?? ''}" placeholder="如 8192"></div>
+          <div class="field"><label>输入价格（美元 / 百万 token）</label><input type="number" min="0" step="0.01" id="f-cin" value="${d?.cin ?? ''}" placeholder="自部署可留空"></div>
+          <div class="field"><label>输出价格（美元 / 百万 token）</label><input type="number" min="0" step="0.01" id="f-cout" value="${d?.cout ?? ''}" placeholder="自部署可留空"></div>
+        </div>` : `
+        <div class="section-t">LiteLLM 中的配置（只读）</div>
+        <div class="kv mb16">
+          <div class="k">模型名</div><div class="mono">${esc(d.model_name)}</div>
+          <div class="k">API Base</div><div class="mono">${esc(d.api_base) || '<span class="muted">供应商默认地址</span>'}</div>
+          <div class="k">上下文 / 输出</div><div>${fmtTokens(d.max_in)} / ${fmtTokens(d.max_out)}</div>
+          <div class="k">价格</div><div>${fmtPrice(d)}</div>
+        </div>`}
+      ${hasGrants ? '<div id="grants-sec"><div class="section-t">授权（私有模型，登记后也可以改）</div><div id="grants" class="mb16"></div></div>' : ''}
+      <details class="preview"><summary>提交内容预览</summary>
+        <div class="pv-t">平台保存</div><pre class="code" id="pv-platform"></pre>
+        ${hasRoute ? '<div class="pv-t" id="pv-litellm-t"></div><pre class="code" id="pv-litellm"></pre>' : ''}
+        ${hasGrants ? '<div class="pv-t" id="pv-uc-t"></div><pre class="code" id="pv-uc"></pre>' : ''}
+      </details>`,
+    foot: `<button class="btn" data-close>取消</button><button class="btn btn-primary" id="f-ok">${{ new: '登记', edit: '保存', reregister: '重新登记', adopt: '纳入' }[kind]}</button>`,
+    onMount: m => {
+      const val = id => $(`#f-${id}`, m)?.value.trim() ?? '';
+      const numOrNull = id => val(id) === '' ? null : Number(val(id));
+      const read = () => ({
+        display: val('display'), provider: val('provider'), desc: val('desc'), visibility: $('input[name=f-vis]:checked', m).value,
+        model_name: hasRoute ? val('model_name') : d.model_name, api_base: val('api_base'), api_key: val('api_key'),
+        max_in: numOrNull('max_in'), max_out: numOrNull('max_out'), cin: numOrNull('cin'), cout: numOrNull('cout'),
+      });
+      const keyRequired = v => kind !== 'edit' && !PROVIDERS[v.provider].keyOptional;
+      const litellmBody = v => {
+        const info = { max_input_tokens: v.max_in, max_output_tokens: v.max_out, input_cost_per_token: v.cin == null ? null : v.cin / 1e6, output_cost_per_token: v.cout == null ? null : v.cout / 1e6 };
+        if (kind === 'edit') info.id = d.id;
+        Object.keys(info).forEach(k => { if (info[k] == null) delete info[k]; });
+        const params = { model: v.model_name, custom_llm_provider: v.provider };
+        if (v.api_base) params.api_base = v.api_base;
+        if (v.api_key) params.api_key = '••••••••';
+        return { model_name: v.model_name, litellm_params: params, model_info: info };
+      };
+      const sync = () => {
+        const v = read();
+        const pub = v.visibility === 'public';
+        $('#vis-hint', m).textContent = kind === 'edit' && v.visibility !== vis0
+          ? (pub ? '改成公有后所有人都能用，已有的授权保留但不再起作用。' : '改成私有后，没被授权的人的用户 Key 里的这个模型会失效；客户端 Key 不受影响。')
+          : '';
+        if (hasGrants) $('#grants-sec', m).hidden = pub;
+        if (hasRoute) {
+          $('#base-req', m).hidden = !PROVIDERS[v.provider].needBase;
+          $('#key-req', m).hidden = !keyRequired(v);
+          $('#pv-litellm-t', m).textContent = kind === 'edit' ? 'LiteLLM  POST /model/update' : 'LiteLLM  POST /model/new';
+          $('#pv-litellm', m).textContent = JSON.stringify(litellmBody(v), null, 2);
+        }
+        const plat = { display_name: v.display, provider: v.provider, model_name: v.model_name, visibility: v.visibility, description: v.desc,
+          litellm_model_id: kind === 'new' || kind === 'reregister' ? '（LiteLLM 返回后回填）' : d.id };
+        $('#pv-platform', m).textContent = JSON.stringify(plat, null, 2);
+        if (hasGrants) {
+          $('#pv-uc-t', m).textContent = pub ? '用户中心：登记数据对象（公有模型不写授权）' : '用户中心：登记数据对象并授权';
+          const uc = { data_code: 'Model', data_id: '（平台模型 uuid）', data_name: v.display,
+            grants: pub ? [] : grants.map(g => ({ permission: 'READ', subject_type: g.kind, subject: grantLabel(g), include_sub: g.sub })) };
+          $('#pv-uc', m).textContent = JSON.stringify(uc, null, 2);
+        }
+      };
+      m.addEventListener('input', sync);
+      m.addEventListener('change', sync);
+      if (hasGrants) grantsEditor($('#grants', m), grants, sync);
+      sync();
+
+      if (hasRoute) $('#f-test', m).onclick = () => {
+        const v = read();
+        if (!v.model_name || (keyRequired(v) && !v.api_key)) { $('#f-test-r', m).innerHTML = '<span class="muted">先填写模型名和供应商 API Key</span>'; return; }
+        $('#f-test-r', m).innerHTML = '<span class="muted">正在经 LiteLLM 试调…</span>';
+        setTimeout(() => {
+          const r = $('#f-test-r', m);
+          if (r) r.innerHTML = `<span style="color:var(--success)">✓ 连接成功，耗时 ${300 + Math.floor(Math.random() * 500)}ms</span> <span class="mono muted">POST /health/test_connection</span>`;
+        }, 700);
+      };
+
+      $('#f-ok', m).onclick = () => {
+        const v = read();
+        const errs = {};
+        if (!v.display) errs.display = '请填写显示名称';
+        if (hasRoute) {
+          if (!v.model_name) errs.model_name = '请填写模型名';
+          else if (!/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(v.model_name)) errs.model_name = '只能包含字母、数字和 . _ : / -';
+          else if (kind === 'new' && findModel(v.model_name)) errs.model_name = '已有同名模型（含 LiteLLM 直配的）；模型名就是调用名，不能重复';
+          if (PROVIDERS[v.provider].needBase && !v.api_base) errs.api_base = `${providerName(v.provider)} 需要填写 API Base`;
+          if (keyRequired(v) && !v.api_key) errs.api_key = '请填写供应商 API Key';
+        }
+        $$('[data-err]', m).forEach(e => { e.textContent = errs[e.dataset.err] || ''; });
+        if (Object.keys(errs).length) { $(`[data-err="${Object.keys(errs)[0]}"]`, m).scrollIntoView({ block: 'center' }); return; }
+
+        const before = snapshotKeys();
+        const depFields = { model_name: v.model_name, provider: v.provider, api_base: v.api_base, max_in: v.max_in, max_out: v.max_out, cin: v.cin || 0, cout: v.cout || 0 };
+        const platFields = { display: v.display, provider: v.provider, visibility: v.visibility, desc: v.desc };
+        const newPlatform = litellm_id => ({ uuid: 'm-' + rand(4), litellm_id, model_name: v.model_name, ...platFields,
+          grants: v.visibility === 'public' ? [] : grants, created_by: me, created_at: nowStr() });
+        const ucNote = v.visibility === 'public' ? ' + 用户中心登记数据对象' : ' + 用户中心登记数据对象并授权';
+        let msg, api;
+        if (kind === 'edit') {
+          Object.assign(d, depFields);
+          Object.assign(p, platFields);
+          msg = `已保存 ${v.model_name}`;
+          api = `POST /model/update  id=${d.id}${v.api_key ? '（含新 API Key）' : ''}`;
+        } else if (kind === 'adopt') {
+          platformModels.push(newPlatform(d.id));
+          msg = `已纳入 ${v.model_name}`;
+          api = '写平台记录' + ucNote + '；LiteLLM 不变';
+        } else {
+          const id = 'lm-' + rand(4);
+          deployments.push({ id, origin: 'db', ...depFields });
+          if (kind === 'new') platformModels.push(newPlatform(id));
+          else Object.assign(p, platFields, { litellm_id: id });
+          msg = `已登记 ${v.model_name}`;
+          api = `POST /model/new → id=${id}，再写平台记录${kind === 'new' ? ucNote : ''}`;
+        }
+        const n = changedKeys(before);
+        closeModal();
+        toast(msg, api + (n ? `；${n} 把 Key 的可用模型随之更新（POST /key/update）` : ''));
+        renderModels();
+      };
+    },
+  });
+}
+
+function confirmDeleteModel(r) {
+  const affected = keys.filter(k => effectiveModels(k).includes(r.model_name)).length;
+  confirmBox({
+    title: `删除模型 ${esc(r.model_name)}`, danger: true, okText: '删除',
+    body: `
+      <div>${r.missing ? '只删除平台记录和用户中心的数据对象（LiteLLM 中已经没有这个部署）。' : 'LiteLLM 中的部署、平台记录、用户中心的数据对象与授权一起删除，模型名 <span class="mono">' + esc(r.model_name) + '</span> 立即不可调用。'}</div>
+      ${affected ? `<div class="callout callout-warn mt12"><div>有 ${affected} 把 Key 分配了它，删除后平台从这些 Key 里去掉它（POST /key/update）。</div></div>` : ''}`,
+    onOk: () => {
+      const before = snapshotKeys();
+      platformModels = platformModels.filter(x => x !== r.platform);
+      if (r.dep) deployments = deployments.filter(x => x !== r.dep);
+      const n = changedKeys(before);
+      toast(`已删除 ${r.model_name}`, (r.missing ? '删平台记录与用户中心数据对象' : `POST /model/delete  id=${r.dep.id}`) + (n ? `；更新 ${n} 把 Key` : ''));
+      renderModels();
+    },
+  });
+}
+
+/* =====================================================================
+ * API Key：用户 Key（本人申请）与客户端 Key（应用调接口创建，管理员分配模型）
+ * ===================================================================== */
+const userKey = uid => keys.find(k => k.type === 'user' && k.user === uid);
+const clientKey = (type, code) => keys.find(k => k.type === 'client' && k.client_type === type && k.client_code === code);
+const keyTitle = k => k.type === 'user' ? `${USERS[k.user].name} 的用户 Key` : `${k.client_name}（${CLIENT_TYPES[k.client_type].name} · ${k.client_code}）`;
+
+function keyStatusBadge(k) {
+  return {
+    pending: '<span class="badge badge-orange"><span class="bdot"></span>待分配模型</span>',
+    active: '<span class="badge badge-green"><span class="bdot"></span>正常</span>',
+    blocked: '<span class="badge badge-gray"><span class="bdot"></span>已停用</span>',
+  }[k.status];
+}
+function keyModelsCell(k) {
+  if (k.status === 'pending') return '<span class="muted">—</span>';
+  const allowed = allowedRowsForKey(k).map(r => r.model_name);
+  const chips = k.models.map(n => {
+    const r = findModel(n);
+    if (!r) return `<span class="tag mono gone" title="模型已删除">${esc(n)}</span>`;
+    if (r.missing) return `<span class="tag mono warn" title="LiteLLM 中缺失，暂不可调用">${esc(n)}</span>`;
+    if (!allowed.includes(n)) return `<span class="tag mono gone" title="授权已撤销">${esc(n)}</span>`;
+    return `<span class="tag mono">${esc(n)}</span>`;
+  }).join(' ');
+  return chips + (effectiveModels(k).length ? '' : ' <span class="badge badge-red" title="LiteLLM 里会被停用">无可用模型</span>');
+}
+
+function renderKeys() {
+  const admin = isAdmin();
+  if (!admin) keyTab = 'user';
+  const clients = keys.filter(k => k.type === 'client');
+  const pending = clients.filter(k => k.status === 'pending').length;
+  const own = userKey(me);
+  $('#content').innerHTML = `
+    <div class="page-head">
+      <div><h1>API Key</h1><div class="sub">${admin
+        ? '用户 Key 由本人申请；客户端 Key 由应用调接口创建，管理员分配模型'
+        : '为你本人申请访问模型的 Key'}。Key 直接调用 LiteLLM（<span class="mono">${LITELLM_URL}</span>）</div></div>
+      <div class="grow"></div>
+      ${keyTab === 'user'
+        ? `<button class="btn btn-primary" id="btn-apply" ${own ? 'disabled title="你已经有用户 Key 了"' : ''}>＋ 申请用户 Key</button>`
+        : '<button class="btn btn-primary" id="btn-new-client">＋ 新建客户端 Key</button>'}
+    </div>
+    ${admin ? `<div class="toolbar"><div class="tabs" id="ktabs">
+        <button data-tab="user">我的用户 Key</button>
+        <button data-tab="client">客户端 Key <span class="n">${clients.length}</span>${pending ? `<span class="n warn">待分配 ${pending}</span>` : ''}</button>
+      </div></div>` : ''}
+    <div class="callout callout-info mb16"><div>${keyTab === 'user'
+      ? '每人一把用户 Key，只能为本人申请。模型从公有模型和授权给你或你所在部门的私有模型里逐个选；私有模型的授权撤销后，Key 里的这个模型随之失效。'
+      : `客户端 Key 由应用调接口创建：Atlas 新建智能体时创建一条（客户端类型 Agent，客户端编码 = 智能体 id），知识库同理。新建的 Key「待分配模型」，管理员分配模型后才在 LiteLLM 生成 Key。应用按客户端类型 + 客户端编码获取 Key 和可用模型。会话标题、记忆补记这类平台服务的 Key（类型 Service）由管理员在这里事先建好、分配模型，再在 Atlas 的平台配置里引用。`}</div></div>
+    ${keyTab === 'client' ? `<div class="toolbar">
+        <select class="select" id="kf-type"><option value="">全部客户端类型</option>${Object.entries(CLIENT_TYPES).map(([k, v]) => `<option value="${k}" ${kf.type === k ? 'selected' : ''}>${v.name}（${k}）</option>`).join('')}</select>
+        <select class="select" id="kf-status"><option value="">全部状态</option>${[['pending', '待分配模型'], ['active', '正常'], ['blocked', '已停用']].map(([k, v]) => `<option value="${k}" ${kf.status === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
+        <input class="input" id="kf-q" placeholder="搜索客户端编码 / 名称" value="${esc(kf.q)}" style="width:220px">
+      </div>` : ''}
+    <div class="card" id="ktable"></div>`;
+  $$('#ktabs button').forEach(b => {
+    b.classList.toggle('on', b.dataset.tab === keyTab);
+    b.onclick = () => { keyTab = b.dataset.tab; renderKeys(); };
+  });
+  const apply = $('#btn-apply');
+  if (apply) apply.onclick = openApply;
+  const newClient = $('#btn-new-client');
+  if (newClient) newClient.onclick = openNewClient;
+  if (keyTab === 'client') {
+    $('#kf-type').onchange = e => { kf.type = e.target.value; renderClientTable(); };
+    $('#kf-status').onchange = e => { kf.status = e.target.value; renderClientTable(); };
+    $('#kf-q').oninput = e => { kf.q = e.target.value; renderClientTable(); };
+    renderClientTable();
+  } else {
+    renderUserTable();
+  }
+}
+
+function bindKeyOps(root) {
+  $$('tr[data-key]', root).forEach(tr => {
+    const k = keys.find(x => x.uuid === tr.dataset.key);
+    $$('[data-op]', tr).forEach(b => b.onclick = () => ({
+      apply: openApply,
+      models: () => openAssign(k),
+      reset: () => resetKey(k),
+      block: () => blockKey(k),
+      unblock: () => { k.status = 'active'; toast('已启用', 'POST /key/unblock'); renderKeys(); },
+      delete: () => (k.type === 'user' ? deleteKey(k) : deleteClientKey(k)),
+    })[b.dataset.op]());
+  });
+}
+const activeOps = k => `
+  <button class="btn-link" data-op="models">分配模型</button>
+  <button class="btn-link" data-op="reset">重置</button>
+  <button class="btn-link" data-op="${k.status === 'active' ? 'block' : 'unblock'}">${k.status === 'active' ? '停用' : '启用'}</button>`;
+
+function renderUserTable() {
+  const k = userKey(me);
+  const who = `<div class="row">${avatar(me)}<div><div class="mname">${USERS[me].name}</div><div class="mono muted">${me}</div></div></div>`;
+  $('#ktable').innerHTML = `
+    <table class="table">
+      <thead><tr><th>本人</th><th>Key</th><th>模型</th><th>状态</th><th>申请时间</th><th>操作</th></tr></thead>
+      <tbody>${k ? `<tr data-key="${k.uuid}">
+          <td>${who}</td><td class="mono nowrap">sk-…${k.last4}</td><td>${keyModelsCell(k)}</td><td>${keyStatusBadge(k)}</td>
+          <td class="nowrap small muted">${k.created_at}</td>
+          <td class="nowrap">${activeOps(k)}<button class="btn-link danger" data-op="delete">删除</button></td></tr>`
+        : `<tr data-key=""><td>${who}</td><td class="muted">未申请</td><td class="muted">—</td><td class="muted">—</td><td class="muted">—</td><td class="muted">—</td>
+          <td><button class="btn btn-sm" data-op="apply">申请用户 Key</button></td></tr>`}</tbody>
+    </table>`;
+  bindKeyOps($('#ktable'));
+}
+
+function renderClientTable() {
+  const q = kf.q.trim().toLowerCase();
+  const rows = keys.filter(k => k.type === 'client' &&
+    (!kf.type || k.client_type === kf.type) && (!kf.status || k.status === kf.status) &&
+    (!q || k.client_code.toLowerCase().includes(q) || k.client_name.toLowerCase().includes(q)));
+  $('#ktable').innerHTML = rows.length ? `
+    <table class="table">
+      <thead><tr><th>客户端类型</th><th>客户端编码 / 名称</th><th>Key</th><th>模型</th><th>状态</th><th>创建</th><th>操作</th></tr></thead>
+      <tbody>${rows.map(k => `<tr data-key="${k.uuid}">
+        <td class="nowrap">${CLIENT_TYPES[k.client_type].name} <span class="mono small muted">${k.client_type}</span></td>
+        <td><div class="mono">${k.client_code}</div><div class="small muted">${esc(k.client_name)}</div></td>
+        <td class="mono nowrap">${k.last4 ? `sk-…${k.last4}` : '<span class="small muted">分配模型后生成</span>'}</td>
+        <td>${keyModelsCell(k)}</td>
+        <td>${keyStatusBadge(k)}</td>
+        <td class="nowrap small">${CLIENT_TYPES[k.client_type].app}（接口）<div class="muted">${k.created_at}</div></td>
+        <td class="nowrap">${k.status === 'pending' ? '<button class="btn btn-sm btn-primary" data-op="models">分配模型</button>' : activeOps(k)}<button class="btn-link danger" data-op="delete">删除</button></td>
+      </tr>`).join('')}</tbody>
+    </table>` : '<div class="empty">没有符合条件的客户端 Key</div>';
+  bindKeyOps($('#ktable'));
+}
+
+/* 分配模型：只有「指定模型」，从可选范围里逐个勾；全选只勾当前已有的，以后登记的不会自动加入 */
+function modelPickerHtml(allowedRows, picked) {
+  const inRange = picked.filter(n => allowedRows.some(r => r.model_name === n));
+  const stale = picked.filter(n => !inRange.includes(n));
+  const reason = n => { const r = findModel(n); return !r ? '已删除' : r.missing ? 'LiteLLM 中缺失' : '授权已撤销'; };
+  return `
+    <div class="row small muted"><span>已选 <b id="mp-n">${inRange.length}</b> / ${allowedRows.length}</span><span class="grow"></span>
+      <button type="button" class="btn-link" id="mp-all">全选</button><button type="button" class="btn-link" id="mp-none">清空</button></div>
+    <div class="modelchecks" id="mp-list">
+      ${allowedRows.map(r => `<label class="check"><input type="checkbox" value="${esc(r.model_name)}" ${picked.includes(r.model_name) ? 'checked' : ''}> ${esc(rowName(r))} <span class="mono small muted">${esc(r.model_name)}</span> ${visBadge(r.platform)}</label>`).join('')}
+      ${stale.map(n => `<label class="check"><input type="checkbox" disabled checked> <span class="mono small muted">${esc(n)}</span> <span class="small" style="color:#b45309">${reason(n)}，保存时移除</span></label>`).join('')}
+    </div>
+    <div class="err" id="mp-err"></div>`;
+}
+function bindPicker(m) {
+  const boxes = () => $$('#mp-list input:not(:disabled)', m);
+  const count = () => { $('#mp-n', m).textContent = boxes().filter(i => i.checked).length; };
+  $('#mp-list', m).onchange = count;
+  $('#mp-all', m).onclick = () => { boxes().forEach(i => { i.checked = true; }); count(); };
+  $('#mp-none', m).onclick = () => { boxes().forEach(i => { i.checked = false; }); count(); };
+}
+function readPicker(m) {
+  const models = $$('#mp-list input:checked:not(:disabled)', m).map(i => i.value);
+  $('#mp-err', m).textContent = models.length ? '' : '至少选择一个模型';
+  return models.length ? models : null;
+}
+
+function openApply() {
+  const allowed = usableRows(me);
+  const has = Boolean(userKey(me));
+  openModal({
+    title: '申请用户 Key',
+    body: `
+      <div class="field"><label>本人</label><div class="row">${avatar(me)}<span>${USERS[me].name}</span><span class="mono muted">${me}</span></div>
+        ${has ? '<div class="err">你已经有一把用户 Key。需要新的 Key 请在列表里「重置」。</div>' : ''}</div>
+      ${allowed.length
+        ? `<div class="field"><label>模型<span class="req">*</span></label>${modelPickerHtml(allowed, [])}
+            <div class="hint">${isAdmin() ? '管理员可选全部已登记模型' : '可选公有模型和授权给你或你所在部门的私有模型'}；以后登记的新模型不会自动加入</div></div>`
+        : '<div class="callout callout-warn mb12"><div>还没有你能用的模型。请联系管理员登记公有模型，或给你授权私有模型。</div></div>'}
+      <div class="small muted">只能为本人申请；智能体、知识库的 Key 由应用自动创建、管理员分配模型。</div>`,
+    foot: `<button class="btn" data-close>取消</button><button class="btn btn-primary" id="a-ok" ${has || !allowed.length ? 'disabled' : ''}>申请</button>`,
+    onMount: m => {
+      if (allowed.length) bindPicker(m);
+      $('#a-ok', m).onclick = () => {
+        const models = readPicker(m);
+        if (!models || userKey(me)) return;
+        const full = genKey();
+        const k = { uuid: 'k-' + rand(4), type: 'user', user: me, last4: full.slice(-4), models, status: 'active', created_at: nowStr() };
+        keys.push(k);
+        renderKeys();
+        toast('已申请用户 Key', `POST /key/generate  user_id=${me}  models=${JSON.stringify(effectiveModels(k))}`);
+        showKey(full, '已申请用户 Key');
+      };
+    },
+  });
+}
+
+// 只有用户 Key 会显示原文；客户端 Key 由应用经接口获取
+function showKey(full, title) {
+  const sample = effectiveModels(userKey(me))[0] || 'deepseek-chat';
+  openModal({
+    title,
+    body: `
+      <div class="keybox"><span id="kfull">${full}</span><button class="btn btn-sm" id="kcopy">复制</button></div>
+      <div class="callout callout-warn mt12"><div>Key 只显示这一次，关闭后无法再查看；忘记了可以「重置」。</div></div>
+      <div class="section-t mt16">怎么用</div>
+      <div class="small muted mb12">在 Claude Code、Cursor 或脚本里把 Base URL 设为 <span class="mono">${LITELLM_URL}</span>，API Key 填这把 Key。</div>
+      <pre class="code">${esc(curlFor(sample, full))}</pre>`,
+    foot: '<button class="btn btn-primary" data-close>我已保存</button>',
+    onMount: m => {
+      $('#kcopy', m).onclick = async () => {
+        try { await navigator.clipboard.writeText(full); toast('已复制'); }
+        catch { getSelection().selectAllChildren($('#kfull', m)); toast('请按 ⌘C / Ctrl+C 复制'); }
+      };
+    },
+  });
+}
+
+function openAssign(k) {
+  const allowed = allowedRowsForKey(k);
+  const first = k.status === 'pending';
+  const app = k.type === 'client' ? CLIENT_TYPES[k.client_type].app : '';
+  const notes = [];
+  if (!first) notes.push('修改立即生效，Key 本身不变');
+  if (k.client_type === 'Agent') notes.push('Atlas 编辑这个智能体时，可选模型随之变化');
+  openModal({
+    title: `分配模型 · ${esc(keyTitle(k))}`,
+    body: `
+      ${first ? `<div class="callout callout-info mb12"><div>这是 ${app} 新建的客户端 Key。分配模型后才在 LiteLLM 生成 Key，${app} 随后就能取到并调用。</div></div>` : ''}
+      <div class="field">${modelPickerHtml(allowed, k.models)}
+        <div class="hint">${k.type === 'client' ? '客户端 Key 可分配全部已登记模型，公有、私有都行' : isAdmin() ? '管理员可选全部已登记模型' : '可选公有模型和授权给你或你所在部门的私有模型'}；以后登记的新模型不会自动加入</div></div>
+      <div class="small muted">${notes.length ? notes.join('；') + '。' : ''}</div>`,
+    foot: `<button class="btn" data-close>取消</button><button class="btn btn-primary" id="as-ok">${first ? '分配并生成 Key' : '保存'}</button>`,
+    onMount: m => {
+      bindPicker(m);
+      $('#as-ok', m).onclick = () => {
+        const models = readPicker(m);
+        if (!models) return;
+        k.models = models;
+        let api = `POST /key/update  models=${JSON.stringify(effectiveModels(k))}`;
+        if (first) {
+          k.last4 = genKey().slice(-4);
+          k.status = 'active';
+          api = `POST /key/generate  key_alias=${k.client_type}:${k.client_code}  models=${JSON.stringify(effectiveModels(k))}`;
+        }
+        closeModal();
+        toast(first ? `已为「${keyTitle(k)}」分配模型并生成 Key` : '已更新模型', api);
+        render();
+      };
+    },
+  });
+}
+
+function resetKey(k) {
+  const isUser = k.type === 'user';
+  confirmBox({
+    title: '重置 Key', okText: '重置',
+    body: `<div>为「${esc(keyTitle(k))}」生成新 Key，旧 Key <span class="mono">sk-…${k.last4}</span> 立即失效。</div>
+      <div class="small muted mt8">${isUser ? '用旧 Key 的工具要换成新 Key。' : `正在用旧 Key 的调用会失败；${CLIENT_TYPES[k.client_type].app} 下一次获取时拿到新的。`}分配的模型、停用状态保持不变。</div>`,
+    onOk: () => {
+      const full = genKey();
+      k.last4 = full.slice(-4);
+      toast('已重置', '生成新 Key（同样的 models 与 metadata）+ POST /key/delete 旧 Key');
+      renderKeys();
+      if (isUser) showKey(full, '已重置用户 Key');
+    },
+  });
+}
+
+function blockKey(k) {
+  confirmBox({
+    title: '停用 Key', okText: '停用', danger: true,
+    body: `<div>停用后 LiteLLM 拒绝「${esc(keyTitle(k))}」这把 Key 的所有调用${k.client_type === 'Agent' ? '，这个智能体在 Atlas 里不能运行' : ''}。可以随时启用。</div>`,
+    onOk: () => { k.status = 'blocked'; toast('已停用', 'POST /key/block'); renderKeys(); },
+  });
+}
+
+function openNewClient() {
+  openModal({
+    title: '新建客户端 Key',
+    body: `
+      <div class="callout callout-info mb12"><div>智能体、知识库的 Key 由应用自动创建。这里用来事先建平台服务这类 Key（如会话标题），建好后分配模型，再在 Atlas 的平台配置里引用它。</div></div>
+      <div class="field"><label>客户端类型<span class="req">*</span></label>
+        <select id="nc-type">${Object.entries(CLIENT_TYPES).map(([k, v]) => `<option value="${k}" ${k === 'Service' ? 'selected' : ''}>${v.name}（${k}）</option>`).join('')}</select></div>
+      <div class="field"><label>客户端编码<span class="req">*</span></label><input type="text" id="nc-code" placeholder="如 session-title"><div class="err" id="nc-err"></div></div>
+      <div class="field"><label>名称</label><input type="text" id="nc-name" placeholder="如 会话标题"></div>`,
+    foot: '<button class="btn" data-close>取消</button><button class="btn btn-primary" id="nc-ok">新建</button>',
+    onMount: m => {
+      $('#nc-ok', m).onclick = () => {
+        const type = $('#nc-type', m).value, code = $('#nc-code', m).value.trim(), name = $('#nc-name', m).value.trim();
+        if (!code) { $('#nc-err', m).textContent = '请填写客户端编码'; return; }
+        if (clientKey(type, code)) { $('#nc-err', m).textContent = '这个客户端已经有 Key 了'; return; }
+        const k = { uuid: 'k-' + rand(4), type: 'client', client_type: type, client_code: code, client_name: name || code, last4: null, models: [], status: 'pending', created_at: nowStr() };
+        keys.push(k);
+        closeModal();
+        toast(`已新建客户端 Key ${type}:${code}（待分配模型）`);
+        renderKeys();
+        openAssign(k);
+      };
+    },
+  });
+}
+
+function deleteClientKey(k) {
+  confirmBox({
+    title: '删除客户端 Key', okText: '删除', danger: true,
+    body: `<div>删除「${esc(keyTitle(k))}」的客户端 Key${k.last4 ? `（<span class="mono">sk-…${k.last4}</span>）` : ''}，LiteLLM 里的 Key 一并删除。</div>
+      <div class="small muted mt8">${k.client_type === 'Agent' ? '这个智能体之后不能运行；Atlas 下次用到它时会重新建一把「待分配」的 Key。' : '引用它的平台功能会停止，直到重新建好并分配模型。'}只是临时不让用，请选「停用」。</div>`,
+    onOk: () => { keys = keys.filter(x => x !== k); toast('已删除', 'POST /key/delete'); renderKeys(); },
+  });
+}
+
+function deleteKey(k) {
+  confirmBox({
+    title: '删除用户 Key', okText: '删除', danger: true,
+    body: `<div>删除你的用户 Key <span class="mono">sk-…${k.last4}</span>，不可恢复。</div>
+      <div class="small muted mt8">删除后要重新申请；只是临时不用，请选「停用」。</div>`,
+    onOk: () => { keys = keys.filter(x => x !== k); toast('已删除', 'POST /key/delete'); renderKeys(); },
+  });
+}
+
+/* =====================================================================
+ * Atlas 编辑器（接入示意）：建智能体时创建客户端 Key，编辑 / 运行时按客户端类型 + 编码获取
+ * ===================================================================== */
+// 开放接口 GET /open/v1/client-keys 的返回
+function clientKeyView(k) {
+  const base = { client_type: k.client_type, client_code: k.client_code };
+  if (k.status === 'pending') return { ...base, status: 'pending_models', key: null, models: [] };
+  if (k.status === 'blocked') return { ...base, status: 'blocked', key: null, models: [] };
+  const models = effectiveModels(k).map(findModel);
+  return { ...base, status: models.length ? 'active' : 'no_models', key: models.length ? `sk-…${k.last4}` : null, models };
+}
+
+function renderAtlas() {
+  const agents = keys.filter(k => k.type === 'client' && k.client_type === 'Agent');
+  const k = agents.find(x => x.client_code === atlasAgent) || agents[0];
+  atlasAgent = k.client_code;
+  const view = clientKeyView(k);
+  const json = { ...view, models: view.models.map(r => ({ model_name: r.model_name, display_name: rowName(r), provider: rowProvider(r), max_input_tokens: r.dep.max_in, max_output_tokens: r.dep.max_out })) };
+  const emptyMsg = {
+    pending_models: '模型管理平台还没给这个智能体分配模型（客户端 Key 待分配），编辑器里没有可选模型，也不能运行。请联系管理员。',
+    blocked: '这个智能体的客户端 Key 已停用，编辑器里没有可选模型，也不能运行。',
+    no_models: '这个智能体分配的模型都不可用了（已删除或 LiteLLM 中缺失），请管理员重新分配。',
+  }[view.status];
+  const callText = model => `POST ${LITELLM_URL}/v1/chat/completions\nAuthorization: Bearer <② 返回的 key>\n{"model": "${model}", "messages": [...]}`;
+  $('#content').innerHTML = `
+    <div class="page-head"><div><h1>Atlas 编辑器（接入示意）</h1><div class="sub">演示 Atlas 怎么接入模型管理平台。这一页不属于模型管理平台；接口路径是示意。</div></div>
+      <div class="grow"></div><button class="btn" id="at-new">＋ 新建智能体（演示）</button></div>
+    <div class="grid-2c">
+      <div class="card"><div class="card-h"><h3>编辑智能体</h3><span class="badge badge-gray">Atlas</span></div>
+        <div class="card-b">
+          <div class="field"><label>智能体 <span class="small muted">（演示用：切换要编辑的智能体）</span></label>
+            <select id="at-agent">${agents.map(a => `<option value="${a.client_code}" ${a === k ? 'selected' : ''}>${esc(a.client_name)}</option>`).join('')}</select></div>
+          <div class="kv mb16">
+            <div class="k">智能体 id</div><div class="mono">${k.client_code}</div>
+            <div class="k">客户端 Key</div><div>${k.last4 ? `<span class="mono">sk-…${k.last4}</span> ` : ''}${keyStatusBadge(k)}</div>
+          </div>
+          <div class="field"><label>模型<span class="req">*</span></label>
+            <select id="at-model" ${view.models.length ? '' : 'disabled'}>${view.models.length
+              ? view.models.map(r => `<option value="${esc(r.model_name)}">${esc(rowName(r))}（${esc(r.model_name)}）</option>`).join('')
+              : '<option>没有可选的模型</option>'}</select>
+            <div class="hint">列表来自模型管理平台：这个智能体的客户端 Key 分配的、仍可调用的模型</div></div>
+          ${view.models.length ? '' : `<div class="callout callout-warn"><div>${emptyMsg}${isAdmin() ? ' <button class="btn-link" id="at-go">去分配模型 →</button>' : ''}</div></div>`}
+        </div></div>
+      <div class="card"><div class="card-h"><h3>调用过程</h3></div>
+        <div class="card-b">
+          <div class="section-t">① 新建智能体时创建客户端 Key（Atlas → 模型管理平台）</div>
+          <pre class="code">${esc(`POST /open/v1/client-keys\n${JSON.stringify({ client_type: 'Agent', client_code: k.client_code, client_name: k.client_name }, null, 2)}\n→ 201 {"status": "pending_models"}   // 按客户端类型 + 编码幂等`)}</pre>
+          <div class="section-t mt16">② 编辑、运行时获取（Atlas → 模型管理平台）</div>
+          <pre class="code">GET /open/v1/client-keys?client_type=Agent&amp;client_code=${k.client_code}</pre>
+          <pre class="code mt8">${esc(JSON.stringify(json, null, 2))}</pre>
+          <div class="small muted mt8">编辑器用 models 填下拉框；运行时用 key 调 LiteLLM，status 不是 active 时这一轮不开始。</div>
+          <div class="section-t mt16">③ 调模型（Atlas → LiteLLM）</div>
+          <pre class="code" id="at-call">${esc(callText(view.models[0]?.model_name || '<编辑器里选的模型>'))}</pre>
+          <div class="section-t mt16">④ 删除智能体时（Atlas → 模型管理平台）</div>
+          <pre class="code">DELETE /open/v1/client-keys?client_type=Agent&amp;client_code=${k.client_code}</pre>
+        </div></div>
+    </div>`;
+  $('#at-agent').onchange = e => { atlasAgent = e.target.value; renderAtlas(); };
+  $('#at-model').onchange = e => { $('#at-call').textContent = callText(e.target.value); };
+  $('#at-new').onclick = () => {
+    const n = keys.filter(x => x.client_type === 'Agent').length + 1;
+    const nk = { uuid: 'k-' + rand(4), type: 'client', client_type: 'Agent', client_code: 'agt_' + rand(6), client_name: `新智能体 ${n}`,
+      last4: null, models: [], status: 'pending', created_at: nowStr() };
+    keys.push(nk);
+    atlasAgent = nk.client_code;
+    renderAtlas();
+    toast(`Atlas 已创建「${nk.client_name}」`, `POST /open/v1/client-keys  client_type=Agent  client_code=${nk.client_code} → 待分配模型`);
+  };
+  const go = $('#at-go');
+  if (go) go.onclick = () => { keyTab = 'client'; history.pushState(null, '', '#/keys'); render(); openAssign(k); };
+}
+
+/* =====================================================================
+ * 原型说明
+ * ===================================================================== */
+function renderAbout() {
+  $('#content').innerHTML = `
+  <div class="doc">
+    <div class="page-head"><div><h1>原型说明</h1><div class="sub">右上角切换演示身份：孙丽是管理员；张明（研发一部）、李工（客服中心）、王芳（研发二部，还没申请 Key）是普通用户。数据为内存态，刷新后重置。</div></div></div>
+
+    <div class="card mb16"><div class="card-h"><h3>分工</h3></div>
+      <div class="card-b">
+        <svg class="diagram" viewBox="0 0 900 300" role="img" aria-label="模型管理平台、LiteLLM、用户中心、Atlas 的分工">
+          <defs><marker id="ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="#94a3b8"/></marker></defs>
+          <rect x="20" y="30" width="190" height="60" rx="10" class="b-gray"/><text x="115" y="56" class="t">管理员 / 用户</text><text x="115" y="75" class="s">登记模型、分配模型 · 申请用户 Key</text>
+          <rect x="355" y="30" width="190" height="60" rx="10" class="b-pri"/><text x="450" y="56" class="t">模型管理平台（自研）</text><text x="450" y="75" class="s">模型 · 用户 Key · 客户端 Key</text>
+          <rect x="690" y="30" width="190" height="60" rx="10" class="b-gray"/><text x="785" y="56" class="t">用户中心</text><text x="785" y="75" class="s">管理员角色 · 私有模型授权</text>
+          <rect x="20" y="210" width="190" height="60" rx="10" class="b-gray"/><text x="115" y="236" class="t">Atlas · 知识库</text><text x="115" y="255" class="s">按客户端类型 + 编码取 Key</text>
+          <rect x="355" y="210" width="190" height="60" rx="10" class="b-sec"/><text x="450" y="236" class="t">LiteLLM</text><text x="450" y="255" class="s">路由 · 日志 · 计费 · 限流</text>
+          <rect x="690" y="210" width="190" height="60" rx="10" class="b-gray"/><text x="785" y="236" class="t">模型供应商</text><text x="785" y="255" class="s">DeepSeek · Anthropic · 自部署</text>
+          <line x1="210" y1="60" x2="352" y2="60" marker-end="url(#ar)"/><text x="282" y="51" class="lbl">页面操作</text>
+          <line x1="545" y1="60" x2="687" y2="60" marker-end="url(#ar)"/><text x="617" y="51" class="lbl">判角色、存授权</text>
+          <line x1="450" y1="90" x2="450" y2="207" marker-end="url(#ar)"/><text x="460" y="145" class="lbl" style="text-anchor:start">登记模型 · 生成 Key · 同步模型</text><text x="460" y="162" class="api" style="text-anchor:start">/model/new · /key/generate · /key/update</text>
+          <line x1="210" y1="214" x2="352" y2="94" marker-end="url(#ar)"/><text x="268" y="150" class="lbl" style="text-anchor:end">① 建客户端 Key、取 Key</text>
+          <line x1="210" y1="240" x2="352" y2="240" marker-end="url(#ar)"/><text x="282" y="231" class="lbl">② 带 Key 直接调用</text>
+          <line x1="545" y1="240" x2="687" y2="240" marker-end="url(#ar)"/><text x="617" y="231" class="lbl">转发</text>
+        </svg>
+        <ul class="mt12">
+          <li><b>LiteLLM</b> 替代 Higress 作为模型网关：路由、协议、调用日志、计费、预算限流都由它负责。</li>
+          <li><b>模型管理平台</b>做三件事：登记模型（公有 / 私有）、给私有模型授权（用户中心数据权限）、管理 API Key。不转发请求、不记访问日志，没有平台用途。</li>
+          <li><b>API Key 两种类型</b>：用户 Key 由本人申请；客户端 Key 由应用调接口创建（Atlas 新建智能体时，客户端类型 Agent、客户端编码 = 智能体 id），管理员只负责给它分配模型。</li>
+          <li><b>Atlas</b> 按客户端类型 + 客户端编码向平台获取 Key 和可用模型，带着 Key 直接调用 LiteLLM。见左侧「Atlas 编辑器」示意页。</li>
+        </ul>
+      </div></div>
+
+    <div class="card mb16"><div class="card-h"><h3>角色与规则</h3></div>
+      <table class="table">
+        <thead><tr><th>操作</th><th>谁能做</th><th>判断依据 / 说明</th></tr></thead>
+        <tbody>
+          <tr><td>查看模型</td><td>管理员看全部；其他人看公有模型和授权给本人或所在部门的私有模型</td><td>公有不判权；私有按数据权限（数据编码 <code>Model</code>）≥ 使用</td></tr>
+          <tr><td>登记、编辑、删除模型，纳入平台，设公有 / 私有</td><td>管理员</td><td>用户中心角色（操作码 <code>model:manage</code>）</td></tr>
+          <tr><td>给私有模型授权（用户、部门，部门可含下级）</td><td>管理员</td><td>管理员有「全部模型 · Owner」（数据编码级授权）；公有模型没有授权</td></tr>
+          <tr><td>申请用户 Key、分配模型、重置、停用、删除</td><td>每个人，只能为本人；一人一把</td><td>模型从「公有 + 授权给本人或所在部门的私有」里逐个选；私有授权撤销后随之失效（演示：李工的 Key 里 claude-sonnet-5 显示删除线）</td></tr>
+          <tr><td>创建、删除客户端 Key</td><td>接入的应用调接口</td><td>Atlas 新建 / 删除智能体时；同一客户端类型 + 编码只有一把；创建后「待分配模型」</td></tr>
+          <tr><td>给客户端 Key 分配模型、重置、停用</td><td>管理员</td><td>用户中心角色（同上）；可分配全部已登记模型，公有私有都行</td></tr>
+          <tr><td>Atlas 编辑智能体时的模型列表</td><td colspan="2">按客户端类型 Agent + 智能体 id 向平台获取：它的客户端 Key 分配的、仍可调用的模型。待分配、已停用时为空，智能体不能运行。与智能体的权限类型无关。</td></tr>
+        </tbody>
+      </table></div>
+
+    <div class="card mb16"><div class="card-h"><h3>各方保存什么</h3></div>
+      <table class="table">
+        <thead><tr><th></th><th>模型管理平台</th><th>LiteLLM</th><th>用户中心</th></tr></thead>
+        <tbody>
+          <tr><td class="nowrap">模型</td><td>显示名称、供应商、模型名、可见性（公有 / 私有）、描述、LiteLLM model id、登记人与时间</td><td>模型名、API Base、供应商 API Key（加密）、上下文窗口、最大输出、价格</td><td>数据对象（编码 <code>Model</code>）与私有模型的授权</td></tr>
+          <tr><td class="nowrap">Key</td><td>类型（用户 / 客户端）；用户 Key 记用户 uid，客户端 Key 记客户端类型、客户端编码、名称；分配的模型、状态、LiteLLM 中的 Key 标识、Key 密文（供应用获取）</td><td>Key 哈希、可用模型列表、停用状态、花费、预算与限流</td><td>—</td></tr>
+          <tr><td class="nowrap">日志与用量</td><td>不保存</td><td>调用日志、花费，按 Key / 用户统计</td><td>—</td></tr>
+        </tbody>
+      </table></div>
+
+    <div class="card mb16"><div class="card-h"><h3>接口</h3></div>
+      <table class="table">
+        <thead><tr><th>场景</th><th>接口</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td>创建客户端 Key</td><td class="mono nowrap">平台 POST /open/v1/client-keys</td><td>Atlas 新建智能体时调用：client_type、client_code、client_name；按类型 + 编码幂等；返回「待分配模型」</td></tr>
+          <tr><td>获取客户端 Key</td><td class="mono nowrap">平台 GET /open/v1/client-keys?client_type=&amp;client_code=</td><td>返回状态、Key、可用模型；编辑器用模型列表，运行时用 Key；内网身份</td></tr>
+          <tr><td>改名</td><td class="mono nowrap">平台 PATCH /open/v1/client-keys</td><td>智能体改名时同步 client_name（只影响展示）</td></tr>
+          <tr><td>删除客户端 Key</td><td class="mono nowrap">平台 DELETE /open/v1/client-keys?client_type=&amp;client_code=</td><td>Atlas 删除智能体时调用；同时删 LiteLLM 里的 Key</td></tr>
+          <tr><td>模型列表</td><td class="mono nowrap">LiteLLM GET /model/info</td><td>与平台记录按 model id 合并；普通用户再按公有 / 授权过滤</td></tr>
+          <tr><td>测试连接</td><td class="mono nowrap">LiteLLM POST /health/test_connection</td><td>登记前用填写的参数试调一次</td></tr>
+          <tr><td>登记模型</td><td class="mono nowrap">LiteLLM POST /model/new</td><td>先登记 LiteLLM，再写平台记录、在用户中心登记数据对象（私有的再授权）；后两步失败就删掉刚建的部署</td></tr>
+          <tr><td>编辑模型</td><td class="mono nowrap">LiteLLM POST /model/update</td><td>API Key 留空不修改；模型名不能改；改成私有时从没授权的人的用户 Key 里去掉</td></tr>
+          <tr><td>授权（私有模型）</td><td class="nowrap">用户中心数据权限接口</td><td>写入 / 删除授权；撤销后从受影响的用户 Key 里去掉，调 LiteLLM <code>/key/update</code></td></tr>
+          <tr><td>删除模型</td><td class="mono nowrap">LiteLLM POST /model/delete</td><td>同时删用户中心数据对象，从所有 Key 里去掉它</td></tr>
+          <tr><td>申请用户 Key</td><td class="mono nowrap">LiteLLM POST /key/generate</td><td>models 传勾选的模型，带 user_id</td></tr>
+          <tr><td>首次给客户端 Key 分配模型</td><td class="mono nowrap">LiteLLM POST /key/generate</td><td>这时才在 LiteLLM 生成 Key（空列表在 LiteLLM 里表示全部模型，所以待分配时不生成）；key_alias = 类型:编码</td></tr>
+          <tr><td>改分配的模型</td><td class="mono nowrap">LiteLLM POST /key/update</td><td></td></tr>
+          <tr><td>重置</td><td class="mono nowrap">/key/generate + /key/delete</td><td>LiteLLM 的 regenerate 接口在开源版可能不可用，按实际部署的版本再定</td></tr>
+          <tr><td>停用、启用</td><td class="mono nowrap">LiteLLM /key/block · /key/unblock</td><td></td></tr>
+        </tbody>
+      </table></div>
+
+    <div class="card"><div class="card-h"><h3>原型里的取舍（待确认）</h3></div>
+      <div class="card-b"><ol>
+        <li><b>公有只表示「不用授权、谁都能选」，不会自动进 Key。</b>用户 Key、客户端 Key 都要逐个勾；新登记的公有模型不会出现在已有的 Key 里。</li>
+        <li><b>客户端 Key 创建后「待分配模型」，这时 Atlas 编辑器没有可选模型、智能体不能运行。</b>每个新智能体都要等管理员分配一次。备选：创建时默认分配全部公有模型。</li>
+        <li><b>客户端 Key 可以分配私有模型，不看智能体使用者的授权。</b>后果是没被授权某私有模型的人，可以通过智能体间接用到它。</li>
+        <li><b>模型 Key 跟智能体走，与权限类型无关。</b>私人助理（以人为权限）的花费也记在智能体上；现有 Atlas 里以人为权限按使用者列模型的逻辑要改成按客户端 Key 取。</li>
+        <li><b>客户端名称是我加的</b>（只用于展示，Atlas 创建时传智能体名称、改名时同步），否则列表里只有 id 认不出来。客户端类型本期有 Agent，知识库按同样方式接入（KnowledgeBase）。</li>
+        <li><b>管理员可以在页面上新建、删除客户端 Key：</b>新建用于平台服务这类事先配好的 Key；智能体、知识库的 Key 平常由应用自动创建。</li>
+        <li><b>没有 Owner 的系统调用（会话标题、记忆整理等）</b>也可以作为一种客户端类型接入（如 Service），部署时调接口创建。</li>
+        <li><b>私有授权撤销、模型删除、公有改私有时，</b>平台把相关模型从 Key 里去掉再同步 LiteLLM；去掉后为空就在 LiteLLM 停用。员工调部门也会让授权变化，需要用户中心通知或定期对账。</li>
+        <li><b>模型名就是调用名，</b>同一个模型名不能登记两次；<b>平台不区分对话、嵌入、重排。</b></li>
+        <li><b>每把 Key 平台加密保存一份。</b>用户 Key 只在申请、重置时显示一次；客户端 Key 不在页面显示，应用经接口获取。</li>
+      </ol></div></div>
+  </div>`;
+}
+
+/* =====================================================================
+ * 骨架
+ * ===================================================================== */
+const ICONS = {
+  models: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 2.8l8.5 4.8v8.8L12 21.2l-8.5-4.8V7.6z"/><path d="M12 21.2V12m8.5-4.4L12 12 3.5 7.6"/></svg>',
+  keys: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="8" cy="15.5" r="4.2"/><path d="M11 12.5 20 3.5M16.5 7l3 3M14 9.5l2 2"/></svg>',
+  atlas: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M4 20h4L19.5 8.5l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></svg>',
+  about: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.6v.2"/></svg>',
+};
+const NAV = [
+  { path: '/models', label: '模型', icon: 'models' },
+  { path: '/keys', label: 'API Key', icon: 'keys' },
+  { path: '/about', label: '原型说明', icon: 'about' },
+  { path: '/atlas', label: 'Atlas 编辑器', icon: 'atlas', group: '接入方示意' },
+];
+
+function renderShell(r) {
+  const cur = NAV.find(n => n.path === r) || NAV[0];
+  $('#nav').innerHTML = NAV.map(n => `${n.group ? `<div class="nav-group">${n.group}</div>` : ''}<a class="nav-item ${n === cur ? 'active' : ''}" href="#${n.path}">${ICONS[n.icon]}<span>${n.label}</span></a>`).join('');
+  const u = USERS[me];
+  $('#sidebar-foot').innerHTML = `<div class="me">${avatar(me)}<div><strong>${u.name}</strong><small>${deptOf(u.dept).name} · ${u.admin ? '管理员' : '普通用户'}</small></div></div>`;
+  $('#topbar').innerHTML = `
+    <div class="crumbs"><span>模型管理</span><span class="sep">/</span><span class="cur">${cur.label}</span></div>
+    <div class="grow"></div>
+    <label class="row small muted">演示身份
+      <select class="select" id="who">${Object.entries(USERS).filter(([, x]) => x.demo).map(([id, x]) => `<option value="${id}" ${id === me ? 'selected' : ''}>${x.name}（${x.admin ? '管理员' : deptOf(x.dept).name}）</option>`).join('')}</select>
+    </label>`;
+  $('#who').onchange = e => { me = e.target.value; closeModal(); render(); toast(`已切换为 ${USERS[me].name}（${USERS[me].admin ? '管理员' : '普通用户'}）`); };
+}
+
+function render() {
+  const r = route();
+  renderShell(r);
+  ({ '/keys': renderKeys, '/about': renderAbout, '/atlas': renderAtlas }[r] || renderModels)();
+}
+window.addEventListener('hashchange', () => { closeModal(); render(); });
+render();
+</script>
+</body>
+</html>

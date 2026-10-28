@@ -8,6 +8,7 @@
 ★ 检索范围钉死在智能体绑定的知识库上，不进工具参数 —— 与记忆工具同一条纪律：
   一旦库 id 可由模型指定，提示词注入就能读到未绑定的库。
 ★ 检索按谁判：请求头 X-Auth-Uid（run 执行时 = 这一轮的 auth-uid，内网身份传递 §8）。
+  库级、文档级权限都由知识库按它判：绑定不是授权，读不到的库跳过（Retrieved.skipped）。
 ★ MCP 令牌：HMAC(knowledge_mcp_secret, {库 id, 会话, u: auth-uid, o: 发起人})。这是给会话 Pod
   （不可信代码）的能力凭据，内网去令牌后仍保留（§5.3）。不设过期 —— ACP 会话只在 open 时
   下发一次 MCP，会话可能挂起很久再恢复（Atlas 不设到点结束的超时）；令牌只授予「读这几个
@@ -21,6 +22,7 @@ import hashlib
 import hmac
 import json
 import logging
+from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID
 
@@ -32,18 +34,21 @@ from pydantic import BaseModel, Field
 
 from ..domain.spec import KnowledgeSpec
 from ..errors import CapabilityUnavailable
-from ..outbound import current_identity, outbound_headers
+from ..outbound import CallIdentity, current_identity, outbound_headers, use_identity
 from ..telemetry import tracer
 
 __all__ = [
     "KNOWLEDGE_SEARCH_TOOL",
     "KnowledgeClient",
     "KnowledgeUnavailable",
+    "Retrieved",
     "format_context",
     "make_knowledge_client",
     "make_knowledge_tool",
     "mcp_server_entry",
+    "readable_as",
     "sign_mcp_token",
+    "skipped_message",
 ]
 
 logger = logging.getLogger(__name__)
@@ -56,6 +61,13 @@ KNOWLEDGE_TOKEN_HEADER = "X-Knowledge-Token"
 
 class KnowledgeUnavailable(CapabilityUnavailable):
     """绑定了知识库，但知识库服务未接入或不可用 —— 明确失败，不静默少装能力（§13.2）。"""
+
+
+@dataclass(frozen=True)
+class Retrieved:
+    records: list[dict[str, Any]]
+    #: 这一轮的权限主体读不到（或已删除）、被跳过的库 id
+    skipped: list[str] = field(default_factory=list)
 
 
 class KnowledgeClient:
@@ -103,7 +115,7 @@ class KnowledgeClient:
         *,
         source: str,
         source_ref: str | None,
-    ) -> list[dict[str, Any]]:
+    ) -> Retrieved:
         with tracer().start_as_current_span(
             "atlas.knowledge.retrieve", kind=SpanKind.CLIENT
         ) as span:
@@ -120,11 +132,14 @@ class KnowledgeClient:
                 },
             )
             records = list(body.get("records") or [])
+            skipped = [str(d) for d in body.get("skipped") or []]
             span.set_attribute("atlas.knowledge.results", len(records))
+            if skipped:
+                span.set_attribute("atlas.knowledge.skipped", skipped)
             # 知识库的检索过程记录：拿它去「召回测试 → 最近检索」看漏斗
             if rid := body.get("retrieval_id"):
                 span.set_attribute("atlas.knowledge.retrieval_id", str(rid))
-        return records
+        return Retrieved(records, skipped)
 
     async def readable(self, dataset_ids: list[str] | None = None) -> list[dict[str, Any]]:
         """本次调用的 auth-uid 能挂哪些库（用户中心数据权限 AtlasKnowledgeBase ≥ READ）。"""
@@ -140,6 +155,31 @@ def make_knowledge_client(settings: Any) -> KnowledgeClient | None:
         settings.knowledge_mcp_secret.get_secret_value() if settings.knowledge_mcp_secret else ""
     )
     return KnowledgeClient(url, secret, timeout_s=settings.knowledge_timeout_s)
+
+
+async def readable_as(
+    settings: Any, auth_uid: UUID, dataset_ids: list[str] | None = None
+) -> list[dict[str, Any]] | None:
+    """按 auth_uid（权限主体）的身份问知识库「能读哪些库」：编辑器列可选的库、保存时校验、
+    身份页签都用它（运行时由知识库按 X-Auth-Uid 自己判）。
+
+    没接知识库 → None；知识库不可用抛 KnowledgeUnavailable。dataset_ids 为 None = 全部能读的。
+    """
+    client = make_knowledge_client(settings)
+    if client is None:
+        return None
+    saved = current_identity()
+    use_identity(
+        CallIdentity(
+            uid=saved.uid if saved else auth_uid,
+            auth_uid=auth_uid,
+            tenant_id=saved.tenant_id if saved else None,
+        )
+    )
+    try:
+        return await client.readable(dataset_ids)
+    finally:
+        use_identity(saved)
 
 
 def require_client(settings: Any) -> KnowledgeClient:
@@ -164,12 +204,18 @@ def _record_text(i: int, rec: dict[str, Any]) -> str:
     return f"{title}\n{str(rec.get('content') or '').strip()}"
 
 
-def format_records(query: str, records: list[dict[str, Any]]) -> str:
-    """工具结果。★ 空结果要明说，否则模型会把「没查到」当成工具坏了。"""
+def format_records(query: str, records: list[dict[str, Any]], skipped: int = 0) -> str:
+    """工具结果。★ 空结果要明说，否则模型会把「没查到」当成工具坏了；跳过的库也要说。"""
+    note = f"\n\n（另有 {skipped} 个知识库没有访问权限，已跳过。）" if skipped else ""
     if not records:
-        return f"知识库里没有找到与「{query}」相关的内容。"
+        return f"知识库里没有找到与「{query}」相关的内容。{note}"
     body = "\n\n".join(_record_text(i, r) for i, r in enumerate(records, 1))
-    return f"与「{query}」相关的知识库内容（{len(records)} 条，按相关度排序）：\n\n{body}"
+    return f"与「{query}」相关的知识库内容（{len(records)} 条，按相关度排序）：\n\n{body}{note}"
+
+
+def skipped_message(count: int, *, acts_as_agent: bool) -> str:
+    who = "这个 Agent 的数字员工" if acts_as_agent else "你"
+    return f"{count} 个已绑定的知识库{who}没有访问权限，本轮未检索：请库的所有者共享给{who}"
 
 
 def format_context(question: Any, records: list[dict[str, Any]]) -> Any:
@@ -215,11 +261,11 @@ def make_knowledge_tool(
 
     async def knowledge_search(query: str) -> str:
         try:
-            records = await client.retrieve(spec, query, source="agent", source_ref=source_ref)
+            got = await client.retrieve(spec, query, source="agent", source_ref=source_ref)
         except KnowledgeUnavailable as exc:
             logger.warning("知识库检索失败：%s", exc)
             return f"知识库暂时不可用（{exc}），这次回答无法引用知识库。"
-        return format_records(query, records)
+        return format_records(query, got.records, len(got.skipped))
 
     scope = f"（可查的知识库：{'、'.join(names)}）" if names else ""
     return StructuredTool.from_function(

@@ -167,6 +167,25 @@ class RunRepository:
         rows = list((await self._session.execute(stmt)).scalars())
         return list(reversed(rows))
 
+    async def user_inputs(self, thread_id: UUID, *, limit: int = 100) -> list[Message]:
+        """会话里用户说的话（不含工具结果），按时间正序，最多取最近 limit 条。
+
+        自动模式的判断器用（kernel/middleware/auto_judge.py）。★ 不看 summary_upto：
+        压缩过的早期消息也要 —— 判断器要知道用户最初要求的是什么。
+        """
+        stmt = (
+            select(Message)
+            .where(
+                Message.thread_id == thread_id,
+                Message.role == "user",
+                Message.kind == KIND_CHAT,
+            )
+            .order_by(Message.created_at.desc())
+            .limit(limit)
+        )
+        rows = list((await self._session.execute(stmt)).scalars())
+        return list(reversed(rows))
+
     async def archived_events(self, run_id: UUID, *, after_seq: int) -> list[RunEvent]:
         stmt = (
             select(RunEvent)

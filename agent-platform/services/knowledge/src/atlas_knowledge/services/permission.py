@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from uuid import UUID
 
 from sqlalchemy import ColumnElement, false, select, true
@@ -28,6 +29,7 @@ __all__ = [
     "Visibility",
     "dataset_level",
     "load_dataset",
+    "readable_ids",
     "visibility",
     "visible_clause",
 ]
@@ -37,6 +39,33 @@ async def dataset_level(perms: DataPermissions, ds: Dataset, p: Principal) -> st
     # 没有登记到用户中心的库（存量服务账号的库，sync-uc 之前）：只有「全部知识库」授权能覆盖它
     # （check 对未登记的返回编码级）
     return await perms.level(p.auth_uid, str(ds.uuid))
+
+
+async def readable_ids(
+    perms: DataPermissions, subject: str | None, dataset_ids: list[UUID]
+) -> set[UUID]:
+    """内部调用（智能体运行时、会话 Pod 里的 MCP）：subject 能读（≥ READ）哪些库。
+
+    ★ 绑定不是授权：每次都按这一轮的 auth-uid 问用户中心（有效级别含「全部知识库」授权），
+      撤权立即生效。逐库并发问 —— 一次最多绑 20 个库。
+    ★ 没有主体一个都读不到；用户中心里没有这个人（如数字员工已删除）按 NONE。
+      用户中心不可用照常抛 Unavailable：不放行。
+    """
+    if not subject or not dataset_ids:
+        return set()
+
+    async def level(dataset_id: UUID) -> str:
+        try:
+            return await perms.level(subject, str(dataset_id))
+        except NotFound:
+            return "NONE"
+
+    levels = await asyncio.gather(*(level(d) for d in dataset_ids))
+    return {
+        d
+        for d, lv in zip(dataset_ids, levels, strict=True)
+        if LEVEL_RANK.get(lv, 0) >= LEVEL_RANK["READ"]
+    }
 
 
 class Visibility:

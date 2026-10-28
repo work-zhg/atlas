@@ -91,7 +91,7 @@ for sts in postgres redis minio qdrant; do
 done
 kubectl -n atlas-infra wait --for=condition=complete job/minio-init --timeout=300s
 # 首次部署之后才加的库：上面的 init SQL 只在数据目录为空时执行，已部署的服务器在这里补建（幂等）
-for db in atlas_memory atlas_mcpgateway atlas_modelgateway; do
+for db in atlas_memory atlas_mcpgateway atlas_modelgateway atlas_litellm; do
   if ! kubectl -n atlas-infra exec statefulset/postgres -- psql -U atlas -d atlas -tAc \
        "SELECT 1 FROM pg_database WHERE datname='${db}'" | grep -q 1; then
     kubectl -n atlas-infra exec statefulset/postgres -- psql -U atlas -d atlas -c "CREATE DATABASE ${db}"
@@ -160,4 +160,5 @@ echo "Atlas     → http://${PUBLIC_HOST}/atlas"
 echo "用户中心  → http://${PUBLIC_HOST}/uc"
 echo "TeamFlow  → http://${PUBLIC_HOST}/teamflow"
 echo "Langfuse  → http://langfuse.${SERVER_IP}.nip.io（admin@atlas.local / Secret atlas-infra/langfuse 的 admin_password）"
+echo "Higress   → http://higress.${SERVER_IP}.nip.io（控制台；账号见 deploy/local/higress/setup.py）"
 echo "Jaeger    → kubectl -n atlas-infra port-forward svc/jaeger 16686"

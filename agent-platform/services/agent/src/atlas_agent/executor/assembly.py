@@ -23,17 +23,23 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 from uuid import UUID
 
 import redis.asyncio as aioredis
+from atlas_engine.kernel.middleware.auto_judge import AutoJudge, Instruction, JudgeSetup
 from atlas_engine.kernel.middleware.compaction import CompactionMiddleware
 from langchain_core.messages import BaseMessage
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from atlas_agent.domain.spec import AgentSpec, resolve_summarizer_model
+from atlas_agent.domain.spec import AgentSpec, ModelSpec, resolve_summarizer_model
 from atlas_agent.domain.tool_registry import BASH_TOOL, MEMORY_TOOL
 from atlas_agent.domain.translator import extract_text
 from atlas_agent.errors import CapabilityUnavailable
 from atlas_agent.executor.context import load_instructions
 from atlas_agent.executor.runner import Titler
-from atlas_agent.providers.knowledge import format_context, make_knowledge_tool, require_client
+from atlas_agent.providers.knowledge import (
+    format_context,
+    make_knowledge_tool,
+    require_client,
+    skipped_message,
+)
 from atlas_agent.providers.llm.factory import build_chat_model
 from atlas_agent.providers.opensandbox import SandboxProvisioner
 from atlas_agent.providers.sandbox import PodSandbox
@@ -50,14 +56,15 @@ from ..providers.filesystem.skill_copy import (
     seed_session_skills,
     skill_refs_for,
 )
-from ..providers.llm.modelgateway import (
-    CatalogModel,
-    ModelCatalog,
+from ..providers.llm.model_platform import (
     ModelEndpoint,
+    PlatformModel,
     admit_models,
+    agent_key,
     direct_endpoint,
-    subject_endpoint,
-    uses_model_gateway,
+    key_endpoint,
+    uses_model_platform,
+    with_platform_model,
 )
 from ..providers.mcp import (
     MCP_PREFIX,
@@ -71,8 +78,10 @@ from ..providers.mcp import (
 )
 from ..providers.mcp.gateway import forget_access, servers_in
 from ..repositories.model_catalog import ModelCatalogRepository
+from ..repositories.run import RunRepository
 from ..services.approval import RedisApprovalGate
 from ..services.compaction import ThreadSummarizer, make_failure_hook, make_persist_hook
+from ..services.service_models import resolve_service_model, service_model_configured
 from ..services.title import TitleService
 from ..stream.relay import EventRelay
 from .build import build_graph
@@ -141,15 +150,16 @@ class SandboxNotEnabled(CapabilityUnavailable):
 class RunModels:
     """这一轮的模型从哪来（with_models 解析好）：主模型、压缩模型都用这个端点。
 
-    endpoint  经模型网关时带这一轮权限主体的 Key；没接时直连 litellm（过渡期）
-    catalog   模型目录（经模型网关时）；None = 没接，能力与上限照旧读 model_catalog 表
+    endpoint  经模型管理平台时 = LiteLLM + 智能体的客户端 Key；没接时直连 litellm
+    models    经平台时：Key 的可用模型（上下文窗口、最大输出来自它）；
+              None = 没接，上限照旧读 model_catalog 表
     """
 
     endpoint: ModelEndpoint
-    catalog: ModelCatalog | None = None
+    models: Mapping[str, PlatformModel] | None = None
 
-    def entry(self, model: str) -> CatalogModel | None:
-        return self.catalog.get(model) if self.catalog is not None else None
+    def entry(self, model: str) -> PlatformModel | None:
+        return self.models.get(model) if self.models is not None else None
 
 
 class MemoryNotConfigured(CapabilityUnavailable):
@@ -371,6 +381,7 @@ class HookAssembly:
             filesystem=workspace,
             sandbox=sandbox,
             approvals=approvals,
+            judge=self._auto_judge(prepared),
             compactor=await self._compactor(
                 prepared,
                 workspace=workspace,
@@ -385,67 +396,56 @@ class HookAssembly:
             spawner=self._subagent_spawner(prepared, run_id=run_id, relay=relay),
             prompt_cache_ttl=await self._prompt_cache_ttl(prepared),
         )
-        return graph, self._titler(prepared, redis)
+        return graph, self._titler(prepared)
 
     def _models(self, prepared: PreparedRun) -> RunModels:
         return prepared.models or RunModels(direct_endpoint(self._settings))
 
-    async def with_models(
-        self,
-        prepared: PreparedRun,
-        *,
-        run_id: UUID,
-        redis: aioredis.Redis,
-        notices: list[tuple[EventType, dict[str, Any]]] | None = None,
-    ) -> PreparedRun:
-        """这一轮用到的模型能不能用、怎么连（doc/model-design.html §7.1）。
+    async def with_models(self, prepared: PreparedRun) -> PreparedRun:
+        """这一轮用到的模型能不能用、怎么连（模型管理方案设计 7.3）。
 
-        经模型网关时：按这一轮的权限主体问网关「能用哪些模型、Key 是什么」，检查主模型和压缩模型
-        （授权、停用、下线、是否在目录里），用不了就本轮不开始（ModelNotAllowed）；弃用的照常运行、
-        对话里提示。模型规格换上目录给出的能力和协议（ModelSpec.caps / provider），之后的参数
-        翻译、保存时的校验都按目录来。
-        ★ SubAgent 的模型只补上能力（校验参数用）：它们在自己的 Run 开始时按自己的主体检查。
+        经模型管理平台时：取这个智能体的客户端 Key（每轮都取最新的；没有就补建，「待分配」），
+        检查主模型和压缩模型都在可用模型里，用不了就本轮不开始（ModelNotAllowed）。
+        端点 = LiteLLM + 这把 Key；调用一律走 Anthropic Messages（LiteLLM 转换）。
+        ★ 与权限类型无关：同一个智能体对所有使用者能用的模型相同。
+        ★ SubAgent 的模型只换调用方式：它们在自己的 Run 开始时检查（内联的沿用同一个智能体的 Key）。
         """
         s = self._settings
-        if not uses_model_gateway(s):
+        if not uses_model_platform(s):
             return dataclasses.replace(prepared, models=RunModels(direct_endpoint(s)))
         spec = prepared.spec
         needed = [spec.model.model]
         if spec.compaction.enabled:
             cfg = spec.compaction
             needed.append(resolve_summarizer_model(cfg.summarizer_model, spec.model.model))
-        ident = current_identity()
-        catalog, access = await admit_models(
-            s,
-            redis,
-            needed,
-            subject=ident.auth_uid if ident else prepared.thread.created_by,
-            acts_as_agent=ident is not None and ident.auth_uid != ident.uid,
-            notices=notices,
-        )
-        assert access.key is not None
+        key = await agent_key(s, prepared.thread.agent_id, spec.name)
+        admit_models(key, needed)
+        assert key.key is not None
         spec = dataclasses.replace(
             spec,
-            model=_with_catalog(spec.model, catalog.get(spec.model.model)),
+            model=with_platform_model(spec.model),
             subagents=tuple(
-                dataclasses.replace(
-                    sub, model=_with_catalog(sub.model, catalog.get(sub.model.model))
-                )
+                dataclasses.replace(sub, model=with_platform_model(sub.model))
                 for sub in spec.subagents
             ),
         )
-        endpoint = subject_endpoint(
-            s, access.key, agent_id=str(prepared.thread.agent_id), run_id=str(run_id)
-        )
-        return dataclasses.replace(prepared, spec=spec, models=RunModels(endpoint, catalog))
+        models = RunModels(key_endpoint(s, key.key), {m.name: m for m in key.models})
+        return dataclasses.replace(prepared, spec=spec, models=models)
 
-    async def with_knowledge(self, prepared: PreparedRun, *, run_id: UUID) -> PreparedRun:
+    async def with_knowledge(
+        self,
+        prepared: PreparedRun,
+        *,
+        run_id: UUID,
+        notices: list[tuple[EventType, dict[str, Any]]] | None = None,
+    ) -> PreparedRun:
         """auto 模式：先用本轮提问检索，参考资料并入**这一轮**的输入（同 Dify 对话应用的上下文）。
 
         ★ 只改模型这一轮看到的输入：用户消息早已按原文落库，Transcript 也只收模型与工具的输出，
           所以历史里没有这段资料 —— 下一轮按下一轮的提问重新检索。
         ★ 续跑段（resume）不再检索：本轮输入已在 history 里，没有可并入的位置。
         ★ 检索失败让这一轮明确失败（KnowledgeUnavailable），不静默当作「没查到」（§13.2）。
+        ★ 权限主体读不到的库由知识库跳过：其余照常检索，经 notices 告知用户（同 MCP）。
         """
         knowledge = prepared.spec.knowledge
         if not knowledge.enabled or knowledge.mode != "auto" or prepared.resume:
@@ -453,14 +453,29 @@ class HookAssembly:
         query = extract_text(prepared.input_content).strip()
         if not query:
             return prepared
-        records = await require_client(self._settings).retrieve(
+        got = await require_client(self._settings).retrieve(
             knowledge,
             query[:2000],
             source="agent",
             source_ref=f"thread:{prepared.thread_id}/run:{run_id}",
         )
+        if got.skipped and notices is not None:
+            ident = current_identity()
+            notices.append(
+                (
+                    EventType.KNOWLEDGE_SKIPPED,
+                    {
+                        "dataset_ids": got.skipped,
+                        "subject": str(ident.auth_uid) if ident else None,
+                        "message": skipped_message(
+                            len(got.skipped),
+                            acts_as_agent=ident is not None and ident.auth_uid != ident.uid,
+                        ),
+                    },
+                )
+            )
         return dataclasses.replace(
-            prepared, input_content=format_context(prepared.input_content, records)
+            prepared, input_content=format_context(prepared.input_content, got.records)
         )
 
     async def _mcp_tool_list(
@@ -596,7 +611,7 @@ class HookAssembly:
 
     # ------------------------------------------------------------------ 各能力
 
-    def _titler(self, prepared: PreparedRun, redis: aioredis.Redis | None = None) -> Titler | None:
+    def _titler(self, prepared: PreparedRun) -> Titler | None:
         """仅当会话还没有标题时才返回生成器（§8.1）。
 
         返回 None 时 engine 直接跳过，不产出 thread.title_generated ——
@@ -607,12 +622,58 @@ class HookAssembly:
             return None
 
         question = extract_text(prepared.input_content)
-        service = TitleService(self._settings, self._build_model, redis)
+        service = TitleService(self._settings, self._build_model)
 
         async def titler(answer: str) -> dict[str, Any] | None:
             return await service.generate(question, answer)
 
         return titler
+
+    def _auto_judge(self, prepared: PreparedRun) -> AutoJudge | None:
+        """自动模式的判断器（kernel/middleware/auto_judge.py）。智能体不允许自动模式时不装。
+
+        ★ 模型和用户消息在第一次判断时才取：多数段落用不到判断器，不该为它多一次平台请求。
+          模型按平台服务模型配置（service_model「自动模式判断器」）取 Key；没接平台时用部署配置里的
+          approval_judge_model（空 = summarizer_model）。
+        ★ 没配置 → None（PermissionMiddleware 按没有判断器处理）；
+          配了但现在用不了 → 抛错（退回请示）
+        """
+        if "auto" not in prepared.spec.approval.allowed_modes:
+            return None
+        settings = self._settings
+        build_model = self._build_model
+        sessionmaker = self._sessionmaker
+        thread = prepared.thread
+
+        async def setup() -> JudgeSetup | None:
+            found = await resolve_service_model(
+                settings,
+                "approval_judge",
+                legacy_model=settings.approval_judge_model or settings.summarizer_model,
+            )
+            if found is None:
+                if not await service_model_configured(settings, "approval_judge"):
+                    return None
+                raise CapabilityUnavailable("自动模式判断器的模型现在用不了（原因见日志）")
+            model = build_model(
+                ModelSpec(
+                    model=found.model,
+                    provider=found.provider,  # type: ignore[arg-type]
+                    max_output_tokens=2048,
+                ),
+                base_url=found.endpoint.base_url,
+                api_key=found.endpoint.api_key,
+                headers=found.endpoint.headers,
+            )
+            async with sessionmaker() as session:
+                instructions = await _judge_instructions(RunRepository(session), thread)
+                # 显式缓存标记只对 Anthropic 有用；DeepSeek 这类自己做前缀缓存
+                cache = found.provider == "anthropic" and await ModelCatalogRepository(
+                    session
+                ).supports_cache(found.model)
+            return JudgeSetup(model=model, instructions=instructions, cache=cache)
+
+        return AutoJudge(setup, timeout_s=settings.approval_judge_timeout_s)
 
     async def _prompt_cache_ttl(self, prepared: PreparedRun) -> Literal["5m", "1h"] | None:
         """开了缓存、且模型实测支持时才打 cache_control —— 编辑器里的开关就是这里生效。
@@ -622,9 +683,6 @@ class HookAssembly:
         """
         if not prepared.spec.model.prompt_cache:
             return None
-        caps = prepared.spec.model.caps
-        if caps is not None:  # 经模型网关：按目录
-            return self._settings.prompt_cache_ttl if caps.prompt_cache else None
         async with self._sessionmaker() as session:
             if not await ModelCatalogRepository(session).supports_cache(prepared.spec.model.model):
                 return None
@@ -647,15 +705,14 @@ class HookAssembly:
         if not cfg.enabled:
             return None
 
-        models = self._models(prepared)
-        entry = models.entry(spec.model.model)
-        if models.catalog is not None:  # 经模型网关：上限来自目录
-            limits = (
-                (entry.context_window, entry.max_output_tokens)
-                if entry is not None and entry.context_window and entry.max_output_tokens
-                else None
-            )
-        else:
+        # 经平台时上限来自 LiteLLM 里登记的规格；没登记、没接平台时读 model_catalog 表
+        entry = self._models(prepared).entry(spec.model.model)
+        limits = (
+            (entry.max_input_tokens, entry.max_output_tokens)
+            if entry is not None and entry.max_input_tokens and entry.max_output_tokens
+            else None
+        )
+        if limits is None:
             async with self._sessionmaker() as session:
                 limits = await ModelCatalogRepository(session).limits(spec.model.model)
         if limits is None:
@@ -699,25 +756,29 @@ class HookAssembly:
         )
 
     def _summarizer(self, prepared: PreparedRun) -> ThreadSummarizer:
-        """压缩用的摘要器：Agent 的推理，和主模型同一个端点（Run 开始时已检查过授权）。"""
+        """压缩用的摘要器：智能体的推理，和主模型同一个端点（Run 开始时已检查过）。"""
         spec = prepared.spec
         name = resolve_summarizer_model(spec.compaction.summarizer_model, spec.model.model)
-        models = self._models(prepared)
-        entry = models.entry(name)
         return ThreadSummarizer(
             self._settings,
             self._build_model,
             model=name,
-            endpoint=models.endpoint,
-            caps=entry.caps() if entry is not None else None,
-            provider=(entry.protocol() if entry is not None else None) or spec.model.provider,
+            endpoint=self._models(prepared).endpoint,
+            provider=spec.model.provider,
         )
 
 
-def _with_catalog(model: Any, entry: CatalogModel | None) -> Any:
-    """模型规格换上目录给出的能力与协议（目录里没有就原样）。"""
-    if entry is None:
-        return model
-    return dataclasses.replace(
-        model, caps=entry.caps(), provider=entry.protocol() or model.provider
-    )
+async def _judge_instructions(runs: RunRepository, thread: Thread) -> list[Instruction]:
+    """判断器眼里的「要求」：用户的消息；子智能体再加上自己会话里的任务书（上级智能体写的）。
+
+    ★ 子会话里 role=user 的消息是派活的智能体写的，不是用户说的 —— 用户的话取根会话的。
+    """
+    own = [extract_text(m.content) for m in await runs.user_inputs(thread.id)]
+    root = thread.root_thread_id or thread.parent_thread_id
+    if root is None:
+        return [Instruction("user", text) for text in own if text]
+    users = [extract_text(m.content) for m in await runs.user_inputs(root)]
+    return [
+        *(Instruction("user", text) for text in users if text),
+        *(Instruction("delegator", text) for text in own if text),
+    ]

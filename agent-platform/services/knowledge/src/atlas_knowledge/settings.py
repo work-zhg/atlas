@@ -111,16 +111,22 @@ class KnowledgeSettings(BaseSettings):
     #: 查询向量缓存秒数（同 Dify）
     query_embedding_ttl_s: int = 600
 
-    # ── 模型网关（doc/model-design.html §6.7）────────────────────────────
-    #: 配了就按平台用途调模型网关：入库增强 kb_enrich、查询理解 kb_query、远程嵌入 kb_embedding、
-    #: 远程重排 kb_rerank。模型由模型管理员在网关里按用途配置，这里不写死模型名，
-    #: 也不持有供应商 Key。
-    #: 空 = 照旧按下面的 llm_* / embedding_* / rerank_* 直连（过渡期）
-    model_gateway_url: str | None = Field(
-        default=None, validation_alias=_alias("ATLAS_KB_MODEL_GATEWAY_URL", "MODEL_GATEWAY_URL")
-    )
-    #: 平台用途的模型配置缓存多久（秒）
-    model_catalog_ttl_s: float = 60.0
+    # ── 模型管理平台（agent-platform/doc/design/model-design.html 第 9 章）───────
+    #: 配了就经平台：各用途用平台上事先建好的服务级客户端 Key（客户端类型:编码），
+    #: 带着它直连 LiteLLM。不持有供应商 Key。空 = 照旧按下面的 llm_* / embedding_* / rerank_* 直连
+    model_platform_url: str | None = None
+    #: LiteLLM 地址（经平台时模型调用连它）
+    model_litellm_url: str | None = None
+    #: 入库增强、查询理解用的客户端 Key（如 Service:knowledge-chat）与模型；
+    #: 查询理解的模型空 = 同入库增强
+    chat_client: str | None = None
+    enrich_model: str | None = None
+    query_model: str | None = None
+    #: 远程嵌入、重排用的客户端 Key：建库时可选的模型 = 这把 Key 的可用模型
+    embedding_client: str | None = None
+    rerank_client: str | None = None
+    #: 客户端 Key 的缓存时间（秒）：Key 被重置后最多滞后这么久（LiteLLM 回 401 时立即重取）
+    model_key_ttl_s: float = 60.0
 
     # ── LLM（上下文补全、表格摘要、查询理解；doc/knowledge-enterprise-design.html）──
     #: OpenAI 兼容的 chat/completions 地址（如 https://api.deepseek.com/v1）。空 = 不用 LLM，
@@ -147,6 +153,9 @@ class KnowledgeSettings(BaseSettings):
     #: 高质量索引的并行组数（同 Dify 的 10 组）
     embedding_parallel: int = 4
     embedding_batch: int = 32
+    #: 入库巡检间隔（秒）：API 进程定期把「停在入库中间状态、却没有任务持锁」的文档重新投递
+    #: （worker 被杀后的恢复，indexing/runner.py recover_stalled）。0 = 关
+    ingest_sweep_interval_s: float = 60.0
 
     # ── 遥测（与 atlas-server 同一套约定）───────────────────────────────
     #: 关闭时零副作用：不装 TracerProvider，埋点退化成官方保证的 no-op

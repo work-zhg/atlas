@@ -7,7 +7,7 @@ from fastapi import APIRouter
 
 from ...auth.authz import PrincipalDep
 from ...deps import AgentServiceDep, MetaServiceDep
-from ...schemas.meta import ModelListResponse, ToolListResponse
+from ...schemas.meta import KnowledgeListResponse, ModelListResponse, ToolListResponse
 from ...services.meta import McpSubject
 
 router = APIRouter(tags=["meta"])
@@ -19,17 +19,16 @@ async def list_models(
     principal: PrincipalDep,
     agents: AgentServiceDep,
     agent_id: UUID | None = None,
-    auth_subject: Literal["user", "agent"] | None = None,
 ) -> ModelListResponse:
-    """可选的模型。
+    """可选的模型。agent_id：编辑已有的智能体；新建时不给。
 
-    经模型网关时按这个 Agent 的权限主体列出（doc/model-design.html §6.4、§11.2），参数同 /tools：
-    以人为权限 = 当前用户自己的权限；以 Agent 为权限 = 它的数字员工的权限。
-    没接模型网关时：model_catalog ⋈ 网关 /v1/models 巡检结果，不分人。
+    经模型管理平台时按这个智能体的客户端 Key 列出（模型管理方案设计 7.2），与权限类型无关；
+    没接平台时：model_catalog ⋈ litellm /v1/models 巡检结果。
     """
-    return await service.list_models(
-        subject=await _subject(principal, agents, agent_id, auth_subject)
-    )
+    if agent_id is None:
+        return await service.list_models()
+    agent = await agents.get(agent_id, principal=principal)
+    return await service.list_models(agent_id=agent.id, agent_name=agent.name)
 
 
 async def _subject(
@@ -62,3 +61,18 @@ async def list_tools(
     return await service.list_tools(
         mcp_subject=await _subject(principal, agents, agent_id, auth_subject)
     )
+
+
+@router.get("/knowledge-bases", response_model=KnowledgeListResponse)
+async def list_knowledge_bases(
+    service: MetaServiceDep,
+    principal: PrincipalDep,
+    agents: AgentServiceDep,
+    agent_id: UUID | None = None,
+    auth_subject: Literal["user", "agent"] | None = None,
+) -> KnowledgeListResponse:
+    """编辑器里可选的知识库，按这个 Agent 的权限主体列出（参数同 /tools）：
+    以人为权限 = 当前用户能读的；以 Agent 为权限 = 它的数字员工能读的。
+    运行时知识库按同一个主体（X-Auth-Uid）判，读不到的库跳过。
+    """
+    return await service.list_knowledge(await _subject(principal, agents, agent_id, auth_subject))

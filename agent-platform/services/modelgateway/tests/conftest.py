@@ -1,9 +1,9 @@
-"""模型网关测试的夹具。
+"""模型管理平台测试的夹具。
 
 ★ 独立测试库 atlas_modelgateway_test，不碰开发库。
 ★ 用户中心是替身：数据权限用内存实现（FakePermissions），授权快照用 httpx.MockTransport。
-★ Higress 是替身（fake_llm.py），在后台线程里起 uvicorn；网关经真实的 HTTP 调它。
-★ 网关本身经 ASGITransport 跑在测试的 event loop 里（库连接绑定 event loop）。
+★ LiteLLM 是替身（FakeLiteLLM），经 httpx.MockTransport 在进程内应答，不起端口。
+★ 平台本身经 ASGITransport 跑在测试的 event loop 里（库连接绑定 event loop）。
 """
 
 from __future__ import annotations
@@ -15,74 +15,57 @@ from typing import Any
 
 import httpx
 import pytest
-from fake_llm import FakeLLM, serve_in_thread
-from modelgw_testkit import ADMIN, FakePermissions
+from modelgw_testkit import ADMIN, MASTER_KEY, FakeLiteLLM, FakePermissions
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 TEST_DB = "atlas_modelgateway_test"
 _ADMIN_URL = "postgresql+asyncpg://atlas:atlas@localhost:5433/atlas"
 TEST_URL = f"postgresql+asyncpg://atlas:atlas@localhost:5433/{TEST_DB}"
-_TABLES = (
-    "gw_model",
-    "gw_model_price",
-    "gw_model_probe",
-    "gw_purpose",
-    "gw_model_key",
-    "gw_model_call",
-    "gw_budget",
-    "gw_audit",
-)
-CREDENTIAL = "modelgw-test-credential"
-
-# 本机的服务不走代理：开着 HTTP(S)_PROXY 时，发往 127.0.0.1 的请求也可能被送进代理
-os.environ["NO_PROXY"] = os.environ["no_proxy"] = ",".join(
-    filter(None, [os.environ.get("NO_PROXY"), "127.0.0.1", "localhost", "gateway"])
-)
-
-_LLM = FakeLLM(credential=CREDENTIAL)
+_TABLES = ("gw_model", "gw_api_key", "gw_audit")
 
 
 @pytest.fixture(scope="session", autouse=True)
 def _environment() -> Iterator[None]:
     from atlas_modelgateway.settings import get_settings
 
-    with serve_in_thread(_LLM.app()) as higress_url:
-        overrides = {
-            "ATLAS_MODELGW_DATABASE_URL": TEST_URL,
-            "ATLAS_MODELGW_HIGRESS_BASE_URL": higress_url,
-            "ATLAS_MODELGW_GATEWAY_CREDENTIAL": CREDENTIAL,
-            "ATLAS_MODELGW_MAINTAINER_TICK_S": "0",
-            "ATLAS_MODELGW_UC_BASE_URL": "http://uc.invalid",
-            "ATLAS_MODELGW_PROBE_TIMEOUT_S": "10",
-        }
-        saved = {k: os.environ.get(k) for k in overrides}
-        os.environ.update(overrides)
+    overrides = {
+        "ATLAS_MODELGW_DATABASE_URL": TEST_URL,
+        "ATLAS_MODELGW_LITELLM_BASE_URL": "http://litellm.test",
+        "ATLAS_MODELGW_LITELLM_MASTER_KEY": MASTER_KEY,
+        "ATLAS_MODELGW_RECONCILE_INTERVAL_S": "0",
+        "ATLAS_MODELGW_UC_BASE_URL": "http://uc.invalid",
+        # 测试里每次都看最新的：授权改了立刻算
+        "ATLAS_MODELGW_PERM_CACHE_TTL_S": "0",
+        "ATLAS_MODELGW_LITELLM_MODELS_TTL_S": "0",
+    }
+    saved = {k: os.environ.get(k) for k in overrides}
+    os.environ.update(overrides)
+    get_settings.cache_clear()
+
+    async def _ensure() -> None:
+        engine = create_async_engine(_ADMIN_URL, isolation_level="AUTOCOMMIT")
+        async with engine.connect() as conn:
+            exists = await conn.scalar(
+                text("SELECT 1 FROM pg_database WHERE datname = :n"), {"n": TEST_DB}
+            )
+            if not exists:
+                await conn.execute(text(f"CREATE DATABASE {TEST_DB}"))
+        await engine.dispose()
+
+    asyncio.run(_ensure())
+    from atlas_modelgateway.__main__ import migrate
+
+    migrate()
+    try:
+        yield
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
         get_settings.cache_clear()
-
-        async def _ensure() -> None:
-            engine = create_async_engine(_ADMIN_URL, isolation_level="AUTOCOMMIT")
-            async with engine.connect() as conn:
-                exists = await conn.scalar(
-                    text("SELECT 1 FROM pg_database WHERE datname = :n"), {"n": TEST_DB}
-                )
-                if not exists:
-                    await conn.execute(text(f"CREATE DATABASE {TEST_DB}"))
-            await engine.dispose()
-
-        asyncio.run(_ensure())
-        from atlas_modelgateway.__main__ import migrate
-
-        migrate()
-        try:
-            yield
-        finally:
-            for k, v in saved.items():
-                if v is None:
-                    os.environ.pop(k, None)
-                else:
-                    os.environ[k] = v
-            get_settings.cache_clear()
 
 
 @pytest.fixture(autouse=True)
@@ -100,11 +83,8 @@ async def _clean_tables() -> AsyncIterator[None]:
 
 
 @pytest.fixture
-def llm() -> Iterator[FakeLLM]:
-    _LLM.models.clear()
-    _LLM.seen.clear()
-    yield _LLM
-    _LLM.models.clear()
+def litellm() -> FakeLiteLLM:
+    return FakeLiteLLM()
 
 
 @pytest.fixture
@@ -129,10 +109,10 @@ def _fake_authz(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-async def app(perms: FakePermissions) -> AsyncIterator[Any]:
+async def app(perms: FakePermissions, litellm: FakeLiteLLM) -> AsyncIterator[Any]:
     from atlas_modelgateway.api.app import create_app
 
-    application = create_app(perms=perms)
+    application = create_app(perms=perms, litellm_transport=litellm.transport())
     async with application.router.lifespan_context(application):
         yield application
 
@@ -140,6 +120,6 @@ async def app(perms: FakePermissions) -> AsyncIterator[Any]:
 @pytest.fixture
 async def client(app: Any) -> AsyncIterator[httpx.AsyncClient]:
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://gateway"
+        transport=httpx.ASGITransport(app=app), base_url="http://platform"
     ) as c:
         yield c

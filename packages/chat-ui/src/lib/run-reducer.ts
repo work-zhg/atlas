@@ -20,6 +20,7 @@ import {
   type FileWrittenData,
   type McpToolDriftData,
   type McpToolSkippedData,
+  type KnowledgeSkippedData,
   type SkillLoadedData,
   type SkillSkippedData,
   type MessageCompletedData,
@@ -148,7 +149,8 @@ export type Notice =
   | { seq: number; type: "skill.loaded"; data: SkillLoadedData }
   | { seq: number; type: "skill.skipped"; data: SkillSkippedData }
   | { seq: number; type: "mcp.tool_drift"; data: McpToolDriftData }
-  | { seq: number; type: "mcp.tool_skipped"; data: McpToolSkippedData };
+  | { seq: number; type: "mcp.tool_skipped"; data: McpToolSkippedData }
+  | { seq: number; type: "knowledge.skipped"; data: KnowledgeSkippedData };
 
 export interface CompactionMark {
   seq: number;
@@ -732,7 +734,8 @@ export function applyEvent(state: RunState, event: AnyTraceEvent): RunState {
     case EventType.SkillLoaded:
     case EventType.SkillSkipped:
     case EventType.McpToolDrift:
-    case EventType.McpToolSkipped: {
+    case EventType.McpToolSkipped:
+    case EventType.KnowledgeSkipped: {
       const notice = { seq: event.thread_seq, type: event.type, data: d } as unknown as Notice;
       return {
         ...base,

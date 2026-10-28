@@ -163,6 +163,15 @@ function NoticeRow({ notice }: { notice: Notice }) {
       </div>
     );
   }
+  if (notice.type === "knowledge.skipped") {
+    return (
+      <div className={styles.modeBadge}>
+        <Icon name="book" size={13} />
+        知识库 <Tag color="warning" style={{ marginInlineEnd: 0 }}>跳过 {notice.data.dataset_ids.length} 个</Tag>
+        <span className={styles.modeHint}>{notice.data.message}</span>
+      </div>
+    );
+  }
   if (notice.type === "mcp.tool_skipped") {
     return (
       <div className={styles.modeBadge}>

@@ -75,6 +75,12 @@ class Settings(BaseSettings):
     deferred_tools_min_count: int = 20
     deferred_tools_min_tokens: int = 10_000
     titling_timeout_s: float = 3.0
+    # ── 自动模式的判断器（kernel/middleware/auto_judge.py）──────────────
+    #: 判断用的快模型（没接模型管理平台时）。空 = summarizer_model。
+    #: 经平台时按平台服务模型配置（service_model「自动模式判断器」）取 Key 和模型
+    approval_judge_model: str | None = None
+    #: 一次判断（含复核）的超时。超时按判断器出错处理：退回请示用户，不替用户做决定
+    approval_judge_timeout_s: float = 60.0
 
     max_concurrent_runs_per_user: int = 3
     run_events_ttl_s: int = 86_400
@@ -324,18 +330,17 @@ class Settings(BaseSettings):
     #: （80 000 字符），否则会抢先裁掉本可完整转存到工作区的内容。
     mcp_max_result_chars: int = 100_000
 
-    # ── 模型网关（doc/model-design.html）──────────────────────────────
-    #: 模型网关地址。配了就只连它：Native 的模型调用、ACP Pod 里的 CLI、会话标题、记忆补记都经它，
-    #: 带这一轮权限主体的 Key（平台功能带应用身份 + 用途）；
-    #: 模型目录（能力、上限、生命周期）也从它读，
-    #: 不再用 model_catalog 表和代码里写死的规则。
-    #: 空 = 没接入（过渡期）：照旧直连 litellm_base_url、按 model_catalog 表判断能力
-    model_gateway_url: str | None = None
-    #: 模型目录的进程内缓存时间。另在 Redis 留一份：网关暂时不可用时编辑器、装配照样能读
-    model_catalog_ttl_s: float = 60.0
-    #: 「主体能用哪些模型 + 主体的 Key」的进程内缓存时间。★ 只在内存里，不进 Redis。
-    #: 取短：Key 被重置后，旧 Key 最多被用这么久（§7.3 ③）
-    model_access_ttl_s: float = 10.0
+    # ── 模型管理平台（agent-platform/doc/design/model-design.html）──────────
+    #: 模型管理平台地址。配了就经平台：每个智能体一把客户端 Key
+    #: （客户端类型 Agent、编码 = 智能体 id），编辑器、Run 开始、ACP 建会话时取 Key 和可用模型，
+    #: 带着 Key 直连 LiteLLM（model_litellm_url）；
+    #: 会话标题、记忆补记按库里的平台服务模型配置（service_model 表）取 Key。
+    #: 空 = 没接入：照旧直连 litellm_base_url、用 litellm_key
+    model_platform_url: str | None = None
+    #: LiteLLM 地址：经平台时模型调用连它。空 = 用 litellm_base_url
+    model_litellm_url: str | None = None
+    #: 调平台的超时
+    model_platform_timeout_s: float = 10.0
 
     # ── 配置服务（atlas-config）────────────────────────────────────────
     #: 技能目录的来源。空 = 未接入：

@@ -6,9 +6,10 @@
 
 ★ worker 只用 prefork 池。每个子进程一个事件循环（worker_process_init 里建），任务体用
   run_async(coro) 跑在这个循环上 —— 复用 api 侧的 async 仓储与客户端，不维护两套 DB 访问代码。
-★ acks_late + reject_on_worker_lost：worker 被杀时任务回到队列，由下一个 worker 续跑
+★ acks_late + reject_on_worker_lost：worker 子进程被杀时任务回到队列，由下一个 worker 续跑
   （runner 会从已完成的阶段之后继续）。visibility_timeout 设得很长：它到期会导致重复投递，
-  不能当超时用。
+  不能当超时用。整个 Pod 被杀时消息要等它到期才回来 —— 入库的恢复靠 API 的入库巡检
+  （indexing/runner.py recover_stalled），不靠这里。
 """
 
 from __future__ import annotations

@@ -4,8 +4,8 @@
 在打开 ACP 会话时签发：
     base64url({"d": [库 id], "t": 会话 id, "u": auth-uid, "o": 发起人})
     + "." + HMAC-SHA256(mcp_secret)
-能查哪些库只看令牌里的 d —— 与原生工具一样，库 id 不进工具参数。文档级权限按 u（按谁判），
-检索记录里记 o（谁在用；旧令牌没有 o 时取 u）。
+查哪些库看令牌里的 d —— 与原生工具一样，库 id 不进工具参数；库级、文档级权限都按 u（按谁判），
+u 读不到的库跳过并在结果里说明。检索记录里记 o（谁在用；旧令牌没有 o 时取 u）。
 
 ★ 会话 Pod 跑的是不可信代码：这里只认令牌，不认任何身份请求头（内网身份传递 §5.3）。
 
@@ -62,9 +62,10 @@ def verify_token(secret: str, token: str) -> dict[str, Any]:
     return data
 
 
-def _format(query: str, records: list[dict[str, Any]]) -> str:
+def _format(query: str, records: list[dict[str, Any]], skipped: int = 0) -> str:
+    note = f"\n\n（另有 {skipped} 个知识库没有访问权限，已跳过。）" if skipped else ""
     if not records:
-        return f"知识库里没有找到与「{query}」相关的内容。"
+        return f"知识库里没有找到与「{query}」相关的内容。{note}"
     parts = []
     for i, r in enumerate(records, 1):
         name = r.get("document_name") or "未命名文档"
@@ -73,8 +74,10 @@ def _format(query: str, records: list[dict[str, Any]]) -> str:
             f"[{i}] 《{name}》{' ' + where if where else ''}（知识库：{r.get('dataset_name', '')}）"
         )
         parts.append(f"{title}\n{str(r.get('content') or '').strip()}")
-    return f"与「{query}」相关的知识库内容（{len(records)} 条，按相关度排序）：\n\n" + "\n\n".join(
-        parts
+    return (
+        f"与「{query}」相关的知识库内容（{len(records)} 条，按相关度排序）：\n\n"
+        + "\n\n".join(parts)
+        + note
     )
 
 
@@ -132,6 +135,6 @@ def build_mcp(runtime_of: Any) -> MCPServer:
                 await session.commit()
             except KnowledgeError as exc:
                 return f"检索失败：{exc.message}"
-        return _format(query, [r.as_dict() for r in res.records])
+        return _format(query, [r.as_dict() for r in res.records], len(res.skipped))
 
     return mcp

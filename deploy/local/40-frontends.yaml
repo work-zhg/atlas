@@ -149,8 +149,8 @@ data:
         include /etc/nginx/conf.d/identity.inc;
         proxy_pass http://atlas-mcpgateway.atlas-system.svc.cluster.local:8070/;
       }
-      # 模型网关的管理端接口（doc/model-design.html §11）。/internal 给 Atlas、知识库，/v1 是数据面
-      # （Atlas、会话 Pod 带主体 Key 调，平台功能带应用 + 用途调），都只走集群内地址
+      # 模型管理平台的管理端接口（agent-platform/doc/design/model-design.html）。/internal 给 Atlas、
+      # 知识库取客户端 Key，只走集群内地址；/v1 已经没有了（模型调用直连 LiteLLM），保留 404 防误配
       location ^~ /model-gateway-api/internal/ { return 404; }
       location ^~ /model-gateway-api/v1/ { return 404; }
       location ^~ /model-gateway-api/ {

@@ -6,6 +6,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import { useGwMe } from "@/api/mcp-gateway";
+import { useMgMe } from "@/api/model-gateway";
 import { authHeaders } from "@/lib/http";
 import { can, useMe } from "@/lib/session";
 
@@ -25,6 +26,8 @@ interface NavItem {
    * MCP 管理员，或某个 MCP 服务的所有者
    */
   mcpGateway?: boolean;
+  /** 由模型管理平台决定显不显示：连得上就显示（人人都能申请自己的用户 Key） */
+  modelGateway?: boolean;
 }
 
 const NAV: NavItem[] = [
@@ -45,6 +48,7 @@ const NAV: NavItem[] = [
     ops: ["kb:create", "kb:review", "agent:create"],
   },
   { href: "/mcp", icon: "plug", label: "MCP", match: "/mcp", ops: [], mcpGateway: true },
+  { href: "/models", icon: "layers", label: "模型", match: "/models", ops: [], modelGateway: true },
   { href: "/memories", icon: "brain", label: "记忆", match: "/memories", ops: ["chat:use"] },
   {
     href: "/settings/instructions",
@@ -61,6 +65,8 @@ export function Rail() {
   const { data: me } = useMe();
   const { data: gwMe } = useGwMe();
   const mcpVisible = !!gwMe && (gwMe.can_manage || gwMe.owned_services.length > 0 || gwMe.owns_all);
+  const { data: mgMe } = useMgMe();
+  const modelVisible = !!mgMe;
   // 文件预览页在新标签里单独打开，是一个整页查看器，不需要主导航；登录页也不要
   if (pathname.startsWith("/files/") || pathname === "/login") return null;
 
@@ -77,7 +83,9 @@ export function Rail() {
         A
       </div>
 
-      {NAV.filter((item) => (item.mcpGateway ? mcpVisible : can(me, ...item.ops))).map((item) => {
+      {NAV.filter((item) =>
+        item.mcpGateway ? mcpVisible : item.modelGateway ? modelVisible : can(me, ...item.ops),
+      ).map((item) => {
         const active = pathname === item.match || pathname.startsWith(`${item.match}/`);
         return (
           <Link

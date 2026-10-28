@@ -1,0 +1,36 @@
+# C-MTEB 检索子集（doc/rag-eval-review.html §5.1）：语料、查询全量，段落不切分，nDCG@10 对照公开榜单。
+#
+#   先导入：python -m atlas_bench import cmteb EcomRetrieval / DuRetrieval
+#
+#   semantic   纯语义检索：与榜单同口径（同一个向量模型应得到接近榜单的分数，差得多说明链路有问题）
+#   hybrid     混合检索（加权重排）：同一个库，只换检索方式
+#
+# ★ 打包入库：每个文件 1000 段、段间空一行；通用分段按 "\n\n" 切、上限 4000 字 → 一段一个分段
+#   （importers/cmteb.py）。不清洗（pre_processing_rules 为空），段落原文不变。
+# ★ 只评检索（C-MTEB 没有参考答案）。
+name: cmteb-检索
+datasets: [cmteb-ecom, cmteb-du]
+split: test
+top_k: 10
+concurrency: 8
+ingest_timeout_s: 14400
+generation: none
+platforms:
+  - adapter: atlas
+    variants:
+      semantic:
+        ingest: &passage
+          doc_form: text_model
+          process_rule:
+            mode: custom
+            rules:
+              pre_processing_rules: []
+              segmentation: {separator: '\n\n', max_tokens: 4000, chunk_overlap: 0}
+        retrieval: {search_method: semantic_search}
+      hybrid:
+        ingest: *passage
+        retrieval:
+          search_method: hybrid_search
+          reranking_enable: true
+          reranking_mode: weighted_score
+          weights: {vector_setting: {vector_weight: 0.7}, keyword_setting: {keyword_weight: 0.3}}

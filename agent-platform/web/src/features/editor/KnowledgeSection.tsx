@@ -1,16 +1,17 @@
 "use client";
 
 /**
- * 编辑器里的「知识库」一节（doc/atlas-rag-design.html §10、§11.2）。
+ * 编辑器里的「知识库」一节（doc/atlas-rag-design.html §10）。
  *
- * ★ 绑定 = 间接授权：能用这个智能体的人都能经它读到库的内容 —— 绑定前要说清楚。
- * ★ 能选的库来自知识库服务（当前用户可读的）；保存时服务端还会再校验一次新绑定的库。
+ * ★ 绑定不是授权：运行时知识库按这一轮的权限主体（X-Auth-Uid）判 —— 以人为权限是使用者本人，
+ *   以 Agent 为权限是它的数字员工。读不到的库跳过并提示（同 MCP）。
+ * ★ 能选的库 = 权限主体能读的（Atlas /v1/knowledge-bases）；保存时服务端再校验一次新绑定的库。
  */
 import { Alert, InputNumber, Radio, Select, Space, Switch, Tag } from "antd";
 import Link from "next/link";
 
+import { useKnowledgeBases } from "@/api/meta";
 import type { AgentSpecIn } from "@/api/types";
-import { useDatasets } from "@/features/knowledge/api";
 
 import styles from "./editor.module.css";
 
@@ -28,15 +29,25 @@ export function KnowledgeSection({
   value,
   kind,
   readOnly,
+  agentId,
+  authSubject,
   onChange,
 }: {
   value: Knowledge;
   kind: string;
   readOnly: boolean;
+  /** 编辑已有的 Agent：按它的权限主体列库；新建时按 authSubject */
+  agentId?: string;
+  authSubject: "user" | "agent";
   onChange: (v: Knowledge) => void;
 }) {
-  const datasets = useDatasets();
-  const options = (datasets.data?.data ?? []).map((d) => ({ value: d.id, label: `${d.icon} ${d.name}` }));
+  const datasets = useKnowledgeBases({ agentId, authSubject });
+  const subject = datasets.data?.subject;
+  const acting = subject ? subject.kind === "agent" : authSubject === "agent";
+  const options = (datasets.data?.data ?? []).map((d) => ({
+    value: d.id,
+    label: `${d.icon ?? "📚"} ${d.name}`,
+  }));
   const known = new Set(options.map((o) => o.value));
   const ids = value.dataset_ids ?? [];
   const acp = kind === "acp";
@@ -51,6 +62,16 @@ export function KnowledgeSection({
       {datasets.error && (
         <Alert type="warning" showIcon message={`读取知识库列表失败：${(datasets.error as Error).message}`} />
       )}
+      {subject && (
+        <div style={{ marginBottom: 8, fontSize: 12, color: "var(--fg-2)" }}>
+          <div>可选的知识库按{acting ? "这个 Agent 的数字员工" : "你"}的权限列出</div>
+          {subject.notes.map((n) => (
+            <div key={n} style={{ marginTop: 4 }}>
+              ⚠ {n}
+            </div>
+          ))}
+        </div>
+      )}
       <Select
         mode="multiple"
         style={{ width: "100%" }}
@@ -62,7 +83,7 @@ export function KnowledgeSection({
         onChange={(dataset_ids: string[]) => set({ dataset_ids })}
         options={[
           ...options,
-          // 已绑定但当前用户看不到的库：保留，不让一次保存把别人绑的库悄悄去掉
+          // 已绑定、但权限主体读不到的库：保留，不让一次保存把它悄悄去掉（运行时跳过并提示）
           ...ids.filter((id) => !known.has(id)).map((id) => ({ value: id, label: `🔒 ${id.slice(0, 8)}…` })),
         ]}
       />
@@ -72,7 +93,11 @@ export function KnowledgeSection({
             type="info"
             showIcon
             style={{ margin: "10px 0" }}
-            message="能使用这个智能体的人，都可以通过它读到所绑定知识库的内容。"
+            message={
+              acting
+                ? "按数字员工的权限检索：能使用这个智能体的人，都可以通过它读到数字员工能读的库。"
+                : "按使用者自己的权限检索：使用者读不到的库，运行时会跳过并提示。"
+            }
           />
           <Space direction="vertical" style={{ width: "100%" }}>
             <Radio.Group

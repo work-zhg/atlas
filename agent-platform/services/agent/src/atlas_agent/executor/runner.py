@@ -61,6 +61,7 @@ from ..domain.translator import (
     tool_calls_from,
     tool_result_from,
 )
+from ..providers.llm.failures import model_call_failure
 
 
 class CancelToken(Protocol):
@@ -394,8 +395,9 @@ async def run(
         return
     except Exception as exc:  # 上游 / 网关异常
         # §13.1：按状态码分类，而不是一律归成 model_unavailable ——
-        # 用户看到限流会以为服务挂了，两者的处置完全不同
-        classified = classify(exc)
+        # 用户看到限流会以为服务挂了，两者的处置完全不同。
+        # 模型网关的拒绝先按它给的原因说清楚：找人授权，还是稍后重发（模型管理方案 §7.3）
+        classified = model_call_failure(exc) or classify(exc)
         if usage:
             yield events.make(EventType.USAGE_UPDATED, dict(usage))
         yield events.make(

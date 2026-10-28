@@ -1,16 +1,14 @@
-# 模型网关（atlas-modelgateway，doc/model-design.html）：所有模型调用的唯一入口。
+# 模型管理平台（atlas-modelgateway，agent-platform/doc/design/model-design.html）：登记模型、私有模型授权、
+# API Key（用户 Key / 客户端 Key），把结果同步到 LiteLLM（39-litellm.yaml）。不在调用路径上。
 #
-#   Atlas / Pod 里的 CLI / 知识库 ──主体 Key 或 应用 + 用途──▶ 模型网关 ──网关凭据──▶ Higress ──供应商 Key──▶ 供应商
+#   管理端 ──登录后──▶ 模型管理平台 ──master key──▶ LiteLLM 管理接口
+#   Atlas / 知识库 ──/internal（按客户端类型 + 编码取 Key 和可用模型）──▶ 模型管理平台
 #
+# ★ 包名、库名（atlas_modelgateway）、用户中心应用编码（model-gateway）沿用自研网关时期的：已有的授权不用迁移。
 # ★ 库是宿主 Postgres 上的独立 database atlas_modelgateway（docker compose 的 modelgateway-init-db；
-#   服务器部署由 deploy/server/deploy.sh 建）。不用 Redis：判权结果进程内缓存，用量记录异步写库。
-# ★ 网关凭据（Secret atlas-modelgateway-creds，apply.sh 建）只在网关和 Higress 里：不下发给 Atlas 和 Pod。
-#   Higress 上的模型路由要配成只认它（deploy/local/higress/models.py）—— 在那之前登记模型会因
-#   「接入检查不通过」被拒。和 MCP 网关的凭据分开。
-# ★ 管理端接口经网关（nginx）登录后访问；/internal（给 Atlas、知识库）与 /v1（数据面）只在集群内，
-#   网关不转发。多副本、无状态：/health 就绪即可接流量。
-# ★ Atlas、知识库什么时候切过来由 ConfigMap atlas-model-gateway 决定（deploy/server/model-cutover.sh 建）：
-#   没有它时照旧直连供应商。
+#   服务器部署由 deploy/server/deploy.sh 建）。不用 Redis。
+# ★ 管理端接口经网关（nginx）登录后访问；/internal（给 Atlas、知识库）只在集群内，网关不转发。
+#   多副本、无状态：/health 就绪即可接流量（每个副本各自定期对账，同步是幂等的）。
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -24,7 +22,7 @@ spec:
     metadata:
       labels: {app: atlas-modelgateway}
     spec:
-      # ★ 模型网关不碰 K8s：默认 SA，没有任何权限
+      # ★ 不碰 K8s：默认 SA，没有任何权限
       initContainers:
         # 先迁移再起服务。迁移脚本在包内，不依赖工作目录。
         - name: migrate
@@ -34,10 +32,9 @@ spec:
           env: &modelgw-env
             - {name: ATLAS_MODELGW_DATABASE_URL, value: "postgresql+asyncpg://atlas:atlas@__HOST_IP__:5433/atlas_modelgateway"}
             - {name: ATLAS_MODELGW_UC_BASE_URL, value: "http://atlas-usercenter.atlas-system.svc.cluster.local:8030"}
-            # 上游 = Higress 的 AI 路由（本机在宿主的 compose 里，--profile higress；服务器上是集群内的服务）
-            - {name: ATLAS_MODELGW_HIGRESS_BASE_URL, value: "http://__HOST_IP__:18080"}
-            - name: ATLAS_MODELGW_GATEWAY_CREDENTIAL
-              valueFrom: {secretKeyRef: {name: atlas-modelgateway-creds, key: gateway_credential}}
+            - {name: ATLAS_MODELGW_LITELLM_BASE_URL, value: "http://atlas-litellm.atlas-system.svc.cluster.local:4000"}
+            - name: ATLAS_MODELGW_LITELLM_MASTER_KEY
+              valueFrom: {secretKeyRef: {name: atlas-litellm-creds, key: master_key}}
       containers:
         - name: modelgateway
           image: atlas-app:dev

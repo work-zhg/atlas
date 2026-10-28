@@ -4,6 +4,7 @@ python -m atlas_bench run experiments/demo.yaml [--limit N] [--resume <运行目
 python -m atlas_bench score <运行目录>        重新判分（不重跑平台）
 python -m atlas_bench report <运行目录>       重新生成报告
 python -m atlas_bench datasets               列出可用数据集
+python -m atlas_bench import cmteb <子集>     导入 C-MTEB 检索子集（如 EcomRetrieval）
 python -m atlas_bench cleanup                删除评测在 Atlas 上建的库（库名前缀 bench:）
 
 智能体评测（doc/agent-eval-design.html）：
@@ -199,6 +200,10 @@ def main(argv: list[str] | None = None) -> int:
     rp = sub.add_parser("report")
     rp.add_argument("run_dir")
     sub.add_parser("datasets")
+    im = sub.add_parser("import", help="导入公开评测集")
+    im.add_argument("source", choices=["cmteb"])
+    im.add_argument("subset", help="C-MTEB 检索子集，如 EcomRetrieval、DuRetrieval")
+    im.add_argument("--per-file", type=int, default=None, help="每个文件放多少段（默认 1000）")
     sub.add_parser("cleanup")
     ag = sub.add_parser("agent", help="智能体工程能力评测")
     agsub = ag.add_subparsers(dest="agent_command", required=True)
@@ -232,6 +237,14 @@ def main(argv: list[str] | None = None) -> int:
                 splits = {s: len(ds.select(s)) for s in ("dev", "test")}
                 docs, total = len(ds.corpus.documents), len(ds.questions)
                 print(f"{ds.name:<20} {docs:>5} 篇文档  {total:>5} 题  {splits}  {m.parent}")
+        return 0
+    if args.command == "import":
+        from .importers.cmteb import PER_FILE, import_cmteb
+
+        root, stats = import_cmteb(
+            args.subset, settings.datasets_dirs[-1], per_file=args.per_file or PER_FILE
+        )
+        print(f"已导入：{root}\n  {json.dumps(stats, ensure_ascii=False)}")
         return 0
     if args.command == "cleanup":
         return asyncio.run(_cleanup(settings))

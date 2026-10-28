@@ -1,16 +1,15 @@
-"""管理接口的身份与操作码（内网身份传递 §3）。数据面的认人不在这里（keys.py、proxy.py）。
+"""管理接口的身份与操作码（内网身份传递 §3）。
 
     X-Uid         谁在用（管理端经网关登录后由网关写入）
     X-Auth-Uid    按谁的权限判，缺省 = X-Uid
     X-Tenant-Id   租户，原样透传给用户中心
-    X-Caller-App  直接调用方（atlas …），只用于追溯
+    X-Caller-App  直接调用方（atlas …）：内部接口按它判断能不能操作某个客户端类型
 
-    MODEL_MANAGE  登记、修改、弃用、下线、停用模型；探测；价目；平台用途；额度；
-                  停用、重置、启用 Key（§6.3）
-                  给某个模型授权不靠操作码，靠该模型的「所有者」数据权限（用户中心校验）
+    MODEL_MANAGE  登记、修改、删除模型，纳入平台，设公有 / 私有，给私有模型授权；
+                  客户端 Key 的新建、分配模型、重置、停用、启用、删除
+                  「能用哪些模型」不靠操作码，靠数据权限（管理员持有「全部模型 · Owner」）
 
 ★ 出站透传：本服务调用户中心时带上本次请求的身份请求头，X-Caller-App 换成本服务的应用编码。
-  数据面调用户中心时没有入站身份可透传，用 Key 认出的主体（proxy 里 use_outbound）。
 ★ 与其它服务各自实现，不抽公共包（规则只有几十行）。
 """
 
@@ -53,7 +52,7 @@ def outbound_headers() -> dict[str, str]:
 
 
 def use_outbound(headers: dict[str, str] | None) -> None:
-    """设置本任务之后调用户中心时带的身份（数据面按 Key 认出的主体设）。"""
+    """设置本任务之后调用户中心时带的身份（命令行、对账任务没有入站请求时用）。"""
     _outbound.set(headers)
 
 
@@ -81,7 +80,7 @@ class IdentityHeadersMiddleware:
 
 @dataclass(frozen=True)
 class Operator:
-    #: 谁在操作（X-Uid）：登记模型时成为所有者、授权时作为操作人交给用户中心
+    #: 谁在操作（X-Uid）：登记模型时成为数据的所有者、授权时作为操作人交给用户中心
     uid: str
     #: 按谁的权限判（X-Auth-Uid）
     auth_uid: str

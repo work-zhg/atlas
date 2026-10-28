@@ -1,6 +1,6 @@
 """作用域的配置（§3.2）：编码、描述、关联主键的字段、是否校验数据权限。
 
-管理员经作用域管理接口（要 memory:scope:manage）或命令行（python -m atlas_memory scope …）配置。
+管理员经作用域管理接口（要 memory_scope:manage）或命令行（python -m atlas_memory scope …）配置。
 
 ★ 作用域之间没有关联关系：需要「人 × 项目」的数据，就单独配一个字段为 uid + project 的作用域，
   而不是让两个作用域互相引用。

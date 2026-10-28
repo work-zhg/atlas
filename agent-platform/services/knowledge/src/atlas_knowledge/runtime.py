@@ -14,7 +14,7 @@ from .perms import DataPermissions, make_data_permissions
 from .principals import PrincipalResolver, make_resolver
 from .rag.embedding import ModelRegistry
 from .rag.llm import ChatModel, OpenAICompatibleChat
-from .rag.model_gateway import PurposeCatalog, PurposeChat, purpose_headers
+from .rag.model_platform import PlatformChat, PlatformKeyAuth, ServiceKeys, parse_client
 from .rag.vdb import VectorFactory
 from .settings import KnowledgeSettings
 from .storage import FileStorage, make_storage
@@ -55,10 +55,11 @@ class Runtime:
     _storage: FileStorage | None = field(default=None, repr=False)
     #: 上下文补全、表格摘要、查询理解用的 LLM。None = 没配，相关增强降级为不做
     llm: ChatModel | None = None
-    #: 查询理解单独用的 LLM（经模型网关时是平台用途 kb_query）。None = 和 llm 共用
+    #: 查询理解单独用的 LLM（经模型管理平台时可配单独的模型）。None = 和 llm 共用
     query_llm: ChatModel | None = None
-    #: 模型网关的平台用途配置（建库时可选的远程嵌入、重排模型）。None = 没接模型网关
-    model_purposes: PurposeCatalog | None = None
+    #: 经模型管理平台时取服务级客户端 Key（建库时可选的远程嵌入、重排模型 = Key 的可用模型）。
+    #: None = 没接平台
+    service_keys: ServiceKeys | None = None
     #: 用户 → 主体标签（文档级权限）。None = 按 settings 建（dev：只有 u:用户）
     principal_resolver: PrincipalResolver | None = None
     #: 库级权限（用户中心数据权限）。None = 按 settings 建（perms.make_data_permissions）
@@ -91,6 +92,8 @@ class Runtime:
         for llm in (self.llm, self.query_llm):
             if llm is not None and hasattr(llm, "aclose"):
                 await llm.aclose()
+        if self.service_keys is not None:
+            self.service_keys.close()
 
 
 def _remote(base_url: str | None, key: Any, timeout_s: float) -> dict[str, Any]:
@@ -112,8 +115,8 @@ def build_runtime(settings: KnowledgeSettings, *, dispatcher: Dispatcher | None 
         api_key=settings.qdrant_api_key.get_secret_value() if settings.qdrant_api_key else None,
         timeout=30,
     )
-    if settings.model_gateway_url:
-        return _gateway_runtime(settings, qdrant, dispatcher)
+    if settings.model_platform_url:
+        return _platform_runtime(settings, qdrant, dispatcher)
     return Runtime(
         settings=settings,
         registry=ModelRegistry(
@@ -147,42 +150,56 @@ def build_runtime(settings: KnowledgeSettings, *, dispatcher: Dispatcher | None 
     )
 
 
-def _gateway_runtime(
+def _platform_runtime(
     settings: KnowledgeSettings, qdrant: Any, dispatcher: Dispatcher | None
 ) -> Runtime:
-    """经模型网关（doc/model-design.html §6.7）：全部按平台用途调。
+    """经模型管理平台（agent-platform/doc/design/model-design.html 第 9 章）：各用途带着平台上
+    事先建好的服务级客户端 Key 直连 LiteLLM。不持有供应商 Key。
 
-    不写死模型名，也不持有供应商 Key。
+    哪项没配客户端 Key，哪项就不可用（LLM 增强降级为不做；远程嵌入、重排不出现在建库选项里）。
     """
     import redis.asyncio as aioredis
 
-    gateway = str(settings.model_gateway_url).rstrip("/")
-    app = settings.uc_app_code
-    purposes = PurposeCatalog(gateway, ttl_s=settings.model_catalog_ttl_s)
+    if not settings.model_litellm_url:
+        raise ValueError("经模型管理平台时要配 LiteLLM 地址（ATLAS_KB_MODEL_LITELLM_URL）")
+    litellm = settings.model_litellm_url.rstrip("/")
+    keys = ServiceKeys(
+        str(settings.model_platform_url),
+        app_code=settings.uc_app_code,
+        ttl_s=settings.model_key_ttl_s,
+    )
 
-    def remote(purpose: str) -> dict[str, Any]:
+    def remote(spec: str | None) -> dict[str, Any]:
+        client = parse_client(spec)
+        if client is None:
+            return {}
         return {
-            "base_url": f"{gateway}/v1",
+            "base_url": f"{litellm}/v1",
             "api_key": None,
             "timeout_s": settings.remote_model_timeout_s,
-            "headers": purpose_headers(purpose, app),
+            "auth": PlatformKeyAuth(keys, client),
         }
 
-    def chat(purpose: str) -> PurposeChat:
-        return PurposeChat(
-            gateway, purpose, purposes, app_code=app, timeout_s=settings.llm_timeout_s
-        )
+    def chat(model: str | None) -> PlatformChat | None:
+        client = parse_client(settings.chat_client)
+        if client is None or not model:
+            return None
+        return PlatformChat(litellm, keys, client, model, timeout_s=settings.llm_timeout_s)
 
+    llm = chat(settings.enrich_model)
     return Runtime(
         settings=settings,
         registry=ModelRegistry(
             cache_dir=settings.model_cache_dir,
-            remote={"embedding": remote("kb_embedding"), "rerank": remote("kb_rerank")},
+            remote={
+                "embedding": remote(settings.embedding_client),
+                "rerank": remote(settings.rerank_client),
+            },
         ),
         vectors=VectorFactory(qdrant),
         redis=aioredis.from_url(settings.redis_url),
         dispatcher=dispatcher or CeleryDispatcher(),
-        llm=chat("kb_enrich"),
-        query_llm=chat("kb_query"),
-        model_purposes=purposes,
+        llm=llm,
+        query_llm=chat(settings.query_model) if settings.query_model else None,
+        service_keys=keys,
     )

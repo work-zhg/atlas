@@ -53,7 +53,12 @@ from ..domain.spec import ACP_MODE_ID, PLATFORM_MODE, acp_permission_mode
 from ..errors import CapabilityUnavailable
 from ..outbound import current_identity
 from ..providers.knowledge import mcp_server_entry, require_client
-from ..providers.llm.modelgateway import admit_models, uses_model_gateway
+from ..providers.llm.model_platform import (
+    admit_models,
+    agent_key,
+    litellm_url,
+    uses_model_platform,
+)
 from ..providers.mcp import GatewayUnavailable, make_mcp_catalog, mcp_subject_access
 from ..providers.mcp.acp import acp_mcp_servers
 from ..providers.mcp.gateway import servers_in
@@ -239,15 +244,12 @@ class HostRuntime:
             return
         for kind, data in notices:
             yield events.make(kind, data)
-        # 模型（doc/model-design.html §8.1）：经模型网关时检查授权、下发网关地址和主体 Key
-        model_notices: list[tuple[EventType, dict[str, Any]]] = []
+        # 模型（模型管理方案设计 8.1）：经平台时检查智能体的客户端 Key，下发 LiteLLM 地址和这把 Key
         try:
-            model = await self._acp_model(prepared, redis, model_notices)
+            model = await self._acp_model(prepared)
         except CapabilityUnavailable as exc:
             yield events.make(*_failed(CapabilityUnavailable.kind, str(exc)))
             return
-        for kind, data in model_notices:
-            yield events.make(kind, data)
         try:
             endpoint = await self._pods.ensure(prepared.thread, spec.cli, model=model)
         except Exception as exc:
@@ -402,44 +404,30 @@ class HostRuntime:
             ]
         return servers, notices
 
-    async def _acp_model(
-        self,
-        prepared: PreparedRun,
-        redis: aioredis.Redis,
-        notices: list[tuple[EventType, dict[str, Any]]],
-    ) -> AcpModel | None:
-        """经模型网关时 Pod 里 CLI 的模型接入（§8.1）。没接模型网关、不是 Claude Code → None
-        （照旧按部署配置）。用不了的模型抛 ModelNotAllowed：本轮不开始。
+    async def _acp_model(self, prepared: PreparedRun) -> AcpModel | None:
+        """经模型管理平台时 Pod 里 CLI 的模型接入（模型管理方案设计 8.1）。
 
-        ★ Claude Code 只会 Anthropic Messages：模型要支持这种协议（原生或经转换且探测通过）。
-        ★ CLI 的轻量模型也指向同一个模型：不指的话 CLI 会去找一个它默认的、平台上未必有的模型。
+        没接平台、不是 Claude Code → None（照旧按部署配置）。Key 待分配、停用或模型没分配
+        抛 ModelNotAllowed：本轮不开始。
+
+        下发 LiteLLM 地址 + 智能体的客户端 Key + 模型名；Pod 里不再有供应商凭据。
+        ★ Claude Code 只会 Anthropic Messages：LiteLLM 负责转换，任何已分配的模型都能用。
+        ★ CLI 的轻量模型也指向同一个模型：不指的话 CLI 会去找一个它默认的、Key 里未必有的模型。
         """
         spec = prepared.spec
-        if not uses_model_gateway(self._settings) or spec.cli is None:
+        if not uses_model_platform(self._settings) or spec.cli is None:
             return None
         if spec.cli.cli_type != "claude-code":
             return None
-        ident = current_identity()
-        subject = ident.auth_uid if ident else prepared.thread.created_by
-        _, access = await admit_models(
-            self._settings,
-            redis,
-            [spec.model.model],
-            subject=subject,
-            acts_as_agent=ident is not None and ident.auth_uid != ident.uid,
-            notices=notices,
-            protocol="anthropic",
-        )
-        assert access.key is not None and self._settings.model_gateway_url
-        headers = {"X-Agent-Id": str(prepared.thread.agent_id)}
-        if ident is not None:
-            headers["X-Uid"] = str(ident.uid)
+        key = await agent_key(self._settings, prepared.thread.agent_id, spec.name)
+        admit_models(key, [spec.model.model])
+        assert key.key is not None
         return AcpModel(
-            base_url=self._settings.model_gateway_url,
-            key=access.key,
+            base_url=litellm_url(self._settings),
+            key=key.key,
             model=spec.model.model,
             small_model=spec.model.model,
-            headers=headers,
+            headers={},
         )
 
     async def _mcp_from_gateway(

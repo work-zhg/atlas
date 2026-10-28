@@ -26,6 +26,7 @@ data:
     CREATE DATABASE atlas_memory;
     CREATE DATABASE atlas_mcpgateway;
     CREATE DATABASE atlas_modelgateway;
+    CREATE DATABASE atlas_litellm;
     CREATE DATABASE atlas_usercenter;
     CREATE DATABASE atlas_teamflow;
     CREATE DATABASE langfuse;

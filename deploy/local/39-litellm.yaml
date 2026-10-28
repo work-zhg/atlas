@@ -1,0 +1,62 @@
+# LiteLLM（agent-platform/doc/design/model-design.html）：唯一的模型网关。
+#
+#   Atlas / Pod 里的 CLI / 知识库 ──客户端 Key 或用户 Key──▶ LiteLLM ──供应商凭据──▶ 供应商
+#   模型管理平台（38-modelgateway.yaml）──master key──▶ LiteLLM 管理接口（登记模型、生成 / 更新 / 停用 Key）
+#
+# ★ 库是宿主 Postgres 上的独立 database atlas_litellm（docker compose 的 litellm-init-db；服务器部署由
+#   deploy/server/deploy.sh 建）。表由 LiteLLM 启动时自己建（prisma）。STORE_MODEL_IN_DB：模型经接口登记，
+#   存在库里，不用配置文件。
+# ★ Secret atlas-litellm-creds（apply.sh 建）：
+#     master_key  管理接口的凭据，只在 LiteLLM 和模型管理平台里；也是管理界面的登录密码（账号 admin）
+#     salt_key    加密库里的供应商凭据。★ 设了就不能再换，换了已存的凭据就解不开了
+# ★ 只在集群内（ClusterIP）：应用直连它调模型；管理界面（/ui，看日志、花费、配预算）用 port-forward 访问。
+# ★ 镜像没有固定版本：首次在服务器上验证通过后，把 main-stable 换成具体的版本号（images.sh 的 THIRD 同步改）。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atlas-litellm
+  namespace: atlas-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: atlas-litellm}
+  template:
+    metadata:
+      labels: {app: atlas-litellm}
+    spec:
+      containers:
+        - name: litellm
+          image: ghcr.io/berriai/litellm:main-stable
+          imagePullPolicy: IfNotPresent
+          args: ["--port", "4000", "--num_workers", "1"]
+          ports: [{containerPort: 4000, name: http}]
+          env:
+            # ★ prisma 的连接串：postgresql://，不是 SQLAlchemy 的 postgresql+asyncpg://
+            - {name: DATABASE_URL, value: "postgresql://atlas:atlas@__HOST_IP__:5433/atlas_litellm"}
+            - {name: STORE_MODEL_IN_DB, value: "True"}
+            - name: LITELLM_MASTER_KEY
+              valueFrom: {secretKeyRef: {name: atlas-litellm-creds, key: master_key}}
+            - name: LITELLM_SALT_KEY
+              valueFrom: {secretKeyRef: {name: atlas-litellm-creds, key: salt_key}}
+            - {name: UI_USERNAME, value: admin}
+            - name: UI_PASSWORD
+              valueFrom: {secretKeyRef: {name: atlas-litellm-creds, key: master_key}}
+          readinessProbe:
+            httpGet: {path: /health/readiness, port: 4000}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /health/liveliness, port: 4000}
+            initialDelaySeconds: 120
+            periodSeconds: 20
+          resources:
+            requests: {cpu: 200m, memory: 512Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: atlas-litellm
+  namespace: atlas-system
+spec:
+  type: ClusterIP
+  selector: {app: atlas-litellm}
+  ports: [{port: 4000, targetPort: 4000}]

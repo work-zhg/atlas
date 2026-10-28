@@ -481,7 +481,8 @@ class Approval(Base):
     tool_call_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     #: 迁移 0022（doc/native-approval-mode-design.html）：
     #:   kind     tool = 工具调用的确认；plan = 规划模式提交的计划
-    #:   source   为什么问：manual_mode / auto_uncertain / plan_mode
+    #:   source   为什么问：manual_mode / plan_mode / auto_uncertain（没有配置判断器）/
+    #:            judge_failed（判断器出错）
     #:   reason   给用户看的一句话
     #:   outcome  决策带回的附加信息：{"mode": 计划审批选的执行模式, "feedback": 拒绝原因}
     kind: Mapped[str] = mapped_column(String(8), nullable=False, server_default="tool")
@@ -595,3 +596,26 @@ class MemoryBackfill(Base):
     seen_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
     __table_args__ = (Index("ix_memory_backfill_user", "user_id", "created_at"),)
+
+
+class ServiceModel(Base):
+    """平台服务用哪个模型（模型管理方案设计第 9 章；迁移 0026）：会话标题、记忆补记这类不属于
+    某个智能体的调用。
+
+    每种用途一行：用模型管理平台上的哪把客户端 Key（客户端类型 + 编码，事先在平台上建好、
+    分配模型）、
+    用其中哪个模型。经平台时 Atlas 按它取 Key，带着 Key 直连 LiteLLM。
+    没接平台时不用这张表（照旧用部署配置里的 summarizer_model / memory_backfill_model）。
+    """
+
+    __tablename__ = "service_model"
+
+    #: services/service_models.PURPOSES 的键
+    purpose: Mapped[str] = mapped_column(String(32), primary_key=True)
+    client_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    client_code: Mapped[str] = mapped_column(String(128), nullable=False)
+    model: Mapped[str] = mapped_column(String(128), nullable=False)
+    updated_by: Mapped[UUID | None] = mapped_column(UUIDType, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )

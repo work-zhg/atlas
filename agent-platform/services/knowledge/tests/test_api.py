@@ -410,10 +410,12 @@ async def test_internal_and_multi_retrieve(client: Any, rt: Any) -> None:
             "source_ref": "thread-1",
             "retrieval_config": {"search_method": "semantic_search", "top_k": 2},
         },
+        headers=ALICE,
     )
     assert r.status_code == 200, r.text
     recs = r.json()["records"]
     assert recs[0]["dataset_name"] == "B" and recs[0]["content"].startswith("请假")
+    assert r.json()["skipped"] == []
 
     # 多库 + 加权重排（两库同一向量模型）
     r = await client.post(
@@ -442,14 +444,14 @@ async def test_delete_dataset(client: Any, rt: Any) -> None:
     assert rt.storage.objects == {}
 
 
-def _sign(secret: str, dataset_ids: list[str]) -> str:
+def _sign(secret: str, dataset_ids: list[str], auth_uid: str | None = "alice") -> str:
     """与 atlas-server providers/knowledge.py 的 sign_mcp_token 同一算法。"""
     import base64
     import hashlib
     import hmac
 
     payload = json.dumps(
-        {"d": dataset_ids, "t": "thread-x", "u": None}, separators=(",", ":"), sort_keys=True
+        {"d": dataset_ids, "t": "thread-x", "u": auth_uid}, separators=(",", ":"), sort_keys=True
     ).encode()
     body = base64.urlsafe_b64encode(payload).decode().rstrip("=")
     return f"{body}.{hmac.new(secret.encode(), body.encode(), hashlib.sha256).hexdigest()}"
@@ -510,6 +512,9 @@ async def test_mcp_knowledge_search(client: Any, rt: Any) -> None:
             # 旧名（带应用名）过渡一个版本仍然认：已打开的会话里 MCP 配置还是它（数字员工设计 §7.4）
             legacy = await call(c, _sign("s3cret", [ds["id"]]), "X-Atlas-Knowledge-Token")
             assert "退款政策" in legacy
+            # 库级权限按令牌里的 u：读不到的库跳过并说明，不泄露内容
+            denied = await call(c, _sign("s3cret", [ds["id"]], "bob"))
+            assert "退款政策" not in denied and "1 个知识库没有访问权限" in denied
 
 
 RESUME_MD = """# 张三

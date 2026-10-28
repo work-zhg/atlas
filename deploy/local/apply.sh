@@ -49,14 +49,20 @@ kubectl -n atlas-system create secret generic atlas-mcpgateway-creds \
   --from-literal=gateway_credential="${GW_CREDENTIAL}" \
   --dry-run=client -o yaml | kubectl apply -f -
 
-# 模型网关的网关凭据（doc/model-design.html §9.3）：Higress 的模型路由只认它。和 MCP 网关的分开。
-# .env 里有就用；没有就沿用集群里已有的；都没有才新生成。★ 换了值要同时改 Higress 的配置（higress/models.py）
-MODEL_GW_CREDENTIAL="${ATLAS_MODELGW_GATEWAY_CREDENTIAL:-$(kubectl -n atlas-system get secret atlas-modelgateway-creds \
-  -o jsonpath='{.data.gateway_credential}' 2>/dev/null | base64 --decode || true)}"
-[ -n "$MODEL_GW_CREDENTIAL" ] || MODEL_GW_CREDENTIAL="$(openssl rand -hex 24)"
-kubectl -n atlas-system create secret generic atlas-modelgateway-creds \
-  --from-literal=gateway_credential="${MODEL_GW_CREDENTIAL}" \
+# LiteLLM（39-litellm.yaml）：master key（管理接口，只给模型管理平台）与 salt key（加密库里的供应商凭据）。
+# .env 里有就用；没有就沿用集群里已有的；都没有才新生成。
+# ★ salt key 设了就不能再换：换了 LiteLLM 库里已存的供应商凭据就解不开了
+secret_value() { kubectl -n atlas-system get secret "$1" -o jsonpath="{.data.$2}" 2>/dev/null | base64 --decode || true; }
+LITELLM_MASTER="${LITELLM_MASTER_KEY:-$(secret_value atlas-litellm-creds master_key)}"
+[ -n "$LITELLM_MASTER" ] || LITELLM_MASTER="sk-$(openssl rand -hex 24)"
+LITELLM_SALT="${LITELLM_SALT_KEY:-$(secret_value atlas-litellm-creds salt_key)}"
+[ -n "$LITELLM_SALT" ] || LITELLM_SALT="sk-$(openssl rand -hex 24)"
+kubectl -n atlas-system create secret generic atlas-litellm-creds \
+  --from-literal=master_key="${LITELLM_MASTER}" \
+  --from-literal=salt_key="${LITELLM_SALT}" \
   --dry-run=client -o yaml | kubectl apply -f -
+# 自研网关时期的网关凭据：Higress 上的模型路由已经撤掉，不再需要
+kubectl -n atlas-system delete secret atlas-modelgateway-creds --ignore-not-found
 
 # ★ 内网免令牌（doc/identity-propagation-design.html）：服务间令牌、用户中心 App Key / Secret、
 #   Atlas 服务账号密钥都已下线，这里不再建。
@@ -111,6 +117,7 @@ kubectl -n atlas-system rollout status deploy/atlas-usercenter --timeout=180s
 render deploy/local/25-config.yaml  | kubectl apply -f -
 render deploy/local/36-memory.yaml  | kubectl apply -f -
 render deploy/local/37-mcpgateway.yaml | kubectl apply -f -
+render deploy/local/39-litellm.yaml | kubectl apply -f -
 render deploy/local/38-modelgateway.yaml | kubectl apply -f -
 render deploy/local/30-server.yaml  | kubectl apply -f -
 render deploy/local/35-knowledge.yaml | kubectl apply -f -
@@ -119,6 +126,7 @@ render deploy/local/45-teamflow.yaml | kubectl apply -f -
 kubectl -n atlas-system rollout status deploy/atlas-config --timeout=180s
 kubectl -n atlas-system rollout status deploy/atlas-memory --timeout=180s
 kubectl -n atlas-system rollout status deploy/atlas-mcpgateway --timeout=180s
+kubectl -n atlas-system rollout status deploy/atlas-litellm --timeout=600s
 kubectl -n atlas-system rollout status deploy/atlas-modelgateway --timeout=180s
 kubectl -n atlas-system rollout status deploy/atlas-server --timeout=180s
 kubectl -n atlas-system rollout status deploy/atlas-knowledge --timeout=300s

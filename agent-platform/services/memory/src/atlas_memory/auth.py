@@ -39,7 +39,8 @@ __all__ = [
 ]
 
 #: 作用域管理的操作码（register-uc 登记到用户中心本服务的应用名下）
-SCOPE_MANAGE = "memory:scope:manage"
+#: ★ 用户中心的操作码只认「资源:动作」（小写字母、数字、下划线，一个冒号）
+SCOPE_MANAGE = "memory_scope:manage"
 
 #: 入站（小写）→ 出站请求头
 _IDENTITY_HEADERS = {"x-uid": "X-Uid", "x-auth-uid": "X-Auth-Uid", "x-tenant-id": "X-Tenant-Id"}
@@ -158,7 +159,7 @@ async def _operations(settings: MemorySettings, auth_uid: str) -> frozenset[str]
 async def require_operator(
     request: Request, settings: Annotated[MemorySettings, Depends(get_settings)]
 ) -> Operator:
-    """作用域管理接口：要有 memory:scope:manage。"""
+    """作用域管理接口：要有 memory_scope:manage。"""
     caller = caller_of(request)
     if caller is None:
         raise Unauthorized("请先登录")

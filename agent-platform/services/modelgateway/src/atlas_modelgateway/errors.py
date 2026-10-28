@@ -1,7 +1,4 @@
-"""领域错误。管理 / 内部接口统一翻译成 {"detail": 说明, "code": 错误码, "context": {...}}。
-
-★ 数据面（/v1/*）的拒绝不走这里：那里要按调用协议（Anthropic / OpenAI）回错误体（proxy.py）。
-"""
+"""领域错误。管理 / 内部接口统一翻译成 {"detail": 说明, "code": 错误码, "context": {...}}。"""
 
 from __future__ import annotations
 
@@ -59,7 +56,7 @@ class TooSoon(GatewayError):
 
 
 class Unavailable(GatewayError):
-    """依赖的服务（用户中心、上游）暂不可用。"""
+    """依赖的服务（用户中心、LiteLLM）暂不可用。"""
 
     status_code = 503
     default_code = "UNAVAILABLE"

@@ -29,7 +29,7 @@ import {
 } from "@/api/agents";
 import { useMcpServers, useSkillCatalog } from "@/api/catalog";
 import { useModels, useTools } from "@/api/meta";
-import type { AgentDetail, AgentStatus, AgentVersion, AuthSubject } from "@/api/types";
+import type { AgentDetail, AgentStatus, AgentVersion, AuthSubject, ModelInfo } from "@/api/types";
 import { relativeTime } from "@/lib/format";
 import { qk } from "@/api/keys";
 import { http } from "@/lib/http";
@@ -68,6 +68,15 @@ const NAV: [string, string][] = [
   ["e-limits", "限制"],
   ["e-share", "共享"],
 ];
+
+/** 模型下拉里的名字：弃用的标出下线日期和替代模型（doc/model-design.html §11.2） */
+function modelLabel(m: ModelInfo): string {
+  const name = m.display_name || m.model;
+  if (m.status !== "deprecated") return name;
+  const when = m.retire_at ? `，${m.retire_at.slice(0, 10)} 下线` : "";
+  const instead = m.replacement ? `，替代：${m.replacement}` : "";
+  return `${name} · 已弃用${when}${instead}`;
+}
 
 /** 后端存的 spec → 编辑器的 spec。旧快照没有后加的字段：补默认值，免得各处判空 */
 function normalizeSpec(raw: unknown): ResolvedSpec {
@@ -196,7 +205,6 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
   const isNew = !agentId;
 
   const detailQ = useAgent(agentId);
-  const modelsQ = useModels();
   const skillCatalogQ = useSkillCatalog();
   const mcpServersQ = useMcpServers();
 
@@ -220,6 +228,9 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
   // MCP 工具按权限主体列出：编辑已有的按 agentId；新建的随「权限类型」切换（以 Agent 为权限、
   // 没保存时还没有数字员工，MCP 部分为空 —— doc/mcp-design.html §9.2）
   const toolsQ = useTools({ agentId, authSubject: draft.auth_subject });
+  // 模型同样按权限主体列出（经模型网关时；以 Agent 为权限、没保存过时列出全部可用的，
+  // doc/model-design.html §6.4、§11.2）
+  const modelsQ = useModels({ agentId });
 
   // 载入已有智能体。spec 在 OpenAPI 里是自由 dict（后端存的是 JSONB），
   // 这里断言成 ResolvedSpec —— 它由同一份 pydantic 模型序列化而来，结构一致。
@@ -285,6 +296,14 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
       spec: { ...d.spec, model: reconcileModelSpec({ ...d.spec.model, model }, info) },
     }));
   };
+
+  // 新建时当前模型不在平台登记的模型里，就换成第一个能选的。只在经模型管理平台（有 key）时这样做
+  const modelKey = modelsQ.data?.key;
+  const startModel = models.find((m) => m.is_available && m.selectable)?.model;
+  useEffect(() => {
+    if (!isNew || !modelKey || !startModel || modelInfo) return;
+    onModelChange(startModel);
+  }, [isNew, modelKey, modelInfo, startModel]);
 
   /**
    * 选中一个已有智能体 → 把它当时的配置**拷贝**进 subagents。
@@ -653,8 +672,9 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
                   onChange={onModelChange}
                   options={models.map((m) => ({
                     value: m.model,
-                    label: m.display_name || m.model,
-                    disabled: !m.is_available,
+                    label: modelLabel(m),
+                    // 弃用的不能新选；已经选着的照样显示（doc/model-design.html §5.3）
+                    disabled: !m.is_available || !m.selectable,
                   }))}
                 />
                 {modelInfo && (
@@ -662,6 +682,26 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
                     上下文 {(modelInfo.context_window / 1000).toFixed(0)}k · 最大输出{" "}
                     {(modelInfo.max_output_tokens / 1000).toFixed(0)}k
                   </p>
+                )}
+                {modelKey && (
+                  <div className={styles.capNote}>
+                    <div>
+                      {modelKey.status === "active"
+                        ? "列出这个智能体的模型 Key 能用的模型（模型管理员在模型管理平台分配）"
+                        : "列出模型管理平台上登记的全部模型"}
+                    </div>
+                    {modelKey.notes.map((n) => (
+                      <div key={n}>⚠ {n}</div>
+                    ))}
+                  </div>
+                )}
+                {modelKey && modelsQ.data?.gateway_reachable && !modelInfo && (
+                  <Alert
+                    type="error"
+                    showIcon
+                    style={{ marginTop: 8 }}
+                    message={`当前模型 ${draft.spec.model.model} 不在能用的列表里（没有分配给这个智能体，或已从平台删除），运行时会被拦下，请换一个`}
+                  />
                 )}
               </div>
 
@@ -824,6 +864,8 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
             value={draft.spec.knowledge ?? DEFAULT_KNOWLEDGE}
             kind={draft.spec.kind ?? "native"}
             readOnly={readOnly}
+            agentId={agentId}
+            authSubject={draft.auth_subject}
             onChange={(knowledge) => patchSpec({ knowledge })}
           />
 
