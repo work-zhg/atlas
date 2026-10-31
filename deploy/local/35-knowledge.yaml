@@ -46,9 +46,9 @@ spec:
             #   重排模型（约 1GB）首次使用时下载到默认目录，Pod 重建后要重新下载。
             - {name: MEM0_TELEMETRY, value: "False"}
             - name: ATLAS_KB_OSS_ACCESS_KEY_ID
-              valueFrom: {secretKeyRef: {name: atlas-config-creds, key: oss_access_key_id}}
+              valueFrom: {secretKeyRef: {name: atlas-oss-creds, key: oss_access_key_id}}
             - name: ATLAS_KB_OSS_ACCESS_KEY_SECRET
-              valueFrom: {secretKeyRef: {name: atlas-config-creds, key: oss_access_key_secret}}
+              valueFrom: {secretKeyRef: {name: atlas-oss-creds, key: oss_access_key_secret}}
             - name: ATLAS_KB_MCP_SECRET
               valueFrom: {secretKeyRef: {name: atlas-knowledge-mcp, key: secret}}
             # 入库增强（上下文补全、表格摘要）与查询理解用的 LLM：OpenAI 兼容的 chat/completions。
@@ -125,9 +125,9 @@ spec:
             #   重排模型（约 1GB）首次使用时下载到默认目录，Pod 重建后要重新下载。
             - {name: MEM0_TELEMETRY, value: "False"}
             - name: ATLAS_KB_OSS_ACCESS_KEY_ID
-              valueFrom: {secretKeyRef: {name: atlas-config-creds, key: oss_access_key_id}}
+              valueFrom: {secretKeyRef: {name: atlas-oss-creds, key: oss_access_key_id}}
             - name: ATLAS_KB_OSS_ACCESS_KEY_SECRET
-              valueFrom: {secretKeyRef: {name: atlas-config-creds, key: oss_access_key_secret}}
+              valueFrom: {secretKeyRef: {name: atlas-oss-creds, key: oss_access_key_secret}}
             - name: ATLAS_KB_MCP_SECRET
               valueFrom: {secretKeyRef: {name: atlas-knowledge-mcp, key: secret}}
             # 入库增强（上下文补全、表格摘要）与查询理解用的 LLM：OpenAI 兼容的 chat/completions。

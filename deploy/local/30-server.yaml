@@ -43,8 +43,8 @@ spec:
             - {name: OSS_BUCKET, value: atlas-dev}
             - {name: OSS_ADDRESSING_STYLE, value: path}
             - {name: OSS_REGION, value: us-east-1}
-            # 配置服务：技能目录（MCP 注册表已迁到 MCP 网关）
-            - {name: CONFIG_BASE_URL, value: "http://atlas-config.atlas-system.svc.cluster.local:8020"}
+            # 技能应用：技能目录（只读 /internal）
+            - {name: SKILL_BASE_URL, value: "http://atlas-skill.atlas-system.svc.cluster.local:8020"}
             # 知识库服务（doc/atlas-rag-design.html §10）；内网免令牌，带身份请求头
             - {name: KNOWLEDGE_BASE_URL, value: "http://atlas-knowledge.atlas-system.svc.cluster.local:8050"}
             # 原生智能体的 Shell 沙箱（doc/sandbox-opensandbox-design.html）：由 OpenSandbox 的 opensandbox-sbx 创建。
@@ -62,6 +62,17 @@ spec:
             - {name: OPENSANDBOX_ACP_URL, value: "http://opensandbox-acp.opensandbox-system.svc.cluster.local"}
             - name: OPENSANDBOX_ACP_API_KEY
               valueFrom: {secretKeyRef: {name: atlas-opensandbox, key: acp_api_key}}
+            # 评测档沙箱（opensandbox-bench：root、根可写，只给评测用）。★ 全部 optional：
+            #   没装（OPENSANDBOX_BENCH=1 deploy/local/opensandbox.sh 才装）就没有这几个键 → 没有评测档
+            - name: OPENSANDBOX_BENCH_URL
+              valueFrom: {configMapKeyRef: {name: atlas-sandbox-bench, key: url, optional: true}}
+            - name: SANDBOX_BENCH_IMAGE_ALLOW_PREFIXES
+              valueFrom: {configMapKeyRef: {name: atlas-sandbox-bench, key: image_prefixes, optional: true}}
+            - name: OPENSANDBOX_BENCH_API_KEY
+              valueFrom: {secretKeyRef: {name: atlas-opensandbox, key: bench_api_key, optional: true}}
+            # 评测档沙箱的出网代理（deploy/server/bench-egress.sh 建；没有就直连）
+            - name: SANDBOX_BENCH_PROXY
+              valueFrom: {secretKeyRef: {name: atlas-sandbox-bench-proxy, key: url, optional: true}}
             - {name: ACP_MODEL_NAME, value: deepseek-chat}
             - name: ACP_MODEL_BASE_URL
               valueFrom: {secretKeyRef: {name: atlas-server-creds, key: acp_model_base_url}}
@@ -74,7 +85,7 @@ spec:
             - name: KNOWLEDGE_MCP_SECRET
               valueFrom: {secretKeyRef: {name: atlas-knowledge-mcp, key: secret}}
             # 技能版本的磁盘缓存。容器里放 /tmp：丢了只是重新拉一次
-            - {name: CONFIGPLANE_CACHE_DIR, value: /tmp/atlas-configplane}
+            - {name: SKILL_CACHE_DIR, value: /tmp/atlas-skill}
             # 遥测（可观测性设计 §02）。Collector 跑在宿主的 compose 里，
             # 与 PG/Redis/MinIO 同款走 LAN IP —— host.docker.internal 会被
             # Docker Desktop 转发到宿主 loopback，命中不了 compose 的监听。
@@ -85,9 +96,8 @@ spec:
             # 身份与鉴权（doc/identity-propagation-design.html）：网关校验用户中心登录态、写入 X-Uid；
             # 缺 X-Uid 一律 401。操作码按 X-Auth-Uid 取用户中心授权快照（内网免令牌）
             - {name: UC_BASE_URL, value: "http://atlas-usercenter.atlas-system.svc.cluster.local:8030"}
-            # MCP 只经自研 MCP 网关（doc/mcp-design.html 第二版，37-mcpgateway.yaml）：服务、工具定义、
-            # 复核结论都从网关读，调用带这一轮权限主体的 API Key。★ 这里只有网关地址 —— 没有 Higress
-            # 的地址，也没有任何后端凭据。serpapi 的 90s 调用超时在网关登记时定（mcp-cutover.sh）
+            # MCP 只经自研 MCP 网关（37-mcpgateway.yaml）：服务、工具定义都从网关读，调用带这个智能体的
+            # MCP Key（网关的内部接口按智能体申请、获取）。★ 这里只有网关地址，没有任何上游凭据
             - {name: MCP_GATEWAY_URL, value: "http://atlas-mcpgateway.atlas-system.svc.cluster.local:8070"}
             # 模型（agent-platform/doc/design/model-design.html）：ConfigMap atlas-model-platform 有了才经
             #   模型管理平台（38-modelgateway.yaml）和 LiteLLM（39-litellm.yaml）—— deploy/server/model-cutover.sh

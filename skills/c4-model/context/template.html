@@ -1,0 +1,447 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>System Context View</title>
+<style>
+  body { margin: 0; background: #fff; color: #444; font-family: "Open Sans", "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
+  main { padding: 24px 32px 48px; }
+  svg { display: block; max-width: 100%; height: auto; }
+  h2 { margin: 40px 0 12px; font-size: 15px; font-weight: 600; color: #666; }
+  #c4-report { margin: 0 0 24px; padding: 12px 16px 12px 36px; border: 1px solid #e0b4b4; background: #fff6f6; font-size: 14px; line-height: 1.6; }
+  #c4-report li[data-level="error"] { color: #b00020; }
+  #c4-report li[data-level="warn"] { color: #8a5a00; }
+</style>
+</head>
+<body>
+<!--
+  只改下面这段 JSON；渲染器不用动。字段说明见 context/RULES.md 的「数据格式」。
+-->
+<script type="application/json" id="c4-model">
+{
+  "title": "System Context View: Internet Banking System",
+  "description": "The system context diagram for a fictional Internet Banking System | c4model.com | License: CC BY 4.0",
+  "elements": [
+    { "id": "customer", "kind": "person", "tag": "Customer", "at": [0, 0],
+      "name": "Personal Banking Customer",
+      "description": "A customer of the bank with one or more personal bank accounts." },
+    { "id": "ibs", "kind": "system", "scope": true, "at": [0, 1.1],
+      "name": "Internet Banking System",
+      "description": "Allows customers to view information about their bank accounts and make payments via the web." },
+    { "id": "core", "kind": "system", "at": [1.2, 1.55],
+      "name": "Core Banking System",
+      "description": "Handles core banking functions including customer information, bank account management, transactions, etc." },
+    { "id": "email", "kind": "system", "at": [1.2, 0.65],
+      "name": "Amazon Web Services Simple Email Service",
+      "description": "Cloud-based email service provider." }
+  ],
+  "relationships": [
+    { "from": "customer", "to": "ibs", "description": "Views account balances and makes payments using" },
+    { "from": "ibs", "to": "email", "description": "Sends e-mails to customers using" },
+    { "from": "ibs", "to": "core", "description": "Gets bank account information from and makes payments using" },
+    { "from": "email", "to": "customer", "description": "Sends e-mails to" }
+  ]
+}
+</script>
+
+<main>
+  <ul id="c4-report" hidden></ul>
+  <svg id="c4-diagram" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+  <h2>Diagram key</h2>
+  <svg id="c4-key" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+</main>
+
+<script>
+(() => {
+  'use strict';
+  const FONT = '"Open Sans", "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
+  const INK = '#444444';
+  const SCOPE_COLOR = '#1168bd';
+  const PALETTE = {
+    person: ['#297e06', '#1a849c', '#6b8e23'],
+    system: ['#ed8609', '#bf101d', '#8411bd', '#5b6770', '#b8336a'],
+  };
+  const KIND_LABEL = { person: 'Person', system: 'Software System' };
+  const COL = 560, ROW = 420;                 // 网格间距：at 的一个单位
+  const BOX = { w: 300, h: 200, rx: 12 };     // 软件系统
+  const BODY = { w: 300, h: 190, rx: 48 };    // 人员身体
+  const HEAD_R = 66, HEAD_OVERLAP = 16;       // 人员头部
+  const STROKE = 4, PAD = 18, MARGIN = 60;
+  const TXT = {
+    name: { size: 20, weight: 700, lh: 25 },
+    meta: { size: 12, weight: 400, lh: 18 },
+    desc: { size: 15, weight: 400, lh: 20 },
+    rel: { size: 14, weight: 400, lh: 18 },
+    key: { size: 14, weight: 400, lh: 18 },
+  };
+  const LABEL_W = 220, ARROW_L = 16, ARROW_W = 13, GAP = 4;
+
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const problems = [];
+  const fail = (msg) => problems.push({ level: 'error', msg });
+  const warn = (msg) => problems.push({ level: 'warn', msg });
+
+  const ctx = document.createElement('canvas').getContext('2d');
+  const measure = (s, st) => { ctx.font = `${st.weight} ${st.size}px ${FONT}`; return ctx.measureText(s).width; };
+
+  // 中文按字断行，英文按词断行；行首不放标点
+  const CJK = '\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef\u3000-\u303f';
+  const TOKEN = new RegExp(`[${CJK}]|[^\\s${CJK}]+|\\s+`, 'g');
+  const NO_LINE_START = /^[，。、；：！？）》」』,.;:!?)]$/;
+  function wrap(text, st, maxW) {
+    const lines = [];
+    for (const para of String(text || '').split('\n')) {
+      let line = '';
+      for (const tok of para.match(TOKEN) || []) {
+        if (/^\s+$/.test(tok)) { if (line) line += ' '; continue; }
+        const next = line + tok;
+        if (line.trim() && measure(next.trimEnd(), st) > maxW && !NO_LINE_START.test(tok)) {
+          lines.push(line.trimEnd());
+          line = tok;
+        } else {
+          line = next;
+        }
+      }
+      if (line.trim()) lines.push(line.trimEnd());
+    }
+    return lines;
+  }
+
+  // 行数不变的前提下收窄宽度，让各行长度接近，避免末行只剩一两个字
+  function wrapBalanced(text, st, maxW) {
+    const lines = wrap(text, st, maxW);
+    if (lines.length < 2) return lines;
+    let lo = maxW / 2, hi = maxW;
+    while (hi - lo > 4) {
+      const mid = (lo + hi) / 2;
+      if (wrap(text, st, mid).length > lines.length) lo = mid; else hi = mid;
+    }
+    return wrap(text, st, hi);
+  }
+
+  function node(tag, attrs, parent) {
+    const n = document.createElementNS(svgNS, tag);
+    for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+    parent.appendChild(n);
+    return n;
+  }
+  // top 是文字块上沿
+  function textLines(parent, lines, x, top, st, color, anchor = 'middle') {
+    const t = node('text', { x, y: top + st.lh / 2 + st.size * 0.35, 'text-anchor': anchor,
+      'font-family': FONT, 'font-size': st.size, 'font-weight': st.weight, fill: color }, parent);
+    lines.forEach((ln, i) => { node('tspan', { x, dy: i ? st.lh : 0 }, t).textContent = ln; });
+    return t;
+  }
+
+  const inter = (a, b, m = 0) => a.x < b.x + b.w + m && b.x < a.x + a.w + m && a.y < b.y + b.h + m && b.y < a.y + a.h + m;
+  function segHitsRect([x0, y0], [x1, y1], r) {
+    let t0 = 0, t1 = 1;
+    const dx = x1 - x0, dy = y1 - y0;
+    for (const [p, q] of [[-dx, x0 - r.x], [dx, r.x + r.w - x0], [-dy, y0 - r.y], [dy, r.y + r.h - y0]]) {
+      if (p === 0) { if (q < 0) return false; continue; }
+      const t = q / p;
+      if (p < 0) { if (t > t1) return false; if (t > t0) t0 = t; }
+      else { if (t < t0) return false; if (t < t1) t1 = t; }
+    }
+    return true;
+  }
+  // 从形状内部 (ox, oy) 沿 (dx, dy) 射出，返回离开形状时的 t；人员 = 身体矩形 ∪ 头部圆
+  function exitT(el, ox, oy, dx, dy) {
+    const b = el.box;
+    let t = Infinity;
+    if (dx > 0) t = Math.min(t, (b.x + b.w - ox) / dx); else if (dx < 0) t = Math.min(t, (b.x - ox) / dx);
+    if (dy > 0) t = Math.min(t, (b.y + b.h - oy) / dy); else if (dy < 0) t = Math.min(t, (b.y - oy) / dy);
+    if (el.head) {
+      const fx = ox - el.head.cx, fy = oy - el.head.cy;
+      const a = dx * dx + dy * dy, bb = 2 * (fx * dx + fy * dy), c = fx * fx + fy * fy - el.head.r ** 2;
+      const disc = bb * bb - 4 * a * c;
+      if (disc >= 0) {
+        const tin = (-bb - Math.sqrt(disc)) / (2 * a), tout = (-bb + Math.sqrt(disc)) / (2 * a);
+        if (tin <= t + 1e-6 && tout > t) t = tout;
+      }
+    }
+    return t;
+  }
+
+  function drawShape(g, el) {
+    const { box, color } = el;
+    if (el.kind === 'person') {
+      node('rect', { x: box.x, y: box.y, width: box.w, height: box.h, rx: BODY.rx * box.w / BODY.w,
+        fill: '#fff', stroke: color, 'stroke-width': STROKE }, g);
+      for (const f of [0.2, 0.8]) {
+        node('line', { x1: box.x + box.w * f, y1: box.y + box.h * 0.44, x2: box.x + box.w * f, y2: box.y + box.h,
+          stroke: color, 'stroke-width': 1, 'stroke-opacity': 0.55 }, g);
+      }
+      node('circle', { cx: el.head.cx, cy: el.head.cy, r: el.head.r, fill: '#fff', stroke: color, 'stroke-width': STROKE }, g);
+    } else {
+      node('rect', { x: box.x, y: box.y, width: box.w, height: box.h, rx: BOX.rx,
+        fill: '#fff', stroke: color, 'stroke-width': STROKE }, g);
+    }
+  }
+  function place(el, cx, cy, w, h, headR) {
+    el.box = { x: cx - w / 2, y: cy - h / 2, w, h };
+    if (el.kind === 'person') {
+      el.head = { cx, cy: el.box.y - headR + headR * HEAD_OVERLAP / HEAD_R, r: headR };
+      const top = el.head.cy - headR;
+      el.bounds = { x: el.box.x, y: top, w, h: el.box.y + h - top };
+    } else {
+      el.bounds = el.box;
+    }
+  }
+  // 边界名占的位置：用来检查关系标签有没有压到它
+  const FRAME_NAME = { size: 18, weight: 700 }, FRAME_TYPE = { size: 12, weight: 400 };
+  const frameLabelBox = (r, name, type) => ({ x: r.x + 14, y: r.y + r.h - 38,
+    w: measure(name, FRAME_NAME) + 6 + measure(`[${type}]`, FRAME_TYPE) + 12, h: 28 });
+  function drawArrow(g, start, end, dx, dy) {
+    const base = [end[0] - dx * ARROW_L, end[1] - dy * ARROW_L];
+    node('line', { x1: start[0], y1: start[1], x2: base[0], y2: base[1], stroke: INK, 'stroke-width': 2.5, 'stroke-dasharray': '10 7' }, g);
+    const nx = -dy * ARROW_W / 2, ny = dx * ARROW_W / 2;
+    node('polygon', { points: [end, [base[0] + nx, base[1] + ny], [base[0] - nx, base[1] - ny]].map((p) => p.join(',')).join(' '), fill: INK }, g);
+  }
+
+  function render() {
+    const model = JSON.parse(document.getElementById('c4-model').textContent);
+    if (model.title) document.title = model.title;
+    else fail('缺少 title（建议「System Context View: 系统名」）');
+
+    // ---- 元素 ----
+    const byId = new Map();
+    const els = [];
+    for (const el of model.elements || []) {
+      const who = el.id || el.name || '(未命名元素)';
+      if (!el.id) { fail(`${who}：缺少 id`); continue; }
+      if (byId.has(el.id)) { fail(`元素 id 重复：${el.id}`); continue; }
+      if (!KIND_LABEL[el.kind]) { fail(`${who}：kind 只能是 person 或 system`); continue; }
+      if (!Array.isArray(el.at) || el.at.length !== 2 || !el.at.every(Number.isFinite)) { fail(`${who}：at 必须是 [列, 行] 两个数字`); continue; }
+      if (!el.name) fail(`${who}：缺少 name`);
+      if (!el.description) fail(`${who}：缺少 description`);
+      if (el.scope && el.kind !== 'system') fail(`${who}：只有 system 能设 scope`);
+      byId.set(el.id, el);
+      els.push(el);
+    }
+    const scoped = els.filter((e) => e.scope);
+    if (scoped.length !== 1) fail(`必须有且只有一个 scope: true 的软件系统，当前 ${scoped.length} 个`);
+    const scope = scoped[0];
+
+    const assigned = new Map(), used = { person: 0, system: 0 };
+    for (const el of els) {
+      if (el.color) continue;
+      if (el === scope) { el.color = SCOPE_COLOR; continue; }
+      const k = `${el.kind}:${el.tag || el.id}`;
+      if (!assigned.has(k)) assigned.set(k, PALETTE[el.kind][used[el.kind]++ % PALETTE[el.kind].length]);
+      el.color = assigned.get(k);
+    }
+
+    for (const el of els) {
+      const isPerson = el.kind === 'person';
+      const base = isPerson ? BODY : BOX;
+      const innerW = base.w - 2 * PAD - (isPerson ? 24 : 0);
+      el.nameLines = wrapBalanced(el.name, TXT.name, innerW);
+      el.descLines = wrapBalanced(el.description, TXT.desc, innerW);
+      el.textH = el.nameLines.length * TXT.name.lh + TXT.meta.lh + 6 + el.descLines.length * TXT.desc.lh;
+      const h = Math.max(base.h, el.textH + 2 * PAD + (isPerson ? HEAD_OVERLAP + 12 : 0));
+      place(el, el.at[0] * COL, el.at[1] * ROW, base.w, h, HEAD_R);
+    }
+    for (let i = 0; i < els.length; i++) {
+      for (let j = i + 1; j < els.length; j++) {
+        if (inter(els[i].bounds, els[j].bounds, 40)) fail(`「${els[i].name}」和「${els[j].name}」重叠或太近，调整 at`);
+      }
+    }
+
+    // ---- 关系 ----
+    const rels = (model.relationships || []).filter((r) => {
+      const who = `${r.from} → ${r.to}`;
+      if (!byId.has(r.from) || !byId.has(r.to)) { fail(`关系 ${who}：端点 id 不存在`); return false; }
+      if (r.from === r.to) { fail(`关系 ${who}：不能指向自己`); return false; }
+      if (!r.description) fail(`关系 ${who}：缺少 description（写交互目的）`);
+      return true;
+    });
+    if (scope) {
+      for (const el of els) {
+        if (el === scope) continue;
+        const linked = rels.some((r) => (r.from === el.id && r.to === scope.id) || (r.from === scope.id && r.to === el.id));
+        if (!linked) fail(`「${el.name}」没有和「${scope.name}」直接相连，不该出现在这张图上`);
+      }
+    }
+    // 同一对元素之间的多条关系：平行错开，标签沿线错开。错开量按同一个参考方向（id 小的一端 → 大的一端）算，
+    // 再换算回每条关系自己的方向 —— 否则两条方向相反的关系，标签会落在同一点
+    const pairs = new Map();
+    for (const r of rels) {
+      const k = [r.from, r.to].sort().join('\u0000');
+      if (!pairs.has(k)) pairs.set(k, []);
+      pairs.get(k).push(r);
+    }
+    for (const list of pairs.values()) {
+      list.forEach((r, i) => {
+        const k = i - (list.length - 1) / 2;
+        const along = 0.5 + k * 0.3;
+        r.offset = k * 28;
+        r.t = Number.isFinite(r.labelAt) ? r.labelAt : r.from < r.to ? along : 1 - along;
+      });
+    }
+    for (const r of rels) {
+      const a = byId.get(r.from), b = byId.get(r.to);
+      const [p, q] = r.from < r.to ? [a, b] : [b, a];
+      const pc = [p.box.x + p.box.w / 2, p.box.y + p.box.h / 2], qc = [q.box.x + q.box.w / 2, q.box.y + q.box.h / 2];
+      let nx = pc[1] - qc[1], ny = qc[0] - pc[0];
+      const nl = Math.hypot(nx, ny) || 1;
+      nx /= nl; ny /= nl;
+      const ac = [a.box.x + a.box.w / 2 + nx * r.offset, a.box.y + a.box.h / 2 + ny * r.offset];
+      const bc = [b.box.x + b.box.w / 2 + nx * r.offset, b.box.y + b.box.h / 2 + ny * r.offset];
+      const len = Math.hypot(bc[0] - ac[0], bc[1] - ac[1]);
+      if (!len) { r.skip = true; continue; }
+      r.dx = (bc[0] - ac[0]) / len; r.dy = (bc[1] - ac[1]) / len;
+      const t0 = exitT(a, ac[0], ac[1], r.dx, r.dy) + GAP;
+      const t1 = exitT(b, bc[0], bc[1], -r.dx, -r.dy) + GAP;
+      if (t0 + t1 + ARROW_L + 20 >= len) { fail(`关系「${r.description}」两端元素太近，连线放不下`); r.skip = true; continue; }
+      r.start = [ac[0] + r.dx * t0, ac[1] + r.dy * t0];
+      r.end = [bc[0] - r.dx * t1, bc[1] - r.dy * t1];
+      r.lines = wrapBalanced(r.description, TXT.rel, LABEL_W);
+      const lw = Math.max(...r.lines.map((s) => measure(s, TXT.rel)), 0) + 10;
+      const lh = r.lines.length * TXT.rel.lh + 6;
+      const mx = r.start[0] + (r.end[0] - r.start[0]) * r.t, my = r.start[1] + (r.end[1] - r.start[1]) * r.t;
+      r.label = r.lines.length ? { x: mx - lw / 2, y: my - lh / 2, w: lw, h: lh } : null;
+    }
+    const drawn = rels.filter((r) => !r.skip);
+    const labelled = drawn.filter((r) => r.label);
+    for (const r of drawn) {
+      for (const el of els) {
+        if (r.from !== el.id && r.to !== el.id && segHitsRect(r.start, r.end, el.bounds)) warn(`关系「${r.description}」的连线穿过「${el.name}」`);
+        if (r.label && inter(r.label, el.bounds, 6)) warn(`关系「${r.description}」的标签压到「${el.name}」，调整 labelAt 或元素位置`);
+      }
+    }
+    for (let i = 0; i < labelled.length; i++) {
+      for (let j = i + 1; j < labelled.length; j++) {
+        if (inter(labelled[i].label, labelled[j].label, 4)) warn(`关系「${labelled[i].description}」和「${labelled[j].description}」的标签重叠`);
+      }
+    }
+
+    // ---- 企业边界（可选）----
+    const bnd = model.boundary;
+    if (bnd) {
+      const members = (bnd.members || []).map((id) => byId.get(id) || (fail(`boundary.members 里的 ${id} 不存在`), null)).filter(Boolean);
+      if (!bnd.name) fail('boundary 缺少 name');
+      if (scope && !members.includes(scope)) fail('boundary 必须包含 scope 系统');
+      if (members.length) {
+        const x0 = Math.min(...members.map((e) => e.bounds.x)), y0 = Math.min(...members.map((e) => e.bounds.y));
+        const x1 = Math.max(...members.map((e) => e.bounds.x + e.bounds.w)), y1 = Math.max(...members.map((e) => e.bounds.y + e.bounds.h));
+        bnd.rect = { x: x0 - 40, y: y0 - 40, w: x1 - x0 + 80, h: y1 - y0 + 80 + 30 };
+        for (const el of els) {
+          if (!members.includes(el) && inter(el.bounds, bnd.rect)) fail(`「${el.name}」不是边界成员，却落在边界框里，调整 at`);
+        }
+        const nameBox = frameLabelBox(bnd.rect, bnd.name || '', 'Enterprise');
+        for (const r of labelled) {
+          if (inter(r.label, nameBox, 2)) warn(`关系「${r.description}」的标签压到边界名「${bnd.name}」，调整 labelAt 或元素位置`);
+        }
+      }
+    }
+
+    // ---- 绘制 ----
+    const svg = document.getElementById('c4-diagram');
+    const gB = node('g', {}, svg), gR = node('g', {}, svg), gE = node('g', {}, svg), gL = node('g', {}, svg), gT = node('g', {}, svg);
+    if (bnd && bnd.rect) {
+      const r = bnd.rect;
+      node('rect', { x: r.x, y: r.y, width: r.w, height: r.h, rx: 16, fill: 'none', stroke: '#8a8a8a', 'stroke-width': 2.5, 'stroke-dasharray': '14 8' }, gB);
+      const t = node('text', { x: r.x + 20, y: r.y + r.h - 18, 'font-family': FONT, fill: '#666' }, gB);
+      node('tspan', { 'font-size': 18, 'font-weight': 700 }, t).textContent = bnd.name || '';
+      node('tspan', { 'font-size': 12, dx: 6 }, t).textContent = '[Enterprise]';
+    }
+    for (const r of drawn) {
+      drawArrow(gR, r.start, r.end, r.dx, r.dy);
+      if (!r.label) continue;
+      node('rect', { x: r.label.x, y: r.label.y, width: r.label.w, height: r.label.h, fill: '#fff' }, gL);
+      textLines(gL, r.lines, r.label.x + r.label.w / 2, r.label.y + 3, TXT.rel, INK);
+    }
+    for (const el of els) {
+      const g = node('g', {}, gE);
+      drawShape(g, el);
+      const cx = el.box.x + el.box.w / 2;
+      let y = el.box.y + (el.box.h - el.textH) / 2 + (el.kind === 'person' ? HEAD_OVERLAP / 2 + 6 : 0);
+      textLines(g, el.nameLines, cx, y, TXT.name, el.color);
+      y += el.nameLines.length * TXT.name.lh;
+      textLines(g, [`[${KIND_LABEL[el.kind]}]`], cx, y, TXT.meta, el.color);
+      y += TXT.meta.lh + 6;
+      textLines(g, el.descLines, cx, y, TXT.desc, el.color);
+    }
+    const boxes = [...els.map((e) => e.bounds), ...labelled.map((r) => r.label), ...(bnd && bnd.rect ? [bnd.rect] : [])];
+    if (!boxes.length) boxes.push({ x: 0, y: 0, w: 0, h: 0 });
+    const minX = Math.min(...boxes.map((b) => b.x)), minY = Math.min(...boxes.map((b) => b.y));
+    let maxX = Math.max(...boxes.map((b) => b.x + b.w)), maxY = Math.max(...boxes.map((b) => b.y + b.h));
+    const title = { size: 26, weight: 400, lh: 34 }, sub = { size: 15, weight: 400, lh: 22 };
+    textLines(gT, [model.title || ''], minX, maxY + 50, title, INK, 'start');
+    if (model.description) textLines(gT, [model.description], minX, maxY + 50 + title.lh, sub, '#666', 'start');
+    maxX = Math.max(maxX, minX + measure(model.title || '', title), minX + measure(model.description || '', sub));
+    maxY += 50 + title.lh + (model.description ? sub.lh : 0);
+    const vw = maxX - minX + 2 * MARGIN, vh = maxY - minY + 2 * MARGIN;
+    svg.setAttribute('viewBox', `${minX - MARGIN} ${minY - MARGIN} ${vw} ${vh}`);
+    svg.setAttribute('width', vw);
+    svg.setAttribute('aria-label', model.title || 'System Context diagram');
+
+    renderKey(els, scope, bnd);
+  }
+
+  // ---- 图例：每种「形状 + 颜色」一项，再加关系线和企业边界 ----
+  function renderKey(els, scope, bnd) {
+    const svg = document.getElementById('c4-key');
+    const groups = new Map();
+    const order = [...els].sort((a, b) => (b === scope) - (a === scope) || (a.kind === 'person') - (b.kind === 'person'));
+    for (const el of order) {
+      const k = `${el.kind}|${el.color}`;
+      if (!groups.has(k)) groups.set(k, { kind: el.kind, color: el.color, labels: [] });
+      const label = el.tag || el.name;
+      if (!groups.get(k).labels.includes(label)) groups.get(k).labels.push(label);
+    }
+    const items = [...groups.values()].map((g) => ({ ...g, text: (g.kind === 'person' ? 'Person, ' : '') + g.labels.join('、') }));
+    items.push({ kind: 'rel', text: 'Relationship' });
+    if (bnd && bnd.rect) items.push({ kind: 'boundary', text: 'Enterprise boundary' });
+
+    const CELL_W = 210, CELL_H = 200, PER_ROW = 8, W = 180, H = 116, HR = 38;
+    items.forEach((it, i) => {
+      const cx = (i % PER_ROW) * (CELL_W + 24) + CELL_W / 2, cy = Math.floor(i / PER_ROW) * (CELL_H + 24) + CELL_H - H / 2;
+      const g = node('g', {}, svg);
+      if (it.kind === 'rel') {
+        drawArrow(g, [cx - 80, cy - 10], [cx + 80, cy - 10], 1, 0);
+        textLines(g, [it.text], cx, cy + 6, TXT.key, INK);
+        return;
+      }
+      if (it.kind === 'boundary') {
+        node('rect', { x: cx - W / 2, y: cy - H / 2, width: W, height: H, rx: 12, fill: 'none', stroke: '#8a8a8a', 'stroke-width': 2.5, 'stroke-dasharray': '14 8' }, g);
+        textLines(g, [it.text], cx, cy - TXT.key.lh / 2, TXT.key, '#666');
+        return;
+      }
+      const el = { kind: it.kind, color: it.color };
+      place(el, cx, cy, W, H, HR);
+      drawShape(g, el);
+      const lines = wrapBalanced(it.text, TXT.key, W - 30);
+      const top = cy - (lines.length * TXT.key.lh) / 2 + (it.kind === 'person' ? 12 : 0);
+      textLines(g, lines, cx, top, TXT.key, it.color);
+    });
+    const rows = Math.ceil(items.length / PER_ROW), cols = Math.min(items.length, PER_ROW);
+    const vw = cols * (CELL_W + 24), vh = rows * (CELL_H + 24);
+    svg.setAttribute('viewBox', `-10 -10 ${vw + 20} ${vh + 20}`);
+    svg.setAttribute('width', vw + 20);
+    svg.setAttribute('aria-label', 'Diagram key');
+  }
+
+  try {
+    render();
+  } catch (e) {
+    fail(`渲染异常：${e && e.message}`);
+    console.error(e);
+  }
+  const status = problems.some((p) => p.level === 'error') ? 'error' : problems.length ? 'warn' : 'ok';
+  document.documentElement.dataset.c4Status = status;
+  const report = document.getElementById('c4-report');
+  for (const p of problems) {
+    const li = document.createElement('li');
+    li.dataset.level = p.level;
+    li.textContent = p.msg;
+    report.appendChild(li);
+  }
+  report.hidden = !problems.length;
+  if (problems.length) console.warn('[c4]', problems);
+})();
+</script>
+</body>
+</html>

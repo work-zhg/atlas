@@ -133,7 +133,7 @@ async def read_stream(
     try:
         async with get_sessionmaker()() as session:
             service = RunService(session, redis, conf, None)  # type: ignore[arg-type]
-            gen = service.stream_thread(UUID(thread_id), after_seq=after_seq)
+            gen = await service.open_thread_stream(UUID(thread_id), after_seq=after_seq)
             try:
                 async with asyncio.timeout(seconds):
                     async for frame in gen:
@@ -174,7 +174,7 @@ async def iter_stream(thread_id: str, *, after_seq: int | None, seconds: float =
     try:
         async with get_sessionmaker()() as session:
             service = RunService(session, redis, conf, None)  # type: ignore[arg-type]
-            gen = service.stream_thread(UUID(thread_id), after_seq=after_seq)
+            gen = await service.open_thread_stream(UUID(thread_id), after_seq=after_seq)
             try:
                 async with asyncio.timeout(seconds):
                     async for frame in gen:

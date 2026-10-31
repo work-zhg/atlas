@@ -1,8 +1,8 @@
 """技能 / MCP 的只读视图（技能 / MCP 设计 §13.3）。
 
-管理页要的东西分在几处：技能的内容与审查在配置服务；MCP 的注册表、工具定义、复核、授权在
+管理页要的东西分在几处：技能的内容与审查在技能应用；MCP 的注册表、工具定义、复核、授权在
 MCP 网关（doc/mcp-design.html 第二版）；「谁在用」「用得怎样」只有运行时知道。这里提供最后
-这一半 —— 配置服务、MCP 网关都不反向调运行时。MCP 的工具定义读网关的元数据（缓存）。
+这一半 —— 技能应用、MCP 网关都不反向调运行时。MCP 的工具定义读网关的元数据（缓存）。
 """
 
 from __future__ import annotations
@@ -17,7 +17,6 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from ..configplane import ConfigPlaneUnavailable, skill_directory
 from ..db.models import Agent, AgentVersion, Thread
 from ..domain.mcp_naming import parse_tool_id, tool_id
 from ..errors import AppError, CapabilityUnavailable, DependencyUnavailable, NotFound
@@ -37,6 +36,7 @@ from ..schemas.catalog import (
     SkillUsageItem,
     SkillUsageOut,
 )
+from ..skills import SkillServiceUnavailable, skill_directory
 
 if TYPE_CHECKING:
     import redis.asyncio as aioredis
@@ -78,7 +78,7 @@ class CatalogService:
         directory = skill_directory(self._settings)
         try:
             catalog = await directory.catalog()
-        except ConfigPlaneUnavailable as exc:
+        except SkillServiceUnavailable as exc:
             raise DependencyUnavailable(f"技能目录暂时不可用：{exc}") from exc
         refs = Counter(r.skill for r in await self._skill_refs())
         loads: Counter[str] = Counter()

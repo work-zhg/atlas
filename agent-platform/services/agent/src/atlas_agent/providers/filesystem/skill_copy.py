@@ -87,10 +87,10 @@ async def resolve_skills(
 
     ★ 已紧急下架的版本跳过（设计 §7.3）：下架是为了止损，不是让 agent 不可用，
       所以不让会话 / run 失败；跳过的清单交给调用方变成 skill.skipped 事件。
-    ★ description 的权威来源是**配置服务**，不是会话副本里的 frontmatter ——
+    ★ description 的权威来源是**技能应用**，不是会话副本里的 frontmatter ——
       技能进了会话就能被 execute 改，而 description 是模型的**路由依据**
       （决定要不要展开正文）。让它始终来自那份经过审查的版本。
-    ★ 没接配置服务（directory.configured=False）时退回接入前的行为：照 spec
+    ★ 没接技能应用（directory.configured=False）时退回接入前的行为：照 spec
       投送，描述以 slug 兜底。
     ★ 下架清单拉不到时**放行**（打 warning）：拿不到「哪些被下架了」不该让所有
       带技能的会话一起失败 —— 下架晚生效一会儿是可以接受的代价。

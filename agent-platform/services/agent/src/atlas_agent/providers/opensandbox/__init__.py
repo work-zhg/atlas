@@ -10,6 +10,7 @@ from .acp import AcpProvisioner, GitProfileDenied, OpenSandboxPods, acp_spec
 from .execd import ExecdClient, ExecdFiles, ExecdGone
 from .lifecycle import LifecycleClient, LifecycleError
 from .provision import (
+    BENCH,
     EXECD_PORT,
     ImageDenied,
     Provisioner,
@@ -17,10 +18,12 @@ from .provision import (
     SandboxEndpoint,
     SandboxProvisioner,
     SandboxRoutes,
+    SandboxServers,
     sandbox_spec,
 )
 
 __all__ = [
+    "BENCH",
     "EXECD_PORT",
     "AcpProvisioner",
     "ExecdClient",
@@ -36,6 +39,7 @@ __all__ = [
     "SandboxEndpoint",
     "SandboxProvisioner",
     "SandboxRoutes",
+    "SandboxServers",
     "acp_spec",
     "sandbox_spec",
 ]

@@ -4,7 +4,7 @@
  * 技能管理（prototype/atlas-v2.html「技能」页；doc/skill-mcp-backend-design.html §5–§7）。
  *
  * 数据来自两边，各管各的：
- *   配置服务（/config/skills）   内容、版本、扫描结果、审查、状态 —— 可写
+ *   技能应用（/api/v1/skills）   内容、版本、扫描结果、审查、状态 —— 可写（按技能应用的操作码）
  *   运行时（/v1/skills/*）       被谁引用、近 7 天加载 —— 只读
  */
 import {
@@ -27,16 +27,17 @@ import { useMemo, useState } from "react";
 import { useSkillCatalog, useSkillReferences, useSkillUsage } from "@/api/catalog";
 import {
   type SkillAction,
-  useConfigSkills,
   useReviewSkill,
+  useSkMe,
   useSkillAction,
   useSkillFile,
+  useSkills,
   useUploadSkill,
-} from "@/api/config";
-import type { ConfigSkill, ConfigSkillVersion } from "@/api/config-types";
+} from "@/api/skill-app";
+import type { ManagedSkill, ManagedSkillVersion } from "@/api/skill-types";
 import { Icon } from "@/components/Icon";
 import { relativeTime } from "@/lib/format";
-import { ApiError, CONFIG_API_BASE } from "@/lib/http";
+import { ApiError, SKILL_API_BASE } from "@/lib/http";
 import pageStyles from "@/features/agents/agents.module.css";
 import styles from "./catalog.module.css";
 
@@ -57,21 +58,22 @@ const SOURCE_LABEL: Record<string, string> = {
 type Scope = "all" | "published" | "pending" | "inactive";
 
 interface Row {
-  skill: ConfigSkill;
-  latest?: ConfigSkillVersion;
-  pending?: ConfigSkillVersion;
+  skill: ManagedSkill;
+  latest?: ManagedSkillVersion;
+  pending?: ManagedSkillVersion;
   references: number;
   loads7d: number;
 }
 
-function latestReleased(skill: ConfigSkill): ConfigSkillVersion | undefined {
+function latestReleased(skill: ManagedSkill): ManagedSkillVersion | undefined {
   return [...skill.versions]
     .filter((v) => v.version != null)
     .sort((a, b) => (b.version ?? 0) - (a.version ?? 0))[0];
 }
 
 export function SkillsPage() {
-  const configQ = useConfigSkills();
+  const skillsQ = useSkills();
+  const { data: me } = useSkMe();
   const runtimeQ = useSkillCatalog();
   const [scope, setScope] = useState<Scope>("all");
   const [keyword, setKeyword] = useState("");
@@ -80,14 +82,14 @@ export function SkillsPage() {
 
   const rows = useMemo<Row[]>(() => {
     const runtime = new Map((runtimeQ.data?.data ?? []).map((s) => [s.slug, s]));
-    return (configQ.data ?? []).map((skill) => ({
+    return (skillsQ.data ?? []).map((skill) => ({
       skill,
       latest: latestReleased(skill),
       pending: skill.versions.find((v) => v.status === "pending_review"),
       references: runtime.get(skill.slug)?.references ?? 0,
       loads7d: runtime.get(skill.slug)?.loads_7d ?? 0,
     }));
-  }, [configQ.data, runtimeQ.data]);
+  }, [skillsQ.data, runtimeQ.data]);
 
   const visible = rows.filter((r) => {
     const kw = keyword.trim().toLowerCase();
@@ -114,14 +116,16 @@ export function SkillsPage() {
                 可复用的工作方法。版本发布后不可变；含脚本或非内置的技能必须经人工审查。
               </p>
             </div>
-            <Button
-              type="primary"
-              className={pageStyles.action}
-              icon={<Icon name="upload" size={14} />}
-              onClick={() => setUploading(true)}
-            >
-              上传技能
-            </Button>
+            {me?.can_upload && (
+              <Button
+                type="primary"
+                className={pageStyles.action}
+                icon={<Icon name="upload" size={14} />}
+                onClick={() => setUploading(true)}
+              >
+                上传技能
+              </Button>
+            )}
           </div>
           <div className={pageStyles.filterRow}>
             <Input
@@ -146,13 +150,13 @@ export function SkillsPage() {
         </header>
 
         <div className={pageStyles.body}>
-          {configQ.error && (
+          {skillsQ.error && (
             <Alert
               type="error"
               showIcon
               style={{ marginBottom: 16 }}
-              message="连不上配置服务"
-              description={`${CONFIG_API_BASE} —— ${configQ.error.message}。本机启动：make config-serve`}
+              message="连不上技能应用"
+              description={`${SKILL_API_BASE} —— ${skillsQ.error.message}。本机启动：make skill-serve`}
             />
           )}
           {runtimeQ.error && (
@@ -174,11 +178,11 @@ export function SkillsPage() {
               showIcon
               style={{ marginBottom: 16 }}
               message="运行时还没有接入技能目录"
-              description="server 未配置 CONFIG_BASE_URL：智能体里引用技能必须手写版本号，技能描述以名称代替。"
+              description="server 未配置 SKILL_BASE_URL：智能体里引用技能必须手写版本号，技能描述以名称代替。"
             />
           )}
-          {configQ.isPending && <Skeleton active paragraph={{ rows: 6 }} />}
-          {configQ.data && visible.length === 0 && (
+          {skillsQ.isPending && <Skeleton active paragraph={{ rows: 6 }} />}
+          {skillsQ.data && visible.length === 0 && (
             <Empty
               style={{ marginTop: 64 }}
               description={rows.length ? "没有匹配的技能" : "还没有技能 —— 上传一个 zip 包开始"}
@@ -272,6 +276,8 @@ function SkillDetail({ row }: { row: Row }) {
   const usageQ = useSkillUsage(7);
   const review = useReviewSkill();
   const action = useSkillAction();
+  // 审查、停用、下架、重新检查都要 skill:review（只是体验，权限在技能应用的接口上）
+  const canReview = !!useSkMe().data?.can_review;
 
   if (!version) return null;
   const st = SKILL_STATUS[version.status];
@@ -350,7 +356,7 @@ function SkillDetail({ row }: { row: Row }) {
             label: `${v.version != null ? `v${v.version}` : "上传"} · ${SKILL_STATUS[v.status]?.label ?? v.status}`,
           }))}
         />
-        {version.status === "pending_review" && (
+        {canReview && version.status === "pending_review" && (
           <>
             <Button size="small" type="primary" onClick={() => doReview(true)}>
               批准
@@ -360,22 +366,22 @@ function SkillDetail({ row }: { row: Row }) {
             </Button>
           </>
         )}
-        {version.status === "published" && (
+        {canReview && version.status === "published" && (
           <Button size="small" onClick={() => doAction("disable", "停用（不可被新引用）")}>
             停用
           </Button>
         )}
-        {version.status === "disabled" && (
+        {canReview && version.status === "disabled" && (
           <Button size="small" onClick={() => doAction("enable", "重新启用")}>
             启用
           </Button>
         )}
-        {(version.status === "published" || version.status === "disabled") && (
+        {canReview && (version.status === "published" || version.status === "disabled") && (
           <Button size="small" danger onClick={() => doAction("revoke", "紧急下架（不可撤销，写明原因）", true)}>
             紧急下架
           </Button>
         )}
-        {version.version != null && version.status !== "rejected" && (
+        {canReview && version.version != null && version.status !== "rejected" && (
           <Button size="small" type="text" onClick={() => doAction("rescan", "按当前规则重新检查")}>
             重新检查
           </Button>

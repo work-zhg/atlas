@@ -1,0 +1,2043 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>MCP 网关 — 原型</title>
+<style>
+/* 视觉与用户中心、TeamFlow 原型一致（同一套设计 token） */
+:root {
+  --bg: #f6f7f9; --surface: #ffffff; --surface-2: #fbfbfd;
+  --ink: #0f172a; --ink-2: #334155; --ink-3: #64748b; --ink-4: #94a3b8;
+  --line: #e6e8ee; --line-2: #eef0f4;
+  --primary: #4f46e5; --primary-2: #6366f1; --primary-weak: #eef0ff;
+  --secondary: #0ea5e9; --secondary-weak: #e6f6fe;
+  --success: #16a34a; --success-weak: #e7f6ec;
+  --warning: #f59e0b; --warning-weak: #fef3e2;
+  --danger: #dc2626; --danger-weak: #fdeaea;
+  --sidebar: #111827;
+  --radius: 12px; --radius-sm: 10px; --radius-xs: 8px;
+  --shadow-xs: 0 1px 2px rgba(16,24,40,.05);
+  --shadow-md: 0 6px 18px rgba(16,24,40,.08), 0 2px 6px rgba(16,24,40,.05);
+  --shadow-lg: 0 20px 48px rgba(16,24,40,.16);
+  --font: "Inter", "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { font-family: var(--font); background: var(--bg); color: var(--ink); font-size: 14px; line-height: 1.55; -webkit-font-smoothing: antialiased; }
+a { color: inherit; text-decoration: none; }
+button, input, select, textarea { font-family: inherit; font-size: inherit; color: inherit; }
+h1, h2, h3, h4 { margin: 0; color: var(--ink); }
+code { font-family: var(--mono); font-size: 12px; background: var(--line-2); padding: 1px 5px; border-radius: 5px; }
+[hidden] { display: none !important; }
+
+/* ---------- 骨架 ---------- */
+.app-shell { display: flex; min-height: 100vh; }
+.sidebar { width: 232px; flex: 0 0 232px; background: var(--sidebar); color: #cbd5e1; display: flex; flex-direction: column; padding: 16px 12px; position: sticky; top: 0; height: 100vh; }
+.brand { display: flex; gap: 10px; align-items: center; padding: 6px 8px 18px; }
+.brand-text { display: flex; flex-direction: column; line-height: 1.15; }
+.brand-text strong { color: #fff; font-size: 15px; }
+.brand-text small { color: #8592a8; font-size: 11px; }
+.nav { display: flex; flex-direction: column; gap: 3px; }
+.nav-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: var(--radius-sm); color: #aeb8cb; font-weight: 550; font-size: 13.5px; position: relative; }
+.nav-item svg { width: 17px; height: 17px; flex: none; }
+.nav-item:hover { background: rgba(255,255,255,.06); color: #e8edf6; }
+.nav-item.active { background: linear-gradient(90deg, rgba(14,165,233,.26), rgba(99,102,241,.16)); color: #fff; }
+.nav-item.active::before { content: ""; position: absolute; left: -12px; top: 8px; bottom: 8px; width: 3px; background: var(--secondary); border-radius: 0 3px 3px 0; }
+.nav-group { font-size: 11px; color: #64748b; padding: 14px 12px 4px; letter-spacing: .04em; }
+.sidebar-foot { margin-top: auto; padding-top: 12px; border-top: 1px solid rgba(255,255,255,.08); }
+.me { display: flex; align-items: center; gap: 10px; padding: 6px 8px; }
+.me strong { color: #eef2f8; font-size: 13px; display: block; }
+.me small { color: #8592a8; font-size: 11px; }
+.main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.topbar { position: sticky; top: 0; z-index: 30; background: rgba(255,255,255,.88); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); padding: 10px 26px; display: flex; align-items: center; gap: 12px; min-height: 52px; }
+.crumbs { display: flex; gap: 8px; color: var(--ink-3); font-size: 13px; }
+.crumbs .sep { color: var(--ink-4); }
+.crumbs .cur { color: var(--ink); font-weight: 650; }
+.content { padding: 24px 26px 60px; }
+
+/* ---------- 通用 ---------- */
+.page-head { display: flex; align-items: flex-end; gap: 16px; margin-bottom: 18px; flex-wrap: wrap; }
+.page-head h1 { font-size: 21px; }
+.page-head .sub { color: var(--ink-3); font-size: 13px; margin-top: 3px; }
+.grow { flex: 1; }
+.row { display: flex; align-items: center; gap: 8px; }
+.muted { color: var(--ink-3); }
+.small { font-size: 12.5px; }
+.mono { font-family: var(--mono); font-size: 12.5px; }
+.mt8 { margin-top: 8px; } .mt12 { margin-top: 12px; } .mt16 { margin-top: 16px; } .mb12 { margin-bottom: 12px; } .mb16 { margin-bottom: 16px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow-xs); }
+.card-h { display: flex; align-items: center; gap: 10px; padding: 12px 18px; border-bottom: 1px solid var(--line-2); min-height: 52px; flex-wrap: wrap; }
+.card-h h3 { font-size: 14.5px; }
+.card-b { padding: 16px 18px; }
+.grid-2c { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+
+.btn { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: var(--surface); color: var(--ink-2); padding: 7px 13px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+.btn:hover { border-color: #cfd4e2; background: var(--surface-2); }
+.btn-primary { background: var(--primary); border-color: var(--primary); color: #fff; box-shadow: 0 4px 12px rgba(79,70,229,.22); }
+.btn-primary:hover { background: var(--primary-2); border-color: var(--primary-2); }
+.btn-danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+.btn-danger:hover { background: #b91c1c; border-color: #b91c1c; }
+.btn-sm { padding: 4px 10px; font-size: 12px; border-radius: var(--radius-xs); }
+.btn-link { border: 0; background: none; color: var(--primary); padding: 2px 4px; font-size: 12.5px; cursor: pointer; font-weight: 600; }
+.btn-link:hover { text-decoration: underline; }
+.btn-link.danger { color: var(--danger); }
+.btn[disabled] { opacity: .45; cursor: not-allowed; }
+
+.badge { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 600; border: 1px solid transparent; white-space: nowrap; }
+.badge .bdot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.badge-gray { background: #f1f3f7; color: #64748b; border-color: #e6e9ef; }
+.badge-blue { background: var(--secondary-weak); color: #0369a1; border-color: #cfeafb; }
+.badge-orange { background: var(--warning-weak); color: #b45309; border-color: #fce6c0; }
+.badge-green { background: var(--success-weak); color: #15803d; border-color: #cdecd6; }
+.badge-red { background: var(--danger-weak); color: #b91c1c; border-color: #f7cfcf; }
+.badge-purple { background: var(--primary-weak); color: var(--primary); border-color: #dcdcfb; }
+.tag { display: inline-flex; align-items: center; padding: 1px 8px; border-radius: 6px; font-size: 11.5px; background: var(--surface-2); border: 1px solid var(--line); color: var(--ink-2); white-space: nowrap; margin: 1px 0; }
+.tag.mono { font-family: var(--mono); font-size: 11.5px; }
+.tag.warn { background: var(--warning-weak); border-color: #fce6c0; color: #b45309; }
+.tag.gone { color: var(--ink-4); text-decoration: line-through; }
+
+.avatar { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-weight: 700; font-size: 12.5px; flex: none; }
+
+.table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.table th { text-align: left; font-weight: 600; color: var(--ink-3); font-size: 12px; padding: 10px 12px; border-bottom: 1px solid var(--line); background: var(--surface-2); white-space: nowrap; }
+.table td { padding: 10px 12px; border-bottom: 1px solid var(--line-2); color: var(--ink-2); vertical-align: middle; }
+.table tr:last-child td { border-bottom: 0; }
+.table tr.click:hover td { background: var(--surface-2); cursor: pointer; }
+.table .nowrap { white-space: nowrap; }
+.mname { font-weight: 650; color: var(--ink); }
+
+.tabs { display: inline-flex; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 3px; gap: 2px; }
+.tabs button { border: 0; background: none; padding: 6px 12px; border-radius: var(--radius-xs); font-size: 13px; color: var(--ink-3); cursor: pointer; display: inline-flex; gap: 6px; align-items: center; }
+.tabs button.on { background: var(--primary-weak); color: var(--primary); font-weight: 650; }
+.tabs.sm button { padding: 4px 10px; font-size: 12.5px; }
+.tabs .n { font-size: 11px; border: 1px solid var(--line); border-radius: 999px; padding: 0 6px; background: var(--surface-2); }
+.tabs .n.warn { background: var(--warning-weak); border-color: #fce6c0; color: #b45309; }
+.toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.input, .select { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 7px 11px; font-size: 13px; background: #fff; outline: none; }
+.input:focus, .select:focus { border-color: var(--primary-2); box-shadow: 0 0 0 3px rgba(99,102,241,.12); }
+
+.field { margin-bottom: 14px; }
+.field > label { display: block; font-size: 12.5px; font-weight: 620; color: var(--ink-2); margin-bottom: 6px; }
+.field .req { color: var(--danger); margin-left: 2px; }
+.field .hint { color: var(--ink-4); font-size: 11.5px; margin-top: 5px; }
+.err { color: var(--danger); font-size: 11.5px; margin-top: 5px; }
+.field input[type=text], .field input[type=password], .field input[type=number], .field select, .field textarea { width: 100%; border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 8px 11px; font-size: 13px; background: #fff; outline: none; }
+.field input:focus, .field select:focus, .field textarea:focus { border-color: var(--primary-2); box-shadow: 0 0 0 3px rgba(99,102,241,.12); }
+.field input[disabled], .field select[disabled] { background: var(--surface-2); color: var(--ink-3); }
+.field textarea { resize: vertical; min-height: 60px; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
+.check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-2); margin: 6px 0; cursor: pointer; }
+.section-t { font-size: 12px; font-weight: 700; color: var(--ink-3); margin: 6px 0 12px; display: flex; align-items: center; gap: 8px; }
+.section-t::after { content: ""; flex: 1; height: 1px; background: var(--line-2); }
+
+.callout { display: flex; gap: 10px; align-items: flex-start; padding: 10px 14px; border-radius: var(--radius-sm); font-size: 12.5px; border: 1px solid; }
+.callout-info { background: var(--primary-weak); border-color: #dcdcfb; color: #3730a3; }
+.callout-warn { background: var(--warning-weak); border-color: #fce6c0; color: #92400e; }
+.empty { text-align: center; color: var(--ink-4); padding: 36px 0; font-size: 13px; }
+.kv { display: grid; grid-template-columns: 112px 1fr; gap: 9px 16px; font-size: 13px; }
+.kv .k { color: var(--ink-3); }
+
+.modelchecks { max-height: 260px; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 4px 12px; margin-top: 4px; }
+.grant-add { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.grant-box { border: 1px solid var(--line); border-radius: var(--radius-sm); overflow: hidden; }
+.keybox { font-family: var(--mono); font-size: 13px; background: #0f172a; color: #e2e8f0; border-radius: 10px; padding: 12px 14px; display: flex; align-items: center; gap: 12px; word-break: break-all; }
+.keybox span { flex: 1; }
+pre.code { background: #0f172a; color: #e2e8f0; border-radius: 10px; padding: 12px 14px; font-family: var(--mono); font-size: 12px; line-height: 1.6; overflow: auto; margin: 0; white-space: pre; }
+details.preview { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 8px 12px; background: var(--surface-2); margin-top: 6px; }
+details.preview summary { cursor: pointer; font-size: 12.5px; font-weight: 620; color: var(--ink-2); }
+details.preview .pv-t { font-size: 12px; color: var(--ink-3); margin: 10px 0 6px; }
+
+/* ---------- 弹窗 / 抽屉 / 提示 ---------- */
+.modal-mask { position: fixed; inset: 0; background: rgba(15,23,42,.42); display: grid; place-items: center; z-index: 100; padding: 24px; }
+.modal { background: #fff; border-radius: 14px; box-shadow: var(--shadow-lg); width: 580px; max-width: 100%; max-height: calc(100vh - 48px); display: flex; flex-direction: column; }
+.modal.wide { width: 800px; }
+.modal-h { padding: 15px 20px; border-bottom: 1px solid var(--line-2); display: flex; align-items: center; gap: 10px; }
+.modal-h h3 { font-size: 15.5px; }
+.modal-b { padding: 18px 20px; overflow: auto; }
+.modal-f { padding: 12px 20px; border-top: 1px solid var(--line-2); display: flex; justify-content: flex-end; gap: 8px; align-items: center; }
+.x { border: 0; background: none; font-size: 22px; color: var(--ink-4); cursor: pointer; margin-left: auto; line-height: 1; }
+.x:hover { color: var(--ink-2); }
+.drawer-mask { position: fixed; inset: 0; background: rgba(15,23,42,.30); z-index: 100; }
+.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: 560px; max-width: 100%; background: #fff; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; }
+.toast-root { position: fixed; right: 20px; bottom: 20px; display: flex; flex-direction: column; gap: 8px; z-index: 200; }
+.toast { background: #0f172a; color: #e2e8f0; padding: 10px 14px; border-radius: 10px; box-shadow: var(--shadow-md); font-size: 13px; max-width: 480px; animation: tin .18s ease-out; }
+.toast .api { display: block; font-family: var(--mono); font-size: 11.5px; color: #93c5fd; margin-top: 3px; }
+@keyframes tin { from { transform: translateY(6px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+/* ---------- 原型说明 ---------- */
+.doc ul, .doc ol { margin: 0; padding-left: 20px; }
+.doc li { margin: 5px 0; color: var(--ink-2); font-size: 13px; }
+.doc .table td { vertical-align: top; }
+.diagram { width: 100%; max-width: 900px; display: block; margin: 0 auto; }
+.diagram rect { stroke-width: 1.3; }
+.diagram .b-gray { fill: #f8fafc; stroke: #cbd5e1; }
+.diagram .b-pri { fill: var(--primary-weak); stroke: #a5b4fc; }
+.diagram .b-sec { fill: var(--secondary-weak); stroke: #7dd3fc; }
+.diagram text { font-family: var(--font); text-anchor: middle; }
+.diagram .t { font-size: 14px; font-weight: 650; fill: var(--ink); }
+.diagram .s { font-size: 11.5px; fill: var(--ink-3); }
+.diagram .lbl { font-size: 11.5px; fill: var(--ink-2); }
+.diagram .api { font-size: 10.5px; fill: var(--ink-4); font-family: var(--mono); }
+.diagram line { stroke: #94a3b8; stroke-width: 1.4; }
+</style>
+<style>
+/* ---------- 本原型增加的样式 ---------- */
+.typecards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 16px; }
+.typecard { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 12px 14px; cursor: pointer; background: #fff; }
+.typecard:hover { border-color: #cfd4e2; }
+.typecard.on { border-color: var(--primary-2); box-shadow: 0 0 0 3px rgba(99,102,241,.12); background: var(--primary-weak); }
+.typecard strong { display: block; font-size: 13.5px; margin-bottom: 4px; }
+.typecard span { font-size: 12px; color: var(--ink-3); }
+.detail-head { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+.detail-head h1 { font-size: 21px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.endpoint { display: inline-flex; align-items: center; gap: 8px; background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius-xs); padding: 4px 10px; font-family: var(--mono); font-size: 12px; color: var(--ink-2); }
+.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
+.dot.ok { background: var(--success); } .dot.bad { background: var(--danger); } .dot.warn { background: var(--warning); }
+.ptable td { padding: 5px 6px; }
+.ptable th { padding: 7px 6px; }
+.ptable input, .ptable select { border: 1px solid var(--line); border-radius: 6px; padding: 4px 7px; font-size: 12.5px; width: 100%; background: #fff; }
+.disc { border: 1px solid var(--line); border-radius: var(--radius-sm); max-height: 300px; overflow: auto; }
+.disc .table td { padding: 7px 10px; }
+.disc tr.off td { color: var(--ink-4); }
+.tree { border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.tree .srv { padding: 10px 14px; border-bottom: 1px solid var(--line-2); }
+.tree .srv:last-child { border-bottom: 0; }
+.tree .srv-h { display: flex; align-items: center; gap: 8px; font-weight: 650; flex-wrap: wrap; }
+.tree .tools { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 12px; padding: 4px 0 0 4px; }
+.tree .check { margin: 3px 0; font-size: 12.5px; }
+.radio-row { display: flex; gap: 18px; flex-wrap: wrap; }
+.subnote { font-size: 11.5px; color: var(--ink-4); }
+.pill-tools { display: flex; flex-wrap: wrap; gap: 4px; }
+.field textarea.mono { font-family: var(--mono); font-size: 12px; }
+.section-t.mt16 { margin-top: 20px; }
+.out-t { font-size: 12px; font-weight: 700; color: var(--ink-3); margin: 14px 0 6px; }
+</style>
+</head>
+<body>
+<div class="app-shell">
+  <aside class="sidebar">
+    <div class="brand">
+      <svg width="26" height="26" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+        <rect x="2" y="2" width="28" height="28" rx="8" fill="url(#lg)"/>
+        <path d="M9 11h14M9 16h14M9 21h14" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+        <circle cx="12" cy="11" r="2" fill="#fff"/><circle cx="20" cy="16" r="2" fill="#fff"/><circle cx="14" cy="21" r="2" fill="#fff"/>
+        <defs><linearGradient id="lg" x1="2" y1="2" x2="30" y2="30" gradientUnits="userSpaceOnUse"><stop stop-color="#0ea5e9"/><stop offset="1" stop-color="#6366f1"/></linearGradient></defs>
+      </svg>
+      <div class="brand-text"><strong>MCP 网关</strong><small>服务接入 · API Key · 授权</small></div>
+    </div>
+    <nav class="nav" id="nav"></nav>
+    <div class="sidebar-foot" id="sidebar-foot"></div>
+  </aside>
+  <div class="main">
+    <header class="topbar" id="topbar"></header>
+    <main class="content" id="content"></main>
+  </div>
+</div>
+<div id="modal-root"></div>
+<div id="toast-root" class="toast-root" aria-live="polite"></div>
+
+<script>
+/* =====================================================================
+ * 演示数据（内存态，刷新后重置）
+ * ===================================================================== */
+const GW_PUBLIC = 'https://atlas.example.com/mcp';   // 外部客户端用的地址
+const GW_INTERNAL = 'http://mcp-gateway.atlas:8070'; // 集群内（Atlas、ACP Pod）用的地址
+
+const DEPTS = [
+  { id: 'd-root', name: '总公司',   parent: null },
+  { id: 'd-plat', name: '平台部',   parent: 'd-root' },
+  { id: 'd-rd',   name: '研发中心', parent: 'd-root' },
+  { id: 'd-rd1',  name: '研发一部', parent: 'd-rd' },
+  { id: 'd-rd2',  name: '研发二部', parent: 'd-rd' },
+  { id: 'd-cs',   name: '客服中心', parent: 'd-root' },
+];
+// 用户中心的用户（人）。admin = MCP 管理员（用户中心角色）
+const USERS = {
+  'sun.li':     { name: '孙丽', dept: 'd-plat', admin: true, color: '#6366f1', demo: true, uid: '0192f3a1-6c0e' },
+  'zhang.ming': { name: '张明', dept: 'd-rd1', color: '#0ea5e9', demo: true, uid: '0192f3b7-1d42' },
+  'li.gong':    { name: '李工', dept: 'd-cs',  color: '#f59e0b', demo: true, uid: '0192f3c2-9a7b' },
+  'wang.fang':  { name: '王芳', dept: 'd-rd2', color: '#10b981', demo: true, uid: '0192f3d9-04ce' },
+  'zhao.qiang': { name: '赵强', dept: 'd-rd1', color: '#ec4899', uid: '0192f3e4-5f13' },
+};
+// Atlas 里的智能体（接入方的数据，演示用）
+let AGENTS = [
+  { id: 'agt_7f3a21', name: '代码评审助手' },
+  { id: 'agt_e4b812', name: '客服质检' },
+  { id: 'agt_2c91be', name: '需求分析师' },
+  { id: 'agt_0b5c6d', name: '平台巡检助手' },
+  { id: 'agt_91aa03', name: '数据分析助手' }, // 还没有 Key：演示「为智能体申请」
+];
+
+const KINDS = {
+  mcp:  { name: 'MCP 代理',  badge: 'badge-purple', desc: '连接已有的远程 MCP Server（Streamable HTTP / SSE），工具定义从上游拉取' },
+  rest: { name: 'REST 转换', badge: 'badge-blue',   desc: '导入 OpenAPI 或手工定义，把 HTTP JSON 接口转换成 MCP 工具' },
+  grpc: { name: 'gRPC 转换', badge: 'badge-orange', desc: '通过服务端反射或描述文件发现方法，把 gRPC 方法转换成 MCP 工具' },
+};
+// 副作用：对应 MCP 工具注解（read = readOnlyHint，destructive = destructiveHint）；Atlas 审批按它判断
+const EFFECTS = {
+  read:        { name: '只读',     badge: 'badge-green' },
+  write:       { name: '有副作用', badge: 'badge-orange' },
+  destructive: { name: '破坏性',   badge: 'badge-red' },
+};
+const TOOL_STATUS = {
+  active:   { name: '可用',   badge: 'badge-green' },
+  disabled: { name: '已停用', badge: 'badge-gray' },
+};
+const STREAMS = { unary: '一元', server: '服务端流', client: '客户端流', bidi: '双向流' };
+const CRED_TYPES = {
+  none:     '无',
+  apikey:   'API Key（请求头或查询参数）',
+  bearer:   'Bearer Token',
+  header:   '自定义请求头',
+  basic:    'Basic 认证',
+  oauth2:   'OAuth2 客户端凭据',
+  metadata: 'Metadata 键值',
+  mtls:     'mTLS 客户端证书',
+};
+const CRED_BY_KIND = { mcp: ['none', 'bearer', 'header', 'oauth2'], rest: ['none', 'apikey', 'bearer', 'basic', 'oauth2'], grpc: ['none', 'metadata', 'mtls'] };
+
+// 参数。REST 的 in = 映射到上游请求的位置（path | query | header | body）；fixed = 固定值，不进工具的参数定义
+const P = (name, type, required, desc, extra = {}) => ({ name, type, required, desc, ...extra });
+
+// API Key 两种：
+//   user   = 本人申请，一人一把（给 Claude Code、Cursor 等外部客户端用）
+//   client = 为智能体申请（client_type Agent，client_code = 智能体 id）：Atlas 新建智能体时调接口申请，管理员也可以在页面上补
+// uid = Key 在用户中心的主体标识。授权（数据权限）授给它；网关判权时以它作 X-Auth-Uid 调用户中心
+let keys = [
+  { uuid: 'k-01', uid: '0194c1a2-7d10', type: 'user', user: 'zhang.ming', last4: '3f9a', status: 'active', created_at: '2026-10-21 10:12' },
+  { uuid: 'k-02', uid: '0194c1b5-2e44', type: 'user', user: 'li.gong', last4: 'c07e', status: 'active', created_at: '2026-10-22 09:30' },
+  { uuid: 'k-03', uid: '0194c1c8-90ab', type: 'user', user: 'sun.li', last4: 'b2d5', status: 'active', created_at: '2026-10-20 09:40' },
+  { uuid: 'k-04', uid: '0194c1d3-5c61', type: 'user', user: 'zhao.qiang', last4: '77be', status: 'blocked', created_at: '2026-10-22 11:05' },
+  { uuid: 'k-05', uid: '0194c2a0-1f38', type: 'client', client_type: 'Agent', client_code: 'agt_7f3a21', client_name: '代码评审助手', last4: 'e813', status: 'active', created_at: '2026-10-23 14:30', by: 'Atlas（接口）' },
+  { uuid: 'k-06', uid: '0194c2b1-a702', type: 'client', client_type: 'Agent', client_code: 'agt_e4b812', client_name: '客服质检', last4: '6d1b', status: 'active', created_at: '2026-10-24 15:40', by: 'Atlas（接口）' },
+  { uuid: 'k-07', uid: '0194c2c4-3b9e', type: 'client', client_type: 'Agent', client_code: 'agt_2c91be', client_name: '需求分析师', last4: 'a1c0', status: 'active', created_at: '2026-10-27 09:12', by: 'Atlas（接口）' },
+  { uuid: 'k-08', uid: '0194c2d7-6e05', type: 'client', client_type: 'Agent', client_code: 'agt_0b5c6d', client_name: '平台巡检助手', last4: '9e44', status: 'blocked', created_at: '2026-10-25 10:00', by: '孙丽（页面）' },
+];
+
+// 服务。owners = 所有者（人，数据权限 McpServer = OWNER）：能给 Key 分配这个服务的权限
+// grants = 授给 API Key 的使用权限：scope all → 数据编码 McpServer（全部工具，含以后新增）；scope tools → 数据编码 McpTool（指定工具）
+let servers = [
+  {
+    name: 'gitlab', display: 'GitLab', kind: 'mcp', visibility: 'private', status: 'enabled',
+    desc: '代码仓库：项目、文件、合并请求与 Issue（自部署的 GitLab MCP Server）',
+    conn: { url: 'http://gitlab-mcp.devops:8000/mcp', transport: 'streamable' },
+    cred: { type: 'bearer', hint: '••••7Q2c' }, identity: true, fetched_at: '10-29 15:40',
+    created_by: 'sun.li', created_at: '2026-10-20 10:00',
+    tools: [
+      { name: 'list_projects', effect: 'read', status: 'active', desc: '列出当前身份能访问的项目', params: [P('search', 'string', false, '按名称过滤'), P('per_page', 'integer', false, '每页条数，默认 20')] },
+      { name: 'get_file', effect: 'read', status: 'active', desc: '读取仓库里某个文件的内容', params: [P('project', 'string', true, '项目路径，如 platform/atlas'), P('path', 'string', true, '文件路径'), P('ref', 'string', false, '分支、标签或提交，默认是默认分支')] },
+      { name: 'search_code', effect: 'read', status: 'active', desc: '在项目里搜索代码', params: [P('project', 'string', true, '项目路径'), P('query', 'string', true, '搜索词')] },
+      { name: 'get_merge_request', effect: 'read', status: 'active', desc: '读取合并请求的详情和变更', params: [P('project', 'string', true, '项目路径'), P('iid', 'integer', true, '合并请求编号')] },
+      { name: 'comment_merge_request', effect: 'write', status: 'active', desc: '在合并请求上发表评论', params: [P('project', 'string', true, '项目路径'), P('iid', 'integer', true, '合并请求编号'), P('body', 'string', true, '评论内容（Markdown）')] },
+      { name: 'create_issue', effect: 'write', status: 'active', desc: '新建 Issue', params: [P('project', 'string', true, '项目路径'), P('title', 'string', true, '标题'), P('description', 'string', false, '内容'), P('labels', 'array', false, '标签')] },
+      { name: 'create_branch', effect: 'write', status: 'active', desc: '从指定提交新建分支', params: [P('project', 'string', true, '项目路径'), P('branch', 'string', true, '新分支名'), P('ref', 'string', true, '起点：分支、标签或提交')] },
+      { name: 'merge_merge_request', effect: 'destructive', status: 'disabled', desc: '合并指定的合并请求', params: [P('project', 'string', true, '项目路径'), P('iid', 'integer', true, '合并请求编号')] },
+    ],
+    owners: ['sun.li', 'zhang.ming'],
+    grants: [
+      { key: 'k-01', scope: 'all', tools: [] },
+      { key: 'k-03', scope: 'all', tools: [] },
+      { key: 'k-05', scope: 'tools', tools: ['list_projects', 'get_file', 'get_merge_request', 'comment_merge_request'] },
+    ],
+  },
+  {
+    name: 'crm', display: '客户管理（CRM）', kind: 'rest', visibility: 'private', status: 'enabled',
+    desc: '客户资料、客户等级、服务工单',
+    conn: { base: 'http://crm-api.biz:8080/api/v1', spec: 'http://crm-api.biz:8080/openapi.json' },
+    cred: { type: 'apikey', where: 'header', key: 'X-Api-Key', hint: '••••a91f' }, identity: true,
+    created_by: 'sun.li', created_at: '2026-10-21 14:20',
+    tools: [
+      { name: 'get_customer', effect: 'read', status: 'active', desc: '按客户编号读取客户资料', http: { method: 'GET', path: '/customers/{id}', pick: '', limit: 32 },
+        params: [P('id', 'string', true, '客户编号，如 C1001', { in: 'path' })] },
+      { name: 'search_customers', effect: 'read', status: 'active', desc: '按姓名、手机号或公司名搜索客户', http: { method: 'GET', path: '/customers', pick: '$.items', limit: 32 },
+        params: [P('q', 'string', true, '姓名、手机号或公司名', { in: 'query' }), P('level', 'string', false, '客户等级：A / B / C', { in: 'query' }), P('limit', 'integer', false, '最多返回条数，默认 10', { in: 'query' })] },
+      { name: 'update_customer_level', effect: 'write', status: 'active', desc: '调整客户等级', http: { method: 'PATCH', path: '/customers/{id}/level', pick: '', limit: 32 },
+        params: [P('id', 'string', true, '客户编号', { in: 'path' }), P('level', 'string', true, '新等级：A / B / C', { in: 'body' }), P('reason', 'string', true, '调整原因', { in: 'body' })] },
+      { name: 'create_ticket', effect: 'write', status: 'active', desc: '为客户新建服务工单', http: { method: 'POST', path: '/tickets', pick: '', limit: 32 },
+        params: [P('customer_id', 'string', true, '客户编号', { in: 'body' }), P('title', 'string', true, '工单标题', { in: 'body' }), P('content', 'string', false, '问题描述', { in: 'body' }), P('priority', 'string', false, '优先级：low / normal / high', { in: 'body' })] },
+    ],
+    owners: ['sun.li'],
+    grants: [
+      { key: 'k-02', scope: 'all', tools: [] },
+      { key: 'k-01', scope: 'tools', tools: ['get_customer', 'search_customers'] },
+      { key: 'k-06', scope: 'tools', tools: ['get_customer', 'search_customers', 'create_ticket'] },
+    ],
+  },
+  {
+    name: 'order', display: '订单服务', kind: 'grpc', visibility: 'private', status: 'enabled',
+    desc: '订单查询与退款（交易中台 gRPC 服务）',
+    conn: { addr: 'order-svc.trade:9090', tls: 'plaintext', discovery: 'reflection', service: 'order.v1.OrderService' },
+    cred: { type: 'metadata', key: 'authorization', hint: '••••c07e' }, identity: true,
+    created_by: 'sun.li', created_at: '2026-10-22 11:00',
+    tools: [
+      { name: 'get_order', effect: 'read', status: 'active', desc: '按订单号读取订单', grpc: { method: 'GetOrder', stream: 'unary', req: 'GetOrderRequest' },
+        params: [P('order_id', 'string', true, '订单号')] },
+      { name: 'list_orders', effect: 'read', status: 'active', desc: '查询客户的订单', grpc: { method: 'ListOrders', stream: 'unary', req: 'ListOrdersRequest' },
+        params: [P('customer_id', 'string', true, '客户编号'), P('status', 'string', false, '订单状态：PAID / SHIPPED / REFUNDED'), P('page_size', 'integer', false, '每页条数')] },
+      { name: 'list_order_items', effect: 'read', status: 'active', desc: '列出订单里的商品', grpc: { method: 'ListOrderItems', stream: 'server', req: 'ListOrderItemsRequest' },
+        params: [P('order_id', 'string', true, '订单号')] },
+      { name: 'refund_order', effect: 'destructive', status: 'active', desc: '为订单退款（不可撤销）', grpc: { method: 'RefundOrder', stream: 'unary', req: 'RefundOrderRequest' },
+        params: [P('order_id', 'string', true, '订单号'), P('amount', 'number', false, '退款金额，不填为全额'), P('reason', 'string', true, '退款原因')] },
+    ],
+    owners: ['sun.li', 'li.gong'],
+    grants: [
+      { key: 'k-02', scope: 'all', tools: [] },
+      { key: 'k-06', scope: 'tools', tools: ['get_order', 'list_orders'] },
+      { key: 'k-03', scope: 'tools', tools: ['get_order'] },
+    ],
+  },
+  {
+    name: 'serpapi', display: '网页搜索（SerpApi）', kind: 'rest', visibility: 'public', status: 'enabled',
+    desc: 'Google 网页搜索与新闻搜索',
+    conn: { base: 'https://serpapi.com', spec: '' },
+    cred: { type: 'apikey', where: 'query', key: 'api_key', hint: '••••5d21' }, identity: false,
+    created_by: 'sun.li', created_at: '2026-10-19 16:30',
+    tools: [
+      { name: 'google_search', effect: 'read', status: 'active', desc: 'Google 网页搜索，返回自然结果的标题、链接和摘要', http: { method: 'GET', path: '/search.json', pick: '$.organic_results', limit: 32 },
+        params: [P('q', 'string', true, '搜索词', { in: 'query' }), P('num', 'integer', false, '结果条数，默认 10', { in: 'query' }), P('engine', 'string', true, '', { in: 'query', fixed: 'google' })] },
+      { name: 'google_news', effect: 'read', status: 'active', desc: 'Google 新闻搜索', http: { method: 'GET', path: '/search.json', pick: '$.news_results', limit: 32 },
+        params: [P('q', 'string', true, '搜索词', { in: 'query' }), P('gl', 'string', false, '国家或地区代码，如 cn', { in: 'query' }), P('engine', 'string', true, '', { in: 'query', fixed: 'google_news' })] },
+    ],
+    owners: ['sun.li'], grants: [],
+  },
+  {
+    name: 'weather', display: '天气', kind: 'rest', visibility: 'public', status: 'enabled',
+    desc: 'Open-Meteo 天气预报（公网接口，不需要凭据）',
+    conn: { base: 'https://api.open-meteo.com/v1', spec: '' },
+    cred: { type: 'none' }, identity: false,
+    created_by: 'sun.li', created_at: '2026-10-19 16:40',
+    tools: [
+      { name: 'get_forecast', effect: 'read', status: 'active', desc: '按经纬度查询未来几天的最高、最低气温', http: { method: 'GET', path: '/forecast', pick: '$.daily', limit: 32 },
+        params: [P('latitude', 'number', true, '纬度', { in: 'query' }), P('longitude', 'number', true, '经度', { in: 'query' }), P('forecast_days', 'integer', false, '天数，1–16', { in: 'query' }),
+          P('daily', 'string', true, '', { in: 'query', fixed: 'temperature_2m_max,temperature_2m_min' }), P('timezone', 'string', true, '', { in: 'query', fixed: 'Asia/Shanghai' })] },
+    ],
+    owners: ['sun.li'], grants: [],
+  },
+  {
+    name: 'jira', display: 'Jira', kind: 'mcp', visibility: 'private', status: 'enabled',
+    desc: '需求与缺陷跟踪（旧版 SSE 协议的 MCP Server）',
+    conn: { url: 'http://jira-mcp.devops:9000/sse', transport: 'sse' },
+    cred: { type: 'header', key: 'X-Jira-Token', hint: '••••0d42' }, identity: true, fetched_at: '10-29 15:20',
+    created_by: 'sun.li', created_at: '2026-10-23 09:30',
+    tools: [
+      { name: 'search_issues', effect: 'read', status: 'active', desc: '用 JQL 搜索问题', params: [P('jql', 'string', true, 'JQL 查询语句'), P('max_results', 'integer', false, '最多返回条数')] },
+      { name: 'get_issue', effect: 'read', status: 'active', desc: '读取问题详情', params: [P('key', 'string', true, '问题编号，如 ATLAS-123')] },
+      { name: 'create_issue', effect: 'write', status: 'active', desc: '新建问题', params: [P('project', 'string', true, '项目键'), P('summary', 'string', true, '标题'), P('type', 'string', false, '类型：Bug / Story / Task')] },
+      { name: 'add_comment', effect: 'write', status: 'active', desc: '在问题上添加评论', params: [P('key', 'string', true, '问题编号'), P('body', 'string', true, '评论内容')] },
+    ],
+    owners: ['sun.li'],
+    grants: [
+      { key: 'k-01', scope: 'all', tools: [] },
+      { key: 'k-05', scope: 'tools', tools: ['search_issues', 'get_issue'] },
+    ],
+  },
+];
+
+// 流量治理：通用组件（单独设计）。这里只是它对各服务生效的值和熔断状态，网关页面只读
+const TRAFFIC_DEFAULT = [
+  ['并发上限', '50', '服务', '默认'],
+  ['限流', '120 次 / 分钟', '每把 Key', '默认'],
+  ['超时', '30 秒', '每次 tools/call', '默认'],
+  ['熔断', '30 秒内至少 20 次、失败占比 ≥ 50% 时打开；30 秒后半开，放 3 次探测', '上游', '默认'],
+];
+const TRAFFIC = {
+  gitlab:  { rows: [['并发上限', '30', '服务', '服务级'], TRAFFIC_DEFAULT[1], TRAFFIC_DEFAULT[2], TRAFFIC_DEFAULT[3]], breaker: 'closed', inflight: 4, limit: 30 },
+  crm:     { rows: [['并发上限', '20', '服务', '服务级'], TRAFFIC_DEFAULT[1], ['超时', '10 秒', '每次 tools/call', '服务级'], TRAFFIC_DEFAULT[3]], breaker: 'closed', inflight: 2, limit: 20 },
+  order:   { rows: [['并发上限', '20；refund_order 2', '服务；工具', '服务级；工具级'], ['限流', '120 次 / 分钟；refund_order 10 次 / 分钟', '每把 Key', '默认；工具级'], ['超时', '5 秒；refund_order 30 秒', '每次 tools/call', '服务级；工具级'], TRAFFIC_DEFAULT[3]], breaker: 'closed', inflight: 1, limit: 20 },
+  serpapi: { rows: [TRAFFIC_DEFAULT[0], ['限流', '100 次 / 分钟', '服务（上游有配额）', '服务级'], TRAFFIC_DEFAULT[2], TRAFFIC_DEFAULT[3]], breaker: 'half', since: '15:41', reason: '15:40 半分钟内 22 次里 12 次返回 429', inflight: 0, limit: 50 },
+  jira:    { rows: TRAFFIC_DEFAULT, breaker: 'open', since: '15:31', reason: '30 秒内 24 次调用全部连接失败', inflight: 0, limit: 50 },
+};
+const BREAKER = { closed: { name: '关闭（正常放行）', dot: 'ok' }, half: { name: '半开（放少量探测）', dot: 'warn' }, open: { name: '打开（直接拒绝）', dot: 'bad' } };
+
+let me = 'sun.li';
+let serverTab = 'tools';
+let lastServer = '';
+let keyTab = 'user';
+let atlasAgent = 'agt_7f3a21';
+const sf = { q: '', kind: '', vis: '' };
+
+/* =====================================================================
+ * 工具
+ * ===================================================================== */
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const isAdmin = () => !!USERS[me].admin;
+const route = () => location.hash.slice(1) || '/servers';
+const go = path => { history.pushState(null, '', '#' + path); window.scrollTo(0, 0); render(); };
+const rand = (n, a = 'abcdefghijklmnopqrstuvwxyz0123456789') => { let s = ''; crypto.getRandomValues(new Uint8Array(n)).forEach(b => { s += a[b % a.length]; }); return s; };
+const hex = n => rand(n, '0123456789abcdef');
+const genKey = () => 'mk-' + rand(32, 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789');
+const genUid = () => `0194${hex(4)}-${hex(4)}`;
+const nowStr = () => { const d = new Date(), p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; };
+const json = v => JSON.stringify(v, null, 2);
+const clone = x => JSON.parse(JSON.stringify(x));
+const deptOf = id => DEPTS.find(d => d.id === id);
+const serverOf = name => servers.find(s => s.name === name);
+const toSnake = s => s.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase();
+
+const avatar = u => `<span class="avatar" style="background:${USERS[u].color}">${USERS[u].name.slice(-1)}</span>`;
+const userCell = u => `<div class="row">${avatar(u)}<div><div>${esc(USERS[u].name)}</div><div class="subnote">${deptOf(USERS[u].dept).name}</div></div></div>`;
+
+// API Key
+const keyById = id => keys.find(k => k.uuid === id);
+const keyOfUser = u => keys.find(k => k.type === 'user' && k.user === u);
+const keyOfAgent = code => keys.find(k => k.type === 'client' && k.client_type === 'Agent' && k.client_code === code);
+const keyName = k => k.type === 'user' ? USERS[k.user].name : k.client_name;
+const keyTitle = k => k.type === 'user' ? `${USERS[k.user].name}的用户 Key` : `${k.client_name}（智能体 Key）`;
+const keyLabel = k => `${keyName(k)} · mk-…${k.last4}${k.status === 'blocked' ? '（已停用）' : ''}`;
+function keyCell(k) {
+  const icon = k.type === 'user' ? avatar(k.user) : '<span class="avatar" style="background:#475569">AI</span>';
+  return `<div class="row">${icon}<div><div>${esc(keyName(k))} <span class="tag">${k.type === 'user' ? '用户 Key' : '智能体 Key'}</span></div>
+    <div class="subnote">${k.type === 'user' ? deptOf(USERS[k.user].dept).name : `<span class="mono">${k.client_code}</span>`} · uid <span class="mono">${k.uid}…</span></div></div></div>`;
+}
+const keyStatusBadge = k => k.status === 'active' ? '<span class="badge badge-green"><span class="bdot"></span>正常</span>' : '<span class="badge badge-gray"><span class="bdot"></span>已停用</span>';
+
+const kindBadge = s => `<span class="badge ${KINDS[s.kind].badge}">${KINDS[s.kind].name}</span>`;
+const visBadge = s => s.visibility === 'public' ? '<span class="badge badge-green">公开</span>' : '<span class="badge badge-gray">私有</span>';
+const effectBadge = t => `<span class="badge ${EFFECTS[t.effect].badge}">${EFFECTS[t.effect].name}</span>`;
+const toolStatusBadge = t => `<span class="badge ${TOOL_STATUS[t.status].badge}">${TOOL_STATUS[t.status].name}</span>`;
+const trafficOf = name => TRAFFIC[name] || { rows: TRAFFIC_DEFAULT, breaker: 'closed', inflight: 0, limit: 50 };
+function statusCell(s) {
+  if (s.status === 'disabled') return '<span class="badge badge-gray">已停用</span>';
+  const b = trafficOf(s.name).breaker;
+  return `<span class="badge badge-green">启用</span>${b === 'open' ? ' <span class="badge badge-orange">熔断中</span>' : b === 'half' ? ' <span class="badge badge-orange">熔断半开</span>' : ''}`;
+}
+function credLabel(c) {
+  switch (c.type) {
+    case 'none': return '无';
+    case 'apikey': return `API Key · ${c.where === 'query' ? '查询参数' : '请求头'} <span class="mono">${esc(c.key)}</span> · <span class="mono">${c.hint}</span>`;
+    case 'bearer': return `Bearer Token · <span class="mono">${c.hint}</span>`;
+    case 'header': return `请求头 <span class="mono">${esc(c.key)}</span> · <span class="mono">${c.hint}</span>`;
+    case 'basic': return `Basic 认证 · 用户 <span class="mono">${esc(c.user || '')}</span> · 密码 <span class="mono">${c.hint}</span>`;
+    case 'oauth2': return `OAuth2 客户端凭据 · <span class="mono">${esc(c.tokenUrl || '')}</span> · client_secret <span class="mono">${c.hint}</span>`;
+    case 'metadata': return `Metadata <span class="mono">${esc(c.key)}</span> · <span class="mono">${c.hint}</span>`;
+    case 'mtls': return `mTLS 客户端证书 · <span class="mono">${c.hint}</span>`;
+  }
+  return c.type;
+}
+
+function toast(msg, api) {
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.innerHTML = esc(msg) + (api ? `<span class="api">${esc(api)}</span>` : '');
+  $('#toast-root').appendChild(el);
+  setTimeout(() => el.remove(), 5200);
+}
+function openModal({ title, body, foot, wide, onMount }) {
+  $('#modal-root').innerHTML = `
+    <div class="modal-mask"><div class="modal ${wide ? 'wide' : ''}" role="dialog">
+      <div class="modal-h"><h3>${title}</h3><button class="x" data-close aria-label="关闭">×</button></div>
+      <div class="modal-b">${body}</div>
+      ${foot ? `<div class="modal-f">${foot}</div>` : ''}
+    </div></div>`;
+  const mask = $('.modal-mask');
+  mask.addEventListener('mousedown', e => { if (e.target === mask) closeModal(); });
+  $$('[data-close]', mask).forEach(b => { b.onclick = closeModal; });
+  onMount && onMount($('.modal', mask));
+}
+function closeModal() { $('#modal-root').innerHTML = ''; }
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+function confirmBox({ title, body, okText = '确定', danger = false, onOk }) {
+  openModal({
+    title, body,
+    foot: `<button class="btn" data-close>取消</button><button class="btn ${danger ? 'btn-danger' : 'btn-primary'}" id="cf-ok">${okText}</button>`,
+    onMount: m => { $('#cf-ok', m).onclick = () => { closeModal(); onOk(); }; },
+  });
+}
+
+/* =====================================================================
+ * 权限
+ *   公开服务：任何有效的 API Key 都能用全部工具，不判权
+ *   私有服务：看授给这把 Key 的数据权限——服务级（McpServer）= 全部工具，含以后新增；工具级（McpTool）= 指定工具
+ *   网关判权：认出 Key → 以 Key 的 uid 作 X-Auth-Uid 调用户中心
+ *   所有者（人）能给 Key 分配自己服务的权限；管理员有数据编码级「全部 MCP 服务 · 所有者」
+ * ===================================================================== */
+const isOwner = (s, uid) => !!USERS[uid].admin || s.owners.includes(uid);
+const canManage = () => isAdmin();
+const canAssign = s => isOwner(s, me);
+const grantOf = (s, k) => s.grants.find(g => g.key === k.uuid);
+const grantCovers = (g, t) => g.scope === 'all' || g.tools.includes(t.name);
+// Key 能不能用某个工具（不看 Key 和工具的状态）：返回来源说明，不能用返回 null
+function keyVia(s, t, k) {
+  if (!k) return null;
+  if (s.visibility === 'public') return '公开';
+  const g = grantOf(s, k);
+  return g && grantCovers(g, t) ? (g.scope === 'all' ? '服务级授权' : '工具级授权') : null;
+}
+const callable = (s, t) => s.status === 'enabled' && t.status === 'active';
+const usableTools = (s, k) => s.tools.filter(t => callable(s, t) && keyVia(s, t, k));
+const usableSummary = k => servers.map(s => ({ s, tools: usableTools(s, k) })).filter(x => x.tools.length);
+const dataRefs = (s, g) => g.scope === 'all' ? `McpServer ${s.name}` : g.tools.map(n => `McpTool ${s.name}/${n}`).join('、');
+function visibleServers() {
+  if (isAdmin()) return servers;
+  const k = keyOfUser(me);
+  return servers.filter(s => isOwner(s, me) || (s.status === 'enabled' && (s.visibility === 'public' || (k && grantOf(s, k)))));
+}
+function myAccess(s) {
+  if (isAdmin()) return s.visibility === 'public' ? '<span class="muted small">公开，不需要授权</span>' : `${s.grants.length} 把 Key`;
+  if (isOwner(s, me)) return `<span class="badge badge-purple">所有者</span>${s.visibility === 'private' ? ` <span class="small muted">已授权 ${s.grants.length} 把 Key</span>` : ''}`;
+  if (s.visibility === 'public') return '<span class="badge badge-green">公开</span>';
+  const k = keyOfUser(me), g = k && grantOf(s, k);
+  if (!g) return '<span class="muted small">无</span>';
+  return `<span class="badge badge-blue">我的 Key · ${g.scope === 'all' ? '全部工具' : g.tools.length + ' 个工具'}</span>`;
+}
+
+/* =====================================================================
+ * MCP 服务列表
+ * ===================================================================== */
+function renderServers() {
+  $('#content').innerHTML = `
+    <div class="page-head"><div><h1>MCP 服务</h1><div class="sub">连接原生 MCP Server，或把 REST / gRPC 接口转换成 MCP 工具。公开服务任何 Key 都能调用；私有服务按授给 API Key 的数据权限调用，可以细到工具。</div></div>
+      <div class="grow"></div>${canManage() ? '<button class="btn btn-primary" id="sv-new">＋ 登记服务</button>' : ''}</div>
+    <div class="toolbar">
+      <input class="input" id="sv-q" placeholder="搜索服务名、名称、描述" value="${esc(sf.q)}" style="width:240px">
+      <select class="select" id="sv-kind"><option value="">全部类型</option>${Object.entries(KINDS).map(([k, v]) => `<option value="${k}" ${sf.kind === k ? 'selected' : ''}>${v.name}</option>`).join('')}</select>
+      <select class="select" id="sv-vis"><option value="">公开和私有</option><option value="public" ${sf.vis === 'public' ? 'selected' : ''}>公开</option><option value="private" ${sf.vis === 'private' ? 'selected' : ''}>私有</option></select>
+      <div class="grow"></div><span class="small muted" id="sv-count"></span>
+    </div>
+    <div class="card" id="sv-table"></div>`;
+  $('#sv-q').oninput = e => { sf.q = e.target.value; renderServerTable(); };
+  $('#sv-kind').onchange = e => { sf.kind = e.target.value; renderServerTable(); };
+  $('#sv-vis').onchange = e => { sf.vis = e.target.value; renderServerTable(); };
+  const nb = $('#sv-new');
+  if (nb) nb.onclick = () => openRegister();
+  renderServerTable();
+}
+
+function renderServerTable() {
+  const q = sf.q.trim().toLowerCase();
+  const list = visibleServers().filter(s => (!sf.kind || s.kind === sf.kind) && (!sf.vis || s.visibility === sf.vis)
+    && (!q || (s.name + s.display + s.desc).toLowerCase().includes(q)));
+  $('#sv-count').textContent = `${list.length} 个服务`;
+  $('#sv-table').innerHTML = `<table class="table">
+    <thead><tr><th>服务</th><th>类型</th><th>可见性</th><th>工具</th><th>状态</th><th>${isAdmin() ? '授权的 Key' : '我的权限'}</th></tr></thead>
+    <tbody>${list.map(s => `<tr class="click" data-s="${s.name}">
+        <td><div class="mname">${esc(s.display)}</div><div class="mono muted">${s.name}</div></td>
+        <td>${kindBadge(s)}</td>
+        <td>${visBadge(s)}</td>
+        <td class="nowrap">${s.tools.filter(t => t.status === 'active').length} / ${s.tools.length} 可用</td>
+        <td class="nowrap">${statusCell(s)}</td>
+        <td>${myAccess(s)}</td>
+      </tr>`).join('') || '<tr><td colspan="6"><div class="empty">没有符合条件的服务</div></td></tr>'}</tbody></table>`;
+  $$('#sv-table tr[data-s]').forEach(tr => { tr.onclick = () => go('/servers/' + tr.dataset.s); });
+}
+
+/* =====================================================================
+ * 服务详情
+ * ===================================================================== */
+function renderServerDetail(name) {
+  const s = serverOf(name);
+  if (!s || !visibleServers().includes(s)) {
+    $('#content').innerHTML = '<div class="card"><div class="empty">服务不存在，或你没有权限查看。<br><a class="btn-link" href="#/servers">返回服务列表</a></div></div>';
+    return;
+  }
+  if (name !== lastServer) { serverTab = 'tools'; lastServer = name; }
+  const own = canAssign(s);
+  const tabs = [['tools', `工具 <span class="n">${s.tools.length}</span>`]];
+  if (own) tabs.push(['grants', s.visibility === 'public' ? `所有者 <span class="n">${s.owners.length}</span>` : `授权 <span class="n">${s.grants.length}</span>`], ['conn', '连接与凭据'], ['traffic', '流量策略']);
+  if (!tabs.some(t => t[0] === serverTab)) serverTab = 'tools';
+  $('#content').innerHTML = `
+    <div class="card mb16"><div class="card-b">
+      <div class="detail-head">
+        <div style="flex:1;min-width:320px">
+          <h1>${esc(s.display)} <span class="mono muted" style="font-size:14px;font-weight:500">${s.name}</span> ${kindBadge(s)} ${visBadge(s)} ${statusCell(s)}</h1>
+          <div class="muted mt8">${esc(s.desc)}</div>
+          <div class="row mt12" style="flex-wrap:wrap"><span class="endpoint">${GW_PUBLIC}/${s.name}</span><button class="btn-link" id="sd-copy">复制地址</button>
+            <span class="small muted">外部客户端用；集群内是 <span class="mono">${GW_INTERNAL}/mcp/${s.name}</span></span></div>
+        </div>
+        ${canManage() ? `<div class="row"><button class="btn btn-sm" id="sd-edit">编辑</button><button class="btn btn-sm" id="sd-toggle">${s.status === 'enabled' ? '停用' : '启用'}</button></div>` : ''}
+      </div>
+      <div class="small muted mt12">登记人 ${USERS[s.created_by].name} · ${s.created_at}${own ? '' : ` · 我的权限：${myAccess(s)}`}</div>
+    </div></div>
+    <div class="row mb12"><div class="tabs" id="sd-tabs">${tabs.map(([k, l]) => `<button data-t="${k}" class="${serverTab === k ? 'on' : ''}">${l}</button>`).join('')}</div></div>
+    <div id="sd-body"></div>`;
+  $$('#sd-tabs button').forEach(b => { b.onclick = () => { serverTab = b.dataset.t; renderServerDetail(name); }; });
+  $('#sd-copy').onclick = () => { navigator.clipboard?.writeText(`${GW_PUBLIC}/${s.name}`); toast('已复制服务地址'); };
+  if (canManage()) {
+    $('#sd-edit').onclick = () => openServerEdit(s);
+    $('#sd-toggle').onclick = () => toggleServer(s);
+  }
+  ({ tools: renderToolsTab, grants: renderGrantsTab, conn: renderConnTab, traffic: renderTrafficTab }[serverTab])(s);
+}
+
+function toggleServer(s) {
+  if (s.status === 'enabled') {
+    confirmBox({
+      title: `停用「${esc(s.display)}」`, danger: true, okText: '停用',
+      body: `<p>停用后经网关的调用都会被拒绝（<code>service_disabled</code>），Atlas 编辑器里也选不到。授权和工具定义保留，重新启用后恢复。</p>
+        <p class="small muted">服务不能删除：服务名是工具名前缀、用户中心里的数据标识、智能体配置里的引用，停用后也不能复用。</p>`,
+      onOk: () => { s.status = 'disabled'; render(); toast(`已停用「${s.display}」`, '各网关实例经配置变更通知立即生效'); },
+    });
+  } else {
+    s.status = 'enabled'; render(); toast(`已启用「${s.display}」`);
+  }
+}
+
+function openServerEdit(s) {
+  openModal({
+    title: `编辑「${esc(s.display)}」`,
+    body: `
+      <div class="grid2">
+        <div class="field"><label>服务名</label><input type="text" value="${s.name}" disabled><div class="hint">登记后不能修改</div></div>
+        <div class="field"><label>显示名称<span class="req">*</span></label><input type="text" id="se-display" value="${esc(s.display)}"></div>
+      </div>
+      <div class="field"><label>描述</label><textarea id="se-desc">${esc(s.desc)}</textarea></div>
+      <div class="field"><label>可见性</label>
+        <div class="radio-row"><label class="check"><input type="radio" name="se-vis" value="private" ${s.visibility === 'private' ? 'checked' : ''}> 私有：按授给 Key 的权限调用</label>
+        <label class="check"><input type="radio" name="se-vis" value="public" ${s.visibility === 'public' ? 'checked' : ''}> 公开：任何 Key 都能用全部工具</label></div>
+        <div class="hint" id="se-vis-hint"></div></div>`,
+    foot: '<button class="btn" data-close>取消</button><button class="btn btn-primary" id="se-ok">保存</button>',
+    onMount: m => {
+      const hint = () => {
+        const v = $('input[name=se-vis]:checked', m).value;
+        $('#se-vis-hint', m).innerHTML = v === s.visibility ? '' : v === 'public'
+          ? '改成公开后，任何有效的 Key 都能用全部工具；现有授权保留但不起作用，改回私有时恢复。'
+          : `<span style="color:var(--danger)">改成私有后，没有授权的 Key 立即不能再用（各实例判权缓存最长 30 秒）。现在授权了 ${s.grants.length} 把 Key。</span>`;
+      };
+      $$('input[name=se-vis]', m).forEach(r => { r.onchange = hint; });
+      $('#se-ok', m).onclick = () => {
+        const display = $('#se-display', m).value.trim();
+        if (!display) { toast('显示名称不能为空'); return; }
+        const vis = $('input[name=se-vis]:checked', m).value;
+        const changed = vis !== s.visibility;
+        Object.assign(s, { display, desc: $('#se-desc', m).value.trim(), visibility: vis });
+        closeModal(); render();
+        toast(`已保存「${display}」`, changed ? `可见性改为${vis === 'public' ? '公开' : '私有'}；用户中心数据对象改名同步` : '用户中心数据对象改名同步');
+      };
+    },
+  });
+}
+
+/* ---------- 工具 ---------- */
+function mappingCell(s, t) {
+  if (s.kind === 'rest') return `<span class="mono">${t.http.method} ${esc(t.http.path)}</span>`;
+  if (s.kind === 'grpc') return `<span class="mono">${s.conn.service.split('.').pop()}/${t.grpc.method}</span>${t.grpc.stream !== 'unary' ? ` <span class="tag">${STREAMS[t.grpc.stream]}</span>` : ''}`;
+  return '<span class="muted">上游同名工具</span>';
+}
+function grantCountCell(s, t) {
+  if (s.visibility === 'public') return '<span class="muted">公开</span>';
+  const n = s.grants.filter(g => grantCovers(g, t)).length;
+  const only = s.grants.filter(g => g.scope === 'tools' && g.tools.includes(t.name)).length;
+  return n ? `${n} 把 Key${only ? `<div class="subnote">其中工具级 ${only} 把</div>` : ''}` : '<span class="muted">—</span>';
+}
+
+function renderToolsTab(s) {
+  const body = $('#sd-body');
+  const head = {
+    mcp: `<span class="small muted">工具定义从上游拉取 · 上次 ${s.fetched_at || '—'} · 上游新增的工具拉到就能用</span>${canManage() ? '<div class="grow"></div><button class="btn btn-sm" id="tl-refresh">立即刷新</button>' : ''}`,
+    rest: `<span class="small muted">${s.conn.spec ? `从 OpenAPI 导入：<span class="mono">${esc(s.conn.spec)}</span>` : '手工定义'} · 工具定义由网关维护，保存后生效</span>${canManage() ? `<div class="grow"></div>${s.conn.spec ? '<button class="btn btn-sm" id="tl-reimport">重新导入</button>' : ''}<button class="btn btn-sm" id="tl-add">＋ 添加接口</button>` : ''}`,
+    grpc: `<span class="small muted">${s.conn.discovery === 'reflection' ? '服务端反射' : '描述文件'}发现：<span class="mono">${s.conn.service}</span> · 描述、副作用可以改</span>${canManage() ? '<div class="grow"></div><button class="btn btn-sm" id="tl-rediscover">重新发现</button>' : ''}`,
+  }[s.kind];
+  const own = canAssign(s);
+  const mine = keyOfUser(me);
+  body.innerHTML = `<div class="toolbar">${head}</div>
+    <div class="card"><table class="table">
+      <thead><tr><th>工具</th><th>副作用</th><th>映射到</th><th>状态</th><th>${own ? '授权的 Key' : '我的 Key 能否使用'}</th><th></th></tr></thead>
+      <tbody>${s.tools.map((t, i) => {
+        const via = keyVia(s, t, mine);
+        const ops = [`<button class="btn-link" data-view="${i}">${canManage() && s.kind !== 'mcp' ? '编辑' : '查看'}</button>`, `<button class="btn-link" data-try="${i}">试调</button>`];
+        if (canManage()) ops.push(t.status === 'active' ? `<button class="btn-link danger" data-off="${i}">停用</button>` : `<button class="btn-link" data-on="${i}">启用</button>`);
+        return `<tr>
+          <td><div class="mono mname">${t.name}</div><div class="small muted">${esc(t.desc)}</div></td>
+          <td>${effectBadge(t)}</td>
+          <td class="small">${mappingCell(s, t)}</td>
+          <td>${toolStatusBadge(t)}</td>
+          <td class="small">${own ? grantCountCell(s, t) : !mine ? '<span class="muted">还没有 Key</span>' : via ? `✓ ${via}` : '<span class="muted">没有授权</span>'}</td>
+          <td class="nowrap">${ops.join('')}</td></tr>`;
+      }).join('')}</tbody></table></div>
+    <div class="small muted mt8">tools/list 由网关按已存的定义生成，并按 Key 的权限过滤${s.kind === 'mcp' ? '，不转发给上游' : ''}。停用的工具对所有 Key 都不可用，和授权无关。</div>`;
+  $$('[data-view]', body).forEach(b => { b.onclick = () => openTool(s, +b.dataset.view); });
+  $$('[data-try]', body).forEach(b => { b.onclick = () => openTry(s, +b.dataset.try); });
+  $$('[data-off]', body).forEach(b => { b.onclick = () => {
+    const t = s.tools[+b.dataset.off];
+    confirmBox({ title: `停用工具 <span class="mono">${t.name}</span>`, danger: true, okText: '停用',
+      body: '<p>停用后对所有 Key 都不可用（tools/list 不再返回，调用被拒绝），和授权无关；授权保留，重新启用后恢复。</p>',
+      onOk: () => { t.status = 'disabled'; render(); toast(`已停用 ${s.name} · ${t.name}`, '已连接的客户端会收到 notifications/tools/list_changed'); } });
+  }; });
+  $$('[data-on]', body).forEach(b => { b.onclick = () => { const t = s.tools[+b.dataset.on]; t.status = 'active'; render(); toast(`已启用 ${s.name} · ${t.name}`); }; });
+  const rf = $('#tl-refresh');
+  if (rf) rf.onclick = () => { s.fetched_at = nowStr().slice(5); render(); toast('已从上游拉取工具定义：没有变化', `tools/list → ${s.conn.url}（多实例时只有领到租约的实例去拉）`); };
+  const ad = $('#tl-add');
+  if (ad) ad.onclick = () => openTool(s, -1);
+  const ri = $('#tl-reimport');
+  if (ri) ri.onclick = () => toast('重新导入：接口定义没有变化', `GET ${s.conn.spec}；有变化时列出新增、删除、变化的接口，由你确认后再改工具`);
+  const rd = $('#tl-rediscover');
+  if (rd) rd.onclick = () => toast('重新发现：方法没有变化', `grpc.reflection.v1.ServerReflection → ${s.conn.addr}`);
+}
+
+/* ---------- 工具定义：查看、编辑 ---------- */
+const PARAM_IN = ['path', 'query', 'header', 'body'];
+const PARAM_TYPES = ['string', 'integer', 'number', 'boolean', 'array', 'object'];
+
+function schemaOf(t) {
+  const props = {}, req = [];
+  t.params.filter(p => !p.fixed).forEach(p => {
+    props[p.name] = { type: p.type, ...(p.type === 'array' ? { items: { type: 'string' } } : {}), ...(p.desc ? { description: p.desc } : {}) };
+    if (p.required) req.push(p.name);
+  });
+  return { type: 'object', properties: props, ...(req.length ? { required: req } : {}) };
+}
+const annotationsOf = t => t.effect === 'read' ? { readOnlyHint: true } : { readOnlyHint: false, destructiveHint: t.effect === 'destructive' };
+const mcpDef = t => ({ name: t.name, description: t.desc, inputSchema: schemaOf(t), annotations: annotationsOf(t) });
+
+function paramTable(s, t) {
+  const rest = s.kind === 'rest';
+  return `<table class="table"><thead><tr><th>参数</th>${rest ? '<th>位置</th>' : ''}<th>类型</th><th>必填</th><th>说明</th></tr></thead><tbody>
+    ${t.params.map(p => `<tr><td class="mono">${esc(p.name)}</td>${rest ? `<td>${p.in}</td>` : ''}<td class="mono">${p.type}</td>
+      <td>${p.fixed ? '<span class="tag">固定值</span>' : p.required ? '是' : ''}</td>
+      <td>${p.fixed ? `<span class="mono">${esc(p.fixed)}</span> <span class="subnote">不出现在工具参数里</span>` : esc(p.desc)}</td></tr>`).join('') || `<tr><td colspan="${rest ? 5 : 4}" class="muted">没有参数</td></tr>`}
+    </tbody></table>`;
+}
+function paramEditor(params) {
+  return `<table class="table ptable" id="pe"><thead><tr><th style="width:19%">参数</th><th style="width:11%">位置</th><th style="width:11%">类型</th><th style="width:6%">必填</th><th style="width:17%">固定值</th><th>说明（给模型看）</th><th></th></tr></thead><tbody>
+    ${params.map((p, i) => `<tr>
+      <td><input data-f="name" value="${esc(p.name)}"></td>
+      <td><select data-f="in">${PARAM_IN.map(x => `<option ${p.in === x ? 'selected' : ''}>${x}</option>`).join('')}</select></td>
+      <td><select data-f="type">${PARAM_TYPES.map(x => `<option ${p.type === x ? 'selected' : ''}>${x}</option>`).join('')}</select></td>
+      <td style="text-align:center"><input type="checkbox" data-f="required" ${p.required ? 'checked' : ''} style="width:auto"></td>
+      <td><input data-f="fixed" value="${esc(p.fixed || '')}" placeholder="—"></td>
+      <td><input data-f="desc" value="${esc(p.desc)}"></td>
+      <td><button class="btn-link danger" data-prm="${i}">删除</button></td></tr>`).join('') || '<tr><td colspan="7" class="muted small">没有参数</td></tr>'}
+    </tbody></table>
+    <div class="row mt8"><button class="btn btn-sm" id="pe-add">＋ 添加参数</button><span class="subnote">填了固定值的参数每次都按固定值发给上游，不出现在工具参数里</span></div>`;
+}
+function readParams(m) {
+  return $$('#pe tbody tr', m).filter(tr => $('[data-f=name]', tr)).map(tr => {
+    const v = f => $(`[data-f=${f}]`, tr);
+    return { name: v('name').value.trim(), in: v('in').value, type: v('type').value, required: v('required').checked, fixed: v('fixed').value.trim(), desc: v('desc').value.trim() };
+  });
+}
+
+function openTool(s, i) {
+  const isNew = i < 0;
+  if (s.kind === 'mcp' || !canManage()) return openToolView(s, s.tools[i]);
+  const t = isNew ? { name: '', desc: '', effect: 'read', status: 'active', http: { method: 'GET', path: '/', pick: '', limit: 32 }, params: [] } : s.tools[i];
+  let params = clone(t.params);
+  const rest = s.kind === 'rest';
+  const body = `
+    <div class="grid2">
+      <div class="field"><label>工具名<span class="req">*</span></label><input type="text" id="te-name" value="${esc(t.name)}" ${isNew ? '' : 'disabled'} placeholder="小写字母、数字、下划线">
+        <div class="hint">${isNew ? '保存后不能改：它是智能体配置里的引用、用户中心里工具级授权的数据标识' : '不能修改'}</div></div>
+      <div class="field"><label>副作用</label><select id="te-effect">${Object.entries(EFFECTS).map(([k, v]) => `<option value="${k}" ${t.effect === k ? 'selected' : ''}>${v.name}</option>`).join('')}</select>
+        <div class="hint">写进 MCP 工具注解；Atlas 审批按它判断要不要确认</div></div>
+    </div>
+    <div class="field"><label>描述<span class="req">*</span></label><textarea id="te-desc" placeholder="告诉模型这个工具做什么、什么时候用">${esc(t.desc)}</textarea></div>
+    ${rest ? `
+      <div class="section-t">请求映射</div>
+      <div class="grid2" style="grid-template-columns:140px 1fr"><div class="field"><label>Method</label><select id="te-method">${['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].map(x => `<option ${t.http.method === x ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
+        <div class="field"><label>路径</label><input type="text" id="te-path" value="${esc(t.http.path)}" class="mono"><div class="hint">相对 Base URL <span class="mono">${esc(s.conn.base)}</span>；<span class="mono">{id}</span> 这样的占位符取位置为 path 的参数</div></div></div>
+      <div id="pe-wrap">${paramEditor(params)}</div>
+      <div class="section-t mt16">结果</div>
+      <div class="grid2"><div class="field"><label>只取响应里的字段（可选）</label><input type="text" id="te-pick" value="${esc(t.http.pick)}" class="mono" placeholder="$.items"><div class="hint">JSONPath；不填返回整个响应体</div></div>
+        <div class="field"><label>结果上限（KB）</label><input type="number" id="te-limit" value="${t.http.limit}"><div class="hint">超过截断，并在结果里注明</div></div></div>
+      <div class="small muted">非 2xx 响应作为工具错误返回（isError = true，带状态码和响应摘要）。</div>`
+    : `
+      <div class="section-t">方法</div>
+      <div class="kv mb12"><div class="k">gRPC 方法</div><div class="mono">${s.conn.service}/${t.grpc.method}</div>
+        <div class="k">流式</div><div>${STREAMS[t.grpc.stream]}${t.grpc.stream === 'server' ? ' · 流里的消息合并成数组返回（最多 100 条）' : ''}</div>
+        <div class="k">请求消息</div><div class="mono">${t.grpc.req}</div></div>
+      ${paramTable(s, t)}
+      <div class="small muted mt8">参数来自 proto 定义（按 proto3 JSON 映射）；要改参数，改 proto 后「重新发现」。</div>`}
+    <details class="preview"><summary>MCP 工具定义预览（tools/list 返回给调用方的）</summary><pre class="code mt8" id="te-pv"></pre></details>`;
+  openModal({
+    title: isNew ? `添加接口 · ${esc(s.display)}` : `编辑工具 <span class="mono">${t.name}</span>`, wide: true, body,
+    foot: `${!isNew && rest ? '<button class="btn btn-danger" id="te-del" style="margin-right:auto">删除工具</button>' : ''}<button class="btn" data-close>取消</button><button class="btn btn-primary" id="te-ok">保存</button>`,
+    onMount: m => {
+      const collect = () => ({
+        ...t,
+        name: $('#te-name', m).value.trim(), desc: $('#te-desc', m).value.trim(), effect: $('#te-effect', m).value,
+        ...(rest ? { http: { method: $('#te-method', m).value, path: $('#te-path', m).value.trim(), pick: $('#te-pick', m).value.trim(), limit: +$('#te-limit', m).value || 32 }, params: readParams(m) } : {}),
+      });
+      const preview = () => { $('#te-pv', m).textContent = json(mcpDef(collect())); };
+      const bindPe = () => {
+        $$('[data-prm]', m).forEach(b => { b.onclick = () => { params = readParams(m); params.splice(+b.dataset.prm, 1); $('#pe-wrap', m).innerHTML = paramEditor(params); bindPe(); preview(); }; });
+        const add = $('#pe-add', m);
+        if (add) add.onclick = () => { params = readParams(m); params.push({ name: '', in: 'query', type: 'string', required: false, fixed: '', desc: '' }); $('#pe-wrap', m).innerHTML = paramEditor(params); bindPe(); };
+      };
+      if (rest) bindPe();
+      m.addEventListener('input', preview);
+      m.addEventListener('change', preview);
+      preview();
+      $('#te-ok', m).onclick = () => {
+        const n = collect();
+        const err = validateTool(s, n, isNew);
+        if (err) { toast(err); return; }
+        if (isNew) s.tools.push(n); else s.tools[i] = n;
+        closeModal(); render();
+        toast(isNew ? `已添加工具 ${n.name}` : `已保存 ${n.name}`, `${isNew ? `用户中心：登记数据对象 McpTool ${s.name}/${n.name}；` : ''}各网关实例经配置变更通知立即生效，已连接的客户端收到 notifications/tools/list_changed`);
+      };
+      const del = $('#te-del', m);
+      if (del) del.onclick = () => confirmBox({
+        title: `删除工具 <span class="mono">${t.name}</span>`, danger: true, okText: '删除',
+        body: '<p>删除后调用方不能再用；引用它的智能体在编辑器里会提示工具已不存在。授给 Key 的工具级授权一并删除。</p>',
+        onOk: () => {
+          s.tools.splice(i, 1);
+          s.grants.forEach(g => { g.tools = g.tools.filter(x => x !== t.name); });
+          s.grants = s.grants.filter(g => g.scope !== 'tools' || g.tools.length);
+          render();
+          toast(`已删除 ${s.name} · ${t.name}`, `用户中心：删除数据对象 McpTool ${s.name}/${t.name}（连同它的授权）`);
+        },
+      });
+    },
+  });
+}
+
+function validateTool(s, t, isNew) {
+  if (!/^[a-z][a-z0-9_]{0,63}$/.test(t.name)) return '工具名：小写字母开头，只能有小写字母、数字、下划线';
+  if (isNew && s.tools.some(x => x.name === t.name)) return `工具名 ${t.name} 已存在`;
+  if (!t.desc) return '请填写描述';
+  if (s.kind !== 'rest') return '';
+  if (!t.http.path.startsWith('/')) return '路径要以 / 开头';
+  const names = t.params.map(p => p.name);
+  if (names.some(n => !n)) return '有参数没填名称';
+  if (new Set(names).size !== names.length) return '参数名重复';
+  const holes = [...t.http.path.matchAll(/\{(\w+)\}/g)].map(x => x[1]);
+  const pathParams = t.params.filter(p => p.in === 'path').map(p => p.name);
+  const miss = holes.find(h => !pathParams.includes(h));
+  if (miss) return `路径里的 {${miss}} 没有对应的 path 参数`;
+  const extra = pathParams.find(p => !holes.includes(p));
+  if (extra) return `path 参数 ${extra} 没出现在路径里`;
+  return '';
+}
+
+function openToolView(s, t) {
+  openModal({
+    title: `<span class="mono">${s.name} · ${t.name}</span>`, wide: true,
+    body: `
+      <div class="kv mb16">
+        <div class="k">描述</div><div>${esc(t.desc)}</div>
+        <div class="k">副作用</div><div>${effectBadge(t)}${s.kind === 'mcp' ? ' <span class="subnote">取自上游注解；上游没标注的按「有副作用」处理</span>' : ''}</div>
+        <div class="k">状态</div><div>${toolStatusBadge(t)}</div>
+        <div class="k">映射到</div><div>${s.kind === 'rest' ? `<span class="mono">${t.http.method} ${esc(s.conn.base)}${esc(t.http.path)}</span>${t.http.pick ? ` · 只取 <span class="mono">${esc(t.http.pick)}</span>` : ''}` : s.kind === 'grpc' ? `<span class="mono">${s.conn.service}/${t.grpc.method}</span>（${STREAMS[t.grpc.stream]}）` : `上游 <span class="mono">${esc(s.conn.url)}</span> 的同名工具`}</div>
+      </div>
+      ${paramTable(s, t)}
+      <details class="preview"><summary>MCP 工具定义（tools/list 返回给调用方的）</summary><pre class="code mt8">${esc(json(mcpDef(t)))}</pre></details>`,
+    foot: '<button class="btn" data-close>关闭</button>',
+  });
+}
+
+/* ---------- 试调 ---------- */
+const SAMPLE_ARG = {
+  id: 'C1001', customer_id: 'C1001', q: '云帆', order_id: 'O202610290012', project: 'platform/atlas', path: 'README.md', iid: 128,
+  latitude: 30.27, longitude: 120.15, jql: 'project = ATLAS AND status = Open', key: 'ATLAS-123', level: 'A', reason: '年度采购额达标',
+  title: '发票抬头修改', body: '看过了，没有问题。', branch: 'feature/mcp-gateway', ref: 'main', summary: '登录页偶发白屏', query: 'session',
+};
+const SAMPLE_RESP = {
+  get_customer: { id: 'C1001', name: '杭州云帆科技有限公司', level: 'B', owner: '李工', phone: '0571-8888****' },
+  search_customers: { total: 2, items: [{ id: 'C1001', name: '杭州云帆科技有限公司', level: 'B' }, { id: 'C1024', name: '云帆物流', level: 'C' }] },
+  update_customer_level: { id: 'C1001', level: 'A', updated_at: '2026-10-29T15:43:10+08:00' },
+  create_ticket: { ticket_id: 'T20261029-0087', status: 'open' },
+  get_order: { order_id: 'O202610290012', status: 'PAID', amount: '1299.00', customer_id: 'C1001', created_at: '2026-10-29T09:12:00+08:00' },
+  list_orders: { orders: [{ order_id: 'O202610290012', status: 'PAID', amount: '1299.00' }], next_page_token: '' },
+  list_order_items: [{ sku: 'SKU-1001', name: '机械键盘', qty: 1 }, { sku: 'SKU-2077', name: '鼠标垫', qty: 2 }],
+  refund_order: { refund_id: 'R20261029-0031', status: 'ACCEPTED' },
+  get_forecast: { latitude: 30.25, longitude: 120.125, daily: { time: ['2026-10-29', '2026-10-30', '2026-10-31'], temperature_2m_max: [21.4, 19.8, 18.2], temperature_2m_min: [13.1, 12.6, 10.9] } },
+  google_search: { search_metadata: { status: 'Success' }, organic_results: [{ position: 1, title: 'Model Context Protocol', link: 'https://modelcontextprotocol.io', snippet: 'An open protocol that enables seamless integration…' }] },
+  google_news: { news_results: [{ title: 'MCP 生态持续扩展', source: '示例新闻', date: '2026-10-29' }] },
+  list_projects: [{ id: 42, path: 'platform/atlas', default_branch: 'main' }],
+  get_file: { path: 'README.md', size: 2048, content: '# Atlas\n…' },
+};
+function sampleArgs(t) {
+  const ex = { string: '示例', integer: 1, number: 1.5, boolean: true, array: [], object: {} };
+  const out = {};
+  t.params.filter(p => !p.fixed && p.required).forEach(p => { out[p.name] = SAMPLE_ARG[p.name] ?? ex[p.type]; });
+  return out;
+}
+function typeOk(type, v) {
+  return { string: typeof v === 'string', integer: Number.isInteger(v), number: typeof v === 'number', boolean: typeof v === 'boolean',
+    array: Array.isArray(v), object: v !== null && typeof v === 'object' && !Array.isArray(v) }[type];
+}
+// 网关在转发前的检查。返回 JSON-RPC 错误对象，通过返回 null
+function rejectionFor(s, t, args, k) {
+  const err = (code, reason, message, extra = {}) => ({ code, message, data: { reason, forwarded: false, service: s.name, tool: t.name, ...extra } });
+  if (s.status !== 'enabled') return err(-32041, 'service_disabled', `服务 ${s.name} 已停用`);
+  if (t.status !== 'active') return err(-32046, 'tool_unknown', `服务 ${s.name} 没有可用的工具 ${t.name}`);
+  if (!keyVia(s, t, k)) return err(-32044, 'forbidden', `这把 Key 没有 ${s.name} · ${t.name} 的权限`, { key_uid: k.uid + '…' });
+  for (const p of t.params.filter(x => !x.fixed)) {
+    if (args[p.name] === undefined) { if (p.required) return err(-32602, 'invalid_params', `缺少必填参数 ${p.name}`); continue; }
+    if (!typeOk(p.type, args[p.name])) return err(-32602, 'invalid_params', `参数 ${p.name} 应该是 ${p.type}`);
+  }
+  if (trafficOf(s.name).breaker === 'open') return err(-32054, 'circuit_open', `服务 ${s.name} 熔断中，暂停调用`, { retry_after: 20 });
+  return null;
+}
+// 发给上游的调用者身份：X-Auth-Uid = Key 的 uid（权限主体）；X-Uid = 使用者（用户 Key 是持有人，智能体 Key 是调用方带来的）
+const identityLines = (k, lower) => {
+  const user = k.type === 'user' ? USERS[k.user].uid + '…' : '<调用方带来的使用者 uid>';
+  return lower ? [`  x-auth-uid: ${k.uid}…`, `  x-uid: ${user}`] : [`X-Auth-Uid: ${k.uid}…`, `X-Uid: ${user}`];
+};
+function upstreamRequest(s, t, args, tp, k) {
+  const c = s.cred;
+  if (s.kind === 'rest') {
+    const path = t.http.path.replace(/\{(\w+)\}/g, (_, x) => encodeURIComponent(args[x] ?? ''));
+    const q = [], hs = [], body = {};
+    t.params.forEach(p => {
+      const v = p.fixed || args[p.name];
+      if (v === undefined || v === '' || p.in === 'path') return;
+      if (p.in === 'query') q.push(`${p.name}=${encodeURIComponent(v)}`);
+      else if (p.in === 'header') hs.push(`${p.name}: ${v}`);
+      else body[p.name] = v;
+    });
+    const cred = [];
+    if (c.type === 'apikey' && c.where === 'query') q.push(`${c.key}=${c.hint}`);
+    if (c.type === 'apikey' && c.where !== 'query') cred.push(`${c.key}: ${c.hint}`);
+    if (c.type === 'bearer') cred.push(`Authorization: Bearer ${c.hint}`);
+    if (c.type === 'basic') cred.push(`Authorization: Basic ${c.hint}`);
+    if (c.type === 'oauth2') cred.push('Authorization: Bearer <网关用 client_credentials 换到的 Token>');
+    const lines = [`${t.http.method} ${s.conn.base}${path}${q.length ? '?' + q.join('&') : ''}`, ...cred, ...hs,
+      ...(s.identity ? identityLines(k) : []), `traceparent: ${tp}`];
+    if (Object.keys(body).length) lines.push('Content-Type: application/json', '', json(body));
+    return lines.join('\n');
+  }
+  if (s.kind === 'grpc') {
+    const md = [];
+    if (c.type === 'metadata') md.push(`  ${c.key}: ${c.hint}`);
+    if (s.identity) md.push(...identityLines(k, true));
+    md.push(`  traceparent: ${tp}`);
+    return [`gRPC ${s.conn.addr}${s.conn.tls === 'plaintext' ? '' : `（${s.conn.tls === 'mtls' ? 'mTLS，网关出示客户端证书' : 'TLS'}）`}`,
+      `${s.conn.service}/${t.grpc.method}（${STREAMS[t.grpc.stream]}）`, '', 'metadata:', ...md, '', `${t.grpc.req}（按 proto3 JSON 映射）:`, json(args)].join('\n');
+  }
+  const cred = c.type === 'bearer' ? `Authorization: Bearer ${c.hint}` : c.type === 'header' ? `${c.key}: ${c.hint}` : c.type === 'oauth2' ? 'Authorization: Bearer <网关换到的 Token>' : null;
+  return [`POST ${s.conn.url}${s.conn.transport === 'sse' ? '  （旧版 SSE：发到 endpoint 事件给的消息地址，结果从 SSE 流回来）' : ''}`,
+    ...(cred ? [cred] : []), 'Mcp-Session-Id: <上游会话，取自网关会话标识>', ...(s.identity ? identityLines(k) : []), `traceparent: ${tp}`, '',
+    json({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: t.name, arguments: args, _meta: { traceparent: tp } } })].join('\n');
+}
+function pickResult(t, resp) {
+  const m = t.http?.pick?.match(/^\$\.(\w+)$/);
+  return m && resp && resp[m[1]] !== undefined ? resp[m[1]] : resp;
+}
+// 试调用哪把 Key：管理员可以选任意一把正常的 Key；其他人只能用自己的用户 Key
+const tryKeys = () => (isAdmin() ? keys : keys.filter(k => k.type === 'user' && k.user === me)).filter(k => k.status === 'active');
+function openTry(s, i) {
+  const t = s.tools[i];
+  const ks = tryKeys();
+  if (!ks.length) { toast('你还没有可用的 API Key，先到「API Key」申请'); return; }
+  openModal({
+    title: `试调 <span class="mono">${s.name} · ${t.name}</span>`, wide: true,
+    body: `
+      <div class="field"><label>用哪把 Key 调用</label><select id="tr-key">${['user', 'client'].map(tp => {
+        const xs = ks.filter(k => k.type === tp);
+        return xs.length ? `<optgroup label="${tp === 'user' ? '用户 Key' : '智能体 Key'}">${xs.map(k => `<option value="${k.uuid}">${esc(keyLabel(k))}</option>`).join('')}</optgroup>` : '';
+      }).join('')}</select>
+        <div class="hint">和真实调用一样：认 Key → 以 Key 的 uid 作 X-Auth-Uid 调用户中心判权 → 流量治理 → 调上游。${t.effect !== 'read' ? '<b>这个工具有副作用，会真的改数据。</b>' : ''}</div></div>
+      <div class="field"><label>参数（JSON）</label><textarea id="tr-args" rows="5" class="mono">${esc(json(sampleArgs(t)))}</textarea></div>
+      <div id="tr-out"></div>`,
+    foot: '<button class="btn" data-close>关闭</button><button class="btn btn-primary" id="tr-go">调用</button>',
+    onMount: m => { $('#tr-go', m).onclick = () => runTry(s, t, m); },
+  });
+}
+function runTry(s, t, m) {
+  const out = $('#tr-out', m);
+  const k = keyById($('#tr-key', m).value);
+  let args;
+  try { args = JSON.parse($('#tr-args', m).value || '{}'); } catch (e) { out.innerHTML = `<div class="err">参数不是合法的 JSON：${esc(e.message)}</div>`; return; }
+  const trace = hex(32), tp = `00-${trace}-${hex(16)}-01`;
+  const traceLine = `<div class="small muted mt8">trace_id <span class="mono">${trace}</span> · Span 已经 OTLP 导出，在追踪系统里按 trace_id 查</div>`;
+  const rej = rejectionFor(s, t, args, k);
+  if (rej) {
+    out.innerHTML = `<div class="out-t">网关直接返回（没有转发给上游）</div><pre class="code">${esc(json({ jsonrpc: '2.0', id: 1, error: rej }))}</pre>${traceLine}`;
+    return;
+  }
+  const resp = SAMPLE_RESP[t.name] ?? { ok: true };
+  const result = s.kind === 'rest' ? pickResult(t, resp) : resp;
+  const text = JSON.stringify(result);
+  const mcpResult = { content: [{ type: 'text', text: text.length > 140 ? text.slice(0, 140) + '…' : text }],
+    ...(result && typeof result === 'object' && !Array.isArray(result) ? { structuredContent: '<同上，结构化>' } : {}), isError: false };
+  const upResp = s.kind === 'rest' ? `HTTP/1.1 200 OK\nContent-Type: application/json\n\n${json(resp)}`
+    : s.kind === 'grpc' ? `status: OK${t.grpc.stream === 'server' ? `（服务端流，共 ${Array.isArray(resp) ? resp.length : 1} 条消息，网关合并成数组）` : ''}\n${json(resp)}`
+    : `200 OK（text/event-stream）\n${json({ jsonrpc: '2.0', id: 7, result: { content: [{ type: 'text', text: '…' }], isError: false } })}`;
+  out.innerHTML = `
+    <div class="out-t">① 网关发给上游的请求（上游凭据由网关注入；调用方的 Key 不转发）</div><pre class="code">${esc(upstreamRequest(s, t, args, tp, k))}</pre>
+    <div class="out-t">② 上游响应</div><pre class="code">${esc(upResp)}</pre>
+    <div class="out-t">③ 返回给调用方的 MCP 结果${s.kind === 'mcp' ? '（原样返回）' : s.kind === 'rest' && t.http.pick ? `（只取 ${esc(t.http.pick)}）` : ''}</div><pre class="code">${esc(json(mcpResult))}</pre>
+    ${traceLine}`;
+}
+
+/* ---------- 授权：授给 API Key；所有者是人 ---------- */
+const scopeCell = g => g.scope === 'all' ? '全部工具 <span class="subnote">含以后新增</span>' : `<div class="pill-tools">${g.tools.map(n => `<span class="tag mono">${n}</span>`).join('')}</div>`;
+const ucLines = (s, k, g) => g.scope === 'all'
+  ? [`数据编码 <code>McpServer</code> · 数据 <code>${s.name}</code> → Key <code>${k.uid}…</code> · READ`]
+  : g.tools.map(n => `数据编码 <code>McpTool</code> · 数据 <code>${s.name}/${n}</code> → Key <code>${k.uid}…</code> · READ`);
+
+function renderGrantsTab(s) {
+  const body = $('#sd-body');
+  const pub = s.visibility === 'public';
+  body.innerHTML = `
+    ${pub ? '<div class="callout callout-info mb12"><div><b>公开服务</b>：任何有效的 API Key 都能调用全部工具，不需要授权。改成私有后，授给 Key 的权限才起作用。</div></div>' : `
+    <div class="card mb16"><div class="card-h"><h3>授权的 API Key</h3><span class="small muted">用户中心数据权限，授给 Key 的 uid：服务级 = 全部工具（含以后新增的）；工具级 = 只能用指定的工具</span>
+      <div class="grow"></div><button class="btn btn-primary btn-sm" id="gr-add">＋ 授权 Key</button></div>
+      <table class="table"><thead><tr><th>API Key</th><th>状态</th><th>范围</th><th></th></tr></thead><tbody>
+      ${s.grants.map((g, i) => { const k = keyById(g.key); return `<tr><td>${keyCell(k)}</td><td>${keyStatusBadge(k)}</td><td>${scopeCell(g)}</td>
+        <td class="nowrap"><button class="btn-link" data-ed="${i}">修改</button><button class="btn-link danger" data-rm="${i}">收回</button></td></tr>`; }).join('') || '<tr><td colspan="4"><div class="empty">还没有授权给任何 Key</div></td></tr>'}
+      </tbody></table>
+      <div class="card-b small muted" style="border-top:1px solid var(--line-2)">网关判权时以 Key 的 uid 作 X-Auth-Uid 调用户中心，结果按 Key 缓存 30 秒：新授、收回的授权最长 30 秒生效。</div></div>`}
+    <div class="card"><div class="card-h"><h3>所有者</h3><span class="small muted">能给 API Key 分配这个服务的权限；不能改连接和工具</span><div class="grow"></div><button class="btn btn-sm" id="ow-add">＋ 添加所有者</button></div>
+      <table class="table"><thead><tr><th>用户</th><th></th><th></th></tr></thead><tbody>
+      ${s.owners.map(u => `<tr><td>${userCell(u)}</td><td class="small muted">${u === s.created_by ? '登记人' : ''}</td><td class="nowrap" style="text-align:right"><button class="btn-link danger" data-ow="${u}">移除</button></td></tr>`).join('')}
+      </tbody></table>
+      <div class="card-b small muted" style="border-top:1px solid var(--line-2)">所有者是人（数据权限 <code>McpServer</code> = OWNER），登记人自动成为所有者。管理员有「全部 MCP 服务 · 所有者」（数据编码级授权），不在列表里。</div></div>`;
+  const add = $('#gr-add');
+  if (add) add.onclick = () => openKeyGrant({ s });
+  $$('[data-ed]', body).forEach(b => { b.onclick = () => openKeyGrant({ s, idx: +b.dataset.ed }); });
+  $$('[data-rm]', body).forEach(b => { b.onclick = () => {
+    const g = s.grants[+b.dataset.rm], k = keyById(g.key);
+    confirmBox({
+      title: '收回授权', danger: true, okText: '收回',
+      body: `<p>收回「${esc(keyTitle(k))}」对「${esc(s.display)}」的权限？</p><p class="small muted">最长 30 秒后，带这把 Key 的调用开始被拒绝（forbidden）。</p>`,
+      onOk: () => { s.grants.splice(s.grants.indexOf(g), 1); render(); toast('已收回授权', `用户中心：删除 ${dataRefs(s, g)} → Key ${k.uid}…`); },
+    });
+  }; });
+  $('#ow-add').onclick = () => {
+    const cands = Object.keys(USERS).filter(u => !s.owners.includes(u) && !USERS[u].admin);
+    if (!cands.length) { toast('没有可以添加的用户'); return; }
+    openModal({
+      title: `添加所有者 · ${esc(s.display)}`,
+      body: `<div class="field"><label>用户</label><select id="ow-u">${cands.map(u => `<option value="${u}">${USERS[u].name}（${deptOf(USERS[u].dept).name}）</option>`).join('')}</select>
+        <div class="hint">所有者能给 API Key 分配这个服务的权限、增删所有者；改连接和工具仍然只有 MCP 管理员</div></div>`,
+      foot: '<button class="btn" data-close>取消</button><button class="btn btn-primary" id="ow-ok">添加</button>',
+      onMount: m => { $('#ow-ok', m).onclick = () => { const u = $('#ow-u', m).value; s.owners.push(u); closeModal(); render(); toast(`已添加所有者 ${USERS[u].name}`, `用户中心：写入 McpServer ${s.name} → 用户 ${USERS[u].name} · OWNER`); }; },
+    });
+  };
+  $$('[data-ow]', body).forEach(b => { b.onclick = () => {
+    const u = b.dataset.ow;
+    confirmBox({ title: '移除所有者', danger: true, okText: '移除', body: `<p>移除 ${esc(USERS[u].name)} 的所有者权限？已经分配给 Key 的权限不受影响。</p>`,
+      onOk: () => { s.owners = s.owners.filter(x => x !== u); render(); toast(`已移除所有者 ${USERS[u].name}`, `用户中心：删除 McpServer ${s.name} → 用户 ${USERS[u].name} · OWNER`); } });
+  }; });
+}
+
+// 从服务的「授权」给某把 Key 授权（一个服务）
+function openKeyGrant({ s, idx = -1 }) {
+  const editing = idx >= 0 ? s.grants[idx] : null;
+  const st = {
+    key: editing ? editing.key : (keys.find(k => k.status === 'active' && !grantOf(s, k)) || keys[0]).uuid,
+    scope: editing ? editing.scope : 'all',
+    tools: new Set(editing ? editing.tools : []),
+  };
+  const draw = m => {
+    const k = keyById(st.key);
+    const old = grantOf(s, k);
+    const g = { key: st.key, scope: st.scope, tools: [...st.tools] };
+    $('.modal-b', m).innerHTML = `
+      <div class="field"><label>服务</label><div>${esc(s.display)} <span class="mono muted">${s.name}</span> ${visBadge(s)}</div></div>
+      <div class="field"><label>API Key</label>${editing ? keyCell(k) : `<select id="kg-key">${['user', 'client'].map(tp => `<optgroup label="${tp === 'user' ? '用户 Key' : '智能体 Key'}">${keys.filter(x => x.type === tp).map(x => `<option value="${x.uuid}" ${x.uuid === st.key ? 'selected' : ''}>${esc(keyLabel(x))}</option>`).join('')}</optgroup>`).join('')}</select>
+        <div class="hint">授权授给 Key 在用户中心的 uid（<span class="mono">${k.uid}…</span>）</div>`}</div>
+      <div class="field"><label>范围</label><div class="radio-row">
+          <label class="check"><input type="radio" name="kg-scope" value="all" ${st.scope === 'all' ? 'checked' : ''}> 全部工具（含以后新增的）</label>
+          <label class="check"><input type="radio" name="kg-scope" value="tools" ${st.scope === 'tools' ? 'checked' : ''}> 指定工具</label></div>
+        ${st.scope === 'tools' ? `<div class="modelchecks">${s.tools.map(t => `<label class="check"><input type="checkbox" data-tool="${t.name}" ${st.tools.has(t.name) ? 'checked' : ''}> <span class="mono">${t.name}</span> ${effectBadge(t)} ${t.status !== 'active' ? toolStatusBadge(t) : ''} <span class="small muted">${esc(t.desc)}</span></label>`).join('')}</div>` : ''}</div>
+      <details class="preview" open><summary>写入用户中心</summary><div class="small mt8">
+        ${g.scope === 'tools' && !g.tools.length ? '<span class="muted">还没选工具</span>' : ucLines(s, k, g).join('<br>')}
+        ${old && old !== editing ? `<div class="subnote mt8">这把 Key 已有授权，会替换掉：${esc(dataRefs(s, old))}</div>` : ''}
+        ${editing ? `<div class="subnote mt8">原来的：${esc(dataRefs(s, editing))}</div>` : ''}
+      </div></details>`;
+    const on = (sel, fn) => $$(sel, m).forEach(el => { el.onchange = () => { fn(el); draw(m); }; });
+    on('#kg-key', el => { st.key = el.value; });
+    on('input[name=kg-scope]', el => { st.scope = el.value; });
+    on('[data-tool]', el => { el.checked ? st.tools.add(el.dataset.tool) : st.tools.delete(el.dataset.tool); });
+  };
+  openModal({
+    title: editing ? '修改授权' : `授权 Key · ${esc(s.display)}`, wide: true, body: '',
+    foot: '<button class="btn" data-close>取消</button><button class="btn btn-primary" id="kg-ok">保存</button>',
+    onMount: m => {
+      draw(m);
+      $('#kg-ok', m).onclick = () => {
+        const k = keyById(st.key);
+        const g = { key: st.key, scope: st.scope, tools: st.scope === 'tools' ? [...st.tools] : [] };
+        if (g.scope === 'tools' && !g.tools.length) { toast('请至少选一个工具'); return; }
+        const at = s.grants.findIndex(x => x.key === g.key);
+        const old = at >= 0 ? s.grants[at] : null;
+        if (at >= 0) s.grants[at] = g; else s.grants.push(g);
+        closeModal(); render();
+        toast(`已授权：${keyTitle(k)} · ${s.display}`, `用户中心：写入 ${dataRefs(s, g)} → Key ${k.uid}… READ${old ? `；删除原来的 ${dataRefs(s, old)}` : ''}。最长 30 秒生效`);
+      };
+    },
+  });
+}
+
+// 从 API Key「分配权限」：一次给这把 Key 配多个服务；只能改自己是所有者的服务
+function openAssign(k, onDone = render) {
+  const priv = servers.filter(s => s.visibility === 'private');
+  const pubs = servers.filter(s => s.visibility === 'public' && s.status === 'enabled');
+  const st = new Map(priv.map(s => { const g = grantOf(s, k); return [s.name, { on: !!g, scope: g ? g.scope : 'all', tools: new Set(g ? g.tools : []) }]; }));
+  const draw = m => {
+    $('.modal-b', m).innerHTML = `
+      <div class="field"><label>API Key</label>${keyCell(k)}</div>
+      <div class="callout callout-info mb12"><div>公开服务不用分配，任何有效的 Key 都能调用：${pubs.map(s => esc(s.display)).join('、') || '（没有）'}。</div></div>
+      <div class="tree">${priv.map(s => {
+        const x = st.get(s.name), can = canAssign(s), dis = can ? '' : 'disabled';
+        return `<div class="srv"><div class="srv-h"><label class="check" style="margin:0;font-weight:650"><input type="checkbox" data-on="${s.name}" ${x.on ? 'checked' : ''} ${dis}> ${esc(s.display)}</label>
+            <span class="mono muted small">${s.name}</span> ${kindBadge(s)}${s.status === 'disabled' ? ' <span class="badge badge-gray">已停用</span>' : ''}${can ? '' : ' <span class="subnote">你不是所有者，只能看</span>'}</div>
+          ${x.on ? `<div style="padding:6px 0 0 26px"><div class="radio-row">
+              <label class="check"><input type="radio" name="sc-${s.name}" value="all" data-scope="${s.name}" ${x.scope === 'all' ? 'checked' : ''} ${dis}> 全部工具（含以后新增的）</label>
+              <label class="check"><input type="radio" name="sc-${s.name}" value="tools" data-scope="${s.name}" ${x.scope === 'tools' ? 'checked' : ''} ${dis}> 指定工具</label></div>
+            ${x.scope === 'tools' ? `<div class="tools">${s.tools.map(t => `<label class="check"><input type="checkbox" data-tool="${s.name}" value="${t.name}" ${x.tools.has(t.name) ? 'checked' : ''} ${dis}> <span class="mono">${t.name}</span> ${t.effect !== 'read' ? effectBadge(t) : ''}${t.status === 'disabled' ? ' <span class="badge badge-gray">已停用</span>' : ''}</label>`).join('')}</div>` : ''}</div>` : ''}
+        </div>`;
+      }).join('')}</div>
+      <div class="small muted mt8">写进用户中心，授给这把 Key 的 uid；修改最长 30 秒生效，Key 本身不变。</div>`;
+    $$('[data-on]', m).forEach(el => { el.onchange = () => { st.get(el.dataset.on).on = el.checked; draw(m); }; });
+    $$('[data-scope]', m).forEach(el => { el.onchange = () => { st.get(el.dataset.scope).scope = el.value; draw(m); }; });
+    $$('[data-tool]', m).forEach(el => { el.onchange = () => { const x = st.get(el.dataset.tool).tools; el.checked ? x.add(el.value) : x.delete(el.value); }; });
+  };
+  openModal({
+    title: `分配权限 · ${esc(keyTitle(k))}`, wide: true, body: '',
+    foot: '<button class="btn" data-close>取消</button><button class="btn btn-primary" id="as-ok">保存</button>',
+    onMount: m => {
+      draw(m);
+      $('#as-ok', m).onclick = () => {
+        const writes = [], dels = [];
+        for (const s of priv.filter(canAssign)) {
+          const x = st.get(s.name), old = grantOf(s, k);
+          if (x.on && x.scope === 'tools' && !x.tools.size) { toast(`「${s.display}」至少选一个工具，或者取消勾选这个服务`); return; }
+        }
+        for (const s of priv.filter(canAssign)) {
+          const x = st.get(s.name), old = grantOf(s, k);
+          const g = x.on ? { key: k.uuid, scope: x.scope, tools: x.scope === 'tools' ? [...x.tools].sort() : [] } : null;
+          const same = old && g && old.scope === g.scope && [...old.tools].sort().join() === g.tools.join();
+          if (same || (!old && !g)) continue;
+          if (old) { dels.push(dataRefs(s, old)); s.grants = s.grants.filter(y => y !== old); }
+          if (g) { writes.push(dataRefs(s, g)); s.grants.push(g); }
+        }
+        closeModal(); onDone();
+        toast(writes.length || dels.length ? `已更新「${keyTitle(k)}」的权限` : '没有变化',
+          [writes.length ? `写入 ${writes.join('；')}` : '', dels.length ? `删除 ${dels.join('；')}` : ''].filter(Boolean).map(x => '用户中心：' + x).join('  ') + (writes.length || dels.length ? ` → Key ${k.uid}…` : ''));
+      };
+    },
+  });
+}
+
+/* ---------- 连接与凭据 ---------- */
+function connFieldsHtml(kind, c = {}) {
+  if (kind === 'mcp') return `
+    <div class="grid2" style="grid-template-columns:2fr 1fr"><div class="field"><label>地址<span class="req">*</span></label><input type="text" id="cf-url" value="${esc(c.url || '')}" placeholder="http://xxx-mcp.ns:8000/mcp"></div>
+      <div class="field"><label>传输</label><select id="cf-transport"><option value="streamable" ${c.transport !== 'sse' ? 'selected' : ''}>Streamable HTTP</option><option value="sse" ${c.transport === 'sse' ? 'selected' : ''}>SSE（旧版协议）</option></select></div></div>
+    <div class="hint" style="margin:-6px 0 12px">只接远程 MCP Server；stdio 的 MCP Server 先单独部署成 HTTP 服务（放在 K8s Pod 里）再登记。</div>`;
+  if (kind === 'rest') {
+    const src = c.src || 'openapi';
+    return `
+    <div class="field"><label>Base URL<span class="req">*</span></label><input type="text" id="cf-base" value="${esc(c.base || '')}" placeholder="http://xxx-api.ns:8080/api"></div>
+    <div class="field"><label>接口定义</label>
+      <div class="radio-row">${[['openapi', '导入 OpenAPI（地址或文件）'], ['manual', '手工添加']].map(([v, l]) => `<label class="check"><input type="radio" name="cf-src" value="${v}" ${src === v ? 'checked' : ''}> ${l}</label>`).join('')}</div>
+      ${src === 'openapi' ? `<input type="text" id="cf-spec" value="${esc(c.spec || '')}" placeholder="http://xxx-api.ns:8080/openapi.json" style="margin-top:6px"><div class="hint">支持 OpenAPI 3.x、Swagger 2.0；一个操作（operation）转成一个工具</div>` : '<div class="hint">登记后在「工具」里逐个添加接口</div>'}</div>`;
+  }
+  return `
+    <div class="grid2"><div class="field"><label>地址<span class="req">*</span></label><input type="text" id="cf-addr" value="${esc(c.addr || '')}" placeholder="xxx-svc.ns:9090"></div>
+      <div class="field"><label>传输安全</label><select id="cf-tls">${[['plaintext', '明文（集群内）'], ['tls', 'TLS'], ['mtls', 'mTLS']].map(([v, l]) => `<option value="${v}" ${c.tls === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div></div>
+    <div class="field"><label>方法发现</label><div class="radio-row">
+      <label class="check"><input type="radio" name="cf-disc" value="reflection" ${c.discovery !== 'descriptor' ? 'checked' : ''}> 服务端反射</label>
+      <label class="check"><input type="radio" name="cf-disc" value="descriptor" ${c.discovery === 'descriptor' ? 'checked' : ''}> 上传描述文件（.proto 或 FileDescriptorSet）</label></div></div>`;
+}
+function readConnFields(m, kind) {
+  const v = id => ($(id, m)?.value || '').trim();
+  let conn, err = '';
+  if (kind === 'mcp') {
+    conn = { url: v('#cf-url'), transport: v('#cf-transport') || 'streamable' };
+    if (!/^https?:\/\/\S+$/.test(conn.url)) err = '请填写 MCP Server 地址（http:// 或 https:// 开头）';
+  } else if (kind === 'rest') {
+    const src = $('input[name=cf-src]:checked', m)?.value || 'openapi';
+    conn = { base: v('#cf-base'), src, spec: src === 'manual' ? '' : v('#cf-spec') };
+    if (!/^https?:\/\/\S+$/.test(conn.base)) err = '请填写 Base URL（http:// 或 https:// 开头）';
+    else if (src === 'openapi' && !conn.spec) err = '请填写 OpenAPI 地址';
+  } else {
+    conn = { addr: v('#cf-addr'), tls: v('#cf-tls') || 'plaintext', discovery: $('input[name=cf-disc]:checked', m)?.value || 'reflection' };
+    if (!/^[\w.-]+:\d+$/.test(conn.addr)) err = '请填写 gRPC 地址（host:port）';
+  }
+  return { conn, err };
+}
+function credExtraHtml(type, cred = {}, val = '') {
+  const ph = cred.hint ? `已保存（${cred.hint}），留空不修改` : '';
+  const f = (id, label, v = '', place = '', t = 'text') => `<div class="field"><label>${label}</label><input type="${t}" id="${id}" value="${esc(v)}" placeholder="${esc(place)}"></div>`;
+  return {
+    none: '',
+    apikey: `<div class="grid2"><div class="field"><label>位置</label><select id="cr-where"><option value="header" ${cred.where !== 'query' ? 'selected' : ''}>请求头</option><option value="query" ${cred.where === 'query' ? 'selected' : ''}>查询参数</option></select></div>${f('cr-key', '名称', cred.key || '', 'X-Api-Key')}</div>${f('cr-val', '值', val, ph, 'password')}`,
+    bearer: f('cr-val', 'Token', val, ph, 'password'),
+    header: `<div class="grid2">${f('cr-key', '请求头名称', cred.key || '', 'X-Token')}${f('cr-val', '值', val, ph, 'password')}</div>`,
+    basic: `<div class="grid2">${f('cr-user', '用户名', cred.user || '')}${f('cr-val', '密码', val, ph, 'password')}</div>`,
+    oauth2: `${f('cr-token', 'Token 地址', cred.tokenUrl || '', 'https://idp.example.com/oauth2/token')}<div class="grid2">${f('cr-user', 'client_id', cred.user || '')}${f('cr-val', 'client_secret', val, ph, 'password')}</div>${f('cr-scope', 'scope（可选）', cred.scope || '')}<div class="hint">网关用 client_credentials 换 Token，缓存到过期前；各实例各自换。</div>`,
+    metadata: `<div class="grid2">${f('cr-key', '键', cred.key || '', 'authorization')}${f('cr-val', '值', val, ph, 'password')}</div>`,
+    mtls: `<div class="grid2">${f('cr-cert', '客户端证书（PEM）', '', cred.hint ? '已保存，留空不修改' : '粘贴或上传')}${f('cr-val', '私钥（PEM）', val, ph, 'password')}</div>`,
+  }[type] || '';
+}
+function credFieldsHtml(kind, cred = { type: 'none' }, val = '') {
+  return `<div class="field"><label>上游凭据</label><select id="cr-type">${CRED_BY_KIND[kind].map(t => `<option value="${t}" ${cred.type === t ? 'selected' : ''}>${CRED_TYPES[t]}</option>`).join('')}</select>
+      <div class="hint">网关调上游时注入，保存后不回显。调用方只带自己的 MCP Key，拿不到上游凭据。</div></div>
+    <div id="cr-extra">${credExtraHtml(cred.type, cred, val)}</div>`;
+}
+function bindCred(m, cred = { type: 'none' }) {
+  $('#cr-type', m).onchange = e => { $('#cr-extra', m).innerHTML = credExtraHtml(e.target.value, e.target.value === cred.type ? cred : {}); };
+}
+function readCred(m, prev = { type: 'none' }) {
+  const type = $('#cr-type', m).value;
+  const v = id => ($(id, m)?.value || '').trim();
+  if (type === 'none') return { cred: { type } };
+  const val = v('#cr-val');
+  if (!val && !(prev.type === type && prev.hint)) return { err: '请填写上游凭据' };
+  const cred = { type, hint: val ? '••••' + val.slice(-4) : prev.hint };
+  if (['apikey', 'header', 'metadata'].includes(type)) { cred.key = v('#cr-key'); if (!cred.key) return { err: '请填写凭据的名称' }; }
+  if (type === 'apikey') cred.where = v('#cr-where');
+  if (type === 'basic' || type === 'oauth2') cred.user = v('#cr-user');
+  if (type === 'oauth2') { cred.tokenUrl = v('#cr-token'); cred.scope = v('#cr-scope'); if (!cred.tokenUrl) return { err: '请填写 Token 地址' }; }
+  return { cred };
+}
+const identityHtml = (kind, on) => `<label class="check"><input type="checkbox" id="cf-identity" ${on ? 'checked' : ''}> 向上游传递调用者身份（${kind === 'grpc' ? 'metadata x-auth-uid、x-uid' : '请求头 X-Auth-Uid、X-Uid'}）</label>`;
+
+function connRows(s) {
+  const c = s.conn;
+  return {
+    mcp: [['地址', `<span class="mono">${esc(c.url)}</span>`], ['传输', c.transport === 'sse' ? 'SSE（旧版协议）' : 'Streamable HTTP'],
+      ['工具定义', '定时从上游拉取，拉到就生效'], ['会话', '网关发给调用方的会话标识里带着上游会话，任一实例都能接着用']],
+    rest: [['Base URL', `<span class="mono">${esc(c.base)}</span>`], ['接口定义', c.spec ? `OpenAPI · <span class="mono">${esc(c.spec)}</span>` : '手工定义'],
+      ['请求与响应', 'JSON；非 2xx 作为工具错误返回（isError），超过结果上限截断'], ['会话', '无状态：网关自己就是 MCP 服务端']],
+    grpc: [['地址', `<span class="mono">${esc(c.addr)}</span>`], ['传输安全', { plaintext: '明文（集群内）', tls: 'TLS', mtls: 'mTLS' }[c.tls]],
+      ['方法发现', c.discovery === 'reflection' ? '服务端反射' : '描述文件'], ['服务', `<span class="mono">${esc(c.service || '')}</span>`],
+      ['流式', '支持一元和服务端流（消息合并成数组返回）；不支持客户端流、双向流'], ['会话', '无状态：网关自己就是 MCP 服务端']],
+  }[s.kind];
+}
+function renderConnTab(s) {
+  const body = $('#sd-body');
+  const ids = s.kind === 'grpc' ? 'metadata x-auth-uid（Key 的 uid）、x-uid（使用者）' : '请求头 X-Auth-Uid（Key 的 uid）、X-Uid（使用者）';
+  const tp = { mcp: '请求头 traceparent，并写进 params._meta', rest: '请求头 traceparent', grpc: 'metadata traceparent' }[s.kind];
+  const probe = { mcp: `initialize → ${s.conn.url}`, rest: `GET ${s.conn.base}`, grpc: `grpc.health.v1.Health/Check → ${s.conn.addr}` }[s.kind];
+  body.innerHTML = `<div class="grid-2c">
+    <div class="card"><div class="card-h"><h3>连接</h3><div class="grow"></div>${canManage() ? '<button class="btn btn-sm" id="cn-test">测试连接</button><button class="btn btn-sm" id="cn-edit">编辑</button>' : ''}</div>
+      <div class="card-b"><div class="kv">${connRows(s).map(([k, v]) => `<div class="k">${k}</div><div>${v}</div>`).join('')}</div></div></div>
+    <div class="card"><div class="card-h"><h3>上游凭据与透传</h3>${canManage() ? '<div class="grow"></div><button class="btn btn-sm" id="cn-cred">替换凭据</button>' : ''}</div>
+      <div class="card-b"><div class="kv">
+        <div class="k">上游凭据</div><div>${credLabel(s.cred)}<div class="subnote">网关调上游时注入；保存后不回显，调用方拿不到</div></div>
+        <div class="k">调用者身份</div><div>${s.identity ? ids : '不传（上游不区分调用者）'}</div>
+        <div class="k">追踪上下文</div><div>${tp}</div>
+        <div class="k">调用方的 Key</div><div>不转发：网关认完 Key 就去掉 <span class="mono">Authorization</span></div>
+      </div></div></div>
+  </div>`;
+  if (!canManage()) return;
+  $('#cn-test').onclick = () => trafficOf(s.name).breaker === 'open' ? toast('连接失败：连接超时（5 秒）', probe) : toast('连接正常', probe);
+  $('#cn-edit').onclick = () => openModal({
+    title: `编辑连接 · ${esc(s.display)}`, wide: true, body: connFieldsHtml(s.kind, s.conn) + identityHtml(s.kind, s.identity),
+    foot: '<button class="btn" data-close>取消</button><button class="btn btn-primary" id="ce-ok">保存</button>',
+    onMount: m => {
+      $$('input[name=cf-src]', m).forEach(r => { r.onchange = () => { const { conn } = readConnFields(m, 'rest'); $('.modal-b', m).innerHTML = connFieldsHtml('rest', { ...s.conn, ...conn }) + identityHtml(s.kind, $('#cf-identity', m).checked); }; });
+      $('#ce-ok', m).onclick = () => {
+        const { conn, err } = readConnFields(m, s.kind);
+        if (err) { toast(err); return; }
+        Object.assign(s.conn, conn);
+        s.identity = $('#cf-identity', m).checked;
+        closeModal(); render();
+        toast('已保存连接', s.kind === 'mcp' ? `已重新拉取工具定义：没有变化（${s.conn.url}）` : '各网关实例经配置变更通知立即生效');
+      };
+    },
+  });
+  $('#cn-cred').onclick = () => openModal({
+    title: `替换上游凭据 · ${esc(s.display)}`, body: credFieldsHtml(s.kind, s.cred),
+    foot: '<button class="btn" data-close>取消</button><button class="btn btn-primary" id="cc-ok">保存</button>',
+    onMount: m => {
+      bindCred(m, s.cred);
+      $('#cc-ok', m).onclick = () => {
+        const { cred, err } = readCred(m, s.cred);
+        if (err) { toast(err); return; }
+        s.cred = cred; closeModal(); render();
+        toast('已替换上游凭据', '新凭据从下一次调用开始用；进行中的调用不受影响');
+      };
+    },
+  });
+}
+
+/* ---------- 流量策略（只读；通用流量治理组件单独设计） ---------- */
+function renderTrafficTab(s) {
+  const tr = trafficOf(s.name);
+  const b = BREAKER[tr.breaker];
+  $('#sd-body').innerHTML = `
+    <div class="callout callout-info mb12"><div>流量治理是<b>通用组件（单独设计）</b>。这里只读显示对本服务生效的策略和熔断状态，策略在流量治理里维护。</div></div>
+    <div class="grid-2c">
+      <div class="card"><div class="card-h"><h3>生效的策略</h3><div class="grow"></div><button class="btn btn-sm" id="tf-go">流量治理 →</button></div>
+        <table class="table"><thead><tr><th>项</th><th>生效值</th><th>维度</th><th>来源</th></tr></thead><tbody>
+        ${tr.rows.map(r => `<tr><td class="nowrap">${r[0]}</td><td>${esc(r[1])}</td><td class="small">${r[2]}</td><td class="small muted">${r[3]}</td></tr>`).join('')}</tbody></table></div>
+      <div class="card"><div class="card-h"><h3>当前状态</h3><span class="small muted">来自流量治理组件，汇总全部网关实例</span></div><div class="card-b"><div class="kv">
+        <div class="k">熔断</div><div><span class="row"><span class="dot ${b.dot}"></span>${b.name}</span>${tr.since ? `<div class="subnote">${tr.since} 起 · ${esc(tr.reason)}</div>` : ''}</div>
+        <div class="k">当前并发</div><div>${tr.inflight} / ${tr.limit}</div>
+      </div></div></div>
+    </div>`;
+  $('#tf-go').onclick = () => go('/traffic');
+}
+
+/* ---------- 登记服务 ---------- */
+const SAMPLE_FILL = {
+  mcp: { name: 'confluence', display: 'Confluence', desc: '知识库文档（自部署的 Confluence MCP Server）', conn: { url: 'http://confluence-mcp.devops:8000/mcp', transport: 'streamable' }, cred: { type: 'bearer' } },
+  rest: { name: 'ticket', display: '工单系统', desc: '客服工单的查询、新建与关闭', conn: { base: 'http://ticket-api.biz:8080/api', src: 'openapi', spec: 'http://ticket-api.biz:8080/openapi.json' }, cred: { type: 'apikey', where: 'header', key: 'X-Api-Key' } },
+  grpc: { name: 'ticket-rpc', display: '工单服务（gRPC）', desc: '工单中台的 gRPC 接口', conn: { addr: 'ticket-svc.biz:9090', tls: 'plaintext', discovery: 'reflection' }, cred: { type: 'metadata', key: 'authorization' } },
+};
+const SAMPLE_DISCOVERY = {
+  mcp: [
+    { name: 'search_pages', effect: 'read', desc: '按关键词搜索页面', params: [P('query', 'string', true, '搜索词'), P('space', 'string', false, '空间键')] },
+    { name: 'get_page', effect: 'read', desc: '读取页面正文', params: [P('page_id', 'string', true, '页面 ID')] },
+    { name: 'create_page', effect: 'write', desc: '在空间里新建页面', params: [P('space', 'string', true, '空间键'), P('title', 'string', true, '标题'), P('body', 'string', true, '正文（Markdown）')] },
+    { name: 'update_page', effect: 'write', desc: '更新页面正文', params: [P('page_id', 'string', true, '页面 ID'), P('body', 'string', true, '新正文')] },
+    { name: 'delete_page', effect: 'destructive', desc: '删除页面', params: [P('page_id', 'string', true, '页面 ID')] },
+  ],
+  rest: [
+    { method: 'GET', path: '/tickets', op: 'listTickets', desc: '查询工单列表', params: [P('status', 'string', false, '状态：open / closed', { in: 'query' }), P('assignee', 'string', false, '处理人账号', { in: 'query' })] },
+    { method: 'GET', path: '/tickets/{id}', op: 'getTicket', desc: '读取工单详情', params: [P('id', 'string', true, '工单号', { in: 'path' })] },
+    { method: 'POST', path: '/tickets', op: 'createTicket', desc: '新建工单', params: [P('title', 'string', true, '标题', { in: 'body' }), P('content', 'string', false, '问题描述', { in: 'body' }), P('priority', 'string', false, '优先级：low / normal / high', { in: 'body' })] },
+    { method: 'POST', path: '/tickets/{id}/close', op: 'closeTicket', desc: '关闭工单', params: [P('id', 'string', true, '工单号', { in: 'path' }), P('resolution', 'string', true, '处理结果', { in: 'body' })] },
+    { method: 'DELETE', path: '/tickets/{id}', op: 'deleteTicket', desc: '删除工单', params: [P('id', 'string', true, '工单号', { in: 'path' })] },
+    { method: 'POST', path: '/attachments', op: 'uploadAttachment', desc: '上传附件', unsupported: '请求体是 multipart/form-data（文件上传）' },
+    { method: 'GET', path: '/tickets/{id}/export', op: 'exportTicket', desc: '导出 PDF', unsupported: '响应是 application/pdf，不是 JSON 或文本' },
+  ],
+  grpc: [
+    { method: 'GetTicket', stream: 'unary', req: 'GetTicketRequest', desc: '读取工单', params: [P('ticket_id', 'string', true, '工单号')] },
+    { method: 'ListTickets', stream: 'unary', req: 'ListTicketsRequest', desc: '查询工单', params: [P('status', 'string', false, '状态：OPEN / CLOSED'), P('page_size', 'integer', false, '每页条数')] },
+    { method: 'CreateTicket', stream: 'unary', req: 'CreateTicketRequest', desc: '新建工单', params: [P('title', 'string', true, '标题'), P('content', 'string', false, '问题描述')] },
+    { method: 'ExportTickets', stream: 'server', req: 'ExportTicketsRequest', desc: '导出工单', params: [P('since', 'string', false, '起始时间，RFC 3339')] },
+    { method: 'UploadAttachment', stream: 'client', req: 'AttachmentChunk', desc: '上传附件', unsupported: '客户端流' },
+    { method: 'Watch', stream: 'bidi', req: 'WatchRequest', desc: '订阅工单变化', unsupported: '双向流' },
+  ],
+};
+const GRPC_SAMPLE_SERVICE = 'ticket.v1.TicketService';
+const restEffect = method => method === 'GET' ? 'read' : method === 'DELETE' ? 'destructive' : 'write';
+const grpcEffect = method => /^(Get|List|Export|Search)/.test(method) ? 'read' : /^Delete/.test(method) ? 'destructive' : 'write';
+const discKey = (kind, d) => kind === 'rest' ? `${d.method} ${d.path}` : kind === 'grpc' ? d.method : d.name;
+
+function openRegister() {
+  const st = { kind: 'rest', name: '', display: '', desc: '', visibility: 'private', identity: true, conn: {}, cred: { type: 'none' }, credVal: '', found: null, picked: new Set() };
+  const sync = m => {
+    const v = id => ($(id, m)?.value ?? '').trim();
+    st.name = v('#rg-name'); st.display = v('#rg-display'); st.desc = v('#rg-desc');
+    st.visibility = $('input[name=rg-vis]:checked', m)?.value || st.visibility;
+    st.identity = $('#cf-identity', m)?.checked ?? st.identity;
+    st.conn = { ...st.conn, ...readConnFields(m, st.kind).conn };
+    const type = $('#cr-type', m)?.value || 'none';
+    st.cred = { type, key: v('#cr-key'), where: v('#cr-where'), user: v('#cr-user'), tokenUrl: v('#cr-token'), scope: v('#cr-scope') };
+    st.credVal = v('#cr-val');
+    $$('[data-pick]', m).forEach(c => { c.checked ? st.picked.add(c.dataset.pick) : st.picked.delete(c.dataset.pick); });
+  };
+  const foundHtml = () => {
+    const k = st.kind;
+    if (k === 'rest' && st.conn.src === 'manual') return '<div class="small muted">手工添加：登记后在服务的「工具」里逐个添加接口。</div>';
+    if (!st.found) return `<div class="empty" style="padding:18px 0">还没有${{ mcp: '拉取工具', rest: '解析接口定义', grpc: '发现方法' }[k]}</div>`;
+    if (k === 'mcp') return `<div class="disc"><table class="table"><thead><tr><th>工具</th><th>副作用（上游注解）</th><th>描述</th></tr></thead><tbody>
+      ${st.found.map(d => `<tr><td class="mono">${d.name}</td><td>${effectBadge(d)}</td><td class="small">${esc(d.desc)}</td></tr>`).join('')}</tbody></table></div>
+      <div class="small muted mt8">共 ${st.found.length} 个工具，全部登记，登记后即可用；不需要的工具登记后停用。</div>`;
+    const rows = st.found.map(d => {
+      const key = discKey(k, d);
+      const name = toSnake(k === 'rest' ? d.op : d.method);
+      const eff = { effect: k === 'rest' ? restEffect(d.method) : grpcEffect(d.method) };
+      return `<tr class="${d.unsupported ? 'off' : ''}">
+        <td style="width:30px"><input type="checkbox" data-pick="${esc(key)}" ${d.unsupported ? 'disabled' : st.picked.has(key) ? 'checked' : ''}></td>
+        <td class="mono nowrap">${k === 'rest' ? `${d.method} ${esc(d.path)}` : `${d.method}`}${k === 'grpc' && d.stream !== 'unary' ? ` <span class="tag">${STREAMS[d.stream]}</span>` : ''}</td>
+        <td class="mono">${d.unsupported ? '—' : name}</td>
+        <td>${d.unsupported ? `<span class="small">不支持：${esc(d.unsupported)}</span>` : effectBadge(eff)}</td>
+        <td class="small">${esc(d.desc)}</td></tr>`;
+    }).join('');
+    return `${k === 'grpc' ? `<div class="small mb12">服务 <span class="mono">${GRPC_SAMPLE_SERVICE}</span> <span class="muted">· grpc.health.v1、grpc.reflection 等系统服务不列出</span></div>` : ''}
+      <div class="disc"><table class="table"><thead><tr><th></th><th>${k === 'rest' ? '接口' : '方法'}</th><th>工具名</th><th>副作用</th><th>说明</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <div class="small muted mt8">副作用按${k === 'rest' ? ' HTTP Method' : '方法名'}推断，描述、副作用登记后都能改。${k === 'grpc' ? '服务端流的消息合并成数组返回。' : ''}</div>`;
+  };
+  const draw = m => {
+    const k = st.kind;
+    $('.modal-b', m).innerHTML = `
+      <div class="section-t">类型</div>
+      <div class="typecards">${Object.entries(KINDS).map(([key, v]) => `<div class="typecard ${k === key ? 'on' : ''}" data-kind="${key}"><strong>${v.name}</strong><span>${v.desc}</span></div>`).join('')}</div>
+      <div class="section-t">基本信息 <button class="btn-link" id="rg-fill">填入示例</button></div>
+      <div class="grid2">
+        <div class="field"><label>服务名<span class="req">*</span></label><input type="text" id="rg-name" value="${esc(st.name)}" placeholder="小写字母、数字、连字符，如 crm">
+          <div class="hint">工具名前缀、用户中心数据标识、服务地址的一段；登记后不能改，也不能复用</div></div>
+        <div class="field"><label>显示名称<span class="req">*</span></label><input type="text" id="rg-display" value="${esc(st.display)}"></div>
+      </div>
+      <div class="field"><label>描述</label><input type="text" id="rg-desc" value="${esc(st.desc)}"></div>
+      <div class="field"><label>可见性</label><div class="radio-row">
+        <label class="check"><input type="radio" name="rg-vis" value="private" ${st.visibility === 'private' ? 'checked' : ''}> 私有：按授给 Key 的权限调用（可以细到工具）</label>
+        <label class="check"><input type="radio" name="rg-vis" value="public" ${st.visibility === 'public' ? 'checked' : ''}> 公开：任何 Key 都能用全部工具，不需要授权</label></div></div>
+      <div class="section-t">连接</div>
+      ${connFieldsHtml(k, st.conn)}
+      <div class="section-t mt16">上游凭据与透传</div>
+      ${credFieldsHtml(k, st.cred, st.credVal)}
+      ${identityHtml(k, st.identity)}
+      <div class="section-t mt16">工具</div>
+      ${k === 'rest' && st.conn.src === 'manual' ? '' : `<div class="row mb12"><button class="btn btn-sm" id="rg-disc">${{ mcp: '连接并拉取工具', rest: '解析 OpenAPI', grpc: '发现方法' }[k]}</button>
+        <span class="small muted">${{ mcp: '调上游 initialize + tools/list', rest: '读取接口定义，每个操作转成一个工具', grpc: '通过服务端反射或描述文件列出服务和方法' }[k]}</span></div>`}
+      ${foundHtml()}`;
+    $$('.typecard', m).forEach(c => { c.onclick = () => {
+      if (c.dataset.kind === st.kind) return;
+      sync(m);
+      Object.assign(st, { kind: c.dataset.kind, conn: {}, cred: { type: 'none' }, credVal: '', found: null });
+      st.picked.clear();
+      draw(m);
+    }; });
+    $('#rg-fill', m).onclick = () => {
+      const x = SAMPLE_FILL[st.kind];
+      Object.assign(st, { name: x.name, display: x.display, desc: x.desc, conn: clone(x.conn), cred: clone(x.cred), credVal: 'demo-' + rand(12), found: null });
+      st.picked.clear();
+      draw(m);
+    };
+    $$('input[name=cf-src]', m).forEach(r => { r.onchange = () => { sync(m); st.found = null; st.picked.clear(); draw(m); }; });
+    const disc = $('#rg-disc', m);
+    if (disc) disc.onclick = () => {
+      sync(m);
+      const { err } = readConnFields(m, st.kind);
+      if (err) { toast(err); return; }
+      st.found = clone(SAMPLE_DISCOVERY[st.kind]);
+      st.picked = new Set(st.found.filter(d => !d.unsupported && !(st.kind === 'rest' && d.method === 'DELETE')).map(d => discKey(st.kind, d)));
+      draw(m);
+      toast({ mcp: `已连接，拉到 ${st.found.length} 个工具`, rest: `已解析 ${st.found.length} 个操作，${st.found.filter(d => d.unsupported).length} 个不支持`, grpc: `发现 ${st.found.length} 个方法，${st.found.filter(d => d.unsupported).length} 个不支持` }[st.kind],
+        { mcp: `initialize + tools/list → ${st.conn.url}`, rest: `GET ${st.conn.spec}`, grpc: `grpc.reflection.v1.ServerReflection → ${st.conn.addr}` }[st.kind]);
+    };
+    bindCred(m, st.cred);
+  };
+  openModal({
+    title: '登记 MCP 服务', wide: true, body: '',
+    foot: '<button class="btn" data-close>取消</button><button class="btn btn-primary" id="rg-ok">登记</button>',
+    onMount: m => {
+      draw(m);
+      $('#rg-ok', m).onclick = () => {
+        sync(m);
+        const k = st.kind;
+        if (!/^[a-z][a-z0-9-]{1,23}$/.test(st.name)) { toast('服务名：小写字母开头，2–24 位小写字母、数字、连字符'); return; }
+        if (servers.some(s => s.name === st.name)) { toast(`服务名 ${st.name} 已被使用（停用的服务也不能复用）`); return; }
+        if (!st.display) { toast('请填写显示名称'); return; }
+        const { conn, err } = readConnFields(m, k);
+        if (err) { toast(err); return; }
+        const cr = readCred(m);
+        if (cr.err) { toast(cr.err); return; }
+        const manual = k === 'rest' && conn.src === 'manual';
+        if (!manual && !st.found) { toast({ mcp: '请先连接并拉取工具', rest: '请先解析 OpenAPI', grpc: '请先发现方法' }[k]); return; }
+        const picked = manual ? [] : st.found.filter(d => k === 'mcp' || (!d.unsupported && st.picked.has(discKey(k, d))));
+        if (!manual && !picked.length) { toast('请至少选一个接口'); return; }
+        const tools = picked.map(d => k === 'mcp'
+          ? { ...clone(d), status: 'active' }
+          : k === 'rest'
+            ? { name: toSnake(d.op), effect: restEffect(d.method), status: 'active', desc: d.desc, http: { method: d.method, path: d.path, pick: '', limit: 32 }, params: clone(d.params) }
+            : { name: toSnake(d.method), effect: grpcEffect(d.method), status: 'active', desc: d.desc, grpc: { method: d.method, stream: d.stream, req: d.req }, params: clone(d.params) });
+        servers.push({
+          name: st.name, display: st.display, desc: st.desc, kind: k, visibility: st.visibility, status: 'enabled',
+          conn: { ...conn, ...(k === 'grpc' ? { service: GRPC_SAMPLE_SERVICE } : {}) }, cred: cr.cred, identity: $('#cf-identity', m).checked,
+          ...(k === 'mcp' ? { fetched_at: nowStr().slice(5) } : {}),
+          created_by: me, created_at: nowStr(), tools, owners: [me], grants: [],
+        });
+        closeModal();
+        go('/servers/' + st.name);
+        toast(`已登记「${st.display}」，${tools.length} 个工具`, `用户中心：登记数据对象 McpServer ${st.name}（${USERS[me].name} 成为所有者）${tools.length ? ` + McpTool × ${tools.length}` : ''}；各网关实例经配置变更通知立即可用`);
+      };
+    },
+  });
+}
+
+/* =====================================================================
+ * API Key（参考模型管理平台：用户 Key + 智能体 Key；权限挂在 Key 上）
+ * ===================================================================== */
+const kf = { status: '', q: '' };
+function permChips(k) {
+  const gs = servers.filter(s => s.visibility === 'private').map(s => ({ s, g: grantOf(s, k) })).filter(x => x.g);
+  if (!gs.length) return '<span class="small muted">只有公开服务</span>';
+  return `<div class="pill-tools">${gs.map(({ s, g }) => `<span class="tag mono" title="${esc(dataRefs(s, g))}">${s.name} · ${g.scope === 'all' ? '全部' : g.tools.length + ' 个工具'}</span>`).join('')}</div>`;
+}
+function usableTableHtml(k) {
+  return `<table class="table"><thead><tr><th>服务</th><th>能用的工具</th><th>来源</th></tr></thead><tbody>
+    ${usableSummary(k).map(({ s, tools }) => {
+      const all = tools.length === s.tools.filter(t => callable(s, t)).length;
+      return `<tr><td><div class="mname">${esc(s.display)}</div><div class="mono muted">${s.name}</div></td>
+        <td>${all ? `全部 ${tools.length} 个` : `<div class="pill-tools">${tools.map(t => `<span class="tag mono">${t.name}</span>`).join('')}</div>`}</td>
+        <td class="small">${keyVia(s, tools[0], k)}</td></tr>`;
+    }).join('') || '<tr><td colspan="3"><div class="empty">没有能用的服务</div></td></tr>'}</tbody></table>`;
+}
+const clientConfig = k => {
+  const names = usableSummary(k).slice(0, 2).map(x => x.s.name);
+  return { mcpServers: Object.fromEntries((names.length ? names : ['<服务名>']).map(n => [n, { type: 'http', url: `${GW_PUBLIC}/${n}`, headers: { Authorization: 'Bearer ${MCP_API_KEY}' } }])) };
+};
+// 能给自己的 Key 分配权限的人：管理员，或至少是一个私有服务的所有者
+const canAssignAny = () => isAdmin() || servers.some(s => s.visibility === 'private' && canAssign(s));
+
+function renderKeys() {
+  const admin = isAdmin();
+  if (!admin) keyTab = 'user';
+  const own = keyOfUser(me);
+  $('#content').innerHTML = `
+    <div class="page-head"><div><h1>API Key</h1><div class="sub">${admin ? '用户 Key 由本人申请；智能体 Key 在 Atlas 新建智能体时自动申请，也可以在这里为智能体申请。' : '为你本人申请调用 MCP 服务的 Key。'}权限挂在 Key 上：每把 Key 在用户中心有自己的 uid，网关判权时以它作 X-Auth-Uid。</div></div>
+      <div class="grow"></div>
+      ${keyTab === 'user' ? `<button class="btn btn-primary" id="btn-apply" ${own ? 'disabled title="你已经有用户 Key 了"' : ''}>＋ 申请用户 Key</button>` : '<button class="btn btn-primary" id="btn-agent">＋ 为智能体申请 Key</button>'}</div>
+    ${admin ? `<div class="toolbar"><div class="tabs" id="ktabs">
+        <button data-tab="user">用户 Key <span class="n">${keys.filter(k => k.type === 'user').length}</span></button>
+        <button data-tab="client">智能体 Key <span class="n">${keys.filter(k => k.type === 'client').length}</span></button></div></div>` : ''}
+    <div class="callout callout-info mb16"><div>${keyTab === 'user'
+      ? '每人一把用户 Key，只能为本人申请，给 Claude Code、Cursor 这类外部客户端用。申请后马上能调用公开服务；私有服务要由服务所有者或管理员给这把 Key 分配权限（可以细到工具）。'
+      : '一个智能体一把 Key（客户端类型 Agent，客户端编码 = 智能体 id）。Atlas 新建智能体时调接口申请、删除智能体时调接口删除；还没有 Key 的智能体可以在这里补申请。Atlas 编辑、运行智能体时按类型 + 编码取 Key 和能用的工具，和智能体的权限类型无关。智能体 Key 不在页面上显示原文。'}</div></div>
+    ${keyTab === 'client' ? `<div class="toolbar">
+        <select class="select" id="kf-status"><option value="">全部状态</option><option value="active" ${kf.status === 'active' ? 'selected' : ''}>正常</option><option value="blocked" ${kf.status === 'blocked' ? 'selected' : ''}>已停用</option></select>
+        <input class="input" id="kf-q" placeholder="搜索智能体 id / 名称" value="${esc(kf.q)}" style="width:220px"></div>` : ''}
+    <div class="card" id="ktable"></div>
+    <div id="kextra"></div>`;
+  $$('#ktabs button').forEach(b => { b.classList.toggle('on', b.dataset.tab === keyTab); b.onclick = () => { keyTab = b.dataset.tab; renderKeys(); }; });
+  const ap = $('#btn-apply');
+  if (ap) ap.onclick = openApply;
+  const ag = $('#btn-agent');
+  if (ag) ag.onclick = openAgentApply;
+  if (keyTab === 'client') {
+    $('#kf-status').onchange = e => { kf.status = e.target.value; renderAgentKeyTable(); };
+    $('#kf-q').oninput = e => { kf.q = e.target.value; renderAgentKeyTable(); };
+    renderAgentKeyTable();
+  } else {
+    renderUserKeyTable();
+  }
+}
+
+function keyOps(k) {
+  const mine = k.type === 'user' && k.user === me;
+  const ops = [];
+  if (isAdmin() || (mine && canAssignAny())) ops.push('<button class="btn-link" data-op="assign">分配权限</button>');
+  if (mine || k.type === 'client') ops.push('<button class="btn-link" data-op="reset">重置</button>');
+  ops.push(`<button class="btn-link" data-op="${k.status === 'active' ? 'block' : 'unblock'}">${k.status === 'active' ? '停用' : '启用'}</button>`);
+  if (mine || k.type === 'client') ops.push('<button class="btn-link danger" data-op="delete">删除</button>');
+  return ops.join('');
+}
+function bindKeyOps(root) {
+  $$('tr[data-key]', root).forEach(tr => {
+    const k = keyById(tr.dataset.key);
+    $$('[data-op]', tr).forEach(b => { b.onclick = () => ({
+      apply: openApply,
+      assign: () => openAssign(k, renderKeys),
+      reset: () => resetKey(k),
+      block: () => blockKey(k),
+      unblock: () => { k.status = 'active'; renderKeys(); toast('已启用', '网关重新接受这把 Key；授权一直保留着'); },
+      delete: () => deleteKey(k),
+    })[b.dataset.op](); });
+  });
+}
+
+function renderUserKeyTable() {
+  const rows = keys.filter(k => k.type === 'user' && (isAdmin() || k.user === me));
+  const own = keyOfUser(me);
+  $('#ktable').innerHTML = `<table class="table"><thead><tr><th>持有人</th><th>Key</th><th>私有服务权限</th><th>状态</th><th>申请时间</th><th>操作</th></tr></thead><tbody>
+    ${own ? '' : `<tr data-key=""><td>${userCell(me)}</td><td class="muted">未申请</td><td class="muted">—</td><td class="muted">—</td><td class="muted">—</td><td><button class="btn btn-sm" data-op="apply">申请用户 Key</button></td></tr>`}
+    ${rows.map(k => `<tr data-key="${k.uuid}">
+      <td>${userCell(k.user)}</td>
+      <td><div class="mono nowrap">mk-…${k.last4}</div><div class="subnote">uid <span class="mono">${k.uid}…</span></div></td>
+      <td>${permChips(k)}</td><td>${keyStatusBadge(k)}</td><td class="small muted nowrap">${k.created_at}</td>
+      <td class="nowrap">${keyOps(k)}</td></tr>`).join('')}
+    </tbody></table>`;
+  bindKeyOps($('#ktable'));
+  $('#kextra').innerHTML = own ? `
+    <div class="grid-2c mt16">
+      <div class="card"><div class="card-h"><h3>我的 Key 能用的服务和工具</h3><span class="small muted">变化最长 30 秒生效</span></div>${usableTableHtml(own)}</div>
+      <div class="card"><div class="card-h"><h3>在外部客户端里用</h3><span class="small muted">Claude Code、Cursor 等</span></div><div class="card-b">
+        <pre class="code">${esc(json(clientConfig(own)))}</pre><div class="small muted mt8">每个服务一个地址；tools/list 只返回这把 Key 有权限的工具。</div></div></div>
+    </div>` : '';
+}
+
+function renderAgentKeyTable() {
+  const q = kf.q.trim().toLowerCase();
+  const rows = keys.filter(k => k.type === 'client' && (!kf.status || k.status === kf.status) && (!q || (k.client_code + k.client_name).toLowerCase().includes(q)));
+  $('#ktable').innerHTML = rows.length ? `<table class="table"><thead><tr><th>智能体</th><th>Key</th><th>私有服务权限</th><th>状态</th><th>申请</th><th>操作</th></tr></thead><tbody>
+    ${rows.map(k => `<tr data-key="${k.uuid}">
+      <td><div class="mname">${esc(k.client_name)}</div><div class="mono small muted">${k.client_type} · ${k.client_code}</div></td>
+      <td><div class="mono nowrap">mk-…${k.last4}</div><div class="subnote">uid <span class="mono">${k.uid}…</span></div></td>
+      <td>${permChips(k)}</td><td>${keyStatusBadge(k)}</td>
+      <td class="small nowrap">${k.by}<div class="muted">${k.created_at}</div></td>
+      <td class="nowrap">${keyOps(k)}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">没有符合条件的智能体 Key</div>';
+  bindKeyOps($('#ktable'));
+  $('#kextra').innerHTML = '';
+}
+
+function openApply() {
+  if (keyOfUser(me)) { toast('你已经有用户 Key 了，需要新的请「重置」'); return; }
+  const pubs = servers.filter(s => s.visibility === 'public' && s.status === 'enabled');
+  openModal({
+    title: '申请用户 Key',
+    body: `<div class="field"><label>本人</label>${userCell(me)}</div>
+      <div class="callout callout-info mb12"><div>申请后马上能调用公开服务：${pubs.map(s => esc(s.display)).join('、')}。私有服务要由服务所有者或管理员给这把 Key 分配权限。</div></div>
+      <div class="small muted">申请时网关在用户中心为这把 Key 登记一个主体（没有密码、不能登录、没有部门），得到它的 uid，之后的授权都授给这个 uid。只能为本人申请；智能体的 Key 在「智能体 Key」里。</div>`,
+    foot: '<button class="btn" data-close>取消</button><button class="btn btn-primary" id="a-ok">申请</button>',
+    onMount: m => {
+      $('#a-ok', m).onclick = () => {
+        const full = genKey();
+        const k = { uuid: 'k-' + rand(4), uid: genUid(), type: 'user', user: me, last4: full.slice(-4), status: 'active', created_at: nowStr() };
+        keys.push(k);
+        renderKeys();
+        toast('已申请用户 Key', `用户中心：登记 Key 主体 uid ${k.uid}…（没有密码、不能登录、没有部门）`);
+        showKey(full, '已申请用户 Key', k);
+      };
+    },
+  });
+}
+// 只有用户 Key 会显示原文（只显示一次）；智能体 Key 由 Atlas 经接口获取
+function showKey(full, title, k) {
+  openModal({
+    title,
+    body: `
+      <div class="keybox"><span id="kfull">${full}</span><button class="btn btn-sm" id="kcopy">复制</button></div>
+      <div class="callout callout-warn mt12"><div>Key 只显示这一次，关闭后无法再查看；忘了可以「重置」（uid 和权限不变）。</div></div>
+      <div class="section-t mt16">在外部客户端里用</div>
+      <pre class="code">${esc(json(clientConfig(k)).split('${MCP_API_KEY}').join(full))}</pre>`,
+    foot: '<button class="btn btn-primary" data-close>我已保存</button>',
+    onMount: m => { $('#kcopy', m).onclick = () => { navigator.clipboard?.writeText(full); toast('已复制'); }; },
+  });
+}
+function openAgentApply() {
+  const free = AGENTS.filter(a => !keyOfAgent(a.id));
+  if (!free.length) { toast('所有智能体都已经有 Key 了'); return; }
+  openModal({
+    title: '为智能体申请 Key',
+    body: `
+      <div class="callout callout-info mb12"><div>Atlas 新建智能体时会自动申请。这里给还没有 Key 的智能体补申请（例如接入前就建好的智能体）。</div></div>
+      <div class="field"><label>智能体<span class="req">*</span></label><select id="ag-id">${free.map(a => `<option value="${a.id}">${esc(a.name)}（${a.id}）</option>`).join('')}</select>
+        <div class="hint">列表来自 Atlas；一个智能体只有一把 Key（按客户端类型 + 编码唯一）</div></div>`,
+    foot: '<button class="btn" data-close>取消</button><button class="btn btn-primary" id="ag-ok">申请并分配权限</button>',
+    onMount: m => {
+      $('#ag-ok', m).onclick = () => {
+        const a = AGENTS.find(x => x.id === $('#ag-id', m).value);
+        const k = { uuid: 'k-' + rand(4), uid: genUid(), type: 'client', client_type: 'Agent', client_code: a.id, client_name: a.name, last4: genKey().slice(-4), status: 'active', created_at: nowStr(), by: `${USERS[me].name}（页面）` };
+        keys.push(k);
+        closeModal(); renderKeys();
+        toast(`已为「${a.name}」申请 Key`, `用户中心：登记 Key 主体 uid ${k.uid}…；Atlas 下一次按 Agent:${a.id} 取 Key 时拿到`);
+        openAssign(k, renderKeys);
+      };
+    },
+  });
+}
+function resetKey(k) {
+  confirmBox({
+    title: '重置 Key', okText: '重置',
+    body: `<div>为「${esc(keyTitle(k))}」生成新的原文，旧 Key <span class="mono">mk-…${k.last4}</span> 立即失效。</div>
+      <div class="small muted mt8">uid 不变，分配的权限保持不变。${k.type === 'user' ? '用旧 Key 的外部客户端要换成新的。' : 'Atlas 下一次获取时拿到新的；正在用旧 Key 的调用会失败。'}</div>`,
+    onOk: () => {
+      const full = genKey();
+      k.last4 = full.slice(-4);
+      renderKeys();
+      toast('已重置', '只换原文；用户中心里的主体和授权不动');
+      if (k.type === 'user') showKey(full, '已重置用户 Key', k);
+    },
+  });
+}
+function blockKey(k) {
+  confirmBox({
+    title: '停用 Key', okText: '停用', danger: true,
+    body: `<div>停用后网关拒绝「${esc(keyTitle(k))}」的所有调用（<code>key_invalid</code>）${k.type === 'client' ? '，这个智能体在 Atlas 里不能调 MCP 工具' : ''}。授权保留，可以随时启用。</div>`,
+    onOk: () => { k.status = 'blocked'; renderKeys(); toast('已停用', '各网关实例经变更通知立即生效'); },
+  });
+}
+function deleteKey(k) {
+  const n = servers.filter(s => grantOf(s, k)).length;
+  confirmBox({
+    title: '删除 Key', okText: '删除', danger: true,
+    body: `<div>删除「${esc(keyTitle(k))}」（<span class="mono">mk-…${k.last4}</span>），不可恢复。用户中心里的 Key 主体和它的 ${n} 个服务的授权一起删除。</div>
+      <div class="small muted mt8">${k.type === 'client' ? 'Atlas 下次用到这个智能体时会重新申请一把（只能调公开服务，要重新分配权限）。' : '重新申请后要重新分配权限。'}只是临时不用，请选「停用」。</div>`,
+    onOk: () => {
+      keys = keys.filter(x => x !== k);
+      servers.forEach(s => { s.grants = s.grants.filter(g => g.key !== k.uuid); });
+      renderKeys();
+      toast('已删除', `用户中心：删除 Key 主体 uid ${k.uid}… 及其授权`);
+    },
+  });
+}
+
+/* =====================================================================
+ * 流量治理（通用组件，单独设计）
+ * ===================================================================== */
+function renderTraffic() {
+  $('#content').innerHTML = `<div class="doc">
+    <div class="page-head"><div><h1>流量治理 <span class="badge badge-gray" style="vertical-align:middle">通用组件 · 单独设计</span></h1>
+      <div class="sub">并发限制、限流、超时、熔断做成通用组件，MCP 网关是它的一个接入方。本原型不设计它的策略模型和页面，只列 MCP 网关对它的要求。</div></div></div>
+    <div class="card mb16"><div class="card-h"><h3>MCP 网关要用的能力</h3></div><table class="table"><thead><tr><th>能力</th><th>维度</th><th>在网关里的执行点</th><th>被拒时调用方收到</th></tr></thead><tbody>
+      <tr><td class="nowrap">并发限制</td><td>服务、工具、Key</td><td>判权之后、调上游之前占用；上游返回（流式结果结束）时释放</td><td class="mono small">-32053 concurrency_limited<br>没有转发</td></tr>
+      <tr><td class="nowrap">限流</td><td>服务、工具、Key</td><td>同上；默认只对 tools/call 计数，initialize、tools/list 不计</td><td class="mono small">-32052 rate_limited<br>没有转发，带 retry_after</td></tr>
+      <tr><td class="nowrap">超时</td><td>服务、工具</td><td>调上游时计时；超时后取消上游请求（HTTP 断开、gRPC 取消、MCP 发 notifications/cancelled）</td><td class="mono small">-32055 upstream_timeout<br>已转发，结果未知</td></tr>
+      <tr><td class="nowrap">熔断</td><td>上游（服务）</td><td>按真实调用统计连接失败、5xx、超时；打开期间直接拒绝，半开时放少量探测</td><td class="mono small">-32054 circuit_open<br>没有转发，带 retry_after</td></tr>
+    </tbody></table></div>
+    <div class="card mb16"><div class="card-h"><h3>对通用组件的要求</h3></div><div class="card-b"><ol>
+      <li><b>多实例下计数准确</b>：网关横向扩展后，并发、限流按全部实例合计，不能各算各的。</li>
+      <li><b>策略不重启生效</b>：改了以后各实例秒级生效；支持默认值 → 服务级 → 工具级逐层覆盖。</li>
+      <li><b>判定开销小</b>：每次工具调用都要过一遍，不能每次多一跳远程调用；允许短时误差。</li>
+      <li><b>组件自己不可用时怎么办要定清楚</b>：放行还是拒绝由通用设计定。流量治理不是安全边界，MCP 网关倾向放行。</li>
+      <li><b>被拒要能追查</b>：MCP 网关只接 Trace，被拒时在 Span 上记下原因和命中的策略。</li>
+      <li><b>MCP 网关只提供维度和执行点</b>：服务名、工具名、Key 的 uid、上游地址；网关里不另做一套限流。</li>
+    </ol></div></div>
+    <div class="card"><div class="card-h"><h3>现在的超时怎么迁</h3></div><div class="card-b small">现在服务上配的「单次调用超时」由调用方（Atlas）执行。接入通用组件后改由网关执行，Atlas 只留一个比它略长的兜底，避免两边各算各的。</div></div>
+  </div>`;
+}
+
+/* =====================================================================
+ * 原型说明
+ * ===================================================================== */
+function renderAbout() {
+  $('#content').innerHTML = `
+  <div class="doc">
+    <div class="page-head"><div><h1>原型说明</h1><div class="sub">右上角切换演示身份：孙丽是 MCP 管理员；张明（研发一部，GitLab 的所有者）、李工（客服中心，订单服务的所有者）、王芳（研发二部，还没申请 Key）是普通用户。数据为内存态，刷新后重置。</div></div></div>
+
+    <div class="card mb16"><div class="card-h"><h3>分工</h3></div>
+      <div class="card-b">
+        <svg class="diagram" viewBox="0 0 900 400" role="img" aria-label="调用方、MCP 网关、上游服务、用户中心、流量治理、OTel 的关系">
+          <defs><marker id="ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="#94a3b8"/></marker></defs>
+          <rect x="20" y="40" width="180" height="56" rx="10" class="b-gray"/><text x="110" y="64" class="t">Atlas 智能体</text><text x="110" y="83" class="s">智能体 Key</text>
+          <rect x="20" y="130" width="180" height="56" rx="10" class="b-gray"/><text x="110" y="154" class="t">ACP Pod</text><text x="110" y="173" class="s">智能体 Key 随任务下发</text>
+          <rect x="20" y="220" width="180" height="56" rx="10" class="b-gray"/><text x="110" y="244" class="t">外部客户端</text><text x="110" y="263" class="s">用户 Key · Claude Code 等</text>
+          <rect x="300" y="30" width="300" height="256" rx="12" class="b-pri"/>
+          <text x="450" y="58" class="t">MCP 网关（多实例）</text>
+          <text x="450" y="90" class="lbl">① 认 Key → Key 的 uid</text>
+          <text x="450" y="116" class="lbl">② 判权：公开直接过，私有问用户中心</text>
+          <text x="450" y="142" class="lbl">③ 流量治理：并发、限流、熔断、超时</text>
+          <text x="450" y="168" class="lbl">④ 协议转换：MCP · REST · gRPC</text>
+          <text x="450" y="194" class="lbl">⑤ 注入上游凭据、身份、traceparent</text>
+          <text x="450" y="220" class="lbl">⑥ 输出 Trace（OTel）</text>
+          <text x="450" y="262" class="s">无状态：任一实例处理任一请求</text>
+          <rect x="700" y="40" width="180" height="56" rx="10" class="b-sec"/><text x="790" y="64" class="t">原生 MCP Server</text><text x="790" y="83" class="s">Streamable HTTP / SSE</text>
+          <rect x="700" y="130" width="180" height="56" rx="10" class="b-sec"/><text x="790" y="154" class="t">REST 服务</text><text x="790" y="173" class="s">OpenAPI 或手工定义</text>
+          <rect x="700" y="220" width="180" height="56" rx="10" class="b-sec"/><text x="790" y="244" class="t">gRPC 服务</text><text x="790" y="263" class="s">服务端反射 / 描述文件</text>
+          <rect x="140" y="320" width="190" height="56" rx="10" class="b-gray"/><text x="235" y="344" class="t">用户中心</text><text x="235" y="363" class="s">Key 主体 · 服务 / 工具授权</text>
+          <rect x="355" y="320" width="190" height="56" rx="10" class="b-gray"/><text x="450" y="344" class="t">流量治理</text><text x="450" y="363" class="s">通用组件 · 单独设计</text>
+          <rect x="570" y="320" width="190" height="56" rx="10" class="b-gray"/><text x="665" y="344" class="t">OTel Collector</text><text x="665" y="363" class="s">Trace</text>
+          <line x1="200" y1="68" x2="297" y2="68" marker-end="url(#ar)"/><text x="248" y="60" class="lbl">Bearer Key</text>
+          <line x1="200" y1="158" x2="297" y2="158" marker-end="url(#ar)"/>
+          <line x1="200" y1="248" x2="297" y2="248" marker-end="url(#ar)"/>
+          <line x1="600" y1="68" x2="697" y2="68" marker-end="url(#ar)"/><text x="648" y="60" class="lbl">MCP</text>
+          <line x1="600" y1="158" x2="697" y2="158" marker-end="url(#ar)"/><text x="648" y="150" class="lbl">HTTP</text>
+          <line x1="600" y1="248" x2="697" y2="248" marker-end="url(#ar)"/><text x="648" y="240" class="lbl">gRPC</text>
+          <line x1="360" y1="286" x2="270" y2="317" marker-end="url(#ar)"/><text x="296" y="300" class="api" style="text-anchor:end">X-Auth-Uid = Key 的 uid</text>
+          <line x1="450" y1="286" x2="450" y2="317" marker-end="url(#ar)"/>
+          <line x1="540" y1="286" x2="630" y2="317" marker-end="url(#ar)"/><text x="606" y="300" class="api" style="text-anchor:start">OTLP</text>
+        </svg>
+        <ul class="mt12">
+          <li><b>MCP 网关</b>是调用方唯一的入口：连原生 MCP Server，也把 REST / gRPC 接口转换成 MCP 工具；上游凭据保存在网关里，调用方只带自己的 API Key。Higress 不再参与。</li>
+          <li><b>用户中心</b>是权限的唯一事实源：「MCP 管理员」角色管服务定义；数据权限管哪把 Key 能用什么——服务级用数据编码 <code>McpServer</code>，工具级用 <code>McpTool</code>，都授给 Key 的 uid。</li>
+          <li><b>流量治理</b>是通用组件，网关只提供维度（服务、工具、Key、上游）和执行点，见左侧「流量治理」。</li>
+          <li><b>可观测只接 Trace</b>：Span 经 OTLP 发给 Collector；不做调用记录和指标页面。</li>
+        </ul>
+      </div></div>
+
+    <div class="card mb16"><div class="card-h"><h3>API Key 与授权</h3></div>
+      <div class="card-b">
+        <svg class="diagram" viewBox="0 0 900 96" role="img" aria-label="申请 Key、登记主体、分配权限、调用判权">
+          <rect x="10" y="12" width="200" height="66" rx="10" class="b-gray"/><text x="110" y="40" class="t">① 申请 Key</text><text x="110" y="60" class="s">本人申请 / 为智能体申请</text>
+          <rect x="240" y="12" width="200" height="66" rx="10" class="b-gray"/><text x="340" y="40" class="t">② 用户中心登记主体</text><text x="340" y="60" class="s">得到 uid：无密码、无部门</text>
+          <rect x="470" y="12" width="200" height="66" rx="10" class="b-pri"/><text x="570" y="40" class="t">③ 给 Key 分配权限</text><text x="570" y="60" class="s">所有者分配 · 服务级或工具级</text>
+          <rect x="700" y="12" width="190" height="66" rx="10" class="b-sec"/><text x="795" y="40" class="t">④ 调用时判权</text><text x="795" y="60" class="s">X-Auth-Uid = Key 的 uid</text>
+          <line x1="210" y1="45" x2="237" y2="45" marker-end="url(#ar)"/><line x1="440" y1="45" x2="467" y2="45" marker-end="url(#ar)"/><line x1="670" y1="45" x2="697" y2="45" marker-end="url(#ar)"/>
+        </svg>
+        <ul class="mt12">
+          <li><b>两种 Key</b>（同模型管理平台）：用户 Key 由本人申请，一人一把，给外部客户端用；智能体 Key 一个智能体一把，Atlas 新建智能体时调接口申请，管理员也能在页面上为还没有 Key 的智能体补申请，Atlas 和 ACP Pod 用它。</li>
+          <li><b>Key 本身是权限主体</b>：申请时在用户中心登记一个没有密码、不能登录、没有部门的主体，它的 uid 就是这把 Key 的身份；部门授权落不到它身上。</li>
+          <li><b>授权 = 给 Key 分配数据权限</b>：私有服务由服务所有者（人）或管理员分配，服务级（全部工具，含以后新增的）或工具级。公开服务不用分配，任何有效的 Key 都能调用，所以新 Key 没有「待分配」状态。</li>
+          <li><b>网关判权</b>：认出 Key 后，以它的 uid 作 X-Auth-Uid 调用户中心，查它能用的服务和工具，按 Key 缓存 30 秒；用户中心不可用、缓存又过期时拒绝。</li>
+          <li><b>X-Auth-Uid 放 uid，不放 Key 原文</b>：用户中心的接口只认 UUID；原文放进请求头会落进用户中心和中间件的日志。</li>
+          <li><b>重置只换原文</b>，uid 和权限不变；<b>删除</b> Key 时连同用户中心的主体和授权一起删。</li>
+        </ul>
+      </div></div>
+
+    <div class="card mb16"><div class="card-h"><h3>一次 tools/call 怎么处理</h3></div>
+      <table class="table"><thead><tr><th>步骤</th><th>做什么</th><th>不通过时（JSON-RPC 错误，带 reason、是否转发）</th></tr></thead><tbody>
+        <tr><td class="nowrap">1 认 Key</td><td>Authorization 里的 Key → 这把 Key 的 uid；停用、删除的 Key 拒绝。去掉 Authorization，不转发给上游</td><td class="mono small">-32042 key_missing · -32043 key_invalid</td></tr>
+        <tr><td class="nowrap">2 找服务和工具</td><td>服务存在且启用；工具存在且没停用</td><td class="mono small">-32040 · -32041 · -32046</td></tr>
+        <tr><td class="nowrap">3 判权</td><td>公开服务直接通过；私有服务以 Key 的 uid 作 X-Auth-Uid 问用户中心，要有覆盖这个工具的服务级或工具级授权</td><td class="mono small">-32044 forbidden · -32045 authz_unavailable</td></tr>
+        <tr><td class="nowrap">4 校验参数</td><td>按工具的参数定义查必填和类型（不做严格模式）</td><td class="mono small">-32602 invalid_params</td></tr>
+        <tr><td class="nowrap">5 流量治理</td><td>并发、限流、熔断（通用组件）</td><td class="mono small">-32052 · -32053 · -32054</td></tr>
+        <tr><td class="nowrap">6 转换并调上游</td><td>MCP 代理：转发 tools/call，带上上游会话；REST：按映射拼路径、查询参数、请求头、请求体；gRPC：参数按 proto3 JSON 映射成请求消息。注入上游凭据、X-Auth-Uid（Key 的 uid）、X-Uid（使用者）、traceparent；超时就取消</td><td class="mono small">-32050 upstream_unavailable · -32051 upstream_rejected · -32055 upstream_timeout</td></tr>
+        <tr><td class="nowrap">7 处理结果</td><td>MCP 代理原样返回；REST / gRPC 转成 content（文本）和 structuredContent；非 2xx、gRPC 错误状态 → isError；超过上限截断</td><td>—</td></tr>
+        <tr><td class="nowrap">8 结束 Span</td><td>被拒的请求也有 Span，带 error.type 和拒绝原因</td><td>—</td></tr>
+      </tbody></table>
+      <div class="card-b small muted" style="border-top:1px solid var(--line-2)">-32040 到 -32051 是现有网关已经在用的错误码，-32052 到 -32055 是这次新增的。tools/list 不转发给上游：网关按已存的定义生成，按 Key 的权限过滤。</div></div>
+
+    <div class="card mb16"><div class="card-h"><h3>角色与规则</h3></div>
+      <table class="table"><thead><tr><th>操作</th><th>谁能做</th><th>判断依据 / 说明</th></tr></thead><tbody>
+        <tr><td>登记服务；改连接、上游凭据、工具定义；停用服务或工具；设公开 / 私有</td><td>MCP 管理员</td><td>用户中心角色（操作码）</td></tr>
+        <tr><td>给 API Key 分配服务、工具的权限；增删所有者</td><td>服务所有者</td><td>数据权限 <code>McpServer</code> = OWNER（授给人）；登记人自动成为所有者；管理员有「全部 MCP 服务 · 所有者」。演示：张明是 GitLab 的所有者、李工是订单服务的所有者</td></tr>
+        <tr><td>申请、重置、停用、删除自己的用户 Key</td><td>本人</td><td>一人一把；原文只显示一次</td></tr>
+        <tr><td>为智能体申请 Key</td><td>Atlas（新建智能体时调接口）、MCP 管理员（页面补申请）</td><td>一个智能体一把，按客户端类型 + 编码幂等</td></tr>
+        <tr><td>重置、停用、删除智能体 Key</td><td>MCP 管理员；Atlas 删除智能体时调接口删</td><td>原文不在页面显示，Atlas 经接口获取</td></tr>
+        <tr><td>停用、启用别人的用户 Key</td><td>MCP 管理员</td><td>看不到原文，不能替人重置</td></tr>
+        <tr><td>调用公开服务</td><td>任何有效的 Key</td><td>不判权</td></tr>
+        <tr><td>调用私有服务的某个工具</td><td>被授权的 Key</td><td><code>McpServer</code> ≥ READ（全部工具）或 <code>McpTool</code> ≥ READ（这个工具），授给 Key 的 uid</td></tr>
+      </tbody></table></div>
+
+    <div class="card mb16"><div class="card-h"><h3>各方保存什么</h3></div>
+      <table class="table"><thead><tr><th></th><th>MCP 网关</th><th>用户中心</th></tr></thead><tbody>
+        <tr><td class="nowrap">服务</td><td>服务名、显示名称、类型、可见性、连接、上游凭据、是否透传身份、状态</td><td>数据对象 <code>McpServer</code> / 服务名；所有者（人）；授给 Key 的服务级授权</td></tr>
+        <tr><td class="nowrap">工具</td><td>MCP 代理：从上游拉来的定义；REST / gRPC：映射、参数、结果处理、副作用</td><td>数据对象 <code>McpTool</code> / 服务名/工具名；授给 Key 的工具级授权</td></tr>
+        <tr><td class="nowrap">API Key</td><td>类型；用户 Key 记持有人，智能体 Key 记客户端类型、编码、名称；Key 原文（供 Atlas 获取）、在用户中心的 uid、状态</td><td>Key 主体（uid；没有密码、不能登录、没有部门）</td></tr>
+        <tr><td class="nowrap">Trace</td><td colspan="2">都不存，经 OTLP 发给 Collector</td></tr>
+        <tr><td class="nowrap">流量策略</td><td colspan="2">都不存，由通用组件保存</td></tr>
+      </tbody></table></div>
+
+    <div class="card mb16"><div class="card-h"><h3>Trace（OpenTelemetry）</h3></div>
+      <table class="table"><thead><tr><th>Span</th><th>类型</th><th>说明</th></tr></thead><tbody>
+        <tr><td class="mono">{mcp.method.name} {工具名}</td><td>SERVER</td><td>每个 MCP 请求一个，如 <span class="mono">tools/call get_customer</span>；被拒的请求也有，带 error.type</td></tr>
+        <tr><td>认 Key、判权、流量治理</td><td>INTERNAL</td><td>记下判权缓存有没有命中、被哪一步拒绝、命中了哪条流量策略</td></tr>
+        <tr><td>调上游</td><td>CLIENT</td><td>HTTP、gRPC 用标准的自动埋点；MCP 上游按 OTel 的 MCP 客户端约定</td></tr>
+      </tbody></table>
+      <div class="card-b"><div class="kv">
+        <div class="k">属性</div><div class="small">按 OTel 的 MCP 语义约定：<span class="mono">mcp.method.name</span>、<span class="mono">mcp.session.id</span>、<span class="mono">gen_ai.tool.name</span>、<span class="mono">jsonrpc.request.id</span>、<span class="mono">error.type</span>；网关自定义：<span class="mono">mcp.gateway.service</span>、<span class="mono">mcp.gateway.key_uid</span>、<span class="mono">mcp.gateway.outcome</span></div>
+        <div class="k">进网关</div><div class="small">HTTP 头 <span class="mono">traceparent</span>；没有时取 <span class="mono">params._meta.traceparent</span>。Atlas 的 Run → 模型调用 → 工具调用 → 网关 → 上游串在同一条 trace 里</div>
+        <div class="k">到上游</div><div class="small">REST：HTTP 头；gRPC：metadata；MCP：HTTP 头，并写进 <span class="mono">params._meta</span></div>
+        <div class="k">导出</div><div class="small">OTLP 发给 Collector（部署时配置）；跟随调用方的采样决定，没有上游上下文时按比例采样</div>
+        <div class="k">不记录</div><div class="small">工具参数和结果（可能含个人信息、业务数据）、Key 原文、上游凭据</div>
+      </div></div></div>
+
+    <div class="card mb16"><div class="card-h"><h3>横向扩展</h3></div><div class="card-b"><ul>
+      <li>网关无状态，K8s Deployment 多副本；任一实例处理任一请求，不需要会话粘滞。</li>
+      <li>MCP 会话：网关发给调用方的会话标识里带着上游会话（签名防篡改），换了实例也能接着用；REST / gRPC 转换的服务网关自己就是 MCP 服务端，无状态。</li>
+      <li>服务定义、Key 在数据库，授权在用户中心，各实例短时缓存（判权 30 秒）；改服务、停用 / 重置 / 删除 Key 时通知各实例立即失效。</li>
+      <li>拉 MCP 代理的工具定义这类定时任务用租约，只有一个实例去做；流量计数跨实例由通用组件负责。</li>
+      <li>滚动升级：先摘流量、等进行中的调用结束；推送流断开后，客户端带原会话标识重连到别的实例。</li>
+    </ul></div></div>
+
+    <div class="card mb16"><div class="card-h"><h3>和现在的实现比</h3></div>
+      <table class="table"><thead><tr><th></th><th>现在（已部署）</th><th>原型</th></tr></thead><tbody>
+        <tr><td class="nowrap">REST 转 MCP、代理 MCP Server</td><td>Higress</td><td>网关自己做，Higress 下线；新增 gRPC 转换</td></tr>
+        <tr><td class="nowrap">上游凭据</td><td>存在 Higress</td><td>存在网关</td></tr>
+        <tr><td class="nowrap">API Key</td><td>一个主体（人或数字员工）一把，只表示身份；管理员用命令行发，Atlas 按人或数字员工的 uid 取</td><td>用户 Key（本人申请）+ 智能体 Key（Atlas 建智能体时申请）；Key 本身是权限主体</td></tr>
+        <tr><td class="nowrap">授权给谁</td><td>人、部门、数字员工</td><td>API Key；所有者仍是人</td></tr>
+        <tr><td class="nowrap">判权</td><td>以 Key 认出的人或数字员工问用户中心</td><td>以 Key 的 uid 作 X-Auth-Uid 问用户中心</td></tr>
+        <tr><td class="nowrap">授权粒度</td><td>服务</td><td>服务 + 工具（新增数据编码 <code>McpTool</code>）</td></tr>
+        <tr><td class="nowrap">公开 / 私有</td><td>没有，都要授权</td><td>新增，公开不判权</td></tr>
+        <tr><td class="nowrap">数字员工、权限类型</td><td>以 Agent 为权限用数字员工、以人为权限用使用者的权限</td><td>不再参与 MCP：智能体用自己的 Key，和权限类型无关</td></tr>
+        <tr><td class="nowrap">复核、接入检查</td><td>有</td><td>去掉</td></tr>
+        <tr><td class="nowrap">访问日志</td><td>存数据库</td><td>去掉；只接 Trace</td></tr>
+        <tr><td class="nowrap">单次调用超时</td><td>配在服务上，Atlas 执行</td><td>网关执行（通用流量治理）</td></tr>
+        <tr><td class="nowrap">多副本</td><td>部署 1 个副本；拉定义已有租约；会话透传给 Higress</td><td>会话标识带上游会话；变更通知各实例；流量计数跨实例</td></tr>
+        <tr><td class="nowrap">沿用</td><td colspan="2">Key 原文存库、判权缓存、拒绝时回 JSON-RPC 错误体、Atlas 只经网关</td></tr>
+      </tbody></table></div>
+
+    <div class="card"><div class="card-h"><h3>原型里的取舍（待确认）</h3></div>
+      <div class="card-b"><ol>
+        <li><b>Key 在用户中心怎么登记。</b>用户中心的数据权限现在只能授给用户和部门，判权接口也只认用户的 uid，所以每把 Key 要登记成一个主体。两种做法：新增一种用户类型（推荐：语义清楚，要改用户中心的约束和开放接口）；或者复用数字员工（用户中心不用改，但 Key 会和数字员工混在一起显示、计数）。</li>
+        <li><b>X-Auth-Uid 放 Key 的 uid，不放 Key 原文</b>（原因见「API Key 与授权」）。</li>
+        <li><b>谁能分配：</b>服务所有者只能分配自己的服务，管理员能分配全部；用户不能给自己的 Key 加私有服务，要找所有者。备选：像模型平台那样，本人从「授权给本人的」里挑——但那样授权又回到人身上了。</li>
+        <li><b>智能体 Key 跟着智能体走，和权限类型无关；数字员工不再参与 MCP。</b>用这个智能体的人共享同一套权限；上游要区分真人只能看 X-Uid（调用方带来的，网关不校验）。</li>
+        <li><b>为智能体申请 Key 有两条路：</b>Atlas 新建智能体时调接口申请（和模型平台一致）；管理员在页面上给还没有 Key 的智能体补申请。新 Key 不用等分配就能调公开服务，所以没有「待分配」状态。</li>
+        <li><b>公开服务对任何有效的 Key 开放全部工具。</b>没有「公开但某几个工具要授权」；要限制就设成私有。停用工具对所有 Key 生效，和授权无关。</li>
+        <li><b>工具级授权用新的数据编码 <code>McpTool</code></b>，服务级 <code>McpServer</code> 覆盖全部工具（含以后新增的），两者取并集。工具增删要同步用户中心。</li>
+        <li><b>去掉复核以后</b>，MCP 代理的上游新增或改了工具，拉到就生效；有服务级授权的 Key 自动拿到新工具。</li>
+        <li><b>只接 Trace：</b>不做调用记录、指标和页面；工具参数和结果不进 Span。排查靠追踪系统按 trace_id 查。</li>
+        <li><b>Higress 下线</b>，转换和上游凭据都进网关。</li>
+        <li><b>gRPC 只支持一元和服务端流，REST 只支持 JSON / 文本响应；</b>网关里不跑 stdio MCP Server；每个服务一个地址，不做聚合端点。</li>
+        <li><b>横向扩展要一个广播通道</b>（Redis 或 PostgreSQL LISTEN/NOTIFY）用来通知各实例失效缓存，现在网关不用 Redis。</li>
+        <li><b>单次调用超时从 Atlas 移到网关</b>，跟通用流量治理一起做。</li>
+      </ol></div></div>
+  </div>`;
+}
+
+/* =====================================================================
+ * 接入方示意：Atlas 与外部客户端
+ * ===================================================================== */
+function renderAtlas() {
+  const agentKeys = keys.filter(k => k.type === 'client' && k.client_type === 'Agent');
+  const k = agentKeys.find(x => x.client_code === atlasAgent) || agentKeys[0];
+  atlasAgent = k.client_code;
+  const usable = k.status === 'active' ? usableSummary(k) : [];
+  const view = {
+    client_type: 'Agent', client_code: k.client_code, status: k.status === 'active' ? 'active' : 'blocked',
+    key: k.status === 'active' ? `mk-…${k.last4}` : null, key_uid: k.uid + '…',
+    servers: usable.map(({ s, tools }) => ({ name: s.name, display_name: s.display, url: `${GW_INTERNAL}/mcp/${s.name}`, tools: tools.map(t => t.name) })),
+  };
+  const first = usable.find(x => x.s.visibility === 'private') || usable[0];
+  let denied = null;
+  for (const s of servers) {
+    if (s.status !== 'enabled') continue;
+    const t = s.tools.find(x => callable(s, x) && !keyVia(s, x, k));
+    if (t) { denied = { s, t }; break; }
+  }
+  const callText = first ? `POST ${GW_INTERNAL}/mcp/${first.s.name}
+Authorization: Bearer <② 返回的 key>
+X-Uid: <使用者 uid>
+traceparent: 00-<Run 的 trace_id>-<span_id>-01
+
+${json({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: first.tools[0].name, arguments: sampleArgs(first.tools[0]) } })}` : '（没有能用的工具）';
+  $('#content').innerHTML = `
+    <div class="page-head"><div><h1>Atlas 与外部客户端（接入示意）</h1><div class="sub">演示调用方怎么接 MCP 网关。这一页不属于 MCP 网关；接口路径是示意。</div></div>
+      <div class="grow"></div><button class="btn" id="at-new">＋ 新建智能体（演示）</button></div>
+    <div class="grid-2c">
+      <div class="card"><div class="card-h"><h3>编辑智能体 · MCP 工具</h3><span class="badge badge-gray">Atlas</span></div>
+        <div class="card-b">
+          <div class="field"><label>智能体 <span class="small muted">（演示：切换要编辑的智能体）</span></label>
+            <select id="at-agent">${agentKeys.map(x => `<option value="${x.client_code}" ${x === k ? 'selected' : ''}>${esc(x.client_name)}</option>`).join('')}</select></div>
+          <div class="kv mb16">
+            <div class="k">智能体 id</div><div class="mono">${k.client_code}</div>
+            <div class="k">智能体 Key</div><div><span class="mono">mk-…${k.last4}</span> ${keyStatusBadge(k)}<div class="subnote">uid <span class="mono">${k.uid}…</span> · 和智能体的权限类型无关</div></div>
+          </div>
+          ${k.status !== 'active' ? `<div class="callout callout-warn mb12"><div>这个智能体的 Key 已停用，编辑器里没有可选的 MCP 工具，运行时也调不了。${isAdmin() ? ' <button class="btn-link" id="at-go">去 API Key 启用 →</button>' : ''}</div></div>` : ''}
+          <div class="tree">${usable.map(({ s, tools }) => {
+            const hidden = s.tools.filter(t => callable(s, t)).length - tools.length;
+            return `<div class="srv"><div class="srv-h">${esc(s.display)} <span class="mono muted small">${s.name}</span> ${visBadge(s)}${hidden ? `<span class="subnote">另有 ${hidden} 个工具没有授权，不显示</span>` : ''}</div>
+              <div class="tools">${tools.map(t => `<label class="check"><input type="checkbox" checked> <span class="mono">${t.name}</span> ${t.effect !== 'read' ? effectBadge(t) : ''}</label>`).join('')}</div></div>`;
+          }).join('') || '<div class="empty">没有能用的 MCP 工具</div>'}</div>
+          <div class="small muted mt8">列表来自 MCP 网关：这把 Key 能用的服务和工具（公开 + 授给它的）。工具级授权只露出授权的那几个。${isAdmin() ? ' <button class="btn-link" id="at-assign">给这把 Key 分配权限 →</button>' : ''}</div>
+        </div></div>
+      <div class="card"><div class="card-h"><h3>调用过程</h3></div>
+        <div class="card-b">
+          <div class="section-t">① 新建智能体时申请 Key（Atlas → MCP 网关）</div>
+          <pre class="code">${esc(`POST /open/v1/client-keys\n${json({ client_type: 'Agent', client_code: k.client_code, client_name: k.client_name })}\n→ 201 {"key_uid": "${k.uid}…", "status": "active"}   // 按类型 + 编码幂等；新 Key 只能调公开服务`)}</pre>
+          <div class="section-t mt16">② 编辑、每个 Run 段开始时获取 Key 和工具（Atlas → MCP 网关）</div>
+          <pre class="code">GET /open/v1/client-keys?client_type=Agent&amp;client_code=${k.client_code}</pre>
+          <pre class="code mt8">${esc(json(view).replace(/\[\n\s+("[^\]]*?)\n\s+\]/g, (_, x) => '[' + x.replace(/\n\s+/g, ' ') + ']'))}</pre>
+          <div class="small muted mt8">每个工具实际还带描述、参数定义、副作用（审批要用），这里只列名字。</div>
+          <div class="section-t mt16">③ 调工具（Atlas → MCP 网关）</div>
+          <pre class="code">${esc(callText)}</pre>
+          <div class="section-t mt16">④ 网关判权（MCP 网关 → 用户中心）</div>
+          <pre class="code">${esc(`GET <用户中心>/open/v1/data-permissions/accessible?data_code=McpServer\nGET <用户中心>/open/v1/data-permissions/accessible?data_code=McpTool\nX-Auth-Uid: ${k.uid}…        ← 这把 Key 的 uid`)}</pre>
+          <div class="small muted mt8">结果按 Key 缓存 30 秒；公开服务不查。${denied ? `调没有授权的工具（例如 ${denied.s.name} · ${denied.t.name}）时网关直接返回 <span class="mono">-32044 forbidden</span>，不转发。` : ''}</div>
+          <div class="section-t mt16">⑤ 删除智能体时（Atlas → MCP 网关）</div>
+          <pre class="code">DELETE /open/v1/client-keys?client_type=Agent&amp;client_code=${k.client_code}</pre>
+          <div class="small muted mt8">同时删除用户中心里的 Key 主体和它的授权。ACP 智能体：Key 随任务下发进 Pod，Pod 里的 MCP 客户端直接连网关，走同一套判权和流量治理。</div>
+        </div></div>
+    </div>
+    <div class="card mt16"><div class="card-h"><h3>外部客户端</h3><span class="small muted">本人在「API Key」里申请用户 Key 后自己配置</span></div>
+      <div class="card-b"><pre class="code">${esc(json({ mcpServers: { gitlab: { type: 'http', url: `${GW_PUBLIC}/gitlab`, headers: { Authorization: 'Bearer ${MCP_API_KEY}' } }, crm: { type: 'http', url: `${GW_PUBLIC}/crm`, headers: { Authorization: 'Bearer ${MCP_API_KEY}' } } } }))}</pre>
+        <div class="small muted mt8">判权规则和智能体 Key 一样：公开服务直接用，私有服务看授给这把用户 Key 的权限；tools/list 只返回有权限的工具。</div></div></div>`;
+  $('#at-agent').onchange = e => { atlasAgent = e.target.value; renderAtlas(); };
+  $('#at-new').onclick = () => {
+    const a = { id: 'agt_' + rand(6), name: `新智能体 ${AGENTS.length + 1}` };
+    AGENTS.push(a);
+    const nk = { uuid: 'k-' + rand(4), uid: genUid(), type: 'client', client_type: 'Agent', client_code: a.id, client_name: a.name, last4: genKey().slice(-4), status: 'active', created_at: nowStr(), by: 'Atlas（接口）' };
+    keys.push(nk);
+    atlasAgent = a.id;
+    renderAtlas();
+    toast(`Atlas 已创建「${a.name}」`, `POST /open/v1/client-keys  client_type=Agent  client_code=${a.id} → 用户中心登记 Key 主体；只能调公开服务`);
+  };
+  const ga = $('#at-go');
+  if (ga) ga.onclick = () => { keyTab = 'client'; go('/keys'); };
+  const as = $('#at-assign');
+  if (as) as.onclick = () => openAssign(k, renderAtlas);
+}
+
+/* =====================================================================
+ * 骨架
+ * ===================================================================== */
+const ICONS = {
+  servers: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3.5" y="4" width="17" height="6.5" rx="2"/><rect x="3.5" y="13.5" width="17" height="6.5" rx="2"/><path d="M7.5 7.2h.1M7.5 16.7h.1" stroke-linecap="round" stroke-width="2.4"/></svg>',
+  keys: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="8" cy="15.5" r="4.2"/><path d="M11 12.5 20 3.5M16.5 7l3 3M14 9.5l2 2"/></svg>',
+  traffic: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4.5 17a8 8 0 1 1 15 0"/><path d="M12 13l4-4"/></svg>',
+  about: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.6v.2"/></svg>',
+  atlas: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M4 20h4L19.5 8.5l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></svg>',
+};
+const NAV = [
+  { path: '/servers', label: 'MCP 服务', icon: 'servers' },
+  { path: '/keys', label: 'API Key', icon: 'keys' },
+  { path: '/about', label: '原型说明', icon: 'about' },
+  { path: '/traffic', label: '流量治理', icon: 'traffic', group: '通用组件（单独设计）' },
+  { path: '/atlas', label: 'Atlas 与外部客户端', icon: 'atlas', group: '接入方示意' },
+];
+
+function renderShell(sec, arg) {
+  const cur = NAV.find(n => n.path === sec) || NAV[0];
+  $('#nav').innerHTML = NAV.map(n => `${n.group ? `<div class="nav-group">${n.group}</div>` : ''}<a class="nav-item ${n === cur ? 'active' : ''}" href="#${n.path}">${ICONS[n.icon]}<span>${n.label}</span></a>`).join('');
+  const u = USERS[me];
+  $('#sidebar-foot').innerHTML = `<div class="me">${avatar(me)}<div><strong>${u.name}</strong><small>${deptOf(u.dept).name} · ${u.admin ? 'MCP 管理员' : '普通用户'}</small></div></div>`;
+  const s = arg && cur.path === '/servers' ? serverOf(arg) : null;
+  $('#topbar').innerHTML = `
+    <div class="crumbs"><span>MCP 网关</span><span class="sep">/</span>${s ? `<a href="#/servers">${cur.label}</a><span class="sep">/</span><span class="cur">${esc(s.display)}</span>` : `<span class="cur">${cur.label}</span>`}</div>
+    <div class="grow"></div>
+    <label class="row small muted">演示身份
+      <select class="select" id="who">${Object.entries(USERS).filter(([, x]) => x.demo).map(([id, x]) => `<option value="${id}" ${id === me ? 'selected' : ''}>${x.name}（${x.admin ? 'MCP 管理员' : deptOf(x.dept).name}）</option>`).join('')}</select>
+    </label>`;
+  $('#who').onchange = e => { me = e.target.value; closeModal(); render(); toast(`已切换为 ${USERS[me].name}（${USERS[me].admin ? 'MCP 管理员' : '普通用户'}）`); };
+}
+
+function render() {
+  const parts = route().split('/');
+  const sec = '/' + (parts[1] || 'servers');
+  const arg = parts[2] ? decodeURIComponent(parts[2]) : '';
+  renderShell(sec, arg);
+  if (sec === '/servers' && arg) return renderServerDetail(arg);
+  ({ '/keys': renderKeys, '/traffic': renderTraffic, '/about': renderAbout, '/atlas': renderAtlas }[sec] || renderServers)();
+}
+window.addEventListener('hashchange', () => { closeModal(); window.scrollTo(0, 0); render(); });
+render();
+</script>
+</body>
+</html>

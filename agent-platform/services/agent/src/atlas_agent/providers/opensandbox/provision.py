@@ -44,6 +44,7 @@ if TYPE_CHECKING:
     from ...config import Settings
 
 __all__ = [
+    "BENCH",
     "EXECD_PORT",
     "ImageDenied",
     "Provisioner",
@@ -51,6 +52,7 @@ __all__ = [
     "SandboxEndpoint",
     "SandboxProvisioner",
     "SandboxRoutes",
+    "SandboxServers",
     "lifecycle_clients",
     "sandbox_spec",
 ]
@@ -58,6 +60,8 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 EXECD_PORT = 44772
+#: 评测档（root、根可写）的 lifecycle server 名 = 档位名（domain/spec.py::SandboxProfile）
+BENCH = "bench"
 
 #: 可以用的状态。★ Allocated = Pod 有了 IP、还没报 ready：上游在创建时把它当作「可以接请求」
 #: （_normalize_create_status），但 GET / 列表里会原样返回
@@ -160,11 +164,13 @@ class SandboxRoutes:
 def lifecycle_clients(
     settings: Settings, *, transport: httpx.AsyncBaseTransport | None = None
 ) -> dict[str, LifecycleClient]:
-    """两个 lifecycle server 实例（§7）：kind → 客户端。"""
+    """lifecycle server 实例（§7）：sbx、acp，部署了评测档时还有 bench。名字 → 客户端。"""
     pairs = {
         "sbx": (settings.opensandbox_sbx_url, settings.opensandbox_sbx_api_key),
         "acp": (settings.opensandbox_acp_url, settings.opensandbox_acp_api_key),
     }
+    if settings.opensandbox_bench_url is not None:
+        pairs[BENCH] = (settings.opensandbox_bench_url, settings.opensandbox_bench_api_key)
     return {
         kind: LifecycleClient(
             str(url),
@@ -289,14 +295,23 @@ class Provisioner:
 
     async def _admit_quota(self, user: str) -> None:
         """★ 原生沙箱与 ACP Pod 合计（§13），两个 server 各数一遍。先数再建：软上限。"""
-        count = 0
+        ids: set[str] = set()
         seen: set[str] = set()
-        for client in self._clients.values():
+        for name, client in self._clients.items():
             if client.base_url in seen:  # 两个实例指向同一个 server（测试、单实例部署）只数一次
                 continue
             seen.add(client.base_url)
-            boxes = await client.list({"atlas.managed": "true", "atlas.user": user})
-            count += sum(1 for sb in boxes if _state(sb) not in _LEAVING)
+            try:
+                boxes = await client.list({"atlas.managed": "true", "atlas.user": user})
+            except LifecycleError:
+                if name != BENCH:
+                    raise
+                # 评测档是附加的：它不可达不能挡住平台默认的沙箱与 ACP
+                logger.warning("评测档 OpenSandbox 不可达，配额没数它", exc_info=True)
+                continue
+            # ★ 按 id 去重：评测档 server 与 strict 档在同一个命名空间建沙箱，两边都列得到
+            ids.update(str(sb["id"]) for sb in boxes if _state(sb) not in _LEAVING)
+        count = len(ids)
         limit = self._settings.sandbox_quota_per_user
         if count >= limit:
             raise QuotaExceeded(
@@ -351,10 +366,96 @@ class Provisioner:
 # ─────────────────────────────────────────────────────────────── 原生沙箱
 
 
+class SandboxServers:
+    """原生沙箱的 lifecycle：strict 档（opensandbox-sbx）+ 评测档（opensandbox-bench，可选）。
+
+    ★ 两个 server 上的沙箱是同一种 kind（sbx）：路由表、令牌、文件路由都不分档。
+      建的时候按档位选 server；查 / 删 / 解析端点按 id 逐个问（不在的那个回 404）；列表取并集。
+      于是闲置回收、孤儿回收、会话删除都不用知道沙箱是哪一档。
+    ★ 部署上两个 server 在同一个命名空间（atlas-sbx）建沙箱、共用整桶 PVC，彼此都列得到对方的：
+      并集按 id 去重。分开命名空间要第三个整桶 PV，而 csi-s3 的 volumeHandle 没有第三种整桶写法。
+    ★ 评测档是附加的：它不可达时列表跳过它，不能连累平台默认的沙箱。
+    """
+
+    def __init__(self, strict: LifecycleClient, bench: LifecycleClient | None = None) -> None:
+        self._by_profile = {"strict": strict} | ({BENCH: bench} if bench is not None else {})
+
+    def has(self, profile: str) -> bool:
+        return profile in self._by_profile
+
+    def _servers(self) -> list[tuple[str, LifecycleClient]]:
+        seen: set[str] = set()  # 测试里两个档指向同一个假 server：只问一次
+        out = []
+        for profile, client in self._by_profile.items():
+            if client.base_url not in seen:
+                seen.add(client.base_url)
+                out.append((profile, client))
+        return out
+
+    async def create(self, spec: dict[str, Any]) -> dict[str, Any]:
+        return await self._by_profile[spec["metadata"]["atlas.profile"]].create(spec)
+
+    async def list(self, metadata: dict[str, str]) -> list[dict[str, Any]]:
+        items: dict[str, dict[str, Any]] = {}
+        for profile, client in self._servers():
+            try:
+                found = await client.list(metadata)
+            except LifecycleError:
+                if profile != BENCH:
+                    raise
+                logger.warning("评测档 OpenSandbox 不可达，列表跳过它", exc_info=True)
+                continue
+            # ★ 按 id 去重：两个 server 在同一个命名空间建沙箱时都列得到同一个 ——
+            #   不去重的话「一个会话有多个沙箱」会把正在用的那个当多余的删掉
+            for sb in found:
+                items.setdefault(str(sb["id"]), sb)
+        return list(items.values())
+
+    async def get(self, sandbox_id: str) -> dict[str, Any] | None:
+        for _, client in self._servers():
+            if (sb := await client.get(sandbox_id)) is not None:
+                return sb
+        return None
+
+    async def delete(self, sandbox_id: str) -> None:
+        for _, client in self._servers():
+            await client.delete(sandbox_id)  # 幂等：不在这个 server 上也算成功
+
+    async def endpoint(self, sandbox_id: str, port: int) -> str:
+        for _, client in self._servers():
+            try:
+                return await client.endpoint(sandbox_id, port)
+            except LifecycleError as exc:
+                if exc.status != 404:
+                    raise
+        raise LifecycleError(f"沙箱 {sandbox_id} 不存在", status=404)
+
+
 def sandbox_spec(
-    settings: Settings, *, ws: str, user: str, token: str, image: str
+    settings: Settings,
+    *,
+    ws: str,
+    user: str,
+    token: str,
+    image: str,
+    profile: str = "strict",
 ) -> dict[str, Any]:
     """原生沙箱的创建请求（设计 §8.1）。前缀布局与 OssFilesystem 一致：{user}/{ws}/workspace。"""
+    env = {
+        "EXECD_ACCESS_TOKEN": token,
+        "EXECD_INIT": "1",  # execd 作 PID 1：回收僵尸进程、转发信号
+        "EXECD_ENVS": "/tmp/.execd/env",  # 默认在 /opt/opensandbox，而 strict 档的根是只读的
+        "TMPDIR": "/tmp",
+    }
+    if profile != BENCH:
+        # strict 档的 HOME 是模板挂的 emptyDir；评测档按镜像自己的（root → /root），
+        # 题目环境可能在 HOME 里预置了东西
+        env["HOME"] = "/home/agent"
+    elif proxy := settings.sandbox_bench_proxy.get_secret_value():
+        # curl、uv 认小写，有的工具只认大写：两套都给。集群内地址不走代理
+        for name in ("http_proxy", "https_proxy"):
+            env[name] = env[name.upper()] = proxy
+        env["no_proxy"] = env["NO_PROXY"] = "localhost,127.0.0.1,::1,.svc,.cluster.local"
     return {
         "image": {"uri": image},
         "entrypoint": ["tail", "-f", "/dev/null"],
@@ -367,16 +468,11 @@ def sandbox_spec(
             "cpu": settings.sandbox_cpu_request,
             "memory": settings.sandbox_memory_request,
         },
-        "env": {
-            "EXECD_ACCESS_TOKEN": token,
-            "EXECD_INIT": "1",  # execd 作 PID 1：回收僵尸进程、转发信号
-            "EXECD_ENVS": "/tmp/.execd/env",  # 默认在 /opt/opensandbox，而 strict 档的根是只读的
-            "HOME": "/home/agent",
-            "TMPDIR": "/tmp",
-        },
+        "env": env,
         "metadata": {
             "atlas.managed": "true",
             "atlas.kind": "sbx",
+            "atlas.profile": profile,
             "atlas.thread": ws,
             "atlas.user": user,
         },
@@ -404,10 +500,31 @@ class SandboxProvisioner(Provisioner):
     kind = "sbx"
     port = EXECD_PORT
 
+    def __init__(
+        self,
+        settings: Settings,
+        redis: aioredis.Redis,
+        *,
+        lifecycle: LifecycleClient | None = None,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        super().__init__(settings, redis, lifecycle=lifecycle, transport=transport)
+        self.servers = SandboxServers(self.lifecycle, self._clients.get(BENCH))
+        self.lifecycle = self.servers  # type: ignore[assignment]  # 同一组接口，多了按档位选 server
+
     async def ensure(
-        self, ws: str, *, user: str, image: str = "", fresh: bool = False
+        self,
+        ws: str,
+        *,
+        user: str,
+        image: str = "",
+        profile: str = "strict",
+        fresh: bool = False,
     ) -> SandboxEndpoint:
-        """确保工作区有一个运行中的沙箱。fresh = 不信缓存（连不上它的时候）。"""
+        """确保工作区有一个运行中的沙箱。fresh = 不信缓存（连不上它的时候）。
+
+        ★ 已有的沙箱原样复用，不看它的镜像与档位：配置改了，要等闲置回收之后才按新的建。
+        """
         if not fresh and (ep := await self.routes.get(ws)):
             return ep
         image = image or self._settings.sandbox_default_image
@@ -420,20 +537,34 @@ class SandboxProvisioner(Provisioner):
                 ws,
                 user=user,
                 previous=previous,
-                admit=lambda: self._admit_image(image),
+                admit=lambda: self._admit_image(image, profile),
                 build=lambda token: sandbox_spec(
-                    self._settings, ws=ws, user=user, token=token, image=image
+                    self._settings, ws=ws, user=user, token=token, image=image, profile=profile
                 ),
             )
 
         return await self._locked(ws, locked)
 
-    def _admit_image(self, image: str) -> None:
+    def _admit_image(self, image: str, profile: str = "strict") -> None:
         settings = self._settings
+        if profile == BENCH:
+            if not self.servers.has(BENCH):
+                raise ImageDenied("这个部署没有评测档沙箱（未配置 OPENSANDBOX_BENCH_URL）")
+            allowed = settings.sandbox_bench_image_allow_prefixes
+        else:
+            allowed = settings.sandbox_image_allow_prefixes
         if image != settings.sandbox_default_image and not any(
-            image.startswith(p) for p in settings.sandbox_image_allow_prefixes
+            image.startswith(p) for p in allowed
         ):
-            raise ImageDenied(f"沙箱镜像 {image!r} 不在允许范围内")
+            scope = "评测档的" if profile == BENCH else ""
+            raise ImageDenied(f"沙箱镜像 {image!r} 不在{scope}允许范围内")
+
+    async def profile_of(self, sandbox_id: str) -> str | None:
+        """沙箱的档位（建时写进 metadata 的 atlas.profile）。None = 沙箱不在了。"""
+        sb = await self.servers.get(sandbox_id)
+        if sb is None:
+            return None
+        return str((sb.get("metadata") or {}).get("atlas.profile") or "strict")
 
     async def _ready(self, ep: SandboxEndpoint) -> None:
         """execd 的 /ping 通了才算就绪。"""

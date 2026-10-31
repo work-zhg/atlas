@@ -6,10 +6,9 @@ from uuid import UUID
 
 import redis.asyncio as aioredis
 from fastapi import Depends, Request
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import Settings, get_settings
-from .db.session import get_session
+from .db.session import SessionDep
 from .executor.base import RunExecutor
 from .identity import current_user
 from .redisx import make_redis
@@ -20,7 +19,7 @@ from .services.run import RunService
 from .services.thread import ThreadService
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
-SessionDep = Annotated[AsyncSession, Depends(get_session)]
+# SessionDep 定义在 db.session（函数作用域，见那里的说明），身份依赖也用它：同一请求只有一个 session
 # 唯一的身份来源（§5.2）—— service 层不允许另取
 CurrentUserDep = Annotated[UUID, Depends(current_user)]
 

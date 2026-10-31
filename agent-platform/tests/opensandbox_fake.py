@@ -89,8 +89,10 @@ class FakeSandbox:
 
 
 class FakeOpenSandbox:
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, *, host: str = "osb") -> None:
+        """host：lifecycle 的主机名。评测档的用例另起一个（osb-bench）当第二个 server。"""
         self.root = root
+        self.host = host
         self.sandboxes: dict[str, FakeSandbox] = {}
         self.created: list[FakeSandbox] = []
         self.deleted: list[str] = []
@@ -164,7 +166,7 @@ class FakeOpenSandbox:
     # ------------------------------------------------------------------ 路由
 
     async def _handle_async(self, request: httpx.Request) -> httpx.Response:
-        if self.create_delay_s and request.method == "POST" and request.url.host == "osb":
+        if self.create_delay_s and request.method == "POST" and request.url.host == self.host:
             await asyncio.sleep(self.create_delay_s)
         response = self._handle(request)
         if self.submit_delay_s and request.method == "POST" and request.url.path == "/command":
@@ -172,7 +174,7 @@ class FakeOpenSandbox:
         return response
 
     def _handle(self, request: httpx.Request) -> httpx.Response:
-        if request.url.host == "osb":
+        if request.url.host == self.host:
             return self._lifecycle(request)
         if request.url.host.endswith(".execd"):
             return self._execd(request)

@@ -1,9 +1,12 @@
 """MCP 网关测试的夹具。
 
 ★ 独立测试库 atlas_mcpgateway_test，不碰开发库。
-★ 用户中心是替身：数据权限用内存实现（FakePermissions），授权快照用 httpx.MockTransport。
-★ Higress 是替身（fake_higress.py），在后台线程里起 uvicorn；网关经真实的 HTTP 调它。
+★ 用户中心是替身：数据权限、Key 的主体用内存实现（FakePermissions），
+  授权快照用 httpx.MockTransport。
+★ 上游是替身（fake_upstreams.py）：MCP、REST 在后台线程里起 uvicorn，gRPC 起 grpc 服务；
+  网关经真实的网络调它们。
 ★ 网关本身经 ASGITransport 跑在测试的 event loop 里（库连接绑定 event loop）。
+★ Trace 用内存导出器：断言 Span 和网关加的属性。
 """
 
 from __future__ import annotations
@@ -15,7 +18,7 @@ from typing import Any
 
 import httpx
 import pytest
-from fake_higress import FakeHigress, serve_in_thread
+from fake_upstreams import FakeGrpc, FakeMcp, FakeRest, http_upstreams, serve_in_thread
 from gateway_testkit import ADMIN, FakePermissions
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
@@ -23,37 +26,48 @@ from sqlalchemy.ext.asyncio import create_async_engine
 TEST_DB = "atlas_mcpgateway_test"
 _ADMIN_URL = "postgresql+asyncpg://atlas:atlas@localhost:5433/atlas"
 TEST_URL = f"postgresql+asyncpg://atlas:atlas@localhost:5433/{TEST_DB}"
-_TABLES = (
-    "mcp_service",
-    "mcp_tool",
-    "mcp_tool_review",
-    "mcp_api_key",
-    "mcp_access_log",
-    "mcp_audit",
-)
-CREDENTIAL = "gw-test-credential"
+_TABLES = ("mcp_service", "mcp_tool", "mcp_api_key", "mcp_audit")
 
 # 本机的服务不走代理：开着 HTTP(S)_PROXY 时，httpx2（FastMCP）会把发往 127.0.0.1 的请求也送进代理
 os.environ["NO_PROXY"] = os.environ["no_proxy"] = ",".join(
     filter(None, [os.environ.get("NO_PROXY"), "127.0.0.1", "localhost", "gateway"])
 )
+os.environ.pop("OTEL_EXPORTER_OTLP_ENDPOINT", None)
 
-_HIGRESS = FakeHigress(credential=CREDENTIAL)
+_MCP = FakeMcp()
+_REST = FakeRest()
+_GRPC = FakeGrpc()
+_SPANS: Any = None
+
+
+def _tracing() -> Any:
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    trace.set_tracer_provider(provider)
+    return exporter
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _environment() -> Iterator[None]:
+def _environment() -> Iterator[str]:
+    global _SPANS
     from atlas_mcpgateway.settings import get_settings
 
-    with serve_in_thread(_HIGRESS.app()) as higress_url:
+    _SPANS = _tracing()
+    _GRPC.start()
+    with serve_in_thread(http_upstreams(_MCP, _REST)) as base:
         overrides = {
             "ATLAS_MCPGW_DATABASE_URL": TEST_URL,
-            "ATLAS_MCPGW_HIGRESS_BASE_URL": higress_url,
-            "ATLAS_MCPGW_GATEWAY_CREDENTIAL": CREDENTIAL,
             "ATLAS_MCPGW_MAINTAINER_TICK_S": "0",
             "ATLAS_MCPGW_MANUAL_REFRESH_MIN_INTERVAL_S": "0",
             "ATLAS_MCPGW_UC_BASE_URL": "http://uc.invalid",
             "ATLAS_MCPGW_DISCOVERY_TIMEOUT_S": "5",
+            "ATLAS_MCPGW_PERM_CACHE_TTL_S": "0",
         }
         saved = {k: os.environ.get(k) for k in overrides}
         os.environ.update(overrides)
@@ -74,14 +88,20 @@ def _environment() -> Iterator[None]:
 
         migrate()
         try:
-            yield
+            yield base
         finally:
+            _GRPC.stop()
             for k, v in saved.items():
                 if v is None:
                     os.environ.pop(k, None)
                 else:
                     os.environ[k] = v
             get_settings.cache_clear()
+
+
+@pytest.fixture
+def upstream_base(_environment: str) -> str:
+    return _environment
 
 
 @pytest.fixture(autouse=True)
@@ -99,11 +119,28 @@ async def _clean_tables() -> AsyncIterator[None]:
 
 
 @pytest.fixture
-def higress() -> Iterator[FakeHigress]:
-    _HIGRESS.services.clear()
-    _HIGRESS.rejected.clear()
-    yield _HIGRESS
-    _HIGRESS.services.clear()
+def fake_mcp() -> Iterator[FakeMcp]:
+    _MCP.services.clear()
+    yield _MCP
+    _MCP.services.clear()
+
+
+@pytest.fixture
+def fake_rest() -> Iterator[FakeRest]:
+    _REST.seen.clear()
+    yield _REST
+
+
+@pytest.fixture
+def fake_grpc() -> Iterator[FakeGrpc]:
+    _GRPC.seen.clear()
+    yield _GRPC
+
+
+@pytest.fixture
+def spans() -> Any:
+    _SPANS.clear()
+    return _SPANS
 
 
 @pytest.fixture

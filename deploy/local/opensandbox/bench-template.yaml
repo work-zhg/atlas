@@ -1,0 +1,20 @@
+# 评测档沙箱的 BatchSandbox 模板，opensandbox-bench 用（合并规则见 sbx-template.yaml 的说明）。
+#
+# ★ 与 strict 档（sbx-template.yaml）的区别：不设 runAsUser / runAsNonRoot、根可写、不 drop 能力 ——
+#   与 `docker run` 的默认一致。Terminal-Bench 这类题目按 root 设计（apt 装包、写 /app 与 /logs），
+#   strict 档跑不了。仍保留 seccomp RuntimeDefault、不开 privileged、不挂宿主机目录。
+# ★ 只给评测用：Atlas 按镜像前缀（SANDBOX_BENCH_IMAGE_ALLOW_PREFIXES）放行。与 strict 档同在 atlas-sbx
+#   （共用整桶 PVC），沙箱带标签 atlas.profile=bench：kubectl -n atlas-sbx get pods -l atlas.profile=bench
+metadata: {}
+spec:
+  replicas: 1
+  template:
+    spec:
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 30
+      enableServiceLinks: false
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: sandbox

@@ -19,10 +19,9 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import Depends, Request
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import Settings, get_settings
-from ..db.session import get_session
+from ..db.session import SessionDep
 from ..errors import Unauthorized
 from ..outbound import CallIdentity, use_identity
 from .principal import Principal
@@ -47,7 +46,7 @@ def _uuid(raw: str | None) -> UUID | None:
 
 async def current_principal(
     request: Request,
-    session: Annotated[AsyncSession, Depends(get_session)],
+    session: SessionDep,
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> Principal:
     h = request.headers

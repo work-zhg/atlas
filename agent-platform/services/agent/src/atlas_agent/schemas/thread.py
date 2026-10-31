@@ -134,6 +134,31 @@ class WorkspaceFilesOut(BaseModel):
     truncated: bool = False
 
 
+class SandboxFileIn(BaseModel):
+    #: 沙箱里的绝对路径，父目录要已经存在（如 /tmp/x.tar）
+    path: str = Field(min_length=2, max_length=1024, pattern=r"^/")
+    content_b64: str
+
+
+class SandboxExecIn(BaseModel):
+    """在会话正在运行的评测档沙箱里执行一条命令（评测原地校验用）。"""
+
+    command: str = Field(min_length=1, max_length=100_000)
+    cwd: str = Field(default="/workspace", pattern=r"^/")
+    #: 秒；省略 = 不限
+    timeout_s: int | None = Field(default=None, gt=0)
+    #: 执行前先写进沙箱的文件
+    files: list[SandboxFileIn] = Field(default_factory=list, max_length=20)
+
+
+class SandboxExecOut(BaseModel):
+    #: None = 命令被中断，没有退出码
+    exit_code: int | None
+    #: 合并的 stdout + stderr；过长时保留头尾
+    output: str
+    truncated: bool
+
+
 class PreviewSessionOut(BaseModel):
     """文件预览站点的入口。base_url 以 / 结尾，文件地址 = base_url + 逐段编码的路径。"""
 

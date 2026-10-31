@@ -1,15 +1,15 @@
 [project]
 name = "atlas-mcpgateway"
 version = "0.1.0"
-description = "MCP gateway — the only entry to MCP services: registry, tool review, API keys, auth and forwarding (doc/mcp-design.html)."
+description = "MCP gateway — the only entry to MCP services: proxies MCP servers, converts REST / gRPC into MCP tools, API keys as permission subjects, OpenTelemetry traces."
 requires-python = ">=3.13"
 
-# ★ 为什么独立成服务（MCP 方案设计 §2.1）：所有 MCP 调用（Atlas 的 Native、Pod 里的 CLI）
-#   都经过它；认人、判权、执行复核、改写身份请求头都在这里。它在用户中心里是独立应用，
-#   「谁能用哪个 MCP 服务」这个数据编码属于它。放进 atlas-server 等于让 Atlas 进数据面。
+# ★ 为什么独立成服务：所有 MCP 调用（Atlas 的 Native、Pod 里的 CLI、外部客户端）都经过它；
+#   认 Key、判权（用户中心数据权限，授给 Key）、协议转换、注入上游凭据都在这里。它在用户中心里
+#   是独立应用，McpServer / McpTool 这两个数据编码属于它。
 #
-# ★ 不依赖 Redis：多副本之间没有要共享的状态 —— 会话标识原样透传给上游（Higress），
-#   Key 与复核结论每个请求查库，判权结果在进程内短时缓存（§5.8）。
+# ★ 不依赖 Redis：数据面无状态（每个请求独立，不发会话标识），服务定义和 Key 在库里，
+#   判权结果在进程内短时缓存。流量治理（跨实例计数）是通用组件，单独设计。
 # ★ 与其它包互不 import（根 pyproject 的 import-linter 守着）：Atlas 只经 HTTP 调本服务。
 dependencies = [
   "fastapi>=0.115",
@@ -19,9 +19,19 @@ dependencies = [
   "alembic>=1.14",
   "pydantic-settings>=2.6",
   "httpx>=0.27",
-  # 从上游拉工具定义、接入检查：和 Atlas 同一套 MCP 客户端（mcp 2.x）
+  # 网关自己是 MCP 服务端（SDK 的 lowlevel Server）；调上游 MCP Server 用 FastMCP 客户端
   "fastmcp-slim[client]>=4.0.11,<5",
   "mcp>=2.3,<3",
+  # gRPC 转换：动态消息、服务端反射。★ protobuf 不上 7：工作区里别的包还在 6.x
+  "grpcio>=1.70",
+  "grpcio-reflection>=1.70",
+  "protobuf>=5.29,<7",
+  # Trace（OTLP/HTTP 导出）
+  "opentelemetry-api>=1.30",
+  "opentelemetry-sdk>=1.30",
+  "opentelemetry-exporter-otlp-proto-http>=1.30",
+  # OpenAPI 可以是 YAML
+  "pyyaml>=6.0",
 ]
 
 [build-system]

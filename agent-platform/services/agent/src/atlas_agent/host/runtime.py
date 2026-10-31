@@ -51,7 +51,6 @@ from ..domain.mcp_naming import MCP_PREFIX
 from ..domain.skill_events import SkillLoadTracker
 from ..domain.spec import ACP_MODE_ID, PLATFORM_MODE, acp_permission_mode
 from ..errors import CapabilityUnavailable
-from ..outbound import current_identity
 from ..providers.knowledge import mcp_server_entry, require_client
 from ..providers.llm.model_platform import (
     admit_models,
@@ -59,7 +58,7 @@ from ..providers.llm.model_platform import (
     litellm_url,
     uses_model_platform,
 )
-from ..providers.mcp import GatewayUnavailable, make_mcp_catalog, mcp_subject_access
+from ..providers.mcp import GatewayUnavailable, make_mcp_catalog, mcp_agent_access
 from ..providers.mcp.acp import acp_mcp_servers
 from ..providers.mcp.gateway import servers_in
 from ..providers.pods import AcpModel
@@ -435,11 +434,12 @@ class HostRuntime:
     ) -> tuple[list[dict[str, Any]], list[tuple[EventType, dict[str, Any]]]]:
         spec = prepared.spec
         catalog = await make_mcp_catalog(self._settings, redis)
-        # 按这一轮的权限主体过滤、下发它的 Key（MCP 方案设计 §7.1）
-        ident = current_identity()
-        subject = ident.auth_uid if ident else prepared.thread.created_by
+        # 按这个智能体的 Key 过滤、下发它的 Key（与权限类型无关）
+        agent_id = prepared.thread.agent_id
         try:
-            access = await mcp_subject_access(self._settings, subject)
+            access = await mcp_agent_access(
+                self._settings, agent_id, name=spec.name, owner=prepared.thread.created_by
+            )
         except GatewayUnavailable as exc:
             # 网关不可用 = 这些服务此刻用不了：不下发并提示，会话照常（§6.7 ③）
             logger.warning("建会话时 MCP 网关不可用，本会话不下发 MCP 服务：%s", exc)
@@ -450,7 +450,7 @@ class HostRuntime:
                         "server": server,
                         "tools": [f"mcp:{server}:*"],
                         "reason": "unavailable",
-                        "subject": str(subject),
+                        "subject": str(agent_id),
                         "message": f"{exc}，本会话不下发这个服务",
                     },
                 )

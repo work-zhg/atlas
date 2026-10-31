@@ -3,14 +3,16 @@
 #
 #   /atlas/*             → atlas-web（basePath=/atlas）     /                   → 302 到 /atlas
 #   /v1/previews/*       → atlas-server（会话文件预览站点）
-#   /atlas-api/*         → atlas-server（集群内）            /atlas-config-api/* → atlas-config（集群内）
+#   /atlas-api/*         → atlas-server（集群内）            /skill-api/*        → atlas-skill（集群内；/internal 不对外）
 #   /atlas-knowledge-api/* → atlas-knowledge（集群内；/internal、/mcp 不对外）
+#   /mcp-gateway-api/*     → atlas-mcpgateway 的管理端；/mcp-gateway-api/mcp/* 是数据面（外部客户端带
+#                            自己的用户 Key 调，不经登录校验；/internal 不对外）
 #   /model-gateway-api/*   → atlas-modelgateway 的管理端（集群内；/internal、/v1 不对外）
 #   /uc/*                → uc-web（basePath=/uc）           /uc/api/*           → 用户中心后端（atlas-usercenter）
 #   /teamflow/*          → tf-web（basePath=/teamflow）     /teamflow/api/*     → TeamFlow 后端（atlas-teamflow）
 #
 # ★ 这是网关（doc/identity-propagation-design.html §4）：唯一对外的入口（LoadBalancer），也是唯一
-#   校验登录的地方。四组应用接口（atlas-api、atlas-config-api、atlas-knowledge-api、teamflow/api）
+#   校验登录的地方。各组应用接口（atlas-api、skill-api、atlas-knowledge-api、teamflow/api …）
 #   先 auth_request 到用户中心 /api/v1/auth/verify（会话 Cookie uc_session；写请求在那里校验 CSRF），
 #   通过后写入 X-Uid、X-Tenant-Id、X-Caller-App: gateway，转给后端；后端之间内网免令牌。
 #   外部带进来的身份请求头一律丢弃，X-Auth-Uid 永远写不进来。未登录 → 401，前端跳 /uc/login。
@@ -126,10 +128,11 @@ data:
       location ^~ /v1/previews/ {
         proxy_pass http://atlas-server.atlas-system.svc.cluster.local:8000;
       }
-      location ^~ /atlas-config-api/internal/ { return 404; }
-      location ^~ /atlas-config-api/ {
+      # 技能应用（用户中心里的独立应用「技能」）。/internal 给 Atlas 取技能目录，只走集群内地址
+      location ^~ /skill-api/internal/ { return 404; }
+      location ^~ /skill-api/ {
         include /etc/nginx/conf.d/identity.inc;
-        proxy_pass http://atlas-config.atlas-system.svc.cluster.local:8020/;
+        proxy_pass http://atlas-skill.atlas-system.svc.cluster.local:8020/;
       }
       # 知识库：/internal 给运行时、/mcp 给会话 Pod，都只走集群内地址
       location ^~ /atlas-knowledge-api/internal/ { return 404; }
@@ -141,10 +144,14 @@ data:
         client_max_body_size 60m;
         proxy_read_timeout 300s;
       }
-      # MCP 网关的管理端接口（doc/mcp-design.html §9）。/internal 给 Atlas、/mcp 是数据面
-      # （Atlas 与会话 Pod 带主体 Key 调），都只走集群内地址
+      # MCP 网关。/internal 给 Atlas，只走集群内地址。
+      # /mcp/{服务名} 是数据面：外部客户端（Claude Code、Cursor）带自己的用户 Key 调，网关认 Key、判权，
+      # 不经登录校验；身份请求头按 server 级的 no-identity.inc 丢掉（这里不写 proxy_set_header，才继承得到）
       location ^~ /mcp-gateway-api/internal/ { return 404; }
-      location ^~ /mcp-gateway-api/mcp { return 404; }
+      location ^~ /mcp-gateway-api/mcp/ {
+        proxy_pass http://atlas-mcpgateway.atlas-system.svc.cluster.local:8070/mcp/;
+        proxy_buffering off;
+      }
       location ^~ /mcp-gateway-api/ {
         include /etc/nginx/conf.d/identity.inc;
         proxy_pass http://atlas-mcpgateway.atlas-system.svc.cluster.local:8070/;

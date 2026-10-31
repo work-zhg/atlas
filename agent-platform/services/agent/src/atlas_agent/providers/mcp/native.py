@@ -11,9 +11,9 @@ langchain.mcp 没有拦截器，调用期的逻辑分两处：
   ② 包执行函数    本 Run 段记住的「用不了」→ 按参数定义校验参数 → 持有会话（Run 段内复用）
                   → 超时 → 失败转成给模型的工具结果（能修复的自动重试一次）→ 超大文本结果掐头去尾
 
-全部经 MCP 网关（MCP 方案设计 §6）：装配时先按这一轮的权限主体问网关「能用哪些服务、Key 是什么」，
-没权限、没 Key 的服务跳过并提示（模型看不见就不会去调）。网关的拒绝带原因（error.data.reason），
-据此给模型不同的说明（§6.7）。
+全部经 MCP 网关：装配时先问网关「这个智能体的 Key 能用哪些服务和工具、Key 是什么」，
+没被授权的服务、工具和管理员停用的工具跳过并提示（模型看不见就不会去调）。网关的拒绝带原因
+（error.data.reason），据此给模型不同的说明。
 
 engine 不认识 MCP：这里产出的就是普通 BaseTool，名字已是模型侧名
 （server__tool），审批中间件按名字匹配自然生效。
@@ -37,7 +37,7 @@ from ...errors import CapabilityUnavailable
 from .arguments import argument_problems
 from .catalog import McpCatalog, ServerSnapshot, describe_error, root_causes
 from .config import client_for
-from .gateway import SubjectAccess
+from .gateway import AgentAccess
 from .review import ReviewIndex, review_status
 from .session import McpSessions
 
@@ -71,9 +71,8 @@ LEGACY_IDENTITY_HEADERS = {"X-Run-Id": "X-Atlas-Run", "X-Thread-Id": "X-Atlas-Th
 
 
 def subject_label(ctx: CallContext) -> str:
-    """给模型 / 用户看的「这一轮按谁的权限」。"""
-    acts_as_agent = ctx.auth_uid is not None and ctx.auth_uid != ctx.user_id
-    return "这个智能体的数字员工" if acts_as_agent else "当前用户"
+    """给模型 / 用户看的「MCP 按谁的权限」：智能体的 Key（与智能体的权限类型无关）。"""
+    return "这个智能体"
 
 
 def identity_headers(ctx: CallContext) -> dict[str, str]:
@@ -152,16 +151,14 @@ def _gateway_failure(reason: str, *, server: str, tool: str, subject: str, detai
                 f"MCP 服务 {server} 不存在或已被停用，请告知用户联系 MCP 管理员。{_NO_RETRY}",
                 remember="server",
             )
-        case "tool_pending_review" | "tool_rejected" | "tool_invalid" | "tool_unknown":
+        case "tool_unknown" | "invalid_params":
             return _Failure(
                 f"工具 {server}__{tool} 暂时不可用（{detail}）。{_NO_RETRY}", remember="tool"
             )
         case "authz_unavailable":
             return _Failure(f"MCP 服务 {server} 暂时不可用（{detail}）。可以稍后重试。")
-        case "upstream_rejected":
-            return _Failure(
-                f"MCP 服务 {server} 暂时不可用（网关配置问题），请告知用户联系 MCP 管理员。"
-            )
+        case "upstream_error":
+            return _Failure(f"MCP 服务 {server} 返回了错误（{detail}）。{_RETRY_HINT}")
     # upstream_unavailable，以及以后网关新增的原因：按「暂时不可用」交给模型，不让整轮失败
     return _Failure(f"MCP 服务 {server} 暂时不可用（{detail}）。{_RETRY_HINT}")
 
@@ -382,7 +379,7 @@ class NativeMcpTools:
         drift_policy: str = "warn",
         reviews: ReviewIndex | None = None,
         notices: list[tuple[EventType, dict[str, Any]]] | None = None,
-        access: SubjectAccess,
+        access: AgentAccess,
         sessions: McpSessions,
     ) -> list[Any]:
         """按 spec.tool_names 里的 `mcp:*` 条目构造工具。
@@ -390,11 +387,12 @@ class NativeMcpTools:
         缺 server / 缺工具 / 工具不可用 / 缺凭据 —— 一律抛出，冒泡成 run.failed，
         而不是少装几个工具就默默跑（§13.2）。
 
-        「这个人此刻用不了」的**跳过并告知**，Run 照常进行（MCP 方案设计 §6.1）：
-          · 未复核 / 被拒的定义、block 策略下漂移了的定义（notices → mcp.tool_drift）
-          · 经网关时：权限主体没被授权、没有 API Key（notices → mcp.tool_skipped）
+        「此刻用不了」的**跳过并告知**，Run 照常进行：
+          · block 策略下漂移了的定义（notices → mcp.tool_drift）
+          · 智能体的 Key 没被授权这个服务 / 工具、Key 停用了、管理员停用了工具
+            （notices → mcp.tool_skipped）
         digests: agent 保存时记录的 {spec 标识: digest}；没有记录的工具不比对。
-        access: 这一轮的权限主体能用什么（服务 + Key），装配前问过网关
+        access: 这个智能体的 Key 能用什么（服务、工具、Key），装配前问过网关
         sessions: 本 Run 段的会话（复用、主体 Key、「用不了」的记忆）；段结束由调用方关闭
         """
         wanted = wanted_tools(tool_names)
@@ -407,7 +405,8 @@ class NativeMcpTools:
         for server, snap in zip(servers, snaps, strict=True):
             if not self._admitted(server, wanted[server], ctx, access, notices):
                 continue
-            names = self._gate(snap, wanted[server], digests or {}, drift_policy, reviews, notices)
+            names = self._granted(snap, wanted[server], access, notices)
+            names = self._gate(snap, names, digests or {}, drift_policy, reviews, notices)
             out.extend(await self._build(snap, names, ctx, sessions))
         return out
 
@@ -416,20 +415,20 @@ class NativeMcpTools:
         server: str,
         names: set[str],
         ctx: CallContext,
-        access: SubjectAccess,
+        access: AgentAccess,
         notices: list[tuple[EventType, dict[str, Any]]] | None,
     ) -> bool:
-        """闸门一（§5.4）：没权限、没 Key 的服务跳过并提示 —— 模型看不见就不会去调。
+        """闸门一：Key 停用了、没被授权的服务跳过并提示 —— 模型看不见就不会去调。
 
         ★ 跳过一定要提示：静默少一个工具，模型照常做事、只是做不好，用户不知道为什么。
         """
         if access.allows(server) and access.key is not None:
             return True
         who = subject_label(ctx)
-        if not access.allows(server):
-            reason, message = "forbidden", f"{who}没有被授权使用 MCP 服务 {server}"
+        if access.key is None:
+            reason, message = "no_key", f"{who}的 MCP Key 已停用"
         else:
-            reason, message = "no_key", f"{who}还没有 MCP API Key"
+            reason, message = "forbidden", f"{who}的 MCP Key 没有被授权使用 MCP 服务 {server}"
         logger.warning("跳过 MCP 服务 %s：%s（主体 %s）", server, reason, access.subject)
         if notices is not None:
             notices.append(
@@ -445,6 +444,53 @@ class NativeMcpTools:
                 )
             )
         return False
+
+    @staticmethod
+    def _granted(
+        snap: ServerSnapshot,
+        names: set[str],
+        access: AgentAccess,
+        notices: list[tuple[EventType, dict[str, Any]]] | None,
+    ) -> set[str]:
+        """闸门二：工具级授权、管理员停用。跳过并提示；被删掉的工具留给 _build 明确报错。
+
+        ★ 停用不让整轮失败：它是管理员有意的运维动作，智能体照常跑，只是少了这个工具。
+        """
+        allowed = access.tools_of(snap.server)
+        keep: set[str] = set()
+        denied: list[str] = []
+        disabled: list[str] = []
+        for name in sorted(names):
+            tool = snap.tool(name)
+            if tool is None:
+                keep.add(name)
+            elif not tool.usable:
+                disabled.append(name)
+            elif name not in allowed:
+                denied.append(name)
+            else:
+                keep.add(name)
+        for reason, skipped, message in (
+            ("forbidden", denied, "这个智能体的 MCP Key 没有被授权使用这些工具"),
+            ("unavailable", disabled, "这些工具不可用（管理员停用了，或定义不合规）"),
+        ):
+            if not skipped:
+                continue
+            logger.warning("跳过 MCP 工具 %s：%s", [f"{snap.server}__{n}" for n in skipped], reason)
+            if notices is not None:
+                notices.append(
+                    (
+                        EventType.MCP_TOOL_SKIPPED,
+                        {
+                            "server": snap.server,
+                            "tools": [tool_id(snap.server, n) for n in skipped],
+                            "reason": reason,
+                            "subject": access.subject,
+                            "message": f"{message}，本轮跳过；请联系服务所有者或 MCP 管理员",
+                        },
+                    )
+                )
+        return keep
 
     def _gate(
         self,

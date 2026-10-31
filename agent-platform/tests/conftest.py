@@ -21,8 +21,8 @@ from atlas_agent.db.session import get_engine, get_sessionmaker
 
 from tests.fake_uc import FakeUC
 
-# MCP 网关的测试环境（进程内网关 + Higress 替身）：用到才起，见 tests/gateway_env.py
-from tests.gateway_env import gateway, gateway_environment, higress  # noqa: F401
+# MCP 网关的测试环境（进程内网关 + 上游 MCP 服务替身）：用到才起，见 tests/gateway_env.py
+from tests.gateway_env import gateway, gateway_environment, upstream  # noqa: F401
 
 REPO_ROOT = Path(__file__).resolve().parents[2]  # agent-platform/tests → 仓库根
 

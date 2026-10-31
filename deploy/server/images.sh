@@ -5,8 +5,14 @@
 #   deploy/server/images.sh app sandbox     只做这几个（app frontends bridge sandbox csi）
 #   deploy/server/images.sh third           第三方镜像：在服务器上用 crane 拉好、导入（kubelet 经国内加速源
 #                                           拉很慢且串行，一个大镜像会堵住后面所有 Pod）
+#   deploy/server/images.sh check           只检查：清单要用的镜像服务器上是否都有（deploy.sh 的前置检查调它）
+#   deploy/server/images.sh pull <镜像…>    与 third 同样的办法拉指定镜像（如评测题目的镜像：
+#                                           images.sh pull $(cat var/bench/agent-tasks/tbench/images.txt)）
 #   SKIP_BUILD=1 deploy/server/images.sh    只导入（已构建）
 #
+# ★ app、frontends 每次构建打一个新标签（构建时刻，如 atlas-app:20261029-153000）：清单里的镜像变了，
+#   apply 就会滚动更新，不用再手动 rollout restart；deploy.sh 默认用服务器上最新的那个标签。
+#   服务器上各留最近 3 个，便于回退（IMAGE_TAG=… 可指定标签）。
 # ★ 本机（Apple Silicon）用 --platform linux/amd64 交叉构建（QEMU），本机打成 *:amd64 之类的单独标签，
 #   导入服务器后再改回清单期望的名字 —— 直接用原名会覆盖本机 Docker Desktop 正在用的 arm64 镜像。
 # ★ 服务器没有 docker：经 ssh 把 docker save 的流灌进 ctr import，不在服务器上装构建工具。
@@ -20,6 +26,8 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 TARGET="${ATLAS_SERVER:-root@192.168.0.112}"
+TAG="${IMAGE_TAG:-$(date +%Y%m%d-%H%M%S)}"
+KEEP=3
 PROXY="${BUILD_PROXY:-http://host.docker.internal:58591}"
 PROXY_ARGS=(--build-arg "HTTP_PROXY=$PROXY" --build-arg "HTTPS_PROXY=$PROXY"
             --build-arg "http_proxy=$PROXY" --build-arg "https_proxy=$PROXY")
@@ -27,8 +35,8 @@ PROXY_ARGS=(--build-arg "HTTP_PROXY=$PROXY" --build-arg "HTTPS_PROXY=$PROXY"
 # 名字 → 本机 amd64 标签 | 服务器上的名字 | Dockerfile | 构建上下文
 spec() {
   case "$1" in
-    app)       echo "atlas-app:amd64|atlas-app:dev|docker/app/Dockerfile|." ;;
-    frontends) echo "atlas-frontends:amd64|atlas-frontends:dev|docker/frontends/Dockerfile|." ;;
+    app)       echo "atlas-app:amd64|atlas-app:${TAG}|docker/app/Dockerfile|." ;;
+    frontends) echo "atlas-frontends:amd64|atlas-frontends:${TAG}|docker/frontends/Dockerfile|." ;;
     bridge)    echo "atlas-acp-bridge:0.4.0-amd64|atlas-acp-bridge:0.4.0|docker/bridge/Dockerfile|." ;;
     sandbox)   echo "atlas-sandbox:dev-amd64|atlas-sandbox:dev|docker/sandbox/Dockerfile|docker/sandbox" ;;
     csi)       echo "atlas-csi-s3:0.43.7-amd64|atlas-csi-s3:0.43.7|docker/csi-s3/Dockerfile|docker/csi-s3" ;;
@@ -60,10 +68,40 @@ THIRD_DIGEST=(
   "$(sed -n 's/^ *image: \(cgr.dev\/chainguard\/minio-client@sha256:[0-9a-f]*\)$/\1/p' deploy/server/10-infra.yaml | head -1)"
 )
 
+# 标签固定的自建镜像（版本变了要改清单）：check 时与第三方镜像一起检查
+FIXED=(atlas-acp-bridge:0.4.0 atlas-sandbox:dev atlas-csi-s3:0.43.7)
+
+if [ "${1:-}" = "check" ]; then
+  have="$(ssh "$TARGET" "ctr -n k8s.io images ls -q")"
+  missing=()
+  for img in "${THIRD[@]}" "${THIRD_DIGEST[@]}"; do
+    grep -qxF "$img" <<<"$have" || missing+=("${img}（images.sh third）")
+  done
+  for img in "${FIXED[@]}"; do
+    grep -qxF "docker.io/library/$img" <<<"$have" || missing+=("${img}（images.sh ${img%%:*}）")
+  done
+  for name in app frontends; do
+    grep -qE "^docker.io/library/atlas-${name}:[0-9]{8}-[0-9]{6}\$" <<<"$have" \
+      || missing+=("atlas-${name}:<构建时刻>（images.sh ${name}）")
+  done
+  if [ ${#missing[@]} -gt 0 ]; then
+    printf '服务器上缺镜像：\n'; printf '  · %s\n' "${missing[@]}"; exit 1
+  fi
+  echo "✓ 镜像齐全"
+  exit 0
+fi
+
 # 服务器上的代理（trojan 客户端，只有 SOCKS5、只绑 127.0.0.1）
 SERVER_PROXY="${SERVER_PROXY:-socks5://127.0.0.1:1080}"
 
-if [ "${1:-}" = "third" ]; then
+if [ "${1:-}" = "third" ] || [ "${1:-}" = "pull" ]; then
+  if [ "$1" = "pull" ]; then
+    shift
+    [ $# -gt 0 ] || { echo "用法：images.sh pull <镜像…>"; exit 1; }
+    IMAGES=("$@")
+  else
+    IMAGES=("${THIRD[@]}")
+  fi
   # ★ 下载路径按实测选最快的（2026-10-20）：阿里云的仓库直连 ≈5.6 MB/s（走代理只有一半）；Docker Hub、
   #   quay、cgr.dev、registry.k8s.io 经服务器的代理 ≈0.5 MB/s，比国内加速源（daocloud 等）和开发机代理快得多。
   # ★ 用 crane 而不是 ctr pull：ctr 不读代理环境变量；给 containerd 配代理又得重启它。crane 是单个静态二进制，
@@ -71,7 +109,7 @@ if [ "${1:-}" = "third" ]; then
   ssh "$TARGET" "[ -x /tmp/crane ] || (cd /tmp && curl -fsSL -x ${SERVER_PROXY/socks5:/socks5h:} -o crane.tgz \
     https://github.com/google/go-containerregistry/releases/latest/download/go-containerregistry_Linux_x86_64.tar.gz \
     && tar xzf crane.tgz crane && rm crane.tgz)"
-  for img in "${THIRD[@]}"; do
+  for img in "${IMAGES[@]}"; do
     case "$img" in
       *.aliyuncs.com/*) proxy="" ;;
       *) proxy="HTTPS_PROXY=${SERVER_PROXY}" ;;
@@ -85,10 +123,12 @@ if [ "${1:-}" = "third" ]; then
   done
   # ★ 按 digest 固定的（MinIO）由 containerd 直连 cgr.dev 拉：crane 只拉 amd64 那份 manifest，存下来的 digest
   #   与清单里的 index digest 对不上，kubelet 认不出来。cgr.dev 在服务器上直连可达，镜像也小
-  for img in "${THIRD_DIGEST[@]}"; do
-    echo "── ${img}（containerd 直连）"
-    ssh "$TARGET" "crictl pull '$img' >/dev/null"
-  done
+  if [ "${1:-}" = "third" ]; then
+    for img in "${THIRD_DIGEST[@]}"; do
+      echo "── ${img}（containerd 直连）"
+      ssh "$TARGET" "crictl pull '$img' >/dev/null"
+    done
+  fi
   ssh "$TARGET" "crictl images | wc -l"
   exit 0
 fi
@@ -99,17 +139,18 @@ NAMES=("$@")
 for name in "${NAMES[@]}"; do
   IFS='|' read -r local_tag remote_tag dockerfile context <<<"$(spec "$name")"
   if [ -z "${SKIP_BUILD:-}" ]; then
-    if [ "$name" = app ]; then
-      # 第三方依赖按 uv.lock 固定（docker/app/Dockerfile 的 pip install -c）。--frozen：只读锁文件，
-      # 不重新解析；锁文件与 pyproject 不同步时先 uv lock，而不是在这里悄悄改版本
-      uv export --frozen --no-dev --no-emit-workspace --all-packages --no-hashes --no-header \
-        --no-annotate --quiet -o docker/app/constraints.txt
-    fi
+    # 第三方依赖按 uv.lock 固定（docker/app/Dockerfile 先装它，再拷源码）
+    [ "$name" != app ] || docker/app/requirements.sh
     echo "── 构建 $local_tag"
     docker build --platform linux/amd64 -f "$dockerfile" -t "$local_tag" "${PROXY_ARGS[@]}" "$context"
   fi
   echo "── 导入 $remote_tag → $TARGET"
   docker save "$local_tag" | ssh "$TARGET" "ctr -n k8s.io images import --platform linux/amd64 -"
   ssh "$TARGET" "ctr -n k8s.io images tag --force docker.io/library/${local_tag} docker.io/library/${remote_tag}"
+  if [ "${remote_tag#*:}" = "$TAG" ]; then
+    # 按构建时刻打标签的：只留最近 KEEP 个（正在跑的 Pod 不受影响，containerd 会留着它用的层）
+    ssh "$TARGET" "ctr -n k8s.io images ls -q | grep -E '^docker.io/library/${remote_tag%%:*}:[0-9]{8}-[0-9]{6}\$' \
+      | sort | head -n -${KEEP} | xargs -r ctr -n k8s.io images rm >/dev/null"
+  fi
 done
 ssh "$TARGET" "crictl images | grep -E 'atlas-' || true"

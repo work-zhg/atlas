@@ -183,14 +183,16 @@ async def test_search_does_not_claim_content_search() -> None:
     assert "execute" in SEARCH_TOOL_DESCRIPTION
 
 
-def test_bash_requires_filesystem() -> None:
-    """K8s 沙箱接入后 bash 已实现；它的 /workspace 就是文件工具的工作区，所以仍要求勾 filesystem。
+def test_bash_alone_is_supported() -> None:
+    """只勾 Shell 是合法配置：模型用命令读写文件。
 
+    以前声明了「bash 要求 filesystem」，run 开始时把 bash 报成不支持，装配却照常给了
+    execute —— 报的和实际的对不上。
     部署是否开启沙箱不在这里判：没开时装配期明确报错（SandboxNotEnabled），见 test_sandbox_provider。
     """
     from atlas_agent.domain.tool_registry import unsupported_tools
 
-    assert unsupported_tools(_spec(("bash",))) == ["bash"]
+    assert unsupported_tools(_spec(("bash",))) == []
     assert unsupported_tools(_spec(("bash", "filesystem"))) == []
 
 
@@ -262,3 +264,18 @@ async def test_the_model_sees_execute_when_a_sandbox_is_configured() -> None:
     ):
         pass
     assert bound and "execute" in bound[0], bound
+
+    # 只勾 Shell：模型只拿到 execute，不会被补上文件工具
+    bound.clear()
+    model = _Recorder(scripts=[[AIMessageChunk(content="好")]])
+    async for _ in run(
+        _spec(("bash",)),
+        run_id=uuid4(),
+        model=model,
+        input_content="跑一下",
+        filesystem=MemoryFilesystem(),
+        sandbox=_Box(),
+    ):
+        pass
+    assert bound and "execute" in bound[0], bound
+    assert not set(bound[0]) & {"read_file", "write_file", "edit_file", "delete", "search"}

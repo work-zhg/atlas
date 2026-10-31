@@ -163,6 +163,10 @@ class LiteLLM:
     # ── 模型
 
     async def models(self) -> list[Deployment]:
+        # ★ LiteLLM 里还一个模型都没有时路由器没建，/model/info 返回 500（1.106 实测）——
+        #   新装的 LiteLLM 登记第一个模型就会被当成「不可用」拦下。/v1/models 这时返回空列表
+        if not ((await self._call("GET", "/v1/models")) or {}).get("data"):
+            return []
         body = await self._call("GET", "/model/info")
         return [Deployment.parse(item) for item in (body or {}).get("data") or []]
 

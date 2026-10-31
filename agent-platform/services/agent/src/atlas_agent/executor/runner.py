@@ -92,6 +92,7 @@ def _graph_input(
     decisions: Mapping[str, Any] | None = None,
     approval_mode: str | None = None,
     run_id: UUID | None = None,
+    run_state: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """system_prompt 交给 agent 自己拼，这里**不再重复塞 SystemMessage**。
 
@@ -106,7 +107,9 @@ def _graph_input(
     messages = list(history)
     if not resume:
         messages.append(HumanMessage(content=input_content))  # type: ignore[arg-type]
-    graph_input: dict[str, Any] = {"messages": messages}
+    # ★ 上一段落库的 state（run_state 表）放在最前：下面的键由本段显式给出，不能被它盖掉。
+    #   图的输入 schema 里没有的键（比如这个 agent 没勾 write_todos 时的 todos）被静默忽略
+    graph_input: dict[str, Any] = {**(run_state or {}), "messages": messages}
     # 审批 / 提问的 id 由 (run_id, tool_call_id) 派生（kernel approval.run_id_of）
     if run_id is not None:
         graph_input["run_id"] = str(run_id)
@@ -204,6 +207,7 @@ async def run(
     waiting_on: Mapping[str, Any] | None = None,
     decisions: Mapping[str, Any] | None = None,
     approval_mode: str | None = None,
+    run_state: Mapping[str, Any] | None = None,
 ) -> AsyncIterator[TraceEvent]:
     """驱动一张**已装配好的图**，产出 TraceEvent 流。
 
@@ -240,6 +244,9 @@ async def run(
 
     approval_mode: 本段开始时的审批模式（run.approval_mode）。计划获批时图内会改它，
         改动经 agent.mode 事件交给执行器落库。
+
+    run_state: 上一段落库的图 state（run_state 表，如 todos），原样作为图的输入交回。
+        本段里的改动经事件（todos.updated）交给执行器落库。首段为空。
     """
     spec.validate()
 
@@ -297,6 +304,7 @@ async def run(
                 decisions=decisions,
                 approval_mode=approval_mode,
                 run_id=run_id,
+                run_state=run_state,
             ),
             # custom 是审批中间件把「需要确认」送出来的通道 ——
             # 它在图内部执行，够不到 runner 的事件工厂（§12.2）。

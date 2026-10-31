@@ -1,13 +1,18 @@
-"""MCP 网关（doc/mcp-design.html 第二版）在 Atlas 这一侧：元数据、主体能用什么、目录。
+"""MCP 网关在 Atlas 这一侧：元数据、智能体的 Key 能用什么、目录。
 
-    元数据       服务、工具定义、复核结论都从网关读（网关是事实源，Atlas 不再自己发现工具）。
+    元数据       服务、工具定义都从网关读（网关是事实源，Atlas 不自己发现工具）。
                  进程内短时缓存 + Redis 里留一份：网关暂时不可用时，装配照样能从缓存造出工具
-    主体能用什么  主体此刻能用哪些服务 + 主体的 API Key，一次问网关（demo F5）。进程内短时缓存，
-                 ★ 不进 Redis、不进日志：Key 只活在内存和 MCP 客户端的传输层里（§6.2）
-    GatewayCatalog  实现 McpCatalog：服务地址都是网关上的 /mcp/{服务名}，看不到 Higress
+    智能体 Key   每个智能体一把（客户端类型 Agent、编码 = 智能体 id）：建智能体时申请，
+                 网关接入前建的智能体在编辑器、Run 开始时补申请。网关给出这把 Key 此刻能用的
+                 服务和工具（公开 + 授给它的），和数据面判权是同一份。
+                 ★ 与智能体的权限类型无关：同一个智能体对所有使用者一样（同模型管理平台）
+                 ★ Key 不进 Redis、不进日志：只活在内存和 MCP 客户端的传输层里
+    GatewayCatalog  实现 McpCatalog：服务地址都是网关上的 /mcp/{服务名}
 
-★ 复核状态由网关算好给出（ok / invalid / pending_review / rejected），这里换算成 ReviewIndex，
-  装配、编辑器、ACP 下发沿用原来的闸门代码。
+★ 网关没有复核了：元数据里 review_required 恒为 False，不能用的工具（定义不合规、管理员停用）
+  带 issues，Atlas 沿用原来的闸门代码。
+★ 网关暂时不可用：沿用这个进程上次取到的 Key 和能用的工具（最终由网关判权）；从没取到过的才报
+  暂时不可用。
 """
 
 from __future__ import annotations
@@ -37,18 +42,25 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "AGENT_CLIENT",
+    "AgentAccess",
     "GatewayCatalog",
     "GatewayClient",
     "GatewayUnavailable",
-    "SubjectAccess",
+    "agent_access",
+    "delete_agent_key",
     "forget_access",
     "gateway_catalog",
     "make_mcp_catalog",
-    "mcp_subject_access",
+    "mcp_agent_access",
+    "register_agent_key",
+    "rename_agent_key",
     "reset_gateway_cache",
     "servers_in",
-    "subject_access",
 ]
+
+#: 智能体的客户端类型（网关的 ATLAS_MCPGW_CLIENT_TYPES 里登记给应用 atlas）
+AGENT_CLIENT = "Agent"
 
 _REDIS_KEY = "atlas:mcp:gateway:metadata"
 #: Redis 里那份的保留时间：网关长时间不可用时，过了这么久就不再用旧定义
@@ -60,20 +72,34 @@ class GatewayUnavailable(CapabilityUnavailable):
 
 
 @dataclass(frozen=True)
-class SubjectAccess:
-    """一个主体此刻能用什么（§5.4 闸门一）。"""
+class AgentAccess:
+    """一个智能体的 MCP Key 此刻能用什么（网关算好的：公开服务 + 授给这把 Key 的）。"""
 
+    #: Key 在用户中心的主体（事件、日志里标出是谁）
     subject: str
-    #: 能用（≥ 使用）且已启用的服务
-    services: frozenset[str]
-    all_services: bool = False
-    #: 原文；没有或已停用为 None
+    #: 服务 → 能用的工具（已去掉停用、不合规的）
+    servers: Mapping[str, frozenset[str]] = field(default_factory=dict)
+    #: 原文；停用时为 None
     key: str | None = None
-    #: active | disabled | none
-    key_status: str = "none"
+    #: active | blocked
+    key_status: str = "active"
 
     def allows(self, service: str) -> bool:
-        return service in self.services
+        return service in self.servers
+
+    def tools_of(self, service: str) -> frozenset[str]:
+        return self.servers.get(service, frozenset())
+
+    @classmethod
+    def parse(cls, body: Mapping[str, Any]) -> AgentAccess:
+        return cls(
+            subject=str(body["key_uid"]),
+            servers={
+                str(s["name"]): frozenset(s.get("tools") or ()) for s in body.get("servers") or ()
+            },
+            key=body.get("key"),
+            key_status=str(body.get("status") or "active"),
+        )
 
 
 class GatewayClient:
@@ -90,7 +116,8 @@ class GatewayClient:
         """Atlas 和 Pod 里的 CLI 连的地址：网关上的服务。"""
         return f"{self.base_url}/mcp/{name}"
 
-    async def _request(self, method: str, path: str, **kw: Any) -> Any:
+    async def _request(self, method: str, path: str, *, missing_ok: bool = False, **kw: Any) -> Any:
+        """→ 响应体。missing_ok：404 返回 None（客户端 Key 还没有）。"""
         try:
             async with httpx.AsyncClient(
                 timeout=self._timeout, trust_env=False, transport=GatewayClient.transport
@@ -100,6 +127,8 @@ class GatewayClient:
                 )
         except httpx.HTTPError as exc:
             raise GatewayUnavailable(f"MCP 网关暂时不可用：{type(exc).__name__}") from exc
+        if r.status_code == 404 and missing_ok:
+            return None
         if r.status_code >= 400:
             try:
                 detail = r.json().get("detail")
@@ -111,18 +140,34 @@ class GatewayClient:
     async def metadata(self) -> list[dict[str, Any]]:
         return list((await self._request("GET", "/internal/metadata"))["services"])
 
-    async def access(self, subject: str) -> SubjectAccess:
-        body = await self._request("GET", f"/internal/subjects/{subject}/access")
-        return SubjectAccess(
-            subject=str(body["subject"]),
-            services=frozenset(body.get("services") or []),
-            all_services=bool(body.get("all_services")),
-            key=body.get("key"),
-            key_status=str(body.get("key_status") or "none"),
+    async def client_key(self, code: str) -> AgentAccess | None:
+        body = await self._request(
+            "GET",
+            "/internal/client-keys",
+            params={"client_type": AGENT_CLIENT, "client_code": code},
+            missing_ok=True,
         )
+        return AgentAccess.parse(body) if body is not None else None
 
-    async def refresh(self, name: str) -> dict[str, Any]:
-        return dict(await self._request("POST", f"/internal/services/{name}/refresh"))
+    async def ensure_client_key(self, code: str, name: str, owner: UUID | str) -> AgentAccess:
+        body = {
+            "client_type": AGENT_CLIENT,
+            "client_code": code,
+            "name": name[:200],
+            "owner_uid": str(owner),
+        }
+        return AgentAccess.parse(await self._request("POST", "/internal/client-keys", json=body))
+
+    async def rename_client_key(self, code: str, name: str) -> None:
+        body = {"client_type": AGENT_CLIENT, "client_code": code, "name": name[:200]}
+        await self._request("PATCH", "/internal/client-keys", json=body)
+
+    async def delete_client_key(self, code: str) -> None:
+        await self._request(
+            "DELETE",
+            "/internal/client-keys",
+            params={"client_type": AGENT_CLIENT, "client_code": code},
+        )
 
 
 # ───────────────────────────── 元数据 → Atlas 的目录
@@ -209,13 +254,15 @@ class GatewayCatalog:
         meta = self._by_name.get(name)
         return snapshot_of(meta) if meta is not None else None
 
-    async def refresh(self, name: str) -> ServerSnapshot:
-        """让网关立即重新拉取（Atlas 的 MCP 页面「刷新」），并更新本进程的缓存。"""
-        meta = await self.client.refresh(name)
-        self._by_name[name] = meta
-        self.metadata = [meta if str(m["name"]) == name else m for m in self.metadata]
-        _metadata.forget()
-        return snapshot_of(meta)
+    def public_access(self) -> dict[str, frozenset[str]]:
+        """公开服务 → 能用的工具（任何有效的 Key 都能用）。新建的智能体还没有 Key：只能选这些。"""
+        return {
+            str(m["name"]): frozenset(
+                str(t["name"]) for t in m.get("tools") or () if not t.get("issues")
+            )
+            for m in self.metadata
+            if m.get("enabled") and m.get("visibility") == "public"
+        }
 
     def reviews(self) -> ReviewIndex:
         """网关算好的复核状态 → ReviewIndex（review.review_status 据此得出同样的结论）。"""
@@ -237,7 +284,7 @@ class GatewayCatalog:
 class _MetadataCache:
     """元数据：TTL 内直接用；过期了问网关，问不到就继续用上一份（进程内或 Redis 里的）。
 
-    ★ 与技能目录、配置服务注册表同一条规则：一个依赖暂时不可用，不该让所有挂了 MCP 的 Agent
+    ★ 与技能目录同一条规则：一个依赖暂时不可用，不该让所有挂了 MCP 的 Agent
       发不出消息 —— 调用时自会报错（§4.1）。
     """
 
@@ -287,13 +334,16 @@ async def _read_copy(redis: aioredis.Redis | None) -> list[dict[str, Any]] | Non
 
 
 _metadata = _MetadataCache()
-#: 主体 → (过期时刻, 能用什么)
-_access: dict[str, tuple[float, SubjectAccess]] = {}
+#: 智能体 id → (过期时刻, 能用什么)
+_access: dict[str, tuple[float, AgentAccess]] = {}
+#: 智能体 id → 上次取到的（网关暂时不可用时沿用）
+_last: dict[str, AgentAccess] = {}
 
 
 def reset_gateway_cache() -> None:
     _metadata.value, _metadata.at = None, 0.0
     _access.clear()
+    _last.clear()
 
 
 async def gateway_catalog(
@@ -303,17 +353,34 @@ async def gateway_catalog(
     return GatewayCatalog(client, await _metadata.get(client, ttl_s, redis))
 
 
-async def subject_access(base_url: str, subject: UUID | str, *, ttl_s: float) -> SubjectAccess:
-    """主体此刻能用什么。网关不可用时抛 GatewayUnavailable（调用方决定跳过还是失败）。"""
-    key = str(subject)
-    row = _access.get(key)
+async def agent_access(
+    base_url: str, agent_id: UUID | str, *, name: str, owner: UUID | str, ttl_s: float
+) -> AgentAccess:
+    """智能体的 Key 此刻能用什么。网关上还没有这把 Key 就补申请（owner = 主体的负责人）。
+
+    网关不可用时沿用上次取到的；从没取到过抛 GatewayUnavailable（调用方决定跳过还是失败）。
+    """
+    code = str(agent_id)
+    row = _access.get(code)
     if row is not None and row[0] >= time.monotonic():
         return row[1]
-    found = await GatewayClient(base_url).access(key)
+    client = GatewayClient(base_url)
+    try:
+        found = await client.client_key(code)
+        if found is None:
+            found = await client.ensure_client_key(code, name, owner)
+    except GatewayUnavailable:
+        cached = _last.get(code)
+        if cached is None:
+            raise
+        logger.warning("MCP 网关不可用，沿用上次取到的智能体 Key（%s）", code)
+        return cached
+    if len(_access) > 10_000:
+        _access.clear()
+        _last.clear()
+    _last[code] = found
     if ttl_s > 0:
-        if len(_access) > 10_000:
-            _access.clear()
-        _access[key] = (time.monotonic() + ttl_s, found)
+        _access[code] = (time.monotonic() + ttl_s, found)
     return found
 
 
@@ -324,21 +391,60 @@ def _gateway_url(settings: Settings) -> str:
 
 
 async def make_mcp_catalog(settings: Settings, redis: aioredis.Redis | None) -> GatewayCatalog:
-    """MCP 工具目录：服务、工具定义、复核结论都来自 MCP 网关（读缓存，§4.1）。"""
+    """MCP 工具目录：服务、工具定义都来自 MCP 网关（读缓存）。"""
     return await gateway_catalog(
         _gateway_url(settings), ttl_s=settings.mcp_metadata_ttl_s, redis=redis
     )
 
 
-async def mcp_subject_access(settings: Settings, subject: UUID) -> SubjectAccess:
-    """这一轮的权限主体能用哪些服务、Key 是什么。网关不可用抛 GatewayUnavailable
-    （调用方决定跳过还是失败）。"""
-    return await subject_access(_gateway_url(settings), subject, ttl_s=settings.mcp_access_ttl_s)
+async def mcp_agent_access(
+    settings: Settings, agent_id: UUID | str, *, name: str, owner: UUID | str
+) -> AgentAccess:
+    """这个智能体的 Key 能用哪些服务和工具、Key 是什么。网关不可用抛 GatewayUnavailable。"""
+    return await agent_access(
+        _gateway_url(settings), agent_id, name=name, owner=owner, ttl_s=settings.mcp_access_ttl_s
+    )
 
 
-def forget_access(subject: UUID | str) -> None:
-    """Key 刚被网关拒绝（可能刚重置）：下次重新取（§6.7 ④）。"""
-    _access.pop(str(subject), None)
+def forget_access(agent_id: UUID | str) -> None:
+    """Key 刚被网关拒绝（可能刚重置）、授权刚改过：下次重新取。"""
+    _access.pop(str(agent_id), None)
+
+
+async def register_agent_key(
+    settings: Settings, agent_id: UUID | str, name: str, owner: UUID | str
+) -> None:
+    """建智能体时申请 Key。★ 尽力而为：网关暂时不可用不挡住建智能体，编辑器、Run 开始时补申请。"""
+    if not settings.mcp_gateway_url:
+        return
+    try:
+        await GatewayClient(settings.mcp_gateway_url).ensure_client_key(str(agent_id), name, owner)
+    except GatewayUnavailable as exc:
+        logger.warning("建智能体 %s 时没能在 MCP 网关申请 Key（之后补申请）：%s", agent_id, exc)
+
+
+async def rename_agent_key(settings: Settings, agent_id: UUID | str, name: str) -> None:
+    """智能体改名：同步 Key 的名字（只影响网关页面上的展示，尽力而为）。"""
+    if not settings.mcp_gateway_url:
+        return
+    try:
+        await GatewayClient(settings.mcp_gateway_url).rename_client_key(str(agent_id), name)
+    except GatewayUnavailable as exc:
+        logger.info("同步智能体 Key 的名字失败（不影响使用）：%s", exc)
+
+
+async def delete_agent_key(settings: Settings, agent_id: UUID | str) -> None:
+    """删除（归档）智能体：删掉它的 Key（网关同时停用用户中心里的主体）。尽力而为。"""
+    if not settings.mcp_gateway_url:
+        return
+    forget_access(agent_id)
+    _last.pop(str(agent_id), None)
+    try:
+        await GatewayClient(settings.mcp_gateway_url).delete_client_key(str(agent_id))
+    except GatewayUnavailable as exc:
+        logger.warning(
+            "删除智能体 %s 的 MCP Key 失败（请在 MCP 网关页面上删除）：%s", agent_id, exc
+        )
 
 
 def servers_in(tool_names: Iterable[str]) -> set[str]:

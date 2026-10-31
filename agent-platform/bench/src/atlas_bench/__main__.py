@@ -5,11 +5,13 @@ python -m atlas_bench score <运行目录>        重新判分（不重跑平台
 python -m atlas_bench report <运行目录>       重新生成报告
 python -m atlas_bench datasets               列出可用数据集
 python -m atlas_bench import cmteb <子集>     导入 C-MTEB 检索子集（如 EcomRetrieval）
+python -m atlas_bench import tbench [任务…]  导入 Terminal-Bench 2 任务（默认第一批 15 题）
 python -m atlas_bench cleanup                删除评测在 Atlas 上建的库（库名前缀 bench:）
 
 智能体评测（doc/agent-eval-design.html）：
 python -m atlas_bench agent run experiments/agent-demo.yaml [--limit N] [--resume <目录>] [--gate]
     --gate：硬门槛不过（平台错误、沙箱不可用、过程断言失败）时退出码 2
+    --prepare-only：只建被测智能体并列出「id<TAB>slug」（新智能体要先在模型管理端分配模型）
 python -m atlas_bench agent report <运行目录>  重新汇总与生成报告（不重跑）
 python -m atlas_bench agent compare <基线目录> <新目录>  按题配对比较；回归或硬门槛不过时退出码 3
 python -m atlas_bench agent tasks              列出任务套件
@@ -146,6 +148,15 @@ async def _agent(args: argparse.Namespace, settings: BenchSettings) -> int:
         cfg = AgentExperimentConfig.model_validate(
             yaml.safe_load(Path(args.experiment).read_text(encoding="utf-8"))
         )
+        if args.prepare_only:
+            # 只建智能体：经模型管理平台时，新建的智能体要先给它的客户端 Key 分配模型才能运行
+            from .agent.runner import prepare_agents
+            from .agent.tasks import select_tasks
+
+            agents, patched = await prepare_agents(cfg, platform, select_tasks(cfg, args.limit))
+            for a in [*agents.values(), *patched.values()]:
+                print(f"{a['id']}\t{a['slug']}")
+            return 0
         answerer = None
         if cfg.user_model:
             from .agent.user import SimulatedUserAnswerer
@@ -201,9 +212,14 @@ def main(argv: list[str] | None = None) -> int:
     rp.add_argument("run_dir")
     sub.add_parser("datasets")
     im = sub.add_parser("import", help="导入公开评测集")
-    im.add_argument("source", choices=["cmteb"])
-    im.add_argument("subset", help="C-MTEB 检索子集，如 EcomRetrieval、DuRetrieval")
-    im.add_argument("--per-file", type=int, default=None, help="每个文件放多少段（默认 1000）")
+    im.add_argument("source", choices=["cmteb", "tbench"])
+    im.add_argument(
+        "subset",
+        nargs="*",
+        help="cmteb：检索子集，如 EcomRetrieval；tbench：任务名，不给 = 第一批",
+    )
+    im.add_argument("--per-file", type=int, default=None, help="cmteb：每文件段数（默认 1000）")
+    im.add_argument("--ref", default=None, help="tbench：仓库提交（默认固定的那个）")
     sub.add_parser("cleanup")
     ag = sub.add_parser("agent", help="智能体工程能力评测")
     agsub = ag.add_subparsers(dest="agent_command", required=True)
@@ -212,6 +228,11 @@ def main(argv: list[str] | None = None) -> int:
     ar.add_argument("--limit", type=int, default=None, help="只跑前 N 个任务")
     ar.add_argument("--resume", default=None, help="接着跑某个运行目录")
     ar.add_argument("--gate", action="store_true", help="硬门槛不过时退出码 2（部署后冒烟用）")
+    ar.add_argument(
+        "--prepare-only",
+        action="store_true",
+        help="只建好被测智能体并列出 id（经模型管理平台时先给它们分配模型）",
+    )
     arp = agsub.add_parser("report")
     arp.add_argument("run_dir")
     acp = agsub.add_parser("compare")
@@ -238,11 +259,20 @@ def main(argv: list[str] | None = None) -> int:
                 docs, total = len(ds.corpus.documents), len(ds.questions)
                 print(f"{ds.name:<20} {docs:>5} 篇文档  {total:>5} 题  {splits}  {m.parent}")
         return 0
+    if args.command == "import" and args.source == "tbench":
+        from .agent.tasks import TASK_DIRS
+        from .importers.tbench import DEFAULT_REF, import_tbench
+
+        suite, names = import_tbench(args.subset, TASK_DIRS[-1], ref=args.ref or DEFAULT_REF)
+        print(f"已导入 {len(names)} 题：{suite}")
+        return 0
     if args.command == "import":
         from .importers.cmteb import PER_FILE, import_cmteb
 
+        if len(args.subset) != 1:
+            parser.error("cmteb 要给一个检索子集")
         root, stats = import_cmteb(
-            args.subset, settings.datasets_dirs[-1], per_file=args.per_file or PER_FILE
+            args.subset[0], settings.datasets_dirs[-1], per_file=args.per_file or PER_FILE
         )
         print(f"已导入：{root}\n  {json.dumps(stats, ensure_ascii=False)}")
         return 0

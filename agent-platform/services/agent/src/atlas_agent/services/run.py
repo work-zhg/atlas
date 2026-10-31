@@ -280,10 +280,10 @@ class RunService:
         if await self._threads.get(thread_id) is None:
             raise NotFound(f"会话 {thread_id} 不存在", thread_id=str(thread_id))
 
-    async def stream_thread(
+    async def open_thread_stream(
         self, thread_id: UUID, *, after_seq: int | None
     ) -> AsyncIterator[str]:
-        """产出一条**会话**流的 SSE 帧。id 写 `thread_seq`。
+        """打开一条**会话**流：读完归档段，返回产出 SSE 帧的生成器。id 写 `thread_seq`。
 
         与按 run 订阅的 `stream` 有三处本质差别：
 
@@ -300,10 +300,11 @@ class RunService:
            最近 N 条。一条会话可以有几百轮，从 0 开始回放会把前端灌死 ——
            这是 thread 流相对 run 流新增的风险，run 流天然只有一轮的量。
 
-        ★ DB 访问集中在方法开头，随后立刻 `session.close()`：SSE 可以挂数小时，
-          而请求级 session 的 teardown 要等响应结束。不主动还的话每个观看者占
-          死一条连接（pool 20 条，约 20 个并发观看就让**所有** HTTP 请求排队）。
-          会话流的观看时长比 run 流长得多，这条纪律因此更要紧。
+        ★ DB 访问全在这个协程里做完，随后立刻 `session.close()`；返回的生成器只读
+          Redis。SSE 可以挂数小时，不主动还的话每个观看者占死一条连接（pool 20 条，
+          约 20 个并发观看就让**所有** HTTP 请求排队）。
+        ★ 必须在返回 StreamingResponse **之前** await：请求的 session 在路由函数返回
+          时就提交并关闭（deps.SessionDep 是函数作用域），生成器跑起来时它已经不在了。
         """
         cursor = (
             after_seq
@@ -327,7 +328,12 @@ class RunService:
             for row in await self._runs.archived_thread_events(thread_id, after_seq=cursor)
         ]
         await self._session.close()
+        return self._thread_frames(thread_id, archived, cursor)
 
+    async def _thread_frames(
+        self, thread_id: UUID, archived: list[TraceEvent], cursor: int
+    ) -> AsyncIterator[str]:
+        """先吐归档段，再从 Redis 接着跟。"""
         for event in archived:
             yield event.to_sse(thread_cursor=True)
             cursor = max(cursor, event.thread_seq)

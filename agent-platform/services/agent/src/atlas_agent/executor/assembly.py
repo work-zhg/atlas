@@ -46,7 +46,6 @@ from atlas_agent.providers.sandbox import PodSandbox
 from atlas_agent.telemetry.model_callback import ModelSpanHandler
 
 from ..config import Settings
-from ..configplane import skill_directory
 from ..db.models import Thread
 from ..domain.events import EventType
 from ..outbound import current_identity
@@ -74,7 +73,7 @@ from ..providers.mcp import (
     McpSessions,
     NativeMcpTools,
     make_mcp_catalog,
-    mcp_subject_access,
+    mcp_agent_access,
 )
 from ..providers.mcp.gateway import forget_access, servers_in
 from ..repositories.model_catalog import ModelCatalogRepository
@@ -83,6 +82,7 @@ from ..services.approval import RedisApprovalGate
 from ..services.compaction import ThreadSummarizer, make_failure_hook, make_persist_hook
 from ..services.service_models import resolve_service_model, service_model_configured
 from ..services.title import TitleService
+from ..skills import skill_directory
 from ..stream.relay import EventRelay
 from .build import build_graph
 
@@ -210,6 +210,8 @@ class PreparedRun:
     waiting_on: dict[str, Any] = field(default_factory=dict)
     #: approval → ApprovalOutcome（结构体）；subagent → 结论文本
     decisions: dict[str, Any] = field(default_factory=dict)
+    #: 上一段落库的图 state（run_state 表，如 todos），作为图的输入交回。全新的 run 为空
+    run_state: dict[str, Any] = field(default_factory=dict)
     #: 本段开始时的审批模式（run.approval_mode；doc/native-approval-mode-design.html）。
     #: native 交给图；acp 子智能体据此与自己的 permission_mode 取更严格的
     approval_mode: str | None = None
@@ -325,6 +327,8 @@ class HookAssembly:
                 workspace_thread_id=ws_thread,
                 user_id=str(prepared.thread.created_by),
                 run_id=str(run_id),
+                image=prepared.spec.sandbox.image,
+                profile=prepared.spec.sandbox.profile,
                 poll_min_s=settings.sandbox_poll_min_s,
                 poll_max_s=settings.sandbox_poll_max_s,
                 output_limit=settings.sandbox_output_limit_bytes,
@@ -348,7 +352,7 @@ class HookAssembly:
 
         approvals = RedisApprovalGate(self._sessionmaker, redis, run_id)
 
-        # 技能清单：描述取自配置服务；已下架的跳过并告诉用户（技能 / MCP 设计 §7.3）
+        # 技能清单：描述取自技能应用；已下架的跳过并告诉用户（技能 / MCP 设计 §7.3）
         skill_metas, skipped = await resolve_skills(
             prepared.spec.skills, skill_directory(self._settings)
         )
@@ -367,9 +371,9 @@ class HookAssembly:
             headers=endpoint.headers,
         )
 
-        # 持久指令（L1）：服务不可用时跳过，不让本轮失败
+        # 持久指令（L1）：读不到时跳过，不让本轮失败
         instructions = await load_instructions(
-            self._settings, workspace, prepared.thread.created_by
+            self._sessionmaker, workspace, prepared.thread.created_by
         )
 
         graph = build_graph(
@@ -487,14 +491,15 @@ class HookAssembly:
         notices: list[tuple[EventType, dict[str, Any]]] | None,
         closers: list[Callable[[], Awaitable[None]]] | None = None,
     ) -> list[Any]:
-        """spec 里的 mcp:* → BaseTool。未复核 / 漂移 / 没权限 / 没 Key 的经 notices 告知用户。
+        """spec 里的 mcp:* → BaseTool。漂移 / 没授权 / Key 停用 / 工具停用的经 notices 告知用户。
 
-        经 MCP 网关（MCP 方案设计 §6.1）：按这一轮的权限主体问网关「能用哪些服务、Key 是什么」
-        （一次），没权限、没 Key 的服务跳过并提示；工具定义读缓存的元数据，装配不连 MCP 服务。
-        同一个 Run 段对同一个服务复用一个会话（§6.3），段结束时经 closers 关掉。
+        经 MCP 网关：问网关「这个智能体的 Key 能用哪些服务和工具、Key 是什么」（一次），
+        用不了的跳过并提示；工具定义读缓存的元数据，装配不连 MCP 服务。
+        同一个 Run 段对同一个服务复用一个会话，段结束时经 closers 关掉。
+        ★ 子智能体的会话记在父智能体名下：用同一把 Key。
         """
         if not any(name.startswith(MCP_PREFIX) for name in prepared.spec.tool_names):
-            return []  # 不碰注册表：没用 MCP 的 agent 不该因为配置服务不可用而失败
+            return []  # 不碰注册表：没用 MCP 的 agent 不该因为 MCP 网关不可用而失败
         s = self._settings
         ident = current_identity()
         ctx = CallContext(
@@ -505,9 +510,11 @@ class HookAssembly:
             auth_uid=ident.auth_uid if ident else None,
         )
         catalog = await make_mcp_catalog(s, redis)
-        subject = ctx.auth_uid or ctx.user_id
+        agent_id = prepared.thread.agent_id
         try:
-            access = await mcp_subject_access(s, subject)
+            access = await mcp_agent_access(
+                s, agent_id, name=prepared.spec.name, owner=prepared.thread.created_by
+            )
         except GatewayUnavailable as exc:
             # 网关不可用 = 这些服务此刻用不了：跳过并提示，对话照常（§6.7 ③）
             for server in sorted(servers_in(prepared.spec.tool_names)):
@@ -519,7 +526,7 @@ class HookAssembly:
                                 "server": server,
                                 "tools": [],
                                 "reason": "unavailable",
-                                "subject": str(subject),
+                                "subject": str(agent_id),
                                 "message": f"{exc}，本轮不装这个服务的工具",
                             },
                         )
@@ -527,7 +534,7 @@ class HookAssembly:
             return []
         sessions = McpSessions(
             auth=KeyAuth(access.key) if access.key else None,
-            fetch_key=self._key_fetcher(subject),
+            fetch_key=self._key_fetcher(prepared),
         )
         if closers is not None:
             closers.append(sessions.aclose)
@@ -547,15 +554,22 @@ class HookAssembly:
             sessions=sessions,
         )
 
-    def _key_fetcher(self, subject: UUID) -> Callable[[], Awaitable[str | None]]:
-        """Key 被网关拒绝时重新取一次（§6.7 ④）。取不到（网关也不可用）当作没有新 Key。"""
+    def _key_fetcher(self, prepared: PreparedRun) -> Callable[[], Awaitable[str | None]]:
+        """Key 被网关拒绝时重新取一次（可能刚被重置）。取不到（网关也不可用）当作没有新 Key。"""
+        agent_id = prepared.thread.agent_id
 
         async def fetch() -> str | None:
-            forget_access(subject)
+            forget_access(agent_id)
             try:
-                return (await mcp_subject_access(self._settings, subject)).key
+                access = await mcp_agent_access(
+                    self._settings,
+                    agent_id,
+                    name=prepared.spec.name,
+                    owner=prepared.thread.created_by,
+                )
             except GatewayUnavailable:
                 return None
+            return access.key
 
         return fetch
 

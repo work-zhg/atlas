@@ -67,14 +67,14 @@ def test_runner_state_keys_exist_in_kernel_schemas() -> None:
     """runner 模式匹配的状态键必须在 kernel 的状态 schema 里真实存在。
 
     runner.py::_from_updates 用 `payload.get("todos")` 推导 todos.updated 事件 ——
-    这是 runner 与上游 langchain 之间一份**没有类型的隐式契约**，改键名的后果
+    这是 runner 与 kernel 待办中间件之间一份**没有类型的隐式契约**，改键名的后果
     是事件静默消失。（file.written 不走 state：文件在对象存储，由
     FilesystemMiddleware 经 custom stream 补发，见 test_tool_gating。）
     """
-    from langchain.agents.middleware import TodoListMiddleware
+    from atlas_engine.kernel.middleware.todo import TodoListMiddleware
 
     todo_keys = TodoListMiddleware().state_schema.__annotations__
-    assert "todos" in todo_keys, "上游的待办状态键变了，runner 的 todos.updated 会静默消失"
+    assert "todos" in todo_keys, "待办状态键变了，runner 的 todos.updated 会静默消失"
 
 
 def test_contracts_exports_are_importable_and_declared() -> None:

@@ -1,4 +1,4 @@
-.PHONY: up down sync lint types arch test migrate serve check smoke regress config-migrate config-serve \
+.PHONY: up down sync lint types arch test migrate serve check smoke regress skill-migrate skill-serve \
         memory-migrate memory-serve mcpgw-migrate mcpgw-serve modelgw-migrate modelgw-serve memory-scopes \
         uc-migrate uc-serve uc-bootstrap uc-web-install uc-web-dev uc-dev \
         tf-migrate tf-serve tf-worker tf-register-uc tf-web-install tf-web-dev tf-dev \
@@ -14,9 +14,10 @@ arch:    ; uv run lint-imports
 test:    ; uv run pytest -q
 migrate: ; cd agent-platform/services/agent && uv run alembic upgrade head
 serve:   ; uv run uvicorn atlas_agent.main:app --reload --port 8000
-# 配置服务（技能 / MCP 注册表）。库是同一 PG 上的 atlas_config（make up 会建）。
-config-migrate: ; uv run python -m atlas_config migrate
-config-serve:   ; ATLAS_CONFIG_ALLOW_SELF_REVIEW=true uv run python -m atlas_config serve
+# 技能应用（技能包的上传、审查、发布）。库是同一 PG 上的 atlas_skill（make up 会建）。
+#   用户中心里是独立应用「技能」：首次要 python -m atlas_skill register-uc --account admin
+skill-migrate: ; uv run python -m atlas_skill migrate
+skill-serve:   ; ATLAS_SKILL_ALLOW_SELF_REVIEW=true uv run python -m atlas_skill serve
 # 记忆服务（doc/memory-design.html §3）。库是同一 PG 上的 atlas_memory（make up 会建）。
 #   首次：make memory-migrate && make memory-scopes；atlas-server 配 MEMORY_BASE_URL=http://127.0.0.1:8060
 #   ★ 「用户」作用域打开了数据权限开关：要先 python -m atlas_memory register-uc --account admin

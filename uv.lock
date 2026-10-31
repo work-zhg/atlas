@@ -18,7 +18,6 @@ members = [
     "atlas-agent",
     "atlas-bench",
     "atlas-bridge",
-    "atlas-config",
     "atlas-engine",
     "atlas-host",
     "atlas-jsonrpc",
@@ -27,6 +26,7 @@ members = [
     "atlas-memory",
     "atlas-modelgateway",
     "atlas-redislock",
+    "atlas-skill",
     "atlas-teamflow",
     "atlas-usercenter",
 ]
@@ -334,7 +334,6 @@ dependencies = [
     { name = "atlas-agent" },
     { name = "atlas-bench" },
     { name = "atlas-bridge" },
-    { name = "atlas-config" },
     { name = "atlas-engine" },
     { name = "atlas-host" },
     { name = "atlas-jsonrpc" },
@@ -343,6 +342,7 @@ dependencies = [
     { name = "atlas-memory" },
     { name = "atlas-modelgateway" },
     { name = "atlas-redislock" },
+    { name = "atlas-skill" },
     { name = "atlas-teamflow" },
     { name = "atlas-usercenter" },
 ]
@@ -365,7 +365,6 @@ requires-dist = [
     { name = "atlas-agent", editable = "agent-platform/services/agent" },
     { name = "atlas-bench", editable = "agent-platform/bench" },
     { name = "atlas-bridge", editable = "agent-platform/pod/bridge" },
-    { name = "atlas-config", editable = "agent-platform/services/config" },
     { name = "atlas-engine", editable = "agent-platform/libs/engine" },
     { name = "atlas-host", editable = "agent-platform/libs/host" },
     { name = "atlas-jsonrpc", editable = "agent-platform/libs/jsonrpc" },
@@ -374,6 +373,7 @@ requires-dist = [
     { name = "atlas-memory", editable = "agent-platform/services/memory" },
     { name = "atlas-modelgateway", editable = "agent-platform/services/modelgateway" },
     { name = "atlas-redislock", editable = "infra-platform/libs/redislock" },
+    { name = "atlas-skill", editable = "agent-platform/services/skill" },
     { name = "atlas-teamflow", editable = "teamflow/services/teamflow" },
     { name = "atlas-usercenter", editable = "usercenter/services/usercenter" },
 ]
@@ -409,11 +409,11 @@ dependencies = [
     { name = "alembic" },
     { name = "asyncpg" },
     { name = "atlas-acp" },
-    { name = "atlas-config" },
     { name = "atlas-engine" },
     { name = "atlas-host" },
     { name = "atlas-jsonrpc" },
     { name = "atlas-redislock" },
+    { name = "atlas-skill" },
     { name = "boto3" },
     { name = "fastapi" },
     { name = "fastmcp-slim", extra = ["client"] },
@@ -434,11 +434,11 @@ requires-dist = [
     { name = "alembic", specifier = ">=1.14" },
     { name = "asyncpg", specifier = ">=0.30" },
     { name = "atlas-acp", editable = "agent-platform/libs/acp" },
-    { name = "atlas-config", editable = "agent-platform/services/config" },
     { name = "atlas-engine", editable = "agent-platform/libs/engine" },
     { name = "atlas-host", editable = "agent-platform/libs/host" },
     { name = "atlas-jsonrpc", editable = "agent-platform/libs/jsonrpc" },
     { name = "atlas-redislock", editable = "infra-platform/libs/redislock" },
+    { name = "atlas-skill", editable = "agent-platform/services/skill" },
     { name = "boto3", specifier = ">=1.35" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "fastmcp-slim", extras = ["client"], specifier = ">=4.0.11,<5" },
@@ -502,35 +502,6 @@ requires-dist = [
     { name = "atlas-host", editable = "agent-platform/libs/host" },
     { name = "atlas-jsonrpc", editable = "agent-platform/libs/jsonrpc" },
     { name = "websockets", specifier = ">=14" },
-]
-
-[[package]]
-name = "atlas-config"
-version = "0.1.0"
-source = { editable = "agent-platform/services/config" }
-dependencies = [
-    { name = "alembic" },
-    { name = "asyncpg" },
-    { name = "boto3" },
-    { name = "fastapi" },
-    { name = "pydantic-settings" },
-    { name = "python-multipart" },
-    { name = "pyyaml" },
-    { name = "sqlalchemy", extra = ["asyncio"] },
-    { name = "uvicorn", extra = ["standard"] },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "alembic", specifier = ">=1.14" },
-    { name = "asyncpg", specifier = ">=0.30" },
-    { name = "boto3", specifier = ">=1.35" },
-    { name = "fastapi", specifier = ">=0.115" },
-    { name = "pydantic-settings", specifier = ">=2.6" },
-    { name = "python-multipart", specifier = ">=0.0.9" },
-    { name = "pyyaml", specifier = ">=6.0" },
-    { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.36" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
 ]
 
 [[package]]
@@ -652,9 +623,16 @@ dependencies = [
     { name = "asyncpg" },
     { name = "fastapi" },
     { name = "fastmcp-slim", extra = ["client"] },
+    { name = "grpcio" },
+    { name = "grpcio-reflection" },
     { name = "httpx" },
     { name = "mcp" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-exporter-otlp-proto-http" },
+    { name = "opentelemetry-sdk" },
+    { name = "protobuf" },
     { name = "pydantic-settings" },
+    { name = "pyyaml" },
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -665,9 +643,16 @@ requires-dist = [
     { name = "asyncpg", specifier = ">=0.30" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "fastmcp-slim", extras = ["client"], specifier = ">=4.0.11,<5" },
+    { name = "grpcio", specifier = ">=1.70" },
+    { name = "grpcio-reflection", specifier = ">=1.70" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "mcp", specifier = ">=2.3,<3" },
+    { name = "opentelemetry-api", specifier = ">=1.30" },
+    { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.30" },
+    { name = "opentelemetry-sdk", specifier = ">=1.30" },
+    { name = "protobuf", specifier = ">=5.29,<7" },
     { name = "pydantic-settings", specifier = ">=2.6" },
+    { name = "pyyaml", specifier = ">=6.0" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.36" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
 ]
@@ -732,6 +717,35 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "redis", specifier = ">=5.2" }]
+
+[[package]]
+name = "atlas-skill"
+version = "0.1.0"
+source = { editable = "agent-platform/services/skill" }
+dependencies = [
+    { name = "alembic" },
+    { name = "asyncpg" },
+    { name = "boto3" },
+    { name = "fastapi" },
+    { name = "pydantic-settings" },
+    { name = "python-multipart" },
+    { name = "pyyaml" },
+    { name = "sqlalchemy", extra = ["asyncio"] },
+    { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "alembic", specifier = ">=1.14" },
+    { name = "asyncpg", specifier = ">=0.30" },
+    { name = "boto3", specifier = ">=1.35" },
+    { name = "fastapi", specifier = ">=0.115" },
+    { name = "pydantic-settings", specifier = ">=2.6" },
+    { name = "python-multipart", specifier = ">=0.0.9" },
+    { name = "pyyaml", specifier = ">=6.0" },
+    { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.36" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
+]
 
 [[package]]
 name = "atlas-teamflow"
@@ -2063,6 +2077,19 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/34/f0/fdcf6bdc1df9ca11679a1187bef8e6b81df31a2baae69497e17344f05ea3/grpcio-1.84.0-cp315-cp315-musllinux_1_2_x86_64.whl", hash = "sha256:659728f20fc7a0933ed7b1945435e31014b97ab8a5a7edcbaa70da4794aeb191", size = 8152972, upload-time = "2026-09-14T06:59:24.523Z" },
     { url = "https://files.pythonhosted.org/packages/5c/cf/6720e720bfa80fcb1ace873f66724eb3c8b03bba2fa078a30c12cab3212e/grpcio-1.84.0-cp315-cp315-win32.whl", hash = "sha256:edb6f87fc60ff438557291501b3e16c7a77c3b01a52d782cf276dccc7c5dd89c", size = 4561981, upload-time = "2026-09-14T06:59:27.275Z" },
     { url = "https://files.pythonhosted.org/packages/7f/b9/69d8a709df225bc2e06e028e9465166b174c24b3da07cc72d9a5ddc63194/grpcio-1.84.0-cp315-cp315-win_amd64.whl", hash = "sha256:4119efa6519871719ad81f33bc95ab87857dcb1c5801f30a6e592f2c41164169", size = 5394757, upload-time = "2026-09-14T06:59:30.118Z" },
+]
+
+[[package]]
+name = "grpcio-reflection"
+version = "1.81.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "grpcio" },
+    { name = "protobuf" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c0/53/7bd579cb35ea5895cb1ef38066e2336324432b3d3eaa21f52f6b94457c2d/grpcio_reflection-1.81.1.tar.gz", hash = "sha256:3d7160000f5fdd0e241f9b1a3d402f15ebcd5f281be105b374a025f38c6434a8", size = 19203, upload-time = "2026-06-11T12:58:47.865Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3b/10/5152fbc98f6b5b4f54cdf97c585d19fe962c265774692e446ad6b4f4950c/grpcio_reflection-1.81.1-py3-none-any.whl", hash = "sha256:d82fc4ac39dd5dcfd63e577075f6a68eac4a765e66a453914bbf57caf35665d0", size = 22906, upload-time = "2026-06-11T12:58:03.183Z" },
 ]
 
 [[package]]

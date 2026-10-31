@@ -1,4 +1,4 @@
-"""列类型。★ 与 atlas_agent / atlas_config 同一套规则，但不 import 它们（服务间不共享代码包）。"""
+"""列类型。★ 与 atlas_agent / atlas_skill 同一套规则，但不 import 它们（服务间不共享代码包）。"""
 
 from __future__ import annotations
 

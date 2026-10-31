@@ -41,7 +41,7 @@ USERS = {
     "lin.yuan": ("林远", "星海科技", ["UC_AUDITOR"]),
     "wang.ce": ("王测", "质量部", []),
     "xu.qing": ("许晴", "交易中台", []),
-    "zhang.ming": ("张明", "产品部", ["ATLAS_ADMIN", "TF_PLATFORM_ADMIN"]),
+    "zhang.ming": ("张明", "产品部", ["ATLAS_ADMIN", "SKILL_ADMIN", "TF_PLATFORM_ADMIN"]),
     "zhou.ning": ("周宁", "产品部", []),
     # 评测账号：deploy/local/smoke.sh 与 atlas_bench 用它（.env 的 ATLAS_BENCH_UID）
     "atlas_bench": ("评测账号", "研发中心", []),
@@ -49,6 +49,8 @@ USERS = {
 #: 没有更高角色时补上的基线：能登录就能用
 BASELINE = {
     "atlas": ("ATLAS_BUILDER", {"ATLAS_ADMIN"}),
+    # 技能应用（用户中心里的独立应用）：构建者原来在 Atlas 名下就能上传技能
+    "skill": ("SKILL_AUTHOR", {"SKILL_ADMIN"}),
     "teamflow": ("TF_TEAM_MEMBER", {"TF_TEAM_ADMIN", "TF_PLATFORM_ADMIN"}),
 }
 

@@ -13,7 +13,7 @@
 
 ★ 出站透传：本服务调用户中心、atlas-server 时原样带上本次请求的身份请求头，X-Caller-App 写
   atlas（知识库属于 Atlas 应用，数据编码登记在它名下）。
-★ 与 atlas-server、atlas-config 各自实现，不抽公共包（规则只有几十行）。
+★ 与 atlas-server、atlas-skill 各自实现，不抽公共包（规则只有几十行）。
 """
 
 from __future__ import annotations

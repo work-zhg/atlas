@@ -3,7 +3,7 @@ name = "atlas"
 version = "0.1.0"
 description = "Atlas — agent platform (workspace root)"
 requires-python = ">=3.13"
-dependencies = ["atlas-acp", "atlas-agent", "atlas-bench", "atlas-bridge", "atlas-config", "atlas-engine", "atlas-host", "atlas-jsonrpc", "atlas-knowledge", "atlas-mcpgateway", "atlas-memory", "atlas-modelgateway", "atlas-redislock", "atlas-teamflow", "atlas-usercenter"]
+dependencies = ["atlas-acp", "atlas-agent", "atlas-bench", "atlas-bridge", "atlas-engine", "atlas-host", "atlas-jsonrpc", "atlas-knowledge", "atlas-mcpgateway", "atlas-memory", "atlas-modelgateway", "atlas-redislock", "atlas-skill", "atlas-teamflow", "atlas-usercenter"]
 
 # Workspace root is a container, not an installable package.
 [tool.uv]
@@ -15,7 +15,6 @@ members = [
   "agent-platform/services/agent",
   "agent-platform/bench",
   "agent-platform/pod/bridge",
-  "agent-platform/services/config",
   "agent-platform/libs/engine",
   "agent-platform/libs/host",
   "agent-platform/libs/jsonrpc",
@@ -24,6 +23,7 @@ members = [
   "agent-platform/services/mcpgateway",
   "agent-platform/services/memory",
   "agent-platform/services/modelgateway",
+  "agent-platform/services/skill",
   "teamflow/services/teamflow",
   "usercenter/services/usercenter",
 ]
@@ -33,7 +33,6 @@ atlas-acp = { workspace = true }
 atlas-agent = { workspace = true }
 atlas-bench = { workspace = true }
 atlas-bridge = { workspace = true }
-atlas-config = { workspace = true }
 atlas-engine = { workspace = true }
 atlas-host = { workspace = true }
 atlas-jsonrpc = { workspace = true }
@@ -42,6 +41,7 @@ atlas-mcpgateway = { workspace = true }
 atlas-memory = { workspace = true }
 atlas-modelgateway = { workspace = true }
 atlas-redislock = { workspace = true }
+atlas-skill = { workspace = true }
 atlas-teamflow = { workspace = true }
 atlas-usercenter = { workspace = true }
 
@@ -64,7 +64,7 @@ dev = [
 # ★ 依赖单向的硬约束（文档 §2.1）。engine 一旦 import server/db/web 就 CI 红。
 # ---------------------------------------------------------------------------
 [tool.importlinter]
-root_packages = ["atlas_acp", "atlas_agent", "atlas_bench", "atlas_bridge", "atlas_config", "atlas_engine", "atlas_host", "atlas_jsonrpc", "atlas_knowledge", "atlas_mcpgateway", "atlas_memory", "atlas_modelgateway", "atlas_redislock", "atlas_teamflow", "atlas_usercenter"]
+root_packages = ["atlas_acp", "atlas_agent", "atlas_bench", "atlas_bridge", "atlas_engine", "atlas_host", "atlas_jsonrpc", "atlas_knowledge", "atlas_mcpgateway", "atlas_memory", "atlas_modelgateway", "atlas_redislock", "atlas_skill", "atlas_teamflow", "atlas_usercenter"]
 # forbidden_modules 里有第三方包（fastapi/sqlalchemy/...），必须打开这个开关
 include_external_packages = true
 
@@ -160,29 +160,30 @@ forbidden_modules = ["atlas_acp"]
 ignore_imports = ["atlas_agent.host.translate.** -> atlas_acp.**"]
 unmatched_ignore_imports_alerting = "none"
 
-# server 只许认配置服务的**对外契约**（schemas，只依赖 pydantic），不许碰它的
+# server 只许认技能应用的**对外契约**（schemas，只依赖 pydantic），不许碰它的
 # 库、存储、服务层。两边同是 Python，越界只要一行 import —— 所以要 CI 拦
 # （doc/skill-mcp-backend-design.html §4.1）。
 [[tool.importlinter.contracts]]
-name = "server 只认 atlas_config 的 schemas"
+name = "server 只认 atlas_skill 的 schemas"
 type = "forbidden"
 source_modules = ["atlas_agent"]
 forbidden_modules = [
-  "atlas_config.db",
-  "atlas_config.skill",
-  "atlas_config.api",
-  "atlas_config.storage",
-  "atlas_config.audit",
-  "atlas_config.auth",
-  "atlas_config.settings",
-  "atlas_config.errors",
+  "atlas_skill.db",
+  "atlas_skill.skill",
+  "atlas_skill.api",
+  "atlas_skill.storage",
+  "atlas_skill.audit",
+  "atlas_skill.auth",
+  "atlas_skill.settings",
+  "atlas_skill.errors",
+  "atlas_skill.register",
 ]
 
-# 配置服务不认识运行时：调用方向只有 server → config。
+# 技能应用不认识运行时：调用方向只有 server → skill。
 [[tool.importlinter.contracts]]
-name = "atlas_config 不认识运行时"
+name = "atlas_skill 不认识运行时"
 type = "forbidden"
-source_modules = ["atlas_config"]
+source_modules = ["atlas_skill"]
 forbidden_modules = [
   "atlas_agent",
   "atlas_engine",
@@ -203,7 +204,7 @@ source_modules = ["atlas_usercenter"]
 forbidden_modules = [
   "atlas_acp",
   "atlas_bridge",
-  "atlas_config",
+  "atlas_skill",
   "atlas_engine",
   "atlas_host",
   "atlas_jsonrpc",
@@ -216,7 +217,7 @@ type = "forbidden"
 source_modules = [
   "atlas_acp",
   "atlas_bridge",
-  "atlas_config",
+  "atlas_skill",
   "atlas_engine",
   "atlas_host",
   "atlas_jsonrpc",
@@ -233,7 +234,7 @@ source_modules = ["atlas_teamflow"]
 forbidden_modules = [
   "atlas_acp",
   "atlas_bridge",
-  "atlas_config",
+  "atlas_skill",
   "atlas_engine",
   "atlas_host",
   "atlas_jsonrpc",
@@ -247,7 +248,7 @@ type = "forbidden"
 source_modules = [
   "atlas_acp",
   "atlas_bridge",
-  "atlas_config",
+  "atlas_skill",
   "atlas_engine",
   "atlas_host",
   "atlas_jsonrpc",
@@ -265,7 +266,7 @@ source_modules = ["atlas_knowledge"]
 forbidden_modules = [
   "atlas_acp",
   "atlas_bridge",
-  "atlas_config",
+  "atlas_skill",
   "atlas_engine",
   "atlas_host",
   "atlas_jsonrpc",
@@ -280,7 +281,7 @@ type = "forbidden"
 source_modules = [
   "atlas_acp",
   "atlas_bridge",
-  "atlas_config",
+  "atlas_skill",
   "atlas_engine",
   "atlas_host",
   "atlas_jsonrpc",
@@ -299,7 +300,7 @@ source_modules = ["atlas_memory"]
 forbidden_modules = [
   "atlas_acp",
   "atlas_bridge",
-  "atlas_config",
+  "atlas_skill",
   "atlas_engine",
   "atlas_host",
   "atlas_jsonrpc",
@@ -318,7 +319,7 @@ type = "forbidden"
 source_modules = [
   "atlas_acp",
   "atlas_bridge",
-  "atlas_config",
+  "atlas_skill",
   "atlas_engine",
   "atlas_host",
   "atlas_jsonrpc",
@@ -338,7 +339,7 @@ source_modules = ["atlas_mcpgateway"]
 forbidden_modules = [
   "atlas_acp",
   "atlas_bridge",
-  "atlas_config",
+  "atlas_skill",
   "atlas_engine",
   "atlas_host",
   "atlas_jsonrpc",
@@ -358,7 +359,7 @@ type = "forbidden"
 source_modules = [
   "atlas_acp",
   "atlas_bridge",
-  "atlas_config",
+  "atlas_skill",
   "atlas_engine",
   "atlas_host",
   "atlas_jsonrpc",
@@ -379,7 +380,7 @@ source_modules = ["atlas_modelgateway"]
 forbidden_modules = [
   "atlas_acp",
   "atlas_bridge",
-  "atlas_config",
+  "atlas_skill",
   "atlas_engine",
   "atlas_host",
   "atlas_jsonrpc",
@@ -400,7 +401,7 @@ type = "forbidden"
 source_modules = [
   "atlas_acp",
   "atlas_bridge",
-  "atlas_config",
+  "atlas_skill",
   "atlas_engine",
   "atlas_host",
   "atlas_jsonrpc",
@@ -421,7 +422,7 @@ source_modules = ["atlas_bench"]
 forbidden_modules = [
   "atlas_acp",
   "atlas_bridge",
-  "atlas_config",
+  "atlas_skill",
   "atlas_engine",
   "atlas_host",
   "atlas_jsonrpc",
@@ -454,7 +455,7 @@ extend-exclude = [
   # 智能体评测的任务夹具（初始文件 / 校验脚本 / 参考答案）：内容就是题目本身，不做格式化与 lint
   "agent-platform/bench/agent-tasks",
   "agent-platform/services/agent/migrations/versions",
-  "agent-platform/services/config/src/atlas_config/migrations/versions",
+  "agent-platform/services/skill/src/atlas_skill/migrations/versions",
   "usercenter/services/usercenter/src/atlas_usercenter/migrations/versions",
   "usercenter/web",
   "teamflow/services/teamflow/src/atlas_teamflow/migrations/versions",
@@ -493,7 +494,7 @@ exclude = ["agent-platform/libs/engine/src/atlas_engine/kernel/**"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["agent-platform/tests", "agent-platform/services/config/tests", "usercenter/services/usercenter/tests", "teamflow/services/teamflow/tests", "agent-platform/services/knowledge/tests", "agent-platform/services/memory/tests", "agent-platform/services/mcpgateway/tests", "agent-platform/services/modelgateway/tests", "agent-platform/bench/tests", "infra-platform/libs/redislock/tests"]
+testpaths = ["agent-platform/tests", "agent-platform/services/skill/tests", "usercenter/services/usercenter/tests", "teamflow/services/teamflow/tests", "agent-platform/services/knowledge/tests", "agent-platform/services/memory/tests", "agent-platform/services/mcpgateway/tests", "agent-platform/services/modelgateway/tests", "agent-platform/bench/tests", "infra-platform/libs/redislock/tests"]
 addopts = "-ra"
 
 [tool.mypy]
@@ -507,4 +508,4 @@ exclude = ["agent-platform/libs/engine/src/atlas_engine/vendor", "agent-platform
 name = "atlas_redislock 不依赖本仓任何其它包"
 type = "forbidden"
 source_modules = ["atlas_redislock"]
-forbidden_modules = ["atlas_acp", "atlas_bench", "atlas_bridge", "atlas_config", "atlas_engine", "atlas_host", "atlas_jsonrpc", "atlas_knowledge", "atlas_agent", "atlas_teamflow", "atlas_usercenter"]
+forbidden_modules = ["atlas_acp", "atlas_bench", "atlas_bridge", "atlas_skill", "atlas_engine", "atlas_host", "atlas_jsonrpc", "atlas_knowledge", "atlas_agent", "atlas_teamflow", "atlas_usercenter"]

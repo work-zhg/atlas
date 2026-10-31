@@ -66,15 +66,15 @@ class ToolInfo(BaseModel):
 
 
 class McpSubjectOut(BaseModel):
-    """编辑器里 MCP 工具按谁的权限列出（MCP 方案设计 §9.2）。只在经 MCP 网关时给出。"""
+    """编辑器里 MCP 工具按谁的权限列出：这个智能体的 MCP Key。只在经 MCP 网关时给出。"""
 
-    #: user = 以人为权限（当前用户）；agent = 以 Agent 为权限（它的数字员工）
-    kind: Literal["user", "agent"]
-    #: 权限主体（用户中心 uid）。以 Agent 为权限、还没有数字员工时为空
+    #: 恒为 agent：MCP 按智能体的 Key 判权，与智能体的权限类型无关
+    kind: Literal["user", "agent"] = "agent"
+    #: Key 在用户中心的主体。新建、还没保存（还没有 Key）时为空
     uid: UUID | None = None
-    #: 主体的 API Key：active | disabled | none（没 Key 也可以先选，运行时跳过并提示）
+    #: 智能体的 Key：active | blocked | none（还没有）
     key_status: str = "none"
-    #: 已启用但主体没有权限的服务个数（不列出它们，只显示个数）
+    #: 已启用、但这把 Key 用不了的服务个数（不列出它们，只显示个数）
     hidden_servers: int = 0
     notes: list[str] = []
 

@@ -32,6 +32,16 @@ RUN HF_HUB_DISABLE_XET=1 python -c "from fastembed import TextEmbedding; TextEmb
     && du -sh /tmp/fastembed_cache
 
 WORKDIR /app
+# ★ 第三方依赖单独一层，放在拷源码之前：只改代码时这一层命中缓存，只重装下面本仓的包。
+#   原先源码在依赖之前拷入，改一行代码就要把全部依赖重装一遍（QEMU 交叉构建下每次 3–6 分钟）。
+#   requirements.txt 改了（uv.lock 变了）这一层才重跑；pip 下载缓存放 BuildKit 缓存挂载，不进镜像层。
+#
+# ★ 版本按 uv.lock 固定（docker/app/requirements.sh 导出）。不固定的话 pip 装的是构建当天的最新版：
+#   2026-10-21 查到服务器镜像有 74 个包与锁文件不同，跑的是一套测试从没覆盖过的组合 —— 其中
+#   FastAPI 0.151 自带 OTel，把每 3 秒一次的 /readyz 全部送进了 Langfuse（占 trace 的 99% 以上）。
+COPY docker/app/requirements.txt /tmp/requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip pip install -r /tmp/requirements.txt
+
 # ★ 源码按产品分目录（agent-platform / infra-platform / usercenter / teamflow），产品内再按
 #   libs / services 分组；镜像内仍平铺在 /app 下（布局不变，K8s 清单里的工作目录 /app/server
 #   不用跟着改）。所以 services/agent 拷进来仍叫 server/ —— 那是镜像布局，不是包名（atlas_agent）
@@ -40,7 +50,7 @@ COPY agent-platform/libs/jsonrpc/ jsonrpc/
 COPY agent-platform/libs/host/ host/
 COPY agent-platform/libs/engine/ engine/
 COPY infra-platform/libs/redislock/ redislock/
-COPY agent-platform/services/config/ config/
+COPY agent-platform/services/skill/ skill/
 COPY agent-platform/services/knowledge/ knowledge/
 COPY agent-platform/services/memory/ memory/
 COPY agent-platform/services/mcpgateway/ mcpgateway/
@@ -53,22 +63,17 @@ COPY teamflow/services/teamflow/ teamflow/
 # ★ 本仓的包一次装：它们彼此按名字依赖（server → engine/acp/redislock），
 #   分开装的话 pip 会去 PyPI 找 atlas-engine，而那里没有这个包。
 #
-# ★ config 要在 server 之前：server 依赖 atlas-config（只用它的 schemas）。
+# ★ skill 要在 server 之前：server 依赖 atlas-skill（只用它的 schemas）。
 #
-# ★ pip 下载缓存放 BuildKit 缓存挂载（不进镜像层）：源码在依赖之前拷入，任何代码改动都会让这一层
-#   重跑，有了缓存就不必每次重新下载全部依赖。
-#
-# ★ 第三方依赖的版本按 uv.lock 固定（-c 约束文件，由 uv export 生成，见 deploy/server/images.sh）。
-#   不固定的话 pip 装的是构建当天的最新版：2026-10-21 查到服务器镜像有 74 个包与锁文件不同，
-#   跑的是一套测试从没覆盖过的组合 —— 其中 FastAPI 0.151 自带 OTel，把每 3 秒一次的
-#   /readyz 全部送进了 Langfuse（占 trace 的 99% 以上）。
-COPY docker/app/constraints.txt /tmp/constraints.txt
+# ★ --no-deps：第三方依赖上一层已经装好。pip check 兜底 —— pyproject 加了依赖却没重新导出
+#   requirements.txt 时在这里构建失败，而不是到 Pod 里才 ImportError。
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install -c /tmp/constraints.txt \
-                ./jsonrpc ./host ./acp ./engine ./redislock ./config ./knowledge ./memory ./mcpgateway \
+    pip install --no-deps \
+                ./jsonrpc ./host ./acp ./engine ./redislock ./skill ./knowledge ./memory ./mcpgateway \
                 ./modelgateway \
                 ./server \
-                ./usercenter ./teamflow
+                ./usercenter ./teamflow \
+    && pip check
 
 
 # alembic.ini 与 migrations/ 在包外（server/ 目录下），迁移要从这里跑。
@@ -76,7 +81,7 @@ WORKDIR /app/server
 
 EXPOSE 8000 8020 8030 8040 8050 8060 8070 8090
 
-# server 的入口。config 由 Deployment 覆盖成 python -m atlas_config serve（迁移：python -m atlas_config migrate，
+# server 的入口。skill 由 Deployment 覆盖成 python -m atlas_skill serve（迁移：python -m atlas_skill migrate，
 # 迁移脚本在包内，不依赖工作目录）。
 # --timeout-graceful-shutdown：停机时等进行中响应的上限。会话 SSE 由交接逻辑主动关闭，
 # 这里兜的是别的长请求（大文件下载）—— 不设的话 uvicorn 会无限等下去，拖到被 K8s 强杀

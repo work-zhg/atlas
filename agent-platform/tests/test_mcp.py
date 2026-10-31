@@ -1,8 +1,8 @@
 """MCP 工具接入：Atlas 的装配与调用链（doc/mcp-design.html 第二版 §6）。
 
-全部经真实的 MCP 网关（进程内）→ Higress 替身（tests/gateway_env.py）。mock 掉 MCP 协议就等于
-什么都没测：这块的风险在协议握手、工具 schema 转换和错误转换上。网关自身的认人、判权、复核在
-它自己的测试里（services/mcpgateway/tests），经网关的权限与失败处理见 test_mcp_gateway.py。
+全部经真实的 MCP 网关（进程内）→ 上游 MCP 服务的替身（tests/gateway_env.py）。mock 掉 MCP 协议就
+等于什么都没测：这块的风险在协议握手、工具 schema 转换和错误转换上。网关自身的认 Key、判权在它自己
+的测试里（services/mcpgateway/tests），经网关的权限与失败处理见 test_mcp_gateway.py。
 """
 
 from __future__ import annotations
@@ -26,14 +26,14 @@ from pydantic import ValidationError
 
 from tests.fake_uc import AS_USER, TEST_USER
 from tests.gateway_env import (
-    ALICE,
     GATEWAY,
-    FakeHigress,
-    FakeService,
+    FakeMcp,
+    FakeMcpService,
     ToolFailure,
+    agent_key,
     assemble,
     call,
-    issue_key,
+    grant,
     register,
     text_of,
 )
@@ -43,8 +43,8 @@ pytestmark = pytest.mark.usefixtures("gateway_environment")
 SRV = "srv"
 
 
-def _service() -> FakeService:
-    srv = FakeService()
+def _service() -> FakeMcpService:
+    srv = FakeMcpService()
     num = {"type": "integer"}
     srv.tool(
         "add", "两数相加。", lambda a, _h: str(a["a"] + a["b"]), properties={"a": num, "b": num}
@@ -64,8 +64,9 @@ def _service() -> FakeService:
         "回显身份请求头。",
         lambda _a, h: f"user={h.get('x-uid')} run={h.get('x-run-id')} auth={h.get('x-auth-uid')}",
     )
-    srv.tool("verbose", "描述超长的工具。" + "填充" * 1200, lambda _a, _h: "never")
-    srv.tool("lookup", "声明了只读的工具。", lambda a, _h: "value", read_only=True)
+    srv.tool(
+        "lookup", "声明了只读的工具。", lambda a, _h: "value", annotations={"readOnlyHint": True}
+    )
 
     def fail(args: dict[str, Any], _h: dict[str, str]) -> str:
         raise ToolFailure(str(args["reason"]))
@@ -75,14 +76,14 @@ def _service() -> FakeService:
 
 
 @pytest.fixture
-async def env(gateway: Any, higress: FakeHigress) -> Any:
-    """服务 srv 已登记（不要求复核），alice 有权限、有 Key。"""
+async def env(gateway: Any, upstream: FakeMcp) -> Any:
+    """私有服务 srv 已登记，智能体的 Key 有服务级授权。→ (app, perms, c, key)。"""
     app, perms, c = gateway
-    higress.services[SRV] = _service()
-    await register(c, SRV, higress=higress)
-    perms.allow(SRV, str(ALICE))
-    await issue_key(c, ALICE)
-    return app, perms, c
+    upstream.services[SRV] = _service()
+    await register(c, SRV, upstream=upstream)
+    key = await agent_key(c)
+    await grant(c, SRV, key, "all")
+    return app, perms, c, key
 
 
 # ---------------------------------------------------------------- 装配
@@ -113,12 +114,6 @@ async def test_unknown_tool_raises(env: Any) -> None:
         await assemble([tool_id(SRV, "nope")])
 
 
-async def test_unusable_tool_raises(env: Any) -> None:
-    """★ 描述超长本身就是可疑信号：网关标不可用，不让它悄悄进模型上下文。"""
-    with pytest.raises(MissingTool, match="描述过长"):
-        await assemble([tool_id(SRV, "verbose")])
-
-
 async def test_read_only_annotation_reaches_approval(env: Any) -> None:
     """★ 审批按 metadata["readOnlyHint"] 判只读。langchain.mcp 把注解收在
     metadata["mcp"] 下、键是 snake_case；装配时要平铺回来，否则只读工具全被当成外部。"""
@@ -136,7 +131,8 @@ async def test_read_only_annotation_reaches_approval(env: Any) -> None:
 
 
 async def test_identity_headers_reach_the_backend(env: Any) -> None:
-    """使用者（X-Uid）照转、只作审计；权限主体（X-Auth-Uid）由网关按 Key 写入。"""
+    """使用者（X-Uid）和 X-Run-Id 照转、只作审计；权限主体（X-Auth-Uid）由网关按 Key 写入。"""
+    *_, key = env
     run = uuid4()
     caller = CallContext(run_id=run, thread_id=uuid4(), user_id=UUID(TEST_USER))
     tools, _, sessions = await assemble([tool_id(SRV, "whoami")], call_ctx=caller)
@@ -144,7 +140,7 @@ async def test_identity_headers_reach_the_backend(env: Any) -> None:
         out = text_of(await call(tools, f"{SRV}__whoami"))
     finally:
         await sessions.aclose()
-    assert out == f"user={TEST_USER} run={run} auth={ALICE}"
+    assert out == f"user={TEST_USER} run={run} auth={key['subject_uid']}"
 
 
 async def test_timeout_goes_to_model_not_run(env: Any) -> None:
@@ -158,21 +154,6 @@ async def test_timeout_goes_to_model_not_run(env: Any) -> None:
     assert time.monotonic() - started < 3
     assert "超时（0.5s）" in out
     assert "结果未知" in out
-
-
-async def test_per_server_timeout_overrides_global(gateway: Any, higress: FakeHigress) -> None:
-    """★ 服务级的 call_timeout_s（网关登记时定）优先于全局：全局 60s，这台只给 0.5s。"""
-    _app, perms, c = gateway
-    higress.services[SRV] = _service()
-    await register(c, SRV, call_timeout_s=0.5, higress=higress)
-    perms.allow(SRV, str(ALICE))
-    await issue_key(c, ALICE)
-    tools, _, sessions = await assemble([tool_id(SRV, "slow")], call_timeout_s=60)
-    try:
-        out = text_of(await call(tools, f"{SRV}__slow", seconds=5))
-    finally:
-        await sessions.aclose()
-    assert "超时（0.5s）" in out
 
 
 def test_per_server_timeout_must_be_positive() -> None:
@@ -194,14 +175,18 @@ async def test_cancellation_is_not_swallowed(env: Any) -> None:
     await sessions.aclose()
 
 
-async def test_upstream_down_at_call_time_goes_to_model(
-    env: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_upstream_down_at_call_time_goes_to_model(env: Any) -> None:
     """★ 定义在、上游宕了：装配成功，调用返回错误文本，不抛异常。"""
-    from atlas_mcpgateway.settings import get_settings as gateway_settings
+    from atlas_mcpgateway.db.models import McpService
+    from atlas_mcpgateway.db.session import get_sessionmaker
+    from sqlalchemy import select
 
     tools, _, sessions = await assemble([tool_id(SRV, "add")])
-    monkeypatch.setattr(gateway_settings(), "higress_base_url", "http://127.0.0.1:9")
+    async with get_sessionmaker()() as session:
+        svc = await session.scalar(select(McpService).where(McpService.name == SRV))
+        assert svc is not None
+        svc.connection = {**svc.connection, "url": "http://127.0.0.1:9/mcp"}
+        await session.commit()
     try:
         result = await call(tools, f"{SRV}__add", a=1, b=2)
     finally:
@@ -271,12 +256,13 @@ def _app_with_gateway(url: str) -> Any:
     return app
 
 
-async def test_catalog_endpoint_includes_mcp(gateway: Any, higress: FakeHigress) -> None:
-    """★ 端到端：/v1/tools 里同时有内置工具与 MCP 工具（按请求人的权限）。"""
-    _app, perms, c = gateway
-    higress.services[SRV] = _service()
-    await register(c, SRV, higress=higress)
-    perms.allow(SRV, TEST_USER)
+async def test_catalog_endpoint_includes_mcp(gateway: Any, upstream: FakeMcp) -> None:
+    """★ 端到端：/v1/tools 里同时有内置工具与 MCP 工具。新建的智能体还没有 Key，只列公开服务。"""
+    _app, _perms, c = gateway
+    upstream.services[SRV] = _service()
+    upstream.services["secret"] = _service()
+    await register(c, SRV, visibility="public", upstream=upstream)
+    await register(c, "secret", upstream=upstream)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=_app_with_gateway(GATEWAY)),
         base_url="http://test",
@@ -290,16 +276,26 @@ async def test_catalog_endpoint_includes_mcp(gateway: Any, higress: FakeHigress)
     add = by_name.get(tool_id(SRV, "add"))
     assert add is not None, "MCP 工具没并进目录"
     assert add["model_tool_names"] == [f"{SRV}__add"]
-    assert by_name[tool_id(SRV, "verbose")]["available"] is False
-    assert body["mcp_subject"]["kind"] == "user"
-    assert body["mcp_subject"]["key_status"] == "none"
+    assert tool_id("secret", "add") not in by_name  # 私有服务：新建的智能体选不了
+    subject = body["mcp_subject"]
+    assert (subject["kind"], subject["key_status"], subject["hidden_servers"]) == (
+        "agent",
+        "none",
+        1,
+    )
 
 
-async def test_unreachable_gateway_does_not_break_catalog() -> None:
+async def test_unreachable_gateway_does_not_break_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
     """★ MCP 网关挂了（且没有缓存），目录照常返回内置工具，并说明 MCP 暂时不可用。"""
-    from atlas_agent.providers.mcp.gateway import reset_gateway_cache
+    from atlas_agent.providers.mcp import gateway as gateway_module
 
-    reset_gateway_cache()
+    gateway_module.reset_gateway_cache()
+
+    async def no_copy(_redis: Any) -> None:
+        return None
+
+    # 开发 Redis 里可能留着别的用例写的元数据副本：这里要的是「从没取到过」
+    monkeypatch.setattr(gateway_module, "_read_copy", no_copy)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=_app_with_gateway("http://127.0.0.1:9")),
         base_url="http://test",

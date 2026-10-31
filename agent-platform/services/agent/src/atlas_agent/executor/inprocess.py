@@ -25,6 +25,7 @@ import asyncio
 import contextlib
 import contextvars
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any
@@ -560,7 +561,7 @@ class InProcessExecutor:
                 run, thread, version = loaded
                 thread_id = thread.id
                 slot.thread_id = thread_id
-                # ★ 出站身份（内网身份传递 §7.2）：这一轮发出的一切内网调用（知识库、配置服务、
+                # ★ 出站身份（内网身份传递 §7.2）：这一轮发出的一切内网调用（知识库、技能应用、
                 #   用户中心）都带它。执行任务是全新的上下文、不继承任何请求；接管的实例同样
                 #   按 run 行重建。auth_uid 与发起人不同只会出现在这里：以 Agent 为权限时
                 #   是数字员工（建 run 时按 Agent 的权限类型取好，数字员工设计 §7.3）。
@@ -617,6 +618,8 @@ class InProcessExecutor:
             hand_off = False
             #: 本段里审批模式变了（计划获批）、还没落库的新值
             mode_changed: str | None = None
+            #: 本段里图 state 变了、还没落库的键（run_state 表）。与 mode_changed 同一条落库路径
+            state_changed: dict[str, Any] = {}
 
             # ★ 「一轮怎么跑」在 runtime 里（acp 详设 §02）。本方法的前后两段
             #   ——载入/标记运行中，与收事件/落库/释放锁——与 agent 类型无关，
@@ -673,6 +676,10 @@ class InProcessExecutor:
                             #   或段收尾落库。只在收尾时写的话，检查点之后进程死掉，接管者会按
                             #   旧的规划模式继续，而「计划已批准」的结果已经在消息里了
                             mode_changed = str(event.data.get("effective") or "") or None
+                        elif event.type is EventType.TODOS_UPDATED:
+                            # ★ 待办是图 state 里的字段，不在 message 表里：不落库的话续跑、
+                            #   接管之后 state.todos 是空的（压缩中间件的待办提醒读的就是它）
+                            state_changed["todos"] = event.data.get("todos") or []
 
                         # ★ 检查点（§5.1）：模型说完、或一批工具结果收齐，就落库。
                         #   进程在这之后死掉，接手的实例从这里接着跑。
@@ -685,9 +692,11 @@ class InProcessExecutor:
                                 events=collected,
                                 last_seq=last_seq,
                                 approval_mode=mode_changed,
+                                run_state=state_changed,
                             )
                             collected = []
                             mode_changed = None
+                            state_changed = {}
                         # ★ 安全点：本轮产生的都已落库、没有在跑的工具 —— 停在这里不丢任何工作
                         if (
                             slot.drain
@@ -709,6 +718,7 @@ class InProcessExecutor:
                             events=collected,
                             last_seq=last_seq,
                             approval_mode=mode_changed,
+                            run_state=state_changed,
                         )
                 await self._hand_off(run_id)
                 return
@@ -730,6 +740,7 @@ class InProcessExecutor:
                 transcript=transcript,
                 suspended=suspended,
                 approval_mode=mode_changed,
+                run_state=state_changed,
             )
             if segment_end is not None:
                 # 序号已在 break 处盖好 —— 这里只发布
@@ -827,10 +838,12 @@ class InProcessExecutor:
         events: list[TraceEvent],
         last_seq: int,
         approval_mode: str | None = None,
+        run_state: Mapping[str, Any] | None = None,
     ) -> None:
         """一个工具轮次的检查点（§5.1）：消息 + 事件归档 + 序号，一个事务。
 
         approval_mode 非空 = 本轮里计划获批、模式变了：与「计划已批准」那条工具结果同一个事务落库。
+        run_state = 本轮里变了的图 state 键（如 todos），与写下它的那条工具结果同一个事务落库。
 
         ★ 第一条写是围栏（checkpoint 校验 owner）：租约已不在本实例就抛 LeaseLost、
           整个回滚 —— 接管者与假死复活的旧实例不能双写同一个 run。
@@ -844,6 +857,7 @@ class InProcessExecutor:
                 )
             if approval_mode:
                 await _save_approval_mode(session, run_id, thread_id, approval_mode)
+            await runs.save_state(run_id, run_state or {})
             await runs.archive_events(events, thread_id=stream_thread_id)
             await session.commit()
 
@@ -1082,6 +1096,8 @@ class InProcessExecutor:
             waiting_on=waiting_on,
             decisions=decisions,
             approval_mode=approval_mode,
+            # ★ 与 waiting_on 一样从库里读：续跑段、接管段可能落在任何一个实例上
+            run_state=await RunRepository(session).load_state(run.id),
         )
 
     async def _resume_state(
@@ -1169,10 +1185,12 @@ class InProcessExecutor:
         transcript: Transcript | None = None,
         suspended: bool = False,
         approval_mode: str | None = None,
+        run_state: Mapping[str, Any] | None = None,
     ) -> None:
         """一段的收尾落库。events 是**上一个检查点之后**的事件，之前的已经归档过了。
 
-        approval_mode 非空 = 上一个检查点之后计划获批、模式变了，随收尾一起落库。"""
+        approval_mode 非空 = 上一个检查点之后计划获批、模式变了，随收尾一起落库。
+        run_state 同理：上一个检查点之后变了的图 state 键。"""
         terminal = None if suspended else segment_end
         status = _STATUS_BY_TERMINAL.get(terminal.type, "failed") if terminal else "failed"
         error_kind = None
@@ -1225,6 +1243,7 @@ class InProcessExecutor:
                 )
             if approval_mode:
                 await _save_approval_mode(session, run_id, thread_id, approval_mode)
+            await runs.save_state(run_id, run_state or {})
             if title is not None:
                 # WHERE title_source != 'manual' 在仓库里，用户改过的名字不会被覆盖
                 await threads.set_generated_title(

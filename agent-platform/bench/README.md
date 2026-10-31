@@ -64,7 +64,11 @@ uv run python -m atlas_bench agent cleanup                                 # 删
 - 身份：同一个评测用户 `ATLAS_BENCH_UID`，需要 `agent:create` + `chat:use`；地址 `ATLAS_BENCH_ATLAS_API_URL`（默认 `http://127.0.0.1:18000`，`kubectl -n atlas-system port-forward svc/atlas-server 18000:8000`）。
 - 任务格式：`agent-platform/bench/agent-tasks/<套件>/<任务>/` 下 `task.yaml`（指令、类别、预算）、`files/`（初始工作区，经 `PUT /v1/threads/{id}/files` 上传）、
   `verifier/verify.py`（校验，Agent 看不到）、`solution/`（参考答案，只给单测用）。
-- 校验：最终工作区拷进 `python:3.12-slim` 容器（无网络）跑校验脚本；退出码 0 = 通过，最后一行 `SCORE=x` 给部分得分。需要本机 docker。
+- 校验（`verifier.mode`）：
+  - `container`（默认）：最终工作区拷进 `python:3.12-slim` 容器（无网络）跑校验脚本；退出码 0 = 通过，最后一行 `SCORE=x` 给部分得分。需要本机 docker。
+  - `sandbox`：在 Agent 用过的沙箱里原地校验（要看环境状态的题）。Agent 结束后才把 `verifier/` 解到沙箱的 `dest`（默认 `/tests`），
+    在 `cwd` 里执行 `command`，再读 `reward_file`（默认 `/logs/verifier/reward.txt`，1 = 通过，同 Harbor）。
+    经 `POST /v1/threads/{id}/sandbox/exec`，只对**正在运行的评测档沙箱**生效；Agent 一条命令没执行过（没有沙箱）记不通过。
 - 审批：勾了 Shell 的智能体每条命令都要审批，评测按 `approve_all` 自动批准（次数与等待计入指标）。
 - 提问（`ask_user_question`，doc/ask-user-question-design.html）：不按审批策略处理。任务带 `user.brief`（用户心里的完整需求，
   Agent 看不到）时由模拟用户作答 —— 实验配置的 `user_model` 扮演用户，只依据 brief 回答；没带的任务按推荐项回答。
@@ -73,7 +77,24 @@ uv run python -m atlas_bench agent cleanup                                 # 删
   `experiments/clarify.yaml` 比较「能提问 / 能提问 + 澄清清单 / 不能提问」；报告的「需求澄清」一节给出
   模糊题的提问率与成功率、清晰题的误问率与成功率。
 - 结果：`var/bench/runs/<时间>-<实验名>/` 下 `trials/<配置>.jsonl`（逐次结果）、`raw/`（原始轨迹）、`summary.json`、`report.md` / `report.html`。
-- 自带的 `demo` 是走通流程用的 7 题（代码修复、重构、数据处理、多步小工具）；Terminal-Bench 等公开任务集的导入器是下一步。
+- 自带的 `demo` 是走通流程用的 7 题（代码修复、重构、数据处理、多步小工具）。
+
+### Terminal-Bench 2
+
+```bash
+uv run python -m atlas_bench import tbench                  # 第一批 15 题 → var/bench/agent-tasks/tbench（另有 images.txt、SOURCE.yaml）
+uv run python -m atlas_bench import tbench regex-log fix-git # 指定题目；--ref 换仓库提交（默认固定一个）
+deploy/server/images.sh pull $(cat var/bench/agent-tasks/tbench/images.txt)   # 在服务器上预拉题目镜像
+uv run python -m atlas_bench agent run agent-platform/bench/experiments/tbench.yaml
+```
+
+- 前提：部署了评测档沙箱（`OPENSANDBOX_BENCH=1 deploy/local/opensandbox.sh`，root、根可写，镜像前缀默认放行 `alexgshaw/`）；
+  连不上 GitHub 的部署要给评测档沙箱配出网代理（112：`deploy/server/bench-egress.sh`，否则校验卡在下载 uv）；
+  经模型管理平台时，新建的评测智能体要先分配模型（`agent run … --prepare-only` 列出 id）。
+  每题的 `agent_patch` 把智能体的沙箱换成题目镜像、`profile: bench`；校验是 `sandbox` 模式。
+- 下载走 `HTTPS_PROXY`；下载过的题目缓存在 `var/bench/cache/tbench/<提交>/`。
+- 与官方榜单的差异（`importers/tbench.py`）：资源上限用平台的沙箱配置；Atlas 的命令从 `/workspace` 开始，
+  指令前加了一行起始目录；时间预算含沙箱启动；校验时现场联网装 pytest。
 
 ## 已实现 / 待做
 

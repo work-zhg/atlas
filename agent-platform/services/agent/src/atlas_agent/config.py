@@ -164,6 +164,17 @@ class Settings(BaseSettings):
     #: 路由表在进程内缓存多久（§9）。操作失败时立即作废
     sandbox_route_cache_s: float = 2.0
 
+    # ── 评测档沙箱：OpenSandbox 的 opensandbox-bench 实例（root、根可写）──────────────
+    #: ★ 只给评测用：Terminal-Bench 这类题目按 root 设计。不配地址 = 这个部署没有评测档，
+    #:   profile=bench 的智能体执行命令时报「沙箱启动失败」
+    opensandbox_bench_url: AnyHttpUrl | None = None
+    opensandbox_bench_api_key: SecretStr = SecretStr("")
+    #: 评测档可用的镜像前缀。与 sandbox_image_allow_prefixes 分开：root 档的放行面单独管
+    sandbox_bench_image_allow_prefixes: list[str] = []
+    #: 评测档沙箱的出网代理（http://用户:口令@主机:端口）。★ 只注入评测档：题目按「能上网」设计
+    #:   （校验时还要从 GitHub 装 uv），而部署环境未必直连得了。空 = 不设代理
+    sandbox_bench_proxy: SecretStr = SecretStr("")
+
     # ── ACP Pod：OpenSandbox 的 opensandbox-acp 实例（doc/sandbox-opensandbox-design.html §11）──
     opensandbox_acp_url: AnyHttpUrl = AnyHttpUrl("http://opensandbox-acp:8080")
     opensandbox_acp_api_key: SecretStr = SecretStr("")
@@ -314,8 +325,8 @@ class Settings(BaseSettings):
 
     # ── MCP（doc/mcp-design.html 第二版）──────────────────────────────
     #: MCP 网关地址。Atlas 和 Pod 里的 CLI 都只连它：服务地址是 {mcp_gateway_url}/mcp/{服务名}，
-    #: 看不到 Higress。服务、工具定义、复核结论都从网关读，Atlas 不自己发现工具；调用带这一轮
-    #: 权限主体的 API Key。空 = 没接入：引用了 MCP 工具的 Agent 保存与运行都明确报错
+    #: 看不到上游。服务、工具定义都从网关读，Atlas 不自己发现工具；调用带这个智能体的 MCP Key。
+    #: 空 = 没接入：引用了 MCP 工具的 Agent 保存与运行都明确报错
     mcp_gateway_url: str | None = None
     #: 网关元数据（服务、工具定义、复核结论）的进程内缓存时间。另在 Redis 留一份：网关暂时不可用
     #: 时装配照样能用缓存的定义
@@ -342,16 +353,16 @@ class Settings(BaseSettings):
     #: 调平台的超时
     model_platform_timeout_s: float = 10.0
 
-    # ── 配置服务（atlas-config）────────────────────────────────────────
+    # ── 技能应用（atlas-skill）─────────────────────────────────────────
     #: 技能目录的来源。空 = 未接入：
     #:   · 技能引用必须带版本号，保存时不做存在性校验（兼容接入前的行为）
     #:   · 描述以 slug 兜底
-    config_base_url: str | None = None
+    skill_base_url: str | None = None
     #: 可变状态（技能 status、下架清单）的缓存时间。
     #: ★ 已发布技能版本的内容不受它影响 —— 版本不可变，永久缓存。
-    configplane_status_ttl_s: float = 60.0
+    skill_status_ttl_s: float = 60.0
     #: 技能版本内容的磁盘缓存。进程重启不该让全部会话重新拉配置。
-    configplane_cache_dir: Path = _REPO_ROOT / "var" / "cache" / "configplane"
+    skill_cache_dir: Path = _REPO_ROOT / "var" / "cache" / "skill"
     #: 单个 agent 所挂技能描述的总长上限 —— 描述常驻每一轮上下文（设计 §7.2）
     skill_index_budget_chars: int = 2000
 

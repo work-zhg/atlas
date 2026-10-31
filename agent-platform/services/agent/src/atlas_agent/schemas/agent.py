@@ -24,6 +24,8 @@ from atlas_agent.domain.spec import (
     McpDriftPolicy,
     ModelSpec,
     PermissionMode,
+    SandboxProfile,
+    SandboxSpec,
     SkillRefSpec,
     SubAgentSpec,
 )
@@ -186,6 +188,17 @@ class CliSpecIn(BaseModel):
         )
 
 
+class SandboxSpecIn(BaseModel):
+    """native 的 Shell 沙箱（见 domain/spec.py::SandboxSpec）。快照纪律：字段都有默认值。"""
+
+    #: 空 = 平台默认镜像
+    image: str = Field(default="", max_length=256)
+    profile: SandboxProfile = "strict"
+
+    def to_engine(self) -> SandboxSpec:
+        return SandboxSpec(image=self.image.strip(), profile=self.profile)
+
+
 class KnowledgeSpecIn(BaseModel):
     dataset_ids: list[str] = Field(default_factory=list, max_length=10)
     mode: Literal["auto", "tool"] = "auto"
@@ -234,6 +247,8 @@ class AgentSpecIn(BaseModel):
     #: ★ 原先「勾了 bash 强制 execute 进必审列表」的校验已删除：命令执行由审批模式管 ——
     #:   手动请示、自动交判断器、规划拦下，都在中间件里强制执行，不靠提示词（设计 D7）
     approval: ApprovalSpecIn = Field(default_factory=ApprovalSpecIn)
+    #: native 的 Shell 沙箱（默认平台镜像、strict 档 —— 历史快照没有这个字段）
+    sandbox: SandboxSpecIn = Field(default_factory=SandboxSpecIn)
 
     def to_engine(self, *, slug: str, name: str) -> AgentSpec:
         return AgentSpec(
@@ -252,6 +267,7 @@ class AgentSpecIn(BaseModel):
             mcp_drift_policy=self.mcp_drift_policy,
             knowledge=self.knowledge.to_engine(),
             approval=self.approval.to_engine(),
+            sandbox=self.sandbox.to_engine(),
         )
 
 

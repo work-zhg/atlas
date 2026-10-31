@@ -7,6 +7,7 @@ import { usePathname } from "next/navigation";
 
 import { useGwMe } from "@/api/mcp-gateway";
 import { useMgMe } from "@/api/model-gateway";
+import { useSkMe } from "@/api/skill-app";
 import { authHeaders } from "@/lib/http";
 import { can, useMe } from "@/lib/session";
 
@@ -28,18 +29,14 @@ interface NavItem {
   mcpGateway?: boolean;
   /** 由模型管理平台决定显不显示：连得上就显示（人人都能申请自己的用户 Key） */
   modelGateway?: boolean;
+  /** 由技能应用决定显不显示（技能应用是用户中心里的独立应用）：在它的可访问范围内就显示 */
+  skillApp?: boolean;
 }
 
 const NAV: NavItem[] = [
   { href: "/chat", icon: "chat", label: "对话", match: "/chat", ops: ["chat:use"] },
   { href: "/agents", icon: "bot", label: "智能体", match: "/agents", ops: ["chat:use"] },
-  {
-    href: "/skills",
-    icon: "spark",
-    label: "技能",
-    match: "/skills",
-    ops: ["skill:upload", "skill:review", "agent:create"],
-  },
+  { href: "/skills", icon: "spark", label: "技能", match: "/skills", ops: [], skillApp: true },
   {
     href: "/knowledge",
     icon: "book",
@@ -64,9 +61,12 @@ export function Rail() {
   const qc = useQueryClient();
   const { data: me } = useMe();
   const { data: gwMe } = useGwMe();
-  const mcpVisible = !!gwMe && (gwMe.can_manage || gwMe.owned_services.length > 0 || gwMe.owns_all);
+  // 人人都能看公开服务、申请自己的用户 Key：网关连得上就显示
+  const mcpVisible = !!gwMe;
   const { data: mgMe } = useMgMe();
   const modelVisible = !!mgMe;
+  const { data: skMe } = useSkMe();
+  const skillVisible = !!skMe;
   // 文件预览页在新标签里单独打开，是一个整页查看器，不需要主导航；登录页也不要
   if (pathname.startsWith("/files/") || pathname === "/login") return null;
 
@@ -84,7 +84,13 @@ export function Rail() {
       </div>
 
       {NAV.filter((item) =>
-        item.mcpGateway ? mcpVisible : item.modelGateway ? modelVisible : can(me, ...item.ops),
+        item.mcpGateway
+          ? mcpVisible
+          : item.modelGateway
+            ? modelVisible
+            : item.skillApp
+              ? skillVisible
+              : can(me, ...item.ops),
       ).map((item) => {
         const active = pathname === item.match || pathname.startsWith(`${item.match}/`);
         return (

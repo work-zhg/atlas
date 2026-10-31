@@ -10,6 +10,8 @@
   「全部数据 · Owner」；
 - MCP 交给 MCP 网关（catalog.RETIRED_MCP_*）：操作码 mcp:manage、数据编码 AtlasMcpServer 删除前，
   授权搬到网关的应用名下。要先登记网关（python -m atlas_mcpgateway register-uc）。
+- 技能交给技能应用（catalog.RETIRED_SKILL_OPS）：skill:upload、skill:review、audit:view 删除前，
+  持有人换成技能应用的角色。要先登记技能应用（python -m atlas_skill register-uc）。
 
 ★ 与 AI TeamFlow 的同名脚本同一套做法，各自一份（不为几十行抽公共包）。
 """
@@ -120,7 +122,7 @@ def _retire_mcp(uc: _UC, aid: str, ops: dict[str, Any]) -> set[str]:
        （MCP 管理员要能给别人授权：角色管「能不能做」，「对哪些服务」是数据权限）
     ② 数据编码 AtlasMcpServer 的授权 → McpServer：编码级的按原范围搬；单条的按数据标识（服务名）
        对上网关里登记过的服务。全部搬完才清掉旧数据、删旧编码；对不上的先保留并列出
-       （先在网关登记这些服务：python -m atlas_mcpgateway import …，再跑一次）
+       （先在 MCP 管理端登记这些服务，再跑一次）
     ★ 网关还没登记到用户中心时什么都不删：删了授权就丢了。
     ★ 幂等：用户中心按 (编码 / 角色, 主体) 去重，重复执行只是更新为同样的级别。
     """
@@ -194,6 +196,52 @@ def _retire_mcp(uc: _UC, aid: str, ops: dict[str, Any]) -> set[str]:
     return set()
 
 
+def _retire_skill(uc: _UC, aid: str, ops: dict[str, Any]) -> set[str]:
+    """技能交给技能应用（atlas_skill/register.py）。→ 这次还不能删的操作码。
+
+    持有 skill:upload 的（直接 + 经岗位）→ 技能应用的 SKILL_AUTHOR；skill:review → SKILL_ADMIN；
+    audit:view 不单独搬（catalog.RETIRED_SKILL_OPS）。
+    ★ 技能应用还没登记到用户中心时什么都不删：删了授权就丢了。
+    ★ 幂等：用户中心按 (角色, 主体) 去重，重复执行只是更新为同样的授权。
+    """
+    retiring = {code: ops[code] for code in catalog.RETIRED_SKILL_OPS if code in ops}
+    if not retiring:
+        return set()
+    app = next((a for a in uc.get("/api/v1/apps") if a.get("code") == catalog.SKILL_APP), None)
+    roles = {} if app is None else {r["code"]: r for r in uc.get(f"/api/v1/apps/{app['id']}/roles")}
+    if not {r for r in catalog.RETIRED_SKILL_OPS.values() if r} <= roles.keys():
+        print(
+            f"  ⚠ 技能应用还没登记到用户中心：{'、'.join(retiring)} 先保留。"
+            "先跑 python -m atlas_skill register-uc，再跑一次"
+        )
+        return set(retiring)
+
+    for code, op in retiring.items():
+        target = catalog.RETIRED_SKILL_OPS[code]
+        if target is None:
+            continue
+        moved = 0
+        for role in uc.get(f"/api/v1/apps/{aid}/roles"):
+            if op["id"] not in uc.get(f"/api/v1/roles/{role['id']}").get("operation_ids", []):
+                continue
+            grants = uc.get(f"/api/v1/roles/{role['id']}/grants")
+            rows = list(grants["grants"]) + [g for p in grants["positions"] for g in p["grants"]]
+            for row in rows:
+                uc.send(
+                    "POST",
+                    "/api/v1/grants",
+                    {
+                        "kind": "role",
+                        "target_ids": [roles[target]["id"]],
+                        "subjects": [{"type": row["subject"]["type"], "id": row["subject"]["id"]}],
+                        "include_sub": bool(row.get("include_sub")),
+                    },
+                )
+                moved += 1
+        print(f"  ↪ {code} 退役：{moved} 条授权换成技能应用的 {target}")
+    return set()
+
+
 def _data_objects(uc: _UC, code: str) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     page = 1
@@ -225,7 +273,7 @@ def _move_mcp_data(uc: _UC, old_dt: dict[str, Any], gw_dt: dict[str, Any]) -> bo
     if missing:
         print(
             f"  ⚠ {catalog.RETIRED_MCP_DATA} 先保留：MCP 网关里还没有 {'、'.join(missing)}。"
-            "先在网关登记这些服务（python -m atlas_mcpgateway import …），再跑一次"
+            "先在 MCP 管理端登记这些服务，再跑一次"
         )
         return False
     me = uc.get("/api/v1/auth/me")
@@ -275,6 +323,7 @@ def register(base_url: str, account: str, password: str, *, tenant: str | None =
     ops = {o["code"]: o for o in uc.get(f"/api/v1/apps/{aid}/operations")}
     _retire_admin_ops(uc, aid, ops)  # 必须在删除目录外的操作码之前
     keep = _retire_mcp(uc, aid, ops)  # 同上；网关还没登记时 mcp:manage 这次先不删
+    keep |= _retire_skill(uc, aid, ops)  # 同上；技能应用还没登记时这几个先不删
     want = {code for _, code, _ in catalog.OPERATIONS} | keep
     for module, code, name in catalog.OPERATIONS:
         if code not in ops:
@@ -338,11 +387,12 @@ def register(base_url: str, account: str, password: str, *, tenant: str | None =
                 {"name": spec["name"], "description": spec["description"]},
             )
         rid = roles[spec["code"]]["id"]
-        uc.send(
-            "PUT",
-            f"/api/v1/roles/{rid}/operations",
-            {"ids": [ops[c]["id"] for c in spec["operations"]]},
-        )
+        ids = [ops[c]["id"] for c in spec["operations"]]
+        if keep:
+            # ★ 这次先不删的操作码，角色原来有的照旧留着：下次退役时要靠它找到持有人
+            held = set(uc.get(f"/api/v1/roles/{rid}").get("operation_ids", []))
+            ids += [ops[c]["id"] for c in keep if c in ops and ops[c]["id"] in held]
+        uc.send("PUT", f"/api/v1/roles/{rid}/operations", {"ids": ids})
         uc.send(
             "PUT", f"/api/v1/roles/{rid}/menus", {"ids": [menus[c]["id"] for c in spec["menus"]]}
         )

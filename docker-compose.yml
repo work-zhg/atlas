@@ -63,22 +63,24 @@ services:
         mc mb --ignore-existing atlas/atlas-dev
     restart: "no"
 
-  # 配置服务（atlas-config）的库：同一实例上的独立 database（技能 / MCP 设计 §15）。
-  # 与 langfuse-init-db 同款幂等写法；不挂 profile —— 配置服务是必要组件。
-  config-init-db:
+  # 技能应用（atlas-skill）的库：同一实例上的独立 database（技能 / MCP 设计 §15）。
+  # 与 langfuse-init-db 同款幂等写法；不挂 profile —— 技能应用是必要组件。
+  # ★ 原来叫 atlas_config：已有的本机库改名即可沿用数据（先停掉用它的进程）——
+  #   docker exec atlas-pg psql -U atlas -d atlas -c "ALTER DATABASE atlas_config RENAME TO atlas_skill"
+  skill-init-db:
     image: postgres:16-alpine
-    container_name: atlas-config-initdb
+    container_name: atlas-skill-initdb
     depends_on:
       postgres: {condition: service_healthy}
     entrypoint: ["/bin/sh", "-c"]
     command:
       - >-
         psql "postgresql://atlas:atlas@postgres:5432/atlas"
-        -tc "SELECT 1 FROM pg_database WHERE datname='atlas_config'" | grep -q 1 ||
-        psql "postgresql://atlas:atlas@postgres:5432/atlas" -c "CREATE DATABASE atlas_config"
+        -tc "SELECT 1 FROM pg_database WHERE datname='atlas_skill'" | grep -q 1 ||
+        psql "postgresql://atlas:atlas@postgres:5432/atlas" -c "CREATE DATABASE atlas_skill"
     restart: "no"
 
-  # 知识库服务（atlas-knowledge）的库：同一实例上的独立 database，与 config-init-db 同款幂等写法。
+  # 知识库服务（atlas-knowledge）的库：同一实例上的独立 database，与 skill-init-db 同款幂等写法。
   knowledge-init-db:
     image: postgres:16-alpine
     container_name: atlas-knowledge-initdb
@@ -148,7 +150,7 @@ services:
         psql "postgresql://atlas:atlas@postgres:5432/atlas" -c "CREATE DATABASE atlas_litellm"
     restart: "no"
 
-  # 用户中心（atlas-usercenter）的库：同一实例上的独立 database，与 config-init-db 同款幂等写法。
+  # 用户中心（atlas-usercenter）的库：同一实例上的独立 database，与 skill-init-db 同款幂等写法。
   usercenter-init-db:
     image: postgres:16-alpine
     container_name: atlas-usercenter-initdb

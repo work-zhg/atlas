@@ -1,0 +1,42 @@
+# Terminal-Bench 2 第一批（15 题）：python -m atlas_bench import tbench 导入到 var/bench/agent-tasks/tbench。
+#
+#   native-bash  只有 Shell —— 与 Terminal-Bench 的中立基线 Terminus 2（只有一个终端）同构
+#   native-full  文件 + Shell + 待办 —— Atlas 原生智能体的常规配置
+#
+# 前提（缺一个都跑不了）：
+#   · 部署了评测档沙箱（opensandbox-bench：root、根可写），镜像前缀放行 alexgshaw/
+#   · 每题的 agent_patch 把沙箱换成题目镜像、评测档；校验在 Agent 用过的沙箱里原地跑
+#     （POST /v1/threads/{id}/sandbox/exec），Agent 一条命令没执行过 = 不通过
+#   · 先在节点上预拉题目镜像：时间预算从发消息算起，现拉镜像会吃掉预算
+#   · 题目与校验要联网（test.sh 从 GitHub 装 uv、Python）：连不上 GitHub 的部署要给评测档沙箱配代理
+#     （112：deploy/server/bench-egress.sh）。没代理时校验卡在下载、记成不通过（10-30 冒烟实测）
+#
+# ★ 审批固定 manual：每条命令都请示、评测自动批准（次数与等待计入指标）。不用 auto ——
+#   那样判断器也成了变量（而且判断器的服务模型未必配了）。
+# ★ 与官方榜单的差异见 importers/tbench.py：资源上限、起始目录、预算含沙箱启动、校验现场联网。
+name: tbench
+suites: [tbench]
+trials: 3
+# ★ 112 单节点 4 核：CPU request 已分出 94%，只剩约 230m，每个沙箱 request 100m —— 并发 3 时第三个沙箱
+#   会 Pending 到创建超时（记成平台错误）。节点余量变了再调
+concurrency: 2
+approval_policy: approve_all
+comparisons:
+  - [native-bash, native-full]   # 文件工具、待办清单在终端类任务上的边际贡献
+variants:
+  native-bash:
+    description: 原生：只有 Shell（对照 Terminus 2）
+    agent:
+      system_prompt: 你在一个 Linux 环境里完成用户的任务。直接动手做，做完自己验证，最后用一两句话说明结果。
+      model: {model: deepseek-v4-pro, provider: anthropic}
+      tool_names: [bash]
+      limits: {max_steps: 200, max_total_tokens: 2000000}
+      approval: {default_mode: manual, allowed_modes: [manual]}
+  native-full:
+    description: 原生：文件 + Shell + 待办
+    agent:
+      system_prompt: 你在一个 Linux 环境里完成用户的任务。直接动手做，做完自己验证，最后用一两句话说明结果。
+      model: {model: deepseek-v4-pro, provider: anthropic}
+      tool_names: [filesystem, bash, write_todos]
+      limits: {max_steps: 200, max_total_tokens: 2000000}
+      approval: {default_mode: manual, allowed_modes: [manual]}

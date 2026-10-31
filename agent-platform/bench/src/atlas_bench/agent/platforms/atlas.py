@@ -12,6 +12,7 @@
     等终态    GET  /v1/runs/{id} 轮询；超预算 → POST /v1/runs/{id}/cancel
     取轨迹    GET  /v1/runs/{id}/trace（含子 run）+ 各 run 的用量
     取产物    GET  /v1/threads/{id}/files + download
+    原地校验  POST /v1/threads/{id}/sandbox/exec（sandbox 模式：在 Agent 用过的评测档沙箱里执行）
     清理      DELETE /v1/threads/{id}；cleanup 命令删除 bench- 开头的智能体
 
 身份：内网免令牌（内网身份传递 §12）—— 请求头 X-Uid = 评测用户 atlas-bench（需 agent:create +
@@ -21,6 +22,7 @@ chat:use），X-Caller-App: bench。不写 X-Auth-Uid：按谁判由 Atlas 按 A
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import hashlib
 import json
@@ -42,6 +44,9 @@ logger = logging.getLogger(__name__)
 AGENT_PREFIX = "bench-"
 _TERMINAL = {"succeeded", "failed", "cancelled", "interrupted"}
 _POLL_S = 2.0
+#: GET 遇到连接断开时的重试（次数 × 间隔 ≈ 等端口转发重新拉起的时间，见 deploy/local/forward.sh）
+_GET_RETRIES = 30
+_GET_RETRY_S = 2.0
 #: 下载产物的单文件上限（校验用不到大文件；超过的跳过并记下）
 _DOWNLOAD_MAX = 5 * 1024 * 1024
 
@@ -119,7 +124,16 @@ class AtlasAgentPlatform:
         await self._c.aclose()
 
     async def _req(self, method: str, path: str, **kw: Any) -> Any:
-        r = await self._c.request(method, path, **kw)
+        # ★ 连接断开（端口转发重连中）：GET 幂等，等一会儿再试；其余请求重发会出副作用（重复发
+        #   消息、重复审批），不重试。都转成 AtlasError —— 只记这个 trial 平台错误，不拖垮整批
+        for attempt in range(_GET_RETRIES + 1):
+            try:
+                r = await self._c.request(method, path, **kw)
+                break
+            except httpx.TransportError as exc:
+                if method != "GET" or attempt == _GET_RETRIES:
+                    raise AtlasError(f"{method} {path} → 连接失败：{exc!r}") from exc
+                await asyncio.sleep(_GET_RETRY_S)
         if r.status_code >= 400:
             try:
                 detail = r.json().get("detail") or r.json().get("message") or r.text[:300]
@@ -453,6 +467,47 @@ class AtlasAgentPlatform:
             if r.status_code == 200:
                 files[f["path"]] = r.content
         return files, skipped
+
+    async def sandbox_exec(
+        self,
+        tr: TrialRun,
+        command: str,
+        *,
+        cwd: str,
+        timeout_s: float,
+        files: dict[str, bytes] | None = None,
+    ) -> dict[str, Any] | None:
+        """在会话正在运行的评测档沙箱里执行一条命令（sandbox 模式的校验）。
+
+        → {exit_code, output, truncated}；None = 会话没有正在运行的沙箱（平台不会为它新建）。
+        files：执行前写进沙箱的 {绝对路径: 内容}。
+        """
+        body = {
+            "command": command,
+            "cwd": cwd,
+            "timeout_s": int(timeout_s),
+            "files": [
+                {"path": path, "content_b64": base64.b64encode(data).decode()}
+                for path, data in (files or {}).items()
+            ],
+        }
+        # 请求一直挂到命令结束：超时要盖过命令自己的上限
+        try:
+            r = await self._c.post(
+                f"/v1/threads/{tr.thread_id}/sandbox/exec", json=body, timeout=timeout_s + 120
+            )
+        except httpx.TransportError as exc:  # 不重试：校验脚本会再跑一遍
+            raise AtlasError(f"POST sandbox/exec → 连接失败：{exc!r}") from exc
+        if r.status_code >= 400:
+            try:
+                error = r.json().get("error") or {}
+            except ValueError:
+                error = {}
+            if error.get("kind") == "sandbox_not_running":
+                return None
+            detail = error.get("message") or r.text[:300]
+            raise AtlasError(f"POST sandbox/exec → {r.status_code}：{detail}")
+        return r.json()
 
     async def delete_thread(self, tr: TrialRun) -> None:
         for tid in [tr.thread_id, *tr.setup_threads]:

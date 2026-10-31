@@ -361,6 +361,28 @@ class CliSpec:
     permission_mode: PermissionMode = "auto"
 
 
+#: native 沙箱的档位。
+#:
+#: strict —— 平台默认：UID 1000、根只读、drop ALL（opensandbox-sbx）
+#: bench  —— 评测档：root、根可写（opensandbox-bench）。Terminal-Bench 这类题目按 root 设计
+#:           （apt 装包、写 /app 与 /logs），strict 档跑不了。只在部署了评测档的环境可用
+SandboxProfile = Literal["strict", "bench"]
+
+
+@dataclass(frozen=True)
+class SandboxSpec:
+    """native agent 的 Shell 沙箱。空镜像 = 平台默认镜像（sandbox_default_image）。
+
+    ★ 镜像要在部署配置的允许前缀里（strict 与 bench 各一份）：任意镜像 = 任意代码以会话身份
+      跑在集群里。不在保存时校验，第一次执行命令时报「沙箱启动失败」—— 与 cli.image 一致。
+    ★ 沙箱按工作区建，native SubAgent 与父会话共用一个：SubAgent 没有自己的这一段，派生时继承父的。
+    ★ 改了配置，已经在跑的沙箱不会换：闲置回收之后，下一次执行命令才按新配置建。
+    """
+
+    image: str = ""
+    profile: SandboxProfile = "strict"
+
+
 #: 子智能体的会话模式。
 #:
 #: persistent —— 子智能体**持有一个子会话**：第二次委派恢复上次的上下文。
@@ -478,6 +500,8 @@ class AgentSpec:
     knowledge: KnowledgeSpec = field(default_factory=KnowledgeSpec)
     #: 审批模式的默认值与允许范围。★ 有默认值（快照纪律）
     approval: ApprovalSpec = field(default_factory=ApprovalSpec)
+    #: native 的 Shell 沙箱（镜像、档位）。★ 有默认值（快照纪律）；acp 的镜像在 cli.image
+    sandbox: SandboxSpec = field(default_factory=SandboxSpec)
 
     def subagent(self, name: str) -> SubAgentSpec | None:
         """按名字取子智能体配置。子会话执行时用它派生出独立的 AgentSpec。"""
@@ -495,6 +519,9 @@ class AgentSpec:
             raise InvalidSpec("acp agent 的知识库只能以工具方式接入（mode='tool'）")
         if self.kind == "acp" and self.cli is None:
             raise InvalidSpec("kind='acp' 必须提供 cli（cli_type / adapter / image）")
+        if self.kind == "acp" and self.sandbox != SandboxSpec():
+            # 配了却不生效（§13.2）：acp 的 Pod 镜像在 cli.image
+            raise InvalidSpec("acp agent 不用 sandbox 配置：Pod 镜像在 cli.image 里配")
         if self.kind == "acp" and any(not name.startswith("mcp:") for name in self.tool_names):
             # ★ acp 的工具来自 CLI 自带，平台内置工具对它没有意义。勾了是
             #   配置错误 —— 报出来而不是静默忽略（Agent 管理 §05）。
@@ -575,4 +602,6 @@ def spec_for_subagent(parent: AgentSpec, name: str) -> AgentSpec:
         mcp_drift_policy=sub.mcp_drift_policy,
         # 子 run 的模式由派活那一刻父 run 的模式决定（run.approval_mode），这里只为装配取默认值
         approval=parent.approval,
+        # ★ native SubAgent 与父会话共用工作区的沙箱：谁先执行命令谁建，配置必须一致
+        sandbox=parent.sandbox if native else SandboxSpec(),
     )

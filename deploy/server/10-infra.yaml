@@ -21,7 +21,7 @@ metadata: {name: postgres-init, namespace: atlas-infra}
 data:
   # 只在数据目录为空时执行（首次部署）。与 compose 的 *-init-db 同一组库
   10-databases.sql: |
-    CREATE DATABASE atlas_config;
+    CREATE DATABASE atlas_skill;
     CREATE DATABASE atlas_knowledge;
     CREATE DATABASE atlas_memory;
     CREATE DATABASE atlas_mcpgateway;

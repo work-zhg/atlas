@@ -2,116 +2,256 @@
 
 from __future__ import annotations
 
-from collections import Counter
-
-from ..db.models import McpApiKey, McpService
-from ..definitions import model_name, read_only
+from ..dataplane import callable_tool
+from ..db.models import McpApiKey, McpService, McpTool
+from ..definitions import content_hash, model_name, read_only
+from ..grants import KeyGrant
 from ..keys import mask
-from ..registry import ToolView
+from ..perms import KeyAccess
+from ..upstreams import grpc as grpc_up
+from ..upstreams import rest as rest_up
+from ..upstreams.credentials import hint
+from ..upstreams.hub import Discovered
 from .schemas import (
-    AccessCheckOut,
+    CredentialOut,
+    DiscoveredOut,
+    DiscoveredToolOut,
+    KeyGrantOut,
     KeyOut,
+    KeyRefOut,
     MetadataServiceOut,
-    ReviewOut,
+    MetadataToolOut,
+    MyAccessOut,
     ServiceDetailOut,
     ServiceOut,
+    ServiceScopeOut,
     ToolOut,
 )
 
+#: 停用的工具在给 Atlas 的元数据里以这条 issue 出现：Atlas 按「有 issue = 不可用」处理
+DISABLED_ISSUE = "MCP 管理员已停用这个工具"
 
-def tool_out(service: str, view: ToolView) -> ToolOut:
-    t = view.row
-    review = view.review
+
+def credential_out(svc: McpService) -> CredentialOut:
+    data = dict(svc.credential or {})
+    return CredentialOut(
+        type=str(data.pop("type", "none")),
+        **{k: v for k, v in data.items() if k in CredentialOut.model_fields},
+        hint=hint(svc.credential_secret),
+    )
+
+
+def my_access(
+    svc: McpService, *, owner: bool, access: KeyAccess | None, has_key: bool
+) -> MyAccessOut:
+    if svc.visibility == "public":
+        return MyAccessOut(owner=owner, scope="public")
+    if not has_key:
+        return MyAccessOut(owner=owner, scope="no_key")
+    if access is None:
+        return MyAccessOut(owner=owner, scope="none")
+    if svc.name in access.servers:
+        return MyAccessOut(owner=owner, scope="all")
+    tools = sorted(access.tools_of(svc.name))
+    return MyAccessOut(owner=owner, scope="tools" if tools else "none", tools=tools)
+
+
+def service_out(svc: McpService, tools: list[McpTool], my: MyAccessOut | None = None) -> ServiceOut:
+    current = [t for t in tools if t.removed_at is None]
+    return ServiceOut(
+        name=svc.name,
+        display_name=svc.display_name,
+        description=svc.description,
+        kind=svc.kind,
+        visibility=svc.visibility,
+        enabled=svc.status == "enabled",
+        connection=dict(svc.connection or {}),
+        credential=credential_out(svc),
+        pass_identity=svc.pass_identity,
+        created_by=svc.created_by,
+        created_at=svc.created_at,
+        updated_at=svc.updated_at,
+        fetched_at=svc.fetched_at,
+        fetch_error=svc.fetch_error,
+        changed_at=svc.changed_at,
+        tool_count=len(current),
+        active_tool_count=sum(1 for t in current if callable_tool(t)),
+        my=my or MyAccessOut(),
+    )
+
+
+def tool_out(service: str, t: McpTool) -> ToolOut:
     return ToolOut(
         name=t.name,
         model_name=model_name(service, t.name),
         description=t.description,
         input_schema=t.input_schema,
         annotations=t.annotations,
-        read_only=read_only(t.annotations),
-        digest=t.digest,
+        effect=t.effect,
+        mapping=t.mapping,
+        status=t.status,
         issues=list(t.issues),
-        status=view.status,
+        digest=t.digest,
         changed_at=t.changed_at,
         previous=t.previous,
-        review=ReviewOut(
-            decision=review.decision,
-            comment=review.comment,
-            reviewed_by=review.reviewed_by,
-            reviewed_at=review.updated_at,
-        )
-        if review
-        else None,
+        callable=callable_tool(t),
     )
 
 
-def service_out(svc: McpService, tools: list[ToolView]) -> ServiceOut:
-    counts = Counter(v.status for v in tools if v.row.removed_at is None)
-    return ServiceOut(
-        name=svc.name,
-        display_name=svc.display_name,
-        description=svc.description,
-        upstream_kind=svc.upstream_kind,
-        upstream_name=svc.upstream_name,
-        credential_mode=svc.credential_mode,
-        review_required=svc.review_required,
-        call_timeout_s=svc.call_timeout_s,
-        enabled=svc.status == "enabled",
-        created_by=svc.created_by,
-        updated_by=svc.updated_by,
-        created_at=svc.created_at,
-        updated_at=svc.updated_at,
-        fetched_at=svc.fetched_at,
-        fetch_error=svc.fetch_error,
-        changed_at=svc.changed_at,
-        content_hash=svc.content_hash,
-        access_check=AccessCheckOut(
-            ok=svc.access_check_ok,
-            detail=svc.access_check_detail,
-            checked_at=svc.access_checked_at,
-        ),
-        tool_counts=dict(counts),
-    )
-
-
-def service_detail(svc: McpService, tools: list[ToolView]) -> ServiceDetailOut:
-    current = [v for v in tools if v.row.removed_at is None]
+def service_detail(
+    svc: McpService,
+    tools: list[McpTool],
+    *,
+    my: MyAccessOut,
+    can_manage: bool,
+    can_assign: bool,
+) -> ServiceDetailOut:
+    current = [t for t in tools if t.removed_at is None]
     return ServiceDetailOut(
-        **service_out(svc, tools).model_dump(),
-        tools=[tool_out(svc.name, v) for v in current],
-        removed_tools=sorted(v.row.name for v in tools if v.row.removed_at is not None),
+        **service_out(svc, tools, my).model_dump(),
+        tools=[tool_out(svc.name, t) for t in current],
+        removed_tools=sorted(t.name for t in tools if t.removed_at is not None),
+        can_manage=can_manage,
+        can_assign=can_assign,
     )
 
 
-def metadata_out(svc: McpService, tools: list[ToolView]) -> MetadataServiceOut:
-    current = [v for v in tools if v.row.removed_at is None]
+def discovered_out(found: Discovered, *, existing: set[str] | None = None) -> DiscoveredOut:
+    existing = existing or set()
+    items: list[DiscoveredToolOut] = []
+    if found.kind == "mcp":
+        items = [
+            DiscoveredToolOut(
+                key=d.name,
+                name=d.name,
+                label=d.name,
+                description=d.description,
+                effect=d.effect,
+                input_schema=d.input_schema,
+                issues=list(d.issues),
+                exists=d.name in existing,
+            )
+            for d in found.definitions
+        ]
+    elif found.kind == "rest":
+        items = [_operation_out(o, existing) for o in found.operations]
+    else:
+        items = [_method_out(m, existing) for m in found.methods]
+    return DiscoveredOut(kind=found.kind, tools=items, services=found.services)
+
+
+def _operation_out(o: rest_up.Operation, existing: set[str]) -> DiscoveredToolOut:
+    from ..definitions import schema_from_params
+
+    return DiscoveredToolOut(
+        key=o.key,
+        name=o.name,
+        label=o.key,
+        description=o.description,
+        effect=o.effect,
+        input_schema=schema_from_params(o.params),
+        unsupported=o.unsupported,
+        exists=o.name in existing,
+    )
+
+
+def _method_out(m: grpc_up.Method, existing: set[str]) -> DiscoveredToolOut:
+    return DiscoveredToolOut(
+        key=m.key,
+        name=m.name,
+        label=m.key,
+        description=f"gRPC {m.key}",
+        effect=m.effect,
+        input_schema=m.input_schema,
+        stream=m.stream,
+        unsupported=m.unsupported,
+        exists=m.name in existing,
+    )
+
+
+def key_ref(k: McpApiKey) -> KeyRefOut:
+    return KeyRefOut(
+        id=k.uuid,
+        key_type=k.key_type,
+        name=k.name,
+        status=k.status,
+        subject_uid=k.subject_uid,
+        client_code=k.client_code,
+    )
+
+
+def key_grant_out(g: KeyGrant) -> KeyGrantOut:
+    return KeyGrantOut(key=key_ref(g.key), scope=g.scope, tools=sorted(g.tools))
+
+
+def scopes_of(access: KeyAccess | None, services: dict[str, McpService]) -> list[ServiceScopeOut]:
+    if access is None:
+        return []
+    out: list[ServiceScopeOut] = []
+    for name, svc in sorted(services.items()):
+        if svc.visibility != "private":
+            continue
+        if name in access.servers:
+            out.append(ServiceScopeOut(service=name, display_name=svc.display_name, scope="all"))
+        elif tools := sorted(access.tools_of(name)):
+            out.append(
+                ServiceScopeOut(
+                    service=name, display_name=svc.display_name, scope="tools", tools=tools
+                )
+            )
+    return out
+
+
+def key_out(k: McpApiKey, grants: list[ServiceScopeOut] | None = None) -> KeyOut:
+    return KeyOut(
+        id=k.uuid,
+        key_type=k.key_type,
+        user_uid=k.user_uuid,
+        client_type=k.client_type,
+        client_code=k.client_code,
+        name=k.name,
+        subject_uid=k.subject_uid,
+        masked=mask(k.secret),
+        status=k.status,
+        created_by=k.created_by,
+        created_at=k.created_at,
+        rotated_at=k.rotated_at,
+        grants=grants or [],
+    )
+
+
+def metadata_out(svc: McpService, tools: list[McpTool]) -> MetadataServiceOut:
+    current = [t for t in tools if t.removed_at is None]
+    out_tools = []
+    for t in current:
+        issues = list(t.issues) + ([DISABLED_ISSUE] if t.status == "disabled" else [])
+        out_tools.append(
+            MetadataToolOut(
+                name=t.name,
+                model_name=model_name(svc.name, t.name),
+                description=t.description,
+                input_schema=t.input_schema,
+                annotations=t.annotations,
+                read_only=read_only(t.annotations),
+                effect=t.effect,
+                digest=t.digest,
+                issues=issues,
+                status="invalid" if issues else "ok",
+                changed_at=t.changed_at,
+                previous=t.previous,
+            )
+        )
     return MetadataServiceOut(
         name=svc.name,
         display_name=svc.display_name,
         description=svc.description,
+        kind=svc.kind,
+        visibility=svc.visibility,
         enabled=svc.status == "enabled",
-        review_required=svc.review_required,
-        call_timeout_s=svc.call_timeout_s,
-        credential_mode=svc.credential_mode,
         fetched_at=svc.fetched_at,
         fetch_error=svc.fetch_error,
         changed_at=svc.changed_at,
-        content_hash=svc.content_hash,
-        tools=[tool_out(svc.name, v) for v in current],
-        removed_tools=sorted(v.row.name for v in tools if v.row.removed_at is not None),
-    )
-
-
-def key_out(row: McpApiKey) -> KeyOut:
-    return KeyOut(
-        id=row.uuid,
-        subject_uid=row.subject_uid,
-        subject_type=row.subject_type,
-        subject_name=row.subject_name,
-        masked=mask(row.api_key),
-        status=row.status,
-        issued_by=row.issued_by,
-        created_at=row.created_at,
-        rotated_at=row.rotated_at,
-        disabled_at=row.disabled_at,
+        content_hash=svc.content_hash or content_hash(t.digest for t in current),
+        tools=out_tools,
+        removed_tools=sorted(t.name for t in tools if t.removed_at is not None),
     )

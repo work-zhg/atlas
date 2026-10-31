@@ -6,10 +6,7 @@ from typing import Any, ClassVar
 from uuid import uuid4
 
 import pytest
-from atlas_agent.config import Settings
 from atlas_agent.executor import context as ctx
-
-_BASE = {"database_url": "postgresql+asyncpg://x:y@localhost/z", "litellm_key": "k"}
 
 
 class _FS:
@@ -29,56 +26,63 @@ class _FS:
         return R(self.files[path])
 
 
-class _Config:
+class _Store:
+    """库里的平台 / 个人指令（InstructionService 的替身）。"""
+
     payload: ClassVar[dict[str, str]] = {}
     fail = False
 
-    def __init__(self, *_a: Any, **_k: Any) -> None: ...
+    def __init__(self, _session: Any) -> None: ...
 
-    async def get(self, path: str, **params: Any) -> Any:
-        if _Config.fail:
-            raise RuntimeError("config down")
-        assert path == "/internal/instructions" and params["user_id"]
-        return _Config.payload
+    async def for_user(self, user_id: Any) -> tuple[str, str]:
+        if _Store.fail:
+            raise RuntimeError("db down")
+        assert user_id
+        return _Store.payload["platform"], _Store.payload["user"]
+
+
+class _Session:
+    async def __aenter__(self) -> _Session:
+        return self
+
+    async def __aexit__(self, *_exc: Any) -> None: ...
+
+
+def _sessions() -> _Session:
+    return _Session()
 
 
 @pytest.fixture(autouse=True)
-def _fake_config(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(ctx, "ConfigClient", _Config)
-    _Config.payload = {"platform": "", "user": ""}
-    _Config.fail = False
-
-
-def _settings(**kw: Any) -> Settings:
-    return Settings(**_BASE, config_base_url="http://cfg", **kw)
+def _fake_store(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ctx, "InstructionService", _Store)
+    _Store.payload = {"platform": "", "user": ""}
+    _Store.fail = False
 
 
 async def test_layers_are_ordered_platform_user_workspace() -> None:
-    _Config.payload = {"platform": "遵守合规", "user": "默认中文"}
+    _Store.payload = {"platform": "遵守合规", "user": "默认中文"}
     fs = _FS({"/workspace/AGENTS.md": "用 pnpm"})
-    text = await ctx.load_instructions(_settings(), fs, uuid4())
+    text = await ctx.load_instructions(_sessions, fs, uuid4())
     assert text.index("遵守合规") < text.index("默认中文") < text.index("用 pnpm")
     assert "工作区约定（/workspace/AGENTS.md）" in text
 
 
 async def test_atlas_md_preferred_and_empty_means_nothing() -> None:
     fs = _FS({"/workspace/ATLAS.md": "A", "/workspace/AGENTS.md": "B"})
-    text = await ctx.load_instructions(_settings(), fs, uuid4())
+    text = await ctx.load_instructions(_sessions, fs, uuid4())
     assert "ATLAS.md" in text and "\nB" not in text
-    assert await ctx.load_instructions(_settings(), _FS({}), uuid4()) == ""
+    assert await ctx.load_instructions(_sessions, _FS({}), uuid4()) == ""
 
 
-async def test_config_outage_does_not_fail_the_turn() -> None:
-    _Config.fail = True
-    text = await ctx.load_instructions(
-        _settings(), _FS({"/workspace/ATLAS.md": "仍然有我"}), uuid4()
-    )
+async def test_store_outage_does_not_fail_the_turn() -> None:
+    _Store.fail = True
+    text = await ctx.load_instructions(_sessions, _FS({"/workspace/ATLAS.md": "仍然有我"}), uuid4())
     assert "仍然有我" in text
 
 
 async def test_long_layers_are_clipped() -> None:
-    _Config.payload = {"platform": "x" * 50_000, "user": ""}
-    text = await ctx.load_instructions(_settings(), None, uuid4())
+    _Store.payload = {"platform": "x" * 50_000, "user": ""}
+    text = await ctx.load_instructions(_sessions, None, uuid4())
     assert len(text) < 11_000 and "已截断" in text
 
 

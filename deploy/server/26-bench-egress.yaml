@@ -1,0 +1,38 @@
+# 评测档沙箱的出网代理（agent-platform/bench/experiments/tbench.yaml）：服务器连不上 GitHub，
+# 而 Terminal-Bench 的题目按「能上网」设计（校验时从 GitHub 装 uv、Python）。
+#
+#   评测档沙箱 ──HTTP(S)_PROXY──▶ 节点:28118（gost，带口令）──SOCKS5──▶ 节点 127.0.0.1:1080（trojan）
+#
+# ★ hostNetwork：trojan 只绑节点的 127.0.0.1，Pod 网络里够不着它。代价是 28118 在局域网可见 —— 靠口令挡。
+# ★ 只有评测档沙箱拿到代理地址（atlas-server 的 SANDBOX_BENCH_PROXY）；strict 档与 ACP 照旧直连。
+# ★ 口令在 Secret bench-egress（deploy/server/bench-egress.sh 生成，已有就沿用），不进 YAML。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bench-egress
+  namespace: atlas-infra
+spec:
+  replicas: 1
+  # hostNetwork 的端口是独占的：滚动更新时新旧 Pod 会抢 28118
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: bench-egress}
+  template:
+    metadata:
+      labels: {app: bench-egress}
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      automountServiceAccountToken: false
+      containers:
+        - name: gost
+          image: docker.io/gogost/gost:3.3.2
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: PROXY_PASSWORD
+              valueFrom: {secretKeyRef: {name: bench-egress, key: password}}
+          args: ["-L", "http://bench:$(PROXY_PASSWORD)@:28118", "-F", "socks5://127.0.0.1:1080"]
+          resources:
+            # 小节点（4 核）的 CPU request 余量留给沙箱
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {cpu: "1", memory: 256Mi}

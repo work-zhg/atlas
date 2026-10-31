@@ -6,15 +6,18 @@ POST /threads/{id}/runs 属于 P3（需要 RunExecutor），本轮不覆盖；
 
 from __future__ import annotations
 
+import json
 from typing import Any
 from uuid import UUID
 
 import httpx
 import pytest
+from atlas_agent.db.models import Message
 from atlas_agent.db.session import get_sessionmaker
 from atlas_agent.main import create_app
 from atlas_agent.repositories.thread import ThreadRepository
 from httpx import ASGITransport
+from sqlalchemy import select
 
 from tests.fake_uc import AS_USER
 
@@ -64,6 +67,58 @@ async def test_create_thread(client: httpx.AsyncClient, clean_db: None) -> None:
     assert body["status"] == "active"
     assert body["title_source"] == "pending"  # 待自动生成（决策 5）
     assert body["message_count"] == 0
+
+
+async def test_created_thread_is_committed_before_the_response_is_sent(clean_db: None) -> None:
+    """写后立读：客户端拿到 201 时会话已经提交，紧接着发消息不会报「会话不存在」。
+
+    ★ 在测试里连发两个请求复现不了：ASGITransport 要等整个 ASGI 调用结束（含依赖的收尾）
+      才把响应交给客户端。真实部署里响应先到、提交后到 —— 所以在应用发出响应体的那一刻查库。
+    """
+    app = create_app()
+    committed: list[bool] = []
+
+    async def probe(scope: Any, receive: Any, send: Any) -> None:
+        async def send_and_check(message: Any) -> None:
+            creating = scope["method"] == "POST" and scope["path"] == "/v1/threads"
+            if creating and message["type"] == "http.response.body":
+                tid = UUID(json.loads(message["body"])["id"])
+                async with get_sessionmaker()() as session:
+                    committed.append(await ThreadRepository(session).get(tid) is not None)
+            await send(message)
+
+        await app(scope, receive, send_and_check)
+
+    transport = ASGITransport(app=probe)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=AS_USER) as c:
+        aid = await make_agent(c)
+        r = await c.post("/v1/threads", json={"agent_id": aid})
+    assert r.status_code == 201, r.text
+    assert committed == [True]
+
+
+async def test_tool_output_with_nul_is_stored_with_a_replacement_character(
+    client: httpx.AsyncClient, clean_db: None
+) -> None:
+    """命令输出里带二进制（NUL）：PG 的 jsonb 收不下，以前整条写不进去、整轮失败。"""
+    aid = await make_agent(client)
+    tid = (await client.post("/v1/threads", json={"agent_id": aid})).json()["id"]
+    output = "PK\x03\x04\x00\x00binary\x00tail"
+    async with get_sessionmaker()() as session:
+        await ThreadRepository(session).add_message(
+            thread_id=UUID(tid),
+            role="user",
+            kind="tool_result",
+            content=[{"type": "tool_result", "tool_use_id": "call_1", "content": output}],
+        )
+        await session.commit()
+
+    # 消息列表接口不返回工具结果（kind=tool_result），直接读库
+    async with get_sessionmaker()() as session:
+        [content] = (
+            await session.scalars(select(Message.content).where(Message.thread_id == UUID(tid)))
+        ).all()
+    assert content[0]["content"] == output.replace("\x00", "\ufffd")
 
 
 async def test_create_thread_with_title_marks_manual(

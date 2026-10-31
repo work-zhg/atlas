@@ -2,7 +2,8 @@
 
 ★ 内部接口（/internal/*）是给 Atlas 的契约：Atlas 侧有一份对应的解析（providers/mcp/gateway.py），
   改字段要两边一起改。
-★ 管理接口不返回 Key 原文（§5.5）：只有内部接口 /internal/subjects/{uid}/access 返回原文。
+★ 上游凭据不回显：只给类型、不保密的字段和「••••末 4 位」。
+★ Key 原文：用户 Key 只在申请、重置时返回一次（KeySecretOut）；智能体 Key 只有内部接口返回。
 """
 
 from __future__ import annotations
@@ -15,194 +16,324 @@ from pydantic import BaseModel, Field
 
 from ..definitions import SERVICE_NAME_PATTERN
 
+Kind = Literal["mcp", "rest", "grpc"]
+Visibility = Literal["public", "private"]
+Effect = Literal["read", "write", "destructive"]
+
 # ───────────────────────────── 服务
 
 
-class ServiceIn(BaseModel):
+class CredentialIn(BaseModel):
+    """上游凭据。secret 留空 = 沿用原来的（类型没变时）。"""
+
+    type: str = "none"
+    key: str | None = None
+    where: str | None = None
+    user: str | None = None
+    token_url: str | None = None
+    scope: str | None = None
+    cert: str | None = None
+    secret: str | None = None
+
+
+class DiscoverIn(BaseModel):
+    kind: Kind
+    connection: dict[str, Any]
+    credential: CredentialIn = CredentialIn()
+    #: gRPC 上传的描述文件：base64 编码的 FileDescriptorSet
+    descriptor: str | None = None
+
+
+class ServiceIn(DiscoverIn):
     name: str = Field(pattern=SERVICE_NAME_PATTERN)
     display_name: str = Field(default="", max_length=100)
     description: str = ""
-    #: Higress 上 MCP 服务的名字；缺省 = 服务名
-    upstream_name: str | None = Field(default=None, min_length=1, max_length=128)
-    review_required: bool = True
-    call_timeout_s: float | None = Field(default=None, gt=0)
-    #: 本期只有主体 Key（§5.6）；用户的第三方授权是远期
-    credential_mode: Literal["subject_key"] = "subject_key"
+    visibility: Visibility = "private"
+    pass_identity: bool = True
+    #: REST：操作（「GET /path」）；gRPC：方法（「包.服务/方法」）。MCP 代理不用挑
+    selected: list[str] = []
 
 
 class ServicePatch(BaseModel):
     display_name: str | None = Field(default=None, max_length=100)
     description: str | None = None
-    upstream_name: str | None = Field(default=None, min_length=1, max_length=128)
-    review_required: bool | None = None
-    #: 显式给 null = 清掉，改用调用方的全局默认
-    call_timeout_s: float | None = Field(default=None, gt=0)
+    visibility: Visibility | None = None
 
 
-class AccessCheckOut(BaseModel):
-    ok: bool | None
-    detail: str | None
-    checked_at: datetime | None
+class ConnectionIn(BaseModel):
+    connection: dict[str, Any]
+    pass_identity: bool = True
+
+
+class ImportIn(BaseModel):
+    selected: list[str] = Field(min_length=1)
+    descriptor: str | None = None
+
+
+class RediscoverIn(BaseModel):
+    descriptor: str | None = None
+
+
+class CredentialOut(BaseModel):
+    type: str
+    key: str | None = None
+    where: str | None = None
+    user: str | None = None
+    token_url: str | None = None
+    scope: str | None = None
+    cert: str | None = None
+    #: 「••••末 4 位」；没有为 None
+    hint: str | None = None
+
+
+class MyAccessOut(BaseModel):
+    """当前用户在这个服务上：是不是所有者；他的用户 Key 能用到什么。"""
+
+    owner: bool = False
+    #: public = 公开服务；all = 服务级；tools = 工具级；none = 没有授权；no_key = 还没有用户 Key
+    scope: str = "none"
+    tools: list[str] = []
 
 
 class ServiceOut(BaseModel):
     name: str
     display_name: str
     description: str
-    upstream_kind: str
-    upstream_name: str
-    credential_mode: str
-    review_required: bool
-    call_timeout_s: float | None
+    kind: str
+    visibility: str
     enabled: bool
+    connection: dict[str, Any]
+    credential: CredentialOut
+    pass_identity: bool
     created_by: str
-    updated_by: str
     created_at: datetime
     updated_at: datetime
     fetched_at: datetime | None
     fetch_error: str | None
     changed_at: datetime | None
-    content_hash: str | None
-    access_check: AccessCheckOut
-    #: 各复核状态的工具个数（ok / pending_review / rejected / invalid）
-    tool_counts: dict[str, int] = {}
-
-
-class ReviewOut(BaseModel):
-    decision: str
-    comment: str
-    reviewed_by: str
-    reviewed_at: datetime
+    tool_count: int
+    active_tool_count: int
+    my: MyAccessOut = MyAccessOut()
 
 
 class ToolOut(BaseModel):
     name: str
-    #: 模型看到的名字（服务名__工具名）；线上名不合规时为空
+    #: 模型看到的名字（服务名__工具名）；不合规时为空
     model_name: str | None
     description: str
     input_schema: dict[str, Any]
-    #: MCP 线上格式（readOnlyHint …）
     annotations: dict[str, Any] | None
-    read_only: bool
-    digest: str
-    issues: list[str]
-    #: ok = 能选、能调；invalid = 机械检查不通过；pending_review；rejected
+    effect: str
+    #: REST / gRPC 的映射；MCP 代理为 None
+    mapping: dict[str, Any] | None
+    #: active | disabled
     status: str
+    issues: list[str]
+    digest: str
     changed_at: datetime | None
-    #: 变化前的一版：{description, input_schema, annotations, digest}
     previous: dict[str, Any] | None
-    review: ReviewOut | None = None
+    #: 能被调用：没停用、没删除、定义合规
+    callable: bool
 
 
 class ServiceDetailOut(ServiceOut):
     tools: list[ToolOut] = []
-    #: 上游已经删掉的工具
     removed_tools: list[str] = []
+    #: 当前用户能不能改服务定义 / 能不能授权
+    can_manage: bool = False
+    can_assign: bool = False
 
 
-class ReviewIn(BaseModel):
-    #: 复核的是哪一版定义：必须是当前指纹
-    digest: str = Field(min_length=64, max_length=64)
-    decision: Literal["approved", "rejected"]
-    comment: str = ""
+class DiscoveredToolOut(BaseModel):
+    """发现结果的一项（登记前、重新导入时给管理员挑）。"""
+
+    key: str
+    name: str
+    description: str
+    effect: str
+    input_schema: dict[str, Any]
+    #: REST：「GET /path」；gRPC：「包.服务/方法」；MCP：工具名
+    label: str
+    #: gRPC：unary | server | client | bidi
+    stream: str | None = None
+    unsupported: str | None = None
+    issues: list[str] = []
+    #: 重新导入时：服务里已经有同名的工具
+    exists: bool = False
 
 
-class PendingReviewOut(BaseModel):
-    service: str
-    tool: ToolOut
+class DiscoveredOut(BaseModel):
+    kind: str
+    tools: list[DiscoveredToolOut]
+    #: gRPC：描述里的服务
+    services: list[str] = []
+
+
+class ToolIn(BaseModel):
+    name: str
+    description: str
+    effect: Effect = "read"
+    mapping: dict[str, Any]
+
+
+class ToolPatch(BaseModel):
+    description: str | None = None
+    effect: Effect | None = None
+    #: 只有 REST 能改映射
+    mapping: dict[str, Any] | None = None
+
+
+class TryIn(BaseModel):
+    key_id: UUID
+    arguments: dict[str, Any] = {}
+
+
+class TryOut(BaseModel):
+    """试调：result 和 error 二选一。"""
+
+    result: dict[str, Any] | None = None
+    error: dict[str, Any] | None = None
+    trace_id: str | None = None
+
+
+class TestOut(BaseModel):
+    ok: bool
+    detail: str
 
 
 # ───────────────────────────── 授权
 
 
-class SubjectIn(BaseModel):
-    #: user 包括数字员工
-    type: Literal["user", "dept"]
+class KeyRefOut(BaseModel):
     id: UUID
+    key_type: str
+    name: str
+    status: str
+    subject_uid: UUID
+    client_code: str | None = None
+
+
+class KeyGrantOut(BaseModel):
+    key: KeyRefOut
+    #: all = 全部工具（含以后新增的）；tools = 只有 tools 里这几个
+    scope: str
+    tools: list[str] = []
+
+
+class OwnerOut(BaseModel):
+    user_id: str
+    name: str
+
+
+class ServerGrantsOut(BaseModel):
+    owners: list[OwnerOut]
+    keys: list[KeyGrantOut]
 
 
 class GrantIn(BaseModel):
-    """与知识库共享同一种形状：一次授给多个人 / 部门。"""
-
-    #: READ = 使用；OWNER = 所有者（能授权）
-    level: Literal["READ", "OWNER"] = "READ"
-    subjects: list[SubjectIn] = Field(min_length=1)
-    #: 授给部门时含下级
-    include_sub: bool = True
+    #: all = 服务级；tools = 工具级；none = 收回
+    scope: Literal["all", "tools", "none"]
+    tools: list[str] = []
 
 
-class GrantPatch(BaseModel):
-    level: Literal["READ", "OWNER"] | None = None
-    include_sub: bool | None = None
+class OwnerIn(BaseModel):
+    user_id: UUID
+
+
+class ServiceGrantIn(GrantIn):
+    service: str
+
+
+class KeyGrantsIn(BaseModel):
+    """一次给一把 Key 配多个服务。只改列出来的服务；自己不是所有者的服务不能列。"""
+
+    grants: list[ServiceGrantIn]
+
+
+class ServiceScopeOut(BaseModel):
+    service: str
+    display_name: str
+    scope: str
+    tools: list[str] = []
 
 
 # ───────────────────────────── API Key
 
 
-class KeyIn(BaseModel):
-    subject_uid: UUID
-    #: 同时给持有人授这些服务的「使用」（写的是持有人的服务授权，不是 Key 的权限）
-    services: list[str] = []
-
-
 class KeyOut(BaseModel):
     id: UUID
+    key_type: str
+    #: 用户 Key 的持有人
+    user_uid: UUID | None
+    client_type: str | None
+    client_code: str | None
+    name: str
+    #: 用户中心里的主体：授权授给它，网关判权时作 X-Auth-Uid
     subject_uid: UUID
-    subject_type: str
-    subject_name: str
     #: 掩码。★ 不返回原文
     masked: str
     status: str
-    issued_by: str
+    created_by: str
     created_at: datetime
     rotated_at: datetime
-    disabled_at: datetime | None
+    #: 这把 Key 在私有服务上的权限（列表页显示；取不到时为空）
+    grants: list[ServiceScopeOut] = []
 
 
-class MissingKeyOut(BaseModel):
-    """有授权但没有 Key 的人（§5.5）：管理端据此批量发放。"""
-
-    subject_uid: str
-    name: str
-    services: list[str]
+class KeySecretOut(KeyOut):
+    #: 原文：只在申请、重置用户 Key 时返回这一次
+    secret: str
 
 
-# ───────────────────────────── 访问日志
+class ClientKeyIn(BaseModel):
+    client_type: str = Field(min_length=1, max_length=64)
+    client_code: str = Field(min_length=1, max_length=128)
+    name: str = Field(default="", max_length=200)
+    #: 用户中心主体的负责人（人）。缺省 = 当前操作人
+    owner_uid: UUID | None = None
 
 
-class AccessLogOut(BaseModel):
-    id: int
-    at: datetime
-    service: str
-    subject_uid: UUID | None
-    user_uid: str | None
-    caller_app: str | None
-    run_id: str | None
-    http_method: str
-    rpc_method: str | None
-    tool: str | None
-    outcome: str
-    status: int
-    forwarded: bool
-    duration_ms: int
+class ClientTypeOut(BaseModel):
+    code: str
+    apps: list[str]
 
 
 # ───────────────────────────── 内部接口（给 Atlas）
+
+
+class MetadataToolOut(BaseModel):
+    name: str
+    model_name: str | None
+    description: str
+    input_schema: dict[str, Any]
+    annotations: dict[str, Any] | None
+    read_only: bool
+    effect: str
+    digest: str
+    #: 不能用的原因（含「已停用」）。非空 = Atlas 里不可选、不可调
+    issues: list[str]
+    #: ok | invalid（沿用 Atlas 的复核状态取值：没有复核了，只剩能用 / 不能用）
+    status: str
+    changed_at: datetime | None
+    previous: dict[str, Any] | None
 
 
 class MetadataServiceOut(BaseModel):
     name: str
     display_name: str
     description: str
+    kind: str
+    visibility: str
     enabled: bool
-    review_required: bool
-    call_timeout_s: float | None
-    credential_mode: str
+    #: ★ 没有复核了，恒为 False（Atlas 据此不再按复核结论判断）
+    review_required: bool = False
+    #: ★ 超时属于流量治理（通用组件，单独设计），这里恒为 None
+    call_timeout_s: float | None = None
     fetched_at: datetime | None
     fetch_error: str | None
     changed_at: datetime | None
-    content_hash: str | None
-    tools: list[ToolOut]
+    content_hash: str
+    tools: list[MetadataToolOut]
     removed_tools: list[str] = []
 
 
@@ -210,14 +341,28 @@ class MetadataOut(BaseModel):
     services: list[MetadataServiceOut]
 
 
-class SubjectAccessOut(BaseModel):
-    """一个主体此刻能用什么（demo F5：可用服务和 Key 一次给出）。"""
+class InternalClientKeyIn(BaseModel):
+    client_type: str = Field(min_length=1, max_length=64)
+    client_code: str = Field(min_length=1, max_length=128)
+    name: str = Field(default="", max_length=200)
+    #: 用户中心主体的负责人（人，Atlas 给智能体的负责人）。创建时必填
+    owner_uid: UUID | None = None
 
-    subject: str
-    #: 能用（≥ 使用）且已启用的服务
-    services: list[str]
-    #: 有「全部 MCP 服务」这类编码级授权
-    all_services: bool
-    #: 原文；没有或已停用为 None。★ 只有这个内部接口返回原文
-    key: str | None
-    key_status: Literal["active", "disabled", "none"]
+
+class UsableServiceOut(BaseModel):
+    name: str
+    #: 这把 Key 能用的工具（已去掉停用、不合规的）
+    tools: list[str]
+
+
+class InternalClientKeyOut(BaseModel):
+    client_type: str
+    client_code: str
+    name: str
+    #: active | blocked
+    status: str
+    #: 原文；停用时为 None
+    key: str | None = None
+    key_uid: UUID
+    #: 这把 Key 此刻能访问的服务（公开 + 授给它的）和其中能用的工具（可以为空：都停用了）
+    servers: list[UsableServiceOut] = []

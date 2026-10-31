@@ -1,6 +1,6 @@
 """技能 / MCP 的只读视图（技能 / MCP 设计 §13.3）。
 
-技能的内容、审查、发布在配置服务（atlas-config 的 /config/*）；这里只有运行时
+技能的内容、审查、发布在技能应用（atlas-skill 的 /api/v1/*）；这里只有运行时
 才知道的那一半：被谁引用、用得怎样、MCP server 此刻的工具定义。
 
 ★ 角色检查（builder+ / 刷新 admin）还没加：这几个接口只要登录即可。
@@ -26,7 +26,7 @@ router = APIRouter(tags=["catalog"])
 
 @router.get("/skills", response_model=SkillListOut)
 async def list_skills(service: CatalogServiceDep) -> SkillListOut:
-    """技能目录（来自配置服务，经缓存）+ 引用数 + 近 7 天加载次数。编辑器选择器用。"""
+    """技能目录（来自技能应用，经缓存）+ 引用数 + 近 7 天加载次数。编辑器选择器用。"""
     return await service.list_skills()
 
 

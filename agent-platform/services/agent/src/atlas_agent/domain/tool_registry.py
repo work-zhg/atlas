@@ -43,8 +43,8 @@ ASK_USER_TOOL = ASK_USER_QUESTION
 
 
 def _todo_middleware() -> Any:
-    # 待办清单在**上游 langchain**，不在 kernel —— 这个分工不明显，踩过一次
-    from langchain.agents.middleware import TodoListMiddleware
+    # 用 kernel 拷来的那份而不是上游的：todos 要能从输入交回图（见 kernel/middleware/todo.py）
+    from atlas_engine.kernel.middleware.todo import TodoListMiddleware
 
     return TodoListMiddleware()
 
@@ -73,8 +73,8 @@ def filesystem_tools_for(tool_names: frozenset[str] | set[str]) -> list[str]:
     ★ 取代了原来的 filesystem_allowlist(tool_names, sandbox=)。那个函数既管
       白名单又管 execute，还藏着一条隐式联动：**勾了 bash 就自动获得全部
       文件工具**（理由是「bash 写的文件 read_file 要能读到」）。拆分后
-      execute 归 SandboxMiddleware，那条联动改成 bash 的 requires 显式声明 ——
-      不满足时明确报出来，而不是偷偷替用户勾上。
+      execute 归 SandboxMiddleware，两者各勾各的：只勾 Shell 时模型只有 execute，
+      不会被偷偷补上文件工具。
     """
     return list(FS_TOOL_NAMES) if FILESYSTEM_TOOL in tool_names else []
 
@@ -195,7 +195,8 @@ BUILTIN_TOOLS: tuple[ToolDef, ...] = (
         # （SANDBOX_ENABLED）：没开时装配期明确报错，工具目录也标不可用（同记忆）。
         implemented=True,
         note="需要服务端开启沙箱（SANDBOX_ENABLED）",
-        requires=lambda spec: FILESYSTEM_TOOL in spec.tool_names,
+        # ★ 不要求同时勾 filesystem：只有 Shell 是合法配置（模型用命令读写文件），装配也从来
+        #   没按它拦过 —— 曾经声明了 requires，结果 run 开始时报「不支持」，execute 却照常可用
     ),
 )
 

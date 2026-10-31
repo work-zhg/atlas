@@ -840,7 +840,7 @@ export interface paths {
         };
         /**
          * List Skills
-         * @description 技能目录（来自配置服务，经缓存）+ 引用数 + 近 7 天加载次数。编辑器选择器用。
+         * @description 技能目录（来自技能应用，经缓存）+ 引用数 + 近 7 天加载次数。编辑器选择器用。
          */
         get: operations["list_skills_v1_skills_get"];
         put?: never;
@@ -1257,6 +1257,7 @@ export interface components {
             mcp_drift_policy: "warn" | "block";
             knowledge?: components["schemas"]["KnowledgeSpecIn"];
             approval?: components["schemas"]["ApprovalSpecIn"];
+            sandbox?: components["schemas"]["SandboxSpecIn"];
         };
         /** AgentStatusUpdate */
         AgentStatusUpdate: {
@@ -2222,6 +2223,20 @@ export interface components {
         RunTraceOut: {
             /** Data */
             data: components["schemas"]["TraceEvent"][];
+        };
+        /** SandboxSpecIn */
+        SandboxSpecIn: {
+            /**
+             * Image
+             * @default
+             */
+            image: string;
+            /**
+             * Profile
+             * @default strict
+             * @enum {string}
+             */
+            profile: "strict" | "bench";
         };
         /** SkillListItem */
         SkillListItem: {

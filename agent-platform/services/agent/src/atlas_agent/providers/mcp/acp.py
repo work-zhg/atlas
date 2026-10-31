@@ -1,15 +1,15 @@
 """acp 会话的 MCP 下发（MCP 方案设计 §7）。
 
-ACP Agent 的 MCP client 是会话 Pod 里的 CLI：Atlas 只在建会话时把服务的**网关地址**和这一轮
-权限主体的 **API Key** 交给它，之后的握手、拉工具列表、调用都由 CLI 自己完成，Atlas 拦截不到
-单次调用 —— MCP 网关是唯一的治理点，它对每个请求认人、判权、按工具执行复核。
+ACP Agent 的 MCP client 是会话 Pod 里的 CLI：Atlas 只在建会话时把服务的**网关地址**和这个
+智能体的 **API Key** 交给它，之后的握手、拉工具列表、调用都由 CLI 自己完成，Atlas 拦截不到
+单次调用 —— MCP 网关是唯一的治理点，它对每个请求认 Key、判权（细到工具）。
 
-  · **粒度只能到服务**：ACP 的 mcpServers 是服务级的，CLI 自己 tools/list。复核由网关按工具
-    执行：待复核 / 被拒绝的工具从 CLI 拿到的列表里消失、调用被拒，其余照常（§4.4、§7.1）
+  · **下发粒度只能到服务**：ACP 的 mcpServers 是服务级的，CLI 自己 tools/list。工具级授权、
+    停用由网关执行：没授权、停用的工具从 CLI 拿到的列表里消失、调用被拒，其余照常
   · **会话内不变**：只在 session.open 时下发；attach 接上的会话沿用当时那份。收回授权、停用
-    服务、拒绝工具定义仍然对已打开的会话生效（网关每个请求都判）
-  · **主体 Key 进 Pod**：有意接受的风险（§7.2），Key 的能力不超出主体的授权
-  · 没权限、没 Key 的服务不下发，并说明原因（与 Native 的装配同一套规则）
+    服务仍然对已打开的会话生效（网关每个请求都判）
+  · **智能体 Key 进 Pod**：有意接受的风险，Key 的能力不超出授给它的权限
+  · Key 停用了、没被授权的服务不下发，并说明原因（与 Native 的装配同一套规则）
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from uuid import UUID
 from ...domain.events import EventType
 from ...domain.mcp_naming import parse_tool_id
 from .catalog import McpCatalog, McpUnavailable
-from .gateway import SubjectAccess
+from .gateway import AgentAccess
 
 __all__ = ["acp_mcp_servers"]
 
@@ -33,11 +33,11 @@ async def acp_mcp_servers(
     user_id: UUID,
     digests: Mapping[str, str],
     drift_policy: str,
-    access: SubjectAccess,
+    access: AgentAccess,
 ) -> tuple[list[dict[str, Any]], list[tuple[EventType, dict[str, Any]]]]:
     """→ (session.open 的 mcpServers, 要告诉用户的 notices)。
 
-    access：这一轮的权限主体能用什么（服务 + Key），建会话前问过网关。
+    access：这个智能体的 Key 能用什么（服务、工具、Key），建会话前问过网关。
     """
     wanted: dict[str, list[str]] = {}
     for name in tool_names:
@@ -95,7 +95,7 @@ async def acp_mcp_servers(
                 # ★ ACP 的 headers 是数组，不是对象
                 "headers": [
                     {"name": "Authorization", "value": f"Bearer {access.key}"},
-                    # 使用者：只作审计，网关照转；权限主体由网关按 Key 写入
+                    # 使用者：只作审计，网关照转；权限主体（Key 的 uid）由网关写入
                     {"name": "X-Uid", "value": str(user_id)},
                 ],
             }
@@ -103,15 +103,15 @@ async def acp_mcp_servers(
     return servers, notices
 
 
-def _skip_reason(server: str, access: SubjectAccess) -> dict[str, Any] | None:
-    """没权限、没 Key 的服务不下发，并说明原因（§7.1，与 Native 的装配同一套规则）。"""
+def _skip_reason(server: str, access: AgentAccess) -> dict[str, Any] | None:
+    """Key 停用了、没被授权的服务不下发，并说明原因（与 Native 的装配同一套规则）。"""
     if access.allows(server) and access.key is not None:
         return None
-    reason = "forbidden" if not access.allows(server) else "no_key"
+    reason = "no_key" if access.key is None else "forbidden"
     message = (
-        f"权限主体没有被授权使用 MCP 服务 {server}"
-        if reason == "forbidden"
-        else "权限主体还没有 MCP API Key"
+        "这个智能体的 MCP Key 已停用"
+        if reason == "no_key"
+        else f"这个智能体的 MCP Key 没有被授权使用 MCP 服务 {server}"
     )
     return {
         "server": server,

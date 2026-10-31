@@ -3,7 +3,7 @@
 布局：{oss_prefix}/{dataset_uuid}/{document_uuid}/{文件名}
 
 ★ 同步接口（boto3 是同步的）；调用方用 asyncio.to_thread 包。
-★ 与 atlas-config 各自实现，不抽公共包（同 auth.py 的理由）。
+★ 与 atlas-skill 各自实现，不抽公共包（同 auth.py 的理由）。
 """
 
 from __future__ import annotations

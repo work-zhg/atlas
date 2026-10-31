@@ -2,7 +2,7 @@
 
 /**
  * 技能 / MCP 的**运行时**视图（server /v1/skills、/v1/mcp/*）：
- * 被谁引用、用得怎样、MCP server 此刻的工具定义。内容与审查在配置服务（api/config.ts）。
+ * 被谁引用、用得怎样、MCP server 此刻的工具定义。内容与审查在技能应用（api/skill-app.ts）。
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 

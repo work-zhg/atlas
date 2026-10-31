@@ -22,12 +22,9 @@ APP_ICON = "🤖"
 OPERATIONS: list[tuple[str, str, str]] = [
     ("对话", "chat:use", "使用对话"),
     ("智能体", "agent:create", "新建智能体"),
-    ("技能", "skill:upload", "上传技能"),
-    ("技能", "skill:review", "审核技能"),
     ("知识库", "kb:create", "新建知识库"),
     ("知识库", "kb:review", "审核入库文档"),
     ("系统", "model:manage", "模型目录"),
-    ("系统", "audit:view", "查看审计"),
 ]
 
 ALL_OPERATIONS = frozenset(code for _, code, _ in OPERATIONS)
@@ -37,12 +34,11 @@ MENUS: list[dict[str, Any]] = [
     {"type": "menu", "code": "chat", "name": "对话", "icon": "💬", "path": "/chat"},
     {"type": "menu", "code": "agents", "name": "智能体", "icon": "🤖", "path": "/agents"},
     {"type": "menu", "code": "memories", "name": "记忆", "icon": "🧠", "path": "/memories"},
-    {"type": "menu", "code": "skills", "name": "技能", "icon": "🧩", "path": "/skills"},
     {"type": "menu", "code": "knowledge", "name": "知识库", "icon": "📚", "path": "/knowledge"},
 ]
 
 _MEMBER_OPS = ["chat:use"]
-_BUILDER_OPS = [*_MEMBER_OPS, "agent:create", "skill:upload", "kb:create"]
+_BUILDER_OPS = [*_MEMBER_OPS, "agent:create", "kb:create"]
 
 ROLES: list[dict[str, Any]] = [
     {
@@ -55,25 +51,19 @@ ROLES: list[dict[str, Any]] = [
     {
         "code": "ATLAS_BUILDER",
         "name": "构建者",
-        "description": "成员 + 新建智能体、上传技能、建知识库",
+        "description": "成员 + 新建智能体、建知识库",
         "operations": _BUILDER_OPS,
-        "menus": ["chat", "agents", "memories", "skills", "knowledge"],
+        "menus": ["chat", "agents", "memories", "knowledge"],
     },
     {
         "code": "ATLAS_ADMIN",
         "name": "管理员",
         "description": (
-            "平台负责人：技能审核、模型目录、审计"
+            "平台负责人：模型目录、平台指令"
             "（管理全部智能体 / 知识库另授数据权限「全部智能体 / 全部知识库 · Owner」）"
         ),
         "operations": sorted(ALL_OPERATIONS),
-        "menus": [
-            "chat",
-            "agents",
-            "memories",
-            "skills",
-            "knowledge",
-        ],
+        "menus": ["chat", "agents", "memories", "knowledge"],
     },
 ]
 
@@ -107,6 +97,19 @@ RETIRED_MCP_OPERATION = "mcp:manage"
 RETIRED_MCP_DATA = "AtlasMcpServer"
 MCP_GATEWAY_ADMIN_ROLE = "MCP_ADMIN"
 MCP_GATEWAY_DATA = "McpServer"
+
+#: 交给技能应用（用户中心里的独立应用，atlas_skill/register.py）：技能的上传、审核与审计。
+#: register-uc 删除下面这几个操作码之前，把持有人搬到技能应用的角色
+#: （auth/register.py::_retire_skill）；技能应用还没登记到用户中心时先保留，不删
+SKILL_APP = "skill"
+#: Atlas 名下退役的操作码 → 技能应用里接替它的角色。
+#: audit:view 只有技能的审计在用，内置角色里持有它的只有 ATLAS_ADMIN，已随 skill:review 换成
+#: SKILL_ADMIN（含 audit:view）；不单独搬，免得把「只能看审计」的人提成技能管理员
+RETIRED_SKILL_OPS: dict[str, str | None] = {
+    "skill:upload": "SKILL_AUTHOR",
+    "skill:review": "SKILL_ADMIN",
+    "audit:view": None,
+}
 
 #: 登录时向用户中心取「全部数据授权」级别的数据编码
 DATA_TYPE_CODES: tuple[str, ...] = tuple(d["code"] for d in DATA_TYPES)

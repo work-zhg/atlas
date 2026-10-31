@@ -175,8 +175,17 @@ class FakeLiteLLM:
             return httpx.Response(404, json={"detail": f"no route {path}"})
         return handler(request, body)  # type: ignore[no-any-return]
 
+    def _v1_models(self, request: httpx.Request, body: Any) -> httpx.Response:
+        names = sorted({m["model_name"] for m in self.models.values()})
+        return httpx.Response(200, json={"data": [{"id": n, "object": "model"} for n in names]})
+
     def _model_info(self, request: httpx.Request, body: Any) -> httpx.Response:
-        """同 LiteLLM：凭据不出现；litellm_params 里的自定义价格合并进 model_info。"""
+        """同 LiteLLM：凭据不出现；litellm_params 里的自定义价格合并进 model_info。
+
+        还一个模型都没有时路由器没建，返回 500（1.106 实测，2026-10-29 在 112 上碰到）。
+        """
+        if not self.models:
+            return httpx.Response(500, json={"detail": {"error": "LLM Model List not loaded in."}})
         data = []
         for m in self.models.values():
             params = {k: v for k, v in m["litellm_params"].items() if k != "api_key"}

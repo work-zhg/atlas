@@ -2,12 +2,12 @@
 
 /**
  * 上下文管理（doc/context-management-design.html §10 / §16）：
- * 会话的上下文用量与构成、手动压缩；持久指令（个人 / 平台，配置服务）。
+ * 会话的上下文用量与构成、手动压缩；持久指令（个人 / 平台）。
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ContextUsageData } from "@atlas/chat-ui/src/lib/events";
 
-import { CONFIG_API_BASE, configHttp, http, request } from "@/lib/http";
+import { http } from "@/lib/http";
 
 export interface ThreadContextStatus {
   usage: ContextUsageData | null;
@@ -57,8 +57,7 @@ export interface InstructionOut {
 export function useInstruction(scope: "me" | "platform") {
   return useQuery({
     queryKey: ["instruction", scope],
-    queryFn: () =>
-      configHttp.get<InstructionOut>(`/config/instructions/${scope}`),
+    queryFn: () => http.get<InstructionOut>(`/v1/instructions/${scope}`),
     retry: 1,
   });
 }
@@ -67,11 +66,7 @@ export function useSaveInstruction(scope: "me" | "platform") {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (content: string) =>
-      request<InstructionOut>(`/config/instructions/${scope}`, {
-        method: "PUT",
-        body: { content },
-        base: CONFIG_API_BASE,
-      }),
+      http.put<InstructionOut>(`/v1/instructions/${scope}`, { content }),
     onSuccess: (data) => qc.setQueryData(["instruction", scope], data),
   });
 }

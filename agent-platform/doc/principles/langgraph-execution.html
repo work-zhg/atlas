@@ -1,0 +1,862 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LangGraph 图的执行原理：编译、超步与调度</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --border: #d1d9e0; --head: #f6f8fa;
+    --accent: #0969da; --ok: #1a7f37; --ok-bg: #dafbe1; --warn: #9a6700; --warn-bg: #fff8c5;
+    --bad: #cf222e; --bad-bg: #ffebe9; --code-bg: #f6f8fa;
+    --b1: #ddf4ff; --b1d: #54aeff; --b2: #fbefff; --b2d: #c297ff; --b3: #dafbe1; --b3d: #4ac26b;
+    --b4: #fff8c5; --b4d: #d4a72c; --b5: #ffebe9; --b5d: #ff8182;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --border: #3d444d; --head: #151b23;
+      --accent: #4493f8; --ok: #3fb950; --ok-bg: #12261e; --warn: #d29922; --warn-bg: #2b2111;
+      --bad: #f85149; --bad-bg: #2d1214; --code-bg: #151b23;
+      --b1: #12263f; --b1d: #1f6feb; --b2: #271a36; --b2d: #8957e5; --b3: #12261e; --b3d: #2ea043;
+      --b4: #2b2111; --b4d: #9e6a03; --b5: #2d1214; --b5d: #da3633;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 32px; background: var(--bg); color: var(--fg);
+         font: 14px/1.75 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif; }
+  main { max-width: 1120px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 44px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 15.5px; margin: 24px 0 8px; }
+  a { color: var(--accent); }
+  .sub { color: var(--muted); margin: 0 0 14px; }
+  code { font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code-bg); padding: 1px 4px; border-radius: 4px; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px 14px; overflow-x: auto; font-size: 12.5px; }
+  pre code { background: none; padding: 0; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0 16px; }
+  th, td { border: 1px solid var(--border); padding: 7px 10px; vertical-align: top; text-align: left; }
+  th { background: var(--head); white-space: nowrap; }
+  .callout { border-left: 4px solid var(--accent); background: var(--head); padding: 10px 14px; border-radius: 4px; margin: 14px 0; }
+  .callout.warn { border-color: var(--warn); background: var(--warn-bg); }
+  .toc { columns: 2; padding-left: 18px; }
+  .fig { border: 1px solid var(--border); border-radius: 6px; padding: 10px; overflow-x: auto; margin: 10px 0 6px; }
+  .cap { color: var(--muted); font-size: 12.5px; margin: 0 0 16px; text-align: center; }
+  svg text { fill: var(--fg); font-size: 12px; font-family: -apple-system, "PingFang SC", sans-serif; }
+  svg .s { font-size: 11px; fill: var(--muted); }
+  svg .b { font-weight: 600; }
+  svg .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+  svg .tw { fill: var(--warn); }
+  svg .tb { fill: var(--bad); }
+  svg .c1 { fill: var(--b1); stroke: var(--b1d); } svg .c2 { fill: var(--b2); stroke: var(--b2d); }
+  svg .c3 { fill: var(--b3); stroke: var(--b3d); } svg .c4 { fill: var(--b4); stroke: var(--b4d); }
+  svg .c5 { fill: var(--b5); stroke: var(--b5d); }
+  svg .inner { fill: var(--bg); stroke: var(--border); }
+  svg .ghost { fill: var(--head); stroke: var(--border); stroke-dasharray: 4 3; }
+  svg .ln { stroke: var(--fg); stroke-width: 1.3; fill: none; }
+  svg .dash { stroke-dasharray: 5 4; }
+  svg .life { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 4 4; fill: none; }
+  svg .arw { fill: var(--fg); }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <marker id="ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="arw" d="M0,0 L8,4 L0,8 z"/></marker>
+</defs></svg>
+<main>
+<h1>LangGraph 图的执行原理：编译、超步与调度</h1>
+<p class="sub">日期：2026-10-30 · 依据：langgraph 1.2.17、langchain 1.4.7（本仓 <code>.venv</code> 里的源码与实测）· 持久化、中断与恢复见姊妹篇 <a href="langgraph-checkpoint.html">LangGraph Checkpoint 原理</a></p>
+
+<ol class="toc" start="0">
+  <li><a href="#s0">一页看懂</a></li>
+  <li><a href="#s1">基本概念</a></li>
+  <li><a href="#s2">编译：从 StateGraph 到 Pregel</a></li>
+  <li><a href="#s3">channel：state 和边的载体</a></li>
+  <li><a href="#s4">执行循环</a></li>
+  <li><a href="#s5">调度：下一步跑谁</a></li>
+  <li><a href="#s6">并行与合并</a></li>
+  <li><a href="#s7">控制流：条件边、Send、Command</a></li>
+  <li><a href="#s8">出错、重试与终止</a></li>
+  <li><a href="#s9">子图</a></li>
+  <li><a href="#s10">实例：create_agent 的一轮工具调用</a></li>
+  <li><a href="#s11">使用要点</a></li>
+</ol>
+
+<!-- ====================================================================== -->
+<h2 id="s0">0. 一页看懂</h2>
+<div class="fig">
+<svg viewBox="0 0 1080 400" width="100%" role="img" aria-label="执行原理总览">
+  <rect x="20" y="20" width="300" height="190" rx="8" class="c1"/>
+  <text x="170" y="46" text-anchor="middle" class="b">StateGraph（构建器）</text>
+  <text x="170" y="76" text-anchor="middle" class="mono">state schema + reducer</text>
+  <text x="170" y="98" text-anchor="middle" class="mono">add_node(name, fn)</text>
+  <text x="170" y="120" text-anchor="middle" class="mono">add_edge / add_conditional_edges</text>
+  <text x="170" y="156" text-anchor="middle" class="s">只是声明，本身不能执行</text>
+  <text x="170" y="176" text-anchor="middle" class="s">Send、Command 在运行时才出现</text>
+
+  <path d="M320,115 H 380" class="ln" marker-end="url(#ar)"/>
+  <text x="350" y="106" text-anchor="middle" class="mono">compile()</text>
+
+  <rect x="380" y="20" width="320" height="190" rx="8" class="c2"/>
+  <text x="540" y="46" text-anchor="middle" class="b">Pregel（编译结果）</text>
+  <text x="540" y="76" text-anchor="middle" class="s">state 的每个字段 → 一个 channel</text>
+  <text x="540" y="98" text-anchor="middle" class="s">每个节点 → PregelNode，</text>
+  <text x="540" y="120" text-anchor="middle" class="s">订阅 channel branch:to:节点名</text>
+  <text x="540" y="142" text-anchor="middle" class="s">边 → 上游跑完往下游的 channel 写一条</text>
+  <text x="540" y="176" text-anchor="middle" class="s">实现 Runnable：invoke / stream</text>
+
+  <path d="M700,115 H 760" class="ln" marker-end="url(#ar)"/>
+  <text x="730" y="106" text-anchor="middle" class="mono">invoke</text>
+
+  <rect x="760" y="20" width="300" height="190" rx="8" class="c3"/>
+  <text x="910" y="46" text-anchor="middle" class="b">PregelLoop（一次调用）</text>
+  <text x="910" y="76" text-anchor="middle" class="s">按超步循环：</text>
+  <text x="910" y="98" text-anchor="middle" class="s">算出任务 → 并行执行</text>
+  <text x="910" y="120" text-anchor="middle" class="s">合并写入 → 存 checkpoint</text>
+  <text x="910" y="142" text-anchor="middle" class="s">没有任务可跑 → 结束</text>
+  <text x="910" y="176" text-anchor="middle" class="s">超步数超过 recursion_limit → 报错</text>
+
+  <rect x="20" y="235" width="1040" height="150" rx="8" class="inner"/>
+  <text x="36" y="259" class="b">一次调用 = 若干超步</text>
+  <text x="180" y="259" class="s">create_agent 一轮工具调用的实测（模型一次发出两个工具调用）</text>
+  <rect x="50" y="275" width="140" height="60" rx="6" class="c1"/>
+  <text x="120" y="299" text-anchor="middle" class="b">超步 -1</text>
+  <text x="120" y="319" text-anchor="middle" class="s">写入输入</text>
+  <rect x="220" y="275" width="140" height="60" rx="6" class="c1"/>
+  <text x="290" y="299" text-anchor="middle" class="b">超步 0</text>
+  <text x="290" y="319" text-anchor="middle" class="s">__start__</text>
+  <rect x="390" y="275" width="140" height="60" rx="6" class="c2"/>
+  <text x="460" y="299" text-anchor="middle" class="b">超步 1</text>
+  <text x="460" y="319" text-anchor="middle" class="s">model</text>
+  <rect x="560" y="275" width="140" height="60" rx="6" class="c2"/>
+  <text x="630" y="299" text-anchor="middle" class="b">超步 2</text>
+  <text x="630" y="319" text-anchor="middle" class="s">tools × 2（并行）</text>
+  <rect x="730" y="275" width="140" height="60" rx="6" class="c2"/>
+  <text x="800" y="299" text-anchor="middle" class="b">超步 3</text>
+  <text x="800" y="319" text-anchor="middle" class="s">model</text>
+  <rect x="900" y="275" width="140" height="60" rx="6" class="ghost"/>
+  <text x="970" y="299" text-anchor="middle" class="b">结束</text>
+  <text x="970" y="319" text-anchor="middle" class="s">算不出任务</text>
+  <path d="M190,305 H 220" class="ln" marker-end="url(#ar)"/>
+  <path d="M360,305 H 390" class="ln" marker-end="url(#ar)"/>
+  <path d="M530,305 H 560" class="ln" marker-end="url(#ar)"/>
+  <path d="M700,305 H 730" class="ln" marker-end="url(#ar)"/>
+  <path d="M870,305 H 900" class="ln" marker-end="url(#ar)"/>
+  <text x="540" y="365" text-anchor="middle" class="s">每个超步：读同一份 state → 并行执行 → 合并写入 → 存一个 checkpoint；下一步跑谁，由 channel 的版本号算出来</text>
+</svg>
+</div>
+<p class="cap">图 0　构建、编译、执行三个阶段，以及一次调用在时间上的展开</p>
+
+<ul>
+  <li><b>编译</b>：<code>StateGraph</code> 只是构建器。<code>compile()</code> 把它翻译成 <code>Pregel</code>：state 的每个字段变成一个 channel；每个节点变成一个 PregelNode，订阅自己的 <code>branch:to:&lt;节点&gt;</code>；边变成"上游节点跑完后往这个 channel 写一条"。节点之间没有直接的调用关系。</li>
+  <li><b>执行</b>：按 BSP 模型分超步执行。每一步先算出要跑的任务，这些任务并行执行、读同一份 state；它们的写入先攒在各自身上，全部跑完后按 reducer 统一合并，再存一个 checkpoint。</li>
+  <li><b>调度</b>：引擎里没有"当前执行到哪个节点"的指针。一个节点该不该跑，只看它订阅的 channel 版本号是否比它上次见过的新。所以拿到任意一个 checkpoint，都能算出同样的下一步。</li>
+  <li><b>结束</b>：某一步算不出任务就正常结束；超步数超过 <code>recursion_limit</code> 抛 <code>GraphRecursionError</code>（1.2.17 默认 10007，旧资料里的 25 已经过时）。</li>
+</ul>
+
+<!-- ====================================================================== -->
+<h2 id="s1">1. 基本概念</h2>
+<table>
+  <tr><th>概念</th><th>是什么</th><th>源码位置</th></tr>
+  <tr><td>StateGraph</td><td>构建器：声明 state schema、节点和边。本身不能执行</td><td><code>graph/state.py</code></td></tr>
+  <tr><td>Pregel / CompiledStateGraph</td><td><code>compile()</code> 的产物，实现 <code>Runnable</code> 接口（<code>invoke</code> / <code>stream</code> / <code>ainvoke</code> …），持有全部 channel 和 PregelNode。<code>CompiledStateGraph</code> 是 <code>Pregel</code> 的子类</td><td><code>pregel/main.py</code></td></tr>
+  <tr><td>channel</td><td>存一个值、带版本号的容器。state 字段、边、<code>Send</code> 都用 channel 表达。channel 的类型决定"一步收到多个写入怎么合并"和"值保留多久"</td><td><code>channels/</code></td></tr>
+  <tr><td>PregelNode</td><td>节点的执行描述：<code>triggers</code>（订阅哪些 channel）、<code>channels</code>（读哪些）、<code>bound</code>（用户函数）、<code>writers</code>（写哪些）</td><td><code>pregel/_read.py</code></td></tr>
+  <tr><td>超步（superstep）</td><td>一轮调度：同一批任务并行执行，跑完统一合并。编号从 -1（写入输入）开始</td><td><code>pregel/_loop.py</code></td></tr>
+  <tr><td>task</td><td>某个超步里的一次节点执行。<b>PULL</b> 任务由 channel 更新触发；<b>PUSH</b> 任务由 <code>Send</code> 触发，一个 <code>Send</code> 一个任务</td><td><code>pregel/_algo.py</code></td></tr>
+  <tr><td>writes</td><td>任务产出的 <code>(channel, value)</code> 列表。执行期间只攒在任务自己身上，超步结束时才合并进 channel</td><td>—</td></tr>
+  <tr><td>reducer</td><td>一个字段在一步里收到多个写入时的合并函数，在 <code>Annotated[类型, reducer]</code> 里声明，如 <code>operator.add</code>、<code>add_messages</code></td><td><code>channels/binop.py</code></td></tr>
+</table>
+
+<!-- ====================================================================== -->
+<h2 id="s2">2. 编译：从 StateGraph 到 Pregel</h2>
+<p><code>compile()</code> 做三件事：校验图（节点是否存在、有没有入口等）；把 state schema 和边翻译成 channel；把每个节点包装成 PregelNode。下面用一个 a ⇄ b 循环的小图说明翻译结果（编译产物是实测打印出来的）：</p>
+<div class="fig">
+<svg viewBox="0 0 1080 440" width="100%" role="img" aria-label="编译前后对照">
+  <rect x="10" y="10" width="400" height="420" rx="8" class="inner"/>
+  <text x="26" y="34" class="b">构建期：StateGraph</text>
+  <text x="30" y="62" class="mono">class S(TypedDict):</text>
+  <text x="56" y="80" class="mono">log: Annotated[list, operator.add]</text>
+  <text x="56" y="98" class="mono">x: int</text>
+  <text x="30" y="122" class="mono">g.add_node("a", fa)</text>
+  <text x="30" y="140" class="mono">g.add_node("b", fb)</text>
+  <text x="30" y="158" class="mono">g.add_edge(START, "a")</text>
+  <text x="30" y="176" class="mono">g.add_conditional_edges("a", route)</text>
+  <text x="30" y="194" class="mono">g.add_edge("b", "a")</text>
+
+  <rect x="30" y="250" width="80" height="34" rx="17" class="inner"/>
+  <text x="70" y="271" text-anchor="middle" class="s">START</text>
+  <rect x="160" y="250" width="90" height="34" rx="6" class="c2"/>
+  <text x="205" y="271" text-anchor="middle" class="b">a</text>
+  <rect x="300" y="250" width="90" height="34" rx="6" class="c2"/>
+  <text x="345" y="271" text-anchor="middle" class="b">b</text>
+  <rect x="160" y="370" width="90" height="34" rx="17" class="inner"/>
+  <text x="205" y="391" text-anchor="middle" class="s">END</text>
+  <path d="M110,267 H 160" class="ln" marker-end="url(#ar)"/>
+  <path d="M235,250 C 255,220 290,220 315,250" class="ln dash" marker-end="url(#ar)"/>
+  <text x="275" y="222" text-anchor="middle" class="s">route → "b"</text>
+  <path d="M330,284 C 310,316 260,316 230,284" class="ln" marker-end="url(#ar)"/>
+  <text x="280" y="326" text-anchor="middle" class="s">b → a</text>
+  <path d="M190,284 V 370" class="ln dash" marker-end="url(#ar)"/>
+  <text x="120" y="335" text-anchor="middle" class="s">route → END</text>
+
+  <path d="M410,220 H 450" class="ln" marker-end="url(#ar)"/>
+
+  <rect x="450" y="10" width="620" height="420" rx="8" class="inner"/>
+  <text x="466" y="34" class="b">编译后：Pregel</text>
+  <rect x="470" y="48" width="580" height="118" rx="6" class="c4"/>
+  <text x="484" y="72" class="b">channels</text>
+  <text x="484" y="100" class="mono">log</text>
+  <text x="590" y="100" class="mono">BinaryOperatorAggregate</text>
+  <text x="484" y="124" class="mono">x</text>
+  <text x="590" y="124" class="mono">LastValue</text>
+  <text x="484" y="148" class="mono">__pregel_tasks</text>
+  <text x="590" y="148" class="mono">Topic(Send)</text>
+  <text x="770" y="100" class="mono">__start__</text>
+  <text x="860" y="100" class="mono">EphemeralValue</text>
+  <text x="770" y="124" class="mono">branch:to:a</text>
+  <text x="860" y="124" class="mono">EphemeralValue</text>
+  <text x="770" y="148" class="mono">branch:to:b</text>
+  <text x="860" y="148" class="mono">EphemeralValue</text>
+
+  <rect x="470" y="185" width="185" height="170" rx="6" class="c1"/>
+  <text x="562" y="208" text-anchor="middle" class="b">__start__（隐藏）</text>
+  <text x="482" y="236" class="mono">triggers: __start__</text>
+  <text x="482" y="258" class="mono">读: __start__</text>
+  <text x="482" y="280" class="s">写：输入拆成 log、x</text>
+  <text x="482" y="302" class="mono">写: branch:to:a</text>
+
+  <rect x="668" y="185" width="185" height="170" rx="6" class="c2"/>
+  <text x="760" y="208" text-anchor="middle" class="b">a</text>
+  <text x="680" y="236" class="mono">triggers: branch:to:a</text>
+  <text x="680" y="258" class="mono">读: log, x</text>
+  <text x="680" y="280" class="mono">bound: fa</text>
+  <text x="680" y="302" class="s">写：fa 的返回值</text>
+  <text x="680" y="324" class="s">分支：调 route，按结果写</text>
+  <text x="680" y="342" class="mono">branch:to:b 或不写</text>
+
+  <rect x="866" y="185" width="185" height="170" rx="6" class="c2"/>
+  <text x="958" y="208" text-anchor="middle" class="b">b</text>
+  <text x="878" y="236" class="mono">triggers: branch:to:b</text>
+  <text x="878" y="258" class="mono">读: log, x</text>
+  <text x="878" y="280" class="mono">bound: fb</text>
+  <text x="878" y="302" class="s">写：fb 的返回值</text>
+  <text x="878" y="324" class="mono">写: branch:to:a</text>
+
+  <text x="760" y="388" text-anchor="middle" class="s">节点只认识 channel：上游往 channel 写，下游订阅 channel，互相不知道对方是谁</text>
+  <text x="760" y="410" text-anchor="middle" class="s">END 不是节点，也没有 channel：路由到 END 就是什么都不写</text>
+</svg>
+</div>
+<p class="cap">图 1　compile() 把 state 字段、节点、边都翻译成 channel 的读写</p>
+
+<table>
+  <tr><th>构建期写法</th><th>编译结果</th></tr>
+  <tr><td>字段 <code>x: int</code></td><td><code>LastValue</code> channel：一步只能收一个写入</td></tr>
+  <tr><td>字段 <code>log: Annotated[list, operator.add]</code></td><td><code>BinaryOperatorAggregate</code> channel：多个写入用 reducer 逐个合并</td></tr>
+  <tr><td><code>add_node("a", fn)</code></td><td>channel <code>branch:to:a</code>（<code>EphemeralValue</code>）＋ PregelNode：<code>triggers=[branch:to:a]</code>，读 state 的全部字段（或 <code>input_schema</code> 里的字段），<code>bound=fn</code>，writer 把返回值写回 state</td></tr>
+  <tr><td><code>add_edge("a", "b")</code></td><td>给 a 加一个 writer：a 跑完写 <code>(branch:to:b, None)</code></td></tr>
+  <tr><td><code>add_edge(["b", "c"], "d")</code></td><td>channel <code>join:b+c:d</code>（<code>NamedBarrierValue</code>）；b、c 各写自己的名字，集齐才触发 d</td></tr>
+  <tr><td><code>add_conditional_edges("a", route)</code></td><td>给 a 加一个分支 writer：a 跑完调用 <code>route</code>，返回的节点名翻译成 <code>branch:to:&lt;目标&gt;</code>，返回的 <code>Send</code> 写进 <code>__pregel_tasks</code></td></tr>
+  <tr><td><code>START</code></td><td>channel <code>__start__</code> ＋ 隐藏节点 <code>__start__</code>：把调用输入拆成各字段写入，再沿 START 的边往下写</td></tr>
+  <tr><td><code>END</code></td><td>没有对应的节点和 channel</td></tr>
+  <tr><td><code>add_node(..., defer=True)</code></td><td><code>branch:to:&lt;节点&gt;</code> 换成 <code>LastValueAfterFinish</code>：等图里没有别的节点要跑时才可用（见第 6 节）</td></tr>
+</table>
+
+<h3>2.1 一个任务的执行过程</h3>
+<p>PregelNode 在执行时被组装成一个 <code>RunnableSeq(bound, *writers)</code>：先跑用户函数，再依次跑各个 writer。所有 writer 都只往任务自己的 <code>writes</code> 列表里追加，不直接改 channel。</p>
+<div class="fig">
+<svg viewBox="0 0 1080 250" width="100%" role="img" aria-label="一个任务的执行过程">
+  <rect x="20" y="40" width="170" height="74" rx="6" class="c1"/>
+  <text x="105" y="64" text-anchor="middle" class="b">① 取输入</text>
+  <text x="105" y="84" text-anchor="middle" class="s">建任务时从 channel 读</text>
+  <text x="105" y="102" text-anchor="middle" class="s">本超步开始时的值</text>
+  <rect x="220" y="40" width="170" height="74" rx="6" class="c2"/>
+  <text x="305" y="64" text-anchor="middle" class="b">② bound</text>
+  <text x="305" y="84" text-anchor="middle" class="s">用户的节点函数</text>
+  <text x="305" y="102" text-anchor="middle" class="s">返回 dict / Command / None</text>
+  <rect x="420" y="40" width="190" height="74" rx="6" class="c4"/>
+  <text x="515" y="64" text-anchor="middle" class="b">③ writer：state</text>
+  <text x="515" y="84" text-anchor="middle" class="s">返回值拆成 (字段, 值)</text>
+  <text x="515" y="102" text-anchor="middle" class="s">schema 里没有的 key 丢弃</text>
+  <rect x="640" y="40" width="190" height="74" rx="6" class="c4"/>
+  <text x="735" y="64" text-anchor="middle" class="b">④ writer：静态边</text>
+  <text x="735" y="84" text-anchor="middle" class="mono">(branch:to:b, None)</text>
+  <text x="735" y="102" text-anchor="middle" class="s">或 join:…（等待边）</text>
+  <rect x="860" y="40" width="200" height="74" rx="6" class="c4"/>
+  <text x="960" y="64" text-anchor="middle" class="b">⑤ writer：条件边</text>
+  <text x="960" y="84" text-anchor="middle" class="s">route(state + 本任务的写入)</text>
+  <text x="960" y="102" text-anchor="middle" class="s">→ branch:to:X 或 Send</text>
+  <path d="M190,77 H 220" class="ln" marker-end="url(#ar)"/>
+  <path d="M390,77 H 420" class="ln" marker-end="url(#ar)"/>
+  <path d="M610,77 H 640" class="ln" marker-end="url(#ar)"/>
+  <path d="M830,77 H 860" class="ln" marker-end="url(#ar)"/>
+
+  <rect x="420" y="160" width="640" height="64" rx="6" class="c3"/>
+  <text x="740" y="185" text-anchor="middle" class="b">task.writes：所有写入先攒在任务自己的列表里，不改 channel</text>
+  <text x="740" y="207" text-anchor="middle" class="s">任务一结束就 put_writes 交给 checkpointer，并产出一条 updates 流事件</text>
+  <path d="M515,114 V 160" class="ln" marker-end="url(#ar)"/>
+  <path d="M735,114 V 160" class="ln" marker-end="url(#ar)"/>
+  <path d="M960,114 V 160" class="ln" marker-end="url(#ar)"/>
+
+  <text x="20" y="180" class="mono">RunnableSeq(bound, *writers)</text>
+  <text x="20" y="200" class="s">即 PregelNode.node</text>
+</svg>
+</div>
+<p class="cap">图 2　节点函数和各种边，执行时都只是往 task.writes 里追加写入</p>
+
+<p>节点返回值的处理（<code>graph/state.py</code> 的 <code>_get_updates</code>、<code>_control_branch</code>）：</p>
+<table>
+  <tr><th>返回</th><th>处理</th></tr>
+  <tr><td><code>dict</code></td><td>只取 state schema 里有的 key。<b>没有的 key 静默丢弃</b>：实测返回 <code>{"x": 1, "typo": 2}</code>，只写了 <code>x</code>，不报错</td></tr>
+  <tr><td><code>None</code></td><td>不写任何字段</td></tr>
+  <tr><td><code>Command</code></td><td><code>update</code> 当作 state 写入；<code>goto</code> 翻译成 <code>branch:to:&lt;目标&gt;</code> 或 <code>Send</code>；<code>graph=Command.PARENT</code> 交给父图</td></tr>
+  <tr><td>Pydantic / dataclass 实例</td><td>按 schema 的字段取值</td></tr>
+  <tr><td>其他</td><td>抛 <code>InvalidUpdateError</code></td></tr>
+</table>
+
+<!-- ====================================================================== -->
+<h2 id="s3">3. channel：state 和边的载体</h2>
+<p>channel 的类型决定两件事：一个超步里收到多个写入怎么办；值能保留多久。超步结束时，<code>apply_writes</code> 把这一步所有任务的写入按 channel 分组，调用各 channel 的 <code>update(values)</code>。值变了，版本号就加一。</p>
+<div class="fig">
+<svg viewBox="0 0 1080 300" width="100%" role="img" aria-label="几种 channel 的合并行为">
+  <text x="20" y="30" class="b">channel</text>
+  <text x="330" y="30" text-anchor="middle" class="b">合并前</text>
+  <text x="560" y="30" text-anchor="middle" class="b">本超步收到的写入</text>
+  <text x="900" y="30" text-anchor="middle" class="b">合并后</text>
+
+  <text x="20" y="72" class="b">LastValue</text>
+  <text x="100" y="72" class="mono">x: int</text>
+  <rect x="250" y="48" width="160" height="38" rx="5" class="inner"/><text x="330" y="72" text-anchor="middle" class="mono">0</text>
+  <rect x="440" y="48" width="240" height="38" rx="5" class="c4"/><text x="560" y="72" text-anchor="middle" class="mono">[1]</text>
+  <rect x="740" y="48" width="320" height="38" rx="5" class="c3"/><text x="900" y="72" text-anchor="middle" class="mono">1</text>
+
+  <text x="20" y="122" class="b">LastValue</text>
+  <text x="100" y="122" class="s">两个并行节点都写</text>
+  <rect x="250" y="98" width="160" height="38" rx="5" class="inner"/><text x="330" y="122" text-anchor="middle" class="mono">0</text>
+  <rect x="440" y="98" width="240" height="38" rx="5" class="c4"/><text x="560" y="122" text-anchor="middle" class="mono">[1, 2]</text>
+  <rect x="740" y="98" width="320" height="38" rx="5" class="c5"/><text x="900" y="122" text-anchor="middle" class="mono">InvalidUpdateError</text>
+
+  <text x="20" y="172" class="b">BinaryOperatorAggregate</text>
+  <rect x="250" y="148" width="160" height="38" rx="5" class="inner"/><text x="330" y="172" text-anchor="middle" class="mono">['a']</text>
+  <rect x="440" y="148" width="240" height="38" rx="5" class="c4"/><text x="560" y="172" text-anchor="middle" class="mono">[['b'], ['c']]</text>
+  <rect x="740" y="148" width="320" height="38" rx="5" class="c3"/><text x="900" y="172" text-anchor="middle" class="mono">add(add(['a'], ['b']), ['c'])</text>
+
+  <text x="20" y="222" class="b">EphemeralValue</text>
+  <text x="128" y="222" class="mono">branch:to:d</text>
+  <rect x="250" y="198" width="160" height="38" rx="5" class="inner"/><text x="330" y="222" text-anchor="middle" class="s">空</text>
+  <rect x="440" y="198" width="240" height="38" rx="5" class="c4"/><text x="560" y="222" text-anchor="middle" class="mono">[None, None]</text>
+  <rect x="740" y="198" width="320" height="38" rx="5" class="c3"/><text x="900" y="222" text-anchor="middle" class="s">有值、可用 → 下一步触发 d（只一次）</text>
+
+  <text x="20" y="272" class="b">EphemeralValue</text>
+  <text x="128" y="272" class="s">再下一步</text>
+  <rect x="250" y="248" width="160" height="38" rx="5" class="inner"/><text x="330" y="272" text-anchor="middle" class="mono">None</text>
+  <rect x="440" y="248" width="240" height="38" rx="5" class="c4"/><text x="560" y="272" text-anchor="middle" class="s">[]（这一步没人写）</text>
+  <rect x="740" y="248" width="320" height="38" rx="5" class="ghost"/><text x="900" y="272" text-anchor="middle" class="s">清空：版本 +1 但不可用，不会触发</text>
+</svg>
+</div>
+<p class="cap">图 3　同样是"收到写入"，不同 channel 的处理不同。边用的是只活一个超步的 EphemeralValue</p>
+
+<table>
+  <tr><th>类型</th><th>一步收到多个写入</th><th>值保留多久</th><th>用在哪</th></tr>
+  <tr><td><code>LastValue</code></td><td>报 <code>InvalidUpdateError</code></td><td>一直保留</td><td>没有声明 reducer 的 state 字段</td></tr>
+  <tr><td><code>BinaryOperatorAggregate</code></td><td>用 reducer 逐个合并；写入 <code>Overwrite(值)</code> 可以绕过 reducer 直接覆盖</td><td>一直保留</td><td><code>Annotated[T, reducer]</code> 字段，如 <code>messages</code>（<code>add_messages</code>）</td></tr>
+  <tr><td><code>EphemeralValue</code></td><td><code>guard=False</code> 时取最后一个</td><td>一个超步：下一步没人写就清空</td><td><code>__start__</code>、<code>branch:to:&lt;节点&gt;</code></td></tr>
+  <tr><td><code>Topic</code></td><td>全部收下</td><td><code>accumulate=False</code> 时每步清空</td><td><code>__pregel_tasks</code>（<code>Send</code> 队列）</td></tr>
+  <tr><td><code>NamedBarrierValue</code></td><td>记下写入者的名字</td><td>名字集齐才可用；被消费后重置</td><td>等待边 <code>join:a+b:c</code></td></tr>
+  <tr><td><code>LastValueAfterFinish</code> / <code>NamedBarrierValueAfterFinish</code></td><td>同上</td><td>到"本次调用快要结束"时才可用</td><td><code>defer=True</code> 的节点</td></tr>
+  <tr><td><code>UntrackedValue</code></td><td>取最后一个</td><td>不写进 checkpoint</td><td>需要时在 <code>Annotated</code> 里显式声明</td></tr>
+  <tr><td><code>DeltaChannel</code>（beta）</td><td>按 reducer</td><td>checkpoint 只存增量</td><td>很长的消息列表，见 checkpoint 一文</td></tr>
+</table>
+<p>"可用"（<code>is_available</code>）是调度的前提：一个 channel 版本变了但已经清空（不可用），不会触发订阅它的节点。这正是边能"只生效一次"的原因。</p>
+
+<!-- ====================================================================== -->
+<h2 id="s4">4. 执行循环</h2>
+<p><code>invoke</code> 是 <code>stream</code> 的包装；<code>stream</code> 打开一个 <code>SyncPregelLoop</code>（异步是 <code>AsyncPregelLoop</code>），然后反复执行"tick → 并行执行 → after_tick"。源码里的注释把规则说得很直接：<i>Channel updates from step N are only visible in step N+1</i>。</p>
+<div class="fig">
+<svg viewBox="0 0 1080 370" width="100%" role="img" aria-label="Pregel 执行循环">
+  <rect x="20" y="40" width="210" height="180" rx="6" class="c1"/>
+  <text x="125" y="64" text-anchor="middle" class="b">调用开始</text>
+  <text x="125" y="90" text-anchor="middle" class="s">get_tuple 取最新 checkpoint</text>
+  <text x="125" y="110" text-anchor="middle" class="s">用它还原各个 channel</text>
+  <text x="125" y="136" text-anchor="middle" class="s">新输入：写 __start__，</text>
+  <text x="125" y="156" text-anchor="middle" class="s">存 step -1（source=input）</text>
+  <text x="125" y="182" text-anchor="middle" class="s">Command(resume)：</text>
+  <text x="125" y="202" text-anchor="middle" class="s">写 __resume__，接着跑</text>
+
+  <rect x="260" y="40" width="240" height="180" rx="6" class="c2"/>
+  <text x="380" y="64" text-anchor="middle" class="mono b">loop.tick()</text>
+  <text x="380" y="92" text-anchor="middle" class="s">step &gt; stop → out_of_steps</text>
+  <text x="380" y="114" text-anchor="middle" class="mono">prepare_next_tasks()</text>
+  <text x="380" y="136" text-anchor="middle" class="s">算不出任务 → done</text>
+  <text x="380" y="158" text-anchor="middle" class="s">恢复时：已成功的任务回放写入</text>
+  <text x="380" y="180" text-anchor="middle" class="s">interrupt_before 检查</text>
+
+  <rect x="540" y="40" width="240" height="180" rx="6" class="c2"/>
+  <text x="660" y="64" text-anchor="middle" class="mono b">runner.tick()</text>
+  <text x="660" y="92" text-anchor="middle" class="s">并行执行还没有写入的任务</text>
+  <text x="660" y="114" text-anchor="middle" class="s">同步节点：线程池</text>
+  <text x="660" y="136" text-anchor="middle" class="s">异步节点：asyncio task</text>
+  <text x="660" y="158" text-anchor="middle" class="s">每完成一个：put_writes</text>
+  <text x="660" y="180" text-anchor="middle" class="s">产出 updates 等流事件</text>
+
+  <rect x="820" y="40" width="240" height="180" rx="6" class="c3"/>
+  <text x="940" y="64" text-anchor="middle" class="mono b">loop.after_tick()</text>
+  <text x="940" y="92" text-anchor="middle" class="mono">apply_writes()</text>
+  <text x="940" y="114" text-anchor="middle" class="s">产出 values 流事件</text>
+  <text x="940" y="136" text-anchor="middle" class="s">put checkpoint（source=loop）</text>
+  <text x="940" y="158" text-anchor="middle" class="s">interrupt_after 检查</text>
+  <text x="940" y="180" text-anchor="middle" class="s">step + 1</text>
+
+  <path d="M230,130 H 260" class="ln" marker-end="url(#ar)"/>
+  <path d="M500,130 H 540" class="ln" marker-end="url(#ar)"/>
+  <path d="M780,130 H 820" class="ln" marker-end="url(#ar)"/>
+  <path d="M940,220 V 255 H 420 V 220" class="ln" marker-end="url(#ar)"/>
+  <text x="680" y="248" text-anchor="middle" class="s">下一个超步</text>
+
+  <path d="M320,220 V 290" class="ln" marker-end="url(#ar)"/>
+  <rect x="40" y="290" width="600" height="66" rx="6" class="inner"/>
+  <text x="340" y="315" text-anchor="middle" class="s">done：正常结束，返回输出字段的值</text>
+  <text x="340" y="337" text-anchor="middle" class="s">out_of_steps → GraphRecursionError；断点或 interrupt() → 以中断状态返回</text>
+  <text x="680" y="315" class="s">退出时：等后台的 checkpoint 写完；</text>
+  <text x="680" y="337" class="s">durability="exit" 时在这里一次性写入</text>
+</svg>
+</div>
+<p class="cap">图 4　一次调用的主循环（<code>pregel/main.py</code> 的 <code>stream</code>、<code>pregel/_loop.py</code>、<code>pregel/_runner.py</code>）</p>
+
+<ol>
+  <li><b>调用开始</b>：取这个 thread 最新的 checkpoint（没有 checkpointer 就是一个空的），用它还原所有 channel。输入是普通值时，把它写进 <code>__start__</code>，存一个 <code>step=-1</code> 的 checkpoint；输入是 <code>None</code> 或 <code>Command</code> 时按"接着跑"处理。<code>stop = step + recursion_limit + 1</code> 在这里算好。</li>
+  <li><b>tick</b>：<code>prepare_next_tasks</code> 根据 checkpoint 算出这一步的任务（第 5 节）。算不出就以 <code>done</code> 结束。如果是从中断或出错处恢复，checkpoint 上挂着的 pending writes 会先交回给已经成功的任务，这些任务这一步不再执行。</li>
+  <li><b>执行</b>：只执行还没有写入的任务。只有一个任务时直接在当前线程跑；多个任务时，同步节点提交到线程池，异步节点创建 asyncio task。实测三个各 <code>sleep(0.5)</code> 的同步节点总耗时 0.51 秒，分别跑在 <code>ThreadPoolExecutor-6_0/1/2</code> 上。</li>
+  <li><b>任务完成</b>：每个任务一结束就 commit：写入交给 checkpointer（<code>put_writes</code>），同时产出 updates 流事件。不等同一步的其他任务。</li>
+  <li><b>after_tick</b>：所有任务都结束后，<code>apply_writes</code> 合并写入、更新版本号，存一个 checkpoint，step 加一，回到 tick。</li>
+</ol>
+
+<h3>4.1 流式输出的产出时机</h3>
+<table>
+  <tr><th><code>stream_mode</code></th><th>什么时候产出</th><th>内容</th></tr>
+  <tr><td><code>values</code></td><td>每个超步合并之后（被更新的 channel 和输出字段有交集时）</td><td>完整 state</td></tr>
+  <tr><td><code>updates</code></td><td>每个任务结束时，<b>按完成先后</b></td><td><code>{节点名: 返回的更新}</code></td></tr>
+  <tr><td><code>messages</code></td><td>节点里的 LLM 产出 token 时（通过 callback）</td><td><code>(消息块, 元数据)</code></td></tr>
+  <tr><td><code>custom</code></td><td>节点里调用 <code>get_stream_writer()</code> 返回的函数时</td><td>任意值</td></tr>
+  <tr><td><code>checkpoints</code></td><td>每次存 checkpoint</td><td>与 <code>get_state()</code> 同格式</td></tr>
+  <tr><td><code>tasks</code></td><td>任务开始、结束</td><td>任务名、输入、结果或错误</td></tr>
+  <tr><td><code>debug</code></td><td>checkpoints ＋ tasks</td><td>—</td></tr>
+</table>
+
+<!-- ====================================================================== -->
+<h2 id="s5">5. 调度：下一步跑谁</h2>
+<p><code>prepare_next_tasks</code>（<code>pregel/_algo.py</code>）每一步产出两类任务：</p>
+<ul>
+  <li><b>PUSH 任务</b>：<code>__pregel_tasks</code> 里每个 <code>Send</code> 一个，目标是 <code>Send.node</code>，输入是 <code>Send.arg</code>（不是 state）。</li>
+  <li><b>PULL 任务</b>：对每个节点检查 <code>_triggers</code>：它订阅的 channel 里，只要有一个<b>可用</b>，并且版本号 <b>大于</b> <code>versions_seen[节点][channel]</code>，这个节点就要跑。为了不每步遍历所有节点，引擎先用 <code>trigger_to_nodes</code> 找出"上一步被更新的 channel 有哪些订阅者"，只检查这些节点。</li>
+</ul>
+<p>任务跑完后，<code>apply_writes</code> 把它当时看到的 trigger 版本记进 <code>versions_seen</code>。下面是 a ⇄ b 循环（<code>route</code> 在 log 满 3 条时返回 END）每个 checkpoint 上的实测版本号：</p>
+<div class="fig">
+<svg viewBox="0 0 1080 340" width="100%" role="img" aria-label="版本号与调度">
+  <text x="345" y="30" text-anchor="middle" class="b">step -1</text>
+  <text x="505" y="30" text-anchor="middle" class="b">step 0</text>
+  <text x="665" y="30" text-anchor="middle" class="b">step 1</text>
+  <text x="825" y="30" text-anchor="middle" class="b">step 2</text>
+  <text x="985" y="30" text-anchor="middle" class="b">step 3</text>
+
+  <text x="20" y="64" class="b">这一步跑了</text>
+  <rect x="275" y="44" width="140" height="30" rx="5" class="inner"/><text x="345" y="64" text-anchor="middle" class="s">写入输入</text>
+  <rect x="435" y="44" width="140" height="30" rx="5" class="inner"/><text x="505" y="64" text-anchor="middle" class="mono">__start__</text>
+  <rect x="595" y="44" width="140" height="30" rx="5" class="inner"/><text x="665" y="64" text-anchor="middle" class="mono">a</text>
+  <rect x="755" y="44" width="140" height="30" rx="5" class="inner"/><text x="825" y="64" text-anchor="middle" class="mono">b</text>
+  <rect x="915" y="44" width="140" height="30" rx="5" class="inner"/><text x="985" y="64" text-anchor="middle" class="mono">a</text>
+
+  <text x="20" y="104" class="mono">channel_versions[branch:to:a]</text>
+  <rect x="275" y="84" width="140" height="30" rx="5" class="inner"/><text x="345" y="104" text-anchor="middle" class="s">—</text>
+  <rect x="435" y="84" width="140" height="30" rx="5" class="c3"/><text x="505" y="104" text-anchor="middle">2　可用</text>
+  <rect x="595" y="84" width="140" height="30" rx="5" class="ghost"/><text x="665" y="104" text-anchor="middle">3　已清空</text>
+  <rect x="755" y="84" width="140" height="30" rx="5" class="c3"/><text x="825" y="104" text-anchor="middle">4　可用</text>
+  <rect x="915" y="84" width="140" height="30" rx="5" class="ghost"/><text x="985" y="104" text-anchor="middle">5　已清空</text>
+
+  <text x="20" y="144" class="mono">versions_seen[a][branch:to:a]</text>
+  <rect x="275" y="124" width="140" height="30" rx="5" class="inner"/><text x="345" y="144" text-anchor="middle" class="s">—</text>
+  <rect x="435" y="124" width="140" height="30" rx="5" class="inner"/><text x="505" y="144" text-anchor="middle" class="s">—</text>
+  <rect x="595" y="124" width="140" height="30" rx="5" class="inner"/><text x="665" y="144" text-anchor="middle">2</text>
+  <rect x="755" y="124" width="140" height="30" rx="5" class="inner"/><text x="825" y="144" text-anchor="middle">2</text>
+  <rect x="915" y="124" width="140" height="30" rx="5" class="inner"/><text x="985" y="144" text-anchor="middle">4</text>
+
+  <text x="20" y="184" class="mono">channel_versions[branch:to:b]</text>
+  <rect x="275" y="164" width="140" height="30" rx="5" class="inner"/><text x="345" y="184" text-anchor="middle" class="s">—</text>
+  <rect x="435" y="164" width="140" height="30" rx="5" class="inner"/><text x="505" y="184" text-anchor="middle" class="s">—</text>
+  <rect x="595" y="164" width="140" height="30" rx="5" class="c3"/><text x="665" y="184" text-anchor="middle">3　可用</text>
+  <rect x="755" y="164" width="140" height="30" rx="5" class="ghost"/><text x="825" y="184" text-anchor="middle">4　已清空</text>
+  <rect x="915" y="164" width="140" height="30" rx="5" class="ghost"/><text x="985" y="184" text-anchor="middle">4　已清空</text>
+
+  <text x="20" y="224" class="mono">versions_seen[b][branch:to:b]</text>
+  <rect x="275" y="204" width="140" height="30" rx="5" class="inner"/><text x="345" y="224" text-anchor="middle" class="s">—</text>
+  <rect x="435" y="204" width="140" height="30" rx="5" class="inner"/><text x="505" y="224" text-anchor="middle" class="s">—</text>
+  <rect x="595" y="204" width="140" height="30" rx="5" class="inner"/><text x="665" y="224" text-anchor="middle" class="s">—</text>
+  <rect x="755" y="204" width="140" height="30" rx="5" class="inner"/><text x="825" y="224" text-anchor="middle">3</text>
+  <rect x="915" y="204" width="140" height="30" rx="5" class="inner"/><text x="985" y="224" text-anchor="middle">3</text>
+
+  <text x="20" y="264" class="mono">channel_versions[log]</text>
+  <rect x="275" y="244" width="140" height="30" rx="5" class="inner"/><text x="345" y="264" text-anchor="middle" class="s">—</text>
+  <rect x="435" y="244" width="140" height="30" rx="5" class="inner"/><text x="505" y="264" text-anchor="middle">2</text>
+  <rect x="595" y="244" width="140" height="30" rx="5" class="inner"/><text x="665" y="264" text-anchor="middle">3</text>
+  <rect x="755" y="244" width="140" height="30" rx="5" class="inner"/><text x="825" y="264" text-anchor="middle">4</text>
+  <rect x="915" y="244" width="140" height="30" rx="5" class="inner"/><text x="985" y="264" text-anchor="middle">5</text>
+
+  <text x="20" y="306" class="b">算出的下一步（next）</text>
+  <rect x="275" y="286" width="140" height="30" rx="5" class="c2"/><text x="345" y="306" text-anchor="middle" class="mono">__start__</text>
+  <rect x="435" y="286" width="140" height="30" rx="5" class="c2"/><text x="505" y="306" text-anchor="middle" class="mono">a</text>
+  <rect x="595" y="286" width="140" height="30" rx="5" class="c2"/><text x="665" y="306" text-anchor="middle" class="mono">b</text>
+  <rect x="755" y="286" width="140" height="30" rx="5" class="c2"/><text x="825" y="306" text-anchor="middle" class="mono">a</text>
+  <rect x="915" y="286" width="140" height="30" rx="5" class="ghost"/><text x="985" y="306" text-anchor="middle" class="s">无 → 结束</text>
+</svg>
+</div>
+<p class="cap">图 5　版本号只取整数部分。绿色格：版本比节点见过的新、且可用 → 下一步触发；虚线格：版本变了但值已清空 → 不触发</p>
+<ul>
+  <li><b>step 0 → a</b>：<code>branch:to:a</code> 版本 2，a 没见过（视为 0），可用 → 触发。</li>
+  <li><b>step 1 → b</b>：a 跑完、route 返回 "b"，写了 <code>branch:to:b</code>。<code>branch:to:a</code> 这一步没人写，被清空（版本 2→3，但不可用），所以 a 不会再被触发。</li>
+  <li><b>step 2 → a</b>：b 的静态边写了 <code>branch:to:a</code>，版本 4 &gt; a 见过的 2 → a 再跑一次。循环就是这样形成的：不需要"回到 a"的指针，只要 a 订阅的 channel 又被写了。</li>
+  <li><b>step 3 → 结束</b>：route 返回 END，什么都没写；所有 trigger channel 都不可用，算不出任务。</li>
+</ul>
+<p>任务 id 也是算出来的：对 <code>(checkpoint_id, 命名空间, step, 节点名, PULL, triggers)</code> 做哈希。同一个 checkpoint 无论在哪个进程上算，得到的任务和 id 都一样，恢复时就靠这个把 pending writes 对回各自的任务（见 checkpoint 一文第 6 节）。</p>
+
+<!-- ====================================================================== -->
+<h2 id="s6">6. 并行与合并</h2>
+<div class="fig">
+<svg viewBox="0 0 1080 290" width="100%" role="img" aria-label="同一超步的并行与合并">
+  <rect x="20" y="80" width="180" height="110" rx="6" class="c1"/>
+  <text x="110" y="106" text-anchor="middle" class="b">step N 的 state</text>
+  <text x="110" y="132" text-anchor="middle" class="mono">log = ['a']</text>
+  <text x="110" y="154" text-anchor="middle" class="mono">x = 0</text>
+
+  <rect x="260" y="40" width="220" height="74" rx="6" class="c2"/>
+  <text x="370" y="64" text-anchor="middle" class="b">任务 b</text>
+  <text x="370" y="86" text-anchor="middle" class="s">读到 log=['a'], x=0</text>
+  <rect x="260" y="160" width="220" height="74" rx="6" class="c2"/>
+  <text x="370" y="184" text-anchor="middle" class="b">任务 c</text>
+  <text x="370" y="206" text-anchor="middle" class="s">读到 log=['a'], x=0</text>
+  <text x="370" y="224" text-anchor="middle" class="s">看不到 b 的写入</text>
+  <path d="M200,120 C 230,120 230,77 260,77" class="ln" marker-end="url(#ar)"/>
+  <path d="M200,150 C 230,150 230,197 260,197" class="ln" marker-end="url(#ar)"/>
+
+  <rect x="530" y="40" width="230" height="74" rx="6" class="c4"/>
+  <text x="645" y="64" text-anchor="middle" class="b">b.writes</text>
+  <text x="645" y="88" text-anchor="middle" class="mono">(log, ['b']), (x, 1)</text>
+  <rect x="530" y="160" width="230" height="74" rx="6" class="c4"/>
+  <text x="645" y="184" text-anchor="middle" class="b">c.writes</text>
+  <text x="645" y="208" text-anchor="middle" class="mono">(log, ['c'])</text>
+  <path d="M480,77 H 530" class="ln" marker-end="url(#ar)"/>
+  <path d="M480,197 H 530" class="ln" marker-end="url(#ar)"/>
+
+  <rect x="810" y="70" width="250" height="134" rx="6" class="c3"/>
+  <text x="935" y="94" text-anchor="middle" class="b">apply_writes</text>
+  <text x="935" y="118" text-anchor="middle" class="s">任务按路径排序：b、c</text>
+  <text x="935" y="140" text-anchor="middle" class="mono">log = ['a', 'b', 'c']</text>
+  <text x="935" y="162" text-anchor="middle" class="mono">x = 1</text>
+  <text x="935" y="186" text-anchor="middle" class="s">→ 存成 step N+1</text>
+  <path d="M760,77 C 785,77 785,110 810,110" class="ln" marker-end="url(#ar)"/>
+  <path d="M760,197 C 785,197 785,165 810,165" class="ln" marker-end="url(#ar)"/>
+
+  <text x="540" y="272" text-anchor="middle" class="tb">如果 c 也写了 x：LastValue 一步收到两个值 → InvalidUpdateError，整个超步失败</text>
+</svg>
+</div>
+<p class="cap">图 6　同一超步的任务读同一份快照，写入在超步结束时按确定的顺序合并</p>
+<ul>
+  <li><b>互相不可见</b>：同一步的任务读的都是本超步开始时的 state。想用另一个节点的结果，只能放到下一步。</li>
+  <li><b>合并顺序是确定的</b>：<code>apply_writes</code> 先按任务路径排序再逐个 reduce。PULL 任务的路径里是节点名，PUSH 任务是 <code>Send</code> 的序号，所以顺序与谁先跑完无关。实测并行的 <code>z</code>（快）和 <code>a</code>（慢）：updates 流先出 z 后出 a，但合并后的 log 是 <code>['a(慢)', 'z(快)']</code>；12 个 <code>Send</code> 任务按 11→0 的顺序完成，合并结果仍是 0→11。</li>
+  <li><b>同一个目标只跑一次</b>：一步里多个任务都写 <code>branch:to:X</code>，<code>EphemeralValue(guard=False)</code> 只保留一个值，X 下一步只跑一次。create_agent 里两个并行的工具调用都路由回 model，model 只跑一次（第 10 节）。</li>
+</ul>
+
+<h3>6.1 扇入：三种写法</h3>
+<p>当汇合点 d 的两条上游路径长度不同（b 一步，c1 → c2 两步）时，写法不同，d 的执行次数也不同（三种都实测过）：</p>
+<div class="fig">
+<svg viewBox="0 0 1080 300" width="100%" role="img" aria-label="扇入的三种写法">
+  <rect x="20" y="125" width="50" height="30" rx="6" class="c2"/><text x="45" y="145" text-anchor="middle" class="b">a</text>
+  <rect x="110" y="75" width="50" height="30" rx="6" class="c2"/><text x="135" y="95" text-anchor="middle" class="b">b</text>
+  <rect x="110" y="175" width="50" height="30" rx="6" class="c2"/><text x="135" y="195" text-anchor="middle" class="b">c1</text>
+  <rect x="200" y="175" width="50" height="30" rx="6" class="c2"/><text x="225" y="195" text-anchor="middle" class="b">c2</text>
+  <rect x="290" y="125" width="50" height="30" rx="6" class="c4"/><text x="315" y="145" text-anchor="middle" class="b">d</text>
+  <path d="M70,135 L 110,95" class="ln" marker-end="url(#ar)"/>
+  <path d="M70,145 L 110,185" class="ln" marker-end="url(#ar)"/>
+  <path d="M160,190 H 200" class="ln" marker-end="url(#ar)"/>
+  <path d="M160,95 L 290,135" class="ln" marker-end="url(#ar)"/>
+  <path d="M250,185 L 290,148" class="ln" marker-end="url(#ar)"/>
+
+  <text x="465" y="28" text-anchor="middle" class="b">超步 1</text>
+  <text x="625" y="28" text-anchor="middle" class="b">超步 2</text>
+  <text x="785" y="28" text-anchor="middle" class="b">超步 3</text>
+  <text x="945" y="28" text-anchor="middle" class="b">超步 4</text>
+
+  <text x="390" y="54" class="b">两条单独的边</text>
+  <text x="490" y="54" class="mono">add_edge("b","d"); add_edge("c2","d")</text>
+  <text x="790" y="54" class="tw">→ d 跑了两次</text>
+  <rect x="395" y="62" width="140" height="34" rx="5" class="inner"/><text x="465" y="84" text-anchor="middle">a</text>
+  <rect x="555" y="62" width="140" height="34" rx="5" class="inner"/><text x="625" y="84" text-anchor="middle">b、c1</text>
+  <rect x="715" y="62" width="140" height="34" rx="5" class="c5"/><text x="785" y="84" text-anchor="middle">d、c2</text>
+  <rect x="875" y="62" width="140" height="34" rx="5" class="c5"/><text x="945" y="84" text-anchor="middle">d</text>
+
+  <text x="390" y="144" class="b">等待边</text>
+  <text x="450" y="144" class="mono">add_edge(["b","c2"], "d")</text>
+  <text x="790" y="144" class="s">→ d 跑一次</text>
+  <rect x="395" y="152" width="140" height="34" rx="5" class="inner"/><text x="465" y="174" text-anchor="middle">a</text>
+  <rect x="555" y="152" width="140" height="34" rx="5" class="inner"/><text x="625" y="174" text-anchor="middle">b、c1</text>
+  <rect x="715" y="152" width="140" height="34" rx="5" class="inner"/><text x="785" y="174" text-anchor="middle">c2</text>
+  <rect x="875" y="152" width="140" height="34" rx="5" class="c3"/><text x="945" y="174" text-anchor="middle">d</text>
+
+  <text x="390" y="234" class="b">defer=True</text>
+  <text x="470" y="234" class="s">两条单独的边 + add_node("d", fd, defer=True)</text>
+  <text x="790" y="234" class="s">→ d 跑一次</text>
+  <rect x="395" y="242" width="140" height="34" rx="5" class="inner"/><text x="465" y="264" text-anchor="middle">a</text>
+  <rect x="555" y="242" width="140" height="34" rx="5" class="inner"/><text x="625" y="264" text-anchor="middle">b、c1</text>
+  <rect x="715" y="242" width="140" height="34" rx="5" class="inner"/><text x="785" y="264" text-anchor="middle">c2</text>
+  <rect x="875" y="242" width="140" height="34" rx="5" class="c3"/><text x="945" y="264" text-anchor="middle">d</text>
+</svg>
+</div>
+<p class="cap">图 7　上游路径不等长时，两条单独的边会让 d 被触发两次</p>
+<table>
+  <tr><th>写法</th><th>编译成</th><th>行为</th><th>适用</th></tr>
+  <tr><td>两条单独的边</td><td>b、c2 各自写 <code>branch:to:d</code></td><td>同一步到达只跑一次；不同步到达就各触发一次</td><td>上游路径一定等长，或本来就希望 d 多次执行</td></tr>
+  <tr><td>等待边 <code>add_edge([b, c2], d)</code></td><td><code>NamedBarrierValue</code> <code>join:b+c2:d</code></td><td>b、c2 都写过才可用，触发后重置</td><td>汇合的上游是固定的几个节点</td></tr>
+  <tr><td><code>defer=True</code></td><td><code>branch:to:d</code> 换成 <code>LastValueAfterFinish</code></td><td>图里没有别的节点要跑时才可用，然后 d 跑一次</td><td>上游分支数不固定（如 <code>Send</code> 扇出后的汇总）</td></tr>
+</table>
+
+<!-- ====================================================================== -->
+<h2 id="s7">7. 控制流：条件边、Send、Command</h2>
+<div class="fig">
+<svg viewBox="0 0 1080 300" width="100%" role="img" aria-label="三种动态控制流">
+  <rect x="20" y="20" width="340" height="270" rx="8" class="inner"/>
+  <text x="36" y="44" class="b">条件边</text>
+  <rect x="40" y="60" width="300" height="38" rx="6" class="c2"/>
+  <text x="190" y="84" text-anchor="middle">节点 a 跑完</text>
+  <rect x="40" y="124" width="300" height="50" rx="6" class="c4"/>
+  <text x="190" y="146" text-anchor="middle" class="mono">route(state)</text>
+  <text x="190" y="164" text-anchor="middle" class="s">state = 本步开始时的值 + a 自己的写入</text>
+  <rect x="40" y="200" width="300" height="76" rx="6" class="c3"/>
+  <text x="56" y="222" class="s">"b" → 写 branch:to:b</text>
+  <text x="56" y="242" class="s">["b", "c"] → 两个都写，下一步并行</text>
+  <text x="56" y="262" class="s">END → 什么都不写　Send → 见中间</text>
+  <path d="M190,98 V 124" class="ln" marker-end="url(#ar)"/>
+  <path d="M190,174 V 200" class="ln" marker-end="url(#ar)"/>
+
+  <rect x="370" y="20" width="340" height="270" rx="8" class="inner"/>
+  <text x="386" y="44" class="b">Send</text>
+  <rect x="390" y="60" width="300" height="50" rx="6" class="c2"/>
+  <text x="540" y="80" text-anchor="middle" class="s">route 或 Command(goto) 返回</text>
+  <text x="540" y="98" text-anchor="middle" class="mono">[Send("work", {"i": 1}), …]</text>
+  <rect x="390" y="134" width="300" height="44" rx="6" class="c4"/>
+  <text x="540" y="154" text-anchor="middle" class="mono">__pregel_tasks（Topic）</text>
+  <text x="540" y="170" text-anchor="middle" class="s">每个 Send 一条</text>
+  <rect x="390" y="200" width="300" height="76" rx="6" class="c3"/>
+  <text x="540" y="224" text-anchor="middle">下一步：每个 Send 一个 PUSH 任务</text>
+  <text x="540" y="246" text-anchor="middle" class="s">输入是 Send 带的参数，不是 state</text>
+  <text x="540" y="264" text-anchor="middle" class="s">同一节点可以并行跑多份</text>
+  <path d="M540,110 V 134" class="ln" marker-end="url(#ar)"/>
+  <path d="M540,178 V 200" class="ln" marker-end="url(#ar)"/>
+
+  <rect x="720" y="20" width="340" height="270" rx="8" class="inner"/>
+  <text x="736" y="44" class="b">Command</text>
+  <rect x="740" y="60" width="300" height="50" rx="6" class="c2"/>
+  <text x="890" y="80" text-anchor="middle" class="s">节点返回</text>
+  <text x="890" y="98" text-anchor="middle" class="mono">Command(update={…}, goto="y")</text>
+  <rect x="740" y="134" width="145" height="56" rx="6" class="c4"/>
+  <text x="812" y="158" text-anchor="middle" class="mono">update</text>
+  <text x="812" y="176" text-anchor="middle" class="s">→ state 写入</text>
+  <rect x="895" y="134" width="145" height="56" rx="6" class="c4"/>
+  <text x="967" y="158" text-anchor="middle" class="mono">goto</text>
+  <text x="967" y="176" text-anchor="middle" class="s">→ branch:to:y / Send</text>
+  <rect x="740" y="214" width="300" height="62" rx="6" class="c1"/>
+  <text x="890" y="238" text-anchor="middle" class="mono">graph=Command.PARENT</text>
+  <text x="890" y="258" text-anchor="middle" class="s">从子图里交给父图执行</text>
+  <path d="M812,110 V 134" class="ln" marker-end="url(#ar)"/>
+  <path d="M967,110 V 134" class="ln" marker-end="url(#ar)"/>
+</svg>
+</div>
+<p class="cap">图 8　三种在运行时决定去向的方式，最终都落到 branch:to:X 或 __pregel_tasks 这两类 channel 上</p>
+<table>
+  <tr><th>方式</th><th>谁决定去向</th><th>目标节点的输入</th><th>画图时能否看到</th><th>典型用途</th></tr>
+  <tr><td>静态边</td><td>编译时固定</td><td>state</td><td>能</td><td>固定流程</td></tr>
+  <tr><td>条件边</td><td>挂在节点上的 route 函数</td><td>state</td><td>route 有返回类型注解或给了 <code>path_map</code> 才能，否则画成可以去任何节点</td><td>分支、循环</td></tr>
+  <tr><td><code>Send</code></td><td>route 函数或 <code>Command.goto</code></td><td><code>Send.arg</code></td><td>不能</td><td>map-reduce；create_agent 每个工具调用一个 <code>Send</code></td></tr>
+  <tr><td><code>Command</code></td><td>节点自己</td><td>state</td><td>需要 <code>destinations</code> 或返回类型 <code>Command[Literal[...]]</code></td><td>同时更新 state 和跳转；从子图跳回父图</td></tr>
+</table>
+<div class="callout">条件边的 route 函数读到的是"本超步开始时的 state ＋ 本节点自己的写入"，<b>不含</b>同一步其他节点的写入。实测 b、c 并行，挂在 b 上的 route 看到的 log 是 <code>['in', 'b']</code>，没有 c。依赖多个并行节点结果的路由，要放到它们汇合之后。</div>
+
+<!-- ====================================================================== -->
+<h2 id="s8">8. 出错、重试与终止</h2>
+<h3>8.1 一个任务失败</h3>
+<div class="fig">
+<svg viewBox="0 0 1080 300" width="100%" role="img" aria-label="并行任务失败与续跑">
+  <rect x="20" y="20" width="510" height="220" rx="8" class="inner"/>
+  <text x="36" y="44" class="b">第一次调用：超步 2 里 c 失败</text>
+  <rect x="40" y="96" width="110" height="56" rx="6" class="c1"/>
+  <text x="95" y="120" text-anchor="middle" class="b">step 1</text>
+  <text x="95" y="140" text-anchor="middle" class="s">a 已完成</text>
+  <rect x="190" y="62" width="120" height="44" rx="6" class="c3"/>
+  <text x="250" y="89" text-anchor="middle">b：成功</text>
+  <rect x="190" y="142" width="120" height="44" rx="6" class="c5"/>
+  <text x="250" y="169" text-anchor="middle">c：抛异常</text>
+  <path d="M150,118 C 170,118 170,84 190,84" class="ln" marker-end="url(#ar)"/>
+  <path d="M150,130 C 170,130 170,164 190,164" class="ln" marker-end="url(#ar)"/>
+  <rect x="340" y="62" width="175" height="124" rx="6" class="c4"/>
+  <text x="427" y="84" text-anchor="middle" class="s">挂在 step 1 上的写入</text>
+  <text x="352" y="110" class="mono">(b, log, ['b'])</text>
+  <text x="352" y="132" class="mono">(b, join:b+c:d, 'b')</text>
+  <text x="352" y="154" class="mono">(c, __error__, …)</text>
+  <path d="M310,84 H 340" class="ln" marker-end="url(#ar)"/>
+  <path d="M310,164 H 340" class="ln" marker-end="url(#ar)"/>
+  <text x="275" y="222" text-anchor="middle" class="s">超步没走完：不合并、不存新的 checkpoint，异常抛给调用方</text>
+
+  <rect x="550" y="20" width="510" height="220" rx="8" class="inner"/>
+  <text x="566" y="44" class="b">修好后 invoke(None, config)</text>
+  <rect x="570" y="62" width="200" height="44" rx="6" class="ghost"/>
+  <text x="670" y="81" text-anchor="middle">b：不执行</text>
+  <text x="670" y="98" text-anchor="middle" class="s">直接交回它的写入</text>
+  <rect x="570" y="142" width="200" height="44" rx="6" class="c2"/>
+  <text x="670" y="169" text-anchor="middle">c：重新执行</text>
+  <rect x="810" y="62" width="230" height="124" rx="6" class="c3"/>
+  <text x="925" y="112" text-anchor="middle" class="b">合并 b、c → step 2</text>
+  <text x="925" y="134" text-anchor="middle" class="s">join 集齐 → 超步 3 跑 d</text>
+  <path d="M770,84 H 810" class="ln" marker-end="url(#ar)"/>
+  <path d="M770,164 H 810" class="ln" marker-end="url(#ar)"/>
+  <text x="805" y="222" text-anchor="middle" class="s">实测：b 共执行 1 次，c 共执行 2 次，结果 ['a', 'b', 'c', 'd']</text>
+
+  <text x="540" y="268" text-anchor="middle" class="tw">失败时同一步其他任务的处理：异步任务立即被 cancel（记一条 CancelledError，续跑时重跑）；</text>
+  <text x="540" y="288" text-anchor="middle" class="tw">同步任务在线程里停不下来，会跑完并保存写入（实测异常要等它跑完 0.5 秒后才抛出）</text>
+</svg>
+</div>
+<p class="cap">图 9　出错和中断用的是同一套机制：成功任务的写入挂在 checkpoint 上，续跑时只重跑没成功的任务（需要 checkpointer）</p>
+
+<h3>8.2 相关配置</h3>
+<table>
+  <tr><th>机制</th><th>作用</th><th>默认</th></tr>
+  <tr><td><code>RetryPolicy</code>（<code>add_node(retry_policy=…)</code>）</td><td>任务失败后在同一超步内重试，指数退避（0.5 秒起，×2，最多 128 秒，带抖动），连同第一次最多执行 3 次。默认的 <code>retry_on</code> 重试 <code>ConnectionError</code>、HTTP 5xx，以及不属于 <code>ValueError</code>、<code>TypeError</code>、<code>RuntimeError</code>、<code>OSError</code> 等常见错误的异常</td><td>不配置就不重试</td></tr>
+  <tr><td><code>error_handler</code>（<code>add_node</code> 参数，或 <code>set_node_defaults</code>）</td><td>重试用尽后，在同一超步里调用处理函数，它的返回值代替失败节点的写入。失败节点原来的出边不会触发，要继续往下走需要返回 <code>Command(goto=…)</code>（实测）</td><td>无</td></tr>
+  <tr><td><code>timeout</code>（<code>add_node</code> 参数）</td><td>每次尝试的超时，超时抛 <code>NodeTimeoutError</code>，由重试策略决定是否重试。只对异步节点生效</td><td>无</td></tr>
+  <tr><td><code>step_timeout</code>（Pregel 属性）</td><td>整个超步的超时</td><td>无</td></tr>
+  <tr><td><code>recursion_limit</code>（config）</td><td>一次调用最多执行多少个超步，超出抛 <code>GraphRecursionError</code>。数的是超步，不是节点执行次数</td><td>10007，可用环境变量 <code>LANGGRAPH_DEFAULT_RECURSION_LIMIT</code> 修改</td></tr>
+  <tr><td><code>interrupt()</code> / 断点</td><td>抛 <code>GraphInterrupt</code>，不算失败、不重试，以中断状态返回</td><td>见 <a href="langgraph-checkpoint.html#s5">checkpoint 一文第 5 节</a></td></tr>
+</table>
+
+<!-- ====================================================================== -->
+<h2 id="s9">9. 子图</h2>
+<p>编译好的图可以直接作为另一个图的节点。父图的这个任务执行时，子图在同一个进程里跑自己的一整套超步循环，命名空间是 <code>节点名:任务id</code>，有自己的 checkpoint（<code>checkpoint_ns</code> 不为空）。子图结束后，它的输出作为这个节点的返回值，交给父图的 writer。</p>
+<div class="fig">
+<svg viewBox="0 0 1080 280" width="100%" role="img" aria-label="子图执行">
+  <rect x="20" y="20" width="1040" height="210" rx="8" class="inner"/>
+  <text x="36" y="44" class="b">父图</text>
+  <rect x="50" y="110" width="110" height="44" rx="6" class="c2"/>
+  <text x="105" y="137" text-anchor="middle" class="b">outer</text>
+  <rect x="210" y="60" width="520" height="150" rx="8" class="c1"/>
+  <text x="226" y="84" class="b">节点 sub = 编译好的子图</text>
+  <text x="400" y="84" class="mono">ns = sub:a9a57931-…</text>
+  <rect x="240" y="104" width="100" height="40" rx="6" class="inner"/>
+  <text x="290" y="129" text-anchor="middle" class="mono">__start__</text>
+  <rect x="380" y="104" width="100" height="40" rx="6" class="c2"/>
+  <text x="430" y="129" text-anchor="middle" class="b">inner</text>
+  <path d="M340,124 H 380" class="ln" marker-end="url(#ar)"/>
+  <text x="500" y="122" class="s">子图自己的超步循环</text>
+  <text x="500" y="140" class="s">和自己的 checkpoint</text>
+  <text x="240" y="176" class="s">输入：父图的 state（按子图 schema 取字段）</text>
+  <text x="240" y="196" class="s">输出：子图结束时的完整 state</text>
+  <rect x="780" y="100" width="250" height="64" rx="6" class="c4"/>
+  <text x="905" y="126" text-anchor="middle" class="b">父图的 writer</text>
+  <text x="905" y="146" text-anchor="middle" class="s">按父图的 reducer 合并</text>
+  <path d="M160,132 H 210" class="ln" marker-end="url(#ar)"/>
+  <path d="M730,132 H 780" class="ln" marker-end="url(#ar)"/>
+  <text x="540" y="258" text-anchor="middle" class="tw">父子共用累加字段 log：子图返回 ['outer', 'inner']，父图再 add 一次 → ['outer', 'outer', 'inner']（实测）</text>
+</svg>
+</div>
+<p class="cap">图 10　子图作为节点：输出的是完整 state，不是增量</p>
+<ul>
+  <li><b>重复累加</b>：子图拿到的输入里已经有父图的旧值，返回时又整个交回去，父图的 reducer 会再合并一次。解决办法：子图用和父图不同的字段；或者用一个普通函数节点包住子图调用，只返回增量。</li>
+  <li><b>流式输出</b>：<code>stream(..., subgraphs=True)</code> 时，事件带命名空间元组，主图是 <code>()</code>，子图是 <code>('sub:&lt;任务id&gt;',)</code>。</li>
+  <li><b>中断</b>：子图里的中断会冒泡到最外层；恢复时父图里调用子图的那个节点会从头重跑（见 checkpoint 一文 6.3）。</li>
+  <li><b>checkpointer</b>：<code>compile(checkpointer=None)</code> 的子图继承父图的 checkpointer；<code>False</code> 不用；<code>True</code> 让子图在多次调用间保留自己的状态。</li>
+</ul>
+
+<!-- ====================================================================== -->
+<h2 id="s10">10. 实例：create_agent 的一轮工具调用</h2>
+<p>langchain v1 的 <code>create_agent</code> 生成的就是一张 StateGraph。不带中间件时只有 <code>model</code> 和 <code>tools</code> 两个节点，靠两个条件边来回走；中间件的每个钩子（<code>before_model</code>、<code>after_model</code> 等）会各自再加一个节点。下面用假模型实测：模型第一次返回两个工具调用，第二次直接回答。</p>
+<div class="fig">
+<svg viewBox="0 0 1080 380" width="100%" role="img" aria-label="create_agent 的图与超步">
+  <rect x="20" y="70" width="90" height="36" rx="18" class="inner"/>
+  <text x="65" y="93" text-anchor="middle" class="s">__start__</text>
+  <rect x="160" y="70" width="110" height="36" rx="6" class="c2"/>
+  <text x="215" y="93" text-anchor="middle" class="b">model</text>
+  <rect x="560" y="70" width="110" height="36" rx="6" class="c2"/>
+  <text x="615" y="93" text-anchor="middle" class="b">tools</text>
+  <rect x="900" y="70" width="90" height="36" rx="18" class="inner"/>
+  <text x="945" y="93" text-anchor="middle" class="s">__end__</text>
+  <path d="M110,88 H 160" class="ln" marker-end="url(#ar)"/>
+  <path d="M270,80 H 560" class="ln dash" marker-end="url(#ar)"/>
+  <text x="415" y="68" text-anchor="middle" class="s">model_to_tools：每个调用一个 Send</text>
+  <path d="M560,98 H 270" class="ln dash" marker-end="url(#ar)"/>
+  <text x="415" y="118" text-anchor="middle" class="s">tools_to_model：回到 model</text>
+  <path d="M215,70 V 36 H 945 V 70" class="ln dash" marker-end="url(#ar)"/>
+  <text x="760" y="30" text-anchor="middle" class="s">model_to_tools：没有工具调用 → 结束</text>
+
+  <rect x="20" y="170" width="190" height="160" rx="6" class="c1"/>
+  <text x="115" y="194" text-anchor="middle" class="b">超步 -1 · 输入</text>
+  <text x="115" y="222" text-anchor="middle" class="s">输入写进 __start__</text>
+  <text x="115" y="310" text-anchor="middle" class="s">0 条消息</text>
+
+  <rect x="230" y="170" width="190" height="160" rx="6" class="c1"/>
+  <text x="325" y="194" text-anchor="middle" class="b">超步 0 · __start__</text>
+  <text x="325" y="222" text-anchor="middle" class="s">输入拆进 messages</text>
+  <text x="325" y="242" text-anchor="middle" class="mono">→ branch:to:model</text>
+  <text x="325" y="310" text-anchor="middle" class="s">1 条消息</text>
+
+  <rect x="440" y="170" width="190" height="160" rx="6" class="c2"/>
+  <text x="535" y="194" text-anchor="middle" class="b">超步 1 · model</text>
+  <text x="535" y="222" text-anchor="middle" class="s">AI 消息带 call_A、call_B</text>
+  <text x="535" y="242" text-anchor="middle" class="s">model_to_tools 返回</text>
+  <text x="535" y="262" text-anchor="middle" class="s">两个 Send</text>
+  <text x="535" y="310" text-anchor="middle" class="s">2 条消息</text>
+
+  <rect x="650" y="170" width="190" height="160" rx="6" class="c2"/>
+  <text x="745" y="194" text-anchor="middle" class="b">超步 2 · tools × 2</text>
+  <text x="745" y="222" text-anchor="middle" class="s">两个 PUSH 任务并行</text>
+  <text x="745" y="242" text-anchor="middle" class="s">各写一条 ToolMessage</text>
+  <text x="745" y="262" text-anchor="middle" class="s">都写 branch:to:model</text>
+  <text x="745" y="310" text-anchor="middle" class="s">4 条消息</text>
+
+  <rect x="860" y="170" width="190" height="160" rx="6" class="c2"/>
+  <text x="955" y="194" text-anchor="middle" class="b">超步 3 · model</text>
+  <text x="955" y="222" text-anchor="middle" class="s">只跑一次</text>
+  <text x="955" y="242" text-anchor="middle" class="s">没有工具调用 → END</text>
+  <text x="955" y="262" text-anchor="middle" class="s">算不出任务 → 结束</text>
+  <text x="955" y="310" text-anchor="middle" class="s">5 条消息</text>
+
+  <path d="M210,250 H 230" class="ln" marker-end="url(#ar)"/>
+  <path d="M420,250 H 440" class="ln" marker-end="url(#ar)"/>
+  <path d="M630,250 H 650" class="ln" marker-end="url(#ar)"/>
+  <path d="M840,250 H 860" class="ln" marker-end="url(#ar)"/>
+  <text x="540" y="362" text-anchor="middle" class="s">每个框结束时存一个 checkpoint，"N 条消息"是该 checkpoint 里 messages 的长度</text>
+</svg>
+</div>
+<p class="cap">图 11　create_agent 的图结构（上）和一轮工具调用实测的超步（下）</p>
+<ul>
+  <li><b>channel</b>：实测有 <code>messages</code>（<code>BinaryOperatorAggregate</code>，reducer 是 <code>add_messages</code>）、<code>jump_to</code>（<code>EphemeralValue</code>，中间件用来跳转）、<code>structured_response</code>（<code>LastValue</code>），加上 <code>__start__</code>、<code>branch:to:model</code>、<code>branch:to:tools</code>、<code>__pregel_tasks</code>。</li>
+  <li><b>工具并行靠 Send</b>：<code>model_to_tools</code> 对每个还没有结果的工具调用返回一个 <code>Send("tools", [tool_call])</code>，所以 tools 节点在同一步里有多个 PUSH 任务并行，各自只处理一个调用。<code>Send</code> 里只放调用本身，工具需要的 state 在执行时再读。</li>
+  <li><b>汇合靠 EphemeralValue</b>：两个 tools 任务都经 <code>tools_to_model</code> 写 <code>branch:to:model</code>，下一步 model 只跑一次。</li>
+  <li><b>ToolMessage 的顺序</b>：两条 ToolMessage 按 <code>Send</code> 的序号合并，与哪个工具先返回无关，所以和 AI 消息里 tool_calls 的顺序一致。</li>
+  <li><b>结束条件</b>：<code>model_to_tools</code> 发现最后一条 AI 消息没有工具调用，返回 END，什么都不写，下一步算不出任务。</li>
+</ul>
+
+<!-- ====================================================================== -->
+<h2 id="s11">11. 使用要点</h2>
+<table>
+  <tr><th>要点</th><th>原因</th><th>做法</th></tr>
+  <tr><td>会被并行写的字段必须有 reducer</td><td><code>LastValue</code> 一步只收一个值，否则 <code>InvalidUpdateError</code></td><td>声明 <code>Annotated[T, reducer]</code>；要整体替换时写 <code>Overwrite(值)</code></td></tr>
+  <tr><td>同一步的节点看不到彼此的写入</td><td>BSP：写入在超步结束时才合并</td><td>需要别的节点结果的逻辑放到下一步，或放到汇合节点里</td></tr>
+  <tr><td>条件边只看到本节点的写入</td><td>route 读的是"本步开始的值 ＋ 本任务写入"</td><td>依赖多个并行结果的路由放在汇合之后</td></tr>
+  <tr><td>不要依赖完成先后</td><td>合并按任务路径排序；updates 流按完成先后</td><td>需要顺序的数据自己带序号，不要从流事件的顺序推断</td></tr>
+  <tr><td>节点返回未声明的 key 会被静默丢弃</td><td>只取 state schema 里有的 key</td><td>拼写错误不会报错，测试里检查最终 state</td></tr>
+  <tr><td>扇入路径不等长时目标会跑多次</td><td>两条单独的边各自触发</td><td>用等待边 <code>add_edge([a, b], c)</code>，或 <code>defer=True</code></td></tr>
+  <tr><td>同步节点跑在线程池里</td><td>并行任务各占一个线程；失败时停不下来</td><td>节点里用到的共享对象要线程安全；能用异步节点就用异步节点</td></tr>
+  <tr><td>子图共用累加字段会重复</td><td>子图返回完整 state，父图再合并一次</td><td>子图用独立字段，或用函数节点包住子图、只返回增量</td></tr>
+  <tr><td>有待决中断时不要直接发新输入</td><td>新输入会把上一次没完成的任务丢弃，从入口重新走（实测旧中断被丢弃，生成了新中断）</td><td>先用 <code>Command(resume=…)</code> 回答，或明确放弃后再发新输入</td></tr>
+  <tr><td>显式设置 <code>recursion_limit</code></td><td>1.2.17 默认 10007，死循环要跑很久才停</td><td>有循环的图按业务估一个上限传进 config</td></tr>
+  <tr><td>需要失败后续跑就配 checkpointer</td><td>成功任务的写入只有存在 checkpointer 里才能在续跑时回放</td><td>生产用持久化的 saver；续跑用 <code>invoke(None, config)</code></td></tr>
+</table>
+
+</main>
+</body>
+</html>

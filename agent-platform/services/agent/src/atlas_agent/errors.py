@@ -73,7 +73,7 @@ class InvalidAnswers(AppError):
 
 
 class DependencyUnavailable(AppError):
-    """保存时要查的依赖（配置服务）暂时不可用。"""
+    """保存时要查的依赖（技能应用）暂时不可用。"""
 
     status_code = 503
     kind = "dependency_unavailable"

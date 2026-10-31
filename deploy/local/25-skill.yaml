@@ -1,0 +1,65 @@
+# 技能应用（atlas-skill）：技能包的唯一所有者 —— 上传、扫描、审查、发布、下架
+# （doc/skill-mcp-backend-design.html §16）。在用户中心是独立应用「技能」（应用编码 skill），
+# 部署后由 deploy/server/register.sh 登记（python -m atlas_skill register-uc）。
+#
+# ★ 凭据（对象存储 HMAC）不在本文件里 —— 由 deploy/local/apply.sh 建成 Secret atlas-oss-creds。
+#   内网免令牌（内网身份传递 §3）：没有服务间令牌。
+# ★ 库是宿主 Postgres 上的独立 database atlas_skill（docker compose 的
+#   skill-initdb 建好）；与运行时库互不访问。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atlas-skill
+  namespace: atlas-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: atlas-skill}
+  template:
+    metadata:
+      labels: {app: atlas-skill}
+    spec:
+      # ★ 技能应用不碰 K8s：默认 SA，没有任何权限
+      initContainers:
+        # 先迁移再起服务。迁移脚本在包内，不依赖工作目录。
+        - name: migrate
+          image: atlas-app:dev
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "atlas_skill", "migrate"]
+          env: &skill-env
+            - {name: ATLAS_SKILL_DATABASE_URL, value: "postgresql+asyncpg://atlas:atlas@__HOST_IP__:5433/atlas_skill"}
+            - {name: ATLAS_SKILL_OSS_ENDPOINT, value: "http://__HOST_IP__:9000"}
+            - {name: ATLAS_SKILL_OSS_BUCKET, value: atlas-dev}
+            - {name: ATLAS_SKILL_OSS_ADDRESSING_STYLE, value: path}
+            - {name: ATLAS_SKILL_OSS_REGION, value: us-east-1}
+            - {name: ATLAS_SKILL_CORS_ORIGINS, value: '["http://localhost:3000","http://127.0.0.1:3000"]'}
+            # 浏览器经网关 /skill-api 访问：网关校验登录、写入 X-Uid；操作码按 X-Auth-Uid
+            # 以本应用的身份（X-Caller-App: skill）取用户中心授权快照（内网身份传递 §3）。内网免令牌
+            - {name: ATLAS_SKILL_UC_BASE_URL, value: "http://atlas-usercenter.atlas-system.svc.cluster.local:8030"}
+            - name: ATLAS_SKILL_OSS_ACCESS_KEY_ID
+              valueFrom: {secretKeyRef: {name: atlas-oss-creds, key: oss_access_key_id}}
+            - name: ATLAS_SKILL_OSS_ACCESS_KEY_SECRET
+              valueFrom: {secretKeyRef: {name: atlas-oss-creds, key: oss_access_key_secret}}
+      containers:
+        - name: skill
+          image: atlas-app:dev
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "atlas_skill", "serve"]
+          ports: [{containerPort: 8020, name: http}]
+          env: *skill-env
+          readinessProbe:
+            httpGet: {path: /health, port: 8020}
+            periodSeconds: 3
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+---
+# ★ ClusterIP（内网身份传递 §4）：浏览器只经网关访问；/internal/* 网关一律 404，只在内网可达。
+apiVersion: v1
+kind: Service
+metadata:
+  name: atlas-skill
+  namespace: atlas-system
+spec:
+  type: ClusterIP
+  selector: {app: atlas-skill}
+  ports: [{port: 8020, targetPort: 8020}]

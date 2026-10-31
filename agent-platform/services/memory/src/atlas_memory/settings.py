@@ -27,7 +27,7 @@ class MemorySettings(BaseSettings):
         populate_by_name=True,
     )
 
-    #: 记忆库：同一 PG 实例上的独立 database。★ 用 localhost（同 atlas_config 的说明）
+    #: 记忆库：同一 PG 实例上的独立 database。★ 用 localhost（同 atlas_skill 的说明）
     database_url: str = "postgresql+asyncpg://atlas:atlas@localhost:5433/atlas_memory"
 
     # ── 用户中心（数据权限 §3.7、作用域管理的操作码）──────────────────────

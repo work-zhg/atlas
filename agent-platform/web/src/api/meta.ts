@@ -40,15 +40,15 @@ export function useModels(ctx: { agentId?: string } = {}) {
   });
 }
 
-/** 编辑器里 MCP 工具按谁的权限列出（经 MCP 网关时才有，doc/mcp-design.html §9.2） */
+/** 编辑器里 MCP 工具按这个智能体的 MCP Key 列出（经 MCP 网关时才有） */
 export interface McpSubjectInfo {
-  /** user = 以人为权限（当前用户）；agent = 以 Agent 为权限（它的数字员工） */
+  /** 恒为 agent：MCP 按智能体的 Key 判权，与智能体的权限类型无关 */
   kind: "user" | "agent";
-  /** 以 Agent 为权限、还没有数字员工（没保存过）时为空 */
+  /** Key 在用户中心的主体；新建、还没保存（还没有 Key）时为空 */
   uid: string | null;
-  /** active | disabled | none */
+  /** active | blocked | none（还没有） */
   key_status: string;
-  /** 已启用、但权限主体没有权限的服务个数（不列出它们） */
+  /** 已启用、但这把 Key 用不了的服务个数（不列出它们） */
   hidden_servers: number;
   notes: string[];
 }

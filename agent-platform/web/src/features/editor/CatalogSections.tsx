@@ -76,7 +76,7 @@ export function SkillsSection({
           showIcon
           style={{ marginBottom: 12 }}
           message="运行时还没有接入技能目录"
-          description="只能手写「名称@版本」引用，保存时不校验是否存在；接入配置服务后可以直接选择。"
+          description="只能手写「名称@版本」引用，保存时不校验是否存在；接入技能应用后可以直接选择。"
         />
       )}
 
@@ -205,26 +205,26 @@ function serverOf(t: ToolInfo): string {
 }
 
 const KEY_STATUS: Record<string, string> = {
-  active: "API Key 已发放",
-  disabled: "API Key 已停用",
-  none: "API Key 未发放",
+  active: "MCP Key 正常",
+  blocked: "MCP Key 已停用",
+  none: "保存后申请 MCP Key",
 };
 
-/** 经 MCP 网关时：说明按谁的权限列出、Key 的状态、没权限的服务个数（doc/mcp-design.html §9.2） */
+/** 经 MCP 网关时：MCP 工具按这个智能体的 Key 列出；Key 的状态、它用不了的服务个数 */
 function McpSubjectBanner({ subject }: { subject: McpSubjectInfo }) {
-  const who = subject.kind === "agent" ? "这个 Agent 的数字员工" : "你";
   const keyOk = subject.key_status === "active";
   return (
     <div style={{ marginBottom: 12, fontSize: 12, color: "var(--fg-2)" }}>
       <div>
-        MCP 服务按{subject.kind === "agent" ? "数字员工" : "你"}的权限列出 ·{" "}
+        MCP 服务按这个智能体的 MCP Key 列出（与权限类型无关） ·{" "}
         <Tag color={keyOk ? "success" : "warning"} style={{ marginInlineEnd: 0 }}>
           {KEY_STATUS[subject.key_status] ?? subject.key_status}
         </Tag>
       </div>
       {subject.hidden_servers > 0 && (
         <div style={{ marginTop: 4 }}>
-          另有 {subject.hidden_servers} 个 MCP 服务{who}没有权限，需要的话请联系服务所有者或 MCP 管理员
+          另有 {subject.hidden_servers} 个私有 MCP 服务这个智能体的 Key 没有被授权，需要的话请联系服务所有者或 MCP 管理员在
+          MCP 网关的「API Key · 智能体 Key」里分配
         </div>
       )}
       {subject.notes.map((n) => (
@@ -288,7 +288,7 @@ export function McpToolsSection({
           message="引用的 MCP 工具不在目录里"
           description={
             subject
-              ? `${missing.join("、")} —— 服务被停用、工具被删除，或权限主体没有这个服务的权限：运行时会跳过并提示。`
+              ? `${missing.join("、")} —— 服务或工具被停用、工具被删除，或这个智能体的 Key 没有被授权：运行时会跳过并提示。`
               : `${missing.join("、")} —— server 被停用或工具被删除，保存会被拒绝，请取消勾选。`
           }
         />

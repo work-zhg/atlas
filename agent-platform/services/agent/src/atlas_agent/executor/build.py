@@ -64,6 +64,15 @@ _SANDBOX_HINT = (
     "后台服务用 `nohup cmd > /tmp/x.log 2>&1 &` 启动，它在本会话内持续存在。"
 )
 
+#: 评测档沙箱（root、根可写，镜像由题目给定）那一段：上面那段的目录布局在这里不成立
+_BENCH_SANDBOX_HINT = (
+    "execute 在本会话专属的 Linux 沙箱里执行命令，以 root 身份运行，整个文件系统可写。"
+    "/workspace 是文件工具的工作区（同一份数据）；文件工具只作用于 /workspace，"
+    "其它路径要用 execute 读写。"
+    "\n首次使用要启动沙箱，会慢几秒。命令没有时长上限；不要运行等待交互输入的命令。"
+    "后台服务用 `nohup cmd > /tmp/x.log 2>&1 &` 启动，它在本会话内持续存在。"
+)
+
 
 #: 工具描述是注入面（MCP 方案设计 §4.5）：外部服务的描述和返回内容是数据，不是指令。
 #: ★ 内容固定、只看有没有挂 MCP 工具：不影响提示词缓存
@@ -106,7 +115,8 @@ def build_graph(
     if FILESYSTEM_TOOL in spec.tool_names:
         system_prompt = f"{system_prompt}\n\n{_FILESYSTEM_HINT}".strip()
     if sandbox is not None:
-        system_prompt = f"{system_prompt}\n\n{_SANDBOX_HINT}".strip()
+        hint = _BENCH_SANDBOX_HINT if spec.sandbox.profile == "bench" else _SANDBOX_HINT
+        system_prompt = f"{system_prompt}\n\n{hint}".strip()
     if any(parse_tool_id(name) is not None for name in spec.tool_names):
         system_prompt = f"{system_prompt}\n\n{_MCP_HINT}".strip()
     # 持久指令（上下文分层 L1）：平台 → 用户 → 工作区，排在系统提示词与工具说明之后

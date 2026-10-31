@@ -35,6 +35,7 @@ def run_agent(
     waiting_on: Any = None,
     decisions: Any = None,
     approval_mode: str | None = None,
+    run_state: Any = None,
     **capabilities: Any,
 ):
     """spec + model + 能力对象 → TraceEvent 流。
@@ -42,7 +43,7 @@ def run_agent(
     capabilities 直接透传 build_graph（filesystem / sandbox / approvals /
     compactor / skills / extra_tools / subagents）；cancel / clock / titler /
     transcript / resume 是 runner 的注入点，随 run() 走；waiting_on / decisions 是
-    续跑时交回图的挂起现场（contracts/suspension.py）。
+    续跑时交回图的挂起现场（contracts/suspension.py），run_state 是上一段落库的图 state。
 
     approval_mode：本段的审批模式。生产路径上执行器总会交进来（run.approval_mode 解析后），
     不传时图按 spec.approval.default_mode 判定。
@@ -64,6 +65,7 @@ def run_agent(
         waiting_on=waiting_on,
         decisions=decisions,
         approval_mode=approval_mode,
+        run_state=run_state,
     )
 
 

@@ -506,7 +506,7 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
                   : saveError.kind === "invalid_reference"
                     ? "引用的技能或 MCP 工具有问题"
                     : saveError.kind === "dependency_unavailable"
-                      ? "配置服务暂时不可用，无法确认引用 —— 稍后再保存"
+                      ? "技能应用暂时不可用，无法确认引用 —— 稍后再保存"
                       : "保存失败"
               }
               // engine 的 spec.validate() 会明确指出哪个参数不被该模型接受
@@ -625,7 +625,28 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
                 />
               </div>
             ) : (
-              <p className={styles.capNote}>执行形态在创建时确定；ACP 智能体目前经 API 创建。</p>
+              <>
+                <p className={styles.capNote}>执行形态在创建时确定；ACP 智能体目前经 API 创建。</p>
+                <label style={{ display: "block", marginTop: 12, fontSize: 12, color: "var(--fg-2)" }}>
+                  Shell 沙箱镜像
+                </label>
+                <Input
+                  style={{ marginTop: 6 }}
+                  disabled={readOnly}
+                  value={draft.spec.sandbox?.image ?? ""}
+                  placeholder="留空 = 平台默认镜像"
+                  onChange={(e) =>
+                    patchSpec({
+                      sandbox: { profile: draft.spec.sandbox?.profile ?? "strict", image: e.target.value },
+                    })
+                  }
+                />
+                <p className={styles.capNote}>
+                  勾选了 Shell 时生效，子智能体与它共用同一个沙箱。镜像要在部署允许的范围内，否则第一次执行命令时报错；
+                  改了之后，已经在运行的沙箱要等闲置回收后才换。
+                  {draft.spec.sandbox?.profile === "bench" && " 当前是评测档（root、根可写），只能经 API 设置。"}
+                </p>
+              </>
             )}
           </Section>
 

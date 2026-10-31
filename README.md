@@ -209,8 +209,8 @@ flowchart LR
 agent-platform/            Agent 平台（Atlas）
 ├── services/              平台后端服务（独立部署，K8s）
 │   ├── agent/             API + 执行器（atlas_agent）
-│   ├── config/            技能 / MCP / 持久指令（atlas_config）
-│   └── knowledge/         知识库与检索（atlas_knowledge）
+│   ├── knowledge/         知识库与检索（atlas_knowledge）
+│   └── skill/             技能应用：技能包的上传、审查、发布（atlas_skill）
 ├── libs/                  纯库，不单独部署
 │   ├── engine/            智能体内核（atlas_engine）
 │   ├── host/              server ⇄ bridge 上游协议（atlas_host）

@@ -6,6 +6,7 @@ from . import (
     auth,
     catalog,
     directory,
+    instructions,
     memories,
     meta,
     previews,
@@ -24,6 +25,7 @@ router.include_router(agents.router, dependencies=_authed)
 router.include_router(threads.router, dependencies=_authed)
 router.include_router(runs.router, dependencies=_authed)
 router.include_router(memories.router, dependencies=_authed)
+router.include_router(instructions.router, dependencies=_authed)
 router.include_router(catalog.router, dependencies=_authed)
 router.include_router(previews.router)
 router.include_router(directory.router, dependencies=_authed)

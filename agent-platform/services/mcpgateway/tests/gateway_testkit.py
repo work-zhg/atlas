@@ -3,192 +3,267 @@
 from __future__ import annotations
 
 import itertools
+from dataclasses import dataclass
 from typing import Any
 
-from atlas_mcpgateway.errors import Conflict, Forbidden, Unavailable
-from atlas_mcpgateway.perms import LEVEL_RANK, Grant, SubjectServices
+from atlas_mcpgateway.errors import Conflict, Forbidden, Invalid, NotFound, Unavailable
+from atlas_mcpgateway.perms import DATA_SERVER, DATA_TOOL, AclEntry, KeyAccess
 
-#: 测试里的用户（用户中心的 uid）
+#: 测试里的人（用户中心的 uid）
 ADMIN = "00000000-0000-7000-8000-00000000000a"
 ALICE = "00000000-0000-7000-8000-0000000000a1"
 BOB = "00000000-0000-7000-8000-0000000000b0"
-DIGITAL = "00000000-0000-7000-8000-0000000000de"
+CAROL = "00000000-0000-7000-8000-0000000000c0"
 
 
 def as_user(uid: str) -> dict[str, str]:
     return {"X-Uid": uid}
 
 
+ATLAS = {"X-Caller-App": "atlas"}
+
+
+@dataclass
+class _Row:
+    id: str
+    level: str
+    subject: str
+
+
 class FakePermissions:
-    """用户中心数据权限的内存替身：服务名 → {用户: 级别}；只有直接授给用户的。"""
+    """用户中心的内存替身。规则照用户中心：
+
+    - 数据对象第一次写授权不需要操作人，但必须至少有一条 OWNER；已经有授权再「第一次写」= 冲突
+    - 之后改授权，操作人要是这条数据的 Owner（或有这个编码的编码级 Owner）
+    - 主体停用后对它一律「无权限」
+    """
 
     def __init__(self) -> None:
-        self.grants: dict[str, dict[str, str]] = {}
-        #: 「全部 MCP 服务」这类编码级授权：用户 → 级别
-        self.type_levels: dict[str, str] = {}
+        self.objects: dict[tuple[str, str], list[_Row]] = {}
+        #: 编码级 OWNER（管理员）
+        self.type_owners: dict[str, set[str]] = {DATA_SERVER: {ADMIN}, DATA_TOOL: {ADMIN}}
         self.users: dict[str, dict[str, Any]] = {
-            ADMIN: {"id": ADMIN, "name": "管理员", "user_type": "human", "status": "active"},
-            ALICE: {"id": ALICE, "name": "alice", "user_type": "human", "status": "active"},
-            BOB: {"id": BOB, "name": "bob", "user_type": "human", "status": "active"},
-            DIGITAL: {
-                "id": DIGITAL,
-                "name": "工单助手",
-                "user_type": "digital",
+            ADMIN: {
+                "id": ADMIN,
+                "name": "管理员",
+                "account": "admin",
+                "user_type": "human",
+                "status": "active",
+            },
+            ALICE: {
+                "id": ALICE,
+                "name": "alice",
+                "account": "alice",
+                "user_type": "human",
+                "status": "active",
+            },
+            BOB: {
+                "id": BOB,
+                "name": "bob",
+                "account": "bob",
+                "user_type": "human",
+                "status": "active",
+            },
+            CAROL: {
+                "id": CAROL,
+                "name": "carol",
+                "account": "carol",
+                "user_type": "human",
                 "status": "active",
             },
         }
+        #: 外部引用 → 主体 uid（Key 的主体，数字员工）
+        self.subjects: dict[str, str] = {}
         self.down = False
         self.calls = 0
-        self._acl_ids = itertools.count(1)
-        self.acl_rows: dict[str, tuple[str, str]] = {}
+        self._ids = itertools.count(1)
 
     def _check(self) -> None:
         self.calls += 1
         if self.down:
             raise Unavailable("用户中心暂不可用", code="AUTHZ_UNAVAILABLE")
 
-    def _level(self, user_id: str, service: str) -> str:
-        own = self.grants.get(service, {}).get(user_id, "NONE")
-        typ = self.type_levels.get(user_id, "NONE")
-        return own if LEVEL_RANK[own] >= LEVEL_RANK[typ] else typ
+    def _active(self, uid: str) -> bool:
+        return self.users.get(uid, {}).get("status") == "active"
 
-    def _accessible(self, user_id: str, min_level: str) -> SubjectServices:
-        names = {
-            s for s in self.grants if LEVEL_RANK[self._level(user_id, s)] >= LEVEL_RANK[min_level]
-        }
-        typ = self.type_levels.get(user_id, "NONE")
-        return SubjectServices(frozenset(names), LEVEL_RANK[typ] >= LEVEL_RANK[min_level])
+    def _owner(self, code: str, data_id: str, user: str) -> bool:
+        if user in self.type_owners.get(code, set()):
+            return True
+        return any(
+            r.subject == user and r.level == "OWNER" for r in self.objects.get((code, data_id), [])
+        )
 
-    async def usable(self, subject: str) -> SubjectServices:
+    def _ids_with(self, code: str, subject: str, level: str) -> frozenset[str]:
+        rank = {"READ": 1, "OWNER": 3}
+        return frozenset(
+            data_id
+            for (c, data_id), rows in self.objects.items()
+            if c == code
+            and any(r.subject == subject and rank[r.level] >= rank[level] for r in rows)
+        )
+
+    # ── Permissions
+
+    async def key_access(self, subject: str) -> KeyAccess:
         self._check()
-        return self._accessible(subject, "READ")
+        if not self._active(subject):
+            return KeyAccess()
+        return KeyAccess(
+            self._ids_with(DATA_SERVER, subject, "READ"), self._ids_with(DATA_TOOL, subject, "READ")
+        )
 
-    async def owned(self, user_id: str) -> SubjectServices:
+    async def owned(self, user: str) -> tuple[frozenset[str], bool]:
         self._check()
-        return self._accessible(user_id, "OWNER")
+        return self._ids_with(DATA_SERVER, user, "OWNER"), user in self.type_owners[DATA_SERVER]
 
-    async def level(self, user_id: str, service: str) -> str:
-        self._check()
-        return self._level(user_id, service)
-
-    async def register(self, service: str, display_name: str, owner: str) -> None:
-        self._check()
-        if self.grants.get(service):
-            raise Conflict(f"用户中心里已经登记过 MCP 服务 {service}", code="UC_REGISTERED")
-        self.grants[service] = {owner: "OWNER"}
-
-    async def rename(self, service: str, display_name: str) -> None:
-        self._check()
-
-    async def acl(self, service: str) -> list[dict[str, Any]]:
-        self._check()
-        return [
-            {"id": acl_id, "subject_id": uid, "permission": self.grants[svc][uid]}
-            for acl_id, (svc, uid) in self.acl_rows.items()
-            if svc == service and uid in self.grants.get(svc, {})
-        ]
-
-    async def grant(self, service: str, operator: str, grants: list[Grant]) -> None:
-        self._check()
-        if self._level(operator, service) != "OWNER":
-            raise Forbidden("只有所有者可以授权", code="NOT_DATA_OWNER")
-        for g in grants:
-            self.grants.setdefault(service, {})[g.subject_id] = g.level
-            self.acl_rows[str(next(self._acl_ids))] = (service, g.subject_id)
-
-    async def update(
-        self, acl_id: str, operator: str, *, level: str | None, include_sub: bool | None
+    async def register(
+        self,
+        data_code: str,
+        data_id: str,
+        name: str,
+        *,
+        owners: list[str],
+        readers: list[str] | None = None,
     ) -> None:
         self._check()
-        service, uid = self.acl_rows[acl_id]
-        if level is not None:
-            self.grants[service][uid] = level
+        if self.objects.get((data_code, data_id)):
+            raise Conflict(f"已经登记过 {data_code} {data_id}", code="UC_REGISTERED")
+        if not owners:
+            raise Invalid("第一次授权中必须至少有一条 OWNER", code="OWNER_REQUIRED")
+        rows = [_Row(str(next(self._ids)), "OWNER", u) for u in owners]
+        rows += [_Row(str(next(self._ids)), "READ", u) for u in readers or []]
+        self.objects[(data_code, data_id)] = rows
+
+    async def rename(self, data_code: str, data_id: str, name: str) -> None:
+        self._check()
+
+    async def drop(self, data_code: str, data_id: str) -> None:
+        self._check()
+        self.objects.pop((data_code, data_id), None)
+
+    async def acl(self, data_code: str, data_id: str) -> list[AclEntry]:
+        self._check()
+        return [
+            AclEntry(
+                r.id, r.level, "USER", r.subject, self.users.get(r.subject, {}).get("name", "")
+            )
+            for r in self.objects.get((data_code, data_id), [])
+        ]
+
+    async def grant(
+        self, data_code: str, data_id: str, operator: str, *, level: str, users: list[str]
+    ) -> None:
+        self._check()
+        rows = self.objects.get((data_code, data_id))
+        if rows is None:
+            raise NotFound("数据不存在", code="DATA_NOT_FOUND")
+        if not self._owner(data_code, data_id, operator):
+            raise Forbidden("只有 Owner 可以修改授权", code="NOT_DATA_OWNER")
+        for u in users:
+            existing = next((r for r in rows if r.subject == u), None)
+            if existing is not None:
+                existing.level = level
+            else:
+                rows.append(_Row(str(next(self._ids)), level, u))
 
     async def revoke(self, acl_id: str, operator: str) -> None:
         self._check()
-        service, uid = self.acl_rows.pop(acl_id)
-        if self._level(operator, service) != "OWNER":
-            raise Forbidden("只有所有者可以收回授权", code="NOT_DATA_OWNER")
-        self.grants[service].pop(uid, None)
+        for (code, data_id), rows in self.objects.items():
+            row = next((r for r in rows if r.id == acl_id), None)
+            if row is None:
+                continue
+            if not self._owner(code, data_id, operator):
+                raise Forbidden("只有 Owner 可以修改授权", code="NOT_DATA_OWNER")
+            if row.level == "OWNER" and sum(1 for r in rows if r.level == "OWNER") == 1:
+                raise Conflict("不能删掉最后一个 Owner", code="LAST_DATA_OWNER")
+            rows.remove(row)
+            return
+        raise NotFound("授权不存在")
 
-    async def holders(self, service: str) -> list[dict[str, Any]]:
+    async def user(self, uid: str) -> dict[str, Any] | None:
         self._check()
-        return [
-            {
-                "user": {"id": uid, "name": self.users.get(uid, {}).get("name", uid)},
-                "permission": lv,
-            }
-            for uid, lv in self.grants.get(service, {}).items()
-        ]
+        return self.users.get(uid)
 
-    async def user(self, user_id: str) -> dict[str, Any] | None:
+    async def search_users(self, q: str) -> list[dict[str, Any]]:
         self._check()
-        return self.users.get(user_id)
+        return [u for u in self.users.values() if u["user_type"] == "human" and q in u["name"]]
 
-    def allow(self, service: str, *users: str) -> None:
-        for uid in users:
-            self.grants.setdefault(service, {})[uid] = "READ"
+    async def create_subject(self, *, ref: str, name: str, owner: str) -> str:
+        self._check()
+        if ref in self.subjects:
+            return self.subjects[ref]
+        if not self._active(owner) or self.users[owner]["user_type"] != "human":
+            raise Invalid("负责人必须是未停用的人", code="OWNER_NOT_HUMAN")
+        uid = f"00000000-0000-7000-9000-{len(self.subjects) + 1:012d}"
+        self.subjects[ref] = uid
+        self.users[uid] = {
+            "id": uid,
+            "name": name[:32],
+            "account": f"dw-{uid[-6:]}",
+            "user_type": "digital",
+            "status": "active",
+        }
+        return uid
+
+    async def set_subject_active(self, uid: str, active: bool) -> None:
+        self._check()
+        if uid in self.users:
+            self.users[uid]["status"] = "active" if active else "disabled"
+
+    # ── 断言用
+
+    def readers(self, code: str, data_id: str) -> set[str]:
+        return {r.subject for r in self.objects.get((code, data_id), []) if r.level == "READ"}
+
+    def owners_of(self, code: str, data_id: str) -> set[str]:
+        return {r.subject for r in self.objects.get((code, data_id), []) if r.level == "OWNER"}
 
 
 # ───────────────────────────── 场景
 
 
-def weather_and_ticket(higress: Any) -> None:
-    """两个要求网关凭据的服务 + 一个漏开了认证的服务（同 demo/mcp-gateway）。"""
-    from fake_higress import FakeService
-
-    weather = FakeService()
-    weather.tool(
-        "get_weather",
-        "查询某个城市今天的天气。",
-        lambda args, _h: f"{args.get('city')}：小雨",
-        properties={"city": {"type": "string"}},
-        read_only=True,
-    )
-    ticket = FakeService()
-    ticket.tool(
-        "create_ticket",
-        "在工单系统里建一张工单，返回工单号。",
-        lambda args, h: (
-            f"T-001 {args.get('title')} 提交人={h.get('x-auth-uid')} 使用者={h.get('x-uid')}"
-        ),
-        properties={"title": {"type": "string"}},
-    )
-    ticket.tool("delete_ticket", "删除一张工单。", lambda args, _h: "deleted")
-    report = FakeService(open=True)
-    report.tool("daily_report", "今天的运营日报。", lambda _a, _h: "一切正常")
-    higress.services.update({"weather": weather, "ticket": ticket, "report": report})
+async def apply_user_key(client: Any, uid: str) -> dict[str, Any]:
+    r = await client.post("/api/v1/keys/me", headers=as_user(uid))
+    assert r.status_code == 201, r.text
+    return dict(r.json())
 
 
-async def register(
-    client: Any, name: str, *, review: bool = True, upstream: str | None = None
-) -> Any:
+async def agent_key(
+    client: Any, code: str, *, owner: str = ALICE, name: str = ""
+) -> dict[str, Any]:
     r = await client.post(
-        "/api/v1/services",
-        json={"name": name, "review_required": review, "upstream_name": upstream or name},
-        headers=as_user(ADMIN),
-    )
-    return r
-
-
-async def approve(client: Any, service: str, tool: str) -> Any:
-    detail = (await client.get(f"/api/v1/services/{service}", headers=as_user(ADMIN))).json()
-    digest = next(t["digest"] for t in detail["tools"] if t["name"] == tool)
-    r = await client.post(
-        f"/api/v1/services/{service}/tools/{tool}/review",
-        json={"digest": digest, "decision": "approved"},
-        headers=as_user(ADMIN),
+        "/internal/client-keys",
+        json={
+            "client_type": "Agent",
+            "client_code": code,
+            "name": name or code,
+            "owner_uid": owner,
+        },
+        headers=ATLAS,
     )
     assert r.status_code == 200, r.text
-    return r.json()
+    return dict(r.json())
 
 
-async def issue_key(client: Any, subject: str) -> str:
-    """发 Key，经内部接口取回原文（管理接口不返回原文）。"""
-    r = await client.post("/api/v1/keys", json={"subject_uid": subject}, headers=as_user(ADMIN))
-    assert r.status_code == 201, r.text
-    access = (await client.get(f"/internal/subjects/{subject}/access")).json()
-    return str(access["key"])
+async def key_id_of(client: Any, subject_uid: str) -> str:
+    keys = (await client.get("/api/v1/keys", headers=as_user(ADMIN))).json()
+    return str(next(k["id"] for k in keys if k["subject_uid"] == subject_uid))
+
+
+async def grant(
+    client: Any,
+    service: str,
+    key_id: str,
+    scope: str,
+    tools: list[str] | None = None,
+    *,
+    by: str = ADMIN,
+) -> Any:
+    return await client.put(
+        f"/api/v1/services/{service}/grants/{key_id}",
+        json={"scope": scope, "tools": tools or []},
+        headers=as_user(by),
+    )
 
 
 def mcp_client(app: Any, service: str, key: str | None, **headers: str) -> Any:

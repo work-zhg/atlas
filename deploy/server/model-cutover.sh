@@ -96,7 +96,7 @@ if [ -n "$AGENT_MODELS" ]; then
   while IFS=$'\t' read -r agent_id _status _name; do
     [ -n "$agent_id" ] || continue
     platform python -m atlas_modelgateway client-key ensure --type Agent --code "$agent_id" \
-      --models "$AGENT_MODELS" --if-pending --actor-account admin
+      --models "$AGENT_MODELS" --if-pending --actor-account admin </dev/null  # exec -i 会吃掉循环的输入
   done <<< "$AGENTS"
 fi
 

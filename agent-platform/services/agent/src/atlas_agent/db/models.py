@@ -15,6 +15,7 @@ schema 定义里出现厂商名，整张表就和那一家焊死了。
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
+from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
@@ -440,6 +441,27 @@ class RunEvent(Base):
     __table_args__ = (Index("ix_run_event_run", "run_id", "seq"),)
 
 
+class RunState(Base):
+    """run 的图状态里 message 表装不下的部分（迁移 0028）。一个 state 键一行。
+
+    ★ 为什么要存：Atlas 不用 checkpointer，每段从 message 表重建图的 state ——
+      messages 以外的字段（todos）不落库的话，挂起续跑、被接管之后就没了。
+    ★ 作用域是 run：只在同一个 run 的段与段之间带回；新的 run 读不到任何行，从空开始。
+    ★ 一个键一行而不是一个字段一列：后面还有别的 state 要存，加键不用迁移；
+      各键由各自的来源写，互不覆盖。
+    """
+
+    __tablename__ = "run_state"
+
+    run_id: Mapped[UUID] = mapped_column(UUIDType, primary_key=True)
+    #: 图 state 里的字段名，原样作为图的输入交回（如 "todos"）
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[Any] = mapped_column(JSONType, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
 class RunFile(Base):
     """虚拟文件系统产物。MVP 直接入库；>1MB 时改对象存储（风险 R9）。"""
 
@@ -510,7 +532,7 @@ class SkillUsageDaily(Base):
     「选中」= 模型读了 SKILL.md（skill.loaded 事件）。run 进入终态时从该 run
     的事件归档里汇总一次 —— 跨段的 run 也只算一次。
 
-    ★ 归运行时：这是运行数据，不是配置。配置服务不知道谁在用哪个技能。
+    ★ 归运行时：这是运行数据，不是配置。技能应用不知道谁在用哪个技能。
     """
 
     __tablename__ = "skill_usage_daily"
@@ -619,3 +641,26 @@ class ServiceModel(Base):
     updated_at: Mapped[datetime] = mapped_column(
         UTCDateTime, server_default=func.now(), onupdate=func.now(), nullable=False
     )
+
+
+class Instruction(Base):
+    """持久指令（上下文管理设计 §10；迁移 0027，原在配置服务）：人主动写下、每轮都带给智能体的规则。
+
+    平台（管理员维护）与用户（个人偏好）两层，一层一行。运行时每轮开始时读一次，拼在系统提示词
+    之后（上下文分层的 L1），见 executor/context.py。
+    ★ 与记忆的分工：指令是**必须遵守的规则**；记忆是系统观察到的事实（参考、可能过期）。
+    """
+
+    __tablename__ = "instruction"
+
+    #: services/instruction.SCOPES
+    scope: Mapped[str] = mapped_column(String(16), primary_key=True)
+    #: platform 为空串；user 为用户 uid
+    owner_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_by: Mapped[UUID | None] = mapped_column(UUIDType, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime, server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (CheckConstraint("scope IN ('platform','user')", name="scope_enum"),)

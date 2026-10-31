@@ -239,7 +239,9 @@ async def test_title_uses_the_configured_service_model(
     title_calls = [c for c in calls if c["spec"].max_output_tokens == 64]
     assert title_calls and title_calls[0]["api_key"] == "sk-title"
     assert title_calls[0]["spec"].model == "m-title"
-    thread = (await client.get(f"/v1/threads/{run['thread_id']}")).json()
+    # 显式关思考：DeepSeek 默认思考，64 个 token 会全花在思考块上
+    assert title_calls[0]["spec"].thinking == "off"
+    thread =(await client.get(f"/v1/threads/{run['thread_id']}")).json()
     assert thread["title"] == "生成的标题"
 
     listed = (await client.get("/v1/service-models")).json()

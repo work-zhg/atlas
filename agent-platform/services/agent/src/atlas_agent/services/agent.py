@@ -36,7 +36,8 @@ from ..providers.llm.model_platform import (
     rename_agent,
     uses_model_platform,
 )
-from ..providers.mcp import mcp_subject_access
+from ..providers.mcp import make_mcp_catalog, mcp_agent_access
+from ..providers.mcp.gateway import delete_agent_key, register_agent_key, rename_agent_key
 from ..repositories.agent import AgentRepository
 from ..schemas.agent import (
     AgentCreate,
@@ -170,7 +171,7 @@ class AgentService:
             # 以 Agent 为权限：数字员工随创建才建出来，还没有任何授权（subject=None）
             subject = principal.auth_uid if payload.auth_subject == "user" else None
             await self._check_knowledge(spec, previous=None, subject=subject)
-            await self._check_mcp(spec, previous=None, subject=subject)
+        await self._check_mcp(spec, previous=None, agent=None)
         await self._check_models(spec, previous=None, agent=None)
         # ★ 在这里就跑 engine 的校验：opus-5 传 temperature 之类的错误
         #   在点保存时被拒，而不是等到某次 run（§3 D3）
@@ -193,6 +194,8 @@ class AgentService:
         # 平台暂时不可用不挡住建智能体，编辑器、Run 开始时会补建
         if self._settings is not None:
             await register_agent(self._settings, agent.id, agent.name)
+            # MCP 网关上的 Key（只能调公开服务，私有服务要所有者给它分配）。同样尽力而为
+            await register_agent_key(self._settings, agent.id, agent.name, owner=user_id)
         await self._session.refresh(agent)  # updated_at 是 onupdate：flush 后要重新读
         return AgentDetailOut(
             **_summarize(agent, version).model_dump(), spec=version.spec, my_level="OWNER"
@@ -223,7 +226,7 @@ class AgentService:
             if principal is not None:
                 subject = agent.digital_employee_uid if agent.acts_as_itself else principal.auth_uid
                 await self._check_knowledge(spec, previous=previous, subject=subject)
-                await self._check_mcp(spec, previous=previous, subject=subject)
+            await self._check_mcp(spec, previous=previous, agent=agent)
             await self._check_models(spec, previous=previous, agent=agent)
             spec.to_engine(slug=agent.slug, name=agent.name).validate()
             version = await self._repo.add_version(
@@ -236,6 +239,7 @@ class AgentService:
             await self._identity.renamed(agent)
             if self._settings is not None:
                 await rename_agent(self._settings, agent.id, agent.name)
+                await rename_agent_key(self._settings, agent.id, agent.name)
 
         await self._session.refresh(agent)
         return AgentDetailOut(**_summarize(agent, version).model_dump(), spec=version.spec)
@@ -255,6 +259,8 @@ class AgentService:
         archived = await self._repo.archive_threads_of(agent.id)
         await self._repo.soft_delete(agent)
         await self._identity.status_changed(agent, before=before)
+        if self._settings is not None:
+            await delete_agent_key(self._settings, agent.id)
         return {"archived": True, "archived_threads": archived}
 
     # ------------------------------------------------------------------ 权限类型与身份
@@ -422,37 +428,40 @@ class AgentService:
             )
 
     async def _check_mcp(
-        self, spec: AgentSpecIn, *, previous: AgentSpecIn | None, subject: UUID | None
+        self, spec: AgentSpecIn, *, previous: AgentSpecIn | None, agent: Agent | None
     ) -> None:
-        """新加的 MCP 服务，权限主体必须有「使用」（MCP 方案设计 §5.4）。
+        """新加的 MCP 工具，这个智能体的 Key 要能用：公开服务的，或授给这把 Key 的。
 
-        ★ 只校验**新加**的服务：旧版本已经选了的不重判 —— 授权被收回以后，连改提示词都
+        ★ 只校验**新加**的：旧版本已经选了的不重判 —— 授权被收回以后，连改提示词都
           保存不了就太过了；运行时会跳过并提示。
-        ★ 不校验 Key：Key 可以后发，缺 Key 由运行时跳过并提示。
-        ★ 主体：以人为权限 = 保存的人；以 Agent 为权限 = 它的数字员工（subject=None：
-          还没有数字员工，新加 MCP 服务一律拒绝）。
+        ★ 新建的智能体还没有 Key：只能选公开服务。保存后在 MCP 网关给它的 Key 分配私有服务。
+        ★ 与智能体的权限类型无关：Key 跟着智能体走。
         """
-        if self._settings is None:
+        if self._settings is None or not self._settings.mcp_gateway_url:
             return
-        added = sorted(_mcp_servers(spec) - (_mcp_servers(previous) if previous else set()))
+        added = sorted(_mcp_tools(spec) - (_mcp_tools(previous) if previous else set()))
         if not added:
             return
-        if subject is None:
-            raise InvalidReference(
-                "以 Agent 为权限的 Agent 要先保存（建出数字员工），在 MCP 管理端给数字员工授权后"
-                "再选 MCP 工具",
-                servers=",".join(added),
-            )
         try:
-            access = await mcp_subject_access(self._settings, subject)
+            if agent is None:
+                allowed = (await make_mcp_catalog(self._settings, self._redis)).public_access()
+            else:
+                found = await mcp_agent_access(
+                    self._settings, agent.id, name=agent.name, owner=agent.created_by
+                )
+                allowed = dict(found.servers)
         except CapabilityUnavailable as exc:
             raise DependencyUnavailable(f"MCP 网关暂时不可用，无法保存：{exc}") from exc
-        denied = [s for s in added if not access.allows(s)]
+        denied = [f"{s}__{t}" for s, t in added if t not in allowed.get(s, frozenset())]
         if denied:
+            where = (
+                "新建的智能体只能选公开的 MCP 服务（保存后在 MCP 网关给它的 Key 分配私有服务）"
+                if agent is None
+                else "这个智能体的 MCP Key 没有被授权使用这些工具"
+            )
             raise InvalidReference(
-                f"权限主体没有被授权使用 MCP 服务：{', '.join(denied)}，"
-                "请联系服务所有者或 MCP 管理员",
-                servers=",".join(denied),
+                f"{where}：{', '.join(denied)}，请联系服务所有者或 MCP 管理员",
+                tools=",".join(denied),
             )
 
     async def _check_models(
@@ -502,10 +511,10 @@ def _models_of(spec: AgentSpecIn) -> set[str]:
     return names
 
 
-def _mcp_servers(spec: AgentSpecIn) -> set[str]:
-    """spec（含子智能体）引用的 MCP 服务。子智能体沿用父 Run 的权限主体。"""
+def _mcp_tools(spec: AgentSpecIn) -> set[tuple[str, str]]:
+    """spec（含子智能体）引用的 MCP 工具：(服务, 线上名)。子智能体用同一把 Key。"""
     names = [*spec.tool_names, *(t for sub in spec.subagents for t in sub.tool_names)]
-    return {p[0] for name in names if (p := parse_tool_id(str(name))) is not None}
+    return {p for name in names if (p := parse_tool_id(str(name))) is not None}
 
 
 __all__ = ["AgentService", "AgentSpecIn"]

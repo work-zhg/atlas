@@ -2,6 +2,8 @@
 # 本机 K8s（Docker Desktop）上的 OpenSandbox（doc/sandbox-opensandbox-design.html §17）：
 #   S3 CSI 驱动 + 整桶静态 PV / PVC → CRD + 控制器 → 两个 lifecycle server：
 #   opensandbox-sbx（原生沙箱，命名空间 atlas-sbx）、opensandbox-acp（ACP Pod，命名空间 atlas-acp）。
+#   OPENSANDBOX_BENCH=1 时再装第三个：opensandbox-bench（评测档：root、根可写，也建在 atlas-sbx），
+#   放行的镜像前缀用 OPENSANDBOX_BENCH_IMAGE_PREFIXES（JSON 数组，默认 ["alexgshaw/"] = Terminal-Bench 2）。
 #
 # 前置：
 #   · make up（宿主的 MinIO）；仓库根 .env 里有 OSS_ACCESS_KEY_ID / OSS_ACCESS_KEY_SECRET，
@@ -59,7 +61,7 @@ api_key() {
   echo "$key"
 }
 
-install_server() {  # $1 = sbx | acp
+install_server() {  # $1 = sbx | acp | bench
   local kind="$1" key="$2" sha
   kubectl -n opensandbox-system create secret generic "opensandbox-${kind}-api-key" \
     --from-literal=api-key="${key}" --dry-run=client -o yaml | kubectl apply -f -
@@ -76,10 +78,20 @@ install_server() {  # $1 = sbx | acp
 
 SBX_KEY="$(api_key sbx)"
 ACP_KEY="$(api_key acp)"
-# atlas-server 用同样的 key（30-server.yaml 的 OPENSANDBOX_SBX_API_KEY / OPENSANDBOX_ACP_API_KEY）
+# 评测档这次要装、或以前装过（它的 key 在）：Secret 里都要带上 —— 不带的话 apply 会把 key 删掉，
+# 而 server 仍按 ConfigMap 去连评测档，就成了 401
+BENCH_ARGS=()
+if [ "${OPENSANDBOX_BENCH:-0}" = 1 ] \
+  || kubectl -n opensandbox-system get secret opensandbox-bench-api-key >/dev/null 2>&1; then
+  BENCH_KEY="$(api_key bench)"
+  BENCH_ARGS=(--from-literal=bench_api_key="${BENCH_KEY}")
+fi
+# atlas-server 用同样的 key（30-server.yaml 的 OPENSANDBOX_SBX_API_KEY / OPENSANDBOX_ACP_API_KEY /
+# OPENSANDBOX_BENCH_API_KEY）。★ 不开评测档时 Secret 里就没有 bench_api_key：server 那边是 optional
+# ★ 空数组要写成 ${a[@]+"${a[@]}"}：macOS 自带的 bash 3.2 在 set -u 下展开空数组会报 unbound
 kubectl -n atlas-system create secret generic atlas-opensandbox \
   --from-literal=sbx_api_key="${SBX_KEY}" --from-literal=acp_api_key="${ACP_KEY}" \
-  --dry-run=client -o yaml | kubectl apply -f -
+  ${BENCH_ARGS[@]+"${BENCH_ARGS[@]}"} --dry-run=client -o yaml | kubectl apply -f -
 # ACP Pod 的模型 key：ACP 模板把它以文件挂进 Pod（/run/secrets/atlas/model_api_key）
 MODEL_KEY="${ATLAS_ACP_MODEL_API_KEY:-${ATLAS_CLUSTER_MODEL_API_KEY:-}}"
 # ★ 已切到模型管理平台（ConfigMap atlas-model-platform 在）：Pod 拿 LiteLLM 地址和智能体的客户端 Key，
@@ -96,3 +108,17 @@ kubectl -n atlas-acp create secret generic atlas-acp-model \
 install_server sbx "$SBX_KEY"
 install_server acp "$ACP_KEY"
 echo "就绪：集群内 http://opensandbox-sbx.opensandbox-system、http://opensandbox-acp.opensandbox-system"
+
+# ── 4. 评测档（可选）────────────────────────────────────────────────
+# ★ server 从 ConfigMap atlas-sandbox-bench 读地址与镜像前缀（30-server.yaml 里是 optional）。
+#   改了要重启 atlas-server（env 只在启动时读）。不带 OPENSANDBOX_BENCH=1 重跑本脚本不会关掉它；
+#   要关：kubectl -n atlas-system delete configmap atlas-sandbox-bench
+#         helm uninstall opensandbox-bench -n opensandbox-system，再重启 atlas-server
+if [ "${OPENSANDBOX_BENCH:-0}" = 1 ]; then
+  install_server bench "$BENCH_KEY"
+  kubectl -n atlas-system create configmap atlas-sandbox-bench \
+    --from-literal=url="http://opensandbox-bench.opensandbox-system.svc.cluster.local" \
+    --from-literal=image_prefixes="${OPENSANDBOX_BENCH_IMAGE_PREFIXES:-[\"alexgshaw/\"]}" \
+    --dry-run=client -o yaml | kubectl apply -f -
+  echo "评测档就绪：http://opensandbox-bench.opensandbox-system（沙箱建在 atlas-sbx，标签 atlas.profile=bench）"
+fi

@@ -28,7 +28,7 @@ class UCSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="ATLAS_UC_", env_file=_REPO_ENV, extra="ignore")
 
     #: 用户中心库：与运行时、配置服务同一个 PG 实例上的**另一个 database**。
-    #: ★ 用 localhost 而不是 127.0.0.1（同 atlas_config 的说明：避开本机 brew 起的 PG）。
+    #: ★ 用 localhost 而不是 127.0.0.1（同 atlas_skill 的说明：避开本机 brew 起的 PG）。
     database_url: str = "postgresql+asyncpg://atlas:atlas@localhost:5433/atlas_usercenter"
     #: 管理台前端（dev 时 Next 经 rewrites 代理同源访问，CORS 只给直连调试用）
     cors_origins: list[str] = ["http://localhost:3100", "http://127.0.0.1:3100"]

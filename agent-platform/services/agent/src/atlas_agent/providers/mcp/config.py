@@ -1,7 +1,7 @@
 """MCP 网关上的一个服务，以及连它的 MCP 客户端（doc/mcp-design.html 第二版）。
 
-★ Atlas 和 Pod 只认 MCP 网关（§3.1）：服务地址都是 {MCP_GATEWAY_URL}/mcp/{服务名}，看不到 Higress。
-  凭据只有这一轮权限主体的 API Key（session.KeyAuth），后端凭据在 Higress、网关凭据在网关。
+★ Atlas 和 Pod 只认 MCP 网关（§3.1）：服务地址都是 {MCP_GATEWAY_URL}/mcp/{服务名}，看不到上游。
+  凭据只有这个智能体的 MCP Key（session.KeyAuth），上游凭据在网关。
 """
 
 from __future__ import annotations
@@ -50,9 +50,8 @@ def client_for(
     auth：httpx2.Auth —— 主体 Key（session.KeyAuth）。每个请求现取，Key 被重置后换一个值，
           已打开的会话不用重建（§6.7 ④）。
 
-    ★ mode="legacy"：上游（Higress 2.2.4）只懂 initialize 握手。默认的 "auto" 会先发一次
-      server/discover，被拒后再退回 initialize —— 每建一次会话白多一个请求。
-      网关和上游都支持 2.x 协议以后再改回 "auto"（§8.2）。
+    ★ mode="legacy"：沿用 initialize 握手（当初的上游 Higress 2.2.4 只懂它）。现在网关自己是 MCP
+      服务端（SDK 2.3），两种握手都支持；改回 "auto" 要先实测请求数再定（§8.2）。
     """
     from fastmcp import Client
     from fastmcp.client.transports import StreamableHttpTransport

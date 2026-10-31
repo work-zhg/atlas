@@ -1,0 +1,840 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LangGraph Checkpoint 原理：持久化、中断与恢复</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --border: #d1d9e0; --head: #f6f8fa;
+    --accent: #0969da; --ok: #1a7f37; --ok-bg: #dafbe1; --warn: #9a6700; --warn-bg: #fff8c5;
+    --bad: #cf222e; --bad-bg: #ffebe9; --code-bg: #f6f8fa;
+    --b1: #ddf4ff; --b1d: #54aeff; --b2: #fbefff; --b2d: #c297ff; --b3: #dafbe1; --b3d: #4ac26b;
+    --b4: #fff8c5; --b4d: #d4a72c; --b5: #ffebe9; --b5d: #ff8182;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --border: #3d444d; --head: #151b23;
+      --accent: #4493f8; --ok: #3fb950; --ok-bg: #12261e; --warn: #d29922; --warn-bg: #2b2111;
+      --bad: #f85149; --bad-bg: #2d1214; --code-bg: #151b23;
+      --b1: #12263f; --b1d: #1f6feb; --b2: #271a36; --b2d: #8957e5; --b3: #12261e; --b3d: #2ea043;
+      --b4: #2b2111; --b4d: #9e6a03; --b5: #2d1214; --b5d: #da3633;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 32px; background: var(--bg); color: var(--fg);
+         font: 14px/1.75 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif; }
+  main { max-width: 1120px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 44px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 15.5px; margin: 24px 0 8px; }
+  .sub { color: var(--muted); margin: 0 0 14px; }
+  code { font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code-bg); padding: 1px 4px; border-radius: 4px; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px 14px; overflow-x: auto; font-size: 12.5px; }
+  pre code { background: none; padding: 0; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0 16px; }
+  th, td { border: 1px solid var(--border); padding: 7px 10px; vertical-align: top; text-align: left; }
+  th { background: var(--head); white-space: nowrap; }
+  .callout { border-left: 4px solid var(--accent); background: var(--head); padding: 10px 14px; border-radius: 4px; margin: 14px 0; }
+  .callout.warn { border-color: var(--warn); background: var(--warn-bg); }
+  .toc { columns: 2; padding-left: 18px; }
+  .fig { border: 1px solid var(--border); border-radius: 6px; padding: 10px; overflow-x: auto; margin: 10px 0 6px; }
+  .cap { color: var(--muted); font-size: 12.5px; margin: 0 0 16px; text-align: center; }
+  svg text { fill: var(--fg); font-size: 12px; font-family: -apple-system, "PingFang SC", sans-serif; }
+  svg .s { font-size: 11px; fill: var(--muted); }
+  svg .b { font-weight: 600; }
+  svg .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+  svg .tw { fill: var(--warn); }
+  svg .tb { fill: var(--bad); }
+  svg .c1 { fill: var(--b1); stroke: var(--b1d); } svg .c2 { fill: var(--b2); stroke: var(--b2d); }
+  svg .c3 { fill: var(--b3); stroke: var(--b3d); } svg .c4 { fill: var(--b4); stroke: var(--b4d); }
+  svg .c5 { fill: var(--b5); stroke: var(--b5d); }
+  svg .inner { fill: var(--bg); stroke: var(--border); }
+  svg .ghost { fill: var(--head); stroke: var(--border); stroke-dasharray: 4 3; }
+  svg .ln { stroke: var(--fg); stroke-width: 1.3; fill: none; }
+  svg .dash { stroke-dasharray: 5 4; }
+  svg .life { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 4 4; fill: none; }
+  svg .arw { fill: var(--fg); }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <marker id="ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="arw" d="M0,0 L8,4 L0,8 z"/></marker>
+</defs></svg>
+<main>
+<h1>LangGraph Checkpoint 原理：持久化、中断与恢复</h1>
+<p class="sub">日期：2026-10-30 · 依据：langgraph 1.2.17、langgraph-checkpoint 4.3.0、langchain 1.4.7（本仓 <code>.venv</code> 里的源码与实测）；PostgresSaver 的表结构取自 langgraph 仓库 main 分支（同日）</p>
+
+<ol class="toc" start="0">
+  <li><a href="#s0">一页看懂</a></li>
+  <li><a href="#s1">基本概念</a></li>
+  <li><a href="#s2">执行模型：超步</a></li>
+  <li><a href="#s3">checkpoint 里有什么</a></li>
+  <li><a href="#s4">什么时候存、存在哪</a></li>
+  <li><a href="#s5">怎么中断</a></li>
+  <li><a href="#s6">怎么恢复</a></li>
+  <li><a href="#s7">实例：create_agent 的人工审批</a></li>
+  <li><a href="#s8">历史、分叉与改写</a></li>
+  <li><a href="#s9">使用要点</a></li>
+</ol>
+
+<!-- ====================================================================== -->
+<h2 id="s0">0. 一页看懂</h2>
+<div class="fig">
+<svg viewBox="0 0 1080 360" width="100%" role="img" aria-label="checkpoint 总览">
+  <rect x="20" y="50" width="150" height="120" rx="6" class="c1"/>
+  <text x="95" y="78" text-anchor="middle" class="b">调用方</text>
+  <text x="95" y="102" text-anchor="middle" class="s">invoke / stream</text>
+  <text x="95" y="122" text-anchor="middle" class="s">config.thread_id</text>
+  <text x="95" y="142" text-anchor="middle" class="s">Command(resume=…)</text>
+
+  <rect x="220" y="20" width="450" height="190" rx="8" class="inner"/>
+  <text x="236" y="44" class="b">编译后的图（Pregel 引擎）</text>
+  <rect x="245" y="66" width="100" height="40" rx="6" class="c2"/>
+  <text x="295" y="91" text-anchor="middle" class="b">model</text>
+  <rect x="370" y="66" width="150" height="40" rx="6" class="c2"/>
+  <text x="445" y="91" text-anchor="middle" class="b">after_model</text>
+  <rect x="545" y="66" width="105" height="40" rx="6" class="c2"/>
+  <text x="597" y="91" text-anchor="middle" class="b">tools</text>
+  <path d="M345,86 H 370" class="ln" marker-end="url(#ar)"/>
+  <path d="M520,86 H 545" class="ln" marker-end="url(#ar)"/>
+  <text x="445" y="140" text-anchor="middle" class="s">state = 一组 channel（messages、todos …），每个 channel 带版本号</text>
+  <text x="445" y="162" text-anchor="middle" class="s">每个任务结束：put_writes（任务的写入）</text>
+  <text x="445" y="184" text-anchor="middle" class="s">每个超步结束：put（整张图的快照）</text>
+
+  <path d="M170,90 H 220" class="ln" marker-end="url(#ar)"/>
+  <text x="195" y="82" text-anchor="middle" class="s">输入</text>
+  <path d="M220,135 H 170" class="ln" marker-end="url(#ar)"/>
+  <text x="195" y="152" text-anchor="middle" class="s">结果</text>
+
+  <rect x="710" y="40" width="170" height="150" rx="6" class="c3"/>
+  <text x="795" y="66" text-anchor="middle" class="b">Checkpointer</text>
+  <text x="795" y="90" text-anchor="middle" class="mono">get_tuple / list</text>
+  <text x="795" y="110" text-anchor="middle" class="mono">put</text>
+  <text x="795" y="130" text-anchor="middle" class="mono">put_writes</text>
+  <text x="795" y="165" text-anchor="middle" class="s">BaseCheckpointSaver</text>
+  <path d="M670,80 H 710" class="ln" marker-end="url(#ar)"/>
+  <text x="690" y="72" text-anchor="middle" class="s">写</text>
+  <path d="M710,150 H 670" class="ln" marker-end="url(#ar)"/>
+  <text x="690" y="167" text-anchor="middle" class="s">读</text>
+
+  <rect x="910" y="40" width="150" height="150" rx="6" class="c4"/>
+  <text x="985" y="66" text-anchor="middle" class="b">存储</text>
+  <text x="985" y="92" text-anchor="middle" class="s">InMemorySaver</text>
+  <text x="985" y="112" text-anchor="middle" class="s">SqliteSaver</text>
+  <text x="985" y="132" text-anchor="middle" class="s">PostgresSaver</text>
+  <text x="985" y="152" text-anchor="middle" class="s">…</text>
+  <path d="M880,115 H 910" class="ln" marker-start="url(#ar)" marker-end="url(#ar)"/>
+
+  <rect x="20" y="235" width="1040" height="115" rx="8" class="inner"/>
+  <text x="36" y="258" class="b">thread_id = t1 的 checkpoint 链</text>
+  <text x="250" y="258" class="s">每个 checkpoint 记着自己的父 checkpoint；最新的一个就是这个 thread 的当前状态</text>
+  <rect x="60" y="275" width="130" height="50" rx="6" class="c1"/>
+  <text x="125" y="296" text-anchor="middle" class="b">step -1</text>
+  <text x="125" y="314" text-anchor="middle" class="s">input</text>
+  <rect x="230" y="275" width="130" height="50" rx="6" class="c1"/>
+  <text x="295" y="296" text-anchor="middle" class="b">step 0</text>
+  <text x="295" y="314" text-anchor="middle" class="s">loop</text>
+  <rect x="400" y="275" width="130" height="50" rx="6" class="c1"/>
+  <text x="465" y="296" text-anchor="middle" class="b">step 1</text>
+  <text x="465" y="314" text-anchor="middle" class="s">loop</text>
+  <rect x="570" y="275" width="130" height="50" rx="6" class="c5"/>
+  <text x="635" y="296" text-anchor="middle" class="b">step 2</text>
+  <text x="635" y="314" text-anchor="middle" class="s">中断停在这里</text>
+  <rect x="740" y="275" width="130" height="50" rx="6" class="c1"/>
+  <text x="805" y="296" text-anchor="middle" class="b">step 3</text>
+  <text x="805" y="314" text-anchor="middle" class="s">恢复后继续</text>
+  <rect x="910" y="275" width="130" height="50" rx="6" class="ghost"/>
+  <text x="975" y="304" text-anchor="middle" class="s">…</text>
+  <path d="M230,300 H 190" class="ln" marker-end="url(#ar)"/>
+  <path d="M400,300 H 360" class="ln" marker-end="url(#ar)"/>
+  <path d="M570,300 H 530" class="ln" marker-end="url(#ar)"/>
+  <path d="M740,300 H 700" class="ln" marker-end="url(#ar)"/>
+  <path d="M910,300 H 870" class="ln" marker-end="url(#ar)"/>
+</svg>
+</div>
+<p class="cap">图 0　checkpointer 挂在图上，按 thread 存下每一步的快照；箭头指向父 checkpoint</p>
+
+<ul>
+  <li><b>存什么</b>：每个超步结束时整张图的快照（各 channel 的值和版本号），加上依附在它上面、还没合并的任务写入（pending writes）。</li>
+  <li><b>怎么中断</b>：节点里调用 <code>interrupt(value)</code>，第一次调用抛出 <code>GraphInterrupt</code>。引擎把它记成这个任务的一条 <code>__interrupt__</code> 写入，这一步没走完，所以不生成新的 checkpoint。之后进程可以直接退出。</li>
+  <li><b>怎么恢复</b>：用同一个 <code>thread_id</code> 调用 <code>Command(resume=值)</code>。恢复值记成一条 <code>__resume__</code> 写入；被中断的任务<b>从头重跑</b>，这一次 <code>interrupt()</code> 不抛出，直接返回恢复值。同一步里已经成功的任务只回放写入，不重跑。</li>
+  <li><b>代价</b>：节点重跑带来的副作用要自己保证幂等；快照里存的是全量 state，存储量随轮数增长；快照和图结构绑定，改图后要考虑旧快照能不能恢复。</li>
+</ul>
+
+<!-- ====================================================================== -->
+<h2 id="s1">1. 基本概念</h2>
+<table>
+  <tr><th>概念</th><th>是什么</th><th>在 checkpoint 里对应</th></tr>
+  <tr><td>thread</td><td>持久化的单位，由 config 里的 <code>thread_id</code> 指定。同一个 thread 的 checkpoint 串成一条链（有分叉时是一棵树）</td><td><code>config.thread_id</code></td></tr>
+  <tr><td>checkpoint</td><td>某个超步结束时整张图的快照</td><td><code>Checkpoint</code></td></tr>
+  <tr><td>超步（superstep）</td><td>引擎的执行单位：一批可以同时运行的节点一起跑，跑完统一合并写入</td><td><code>metadata.step</code></td></tr>
+  <tr><td>channel</td><td>state 的每个字段是一个 channel，各自有 reducer 和版本号。另有引擎内部用的 channel，例如边对应的 <code>branch:to:&lt;节点&gt;</code>、存放 <code>Send</code> 的 <code>__pregel_tasks</code></td><td><code>channel_values</code> / <code>channel_versions</code></td></tr>
+  <tr><td>task</td><td>某个超步里的一次节点执行，有自己的 task_id 和命名空间（<code>节点名:task_id</code>）</td><td><code>pending_writes</code> 的第一项</td></tr>
+  <tr><td>pending write</td><td>任务产生、还没合并进 channel 的写入。中断和恢复值也是用写入来记录的，分别写到 <code>__interrupt__</code> 和 <code>__resume__</code> 这两个特殊 channel</td><td><code>pending_writes</code></td></tr>
+  <tr><td>checkpointer</td><td>负责存取 checkpoint 的组件（<code>BaseCheckpointSaver</code> 的实现），编译图时传入</td><td>—</td></tr>
+</table>
+
+<!-- ====================================================================== -->
+<h2 id="s2">2. 执行模型：超步</h2>
+<p>LangGraph 的执行引擎叫 Pregel，按 BSP（bulk synchronous parallel）模型运行：一个超步里，所有该跑的节点并行执行，读的是同一份 state，彼此看不到对方的写入；全部执行完以后，写入按各 channel 的 reducer 统一合并，然后存一份 checkpoint，进入下一个超步。</p>
+<div class="fig">
+<svg viewBox="0 0 1080 230" width="100%" role="img" aria-label="超步循环">
+  <rect x="20" y="30" width="180" height="120" rx="6" class="c1"/>
+  <text x="110" y="56" text-anchor="middle" class="b">① 计划</text>
+  <text x="110" y="80" text-anchor="middle" class="s">比较 channel_versions</text>
+  <text x="110" y="98" text-anchor="middle" class="s">与各节点的 versions_seen</text>
+  <text x="110" y="116" text-anchor="middle" class="s">版本比节点见过的新</text>
+  <text x="110" y="134" text-anchor="middle" class="s">→ 这个节点要跑</text>
+
+  <rect x="230" y="30" width="180" height="120" rx="6" class="c2"/>
+  <text x="320" y="56" text-anchor="middle" class="b">② 执行</text>
+  <text x="320" y="80" text-anchor="middle" class="s">本步的任务并行运行</text>
+  <text x="320" y="98" text-anchor="middle" class="s">读同一份 state 快照</text>
+  <text x="320" y="116" text-anchor="middle" class="s">彼此看不到对方的写入</text>
+
+  <rect x="440" y="30" width="180" height="120" rx="6" class="c4"/>
+  <text x="530" y="56" text-anchor="middle" class="b">③ 记录写入</text>
+  <text x="530" y="80" text-anchor="middle" class="s">每个任务一结束就调</text>
+  <text x="530" y="98" text-anchor="middle" class="mono">put_writes(task, 写入)</text>
+  <text x="530" y="116" text-anchor="middle" class="s">中断、出错也记一条</text>
+
+  <rect x="650" y="30" width="180" height="120" rx="6" class="c2"/>
+  <text x="740" y="56" text-anchor="middle" class="b">④ 合并</text>
+  <text x="740" y="80" text-anchor="middle" class="s">按 reducer 合进 channel</text>
+  <text x="740" y="98" text-anchor="middle" class="s">被写的 channel 版本 +1</text>
+  <text x="740" y="116" text-anchor="middle" class="s">更新节点的 versions_seen</text>
+
+  <rect x="860" y="30" width="200" height="120" rx="6" class="c3"/>
+  <text x="960" y="56" text-anchor="middle" class="b">⑤ 存档</text>
+  <text x="960" y="80" text-anchor="middle" class="mono">put(checkpoint)</text>
+  <text x="960" y="98" text-anchor="middle" class="s">step + 1</text>
+  <text x="960" y="116" text-anchor="middle" class="s">父 = 上一个 checkpoint</text>
+
+  <path d="M200,90 H 230" class="ln" marker-end="url(#ar)"/>
+  <path d="M410,90 H 440" class="ln" marker-end="url(#ar)"/>
+  <path d="M620,90 H 650" class="ln" marker-end="url(#ar)"/>
+  <path d="M830,90 H 860" class="ln" marker-end="url(#ar)"/>
+  <path d="M960,150 V 185 H 110 V 150" class="ln" marker-end="url(#ar)"/>
+  <text x="535" y="206" text-anchor="middle" class="s">还有要跑的节点就进入下一个超步；没有就结束</text>
+</svg>
+</div>
+<p class="cap">图 1　一个超步的五个阶段。checkpoint 只在超步边界产生，中途的写入以 pending writes 的形式挂在当前 checkpoint 上</p>
+
+<p>这套模型能从任意 checkpoint 恢复，关键在于"下一步跑什么"不存在内存里，而是可以从 checkpoint 推算出来：</p>
+<ul>
+  <li>每个节点订阅若干 channel。某个 channel 的版本号比节点上次见过的新，这个节点就该跑。边本身也是 channel：普通边写 <code>branch:to:&lt;节点&gt;</code>，<code>Send</code> 写 <code>__pregel_tasks</code>。</li>
+  <li>checkpoint 里同时存了 <code>channel_versions</code>（每个 channel 当前的版本）和 <code>versions_seen</code>（每个节点见过的版本），所以任何一个进程拿到它，都能算出同样的下一步。</li>
+</ul>
+
+<!-- ====================================================================== -->
+<h2 id="s3">3. checkpoint 里有什么</h2>
+<div class="fig">
+<svg viewBox="0 0 1080 400" width="100%" role="img" aria-label="CheckpointTuple 结构">
+  <rect x="10" y="10" width="1060" height="380" rx="8" class="inner"/>
+  <text x="26" y="34" class="b">CheckpointTuple</text>
+  <text x="140" y="34" class="s">checkpointer.get_tuple() 返回的一条记录</text>
+
+  <rect x="30" y="50" width="300" height="92" rx="6" class="c1"/>
+  <text x="180" y="72" text-anchor="middle" class="b">config</text>
+  <text x="180" y="94" text-anchor="middle" class="mono">thread_id: t1</text>
+  <text x="180" y="112" text-anchor="middle" class="mono">checkpoint_ns: ""（主图）</text>
+  <text x="180" y="130" text-anchor="middle" class="mono">checkpoint_id: 1f1d…8002…</text>
+
+  <rect x="30" y="156" width="300" height="62" rx="6" class="c1"/>
+  <text x="180" y="180" text-anchor="middle" class="b">parent_config</text>
+  <text x="180" y="202" text-anchor="middle" class="s">上一个 checkpoint 的地址</text>
+
+  <rect x="30" y="232" width="300" height="80" rx="6" class="c1"/>
+  <text x="180" y="256" text-anchor="middle" class="b">metadata</text>
+  <text x="180" y="278" text-anchor="middle" class="s">source：input / loop / update / fork</text>
+  <text x="180" y="298" text-anchor="middle" class="s">step：-1 是输入，之后每步 +1</text>
+  <text x="180" y="345" text-anchor="middle" class="s">定位一个 checkpoint：</text>
+  <text x="180" y="363" text-anchor="middle" class="s">thread_id + checkpoint_ns + checkpoint_id</text>
+
+  <rect x="350" y="50" width="400" height="325" rx="6" class="c2"/>
+  <text x="550" y="72" text-anchor="middle" class="b">checkpoint</text>
+  <rect x="368" y="86" width="364" height="100" rx="6" class="inner"/>
+  <text x="380" y="106" class="b">channel_values</text>
+  <text x="490" y="106" class="s">图 state 的值</text>
+  <text x="380" y="128" class="mono">messages: [human, ai(tool_calls=[call_A])]</text>
+  <text x="380" y="148" class="mono">__pregel_tasks: [Send("tools", call_A)]</text>
+  <text x="380" y="168" class="mono">todos / 其他 state 字段 …</text>
+  <rect x="368" y="196" width="364" height="54" rx="6" class="inner"/>
+  <text x="380" y="216" class="b">channel_versions</text>
+  <text x="380" y="238" class="s">每个 channel 的当前版本，被写一次增加一次</text>
+  <rect x="368" y="260" width="364" height="54" rx="6" class="inner"/>
+  <text x="380" y="280" class="b">versions_seen</text>
+  <text x="380" y="302" class="s">每个节点上次运行时看到的各 channel 版本</text>
+  <rect x="368" y="324" width="364" height="38" rx="6" class="inner"/>
+  <text x="380" y="348" class="s">v（格式版本）· id（按时间递增）· ts · updated_channels</text>
+
+  <rect x="770" y="50" width="280" height="325" rx="6" class="c4"/>
+  <text x="910" y="72" text-anchor="middle" class="b">pending_writes</text>
+  <text x="910" y="94" text-anchor="middle" class="s">从这个 checkpoint 出发的任务</text>
+  <text x="910" y="112" text-anchor="middle" class="s">已经产生、还没合并的写入</text>
+  <rect x="785" y="128" width="250" height="52" rx="6" class="inner"/>
+  <text x="910" y="150" text-anchor="middle" class="mono">(task_id, channel, value)</text>
+  <text x="910" y="170" text-anchor="middle" class="s">一条写入的形状</text>
+  <rect x="785" y="190" width="250" height="52" rx="6" class="inner"/>
+  <text x="910" y="212" text-anchor="middle" class="mono">(tools 任务, __interrupt__, […])</text>
+  <text x="910" y="232" text-anchor="middle" class="s">任务调了 interrupt()</text>
+  <rect x="785" y="252" width="250" height="52" rx="6" class="inner"/>
+  <text x="910" y="274" text-anchor="middle" class="mono">(NULL, __resume__, 恢复值)</text>
+  <text x="910" y="294" text-anchor="middle" class="s">Command(resume) 写进来的</text>
+  <text x="910" y="334" text-anchor="middle" class="s">成功任务的普通写入也在这里，</text>
+  <text x="910" y="352" text-anchor="middle" class="s">恢复时直接回放，不重跑</text>
+</svg>
+</div>
+<p class="cap">图 2　一条 checkpoint 记录的组成。左边定位，中间是快照，右边是挂在快照上的写入</p>
+
+<table>
+  <tr><th>字段</th><th>内容</th><th>恢复时的用途</th></tr>
+  <tr><td><code>channel_values</code></td><td>每个 channel 的值。<code>messages</code> 是<b>完整列表</b>；<code>__pregel_tasks</code> 是待执行的 <code>Send</code></td><td>还原 state，确定待执行的 <code>Send</code> 任务</td></tr>
+  <tr><td><code>channel_versions</code></td><td>每个 channel 的当前版本</td><td>和 <code>versions_seen</code> 一起算出下一步要跑的节点</td></tr>
+  <tr><td><code>versions_seen</code></td><td>每个节点上次运行时看到的版本</td><td>同上</td></tr>
+  <tr><td><code>updated_channels</code></td><td>这一步写过的 channel</td><td>调度时缩小比较范围</td></tr>
+  <tr><td><code>v</code> / <code>id</code> / <code>ts</code></td><td>格式版本（实测为 4）、id（单调递增，可直接排序）、时间戳</td><td>定位、排序</td></tr>
+  <tr><td><code>parent_config</code></td><td>父 checkpoint 的地址</td><td>回看历史、从某一步分叉（见第 8 节）</td></tr>
+  <tr><td><code>metadata</code></td><td><code>source</code>、<code>step</code>、子图的 <code>parents</code></td><td>审计、筛选</td></tr>
+  <tr><td><code>pending_writes</code></td><td><code>(task_id, channel, value)</code> 列表</td><td>找出被中断的任务；回放已成功任务的写入</td></tr>
+</table>
+
+<p>下面是第 7 节那个审批例子在中断那一刻的最新 checkpoint（实测，删掉了次要字段）：</p>
+<pre><code>{
+  "config":        { "thread_id": "t1", "checkpoint_ns": "", "checkpoint_id": "1f1d4197-82cb-…-8002…" },
+  "parent_config": { "checkpoint_id": "1f1d4197-82ca-…-8001…" },
+  "metadata":      { "source": "loop", "step": 2, "parents": {} },
+  "checkpoint": {
+    "channel_values": {
+      "messages": [
+        { "type": "human", "content": "给 alice 发封邮件" },
+        { "type": "ai", "content": "我来发邮件。",
+          "tool_calls": [{ "id": "call_A", "name": "send_email", "args": { "to": "alice", "body": "hi" } }] }
+      ],
+      "__pregel_tasks": [ "Send(node='tools', arg=[{ name: send_email, id: call_A }])" ]
+    },
+    "channel_versions": { "messages": "…0003…", "__pregel_tasks": "…0004…", "branch:to:model": "…0003…" },
+    "versions_seen":    { "model": { "branch:to:model": "…0002…" }, "HumanInTheLoopMiddleware.after_model": { … } }
+  },
+  "pending_writes": [
+    [ "5628f28c…", "__interrupt__", [ { "id": "85508eef…",
+        "value": { "type": "tool_approval", "tool_call_id": "call_A", "name": "send_email", "args": { … } } } ] ]
+  ]
+}</code></pre>
+
+<!-- ====================================================================== -->
+<h2 id="s4">4. 什么时候存、存在哪</h2>
+<h3>4.1 checkpoint 的来源</h3>
+<table>
+  <tr><th><code>metadata.source</code></th><th>什么时候产生</th><th><code>step</code></th></tr>
+  <tr><td><code>input</code></td><td>调用开始，输入还没合并进 state 时（输入作为 pending writes 挂在它上面）</td><td>-1</td></tr>
+  <tr><td><code>loop</code></td><td>每个超步结束</td><td>0、1、2 …</td></tr>
+  <tr><td><code>update</code></td><td>调用方用 <code>update_state</code> 手动改 state</td><td>接着上一个</td></tr>
+  <tr><td><code>fork</code></td><td>从历史 checkpoint 重新出发时复制出的分支起点</td><td>接着被复制的那个</td></tr>
+</table>
+
+<h3>4.2 写盘时机：durability</h3>
+<p>调用时可以用 <code>durability</code> 参数选择写盘时机，默认是 <code>"async"</code>。</p>
+<div class="fig">
+<svg viewBox="0 0 1080 260" width="100%" role="img" aria-label="三种写盘时机">
+  <text x="20" y="62" class="b">sync</text>
+  <rect x="150" y="45" width="150" height="34" rx="5" class="c2"/><text x="225" y="67" text-anchor="middle">超步 1</text>
+  <rect x="304" y="45" width="56" height="34" rx="5" class="c3"/><text x="332" y="67" text-anchor="middle" class="s">存档</text>
+  <rect x="364" y="45" width="150" height="34" rx="5" class="c2"/><text x="439" y="67" text-anchor="middle">超步 2</text>
+  <rect x="518" y="45" width="56" height="34" rx="5" class="c3"/><text x="546" y="67" text-anchor="middle" class="s">存档</text>
+  <rect x="578" y="45" width="100" height="34" rx="5" class="c2"/><text x="628" y="67" text-anchor="middle">…</text>
+  <text x="710" y="58" class="s">存完才开始下一步</text>
+  <text x="710" y="76" class="s">最慢；崩溃时不丢已完成的超步</text>
+
+  <text x="20" y="132" class="b">async</text>
+  <text x="20" y="150" class="s">（默认）</text>
+  <rect x="150" y="115" width="150" height="34" rx="5" class="c2"/><text x="225" y="137" text-anchor="middle">超步 1</text>
+  <rect x="304" y="115" width="150" height="34" rx="5" class="c2"/><text x="379" y="137" text-anchor="middle">超步 2</text>
+  <rect x="458" y="115" width="150" height="34" rx="5" class="c2"/><text x="533" y="137" text-anchor="middle">超步 3</text>
+  <rect x="304" y="153" width="56" height="22" rx="5" class="c3"/><text x="332" y="168" text-anchor="middle" class="s">存档 1</text>
+  <rect x="458" y="153" width="56" height="22" rx="5" class="c3"/><text x="486" y="168" text-anchor="middle" class="s">存档 2</text>
+  <text x="710" y="128" class="s">存档与下一步并行进行</text>
+  <text x="710" y="146" class="s">进程崩溃时，正在后台写的那一次可能没写完</text>
+
+  <text x="20" y="222" class="b">exit</text>
+  <rect x="150" y="205" width="150" height="34" rx="5" class="c2"/><text x="225" y="227" text-anchor="middle">超步 1</text>
+  <rect x="304" y="205" width="150" height="34" rx="5" class="c2"/><text x="379" y="227" text-anchor="middle">超步 2</text>
+  <rect x="458" y="205" width="150" height="34" rx="5" class="c2"/><text x="533" y="227" text-anchor="middle">超步 3</text>
+  <rect x="612" y="205" width="56" height="34" rx="5" class="c3"/><text x="640" y="227" text-anchor="middle" class="s">存档</text>
+  <text x="710" y="218" class="s">只在图退出（结束或中断）时写一次，中途也不写 pending writes</text>
+  <text x="710" y="236" class="s">最快；中途崩溃，这次调用的进度全部丢失</text>
+</svg>
+</div>
+<p class="cap">图 3　三种 durability 模式下存档发生的时机</p>
+
+<h3>4.3 checkpointer 接口</h3>
+<table>
+  <tr><th>方法</th><th>作用</th><th>什么时候被调用</th></tr>
+  <tr><td><code>get_tuple(config)</code></td><td>取一个 checkpoint 及其 pending writes；config 里不带 <code>checkpoint_id</code> 就取最新的</td><td>每次调用开始；<code>get_state</code></td></tr>
+  <tr><td><code>list(config)</code></td><td>按时间倒序列出 thread 的 checkpoint</td><td><code>get_state_history</code></td></tr>
+  <tr><td><code>put(config, checkpoint, metadata, new_versions)</code></td><td>存一个 checkpoint；<code>new_versions</code> 是这一步版本变了的 channel</td><td>每个超步结束（受 durability 影响）</td></tr>
+  <tr><td><code>put_writes(config, writes, task_id)</code></td><td>存某个任务的写入，挂在当前 checkpoint 上</td><td>每个任务结束，包括中断和出错</td></tr>
+  <tr><td><code>delete_thread</code> / <code>prune</code> / <code>copy_thread</code></td><td>删除 thread、裁剪历史、复制 thread</td><td>由调用方按需使用；具体 saver 是否实现以各自为准</td></tr>
+</table>
+<p>每个方法都有对应的异步版本（<code>aget_tuple</code>、<code>aput</code> …）。值用 <code>JsonPlusSerializer</code> 序列化，消息等 LangChain 对象可以原样存取。</p>
+
+<h3>4.4 PostgresSaver 的表</h3>
+<div class="fig">
+<svg viewBox="0 0 1080 300" width="100%" role="img" aria-label="PostgresSaver 表结构">
+  <rect x="20" y="20" width="340" height="30" rx="5" class="c2"/>
+  <text x="190" y="40" text-anchor="middle" class="b">checkpoints</text>
+  <rect x="20" y="50" width="340" height="100" class="inner"/>
+  <text x="32" y="70" class="mono">PK thread_id, checkpoint_ns, checkpoint_id</text>
+  <text x="32" y="92" class="mono">parent_checkpoint_id</text>
+  <text x="32" y="114" class="mono">checkpoint JSONB</text>
+  <text x="150" y="114" class="s">版本信息 + 基础类型的值</text>
+  <text x="32" y="136" class="mono">metadata JSONB</text>
+  <text x="150" y="136" class="s">source、step …</text>
+
+  <rect x="390" y="20" width="330" height="30" rx="5" class="c3"/>
+  <text x="555" y="40" text-anchor="middle" class="b">checkpoint_blobs</text>
+  <rect x="390" y="50" width="330" height="100" class="inner"/>
+  <text x="402" y="70" class="mono">PK thread_id, checkpoint_ns,</text>
+  <text x="402" y="88" class="mono">   channel, version</text>
+  <text x="402" y="110" class="mono">type</text>
+  <text x="402" y="132" class="mono">blob BYTEA</text>
+  <text x="490" y="132" class="s">序列化后的 channel 值</text>
+
+  <rect x="750" y="20" width="310" height="30" rx="5" class="c4"/>
+  <text x="905" y="40" text-anchor="middle" class="b">checkpoint_writes</text>
+  <rect x="750" y="50" width="310" height="100" class="inner"/>
+  <text x="762" y="70" class="mono">PK thread_id, checkpoint_ns,</text>
+  <text x="762" y="88" class="mono">   checkpoint_id, task_id, idx</text>
+  <text x="762" y="110" class="mono">channel</text>
+  <text x="830" y="110" class="s">含 __interrupt__、__resume__</text>
+  <text x="762" y="132" class="mono">type · blob · task_path</text>
+
+  <path d="M360,114 C 375,114 375,99 390,99" class="ln" marker-end="url(#ar)"/>
+  <text x="555" y="172" text-anchor="middle" class="s">channel_versions[ch] 指向 (channel, version)；只有版本变了的 channel 才写新 blob</text>
+  <path d="M190,150 V 205 H 905 V 150" class="ln" marker-end="url(#ar)"/>
+  <text x="555" y="222" text-anchor="middle" class="s">按 checkpoint_id 关联：挂在这个 checkpoint 上的 pending writes</text>
+
+  <rect x="20" y="245" width="220" height="44" rx="5" class="inner"/>
+  <text x="130" y="264" text-anchor="middle" class="mono">checkpoint_migrations</text>
+  <text x="130" y="281" text-anchor="middle" class="s">表结构版本</text>
+  <text x="750" y="262" class="s">messages 几乎每步都变：</text>
+  <text x="750" y="280" class="s">每步都把完整列表再序列化存一份</text>
+</svg>
+</div>
+<p class="cap">图 4　PostgresSaver 的三张主表。<code>None</code>、字符串、数字、布尔这类基础类型的值直接存在 <code>checkpoints.checkpoint</code> 里，其余按 (channel, version) 存进 blobs</p>
+
+<div class="callout warn">存储量的增长：一个 channel 每变一次就多一个版本的 blob。<code>messages</code> 每步都变，所以每步都要把完整的消息列表再存一份，存储量随轮数近似平方增长。LangGraph 有一个 beta 阶段的 <code>DeltaChannel</code>，只存增量（deepagents 的 messages 就用了它）。开源版 saver 不会自动清理旧数据，需要自己调用 <code>delete_thread</code> / <code>prune</code>。</div>
+
+<!-- ====================================================================== -->
+<h2 id="s5">5. 怎么中断</h2>
+<h3>5.1 动态中断：<code>interrupt()</code></h3>
+<p>在节点（或节点里调用的中间件、工具）中调用 <code>interrupt(value)</code>。下图以第 7 节的审批例子为例：中断发生在 step 2 的 tools 任务里。</p>
+<div class="fig">
+<svg viewBox="0 0 1080 470" width="100%" role="img" aria-label="中断时序">
+  <rect x="25" y="20" width="150" height="36" rx="6" class="c1"/><text x="100" y="43" text-anchor="middle" class="b">调用方</text>
+  <rect x="255" y="20" width="150" height="36" rx="6" class="c2"/><text x="330" y="43" text-anchor="middle" class="b">Pregel 循环</text>
+  <rect x="485" y="20" width="150" height="36" rx="6" class="c2"/><text x="560" y="43" text-anchor="middle" class="b">tools 任务</text>
+  <rect x="705" y="20" width="150" height="36" rx="6" class="c5"/><text x="780" y="43" text-anchor="middle" class="b">interrupt()</text>
+  <rect x="905" y="20" width="150" height="36" rx="6" class="c3"/><text x="980" y="43" text-anchor="middle" class="b">Checkpointer</text>
+  <path d="M100,56 V 455" class="life"/>
+  <path d="M330,56 V 455" class="life"/>
+  <path d="M560,56 V 455" class="life"/>
+  <path d="M780,56 V 455" class="life"/>
+  <path d="M980,56 V 455" class="life"/>
+
+  <path d="M100,90 H 330" class="ln" marker-end="url(#ar)"/>
+  <text x="215" y="83" text-anchor="middle" class="mono">invoke(输入, thread_id)</text>
+  <path d="M330,125 H 980" class="ln" marker-end="url(#ar)"/>
+  <text x="655" y="118" text-anchor="middle" class="s">put：step -1、0、1（每个超步一份）</text>
+  <path d="M330,160 H 560" class="ln" marker-end="url(#ar)"/>
+  <text x="445" y="153" text-anchor="middle" class="s">step 2：执行 tools 任务</text>
+  <path d="M560,195 H 780" class="ln" marker-end="url(#ar)"/>
+  <text x="670" y="188" text-anchor="middle" class="mono">interrupt(审批请求)</text>
+  <rect x="790" y="212" width="170" height="30" rx="5" class="c4"/>
+  <text x="875" y="232" text-anchor="middle" class="s">scratchpad 里没有恢复值</text>
+  <path d="M780,265 H 560" class="ln dash" marker-end="url(#ar)"/>
+  <text x="670" y="258" text-anchor="middle" class="mono">raise GraphInterrupt(Interrupt)</text>
+  <path d="M560,300 H 330" class="ln dash" marker-end="url(#ar)"/>
+  <text x="445" y="293" text-anchor="middle" class="s">异常上抛（不算失败，不重试）</text>
+  <path d="M330,335 H 980" class="ln" marker-end="url(#ar)"/>
+  <text x="655" y="328" text-anchor="middle" class="mono">put_writes(tools 任务, [(__interrupt__, [Interrupt])])</text>
+  <rect x="200" y="352" width="260" height="30" rx="5" class="c4"/>
+  <text x="330" y="372" text-anchor="middle" class="s">超步没走完：不生成新的 checkpoint</text>
+  <path d="M330,410 H 100" class="ln dash" marker-end="url(#ar)"/>
+  <text x="215" y="403" text-anchor="middle" class="s">返回 interrupts</text>
+  <text x="100" y="440" text-anchor="middle" class="s">进程可以退出</text>
+</svg>
+</div>
+<p class="cap">图 5　中断的时序。最新的 checkpoint 仍是 step 2，被中断的任务只留下一条 <code>__interrupt__</code> 写入</p>
+
+<ol>
+  <li><b>判断有没有恢复值</b>：每个任务有一个 scratchpad，记着这个任务已经收到的恢复值和本次执行中 <code>interrupt()</code> 被调用了第几次。第一次执行时没有恢复值。</li>
+  <li><b>抛出 <code>GraphInterrupt</code></b>：异常里带一个 <code>Interrupt(value, id)</code>。<code>id</code> 是对任务命名空间（如 <code>tools:&lt;task_id&gt;</code>）做 xxh3 哈希得到的，恢复时用它指明回答的是哪个中断。</li>
+  <li><b>记成一条写入</b>：引擎把 <code>GraphInterrupt</code> 当作"正常停下"而不是失败，不走重试，而是调 <code>put_writes</code>，记一条 <code>(task_id, "__interrupt__", [Interrupt])</code>。同一步里其他任务照常跑完，它们的写入也都记下。</li>
+  <li><b>不前进</b>：这个超步有任务没完成，所以不合并、不生成新的 checkpoint，循环以 <code>interrupted</code> 状态退出。</li>
+  <li><b>交给调用方</b>：<code>invoke(..., version="v2")</code> 的返回值带 <code>interrupts</code>；流式调用会产出一条 <code>__interrupt__</code>；之后也可以用 <code>get_state()</code> 查 <code>tasks[].interrupts</code>。</li>
+</ol>
+<p>到这一步，恢复所需的一切都在存储里了：快照（step 2）、待执行的任务（<code>__pregel_tasks</code>），以及哪个任务停在哪里（<code>__interrupt__</code>）。进程可以直接退出，恢复可以在另一个进程里进行。</p>
+
+<h3>5.2 静态断点：<code>interrupt_before</code> / <code>interrupt_after</code></h3>
+<table>
+  <tr><th></th><th>动态中断 <code>interrupt()</code></th><th>静态断点</th></tr>
+  <tr><td>在哪里设置</td><td>节点代码里，可以带条件</td><td>编译或调用时传节点名列表</td></tr>
+  <tr><td>停在哪</td><td>节点执行到一半</td><td>指定节点执行之前或之后，停在超步边界</td></tr>
+  <tr><td>能带什么给调用方</td><td>任意 <code>value</code>（以及 <code>response_schema</code>）</td><td>没有自定义内容</td></tr>
+  <tr><td>怎么恢复</td><td><code>Command(resume=值)</code></td><td><code>invoke(None, config)</code> 接着跑；需要改值时先 <code>update_state</code></td></tr>
+  <tr><td>典型用途</td><td>人工审批、向用户提问</td><td>调试、单步执行</td></tr>
+</table>
+
+<!-- ====================================================================== -->
+<h2 id="s6">6. 怎么恢复</h2>
+<h3>6.1 恢复的时序</h3>
+<div class="fig">
+<svg viewBox="0 0 1080 545" width="100%" role="img" aria-label="恢复时序">
+  <rect x="25" y="20" width="150" height="36" rx="6" class="c1"/><text x="100" y="43" text-anchor="middle" class="b">调用方</text>
+  <rect x="255" y="20" width="150" height="36" rx="6" class="c2"/><text x="330" y="43" text-anchor="middle" class="b">Pregel 循环</text>
+  <rect x="485" y="20" width="150" height="36" rx="6" class="c2"/><text x="560" y="43" text-anchor="middle" class="b">tools 任务</text>
+  <rect x="705" y="20" width="150" height="36" rx="6" class="c5"/><text x="780" y="43" text-anchor="middle" class="b">interrupt()</text>
+  <rect x="905" y="20" width="150" height="36" rx="6" class="c3"/><text x="980" y="43" text-anchor="middle" class="b">Checkpointer</text>
+  <path d="M100,56 V 530" class="life"/>
+  <path d="M330,56 V 530" class="life"/>
+  <path d="M560,56 V 530" class="life"/>
+  <path d="M780,56 V 530" class="life"/>
+  <path d="M980,56 V 530" class="life"/>
+
+  <path d="M100,90 H 330" class="ln" marker-end="url(#ar)"/>
+  <text x="215" y="83" text-anchor="middle" class="mono">invoke(Command(resume=…))</text>
+  <text x="215" y="106" text-anchor="middle" class="s">同一个 thread_id，可在另一个进程</text>
+  <path d="M330,135 H 980" class="ln" marker-end="url(#ar)"/>
+  <text x="655" y="128" text-anchor="middle" class="mono">get_tuple()：取最新 checkpoint</text>
+  <path d="M980,170 H 330" class="ln dash" marker-end="url(#ar)"/>
+  <text x="655" y="163" text-anchor="middle" class="s">step 2 的快照 + pending writes（含 __interrupt__）</text>
+  <rect x="185" y="185" width="290" height="30" rx="5" class="c4"/>
+  <text x="330" y="205" text-anchor="middle" class="mono">resume → (NULL_TASK_ID, __resume__, 值)</text>
+  <path d="M330,240 H 980" class="ln" marker-end="url(#ar)"/>
+  <text x="655" y="233" text-anchor="middle" class="mono">put_writes(__resume__)</text>
+  <rect x="185" y="255" width="290" height="30" rx="5" class="c4"/>
+  <text x="330" y="275" text-anchor="middle" class="s">同一步里已成功的任务：回放写入，不重跑</text>
+  <path d="M330,315 H 560" class="ln" marker-end="url(#ar)"/>
+  <text x="445" y="308" text-anchor="middle" class="s">从头重新执行 tools 任务</text>
+  <path d="M560,350 H 780" class="ln" marker-end="url(#ar)"/>
+  <text x="670" y="343" text-anchor="middle" class="mono">interrupt(审批请求)</text>
+  <text x="670" y="366" text-anchor="middle" class="s">同一个调用，第二次执行到</text>
+  <path d="M780,395 H 560" class="ln dash" marker-end="url(#ar)"/>
+  <text x="670" y="388" text-anchor="middle" class="s">scratchpad 里有恢复值 → 直接返回</text>
+  <path d="M560,430 H 330" class="ln dash" marker-end="url(#ar)"/>
+  <text x="445" y="423" text-anchor="middle" class="s">正常结束：写入 ToolMessage</text>
+  <path d="M330,465 H 980" class="ln" marker-end="url(#ar)"/>
+  <text x="655" y="458" text-anchor="middle" class="s">put_writes，合并后 put：step 3</text>
+  <path d="M330,505 H 100" class="ln dash" marker-end="url(#ar)"/>
+  <text x="215" y="498" text-anchor="middle" class="s">继续跑，直到结束或再次中断</text>
+</svg>
+</div>
+<p class="cap">图 6　恢复的时序。<code>__resume__</code> 写入挂在中断时的同一个 checkpoint（step 2）上，被中断的任务跑完后才生成 step 3</p>
+
+<ol>
+  <li><b>判断是恢复</b>：输入是 <code>Command</code>，而且 thread 已经有 checkpoint，就按"接着跑"处理，不当成一次新的输入。</li>
+  <li><b>取现场</b>：<code>get_tuple</code> 取最新的 checkpoint 及其 pending writes。</li>
+  <li><b>写入恢复值</b>：<code>Command(resume=值)</code> 被翻译成一条 <code>(NULL_TASK_ID, "__resume__", 值)</code> 写入，挂在同一个 checkpoint 上。</li>
+  <li><b>重建任务</b>：用快照里的版本信息和 <code>__pregel_tasks</code> 算出这一步的任务，结果和中断前完全一样。有成功写入的任务把写入原样交回、不再执行；被中断的任务重新执行。</li>
+  <li><b>重跑</b>：被中断的任务<b>从节点开头</b>执行。执行到同一个 <code>interrupt()</code> 时，scratchpad 里已经有恢复值，直接返回，不再抛出。</li>
+  <li><b>前进</b>：所有任务完成后合并写入，生成 step 3 的 checkpoint，继续后面的超步。</li>
+</ol>
+
+<h3>6.2 恢复值怎么对上中断</h3>
+<table>
+  <tr><th>写法</th><th>含义</th><th>适用</th></tr>
+  <tr><td><code>Command(resume=值)</code></td><td>只有一个待决的中断时，直接交给它</td><td>只有一个待决中断。有多个时引擎会报错，要求指明 id</td></tr>
+  <tr><td><code>Command(resume={interrupt_id: 值, …})</code></td><td>key 全是中断 id 时，按 id 分别交给对应的任务</td><td>同一步里有多个任务各自中断（如并行的多个工具调用都要审批）</td></tr>
+  <tr><td>同一个任务里多次调用 <code>interrupt()</code></td><td>按调用顺序一一对应：第 1 次调用拿第 1 个恢复值，依此类推</td><td>一个节点里连续问几个问题</td></tr>
+</table>
+<p><code>interrupt()</code> 可以带 <code>response_schema</code>。如果给的是 Pydantic 模型、TypedDict 或 dataclass，恢复值会先按它校验；校验失败时抛 <code>ValidationError</code>，<b>这次恢复不会被保存</b>，可以重新回答。</p>
+
+<h3>6.3 节点从头重跑</h3>
+<div class="fig">
+<svg viewBox="0 0 1080 250" width="100%" role="img" aria-label="节点重跑">
+  <text x="20" y="74" class="b">第一次执行</text>
+  <rect x="150" y="50" width="260" height="40" rx="6" class="c4"/>
+  <text x="280" y="75" text-anchor="middle">interrupt() 之前的代码</text>
+  <rect x="420" y="50" width="170" height="40" rx="6" class="c5"/>
+  <text x="505" y="75" text-anchor="middle">interrupt() 抛出</text>
+  <text x="610" y="75" class="s">本次执行到此为止，后面的代码没有执行</text>
+  <path d="M410,70 H 420" class="ln"/>
+
+  <path d="M280,90 V 150" class="ln dash"/>
+  <text x="292" y="125" class="tw">副作用（发请求、写文件、计数）会发生两次</text>
+
+  <text x="20" y="174" class="b">恢复后</text>
+  <rect x="150" y="150" width="260" height="40" rx="6" class="c4"/>
+  <text x="280" y="175" text-anchor="middle">同一段代码再执行一次</text>
+  <rect x="420" y="150" width="170" height="40" rx="6" class="c3"/>
+  <text x="505" y="175" text-anchor="middle">interrupt() 返回恢复值</text>
+  <rect x="600" y="150" width="200" height="40" rx="6" class="c2"/>
+  <text x="700" y="175" text-anchor="middle">interrupt() 之后的代码</text>
+  <rect x="810" y="150" width="150" height="40" rx="6" class="c3"/>
+  <text x="885" y="175" text-anchor="middle">返回写入</text>
+  <path d="M410,170 H 420" class="ln"/>
+  <path d="M590,170 H 600" class="ln"/>
+  <path d="M800,170 H 810" class="ln"/>
+
+  <text x="20" y="230" class="s">同一个任务里调用多次 interrupt() 时，恢复值按调用顺序对应。两次执行之间如果条件分支变了、调用顺序跟着变，恢复值就会交错。</text>
+</svg>
+</div>
+<p class="cap">图 7　恢复不是从 <code>interrupt()</code> 那一行接着往下执行，而是把整个节点重新执行一遍</p>
+<p>引擎不保存 Python 的调用栈，能恢复的只有 checkpoint 里的数据，所以只能把节点重新执行一遍，靠 scratchpad 让 <code>interrupt()</code> 这一次返回恢复值。由此有两条要求：</p>
+<ul>
+  <li><b><code>interrupt()</code> 之前不放有副作用的操作</b>，或者保证它们幂等。比较稳妥的做法是把副作用拆到 <code>interrupt()</code> 之后，或者放到下一个节点里。</li>
+  <li><b>两次执行要走同一条路径</b>：决定要不要中断、按什么顺序中断的条件，在重跑时必须得出相同的结果。</li>
+</ul>
+<p>子图同理。子图的中断会一直冒泡到最外层图，恢复时调用子图的那个父节点也会从头重跑。</p>
+
+<h3>6.4 并行任务：只重跑被中断的那个</h3>
+<div class="fig">
+<svg viewBox="0 0 1080 280" width="100%" role="img" aria-label="并行任务的中断与恢复">
+  <rect x="20" y="20" width="500" height="240" rx="8" class="inner"/>
+  <text x="36" y="44" class="b">中断时（step N）</text>
+  <rect x="45" y="62" width="180" height="44" rx="6" class="c3"/>
+  <text x="135" y="89" text-anchor="middle">任务 A：成功</text>
+  <rect x="45" y="122" width="180" height="44" rx="6" class="c5"/>
+  <text x="135" y="149" text-anchor="middle">任务 B：interrupt()</text>
+  <rect x="45" y="182" width="180" height="44" rx="6" class="c3"/>
+  <text x="135" y="209" text-anchor="middle">任务 C：成功</text>
+  <rect x="265" y="62" width="235" height="44" rx="6" class="c4"/>
+  <text x="382" y="89" text-anchor="middle" class="mono">(A, messages, …)</text>
+  <rect x="265" y="122" width="235" height="44" rx="6" class="c4"/>
+  <text x="382" y="149" text-anchor="middle" class="mono">(B, __interrupt__, …)</text>
+  <rect x="265" y="182" width="235" height="44" rx="6" class="c4"/>
+  <text x="382" y="209" text-anchor="middle" class="mono">(C, messages, …)</text>
+  <path d="M225,84 H 265" class="ln" marker-end="url(#ar)"/>
+  <path d="M225,144 H 265" class="ln" marker-end="url(#ar)"/>
+  <path d="M225,204 H 265" class="ln" marker-end="url(#ar)"/>
+  <text x="270" y="248" text-anchor="middle" class="s">三条写入都挂在 step N 上；checkpoint 不前进</text>
+
+  <rect x="560" y="20" width="500" height="240" rx="8" class="inner"/>
+  <text x="576" y="44" class="b">恢复时</text>
+  <rect x="585" y="62" width="210" height="44" rx="6" class="ghost"/>
+  <text x="690" y="81" text-anchor="middle">任务 A：不执行</text>
+  <text x="690" y="98" text-anchor="middle" class="s">直接回放它的写入</text>
+  <rect x="585" y="122" width="210" height="44" rx="6" class="c2"/>
+  <text x="690" y="141" text-anchor="middle">任务 B：从头重跑</text>
+  <text x="690" y="158" text-anchor="middle" class="s">interrupt() 拿到恢复值</text>
+  <rect x="585" y="182" width="210" height="44" rx="6" class="ghost"/>
+  <text x="690" y="201" text-anchor="middle">任务 C：不执行</text>
+  <text x="690" y="218" text-anchor="middle" class="s">直接回放它的写入</text>
+  <rect x="835" y="62" width="205" height="164" rx="6" class="c3"/>
+  <text x="937" y="132" text-anchor="middle" class="b">合并 A、B、C</text>
+  <text x="937" y="154" text-anchor="middle" class="s">→ 存档 step N+1</text>
+  <path d="M795,84 H 835" class="ln" marker-end="url(#ar)"/>
+  <path d="M795,144 H 835" class="ln" marker-end="url(#ar)"/>
+  <path d="M795,204 H 835" class="ln" marker-end="url(#ar)"/>
+</svg>
+</div>
+<p class="cap">图 8　pending writes 的作用：同一步里已经成功的任务，恢复时不会再执行一遍</p>
+
+<!-- ====================================================================== -->
+<h2 id="s7">7. 实例：create_agent 的人工审批</h2>
+<p>langchain v1 的 <code>create_agent</code> 生成的就是一张 LangGraph 图，中间件的钩子各占一个节点。人工审批由 <code>HumanInTheLoopMiddleware</code> 提供，它必须配合 checkpointer 使用。它有两种模式，中断发生的位置不同：</p>
+<div class="fig">
+<svg viewBox="0 0 1080 340" width="100%" role="img" aria-label="create_agent 图与审批中断点">
+  <rect x="20" y="130" width="90" height="40" rx="20" class="inner"/>
+  <text x="65" y="155" text-anchor="middle" class="s">__start__</text>
+  <rect x="150" y="130" width="120" height="40" rx="6" class="c2"/>
+  <text x="210" y="155" text-anchor="middle" class="b">model</text>
+  <rect x="310" y="130" width="250" height="40" rx="6" class="c2"/>
+  <text x="435" y="155" text-anchor="middle" class="b">HumanInTheLoopMiddleware.after_model</text>
+  <rect x="610" y="130" width="120" height="40" rx="6" class="c2"/>
+  <text x="670" y="155" text-anchor="middle" class="b">tools</text>
+  <rect x="900" y="130" width="90" height="40" rx="20" class="inner"/>
+  <text x="945" y="155" text-anchor="middle" class="s">__end__</text>
+
+  <path d="M110,150 H 150" class="ln" marker-end="url(#ar)"/>
+  <path d="M270,150 H 310" class="ln" marker-end="url(#ar)"/>
+  <path d="M560,150 H 610" class="ln" marker-end="url(#ar)"/>
+  <text x="585" y="142" text-anchor="middle" class="s">有调用</text>
+  <path d="M435,130 V 90 H 945 V 130" class="ln" marker-end="url(#ar)"/>
+  <text x="690" y="82" text-anchor="middle" class="s">没有工具调用 → 结束</text>
+  <path d="M640,170 V 210 H 210 V 170" class="ln" marker-end="url(#ar)"/>
+  <text x="320" y="203" text-anchor="middle" class="s">工具结果交回模型</text>
+
+  <path d="M435,170 V 240" class="ln dash"/>
+  <rect x="290" y="240" width="300" height="86" rx="6" class="c5"/>
+  <text x="440" y="262" text-anchor="middle" class="b">batched（默认）：在这里中断</text>
+  <text x="440" y="284" text-anchor="middle" class="s">一轮模型输出只中断一次，列出全部待审调用</text>
+  <text x="440" y="304" text-anchor="middle" class="mono">恢复：{"decisions": [...]}，按位置对应</text>
+
+  <path d="M700,170 V 240" class="ln dash"/>
+  <rect x="620" y="240" width="320" height="86" rx="6" class="c5"/>
+  <text x="780" y="262" text-anchor="middle" class="b">per_call：在 tools 任务里中断</text>
+  <text x="780" y="284" text-anchor="middle" class="s">每个待审调用一次（在 wrap_tool_call 里）</text>
+  <text x="780" y="304" text-anchor="middle" class="mono">恢复：{interrupt_id: 决定}，按 schema 校验</text>
+</svg>
+</div>
+<p class="cap">图 9　create_agent 的图结构，以及两种审批模式各自的中断位置</p>
+
+<p>对每个待审的调用，审批人可以做四种决定（每个工具允许哪几种由配置决定）：</p>
+<table>
+  <tr><th>决定</th><th>结果</th></tr>
+  <tr><td><code>approve</code></td><td>按原参数执行</td></tr>
+  <tr><td><code>edit</code></td><td>用审批人改过的参数执行</td></tr>
+  <tr><td><code>reject</code></td><td>不执行，模型收到一条 <code>status=error</code> 的 ToolMessage，说明被用户拒绝（可附原因）</td></tr>
+  <tr><td><code>respond</code></td><td>不执行，审批人的回复代替工具结果交给模型（<code>status=success</code>）</td></tr>
+</table>
+
+<pre><code>agent = create_agent(model, tools=[send_email],
+                     middleware=[HumanInTheLoopMiddleware(interrupt_on={"send_email": True},
+                                                          interrupt_mode="per_call")],
+                     checkpointer=saver)
+config = {"configurable": {"thread_id": "t1"}}
+
+r = agent.invoke({"messages": [{"role": "user", "content": "给 alice 发封邮件"}]}, config, version="v2")
+# r.interrupts[0].value == {"type": "tool_approval", "tool_call_id": "call_A", "name": "send_email", ...}
+
+agent.invoke(Command(resume={r.interrupts[0].id: {"type": "approve"}}), config, version="v2")</code></pre>
+
+<p>用假模型实测这个例子，下面是两种模式各自产生的 checkpoint 链：</p>
+<div class="fig">
+<svg viewBox="0 0 1080 315" width="100%" role="img" aria-label="实测 checkpoint 链">
+  <text x="20" y="34" class="b">per_call：中断在 step 2 的 tools 任务</text>
+  <rect x="20" y="50" width="135" height="70" rx="6" class="c1"/>
+  <text x="87" y="72" text-anchor="middle" class="b">step -1</text>
+  <text x="87" y="92" text-anchor="middle" class="s">input · 0 条消息</text>
+  <text x="87" y="110" text-anchor="middle" class="s">用户输入待合并</text>
+  <rect x="170" y="50" width="135" height="70" rx="6" class="c1"/>
+  <text x="237" y="72" text-anchor="middle" class="b">step 0</text>
+  <text x="237" y="92" text-anchor="middle" class="s">1 条消息</text>
+  <text x="237" y="110" text-anchor="middle" class="s">model 发出调用</text>
+  <rect x="320" y="50" width="135" height="70" rx="6" class="c1"/>
+  <text x="387" y="72" text-anchor="middle" class="b">step 1</text>
+  <text x="387" y="92" text-anchor="middle" class="s">2 条消息</text>
+  <text x="387" y="110" text-anchor="middle" class="s">after_model 发 Send</text>
+  <rect x="470" y="50" width="135" height="70" rx="6" class="c5"/>
+  <text x="537" y="72" text-anchor="middle" class="b">step 2</text>
+  <text x="537" y="92" text-anchor="middle" class="s">2 条消息</text>
+  <text x="537" y="110" text-anchor="middle" class="s">tools 中断 → 恢复</text>
+  <rect x="620" y="50" width="135" height="70" rx="6" class="c1"/>
+  <text x="687" y="72" text-anchor="middle" class="b">step 3</text>
+  <text x="687" y="92" text-anchor="middle" class="s">3 条消息</text>
+  <text x="687" y="110" text-anchor="middle" class="s">model 给出回答</text>
+  <rect x="770" y="50" width="135" height="70" rx="6" class="c1"/>
+  <text x="837" y="72" text-anchor="middle" class="b">step 4</text>
+  <text x="837" y="92" text-anchor="middle" class="s">4 条消息</text>
+  <text x="837" y="110" text-anchor="middle" class="s">after_model 无写入</text>
+  <rect x="920" y="50" width="135" height="70" rx="6" class="c1"/>
+  <text x="987" y="72" text-anchor="middle" class="b">step 5</text>
+  <text x="987" y="92" text-anchor="middle" class="s">4 条消息</text>
+  <text x="987" y="110" text-anchor="middle" class="s">结束</text>
+  <path d="M170,85 H 155" class="ln" marker-end="url(#ar)"/>
+  <path d="M320,85 H 305" class="ln" marker-end="url(#ar)"/>
+  <path d="M470,85 H 455" class="ln" marker-end="url(#ar)"/>
+  <path d="M620,85 H 605" class="ln" marker-end="url(#ar)"/>
+  <path d="M770,85 H 755" class="ln" marker-end="url(#ar)"/>
+  <path d="M920,85 H 905" class="ln" marker-end="url(#ar)"/>
+  <text x="537" y="142" text-anchor="middle" class="s">step 2 上的写入依次为：__interrupt__ → __resume__ → ToolMessage</text>
+
+  <text x="20" y="190" class="b">batched：中断在 step 1 的 after_model 任务</text>
+  <rect x="20" y="205" width="135" height="70" rx="6" class="c1"/>
+  <text x="87" y="227" text-anchor="middle" class="b">step -1</text>
+  <text x="87" y="247" text-anchor="middle" class="s">input · 0 条消息</text>
+  <text x="87" y="265" text-anchor="middle" class="s">用户输入待合并</text>
+  <rect x="170" y="205" width="135" height="70" rx="6" class="c1"/>
+  <text x="237" y="227" text-anchor="middle" class="b">step 0</text>
+  <text x="237" y="247" text-anchor="middle" class="s">1 条消息</text>
+  <text x="237" y="265" text-anchor="middle" class="s">model 发出调用</text>
+  <rect x="320" y="205" width="135" height="70" rx="6" class="c5"/>
+  <text x="387" y="227" text-anchor="middle" class="b">step 1</text>
+  <text x="387" y="247" text-anchor="middle" class="s">2 条消息</text>
+  <text x="387" y="265" text-anchor="middle" class="s">after_model 中断 → 恢复</text>
+  <rect x="470" y="205" width="135" height="70" rx="6" class="c1"/>
+  <text x="537" y="227" text-anchor="middle" class="b">step 2</text>
+  <text x="537" y="247" text-anchor="middle" class="s">2 条消息</text>
+  <text x="537" y="265" text-anchor="middle" class="s">tools 执行</text>
+  <rect x="620" y="205" width="135" height="70" rx="6" class="c1"/>
+  <text x="687" y="227" text-anchor="middle" class="b">step 3</text>
+  <text x="687" y="247" text-anchor="middle" class="s">3 条消息</text>
+  <text x="687" y="265" text-anchor="middle" class="s">model 给出回答</text>
+  <rect x="770" y="205" width="135" height="70" rx="6" class="c1"/>
+  <text x="837" y="227" text-anchor="middle" class="b">step 4</text>
+  <text x="837" y="247" text-anchor="middle" class="s">4 条消息</text>
+  <text x="837" y="265" text-anchor="middle" class="s">after_model 无写入</text>
+  <rect x="920" y="205" width="135" height="70" rx="6" class="c1"/>
+  <text x="987" y="227" text-anchor="middle" class="b">step 5</text>
+  <text x="987" y="247" text-anchor="middle" class="s">4 条消息</text>
+  <text x="987" y="265" text-anchor="middle" class="s">结束</text>
+  <path d="M170,240 H 155" class="ln" marker-end="url(#ar)"/>
+  <path d="M320,240 H 305" class="ln" marker-end="url(#ar)"/>
+  <path d="M470,240 H 455" class="ln" marker-end="url(#ar)"/>
+  <path d="M620,240 H 605" class="ln" marker-end="url(#ar)"/>
+  <path d="M770,240 H 755" class="ln" marker-end="url(#ar)"/>
+  <path d="M920,240 H 905" class="ln" marker-end="url(#ar)"/>
+  <text x="387" y="297" text-anchor="middle" class="s">step 1 上的写入：__interrupt__ → __resume__ → 改写后的 AI 消息 + Send(tools)</text>
+</svg>
+</div>
+<p class="cap">图 10　实测的 checkpoint 链（InMemorySaver + 假模型）。中断和恢复都发生在同一个 checkpoint 上，链本身没有"中断"这种节点</p>
+
+<p>两种模式的差别：</p>
+<ul>
+  <li><b>batched</b>：模型一轮发出的所有待审调用合成一个中断，审批人一次给出全部决定，按位置对应。如果 <code>when</code> 谓词在重跑时对其中一部分调用的判断变了，决定和调用就对不上，恢复会报错。</li>
+  <li><b>per_call</b>：每个调用单独中断，恢复值带 <code>response_schema</code> 校验。源码里有两条提醒：
+    <ul>
+      <li>一次提交多个答案时，只要有一个不合法，其他调用可能已经执行了，重新提交会执行两遍；</li>
+      <li>排在 HITL 前面的中间件在恢复时会重跑到暂停点，不能有副作用。</li>
+    </ul>
+  </li>
+  <li><b>两种模式都一样</b>：<code>when</code> 谓词重跑时如果返回了 <code>False</code>，审批答案会被跳过，工具<b>照样执行</b>，即使审批人选的是拒绝。</li>
+</ul>
+
+<!-- ====================================================================== -->
+<h2 id="s8">8. 历史、分叉与改写</h2>
+<div class="fig">
+<svg viewBox="0 0 1080 230" width="100%" role="img" aria-label="从历史 checkpoint 分叉">
+  <rect x="40" y="30" width="120" height="44" rx="6" class="c1"/><text x="100" y="57" text-anchor="middle" class="b">c0</text>
+  <rect x="220" y="30" width="120" height="44" rx="6" class="c1"/><text x="280" y="57" text-anchor="middle" class="b">c1</text>
+  <rect x="400" y="30" width="120" height="44" rx="6" class="c1"/><text x="460" y="57" text-anchor="middle" class="b">c2</text>
+  <rect x="580" y="30" width="120" height="44" rx="6" class="c1"/><text x="640" y="57" text-anchor="middle" class="b">c3</text>
+  <rect x="760" y="30" width="120" height="44" rx="6" class="c1"/><text x="820" y="57" text-anchor="middle" class="b">c4</text>
+  <path d="M220,52 H 160" class="ln" marker-end="url(#ar)"/>
+  <path d="M400,52 H 340" class="ln" marker-end="url(#ar)"/>
+  <path d="M580,52 H 520" class="ln" marker-end="url(#ar)"/>
+  <path d="M760,52 H 700" class="ln" marker-end="url(#ar)"/>
+  <text x="900" y="47" class="s">原来的 c3、c4 仍在</text>
+  <text x="900" y="65" class="s">两条分支共享 c0…c2</text>
+
+  <rect x="580" y="140" width="140" height="44" rx="6" class="c4"/>
+  <text x="650" y="160" text-anchor="middle" class="b">c2′</text>
+  <text x="650" y="177" text-anchor="middle" class="s">source = fork / update</text>
+  <rect x="780" y="140" width="120" height="44" rx="6" class="c4"/>
+  <text x="840" y="167" text-anchor="middle" class="b">c3′</text>
+  <path d="M580,162 H 460 V 74" class="ln" marker-end="url(#ar)"/>
+  <path d="M780,162 H 720" class="ln" marker-end="url(#ar)"/>
+
+  <text x="40" y="140" class="b">从 c2 重新出发</text>
+  <text x="40" y="162" class="mono">invoke(…, checkpoint_id=c2)</text>
+  <text x="40" y="182" class="s">或先 update_state 改掉 c2 的值再跑</text>
+</svg>
+</div>
+<p class="cap">图 11　parent 指针让 checkpoint 构成一棵树：从历史上的某一步出发再跑，就长出一个新分支，原来的分支不受影响</p>
+<table>
+  <tr><th>接口</th><th>作用</th></tr>
+  <tr><td><code>get_state(config)</code></td><td>返回 <code>StateSnapshot</code>：<code>values</code>（state）、<code>next</code>（下一步要跑的节点）、<code>tasks</code>（含待决的 <code>interrupts</code>）、<code>config</code>、<code>metadata</code>、<code>parent_config</code></td></tr>
+  <tr><td><code>get_state_history(config)</code></td><td>按时间倒序列出这个 thread 的全部快照</td></tr>
+  <tr><td><code>update_state(config, values, as_node=…)</code></td><td>像某个节点那样写一次 state，生成一个 <code>source=update</code> 的新 checkpoint，后续调度按"这个节点刚跑完"来算</td></tr>
+  <tr><td>config 里带 <code>checkpoint_id</code> 调用</td><td>从那个历史 checkpoint 重新出发（time travel）。新产生的 checkpoint 以它为父，形成分叉；在那里调用 <code>interrupt()</code> 会重新触发，不会沿用当时的恢复值</td></tr>
+</table>
+
+<!-- ====================================================================== -->
+<h2 id="s9">9. 使用要点</h2>
+<table>
+  <tr><th>要点</th><th>原因</th><th>做法</th></tr>
+  <tr><td>中断必须配 checkpointer</td><td>中断的现场只存在 checkpoint 里；没有 checkpointer 时 <code>Command(resume)</code> 直接报错</td><td>生产用持久化的 saver（Postgres 等），不要用 InMemorySaver</td></tr>
+  <tr><td><code>interrupt()</code> 之前的代码会执行两次</td><td>恢复时节点从头重跑</td><td>把副作用移到 <code>interrupt()</code> 之后或下一个节点；做不到就保证幂等</td></tr>
+  <tr><td>重跑必须走同一条路径</td><td>多次中断按调用顺序对应；审批中间件的 <code>when</code> 谓词翻转会跳过审批答案</td><td>中断的条件只依赖 state 里已有的数据，不依赖时间、随机数、外部状态</td></tr>
+  <tr><td>多个待决中断要按 id 回答</td><td>只给一个值时引擎不知道交给谁，会报错</td><td>用 <code>{interrupt_id: 值}</code> 的形式</td></tr>
+  <tr><td>存储会持续增长</td><td>每个变了的 channel 每步存一份完整的值；开源 saver 不会自动清理</td><td>定期 <code>delete_thread</code> / <code>prune</code>；消息很长时考虑 <code>DeltaChannel</code>（beta）</td></tr>
+  <tr><td>快照和图结构绑定</td><td>快照按节点名、channel 名和序列化格式保存</td><td>改节点名、删 state 字段、换消息类型之前，确认旧 thread 还能恢复，或者给出迁移办法</td></tr>
+  <tr><td>durability 选择</td><td><code>exit</code> 只在退出时写，中途崩溃全丢</td><td>需要崩溃后能接着跑的场景用 <code>sync</code> 或默认的 <code>async</code></td></tr>
+</table>
+
+</main>
+</body>
+</html>

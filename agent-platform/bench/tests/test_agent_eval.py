@@ -11,7 +11,7 @@ from typing import Any
 
 import httpx
 import pytest
-from atlas_bench.agent.platforms.atlas import AtlasAgentPlatform
+from atlas_bench.agent.platforms.atlas import AtlasAgentPlatform, AtlasError
 from atlas_bench.agent.report import write_agent_report
 from atlas_bench.agent.schema import AgentExperimentConfig, Task, TrialResult, VariantConfig
 from atlas_bench.agent.tasks import load_suite
@@ -273,6 +273,47 @@ async def test_budget_exceeded_cancels_run(monkeypatch: pytest.MonkeyPatch) -> N
     finally:
         await plat.aclose()
     assert tr.budget_exceeded and seen == ["cancel"]
+
+
+async def test_poll_survives_port_forward_reconnect(monkeypatch: pytest.MonkeyPatch) -> None:
+    """几小时的评测里端口转发会断（forward.sh 会重新拉起）：轮询 run 等它恢复，不拖垮整批。"""
+    import atlas_bench.agent.platforms.atlas as mod
+
+    monkeypatch.setattr(mod, "_POLL_S", 0.05)
+    monkeypatch.setattr(mod, "_GET_RETRY_S", 0.01)
+    fake = _FakeAtlas()
+    drops = iter([True, True, False])
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path == "/v1/runs/run-1" and next(drops, False):
+            raise httpx.ReadError("connection reset", request=req)
+        return fake.handler(req)
+
+    plat = AtlasAgentPlatform("http://atlas", BENCH_HEADERS, transport=httpx.MockTransport(handler))
+    try:
+        agent = await plat.prepare("v", VariantConfig(agent={}))
+        task = Task(id="demo/x", suite="demo", instruction="x")
+        tr = await plat.run_trial(agent, task, trial=1, approval_policy="approve_all")
+    finally:
+        await plat.aclose()
+    assert tr.status == "succeeded"
+
+
+async def test_non_get_is_not_resent_after_connection_drop() -> None:
+    """发消息断在半路：不知道服务端收没收到，重发可能多一轮 —— 只记这个 trial 平台错误。"""
+    sent: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        sent.append(req.method)
+        raise httpx.ReadError("connection reset", request=req)
+
+    plat = AtlasAgentPlatform("http://atlas", BENCH_HEADERS, transport=httpx.MockTransport(handler))
+    try:
+        with pytest.raises(AtlasError, match="连接失败"):
+            await plat._req("POST", "/v1/threads/th-1/runs", json={})
+    finally:
+        await plat.aclose()
+    assert sent == ["POST"]
 
 
 # ─────────────────────────────── 过程断言、审批策略、结局分类（评测计划阶段 1）

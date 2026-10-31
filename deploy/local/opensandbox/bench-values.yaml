@@ -1,0 +1,52 @@
+# opensandbox-bench：评测档沙箱（root、根可写）的 lifecycle server。只在 OPENSANDBOX_BENCH=1 时由 opensandbox.sh 安装。
+# 用上游 server chart（release-1.1.1）装：deploy/local/opensandbox.sh。
+#
+# ★ fullnameOverride 决定 Deployment / Service / ClusterRole 的名字：ACP 那个实例（P2）用 opensandbox-acp，
+#   两份互不覆盖。
+# ★ API key 从 Secret 来（OPENSANDBOX_SERVER_API_KEY 覆盖 TOML 里的空值），不进 YAML。
+# ★ store 用 SQLite 放 emptyDir：只存快照 / 模板目录这类自管数据（Atlas 不用），沙箱本身是 CR。
+fullnameOverride: opensandbox-bench
+server:
+  replicaCount: 1
+  resources:
+    # ★ 只在评测时有请求：request 压低，不占小节点（4 核）的调度余量 —— 那是留给沙箱的
+    requests: {cpu: 20m, memory: 128Mi}
+    limits: {cpu: "1", memory: 1Gi}
+  env:
+    - name: OPENSANDBOX_SERVER_API_KEY
+      valueFrom: {secretKeyRef: {name: opensandbox-bench-api-key, key: api-key}}
+  volumes:
+    - name: template
+      configMap: {name: opensandbox-bench-template}
+    - name: store
+      emptyDir: {}
+  volumeMounts:
+    - {name: template, mountPath: /etc/opensandbox/templates, readOnly: true}
+    - {name: store, mountPath: /var/lib/opensandbox}
+configToml: |
+  [server]
+  host = "0.0.0.0"
+  port = 80
+  api_key = ""
+
+  [log]
+  level = "INFO"
+
+  [runtime]
+  type = "kubernetes"
+  execd_image = "sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/execd:release-1.1.1"
+  # execd 作 PID 1：回收僵尸进程、转发信号（OSEP-0018）
+  execd_run_as_init = true
+
+  [kubernetes]
+  # ★ 与 opensandbox-sbx 同一个命名空间：共用整桶 PVC atlas-oss（第三个整桶 PV 没有可用的 volumeHandle）。
+  #   两个 server 都列得到对方的沙箱，Atlas 按 id 去重；评测档的沙箱带标签 atlas.profile=bench
+  namespace = "atlas-sbx"
+  workload_provider = "batchsandbox"
+  batchsandbox_template_file = "/etc/opensandbox/templates/bench.yaml"
+  sandbox_create_timeout_seconds = 180
+  image_pull_policy = "IfNotPresent"
+
+  [store]
+  type = "sqlite"
+  path = "/var/lib/opensandbox/opensandbox.db"

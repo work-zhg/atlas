@@ -1,15 +1,16 @@
-"""Atlas 测 MCP 用的环境：真实的 MCP 网关（进程内）+ Higress 替身（后台线程）。
+"""Atlas 测 MCP 用的环境：真实的 MCP 网关（进程内）+ 上游 MCP 服务的替身（后台线程）。
 
 MCP 网关用真实现：atlas_mcpgateway 的 app 经 ASGITransport 跑在测试的 event loop 里（它自己的
-测试库 atlas_mcpgateway_test），用户中心换成内存替身；Higress 是后台线程里的替身（只认网关凭据）。
-Atlas 的内部接口调用（GatewayClient）、MCP 客户端（FastMCP / httpx2）都经 ASGITransport 连到它。
+测试库 atlas_mcpgateway_test），用户中心换成内存替身；上游 MCP 服务是后台线程里的替身（只认
+网关注入的上游凭据）。Atlas 的内部接口调用（GatewayClient）、MCP 客户端（FastMCP / httpx2）
+都经 ASGITransport 连到网关。
 
 用法（测试模块里）：
 
-    from tests.gateway_env import gateway, gateway_environment, higress  # noqa: F401（夹具）
+    from tests.gateway_env import gateway, gateway_environment, upstream  # noqa: F401（夹具）
     pytestmark = pytest.mark.usefixtures("gateway_environment")
 
-★ 网关测试里的替身（fake_higress、gateway_testkit）同一份，不复制。
+★ 网关测试里的替身（fake_upstreams、gateway_testkit）同一份，不复制。
 """
 
 from __future__ import annotations
@@ -29,67 +30,81 @@ from atlas_agent.providers.mcp import CallContext, KeyAuth, McpSessions, NativeM
 from atlas_agent.providers.mcp import config as mcp_config
 from atlas_agent.providers.mcp.gateway import (
     GatewayClient,
+    agent_access,
+    forget_access,
     gateway_catalog,
     reset_gateway_cache,
-    subject_access,
 )
 from sqlalchemy import text
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "services/mcpgateway/tests"))
-from fake_higress import FakeHigress, FakeService, ToolFailure, serve_in_thread
-from gateway_testkit import ADMIN, FakePermissions, as_user
+from fake_upstreams import (
+    MCP_TOKEN,
+    FakeMcp,
+    FakeMcpService,
+    ToolFailure,
+    http_upstreams,
+    serve_in_thread,
+)
+from gateway_testkit import ADMIN, ATLAS, FakePermissions, as_user
 
 __all__ = [
     "ADMIN",
+    "AGENT",
     "ALICE",
-    "DIGITAL",
     "GATEWAY",
-    "FakeHigress",
+    "MCP_TOKEN",
+    "FakeMcp",
+    "FakeMcpService",
     "FakePermissions",
-    "FakeService",
     "ToolFailure",
-    "approve",
+    "agent_key",
     "as_user",
     "assemble",
     "call",
     "ctx",
     "gateway",
     "gateway_environment",
-    "higress",
-    "issue_key",
+    "grant",
     "register",
     "text_of",
+    "upstream",
 ]
 
 GATEWAY_DB = "atlas_mcpgateway_test"
 _ADMIN_URL = "postgresql+asyncpg://atlas:atlas@localhost:5433/atlas"
 _GATEWAY_DB_URL = f"postgresql+asyncpg://atlas:atlas@localhost:5433/{GATEWAY_DB}"
-CREDENTIAL = "gw-atlas-test"
 GATEWAY = "http://gateway"
 
 ALICE = UUID("00000000-0000-7000-8000-0000000000a1")
-DIGITAL = UUID("00000000-0000-7000-8000-0000000000de")
+#: 测试里的智能体
+AGENT = UUID("00000000-0000-7000-8000-0000000a6e01")
 
-_HIGRESS = FakeHigress(credential=CREDENTIAL)
+_UPSTREAM = FakeMcp()
+_BASE: dict[str, str] = {}
 
 
 @pytest.fixture(scope="module")
 def gateway_environment() -> Iterator[str]:
-    """起 Higress 替身、准备网关的测试库与设置。→ Higress 替身的地址。"""
+    """起上游替身、准备网关的测试库与设置。→ 上游替身的地址。"""
     from atlas_mcpgateway.settings import get_settings as gateway_settings
+    from fake_upstreams import FakeRest
     from sqlalchemy.ext.asyncio import create_async_engine
 
-    with serve_in_thread(_HIGRESS.app()) as higress_url:
+    with serve_in_thread(http_upstreams(_UPSTREAM, FakeRest())) as base:
+        _BASE["url"] = base
         overrides = {
             "ATLAS_MCPGW_DATABASE_URL": _GATEWAY_DB_URL,
-            "ATLAS_MCPGW_HIGRESS_BASE_URL": higress_url,
-            "ATLAS_MCPGW_GATEWAY_CREDENTIAL": CREDENTIAL,
             "ATLAS_MCPGW_MAINTAINER_TICK_S": "0",
             "ATLAS_MCPGW_MANUAL_REFRESH_MIN_INTERVAL_S": "0",
             "ATLAS_MCPGW_UC_BASE_URL": "http://uc.invalid",
+            "ATLAS_MCPGW_PERM_CACHE_TTL_S": "0",
         }
         saved = {k: os.environ.get(k) for k in overrides}
         os.environ.update(overrides)
+        os.environ["NO_PROXY"] = os.environ["no_proxy"] = ",".join(
+            filter(None, [os.environ.get("NO_PROXY"), "127.0.0.1", "localhost", "gateway"])
+        )
         gateway_settings.cache_clear()
 
         async def _ensure() -> None:
@@ -107,7 +122,7 @@ def gateway_environment() -> Iterator[str]:
 
         migrate()
         try:
-            yield higress_url
+            yield base
         finally:
             for k, v in saved.items():
                 if v is None:
@@ -118,17 +133,16 @@ def gateway_environment() -> Iterator[str]:
 
 
 @pytest.fixture
-def higress() -> Iterator[FakeHigress]:
-    """Higress 替身（每个测试清空）：服务由测试自己放进 higress.services。"""
-    _HIGRESS.services.clear()
-    _HIGRESS.rejected.clear()
-    yield _HIGRESS
-    _HIGRESS.services.clear()
+def upstream() -> Iterator[FakeMcp]:
+    """上游 MCP 服务的替身（每个测试清空）：服务由测试自己放进 upstream.services。"""
+    _UPSTREAM.services.clear()
+    yield _UPSTREAM
+    _UPSTREAM.services.clear()
 
 
 @pytest.fixture
 async def gateway(
-    monkeypatch: pytest.MonkeyPatch, higress: FakeHigress
+    monkeypatch: pytest.MonkeyPatch, upstream: FakeMcp
 ) -> AsyncIterator[tuple[Any, FakePermissions, httpx.AsyncClient]]:
     """进程内的 MCP 网关（空库）。→ (app, 用户中心替身, 管理接口的客户端)。"""
     import httpx2
@@ -146,12 +160,7 @@ async def gateway(
     monkeypatch.setattr(gateway_auth, "_transport", httpx.MockTransport(authz))
     monkeypatch.setattr(gateway_auth, "_cache", gateway_auth._Cache())
     async with get_sessionmaker()() as session:
-        await session.execute(
-            text(
-                "TRUNCATE mcp_service, mcp_tool, mcp_tool_review, mcp_api_key,"
-                " mcp_access_log, mcp_audit"
-            )
-        )
+        await session.execute(text("TRUNCATE mcp_service, mcp_tool, mcp_api_key, mcp_audit"))
         await session.commit()
 
     perms = FakePermissions()
@@ -170,66 +179,83 @@ async def gateway(
     get_sessionmaker.cache_clear()
 
 
-# ───────────────────────────── 网关上的操作（管理接口）
+# ───────────────────────────── 网关上的操作（管理接口、内部接口）
 
 
 async def register(
-    c: httpx.AsyncClient,
-    name: str,
-    *,
-    review: bool = False,
-    call_timeout_s: float | None = None,
-    higress: FakeHigress | None = None,
+    c: httpx.AsyncClient, name: str, *, visibility: str = "private", upstream: FakeMcp | None = None
 ) -> None:
-    r = await c.post(
-        "/api/v1/services",
-        json={"name": name, "review_required": review, "call_timeout_s": call_timeout_s},
-        headers=as_user(ADMIN),
-    )
+    """把上游替身里的服务 name 登记成 MCP 代理。"""
+    body = {
+        "kind": "mcp",
+        "name": name,
+        "visibility": visibility,
+        "connection": {"url": f"{_BASE['url']}/mcp/{name}", "transport": "streamable"},
+        "credential": {"type": "bearer", "secret": MCP_TOKEN},
+    }
+    r = await c.post("/api/v1/services", json=body, headers=as_user(ADMIN))
     assert r.status_code == 201, r.text
-    if higress is not None:
-        # 登记时网关自己拉过一次工具定义：之后只看 Atlas 发出的请求
-        higress.services[name].seen.clear()
+    if upstream is not None:
+        # 登记时网关自己拉过一次工具定义：之后只看调用
+        upstream.services[name].seen.clear()
 
 
-async def approve(c: httpx.AsyncClient, service: str, tool: str) -> None:
-    detail = (await c.get(f"/api/v1/services/{service}", headers=as_user(ADMIN))).json()
-    digest = next(t["digest"] for t in detail["tools"] if t["name"] == tool)
+async def agent_key(c: httpx.AsyncClient, agent: UUID = AGENT) -> dict[str, Any]:
+    """智能体的 Key（和 Atlas 建智能体时一样经内部接口申请）。→ 管理接口里的 Key。"""
     r = await c.post(
-        f"/api/v1/services/{service}/tools/{tool}/review",
-        json={"digest": digest, "decision": "approved"},
+        "/internal/client-keys",
+        json={
+            "client_type": "Agent",
+            "client_code": str(agent),
+            "name": "测试智能体",
+            "owner_uid": str(ALICE),
+        },
+        headers=ATLAS,
+    )
+    assert r.status_code == 200, r.text
+    keys = (await c.get("/api/v1/keys", headers=as_user(ADMIN))).json()
+    return dict(next(k for k in keys if k["client_code"] == str(agent)))
+
+
+async def grant(
+    c: httpx.AsyncClient,
+    service: str,
+    key: dict[str, Any],
+    scope: str,
+    tools: list[str] | None = None,
+) -> None:
+    r = await c.put(
+        f"/api/v1/services/{service}/grants/{key['id']}",
+        json={"scope": scope, "tools": tools or []},
         headers=as_user(ADMIN),
     )
     assert r.status_code == 200, r.text
-
-
-async def issue_key(c: httpx.AsyncClient, subject: UUID) -> None:
-    r = await c.post("/api/v1/keys", json={"subject_uid": str(subject)}, headers=as_user(ADMIN))
-    assert r.status_code == 201, r.text
+    forget_access(key["client_code"])
 
 
 # ───────────────────────────── Atlas 侧：装配、调用
 
 
-def ctx(user: UUID = ALICE, auth: UUID | None = None) -> CallContext:
-    return CallContext(run_id=uuid4(), thread_id=uuid4(), user_id=user, auth_uid=auth)
+def ctx(user: UUID = ALICE) -> CallContext:
+    return CallContext(run_id=uuid4(), thread_id=uuid4(), user_id=user)
 
 
 async def assemble(
     tool_names: list[str],
-    subject: UUID = ALICE,
+    agent: UUID = AGENT,
     *,
     call_timeout_s: float = 30,
     max_result_chars: int = 100_000,
-    call_ctx: CallContext | None = None,
     digests: dict[str, str] | None = None,
+    call_ctx: CallContext | None = None,
 ) -> tuple[list[Any], list[tuple[EventType, dict[str, Any]]], McpSessions]:
-    """和 assembly._mcp_tool_list 同一套：问网关主体能用什么 → 读元数据造工具。"""
+    """和 assembly._mcp_tool_list 同一套：问网关这个智能体的 Key 能用什么 → 读元数据造工具。"""
     catalog = await gateway_catalog(GATEWAY, ttl_s=0, redis=None)
-    access = await subject_access(GATEWAY, subject, ttl_s=0)
+    access = await agent_access(GATEWAY, agent, name="测试智能体", owner=ALICE, ttl_s=0)
 
     async def fetch() -> str | None:
-        return (await subject_access(GATEWAY, subject, ttl_s=0)).key
+        forget_access(agent)
+        return (await agent_access(GATEWAY, agent, name="测试智能体", owner=ALICE, ttl_s=0)).key
 
     sessions = McpSessions(auth=KeyAuth(access.key) if access.key else None, fetch_key=fetch)
     notices: list[tuple[EventType, dict[str, Any]]] = []
@@ -237,7 +263,7 @@ async def assemble(
         catalog, call_timeout_s=call_timeout_s, max_result_chars=max_result_chars
     ).tools_for(
         tool_names,
-        call_ctx or ctx(auth=subject if subject != ALICE else None),
+        call_ctx or ctx(),
         digests=digests,
         reviews=catalog.reviews(),
         notices=notices,

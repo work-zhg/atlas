@@ -3,24 +3,27 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import logging
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+from atlas_engine.contracts import SandboxUnavailable
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth.agent_access import AgentAccess
 from ..auth.principal import Principal
 from ..auth.uc import UCClient
 from ..config import Settings
-from ..configplane import skill_directory
 from ..db.models import Agent, AgentVersion, Message, Thread
-from ..errors import AppError, BadCursor, NotFound
+from ..errors import AppError, BadCursor, Conflict, DependencyUnavailable, Forbidden, NotFound
 from ..pagination import InvalidCursor, decode_cursor, encode_cursor
 from ..providers.filesystem import make_workspace
 from ..providers.filesystem.oss import PathEscape, WorkspaceListing
 from ..providers.filesystem.skill_copy import resolve_skills, seed_session_skills
-from ..providers.opensandbox import AcpProvisioner, SandboxProvisioner
+from ..providers.opensandbox import BENCH, AcpProvisioner, SandboxProvisioner
+from ..providers.sandbox import SandboxNotRunning, SandboxProfileDenied, exec_in_running
 from ..redisx import make_redis
 from ..repositories.agent import AgentRepository
 from ..repositories.run import RunRepository
@@ -29,6 +32,8 @@ from ..schemas.agent import AgentSpecIn
 from ..schemas.thread import (
     MessageListOut,
     MessageOut,
+    SandboxExecIn,
+    SandboxExecOut,
     ThreadApprovalOut,
     ThreadCreate,
     ThreadListOut,
@@ -36,6 +41,7 @@ from ..schemas.thread import (
     ThreadUpdate,
     WorkspaceFilesOut,
 )
+from ..skills import skill_directory
 
 if TYPE_CHECKING:
     from ..memory import MemoryRuntime
@@ -146,6 +152,14 @@ logger = logging.getLogger(__name__)
 class BadRequest(AppError):
     status_code = 400
     kind = "bad_request"
+
+
+class SandboxNotRunningError(Conflict):
+    kind = "sandbox_not_running"
+
+
+#: 直接执行时随命令写进沙箱的文件合计上限（与工作区上传一致）
+SANDBOX_EXEC_FILES_MAX = 10 * 1024 * 1024
 
 
 class ThreadService:
@@ -355,6 +369,54 @@ class ThreadService:
             return await asyncio.to_thread(listing.put, path, data)
         except PathEscape as exc:
             raise BadRequest(str(exc), path=path) from exc
+
+    # ------------------------------------------------------------------ 沙箱
+
+    async def exec_in_sandbox(self, thread_id: UUID, payload: SandboxExecIn) -> SandboxExecOut:
+        """在会话正在运行的**评测档**沙箱里执行一条命令，等它结束（评测原地校验）。
+
+        不新建沙箱、只认评测档：见 providers/sandbox.py::exec_in_running。
+        """
+        thread, _ = await self._require(thread_id)
+        if not self._settings.sandbox_enabled:
+            raise SandboxNotRunningError("这个部署没有开启沙箱")
+        files: list[tuple[str, bytes]] = []
+        for f in payload.files:
+            try:
+                files.append((f.path, base64.b64decode(f.content_b64, validate=True)))
+            except binascii.Error as exc:
+                raise BadRequest("content_b64 不是合法的 base64", path=f.path) from exc
+        if sum(len(data) for _, data in files) > SANDBOX_EXEC_FILES_MAX:
+            raise BadRequest(f"文件合计超过 {SANDBOX_EXEC_FILES_MAX // 1024 // 1024} MB")
+        settings = self._settings
+        redis = make_redis(settings)
+        try:
+            logger.info("会话 %s 在评测档沙箱里直接执行命令", thread_id)
+            result = await exec_in_running(
+                SandboxProvisioner(settings, redis),
+                str(thread.workspace_thread_id),
+                user_id=str(thread.created_by),
+                command=payload.command,
+                profile=BENCH,
+                cwd=payload.cwd,
+                timeout=payload.timeout_s,
+                files=files,
+                output_limit=settings.sandbox_output_limit_bytes,
+                poll_min_s=settings.sandbox_poll_min_s,
+                poll_max_s=settings.sandbox_poll_max_s,
+            )
+        except SandboxNotRunning as exc:
+            raise SandboxNotRunningError(str(exc), thread_id=str(thread_id)) from exc
+        except SandboxProfileDenied as exc:
+            raise Forbidden(str(exc), thread_id=str(thread_id)) from exc
+        except SandboxUnavailable as exc:
+            # 执行途中沙箱没了 / 连不上：校验没做成，不是校验没通过
+            raise DependencyUnavailable(str(exc), thread_id=str(thread_id)) from exc
+        finally:
+            await redis.aclose()
+        return SandboxExecOut(
+            exit_code=result.exit_code, output=result.output, truncated=result.truncated
+        )
 
     async def _listing(self, thread_id: UUID) -> WorkspaceListing | None:
         thread, _ = await self._require(thread_id)

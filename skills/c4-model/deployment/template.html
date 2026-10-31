@@ -1,0 +1,577 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deployment View</title>
+<style>
+  body { margin: 0; background: #fff; color: #444; font-family: "Open Sans", "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
+  main { padding: 24px 32px 48px; }
+  svg { display: block; max-width: 100%; height: auto; }
+  h2 { margin: 40px 0 12px; font-size: 15px; font-weight: 600; color: #666; }
+  #c4-report { margin: 0 0 24px; padding: 12px 16px 12px 36px; border: 1px solid #e0b4b4; background: #fff6f6; font-size: 14px; line-height: 1.6; }
+  #c4-report li[data-level="error"] { color: #b00020; }
+  #c4-report li[data-level="warn"] { color: #8a5a00; }
+</style>
+</head>
+<body>
+<!--
+  只改下面这段 JSON；渲染器不用动。字段说明见 deployment/RULES.md 的「数据格式」。
+-->
+<script type="application/json" id="c4-model">
+{
+  "title": "Deployment View: Internet Banking System - Live",
+  "description": "An example live deployment scenario for the Internet Banking System | c4model.com | License: CC BY 4.0",
+  "environment": "Live",
+  "nodes": [
+    { "id": "computer", "kind": "node", "name": "Customer's computer", "technology": "Microsoft Windows or Apple macOS" },
+    { "id": "browser", "kind": "node", "name": "Web Browser", "technology": "Chrome, Firefox, Safari, or Edge", "in": "computer" },
+    { "id": "cloudflare", "kind": "group", "name": "Cloudflare" },
+    { "id": "dns", "kind": "node", "name": "DNS Services", "technology": "Cloudflare DNS", "in": "cloudflare" },
+    { "id": "aws", "kind": "group", "name": "Amazon Web Services" },
+    { "id": "region", "kind": "node", "name": "eu-west-1", "technology": "Amazon Web Services Region", "in": "aws" },
+    { "id": "s3", "kind": "node", "name": "Cloud Object Storage", "technology": "Amazon Web Services Simple Storage Service", "in": "region" },
+    { "id": "staticStore", "kind": "node", "name": "Static Content Store", "technology": "S3 Bucket", "in": "s3" },
+    { "id": "fargate", "kind": "node", "name": "Serverless Compute Engine", "technology": "Amazon Web Services Fargate", "in": "region" },
+    { "id": "backendContainer", "kind": "node", "name": "Backend Container", "technology": "Docker Container", "instances": "1..10", "in": "fargate" },
+    { "id": "jvm", "kind": "node", "name": "Java Virtual Machine", "technology": "Eclipse Temurin - JDK 21 - LTS", "in": "backendContainer" },
+    { "id": "rds", "kind": "node", "name": "Relational Database Service", "technology": "Amazon Web Services Relational Database Service", "in": "region" },
+    { "id": "dbServer", "kind": "node", "name": "Database Server", "technology": "MySQL 8.4 LTS", "in": "rds" },
+    { "id": "bigbank", "kind": "group", "name": "Big Bank" },
+    { "id": "dataCenter", "kind": "node", "name": "Big Bank Data Center", "in": "bigbank" },
+    { "id": "coreLive", "kind": "node", "name": "corebanking-live", "technology": "Ubuntu 24.04 LTS", "in": "dataCenter" }
+  ],
+  "elements": [
+    { "id": "ui", "kind": "container", "shape": "browser", "technology": "JavaScript and Angular", "in": "browser", "at": [1, 0],
+      "name": "UI", "description": "Single-page app that provides Internet banking functionality to customers via their web browser." },
+    { "id": "ibDns", "kind": "infrastructure", "technology": "DNS CNAME", "in": "dns", "at": [0, 1.15],
+      "name": "ib.bigbank.com", "description": "Proxied DNS CNAME record providing cached access to static content." },
+    { "id": "apiDns", "kind": "infrastructure", "technology": "DNS CNAME", "in": "dns", "at": [1, 1.15],
+      "name": "ib-api.bigbank.com", "description": "Unproxied DNS CNAME record providing access to the Internet Banking System Backend." },
+    { "id": "static", "kind": "container", "shape": "folder", "technology": "Directory", "in": "staticStore", "at": [0, 2.35],
+      "name": "Static Content", "description": "HTML, CSS, JavaScript, etc." },
+    { "id": "lb", "kind": "infrastructure", "technology": "Application Load Balancer", "in": "region", "at": [1, 2.35],
+      "name": "Load Balancer", "description": "Forwards incoming HTTPS traffic to the Backend." },
+    { "id": "backend", "kind": "container", "shape": "server", "technology": "Java and Spring Boot", "in": "jvm", "at": [1, 3.55],
+      "name": "Backend", "description": "Provides Internet banking functionality via a JSON/HTTP API." },
+    { "id": "bridge", "kind": "infrastructure", "technology": "Amazon Web Services Direct Connect", "in": "region", "at": [2.1, 3.55],
+      "name": "Network Bridge", "description": "Provides a private dedicated network connection between AWS and the on-premises network." },
+    { "id": "statements", "kind": "container", "shape": "bucket", "technology": "Amazon Web Services S3 Bucket", "in": "s3", "at": [0, 4.9],
+      "name": "Statement Store", "description": "Bank account statements rendered as PDF files." },
+    { "id": "db", "kind": "container", "shape": "database", "technology": "MySQL Database Schema", "in": "dbServer", "at": [2.1, 4.9],
+      "name": "Database", "description": "User account information, access logs, etc." },
+    { "id": "core", "kind": "system", "in": "coreLive", "at": [3.4, 3.55],
+      "name": "Core Banking System", "description": "Handles core banking functions including customer information, bank account management, transactions, etc." },
+    { "id": "ses", "kind": "system", "in": "region", "at": [2.1, 2.35],
+      "name": "Amazon Web Services Simple Email Service", "description": "Cloud-based email service provider." }
+  ],
+  "relationships": [
+    { "from": "static", "to": "ui", "description": "Delivers", "technology": "HTTPS" },
+    { "from": "ui", "to": "apiDns", "description": "Makes API requests to", "technology": "JSON/HTTPS" },
+    { "from": "ibDns", "to": "staticStore", "description": "Is an alias for" },
+    { "from": "apiDns", "to": "lb", "description": "Is an alias for" },
+    { "from": "lb", "to": "backend", "description": "Forwards API requests to", "technology": "JSON/HTTP" },
+    { "from": "backend", "to": "ses", "description": "Sends e-mails to customers using", "technology": "AWS SES API/HTTPS" },
+    { "from": "backend", "to": "bridge", "description": "Gets bank account information from and makes payments using", "technology": "XML/HTTPS" },
+    { "from": "bridge", "to": "core", "description": "Gets bank account information from and makes payments using", "technology": "XML/HTTPS", "private": true },
+    { "from": "backend", "to": "statements", "description": "Reads from and writes to", "technology": "AWS S3 API/HTTPS" },
+    { "from": "backend", "to": "db", "description": "Reads from and writes to", "technology": "MySQL protocol/TLS" }
+  ]
+}
+</script>
+
+<main>
+  <ul id="c4-report" hidden></ul>
+  <svg id="c4-diagram" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+  <h2>Diagram key</h2>
+  <svg id="c4-key" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+</main>
+
+<script>
+(() => {
+  'use strict';
+  const FONT = '"Open Sans", "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
+  const INK = '#444444';
+  const SCOPE_COLOR = '#1168bd';
+  const PALETTE = { system: ['#ed8609', '#bf101d', '#8411bd', '#5b6770', '#b8336a'] };
+  const KIND_LABEL = { system: 'Software System', container: 'Container', infrastructure: 'Infrastructure Node' };
+  const COL = 560, ROW = 420;                 // 网格间距：at 的一个单位
+  const BOX = { w: 300, h: 200, rx: 12 };
+  const STROKE = 4, PAD = 18, MARGIN = 60;
+  const FRAME_PAD = 24, FRAME_LABEL = 44;      // 节点框：四周留白、底部写名字的高度
+  const TXT = {
+    name: { size: 20, weight: 700, lh: 25 },
+    meta: { size: 12, weight: 400, lh: 18 },
+    desc: { size: 15, weight: 400, lh: 20 },
+    rel: { size: 14, weight: 400, lh: 18 },
+    tech: { size: 11, weight: 400, lh: 15 },
+    fname: { size: 18, weight: 700, lh: 22 },
+    fmeta: { size: 11, weight: 400, lh: 15 },
+    count: { size: 18, weight: 400, lh: 22 },
+    key: { size: 14, weight: 400, lh: 18 },
+  };
+  const LABEL_W = 220, ARROW_L = 16, ARROW_W = 13, GAP = 4;
+
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const problems = [];
+  const fail = (msg) => problems.push({ level: 'error', msg });
+  const warn = (msg) => problems.push({ level: 'warn', msg });
+
+  const ctx = document.createElement('canvas').getContext('2d');
+  const measure = (s, st) => { ctx.font = `${st.weight} ${st.size}px ${FONT}`; return ctx.measureText(s).width; };
+
+  // 中文按字断行，英文按词断行；行首不放标点
+  const CJK = '\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef\u3000-\u303f';
+  const TOKEN = new RegExp(`[${CJK}]|[^\\s${CJK}]+|\\s+`, 'g');
+  const NO_LINE_START = /^[，。、；：！？）》」』,.;:!?)]$/;
+  function wrap(text, st, maxW) {
+    const lines = [];
+    for (const para of String(text || '').split('\n')) {
+      let line = '';
+      for (const tok of para.match(TOKEN) || []) {
+        if (/^\s+$/.test(tok)) { if (line) line += ' '; continue; }
+        const next = line + tok;
+        if (line.trim() && measure(next.trimEnd(), st) > maxW && !NO_LINE_START.test(tok)) {
+          lines.push(line.trimEnd());
+          line = tok;
+        } else {
+          line = next;
+        }
+      }
+      if (line.trim()) lines.push(line.trimEnd());
+    }
+    return lines;
+  }
+  // 行数不变的前提下收窄宽度，让各行长度接近，避免末行只剩一两个字
+  function wrapBalanced(text, st, maxW) {
+    const lines = wrap(text, st, maxW);
+    if (lines.length < 2) return lines;
+    let lo = maxW / 2, hi = maxW;
+    while (hi - lo > 4) {
+      const mid = (lo + hi) / 2;
+      if (wrap(text, st, mid).length > lines.length) lo = mid; else hi = mid;
+    }
+    return wrap(text, st, hi);
+  }
+
+  function node(tag, attrs, parent) {
+    const n = document.createElementNS(svgNS, tag);
+    for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+    parent.appendChild(n);
+    return n;
+  }
+  // top 是文字块上沿
+  function textLines(parent, lines, x, top, st, color, anchor = 'middle') {
+    const t = node('text', { x, y: top + st.lh / 2 + st.size * 0.35, 'text-anchor': anchor,
+      'font-family': FONT, 'font-size': st.size, 'font-weight': st.weight, fill: color }, parent);
+    lines.forEach((ln, i) => { node('tspan', { x, dy: i ? st.lh : 0 }, t).textContent = ln; });
+    return t;
+  }
+  const rect = (g, b, rx, c) => node('rect', { x: b.x, y: b.y, width: b.w, height: b.h, rx,
+    fill: '#fff', stroke: c, 'stroke-width': STROKE }, g);
+
+  // 容器实例的形状，和 Container 图一致。inset：顶部装饰占的高度；side：左右各少用的文字宽度；
+  // clip：连线停靠的主体矩形；key：图例默认文字
+  const SHAPES = {
+    box: { key: 'Container', inset: 0, side: 0, draw: (g, b, c) => rect(g, b, BOX.rx, c) },
+    server: { key: 'Container, Server-side Application', inset: 14, side: 0, draw: (g, b, c) => {
+      rect(g, b, 6, c);
+      node('polyline', { points: `${b.x + 14},${b.y + 12} ${b.x + 26},${b.y + 19} ${b.x + 14},${b.y + 26}`,
+        fill: 'none', stroke: c, 'stroke-width': 3, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, g);
+      node('line', { x1: b.x + 30, y1: b.y + 29, x2: b.x + 44, y2: b.y + 29, stroke: c, 'stroke-width': 3, 'stroke-linecap': 'round' }, g);
+    } },
+    browser: { key: 'Container, Web Browser Application', inset: 24, side: 0, draw: (g, b, c) => {
+      rect(g, b, 6, c);
+      node('path', { d: `M${b.x} ${b.y + 26} V${b.y + 6} Q${b.x} ${b.y} ${b.x + 6} ${b.y} H${b.x + b.w - 6} Q${b.x + b.w} ${b.y} ${b.x + b.w} ${b.y + 6} V${b.y + 26} Z`, fill: c }, g);
+      for (const i of [0, 1, 2]) node('circle', { cx: b.x + 16 + i * 16, cy: b.y + 13, r: 5, fill: '#fff' }, g);
+      node('rect', { x: b.x + 64, y: b.y + 8, width: b.w - 76, height: 10, rx: 5, fill: '#fff' }, g);
+    } },
+    database: { key: 'Container, Database', inset: 22, side: 0, draw: (g, b, c) => {
+      const ry = 14, rx = b.w / 2;
+      node('path', { d: `M${b.x} ${b.y + ry} V${b.y + b.h - ry} A${rx} ${ry} 0 0 0 ${b.x + b.w} ${b.y + b.h - ry} V${b.y + ry}`,
+        fill: '#fff', stroke: c, 'stroke-width': STROKE }, g);
+      node('ellipse', { cx: b.x + rx, cy: b.y + ry, rx, ry, fill: '#fff', stroke: c, 'stroke-width': STROKE }, g);
+    } },
+    bucket: { key: 'Container, Blob Store', inset: 20, side: 26, draw: (g, b, c) => {
+      const ry = 12, rx = b.w / 2, inX = b.w * 0.1, by = b.y + b.h - 10;
+      node('path', { d: `M${b.x} ${b.y + ry} L${b.x + inX} ${by} A${rx - inX} 10 0 0 0 ${b.x + b.w - inX} ${by} L${b.x + b.w} ${b.y + ry}`,
+        fill: '#fff', stroke: c, 'stroke-width': STROKE, 'stroke-linejoin': 'round' }, g);
+      node('ellipse', { cx: b.x + rx, cy: b.y + ry, rx, ry, fill: '#fff', stroke: c, 'stroke-width': STROKE }, g);
+    } },
+    folder: { key: 'Container, File System', inset: 18, side: 0, clip: (b) => ({ x: b.x, y: b.y + 20, w: b.w, h: b.h - 20 }), draw: (g, b, c) => {
+      const tab = 20, tw = b.w * 0.35;
+      node('path', { d: `M${b.x + 8} ${b.y + tab} V${b.y + 5} Q${b.x + 8} ${b.y} ${b.x + 13} ${b.y} H${b.x + tw - 5} Q${b.x + tw} ${b.y} ${b.x + tw} ${b.y + 5} V${b.y + tab}`,
+        fill: '#fff', stroke: c, 'stroke-width': STROKE }, g);
+      rect(g, { x: b.x, y: b.y + tab, w: b.w, h: b.h - tab }, 3, c);
+    } },
+    queue: { key: 'Container, Message Queue', inset: 0, side: 22, draw: (g, b, c) => {
+      const rx = 18, ry = b.h / 2;
+      node('path', { d: `M${b.x + rx} ${b.y} H${b.x + b.w - rx} A${rx} ${ry} 0 0 1 ${b.x + b.w - rx} ${b.y + b.h} H${b.x + rx} A${rx} ${ry} 0 0 1 ${b.x + rx} ${b.y} Z`,
+        fill: '#fff', stroke: c, 'stroke-width': STROKE }, g);
+      node('ellipse', { cx: b.x + b.w - rx, cy: b.y + ry, rx, ry, fill: 'none', stroke: c, 'stroke-width': STROKE }, g);
+    } },
+  };
+  // 基础设施节点：灰色椭圆，文字区收窄
+  const INFRA = { key: 'Infrastructure Node', inset: 0, side: 28, draw: (g, b, c) =>
+    node('ellipse', { cx: b.x + b.w / 2, cy: b.y + b.h / 2, rx: b.w / 2, ry: b.h / 2, fill: '#fff', stroke: c, 'stroke-width': STROKE }, g) };
+  const shapeOf = (el) => (el.kind === 'container' ? SHAPES[el.shape] : el.kind === 'infrastructure' ? INFRA : null);
+
+  const inter = (a, b, m = 0) => a.x < b.x + b.w + m && b.x < a.x + a.w + m && a.y < b.y + b.h + m && b.y < a.y + a.h + m;
+  const contains = (outer, inner) => inner.x >= outer.x && inner.y >= outer.y && inner.x + inner.w <= outer.x + outer.w && inner.y + inner.h <= outer.y + outer.h;
+  function segHitsRect([x0, y0], [x1, y1], r) {
+    let t0 = 0, t1 = 1;
+    const dx = x1 - x0, dy = y1 - y0;
+    for (const [p, q] of [[-dx, x0 - r.x], [dx, r.x + r.w - x0], [-dy, y0 - r.y], [dy, r.y + r.h - y0]]) {
+      if (p === 0) { if (q < 0) return false; continue; }
+      const t = q / p;
+      if (p < 0) { if (t > t1) return false; if (t > t0) t0 = t; }
+      else { if (t < t0) return false; if (t < t1) t1 = t; }
+    }
+    return true;
+  }
+  // 从形状内部 (ox, oy) 沿 (dx, dy) 射出，返回离开形状时的 t；椭圆按椭圆算，其余按主体矩形
+  function exitT(el, ox, oy, dx, dy) {
+    const b = el.clip || el.box;
+    if (el.kind === 'infrastructure') {
+      const cx = b.x + b.w / 2, cy = b.y + b.h / 2, rx = b.w / 2, ry = b.h / 2;
+      const fx = (ox - cx) / rx, fy = (oy - cy) / ry, ux = dx / rx, uy = dy / ry;
+      const a = ux * ux + uy * uy, bb = 2 * (fx * ux + fy * uy), c = fx * fx + fy * fy - 1;
+      return (-bb + Math.sqrt(Math.max(0, bb * bb - 4 * a * c))) / (2 * a);
+    }
+    let t = Infinity;
+    if (dx > 0) t = Math.min(t, (b.x + b.w - ox) / dx); else if (dx < 0) t = Math.min(t, (b.x - ox) / dx);
+    if (dy > 0) t = Math.min(t, (b.y + b.h - oy) / dy); else if (dy < 0) t = Math.min(t, (b.y - oy) / dy);
+    return t;
+  }
+  function drawArrow(g, start, end, dx, dy, solid) {
+    const base = [end[0] - dx * ARROW_L, end[1] - dy * ARROW_L];
+    node('line', { x1: start[0], y1: start[1], x2: base[0], y2: base[1], stroke: INK, 'stroke-width': 2.5, ...(solid ? {} : { 'stroke-dasharray': '10 7' }) }, g);
+    const nx = -dy * ARROW_W / 2, ny = dx * ARROW_W / 2;
+    node('polygon', { points: [end, [base[0] + nx, base[1] + ny], [base[0] - nx, base[1] - ny]].map((p) => p.join(',')).join(' '), fill: INK }, g);
+  }
+  // 节点框：部署节点实线圆角，分组点线
+  function drawFrame(g, r, kind) {
+    node('rect', { x: r.x, y: r.y, width: r.w, height: r.h, rx: kind === 'group' ? 0 : 10, fill: 'none', stroke: INK,
+      'stroke-width': kind === 'group' ? 2.5 : 1.8, ...(kind === 'group' ? { 'stroke-dasharray': '2 6', 'stroke-linecap': 'round' } : {}) }, g);
+  }
+  const frameMeta = (n) => (n.kind === 'group' ? '' : n.technology ? `[Deployment Node: ${n.technology}]` : '[Deployment Node]');
+  const frameLabelBox = (n) => ({ x: n.rect.x + 8, y: n.rect.y + n.rect.h - FRAME_LABEL + 4,
+    w: Math.max(measure(n.name || '', TXT.fname), measure(frameMeta(n), TXT.fmeta)) + 12, h: FRAME_LABEL - 8 });
+
+  function drawElement(g, el) {
+    const shape = shapeOf(el);
+    if (shape) shape.draw(g, el.box, el.color); else rect(g, el.box, BOX.rx, el.color);
+    const cx = el.box.x + el.box.w / 2;
+    const inset = shape ? shape.inset : 0;
+    let y = el.box.y + inset + (el.box.h - inset - el.textH) / 2;
+    textLines(g, el.nameLines, cx, y, TXT.name, el.color);
+    y += el.nameLines.length * TXT.name.lh;
+    textLines(g, el.metaLines, cx, y, TXT.meta, el.color);
+    y += el.metaLines.length * TXT.meta.lh + 6;
+    textLines(g, el.descLines, cx, y, TXT.desc, el.color);
+  }
+
+  function render() {
+    const model = JSON.parse(document.getElementById('c4-model').textContent);
+    if (model.title) document.title = model.title;
+    else fail('缺少 title（建议「Deployment View: 系统名 - 环境」）');
+    if (!model.environment) fail('缺少 environment（部署环境，如 Live、Staging、Development）');
+
+    // ---- 部署节点与分组 ----
+    const nById = new Map();
+    for (const n of model.nodes || []) {
+      if (!n.id) { fail(`节点 ${n.name || ''}：缺少 id`); continue; }
+      if (nById.has(n.id)) { fail(`节点 id 重复：${n.id}`); continue; }
+      if (n.kind !== 'node' && n.kind !== 'group') { fail(`节点 ${n.id}：kind 只能是 node 或 group`); continue; }
+      if (!n.name) fail(`节点 ${n.id}：缺少 name`);
+      nById.set(n.id, n);
+    }
+    const chain = (id) => {   // 从里到外的节点链；断链或成环返回 null
+      const out = [];
+      for (let cur = id; cur; cur = nById.get(cur) && nById.get(cur).in) {
+        if (!nById.has(cur) || out.includes(cur)) return null;
+        out.push(cur);
+      }
+      return out;
+    };
+    const nodes = [...nById.values()].filter((n) => {
+      n.chain = chain(n.id);
+      if (!n.chain) { fail(`节点 ${n.id}：in 指向不存在的节点，或者节点嵌套成了环`); return false; }
+      return true;
+    });
+
+    // ---- 实例与基础设施节点 ----
+    const byId = new Map();
+    const els = [];
+    for (const el of model.elements || []) {
+      const who = el.id || el.name || '(未命名元素)';
+      if (!el.id) { fail(`${who}：缺少 id`); continue; }
+      if (byId.has(el.id) || nById.has(el.id)) { fail(`id 重复：${el.id}`); continue; }
+      if (!KIND_LABEL[el.kind]) { fail(`${who}：kind 只能是 container / system / infrastructure`); continue; }
+      if (!Array.isArray(el.at) || el.at.length !== 2 || !el.at.every(Number.isFinite)) { fail(`${who}：at 必须是 [列, 行] 两个数字`); continue; }
+      if (el.kind === 'container') {
+        el.shape = el.shape || 'box';
+        if (!SHAPES[el.shape]) { fail(`${who}：shape 只能是 ${Object.keys(SHAPES).join(' / ')}`); continue; }
+        if (!el.technology) fail(`${who}：容器实例缺少 technology，和 Container 图里的一致`);
+        if (!el.in) fail(`${who}：容器实例要写 in，说明部署在哪个节点上`);
+      }
+      if (el.in && !(nById.has(el.in) && nById.get(el.in).chain)) { fail(`${who}：in 指向的节点 ${el.in} 不存在`); el.in = null; }
+      if (!el.name) fail(`${who}：缺少 name`);
+      if (!el.description) fail(`${who}：缺少 description`);
+      el.chain = el.in ? chain(el.in) : [];
+      byId.set(el.id, el);
+      els.push(el);
+    }
+
+    const assigned = new Map();
+    let used = 0;
+    for (const el of els) {
+      if (el.color) continue;
+      if (el.kind === 'container' || (el.kind === 'system' && el.scope)) { el.color = SCOPE_COLOR; continue; }
+      if (el.kind === 'infrastructure') { el.color = INK; continue; }
+      const k = el.tag || el.id;
+      if (!assigned.has(k)) assigned.set(k, PALETTE.system[used++ % PALETTE.system.length]);
+      el.color = assigned.get(k);
+    }
+
+    for (const el of els) {
+      const shape = shapeOf(el);
+      const innerW = BOX.w - 2 * PAD - 2 * (shape ? shape.side : 0);
+      const meta = el.technology ? `[${KIND_LABEL[el.kind]}: ${el.technology}]` : `[${KIND_LABEL[el.kind]}]`;
+      el.nameLines = wrapBalanced(el.name, TXT.name, innerW);
+      el.metaLines = wrapBalanced(meta, TXT.meta, innerW);
+      el.descLines = wrapBalanced(el.description, TXT.desc, innerW);
+      el.textH = el.nameLines.length * TXT.name.lh + el.metaLines.length * TXT.meta.lh + 6 + el.descLines.length * TXT.desc.lh;
+      const h = Math.max(BOX.h, el.textH + 2 * PAD + (shape ? shape.inset : 0) + (el.kind === 'infrastructure' ? 30 : 0));
+      el.box = { x: el.at[0] * COL - BOX.w / 2, y: el.at[1] * ROW - h / 2, w: BOX.w, h };
+      if (shape && shape.clip) el.clip = shape.clip(el.box);
+    }
+    for (let i = 0; i < els.length; i++) {
+      for (let j = i + 1; j < els.length; j++) {
+        if (inter(els[i].box, els[j].box, 40)) fail(`「${els[i].name}」和「${els[j].name}」重叠或太近，调整 at`);
+      }
+    }
+
+    // ---- 节点框：由内向外，包住子节点和部署在上面的元素 ----
+    const depthBelow = new Map();
+    const frameOf = (n) => {
+      if (n.rect !== undefined) return n.rect;
+      n.rect = null;   // 防重入
+      const boxes = [
+        ...els.filter((e) => e.in === n.id).map((e) => e.box),
+        ...nodes.filter((c) => c.in === n.id).map(frameOf).filter(Boolean),
+      ];
+      if (!boxes.length) { fail(`节点「${n.name}」里没有任何实例、基础设施节点或子节点`); return null; }
+      const x0 = Math.min(...boxes.map((b) => b.x)), y0 = Math.min(...boxes.map((b) => b.y));
+      const x1 = Math.max(...boxes.map((b) => b.x + b.w)), y1 = Math.max(...boxes.map((b) => b.y + b.h));
+      n.rect = { x: x0 - FRAME_PAD, y: y0 - FRAME_PAD, w: x1 - x0 + 2 * FRAME_PAD, h: y1 - y0 + FRAME_PAD + FRAME_LABEL };
+      const w = Math.max(measure(n.name || '', TXT.fname), measure(frameMeta(n), TXT.fmeta)) + 24 + (n.instances !== undefined ? 70 : 0);
+      if (n.rect.w < w) { n.rect.x -= (w - n.rect.w) / 2; n.rect.w = w; }
+      return n.rect;
+    };
+    nodes.forEach(frameOf);
+    const framed = nodes.filter((n) => n.rect);
+    for (const el of els) {
+      for (const n of framed) {
+        if (!el.chain.includes(n.id) && inter(el.box, n.rect)) fail(`「${el.name}」不在节点「${n.name}」上，却落在它的框里，调整 at`);
+      }
+    }
+    for (let i = 0; i < framed.length; i++) {
+      for (let j = i + 1; j < framed.length; j++) {
+        const a = framed[i], b = framed[j];
+        if (a.chain.includes(b.id) || b.chain.includes(a.id)) continue;
+        if (inter(a.rect, b.rect)) fail(`节点「${a.name}」和「${b.name}」的框重叠，调整里面元素的 at`);
+      }
+    }
+
+    // ---- 关系：端点可以是元素，也可以是部署节点 ----
+    const endpoint = (id) => byId.get(id) || (nById.get(id) && nById.get(id).rect ? { id, name: nById.get(id).name, box: nById.get(id).rect, isNode: true } : null);
+    const rels = (model.relationships || []).filter((r) => {
+      const who = `${r.from} → ${r.to}`;
+      r.a = endpoint(r.from); r.b = endpoint(r.to);
+      if (!r.a || !r.b) { fail(`关系 ${who}：端点 id 不存在`); return false; }
+      if (r.from === r.to) { fail(`关系 ${who}：不能指向自己`); return false; }
+      if (!r.description) fail(`关系 ${who}：缺少 description（写交互目的）`);
+      if (r.a.kind === 'container' && !r.technology) fail(`关系 ${who}：容器实例发起的关系要写 technology（协议，必要时带上 TLS 等）`);
+      return true;
+    });
+    for (const el of els) {
+      if (!rels.some((r) => r.from === el.id || r.to === el.id)) warn(`「${el.name}」没有任何关系`);
+    }
+    // 同一对端点之间的多条关系：平行错开，标签沿线错开（按同一个参考方向算，再换算回各自的方向）
+    const pairs = new Map();
+    for (const r of rels) {
+      const k = [r.from, r.to].sort().join('\u0000');
+      if (!pairs.has(k)) pairs.set(k, []);
+      pairs.get(k).push(r);
+    }
+    for (const list of pairs.values()) {
+      list.forEach((r, i) => {
+        const k = i - (list.length - 1) / 2;
+        const along = 0.5 + k * 0.3;
+        r.offset = k * 28;
+        r.t = Number.isFinite(r.labelAt) ? r.labelAt : r.from < r.to ? along : 1 - along;
+      });
+    }
+    const center = (e) => [e.box.x + e.box.w / 2, e.box.y + e.box.h / 2];
+    for (const r of rels) {
+      const { a, b } = r;
+      const [p, q] = r.from < r.to ? [a, b] : [b, a];
+      const pc = center(p), qc = center(q);
+      let nx = pc[1] - qc[1], ny = qc[0] - pc[0];
+      const nl = Math.hypot(nx, ny) || 1;
+      nx /= nl; ny /= nl;
+      const ac = [center(a)[0] + nx * r.offset, center(a)[1] + ny * r.offset];
+      const bc = [center(b)[0] + nx * r.offset, center(b)[1] + ny * r.offset];
+      const len = Math.hypot(bc[0] - ac[0], bc[1] - ac[1]);
+      if (!len) { r.skip = true; continue; }
+      r.dx = (bc[0] - ac[0]) / len; r.dy = (bc[1] - ac[1]) / len;
+      const t0 = exitT(a, ac[0], ac[1], r.dx, r.dy) + GAP;
+      const t1 = exitT(b, bc[0], bc[1], -r.dx, -r.dy) + GAP;
+      if (t0 + t1 + ARROW_L + 20 >= len) { fail(`关系「${r.description}」两端太近，连线放不下`); r.skip = true; continue; }
+      r.start = [ac[0] + r.dx * t0, ac[1] + r.dy * t0];
+      r.end = [bc[0] - r.dx * t1, bc[1] - r.dy * t1];
+      r.lines = wrapBalanced(r.description, TXT.rel, LABEL_W);
+      r.tech = r.technology ? `[${r.technology}]` : '';
+      const widths = r.lines.map((s) => measure(s, TXT.rel));
+      if (r.tech) widths.push(measure(r.tech, TXT.tech));
+      const lw = Math.max(...widths, 0) + 10;
+      const lh = r.lines.length * TXT.rel.lh + (r.tech ? TXT.tech.lh : 0) + 6;
+      const mx = r.start[0] + (r.end[0] - r.start[0]) * r.t, my = r.start[1] + (r.end[1] - r.start[1]) * r.t;
+      r.label = widths.length ? { x: mx - lw / 2, y: my - lh / 2, w: lw, h: lh } : null;
+    }
+    const drawn = rels.filter((r) => !r.skip);
+    const labelled = drawn.filter((r) => r.label);
+    for (const r of drawn) {
+      for (const el of els) {
+        if (r.from !== el.id && r.to !== el.id && segHitsRect(r.start, r.end, el.box)) {
+          // 指向节点的关系，终点在节点框上，不算穿过节点里的元素
+          if (!(r.b.isNode && el.chain.includes(r.to)) && !(r.a.isNode && el.chain.includes(r.from))) warn(`关系「${r.description}」的连线穿过「${el.name}」`);
+        }
+        if (r.label && inter(r.label, el.box, 6)) warn(`关系「${r.description}」的标签压到「${el.name}」，调整 labelAt 或元素位置`);
+      }
+      for (const n of framed) {
+        if (r.label && inter(r.label, frameLabelBox(n), 2)) warn(`关系「${r.description}」的标签压到节点名「${n.name}」，调整 labelAt 或元素位置`);
+      }
+    }
+    for (let i = 0; i < labelled.length; i++) {
+      for (let j = i + 1; j < labelled.length; j++) {
+        if (inter(labelled[i].label, labelled[j].label, 4)) warn(`关系「${labelled[i].description}」和「${labelled[j].description}」的标签重叠`);
+      }
+    }
+
+    // ---- 绘制 ----
+    const svg = document.getElementById('c4-diagram');
+    // 层次：节点框 → 连线 → 节点名（白底，连线从字底下穿过）→ 元素 → 关系标签
+    const gB = node('g', {}, svg), gR = node('g', {}, svg), gN = node('g', {}, svg), gE = node('g', {}, svg), gL = node('g', {}, svg), gT = node('g', {}, svg);
+    for (const n of [...framed].sort((a, b) => a.chain.length - b.chain.length)) {
+      drawFrame(gB, n.rect, n.kind);
+      const lb = frameLabelBox(n);
+      node('rect', { x: lb.x - 2, y: lb.y + 2, width: lb.w - 8, height: lb.h - 6, fill: '#fff' }, gN);
+      textLines(gN, [n.name], lb.x, lb.y, TXT.fname, INK, 'start');
+      const meta = frameMeta(n);
+      if (meta) textLines(gN, [meta], lb.x, lb.y + TXT.fname.lh, TXT.fmeta, INK, 'start');
+      if (n.instances !== undefined) {
+        const cw = measure(`x${n.instances}`, TXT.count) + 8;
+        node('rect', { x: n.rect.x + n.rect.w - 16 - cw, y: lb.y + 4, width: cw, height: TXT.count.lh, fill: '#fff' }, gN);
+        textLines(gN, [`x${n.instances}`], n.rect.x + n.rect.w - 12, lb.y + 4, TXT.count, INK, 'end');
+      }
+    }
+    for (const r of drawn) {
+      drawArrow(gR, r.start, r.end, r.dx, r.dy, r.private);
+      if (!r.label) continue;
+      node('rect', { x: r.label.x, y: r.label.y, width: r.label.w, height: r.label.h, fill: '#fff' }, gL);
+      const cx = r.label.x + r.label.w / 2;
+      textLines(gL, r.lines, cx, r.label.y + 3, TXT.rel, INK);
+      if (r.tech) textLines(gL, [r.tech], cx, r.label.y + 3 + r.lines.length * TXT.rel.lh, TXT.tech, INK);
+    }
+    for (const el of els) drawElement(node('g', {}, gE), el);
+    const boxes = [...els.map((e) => e.box), ...labelled.map((r) => r.label), ...framed.map((n) => n.rect)];
+    if (!boxes.length) boxes.push({ x: 0, y: 0, w: 0, h: 0 });
+    const minX = Math.min(...boxes.map((b) => b.x)), minY = Math.min(...boxes.map((b) => b.y));
+    let maxX = Math.max(...boxes.map((b) => b.x + b.w)), maxY = Math.max(...boxes.map((b) => b.y + b.h));
+    const title = { size: 26, weight: 400, lh: 34 }, sub = { size: 15, weight: 400, lh: 22 };
+    textLines(gT, [model.title || ''], minX, maxY + 50, title, INK, 'start');
+    if (model.description) textLines(gT, [model.description], minX, maxY + 50 + title.lh, sub, '#666', 'start');
+    maxX = Math.max(maxX, minX + measure(model.title || '', title), minX + measure(model.description || '', sub));
+    maxY += 50 + title.lh + (model.description ? sub.lh : 0);
+    const vw = maxX - minX + 2 * MARGIN, vh = maxY - minY + 2 * MARGIN;
+    svg.setAttribute('viewBox', `${minX - MARGIN} ${minY - MARGIN} ${vw} ${vh}`);
+    svg.setAttribute('width', vw);
+    svg.setAttribute('aria-label', model.title || 'Deployment diagram');
+
+    renderKey(els, framed, drawn);
+  }
+
+  // ---- 图例：每种实例 / 基础设施节点一项，再加部署节点、分组和关系线型 ----
+  function renderKey(els, framed, rels) {
+    const svg = document.getElementById('c4-key');
+    const rank = { system: 0, container: 1, infrastructure: 2 };
+    const keyLabel = (el) => {
+      if (el.kind === 'container') return el.tag ? `Container, ${el.tag}` : SHAPES[el.shape].key;
+      if (el.kind === 'infrastructure') return 'Infrastructure Node';
+      return el.tag || el.name;
+    };
+    const groups = new Map();
+    for (const el of [...els].sort((a, b) => rank[a.kind] - rank[b.kind])) {
+      const k = `${el.kind}|${el.shape || ''}|${el.color}`;
+      if (!groups.has(k)) groups.set(k, { kind: el.kind, shape: el.shape, color: el.color, labels: [] });
+      const label = keyLabel(el);
+      if (!groups.get(k).labels.includes(label)) groups.get(k).labels.push(label);
+    }
+    const items = [...groups.values()].map((g) => ({ ...g, text: g.labels.join('、') }));
+    if (framed.some((n) => n.kind === 'node')) items.push({ kind: 'frame', frame: 'node', text: 'Deployment Node' });
+    if (framed.some((n) => n.kind === 'group')) items.push({ kind: 'frame', frame: 'group', text: 'Group' });
+    items.push({ kind: 'rel', text: 'Relationship' });
+    if (rels.some((r) => r.private)) items.push({ kind: 'rel', solid: true, text: 'via Private Network Connection' });
+
+    const CELL_W = 210, CELL_H = 170, PER_ROW = 8, W = 180, H = 116;
+    items.forEach((it, i) => {
+      const cx = (i % PER_ROW) * (CELL_W + 24) + CELL_W / 2, cy = Math.floor(i / PER_ROW) * (CELL_H + 24) + CELL_H - H / 2;
+      const g = node('g', {}, svg);
+      const box = { x: cx - W / 2, y: cy - H / 2, w: W, h: H };
+      if (it.kind === 'rel') {
+        drawArrow(g, [cx - 80, cy - 10], [cx + 80, cy - 10], 1, 0, it.solid);
+        textLines(g, wrapBalanced(it.text, TXT.key, W), cx, cy + 6, TXT.key, INK);
+        return;
+      }
+      if (it.kind === 'frame') {
+        drawFrame(g, box, it.frame);
+        textLines(g, [it.text], cx, cy - TXT.key.lh / 2, TXT.key, INK);
+        return;
+      }
+      const el = { kind: it.kind, shape: it.shape, color: it.color, box };
+      const shape = shapeOf(el);
+      if (shape) shape.draw(g, box, it.color); else rect(g, box, BOX.rx, it.color);
+      const lines = wrapBalanced(it.text, TXT.key, W - 30 - 2 * (shape ? shape.side : 0));
+      const top = cy - (lines.length * TXT.key.lh) / 2 + (shape ? shape.inset / 2 : 0);
+      textLines(g, lines, cx, top, TXT.key, it.color);
+    });
+    const rows = Math.ceil(items.length / PER_ROW), cols = Math.min(items.length, PER_ROW);
+    const vw = cols * (CELL_W + 24), vh = rows * (CELL_H + 24);
+    svg.setAttribute('viewBox', `-10 -10 ${vw + 20} ${vh + 20}`);
+    svg.setAttribute('width', vw + 20);
+    svg.setAttribute('aria-label', 'Diagram key');
+  }
+
+  try {
+    render();
+  } catch (e) {
+    fail(`渲染异常：${e && e.message}`);
+    console.error(e);
+  }
+  const status = problems.some((p) => p.level === 'error') ? 'error' : problems.length ? 'warn' : 'ok';
+  document.documentElement.dataset.c4Status = status;
+  const report = document.getElementById('c4-report');
+  for (const p of problems) {
+    const li = document.createElement('li');
+    li.dataset.level = p.level;
+    li.textContent = p.msg;
+    report.appendChild(li);
+  }
+  report.hidden = !problems.length;
+  if (problems.length) console.warn('[c4]', problems);
+})();
+</script>
+</body>
+</html>

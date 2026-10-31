@@ -137,6 +137,11 @@ class TitleService:
                 model=found.model,
                 provider=found.provider,  # type: ignore[arg-type]
                 max_output_tokens=64,
+                # ★ 显式关思考：DeepSeek 默认会思考，64 个 token 全花在思考块上、没有正文，
+                #   标题一律退回问题原文（2026-10-29 在 112 上经 LiteLLM 实测）。
+                #   模型能力不再随模型登记，没法按能力判断；
+                #   思考关不掉的模型（fable-5）会在 validate 报错 → 降级并记日志
+                thinking="off",
             ),
             base_url=found.endpoint.base_url,
             api_key=found.endpoint.api_key,

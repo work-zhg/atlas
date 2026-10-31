@@ -36,11 +36,11 @@ COPY agent-platform/web/ agent-platform/web/
 COPY teamflow/web/ teamflow/web/
 ENV NEXT_TELEMETRY_DISABLED=1
 
-# ── Atlas：/atlas；接口经 nginx 的 /atlas-api、/atlas-config-api 同源访问
+# ── Atlas：/atlas；接口经 nginx 的 /atlas-api、/skill-api 等同源访问
 FROM ws AS atlas
 ENV NEXT_PUBLIC_BASE_PATH=/atlas \
     NEXT_PUBLIC_API_BASE=/atlas-api \
-    NEXT_PUBLIC_CONFIG_API_BASE=/atlas-config-api \
+    NEXT_PUBLIC_SKILL_API_BASE=/skill-api \
     NEXT_PUBLIC_KNOWLEDGE_API_BASE=/atlas-knowledge-api \
     NEXT_PUBLIC_MCP_GATEWAY_API_BASE=/mcp-gateway-api \
     NEXT_PUBLIC_MODEL_GATEWAY_API_BASE=/model-gateway-api

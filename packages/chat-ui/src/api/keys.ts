@@ -22,7 +22,7 @@ export const qk = {
     messages: (id: string) => ["threads", "messages", id] as const,
   },
 
-  /** 技能 / MCP。运行时视图（引用、用量、MCP 当前定义）与配置服务视图分开缓存 */
+  /** 技能 / MCP。运行时视图（引用、用量、MCP 当前定义）与技能应用视图分开缓存 */
   catalog: {
     skills: ["catalog", "skills"] as const,
     skillRefs: (slug: string) => ["catalog", "skills", "refs", slug] as const,
@@ -30,12 +30,12 @@ export const qk = {
     mcp: ["catalog", "mcp"] as const,
     mcpServer: (name: string) => ["catalog", "mcp", name] as const,
   },
-  config: {
-    skills: ["config", "skills"] as const,
-    skill: (slug: string) => ["config", "skills", slug] as const,
-    file: (key: string) => ["config", "file", key] as const,
-    mcp: ["config", "mcp"] as const,
-    reviews: (name: string) => ["config", "mcp", "reviews", name] as const,
+  /** 技能应用（atlas-skill）的管理端 */
+  skillApp: {
+    me: ["skill-app", "me"] as const,
+    skills: ["skill-app", "skills"] as const,
+    file: (key: string) => ["skill-app", "file", key] as const,
+    audit: (targetId: string) => ["skill-app", "audit", targetId] as const,
   },
 
   runs: {

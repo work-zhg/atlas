@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
@@ -10,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from atlas_agent.domain.events import EventType, TraceEvent
 from atlas_agent.domain.messages import KIND_CHAT
 
-from ..db.models import AgentVersion, Message, Run, RunEvent, Thread
+from ..db.models import AgentVersion, Message, Run, RunEvent, RunState, Thread
 
 _TERMINAL = ("succeeded", "failed", "cancelled", "interrupted")
 
@@ -701,6 +702,39 @@ class RunRepository:
             .where(Run.id == run_id)
             .values(acp_bridge_instance=instance[:64], acp_acked_seq=acked_seq)
         )
+
+    async def load_state(self, run_id: UUID) -> dict[str, Any]:
+        """这个 run 落过库的图 state（run_state 表），续跑与接管时交回图。全新的 run 返回 {}。"""
+        rows = await self._session.execute(
+            select(RunState.key, RunState.value).where(RunState.run_id == run_id)
+        )
+        return {key: value for key, value in rows.all()}
+
+    async def save_state(self, run_id: UUID, values: Mapping[str, Any]) -> None:
+        """逐键 upsert：只写传进来的键，别的键不动。
+
+        ★ 必须与检查点（或段收尾）在同一个事务里：接管者从最后一个检查点接着跑，
+          state 要与那时落库的消息对得上。
+        """
+        if not values:
+            return
+        table = RunState.__table__
+        rows = [{"run_id": run_id, "key": key, "value": value} for key, value in values.items()]
+        dialect = self._session.bind.dialect.name if self._session.bind else "postgresql"
+        if dialect in ("mysql", "mariadb"):
+            from sqlalchemy.dialects.mysql import insert as mysql_insert
+
+            stmt: Any = mysql_insert(table).values(rows)
+            stmt = stmt.on_duplicate_key_update(value=stmt.inserted.value, updated_at=func.now())
+        else:
+            from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+            stmt = pg_insert(table).values(rows)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["run_id", "key"],
+                set_={"value": stmt.excluded.value, "updated_at": func.now()},
+            )
+        await self._session.execute(stmt)
 
     async def archived_thread_seqs(self, run_id: UUID, thread_seqs: list[int]) -> set[int]:
         """这些 thread_seq 里哪些已经归档 —— 接管时从 Redis 补归档要跳过它们。"""

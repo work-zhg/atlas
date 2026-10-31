@@ -1,0 +1,36 @@
+# SerpApi Google 搜索：在 MCP 网关登记成 REST 转换（mcp-cutover.sh 用）。
+#
+#   python -m atlas_mcpgateway service add --file - --owner-account admin < 本文件（填好 key）
+#
+# ★ __SERPAPI_KEY__ 由 mcp-cutover.sh 从 .env 替换后经标准输入传进 Pod —— 本文件入库，key 不入库。
+#   网关调 serpapi.com 时把它放进查询参数 api_key；调用方（Atlas、Pod）拿不到。
+# ★ 原来 Higress 的模板把结果排成 Markdown（直接答案 + 前 5 条）；这里只取 organic_results，
+#   天气这类查询的 answer_box 不再给模型。要的话把 pick 留空（整个响应，超过 32 KB 截断）。
+# ★ 不传调用者身份：第三方服务，不把内部的 uid 发出去。
+kind: rest
+name: serpapi
+display_name: SerpApi 搜索
+description: 用 Google 搜索网页（SerpApi）
+visibility: private
+pass_identity: false
+connection:
+  base_url: https://serpapi.com
+  spec_url: ""
+credential:
+  type: apikey
+  where: query
+  key: api_key
+  secret: __SERPAPI_KEY__
+tools:
+  - name: google_search
+    description: 用 Google 搜索网页，返回前几条结果的标题、链接与摘要。适合查询实时信息、新闻、事实。
+    effect: read
+    mapping:
+      method: GET
+      path: /search.json
+      params:
+        - {name: query, in: query, type: string, required: true, description: 搜索关键词, field: q}
+        - {name: engine, in: query, type: string, fixed: google}
+        - {name: num, in: query, type: string, fixed: "5"}
+      pick: $.organic_results
+      limit_kb: 32

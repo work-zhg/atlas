@@ -91,7 +91,7 @@ function Editor({
 
 export default function InstructionsPage() {
   const { data: me } = useMe();
-  const admin = can(me, "instruction:manage", "model:manage");
+  const admin = can(me, "model:manage");
   return (
     <div
       style={{ flex: 1, overflow: "auto", padding: "24px 28px", maxWidth: 900 }}

@@ -74,7 +74,7 @@ export async function toApiError(res: Response): Promise<ApiError> {
       message = body.error.message ?? message;
       details = body.error.details ?? {};
     } else if (typeof body.detail === "string") {
-      // 配置服务的错误体：{detail: "人话", context?} —— 技能扫描未通过时还带 layer/hits
+      // 技能应用的错误体：{detail: "人话", context?} —— 技能扫描未通过时还带 layer/hits
       kind = body.layer ? "scan_blocked" : `http_${res.status}`;
       message = body.detail;
       details = { ...(body.context ?? {}), ...(body.layer ? { layer: body.layer, hits: body.hits ?? [] } : {}) };

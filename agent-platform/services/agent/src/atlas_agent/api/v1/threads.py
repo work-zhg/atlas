@@ -27,6 +27,8 @@ from ...schemas.run import RunAccepted, RunCreate
 from ...schemas.thread import (
     MessageListOut,
     PreviewSessionOut,
+    SandboxExecIn,
+    SandboxExecOut,
     ThreadCreate,
     ThreadListOut,
     ThreadOut,
@@ -177,6 +179,23 @@ async def upload_file(
     return {"path": path, "size": size}
 
 
+@router.post("/{thread_id}/sandbox/exec", response_model=SandboxExecOut)
+async def exec_in_sandbox(
+    thread_id: UUID,
+    payload: SandboxExecIn,
+    service: ThreadServiceDep,
+    session: SessionDep,
+    principal: PrincipalDep,
+) -> SandboxExecOut:
+    """在会话正在运行的评测档沙箱里执行一条命令，等它结束后返回输出。
+
+    用途：评测在 Agent 留下的现场里校验（Terminal-Bench 的 tests/test.sh）。
+    409 = 没有正在运行的沙箱（不会为它新建）；403 = 不是评测档；503 = 执行途中沙箱没了。
+    """
+    await ensure_thread_owner(session, thread_id, principal, write=True)
+    return await service.exec_in_sandbox(thread_id, payload)
+
+
 class CompactIn(BaseModel):
     #: 可选：希望摘要重点保留什么
     focus: str = Field(default="", max_length=2000)
@@ -278,8 +297,10 @@ async def stream_thread_events(
     await service.ensure_thread(thread_id)
 
     gate = request.app.state.stream_gate
+    # 归档段在这里读完：请求的 session 随本函数返回就关了，生成器里不能再用它
+    frames = await service.open_thread_stream(thread_id, after_seq=resume_from)
     return StreamingResponse(
-        gate.guard(service.stream_thread(thread_id, after_seq=resume_from)),
+        gate.guard(frames),
         media_type="text/event-stream",
         headers=SSE_HEADERS,
     )

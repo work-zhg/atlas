@@ -27,16 +27,27 @@ class Budget(BaseModel):
 
 
 class Verifier(BaseModel):
-    """校验：Agent 结束后，把最终工作区拷进隔离容器（无网络），跑任务自带的校验脚本。
+    """校验：Agent 结束后跑任务自带的校验脚本。两种方式：
 
-    ★ 校验脚本放在任务的 verifier/ 目录，挂到容器的 /verifier —— Agent 从头到尾看不到它
-      （否则就成了照着答案做题）。退出码 0 = 通过；脚本可以把「部分得分」写到 stdout 的
-      最后一行 `SCORE=<0~1>`。
+        container  把最终工作区拷进隔离容器（无网络）校验。校验脚本挂到 /verifier；
+                   退出码 0 = 通过，stdout 最后一行 `SCORE=<0~1>` 给部分得分
+        sandbox    在 Agent 用过的沙箱里原地校验（Terminal-Bench 这类：要看的是环境状态，
+                   不只是文件）。Agent 结束后才把 verifier/ 解到沙箱的 dest，在 cwd 里执行
+                   command，再读 reward_file 里的得分（1 = 通过，同 Harbor）。
+                   要求评测档沙箱与平台的直接执行接口（POST /v1/threads/{id}/sandbox/exec）
+
+    ★ 校验脚本放在任务的 verifier/ 目录，Agent 从头到尾看不到它（否则就成了照着答案做题）。
     """
 
+    mode: Literal["container", "sandbox"] = "container"
     command: str = "python /verifier/verify.py"
+    #: container 模式的校验镜像
     image: str = "python:3.12-slim"
     timeout_s: float = 120.0
+    #: sandbox 模式：verifier/ 解到哪、在哪执行、得分写在哪
+    dest: str = "/tests"
+    cwd: str = "/app"
+    reward_file: str = "/logs/verifier/reward.txt"
 
 
 #: 审批策略：approve_all / deny_all / deny_first（本 trial 第一次拒绝，其余批准）/

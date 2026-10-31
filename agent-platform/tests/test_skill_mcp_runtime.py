@@ -16,34 +16,34 @@ from typing import Any
 import httpx
 import pytest
 from atlas_agent.config import Settings
-from atlas_agent.configplane import (
-    ConfigPlaneUnavailable,
-    FakeSkillDirectory,
-    HttpSkillDirectory,
-    UnconfiguredSkillDirectory,
-    override_skill_directory,
-)
-from atlas_agent.configplane.client import ConfigClient
-from atlas_agent.configplane.skills import SkillNotFound
 from atlas_agent.domain.events import EventType
 from atlas_agent.domain.skill_events import SkillLoadTracker, skill_slug_of
 from atlas_agent.domain.spec import AgentSpec, ModelSpec, SkillRefSpec
 from atlas_agent.errors import InvalidReference
 from atlas_agent.providers.filesystem.skill_copy import SkillUnavailable, resolve_skills
 from atlas_agent.providers.mcp import (
+    AgentAccess,
     CallContext,
     KeyAuth,
     McpServerConfig,
     McpSessions,
     McpUnavailable,
     NativeMcpTools,
-    SubjectAccess,
 )
 from atlas_agent.providers.mcp.acp import acp_mcp_servers
 from atlas_agent.providers.mcp.catalog import McpToolDef, ServerSnapshot
 from atlas_agent.schemas.agent import AgentSpecIn, SkillRefIn, SubAgentSpecIn
 from atlas_agent.services.spec_refs import resolve_spec_refs
-from atlas_config.schemas import SkillCatalogItem, SkillVersionBrief, SkillVersionOut
+from atlas_agent.skills import (
+    FakeSkillDirectory,
+    HttpSkillDirectory,
+    SkillServiceUnavailable,
+    UnconfiguredSkillDirectory,
+    override_skill_directory,
+)
+from atlas_agent.skills.client import SkillClient
+from atlas_agent.skills.directory import SkillNotFound
+from atlas_skill.schemas import SkillCatalogItem, SkillVersionBrief, SkillVersionOut
 
 from tests.fake_uc import AS_USER
 
@@ -139,7 +139,7 @@ def _version(slug: str = "demo", version: int = 1, **kw: Any) -> SkillVersionOut
 
 
 class _Server:
-    """配置服务的替身：可以随时「宕机」，并记下被请求了什么。"""
+    """技能应用的替身：可以随时「宕机」，并记下被请求了什么。"""
 
     def __init__(self) -> None:
         self.versions = {("demo", 1): _version()}
@@ -166,7 +166,7 @@ class _Server:
         return httpx.Response(200, json=found.model_dump(mode="json"))
 
     def directory(self, cache_dir: Path | None, ttl: float = 60) -> HttpSkillDirectory:
-        client = ConfigClient("http://cfg", transport=httpx.MockTransport(self.handler))
+        client = SkillClient("http://skill", transport=httpx.MockTransport(self.handler))
         return HttpSkillDirectory(client, cache_dir=cache_dir, status_ttl_s=ttl)
 
 
@@ -178,7 +178,7 @@ async def test_version_content_is_cached_forever_on_disk(tmp_path: Path) -> None
     await first.get("demo", 1)
     assert [c for c in server.calls if "/versions/" in c] == content_calls  # 内存命中
 
-    # 进程重启 + 配置服务宕机：磁盘缓存照样装配
+    # 进程重启 + 技能应用宕机：磁盘缓存照样装配
     server.down = True
     restarted = server.directory(tmp_path)
     assert (await restarted.get("demo", 1)).slug == "demo"
@@ -193,7 +193,7 @@ async def test_status_comes_from_catalog_not_from_cached_content(tmp_path: Path)
     assert await directory.revoked() == frozenset({("demo", 1)})
 
 
-async def test_stale_catalog_is_used_when_config_goes_down(tmp_path: Path) -> None:
+async def test_stale_catalog_is_used_when_skill_app_goes_down(tmp_path: Path) -> None:
     server = _Server()
     directory = server.directory(tmp_path, ttl=0)
     assert (await directory.latest("demo")) is not None
@@ -208,33 +208,33 @@ async def test_first_fetch_failure_and_not_found() -> None:
     with pytest.raises(SkillNotFound):
         await directory.get("demo", 9)
     server.down = True
-    with pytest.raises(ConfigPlaneUnavailable):
+    with pytest.raises(SkillServiceUnavailable):
         await server.directory(None).get("demo", 1)
 
 
-# ═══════════════════════════════════════════════ 契约：对着真实的 atlas-config
+# ═══════════════════════════════════════════════ 契约：对着真实的 atlas-skill
 
 
 @pytest.fixture
-async def real_config_app(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Any]:
-    """真实的配置服务 app（测试库 + moto 桶）—— 两边对 schemas 的理解必须一致。"""
+async def real_skill_app(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Any]:
+    """真实的技能应用 app（测试库 + moto 桶）—— 两边对 schemas 的理解必须一致。"""
     import os
 
     import boto3
-    from atlas_config import __main__ as config_main
-    from atlas_config import auth as config_auth
-    from atlas_config.api.app import create_app
-    from atlas_config.db.session import get_engine as config_engine
-    from atlas_config.db.session import get_sessionmaker as config_sessions
-    from atlas_config.settings import get_settings as config_settings
-    from atlas_config.storage import S3SkillStorage
+    from atlas_skill import __main__ as skill_main
+    from atlas_skill import auth as skill_auth
+    from atlas_skill.api.app import create_app
+    from atlas_skill.db.session import get_engine as skill_engine
+    from atlas_skill.db.session import get_sessionmaker as skill_sessions
+    from atlas_skill.settings import get_settings as skill_settings
+    from atlas_skill.storage import S3SkillStorage
     from moto import mock_aws
     from sqlalchemy import text
     from sqlalchemy.ext.asyncio import create_async_engine
 
-    # 配置服务没有免鉴权模式：授权快照接替身（能上传技能即可）
+    # 技能应用没有免鉴权模式：授权快照接替身（能上传技能即可）
     monkeypatch.setattr(
-        config_auth,
+        skill_auth,
         "_transport",
         httpx.MockTransport(
             lambda req: httpx.Response(
@@ -242,13 +242,13 @@ async def real_config_app(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Any]
             )
         ),
     )
-    monkeypatch.setattr(config_auth, "_cache", config_auth._Cache())
-    test_db = "atlas_config_test"
-    saved = os.environ.get("ATLAS_CONFIG_DATABASE_URL")
-    os.environ["ATLAS_CONFIG_DATABASE_URL"] = (
+    monkeypatch.setattr(skill_auth, "_cache", skill_auth._Cache())
+    test_db = "atlas_skill_test"
+    saved = os.environ.get("ATLAS_SKILL_DATABASE_URL")
+    os.environ["ATLAS_SKILL_DATABASE_URL"] = (
         f"postgresql+asyncpg://atlas:atlas@localhost:5433/{test_db}"
     )
-    config_settings.cache_clear()
+    skill_settings.cache_clear()
     admin = create_async_engine(
         "postgresql+asyncpg://atlas:atlas@localhost:5433/atlas", isolation_level="AUTOCOMMIT"
     )
@@ -260,10 +260,10 @@ async def real_config_app(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Any]
     await admin.dispose()
     import asyncio
 
-    await asyncio.to_thread(config_main.migrate)
-    async with config_sessions()() as session:
+    await asyncio.to_thread(skill_main.migrate)
+    async with skill_sessions()() as session:
         await session.execute(
-            text("TRUNCATE skill, skill_version, config_audit")
+            text("TRUNCATE skill, skill_version, skill_audit")
         )
         await session.commit()
     try:
@@ -273,20 +273,20 @@ async def real_config_app(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Any]
             storage = S3SkillStorage(client, "contract-bucket")
             yield create_app(storage=storage), storage
     finally:
-        await config_engine().dispose()
-        config_engine.cache_clear()
-        config_sessions.cache_clear()
+        await skill_engine().dispose()
+        skill_engine.cache_clear()
+        skill_sessions.cache_clear()
         if saved is None:
-            os.environ.pop("ATLAS_CONFIG_DATABASE_URL", None)
+            os.environ.pop("ATLAS_SKILL_DATABASE_URL", None)
         else:
-            os.environ["ATLAS_CONFIG_DATABASE_URL"] = saved
-        config_settings.cache_clear()
+            os.environ["ATLAS_SKILL_DATABASE_URL"] = saved
+        skill_settings.cache_clear()
 
 
-async def test_contract_against_real_config_service(real_config_app: Any) -> None:
-    app, _storage = real_config_app
+async def test_contract_against_real_skill_app(real_skill_app: Any) -> None:
+    app, _storage = real_skill_app
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://cfg", headers=AS_USER) as c:
+    async with httpx.AsyncClient(transport=transport, base_url="http://sk", headers=AS_USER) as c:
         import io
         import zipfile
 
@@ -294,14 +294,14 @@ async def test_contract_against_real_config_service(real_config_app: Any) -> Non
         with zipfile.ZipFile(buf, "w") as z:
             z.writestr("SKILL.md", "---\nname: demo\ndescription: 契约测试用的技能\n---\nbody")
         resp = await c.post(
-            "/config/skills",
+            "/api/v1/skills",
             files={"file": ("s.zip", buf.getvalue(), "application/zip")},
             data={"source": "builtin"},
         )
         assert resp.status_code == 201, resp.text
 
     directory = HttpSkillDirectory(
-        ConfigClient("http://cfg", transport=transport), cache_dir=None, status_ttl_s=60
+        SkillClient("http://skill", transport=transport), cache_dir=None, status_ttl_s=60
     )
     latest = await directory.latest("demo")
     assert latest is not None
@@ -370,9 +370,9 @@ async def test_subagent_skills_are_pinned_too(fake_skills: FakeSkillDirectory) -
     assert out.subagents[0].skills[0].version == 4
 
 
-async def test_without_config_service_versions_must_be_explicit() -> None:
+async def test_without_skill_app_versions_must_be_explicit() -> None:
     override_skill_directory(None)
-    settings = _settings(config_base_url=None)
+    settings = _settings(skill_base_url=None)
     with pytest.raises(InvalidReference, match="版本号"):
         await resolve_spec_refs(_spec(skills=[{"slug": "demo"}]), settings=settings, redis=None)
     out = await resolve_spec_refs(
@@ -401,7 +401,7 @@ async def test_resolve_skills_skips_revoked_and_uses_directory_description() -> 
     assert skipped == [{"slug": "bad", "version": 1, "reason": "revoked"}]
 
 
-async def test_resolve_skills_without_config_service_falls_back_to_slug() -> None:
+async def test_resolve_skills_without_skill_app_falls_back_to_slug() -> None:
     metas, skipped = await resolve_skills([SkillRefSpec("demo", 2)], UnconfiguredSkillDirectory())
     assert [(m.slug, m.version, m.description) for m in metas] == [("demo", 2, "demo")]
     assert skipped == []
@@ -454,7 +454,9 @@ class _FakeCatalog:
 
 CTX = CallContext(run_id=uuid.uuid4(), thread_id=uuid.uuid4(), user_id=uuid.uuid4())
 #: 权限主体能用 srv、有 Key（闸门一另有测试：test_mcp_gateway.py）
-ACCESS = SubjectAccess(subject=str(CTX.user_id), services=frozenset({"srv"}), key="mk-test")
+ACCESS = AgentAccess(
+    subject=str(CTX.user_id), servers={"srv": frozenset({"search"})}, key="mk-test"
+)
 
 
 def _sessions() -> McpSessions:
@@ -562,10 +564,10 @@ async def test_acp_unreviewed_tools_are_left_to_the_gateway() -> None:
 async def test_acp_skips_services_without_permission_or_key() -> None:
     catalog = _FakeCatalog(_cfg(), [_tool("srv", "search")])
     kw: dict[str, Any] = dict(user_id=uuid.uuid4(), digests={}, drift_policy="warn")
-    no_key = SubjectAccess(subject="u", services=frozenset({"srv"}))
+    no_key = AgentAccess(subject="u", servers={"srv": frozenset({"search"})}, key_status="blocked")
     servers, notices = await acp_mcp_servers(["mcp:srv:search"], catalog, access=no_key, **kw)
     assert servers == [] and notices[0][1]["reason"] == "no_key"
-    forbidden = SubjectAccess(subject="u", services=frozenset(), key="k")
+    forbidden = AgentAccess(subject="u", servers={}, key="k")
     servers, notices = await acp_mcp_servers(["mcp:srv:search"], catalog, access=forbidden, **kw)
     assert servers == [] and notices[0][1]["reason"] == "forbidden"
     with pytest.raises(McpUnavailable, match="未在 MCP 网关注册"):

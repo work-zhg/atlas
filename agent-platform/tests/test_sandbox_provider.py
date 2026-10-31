@@ -103,6 +103,7 @@ async def test_create_request_matches_the_design(
     assert spec["metadata"] == {
         "atlas.managed": "true",
         "atlas.kind": "sbx",
+        "atlas.profile": "strict",  # 档位：直接执行据此只放行评测档
         "atlas.thread": ws,
         "atlas.user": USER,
     }

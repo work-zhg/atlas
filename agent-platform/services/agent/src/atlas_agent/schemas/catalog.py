@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from atlas_config.schemas import SkillVersionBrief
+from atlas_skill.schemas import SkillVersionBrief
 from pydantic import BaseModel, Field
 
 
@@ -33,7 +33,7 @@ class SkillListItem(BaseModel):
 
 
 class SkillListOut(BaseModel):
-    #: False = 没接配置服务：列表为空，技能引用需手写版本号
+    #: False = 没接技能应用：列表为空，技能引用需手写版本号
     directory_configured: bool
     data: list[SkillListItem]
 

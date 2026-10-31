@@ -165,6 +165,7 @@ class NativeRuntime:
                 waiting_on=prepared.waiting_on,
                 decisions=prepared.decisions,
                 approval_mode=prepared.approval_mode,
+                run_state=prepared.run_state,
             ):
                 yield event
         finally:

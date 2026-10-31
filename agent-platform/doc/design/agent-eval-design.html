@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Atlas 智能体评测方案设计</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --border: #d1d9e0; --head: #f6f8fa;
+    --accent: #0969da; --ok: #1a7f37; --ok-bg: #dafbe1; --warn: #9a6700; --warn-bg: #fff8c5;
+    --bad: #cf222e; --bad-bg: #ffebe9; --code-bg: #f6f8fa;
+    --b1: #ddf4ff; --b1d: #54aeff; --b2: #fbefff; --b2d: #c297ff; --b3: #dafbe1; --b3d: #4ac26b;
+    --b4: #fff8c5; --b4d: #d4a72c; --b5: #ffebe9; --b5d: #ff8182;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --border: #3d444d; --head: #151b23;
+      --accent: #4493f8; --ok: #3fb950; --ok-bg: #12261e; --warn: #d29922; --warn-bg: #2b2111;
+      --bad: #f85149; --bad-bg: #2d1214; --code-bg: #151b23;
+      --b1: #12263f; --b1d: #1f6feb; --b2: #271a36; --b2d: #8957e5; --b3: #12261e; --b3d: #2ea043;
+      --b4: #2b2111; --b4d: #9e6a03; --b5: #2d1214; --b5d: #da3633;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 32px; background: var(--bg); color: var(--fg);
+         font: 14px/1.75 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif; }
+  main { max-width: 1120px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 44px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 15.5px; margin: 24px 0 8px; }
+  .sub { color: var(--muted); margin: 0 0 14px; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0 16px; }
+  th, td { border: 1px solid var(--border); padding: 7px 10px; vertical-align: top; text-align: left; }
+  th { background: var(--head); white-space: nowrap; }
+  td.c { text-align: center; }
+  .callout { border-left: 4px solid var(--accent); background: var(--head); padding: 10px 14px; border-radius: 4px; margin: 14px 0; }
+  .callout.warn { border-color: var(--warn); background: var(--warn-bg); }
+  .tag { display: inline-block; padding: 0 7px; border-radius: 9px; font-size: 12px; font-weight: 600; border: 1px solid; white-space: nowrap; }
+  .tag.warn { color: var(--warn); background: var(--warn-bg); border-color: var(--warn); }
+  .tag.ok { color: var(--ok); background: var(--ok-bg); border-color: var(--ok); }
+  .toc { columns: 2; padding-left: 18px; }
+  .fig { border: 1px solid var(--border); border-radius: 6px; padding: 10px; overflow-x: auto; margin: 10px 0 6px; }
+  .cap { color: var(--muted); font-size: 12.5px; margin: 0 0 16px; text-align: center; }
+  svg text { fill: var(--fg); font-size: 12px; font-family: -apple-system, "PingFang SC", sans-serif; }
+  svg .s { font-size: 11px; fill: var(--muted); }
+  svg .b { font-weight: 600; }
+  svg .c1 { fill: var(--b1); stroke: var(--b1d); } svg .c2 { fill: var(--b2); stroke: var(--b2d); }
+  svg .c3 { fill: var(--b3); stroke: var(--b3d); } svg .c4 { fill: var(--b4); stroke: var(--b4d); }
+  svg .c5 { fill: var(--b5); stroke: var(--b5d); }
+  svg .inner { fill: var(--bg); stroke: var(--border); }
+  svg .ln { stroke: var(--fg); stroke-width: 1.3; fill: none; }
+  svg .dash { stroke-dasharray: 5 4; }
+  svg .arw { fill: var(--fg); }
+  svg .fault { fill: var(--bad-bg); stroke: var(--bad); stroke-width: 1.5; }
+  svg .faultt { fill: var(--bad); font-weight: 600; font-size: 11px; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <marker id="ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="arw" d="M0,0 L8,4 L0,8 z"/></marker>
+</defs></svg>
+<main>
+<h1>Atlas 智能体评测方案设计</h1>
+<p class="sub">日期：2026-10-30 · 状态：<span class="tag ok">§1–§7 已在用（Terminal-Bench 2 第一批已在测试环境冒烟）</span> <span class="tag warn">§8 平台机制的可靠性评测为新增方案</span><br>
+范围：智能体（原生、ACP）的端到端能力与平台机制。知识库检索与生成的评测另见《RAG 评测》。</p>
+
+<ol class="toc" start="0">
+  <li><a href="#s0">方案概览</a></li>
+  <li><a href="#s1">目标与原则</a></li>
+  <li><a href="#s2">被测对象与对照</a></li>
+  <li><a href="#s3">任务模型</a></li>
+  <li><a href="#s4">任务集</a></li>
+  <li><a href="#s5">一次 trial 怎么跑</a></li>
+  <li><a href="#s6">判分</a></li>
+  <li><a href="#s7">统计、报告与门禁</a></li>
+  <li><a href="#s8">平台机制的可靠性评测</a></li>
+</ol>
+
+<!-- ───────────────────────────────────────────── 0 -->
+<h2 id="s0">0. 方案概览</h2>
+<div class="fig">
+<svg viewBox="0 0 1080 330" width="100%" role="img" aria-label="评测总览">
+  <rect x="10" y="40" width="180" height="140" rx="6" class="c1"/>
+  <text x="100" y="66" text-anchor="middle" class="b">任务集</text>
+  <text x="100" y="92" text-anchor="middle" class="s">公开集：Terminal-Bench 2</text>
+  <text x="100" y="112" text-anchor="middle" class="s">工程场景集</text>
+  <text x="100" y="132" text-anchor="middle" class="s">走通集 · 需求澄清集</text>
+  <text x="100" y="160" text-anchor="middle" class="s">指令 · 环境 · 校验 · 参考解</text>
+
+  <rect x="230" y="40" width="200" height="140" rx="6" class="c2"/>
+  <text x="330" y="66" text-anchor="middle" class="b">运行器</text>
+  <text x="330" y="92" text-anchor="middle" class="s">变体 × 任务 × 次数</text>
+  <text x="330" y="112" text-anchor="middle" class="s">打乱顺序 · 限并发</text>
+  <text x="330" y="132" text-anchor="middle" class="s">审批策略 · 模拟用户</text>
+  <text x="330" y="152" text-anchor="middle" class="s">预算 · 平台错误重跑一次</text>
+
+  <rect x="470" y="20" width="270" height="180" rx="8" class="inner"/>
+  <text x="486" y="42" class="b">被测平台：Atlas（只走公开能力）</text>
+  <rect x="486" y="56" width="115" height="56" rx="6" class="c3"/>
+  <text x="543" y="80" text-anchor="middle" class="b">原生智能体</text>
+  <text x="543" y="99" text-anchor="middle" class="s">工具组合可变</text>
+  <rect x="611" y="56" width="115" height="56" rx="6" class="c3"/>
+  <text x="668" y="80" text-anchor="middle" class="b">ACP 智能体</text>
+  <text x="668" y="99" text-anchor="middle" class="s">CLI 在 Pod 里</text>
+  <rect x="486" y="124" width="240" height="62" rx="6" class="c3"/>
+  <text x="606" y="146" text-anchor="middle" class="b">会话 · 工作区 · 沙箱</text>
+  <text x="606" y="167" text-anchor="middle" class="s">默认档 / 评测档（root，题目镜像）</text>
+
+  <rect x="780" y="40" width="130" height="140" rx="6" class="c4"/>
+  <text x="845" y="66" text-anchor="middle" class="b">校验</text>
+  <text x="845" y="94" text-anchor="middle" class="s">容器校验</text>
+  <text x="845" y="114" text-anchor="middle" class="s">（只看文件）</text>
+  <text x="845" y="142" text-anchor="middle" class="s">沙箱原地校验</text>
+  <text x="845" y="162" text-anchor="middle" class="s">（看环境状态）</text>
+
+  <rect x="950" y="40" width="120" height="140" rx="6" class="c5"/>
+  <text x="1010" y="66" text-anchor="middle" class="b">汇总</text>
+  <text x="1010" y="92" text-anchor="middle" class="s">成功率 · pass^k</text>
+  <text x="1010" y="112" text-anchor="middle" class="s">成本 · 过程指标</text>
+  <text x="1010" y="132" text-anchor="middle" class="s">失败构成</text>
+  <text x="1010" y="152" text-anchor="middle" class="s">配对比较</text>
+
+  <path d="M190,110 H 230" class="ln" marker-end="url(#ar)"/>
+  <path d="M430,110 H 470" class="ln" marker-end="url(#ar)"/>
+  <path d="M740,110 H 780" class="ln" marker-end="url(#ar)"/>
+  <path d="M910,110 H 950" class="ln" marker-end="url(#ar)"/>
+  <path d="M606,200 V 250 H 1045 V 180" class="ln dash" marker-end="url(#ar)"/>
+  <text x="620" y="244" class="s">轨迹与用量（过程断言、过程指标）</text>
+
+  <rect x="230" y="262" width="500" height="56" rx="6" class="c2"/>
+  <text x="480" y="284" text-anchor="middle" class="b">层级与门禁</text>
+  <text x="480" y="304" text-anchor="middle" class="s">冒烟（部署后，只看硬门槛）· 回归（对基线配对比较）· 能力评测（公开集）· 可靠性评测（§8）</text>
+  <path d="M985,180 V 290 H 730" class="ln" marker-end="url(#ar)"/>
+</svg>
+</div>
+<p class="cap">图 0　评测只通过平台的公开能力驱动被测方；结果校验与过程分析分开，汇总后进门禁。</p>
+
+<!-- ───────────────────────────────────────────── 1 -->
+<h2 id="s1">1. 目标与原则</h2>
+<p>评的是<b>平台与 harness</b>，不是模型：模型固定，换的是智能体的配置与执行形态。要回答四个问题：</p>
+<table>
+  <tr><th>问题</th><th>怎么回答</th></tr>
+  <tr><td>能力：做不做得成</td><td>公开任务集（可与公开榜单对照）与自建任务的成功率、pass^k</td></tr>
+  <tr><td>对照：哪种配置更好</td><td>同题配对比较：原生与 ACP 横比；去掉某项能力的消融</td></tr>
+  <tr><td>可靠性：平台机制在扰动下守不守得住</td><td>不变量断言、故障注入、扰动与干净运行配对（§8）</td></tr>
+  <tr><td>回归：改动之后有没有变差</td><td>与基线按题配对比较；硬门槛</td></tr>
+</table>
+<p>原则：</p>
+<ul>
+  <li><b>看结果，不卡路径</b>：判分看最终产出与环境状态，不强制工具调用顺序；过程断言只用来守平台机制。</li>
+  <li><b>校验器先自证</b>：空跑应失败、参考解应通过，否则题目作废。</li>
+  <li><b>平台错误与 Agent 失败分开</b>：基础设施的问题单独计数、按协议重跑，评测侧自己的问题不进分母。</li>
+  <li><b>多次运行看稳定性</b>：同时报成功率（均值）与 pass^k（k 次全成功）；结论带置信区间。</li>
+  <li><b>和真实用户走同一条路</b>：只用平台对外的能力，评测账号是普通用户；评测专用的能力只放在评测档里。</li>
+</ul>
+
+<!-- ───────────────────────────────────────────── 2 -->
+<h2 id="s2">2. 被测对象与对照</h2>
+<p>被测方是「一份智能体配置」：系统提示词、模型、工具组合、子智能体、执行形态、审批模式、沙箱镜像与档位。同一实验里所有变体用<b>同一个模型</b>，配置变了就是另一个被测方（另建一个智能体，可复用）。</p>
+<table>
+  <tr><th>对照</th><th>做法</th><th>例子</th></tr>
+  <tr><td>横比</td><td>同模型、不同执行形态</td><td>原生智能体对 ACP（Pod 里的 Claude Code）</td></tr>
+  <tr><td>消融</td><td>只去掉一项能力</td><td>去掉待办清单；只留 Shell（与 Terminal-Bench 的中立基线 Terminus 同构）</td></tr>
+  <tr><td>基线</td><td>同配置、不同平台版本</td><td>本次部署对上次存的基线</td></tr>
+  <tr><td>扰动</td><td>同配置、同版本，有无注入故障</td><td>§8.2</td></tr>
+</table>
+<p>审批模式在评测里固定为「每条命令都请示」，由评测按策略作答：避免自动模式的判断器成为额外变量。</p>
+
+<!-- ───────────────────────────────────────────── 3 -->
+<h2 id="s3">3. 任务模型</h2>
+<p>一道任务由下面几部分组成。前五项是所有任务都有的；场景设定只在需要的题里出现。</p>
+<table>
+  <tr><th>组成</th><th>说明</th></tr>
+  <tr><td>指令</td><td>Agent 看到的全部任务描述</td></tr>
+  <tr><td>环境</td><td>初始工作区文件；或题目自带的环境镜像（命令从工作区开始，指令里写明题目的起始目录）</td></tr>
+  <tr><td>校验</td><td>Agent 看不到的校验脚本与校验方式（§6.1）</td></tr>
+  <tr><td>参考解</td><td>证明题目做得出来，只用于校验器自证</td></tr>
+  <tr><td>预算</td><td>时间与 token 的上限。这是评测协议，不是平台限制：超了由评测取消，记「超预算」</td></tr>
+  <tr><td>配置补丁</td><td>叠加到被测配置上的改动（换沙箱镜像与档位、给写文件加审批、配一个子智能体）</td></tr>
+  <tr><td>审批策略</td><td>全部批准 / 全部拒绝 / 第一次拒绝 / 等 N 秒再批 —— 用来造「审批被拒」「审批很久」的场景</td></tr>
+  <tr><td>模拟用户</td><td>用户心里的完整需求（Agent 看不到）；Agent 提问时由评测侧的模型只按它作答</td></tr>
+  <tr><td>前置会话</td><td>主任务之前先在另一个会话里发的消息（跨会话场景，如先交代偏好再检验）</td></tr>
+  <tr><td>事件流断线</td><td>收到 N 条事件后主动断开再带游标重连</td></tr>
+  <tr><td>过程断言</td><td>从轨迹判定平台机制有没有按预期工作，分不变量与场景前提（§6.3）</td></tr>
+</table>
+
+<!-- ───────────────────────────────────────────── 4 -->
+<h2 id="s4">4. 任务集</h2>
+<table>
+  <tr><th>任务集</th><th>题量</th><th>用途</th><th>内容</th></tr>
+  <tr><td>走通集</td><td class="c">7</td><td>冒烟、回归</td><td>代码修复、重构、数据处理、多步小工具；基础题必须让模型稳能做成</td></tr>
+  <tr><td>工程场景集</td><td class="c">11</td><td>平台机制的单点场景</td><td>审批被拒、慢审批、并行审批续跑、断线重连、跨会话记忆、长读压缩、重复读清理、并行委派、错误路径恢复、大输出、工作区约定</td></tr>
+  <tr><td>需求澄清集</td><td class="c">6</td><td>向用户提问的时机</td><td>3 对「一句话的模糊题 / 写清楚的清晰题」：模糊题看提问率与成功率，清晰题看误问率</td></tr>
+  <tr><td>Terminal-Bench 2</td><td class="c">15</td><td>能力、与榜单对照</td><td>第一批：简单 3、中等 10、困难 2；含系统管理类（必须 root）；每题自带环境镜像</td></tr>
+</table>
+<h3>4.1 公开集接入</h3>
+<ul>
+  <li><b>固定版本</b>：导入固定到上游仓库的一个提交，题目修订后另起一版，结果不混比。</li>
+  <li><b>保留原格式</b>：指令、校验脚本、参考解原样搬入；题目环境用上游预构建的镜像，不在本地重建。</li>
+  <li><b>选题</b>：先挑镜像小、不需要 GPU / 虚拟机、没有加密附件、纯文本可做的题，覆盖各难度与类别；之后再扩到全集。</li>
+  <li><b>与榜单的差异要写在报告里</b>：资源上限用平台的沙箱配置；Atlas 的命令从工作区开始（指令前加了起始目录）；时间预算含沙箱启动；校验时现场联网（经评测档的出网代理）。</li>
+</ul>
+
+<!-- ───────────────────────────────────────────── 5 -->
+<h2 id="s5">5. 一次 trial 怎么跑</h2>
+<div class="fig">
+<svg viewBox="0 0 1080 210" width="100%" role="img" aria-label="trial 流程">
+  <rect x="10" y="30" width="118" height="78" rx="6" class="c1"/>
+  <text x="69" y="56" text-anchor="middle" class="b">新会话</text>
+  <text x="69" y="76" text-anchor="middle" class="s">全新工作区</text>
+  <text x="69" y="94" text-anchor="middle" class="s">与沙箱</text>
+  <rect x="142" y="30" width="118" height="78" rx="6" class="c1"/>
+  <text x="201" y="56" text-anchor="middle" class="b">准备</text>
+  <text x="201" y="76" text-anchor="middle" class="s">初始文件</text>
+  <text x="201" y="94" text-anchor="middle" class="s">前置会话</text>
+  <rect x="274" y="30" width="118" height="78" rx="6" class="c2"/>
+  <text x="333" y="56" text-anchor="middle" class="b">发指令</text>
+  <text x="333" y="76" text-anchor="middle" class="s">带幂等键</text>
+  <rect x="406" y="30" width="118" height="78" rx="6" class="c2"/>
+  <text x="465" y="56" text-anchor="middle" class="b">跟事件流</text>
+  <text x="465" y="76" text-anchor="middle" class="s">按策略批审批</text>
+  <text x="465" y="94" text-anchor="middle" class="s">模拟用户答提问</text>
+  <rect x="538" y="30" width="118" height="78" rx="6" class="c2"/>
+  <text x="597" y="56" text-anchor="middle" class="b">等终态</text>
+  <text x="597" y="76" text-anchor="middle" class="s">超预算即取消</text>
+  <rect x="670" y="30" width="118" height="78" rx="6" class="c3"/>
+  <text x="729" y="56" text-anchor="middle" class="b">取轨迹</text>
+  <text x="729" y="76" text-anchor="middle" class="s">含子 run</text>
+  <text x="729" y="94" text-anchor="middle" class="s">各 run 用量</text>
+  <rect x="802" y="30" width="118" height="78" rx="6" class="c4"/>
+  <text x="861" y="56" text-anchor="middle" class="b">校验</text>
+  <text x="861" y="76" text-anchor="middle" class="s">run 失败也照样</text>
+  <text x="861" y="94" text-anchor="middle" class="s">校验</text>
+  <rect x="934" y="30" width="136" height="78" rx="6" class="c5"/>
+  <text x="1002" y="56" text-anchor="middle" class="b">记录</text>
+  <text x="1002" y="76" text-anchor="middle" class="s">逐次结果 · 原始轨迹</text>
+  <text x="1002" y="94" text-anchor="middle" class="s">删会话 → 回收沙箱</text>
+  <path d="M128,69 H 142" class="ln" marker-end="url(#ar)"/>
+  <path d="M260,69 H 274" class="ln" marker-end="url(#ar)"/>
+  <path d="M392,69 H 406" class="ln" marker-end="url(#ar)"/>
+  <path d="M524,69 H 538" class="ln" marker-end="url(#ar)"/>
+  <path d="M656,69 H 670" class="ln" marker-end="url(#ar)"/>
+  <path d="M788,69 H 802" class="ln" marker-end="url(#ar)"/>
+  <path d="M920,69 H 934" class="ln" marker-end="url(#ar)"/>
+  <path d="M1002,108 V 160 H 69 V 108" class="ln dash" marker-end="url(#ar)"/>
+  <text x="430" y="152" class="s">平台错误（网关、Pod、内部错误、沙箱起不来）→ 换新会话按协议重跑一次，仍失败才记「平台错误」</text>
+  <text x="430" y="190" class="s">变体 × 任务 × 次数的矩阵打乱顺序执行：避免时段因素系统性偏向某个变体；共享状态的题（如记忆）串行</text>
+</svg>
+</div>
+<p class="cap">图 1　每个 trial 用全新会话；平台错误换新会话重跑一次。</p>
+<h3>5.1 评测档沙箱</h3>
+<p>平台默认的沙箱是收紧的（非 root、根文件系统只读）。公开命令行题按 root 设计（装包、写系统目录），所以单独有一档<b>评测档</b>：</p>
+<ul>
+  <li>root、根文件系统可写，与容器运行时的默认权限一致；不开特权、不挂宿主机目录、不带集群凭据。</li>
+  <li>镜像由题目给定，只放行评测档自己的镜像白名单；部署没有开评测档时，这类配置在执行命令时直接报错。</li>
+  <li>出网：部署环境访问不了题目依赖的外网时，评测档沙箱经出网代理访问；默认档与 ACP 不受影响。</li>
+  <li>与默认档共用工作区存储与回收机制：闲置回收、会话删除时级联回收、配额都覆盖它。</li>
+</ul>
+
+<!-- ───────────────────────────────────────────── 6 -->
+<h2 id="s6">6. 判分</h2>
+<h3>6.1 结果校验</h3>
+<table>
+  <tr><th>方式</th><th>做法</th><th>适用</th></tr>
+  <tr><td>容器校验</td><td>把最终工作区拷进隔离容器（无网络）跑校验脚本：退出码判通过，可给部分得分</td><td>只看文件的题</td></tr>
+  <tr><td>沙箱原地校验</td><td>Agent 结束后，把校验脚本送进它用过的沙箱，在题目目录里执行，再读得分文件（1 = 通过）</td><td>要看环境状态的题：装了什么、服务起没起、工作区以外的文件</td></tr>
+</table>
+<div class="fig">
+<svg viewBox="0 0 1080 230" width="100%" role="img" aria-label="沙箱原地校验">
+  <rect x="10" y="40" width="180" height="150" rx="6" class="c2"/>
+  <text x="100" y="66" text-anchor="middle" class="b">评测</text>
+  <text x="100" y="92" text-anchor="middle" class="s">① 等到 run 终态</text>
+  <text x="100" y="112" text-anchor="middle" class="s">② 打包校验脚本</text>
+  <text x="100" y="132" text-anchor="middle" class="s">③ 请求原地执行</text>
+  <text x="100" y="152" text-anchor="middle" class="s">⑤ 读得分文件</text>
+
+  <rect x="260" y="40" width="250" height="150" rx="6" class="c3"/>
+  <text x="385" y="66" text-anchor="middle" class="b">平台</text>
+  <text x="385" y="92" text-anchor="middle" class="s">只对正在运行的评测档沙箱</text>
+  <text x="385" y="112" text-anchor="middle" class="s">不新建：没有沙箱 = Agent 一条命令</text>
+  <text x="385" y="130" text-anchor="middle" class="s">都没执行过 → 记不通过</text>
+  <text x="385" y="152" text-anchor="middle" class="s">执行途中沙箱没了 → 评测侧错误</text>
+  <text x="385" y="172" text-anchor="middle" class="s">不经审批（这是评测，不是 Agent）</text>
+
+  <rect x="580" y="20" width="300" height="190" rx="8" class="inner"/>
+  <text x="596" y="42" class="b">Agent 用过的沙箱（题目镜像，root）</text>
+  <rect x="596" y="56" width="268" height="40" rx="6" class="c1"/>
+  <text x="730" y="81" text-anchor="middle" class="s">题目环境：Agent 留下的现场</text>
+  <rect x="596" y="106" width="268" height="40" rx="6" class="c4"/>
+  <text x="730" y="131" text-anchor="middle" class="s">④ 校验脚本：此刻才出现，在题目目录执行</text>
+  <rect x="596" y="156" width="268" height="40" rx="6" class="c5"/>
+  <text x="730" y="181" text-anchor="middle" class="s">得分文件</text>
+
+  <rect x="940" y="70" width="130" height="90" rx="6" class="c5"/>
+  <text x="1005" y="98" text-anchor="middle" class="b">结束</text>
+  <text x="1005" y="120" text-anchor="middle" class="s">删会话</text>
+  <text x="1005" y="140" text-anchor="middle" class="s">沙箱随之回收</text>
+
+  <path d="M190,115 H 260" class="ln" marker-end="url(#ar)"/>
+  <path d="M510,115 H 580" class="ln" marker-end="url(#ar)"/>
+  <path d="M880,115 H 940" class="ln" marker-end="url(#ar)"/>
+</svg>
+</div>
+<p class="cap">图 2　沙箱原地校验：校验脚本在 Agent 结束之后才送进现场，Agent 从头到尾看不到它。</p>
+<h3>6.2 校验器自证</h3>
+<p>每道自建题都要过两关才能用：初始状态校验不通过（题目有意义）、参考解校验通过（校验脚本没写错）。公开集沿用上游的人工复核，并用参考解抽查。</p>
+<h3>6.3 过程断言</h3>
+<p>从轨迹统计事件条数或过程指标，与期望比较。断言分两类，处理不同：</p>
+<table>
+  <tr><th>类别</th><th>含义</th><th>例子</th><th>不满足时</th></tr>
+  <tr><td>不变量</td><td>违反即平台缺陷</td><td>断线重连后不丢事件、不重复事件</td><td>进硬门槛</td></tr>
+  <tr><td>场景前提</td><td>只说明这次场景生效了没有</td><td>第一次审批确实被拒；确实发生了压缩；子智能体确实并行</td><td>单列「场景未生效」，不进门槛（否则随模型的随机性红绿跳）</td></tr>
+</table>
+<p>过程断言只守平台机制，不要求 Agent「必须用某种办法做事」。</p>
+<h3>6.4 结果分类</h3>
+<table>
+  <tr><th>结果</th><th>含义</th><th>进成功率分母</th></tr>
+  <tr><td>成功</td><td>校验通过且没超预算</td><td class="c">是</td></tr>
+  <tr><td>失败</td><td>跑完了，没做对</td><td class="c">是</td></tr>
+  <tr><td>超预算</td><td>超时间或 token 预算，被评测取消（工作区照样校验，但不计通过）</td><td class="c">是</td></tr>
+  <tr><td>Agent 错误</td><td>run 失败，原因在 Agent / harness：超步数、上下文溢出、模型拒答</td><td class="c">是</td></tr>
+  <tr><td>平台错误</td><td>run 失败或沙箱不可用，原因在基础设施；重跑一次仍失败才记</td><td class="c">是，报告首页单列</td></tr>
+  <tr><td>评测侧错误</td><td>建会话失败、校验没做成、模拟用户出错</td><td class="c">否，续跑时重来</td></tr>
+</table>
+
+<!-- ───────────────────────────────────────────── 7 -->
+<h2 id="s7">7. 统计、报告与门禁</h2>
+<h3>7.1 指标</h3>
+<table>
+  <tr><th>类别</th><th>指标</th></tr>
+  <tr><td>结果</td><td>成功率（每题 k 次取均值，再按题平均；按题重采样的 95% 置信区间）；pass^k（k 次全成功的题目占比，与成功率差距大 = 不稳定）</td></tr>
+  <tr><td>成本</td><td>token（输入、输出、缓存命中）、耗时、审批次数与等待时长</td></tr>
+  <tr><td>过程</td><td>工具调用、工具错误、命令失败、重复调用、压缩与上下文清理、子智能体调用与最大并行数、待办更新、提问轮次</td></tr>
+  <tr><td>失败构成</td><td>按结果分类与任务类别分组；平台错误与沙箱不可用单列</td></tr>
+</table>
+<h3>7.2 比较</h3>
+<ul>
+  <li><b>配对比较</b>：同一题上两个变体（或两次运行）的成功率差，按题配对重采样；区间不含 0 才算显著。</li>
+  <li><b>回归判定</b>：成功率下降且区间不含 0 = 回归。</li>
+  <li><b>警告</b>：pass^k 下降 ≥ 10 个百分点；token 或耗时的中位数上升 ≥ 20%；不变量断言失败增加。</li>
+</ul>
+<h3>7.3 层级</h3>
+<table>
+  <tr><th>层级</th><th>触发</th><th>内容</th><th>看什么</th></tr>
+  <tr><td>冒烟</td><td>每次部署后</td><td>走通集 × 1 次</td><td>只看硬门槛（单次有方差，成功率不作门槛）</td></tr>
+  <tr><td>回归</td><td>合并前 / 定期</td><td>走通集 + 工程场景集 × 多次</td><td>与基线配对比较；硬门槛</td></tr>
+  <tr><td>能力评测</td><td>定期 / 换模型或大改 harness</td><td>公开集 × 多次 × 多变体</td><td>成功率、pass^k、横比与消融</td></tr>
+  <tr><td>可靠性评测</td><td>见 §8.5</td><td>故障点、扰动变体、记忆、压缩</td><td>不变量、扰动下的退化</td></tr>
+</table>
+<p><b>硬门槛</b>：平台错误、沙箱不可用、不变量断言失败，任一非零即不通过。</p>
+
+<!-- ───────────────────────────────────────────── 8 -->
+<h2 id="s8">8. 平台机制的可靠性评测</h2>
+<p>挂起续跑、审批等待、断线重连、接管、沙箱重建、子智能体、记忆、上下文压缩这些机制，出问题时往往<b>不影响成功率</b>（命令重跑了两遍但恰好幂等），而正常运行几乎走不到故障路径。所以这部分不靠成功率，靠三件事：</p>
+<ul>
+  <li><b>不变量</b>：每个机制写清楚必须守住什么，违反一次就是缺陷。</li>
+  <li><b>可复现的故障注入</b>：故障按「运行到哪一步」触发，而不是按时间，同一个故障能反复打在同一个位置。</li>
+  <li><b>把模型的随机性和平台故障分开</b>：确定性的那一层用脚本化的模型（§8.1）；真实模型那一层用扰动与干净运行配对（§8.2）。</li>
+</ul>
+<p>工程场景集里已有的单点场景（审批被拒、慢审批、并行审批续跑、断线重连、跨会话记忆、长读压缩）保留；本节把它们扩成系统化的故障点、扰动变体，并补上记忆与压缩的质量评测。</p>
+
+<div class="fig">
+<svg viewBox="0 0 1080 250" width="100%" role="img" aria-label="一轮 run 的故障点">
+  <text x="10" y="24" class="b">一轮 run 的时间线（原生智能体）</text>
+  <path d="M20,90 H 1060" class="ln" marker-end="url(#ar)"/>
+  <rect x="30" y="66" width="110" height="48" rx="6" class="c2"/>
+  <text x="85" y="94" text-anchor="middle" class="s">模型调用</text>
+  <rect x="170" y="66" width="130" height="48" rx="6" class="c3"/>
+  <text x="235" y="94" text-anchor="middle" class="s">命令执行（沙箱）</text>
+  <rect x="330" y="66" width="110" height="48" rx="6" class="c1"/>
+  <text x="385" y="94" text-anchor="middle" class="s">结果落库</text>
+  <rect x="470" y="66" width="110" height="48" rx="6" class="c4"/>
+  <text x="525" y="94" text-anchor="middle" class="s">等待审批</text>
+  <rect x="610" y="66" width="140" height="48" rx="6" class="c2"/>
+  <text x="680" y="88" text-anchor="middle" class="s">委派子 run</text>
+  <text x="680" y="104" text-anchor="middle" class="s">（父挂起）</text>
+  <rect x="780" y="66" width="110" height="48" rx="6" class="c1"/>
+  <text x="835" y="94" text-anchor="middle" class="s">压缩</text>
+  <rect x="920" y="66" width="120" height="48" rx="6" class="c3"/>
+  <text x="980" y="94" text-anchor="middle" class="s">下一轮 / 收尾</text>
+
+  <circle cx="155" cy="140" r="13" class="fault"/><text x="155" y="144" text-anchor="middle" class="faultt">F1</text>
+  <circle cx="235" cy="140" r="13" class="fault"/><text x="235" y="144" text-anchor="middle" class="faultt">F2</text>
+  <circle cx="385" cy="140" r="13" class="fault"/><text x="385" y="144" text-anchor="middle" class="faultt">F3</text>
+  <circle cx="525" cy="140" r="13" class="fault"/><text x="525" y="144" text-anchor="middle" class="faultt">F4</text>
+  <circle cx="680" cy="140" r="13" class="fault"/><text x="680" y="144" text-anchor="middle" class="faultt">F5</text>
+  <circle cx="835" cy="140" r="13" class="fault"/><text x="835" y="144" text-anchor="middle" class="faultt">F6</text>
+  <circle cx="300" cy="200" r="13" class="fault"/><text x="300" y="204" text-anchor="middle" class="faultt">F7</text>
+  <path d="M155,127 V 114" class="ln dash"/>
+  <path d="M235,127 V 114" class="ln dash"/>
+  <path d="M385,127 V 114" class="ln dash"/>
+  <path d="M525,127 V 114" class="ln dash"/>
+  <path d="M680,127 V 114" class="ln dash"/>
+  <path d="M835,127 V 114" class="ln dash"/>
+  <path d="M287,200 H 170 V 114" class="ln dash"/>
+  <text x="322" y="204" class="s">用户取消落在命令执行途中</text>
+  <text x="600" y="190" class="s">注入动作：进程崩溃 · 别的实例接管 · 挂起后续跑 · 重启</text>
+  <text x="600" y="210" class="s">触发方式：按「运行到哪一步」触发（如第 N 次命令开始后），可反复命中同一位置</text>
+</svg>
+</div>
+<p class="cap">图 3　故障点：每个机制最容易出错的边界。</p>
+
+<h3>8.1 固定故障点测试</h3>
+<p>在平台自己的测试里跑，每次改动都跑。用<b>脚本化的模型</b>：预先写好每一步的模型输出（调哪个工具、参数是什么、最后说什么），同一个脚本跑多少遍都走同一条路径。每条命令往一个计数文件追加一行，用来清点副作用。</p>
+<table>
+  <tr><th>故障点</th><th>注入</th><th>必须守住</th></tr>
+  <tr><td>F1 模型返回后、工具开始前</td><td>进程崩溃，另一个实例接管</td><td>这一步的工具最终只执行一次；历史里没有半截的调用</td></tr>
+  <tr><td>F2 命令执行中</td><td>进程崩溃 / 别的实例接管</td><td>命令不重跑：接上原命令拿到结果，或如实告诉模型「结果未知」；副作用计数为 1</td></tr>
+  <tr><td>F3 结果落库前</td><td>进程崩溃</td><td>结果不丢、不重复；事件序号连续</td></tr>
+  <tr><td>F4 等待审批中</td><td>重启；批准落在重启之前 / 之后</td><td>审批不丢、不过期；批准后只执行一次；拒绝的原因回给 Agent</td></tr>
+  <tr><td>F5 子 run 进行中（父已挂起）</td><td>重启；子 run 在重启前 / 后完成</td><td>父 run 只被唤醒一次，结论只回传一次；取消父 run 级联到子 run</td></tr>
+  <tr><td>F6 压缩进行中</td><td>进程崩溃</td><td>历史不损坏；下一轮照常继续，摘要不重复计费</td></tr>
+  <tr><td>F7 取消落在命令执行途中</td><td>用户取消</td><td>命令被中断；run 终态为已取消；不残留运行记录，不挡住沙箱回收</td></tr>
+</table>
+<p><b>判据是「回放等价」</b>：同一个脚本，在任一故障点中断并恢复后，终态要和没中断的那次一致 —— 消息历史（工具调用与结果）、工作区文件、副作用计数、run 终态与用量；事件序列除了重连标记，不缺、不重、不乱序。故障点 × 脚本全排列都跑，任何一格不等价即失败。</p>
+<div class="callout">脚本覆盖三类 run：只有命令的单 Agent；带审批的单 Agent；带委派（子智能体又委派）的多层。每类至少一条脚本经过全部适用的故障点。</div>
+
+<h3>8.2 端到端故障变体</h3>
+<p>在测试环境的真实部署上、用真实模型。同一批工程任务分「干净」与「扰动」两种跑，每种 k 次，按题配对。扰动由评测在轨迹到达某一步时触发（如收到第 N 次命令开始的事件），保证每次打在同一个位置。</p>
+<table>
+  <tr><th>扰动</th><th>触发时机</th><th>期望</th></tr>
+  <tr><td>服务实例被删</td><td>第 N 次命令开始后</td><td>别的实例接管，run 继续完成；有副作用的命令最多执行一次</td></tr>
+  <tr><td>滚动部署</td><td>run 进行中</td><td>同上；客户端带游标重连，事件不丢不重</td></tr>
+  <tr><td>沙箱被删</td><td>命令执行中 / 两条命令之间</td><td>告诉模型环境重建过；工作区文件仍在；Agent 能继续</td></tr>
+  <tr><td>事件流断开</td><td>收到第 N 条事件后</td><td>重连后不丢、不重、不乱序</td></tr>
+  <tr><td>审批迟迟不批</td><td>每次审批等 N 分钟</td><td>run 不被当成超时或孤儿，批准后继续</td></tr>
+  <tr><td>模型服务短暂不可用</td><td>第 N 次模型调用</td><td>按策略重试，或明确失败并给出原因；不半途卡死</td></tr>
+</table>
+<div class="fig">
+<svg viewBox="0 0 1080 220" width="100%" role="img" aria-label="扰动配对">
+  <rect x="10" y="70" width="150" height="80" rx="6" class="c1"/>
+  <text x="85" y="102" text-anchor="middle" class="b">同一道题</text>
+  <text x="85" y="124" text-anchor="middle" class="s">同一配置、同一版本</text>
+  <rect x="220" y="20" width="300" height="70" rx="6" class="c3"/>
+  <text x="370" y="48" text-anchor="middle" class="b">干净运行 × k</text>
+  <text x="370" y="70" text-anchor="middle" class="s">不注入</text>
+  <rect x="220" y="130" width="300" height="70" rx="6" class="c5"/>
+  <text x="370" y="158" text-anchor="middle" class="b">扰动运行 × k</text>
+  <text x="370" y="180" text-anchor="middle" class="s">轨迹到第 N 步时注入（实例被删 / 沙箱被删 / …）</text>
+  <path d="M160,100 H 190 V 55 H 220" class="ln" marker-end="url(#ar)"/>
+  <path d="M160,120 H 190 V 165 H 220" class="ln" marker-end="url(#ar)"/>
+  <rect x="580" y="20" width="230" height="180" rx="6" class="c4"/>
+  <text x="695" y="48" text-anchor="middle" class="b">按题配对</text>
+  <text x="695" y="76" text-anchor="middle" class="s">成功率差（扰动 − 干净）</text>
+  <text x="695" y="96" text-anchor="middle" class="s">与 95% 置信区间</text>
+  <text x="695" y="128" text-anchor="middle" class="s">恢复耗时</text>
+  <text x="695" y="148" text-anchor="middle" class="s">（故障到下一个事件）</text>
+  <text x="695" y="176" text-anchor="middle" class="s">重复执行的命令数</text>
+  <path d="M520,55 H 550 V 100 H 580" class="ln" marker-end="url(#ar)"/>
+  <path d="M520,165 H 550 V 120 H 580" class="ln" marker-end="url(#ar)"/>
+  <rect x="870" y="20" width="200" height="80" rx="6" class="c5"/>
+  <text x="970" y="50" text-anchor="middle" class="b">硬门槛</text>
+  <text x="970" y="72" text-anchor="middle" class="s">任一不变量失败 = 不通过</text>
+  <rect x="870" y="120" width="200" height="80" rx="6" class="c3"/>
+  <text x="970" y="150" text-anchor="middle" class="b">退化</text>
+  <text x="970" y="172" text-anchor="middle" class="s">区间含 0 = 无退化</text>
+  <path d="M810,60 H 870" class="ln" marker-end="url(#ar)"/>
+  <path d="M810,160 H 870" class="ln" marker-end="url(#ar)"/>
+</svg>
+</div>
+<p class="cap">图 4　扰动与干净运行按题配对：不变量决定通过与否，成功率差衡量退化。</p>
+<p>只在测试环境跑；扰动运行之间串行注入，同一时刻只有一个扰动，结论才能归到具体的那一种。</p>
+
+<h3>8.3 记忆评测</h3>
+<p>分两部分：<b>能力</b>（记得对不对）用公开记忆基准；<b>不变量</b>（该隔离的隔离、该删的删掉）自建。</p>
+<div class="fig">
+<svg viewBox="0 0 1080 260" width="100%" role="img" aria-label="记忆评测">
+  <rect x="10" y="60" width="170" height="120" rx="6" class="c1"/>
+  <text x="95" y="86" text-anchor="middle" class="b">基准样本</text>
+  <text x="95" y="110" text-anchor="middle" class="s">若干段历史会话</text>
+  <text x="95" y="130" text-anchor="middle" class="s">一个问题</text>
+  <text x="95" y="150" text-anchor="middle" class="s">标准答案（或应拒答）</text>
+
+  <rect x="230" y="20" width="250" height="90" rx="6" class="c2"/>
+  <text x="355" y="46" text-anchor="middle" class="b">全链路写入（主）</text>
+  <text x="355" y="68" text-anchor="middle" class="s">按原文逐段在平台上重放会话</text>
+  <text x="355" y="88" text-anchor="middle" class="s">Agent 自己记 + 会话结束后补记</text>
+  <rect x="230" y="130" width="250" height="90" rx="6" class="c2"/>
+  <text x="355" y="156" text-anchor="middle" class="b">直接写入（定位用）</text>
+  <text x="355" y="178" text-anchor="middle" class="s">把历史以记忆条目写入，只测「取」</text>
+  <text x="355" y="198" text-anchor="middle" class="s">区分问题出在「记」还是「取」</text>
+  <path d="M180,105 H 205 V 65 H 230" class="ln" marker-end="url(#ar)"/>
+  <path d="M180,135 H 205 V 175 H 230" class="ln" marker-end="url(#ar)"/>
+
+  <rect x="530" y="60" width="180" height="120" rx="6" class="c3"/>
+  <text x="620" y="86" text-anchor="middle" class="b">平台记忆</text>
+  <text x="620" y="110" text-anchor="middle" class="s">每题一个独立评测用户</text>
+  <text x="620" y="130" text-anchor="middle" class="s">题与题互不污染</text>
+  <text x="620" y="150" text-anchor="middle" class="s">跑完清理</text>
+  <path d="M480,65 H 505 V 105 H 530" class="ln" marker-end="url(#ar)"/>
+  <path d="M480,175 H 505 V 135 H 530" class="ln" marker-end="url(#ar)"/>
+
+  <rect x="760" y="60" width="140" height="120" rx="6" class="c4"/>
+  <text x="830" y="86" text-anchor="middle" class="b">新会话提问</text>
+  <text x="830" y="110" text-anchor="middle" class="s">只问基准问题</text>
+  <text x="830" y="130" text-anchor="middle" class="s">不给历史</text>
+  <path d="M710,120 H 760" class="ln" marker-end="url(#ar)"/>
+
+  <rect x="950" y="60" width="120" height="120" rx="6" class="c5"/>
+  <text x="1010" y="86" text-anchor="middle" class="b">判分</text>
+  <text x="1010" y="110" text-anchor="middle" class="s">对照标准答案</text>
+  <text x="1010" y="130" text-anchor="middle" class="s">按能力分组</text>
+  <text x="1010" y="150" text-anchor="middle" class="s">拒答题要明说不知道</text>
+  <path d="M900,120 H 950" class="ln" marker-end="url(#ar)"/>
+
+  <text x="530" y="214" class="s">不变量另起用例：跨用户不可见 · 撤销 / 删除后召回不到 · 关闭记忆的会话不写入 · 暂停期间不写入</text>
+  <text x="530" y="236" class="s">每个不变量都用「先写入、再检验」的成对会话构造，违反即进硬门槛</text>
+</svg>
+</div>
+<p class="cap">图 5　记忆评测：基准样本经平台真实的记忆通路写入，再在新会话里提问。</p>
+<ul>
+  <li><b>基准</b>：LongMemEval，固定版本。它考五种能力：信息抽取、跨会话推理、时间推理、知识更新、拒答（问到没发生过的事要说不知道）。先用只含证据会话的版本（每题几段会话，成本低、只测记忆通路），再用带大量干扰会话的版本（考噪声里的召回）。</li>
+  <li><b>抽样</b>：每种能力抽同样多的题（先每种 10 题），拒答题单独计；固定抽样种子，前后可比。</li>
+  <li><b>判分</b>：模型判分，对照标准答案；知识更新题答出旧值记为「过时」，与答错分开计；拒答题只有明确说不知道才算对。</li>
+</ul>
+<table>
+  <tr><th>指标</th><th>说明</th></tr>
+  <tr><td>分能力准确率</td><td>五种能力各自的准确率，不只报总分</td></tr>
+  <tr><td>拒答正确率</td><td>该拒答时拒答的比例；不该拒答时拒答单独计（过度保守）</td></tr>
+  <tr><td>过时事实率</td><td>知识更新题里答出被取代的旧值的比例 —— 比「答错」更有害</td></tr>
+  <tr><td>写入与成本</td><td>每题写入的条目数、召回耗时、记与取消耗的 token</td></tr>
+</table>
+
+<h3>8.4 上下文压缩评测</h3>
+<p>压缩发生了不等于信息还在。用<b>探针</b>测「压缩后还记得什么」，再用任务成功率测「压缩对做事的影响」，两者一起看。</p>
+<div class="fig">
+<svg viewBox="0 0 1080 240" width="100%" role="img" aria-label="压缩探针">
+  <rect x="10" y="70" width="160" height="90" rx="6" class="c1"/>
+  <text x="90" y="98" text-anchor="middle" class="b">长任务轨迹</text>
+  <text x="90" y="120" text-anchor="middle" class="s">已归档、调低阈值</text>
+  <text x="90" y="138" text-anchor="middle" class="s">使压缩必然发生</text>
+
+  <rect x="220" y="20" width="260" height="90" rx="6" class="c2"/>
+  <text x="350" y="46" text-anchor="middle" class="b">压缩前的完整历史</text>
+  <text x="350" y="68" text-anchor="middle" class="s">生成四类探针 + 参考答案：</text>
+  <text x="350" y="88" text-anchor="middle" class="s">回忆 · 产物 · 接着干 · 决策</text>
+  <rect x="220" y="130" width="260" height="90" rx="6" class="c3"/>
+  <text x="350" y="156" text-anchor="middle" class="b">压缩后的上下文</text>
+  <text x="350" y="178" text-anchor="middle" class="s">摘要 + 保留的近期轮次</text>
+  <text x="350" y="198" text-anchor="middle" class="s">与线上压缩用同一套策略</text>
+  <path d="M170,105 H 195 V 65 H 220" class="ln" marker-end="url(#ar)"/>
+  <path d="M170,125 H 195 V 175 H 220" class="ln" marker-end="url(#ar)"/>
+
+  <rect x="540" y="70" width="180" height="90" rx="6" class="c4"/>
+  <text x="630" y="98" text-anchor="middle" class="b">回答探针</text>
+  <text x="630" y="120" text-anchor="middle" class="s">只能看压缩后的上下文</text>
+  <path d="M480,65 H 510 V 105 H 540" class="ln" marker-end="url(#ar)"/>
+  <path d="M480,175 H 510 V 125 H 540" class="ln" marker-end="url(#ar)"/>
+
+  <rect x="780" y="70" width="140" height="90" rx="6" class="c5"/>
+  <text x="850" y="98" text-anchor="middle" class="b">判分</text>
+  <text x="850" y="120" text-anchor="middle" class="s">正确 · 遗漏 · 编造</text>
+  <path d="M720,115 H 780" class="ln" marker-end="url(#ar)"/>
+
+  <rect x="960" y="40" width="110" height="150" rx="6" class="c3"/>
+  <text x="1015" y="66" text-anchor="middle" class="b">再配对</text>
+  <text x="1015" y="92" text-anchor="middle" class="s">同一批长任务</text>
+  <text x="1015" y="112" text-anchor="middle" class="s">压缩开 / 关</text>
+  <text x="1015" y="132" text-anchor="middle" class="s">成功率差</text>
+  <path d="M920,115 H 960" class="ln" marker-end="url(#ar)"/>
+</svg>
+</div>
+<p class="cap">图 6　压缩探针离线跑在已归档的轨迹上，不用重跑任务；再用开 / 关压缩的配对成功率确认实际影响。</p>
+<table>
+  <tr><th>探针类别</th><th>问什么</th></tr>
+  <tr><td>回忆</td><td>压缩前出现过的具体事实：数值、报错信息、用户给的约束</td></tr>
+  <tr><td>产物</td><td>改过哪些文件、文件里现在是什么、生成了哪些结果</td></tr>
+  <tr><td>接着干</td><td>下一步该做什么、还剩哪些没做</td></tr>
+  <tr><td>决策</td><td>之前为什么选了这个方案、排除了哪些做法</td></tr>
+</table>
+<ul>
+  <li><b>素材</b>：工程场景集与公开集里的长任务轨迹；每个压缩点各出四类探针，参考答案由能看到完整历史的模型生成，抽样人工复核。</li>
+  <li><b>判分</b>：模型判分，看到探针、回答、压缩后的上下文与参考答案；「编造」（答出历史里没有的内容）单独计，比遗漏更严重。</li>
+  <li><b>局限的补偿</b>：探针只测到被问到的信息，所以必须同时看「压缩开 / 关」的配对成功率；关压缩时用足够大的窗口或不触发压缩。</li>
+  <li><b>指标</b>：四类探针各自的得分、编造率、压缩后的成功率差、每次压缩节省的 token。</li>
+</ul>
+
+<h3>8.5 运行节奏</h3>
+<table>
+  <tr><th>评测</th><th>何时跑</th><th>在哪跑</th><th>结论怎么用</th></tr>
+  <tr><td>固定故障点（8.1）</td><td>每次改动</td><td>平台自己的测试</td><td>任一格不等价即不合并</td></tr>
+  <tr><td>端到端故障变体（8.2）</td><td>发版前 / 每周</td><td>测试环境</td><td>不变量进硬门槛；退化进报告</td></tr>
+  <tr><td>记忆（8.3）</td><td>记忆相关改动时 / 每月</td><td>测试环境</td><td>不变量进硬门槛；分能力准确率与上次比</td></tr>
+  <tr><td>上下文压缩（8.4）</td><td>压缩策略或模型改动时</td><td>离线（探针）+ 测试环境（配对）</td><td>探针得分与成功率差一起决定是否采用新策略</td></tr>
+</table>
+</main>
+</body>
+</html>

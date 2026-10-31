@@ -13,12 +13,12 @@ import logging
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
-from ..configplane import ConfigPlaneUnavailable, skill_directory
-from ..configplane.skills import SkillNotFound
 from ..domain.mcp_naming import parse_tool_id
 from ..errors import CapabilityUnavailable, DependencyUnavailable, InvalidReference
 from ..providers.mcp import make_mcp_catalog
 from ..schemas.agent import AgentSpecIn, SkillRefIn
+from ..skills import SkillServiceUnavailable, skill_directory
+from ..skills.directory import SkillNotFound
 
 if TYPE_CHECKING:
     import redis.asyncio as aioredis
@@ -71,11 +71,11 @@ async def _pin_skills(
         return []
     directory = skill_directory(settings)
     if not directory.configured:
-        # 没接配置服务：保持接入前的行为（照 spec 投送），但不再允许没钉死的版本
+        # 没接技能应用：保持接入前的行为（照 spec 投送），但不再允许没钉死的版本
         missing = [r.slug for r in refs if r.version is None]
         if missing:
             raise InvalidReference(
-                "未接入技能目录（CONFIG_BASE_URL），技能引用必须写明版本号", skills=missing
+                "未接入技能目录（SKILL_BASE_URL），技能引用必须写明版本号", skills=missing
             )
         return refs
 
@@ -107,7 +107,7 @@ async def _pin_skills(
                 )
             budget += len(info.description)
             out.append(SkillRefIn(slug=info.slug, version=info.version))
-    except ConfigPlaneUnavailable as exc:
+    except SkillServiceUnavailable as exc:
         # ★ 不能确认技能存在就写进快照，等于允许一份指向空气的配置进库
         raise DependencyUnavailable(f"技能目录暂时不可用，无法保存：{exc}") from exc
 

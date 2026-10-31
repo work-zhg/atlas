@@ -27,9 +27,15 @@ from .platforms.atlas import Answerer, AtlasAgentPlatform, AtlasError, TrialRun
 from .schema import AgentExperimentConfig, Task, TrialResult, VariantConfig
 from .tasks import select_tasks
 from .trajectory import check_expectations, metrics_from_trace
-from .verify import verify_workspace
+from .verify import verify_in_sandbox, verify_workspace
 
-__all__ = ["PLATFORM_ERROR_KINDS", "deep_merge", "run_agent_experiment", "trials_path"]
+__all__ = [
+    "PLATFORM_ERROR_KINDS",
+    "deep_merge",
+    "prepare_agents",
+    "run_agent_experiment",
+    "trials_path",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -183,9 +189,11 @@ async def _attempt(
     except (AtlasError, OSError) as exc:  # 建会话 / 上传 / 发消息失败：评测侧拿不到现场
         return TrialResult(**base, outcome="infra_error", error=str(exc))
     refs = {"thread_id": tr.thread_id, "run_id": tr.run_id, "agent_slug": agent["slug"]}
+    in_sandbox = task.verifier.mode == "sandbox"
     try:
         trace, runs = await platform.collect(tr)
-        files, skipped = await platform.download_workspace(tr)
+        # sandbox 模式在现场校验，不用把工作区下载回来
+        files, skipped = ({}, []) if in_sandbox else await platform.download_workspace(tr)
     except (AtlasError, OSError) as exc:
         return TrialResult(**base, outcome="infra_error", error=f"取结果失败：{exc}", refs=refs)
 
@@ -215,7 +223,10 @@ async def _attempt(
     expectations, expect_ok = check_expectations(task.expect, trace, metrics)
 
     # 即使 run 失败 / 超预算也照样校验：工作区里可能已经做对了（只是没好好收尾）
-    v = await verify_workspace(task, files)
+    if in_sandbox:
+        v = await verify_in_sandbox(platform, tr, task)
+    else:
+        v = await verify_workspace(task, files)
     outcome = "infra_error" if v.infra_error else _classify(tr, v.passed, metrics)
     if cfg.delete_threads:
         await platform.delete_thread(tr)
@@ -233,6 +244,28 @@ async def _attempt(
         expectations=expectations,
         expect_ok=expect_ok,
     )
+
+
+async def prepare_agents(
+    cfg: AgentExperimentConfig, platform: AtlasAgentPlatform, tasks: list[Task]
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    """建好（或找到）被测的智能体 → (各 variant 的, 带 agent_patch 的任务另建的)。
+
+    ★ 带 agent_patch 的任务用「被测配置 + 补丁」另建一个智能体（slug 带配置指纹，可复用）。
+      预先建好：并发的 trial 同时去建同一个 slug 会撞唯一约束。
+    """
+    agents = {v: await platform.prepare(v, vc) for v, vc in cfg.variants.items()}
+    patched: dict[str, dict[str, Any]] = {}
+    for v, vc in cfg.variants.items():
+        for t in tasks:
+            if t.agent_patch and (key := _agent_key(v, t)) not in patched:
+                merged = VariantConfig(
+                    adapter=vc.adapter,
+                    agent=deep_merge(vc.agent, t.agent_patch),
+                    description=vc.description,
+                )
+                patched[key] = await platform.prepare(v, merged)
+    return agents, patched
 
 
 async def run_agent_experiment(
@@ -256,19 +289,7 @@ async def run_agent_experiment(
         run_dir = settings.runs_dir / f"{stamp}-{cfg.name}"
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    agents = {v: await platform.prepare(v, vc) for v, vc in cfg.variants.items()}
-    # ★ 带 agent_patch 的任务用「被测配置 + 补丁」另建一个智能体（slug 带配置指纹，可复用）。
-    #   预先建好：并发的 trial 同时去建同一个 slug 会撞唯一约束
-    patched: dict[str, dict[str, Any]] = {}
-    for v, vc in cfg.variants.items():
-        for t in tasks:
-            if t.agent_patch and (key := _agent_key(v, t)) not in patched:
-                merged = VariantConfig(
-                    adapter=vc.adapter,
-                    agent=deep_merge(vc.agent, t.agent_patch),
-                    description=vc.description,
-                )
-                patched[key] = await platform.prepare(v, merged)
+    agents, patched = await prepare_agents(cfg, platform, tasks)
     manifest = {
         "kind": "agent",
         "config": cfg.model_dump(mode="json"),

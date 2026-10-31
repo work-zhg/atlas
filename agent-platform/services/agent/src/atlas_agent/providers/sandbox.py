@@ -26,19 +26,28 @@ import asyncio
 import logging
 import time
 from collections import OrderedDict
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 import httpx
 from atlas_engine.contracts import ExecuteResponse, SandboxUnavailable
 
 from ..telemetry import tracer
-from .opensandbox import ExecdClient, ExecdGone, ImageDenied, LifecycleError, QuotaExceeded
+from .opensandbox import (
+    ExecdClient,
+    ExecdFiles,
+    ExecdGone,
+    ImageDenied,
+    LifecycleError,
+    QuotaExceeded,
+)
 
 if TYPE_CHECKING:
     from .opensandbox import SandboxEndpoint, SandboxProvisioner
 
-__all__ = ["PodSandbox"]
+__all__ = ["PodSandbox", "SandboxNotRunning", "SandboxProfileDenied", "exec_in_running"]
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +120,7 @@ class PodSandbox:
         user_id: str,
         run_id: str,
         image: str = "",
+        profile: str = "strict",
         poll_min_s: float = 0.3,
         poll_max_s: float = 2.0,
         output_limit: int = 100_000,
@@ -120,6 +130,7 @@ class PodSandbox:
     ) -> None:
         self._p = provisioner
         self._ws, self._user, self._run, self._image = workspace_thread_id, user_id, run_id, image
+        self._profile = profile
         self._poll_min, self._poll_max = poll_min_s, poll_max_s
         self._limit = output_limit
         self._idle_s = idle_s
@@ -191,7 +202,7 @@ class PodSandbox:
         with tracer().start_as_current_span("sandbox.ensure"):
             try:
                 return await self._p.ensure(
-                    self._ws, user=self._user, image=self._image, fresh=fresh
+                    self._ws, user=self._user, image=self._image, profile=self._profile, fresh=fresh
                 )
             except (QuotaExceeded, ImageDenied, LifecycleError) as exc:
                 raise SandboxUnavailable(f"沙箱启动失败：{exc}") from exc
@@ -302,3 +313,68 @@ class PodSandbox:
         task = asyncio.get_running_loop().create_task(interrupt())
         _BACKGROUND.add(task)
         task.add_done_callback(_BACKGROUND.discard)
+
+
+# ─────────────────────────────────────────────────────────────── 直接执行（评测原地校验）
+
+
+class SandboxNotRunning(RuntimeError):
+    """工作区没有正在运行的沙箱。直接执行不新建沙箱。"""
+
+
+class SandboxProfileDenied(RuntimeError):
+    """沙箱的档位不允许直接执行。"""
+
+
+async def exec_in_running(
+    provisioner: SandboxProvisioner,
+    workspace_thread_id: str,
+    *,
+    user_id: str,
+    command: str,
+    profile: str,
+    cwd: str = WORKDIR,
+    timeout: int | None = None,
+    files: Sequence[tuple[str, bytes]] = (),
+    output_limit: int = 100_000,
+    poll_min_s: float = 0.3,
+    poll_max_s: float = 2.0,
+    transport: httpx.AsyncBaseTransport | None = None,
+    files_transport: httpx.BaseTransport | None = None,
+) -> ExecuteResponse:
+    """在工作区**已经在运行**的沙箱里执行一条命令，等它结束（评测在 Agent 的现场里校验）。
+
+    ★ 不新建沙箱：要看的是 Agent 留下的现场。没有就报 SandboxNotRunning —— 新建一个空沙箱去执行，
+      结论就是错的。
+    ★ 只认 profile 这一档（调用方给评测档）：这条路径不经过审批模式。
+    files：执行前先写进沙箱的 (绝对路径, 内容)，父目录要已经存在。
+    """
+    ep = await provisioner.routes.get(workspace_thread_id, fresh=True)
+    actual = await provisioner.profile_of(ep.sandbox_id) if ep else None
+    if ep is None or actual is None:
+        raise SandboxNotRunning(
+            "会话的工作区没有正在运行的沙箱（Agent 没有执行过命令，或已闲置回收）"
+        )
+    if actual != profile:
+        raise SandboxProfileDenied(f"这个沙箱是 {actual} 档，不能直接执行命令")
+    if files:
+        execd = ExecdFiles(ep.url, ep.token, transport=files_transport)
+        try:
+            for path, data in files:
+                await asyncio.to_thread(execd.upload, path, data)
+        except httpx.HTTPError as exc:
+            raise SandboxUnavailable(f"往沙箱里写文件失败：{exc}") from exc
+        finally:
+            execd.close()
+    sandbox = PodSandbox(
+        provisioner=provisioner,
+        workspace_thread_id=workspace_thread_id,
+        user_id=user_id,
+        run_id=f"exec-{uuid4().hex}",
+        profile=actual,
+        poll_min_s=poll_min_s,
+        poll_max_s=poll_max_s,
+        output_limit=output_limit,
+        transport=transport,
+    )
+    return await sandbox.aexecute(command, timeout=timeout, cwd=cwd)

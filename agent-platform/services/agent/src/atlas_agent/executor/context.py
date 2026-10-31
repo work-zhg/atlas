@@ -4,7 +4,7 @@
               拼在系统提示词之后；后面的优先级更高（离具体场景更近）
 
 ★ 记忆不在这里：常驻块与更新提示归 memory/runtime.py（doc/memory-design.html §5）。
-★ 「锦上添花」：配置服务不可用时跳过并记日志，不让这一轮失败。
+★ 「锦上添花」：平台 / 个人指令读不到时跳过并记日志，不让这一轮失败。
 ★ 指令每轮开始时读一次：本轮内不变（保住前缀缓存），修改从下一轮生效。
 """
 
@@ -14,8 +14,9 @@ import logging
 from typing import Any
 from uuid import UUID
 
-from ..config import Settings
-from ..configplane.client import ConfigClient
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from ..services.instruction import InstructionService
 
 __all__ = ["load_instructions"]
 
@@ -47,19 +48,20 @@ async def _workspace_instructions(workspace: Any) -> tuple[str, str] | None:
     return None
 
 
-async def load_instructions(settings: Settings, workspace: Any, user_id: UUID | str | None) -> str:
+async def load_instructions(
+    sessionmaker: async_sessionmaker[AsyncSession], workspace: Any, user_id: UUID | str | None
+) -> str:
     """拼好的持久指令段；什么都没有时返回空串。"""
     layers: list[tuple[str, str]] = []
-    if settings.config_base_url and user_id:
+    if user_id:
         try:
-            got = await ConfigClient(settings.config_base_url).get(
-                "/internal/instructions", user_id=str(user_id)
-            )
-            if got.get("platform"):
-                layers.append(("平台指令（管理员设定，必须遵守）", got["platform"]))
-            if got.get("user"):
-                layers.append(("用户的个人指令", got["user"]))
-        except Exception as exc:  # 配置服务不可用：本轮不带指令，不失败
+            async with sessionmaker() as session:
+                platform, user = await InstructionService(session).for_user(user_id)
+            if platform:
+                layers.append(("平台指令（管理员设定，必须遵守）", platform))
+            if user:
+                layers.append(("用户的个人指令", user))
+        except Exception as exc:  # 读不到：本轮不带指令，不失败
             logger.warning("读取持久指令失败，本轮跳过：%s", exc)
     if found := await _workspace_instructions(workspace):
         path, content = found

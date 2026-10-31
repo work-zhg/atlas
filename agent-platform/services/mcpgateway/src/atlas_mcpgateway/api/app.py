@@ -4,18 +4,21 @@ import asyncio
 import contextlib
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any
 
-import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from starlette.types import Receive, Scope, Send
 
+from .. import tracing
 from ..auth import IdentityHeadersMiddleware
+from ..dataplane import DataPlane
 from ..db.session import get_sessionmaker
 from ..errors import GatewayError
 from ..maintainer import run_maintainer
-from ..perms import Permissions, UCPermissions, UsableCache
-from ..proxy import DataPlane
+from ..perms import AccessCache, Permissions, UCPermissions
 from ..settings import get_settings
+from ..upstreams.hub import Upstreams
 from . import admin, internal
 
 __all__ = ["create_app"]
@@ -24,9 +27,17 @@ __all__ = ["create_app"]
 _MCP_PATHS = ("/mcp/{service}", "/mcp/{service}/")
 
 
+class _McpRoute:
+    """数据面的 ASGI 入口：转给 app 生命周期里建好的 DataPlane。"""
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        await scope["app"].state.data_plane(scope, receive, send)
+
+
 def create_app(*, perms: Permissions | None = None) -> FastAPI:
     """perms 可注入 —— 测试用内存实现；不注入则按设置连用户中心。"""
     settings = get_settings()
+    tracing.setup()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -34,32 +45,29 @@ def create_app(*, perms: Permissions | None = None) -> FastAPI:
         if perms is None:
             owned = UCPermissions(settings.uc_base_url)
             _wire(app, owned)
-        # ★ 不设读超时：工具调用可能要几十秒、推送流更长（调用超时由调用方判）
-        http = httpx.AsyncClient(
-            timeout=httpx.Timeout(
-                connect=settings.connect_timeout_s, read=None, write=60.0, pool=30.0
-            ),
-            limits=httpx.Limits(max_connections=1000, max_keepalive_connections=100),
-            trust_env=False,
-        )
-        app.state.data_plane = DataPlane(settings, get_sessionmaker(), app.state.usable, http)
+        upstreams = Upstreams(settings)
+        app.state.upstreams = upstreams
+        plane = DataPlane(get_sessionmaker(), app.state.perms, app.state.access, upstreams)
+        app.state.data_plane = plane
         maintainer = (
-            asyncio.create_task(run_maintainer(settings))
+            asyncio.create_task(run_maintainer(settings, app.state.perms, upstreams))
             if settings.maintainer_tick_s > 0
             else None
         )
+        await plane.start()
         try:
             yield
         finally:
+            await plane.stop()
             if maintainer is not None:
                 maintainer.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await maintainer
-            await http.aclose()
+            await upstreams.aclose()
             if owned is not None:
                 await owned.aclose()
 
-    app = FastAPI(title="MCP Gateway", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="MCP Gateway", version="0.2.0", lifespan=lifespan)
     if perms is not None:
         _wire(app, perms)
     # 身份请求头透传：管理接口里调用户中心都带上（auth.py）
@@ -80,11 +88,9 @@ def create_app(*, perms: Permissions | None = None) -> FastAPI:
     async def health() -> dict[str, str]:
         return {"status": "ok"}
 
-    async def mcp(request: Request) -> object:
-        return await request.app.state.data_plane.handle(request)
-
+    route: Any = _McpRoute()
     for path in _MCP_PATHS:
-        app.add_route(path, mcp, methods=["GET", "POST", "DELETE"], include_in_schema=False)
+        app.add_route(path, route, methods=["GET", "POST", "DELETE"], include_in_schema=False)
 
     app.include_router(admin.router)
     app.include_router(internal.router)
@@ -93,4 +99,4 @@ def create_app(*, perms: Permissions | None = None) -> FastAPI:
 
 def _wire(app: FastAPI, perms: Permissions) -> None:
     app.state.perms = perms
-    app.state.usable = UsableCache(perms, get_settings().perm_cache_ttl_s)
+    app.state.access = AccessCache(perms, get_settings().perm_cache_ttl_s)

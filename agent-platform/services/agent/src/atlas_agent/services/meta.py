@@ -30,7 +30,7 @@ from atlas_agent.providers.llm.model_platform import (
 from ..config import Settings
 from ..errors import CapabilityUnavailable
 from ..providers.knowledge import KnowledgeUnavailable, readable_as
-from ..providers.mcp import make_mcp_catalog, mcp_subject_access, review_status, tool_id
+from ..providers.mcp import make_mcp_catalog, mcp_agent_access, review_status, tool_id
 from ..repositories.model_catalog import ModelCatalogRepository
 from ..schemas.meta import (
     KnowledgeBaseInfo,
@@ -49,13 +49,25 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class McpSubject:
-    """编辑器按谁的权限列 MCP 工具（MCP 方案设计 §5.2）。
+    """编辑器按谁的权限列知识库（数字员工设计）。
 
     uid 为空 = 以 Agent 为权限、还没有数字员工。
     """
 
     kind: Literal["user", "agent"]
     uid: UUID | None
+
+
+@dataclass(frozen=True)
+class McpAgent:
+    """编辑器按哪个智能体的 Key 列 MCP 工具（与权限类型无关）。
+
+    id 为空 = 新建、还没保存（还没有 Key，只能选公开服务）。owner：补申请 Key 时的负责人。
+    """
+
+    id: UUID | None
+    name: str
+    owner: UUID
 
 
 _MODELS_CACHE_KEY = "models:available"
@@ -215,7 +227,7 @@ class MetaService:
             subject=out,
         )
 
-    async def list_tools(self, *, mcp_subject: McpSubject | None = None) -> ToolListResponse:
+    async def list_tools(self, *, mcp_agent: McpAgent | None = None) -> ToolListResponse:
         # Shell / 记忆是否可用取决于部署是否开启了沙箱、接入了记忆服务 —— 目录不能说谎
         off = set()
         if not self._settings.sandbox_enabled:
@@ -226,18 +238,19 @@ class MetaService:
             t.model_copy(update={"available": False}) if t.name in off else t
             for t in _BUILTIN_TOOLS
         ]
-        if mcp_subject is None or not self._settings.mcp_gateway_url:
+        if mcp_agent is None or not self._settings.mcp_gateway_url:
             return ToolListResponse(data=tools)
-        mcp, subject_out = await self._mcp_tools_for(mcp_subject)
+        mcp, subject_out = await self._mcp_tools_for(mcp_agent)
         tools.extend(mcp)
         return ToolListResponse(data=tools, mcp_subject=subject_out)
 
-    async def _mcp_tools_for(self, subject: McpSubject) -> tuple[list[ToolInfo], McpSubjectOut]:
-        """只列权限主体能用的服务里的工具；没权限的服务只给个数（MCP 方案设计 §9.2）。
+    async def _mcp_tools_for(self, agent: McpAgent) -> tuple[list[ToolInfo], McpSubjectOut]:
+        """只列这个智能体的 Key 能用的服务和工具；别的服务只给个数。
 
-        ★ 按主体问网关：编辑器里看到的和运行时装配的是同一个闸门（§5.4）。
+        ★ 和运行时装配同一个闸门：都问网关「这把 Key 能用什么」。
+        ★ 新建的智能体还没有 Key：只列公开服务。
         """
-        out = McpSubjectOut(kind=subject.kind, uid=subject.uid)
+        out = McpSubjectOut(kind="agent")
         try:
             catalog = await make_mcp_catalog(self._settings, self._redis)
             reviews = catalog.reviews()
@@ -246,40 +259,45 @@ class MetaService:
             out.notes.append(f"MCP 网关暂时不可用：{exc}")
             return [], out
         enabled = [c.name for c in catalog.servers()]
-        if subject.uid is None:
-            out.hidden_servers = len(enabled)
+        if agent.id is None:
+            allowed: dict[str, frozenset[str]] = catalog.public_access()
             out.notes.append(
-                "保存后在 MCP 管理端给这个 Agent 的数字员工发放 API Key、授权 MCP 服务"
+                "新建的智能体只能选公开的 MCP 服务：保存后请服务所有者或 MCP 管理员"
+                "在 MCP 网关给这个智能体的 Key 分配私有服务"
             )
-            return [], out
-        try:
-            access = await mcp_subject_access(self._settings, subject.uid)
-        except CapabilityUnavailable as exc:
-            out.notes.append(f"MCP 网关暂时不可用：{exc}")
-            return [], out
-        out.key_status = access.key_status
-        out.hidden_servers = sum(1 for name in enabled if not access.allows(name))
-        if access.key is None:
-            out.notes.append("还没有可用的 API Key：可以先选，运行时会跳过，并在对话里提示")
-        allowed = [name for name in enabled if access.allows(name)]
+        else:
+            try:
+                access = await mcp_agent_access(
+                    self._settings, agent.id, name=agent.name, owner=agent.owner
+                )
+            except CapabilityUnavailable as exc:
+                out.notes.append(f"MCP 网关暂时不可用：{exc}")
+                return [], out
+            out.uid, out.key_status = UUID(access.subject), access.key_status
+            allowed = dict(access.servers)
+            if access.key is None:
+                out.notes.append("这个智能体的 MCP Key 已停用：可以先选，运行时会跳过并提示")
+        out.hidden_servers = sum(1 for name in enabled if name not in allowed)
         tools: list[ToolInfo] = []
-        for name in allowed:
+        for name in enabled:
+            if name not in allowed:
+                continue
             config = catalog.server(name)
             snap = await catalog.snapshot(name)
             assert config is not None
-            tools.extend(self._tool_infos(name, config, snap, reviews))
+            tools.extend(self._tool_infos(name, config, snap, reviews, allowed[name]))
         return tools, out
 
     @staticmethod
-    def _tool_infos(name: str, config: Any, snap: Any, reviews: Any) -> list[ToolInfo]:
+    def _tool_infos(
+        name: str, config: Any, snap: Any, reviews: Any, allowed: frozenset[str]
+    ) -> list[ToolInfo]:
         out: list[ToolInfo] = []
         for d in snap.tools:
+            if d.name not in allowed:
+                continue  # 工具级授权：没授给这把 Key 的不列
             status = review_status(config, d, reviews)
-            notes = [f"来自 MCP server {name}", *d.issues]
-            if status == "pending_review":
-                notes.append("定义未经复核，暂不可用")
-            elif status == "rejected":
-                notes.append("定义复核未通过")
+            notes = [f"来自 MCP 服务 {name}", *d.issues]
             if snap.error:
                 notes.append(f"最近一次刷新失败：{snap.error}")
             out.append(
