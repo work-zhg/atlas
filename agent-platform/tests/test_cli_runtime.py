@@ -561,7 +561,7 @@ async def test_auto_is_the_default_and_reaches_the_agent(env: Any) -> None:
     assert last(events).type is EventType.RUN_FINISHED
     assert events[0].data["permission_mode"] == "auto"  # run.started 留审计记录
     assert mode_events(events) == [{"requested": "auto", "effective": "auto", "degraded": False}]
-    assert e.app.host._mode_current == "auto"
+    assert e.app.host.modes.current == "auto"
 
 
 async def test_a_stricter_parent_mode_tightens_the_cli(env: Any) -> None:
@@ -572,7 +572,7 @@ async def test_a_stricter_parent_mode_tightens_the_cli(env: Any) -> None:
     e = await env()
     events = await e.run(approval_mode="manual")
     assert events[0].data["permission_mode"] == "manual"
-    assert e.app.host._mode_current == "default"  # 手动 = ACP 的 default modeId
+    assert e.app.host.modes.current == "default"  # 手动 = ACP 的 default modeId
 
 
 async def test_platform_mode_names_are_mapped_both_ways(env: Any) -> None:
@@ -581,7 +581,7 @@ async def test_platform_mode_names_are_mapped_both_ways(env: Any) -> None:
     assert mode_events(events) == [
         {"requested": "accept_edits", "effective": "accept_edits", "degraded": False}
     ]
-    assert e.app.host._mode_current == "acceptEdits"  # 下发的是 ACP modeId
+    assert e.app.host.modes.current == "acceptEdits"  # 下发的是 ACP modeId
 
 
 async def test_degraded_auto_is_visible(env: Any) -> None:
