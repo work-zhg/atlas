@@ -35,27 +35,25 @@ from langchain.agents.middleware.types import (
     AgentMiddleware,
     InputAgentState,
     OutputAgentState,
-    StateT_co,
 )
 from langchain.agents.structured_output import ResponseFormat
+from langchain_anthropic.middleware import AnthropicPromptCachingMiddleware
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import SystemMessage
 from langchain_core.tools import BaseTool
-from langchain_anthropic.middleware import AnthropicPromptCachingMiddleware
 from langgraph.cache.base import BaseCache
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.store.base import BaseStore
 from langgraph.types import Checkpointer
-from langgraph.typing import ContextT
 
 from atlas_engine.contracts import FilesystemProtocol, SubAgentSpawner
 from atlas_engine.kernel.middleware.filesystem import FilesystemMiddleware, FilesystemPermission
-from atlas_engine.kernel.middleware.patch_tool_calls import PatchToolCallsMiddleware
 from atlas_engine.kernel.middleware.skills import SkillRef, SkillsMiddleware
 from atlas_engine.kernel.middleware.subagents import (
     SubAgent,
     SubAgentMiddleware,
 )
+from atlas_engine.kernel.stack import MiddlewareStack, Slot
 
 logger = logging.getLogger(__name__)
 
@@ -137,49 +135,12 @@ class GraphOptions:
     cache: BaseCache | None = None
 
 
-def _apply_custom_middleware(
-    base: list[AgentMiddleware[Any, Any, Any]],
-    custom: Sequence[AgentMiddleware[Any, Any, Any]],
-    *,
-    core_names: set[str] | None = None,
-) -> list[AgentMiddleware[Any, Any, Any]]:
-    """Merge custom middleware into the base stack by name.
-
-    - If its `.name` matches a name still present in `base`: replace in-place,
-      preserving stack order.
-    - Otherwise: a brand-new entry lands after the last `core_names` member (so it
-      precedes the prompt-caching tail), or at the end when
-      `core_names` is unset.
-    """
-    if not custom:
-        return list(base)
-    current_names = {m.name for m in base}
-    replacements: dict[str, AgentMiddleware[Any, Any, Any]] = {}
-    to_append: list[AgentMiddleware[Any, Any, Any]] = []
-    for m in custom:
-        if m.name in current_names:
-            replacements[m.name] = m
-        else:
-            to_append.append(m)
-    result = list(base)
-    for i, m in enumerate(result):
-        if m.name in replacements:
-            result[i] = replacements[m.name]
-    if to_append and core_names is not None:
-        # Land new middleware after the last core entry, ahead of the tail.
-        pos = max((i for i, m in enumerate(result) if m.name in core_names), default=len(result) - 1) + 1
-        result[pos:pos] = to_append
-    else:
-        result.extend(to_append)
-    return result
-
-
 def create_deep_agent(  # noqa: C901, PLR0912, PLR0915  # Complex graph assembly logic with many conditional branches
     model: BaseChatModel,
     tools: Sequence[BaseTool | Callable | dict[str, Any]] | None = None,
     *,
     system_prompt: str | SystemMessage | None = None,
-    middleware: Sequence[AgentMiddleware[StateT_co, ContextT]] = (),
+    middleware: MiddlewareStack | None = None,
     skills: Sequence[SkillRef] | None = None,
     filesystem: FilesystemConfig | None = None,
     subagents: SubAgentConfig | None = None,
@@ -214,24 +175,14 @@ def create_deep_agent(  # noqa: C901, PLR0912, PLR0915  # Complex graph assembly
             Passing a `SystemMessage` preserves any `cache_control` markers
             on its existing content blocks — useful for explicit Anthropic
             prompt-cache breakpoints.
-        middleware: Additional middleware to apply after the base stack
-            but before the tail middleware. The full ordering is:
-
-            Base stack:
-
-            - `SkillsMiddleware` (if `skills` is provided)
-            - `FilesystemMiddleware`
-            - `PatchToolCallsMiddleware`
-
-            *User middleware is inserted here, followed by*
-            `SubAgentMiddleware` (if `subagents` is provided with a non-empty
-            `agents`) —— its tool wrapper must sit inside the caller's
-            approval / resume-dedup wrappers.
-
-            Tail stack:
-
-            - [`AnthropicPromptCachingMiddleware`][langchain_anthropic.middleware.AnthropicPromptCachingMiddleware]
-                when `prompt_cache_ttl` is set (no-ops for non-Anthropic models)
+        middleware: The caller's middleware, each in its slot (`MiddlewareStack`):
+            suspension, ask-user, permission, context, tools, limits. The order
+            comes from the slots only (kernel/stack.py). This function adds its
+            own built-ins to their slots —— `SkillsMiddleware` and
+            `FilesystemMiddleware` first in `TOOLS`, `SubAgentMiddleware` in
+            `SUBAGENTS` —— and appends
+            [`AnthropicPromptCachingMiddleware`][langchain_anthropic.middleware.AnthropicPromptCachingMiddleware]
+            innermost when `prompt_cache_ttl` is set (no-ops for non-Anthropic models).
 
             To run without the `task` tool, pass no subagents via
             `subagents=`.
@@ -312,31 +263,29 @@ def create_deep_agent(  # noqa: C901, PLR0912, PLR0915  # Complex graph assembly
         )
     options = graph if graph is not None else GraphOptions()
 
-    # Build main agent middleware stack
-    deepagent_middleware: list[AgentMiddleware[Any, Any, Any]] = []
+    # ★ 中间件顺序只由槽位决定（kernel/stack.py）。本函数的内置件进各自的槽位：
+    #   技能、文件排在 TOOLS 的最前 —— 大结果外置还挂在 FilesystemMiddleware 的
+    #   wrap_tool_call 上，它要包在调用方的 SandboxMiddleware 外面才接得住 execute 的大输出。
+    stack = MiddlewareStack()
     if skills:
-        deepagent_middleware.append(SkillsMiddleware(skills=skills))
-    deepagent_middleware.append(
-        FilesystemMiddleware(filesystem=fs, _permissions=permissions, tools=filesystem_tools)
+        stack.add(Slot.TOOLS, SkillsMiddleware(skills=skills))
+    stack.add(
+        Slot.TOOLS,
+        FilesystemMiddleware(filesystem=fs, _permissions=permissions, tools=filesystem_tools),
     )
-    deepagent_middleware.append(PatchToolCallsMiddleware())
-
-    # Names of the core stack, captured before the tail is appended so new user
-    # middleware can splice in ahead of the prompt-caching tail.
-    _main_core_names = {m.name for m in deepagent_middleware}
+    if middleware is not None:
+        stack.merge(middleware)
+    stack.extend(Slot.SUBAGENTS, subagent_middleware)
+    deepagent_middleware: list[AgentMiddleware[Any, Any, Any]] = stack.ordered()
     if prompt_cache_ttl is not None:
         # ★ 不是 ChatAnthropic 时它什么也不做（ignore）。「这个模型支不支持缓存」由调用方
         #   按实测能力判断 —— 不支持就别传 TTL，而不是靠这里的类型探测兜底。
+        # ★ 永远在最内层：改系统提示词的中间件都在它外面，缓存前缀才不会每轮失效。
         deepagent_middleware.append(
             AnthropicPromptCachingMiddleware(ttl=prompt_cache_ttl, unsupported_model_behavior="ignore")
         )
     # ★ 不装 HumanInTheLoopMiddleware：它靠 LangGraph 的 interrupt() + checkpointer，
     #   而 Atlas 不用 checkpointer —— 人工审批走调用方的 PermissionMiddleware（挂起）。
-    # ★ SubAgentMiddleware 跟在调用方中间件后面（见模块文档）：它的 awrap_tool_call
-    #   因此在审批与续跑去重**之内**，起子 run 是 `task` 最后一步。
-    deepagent_middleware = _apply_custom_middleware(
-        deepagent_middleware, [*(middleware or []), *subagent_middleware], core_names=_main_core_names
-    )
 
     # ★ 系统提示词就是调用方给的那一份，不按模型追加任何东西。原先的 HarnessProfile
     #   会给特定模型（如 claude-haiku-4-5）悄悄补一段提示词，用户在配置里看不到，

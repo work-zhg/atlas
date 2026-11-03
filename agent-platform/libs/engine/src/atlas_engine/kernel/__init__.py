@@ -36,6 +36,7 @@ from atlas_engine.kernel.middleware.subagents import (
     SubAgent,
     SubAgentMiddleware,
 )
+from atlas_engine.kernel.stack import MiddlewareStack, Slot
 
 __all__ = [
     "FilesystemConfig",
@@ -43,6 +44,8 @@ __all__ = [
     "FilesystemPermission",
     "FsToolName",
     "GraphOptions",
+    "MiddlewareStack",
+    "Slot",
     "SubAgent",
     "SubAgentConfig",
     "SubAgentMiddleware",

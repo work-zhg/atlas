@@ -39,7 +39,6 @@ frontmatter 仍然写进会话副本，但它从**运行时的数据源**降为*
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Sequence
-from atlas_engine.contracts.skills import SkillRef
 
 from langchain.agents.middleware.types import (
     AgentMiddleware,
@@ -49,6 +48,7 @@ from langchain.agents.middleware.types import (
     ResponseT,
 )
 
+from atlas_engine.contracts.skills import SkillRef
 from atlas_engine.kernel.middleware._utils import append_to_system_message
 
 __all__ = ["SKILLS_SYSTEM_PROMPT", "SkillRef", "SkillsMiddleware"]

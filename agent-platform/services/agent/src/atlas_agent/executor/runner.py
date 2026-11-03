@@ -281,7 +281,7 @@ async def run(
         if call.get("id")
     }
     # 被放弃的调用：历史里发起了、没有结果、本段也不在等（不在 waiting_on 里）。
-    # PatchToolCallsMiddleware 给它们补的「已取消」是给模型看的占位，不是本段的工具结果
+    # SuspensionMiddleware 在图入口给它们补的「已取消」是给模型看的占位，不是本段的工具结果
     abandoned = announced - settled - set(waiting_on or {})
     # 「模型读了某个技能的 SKILL.md」→ skill.loaded（技能 / MCP 设计 §7.4）
     skills = SkillLoadTracker(spec.skills)

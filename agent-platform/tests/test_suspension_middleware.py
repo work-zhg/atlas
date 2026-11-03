@@ -22,7 +22,6 @@ from typing import Any
 import pytest
 from atlas_engine.contracts import ApprovalState, ToolEffect, merge_waits
 from atlas_engine.kernel.middleware.approval import REJECTED_RESULT, approval_id_for
-from atlas_engine.kernel.middleware.patch_tool_calls import PatchToolCallsMiddleware
 from atlas_engine.kernel.middleware.permission import PermissionMiddleware
 from atlas_engine.kernel.middleware.suspension import SuspensionMiddleware, release_wait
 from langchain.agents import create_agent
@@ -166,7 +165,7 @@ def _agent(model: TurnModel, gate: ScriptedGate, executed: list[str]) -> Any:
         model,
         tools=tools,
         middleware=[
-            PatchToolCallsMiddleware(),
+            # 图入口的补悬空调用也在 SuspensionMiddleware 里（原先是单独的 PatchToolCallsMiddleware）
             SuspensionMiddleware(),
             PermissionMiddleware(
                 effects={"danger": ToolEffect.EXTERNAL, "write": ToolEffect.WRITE},

@@ -413,7 +413,7 @@ def interrupted_results(rows: Sequence[_StoredLike]) -> StoredMessage | None:
 
     ★ 那些调用的 tool_use 已在检查点里落库（意图记录），结果却没有 —— 进程死在工具
       执行中。是否执行过、执行到哪一步都不知道，如实告诉模型「结果未知」，让它先检查
-      状态再决定是否重试（§5.1）。不补的话 PatchToolCallsMiddleware 会补成「被取消」，
+      状态再决定是否重试（§5.1）。不补的话 SuspensionMiddleware 在图入口会补成「被取消」，
       模型会以为没执行过而直接重放有副作用的调用。
 
     返回 None = 不需要补（没有悬空，或最后一条回答之后已经有新的对话）。

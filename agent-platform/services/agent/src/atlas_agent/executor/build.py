@@ -18,6 +18,7 @@ from atlas_engine.kernel.middleware.ask_user import AskUserMiddleware
 from atlas_engine.kernel.middleware.limits import StepLimitMiddleware, ToolGovernorMiddleware
 from atlas_engine.kernel.middleware.permission import PermissionMiddleware
 from atlas_engine.kernel.middleware.suspension import SuspensionMiddleware
+from atlas_engine.kernel.stack import MiddlewareStack, Slot
 
 from atlas_agent.domain.mcp_naming import parse_tool_id
 from atlas_agent.domain.tool_registry import (
@@ -156,32 +157,21 @@ def build_graph(
             spawner=spawner,
         )
 
-    # ★ 中间件顺序即语义，从外到内分两层显式列出（列表顺序 = 包裹顺序）：
-    #
-    #   外层（顺序敏感）：
-    #     1. suspension 必须最外 —— 它的 before_model 要在任何「为模型调用做
-    #        准备」的工作之前跳出。排在 compactor 后面的话，一个马上就要挂起
-    #        的段可能先触发一次压缩：调一次 LLM、写一次 thread.summary，
-    #        然后才发现这一段根本不调模型。白花钱且把摘要边界搞乱。
-    #     2. ask_user（勾了才装）在 permission 之前 —— 它自己处理自己的工具：问用户在任何模式下都
-    #        允许，而且续跑时这个调用的等待项（reason=approval）不能落到 permission 手里，否则
-    #        「用户不想回答」会被当成「用户拒绝执行该工具」（doc/ask-user-question-design.html）
-    #     3. permission 次之 —— 排后面的话工具已被内层执行掉，再问也来不及。
-    #        ★ 无条件装：问不问人由审批模式决定（doc/native-approval-mode-design.html），
-    #          不再取决于作者有没有配必审工具。规划模式的 exit_plan_mode 也由它提供
-    #     4. compactor 再次之 —— abefore_model 要在其它中间件动手前拿到完整消息列表
-    #   内层（彼此无序）：
-    #     工具中间件 + 步数上限 + 工具并发/熔断（§4.4 / §13.2）
-    #
-    # 新增有序中间件时把它插进 outer 的正确位置并写明理由，不要用 insert(0)。
-    outer: list[Any] = []
+    # ★ 中间件顺序即语义，只在一处定：按槽位交给 MiddlewareStack（atlas_engine/kernel/stack.py
+    #   写着每个槽位为什么在那里）。挂起 → 提问 → 审批 → 上下文 → 工具 → 限额 → 子智能体，
+    #   提示词缓存永远在最内层。这里只说「放进哪个槽位」，不排先后。
+    stack = MiddlewareStack()
     # ★ 无条件装：它无状态、零开销（只扫最后几条消息），而「悬空的 tool_call
     #   续跑时自愈」这条判据对任何 agent 都有价值 —— 不只是配了子智能体或
-    #   高风险工具的那些。
-    outer.append(SuspensionMiddleware())
+    #   高风险工具的那些。图入口的补悬空调用也在它里面。
+    stack.add(Slot.SUSPEND, SuspensionMiddleware())
     if ASK_USER_TOOL in spec.tool_names:
-        outer.append(AskUserMiddleware(gate=approvals))
-    outer.append(
+        # 任何模式都允许提问（doc/ask-user-question-design.html）
+        stack.add(Slot.ASK, AskUserMiddleware(gate=approvals))
+    # ★ 无条件装：问不问人由审批模式决定（doc/native-approval-mode-design.html），
+    #   不再取决于作者有没有配必审工具。规划模式的 exit_plan_mode 也由它提供
+    stack.add(
+        Slot.PERMISSION,
         PermissionMiddleware(
             effects=tool_effects([*(extra_tools or ()), *(deferred_tools or ())]),
             default_mode=spec.approval.default_mode,
@@ -189,28 +179,25 @@ def build_graph(
             execution_modes=spec.approval.execution_modes(),
             irreversible=irreversible_tools(),
             judge=judge,
-        )
+        ),
     )
     if compactor is not None:
-        outer.append(compactor)
-
-    inner: list[Any] = []
-    # ★ sandbox 在 filesystem 之后、治理中间件之前：大结果外置挂在
-    #   FilesystemMiddleware 的 wrap_tool_call 上，而它的主要服务对象正是
-    #   execute（文件工具都在 TOOLS_EXCLUDED_FROM_EVICTION 里，它们自己有
-    #   分页）。filesystem 必须在外层才接得住 sandbox 的大输出。
+        stack.add(Slot.CONTEXT, compactor)
+    # ★ sandbox 排在 filesystem 后面（同一槽位按交进来的先后，filesystem 由内核先放）：
+    #   大结果外置挂在 FilesystemMiddleware 的 wrap_tool_call 上，它的主要服务对象正是
+    #   execute（文件工具自己有分页）。
     if sandbox is not None:
         from atlas_engine.kernel.middleware.sandbox import SandboxMiddleware
 
-        inner.append(SandboxMiddleware(sandbox=sandbox))
+        stack.add(Slot.TOOLS, SandboxMiddleware(sandbox=sandbox))
     # 延迟工具（上下文管理 §13）：MCP 工具多时只给名字，模型用 tool_search 按需加载定义
     if deferred_tools:
         from atlas_engine.kernel.middleware.tool_search import ToolSearchMiddleware
 
-        inner.append(ToolSearchMiddleware(deferred_tools))
-    inner.extend(middleware_for(set(spec.tool_names)))
-    inner.append(StepLimitMiddleware(spec.limits.max_steps))
-    inner.append(ToolGovernorMiddleware(concurrency=spec.limits.tool_concurrency))
+        stack.add(Slot.TOOLS, ToolSearchMiddleware(deferred_tools))
+    stack.extend(Slot.TOOLS, middleware_for(set(spec.tool_names)))
+    stack.add(Slot.LIMITS, StepLimitMiddleware(spec.limits.max_steps))
+    stack.add(Slot.LIMITS, ToolGovernorMiddleware(concurrency=spec.limits.tool_concurrency))
 
     return create_deep_agent(
         model=model,
@@ -228,7 +215,7 @@ def build_graph(
             if filesystem is not None
             else None
         ),
-        middleware=[*outer, *inner],
+        middleware=stack,
         # 没配子智能体（或深度为 0）是 None：kernel 不装 task
         subagents=subagent_config,
         prompt_cache_ttl=prompt_cache_ttl,
