@@ -4,9 +4,8 @@ from uuid import UUID
 
 from fastapi import APIRouter
 
-from ...approval import ApprovalService
 from ...auth.authz import PrincipalDep, ensure_run_owner
-from ...deps import ExecutorDep, RunServiceDep, SessionDep
+from ...deps import ApprovalServiceDep, RunServiceDep, SessionDep
 from ...errors import NotFound
 from ...schemas.run import (
     ApprovalDecision,
@@ -51,7 +50,7 @@ async def cancel_run(
 
 @router.get("/{run_id}/approvals", response_model=PendingApprovalList)
 async def list_pending_approvals(
-    run_id: UUID, session: SessionDep, principal: PrincipalDep
+    run_id: UUID, session: SessionDep, principal: PrincipalDep, approvals: ApprovalServiceDep
 ) -> PendingApprovalList:
     """该 run 上还没决策的确认项。
 
@@ -60,7 +59,7 @@ async def list_pending_approvals(
     这个端点直接查库，是更硬的恢复路径。
     """
     await ensure_run_owner(session, run_id, principal)
-    rows = await ApprovalService(session).pending(run_id)
+    rows = await approvals.pending(run_id)
     return PendingApprovalList(
         data=[
             PendingApproval(
@@ -83,7 +82,7 @@ async def decide_approval(
     payload: ApprovalDecision,
     session: SessionDep,
     principal: PrincipalDep,
-    executor: ExecutorDep,
+    approvals: ApprovalServiceDep,
 ) -> ApprovalOut:
     """批准或拒绝一次工具调用、规划模式提交的计划（doc/native-approval-mode-design.html），
     或回答智能体提的问题（doc/ask-user-question-design.html）。
@@ -94,8 +93,7 @@ async def decide_approval(
     # ★ 归属按审批**实际所在**的 run 判：只看路径里的 run 会让人拿自己的 run id
     #   去批别人的审批（子智能体的审批可能挂在子 run 上，所以不要求两者相等）
     await ensure_run_owner(session, run_id, principal, write=True)
-    # 做了决定由审批组件通知执行器续跑（DecisionListener）
-    approvals = ApprovalService(session, listener=executor)
+    # 做了决定由审批组件通知执行器续跑（DecisionListener，接线在 deps.get_approval_service）
     approval = await approvals.get(approval_id)
     if approval is None:
         raise NotFound("确认项不存在", approval_id=str(approval_id))

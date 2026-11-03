@@ -40,7 +40,7 @@
       "kind": "class",
       "name": "ToolSurface",
       "stereotype": "应用服务",
-      "responsibility": "本领域的入口：按智能体勾选的工具，为一段交出工具中间件（槽位 ⑤）和限额（槽位 ⑦）、模型看到的工具提示段，以及每个工具的副作用类别（交给审批）。外部工具（MCP、知识库、记忆）由别的组件构造好交进来，这里只负责装上和声明类别。",
+      "responsibility": "本领域的入口：按智能体勾选的工具，为一段交出工具中间件（槽位 ⑤）和限额（槽位 ⑥）、模型看到的工具提示段，以及每个工具的副作用类别（交给审批）。外部工具（MCP、知识库、记忆）由别的组件构造好交进来，这里只负责装上和声明类别。",
       "methods": [
         [
           "+",
@@ -358,7 +358,7 @@
       "from": "surface",
       "to": "gov",
       "type": "uses",
-      "description": "creates（槽位 ⑦）"
+      "description": "creates（槽位 ⑥）"
     },
     {
       "from": "surface",
@@ -427,7 +427,7 @@
       "name": "接上本段的工具",
       "entry": "ToolSurface.contribute(segment)",
       "callers": "一轮的编排（CapabilityAssembly）",
-      "description": "按勾选的工具装中间件（槽位 ⑤）和限额（槽位 ⑦），给出工具提示段和每个工具的副作用类别"
+      "description": "按勾选的工具装中间件（槽位 ⑤）和限额（槽位 ⑥），给出工具提示段和每个工具的副作用类别"
     },
     {
       "name": "工具目录",
