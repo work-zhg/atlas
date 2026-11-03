@@ -64,7 +64,7 @@ def make_spec(kind: str = "native") -> AgentSpec:
         system_prompt="",
         model=ModelSpec(model="claude-sonnet-5"),
         kind=kind,  # type: ignore[arg-type]
-        cli=CliSpec(cli_type="claude-code") if kind == "acp" else None,
+        cli=CliSpec(cli_type="claude-code") if kind == "cli" else None,
     )
 
 
@@ -193,7 +193,7 @@ def test_duplicate_tool_started_makes_one_span(traced) -> None:
     两条的 call_id 相同。不去重的话，Jaeger 上每次工具调用都会出现一个
     永远不结束的影子 span。
     """
-    with RunTrace.start(_Prepared(make_spec("acp")), run_id=str(RUN_ID)) as rt:
+    with RunTrace.start(_Prepared(make_spec("cli")), run_id=str(RUN_ID)) as rt:
         for e in events_of(
             (EventType.TOOL_STARTED, {"call_id": "c1", "name": "Write"}),
             (EventType.TOOL_STARTED, {"call_id": "c1", "name": "Write /workspace/a.md"}),
@@ -332,12 +332,6 @@ async def test_requesting_an_approval_is_recorded_as_a_span(traced, monkeypatch)
 
     monkeypatch.setattr(approval_mod, "ApprovalRepository", _Approvals)
 
-    class _Runs:
-        def __init__(self, _session: object) -> None: ...
-        async def set_status(self, *_a: object) -> None: ...
-
-    monkeypatch.setattr(approval_mod, "RunRepository", _Runs)
-
     # ★ 没有 timeout_s 了：超时判定搬到恢复扫描（S8）
     gate = RedisApprovalGate(_Maker(), None, RUN_ID)
     state = await gate.check(approval_id=str(THREAD_ID), tool_name="Write /workspace/a.md", args={})
@@ -412,7 +406,7 @@ def test_session_is_the_root_thread_and_user_is_the_owner(traced) -> None:
     """★ 子 run 在子会话上，但归到根会话那个 Session（P1）；用户 = 会话所有者（P9）。"""
     parent_run = "12121212-1212-1212-1212-121212121212"
     with RunTrace.start(
-        _Run(make_spec("acp"), parent_thread=ROOT_THREAD, base_depth=1),
+        _Run(make_spec("cli"), parent_thread=ROOT_THREAD, base_depth=1),
         run_id=str(RUN_ID),
         parent_run_id=parent_run,
     ):
@@ -425,13 +419,13 @@ def test_session_is_the_root_thread_and_user_is_the_owner(traced) -> None:
     assert attrs[sc.PARENT_RUN_ID] == parent_run
     assert attrs[f"{sc.LF_TRACE_METADATA}parent_run_id"] == parent_run
     assert attrs[sc.LF_TRACE_NAME] == "analyst"
-    assert list(attrs[sc.LF_TRACE_TAGS]) == ["acp", "analyst"]
+    assert list(attrs[sc.LF_TRACE_TAGS]) == ["cli", "analyst"]
     assert attrs[sc.LF_OBSERVATION_TYPE] == sc.OBS_AGENT
 
 
 def test_child_run_keeps_its_own_steps(traced) -> None:
     """★ P10：子 run 自己的事件 depth = 1（base_depth），原先被当成别人的内部步骤整个丢掉。"""
-    run = _Run(make_spec("acp"), parent_thread=ROOT_THREAD, base_depth=1)
+    run = _Run(make_spec("cli"), parent_thread=ROOT_THREAD, base_depth=1)
     with RunTrace.start(run, run_id=str(RUN_ID)) as rt:
         for e in events_of(
             (EventType.TOOL_STARTED, {"call_id": "c1", "name": "Write"}),
@@ -448,7 +442,7 @@ def test_child_run_keeps_its_own_steps(traced) -> None:
 
 def test_acp_turn_usage_becomes_one_synthetic_generation(traced) -> None:
     """★ CLI 内部的模型调用看不到：用一轮的总用量合成一个 Generation 计费（P5）。"""
-    with RunTrace.start(_Run(make_spec("acp")), run_id=str(RUN_ID)) as rt:
+    with RunTrace.start(_Run(make_spec("cli")), run_id=str(RUN_ID)) as rt:
         rt.observe(
             events_of(
                 (
@@ -520,7 +514,7 @@ def test_resumed_segment_does_not_repeat_the_input(traced, capture) -> None:
 
 
 def test_mode_and_denial_become_root_events(traced) -> None:
-    with RunTrace.start(_Run(make_spec("acp")), run_id=str(RUN_ID)) as rt:
+    with RunTrace.start(_Run(make_spec("cli")), run_id=str(RUN_ID)) as rt:
         for e in events_of(
             (EventType.AGENT_MODE, {"requested": "auto", "effective": "auto", "degraded": False}),
             (EventType.TOOL_STARTED, {"call_id": "c1", "name": "Bash"}),

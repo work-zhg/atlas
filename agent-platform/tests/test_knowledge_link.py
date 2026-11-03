@@ -73,7 +73,7 @@ def test_spec_snapshot_and_validation() -> None:
     acp = AgentSpecIn.model_validate(
         {
             "model": {"model": "claude-sonnet-5"},
-            "kind": "acp",
+            "kind": "cli",
             "cli": {"cli_type": "claude", "adapter": "x", "image": "y"},
             "knowledge": {"dataset_ids": ["a"], "mode": "auto"},
         }

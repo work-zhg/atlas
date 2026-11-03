@@ -475,7 +475,7 @@ def test_usage_update_becomes_context_usage() -> None:
             EventType.CONTEXT_USAGE,
             {
                 "tokens": 42_000,
-                "basis": "acp",
+                "basis": "cli",
                 "context_window": 200_000,
                 "effective_window": 200_000,
             },

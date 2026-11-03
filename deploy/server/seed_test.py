@@ -81,7 +81,7 @@ AGENT = {
                     "完成后简要说明做了什么、改了哪些文件。git 仓库放 /repos，不要放进 /workspace。"
                 ),
                 "model": {"model": "deepseek-v4-pro", "provider": "anthropic"},
-                "kind": "acp",
+                "kind": "cli",
                 "cli": {
                     "cli_type": "claude-code",
                     "adapter": "node /opt/acp-cli/bin/claude-acp",

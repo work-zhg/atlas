@@ -11,7 +11,7 @@ import { AgentCard } from "@/features/agents/AgentCard";
 import styles from "@/features/agents/agents.module.css";
 
 type Scope = AgentStatus | "all";
-type Kind = "all" | "native" | "acp";
+type Kind = "all" | "native" | "cli";
 
 const SCOPES: { value: Scope; label: string }[] = [
   { value: "all", label: "全部" },
@@ -75,7 +75,7 @@ export default function AgentsPage() {
             options={[
               { value: "all", label: "全部类型" },
               { value: "native", label: "Native" },
-              { value: "acp", label: "ACP · CLI" },
+              { value: "cli", label: "CLI" },
             ]}
           />
           <Segmented

@@ -112,7 +112,7 @@ def test_agent_summary_exposes_capabilities() -> None:
             "subagents": [
                 {
                     "name": "claude-code",
-                    "kind": "acp",
+                    "kind": "cli",
                     "cli": {"cli_type": "claude-code", "permission_mode": "auto"},
                 },
                 {"name": "searcher"},
@@ -123,7 +123,7 @@ def test_agent_summary_exposes_capabilities() -> None:
     assert (out.kind, out.builtin_tool_count, out.skill_count) == ("native", 2, 2)
     assert out.mcp_servers == ["github", "serpapi"]
     assert out.subagents == [
-        {"name": "claude-code", "kind": "acp", "permission_mode": "auto"},
+        {"name": "claude-code", "kind": "cli", "permission_mode": "auto"},
         {"name": "searcher", "kind": "native", "permission_mode": None},
     ]
     # 历史快照没有这些字段也不出错

@@ -81,7 +81,7 @@ export function ContextMeter({
   return (
     <>
       <Tooltip
-        title={`上下文已用 ${fmt(usage.tokens)} / ${fmt(eff)} tokens（${usage.basis === "usage" ? "模型实际用量" : usage.basis === "acp" ? "CLI 上报" : "估算"}）`}
+        title={`上下文已用 ${fmt(usage.tokens)} / ${fmt(eff)} tokens（${usage.basis === "usage" ? "模型实际用量" : usage.basis === "cli" ? "CLI 上报" : "估算"}）`}
       >
         <button
           type="button"
@@ -123,7 +123,7 @@ export function ContextMeter({
             {fmt(usage.tokens)} / {fmt(eff)} tokens（{pct}%）
             {usage.basis !== "usage" && (
               <Tag style={{ marginLeft: 8 }}>
-                {usage.basis === "acp" ? "CLI 上报" : "估算"}
+                {usage.basis === "cli" ? "CLI 上报" : "估算"}
               </Tag>
             )}
           </Descriptions.Item>
@@ -196,7 +196,7 @@ export function ContextMeter({
             message="自动压缩连续失败，已暂停；可以手动压缩或新开会话"
           />
         )}
-        {usage.basis === "acp" ? (
+        {usage.basis === "cli" ? (
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             这个智能体由 CLI 自行管理上下文，平台只显示用量。
           </Typography.Text>

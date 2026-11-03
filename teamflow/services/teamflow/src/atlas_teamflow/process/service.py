@@ -528,7 +528,7 @@ class ProcessService:
 
     async def _shell_capability_notice(self, ta: TeamAgent) -> str | None:
         """产物要由 Agent 在 Pod 里用 git 提交：执行 Agent 必须能执行命令
-        （ACP 类 Agent，或带 ACP 子智能体的原生 Agent）。查不到时不拦，只在运行中暴露。"""
+        （CLI 类 Agent，或带 CLI 子智能体的原生 Agent）。查不到时不拦，只在运行中暴露。"""
         atlas = getattr(self.teams, "atlas", None) if self.teams else None
         if atlas is None:
             return None
@@ -538,10 +538,10 @@ class ProcessService:
             return None
         if not a:
             return f"执行 Agent「{ta.name}」在 Atlas 中不存在，请团队管理员更换分配"
-        if a.get("kind") == "acp" or any(s.get("kind") == "acp" for s in a.get("subagents") or []):
+        if a.get("kind") == "cli" or any(s.get("kind") == "cli" for s in a.get("subagents") or []):
             return None
         return (
-            f"执行 Agent「{ta.name}」不能执行命令（需要 ACP 类 Agent，或带 ACP 子智能体），"
+            f"执行 Agent「{ta.name}」不能执行命令（需要 CLI 类 Agent，或带 CLI 子智能体），"
             "无法向产物仓库提交，请到 Atlas 配置或更换分配"
         )
 

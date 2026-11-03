@@ -160,7 +160,7 @@ def translate_update(update: Any) -> list[EventIntent]:
         return [
             (
                 EventType.CONTEXT_USAGE,
-                {"tokens": used, "basis": "acp", "context_window": size, "effective_window": size},
+                {"tokens": used, "basis": "cli", "context_window": size, "effective_window": size},
             )
         ]
 

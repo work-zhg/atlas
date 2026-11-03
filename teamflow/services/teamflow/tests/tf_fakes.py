@@ -483,7 +483,7 @@ class FakeAtlas:
             async with self._cond:
                 await self._cond.wait()
 
-    def add(self, name: str, status: str = "enabled", kind: str = "acp") -> str:
+    def add(self, name: str, status: str = "enabled", kind: str = "cli") -> str:
         aid = str(uuid.uuid4())
         self.agents[aid] = {
             "id": aid,

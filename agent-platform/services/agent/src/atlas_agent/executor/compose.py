@@ -29,14 +29,14 @@ def build_executor(
     settings: Settings,
     *,
     model_builder: ModelBuilder | None = None,
-    acp_runtime: Any = None,
+    cli_runtime: Any = None,
     memory: MemoryRuntime | None = None,
     instance: str | None = None,
 ) -> RunWorker:
     """装配一个实例上的 Run 执行器。
 
     model_builder  可注入：单测塞一个假模型，整条执行链路即可脱离网络运行
-    acp_runtime    None = 本部署没接会话 Pod：kind="acp" 的智能体明确报错，不悄悄按 native 跑
+    cli_runtime    None = 本部署没接会话 Pod：kind="cli" 的智能体明确报错，不悄悄按 native 跑
     instance       租约的 owner；默认取本进程的实例号（测试里可以在一个进程里扮演几个实例）
     """
     build_model = model_builder or default_model_builder
@@ -57,7 +57,7 @@ def build_executor(
         # 常驻记忆与记忆工具（doc/memory-design.html §4–§5）
         memory=memory,
     )
-    runtimes = RuntimeRegistry(native=NativeRuntime(assembly), acp=acp_runtime)
+    runtimes = RuntimeRegistry(native=NativeRuntime(assembly), cli=cli_runtime)
     continuation = Continuation(sessionmaker, settings, instance=owner, requeue=submit)
     segment = SegmentExecution(
         sessionmaker, settings, instance=owner, runtimes=runtimes, continuation=continuation

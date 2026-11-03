@@ -200,20 +200,20 @@ def _classify_assembly_error(exc: Exception) -> tuple[str, str, dict[str, object
 
 
 def select_runtime(
-    prepared: PreparedRun, *, native: NativeRuntime, acp: AgentRuntime | None = None
+    prepared: PreparedRun, *, native: NativeRuntime, cli: AgentRuntime | None = None
 ) -> AgentRuntime:
     """按 agent 类型选执行方式。
 
     刻意做成函数而不是 if 散在执行器里：选择的依据（spec）与可选项（runtime
     实例）都摆在签名上，加一种类型时一眼看得出要补什么。
 
-    ★ kind="acp" 但没注入 HostRuntime 时**报错**，不静默回落 native ——
+    ★ kind="cli" 但没注入 CLI 运行时时**报错**，不静默回落 native ——
       回落的后果是「配了 CLI 助理，实际跑的是进程内 LangGraph」，两者的
       工具面与上下文语义完全不同，而事件流上看不出区别（§13.2）。
     """
-    if prepared.spec.kind == "acp":
-        if acp is None:
-            msg = "agent 的 kind='acp' 但未注入 HostRuntime（需配置 acp 执行环境）"
+    if prepared.spec.kind == "cli":
+        if cli is None:
+            msg = "agent 的 kind='cli' 但未注入 CLI 运行时（需配置会话 Pod 执行环境）"
             raise InvalidSpec(msg, agent=prepared.spec.slug)
-        return acp
+        return cli
     return native

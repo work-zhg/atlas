@@ -21,7 +21,7 @@ const MODE_SHORT: Record<string, string> = {
 export function AgentCard({ agent }: { agent: Agent }) {
   const router = useRouter();
   const status = AGENT_STATUS_META[agent.status];
-  const isAcp = agent.kind === "acp";
+  const isCli = agent.kind === "cli";
 
   return (
     <div
@@ -61,7 +61,7 @@ export function AgentCard({ agent }: { agent: Agent }) {
       <p className={styles.cardDesc}>{agent.description || "暂无描述"}</p>
 
       <div className={styles.cardTags}>
-        {isAcp ? (
+        {isCli ? (
           <Tag color="orange" style={{ marginInlineEnd: 0 }}>
             ACP · CLI
           </Tag>
@@ -91,11 +91,11 @@ export function AgentCard({ agent }: { agent: Agent }) {
         {agent.subagents.map((s) => (
           <Tag
             key={String(s.name)}
-            color={s.kind === "acp" ? "orange" : "processing"}
+            color={s.kind === "cli" ? "orange" : "processing"}
             style={{ marginInlineEnd: 0 }}
           >
             → {String(s.name)}
-            {s.kind === "acp" && ` · ${MODE_SHORT[String(s.permission_mode ?? "auto")] ?? s.permission_mode}`}
+            {s.kind === "cli" && ` · ${MODE_SHORT[String(s.permission_mode ?? "auto")] ?? s.permission_mode}`}
           </Tag>
         ))}
       </div>

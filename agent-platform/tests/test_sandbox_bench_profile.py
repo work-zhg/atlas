@@ -328,7 +328,7 @@ def test_native_subagent_inherits_the_sandbox_and_acp_one_does_not() -> None:
                 description="",
                 system_prompt="",
                 model=_model(),
-                kind="acp",
+                kind="cli",
                 cli=CliSpec(cli_type="claude-code", image="img"),
             ),
         ),
@@ -344,7 +344,7 @@ def test_acp_agent_rejects_a_sandbox_config() -> None:
         name="a",
         system_prompt="",
         model=_model(),
-        kind="acp",
+        kind="cli",
         cli=CliSpec(cli_type="claude-code", image="img"),
         sandbox=SandboxSpec(image="x"),
     )

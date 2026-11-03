@@ -110,21 +110,21 @@ class SegmentControl(Protocol):
     settled: bool
     lost: bool
     drain: bool
-    acp: bool
+    cli: bool
 
 
 class RuntimeRegistry:
-    """按智能体类型选运行时。运行时由组合根注册（native 必有，acp 部署接了才有）。
+    """按智能体类型选运行时。运行时由组合根注册（native 必有，cli 部署接了才有）。
 
     ★ 选择只在这里发生一次：散在执行器里的话，加一种智能体类型要找齐所有分支点。
     """
 
-    def __init__(self, *, native: NativeRuntime, acp: AgentRuntime | None = None) -> None:
+    def __init__(self, *, native: NativeRuntime, cli: AgentRuntime | None = None) -> None:
         self._native = native
-        self._acp = acp
+        self._cli = cli
 
     def select(self, prepared: PreparedRun) -> AgentRuntime:
-        return select_runtime(prepared, native=self._native, acp=self._acp)
+        return select_runtime(prepared, native=self._native, cli=self._cli)
 
 
 class SegmentLoader:
@@ -163,10 +163,10 @@ class SegmentLoader:
             else run.approval_mode
         )
 
-        # acp：会话的接续信息（cli_session）。会话级的，跨 run、跨实例都从库里读
+        # CLI 智能体：会话的接续信息（cli_session）。会话级的，跨 run、跨实例都从库里读
         cli: dict[str, Any] = {}
         cli_sessions = CliSessionRepository(session)
-        if spec.kind == "acp" and (row := await cli_sessions.get(thread.thread_uuid)):
+        if spec.kind == "cli" and (row := await cli_sessions.get(thread.thread_uuid)):
             cli = {
                 "cli_session_id": row.agent_session_id,
                 "cli_bridge_instance": row.bridge_instance,
@@ -375,7 +375,7 @@ class SegmentExecution:
                 await records.mark_running(run_id)
                 await session.commit()
 
-            slot.acp = prepared.spec.kind == "acp"
+            slot.cli = prepared.spec.kind == "cli"
             last_seq = prepared.start_seq
             # 会话锁跟随租约（§4.4）：接管时原来的锁多半已经过期，重新占上
             with contextlib.suppress(Exception):
@@ -386,7 +386,7 @@ class SegmentExecution:
                 collected.append(
                     await relay.publish(resumed, thread_id=stream_thread_id, floor=seq_floor)
                 )
-            if slot.drain and slot.acp:
+            if slot.drain and slot.cli:
                 raise asyncio.CancelledError  # 领到时已在停机：直接交回去
 
             assistant_content: list[dict] | None = None

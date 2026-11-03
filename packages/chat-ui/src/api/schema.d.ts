@@ -1243,7 +1243,7 @@ export interface components {
              * @default native
              * @enum {string}
              */
-            kind: "native" | "acp";
+            kind: "native" | "cli";
             cli?: components["schemas"]["CliSpecIn"] | null;
             /** Mcp Tool Digests */
             mcp_tool_digests?: {
@@ -2384,7 +2384,7 @@ export interface components {
              * @default native
              * @enum {string}
              */
-            kind: "native" | "acp";
+            kind: "native" | "cli";
             cli?: components["schemas"]["CliSpecIn"] | null;
             /** Mcp Tool Digests */
             mcp_tool_digests?: {

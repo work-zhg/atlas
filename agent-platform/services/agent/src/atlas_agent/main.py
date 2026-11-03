@@ -82,8 +82,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.executor = build_executor(
         get_sessionmaker(),
         settings,
-        # acp agent 的执行：经会话 Pod 里的 bridge（上游协议 atlas.host.v1）
-        acp_runtime=HostRuntime(get_sessionmaker(), settings, pods),
+        # CLI 智能体的执行：经会话 Pod 里的 bridge（上游协议 atlas.host.v1）
+        cli_runtime=HostRuntime(get_sessionmaker(), settings, pods),
         memory=memory,
     )
 

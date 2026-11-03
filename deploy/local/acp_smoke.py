@@ -55,7 +55,7 @@ def ensure_agent() -> str:
             "slug": SLUG,
             "name": "ACP 冒烟",
             "spec": {
-                "kind": "acp",
+                "kind": "cli",
                 "system_prompt": "你是跑在会话 Pod 里的助手。工作区是当前目录。",
                 "model": {"model": "deepseek-chat", "provider": "anthropic"},
                 "cli": {"cli_type": "claude-code", "adapter": ADAPTER, "image": IMAGE},

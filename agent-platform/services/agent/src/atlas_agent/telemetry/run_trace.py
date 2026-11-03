@@ -426,7 +426,7 @@ class RunTrace:
             value = data.get(key)
             if isinstance(value, int):
                 self._root.set_attribute(total_attr, value)
-        if self._kind != "acp":
+        if self._kind != "cli":
             return
 
         from opentelemetry import trace as ot

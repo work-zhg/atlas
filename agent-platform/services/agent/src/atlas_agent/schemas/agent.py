@@ -108,7 +108,7 @@ class SubAgentSpecIn(BaseModel):
     #: 子会话的压缩配置。None = 继承主 agent 的。
     compaction: CompactionSpecIn | None = None
     #: 子智能体自己的执行形态 —— native 主 agent 可以委派给 acp 子智能体。
-    kind: Literal["native", "acp"] = "native"
+    kind: Literal["native", "cli"] = "native"
     cli: CliSpecIn | None = None
     #: 见 AgentSpecIn.mcp_tool_digests
     mcp_tool_digests: dict[str, str] = Field(default_factory=dict)
@@ -233,7 +233,7 @@ class AgentSpecIn(BaseModel):
     limits: LimitSpecIn = Field(default_factory=LimitSpecIn)
     compaction: CompactionSpecIn = Field(default_factory=CompactionSpecIn)
     #: 默认 native —— 历史快照没有这两个字段，反序列化照常
-    kind: Literal["native", "acp"] = "native"
+    kind: Literal["native", "cli"] = "native"
     cli: CliSpecIn | None = None
     #: 保存时记录的 MCP 工具定义指纹 {mcp:server:tool → digest}。
     #: ★ 服务端填写（AgentService），请求里传来的值会被覆盖 —— 指纹的意义是

@@ -50,7 +50,8 @@ class ExecutionSlot:
     lost: bool = False
     #: 停机中：native 到安全点就交接
     drain: bool = False
-    acp: bool = False
+    #: CLI 智能体：停机时直接断开（那一轮在 Pod 里照常进行）
+    cli: bool = False
 
 
 class RunWorker:
@@ -372,7 +373,7 @@ class RunWorker:
             logger.info("停机：交接 %d 个在跑的 run", len(slots))
         for slot in slots:
             slot.drain = True
-            if slot.acp and slot.task is not None:
+            if slot.cli and slot.task is not None:
                 slot.task.cancel()
         tasks = [s.task for s in slots if s.task is not None and not s.task.done()]
         if tasks:
