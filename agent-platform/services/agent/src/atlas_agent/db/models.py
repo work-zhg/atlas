@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from sqlalchemy import (
     BigInteger,
@@ -35,14 +35,26 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
+from ..ids import uuid7
 from .base import Base, TimestampMixin
 from .types import JSONType, UTCDateTime, UUIDType
 
 
-def _uuid_pk() -> Mapped[UUID]:
-    """主键默认值在 Python 侧生成 —— gen_random_uuid() 是 PG 内置函数，
-    MySQL 没有对应物。副作用是好的：insert 之前就知道 id。"""
-    return mapped_column(UUIDType, primary_key=True, default=uuid4)
+def _pk() -> Mapped[int]:
+    """自增主键 id，只在库内使用：不对外、不做关联（迁移 0029）。
+
+    ★ 对外和表间引用一律用 xxx_uuid。`run.id` 是库内的整数，不是 run 的 id。
+    """
+    return mapped_column(BigInteger, primary_key=True, autoincrement=True)
+
+
+def _logical_key() -> Mapped[UUID]:
+    """逻辑主键 xxx_uuid：表间引用和 API 都用它。
+
+    默认值在 Python 侧生成（UUIDv7）—— gen_random_uuid() 是 PG 内置函数，
+    MySQL 没有对应物。副作用是好的：insert 之前就知道它。
+    """
+    return mapped_column(UUIDType, nullable=False, default=uuid7)
 
 
 class AppUser(Base):
@@ -55,7 +67,8 @@ class AppUser(Base):
 
     __tablename__ = "app_user"
 
-    id: Mapped[UUID] = _uuid_pk()
+    id: Mapped[int] = _pk()
+    user_uuid: Mapped[UUID] = _logical_key()
     name: Mapped[str] = mapped_column(Text, nullable=False)
     # String 而非 Text：它进了唯一索引，而 MySQL 不能给无长度的 TEXT 建索引
     external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -72,6 +85,7 @@ class AppUser(Base):
     )
 
     __table_args__ = (
+        UniqueConstraint("user_uuid", name="uk_app_user_uuid"),
         Index(
             "ux_app_user_external_id",
             "external_id",
@@ -90,7 +104,8 @@ class ModelCatalog(Base):
 
     __tablename__ = "model_catalog"
 
-    model: Mapped[str] = mapped_column(String(128), primary_key=True)
+    id: Mapped[int] = _pk()
+    model: Mapped[str] = mapped_column(String(128), nullable=False)
     provider: Mapped[str] = mapped_column(String(32), nullable=False)
     display_name: Mapped[str] = mapped_column(Text, nullable=False)
     context_window: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -109,6 +124,7 @@ class ModelCatalog(Base):
     is_available: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
     __table_args__ = (
+        UniqueConstraint("model", name="uk_model_catalog_model"),
         CheckConstraint("context_window > 0", name="context_window_positive"),
         CheckConstraint("max_output_tokens > 0", name="max_output_positive"),
     )
@@ -117,18 +133,19 @@ class ModelCatalog(Base):
 class Agent(Base, TimestampMixin):
     __tablename__ = "agent"
 
-    id: Mapped[UUID] = _uuid_pk()
+    id: Mapped[int] = _pk()
+    agent_uuid: Mapped[UUID] = _logical_key()
     slug: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
     name: Mapped[str] = mapped_column(Text, nullable=False)
     # TEXT 列的默认值挪到 Python 侧：MySQL 不接受 TEXT/JSON 的字面量默认值（1101）
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     avatar_key: Mapped[str] = mapped_column(String(32), nullable=False, server_default="general")
     status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="draft")
-    current_version_id: Mapped[UUID | None] = mapped_column(
+    current_version_uuid: Mapped[UUID | None] = mapped_column(
         UUIDType,
         nullable=True,
     )
-    created_by: Mapped[UUID] = mapped_column(
+    created_by_uuid: Mapped[UUID] = mapped_column(
         UUIDType, nullable=False
     )
     #: 权限类型（迁移 0023，数字员工设计 §7.1）：只决定这个 Agent 的 run 发出的调用
@@ -141,6 +158,7 @@ class Agent(Base, TimestampMixin):
     digital_employee_uid: Mapped[UUID | None] = mapped_column(UUIDType, nullable=True)
 
     __table_args__ = (
+        UniqueConstraint("agent_uuid", name="uk_agent_uuid"),
         CheckConstraint("status IN ('draft','enabled','archived')", name="status_enum"),
         CheckConstraint("auth_subject IN ('user','agent')", name="auth_subject_enum"),
     )
@@ -156,27 +174,32 @@ class AgentVersion(Base):
 
     __tablename__ = "agent_version"
 
-    id: Mapped[UUID] = _uuid_pk()
-    agent_id: Mapped[UUID] = mapped_column(
+    id: Mapped[int] = _pk()
+    agent_version_uuid: Mapped[UUID] = _logical_key()
+    agent_uuid: Mapped[UUID] = mapped_column(
         UUIDType, nullable=False
     )
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     spec: Mapped[dict] = mapped_column(JSONType, nullable=False)
-    created_by: Mapped[UUID] = mapped_column(
+    created_by_uuid: Mapped[UUID] = mapped_column(
         UUIDType, nullable=False
     )
     created_at: Mapped[datetime] = mapped_column(
         UTCDateTime, server_default=func.now(), nullable=False
     )
 
-    __table_args__ = (UniqueConstraint("agent_id", "version", name="uq_agent_version"),)
+    __table_args__ = (
+        UniqueConstraint("agent_version_uuid", name="uk_agent_version_uuid"),
+        UniqueConstraint("agent_uuid", "version", name="uq_agent_version"),
+    )
 
 
 class Thread(Base, TimestampMixin):
     __tablename__ = "thread"
 
-    id: Mapped[UUID] = _uuid_pk()
-    agent_id: Mapped[UUID] = mapped_column(
+    id: Mapped[int] = _pk()
+    thread_uuid: Mapped[UUID] = _logical_key()
+    agent_uuid: Mapped[UUID] = mapped_column(
         UUIDType, nullable=False
     )
     title: Mapped[str] = mapped_column(Text, nullable=False, default="")
@@ -186,23 +209,15 @@ class Thread(Base, TimestampMixin):
     # 冗余快照（文档 §6 纪律 2）：可从事件流重建，丢了不影响正确性。
     latest_state: Mapped[dict] = mapped_column(JSONType, nullable=False, default=dict)
     message_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
-    compact_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
-    # §7.4：压缩后的摘要与其覆盖边界。message 表不受影响 ——
-    # 模型视角被压缩，用户视角完整保留（迁移 0005）。
-    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
-    summary_upto: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
-    #: 上下文管理的会话级状态（迁移 0017）：自动压缩连续失败次数（熔断）等
-    context_state: Mapped[dict | None] = mapped_column(JSONType, nullable=True, default=dict)
+    # ★ 摘要、覆盖边界、压缩次数和熔断计数在 thread_context（迁移 0033）：只有上下文管理读写
     # ── 子会话（迁移 0007）─────────────────────────────────────────
     # NULL = 用户会话；非空 = 某个会话的子智能体会话。子会话不出现在
     # 会话列表里 —— 它是父会话的一部分，不是用户的一段独立对话。
-    parent_thread_id: Mapped[UUID | None] = mapped_column(
+    parent_thread_uuid: Mapped[UUID | None] = mapped_column(
         UUIDType, nullable=True
     )
     #: 与 parent_thread_id 组成恢复的查找键（唯一）。
     subagent_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    #: ACP 侧的会话标识，供 loadSession 恢复（acp 详设那一期接入）。
-    external_session_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     #: git 凭据档案（cluster 配置里的名字）：acp 会话的 Pod 据此挂载 git 凭据。
     #: 建会话时由调用方声明（如 AI TeamFlow 给节点会话声明产物仓库的档案）；子会话继承父会话。
     git_profile: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -214,7 +229,7 @@ class Thread(Base, TimestampMixin):
     #: 用户在会话里选的审批模式 plan | manual | auto（迁移 0022），作用于下一个 run。
     #: NULL = 用智能体的默认模式（doc/native-approval-mode-design.html）
     approval_mode: Mapped[str | None] = mapped_column(String(8), nullable=True)
-    created_by: Mapped[UUID] = mapped_column(
+    created_by_uuid: Mapped[UUID] = mapped_column(
         UUIDType, nullable=False
     )
     #: 会话树的根（迁移 0021）。NULL = 自己就是根；子会话建出时取父会话的根
@@ -225,7 +240,7 @@ class Thread(Base, TimestampMixin):
     #:     工作区   SubAgent 读写根会话的 /workspace
     #:     事件流   一个会话一条流，子孙 run 的事件都进根会话那条
     #:   共用同一个值是巧合（都是「根」），不是耦合 —— 所以各自有名字。
-    root_thread_id: Mapped[UUID | None] = mapped_column(UUIDType, nullable=True)
+    root_thread_uuid: Mapped[UUID | None] = mapped_column(UUIDType, nullable=True)
 
     @property
     def workspace_thread_id(self) -> UUID:
@@ -233,7 +248,7 @@ class Thread(Base, TimestampMixin):
 
         ★ skills / system 仍按 `id` 走，所以「读共享、技能隔离」是结构性的，不靠约定。
         """
-        return self.root_thread_id or self.id
+        return self.root_thread_uuid or self.thread_uuid
 
     @property
     def stream_thread_id(self) -> UUID:
@@ -244,9 +259,10 @@ class Thread(Base, TimestampMixin):
           订阅的孤流（这正是审批弹窗在 SubAgent 挂起期间消失的根因，
           doc/detail/suspension.html §06）。
         """
-        return self.root_thread_id or self.id
+        return self.root_thread_uuid or self.thread_uuid
 
     __table_args__ = (
+        UniqueConstraint("thread_uuid", name="uk_thread_uuid"),
         Index("ix_thread_list", "status", text("updated_at DESC")),
         # ★ 恢复的查找键。条件里的 status='active' 是关键的一半：
         #   一次性（ephemeral）子会话以 status='ephemeral' 出生，因此不占这个
@@ -254,7 +270,7 @@ class Thread(Base, TimestampMixin):
         #   而持久子智能体的同名委派仍被唯一约束 + 会话串行锁按住。
         Index(
             "ux_thread_subagent",
-            "parent_thread_id",
+            "parent_thread_uuid",
             "subagent_name",
             unique=True,
             postgresql_where=text("subagent_name IS NOT NULL AND status = 'active'"),
@@ -276,11 +292,12 @@ class Message(Base):
 
     __tablename__ = "message"
 
-    id: Mapped[UUID] = _uuid_pk()
-    thread_id: Mapped[UUID] = mapped_column(
+    id: Mapped[int] = _pk()
+    message_uuid: Mapped[UUID] = _logical_key()
+    thread_uuid: Mapped[UUID] = mapped_column(
         UUIDType, nullable=False
     )
-    run_id: Mapped[UUID | None] = mapped_column(UUIDType, nullable=True)
+    run_uuid: Mapped[UUID | None] = mapped_column(UUIDType, nullable=True)
     role: Mapped[str] = mapped_column(String(16), nullable=False)
     #: 'chat' = 对话轮（用户提问 / 助手回答，后者可带 tool_use）；
     #: 'tool_result' = 一批工具结果（role 同为 'user'，靠本列区分）。
@@ -304,7 +321,8 @@ class Message(Base):
     )
 
     __table_args__ = (
-        Index("ix_message_thread", "thread_id", "created_at"),
+        UniqueConstraint("message_uuid", name="uk_message_uuid"),
+        Index("ix_message_thread", "thread_uuid", "created_at"),
         CheckConstraint("role IN ('user','assistant')", name="role_enum"),
         CheckConstraint("kind IN ('chat','tool_result')", name="kind_enum"),
     )
@@ -320,21 +338,22 @@ class Run(Base):
 
     __tablename__ = "run"
 
-    id: Mapped[UUID] = _uuid_pk()
-    thread_id: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
-    agent_version_id: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
+    id: Mapped[int] = _pk()
+    run_uuid: Mapped[UUID] = _logical_key()
+    thread_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
+    agent_version_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
     #: 派出这个子 run 的 run（迁移 0007）。NULL = 用户直接发起的 run。
     #: ★ 子 run 是独立可寻址的执行记录，父行没了不该让它的用量统计跟着消失。
-    parent_run_id: Mapped[UUID | None] = mapped_column(UUIDType, nullable=True)
+    parent_run_uuid: Mapped[UUID | None] = mapped_column(UUIDType, nullable=True)
     #: run 树的根 —— 一轮用户输入的那个 run（迁移 0021）。NULL = 自己就是根。
     #: SubAgent 可以继续派 SubAgent，准入控制按它数「这一轮整棵树累计派了几个」。
-    root_run_id: Mapped[UUID | None] = mapped_column(UUIDType, nullable=True)
+    root_run_uuid: Mapped[UUID | None] = mapped_column(UUIDType, nullable=True)
     #: 在 run 树里的深度：根 0、子 1、孙 2 ……（迁移 0021）。进 TraceEvent.depth，
     #: 前端据此把子孙 run 的过程渲染进 SubAgent 卡片而不是主对话。
     depth: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     #: 发起人（X-Uid，权限设计 §11）：这一轮是谁触发的。与会话所有者可以不同 ——
     #: 业务应用（TeamFlow）的节点会话里，团队其他执行人也能经它发指令。存量可能为空
-    created_by: Mapped[UUID | None] = mapped_column(UUIDType, nullable=True)
+    created_by_uuid: Mapped[UUID | None] = mapped_column(UUIDType, nullable=True)
     #: 这一轮按谁的权限判（X-Auth-Uid，内网身份传递 §7.2）：执行时发出的一切调用都带它。
     #: 以人为权限 = 发起人；以 Agent 为权限 = 当时 Agent 的数字员工（数字员工设计 §7.3）。
     #: 记下来用于审计与复现（接管的实例也按它；切换权限类型不影响进行中的 run）
@@ -345,12 +364,17 @@ class Run(Base):
     #: 挂起时「在等什么」（迁移 0012）。与图的 state.waiting_on 同形
     #: （contracts/suspension.py）：
     #: {"<tool_call_id>": {"reason": "approval", "token": "<approval_id>"}}。
-    #: 续跑时与消息一起交回图；留到 run 结束才清（repositories/run.py::claim_for_resume）。
+    #: 续跑时与消息一起交回图；留到 run 结束才清（RunQueue.requeue）。
     #:
     #: ★ 没有它，续跑的 barrier 会判错方向：SubAgent 的 barrier 是「子 run 终态」，
     #:   而审批挂起时**没有子 run** —— barrier 立刻满足，于是续跑、又挂起、
     #:   再续跑，死循环。两种 reason 的等待条件不同，必须显式记下来。
     waiting_on: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    #: CLI 智能体在线等权限（迁移 0030）：run 仍是 running —— CLI 和 bridge 都在等，不能挂起、
+    #: 也不能被当成可续跑的挂起态 —— 界面据此显示「需要你处理」。原生智能体等人是 suspended
+    awaiting_user: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
     #: 这个 run 当前的审批模式（迁移 0022）：建 run 时取自会话，计划获批时更新，续跑与接管时
     #: 从这里读。子 run 记的是派活那一刻父 run 的模式。NULL = 旧数据，按智能体默认
     approval_mode: Mapped[str | None] = mapped_column(String(8), nullable=True)
@@ -376,9 +400,6 @@ class Run(Base):
     claimed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     #: 被接管（交接或租约过期）的次数 —— 频繁接管 = 实例在频繁崩溃。
     takeovers: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
-    #: acp：已处理到的 bridge 实例与序号（§5.2）。换实例接管时据此 attach 补发。
-    acp_bridge_instance: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    acp_acked_seq: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     started_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -386,21 +407,22 @@ class Run(Base):
     )
 
     __table_args__ = (
-        Index("ix_run_thread", "thread_id", text("created_at DESC")),
-        Index("ix_run_parent", "parent_run_id"),
-        Index("ix_run_root", "root_run_id"),
+        UniqueConstraint("run_uuid", name="uk_run_uuid"),
+        Index("ix_run_thread", "thread_uuid", text("created_at DESC")),
+        Index("ix_run_parent", "parent_run_uuid"),
+        Index("ix_run_root", "root_run_uuid"),
         Index("ix_run_status_created", "status", "created_at"),
         Index("ix_run_status_lease", "status", "lease_until"),
         Index(
             "ix_run_active",
             "status",
             postgresql_where=text(
-                "status IN ('queued','running','awaiting_approval','suspended')"
+                "status IN ('queued','running','suspended')"
             ),
         ),
         CheckConstraint(
             "status IN ('queued','running','succeeded','failed','cancelled',"
-            "'interrupted','awaiting_approval','suspended')",
+            "'interrupted','suspended')",
             name="status_enum",
         ),
     )
@@ -421,14 +443,14 @@ class RunEvent(Base):
 
     __tablename__ = "run_event"
 
+    id: Mapped[int] = _pk()
+    event_uuid: Mapped[UUID] = _logical_key()
     #: 事件流归属的会话 = 根会话（Thread.stream_thread_id）。子 run 的事件
     #: 写的是**父会话**的 thread_id —— 这是「一个会话一条流」的落地。
-    thread_id: Mapped[UUID] = mapped_column(
-        UUIDType, primary_key=True
-    )
+    thread_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
     #: 会话内单调递增（契约规则 2 的新口径）。由 Redis INCR 分配，见 EventRelay。
-    thread_seq: Mapped[int] = mapped_column(Integer, primary_key=True)
-    run_id: Mapped[UUID] = mapped_column(
+    thread_seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    run_uuid: Mapped[UUID] = mapped_column(
         UUIDType, nullable=False
     )
     #: run 内单调递增。过渡期前端仍用它做游标；thread 流切换后只剩诊断价值。
@@ -438,7 +460,12 @@ class RunEvent(Base):
     depth: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default=text("0"))
     data: Mapped[dict] = mapped_column(JSONType, nullable=False)
 
-    __table_args__ = (Index("ix_run_event_run", "run_id", "seq"),)
+    __table_args__ = (
+        UniqueConstraint("event_uuid", name="uk_run_event_uuid"),
+        #: 一条会话流一个序号一条
+        UniqueConstraint("thread_uuid", "thread_seq", name="uk_run_event_stream"),
+        Index("ix_run_event_run", "run_uuid", "seq"),
+    )
 
 
 class RunState(Base):
@@ -453,13 +480,17 @@ class RunState(Base):
 
     __tablename__ = "run_state"
 
-    run_id: Mapped[UUID] = mapped_column(UUIDType, primary_key=True)
+    id: Mapped[int] = _pk()
+    run_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
     #: 图 state 里的字段名，原样作为图的输入交回（如 "todos"）
-    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    key: Mapped[str] = mapped_column(String(64), nullable=False)
     value: Mapped[Any] = mapped_column(JSONType, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         UTCDateTime, server_default=func.now(), onupdate=func.now(), nullable=False
     )
+
+    #: 一个 run 的一个字段一行
+    __table_args__ = (UniqueConstraint("run_uuid", "key", name="uk_run_state_key"),)
 
 
 class RunFile(Base):
@@ -467,11 +498,12 @@ class RunFile(Base):
 
     __tablename__ = "run_file"
 
-    id: Mapped[UUID] = _uuid_pk()
-    thread_id: Mapped[UUID] = mapped_column(
+    id: Mapped[int] = _pk()
+    run_file_uuid: Mapped[UUID] = _logical_key()
+    thread_uuid: Mapped[UUID] = mapped_column(
         UUIDType, nullable=False
     )
-    run_id: Mapped[UUID] = mapped_column(
+    run_uuid: Mapped[UUID] = mapped_column(
         UUIDType, nullable=False
     )
     # 同理：它是 ix_run_file_thread 的一部分
@@ -483,7 +515,10 @@ class RunFile(Base):
         UTCDateTime, server_default=func.now(), nullable=False
     )
 
-    __table_args__ = (Index("ix_run_file_thread", "thread_id", "path", text("created_at DESC")),)
+    __table_args__ = (
+        UniqueConstraint("run_file_uuid", name="uk_run_file_uuid"),
+        Index("ix_run_file_thread", "thread_uuid", "path", text("created_at DESC")),
+    )
 
 
 class Approval(Base):
@@ -491,8 +526,9 @@ class Approval(Base):
 
     __tablename__ = "approval"
 
-    id: Mapped[UUID] = _uuid_pk()
-    run_id: Mapped[UUID] = mapped_column(
+    id: Mapped[int] = _pk()
+    approval_uuid: Mapped[UUID] = _logical_key()
+    run_uuid: Mapped[UUID] = mapped_column(
         UUIDType, nullable=False
     )
     tool_name: Mapped[str] = mapped_column(String(128), nullable=False)
@@ -511,7 +547,7 @@ class Approval(Base):
     source: Mapped[str | None] = mapped_column(String(24), nullable=True)
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     outcome: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
-    decided_by: Mapped[UUID | None] = mapped_column(
+    decided_by_uuid: Mapped[UUID | None] = mapped_column(
         UUIDType, nullable=True
     )
     decided_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
@@ -520,10 +556,69 @@ class Approval(Base):
     )
 
     __table_args__ = (
+        UniqueConstraint("approval_uuid", name="uk_approval_uuid"),
+        #: 一个调用至多一件事（迁移 0032）。原生和 CLI 的 approval_uuid 都由 (run, 调用 id) 派生，
+        #: 重放、续跑、接管、bridge 补发都落到同一行
+        UniqueConstraint("run_uuid", "tool_call_id", name="uk_approval_call"),
+        #: 续跑前查待决事项
+        Index("ix_approval_run_status", "run_uuid", "status"),
         CheckConstraint(
             "status IN ('pending','approved','rejected','expired')", name="status_enum"
         ),
     )
+
+
+class ThreadContext(Base, TimestampMixin):
+    """会话的上下文状态（聚合根 ThreadContext，迁移 0033），一个会话一行。
+
+    见 c4-model/agent/code-native-runtime-context.html。摘要替换掉覆盖边界之前的消息（§7.4）：
+    message 表不受影响 —— 模型视角被压缩，用户视角完整保留。
+
+    ★ 原先挂在 thread 上；thread 同时放着标题、审批模式、记忆开关、凭据档案、来源应用，
+      这四项只有上下文管理读写，单独成表，归属清楚。
+    """
+
+    __tablename__ = "thread_context"
+
+    id: Mapped[int] = _pk()
+    thread_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
+    #: 当前摘要与它覆盖到哪里：两者同时有或同时没有
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    summary_upto: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    compact_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    #: 自动压缩连续失败次数（熔断用，上下文管理设计 §7）；压缩成功清零
+    failure_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+
+    __table_args__ = (
+        #: 一个会话一行
+        UniqueConstraint("thread_uuid", name="uk_thread_context_thread"),
+        CheckConstraint("(summary IS NULL) = (summary_upto IS NULL)", name="summary_pair"),
+    )
+
+
+class CliSession(Base, TimestampMixin):
+    """CLI 会话的接续信息（聚合根 CliSession，迁移 0031）。
+
+    见 c4-model/agent/code-cli-runtime-link.html。
+
+    一个会话一行：CLI 自己的会话 id（open 时恢复用）、连着的是哪个 bridge 实例、已确认到哪个
+    序号。序号是会话级的，跨连接、跨轮连续；换实例接管时，接手的 server 据此 attach 回去、
+    从确认点之后补发，那一轮在 Pod 里一直在跑，工具不会重复执行。
+
+    ★ 原先一半在 thread 上（external_session_id）、一半在 run 上（acp_bridge_instance /
+      acp_acked_seq）：会话级的东西放在 run 上，执行记录就带着运行时私有的字段。
+    """
+
+    __tablename__ = "cli_session"
+
+    id: Mapped[int] = _pk()
+    thread_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
+    agent_session_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    bridge_instance: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    acked_seq: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+
+    #: 一个会话一行
+    __table_args__ = (UniqueConstraint("thread_uuid", name="uk_cli_session_thread"),)
 
 
 class SkillUsageDaily(Base):
@@ -537,14 +632,19 @@ class SkillUsageDaily(Base):
 
     __tablename__ = "skill_usage_daily"
 
-    day: Mapped[date] = mapped_column(Date, primary_key=True)
-    slug: Mapped[str] = mapped_column(String(63), primary_key=True)
-    version: Mapped[int] = mapped_column(Integer, primary_key=True)
-    agent_id: Mapped[UUID] = mapped_column(UUIDType, primary_key=True)
+    id: Mapped[int] = _pk()
+    day: Mapped[date] = mapped_column(Date, nullable=False)
+    slug: Mapped[str] = mapped_column(String(63), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    agent_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
     #: 加载过这个技能的 run 数（同一 run 多次加载只算一次）
     loads: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     #: 其中正常结束（succeeded）的 run 数
     completed_runs: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+
+    __table_args__ = (
+        UniqueConstraint("day", "slug", "version", "agent_uuid", name="uk_skill_usage_daily_key"),
+    )
 
 
 class ThreadMemory(Base):
@@ -565,7 +665,8 @@ class ThreadMemory(Base):
 
     __tablename__ = "thread_memory"
 
-    thread_id: Mapped[UUID] = mapped_column(UUIDType, primary_key=True)
+    id: Mapped[int] = _pk()
+    thread_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
     registered_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     snapshot: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
     known: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
@@ -579,6 +680,8 @@ class ThreadMemory(Base):
         UTCDateTime, server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
+    __table_args__ = (UniqueConstraint("thread_uuid", name="uk_thread_memory_thread"),)
+
 
 class MemoryUserSetting(Base):
     """用户级的记忆设置（§7；迁移 0025）。
@@ -590,12 +693,15 @@ class MemoryUserSetting(Base):
 
     __tablename__ = "memory_user_setting"
 
-    user_id: Mapped[UUID] = mapped_column(UUIDType, primary_key=True)
+    id: Mapped[int] = _pk()
+    user_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
     paused: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     epoch: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     updated_at: Mapped[datetime] = mapped_column(
         UTCDateTime, server_default=func.now(), onupdate=func.now(), nullable=False
     )
+
+    __table_args__ = (UniqueConstraint("user_uuid", name="uk_memory_user_setting_user"),)
 
 
 class MemoryBackfill(Base):
@@ -607,9 +713,10 @@ class MemoryBackfill(Base):
 
     __tablename__ = "memory_backfill"
 
-    id: Mapped[UUID] = _uuid_pk()
-    thread_id: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
-    user_id: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
+    id: Mapped[int] = _pk()
+    memory_backfill_uuid: Mapped[UUID] = _logical_key()
+    thread_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
+    user_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
     written: Mapped[list] = mapped_column(JSONType, nullable=False, default=list)
     split: Mapped[list] = mapped_column(JSONType, nullable=False, default=list)
     created_at: Mapped[datetime] = mapped_column(
@@ -617,7 +724,10 @@ class MemoryBackfill(Base):
     )
     seen_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
-    __table_args__ = (Index("ix_memory_backfill_user", "user_id", "created_at"),)
+    __table_args__ = (
+        UniqueConstraint("memory_backfill_uuid", name="uk_memory_backfill_uuid"),
+        Index("ix_memory_backfill_user", "user_uuid", "created_at"),
+    )
 
 
 class ServiceModel(Base):
@@ -633,14 +743,17 @@ class ServiceModel(Base):
     __tablename__ = "service_model"
 
     #: services/service_models.PURPOSES 的键
-    purpose: Mapped[str] = mapped_column(String(32), primary_key=True)
+    id: Mapped[int] = _pk()
+    purpose: Mapped[str] = mapped_column(String(32), nullable=False)
     client_type: Mapped[str] = mapped_column(String(64), nullable=False)
     client_code: Mapped[str] = mapped_column(String(128), nullable=False)
     model: Mapped[str] = mapped_column(String(128), nullable=False)
-    updated_by: Mapped[UUID | None] = mapped_column(UUIDType, nullable=True)
+    updated_by_uuid: Mapped[UUID | None] = mapped_column(UUIDType, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         UTCDateTime, server_default=func.now(), onupdate=func.now(), nullable=False
     )
+
+    __table_args__ = (UniqueConstraint("purpose", name="uk_service_model_purpose"),)
 
 
 class Instruction(Base):
@@ -654,13 +767,17 @@ class Instruction(Base):
     __tablename__ = "instruction"
 
     #: services/instruction.SCOPES
-    scope: Mapped[str] = mapped_column(String(16), primary_key=True)
+    id: Mapped[int] = _pk()
+    scope: Mapped[str] = mapped_column(String(16), nullable=False)
     #: platform 为空串；user 为用户 uid
-    owner_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    updated_by: Mapped[UUID | None] = mapped_column(UUIDType, nullable=True)
+    updated_by_uuid: Mapped[UUID | None] = mapped_column(UUIDType, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         UTCDateTime, server_default=func.now(), nullable=False
     )
 
-    __table_args__ = (CheckConstraint("scope IN ('platform','user')", name="scope_enum"),)
+    __table_args__ = (
+        UniqueConstraint("scope", "owner_id", name="uk_instruction_owner"),
+        CheckConstraint("scope IN ('platform','user')", name="scope_enum"),
+    )

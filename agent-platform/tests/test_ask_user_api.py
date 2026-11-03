@@ -12,7 +12,7 @@ import httpx
 import pytest
 from atlas_agent.config import get_settings
 from atlas_agent.db.session import get_sessionmaker
-from atlas_agent.executor.inprocess import InProcessExecutor
+from atlas_agent.executor.compose import build_executor
 from atlas_agent.main import create_app
 from atlas_engine.kernel.middleware.ask_user import ASK_USER_QUESTION
 from httpx import ASGITransport
@@ -48,7 +48,7 @@ def make_app():
         ]
     )
     app = create_app()
-    app.state.executor = InProcessExecutor(
+    app.state.executor = build_executor(
         get_sessionmaker(), get_settings(), model_builder=lambda *_a, **_k: model
     )
     app.state.test_model = model
@@ -109,8 +109,12 @@ async def test_an_answer_resumes_the_run_and_reaches_the_model(
     run_id, pending = await _start(client)
     assert pending["kind"] == "question"
     assert pending["args"]["questions"][0]["header"] == "业务场景"
-    run = (await client.get(f"/v1/runs/{run_id}")).json()
-    assert run["status"] == "awaiting_approval"
+    for _ in range(100):  # 提问登记在前，落成 suspended 在段收尾时
+        run = (await client.get(f"/v1/runs/{run_id}")).json()
+        if run["status"] == "suspended":
+            break
+        await asyncio.sleep(0.1)
+    assert run["status"] == "suspended", run
 
     res = await client.post(
         f"/v1/runs/{run_id}/approvals/{pending['id']}",

@@ -150,27 +150,27 @@ async def rt(memory_app: Any, owners: list[UUID]) -> AsyncIterator[MemoryRuntime
     runtime = MemoryRuntime(_settings(), get_sessionmaker(), client)
     yield runtime
     async with get_sessionmaker()() as session:
-        await session.execute(delete(ThreadMemory).where(ThreadMemory.thread_id.in_(owners)))
+        await session.execute(delete(ThreadMemory).where(ThreadMemory.thread_uuid.in_(owners)))
         await session.execute(
-            delete(MemoryUserSetting).where(MemoryUserSetting.user_id.in_(owners))
+            delete(MemoryUserSetting).where(MemoryUserSetting.user_uuid.in_(owners))
         )
-        await session.execute(delete(MemoryBackfill).where(MemoryBackfill.user_id.in_(owners)))
-        await session.execute(delete(Message).where(Message.thread_id.in_(owners)))
-        await session.execute(delete(Thread).where(Thread.id.in_(owners)))
+        await session.execute(delete(MemoryBackfill).where(MemoryBackfill.user_uuid.in_(owners)))
+        await session.execute(delete(Message).where(Message.thread_uuid.in_(owners)))
+        await session.execute(delete(Thread).where(Thread.thread_uuid.in_(owners)))
         await session.commit()
 
 
 def new_thread(owners: list[UUID], owner: UUID | None = None, **kw: Any) -> SimpleNamespace:
     owner = owner or uuid4()
     thread = SimpleNamespace(
-        id=uuid4(),
+        thread_uuid=uuid4(),
         memory="on",
-        created_by=owner,
+        created_by_uuid=owner,
         compact_count=0,
-        parent_thread_id=None,
+        parent_thread_uuid=None,
         **kw,
     )
-    owners += [owner, thread.id]
+    owners += [owner, thread.thread_uuid]
     return thread
 
 
@@ -215,6 +215,8 @@ async def turn(rt: MemoryRuntime, thread: Any, **kw: Any) -> Any:
     kw.setdefault("resume", False)
     kw.setdefault("history_upto", datetime.now(UTC))
     kw.setdefault("occurred_at", at(12))
+    # 压缩次数在 thread_context 里，由段载入时交进来；替身记在 thread 上
+    kw.setdefault("compact_count", thread.compact_count)
     return await rt.turn(thread, **kw)
 
 
@@ -223,7 +225,7 @@ async def turn(rt: MemoryRuntime, thread: Any, **kw: Any) -> Any:
 
 async def test_first_turn_builds_resident_block(rt: MemoryRuntime, owners: list[UUID]) -> None:
     thread = new_thread(owners)
-    owner = thread.created_by
+    owner = thread.created_by_uuid
     await seed(rt, owner, "沟通偏好", ["回复使用中文", "技术术语保留英文"], resident=True)
     await seed(rt, owner, "编码-java", ["不使用 Lombok"])
     mt = await turn(rt, thread)
@@ -233,7 +235,7 @@ async def test_first_turn_builds_resident_block(rt: MemoryRuntime, owners: list[
     assert "编码-java：编码-java 相关（1 条" in mt.block
     assert "不使用 Lombok" not in mt.block  # 不常驻的只在目录里
     assert [t.name for t in mt.tools()] == ["load_memory"]
-    state = await rt.state(thread.id)
+    state = await rt.state(thread.thread_uuid)
     assert state is not None and state.registered_at is not None
     assert state.snapshot["block"] in mt.block
     assert set(state.known["user"]) == {"沟通偏好"}
@@ -242,7 +244,7 @@ async def test_first_turn_builds_resident_block(rt: MemoryRuntime, owners: list[
 async def test_snapshot_reused_and_updates_reminded(rt: MemoryRuntime, owners: list[UUID]) -> None:
     """缓存还有效时常驻块原样复用（前缀缓存不失效）；别处的更新只在末尾提示。"""
     thread = new_thread(owners)
-    owner = thread.created_by
+    owner = thread.created_by_uuid
     await seed(rt, owner, "沟通偏好", ["回复使用中文"], resident=True)
     first = await turn(rt, thread)
     await seed(rt, owner, "沟通偏好", ["不要用表情符号"])  # 别的会话写入
@@ -260,7 +262,7 @@ async def test_snapshot_refreshes_when_cache_is_gone(
     rt: MemoryRuntime, owners: list[UUID], reason: str
 ) -> None:
     thread = new_thread(owners)
-    owner = thread.created_by
+    owner = thread.created_by_uuid
     await seed(rt, owner, "沟通偏好", ["回复使用中文"], resident=True)
     await turn(rt, thread)
     await seed(rt, owner, "沟通偏好", ["不要用表情符号"])
@@ -279,7 +281,7 @@ async def test_snapshot_refreshes_when_cache_is_gone(
 async def test_resume_segment_never_rebuilds(rt: MemoryRuntime, owners: list[UUID]) -> None:
     """同一个 run 的续跑段，系统提示词必须和前一段一致。"""
     thread = new_thread(owners)
-    owner = thread.created_by
+    owner = thread.created_by_uuid
     await seed(rt, owner, "沟通偏好", ["回复使用中文"], resident=True)
     first = await turn(rt, thread)
     await rt.bump_epoch(owner)
@@ -291,7 +293,7 @@ async def test_resume_segment_never_rebuilds(rt: MemoryRuntime, owners: list[UUI
 async def test_resident_budget_demotes_topics(rt: MemoryRuntime, owners: list[UUID]) -> None:
     rt.settings.memory_resident_budget_chars = 10
     thread = new_thread(owners)
-    owner = thread.created_by
+    owner = thread.created_by_uuid
     await seed(rt, owner, "身份", ["后端工程师"], resident=True)
     await seed(rt, owner, "沟通偏好", ["回复使用中文，技术术语保留英文"], resident=True)
     mt = await turn(rt, thread)
@@ -304,7 +306,7 @@ async def test_resident_budget_demotes_topics(rt: MemoryRuntime, owners: list[UU
 
 async def test_load_then_unchanged(rt: MemoryRuntime, owners: list[UUID]) -> None:
     thread = new_thread(owners)
-    owner = thread.created_by
+    owner = thread.created_by_uuid
     await seed(rt, owner, "编码-java", ["不使用 Lombok", "单元测试用 JUnit 5"])
     mt = await turn(rt, thread)
     loaded = await mt._load("编码-java")
@@ -317,7 +319,7 @@ async def test_load_then_unchanged(rt: MemoryRuntime, owners: list[UUID]) -> Non
 
 async def test_reload_clears_update_reminder(rt: MemoryRuntime, owners: list[UUID]) -> None:
     thread = new_thread(owners)
-    owner = thread.created_by
+    owner = thread.created_by_uuid
     await seed(rt, owner, "编码-java", ["不使用 Lombok"])
     mt = await turn(rt, thread)
     await mt._load("编码-java")
@@ -333,7 +335,7 @@ async def test_reload_clears_update_reminder(rt: MemoryRuntime, owners: list[UUI
 
 async def test_save_requires_seeing_topic_first(rt: MemoryRuntime, owners: list[UUID]) -> None:
     thread = new_thread(owners)
-    owner = thread.created_by
+    owner = thread.created_by_uuid
     await seed(rt, owner, "工具偏好", ["用 pnpm"])
     mt = await turn(rt, thread, writable=True)
     assert [t.name for t in mt.tools()] == ["load_memory", "save_memory", "forget_memory"]
@@ -350,7 +352,7 @@ async def test_save_requires_seeing_topic_first(rt: MemoryRuntime, owners: list[
     _, entries = await rt.client.load(rt.user_scope(owner), "工具偏好", as_user=owner)
     [entry] = entries
     assert entry.source == "agent"
-    assert entry.origin == {"thread": str(thread.id), "run": str(mt.run_id)}
+    assert entry.origin == {"thread": str(thread.thread_uuid), "run": str(mt.run_id)}
     assert entry.occurred_at.startswith("2026-10-26T12:00")
 
 
@@ -363,14 +365,15 @@ async def test_save_creates_topic(rt: MemoryRuntime, owners: list[UUID]) -> None
         "沟通偏好", "回复使用中文", topic_description="怎么回复：语言、格式", resident=True
     )
     assert done == "已记住 #1（用户 · 沟通偏好）。"
-    topics = await rt.client.catalog(rt.user_scope(thread.created_by), as_user=thread.created_by)
+    owner = thread.created_by_uuid
+    topics = await rt.client.catalog(rt.user_scope(owner), as_user=owner)
     assert [(t.code, t.resident) for t in topics] == [("沟通偏好", True)]
 
 
 async def test_save_discarded_when_newer_info_exists(rt: MemoryRuntime, owners: list[UUID]) -> None:
     """§6.4：本轮的时间早于已有条目 —— 记忆服务丢弃这次写入，Agent 被告知并要重新加载。"""
     thread = new_thread(owners)
-    owner = thread.created_by
+    owner = thread.created_by_uuid
     await seed(rt, owner, "项目约定", ["测试命令是 make test"], when=at(13))
     mt = await turn(rt, thread, writable=True, occurred_at=at(10))
     await mt._load("项目约定")
@@ -384,7 +387,7 @@ async def test_save_discarded_when_newer_info_exists(rt: MemoryRuntime, owners: 
 
 async def test_forget(rt: MemoryRuntime, owners: list[UUID]) -> None:
     thread = new_thread(owners)
-    owner = thread.created_by
+    owner = thread.created_by_uuid
     await seed(rt, owner, "身份", ["用 Java"])
     mt = await turn(rt, thread, writable=True)
     text_, artifact = await mt._forget([1])
@@ -400,14 +403,14 @@ async def test_pause_and_write_limit(rt: MemoryRuntime, owners: list[UUID]) -> N
     await mt._save("身份", "后端工程师", topic_description="身份与背景")
     limited, _ = await mt._save("身份", "在杭州")
     assert "本轮写入次数已达上限" in limited
-    await rt.set_paused(thread.created_by, True)
+    await rt.set_paused(thread.created_by_uuid, True)
     paused, _ = await mt._forget([1])
     assert paused == "用户已暂停记忆写入，这次没有保存。"
 
 
 async def test_subagent_is_read_only(rt: MemoryRuntime, owners: list[UUID]) -> None:
     thread = new_thread(owners)
-    thread.parent_thread_id = uuid4()
+    thread.parent_thread_uuid = uuid4()
     mt = await turn(rt, thread, writable=True)
     assert [t.name for t in mt.tools()] == ["load_memory"]
     assert "## 记忆的写入" not in mt.block
@@ -432,7 +435,7 @@ async def test_memory_off_and_unavailable(rt: MemoryRuntime, owners: list[UUID])
 async def test_identity_is_the_session_owner(rt: MemoryRuntime, owners: list[UUID]) -> None:
     """数据权限开关打开：会话所属用户以外的人读不到这个实例（§3.7）。"""
     thread = new_thread(owners)
-    owner = thread.created_by
+    owner = thread.created_by_uuid
     await seed(rt, owner, "身份", ["后端工程师"])
     stranger = uuid4()
     from atlas_agent.memory import MemoryRejected
@@ -444,7 +447,7 @@ async def test_identity_is_the_session_owner(rt: MemoryRuntime, owners: list[UUI
 
 async def test_reregisters_after_instance_purged(rt: MemoryRuntime, owners: list[UUID]) -> None:
     thread = new_thread(owners)
-    owner = thread.created_by
+    owner = thread.created_by_uuid
     await seed(rt, owner, "身份", ["后端工程师"])
     await turn(rt, thread)
     await rt.client.purge_instance(rt.user_scope(owner), as_user=owner)
@@ -487,20 +490,20 @@ async def make_session(
     """Atlas 库里建一个空闲了两小时的会话和它的消息。"""
     owner = owner or uuid4()
     thread = Thread(
-        id=uuid4(),
-        agent_id=uuid4(),
+        thread_uuid=uuid4(),
+        agent_uuid=uuid4(),
         title="t",
-        created_by=owner,
+        created_by_uuid=owner,
         memory="on",
         updated_at=datetime.now(UTC) - timedelta(hours=2),
     )
-    owners += [owner, thread.id]
+    owners += [owner, thread.thread_uuid]
     async with get_sessionmaker()() as session:
         session.add(thread)
         for role, body, when in lines:
             session.add(
                 Message(
-                    thread_id=thread.id,
+                    thread_uuid=thread.thread_uuid,
                     role=role,
                     kind="chat",
                     content=[{"type": "text", "text": body}],
@@ -523,7 +526,7 @@ async def test_backfill_writes_what_agent_missed(rt: MemoryRuntime, owners: list
             ("assistant", "好的，明白。", at(10, 1)),
         ],
     )
-    owner = thread.created_by
+    owner = thread.created_by_uuid
     await rt.register(owner)
     model = FakeModel(
         [
@@ -541,20 +544,20 @@ async def test_backfill_writes_what_agent_missed(rt: MemoryRuntime, owners: list
             }
         ]
     )
-    result = await backfiller(rt, model).process(thread.id)
+    result = await backfiller(rt, model).process(thread.thread_uuid)
     assert [w["content"] for w in result.written] == ["回复使用中文，技术术语保留英文"]
     assert "[1] 用户（2026-10-26 10:00）：以后回复都用中文" in model.prompts[0]
     _, entries = await rt.client.load(rt.user_scope(owner), "沟通偏好", as_user=owner)
     [entry] = entries
     assert entry.source == "backfill"
     assert entry.occurred_at.startswith("2026-10-26T10:00")  # 原消息的时间，不是补记执行的时间
-    state = await rt.state(thread.id)
+    state = await rt.state(thread.thread_uuid)
     assert state is not None and state.backfill_upto == at(10, 1)
     async with get_sessionmaker()() as session:
         notes = (
             (
                 await session.execute(
-                    select(MemoryBackfill).where(MemoryBackfill.thread_id == thread.id)
+                    select(MemoryBackfill).where(MemoryBackfill.thread_uuid == thread.thread_uuid)
                 )
             )
             .scalars()
@@ -562,16 +565,16 @@ async def test_backfill_writes_what_agent_missed(rt: MemoryRuntime, owners: list
         )
     assert len(notes) == 1 and notes[0].written[0]["number"] == entry.number
     # 进度推进了：没有新内容就不再调模型（但照样检查超限主题）
-    again = await backfiller(rt, FakeModel([])).process(thread.id)
+    again = await backfiller(rt, FakeModel([])).process(thread.thread_uuid)
     assert again.skipped == "no_new_content"
 
 
 async def test_backfill_respects_protected_entries(rt: MemoryRuntime, owners: list[UUID]) -> None:
     thread = await make_session(owners, [("user", "我现在改用 Go 了，Java 不怎么写了。", at(10))])
-    owner = thread.created_by
+    owner = thread.created_by_uuid
     [mine] = await seed(rt, owner, "身份", ["主要写 Java"], source="user")
     [agent_now] = await seed(
-        rt, owner, "身份", ["在杭州"], source="agent", origin={"thread": str(thread.id)}
+        rt, owner, "身份", ["在杭州"], source="agent", origin={"thread": str(thread.thread_uuid)}
     )
     [older] = await seed(rt, owner, "身份", ["用 VS Code"], source="backfill")
     model = FakeModel(
@@ -585,7 +588,7 @@ async def test_backfill_respects_protected_entries(rt: MemoryRuntime, owners: li
             }
         ]
     )
-    result = await backfiller(rt, model).process(thread.id)
+    result = await backfiller(rt, model).process(thread.thread_uuid)
     assert [(w["content"], w["removed"]) for w in result.written] == [("用 GoLand", [older])]
     assert f"[#{mine} 用户亲自" in model.prompts[0]
     assert "Agent 写入 · 本会话" in model.prompts[0]
@@ -595,17 +598,17 @@ async def test_backfill_paused_advances_without_writing(
     rt: MemoryRuntime, owners: list[UUID]
 ) -> None:
     thread = await make_session(owners, [("user", "记住：我讨厌在回复里看到表情符号。", at(10))])
-    await rt.set_paused(thread.created_by, True)
-    result = await backfiller(rt, FakeModel([])).process(thread.id)
+    await rt.set_paused(thread.created_by_uuid, True)
+    result = await backfiller(rt, FakeModel([])).process(thread.thread_uuid)
     assert result.skipped == "paused"
-    state = await rt.state(thread.id)
+    state = await rt.state(thread.thread_uuid)
     assert state is not None and state.backfill_upto == at(10)
 
 
 async def test_backfill_splits_oversized_topic(rt: MemoryRuntime, owners: list[UUID]) -> None:
     rt.settings.memory_topic_max_chars = 20
     thread = await make_session(owners, [("assistant", "好", at(10))])
-    owner = thread.created_by
+    owner = thread.created_by_uuid
     numbers = await seed(
         rt,
         owner,
@@ -627,7 +630,7 @@ async def test_backfill_splits_oversized_topic(rt: MemoryRuntime, owners: list[U
             }
         ]
     )
-    result = await backfiller(rt, model).process(thread.id)
+    result = await backfiller(rt, model).process(thread.thread_uuid)
     assert result.split == [{"scope": "user", "topic": "编码", "into": ["编码-java", "编码-js"]}]
     topics = await rt.client.catalog(rt.user_scope(owner), as_user=owner)
     assert [(t.code, t.resident) for t in topics] == [("编码-java", True), ("编码-js", True)]
@@ -638,9 +641,9 @@ async def test_backfill_unsplittable_topic_is_left_alone(
 ) -> None:
     rt.settings.memory_topic_max_chars = 10
     thread = await make_session(owners, [("assistant", "好", at(10))])
-    owner = thread.created_by
+    owner = thread.created_by_uuid
     await seed(rt, owner, "工具", ["包管理用 pnpm", "构建用 vite"])
-    result = await backfiller(rt, FakeModel([{"groups": []}])).process(thread.id)
+    result = await backfiller(rt, FakeModel([{"groups": []}])).process(thread.thread_uuid)
     assert result.split == []
     topics = await rt.client.catalog(rt.user_scope(owner), as_user=owner)
     assert [t.code for t in topics] == ["工具"]
@@ -649,14 +652,14 @@ async def test_backfill_unsplittable_topic_is_left_alone(
 async def test_backfill_failures_back_off(rt: MemoryRuntime, owners: list[UUID]) -> None:
     rt.settings.memory_backfill_max_failures = 2
     thread = await make_session(owners, [("user", "记住：周报每周五下午四点前发。", at(10))])
-    await rt.register(thread.created_by)
+    await rt.register(thread.created_by_uuid)
     with pytest.raises(ValueError):
-        await backfiller(rt, FakeModel(["不是 JSON"])).process(thread.id)
-    state = await rt.state(thread.id)
+        await backfiller(rt, FakeModel(["不是 JSON"])).process(thread.thread_uuid)
+    state = await rt.state(thread.thread_uuid)
     assert state is not None and state.backfill_failures == 1 and state.backfill_seen is None
     with pytest.raises(ValueError):
-        await backfiller(rt, FakeModel(["还不是"])).process(thread.id)
-    state = await rt.state(thread.id)
+        await backfiller(rt, FakeModel(["还不是"])).process(thread.thread_uuid)
+    state = await rt.state(thread.thread_uuid)
     assert state is not None and state.backfill_failures == 0
     assert state.backfill_seen is not None  # 等会话有新变化再试
     assert state.backfill_upto is None  # 进度没有推进
@@ -665,9 +668,9 @@ async def test_backfill_failures_back_off(rt: MemoryRuntime, owners: list[UUID])
 async def test_due_threads(rt: MemoryRuntime, owners: list[UUID]) -> None:
     thread = await make_session(owners, [("user", "记住：周报每周五发。", at(10))])
     filler = backfiller(rt, FakeModel([{"writes": []}]))
-    assert thread.id in await filler.due_threads()
-    await filler.process(thread.id)
-    assert thread.id not in await filler.due_threads()
+    assert thread.thread_uuid in await filler.due_threads()
+    await filler.process(thread.thread_uuid)
+    assert thread.thread_uuid not in await filler.due_threads()
 
 
 # ───────────────────────────── 管理接口（§7）

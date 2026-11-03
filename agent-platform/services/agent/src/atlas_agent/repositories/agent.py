@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import builtins
 from typing import Any
 from uuid import UUID
 
@@ -22,8 +23,8 @@ class AgentRepository:
         cv = aliased(AgentVersion)
         stmt = (
             select(Agent, cv)
-            .join(cv, cv.id == Agent.current_version_id)
-            .where(Agent.id == agent_id)
+            .join(cv, cv.agent_version_uuid == Agent.current_version_uuid)
+            .where(Agent.agent_uuid == agent_id)
         )
         row = (await self._session.execute(stmt)).one_or_none()
         return (row[0], row[1]) if row else None
@@ -40,10 +41,10 @@ class AgentRepository:
         model: str | None = None,
         limit: int = 50,
         visible: Any = None,
-    ) -> list[tuple[Agent, AgentVersion]]:
+    ) -> builtins.list[tuple[Agent, AgentVersion]]:
         """visible：可见范围的 SQL 条件（auth/agent_access.Visibility）。None = 不过滤。"""
         cv = aliased(AgentVersion)
-        stmt = select(Agent, cv).join(cv, cv.id == Agent.current_version_id)
+        stmt = select(Agent, cv).join(cv, cv.agent_version_uuid == Agent.current_version_uuid)
         if visible is not None:
             stmt = stmt.where(visible)
 
@@ -62,13 +63,13 @@ class AgentRepository:
             # spec 是 JSONB，模型 id 在 spec->'model'->>'model'
             stmt = stmt.where(cv.spec["model"]["model"].as_string() == model)
 
-        stmt = stmt.order_by(Agent.updated_at.desc(), Agent.id.desc()).limit(limit)
+        stmt = stmt.order_by(Agent.updated_at.desc(), Agent.agent_uuid.desc()).limit(limit)
         return [(r[0], r[1]) for r in (await self._session.execute(stmt)).all()]
 
-    async def list_versions(self, agent_id: UUID) -> list[AgentVersion]:
+    async def list_versions(self, agent_id: UUID) -> builtins.list[AgentVersion]:
         stmt = (
             select(AgentVersion)
-            .where(AgentVersion.agent_id == agent_id)
+            .where(AgentVersion.agent_uuid == agent_id)
             .order_by(AgentVersion.version.desc())
         )
         return list((await self._session.execute(stmt)).scalars())
@@ -92,17 +93,19 @@ class AgentRepository:
             description=description,
             avatar_key=avatar_key,
             status="draft",
-            created_by=created_by,
+            created_by_uuid=created_by,
             auth_subject=auth_subject,
         )
         self._session.add(agent)
         await self._session.flush()  # 拿到 agent.id
 
-        version = AgentVersion(agent_id=agent.id, version=1, spec=spec, created_by=created_by)
+        version = AgentVersion(
+            agent_uuid=agent.agent_uuid, version=1, spec=spec, created_by_uuid=created_by
+        )
         self._session.add(version)
         await self._session.flush()
 
-        agent.current_version_id = version.id
+        agent.current_version_uuid = version.agent_version_uuid
         await self._session.flush()
         # created_at / updated_at 是 server_default：flush 后 Python 侧仍是空的，
         # 同步读取会触发隐式 IO → MissingGreenlet。必须显式 refresh。
@@ -114,14 +117,14 @@ class AgentRepository:
         self, *, agent: Agent, spec: dict[str, Any], created_by: UUID
     ) -> AgentVersion:
         """保存即产生新版本 —— 从不原地更新（文档 §5.4）。"""
-        next_version = await self._next_version(agent.id)
+        next_version = await self._next_version(agent.agent_uuid)
         version = AgentVersion(
-            agent_id=agent.id, version=next_version, spec=spec, created_by=created_by
+            agent_uuid=agent.agent_uuid, version=next_version, spec=spec, created_by_uuid=created_by
         )
         self._session.add(version)
         await self._session.flush()
 
-        agent.current_version_id = version.id
+        agent.current_version_uuid = version.agent_version_uuid
         agent.updated_at = func.now()
         await self._session.flush()
         await self._session.refresh(agent)
@@ -130,7 +133,7 @@ class AgentRepository:
 
     async def _next_version(self, agent_id: UUID) -> int:
         stmt = select(func.coalesce(func.max(AgentVersion.version), 0)).where(
-            AgentVersion.agent_id == agent_id
+            AgentVersion.agent_uuid == agent_id
         )
         return int((await self._session.execute(stmt)).scalar_one()) + 1
 
@@ -138,7 +141,7 @@ class AgentRepository:
         """删除 agent 时关联会话保留但置 archived（文档 §11.1）。"""
         stmt = (
             update(Thread)
-            .where(Thread.agent_id == agent_id, Thread.status != "archived")
+            .where(Thread.agent_uuid == agent_id, Thread.status != "archived")
             .values(status="archived")
         )
         return int((await self._session.execute(stmt)).rowcount or 0)

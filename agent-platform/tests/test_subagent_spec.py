@@ -87,7 +87,7 @@ def test_an_acp_subagent_has_no_roster() -> None:
     """acp SubAgent 不带名录：它的工具面由 CLI 自带，task 装不进它的图（AgentSpec.validate）。"""
     from atlas_agent.domain.spec import CliSpec
 
-    child = spec_for_subagent(_parent(kind="acp", cli=CliSpec(cli_type="claude-code")), "coder")
+    child = spec_for_subagent(_parent(kind="cli", cli=CliSpec(cli_type="claude-code")), "coder")
     assert child.subagents == ()
 
 

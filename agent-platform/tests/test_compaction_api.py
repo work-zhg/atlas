@@ -11,9 +11,10 @@ import pytest
 from atlas_agent.config import get_settings
 from atlas_agent.db.models import Thread
 from atlas_agent.db.session import get_sessionmaker
-from atlas_agent.executor.inprocess import InProcessExecutor
+from atlas_agent.executor.compose import build_executor
 from atlas_agent.main import create_app
 from atlas_agent.repositories.run import RunRepository
+from atlas_agent.repositories.thread_context import ThreadContextRepository
 from atlas_agent.services.compaction import ThreadSummarizer, make_persist_hook
 from httpx import ASGITransport
 from sqlalchemy import select
@@ -25,7 +26,7 @@ from tests.test_runs_api import wait_for_status
 
 def make_app():
     app = create_app()
-    app.state.executor = InProcessExecutor(
+    app.state.executor = build_executor(
         get_sessionmaker(),
         get_settings(),
         model_builder=lambda *_a, **_k: text_model("好的。"),
@@ -70,20 +71,25 @@ async def test_summary_is_reused_not_recomputed(client: httpx.AsyncClient) -> No
     tid = await _thread_with_messages(client, rounds=3)
 
     async with get_sessionmaker()() as session:
-        thread = (await session.execute(select(Thread).where(Thread.id == tid))).scalar_one()
-        all_messages = await RunRepository(session).history(thread.id)
+        thread = (
+            await session.execute(select(Thread).where(Thread.thread_uuid == tid))
+        ).scalar_one()
+        all_messages = await RunRepository(session).history(thread.thread_uuid)
         assert len(all_messages) >= 6, "没造出足够的消息"
 
         # 手工模拟一次压缩落库
         cutoff = all_messages[2].created_at
-        await make_persist_hook(get_sessionmaker(), thread.id, cutoff)({"summary": "早期摘要正文"})
+        await make_persist_hook(get_sessionmaker(), thread.thread_uuid, cutoff)(
+            {"summary": "早期摘要正文"}
+        )
 
     async with get_sessionmaker()() as session:
-        thread = (await session.execute(select(Thread).where(Thread.id == tid))).scalar_one()
-        assert thread.summary == "早期摘要正文"
-        assert thread.compact_count == 1
+        context = await ThreadContextRepository(session).get(tid)
+        assert context is not None
+        assert context.summary == "早期摘要正文"
+        assert context.compact_count == 1
 
-        after = await RunRepository(session).history(thread.id, after=thread.summary_upto)
+        after = await RunRepository(session).history(tid, after=context.summary_upto)
         assert len(after) == len(all_messages) - 3, "边界之前的消息没有被排除"
 
 
@@ -97,9 +103,11 @@ async def test_message_table_is_never_touched(client: httpx.AsyncClient) -> None
     before = (await client.get(f"/v1/threads/{tid}/messages")).json()["data"]
 
     async with get_sessionmaker()() as session:
-        thread = (await session.execute(select(Thread).where(Thread.id == tid))).scalar_one()
-        rows = await RunRepository(session).history(thread.id)
-        await make_persist_hook(get_sessionmaker(), thread.id, rows[2].created_at)(
+        thread = (
+            await session.execute(select(Thread).where(Thread.thread_uuid == tid))
+        ).scalar_one()
+        rows = await RunRepository(session).history(thread.thread_uuid)
+        await make_persist_hook(get_sessionmaker(), thread.thread_uuid, rows[2].created_at)(
             {"summary": "摘要"}
         )
 
@@ -120,9 +128,10 @@ async def test_compact_count_accumulates(client: httpx.AsyncClient) -> None:
     await hook({"summary": "二"})
 
     async with get_sessionmaker()() as session:
-        thread = (await session.execute(select(Thread).where(Thread.id == tid))).scalar_one()
-        assert thread.compact_count == 2
-        assert thread.summary == "二", "后一次摘要应覆盖前一次"
+        context = await ThreadContextRepository(session).get(tid)
+        assert context is not None
+        assert context.compact_count == 2
+        assert context.summary == "二", "后一次摘要应覆盖前一次"
 
 
 @pytest.mark.usefixtures("clean_db")

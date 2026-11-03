@@ -3,9 +3,9 @@
 engine 侧的时序与决策语义见 test_approval.py。
 这里测的是「HTTP 决策能不能唤醒**挂起的** run」—— 整条链路的接缝。
 
-★ 断言一个字没改（S7）：审批从「在线阻塞」改成「挂起」之后，外部行为完全
-  一致 —— run 落成 awaiting_approval、决策后续跑到 succeeded、拒绝不终止、
-  重复决策 409。变的只是内部机制：没有进程在等，唤醒由端点触发。
+★ 审批从「在线阻塞」改成「挂起」之后：run 落成 suspended（在等什么看 waiting_on；
+  迁移 0030 起不再有 awaiting_approval）、决策后续跑到 succeeded、拒绝不终止、
+  重复决策 409。没有进程在等，唤醒由端点触发。
 
 ★ 原先有一条 test_decision_arriving_first_is_not_lost 论证「用 BLPOP 而非
   pub/sub」。那个队列现在没有消费者，整条测试随机制一起删掉了。
@@ -14,14 +14,15 @@ engine 侧的时序与决策语义见 test_approval.py。
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 from uuid import UUID, uuid4
 
 import httpx
 import pytest
 import redis.asyncio as aioredis
 from atlas_agent.config import get_settings
-from atlas_agent.db.session import get_sessionmaker
-from atlas_agent.executor.inprocess import InProcessExecutor
+from atlas_agent.db.session import fetch_one, get_sessionmaker
+from atlas_agent.executor.compose import build_executor
 from atlas_agent.main import create_app
 from httpx import ASGITransport
 from langchain_core.messages import AIMessageChunk
@@ -44,7 +45,7 @@ APPROVE = {"decision": "approved", "approval_mode": "auto"}
 
 def make_app():
     app = create_app()
-    app.state.executor = InProcessExecutor(
+    app.state.executor = build_executor(
         get_sessionmaker(),
         get_settings(),
         model_builder=lambda *_a, **_k: TurnModel(
@@ -94,14 +95,26 @@ async def _start_guarded_run(client: httpx.AsyncClient) -> tuple[str, str]:
     raise AssertionError("没等到待决的确认项")
 
 
+async def _wait_suspended(client: httpx.AsyncClient, run_id: str) -> dict[str, Any]:
+    """等到这一段挂起落库（审批登记在前，落成 suspended 在段收尾时）。"""
+    run: dict[str, Any] = {}
+    for _ in range(100):
+        run = (await client.get(f"/v1/runs/{run_id}")).json()
+        if run["status"] == "suspended":
+            return run
+        await asyncio.sleep(0.1)
+    raise AssertionError(f"run 没有挂起：{run}")
+
+
 @pytest.mark.usefixtures("clean_db")
-async def test_run_waits_and_marks_awaiting_approval(client: httpx.AsyncClient) -> None:
-    """★ 执行器真的停在那里等 —— 而不是继续往下跑。"""
+async def test_run_waits_suspended_on_the_approval(client: httpx.AsyncClient) -> None:
+    """★ 执行器真的停在那里等 —— 而不是继续往下跑。等人是挂起，不是 awaiting_user。"""
     run_id, _ = await _start_guarded_run(client)
 
+    run = await _wait_suspended(client, run_id)
+    assert run["awaiting_user"] is False, run
     await asyncio.sleep(0.3)
-    run = (await client.get(f"/v1/runs/{run_id}")).json()
-    assert run["status"] == "awaiting_approval", f"实际 {run['status']}"
+    assert (await client.get(f"/v1/runs/{run_id}")).json()["status"] == "suspended"
 
 
 @pytest.mark.usefixtures("clean_db")
@@ -191,13 +204,12 @@ async def test_an_approval_survives_a_process_restart(client: httpx.AsyncClient)
     """
     run_id, approval_id = await _start_guarded_run(client)
 
-    run = (await client.get(f"/v1/runs/{run_id}")).json()
-    assert run["status"] == "awaiting_approval", run
+    await _wait_suspended(client, run_id)
 
     # 模拟重启：旧执行器的 task 全部作废，换一个新的
     old = client._transport.app.state.executor  # type: ignore[attr-defined]
     await old.shutdown()
-    fresh = InProcessExecutor(
+    fresh = build_executor(
         get_sessionmaker(),
         get_settings(),
         model_builder=lambda *_a, **_k: TurnModel(
@@ -210,7 +222,7 @@ async def test_an_approval_survives_a_process_restart(client: httpx.AsyncClient)
     client._transport.app.state.executor = fresh  # type: ignore[attr-defined]
 
     still = (await client.get(f"/v1/runs/{run_id}")).json()
-    assert still["status"] == "awaiting_approval", f"被孤儿回收误杀了：{still}"
+    assert still["status"] == "suspended", f"被孤儿回收误杀了：{still}"
 
     # 决策到了 —— 新进程把它续起来
     res = await client.post(
@@ -231,13 +243,14 @@ async def test_a_pending_approval_does_not_resume_early(client: httpx.AsyncClien
     run.waiting_on 里的 reason 就是为了让 barrier 分派对（迁移 0012）。
     """
     run_id, _approval_id = await _start_guarded_run(client)
+    await _wait_suspended(client, run_id)
     executor = client._transport.app.state.executor  # type: ignore[attr-defined]
 
     assert await executor.resume_if_ready(run_id) is False, "没决策就被续跑了"
     assert await executor.sweep_suspended() == 0
 
     run = (await client.get(f"/v1/runs/{run_id}")).json()
-    assert run["status"] == "awaiting_approval", run
+    assert run["status"] == "suspended", run
 
 
 @pytest.mark.usefixtures("clean_db")
@@ -255,14 +268,16 @@ async def test_an_old_approval_never_expires(client: httpx.AsyncClient) -> None:
     long_ago = datetime.now(UTC) - timedelta(days=30)
     async with get_sessionmaker()() as session:
         await session.execute(
-            update(Approval).where(Approval.id == UUID(approval_id)).values(created_at=long_ago)
+            update(Approval)
+            .where(Approval.approval_uuid == UUID(approval_id))
+            .values(created_at=long_ago)
         )
         await session.commit()
 
     assert await executor.sweep_suspended() == 0
-    assert (await client.get(f"/v1/runs/{run_id}")).json()["status"] == "awaiting_approval"
+    assert (await client.get(f"/v1/runs/{run_id}")).json()["status"] == "suspended"
     async with get_sessionmaker()() as session:
-        row = await session.get(Approval, UUID(approval_id))
+        row = await fetch_one(session, Approval, Approval.approval_uuid == UUID(approval_id))
         assert row is not None and row.status == "pending", row.status if row else None
 
     # 人终于做了决定 —— 照样生效
@@ -284,37 +299,67 @@ async def test_an_old_approval_never_expires(client: httpx.AsyncClient) -> None:
 async def test_an_online_wait_is_not_mistaken_for_a_suspension(
     client: httpx.AsyncClient,
 ) -> None:
-    """★ `awaiting_approval` 在两条路径上含义不同，扫描不能一视同仁。
+    """★ CLI 在线等权限是 running + awaiting_user，扫描和续跑都不能碰它。
 
-        native   图已跳出、进程已结束 —— 真挂起，waiting_on 有值
-        acp      CLI 在 Pod 里发起的同步 RPC，**run 还在跑** —— bridge 正等着
-                 响应，只能在线等；这期间 gate 也把 run 标成 awaiting_approval，
-                 但它**没有** waiting_on
+        原生   图已跳出、进程已结束 —— 真挂起（suspended），waiting_on 有值
+        CLI    CLI 在 Pod 里发起的同步 RPC，**run 还在跑** —— bridge 正等着
+               响应，只能在线等
 
-    不区分的话扫描会把一个正在跑的 acp 子 run 当成可续跑并 submit 第二次 ——
-    第二条上游连接 连上同一个 Pod，bridge 按 CLOSE_SUPERSEDED(4409) 关掉
-    第一个，整轮 runtime_crashed。真机验证时撞到过，症状是「审批批准了，
-    子 run 却崩了」。
+    续跑它的话，第二条上游连接连上同一个 Pod，bridge 按 CLOSE_SUPERSEDED(4409)
+    关掉第一个，整轮 runtime_crashed。真机验证时撞到过，症状是「审批批准了，
+    子 run 却崩了」。迁移 0030 之前两者共用 awaiting_approval，只能靠有没有
+    waiting_on 去猜。
     """
     from atlas_agent.db.models import Run
     from sqlalchemy import update
 
     run_id, _approval_id = await _start_guarded_run(client)
+    await _wait_suspended(client, run_id)
     executor = client._transport.app.state.executor  # type: ignore[attr-defined]
 
-    # 模拟 acp 的在线等待：状态是 awaiting_approval，但没有 waiting_on
+    # 模拟 CLI 的在线等待：进程在跑（持有租约），等用户批准
     async with get_sessionmaker()() as session:
         await session.execute(
-            update(Run).where(Run.id == UUID(run_id)).values(waiting_on=None)
+            update(Run)
+            .where(Run.run_uuid == UUID(run_id))
+            .values(status="running", awaiting_user=True, waiting_on=None, owner="elsewhere")
         )
         await session.commit()
 
     assert await executor.sweep_suspended() == 0, "在线等待的 run 被当成挂起续跑了"
     assert await executor.resume_if_ready(UUID(run_id)) is False
 
+    run = (await client.get(f"/v1/runs/{run_id}")).json()
+    assert run["status"] == "running" and run["awaiting_user"] is True, run
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_cli_approvals_mark_the_run_awaiting_user(
+    client: httpx.AsyncClient, redis: aioredis.Redis
+) -> None:
+    """★ CLI 的权限请求进同一张审批表；待决期间 run 标 awaiting_user，决定之后清掉。"""
+    from atlas_agent.db.models import Approval
+    from atlas_agent.host.runtime import _DbApprovals
+    from sqlalchemy import update
+
+    run_id, _approval_id = await _start_guarded_run(client)
+    await _wait_suspended(client, run_id)
+    # 原生那条审批先作废，只留 CLI 的这一条
     async with get_sessionmaker()() as session:
-        row = await session.get(Run, UUID(run_id))
-        assert row is not None and row.status == "awaiting_approval"
+        await session.execute(update(Approval).values(status="expired"))
+        await session.commit()
+
+    approvals = _DbApprovals(get_sessionmaker(), redis, UUID(run_id))
+    cli_approval = str(uuid4())
+    assert await approvals.check(approval_id=cli_approval, tool_name="Bash", args={}) == "pending"
+    assert (await client.get(f"/v1/runs/{run_id}")).json()["awaiting_user"] is True
+
+    decided = await client.post(
+        f"/v1/runs/{run_id}/approvals/{cli_approval}", json={"decision": "approved"}
+    )
+    assert decided.status_code == 200, decided.text
+    assert await approvals.check(approval_id=cli_approval, tool_name="Bash", args={}) == "approved"
+    assert (await client.get(f"/v1/runs/{run_id}")).json()["awaiting_user"] is False
 
 
 @pytest.mark.usefixtures("clean_db")
@@ -350,7 +395,7 @@ async def test_a_very_long_tool_name_still_registers(
     assert state == "pending", f"长工具名没能登记，退化成了 {state!r}"
 
     async with get_sessionmaker()() as session:
-        row = await session.get(Approval, UUID(approval_id))
+        row = await fetch_one(session, Approval, Approval.approval_uuid == UUID(approval_id))
         assert row is not None, "approval 没落库 —— 事务回滚了"
         assert len(row.tool_name) <= _TOOL_NAME_MAX
         # 截断保留开头：排查时一眼能认出是哪条命令

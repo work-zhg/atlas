@@ -299,7 +299,7 @@ class SkillRefSpec:
 #:
 #: ★ 不做成「顾问 / 助理」这类角色名：角色是用法，type 是机制。
 #:   role 会诱导人往里塞与执行方式无关的策略（Agent 管理 §02）。
-AgentKind = Literal["native", "acp"]
+AgentKind = Literal["native", "cli"]
 
 
 #: acp CLI 的权限模式（doc/acp-permission-mode-design.html）。
@@ -423,7 +423,7 @@ class SubAgentSpec:
     #: ★ SubAgent 链路本身不认识它：子会话也是 thread，HostRuntime 对它原样生效
     #:   （subagent §02 的对称性）。这里只是让子会话的 spec 派生带上它。
     kind: AgentKind = "native"
-    #: kind="acp" 时必填。
+    #: kind="cli" 时必填。
     cli: CliSpec | None = None
     #: 见 AgentSpec.mcp_tool_digests
     mcp_tool_digests: Mapping[str, str] = field(default_factory=dict)
@@ -488,7 +488,7 @@ class AgentSpec:
     #: 执行形态。★ 有默认值是快照纪律：历史 agent_version.spec 里没有这个
     #: 字段，反序列化必须照常（tests/test_spec_snapshots.py 守着）。
     kind: AgentKind = "native"
-    #: kind="acp" 时必填，validate() 互校。
+    #: kind="cli" 时必填，validate() 互校。
     cli: CliSpec | None = None
     #: 保存时记录的 MCP 工具定义指纹：{spec 标识 mcp:server:tool → digest}。
     #: ★ 由服务端在保存时填写，客户端传的值不算数（技能 / MCP 设计 §9）。
@@ -515,14 +515,14 @@ class AgentSpec:
         self.compaction.validate()
         self.knowledge.validate()
         self.approval.validate()
-        if self.kind == "acp" and self.knowledge.enabled and self.knowledge.mode != "tool":
+        if self.kind == "cli" and self.knowledge.enabled and self.knowledge.mode != "tool":
             raise InvalidSpec("acp agent 的知识库只能以工具方式接入（mode='tool'）")
-        if self.kind == "acp" and self.cli is None:
-            raise InvalidSpec("kind='acp' 必须提供 cli（cli_type / adapter / image）")
-        if self.kind == "acp" and self.sandbox != SandboxSpec():
+        if self.kind == "cli" and self.cli is None:
+            raise InvalidSpec("kind='cli' 必须提供 cli（cli_type / adapter / image）")
+        if self.kind == "cli" and self.sandbox != SandboxSpec():
             # 配了却不生效（§13.2）：acp 的 Pod 镜像在 cli.image
             raise InvalidSpec("acp agent 不用 sandbox 配置：Pod 镜像在 cli.image 里配")
-        if self.kind == "acp" and any(not name.startswith("mcp:") for name in self.tool_names):
+        if self.kind == "cli" and any(not name.startswith("mcp:") for name in self.tool_names):
             # ★ acp 的工具来自 CLI 自带，平台内置工具对它没有意义。勾了是
             #   配置错误 —— 报出来而不是静默忽略（Agent 管理 §05）。
             raise InvalidSpec(
@@ -534,7 +534,7 @@ class AgentSpec:
         names = [s.name for s in self.subagents]
         if len(names) != len(set(names)):
             raise InvalidSpec("子智能体名称必须唯一", names=names)
-        if self.kind == "acp" and self.subagents:
+        if self.kind == "cli" and self.subagents:
             # ★ acp agent **不能委派**：平台的 task 工具装在 LangGraph 图上，
             #   而 acp 的一轮根本不建图（工具面由 CLI 自带）。静默忽略这份
             #   配置就是「配了却不生效」—— §13.2 不允许。
@@ -544,9 +544,9 @@ class AgentSpec:
                 subagents=[s.name for s in self.subagents],
             )
         for sub in self.subagents:
-            if sub.kind == "acp" and sub.cli is None:
+            if sub.kind == "cli" and sub.cli is None:
                 raise InvalidSpec(
-                    f"子智能体 {sub.name!r} 的 kind='acp' 但缺少 cli 配置",
+                    f"子智能体 {sub.name!r} 的 kind='cli' 但缺少 cli 配置",
                     subagent=sub.name,
                 )
 

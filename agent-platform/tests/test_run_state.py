@@ -21,7 +21,7 @@ from atlas_agent.config import get_settings
 from atlas_agent.db.models import RunState
 from atlas_agent.db.session import get_sessionmaker
 from atlas_agent.executor import runtime
-from atlas_agent.executor.inprocess import InProcessExecutor
+from atlas_agent.executor.compose import build_executor
 from atlas_agent.main import create_app
 from atlas_engine.kernel.middleware.compaction import CompactionMiddleware
 from httpx import ASGITransport
@@ -141,7 +141,7 @@ async def client_and_states(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(runtime, "engine_run", spy)
 
     app = create_app()
-    app.state.executor = InProcessExecutor(
+    app.state.executor = build_executor(
         get_sessionmaker(), get_settings(), model_builder=lambda *_a, **_k: model
     )
     transport = ASGITransport(app=app)
@@ -152,7 +152,7 @@ async def client_and_states(monkeypatch: pytest.MonkeyPatch):
 async def _stored(run_id: str) -> dict[str, Any]:
     async with get_sessionmaker()() as session:
         rows = await session.execute(
-            select(RunState.key, RunState.value).where(RunState.run_id == UUID(run_id))
+            select(RunState.key, RunState.value).where(RunState.run_uuid == UUID(run_id))
         )
         return dict(rows.all())
 

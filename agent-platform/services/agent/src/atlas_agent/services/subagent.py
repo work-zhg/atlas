@@ -29,7 +29,7 @@ from atlas_agent.domain.spec import AgentSpec, SubAgentSpec
 
 from ..config import Settings
 from ..db.models import Run, Thread
-from ..executor.base import RunExecutor
+from ..executor.base import SubmitRun
 from ..repositories.run import RunRepository
 from ..repositories.thread import ThreadRepository
 from ..stream.relay import EventRelay
@@ -66,7 +66,7 @@ class SubAgentService:
         self,
         sessionmaker: async_sessionmaker[AsyncSession],
         settings: Settings,
-        executor: RunExecutor,
+        submit: SubmitRun,
         relay: EventRelay,
         *,
         parent_run_id: UUID,
@@ -77,12 +77,13 @@ class SubAgentService:
     ) -> None:
         self._sessionmaker = sessionmaker
         self._settings = settings
-        self._executor = executor
+        #: 起子 run：与用户发起的 run 同一条链路（Run 执行器的入队）
+        self._submit = submit
         self._relay = relay
         self._parent_run_id = parent_run_id
-        self._parent_thread_id = parent_thread.id
-        self._agent_id = parent_thread.agent_id
-        self._created_by = parent_thread.created_by
+        self._parent_thread_id = parent_thread.thread_uuid
+        self._agent_id = parent_thread.agent_uuid
+        self._created_by = parent_thread.created_by_uuid
         self._spec = parent_spec
         self._agent_version_id = agent_version_id
         #: 会话创建后的技能投送回调，注入以避免本模块依赖对象存储装配。
@@ -140,16 +141,16 @@ class SubAgentService:
                 parent = (
                     await session.execute(
                         select(
-                            Run.created_by,
+                            Run.created_by_uuid,
                             Run.auth_uid,
                             Run.auth_subject,
-                            Run.root_run_id,
+                            Run.root_run_uuid,
                             Run.depth,
-                        ).where(Run.id == self._parent_run_id)
+                        ).where(Run.run_uuid == self._parent_run_id)
                     )
                 ).one_or_none()
             # run 树的根：父 run 的根；父 run 自己是根（用户输入的那个 run）就是它
-            root_run_id = (parent.root_run_id if parent else None) or self._parent_run_id
+            root_run_id = (parent.root_run_uuid if parent else None) or self._parent_run_id
             await self._check_admission(root_run_id)
             run_id = await self._start(
                 sub,
@@ -157,7 +158,7 @@ class SubAgentService:
                 fresh=fresh,
                 root_run_id=root_run_id,
                 depth=(parent.depth if parent else 0) + 1,
-                created_by=parent.created_by if parent else None,
+                created_by=parent.created_by_uuid if parent else None,
                 auth_uid=parent.auth_uid if parent else None,
                 auth_subject=parent.auth_subject if parent else None,
                 approval_mode=approval_mode,
@@ -258,7 +259,7 @@ class SubAgentService:
             )
             await session.commit()
 
-        await self._executor.submit(run_id)
+        await self._submit(run_id)
         logger.info(
             "派出 SubAgent %s → 子会话 %s 子 run %s（父 run %s，深度 %d）",
             sub.name,
@@ -289,7 +290,7 @@ class SubAgentService:
                 existing = await threads.find_subagent(self._parent_thread_id, sub.name)
                 if existing is not None:
                     if not fresh:
-                        return existing.id
+                        return existing.thread_uuid
                     await threads.archive_subagent(existing)
 
             thread = await threads.create(
@@ -312,7 +313,7 @@ class SubAgentService:
             if self._seed_skills is not None:
                 await self._seed_skills(thread, sub)  # type: ignore[operator]
             await session.commit()
-            return thread.id
+            return thread.thread_uuid
 
 
 #: 失败 / 被停止时附带的部分输出上限：它只是线索，不该比一次正常结论还长。
@@ -331,13 +332,13 @@ async def subagent_result(session: AsyncSession, sub_run_id: UUID) -> str:
     if run is None:
         return "SubAgent 的 run 记录丢失，没有拿到结论。"
 
-    thread = await ThreadRepository(session).by_id(run.thread_id)
+    thread = await ThreadRepository(session).by_id(run.thread_uuid)
     name = (thread.subagent_name if thread is not None else None) or "SubAgent"
 
     if run.status not in _TERMINAL:
         return f"{name} 尚未结束（状态 {run.status}），本轮拿不到它的结论。"
 
-    text, tool_calls = await runs.run_output(run.id)
+    text, tool_calls = await runs.run_output(run.run_uuid)
     started, finished = run.started_at, run.finished_at
     return format_subagent_result(
         name,

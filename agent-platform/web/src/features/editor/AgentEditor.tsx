@@ -607,10 +607,10 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
               value={draft.spec.kind ?? "native"}
               options={[
                 { value: "native", label: "Native · 平台内运行" },
-                { value: "acp", label: "ACP · CLI" },
+                { value: "cli", label: "CLI" },
               ]}
             />
-            {draft.spec.kind === "acp" && draft.spec.cli ? (
+            {draft.spec.kind === "cli" && draft.spec.cli ? (
               <div style={{ marginTop: 12, fontSize: 12.5, color: "var(--fg-2)" }}>
                 CLI <code>{draft.spec.cli.cli_type}</code> · 权限模式{" "}
                 <Select
@@ -959,7 +959,7 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
                         </Tag>
                       )}
                       {/* ACP 子智能体（CLI 跑在会话 Pod 里）：权限模式由作者定，不让模型自己选 */}
-                      {sub.kind === "acp" && sub.cli && (
+                      {sub.kind === "cli" && sub.cli && (
                         <div style={{ margin: "6px 0 2px", fontSize: 12, color: "var(--fg-2)" }}>
                           CLI 权限模式{" "}
                           <Select
@@ -1051,7 +1051,7 @@ export function AgentEditor({ agentId }: { agentId?: string }) {
             title="审批模式"
             desc="作者定默认模式和允许的范围，用户在对话里从允许的模式中选。拒绝不终止本轮 —— 连同用户给的原因作为工具结果回给智能体，它可以换个方案继续。"
           >
-            {draft.spec.kind === "acp" ? (
+            {draft.spec.kind === "cli" ? (
               <p className={styles.capNote}>
                 ACP 智能体的权限由 CLI 的权限模式决定（见「执行形态」）；作为子智能体时与父智能体的模式取更严格的那个。
               </p>

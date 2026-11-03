@@ -49,9 +49,9 @@ class PreviewService:
         thread, _ = found
         token = secrets.token_urlsafe(32)
         payload = {
-            "thread_id": str(thread.id),
+            "thread_id": str(thread.thread_uuid),
             # 工作区的 key 里有 user 段，取的是会话创建者而不是当前请求者
-            "owner_id": str(thread.created_by),
+            "owner_id": str(thread.created_by_uuid),
             "workspace_thread_id": (
                 str(thread.workspace_thread_id) if thread.workspace_thread_id else None
             ),

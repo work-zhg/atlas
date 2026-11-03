@@ -20,7 +20,7 @@ from .auth.uc import UCClient
 from .config import get_settings
 from .db.session import get_sessionmaker
 from .errors import AppError
-from .executor.inprocess import InProcessExecutor
+from .executor.compose import build_executor
 from .host.runtime import HostRuntime
 from .instance import instance_id
 from .maintainer import Maintainer
@@ -79,11 +79,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     #   补记据此完全跳过，不回落任何假实现。
     memory = make_memory_runtime(settings, get_sessionmaker())
     app.state.memory = memory
-    app.state.executor = InProcessExecutor(
+    app.state.executor = build_executor(
         get_sessionmaker(),
         settings,
-        # acp agent 的执行：经会话 Pod 里的 bridge（上游协议 atlas.host.v1）
-        acp_runtime=HostRuntime(get_sessionmaker(), settings, pods),
+        # CLI 智能体的执行：经会话 Pod 里的 bridge（上游协议 atlas.host.v1）
+        cli_runtime=HostRuntime(get_sessionmaker(), settings, pods),
         memory=memory,
     )
 

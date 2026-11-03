@@ -19,10 +19,11 @@ from atlas_agent.services.run import RunService
 class _Runs:
     def __init__(self, status: str, children: list[UUID], **nested: list[UUID]) -> None:
         self.run = SimpleNamespace(
-            id=uuid4(),
-            thread_id=uuid4(),
-            parent_run_id=None,
+            run_uuid=uuid4(),
+            thread_uuid=uuid4(),
+            parent_run_uuid=None,
             status=status,
+            awaiting_user=False,
             error_kind=None,
             error_message=None,
             last_seq=0,
@@ -36,7 +37,7 @@ class _Runs:
             created_at=datetime.now(UTC),
         )
         #: 父 run → 还没结束的直接子 run。nested 的键是子 run 的 str(id)
-        self.children: dict[UUID, list[UUID]] = {self.run.id: children}
+        self.children: dict[UUID, list[UUID]] = {self.run.run_uuid: children}
         self.children.update({UUID(k): v for k, v in nested.items()})
 
     async def get(self, run_id: UUID) -> Any:
@@ -58,6 +59,7 @@ def _service(runs: _Runs) -> tuple[RunService, _Executor]:
     executor = _Executor()
     service = RunService(None, None, get_settings(), executor)  # type: ignore[arg-type]
     service._runs = runs  # type: ignore[assignment]
+    service._continuation = runs  # type: ignore[assignment]
     return service, executor
 
 
@@ -65,7 +67,7 @@ async def test_stopping_a_finished_parent_still_cancels_its_running_children() -
     child = uuid4()
     runs = _Runs("interrupted", [child])
     service, executor = _service(runs)
-    await service.cancel(runs.run.id)
+    await service.cancel(runs.run.run_uuid)
     assert executor.cancelled == [child]  # 父不再取消（已结束），只级联子
 
 
@@ -73,7 +75,7 @@ async def test_stopping_a_finished_run_without_children_is_still_a_conflict() ->
     runs = _Runs("succeeded", [])
     service, executor = _service(runs)
     with pytest.raises(Conflict):
-        await service.cancel(runs.run.id)
+        await service.cancel(runs.run.run_uuid)
     assert executor.cancelled == []
 
 
@@ -81,8 +83,8 @@ async def test_stopping_a_running_parent_cancels_it_and_its_children() -> None:
     child = uuid4()
     runs = _Runs("running", [child])
     service, executor = _service(runs)
-    await service.cancel(runs.run.id)
-    assert executor.cancelled == [runs.run.id, child]
+    await service.cancel(runs.run.run_uuid)
+    assert executor.cancelled == [runs.run.run_uuid, child]
 
 
 async def test_stopping_cancels_the_whole_subtree() -> None:
@@ -94,5 +96,5 @@ async def test_stopping_cancels_the_whole_subtree() -> None:
     child, grandchild, great = uuid4(), uuid4(), uuid4()
     runs = _Runs("suspended", [child], **{str(child): [grandchild], str(grandchild): [great]})
     service, executor = _service(runs)
-    await service.cancel(runs.run.id)
-    assert executor.cancelled == [runs.run.id, child, grandchild, great]
+    await service.cancel(runs.run.run_uuid)
+    assert executor.cancelled == [runs.run.run_uuid, child, grandchild, great]

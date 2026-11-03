@@ -96,7 +96,7 @@ def ensure_agent() -> str:
                         "system_prompt": "你在会话 Pod 里，工作区是当前目录。按要求写文件。",
                         "model": {"model": "deepseek-chat", "provider": "anthropic"},
                         # ★ 这一行就是本次验证的主角
-                        "kind": "acp",
+                        "kind": "cli",
                         "cli": {"cli_type": "claude-code", "adapter": ADAPTER, "image": IMAGE},
                     }
                 ],

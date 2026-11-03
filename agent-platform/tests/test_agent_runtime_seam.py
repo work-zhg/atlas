@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import inspect
 
-from atlas_agent.executor import inprocess
+from atlas_agent.executor import segment
 from atlas_agent.executor.runtime import AgentRuntime, NativeRuntime, select_runtime
 
 
@@ -56,8 +56,9 @@ def test_executor_asks_which_runtime_exactly_once() -> None:
     散在多处 if 的话，加一个 agent 类型就要在执行器里找齐所有分支点，
     而漏掉一处的表现是「某条路径下 acp 走了 native 的装配」。
     """
-    src = inspect.getsource(inprocess.InProcessExecutor._execute)
-    assert src.count("select_runtime(") == 1
+    src = inspect.getsource(segment.SegmentExecution.run)
+    assert src.count("self._runtimes.select(") == 1
+    assert inspect.getsource(segment.RuntimeRegistry.select).count("select_runtime(") == 1
 
 
 def test_runtime_does_not_persist_publish_or_unlock() -> None:
@@ -79,12 +80,12 @@ def _prepared(kind: str):
 
 def test_select_runtime_dispatches_on_kind() -> None:
     native = NativeRuntime(assembly=None)  # type: ignore[arg-type]
-    acp = object()
-    assert select_runtime(_prepared("native"), native=native, acp=acp) is native  # type: ignore[arg-type]
-    assert select_runtime(_prepared("acp"), native=native, acp=acp) is acp  # type: ignore[arg-type]
+    cli = object()
+    assert select_runtime(_prepared("native"), native=native, cli=cli) is native  # type: ignore[arg-type]
+    assert select_runtime(_prepared("cli"), native=native, cli=cli) is cli  # type: ignore[arg-type]
 
 
-def test_acp_without_a_runtime_is_a_loud_error() -> None:
+def test_cli_without_a_runtime_is_a_loud_error() -> None:
     """★ 不静默回落 native。
 
     回落的后果是「配了 CLI 助理，实际跑的是进程内 LangGraph」—— 两者的
@@ -95,4 +96,4 @@ def test_acp_without_a_runtime_is_a_loud_error() -> None:
 
     native = NativeRuntime(assembly=None)  # type: ignore[arg-type]
     with pytest.raises(InvalidSpec):
-        select_runtime(_prepared("acp"), native=native)
+        select_runtime(_prepared("cli"), native=native)

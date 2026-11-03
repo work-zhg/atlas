@@ -31,21 +31,21 @@ async def reassign_threads(mapping: dict[str, str]) -> dict[str, Any]:
             ids = [
                 thread_id,
                 *await session.scalars(
-                    select(Thread.id).where(Thread.parent_thread_id == thread_id)
+                    select(Thread.thread_uuid).where(Thread.parent_thread_uuid == thread_id)
                 ),
             ]
             changed = await session.execute(
-                update(Thread).where(Thread.id.in_(ids)).values(created_by=user_id)
+                update(Thread).where(Thread.thread_uuid.in_(ids)).values(created_by_uuid=user_id)
             )
             if not changed.rowcount:  # type: ignore[attr-defined]
                 out["missing"] += 1
                 continue
             out["threads"] += changed.rowcount  # type: ignore[attr-defined]
-            unowned = or_(Run.created_by.is_(None), Run.auth_uid.is_(None))
+            unowned = or_(Run.created_by_uuid.is_(None), Run.auth_uid.is_(None))
             runs = await session.execute(
                 update(Run)
-                .where(Run.thread_id.in_(ids), unowned)
-                .values(created_by=user_id, auth_uid=user_id)
+                .where(Run.thread_uuid.in_(ids), unowned)
+                .values(created_by_uuid=user_id, auth_uid=user_id)
             )
             out["runs"] += runs.rowcount  # type: ignore[attr-defined]
         await session.commit()

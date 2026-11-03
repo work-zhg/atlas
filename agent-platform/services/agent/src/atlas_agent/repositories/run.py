@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, func, insert, or_, select, update
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from atlas_agent.domain.events import EventType, TraceEvent
+from atlas_agent.domain.events import EventType
 from atlas_agent.domain.messages import KIND_CHAT
 
-from ..db.models import AgentVersion, Message, Run, RunEvent, RunState, Thread
+from ..db.models import Message, Run
+from ..db.session import fetch_one
 
 _TERMINAL = ("succeeded", "failed", "cancelled", "interrupted")
 
@@ -22,26 +22,20 @@ _RUNNING = ("queued", "running")
 
 #: 挂起：**没有进程**，但这个 run 没结束。
 #:
-#: ★ awaiting_approval 从 _RUNNING 搬到了这里（S7）。它的含义变了：原先是
-#:   「有一个 asyncio.Task 正阻塞在 BLPOP 上」，所以进程死了它确实是孤儿；
-#:   现在是「挂起中，等人点头」—— 没有进程是正常的，收它就是把等待中的审批
-#:   全判死。
-#:
-#: ★ 为什么不与 suspended 合并成一个值：UI 要区分「在等机器」和「在等你」。
-#:   前者用户只能干等，后者需要他行动（去点那个弹窗）。
-SUSPENDED_STATUSES = ("suspended", "awaiting_approval")
+#: ★ 「等人」不是一个状态（迁移 0030 去掉了 awaiting_approval）：挂起时在等审批还是
+#:   等子 run，看 waiting_on 里的原因；CLI 在线等权限（进程还在跑）是 running +
+#:   awaiting_user。原先一个 awaiting_approval 两种意思，续跑判据只能靠「有没有等待项」
+#:   去猜，猜错了就会把在跑的 CLI 再执行一遍。
+SUSPENDED_STATUSES = ("suspended",)
 _SUSPENDED = SUSPENDED_STATUSES
 
 
 #: 「用户眼里这个 run 还没结束」。
 _UNFINISHED = (*_RUNNING, *_SUSPENDED)
 
-#: 持有租约（有执行器在跑）的状态（横向扩展设计 §4）。
-#:
-#: ★ awaiting_approval 也在其中：acp 的在线等审批 run 还在跑（bridge 等着权限响应），
-#:   持有者死了要被接管。native 的审批挂起同一个状态值，但它挂起时清掉了租约
-#:   （owner、lease_until 为空），不会被续租也不会被当成过期。
-_LEASED = ("running", "awaiting_approval")
+#: 持有租约（有执行器在跑）的状态（横向扩展设计 §4）。CLI 在线等权限时仍是 running：
+#: 进程还在跑，持有者死了要被接管
+_LEASED = ("running",)
 
 
 class LeaseLost(RuntimeError):
@@ -78,12 +72,6 @@ def _held_by(owner: str | None) -> tuple[Any, ...]:
 _ARCHIVED_EXCLUDED = frozenset({EventType.MESSAGE_DELTA, EventType.THINKING_DELTA})
 
 
-def _suspended_status(waiting_on: dict[str, dict[str, str]] | None) -> str:
-    """挂起落哪个状态值 —— 等人点头的那些要能被 UI 认出来。"""
-    for wait in (waiting_on or {}).values():
-        if (wait or {}).get("reason") == "approval":
-            return "awaiting_approval"
-    return "suspended"
 
 
 def _wait_reasons(status: str, waiting_on: Any) -> set[str]:
@@ -125,24 +113,7 @@ class RunRepository:
     # ------------------------------------------------------------------ 读
 
     async def get(self, run_id: UUID) -> Run | None:
-        return await self._session.get(Run, run_id)
-
-    async def load_for_execution(
-        self, run_id: UUID
-    ) -> tuple[Run, Thread, AgentVersion] | None:
-        """取执行一次 run 所需的三行。
-
-        试跑移除后 thread_id / agent_version_id 均非空（迁移 0006），
-        内连接即可 —— 查不到就是 run 真的不存在。
-        """
-        stmt = (
-            select(Run, Thread, AgentVersion)
-            .join(AgentVersion, AgentVersion.id == Run.agent_version_id)
-            .join(Thread, Thread.id == Run.thread_id)
-            .where(Run.id == run_id)
-        )
-        row = (await self._session.execute(stmt)).one_or_none()
-        return (row[0], row[1], row[2]) if row else None
+        return await fetch_one(self._session, Run, Run.run_uuid == run_id)
 
     async def history(
         self,
@@ -161,7 +132,7 @@ class RunRepository:
           直接消失，既不进模型也不产生摘要，用户感受是「它忘了」而不是
           「已压缩」。收缩上下文的职责现在唯一地归压缩。
         """
-        stmt = select(Message).where(Message.thread_id == thread_id)
+        stmt = select(Message).where(Message.thread_uuid == thread_id)
         if after is not None:
             stmt = stmt.where(Message.created_at > after)
         stmt = stmt.order_by(Message.created_at.desc()).limit(limit)
@@ -177,7 +148,7 @@ class RunRepository:
         stmt = (
             select(Message)
             .where(
-                Message.thread_id == thread_id,
+                Message.thread_uuid == thread_id,
                 Message.role == "user",
                 Message.kind == KIND_CHAT,
             )
@@ -186,122 +157,6 @@ class RunRepository:
         )
         rows = list((await self._session.execute(stmt)).scalars())
         return list(reversed(rows))
-
-    async def archived_events(self, run_id: UUID, *, after_seq: int) -> list[RunEvent]:
-        stmt = (
-            select(RunEvent)
-            .where(RunEvent.run_id == run_id, RunEvent.seq > after_seq)
-            .order_by(RunEvent.seq)
-        )
-        return list((await self._session.execute(stmt)).scalars())
-
-    async def archived_run_trace(self, run_id: UUID, *, limit: int = 5_000) -> list[RunEvent]:
-        """一轮的完整归档轨迹：这个 run 自己的事件 + 它委派出去的子 run 的事件。
-
-        ★ 子 run 靠 parent_run_id 找。委派深度结构性封顶 1，一层子查询就够。
-        ★ 按 thread_seq 排：父子交错发生，thread_seq 才是它们在会话流上的真实顺序。
-        ★ 归档被清理后这里返回空 —— 前端据此退回只显示正文。
-        """
-        children = select(Run.id).where(Run.parent_run_id == run_id)
-        stmt = (
-            select(RunEvent)
-            .where((RunEvent.run_id == run_id) | RunEvent.run_id.in_(children))
-            .order_by(RunEvent.thread_seq)
-            .limit(limit)
-        )
-        return list((await self._session.execute(stmt)).scalars())
-
-    async def archived_thread_events(
-        self, thread_id: UUID, *, after_seq: int, limit: int = 5_000
-    ) -> list[RunEvent]:
-        """一条会话流上 thread_seq 之后的归档事件（跨 run，含子 run）。
-
-        ★ 为什么会话流也要读归档：Redis 的流有 maxlen 裁剪，而会话流永不结束
-          —— 活跃久了早期事件只在 Postgres 里。所以回放是「先归档、再 Redis」
-          接力，两段按 thread_seq 接上（见 services/run.py::stream_thread）。
-
-        ★ limit 是安全网而不是分页：正常路径由调用方先算出一个窗口下界
-          （thread_seq_window_floor），不会一次要几千条。
-        """
-        stmt = (
-            select(RunEvent)
-            .where(RunEvent.thread_id == thread_id, RunEvent.thread_seq > after_seq)
-            .order_by(RunEvent.thread_seq)
-            .limit(limit)
-        )
-        return list((await self._session.execute(stmt)).scalars())
-
-    async def thread_seq_window_floor(self, thread_id: UUID, *, keep: int) -> int:
-        """「只回放最近 keep 条」对应的游标下界。
-
-        ★ 为什么必须有这个窗口。会话流的订阅单位是 thread，而一条会话可以有
-          几百轮 —— 首连若从 thread_seq=0 开始回放，打开一个老会话就是往前端
-          灌几万个事件，页面直接卡死。这是 thread 流相对 run 流**新增**的风险
-          （run 流天然只有一轮的量）。
-
-        ★ 返回 0 = 这条会话的事件不足 keep 条，全给。
-        """
-        inner = (
-            select(RunEvent.thread_seq)
-            .where(RunEvent.thread_id == thread_id)
-            .order_by(RunEvent.thread_seq.desc())
-            .limit(keep)
-            .subquery()
-        )
-        floor = (await self._session.execute(select(func.min(inner.c.thread_seq)))).scalar()
-        # 下界是「最早那条的前一个」—— after_seq 语义是**严格大于**
-        return max(int(floor) - 1, 0) if floor else 0
-
-    async def suspended_runs(self) -> list[UUID]:
-        """**真正挂起**的 run（含等审批的）。周期扫描用来补唤醒。
-
-        ★ 为什么需要补：正常路径是「等的东西到了就主动唤醒」—— 子 run 收尾时、
-          HTTP 决策提交时。但那一刻进程可能正好在重启，唤醒信号就这么没了，
-          run 会永远挂着。这个扫描是它唯一的出路。
-
-        ★ `waiting_on IS NOT NULL` 这一条不是优化，是**正确性**。
-          `awaiting_approval` 这个状态值在两条路径上含义不同：
-
-            native   图已跳出、进程已结束 —— 真挂起，waiting_on 有值
-            acp      CLI 在 Pod 里发起的同步 RPC，**run 还在跑** —— bridge 正
-                     等着响应，所以只能在线等（acp/runtime.py::_await_decision），
-                     这期间 gate 也会把 run 标成 awaiting_approval，但它没有
-                     waiting_on
-
-          不加这一条的话，扫描会把一个**正在跑**的 acp 子 run 当成可续跑，
-          submit 第二次 —— 第二条上游连接 连上同一个 Pod，bridge 按
-          CLOSE_SUPERSEDED(4409) 关掉第一个，整轮以 runtime_crashed 失败。
-          真机验证时撞到过，症状是「审批批准了，子 run 却崩了」。
-        """
-        stmt = select(Run.id).where(
-            Run.status.in_(_SUSPENDED), Run.waiting_on.isnot(None)
-        )
-        return list((await self._session.execute(stmt)).scalars())
-
-    async def has_unfinished_children(self, run_id: UUID) -> bool:
-        """这个 run 还有没跑完的子 run 吗 —— 续跑的 join barrier。
-
-        ★ 判据直接查 run 表，不需要单独的委派账本：`parent_run_id` 本来就
-          记着这层关系（迁移 0007），`ix_run_parent` 本来就在。已经终态的
-          子 run（包括前几段里完成的那些）天然不计入。
-        """
-        stmt = (
-            select(func.count())
-            .select_from(Run)
-            .where(Run.parent_run_id == run_id, Run.status.in_(_UNFINISHED))
-        )
-        return int((await self._session.execute(stmt)).scalar_one()) > 0
-
-    async def unfinished_children_of(self, run_id: UUID) -> list[UUID]:
-        """还没结束的直接子 run —— 父被取消时要级联取消它们（RunService 逐层往下）。
-
-        ★ 不级联的后果很贵：父 run 挂起时没有任何进程盯着子 run，它会一直跑下去，
-          而 acp 的子 run 整段时间都占着一个 Pod。
-        """
-        stmt = select(Run.id).where(
-            Run.parent_run_id == run_id, Run.status.in_(_UNFINISHED)
-        )
-        return list((await self._session.execute(stmt)).scalars())
 
     async def active_run_of(self, thread_id: UUID) -> UUID | None:
         """该会话当前**还没跑完**的 run —— 刷新页面后恢复事件流要用它。
@@ -316,8 +171,8 @@ class RunRepository:
           他正盯着那个「委派中」的卡片。两者都没有进程在跑，但都没结束。
         """
         stmt = (
-            select(Run.id)
-            .where(Run.thread_id == thread_id, Run.status.in_(_UNFINISHED))
+            select(Run.run_uuid)
+            .where(Run.thread_uuid == thread_id, Run.status.in_(_UNFINISHED))
             .order_by(Run.created_at.desc())
             .limit(1)
         )
@@ -336,38 +191,42 @@ class RunRepository:
         if not thread_ids:
             return {}
         latest = (
-            select(Run.thread_id, func.max(Run.created_at).label("at"))
-            .where(Run.thread_id.in_(thread_ids))
-            .group_by(Run.thread_id)
+            select(Run.thread_uuid, func.max(Run.created_at).label("at"))
+            .where(Run.thread_uuid.in_(thread_ids))
+            .group_by(Run.thread_uuid)
             .subquery()
         )
         rows = (
             await self._session.execute(
-                select(Run.id, Run.thread_id, Run.status, Run.waiting_on).join(
-                    latest, (Run.thread_id == latest.c.thread_id) & (Run.created_at == latest.c.at)
+                select(
+                    Run.run_uuid, Run.thread_uuid, Run.status, Run.waiting_on, Run.awaiting_user
+                ).join(
+                    latest,
+                    (Run.thread_uuid == latest.c.thread_uuid) & (Run.created_at == latest.c.at),
                 )
             )
         ).all()
         out: dict[UUID, dict[str, Any]] = {}
-        for run_id, thread_id, status, waiting_on in rows:
+        for run_id, thread_id, status, waiting_on, awaiting_user in rows:
             reasons = sorted(_wait_reasons(status, waiting_on))
             out[thread_id] = {
                 "id": run_id,
                 "status": status,
                 "waiting": reasons,
-                "needs_approval": status == "awaiting_approval" or "approval" in reasons,
+                # 原生挂起在等审批或提问，或者 CLI 在线等权限
+                "needs_approval": awaiting_user or "approval" in reasons,
             }
         parents = {v["id"]: tid for tid, v in out.items() if v["status"] in _SUSPENDED}
         if parents:
             children = (
                 await self._session.execute(
-                    select(Run.parent_run_id, Run.status, Run.waiting_on).where(
-                        Run.parent_run_id.in_(list(parents)), Run.status.in_(_UNFINISHED)
-                    )
+                    select(
+                        Run.parent_run_uuid, Run.status, Run.waiting_on, Run.awaiting_user
+                    ).where(Run.parent_run_uuid.in_(list(parents)), Run.status.in_(_UNFINISHED))
                 )
             ).all()
-            for parent_id, status, waiting_on in children:
-                if status == "awaiting_approval" or "approval" in _wait_reasons(status, waiting_on):
+            for parent_id, status, waiting_on, awaiting_user in children:
+                if awaiting_user or "approval" in _wait_reasons(status, waiting_on):
                     out[parents[parent_id]]["needs_approval"] = True
         return out
 
@@ -380,7 +239,7 @@ class RunRepository:
         stmt = (
             select(Message.content)
             .where(
-                Message.thread_id == thread_id,
+                Message.thread_uuid == thread_id,
                 Message.role == "assistant",
                 Message.kind == KIND_CHAT,
             )
@@ -401,7 +260,7 @@ class RunRepository:
         stmt = (
             select(Message.content)
             .where(
-                Message.run_id == run_id,
+                Message.run_uuid == run_id,
                 Message.role == "assistant",
                 Message.kind == KIND_CHAT,
             )
@@ -431,7 +290,7 @@ class RunRepository:
         stmt = (
             select(func.count())
             .select_from(Run)
-            .where(Run.parent_run_id.isnot(None), Run.status.in_(_RUNNING))
+            .where(Run.parent_run_uuid.isnot(None), Run.status.in_(_RUNNING))
         )
         return int((await self._session.execute(stmt)).scalar_one())
 
@@ -444,7 +303,7 @@ class RunRepository:
         ★ 也防另一种绕过：长 run 在每个规划点派一批「合法尺寸」的 SubAgent，
           累计起来远超并发限制。查 run 表即可，不用单独的账本。
         """
-        stmt = select(func.count()).select_from(Run).where(Run.root_run_id == root_run_id)
+        stmt = select(func.count()).select_from(Run).where(Run.root_run_uuid == root_run_id)
         return int((await self._session.execute(stmt)).scalar_one())
 
     # ------------------------------------------------------------------ 写
@@ -472,334 +331,33 @@ class RunRepository:
         approval_mode：根 run 取自会话 / 请求；子 run 是派活那一刻父 run 的模式。
         """
         run = Run(
-            thread_id=thread_id,
-            agent_version_id=agent_version_id,
-            parent_run_id=parent_run_id,
-            root_run_id=root_run_id,
+            thread_uuid=thread_id,
+            agent_version_uuid=agent_version_id,
+            parent_run_uuid=parent_run_id,
+            root_run_uuid=root_run_id,
             depth=depth,
-            created_by=created_by,
+            created_by_uuid=created_by,
             auth_uid=auth_uid or created_by,
             auth_subject=auth_subject,
             status="queued",
             approval_mode=approval_mode,
         )
         if run_id is not None:
-            run.id = run_id
+            run.run_uuid = run_id
         self._session.add(run)
         await self._session.flush()
         await self._session.refresh(run)
         return run
 
-    async def set_status(self, run_id: UUID, status: str) -> None:
-        """仅用于运行中的状态切换（running ⇄ awaiting_approval）。
-
-        ★ 不碰终止态：run 一旦 succeeded/failed/cancelled，事件集就是不可变的
-          （§10.2 的回放依赖这一点），把它改回 running 会让已关闭的 SSE
-          再也无法正确回放。
-        """
-        await self._session.execute(
-            update(Run)
-            .where(Run.id == run_id, Run.status.notin_(list(_TERMINAL)))
-            .values(status=status)
-        )
-
-    async def mark_running(self, run_id: UUID) -> None:
-        """★ started_at 只在第一次设。
-
-        一个 run 可以分多段执行，每段都会走到这里。每次都重设的话，
-        「这一轮跑了多久」会变成「最后一段跑了多久」—— 而委派挂起的那一
-        小时恰恰是最该被看见的部分。COALESCE 让它保持第一段的时间。
-        """
-        await self._session.execute(
-            update(Run)
-            .where(Run.id == run_id)
-            .values(
-                status="running",
-                started_at=func.coalesce(Run.started_at, datetime.now(UTC)),
-            )
-        )
-
-    async def finish(
-        self,
-        run_id: UUID,
-        *,
-        status: str,
-        last_seq: int,
-        usage: dict[str, int],
-        error_kind: str | None = None,
-        error_message: str | None = None,
-        owner: str | None = None,
-    ) -> None:
-        """owner: 执行器收尾时传本实例 id —— 租约已不在本实例就抛 LeaseLost（围栏）。
-        不传 = 没有执行器在跑的收尾（挂起中被取消、兜底失败）。"""
-        result = await self._session.execute(
-            update(Run)
-            .where(Run.id == run_id, *_held_by(owner))
-            .values(
-                status=status,
-                last_seq=last_seq,
-                error_kind=error_kind,
-                error_message=error_message,
-                **_usage_increments(usage),
-                finished_at=datetime.now(UTC),
-                lease_until=None,
-                # 挂起现场随 run 结束作废（续跑段要读它，所以留到这里才清，见 claim_for_resume）
-                waiting_on=None,
-            )
-        )
-        if owner is not None and not result.rowcount:
-            raise LeaseLost(run_id)
-
-    async def suspend(
-        self,
-        run_id: UUID,
-        *,
-        last_seq: int,
-        usage: dict[str, int],
-        waiting_on: dict[str, dict[str, str]] | None = None,
-        owner: str | None = None,
-    ) -> None:
-        """一段跑完了，但这个 run 还没结束 —— 等子 run 回来再续。
-
-        ★ 用量与 seq 必须当场落下。下一段要从 `last_seq` 接着数事件序号
-          （契约规则 2 的「无空洞」跨段成立），也要从 `total_tokens` 接着
-          算 token 上限 —— 每段各算各的话，一个 run 分三段就能烧掉三倍的
-          预算，而「刹车」在账面上看起来一直没踩。
-
-        ★ 不写 finished_at：它没结束。
-
-        ★ waiting_on 记「在等什么」：{tool_call_id: {reason, token}}，与图的 state 同形
-          （contracts/suspension.py）。续跑的 barrier 按 reason 分派 —— 委派等子 run
-          终态，审批等 approval 被决策；续跑时它与消息一起交回图。
-        """
-        result = await self._session.execute(
-            update(Run)
-            .where(Run.id == run_id, *_held_by(owner))
-            .values(
-                # ★ 等人点头落 awaiting_approval，等机器落 suspended。
-                #   两者都是挂起（_SUSPENDED），分开只为让 UI 能区分
-                #   「你需要做点什么」和「干等就行」。
-                status=_suspended_status(waiting_on),
-                last_seq=last_seq,
-                waiting_on=waiting_on or None,
-                **_usage_increments(usage),
-                # 挂起 = 没有进程在跑：租约一并清掉，它不该被续租，也不该被当成过期接管
-                owner=None,
-                lease_until=None,
-            )
-        )
-        if owner is not None and not result.rowcount:
-            raise LeaseLost(run_id)
-
-    async def claim_for_resume(self, run_id: UUID) -> bool:
-        """把一个 suspended 的 run 抢过来续跑。抢到返回 True。
-
-        ★ 必须是 CAS，不能先查后改。一轮里派出去的几个子 run 可能同时
-          结束，每一个都会来唤醒父 run —— 先查后改的话它们全都看到
-          `suspended` 并各自起一个续跑任务，于是同一个 run 有好几个进程
-          在跑，事件序号与落库互相踩。
-          WHERE 里那个 status 才是真正的互斥，rowcount 是它的回执。
-        """
-        result = await self._session.execute(
-            update(Run)
-            .where(Run.id == run_id, Run.status.in_(_SUSPENDED))
-            # ★ waiting_on **不清**：续跑段要把它和消息一起交回图，而这一段可能由任意
-            #   实例领取，只能从库里读（executor._resume_state）。下一次挂起时覆盖，
-            #   run 结束时清（finish）。读它的地方都按状态过滤（_wait_reasons）。
-            .values(status="queued")
-        )
-        return bool(result.rowcount)
-
     # ------------------------------------------------------------------ 租约
 
-    async def claim_next(self, *, owner: str, lease_s: float) -> tuple[UUID, str | None] | None:
-        """领取一个 run：排队中的，或租约已过期的在途 run（接管）。抢到返回 (run_id, 接管原因)。
 
-        接管原因：None = 正常领取（新 run 或挂起后续跑）；"handoff" = 上一个持有者停机前
-        主动交接（owner 已清空）；"expired" = 持有者租约过期（多半是进程死了）。
 
-        ★ SELECT … FOR UPDATE SKIP LOCKED 再 UPDATE，同一事务：多个执行器并发领取互不
-          阻塞、也不会领到同一行。不写成 UPDATE … WHERE id = (子查询)：MySQL 不允许
-          UPDATE 的子查询读同一张表，这样两种方言同一份代码。
-        ★ 时间用本进程的 UTC 时钟：K8s 节点有 NTP，秒级偏差相对 30s 的租约可以忽略。
-        """
-        now = _utcnow()
-        expired = and_(
-            Run.status.in_(_LEASED),
-            # native 的审批挂起没有进程在跑：挂起时清了租约（lease_until 为空），它由续跑
-            # 路径（claim_for_resume）唤醒，不是接管。★ 不能再用 waiting_on 判断 —— 续跑段
-            # 带着上一次挂起的 waiting_on 在跑，它崩了也要能被接管。
-            Run.lease_until.isnot(None),
-            Run.lease_until < now,
-        )
-        stmt = (
-            select(Run.id, Run.status, Run.owner)
-            .where(or_(Run.status == "queued", expired))
-            .order_by(Run.created_at)
-            .limit(1)
-            .with_for_update(skip_locked=True)
-        )
-        row = (await self._session.execute(stmt)).one_or_none()
-        if row is None:
-            return None
-        run_id, status, previous = row
-        reason = None if status == "queued" else ("handoff" if previous is None else "expired")
-        values: dict[str, Any] = {
-            "status": "running",
-            "owner": owner,
-            "lease_until": now + timedelta(seconds=lease_s),
-            "claimed_at": now,
-            "started_at": func.coalesce(Run.started_at, now),
-        }
-        if reason is not None:
-            values["takeovers"] = Run.takeovers + 1
-        await self._session.execute(update(Run).where(Run.id == run_id).values(**values))
-        return run_id, reason
 
-    async def renew_leases(self, run_ids: list[UUID], *, owner: str, lease_s: float) -> set[UUID]:
-        """一条 SQL 续本实例持有的全部 run。返回仍由本实例持有的那些。
 
-        ★ 不在返回集合里的 = 已被别人接管（或已不在租约态），调用方必须立即停止它的
-          本地执行，否则就是「假死后复活」的双写。
-        """
-        if not run_ids:
-            return set()
-        held = (Run.id.in_(run_ids), Run.owner == owner, Run.status.in_(_LEASED))
-        await self._session.execute(
-            update(Run).where(*held).values(lease_until=_utcnow() + timedelta(seconds=lease_s))
-        )
-        return set((await self._session.execute(select(Run.id).where(*held))).scalars())
 
-    async def release_lease(self, run_id: UUID, *, owner: str) -> bool:
-        """主动交接（§6）：清掉 owner、租约立即到期，下一次领取扫描就会把它领走。
 
-        ★ 状态不动（仍是 running / awaiting_approval）：对用户来说这一轮没有停。
-        """
-        result = await self._session.execute(
-            update(Run)
-            .where(Run.id == run_id, Run.owner == owner, Run.status.in_(_LEASED))
-            .values(owner=None, lease_until=_utcnow())
-        )
-        return bool(result.rowcount)
 
-    async def checkpoint(self, run_id: UUID, *, owner: str, last_seq: int) -> None:
-        """检查点的围栏：推进 last_seq，同时确认租约仍在本实例。不在就抛 LeaseLost。
 
-        ★ 必须是检查点事务里的**第一条**写：它拿到 run 行锁，与接管者的领取互斥。
-        """
-        result = await self._session.execute(
-            update(Run)
-            .where(Run.id == run_id, Run.owner == owner, Run.status.in_(_LEASED))
-            .values(last_seq=func.greatest(Run.last_seq, last_seq))
-        )
-        if not result.rowcount:
-            raise LeaseLost(run_id)
 
-    async def save_acp_progress(self, run_id: UUID, *, instance: str, acked_seq: int) -> None:
-        """acp：已处理到的 bridge 实例与序号（§5.2）。换实例接管时据此 attach。"""
-        await self._session.execute(
-            update(Run)
-            .where(Run.id == run_id)
-            .values(acp_bridge_instance=instance[:64], acp_acked_seq=acked_seq)
-        )
 
-    async def load_state(self, run_id: UUID) -> dict[str, Any]:
-        """这个 run 落过库的图 state（run_state 表），续跑与接管时交回图。全新的 run 返回 {}。"""
-        rows = await self._session.execute(
-            select(RunState.key, RunState.value).where(RunState.run_id == run_id)
-        )
-        return {key: value for key, value in rows.all()}
-
-    async def save_state(self, run_id: UUID, values: Mapping[str, Any]) -> None:
-        """逐键 upsert：只写传进来的键，别的键不动。
-
-        ★ 必须与检查点（或段收尾）在同一个事务里：接管者从最后一个检查点接着跑，
-          state 要与那时落库的消息对得上。
-        """
-        if not values:
-            return
-        table = RunState.__table__
-        rows = [{"run_id": run_id, "key": key, "value": value} for key, value in values.items()]
-        dialect = self._session.bind.dialect.name if self._session.bind else "postgresql"
-        if dialect in ("mysql", "mariadb"):
-            from sqlalchemy.dialects.mysql import insert as mysql_insert
-
-            stmt: Any = mysql_insert(table).values(rows)
-            stmt = stmt.on_duplicate_key_update(value=stmt.inserted.value, updated_at=func.now())
-        else:
-            from sqlalchemy.dialects.postgresql import insert as pg_insert
-
-            stmt = pg_insert(table).values(rows)
-            stmt = stmt.on_conflict_do_update(
-                index_elements=["run_id", "key"],
-                set_={"value": stmt.excluded.value, "updated_at": func.now()},
-            )
-        await self._session.execute(stmt)
-
-    async def archived_thread_seqs(self, run_id: UUID, thread_seqs: list[int]) -> set[int]:
-        """这些 thread_seq 里哪些已经归档 —— 接管时从 Redis 补归档要跳过它们。"""
-        if not thread_seqs:
-            return set()
-        stmt = select(RunEvent.thread_seq).where(
-            RunEvent.run_id == run_id, RunEvent.thread_seq.in_(thread_seqs)
-        )
-        return set((await self._session.execute(stmt)).scalars())
-
-    async def archive_events(self, events: list[TraceEvent], *, thread_id: UUID) -> None:
-        """每段结束时批量落库 —— Redis 是实时通道，这里是历史（文档 §10.2）。
-
-        thread_id 是**事件流归属的会话**（根会话，Thread.stream_thread_id），
-        与 run.thread_id 在子 run 上是不同的值。
-
-        ★ delta 类事件不归档（_ARCHIVED_EXCLUDED）。它们的价值是实时打字
-          效果；回放历史时正文来自 message.completed 一次到位，而前端读
-          历史本来就走 message 表。不滤的话一个长会话能到几十万行，其中
-          绝大多数永远不会被读到。
-
-        ★ 只落已盖过会话序号的事件。thread_seq 是主键的一半，为 0 说明它
-          没经过 publish —— 那是个 bug，宁可少归档一条也不能让整批 INSERT
-          撞主键（那会让整段的收尾失败，run 卡在 running）。
-        """
-        rows = [
-            {
-                "thread_id": thread_id,
-                "thread_seq": e.thread_seq,
-                "run_id": e.run_id,
-                "seq": e.seq,
-                "ts": e.ts,
-                "type": e.type.value,
-                "depth": e.depth,
-                "data": e.data,
-            }
-            for e in events
-            if e.type not in _ARCHIVED_EXCLUDED and e.thread_seq > 0
-        ]
-        if not rows:
-            return
-        await self._session.execute(insert(RunEvent), rows)
-
-    async def thread_seq_floor(self, thread_id: UUID) -> int:
-        """这条会话已归档的最大 thread_seq —— Redis 序号丢失时的恢复水位。
-
-        ★ 每段执行开始时查一次，不是每个事件查一次。它只在 Redis 的序号 key
-          不存在时才真正被用到（见 EventRelay.next_thread_seq 的 Lua）。
-        """
-        stmt = select(func.max(RunEvent.thread_seq)).where(RunEvent.thread_id == thread_id)
-        return int((await self._session.execute(stmt)).scalar() or 0)
-
-    async def touch_thread(self, thread_id: UUID, *, latest_state: dict | None = None) -> None:
-        values: dict = {
-            "updated_at": func.now(),
-            # ★ 只数对话轮，与 ThreadRepository.list_messages / count_messages
-            #   同口径。工具结果也数进去的话，一轮调十次工具就凭空多二十条，
-            #   而用户只发了一句话。
-            "message_count": (
-                select(func.count())
-                .select_from(Message)
-                .where(Message.thread_id == thread_id, Message.kind == KIND_CHAT)
-                .scalar_subquery()
-            ),
-        }
-        if latest_state is not None:
-            values["latest_state"] = latest_state
-        await self._session.execute(update(Thread).where(Thread.id == thread_id).values(**values))

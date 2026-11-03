@@ -43,12 +43,11 @@ class ThreadRunState(BaseModel):
     """会话最近一个 run 的状态 —— 列表上的「运行中 / 待审批 / 等待子智能体 / 失败」。"""
 
     id: UUID
-    #: queued | running | awaiting_approval | suspended |
-    #: succeeded | failed | cancelled | interrupted
+    #: queued | running | suspended | succeeded | failed | cancelled | interrupted
     status: str
-    #: 挂起时在等什么：approval / delegation
+    #: 挂起时在等什么：approval / subagent
     waiting: list[str] = []
-    #: 需要用户处理：本 run 或它委派出去的子 run 在等审批
+    #: 需要用户处理：本 run 或它委派出去的子 run 在等审批或提问（原生挂起，或 CLI 在线等权限）
     needs_approval: bool = False
 
 

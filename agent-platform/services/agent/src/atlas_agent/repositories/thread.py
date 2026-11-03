@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import builtins
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
@@ -8,6 +9,7 @@ from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.models import Agent, Message, Run, Thread
+from ..db.session import fetch_one
 from ..domain.messages import KIND_CHAT, StoredMessage
 
 
@@ -25,13 +27,13 @@ class ThreadRepository:
         调用方（续跑时解析委派结论）要的只是 subagent_name —— 为它多 join
         一张表是白付一次连接开销。
         """
-        return await self._session.get(Thread, thread_id)
+        return await fetch_one(self._session, Thread, Thread.thread_uuid == thread_id)
 
     async def get(self, thread_id: UUID) -> tuple[Thread, Agent] | None:
         stmt = (
             select(Thread, Agent)
-            .join(Agent, Agent.id == Thread.agent_id)
-            .where(Thread.id == thread_id)
+            .join(Agent, Agent.agent_uuid == Thread.agent_uuid)
+            .where(Thread.thread_uuid == thread_id)
         )
         row = (await self._session.execute(stmt)).one_or_none()
         return (row[0], row[1]) if row else None
@@ -43,16 +45,16 @@ class ThreadRepository:
         status: str | None = None,
         cursor: tuple[datetime, UUID] | None = None,
         limit: int = 30,
-    ) -> list[tuple[Thread, Agent]]:
+    ) -> builtins.list[tuple[Thread, Agent]]:
         # ★ 只列用户会话。子会话是父会话的一部分（它的 message 是委派的
         #   中间过程），出现在会话列表里等于把内部过程当成用户的对话。
         stmt = (
             select(Thread, Agent)
-            .join(Agent, Agent.id == Thread.agent_id)
-            .where(Thread.parent_thread_id.is_(None))
+            .join(Agent, Agent.agent_uuid == Thread.agent_uuid)
+            .where(Thread.parent_thread_uuid.is_(None))
         )
         if owner is not None:  # 只列本主体的会话（权限设计 §7.4）
-            stmt = stmt.where(Thread.created_by == owner)
+            stmt = stmt.where(Thread.created_by_uuid == owner)
         if status:
             stmt = stmt.where(Thread.status == status)
         if cursor is not None:
@@ -61,10 +63,10 @@ class ThreadRepository:
             stmt = stmt.where(
                 or_(
                     Thread.updated_at < ts,
-                    and_(Thread.updated_at == ts, Thread.id < last_id),
+                    and_(Thread.updated_at == ts, Thread.thread_uuid < last_id),
                 )
             )
-        stmt = stmt.order_by(Thread.updated_at.desc(), Thread.id.desc()).limit(limit)
+        stmt = stmt.order_by(Thread.updated_at.desc(), Thread.thread_uuid.desc()).limit(limit)
         return [(r[0], r[1]) for r in (await self._session.execute(stmt)).all()]
 
     async def list_messages(
@@ -73,7 +75,7 @@ class ThreadRepository:
         *,
         cursor: tuple[datetime, UUID] | None = None,
         limit: int = 50,
-    ) -> list[Message]:
+    ) -> builtins.list[Message]:
         """倒序：最新的在前，前端向上滚加载更旧的。
 
         ★ 只列 kind='chat'。工具结果（kind='tool_result'）是 role='user' 的
@@ -82,22 +84,22 @@ class ThreadRepository:
           工具调用的展示本来就走事件流（Inspector 的「工具」页），不走这里。
         """
         stmt = select(Message).where(
-            Message.thread_id == thread_id, Message.kind == KIND_CHAT
+            Message.thread_uuid == thread_id, Message.kind == KIND_CHAT
         )
         if cursor is not None:
             ts, last_id = cursor
             stmt = stmt.where(
                 or_(
                     Message.created_at < ts,
-                    and_(Message.created_at == ts, Message.id < last_id),
+                    and_(Message.created_at == ts, Message.message_uuid < last_id),
                 )
             )
-        stmt = stmt.order_by(Message.created_at.desc(), Message.id.desc()).limit(limit)
+        stmt = stmt.order_by(Message.created_at.desc(), Message.message_uuid.desc()).limit(limit)
         return list((await self._session.execute(stmt)).scalars())
 
     # ------------------------------------------------------------------ 写
 
-    async def live_ids(self) -> list[UUID]:
+    async def live_ids(self) -> builtins.list[UUID]:
         """沙箱回收眼里「还活着」的会话：没归档的，加上归档了但还有没结束的 run 的。
 
         ★ 归档的会话不算活：task 的 fresh=true 丢弃的子会话不会再被复用，它的沙箱（ACP Pod）
@@ -105,8 +107,10 @@ class ThreadRepository:
         """
         from .run import _UNFINISHED
 
-        unfinished = select(Run.thread_id).where(Run.status.in_(_UNFINISHED))
-        stmt = select(Thread.id).where(or_(Thread.status != "archived", Thread.id.in_(unfinished)))
+        unfinished = select(Run.thread_uuid).where(Run.status.in_(_UNFINISHED))
+        stmt = select(Thread.thread_uuid).where(
+            or_(Thread.status != "archived", Thread.thread_uuid.in_(unfinished))
+        )
         return list((await self._session.execute(stmt)).scalars())
 
     async def create(
@@ -130,8 +134,11 @@ class ThreadRepository:
             parent = (
                 await self._session.execute(
                     select(
-                        Thread.git_profile, Thread.source_app, Thread.memory, Thread.root_thread_id
-                    ).where(Thread.id == parent_thread_id)
+                        Thread.git_profile,
+                        Thread.source_app,
+                        Thread.memory,
+                        Thread.root_thread_uuid,
+                    ).where(Thread.thread_uuid == parent_thread_id)
                 )
             ).one_or_none()
             # 会话树的根：父会话的根，父会话自己是根就是父会话（SubAgent 可以层层派下去）
@@ -140,16 +147,16 @@ class ThreadRepository:
                 if git_profile is None:
                     git_profile = parent.git_profile
                 source_app, memory = parent.source_app, parent.memory
-                root_thread_id = parent.root_thread_id or parent_thread_id
+                root_thread_id = parent.root_thread_uuid or parent_thread_id
         thread = Thread(
-            agent_id=agent_id,
+            agent_uuid=agent_id,
             title=title,
             # 用户建会话时给了标题就算 manual —— 自动生成永不覆盖（决策 5）
             title_source="manual" if title else "pending",
             status=status,
-            created_by=created_by,
-            parent_thread_id=parent_thread_id,
-            root_thread_id=root_thread_id,
+            created_by_uuid=created_by,
+            parent_thread_uuid=parent_thread_id,
+            root_thread_uuid=root_thread_id,
             subagent_name=subagent_name,
             git_profile=git_profile,
             source_app=source_app,
@@ -167,7 +174,7 @@ class ThreadRepository:
     async def find_subagent(self, parent_thread_id: UUID, name: str) -> Thread | None:
         """按 (父会话, 子智能体名) 找已有的子会话 —— 恢复的查找键。"""
         stmt = select(Thread).where(
-            Thread.parent_thread_id == parent_thread_id,
+            Thread.parent_thread_uuid == parent_thread_id,
             Thread.subagent_name == name,
             Thread.status == "active",
         )
@@ -189,7 +196,7 @@ class ThreadRepository:
         stmt = (
             select(func.count())
             .select_from(Thread)
-            .where(Thread.parent_thread_id == parent_thread_id)
+            .where(Thread.parent_thread_uuid == parent_thread_id)
         )
         return int((await self._session.execute(stmt)).scalar_one())
 
@@ -198,12 +205,12 @@ class ThreadRepository:
         *,
         thread_id: UUID,
         role: str,
-        content: list[dict],
+        content: builtins.list[dict],
         run_id: UUID | None = None,
         kind: str = KIND_CHAT,
     ) -> Message:
         message = Message(
-            thread_id=thread_id, role=role, content=content, run_id=run_id, kind=kind
+            thread_uuid=thread_id, role=role, content=content, run_uuid=run_id, kind=kind
         )
         self._session.add(message)
         await self._session.flush()
@@ -235,11 +242,11 @@ class ThreadRepository:
         self._session.add_all(
             [
                 Message(
-                    thread_id=thread_id,
+                    thread_uuid=thread_id,
                     role=stored.role,
                     kind=stored.kind,
                     content=stored.content,
-                    run_id=run_id,
+                    run_uuid=run_id,
                     created_at=base + timedelta(microseconds=index),
                 )
                 for index, stored in enumerate(messages)
@@ -258,7 +265,7 @@ class ThreadRepository:
         """
         stmt = (
             update(Thread)
-            .where(Thread.id == thread_id, Thread.title_source != "manual")
+            .where(Thread.thread_uuid == thread_id, Thread.title_source != "manual")
             .values(title=title, title_source="fallback" if degraded else "generated")
         )
         result = await self._session.execute(stmt)
@@ -271,7 +278,7 @@ class ThreadRepository:
         暴涨 —— 一轮里调十次工具就多二十条，而用户只发了一句话。
         """
         stmt = select(func.count()).select_from(Message).where(
-            Message.thread_id == thread_id, Message.kind == KIND_CHAT
+            Message.thread_uuid == thread_id, Message.kind == KIND_CHAT
         )
         return int((await self._session.execute(stmt)).scalar_one())
 
@@ -285,18 +292,18 @@ class ThreadRepository:
         """
         from ..db.models import Approval, Message, Run, RunEvent, RunFile, RunState
 
-        ids = [thread.id, *await self._session.scalars(
-            select(Thread.id).where(Thread.parent_thread_id == thread.id)
+        ids = [thread.thread_uuid, *await self._session.scalars(
+            select(Thread.thread_uuid).where(Thread.parent_thread_uuid == thread.thread_uuid)
         )]
-        run_ids = select(Run.id).where(Run.thread_id.in_(ids)).scalar_subquery()
+        run_ids = select(Run.run_uuid).where(Run.thread_uuid.in_(ids)).scalar_subquery()
         for stmt in (
-            delete(Approval).where(Approval.run_id.in_(run_ids)),
-            delete(RunState).where(RunState.run_id.in_(run_ids)),
-            delete(RunEvent).where(RunEvent.thread_id.in_(ids)),
-            delete(RunFile).where(RunFile.thread_id.in_(ids)),
-            delete(Message).where(Message.thread_id.in_(ids)),
-            delete(Run).where(Run.thread_id.in_(ids)),
-            delete(Thread).where(Thread.parent_thread_id == thread.id),
+            delete(Approval).where(Approval.run_uuid.in_(run_ids)),
+            delete(RunState).where(RunState.run_uuid.in_(run_ids)),
+            delete(RunEvent).where(RunEvent.thread_uuid.in_(ids)),
+            delete(RunFile).where(RunFile.thread_uuid.in_(ids)),
+            delete(Message).where(Message.thread_uuid.in_(ids)),
+            delete(Run).where(Run.thread_uuid.in_(ids)),
+            delete(Thread).where(Thread.parent_thread_uuid == thread.thread_uuid),
         ):
             await self._session.execute(stmt)
         await self._session.delete(thread)

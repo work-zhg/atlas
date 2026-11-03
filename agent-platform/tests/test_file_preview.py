@@ -231,17 +231,19 @@ class _Repo:
         self.thread = thread
 
     async def get(self, thread_id):
-        return (self.thread, None) if self.thread and thread_id == self.thread.id else None
+        return (self.thread, None) if self.thread and thread_id == self.thread.thread_uuid else None
 
 
 async def test_issue_and_resolve_token(monkeypatch) -> None:
     redis = FakeRedis()
     settings = _settings(preview_token_ttl_s=120)
     parent = uuid4()
-    thread = SimpleNamespace(id=uuid4(), created_by=uuid4(), workspace_thread_id=parent)
+    thread = SimpleNamespace(
+        thread_uuid=uuid4(), created_by_uuid=uuid4(), workspace_thread_id=parent
+    )
     service = PreviewService(redis, settings)  # type: ignore[arg-type]
 
-    token, _ = await service.issue(_Repo(thread), thread.id)  # type: ignore[arg-type]
+    token, _ = await service.issue(_Repo(thread), thread.thread_uuid)  # type: ignore[arg-type]
     assert len(token) >= 40
 
     seen = {}
@@ -256,7 +258,7 @@ async def test_issue_and_resolve_token(monkeypatch) -> None:
 
     assert await service.resolve(token) == "listing"
     # 工作区按会话创建者构造；子会话解析到父会话的工作区
-    assert seen == {"owner": thread.created_by, "thread_id": thread.id, "ws": parent}
+    assert seen == {"owner": thread.created_by_uuid, "thread_id": thread.thread_uuid, "ws": parent}
     # 命中即续期
     assert redis.ttl == {f"atlas:preview:{token}": 120}
     assert await service.resolve("unknown") is None

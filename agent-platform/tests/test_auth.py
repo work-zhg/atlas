@@ -17,6 +17,7 @@ import pytest
 from atlas_agent.auth.service import snapshot_cache
 from atlas_agent.auth.uc import UCClient
 from atlas_agent.config import get_settings
+from atlas_agent.db.session import fetch_one
 from atlas_agent.main import create_app
 from httpx import ASGITransport
 from sqlalchemy import select
@@ -126,8 +127,8 @@ async def test_business_app_threads(clean_db: None) -> None:
         assert (await bench.get(f"/v1/threads/{t['id']}")).status_code == 404
 
     async with get_sessionmaker()() as s:
-        run = await s.get(Run, uuid.UUID(run_id))
-        assert run is not None and str(run.created_by) == wang and str(run.auth_uid) == wang
+        run = await fetch_one(s, Run, Run.run_uuid == uuid.UUID(run_id))
+        assert run is not None and str(run.created_by_uuid) == wang and str(run.auth_uid) == wang
 
 
 async def test_run_records_auth_uid(clean_db: None) -> None:
@@ -143,8 +144,8 @@ async def test_run_records_auth_uid(clean_db: None) -> None:
         r = await c.post(f"/v1/threads/{t['id']}/runs", json=TEXT)
         assert r.status_code == 202, r.text
     async with get_sessionmaker()() as s:
-        run = await s.get(Run, uuid.UUID(r.json()["run_id"]))
-        assert run is not None and str(run.created_by) == me and str(run.auth_uid) == de
+        run = await fetch_one(s, Run, Run.run_uuid == uuid.UUID(r.json()["run_id"]))
+        assert run is not None and str(run.created_by_uuid) == me and str(run.auth_uid) == de
 
 
 async def test_thread_delete_removes_dependent_rows(clean_db: None) -> None:
@@ -161,8 +162,8 @@ async def test_thread_delete_removes_dependent_rows(clean_db: None) -> None:
         assert (await c.delete(f"/v1/threads/{t['id']}")).status_code == 204
     tid = uuid.UUID(t["id"])
     async with get_sessionmaker()() as s:
-        assert await s.scalar(select(func.count()).where(Message.thread_id == tid)) == 0
-        assert await s.scalar(select(func.count()).where(Run.thread_id == tid)) == 0
+        assert await s.scalar(select(func.count()).where(Message.thread_uuid == tid)) == 0
+        assert await s.scalar(select(func.count()).where(Run.thread_uuid == tid)) == 0
 
 
 # ───────────────────────────── 请求头身份 + 用户中心授权快照（登记具体的人测权限）
@@ -246,9 +247,9 @@ async def _run_identity(run_id: str) -> tuple[str | None, str | None, str | None
     from atlas_agent.db.session import get_sessionmaker
 
     async with get_sessionmaker()() as s:
-        run = await s.get(Run, uuid.UUID(run_id))
+        run = await fetch_one(s, Run, Run.run_uuid == uuid.UUID(run_id))
         assert run is not None
-        return str(run.created_by), str(run.auth_uid), run.auth_subject
+        return str(run.created_by_uuid), str(run.auth_uid), run.auth_subject
 
 
 async def test_agent_sharing_gates_use(uc_app: tuple[Any, FakeUC], clean_db: None) -> None:
@@ -377,17 +378,17 @@ async def test_backfill_existing_agents(clean_db: None) -> None:
             slug=f"e-{uuid.uuid4().hex[:8]}",
             name="已启用",
             status="enabled",
-            created_by=uuid.UUID(owner),
+            created_by_uuid=uuid.UUID(owner),
         )
         draft = Agent(
             slug=f"d-{uuid.uuid4().hex[:8]}",
             name="草稿",
             status="draft",
-            created_by=uuid.UUID(owner),
+            created_by_uuid=uuid.UUID(owner),
         )
         s.add_all([enabled, draft])
         await s.commit()
-        ids = (str(enabled.id), str(draft.id))
+        ids = (str(enabled.agent_uuid), str(draft.agent_uuid))
 
     uc = UCClient(get_settings(), transport=httpx.MockTransport(fake.handler))
     try:
@@ -404,5 +405,7 @@ async def test_backfill_existing_agents(clean_db: None) -> None:
     finally:
         await uc.aclose()
     async with get_sessionmaker()() as s:
-        rows = list(await s.scalars(select(Agent).where(Agent.id.in_([uuid.UUID(i) for i in ids]))))
+        rows = list(
+            await s.scalars(select(Agent).where(Agent.agent_uuid.in_([uuid.UUID(i) for i in ids])))
+        )
         assert all(a.digital_employee_uid is not None and a.auth_subject == "user" for a in rows)

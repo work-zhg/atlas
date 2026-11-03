@@ -13,7 +13,6 @@ from uuid import UUID
 
 import pytest
 from atlas_agent.domain.events import EventType
-from tests.graphs import run_agent as run
 from atlas_agent.domain.spec import AgentSpec, LimitSpec, ModelSpec
 
 from tests.fakes import (
@@ -23,6 +22,7 @@ from tests.fakes import (
     text_model,
     usage_model,
 )
+from tests.graphs import run_agent as run
 
 RUN_ID = UUID("11111111-1111-1111-1111-111111111111")
 FIXED_TIME = datetime(2026, 8, 19, 12, 0, 0, tzinfo=UTC)
@@ -250,7 +250,7 @@ async def test_thinking_blocks_are_not_treated_as_visible_text() -> None:
 
 
 async def test_usage_is_reported_even_when_the_run_fails() -> None:
-    """★ 失败前已经花掉的 token 也要入账：inprocess 只从 usage.updated 取用量，
+    """★ 失败前已经花掉的 token 也要入账：执行器只从 usage.updated 取用量，
     失败分支提前 return 的话失败 run 记成 0（评测 atlas-eng/long-read 撞到）。"""
     from langchain_core.messages import AIMessageChunk
     from langchain_core.outputs import ChatGenerationChunk

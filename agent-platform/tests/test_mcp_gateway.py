@@ -276,7 +276,7 @@ async def test_saving_new_mcp_tool_requires_grant(env: Any) -> None:
     spec = AgentSpecIn.model_validate(
         {**base, "tool_names": ["mcp:weather:get_weather", "mcp:ticket:create_ticket"]}
     )
-    agent = Agent(id=AGENT, name="测试智能体", created_by=ALICE)
+    agent = Agent(agent_uuid=AGENT, name="测试智能体", created_by_uuid=ALICE)
     with pytest.raises(InvalidReference, match="ticket__create_ticket"):
         await service._check_mcp(spec, previous=previous, agent=agent)
     await grant(c, "ticket", key, "all")

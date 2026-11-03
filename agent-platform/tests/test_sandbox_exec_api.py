@@ -51,7 +51,7 @@ async def test_acp_agent_rejects_a_sandbox_config(client: httpx.AsyncClient) -> 
             "name": "acp",
             "spec": {
                 "model": MODEL,
-                "kind": "acp",
+                "kind": "cli",
                 "cli": {"cli_type": "claude-code", "image": "img"},
                 "sandbox": {"image": "x"},
             },

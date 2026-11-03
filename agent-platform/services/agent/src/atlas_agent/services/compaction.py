@@ -18,15 +18,14 @@ from uuid import UUID
 
 from atlas_engine.kernel.middleware.ask_user import ASK_USER_QUESTION
 from langchain_core.messages import BaseMessage, HumanMessage
-from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from atlas_agent.domain.spec import ModelSpec
 from atlas_agent.domain.translator import extract_text
 
 from ..config import Settings
-from ..db.models import Thread
 from ..providers.llm.model_platform import ModelEndpoint, direct_endpoint
+from ..repositories.thread_context import ThreadContextRepository
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +143,7 @@ class ThreadSummarizer:
             prompt += f"\n\n用户特别要求在摘要里保留：{focus.strip()[:2000]}"
         result = await chat.ainvoke([HumanMessage(content=prompt)])
         # ★ 同 title.py：str(content) 会把 content blocks 变成 Python repr，
-        #   而这段文本是要写进 thread.summary 的 —— 之后每一轮都带着它跑。
+        #   而这段文本是要写进 thread_context.summary 的 —— 之后每一轮都带着它跑。
         text = _extract_summary(extract_text(result.content))
         if not text:
             meta = getattr(result, "response_metadata", None) or {}
@@ -163,7 +162,7 @@ def make_persist_hook(
     thread_id: UUID,
     upto: datetime | None,
 ):
-    """返回 on_compacted 回调：把摘要写回 thread。
+    """返回 on_compacted 回调：把摘要写进会话的上下文状态（thread_context）。
 
     `upto` 是本次 run 起始时历史里最后一条消息的时间 —— 摘要覆盖到那里。
     ★ 它可以为 None：会话的第一轮没有历史，也就没有覆盖边界。
@@ -175,16 +174,9 @@ def make_persist_hook(
             return
         try:
             async with sessionmaker() as session:
-                await session.execute(
-                    update(Thread)
-                    .where(Thread.id == thread_id)
-                    .values(
-                        summary=payload.get("summary", ""),
-                        summary_upto=upto,
-                        compact_count=Thread.compact_count + 1,
-                        # 成功一次就清零熔断计数
-                        context_state={"compaction_failures": 0},
-                    )
+                # 成功一次就清零熔断计数
+                await ThreadContextRepository(session).save_summary(
+                    thread_id, summary=str(payload.get("summary", "")), upto=upto
                 )
                 await session.commit()
         except Exception:
@@ -200,11 +192,7 @@ def make_failure_hook(sessionmaker: async_sessionmaker[AsyncSession], thread_id:
     async def record(failures: int) -> None:
         try:
             async with sessionmaker() as session:
-                await session.execute(
-                    update(Thread)
-                    .where(Thread.id == thread_id)
-                    .values(context_state={"compaction_failures": failures})
-                )
+                await ThreadContextRepository(session).record_failure(thread_id, failures)
                 await session.commit()
         except Exception:
             logger.warning("记录压缩失败次数失败 thread=%s", thread_id, exc_info=True)

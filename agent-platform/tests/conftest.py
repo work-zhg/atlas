@@ -161,30 +161,39 @@ async def _reset_db_singletons() -> AsyncIterator[None]:
     get_sessionmaker.cache_clear()
 
 
+#: 测试会写的表，按删除顺序。model_catalog、service_model 这类迁移种子不在里面。
+_TEST_DATA_TABLES = (
+    "run_event",
+    "run_state",
+    "run_file",
+    "approval",
+    "message",
+    "run",
+    "thread_memory",
+    "thread_context",
+    "cli_session",
+    "memory_backfill",
+    "skill_usage_daily",
+    "thread",
+    "agent_version",
+    "agent",
+)
+
+
 @pytest.fixture
 async def clean_db() -> AsyncIterator[None]:
     """清掉测试造的数据，保留迁移种子（model_catalog 等）。
 
-    thread 删除会级联带走 message / run / run_file；
-    agent 删除会级联带走 agent_version。内置 agent 必须留着 —— 它是产品的一部分。
-
-    ★ 必须先把 current_version_id 置空：agent.current_version_id 指向
-      agent_version，而 agent_version.agent_id 是 ON DELETE CASCADE。
-      删 agent 时 MySQL 会先看到「父行仍被引用」而拒绝（错误 1451），
-      PostgreSQL 则能自行排序。不置空的话 MySQL 上所有 DB 测试全挂在夹具里。
+    ★ 表间不建外键，删会话不会级联带走 run、消息和事件，所以逐张表删。
+      留下的 run 会串到别的测试里：卡在 running 的子 run 占着全局的
+      子智能体并发名额，后面派子智能体的测试全被准入拦下。
     """
     from sqlalchemy import text
 
     async def _wipe() -> None:
         async with get_sessionmaker()() as session:
-            # ★ 子会话先走：thread.parent_thread_id 是自引用外键，而 MySQL
-            #   不对同表的自引用触发级联删除（PG 会），留着的话父行删不掉
-            #   （1451）。两步删就够 —— 委派深度结构性封顶在 1。
-            await session.execute(text("DELETE FROM thread WHERE parent_thread_id IS NOT NULL"))
-            await session.execute(text("DELETE FROM thread"))
-            await session.execute(text("UPDATE agent SET current_version_id = NULL"))
-            await session.execute(text("DELETE FROM agent_version"))
-            await session.execute(text("DELETE FROM agent"))
+            for table in _TEST_DATA_TABLES:
+                await session.execute(text(f"DELETE FROM {table}"))
             await session.commit()
 
     await _wipe()

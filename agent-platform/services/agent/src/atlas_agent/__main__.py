@@ -119,8 +119,8 @@ def main(argv: list[str] | None = None) -> int:
             finally:
                 await get_engine().dispose()
             for agent in rows:
-                key = await agent_key(settings, agent.id, agent.name)
-                print(f"{agent.id}\t{key.status}\t{agent.name}")
+                key = await agent_key(settings, agent.agent_uuid, agent.name)
+                print(f"{agent.agent_uuid}\t{key.status}\t{agent.name}")
             return 0
 
         return asyncio.run(_register())

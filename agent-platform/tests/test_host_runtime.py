@@ -49,7 +49,9 @@ class Approvals:
         self.polls: dict[str, int] = {}
         self.expired: list[str] = []
 
-    async def check(self, *, approval_id: str, tool_name: str, args: dict[str, Any]) -> str:
+    async def check(
+        self, *, approval_id: str, tool_name: str, args: dict[str, Any], **_: Any
+    ) -> str:
         n = self.polls.get(approval_id, 0)
         self.polls[approval_id] = n + 1
         if approval_id in self.expired:
@@ -83,6 +85,7 @@ def prepared(
     timeout_s: int = 60,
     permission_mode: str = "auto",
     approval_mode: str | None = None,
+    cli_session_id: str | None = None,
 ) -> Any:
     cli = CliSpec(
         cli_type="claude-code",
@@ -103,12 +106,14 @@ def prepared(
         spec=spec,
         input_content=text,
         thread=thread,
-        thread_id=thread.id,
+        thread_id=thread.thread_uuid,
         start_seq=0,
         base_depth=0,
         takeover=None,
-        acp_bridge_instance=None,
-        acp_acked_seq=0,
+        # 会话的接续信息（cli_session）：CLI 的会话 id、bridge 实例、确认点
+        cli_session_id=cli_session_id,
+        cli_bridge_instance=None,
+        cli_acked_seq=0,
         # 作为 SubAgent 时父 run 的审批模式；直接对话为 None
         approval_mode=approval_mode,
     )
@@ -121,6 +126,8 @@ class Env:
     def __init__(self, app: BridgeApp, thread: Any) -> None:
         self.app = app
         self.thread = thread
+        #: 库里记着的 CLI 会话 id（cli_session.agent_session_id），下一轮 open 时带上
+        self.cli_session_id: str | None = None
         self.pods = Pods(f"ws://127.0.0.1:{app.server.port}")
         self.approvals = Approvals()
         self.sessions = Sessions()
@@ -144,7 +151,7 @@ class Env:
     async def run(self, **kw: Any) -> list[TraceEvent]:
         out: list[TraceEvent] = []
         gen = self.runtime.run_turn(
-            prepared(self.thread, **kw),
+            prepared(self.thread, **{"cli_session_id": self.cli_session_id, **kw}),
             run_id=uuid4(),
             redis=None,
             relay=self.relay,  # type: ignore[arg-type]
@@ -157,14 +164,14 @@ class Env:
 @pytest.fixture
 async def env(tmp_path: Path) -> AsyncIterator[Callable[..., Awaitable[Env]]]:
     apps: list[tuple[BridgeApp, asyncio.Task[int]]] = []
-    thread = SimpleNamespace(id=uuid4(), external_session_id=None)
+    thread = SimpleNamespace(thread_uuid=uuid4())
 
     async def start(script: Script | None = None, **cfg: Any) -> Env:
         token_file = tmp_path / "token"
         token_file.write_text(TOKEN)
         app = BridgeApp(
             BridgeConfig(
-                session_id=str(thread.id),
+                session_id=str(thread.thread_uuid),
                 token_file=token_file,
                 listen_host="127.0.0.1",
                 listen_port=0,
@@ -223,14 +230,14 @@ async def test_a_full_turn(env: Any) -> None:
     assert last(events).data["stop_reason"] == "end_turn"
     assert last(events).data["text_len"] == len("第 1 段第 2 段")
     # 会话身份当场落下：下一轮的恢复全靠它
-    assert e.sessions.remembered == [(e.thread.id, e.app.host.agent_session_id)]
+    assert e.sessions.remembered == [(e.thread.thread_uuid, e.app.host.agent_session_id)]
 
 
 async def test_second_run_on_the_same_pod(env: Any) -> None:
     """Pod 上的会话已由前一轮打开：session.open 返回 ALREADY_OPEN，照常开下一轮。"""
     e = await env()
     await e.run()
-    e.thread.external_session_id = e.sessions.remembered[-1][1]
+    e.cli_session_id = e.sessions.remembered[-1][1]
     events = await e.run(text="again")
     assert last(events).type is EventType.RUN_FINISHED
     assert EventType.SESSION_LOST not in [x.type for x in events]
@@ -239,7 +246,7 @@ async def test_second_run_on_the_same_pod(env: Any) -> None:
 async def test_resume_on_a_new_pod_that_lost_the_session_is_visible(env: Any) -> None:
     """新 Pod 上恢复不了（FakeAgent 不持久化会话）：必须以 session.lost 让用户看见。"""
     e = await env()
-    e.thread.external_session_id = "gone-session"
+    e.cli_session_id = "gone-session"
     events = await e.run()
     assert EventType.SESSION_LOST in [x.type for x in events]
     assert last(events).type is EventType.RUN_FINISHED
@@ -390,7 +397,7 @@ async def test_wrong_token_is_unreachable_not_a_hang(env: Any) -> None:
 async def test_next_run_attaches_instead_of_opening(env: Any) -> None:
     e = await env()
     await e.run()
-    known = e.runtime._known[e.thread.id]
+    known = e.runtime._known[e.thread.thread_uuid]
     assert known.instance == e.app.instance and known.last_seq > 0
     events = await e.run(text="again")
     assert last(events).type is EventType.RUN_FINISHED
@@ -465,17 +472,17 @@ async def test_bridge_restarted_mid_turn_is_bridge_lost(env: Any) -> None:
     e = await env(Script(on_prompt="silent"))
 
     async def restart_then_disconnect() -> None:
-        while e.thread.id not in e.runtime._known or e.app.host.turn is None:
+        while e.thread.thread_uuid not in e.runtime._known or e.app.host.turn is None:
             await asyncio.sleep(0.02)
         # 模拟：runtime 记得的是重启前的实例
-        e.runtime._known[e.thread.id].instance = "b-before-restart"
+        e.runtime._known[e.thread.thread_uuid].instance = "b-before-restart"
         await e.app.server.close_current(1011, "test")
 
     task = asyncio.create_task(restart_then_disconnect())
     events = await e.run(timeout_s=30)
     await task
     assert last(events).data["error_kind"] == "bridge_lost"
-    assert e.thread.id not in e.runtime._known  # 忘掉它，下一轮 session.open
+    assert e.thread.thread_uuid not in e.runtime._known  # 忘掉它，下一轮 session.open
 
 
 async def test_superseded_connection_does_not_reconnect(env: Any) -> None:
@@ -486,7 +493,9 @@ async def test_superseded_connection_does_not_reconnect(env: Any) -> None:
     async def take_over() -> None:
         await asyncio.sleep(0.5)
         probe = await UpstreamProbe.connect(
-            f"ws://127.0.0.1:{e.app.server.port}/host", token=TOKEN, session_id=str(e.thread.id)
+            f"ws://127.0.0.1:{e.app.server.port}/host",
+            token=TOKEN,
+            session_id=str(e.thread.thread_uuid),
         )
         await asyncio.sleep(1)
         await probe.close()
@@ -503,10 +512,10 @@ async def test_server_that_forgot_the_bridge_attaches_via_already_open(env: Any)
     e = await env()
     await e.run()
     e.runtime._known.clear()
-    e.thread.external_session_id = e.sessions.remembered[-1][1]
+    e.cli_session_id = e.sessions.remembered[-1][1]
     events = await e.run(text="again")
     assert last(events).type is EventType.RUN_FINISHED
-    assert e.runtime._known[e.thread.id].instance == e.app.instance
+    assert e.runtime._known[e.thread.thread_uuid].instance == e.app.instance
 
 
 # ═════════════════════════ 权限模式（doc/acp-permission-mode-design.html）═════════════════════════
@@ -563,3 +572,17 @@ async def test_failing_to_tighten_is_a_clear_failure(env: Any) -> None:
     assert last(events).type is EventType.RUN_FAILED
     assert last(events).data["error_kind"] == "mode_unavailable"
     assert "权限模式" in last(events).data["message"]
+
+
+def test_cli_approval_ids_are_derived_from_the_run_and_the_call() -> None:
+    """★ 审批 id 由 (run, toolCallId) 派生，和原生一致：换实例接管后重新询问落到同一行，
+    不会弹出两个窗口（approval 表的唯一键也是这一对）。"""
+    from atlas_agent.host.approvals import PermissionDesk
+    from atlas_engine.kernel.middleware.approval import approval_id_for
+
+    run_id = uuid4()
+    first = PermissionDesk(Approvals(), lambda *_: None, run_id=run_id)
+    after_takeover = PermissionDesk(Approvals(), lambda *_: None, run_id=run_id)
+    assert first._approval_id("call-1") == after_takeover._approval_id("call-1")
+    assert first._approval_id("call-1") == approval_id_for(str(run_id), "call-1")
+    assert first._approval_id("call-1") != first._approval_id("call-2")

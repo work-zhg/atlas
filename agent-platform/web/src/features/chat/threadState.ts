@@ -37,8 +37,6 @@ export function threadBadge(thread: Pick<Thread, "last_run">): ThreadBadge | nul
         active: true,
         live: true,
       };
-    case "awaiting_approval":
-      return { label: "待审批", color: "warning", needsMe: true, active: true, live: false };
     case "failed":
     case "interrupted":
       return { label: "失败", color: "error", needsMe: false, active: false, live: false };

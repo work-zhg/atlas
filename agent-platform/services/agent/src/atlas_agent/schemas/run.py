@@ -21,7 +21,6 @@ RunStatus = Literal[
     "failed",
     "cancelled",
     "interrupted",
-    "awaiting_approval",
     "suspended",
 ]
 
@@ -96,6 +95,9 @@ class RunOut(BaseModel):
     #: task 工具调用下面，而不是当成一条独立的对话轮次。
     parent_run_id: UUID | None = None
     status: RunStatus
+    #: CLI 智能体在线等权限：run 仍是 running（进程在跑），但要用户去批准。
+    #: 原生智能体等审批或提问是 suspended，在等什么看会话列表的 waiting。
+    awaiting_user: bool = False
     error_kind: str | None
     error_message: str | None
     last_seq: int

@@ -20,16 +20,16 @@ import httpx
 import pytest
 from atlas_agent.config import get_settings
 from atlas_agent.db.models import Message, Run, RunEvent, Thread
-from atlas_agent.db.session import get_sessionmaker
-from atlas_agent.executor.inprocess import InProcessExecutor
+from atlas_agent.db.session import fetch_one, get_sessionmaker
+from atlas_agent.executor.compose import build_executor
 from atlas_agent.main import create_app
-from atlas_agent.repositories.run import RunRepository
+from atlas_agent.repositories.event_archive import EventArchive
 from httpx import ASGITransport
 from langchain_core.messages import AIMessageChunk
 from sqlalchemy import select
 
 from tests.fake_uc import AS_USER
-from tests.fakes import TurnModel, tool_call_chunk
+from tests.fakes import JUDGE_MODEL, TurnModel, allow_judge, allowing_judge, tool_call_chunk
 
 pytestmark = pytest.mark.usefixtures("clean_db")
 
@@ -51,13 +51,13 @@ def make_app(parent: TurnModel, child: TurnModel):
       第二段脚本，测出来的东西与真实行为无关。
     """
     app = create_app()
-    models = {PARENT_MODEL: parent, CHILD_MODEL: child}
+    models = {PARENT_MODEL: parent, CHILD_MODEL: child, JUDGE_MODEL: allow_judge()}
 
     def builder(model_spec, **_kw):
         return models[model_spec.model]
 
-    app.state.executor = InProcessExecutor(
-        get_sessionmaker(), get_settings(), model_builder=builder
+    app.state.executor = build_executor(
+        get_sessionmaker(), allowing_judge(get_settings()), model_builder=builder
     )
     return app
 
@@ -132,21 +132,21 @@ async def sub_threads(parent_id: str) -> list[Thread]:
     async with get_sessionmaker()() as session:
         stmt = (
             select(Thread)
-            .where(Thread.parent_thread_id == UUID(parent_id))
-            .order_by(Thread.created_at, Thread.id)
+            .where(Thread.parent_thread_uuid == UUID(parent_id))
+            .order_by(Thread.created_at, Thread.thread_uuid)
         )
         return list((await session.execute(stmt)).scalars())
 
 
 async def child_runs() -> list[Run]:
     async with get_sessionmaker()() as session:
-        stmt = select(Run).where(Run.parent_run_id.isnot(None))
+        stmt = select(Run).where(Run.parent_run_uuid.isnot(None))
         return list((await session.execute(stmt)).scalars())
 
 
 async def runs_of(thread_id) -> list[Run]:
     async with get_sessionmaker()() as session:
-        stmt = select(Run).where(Run.thread_id == thread_id)
+        stmt = select(Run).where(Run.thread_uuid == thread_id)
         return list((await session.execute(stmt)).scalars())
 
 
@@ -157,7 +157,7 @@ async def messages_blob(thread_id, *, role: str | None = None, kind: str | None 
     'tool_result' 是工具结果（只给模型看）。见 domain/messages.py。
     """
     async with get_sessionmaker()() as session:
-        stmt = select(Message).where(Message.thread_id == thread_id)
+        stmt = select(Message).where(Message.thread_uuid == thread_id)
         if role:
             stmt = stmt.where(Message.role == role)
         if kind:
@@ -196,8 +196,8 @@ async def test_delegation_creates_a_child_thread_and_child_run(client_factory) -
 
     children = await child_runs()
     assert len(children) == 1
-    assert children[0].thread_id == subs[0].id
-    assert children[0].parent_run_id == UUID(result["id"])
+    assert children[0].thread_uuid == subs[0].thread_uuid
+    assert children[0].parent_run_uuid == UUID(result["id"])
     assert children[0].status == "succeeded"
 
 
@@ -241,7 +241,7 @@ async def test_subagent_output_reaches_the_main_thread_only_as_a_tool_result(
     assert "子智能体的结论" in tool_blob
 
     # 子会话那边则完整保留：任务书 + 子智能体的回答
-    sub_blob = await messages_blob((await sub_threads(thread_id))[0].id)
+    sub_blob = await messages_blob((await sub_threads(thread_id))[0].thread_uuid)
     assert "写个排序函数" in sub_blob
     assert "子智能体的结论" in sub_blob
 
@@ -288,7 +288,7 @@ async def test_child_threads_are_not_in_the_users_thread_list(client_factory) ->
     listed = (await client.get("/v1/threads")).json()["data"]
     assert [t["id"] for t in listed] == [thread_id]
     # 但直接按 id 取得到，且能看出自己的身份
-    sub_id = (await sub_threads(thread_id))[0].id
+    sub_id = (await sub_threads(thread_id))[0].thread_uuid
     detail = (await client.get(f"/v1/threads/{sub_id}")).json()
     assert detail["subagent_name"] == "coder"
     assert detail["parent_thread_id"] == thread_id
@@ -334,7 +334,7 @@ async def test_second_delegation_resumes_the_same_session(client_factory) -> Non
     # 一个子会话，两个子 run —— 而不是两个子会话
     subs = await sub_threads(thread_id)
     assert len(subs) == 1
-    assert len(await runs_of(subs[0].id)) == 2
+    assert len(await runs_of(subs[0].thread_uuid)) == 2
 
     # 第二轮的输入更长 —— 历史确实被重建进去了
     assert len(seen_histories) == 2
@@ -419,7 +419,7 @@ async def test_the_final_text_reaches_the_parent_as_the_tool_result(client_facto
     assert run["status"] == "succeeded"
 
     # 权威来源是子会话的 message 表（事件在 Redis 里有 TTL）
-    sub_id = (await sub_threads(thread_id))[0].id
+    sub_id = (await sub_threads(thread_id))[0].thread_uuid
     assert "答案是 42" in await messages_blob(sub_id, role="assistant")
 
 
@@ -441,12 +441,12 @@ async def test_child_run_uses_the_subagents_own_config(client_factory) -> None:
     await run_turn(client, thread_id, "干活")
 
     sub = (await sub_threads(thread_id))[0]
-    child_run = (await runs_of(sub.id))[0]
+    child_run = (await runs_of(sub.thread_uuid))[0]
 
     async with get_sessionmaker()() as session:
         stmt = (
             select(RunEvent)
-            .where(RunEvent.run_id == child_run.id, RunEvent.type == "run.started")
+            .where(RunEvent.run_uuid == child_run.run_uuid, RunEvent.type == "run.started")
             .limit(1)
         )
         started = (await session.execute(stmt)).scalars().one()
@@ -484,21 +484,21 @@ async def test_a_subagent_can_spawn_a_subagent(client_factory) -> None:
     runs = {r.depth: r for r in await child_runs()}
     assert set(runs) == {1, 2}
     root_id = UUID(result["id"])
-    assert runs[1].parent_run_id == root_id and runs[1].root_run_id == root_id
-    assert runs[2].parent_run_id == runs[1].id and runs[2].root_run_id == root_id
+    assert runs[1].parent_run_uuid == root_id and runs[1].root_run_uuid == root_id
+    assert runs[2].parent_run_uuid == runs[1].run_uuid and runs[2].root_run_uuid == root_id
 
     child_thread = (await sub_threads(thread_id))[0]
-    grandchild_thread = (await sub_threads(str(child_thread.id)))[0]
-    assert grandchild_thread.root_thread_id == UUID(thread_id)
+    grandchild_thread = (await sub_threads(str(child_thread.thread_uuid)))[0]
+    assert grandchild_thread.root_thread_uuid == UUID(thread_id)
     assert grandchild_thread.stream_thread_id == UUID(thread_id)
 
     async with get_sessionmaker()() as session:
         archived = list(
             (
-                await session.execute(select(RunEvent).where(RunEvent.run_id == runs[2].id))
+                await session.execute(select(RunEvent).where(RunEvent.run_uuid == runs[2].run_uuid))
             ).scalars()
         )
-    assert archived and all(e.thread_id == UUID(thread_id) for e in archived)
+    assert archived and all(e.thread_uuid == UUID(thread_id) for e in archived)
     assert all(e.depth == 2 for e in archived)
 
     assert "子结论：孙说 x=1" in await messages_blob(thread_id, kind="tool_result")
@@ -534,7 +534,7 @@ async def test_admission_limits_are_global_and_per_run(client_factory, monkeypat
 
     async with get_sessionmaker()() as session:
         stmt = select(RunEvent).where(
-            RunEvent.run_id == UUID(result["id"]), RunEvent.type == "subagent.finished"
+            RunEvent.run_uuid == UUID(result["id"]), RunEvent.type == "subagent.finished"
         )
         finished = list((await session.execute(stmt)).scalars())
     blob = json.dumps([e.data for e in finished], ensure_ascii=False)
@@ -588,7 +588,7 @@ async def test_same_subagent_twice_in_one_turn_is_rejected(client_factory) -> No
 
     async with get_sessionmaker()() as session:
         stmt = select(RunEvent).where(
-            RunEvent.run_id == UUID(result["id"]), RunEvent.type == "subagent.finished"
+            RunEvent.run_uuid == UUID(result["id"]), RunEvent.type == "subagent.finished"
         )
         blob = json.dumps(
             [e.data for e in (await session.execute(stmt)).scalars()], ensure_ascii=False
@@ -690,9 +690,9 @@ async def test_thread_detail_exposes_the_running_run(client_factory) -> None:
 
     # 人为把它置回「在跑」，确认查得到的是这个 run
     async with get_sessionmaker()() as session:
-        run = await session.get(Run, UUID(run_id))
+        run = await fetch_one(session, Run, Run.run_uuid == UUID(run_id))
         assert run is not None
-        run.status = "awaiting_approval"  # 等审批在用户眼里也是「还在跑」
+        run.status = "suspended"  # 挂起等审批在用户眼里也是「还在跑」
         await session.commit()
 
     detail = (await client.get(f"/v1/threads/{thread_id}")).json()
@@ -735,15 +735,15 @@ async def test_subagent_approvals_land_on_the_thread_stream(client_factory) -> N
 
     children = await child_runs()
     assert children, "应当有一个子 run"
-    sub_run_id = children[0].id
+    sub_run_id = children[0].run_uuid
 
     # 造一条「子 run 正在等审批」，并按子 run 的身份发事件（base_depth=1）
     approval_id = uuid4()
     async with get_sessionmaker()() as session:
         session.add(
             Approval(
-                id=approval_id,
-                run_id=sub_run_id,
+                approval_uuid=approval_id,
+                run_uuid=sub_run_id,
                 tool_name="Write /workspace/report.md",
                 args={"file_path": "/workspace/report.md"},
                 status="pending",
@@ -755,7 +755,7 @@ async def test_subagent_approvals_land_on_the_thread_stream(client_factory) -> N
     try:
         relay = EventRelay(redis, ttl_s=get_settings().run_events_ttl_s)
         async with get_sessionmaker()() as session:
-            floor = await RunRepository(session).thread_seq_floor(UUID(thread_id))
+            floor = await EventArchive(session).thread_seq_floor(UUID(thread_id))
         event = EventFactory(sub_run_id, _utcnow, base_depth=1).make(
             EventType.APPROVAL_REQUIRED,
             {
@@ -767,7 +767,7 @@ async def test_subagent_approvals_land_on_the_thread_stream(client_factory) -> N
         )
         stamped = await relay.publish(event, thread_id=UUID(thread_id), floor=floor)
         async with get_sessionmaker()() as session:
-            await RunRepository(session).archive_events(
+            await EventArchive(session).archive_events(
                 [stamped], thread_id=UUID(thread_id)
             )
             await session.commit()
@@ -780,7 +780,7 @@ async def test_subagent_approvals_land_on_the_thread_stream(client_factory) -> N
             (
                 await session.execute(
                     select(RunEvent).where(
-                        RunEvent.thread_id == UUID(thread_id),
+                        RunEvent.thread_uuid == UUID(thread_id),
                         RunEvent.type == "approval.required",
                     )
                 )
@@ -790,7 +790,7 @@ async def test_subagent_approvals_land_on_the_thread_stream(client_factory) -> N
     assert len(rows) == 1, rows
     row = rows[0]
     assert row.depth == 1, "没标成子智能体的事件，前端会把它当主 agent 的"
-    assert row.run_id == sub_run_id, "决策会被提交到父 run 的端点，拿到 404"
+    assert row.run_uuid == sub_run_id, "决策会被提交到父 run 的端点，拿到 404"
     assert row.data["approval_id"] == str(approval_id)
 
 

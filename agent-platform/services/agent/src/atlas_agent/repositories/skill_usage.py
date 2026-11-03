@@ -38,7 +38,7 @@ class SkillUsageRepository:
     async def _record(self, run_id: UUID, *, succeeded: bool, day: date) -> None:
         rows = (
             await self._session.execute(
-                select(RunEvent.data).where(RunEvent.run_id == run_id, RunEvent.type == _LOADED)
+                select(RunEvent.data).where(RunEvent.run_uuid == run_id, RunEvent.type == _LOADED)
             )
         ).scalars()
         loaded = {
@@ -49,9 +49,9 @@ class SkillUsageRepository:
         if not loaded:
             return
         agent_id = await self._session.scalar(
-            select(AgentVersion.agent_id)
-            .join(Run, Run.agent_version_id == AgentVersion.id)
-            .where(Run.id == run_id)
+            select(AgentVersion.agent_uuid)
+            .join(Run, Run.agent_version_uuid == AgentVersion.agent_version_uuid)
+            .where(Run.run_uuid == run_id)
         )
         if agent_id is None:
             return
@@ -65,7 +65,7 @@ class SkillUsageRepository:
             "day": day,
             "slug": slug,
             "version": version,
-            "agent_id": agent_id,
+            "agent_uuid": agent_id,
             "loads": 1,
             "completed_runs": completed,
         }
@@ -83,7 +83,7 @@ class SkillUsageRepository:
 
             stmt = pg_insert(table).values(**values)
             stmt = stmt.on_conflict_do_update(
-                index_elements=["day", "slug", "version", "agent_id"],
+                index_elements=["day", "slug", "version", "agent_uuid"],
                 set_={
                     "loads": table.c.loads + 1,
                     "completed_runs": table.c.completed_runs + completed,
@@ -99,12 +99,12 @@ class SkillUsageRepository:
                 select(
                     SkillUsageDaily.slug,
                     SkillUsageDaily.version,
-                    SkillUsageDaily.agent_id,
+                    SkillUsageDaily.agent_uuid,
                     func.sum(SkillUsageDaily.loads).label("loads"),
                     func.sum(SkillUsageDaily.completed_runs).label("completed_runs"),
                 )
                 .where(SkillUsageDaily.day >= since)
-                .group_by(SkillUsageDaily.slug, SkillUsageDaily.version, SkillUsageDaily.agent_id)
+                .group_by(SkillUsageDaily.slug, SkillUsageDaily.version, SkillUsageDaily.agent_uuid)
                 .order_by(SkillUsageDaily.slug, SkillUsageDaily.version)
             )
         ).all()
@@ -112,7 +112,7 @@ class SkillUsageRepository:
             {
                 "slug": r.slug,
                 "version": r.version,
-                "agent_id": r.agent_id,
+                "agent_id": r.agent_uuid,
                 "loads": int(r.loads or 0),
                 "completed_runs": int(r.completed_runs or 0),
             }

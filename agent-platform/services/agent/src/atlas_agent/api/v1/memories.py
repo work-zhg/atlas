@@ -424,7 +424,7 @@ async def list_backfills(
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
 ) -> BackfillListOut:
     """会话后补记写入了什么（§4.3「上次会话补记了 2 条［查看］」）。unseen=true 只列没看过的。"""
-    stmt = select(MemoryBackfill).where(MemoryBackfill.user_id == user)
+    stmt = select(MemoryBackfill).where(MemoryBackfill.user_uuid == user)
     if unseen:
         stmt = stmt.where(MemoryBackfill.seen_at.is_(None))
     rows = (
@@ -433,8 +433,8 @@ async def list_backfills(
     return BackfillListOut(
         data=[
             BackfillOut(
-                id=r.id,
-                thread_id=r.thread_id,
+                id=r.memory_backfill_uuid,
+                thread_id=r.thread_uuid,
                 created_at=r.created_at.isoformat(),
                 seen_at=r.seen_at.isoformat() if r.seen_at else None,
                 written=list(r.written or []),
@@ -450,10 +450,10 @@ async def mark_backfills_seen(
     body: BackfillSeenIn, session: SessionDep, user: CurrentUserDep, _: RuntimeDep
 ) -> dict[str, int]:
     stmt = update(MemoryBackfill).where(
-        MemoryBackfill.user_id == user, MemoryBackfill.seen_at.is_(None)
+        MemoryBackfill.user_uuid == user, MemoryBackfill.seen_at.is_(None)
     )
     if body.ids is not None:
-        stmt = stmt.where(MemoryBackfill.id.in_(body.ids))
+        stmt = stmt.where(MemoryBackfill.memory_backfill_uuid.in_(body.ids))
     result = await session.execute(stmt.values(seen_at=_now()))
     await session.commit()
     return {"updated": int(result.rowcount or 0)}  # type: ignore[attr-defined]

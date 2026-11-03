@@ -116,7 +116,7 @@ async def test_tool_output_with_nul_is_stored_with_a_replacement_character(
     # 消息列表接口不返回工具结果（kind=tool_result），直接读库
     async with get_sessionmaker()() as session:
         [content] = (
-            await session.scalars(select(Message.content).where(Message.thread_id == UUID(tid)))
+            await session.scalars(select(Message.content).where(Message.thread_uuid == UUID(tid)))
         ).all()
     assert content[0]["content"] == output.replace("\x00", "\ufffd")
 

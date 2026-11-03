@@ -7,6 +7,7 @@ agent_version 并切换 current_version_id —— 这样每条历史 run 都能�
 
 from __future__ import annotations
 
+import builtins
 import logging
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -71,7 +72,7 @@ def _summarize(agent: Agent, version: AgentVersion) -> AgentOut:
     model = (spec.get("model") or {}).get("model", "")
     tools = spec.get("tool_names") or []
     return AgentOut(
-        id=agent.id,
+        id=agent.agent_uuid,
         slug=agent.slug,
         name=agent.name,
         description=agent.description,
@@ -151,7 +152,9 @@ class AgentService:
         versions = await self._repo.list_versions(agent_id)
         return AgentVersionListOut(
             data=[
-                AgentVersionOut(id=v.id, version=v.version, spec=v.spec, created_at=v.created_at)
+                AgentVersionOut(
+                    id=v.agent_version_uuid, version=v.version, spec=v.spec, created_at=v.created_at
+                )
                 for v in versions
             ]
         )
@@ -193,9 +196,9 @@ class AgentService:
         # 模型管理平台上的客户端 Key（「待分配」，管理员分配模型后才能运行）。尽力而为：
         # 平台暂时不可用不挡住建智能体，编辑器、Run 开始时会补建
         if self._settings is not None:
-            await register_agent(self._settings, agent.id, agent.name)
+            await register_agent(self._settings, agent.agent_uuid, agent.name)
             # MCP 网关上的 Key（只能调公开服务，私有服务要所有者给它分配）。同样尽力而为
-            await register_agent_key(self._settings, agent.id, agent.name, owner=user_id)
+            await register_agent_key(self._settings, agent.agent_uuid, agent.name, owner=user_id)
         await self._session.refresh(agent)  # updated_at 是 onupdate：flush 后要重新读
         return AgentDetailOut(
             **_summarize(agent, version).model_dump(), spec=version.spec, my_level="OWNER"
@@ -238,8 +241,8 @@ class AgentService:
         if renamed:
             await self._identity.renamed(agent)
             if self._settings is not None:
-                await rename_agent(self._settings, agent.id, agent.name)
-                await rename_agent_key(self._settings, agent.id, agent.name)
+                await rename_agent(self._settings, agent.agent_uuid, agent.name)
+                await rename_agent_key(self._settings, agent.agent_uuid, agent.name)
 
         await self._session.refresh(agent)
         return AgentDetailOut(**_summarize(agent, version).model_dump(), spec=version.spec)
@@ -256,11 +259,11 @@ class AgentService:
         """归档语义，不是物理删除 —— 理由见 AgentRepository.soft_delete。"""
         agent, _ = await self._require(agent_id)
         before = agent.status
-        archived = await self._repo.archive_threads_of(agent.id)
+        archived = await self._repo.archive_threads_of(agent.agent_uuid)
         await self._repo.soft_delete(agent)
         await self._identity.status_changed(agent, before=before)
         if self._settings is not None:
-            await delete_agent_key(self._settings, agent.id)
+            await delete_agent_key(self._settings, agent.agent_uuid)
         return {"archived": True, "archived_threads": archived}
 
     # ------------------------------------------------------------------ 权限类型与身份
@@ -273,11 +276,11 @@ class AgentService:
         agent, version = await self._require(agent_id)
         if auth_subject == "agent":
             self._identity.require()
-            await self._identity.ensure_digital_employee(agent, owner=agent.created_by)
+            await self._identity.ensure_digital_employee(agent, owner=agent.created_by_uuid)
         if agent.auth_subject != auth_subject:
             logger.info(
                 "agent=%s 权限类型 %s → %s（操作人 %s）",
-                agent.id,
+                agent.agent_uuid,
                 agent.auth_subject,
                 auth_subject,
                 user_id,
@@ -323,7 +326,9 @@ class AgentService:
                     )
         return out
 
-    async def _readable_as(self, auth_uid: UUID, dataset_ids: list[str]) -> list[dict] | None:
+    async def _readable_as(
+        self, auth_uid: UUID, dataset_ids: builtins.list[str]
+    ) -> builtins.list[dict] | None:
         """权限主体能读哪些库。没接知识库 → None；知识库不可用抛 KnowledgeUnavailable。"""
         if self._settings is None:
             return None
@@ -338,18 +343,18 @@ class AgentService:
             raise Conflict("未接入用户中心，不能共享")
         return self._uc
 
-    async def grants(self, agent_id: UUID) -> list[dict[str, Any]]:
+    async def grants(self, agent_id: UUID) -> builtins.list[dict[str, Any]]:
         agent = await self.agent(agent_id)
         if self._uc is None:
             return []
-        return await self._uc.data_acl(AGENT_DATA, str(agent.id))
+        return await self._uc.data_acl(AGENT_DATA, str(agent.agent_uuid))
 
     async def add_grants(self, agent_id: UUID, body: AgentGrantCreate, *, operator: UUID) -> None:
         agent = await self.agent(agent_id)
         uc = self._uc_or_conflict()
         await uc.data_grant(
             AGENT_DATA,
-            str(agent.id),
+            str(agent.agent_uuid),
             [
                 {
                     "permission": body.level,
@@ -447,7 +452,7 @@ class AgentService:
                 allowed = (await make_mcp_catalog(self._settings, self._redis)).public_access()
             else:
                 found = await mcp_agent_access(
-                    self._settings, agent.id, name=agent.name, owner=agent.created_by
+                    self._settings, agent.agent_uuid, name=agent.name, owner=agent.created_by_uuid
                 )
                 allowed = dict(found.servers)
         except CapabilityUnavailable as exc:
@@ -480,7 +485,7 @@ class AgentService:
         if not added:
             return
         try:
-            key = await agent_key(self._settings, agent.id, agent.name) if agent else None
+            key = await agent_key(self._settings, agent.agent_uuid, agent.name) if agent else None
             if key is not None and key.status == "active":
                 allowed = {m.name for m in key.models}
                 where = "这个智能体的模型 Key 里"

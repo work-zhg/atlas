@@ -1243,7 +1243,7 @@ export interface components {
              * @default native
              * @enum {string}
              */
-            kind: "native" | "acp";
+            kind: "native" | "cli";
             cli?: components["schemas"]["CliSpecIn"] | null;
             /** Mcp Tool Digests */
             mcp_tool_digests?: {
@@ -2151,7 +2151,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | "interrupted" | "awaiting_approval" | "suspended";
+            status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | "interrupted" | "suspended";
         };
         /**
          * RunCreate
@@ -2186,7 +2186,12 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | "interrupted" | "awaiting_approval" | "suspended";
+            status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | "interrupted" | "suspended";
+            /**
+             * Awaiting User
+             * @default false
+             */
+            awaiting_user: boolean;
             /** Error Kind */
             error_kind: string | null;
             /** Error Message */
@@ -2379,7 +2384,7 @@ export interface components {
              * @default native
              * @enum {string}
              */
-            kind: "native" | "acp";
+            kind: "native" | "cli";
             cli?: components["schemas"]["CliSpecIn"] | null;
             /** Mcp Tool Digests */
             mcp_tool_digests?: {

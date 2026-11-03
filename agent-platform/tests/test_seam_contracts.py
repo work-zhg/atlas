@@ -47,7 +47,7 @@ def test_subagent_service_satisfies_the_protocol() -> None:
     from atlas_agent.domain.spec import AgentSpec, ModelSpec
     from atlas_agent.services.subagent import SubAgentService
 
-    thread = SimpleNamespace(id=uuid4(), agent_id=uuid4(), created_by=uuid4())
+    thread = SimpleNamespace(thread_uuid=uuid4(), agent_uuid=uuid4(), created_by_uuid=uuid4())
     service = SubAgentService(
         None,  # type: ignore[arg-type] — isinstance 只查方法，不会真跑
         None,  # type: ignore[arg-type]

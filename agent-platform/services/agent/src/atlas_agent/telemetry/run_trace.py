@@ -82,7 +82,7 @@ def _text_of(blocks: Any) -> str:
 class RunTrace:
     """一次 run（的一段执行）的 span 树。用作 context manager。
 
-    用法（executor/inprocess.py::_execute）：
+    用法（executor/segment.py::SegmentExecution.run）：
 
         with RunTrace.start(prepared, run_id=run_id, parent_run_id=...) as rt:
             async for event in runtime.run_turn(...):
@@ -136,7 +136,7 @@ class RunTrace:
         thread_id = str(prepared.thread_id)
         # ★ 会话 = 根会话：子 run 在子会话上，但它是父会话那段对话的一部分（设计 §7）
         session_id = str(getattr(thread, "stream_thread_id", None) or thread_id)
-        user_id = getattr(thread, "created_by", None)
+        user_id = getattr(thread, "created_by_uuid", None)
         resumed = bool(getattr(prepared, "resume", False))
 
         attributes: dict[str, Any] = {
@@ -426,7 +426,7 @@ class RunTrace:
             value = data.get(key)
             if isinstance(value, int):
                 self._root.set_attribute(total_attr, value)
-        if self._kind != "acp":
+        if self._kind != "cli":
             return
 
         from opentelemetry import trace as ot

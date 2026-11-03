@@ -8,6 +8,7 @@ from fastapi import APIRouter
 
 from ...auth.authz import PrincipalDep
 from ...db.models import AppUser
+from ...db.session import fetch_one
 from ...deps import SessionDep
 
 router = APIRouter(tags=["auth"])
@@ -24,7 +25,7 @@ async def me(principal: PrincipalDep, session: SessionDep) -> dict[str, Any]:
         # 数据权限领域：对各数据编码下全部数据的级别（前端据此显示「全部」视图）
         "data_levels": dict(p.data_levels),
     }
-    user = await session.get(AppUser, p.uid)
+    user = await fetch_one(session, AppUser, AppUser.user_uuid == p.uid)
     if user is not None:
         out.update(name=user.name, account=user.account, email=user.email, dept=user.dept_name)
     return out

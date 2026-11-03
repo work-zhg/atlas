@@ -237,7 +237,7 @@ class CatalogService:
         cv = aliased(AgentVersion)
         rows = await self._session.execute(
             select(Agent, cv)
-            .join(cv, cv.id == Agent.current_version_id)
+            .join(cv, cv.agent_version_uuid == Agent.current_version_uuid)
             .where(Agent.status != "archived")
             .order_by(Agent.slug)
         )
@@ -245,9 +245,9 @@ class CatalogService:
 
     async def _active_threads(self) -> dict[UUID, int]:
         rows = await self._session.execute(
-            select(Thread.agent_id, func.count())
-            .where(Thread.status == "active", Thread.parent_thread_id.is_(None))
-            .group_by(Thread.agent_id)
+            select(Thread.agent_uuid, func.count())
+            .where(Thread.status == "active", Thread.parent_thread_uuid.is_(None))
+            .group_by(Thread.agent_uuid)
         )
         return {agent_id: int(n) for agent_id, n in rows.all()}
 
@@ -270,13 +270,13 @@ class CatalogService:
                         _SkillRef(
                             skill=ref["slug"],
                             out=SkillReference(
-                                agent_id=agent.id,
+                                agent_id=agent.agent_uuid,
                                 agent_slug=agent.slug,
                                 agent_name=agent.name,
                                 agent_version=version.version,
                                 subagent=sub_name,
                                 skill_version=int(ref.get("version") or 0),
-                                active_threads=threads.get(agent.id, 0),
+                                active_threads=threads.get(agent.agent_uuid, 0),
                             ),
                         )
                     )
@@ -301,7 +301,7 @@ class CatalogService:
                         (
                             server,
                             {
-                                "agent_id": str(agent.id),
+                                "agent_id": str(agent.agent_uuid),
                                 "agent_slug": agent.slug,
                                 "agent_name": agent.name,
                                 "agent_version": version.version,

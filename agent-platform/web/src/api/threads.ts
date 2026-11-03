@@ -36,7 +36,7 @@ export function useThreads(status?: string) {
   });
 }
 
-const UNFINISHED = new Set(["queued", "running", "awaiting_approval", "suspended"]);
+const UNFINISHED = new Set(["queued", "running", "suspended"]);
 
 // 对话用的会话读取 hooks 在共享包里（Atlas 与 AI TeamFlow 共用同一份）
 export { flattenMessages, useMessages, useThread } from "@atlas/chat-ui/src/api/threads";

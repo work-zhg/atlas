@@ -50,7 +50,7 @@ export function KnowledgeSection({
   }));
   const known = new Set(options.map((o) => o.value));
   const ids = value.dataset_ids ?? [];
-  const acp = kind === "acp";
+  const cli = kind === "cli";
   const set = (patch: Partial<Knowledge>) => onChange({ ...value, ...patch });
 
   return (
@@ -102,15 +102,15 @@ export function KnowledgeSection({
           <Space direction="vertical" style={{ width: "100%" }}>
             <Radio.Group
               disabled={readOnly}
-              value={acp ? "tool" : value.mode}
+              value={cli ? "tool" : value.mode}
               onChange={(e) => set({ mode: e.target.value })}
             >
-              <Radio value="auto" disabled={acp}>
+              <Radio value="auto" disabled={cli}>
                 自动检索：每轮先按用户的问题检索，资料并入本轮输入
               </Radio>
               <Radio value="tool">工具：由模型决定何时调用 knowledge_search</Radio>
             </Radio.Group>
-            {acp && <Tag>外部 CLI 只能以工具方式（MCP）接入知识库</Tag>}
+            {cli && <Tag>外部 CLI 只能以工具方式（MCP）接入知识库</Tag>}
             <Space wrap>
               <span>Top K</span>
               <InputNumber

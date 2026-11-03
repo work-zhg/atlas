@@ -1,11 +1,8 @@
 """RunHooks 的组装（与执行循环分离）。
 
-InProcessExecutor 此前把「组装能力」（MCP 解析、压缩、标题、审批、子模型）
-和「执行循环」（起任务、收事件、落库）揉在一个 400 行的类里 ——
-换 arq/Celery worker 时这 400 行几乎要整体搬迁，RunExecutor Protocol
-承诺的「只加一个实现类」兑现不了。
-
-现在组装归本模块：换执行器时搬走的是循环，HookAssembly 原样复用。
+「组装能力」（MCP 解析、压缩、标题、审批、子模型）与「执行循环」（领取、收事件、落库，
+executor/scheduling.py 与 segment.py）分开：换执行器时搬走的是循环，HookAssembly 原样复用。
+它由组合根（executor/compose.py）构造，不认识执行器；委派只拿到入队这一个回调。
 
 PreparedRun 是「任务是什么」的载体（对应 engine run() 签名的前半），
 HookAssembly.build() 产出「用什么能力跑」（RunHooks，签名的后半）。
@@ -84,6 +81,7 @@ from ..services.service_models import resolve_service_model, service_model_confi
 from ..services.title import TitleService
 from ..skills import skill_directory
 from ..stream.relay import EventRelay
+from .base import SubmitRun
 from .build import build_graph
 
 if TYPE_CHECKING:
@@ -202,9 +200,11 @@ class PreparedRun:
     #: 本段是接管来的（横向扩展设计 §5）：None = 正常领取；"handoff" / "expired" = 上一个
     #: 执行器停机交接 / 租约过期。acp 据此只 attach 不重开一轮。
     takeover: str | None = None
-    #: acp：上一个执行器已处理到的 bridge 实例与序号（§5.2），接管时从这里 attach 补发。
-    acp_bridge_instance: str | None = None
-    acp_acked_seq: int = 0
+    #: acp：会话的接续信息（cli_session 表，段开始时读出）—— CLI 自己的会话 id（open 时恢复），
+    #: 以及已处理到的 bridge 实例与序号（§5.2，接管时从这里 attach 补发）
+    cli_session_id: str | None = None
+    cli_bridge_instance: str | None = None
+    cli_acked_seq: int = 0
     #: 续跑时交回图的挂起现场（contracts/suspension.py）：上一段还在等的调用
     #: （run.waiting_on，已剪掉历史里有结果的），和 server 查好的结果。首段都为空。
     waiting_on: dict[str, Any] = field(default_factory=dict)
@@ -217,12 +217,16 @@ class PreparedRun:
     approval_mode: str | None = None
     #: 本轮用户消息的时间。Agent 在这一轮写入记忆时用它作为「信息成立的时间」（记忆设计 §6.4）
     input_at: datetime | None = None
+    #: 会话的上下文状态（thread_context）：压缩过几次（记忆据此重建常驻快照）、
+    #: 自动压缩连续失败了几次（熔断用）
+    compact_count: int = 0
+    compaction_failures: int = 0
     #: 这一轮的模型端点与目录（HookAssembly.with_models 填）。None = 还没解析，按直连处理
     models: RunModels | None = None
 
     @property
     def thread_id(self) -> UUID:
-        return self.thread.id
+        return self.thread.thread_uuid
 
 
 class HookAssembly:
@@ -233,12 +237,11 @@ class HookAssembly:
         sessionmaker: async_sessionmaker[AsyncSession],
         settings: Settings,
         model_builder: ModelBuilder,
-        executor: Any = None,
+        submit_run: SubmitRun | None = None,
         memory: MemoryRuntime | None = None,
     ) -> None:
-        #: 委派要能起子 run。循环引用是刻意的且只有一层：执行器持有本对象，
-        #: 本对象只在构造委派回调时回调它的 submit —— 不在初始化期用到。
-        self._executor = executor
+        #: 委派要能起子 run：入队由组合根注入，装配不认识执行器。None = 不能委派
+        self._submit_run = submit_run
         self._sessionmaker = sessionmaker
         self._settings = settings
         self._build_model = model_builder
@@ -288,6 +291,7 @@ class HookAssembly:
                 resume=prepared.resume,
                 history_upto=prepared.history_upto,
                 occurred_at=prepared.input_at,
+                compact_count=prepared.compact_count,
             )
             if self._memory is not None
             else None
@@ -325,7 +329,7 @@ class HookAssembly:
             sandbox = PodSandbox(
                 provisioner=provisioner,
                 workspace_thread_id=ws_thread,
-                user_id=str(prepared.thread.created_by),
+                user_id=str(prepared.thread.created_by_uuid),
                 run_id=str(run_id),
                 image=prepared.spec.sandbox.image,
                 profile=prepared.spec.sandbox.profile,
@@ -344,7 +348,7 @@ class HookAssembly:
         #     与父会话共用工作区，父会话的沙箱在跑时它的文件工具也要进沙箱（与命令同一个挂载，§9）。
         workspace = make_workspace(
             self._settings,
-            prepared.thread.created_by,
+            prepared.thread.created_by_uuid,
             prepared.thread_id,
             workspace_thread_id=prepared.thread.workspace_thread_id,
             routing=WorkspaceRouting(provisioner, ws_thread) if provisioner else None,
@@ -373,7 +377,7 @@ class HookAssembly:
 
         # 持久指令（L1）：读不到时跳过，不让本轮失败
         instructions = await load_instructions(
-            self._sessionmaker, workspace, prepared.thread.created_by
+            self._sessionmaker, workspace, prepared.thread.created_by_uuid
         )
 
         graph = build_graph(
@@ -422,7 +426,7 @@ class HookAssembly:
         if spec.compaction.enabled:
             cfg = spec.compaction
             needed.append(resolve_summarizer_model(cfg.summarizer_model, spec.model.model))
-        key = await agent_key(s, prepared.thread.agent_id, spec.name)
+        key = await agent_key(s, prepared.thread.agent_uuid, spec.name)
         admit_models(key, needed)
         assert key.key is not None
         spec = dataclasses.replace(
@@ -505,15 +509,15 @@ class HookAssembly:
         ctx = CallContext(
             run_id=run_id,
             thread_id=prepared.thread_id,
-            user_id=prepared.thread.created_by,
+            user_id=prepared.thread.created_by_uuid,
             # 执行器在 run 开始时设好的出站身份（以 Agent 为权限时是数字员工）
             auth_uid=ident.auth_uid if ident else None,
         )
         catalog = await make_mcp_catalog(s, redis)
-        agent_id = prepared.thread.agent_id
+        agent_id = prepared.thread.agent_uuid
         try:
             access = await mcp_agent_access(
-                s, agent_id, name=prepared.spec.name, owner=prepared.thread.created_by
+                s, agent_id, name=prepared.spec.name, owner=prepared.thread.created_by_uuid
             )
         except GatewayUnavailable as exc:
             # 网关不可用 = 这些服务此刻用不了：跳过并提示，对话照常（§6.7 ③）
@@ -556,7 +560,7 @@ class HookAssembly:
 
     def _key_fetcher(self, prepared: PreparedRun) -> Callable[[], Awaitable[str | None]]:
         """Key 被网关拒绝时重新取一次（可能刚被重置）。取不到（网关也不可用）当作没有新 Key。"""
-        agent_id = prepared.thread.agent_id
+        agent_id = prepared.thread.agent_uuid
 
         async def fetch() -> str | None:
             forget_access(agent_id)
@@ -565,7 +569,7 @@ class HookAssembly:
                     self._settings,
                     agent_id,
                     name=prepared.spec.name,
-                    owner=prepared.thread.created_by,
+                    owner=prepared.thread.created_by_uuid,
                 )
             except GatewayUnavailable:
                 return None
@@ -582,7 +586,7 @@ class HookAssembly:
         ★ 子 run 也走这里：native SubAgent 的 spec 带着同一份名录（spec_for_subagent），
           所以它也能继续派 SubAgent；acp SubAgent 的名录为空，天然返回 None。
         """
-        if not prepared.spec.subagents or self._executor is None:
+        if not prepared.spec.subagents or self._submit_run is None:
             return None
         if prepared.agent_version_id is None:
             logger.warning("run %s 缺 agent_version_id，SubAgent 不启用", run_id)
@@ -593,7 +597,7 @@ class HookAssembly:
         return SubAgentService(
             self._sessionmaker,
             self._settings,
-            self._executor,
+            self._submit_run,
             relay,
             parent_run_id=run_id,
             parent_thread=prepared.thread,
@@ -612,8 +616,8 @@ class HookAssembly:
             return
         fs = make_workspace(
             self._settings,
-            thread.created_by,
-            thread.id,
+            thread.created_by_uuid,
+            thread.thread_uuid,
             workspace_thread_id=thread.workspace_thread_id,
         )
         if fs is None:
@@ -741,7 +745,6 @@ class HookAssembly:
         idle_s = None
         if prepared.history_upto is not None:
             idle_s = (datetime.now(UTC) - prepared.history_upto).total_seconds()
-        state = prepared.thread.context_state or {}
 
         return CompactionMiddleware(
             context_window=window,
@@ -761,7 +764,7 @@ class HookAssembly:
             attachment_budget_tokens=int(
                 (window - min(effective_max_output, 20_000)) * cfg.attachment_budget_ratio
             ),
-            failure_count=int(state.get("compaction_failures") or 0),
+            failure_count=prepared.compaction_failures,
             on_failed=make_failure_hook(self._sessionmaker, prepared.thread_id),
             summarizer=self._summarizer(prepared),
             on_compacted=make_persist_hook(
@@ -787,8 +790,8 @@ async def _judge_instructions(runs: RunRepository, thread: Thread) -> list[Instr
 
     ★ 子会话里 role=user 的消息是派活的智能体写的，不是用户说的 —— 用户的话取根会话的。
     """
-    own = [extract_text(m.content) for m in await runs.user_inputs(thread.id)]
-    root = thread.root_thread_id or thread.parent_thread_id
+    own = [extract_text(m.content) for m in await runs.user_inputs(thread.thread_uuid)]
+    root = thread.root_thread_uuid or thread.parent_thread_uuid
     if root is None:
         return [Instruction("user", text) for text in own if text]
     users = [extract_text(m.content) for m in await runs.user_inputs(root)]

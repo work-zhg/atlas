@@ -122,7 +122,7 @@ TeamFlow 不写仓库（详细设计 `prototype/teamflow/docs/artifact-git-desig
 
 - 节点会话以 git 凭据档案（`ATLAS_TF_ATLAS_GIT_PROFILE`）建在 Atlas；atlas-cluster 校验档案授权后把凭据只读挂进 Pod。
 - 开工上下文给出 `<repository>`（clone 地址、本节点产物路径、上游产物的路径与 commit）、git 步骤与提交说明模板（尾注 `TeamFlow-Node`）。
-- Agent 在 Pod 里 clone 到 `/repos`、写产物、commit、push。执行 Agent 须能执行命令（ACP 类，或带 ACP 子智能体），否则开工时提示。
+- Agent 在 Pod 里 clone 到 `/repos`、写产物、commit、push。执行 Agent 须能执行命令（CLI 类，或带 CLI 子智能体），否则开工时提示。
 - TeamFlow **不跟踪提交**（run 结束、运行中都不访问 Gitee）。节点页「产物」页签预览本流程目录（master 或某次锁定的 commit，只开放本流程目录）。
 - 执行人提交准出评审时，锁定产物路径最新的提交为版本：带本节点尾注 → Agent；已绑定账号的成员 → 人工；否则未知。路径无提交 → `NO_ARTIFACT`；驳回 / 打回后无新提交 → `ARTIFACT_NOT_REVISED`。
 - 成员在「Gitee 账号」页用 OAuth 绑定账号，按团队身份成为仓库协作者（成员只读；项目开启「允许管理员直接提交」后管理员可推送），每日对账。

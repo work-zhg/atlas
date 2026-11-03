@@ -67,7 +67,7 @@ async def list_pending_approvals(
     return PendingApprovalList(
         data=[
             PendingApproval(
-                id=r.id,
+                id=r.approval_uuid,
                 tool_name=r.tool_name,
                 args=r.args,
                 kind=r.kind,
@@ -97,10 +97,10 @@ async def decide_approval(
     # ★ 归属按审批**实际所在**的 run 判：只看路径里的 run 会让人拿自己的 run id
     #   去批别人的审批（子智能体的审批可能挂在子 run 上，所以不要求两者相等）
     await ensure_run_owner(session, run_id, principal, write=True)
-    approval = await session.scalar(select(Approval).where(Approval.id == approval_id))
+    approval = await session.scalar(select(Approval).where(Approval.approval_uuid == approval_id))
     if approval is None:
         raise NotFound("确认项不存在", approval_id=str(approval_id))
-    await ensure_run_owner(session, approval.run_id, principal, write=True)
+    await ensure_run_owner(session, approval.run_uuid, principal, write=True)
     outcome = await decision_outcome(
         session,
         approval,
@@ -123,8 +123,8 @@ async def decide_approval(
 
     # ★ 决策到了 —— 立刻唤醒那个挂起的 run。
     #
-    #   审批现在是挂起而不是在线阻塞（detail/suspension.html §06）：run 落成
-    #   awaiting_approval 之后**没有进程**在等这个决策。不在这里唤醒的话要等到
+    #   原生智能体的审批是挂起而不是在线阻塞（detail/suspension.html §06）：run 落成
+    #   suspended 之后**没有进程**在等这个决策。不在这里唤醒的话要等到
     #   周期扫描（默认 60s），用户点完「允许」得干等一分钟，看着像没生效。
     #
     #   ★ 幂等：resume_if_ready 内部有 CAS，与周期扫描撞上时只有一个能赢。

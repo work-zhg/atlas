@@ -12,8 +12,8 @@
 与 bridge 的分工（Bridge 设计 §3 D1）：轮次的计时、取消流程、ACP 的取消义务、
 agent 崩溃后的重启与会话恢复都在 bridge 里；这里只提出要求（时限、取消）并解读结果。
 
-★ 与 NativeRuntime 一样：不落库、不发布、不管锁。唯一的写库是 external_session_id ——
-  它是会话身份，下一轮的恢复全靠它。
+★ 与 NativeRuntime 一样：不落库、不发布、不管锁。唯一的写库是会话的接续信息（cli_session
+  表：CLI 的会话 id、bridge 实例、确认点）—— 下一轮的恢复和换实例接管全靠它。
 
 连接：一轮一条。认识这个 bridge（进程内记住了实例 id 与 lastSeq）就 session.attach，
 否则 session.open；一轮进行中断线则退避重连并 attach，补全事件流（§7.3 · §7.5）。
@@ -22,8 +22,8 @@ bridge 重启过（实例 id 变了）→ 这一轮以 bridge_lost 失败，下�
 ★ 一轮没有时间上限，审批没有等待上限，断线重连没有窗口：CLI 在干活就不中断，
   审批只由人决定，断线只是通道断了（这一轮在 Pod 里照常进行）。一轮只在这几种情况下结束：
   CLI 自己结束或报错、CLI 进程死了、静默检测判定卡死、用户取消、bridge 重启或 Pod 没了。
-换实例接管（横向扩展设计 §5.2）：已处理到的 bridge 实例与序号随 ack 写进 run 行
-（acp_bridge_instance / acp_acked_seq）。执行这一轮的 server 实例退出后，接手的实例从库里
+换实例接管（横向扩展设计 §5.2）：已处理到的 bridge 实例与序号随 ack 写进 cli_session
+（会话级，迁移 0031）。执行这一轮的 server 实例退出后，接手的实例从库里
 读出它们 attach 回去、从确认点之后补发 —— 那一轮在 Pod 里一直在跑，接管只是把事件流接回来，
 工具不会重复执行。turn.start 带同一个 turnId（= run id），bridge 按幂等处理。
 """
@@ -43,9 +43,7 @@ from uuid import UUID
 
 from atlas_host import CloseCode, HostErrorCode, methods
 from atlas_jsonrpc import ChannelClosed, ErrorCode, RpcFault
-from sqlalchemy import update as sql_update
 
-from ..db.models import Thread
 from ..domain.events import EventFactory, EventType, TraceEvent
 from ..domain.mcp_naming import MCP_PREFIX
 from ..domain.skill_events import SkillLoadTracker
@@ -63,6 +61,7 @@ from ..providers.mcp.acp import acp_mcp_servers
 from ..providers.mcp.gateway import servers_in
 from ..providers.pods import AcpModel
 from ..repositories.approval import ApprovalRepository
+from ..repositories.cli_session import CliSessionRepository
 from ..services.approval import RedisApprovalGate
 from .approvals import ApprovalPort, PermissionDesk
 from .client import HostClient, HostUnreachable
@@ -115,7 +114,7 @@ class SessionStore(Protocol):
 
 
 class ProgressStore(Protocol):
-    async def save(self, run_id: UUID, *, instance: str, acked_seq: int) -> None: ...
+    async def save(self, thread_id: UUID, *, instance: str, acked_seq: int) -> None: ...
 
 
 class ApprovalFactory(Protocol):
@@ -131,11 +130,7 @@ class _DbSessions:
 
     async def remember(self, thread_id: UUID, agent_session_id: str) -> None:
         async with self._sessionmaker() as session:
-            await session.execute(
-                sql_update(Thread)
-                .where(Thread.id == thread_id)
-                .values(external_session_id=agent_session_id)
-            )
+            await CliSessionRepository(session).remember(thread_id, agent_session_id)
             await session.commit()
 
 
@@ -143,30 +138,59 @@ class _DbProgress:
     def __init__(self, sessionmaker: async_sessionmaker[AsyncSession]) -> None:
         self._sessionmaker = sessionmaker
 
-    async def save(self, run_id: UUID, *, instance: str, acked_seq: int) -> None:
-        from ..repositories.run import RunRepository
-
+    async def save(self, thread_id: UUID, *, instance: str, acked_seq: int) -> None:
         async with self._sessionmaker() as session:
-            await RunRepository(session).save_acp_progress(
-                run_id, instance=instance, acked_seq=acked_seq
+            await CliSessionRepository(session).save_progress(
+                thread_id, instance=instance, acked_seq=acked_seq
             )
             await session.commit()
 
 
 class _DbApprovals:
+    """CLI 的权限请求进原生的同一张审批表；在线等待期间 run 标 awaiting_user。
+
+    ★ awaiting_user 每次都按「这个 run 还有没有待决的审批」重算，不跟着单次请求翻转：
+      同一轮里可能同时挂着两个请求，答完一个时另一个还在等。
+    """
+
     def __init__(
         self, sessionmaker: async_sessionmaker[AsyncSession], redis: aioredis.Redis, run_id: UUID
     ) -> None:
         self._sessionmaker = sessionmaker
+        self._run_id = run_id
         self._gate = RedisApprovalGate(sessionmaker, redis, run_id)
 
-    async def check(self, *, approval_id: str, tool_name: str, args: dict[str, Any]) -> str:
-        return await self._gate.check(approval_id=approval_id, tool_name=tool_name, args=args)
+    async def check(
+        self,
+        *,
+        approval_id: str,
+        tool_name: str,
+        args: dict[str, Any],
+        tool_call_id: str | None = None,
+    ) -> str:
+        state = await self._gate.check(
+            approval_id=approval_id, tool_name=tool_name, args=args, tool_call_id=tool_call_id
+        )
+        await self._sync_awaiting()
+        return state
 
     async def expire(self, approval_id: str) -> None:
         async with self._sessionmaker() as session:
             await ApprovalRepository(session).expire(UUID(approval_id))
             await session.commit()
+        await self._sync_awaiting()
+
+    async def _sync_awaiting(self) -> None:
+        from ..repositories.run_record import RunRecordRepository
+
+        try:
+            async with self._sessionmaker() as session:
+                waiting = bool(await ApprovalRepository(session).list_pending(self._run_id))
+                await RunRecordRepository(session).set_awaiting_user(self._run_id, waiting=waiting)
+                await session.commit()
+        except Exception:
+            # 只影响界面上的「需要你处理」，不影响审批本身
+            logger.warning("run %s 的 awaiting_user 没写上", self._run_id, exc_info=True)
 
 
 # ═══════════════════════════════════ 运行时 ═══════════════════════════════════
@@ -260,6 +284,7 @@ class HostRuntime:
         desk = PermissionDesk(
             self._approvals(run_id, redis),
             emit=lambda kind, data: turn.queue.put_nowait(("event", kind, data)),
+            run_id=run_id,
         )
 
         async def on_notification(method: str, params: Any) -> None:
@@ -418,7 +443,7 @@ class HostRuntime:
             return None
         if spec.cli.cli_type != "claude-code":
             return None
-        key = await agent_key(self._settings, prepared.thread.agent_id, spec.name)
+        key = await agent_key(self._settings, prepared.thread.agent_uuid, spec.name)
         admit_models(key, [spec.model.model])
         assert key.key is not None
         return AcpModel(
@@ -435,10 +460,10 @@ class HostRuntime:
         spec = prepared.spec
         catalog = await make_mcp_catalog(self._settings, redis)
         # 按这个智能体的 Key 过滤、下发它的 Key（与权限类型无关）
-        agent_id = prepared.thread.agent_id
+        agent_id = prepared.thread.agent_uuid
         try:
             access = await mcp_agent_access(
-                self._settings, agent_id, name=spec.name, owner=prepared.thread.created_by
+                self._settings, agent_id, name=spec.name, owner=prepared.thread.created_by_uuid
             )
         except GatewayUnavailable as exc:
             # 网关不可用 = 这些服务此刻用不了：不下发并提示，会话照常（§6.7 ③）
@@ -459,7 +484,7 @@ class HostRuntime:
         return await acp_mcp_servers(
             spec.tool_names,
             catalog,
-            user_id=prepared.thread.created_by,
+            user_id=prepared.thread.created_by_uuid,
             digests=spec.mcp_tool_digests,
             drift_policy=spec.mcp_drift_policy,
             access=access,
@@ -476,10 +501,10 @@ class HostRuntime:
         except HostUnreachable as exc:
             raise _Abort(_failed("runtime_unreachable", str(exc))) from exc
         known = self._known.get(prepared.thread_id)
-        if prepared.takeover is not None and prepared.acp_bridge_instance:
+        if prepared.takeover is not None and prepared.cli_bridge_instance:
             # ★ 接管（§5.2）：上一个 server 实例确认到哪，就从哪 attach —— 进程内的记忆
-            #   在那个实例上，这里只认库里的
-            known = _Known(prepared.acp_bridge_instance, prepared.acp_acked_seq)
+            #   在那个实例上，这里只认库里的（cli_session）
+            known = _Known(prepared.cli_bridge_instance, prepared.cli_acked_seq)
             self._known[prepared.thread_id] = known
         if known is not None:
             try:
@@ -517,7 +542,7 @@ class HostRuntime:
     async def _open(
         self, link: _Link, prepared: PreparedRun, mcp_servers: list[dict[str, Any]]
     ) -> list[tuple[EventType, dict[str, Any]]]:
-        existing = prepared.thread.external_session_id
+        existing = prepared.cli_session_id
         params: dict[str, Any] = {
             "mcpServers": mcp_servers,
             # ★ 只下发静默检测的两个阈值（唯一的「卡死」判据）。截止、审批等待、
@@ -608,7 +633,7 @@ class HostRuntime:
                 delay = min(delay * 2, _RECONNECT_MAX_DELAY_S)
 
     async def _save_progress(self, run_id: UUID, prepared: PreparedRun, turn: _Turn) -> None:
-        """已处理到的 bridge 实例与序号写进 run 行（§5.2）。
+        """已处理到的 bridge 实例与序号写进 cli_session（§5.2，会话级）。
 
         失败只记日志：最坏是接管时多补发一段。
         """
@@ -616,7 +641,9 @@ class HostRuntime:
         if known is None:
             return
         try:
-            await self._progress.save(run_id, instance=known.instance, acked_seq=turn.last_seq)
+            await self._progress.save(
+                prepared.thread_id, instance=known.instance, acked_seq=turn.last_seq
+            )
         except Exception:
             logger.warning("acp 进度写库失败 run=%s", run_id, exc_info=True)
 

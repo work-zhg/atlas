@@ -11,7 +11,7 @@ from uuid import UUID
 import httpx
 import pytest
 from atlas_agent.db.models import Instruction
-from atlas_agent.db.session import get_sessionmaker
+from atlas_agent.db.session import fetch_one, get_sessionmaker
 from atlas_agent.executor.context import load_instructions
 from atlas_agent.main import create_app
 from httpx import ASGITransport
@@ -43,15 +43,19 @@ async def users(fake_user_center: FakeUC) -> AsyncIterator[dict[str, str]]:
 @pytest.fixture
 async def keep_platform() -> AsyncIterator[None]:
     async with get_sessionmaker()() as s:
-        row = await s.get(Instruction, ("platform", ""))
-        saved = None if row is None else (row.content, row.updated_by, row.updated_at)
+        row = await fetch_one(
+            s, Instruction, Instruction.scope == "platform", Instruction.owner_id == ""
+        )
+        saved = None if row is None else (row.content, row.updated_by_uuid, row.updated_at)
     yield
     async with get_sessionmaker()() as s:
-        row = await s.get(Instruction, ("platform", ""))
+        row = await fetch_one(
+            s, Instruction, Instruction.scope == "platform", Instruction.owner_id == ""
+        )
         if saved is None and row is not None:
             await s.delete(row)
         elif saved is not None and row is not None:
-            row.content, row.updated_by, row.updated_at = saved
+            row.content, row.updated_by_uuid, row.updated_at = saved
         await s.commit()
 
 

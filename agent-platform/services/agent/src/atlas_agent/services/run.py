@@ -26,6 +26,8 @@ from ..db.models import Agent, Run
 from ..errors import Conflict, InvalidApprovalMode, NotFound, ThreadLocked
 from ..executor.base import RunExecutor
 from ..repositories.agent import AgentRepository
+from ..repositories.continuation import ContinuationQueries
+from ..repositories.event_archive import EventArchive
 from ..repositories.run import RunRepository
 from ..repositories.thread import ThreadRepository
 from ..schemas.run import RunAccepted, RunCreate, RunOut, RunTraceOut
@@ -38,10 +40,11 @@ _TERMINAL_STATUSES = {"succeeded", "failed", "cancelled", "interrupted"}
 
 def _to_out(run: Run) -> RunOut:
     return RunOut(
-        id=run.id,
-        thread_id=run.thread_id,
-        parent_run_id=run.parent_run_id,
+        id=run.run_uuid,
+        thread_id=run.thread_uuid,
+        parent_run_id=run.parent_run_uuid,
         status=run.status,  # type: ignore[arg-type]
+        awaiting_user=run.awaiting_user,
         error_kind=run.error_kind,
         error_message=run.error_message,
         last_seq=run.last_seq,
@@ -68,7 +71,7 @@ def run_auth_uid(agent: Agent, requested: UUID | None) -> UUID | None:
     if agent.digital_employee_uid is None:
         raise Conflict(
             "这个智能体以 Agent 为权限，但还没有数字员工，暂时不能使用，请联系管理员",
-            agent_id=str(agent.id),
+            agent_id=str(agent.agent_uuid),
         )
     return agent.digital_employee_uid
 
@@ -85,6 +88,8 @@ class RunService:
         self._settings = settings
         self._executor = executor
         self._runs = RunRepository(session)
+        self._events = EventArchive(session)
+        self._continuation = ContinuationQueries(session)
         self._threads = ThreadRepository(session)
         self._agents = AgentRepository(session)
         self._relay = EventRelay(redis, ttl_s=settings.run_events_ttl_s)
@@ -107,7 +112,7 @@ class RunService:
                 if run is not None:
                     # 移动端抖动导致的重复提交不该变成两条消息、跑两次
                     return RunAccepted(
-                        run_id=run.id,
+                        run_id=run.run_uuid,
                         message_id=UUID(int=0),
                         status=run.status,  # type: ignore[arg-type]
                     )
@@ -117,9 +122,9 @@ class RunService:
             raise NotFound(f"会话 {thread_id} 不存在", thread_id=str(thread_id))
         thread, agent = found
 
-        agent_row = await self._agents.get(agent.id)
-        if agent_row is None or agent_row[0].current_version_id is None:
-            raise NotFound(f"智能体 {agent.id} 无可用版本", agent_id=str(agent.id))
+        agent_row = await self._agents.get(agent.agent_uuid)
+        if agent_row is None or agent_row[0].current_version_uuid is None:
+            raise NotFound(f"智能体 {agent.agent_uuid} 无可用版本", agent_id=str(agent.agent_uuid))
         version = agent_row[1]
         auth_uid = run_auth_uid(agent_row[0], auth_uid or initiator)
         approval_mode = _approval_mode_for(
@@ -166,7 +171,7 @@ class RunService:
             run = await self._runs.create(
                 run_id=run_id,
                 thread_id=thread_id,
-                agent_version_id=version.id,
+                agent_version_id=version.agent_version_uuid,
                 created_by=initiator,
                 auth_uid=auth_uid,
                 auth_subject=agent_row[0].auth_subject,
@@ -178,10 +183,10 @@ class RunService:
             raise
 
         if idempotency_key:
-            await self._relay.remember_idempotency(idempotency_key, run.id)
+            await self._relay.remember_idempotency(idempotency_key, run.run_uuid)
 
-        await self._executor.submit(run.id)
-        return RunAccepted(run_id=run.id, message_id=message.id, status="queued")
+        await self._executor.submit(run.run_uuid)
+        return RunAccepted(run_id=run.run_uuid, message_id=message.message_uuid, status="queued")
 
     def _lock_ttl_s(self) -> int:
         """Redis 锁的 TTL = run 的租约时长（横向扩展设计 §4.4）。
@@ -205,11 +210,11 @@ class RunService:
         """一轮已结束后的过程轨迹 —— 历史对话里的工具、委派、审批靠它重现。"""
         if await self._runs.get(run_id) is None:
             raise NotFound(f"run {run_id} 不存在", run_id=str(run_id))
-        rows = await self._runs.archived_run_trace(run_id)
+        rows = await self._events.archived_run_trace(run_id)
         return RunTraceOut(
             data=[
                 event_from_row(
-                    run_id=row.run_id,
+                    run_id=row.run_uuid,
                     seq=row.seq,
                     thread_seq=row.thread_seq,
                     ts=row.ts,
@@ -258,7 +263,7 @@ class RunService:
         while frontier:
             children: list[UUID] = []
             for parent_id in frontier:
-                children.extend(await self._runs.unfinished_children_of(parent_id))
+                children.extend(await self._continuation.unfinished_children_of(parent_id))
             for child_id in children:
                 await self._executor.cancel(child_id)
             cancelled += len(children)
@@ -309,7 +314,7 @@ class RunService:
         cursor = (
             after_seq
             if after_seq is not None
-            else await self._runs.thread_seq_window_floor(
+            else await self._events.thread_seq_window_floor(
                 thread_id, keep=self._settings.sse_thread_replay_events
             )
         )
@@ -317,7 +322,7 @@ class RunService:
         # 归档段：一次取完（有 limit 兜底），随后连接就能还掉
         archived = [
             event_from_row(
-                run_id=row.run_id,
+                run_id=row.run_uuid,
                 seq=row.seq,
                 thread_seq=row.thread_seq,
                 ts=row.ts,
@@ -325,7 +330,7 @@ class RunService:
                 depth=row.depth,
                 data=row.data,
             )
-            for row in await self._runs.archived_thread_events(thread_id, after_seq=cursor)
+            for row in await self._events.archived_thread_events(thread_id, after_seq=cursor)
         ]
         await self._session.close()
         return self._thread_frames(thread_id, archived, cursor)

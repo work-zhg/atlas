@@ -60,7 +60,7 @@ class Visibility:
                 continue
             ids = [i for i, lv in self.levels.items() if LEVEL_RANK[lv] >= LEVEL_RANK[need]]
             if ids:
-                conds.append(and_(Agent.status == status, Agent.id.in_(ids)))
+                conds.append(and_(Agent.status == status, Agent.agent_uuid.in_(ids)))
         return or_(*conds) if conds else false()
 
 
@@ -74,7 +74,7 @@ class AgentAccess:
         type_level = principal.data_levels.get(AGENT_DATA, "NONE")
         if LEVEL_RANK[type_level] >= LEVEL_RANK["OWNER"]:
             return type_level
-        own = await self.uc.data_check(AGENT_DATA, str(agent.id), principal.auth_uid)
+        own = await self.uc.data_check(AGENT_DATA, str(agent.agent_uuid), principal.auth_uid)
         return _max(own, type_level)
 
     async def visibility(self, principal: Principal) -> Visibility:
@@ -88,7 +88,7 @@ class AgentAccess:
         """看不到 → 404（不泄露存在）；看得到但级别不够 → 403。返回有效级别。"""
         level = await self.level(principal, agent)
         if LEVEL_RANK[level] < LEVEL_RANK[STATUS_MIN.get(agent.status, "OWNER")]:
-            raise NotFound(f"智能体 {agent.id} 不存在", agent_id=str(agent.id))
+            raise NotFound(f"智能体 {agent.agent_uuid} 不存在", agent_id=str(agent.agent_uuid))
         if need is not None and LEVEL_RANK[level] < LEVEL_RANK[need]:
             raise Forbidden(_DENIED[need])
         return level

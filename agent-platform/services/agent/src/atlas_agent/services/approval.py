@@ -29,7 +29,6 @@ from ..db.models import Approval
 from ..domain.spec import ApprovalSpec
 from ..errors import InvalidAnswers, InvalidApprovalMode
 from ..repositories.approval import ApprovalRepository
-from ..repositories.run import RunRepository
 from ..telemetry import semconv as _sc
 from ..telemetry import tracer as _tracer
 
@@ -38,8 +37,9 @@ logger = logging.getLogger(__name__)
 class RedisApprovalGate:
     """注入给 engine 的审批门禁。
 
-    engine 在工具执行前问它「这次批了吗」；它负责登记、把 run 标成
-    awaiting_approval，然后**立刻**返回状态 —— 等待由挂起机制承担。
+    engine 在工具执行前问它「这次批了吗」；它负责登记，然后**立刻**返回状态 ——
+    等待由挂起机制承担。run 的状态不在这里动：原生智能体随后挂起（suspended），
+    CLI 在线等权限由 CLI 运行时标 awaiting_user。
     """
 
     def __init__(
@@ -67,6 +67,7 @@ class RedisApprovalGate:
         kind: str = "tool",
         source: str | None = None,
         reason: str | None = None,
+        tool_call_id: str | None = None,
     ) -> ApprovalState:
         """查一次状态。**立刻返回，不阻塞**。
 
@@ -92,15 +93,11 @@ class RedisApprovalGate:
                     run_id=self._run_id,
                     tool_name=tool_name,
                     args=args,
-                    tool_call_id=_tool_call_id_of(args),
+                    tool_call_id=tool_call_id or _tool_call_id_of(args),
                     kind=kind,
                     source=source,
                     reason=reason,
                 )
-                # ★ 仍然把 run 标成 awaiting_approval —— 它是 suspended 的一个
-                #   细分。UI 要区分「在等机器」和「在等你」：前者用户只能干等，
-                #   后者需要他行动（detail/suspension.html §06）。
-                await RunRepository(session).set_status(self._run_id, "awaiting_approval")
                 await session.commit()
         except Exception:
             # ★ 落库失败**不放行**。高风险工具无人把关地执行是这里最不能接受的
@@ -174,9 +171,9 @@ async def approval_spec_of_run(session: AsyncSession, run_id: UUID) -> ApprovalS
     from ..schemas.agent import AgentSpecIn
 
     spec = await session.scalar(
-        select(AgentVersion.spec).join(Run, Run.agent_version_id == AgentVersion.id).where(
-            Run.id == run_id
-        )
+        select(AgentVersion.spec)
+        .join(Run, Run.agent_version_uuid == AgentVersion.agent_version_uuid)
+        .where(Run.run_uuid == run_id)
     )
     return AgentSpecIn.model_validate(spec or {"model": {"model": "unknown"}}).approval.to_engine()
 
@@ -207,7 +204,7 @@ async def decision_outcome(
         except ValueError as exc:
             raise InvalidAnswers(str(exc)) from exc
     if approval.kind == "plan" and decision == "approved":
-        allowed = (await approval_spec_of_run(session, approval.run_id)).execution_modes()
+        allowed = (await approval_spec_of_run(session, approval.run_uuid)).execution_modes()
         if approval_mode not in allowed:
             raise InvalidApprovalMode(
                 "批准计划时要选一个执行模式，且必须在智能体允许的范围里",
