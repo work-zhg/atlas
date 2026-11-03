@@ -86,7 +86,7 @@ class RunRecordRepository:
                 **_usage_increments(usage),
                 finished_at=datetime.now(UTC),
                 lease_until=None,
-                # 挂起现场随 run 结束作废（续跑段要读它，所以留到这里才清，见 claim_for_resume）
+                # 挂起现场随 run 结束作废（续跑段要读它，所以留到这里才清，见 RunQueue.requeue）
                 waiting_on=None,
                 awaiting_user=False,
             )

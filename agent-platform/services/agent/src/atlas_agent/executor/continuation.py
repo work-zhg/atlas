@@ -120,7 +120,7 @@ class Continuation:
           都会让 run 永久卡在 suspended，而那是最难发现的故障形态 ——
           没有报错、没有事件，只是一个永远转圈的界面。
 
-        ★ CAS 在 claim_for_resume 里。几个子 run 同时结束时它们都会走到这，
+        ★ CAS 在 RunQueue.requeue 里。几个子 run 同时结束时它们都会走到这，
           只有一个能抢到。
         """
         async with self._sessionmaker() as session:
@@ -129,7 +129,7 @@ class Continuation:
                 return False
             if not await self.waits_are_settled(session, run):
                 return False
-            if not await RunQueue(session).claim_for_resume(run_id):
+            if not await RunQueue(session).requeue(run_id):
                 return False  # 别人抢到了
             await session.commit()
 

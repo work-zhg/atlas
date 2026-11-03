@@ -370,7 +370,7 @@ class Run(Base):
     #: 挂起时「在等什么」（迁移 0012）。与图的 state.waiting_on 同形
     #: （contracts/suspension.py）：
     #: {"<tool_call_id>": {"reason": "approval", "token": "<approval_id>"}}。
-    #: 续跑时与消息一起交回图；留到 run 结束才清（repositories/run.py::claim_for_resume）。
+    #: 续跑时与消息一起交回图；留到 run 结束才清（RunQueue.requeue）。
     #:
     #: ★ 没有它，续跑的 barrier 会判错方向：SubAgent 的 barrier 是「子 run 终态」，
     #:   而审批挂起时**没有子 run** —— barrier 立刻满足，于是续跑、又挂起、

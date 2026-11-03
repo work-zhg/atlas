@@ -26,8 +26,11 @@ class RunQueue:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def claim_for_resume(self, run_id: UUID) -> bool:
-        """把一个 suspended 的 run 抢过来续跑。抢到返回 True。
+    async def requeue(self, run_id: UUID) -> bool:
+        """把挂起的 run 放回队列（CAS：suspended → queued）。放回去了返回 True。
+
+        续跑就是重新入队：之后与新 run 走同一条领取路径（claim_next），并发上限和接管的
+        规则只有一套，哪个实例领到都一样。
 
         ★ 必须是 CAS，不能先查后改。一轮里派出去的几个子 run 可能同时
           结束，每一个都会来唤醒父 run —— 先查后改的话它们全都看到
@@ -39,7 +42,7 @@ class RunQueue:
             update(Run)
             .where(Run.run_uuid == run_id, Run.status.in_(_SUSPENDED))
             # ★ waiting_on **不清**：续跑段要把它和消息一起交回图，而这一段可能由任意
-            #   实例领取，只能从库里读（executor._resume_state）。下一次挂起时覆盖，
+            #   实例领取，只能从库里读（SegmentLoader.resume_state）。下一次挂起时覆盖，
             #   run 结束时清（finish）。读它的地方都按状态过滤（_wait_reasons）。
             .values(status="queued")
         )
@@ -60,7 +63,7 @@ class RunQueue:
         expired = and_(
             Run.status.in_(_LEASED),
             # native 的审批挂起没有进程在跑：挂起时清了租约（lease_until 为空），它由续跑
-            # 路径（claim_for_resume）唤醒，不是接管。★ 不能再用 waiting_on 判断 —— 续跑段
+            # 路径（requeue）唤醒，不是接管。★ 不能再用 waiting_on 判断 —— 续跑段
             # 带着上一次挂起的 waiting_on 在跑，它崩了也要能被接管。
             Run.lease_until.isnot(None),
             Run.lease_until < now,
