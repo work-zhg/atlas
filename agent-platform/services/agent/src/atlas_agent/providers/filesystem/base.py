@@ -6,7 +6,7 @@
 ★ 它<b>不是</b>生产兜底。删掉 StateBackend 时的判断同样适用于这里：
   没配对象存储就是**没有文件能力**，不该悄悄给模型一个 run 结束即弃的
   假工作区 —— 模型不会收到任何提示，只会发现自己写过的东西不见了。
-  所以 `HookAssembly` 永远不会构造它，只有测试会。
+  所以 `CapabilityAssembly` 永远不会构造它，只有测试会。
 """
 
 from __future__ import annotations

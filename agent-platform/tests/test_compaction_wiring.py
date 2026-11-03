@@ -309,9 +309,9 @@ def test_disabled_spec_means_no_middleware_at_all() -> None:
     """
     import inspect
 
-    from atlas_agent.executor.assembly import HookAssembly
+    from atlas_agent.executor.context_manager import ContextManager
 
-    src = inspect.getsource(HookAssembly._compactor)
+    src = inspect.getsource(ContextManager._compactor)
     assert "enabled" in src, "装配层不再检查 enabled，禁用压缩的开关失效了"
 
 

@@ -17,7 +17,7 @@ from ..domain.spec import AgentSpec
 
 if TYPE_CHECKING:
     from ..db.models import Thread
-    from .assembly import RunModels
+    from .run_models import RunModels
 
 
 @dataclass(frozen=True)
@@ -79,7 +79,7 @@ class Segment:
     #: 自动压缩连续失败了几次（熔断用）
     compact_count: int = 0
     compaction_failures: int = 0
-    #: 这一轮的模型端点与目录（HookAssembly.with_models 填）。None = 还没解析，按直连处理
+    #: 这一轮的模型端点与目录（CapabilityAssembly.with_models 填）。None = 还没解析，按直连处理
     models: RunModels | None = None
 
     @property

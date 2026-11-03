@@ -221,7 +221,7 @@ async def test_auto_mode_notice_when_skipped(monkeypatch: pytest.MonkeyPatch) ->
         thread_id: Any
         resume: bool = False
 
-    hook = object.__new__(asm.HookAssembly)
+    hook = object.__new__(asm.CapabilityAssembly)
     hook._settings = object()  # type: ignore[assignment]
     spec = SimpleNamespace(knowledge=KnowledgeSpec(dataset_ids=("d2",), mode="auto"))
     notices: list[Any] = []

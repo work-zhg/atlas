@@ -249,7 +249,7 @@ async def assemble(
     digests: dict[str, str] | None = None,
     call_ctx: CallContext | None = None,
 ) -> tuple[list[Any], list[tuple[EventType, dict[str, Any]]], McpSessions]:
-    """和 assembly._mcp_tool_list 同一套：问网关这个智能体的 Key 能用什么 → 读元数据造工具。"""
+    """和 tool_surface.ToolSurface._mcp_tool_list 同一套：问网关这个智能体的 Key 能用什么 → 读元数据造工具。"""
     catalog = await gateway_catalog(GATEWAY, ttl_s=0, redis=None)
     access = await agent_access(GATEWAY, agent, name="测试智能体", owner=ALICE, ttl_s=0)
 

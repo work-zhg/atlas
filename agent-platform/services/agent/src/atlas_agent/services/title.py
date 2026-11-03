@@ -23,7 +23,7 @@ from ..config import Settings
 from .service_models import resolve_service_model
 
 if TYPE_CHECKING:
-    from ..executor.assembly import ModelBuilder
+    from ..executor.run_models import ModelBuilder
 
 logger = logging.getLogger(__name__)
 

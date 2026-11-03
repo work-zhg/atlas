@@ -16,7 +16,7 @@ from uuid import UUID, uuid4
 import pytest
 from atlas_agent.domain.events import EventType
 from atlas_agent.domain.spec import AgentSpec, ApprovalSpec, LimitSpec, ModelSpec
-from atlas_agent.executor.assembly import _judge_instructions
+from atlas_agent.executor.collaboration import _judge_instructions
 from atlas_engine.contracts import ToolEffect
 from atlas_engine.kernel.middleware.auto_judge import (
     JUDGE_RULES,

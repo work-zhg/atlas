@@ -1,61 +1,45 @@
-"""RunHooks 的组装（与执行循环分离）。
+"""原生运行时 · 一轮的编排：为一段装配能力、建图。
 
-「组装能力」（MCP 解析、压缩、标题、审批、子模型）与「执行循环」（领取、收事件、落库，
-executor/scheduling.py 与 segment.py）分开：换执行器时搬走的是循环，HookAssembly 原样复用。
+见 c4-model/agent/native-runtime/code-native-runtime-turn.html。
+
+CapabilityAssembly 只编排、不实现。顺序固定：模型先于一切（with_models）→ 知识库预检索
+（with_knowledge）→ 段内共享的资源（记忆、沙箱供给器、工作区）→ 按固定顺序问三个能力领域
+要本段的东西 —— 工具面（tool_surface.py）、挂起与人机协作（collaboration.py）、上下文管理
+（context_manager.py）—— 交给 build.py::build_graph 建图（纯函数，中间件按槽位排）。新增一种
+能力只改对应领域，不改这里。
+
 它由组合根（executor/compose.py）构造，不认识执行器；委派只拿到入队这一个回调。
-
-Segment 是「任务是什么」的载体（对应 engine run() 签名的前半），
-HookAssembly.build() 产出「用什么能力跑」（RunHooks，签名的后半）。
 """
 
 from __future__ import annotations
 
 import dataclasses
-import json
 import logging
-from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
-from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, Literal, Protocol
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID
 
 import redis.asyncio as aioredis
-from atlas_engine.kernel.middleware.auto_judge import AutoJudge, Instruction, JudgeSetup
-from atlas_engine.kernel.middleware.compaction import CompactionMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from atlas_agent.domain.spec import ModelSpec, resolve_summarizer_model
-from atlas_agent.domain.tool_registry import BASH_TOOL, MEMORY_TOOL
+from atlas_agent.domain.spec import resolve_summarizer_model
+from atlas_agent.domain.tool_registry import MEMORY_TOOL
 from atlas_agent.domain.translator import extract_text
 from atlas_agent.errors import CapabilityUnavailable
-from atlas_agent.executor.context import load_instructions
 from atlas_agent.executor.runner import Titler
 from atlas_agent.executor.segment_data import Segment
 from atlas_agent.providers.knowledge import (
     format_context,
-    make_knowledge_tool,
     require_client,
     skipped_message,
 )
-from atlas_agent.providers.llm.factory import build_chat_model
 from atlas_agent.providers.opensandbox import SandboxProvisioner
-from atlas_agent.providers.sandbox import PodSandbox
-from atlas_agent.telemetry.model_callback import ModelSpanHandler
 
-from ..approval import RunApprovalGate
 from ..config import Settings
-from ..db.models import Thread
 from ..domain.events import EventType
 from ..outbound import current_identity
 from ..providers.filesystem import WorkspaceRouting, make_workspace
-from ..providers.filesystem.skill_copy import (
-    resolve_skills,
-    seed_session_skills,
-    skill_refs_for,
-)
 from ..providers.llm.model_platform import (
-    ModelEndpoint,
-    PlatformModel,
     admit_models,
     agent_key,
     direct_endpoint,
@@ -63,101 +47,20 @@ from ..providers.llm.model_platform import (
     uses_model_platform,
     with_platform_model,
 )
-from ..providers.mcp import (
-    MCP_PREFIX,
-    CallContext,
-    GatewayUnavailable,
-    KeyAuth,
-    McpSessions,
-    NativeMcpTools,
-    make_mcp_catalog,
-    mcp_agent_access,
-)
-from ..providers.mcp.gateway import forget_access, servers_in
 from ..repositories.model_catalog import ModelCatalogRepository
-from ..repositories.run import RunRepository
-from ..services.compaction import ThreadSummarizer, make_failure_hook, make_persist_hook
-from ..services.service_models import resolve_service_model, service_model_configured
 from ..services.title import TitleService
-from ..skills import skill_directory
 from ..stream.relay import EventRelay
 from .base import SubmitRun
 from .build import build_graph
+from .collaboration import Collaboration
+from .context_manager import ContextManager
+from .run_models import ModelBuilder, RunModels, models_of
+from .tool_surface import ToolSurface
 
 if TYPE_CHECKING:
-    from ..memory import MemoryRuntime
+    from ..memory import MemoryRuntime, MemoryTurn
 
 logger = logging.getLogger(__name__)
-
-
-class ModelBuilder(Protocol):
-    def __call__(
-        self,
-        model_spec: Any,
-        *,
-        base_url: str,
-        api_key: str,
-        headers: Mapping[str, str] | None = None,
-    ) -> Any: ...
-
-
-def default_model_builder(
-    model_spec: Any, *, base_url: str, api_key: str, headers: Mapping[str, str] | None = None
-) -> Any:
-    """★ 遥测回调挂在这里，因为**全部**模型构造都过这一个函数：主对话、
-    标题生成、上下文摘要。挂在这里三处一并覆盖，而且不用碰 runner ——
-    它是纯计算层，往那里塞回调会让「run 一轮」不再能脱离基础设施单测。
-
-    ★ 用构造器级 callbacks 而不是逐次调用传 config：调用点分散在三处，
-      漏一处的表现是「某类模型调用在链路图上凭空消失」，而那恰恰最难发现。
-
-    未启用遥测时回调照常挂着，但它拿到的是 no-op span —— 不写 if 分支。
-    """
-    return build_chat_model(
-        model_spec,
-        base_url=base_url,
-        api_key=api_key,
-        callbacks=[ModelSpanHandler()],
-        headers=headers,
-    )
-
-
-def _deferred_mcp_tools(tools: list[Any], settings: Settings) -> list[Any]:
-    """MCP 工具数量或定义总量超过阈值 → 全部改为延迟工具；否则照常常驻。"""
-    if not tools:
-        return []
-    from atlas_engine.kernel.middleware._context import estimate_text
-    from langchain_core.utils.function_calling import convert_to_openai_tool
-
-    size = 0
-    for t in tools:
-        try:
-            size += estimate_text(json.dumps(convert_to_openai_tool(t), ensure_ascii=False))
-        except Exception:
-            size += estimate_text(str(getattr(t, "description", "")))
-    if len(tools) > settings.deferred_tools_min_count or size > settings.deferred_tools_min_tokens:
-        return list(tools)
-    return []
-
-
-class SandboxNotEnabled(CapabilityUnavailable):
-    """勾了 Shell 但部署没开沙箱 —— 明确报错（§13.2），不静默少装 execute。"""
-
-
-@dataclass(frozen=True)
-class RunModels:
-    """这一轮的模型从哪来（with_models 解析好）：主模型、压缩模型都用这个端点。
-
-    endpoint  经模型管理平台时 = LiteLLM + 智能体的客户端 Key；没接时直连 litellm
-    models    经平台时：Key 的可用模型（上下文窗口、最大输出来自它）；
-              None = 没接，上限照旧读 model_catalog 表
-    """
-
-    endpoint: ModelEndpoint
-    models: Mapping[str, PlatformModel] | None = None
-
-    def entry(self, model: str) -> PlatformModel | None:
-        return self.models.get(model) if self.models is not None else None
 
 
 class MemoryNotConfigured(CapabilityUnavailable):
@@ -168,8 +71,9 @@ class MemoryNotConfigured(CapabilityUnavailable):
     """
 
 
-class HookAssembly:
-    """把一次 run 所需的全部能力注入组装成 RunHooks。"""
+class CapabilityAssembly:
+    """为一段装配能力并建图（原 HookAssembly，800 行一个类：模型、知识库、MCP、沙箱、审批、
+    子智能体、技能、判断器、压缩全在里面）。"""
 
     def __init__(
         self,
@@ -179,13 +83,14 @@ class HookAssembly:
         submit_run: SubmitRun | None = None,
         memory: MemoryRuntime | None = None,
     ) -> None:
-        #: 委派要能起子 run：入队由组合根注入，装配不认识执行器。None = 不能委派
-        self._submit_run = submit_run
         self._sessionmaker = sessionmaker
         self._settings = settings
         self._build_model = model_builder
         #: 记忆（doc/memory-design.html）。None = 没接入记忆服务
         self._memory = memory
+        self._tools = ToolSurface(settings)
+        self._collaboration = Collaboration(sessionmaker, settings, model_builder, submit_run)
+        self._context = ContextManager(sessionmaker, settings, model_builder)
 
     async def build(
         self,
@@ -197,94 +102,22 @@ class HookAssembly:
         notices: list[tuple[EventType, dict[str, Any]]] | None = None,
         closers: list[Callable[[], Awaitable[None]]] | None = None,
     ) -> tuple[Any, Titler | None]:
-        """收集本次 run 的全部能力对象，装配出图。返回 (graph, titler)。
+        """问三个能力领域要本段的东西，装配出图。返回 (graph, titler)。
 
-        策略（装什么、什么顺序）在 build.py::build_graph —— 那里是纯函数；
-        这里只做 IO：解析 MCP、起沙箱容器、连对象存储、建 Redis 门禁。
+        策略（装什么、什么顺序）在 build.py::build_graph —— 那里是纯函数；IO 都在各领域里。
         titler 单独返回：它是 runner 的注入点，不进图。
         closers: 本 Run 段结束时要收尾的（MCP 会话），由调用方在段结束时执行。
         """
-        # MCP 工具在这里解析成 BaseTool —— engine 不认识 MCP 的传输与凭据
-        # （§14）。解析失败要冒泡成 run.failed，而不是少装几个工具就默默跑
-        # （§13.2）。工具定义读目录缓存，命中时装配不连网（MCP 详设 §05）。
-        extra_tools = await self._mcp_tool_list(
-            segment, run_id=run_id, redis=redis, notices=notices, closers=closers
-        )
-        # MCP 工具多时改为按需加载：定义不常驻上下文，模型用 tool_search 加载（上下文管理 §13）
-        deferred = _deferred_mcp_tools(extra_tools, self._settings)
-
-        # ★ 网页搜索不再是内置工具：它经 Higress 以 MCP 提供
-        #   （mcp:serpapi:google_search），后端 key 只在网关里，走上面那条路。
-
-        # 记忆（doc/memory-design.html §4–§5）：常驻块进系统提示词，load_memory 随记忆挂上；
-        # 勾了「记忆」的主会话再挂 save_memory / forget_memory。★ 关联主键（会话所属用户）
-        # 闭包捕获，不进工具参数 —— 一旦可由模型指定，提示词注入就能读写别人的记忆（§4.8）。
-        wants_write = MEMORY_TOOL in segment.spec.tool_names
-        if wants_write and self._memory is None and segment.thread.memory != "off":
-            raise MemoryNotConfigured("勾选了「记忆」但服务端未接入记忆服务（MEMORY_BASE_URL）")
-        memory = (
-            await self._memory.turn(
-                segment.thread,
-                run_id=run_id,
-                writable=wants_write,
-                resume=segment.resume,
-                history_upto=segment.history_upto,
-                occurred_at=segment.input_at,
-                compact_count=segment.compact_count,
-            )
-            if self._memory is not None
-            else None
-        )
-        if memory is not None:
-            extra_tools = [*extra_tools, *memory.tools()]
-
-        # 知识库（tool 模式）：库 id 闭包捕获，不进参数（doc/atlas-rag-design.html §10）
-        knowledge = segment.spec.knowledge
-        if knowledge.enabled and knowledge.mode == "tool":
-            extra_tools = [
-                *extra_tools,
-                make_knowledge_tool(
-                    require_client(self._settings),
-                    knowledge,
-                    names=None,
-                    source_ref=f"thread:{segment.thread_id}/run:{run_id}",
-                ),
-            ]
-
-        # Shell 沙箱（doc/sandbox-opensandbox-design.html）。★ 这里只构造客户端，不建沙箱 ——
-        #   沙箱在第一次 execute 时才按需创建（多数原生会话用不到）。
-        #   按工作区建：子智能体（workspace_thread_id = 父会话）与父会话共用一个。
-        ws_thread = str(segment.thread.workspace_thread_id)
+        # ── 段内共享的资源：几个领域都要用，在这里建一次 ──────────────────────────
+        memory = await self._memory_turn(segment, run_id=run_id)
         provisioner = (
             SandboxProvisioner(self._settings, redis) if self._settings.sandbox_enabled else None
         )
-        sandbox = None
-        if BASH_TOOL in segment.spec.tool_names:
-            if provisioner is None:
-                raise SandboxNotEnabled(
-                    "勾选了 Shell（bash）但服务端未开启沙箱（SANDBOX_ENABLED=false）"
-                )
-            settings = self._settings
-            sandbox = PodSandbox(
-                provisioner=provisioner,
-                workspace_thread_id=ws_thread,
-                user_id=str(segment.thread.created_by_uuid),
-                run_id=str(run_id),
-                image=segment.spec.sandbox.image,
-                profile=segment.spec.sandbox.profile,
-                poll_min_s=settings.sandbox_poll_min_s,
-                poll_max_s=settings.sandbox_poll_max_s,
-                output_limit=settings.sandbox_output_limit_bytes,
-                idle_s=settings.acp_tool_idle_timeout_s,
-                stall_cpu_pct=settings.sandbox_stall_cpu_pct,
-            )
-
-        # ★ workspace 挂**父会话的**前缀，skills / system 仍按自己的 thread 走
-        #   （Thread.workspace_thread_id 是 parent_thread_id or id）。
-        #   没配对象存储 = **没有文件能力**（make_workspace 返回 None，
-        #   不回落任何内存实现）：文件工具届时一个都不注册。
+        # ★ workspace 挂**父会话的**前缀，skills / system 仍按自己的 thread 走。
+        #   没配对象存储 = **没有文件能力**（make_workspace 返回 None，不回落任何内存实现）。
         #   ★ 工作区的读写路由跟着**工作区**走，不跟着本智能体有没有 bash 走：没勾 bash 的子智能体
         #     与父会话共用工作区，父会话的沙箱在跑时它的文件工具也要进沙箱（与命令同一个挂载，§9）。
+        ws_thread = str(segment.thread.workspace_thread_id)
         workspace = make_workspace(
             self._settings,
             segment.thread.created_by_uuid,
@@ -293,60 +126,65 @@ class HookAssembly:
             routing=WorkspaceRouting(provisioner, ws_thread) if provisioner else None,
         )
 
-        approvals = RunApprovalGate(self._sessionmaker, run_id)
-
-        # 技能清单：描述取自技能应用；已下架的跳过并告诉用户（技能 / MCP 设计 §7.3）
-        skill_metas, skipped = await resolve_skills(
-            segment.spec.skills, skill_directory(self._settings)
+        # ── 三个能力领域，顺序固定 ────────────────────────────────────────────
+        tools = await self._tools.contribute(
+            segment,
+            run_id=run_id,
+            redis=redis,
+            provisioner=provisioner,
+            workspace=workspace,
+            memory=memory,
+            notices=notices,
+            closers=closers,
         )
-        for item in skipped:
-            if notices is not None:
-                notices.append((EventType.SKILL_SKIPPED, item))
-            if workspace is not None:
-                # ★ 删掉本会话里的副本：只从索引里拿掉的话，模型仍可能凭记忆去读
-                await workspace.adelete(f"/skills/{item['slug']}", recursive=True)
+        collaboration = self._collaboration.contribute(segment, run_id=run_id, relay=relay)
+        context = await self._context.contribute(segment, workspace=workspace, memory=memory)
 
-        endpoint = self._models(segment).endpoint
+        endpoint = models_of(segment, self._settings).endpoint
         chat = self._build_model(
             segment.spec.model,
             base_url=endpoint.base_url,
             api_key=endpoint.api_key,
             headers=endpoint.headers,
         )
-
-        # 持久指令（L1）：读不到时跳过，不让本轮失败
-        instructions = await load_instructions(
-            self._sessionmaker, workspace, segment.thread.created_by_uuid
-        )
-
         graph = build_graph(
             segment.spec,
             chat,
-            instructions=instructions,
-            memory=memory.block if memory is not None else None,
-            deferred_tools=deferred,
+            instructions=context.instructions,
+            memory=context.memory_block,
+            compactor=context.compactor,
+            deferred_tools=tools.deferred_tools,
             filesystem=workspace,
-            sandbox=sandbox,
-            approvals=approvals,
-            judge=self._auto_judge(segment),
-            compactor=await self._compactor(
-                segment,
-                workspace=workspace,
-                # 记忆的更新提示（§5.5）：每次调模型时现取，Agent 重新加载过的主题不再列出
-                dynamic_attachments=memory.reminders if memory is not None else None,
-            ),
-            # ★ 技能在**会话创建**时就已拷进 skills 前缀（见 skill_copy），
-            #   这里只把清单渲染给中间件 —— 不扫描、不读文件。
-            skills=skill_refs_for(skill_metas),
-            extra_tools=extra_tools,
-            # ★ SubAgent 不在图内跑子图 —— SubAgentService 在子会话上起子 run，本段挂起。
-            spawner=self._subagent_spawner(segment, run_id=run_id, relay=relay),
+            sandbox=tools.sandbox,
+            skills=tools.skills,
+            extra_tools=tools.extra_tools,
+            approvals=collaboration.approvals,
+            judge=collaboration.judge,
+            spawner=collaboration.spawner,
             prompt_cache_ttl=await self._prompt_cache_ttl(segment),
         )
         return graph, self._titler(segment)
 
-    def _models(self, segment: Segment) -> RunModels:
-        return segment.models or RunModels(direct_endpoint(self._settings))
+    async def _memory_turn(self, segment: Segment, *, run_id: UUID) -> MemoryTurn | None:
+        """这一段的记忆：常驻块进系统提示词（上下文管理），记忆工具挂上（工具面）。
+
+        ★ 关联主键（会话所属用户）闭包捕获，不进工具参数 —— 一旦可由模型指定，提示词注入
+          就能读写别人的记忆（§4.8）。
+        """
+        wants_write = MEMORY_TOOL in segment.spec.tool_names
+        if wants_write and self._memory is None and segment.thread.memory != "off":
+            raise MemoryNotConfigured("勾选了「记忆」但服务端未接入记忆服务（MEMORY_BASE_URL）")
+        if self._memory is None:
+            return None
+        return await self._memory.turn(
+            segment.thread,
+            run_id=run_id,
+            writable=wants_write,
+            resume=segment.resume,
+            history_upto=segment.history_upto,
+            occurred_at=segment.input_at,
+            compact_count=segment.compact_count,
+        )
 
     async def with_models(self, segment: Segment) -> Segment:
         """这一轮用到的模型能不能用、怎么连（模型管理方案设计 7.3）。
@@ -425,149 +263,6 @@ class HookAssembly:
             segment, input_content=format_context(segment.input_content, got.records)
         )
 
-    async def _mcp_tool_list(
-        self,
-        segment: Segment,
-        *,
-        run_id: UUID,
-        redis: aioredis.Redis,
-        notices: list[tuple[EventType, dict[str, Any]]] | None,
-        closers: list[Callable[[], Awaitable[None]]] | None = None,
-    ) -> list[Any]:
-        """spec 里的 mcp:* → BaseTool。漂移 / 没授权 / Key 停用 / 工具停用的经 notices 告知用户。
-
-        经 MCP 网关：问网关「这个智能体的 Key 能用哪些服务和工具、Key 是什么」（一次），
-        用不了的跳过并提示；工具定义读缓存的元数据，装配不连 MCP 服务。
-        同一个 Run 段对同一个服务复用一个会话，段结束时经 closers 关掉。
-        ★ 子智能体的会话记在父智能体名下：用同一把 Key。
-        """
-        if not any(name.startswith(MCP_PREFIX) for name in segment.spec.tool_names):
-            return []  # 不碰注册表：没用 MCP 的 agent 不该因为 MCP 网关不可用而失败
-        s = self._settings
-        ident = current_identity()
-        ctx = CallContext(
-            run_id=run_id,
-            thread_id=segment.thread_id,
-            user_id=segment.thread.created_by_uuid,
-            # 执行器在 run 开始时设好的出站身份（以 Agent 为权限时是数字员工）
-            auth_uid=ident.auth_uid if ident else None,
-        )
-        catalog = await make_mcp_catalog(s, redis)
-        agent_id = segment.thread.agent_uuid
-        try:
-            access = await mcp_agent_access(
-                s, agent_id, name=segment.spec.name, owner=segment.thread.created_by_uuid
-            )
-        except GatewayUnavailable as exc:
-            # 网关不可用 = 这些服务此刻用不了：跳过并提示，对话照常（§6.7 ③）
-            for server in sorted(servers_in(segment.spec.tool_names)):
-                if notices is not None:
-                    notices.append(
-                        (
-                            EventType.MCP_TOOL_SKIPPED,
-                            {
-                                "server": server,
-                                "tools": [],
-                                "reason": "unavailable",
-                                "subject": str(agent_id),
-                                "message": f"{exc}，本轮不装这个服务的工具",
-                            },
-                        )
-                    )
-            return []
-        sessions = McpSessions(
-            auth=KeyAuth(access.key) if access.key else None,
-            fetch_key=self._key_fetcher(segment),
-        )
-        if closers is not None:
-            closers.append(sessions.aclose)
-        tools = NativeMcpTools(
-            catalog,
-            call_timeout_s=s.mcp_call_timeout_s,
-            max_result_chars=s.mcp_max_result_chars,
-        )
-        return await tools.tools_for(
-            segment.spec.tool_names,
-            ctx,
-            digests=segment.spec.mcp_tool_digests,
-            drift_policy=segment.spec.mcp_drift_policy,
-            reviews=catalog.reviews(),
-            notices=notices,
-            access=access,
-            sessions=sessions,
-        )
-
-    def _key_fetcher(self, segment: Segment) -> Callable[[], Awaitable[str | None]]:
-        """Key 被网关拒绝时重新取一次（可能刚被重置）。取不到（网关也不可用）当作没有新 Key。"""
-        agent_id = segment.thread.agent_uuid
-
-        async def fetch() -> str | None:
-            forget_access(agent_id)
-            try:
-                access = await mcp_agent_access(
-                    self._settings,
-                    agent_id,
-                    name=segment.spec.name,
-                    owner=segment.thread.created_by_uuid,
-                )
-            except GatewayUnavailable:
-                return None
-            return access.key
-
-        return fetch
-
-    def _subagent_spawner(self, segment: Segment, *, run_id: UUID, relay: EventRelay) -> Any:
-        """构造本段派 SubAgent 的入口（SubAgentSpawner 的实现）。
-
-        没有 SubAgent 就返回 None —— kernel 据此**根本不装** `task`，
-        与「没配沙箱就没有 execute」同一条纪律：模型看不见 = 不会去调。
-
-        ★ 子 run 也走这里：native SubAgent 的 spec 带着同一份名录（spec_for_subagent），
-          所以它也能继续派 SubAgent；acp SubAgent 的名录为空，天然返回 None。
-        """
-        if not segment.spec.subagents or self._submit_run is None:
-            return None
-        if segment.agent_version_id is None:
-            logger.warning("run %s 缺 agent_version_id，SubAgent 不启用", run_id)
-            return None
-
-        from ..services.subagent import SubAgentService
-
-        return SubAgentService(
-            self._sessionmaker,
-            self._settings,
-            self._submit_run,
-            relay,
-            parent_run_id=run_id,
-            parent_thread=segment.thread,
-            parent_spec=segment.spec,
-            agent_version_id=segment.agent_version_id,
-            seed_skills=self._seed_subagent_skills,
-        )
-
-    async def _seed_subagent_skills(self, thread: Thread, sub: Any) -> None:
-        """把子智能体的技能拷进**它自己的** skills 前缀。
-
-        用的是子会话的 thread_id —— workspace 参数在这里无关紧要（只写 skills），
-        但仍按真实形态构造，免得将来有人在这里顺手读工作区时拿到错的根。
-        """
-        if not sub.skills:
-            return
-        fs = make_workspace(
-            self._settings,
-            thread.created_by_uuid,
-            thread.thread_uuid,
-            workspace_thread_id=thread.workspace_thread_id,
-        )
-        if fs is None:
-            return
-        metas, _skipped = await resolve_skills(
-            sub.skills, skill_directory(self._settings), with_descriptions=False
-        )
-        await seed_session_skills(fs, metas)
-
-    # ------------------------------------------------------------------ 各能力
-
     def _titler(self, segment: Segment) -> Titler | None:
         """仅当会话还没有标题时才返回生成器（§8.1）。
 
@@ -586,52 +281,6 @@ class HookAssembly:
 
         return titler
 
-    def _auto_judge(self, segment: Segment) -> AutoJudge | None:
-        """自动模式的判断器（kernel/middleware/auto_judge.py）。智能体不允许自动模式时不装。
-
-        ★ 模型和用户消息在第一次判断时才取：多数段落用不到判断器，不该为它多一次平台请求。
-          模型按平台服务模型配置（service_model「自动模式判断器」）取 Key；没接平台时用部署配置里的
-          approval_judge_model（空 = summarizer_model）。
-        ★ 没配置 → None（PermissionMiddleware 按没有判断器处理）；
-          配了但现在用不了 → 抛错（退回请示）
-        """
-        if "auto" not in segment.spec.approval.allowed_modes:
-            return None
-        settings = self._settings
-        build_model = self._build_model
-        sessionmaker = self._sessionmaker
-        thread = segment.thread
-
-        async def setup() -> JudgeSetup | None:
-            found = await resolve_service_model(
-                settings,
-                "approval_judge",
-                legacy_model=settings.approval_judge_model or settings.summarizer_model,
-            )
-            if found is None:
-                if not await service_model_configured(settings, "approval_judge"):
-                    return None
-                raise CapabilityUnavailable("自动模式判断器的模型现在用不了（原因见日志）")
-            model = build_model(
-                ModelSpec(
-                    model=found.model,
-                    provider=found.provider,  # type: ignore[arg-type]
-                    max_output_tokens=2048,
-                ),
-                base_url=found.endpoint.base_url,
-                api_key=found.endpoint.api_key,
-                headers=found.endpoint.headers,
-            )
-            async with sessionmaker() as session:
-                instructions = await _judge_instructions(RunRepository(session), thread)
-                # 显式缓存标记只对 Anthropic 有用；DeepSeek 这类自己做前缀缓存
-                cache = found.provider == "anthropic" and await ModelCatalogRepository(
-                    session
-                ).supports_cache(found.model)
-            return JudgeSetup(model=model, instructions=instructions, cache=cache)
-
-        return AutoJudge(setup, timeout_s=settings.approval_judge_timeout_s)
-
     async def _prompt_cache_ttl(self, segment: Segment) -> Literal["5m", "1h"] | None:
         """开了缓存、且模型实测支持时才打 cache_control —— 编辑器里的开关就是这里生效。
 
@@ -644,97 +293,3 @@ class HookAssembly:
             if not await ModelCatalogRepository(session).supports_cache(segment.spec.model.model):
                 return None
         return self._settings.prompt_cache_ttl
-
-    async def _compactor(
-        self,
-        segment: Segment,
-        *,
-        workspace: Any = None,
-        dynamic_attachments: Any = None,
-    ) -> CompactionMiddleware | None:
-        """按 spec 与模型目录构造上下文管理中间件（doc/context-management-design.html）。
-
-        context_window / max_output_tokens 来自 model_catalog —— 实测落库（§3 D3），
-        不能硬编码：opus/sonnet/fable 是 1M，haiku 只有 200k，差 5 倍。
-        """
-        spec = segment.spec
-        cfg = spec.compaction
-        if not cfg.enabled:
-            return None
-
-        # 经平台时上限来自 LiteLLM 里登记的规格；没登记、没接平台时读 model_catalog 表
-        entry = self._models(segment).entry(spec.model.model)
-        limits = (
-            (entry.max_input_tokens, entry.max_output_tokens)
-            if entry is not None and entry.max_input_tokens and entry.max_output_tokens
-            else None
-        )
-        if limits is None:
-            async with self._sessionmaker() as session:
-                limits = await ModelCatalogRepository(session).limits(spec.model.model)
-        if limits is None:
-            # 目录里没有这个模型 —— 不猜一个窗口值：猜大了压缩永不触发，
-            # 猜小了每轮都压。宁可不压，让 token 上限去兜底。
-            logger.warning("model_catalog 无 %s 的窗口，跳过压缩", spec.model.model)
-            return None
-        window, model_max_output = limits
-        effective_max_output = min(spec.model.max_output_tokens, model_max_output)
-
-        # 距上次回复多久：超过缓存有效期 → 缓存反正失效，顺手清旧工具结果（§8 ②）
-        idle_s = None
-        if segment.history_upto is not None:
-            idle_s = (datetime.now(UTC) - segment.history_upto).total_seconds()
-
-        return CompactionMiddleware(
-            context_window=window,
-            max_output_tokens=effective_max_output,
-            max_output_cap=model_max_output,
-            trigger_ratio=cfg.trigger_ratio,
-            clear_ratio=cfg.clear_ratio,
-            warn_ratio=cfg.warn_ratio,
-            keep_recent_turns=cfg.keep_recent_turns,
-            keep_recent_tool_results=cfg.keep_recent_tool_results,
-            batch_cap_tokens=self._settings.context_batch_cap_tokens,
-            idle_s=idle_s,
-            cache_ttl_s=self._settings.prompt_cache_ttl_s,
-            filesystem=workspace,
-            restore_files=cfg.restore_files,
-            dynamic_attachments=dynamic_attachments,
-            attachment_budget_tokens=int(
-                (window - min(effective_max_output, 20_000)) * cfg.attachment_budget_ratio
-            ),
-            failure_count=segment.compaction_failures,
-            on_failed=make_failure_hook(self._sessionmaker, segment.thread_id),
-            summarizer=self._summarizer(segment),
-            on_compacted=make_persist_hook(
-                self._sessionmaker, segment.thread_id, segment.history_upto
-            ),
-        )
-
-    def _summarizer(self, segment: Segment) -> ThreadSummarizer:
-        """压缩用的摘要器：智能体的推理，和主模型同一个端点（Run 开始时已检查过）。"""
-        spec = segment.spec
-        name = resolve_summarizer_model(spec.compaction.summarizer_model, spec.model.model)
-        return ThreadSummarizer(
-            self._settings,
-            self._build_model,
-            model=name,
-            endpoint=self._models(segment).endpoint,
-            provider=spec.model.provider,
-        )
-
-
-async def _judge_instructions(runs: RunRepository, thread: Thread) -> list[Instruction]:
-    """判断器眼里的「要求」：用户的消息；子智能体再加上自己会话里的任务书（上级智能体写的）。
-
-    ★ 子会话里 role=user 的消息是派活的智能体写的，不是用户说的 —— 用户的话取根会话的。
-    """
-    own = [extract_text(m.content) for m in await runs.user_inputs(thread.thread_uuid)]
-    root = thread.root_thread_uuid or thread.parent_thread_uuid
-    if root is None:
-        return [Instruction("user", text) for text in own if text]
-    users = [extract_text(m.content) for m in await runs.user_inputs(root)]
-    return [
-        *(Instruction("user", text) for text in users if text),
-        *(Instruction("delegator", text) for text in own if text),
-    ]

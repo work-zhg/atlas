@@ -43,7 +43,7 @@ from .prompts import EXTRACT_PROMPT, SOURCE_LABELS, SPLIT_PROMPT
 from .runtime import SOURCE_AGENT, SOURCE_BACKFILL, SOURCE_USER, MemoryRuntime
 
 if TYPE_CHECKING:
-    from ..executor.assembly import ModelBuilder
+    from ..executor.run_models import ModelBuilder
 
 logger = logging.getLogger(__name__)
 

@@ -74,12 +74,12 @@ async def test_no_ttl_means_no_cache_control_at_all() -> None:
 
 async def _ttl(spec: AgentSpec, ttl: str = "1h") -> str | None:
     from atlas_agent.db.session import get_sessionmaker
-    from atlas_agent.executor.assembly import HookAssembly
+    from atlas_agent.executor.assembly import CapabilityAssembly
 
     host = SimpleNamespace(
         _sessionmaker=get_sessionmaker(), _settings=SimpleNamespace(prompt_cache_ttl=ttl)
     )
-    return await HookAssembly._prompt_cache_ttl(host, SimpleNamespace(spec=spec))  # type: ignore[arg-type]
+    return await CapabilityAssembly._prompt_cache_ttl(host, SimpleNamespace(spec=spec))  # type: ignore[arg-type]
 
 
 async def test_assembly_uses_the_configured_ttl_when_the_model_supports_cache() -> None:

@@ -14,8 +14,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ..config import Settings
 from ..instance import instance_id
-from .assembly import HookAssembly, ModelBuilder, default_model_builder
+from .assembly import CapabilityAssembly
 from .continuation import Continuation
+from .run_models import ModelBuilder, default_model_builder
 from .runtime import NativeRuntime
 from .scheduling import RunWorker
 from .segment import RuntimeRegistry, SegmentExecution
@@ -49,7 +50,7 @@ def build_executor(
         await worker.submit(run_id)
 
     # assembly 是进程级复用的：它持有实例态（沙箱 / 编码后端），每轮新建会把那些状态打散
-    assembly = HookAssembly(
+    assembly = CapabilityAssembly(
         sessionmaker,
         settings,
         build_model,

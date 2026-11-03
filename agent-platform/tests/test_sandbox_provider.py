@@ -307,7 +307,7 @@ async def test_cancel_during_submit_still_interrupts(
 
 async def test_assembly_refuses_bash_when_sandbox_disabled() -> None:
     from atlas_agent.errors import CapabilityUnavailable
-    from atlas_agent.executor.assembly import SandboxNotEnabled
+    from atlas_agent.executor.tool_surface import SandboxNotEnabled
 
     assert issubclass(SandboxNotEnabled, CapabilityUnavailable)
 

@@ -44,7 +44,7 @@ if TYPE_CHECKING:
     from ..domain.events import TraceEvent
     from ..domain.messages import Transcript
     from ..stream.relay import EventRelay
-    from .assembly import HookAssembly
+    from .assembly import CapabilityAssembly
     from .segment_data import Segment
 
 __all__ = ["AgentRuntime", "NativeRuntime", "select_runtime"]
@@ -100,7 +100,7 @@ class NativeRuntime:
     复用；每轮变化的东西全在 run_turn 的参数里。
     """
 
-    def __init__(self, assembly: HookAssembly) -> None:
+    def __init__(self, assembly: CapabilityAssembly) -> None:
         self._assembly = assembly
 
     async def run_turn(
