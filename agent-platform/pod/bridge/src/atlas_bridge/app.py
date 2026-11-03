@@ -1,12 +1,14 @@
 """BridgeApp：装配全部组件，按启动顺序运行（代码设计 §6.3）。
 
-  1. 读配置、读 token 文件、生成 bridge 实例 id
-  2. 启动 UpstreamServer（此时 /readyz 返回 503）
-  3. SessionHost.boot()：拉起 agent、完成 initialize（预热）
-  4. 进入 IDLE，/readyz 返回 200
-  5. 等待；会话结束（session.close / session.ended）后以 4410 关闭连接；收到 SIGTERM 时退出
-
-SIGTERM 的完整排空流程（§8.7）在安全与可观测性一步实现；目前收到信号即结束会话并退出。
+1. 读配置、读 token 文件、生成 bridge 实例 id
+2. 启动 UpstreamServer（此时 /readyz 返回 503）
+3. SessionHost.boot()：拉起 agent、完成 initialize（预热）
+4. 进入 IDLE，/readyz 返回 200
+5. 等待，直到会话结束或收到 SIGTERM：
+     · 会话结束（session.close、session.ended，不论原因）→ 把剩下的消息发完、以 4410 关闭连接，
+       退出进程。Pod 的重启策略是 Never：进程退出 Pod 就进终态，下一轮确保 Pod 时通用供给退役它、
+       重建一个，CLI 从持久化的 HOME 接着跑（c4-model/agent/bridge/code-bridge-session.html）
+     · SIGTERM → 排空：当前一轮以 pod_terminating 取消、结束状态送出，再关闭 CLI，然后同上退出
 """
 
 from __future__ import annotations
@@ -115,16 +117,18 @@ class BridgeApp:
             ended = asyncio.create_task(self.host.ended.wait())
             stopping = asyncio.create_task(stop.wait())
             await asyncio.wait({ended, stopping}, return_when=asyncio.FIRST_COMPLETED)
-            if self.host.ended.is_set() and not stop.is_set():
-                # session.close 的连接已由连接自己关闭；这里负责 session.ended 的情形。
-                # ★ 会话结束后进程不退出：退出会让容器被重启，而这个 Pod 只等回收（§5.5）。
-                #   之后的连接一律以 4410 关闭。
-                await self.server.close_current_after_drain(CloseCode.SESSION_GONE, "session ended")
-                await self.agent.shutdown()
-                logger.info("会话已结束，等待 Pod 回收")
-                await stopping
-            logger.info("收到终止信号，退出")
-            ended.cancel()
+            stopping.cancel()
+            if not self.host.ended.is_set():
+                logger.info("收到终止信号，排空后退出")
+                await self.host.drain()
+            # ★ 会话结束就退出进程：留着的话 /readyz 仍回 200，下一轮连上就被 4410 关掉，
+            #   闲置回收之前每一轮都失败。退出前把剩下的消息（结束状态）发完，再以 4410 关闭
+            await self.server.close_current_after_drain(CloseCode.SESSION_GONE, "session ended")
+            if self.host.end_cause is not None:
+                # bridge 自己结束的（CLI 起不来、反复崩溃）：以非零退出，Pod 的终态如实显示失败
+                logger.error("会话因 %s 结束，bridge 退出", self.host.end_cause)
+                return 1
+            logger.info("会话已结束，bridge 退出")
             return 0
         finally:
             await self.agent.shutdown()

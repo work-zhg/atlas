@@ -275,7 +275,11 @@ async def test_new_connection_supersedes_the_old_one(bridge: Any) -> None:
     await second.close()
 
 
-async def test_session_close_closes_with_4410_and_later_connections_too(bridge: Any) -> None:
+async def test_session_close_closes_with_4410_and_the_bridge_exits(bridge: Any) -> None:
+    """★ 会话结束就退出进程（Pod 的重启策略是 Never，进程退出 Pod 就进终态，下一轮重建）。
+
+    留着的话 /readyz 仍回 200，下一轮连上就被 4410 关掉，闲置回收之前每一轮都失败。
+    """
     b = await bridge(Script(on_prompt="silent"))
     probe = await b.probe()
     await probe.request("session.open", {})
@@ -284,10 +288,21 @@ async def test_session_close_closes_with_4410_and_later_connections_too(bridge: 
     # 进行中的一轮先按取消流程结束，ended 排在 close 的响应之前
     assert (await probe.turn_ended("run-1"))["outcome"]["cause"] == "session_closing"
     assert await probe.closed() == CloseCode.SESSION_GONE
+    assert await asyncio.wait_for(b.task, 10) == 0
 
-    again = await b.probe()
-    assert await again.closed() == CloseCode.SESSION_GONE
-    assert not b.task.done()  # 进程不退出，等 Pod 回收
+
+async def test_sigterm_drains_the_running_turn_then_exits(bridge: Any) -> None:
+    """★ SIGTERM 时先排空：进行中的一轮以 pod_terminating 取消、结束状态送到 server，再以 4410
+    关闭、退出。server 因此能给出明确的结果，不用等断线重连、attach 得到 bridge_restarted。"""
+    b = await bridge(Script(on_prompt="silent"))
+    probe = await b.probe()
+    await probe.request("session.open", {})
+    await probe.request("turn.start", {"turnId": "run-1", "prompt": PROMPT})
+    b.app.stop()  # 与 SIGTERM 同一个入口
+    outcome = (await probe.turn_ended("run-1"))["outcome"]
+    assert (outcome["kind"], outcome["cause"]) == ("cancelled", "pod_terminating")
+    assert await probe.closed() == CloseCode.SESSION_GONE
+    assert await asyncio.wait_for(b.task, 10) == 0
 
 
 async def test_turn_survives_a_disconnect_and_attach_resends(bridge: Any) -> None:
@@ -424,9 +439,9 @@ async def test_open_timeout_over_websocket_reboots_and_becomes_ready_again(bridg
     await probe.close()
 
 
-async def test_crash_loop_ends_the_session_with_4410_and_the_process_stays(bridge: Any) -> None:
-    """bridge 自己结束会话（不是 server 要求的）：先发 session.ended，
-    再以 4410 关闭；进程不退出。"""
+async def test_crash_loop_ends_the_session_with_4410_and_the_bridge_exits(bridge: Any) -> None:
+    """bridge 自己结束会话（不是 server 要求的）：先发 session.ended，再以 4410 关闭，
+    然后以非零退出 —— Pod 的终态如实显示失败。"""
     b = await bridge(Script(on_prompt="crash"), policy=RestartPolicy(max_restarts=0))
     probe = await b.probe()
     await probe.request("session.open", {})
@@ -438,10 +453,7 @@ async def test_crash_loop_ends_the_session_with_4410_and_the_process_stays(bridg
     )
     assert gone["cause"] == "agent_crash_loop"
     assert await probe.closed() == CloseCode.SESSION_GONE
-
-    again = await b.probe()
-    assert await again.closed() == CloseCode.SESSION_GONE
-    assert not b.task.done()  # 退出会让容器被重启；这个 Pod 只等回收
+    assert await asyncio.wait_for(b.task, 10) == 1
 
 
 async def test_entrypoint_reads_env_serves_and_exits_cleanly_on_sigterm(tmp_path: Path) -> None:
@@ -482,8 +494,9 @@ async def test_entrypoint_reads_env_serves_and_exits_cleanly_on_sigterm(tmp_path
         await probe.request("turn.start", {"turnId": "run-1", "prompt": PROMPT})
         assert (await probe.turn_ended("run-1"))["outcome"]["kind"] == "completed"
 
+        # ★ SIGTERM 排空：会话随之结束，以 4410 关闭（告诉 server 不要重连），干净退出
         proc.send_signal(signal.SIGTERM)
-        assert await probe.closed() == CloseCode.GOING_AWAY
+        assert await probe.closed() == CloseCode.SESSION_GONE
         assert await asyncio.wait_for(proc.wait(), 10) == 0
     finally:
         if proc.returncode is None:

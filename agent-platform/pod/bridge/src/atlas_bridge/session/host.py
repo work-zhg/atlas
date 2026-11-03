@@ -131,8 +131,10 @@ class SessionHost:
         self.turn: Turn | None = None
         self.ledger = TurnLedger(ledger_size)
         self.permissions = PermissionBroker(outbox, clock, max_pending=max_pending_asks)
-        #: 会话结束（不论谁发起）时 set；上游层据此以 4410 关闭连接
+        #: 会话结束（不论谁发起）时 set；上游层据此以 4410 关闭连接，bridge 随之退出
         self.ended = asyncio.Event()
+        #: bridge 自己结束会话的原因（如 agent_crash_loop）；server 要求的关闭、排空为 None
+        self.end_cause: str | None = None
 
         self._booted = asyncio.Event()
         self._replaying = False
@@ -271,8 +273,9 @@ class SessionHost:
         raise TurnNotFound(turn_id)
 
     def readiness(self) -> tuple[bool, str]:
-        """/readyz：CLI 完成初始化就算就绪。"""
-        return self.phase is not Phase.BOOTING, self.phase.value
+        """/readyz：CLI 完成初始化就算就绪；会话在收尾或已结束就不再就绪（进程随后退出）。"""
+        ready = self.phase not in (Phase.BOOTING, Phase.CLOSING, Phase.ENDED)
+        return ready, self.phase.value
 
     def snapshot(self, bridge_instance: str) -> tuple[SessionState, TurnRef | None]:
         """session.attach：会话此刻的状态和当前一轮（§7.3）。补发计划由上游通道按 Outbox 算。
@@ -303,14 +306,23 @@ class SessionHost:
             self.turn.on_upstream(connected)
 
     async def close(self) -> None:
-        """若有一轮在进行，先按取消流程结束它；再关闭 agent 会话、终止 agent。幂等。"""
+        """session.close：若有一轮在进行，先按取消流程结束它；再关闭 CLI 会话、终止 CLI。幂等。"""
+        await self._wind_down(CancelCause.SESSION_CLOSING)
+
+    async def drain(self) -> None:
+        """SIGTERM：排空。拒绝新的一轮（进入 CLOSING 后 turn.start 回 session_not_open），当前一轮
+        以 pod_terminating 取消、结束状态送出之后再关闭 CLI —— server 能给出明确的结果，不用等断线
+        重连、attach 得到 bridge_restarted 才知道这一轮没了。幂等。"""
+        await self._wind_down(CancelCause.POD_TERMINATING)
+
+    async def _wind_down(self, cause: CancelCause) -> None:
         if self.phase in (Phase.CLOSING, Phase.ENDED):
             await self.ended.wait()
             return
         self.phase = Phase.CLOSING
         turn = self.turn
         if turn is not None:
-            turn.begin_cancel(CancelCause.SESSION_CLOSING)
+            turn.begin_cancel(cause)
             await turn.done.wait()
         if self.agent_session_id is not None and self._agent_healthy:
             await self._close_agent_session(self.agent_session_id)
@@ -576,6 +588,7 @@ class SessionHost:
         if self.phase in (Phase.CLOSING, Phase.ENDED):
             return
         self.phase = Phase.ENDED
+        self.end_cause = cause
         self._outbox.put_notification(
             methods.SESSION_ENDED,
             lambda seq: SessionEndedParams(seq=seq, cause=cause, error=error),
