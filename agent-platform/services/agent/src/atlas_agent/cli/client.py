@@ -3,8 +3,7 @@
 基于 atlas_jsonrpc.RpcEndpoint。server 方向不需要补发：它发出的都是短请求，失败重试即可，
 turnId 保证幂等（§4.1）。bridge 发来的通知与请求（permission.ask）交给回调。
 
-★ 连接与会话生命周期的管理（常驻连接、session.attach、租约、重连退避）在下一步；
-  目前一轮一条连接，由 HostRuntime 管理。
+连接与会话接续（session.attach、按序号去重、重连退避）在 link.py 的 SessionLink，一轮一条连接。
 """
 
 from __future__ import annotations

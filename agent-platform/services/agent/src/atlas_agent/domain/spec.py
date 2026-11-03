@@ -420,7 +420,7 @@ class SubAgentSpec:
     #: ★ 默认 native 而不是「继承父的」：只有 native agent 能派 SubAgent（acp 的
     #:   工具面由 CLI 自带，平台的 task 工具进不去它的图），所以父恒为
     #:   native，「继承」与「默认 native」在语义上等价而后者更直白。
-    #: ★ SubAgent 链路本身不认识它：子会话也是 thread，HostRuntime 对它原样生效
+    #: ★ SubAgent 链路本身不认识它：子会话也是 thread，CliRuntime 对它原样生效
     #:   （subagent §02 的对称性）。这里只是让子会话的 spec 派生带上它。
     kind: AgentKind = "native"
     #: kind="cli" 时必填。

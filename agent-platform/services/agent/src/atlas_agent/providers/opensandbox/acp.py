@@ -2,7 +2,7 @@
 
 doc/sandbox-opensandbox-design.html §11、§12。
 
-    OpenSandboxPods   HostRuntime 用的 PodProvider：ensure(thread, cli) → ws://PodIP:8900 + 令牌
+    OpenSandboxPods   CliRuntime 用的 PodProvider：ensure(thread, cli) → ws://PodIP:8900 + 令牌
     AcpProvisioner    opensandbox-acp 上的供给：按会话复用、git 档案授权、Credential Vault、
                       等 bridge 就绪
 
@@ -13,7 +13,7 @@ doc/sandbox-opensandbox-design.html §11、§12。
 ★ 有 git 档案时：networkPolicy(allow) + credentialProxy → egress sidecar 透明 MITM；
   ensure 时把凭据写进 Credential Vault。MITM 拦的是全部 HTTPS（P0-3 实测），
   所以 CLI 及其子进程都要信任 MITM 的 CA。
-★ 不在 ensure 外缓存端点：每一轮都在锁里查一遍沙箱状态（HostRuntime 每轮调一次，频率很低），
+★ 不在 ensure 外缓存端点：每一轮都在锁里查一遍沙箱状态（CliRuntime 每轮调一次，频率很低），
   bridge 崩了（restartPolicy: Never → Failed）的那一轮之后就会重建，CLI 从 /state resume。
 """
 
@@ -336,7 +336,7 @@ class AcpProvisioner(Provisioner):
 
 
 class OpenSandboxPods:
-    """PodProvider：一个进程一个，HostRuntime 每轮调一次 ensure。"""
+    """PodProvider：一个进程一个，CliRuntime 每轮调一次 ensure。"""
 
     def __init__(
         self,

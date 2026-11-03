@@ -17,11 +17,11 @@ from .api.v1 import router as v1_router
 from .api.v1.previews import install_log_mask
 from .auth.service import listen_invalidations
 from .auth.uc import UCClient
+from .cli.runtime import CliRuntime
 from .config import get_settings
 from .db.session import get_sessionmaker
 from .errors import AppError
 from .executor.compose import build_executor
-from .host.runtime import HostRuntime
 from .instance import instance_id
 from .maintainer import Maintainer
 from .memory import Backfiller, make_memory_runtime
@@ -83,7 +83,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         get_sessionmaker(),
         settings,
         # CLI 智能体的执行：经会话 Pod 里的 bridge（上游协议 atlas.host.v1）
-        cli_runtime=HostRuntime(get_sessionmaker(), settings, pods),
+        cli_runtime=CliRuntime(get_sessionmaker(), settings, pods),
         memory=memory,
     )
 

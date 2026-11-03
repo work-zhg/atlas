@@ -3,9 +3,9 @@
     OpenSandboxPods.ensure(thread)   替代 ClusterPods：经 opensandbox-acp 建 / 复用 ACP 的 Pod
                                      git 档案先授权（原 cluster 的 allowed_apps 判定搬到这里），
                                      建好后把凭据写进 Credential Vault —— 凭据只在 egress 的内存里
-    AcpRuntime.run_turn              HostRuntime 的极简版：等 bridge 就绪 → 带令牌和会话头发一轮
+    AcpRuntime.run_turn              CliRuntime 的极简版：等 bridge 就绪 → 带令牌和会话头发一轮
 
-★ HostRuntime 只认 PodProvider 这个接缝（ensure → 地址 + 令牌），换成 OpenSandbox 它不用改。
+★ CliRuntime 只认 PodProvider 这个接缝（ensure → 地址 + 令牌），换成 OpenSandbox 它不用改。
 ★ 模型 key 不经过这里：它是 ACP 实例模板里挂的静态 Secret 文件，bridge 自己读（images.py）。
 """
 

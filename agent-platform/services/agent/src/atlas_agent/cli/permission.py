@@ -178,7 +178,7 @@ class PermissionDesk:
                 )
                 await asyncio.wait({decided, withdrawn}, return_when=asyncio.FIRST_COMPLETED)
                 if withdrawn.done():
-                    # 标 expired：前端据此关掉弹窗；用户恰好刚点了决定的话以库里为准（WHERE pending）
+                    # 标 expired：前端据此关掉弹窗；用户恰好刚做了决定的话以库里为准
                     with contextlib.suppress(Exception):
                         await self._approvals.expire(pending.approval_id)
                     return "withdrawn"

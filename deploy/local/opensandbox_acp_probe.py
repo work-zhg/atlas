@@ -17,9 +17,9 @@ import uuid
 from types import SimpleNamespace
 
 import httpx
+from atlas_agent.cli.client import HostClient
 from atlas_agent.config import get_settings
 from atlas_agent.domain.spec import CliSpec
-from atlas_agent.host.client import HostClient
 from atlas_agent.providers.opensandbox import AcpProvisioner, ExecdClient, OpenSandboxPods
 from atlas_agent.redisx import make_redis
 

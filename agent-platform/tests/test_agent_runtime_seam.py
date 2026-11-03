@@ -19,7 +19,7 @@ from atlas_agent.executor.runtime import AgentRuntime, NativeRuntime, select_run
 def test_native_runtime_satisfies_the_protocol_structurally() -> None:
     """满足协议只需要一个 run_turn，不需要继承。
 
-    acp 的 HostRuntime 同样只是「有这个方法」—— 两个实现之间没有
+    acp 的 CliRuntime 同样只是「有这个方法」—— 两个实现之间没有
     共同基类可以被顺手塞进公共逻辑，那正是我们要的。
     """
     assert isinstance(NativeRuntime(assembly=None), AgentRuntime)  # type: ignore[arg-type]

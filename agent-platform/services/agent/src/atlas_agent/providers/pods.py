@@ -1,4 +1,4 @@
-"""Pod 供给的接缝：HostRuntime 通过它拿到会话 Pod 里 bridge 的地址与凭据。
+"""Pod 供给的接缝：CliRuntime 通过它拿到会话 Pod 里 bridge 的地址与凭据。
 
 生产实现是 providers/opensandbox/acp.py 的 OpenSandboxPods
 （经 OpenSandbox 的 opensandbox-acp 建 Pod）；

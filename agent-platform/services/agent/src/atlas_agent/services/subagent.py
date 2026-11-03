@@ -105,7 +105,7 @@ class SubAgentService:
         """`SubAgentSpawner` 的唯一实现：起一个子 run，立刻返回它的 id，不等它跑完。
 
         approval_mode 是派活那一刻父 run 的审批模式，记到子 run 上（设计 D6）：native 子 run
-        直接沿用；acp 子 run 由 HostRuntime 与它自己的 permission_mode 取更严格的。
+        直接沿用；acp 子 run 由 CliRuntime 与它自己的 permission_mode 取更严格的。
 
         签名与 `atlas_engine.contracts.SubAgentSpawner` 保持一字不差 ——
         runtime_checkable 只查方法存在，参数形状靠 tests/test_seam_contracts.py

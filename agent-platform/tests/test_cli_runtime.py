@@ -1,4 +1,4 @@
-"""HostRuntime：server 侧对接新 bridge（代码设计 §11）。
+"""CliRuntime：server 侧对接会话 Pod 里的 bridge（c4-model/agent/cli-runtime/）。
 
 真实的新 bridge（BridgeApp，进程内事件循环）+ 真实 agent 子进程（FakeAgent）+ 真实 WebSocket；
 平台侧的审批、会话存储、取消信号用替身 —— 不碰数据库与 Redis。
@@ -15,9 +15,10 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
+from atlas_agent.cli import runtime as cli_runtime_mod
+from atlas_agent.cli.runtime import CliRuntime
 from atlas_agent.domain.events import EventType, TraceEvent
 from atlas_agent.domain.spec import CliSpec, KnowledgeSpec
-from atlas_agent.host.runtime import HostRuntime
 from atlas_agent.providers.pods import PodEndpoint
 from atlas_bridge.app import BridgeApp
 from atlas_bridge.config import BridgeConfig
@@ -67,11 +68,18 @@ class Approvals:
 
 
 class Sessions:
+    """cli_session 表的替身：下一轮的 segment 从这里读接续信息（SegmentLoader 读库的那一步）。"""
+
     def __init__(self) -> None:
         self.remembered: list[tuple[UUID, str]] = []
+        self.instance: str | None = None
+        self.acked_seq = 0
 
     async def remember(self, thread_id: UUID, agent_session_id: str) -> None:
         self.remembered.append((thread_id, agent_session_id))
+
+    async def save_progress(self, thread_id: UUID, *, instance: str, acked_seq: int) -> None:
+        self.instance, self.acked_seq = instance, acked_seq
 
 
 class Relay:
@@ -90,6 +98,8 @@ def prepared(
     permission_mode: str = "auto",
     approval_mode: str | None = None,
     cli_session_id: str | None = None,
+    cli_bridge_instance: str | None = None,
+    cli_acked_seq: int = 0,
 ) -> Any:
     cli = CliSpec(
         cli_type="claude-code",
@@ -116,8 +126,8 @@ def prepared(
         takeover=None,
         # 会话的接续信息（cli_session）：CLI 的会话 id、bridge 实例、确认点
         cli_session_id=cli_session_id,
-        cli_bridge_instance=None,
-        cli_acked_seq=0,
+        cli_bridge_instance=cli_bridge_instance,
+        cli_acked_seq=cli_acked_seq,
         # 作为 SubAgent 时父 run 的审批模式；直接对话为 None
         approval_mode=approval_mode,
     )
@@ -144,7 +154,7 @@ class Env:
             model_platform_url=None,
         )
         self.settings = settings
-        self.runtime = HostRuntime(
+        self.runtime = CliRuntime(
             None,  # type: ignore[arg-type]
             settings,  # type: ignore[arg-type]
             self.pods,
@@ -154,8 +164,13 @@ class Env:
 
     async def run(self, **kw: Any) -> list[TraceEvent]:
         out: list[TraceEvent] = []
+        stored = {
+            "cli_session_id": self.cli_session_id,
+            "cli_bridge_instance": self.sessions.instance,
+            "cli_acked_seq": self.sessions.acked_seq,
+        }
         gen = self.runtime.run_turn(
-            prepared(self.thread, **{"cli_session_id": self.cli_session_id, **kw}),
+            prepared(self.thread, **{**stored, **kw}),
             run_id=uuid4(),
             redis=None,
             relay=self.relay,  # type: ignore[arg-type]
@@ -401,8 +416,8 @@ async def test_wrong_token_is_unreachable_not_a_hang(env: Any) -> None:
 async def test_next_run_attaches_instead_of_opening(env: Any) -> None:
     e = await env()
     await e.run()
-    known = e.runtime._known[e.thread.thread_uuid]
-    assert known.instance == e.app.instance and known.last_seq > 0
+    # 接续信息落在 cli_session（不在进程内存）：下一轮从库里读出来 attach
+    assert e.sessions.instance == e.app.instance and e.sessions.acked_seq > 0
     events = await e.run(text="again")
     assert last(events).type is EventType.RUN_FINISHED
     assert e.app.outbox.acked == e.app.outbox.last_seq  # 全部确认，bridge 缓冲已清空
@@ -471,22 +486,31 @@ async def test_cancel_during_an_outage_ends_the_run_as_cancelled(env: Any) -> No
     assert last(events).type is EventType.RUN_CANCELLED
 
 
-async def test_bridge_restarted_mid_turn_is_bridge_lost(env: Any) -> None:
+async def test_bridge_restarted_mid_turn_is_bridge_lost(
+    env: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """一轮进行中断线，重连时发现 bridge 重启过（实例 id 变了）：这一轮的进度已丢失（§7.6）。"""
     e = await env(Script(on_prompt="silent"))
+    made: list[Any] = []
+    real = cli_runtime_mod.CliSession
+
+    def capture(*args: Any, **kwargs: Any) -> Any:
+        made.append(real(*args, **kwargs))
+        return made[-1]
+
+    monkeypatch.setattr(cli_runtime_mod, "CliSession", capture)
 
     async def restart_then_disconnect() -> None:
-        while e.thread.thread_uuid not in e.runtime._known or e.app.host.turn is None:
+        while not made or not made[0].bridge_instance or e.app.host.turn is None:
             await asyncio.sleep(0.02)
-        # 模拟：runtime 记得的是重启前的实例
-        e.runtime._known[e.thread.thread_uuid].instance = "b-before-restart"
+        # 模拟：这一轮记得的是重启前的实例
+        made[0].bridge_instance = "b-before-restart"
         await e.app.server.close_current(1011, "test")
 
     task = asyncio.create_task(restart_then_disconnect())
     events = await e.run(timeout_s=30)
     await task
     assert last(events).data["error_kind"] == "bridge_lost"
-    assert e.thread.thread_uuid not in e.runtime._known  # 忘掉它，下一轮 session.open
 
 
 async def test_superseded_connection_does_not_reconnect(env: Any) -> None:
@@ -512,14 +536,15 @@ async def test_superseded_connection_does_not_reconnect(env: Any) -> None:
 
 
 async def test_server_that_forgot_the_bridge_attaches_via_already_open(env: Any) -> None:
-    """server 重启过（进程内记忆没了）：open 得到 ALREADY_OPEN，带回实例 id，改用 attach。"""
+    """库里没记下 bridge 实例（比如进度没写上）：open 得到 ALREADY_OPEN、带回实例 id，
+    改用 attach。"""
     e = await env()
     await e.run()
-    e.runtime._known.clear()
+    e.sessions.instance, e.sessions.acked_seq = None, 0
     e.cli_session_id = e.sessions.remembered[-1][1]
     events = await e.run(text="again")
     assert last(events).type is EventType.RUN_FINISHED
-    assert e.runtime._known[e.thread.thread_uuid].instance == e.app.instance
+    assert e.sessions.instance == e.app.instance
 
 
 # ═════════════════════════ 权限模式（doc/acp-permission-mode-design.html）═════════════════════════
@@ -581,7 +606,7 @@ async def test_failing_to_tighten_is_a_clear_failure(env: Any) -> None:
 def test_cli_approval_ids_are_derived_from_the_run_and_the_call() -> None:
     """★ 审批 id 由 (run, toolCallId) 派生，和原生一致：换实例接管后重新询问落到同一行，
     不会弹出两个窗口（approval 表的唯一键也是这一对）。"""
-    from atlas_agent.host.approvals import PermissionDesk
+    from atlas_agent.cli.permission import PermissionDesk
     from atlas_engine.kernel.middleware.approval import approval_id_for
 
     run_id = uuid4()

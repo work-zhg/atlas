@@ -156,7 +156,7 @@ class SegmentLoader:
 
         # 审批模式（doc/native-approval-mode-design.html）：run 上记的是建 run 时
         # （或计划获批后）的模式，子 run 记的是派活那一刻父 run 的模式。
-        # native 按智能体允许的范围校正；acp 原样交下去，由 HostRuntime 与它自己的
+        # native 按智能体允许的范围校正；acp 原样交下去，由 CliRuntime 与它自己的
         # permission_mode 取更严格的
         approval_mode = (
             spec.approval.resolve(run.approval_mode or thread.approval_mode)

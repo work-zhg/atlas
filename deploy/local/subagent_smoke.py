@@ -2,7 +2,7 @@
 
     POST /runs（native 父，跑在 server 进程内的图里）
       → 模型调 task 工具 → 子会话 + 子 run
-      → HostRuntime 对子会话原样生效：cluster 建**第二个** Pod
+      → CliRuntime 对子会话原样生效：cluster 建**第二个** Pod
       → 子 Pod 里真 CLI 往 /workspace 写文件
       → 父只拿回结论，用自己的 filesystem 工具读同一份工作区
 

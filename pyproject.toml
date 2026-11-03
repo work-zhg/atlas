@@ -153,11 +153,11 @@ forbidden_modules = [
 ]
 
 [[tool.importlinter.contracts]]
-name = "server 里只有 host.translate 能读 ACP（Bridge 设计 §3 D1：server 不说 ACP 的控制语义）"
+name = "server 里只有 cli.translate 能读 ACP（Bridge 设计 §3 D1：server 不说 ACP 的控制语义）"
 type = "forbidden"
 source_modules = ["atlas_agent"]
 forbidden_modules = ["atlas_acp"]
-ignore_imports = ["atlas_agent.host.translate.** -> atlas_acp.**"]
+ignore_imports = ["atlas_agent.cli.translate.** -> atlas_acp.**"]
 unmatched_ignore_imports_alerting = "none"
 
 # server 只许认技能应用的**对外契约**（schemas，只依赖 pydantic），不许碰它的
@@ -444,7 +444,7 @@ source_modules = [
   "atlas_agent.executor.build",
   # translate 是纯函数：一条 update 进、零或多条事件意图出。它必须能脱离
   # WS 与 DB 单测 —— §06 的表就是它的测试用例（acp 详设 §03）。
-  "atlas_agent.host.translate",
+  "atlas_agent.cli.translate",
 ]
 forbidden_modules = ["sqlalchemy", "fastapi", "redis", "alembic", "pydantic_settings"]
 

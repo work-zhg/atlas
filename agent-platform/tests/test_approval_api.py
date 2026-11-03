@@ -358,8 +358,8 @@ async def test_cli_approvals_mark_the_run_awaiting_user(
 ) -> None:
     """★ CLI 的权限请求进同一张审批表；待决期间 run 标 awaiting_user，决定之后清掉。"""
     from atlas_agent.approval import DecisionChannel, OnlineApprovals
+    from atlas_agent.cli.runtime import _awaiting_sync
     from atlas_agent.db.models import Approval
-    from atlas_agent.host.runtime import _awaiting_sync
     from sqlalchemy import update
 
     run_id, _approval_id = await _start_guarded_run(client)

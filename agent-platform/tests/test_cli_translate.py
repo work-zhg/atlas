@@ -9,9 +9,8 @@
 
 from __future__ import annotations
 
-from atlas_agent.domain.events import EventType
-from atlas_agent.host.runtime import note_failed_tool, silent_failure_message
-from atlas_agent.host.translate.acp_v1 import (
+from atlas_agent.cli.outcome import note_failed_tool, silent_failure_message
+from atlas_agent.cli.translate.acp_v1 import (
     AcpV1Translator,
     model_of,
     translate_crash,
@@ -19,6 +18,7 @@ from atlas_agent.host.translate.acp_v1 import (
     translate_update,
     usage_of,
 )
+from atlas_agent.domain.events import EventType
 
 
 def _one(payload: dict) -> tuple[EventType, dict]:
@@ -444,7 +444,7 @@ def test_cancelled_turn_with_usage_does_not_crash_and_carries_the_model() -> Non
 
     （usage 是 dict，不是 pydantic 模型。）
     """
-    from atlas_agent.host.runtime import _finish
+    from atlas_agent.cli.outcome import terminal_events as _finish
 
     response = {
         "stopReason": "cancelled",
@@ -466,8 +466,8 @@ def test_cancelled_turn_with_usage_does_not_crash_and_carries_the_model() -> Non
 
 def test_usage_update_becomes_context_usage() -> None:
     """ACP 的上下文用量 → 平台的 context.usage（平台只观测，不改写 CLI 的上下文）。"""
+    from atlas_agent.cli.translate.acp_v1 import translate_update
     from atlas_agent.domain.events import EventType
-    from atlas_agent.host.translate.acp_v1 import translate_update
 
     out = translate_update({"sessionUpdate": "usage_update", "used": 42_000, "size": 200_000})
     assert out == [

@@ -36,7 +36,7 @@
     scripted.py           假模型（剧本）
     sandbox_client.py     server：PodSandbox —— 后台命令、游标轮询、断线接上、环境已重建、头尾截断
     workspace.py          server：工作区读写路由 —— 两套底层（对象存储 / execd）
-    acp.py                server：OpenSandboxPods、git 档案与 Credential Vault、HostRuntime
+    acp.py                server：OpenSandboxPods、git 档案与 Credential Vault、CliRuntime
     provision.py          server：路由表、ensure（复用 / 锁 / 配额 / 镜像）、闲置回收与孤儿回收
     opensandbox_client.py server：lifecycle 与 execd 的薄客户端
     opensandbox.py        OpenSandbox：两个 lifecycle server、控制器、Pod、egress；集群网络
@@ -165,7 +165,7 @@ async def main() -> None:
     )
     acp = AcpRuntime(OpenSandboxPods(ensurer), transport)
     reply = await acp.run_turn(t2, "把 RELEASE.md 写好并推到 Gitee")
-    say("HostRuntime", f"bridge 回复：{reply}")
+    say("CliRuntime", f"bridge 回复：{reply}")
     release = storage.get("u1/t2/workspace/RELEASE.md")
     say(
         "界面",
