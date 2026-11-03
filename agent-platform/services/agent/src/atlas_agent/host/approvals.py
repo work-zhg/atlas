@@ -17,8 +17,9 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
-from uuid import uuid4
+from uuid import UUID, uuid4
 
+from atlas_engine.kernel.middleware.approval import approval_id_for
 from atlas_jsonrpc import current_request_id
 
 from ..domain.events import EventType
@@ -40,7 +41,14 @@ Emit = Callable[[EventType, dict[str, Any]], None]
 class ApprovalPort(Protocol):
     """平台审批的最小接口。生产实现包装 RedisApprovalGate 与 ApprovalRepository。"""
 
-    async def check(self, *, approval_id: str, tool_name: str, args: dict[str, Any]) -> str:
+    async def check(
+        self,
+        *,
+        approval_id: str,
+        tool_name: str,
+        args: dict[str, Any],
+        tool_call_id: str | None = None,
+    ) -> str:
         """首次调用即登记；返回 pending / approved / rejected / expired / failed。"""
         ...
 
@@ -55,8 +63,17 @@ class _Pending:
 
 
 class PermissionDesk:
-    def __init__(self, approvals: ApprovalPort, emit: Emit, *, poll_s: float = 1.0) -> None:
+    def __init__(
+        self,
+        approvals: ApprovalPort,
+        emit: Emit,
+        *,
+        run_id: UUID | None = None,
+        poll_s: float = 1.0,
+    ) -> None:
         self._approvals = approvals
+        #: 审批 id 由 (run, toolCallId) 派生，和原生一致（kernel 的 approval_id_for）
+        self._run_id = run_id
         self._emit = emit
         self._poll_s = poll_s
         #: ask_id（permission.ask 的 JSON-RPC id）→ 等待中的审批
@@ -72,14 +89,14 @@ class PermissionDesk:
         request = params.get("request") or {}
         tool_call = request.get("toolCall") or {}
         name = str(tool_call.get("title") or tool_call.get("toolCallId") or "acp_tool")
-        # approval_id 现生成，不复用 toolCallId：Approval.approval_uuid 是 UUID，toolCallId 是任意字符串
+        call_id = str(tool_call.get("toolCallId") or "") or None
         resent = ask_id in self._approval_ids
-        approval_id = self._approval_ids.setdefault(ask_id, str(uuid4()))
+        approval_id = self._approval_ids.setdefault(ask_id, self._approval_id(call_id))
         pending = _Pending(approval_id)
         self._pending[ask_id] = pending
         try:
             state = await self._approvals.check(
-                approval_id=approval_id, tool_name=name, args=tool_call
+                approval_id=approval_id, tool_name=name, args=tool_call, tool_call_id=call_id
             )
             if state == "pending" and not resent:
                 # 字段名与 native 逐字对齐 —— 前端 reducer 按字段名取值
@@ -110,6 +127,14 @@ class PermissionDesk:
             return {"reject": True}
         self._denied(tool_call, name, state)
         return {"reject": True}
+
+    def _approval_id(self, call_id: str | None) -> str:
+        """★ 由 (run, toolCallId) 派生：bridge 补发同一个请求、换实例接管后重新询问时都落到
+        同一行，不会弹出两个窗口（approval 表的唯一键也是这一对）。取不到 toolCallId 才现生成。
+        """
+        if self._run_id is not None and call_id:
+            return approval_id_for(str(self._run_id), call_id)
+        return str(uuid4())
 
     def withdraw(self, ask_id: Any, reason: str) -> None:
         """permission.withdraw：bridge 已经给了 agent 结果，平台这边的审批作废。"""

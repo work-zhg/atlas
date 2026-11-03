@@ -237,6 +237,7 @@ class AskUserMiddleware(AgentMiddleware):
             args=args,
             kind="question",
             source="ask_user",
+            tool_call_id=call_id,
         )
         if status != "pending":
             # 已经有结果（接管后重放到这里）或门禁故障：按结果处理，不再挂起

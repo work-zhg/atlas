@@ -49,7 +49,9 @@ class Approvals:
         self.polls: dict[str, int] = {}
         self.expired: list[str] = []
 
-    async def check(self, *, approval_id: str, tool_name: str, args: dict[str, Any]) -> str:
+    async def check(
+        self, *, approval_id: str, tool_name: str, args: dict[str, Any], **_: Any
+    ) -> str:
         n = self.polls.get(approval_id, 0)
         self.polls[approval_id] = n + 1
         if approval_id in self.expired:
@@ -570,3 +572,17 @@ async def test_failing_to_tighten_is_a_clear_failure(env: Any) -> None:
     assert last(events).type is EventType.RUN_FAILED
     assert last(events).data["error_kind"] == "mode_unavailable"
     assert "权限模式" in last(events).data["message"]
+
+
+def test_cli_approval_ids_are_derived_from_the_run_and_the_call() -> None:
+    """★ 审批 id 由 (run, toolCallId) 派生，和原生一致：换实例接管后重新询问落到同一行，
+    不会弹出两个窗口（approval 表的唯一键也是这一对）。"""
+    from atlas_agent.host.approvals import PermissionDesk
+    from atlas_engine.kernel.middleware.approval import approval_id_for
+
+    run_id = uuid4()
+    first = PermissionDesk(Approvals(), lambda *_: None, run_id=run_id)
+    after_takeover = PermissionDesk(Approvals(), lambda *_: None, run_id=run_id)
+    assert first._approval_id("call-1") == after_takeover._approval_id("call-1")
+    assert first._approval_id("call-1") == approval_id_for(str(run_id), "call-1")
+    assert first._approval_id("call-1") != first._approval_id("call-2")

@@ -300,7 +300,13 @@ class PermissionMiddleware(AgentMiddleware):
         if self._gate is None:
             return _failed(call_id, name, GATE_FAILED_RESULT)
         status = await self._gate.check(
-            approval_id=approval_id, tool_name=name, args=args, kind=kind, source=source, reason=reason
+            approval_id=approval_id,
+            tool_name=name,
+            args=args,
+            kind=kind,
+            source=source,
+            reason=reason,
+            tool_call_id=call_id,
         )
         if status != "pending":
             # 已经有结果（接管后重放到这里）或门禁故障：按结果处理，不再挂起

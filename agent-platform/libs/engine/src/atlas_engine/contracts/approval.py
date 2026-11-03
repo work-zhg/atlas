@@ -54,6 +54,7 @@ class ApprovalGate(Protocol):
         kind: str = "tool",
         source: str | None = None,
         reason: str | None = None,
+        tool_call_id: str | None = None,
     ) -> ApprovalState:
         """这次调用批了吗？**立刻返回，不阻塞**。
 
@@ -66,6 +67,7 @@ class ApprovalGate(Protocol):
           source  为什么问：manual_mode / plan_mode / auto_uncertain（没有配置判断器）/
                   judge_failed（判断器出错）
           reason  给用户看的一句话
+          tool_call_id  被拦下的那个调用；一个调用至多一件待决的事（approval 表的唯一键）
 
         ★ approval_id 必须由调用方**可复现地**派生，否则续跑时算出一个新 id、
           查到 pending、再挂起一次 —— 死循环。kernel 用

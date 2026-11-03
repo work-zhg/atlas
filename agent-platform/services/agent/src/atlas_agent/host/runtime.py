@@ -160,8 +160,17 @@ class _DbApprovals:
         self._run_id = run_id
         self._gate = RedisApprovalGate(sessionmaker, redis, run_id)
 
-    async def check(self, *, approval_id: str, tool_name: str, args: dict[str, Any]) -> str:
-        state = await self._gate.check(approval_id=approval_id, tool_name=tool_name, args=args)
+    async def check(
+        self,
+        *,
+        approval_id: str,
+        tool_name: str,
+        args: dict[str, Any],
+        tool_call_id: str | None = None,
+    ) -> str:
+        state = await self._gate.check(
+            approval_id=approval_id, tool_name=tool_name, args=args, tool_call_id=tool_call_id
+        )
         await self._sync_awaiting()
         return state
 
@@ -275,6 +284,7 @@ class HostRuntime:
         desk = PermissionDesk(
             self._approvals(run_id, redis),
             emit=lambda kind, data: turn.queue.put_nowait(("event", kind, data)),
+            run_id=run_id,
         )
 
         async def on_notification(method: str, params: Any) -> None:

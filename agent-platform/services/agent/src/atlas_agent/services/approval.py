@@ -67,6 +67,7 @@ class RedisApprovalGate:
         kind: str = "tool",
         source: str | None = None,
         reason: str | None = None,
+        tool_call_id: str | None = None,
     ) -> ApprovalState:
         """查一次状态。**立刻返回，不阻塞**。
 
@@ -92,7 +93,7 @@ class RedisApprovalGate:
                     run_id=self._run_id,
                     tool_name=tool_name,
                     args=args,
-                    tool_call_id=_tool_call_id_of(args),
+                    tool_call_id=tool_call_id or _tool_call_id_of(args),
                     kind=kind,
                     source=source,
                     reason=reason,

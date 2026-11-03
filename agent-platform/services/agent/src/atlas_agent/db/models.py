@@ -563,6 +563,11 @@ class Approval(Base):
 
     __table_args__ = (
         UniqueConstraint("approval_uuid", name="uk_approval_uuid"),
+        #: 一个调用至多一件事（迁移 0032）。原生和 CLI 的 approval_uuid 都由 (run, 调用 id) 派生，
+        #: 重放、续跑、接管、bridge 补发都落到同一行
+        UniqueConstraint("run_uuid", "tool_call_id", name="uk_approval_call"),
+        #: 续跑前查待决事项
+        Index("ix_approval_run_status", "run_uuid", "status"),
         CheckConstraint(
             "status IN ('pending','approved','rejected','expired')", name="status_enum"
         ),
