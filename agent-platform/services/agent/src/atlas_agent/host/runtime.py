@@ -34,7 +34,7 @@ import asyncio
 import contextlib
 import logging
 import random
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Protocol
@@ -44,7 +44,7 @@ from uuid import UUID
 from atlas_host import CloseCode, HostErrorCode, methods
 from atlas_jsonrpc import ChannelClosed, ErrorCode, RpcFault
 
-from ..approval import RunApprovalGate
+from ..approval import ApprovalService, DecisionChannel, OnlineApprovals
 from ..domain.events import EventFactory, EventType, TraceEvent
 from ..domain.mcp_naming import MCP_PREFIX
 from ..domain.skill_events import SkillLoadTracker
@@ -61,7 +61,6 @@ from ..providers.mcp import GatewayUnavailable, make_mcp_catalog, mcp_agent_acce
 from ..providers.mcp.acp import acp_mcp_servers
 from ..providers.mcp.gateway import servers_in
 from ..providers.pods import AcpModel
-from ..repositories.approval import ApprovalRepository
 from ..repositories.cli_session import CliSessionRepository
 from .approvals import ApprovalPort, PermissionDesk
 from .client import HostClient, HostUnreachable
@@ -146,51 +145,23 @@ class _DbProgress:
             await session.commit()
 
 
-class _DbApprovals:
-    """CLI 的权限请求进原生的同一张审批表；在线等待期间 run 标 awaiting_user。
+def _awaiting_sync(
+    sessionmaker: async_sessionmaker[AsyncSession], run_id: UUID
+) -> Callable[[], Awaitable[None]]:
+    """在线等待期间 run 标 awaiting_user（状态仍是 running）。
 
-    ★ awaiting_user 每次都按「这个 run 还有没有待决的审批」重算，不跟着单次请求翻转：
-      同一轮里可能同时挂着两个请求，答完一个时另一个还在等。
+    ★ 每次都按「这个 run 还有没有待决的审批」重算，不跟着单次请求翻转：同一轮里可能同时
+      挂着两个请求，答完一个时另一个还在等。
     """
+    from ..repositories.run_record import RunRecordRepository
 
-    def __init__(
-        self, sessionmaker: async_sessionmaker[AsyncSession], redis: aioredis.Redis, run_id: UUID
-    ) -> None:
-        self._sessionmaker = sessionmaker
-        self._run_id = run_id
-        self._gate = RunApprovalGate(sessionmaker, run_id)
-
-    async def check(
-        self,
-        *,
-        approval_id: str,
-        tool_name: str,
-        args: dict[str, Any],
-        tool_call_id: str | None = None,
-    ) -> str:
-        state = await self._gate.check(
-            approval_id=approval_id, tool_name=tool_name, args=args, tool_call_id=tool_call_id
-        )
-        await self._sync_awaiting()
-        return state
-
-    async def expire(self, approval_id: str) -> None:
-        async with self._sessionmaker() as session:
-            await ApprovalRepository(session).expire(UUID(approval_id))
+    async def sync() -> None:
+        async with sessionmaker() as session:
+            waiting = bool(await ApprovalService(session).pending(run_id))
+            await RunRecordRepository(session).set_awaiting_user(run_id, waiting=waiting)
             await session.commit()
-        await self._sync_awaiting()
 
-    async def _sync_awaiting(self) -> None:
-        from ..repositories.run_record import RunRecordRepository
-
-        try:
-            async with self._sessionmaker() as session:
-                waiting = bool(await ApprovalRepository(session).list_pending(self._run_id))
-                await RunRecordRepository(session).set_awaiting_user(self._run_id, waiting=waiting)
-                await session.commit()
-        except Exception:
-            # 只影响界面上的「需要你处理」，不影响审批本身
-            logger.warning("run %s 的 awaiting_user 没写上", self._run_id, exc_info=True)
+    return sync
 
 
 # ═══════════════════════════════════ 运行时 ═══════════════════════════════════
@@ -212,8 +183,9 @@ class HostRuntime:
     ) -> None:
         self._settings = settings
         self._pods = pods
+        self._sessionmaker = sessionmaker
         self._approvals: ApprovalFactory = approvals or (
-            lambda run_id, redis: _DbApprovals(sessionmaker, redis, run_id)
+            lambda run_id, redis: OnlineApprovals(sessionmaker, DecisionChannel(redis), run_id)
         )
         self._sessions: SessionStore = sessions or _DbSessions(sessionmaker)
         self._progress: ProgressStore = progress or _DbProgress(sessionmaker)
@@ -285,6 +257,11 @@ class HostRuntime:
             self._approvals(run_id, redis),
             emit=lambda kind, data: turn.queue.put_nowait(("event", kind, data)),
             run_id=run_id,
+            awaiting=(
+                _awaiting_sync(self._sessionmaker, run_id)
+                if self._sessionmaker is not None
+                else None
+            ),
         )
 
         async def on_notification(method: str, params: Any) -> None:
@@ -308,9 +285,7 @@ class HostRuntime:
             connect_timeout_s=self._settings.acp_ws_connect_timeout_s,
         )
         try:
-            async for event in self._drive(
-                link, segment, turn, events, relay, run_id, mcp_servers
-            ):
+            async for event in self._drive(link, segment, turn, events, relay, run_id, mcp_servers):
                 yield event
         finally:
             await link.close()

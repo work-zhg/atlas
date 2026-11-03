@@ -6,7 +6,8 @@ CLI 智能体共用、弹同一个窗口：
     登记、查状态    RunApprovalGate.check（原生运行时的审批、提问中间件；CLI 的权限转发经它）
                     第一次查时登记，立刻返回，不阻塞 —— 等待交给数据库，可以等到第二天
     做决定          ApprovalService.decide：校验执行模式和答案，条件更新只成功一次，
-                    然后通知 DecisionListener（Run 执行器）续跑
+                    然后通知 DecisionListener（Run 执行器）续跑、发决定信号（DecisionChannel）
+    在线等待        OnlineApprovals.wait：CLI 的权限请求在线等决定 —— 等决定信号，回库兜底
     续跑前核对      ApprovalService.status / result（Run 执行器）
     作废            ApprovalService.expire_run：run 进入终态时，还挂着的一律 expired
 
@@ -30,6 +31,7 @@ from ..errors import Conflict, InvalidAnswers, InvalidApprovalMode, NotFound
 from ..repositories.approval import ApprovalRepository
 from ..telemetry import semconv as _sc
 from ..telemetry import tracer as _tracer
+from .channel import DecisionChannel
 
 logger = logging.getLogger(__name__)
 
@@ -47,10 +49,17 @@ class DecisionListener(Protocol):
 class ApprovalService:
     """等人决定的事的入口（按请求或段的会话构造）：做决定、待决事项、续跑前核对、作废。"""
 
-    def __init__(self, session: AsyncSession, *, listener: DecisionListener | None = None) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        listener: DecisionListener | None = None,
+        channel: DecisionChannel | None = None,
+    ) -> None:
         self._session = session
         self._repo = ApprovalRepository(session)
         self._listener = listener
+        self._channel = channel
 
     async def get(self, approval_id: UUID) -> Approval | None:
         return await self._repo.get(approval_id)
@@ -94,6 +103,9 @@ class ApprovalService:
         #   通知是幂等的：放回队列有 CAS，与补扫撞上只有一个能赢。
         if self._listener is not None:
             await self._listener.decided(approval.run_uuid, approval_id)
+        # CLI 的权限请求在线等这件事：叫醒它（可能在别的实例上）
+        if self._channel is not None:
+            await self._channel.publish(approval_id)
         return approval
 
     async def status(self, token: str) -> str:
@@ -213,6 +225,59 @@ class RunApprovalGate:
             },
         ).end()
         return "pending"
+
+
+class OnlineApprovals:
+    """在线等待的审批：CLI 运行时的 ApprovalPort（code-cli-runtime-permission.html）。
+    一个 run 一个。
+
+    CLI 的权限请求进和原生同一张表（登记走 RunApprovalGate），但不能挂起：CLI 进程和 bridge
+    都在等。所以多一个 wait —— 等决定信号，到点回库看一眼（信号丢了也能返回）。
+    """
+
+    def __init__(
+        self,
+        sessionmaker: async_sessionmaker[AsyncSession],
+        channel: DecisionChannel,
+        run_id: UUID,
+    ) -> None:
+        self._sessionmaker = sessionmaker
+        self._channel = channel
+        self._gate = RunApprovalGate(sessionmaker, run_id)
+
+    async def check(
+        self,
+        *,
+        approval_id: str,
+        tool_name: str,
+        args: dict[str, Any],
+        tool_call_id: str | None = None,
+    ) -> ApprovalState:
+        return await self._gate.check(
+            approval_id=approval_id, tool_name=tool_name, args=args, tool_call_id=tool_call_id
+        )
+
+    async def wait(self, approval_id: str, timeout: float) -> str:
+        """等这件事有结果，最多 timeout 秒。返回当时的状态（还没结果就是 pending）。
+
+        ★ 先订阅、再回库看状态：看完之后才做的决定，信号一定收得到。
+        """
+        async with self._channel.listen(approval_id) as signal:
+            state = await self._status(approval_id)
+            if state != "pending":
+                return state
+            await signal.wait(timeout)
+        return await self._status(approval_id)
+
+    async def expire(self, approval_id: str) -> None:
+        """撤回：bridge 已经给了 CLI 结果，这件事作废，前端的弹窗随之消失。"""
+        async with self._sessionmaker() as session:
+            await ApprovalRepository(session).expire(UUID(approval_id))
+            await session.commit()
+
+    async def _status(self, approval_id: str) -> str:
+        async with self._sessionmaker() as session:
+            return await ApprovalService(session).status(approval_id)
 
 
 def _tool_call_id_of(args: dict[str, Any]) -> str | None:

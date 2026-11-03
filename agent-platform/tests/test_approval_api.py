@@ -357,8 +357,9 @@ async def test_cli_approvals_mark_the_run_awaiting_user(
     client: httpx.AsyncClient, redis: aioredis.Redis
 ) -> None:
     """★ CLI 的权限请求进同一张审批表；待决期间 run 标 awaiting_user，决定之后清掉。"""
+    from atlas_agent.approval import DecisionChannel, OnlineApprovals
     from atlas_agent.db.models import Approval
-    from atlas_agent.host.runtime import _DbApprovals
+    from atlas_agent.host.runtime import _awaiting_sync
     from sqlalchemy import update
 
     run_id, _approval_id = await _start_guarded_run(client)
@@ -368,16 +369,22 @@ async def test_cli_approvals_mark_the_run_awaiting_user(
         await session.execute(update(Approval).values(status="expired"))
         await session.commit()
 
-    approvals = _DbApprovals(get_sessionmaker(), redis, UUID(run_id))
+    approvals = OnlineApprovals(get_sessionmaker(), DecisionChannel(redis), UUID(run_id))
+    sync = _awaiting_sync(get_sessionmaker(), UUID(run_id))
     cli_approval = str(uuid4())
     assert await approvals.check(approval_id=cli_approval, tool_name="Bash", args={}) == "pending"
+    await sync()
     assert (await client.get(f"/v1/runs/{run_id}")).json()["awaiting_user"] is True
 
+    # ★ 在线等待靠决定信号返回：做决定的请求一到，等待马上结束（不是等到回库的那一刻）
+    waiting = asyncio.create_task(approvals.wait(cli_approval, timeout=60))
+    await asyncio.sleep(0.2)
     decided = await client.post(
         f"/v1/runs/{run_id}/approvals/{cli_approval}", json={"decision": "approved"}
     )
     assert decided.status_code == 200, decided.text
-    assert await approvals.check(approval_id=cli_approval, tool_name="Bash", args={}) == "approved"
+    assert await asyncio.wait_for(waiting, 5) == "approved"
+    await sync()
     assert (await client.get(f"/v1/runs/{run_id}")).json()["awaiting_user"] is False
 
 

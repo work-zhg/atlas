@@ -7,6 +7,9 @@
 
 等待的上限由 bridge 给出（expiresInS），到点 bridge 自己按拒绝答复 agent 并发 permission.withdraw；
 server 收到撤回就把审批行标为 expired，前端的弹窗随之消失。
+
+等决定靠审批组件的决定信号（DecisionChannel），低频回库兜底 —— 原先每秒查一次库，等一天就是
+八万多次查询。等待期间 run 标 awaiting_user（状态仍是 running：CLI 和 bridge 都在等）。
 """
 
 from __future__ import annotations
@@ -14,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 from uuid import UUID, uuid4
@@ -38,8 +41,12 @@ DENIAL_REASON = {
 Emit = Callable[[EventType, dict[str, Any]], None]
 
 
+#: 等决定时多久回库看一眼（决定信号丢了也能返回）
+FALLBACK_CHECK_S = 30.0
+
+
 class ApprovalPort(Protocol):
-    """平台审批的最小接口。生产实现包装审批组件（RunApprovalGate 与 ApprovalRepository）。"""
+    """平台审批的最小接口。生产实现是审批组件的 OnlineApprovals。"""
 
     async def check(
         self,
@@ -50,6 +57,10 @@ class ApprovalPort(Protocol):
         tool_call_id: str | None = None,
     ) -> str:
         """首次调用即登记；返回 pending / approved / rejected / expired / failed。"""
+        ...
+
+    async def wait(self, approval_id: str, timeout: float) -> str:
+        """等这件事有结果，最多 timeout 秒；返回当时的状态（还没结果就是 pending）。"""
         ...
 
     async def expire(self, approval_id: str) -> None: ...
@@ -69,13 +80,16 @@ class PermissionDesk:
         emit: Emit,
         *,
         run_id: UUID | None = None,
-        poll_s: float = 1.0,
+        awaiting: Callable[[], Awaitable[None]] | None = None,
+        fallback_s: float = FALLBACK_CHECK_S,
     ) -> None:
+        """awaiting：待决的事项变了时调一次，按「还有没有待决的」重算 run 的 awaiting_user。"""
         self._approvals = approvals
         #: 审批 id 由 (run, toolCallId) 派生，和原生一致（kernel 的 approval_id_for）
         self._run_id = run_id
         self._emit = emit
-        self._poll_s = poll_s
+        self._awaiting = awaiting
+        self._fallback_s = fallback_s
         #: ask_id（permission.ask 的 JSON-RPC id）→ 等待中的审批
         self._pending: dict[Any, _Pending] = {}
         #: ask_id → approval_id，跨连接保留：断线时处理任务被取消，bridge 重连后以**同一个 id**
@@ -98,6 +112,7 @@ class PermissionDesk:
             state = await self._approvals.check(
                 approval_id=approval_id, tool_name=name, args=tool_call, tool_call_id=call_id
             )
+            await self._sync_awaiting()
             if state == "pending" and not resent:
                 # 字段名与 native 逐字对齐 —— 前端 reducer 按字段名取值
                 self._emit(
@@ -110,7 +125,8 @@ class PermissionDesk:
                     },
                 )
             if state == "pending":
-                state = await self._await_decision(pending, name, tool_call)
+                state = await self._await_decision(pending)
+                await self._sync_awaiting()
         finally:
             self._pending.pop(ask_id, None)
 
@@ -150,25 +166,49 @@ class PermissionDesk:
         pending.reason = reason
         pending.withdrawn.set()
 
-    async def _await_decision(self, pending: _Pending, name: str, args: dict[str, Any]) -> str:
-        """轮询门禁直到有决定，或被撤回。上限由 bridge 的 expiresInS 负责，这里不另设。"""
-        while True:
-            with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(pending.withdrawn.wait(), self._poll_s)
-            if pending.withdrawn.is_set():
-                # 标 expired：前端据此关掉弹窗；若用户恰好刚点了决定，以库里的为准（WHERE pending）
-                with contextlib.suppress(Exception):
-                    await self._approvals.expire(pending.approval_id)
-                return "withdrawn"
-            state = await self._approvals.check(
-                approval_id=pending.approval_id, tool_name=name, args=args
-            )
-            if state != "pending":
-                return state
+    async def _await_decision(self, pending: _Pending) -> str:
+        """等决定（决定信号，fallback_s 回库一次兜底），或被撤回。上限由 bridge 的 expiresInS
+        负责，这里不另设 —— 审批只由人决定。"""
+        withdrawn = asyncio.ensure_future(pending.withdrawn.wait())
+        decided: asyncio.Future[str] | None = None
+        try:
+            while True:
+                decided = asyncio.ensure_future(
+                    self._approvals.wait(pending.approval_id, self._fallback_s)
+                )
+                await asyncio.wait({decided, withdrawn}, return_when=asyncio.FIRST_COMPLETED)
+                if withdrawn.done():
+                    # 标 expired：前端据此关掉弹窗；用户恰好刚点了决定的话以库里为准（WHERE pending）
+                    with contextlib.suppress(Exception):
+                        await self._approvals.expire(pending.approval_id)
+                    return "withdrawn"
+                try:
+                    state = decided.result()
+                except Exception:
+                    # 查不到（库或 Redis 抖了）：过一会儿再看，不替用户做决定
+                    logger.warning("等审批 %s 的决定时出错", pending.approval_id, exc_info=True)
+                    await asyncio.sleep(1.0)
+                    continue
+                if state != "pending":
+                    return state
+        finally:
+            for task in (withdrawn, decided):
+                if task is not None and not task.done():
+                    task.cancel()
 
     async def _expire(self, approval_id: str) -> None:
         with contextlib.suppress(Exception):
             await self._approvals.expire(approval_id)
+        await self._sync_awaiting()
+
+    async def _sync_awaiting(self) -> None:
+        if self._awaiting is None:
+            return
+        try:
+            await self._awaiting()
+        except Exception:
+            # 只影响界面上的「需要你处理」，不影响审批本身
+            logger.warning("run %s 的 awaiting_user 没写上", self._run_id, exc_info=True)
 
     def _denied(self, tool_call: dict[str, Any], name: str, decision: str) -> None:
         reason = DENIAL_REASON.get(decision, decision)

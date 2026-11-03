@@ -7,7 +7,7 @@ from uuid import UUID
 import redis.asyncio as aioredis
 from fastapi import Depends, Request
 
-from .approval import ApprovalService
+from .approval import ApprovalService, DecisionChannel
 from .config import Settings, get_settings
 from .db.session import SessionDep
 from .executor.base import RunExecutor
@@ -56,13 +56,16 @@ def get_executor(request: Request) -> RunExecutor:
 ExecutorDep = Annotated[RunExecutor, Depends(get_executor)]
 
 
-async def get_approval_service(session: SessionDep, executor: ExecutorDep) -> ApprovalService:
-    """审批组件：做了决定通知 Run 执行器（它实现 DecisionListener），由这里接上。
+async def get_approval_service(
+    session: SessionDep, executor: ExecutorDep, redis: RedisDep
+) -> ApprovalService:
+    """审批组件：做了决定通知 Run 执行器（它实现 DecisionListener），并发决定信号叫醒在线等待
+    （CLI 的权限请求），由这里接上。
 
     ★ 接线放在依赖注入里、不放在路由里：路由只认审批，审批只认 DecisionListener 接口，
       谁来续跑由组合根决定（c4-model/agent/code-approval.html）。
     """
-    return ApprovalService(session, listener=executor)
+    return ApprovalService(session, listener=executor, channel=DecisionChannel(redis))
 
 
 ApprovalServiceDep = Annotated[ApprovalService, Depends(get_approval_service)]

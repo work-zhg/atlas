@@ -58,6 +58,10 @@ class Approvals:
             return "expired"
         return self.decision if n >= self.after_polls else "pending"
 
+    async def wait(self, approval_id: str, timeout: float) -> str:
+        await asyncio.sleep(min(timeout, 0.05))
+        return await self.check(approval_id=approval_id, tool_name="", args={})
+
     async def expire(self, approval_id: str) -> None:
         self.expired.append(approval_id)
 
