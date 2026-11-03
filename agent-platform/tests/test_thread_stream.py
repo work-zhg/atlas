@@ -24,7 +24,7 @@ import pytest
 from atlas_agent.config import Settings, get_settings
 from atlas_agent.db.session import get_sessionmaker
 from atlas_agent.domain.events import TraceEvent
-from atlas_agent.executor.inprocess import InProcessExecutor
+from atlas_agent.executor.compose import build_executor
 from atlas_agent.main import create_app
 from atlas_agent.stream.gate import StreamGate, StreamsBusy
 from httpx import ASGITransport
@@ -39,7 +39,7 @@ pytestmark = pytest.mark.usefixtures("clean_db")
 def make_app(*, chunks: list[str] | None = None):
     app = create_app()
     model = text_model("".join(chunks or ["好"]), pieces=len(chunks or ["好"]))
-    app.state.executor = InProcessExecutor(
+    app.state.executor = build_executor(
         get_sessionmaker(), get_settings(), model_builder=lambda *_a, **_k: model
     )
     return app
@@ -307,7 +307,7 @@ async def test_first_connect_is_capped(clean_db: None) -> None:
     capped = get_settings().model_copy(update={"sse_thread_replay_events": 3})
     app = create_app()
     model = text_model("好")
-    app.state.executor = InProcessExecutor(
+    app.state.executor = build_executor(
         get_sessionmaker(), capped, model_builder=lambda *_a, **_k: model
     )
 

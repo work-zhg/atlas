@@ -1,11 +1,8 @@
 """RunHooks 的组装（与执行循环分离）。
 
-InProcessExecutor 此前把「组装能力」（MCP 解析、压缩、标题、审批、子模型）
-和「执行循环」（起任务、收事件、落库）揉在一个 400 行的类里 ——
-换 arq/Celery worker 时这 400 行几乎要整体搬迁，RunExecutor Protocol
-承诺的「只加一个实现类」兑现不了。
-
-现在组装归本模块：换执行器时搬走的是循环，HookAssembly 原样复用。
+「组装能力」（MCP 解析、压缩、标题、审批、子模型）与「执行循环」（领取、收事件、落库，
+executor/scheduling.py 与 segment.py）分开：换执行器时搬走的是循环，HookAssembly 原样复用。
+它由组合根（executor/compose.py）构造，不认识执行器；委派只拿到入队这一个回调。
 
 PreparedRun 是「任务是什么」的载体（对应 engine run() 签名的前半），
 HookAssembly.build() 产出「用什么能力跑」（RunHooks，签名的后半）。
@@ -84,6 +81,7 @@ from ..services.service_models import resolve_service_model, service_model_confi
 from ..services.title import TitleService
 from ..skills import skill_directory
 from ..stream.relay import EventRelay
+from .base import SubmitRun
 from .build import build_graph
 
 if TYPE_CHECKING:
@@ -233,12 +231,11 @@ class HookAssembly:
         sessionmaker: async_sessionmaker[AsyncSession],
         settings: Settings,
         model_builder: ModelBuilder,
-        executor: Any = None,
+        submit_run: SubmitRun | None = None,
         memory: MemoryRuntime | None = None,
     ) -> None:
-        #: 委派要能起子 run。循环引用是刻意的且只有一层：执行器持有本对象，
-        #: 本对象只在构造委派回调时回调它的 submit —— 不在初始化期用到。
-        self._executor = executor
+        #: 委派要能起子 run：入队由组合根注入，装配不认识执行器。None = 不能委派
+        self._submit_run = submit_run
         self._sessionmaker = sessionmaker
         self._settings = settings
         self._build_model = model_builder
@@ -582,7 +579,7 @@ class HookAssembly:
         ★ 子 run 也走这里：native SubAgent 的 spec 带着同一份名录（spec_for_subagent），
           所以它也能继续派 SubAgent；acp SubAgent 的名录为空，天然返回 None。
         """
-        if not prepared.spec.subagents or self._executor is None:
+        if not prepared.spec.subagents or self._submit_run is None:
             return None
         if prepared.agent_version_id is None:
             logger.warning("run %s 缺 agent_version_id，SubAgent 不启用", run_id)
@@ -593,7 +590,7 @@ class HookAssembly:
         return SubAgentService(
             self._sessionmaker,
             self._settings,
-            self._executor,
+            self._submit_run,
             relay,
             parent_run_id=run_id,
             parent_thread=prepared.thread,

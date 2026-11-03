@@ -1,7 +1,7 @@
 """版本快照的 schema 演进守卫。
 
 agent_version.spec 是**历史数据**：executor 每次执行都会
-`AgentSpecIn.model_validate(...)` 反序列化它（inprocess.py）。
+`AgentSpecIn.model_validate(...)` 反序列化它（executor/segment.py）。
 
 给这些模型加一个**必填**字段，所有历史快照当场炸掉 —— 历史 run 打不开，
 而 CI 抓不到：测试库里只有新格式。可复现性承诺

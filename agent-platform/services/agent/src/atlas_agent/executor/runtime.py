@@ -2,7 +2,7 @@
 
 执行器的链路里，前后两段与 agent 类型无关：
 
-    load_for_execution → _prepare → mark_running     ← 无关
+    load_for_execution → SegmentLoader.load → mark_running     ← 无关
     ┌───────────────────────────────────────────┐
     │ 装配 → 驱动 → 产出 TraceEvent 流            │  ← 只有这一段有类型之分
     └───────────────────────────────────────────┘

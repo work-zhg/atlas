@@ -10,7 +10,7 @@ import httpx
 import pytest
 from atlas_agent.config import get_settings
 from atlas_agent.db.session import get_sessionmaker
-from atlas_agent.executor.inprocess import InProcessExecutor
+from atlas_agent.executor.compose import build_executor
 from atlas_agent.main import create_app
 from atlas_agent.services.title import _clean, fallback_title
 from httpx import ASGITransport
@@ -24,7 +24,7 @@ def make_app(reply: str = "生成的标题"):
     """假模型同时承担「回答」与「起标题」两个角色 ——
     TitleService 与执行器共用 model_builder，注入一次即可。"""
     app = create_app()
-    app.state.executor = InProcessExecutor(
+    app.state.executor = build_executor(
         get_sessionmaker(),
         get_settings(),
         model_builder=lambda *_a, **_k: text_model(reply),

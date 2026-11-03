@@ -26,6 +26,8 @@ from ..db.models import Agent, Run
 from ..errors import Conflict, InvalidApprovalMode, NotFound, ThreadLocked
 from ..executor.base import RunExecutor
 from ..repositories.agent import AgentRepository
+from ..repositories.continuation import ContinuationQueries
+from ..repositories.event_archive import EventArchive
 from ..repositories.run import RunRepository
 from ..repositories.thread import ThreadRepository
 from ..schemas.run import RunAccepted, RunCreate, RunOut, RunTraceOut
@@ -85,6 +87,8 @@ class RunService:
         self._settings = settings
         self._executor = executor
         self._runs = RunRepository(session)
+        self._events = EventArchive(session)
+        self._continuation = ContinuationQueries(session)
         self._threads = ThreadRepository(session)
         self._agents = AgentRepository(session)
         self._relay = EventRelay(redis, ttl_s=settings.run_events_ttl_s)
@@ -205,7 +209,7 @@ class RunService:
         """一轮已结束后的过程轨迹 —— 历史对话里的工具、委派、审批靠它重现。"""
         if await self._runs.get(run_id) is None:
             raise NotFound(f"run {run_id} 不存在", run_id=str(run_id))
-        rows = await self._runs.archived_run_trace(run_id)
+        rows = await self._events.archived_run_trace(run_id)
         return RunTraceOut(
             data=[
                 event_from_row(
@@ -258,7 +262,7 @@ class RunService:
         while frontier:
             children: list[UUID] = []
             for parent_id in frontier:
-                children.extend(await self._runs.unfinished_children_of(parent_id))
+                children.extend(await self._continuation.unfinished_children_of(parent_id))
             for child_id in children:
                 await self._executor.cancel(child_id)
             cancelled += len(children)
@@ -309,7 +313,7 @@ class RunService:
         cursor = (
             after_seq
             if after_seq is not None
-            else await self._runs.thread_seq_window_floor(
+            else await self._events.thread_seq_window_floor(
                 thread_id, keep=self._settings.sse_thread_replay_events
             )
         )
@@ -325,7 +329,7 @@ class RunService:
                 depth=row.depth,
                 data=row.data,
             )
-            for row in await self._runs.archived_thread_events(thread_id, after_seq=cursor)
+            for row in await self._events.archived_thread_events(thread_id, after_seq=cursor)
         ]
         await self._session.close()
         return self._thread_frames(thread_id, archived, cursor)

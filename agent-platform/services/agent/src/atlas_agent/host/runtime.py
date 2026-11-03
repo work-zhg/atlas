@@ -144,10 +144,10 @@ class _DbProgress:
         self._sessionmaker = sessionmaker
 
     async def save(self, run_id: UUID, *, instance: str, acked_seq: int) -> None:
-        from ..repositories.run import RunRepository
+        from ..repositories.run_record import RunRecordRepository
 
         async with self._sessionmaker() as session:
-            await RunRepository(session).save_acp_progress(
+            await RunRecordRepository(session).save_acp_progress(
                 run_id, instance=instance, acked_seq=acked_seq
             )
             await session.commit()

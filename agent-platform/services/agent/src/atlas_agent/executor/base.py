@@ -8,8 +8,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import Protocol
 from uuid import UUID
+
+#: 入队一个 run：子智能体服务起子 run 只依赖它，不认识执行器（RunExecutor.submit）
+SubmitRun = Callable[[UUID], Awaitable[None]]
 
 
 class RunExecutor(Protocol):

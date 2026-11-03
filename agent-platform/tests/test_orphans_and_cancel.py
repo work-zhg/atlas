@@ -58,6 +58,7 @@ def _service(runs: _Runs) -> tuple[RunService, _Executor]:
     executor = _Executor()
     service = RunService(None, None, get_settings(), executor)  # type: ignore[arg-type]
     service._runs = runs  # type: ignore[assignment]
+    service._continuation = runs  # type: ignore[assignment]
     return service, executor
 
 

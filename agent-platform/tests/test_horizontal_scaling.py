@@ -1,6 +1,6 @@
 """横向扩展：run 的领取、租约、检查点、接管与交接（doc/horizontal-scaling-design.html）。
 
-两个执行器实例 = 同一个进程里两个 InProcessExecutor，各自换一个实例 id。
+两个执行器实例 = 同一个进程里两个 RunWorker，各自换一个实例 id。
 「实例死了」= 把它的本地任务当成被接管掐掉（不让它碰库），再把租约改成已过期 ——
 与进程被 SIGKILL 后租约自然到期在数据库里看到的是同一个状态。
 """
@@ -20,9 +20,13 @@ from atlas_agent.db.models import Message, Run, RunEvent
 from atlas_agent.db.session import fetch_one, get_sessionmaker
 from atlas_agent.domain.events import EventFactory, EventType
 from atlas_agent.domain.messages import StoredMessage, Transcript, interrupted_results
-from atlas_agent.executor.inprocess import InProcessExecutor, _discarded_chars
+from atlas_agent.executor.compose import build_executor
+from atlas_agent.executor.continuation import _discarded_chars
+from atlas_agent.executor.scheduling import RunWorker
 from atlas_agent.main import create_app
 from atlas_agent.repositories.run import LeaseLost, RunRepository
+from atlas_agent.repositories.run_queue import RunQueue
+from atlas_agent.repositories.run_record import RunRecordRepository
 from atlas_agent.repositories.thread import ThreadRepository
 from httpx import ASGITransport
 from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
@@ -151,33 +155,31 @@ async def test_claim_renew_fence_and_takeover() -> None:
     sm = get_sessionmaker()
 
     async with sm() as s:
-        runs = RunRepository(s)
-        assert await _claim_until(runs, run_id, "A", lease) is None
+        assert await _claim_until(RunQueue(s), run_id, "A", lease) is None
         await s.commit()
     async with sm() as s:
         # 同一个 run 不会被第二个实例领到
-        assert await _claim_until(RunRepository(s), run_id, "B", lease) is False
+        assert await _claim_until(RunQueue(s), run_id, "B", lease) is False
         await s.commit()
 
     await _expire(run_id)
     async with sm() as s:
-        assert await _claim_until(RunRepository(s), run_id, "B", lease) == "expired"
+        assert await _claim_until(RunQueue(s), run_id, "B", lease) == "expired"
         await s.commit()
     async with sm() as s:
-        runs = RunRepository(s)
-        assert await runs.renew_leases([run_id], owner="A", lease_s=lease) == set(), (
+        assert await RunQueue(s).renew_leases([run_id], owner="A", lease_s=lease) == set(), (
             "被接管后旧实例续不上"
         )
         with pytest.raises(LeaseLost):
-            await runs.checkpoint(run_id, owner="A", last_seq=5)
+            await RunRecordRepository(s).checkpoint(run_id, owner="A", last_seq=5)
         await s.rollback()
     async with sm() as s:
-        runs = RunRepository(s)
-        assert await runs.renew_leases([run_id], owner="B", lease_s=lease) == {run_id}
-        assert await runs.release_lease(run_id, owner="B")
+        queue = RunQueue(s)
+        assert await queue.renew_leases([run_id], owner="B", lease_s=lease) == {run_id}
+        assert await queue.release_lease(run_id, owner="B")
         await s.commit()
     async with sm() as s:
-        assert await _claim_until(RunRepository(s), run_id, "C", lease) == "handoff"
+        assert await _claim_until(RunQueue(s), run_id, "C", lease) == "handoff"
         await s.commit()
     async with sm() as s:
         run = await RunRepository(s).get(run_id)
@@ -225,26 +227,26 @@ class RecordingModel(TurnModel):
 
 
 @pytest.fixture
-async def executors() -> AsyncIterator[list[InProcessExecutor]]:
-    made: list[InProcessExecutor] = []
+async def executors() -> AsyncIterator[list[RunWorker]]:
+    made: list[RunWorker] = []
     yield made
     for ex in made:
         await ex.shutdown()
 
 
 def _executor(
-    made: list[InProcessExecutor], name: str, builder: Any, **overrides: Any
-) -> InProcessExecutor:
+    made: list[RunWorker], name: str, builder: Any, **overrides: Any
+) -> RunWorker:
     settings = get_settings().model_copy(update=overrides) if overrides else get_settings()
-    ex = InProcessExecutor(get_sessionmaker(), settings, model_builder=builder)
-    ex._instance = name  # 同一个进程里扮演两个实例
+    # 同一个进程里扮演两个实例
+    ex = build_executor(get_sessionmaker(), settings, model_builder=builder, instance=name)
     made.append(ex)
     return ex
 
 
 @pytest.mark.usefixtures("clean_db")
 async def test_expired_lease_is_taken_over_from_the_last_checkpoint(
-    executors: list[InProcessExecutor],
+    executors: list[RunWorker],
 ) -> None:
     """A 跑完一个工具轮次（已落检查点）后在下一次模型调用中死掉 → B 接着跑，不重做工具。"""
     a = _executor(
@@ -288,7 +290,7 @@ async def test_expired_lease_is_taken_over_from_the_last_checkpoint(
 
 @pytest.mark.usefixtures("clean_db")
 async def test_takeover_marks_a_tool_that_was_running_as_unknown(
-    executors: list[InProcessExecutor],
+    executors: list[RunWorker],
 ) -> None:
     """死在工具执行中：tool_use 已落库、结果没有 → 接管者补「结果未知」，不让模型不知情地重放。"""
     a = _executor(
@@ -336,7 +338,7 @@ async def test_takeover_marks_a_tool_that_was_running_as_unknown(
 
 @pytest.mark.usefixtures("clean_db")
 async def test_drain_hands_the_run_to_another_instance(
-    executors: list[InProcessExecutor],
+    executors: list[RunWorker],
 ) -> None:
     """停机交接：等不到安全点就中止并清租约，别的实例立刻以 handoff 领走、跑完。"""
     a = _executor(
@@ -369,7 +371,7 @@ async def test_drain_hands_the_run_to_another_instance(
 
 @pytest.mark.usefixtures("clean_db")
 async def test_lost_lease_stops_local_execution_without_touching_the_run(
-    executors: list[InProcessExecutor],
+    executors: list[RunWorker],
 ) -> None:
     """续租发现租约已在别人手里 → 本地立即停，不落库、不放锁（假死复活不能双写）。"""
     a = _executor(
@@ -394,7 +396,7 @@ async def test_lost_lease_stops_local_execution_without_touching_the_run(
 # --------------------------------------------------------------------------- 工具
 
 
-def _client(executor: InProcessExecutor) -> httpx.AsyncClient:
+def _client(executor: RunWorker) -> httpx.AsyncClient:
     app = create_app()
     app.state.executor = executor
     return httpx.AsyncClient(
@@ -416,7 +418,7 @@ async def _start(client: httpx.AsyncClient) -> UUID:
     return UUID(res.json()["run_id"])
 
 
-def _kill(executor: InProcessExecutor, run_id: UUID) -> None:
+def _kill(executor: RunWorker, run_id: UUID) -> None:
     """实例死了：本地任务停掉，且不让它再碰库（被接管的语义）。"""
     slot = executor._slots[run_id]
     slot.lost = True
@@ -482,7 +484,7 @@ async def _bare_queued_run() -> UUID:
 
 
 async def _claim_until(
-    runs: RunRepository, run_id: UUID, owner: str, lease: float
+    runs: RunQueue, run_id: UUID, owner: str, lease: float
 ) -> str | bool | None:
     """领取直到领到 run_id（库里可能有别的测试残留的排队 run）。没领到它返回 False。"""
     while (got := await runs.claim_next(owner=owner, lease_s=lease)) is not None:

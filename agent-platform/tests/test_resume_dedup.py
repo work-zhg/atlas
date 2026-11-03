@@ -15,9 +15,10 @@ from typing import Any, ClassVar
 from uuid import UUID, uuid4
 
 import pytest
-from atlas_agent.executor import inprocess
-from atlas_agent.executor.inprocess import InProcessExecutor
+from atlas_agent.executor import segment
 from atlas_agent.executor.runner import Answer, EventFactory, _from_updates, _transcript_messages
+from atlas_agent.executor.scheduling import RunWorker
+from atlas_agent.executor.segment import SegmentLoader
 from langchain_core.messages import AIMessage, ToolMessage
 
 AP_1 = str(uuid4())
@@ -75,7 +76,7 @@ class _FakeApprovals:
 
 @pytest.fixture
 def approvals(monkeypatch: pytest.MonkeyPatch) -> type[_FakeApprovals]:
-    monkeypatch.setattr(inprocess, "ApprovalRepository", _FakeApprovals)
+    monkeypatch.setattr(segment, "ApprovalRepository", _FakeApprovals)
     _FakeApprovals.rows = {}
     return _FakeApprovals
 
@@ -83,8 +84,7 @@ def approvals(monkeypatch: pytest.MonkeyPatch) -> type[_FakeApprovals]:
 async def _resume_state(waiting_on: Any, history: list[Any]) -> tuple[dict, dict]:
     run = SimpleNamespace(run_uuid=uuid4(), waiting_on=waiting_on)
     # 只走审批分支，不碰 session / self 的其它部分
-    executor = InProcessExecutor.__new__(InProcessExecutor)
-    return await executor._resume_state(None, run, history)  # type: ignore[arg-type]
+    return await SegmentLoader().resume_state(None, run, history)  # type: ignore[arg-type]
 
 
 async def test_second_resume_drops_waits_that_already_have_a_result(approvals: Any) -> None:
@@ -126,7 +126,7 @@ async def test_only_settled_approvals_go_into_decisions(approvals: Any) -> None:
 
 
 async def test_old_array_shaped_waiting_on_is_ignored(approvals: Any) -> None:
-    """旧格式（数组）的遗留数据当成没有等待项 —— 不续跑它，也不让它炸掉 _prepare。"""
+    """旧格式（数组）的遗留数据当成没有等待项 —— 不续跑它，也不让它炸掉 SegmentLoader.load。"""
     assert await _resume_state([{"reason": "approval", "token": AP_1}], [_ai("c1")]) == ({}, {})
 
 
@@ -134,7 +134,7 @@ async def test_resubmit_keeps_strong_ref_to_new_task() -> None:
     """续跑时同一个 run_id 被再次领取：上一段任务结束不能把新任务的引用删掉。"""
     import asyncio
 
-    ex = InProcessExecutor.__new__(InProcessExecutor)
+    ex = RunWorker.__new__(RunWorker)
     ex._slots = {}
     # 续租任务已在跑（这里用一个永不完成的 future 占位，不让 _spawn 去起真的）
     ex._renewer = asyncio.get_running_loop().create_future()

@@ -25,7 +25,8 @@ import pytest
 from atlas_agent.config import get_settings
 from atlas_agent.db.models import Message, Run
 from atlas_agent.db.session import fetch_one, get_sessionmaker
-from atlas_agent.executor.inprocess import InProcessExecutor
+from atlas_agent.executor.compose import build_executor
+from atlas_agent.executor.scheduling import RunWorker
 from atlas_agent.main import create_app
 from httpx import ASGITransport
 from langchain_core.messages import AIMessageChunk
@@ -55,7 +56,7 @@ def make_app(parent: TurnModel, child: TurnModel):
         # 标题/摘要模型不在脚本里 —— 回落到子模型，它们的输出本测试不看。
         return models.get(model_spec.model, child)
 
-    app.state.executor = InProcessExecutor(
+    app.state.executor = build_executor(
         get_sessionmaker(), settings, model_builder=builder
     )
     return app
@@ -64,11 +65,11 @@ def make_app(parent: TurnModel, child: TurnModel):
 @pytest.fixture
 async def client_factory():
     clients: list[httpx.AsyncClient] = []
-    executors: list[InProcessExecutor] = []
+    executors: list[RunWorker] = []
 
     async def make(
         parent: TurnModel, child: TurnModel
-    ) -> tuple[httpx.AsyncClient, InProcessExecutor]:
+    ) -> tuple[httpx.AsyncClient, RunWorker]:
         app = make_app(parent, child)
         c = httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test", headers=AS_USER
@@ -579,7 +580,7 @@ async def test_an_approval_during_suspension_reaches_the_thread_stream(
     """
     from atlas_agent.domain.events import EventFactory, EventType
     from atlas_agent.redisx import make_redis
-    from atlas_agent.repositories.run import RunRepository
+    from atlas_agent.repositories.event_archive import EventArchive
     from atlas_agent.stream.relay import EventRelay, thread_stream_key
 
     _client, _executor, thread_id, run_id = await _suspend_a_run(client_factory)
@@ -603,7 +604,7 @@ async def test_an_approval_during_suspension_reaches_the_thread_stream(
     try:
         relay = EventRelay(redis, ttl_s=get_settings().run_events_ttl_s)
         async with get_sessionmaker()() as session:
-            floor = await RunRepository(session).thread_seq_floor(UUID(thread_id))
+            floor = await EventArchive(session).thread_seq_floor(UUID(thread_id))
         event = EventFactory(sub_run_id, _utcnow, base_depth=1).make(
             EventType.APPROVAL_REQUIRED,
             {"approval_id": str(uuid4()), "tool_name": "shell", "args": {}, "reason": "需要确认"},

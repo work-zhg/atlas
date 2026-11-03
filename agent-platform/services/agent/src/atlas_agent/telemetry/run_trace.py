@@ -82,7 +82,7 @@ def _text_of(blocks: Any) -> str:
 class RunTrace:
     """一次 run（的一段执行）的 span 树。用作 context manager。
 
-    用法（executor/inprocess.py::_execute）：
+    用法（executor/segment.py::SegmentExecution.run）：
 
         with RunTrace.start(prepared, run_id=run_id, parent_run_id=...) as rt:
             async for event in runtime.run_turn(...):

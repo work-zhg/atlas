@@ -21,7 +21,7 @@ import pytest
 import redis.asyncio as aioredis
 from atlas_agent.config import get_settings
 from atlas_agent.db.session import fetch_one, get_sessionmaker
-from atlas_agent.executor.inprocess import InProcessExecutor
+from atlas_agent.executor.compose import build_executor
 from atlas_agent.main import create_app
 from httpx import ASGITransport
 from langchain_core.messages import AIMessageChunk
@@ -44,7 +44,7 @@ APPROVE = {"decision": "approved", "approval_mode": "auto"}
 
 def make_app():
     app = create_app()
-    app.state.executor = InProcessExecutor(
+    app.state.executor = build_executor(
         get_sessionmaker(),
         get_settings(),
         model_builder=lambda *_a, **_k: TurnModel(
@@ -197,7 +197,7 @@ async def test_an_approval_survives_a_process_restart(client: httpx.AsyncClient)
     # 模拟重启：旧执行器的 task 全部作废，换一个新的
     old = client._transport.app.state.executor  # type: ignore[attr-defined]
     await old.shutdown()
-    fresh = InProcessExecutor(
+    fresh = build_executor(
         get_sessionmaker(),
         get_settings(),
         model_builder=lambda *_a, **_k: TurnModel(

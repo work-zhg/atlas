@@ -12,7 +12,7 @@ import httpx
 import pytest
 from atlas_agent.config import get_settings
 from atlas_agent.db.session import get_sessionmaker
-from atlas_agent.executor.inprocess import InProcessExecutor
+from atlas_agent.executor.compose import build_executor
 from atlas_agent.main import create_app
 from atlas_engine.kernel.middleware.ask_user import ASK_USER_QUESTION
 from httpx import ASGITransport
@@ -48,7 +48,7 @@ def make_app():
         ]
     )
     app = create_app()
-    app.state.executor = InProcessExecutor(
+    app.state.executor = build_executor(
         get_sessionmaker(), get_settings(), model_builder=lambda *_a, **_k: model
     )
     app.state.test_model = model

@@ -21,9 +21,9 @@ import pytest
 from atlas_agent.config import get_settings
 from atlas_agent.db.models import Message, Run, RunEvent, Thread
 from atlas_agent.db.session import fetch_one, get_sessionmaker
-from atlas_agent.executor.inprocess import InProcessExecutor
+from atlas_agent.executor.compose import build_executor
 from atlas_agent.main import create_app
-from atlas_agent.repositories.run import RunRepository
+from atlas_agent.repositories.event_archive import EventArchive
 from httpx import ASGITransport
 from langchain_core.messages import AIMessageChunk
 from sqlalchemy import select
@@ -56,7 +56,7 @@ def make_app(parent: TurnModel, child: TurnModel):
     def builder(model_spec, **_kw):
         return models[model_spec.model]
 
-    app.state.executor = InProcessExecutor(
+    app.state.executor = build_executor(
         get_sessionmaker(), allowing_judge(get_settings()), model_builder=builder
     )
     return app
@@ -755,7 +755,7 @@ async def test_subagent_approvals_land_on_the_thread_stream(client_factory) -> N
     try:
         relay = EventRelay(redis, ttl_s=get_settings().run_events_ttl_s)
         async with get_sessionmaker()() as session:
-            floor = await RunRepository(session).thread_seq_floor(UUID(thread_id))
+            floor = await EventArchive(session).thread_seq_floor(UUID(thread_id))
         event = EventFactory(sub_run_id, _utcnow, base_depth=1).make(
             EventType.APPROVAL_REQUIRED,
             {
@@ -767,7 +767,7 @@ async def test_subagent_approvals_land_on_the_thread_stream(client_factory) -> N
         )
         stamped = await relay.publish(event, thread_id=UUID(thread_id), floor=floor)
         async with get_sessionmaker()() as session:
-            await RunRepository(session).archive_events(
+            await EventArchive(session).archive_events(
                 [stamped], thread_id=UUID(thread_id)
             )
             await session.commit()
