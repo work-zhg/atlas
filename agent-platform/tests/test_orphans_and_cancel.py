@@ -23,6 +23,7 @@ class _Runs:
             thread_uuid=uuid4(),
             parent_run_uuid=None,
             status=status,
+            awaiting_user=False,
             error_kind=None,
             error_message=None,
             last_seq=0,
