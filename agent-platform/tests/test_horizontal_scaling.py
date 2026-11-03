@@ -19,9 +19,14 @@ from atlas_agent.config import get_settings
 from atlas_agent.db.models import Message, Run, RunEvent
 from atlas_agent.db.session import fetch_one, get_sessionmaker
 from atlas_agent.domain.events import EventFactory, EventType
-from atlas_agent.domain.messages import StoredMessage, Transcript, interrupted_results
+from atlas_agent.domain.messages import (
+    StoredMessage,
+    Transcript,
+    dangling_calls,
+    unknown_results,
+)
 from atlas_agent.executor.compose import build_executor
-from atlas_agent.executor.continuation import _discarded_chars
+from atlas_agent.executor.continuation import DanglingCallPolicy, _discarded_chars
 from atlas_agent.executor.scheduling import RunWorker
 from atlas_agent.main import create_app
 from atlas_agent.repositories.run import LeaseLost, RunRepository
@@ -105,7 +110,7 @@ def test_remaining_rows_without_checkpoints_equals_to_storage() -> None:
     assert t.remaining_rows() == Transcript(messages=list(t.messages)).to_storage()
 
 
-def test_interrupted_results_for_takeover() -> None:
+def test_dangling_calls_for_takeover() -> None:
     rows = [
         StoredMessage(role="user", kind="chat", content=[{"type": "text", "text": "q"}]),
         StoredMessage(
@@ -122,11 +127,20 @@ def test_interrupted_results_for_takeover() -> None:
             content=[{"type": "tool_result", "tool_use_id": "a", "content": "ok"}],
         ),
     ]
-    sealing = interrupted_results(rows)
-    assert sealing is not None
+    assert dangling_calls(rows) == [("b", "y")]
+    assert dangling_calls(rows[:1]) == [], "最后是用户的提问：没有悬空"
+    sealing = unknown_results(["b"])
     assert [b["tool_use_id"] for b in sealing.content] == ["b"]
     assert "未知" in sealing.content[0]["content"]
-    assert interrupted_results(rows[:1]) is None, "最后是用户的提问：没有悬空"
+
+
+def test_only_resumable_tools_are_replayed() -> None:
+    """execute 能用同一个调用接上（沙箱的执行账本）；其余工具记「结果未知」。"""
+    policy = DanglingCallPolicy()
+    assert policy.resolve("execute") == "replay"
+    assert [policy.resolve(n) for n in ("write_file", "write_todos", "mcp__x__y", "task")] == [
+        "unknown"
+    ] * 4
 
 
 def test_discarded_chars_counts_only_text_after_the_last_checkpointed_event() -> None:
@@ -334,6 +348,81 @@ async def test_takeover_marks_a_tool_that_was_running_as_unknown(
     ]
     assert len(tool_results) == 1
     assert "未知" in str(tool_results[0].content) and tool_results[0].status == "error"
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_takeover_replays_a_resumable_tool_with_the_same_call(
+    executors: list[RunWorker], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """死在工具执行中、工具声明了能接上：接管者用同一个 tool_call_id 重放，而不是补「结果未知」。
+
+    生产上能接上的是 execute（沙箱的执行账本按同一个调用接上原命令，见 test_sandbox_provider）；
+    这里把 write_todos 声明成能接上，只验证接管的这一侧：同一个调用被执行、结果落库、模型看到它。
+    """
+    import dataclasses
+
+    from atlas_agent.domain import tool_registry
+
+    monkeypatch.setattr(
+        tool_registry,
+        "BUILTIN_TOOLS",
+        tuple(
+            dataclasses.replace(t, resumable=True) if t.name == "write_todos" else t
+            for t in tool_registry.BUILTIN_TOOLS
+        ),
+    )
+    a = _executor(
+        executors, "instance-a", lambda *_a, **_k: HangingModel(hang_from=1, scripts=[[]])
+    )
+    async with _client(a) as client:
+        run_id = await _start(client)
+        await asyncio.sleep(0.3)
+        _kill(a, run_id)
+        async with get_sessionmaker()() as s:
+            run = await RunRepository(s).get(run_id)
+            assert run is not None
+            await ThreadRepository(s).add_messages(
+                thread_id=run.thread_uuid,
+                messages=[
+                    StoredMessage(
+                        role="assistant",
+                        kind="chat",
+                        content=[
+                            {
+                                "type": "tool_use",
+                                "id": "c9",
+                                "name": "write_todos",
+                                "input": {"todos": [{"content": "接着做", "status": "pending"}]},
+                            }
+                        ],
+                    )
+                ],
+                run_id=run_id,
+            )
+            await s.commit()
+        await _expire(run_id)
+
+        SEEN.clear()
+        b = _executor(
+            executors,
+            "instance-b",
+            lambda *_a, **_k: RecordingModel(scripts=[[AIMessageChunk(content="继续")]]),
+        )
+        await b.claim_available()
+        await _until(lambda: _run(run_id), lambda r: r.status == "succeeded")
+
+    results = [m for m in SEEN[0] if isinstance(m, ToolMessage) and m.tool_call_id == "c9"]
+    assert len(results) == 1, results
+    assert "未知" not in str(results[0].content) and "接着做" in str(results[0].content)
+    rows = await _messages_of(run_id)
+    stored = [
+        b
+        for r in rows
+        if r.kind == "tool_result"
+        for b in r.content
+        if b.get("tool_use_id") == "c9"
+    ]
+    assert len(stored) == 1 and not stored[0].get("is_error"), stored
 
 
 @pytest.mark.usefixtures("clean_db")

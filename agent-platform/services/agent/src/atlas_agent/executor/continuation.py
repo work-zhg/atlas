@@ -4,7 +4,8 @@
 
     续跑    挂起的 run 等的事都有结果了，CAS 放回队列并唤醒。入口有三个（子 run 结束时、
             自己挂起落库后、定时补扫），判据只有一套（waits_are_settled）
-    接管    领到交接或租约过期的 run，跑之前收拾上一个实例留下的现场（recover）
+    接管    领到交接或租约过期的 run，跑之前收拾上一个实例留下的现场（recover）；
+            悬空的工具调用按 DanglingCallPolicy：可接续的重放，其余记「结果未知」
     取消    挂起中被取消的 run 没有进程，由这里落终态、放会话锁（settle_cancelled）
 
 它不领取 run（调度与租约管），也不跑一段（一段的执行管）；放回队列之后由谁领走，
@@ -16,14 +17,18 @@ from __future__ import annotations
 import contextlib
 import logging
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from typing import Literal
 from uuid import UUID
 
 import redis.asyncio as aioredis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from atlas_agent.domain.events import EventFactory, EventType, TraceEvent
-from atlas_agent.domain.messages import interrupted_results
+from atlas_agent.domain.messages import dangling_calls, unknown_results
+from atlas_agent.domain.tool_registry import resumable
+from atlas_agent.executor.segment_data import Segment
 
 from ..approval import ApprovalService
 from ..config import Settings
@@ -62,6 +67,43 @@ def _discarded_chars(events: list[TraceEvent], depth: int) -> int:
     return chars
 
 
+class DanglingCallPolicy:
+    """检查点里有 tool_use、没有结果的调用怎么办（code-executor-continuation.html）。
+
+    工具声明了可接续的（execute：沙箱的执行账本能按同一个调用接上还在跑的命令）用同一个
+    tool_call_id 重放；其余的写一条「结果未知」交给模型判断，不盲目重放副作用。
+    能不能接上是工具的属性，在工具注册表里声明（ToolDef.resumable）。
+    """
+
+    def __init__(self, is_resumable: Callable[[str], bool] = resumable) -> None:
+        self._resumable = is_resumable
+
+    def resolve(self, tool_name: str) -> Literal["replay", "unknown"]:
+        return "replay" if self._resumable(tool_name) else "unknown"
+
+
+@dataclass(frozen=True)
+class Recovery:
+    """接管时收拾现场的结果：发给前端的 run.resumed，和要用同一个调用重放的悬空调用。"""
+
+    event: TraceEvent
+    replays: tuple[str, ...] = ()
+
+    def apply(self, segment: Segment) -> Segment:
+        """把重放交给图：登记成在等、结果已到（reason=replay），图入口不会把它们补成「被取消」，
+        模型调用前直接去 tools 用同一个调用执行（contracts/suspension.py）。
+
+        ★ 本来就在等的（比如审批已批、执行到一半）不改：续跑照常执行它，效果一样。
+        """
+        waits = dict(segment.waiting_on)
+        decisions = dict(segment.decisions)
+        for call_id in self.replays:
+            if call_id not in waits:
+                waits[call_id] = {"reason": "replay", "token": call_id}
+                decisions[call_id] = {"status": "replay"}
+        return replace(segment, start_seq=self.event.seq, waiting_on=waits, decisions=decisions)
+
+
 class Continuation:
     """一段结束之后怎么接着跑：续跑、接管时收拾现场、挂起中取消的收尾。"""
 
@@ -78,6 +120,7 @@ class Continuation:
         #: 租约的 owner：接管时收拾现场的第一条写是租约围栏
         self._instance = instance
         self._requeue = requeue
+        self._dangling = DanglingCallPolicy()
 
     def _redis(self) -> aioredis.Redis:
         return make_redis(self._settings)
@@ -124,6 +167,7 @@ class Continuation:
 
             subagent    子 run 进终态
             approval    approval 行被决策（approved / rejected / expired）
+            replay      接管时要用同一个调用重放的悬空调用：不等任何东西
 
           用 SubAgent 那套去判审批的话，barrier 会**立刻满足**（审批挂起时没有子
           run），于是续跑 → 又挂起 → 再续跑，死循环。这是 run.waiting_on
@@ -150,6 +194,8 @@ class Continuation:
             elif reason == "subagent":
                 if await queries.has_unfinished_children(run.run_uuid):
                     return False
+            elif reason == "replay":
+                continue  # 接管时要重放的调用：不等任何东西
             else:
                 # 不认识的 reason —— 不敢续跑（可能永远等不到），也不敢判死。
                 # 记一条日志让它被发现，而不是静默卡住。
@@ -253,16 +299,17 @@ class Continuation:
         thread: Thread,
         relay: EventRelay,
         takeover: str,
-    ) -> TraceEvent:
+    ) -> Recovery:
         """接管一个中途换手的 run（横向扩展设计 §5）：把上一个实例留下的现场收拾好。
 
             补归档    检查点之后发布到 Redis、还没归档的事件（流里有、库里没有的序号）
             续序号    run 内 seq 从上一个实例实际发到的地方接着数，不重号
-            补结果    检查点里有 tool_use、没有结果的调用 → 「结果未知」（不盲目重放副作用）
+            悬空调用  检查点里有 tool_use、没有结果的调用 → DanglingCallPolicy：可接续的
+                      交给这一段用同一个调用重放，其余补「结果未知」（不盲目重放副作用）
             丢正文    最后一次模型调用已流出、没落库的正文字数 → 前端据此丢掉（会重做）
 
-        返回 run.resumed。与检查点同一个事务里做，第一条写是围栏：租约若已不在本实例
-        就整个回滚。
+        返回 run.resumed 和要重放的调用。与检查点同一个事务里做，第一条写是围栏：租约若已
+        不在本实例就整个回滚。
         """
         archive = EventArchive(session)
         stream_thread_id = thread.stream_thread_id
@@ -280,13 +327,21 @@ class Continuation:
         rows = await RunRepository(session).history(
             thread.thread_uuid, after=context.summary_upto if context is not None else None
         )
-        if (sealing := interrupted_results(rows)) is not None:
+        replays: list[str] = []
+        unknown: list[str] = []
+        for call_id, name in dangling_calls(rows):
+            (replays if self._dangling.resolve(name) == "replay" else unknown).append(call_id)
+        if unknown:
             await ThreadRepository(session).add_messages(
-                thread_id=thread.thread_uuid, messages=[sealing], run_id=run.run_uuid
+                thread_id=thread.thread_uuid,
+                messages=[unknown_results(unknown)],
+                run_id=run.run_uuid,
             )
-            logger.warning("run %s 接管：%d 个工具调用结果未知", run.run_uuid, len(sealing.content))
+            logger.warning("run %s 接管：%d 个工具调用结果未知", run.run_uuid, len(unknown))
+        if replays:
+            logger.info("run %s 接管：%d 个工具调用用同一个调用重放", run.run_uuid, len(replays))
         base_depth = run.depth
-        return EventFactory(run.run_uuid, _utcnow, start_seq=top, base_depth=base_depth).make(
+        event = EventFactory(run.run_uuid, _utcnow, start_seq=top, base_depth=base_depth).make(
             EventType.RUN_RESUMED,
             {
                 "reason": takeover,
@@ -294,3 +349,4 @@ class Continuation:
                 "takeovers": run.takeovers,
             },
         )
+        return Recovery(event=event, replays=tuple(replays))

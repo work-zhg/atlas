@@ -57,7 +57,7 @@ from ..schemas.agent import AgentSpecIn
 from ..services.subagent import subagent_result
 from ..stream.relay import EventRelay
 from ..telemetry.run_trace import RunTrace
-from .continuation import Continuation
+from .continuation import Continuation, Recovery
 from .runtime import AgentRuntime, NativeRuntime, select_runtime
 from .segment_data import Segment
 
@@ -281,6 +281,9 @@ class SegmentLoader:
                 outcome = await approvals.result(token)
                 if outcome["status"] != "pending":
                     decisions[token] = outcome
+            elif wait.get("reason") == "replay":
+                # 接管时要重放的调用（Recovery.apply 登记的）：结果就是「用同一个调用再执行一次」
+                decisions[token] = {"status": "replay"}
             elif wait.get("reason") == "subagent":
                 try:
                     decisions[token] = await subagent_result(session, UUID(token))
@@ -374,16 +377,17 @@ class SegmentExecution:
                 # Redis 的序号 key 丢失时的恢复水位。每段查一次，不是每事件。
                 seq_floor = await EventArchive(session).thread_seq_floor(stream_thread_id)
 
-                resumed: TraceEvent | None = None
+                recovery: Recovery | None = None
                 if takeover is not None:
-                    resumed = await self._continuation.recover(
+                    recovery = await self._continuation.recover(
                         session, run, thread, relay, takeover
                     )
                     # recover 的 UPDATE 让 ORM 行过期了；异步会话不能懒加载，显式刷新
                     await session.refresh(run)
                 segment = await self._loader.load(session, run, thread, version)
-                if resumed is not None:
-                    segment = replace(segment, start_seq=resumed.seq, takeover=takeover)
+                resumed = recovery.event if recovery is not None else None
+                if recovery is not None:
+                    segment = replace(recovery.apply(segment), takeover=takeover)
                 await records.mark_running(run_id)
                 await session.commit()
 

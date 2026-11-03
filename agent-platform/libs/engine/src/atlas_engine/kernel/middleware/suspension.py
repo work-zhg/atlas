@@ -11,6 +11,8 @@
 
 这个中间件因此不需要知道 SubAgent 和审批的存在 —— 它们是 waiting_on 的两个生产者，
 各自在拿到结果时把自己那一项删掉（PermissionMiddleware / SubAgentMiddleware）。
+第三种 replay 由 server 在接管时登记（工具声明了能用同一个调用接上），本中间件自己执行、
+自己删掉。
 
 ★ 为什么落在 `before_model` 而不是「工具执行之后」。middleware 没有 after_tools
   钩子。工具节点的出边指向第一个 before_model 节点 —— 那里正是「整批工具执行
@@ -148,15 +150,26 @@ class SuspensionMiddleware(AgentMiddleware):
     #   并行的一批里只有一个在等时，已完成的兄弟调用就会重跑：副作用两次，还多一份
     #   tool_result，下一次模型调用被拒（each tool_use must have a single result）。
     #   这里拦下「本批已有结果」的调用，原样返回那条结果 —— 消息按 id 去重，不会重复。
+    #
+    # ★ replay（接管时要用同一个调用重放的）：照常往里执行 —— 审批、上下文、工具都经过，
+    #   审批 id 由 (run, tool_call_id) 派生，已经批过的不会再问一次 —— 执行完删掉这一项。
     def wrap_tool_call(self, request: Any, handler: Callable[[Any], Any]) -> Any:
         done = _completed_result(request)
-        return done if done is not None else handler(request)
+        if done is not None:
+            return done
+        if (call_id := _replay_of(request)) is not None:
+            return release_wait(handler(request), call_id)
+        return handler(request)
 
     async def awrap_tool_call(
         self, request: Any, handler: Callable[[Any], Awaitable[Any]]
     ) -> Any:
         done = _completed_result(request)
-        return done if done is not None else await handler(request)
+        if done is not None:
+            return done
+        if (call_id := _replay_of(request)) is not None:
+            return release_wait(await handler(request), call_id)
+        return await handler(request)
 
 
 def release_wait(result: ToolMessage | Command[Any], tool_call_id: str) -> Command[Any]:
@@ -182,6 +195,17 @@ def release_wait(result: ToolMessage | Command[Any], tool_call_id: str) -> Comma
     else:  # Command.update 也可以是 (key, value) 序列；按顺序过 reducer，后写的覆盖先写的
         merged = [("waiting_on", release), *(update or ())]
     return Command(graph=result.graph, update=merged, resume=result.resume, goto=result.goto)
+
+
+def _replay_of(request: Any) -> str | None:
+    """这个调用登记成了 replay（接管时用同一个调用重放）→ 它的 tool_call_id；否则 None。"""
+    state = getattr(request, "state", None)
+    waits = state.get("waiting_on") if isinstance(state, dict) else None
+    call_id = (getattr(request, "tool_call", None) or {}).get("id")
+    if not waits or not call_id:
+        return None
+    wait = waits.get(call_id) or {}
+    return str(call_id) if wait.get("reason") == "replay" else None
 
 
 def _completed_result(request: Any) -> ToolMessage | None:

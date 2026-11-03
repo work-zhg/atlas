@@ -108,6 +108,8 @@ class ToolDef:
                  按模型侧名声明：filesystem 展开后读写各不相同
     irreversible:不可逆的模型侧工具（delete）。自动模式下不直接放行
     reminder:    每次模型调用时的提醒来源（工厂）。内容由工具给，上下文管理负责追加
+    resumable:   接管时能否用同一个调用接上（检查点里有 tool_use、没有结果的调用）。
+                 能：续跑用同一个 tool_call_id 重放；不能：补「结果未知」交给模型判断
     """
 
     name: str
@@ -121,6 +123,7 @@ class ToolDef:
     effects: Mapping[str, ToolEffect] = field(default_factory=dict)
     irreversible: frozenset[str] = frozenset()
     reminder: Callable[[], Any] | None = None
+    resumable: bool = False
 
     def model_names(self) -> tuple[str, ...]:
         """模型侧工具名；未显式声明时就是 name 本身。"""
@@ -201,6 +204,9 @@ BUILTIN_TOOLS: tuple[ToolDef, ...] = (
         # 模型看到的是 execute（D4）
         model_tool_names=("execute",),
         effects={"execute": ToolEffect.EXECUTE},
+        # ★ 沙箱按 (run, tool_call) 记了执行账本（Redis）：同一个调用重放时接上还在跑的命令、
+        #   或读回已经跑完的输出，不会再跑一遍
+        resumable=True,
         display_name="Shell",
         description="在会话专属的沙箱内执行命令（模型侧工具名为 execute）",
         # K8s Pod 沙箱（doc/native-sandbox-design.html）。可用性还取决于服务端是否开启
@@ -246,6 +252,11 @@ def middleware_for(tool_names: frozenset[str] | set[str]) -> list[Any]:
         if tool.name in tool_names and tool.middleware is not None:
             out.append(tool.middleware())
     return out
+
+
+def resumable(tool_name: str) -> bool:
+    """接管时这个工具（模型侧名）能不能用同一个调用接上。外部工具（MCP 等）一律不能。"""
+    return any(tool_name in t.model_names() for t in BUILTIN_TOOLS if t.resumable)
 
 
 def reminders_for(tool_names: frozenset[str] | set[str]) -> list[Any]:

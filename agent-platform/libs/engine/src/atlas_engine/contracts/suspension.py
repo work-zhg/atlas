@@ -19,6 +19,7 @@
                    approval    ApprovalOutcome：{status, mode?, feedback?}
                                （contracts/permission.py）
                    subagent    子 run 的结论文本
+                   replay      {"status": "replay"}：用同一个调用再执行一次
                  ★ 只放**已经有结果**的。放了 pending 的话 before_model 放行、
                    审批中间件又登记一次，两边来回跳到 GraphRecursionError
 
@@ -26,6 +27,11 @@
   tool_result）只约束交给模型的那一刻：挂起时图在 before_model 就跳出、不调
   模型；续跑时先执行工具再调模型。悬空有两种含义，靠 waiting_on 区分 ——
   在里面的是「在等」，不在的是「被放弃」（补 cancelled / 中断）。
+
+★ replay 不是等外部：run 被别的实例接管时，检查点里有 tool_use、没有结果的调用，工具又声明了
+  能接上（execute：沙箱按 (run, tool_call) 记了执行账本），server 就把它登记成 replay、结果
+  已到 —— 图入口不补 cancelled，模型调用前直接去 tools，用同一个 tool_call_id 再执行一次
+  （SuspensionMiddleware 执行完删掉这一项）。
 
 ★ 本模块是 contracts 层，不依赖 langchain：state schema 本身（带 reducer 与
   可见性标注）在 kernel/middleware/suspension.py::SuspensionState。
@@ -42,7 +48,7 @@ __all__ = [
     "merge_waits",
 ]
 
-SuspensionReason = Literal["subagent", "approval"]
+SuspensionReason = Literal["subagent", "approval", "replay"]
 
 
 class Wait(TypedDict):
@@ -54,7 +60,8 @@ class Wait(TypedDict):
     """
 
     reason: SuspensionReason
-    #: subagent → 子 run 的 id；approval → approval 的 id。也是 decisions 的 key。
+    #: subagent → 子 run 的 id；approval → approval 的 id；replay → tool_call_id。
+    #: 也是 decisions 的 key。
     token: str
 
 

@@ -54,7 +54,7 @@ def _provisioner(fake: FakeOpenSandbox, redis: Any, **settings: Any) -> SandboxP
 
 
 def _sandbox(fake: FakeOpenSandbox, redis: Any, ws: str, **kw: Any) -> PodSandbox:
-    """run_id 随工作区唯一：命令映射是进程级的，用例之间不能共用 {run}:{tool_call}。"""
+    """run_id 随工作区唯一：执行账本在共用的测试 Redis 里，用例之间不能共用 {run}:{tool_call}。"""
     kw.setdefault("poll_min_s", 0.02)
     kw.setdefault("poll_max_s", 0.05)
     return PodSandbox(
@@ -162,6 +162,7 @@ async def test_replayed_tool_call_is_not_run_again(
 async def test_replay_while_running_attaches_to_the_same_command(
     fake: FakeOpenSandbox, redis: Any, ws: str
 ) -> None:
+    """另一个实例（新的 PodSandbox、同一个 Redis）重放同一个调用：经执行账本接上，不重跑。"""
     sbx = _sandbox(fake, redis, ws)
     cmd = "echo x >> marker; sleep 0.4; echo done"
     first = asyncio.create_task(sbx.aexecute(cmd, exec_id="call-1"))
@@ -279,7 +280,9 @@ async def test_cancel_interrupts_the_command(fake: FakeOpenSandbox, redis: Any, 
     with pytest.raises(asyncio.CancelledError):
         await task
     await _until(lambda: cmd.proc.poll() is not None)
-    assert f"run-{ws}:c" not in sandbox_mod._EXECS  # 中断过的调用再来一次就是新的执行
+    # ★ 账本里还记着它：重放同一个调用（比如接管的实例）读到的是中断时的输出，不再跑一遍
+    again = await sbx.aexecute("sleep 30", exec_id="c")
+    assert again.exit_code != 0 and len(fake.created[0].commands) == 1
 
 
 async def test_cancel_during_submit_still_interrupts(
@@ -299,7 +302,8 @@ async def test_cancel_during_submit_still_interrupts(
     with pytest.raises(asyncio.CancelledError):
         await task
     await _until(lambda: cmd.proc.poll() is not None)
-    assert f"run-{ws}:c" not in sandbox_mod._EXECS
+    # 提交途中取消：账本里没有它（拿到 id 时调用已经取消），重放就是新的执行
+    assert await sandbox_mod.ExecutionLedger(redis).get(f"run-{ws}", "c") is None
 
 
 # ──────────────────────────────────────────────── 装配

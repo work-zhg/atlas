@@ -114,9 +114,9 @@ export interface RunCancelledData {
 }
 
 export interface SuspensionWait {
-  /** 等 SubAgent 的结论，还是等人点头。 */
-  reason: "subagent" | "approval";
-  /** subagent → 子 run 的 id；approval → approval 的 id。 */
+  /** 等 SubAgent 的结论，还是等人点头；replay 是接管时要用同一个调用重放的（不等任何东西）。 */
+  reason: "subagent" | "approval" | "replay";
+  /** subagent → 子 run 的 id；approval → approval 的 id；replay → tool_call_id。 */
   token: string;
 }
 

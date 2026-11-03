@@ -35,9 +35,10 @@ __all__ = [
     "KIND_TOOL_RESULT",
     "StoredMessage",
     "Transcript",
+    "dangling_calls",
     "from_storage",
-    "interrupted_results",
     "to_storage",
+    "unknown_results",
 ]
 
 #: 对话轮：用户的提问、助手的回答（后者可携带 tool_use blocks）。
@@ -408,17 +409,17 @@ class Transcript:
         return bool(self.messages)
 
 
-def interrupted_results(rows: Sequence[_StoredLike]) -> StoredMessage | None:
-    """接管时：库里最后一条带 tool_use 的回答，有哪些调用没有结果 → 补一条「中断」结果。
+def dangling_calls(rows: Sequence[_StoredLike]) -> list[tuple[str, str]]:
+    """接管时：库里最后一条带 tool_use 的回答，有哪些调用没有结果 → [(tool_call_id, 工具名)]。
 
-    ★ 那些调用的 tool_use 已在检查点里落库（意图记录），结果却没有 —— 进程死在工具
-      执行中。是否执行过、执行到哪一步都不知道，如实告诉模型「结果未知」，让它先检查
-      状态再决定是否重试（§5.1）。不补的话 SuspensionMiddleware 在图入口会补成「被取消」，
-      模型会以为没执行过而直接重放有副作用的调用。
+    ★ 那些调用的 tool_use 已在检查点里落库（意图记录），结果却没有 —— 进程死在工具执行中。
+      怎么处理由续跑领域的 DanglingCallPolicy 决定：工具声明了可接续的用同一个调用重放，
+      其余的补「结果未知」（unknown_results）。都不处理的话 SuspensionMiddleware 在图入口
+      会补成「被取消」，模型会以为没执行过而直接重放有副作用的调用。
 
-    返回 None = 不需要补（没有悬空，或最后一条回答之后已经有新的对话）。
+    空列表 = 没有悬空（或最后一条回答之后已经有新的对话）。
     """
-    wanted: list[str] = []
+    wanted: list[tuple[str, str]] = []
     answered: set[str] = set()
     for row in rows:
         blocks = row.content if isinstance(row.content, list) else []
@@ -426,15 +427,22 @@ def interrupted_results(rows: Sequence[_StoredLike]) -> StoredMessage | None:
         if kind == KIND_TOOL_RESULT:
             answered.update(str(b.get("tool_use_id") or "") for b in blocks if isinstance(b, dict))
         elif row.role == "assistant":
-            wanted = [str(b.get("id") or "") for b in blocks if _is_type(b, "tool_use")]
+            wanted = [
+                (str(b.get("id") or ""), str(b.get("name") or ""))
+                for b in blocks
+                if _is_type(b, "tool_use")
+            ]
             answered = set()
         else:
             wanted, answered = [], set()  # 用户的新提问之后，前面的悬空不归这一轮管
-    missing = [call_id for call_id in wanted if call_id not in answered]
-    if not missing:
-        return None
+    return [(call_id, name) for call_id, name in wanted if call_id not in answered]
+
+
+def unknown_results(call_ids: Sequence[str]) -> StoredMessage:
+    """给接管时不能接续的悬空调用补一条「结果未知」：是否执行过、执行到哪一步都不知道，
+    如实告诉模型，让它先检查状态再决定是否重试（§5.1）。"""
     return StoredMessage(
         role="user",
         kind=KIND_TOOL_RESULT,
-        content=[_interrupted_block(call_id, _TAKEOVER_RESULT) for call_id in missing],
+        content=[_interrupted_block(call_id, _TAKEOVER_RESULT) for call_id in call_ids],
     )

@@ -5,9 +5,10 @@ doc/sandbox-opensandbox-design.html §8。
     首次 execute   经 SandboxProvisioner 确保工作区的沙箱在跑
                    （按需建；子智能体与父会话共用，键是工作区）
     提交           execd 后台模式 POST /command → init 事件里的命令 id；
-                   进程内记 {run}:{tool_call} → 命令 id
+                   执行账本（Redis）记 (run, tool_call) → (沙箱 id, 命令 id)
     重放           同一个调用再来一次 → 用记下的命令 id 从游标 0 重读
-                   （跑完了就直接拿到原结果），不重跑
+                   （跑完了就直接拿到原结果），不重跑。账本在 Redis 里，接管的实例重放
+                   同一个调用也接得上（code-sandbox-exec.html · ExecutionLedger）
     跟随           轮询 GET logs?cursor= 与 GET status，直到退出；不设总时长上限
     断线 / 换 IP   重新 ensure，用同一个命令 id、同一个游标接上 —— 命令属于 execd，不属于连接
     沙箱换了       新沙箱的 execd 不认识这个 id → 工具错误「执行期间沙箱重启」，不重跑
@@ -16,16 +17,17 @@ doc/sandbox-opensandbox-design.html §8。
     沙箱 id 变了   在工具结果前提示「环境已重建」
 
 ★ 失败一律抛 SandboxUnavailable：中间件把它转成工具错误回给模型，不让整轮失败。
-★ 命令映射在进程内存里：跨进程接管时按横向扩展设计补「结果未知」（§9.4），原命令在沙箱里继续跑完。
+★ 被取消的调用不从账本里划掉：命令已经中断，再重放同一个调用读到的是它中断时的输出，不会
+  再跑一遍。取消只发生在 run 结束（用户取消）或租约丢了（别的实例接管后会重放这个调用）。
 ★ 写穿式挂载下，命令退出时它写的文件已经落盘 —— 不再需要旧方案的「执行后等写回」（§10）。
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
-from collections import OrderedDict
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -45,9 +47,17 @@ from .opensandbox import (
 )
 
 if TYPE_CHECKING:
+    import redis.asyncio as aioredis
+
     from .opensandbox import SandboxEndpoint, SandboxProvisioner
 
-__all__ = ["PodSandbox", "SandboxNotRunning", "SandboxProfileDenied", "exec_in_running"]
+__all__ = [
+    "ExecutionLedger",
+    "PodSandbox",
+    "SandboxNotRunning",
+    "SandboxProfileDenied",
+    "exec_in_running",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -57,12 +67,6 @@ _RECONNECT_ATTEMPTS = 15
 #: 卡死候选期间多久取一次容器 CPU
 _CPU_SAMPLE_S = 15.0
 
-#: 进程内存：{run}:{tool_call} → (沙箱 id, 命令 id)。同一个调用被重放时接上它，而不是再跑一遍。
-#: 只记 id 不记输出（输出在 execd 里保留 24 小时），所以可以多记一些
-_EXECS: OrderedDict[str, tuple[str, str]] = OrderedDict()
-_EXECS_MAX = 4096
-#: 每个工作区上次见到的沙箱。变了 = 环境重建过，要告诉模型
-_SEEN: dict[str, str] = {}
 #: 取消时发出的中断请求（持有引用，防止任务被回收）
 _BACKGROUND: set[asyncio.Task[Any]] = set()
 
@@ -100,6 +104,40 @@ class _Output:
         return f"{head}\n…（省略中间 {self.total - kept} 字节）…\n{tail}", True
 
 
+class ExecutionLedger:
+    """执行账本（code-sandbox-exec.html）：(run, tool_call) → (沙箱 id, 命令 id)。
+
+    存在 Redis，24 小时过期（和 execd 保留输出的时长一致）：同一个调用被重放时接上原来的命令，
+    而不是再跑一遍 —— 接管的实例重放也接得上（进程内存里的映射做不到这一点）。
+    另记每个工作区上次执行用的沙箱，用来提示环境已重建。
+    """
+
+    _TTL_S = 24 * 3600
+
+    def __init__(self, redis: aioredis.Redis) -> None:
+        self._r = redis
+
+    @staticmethod
+    def _key(run: str, call: str) -> str:
+        return f"atlas:sbx:exec:{run}:{call}"
+
+    async def get(self, run: str, call: str) -> tuple[str, str] | None:
+        raw = await self._r.get(self._key(run, call))
+        if not raw:
+            return None
+        sandbox_id, cmd_id = json.loads(raw)
+        return str(sandbox_id), str(cmd_id)
+
+    async def put(self, run: str, call: str, sandbox_id: str, cmd_id: str) -> None:
+        await self._r.set(self._key(run, call), json.dumps([sandbox_id, cmd_id]), ex=self._TTL_S)
+
+    async def swap_seen(self, ws: str, sandbox_id: str) -> str | None:
+        """记下工作区这次用的沙箱，返回上一次用的（没有就 None）。"""
+        previous = await self._r.getset(f"atlas:sbx:seen:{ws}", sandbox_id)
+        await self._r.expire(f"atlas:sbx:seen:{ws}", self._TTL_S)
+        return previous.decode() if isinstance(previous, bytes) else previous
+
+
 @dataclass
 class _Exec:
     sandbox_id: str
@@ -127,8 +165,10 @@ class PodSandbox:
         idle_s: float | None = None,
         stall_cpu_pct: float = 2.0,
         transport: httpx.AsyncBaseTransport | None = None,
+        ledger: ExecutionLedger | None = None,
     ) -> None:
         self._p = provisioner
+        self._ledger_given = ledger
         self._ws, self._user, self._run, self._image = workspace_thread_id, user_id, run_id, image
         self._profile = profile
         self._poll_min, self._poll_max = poll_min_s, poll_max_s
@@ -141,6 +181,13 @@ class PodSandbox:
     def id(self) -> str:
         return f"sbx:{self._ws}"
 
+    @property
+    def _ledger(self) -> ExecutionLedger:
+        """执行账本默认记在供给的 Redis 里（用到时才取：构造时不碰供给）。"""
+        if self._ledger_given is None:
+            self._ledger_given = ExecutionLedger(self._p.redis)
+        return self._ledger_given
+
     def execute(self, command: str, *, timeout: int | None = None, cwd: str | None = None) -> Any:
         raise NotImplementedError("沙箱只支持异步调用（aexecute）")
 
@@ -152,21 +199,18 @@ class PodSandbox:
         cwd: str | None = None,
         exec_id: str | None = None,
     ) -> ExecuteResponse:
-        key = f"{self._run}:{exec_id}" if exec_id else ""
         with tracer().start_as_current_span("sandbox.exec") as span:
             span.set_attribute("atlas.sandbox.workspace", self._ws)
             started = time.monotonic()
             ep = await self._ensure()
-            notice = self._notice(ep)
-            submitted = _EXECS.get(key) if key else None
+            notice = await self._notice(ep)
+            submitted = await self._ledger.get(self._run, exec_id) if exec_id else None
             if submitted is None:
                 ex = await self._submit(ep, command, cwd or WORKDIR, timeout)
-                if key:
-                    _EXECS[key] = (ex.sandbox_id, ex.cmd_id)
-                    while len(_EXECS) > _EXECS_MAX:
-                        _EXECS.popitem(last=False)
+                if exec_id:
+                    await self._ledger.put(self._run, exec_id, ex.sandbox_id, ex.cmd_id)
             else:
-                logger.info("%s 已提交过（%s）→ 接上，不重跑", key, submitted[1])
+                logger.info("%s:%s 已提交过（%s）→ 接上，不重跑", self._run, exec_id, submitted[1])
                 ex = _Exec(*submitted, _Output(self._limit))
             span.set_attribute("atlas.sandbox.id", ex.sandbox_id)
             span.set_attribute("atlas.sandbox.cmd_id", ex.cmd_id)
@@ -181,8 +225,8 @@ class PodSandbox:
                     "/workspace 里已经写入的文件仍在"
                 ) from exc
             except asyncio.CancelledError:
+                # ★ 不从账本里划掉：重放同一个调用读到的是它中断时的输出，不会再跑一遍
                 self._interrupt_later(ep, ex.cmd_id)
-                _EXECS.pop(key, None)  # 已经中断：再来一次就是新的执行
                 raise
             finally:
                 await self._p.routes.finished(self._ws, ex.sandbox_id, ex.cmd_id)
@@ -207,9 +251,8 @@ class PodSandbox:
             except (QuotaExceeded, ImageDenied, LifecycleError) as exc:
                 raise SandboxUnavailable(f"沙箱启动失败：{exc}") from exc
 
-    def _notice(self, ep: SandboxEndpoint) -> str:
-        previous = _SEEN.get(self._ws)
-        _SEEN[self._ws] = ep.sandbox_id
+    async def _notice(self, ep: SandboxEndpoint) -> str:
+        previous = await self._ledger.swap_seen(self._ws, ep.sandbox_id)
         if previous and previous != ep.sandbox_id:
             return (
                 "[沙箱环境已重建：/workspace 内的文件仍在；安装的软件包、HOME 与 /repos 里的内容、"

@@ -206,6 +206,11 @@ class Provisioner:
         self._token_key = f"atlas:{self.kind}:token:"
         self._lock_key = f"atlas:{self.kind}:ensure:"
 
+    @property
+    def redis(self) -> aioredis.Redis:
+        """路由表、令牌、锁所在的 Redis。命令执行的账本也记在这里。"""
+        return self._r
+
     # ------------------------------------------------------------------ 子类钩子
 
     async def _ready(self, ep: SandboxEndpoint) -> None:
