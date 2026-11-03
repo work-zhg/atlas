@@ -188,7 +188,7 @@ def test_rewrite_in_the_middle_of_a_run_does_not_repeat_started() -> None:
     first = _from_updates({"model": {"messages": [call]}}, events, 0, Answer(), announced=announced)
     rewritten = [RemoveMessage(id=REMOVE_ALL_MESSAGES), AIMessage(content="摘要"), call, result]
     second = _from_updates(
-        {"CompactionMiddleware.before_model": {"messages": rewritten}},
+        {"ContextMiddleware.before_model": {"messages": rewritten}},
         events,
         0,
         Answer(),

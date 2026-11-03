@@ -8,7 +8,7 @@
   模块路径随时可能变 —— server 要的协议与结果类型一律走 atlas_engine.contracts
   （那里的 re-export 才是承诺面）。守卫见 tests/test_engine_purity.py。
 
-★ 压缩只有一套：middleware/compaction.py（Atlas 自研，server 按智能体配置装）。
+★ 上下文管理只有一套：kernel/context（Atlas 自研的流水线，server 按智能体配置装）。
   原先 create_deep_agent 恒装的 middleware/summarization.py（引入自上游、全包唯一
   没人走通过的大块）2026-10-19 删除，理由见 graph.py 模块文档。
 

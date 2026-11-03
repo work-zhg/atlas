@@ -23,7 +23,8 @@ from atlas_agent.db.session import get_sessionmaker
 from atlas_agent.executor import runtime
 from atlas_agent.executor.compose import build_executor
 from atlas_agent.main import create_app
-from atlas_engine.kernel.middleware.compaction import CompactionMiddleware
+from atlas_engine.kernel.context import ContextMiddleware, Reminders
+from atlas_engine.kernel.middleware.todo import todo_reminder
 from httpx import ASGITransport
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 from sqlalchemy import select
@@ -56,10 +57,6 @@ def _spec() -> object:
     )
 
 
-async def _summ(messages: Any) -> str:
-    return "摘要"
-
-
 @pytest.mark.parametrize(("run_state", "reminded"), [(None, False), ({"todos": TODOS}, True)])
 async def test_the_todo_reminder_fires_in_a_resumed_segment_only_with_run_state(
     run_state: dict[str, Any] | None, reminded: bool
@@ -78,13 +75,12 @@ async def test_the_todo_reminder_fires_in_a_resumed_segment_only_with_run_state(
         ToolMessage(content="Updated todo list", tool_call_id="c0"),
     ]
     model = TurnModel(scripts=[[AIMessageChunk(content="继续写")]])
-    compactor = CompactionMiddleware(
-        context_window=200_000,
-        trigger_ratio=0.8,
-        keep_recent_turns=2,
-        summarizer=_summ,
-        todo_reminder_after=0,
-    )
+
+    def todo(state: Any) -> list[tuple[str, str]]:
+        text = todo_reminder(state, after=0)
+        return [("todo", text)] if text else []
+
+    context = ContextMiddleware(reminders=Reminders(budget_tokens=10_000, sources=[todo]))
 
     async for _ in run_agent(
         _spec(),
@@ -93,7 +89,7 @@ async def test_the_todo_reminder_fires_in_a_resumed_segment_only_with_run_state(
         input_content="",
         history=history,
         resume=True,
-        compactor=compactor,
+        context=context,
         run_state=run_state,
     ):
         pass
@@ -134,9 +130,9 @@ async def client_and_states(monkeypatch: pytest.MonkeyPatch):
     states: list[dict[str, Any]] = []
     real = runtime.engine_run
 
-    def spy(*args: Any, **kwargs: Any) -> Any:
-        states.append(dict(kwargs.get("run_state") or {}))
-        return real(*args, **kwargs)
+    def spy(segment: Any, **kwargs: Any) -> Any:
+        states.append(dict(segment.run_state or {}))
+        return real(segment, **kwargs)
 
     monkeypatch.setattr(runtime, "engine_run", spy)
 

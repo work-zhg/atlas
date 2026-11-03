@@ -8,13 +8,13 @@ skills 两条栈是 Atlas 自己的语义 —— 前者让调用方在 SubAgent 
   提示词的中间件放在它后面会让缓存前缀每轮失效）。装不装、TTL 多长由调用方经
   `prompt_cache_ttl` 决定（模型支不支持缓存、用户开没开都只有 server 知道）；
   kernel 只保证装了就排在最内层。完整推导见 doc/detail/kernel.html
-  §02。FilesystemMiddleware 是恒装的脚手架（大结果外置、文件权限挂在它上面），
-  没有文件能力时也装，只是不注册工具。
+  §02。FilesystemMiddleware 只在有文件工具时装（大结果外置已归调用方的上下文管理，
+  kernel/context；它不再是恒装的脚手架）。
 
 ★ 不按模型做任何调整：系统提示词、工具、中间件都只由调用方决定。原先的 HarnessProfile
   （按模型追加提示词、改写工具描述、剔除工具 / 中间件）2026-10-19 删除。
 
-★ kernel 不装压缩：上下文管理只有调用方的 CompactionMiddleware 一套（server 按智能体
+★ kernel 不装压缩：上下文管理只有调用方的 ContextMiddleware 一套（server 按智能体
   配置装）。原先恒装的 SummarizationMiddleware（引入自上游）2026-10-19 删除 —— 它的
   触发线（窗口 × 0.85）总在 Compaction（有效窗口 × 0.8）之后，只在压缩被关闭、模型
   不在目录里、或 Compaction 熔断时才轮到它；而它的压缩记录只在本轮 graph state 里，
@@ -73,15 +73,14 @@ class FilesystemConfig:
     """
 
     filesystem: FilesystemProtocol
-    """智能体看到的文件系统（Atlas：会话工作区 + 自己的 /skills）。也是大结果外置的去处。"""
+    """智能体看到的文件系统（Atlas：会话工作区 + 自己的 /skills）。"""
 
     # ★ Atlas 改动（Sandbox S0）：文件工具白名单。原逻辑默认注册全部工具
     #   （含 execute），造成两个门禁缺口：
     #     · 未勾 filesystem 的 agent 也能 write_file（工具目录说谎）
     #     · execute 在 filesystem 不支持时「注册后运行时报错」—— 模型看得见、
     #       调用后才失败，每次尝试烧一轮 token
-    #   传 [] 时中间件本体保留（它是恒装的脚手架：大结果外置、
-    #   权限机制挂在上面），但模型看不到任何文件工具。"all" 保持原本的全量行为。
+    #   传 [] 等于没有文件能力：不装 FilesystemMiddleware。"all" 保持原本的全量行为。
     tools: list[str] | Literal["all"] = "all"
     """可选值见 `FsToolName`；`"all"` 表示全部注册。"""
 
@@ -179,7 +178,7 @@ def create_deep_agent(  # noqa: C901, PLR0912, PLR0915  # Complex graph assembly
             suspension, ask-user, permission, context, tools, limits. The order
             comes from the slots only (kernel/stack.py). This function adds its
             own built-ins to their slots —— `SkillsMiddleware` and
-            `FilesystemMiddleware` first in `TOOLS`, `SubAgentMiddleware` in
+            `FilesystemMiddleware` (only with file tools) first in `TOOLS`, `SubAgentMiddleware` in
             `SUBAGENTS` —— and appends
             [`AnthropicPromptCachingMiddleware`][langchain_anthropic.middleware.AnthropicPromptCachingMiddleware]
             innermost when `prompt_cache_ttl` is set (no-ops for non-Anthropic models).
@@ -194,9 +193,8 @@ def create_deep_agent(  # noqa: C901, PLR0912, PLR0915  # Complex graph assembly
             the full SKILL.md at `path` with `read_file` when it decides a
             skill applies.
         filesystem: The agent's filesystem, visible file tools and access rules
-            —— see `FilesystemConfig`. `None` means **no file capability**:
-            `FilesystemMiddleware` is still installed (it is scaffolding) but
-            registers no tools, and large-result offload is off.
+            —— see `FilesystemConfig`. `None` (or an empty tool list) means
+            **no file capability**: `FilesystemMiddleware` is not installed.
 
             `FilesystemConfig.permissions` are evaluated in declaration
             order; the first match wins and no match means allow. Each
@@ -243,13 +241,7 @@ def create_deep_agent(  # noqa: C901, PLR0912, PLR0915  # Complex graph assembly
     # ★ 没有 filesystem 配置就**没有文件能力** —— 不再回落到内存里的临时存储。
     #   回落意味着模型以为自己有持久工作区，写进去的东西 run 结束即弃，
     #   而它不会收到任何提示。宁可结构性地没有这些工具。
-    #   FilesystemMiddleware 本体仍会装（它是脚手架），但 tools 为空、
-    #   大结果外置一并关闭 —— 外置出去的内容没有 read_file 读得回来。
-    fs = filesystem.filesystem if filesystem is not None else None
-    permissions = filesystem.permissions if filesystem is not None else None
-    filesystem_tools: list[str] | Literal["all"] = (
-        filesystem.tools if filesystem is not None else []
-    )
+    #   白名单为空同理：不装 FilesystemMiddleware，模型也看不到它的说明。
 
     # ★ Atlas：SubAgent 只有**一种**形态 —— 名字 + 描述，`task` 经注入的 spawner
     #   在 SubAgent 自己的会话上起子 run。图内编译子图、CompiledSubAgent、
@@ -264,15 +256,19 @@ def create_deep_agent(  # noqa: C901, PLR0912, PLR0915  # Complex graph assembly
     options = graph if graph is not None else GraphOptions()
 
     # ★ 中间件顺序只由槽位决定（kernel/stack.py）。本函数的内置件进各自的槽位：
-    #   技能、文件排在 TOOLS 的最前 —— 大结果外置还挂在 FilesystemMiddleware 的
-    #   wrap_tool_call 上，它要包在调用方的 SandboxMiddleware 外面才接得住 execute 的大输出。
+    #   技能、文件排在 TOOLS 的最前（技能清单的说明在文件工具之前）。
     stack = MiddlewareStack()
     if skills:
         stack.add(Slot.TOOLS, SkillsMiddleware(skills=skills))
-    stack.add(
-        Slot.TOOLS,
-        FilesystemMiddleware(filesystem=fs, _permissions=permissions, tools=filesystem_tools),
-    )
+    if filesystem is not None and filesystem.tools:
+        stack.add(
+            Slot.TOOLS,
+            FilesystemMiddleware(
+                filesystem=filesystem.filesystem,
+                _permissions=filesystem.permissions,
+                tools=filesystem.tools,
+            ),
+        )
     if middleware is not None:
         stack.merge(middleware)
     stack.extend(Slot.SUBAGENTS, subagent_middleware)

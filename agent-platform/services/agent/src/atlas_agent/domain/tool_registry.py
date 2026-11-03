@@ -49,6 +49,17 @@ def _todo_middleware() -> Any:
     return TodoListMiddleware()
 
 
+def _todo_reminder() -> Any:
+    """好几步没更新待办时的提醒。内容由待办给，上下文管理负责追加和控制总量。"""
+    from atlas_engine.kernel.middleware.todo import todo_reminder
+
+    def source(state: Mapping[str, Any]) -> list[tuple[str, str]]:
+        text = todo_reminder(state)
+        return [("todo", text)] if text else []
+
+    return source
+
+
 #: filesystem 的文件工具。★ 刻意不含 execute —— 它归 SandboxMiddleware，
 #: 只随 sandbox 出现，在此之前模型根本不该看到它（Sandbox 设计 §2 缺口 2）。
 #:
@@ -66,9 +77,8 @@ FS_TOOL_NAMES: tuple[str, ...] = (
 def filesystem_tools_for(tool_names: frozenset[str] | set[str]) -> list[str]:
     """交给 create_deep_agent 的 FilesystemConfig.tools 的白名单。
 
-    FilesystemMiddleware 是 kernel 恒装的脚手架
-    （大结果外置、权限机制挂在上面），**不能整个移除** —— 未勾 filesystem 时
-    传空表：中间件保留、模型看不到任何文件工具。
+    未勾 filesystem 时传空表：kernel 不装 FilesystemMiddleware，模型看不到任何文件工具。
+    （它以前是恒装的脚手架 —— 大结果外置挂在上面；外置已归上下文管理。）
 
     ★ 取代了原来的 filesystem_allowlist(tool_names, sandbox=)。那个函数既管
       白名单又管 execute，还藏着一条隐式联动：**勾了 bash 就自动获得全部
@@ -97,6 +107,7 @@ class ToolDef:
                  （doc/native-approval-mode-design.html）。
                  按模型侧名声明：filesystem 展开后读写各不相同
     irreversible:不可逆的模型侧工具（delete）。自动模式下不直接放行
+    reminder:    每次模型调用时的提醒来源（工厂）。内容由工具给，上下文管理负责追加
     """
 
     name: str
@@ -109,6 +120,7 @@ class ToolDef:
     model_tool_names: tuple[str, ...] = ()
     effects: Mapping[str, ToolEffect] = field(default_factory=dict)
     irreversible: frozenset[str] = frozenset()
+    reminder: Callable[[], Any] | None = None
 
     def model_names(self) -> tuple[str, ...]:
         """模型侧工具名；未显式声明时就是 name 本身。"""
@@ -123,6 +135,7 @@ BUILTIN_TOOLS: tuple[ToolDef, ...] = (
         description="内核计划能力，TodoCard 的数据源",
         implemented=True,
         middleware=_todo_middleware,
+        reminder=_todo_reminder,
         effects={TODO_TOOL: ToolEffect.PLAN},
     ),
     ToolDef(
@@ -149,9 +162,8 @@ BUILTIN_TOOLS: tuple[ToolDef, ...] = (
         display_name="虚拟文件系统",
         description="read_file / write_file / ls，中间产物落盘",
         implemented=True,
-        # middleware=None：文件工具由 kernel 的 FilesystemMiddleware 提供
-        # （它是必备脚手架，文件系统/外置/权限都接在上面），本表只决定
-        # 白名单 —— 见 filesystem_allowlist 与 agent.build_agent。
+        # middleware=None：文件工具由 kernel 的 FilesystemMiddleware 提供（要注入工作区），
+        # 本表只决定白名单 —— 见 filesystem_tools_for 与 build_graph。
     ),
     ToolDef(
         name=SUBAGENT_TOOL,
@@ -234,6 +246,11 @@ def middleware_for(tool_names: frozenset[str] | set[str]) -> list[Any]:
         if tool.name in tool_names and tool.middleware is not None:
             out.append(tool.middleware())
     return out
+
+
+def reminders_for(tool_names: frozenset[str] | set[str]) -> list[Any]:
+    """勾选的内置工具给出的提醒来源（ReminderSource），交给上下文管理。"""
+    return [t.reminder() for t in BUILTIN_TOOLS if t.name in tool_names and t.reminder is not None]
 
 
 def unsupported_tools(spec: AgentSpec) -> list[str]:

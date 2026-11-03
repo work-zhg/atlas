@@ -138,7 +138,13 @@ class CapabilityAssembly:
             closers=closers,
         )
         collaboration = self._collaboration.contribute(segment, run_id=run_id, relay=relay)
-        context = await self._context.contribute(segment, workspace=workspace, memory=memory)
+        context = await self._context.contribute(
+            segment,
+            workspace=workspace,
+            memory=memory,
+            reminders=tools.reminders,
+            readable_store=tools.readable_store,
+        )
 
         endpoint = models_of(segment, self._settings).endpoint
         chat = self._build_model(
@@ -152,7 +158,7 @@ class CapabilityAssembly:
             chat,
             instructions=context.instructions,
             memory=context.memory_block,
-            compactor=context.compactor,
+            context=context.middleware,
             deferred_tools=tools.deferred_tools,
             filesystem=workspace,
             sandbox=tools.sandbox,

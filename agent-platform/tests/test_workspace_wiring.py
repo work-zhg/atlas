@@ -55,8 +55,6 @@ def test_filesystem_tools_absent_without_workspace(tools: tuple[str, ...]) -> No
 
     middleware = FilesystemMiddleware(filesystem=None)
     assert middleware.tools == []
-    # 大结果外置也必须一并关闭：外置出去的内容没有 read_file 读得回来
-    assert middleware._tool_token_limit_before_evict is None
 
 
 def test_end_to_end_roundtrip_through_wiring() -> None:

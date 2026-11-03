@@ -15,7 +15,7 @@ from uuid import UUID
 
 import redis.asyncio as aioredis
 
-from atlas_agent.domain.tool_registry import BASH_TOOL
+from atlas_agent.domain.tool_registry import BASH_TOOL, FILESYSTEM_TOOL, reminders_for
 from atlas_agent.errors import CapabilityUnavailable
 from atlas_agent.executor.segment_data import Segment
 from atlas_agent.providers.knowledge import make_knowledge_tool, require_client
@@ -61,6 +61,11 @@ class ToolContribution:
     sandbox: Any = None
     #: 技能清单（已拷进会话的技能，只渲染、不扫描）
     skills: list[Any] = field(default_factory=list)
+    #: 勾选的工具给出的提醒来源（待办），交给上下文管理追加
+    reminders: list[Any] = field(default_factory=list)
+    #: 模型能用 read_file 读回来的存储（勾了文件工具时就是工作区）。大结果外置写进这里；
+    #: None = 读不回来，外置只能截断
+    readable_store: Any = None
 
 
 class ToolSurface:
@@ -150,6 +155,8 @@ class ToolSurface:
             # ★ 技能在**会话创建**时就已拷进 skills 前缀（见 skill_copy），
             #   这里只把清单渲染给中间件 —— 不扫描、不读文件。
             skills=skill_refs_for(skill_metas),
+            reminders=reminders_for(set(segment.spec.tool_names)),
+            readable_store=workspace if FILESYSTEM_TOOL in segment.spec.tool_names else None,
         )
 
     async def _mcp_tool_list(
@@ -248,7 +255,7 @@ def _deferred_mcp_tools(tools: list[Any], settings: Settings) -> list[Any]:
     """MCP 工具数量或定义总量超过阈值 → 全部改为延迟工具；否则照常常驻。"""
     if not tools:
         return []
-    from atlas_engine.kernel.middleware._context import estimate_text
+    from atlas_engine.kernel.context import estimate_text
     from langchain_core.utils.function_calling import convert_to_openai_tool
 
     size = 0

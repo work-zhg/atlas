@@ -15,6 +15,8 @@
   同时装了上游那份的话，create_agent 会因中间件重名直接报错，而不是装两套。
 
 上游模块级的 `write_todos` 工具没有拷：中间件不用它（用的是下面的 `_write_todos`）。
+
+★ 文件末尾的 `todo_reminder` 是 Atlas 加的（待办提醒的内容），与上游比对时跳过。
 """
 
 from collections.abc import Awaitable, Callable
@@ -36,7 +38,7 @@ from langgraph.types import Command
 from pydantic import BaseModel
 from typing_extensions import NotRequired, TypedDict, override
 
-__all__ = ["PlanningState", "Todo", "TodoListMiddleware"]
+__all__ = ["TODO_REMINDER_AFTER", "PlanningState", "Todo", "TodoListMiddleware", "todo_reminder"]
 
 
 class Todo(TypedDict):
@@ -346,3 +348,35 @@ class TodoListMiddleware(AgentMiddleware[PlanningState[ResponseT], ContextT, Res
             parallel calls are detected, otherwise None to allow normal execution.
         """
         return self.after_model(state, runtime)
+
+
+# ───────────────────────────────────────── 以下是 Atlas 加的，上游没有
+
+
+#: 好几步（模型调用）没更新待办时提醒
+TODO_REMINDER_AFTER = 8
+
+
+def todo_reminder(state: Any, *, after: int = TODO_REMINDER_AFTER) -> str | None:
+    """待办提醒的内容（c4-model/agent/native-runtime/code-native-runtime-tools.html · TodoList）。
+
+    有没完成的事项、且已经 after 步没调 write_todos 时给出；上下文管理负责追加和控制总量。
+    """
+    if not isinstance(state, dict):
+        return None
+    todos = state.get("todos")
+    if not todos:
+        return None
+    open_items = [t for t in todos if isinstance(t, dict) and t.get("status") != "completed"]
+    if not open_items:
+        return None
+    calls_since = 0
+    for m in reversed(list(state.get("messages") or [])):
+        if isinstance(m, AIMessage):
+            if any(c.get("name") == "write_todos" for c in m.tool_calls or []):
+                break
+            calls_since += 1
+    if calls_since < after:
+        return None
+    lines = "\n".join(f"- [{t.get('status')}] {t.get('content')}" for t in open_items[:20])
+    return f"待办清单已有 {calls_since} 步没有更新，当前未完成的事项：\n{lines}\n完成或调整后请更新待办。"

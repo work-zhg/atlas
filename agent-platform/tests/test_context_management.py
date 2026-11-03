@@ -6,17 +6,18 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from atlas_engine.kernel.middleware._context import (
-    TokenMeter,
-    batch_overflow,
-    clear_plan,
-    is_context_overflow,
-    working_set,
-)
-from atlas_engine.kernel.middleware.compaction import SUMMARY_PREFIX, CompactionMiddleware
+from atlas_engine.kernel.context import SUMMARY_PREFIX, ContextBudget, ContextMiddleware, Reminders
+from atlas_engine.kernel.context.budget import TokenMeter
+from atlas_engine.kernel.context.clearing import clear_plan
+from atlas_engine.kernel.context.compactor import working_set
+from atlas_engine.kernel.context.offload import batch_overflow
+from atlas_engine.kernel.context.recovery import is_context_overflow
+from atlas_engine.kernel.middleware.todo import todo_reminder
 from langchain.agents.middleware.types import ModelRequest, ModelResponse
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
+
+from tests.graphs import context_pipeline
 
 BULK = "数据" * 4000  # ≈ 3200 tokens
 
@@ -43,14 +44,14 @@ async def _summ(messages: Any) -> str:
     return "摘要内容"
 
 
-def _mw(**kw: Any) -> CompactionMiddleware:
+def _mw(**kw: Any) -> ContextMiddleware:
     base: dict[str, Any] = {
         "context_window": 200_000,
         "trigger_ratio": 0.8,
         "keep_recent_turns": 2,
         "summarizer": _summ,
     }
-    return CompactionMiddleware(**{**base, **kw})
+    return context_pipeline(**{**base, **kw})
 
 
 # ─────────────────────────────────────────────── 纯函数
@@ -136,7 +137,7 @@ async def test_clearing_tier_replaces_old_results_in_place() -> None:
 
 
 async def test_idle_trigger_clears_once_even_below_threshold() -> None:
-    mw = _mw(clear_ratio=0.9, idle_s=4000, cache_ttl_s=3600, keep_recent_tool_results=1)
+    mw = _mw(clear_ratio=0.9, cache_expired=True, keep_recent_tool_results=1)
     out = await mw.abefore_model({"messages": _history(3)})
     assert out is not None and {m.id for m in out["messages"]} == {"t0", "t1"}
     assert await mw.abefore_model({"messages": _history(3)}) is None  # 只在首次调用时判断
@@ -156,7 +157,7 @@ async def test_compaction_restores_working_set_from_filesystem() -> None:
     async def on_compacted(p: dict[str, Any]) -> None:
         persisted.append(p)
 
-    mw = _mw(context_window=20_000, filesystem=FS(), on_compacted=on_compacted)
+    mw = _mw(context_window=20_000, workspace=FS(), on_compacted=on_compacted)
     out = await mw.abefore_model({"messages": _history(6)})
     assert out is not None
     msgs = out["messages"]
@@ -249,8 +250,14 @@ async def test_attachments_are_appended_not_persisted() -> None:
 
     todos = [{"content": "写测试", "status": "in_progress"}]
     history = [HumanMessage(content="开始"), *[AIMessage(content=f"step{i}") for i in range(9)]]
-    mw = _mw(attachments=[("memory", "用户偏好中文")], todo_reminder_after=8)
-    await mw.awrap_model_call(_req(history, state={"todos": todos}), handler)
+
+    def todo(state: Any) -> list[tuple[str, str]]:
+        text = todo_reminder(state, after=8)
+        return [("todo", text)] if text else []
+
+    reminders = Reminders(budget_tokens=10_000, static=[("memory", "用户偏好中文")], sources=[todo])
+    mw = _mw(reminders=reminders)
+    await mw.awrap_model_call(_req(history, state={"todos": todos, "messages": history}), handler)
     last = sent[0][-1]
     assert isinstance(last, HumanMessage) and "<system-reminder" in last.content
     assert "用户偏好中文" in last.content and "写测试" in last.content
@@ -272,8 +279,9 @@ async def test_usage_warning_reminder_near_limit() -> None:
 
 @pytest.mark.parametrize("ratio", [0.8])
 def test_effective_window_reserves_output(ratio: float) -> None:
-    mw = _mw(context_window=100_000, max_output_tokens=16_384, trigger_ratio=ratio)
-    assert mw._effective == 100_000 - 16_384 and mw._trigger == int((100_000 - 16_384) * ratio)
+    budget = ContextBudget(context_window=100_000, max_output_tokens=16_384, compact_ratio=ratio)
+    assert budget.effective == 100_000 - 16_384
+    assert budget.compact_at == int((100_000 - 16_384) * ratio)
 
 
 # ─────────────────────────────────────────────── 回合内压缩（单轮长任务）
@@ -296,8 +304,8 @@ def _single_turn(rounds: int) -> list[Any]:
 
 
 def test_plan_split_within_turn_keeps_recent_rounds() -> None:
-    from atlas_engine.kernel.middleware._compaction import plan_split_within_turn
-    from atlas_engine.kernel.middleware.compaction import facts_from
+    from atlas_engine.kernel.context._split import plan_split_within_turn
+    from atlas_engine.kernel.context.compactor import facts_from
 
     facts = facts_from(_single_turn(6))
     # 1 条用户消息 + 6 轮（每轮 2 条）：保留最近 3 轮 → 切在第 4 轮的开头（下标 7）

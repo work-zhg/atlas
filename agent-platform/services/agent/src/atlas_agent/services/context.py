@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from atlas_engine.kernel.middleware.compaction import SUMMARY_PREFIX
+from atlas_engine.kernel.context import SUMMARY_PREFIX
 from langchain_core.messages import AIMessage
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession

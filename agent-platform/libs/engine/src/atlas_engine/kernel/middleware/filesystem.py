@@ -4,7 +4,6 @@
 import concurrent.futures
 import mimetypes
 import threading
-import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -15,17 +14,14 @@ from langchain.agents.middleware.types import (
     AgentMiddleware,
     AgentState,
     ContextT,
-    ExtendedModelResponse,
     ModelRequest,
     ModelResponse,
     ResponseT,
 )
 from langchain.tools import ToolRuntime
-from langchain.tools.tool_node import ToolCallRequest
-from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, RemoveMessage, ToolMessage
+from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, ToolMessage
 from langchain_core.messages.content import ContentBlock
 from langchain_core.tools import BaseTool, StructuredTool
-from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.types import Command
 from pydantic import BaseModel, Field
 
@@ -47,12 +43,6 @@ from atlas_engine.kernel.middleware._fs_utils import (
     format_content_with_line_numbers,
     truncate_if_too_long,
     validate_path,
-)
-from atlas_engine.kernel.middleware._message_eviction import (
-    _aoffload_tool_message_content,
-    _create_content_preview,
-    _extract_text_from_message,
-    _offload_tool_message_content,
 )
 from atlas_engine.kernel.middleware._utils import append_to_system_message
 
@@ -576,7 +566,7 @@ READ_FILE_TRUNCATION_MSG = (
 
 # Approximate number of characters per token for truncation calculations.
 # Using 4 chars per token as a conservative approximation (actual ratio varies by content)
-# This errs on the high side to avoid premature eviction of content that might fit
+# This errs on the high side to avoid premature truncation of content that might fit
 NUM_CHARS_PER_TOKEN = 4
 
 
@@ -821,97 +811,6 @@ def _supports_delete(filesystem: object) -> bool:
     return callable(getattr(filesystem, "delete", None))
 
 
-# Tools that should be excluded from the large result eviction logic.
-#
-# This tuple contains tools that should NOT have their results evicted to the filesystem
-# when they exceed token limits. Tools are excluded for different reasons:
-#
-# 1. Tools with built-in truncation (ls, glob, grep):
-#    These tools truncate their own output when it becomes too large. When these tools
-#    produce truncated output due to many matches, it typically indicates the query
-#    needs refinement rather than full result preservation. In such cases, the truncated
-#    matches are potentially more like noise and the LLM should be prompted to narrow
-#    its search criteria instead.
-#
-# 2. Tools with problematic truncation behavior (read_file):
-#    read_file is tricky to handle as the failure mode here is single long lines
-#    (e.g., imagine a jsonl file with very long payloads on each line). If we try to
-#    truncate the result of read_file, the agent may then attempt to re-read the
-#    truncated file using read_file again, which won't help.
-#
-# 3. Tools that never exceed limits (edit_file, write_file):
-#    These tools return minimal confirmation messages and are never expected to produce
-#    output large enough to exceed token limits, so checking them would be unnecessary.
-TOOLS_EXCLUDED_FROM_EVICTION = (
-    "ls",
-    "glob",
-    "grep",
-    "read_file",
-    "edit_file",
-    "write_file",
-    "delete",
-)
-
-
-TOO_LARGE_HUMAN_MSG = """Message content too large and was saved to the filesystem at: {file_path}
-
-You can read the full content using the read_file tool with pagination (offset and limit parameters).
-
-Here is a preview showing the head and tail of the content:
-
-{content_sample}
-"""
-
-
-def _build_evicted_human_content(
-    message: HumanMessage,
-    replacement_text: str,
-) -> str | list[ContentBlock]:
-    """Build replacement content for an evicted HumanMessage, preserving non-text blocks.
-
-    For plain string content, returns the replacement text directly. For list content
-    with mixed block types (e.g., text + image), replaces all text blocks with a single
-    text block containing the replacement text while keeping non-text blocks intact.
-
-    Args:
-        message: The original HumanMessage being evicted.
-        replacement_text: The truncation notice and preview text.
-
-    Returns:
-        Replacement content: a string or list of content blocks.
-    """
-    if isinstance(message.content, str):
-        return replacement_text
-    media_blocks = [block for block in message.content_blocks if block["type"] != "text"]
-    if not media_blocks:
-        return replacement_text
-    return [cast("ContentBlock", {"type": "text", "text": replacement_text}), *media_blocks]
-
-
-def _build_truncated_human_message(message: HumanMessage, file_path: str) -> HumanMessage:
-    """Build a truncated HumanMessage for the model request.
-
-    Computes a preview from the full content still in state and returns a
-    lightweight replacement the model will see. Pure string computation — no
-    filesystem I/O.
-
-    Args:
-        message: The original HumanMessage (full content in state).
-        file_path: The filesystem path where the content was evicted.
-
-    Returns:
-        A new HumanMessage with truncated content and the same `id`.
-    """
-    content_str = _extract_text_from_message(message)
-    content_sample = _create_content_preview(content_str)
-    replacement_text = TOO_LARGE_HUMAN_MSG.format(
-        file_path=file_path,
-        content_sample=content_sample,
-    )
-    evicted = _build_evicted_human_content(message, replacement_text)
-    return message.model_copy(update={"content": evicted})
-
-
 class FilesystemMiddleware(AgentMiddleware[AgentState, ContextT, ResponseT]):
     """Middleware for providing filesystem and optional execution tools to an agent.
 
@@ -926,24 +825,22 @@ class FilesystemMiddleware(AgentMiddleware[AgentState, ContextT, ResponseT]):
       之后那段检查把 SandboxMiddleware 注册的 execute 也从模型请求里剔掉了
       （OssFilesystem 从不实现它），2026-10-19 随死代码一并删除。
 
-    This middleware also automatically evicts large tool results to the file system when
-    they exceed a token threshold, preventing context window saturation.
+    ★ 只在勾了文件工具时装（c4-model/agent/native-runtime/code-native-runtime-tools.html
+      · FileTools）。大结果外置、超长用户输入外置原先也挂在这里，它因此是「恒装的脚手架」；
+      2026-11 外置归到上下文管理（kernel/context/offload.py）后不再如此。
 
     Args:
         filesystem: The agent's filesystem —— a `FilesystemProtocol` instance
             (Atlas: `OssFilesystem`, the session workspace plus its `/skills`).
 
-            `None` means no file capability: no file tools are registered and
-            large-result eviction is off (there is no ephemeral fallback).
+            `None` means no file capability: no file tools are registered
+            (there is no ephemeral fallback).
 
             For execution support, use a filesystem that implements
             [`SandboxProtocol`][SandboxProtocol].
         system_prompt: Optional custom system prompt override.
-        tool_token_limit_before_evict: Token limit before evicting a tool result to the
-            filesystem.
-
-            When exceeded, writes the result using the configured filesystem and replaces it
-            with a truncated preview and file reference.
+        read_token_limit: Token limit for one `read_file` page; longer pages are
+            truncated with a notice telling the model to page with `offset` / `limit`.
 
     Example:
         ```python
@@ -953,8 +850,7 @@ class FilesystemMiddleware(AgentMiddleware[AgentState, ContextT, ResponseT]):
         # The session workspace on object storage (server: providers/filesystem)
         agent = create_agent(middleware=[FilesystemMiddleware(filesystem=oss_filesystem)])
 
-        # No file capability: the middleware stays (it is scaffolding), no file tools
-        agent = create_agent(middleware=[FilesystemMiddleware(filesystem=None)])
+        # No file capability: don't install it at all (create_deep_agent skips it)
         ```
     """
 
@@ -963,8 +859,7 @@ class FilesystemMiddleware(AgentMiddleware[AgentState, ContextT, ResponseT]):
         *,
         filesystem: Any = None,
         system_prompt: str | None = None,
-        tool_token_limit_before_evict: int | None = 20000,
-        human_message_token_limit_before_evict: int | None = 50000,
+        read_token_limit: int | None = 20000,
         tools: list[FsToolName] | Literal["all"] | None = None,
         _permissions: list[FilesystemPermission] | None = None,
     ) -> None:
@@ -972,11 +867,9 @@ class FilesystemMiddleware(AgentMiddleware[AgentState, ContextT, ResponseT]):
 
         Args:
             filesystem: The agent's filesystem (`FilesystemProtocol`). `None` =
-                no file capability: no file tools, large-result eviction off.
+                no file capability: no file tools.
             system_prompt: Optional custom system prompt override.
-            tool_token_limit_before_evict: Optional token limit before evicting a tool result to the filesystem.
-            human_message_token_limit_before_evict: Optional token limit before
-                evicting a HumanMessage to the filesystem.
+            read_token_limit: Optional token limit for one `read_file` page.
             tools: Allowlist of tool names to expose to the model.
                 ``"all"` indicates all tools. If unset, defaults to `"all"`.
                 Pass a list containing any of `"read_file"`, `"write_file"`,
@@ -994,17 +887,13 @@ class FilesystemMiddleware(AgentMiddleware[AgentState, ContextT, ResponseT]):
         """
         if filesystem is None or (isinstance(tools, list) and tools == []):
             # ★ Atlas 改动（Sandbox S0）：空白名单 = 完全关闭文件工具。
-            #   原实现没预想过这个模式（校验要求 read_file 恒在）。中间件本体
-            #   必须保留 —— 它是恒装的脚手架；但大结果外置
-            #   依赖 read_file 把内容读回，零工具时外置出去的内容对模型
-            #   不可达，所以一并关闭。
+            #   原实现没预想过这个模式（校验要求 read_file 恒在）。create_deep_agent
+            #   在这种情况下已经不装本中间件，这里只是让直接构造的调用方也得到同样的结果。
             #
             # ★ filesystem is None 走同一条路：没有配置对象存储 = 没有文件能力。
             #   不再像原实现那样回落到内存里的临时存储 —— 那会让模型以为自己有持久
             #   工作区，写进去的东西 run 结束即弃，而它收不到任何提示。
             tools = []
-            tool_token_limit_before_evict = None
-            human_message_token_limit_before_evict = None
         elif isinstance(tools, list) and "read_file" not in tools:
             msg = "read_file must be included in tools; it is required by FilesystemMiddleware"
             raise ValueError(msg)
@@ -1014,15 +903,9 @@ class FilesystemMiddleware(AgentMiddleware[AgentState, ContextT, ResponseT]):
             msg = "filesystem must be a FilesystemProtocol instance, not a factory"
             raise TypeError(msg)
 
-        artifacts_root = "/"
-        _root = artifacts_root.rstrip("/")
-        self._large_tool_results_prefix = f"{_root}/large_tool_results"
-        self._conversation_history_prefix = f"{_root}/conversation_history"
-
         # Store configuration (private - internal implementation details)
         self._custom_system_prompt = system_prompt
-        self._tool_token_limit_before_evict = tool_token_limit_before_evict
-        self._human_message_token_limit_before_evict = human_message_token_limit_before_evict
+        self._read_token_limit = read_token_limit
         if isinstance(tools, list):
             self._enabled_tools: frozenset[str] | None = frozenset(tools)
         elif tools == "all":
@@ -1108,7 +991,7 @@ class FilesystemMiddleware(AgentMiddleware[AgentState, ContextT, ResponseT]):
         """Create the read_file tool."""
         tool_description = READ_FILE_TOOL_DESCRIPTION
         args_schema = ReadFileSchema
-        token_limit = self._tool_token_limit_before_evict
+        token_limit = self._read_token_limit
 
         def _truncate(content: str, file_path: str, *, line_limit: int | None = None) -> str:
             if line_limit is not None:
@@ -1585,7 +1468,7 @@ class FilesystemMiddleware(AgentMiddleware[AgentState, ContextT, ResponseT]):
         """Drop capability-gated tools the filesystem can't serve, then apply the system prompt.
 
         Shared by the sync and async `wrap_model_call` paths (the only part that
-        differs between them is sync vs. async message eviction). The `delete`
+        differs between them is sync vs. async). The `delete`
         tool is optional per filesystem, so when the filesystem doesn't support
         it the tool is filtered out of the request rather than advertised to the
         model and left to fail at call time.
@@ -1614,454 +1497,33 @@ class FilesystemMiddleware(AgentMiddleware[AgentState, ContextT, ResponseT]):
         self,
         request: ModelRequest[ContextT],
         handler: Callable[[ModelRequest[ContextT]], ModelResponse[ResponseT]],
-    ) -> ModelResponse[ResponseT] | ExtendedModelResponse:
-        """Update the system prompt, filter tools, and evict oversized HumanMessages.
+    ) -> ModelResponse[ResponseT]:
+        """Update the system prompt, filter tools, and scrub unsupported multimodal blocks.
 
-        In addition to the system-prompt and tool-filtering logic, this method
-        handles large HumanMessage eviction:
-
-        1. Any message already tagged with `lc_evicted_to` in
-            `additional_kwargs` is replaced with a truncated preview for the
-            model request (content in state is unchanged).
-        2. If the most recent message is an untagged HumanMessage exceeding the
-            eviction threshold, its content is written to the filesystem and the
-            message is tagged in state via `ExtendedModelResponse`.
-
-        It also scrubs unsupported multimodal blocks, replacing them with text
-        placeholders to avoid non-retryable provider errors.
+        Unsupported multimodal blocks (from `read_file` media results) are
+        replaced with text placeholders to avoid non-retryable provider errors.
 
         Args:
             request: The model request being processed.
             handler: The handler function to call with the modified request.
 
         Returns:
-            The model response, or an `ExtendedModelResponse` with a state
-                update tagging a newly evicted message.
+            The model response.
         """
-        request = self._filter_unsupported_tools_and_apply_prompt(request)
-
-        request_messages = _move_media_results_after_tool_results(list(request.messages))
-        request_messages = _scrub_unsupported_multimodal_content(request_messages, request.model)
-        if request_messages != list(request.messages):
-            request = request.override(messages=request_messages)
-
-        eviction_result = self._evict_and_truncate_messages(request)
-        if eviction_result is not None:
-            messages, state_command = eviction_result
-            request = request.override(messages=messages)
-            response = handler(request)
-            if state_command is not None:
-                return ExtendedModelResponse(model_response=response, command=state_command)
-            return response
-
-        return handler(request)
+        return handler(self._prepare(request))
 
     async def awrap_model_call(
         self,
         request: ModelRequest[ContextT],
         handler: Callable[[ModelRequest[ContextT]], Awaitable[ModelResponse[ResponseT]]],
-    ) -> ModelResponse[ResponseT] | ExtendedModelResponse:
-        """(async) Update the system prompt and filter tools based on filesystem capabilities.
+    ) -> ModelResponse[ResponseT]:
+        """(async) See `wrap_model_call`."""
+        return await handler(self._prepare(request))
 
-        Also evicts oversized HumanMessages to the filesystem. See
-        `wrap_model_call` for full documentation.
-
-        Args:
-            request: The model request being processed.
-            handler: The handler function to call with the modified request.
-
-        Returns:
-            The model response from the handler, or an `ExtendedModelResponse`
-                with a state update tagging newly evicted messages.
-        """
+    def _prepare(self, request: ModelRequest[ContextT]) -> ModelRequest[ContextT]:
         request = self._filter_unsupported_tools_and_apply_prompt(request)
-
         request_messages = _move_media_results_after_tool_results(list(request.messages))
         request_messages = _scrub_unsupported_multimodal_content(request_messages, request.model)
         if request_messages != list(request.messages):
             request = request.override(messages=request_messages)
-
-        eviction_result = await self._aevict_and_truncate_messages(request)
-        if eviction_result is not None:
-            messages, state_command = eviction_result
-            request = request.override(messages=messages)
-            response = await handler(request)
-            if state_command is not None:
-                return ExtendedModelResponse(model_response=response, command=state_command)
-            return response
-
-        return await handler(request)
-
-    def _process_large_message(
-        self,
-        message: ToolMessage,
-        resolved_filesystem: FilesystemProtocol,
-    ) -> tuple[ToolMessage, bool]:
-        """Process a large ToolMessage by evicting its content to filesystem.
-
-        Args:
-            message: The ToolMessage with large content to evict.
-            resolved_filesystem: The filesystem filesystem to write the content to.
-
-        Returns:
-            A tuple of `(processed_message, evicted)`:
-
-                - processed_message: New `ToolMessage` with truncated content
-                    and file reference
-                - evicted: Whether the content was evicted to the filesystem
-
-        !!! note
-
-            Text is extracted from all text content blocks, joined, and used for
-            both the size check and eviction. Non-text blocks
-            (images, audio, etc.) are preserved in the replacement message
-            so multimodal context is not lost. The model can recover
-            the full text by reading the offloaded file from the filesystem.
-        """
-        # Early exit if eviction not configured
-        if not self._tool_token_limit_before_evict:
-            return message, False
-
-        content_str = _extract_text_from_message(message)
-
-        # Check if content exceeds eviction threshold
-        if len(content_str) <= NUM_CHARS_PER_TOKEN * self._tool_token_limit_before_evict:
-            return message, False
-
-        processed_message = _offload_tool_message_content(
-            message,
-            content_str,
-            resolved_filesystem,
-            self._large_tool_results_prefix,
-        )
-        if processed_message is None:
-            return message, False
-        return processed_message, True
-
-    async def _aprocess_large_message(
-        self,
-        message: ToolMessage,
-        resolved_filesystem: FilesystemProtocol,
-    ) -> tuple[ToolMessage, bool]:
-        """Async version of _process_large_message.
-
-        Uses async filesystem methods to avoid sync calls in async context.
-
-        See `_process_large_message` for full documentation.
-        """
-        # Early exit if eviction not configured
-        if not self._tool_token_limit_before_evict:
-            return message, False
-
-        content_str = _extract_text_from_message(message)
-
-        if len(content_str) <= NUM_CHARS_PER_TOKEN * self._tool_token_limit_before_evict:
-            return message, False
-
-        processed_message = await _aoffload_tool_message_content(
-            message,
-            content_str,
-            resolved_filesystem,
-            self._large_tool_results_prefix,
-        )
-        if processed_message is None:
-            return message, False
-        return processed_message, True
-
-    def _check_eviction_needed(
-        self,
-        messages: list[AnyMessage],
-    ) -> tuple[bool, bool]:
-        """Check whether any message processing is needed.
-
-        Args:
-            messages: The message list to inspect.
-
-        Returns:
-            Tuple of `(has_tagged, new_eviction_needed)`.
-        """
-        if not self._human_message_token_limit_before_evict:
-            return False, False
-
-        threshold = NUM_CHARS_PER_TOKEN * self._human_message_token_limit_before_evict
-        has_tagged = any(isinstance(msg, HumanMessage) and msg.additional_kwargs.get("lc_evicted_to") for msg in messages)
-        new_eviction_needed = False
-        if messages and isinstance(messages[-1], HumanMessage):
-            last = messages[-1]
-            if not last.additional_kwargs.get("lc_evicted_to") and len(_extract_text_from_message(last)) > threshold:
-                new_eviction_needed = True
-        return has_tagged, new_eviction_needed
-
-    @staticmethod
-    def _apply_eviction_and_truncate(
-        messages: list[AnyMessage],
-        write_result: WriteResult | None,
-        file_path: str | None,
-    ) -> tuple[list[AnyMessage], Command | None]:
-        """Tag a newly evicted message and truncate all tagged messages.
-
-        When a new eviction fires, emits a `Command` whose messages update
-        contains only the tagged `HumanMessage`. The original already carries an ID in
-        state (`add_messages` assigns one on write), so the tagged copy (which
-        reuses that ID) replaces it in place — no `REMOVE_ALL_MESSAGES` sentinel
-        is needed.
-        Using a sentinel would also clobber the `AIMessage` that the model node
-        writes in the same super-step.
-
-        Args:
-            messages: The message list (may be modified if write succeeded).
-            write_result: Result of the filesystem write, or `None` if no new
-                eviction was attempted.
-            file_path: Path the content was written to.
-
-        Returns:
-            Tuple of `(processed_messages, state_command)`.
-        """
-        state_command: Command | None = None
-
-        if write_result is not None and file_path is not None and not write_result.error:
-            last = messages[-1]
-            tagged = last.model_copy(
-                update={
-                    "id": last.id if last.id is not None else str(uuid.uuid4()),
-                    "additional_kwargs": {
-                        **last.additional_kwargs,
-                        "lc_evicted_to": file_path,
-                    },
-                }
-            )
-            state_command = Command(update={"messages": [tagged]})
-            messages = [*messages[:-1], tagged]
-
-        processed: list[AnyMessage] = []
-        for msg in messages:
-            if isinstance(msg, HumanMessage) and msg.additional_kwargs.get("lc_evicted_to"):
-                processed.append(_build_truncated_human_message(msg, msg.additional_kwargs["lc_evicted_to"]))
-            else:
-                processed.append(msg)
-
-        return processed, state_command
-
-    def _evict_and_truncate_messages(
-        self,
-        request: ModelRequest[ContextT],
-    ) -> tuple[list[AnyMessage], Command | None] | None:
-        """Evict a new oversized `HumanMessage` and truncate all tagged messages.
-
-        Returns `None` if no messages needed processing (fast path). Otherwise
-        returns `(processed_messages, command)` where `command` is a state
-        update tagging the newly evicted message, or `None` if only
-        previously-tagged messages were truncated.
-
-        Args:
-            request: The model request being processed.
-
-        Returns:
-            Tuple of `(messages, command)` if any processing occurred, else `None`.
-        """
-        messages = list(request.messages)
-        has_tagged, new_eviction_needed = self._check_eviction_needed(messages)
-        if not has_tagged and not new_eviction_needed:
-            return None
-
-        write_result: WriteResult | None = None
-        file_path: str | None = None
-        if new_eviction_needed:
-            filesystem = self.filesystem
-            file_path = f"{self._conversation_history_prefix}/{uuid.uuid4()}.md"
-            write_result = filesystem.write(file_path, _extract_text_from_message(messages[-1]))
-
-        return self._apply_eviction_and_truncate(messages, write_result, file_path)
-
-    async def _aevict_and_truncate_messages(
-        self,
-        request: ModelRequest[ContextT],
-    ) -> tuple[list[AnyMessage], Command | None] | None:
-        """Async version of `_evict_and_truncate_messages`.
-
-        Args:
-            request: The model request being processed.
-
-        Returns:
-            Tuple of `(messages, command)` if any processing occurred, else `None`.
-        """
-        messages = list(request.messages)
-        has_tagged, new_eviction_needed = self._check_eviction_needed(messages)
-        if not has_tagged and not new_eviction_needed:
-            return None
-
-        write_result: WriteResult | None = None
-        file_path: str | None = None
-        if new_eviction_needed:
-            filesystem = self.filesystem
-            file_path = f"{self._conversation_history_prefix}/{uuid.uuid4()}.md"
-            write_result = await filesystem.awrite(file_path, _extract_text_from_message(messages[-1]))
-
-        return self._apply_eviction_and_truncate(messages, write_result, file_path)
-
-    @staticmethod
-    def _unwrap_command_messages(update: Mapping[str, Any]) -> tuple[Any, bool]:
-        """Return the message list from a Command update and whether it was prefixed with a `REMOVE_ALL_MESSAGES` sentinel.
-
-        Tools that want to atomically replace the messages channel emit
-        `[RemoveMessage(REMOVE_ALL_MESSAGES), *messages]`. Detect that
-        sentinel so we can preserve it after processing.
-        """
-        command_messages = update.get("messages", [])
-        if (
-            isinstance(command_messages, list)
-            and command_messages
-            and isinstance(command_messages[0], RemoveMessage)
-            and command_messages[0].id == REMOVE_ALL_MESSAGES
-        ):
-            return command_messages[1:], True
-        return command_messages, False
-
-    @staticmethod
-    def _rewrap_command_messages(messages: list[AnyMessage], *, wrapped: bool) -> list[AnyMessage | RemoveMessage]:
-        """Restore the `REMOVE_ALL_MESSAGES` sentinel when the original update used one."""
-        if wrapped:
-            return [RemoveMessage(id=REMOVE_ALL_MESSAGES), *messages]
-        return list(messages)
-
-    def _intercept_large_tool_result(self, tool_result: ToolMessage | Command) -> ToolMessage | Command:
-        """Intercept and process large tool results before they're added to state.
-
-        Args:
-            tool_result: The tool result to potentially evict (`ToolMessage` or `Command`).
-
-        Returns:
-            Either the original result (if small enough) or a processed result with
-                evicted content written to filesystem and truncated message.
-
-        !!! note
-
-            Handles both single `ToolMessage` results and `Command` objects
-            containing multiple messages. Large content is automatically
-            offloaded to filesystem to prevent context window overflow.
-        """
-        if isinstance(tool_result, ToolMessage):
-            resolved_filesystem = self.filesystem
-            processed_message, _evicted = self._process_large_message(
-                tool_result,
-                resolved_filesystem,
-            )
-            return processed_message
-
-        if isinstance(tool_result, Command):
-            update = tool_result.update
-            if update is None:
-                return tool_result
-            command_messages, wrapped = self._unwrap_command_messages(update)
-            resolved_filesystem = self.filesystem
-            processed_messages = []
-            for message in command_messages:
-                if not isinstance(message, ToolMessage):
-                    processed_messages.append(message)
-                    continue
-
-                processed_message, _evicted = self._process_large_message(
-                    message,
-                    resolved_filesystem,
-                )
-                processed_messages.append(processed_message)
-            new_messages = self._rewrap_command_messages(processed_messages, wrapped=wrapped)
-            return Command(
-                goto=tool_result.goto,
-                graph=tool_result.graph,
-                update={**update, "messages": new_messages},
-            )
-        msg = f"Unreachable code reached in _intercept_large_tool_result: for tool_result of type {type(tool_result)}"
-        raise AssertionError(msg)
-
-    async def _aintercept_large_tool_result(self, tool_result: ToolMessage | Command) -> ToolMessage | Command:
-        """Async version of _intercept_large_tool_result.
-
-        Uses async filesystem methods to avoid sync calls in async context.
-
-        See `_intercept_large_tool_result` for full documentation.
-        """
-        if isinstance(tool_result, ToolMessage):
-            resolved_filesystem = self.filesystem
-            processed_message, _evicted = await self._aprocess_large_message(
-                tool_result,
-                resolved_filesystem,
-            )
-            return processed_message
-
-        if isinstance(tool_result, Command):
-            update = tool_result.update
-            if update is None:
-                return tool_result
-            command_messages, wrapped = self._unwrap_command_messages(update)
-            resolved_filesystem = self.filesystem
-            processed_messages = []
-            for message in command_messages:
-                if not isinstance(message, ToolMessage):
-                    processed_messages.append(message)
-                    continue
-
-                processed_message, _evicted = await self._aprocess_large_message(
-                    message,
-                    resolved_filesystem,
-                )
-                processed_messages.append(processed_message)
-            new_messages = self._rewrap_command_messages(processed_messages, wrapped=wrapped)
-            return Command(
-                goto=tool_result.goto,
-                graph=tool_result.graph,
-                update={**update, "messages": new_messages},
-            )
-        msg = f"Unreachable code reached in _aintercept_large_tool_result: for tool_result of type {type(tool_result)}"
-        raise AssertionError(msg)
-
-    def wrap_tool_call(
-        self,
-        request: ToolCallRequest,
-        handler: Callable[[ToolCallRequest], ToolMessage | Command],
-    ) -> ToolMessage | Command:
-        """Check the size of the tool call result and evict to filesystem if too large.
-
-        Args:
-            request: The tool call request being processed.
-            handler: The handler function to call with the modified request.
-
-        Returns:
-            The raw `ToolMessage`, or a pseudo tool message with the `ToolResult` in state.
-
-        !!! note
-
-            Tool-execution exceptions (including `ToolException`) propagate
-            through this wrapper unhandled by design.
-        """
-        tool_result = handler(request)
-
-        if self._tool_token_limit_before_evict is None or request.tool_call["name"] in TOOLS_EXCLUDED_FROM_EVICTION:
-            return tool_result
-
-        return self._intercept_large_tool_result(tool_result)
-
-    async def awrap_tool_call(
-        self,
-        request: ToolCallRequest,
-        handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command]],
-    ) -> ToolMessage | Command:
-        """(async) Check the size of the tool call result and evict to filesystem if too large.
-
-        Args:
-            request: The tool call request being processed.
-            handler: The handler function to call with the modified request.
-
-        Returns:
-            The raw `ToolMessage`, or a pseudo tool message with the `ToolResult` in state.
-
-        Note:
-            Tool-execution exceptions (including `ToolException`) propagate
-                through this wrapper unhandled by design.
-        """
-        tool_result = await handler(request)
-
-        if self._tool_token_limit_before_evict is None or request.tool_call["name"] in TOOLS_EXCLUDED_FROM_EVICTION:
-            return tool_result
-
-        return await self._aintercept_large_tool_result(tool_result)
+        return request

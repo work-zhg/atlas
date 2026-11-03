@@ -23,7 +23,7 @@ middleware:
 * **Inject system-prompt context** -- e.g. `SkillsMiddleware` injects relevant
     instructions into the system message on every call so the LLM knows how to
     use the tools it provides.
-* **Transform messages** -- e.g. `CompactionMiddleware` clears old tool
+* **Transform messages** -- e.g. `ContextMiddleware` (kernel/context) clears old tool
     results and replaces history with a summary when the context window fills up.
 * **Maintain cross-turn state** -- middleware can read/write a typed state
     dict that persists across agent turns (e.g. `waiting_on` in `SuspensionMiddleware`).

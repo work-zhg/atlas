@@ -91,7 +91,7 @@ def build_graph(
     sandbox: SandboxProtocol | None = None,
     approvals: ApprovalGate | None = None,
     judge: AutoJudge | None = None,
-    compactor: Any = None,
+    context: Any = None,
     skills: list[SkillRef] | None = None,
     extra_tools: list[Any] | None = None,
     spawner: SubAgentSpawner | None = None,
@@ -181,11 +181,10 @@ def build_graph(
             judge=judge,
         ),
     )
-    if compactor is not None:
-        stack.add(Slot.CONTEXT, compactor)
-    # ★ sandbox 排在 filesystem 后面（同一槽位按交进来的先后，filesystem 由内核先放）：
-    #   大结果外置挂在 FilesystemMiddleware 的 wrap_tool_call 上，它的主要服务对象正是
-    #   execute（文件工具自己有分页）。
+    # 上下文流水线（外置、清理、压缩、提醒、失败恢复）。★ 大结果外置在它的 wrap_tool_call 上：
+    #   槽位 ④ 包在工具（⑤）外面，execute、MCP 等所有工具的结果都经过它
+    if context is not None:
+        stack.add(Slot.CONTEXT, context)
     if sandbox is not None:
         from atlas_engine.kernel.middleware.sandbox import SandboxMiddleware
 
@@ -205,7 +204,7 @@ def build_graph(
         tools=list(extra_tools) if extra_tools else None,
         # 空列表传 None：装一个内容为空的技能段只会白占提示词
         skills=list(skills) if skills else None,
-        # 文件工具白名单：未勾 filesystem 传空表 —— 中间件保留（它是脚手架），
+        # 文件工具白名单：未勾 filesystem 传空表 —— kernel 不装文件中间件，
         # 模型看不到任何文件工具。execute 已不在此列，它归 SandboxMiddleware。
         # 没注入 filesystem 就传 None：没有存储 = 没有文件能力，白名单无从谈起。
         filesystem=(

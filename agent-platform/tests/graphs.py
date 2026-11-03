@@ -14,9 +14,65 @@ from atlas_agent.domain.messages import Transcript
 from atlas_agent.executor.build import build_graph
 from atlas_agent.executor.runner import run as engine_run
 from atlas_agent.executor.segment_data import Segment
+from atlas_engine.kernel.context import (
+    CallRecovery,
+    Compactor,
+    ContextBudget,
+    ContextMiddleware,
+    Reminders,
+    ResultClearing,
+    ResultOffloader,
+)
 from langchain_core.messages import HumanMessage
 
-__all__ = ["build_graph", "run_agent", "run_to_end"]
+__all__ = ["build_graph", "context_pipeline", "run_agent", "run_to_end"]
+
+
+def context_pipeline(
+    *,
+    context_window: int,
+    trigger_ratio: float,
+    keep_recent_turns: int,
+    summarizer: Any,
+    cls: type[ContextMiddleware] = ContextMiddleware,
+    max_output_tokens: int = 0,
+    clear_ratio: float | None = None,
+    warn_ratio: float | None = None,
+    keep_recent_tool_results: int = 5,
+    cache_expired: bool = False,
+    workspace: Any = None,
+    restore_files: int = 5,
+    on_compacted: Any = None,
+    failure_count: int = 0,
+    on_failed: Any = None,
+    max_output_cap: int | None = None,
+    reminders: Reminders | None = None,
+    offloader: ResultOffloader | None = None,
+) -> ContextMiddleware:
+    """按档位工作的完整上下文流水线（压缩开着、知道窗口）—— 与 ContextManager 装的同构。"""
+    compactor = Compactor(
+        summarizer=summarizer,
+        keep_recent_turns=keep_recent_turns,
+        workspace=workspace,
+        restore_files=restore_files,
+        failure_count=failure_count,
+        on_failed=on_failed,
+        on_compacted=on_compacted,
+    )
+    return cls(
+        budget=ContextBudget(
+            context_window=context_window,
+            max_output_tokens=max_output_tokens,
+            compact_ratio=trigger_ratio,
+            clear_ratio=clear_ratio,
+            warn_ratio=warn_ratio,
+        ),
+        clearing=ResultClearing(keep_recent=keep_recent_tool_results, cache_expired=cache_expired),
+        compactor=compactor,
+        recovery=CallRecovery(compactor=compactor, max_output_cap=max_output_cap),
+        reminders=reminders,
+        offloader=offloader,
+    )
 
 
 def run_agent(
@@ -42,7 +98,7 @@ def run_agent(
     """spec + model + 能力对象 → TraceEvent 流。
 
     capabilities 直接透传 build_graph（filesystem / sandbox / approvals /
-    compactor / skills / extra_tools / subagents）；cancel / clock / titler /
+    context / skills / extra_tools / subagents）；cancel / clock / titler /
     transcript / resume 是 runner 的注入点，随 run() 走；waiting_on / decisions 是
     续跑时交回图的挂起现场（contracts/suspension.py），run_state 是上一段落库的图 state。
 

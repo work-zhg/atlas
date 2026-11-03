@@ -13,15 +13,12 @@ from typing import Any
 from uuid import UUID
 
 import pytest
-from atlas_engine.kernel.middleware._compaction import would_split_tool_pair
-from atlas_engine.kernel.middleware.compaction import (
-    SUMMARY_PREFIX,
-    CompactionMiddleware,
-    estimate_tokens,
-    facts_from,
-)
+from atlas_engine.kernel.context import SUMMARY_PREFIX, ContextMiddleware, estimate_tokens
+from atlas_engine.kernel.context._split import would_split_tool_pair
+from atlas_engine.kernel.context.compactor import facts_from
 from atlas_engine.contracts import ContextOverflow
 from atlas_agent.domain.events import EventType
+from tests.graphs import context_pipeline
 from tests.graphs import run_agent as run
 from atlas_agent.domain.spec import AgentSpec, CompactionSpec, LimitSpec, ModelSpec
 from langchain_core.messages import (
@@ -31,6 +28,8 @@ from langchain_core.messages import (
     HumanMessage,
     ToolMessage,
 )
+
+from atlas_agent.config import Settings
 
 from .fakes import TurnModel
 
@@ -118,7 +117,7 @@ async def test_compaction_never_orphans_a_tool_result() -> None:
 
     captured: dict[str, Any] = {}
 
-    class Spy(CompactionMiddleware):
+    class Spy(ContextMiddleware):
         async def abefore_model(self, state: Any, runtime: Any = None) -> Any:
             result = await super().abefore_model(state, runtime)
             if result is not None:
@@ -126,7 +125,8 @@ async def test_compaction_never_orphans_a_tool_result() -> None:
                 captured["before"] = list(state.get("messages") or [])
             return result
 
-    middleware = Spy(
+    middleware = context_pipeline(
+        cls=Spy,
         context_window=_TIGHT_WINDOW,
         trigger_ratio=0.75,
         keep_recent_turns=3,
@@ -141,7 +141,7 @@ async def test_compaction_never_orphans_a_tool_result() -> None:
             model=TurnModel(scripts=[[AIMessageChunk(content="好的。")]]),
             input_content="继续",
             history=history,
-            compactor=middleware,
+            context=middleware,
         )
     ]
 
@@ -167,7 +167,7 @@ async def test_keeps_requested_recent_turns() -> None:
     """保留区确实是最近 N 个完整回合。"""
     history = build_history(30)
     summarizer = RecordingSummarizer()
-    middleware = CompactionMiddleware(
+    middleware = context_pipeline(
         context_window=_TIGHT_WINDOW, trigger_ratio=0.75, keep_recent_turns=3, summarizer=summarizer
     )
 
@@ -195,7 +195,7 @@ async def test_emits_context_compacted_event() -> None:
             model=TurnModel(scripts=[[AIMessageChunk(content="好的。")]]),
             input_content="继续",
             history=build_history(30),
-            compactor=CompactionMiddleware(
+            context=context_pipeline(
                 context_window=_TIGHT_WINDOW,
                 trigger_ratio=0.75,
                 keep_recent_turns=3,
@@ -227,7 +227,7 @@ async def test_compaction_does_not_replay_kept_tool_calls() -> None:
             model=TurnModel(scripts=[[AIMessageChunk(content="好的。")]]),
             input_content="继续",
             history=build_history(30),
-            compactor=CompactionMiddleware(
+            context=context_pipeline(
                 context_window=_TIGHT_WINDOW,
                 trigger_ratio=0.75,
                 keep_recent_turns=3,
@@ -254,7 +254,7 @@ async def test_summary_failure_degrades_but_continues() -> None:
             model=TurnModel(scripts=[[AIMessageChunk(content="好的。")]]),
             input_content="继续",
             history=build_history(30),
-            compactor=CompactionMiddleware(
+            context=context_pipeline(
                 context_window=_TIGHT_WINDOW,
                 trigger_ratio=0.75,
                 keep_recent_turns=3,
@@ -277,7 +277,7 @@ async def test_thinking_blocks_excluded_from_summary() -> None:
     )
 
     summarizer = RecordingSummarizer()
-    middleware = CompactionMiddleware(
+    middleware = context_pipeline(
         context_window=_TIGHT_WINDOW, trigger_ratio=0.75, keep_recent_turns=3, summarizer=summarizer
     )
     await middleware.abefore_model({"messages": history})
@@ -291,7 +291,7 @@ async def test_thinking_blocks_excluded_from_summary() -> None:
 
 async def test_short_history_is_untouched() -> None:
     """没到阈值就不该动 —— 每轮都压缩会全量击穿 prompt cache（§7.3 坑 2）。"""
-    middleware = CompactionMiddleware(
+    middleware = context_pipeline(
         context_window=1_000_000,
         trigger_ratio=0.75,
         keep_recent_turns=3,
@@ -300,24 +300,35 @@ async def test_short_history_is_untouched() -> None:
     assert await middleware.abefore_model({"messages": build_history(2)}) is None
 
 
-def test_disabled_spec_means_no_middleware_at_all() -> None:
-    """enabled=False 的语义从「装了但自我短路」变成「根本不构造」。
+async def test_disabled_compaction_leaves_only_offload_and_reminders() -> None:
+    """enabled=False：不按档位清理、压缩（连窗口都不去查），外置和提醒照常。
 
-    ★ 关的开关在装配层：server 的 _compactor 见 enabled=False 直接返回
-      None，图里连这个节点都没有 —— 比装一个每轮空转的中间件更诚实。
-      这里钉住装配层真的这么做了。
+    ★ 外置和提醒不是压缩：关压缩不该把大结果保护和记忆提醒一起关掉。
     """
-    import inspect
-
     from atlas_agent.executor.context_manager import ContextManager
 
-    src = inspect.getsource(ContextManager._compactor)
-    assert "enabled" in src, "装配层不再检查 enabled，禁用压缩的开关失效了"
+    class _Thread:
+        created_by_uuid = None
+
+    class _Segment:
+        spec = _spec(compaction=CompactionSpec(enabled=False))
+        thread = _Thread()
+
+    manager = ContextManager(None, Settings(litellm_key="x"), None)  # type: ignore[arg-type]
+    middleware = await manager._pipeline(
+        _Segment(),  # type: ignore[arg-type]
+        workspace=None,
+        readable_store=None,
+        sources=[],
+    )
+    assert middleware._budget is None and middleware._compactor is None
+    assert middleware._offloader is not None
+    assert await middleware.abefore_model({"messages": build_history(30)}) is None
 
 
 async def test_overflow_when_recent_turns_alone_exceed_window() -> None:
     """§7.6：保留区本身就装不下 → 报错而不是无限压缩。"""
-    middleware = CompactionMiddleware(
+    middleware = context_pipeline(
         context_window=200,  # 比任何一个回合都小
         trigger_ratio=0.75,
         keep_recent_turns=3,

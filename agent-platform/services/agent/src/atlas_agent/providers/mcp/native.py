@@ -230,12 +230,12 @@ def _clip(text: str, limit: int) -> str:
 
 
 def _clip_blocks(blocks: Any, limit: int) -> Any:
-    """没开文件工具的 agent 没有 FilesystemMiddleware 的转存保护，一个返回
-    5 MB JSON 的调用会直接撑爆上下文。这是最后一道。
+    """最后一道：上下文管理会外置或截断超长结果，但那是结果整个进了消息之后的事；
+    一个返回 5 MB JSON 的调用先在这里裁掉。
 
-    ★ 阈值必须高于 FilesystemMiddleware 的转存阈值（20000 token × 4 = 80 000
+    ★ 阈值必须高于上下文管理的外置阈值（context_result_limit_tokens，约 80 000
       字符）：这里在工具内部执行、早于中间件看到结果，阈值更低就会
-      抢先裁掉本可完整转存到工作区的内容。
+      抢先裁掉本可完整外置的内容。
     """
     if not isinstance(blocks, list):
         return blocks

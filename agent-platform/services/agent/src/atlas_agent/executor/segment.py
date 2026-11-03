@@ -27,7 +27,7 @@ from typing import Any, Protocol
 from uuid import UUID
 
 import redis.asyncio as aioredis
-from atlas_engine.kernel.middleware.compaction import SUMMARY_PREFIX
+from atlas_engine.kernel.context import SUMMARY_PREFIX
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker

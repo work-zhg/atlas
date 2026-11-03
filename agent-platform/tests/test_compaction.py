@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import pytest
-from atlas_engine.kernel.middleware._compaction import (
+from atlas_engine.kernel.context._split import (
     MessageFacts,
     drop_thinking,
     plan_split,

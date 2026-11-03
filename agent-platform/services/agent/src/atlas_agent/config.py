@@ -65,7 +65,9 @@ class Settings(BaseSettings):
     default_model: str = "claude-sonnet-5"
     summarizer_model: str = "claude-haiku-4-5"  # §8 标题（压缩的摘要模型改由智能体配置决定）
     # ── 上下文管理（doc/context-management-design.html）─────────────────
-    #: 一批工具结果的总量上限（tokens）：超过时从最大的开始外置到工作区
+    #: 单条工具结果的上限（tokens，按 2.5 字符 / token 粗估，约 80 000 字符）：超过就外置
+    context_result_limit_tokens: int = 32_000
+    #: 一批工具结果的总量上限（tokens）：超过时从最大的开始外置
     context_batch_cap_tokens: int = 80_000
     #: 前缀缓存的有效期。两处共用这一个值：缓存中间件按它打 cache_control；上下文管理
     #: 据它判断「距上次回复超过有效期 → 缓存必然失效，顺手清旧工具结果」。
@@ -337,8 +339,8 @@ class Settings(BaseSettings):
     #: 超时交给模型（「稍后重试或换一种方式」），不打死整个 run ——
     #: 一个 MCP 服务抖一下不该让整轮失败（MCP 详设 §06）。
     mcp_call_timeout_s: float = 60.0
-    #: 单个文本结果的上限。★ 必须大于 FilesystemMiddleware 的转存阈值
-    #: （80 000 字符），否则会抢先裁掉本可完整转存到工作区的内容。
+    #: 单个文本结果的上限。★ 必须大于上下文管理的外置阈值（context_result_limit_tokens，
+    #: 约 80 000 字符），否则会抢先裁掉本可完整外置的内容。
     mcp_max_result_chars: int = 100_000
 
     # ── 模型管理平台（agent-platform/doc/design/model-design.html）──────────

@@ -16,6 +16,8 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
+import pytest
+
 from atlas_agent.domain.events import EventType
 from tests.graphs import run_agent as run
 from atlas_agent.domain.spec import AgentSpec, LimitSpec, ModelSpec
@@ -85,7 +87,7 @@ async def _call_tool(spec: AgentSpec, tool: str, args: str, **hook_kw: Any) -> s
 async def test_write_file_absent_without_filesystem() -> None:
     """★ 缺口 1：未勾 filesystem，write_file 必须**不存在**。
 
-    修复前它会成功执行（kernel 无条件装 FilesystemMiddleware）。
+    修复前它会成功执行（kernel 无条件装 FilesystemMiddleware）。现在没勾就根本不装。
     """
     result = await _call_tool(_spec(()), "write_file", '{"file_path":"/x.txt","content":"hi"}')
     assert NOT_A_TOOL in result, f"未勾 filesystem 却能写文件：{result[:80]}"
@@ -199,8 +201,8 @@ def test_bash_alone_is_supported() -> None:
 def test_filesystem_and_sandbox_middlewares_are_independent() -> None:
     """两个中间件各自独立装配，互不为前提。
 
-    filesystem 是恒装的脚手架（大结果外置挂在它上面），
-    恒装；sandbox 只在注入了 SandboxProtocol 时才装 —— 没有沙箱是合法状态。
+    filesystem 只在有文件工具时装（大结果外置已归上下文管理，它不再是恒装的脚手架）；
+    sandbox 只在注入了 SandboxProtocol 时才装 —— 没有沙箱是合法状态。
     """
     from atlas_engine.kernel.middleware.filesystem import FilesystemMiddleware
     from atlas_engine.kernel.middleware.sandbox import SandboxMiddleware
@@ -279,3 +281,26 @@ async def test_the_model_sees_execute_when_a_sandbox_is_configured() -> None:
         pass
     assert bound and "execute" in bound[0], bound
     assert not set(bound[0]) & {"read_file", "write_file", "edit_file", "delete", "search"}
+
+
+@pytest.mark.parametrize(("tools", "installed"), [([], False), (["read_file"], True)])
+def test_file_middleware_installed_only_with_file_tools(
+    monkeypatch: pytest.MonkeyPatch, tools: list[str], installed: bool
+) -> None:
+    """文件中间件勾了才装，不再是恒装的脚手架（大结果外置已归上下文管理）。"""
+    from atlas_engine.kernel import graph as kernel_graph
+    from atlas_engine.kernel.graph import FilesystemConfig, create_deep_agent
+
+    built: list[Any] = []
+    real = kernel_graph.FilesystemMiddleware
+
+    def spy(*args: Any, **kwargs: Any) -> Any:
+        built.append(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(kernel_graph, "FilesystemMiddleware", spy)
+    create_deep_agent(
+        model=TurnModel(scripts=[]),
+        filesystem=FilesystemConfig(filesystem=MemoryFilesystem(), tools=tools),
+    )
+    assert bool(built) is installed
