@@ -67,10 +67,10 @@ async def ensure_thread_owner(
     """会话（含子会话）归根会话所有者。子会话的 created_by / source_app 继承自父会话。"""
     row = (
         await session.execute(
-            select(Thread.created_by, Thread.source_app).where(Thread.id == thread_id)
+            select(Thread.created_by_uuid, Thread.source_app).where(Thread.thread_uuid == thread_id)
         )
     ).one_or_none()
-    owner, source_app = (row.created_by, row.source_app) if row else (None, None)
+    owner, source_app = (row.created_by_uuid, row.source_app) if row else (None, None)
     _check_owner(owner, source_app, principal, write=write, what="会话")
 
 
@@ -79,10 +79,10 @@ async def ensure_run_owner(
 ) -> None:
     row = (
         await session.execute(
-            select(Thread.created_by, Thread.source_app)
-            .join(Run, Run.thread_id == Thread.id)
-            .where(Run.id == run_id)
+            select(Thread.created_by_uuid, Thread.source_app)
+            .join(Run, Run.thread_uuid == Thread.thread_uuid)
+            .where(Run.run_uuid == run_id)
         )
     ).one_or_none()
-    owner, source_app = (row.created_by, row.source_app) if row else (None, None)
+    owner, source_app = (row.created_by_uuid, row.source_app) if row else (None, None)
     _check_owner(owner, source_app, principal, write=write, what="运行")

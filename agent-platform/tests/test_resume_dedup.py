@@ -81,7 +81,7 @@ def approvals(monkeypatch: pytest.MonkeyPatch) -> type[_FakeApprovals]:
 
 
 async def _resume_state(waiting_on: Any, history: list[Any]) -> tuple[dict, dict]:
-    run = SimpleNamespace(id=uuid4(), waiting_on=waiting_on)
+    run = SimpleNamespace(run_uuid=uuid4(), waiting_on=waiting_on)
     # 只走审批分支，不碰 session / self 的其它部分
     executor = InProcessExecutor.__new__(InProcessExecutor)
     return await executor._resume_state(None, run, history)  # type: ignore[arg-type]

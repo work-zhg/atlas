@@ -25,12 +25,12 @@ async def test_latest_run_state_per_thread_in_rolled_back_tx() -> None:
 
             def run(thread_id, status, *, at, waiting=None, parent=None):  # type: ignore[no-untyped-def]
                 r = Run(
-                    id=uuid.uuid4(),
-                    thread_id=thread_id,
-                    agent_version_id=version_id,
+                    run_uuid=uuid.uuid4(),
+                    thread_uuid=thread_id,
+                    agent_version_uuid=version_id,
                     status=status,
                     waiting_on=waiting,
-                    parent_run_id=parent,
+                    parent_run_uuid=parent,
                     created_at=at,
                 )
                 session.add(r)
@@ -57,7 +57,7 @@ async def test_latest_run_state_per_thread_in_rolled_back_tx() -> None:
                 "suspended",
                 at=now,
                 waiting={"c2": {"reason": "approval", "token": "y"}},
-                parent=parent.id,
+                parent=parent.run_uuid,
             )
             run(t_done, "succeeded", at=now)
             # ★ 续跑中的 run 还带着上一次挂起的 waiting_on（留到 run 结束才清）—— 不算「需要我处理」
@@ -84,21 +84,21 @@ async def test_latest_run_state_per_thread_in_rolled_back_tx() -> None:
 def test_agent_summary_exposes_capabilities() -> None:
     now = datetime.now(UTC)
     agent = Agent(
-        id=uuid.uuid4(),
+        agent_uuid=uuid.uuid4(),
         slug="coord",
         name="协调者",
         description="",
         avatar_key="general",
         status="enabled",
-        created_by=uuid.uuid4(),
+        created_by_uuid=uuid.uuid4(),
         created_at=now,
         updated_at=now,
     )
     version = AgentVersion(
-        id=uuid.uuid4(),
-        agent_id=agent.id,
+        agent_version_uuid=uuid.uuid4(),
+        agent_uuid=agent.agent_uuid,
         version=7,
-        created_by=uuid.uuid4(),
+        created_by_uuid=uuid.uuid4(),
         spec={
             "model": {"model": "claude-sonnet-5"},
             "tool_names": [
@@ -128,6 +128,10 @@ def test_agent_summary_exposes_capabilities() -> None:
     ]
     # 历史快照没有这些字段也不出错
     bare = AgentVersion(
-        id=uuid.uuid4(), agent_id=agent.id, version=1, created_by=uuid.uuid4(), spec={}
+        agent_version_uuid=uuid.uuid4(),
+        agent_uuid=agent.agent_uuid,
+        version=1,
+        created_by_uuid=uuid.uuid4(),
+        spec={},
     )
     assert _summarize(agent, bare).kind == "native"

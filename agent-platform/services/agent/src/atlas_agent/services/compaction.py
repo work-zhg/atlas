@@ -177,7 +177,7 @@ def make_persist_hook(
             async with sessionmaker() as session:
                 await session.execute(
                     update(Thread)
-                    .where(Thread.id == thread_id)
+                    .where(Thread.thread_uuid == thread_id)
                     .values(
                         summary=payload.get("summary", ""),
                         summary_upto=upto,
@@ -202,7 +202,7 @@ def make_failure_hook(sessionmaker: async_sessionmaker[AsyncSession], thread_id:
             async with sessionmaker() as session:
                 await session.execute(
                     update(Thread)
-                    .where(Thread.id == thread_id)
+                    .where(Thread.thread_uuid == thread_id)
                     .values(context_state={"compaction_failures": failures})
                 )
                 await session.commit()

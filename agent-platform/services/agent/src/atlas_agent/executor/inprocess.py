@@ -97,8 +97,10 @@ async def _save_approval_mode(
 
     run 续跑、接管时从 run.approval_mode 读；会话记住它，作用于下一条消息。
     """
-    await session.execute(update(Run).where(Run.id == run_id).values(approval_mode=mode))
-    await session.execute(update(Thread).where(Thread.id == thread_id).values(approval_mode=mode))
+    await session.execute(update(Run).where(Run.run_uuid == run_id).values(approval_mode=mode))
+    await session.execute(
+        update(Thread).where(Thread.thread_uuid == thread_id).values(approval_mode=mode)
+    )
 
 
 def _spec_from_version(version: AgentVersion, *, slug: str, name: str) -> AgentSpec:
@@ -559,15 +561,15 @@ class InProcessExecutor:
                     await session.commit()
                     return
                 run, thread, version = loaded
-                thread_id = thread.id
+                thread_id = thread.thread_uuid
                 slot.thread_id = thread_id
                 # ★ 出站身份（内网身份传递 §7.2）：这一轮发出的一切内网调用（知识库、技能应用、
                 #   用户中心）都带它。执行任务是全新的上下文、不继承任何请求；接管的实例同样
                 #   按 run 行重建。auth_uid 与发起人不同只会出现在这里：以 Agent 为权限时
                 #   是数字员工（建 run 时按 Agent 的权限类型取好，数字员工设计 §7.3）。
-                initiator = run.created_by or thread.created_by
+                initiator = run.created_by_uuid or thread.created_by_uuid
                 use_identity(CallIdentity(uid=initiator, auth_uid=run.auth_uid or initiator))
-                parent_run_id = run.parent_run_id
+                parent_run_id = run.parent_run_uuid
                 # ★ 事件流归属**根会话**：子 run 的事件也进父会话那条流，
                 #   否则「一个会话看到所有事」不成立（见 Thread.stream_thread_id）。
                 stream_thread_id = thread.stream_thread_id
@@ -804,22 +806,22 @@ class InProcessExecutor:
         """
         runs = RunRepository(session)
         stream_thread_id = thread.stream_thread_id
-        lost = await relay.run_events_after(stream_thread_id, run.id, after_seq=run.last_seq)
+        lost = await relay.run_events_after(stream_thread_id, run.run_uuid, after_seq=run.last_seq)
         top = max([run.last_seq, *(e.seq for e in lost)])
-        await runs.checkpoint(run.id, owner=self._instance, last_seq=top)
-        archived = await runs.archived_thread_seqs(run.id, [e.thread_seq for e in lost])
+        await runs.checkpoint(run.run_uuid, owner=self._instance, last_seq=top)
+        archived = await runs.archived_thread_seqs(run.run_uuid, [e.thread_seq for e in lost])
         await runs.archive_events(
             [e for e in lost if e.thread_seq not in archived], thread_id=stream_thread_id
         )
         # acp 的 message 表里没有 tool_use（工具在 Pod 里），这一步对它天然是空操作
-        rows = await runs.history(thread.id, after=thread.summary_upto)
+        rows = await runs.history(thread.thread_uuid, after=thread.summary_upto)
         if (sealing := interrupted_results(rows)) is not None:
             await ThreadRepository(session).add_messages(
-                thread_id=thread.id, messages=[sealing], run_id=run.id
+                thread_id=thread.thread_uuid, messages=[sealing], run_id=run.run_uuid
             )
-            logger.warning("run %s 接管：%d 个工具调用结果未知", run.id, len(sealing.content))
+            logger.warning("run %s 接管：%d 个工具调用结果未知", run.run_uuid, len(sealing.content))
         base_depth = run.depth
-        return EventFactory(run.id, _utcnow, start_seq=top, base_depth=base_depth).make(
+        return EventFactory(run.run_uuid, _utcnow, start_seq=top, base_depth=base_depth).make(
             EventType.RUN_RESUMED,
             {
                 "reason": takeover,
@@ -936,12 +938,12 @@ class InProcessExecutor:
                 if await self._approval_decision(approvals, token) == "pending":
                     return False
             elif reason == "subagent":
-                if await runs.has_unfinished_children(run.id):
+                if await runs.has_unfinished_children(run.run_uuid):
                     return False
             else:
                 # 不认识的 reason —— 不敢续跑（可能永远等不到），也不敢判死。
                 # 记一条日志让它被发现，而不是静默卡住。
-                logger.warning("run %s 的 waiting_on 里有未知 reason：%r", run.id, reason)
+                logger.warning("run %s 的 waiting_on 里有未知 reason：%r", run.run_uuid, reason)
                 return False
         return True
 
@@ -969,7 +971,7 @@ class InProcessExecutor:
                 run = await runs.get(run_id)
                 if run is None:
                     return
-                thread = await ThreadRepository(session).by_id(run.thread_id)
+                thread = await ThreadRepository(session).by_id(run.thread_uuid)
                 if thread is None:
                     return
                 stream_thread_id = thread.stream_thread_id
@@ -995,7 +997,7 @@ class InProcessExecutor:
                 )
                 await runs.archive_events([event], thread_id=stream_thread_id)
                 await session.commit()
-                thread_id = run.thread_id
+                thread_id = run.thread_uuid
 
             await relay.emit(event, thread_id=stream_thread_id)
             with contextlib.suppress(Exception):
@@ -1015,7 +1017,7 @@ class InProcessExecutor:
         """从库里还原「任务是什么」（spec / 输入 / 历史 / 摘要边界）。"""
         from ..repositories.agent import AgentRepository
 
-        found = await AgentRepository(session).get(thread.agent_id)
+        found = await AgentRepository(session).get(thread.agent_uuid)
         # agent 行理论上必然存在（thread.agent_id 有外键），兜底只为不炸
         slug, name = (found[0].slug, found[0].name) if found is not None else ("agent", "agent")
 
@@ -1037,13 +1039,13 @@ class InProcessExecutor:
             else run.approval_mode
         )
 
-        rows = await RunRepository(session).history(thread.id, after=thread.summary_upto)
+        rows = await RunRepository(session).history(thread.thread_uuid, after=thread.summary_upto)
         if not rows:
             return PreparedRun(
                 spec=spec,
                 input_content="",
                 thread=thread,
-                agent_version_id=version.id,
+                agent_version_id=version.agent_version_uuid,
                 approval_mode=approval_mode,
             )
 
@@ -1084,7 +1086,7 @@ class InProcessExecutor:
             history=history,
             history_upto=upto,
             thread=thread,
-            agent_version_id=version.id,
+            agent_version_id=version.agent_version_uuid,
             resume=resume,
             # 本轮用户消息的时间：Agent 这一轮写入记忆时的「信息成立时间」（记忆设计 §6.4）
             input_at=rows[input_index].created_at if input_index is not None else None,
@@ -1097,7 +1099,7 @@ class InProcessExecutor:
             decisions=decisions,
             approval_mode=approval_mode,
             # ★ 与 waiting_on 一样从库里读：续跑段、接管段可能落在任何一个实例上
-            run_state=await RunRepository(session).load_state(run.id),
+            run_state=await RunRepository(session).load_state(run.run_uuid),
         )
 
     async def _resume_state(
@@ -1139,7 +1141,7 @@ class InProcessExecutor:
                     logger.warning("waiting_on 里的 sub_run_id 非法：%r", token)
                     decisions[token] = "SubAgent 的子 run 记录无法解析，本轮拿不到它的结论。"
             else:
-                logger.warning("run %s 的 waiting_on 里有未知 reason：%r", run.id, wait)
+                logger.warning("run %s 的 waiting_on 里有未知 reason：%r", run.run_uuid, wait)
         return waits, decisions
 
     @staticmethod

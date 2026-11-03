@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.models import Instruction
+from ..db.session import fetch_one
 
 __all__ = ["MAX_CHARS", "PLATFORM", "USER", "InstructionService", "owner_of"]
 
@@ -34,7 +35,9 @@ class InstructionService:
         self.session = session
 
     async def get(self, scope: str, owner: str) -> Instruction | None:
-        return await self.session.get(Instruction, (scope, owner))
+        return await fetch_one(
+            self.session, Instruction, Instruction.scope == scope, Instruction.owner_id == owner
+        )
 
     async def put(self, scope: str, owner: str, content: str, *, actor: UUID) -> Instruction:
         """整段覆盖（不提交，由调用方提交）。"""
@@ -43,7 +46,7 @@ class InstructionService:
             row = Instruction(scope=scope, owner_id=owner)
             self.session.add(row)
         row.content = content
-        row.updated_by = actor
+        row.updated_by_uuid = actor
         row.updated_at = datetime.now(UTC)
         await self.session.flush()
         return row

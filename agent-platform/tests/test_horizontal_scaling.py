@@ -17,7 +17,7 @@ import httpx
 import pytest
 from atlas_agent.config import get_settings
 from atlas_agent.db.models import Message, Run, RunEvent
-from atlas_agent.db.session import get_sessionmaker
+from atlas_agent.db.session import fetch_one, get_sessionmaker
 from atlas_agent.domain.events import EventFactory, EventType
 from atlas_agent.domain.messages import StoredMessage, Transcript, interrupted_results
 from atlas_agent.executor.inprocess import InProcessExecutor, _discarded_chars
@@ -303,7 +303,7 @@ async def test_takeover_marks_a_tool_that_was_running_as_unknown(
             run = await RunRepository(s).get(run_id)
             assert run is not None
             await ThreadRepository(s).add_messages(
-                thread_id=run.thread_id,
+                thread_id=run.thread_uuid,
                 messages=[
                     StoredMessage(
                         role="assistant",
@@ -380,7 +380,7 @@ async def test_lost_lease_stops_local_execution_without_touching_the_run(
         await _until(lambda: _run(run_id), lambda r: r.status == "running")
         slot = a._slots[run_id]
         async with get_sessionmaker()() as s:
-            await s.execute(update(Run).where(Run.id == run_id).values(owner="someone-else"))
+            await s.execute(update(Run).where(Run.run_uuid == run_id).values(owner="someone-else"))
             await s.commit()
         await a.renew_leases()
         assert slot.task is not None
@@ -428,7 +428,7 @@ async def _expire(run_id: UUID) -> None:
     async with get_sessionmaker()() as s:
         await s.execute(
             update(Run)
-            .where(Run.id == run_id)
+            .where(Run.run_uuid == run_id)
             .values(lease_until=datetime.now(UTC) - timedelta(minutes=1))
         )
         await s.commit()
@@ -436,20 +436,20 @@ async def _expire(run_id: UUID) -> None:
 
 async def _run(run_id: UUID) -> Run:
     async with get_sessionmaker()() as s:
-        run = await s.get(Run, run_id)
+        run = await fetch_one(s, Run, Run.run_uuid == run_id)
         assert run is not None
         return run
 
 
 async def _messages_of(run_id: UUID) -> list[Message]:
     async with get_sessionmaker()() as s:
-        stmt = select(Message).where(Message.run_id == run_id).order_by(Message.created_at)
+        stmt = select(Message).where(Message.run_uuid == run_id).order_by(Message.created_at)
         return list((await s.execute(stmt)).scalars())
 
 
 async def _archived(run_id: UUID, kind: EventType | None = None) -> list[RunEvent]:
     async with get_sessionmaker()() as s:
-        stmt = select(RunEvent).where(RunEvent.run_id == run_id).order_by(RunEvent.thread_seq)
+        stmt = select(RunEvent).where(RunEvent.run_uuid == run_id).order_by(RunEvent.thread_seq)
         if kind is not None:
             stmt = stmt.where(RunEvent.type == kind.value)
         return list((await s.execute(stmt)).scalars())
@@ -470,15 +470,15 @@ async def _bare_queued_run() -> UUID:
     """一个排队中的 run（不经 API —— 只测仓库层的领取语义）。"""
     async with get_sessionmaker()() as s:
         run = Run(
-            id=uuid4(),
-            thread_id=uuid4(),
-            agent_version_id=uuid4(),
+            run_uuid=uuid4(),
+            thread_uuid=uuid4(),
+            agent_version_uuid=uuid4(),
             status="queued",
             created_at=datetime(2000, 1, 1, tzinfo=UTC),  # 排在所有残留 run 前面
         )
         s.add(run)
         await s.commit()
-        return run.id
+        return run.run_uuid
 
 
 async def _claim_until(

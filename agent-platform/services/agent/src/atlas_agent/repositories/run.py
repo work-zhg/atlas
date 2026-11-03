@@ -12,6 +12,7 @@ from atlas_agent.domain.events import EventType, TraceEvent
 from atlas_agent.domain.messages import KIND_CHAT
 
 from ..db.models import AgentVersion, Message, Run, RunEvent, RunState, Thread
+from ..db.session import fetch_one
 
 _TERMINAL = ("succeeded", "failed", "cancelled", "interrupted")
 
@@ -125,7 +126,7 @@ class RunRepository:
     # ------------------------------------------------------------------ 读
 
     async def get(self, run_id: UUID) -> Run | None:
-        return await self._session.get(Run, run_id)
+        return await fetch_one(self._session, Run, Run.run_uuid == run_id)
 
     async def load_for_execution(
         self, run_id: UUID
@@ -137,9 +138,9 @@ class RunRepository:
         """
         stmt = (
             select(Run, Thread, AgentVersion)
-            .join(AgentVersion, AgentVersion.id == Run.agent_version_id)
-            .join(Thread, Thread.id == Run.thread_id)
-            .where(Run.id == run_id)
+            .join(AgentVersion, AgentVersion.agent_version_uuid == Run.agent_version_uuid)
+            .join(Thread, Thread.thread_uuid == Run.thread_uuid)
+            .where(Run.run_uuid == run_id)
         )
         row = (await self._session.execute(stmt)).one_or_none()
         return (row[0], row[1], row[2]) if row else None
@@ -161,7 +162,7 @@ class RunRepository:
           直接消失，既不进模型也不产生摘要，用户感受是「它忘了」而不是
           「已压缩」。收缩上下文的职责现在唯一地归压缩。
         """
-        stmt = select(Message).where(Message.thread_id == thread_id)
+        stmt = select(Message).where(Message.thread_uuid == thread_id)
         if after is not None:
             stmt = stmt.where(Message.created_at > after)
         stmt = stmt.order_by(Message.created_at.desc()).limit(limit)
@@ -177,7 +178,7 @@ class RunRepository:
         stmt = (
             select(Message)
             .where(
-                Message.thread_id == thread_id,
+                Message.thread_uuid == thread_id,
                 Message.role == "user",
                 Message.kind == KIND_CHAT,
             )
@@ -190,7 +191,7 @@ class RunRepository:
     async def archived_events(self, run_id: UUID, *, after_seq: int) -> list[RunEvent]:
         stmt = (
             select(RunEvent)
-            .where(RunEvent.run_id == run_id, RunEvent.seq > after_seq)
+            .where(RunEvent.run_uuid == run_id, RunEvent.seq > after_seq)
             .order_by(RunEvent.seq)
         )
         return list((await self._session.execute(stmt)).scalars())
@@ -202,10 +203,10 @@ class RunRepository:
         ★ 按 thread_seq 排：父子交错发生，thread_seq 才是它们在会话流上的真实顺序。
         ★ 归档被清理后这里返回空 —— 前端据此退回只显示正文。
         """
-        children = select(Run.id).where(Run.parent_run_id == run_id)
+        children = select(Run.run_uuid).where(Run.parent_run_uuid == run_id)
         stmt = (
             select(RunEvent)
-            .where((RunEvent.run_id == run_id) | RunEvent.run_id.in_(children))
+            .where((RunEvent.run_uuid == run_id) | RunEvent.run_uuid.in_(children))
             .order_by(RunEvent.thread_seq)
             .limit(limit)
         )
@@ -225,7 +226,7 @@ class RunRepository:
         """
         stmt = (
             select(RunEvent)
-            .where(RunEvent.thread_id == thread_id, RunEvent.thread_seq > after_seq)
+            .where(RunEvent.thread_uuid == thread_id, RunEvent.thread_seq > after_seq)
             .order_by(RunEvent.thread_seq)
             .limit(limit)
         )
@@ -243,7 +244,7 @@ class RunRepository:
         """
         inner = (
             select(RunEvent.thread_seq)
-            .where(RunEvent.thread_id == thread_id)
+            .where(RunEvent.thread_uuid == thread_id)
             .order_by(RunEvent.thread_seq.desc())
             .limit(keep)
             .subquery()
@@ -273,7 +274,7 @@ class RunRepository:
           CLOSE_SUPERSEDED(4409) 关掉第一个，整轮以 runtime_crashed 失败。
           真机验证时撞到过，症状是「审批批准了，子 run 却崩了」。
         """
-        stmt = select(Run.id).where(
+        stmt = select(Run.run_uuid).where(
             Run.status.in_(_SUSPENDED), Run.waiting_on.isnot(None)
         )
         return list((await self._session.execute(stmt)).scalars())
@@ -288,7 +289,7 @@ class RunRepository:
         stmt = (
             select(func.count())
             .select_from(Run)
-            .where(Run.parent_run_id == run_id, Run.status.in_(_UNFINISHED))
+            .where(Run.parent_run_uuid == run_id, Run.status.in_(_UNFINISHED))
         )
         return int((await self._session.execute(stmt)).scalar_one()) > 0
 
@@ -298,8 +299,8 @@ class RunRepository:
         ★ 不级联的后果很贵：父 run 挂起时没有任何进程盯着子 run，它会一直跑下去，
           而 acp 的子 run 整段时间都占着一个 Pod。
         """
-        stmt = select(Run.id).where(
-            Run.parent_run_id == run_id, Run.status.in_(_UNFINISHED)
+        stmt = select(Run.run_uuid).where(
+            Run.parent_run_uuid == run_id, Run.status.in_(_UNFINISHED)
         )
         return list((await self._session.execute(stmt)).scalars())
 
@@ -316,8 +317,8 @@ class RunRepository:
           他正盯着那个「委派中」的卡片。两者都没有进程在跑，但都没结束。
         """
         stmt = (
-            select(Run.id)
-            .where(Run.thread_id == thread_id, Run.status.in_(_UNFINISHED))
+            select(Run.run_uuid)
+            .where(Run.thread_uuid == thread_id, Run.status.in_(_UNFINISHED))
             .order_by(Run.created_at.desc())
             .limit(1)
         )
@@ -336,15 +337,16 @@ class RunRepository:
         if not thread_ids:
             return {}
         latest = (
-            select(Run.thread_id, func.max(Run.created_at).label("at"))
-            .where(Run.thread_id.in_(thread_ids))
-            .group_by(Run.thread_id)
+            select(Run.thread_uuid, func.max(Run.created_at).label("at"))
+            .where(Run.thread_uuid.in_(thread_ids))
+            .group_by(Run.thread_uuid)
             .subquery()
         )
         rows = (
             await self._session.execute(
-                select(Run.id, Run.thread_id, Run.status, Run.waiting_on).join(
-                    latest, (Run.thread_id == latest.c.thread_id) & (Run.created_at == latest.c.at)
+                select(Run.run_uuid, Run.thread_uuid, Run.status, Run.waiting_on).join(
+                    latest,
+                    (Run.thread_uuid == latest.c.thread_uuid) & (Run.created_at == latest.c.at),
                 )
             )
         ).all()
@@ -361,8 +363,8 @@ class RunRepository:
         if parents:
             children = (
                 await self._session.execute(
-                    select(Run.parent_run_id, Run.status, Run.waiting_on).where(
-                        Run.parent_run_id.in_(list(parents)), Run.status.in_(_UNFINISHED)
+                    select(Run.parent_run_uuid, Run.status, Run.waiting_on).where(
+                        Run.parent_run_uuid.in_(list(parents)), Run.status.in_(_UNFINISHED)
                     )
                 )
             ).all()
@@ -380,7 +382,7 @@ class RunRepository:
         stmt = (
             select(Message.content)
             .where(
-                Message.thread_id == thread_id,
+                Message.thread_uuid == thread_id,
                 Message.role == "assistant",
                 Message.kind == KIND_CHAT,
             )
@@ -401,7 +403,7 @@ class RunRepository:
         stmt = (
             select(Message.content)
             .where(
-                Message.run_id == run_id,
+                Message.run_uuid == run_id,
                 Message.role == "assistant",
                 Message.kind == KIND_CHAT,
             )
@@ -431,7 +433,7 @@ class RunRepository:
         stmt = (
             select(func.count())
             .select_from(Run)
-            .where(Run.parent_run_id.isnot(None), Run.status.in_(_RUNNING))
+            .where(Run.parent_run_uuid.isnot(None), Run.status.in_(_RUNNING))
         )
         return int((await self._session.execute(stmt)).scalar_one())
 
@@ -444,7 +446,7 @@ class RunRepository:
         ★ 也防另一种绕过：长 run 在每个规划点派一批「合法尺寸」的 SubAgent，
           累计起来远超并发限制。查 run 表即可，不用单独的账本。
         """
-        stmt = select(func.count()).select_from(Run).where(Run.root_run_id == root_run_id)
+        stmt = select(func.count()).select_from(Run).where(Run.root_run_uuid == root_run_id)
         return int((await self._session.execute(stmt)).scalar_one())
 
     # ------------------------------------------------------------------ 写
@@ -472,19 +474,19 @@ class RunRepository:
         approval_mode：根 run 取自会话 / 请求；子 run 是派活那一刻父 run 的模式。
         """
         run = Run(
-            thread_id=thread_id,
-            agent_version_id=agent_version_id,
-            parent_run_id=parent_run_id,
-            root_run_id=root_run_id,
+            thread_uuid=thread_id,
+            agent_version_uuid=agent_version_id,
+            parent_run_uuid=parent_run_id,
+            root_run_uuid=root_run_id,
             depth=depth,
-            created_by=created_by,
+            created_by_uuid=created_by,
             auth_uid=auth_uid or created_by,
             auth_subject=auth_subject,
             status="queued",
             approval_mode=approval_mode,
         )
         if run_id is not None:
-            run.id = run_id
+            run.run_uuid = run_id
         self._session.add(run)
         await self._session.flush()
         await self._session.refresh(run)
@@ -499,7 +501,7 @@ class RunRepository:
         """
         await self._session.execute(
             update(Run)
-            .where(Run.id == run_id, Run.status.notin_(list(_TERMINAL)))
+            .where(Run.run_uuid == run_id, Run.status.notin_(list(_TERMINAL)))
             .values(status=status)
         )
 
@@ -512,7 +514,7 @@ class RunRepository:
         """
         await self._session.execute(
             update(Run)
-            .where(Run.id == run_id)
+            .where(Run.run_uuid == run_id)
             .values(
                 status="running",
                 started_at=func.coalesce(Run.started_at, datetime.now(UTC)),
@@ -534,7 +536,7 @@ class RunRepository:
         不传 = 没有执行器在跑的收尾（挂起中被取消、兜底失败）。"""
         result = await self._session.execute(
             update(Run)
-            .where(Run.id == run_id, *_held_by(owner))
+            .where(Run.run_uuid == run_id, *_held_by(owner))
             .values(
                 status=status,
                 last_seq=last_seq,
@@ -574,7 +576,7 @@ class RunRepository:
         """
         result = await self._session.execute(
             update(Run)
-            .where(Run.id == run_id, *_held_by(owner))
+            .where(Run.run_uuid == run_id, *_held_by(owner))
             .values(
                 # ★ 等人点头落 awaiting_approval，等机器落 suspended。
                 #   两者都是挂起（_SUSPENDED），分开只为让 UI 能区分
@@ -602,7 +604,7 @@ class RunRepository:
         """
         result = await self._session.execute(
             update(Run)
-            .where(Run.id == run_id, Run.status.in_(_SUSPENDED))
+            .where(Run.run_uuid == run_id, Run.status.in_(_SUSPENDED))
             # ★ waiting_on **不清**：续跑段要把它和消息一起交回图，而这一段可能由任意
             #   实例领取，只能从库里读（executor._resume_state）。下一次挂起时覆盖，
             #   run 结束时清（finish）。读它的地方都按状态过滤（_wait_reasons）。
@@ -633,7 +635,7 @@ class RunRepository:
             Run.lease_until < now,
         )
         stmt = (
-            select(Run.id, Run.status, Run.owner)
+            select(Run.run_uuid, Run.status, Run.owner)
             .where(or_(Run.status == "queued", expired))
             .order_by(Run.created_at)
             .limit(1)
@@ -653,7 +655,7 @@ class RunRepository:
         }
         if reason is not None:
             values["takeovers"] = Run.takeovers + 1
-        await self._session.execute(update(Run).where(Run.id == run_id).values(**values))
+        await self._session.execute(update(Run).where(Run.run_uuid == run_id).values(**values))
         return run_id, reason
 
     async def renew_leases(self, run_ids: list[UUID], *, owner: str, lease_s: float) -> set[UUID]:
@@ -664,11 +666,11 @@ class RunRepository:
         """
         if not run_ids:
             return set()
-        held = (Run.id.in_(run_ids), Run.owner == owner, Run.status.in_(_LEASED))
+        held = (Run.run_uuid.in_(run_ids), Run.owner == owner, Run.status.in_(_LEASED))
         await self._session.execute(
             update(Run).where(*held).values(lease_until=_utcnow() + timedelta(seconds=lease_s))
         )
-        return set((await self._session.execute(select(Run.id).where(*held))).scalars())
+        return set((await self._session.execute(select(Run.run_uuid).where(*held))).scalars())
 
     async def release_lease(self, run_id: UUID, *, owner: str) -> bool:
         """主动交接（§6）：清掉 owner、租约立即到期，下一次领取扫描就会把它领走。
@@ -677,7 +679,7 @@ class RunRepository:
         """
         result = await self._session.execute(
             update(Run)
-            .where(Run.id == run_id, Run.owner == owner, Run.status.in_(_LEASED))
+            .where(Run.run_uuid == run_id, Run.owner == owner, Run.status.in_(_LEASED))
             .values(owner=None, lease_until=_utcnow())
         )
         return bool(result.rowcount)
@@ -689,7 +691,7 @@ class RunRepository:
         """
         result = await self._session.execute(
             update(Run)
-            .where(Run.id == run_id, Run.owner == owner, Run.status.in_(_LEASED))
+            .where(Run.run_uuid == run_id, Run.owner == owner, Run.status.in_(_LEASED))
             .values(last_seq=func.greatest(Run.last_seq, last_seq))
         )
         if not result.rowcount:
@@ -699,14 +701,14 @@ class RunRepository:
         """acp：已处理到的 bridge 实例与序号（§5.2）。换实例接管时据此 attach。"""
         await self._session.execute(
             update(Run)
-            .where(Run.id == run_id)
+            .where(Run.run_uuid == run_id)
             .values(acp_bridge_instance=instance[:64], acp_acked_seq=acked_seq)
         )
 
     async def load_state(self, run_id: UUID) -> dict[str, Any]:
         """这个 run 落过库的图 state（run_state 表），续跑与接管时交回图。全新的 run 返回 {}。"""
         rows = await self._session.execute(
-            select(RunState.key, RunState.value).where(RunState.run_id == run_id)
+            select(RunState.key, RunState.value).where(RunState.run_uuid == run_id)
         )
         return {key: value for key, value in rows.all()}
 
@@ -719,7 +721,7 @@ class RunRepository:
         if not values:
             return
         table = RunState.__table__
-        rows = [{"run_id": run_id, "key": key, "value": value} for key, value in values.items()]
+        rows = [{"run_uuid": run_id, "key": key, "value": value} for key, value in values.items()]
         dialect = self._session.bind.dialect.name if self._session.bind else "postgresql"
         if dialect in ("mysql", "mariadb"):
             from sqlalchemy.dialects.mysql import insert as mysql_insert
@@ -731,7 +733,7 @@ class RunRepository:
 
             stmt = pg_insert(table).values(rows)
             stmt = stmt.on_conflict_do_update(
-                index_elements=["run_id", "key"],
+                index_elements=["run_uuid", "key"],
                 set_={"value": stmt.excluded.value, "updated_at": func.now()},
             )
         await self._session.execute(stmt)
@@ -741,7 +743,7 @@ class RunRepository:
         if not thread_seqs:
             return set()
         stmt = select(RunEvent.thread_seq).where(
-            RunEvent.run_id == run_id, RunEvent.thread_seq.in_(thread_seqs)
+            RunEvent.run_uuid == run_id, RunEvent.thread_seq.in_(thread_seqs)
         )
         return set((await self._session.execute(stmt)).scalars())
 
@@ -762,9 +764,9 @@ class RunRepository:
         """
         rows = [
             {
-                "thread_id": thread_id,
+                "thread_uuid": thread_id,
                 "thread_seq": e.thread_seq,
-                "run_id": e.run_id,
+                "run_uuid": e.run_id,
                 "seq": e.seq,
                 "ts": e.ts,
                 "type": e.type.value,
@@ -784,7 +786,7 @@ class RunRepository:
         ★ 每段执行开始时查一次，不是每个事件查一次。它只在 Redis 的序号 key
           不存在时才真正被用到（见 EventRelay.next_thread_seq 的 Lua）。
         """
-        stmt = select(func.max(RunEvent.thread_seq)).where(RunEvent.thread_id == thread_id)
+        stmt = select(func.max(RunEvent.thread_seq)).where(RunEvent.thread_uuid == thread_id)
         return int((await self._session.execute(stmt)).scalar() or 0)
 
     async def touch_thread(self, thread_id: UUID, *, latest_state: dict | None = None) -> None:
@@ -796,10 +798,12 @@ class RunRepository:
             "message_count": (
                 select(func.count())
                 .select_from(Message)
-                .where(Message.thread_id == thread_id, Message.kind == KIND_CHAT)
+                .where(Message.thread_uuid == thread_id, Message.kind == KIND_CHAT)
                 .scalar_subquery()
             ),
         }
         if latest_state is not None:
             values["latest_state"] = latest_state
-        await self._session.execute(update(Thread).where(Thread.id == thread_id).values(**values))
+        await self._session.execute(
+            update(Thread).where(Thread.thread_uuid == thread_id).values(**values)
+        )

@@ -43,7 +43,7 @@ def _out(scope: str, row: Instruction | None) -> InstructionOut:
     if row is None:
         return InstructionOut(scope=scope, content="")
     return InstructionOut(
-        scope=scope, content=row.content, updated_at=row.updated_at, updated_by=row.updated_by
+        scope=scope, content=row.content, updated_at=row.updated_at, updated_by=row.updated_by_uuid
     )
 
 

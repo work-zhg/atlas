@@ -6,6 +6,7 @@ from functools import lru_cache
 from typing import Annotated, Any
 
 from fastapi import Depends
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -74,3 +75,12 @@ async def get_session() -> AsyncIterator[AsyncSession]:
 #: 不存在」）。代价：响应发出后 session 已关闭，流式响应的生成器里不能再用它。
 #: 作用域不同的两个 Depends(get_session) 在同一请求里是两个 session，所以只能有这一处声明
 SessionDep = Annotated[AsyncSession, Depends(get_session, scope="function")]
+
+
+async def fetch_one[T](session: AsyncSession, model: type[T], *where: Any) -> T | None:
+    """按逻辑键取一行：`fetch_one(s, Run, Run.run_uuid == run_id)`。
+
+    ★ 主键是库内的自增 id，按 uuid 取行不能再用 `session.get`（它只认主键）。
+    """
+    stmt = select(model).where(*where)
+    return (await session.execute(stmt)).scalar_one_or_none()

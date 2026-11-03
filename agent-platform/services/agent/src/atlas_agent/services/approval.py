@@ -174,9 +174,9 @@ async def approval_spec_of_run(session: AsyncSession, run_id: UUID) -> ApprovalS
     from ..schemas.agent import AgentSpecIn
 
     spec = await session.scalar(
-        select(AgentVersion.spec).join(Run, Run.agent_version_id == AgentVersion.id).where(
-            Run.id == run_id
-        )
+        select(AgentVersion.spec)
+        .join(Run, Run.agent_version_uuid == AgentVersion.agent_version_uuid)
+        .where(Run.run_uuid == run_id)
     )
     return AgentSpecIn.model_validate(spec or {"model": {"model": "unknown"}}).approval.to_engine()
 
@@ -207,7 +207,7 @@ async def decision_outcome(
         except ValueError as exc:
             raise InvalidAnswers(str(exc)) from exc
     if approval.kind == "plan" and decision == "approved":
-        allowed = (await approval_spec_of_run(session, approval.run_id)).execution_modes()
+        allowed = (await approval_spec_of_run(session, approval.run_uuid)).execution_modes()
         if approval_mode not in allowed:
             raise InvalidApprovalMode(
                 "批准计划时要选一个执行模式，且必须在智能体允许的范围里",

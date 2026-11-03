@@ -103,7 +103,7 @@ def prepared(
         spec=spec,
         input_content=text,
         thread=thread,
-        thread_id=thread.id,
+        thread_id=thread.thread_uuid,
         start_seq=0,
         base_depth=0,
         takeover=None,
@@ -157,14 +157,14 @@ class Env:
 @pytest.fixture
 async def env(tmp_path: Path) -> AsyncIterator[Callable[..., Awaitable[Env]]]:
     apps: list[tuple[BridgeApp, asyncio.Task[int]]] = []
-    thread = SimpleNamespace(id=uuid4(), external_session_id=None)
+    thread = SimpleNamespace(thread_uuid=uuid4(), external_session_id=None)
 
     async def start(script: Script | None = None, **cfg: Any) -> Env:
         token_file = tmp_path / "token"
         token_file.write_text(TOKEN)
         app = BridgeApp(
             BridgeConfig(
-                session_id=str(thread.id),
+                session_id=str(thread.thread_uuid),
                 token_file=token_file,
                 listen_host="127.0.0.1",
                 listen_port=0,
@@ -223,7 +223,7 @@ async def test_a_full_turn(env: Any) -> None:
     assert last(events).data["stop_reason"] == "end_turn"
     assert last(events).data["text_len"] == len("第 1 段第 2 段")
     # 会话身份当场落下：下一轮的恢复全靠它
-    assert e.sessions.remembered == [(e.thread.id, e.app.host.agent_session_id)]
+    assert e.sessions.remembered == [(e.thread.thread_uuid, e.app.host.agent_session_id)]
 
 
 async def test_second_run_on_the_same_pod(env: Any) -> None:
@@ -390,7 +390,7 @@ async def test_wrong_token_is_unreachable_not_a_hang(env: Any) -> None:
 async def test_next_run_attaches_instead_of_opening(env: Any) -> None:
     e = await env()
     await e.run()
-    known = e.runtime._known[e.thread.id]
+    known = e.runtime._known[e.thread.thread_uuid]
     assert known.instance == e.app.instance and known.last_seq > 0
     events = await e.run(text="again")
     assert last(events).type is EventType.RUN_FINISHED
@@ -465,17 +465,17 @@ async def test_bridge_restarted_mid_turn_is_bridge_lost(env: Any) -> None:
     e = await env(Script(on_prompt="silent"))
 
     async def restart_then_disconnect() -> None:
-        while e.thread.id not in e.runtime._known or e.app.host.turn is None:
+        while e.thread.thread_uuid not in e.runtime._known or e.app.host.turn is None:
             await asyncio.sleep(0.02)
         # 模拟：runtime 记得的是重启前的实例
-        e.runtime._known[e.thread.id].instance = "b-before-restart"
+        e.runtime._known[e.thread.thread_uuid].instance = "b-before-restart"
         await e.app.server.close_current(1011, "test")
 
     task = asyncio.create_task(restart_then_disconnect())
     events = await e.run(timeout_s=30)
     await task
     assert last(events).data["error_kind"] == "bridge_lost"
-    assert e.thread.id not in e.runtime._known  # 忘掉它，下一轮 session.open
+    assert e.thread.thread_uuid not in e.runtime._known  # 忘掉它，下一轮 session.open
 
 
 async def test_superseded_connection_does_not_reconnect(env: Any) -> None:
@@ -486,7 +486,9 @@ async def test_superseded_connection_does_not_reconnect(env: Any) -> None:
     async def take_over() -> None:
         await asyncio.sleep(0.5)
         probe = await UpstreamProbe.connect(
-            f"ws://127.0.0.1:{e.app.server.port}/host", token=TOKEN, session_id=str(e.thread.id)
+            f"ws://127.0.0.1:{e.app.server.port}/host",
+            token=TOKEN,
+            session_id=str(e.thread.thread_uuid),
         )
         await asyncio.sleep(1)
         await probe.close()
@@ -506,7 +508,7 @@ async def test_server_that_forgot_the_bridge_attaches_via_already_open(env: Any)
     e.thread.external_session_id = e.sessions.remembered[-1][1]
     events = await e.run(text="again")
     assert last(events).type is EventType.RUN_FINISHED
-    assert e.runtime._known[e.thread.id].instance == e.app.instance
+    assert e.runtime._known[e.thread.thread_uuid].instance == e.app.instance
 
 
 # ═════════════════════════ 权限模式（doc/acp-permission-mode-design.html）═════════════════════════

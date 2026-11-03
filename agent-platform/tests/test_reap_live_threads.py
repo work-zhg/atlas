@@ -22,27 +22,29 @@ async def test_archived_threads_are_not_live_unless_a_run_is_unfinished() -> Non
     async with get_sessionmaker()() as s:
         threads = ThreadRepository(s)
         runs = RunRepository(s)
-        agent = Agent(slug="reap", name="回收", status="enabled", created_by=USER)
+        agent = Agent(slug="reap", name="回收", status="enabled", created_by_uuid=USER)
         s.add(agent)
         await s.flush()
-        ver = AgentVersion(agent_id=agent.id, version=1, spec={}, created_by=USER)
+        ver = AgentVersion(agent_uuid=agent.agent_uuid, version=1, spec={}, created_by_uuid=USER)
         s.add(ver)
         await s.flush()
-        version = ver.id
-        aid = agent.id
+        version = ver.agent_version_uuid
+        aid = agent.agent_uuid
         active = await threads.create(agent_id=aid, title="在用", created_by=USER)
         dropped = await threads.create(agent_id=aid, title="fresh 丢弃的", created_by=USER)
         busy = await threads.create(agent_id=aid, title="归档时还在跑", created_by=USER)
         done = await threads.create(agent_id=aid, title="归档且跑完了", created_by=USER)
         for t in (dropped, busy, done):
             await threads.archive_subagent(t)
-        await runs.create(thread_id=busy.id, agent_version_id=version)  # 新建的 run 是 queued
-        finished = await runs.create(thread_id=done.id, agent_version_id=version)
+        await runs.create(
+            thread_id=busy.thread_uuid, agent_version_id=version
+        )  # 新建的 run 是 queued
+        finished = await runs.create(thread_id=done.thread_uuid, agent_version_id=version)
         finished.status = "succeeded"
         await s.commit()
 
         live = set(await threads.live_ids())
-    assert active.id in live
-    assert busy.id in live
-    assert dropped.id not in live
-    assert done.id not in live
+    assert active.thread_uuid in live
+    assert busy.thread_uuid in live
+    assert dropped.thread_uuid not in live
+    assert done.thread_uuid not in live

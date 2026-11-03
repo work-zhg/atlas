@@ -45,6 +45,7 @@ from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 
 from ..db.models import MemoryUserSetting, ThreadMemory
+from ..db.session import fetch_one
 from .client import (
     MemoryClient,
     MemoryEntry,
@@ -170,14 +171,14 @@ class MemoryRuntime:
 
     async def state(self, thread_id: UUID) -> ThreadMemory | None:
         async with self.sessionmaker() as session:
-            return await session.get(ThreadMemory, thread_id)
+            return await fetch_one(session, ThreadMemory, ThreadMemory.thread_uuid == thread_id)
 
     async def update_state(self, thread_id: UUID, **values: Any) -> None:
         await self._upsert(
             ThreadMemory,
-            ThreadMemory.thread_id == thread_id,
+            ThreadMemory.thread_uuid == thread_id,
             values,
-            insert={"thread_id": thread_id, **values},
+            insert={"thread_uuid": thread_id, **values},
         )
 
     async def _upsert(
@@ -207,25 +208,27 @@ class MemoryRuntime:
     async def user_setting(self, user_id: UUID) -> tuple[bool, int]:
         """(是否暂停写入, 管理操作计数)。"""
         async with self.sessionmaker() as session:
-            row = await session.get(MemoryUserSetting, user_id)
+            row = await fetch_one(
+                session, MemoryUserSetting, MemoryUserSetting.user_uuid == user_id
+            )
         return (row.paused, row.epoch) if row is not None else (False, 0)
 
     async def bump_epoch(self, user_id: UUID) -> None:
         """用户在管理界面做了影响记忆的操作：各会话的常驻块在下一轮刷新（§5.3）。"""
         await self._upsert(
             MemoryUserSetting,
-            MemoryUserSetting.user_id == user_id,
+            MemoryUserSetting.user_uuid == user_id,
             {"epoch": MemoryUserSetting.epoch + 1},
-            insert={"user_id": user_id, "epoch": 1},
+            insert={"user_uuid": user_id, "epoch": 1},
         )
 
     async def set_paused(self, user_id: UUID, paused: bool) -> None:
         """暂停 / 恢复两条写入路径（§7）。已有记忆照常常驻、照常可以加载。"""
         await self._upsert(
             MemoryUserSetting,
-            MemoryUserSetting.user_id == user_id,
+            MemoryUserSetting.user_uuid == user_id,
             {"paused": paused},
-            insert={"user_id": user_id, "paused": paused},
+            insert={"user_uuid": user_id, "paused": paused},
         )
 
     # ── 一轮
@@ -243,20 +246,22 @@ class MemoryRuntime:
         """为这一段 run 组装记忆。会话关了记忆、或记忆服务不可用时返回 None（本轮不用记忆）。"""
         if thread.memory == "off":
             return None
-        owner = thread.created_by
+        owner = thread.created_by_uuid
         scopes = self.scopes_for(owner)
-        state = await self.state(thread.id)
+        state = await self.state(thread.thread_uuid)
         _, epoch = await self.user_setting(owner)
         try:
             if state is None or state.registered_at is None:
                 await self.register(owner)
-                await self.update_state(thread.id, registered_at=datetime.now(UTC))
+                await self.update_state(thread.thread_uuid, registered_at=datetime.now(UTC))
             catalogs = {
                 s.name: await self.call(owner, lambda s=s: self.client.catalog(s, as_user=owner))
                 for s in scopes
             }
         except (MemoryUnavailable, MemoryRejected) as exc:
-            logger.warning("记忆暂不可用，本轮不加载、不写入 thread=%s：%s", thread.id, exc)
+            logger.warning(
+                "记忆暂不可用，本轮不加载、不写入 thread=%s：%s", thread.thread_uuid, exc
+            )
             return None
 
         snapshot = dict(state.snapshot or {}) if state is not None else {}
@@ -271,13 +276,15 @@ class MemoryRuntime:
                     thread, scopes, catalogs, snapshot, known, epoch=epoch, reason=reason
                 )
             except (MemoryUnavailable, MemoryRejected) as exc:
-                logger.warning("重建常驻块失败，本轮不用记忆 thread=%s：%s", thread.id, exc)
+                logger.warning(
+                    "重建常驻块失败，本轮不用记忆 thread=%s：%s", thread.thread_uuid, exc
+                )
                 return None
-            await self.update_state(thread.id, snapshot=snapshot, known=known.to_json())
-            logger.info("记忆常驻块已重建 thread=%s 原因=%s", thread.id, reason)
+            await self.update_state(thread.thread_uuid, snapshot=snapshot, known=known.to_json())
+            logger.info("记忆常驻块已重建 thread=%s 原因=%s", thread.thread_uuid, reason)
 
         block = str(snapshot.get("block") or "")
-        writable = writable and thread.parent_thread_id is None
+        writable = writable and thread.parent_thread_uuid is None
         if writable:
             block += "\n\n" + write_guidance(
                 topic_max_chars=self.settings.memory_topic_max_chars,
@@ -285,7 +292,7 @@ class MemoryRuntime:
             )
         return MemoryTurn(
             runtime=self,
-            thread_id=thread.id,
+            thread_id=thread.thread_uuid,
             owner=owner,
             run_id=run_id,
             scopes=scopes,
@@ -335,7 +342,7 @@ class MemoryRuntime:
         reason: str,
     ) -> tuple[dict[str, Any], _Known]:
         """重建常驻块。没变的常驻主题沿用快照里的条目，变了的才重新拉取。"""
-        owner = thread.created_by
+        owner = thread.created_by_uuid
         budget = self.settings.memory_resident_budget_chars
         old_resident = dict(old.get("resident") or {})
         resident_out: dict[str, dict[str, Any]] = {}

@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import Settings
 from ..db.models import AppUser
+from ..db.session import fetch_one
 from ..errors import Forbidden, Unauthorized
 from .principal import Principal
 from .uc import UCClient, UCError
@@ -117,7 +118,7 @@ class AuthService:
     async def upsert_user(self, info: dict[str, Any]) -> AppUser:
         """按用户中心资料登记 / 同步投影（id = 用户中心用户 id）。"""
         uid = UUID(str(info["id"]))
-        user = await self.session.get(AppUser, uid)
+        user = await fetch_one(self.session, AppUser, AppUser.user_uuid == uid)
         dept = info.get("dept") or {}
         fields = {
             "name": info.get("name") or info.get("account") or str(uid),
@@ -130,7 +131,7 @@ class AuthService:
             "updated_at": _now(),
         }
         if user is None:
-            user = AppUser(id=uid, **fields)
+            user = AppUser(user_uuid=uid, **fields)
             self.session.add(user)
         else:
             for k, v in fields.items():
@@ -149,7 +150,7 @@ class AuthService:
             raise Unauthorized("账号已停用")
         if not snap.get("can_access"):
             raise Forbidden("没有使用 Atlas 的权限，请联系管理员在用户中心授权")
-        user = await self.session.get(AppUser, uid)
+        user = await fetch_one(self.session, AppUser, AppUser.user_uuid == uid)
         if user is not None and (
             user.last_seen_at is None or _now() - user.last_seen_at > _TOUCH_EVERY
         ):

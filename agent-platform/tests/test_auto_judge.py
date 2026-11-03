@@ -434,8 +434,8 @@ class FakeRuns:
 
 
 async def test_a_root_thread_judges_by_its_own_user_messages() -> None:
-    thread = SimpleNamespace(id=uuid4(), root_thread_id=None, parent_thread_id=None)
-    runs = FakeRuns({thread.id: ["统计行数", "再画个图"]})
+    thread = SimpleNamespace(thread_uuid=uuid4(), root_thread_uuid=None, parent_thread_uuid=None)
+    runs = FakeRuns({thread.thread_uuid: ["统计行数", "再画个图"]})
     got = await _judge_instructions(runs, thread)  # type: ignore[arg-type]
     assert got == [Instruction("user", "统计行数"), Instruction("user", "再画个图")]
 
@@ -443,7 +443,7 @@ async def test_a_root_thread_judges_by_its_own_user_messages() -> None:
 async def test_a_subagent_judges_by_the_root_users_words_plus_its_brief() -> None:
     """★ 子会话里 role=user 的是上级智能体写的任务书，不能当成用户说的话。"""
     root = uuid4()
-    thread = SimpleNamespace(id=uuid4(), root_thread_id=root, parent_thread_id=root)
-    runs = FakeRuns({root: ["整理周报"], thread.id: ["汇总本周提交"]})
+    thread = SimpleNamespace(thread_uuid=uuid4(), root_thread_uuid=root, parent_thread_uuid=root)
+    runs = FakeRuns({root: ["整理周报"], thread.thread_uuid: ["汇总本周提交"]})
     got = await _judge_instructions(runs, thread)  # type: ignore[arg-type]
     assert got == [Instruction("user", "整理周报"), Instruction("delegator", "汇总本周提交")]

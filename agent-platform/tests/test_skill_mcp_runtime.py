@@ -632,25 +632,33 @@ async def test_skill_usage_is_counted_once_per_run_in_rolled_back_tx() -> None:
     today = date(2026, 10, 5)
     async with get_sessionmaker()() as session:
         try:
-            agent = Agent(slug=f"usage-{uuid.uuid4().hex[:8]}", name="u", created_by=uuid.uuid4())
+            agent = Agent(
+                slug=f"usage-{uuid.uuid4().hex[:8]}", name="u", created_by_uuid=uuid.uuid4()
+            )
             session.add(agent)
             await session.flush()
-            version = AgentVersion(agent_id=agent.id, version=1, spec={}, created_by=uuid.uuid4())
+            version = AgentVersion(
+                agent_uuid=agent.agent_uuid, version=1, spec={}, created_by_uuid=uuid.uuid4()
+            )
             session.add(version)
             await session.flush()
             thread_id = uuid.uuid4()
             runs = []
             for i, status in enumerate(("succeeded", "failed")):
-                run = Run(thread_id=thread_id, agent_version_id=version.id, status=status)
+                run = Run(
+                    thread_uuid=thread_id,
+                    agent_version_uuid=version.agent_version_uuid,
+                    status=status,
+                )
                 session.add(run)
                 await session.flush()
                 runs.append(run)
                 for j in range(2):  # 同一 run 两条 skill.loaded（两段）只算一次
                     session.add(
                         RunEvent(
-                            thread_id=thread_id,
+                            thread_uuid=thread_id,
                             thread_seq=i * 10 + j + 1,
-                            run_id=run.id,
+                            run_uuid=run.run_uuid,
                             seq=j + 1,
                             ts=datetime.now(UTC),
                             type="skill.loaded",
@@ -659,14 +667,15 @@ async def test_skill_usage_is_counted_once_per_run_in_rolled_back_tx() -> None:
                     )
             await session.flush()
             repo = SkillUsageRepository(session)
-            await repo.record_run(runs[0].id, succeeded=True, day=today)
-            await repo.record_run(runs[1].id, succeeded=False, day=today)
-            rows = [r for r in await repo.summary(days=1, today=today) if r["agent_id"] == agent.id]
+            await repo.record_run(runs[0].run_uuid, succeeded=True, day=today)
+            await repo.record_run(runs[1].run_uuid, succeeded=False, day=today)
+            summary = await repo.summary(days=1, today=today)
+            rows = [r for r in summary if r["agent_id"] == agent.agent_uuid]
             assert rows == [
                 {
                     "slug": "demo",
                     "version": 2,
-                    "agent_id": agent.id,
+                    "agent_id": agent.agent_uuid,
                     "loads": 2,
                     "completed_runs": 1,
                 }

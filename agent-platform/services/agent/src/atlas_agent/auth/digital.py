@@ -50,13 +50,13 @@ class AgentIdentity:
         if agent.digital_employee_uid is not None or self.uc is None:
             return agent.digital_employee_uid
         de = await self.uc.create_digital_employee(
-            external_ref=str(agent.id),
+            external_ref=str(agent.agent_uuid),
             name=digital_name(agent.name),
             owner_id=owner,
             description=(agent.description or "")[:200] or None,
         )
         agent.digital_employee_uid = UUID(str(de["id"]))
-        log.info("agent=%s 数字员工=%s（%s）", agent.id, de["id"], de.get("account"))
+        log.info("agent=%s 数字员工=%s（%s）", agent.agent_uuid, de["id"], de.get("account"))
         return agent.digital_employee_uid
 
     async def register(self, agent: Agent, owner: UUID) -> None:
@@ -65,7 +65,7 @@ class AgentIdentity:
             return
         await self.uc.data_grant(
             AGENT_DATA,
-            str(agent.id),
+            str(agent.agent_uuid),
             [{"permission": "OWNER", "subject_type": "USER", "subject_id": str(owner)}],
             data_name=agent.name,
         )
@@ -73,7 +73,7 @@ class AgentIdentity:
     async def renamed(self, agent: Agent) -> None:
         if self.uc is None:
             return
-        await self.uc.data_rename(AGENT_DATA, str(agent.id), agent.name)
+        await self.uc.data_rename(AGENT_DATA, str(agent.agent_uuid), agent.name)
         if agent.digital_employee_uid is not None:
             await self.uc.update_digital_employee(
                 agent.digital_employee_uid, name=digital_name(agent.name)

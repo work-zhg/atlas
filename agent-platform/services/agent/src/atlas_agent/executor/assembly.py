@@ -222,7 +222,7 @@ class PreparedRun:
 
     @property
     def thread_id(self) -> UUID:
-        return self.thread.id
+        return self.thread.thread_uuid
 
 
 class HookAssembly:
@@ -325,7 +325,7 @@ class HookAssembly:
             sandbox = PodSandbox(
                 provisioner=provisioner,
                 workspace_thread_id=ws_thread,
-                user_id=str(prepared.thread.created_by),
+                user_id=str(prepared.thread.created_by_uuid),
                 run_id=str(run_id),
                 image=prepared.spec.sandbox.image,
                 profile=prepared.spec.sandbox.profile,
@@ -344,7 +344,7 @@ class HookAssembly:
         #     与父会话共用工作区，父会话的沙箱在跑时它的文件工具也要进沙箱（与命令同一个挂载，§9）。
         workspace = make_workspace(
             self._settings,
-            prepared.thread.created_by,
+            prepared.thread.created_by_uuid,
             prepared.thread_id,
             workspace_thread_id=prepared.thread.workspace_thread_id,
             routing=WorkspaceRouting(provisioner, ws_thread) if provisioner else None,
@@ -373,7 +373,7 @@ class HookAssembly:
 
         # 持久指令（L1）：读不到时跳过，不让本轮失败
         instructions = await load_instructions(
-            self._sessionmaker, workspace, prepared.thread.created_by
+            self._sessionmaker, workspace, prepared.thread.created_by_uuid
         )
 
         graph = build_graph(
@@ -422,7 +422,7 @@ class HookAssembly:
         if spec.compaction.enabled:
             cfg = spec.compaction
             needed.append(resolve_summarizer_model(cfg.summarizer_model, spec.model.model))
-        key = await agent_key(s, prepared.thread.agent_id, spec.name)
+        key = await agent_key(s, prepared.thread.agent_uuid, spec.name)
         admit_models(key, needed)
         assert key.key is not None
         spec = dataclasses.replace(
@@ -505,15 +505,15 @@ class HookAssembly:
         ctx = CallContext(
             run_id=run_id,
             thread_id=prepared.thread_id,
-            user_id=prepared.thread.created_by,
+            user_id=prepared.thread.created_by_uuid,
             # 执行器在 run 开始时设好的出站身份（以 Agent 为权限时是数字员工）
             auth_uid=ident.auth_uid if ident else None,
         )
         catalog = await make_mcp_catalog(s, redis)
-        agent_id = prepared.thread.agent_id
+        agent_id = prepared.thread.agent_uuid
         try:
             access = await mcp_agent_access(
-                s, agent_id, name=prepared.spec.name, owner=prepared.thread.created_by
+                s, agent_id, name=prepared.spec.name, owner=prepared.thread.created_by_uuid
             )
         except GatewayUnavailable as exc:
             # 网关不可用 = 这些服务此刻用不了：跳过并提示，对话照常（§6.7 ③）
@@ -556,7 +556,7 @@ class HookAssembly:
 
     def _key_fetcher(self, prepared: PreparedRun) -> Callable[[], Awaitable[str | None]]:
         """Key 被网关拒绝时重新取一次（可能刚被重置）。取不到（网关也不可用）当作没有新 Key。"""
-        agent_id = prepared.thread.agent_id
+        agent_id = prepared.thread.agent_uuid
 
         async def fetch() -> str | None:
             forget_access(agent_id)
@@ -565,7 +565,7 @@ class HookAssembly:
                     self._settings,
                     agent_id,
                     name=prepared.spec.name,
-                    owner=prepared.thread.created_by,
+                    owner=prepared.thread.created_by_uuid,
                 )
             except GatewayUnavailable:
                 return None
@@ -612,8 +612,8 @@ class HookAssembly:
             return
         fs = make_workspace(
             self._settings,
-            thread.created_by,
-            thread.id,
+            thread.created_by_uuid,
+            thread.thread_uuid,
             workspace_thread_id=thread.workspace_thread_id,
         )
         if fs is None:
@@ -787,8 +787,8 @@ async def _judge_instructions(runs: RunRepository, thread: Thread) -> list[Instr
 
     ★ 子会话里 role=user 的消息是派活的智能体写的，不是用户说的 —— 用户的话取根会话的。
     """
-    own = [extract_text(m.content) for m in await runs.user_inputs(thread.id)]
-    root = thread.root_thread_id or thread.parent_thread_id
+    own = [extract_text(m.content) for m in await runs.user_inputs(thread.thread_uuid)]
+    root = thread.root_thread_uuid or thread.parent_thread_uuid
     if root is None:
         return [Instruction("user", text) for text in own if text]
     users = [extract_text(m.content) for m in await runs.user_inputs(root)]

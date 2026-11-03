@@ -85,8 +85,8 @@ def _settings(**over: Any) -> Any:
 
 def _thread(tid: str, **over: Any) -> Any:
     fields = {
-        "id": tid,
-        "created_by": USER,
+        "thread_uuid": tid,
+        "created_by_uuid": USER,
         "workspace_thread_id": tid,
         "git_profile": "",
         "source_app": "",

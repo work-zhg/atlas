@@ -36,14 +36,14 @@ async def backfill_agent_identity(uc: UCClient, *, dry_run: bool = False) -> dic
     async with get_sessionmaker()() as session:
         agents = list(await session.scalars(select(Agent).order_by(Agent.created_at)))
         for agent in agents:
-            owner = agent.created_by
+            owner = agent.created_by_uuid
             use_identity(CallIdentity(uid=owner, auth_uid=owner))
             try:
                 if agent.digital_employee_uid is None:
                     if not dry_run:
                         await identity.ensure_digital_employee(agent, owner=owner)
                     out["digital_created"] += 1
-                if not await uc.data_acl(AGENT_DATA, str(agent.id)):
+                if not await uc.data_acl(AGENT_DATA, str(agent.agent_uuid)):
                     grants = [
                         {"permission": "OWNER", "subject_type": "USER", "subject_id": str(owner)}
                     ]
@@ -59,7 +59,9 @@ async def backfill_agent_identity(uc: UCClient, *, dry_run: bool = False) -> dic
                             }
                         )
                     if not dry_run:
-                        await uc.data_grant(AGENT_DATA, str(agent.id), grants, data_name=agent.name)
+                        await uc.data_grant(
+                            AGENT_DATA, str(agent.agent_uuid), grants, data_name=agent.name
+                        )
                     out["registered"] += 1
                 if not dry_run:
                     await session.commit()

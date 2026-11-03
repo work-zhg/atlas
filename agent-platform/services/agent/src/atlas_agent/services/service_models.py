@@ -25,7 +25,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.models import ServiceModel
-from ..db.session import get_sessionmaker
+from ..db.session import fetch_one, get_sessionmaker
 from ..errors import CapabilityUnavailable, InvalidReference
 from ..providers.llm.model_platform import (
     ClientKey,
@@ -81,7 +81,7 @@ async def _binding(purpose: str) -> ServiceModel | None:
     if row is not None and time.monotonic() - row[0] < _TTL_S:
         return row[1]
     async with get_sessionmaker()() as session:
-        found = await session.get(ServiceModel, purpose)
+        found = await fetch_one(session, ServiceModel, ServiceModel.purpose == purpose)
     _cache[purpose] = (time.monotonic(), found)
     return found
 
@@ -195,18 +195,24 @@ class ServiceModelService:
             client_type=client_type,
             client_code=client_code,
             model=model,
-            updated_by=actor,
+            updated_by_uuid=actor,
         )
         problem = _problem(key, row)
         if problem is not None:
             raise InvalidReference(f"现在还用不了：{problem}。请先在模型管理平台上配好")
-        await self._s.merge(row)
+        # ★ 主键是自增 id，merge 认不出同一用途的已有行：按 purpose 找到就改，没有才插
+        existing = await fetch_one(self._s, ServiceModel, ServiceModel.purpose == purpose)
+        if existing is None:
+            self._s.add(row)
+        else:
+            existing.client_type, existing.client_code = client_type, client_code
+            existing.model, existing.updated_by_uuid = model, actor
         await self._s.flush()
         _cache.pop(purpose, None)
         return await self._view(purpose, PURPOSES[purpose], row)
 
     async def clear(self, purpose: str) -> None:
-        row = await self._s.get(ServiceModel, purpose)
+        row = await fetch_one(self._s, ServiceModel, ServiceModel.purpose == purpose)
         if row is not None:
             await self._s.delete(row)
             await self._s.flush()

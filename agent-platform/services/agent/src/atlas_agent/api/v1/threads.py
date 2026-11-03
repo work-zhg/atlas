@@ -248,7 +248,9 @@ async def create_run(
     # 发消息也要能用这个 Agent（数字员工设计 §8.1）：收回使用权后不能在已有会话里接着用
     # —— 以 Agent 为权限时这道闸门就是全部的人这一侧
     agent = await session.scalar(
-        select(Agent).join(Thread, Thread.agent_id == Agent.id).where(Thread.id == thread_id)
+        select(Agent)
+        .join(Thread, Thread.agent_uuid == Agent.agent_uuid)
+        .where(Thread.thread_uuid == thread_id)
     )
     if agent is not None:
         await AgentAccess(uc_client(request)).require_use(principal, agent)

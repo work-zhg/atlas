@@ -17,6 +17,7 @@ from ..auth.principal import Principal
 from ..auth.uc import UCClient
 from ..config import Settings
 from ..db.models import Agent, AgentVersion, Message, Thread
+from ..db.session import fetch_one
 from ..errors import AppError, BadCursor, Conflict, DependencyUnavailable, Forbidden, NotFound
 from ..pagination import InvalidCursor, decode_cursor, encode_cursor
 from ..providers.filesystem import make_workspace
@@ -81,17 +82,17 @@ def _fold_assistant_turns(rows: list[Message]) -> list[MessageOut]:
             and previous.role == "assistant"
             # run_id 为 None 的历史消息不参与折叠：没有它就无法判断「同一轮」，
             # 而按相邻就折会把两轮的回答粘在一起。
-            and row.run_id is not None
-            and previous.run_id == row.run_id
+            and row.run_uuid is not None
+            and previous.run_id == row.run_uuid
         )
         if mergeable and previous is not None:
             folded[-1] = previous.model_copy(update={"content": [*previous.content, *blocks]})
             continue
         folded.append(
             MessageOut(
-                id=row.id,
-                thread_id=row.thread_id,
-                run_id=row.run_id,
+                id=row.message_uuid,
+                thread_id=row.thread_uuid,
+                run_id=row.run_uuid,
                 role=row.role,  # type: ignore[arg-type]
                 content=blocks,
                 created_at=row.created_at,
@@ -111,15 +112,15 @@ def _to_out(
     approval: ThreadApprovalOut | None = None,
 ) -> ThreadOut:
     return ThreadOut(
-        id=thread.id,
-        agent_id=agent.id,
+        id=thread.thread_uuid,
+        agent_id=agent.agent_uuid,
         agent_slug=agent.slug,
         agent_name=agent.name,
         agent_avatar_key=agent.avatar_key,
         title=thread.title,
         title_source=thread.title_source,  # type: ignore[arg-type]
         status=thread.status,  # type: ignore[arg-type]
-        parent_thread_id=thread.parent_thread_id,
+        parent_thread_id=thread.parent_thread_uuid,
         subagent_name=thread.subagent_name,
         git_profile=thread.git_profile,
         memory=thread.memory,
@@ -190,11 +191,13 @@ class ThreadService:
         has_more = len(rows) > limit
         rows = rows[:limit]
         next_cursor = (
-            encode_cursor(rows[-1][0].updated_at, rows[-1][0].id) if has_more and rows else None
+            encode_cursor(rows[-1][0].updated_at, rows[-1][0].thread_uuid)
+            if has_more and rows
+            else None
         )
-        runs = await RunRepository(self._session).latest_runs_of([t.id for t, _ in rows])
+        runs = await RunRepository(self._session).latest_runs_of([t.thread_uuid for t, _ in rows])
         return ThreadListOut(
-            data=[_to_out(t, a, last_run=runs.get(t.id)) for t, a in rows],
+            data=[_to_out(t, a, last_run=runs.get(t.thread_uuid)) for t, a in rows],
             next_cursor=next_cursor,
         )
 
@@ -215,9 +218,13 @@ class ThreadService:
 
     async def _approval_of(self, thread: Thread, agent: Agent) -> ThreadApprovalOut | None:
         """会话当前的审批模式与可选范围，取自智能体**当前版本**（下一条消息就用它）。"""
-        if agent.current_version_id is None:
+        if agent.current_version_uuid is None:
             return None
-        version = await self._session.get(AgentVersion, agent.current_version_id)
+        version = await fetch_one(
+            self._session,
+            AgentVersion,
+            AgentVersion.agent_version_uuid == agent.current_version_uuid,
+        )
         if version is None:
             return None
         parsed = AgentSpecIn.model_validate(version.spec)
@@ -239,7 +246,9 @@ class ThreadService:
         )
         has_more = len(rows) > limit
         rows = rows[:limit]
-        next_cursor = encode_cursor(rows[-1].created_at, rows[-1].id) if has_more and rows else None
+        next_cursor = (
+            encode_cursor(rows[-1].created_at, rows[-1].message_uuid) if has_more and rows else None
+        )
         return MessageListOut(data=_fold_assistant_turns(rows), next_cursor=next_cursor)
 
     # ------------------------------------------------------------------ 写
@@ -267,7 +276,7 @@ class ThreadService:
         # 调用方可以显式指定（评测的跨会话记忆用例要打开）
         memory = payload.memory or ("off" if principal.app else "on")
         thread = await self._repo.create(
-            agent_id=agent.id,
+            agent_id=agent.agent_uuid,
             title=payload.title,
             created_by=user_id,
             git_profile=payload.git_profile,
@@ -275,11 +284,11 @@ class ThreadService:
             memory=memory,
         )
         await self._session.refresh(thread)
-        await self._seed_skills(version, thread_id=thread.id, user_id=user_id)
+        await self._seed_skills(version, thread_id=thread.thread_uuid, user_id=user_id)
         if memory == "on" and self._memory is not None:
             # 建会话时登记本会话用到的记忆实例（§4.1）。失败不阻塞会话：本会话暂时不用记忆，
             # 下一个 Run 开始时再登记
-            await self._memory.register_thread(thread.id, user_id)
+            await self._memory.register_thread(thread.thread_uuid, user_id)
         return _to_out(thread, agent)
 
     async def _seed_skills(self, version: AgentVersion, *, thread_id: UUID, user_id: UUID) -> None:
@@ -395,7 +404,7 @@ class ThreadService:
             result = await exec_in_running(
                 SandboxProvisioner(settings, redis),
                 str(thread.workspace_thread_id),
-                user_id=str(thread.created_by),
+                user_id=str(thread.created_by_uuid),
                 command=payload.command,
                 profile=BENCH,
                 cwd=payload.cwd,
@@ -422,8 +431,8 @@ class ThreadService:
         thread, _ = await self._require(thread_id)
         fs = make_workspace(
             self._settings,
-            thread.created_by,
-            thread.id,
+            thread.created_by_uuid,
+            thread.thread_uuid,
             # ★ 子会话的工作区是父会话的（共享挂载）
             workspace_thread_id=thread.workspace_thread_id,
         )

@@ -10,15 +10,14 @@ from uuid import uuid4
 
 import boto3
 import pytest
-from atlas_engine.kernel.middleware.skills import SkillRef, SkillsMiddleware
-from moto import mock_aws
-
 from atlas_agent.providers.filesystem.oss import OssFilesystem
 from atlas_agent.providers.filesystem.skill_copy import (
     SkillMeta,
     SkillUnavailable,
     seed_session_skills,
 )
+from atlas_engine.kernel.middleware.skills import SkillRef, SkillsMiddleware
+from moto import mock_aws
 
 BUCKET, USER = "atlas-test", "u-test"
 
@@ -132,13 +131,12 @@ async def test_creating_a_thread_seeds_the_agents_skills(clean_db) -> None:
     一去 read 那个路径就是 404。子智能体那边反而投了，两边不一致。
     """
     import boto3
-    from moto import mock_aws
-
     from atlas_agent.config import Settings
     from atlas_agent.db.session import get_sessionmaker
     from atlas_agent.repositories.agent import AgentRepository
     from atlas_agent.schemas.thread import ThreadCreate
     from atlas_agent.services.thread import ThreadService
+    from moto import mock_aws
 
     with mock_aws():
         s3 = boto3.client("s3", region_name="us-east-1")
@@ -166,7 +164,7 @@ async def test_creating_a_thread_seeds_the_agents_skills(clean_db) -> None:
                 },
             )
             await session.commit()
-            agent_id = agent.id
+            agent_id = agent.agent_uuid
 
         async with get_sessionmaker()() as session:
             service = ThreadService(session, settings)
@@ -209,7 +207,7 @@ async def test_thread_creation_without_object_storage_is_not_an_error(clean_db) 
             },
         )
         await session.commit()
-        agent_id = agent.id
+        agent_id = agent.agent_uuid
 
     async with get_sessionmaker()() as session:
         out = await ThreadService(session, settings).create(
@@ -223,4 +221,4 @@ async def _any_user_id(session):
     from atlas_agent.db.models import AppUser
     from sqlalchemy import select
 
-    return (await session.execute(select(AppUser.id).limit(1))).scalars().one()
+    return (await session.execute(select(AppUser.user_uuid).limit(1))).scalars().one()

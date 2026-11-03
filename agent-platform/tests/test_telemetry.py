@@ -356,8 +356,8 @@ USER = UUID("11111111-2222-3333-4444-555555555555")
 
 class _Thread:
     def __init__(self, *, parent: UUID | None = None) -> None:
-        self.id = THREAD_ID
-        self.created_by = USER
+        self.thread_uuid = THREAD_ID
+        self.created_by_uuid = USER
         self.stream_thread_id = parent or THREAD_ID
 
 

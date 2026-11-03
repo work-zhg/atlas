@@ -64,8 +64,8 @@ class ApprovalRepository:
           而不是重新登记一遍（那会死循环）。tool_call_id 一起存下来供审计。
         """
         row = Approval(
-            id=approval_id,
-            run_id=run_id,
+            approval_uuid=approval_id,
+            run_uuid=run_id,
             tool_name=_fit_tool_name(tool_name),
             args=args,
             status="pending",
@@ -79,13 +79,13 @@ class ApprovalRepository:
         return row
 
     async def get(self, approval_id: UUID) -> Approval | None:
-        stmt = select(Approval).where(Approval.id == approval_id)
+        stmt = select(Approval).where(Approval.approval_uuid == approval_id)
         return (await self._session.execute(stmt)).scalar_one_or_none()
 
     async def list_pending(self, run_id: UUID) -> list[Approval]:
         stmt = (
             select(Approval)
-            .where(Approval.run_id == run_id, Approval.status == "pending")
+            .where(Approval.run_uuid == run_id, Approval.status == "pending")
             .order_by(Approval.created_at)
         )
         return list((await self._session.execute(stmt)).scalars())
@@ -107,10 +107,10 @@ class ApprovalRepository:
         """
         stmt = (
             update(Approval)
-            .where(Approval.id == approval_id, Approval.status == "pending")
+            .where(Approval.approval_uuid == approval_id, Approval.status == "pending")
             .values(
                 status=decision,
-                decided_by=user_id,
+                decided_by_uuid=user_id,
                 decided_at=datetime.now(UTC),
                 outcome=outcome or None,
             )
@@ -120,7 +120,7 @@ class ApprovalRepository:
     async def expire(self, approval_id: UUID) -> bool:
         stmt = (
             update(Approval)
-            .where(Approval.id == approval_id, Approval.status == "pending")
+            .where(Approval.approval_uuid == approval_id, Approval.status == "pending")
             .values(status="expired", decided_at=datetime.now(UTC))
         )
         return bool((await self._session.execute(stmt)).rowcount)

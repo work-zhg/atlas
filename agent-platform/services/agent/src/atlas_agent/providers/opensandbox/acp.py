@@ -215,8 +215,8 @@ class AcpProvisioner(Provisioner):
     ) -> SandboxEndpoint:
         if not cli.image:
             raise LifecycleError("acp agent 的 cli.image 为空，无法创建 Pod")
-        key = str(thread.id)
-        user = str(thread.created_by)
+        key = str(thread.thread_uuid)
+        user = str(thread.created_by_uuid)
         profile = self._git_profile(thread)
 
         async def locked() -> SandboxEndpoint:
@@ -253,7 +253,7 @@ class AcpProvisioner(Provisioner):
         profile = self._settings.git_profiles.get(name)
         if profile is None:
             raise GitProfileDenied(f"git 凭据档案 {name!r} 不存在")
-        if profile.allowed_users and str(thread.created_by) not in profile.allowed_users:
+        if profile.allowed_users and str(thread.created_by_uuid) not in profile.allowed_users:
             raise GitProfileDenied(f"会话创建者无权使用 git 凭据档案 {name!r}")
         source_app = thread.source_app or ""
         if profile.allowed_apps and source_app not in profile.allowed_apps:

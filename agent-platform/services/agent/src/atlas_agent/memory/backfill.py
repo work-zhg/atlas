@@ -33,6 +33,7 @@ from atlas_redislock import LockBusy, RedisLock
 from sqlalchemy import or_, select
 
 from ..db.models import MemoryBackfill, Message, Run, Thread, ThreadMemory
+from ..db.session import fetch_one
 from ..domain.messages import KIND_CHAT
 from ..domain.spec import ModelSpec
 from ..domain.translator import extract_text
@@ -86,13 +87,13 @@ class Backfiller:
 
         s = self.settings
         now = datetime.now(UTC)
-        busy = select(Run.thread_id).where(Run.status.in_(_UNFINISHED))
+        busy = select(Run.thread_uuid).where(Run.status.in_(_UNFINISHED))
         stmt = (
-            select(Thread.id)
-            .outerjoin(ThreadMemory, ThreadMemory.thread_id == Thread.id)
+            select(Thread.thread_uuid)
+            .outerjoin(ThreadMemory, ThreadMemory.thread_uuid == Thread.thread_uuid)
             .where(
                 Thread.memory == "on",
-                Thread.parent_thread_id.is_(None),
+                Thread.parent_thread_uuid.is_(None),
                 Thread.updated_at > now - timedelta(days=_HORIZON_DAYS),
                 or_(
                     Thread.status == "archived",
@@ -102,7 +103,7 @@ class Backfiller:
                     ThreadMemory.backfill_seen.is_(None),
                     Thread.updated_at > ThreadMemory.backfill_seen,
                 ),
-                Thread.id.not_in(busy),
+                Thread.thread_uuid.not_in(busy),
             )
             .order_by(Thread.updated_at)
             .limit(s.memory_backfill_batch)
@@ -135,9 +136,9 @@ class Backfiller:
 
     async def process(self, thread_id: UUID) -> BackfillResult:
         async with self.runtime.sessionmaker() as session:
-            thread = await session.get(Thread, thread_id)
-            state = await session.get(ThreadMemory, thread_id)
-        if thread is None or thread.memory == "off" or thread.parent_thread_id is not None:
+            thread = await fetch_one(session, Thread, Thread.thread_uuid == thread_id)
+            state = await fetch_one(session, ThreadMemory, ThreadMemory.thread_uuid == thread_id)
+        if thread is None or thread.memory == "off" or thread.parent_thread_uuid is not None:
             return BackfillResult(skipped="not_eligible")
         seen = thread.updated_at
         upto = state.backfill_upto if state is not None else None
@@ -161,8 +162,8 @@ class Backfiller:
             async with self.runtime.sessionmaker() as session:
                 session.add(
                     MemoryBackfill(
-                        thread_id=thread_id,
-                        user_id=thread.created_by,
+                        thread_uuid=thread_id,
+                        user_uuid=thread.created_by_uuid,
                         written=result.written,
                         split=result.split,
                     )
@@ -185,7 +186,7 @@ class Backfiller:
         return result
 
     async def _process(self, thread: Thread, lines: list[_Line]) -> BackfillResult:
-        owner = thread.created_by
+        owner = thread.created_by_uuid
         paused, _ = await self.runtime.user_setting(owner)
         if paused:
             return BackfillResult(skipped="paused")
@@ -207,7 +208,7 @@ class Backfiller:
         self, thread_id: UUID, *, after: datetime | None
     ) -> tuple[list[_Line], datetime | None]:
         """上次补记之后新增的用户 / 助手正文。工具调用与结果一律不进（体量大、信噪比低）。"""
-        stmt = select(Message).where(Message.thread_id == thread_id, Message.kind == KIND_CHAT)
+        stmt = select(Message).where(Message.thread_uuid == thread_id, Message.kind == KIND_CHAT)
         if after is not None:
             stmt = stmt.where(Message.created_at > after)
         async with self.runtime.sessionmaker() as session:
@@ -234,7 +235,7 @@ class Backfiller:
     async def _extract(
         self, thread: Thread, scope: ScopeRef, lines: list[_Line]
     ) -> list[dict[str, Any]]:
-        owner = thread.created_by
+        owner = thread.created_by_uuid
         client = self.runtime.client
         catalog = await self.runtime.call(owner, lambda: client.catalog(scope, as_user=owner))
         shown: dict[str, list[MemoryEntry]] = {}
@@ -246,11 +247,11 @@ class Backfiller:
             shown[topic.code] = entries
             budget -= topic.char_count
         session_written, _ = await client.entries(
-            scope, as_user=owner, origin={"thread": str(thread.id)}, limit=200
+            scope, as_user=owner, origin={"thread": str(thread.thread_uuid)}, limit=200
         )
         prompt = EXTRACT_PROMPT.format(
             today=datetime.now(UTC).date().isoformat(),
-            memories=_render_memories(scope, catalog, shown, thread.id),
+            memories=_render_memories(scope, catalog, shown, thread.thread_uuid),
             session_written=_render_session(session_written),
             conversation=_render_lines(lines),
         )
@@ -304,13 +305,14 @@ class Backfiller:
             if old is None:
                 continue
             if old.source == SOURCE_USER or (
-                old.source == SOURCE_AGENT and (old.origin or {}).get("thread") == str(thread.id)
+                old.source == SOURCE_AGENT
+                and (old.origin or {}).get("thread") == str(thread.thread_uuid)
             ):
                 logger.info("补记：#%s 受保护（%s），放弃 %r", number, old.source, content)
                 return None
             replaces.append(number)
 
-        owner = thread.created_by
+        owner = thread.created_by_uuid
         client = self.runtime.client
         try:
             if code not in topics:
@@ -335,8 +337,8 @@ class Backfiller:
                 remove=sorted(set(replaces)),
                 occurred_at=evidence.at,
                 source=SOURCE_BACKFILL,
-                origin={"thread": str(thread.id)},
-                idempotency_key=_key(thread.id, code, content, replaces),
+                origin={"thread": str(thread.thread_uuid)},
+                idempotency_key=_key(thread.thread_uuid, code, content, replaces),
                 as_user=owner,
             )
         except MemoryRejected as exc:

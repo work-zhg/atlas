@@ -24,7 +24,7 @@ import httpx
 import pytest
 from atlas_agent.config import get_settings
 from atlas_agent.db.models import Message, Run
-from atlas_agent.db.session import get_sessionmaker
+from atlas_agent.db.session import fetch_one, get_sessionmaker
 from atlas_agent.executor.inprocess import InProcessExecutor
 from atlas_agent.main import create_app
 from httpx import ASGITransport
@@ -150,7 +150,7 @@ async def events_of(run_id: str) -> list:
 
     async with get_sessionmaker()() as session:
         stmt = (
-            select(RunEvent).where(RunEvent.run_id == UUID(run_id)).order_by(RunEvent.seq)
+            select(RunEvent).where(RunEvent.run_uuid == UUID(run_id)).order_by(RunEvent.seq)
         )
         return list((await session.execute(stmt)).scalars())
 
@@ -179,12 +179,12 @@ async def test_a_long_delegation_becomes_one_run_in_two_segments(client_factory)
             (
                 await session.execute(
                     select(Run).where(
-                        Run.thread_id == UUID(thread_id), Run.parent_run_id.is_(None)
+                        Run.thread_uuid == UUID(thread_id), Run.parent_run_uuid.is_(None)
                     )
                 )
             ).scalars()
         )
-    assert [str(r.id) for r in rows] == [run_id]
+    assert [str(r.run_uuid) for r in rows] == [run_id]
 
 
 async def test_the_run_passes_through_suspended(client_factory) -> None:
@@ -292,20 +292,20 @@ async def test_sub_run_events_land_in_the_parent_thread(client_factory) -> None:
     async with get_sessionmaker()() as session:
         children = list(
             (
-                await session.execute(select(Run).where(Run.parent_run_id == UUID(run_id)))
+                await session.execute(select(Run).where(Run.parent_run_uuid == UUID(run_id)))
             ).scalars()
         )
         assert children, "应当有子 run"
         rows = list(
             (
                 await session.execute(
-                    select(RunEvent).where(RunEvent.run_id == children[0].id)
+                    select(RunEvent).where(RunEvent.run_uuid == children[0].run_uuid)
                 )
             ).scalars()
         )
 
     assert rows, "子 run 的事件没有归档"
-    assert all(r.thread_id == UUID(thread_id) for r in rows), (
+    assert all(r.thread_uuid == UUID(thread_id) for r in rows), (
         "子 run 的事件归到了子会话名下，父会话的流里看不到它们"
     )
     # 而且带着 depth=1 —— 前端据此渲染进子智能体卡片（S1）
@@ -407,7 +407,7 @@ async def test_the_stored_history_is_an_ordinary_tool_call(client_factory) -> No
             (
                 await session.execute(
                     select(Message)
-                    .where(Message.thread_id == UUID(thread_id))
+                    .where(Message.thread_uuid == UUID(thread_id))
                     .order_by(Message.created_at)
                 )
             ).scalars()
@@ -439,12 +439,12 @@ async def _freeze_as_suspended(run_id: str, *, child_status: str) -> None:
     """
     async with get_sessionmaker()() as session:
         child_id = (
-            await session.execute(select(Run.id).where(Run.parent_run_id == UUID(run_id)))
+            await session.execute(select(Run.run_uuid).where(Run.parent_run_uuid == UUID(run_id)))
         ).scalar_one()
         # ★ 真实的挂起一定带着 waiting_on（关卡按它分派）—— 没有它的「挂起」不会被续跑
         await session.execute(
             Run.__table__.update()
-            .where(Run.id == UUID(run_id))
+            .where(Run.run_uuid == UUID(run_id))
             .values(
                 status="suspended",
                 finished_at=None,
@@ -453,7 +453,7 @@ async def _freeze_as_suspended(run_id: str, *, child_status: str) -> None:
         )
         await session.execute(
             Run.__table__.update()
-            .where(Run.parent_run_id == UUID(run_id))
+            .where(Run.parent_run_uuid == UUID(run_id))
             .values(status=child_status)
         )
         await session.commit()
@@ -542,7 +542,7 @@ async def test_cancelling_the_parent_cascades_to_the_child(client_factory) -> No
     async with get_sessionmaker()() as session:
         children = list(
             (
-                await session.execute(select(Run).where(Run.parent_run_id == UUID(run_id)))
+                await session.execute(select(Run).where(Run.parent_run_uuid == UUID(run_id)))
             ).scalars()
         )
     assert children
@@ -553,7 +553,8 @@ async def test_cancelling_the_parent_cascades_to_the_child(client_factory) -> No
     try:
         relay = EventRelay(redis)
         for child in children:
-            assert await relay.is_cancelled(child.id), f"子 run {child.id} 没有被级联取消"
+            cancelled = await relay.is_cancelled(child.run_uuid)
+            assert cancelled, f"子 run {child.run_uuid} 没有被级联取消"
     finally:
         await redis.aclose()
 
@@ -586,15 +587,15 @@ async def test_an_approval_during_suspension_reaches_the_thread_stream(
     async with get_sessionmaker()() as session:
         children = list(
             (
-                await session.execute(select(Run).where(Run.parent_run_id == UUID(run_id)))
+                await session.execute(select(Run).where(Run.parent_run_uuid == UUID(run_id)))
             ).scalars()
         )
     assert children
-    sub_run_id = children[0].id
+    sub_run_id = children[0].run_uuid
 
     # 父 run 此刻是 suspended —— 没有任何进程在跑它
     async with get_sessionmaker()() as session:
-        parent = await session.get(Run, UUID(run_id))
+        parent = await fetch_one(session, Run, Run.run_uuid == UUID(run_id))
         assert parent is not None and parent.status == "suspended"
 
     # 子 run 请求审批：按自己的身份往**会话**流上发（base_depth=1）

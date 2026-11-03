@@ -21,7 +21,7 @@ OTHER = uuid4()
 
 
 def _agent(status: str = "enabled", *, subject: str = "user") -> Agent:
-    return Agent(id=uuid4(), status=status, created_by=ME, auth_subject=subject)
+    return Agent(agent_uuid=uuid4(), status=status, created_by_uuid=ME, auth_subject=subject)
 
 
 class _UC:
@@ -42,9 +42,9 @@ async def test_levels_follow_status() -> None:
     mine, draft, archived = _agent(), _agent("draft"), _agent("archived")
     uc = _UC(
         {
-            (ME, str(mine.id)): "READ",
-            (ME, str(draft.id)): "READ",
-            (ME, str(archived.id)): "WRITE",
+            (ME, str(mine.agent_uuid)): "READ",
+            (ME, str(draft.agent_uuid)): "READ",
+            (ME, str(archived.agent_uuid)): "WRITE",
         }
     )
     access = AgentAccess(uc)  # type: ignore[arg-type]
@@ -70,7 +70,7 @@ async def test_editing_agent_subject_needs_owner() -> None:
     """以 Agent 为权限：谁能改提示词和工具，谁就间接握有数字员工的全部权限 → 编辑要 OWNER。"""
     as_user, as_agent = _agent(), _agent(subject="agent")
     assert edit_level(as_user) == "WRITE" and edit_level(as_agent) == "OWNER"
-    uc = _UC({(ME, str(as_user.id)): "WRITE", (ME, str(as_agent.id)): "WRITE"})
+    uc = _UC({(ME, str(as_user.agent_uuid)): "WRITE", (ME, str(as_agent.agent_uuid)): "WRITE"})
     access = AgentAccess(uc)  # type: ignore[arg-type]
     me = Principal(uid=ME)
     assert await access.require(me, as_user, edit_level(as_user)) == "WRITE"
@@ -100,11 +100,11 @@ async def test_managing_all_agents_is_a_data_permission_not_a_role() -> None:
 async def test_visibility_condition() -> None:
     """列表的可见范围：一次 accessible，拼成 SQL 条件；全部 · Owner 不过滤。"""
     a = _agent()
-    access = AgentAccess(_UC({(ME, str(a.id)): "READ"}))  # type: ignore[arg-type]
+    access = AgentAccess(_UC({(ME, str(a.agent_uuid)): "READ"}))  # type: ignore[arg-type]
     vis = await access.visibility(Principal(uid=ME))
-    assert vis.levels == {a.id: "READ"} and not vis.all_
+    assert vis.levels == {a.agent_uuid: "READ"} and not vis.all_
     sql = str(vis.condition().compile(compile_kwargs={"literal_binds": True}))
-    assert str(a.id).replace("-", "") in sql.replace("-", "")
+    assert str(a.agent_uuid).replace("-", "") in sql.replace("-", "")
     # 没有授权就什么都看不到（没有「内置的人人可见」这一支）
     nothing = await AgentAccess(_UC({})).visibility(Principal(uid=OTHER))  # type: ignore[arg-type]
     assert str(nothing.condition()) == "false"

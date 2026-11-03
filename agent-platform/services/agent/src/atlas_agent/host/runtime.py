@@ -133,7 +133,7 @@ class _DbSessions:
         async with self._sessionmaker() as session:
             await session.execute(
                 sql_update(Thread)
-                .where(Thread.id == thread_id)
+                .where(Thread.thread_uuid == thread_id)
                 .values(external_session_id=agent_session_id)
             )
             await session.commit()
@@ -418,7 +418,7 @@ class HostRuntime:
             return None
         if spec.cli.cli_type != "claude-code":
             return None
-        key = await agent_key(self._settings, prepared.thread.agent_id, spec.name)
+        key = await agent_key(self._settings, prepared.thread.agent_uuid, spec.name)
         admit_models(key, [spec.model.model])
         assert key.key is not None
         return AcpModel(
@@ -435,10 +435,10 @@ class HostRuntime:
         spec = prepared.spec
         catalog = await make_mcp_catalog(self._settings, redis)
         # 按这个智能体的 Key 过滤、下发它的 Key（与权限类型无关）
-        agent_id = prepared.thread.agent_id
+        agent_id = prepared.thread.agent_uuid
         try:
             access = await mcp_agent_access(
-                self._settings, agent_id, name=spec.name, owner=prepared.thread.created_by
+                self._settings, agent_id, name=spec.name, owner=prepared.thread.created_by_uuid
             )
         except GatewayUnavailable as exc:
             # 网关不可用 = 这些服务此刻用不了：不下发并提示，会话照常（§6.7 ③）
@@ -459,7 +459,7 @@ class HostRuntime:
         return await acp_mcp_servers(
             spec.tool_names,
             catalog,
-            user_id=prepared.thread.created_by,
+            user_id=prepared.thread.created_by_uuid,
             digests=spec.mcp_tool_digests,
             drift_policy=spec.mcp_drift_policy,
             access=access,

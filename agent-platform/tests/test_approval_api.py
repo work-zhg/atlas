@@ -20,7 +20,7 @@ import httpx
 import pytest
 import redis.asyncio as aioredis
 from atlas_agent.config import get_settings
-from atlas_agent.db.session import get_sessionmaker
+from atlas_agent.db.session import fetch_one, get_sessionmaker
 from atlas_agent.executor.inprocess import InProcessExecutor
 from atlas_agent.main import create_app
 from httpx import ASGITransport
@@ -255,14 +255,16 @@ async def test_an_old_approval_never_expires(client: httpx.AsyncClient) -> None:
     long_ago = datetime.now(UTC) - timedelta(days=30)
     async with get_sessionmaker()() as session:
         await session.execute(
-            update(Approval).where(Approval.id == UUID(approval_id)).values(created_at=long_ago)
+            update(Approval)
+            .where(Approval.approval_uuid == UUID(approval_id))
+            .values(created_at=long_ago)
         )
         await session.commit()
 
     assert await executor.sweep_suspended() == 0
     assert (await client.get(f"/v1/runs/{run_id}")).json()["status"] == "awaiting_approval"
     async with get_sessionmaker()() as session:
-        row = await session.get(Approval, UUID(approval_id))
+        row = await fetch_one(session, Approval, Approval.approval_uuid == UUID(approval_id))
         assert row is not None and row.status == "pending", row.status if row else None
 
     # 人终于做了决定 —— 照样生效
@@ -305,7 +307,7 @@ async def test_an_online_wait_is_not_mistaken_for_a_suspension(
     # 模拟 acp 的在线等待：状态是 awaiting_approval，但没有 waiting_on
     async with get_sessionmaker()() as session:
         await session.execute(
-            update(Run).where(Run.id == UUID(run_id)).values(waiting_on=None)
+            update(Run).where(Run.run_uuid == UUID(run_id)).values(waiting_on=None)
         )
         await session.commit()
 
@@ -313,7 +315,7 @@ async def test_an_online_wait_is_not_mistaken_for_a_suspension(
     assert await executor.resume_if_ready(UUID(run_id)) is False
 
     async with get_sessionmaker()() as session:
-        row = await session.get(Run, UUID(run_id))
+        row = await fetch_one(session, Run, Run.run_uuid == UUID(run_id))
         assert row is not None and row.status == "awaiting_approval"
 
 
@@ -350,7 +352,7 @@ async def test_a_very_long_tool_name_still_registers(
     assert state == "pending", f"长工具名没能登记，退化成了 {state!r}"
 
     async with get_sessionmaker()() as session:
-        row = await session.get(Approval, UUID(approval_id))
+        row = await fetch_one(session, Approval, Approval.approval_uuid == UUID(approval_id))
         assert row is not None, "approval 没落库 —— 事务回滚了"
         assert len(row.tool_name) <= _TOOL_NAME_MAX
         # 截断保留开头：排查时一眼能认出是哪条命令

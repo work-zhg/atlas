@@ -152,7 +152,7 @@ async def client_and_states(monkeypatch: pytest.MonkeyPatch):
 async def _stored(run_id: str) -> dict[str, Any]:
     async with get_sessionmaker()() as session:
         rows = await session.execute(
-            select(RunState.key, RunState.value).where(RunState.run_id == UUID(run_id))
+            select(RunState.key, RunState.value).where(RunState.run_uuid == UUID(run_id))
         )
         return dict(rows.all())
 

@@ -72,7 +72,7 @@ class PermissionDesk:
         request = params.get("request") or {}
         tool_call = request.get("toolCall") or {}
         name = str(tool_call.get("title") or tool_call.get("toolCallId") or "acp_tool")
-        # approval_id 现生成，不复用 toolCallId：Approval.id 是 UUID，toolCallId 是任意字符串
+        # approval_id 现生成，不复用 toolCallId：Approval.approval_uuid 是 UUID，toolCallId 是任意字符串
         resent = ask_id in self._approval_ids
         approval_id = self._approval_ids.setdefault(ask_id, str(uuid4()))
         pending = _Pending(approval_id)

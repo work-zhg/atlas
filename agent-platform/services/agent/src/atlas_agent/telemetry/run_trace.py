@@ -136,7 +136,7 @@ class RunTrace:
         thread_id = str(prepared.thread_id)
         # ★ 会话 = 根会话：子 run 在子会话上，但它是父会话那段对话的一部分（设计 §7）
         session_id = str(getattr(thread, "stream_thread_id", None) or thread_id)
-        user_id = getattr(thread, "created_by", None)
+        user_id = getattr(thread, "created_by_uuid", None)
         resumed = bool(getattr(prepared, "resume", False))
 
         attributes: dict[str, Any] = {

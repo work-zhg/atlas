@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import Settings
 from ..db.models import Agent, AgentVersion, RunEvent, Thread
+from ..db.session import fetch_one
 from ..domain.messages import from_storage
 from ..domain.spec import resolve_summarizer_model
 from ..errors import Conflict, NotFound
@@ -40,7 +41,7 @@ class ContextService:
         self._build_model = model_builder
 
     async def _thread(self, thread_id: UUID) -> Thread:
-        thread = await self._s.get(Thread, thread_id)
+        thread = await fetch_one(self._s, Thread, Thread.thread_uuid == thread_id)
         if thread is None:
             raise NotFound(f"会话 {thread_id} 不存在", thread_id=str(thread_id))
         return thread
@@ -50,7 +51,7 @@ class ContextService:
         row = await self._s.scalar(
             select(RunEvent)
             .where(
-                RunEvent.thread_id == thread.stream_thread_id,
+                RunEvent.thread_uuid == thread.stream_thread_id,
                 RunEvent.type == "context.usage",
                 RunEvent.depth == 0,
             )
@@ -83,12 +84,12 @@ class ContextService:
         history = from_storage(rows)
         prior = [AIMessage(content=SUMMARY_PREFIX + thread.summary)] if thread.summary else []
 
-        agent = await self._s.get(Agent, thread.agent_id)
+        agent = await fetch_one(self._s, Agent, Agent.agent_uuid == thread.agent_uuid)
         model = ""
         if agent is not None:
             version = await self._s.scalar(
                 select(AgentVersion)
-                .where(AgentVersion.agent_id == agent.id)
+                .where(AgentVersion.agent_uuid == agent.agent_uuid)
                 .order_by(AgentVersion.version.desc())
                 .limit(1)
             )
@@ -100,7 +101,7 @@ class ContextService:
         endpoint = None
         if uses_model_platform(self._settings) and agent is not None:
             # 经模型管理平台：智能体的客户端 Key，摘要模型要在它的可用模型里（同 Run 开始的检查）
-            key = await agent_key(self._settings, agent.id, agent.name)
+            key = await agent_key(self._settings, agent.agent_uuid, agent.name)
             admit_models(key, [model or self._settings.summarizer_model])
             assert key.key is not None
             endpoint = key_endpoint(self._settings, key.key)
@@ -111,7 +112,7 @@ class ContextService:
 
         await self._s.execute(
             update(Thread)
-            .where(Thread.id == thread_id)
+            .where(Thread.thread_uuid == thread_id)
             .values(
                 summary=summary,
                 summary_upto=rows[-1].created_at,
