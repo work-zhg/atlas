@@ -29,7 +29,7 @@ from langchain_core.messages import AIMessageChunk
 from sqlalchemy import select
 
 from tests.fake_uc import AS_USER
-from tests.fakes import TurnModel, tool_call_chunk
+from tests.fakes import JUDGE_MODEL, TurnModel, allow_judge, allowing_judge, tool_call_chunk
 
 pytestmark = pytest.mark.usefixtures("clean_db")
 
@@ -51,13 +51,13 @@ def make_app(parent: TurnModel, child: TurnModel):
       第二段脚本，测出来的东西与真实行为无关。
     """
     app = create_app()
-    models = {PARENT_MODEL: parent, CHILD_MODEL: child}
+    models = {PARENT_MODEL: parent, CHILD_MODEL: child, JUDGE_MODEL: allow_judge()}
 
     def builder(model_spec, **_kw):
         return models[model_spec.model]
 
     app.state.executor = InProcessExecutor(
-        get_sessionmaker(), get_settings(), model_builder=builder
+        get_sessionmaker(), allowing_judge(get_settings()), model_builder=builder
     )
     return app
 

@@ -235,3 +235,22 @@ class Spawner:
 
     def result(self, sub_run_id: str) -> str:
         return self.reply
+
+
+#: 自动模式判断器在测试里用的模型名。
+#:
+#: ★ 没接模型管理平台时，判断器用 settings.approval_judge_model，空了取 summarizer_model
+#:   （claude-haiku-4-5）—— 正好和不少测试里子智能体的模型同名：判断器的请求会吃掉
+#:   子智能体的脚本，答非所问又解析不出结论，于是退回请示用户，run 停在等审批。
+#:   要放行的测试用 allowing_judge() 把判断器指到这个名字上，再在 builder 里接 ALLOW_JUDGE。
+JUDGE_MODEL = "fake-judge"
+
+
+def allow_judge() -> ReplyModel:
+    """判断器的替身：阶段一永远答 ALLOW，所有工具调用都放行。"""
+    return ReplyModel(replies=[AIMessage(content="ALLOW")])
+
+
+def allowing_judge(settings: Any) -> Any:
+    """settings 的副本，判断器指向 JUDGE_MODEL（builder 里接 allow_judge()）。"""
+    return settings.model_copy(update={"approval_judge_model": JUDGE_MODEL})
