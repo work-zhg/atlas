@@ -152,14 +152,6 @@ class RunRecordRepository:
         if not result.rowcount:
             raise LeaseLost(run_id)
 
-    async def save_acp_progress(self, run_id: UUID, *, instance: str, acked_seq: int) -> None:
-        """acp：已处理到的 bridge 实例与序号（§5.2）。换实例接管时据此 attach。"""
-        await self._session.execute(
-            update(Run)
-            .where(Run.run_uuid == run_id)
-            .values(acp_bridge_instance=instance[:64], acp_acked_seq=acked_seq)
-        )
-
     async def load_state(self, run_id: UUID) -> dict[str, Any]:
         """这个 run 落过库的图 state（run_state 表），续跑与接管时交回图。全新的 run 返回 {}。"""
         rows = await self._session.execute(

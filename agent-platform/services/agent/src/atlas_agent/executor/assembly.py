@@ -200,9 +200,11 @@ class PreparedRun:
     #: 本段是接管来的（横向扩展设计 §5）：None = 正常领取；"handoff" / "expired" = 上一个
     #: 执行器停机交接 / 租约过期。acp 据此只 attach 不重开一轮。
     takeover: str | None = None
-    #: acp：上一个执行器已处理到的 bridge 实例与序号（§5.2），接管时从这里 attach 补发。
-    acp_bridge_instance: str | None = None
-    acp_acked_seq: int = 0
+    #: acp：会话的接续信息（cli_session 表，段开始时读出）—— CLI 自己的会话 id（open 时恢复），
+    #: 以及已处理到的 bridge 实例与序号（§5.2，接管时从这里 attach 补发）
+    cli_session_id: str | None = None
+    cli_bridge_instance: str | None = None
+    cli_acked_seq: int = 0
     #: 续跑时交回图的挂起现场（contracts/suspension.py）：上一段还在等的调用
     #: （run.waiting_on，已剪掉历史里有结果的），和 server 查好的结果。首段都为空。
     waiting_on: dict[str, Any] = field(default_factory=dict)

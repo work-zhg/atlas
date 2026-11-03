@@ -224,8 +224,6 @@ class Thread(Base, TimestampMixin):
     )
     #: 与 parent_thread_id 组成恢复的查找键（唯一）。
     subagent_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    #: ACP 侧的会话标识，供 loadSession 恢复（acp 详设那一期接入）。
-    external_session_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     #: git 凭据档案（cluster 配置里的名字）：acp 会话的 Pod 据此挂载 git 凭据。
     #: 建会话时由调用方声明（如 AI TeamFlow 给节点会话声明产物仓库的档案）；子会话继承父会话。
     git_profile: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -408,9 +406,6 @@ class Run(Base):
     claimed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     #: 被接管（交接或租约过期）的次数 —— 频繁接管 = 实例在频繁崩溃。
     takeovers: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
-    #: acp：已处理到的 bridge 实例与序号（§5.2）。换实例接管时据此 attach 补发。
-    acp_bridge_instance: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    acp_acked_seq: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     started_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -572,6 +567,31 @@ class Approval(Base):
             "status IN ('pending','approved','rejected','expired')", name="status_enum"
         ),
     )
+
+
+class CliSession(Base, TimestampMixin):
+    """CLI 会话的接续信息（聚合根 CliSession，迁移 0031）。
+
+    见 c4-model/agent/code-cli-runtime-link.html。
+
+    一个会话一行：CLI 自己的会话 id（open 时恢复用）、连着的是哪个 bridge 实例、已确认到哪个
+    序号。序号是会话级的，跨连接、跨轮连续；换实例接管时，接手的 server 据此 attach 回去、
+    从确认点之后补发，那一轮在 Pod 里一直在跑，工具不会重复执行。
+
+    ★ 原先一半在 thread 上（external_session_id）、一半在 run 上（acp_bridge_instance /
+      acp_acked_seq）：会话级的东西放在 run 上，执行记录就带着运行时私有的字段。
+    """
+
+    __tablename__ = "cli_session"
+
+    id: Mapped[int] = _pk()
+    thread_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
+    agent_session_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    bridge_instance: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    acked_seq: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+
+    #: 一个会话一行
+    __table_args__ = (UniqueConstraint("thread_uuid", name="uk_cli_session_thread"),)
 
 
 class SkillUsageDaily(Base):

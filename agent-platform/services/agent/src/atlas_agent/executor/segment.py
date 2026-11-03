@@ -46,6 +46,7 @@ from ..db.models import AgentVersion, Message, Run, Thread
 from ..outbound import CallIdentity, use_identity
 from ..redisx import make_redis
 from ..repositories.approval import ApprovalRepository
+from ..repositories.cli_session import CliSessionRepository
 from ..repositories.event_archive import EventArchive
 from ..repositories.run import LeaseLost, RunRepository
 from ..repositories.run_record import RunRecordRepository
@@ -162,9 +163,20 @@ class SegmentLoader:
             else run.approval_mode
         )
 
+        # acp：会话的接续信息（cli_session）。会话级的，跨 run、跨实例都从库里读
+        cli: dict[str, Any] = {}
+        cli_sessions = CliSessionRepository(session)
+        if spec.kind == "acp" and (row := await cli_sessions.get(thread.thread_uuid)):
+            cli = {
+                "cli_session_id": row.agent_session_id,
+                "cli_bridge_instance": row.bridge_instance,
+                "cli_acked_seq": row.acked_seq,
+            }
+
         rows = await RunRepository(session).history(thread.thread_uuid, after=thread.summary_upto)
         if not rows:
             return PreparedRun(
+                **cli,
                 spec=spec,
                 input_content="",
                 thread=thread,
@@ -204,6 +216,7 @@ class SegmentLoader:
             history.insert(0, AIMessage(content=SUMMARY_PREFIX + thread.summary))
 
         return PreparedRun(
+            **cli,
             spec=spec,
             input_content=input_content,
             history=history,
@@ -358,13 +371,7 @@ class SegmentExecution:
                     await session.refresh(run)
                 prepared = await self._loader.load(session, run, thread, version)
                 if resumed is not None:
-                    prepared = replace(
-                        prepared,
-                        start_seq=resumed.seq,
-                        takeover=takeover,
-                        acp_bridge_instance=run.acp_bridge_instance,
-                        acp_acked_seq=run.acp_acked_seq,
-                    )
+                    prepared = replace(prepared, start_seq=resumed.seq, takeover=takeover)
                 await records.mark_running(run_id)
                 await session.commit()
 

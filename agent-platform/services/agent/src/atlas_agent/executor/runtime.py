@@ -86,7 +86,7 @@ class AgentRuntime(Protocol):
               模型连着调两批工具、中间没说话时顺序就再也对不上了。
 
             ★ acp 实现**不填它**。CLI 的工具调用发生在 Pod 内部，平台侧只看到
-              update 流；它的历史恢复走 `external_session_id` + session/load，
+              update 流；它的历史恢复走 cli_session 里的 CLI 会话 id + session/load，
               根本不经过 message 表（acp 详设 §09）。
         """
         ...

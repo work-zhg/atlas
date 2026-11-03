@@ -83,6 +83,7 @@ def prepared(
     timeout_s: int = 60,
     permission_mode: str = "auto",
     approval_mode: str | None = None,
+    cli_session_id: str | None = None,
 ) -> Any:
     cli = CliSpec(
         cli_type="claude-code",
@@ -107,8 +108,10 @@ def prepared(
         start_seq=0,
         base_depth=0,
         takeover=None,
-        acp_bridge_instance=None,
-        acp_acked_seq=0,
+        # 会话的接续信息（cli_session）：CLI 的会话 id、bridge 实例、确认点
+        cli_session_id=cli_session_id,
+        cli_bridge_instance=None,
+        cli_acked_seq=0,
         # 作为 SubAgent 时父 run 的审批模式；直接对话为 None
         approval_mode=approval_mode,
     )
@@ -121,6 +124,8 @@ class Env:
     def __init__(self, app: BridgeApp, thread: Any) -> None:
         self.app = app
         self.thread = thread
+        #: 库里记着的 CLI 会话 id（cli_session.agent_session_id），下一轮 open 时带上
+        self.cli_session_id: str | None = None
         self.pods = Pods(f"ws://127.0.0.1:{app.server.port}")
         self.approvals = Approvals()
         self.sessions = Sessions()
@@ -144,7 +149,7 @@ class Env:
     async def run(self, **kw: Any) -> list[TraceEvent]:
         out: list[TraceEvent] = []
         gen = self.runtime.run_turn(
-            prepared(self.thread, **kw),
+            prepared(self.thread, **{"cli_session_id": self.cli_session_id, **kw}),
             run_id=uuid4(),
             redis=None,
             relay=self.relay,  # type: ignore[arg-type]
@@ -157,7 +162,7 @@ class Env:
 @pytest.fixture
 async def env(tmp_path: Path) -> AsyncIterator[Callable[..., Awaitable[Env]]]:
     apps: list[tuple[BridgeApp, asyncio.Task[int]]] = []
-    thread = SimpleNamespace(thread_uuid=uuid4(), external_session_id=None)
+    thread = SimpleNamespace(thread_uuid=uuid4())
 
     async def start(script: Script | None = None, **cfg: Any) -> Env:
         token_file = tmp_path / "token"
@@ -230,7 +235,7 @@ async def test_second_run_on_the_same_pod(env: Any) -> None:
     """Pod 上的会话已由前一轮打开：session.open 返回 ALREADY_OPEN，照常开下一轮。"""
     e = await env()
     await e.run()
-    e.thread.external_session_id = e.sessions.remembered[-1][1]
+    e.cli_session_id = e.sessions.remembered[-1][1]
     events = await e.run(text="again")
     assert last(events).type is EventType.RUN_FINISHED
     assert EventType.SESSION_LOST not in [x.type for x in events]
@@ -239,7 +244,7 @@ async def test_second_run_on_the_same_pod(env: Any) -> None:
 async def test_resume_on_a_new_pod_that_lost_the_session_is_visible(env: Any) -> None:
     """新 Pod 上恢复不了（FakeAgent 不持久化会话）：必须以 session.lost 让用户看见。"""
     e = await env()
-    e.thread.external_session_id = "gone-session"
+    e.cli_session_id = "gone-session"
     events = await e.run()
     assert EventType.SESSION_LOST in [x.type for x in events]
     assert last(events).type is EventType.RUN_FINISHED
@@ -505,7 +510,7 @@ async def test_server_that_forgot_the_bridge_attaches_via_already_open(env: Any)
     e = await env()
     await e.run()
     e.runtime._known.clear()
-    e.thread.external_session_id = e.sessions.remembered[-1][1]
+    e.cli_session_id = e.sessions.remembered[-1][1]
     events = await e.run(text="again")
     assert last(events).type is EventType.RUN_FINISHED
     assert e.runtime._known[e.thread.thread_uuid].instance == e.app.instance

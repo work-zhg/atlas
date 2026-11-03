@@ -29,7 +29,6 @@ from ..db.models import Approval
 from ..domain.spec import ApprovalSpec
 from ..errors import InvalidAnswers, InvalidApprovalMode
 from ..repositories.approval import ApprovalRepository
-from ..repositories.run import RunRepository
 from ..telemetry import semconv as _sc
 from ..telemetry import tracer as _tracer
 
