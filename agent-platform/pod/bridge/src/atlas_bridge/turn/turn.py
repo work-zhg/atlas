@@ -32,9 +32,9 @@ from atlas_host import (
 )
 from atlas_jsonrpc import ChannelClosed, RpcFault
 
-from ..agent.client import AcpClient
+from ..cli.client import AcpClient
 from ..clock import Clock, Timer
-from .ports import OutboxSink
+from ..upstream.ports import UpstreamOutbox
 from .progress import ProgressTracker
 
 __all__ = ["Turn", "TurnOwner"]
@@ -43,9 +43,9 @@ logger = logging.getLogger(__name__)
 
 
 class TurnOwner(Protocol):
-    """Turn 需要通知持有者的两件事。由 HostSession 实现。"""
+    """Turn 需要通知持有者的两件事。由 SessionHost 实现。"""
 
-    def settle_permissions(self, turn: Turn) -> None:
+    def settle_permissions(self, turn_id: str) -> None:
         """进入取消或即将结束：挂起的权限询问全部回 cancelled 并撤回（§6.4 ②）。"""
 
     def turn_ended(self, turn: Turn) -> None:
@@ -62,7 +62,7 @@ class Turn:
         limits: TurnLimits,
         agent_session_id: str,
         client: AcpClient,
-        outbox: OutboxSink,
+        outbox: UpstreamOutbox,
         clock: Clock,
         owner: TurnOwner,
         cancel_grace_s: float,
@@ -95,6 +95,9 @@ class Turn:
         self._deadline = Timer(clock, self._on_deadline, name=f"{turn_id}:deadline")
         self._idle = Timer(clock, self._on_idle, name=f"{turn_id}:idle")
         self._grace = Timer(clock, self._on_cancel_grace, name=f"{turn_id}:cancel-grace")
+        #: 断线重连窗口（可选）：上游断开时开始，重连上就停；到点以 upstream_lost 取消。
+        #: 默认不设：断线只是通道断了，这一轮照常进行，消息缓冲到 server 回来 attach
+        self._reconnect = Timer(clock, self._on_reconnect_window, name=f"{turn_id}:reconnect")
 
         self._started_at = 0.0
         self._awaiting_since: float | None = None
@@ -144,7 +147,16 @@ class Turn:
         if self.state is TurnState.RUNNING:
             self._idle.reset(self.progress.idle_threshold)
 
-    def on_permission_pending(self, pending: int) -> None:
+    # ---------------------------------------------- AskScope（权限询问只认这几个）
+
+    def accepting(self) -> bool:
+        """取消中、已结束就不再收询问。"""
+        return self.state not in (TurnState.CANCELLING, TurnState.ENDED)
+
+    def wait_bound(self) -> tuple[float | None, float | None]:
+        return self._limits.permission_wait_s, self._deadline.remaining
+
+    def on_pending(self, pending: int) -> None:
         """挂起的询问数变化：0 → >0 进入等人，>0 → 0 回到 running（§6.3）。"""
         if self.state is TurnState.RUNNING and pending > 0:
             self.state = TurnState.AWAITING_PERMISSION
@@ -179,9 +191,20 @@ class Turn:
         self._deadline.stop()
         self._idle.stop()
         self._emit_state()  # ①
-        self._owner.settle_permissions(self)  # ② 挂起的询问全部回 cancelled
+        self._owner.settle_permissions(self.turn_id)  # ② 挂起的询问全部回 cancelled
         self._spawn(self._client.cancel(self._session_id))  # ③
         self._grace.start(self._cancel_grace_s)  # ④
+
+    def on_upstream(self, connected: bool) -> None:
+        """上游连接建立 / 断开。断开不结束这一轮；给了重连窗口才计时。"""
+        if connected:
+            self._reconnect.stop()
+        elif not self.ended and self._limits.reconnect_window_s is not None:
+            self._reconnect.start(self._limits.reconnect_window_s)
+
+    def _on_reconnect_window(self) -> None:
+        logger.warning("上游在重连窗口内没有回来，取消这一轮")
+        self.begin_cancel(CancelCause.UPSTREAM_LOST)
 
     def _on_deadline(self) -> None:
         self.begin_cancel(CancelCause.DEADLINE)
@@ -229,10 +252,10 @@ class Turn:
         if self.ended:
             return
         self._stop_awaiting()
-        for timer in (self._deadline, self._idle, self._grace):
+        for timer in (self._deadline, self._idle, self._grace, self._reconnect):
             timer.stop()
         # 不经取消直接结束（agent 退出）时仍可能有挂起的询问；撤回排在 ended 之前
-        self._owner.settle_permissions(self)
+        self._owner.settle_permissions(self.turn_id)
         self.state = TurnState.ENDED
         self.outcome = outcome
         self.stats = TurnStats(

@@ -20,9 +20,9 @@ from websockets.asyncio.server import Server, ServerConnection, serve
 from websockets.datastructures import Headers
 from websockets.http11 import Request, Response
 
-from ..session.host import HostSession, Phase
 from .connection import UpstreamConnection
 from .outbox import Outbox
+from .ports import SessionCommands
 
 __all__ = ["UpstreamServer"]
 
@@ -34,7 +34,7 @@ PATH = "/host"
 class UpstreamServer:
     def __init__(
         self,
-        host: HostSession,
+        host: SessionCommands,
         outbox: Outbox,
         *,
         token: str,
@@ -84,9 +84,9 @@ class UpstreamServer:
         if path == "/healthz":
             return conn.respond(HTTPStatus.OK, "ok\n")
         if path == "/readyz":
-            ready = self._host.phase is not Phase.BOOTING
+            ready, phase = self._host.readiness()
             status = HTTPStatus.OK if ready else HTTPStatus.SERVICE_UNAVAILABLE
-            return conn.respond(status, f"{self._host.phase.value}\n")
+            return conn.respond(status, f"{phase}\n")
         if path != PATH:
             return conn.respond(HTTPStatus.NOT_FOUND, "not found\n")
 

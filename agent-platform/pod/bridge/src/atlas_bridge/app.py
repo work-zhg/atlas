@@ -2,7 +2,7 @@
 
   1. 读配置、读 token 文件、生成 bridge 实例 id
   2. 启动 UpstreamServer（此时 /readyz 返回 503）
-  3. HostSession.boot()：拉起 agent、完成 initialize（预热）
+  3. SessionHost.boot()：拉起 agent、完成 initialize（预热）
   4. 进入 IDLE，/readyz 返回 200
   5. 等待；会话结束（session.close / session.ended）后以 4410 关闭连接；收到 SIGTERM 时退出
 
@@ -21,12 +21,12 @@ from importlib.metadata import PackageNotFoundError, version
 
 from atlas_host import BridgeInfo, CloseCode
 
-from .agent.process import AgentLaunch
-from .agent.supervisor import AgentSupervisor
+from .cli.process import CliLaunch
+from .cli.supervisor import CliSupervisor
 from .clock import SystemClock
 from .config import BridgeConfig
 from .errors import AgentUnavailable
-from .session.host import HostSession
+from .session.host import SessionHost
 from .upstream.outbox import Outbox
 from .upstream.server import UpstreamServer
 
@@ -47,7 +47,7 @@ class BridgeApp:
         self.config = config
         self.instance = f"b-{secrets.token_hex(6)}"
         clock = SystemClock()
-        launch = AgentLaunch(
+        launch = CliLaunch(
             argv=config.agent_cmd,
             cwd=config.workspace,
             env=config.agent_env(os.environ),
@@ -56,7 +56,7 @@ class BridgeApp:
             oom_score_adj=config.agent_oom_score_adj,
             max_line_bytes=config.max_message_bytes,
         )
-        self.agent = AgentSupervisor(
+        self.agent = CliSupervisor(
             launch,
             clock,
             boot_timeout_s=config.boot_timeout_s,
@@ -64,7 +64,7 @@ class BridgeApp:
             client_version=_version(),
         )
         self.outbox = Outbox(max_bytes=config.outbox_bytes)
-        self.host = HostSession(
+        self.host = SessionHost(
             self.agent,
             self.outbox,
             clock,

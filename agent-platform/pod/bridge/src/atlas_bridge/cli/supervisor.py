@@ -1,7 +1,7 @@
-"""AgentSupervisor：拉起、握手、退出监视与重启节制（Bridge 设计 §5.5 · §5.6 · §6.5）。
+"""CliSupervisor：拉起、握手、退出监视与重启节制（Bridge 设计 §5.5 · §5.6 · §6.5）。
 
-AgentPort 的生产实现。只管进程与 ACP 握手，不知道会话与轮次：
-「重启之后恢复哪个会话」由 HostSession 决定。
+CliPort 的生产实现。只管进程与 ACP 握手，不知道会话与轮次：
+「重启之后恢复哪个会话」由 SessionHost 决定。
 
 ★ 退出只报告一次，而且只报告「意外」的退出：主动终止（restart / shutdown）与预热期间的
   退出不报告。报告发生在 stdout 读完之后 —— agent 最后的输出先于退出事件处理完。
@@ -16,7 +16,6 @@ import contextlib
 import logging
 from collections import deque
 from dataclasses import dataclass
-from typing import Any, Protocol
 
 from atlas_host import FailCause
 from atlas_jsonrpc import ChannelClosed
@@ -24,21 +23,12 @@ from atlas_jsonrpc import ChannelClosed
 from ..clock import Clock
 from ..errors import AgentUnavailable, BridgeError
 from .client import AcpClient, Negotiated
-from .process import AgentLaunch, AgentProcess, OversizeLine
+from .ports import CliEvents
+from .process import CliLaunch, CliProcess, OversizeLine
 
-__all__ = ["DEFAULT_POLICY", "AgentSupervisor", "RestartPolicy"]
+__all__ = ["DEFAULT_POLICY", "CliSupervisor", "RestartPolicy"]
 
 logger = logging.getLogger(__name__)
-
-
-class AgentCallbacks(Protocol):
-    """agent 的输出交给谁。结构上与 session.ports.AgentEvents 相同（本层不依赖 session/）。"""
-
-    async def on_agent_update(self, raw: dict[str, Any]) -> None: ...
-
-    async def on_permission_request(self, raw: dict[str, Any]) -> dict[str, Any]: ...
-
-    def on_agent_lost(self, cause: FailCause) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,10 +42,10 @@ class RestartPolicy:
 DEFAULT_POLICY = RestartPolicy()
 
 
-class AgentSupervisor:
+class CliSupervisor:
     def __init__(
         self,
-        launch: AgentLaunch,
+        launch: CliLaunch,
         clock: Clock,
         *,
         policy: RestartPolicy = DEFAULT_POLICY,
@@ -70,8 +60,8 @@ class AgentSupervisor:
         self._kill_grace_s = kill_grace_s
         self._client_version = client_version
 
-        self._events: AgentCallbacks | None = None
-        self._proc: AgentProcess | None = None
+        self._events: CliEvents | None = None
+        self._proc: CliProcess | None = None
         self._client: AcpClient | None = None
         self._negotiated: Negotiated | None = None
         self._watch: asyncio.Task[None] | None = None
@@ -83,9 +73,9 @@ class AgentSupervisor:
         #: 会话期间累计的重启次数（上报给 server）
         self.restarts = 0
 
-    # ------------------------------------------------------------------ AgentPort
+    # ------------------------------------------------------------------ CliPort
 
-    def bind(self, events: AgentCallbacks) -> None:
+    def bind(self, events: CliEvents) -> None:
         self._events = events
 
     @property
@@ -153,11 +143,11 @@ class AgentSupervisor:
     async def _start(self) -> Negotiated:
         assert self._events is not None, "先 bind 再 boot"
         self._starts.append(self._clock.now())
-        proc = AgentProcess(self._launch, on_oversize=self._on_oversize, on_stderr=self._on_stderr)
+        proc = CliProcess(self._launch, on_oversize=self._on_oversize, on_stderr=self._on_stderr)
         await proc.start()
         client = AcpClient(
             proc,
-            on_update=self._events.on_agent_update,
+            on_update=self._events.on_update,
             on_permission=self._events.on_permission_request,
             client_version=self._client_version,
         )
@@ -181,7 +171,7 @@ class AgentSupervisor:
             with contextlib.suppress(asyncio.CancelledError):
                 await watch
 
-    async def _watch_exit(self, proc: AgentProcess, client: AcpClient) -> None:
+    async def _watch_exit(self, proc: CliProcess, client: AcpClient) -> None:
         await client.run()  # stdout 读完（agent 的全部输出都已处理）
         code = await proc.terminate(self._kill_grace_s)  # 已退出则立即返回；只关了 stdout 的也收掉
         if proc is not self._proc or not self._live:
@@ -189,7 +179,7 @@ class AgentSupervisor:
         self._live = False
         logger.warning("agent 意外退出（退出码 %s）", code)
         assert self._events is not None
-        self._events.on_agent_lost(FailCause.AGENT_EXITED)
+        self._events.on_cli_lost(FailCause.AGENT_EXITED)
 
     @staticmethod
     def _on_stderr(line: str) -> None:

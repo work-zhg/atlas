@@ -1,4 +1,4 @@
-"""AgentSupervisor：对真实子进程测试（代码设计 §7.4）。"""
+"""CliSupervisor：对真实子进程测试（代码设计 §7.4）。"""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from atlas_bridge.agent.process import AgentLaunch
-from atlas_bridge.agent.supervisor import AgentSupervisor, RestartPolicy
+from atlas_bridge.cli.process import CliLaunch
+from atlas_bridge.cli.supervisor import CliSupervisor, RestartPolicy
 from atlas_bridge.errors import AgentUnavailable
 from atlas_bridge.testing.clock import FakeClock
 from atlas_bridge.testing.fake_agent import Script
@@ -26,20 +26,20 @@ class Events:
         self.updates: list[dict[str, Any]] = []
         self.lost: list[FailCause] = []
 
-    async def on_agent_update(self, raw: dict[str, Any]) -> None:
+    async def on_update(self, raw: dict[str, Any]) -> None:
         self.updates.append(raw)
 
     async def on_permission_request(self, raw: dict[str, Any]) -> dict[str, Any]:
         return {"outcome": {"outcome": "cancelled"}}
 
-    def on_agent_lost(self, cause: FailCause) -> None:
+    def on_cli_lost(self, cause: FailCause) -> None:
         self.lost.append(cause)
 
 
 def supervisor(
     tmp_path: Path, script: Script | None = None, policy: RestartPolicy = NO_WAIT
-) -> tuple[AgentSupervisor, Events, FakeClock]:
-    launch = AgentLaunch(
+) -> tuple[CliSupervisor, Events, FakeClock]:
+    launch = CliLaunch(
         argv=(
             sys.executable,
             "-m",
@@ -51,7 +51,7 @@ def supervisor(
         oom_score_adj=None,
     )
     clock = FakeClock()
-    sup = AgentSupervisor(launch, clock, policy=policy, boot_timeout_s=10, kill_grace_s=1)
+    sup = CliSupervisor(launch, clock, policy=policy, boot_timeout_s=10, kill_grace_s=1)
     events = Events()
     sup.bind(events)
     return sup, events, clock
@@ -116,7 +116,7 @@ async def test_backoff_grows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
         slept.append(delay)
         await real_sleep(0)
 
-    monkeypatch.setattr("atlas_bridge.agent.supervisor.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("atlas_bridge.cli.supervisor.asyncio.sleep", fake_sleep)
     await sup.boot()
     for _ in range(3):
         await sup.restart("crash")
@@ -134,8 +134,8 @@ async def test_boot_failure_is_retried_then_given_up(tmp_path: Path) -> None:
 
 
 async def test_missing_executable_is_a_boot_failure(tmp_path: Path) -> None:
-    launch = AgentLaunch(argv=("/nonexistent/agent",), cwd=tmp_path, env={}, oom_score_adj=None)
-    sup = AgentSupervisor(launch, FakeClock(), policy=NO_WAIT)
+    launch = CliLaunch(argv=("/nonexistent/agent",), cwd=tmp_path, env={}, oom_score_adj=None)
+    sup = CliSupervisor(launch, FakeClock(), policy=NO_WAIT)
     sup.bind(Events())
     with pytest.raises(AgentUnavailable):
         await sup.boot()

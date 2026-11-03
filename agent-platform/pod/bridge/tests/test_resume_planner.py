@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 from atlas_acp.v1 import AgentCaps
-from atlas_bridge.agent.resume import OpenMethod, Plan, plan_open
+from atlas_bridge.session.resume import OpenMethod, Plan, plan_open
 
 BOTH = AgentCaps(load_session=True, resume=True)
 LOAD_ONLY = AgentCaps(load_session=True)

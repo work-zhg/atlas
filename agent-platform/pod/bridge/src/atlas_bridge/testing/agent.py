@@ -1,7 +1,7 @@
-"""InProcessAgent：进程内运行 FakeAgent 的 AgentPort，用于 session 层的组件测试。
+"""InProcessAgent：进程内运行 FakeAgent 的 CliPort，用于 session 层的组件测试。
 
-生产实现是 AgentSupervisor（拉起真实进程、崩溃检测、重启节制）。这里只保留接口语义：
-boot = 建通道 + initialize；通道关闭 = 进程退出 → on_agent_lost；restart = 新通道 + initialize。
+生产实现是 CliSupervisor（拉起真实进程、崩溃检测、重启节制）。这里只保留接口语义：
+boot = 建通道 + initialize；通道关闭 = 进程退出 → on_cli_lost；restart = 新通道 + initialize。
 重启前后是同一个 FakeAgent 对象：它的 history 相当于 agent 写在磁盘上的会话文件。
 """
 
@@ -14,9 +14,9 @@ from typing import Any
 from atlas_host import FailCause
 from atlas_jsonrpc.memory import MemoryChannel, memory_pair
 
-from ..agent.client import AcpClient, Negotiated
+from ..cli.client import AcpClient, Negotiated
+from ..cli.ports import CliEvents
 from ..errors import AgentUnavailable
-from ..session.ports import AgentEvents
 from .fake_agent import FakeAgent, Script
 
 __all__ = ["InProcessAgent"]
@@ -31,7 +31,7 @@ class InProcessAgent:
         self.script_after_restart: Script | None = None
         #: 设置后 restart 会等它 set 再继续（测试「恢复期间」的行为）
         self.hold_restart: asyncio.Event | None = None
-        self._events: AgentEvents | None = None
+        self._events: CliEvents | None = None
         self._client: AcpClient | None = None
         self._negotiated: Negotiated | None = None
         self._channels: tuple[MemoryChannel, MemoryChannel] | None = None
@@ -39,7 +39,7 @@ class InProcessAgent:
         self._stopping = False
         self.shutdowns = 0
 
-    def bind(self, events: AgentEvents) -> None:
+    def bind(self, events: CliEvents) -> None:
         self._events = events
 
     @property
@@ -58,7 +58,7 @@ class InProcessAgent:
         self._channels = (client_side, agent_side)
         self._client = AcpClient(
             client_side,
-            on_update=self._events.on_agent_update,
+            on_update=self._events.on_update,
             on_permission=self._events.on_permission_request,
         )
         self._tasks = [
@@ -103,4 +103,4 @@ class InProcessAgent:
         assert self._client is not None and self._events is not None
         await self._client.run()
         if not self._stopping:
-            self._events.on_agent_lost(FailCause.AGENT_EXITED)
+            self._events.on_cli_lost(FailCause.AGENT_EXITED)

@@ -8,7 +8,7 @@ from typing import Any
 
 from atlas_host import Model
 
-from ..session.ports import MessageKind
+from ..upstream.ports import MessageKind
 
 __all__ = ["Recorded", "RecordingOutbox"]
 

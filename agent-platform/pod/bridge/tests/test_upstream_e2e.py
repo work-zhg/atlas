@@ -17,8 +17,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from atlas_bridge.agent.supervisor import RestartPolicy
 from atlas_bridge.app import BridgeApp
+from atlas_bridge.cli.supervisor import RestartPolicy
 from atlas_bridge.config import BridgeConfig
 from atlas_bridge.testing.fake_agent import Script
 from atlas_bridge.testing.probe import RpcError, UpstreamProbe

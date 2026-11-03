@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from atlas_bridge.session.ledger import TurnLedger, TurnRecord
-from atlas_bridge.session.progress import ProgressTracker
+from atlas_bridge.turn.progress import ProgressTracker
 from atlas_host import Completed, TurnStats
 
 

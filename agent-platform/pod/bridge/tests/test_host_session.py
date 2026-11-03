@@ -1,4 +1,4 @@
-"""HostSession + Turn 的组件测试：进程内 FakeAgent + FakeClock + RecordingOutbox。
+"""SessionHost + Turn 的组件测试：进程内 FakeAgent + FakeClock + RecordingOutbox。
 
 没有进程、没有网络、没有真实时间：计时全部由 FakeClock 推进。
 """
@@ -258,6 +258,26 @@ async def test_by_default_a_disconnect_never_cancels_the_turn(make: Any) -> None
     assert (await h.turn_over())["outcome"]["cause"] == "requested"
 
 
+async def test_a_given_reconnect_window_cancels_the_turn_as_upstream_lost(make: Any) -> None:
+    """server 显式给了重连窗口：断开超过它就以 upstream_lost 取消；窗口内连回来就不取消。
+
+    计时在一轮里（不在会话里）：重连窗口是这一轮的时限之一。
+    """
+    h = make(Script(on_prompt="silent"))
+    await h.open(defaults=TurnLimits(idle_s=10**9, tool_idle_s=10**9))
+    h.host.upstream_changed(True)
+    await h.start(limits=TurnLimits(reconnect_window_s=60))
+    h.host.upstream_changed(False)
+    h.clock.advance(30)
+    h.host.upstream_changed(True)  # 窗口内连回来：计时停下
+    h.clock.advance(120)
+    assert h.outbox.turn_states("t1") == ["running"]
+    h.host.upstream_changed(False)
+    h.clock.advance(61)
+    outcome = (await h.turn_over())["outcome"]
+    assert outcome == {"kind": "cancelled", "cause": "upstream_lost"}
+
+
 async def test_deadline(make: Any) -> None:
     """server 显式给了 deadlineS 时才有截止（默认不给）。"""
     h = make(Script(on_prompt="silent"))
@@ -278,11 +298,11 @@ async def test_idle_uses_the_tool_threshold_while_a_tool_runs(make: Any) -> None
     await h.start()
     sid = h.host.agent_session_id
     running = {"sessionUpdate": "tool_call", "toolCallId": "c1", "status": "in_progress"}
-    await h.host.on_agent_update({"sessionId": sid, "update": running})
+    await h.host.on_update({"sessionId": sid, "update": running})
     h.clock.advance(49)
     assert h.outbox.turn_states("t1") == ["running"]
     done = {"sessionUpdate": "tool_call_update", "toolCallId": "c1", "status": "completed"}
-    await h.host.on_agent_update({"sessionId": sid, "update": done})
+    await h.host.on_update({"sessionId": sid, "update": done})
     h.clock.advance(4.9)  # 工具结束，回到 idleS，从这条 update 起重新计时
     assert h.outbox.turn_states("t1") == ["running"]
     h.clock.advance(0.1)

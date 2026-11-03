@@ -1,4 +1,4 @@
-"""HostSession：会话状态机，上游指令的唯一入口（Bridge 设计 §5.5 · 代码设计 §7.2）。
+"""SessionHost：会话状态机，上游指令的唯一入口（Bridge 设计 §5.5 · 代码设计 §7.2）。
 
 ★ 所有状态只在事件循环里修改，没有锁。一次状态转换在同一个同步段里完成「改状态 + 放入消息」；
   需要 await 的操作先转到中间态（OPENING、CLOSING），醒来后先检查状态是否已被别的事件改变。
@@ -21,8 +21,6 @@ from atlas_host import (
     AcpNegotiation,
     AgentRestart,
     AgentUpdateParams,
-    AttachParams,
-    AttachResult,
     BridgeInfo,
     CancelCause,
     ErrorInfo,
@@ -33,7 +31,6 @@ from atlas_host import (
     OpenParams,
     OpenResult,
     ResumeSpec,
-    SeqRange,
     SessionEndedParams,
     SessionState,
     SessionStateParams,
@@ -48,8 +45,8 @@ from atlas_host import (
 )
 from atlas_jsonrpc import ChannelClosed
 
-from ..agent.resume import OpenMethod, plan_open
-from ..clock import Clock, Timer
+from ..cli.ports import CliPort
+from ..clock import Clock
 from ..errors import (
     AcpRequestTimeout,
     AgentRequestFailed,
@@ -59,12 +56,13 @@ from ..errors import (
     TurnBusy,
     TurnNotFound,
 )
+from ..permission.broker import PermissionBroker
+from ..turn.turn import Turn
+from ..upstream.ports import UpstreamOutbox
 from .ledger import TurnLedger, TurnRecord
-from .permissions import PermissionBroker
-from .ports import AgentPort, OutboxSink
-from .turn import Turn
+from .resume import OpenMethod, plan_open
 
-__all__ = ["HostSession", "Phase"]
+__all__ = ["Phase", "SessionHost"]
 
 logger = logging.getLogger(__name__)
 
@@ -100,11 +98,11 @@ class Phase(StrEnum):
     ENDED = "ended"
 
 
-class HostSession:
+class SessionHost:
     def __init__(
         self,
-        agent: AgentPort,
-        outbox: OutboxSink,
+        agent: CliPort,
+        outbox: UpstreamOutbox,
         clock: Clock,
         *,
         bridge: BridgeInfo,
@@ -143,10 +141,6 @@ class HostSession:
         #: agent 进程是否仍可信（取消不响应之后不再向它发 session/close）
         self._agent_healthy = True
         self._tasks: set[asyncio.Task[Any]] = set()
-        #: 上游断开时计时；窗口内没有重连上，就以 upstream_lost 取消进行中的一轮（§7.2）。
-        #: 默认不设窗口：断线只是通道断了，这一轮照常进行，消息缓冲到 server 回来 attach
-        self._upstream_connected = False
-        self._reconnect = Timer(clock, self._on_reconnect_window, name="reconnect-window")
         #: server 要的权限模式（最近一次 turn.start 给的）。agent 每次新建 / 恢复会话都会
         #: 把模式重置，所以要记住它，恢复会话后重新应用
         self._desired_mode: str | None = None
@@ -276,12 +270,16 @@ class HostSession:
             return TurnCancelResult(state="ended")
         raise TurnNotFound(turn_id)
 
-    def attach(self, params: AttachParams) -> AttachResult:
-        """重连后的第一条请求（§7.3）。响应之后由 Outbox 按 seq 顺序补发 resendFrom 起的消息。
+    def readiness(self) -> tuple[bool, str]:
+        """/readyz：CLI 完成初始化就算就绪。"""
+        return self.phase is not Phase.BOOTING, self.phase.value
+
+    def snapshot(self, bridge_instance: str) -> tuple[SessionState, TurnRef | None]:
+        """session.attach：会话此刻的状态和当前一轮（§7.3）。补发计划由上游通道按 Outbox 算。
 
         ★ server 的判断依据是 state 与 turn，不是补发的消息：会话此刻处于什么状态以这里为准。
         """
-        if params.bridge_instance != self._bridge.instance:
+        if bridge_instance != self._bridge.instance:
             # bridge 重启过，进程内状态全丢；server 据此让进行中的一轮失败并 session.open 恢复
             raise SessionNotOpen("bridge_restarted", bridgeInstance=self._bridge.instance)
         state = {
@@ -294,28 +292,15 @@ class HostSession:
         if state is None:
             raise SessionNotOpen("not_opened")
         turn = self.turn
-        resend_from, gaps = self._outbox.resend_plan(params.last_seq)
-        return AttachResult(
-            state=state,
-            turn=TurnRef(turn_id=turn.turn_id, state=turn.state) if turn and turn.state else None,
-            resend_from=resend_from,
-            gaps=[SeqRange(first=a, last=b) for a, b in gaps],
+        return state, (
+            TurnRef(turn_id=turn.turn_id, state=turn.state) if turn and turn.state else None
         )
 
     def upstream_changed(self, connected: bool) -> None:
-        """上游连接建立 / 断开（由 UpstreamServer 调用）。断开不结束这一轮（§7.2）。"""
-        self._upstream_connected = connected
-        if connected:
-            self._reconnect.stop()
-        elif self.turn is not None and not self.turn.ended:
-            window = self.turn.limits.reconnect_window_s
-            if window is not None:
-                self._reconnect.start(window)
-
-    def _on_reconnect_window(self) -> None:
-        if not self._upstream_connected and self.turn is not None:
-            logger.warning("上游在重连窗口内没有回来，取消进行中的一轮")
-            self.turn.begin_cancel(CancelCause.UPSTREAM_LOST)
+        """上游连接建立 / 断开（由 UpstreamServer 调用）。断开不结束这一轮（§7.2）；
+        重连窗口的计时在一轮里。"""
+        if self.turn is not None:
+            self.turn.on_upstream(connected)
 
     async def close(self) -> None:
         """若有一轮在进行，先按取消流程结束它；再关闭 agent 会话、终止 agent。幂等。"""
@@ -333,13 +318,13 @@ class HostSession:
         self.phase = Phase.ENDED
         self.ended.set()
 
-    def on_permission_answer(self, ask_id: int, result: Any = None, error: Any = None) -> None:
+    def answer_permission(self, ask_id: int, result: Any = None, error: Any = None) -> None:
         """server 对 permission.ask 的响应（由上游连接按 id 转交）。"""
         self.permissions.on_answer(ask_id, result, error)
 
     # ═══════════════════════════════════ 来自 agent ═══════════════════════════════════
 
-    async def on_agent_update(self, raw: dict[str, Any]) -> None:
+    async def on_update(self, raw: dict[str, Any]) -> None:
         """定 origin → Outbox；属于当前一轮的，再交给 Turn 读取进展信号。
 
         ★ 先等 Outbox 可写：缓冲满时这里停下，AcpClient 的读循环随之停下，压力传回 agent（§6.6）。
@@ -367,7 +352,7 @@ class HostSession:
         """B6：agent 的反向请求永远有回应（由 PermissionBroker 保证）。"""
         return await self.permissions.handle(self.turn, raw)
 
-    def on_agent_lost(self, cause: FailCause) -> None:
+    def on_cli_lost(self, cause: FailCause) -> None:
         """agent 进程退出。关闭过程中的退出是预期内的。"""
         if self.phase in (Phase.CLOSING, Phase.ENDED):
             return
@@ -379,13 +364,12 @@ class HostSession:
 
     # ═══════════════════════════════════ TurnOwner ═══════════════════════════════════
 
-    def settle_permissions(self, turn: Turn) -> None:
-        self.permissions.settle_all(turn)
+    def settle_permissions(self, turn_id: str) -> None:
+        self.permissions.settle_all(turn_id)
 
     def turn_ended(self, turn: Turn) -> None:
         assert turn.outcome is not None and turn.stats is not None
         self.ledger.record(turn.turn_id, TurnRecord(turn.outcome, turn.stats))
-        self._reconnect.stop()
         if self.turn is turn:
             self.turn = None
         if self.phase is Phase.IN_TURN:

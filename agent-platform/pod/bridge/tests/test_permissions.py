@@ -9,7 +9,7 @@ import asyncio
 from typing import Any
 
 import pytest
-from atlas_bridge.session.permissions import reject_result
+from atlas_bridge.permission.broker import reject_result
 from atlas_bridge.testing.fake_agent import Script
 from atlas_bridge.testing.harness import SessionHarness, until
 from atlas_host import TurnLimits
@@ -47,7 +47,7 @@ async def test_ask_goes_up_and_the_chosen_option_goes_back(make: Any) -> None:
     assert "expiresInS" not in params and "expiresAt" not in params  # 默认不过期
     assert h.outbox.turn_states("t1") == ["running", "awaiting_permission"]
 
-    h.host.on_permission_answer(ask_id, {"optionId": "allow"})
+    h.host.answer_permission(ask_id, {"optionId": "allow"})
     assert (await h.turn_over())["outcome"]["kind"] == "completed"
     assert tool_result(h) == "completed"
     assert h.outbox.turn_states("t1") == ["running", "awaiting_permission", "running", "ended"]
@@ -68,7 +68,7 @@ async def test_anything_but_a_valid_choice_is_a_rejection(make: Any, answer: Any
     await h.open()
     await h.start()
     [(ask_id, _)] = await asked(h)
-    h.host.on_permission_answer(ask_id, answer)
+    h.host.answer_permission(ask_id, answer)
     await h.turn_over()
     assert tool_result(h) == "failed"
 
@@ -78,7 +78,7 @@ async def test_server_error_is_a_rejection(make: Any) -> None:
     await h.open()
     await h.start()
     [(ask_id, _)] = await asked(h)
-    h.host.on_permission_answer(ask_id, error={"code": -32603, "message": "boom"})
+    h.host.answer_permission(ask_id, error={"code": -32603, "message": "boom"})
     await h.turn_over()
     assert tool_result(h) == "failed"
 
@@ -88,9 +88,9 @@ async def test_late_and_unknown_answers_are_ignored(make: Any) -> None:
     await h.open()
     await h.start()
     [(ask_id, _)] = await asked(h)
-    h.host.on_permission_answer(ask_id, {"reject": True})
-    h.host.on_permission_answer(ask_id, {"optionId": "allow"})  # 已有结果：忽略
-    h.host.on_permission_answer(999, {"optionId": "allow"})
+    h.host.answer_permission(ask_id, {"reject": True})
+    h.host.answer_permission(ask_id, {"optionId": "allow"})  # 已有结果：忽略
+    h.host.answer_permission(999, {"optionId": "allow"})
     await h.turn_over()
     assert tool_result(h) == "failed"
 
@@ -122,7 +122,7 @@ async def test_idle_is_paused_while_waiting_for_a_human(make: Any) -> None:
     [(ask_id, _)] = await asked(h)
     h.clock.advance(500)
     assert h.outbox.turn_states("t1") == ["running", "awaiting_permission"]
-    h.host.on_permission_answer(ask_id, {"optionId": "allow"})
+    h.host.answer_permission(ask_id, {"optionId": "allow"})
     ended = await h.turn_over()
     assert ended["stats"]["awaitingPermissionS"] == 500
 
@@ -136,7 +136,7 @@ async def test_by_default_an_ask_waits_for_a_human_however_long_it_takes(make: A
     h.clock.advance(10 * 86_400)
     assert h.outbox.of("permission.withdraw") == []
     assert h.outbox.turn_states("t1") == ["running", "awaiting_permission"]
-    h.host.on_permission_answer(ask_id, {"optionId": "allow"})
+    h.host.answer_permission(ask_id, {"optionId": "allow"})
     assert (await h.turn_over())["outcome"]["kind"] == "completed"
     assert tool_result(h) == "completed"
 
@@ -190,7 +190,7 @@ async def test_cancel_answers_pending_asks_with_cancelled(make: Any) -> None:
     ]
     methods = [m.method for m in h.outbox.messages]
     assert methods.index("permission.withdraw") < len(methods) - 1  # 撤回排在 ended 之前
-    h.host.on_permission_answer(ask_id, {"optionId": "allow"})  # 撤回之后的答复：忽略
+    h.host.answer_permission(ask_id, {"optionId": "allow"})  # 撤回之后的答复：忽略
 
 
 async def test_ask_during_cancelling_is_not_reported(make: Any) -> None:

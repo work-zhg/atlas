@@ -1,4 +1,4 @@
-"""AgentProcess：对真实子进程测试（代码设计 §7.3）。
+"""CliProcess：对真实子进程测试（代码设计 §7.3）。
 
 agent 是以独立进程运行的 FakeAgent，走真实的 stdio —— 超长行、stderr、进程组终止、
 环境隔离这些问题只有真进程才会暴露。
@@ -13,13 +13,13 @@ import sys
 from pathlib import Path
 
 import pytest
-from atlas_bridge.agent.process import AgentLaunch, AgentProcess, OversizeLine
+from atlas_bridge.cli.process import CliLaunch, CliProcess, OversizeLine
 from atlas_bridge.testing.fake_agent import Script
 from atlas_jsonrpc import ChannelClosed
 
 
-def launch(script: Script, tmp_path: Path, **kw: object) -> AgentLaunch:
-    return AgentLaunch(
+def launch(script: Script, tmp_path: Path, **kw: object) -> CliLaunch:
+    return CliLaunch(
         argv=(sys.executable, "-m", "atlas_bridge.testing.fake_agent", script.to_json()),
         cwd=tmp_path,
         env={"PATH": os.environ["PATH"], "HOME": str(tmp_path), "ONLY_THIS": "1"},
@@ -28,7 +28,7 @@ def launch(script: Script, tmp_path: Path, **kw: object) -> AgentLaunch:
     )
 
 
-async def request(proc: AgentProcess, rid: int, method: str, params: dict) -> dict:
+async def request(proc: CliProcess, rid: int, method: str, params: dict) -> dict:
     await proc.send(json.dumps({"jsonrpc": "2.0", "id": rid, "method": method, "params": params}))
     while True:
         line = await asyncio.wait_for(proc.receive(), 10)
@@ -39,7 +39,7 @@ async def request(proc: AgentProcess, rid: int, method: str, params: dict) -> di
 
 
 async def test_line_roundtrip(tmp_path: Path) -> None:
-    proc = AgentProcess(launch(Script(), tmp_path))
+    proc = CliProcess(launch(Script(), tmp_path))
     await proc.start()
     try:
         resp = await request(proc, 1, "initialize", {"protocolVersion": 1})
@@ -53,7 +53,7 @@ async def test_environment_is_not_inherited(
 ) -> None:
     """★ agent 只拿到白名单里的环境变量，拿不到 bridge 自己的（Bridge 设计 §8.3）。"""
     monkeypatch.setenv("BRIDGE_SECRET", "must-not-leak")
-    proc = AgentProcess(launch(Script(), tmp_path))
+    proc = CliProcess(launch(Script(), tmp_path))
     await proc.start()
     try:
         keys = (await request(proc, 1, "_test/env", {}))["result"]["keys"]
@@ -69,7 +69,7 @@ async def test_oversize_line_is_skipped_and_the_next_frame_survives(tmp_path: Pa
     """
     oversize: list[OversizeLine] = []
     script = Script(updates_per_turn=0, huge_line_bytes=200_000, ask_permission=True)
-    proc = AgentProcess(
+    proc = CliProcess(
         launch(script, tmp_path, max_line_bytes=64 * 1024), on_oversize=oversize.append
     )
     await proc.start()
@@ -103,7 +103,7 @@ async def test_oversize_line_is_skipped_and_the_next_frame_survives(tmp_path: Pa
 async def test_stderr_is_collected_and_truncated(tmp_path: Path) -> None:
     lines: list[str] = []
     script = Script(stderr_lines=["hello from agent", "y" * 5000])
-    proc = AgentProcess(launch(script, tmp_path, stderr_line_bytes=100), on_stderr=lines.append)
+    proc = CliProcess(launch(script, tmp_path, stderr_line_bytes=100), on_stderr=lines.append)
     await proc.start()
     await request(proc, 1, "initialize", {})
     await proc.terminate(grace=2)
@@ -114,7 +114,7 @@ async def test_stderr_is_collected_and_truncated(tmp_path: Path) -> None:
 async def test_terminate_kills_the_whole_process_group(tmp_path: Path) -> None:
     """★ CLI 拉起的子进程也必须一起终止，不能留成孤儿。"""
     lines: list[str] = []
-    proc = AgentProcess(launch(Script(spawn_child=True), tmp_path), on_stderr=lines.append)
+    proc = CliProcess(launch(Script(spawn_child=True), tmp_path), on_stderr=lines.append)
     await proc.start()
     await request(proc, 1, "initialize", {})
     child_pid = int(next(ln for ln in lines if ln.startswith("child-pid=")).split("=")[1])
@@ -126,7 +126,7 @@ async def test_terminate_kills_the_whole_process_group(tmp_path: Path) -> None:
 
 
 async def test_exit_is_observable_and_send_after_exit_fails(tmp_path: Path) -> None:
-    proc = AgentProcess(launch(Script(on_prompt="crash"), tmp_path))
+    proc = CliProcess(launch(Script(on_prompt="crash"), tmp_path))
     await proc.start()
     await request(proc, 1, "initialize", {})
     sid = (await request(proc, 2, "session/new", {"cwd": "/w", "mcpServers": []}))["result"][
@@ -149,8 +149,8 @@ async def test_sigterm_ignored_escalates_to_sigkill(tmp_path: Path) -> None:
         "import signal,sys,time;signal.signal(signal.SIGTERM, signal.SIG_IGN);"
         "print('ready',flush=True);time.sleep(60)"
     )
-    proc = AgentProcess(
-        AgentLaunch(
+    proc = CliProcess(
+        CliLaunch(
             argv=(sys.executable, "-c", ignore_term),
             cwd=tmp_path,
             env={"PATH": os.environ["PATH"]},

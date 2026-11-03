@@ -3,7 +3,7 @@
 接收循环里：
   · 请求（session.* / turn.*） → 各自一个任务交给 dispatch，响应经 Outbox 排队发出
   · session.ack 通知 → Outbox.ack
-  · 响应（server 对 permission.ask 的答复） → HostSession.on_permission_answer
+  · 响应（server 对 permission.ask 的答复） → SessionHost.answer_permission
 
 不用 RpcEndpoint：bridge 发出的消息都由 Outbox 预先编好 seq 与 id，这条连接只负责收发。
 """
@@ -15,7 +15,7 @@ import contextlib
 import logging
 from typing import Any
 
-from atlas_host import AckParams, AttachParams, CloseCode, methods
+from atlas_host import AckParams, AttachParams, AttachResult, CloseCode, SeqRange, methods
 from atlas_jsonrpc import (
     ChannelClosed,
     ErrorCode,
@@ -32,9 +32,9 @@ from websockets.asyncio.server import ServerConnection
 from websockets.exceptions import ConnectionClosed
 
 from ..errors import BridgeError
-from ..session.host import HostSession
 from .dispatch import dispatch, to_fault
 from .outbox import Outbox
+from .ports import SessionCommands
 
 __all__ = ["UpstreamConnection"]
 
@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 
 class UpstreamConnection:
-    def __init__(self, ws: ServerConnection, host: HostSession, outbox: Outbox) -> None:
+    def __init__(self, ws: ServerConnection, host: SessionCommands, outbox: Outbox) -> None:
         self._ws = ws
         self._host = host
         self._outbox = outbox
@@ -121,7 +121,7 @@ class UpstreamConnection:
         中间没有新消息插进来，于是「响应之后按 seq 补发，再接实时消息」严格成立（§7.3）。"""
         try:
             params = AttachParams.model_validate(request.params)
-            result = self._host.attach(params)
+            state, turn = self._host.snapshot(params.bridge_instance)
         except ValidationError as exc:
             fault = RpcFault(ErrorCode.INVALID_PARAMS, "参数不合法", {"cause": "invalid_params"})
             self._outbox.release(self)
@@ -132,6 +132,13 @@ class UpstreamConnection:
             self._outbox.release(self)
             self._respond(Response(request.id, error=to_fault(methods.SESSION_ATTACH, exc)))
             return
+        resend_from, gaps = self._outbox.resend_plan(params.last_seq)
+        result = AttachResult(
+            state=state,
+            turn=turn,
+            resend_from=resend_from,
+            gaps=[SeqRange(first=a, last=b) for a, b in gaps],
+        )
         self._outbox.rewind(self, encode(Response(request.id, result=result.to_wire())))
 
     def _handle_ack(self, params: Any) -> None:
@@ -145,7 +152,7 @@ class UpstreamConnection:
             logger.warning("收到 id 不认识的响应：%r", response.id)
             return
         error = response.error.to_json() if response.error is not None else None
-        self._host.on_permission_answer(response.id, response.result, error)
+        self._host.answer_permission(response.id, response.result, error)
 
     def _respond(self, response: Response) -> None:
         self._outbox.put_response(self, encode(response))

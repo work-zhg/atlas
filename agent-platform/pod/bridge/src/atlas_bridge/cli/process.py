@@ -1,4 +1,4 @@
-"""AgentProcess：把 agent 子进程包装成一条按行收发的 ``MessageChannel``（代码设计 §7.3）。
+"""CliProcess：把 agent 子进程包装成一条按行收发的 ``MessageChannel``（代码设计 §7.3）。
 
 ACP 的 stdio 传输：一条消息一行，stdout 上只有协议消息，日志走 stderr（Bridge 设计 §2.3）。
 
@@ -25,7 +25,7 @@ from pathlib import Path
 
 from atlas_jsonrpc import ChannelClosed
 
-__all__ = ["AgentLaunch", "AgentProcess", "OversizeLine"]
+__all__ = ["CliLaunch", "CliProcess", "OversizeLine"]
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ _PREVIEW_BYTES = 512
 
 
 @dataclass(frozen=True, slots=True)
-class AgentLaunch:
+class CliLaunch:
     argv: tuple[str, ...]
     cwd: Path
     #: 传给 agent 的全部环境变量（白名单构造，不继承 bridge 的环境）
@@ -56,12 +56,12 @@ class OversizeLine:
     head: bytes
 
 
-class AgentProcess:
+class CliProcess:
     """一个 agent 子进程。实现 ``MessageChannel``：每条消息是 stdout 上的一行。"""
 
     def __init__(
         self,
-        launch: AgentLaunch,
+        launch: CliLaunch,
         *,
         on_oversize: Callable[[OversizeLine], None] | None = None,
         on_stderr: Callable[[str], None] | None = None,

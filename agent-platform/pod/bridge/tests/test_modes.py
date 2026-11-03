@@ -134,7 +134,7 @@ async def test_agent_switching_mode_by_itself_is_tracked(make: Any) -> None:
     await h.start("t1", mode="auto")
     await h.turn_over("t1")
     sid = h.host.agent_session_id
-    await h.host.on_agent_update(
+    await h.host.on_update(
         {
             "sessionId": sid,
             "update": {"sessionUpdate": "current_mode_update", "currentModeId": "plan"},

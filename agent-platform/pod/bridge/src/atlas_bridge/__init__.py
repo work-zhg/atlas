@@ -1,7 +1,7 @@
 """会话 Pod 里的 bridge：ACP client + 上游协议（atlas.host.v1）服务端（代码设计 §5）。
 
-    agent/      对下：agent 进程与 ACP（AgentProcess · AcpClient · AgentSupervisor）
-    session/    核心：会话与轮次的状态机、计时、取消、权限（HostSession · Turn · PermissionBroker）
+    agent/      对下：agent 进程与 ACP（CliProcess · AcpClient · CliSupervisor）
+    session/    核心：会话与轮次的状态机、计时、取消、权限（SessionHost · Turn · PermissionBroker）
     upstream/   对上：WebSocket、握手鉴权、序号与补发（UpstreamServer · Outbox）
     app.py      装配与启动顺序；入口是 ``python -m atlas_bridge``
 

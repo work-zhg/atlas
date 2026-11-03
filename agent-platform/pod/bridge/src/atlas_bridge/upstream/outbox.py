@@ -29,7 +29,7 @@ from typing import Protocol
 from atlas_host import Model
 from atlas_jsonrpc import ChannelClosed, Notification, Request, encode
 
-from ..session.ports import MessageKind
+from .ports import MessageKind
 
 __all__ = ["Entry", "Outbox", "UpstreamSink"]
 

@@ -16,28 +16,49 @@ import itertools
 import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal, Protocol
 
 from atlas_host import (
     PermissionAnswer,
     PermissionAskParams,
     PermissionWithdrawParams,
-    TurnState,
     methods,
 )
 from pydantic import ValidationError
 
 from ..clock import Clock, Timer
-from .ports import OutboxSink
+from ..upstream.ports import UpstreamOutbox
 
-if TYPE_CHECKING:
-    from .turn import Turn
-
-__all__ = ["PermissionBroker", "cancelled_result", "reject_result"]
+__all__ = ["AskScope", "PermissionBroker", "cancelled_result", "expires_in", "reject_result"]
 
 logger = logging.getLogger(__name__)
 
 WithdrawReason = Literal["turn_ended", "expired", "agent_withdrew"]
+
+
+class AskScope(Protocol):
+    """权限询问对「这一轮」的全部要求，由一轮实现 —— 权限询问因此不认识 Turn。"""
+
+    @property
+    def turn_id(self) -> str: ...
+
+    def accepting(self) -> bool:
+        """还收不收询问：取消中、已结束就不收（新询问直接回 cancelled，不上报）。"""
+        ...
+
+    def wait_bound(self) -> tuple[float | None, float | None]:
+        """(权限等待, 截止剩余时间)，None = 不限。"""
+        ...
+
+    def on_pending(self, n: int) -> None:
+        """挂起的询问数变了：0 → 有，进入等人、暂停静默计时；有 → 0，回到 running。"""
+        ...
+
+
+def expires_in(wait_s: float | None, deadline_left: float | None) -> float | None:
+    """询问的期限（ExpiryPolicy）：两项都不限就不限 —— 审批只由人决定。"""
+    bounds = [v for v in (wait_s, deadline_left) if v is not None]
+    return min(bounds) if bounds else None
 
 
 def cancelled_result() -> dict[str, Any]:
@@ -69,7 +90,7 @@ def reject_result(request: Any) -> dict[str, Any]:
 @dataclass(eq=False)
 class Ask:
     ask_id: int
-    turn: Turn
+    scope: AskScope
     request: dict[str, Any]
     future: asyncio.Future[dict[str, Any]]
     timer: Timer | None = None
@@ -77,7 +98,7 @@ class Ask:
 
 
 class PermissionBroker:
-    def __init__(self, outbox: OutboxSink, clock: Clock, *, max_pending: int = 8) -> None:
+    def __init__(self, outbox: UpstreamOutbox, clock: Clock, *, max_pending: int = 8) -> None:
         self._outbox = outbox
         self._clock = clock
         self._max_pending = max_pending
@@ -85,48 +106,44 @@ class PermissionBroker:
         self._ids = itertools.count(1)
         self.asks: dict[int, Ask] = {}
 
-    def pending(self, turn: Turn) -> int:
-        return sum(1 for a in self.asks.values() if a.turn is turn)
+    def pending(self, turn_id: str) -> int:
+        return sum(1 for a in self.asks.values() if a.scope.turn_id == turn_id)
 
     # ------------------------------------------------------------------ 来自 agent
 
-    async def handle(self, turn: Turn | None, request: dict[str, Any]) -> dict[str, Any]:
+    async def handle(self, scope: AskScope | None, request: dict[str, Any]) -> dict[str, Any]:
         """agent 的 session/request_permission → 返回 ACP 的 RequestPermissionResponse。"""
-        if turn is None:
+        if scope is None:
             # 没有进行中的一轮（v2 的后台活动）：没有人会看到这次询问
             return reject_result(request)
-        if turn.state in (TurnState.CANCELLING, TurnState.ENDED):
+        if not scope.accepting():
             return cancelled_result()  # §6.4 ④：取消期间的新询问直接回 cancelled，不上报
-        if self.pending(turn) >= self._max_pending:
+        if self.pending(scope.turn_id) >= self._max_pending:
             logger.warning("挂起的权限询问超过 %d 个，直接拒绝", self._max_pending)
             return reject_result(request)
 
         loop = asyncio.get_running_loop()
-        ask = Ask(next(self._ids), turn, request, loop.create_future())
+        ask = Ask(next(self._ids), scope, request, loop.create_future())
         self.asks[ask.ask_id] = ask
 
         # ★ 默认两者都是 None：审批只由人决定，一直等到答复（或这一轮被取消、结束）
-        wait_s = turn.limits.permission_wait_s
-        deadline_left = turn.deadline_remaining
-        bounds = [v for v in (wait_s, deadline_left) if v is not None]
-        expires_in = min(bounds) if bounds else None
+        wait_s, deadline_left = scope.wait_bound()
+        expires = expires_in(wait_s, deadline_left)
         if wait_s is not None and (deadline_left is None or wait_s < deadline_left):
             # 截止先到时不设询问计时：截止触发取消，询问随之回 cancelled（§6.3）
             ask.timer = Timer(self._clock, lambda: self._expire(ask), name=f"ask-{ask.ask_id}")
             ask.timer.start(wait_s)
 
-        turn.on_permission_pending(self.pending(turn))  # → awaiting_permission
-        expires_at = (
-            None if expires_in is None else datetime.now(UTC) + timedelta(seconds=expires_in)
-        )
+        scope.on_pending(self.pending(scope.turn_id))  # → awaiting_permission
+        expires_at = None if expires is None else datetime.now(UTC) + timedelta(seconds=expires)
         self._outbox.put_request(
             methods.PERMISSION_ASK,
             lambda seq: PermissionAskParams(
                 seq=seq,
-                turn_id=turn.turn_id,
+                turn_id=scope.turn_id,
                 request=request,
                 expires_at=expires_at,
-                expires_in_s=expires_in,
+                expires_in_s=expires,
             ),
             request_id=ask.ask_id,
         )
@@ -165,12 +182,12 @@ class PermissionBroker:
 
     # ------------------------------------------------------------------ 兜底
 
-    def settle_all(self, turn: Turn) -> None:
+    def settle_all(self, turn_id: str) -> None:
         """这一轮被取消或已结束：挂起的询问全部回 cancelled，并向 server 撤回（§6.4 ②）。
 
         不再通知 Turn 挂起数的变化 —— 它正在取消或结束，不会回到 running。
         """
-        for ask in [a for a in self.asks.values() if a.turn is turn]:
+        for ask in [a for a in self.asks.values() if a.scope.turn_id == turn_id]:
             self._settle(ask, cancelled_result(), withdraw="turn_ended", notify_turn=False)
 
     def _expire(self, ask: Ask) -> None:
@@ -200,4 +217,4 @@ class PermissionBroker:
                 kind="control",
             )
         if notify_turn:
-            ask.turn.on_permission_pending(self.pending(ask.turn))
+            ask.scope.on_pending(self.pending(ask.scope.turn_id))

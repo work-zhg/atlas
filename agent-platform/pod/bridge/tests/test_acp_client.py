@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
-from atlas_bridge.agent.client import AcpClient
+from atlas_bridge.cli.client import AcpClient
 from atlas_bridge.errors import AcpRequestTimeout, AgentProtocolError, AgentRequestFailed
 from atlas_bridge.testing.fake_agent import FakeAgent, Script
 from atlas_jsonrpc.memory import memory_pair

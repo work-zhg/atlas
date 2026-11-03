@@ -1,4 +1,4 @@
-"""session 层组件测试的脚手架：HostSession + 进程内 FakeAgent + FakeClock + RecordingOutbox。"""
+"""session 层组件测试的脚手架：SessionHost + 进程内 FakeAgent + FakeClock + RecordingOutbox。"""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from typing import Any
 
 from atlas_host import BridgeInfo, OpenParams, TurnStartParams
 
-from ..session.host import HostSession
+from ..session.host import SessionHost
 from .agent import InProcessAgent
 from .clock import FakeClock
 from .fake_agent import Script
@@ -32,7 +32,7 @@ class SessionHarness:
         self.clock = FakeClock()
         self.outbox = RecordingOutbox()
         self.agent = InProcessAgent(script)
-        self.host = HostSession(
+        self.host = SessionHost(
             self.agent,
             self.outbox,
             self.clock,
