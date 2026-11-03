@@ -106,7 +106,7 @@ class RunQueue:
     async def release_lease(self, run_id: UUID, *, owner: str) -> bool:
         """主动交接（§6）：清掉 owner、租约立即到期，下一次领取扫描就会把它领走。
 
-        ★ 状态不动（仍是 running / awaiting_approval）：对用户来说这一轮没有停。
+        ★ 状态不动（仍是 running）：对用户来说这一轮没有停。
         """
         result = await self._session.execute(
             update(Run)

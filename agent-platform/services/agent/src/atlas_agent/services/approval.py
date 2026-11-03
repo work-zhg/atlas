@@ -38,8 +38,9 @@ logger = logging.getLogger(__name__)
 class RedisApprovalGate:
     """注入给 engine 的审批门禁。
 
-    engine 在工具执行前问它「这次批了吗」；它负责登记、把 run 标成
-    awaiting_approval，然后**立刻**返回状态 —— 等待由挂起机制承担。
+    engine 在工具执行前问它「这次批了吗」；它负责登记，然后**立刻**返回状态 ——
+    等待由挂起机制承担。run 的状态不在这里动：原生智能体随后挂起（suspended），
+    CLI 在线等权限由 CLI 运行时标 awaiting_user。
     """
 
     def __init__(
@@ -97,10 +98,6 @@ class RedisApprovalGate:
                     source=source,
                     reason=reason,
                 )
-                # ★ 仍然把 run 标成 awaiting_approval —— 它是 suspended 的一个
-                #   细分。UI 要区分「在等机器」和「在等你」：前者用户只能干等，
-                #   后者需要他行动（detail/suspension.html §06）。
-                await RunRepository(session).set_status(self._run_id, "awaiting_approval")
                 await session.commit()
         except Exception:
             # ★ 落库失败**不放行**。高风险工具无人把关地执行是这里最不能接受的

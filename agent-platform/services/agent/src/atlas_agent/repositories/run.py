@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from atlas_agent.domain.events import EventType
@@ -22,26 +22,20 @@ _RUNNING = ("queued", "running")
 
 #: 挂起：**没有进程**，但这个 run 没结束。
 #:
-#: ★ awaiting_approval 从 _RUNNING 搬到了这里（S7）。它的含义变了：原先是
-#:   「有一个 asyncio.Task 正阻塞在 BLPOP 上」，所以进程死了它确实是孤儿；
-#:   现在是「挂起中，等人点头」—— 没有进程是正常的，收它就是把等待中的审批
-#:   全判死。
-#:
-#: ★ 为什么不与 suspended 合并成一个值：UI 要区分「在等机器」和「在等你」。
-#:   前者用户只能干等，后者需要他行动（去点那个弹窗）。
-SUSPENDED_STATUSES = ("suspended", "awaiting_approval")
+#: ★ 「等人」不是一个状态（迁移 0030 去掉了 awaiting_approval）：挂起时在等审批还是
+#:   等子 run，看 waiting_on 里的原因；CLI 在线等权限（进程还在跑）是 running +
+#:   awaiting_user。原先一个 awaiting_approval 两种意思，续跑判据只能靠「有没有等待项」
+#:   去猜，猜错了就会把在跑的 CLI 再执行一遍。
+SUSPENDED_STATUSES = ("suspended",)
 _SUSPENDED = SUSPENDED_STATUSES
 
 
 #: 「用户眼里这个 run 还没结束」。
 _UNFINISHED = (*_RUNNING, *_SUSPENDED)
 
-#: 持有租约（有执行器在跑）的状态（横向扩展设计 §4）。
-#:
-#: ★ awaiting_approval 也在其中：acp 的在线等审批 run 还在跑（bridge 等着权限响应），
-#:   持有者死了要被接管。native 的审批挂起同一个状态值，但它挂起时清掉了租约
-#:   （owner、lease_until 为空），不会被续租也不会被当成过期。
-_LEASED = ("running", "awaiting_approval")
+#: 持有租约（有执行器在跑）的状态（横向扩展设计 §4）。CLI 在线等权限时仍是 running：
+#: 进程还在跑，持有者死了要被接管
+_LEASED = ("running",)
 
 
 class LeaseLost(RuntimeError):
@@ -78,12 +72,6 @@ def _held_by(owner: str | None) -> tuple[Any, ...]:
 _ARCHIVED_EXCLUDED = frozenset({EventType.MESSAGE_DELTA, EventType.THINKING_DELTA})
 
 
-def _suspended_status(waiting_on: dict[str, dict[str, str]] | None) -> str:
-    """挂起落哪个状态值 —— 等人点头的那些要能被 UI 认出来。"""
-    for wait in (waiting_on or {}).values():
-        if (wait or {}).get("reason") == "approval":
-            return "awaiting_approval"
-    return "suspended"
 
 
 def _wait_reasons(status: str, waiting_on: Any) -> set[str]:
@@ -210,32 +198,35 @@ class RunRepository:
         )
         rows = (
             await self._session.execute(
-                select(Run.run_uuid, Run.thread_uuid, Run.status, Run.waiting_on).join(
+                select(
+                    Run.run_uuid, Run.thread_uuid, Run.status, Run.waiting_on, Run.awaiting_user
+                ).join(
                     latest,
                     (Run.thread_uuid == latest.c.thread_uuid) & (Run.created_at == latest.c.at),
                 )
             )
         ).all()
         out: dict[UUID, dict[str, Any]] = {}
-        for run_id, thread_id, status, waiting_on in rows:
+        for run_id, thread_id, status, waiting_on, awaiting_user in rows:
             reasons = sorted(_wait_reasons(status, waiting_on))
             out[thread_id] = {
                 "id": run_id,
                 "status": status,
                 "waiting": reasons,
-                "needs_approval": status == "awaiting_approval" or "approval" in reasons,
+                # 原生挂起在等审批或提问，或者 CLI 在线等权限
+                "needs_approval": awaiting_user or "approval" in reasons,
             }
         parents = {v["id"]: tid for tid, v in out.items() if v["status"] in _SUSPENDED}
         if parents:
             children = (
                 await self._session.execute(
-                    select(Run.parent_run_uuid, Run.status, Run.waiting_on).where(
-                        Run.parent_run_uuid.in_(list(parents)), Run.status.in_(_UNFINISHED)
-                    )
+                    select(
+                        Run.parent_run_uuid, Run.status, Run.waiting_on, Run.awaiting_user
+                    ).where(Run.parent_run_uuid.in_(list(parents)), Run.status.in_(_UNFINISHED))
                 )
             ).all()
-            for parent_id, status, waiting_on in children:
-                if status == "awaiting_approval" or "approval" in _wait_reasons(status, waiting_on):
+            for parent_id, status, waiting_on, awaiting_user in children:
+                if awaiting_user or "approval" in _wait_reasons(status, waiting_on):
                     out[parents[parent_id]]["needs_approval"] = True
         return out
 
@@ -357,19 +348,6 @@ class RunRepository:
         await self._session.flush()
         await self._session.refresh(run)
         return run
-
-    async def set_status(self, run_id: UUID, status: str) -> None:
-        """仅用于运行中的状态切换（running ⇄ awaiting_approval）。
-
-        ★ 不碰终止态：run 一旦 succeeded/failed/cancelled，事件集就是不可变的
-          （§10.2 的回放依赖这一点），把它改回 running 会让已关闭的 SSE
-          再也无法正确回放。
-        """
-        await self._session.execute(
-            update(Run)
-            .where(Run.run_uuid == run_id, Run.status.notin_(list(_TERMINAL)))
-            .values(status=status)
-        )
 
     # ------------------------------------------------------------------ 租约
 

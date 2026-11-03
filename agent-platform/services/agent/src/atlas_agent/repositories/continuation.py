@@ -30,19 +30,9 @@ class ContinuationQueries:
           HTTP 决策提交时。但那一刻进程可能正好在重启，唤醒信号就这么没了，
           run 会永远挂着。这个扫描是它唯一的出路。
 
-        ★ `waiting_on IS NOT NULL` 这一条不是优化，是**正确性**。
-          `awaiting_approval` 这个状态值在两条路径上含义不同：
-
-            native   图已跳出、进程已结束 —— 真挂起，waiting_on 有值
-            acp      CLI 在 Pod 里发起的同步 RPC，**run 还在跑** —— bridge 正
-                     等着响应，所以只能在线等（acp/runtime.py::_await_decision），
-                     这期间 gate 也会把 run 标成 awaiting_approval，但它没有
-                     waiting_on
-
-          不加这一条的话，扫描会把一个**正在跑**的 acp 子 run 当成可续跑，
-          submit 第二次 —— 第二条上游连接 连上同一个 Pod，bridge 按
-          CLOSE_SUPERSEDED(4409) 关掉第一个，整轮以 runtime_crashed 失败。
-          真机验证时撞到过，症状是「审批批准了，子 run 却崩了」。
+        ★ 没有等待项的挂起（旧格式的遗留数据）不续跑。CLI 在线等权限不是挂起：它是
+          running + awaiting_user，进程还在跑 —— 续跑它等于把同一个 run 执行两遍，第二条
+          上游连接会把第一个按 CLOSE_SUPERSEDED(4409) 关掉，整轮崩掉。
         """
         stmt = select(Run.run_uuid).where(Run.status.in_(_SUSPENDED), Run.waiting_on.isnot(None))
         return list((await self._session.execute(stmt)).scalars())

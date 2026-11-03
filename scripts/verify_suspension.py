@@ -9,7 +9,7 @@
 
 两条路径各验一遍：
 
-    审批挂起   run 落 awaiting_approval → 决策 → 续跑 → 工具执行 → succeeded
+    审批挂起   run 落 suspended → 决策 → 续跑 → 工具执行 → succeeded
     委派挂起   run 落 suspended        → 子 run 跑完 → 自动续跑 → succeeded
 
 ★ 委派那条把 `subagent_inline_wait_s` 压到 0 才能稳定观察到挂起（默认 60s
@@ -114,14 +114,14 @@ async def verify_approval(c: httpx.AsyncClient) -> None:
     )
     rid = run["run_id"]
 
-    # ① 落成 awaiting_approval —— 挂起态，**没有进程在等**
-    state = await wait_status(c, rid, {"awaiting_approval", "succeeded", "failed"})
+    # ① 落成 suspended —— 挂起态，**没有进程在等**
+    state = await wait_status(c, rid, {"suspended", "succeeded", "failed"})
     check(
-        state["status"] == "awaiting_approval",
-        "run 落成 awaiting_approval（挂起，不是阻塞）",
+        state["status"] == "suspended",
+        "run 落成 suspended（挂起，不是阻塞）",
         state["status"],
     )
-    if state["status"] != "awaiting_approval":
+    if state["status"] != "suspended":
         print("    ⚠ 模型没调用 write_todos —— 换个提示词或模型再试")
         return
 

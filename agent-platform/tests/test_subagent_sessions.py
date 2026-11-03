@@ -692,7 +692,7 @@ async def test_thread_detail_exposes_the_running_run(client_factory) -> None:
     async with get_sessionmaker()() as session:
         run = await fetch_one(session, Run, Run.run_uuid == UUID(run_id))
         assert run is not None
-        run.status = "awaiting_approval"  # 等审批在用户眼里也是「还在跑」
+        run.status = "suspended"  # 挂起等审批在用户眼里也是「还在跑」
         await session.commit()
 
     detail = (await client.get(f"/v1/threads/{thread_id}")).json()

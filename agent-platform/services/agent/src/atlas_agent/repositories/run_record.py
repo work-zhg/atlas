@@ -21,7 +21,6 @@ from .run import (
     _LEASED,
     LeaseLost,
     _held_by,
-    _suspended_status,
     _usage_increments,
 )
 
@@ -89,6 +88,7 @@ class RunRecordRepository:
                 lease_until=None,
                 # 挂起现场随 run 结束作废（续跑段要读它，所以留到这里才清，见 claim_for_resume）
                 waiting_on=None,
+                awaiting_user=False,
             )
         )
         if owner is not None and not result.rowcount:
@@ -120,10 +120,8 @@ class RunRecordRepository:
             update(Run)
             .where(Run.run_uuid == run_id, *_held_by(owner))
             .values(
-                # ★ 等人点头落 awaiting_approval，等机器落 suspended。
-                #   两者都是挂起（_SUSPENDED），分开只为让 UI 能区分
-                #   「你需要做点什么」和「干等就行」。
-                status=_suspended_status(waiting_on),
+                # ★ 等人还是等子 run 都是 suspended：在等什么看 waiting_on 的原因
+                status="suspended",
                 last_seq=last_seq,
                 waiting_on=waiting_on or None,
                 **_usage_increments(usage),
@@ -134,6 +132,12 @@ class RunRecordRepository:
         )
         if owner is not None and not result.rowcount:
             raise LeaseLost(run_id)
+
+    async def set_awaiting_user(self, run_id: UUID, *, waiting: bool) -> None:
+        """CLI 在线等权限：run 仍是 running（CLI 和 bridge 都在等），界面据此显示「需要你处理」。"""
+        await self._session.execute(
+            update(Run).where(Run.run_uuid == run_id).values(awaiting_user=waiting)
+        )
 
     async def checkpoint(self, run_id: UUID, *, owner: str, last_seq: int) -> None:
         """检查点的围栏：推进 last_seq，同时确认租约仍在本实例。不在就抛 LeaseLost。

@@ -378,6 +378,11 @@ class Run(Base):
     #:   而审批挂起时**没有子 run** —— barrier 立刻满足，于是续跑、又挂起、
     #:   再续跑，死循环。两种 reason 的等待条件不同，必须显式记下来。
     waiting_on: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    #: CLI 智能体在线等权限（迁移 0030）：run 仍是 running —— CLI 和 bridge 都在等，不能挂起、
+    #: 也不能被当成可续跑的挂起态 —— 界面据此显示「需要你处理」。原生智能体等人是 suspended
+    awaiting_user: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
     #: 这个 run 当前的审批模式（迁移 0022）：建 run 时取自会话，计划获批时更新，续跑与接管时
     #: 从这里读。子 run 记的是派活那一刻父 run 的模式。NULL = 旧数据，按智能体默认
     approval_mode: Mapped[str | None] = mapped_column(String(8), nullable=True)
@@ -423,12 +428,12 @@ class Run(Base):
             "ix_run_active",
             "status",
             postgresql_where=text(
-                "status IN ('queued','running','awaiting_approval','suspended')"
+                "status IN ('queued','running','suspended')"
             ),
         ),
         CheckConstraint(
             "status IN ('queued','running','succeeded','failed','cancelled',"
-            "'interrupted','awaiting_approval','suspended')",
+            "'interrupted','suspended')",
             name="status_enum",
         ),
     )

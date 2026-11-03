@@ -125,10 +125,6 @@ class Continuation:
         """
         async with self._sessionmaker() as session:
             run = await RunRepository(session).get(run_id)
-            # ★ 两个挂起态都要认。等审批的 run 落的是 awaiting_approval
-            #   （suspended 的细分，为了让 UI 区分「等你」和「等机器」）——
-            #   只认字面量 "suspended" 的话审批永远唤不醒，用户点了「允许」
-            #   之后 run 一动不动。
             if run is None or run.status not in SUSPENDED_STATUSES:
                 return False
             if not await self.waits_are_settled(session, run):
@@ -162,14 +158,8 @@ class Continuation:
           那一列存在的全部理由（迁移 0012）。
 
         ★ 等待项是 {tool_call_id: {reason, token}}（contracts/suspension.py）。没有等待项
-          的挂起态一律不续跑：
-
-            awaiting_approval  **acp 的在线等待**，run 其实还在跑（bridge 正等着那个
-                               权限响应）。续跑它等于把同一个 run 执行两遍：第二条上游
-                               连接会把第一个 superseded(4409)，整轮崩掉。这条与
-                               suspended_runs 的过滤是同一个判据，两处都守 —— 主动唤醒
-                               那一路不经过扫描
-            其它               旧格式（数组）的遗留数据。不续跑，用户可以取消它
+          的挂起（旧格式的数组）一律不续跑，用户可以取消它。CLI 在线等权限不是挂起，
+          它是 running + awaiting_user，根本走不到这里。
         """
         waits = run.waiting_on if isinstance(run.waiting_on, dict) else {}
         if not waits:

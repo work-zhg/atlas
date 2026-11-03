@@ -44,6 +44,7 @@ def _to_out(run: Run) -> RunOut:
         thread_id=run.thread_uuid,
         parent_run_id=run.parent_run_uuid,
         status=run.status,  # type: ignore[arg-type]
+        awaiting_user=run.awaiting_user,
         error_kind=run.error_kind,
         error_message=run.error_message,
         last_seq=run.last_seq,

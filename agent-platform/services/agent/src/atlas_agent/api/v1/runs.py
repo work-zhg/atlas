@@ -123,8 +123,8 @@ async def decide_approval(
 
     # ★ 决策到了 —— 立刻唤醒那个挂起的 run。
     #
-    #   审批现在是挂起而不是在线阻塞（detail/suspension.html §06）：run 落成
-    #   awaiting_approval 之后**没有进程**在等这个决策。不在这里唤醒的话要等到
+    #   原生智能体的审批是挂起而不是在线阻塞（detail/suspension.html §06）：run 落成
+    #   suspended 之后**没有进程**在等这个决策。不在这里唤醒的话要等到
     #   周期扫描（默认 60s），用户点完「允许」得干等一分钟，看着像没生效。
     #
     #   ★ 幂等：resume_if_ready 内部有 CAS，与周期扫描撞上时只有一个能赢。

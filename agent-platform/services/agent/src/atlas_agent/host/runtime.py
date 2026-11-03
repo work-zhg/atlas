@@ -154,19 +154,41 @@ class _DbProgress:
 
 
 class _DbApprovals:
+    """CLI 的权限请求进原生的同一张审批表；在线等待期间 run 标 awaiting_user。
+
+    ★ awaiting_user 每次都按「这个 run 还有没有待决的审批」重算，不跟着单次请求翻转：
+      同一轮里可能同时挂着两个请求，答完一个时另一个还在等。
+    """
+
     def __init__(
         self, sessionmaker: async_sessionmaker[AsyncSession], redis: aioredis.Redis, run_id: UUID
     ) -> None:
         self._sessionmaker = sessionmaker
+        self._run_id = run_id
         self._gate = RedisApprovalGate(sessionmaker, redis, run_id)
 
     async def check(self, *, approval_id: str, tool_name: str, args: dict[str, Any]) -> str:
-        return await self._gate.check(approval_id=approval_id, tool_name=tool_name, args=args)
+        state = await self._gate.check(approval_id=approval_id, tool_name=tool_name, args=args)
+        await self._sync_awaiting()
+        return state
 
     async def expire(self, approval_id: str) -> None:
         async with self._sessionmaker() as session:
             await ApprovalRepository(session).expire(UUID(approval_id))
             await session.commit()
+        await self._sync_awaiting()
+
+    async def _sync_awaiting(self) -> None:
+        from ..repositories.run_record import RunRecordRepository
+
+        try:
+            async with self._sessionmaker() as session:
+                waiting = bool(await ApprovalRepository(session).list_pending(self._run_id))
+                await RunRecordRepository(session).set_awaiting_user(self._run_id, waiting=waiting)
+                await session.commit()
+        except Exception:
+            # 只影响界面上的「需要你处理」，不影响审批本身
+            logger.warning("run %s 的 awaiting_user 没写上", self._run_id, exc_info=True)
 
 
 # ═══════════════════════════════════ 运行时 ═══════════════════════════════════
