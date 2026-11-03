@@ -36,6 +36,7 @@ from ..repositories.run import SUSPENDED_STATUSES, RunRepository
 from ..repositories.run_queue import RunQueue
 from ..repositories.run_record import RunRecordRepository
 from ..repositories.thread import ThreadRepository
+from ..repositories.thread_context import ThreadContextRepository
 from ..stream.relay import EventRelay
 
 logger = logging.getLogger(__name__)
@@ -298,7 +299,10 @@ class Continuation:
             [e for e in lost if e.thread_seq not in archived], thread_id=stream_thread_id
         )
         # acp 的 message 表里没有 tool_use（工具在 Pod 里），这一步对它天然是空操作
-        rows = await RunRepository(session).history(thread.thread_uuid, after=thread.summary_upto)
+        context = await ThreadContextRepository(session).get(thread.thread_uuid)
+        rows = await RunRepository(session).history(
+            thread.thread_uuid, after=context.summary_upto if context is not None else None
+        )
         if (sealing := interrupted_results(rows)) is not None:
             await ThreadRepository(session).add_messages(
                 thread_id=thread.thread_uuid, messages=[sealing], run_id=run.run_uuid

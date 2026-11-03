@@ -52,6 +52,7 @@ from ..repositories.run import LeaseLost, RunRepository
 from ..repositories.run_record import RunRecordRepository
 from ..repositories.skill_usage import SkillUsageRepository
 from ..repositories.thread import ThreadRepository
+from ..repositories.thread_context import ThreadContextRepository
 from ..schemas.agent import AgentSpecIn
 from ..services.subagent import subagent_result
 from ..stream.relay import EventRelay
@@ -173,10 +174,18 @@ class SegmentLoader:
                 "cli_acked_seq": row.acked_seq,
             }
 
-        rows = await RunRepository(session).history(thread.thread_uuid, after=thread.summary_upto)
+        # 上下文状态（thread_context）：摘要替换掉覆盖边界之前的消息，熔断计数交给压缩
+        context = await ThreadContextRepository(session).get(thread.thread_uuid)
+        summary_upto = context.summary_upto if context is not None else None
+        failures = context.failure_count if context is not None else 0
+        compacted = context.compact_count if context is not None else 0
+
+        rows = await RunRepository(session).history(thread.thread_uuid, after=summary_upto)
         if not rows:
             return PreparedRun(
                 **cli,
+                compact_count=compacted,
+                compaction_failures=failures,
                 spec=spec,
                 input_content="",
                 thread=thread,
@@ -212,11 +221,13 @@ class SegmentLoader:
         # §7.4：已压缩的早期消息以摘要形式回填，而不是重新送原文。
         # 没有这一步，每个 run 都要重压一次 —— 摘要 token 重复付、
         # prompt cache 每轮击穿（§7.3 坑 2 的抖动）。
-        if thread.summary:
-            history.insert(0, AIMessage(content=SUMMARY_PREFIX + thread.summary))
+        if context is not None and context.summary:
+            history.insert(0, AIMessage(content=SUMMARY_PREFIX + context.summary))
 
         return PreparedRun(
             **cli,
+            compact_count=compacted,
+            compaction_failures=failures,
             spec=spec,
             input_content=input_content,
             history=history,

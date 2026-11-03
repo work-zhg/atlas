@@ -14,6 +14,7 @@ from atlas_agent.db.session import get_sessionmaker
 from atlas_agent.executor.compose import build_executor
 from atlas_agent.main import create_app
 from atlas_agent.repositories.run import RunRepository
+from atlas_agent.repositories.thread_context import ThreadContextRepository
 from atlas_agent.services.compaction import ThreadSummarizer, make_persist_hook
 from httpx import ASGITransport
 from sqlalchemy import select
@@ -83,13 +84,12 @@ async def test_summary_is_reused_not_recomputed(client: httpx.AsyncClient) -> No
         )
 
     async with get_sessionmaker()() as session:
-        thread = (
-            await session.execute(select(Thread).where(Thread.thread_uuid == tid))
-        ).scalar_one()
-        assert thread.summary == "早期摘要正文"
-        assert thread.compact_count == 1
+        context = await ThreadContextRepository(session).get(tid)
+        assert context is not None
+        assert context.summary == "早期摘要正文"
+        assert context.compact_count == 1
 
-        after = await RunRepository(session).history(thread.thread_uuid, after=thread.summary_upto)
+        after = await RunRepository(session).history(tid, after=context.summary_upto)
         assert len(after) == len(all_messages) - 3, "边界之前的消息没有被排除"
 
 
@@ -128,11 +128,10 @@ async def test_compact_count_accumulates(client: httpx.AsyncClient) -> None:
     await hook({"summary": "二"})
 
     async with get_sessionmaker()() as session:
-        thread = (
-            await session.execute(select(Thread).where(Thread.thread_uuid == tid))
-        ).scalar_one()
-        assert thread.compact_count == 2
-        assert thread.summary == "二", "后一次摘要应覆盖前一次"
+        context = await ThreadContextRepository(session).get(tid)
+        assert context is not None
+        assert context.compact_count == 2
+        assert context.summary == "二", "后一次摘要应覆盖前一次"
 
 
 @pytest.mark.usefixtures("clean_db")

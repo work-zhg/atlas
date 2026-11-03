@@ -209,13 +209,7 @@ class Thread(Base, TimestampMixin):
     # 冗余快照（文档 §6 纪律 2）：可从事件流重建，丢了不影响正确性。
     latest_state: Mapped[dict] = mapped_column(JSONType, nullable=False, default=dict)
     message_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
-    compact_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
-    # §7.4：压缩后的摘要与其覆盖边界。message 表不受影响 ——
-    # 模型视角被压缩，用户视角完整保留（迁移 0005）。
-    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
-    summary_upto: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
-    #: 上下文管理的会话级状态（迁移 0017）：自动压缩连续失败次数（熔断）等
-    context_state: Mapped[dict | None] = mapped_column(JSONType, nullable=True, default=dict)
+    # ★ 摘要、覆盖边界、压缩次数和熔断计数在 thread_context（迁移 0033）：只有上下文管理读写
     # ── 子会话（迁移 0007）─────────────────────────────────────────
     # NULL = 用户会话；非空 = 某个会话的子智能体会话。子会话不出现在
     # 会话列表里 —— 它是父会话的一部分，不是用户的一段独立对话。
@@ -571,6 +565,34 @@ class Approval(Base):
         CheckConstraint(
             "status IN ('pending','approved','rejected','expired')", name="status_enum"
         ),
+    )
+
+
+class ThreadContext(Base, TimestampMixin):
+    """会话的上下文状态（聚合根 ThreadContext，迁移 0033），一个会话一行。
+
+    见 c4-model/agent/code-native-runtime-context.html。摘要替换掉覆盖边界之前的消息（§7.4）：
+    message 表不受影响 —— 模型视角被压缩，用户视角完整保留。
+
+    ★ 原先挂在 thread 上；thread 同时放着标题、审批模式、记忆开关、凭据档案、来源应用，
+      这四项只有上下文管理读写，单独成表，归属清楚。
+    """
+
+    __tablename__ = "thread_context"
+
+    id: Mapped[int] = _pk()
+    thread_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
+    #: 当前摘要与它覆盖到哪里：两者同时有或同时没有
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    summary_upto: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    compact_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    #: 自动压缩连续失败次数（熔断用，上下文管理设计 §7）；压缩成功清零
+    failure_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+
+    __table_args__ = (
+        #: 一个会话一行
+        UniqueConstraint("thread_uuid", name="uk_thread_context_thread"),
+        CheckConstraint("(summary IS NULL) = (summary_upto IS NULL)", name="summary_pair"),
     )
 
 

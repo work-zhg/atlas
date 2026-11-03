@@ -217,6 +217,10 @@ class PreparedRun:
     approval_mode: str | None = None
     #: 本轮用户消息的时间。Agent 在这一轮写入记忆时用它作为「信息成立的时间」（记忆设计 §6.4）
     input_at: datetime | None = None
+    #: 会话的上下文状态（thread_context）：压缩过几次（记忆据此重建常驻快照）、
+    #: 自动压缩连续失败了几次（熔断用）
+    compact_count: int = 0
+    compaction_failures: int = 0
     #: 这一轮的模型端点与目录（HookAssembly.with_models 填）。None = 还没解析，按直连处理
     models: RunModels | None = None
 
@@ -287,6 +291,7 @@ class HookAssembly:
                 resume=prepared.resume,
                 history_upto=prepared.history_upto,
                 occurred_at=prepared.input_at,
+                compact_count=prepared.compact_count,
             )
             if self._memory is not None
             else None
@@ -740,7 +745,6 @@ class HookAssembly:
         idle_s = None
         if prepared.history_upto is not None:
             idle_s = (datetime.now(UTC) - prepared.history_upto).total_seconds()
-        state = prepared.thread.context_state or {}
 
         return CompactionMiddleware(
             context_window=window,
@@ -760,7 +764,7 @@ class HookAssembly:
             attachment_budget_tokens=int(
                 (window - min(effective_max_output, 20_000)) * cfg.attachment_budget_ratio
             ),
-            failure_count=int(state.get("compaction_failures") or 0),
+            failure_count=prepared.compaction_failures,
             on_failed=make_failure_hook(self._sessionmaker, prepared.thread_id),
             summarizer=self._summarizer(prepared),
             on_compacted=make_persist_hook(

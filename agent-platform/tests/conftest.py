@@ -170,6 +170,8 @@ _TEST_DATA_TABLES = (
     "message",
     "run",
     "thread_memory",
+    "thread_context",
+    "cli_session",
     "memory_backfill",
     "skill_usage_daily",
     "thread",

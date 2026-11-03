@@ -215,6 +215,8 @@ async def turn(rt: MemoryRuntime, thread: Any, **kw: Any) -> Any:
     kw.setdefault("resume", False)
     kw.setdefault("history_upto", datetime.now(UTC))
     kw.setdefault("occurred_at", at(12))
+    # 压缩次数在 thread_context 里，由段载入时交进来；替身记在 thread 上
+    kw.setdefault("compact_count", thread.compact_count)
     return await rt.turn(thread, **kw)
 
 

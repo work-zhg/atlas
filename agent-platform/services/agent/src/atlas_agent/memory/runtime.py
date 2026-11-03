@@ -242,8 +242,12 @@ class MemoryRuntime:
         resume: bool,
         history_upto: datetime | None,
         occurred_at: datetime | None,
+        compact_count: int = 0,
     ) -> MemoryTurn | None:
-        """为这一段 run 组装记忆。会话关了记忆、或记忆服务不可用时返回 None（本轮不用记忆）。"""
+        """为这一段 run 组装记忆。会话关了记忆、或记忆服务不可用时返回 None（本轮不用记忆）。
+
+        compact_count：会话压缩过几次（thread_context）。变了就重建常驻快照（§5.3）。
+        """
         if thread.memory == "off":
             return None
         owner = thread.created_by_uuid
@@ -267,13 +271,20 @@ class MemoryRuntime:
         snapshot = dict(state.snapshot or {}) if state is not None else {}
         known = _Known(state.known if state is not None else None)
         reason = self._refresh_reason(
-            snapshot, thread=thread, scopes=scopes, epoch=epoch, resume=resume,
+            snapshot, compact_count=compact_count, scopes=scopes, epoch=epoch, resume=resume,
             history_upto=history_upto,
         )  # fmt: skip
         if reason is not None:
             try:
                 snapshot, known = await self._rebuild(
-                    thread, scopes, catalogs, snapshot, known, epoch=epoch, reason=reason
+                    thread,
+                    scopes,
+                    catalogs,
+                    snapshot,
+                    known,
+                    epoch=epoch,
+                    reason=reason,
+                    compact_count=compact_count,
                 )
             except (MemoryUnavailable, MemoryRejected) as exc:
                 logger.warning(
@@ -308,7 +319,7 @@ class MemoryRuntime:
         self,
         snapshot: dict[str, Any],
         *,
-        thread: Thread,
+        compact_count: int,
         scopes: list[ScopeRef],
         epoch: int,
         resume: bool,
@@ -318,7 +329,7 @@ class MemoryRuntime:
             return "initial"
         if resume:
             return None
-        if int(snapshot.get("compact_count", -1)) != thread.compact_count:
+        if int(snapshot.get("compact_count", -1)) != compact_count:
             return "compaction"
         if snapshot.get("scopes") != [s.name for s in scopes]:
             return "scopes"
@@ -340,6 +351,7 @@ class MemoryRuntime:
         *,
         epoch: int,
         reason: str,
+        compact_count: int,
     ) -> tuple[dict[str, Any], _Known]:
         """重建常驻块。没变的常驻主题沿用快照里的条目，变了的才重新拉取。"""
         owner = thread.created_by_uuid
@@ -390,7 +402,7 @@ class MemoryRuntime:
             "resident": resident_out,
             "scopes": [s.name for s in scopes],
             "epoch": epoch,
-            "compact_count": thread.compact_count,
+            "compact_count": compact_count,
             "built_at": datetime.now(UTC).isoformat(),
         }
         return snapshot, fresh

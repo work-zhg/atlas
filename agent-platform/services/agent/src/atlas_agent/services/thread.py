@@ -29,6 +29,7 @@ from ..redisx import make_redis
 from ..repositories.agent import AgentRepository
 from ..repositories.run import RunRepository
 from ..repositories.thread import ThreadRepository
+from ..repositories.thread_context import ThreadContextRepository
 from ..schemas.agent import AgentSpecIn
 from ..schemas.thread import (
     MessageListOut,
@@ -110,6 +111,7 @@ def _to_out(
     active_run_id: UUID | None = None,
     last_run: dict[str, Any] | None = None,
     approval: ThreadApprovalOut | None = None,
+    compact_count: int = 0,
 ) -> ThreadOut:
     return ThreadOut(
         id=thread.thread_uuid,
@@ -131,7 +133,7 @@ def _to_out(
         active_run_id=active_run_id,
         last_run=last_run,
         message_count=thread.message_count,
-        compact_count=thread.compact_count,
+        compact_count=compact_count,
         latest_state=thread.latest_state,
         created_at=thread.created_at,
         updated_at=thread.updated_at,
@@ -195,9 +197,19 @@ class ThreadService:
             if has_more and rows
             else None
         )
-        runs = await RunRepository(self._session).latest_runs_of([t.thread_uuid for t, _ in rows])
+        ids = [t.thread_uuid for t, _ in rows]
+        runs = await RunRepository(self._session).latest_runs_of(ids)
+        compacted = await ThreadContextRepository(self._session).compact_counts(ids)
         return ThreadListOut(
-            data=[_to_out(t, a, last_run=runs.get(t.thread_uuid)) for t, a in rows],
+            data=[
+                _to_out(
+                    t,
+                    a,
+                    last_run=runs.get(t.thread_uuid),
+                    compact_count=compacted.get(t.thread_uuid, 0),
+                )
+                for t, a in rows
+            ],
             next_cursor=next_cursor,
         )
 
@@ -214,7 +226,12 @@ class ThreadService:
                 thread_id
             ),
             approval=await self._approval_of(thread, agent),
+            compact_count=await self._compact_count(thread_id),
         )
+
+    async def _compact_count(self, thread_id: UUID) -> int:
+        counts = await ThreadContextRepository(self._session).compact_counts([thread_id])
+        return counts.get(thread_id, 0)
 
     async def _approval_of(self, thread: Thread, agent: Agent) -> ThreadApprovalOut | None:
         """会话当前的审批模式与可选范围，取自智能体**当前版本**（下一条消息就用它）。"""
