@@ -29,22 +29,28 @@
 -->
 <script type="application/json" id="c4-model">
 {
-  "title": "代码图：Agent 平台 - Agent 服务 - 原生运行时 - 工具面",
-  "description": "目标领域模型，只画期望的样子、不对照现状。模型能调用哪些工具、每个工具的副作用类别、运行限制。",
-  "component": "原生运行时",
-  "package": "原生运行时 · 工具面（目标模型）",
-  "overview": "工具面决定模型这一段能调用哪些工具：按智能体勾选的内置工具装上对应的中间件——文件、Shell、技能清单、待办、工具搜索——再接上别的组件构造好的外部工具：MCP 和知识库来自工具接入组件，记忆工具来自记忆组件。每个工具都声明副作用类别，审批按类别判定；步数、并发和连续失败熔断在图里拦。\n\n内置工具的全部知识只在 ToolRegistry 里，目录、装配、类别都从它派生。它不管工具背后的实现：文件读写归工作区组件，命令执行归沙箱组件，也不管问不问人（挂起与人机协作管）和大结果外置（上下文管理管）。",
+  "title": "代码图：Agent 平台 - Agent 服务 - CLI 运行时 - 领域总览",
+  "description": "目标模型，只画期望的样子、不对照现状。CLI 运行时（原名 ACP 运行时）的四个领域，每个只画对外入口和关键元素，看依赖方向；领域内部见各自的 code-cli-runtime-*.html。",
+  "component": "CLI 运行时",
+  "package": "CLI 运行时（目标模型 · 领域总览）",
+  "overview": "CLI 运行时让会话 Pod 里的外部 CLI 智能体（如 Claude Code）跑一轮，对 Run 执行器来说它和原生运行时是同一个接口。它分四个领域。一轮的编排在上：解析交给 CLI 的能力、确保 Pod、接上会话、开一轮、把通知分给下面三个领域、产出终止事件。上游连接管 server 到 bridge 的会话接续，保证断线、接管之后事件流完整不重复；权限转发把 CLI 的权限请求变成平台审批；内容翻译把 CLI 的内容翻成和原生运行时同形的事件。\n\n轮次的计时、取消、CLI 崩溃重启都在 Pod 里的 bridge，不在这里。图上每个元素第一行写着它属于哪个领域。",
   "elements": [
     {
-      "id": "surface",
+      "id": "runtime",
       "kind": "class",
-      "name": "ToolSurface",
+      "name": "CliRuntime",
       "stereotype": "应用服务",
-      "responsibility": "本领域的入口：按智能体勾选的工具，为一段交出工具中间件（槽位 ⑤）和限额（槽位 ⑦）、模型看到的工具提示段，以及每个工具的副作用类别（交给审批）。外部工具（MCP、知识库、记忆）由别的组件构造好交进来，这里只负责装上和声明类别。",
+      "responsibility": "【一轮的编排】实现 AgentRuntime：解析能力（MCP、模型、凭据）→ 确保 Pod → 接上会话 → 开一轮 → 收通知、分给翻译和权限转发 → 终止事件。不落库、不发布、不管锁。详见 code-cli-runtime-turn.html。",
+      "attributes": [
+        [
+          "",
+          "领域：一轮的编排"
+        ]
+      ],
       "methods": [
         [
           "+",
-          "contribute(segment) -> Contribution"
+          "run_turn(segment, *, run_id, relay)"
         ]
       ],
       "at": [
@@ -53,431 +59,361 @@
       ]
     },
     {
-      "id": "registry",
+      "id": "link",
       "kind": "class",
-      "name": "ToolRegistry",
-      "stereotype": "工厂",
-      "responsibility": "内置工具的唯一来源：每个工具一条 ToolDef。工具目录、中间件装配、可用性判断、副作用类别都从这张表派生；加一个内置工具只加一条，不用去三处同步。spec 里请求了但不生效的工具，在保存智能体时就报出来。",
-      "methods": [
-        [
-          "+",
-          "middlewares(tool_names) -> list[(slot, Middleware)]"
-        ],
-        [
-          "+",
-          "effects(tools) -> dict[str, ToolEffect]"
-        ],
-        [
-          "+",
-          "catalog() · unsupported(tool_names)"
-        ],
-        [
-          "+",
-          "resumable(tool_name) -> bool"
-        ]
-      ],
-      "at": [
-        -0.45,
-        0.7
-      ]
-    },
-    {
-      "id": "tdef",
-      "kind": "class",
-      "name": "ToolDef",
-      "stereotype": "值对象",
-      "responsibility": "一个内置工具的全部知识：给模型的工具名和各自的副作用类别、要装的中间件、提示段、目录里的展示名和说明、是否不可逆。提问（ask_user）的中间件由挂起与人机协作装，记忆工具由记忆组件构造，这里只登记目录和类别。",
-      "attributes": [
-        [
-          "+",
-          "name: str（todo · filesystem · bash · memory · ask_user）"
-        ],
-        [
-          "+",
-          "model_tools: dict[str, ToolEffect]"
-        ],
-        [
-          "+",
-          "middleware: Callable · hint: str"
-        ],
-        [
-          "+",
-          "display_name · description · irreversible"
-        ],
-        [
-          "+",
-          "resumable: bool（接管时能否用同一个调用接上）"
-        ]
-      ],
-      "at": [
-        -0.45,
-        2.55
-      ]
-    },
-    {
-      "id": "gov",
-      "kind": "class",
-      "name": "ToolGovernor",
-      "stereotype": "策略",
-      "responsibility": "运行限制在图里拦：步数上限（一次模型调用算一步，在模型调用前拦）、工具并发上限、同一工具连续失败 3 次熔断（在工具调用时拦）。编辑器里能填的限制都必须真的生效，配了不生效比没有这个选项更糟。",
-      "attributes": [
-        [
-          "+",
-          "max_steps · concurrency · failure_limit"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "abefore_model(state)"
-        ],
-        [
-          "+",
-          "awrap_tool_call(req, handler)"
-        ]
-      ],
-      "at": [
-        3.55,
-        0.7
-      ]
-    },
-    {
-      "id": "files",
-      "kind": "class",
-      "name": "FileTools",
-      "stereotype": "领域服务",
-      "responsibility": "文件工具：read_file、write_file、edit_file、delete、search，作用于会话工作区（经 FilesystemProtocol）。按路径 glob 的访问规则拦截；只在勾了文件工具时装，不再当恒装的脚手架（大结果外置已归上下文管理）。路径规则管不住 Shell，所以 execute 不在这里。",
-      "attributes": [
-        [
-          "+",
-          "rules: list[FilesystemPermission]"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "read_file · write_file · edit_file · delete · search"
-        ]
-      ],
-      "at": [
-        -0.55,
-        4.4
-      ]
-    },
-    {
-      "id": "exec",
-      "kind": "class",
-      "name": "ExecuteTool",
-      "stereotype": "领域服务",
-      "responsibility": "只提供 execute，经 SandboxProtocol 在会话的沙箱里执行命令。没有沙箱是合法配置（只有文件工具的顾问型智能体）；沙箱起不来时转成工具错误回给模型。",
-      "methods": [
-        [
-          "+",
-          "execute(command, *, timeout, cwd)"
-        ]
-      ],
-      "at": [
-        1.0,
-        4.4
-      ]
-    },
-    {
-      "id": "skills",
-      "kind": "class",
-      "name": "SkillCatalog",
-      "stereotype": "策略",
-      "responsibility": "把技能清单（名字、说明、SKILL.md 的路径）渲染进系统提示词，模型用到时再去读。不扫描目录：有哪些技能、什么版本都钉在 spec 里，名字和说明来自技能应用；校验在发布时做，运行时不再解析。",
-      "methods": [
-        [
-          "+",
-          "awrap_model_call(req, handler)"
-        ]
-      ],
-      "at": [
-        2.45,
-        4.4
-      ]
-    },
-    {
-      "id": "deferred",
-      "kind": "class",
-      "name": "DeferredTools",
-      "stereotype": "领域服务",
-      "responsibility": "MCP 工具多的时候改为延迟工具：模型平时只看到名字和一句描述（追加在系统提示词末尾，每次都相同，不影响缓存），需要时调 tool_search，命中的工具在之后的调用里带上完整定义。已加载哪些从历史里的 tool_search 结果推出来，不另存状态。",
-      "attributes": [
-        [
-          "+",
-          "threshold（数量、定义总量）"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "tool_search(query)"
-        ]
-      ],
-      "at": [
-        3.95,
-        4.4
-      ]
-    },
-    {
-      "id": "todo",
-      "kind": "class",
-      "name": "TodoList",
-      "stereotype": "领域服务",
-      "responsibility": "write_todos：模型维护本轮的待办清单，前端据此展示进度。todos 登记为跨段 state，挂起续跑后还在。好几步没更新待办时，由它给出提醒内容，上下文管理负责追加。拷自上游 langchain 1.4.7，只去掉了让 todos 无法交回图的那个标注。",
-      "attributes": [
-        [
-          "+",
-          "todos: list[Todo]（跨段保留）"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "write_todos(todos)"
-        ],
-        [
-          "+",
-          "reminder(state) -> str | None"
-        ]
-      ],
-      "at": [
-        5.35,
-        4.4
-      ]
-    },
-    {
-      "id": "effect",
-      "kind": "enum",
-      "name": "ToolEffect",
-      "external": true,
-      "source": "原生运行时 · 挂起与人机协作领域",
+      "name": "SessionLink",
+      "stereotype": "应用服务",
+      "responsibility": "【上游连接】到 bridge 的会话接续：attach / open、按序号去重和确认、断线重连补发、换实例接管。详见 code-cli-runtime-link.html。",
       "attributes": [
         [
           "",
-          "READ · PLAN · WRITE · EXECUTE · EXTERNAL · DELEGATE"
+          "领域：上游连接"
         ]
       ],
-      "at": [
-        -2.45,
-        2.55
-      ]
-    },
-    {
-      "id": "fsp",
-      "kind": "interface",
-      "name": "FilesystemProtocol",
-      "external": true,
-      "source": "引擎契约，由工作区组件实现",
       "methods": [
         [
           "+",
-          "aread · asearch · awrite · aedit · adelete"
+          "join · start_turn · notes · cancel_turn"
         ]
       ],
       "at": [
-        -0.55,
-        6.1
+        -0.45,
+        2.5
       ]
     },
     {
-      "id": "sbp",
-      "kind": "interface",
-      "name": "SandboxProtocol",
-      "external": true,
-      "source": "引擎契约，由沙箱组件实现",
-      "methods": [
+      "id": "session",
+      "kind": "class",
+      "name": "CliSession",
+      "stereotype": "聚合根",
+      "responsibility": "【上游连接】一个 CLI 会话的接续信息：CLI 的会话 id、bridge 实例、确认点；存在 cli_session 表里，接管的实例据此 attach。",
+      "attributes": [
+        [
+          "",
+          "领域：上游连接"
+        ],
         [
           "+",
-          "aexecute(command, …)"
+          "agent_session_id · bridge_instance · acked_seq"
         ]
       ],
       "at": [
-        1.0,
-        6.1
+        -0.45,
+        4.3
+      ]
+    },
+    {
+      "id": "desk",
+      "kind": "class",
+      "name": "PermissionDesk",
+      "stereotype": "应用服务",
+      "responsibility": "【权限转发】CLI 的权限请求 → 平台审批（同一张表、同一个弹窗）→ 答复「允许一次」或拒绝；在线等待期间 run 标 awaiting_user。详见 code-cli-runtime-permission.html。",
+      "attributes": [
+        [
+          "",
+          "领域：权限转发"
+        ]
+      ],
+      "methods": [
+        [
+          "+",
+          "ask · withdraw"
+        ]
+      ],
+      "at": [
+        1.6,
+        2.5
+      ]
+    },
+    {
+      "id": "port",
+      "kind": "interface",
+      "name": "ApprovalPort",
+      "stereotype": "扩展点",
+      "responsibility": "【权限转发】平台审批的最小接口：查状态（首次登记）、等决定、作废。由审批组件实现。",
+      "attributes": [
+        [
+          "",
+          "领域：权限转发"
+        ]
+      ],
+      "methods": [
+        [
+          "+",
+          "check · wait · expire"
+        ]
+      ],
+      "at": [
+        1.6,
+        4.3
+      ]
+    },
+    {
+      "id": "translator",
+      "kind": "class",
+      "name": "CliUpdateTranslator",
+      "stereotype": "应用服务",
+      "responsibility": "【内容翻译】CLI 的内容更新 → 平台事件意图，data 形状与原生运行时逐字段一致；server 里唯一理解 CLI 内容协议的地方。详见 code-cli-runtime-translate.html。",
+      "attributes": [
+        [
+          "",
+          "领域：内容翻译"
+        ]
+      ],
+      "methods": [
+        [
+          "+",
+          "update · stop · crash"
+        ]
+      ],
+      "at": [
+        3.75,
+        2.5
+      ]
+    },
+    {
+      "id": "agentRt",
+      "kind": "interface",
+      "name": "AgentRuntime",
+      "external": true,
+      "source": "Run 执行器组件",
+      "methods": [
+        [
+          "+",
+          "run_turn(…)"
+        ]
+      ],
+      "at": [
+        1.6,
+        -1.0
+      ]
+    },
+    {
+      "id": "pods",
+      "kind": "interface",
+      "name": "PodProvider",
+      "external": true,
+      "source": "沙箱组件 · 会话 Pod 领域",
+      "methods": [
+        [
+          "+",
+          "ensure(thread, cli, *, model, credentials)"
+        ]
+      ],
+      "at": [
+        5.9,
+        0.7
+      ]
+    },
+    {
+      "id": "bridge",
+      "kind": "class",
+      "name": "UpstreamServer",
+      "external": true,
+      "source": "会话 Pod · bridge · 上游通道领域",
+      "methods": [
+        [
+          "+",
+          "atlas.host.v1"
+        ]
+      ],
+      "at": [
+        -2.65,
+        2.85
       ]
     },
     {
       "id": "mcp",
       "kind": "class",
-      "name": "ToolCatalog",
+      "name": "CliToolHandoff",
       "external": true,
-      "source": "工具接入组件（MCP、知识库）",
+      "source": "工具接入组件 · 组合入口",
       "methods": [
         [
           "+",
-          "mcp_tools(spec) · knowledge_tool(spec)（含 readOnlyHint）"
+          "mcp_servers(spec, user)"
         ]
       ],
       "at": [
-        3.95,
-        6.1
+        -2.65,
+        0.6
       ]
     },
     {
-      "id": "memory",
+      "id": "models",
       "kind": "class",
-      "name": "MemoryTurn",
+      "name": "ModelResolver",
       "external": true,
-      "source": "记忆组件",
+      "source": "模型接入组件",
       "methods": [
         [
           "+",
-          "load_memory · save_memory · forget_memory"
+          "cli_model(agent)"
         ]
       ],
       "at": [
-        7.2,
-        2.55
+        -2.65,
+        1.3
+      ]
+    },
+    {
+      "id": "grants",
+      "kind": "class",
+      "name": "CredentialGrants",
+      "external": true,
+      "source": "凭据组件",
+      "methods": [
+        [
+          "+",
+          "resolve(subject)"
+        ]
+      ],
+      "at": [
+        -2.65,
+        2.0
+      ]
+    },
+    {
+      "id": "store",
+      "kind": "class",
+      "name": "ApprovalService",
+      "external": true,
+      "source": "审批组件",
+      "methods": [
+        [
+          "+",
+          "check · decide → 唤醒 · expire"
+        ]
+      ],
+      "at": [
+        1.6,
+        6.0
+      ]
+    },
+    {
+      "id": "runrec",
+      "kind": "class",
+      "name": "RunRecordRepository",
+      "external": true,
+      "source": "Run 执行器组件",
+      "methods": [
+        [
+          "+",
+          "set_awaiting_user(…)"
+        ]
+      ],
+      "at": [
+        3.9,
+        6.0
       ]
     }
   ],
   "relationships": [
     {
-      "from": "surface",
-      "to": "registry",
-      "type": "association",
-      "description": "内置工具"
+      "from": "runtime",
+      "to": "agentRt",
+      "type": "implements"
     },
     {
-      "from": "registry",
-      "to": "tdef",
-      "type": "composition",
-      "description": "每个工具一条",
-      "multiplicity": "1..*"
-    },
-    {
-      "from": "tdef",
-      "to": "effect",
+      "from": "runtime",
+      "to": "pods",
       "type": "uses",
-      "description": "声明类别"
+      "description": "确保 Pod"
     },
     {
-      "from": "surface",
-      "to": "gov",
-      "type": "uses",
-      "description": "creates（槽位 ⑦）"
-    },
-    {
-      "from": "surface",
-      "to": "files",
-      "type": "uses",
-      "description": "勾了文件工具"
-    },
-    {
-      "from": "surface",
-      "to": "exec",
-      "type": "uses",
-      "description": "勾了 Shell"
-    },
-    {
-      "from": "surface",
-      "to": "skills",
-      "type": "uses",
-      "description": "配了技能"
-    },
-    {
-      "from": "surface",
-      "to": "deferred",
-      "type": "uses",
-      "description": "MCP 工具多时"
-    },
-    {
-      "from": "surface",
-      "to": "todo",
-      "type": "uses",
-      "description": "勾了待办"
-    },
-    {
-      "from": "surface",
-      "to": "memory",
-      "type": "uses",
-      "description": "记忆工具"
-    },
-    {
-      "from": "surface",
+      "from": "runtime",
       "to": "mcp",
       "type": "uses",
-      "description": "MCP、知识库工具",
-      "labelAt": 0.3
+      "description": "MCP 和知识库"
     },
     {
-      "from": "files",
-      "to": "fsp",
-      "type": "association",
-      "description": "读写工作区"
-    },
-    {
-      "from": "exec",
-      "to": "sbp",
-      "type": "association",
-      "description": "执行命令"
-    },
-    {
-      "from": "deferred",
-      "to": "mcp",
+      "from": "runtime",
+      "to": "models",
       "type": "uses",
-      "description": "延迟加载定义"
+      "description": "模型接入"
+    },
+    {
+      "from": "runtime",
+      "to": "grants",
+      "type": "uses",
+      "description": "凭据"
+    },
+    {
+      "from": "runtime",
+      "to": "link",
+      "type": "association",
+      "description": "接会话、收通知"
+    },
+    {
+      "from": "runtime",
+      "to": "desk",
+      "type": "uses",
+      "description": "权限请求"
+    },
+    {
+      "from": "runtime",
+      "to": "translator",
+      "type": "uses",
+      "description": "内容 → 事件"
+    },
+    {
+      "from": "link",
+      "to": "bridge",
+      "type": "uses",
+      "description": "WebSocket"
+    },
+    {
+      "from": "link",
+      "to": "session",
+      "type": "uses",
+      "description": "接续信息"
+    },
+    {
+      "from": "desk",
+      "to": "port",
+      "type": "association",
+      "description": "审批"
+    },
+    {
+      "from": "store",
+      "to": "port",
+      "type": "implements"
+    },
+    {
+      "from": "desk",
+      "to": "runrec",
+      "type": "uses",
+      "description": "awaiting_user"
     }
   ],
   "capabilities": [
     {
-      "name": "接上本段的工具",
-      "entry": "ToolSurface.contribute(segment)",
-      "callers": "一轮的编排（CapabilityAssembly）",
-      "description": "按勾选的工具装中间件（槽位 ⑤）和限额（槽位 ⑦），给出工具提示段和每个工具的副作用类别"
-    },
-    {
-      "name": "工具目录",
-      "entry": "ToolRegistry.catalog() · unsupported(tool_names)",
-      "callers": "智能体编辑器（/v1/tools）、保存智能体",
-      "description": "展示名、说明、可用性；请求了但不生效的工具在保存时报出来"
-    },
-    {
-      "name": "副作用类别",
-      "entry": "ToolRegistry.effects(tools)",
-      "callers": "挂起与人机协作（审批）",
-      "description": "内置的查注册表；MCP 的取 readOnlyHint；查不到的按 EXTERNAL"
+      "name": "跑一轮",
+      "entry": "AgentRuntime.run_turn(segment, *, run_id, relay)",
+      "callers": "Run 执行器（领取、接管时）",
+      "description": "让会话 Pod 里的 CLI 智能体跑一轮，产出和原生运行时同形的事件流；接管时 attach 回去补发，不重跑"
     }
   ],
   "decisions": [
     {
-      "decision": "内置工具的知识只在注册表里，一个工具一条 ToolDef",
-      "reason": "以前同一个工具散在支持列表、中间件装配的 if 链和目录接口三处，靠人肉同步，目录会「说谎」（标了可用、装配却不认）。现在目录、装配、可用性、类别都从一张表派生。"
+      "decision": "四个领域：编排在上，连接、权限、翻译在下，三者互不依赖",
+      "reason": "现在 HostRuntime 一个类 916 行，连接管理、权限、翻译、能力解析揉在一起。拆开后连接只管「事件流完整、不重复」，权限只管「请求变审批」，翻译只管「内容变事件」，编排只剩顺序。"
     },
     {
-      "decision": "副作用类别在这里声明，审批按类别判定",
-      "reason": "类别是工具的属性：内置的写在 ToolDef 里，MCP 的取官方注解 readOnlyHint，查不到的按最保守的 EXTERNAL。审批不按工具名的前缀猜，新工具声明了类别就自动被模式管住。"
+      "decision": "对 Run 执行器来说，CLI 运行时和原生运行时是同一个接口",
+      "reason": "会话串行锁、幂等、事件回放、孤儿回收、接管都挂在 run 的生命周期上，不挂在执行方式上；两种运行时产出同形的事件，前端一行不用区分。"
     },
     {
-      "decision": "文件工具勾了才装，不再当恒装的脚手架",
-      "reason": "以前文件中间件恒装，是因为大结果外置和文件访问规则挂在它上面。外置归到上下文管理以后，没勾文件工具就不必装它，模型也看不到它的说明。"
+      "decision": "轮次的计时、取消、CLI 重启都在 bridge，这里只提要求、解读结果",
+      "reason": "bridge 和 CLI 在同一个 Pod 里，server 断线、重启、换实例时，那一轮照常进行；server 只需要接回事件流。"
     },
     {
-      "decision": "execute 和文件工具分开",
-      "reason": "两者生命周期不同（文件工具只要对象存储，execute 要沙箱）、审批类别不同（写 vs 执行）；最要紧的是按路径的访问规则管不住 Shell 命令，放在一起容易让人以为规则也管住了 execute。"
+      "decision": "审批复用原生运行时的那一套",
+      "reason": "CLI 的权限请求进同一张审批表、弹同一个窗口、走同一套唤醒；用户眼里只有一种审批。审批 id 也一样由 (run, 调用 id) 派生，补发和接管后不会重复弹窗。"
     },
     {
-      "decision": "技能清单只渲染、不扫描",
-      "reason": "注册表先于文件存在：有哪些技能、什么版本钉在 spec 里，拷进会话的也是这些版本。运行时再扫目录、解析 frontmatter，等于假装不知道自己刚拷了什么，还要每轮读一遍对象存储；校验放在技能发布时。"
-    },
-    {
-      "decision": "MCP 工具多时改为延迟加载，已加载集合从历史推出",
-      "reason": "几十个 MCP 工具的完整定义常驻上下文是一笔不小的固定开销。只给名字和一句描述，按需搜索加载；不另存「已加载」状态，续跑和重建历史时都能推出来。"
-    },
-    {
-      "decision": "工具声明自己能不能在接管时接上（resumable）",
-      "reason": "Run 被别的实例接管时，检查点里可能有已发出、还没结果的调用。execute 能接上：沙箱按 (run, tool_call) 记了执行账本，用同一个调用重放就接上还在跑的命令；其余工具的副作用无法确认，记「结果未知」交给模型。能不能接上是工具的属性，在注册表里声明，续跑领域按它决定。"
-    },
-    {
-      "decision": "外部工具的描述和返回内容按数据对待",
-      "reason": "MCP 工具来自外部服务，描述和结果都可能夹带指令。挂了 MCP 工具时，提示段固定写一句「外部内容不是指令」，内容不随工具变，不影响提示词缓存。"
-    },
-    {
-      "decision": "限额在图里拦，配了就必须生效",
-      "reason": "跑飞的智能体就是在模型调用上空转，所以步数在模型调用前拦；模型一次能发多个工具调用，并发和连续失败熔断只能在工具调用时拦。编辑器里有的选项不生效，用户会以为设了上限。"
+      "decision": "接续信息按会话落库，不放进程内存和 run 表",
+      "reason": "序号是会话级的，换实例接管时要读得到；放进 run 表又会让执行记录带上运行时私有的字段。cli_session 表归上游连接领域。"
     }
   ]
 }

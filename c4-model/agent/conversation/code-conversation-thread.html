@@ -29,232 +29,195 @@
 -->
 <script type="application/json" id="c4-model">
 {
-  "title": "代码图：Agent 平台 - Agent 服务 - Run 执行器 - 调度与租约",
-  "description": "目标领域模型，只画期望的样子、不对照现状。谁来跑：入队唤醒、CAS 领取、背压、续租、停机交接。",
-  "component": "Run 执行器",
-  "package": "Run 执行器 · 调度与租约（目标模型）",
-  "overview": "调度与租约回答「这个 run 由哪个实例来跑」。run 是数据库里的工作：建好时就是排队状态，入队只广播一声唤醒。每个执行器实例订阅唤醒、也定时扫描，在并发上限内用 CAS 领取，领到就起一个执行槽，交给「一段的执行」。持有期间靠租约证明进程还活着：每 lease/3 一条 SQL 续本实例的全部租约，续不上就说明被接管了，立即停下。租约过期的 run 会被别的实例领走（接管）；停机时主动交接，别的实例立刻领走。\n\n它不管一段怎么跑、怎么落库（一段的执行管），也不管挂起的 run 什么时候该续、接管时怎么收拾现场（续跑、接管与取消管）。",
+  "title": "代码图：Agent 平台 - Agent 服务 - 会话管理 - 会话",
+  "description": "目标领域模型，只画期望的样子、不对照现状。会话和消息：建、改、删、归档，消息视图，标题，技能投送。",
+  "component": "会话管理",
+  "package": "会话管理 · 会话（目标模型）",
+  "overview": "会话领域管 thread 和 message 两张表：一段对话和它的消息。建会话时把该定的都定下来（能不能用、记忆开关、凭据档案、技能投送），删会话时连同子会话一起删并释放沙箱。消息表是执行的事实源，用户的输入、模型和工具的消息都在这里；界面看到的是折叠成一轮一条的视图。子智能体的会话也是 thread，挂在派出它的那一层下面，工作区和事件流归根会话。\n\n它不认识 run：提交一轮、取消、事件流在对话领域，那边往这里写用户消息；文件、预览、上下文和手动压缩在工作区与上下文领域。",
   "elements": [
     {
-      "id": "iface",
-      "kind": "interface",
-      "name": "RunExecutor",
-      "stereotype": "对外接口",
-      "responsibility": "Run 执行器对组件外的唯一入口：入队后唤醒、取消、等的事有了结果时续跑、停机。调用方不知道 run 会在哪个实例上跑；以后换成独立的 worker 进程，只换实现。",
-      "methods": [
-        [
-          "+",
-          "submit(run_uuid)"
-        ],
-        [
-          "+",
-          "cancel(run_uuid)"
-        ],
-        [
-          "+",
-          "resume_if_ready(run_uuid) -> bool"
-        ],
-        [
-          "+",
-          "shutdown()"
-        ]
-      ],
-      "at": [
-        1.45,
-        -0.95
-      ]
-    },
-    {
-      "id": "worker",
+      "id": "svc",
       "kind": "class",
-      "name": "RunWorker",
+      "name": "ThreadService",
       "stereotype": "应用服务",
-      "responsibility": "一个实例上的执行器：订阅唤醒、定时领取扫描、领到就起一个执行槽交给「一段的执行」，有 run 在跑时续租，停机时交接。不自己装配运行时：运行时由组合根注入「一段的执行」。api 角色的实例只入队、不领取。",
-      "attributes": [
-        [
-          "-",
-          "_instance: str（租约的 owner）"
-        ],
-        [
-          "-",
-          "_slots: dict[run_uuid, ExecutionSlot]"
-        ]
-      ],
+      "responsibility": "会话的增删改查。建：能用这个智能体才能建（看不到的与不存在一样 404）；业务应用建的默认关记忆；凭据档案在这时选定、经凭据组件校验，之后不改；智能体当前版本引用的技能在这时拷进会话，失败整个不建，不留技能残缺的会话；登记记忆实例，失败不挡（下一轮再登记）。删：连同子会话一起删，再经沙箱组件释放会话 Pod 和工作区沙箱，失败只记日志，由孤儿回收兜底。智能体归档时把它的会话一起归档。",
       "methods": [
         [
           "+",
-          "start() · claim_available() -> int"
+          "create(payload, principal) -> Thread"
         ],
         [
-          "-",
-          "_spawn(run_uuid, reason)"
+          "+",
+          "update(thread_uuid, *, title, status) · delete(thread_uuid)"
+        ],
+        [
+          "+",
+          "get · list(owner, cursor) · messages(thread_uuid, cursor)"
+        ],
+        [
+          "+",
+          "on_agent_archived(event)"
         ]
       ],
       "at": [
-        1.45,
+        1.6,
         0.75
       ]
     },
     {
-      "id": "admission",
+      "id": "thread",
       "kind": "class",
-      "name": "ClaimAdmission",
-      "stereotype": "策略",
-      "responsibility": "本实例能不能再领：并发上限（默认 32）减去在跑的槽；领取串行进行，几个唤醒同时到也不会一起冲过上限。停机中、或者是 api 角色，一律不领。",
+      "name": "Thread",
+      "stereotype": "聚合根",
+      "responsibility": "一段对话。子智能体的会话也是一行 thread，挂在派出它的那一层下面，会话随 run 长成一棵树；工作区和事件流都归根会话，技能归自己。会话记住用户选的审批模式，作用于下一条消息；凭据档案、来源应用建时定、子会话继承。用户改过的标题永不被自动生成覆盖。",
       "attributes": [
         [
           "+",
-          "max_concurrent: int"
+          "thread_uuid · agent_uuid · created_by"
+        ],
+        [
+          "+",
+          "parent · root · subagent_name"
+        ],
+        [
+          "+",
+          "title · title_source · status: active | archived | ephemeral"
+        ],
+        [
+          "+",
+          "approval_mode · memory · credential_profiles · source_app"
         ]
       ],
       "methods": [
         [
           "+",
-          "free_slots(slots, *, draining) -> int"
+          "rename(title)（manual）· set_title(generated)"
+        ],
+        [
+          "+",
+          "remember_mode(mode)"
+        ],
+        [
+          "+",
+          "workspace_owner · stream_owner -> 根会话"
         ]
       ],
       "at": [
-        -0.6,
-        0.75
+        1.6,
+        2.6
       ]
     },
     {
-      "id": "queue",
+      "id": "msg",
       "kind": "class",
-      "name": "RunQueue",
-      "stereotype": "仓储",
-      "responsibility": "run 表上与调度有关的读写。领取：排队中的、或租约已过期的在途 run，SELECT … FOR UPDATE SKIP LOCKED 再 UPDATE，同一个事务，多个实例并发领取互不阻塞，也不会领到同一行。续租：一条 SQL 续本实例的全部 run，返回仍由本实例持有的。交接：清掉 owner，让租约立即到期。续跑也走这里：把挂起的 run 放回队列。",
-      "methods": [
-        [
-          "+",
-          "claim_next(owner, lease_s) -> (run_uuid, TakeoverReason | None)"
-        ],
-        [
-          "+",
-          "renew(run_uuids, owner, lease_s) -> set[run_uuid]"
-        ],
-        [
-          "+",
-          "release(run_uuid)"
-        ],
-        [
-          "+",
-          "requeue(run_uuid) -> bool（挂起 → 排队，CAS）"
-        ]
-      ],
-      "at": [
-        4.25,
-        0.75
-      ]
-    },
-    {
-      "id": "reason",
-      "kind": "enum",
-      "name": "TakeoverReason",
-      "stereotype": "值对象",
-      "responsibility": "领到的是不是别人留下的：None 是新 run 或续跑；handoff 是上一个持有者停机前主动交接；expired 是持有者的租约过期，多半是进程死了。后两种要先收拾现场。",
-      "attributes": [
-        [
-          "",
-          "None（新 run、续跑）"
-        ],
-        [
-          "",
-          "HANDOFF（主动交接）"
-        ],
-        [
-          "",
-          "EXPIRED（租约过期）"
-        ]
-      ],
-      "at": [
-        4.25,
-        -0.95
-      ]
-    },
-    {
-      "id": "lease",
-      "kind": "class",
-      "name": "Lease",
-      "stereotype": "值对象",
-      "responsibility": "「进程还活着」的心跳：持有者、到期时刻、被接管过几次。默认 30 秒，每 10 秒续一次。它不是工作时长上限，长任务靠续租一直跑；挂起和终态时清掉。被接管得频繁，说明实例在频繁崩溃。",
-      "attributes": [
-        [
-          "+",
-          "owner: str | None"
-        ],
-        [
-          "+",
-          "until: datetime | None"
-        ],
-        [
-          "+",
-          "takeovers: int"
-        ]
-      ],
-      "at": [
-        4.6,
-        2.75
-      ]
-    },
-    {
-      "id": "renewer",
-      "kind": "class",
-      "name": "LeaseRenewer",
-      "stereotype": "领域服务",
-      "responsibility": "有 run 在跑时每 lease/3 续一次本实例的全部租约；没 run 了就停，下次领到再起。某个 run 续不上，就说明它已被别的实例接管，立即停掉它的执行槽。",
-      "attributes": [
-        [
-          "-",
-          "_interval = lease / 3"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "renew_once() -> set[run_uuid]（续不上的）"
-        ]
-      ],
-      "at": [
-        2.95,
-        2.75
-      ]
-    },
-    {
-      "id": "slot",
-      "kind": "class",
-      "name": "ExecutionSlot",
+      "name": "Message",
       "stereotype": "实体",
-      "responsibility": "本实例上一个在跑的 run：执行任务、是否在交接、是不是 CLI 运行时（交接方式不同）。交接或续不上租约时，按这个槽停下对应的执行。",
+      "responsibility": "执行的事实：模型一轮里说几次话就是几条助手消息，中间夹着工具结果；永远保留完整原文，压缩只改模型看到的上下文。用户的输入由对话领域写，模型和工具的消息由 Run 执行器在检查点写，执行器重建历史也从这里读。",
       "attributes": [
         [
           "+",
-          "run_uuid · task"
+          "message_uuid · run_uuid"
         ],
         [
           "+",
-          "draining: bool · cli: bool"
+          "role: user | assistant · kind: chat | tool_result"
+        ],
+        [
+          "+",
+          "content（原始 content blocks）"
+        ]
+      ],
+      "at": [
+        4.0,
+        2.6
+      ]
+    },
+    {
+      "id": "view",
+      "kind": "class",
+      "name": "TranscriptView",
+      "stereotype": "策略",
+      "responsibility": "消息表是给模型的形状，界面要的是「一轮一条」：同一个 run 的多条助手消息折成一条（前面的段落是过程性发言，最后一段是结论），工具调用块不上网线（一次写文件的入参可能是整个文件）。没有 run 的历史消息不折，免得把两轮粘在一起。",
+      "methods": [
+        [
+          "+",
+          "fold(rows) -> list[MessageOut]"
+        ]
+      ],
+      "at": [
+        4.0,
+        0.75
+      ]
+    },
+    {
+      "id": "title",
+      "kind": "class",
+      "name": "TitleService",
+      "stereotype": "领域服务",
+      "responsibility": "会话标题：用平台服务模型「会话标题」按首个问题和回答的开头起一个不超过 20 个字宽的名词短语；取不到模型、超时、出错都退回问题截断。永不抛异常，也不写库：执行器在一轮收尾时写，标题来源是 manual 的不覆盖。",
+      "methods": [
+        [
+          "+",
+          "generate(question, answer) -> (title, degraded)"
         ]
       ],
       "at": [
         -0.6,
-        2.75
+        4.45
       ]
     },
     {
-      "id": "wake",
-      "kind": "interface",
-      "name": "WakeChannel",
-      "stereotype": "扩展点",
-      "responsibility": "广播「有活了」，订阅方断了就退避重连。服务端用 Redis 发布订阅实现。它只是加速：唤醒丢了，定时领取扫描照样能领到。",
+      "id": "seeder",
+      "kind": "class",
+      "name": "SkillSeeder",
+      "stereotype": "领域服务",
+      "responsibility": "把智能体（或子智能体）引用的技能按钉死的版本从技能目录拷进这个会话自己的技能区；已下架的跳过并记下。在建会话时做，不拖到第一轮。",
       "methods": [
         [
           "+",
-          "broadcast()"
+          "seed(thread, skill_refs)"
+        ]
+      ],
+      "at": [
+        -0.6,
+        2.6
+      ]
+    },
+    {
+      "id": "repo",
+      "kind": "class",
+      "name": "ThreadRepository",
+      "stereotype": "仓储",
+      "responsibility": "thread、message 两张表。列表只列用户会话（子会话不进列表）；子智能体按 (父会话, 名字) 找持久会话；执行器的检查点经 append 写模型和工具的消息。",
+      "methods": [
+        [
+          "+",
+          "get · create · list(owner, cursor)"
         ],
         [
           "+",
-          "listen() -> AsyncIterator[None]"
+          "add_message · append(messages) · history(thread)"
+        ],
+        [
+          "+",
+          "find_subagent · archive_subagent · delete_tree"
+        ]
+      ],
+      "at": [
+        4.0,
+        4.45
+      ]
+    },
+    {
+      "id": "access",
+      "kind": "class",
+      "name": "AgentAccess",
+      "external": true,
+      "source": "鉴权组件",
+      "methods": [
+        [
+          "+",
+          "require(principal, agent)"
         ]
       ],
       "at": [
@@ -263,231 +226,460 @@
       ]
     },
     {
-      "id": "drain",
+      "id": "agents",
       "kind": "class",
-      "name": "Drainer",
-      "stereotype": "领域服务",
-      "responsibility": "停机交接：先停止领取，再把在跑的 run 交给别的实例。原生运行时在下一个安全点（工具轮次落库之后）停下；CLI 运行时直接断开，那一轮在 Pod 里照常进行，接手的实例再连回去。等不到安全点的，到 drain_timeout（默认 60 秒）直接中止，最多丢一轮。交接 = 清租约 + 发唤醒，状态不动。",
-      "attributes": [
-        [
-          "+",
-          "timeout_s: float"
-        ]
-      ],
+      "name": "AgentService",
+      "external": true,
+      "source": "智能体管理 · 智能体配置领域",
       "methods": [
         [
           "+",
-          "drain()（可重复调用，只做一次）"
+          "get(agent_uuid) -> Agent（含当前版本）"
         ]
       ],
       "at": [
-        0.6,
-        2.75
+        1.6,
+        -0.95
       ]
     },
     {
-      "id": "segment",
+      "id": "archived",
       "kind": "class",
-      "name": "SegmentExecution",
+      "name": "AgentArchived",
       "external": true,
-      "source": "Run 执行器 · 一段的执行与落库领域",
+      "source": "智能体管理 · 智能体配置领域",
       "methods": [
         [
           "+",
-          "run(run_uuid, *, takeover, drain_signal)"
+          "agent_uuid"
         ]
       ],
       "at": [
-        0.85,
-        4.65
+        4.0,
+        -0.95
       ]
     },
     {
-      "id": "cont",
+      "id": "creds",
       "kind": "class",
-      "name": "Continuation",
+      "name": "CredentialGrants",
       "external": true,
-      "source": "Run 执行器 · 续跑、接管与取消领域",
+      "source": "凭据组件",
       "methods": [
         [
           "+",
-          "resume_if_ready(run_uuid) · settle_cancelled(run_uuid)"
+          "check(subject, profiles)"
         ]
       ],
       "at": [
-        2.65,
-        4.65
+        -2.9,
+        0.75
       ]
     },
     {
-      "id": "runsvc",
+      "id": "memory",
       "kind": "class",
-      "name": "RunService",
+      "name": "MemoryRuntime",
       "external": true,
-      "source": "应用服务组件",
+      "source": "记忆组件",
       "methods": [
         [
           "+",
-          "create(…) → submit · cancel(…)"
+          "register_thread(thread, user)"
         ]
       ],
       "at": [
-        1.45,
-        -2.65
+        -2.9,
+        2.0
+      ]
+    },
+    {
+      "id": "native",
+      "kind": "class",
+      "name": "NativeSandboxService",
+      "external": true,
+      "source": "沙箱 · 原生沙箱领域",
+      "methods": [
+        [
+          "+",
+          "release(ws)"
+        ]
+      ],
+      "at": [
+        6.3,
+        0.0
+      ]
+    },
+    {
+      "id": "pods",
+      "kind": "class",
+      "name": "SessionPods",
+      "external": true,
+      "source": "沙箱 · 会话 Pod 领域",
+      "methods": [
+        [
+          "+",
+          "release(thread)"
+        ]
+      ],
+      "at": [
+        6.3,
+        1.25
+      ]
+    },
+    {
+      "id": "titler",
+      "kind": "interface",
+      "name": "Titler",
+      "external": true,
+      "source": "原生运行时 · 一轮的编排领域",
+      "methods": [
+        [
+          "+",
+          "generate(question, answer)"
+        ]
+      ],
+      "at": [
+        -2.9,
+        4.45
       ]
     }
   ],
   "relationships": [
     {
-      "from": "runsvc",
-      "to": "iface",
+      "from": "svc",
+      "to": "access",
       "type": "uses",
-      "description": "建好就入队、取消"
+      "description": "能用吗"
     },
     {
-      "from": "worker",
-      "to": "iface",
-      "type": "implements"
-    },
-    {
-      "from": "worker",
-      "to": "admission",
+      "from": "svc",
+      "to": "agents",
       "type": "uses",
-      "description": "还能领几个"
+      "description": "智能体和当前版本"
     },
     {
-      "from": "worker",
-      "to": "queue",
-      "type": "association",
-      "description": "领取"
-    },
-    {
-      "from": "queue",
-      "to": "reason",
+      "from": "svc",
+      "to": "archived",
       "type": "uses",
-      "description": "返回"
+      "description": "订阅",
+      "labelAt": 0.6
     },
     {
-      "from": "queue",
-      "to": "lease",
+      "from": "svc",
+      "to": "creds",
       "type": "uses",
-      "description": "写入、续期、清除"
+      "description": "校验凭据档案"
     },
     {
-      "from": "worker",
-      "to": "renewer",
+      "from": "svc",
+      "to": "memory",
+      "type": "uses",
+      "description": "登记记忆实例"
+    },
+    {
+      "from": "svc",
+      "to": "native",
+      "type": "uses",
+      "description": "删除级联"
+    },
+    {
+      "from": "svc",
+      "to": "pods",
+      "type": "uses",
+      "description": "删除级联",
+      "labelAt": 0.6
+    },
+    {
+      "from": "svc",
+      "to": "thread",
+      "type": "uses",
+      "description": "建、改、删"
+    },
+    {
+      "from": "thread",
+      "to": "msg",
       "type": "composition",
-      "description": "有 run 时起"
-    },
-    {
-      "from": "renewer",
-      "to": "queue",
-      "type": "uses",
-      "description": "一条 SQL 续全部"
-    },
-    {
-      "from": "worker",
-      "to": "slot",
-      "type": "composition",
-      "description": "在跑的 run",
+      "description": "消息",
       "multiplicity": "0..*"
     },
     {
-      "from": "worker",
-      "to": "wake",
-      "type": "association",
-      "description": "订阅唤醒"
-    },
-    {
-      "from": "worker",
-      "to": "drain",
-      "type": "composition",
-      "description": "停机时"
-    },
-    {
-      "from": "drain",
-      "to": "slot",
+      "from": "svc",
+      "to": "view",
       "type": "uses",
-      "description": "逐个交接"
+      "description": "消息列表"
     },
     {
-      "from": "drain",
-      "to": "queue",
+      "from": "svc",
+      "to": "seeder",
       "type": "uses",
-      "description": "清租约",
-      "labelAt": 0.72
+      "description": "建会话时投送技能"
     },
     {
-      "from": "worker",
-      "to": "segment",
+      "from": "svc",
+      "to": "repo",
       "type": "uses",
-      "description": "领到就跑一段"
+      "description": "存取",
+      "labelAt": 0.75
     },
     {
-      "from": "worker",
-      "to": "cont",
-      "type": "uses",
-      "description": "续跑、等待中取消"
+      "from": "title",
+      "to": "titler",
+      "type": "implements"
     }
   ],
   "capabilities": [
     {
-      "name": "入队",
-      "entry": "RunExecutor.submit(run_uuid)",
-      "callers": "应用服务（建 Run）、会话服务（起子 run）",
-      "description": "run 行建好时已是排队状态；这里只广播唤醒，本实例有空位也立刻试领一次"
+      "name": "建会话",
+      "entry": "ThreadService.create(payload, principal)",
+      "callers": "HTTP 接口（界面、TeamFlow 等业务应用）",
+      "description": "能用智能体才能建；凭据档案校验、技能投送失败就不建；记忆实例登记失败不挡"
     },
     {
-      "name": "领取与接管",
-      "entry": "RunWorker.claim_available()",
-      "callers": "唤醒、定时扫描、入队时",
-      "description": "领到并发上限为止；领到租约过期或被交接的 run 时，先交给续跑领域收拾现场再跑"
+      "name": "改、删、归档",
+      "entry": "ThreadService.update · delete · on_agent_archived",
+      "callers": "HTTP 接口；智能体配置（AgentArchived）",
+      "description": "改标题即 manual；删除连同子会话，并释放会话 Pod 和工作区沙箱（失败只记日志）"
     },
     {
-      "name": "取消",
-      "entry": "RunExecutor.cancel(run_uuid)",
-      "callers": "应用服务",
-      "description": "在跑的由运行时下一步看到取消标记后自己收尾；挂起中的没有进程，交给续跑领域收尾"
+      "name": "会话和消息列表",
+      "entry": "ThreadService.list · get · messages",
+      "callers": "HTTP 接口",
+      "description": "列表只有用户会话；消息按一轮一条折叠、去掉工具调用块；最近一轮的状态由对话领域补上"
     },
     {
-      "name": "停机交接",
-      "entry": "RunExecutor.shutdown()",
-      "callers": "进程退出钩子",
-      "description": "停止领取，安全点交接，超时直接中止；别的实例马上领走"
+      "name": "生成标题",
+      "entry": "Titler.generate(question, answer)",
+      "callers": "原生运行时（一轮的主输出结束后）",
+      "description": "平台服务模型起标题，失败退回问题截断，永不抛异常"
+    },
+    {
+      "name": "读写消息",
+      "entry": "ThreadRepository.append · history",
+      "callers": "Run 执行器（检查点、重建历史）、对话（用户输入）、子智能体（任务书）",
+      "description": "消息表是事实源，执行器没有别的历史来源"
     }
   ],
   "decisions": [
     {
-      "decision": "Run 是数据库里的工作，任何实例都能领",
-      "reason": "以前 run 是「接到请求的那个进程里的任务」，进程一死就丢了。现在 run 行建好就是排队状态，入队只发唤醒；进程死了，租约过期后别的实例接着跑，最多丢一轮。"
+      "decision": "子智能体的会话也是 thread，工作区和事件流归根会话",
+      "reason": "子智能体可以一层层再派，会话随 run 长成一棵树；共享根会话的工作区才能接着处理父会话的文件，事件进根会话那条流用户才看得到子 run 的过程和审批。技能归自己，读共享、技能隔离是结构性的。"
     },
     {
-      "decision": "领取用 SELECT … FOR UPDATE SKIP LOCKED 再 UPDATE，在同一个事务里",
-      "reason": "多个实例并发领取互不阻塞，也不会领到同一行。不写成 UPDATE … WHERE id = (子查询)：MySQL 不允许 UPDATE 的子查询读同一张表，这样两种方言同一份代码。"
+      "decision": "技能在建会话时投送，失败就不建",
+      "reason": "用户对「新建会话」的等待更宽容，首轮对话的等待最刺眼；少拷几个文件就默默开始，表现是模型照技能做了但脚本不存在，比明确报错难查得多。"
     },
     {
-      "decision": "租约是心跳，不是工作时长上限",
-      "reason": "运行不设到点结束的上限。租约短（30 秒）是为了进程死后尽快被接管；长任务靠每 10 秒续一次一直跑。挂起时清掉租约：等人可以等到第二天，不该占着实例。"
+      "decision": "删除级联只经沙箱组件释放，失败不挡删除",
+      "reason": "会话 Pod 和工作区沙箱归人，由沙箱组件的通用供给决定退不退役；清理失败不该让用户删不掉会话，残留由维护任务的孤儿回收收掉。"
     },
     {
-      "decision": "一条 SQL 续本实例的全部租约，续不上就立即停",
-      "reason": "逐个续，几十个 run 就是几十条 SQL。续不上说明租约已被别的实例接走（本实例卡顿过久），这时继续跑就是两个实例写同一个 run；检查点的第一条写也会再校验一次。"
+      "decision": "会话不认识 run",
+      "reason": "对话领域要写会话的消息（会话在下），会话再去查 run 就成了双向依赖。列表和详情里「最近一轮」「进行中的 run」由对话领域补；手动压缩要和 run 互斥，放在工作区与上下文领域，经对话领域的会话串行。"
     },
     {
-      "decision": "唤醒只是加速，定时领取扫描兜底",
-      "reason": "Redis 发布订阅不保证送达，订阅断开期间的消息就丢了。定时扫描保证排队的 run 总会被领到，唤醒只让它更快。"
+      "decision": "thread 表只留会话本身的字段",
+      "reason": "摘要、覆盖边界、压缩次数和熔断计数归原生运行时的 thread_context；CLI 的会话 id 归 CLI 运行时的 cli_session；git_profile 改成凭据档案列表；latest_state 没有写入方也没有读取方，删掉。"
     },
     {
-      "decision": "续跑就是重新入队，和新 run 走同一条领取路径",
-      "reason": "现在续跑另有一条领取路径（claim_for_resume），绕过了并发上限，接管、交接的判据也要在两处各写一遍。改成把挂起的 run 放回队列（CAS：挂起 → 排队）再唤醒，哪个实例领到都一样，背压规则只有一套。"
+      "decision": "标题生成不写库",
+      "reason": "生成发生在一轮收尾之前（之后事件流就送不出去了），写库由执行器在收尾时和别的收尾一起做；标题生成失败只是标题难看一点，不该影响这一轮。"
+    }
+  ],
+  "schemaNote": "主键约定：id 是自增主键，只在库内使用，不对外、不做关联；xxx_uuid 是逻辑主键（UUIDv7，Python 侧生成），表间引用和 API 都用它。表间不建外键约束，引用由代码维护；引用会话、run 这些别的领域的表时只写列说明，不画连线。类型写的是 db/types.py 和 SQLAlchemy 的通用类型。",
+  "tables": [
+    {
+      "name": "thread",
+      "description": "会话（聚合根 Thread），含子智能体的会话。",
+      "at": [
+        0,
+        0
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": "BigInteger",
+          "key": "PK",
+          "default": "自增",
+          "description": "库内主键"
+        },
+        {
+          "name": "thread_uuid",
+          "type": "UUIDType",
+          "key": "UK",
+          "description": "逻辑主键"
+        },
+        {
+          "name": "agent_uuid",
+          "type": "UUIDType",
+          "description": "所属智能体（智能体配置的表，逻辑引用）"
+        },
+        {
+          "name": "parent_thread_uuid",
+          "type": "UUIDType",
+          "nullable": true,
+          "description": "派出它的那一层会话（本表，自引用）；用户会话为空"
+        },
+        {
+          "name": "root_thread_uuid",
+          "type": "UUIDType",
+          "nullable": true,
+          "description": "会话树的根（本表，自引用），工作区和事件流归它；自己是根时为空"
+        },
+        {
+          "name": "subagent_name",
+          "type": "String(64)",
+          "nullable": true,
+          "description": "子智能体名"
+        },
+        {
+          "name": "title",
+          "type": "Text",
+          "default": "''"
+        },
+        {
+          "name": "title_source",
+          "type": "String(16)",
+          "default": "'pending'",
+          "description": "pending / generated / fallback / manual"
+        },
+        {
+          "name": "status",
+          "type": "String(16)",
+          "default": "'active'",
+          "description": "active / archived / ephemeral（一次性子会话）"
+        },
+        {
+          "name": "approval_mode",
+          "type": "String(8)",
+          "nullable": true,
+          "description": "会话记住的审批模式；空 = 用智能体默认"
+        },
+        {
+          "name": "memory",
+          "type": "String(8)",
+          "default": "'on'",
+          "description": "on / off"
+        },
+        {
+          "name": "credential_profiles",
+          "type": "JSONType",
+          "default": "'[]'",
+          "description": "建会话时选定的凭据档案编码，之后不改，子会话继承"
+        },
+        {
+          "name": "source_app",
+          "type": "String(32)",
+          "nullable": true,
+          "description": "建会话的业务应用（X-Caller-App）；子会话继承"
+        },
+        {
+          "name": "message_count",
+          "type": "Integer",
+          "default": "0"
+        },
+        {
+          "name": "created_by_uuid",
+          "type": "UUIDType",
+          "description": "创建人；工作区路径按它分"
+        },
+        {
+          "name": "created_at",
+          "type": "UTCDateTime",
+          "default": "now()"
+        },
+        {
+          "name": "updated_at",
+          "type": "UTCDateTime",
+          "default": "now()"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "ix_thread_list",
+          "columns": [
+            "created_by_uuid",
+            "status",
+            "updated_at"
+          ],
+          "description": "会话列表"
+        },
+        {
+          "name": "ux_thread_subagent",
+          "columns": [
+            "parent_thread_uuid",
+            "subagent_name"
+          ],
+          "unique": true,
+          "description": "持久子智能体的查找键；只约束 status = active 的行，一次性子会话不占"
+        }
+      ]
     },
     {
-      "decision": "执行器不自己装配运行时，组合根在外面",
-      "reason": "现在 InProcessExecutor 在构造函数里自己建 HookAssembly 和 NativeRuntime，还把 executor=self 传进装配，让子智能体能起子 run，形成循环依赖。改成运行时由组合根注入；子智能体服务只依赖 RunExecutor.submit 这个接口。"
-    },
-    {
-      "decision": "停机时在安全点交接，等不到就中止",
-      "reason": "滚动发布时实例会被替换。原生运行时走到「本轮产生的都已落库、没有在跑的工具」再停，不丢工作；CLI 运行时断开即可，那一轮在 Pod 里照常跑。等不到安全点就中止，最多丢一轮。"
+      "name": "message",
+      "description": "消息（实体 Message），只追加。",
+      "at": [
+        2.4,
+        0
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": "BigInteger",
+          "key": "PK",
+          "default": "自增",
+          "description": "库内主键"
+        },
+        {
+          "name": "message_uuid",
+          "type": "UUIDType",
+          "key": "UK",
+          "description": "逻辑主键"
+        },
+        {
+          "name": "thread_uuid",
+          "type": "UUIDType",
+          "references": "thread.thread_uuid",
+          "description": "所属会话"
+        },
+        {
+          "name": "run_uuid",
+          "type": "UUIDType",
+          "nullable": true,
+          "description": "哪一轮写的（Run 执行器的表，逻辑引用）"
+        },
+        {
+          "name": "role",
+          "type": "String(16)",
+          "description": "user / assistant"
+        },
+        {
+          "name": "kind",
+          "type": "String(16)",
+          "default": "'chat'",
+          "description": "chat / tool_result；工具结果的 role 也是 user，靠它区分"
+        },
+        {
+          "name": "content",
+          "type": "JSONType",
+          "description": "原始 content blocks"
+        },
+        {
+          "name": "created_at",
+          "type": "UTCDateTime",
+          "description": "Python 侧逐行生成、微秒精度：排序靠它，同一事务里也互不相同"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "ix_message_thread",
+          "columns": [
+            "thread_uuid",
+            "created_at"
+          ],
+          "description": "按会话翻页、重建历史"
+        }
+      ]
     }
   ]
 }

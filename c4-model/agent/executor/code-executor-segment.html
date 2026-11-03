@@ -29,250 +29,255 @@
 -->
 <script type="application/json" id="c4-model">
 {
-  "title": "代码图：Agent 平台 - Agent 服务 - 原生运行时 - 领域总览",
-  "description": "目标模型，只画期望的样子、不对照现状。原生运行时的四个领域，每个只画对外入口和扩展点，看依赖方向；领域内部见各自的 code-native-runtime-*.html。",
-  "component": "原生运行时",
-  "package": "原生运行时（目标模型 · 领域总览）",
-  "overview": "原生运行时在进程里跑原生智能体的一段：调用模型和工具，遇到要等外部的事就挂起。它分四个领域。一轮的编排在上：解析模型、问三个能力领域要本段的贡献、按槽位叠中间件、建图、驱动产出事件。下面三个能力领域各交一部分中间件：挂起与人机协作（审批模式、提问、子智能体）、上下文管理（系统提示词分层、清理、外置、压缩、提醒）、工具面（文件、Shell、技能、待办、工具搜索、外部工具、限额）。\n\n图里的能力都经扩展点接到组件外：审批闸门和摘要器由服务端实现，子智能体发起方由会话服务实现，文件和命令执行由工作区、沙箱组件实现。Run 怎么领取、续租、接管、落检查点归 Run 执行器组件，不在这里。图上每个元素第一行写着它属于哪个领域。",
+  "title": "代码图：Agent 平台 - Agent 服务 - Run 执行器 - 一段的执行与落库",
+  "description": "目标领域模型，只画期望的样子、不对照现状。跑一段并留下记录：还原 Segment、选运行时、事件编号与发布、检查点、收尾。",
+  "component": "Run 执行器",
+  "package": "Run 执行器 · 一段的执行与落库（目标模型）",
+  "overview": "一段的执行与落库负责「领到之后怎么跑、跑完留下什么」。它从库里还原这一段（Segment），按智能体类型选运行时，把运行时产出的事件逐个盖序号、发布到事件中继、攒着归档；每个工具轮次落一次检查点（消息、事件、序号、变了的审批模式和待办，一个事务，第一条写校验租约）；段结束时按结果收尾：终态、挂起或交接。收尾事件先落库再发布，前端看到它时库里已经是对应状态。\n\n它不管 run 由哪个实例领（调度与租约管），也不管挂起后何时续、接管时怎么收拾现场（续跑、接管与取消管），更不管一段在运行时内部怎么跑（原生 / CLI 运行时管）。",
   "elements": [
     {
-      "id": "native",
+      "id": "seg",
       "kind": "class",
-      "name": "NativeRuntime",
+      "name": "SegmentExecution",
       "stereotype": "应用服务",
-      "responsibility": "【一轮的编排】跑一段：解析模型 → 预检索知识库 → 问三个领域要本段的贡献 → 按槽位叠中间件建图 → 驱动产出 TraceEvent 流；段末带出挂起现场和跨段 state。详见 code-native-runtime-turn.html。",
-      "attributes": [
-        [
-          "",
-          "领域：一轮的编排"
-        ]
-      ],
+      "responsibility": "跑一段并留下记录，只编排。顺序：载入（会话或版本没了就判失败收掉）→ 接管来的先交给续跑领域收拾现场 → 标记运行中 → 会话锁跟着租约续上 → 按智能体类型选运行时 → 事件逐个过事件流水线 → 每个工具轮次落一次检查点 → 安全点上响应交接 → 段末按结果收尾；挂起收尾后再请续跑领域查一次续跑条件。出站身份按 run 行重建，不继承任何请求。",
       "methods": [
         [
           "+",
-          "run_turn(segment, *, run_id, relay)"
+          "run(run_uuid, *, takeover, drain_signal)"
         ]
       ],
       "at": [
-        2.0,
-        0.65
+        1.6,
+        0.75
       ]
     },
     {
-      "id": "stack",
+      "id": "loader",
       "kind": "class",
-      "name": "MiddlewareStack",
+      "name": "SegmentLoader",
+      "stereotype": "工厂",
+      "responsibility": "从库里还原 Segment：智能体版本快照、本轮输入、历史（摘要边界之前用摘要代替）、挂起现场（waiting_on，以及从审批组件和子 run 组装出的 decisions）、审批模式、跨段 state。",
+      "methods": [
+        [
+          "+",
+          "load(run_uuid) -> Segment | None"
+        ]
+      ],
+      "at": [
+        -0.45,
+        0.75
+      ]
+    },
+    {
+      "id": "registry",
+      "kind": "class",
+      "name": "RuntimeRegistry",
       "stereotype": "策略",
-      "responsibility": "【一轮的编排】中间件顺序的唯一来源：各领域交中间件时带槽位，这里从外到内排好，提示词缓存永远在最内层。",
-      "attributes": [
-        [
-          "",
-          "领域：一轮的编排"
-        ],
-        [
-          "",
-          "① 挂起 ② 提问 ③ 审批 ④ 上下文管理"
-        ],
-        [
-          "",
-          "⑤ 工具 ⑥ 子智能体 ⑦ 限额 ⑧ 提示词缓存"
-        ]
-      ],
-      "at": [
-        4.5,
-        0.65
-      ]
-    },
-    {
-      "id": "collab",
-      "kind": "class",
-      "name": "Collaboration",
-      "stereotype": "应用服务",
-      "responsibility": "【挂起与人机协作】审批模式、向用户提问、派子智能体，都是同一种挂起：登记一项等待、本段结束、等到了续跑。交出槽位 ①②③⑥ 的中间件。详见 code-native-runtime-suspension.html。",
-      "attributes": [
-        [
-          "",
-          "领域：挂起与人机协作"
-        ]
-      ],
+      "responsibility": "按智能体类型选运行时：native → 原生运行时，cli → CLI 运行时。运行时由组合根注册；部署没接 CLI 运行时时明确报错，不悄悄按原生跑。",
       "methods": [
         [
           "+",
-          "contribute(segment, *, run_id)"
+          "select(spec) -> AgentRuntime"
         ]
       ],
       "at": [
-        0.0,
-        2.45
-      ]
-    },
-    {
-      "id": "tools",
-      "kind": "class",
-      "name": "ToolSurface",
-      "stereotype": "应用服务",
-      "responsibility": "【工具面】模型能调用哪些工具：文件、Shell、技能清单、待办、工具搜索，加上外部的 MCP、知识库、记忆工具；每个工具声明副作用类别；步数、并发、连续失败熔断。交出槽位 ⑤⑦ 的中间件。详见 code-native-runtime-tools.html。",
-      "attributes": [
-        [
-          "",
-          "领域：工具面"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "contribute(segment)"
-        ]
-      ],
-      "at": [
-        2.0,
-        2.45
-      ]
-    },
-    {
-      "id": "ctx",
-      "kind": "class",
-      "name": "ContextManager",
-      "stereotype": "应用服务",
-      "responsibility": "【上下文管理】系统提示词分层（作者 → 工具提示 → 持久指令 → 记忆常驻块），以及上下文流水线：清理、外置、压缩、提醒、失败恢复。交出槽位 ④ 的中间件。详见 code-native-runtime-context.html。",
-      "attributes": [
-        [
-          "",
-          "领域：上下文管理"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "contribute(segment, model)"
-        ]
-      ],
-      "at": [
-        4.5,
-        2.45
-      ]
-    },
-    {
-      "id": "gate",
-      "kind": "interface",
-      "name": "ApprovalGate",
-      "stereotype": "扩展点",
-      "responsibility": "【挂起与人机协作】查一次「等人决定的事」的状态，第一次查时登记；立刻返回，不阻塞。服务端实现在本领域（ApprovalStore）。",
-      "attributes": [
-        [
-          "",
-          "领域：挂起与人机协作"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "check(…) -> Outcome | None"
-        ]
-      ],
-      "at": [
-        -1.05,
-        4.3
-      ]
-    },
-    {
-      "id": "spawner",
-      "kind": "interface",
-      "name": "SubAgentSpawner",
-      "stereotype": "扩展点",
-      "responsibility": "【挂起与人机协作】起一个子智能体的子 run。由会话服务实现。",
-      "attributes": [
-        [
-          "",
-          "领域：挂起与人机协作"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "spawn(name, brief, …) -> run_uuid"
-        ]
-      ],
-      "at": [
-        0.45,
-        4.3
-      ]
-    },
-    {
-      "id": "fsp",
-      "kind": "interface",
-      "name": "FilesystemProtocol",
-      "stereotype": "扩展点",
-      "responsibility": "【工具面】文件工具背后的工作区。引擎契约，由工作区组件实现。",
-      "attributes": [
-        [
-          "",
-          "领域：工具面"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "aread · asearch · awrite · aedit · adelete"
-        ]
-      ],
-      "at": [
-        2.0,
-        4.3
-      ]
-    },
-    {
-      "id": "sbp",
-      "kind": "interface",
-      "name": "SandboxProtocol",
-      "stereotype": "扩展点",
-      "responsibility": "【工具面】execute 背后的沙箱。引擎契约，由沙箱组件实现。",
-      "attributes": [
-        [
-          "",
-          "领域：工具面"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "aexecute(command, …)"
-        ]
-      ],
-      "at": [
-        3.5,
-        4.3
-      ]
-    },
-    {
-      "id": "summ",
-      "kind": "interface",
-      "name": "Summarizer",
-      "stereotype": "扩展点",
-      "responsibility": "【上下文管理】把一段消息压成摘要。服务端实现用智能体自己的模型。",
-      "attributes": [
-        [
-          "",
-          "领域：上下文管理"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "summarize(messages) -> str"
-        ]
-      ],
-      "at": [
-        4.85,
-        4.3
+        3.75,
+        -0.85
       ]
     },
     {
       "id": "agentRt",
       "kind": "interface",
       "name": "AgentRuntime",
+      "stereotype": "扩展点",
+      "responsibility": "「一段怎么跑」的接缝：给一段，产出事件流直到段结束（终态或挂起）。前后两段（载入、标记运行中；收事件、落库、放锁）与智能体类型无关，都在本领域。",
+      "methods": [
+        [
+          "+",
+          "run_turn(segment, *, run_id, relay) -> AsyncIterator[TraceEvent]"
+        ]
+      ],
+      "at": [
+        6.1,
+        -0.85
+      ]
+    },
+    {
+      "id": "pipeline",
+      "kind": "class",
+      "name": "EventPipeline",
+      "stereotype": "领域服务",
+      "responsibility": "事件从运行时出来后的去向：盖 run 内序号和会话序号（会话流归根会话，子 run 的事件也进父会话那条），发布到事件中继，攒下要归档的（message.delta 不归档）。收尾事件先盖序号、等落库后再发布：看到 run.finished 或 run.suspended 时，库里已经是对应状态。",
+      "methods": [
+        [
+          "+",
+          "accept(event) -> TraceEvent（已盖序号、已发布）"
+        ],
+        [
+          "+",
+          "hold_end(event) · release_end()"
+        ]
+      ],
+      "at": [
+        3.75,
+        0.75
+      ]
+    },
+    {
+      "id": "transcript",
+      "kind": "class",
+      "name": "Transcript",
+      "stereotype": "实体",
+      "responsibility": "本段实际产生的消息（模型的 tool_use、工具结果），以及上一个检查点之后变了的审批模式和图 state 键。段与段之间没有别的载体，事实源始终是消息表。",
+      "methods": [
+        [
+          "+",
+          "add(update)"
+        ],
+        [
+          "+",
+          "checkpoint_rows() · pending_mode · pending_state"
+        ]
+      ],
+      "at": [
+        -0.45,
+        2.65
+      ]
+    },
+    {
+      "id": "checkpointer",
+      "kind": "class",
+      "name": "Checkpointer",
+      "stereotype": "领域服务",
+      "responsibility": "每个工具轮次（模型说完，或一批工具结果收齐）落一次检查点：消息、事件归档、序号水位、变了的审批模式和图 state，在一个事务里。第一条写是租约围栏：租约已不在本实例就整个回滚，接管者和假死复活的旧实例不会双写同一个 run。",
+      "methods": [
+        [
+          "+",
+          "checkpoint(run_uuid, transcript, events)（LeaseLost）"
+        ]
+      ],
+      "at": [
+        1.6,
+        2.65
+      ]
+    },
+    {
+      "id": "archive",
+      "kind": "class",
+      "name": "EventArchive",
+      "stereotype": "仓储",
+      "responsibility": "run_event 表：把攒下的事件批量落库，Redis 是实时通道、这里是历史。接管时查哪些会话序号已经归档；Redis 的序号丢了时，从这里取恢复水位。",
+      "methods": [
+        [
+          "+",
+          "archive(events)"
+        ],
+        [
+          "+",
+          "archived(thread_uuid, seqs) -> set[int]"
+        ],
+        [
+          "+",
+          "floor(thread_uuid) -> int"
+        ]
+      ],
+      "at": [
+        3.75,
+        2.65
+      ]
+    },
+    {
+      "id": "outcome",
+      "kind": "class",
+      "name": "SegmentOutcome",
+      "stereotype": "值对象",
+      "responsibility": "一段怎么结束的：终态（成功、失败、取消、中断）、挂起（带 waiting_on）、交接（状态不动），加上本段用量的增量和错误信息。收尾按它落库，挂起和终态都清掉租约。",
+      "attributes": [
+        [
+          "+",
+          "kind: terminal | suspended | handed_off"
+        ],
+        [
+          "+",
+          "status · waiting_on · usage · error"
+        ]
+      ],
+      "at": [
+        -0.45,
+        4.5
+      ]
+    },
+    {
+      "id": "recRepo",
+      "kind": "class",
+      "name": "RunRecordRepository",
+      "stereotype": "仓储",
+      "responsibility": "run 表上与执行有关的写，每条都带租约围栏：标记运行中、检查点推进序号、挂起、收尾；还有跨段 state（run_state）的读写。界面要的列表、轨迹这类读查询不在这里，归会话管理组件。",
+      "methods": [
+        [
+          "+",
+          "load_for_execution · mark_running"
+        ],
+        [
+          "+",
+          "advance(run_uuid, seq, owner)"
+        ],
+        [
+          "+",
+          "suspend · finish(run_uuid, outcome, owner)"
+        ]
+      ],
+      "at": [
+        1.6,
+        4.5
+      ]
+    },
+    {
+      "id": "record",
+      "kind": "class",
+      "name": "RunRecord",
+      "stereotype": "聚合根",
+      "responsibility": "一个 run 的执行记录：状态、租约、挂起现场、审批模式、序号水位、用量。状态只有 queued → running → suspended / succeeded / failed / cancelled / interrupted。「等人」不再是一个状态：挂起时在等审批或提问，看 waiting_on 里的原因；CLI 在线等权限（进程还在跑），看 awaiting_user。",
+      "attributes": [
+        [
+          "+",
+          "status: RunStatus"
+        ],
+        [
+          "+",
+          "awaiting_user: bool"
+        ],
+        [
+          "+",
+          "waiting_on · approval_mode"
+        ],
+        [
+          "+",
+          "lease: Lease · last_seq · usage"
+        ]
+      ],
+      "methods": [
+        [
+          "+",
+          "mark_running() · suspend(waiting_on)"
+        ],
+        [
+          "+",
+          "finish(status, usage, error)"
+        ]
+      ],
+      "at": [
+        3.75,
+        4.5
+      ]
+    },
+    {
+      "id": "native",
+      "kind": "class",
+      "name": "NativeRuntime",
       "external": true,
-      "source": "Run 执行器组件",
+      "source": "原生运行时组件",
       "methods": [
         [
           "+",
@@ -280,220 +285,534 @@
         ]
       ],
       "at": [
-        2.0,
-        -1.0
+        5.3,
+        -2.5
       ]
     },
     {
-      "id": "subsvc",
+      "id": "cli",
       "kind": "class",
-      "name": "SubAgentService",
+      "name": "CliRuntime",
       "external": true,
-      "source": "会话服务组件",
+      "source": "CLI 运行时组件",
       "methods": [
         [
           "+",
-          "spawn(…)"
+          "run_turn(…)"
         ]
       ],
       "at": [
-        0.45,
-        6.0
+        6.9,
+        -2.5
       ]
     },
     {
-      "id": "workspace",
+      "id": "relay",
       "kind": "class",
-      "name": "Workspace",
+      "name": "EventRelay",
       "external": true,
-      "source": "工作区组件",
+      "source": "事件中继组件",
       "methods": [
         [
           "+",
-          "按 FileStore 选路读写"
+          "next_thread_seq · publish · renew / release_thread_lock"
         ]
       ],
       "at": [
-        2.0,
-        6.0
+        8.5,
+        2.6
       ]
     },
     {
-      "id": "shell",
+      "id": "cont",
       "kind": "class",
-      "name": "ShellSandbox",
+      "name": "Continuation",
       "external": true,
-      "source": "沙箱组件",
+      "source": "Run 执行器 · 续跑、接管与取消领域",
       "methods": [
         [
           "+",
-          "aexecute(…)"
+          "recover(run_uuid, reason) · resume_if_ready(run_uuid)"
         ]
       ],
       "at": [
-        3.5,
-        6.0
-      ]
-    },
-    {
-      "id": "memory",
-      "kind": "class",
-      "name": "MemoryTurn",
-      "external": true,
-      "source": "记忆组件",
-      "methods": [
-        [
-          "+",
-          "常驻块 · 更新提示 · 记忆工具"
-        ]
-      ],
-      "at": [
-        6.75,
-        1.4
+        -2.6,
+        -0.85
       ]
     }
   ],
   "relationships": [
+    {
+      "from": "seg",
+      "to": "loader",
+      "type": "uses",
+      "description": "还原 Segment"
+    },
+    {
+      "from": "seg",
+      "to": "registry",
+      "type": "uses",
+      "description": "选运行时"
+    },
+    {
+      "from": "registry",
+      "to": "agentRt",
+      "type": "association",
+      "description": "按类型",
+      "multiplicity": "1..*"
+    },
     {
       "from": "native",
       "to": "agentRt",
       "type": "implements"
     },
     {
-      "from": "native",
-      "to": "stack",
-      "type": "association",
-      "description": "按槽位排中间件"
-    },
-    {
-      "from": "native",
-      "to": "collab",
-      "type": "uses",
-      "description": "本段的贡献"
-    },
-    {
-      "from": "native",
-      "to": "tools",
-      "type": "uses",
-      "description": "本段的贡献"
-    },
-    {
-      "from": "native",
-      "to": "ctx",
-      "type": "uses",
-      "description": "本段的贡献"
-    },
-    {
-      "from": "tools",
-      "to": "collab",
-      "type": "uses",
-      "description": "声明副作用类别"
-    },
-    {
-      "from": "collab",
-      "to": "gate",
-      "type": "association",
-      "description": "等人决定"
-    },
-    {
-      "from": "collab",
-      "to": "spawner",
-      "type": "association",
-      "description": "起子 run"
-    },
-    {
-      "from": "tools",
-      "to": "fsp",
-      "type": "association",
-      "description": "文件工具"
-    },
-    {
-      "from": "tools",
-      "to": "sbp",
-      "type": "association",
-      "description": "execute"
-    },
-    {
-      "from": "ctx",
-      "to": "summ",
-      "type": "association",
-      "description": "摘要"
-    },
-    {
-      "from": "ctx",
-      "to": "memory",
-      "type": "uses",
-      "description": "常驻块、更新提示"
-    },
-    {
-      "from": "tools",
-      "to": "memory",
-      "type": "uses",
-      "description": "记忆工具",
-      "labelAt": 0.7
-    },
-    {
-      "from": "subsvc",
-      "to": "spawner",
+      "from": "cli",
+      "to": "agentRt",
       "type": "implements"
     },
     {
-      "from": "workspace",
-      "to": "fsp",
-      "type": "implements"
+      "from": "seg",
+      "to": "pipeline",
+      "type": "association",
+      "description": "每个事件"
     },
     {
-      "from": "shell",
-      "to": "sbp",
-      "type": "implements"
+      "from": "pipeline",
+      "to": "relay",
+      "type": "uses",
+      "description": "盖会话序号、发布"
+    },
+    {
+      "from": "seg",
+      "to": "relay",
+      "type": "uses",
+      "description": "会话锁跟随租约",
+      "labelAt": 0.3
+    },
+    {
+      "from": "seg",
+      "to": "transcript",
+      "type": "composition",
+      "description": "本段"
+    },
+    {
+      "from": "seg",
+      "to": "checkpointer",
+      "type": "uses",
+      "description": "每个工具轮次"
+    },
+    {
+      "from": "checkpointer",
+      "to": "transcript",
+      "type": "uses",
+      "description": "取消息和变化"
+    },
+    {
+      "from": "checkpointer",
+      "to": "archive",
+      "type": "uses",
+      "description": "归档事件"
+    },
+    {
+      "from": "checkpointer",
+      "to": "recRepo",
+      "type": "uses",
+      "description": "推进序号（围栏）"
+    },
+    {
+      "from": "seg",
+      "to": "outcome",
+      "type": "uses",
+      "description": "收尾",
+      "labelAt": 0.78
+    },
+    {
+      "from": "recRepo",
+      "to": "record",
+      "type": "association",
+      "description": "存取"
+    },
+    {
+      "from": "seg",
+      "to": "cont",
+      "type": "uses",
+      "description": "接管先收拾、挂起后查条件"
     }
   ],
   "capabilities": [
     {
       "name": "跑一段",
-      "entry": "AgentRuntime.run_turn(segment, *, run_id, relay)",
-      "callers": "Run 执行器（领取、续跑、接管时）",
-      "description": "装配本段能力、建图、驱动，产出 TraceEvent 流；遇到要等外部的事就挂起本段"
+      "entry": "SegmentExecution.run(run_uuid, *, takeover, drain_signal)",
+      "callers": "调度与租约（领到 run 时）",
+      "description": "载入 → 选运行时 → 驱动并逐个处理事件 → 检查点 → 收尾；接管来的先收拾现场，挂起的收尾后再查一次续跑条件"
     },
     {
-      "name": "做决定、回答提问",
-      "entry": "ApprovalStore.decide(…)",
-      "callers": "会话接口",
-      "description": "记下用户的决定并唤醒挂起的 run"
-    },
-    {
-      "name": "手动压缩",
-      "entry": "Compactor.compact(messages, force=True)",
-      "callers": "会话接口",
-      "description": "立即压缩一次，下一轮生效"
-    },
-    {
-      "name": "工具目录",
-      "entry": "ToolRegistry.catalog()",
-      "callers": "智能体编辑器",
-      "description": "内置工具的展示名、说明、可用性"
+      "name": "查执行记录",
+      "entry": "RunRecordRepository.load_for_execution(run_uuid)",
+      "callers": "续跑、接管与取消",
+      "description": "状态、挂起现场、租约，带围栏的写都在这里"
     }
   ],
   "decisions": [
     {
-      "decision": "四个领域：编排在上，三个能力领域在下，依赖只从编排指向能力领域",
-      "reason": "跑一段的流程（模型先于一切、装配、建图、驱动）只写在编排里；每种能力内部怎么做写在各自领域里，新增一种能力只加一个贡献者。能力领域之间只有一条依赖：工具面声明副作用类别时用挂起与人机协作的 ToolEffect。"
+      "decision": "一段的执行拆成编排、事件流水线、检查点、收尾",
+      "reason": "现在 _execute 一个方法约 400 行：载入、身份、会话锁、选运行时、序号、发布、检查点、审批模式和待办落库、安全点交接、收尾、挂起后的竞态补救全在里面，改其中一处要读懂全部。拆开后编排只剩顺序，每一步能单独测。"
     },
     {
-      "decision": "各领域按槽位交中间件，顺序只在 MiddlewareStack 定",
-      "reason": "中间件的顺序就是语义（挂起先于压缩、审批先于工具、缓存在最内层），分在内核和服务端两处定义时没有人能一眼看全；现在各领域只说「我在哪个槽位」，排序和理由只写一处。"
+      "decision": "收尾事件先落库再发布，序号先盖",
+      "reason": "前端收到 run.finished 就去取最终用量；先发布的话会读到 status=running、tokens=0。序号要先盖，因为归档按会话序号落库，它是唯一键的一半。"
     },
     {
-      "decision": "图里的能力都经扩展点接到组件外",
-      "reason": "审批闸门、子智能体发起方、摘要器、工作区、沙箱都是接口，实现在服务端或别的组件；图和中间件因此能脱离数据库、Redis、沙箱单独测，能力缺省就是结构性不存在（不注册对应工具）。"
+      "decision": "每个工具轮次落一次检查点，事务的第一条写是租约围栏",
+      "reason": "进程死了，最多丢一轮。围栏保证租约已被接走时整个回滚：接管者和假死后又活过来的旧实例不会同时写同一个 run。"
     },
     {
-      "decision": "跨段的东西只有三样：消息、挂起现场、显式登记的 state",
-      "reason": "没有 checkpointer，每段从消息表重建。挂起现场（waiting_on）落在 run 表、显式登记的 state（待办）落在 run_state、上下文摘要落在 thread_context，除此以外的 state 一律不跨段，续跑和接管时重建出来的东西是可枚举的。"
+      "decision": "审批模式和跨段 state 随写下它的那条工具结果同一个事务落库",
+      "reason": "只在段末写的话，检查点之后进程死掉，接管者会按旧的规划模式继续，而「计划已批准」的工具结果已经在消息里了；待办同理。"
     },
     {
-      "decision": "提示词缓存的前缀一轮内不变",
-      "reason": "系统提示词分层每轮读一次、续跑沿用；工具列表在三种审批模式下都一样；提醒只追加在最后、不进历史；MCP 工具多时延迟加载。四个领域都按这一条约束自己。"
+      "decision": "事实源是消息表，没有 checkpointer",
+      "reason": "段与段之间只靠消息、挂起现场和显式登记的 state 交接，接管的实例按同一份数据重建，不依赖上一个进程的内存。"
+    },
+    {
+      "decision": "状态机去掉 awaiting_approval，「等人」改成显式属性",
+      "reason": "现在 awaiting_approval 一个状态两种意思：原生运行时的审批挂起（没有进程在跑），和 CLI 运行时在线等权限响应（进程还在跑）。续跑判据只能靠「有没有等待项」去猜，猜错了就会把在跑的 CLI 再执行一遍。改成：挂起就是 suspended，等什么看 waiting_on 的原因；CLI 在线等权限是 running + awaiting_user。"
+    },
+    {
+      "decision": "运行时私有的进度不进 run 表",
+      "reason": "acp_bridge_instance、acp_acked_seq 只有 CLI 运行时读写（换实例接管时据此连回 bridge、补发事件），放进 CLI 运行时自己的表；run 表只放与运行时类型无关的执行记录。"
+    },
+    {
+      "decision": "RunRepository 按领域拆",
+      "reason": "现在一个 RunRepository 有约 30 个方法：执行要的、归档要的、事件回放要的、会话列表要的、子智能体准入要的都在里面。拆成调度的 RunQueue、本领域的 RunRecordRepository 和 EventArchive、续跑的查询；界面的读查询归会话管理组件。"
+    },
+    {
+      "decision": "会话锁跟随租约",
+      "reason": "会话串行锁的 TTL 等于租约时长、和租约一起续；接管时原来的锁多半已经过期，重新占上。挂起和交接时不放锁，run 还没完。"
+    },
+    {
+      "decision": "载入不到会话或版本就判失败收掉",
+      "reason": "run 行还在、会话被删了或版本没了时，不判失败的话它会一遍遍被领取、一遍遍跳过。"
+    }
+  ],
+  "schemaNote": "主键约定：id 是自增主键，只在库内使用，不对外、不做关联；xxx_uuid 是逻辑主键（UUIDv7，Python 侧生成），表间引用和 API 都用它。表间不建外键约束，引用由代码维护；引用会话、run 这些别的领域的表时只写列说明，不画连线。类型写的是 db/types.py 和 SQLAlchemy 的通用类型。run 表的 parent_run_uuid、root_run_uuid 引用的是 run 表自己的 run_uuid（逻辑引用，ER 图里不画自连线）。",
+  "tables": [
+    {
+      "name": "run",
+      "description": "一个 run 的执行记录（聚合根 RunRecord）。行由会话管理组件建好（状态 queued），之后只由执行器改。",
+      "at": [
+        0,
+        0
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": "BigInteger",
+          "key": "PK",
+          "default": "自增",
+          "description": "库内主键"
+        },
+        {
+          "name": "run_uuid",
+          "type": "UUIDType",
+          "key": "UK",
+          "default": "uuid7()",
+          "description": "逻辑主键；会话串行锁的 owner 也是它"
+        },
+        {
+          "name": "thread_uuid",
+          "type": "UUIDType",
+          "description": "所属会话（会话管理 · 会话领域的表）"
+        },
+        {
+          "name": "agent_version_uuid",
+          "type": "UUIDType",
+          "description": "这一轮用的智能体版本"
+        },
+        {
+          "name": "parent_run_uuid",
+          "type": "UUIDType",
+          "nullable": true,
+          "description": "派出它的 run；用户直接发起的为空"
+        },
+        {
+          "name": "root_run_uuid",
+          "type": "UUIDType",
+          "nullable": true,
+          "description": "run 树的根；子智能体准入按整棵树累计"
+        },
+        {
+          "name": "depth",
+          "type": "SmallInteger",
+          "default": "0",
+          "description": "在 run 树里的深度"
+        },
+        {
+          "name": "created_by_uuid",
+          "type": "UUIDType",
+          "nullable": true,
+          "description": "发起人"
+        },
+        {
+          "name": "auth_uid",
+          "type": "UUIDType",
+          "nullable": true,
+          "description": "按谁的权限执行（以人为权限 = 发起人；以 Agent 为权限 = 数字员工）"
+        },
+        {
+          "name": "auth_subject",
+          "type": "String(8)",
+          "nullable": true,
+          "description": "建 run 时的权限类型 user / agent"
+        },
+        {
+          "name": "status",
+          "type": "String(16)",
+          "default": "'queued'",
+          "description": "queued / running / suspended / succeeded / failed / cancelled / interrupted"
+        },
+        {
+          "name": "awaiting_user",
+          "type": "Boolean",
+          "default": "false",
+          "description": "CLI 运行时在线等用户的权限响应（进程在跑）"
+        },
+        {
+          "name": "waiting_on",
+          "type": "JSONType",
+          "nullable": true,
+          "description": "挂起现场：tool_call_id → (原因, 凭据)；与消息同一个事务落库，run 结束才清"
+        },
+        {
+          "name": "approval_mode",
+          "type": "String(8)",
+          "nullable": true,
+          "description": "当前审批模式 plan / manual / auto；计划获批时更新"
+        },
+        {
+          "name": "error_kind",
+          "type": "String(48)",
+          "nullable": true
+        },
+        {
+          "name": "error_message",
+          "type": "Text",
+          "nullable": true
+        },
+        {
+          "name": "last_seq",
+          "type": "Integer",
+          "default": "0",
+          "description": "run 内已落库的最大序号，检查点推进"
+        },
+        {
+          "name": "step_count",
+          "type": "Integer",
+          "default": "0",
+          "description": "模型调用次数"
+        },
+        {
+          "name": "input_tokens",
+          "type": "BigInteger",
+          "default": "0"
+        },
+        {
+          "name": "output_tokens",
+          "type": "BigInteger",
+          "default": "0"
+        },
+        {
+          "name": "cache_read_tokens",
+          "type": "BigInteger",
+          "default": "0"
+        },
+        {
+          "name": "thinking_tokens",
+          "type": "BigInteger",
+          "default": "0"
+        },
+        {
+          "name": "total_tokens",
+          "type": "BigInteger",
+          "default": "0"
+        },
+        {
+          "name": "owner",
+          "type": "String(64)",
+          "nullable": true,
+          "description": "租约持有者（实例 id）；为空且 running = 被交接，等别的实例领走"
+        },
+        {
+          "name": "lease_until",
+          "type": "UTCDateTime",
+          "nullable": true,
+          "description": "租约到期时刻；挂起和终态时清掉"
+        },
+        {
+          "name": "claimed_at",
+          "type": "UTCDateTime",
+          "nullable": true
+        },
+        {
+          "name": "takeovers",
+          "type": "Integer",
+          "default": "0",
+          "description": "被接管的次数"
+        },
+        {
+          "name": "started_at",
+          "type": "UTCDateTime",
+          "nullable": true,
+          "description": "第一次开始运行"
+        },
+        {
+          "name": "finished_at",
+          "type": "UTCDateTime",
+          "nullable": true
+        },
+        {
+          "name": "created_at",
+          "type": "UTCDateTime",
+          "default": "now()"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "uk_run_uuid",
+          "columns": [
+            "run_uuid"
+          ],
+          "unique": true
+        },
+        {
+          "name": "ix_run_claim",
+          "columns": [
+            "status",
+            "created_at"
+          ],
+          "description": "领取扫描：排队中的按先后"
+        },
+        {
+          "name": "ix_run_lease",
+          "columns": [
+            "status",
+            "lease_until"
+          ],
+          "description": "接管扫描：租约过期的在途 run"
+        },
+        {
+          "name": "ix_run_thread",
+          "columns": [
+            "thread_uuid",
+            "created_at"
+          ]
+        },
+        {
+          "name": "ix_run_parent",
+          "columns": [
+            "parent_run_uuid"
+          ],
+          "description": "续跑前查子 run、级联取消"
+        },
+        {
+          "name": "ix_run_root",
+          "columns": [
+            "root_run_uuid"
+          ],
+          "description": "子智能体准入"
+        }
+      ]
+    },
+    {
+      "name": "run_event",
+      "description": "事件归档（EventArchive）。Redis 是实时通道，这里是历史；message.delta 不归档。",
+      "at": [
+        1.55,
+        0
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": "BigInteger",
+          "key": "PK",
+          "default": "自增",
+          "description": "库内主键"
+        },
+        {
+          "name": "event_uuid",
+          "type": "UUIDType",
+          "key": "UK",
+          "default": "uuid7()",
+          "description": "逻辑主键"
+        },
+        {
+          "name": "thread_uuid",
+          "type": "UUIDType",
+          "description": "事件流归属的会话 = 根会话；子 run 的事件也写父会话"
+        },
+        {
+          "name": "thread_seq",
+          "type": "Integer",
+          "description": "会话内单调递增，由事件中继分配；回放的游标"
+        },
+        {
+          "name": "run_uuid",
+          "type": "UUIDType",
+          "references": "run.run_uuid",
+          "description": "哪个 run 产生的"
+        },
+        {
+          "name": "seq",
+          "type": "Integer",
+          "description": "run 内单调递增"
+        },
+        {
+          "name": "ts",
+          "type": "UTCDateTime"
+        },
+        {
+          "name": "type",
+          "type": "String(48)",
+          "description": "事件类型"
+        },
+        {
+          "name": "depth",
+          "type": "SmallInteger",
+          "default": "0",
+          "description": "run 树深度，前端据此把子 run 渲染进子智能体卡片"
+        },
+        {
+          "name": "data",
+          "type": "JSONType"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "uk_run_event_uuid",
+          "columns": [
+            "event_uuid"
+          ],
+          "unique": true
+        },
+        {
+          "name": "uk_run_event_stream",
+          "columns": [
+            "thread_uuid",
+            "thread_seq"
+          ],
+          "unique": true,
+          "description": "一条会话流一个序号一条"
+        },
+        {
+          "name": "ix_run_event_run",
+          "columns": [
+            "run_uuid",
+            "seq"
+          ],
+          "description": "按 run 取轨迹"
+        }
+      ]
     }
   ]
 }

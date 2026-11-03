@@ -29,567 +29,412 @@
 -->
 <script type="application/json" id="c4-model">
 {
-  "title": "代码图：Agent 平台 - Agent 服务 - 原生运行时 - 上下文管理",
-  "description": "目标领域模型，只画期望的样子、不对照现状。让模型在有限的窗口里放得下：提示词分层、清理、外置、压缩、提醒、失败恢复。",
-  "component": "原生运行时",
-  "package": "原生运行时 · 上下文管理（目标模型）",
-  "overview": "上下文管理让一段对话在有限的窗口里一直跑得下去，又不把提示词缓存搞失效。它管两件事。一是系统提示词的分层：作者的提示词、工具提示、持久指令、记忆常驻块按固定顺序拼好，一轮内不变。二是上下文流水线：每次模型调用前，按占用的档位清理旧工具结果、必要时自动压缩（摘要 + 恢复最近用过的文件和技能）；每次调用时追加提醒、失败时补救一次；每次工具调用后把大结果外置到会话的系统区。\n\n所有改写只作用于模型看到的 state，消息表不动；摘要和覆盖边界存在会话的上下文状态里，下一轮重建历史时用上。它不管记忆的内容（记忆组件管），也不管文件怎么存（工作区组件管）。",
+  "title": "代码图：Agent 平台 - Agent 服务 - 工具接入 - 领域总览",
+  "description": "目标模型，只画期望的样子、不对照现状。工具接入的三个领域和两个组合入口，每个只画对外入口和关键元素；外部服务和领域内部见各自的 code-tools-*.html。",
+  "component": "工具接入",
+  "package": "工具接入（目标模型 · 领域总览）",
+  "overview": "工具接入把三种外部能力接到运行时：经 MCP 网关的外部工具、智能体绑定的知识库、技能应用发布的技能。原生智能体每段装配时经 ToolCatalog 一次拿到 MCP 工具和 knowledge_search，auto 模式的知识库检索在每轮开始前并入输入；CLI 智能体开会话时经 CliToolHandoff 拿到要下发的 MCP 服务；技能由 SkillResolver 决定这一次用哪些。智能体管理在编辑器和保存时也问这里，能选的和运行时能用的出自同一个来源。\n\n它不决定问不问人（原生运行时按工具的只读注解判）、不登记智能体的 Key（智能体管理）、不拷贝技能包（会话管理）。图上每个元素第一行写着它属于哪个领域。",
   "elements": [
     {
-      "id": "mgr",
+      "id": "catalog",
       "kind": "class",
-      "name": "ContextManager",
+      "name": "ToolCatalog",
       "stereotype": "应用服务",
-      "responsibility": "本领域的入口：为一段交出系统提示词分层和上下文流水线（槽位 ④）。持久指令（平台 → 用户 → 工作区 ATLAS.md）在每轮开始时读一次，本轮内不变；读不到就跳过、记日志，不让这一轮失败。智能体关了上下文管理就只给提示词分层，不装流水线。",
-      "methods": [
-        [
-          "+",
-          "contribute(segment, model) -> Contribution"
-        ],
-        [
-          "-",
-          "_instructions(segment) -> str（读不到就空）"
-        ]
-      ],
-      "at": [
-        1.5,
-        0.7
-      ]
-    },
-    {
-      "id": "layers",
-      "kind": "class",
-      "name": "PromptLayers",
-      "stereotype": "值对象",
-      "responsibility": "系统提示词的分层，顺序固定：作者写的提示词 → 工具面给的工具提示 → 持久指令 → 记忆常驻块。越靠后越贴近具体场景、优先级越高；顺序和内容在一轮内都不变，续跑的段沿用同一份，提示词缓存的前缀因此稳定。",
+      "responsibility": "【组合入口】原生运行时每段装配时调用一次：交出这一段的 MCP 工具和 knowledge_search，要告诉用户的提示（跳过了哪些、定义变了哪些），以及段末要关的东西（MCP 会话）。不属于任何领域，只把两个领域的结果拼在一起。",
       "attributes": [
         [
-          "+",
-          "authored · tool_hints"
-        ],
-        [
-          "+",
-          "instructions（平台 → 用户 → 工作区）"
-        ],
-        [
-          "+",
-          "memory_block"
+          "",
+          "领域：组合入口"
         ]
       ],
       "methods": [
         [
           "+",
-          "render() -> str"
-        ]
-      ],
-      "at": [
-        -0.45,
-        0.7
-      ]
-    },
-    {
-      "id": "mw",
-      "kind": "class",
-      "name": "ContextMiddleware",
-      "stereotype": "领域服务",
-      "responsibility": "流水线的接线，自己不做判断。模型调用前（改 state）：应用上一次反应式压缩的结果 → 旧结果清理 → 自动压缩。每次模型调用（不改 state）：追加提醒 → 失败恢复 → 发 context.usage 事件。每次工具调用：大结果外置。所有改写只作用于模型看到的 state，消息表不动。",
-      "methods": [
-        [
-          "+",
-          "abefore_model(state)"
-        ],
-        [
-          "+",
-          "awrap_model_call(req, handler)"
-        ],
-        [
-          "+",
-          "awrap_tool_call(req, handler)"
-        ]
-      ],
-      "at": [
-        1.5,
-        2.6
-      ]
-    },
-    {
-      "id": "budget",
-      "kind": "class",
-      "name": "ContextBudget",
-      "stereotype": "值对象",
-      "responsibility": "上下文的预算和档位。有效窗口 = 窗口 − min(最大输出, 20k)，给回复和摘要留位置；按占用分出正常、清理、压缩、提醒几档。占用优先用模型返回的实际用量，没有时按消息粗估（工具调用的入参也算）。",
-      "attributes": [
-        [
-          "+",
-          "window · effective"
-        ],
-        [
-          "+",
-          "clear_at · compact_at · warn_at"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "measure(messages, usage) -> int"
-        ],
-        [
-          "+",
-          "level(tokens) -> Level"
-        ]
-      ],
-      "at": [
-        -0.45,
-        2.6
-      ]
-    },
-    {
-      "id": "recovery",
-      "kind": "class",
-      "name": "CallRecovery",
-      "stereotype": "策略",
-      "responsibility": "模型调用失败时的补救，各只重试一次：上下文过长（按各家网关的措辞识别，只认 4xx）→ 强制压缩后重试；回复被输出上限截断 → 调高输出上限重试。",
-      "methods": [
-        [
-          "+",
-          "retry(req, error) -> Request | None"
-        ]
-      ],
-      "at": [
-        5.25,
-        2.6
-      ]
-    },
-    {
-      "id": "clear",
-      "kind": "class",
-      "name": "ResultClearing",
-      "stereotype": "策略",
-      "responsibility": "旧工具结果清理：占用到了清理档，或者距上次回复已超过提示词缓存的有效期（缓存反正失效了），就把较早的、可清理工具的结果换成一句占位，最近 N 条保留。同 id 替换，不改消息顺序。",
-      "attributes": [
-        [
-          "+",
-          "keep_recent: int"
-        ],
-        [
-          "+",
-          "clearable: frozenset[str]"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "plan(messages) -> list[ToolMessage]"
-        ]
-      ],
-      "at": [
-        -0.6,
-        4.45
-      ]
-    },
-    {
-      "id": "offload",
-      "kind": "class",
-      "name": "ResultOffloader",
-      "stereotype": "策略",
-      "responsibility": "大结果外置，全领域只有这一处：单条工具结果超过阈值，或者最后一批结果总量超过上限（从最大的挑），就把全文写进会话的系统区，消息里只留头尾预览和路径，模型要看再去读。文件读工具自带分页，不外置。",
-      "attributes": [
-        [
-          "+",
-          "single_limit · batch_cap"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "on_result(result) -> ToolMessage"
-        ],
-        [
-          "+",
-          "on_batch(results) -> list[ToolMessage]"
-        ]
-      ],
-      "at": [
-        0.85,
-        4.45
-      ]
-    },
-    {
-      "id": "compactor",
-      "kind": "class",
-      "name": "Compactor",
-      "stereotype": "领域服务",
-      "responsibility": "自动压缩：占用到了压缩档，就在完整回合的边界上切（tool_use 和 tool_result 必须成对；一个回合太长时在回合内找安全点），切出的部分丢掉思考块后交给摘要器，再按预算恢复最近用过的工作区文件和技能，最后按顺序重写 state。摘要和覆盖边界存进会话的上下文状态；连续失败 N 次就熔断，不再自动压缩。",
-      "methods": [
-        [
-          "+",
-          "compact(messages, *, force) -> list[BaseMessage]"
-        ],
-        [
-          "-",
-          "_split(messages) -> int"
-        ],
-        [
-          "-",
-          "_restore_working_set(cut) -> list[BaseMessage]"
-        ]
-      ],
-      "at": [
-        2.35,
-        4.45
-      ]
-    },
-    {
-      "id": "reminders",
-      "kind": "class",
-      "name": "Reminders",
-      "stereotype": "策略",
-      "responsibility": "每次模型调用时在最后一条消息后面追加 <system-reminder>：记忆的更新提示（记忆组件现取）、待办提醒（工具面的 TodoList 给出内容）、用量提醒（到了提醒档）。提醒的内容由各自的来源给，这里只负责追加和控制总量，不读别的领域的 state 字段。只进这一次请求，不落库、不进历史，提示词缓存的前缀不受影响；总量有预算。",
-      "attributes": [
-        [
-          "+",
-          "budget_tokens: int"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "collect(state) -> list[(tag, text)]"
-        ]
-      ],
-      "at": [
-        3.95,
-        4.45
-      ]
-    },
-    {
-      "id": "summ",
-      "kind": "interface",
-      "name": "Summarizer",
-      "stereotype": "扩展点",
-      "responsibility": "把一段消息压成结构化摘要。服务端实现用智能体自己的模型（同一个端点，Run 开始时已检查过可用）；测试注入假的。",
-      "methods": [
-        [
-          "+",
-          "summarize(messages) -> str"
-        ]
-      ],
-      "at": [
-        2.35,
-        6.2
-      ]
-    },
-    {
-      "id": "repo",
-      "kind": "class",
-      "name": "ThreadContextRepository",
-      "stereotype": "仓储",
-      "responsibility": "会话的上下文状态存在 thread_context 表里，一个会话一行。Run 执行器重建历史时也读它：摘要替换掉边界之前的消息。",
-      "methods": [
-        [
-          "+",
-          "get(thread_uuid) -> ThreadContext"
-        ],
-        [
-          "+",
-          "save(context)"
-        ]
-      ],
-      "at": [
-        3.95,
-        6.2
-      ]
-    },
-    {
-      "id": "tctx",
-      "kind": "class",
-      "name": "ThreadContext",
-      "stereotype": "聚合根",
-      "responsibility": "一个会话的上下文状态：当前摘要、摘要覆盖到哪里、压缩过几次、自动压缩连续失败几次（熔断用）。压缩成功清零失败计数。",
-      "attributes": [
-        [
-          "+",
-          "summary · summary_upto"
-        ],
-        [
-          "+",
-          "compact_count · failure_count"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "record_compaction(summary, upto)"
-        ],
-        [
-          "+",
-          "record_failure() -> bool（是否熔断）"
-        ]
-      ],
-      "at": [
-        5.55,
-        6.2
-      ]
-    },
-    {
-      "id": "memory",
-      "kind": "class",
-      "name": "MemoryTurn",
-      "external": true,
-      "source": "记忆组件",
-      "methods": [
-        [
-          "+",
-          "resident_block() · reminders()"
-        ]
-      ],
-      "at": [
-        7.1,
-        4.45
-      ]
-    },
-    {
-      "id": "workspace",
-      "kind": "class",
-      "name": "Workspace",
-      "external": true,
-      "source": "工作区组件",
-      "methods": [
-        [
-          "+",
-          "写系统区 · 读工作区文件和技能"
+          "for_segment(spec, ctx) -> (tools, notices, closers)"
         ]
       ],
       "at": [
         0.4,
-        7.75
+        0.75
+      ]
+    },
+    {
+      "id": "handoff",
+      "kind": "class",
+      "name": "CliToolHandoff",
+      "stereotype": "应用服务",
+      "responsibility": "【组合入口】CLI 运行时开会话时调用一次：交出要下发给 CLI 的 MCP 服务——网关上的服务（带智能体的 Key）和知识库 MCP（带签名令牌），以及提示。",
+      "attributes": [
+        [
+          "",
+          "领域：组合入口"
+        ]
+      ],
+      "methods": [
+        [
+          "+",
+          "mcp_servers(spec, user) -> (servers, notices)"
+        ]
+      ],
+      "at": [
+        3.6,
+        0.75
+      ]
+    },
+    {
+      "id": "toolset",
+      "kind": "class",
+      "name": "McpToolset",
+      "stereotype": "应用服务",
+      "responsibility": "【MCP 工具】三道闸门（授权、停用、定义变化）、带护栏的调用、一段内复用会话；原生和 CLI 共用一套闸门。详见 code-tools-mcp.html。",
+      "attributes": [
+        [
+          "",
+          "领域：MCP 工具"
+        ]
+      ],
+      "methods": [
+        [
+          "+",
+          "tools(spec, ctx) · cli_servers(spec, user)"
+        ]
+      ],
+      "at": [
+        1.2,
+        2.6
+      ]
+    },
+    {
+      "id": "gw",
+      "kind": "class",
+      "name": "McpGatewayClient",
+      "stereotype": "防腐层",
+      "responsibility": "【MCP 工具】网关的元数据（缓存）和智能体的 Key 能用什么；编辑器和保存时也问它。",
+      "attributes": [
+        [
+          "",
+          "领域：MCP 工具"
+        ]
+      ],
+      "methods": [
+        [
+          "+",
+          "catalog() · access(agent)"
+        ]
+      ],
+      "at": [
+        1.2,
+        4.45
+      ]
+    },
+    {
+      "id": "knowledge",
+      "kind": "class",
+      "name": "KnowledgeService",
+      "stereotype": "应用服务",
+      "responsibility": "【知识库】tool 模式的检索工具、auto 模式并入本轮输入、CLI 的知识库 MCP 令牌、主体能读哪些库。详见 code-tools-knowledge.html。",
+      "attributes": [
+        [
+          "",
+          "领域：知识库"
+        ]
+      ],
+      "methods": [
+        [
+          "+",
+          "tool · augment · cli_entry · readable"
+        ]
+      ],
+      "at": [
+        2.8,
+        2.6
+      ]
+    },
+    {
+      "id": "resolver",
+      "kind": "class",
+      "name": "SkillResolver",
+      "stereotype": "领域服务",
+      "responsibility": "【技能目录】spec 里钉死的技能引用 → 这一次要用的技能：下架的跳过，描述取技能应用里审查过的那份。详见 code-tools-skills.html。",
+      "attributes": [
+        [
+          "",
+          "领域：技能目录"
+        ]
+      ],
+      "methods": [
+        [
+          "+",
+          "resolve(refs) -> (metas, skipped)"
+        ]
+      ],
+      "at": [
+        4.6,
+        2.6
+      ]
+    },
+    {
+      "id": "dir",
+      "kind": "interface",
+      "name": "SkillDirectory",
+      "stereotype": "对外接口",
+      "responsibility": "【技能目录】技能应用的只读视图：版本内容永久缓存，可变状态一分钟。",
+      "attributes": [
+        [
+          "",
+          "领域：技能目录"
+        ]
+      ],
+      "methods": [
+        [
+          "+",
+          "catalog · get · latest · revoked"
+        ]
+      ],
+      "at": [
+        4.6,
+        4.45
+      ]
+    },
+    {
+      "id": "surface",
+      "kind": "class",
+      "name": "ToolSurface",
+      "external": true,
+      "source": "原生运行时 · 工具面领域",
+      "methods": [
+        [
+          "+",
+          "每段装配工具"
+        ]
+      ],
+      "at": [
+        0.4,
+        -0.95
+      ]
+    },
+    {
+      "id": "assembly",
+      "kind": "class",
+      "name": "CapabilityAssembly",
+      "external": true,
+      "source": "原生运行时 · 一轮的编排领域",
+      "methods": [
+        [
+          "+",
+          "本轮输入（auto 模式）"
+        ]
+      ],
+      "at": [
+        2.0,
+        -0.95
+      ]
+    },
+    {
+      "id": "cli",
+      "kind": "class",
+      "name": "CliCapabilityAssembly",
+      "external": true,
+      "source": "CLI 运行时 · 一轮的编排领域",
+      "methods": [
+        [
+          "+",
+          "开会话时的能力"
+        ]
+      ],
+      "at": [
+        3.6,
+        -0.95
+      ]
+    },
+    {
+      "id": "skillCatalog",
+      "kind": "class",
+      "name": "SkillCatalog",
+      "external": true,
+      "source": "原生运行时 · 工具面领域",
+      "methods": [
+        [
+          "+",
+          "本段的技能清单"
+        ]
+      ],
+      "at": [
+        5.4,
+        -0.95
+      ]
+    },
+    {
+      "id": "seeder",
+      "kind": "class",
+      "name": "SkillSeeder",
+      "external": true,
+      "source": "会话管理 · 会话领域",
+      "methods": [
+        [
+          "+",
+          "建会话时投送技能"
+        ]
+      ],
+      "at": [
+        6.8,
+        2.6
+      ]
+    },
+    {
+      "id": "scopes",
+      "kind": "class",
+      "name": "SkillScope · McpToolScope · KnowledgeScope",
+      "external": true,
+      "source": "智能体管理 · 智能体配置领域（ReferenceScope 的三个实现）",
+      "methods": [
+        [
+          "+",
+          "编辑器可选项、保存时校验"
+        ]
+      ],
+      "at": [
+        2.8,
+        6.2
       ]
     }
   ],
   "relationships": [
     {
-      "from": "mgr",
-      "to": "layers",
+      "from": "surface",
+      "to": "catalog",
       "type": "uses",
-      "description": "creates"
+      "description": "每段装配"
     },
     {
-      "from": "mgr",
-      "to": "mw",
+      "from": "assembly",
+      "to": "knowledge",
       "type": "uses",
-      "description": "creates（槽位 ④）"
+      "description": "auto 模式"
     },
     {
-      "from": "mgr",
-      "to": "memory",
+      "from": "cli",
+      "to": "handoff",
       "type": "uses",
-      "description": "常驻块"
+      "description": "开会话时"
     },
     {
-      "from": "mw",
-      "to": "budget",
-      "type": "association",
-      "description": "按档位决定"
-    },
-    {
-      "from": "mw",
-      "to": "clear",
+      "from": "catalog",
+      "to": "toolset",
       "type": "uses",
-      "description": "清理档"
+      "description": "MCP 工具"
     },
     {
-      "from": "mw",
-      "to": "offload",
+      "from": "catalog",
+      "to": "knowledge",
       "type": "uses",
-      "description": "工具结果"
+      "description": "knowledge_search",
+      "labelAt": 0.3
     },
     {
-      "from": "mw",
-      "to": "compactor",
+      "from": "handoff",
+      "to": "toolset",
       "type": "uses",
-      "description": "压缩档"
+      "description": "网关上的服务",
+      "labelAt": 0.3
     },
     {
-      "from": "mw",
-      "to": "reminders",
+      "from": "handoff",
+      "to": "knowledge",
       "type": "uses",
-      "description": "每次调用"
+      "description": "知识库 MCP"
     },
     {
-      "from": "mw",
-      "to": "recovery",
+      "from": "toolset",
+      "to": "gw",
       "type": "uses",
-      "description": "调用失败"
+      "description": "定义、Key"
     },
     {
-      "from": "recovery",
-      "to": "compactor",
+      "from": "skillCatalog",
+      "to": "resolver",
       "type": "uses",
-      "description": "强制压缩"
+      "description": "技能清单"
     },
     {
-      "from": "reminders",
-      "to": "memory",
+      "from": "seeder",
+      "to": "resolver",
       "type": "uses",
-      "description": "更新提示"
+      "description": "投送"
     },
     {
-      "from": "compactor",
-      "to": "summ",
-      "type": "association",
-      "description": "摘要"
-    },
-    {
-      "from": "compactor",
-      "to": "repo",
+      "from": "resolver",
+      "to": "dir",
       "type": "uses",
-      "description": "存摘要、记失败"
+      "description": "下架、描述"
     },
     {
-      "from": "repo",
-      "to": "tctx",
-      "type": "association",
-      "description": "存取"
-    },
-    {
-      "from": "offload",
-      "to": "workspace",
+      "from": "scopes",
+      "to": "gw",
       "type": "uses",
-      "description": "全文写进系统区"
+      "description": "能选哪些工具"
     },
     {
-      "from": "compactor",
-      "to": "workspace",
+      "from": "scopes",
+      "to": "knowledge",
       "type": "uses",
-      "description": "恢复工作集"
+      "description": "能读哪些库"
+    },
+    {
+      "from": "scopes",
+      "to": "dir",
+      "type": "uses",
+      "description": "钉版本"
     }
   ],
   "capabilities": [
     {
-      "name": "接上本段的上下文管理",
-      "entry": "ContextManager.contribute(segment, model)",
-      "callers": "一轮的编排（CapabilityAssembly）",
-      "description": "交出系统提示词分层和上下文流水线（槽位 ④）；关了上下文管理就只给提示词分层"
+      "name": "原生智能体本段的外部工具",
+      "entry": "ToolCatalog.for_segment(spec, ctx)",
+      "callers": "原生运行时 · 工具面（每段装配）",
+      "description": "MCP 工具（过闸门、带护栏）和 knowledge_search；提示和段末要关的会话一并交出"
     },
     {
-      "name": "手动压缩",
-      "entry": "Compactor.compact(messages, force=True)",
-      "callers": "会话接口（用户点「压缩」）",
-      "description": "不看档位，立即压缩一次，结果写进会话的上下文状态，下一轮生效"
+      "name": "知识库并入本轮输入",
+      "entry": "KnowledgeService.augment(input, spec, ctx)",
+      "callers": "原生运行时 · 一轮的编排（auto 模式）",
+      "description": "用本轮提问检索，资料只进这一轮模型看到的输入"
     },
     {
-      "name": "查上下文状态",
-      "entry": "ThreadContextRepository.get(thread_uuid)",
-      "callers": "Run 执行器（重建历史）、会话接口（展示）",
-      "description": "摘要和覆盖边界：重建历史时，边界之前的消息由摘要代替"
+      "name": "CLI 智能体下发的 MCP",
+      "entry": "CliToolHandoff.mcp_servers(spec, user)",
+      "callers": "CLI 运行时 · 一轮的编排（开会话时）",
+      "description": "网关上的服务带智能体的 Key、知识库 MCP 带签名令牌；之后的调用 CLI 自己完成，网关和知识库在每个请求上判权"
+    },
+    {
+      "name": "技能",
+      "entry": "SkillResolver.resolve · SkillDirectory",
+      "callers": "原生运行时 · 工具面、会话管理（投送）、智能体管理（钉版本）",
+      "description": "下架的跳过；描述以技能应用为准；技能应用短暂不可用时用过的版本照常"
+    },
+    {
+      "name": "编辑器和保存时的可选范围",
+      "entry": "McpGatewayClient.access · KnowledgeService.readable · SkillDirectory",
+      "callers": "智能体管理（ReferenceScope 的三个实现）",
+      "description": "和运行时同一个来源，能选的和能用的不会不一致"
     }
   ],
   "decisions": [
     {
-      "decision": "上下文管理拆成流水线，一个阶段一个策略，中间件只做接线",
-      "reason": "现在 CompactionMiddleware 一个类有 26 个构造参数，计量、旧结果清理、批量外置、压缩、工作集恢复、熔断、附件、失败重试全在里面。拆开后每个策略能单独配置和测试；加一个阶段（比如以后的记忆注入方式）只加一个策略，不动别的。"
+      "decision": "三个领域：MCP 工具、知识库、技能目录，各自只对接一个外部服务",
+      "reason": "MCP 网关、知识库服务、技能应用的协议、缓存策略、失败处理各不相同；分开之后一个外部服务出问题，只看一个领域。"
     },
     {
-      "decision": "大结果外置只有一处（ResultOffloader）",
-      "reason": "现在有两套：文件中间件在每次工具调用后逐条外置，压缩中间件在模型调用前按批外置，阈值、预览格式、写到哪里各管各的。合成一个策略后，单条和整批用同一套规则、写进同一个系统区。外置也因此不再挂在文件中间件上，文件中间件不必当「恒装的脚手架」。"
+      "decision": "两个运行时各有一个组合入口",
+      "reason": "现在原生智能体的 MCP 工具、知识库工具在 Run 执行器的 assembly 里拼，CLI 的 MCP 和知识库下发在 CLI 运行时里拼，同样的规则写了两遍。收成 ToolCatalog 和 CliToolHandoff 后，运行时只调一个入口，闸门、令牌、提示都在这里。"
     },
     {
-      "decision": "所有改写只作用于模型看到的 state，消息表不动",
-      "reason": "用户看到的历史、审计和评测都以消息表为准；清理、外置、压缩只是为了让模型放得下，不能把原始记录改掉。"
+      "decision": "外部依赖暂时不可用，跳过并提示，不让对话停摆",
+      "reason": "网关、技能应用都有缓存兜底；实在取不到的工具这一轮不装、明确告诉用户，对话照常。只有配置错误（服务没注册、工具不存在、绑了知识库却没接入）才明确失败。"
     },
     {
-      "decision": "摘要和覆盖边界存在会话的上下文状态里，不改写历史",
-      "reason": "没有 checkpointer，历史每轮从消息表重建。照搬「改写 checkpoint」会变成每轮重压一次：摘要的 token 重复付，提示词缓存每轮击穿。存下摘要和边界，重建时边界之前用摘要代替，压一次管到下次再压。"
-    },
-    {
-      "decision": "上下文状态单独成表（thread_context），不再挂在 thread 上",
-      "reason": "thread 表现在同时放着标题、审批模式、记忆开关、凭据档案、来源应用，又加了摘要、覆盖边界、压缩次数和熔断计数；这四项只有本领域读写，单独成表，归属清楚。"
-    },
-    {
-      "decision": "只在完整回合的边界上切",
-      "reason": "assistant 消息里的每个 tool_use 都必须在紧随的消息里有对应的 tool_result，切在两者之间请求会被拒；所以按回合切，一个回合太长时在回合内找「已发出的调用都有结果」的位置。"
-    },
-    {
-      "decision": "提醒追加在最后，只进这一次请求",
-      "reason": "提醒每次都可能变（记忆有更新、待办该更新了、用量到了提醒档）；放进系统提示词或写进历史，提示词缓存的前缀就每次都失效。"
-    },
-    {
-      "decision": "系统提示词分层的顺序固定，每轮开始读一次",
-      "reason": "持久指令和记忆常驻块在一轮内不变，修改从下一轮生效；续跑的段沿用同一份。顺序固定，提示词缓存的前缀才稳定。"
-    },
-    {
-      "decision": "自动压缩连续失败就熔断，失败恢复各只重试一次",
-      "reason": "压缩本身要调模型，摘要器出错时每次模型调用前都重压一遍，只会持续烧钱；熔断后照常对话，直到下次手动压缩成功清零。失败恢复只试一次，避免在同一个错误上反复重试。"
-    }
-  ],
-  "schemaNote": "主键约定：id 是自增主键，只在库内使用，不对外、不做关联；xxx_uuid 是逻辑主键（UUIDv7，Python 侧生成），表间引用和 API 都用它。表间不建外键约束，引用由代码维护；引用会话、run 这些别的领域的表时只写列说明，不画连线。类型写的是 db/types.py 和 SQLAlchemy 的通用类型。",
-  "tables": [
-    {
-      "name": "thread_context",
-      "description": "会话的上下文状态（聚合根 ThreadContext），一个会话一行。",
-      "at": [
-        0,
-        0
-      ],
-      "columns": [
-        {
-          "name": "id",
-          "type": "BigInteger",
-          "key": "PK",
-          "default": "自增",
-          "description": "库内主键"
-        },
-        {
-          "name": "thread_uuid",
-          "type": "UUIDType",
-          "key": "UK",
-          "description": "所属会话（会话服务的表，逻辑引用）"
-        },
-        {
-          "name": "summary",
-          "type": "Text",
-          "nullable": true,
-          "description": "当前摘要；没压缩过为空"
-        },
-        {
-          "name": "summary_upto",
-          "type": "UTCDateTime",
-          "nullable": true,
-          "description": "摘要覆盖到这个时刻之前的消息；重建历史时这之前的消息由摘要代替"
-        },
-        {
-          "name": "compact_count",
-          "type": "Integer",
-          "default": "0",
-          "description": "压缩过几次"
-        },
-        {
-          "name": "failure_count",
-          "type": "Integer",
-          "default": "0",
-          "description": "自动压缩连续失败几次，到上限就熔断；成功时清零"
-        },
-        {
-          "name": "created_at",
-          "type": "UTCDateTime",
-          "default": "now()"
-        },
-        {
-          "name": "updated_at",
-          "type": "UTCDateTime",
-          "default": "now()"
-        }
-      ],
-      "indexes": [
-        {
-          "name": "uk_thread_context_thread",
-          "columns": [
-            "thread_uuid"
-          ],
-          "unique": true,
-          "description": "一个会话一行"
-        }
-      ]
+      "decision": "编辑器、保存、运行时问同一个来源",
+      "reason": "智能体管理的 ReferenceScope 直接用这里的网关客户端、知识库服务和技能目录，能选什么、能存什么、运行时能用什么是同一个答案。"
     }
   ]
 }

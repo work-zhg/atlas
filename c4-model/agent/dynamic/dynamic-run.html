@@ -12,6 +12,21 @@
   #c4-report { margin: 0 0 24px; padding: 12px 16px 12px 36px; border: 1px solid #e0b4b4; background: #fff6f6; font-size: 14px; line-height: 1.6; }
   #c4-report li[data-level="error"] { color: #b00020; }
   #c4-report li[data-level="warn"] { color: #8a5a00; }
+  #c4-details { max-width: 1280px; }
+  #c4-details article { margin: 0 0 28px; scroll-margin-top: 16px; }
+  #c4-details article:target h3 { background: #fff8d6; }
+  #c4-details h3 { margin: 0 0 8px; padding: 2px 4px; font-size: 15px; font-weight: 600; color: #333; }
+  #c4-details h3 .tech { margin-left: 8px; font-size: 13px; font-weight: 400; color: #888; }
+  #c4-details p { margin: 0 0 8px; font-size: 14px; line-height: 1.7; }
+  #c4-details table { width: 100%; margin: 0 0 8px; border-collapse: collapse; table-layout: fixed; font-size: 13px; line-height: 1.6; }
+  #c4-details th, #c4-details td { padding: 6px 10px; border: 1px solid #e3e3e3; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+  #c4-details th { background: #f6f8fa; font-weight: 600; }
+  #c4-details th:nth-child(1) { width: 14%; }
+  #c4-details th:nth-child(2) { width: 46%; }
+  #c4-details td.sample, #c4-details pre { font-family: Menlo, Consolas, "PingFang SC", monospace; }
+  #c4-details td.sample { word-break: break-all; }
+  #c4-details pre { margin: 0; padding: 10px 12px; border: 1px solid #e3e3e3; background: #f6f8fa; font-size: 12px; line-height: 1.5; overflow-x: auto; }
+  svg a { cursor: pointer; }
 </style>
 </head>
 <body>
@@ -21,52 +36,325 @@
 <script type="application/json" id="c4-model">
 {
   "title": "动态图：Agent 平台 - 一个 Run",
-  "description": "原生智能体的一轮。数据库、Redis 分别经数据访问、事件中继组件访问，图中省略这一跳；取消检查、记忆和技能装配未画",
+  "description": "目标模型。原生智能体的一轮：从打开会话订阅事件流、发一条消息，到 run.finished 推回控制台。Redis 经事件中继组件访问，图中省略这一跳；上下文装配（指令、记忆、技能）、取消检查、审批挂起未画，挂起见原生运行时和审批的代码图",
   "boundaries": [
-    { "id": "platform", "name": "Agent 平台", "type": "Software System" },
-    { "id": "server", "name": "Agent 服务", "type": "Container: Python / FastAPI", "in": "platform" }
+    {
+      "id": "platform",
+      "name": "Agent 平台",
+      "type": "Software System"
+    },
+    {
+      "id": "server",
+      "name": "Agent 服务",
+      "type": "Container: Python / FastAPI",
+      "in": "platform"
+    }
   ],
   "participants": [
-    { "id": "employee", "kind": "person", "tag": "员工", "color": "#297e06",
-      "name": "员工" },
-    { "id": "web", "kind": "container", "technology": "Next.js / React", "in": "platform",
-      "name": "控制台" },
-    { "id": "services", "kind": "component", "technology": "Python 服务层", "in": "server",
-      "name": "应用服务" },
-    { "id": "executor", "kind": "component", "technology": "asyncio 后台任务", "in": "server",
-      "name": "Run 执行器" },
-    { "id": "native", "kind": "component", "technology": "atlas_engine 内核 / LangGraph", "in": "server",
-      "name": "原生运行时" },
-    { "id": "db", "kind": "container", "shape": "database", "technology": "PostgreSQL 16", "in": "platform",
-      "name": "数据库" },
-    { "id": "redis", "kind": "container", "technology": "Redis 7", "in": "platform",
-      "name": "Redis" },
-    { "id": "model", "kind": "system", "tag": "同级服务", "color": "#8411bd",
-      "name": "模型平台" },
-    { "id": "mcp", "kind": "system", "tag": "同级服务", "color": "#8411bd",
-      "name": "MCP 网关" }
+    {
+      "id": "employee",
+      "kind": "person",
+      "tag": "员工",
+      "color": "#297e06",
+      "name": "员工"
+    },
+    {
+      "id": "web",
+      "kind": "container",
+      "technology": "Next.js / React",
+      "in": "platform",
+      "name": "控制台"
+    },
+    {
+      "id": "conv",
+      "kind": "component",
+      "technology": "Python 服务层",
+      "in": "server",
+      "name": "会话管理"
+    },
+    {
+      "id": "executor",
+      "kind": "component",
+      "technology": "asyncio 后台任务",
+      "in": "server",
+      "name": "Run 执行器"
+    },
+    {
+      "id": "native",
+      "kind": "component",
+      "technology": "atlas_engine 内核 / LangGraph",
+      "in": "server",
+      "name": "原生运行时"
+    },
+    {
+      "id": "llm",
+      "kind": "component",
+      "technology": "LangChain ChatAnthropic",
+      "in": "server",
+      "name": "模型接入"
+    },
+    {
+      "id": "tools",
+      "kind": "component",
+      "technology": "MCP 客户端 / httpx",
+      "in": "server",
+      "name": "工具接入"
+    },
+    {
+      "id": "db",
+      "kind": "container",
+      "shape": "database",
+      "technology": "PostgreSQL 16",
+      "in": "platform",
+      "name": "数据库"
+    },
+    {
+      "id": "redis",
+      "kind": "container",
+      "technology": "Redis 7",
+      "in": "platform",
+      "name": "Redis"
+    },
+    {
+      "id": "model",
+      "kind": "system",
+      "tag": "同级服务",
+      "color": "#8411bd",
+      "name": "模型平台"
+    },
+    {
+      "id": "mcp",
+      "kind": "system",
+      "tag": "同级服务",
+      "color": "#8411bd",
+      "name": "MCP 网关"
+    }
   ],
   "messages": [
-    { "from": "web", "to": "services", "description": "打开会话时订阅会话事件流（GET /threads/{id}/events）", "technology": "SSE" },
-    { "from": "services", "to": "db", "description": "先读归档事件，补到游标", "technology": "SQL/TCP" },
-    { "from": "services", "to": "redis", "description": "再从游标起阻塞读会话流（XREAD）", "technology": "Redis Streams" },
-    { "from": "employee", "to": "web", "description": "发送一条消息" },
-    { "from": "web", "to": "services", "description": "创建 Run（POST /threads/{id}/runs）", "technology": "JSON/HTTPS" },
-    { "from": "services", "to": "db", "description": "确认会话没有未结束的 Run", "technology": "SQL/TCP" },
-    { "from": "services", "to": "redis", "description": "加会话锁（SET NX，owner = run_id）", "technology": "Redis 协议" },
-    { "from": "services", "to": "db", "description": "写入用户消息和 Run（queued）", "technology": "SQL/TCP" },
-    { "from": "services", "to": "executor", "description": "提交 Run（经 Redis 广播唤醒，任一实例都可能领取）" },
-    { "from": "services", "to": "web", "description": "202 Accepted，返回 run_id", "technology": "JSON/HTTPS" },
-    { "from": "executor", "to": "db", "description": "领取 Run（CAS + 租约），标记 running", "technology": "SQL/TCP" },
-    { "from": "executor", "to": "native", "description": "跑这一轮" },
-    { "from": "native", "to": "model", "description": "取模型 Key，流式调用大模型", "technology": "JSON/HTTP、Anthropic Messages API" },
-    { "from": "native", "to": "mcp", "description": "调用模型请求的工具", "technology": "MCP/HTTP" },
-    { "from": "executor", "to": "redis", "description": "把运行时产出的事件逐个发布到会话流（XADD，盖会话序号）", "technology": "Redis Streams" },
-    { "from": "services", "to": "web", "description": "XREAD 读到新事件，推送 SSE 帧", "technology": "SSE" },
-    { "from": "executor", "to": "db", "description": "写检查点：新消息和已发布的事件", "technology": "SQL/TCP" },
-    { "from": "executor", "to": "db", "description": "运行时产出 run.finished：先落库终态、用量和回答", "technology": "SQL/TCP" },
-    { "from": "executor", "to": "redis", "description": "再发布 run.finished，释放会话锁", "technology": "Redis Streams" },
-    { "from": "services", "to": "web", "description": "推送 run.finished", "technology": "SSE" }
+    {
+      "from": "web",
+      "to": "conv",
+      "description": "打开会话时订阅会话事件流",
+      "technology": "SSE",
+      "details": {
+        "note": "ThreadStream.open。观看名额在构造响应之前占，满了直接回 503（现在是在生成器里查，超限时已经回了 200 只能断流）。先读数据库里的归档段补到游标，读完立刻还连接，之后只读 Redis。一个会话一条流，含子孙 run 的事件。",
+        "items": [
+          [
+            "请求",
+            "接口",
+            "GET /v1/threads/{thread_uuid}/events"
+          ],
+          [
+            "游标",
+            "Last-Event-ID 头或 after_seq 参数",
+            "\"1532\"（会话序号）；没有游标时只回放最近 N 条"
+          ]
+        ]
+      }
+    },
+    {
+      "from": "conv",
+      "to": "redis",
+      "description": "从游标起阻塞读会话流",
+      "technology": "Redis Streams",
+      "details": {
+        "items": [
+          [
+            "键",
+            "stream/relay.py thread_stream_key",
+            "thread:events:{根会话 uuid}"
+          ],
+          [
+            "读法",
+            "tail_thread",
+            "XRANGE 补齐后 XREAD BLOCK，按 thread_seq 过滤"
+          ]
+        ]
+      }
+    },
+    {
+      "from": "employee",
+      "to": "web",
+      "description": "发送一条消息"
+    },
+    {
+      "from": "web",
+      "to": "conv",
+      "description": "提交一轮",
+      "technology": "JSON/HTTPS",
+      "details": {
+        "note": "RunService.submit。幂等键命中就直接回已有的 run；否则依次：能用这个智能体吗 → 取当前版本 → 这一轮按谁的权限判 → 定审批模式。响应在交给执行器之后立刻返回，不等这一轮跑完。",
+        "items": [
+          [
+            "请求",
+            "接口",
+            "POST /v1/threads/{thread_uuid}/runs"
+          ],
+          [
+            "幂等键",
+            "Idempotency-Key 头，按使用者隔离",
+            "idem:run:{uid}:{key}"
+          ],
+          [
+            "响应",
+            "RunAccepted",
+            "202 {run_id, message_id, status: \"queued\"}"
+          ]
+        ],
+        "example": "{\n  \"content\": [{\"type\": \"text\", \"text\": \"帮我看下这个 PR\"}],\n  \"approval_mode\": \"manual\"\n}"
+      }
+    },
+    {
+      "from": "conv",
+      "to": "db",
+      "description": "会话里还有没结束的 run 吗；取智能体当前版本",
+      "technology": "SQL/TCP",
+      "details": {
+        "note": "会话串行的权威在库里：挂起几小时的 run 也照样拦得住。有就回 409。"
+      }
+    },
+    {
+      "from": "conv",
+      "to": "redis",
+      "description": "占会话锁，防两个请求同时进来",
+      "technology": "Redis 协议",
+      "details": {
+        "items": [
+          [
+            "键",
+            "thread_lock_key",
+            "run:lock:{thread_uuid}"
+          ],
+          [
+            "值、过期",
+            "ThreadSerial.occupy",
+            "SET NX，值 = run_uuid，TTL = 一个租约"
+          ]
+        ]
+      }
+    },
+    {
+      "from": "conv",
+      "to": "db",
+      "description": "同一事务写用户消息和 run 行（queued）",
+      "technology": "SQL/TCP"
+    },
+    {
+      "from": "conv",
+      "to": "executor",
+      "description": "交给执行器；广播唤醒，任一实例都可能领取",
+      "technology": "进程内调用 + Redis Pub/Sub",
+      "details": {
+        "items": [
+          [
+            "频道",
+            "RUN_WAKE_CHANNEL",
+            "run:wake"
+          ]
+        ],
+        "note": "唤醒只是加速，丢了也没关系：执行器定时扫描兜底，排队的真相在数据库。"
+      }
+    },
+    {
+      "from": "executor",
+      "to": "db",
+      "description": "领取 run、加租约、标 running",
+      "technology": "SQL/TCP",
+      "details": {
+        "note": "RunQueue.claim。多个实例并发领取互不阻塞、也不会领到同一行；租约在后台每 1/3 个租约续一次，顺带续会话锁。",
+        "example": "SELECT id FROM run\n WHERE status = 'queued' OR (status IN (...) AND lease_until < now())\n ORDER BY created_at LIMIT 1\n FOR UPDATE SKIP LOCKED;\nUPDATE run SET status = 'running', owner = :me, lease_until = now() + :lease WHERE id = :id;"
+      }
+    },
+    {
+      "from": "executor",
+      "to": "native",
+      "description": "跑一段（Segment：版本快照、历史、审批模式）"
+    },
+    {
+      "from": "native",
+      "to": "llm",
+      "description": "调用模型（流式）"
+    },
+    {
+      "from": "llm",
+      "to": "model",
+      "description": "带智能体的客户端 Key 调用",
+      "technology": "Anthropic Messages API / HTTPS",
+      "details": {
+        "note": "Run 开始时已检查过：Key 可用、所选模型在 Key 的可用模型里；经模型平台（LiteLLM）转发给供应商。"
+      }
+    },
+    {
+      "from": "native",
+      "to": "tools",
+      "description": "执行模型请求的工具"
+    },
+    {
+      "from": "tools",
+      "to": "mcp",
+      "description": "调用 MCP 工具（带智能体的 Key）",
+      "technology": "MCP / Streamable HTTP",
+      "details": {
+        "note": "同一段里复用 MCP 会话；Key 能用哪些服务和工具由网关判定。"
+      }
+    },
+    {
+      "from": "executor",
+      "to": "redis",
+      "description": "事件盖序号后逐个发布到会话流",
+      "technology": "Redis Streams",
+      "details": {
+        "items": [
+          [
+            "会话序号",
+            "thread_seq_key（INCR，原子）",
+            "thread:seq:{根会话 uuid}"
+          ],
+          [
+            "写入",
+            "EventPipeline → EventRelay.publish",
+            "XADD thread:events:{根会话 uuid} MAXLEN ~ N"
+          ]
+        ],
+        "note": "run 内序号和会话序号都在发布前盖好；message.delta 只发布不归档。"
+      }
+    },
+    {
+      "from": "conv",
+      "to": "web",
+      "description": "读到新事件，推成 SSE 帧",
+      "technology": "SSE"
+    },
+    {
+      "from": "executor",
+      "to": "db",
+      "description": "每个工具轮次一个检查点：消息、事件归档、序号水位",
+      "technology": "SQL/TCP",
+      "details": {
+        "note": "一个事务，带租约围栏（owner 不是自己就写不进去）；接管的实例按库里的这些重建，不依赖上一个进程的内存。"
+      }
+    },
+    {
+      "from": "executor",
+      "to": "db",
+      "description": "收尾：终态、用量、回答先落库",
+      "technology": "SQL/TCP",
+      "details": {
+        "note": "前端收到 run.finished 就会去取最终用量，所以先落库、后发布。"
+      }
+    },
+    {
+      "from": "executor",
+      "to": "redis",
+      "description": "再发布 run.finished，释放会话锁",
+      "technology": "Redis Streams"
+    },
+    {
+      "from": "conv",
+      "to": "web",
+      "description": "推送 run.finished；流不关，等下一轮",
+      "technology": "SSE"
+    }
   ]
 }
 </script>
@@ -74,6 +362,7 @@
 <main>
   <ul id="c4-report" hidden></ul>
   <svg id="c4-diagram" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+  <section id="c4-details" hidden></section>
   <h2>Diagram key</h2>
   <svg id="c4-key" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
 </main>
@@ -255,6 +544,21 @@
       const a = pById.get(m.from), b = pById.get(m.to);
       const crossProcess = a.kind !== 'person' && b.kind !== 'person' && !(a.kind === 'component' && b.kind === 'component') && a !== b;
       if (crossProcess && !m.technology) fail(`${who}：涉及 container 或软件系统，是跨进程交互，要写 technology`);
+      if (m.details !== undefined) {
+        const d = m.details;
+        const isText = (v) => typeof v === 'string';
+        if (!d || typeof d !== 'object' || Array.isArray(d)) {
+          fail(`${who}：details 要写成对象 { note, items, example }`);
+          m.details = undefined;
+        } else {
+          if (d.note !== undefined && !isText(d.note)) fail(`${who}：details.note 要写成字符串`);
+          if (d.example !== undefined && !isText(d.example)) fail(`${who}：details.example 要写成字符串，多行用 \\n`);
+          if (d.items !== undefined && !(Array.isArray(d.items) && d.items.every((r) => Array.isArray(r) && r.length === 3 && r.every(isText)))) {
+            fail(`${who}：details.items 的每一行要写成 [项, 来源, 样例] 三个字符串`);
+          }
+          if (!d.note && !d.example && !(Array.isArray(d.items) && d.items.length)) warn(`${who}：details 是空的，删掉或补上内容`);
+        }
+      }
       m.n = i + 1;
       return true;
     });
@@ -268,7 +572,7 @@
     for (const p of ps) p.size = headSize(p);
     const index = new Map(ps.map((p, i) => [p.id, i]));
     for (const m of msgs) {
-      m.lines = wrapBalanced(`${m.n}: ${m.description || ''}`, TXT.msg, LABEL_W);
+      m.lines = wrapBalanced(`${m.n}: ${m.description || ''}${m.details ? ' ⓘ' : ''}`, TXT.msg, LABEL_W);
       m.tech = m.technology ? `[${m.technology}]` : '';
       m.labelW = Math.max(...m.lines.map((s) => measure(s, TXT.msg)), m.tech ? measure(m.tech, TXT.tech) : 0);
       m.labelH = m.lines.length * TXT.msg.lh + (m.tech ? TXT.tech.lh : 0);
@@ -354,9 +658,11 @@
         drawArrow(gM, a.x, b.x, m.y);
         lx = Math.min(a.x, b.x) + 12;
       }
-      node('rect', { x: lx - 3, y: m.labelTop - 1, width: m.labelW + 6, height: m.labelH + 2, fill: '#fff' }, gM);
-      textLines(gM, m.lines, lx, m.labelTop, TXT.msg, INK, 'start');
-      if (m.tech) textLines(gM, [m.tech], lx, m.labelTop + m.lines.length * TXT.msg.lh, TXT.tech, INK, 'start');
+      // 有 details 的消息：标签链接到图下方「消息说明」里的同号条目
+      const gL = m.details ? node('a', { href: `#c4-msg-${m.n}` }, gM) : gM;
+      node('rect', { x: lx - 3, y: m.labelTop - 1, width: m.labelW + 6, height: m.labelH + 2, fill: '#fff' }, gL);
+      textLines(gL, m.lines, lx, m.labelTop, TXT.msg, INK, 'start');
+      if (m.tech) textLines(gL, [m.tech], lx, m.labelTop + m.lines.length * TXT.msg.lh, TXT.tech, INK, 'start');
     }
     const minX = Math.min(...ps.map((p) => p.x - p.size.w / 2), ...live.map((b) => b.rect.x));
     let maxX = Math.max(...ps.map((p) => p.x + p.size.w / 2 + (p === ps[ps.length - 1] ? rightExtra : 0)), ...live.map((b) => b.rect.x + b.rect.w));
@@ -372,6 +678,45 @@
     svg.setAttribute('aria-label', model.title || 'Dynamic diagram');
 
     renderKey(ps, live);
+    renderDetails(msgs);
+  }
+
+  // ---- 消息说明：每条带 details 的消息一节（说明、[项, 来源, 样例] 表、数据样例）----
+  function renderDetails(msgs) {
+    const list = msgs.filter((m) => m.details);
+    if (!list.length) return;
+    const sec = document.getElementById('c4-details');
+    const el = (tag, cls, text) => {
+      const e = document.createElement(tag);
+      if (cls) e.className = cls;
+      if (text !== undefined) e.textContent = text;
+      return e;
+    };
+    sec.appendChild(el('h2', '', '消息说明'));
+    for (const m of list) {
+      const d = m.details;
+      const art = el('article');
+      art.id = `c4-msg-${m.n}`;
+      const h = el('h3', '', `${m.n}: ${m.description || ''}`);
+      if (m.technology) h.appendChild(el('span', 'tech', `[${m.technology}]`));
+      art.appendChild(h);
+      if (typeof d.note === 'string' && d.note) art.appendChild(el('p', '', d.note));
+      const rows = Array.isArray(d.items) ? d.items.filter((r) => Array.isArray(r)) : [];
+      if (rows.length) {
+        const table = el('table');
+        const head = table.createTHead().insertRow();
+        for (const c of ['项', '来源', '样例']) head.appendChild(el('th', '', c));
+        const body = table.createTBody();
+        for (const r of rows) {
+          const tr = body.insertRow();
+          r.slice(0, 3).forEach((c, i) => tr.appendChild(el('td', i === 2 ? 'sample' : '', String(c))));
+        }
+        art.appendChild(table);
+      }
+      if (typeof d.example === 'string' && d.example) art.appendChild(el('pre', '', d.example));
+      sec.appendChild(art);
+    }
+    sec.hidden = false;
   }
 
   // ---- 图例：每种参与者一项，再加边界和消息 ----

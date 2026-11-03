@@ -29,391 +29,609 @@
 -->
 <script type="application/json" id="c4-model">
 {
-  "title": "代码图：Agent 平台 - Agent 服务 - CLI 运行时 - 领域总览",
-  "description": "目标模型，只画期望的样子、不对照现状。CLI 运行时（原名 ACP 运行时）的四个领域，每个只画对外入口和关键元素，看依赖方向；领域内部见各自的 code-cli-runtime-*.html。",
-  "component": "CLI 运行时",
-  "package": "CLI 运行时（目标模型 · 领域总览）",
-  "overview": "CLI 运行时让会话 Pod 里的外部 CLI 智能体（如 Claude Code）跑一轮，对 Run 执行器来说它和原生运行时是同一个接口。它分四个领域。一轮的编排在上：解析交给 CLI 的能力、确保 Pod、接上会话、开一轮、把通知分给下面三个领域、产出终止事件。上游连接管 server 到 bridge 的会话接续，保证断线、接管之后事件流完整不重复；权限转发把 CLI 的权限请求变成平台审批；内容翻译把 CLI 的内容翻成和原生运行时同形的事件。\n\n轮次的计时、取消、CLI 崩溃重启都在 Pod 里的 bridge，不在这里。图上每个元素第一行写着它属于哪个领域。",
+  "title": "代码图：Agent 平台 - Agent 服务 - 智能体管理 - 智能体配置",
+  "description": "目标领域模型，只画期望的样子、不对照现状。智能体的配置与版本：保存即新版本、引用钉死、只校验新增、编辑器可选项。",
+  "component": "智能体管理",
+  "package": "智能体管理 · 智能体配置（目标模型）",
+  "overview": "智能体配置管智能体本身和它的配置版本。保存配置即产生一份不可变的新版本，run 记的是版本，历史永远可复现。保存时 spec 里的外部引用（技能、MCP 工具、模型、知识库）全部钉死，新增的引用要在可选范围里；四种引用的范围由 ReferenceScope 给出，编辑器列可选项和保存时校验问的是同一个接口。引擎的配置校验也在保存时跑，错误不留到运行时。\n\n它不管智能体在平台外的登记和共享（身份与共享管），也不管会话；归档时只发出 AgentArchived，由会话领域把它的会话一起归档。",
   "elements": [
     {
-      "id": "runtime",
+      "id": "svc",
       "kind": "class",
-      "name": "CliRuntime",
+      "name": "AgentService",
       "stereotype": "应用服务",
-      "responsibility": "【一轮的编排】实现 AgentRuntime：解析能力（MCP、模型、凭据）→ 确保 Pod → 接上会话 → 开一轮 → 收通知、分给翻译和权限转发 → 终止事件。不落库、不发布、不管锁。详见 code-cli-runtime-turn.html。",
-      "attributes": [
-        [
-          "",
-          "领域：一轮的编排"
-        ]
-      ],
+      "responsibility": "智能体的增删改查。保存即产生新版本：改配置从不原地改，写一条新版本并切换当前版本；只改名字、描述、头像不出新版本。保存前依次：引用全部钉死、新增的引用查可用范围、引擎校验配置（模型参数这类错误在点保存时就拒，不等到某次 run）。建、改名、改状态之后交给身份与共享做外部登记；切到「以 Agent 为权限」时没有数字员工就让它补建。删除是归档：发出 AgentArchived，会话那边把它的会话一起归档；历史 run 仍能指回版本。",
       "methods": [
         [
           "+",
-          "run_turn(segment, *, run_id, relay)"
-        ]
-      ],
-      "at": [
-        1.6,
-        0.7
-      ]
-    },
-    {
-      "id": "link",
-      "kind": "class",
-      "name": "SessionLink",
-      "stereotype": "应用服务",
-      "responsibility": "【上游连接】到 bridge 的会话接续：attach / open、按序号去重和确认、断线重连补发、换实例接管。详见 code-cli-runtime-link.html。",
-      "attributes": [
-        [
-          "",
-          "领域：上游连接"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "join · start_turn · notes · cancel_turn"
-        ]
-      ],
-      "at": [
-        -0.45,
-        2.5
-      ]
-    },
-    {
-      "id": "session",
-      "kind": "class",
-      "name": "CliSession",
-      "stereotype": "聚合根",
-      "responsibility": "【上游连接】一个 CLI 会话的接续信息：CLI 的会话 id、bridge 实例、确认点；存在 cli_session 表里，接管的实例据此 attach。",
-      "attributes": [
-        [
-          "",
-          "领域：上游连接"
+          "create(payload, *, by) · update(agent_uuid, payload, *, by)"
         ],
         [
           "+",
-          "agent_session_id · bridge_instance · acked_seq"
+          "set_status(agent_uuid, status) · set_auth_subject(agent_uuid, subject)"
+        ],
+        [
+          "+",
+          "archive(agent_uuid)"
+        ],
+        [
+          "+",
+          "get · list(visible) · versions(agent_uuid)"
         ]
       ],
       "at": [
-        -0.45,
-        4.3
+        1.6,
+        0.75
       ]
     },
     {
-      "id": "desk",
+      "id": "agent",
       "kind": "class",
-      "name": "PermissionDesk",
-      "stereotype": "应用服务",
-      "responsibility": "【权限转发】CLI 的权限请求 → 平台审批（同一张表、同一个弹窗）→ 答复「允许一次」或拒绝；在线等待期间 run 标 awaiting_user。详见 code-cli-runtime-permission.html。",
+      "name": "Agent",
+      "stereotype": "聚合根",
+      "responsibility": "一个智能体：标识、状态、当前版本、权限类型、数字员工。状态 draft → enabled → archived：草稿能编辑者试跑，启用后共享给的人能用，归档后只有所有者看得到。权限类型只决定它的 run 按谁的权限判，换了只影响之后新建的 run。",
       "attributes": [
         [
-          "",
-          "领域：权限转发"
+          "+",
+          "agent_uuid · slug · name · status"
+        ],
+        [
+          "+",
+          "current_version: AgentVersion"
+        ],
+        [
+          "+",
+          "auth_subject: user | agent · digital_employee_uid"
         ]
       ],
       "methods": [
         [
           "+",
-          "ask · withdraw"
+          "new_version(spec, by) -> AgentVersion"
+        ],
+        [
+          "+",
+          "set_status(status) · archive()"
         ]
       ],
       "at": [
         1.6,
-        2.5
+        2.6
       ]
     },
     {
-      "id": "port",
+      "id": "version",
+      "kind": "class",
+      "name": "AgentVersion",
+      "stereotype": "实体",
+      "responsibility": "一份不可变的配置快照。run 记的是版本 uuid，历史 run 永远能指回「当时用的哪份配置」；技能、MCP 工具升级不会悄悄改变已有版本的含义。",
+      "attributes": [
+        [
+          "+",
+          "agent_version_uuid · version: int"
+        ],
+        [
+          "+",
+          "spec: AgentSpec（技能写明版本、MCP 记下指纹）"
+        ]
+      ],
+      "at": [
+        3.85,
+        2.6
+      ]
+    },
+    {
+      "id": "guard",
+      "kind": "class",
+      "name": "ReferenceGuard",
+      "stereotype": "领域服务",
+      "responsibility": "保存时处理 spec（含子智能体）里的外部引用：技能、MCP 工具、模型、知识库。全部钉死；只对新增的查可用范围，沿用上一版本的不重判——授权被收回以后连改提示词都保存不了就太过了，运行时会跳过并提示。按谁判：MCP 和模型按这个智能体的 Key（新建时还没有），知识库按权限主体（以人为权限是保存的人，以 Agent 为权限是数字员工）。来源暂时不可用就拒绝保存，不让指向空气的配置进库。",
+      "methods": [
+        [
+          "+",
+          "settle(spec, previous, *, agent, subject) -> AgentSpec"
+        ]
+      ],
+      "at": [
+        -0.6,
+        2.6
+      ]
+    },
+    {
+      "id": "scope",
       "kind": "interface",
-      "name": "ApprovalPort",
+      "name": "ReferenceScope",
       "stereotype": "扩展点",
-      "responsibility": "【权限转发】平台审批的最小接口：查状态（首次登记）、等决定、作废。由原生运行时的审批实现。",
-      "attributes": [
-        [
-          "",
-          "领域：权限转发"
-        ]
-      ],
+      "responsibility": "一种引用的可选范围。编辑器列可选项、保存时校验新增、钉死引用，问的是同一个接口，编辑器里能选的和保存时放行的不会不一致。",
       "methods": [
         [
           "+",
-          "check · wait · expire"
+          "options(agent, subject) -> list[Option]"
+        ],
+        [
+          "+",
+          "admit(added, agent, subject)（不在范围里就拒）"
+        ],
+        [
+          "+",
+          "pin(refs) -> refs"
         ]
       ],
       "at": [
         1.6,
-        4.3
+        4.45
       ]
     },
     {
-      "id": "translator",
+      "id": "options",
       "kind": "class",
-      "name": "CliUpdateTranslator",
+      "name": "EditorOptions",
       "stereotype": "应用服务",
-      "responsibility": "【内容翻译】CLI 的内容更新 → 平台事件意图，data 形状与原生运行时逐字段一致；server 里唯一理解 CLI 内容协议的地方。详见 code-cli-runtime-translate.html。",
+      "responsibility": "编辑器里可选的模型、工具、知识库、技能。内置工具按部署能力标可用（没开沙箱就没有 Shell，没接记忆服务就没有记忆工具）；外部的经 ReferenceScope 取。来源不可用不报错：返回空并写明原因，前端能提示，而不是静默少几项。",
+      "methods": [
+        [
+          "+",
+          "models · tools · knowledge · skills(agent, subject)"
+        ]
+      ],
+      "at": [
+        3.85,
+        0.75
+      ]
+    },
+    {
+      "id": "repo",
+      "kind": "class",
+      "name": "AgentRepository",
+      "stereotype": "仓储",
+      "responsibility": "agent、agent_version 两张表。列表按可见范围过滤（条件由鉴权组件给出）；新版本号在智能体内递增，靠唯一约束防并发保存撞号。",
+      "methods": [
+        [
+          "+",
+          "get(agent_uuid) · list(*, visible, q, status)"
+        ],
+        [
+          "+",
+          "add(agent, version) · add_version(agent, version)"
+        ]
+      ],
+      "at": [
+        -0.6,
+        4.45
+      ]
+    },
+    {
+      "id": "archived",
+      "kind": "class",
+      "name": "AgentArchived",
+      "stereotype": "领域事件",
+      "responsibility": "智能体归档了。会话领域订阅它，把这个智能体的会话一起归档；配置领域因此不用认识会话。",
       "attributes": [
         [
-          "",
-          "领域：内容翻译"
-        ]
-      ],
-      "methods": [
-        [
           "+",
-          "update · stop · crash"
+          "agent_uuid · archived_by"
         ]
       ],
       "at": [
-        3.75,
-        2.5
+        3.85,
+        4.45
       ]
     },
     {
-      "id": "agentRt",
-      "kind": "interface",
-      "name": "AgentRuntime",
-      "external": true,
-      "source": "Run 执行器组件",
-      "methods": [
-        [
-          "+",
-          "run_turn(…)"
-        ]
-      ],
-      "at": [
-        1.6,
-        -1.0
-      ]
-    },
-    {
-      "id": "pods",
-      "kind": "interface",
-      "name": "PodProvider",
-      "external": true,
-      "source": "沙箱组件 · 会话 Pod 领域",
-      "methods": [
-        [
-          "+",
-          "ensure(thread, cli, *, model, credentials)"
-        ]
-      ],
-      "at": [
-        5.9,
-        0.7
-      ]
-    },
-    {
-      "id": "bridge",
+      "id": "skills",
       "kind": "class",
-      "name": "UpstreamServer",
-      "external": true,
-      "source": "会话 Pod · bridge · 上游通道领域",
+      "name": "SkillScope",
+      "stereotype": "防腐层",
+      "responsibility": "技能：问技能目录。没写版本就钉成当前最新；已下架的拒绝，已停用的不能新增（沿用的放行）；挂的技能描述合计不超过预算（描述常驻每一轮上下文）。",
       "methods": [
         [
           "+",
-          "atlas.host.v1"
+          "options · admit · pin（钉版本）"
         ]
       ],
       "at": [
-        -2.65,
-        2.85
+        -0.75,
+        6.3
       ]
     },
     {
       "id": "mcp",
       "kind": "class",
-      "name": "McpGateway",
-      "external": true,
-      "source": "MCP 网关",
+      "name": "McpToolScope",
+      "stereotype": "防腐层",
+      "responsibility": "MCP 工具：问 MCP 网关这个智能体的 Key 能用哪些服务和工具；新建的还没有 Key，只能选公开服务。钉死时记下工具此刻的定义指纹，运行时据此发现定义变了。",
       "methods": [
         [
           "+",
-          "servers_for(agent)"
+          "options · admit · pin（记指纹）"
         ]
       ],
       "at": [
-        -2.65,
-        0.6
+        0.85,
+        6.3
       ]
     },
     {
       "id": "models",
       "kind": "class",
-      "name": "ModelResolver",
-      "external": true,
-      "source": "模型接入组件",
+      "name": "ModelScope",
+      "stereotype": "防腐层",
+      "responsibility": "模型（主模型、压缩模型、子智能体的模型）：智能体的 Key 已分配模型就是那些；还没分配（新建、待分配、停用）就是模型平台上登记的全部，分配之前不能运行。",
       "methods": [
         [
           "+",
-          "cli_model(agent)"
+          "options · admit"
         ]
       ],
       "at": [
-        -2.65,
-        1.3
+        2.35,
+        6.3
       ]
     },
     {
-      "id": "grants",
+      "id": "kb",
       "kind": "class",
-      "name": "CredentialGrants",
-      "external": true,
-      "source": "凭据组件",
+      "name": "KnowledgeScope",
+      "stereotype": "防腐层",
+      "responsibility": "知识库：权限主体能读的。以 Agent 为权限、还没有数字员工时一个都不给，提示先保存、请库的所有者共享给数字员工。绑定不是授权：运行时按这一轮的主体再判一次。",
       "methods": [
         [
           "+",
-          "resolve(subject)"
-        ]
-      ],
-      "at": [
-        -2.65,
-        2.0
-      ]
-    },
-    {
-      "id": "store",
-      "kind": "class",
-      "name": "ApprovalStore",
-      "external": true,
-      "source": "原生运行时 · 挂起与人机协作领域",
-      "methods": [
-        [
-          "+",
-          "check · decide → 唤醒 · expire"
-        ]
-      ],
-      "at": [
-        1.6,
-        6.0
-      ]
-    },
-    {
-      "id": "runrec",
-      "kind": "class",
-      "name": "RunRecordRepository",
-      "external": true,
-      "source": "Run 执行器组件",
-      "methods": [
-        [
-          "+",
-          "set_awaiting_user(…)"
+          "options · admit"
         ]
       ],
       "at": [
         3.9,
-        6.0
+        6.3
+      ]
+    },
+    {
+      "id": "access",
+      "kind": "class",
+      "name": "AgentAccess",
+      "external": true,
+      "source": "鉴权组件",
+      "methods": [
+        [
+          "+",
+          "visibility(principal) · require(principal, agent)"
+        ]
+      ],
+      "at": [
+        1.6,
+        -0.95
+      ]
+    },
+    {
+      "id": "registrar",
+      "kind": "class",
+      "name": "AgentRegistrar",
+      "external": true,
+      "source": "智能体管理 · 身份与共享领域",
+      "methods": [
+        [
+          "+",
+          "on_created · on_renamed · on_status_changed(AgentRef)"
+        ]
+      ],
+      "at": [
+        6.3,
+        2.6
+      ]
+    },
+    {
+      "id": "threads",
+      "kind": "class",
+      "name": "ThreadService",
+      "external": true,
+      "source": "会话管理 · 会话领域",
+      "methods": [
+        [
+          "+",
+          "on_agent_archived(event)"
+        ]
+      ],
+      "at": [
+        6.3,
+        4.45
       ]
     }
   ],
   "relationships": [
     {
-      "from": "runtime",
-      "to": "agentRt",
+      "from": "svc",
+      "to": "access",
+      "type": "uses",
+      "description": "看得到吗"
+    },
+    {
+      "from": "svc",
+      "to": "agent",
+      "type": "uses",
+      "description": "建、改、切版本、归档"
+    },
+    {
+      "from": "agent",
+      "to": "version",
+      "type": "composition",
+      "description": "版本",
+      "multiplicity": "1..*"
+    },
+    {
+      "from": "svc",
+      "to": "guard",
+      "type": "uses",
+      "description": "引用"
+    },
+    {
+      "from": "guard",
+      "to": "scope",
+      "type": "uses",
+      "description": "钉死、校验新增"
+    },
+    {
+      "from": "options",
+      "to": "scope",
+      "type": "uses",
+      "description": "可选项",
+      "labelAt": 0.75
+    },
+    {
+      "from": "svc",
+      "to": "repo",
+      "type": "uses",
+      "description": "存取"
+    },
+    {
+      "from": "agent",
+      "to": "archived",
+      "type": "uses",
+      "description": "归档时发出"
+    },
+    {
+      "from": "svc",
+      "to": "registrar",
+      "type": "uses",
+      "description": "外部登记"
+    },
+    {
+      "from": "threads",
+      "to": "archived",
+      "type": "uses",
+      "description": "订阅"
+    },
+    {
+      "from": "skills",
+      "to": "scope",
       "type": "implements"
     },
     {
-      "from": "runtime",
-      "to": "pods",
-      "type": "uses",
-      "description": "确保 Pod"
-    },
-    {
-      "from": "runtime",
-      "to": "mcp",
-      "type": "uses",
-      "description": "MCP 配置"
-    },
-    {
-      "from": "runtime",
-      "to": "models",
-      "type": "uses",
-      "description": "模型接入"
-    },
-    {
-      "from": "runtime",
-      "to": "grants",
-      "type": "uses",
-      "description": "凭据"
-    },
-    {
-      "from": "runtime",
-      "to": "link",
-      "type": "association",
-      "description": "接会话、收通知"
-    },
-    {
-      "from": "runtime",
-      "to": "desk",
-      "type": "uses",
-      "description": "权限请求"
-    },
-    {
-      "from": "runtime",
-      "to": "translator",
-      "type": "uses",
-      "description": "内容 → 事件"
-    },
-    {
-      "from": "link",
-      "to": "bridge",
-      "type": "uses",
-      "description": "WebSocket"
-    },
-    {
-      "from": "link",
-      "to": "session",
-      "type": "uses",
-      "description": "接续信息"
-    },
-    {
-      "from": "desk",
-      "to": "port",
-      "type": "association",
-      "description": "审批"
-    },
-    {
-      "from": "store",
-      "to": "port",
+      "from": "mcp",
+      "to": "scope",
       "type": "implements"
     },
     {
-      "from": "desk",
-      "to": "runrec",
-      "type": "uses",
-      "description": "awaiting_user"
+      "from": "models",
+      "to": "scope",
+      "type": "implements"
+    },
+    {
+      "from": "kb",
+      "to": "scope",
+      "type": "implements"
     }
   ],
   "capabilities": [
     {
-      "name": "跑一轮",
-      "entry": "AgentRuntime.run_turn(segment, *, run_id, relay)",
-      "callers": "Run 执行器（领取、接管时）",
-      "description": "让会话 Pod 里的 CLI 智能体跑一轮，产出和原生运行时同形的事件流；接管时 attach 回去补发，不重跑"
+      "name": "建、改智能体",
+      "entry": "AgentService.create · update",
+      "callers": "HTTP 接口（编辑器保存）",
+      "description": "改配置即新版本；引用钉死、新增的查范围、引擎校验，任何一项不过就拒绝保存；之后做外部登记"
+    },
+    {
+      "name": "启用、归档、切换权限类型",
+      "entry": "AgentService.set_status · archive · set_auth_subject",
+      "callers": "HTTP 接口（所有者）",
+      "description": "归档发出 AgentArchived，它的会话随之归档；权限类型只影响之后新建的 run"
+    },
+    {
+      "name": "查智能体和版本",
+      "entry": "AgentService.get · list · versions",
+      "callers": "HTTP 接口；会话、对话（取当前版本）",
+      "description": "列表只列看得到的：已启用要能用，草稿要能改，已归档只有所有者"
+    },
+    {
+      "name": "编辑器可选项",
+      "entry": "EditorOptions.models · tools · knowledge · skills",
+      "callers": "HTTP 接口（编辑器）",
+      "description": "和保存时的校验问同一个 ReferenceScope；来源不可用返回空并说明原因"
     }
   ],
   "decisions": [
     {
-      "decision": "四个领域：编排在上，连接、权限、翻译在下，三者互不依赖",
-      "reason": "现在 HostRuntime 一个类 916 行，连接管理、权限、翻译、能力解析揉在一起。拆开后连接只管「事件流完整、不重复」，权限只管「请求变审批」，翻译只管「内容变事件」，编排只剩顺序。"
+      "decision": "保存即新版本，版本不可变",
+      "reason": "run 要能指回当时用的那份配置，复盘、评测对比才有意义。原地改的话，昨天那一轮为什么那样回答就再也说不清了。"
     },
     {
-      "decision": "对 Run 执行器来说，CLI 运行时和原生运行时是同一个接口",
-      "reason": "会话串行锁、幂等、事件回放、孤儿回收、接管都挂在 run 的生命周期上，不挂在执行方式上；两种运行时产出同形的事件，前端一行不用区分。"
+      "decision": "引用在保存时全部钉死",
+      "reason": "技能写明版本、MCP 工具记下定义指纹，快照里只有确定的东西；技能发布新版、MCP 工具改了描述，都不会悄悄改变已有配置的含义。"
     },
     {
-      "decision": "轮次的计时、取消、CLI 重启都在 bridge，这里只提要求、解读结果",
-      "reason": "bridge 和 CLI 在同一个 Pod 里，server 断线、重启、换实例时，那一轮照常进行；server 只需要接回事件流。"
+      "decision": "四种引用统一成 ReferenceScope，编辑器和保存问同一个接口",
+      "reason": "现在编辑器的目录（MetaService）和保存时的校验（AgentService 的三个 _check_*、spec_refs 的钉版本）各自去问 MCP 网关、模型平台、知识库，规则写了两遍。合成一个接口后，「能选什么」和「能存什么」只有一个答案。"
     },
     {
-      "decision": "审批复用原生运行时的那一套",
-      "reason": "CLI 的权限请求进同一张审批表、弹同一个窗口、走同一套唤醒；用户眼里只有一种审批。审批 id 也一样由 (run, 调用 id) 派生，补发和接管后不会重复弹窗。"
+      "decision": "只校验新增的引用",
+      "reason": "授权被收回、技能被停用、模型被移出 Key 以后，沿用的引用照样能保存，连改个提示词都存不了太过了；运行时会跳过并提示。这条规则现在四处各写一遍，收到 ReferenceGuard 一处。"
     },
     {
-      "decision": "接续信息按会话落库，不放进程内存和 run 表",
-      "reason": "序号是会话级的，换实例接管时要读得到；放进 run 表又会让执行记录带上运行时私有的字段。cli_session 表归上游连接领域。"
+      "decision": "来源暂时不可用就拒绝保存",
+      "reason": "不能确认技能存在、工具可用就写进快照，等于允许一份指向空气的配置进库，问题要到某次 run 才暴露。编辑器列可选项时则相反：返回空并说明原因，不挡住编辑。"
+    },
+    {
+      "decision": "归档发领域事件，会话那边订阅",
+      "reason": "会话属于智能体（会话依赖配置），反过来让配置去改会话就成了双向依赖。现在 AgentRepository.archive_threads_of 直接改 thread 表。"
+    },
+    {
+      "decision": "外部登记交给身份与共享领域",
+      "reason": "数字员工、数据对象、两把 Key 都是智能体在平台外的存在，和配置版本无关；放在一起，AgentService 的 create、update 只剩配置本身的流程。"
+    }
+  ],
+  "schemaNote": "主键约定：id 是自增主键，只在库内使用，不对外、不做关联；xxx_uuid 是逻辑主键（UUIDv7，Python 侧生成），表间引用和 API 都用它。表间不建外键约束，引用由代码维护；引用会话、run 这些别的领域的表时只写列说明，不画连线。类型写的是 db/types.py 和 SQLAlchemy 的通用类型。",
+  "tables": [
+    {
+      "name": "agent",
+      "description": "智能体（聚合根 Agent）。",
+      "at": [
+        0,
+        0
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": "BigInteger",
+          "key": "PK",
+          "default": "自增",
+          "description": "库内主键"
+        },
+        {
+          "name": "agent_uuid",
+          "type": "UUIDType",
+          "key": "UK",
+          "description": "逻辑主键"
+        },
+        {
+          "name": "slug",
+          "type": "String(128)",
+          "key": "UK",
+          "description": "标识，界面和接口里引用它"
+        },
+        {
+          "name": "name",
+          "type": "Text"
+        },
+        {
+          "name": "description",
+          "type": "Text",
+          "default": "''"
+        },
+        {
+          "name": "avatar_key",
+          "type": "String(32)",
+          "default": "'general'"
+        },
+        {
+          "name": "status",
+          "type": "String(16)",
+          "default": "'draft'",
+          "description": "draft / enabled / archived"
+        },
+        {
+          "name": "current_version_uuid",
+          "type": "UUIDType",
+          "nullable": true,
+          "references": "agent_version.agent_version_uuid",
+          "description": "当前版本；保存配置即切换"
+        },
+        {
+          "name": "auth_subject",
+          "type": "String(8)",
+          "default": "'user'",
+          "description": "user（以人为权限）/ agent（以 Agent 为权限）"
+        },
+        {
+          "name": "digital_employee_uid",
+          "type": "UUIDType",
+          "nullable": true,
+          "description": "用户中心里的数字员工；身份与共享登记后回写"
+        },
+        {
+          "name": "created_by_uuid",
+          "type": "UUIDType",
+          "description": "创建者（数据对象的 OWNER）"
+        },
+        {
+          "name": "created_at",
+          "type": "UTCDateTime",
+          "default": "now()"
+        },
+        {
+          "name": "updated_at",
+          "type": "UTCDateTime",
+          "default": "now()",
+          "description": "列表按它排序；只改元信息也刷新"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "ix_agent_list",
+          "columns": [
+            "status",
+            "updated_at"
+          ],
+          "description": "列表"
+        }
+      ]
+    },
+    {
+      "name": "agent_version",
+      "description": "配置版本（实体 AgentVersion），只追加、不修改。",
+      "at": [
+        2.2,
+        0
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": "BigInteger",
+          "key": "PK",
+          "default": "自增",
+          "description": "库内主键"
+        },
+        {
+          "name": "agent_version_uuid",
+          "type": "UUIDType",
+          "key": "UK",
+          "description": "逻辑主键；run 记的是它"
+        },
+        {
+          "name": "agent_uuid",
+          "type": "UUIDType",
+          "references": "agent.agent_uuid",
+          "description": "所属智能体"
+        },
+        {
+          "name": "version",
+          "type": "Integer",
+          "description": "智能体内从 1 递增"
+        },
+        {
+          "name": "spec",
+          "type": "JSONType",
+          "description": "配置快照：技能写明版本，MCP 工具记下定义指纹"
+        },
+        {
+          "name": "created_by_uuid",
+          "type": "UUIDType",
+          "description": "保存的人"
+        },
+        {
+          "name": "created_at",
+          "type": "UTCDateTime",
+          "default": "now()"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "uk_agent_version_no",
+          "columns": [
+            "agent_uuid",
+            "version"
+          ],
+          "unique": true,
+          "description": "并发保存时撞号就失败重试"
+        }
+      ]
     }
   ]
 }

@@ -29,400 +29,389 @@
 -->
 <script type="application/json" id="c4-model">
 {
-  "title": "代码图：Agent 平台 - Agent 服务 - Run 执行器 - 续跑、接管与取消",
-  "description": "目标领域模型，只画期望的样子、不对照现状。一段结束之后怎么接着跑：挂起的何时续、接管时怎么收拾现场、挂起中被取消怎么收尾。",
-  "component": "Run 执行器",
-  "package": "Run 执行器 · 续跑、接管与取消（目标模型）",
-  "overview": "续跑、接管与取消管「一段结束之后」的三件事。挂起的 run 在等外部的事（审批、提问、子 run），等的事都有结果了就 CAS 放回队列，由任意实例领走续跑；入口有三个（子 run 结束、自己挂起落库后、定时补扫），判据只有一套，按等待原因分别判。接管来的 run（交接或租约过期）在跑之前先收拾上一个实例留下的现场：补归档、续序号、处理悬空的工具调用、告诉前端丢掉没落库的正文。挂起中被取消的 run 没有进程，由这里落终态、放会话锁。\n\n它不领取 run（调度与租约管），也不跑一段（一段的执行管）；事项的决定由审批那边做，这里只看结果。",
+  "title": "代码图：Agent 平台 - Agent 服务 - 工具接入 - MCP 工具",
+  "description": "目标领域模型，只画期望的样子、不对照现状。经 MCP 网关接入外部工具：目录与智能体 Key、三道闸门、一段内复用会话、带护栏的调用。",
+  "component": "工具接入",
+  "package": "工具接入 · MCP 工具（目标模型）",
+  "overview": "MCP 工具领域把智能体勾选的 MCP 工具接到运行时。所有东西都经 MCP 网关：服务和工具定义从网关读，调用经网关、带这个智能体的 Key，能用哪些服务和工具由网关判定。原生智能体每段装配时，这里取目录和 Key、过三道闸门（授权、停用、定义变化），为每个工具包一层护栏（参数校验、超时、失败分类、能修复的重试一次、结果截断），同一段里同一个服务复用一个会话。CLI 智能体则在开会话时拿到服务级的网关地址和 Key，自己去连。\n\n它不决定问不问人（审批按工具的只读注解判，原生运行时管），不管工具结果太大怎么外置（上下文管理管），也不登记智能体的 Key（智能体管理建智能体时登记）。",
   "elements": [
     {
-      "id": "cont",
+      "id": "toolset",
       "kind": "class",
-      "name": "Continuation",
+      "name": "McpToolset",
       "stereotype": "应用服务",
-      "responsibility": "一段结束之后怎么接着跑。挂起的 run：等的事都有结果了，就放回队列续跑——入口有三个（子 run 结束时、自己挂起落库后、定时补扫），判据只有一套。接管来的 run：在跑之前收拾上一个实例留下的现场。挂起中被取消的 run：没有进程在跑，由这里收尾。",
+      "responsibility": "spec 里勾的 MCP 工具 → 这一段能用的东西。原生智能体：取目录和这个智能体的 Key，过闸门，为每个服务建一个客户端（身份请求头和 Key 写在传输层），把每个工具包成带护栏的调用，交出工具、要告诉用户的提示和段末要关的会话；装配时只读缓存、不连网，建连推迟到第一次调用。CLI 智能体：同一套闸门，交出服务级的网关地址和 Key，CLI 自己建会话、拉工具列表。服务没注册、工具不存在是配置错误，明确失败；网关不可用就跳过并提示，对话照常。",
       "methods": [
         [
           "+",
-          "resume_if_ready(run_uuid) -> bool"
+          "tools(spec, ctx) -> (tools, notices, closer)"
         ],
         [
           "+",
-          "recover(run_uuid, reason) -> TraceEvent（run.resumed）"
-        ],
-        [
-          "+",
-          "settle_cancelled(run_uuid)"
+          "cli_servers(spec, *, user) -> (servers, notices)"
         ]
       ],
       "at": [
-        2.0,
+        1.6,
         0.75
       ]
     },
     {
-      "id": "barrier",
+      "id": "admission",
       "kind": "class",
-      "name": "WaitBarrier",
+      "name": "McpAdmission",
       "stereotype": "策略",
-      "responsibility": "续跑条件：waiting_on 里每一项都有结果。按等待原因分别判：子 run → 子 run 进入终态；审批、提问 → 事项已决定（approved / rejected / expired）。没有等待项的挂起一律不续（旧格式的遗留数据，用户可以取消）。",
+      "responsibility": "三道闸门，原生和 CLI 共用：① 这个智能体的 Key 停用了、服务没授给它 → 跳过；② 工具没授给它、管理员停用、定义不合规 → 跳过；③ 工具定义和保存时记下的指纹不同 → 按智能体的策略照用并提示，或拦下。跳过一定要提示（mcp.tool_skipped / mcp.tool_drift），静默少一个工具，模型照常做事只是做不好，用户不知道为什么。CLI 只能按服务下发：一个工具被拦，整个服务这一轮不下发。",
       "methods": [
         [
           "+",
-          "settled(run) -> bool"
+          "admit(wanted, catalog, access, digests, policy) -> (allowed, notices)"
         ]
       ],
       "at": [
-        0.0,
+        3.85,
         2.6
       ]
     },
     {
-      "id": "sweep",
+      "id": "gw",
       "kind": "class",
-      "name": "SuspendedSweep",
-      "stereotype": "领域服务",
-      "responsibility": "定时（默认 60 秒）扫一遍挂起的 run，能续的续上，补上丢掉的唤醒。不判超时：审批只由人决定，等多久都不替用户按拒绝处理。",
-      "attributes": [
-        [
-          "+",
-          "interval_s: float"
-        ]
-      ],
+      "name": "McpGatewayClient",
+      "stereotype": "防腐层",
+      "responsibility": "MCP 网关的内部接口，Atlas 只认网关：服务和工具定义从网关读，服务地址都是网关上的 /mcp/{服务名}，看不到上游。元数据进程内短时缓存，Redis 里留一份（7 天），网关暂时不可用时照样能装配。智能体的 Key：每个智能体一把，没有就补申请；网关算好它此刻能用的服务和工具；Key 只在内存和传输层，不进 Redis、不进日志；网关不可用时沿用上次取到的，从没取到过才报不可用。",
       "methods": [
         [
           "+",
-          "sweep() -> int（续了几个）"
-        ]
-      ],
-      "at": [
-        2.0,
-        2.6
-      ]
-    },
-    {
-      "id": "recovery",
-      "kind": "class",
-      "name": "TakeoverRecovery",
-      "stereotype": "领域服务",
-      "responsibility": "接管时收拾现场，和第一个检查点在同一个事务里做，第一条写是租约围栏：补归档（检查点之后发布到 Redis、还没归档的事件）、续序号（从上一个实例实际发到的地方接着数）、处理悬空的工具调用、算出已流出但没落库的正文字数，放进 run.resumed 让前端丢掉（这一段会重做）。",
-      "methods": [
-        [
-          "+",
-          "recover(run, reason) -> TraceEvent"
-        ]
-      ],
-      "at": [
-        4.1,
-        2.6
-      ]
-    },
-    {
-      "id": "cancel",
-      "kind": "class",
-      "name": "CancelSettlement",
-      "stereotype": "领域服务",
-      "responsibility": "挂起中被取消的 run 由这里收尾：落终态 cancelled、发 run.cancelled、放会话锁。别处的取消都发生在有进程在跑的时候（运行时自己发 run.cancelled、走正常收尾），这里没有任何进程；不自己收，run 会一直躺在挂起状态，会话锁也一直不放。子孙 run 的级联取消由应用服务逐层做。",
-      "methods": [
-        [
-          "+",
-          "settle(run_uuid)"
-        ]
-      ],
-      "at": [
-        6.05,
-        2.6
-      ]
-    },
-    {
-      "id": "queries",
-      "kind": "class",
-      "name": "ContinuationQueries",
-      "stereotype": "仓储",
-      "responsibility": "续跑要的读查询：真正挂起的 run（有等待项的），某个 run 还没结束的直接子 run，子 run 的状态。",
-      "methods": [
-        [
-          "+",
-          "suspended_runs() -> list[run_uuid]"
+          "catalog() -> 服务、工具定义（缓存）"
         ],
         [
           "+",
-          "unfinished_children(run_uuid) -> list[run_uuid]"
-        ]
-      ],
-      "at": [
-        1.0,
-        4.45
-      ]
-    },
-    {
-      "id": "dangling",
-      "kind": "class",
-      "name": "DanglingCallPolicy",
-      "stereotype": "策略",
-      "responsibility": "检查点里有 tool_use、没有结果的调用怎么办：工具声明了可接续的（execute：沙箱的执行账本能按同一个调用接上还在跑的命令），用同一个 tool_call_id 重放；其余的写一条「结果未知」交给模型判断，不盲目重放副作用。",
-      "methods": [
+          "access(agent) -> 能用的服务和工具、Key"
+        ],
         [
           "+",
-          "resolve(call) -> Replay | Unknown"
+          "forget(agent)"
         ]
       ],
       "at": [
-        4.1,
-        4.45
-      ]
-    },
-    {
-      "id": "seg",
-      "kind": "class",
-      "name": "SegmentExecution",
-      "external": true,
-      "source": "Run 执行器 · 一段的执行与落库领域",
-      "methods": [
-        [
-          "+",
-          "接管时 · 挂起落库后 · 子 run 结束时"
-        ]
-      ],
-      "at": [
-        0.0,
-        -1.0
-      ]
-    },
-    {
-      "id": "worker",
-      "kind": "class",
-      "name": "RunWorker",
-      "external": true,
-      "source": "Run 执行器 · 调度与租约领域",
-      "methods": [
-        [
-          "+",
-          "cancel(…)（挂起中的）"
-        ]
-      ],
-      "at": [
-        2.0,
-        -1.0
-      ]
-    },
-    {
-      "id": "queue",
-      "kind": "class",
-      "name": "RunQueue",
-      "external": true,
-      "source": "Run 执行器 · 调度与租约领域",
-      "methods": [
-        [
-          "+",
-          "requeue(run_uuid) -> bool（挂起 → 排队，CAS）"
-        ]
-      ],
-      "at": [
-        4.4,
-        -1.0
-      ]
-    },
-    {
-      "id": "approval",
-      "kind": "class",
-      "name": "ApprovalStore",
-      "external": true,
-      "source": "原生运行时 · 挂起与人机协作领域",
-      "methods": [
-        [
-          "+",
-          "status(tokens) · decide(…) → 唤醒"
-        ]
-      ],
-      "at": [
-        -2.2,
+        -0.6,
         2.6
       ]
     },
     {
-      "id": "relay",
+      "id": "def",
       "kind": "class",
-      "name": "EventRelay",
-      "external": true,
-      "source": "事件中继组件",
-      "methods": [
+      "name": "McpToolDef",
+      "stereotype": "值对象",
+      "responsibility": "一个工具的定义，来自网关的元数据。模型看到的名字是「服务__工具」，服务名不许有下划线，否则审计时还原不出来源。只读注解（readOnlyHint）平铺到工具的元数据上，审批按它判副作用类别。指纹覆盖名字、描述、参数定义和注解：只改描述不改名字是注入风险最高的变更。",
+      "attributes": [
         [
           "+",
-          "未归档的事件 · publish · release_thread_lock"
+          "server · name · model_name"
+        ],
+        [
+          "+",
+          "description · input_schema · annotations"
+        ],
+        [
+          "+",
+          "digest · issues（非空即不可用）"
         ]
       ],
       "at": [
-        7.9,
+        3.85,
+        0.75
+      ]
+    },
+    {
+      "id": "ctx",
+      "kind": "class",
+      "name": "CallContext",
+      "stereotype": "值对象",
+      "responsibility": "这一轮的身份，闭包捕获、不进工具参数：身份能由模型指定就是冒用他人身份的口子。写成请求头随每次调用发出，审计用，网关会改写成它确认过的身份。",
+      "attributes": [
+        [
+          "+",
+          "run · thread · user · auth_uid"
+        ],
+        [
+          "",
+          "→ X-Run-Id · X-Thread-Id · X-Uid · X-Auth-Uid"
+        ]
+      ],
+      "at": [
+        -0.6,
+        0.75
+      ]
+    },
+    {
+      "id": "sessions",
+      "kind": "class",
+      "name": "SegmentSessions",
+      "stereotype": "实体",
+      "responsibility": "一段执行里的 MCP 状态。同一个服务复用一个会话：第一次调用时建（握手 + 补拉一次工具列表），之后每次调用只发 1 个请求，N 次调用从 4N 个请求降到 N + 3；段结束（完成、挂起、取消、被接管）时全部关闭，续跑重新建，不跨进程迁移。Key 每个请求现取，被网关拒绝时重新取一次，已打开的会话不用重建。「用不了」的结论在本段内记住（整段、某个服务、某个工具），之后直接交回同样的说明，不再发请求。",
+      "methods": [
+        [
+          "+",
+          "hold(server) · reset(server) · refresh_key()"
+        ],
+        [
+          "+",
+          "block(server, tool, message) · blocked(server, tool)"
+        ],
+        [
+          "+",
+          "aclose()"
+        ]
+      ],
+      "at": [
+        1.6,
         4.45
       ]
     },
     {
-      "id": "toolreg",
+      "id": "guarded",
       "kind": "class",
-      "name": "ToolRegistry",
-      "external": true,
-      "source": "原生运行时 · 工具面领域",
+      "name": "GuardedCall",
+      "stereotype": "领域服务",
+      "responsibility": "每次调用的护栏，按顺序：本段已记住用不了就直接交回说明 → 按参数定义校验参数（缺必填、类型不对、多了字段，直接交回模型改正，不发请求）→ 持有会话 → 超时 → 失败分类 → 能先修复的（Key 刚被重置、会话失效）修好后自动重试一次，其余不自动重试：有副作用的工具执行两次就是两张工单 → 结论记进本段 → 超大文本结果掐头去尾。服务自己返回的业务错误原样交给模型。",
       "methods": [
         [
           "+",
-          "resumable(tool_name) -> bool"
+          "__call__(**arguments) -> content"
         ]
       ],
       "at": [
-        4.1,
-        6.15
+        1.6,
+        2.6
+      ]
+    },
+    {
+      "id": "failure",
+      "kind": "class",
+      "name": "FailurePolicy",
+      "stereotype": "策略",
+      "responsibility": "失败 → 给模型的说明、能不能先修复、在本段记住的范围。网关的拒绝带原因：Key 失效（重取一次，取不到整段记住）、没被授权、服务停用（记住这个服务）、工具不存在（记住这个工具）、上游出错或不可用（不记住，可以稍后重试）。超时：只读工具说可以重试，有副作用的说「结果未知，先确认再重试」。取消、编程错误不归这里，照旧抛出，不让 bug 伪装成「服务不可用」被模型绕过去。",
+      "methods": [
+        [
+          "+",
+          "classify(exc, *, read_only) -> Failure | None"
+        ]
+      ],
+      "attributes": [
+        [
+          "+",
+          "Failure = (message, retry: key | session | None, remember: run | server | tool | None)"
+        ]
+      ],
+      "at": [
+        3.85,
+        4.45
+      ]
+    },
+    {
+      "id": "catalogFacade",
+      "kind": "class",
+      "name": "ToolCatalog",
+      "external": true,
+      "source": "工具接入 · 原生运行时的入口",
+      "methods": [
+        [
+          "+",
+          "for_segment(spec, ctx)"
+        ]
+      ],
+      "at": [
+        0.8,
+        -0.95
+      ]
+    },
+    {
+      "id": "cliFacade",
+      "kind": "class",
+      "name": "CliToolHandoff",
+      "external": true,
+      "source": "工具接入 · CLI 运行时的入口",
+      "methods": [
+        [
+          "+",
+          "mcp_servers(spec, user)"
+        ]
+      ],
+      "at": [
+        2.6,
+        -0.95
+      ]
+    },
+    {
+      "id": "gateway",
+      "kind": "class",
+      "name": "MCP 网关",
+      "external": true,
+      "source": "MCP 网关服务",
+      "methods": [
+        [
+          "+",
+          "/internal/metadata · /internal/client-keys"
+        ],
+        [
+          "+",
+          "/mcp/{服务}（Streamable HTTP）"
+        ]
+      ],
+      "at": [
+        -2.9,
+        4.45
+      ]
+    },
+    {
+      "id": "scope",
+      "kind": "class",
+      "name": "McpToolScope",
+      "external": true,
+      "source": "智能体管理 · 智能体配置领域",
+      "methods": [
+        [
+          "+",
+          "编辑器可选项、保存时校验、记指纹"
+        ]
+      ],
+      "at": [
+        -2.9,
+        1.6
       ]
     }
   ],
   "relationships": [
     {
-      "from": "seg",
-      "to": "cont",
+      "from": "catalogFacade",
+      "to": "toolset",
       "type": "uses",
-      "description": "收拾现场、查续跑条件"
+      "description": "本段的 MCP 工具"
     },
     {
-      "from": "worker",
-      "to": "cont",
+      "from": "cliFacade",
+      "to": "toolset",
       "type": "uses",
-      "description": "挂起中取消"
+      "description": "下发的服务"
     },
     {
-      "from": "approval",
-      "to": "cont",
+      "from": "toolset",
+      "to": "ctx",
       "type": "uses",
-      "description": "做了决定就查条件"
+      "description": "身份请求头"
     },
     {
-      "from": "cont",
-      "to": "queue",
+      "from": "toolset",
+      "to": "gw",
       "type": "uses",
-      "description": "条件满足：放回队列"
+      "description": "定义、Key"
     },
     {
-      "from": "cont",
-      "to": "barrier",
+      "from": "toolset",
+      "to": "admission",
       "type": "uses",
-      "description": "都有结果了吗"
+      "description": "过闸门"
     },
     {
-      "from": "barrier",
-      "to": "approval",
+      "from": "toolset",
+      "to": "guarded",
       "type": "uses",
-      "description": "事项状态"
+      "description": "creates（每个工具一个）"
     },
     {
-      "from": "barrier",
-      "to": "queries",
+      "from": "admission",
+      "to": "def",
       "type": "uses",
-      "description": "子 run 状态"
+      "description": "能不能用、指纹"
     },
     {
-      "from": "cont",
-      "to": "sweep",
-      "type": "composition",
-      "description": "定时补扫"
+      "from": "guarded",
+      "to": "sessions",
+      "type": "uses",
+      "description": "持有会话、记住用不了"
     },
     {
-      "from": "sweep",
-      "to": "queries",
+      "from": "guarded",
+      "to": "failure",
       "type": "uses",
-      "description": "挂起的 run"
+      "description": "失败怎么说"
     },
     {
-      "from": "cont",
-      "to": "recovery",
+      "from": "gw",
+      "to": "gateway",
       "type": "uses",
-      "description": "接管时"
+      "description": "元数据、智能体 Key"
     },
     {
-      "from": "recovery",
-      "to": "dangling",
+      "from": "sessions",
+      "to": "gateway",
       "type": "uses",
-      "description": "悬空的调用"
+      "description": "tools/call（带 Key）"
     },
     {
-      "from": "dangling",
-      "to": "toolreg",
+      "from": "scope",
+      "to": "gw",
       "type": "uses",
-      "description": "工具可接续吗"
-    },
-    {
-      "from": "recovery",
-      "to": "relay",
-      "type": "uses",
-      "description": "补归档、续序号"
-    },
-    {
-      "from": "cont",
-      "to": "cancel",
-      "type": "uses",
-      "description": "挂起中取消"
-    },
-    {
-      "from": "cancel",
-      "to": "relay",
-      "type": "uses",
-      "description": "发 run.cancelled、放锁"
+      "description": "能选哪些工具"
     }
   ],
   "capabilities": [
     {
-      "name": "续跑",
-      "entry": "Continuation.resume_if_ready(run_uuid)",
-      "callers": "一段的执行（子 run 结束时、自己挂起落库后）、审批事项被决定时、定时补扫",
-      "description": "等的事都有结果了，就 CAS 把 run 放回队列并唤醒；几个入口同时到时只有一个放得回去"
+      "name": "原生智能体本段的 MCP 工具",
+      "entry": "McpToolset.tools(spec, ctx)",
+      "callers": "ToolCatalog（原生运行时每段装配时）",
+      "description": "过三道闸门后造出带护栏的工具；交出提示和段末要关的会话；网关不可用就跳过并提示"
     },
     {
-      "name": "接管时收拾现场",
-      "entry": "Continuation.recover(run_uuid, reason)",
-      "callers": "一段的执行（领到交接或租约过期的 run 时）",
-      "description": "补归档、续序号、处理悬空调用，返回 run.resumed（带要丢掉的正文字数）"
+      "name": "CLI 智能体下发的 MCP 服务",
+      "entry": "McpToolset.cli_servers(spec, *, user)",
+      "callers": "CliToolHandoff（CLI 运行时开会话时）",
+      "description": "服务级的网关地址和智能体的 Key；同一套闸门，有一个工具被拦就整个服务不下发"
     },
     {
-      "name": "挂起中取消",
-      "entry": "Continuation.settle_cancelled(run_uuid)",
-      "callers": "调度与租约（RunExecutor.cancel）",
-      "description": "落终态、发 run.cancelled、放会话锁"
+      "name": "目录和 Key",
+      "entry": "McpGatewayClient.catalog · access",
+      "callers": "智能体管理（编辑器可选项、保存时校验）",
+      "description": "和运行时同一个闸门来源：都问网关「这把 Key 能用什么」"
     }
   ],
   "decisions": [
     {
-      "decision": "三个续跑入口，同一套判据",
-      "reason": "子 run 结束时、自己挂起落库后、定时补扫时都可能该续。漏掉任何一个，run 就会永久卡在挂起：没有报错、没有事件，只是一个一直转圈的界面，这是最难发现的故障。"
+      "decision": "只连 MCP 网关，只做远程",
+      "reason": "服务注册、工具定义、授权、上游凭据都在网关，Atlas 不自己发现工具、不持有上游凭据；也不在平台里拉起 stdio 进程。网关是唯一的治理点，原生和 CLI 都经它。"
     },
     {
-      "decision": "续跑条件按等待原因分别判",
-      "reason": "子智能体挂起时没有审批，审批挂起时没有子 run。用「子 run 都结束了」去判审批，条件会立刻满足，于是续跑、又挂起、再续跑，死循环。所以 waiting_on 要落库，逐项按原因核对。"
+      "decision": "装配收进 McpToolset，闸门只有一份",
+      "reason": "现在原生智能体的装配写在执行器的 assembly 里（取目录、取 Key、建会话、Key 重取），CLI 的下发写在 CLI 运行时里，闸门各写一套，注释里写着「与 Native 同一套规则」靠人维持。收进来后两个运行时各调一个入口，规则改一处。"
     },
     {
-      "decision": "自己挂起落库之后，再查一次续跑条件",
-      "reason": "子 run 可能在父 run 这段收尾之前就跑完了：它去叫父 run 时，父还是 running，放回队列的 CAS 失败、唤醒丢掉；随后父落成挂起，从此再没人叫它。子 run 秒回时几乎必现。"
+      "decision": "去掉复核",
+      "reason": "网关已经不做人工复核（review_required 恒为假），工具能不能用只看网关给的不合规原因和授权；留着复核状态的判断，是一段永远走不到的代码和一个误导人的概念。"
     },
     {
-      "decision": "续跑就是 CAS 放回队列",
-      "reason": "几个子 run 同时结束时都会来续父 run，只有一个能 CAS 成功；放回队列后和新 run 走同一条领取路径，背压和接管的规则只有一套。"
+      "decision": "装配时只读缓存，建连推迟到第一次调用",
+      "reason": "一个慢的服务不该拖慢每一轮，一个宕机的服务也不该让所有挂了它的智能体发不出消息；元数据在进程内和 Redis 各有一份，网关短暂不可用时照样装配。"
     },
     {
-      "decision": "不判超时",
-      "reason": "审批只由人决定，等到第二天也不替用户按拒绝处理；挂起时已清掉租约，等待不占实例。定时补扫只补丢掉的唤醒，不催促。"
+      "decision": "Key 写在传输层，每个请求现取",
+      "reason": "模型看不到、改不了；Key 在网关被重置后，被拒绝的那次请求重新取一次就能接着用，已打开的会话不用重建。"
     },
     {
-      "decision": "接管时收拾现场和第一个检查点在同一个事务里，第一条写是围栏",
-      "reason": "补归档、续序号、补工具结果要么一起生效、要么一起不生效；如果在收拾的过程中租约又被别人拿走，整个回滚，不会两个实例各补一半。"
+      "decision": "一段之内复用会话，段结束就关",
+      "reason": "每次调用都新建会话要 4 个请求（握手、通知、补拉工具列表、调用）；复用后 N 次调用 N + 3 个。会话不跨段、不跨进程：挂起可能等很久，接管的实例重新建就好。"
     },
     {
-      "decision": "悬空的调用：可接续的工具重放，其余记「结果未知」",
-      "reason": "现在接管时所有悬空的调用都记「结果未知」，模型多半会再发一次新的调用，命令就跑了两遍；而沙箱的命令执行按 (run, tool_call) 记了执行账本，本来能接上还在跑的命令（沙箱架构评审第 12 条的冲突就在这里）。让工具声明自己可不可接续：execute 可以，用同一个 tool_call_id 重放；副作用无法确认的工具仍记「结果未知」，交给模型判断。"
+      "decision": "只有能先修复的失败才自动重试，而且只一次",
+      "reason": "Key 刚被重置、会话失效时，请求确定没到后端，修好重试是安全的。超时、后端出错时结果未知，有副作用的工具执行两次就是两张工单、两封邮件，交给模型判断。"
     },
     {
-      "decision": "已流出、没落库的正文告诉前端丢掉",
-      "reason": "上一个实例最后一次模型调用的正文可能已经流到前端，但没落库；接手的实例会重做这一次调用。run.resumed 带上要丢掉的字数，前端据此删掉，不会出现两份。"
+      "decision": "失败转成给模型的工具结果，不让整轮失败",
+      "reason": "一个外部服务出问题，模型可以换方法、告诉用户找谁；整轮失败的话用户什么都拿不到。确定用不了的在本段内记住，模型再调直接给同样的说明，不再打扰网关。"
     },
     {
-      "decision": "挂起中被取消，由这里收尾",
-      "reason": "其它取消都发生在有进程在跑时，运行时自己收尾；挂起中的 run 没有进程，不在这里收，它会一直挂着、会话锁也一直不放。"
+      "decision": "CLI 拿到的是服务级的网关地址和智能体的 Key",
+      "reason": "CLI 的 MCP 客户端在 Pod 里，Atlas 拦截不到单次调用，只能在开会话时下发；工具级的授权和停用由网关在每个请求上执行。Key 进 Pod 是有意接受的风险：它的能力不超出授给它的权限。"
     }
   ]
 }

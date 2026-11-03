@@ -29,336 +29,465 @@
 -->
 <script type="application/json" id="c4-model">
 {
-  "title": "代码图：Agent 平台 - Agent 服务 - CLI 运行时 - 权限转发",
-  "description": "目标领域模型，只画期望的样子、不对照现状。CLI 的权限请求 → 平台审批 → 答复或撤回；和原生运行时共用审批表和弹窗。",
-  "component": "CLI 运行时",
-  "package": "CLI 运行时 · 权限转发（目标模型）",
-  "overview": "CLI 智能体要执行有副作用的动作时，会按它自己的权限模式向 bridge 要权限；bridge 把请求经上游连接转给 server。权限转发把它变成一件平台审批：登记进和原生运行时同一张审批表、发 approval.required 让前端弹窗、等用户决定，再从 CLI 给出的选项里选一个答复（批准只选「允许一次」）。被拒的原因作为 tool.failed 送进事件流；bridge 撤回请求时作废审批。\n\n这是在线等待：CLI 进程和 bridge 都在等，run 仍是 running，只标上 awaiting_user。它不决定什么时候该问（CLI 的权限模式决定），也不管审批怎么存、怎么唤醒（原生运行时的审批管）。",
+  "title": "代码图：Agent 平台 - Agent 服务 - Run 执行器 - 调度与租约",
+  "description": "目标领域模型，只画期望的样子、不对照现状。谁来跑：入队唤醒、CAS 领取、背压、续租、停机交接。",
+  "component": "Run 执行器",
+  "package": "Run 执行器 · 调度与租约（目标模型）",
+  "overview": "调度与租约回答「这个 run 由哪个实例来跑」。run 是数据库里的工作：建好时就是排队状态，入队只广播一声唤醒。每个执行器实例订阅唤醒、也定时扫描，在并发上限内用 CAS 领取，领到就起一个执行槽，交给「一段的执行」。持有期间靠租约证明进程还活着：每 lease/3 一条 SQL 续本实例的全部租约，续不上就说明被接管了，立即停下。租约过期的 run 会被别的实例领走（接管）；停机时主动交接，别的实例立刻领走。\n\n它不管一段怎么跑、怎么落库（一段的执行管），也不管挂起的 run 什么时候该续、接管时怎么收拾现场（续跑、接管与取消管）。",
   "elements": [
     {
-      "id": "desk",
-      "kind": "class",
-      "name": "PermissionDesk",
-      "stereotype": "应用服务",
-      "responsibility": "CLI 要执行有副作用的动作时，bridge 发来权限请求；这里把它变成平台审批：登记事项 → 发 approval.required → 等用户决定 → 选一个选项答复。不属于本轮的请求（上一轮遗留的）直接拒绝，没人会看到它。bridge 撤回请求（到期按拒绝、或这一轮已结束）时作废审批，前端的弹窗随之消失。",
-      "methods": [
-        [
-          "+",
-          "ask(params) -> PermissionAnswer"
-        ],
-        [
-          "+",
-          "withdraw(params)"
-        ]
-      ],
-      "at": [
-        1.6,
-        0.75
-      ]
-    },
-    {
-      "id": "ask",
-      "kind": "class",
-      "name": "PermissionAsk",
-      "stereotype": "值对象",
-      "responsibility": "一次权限请求：属于哪一轮、哪个工具调用（标题、类别、原始参数）、CLI 给出的选项，以及 bridge 给的等待期限（默认不限）。",
-      "attributes": [
-        [
-          "+",
-          "turn_id · tool_call"
-        ],
-        [
-          "+",
-          "options: allow_once · allow_always · reject_once · reject_always"
-        ],
-        [
-          "+",
-          "expires_in_s: int | None"
-        ]
-      ],
-      "at": [
-        -0.6,
-        0.75
-      ]
-    },
-    {
-      "id": "answer",
-      "kind": "class",
-      "name": "PermissionAnswer",
-      "stereotype": "值对象",
-      "responsibility": "给 bridge 的答复：从 CLI 给出的选项里选一个，或者拒绝，二者恰好其一。",
-      "attributes": [
-        [
-          "+",
-          "option_id: str | None · reject: bool"
-        ]
-      ],
-      "at": [
-        -0.6,
-        2.6
-      ]
-    },
-    {
-      "id": "picker",
-      "kind": "class",
-      "name": "OptionPolicy",
-      "stereotype": "策略",
-      "responsibility": "按审批结果选选项：批准就选「允许一次」，绝不选「永远允许」——那是 CLI 侧的全局策略，不能从一次弹窗里溜进来；拒绝、过期、找不到对应选项都答拒绝。",
-      "methods": [
-        [
-          "+",
-          "pick(state, options) -> PermissionAnswer"
-        ]
-      ],
-      "at": [
-        1.6,
-        2.6
-      ]
-    },
-    {
-      "id": "denial",
-      "kind": "class",
-      "name": "DenialReporter",
-      "stereotype": "策略",
-      "responsibility": "被拒时，把原因（用户写的拒绝理由、CLI 自动模式拦截的类别）作为 tool.failed 送进事件流。CLI 只知道被拒，不知道为什么；不送的话用户在界面上也看不出来。",
-      "methods": [
-        [
-          "+",
-          "report(tool_call, outcome) -> EventIntent"
-        ]
-      ],
-      "at": [
-        3.85,
-        0.75
-      ]
-    },
-    {
-      "id": "waiter",
-      "kind": "class",
-      "name": "DecisionWaiter",
-      "stereotype": "领域服务",
-      "responsibility": "等用户的决定：等审批那边的唤醒，低频检查兜底；bridge 撤回就停。自己不设期限，bridge 给了期限才按它。等待期间把 run 标成 awaiting_user：run 还在跑（CLI 和 bridge 都在等），但界面要显示「需要你处理」。",
-      "methods": [
-        [
-          "+",
-          "wait(approval_uuid, withdrawn) -> state"
-        ]
-      ],
-      "at": [
-        3.85,
-        2.6
-      ]
-    },
-    {
-      "id": "port",
+      "id": "iface",
       "kind": "interface",
-      "name": "ApprovalPort",
-      "stereotype": "扩展点",
-      "responsibility": "平台审批的最小接口：查状态（第一次查时登记，审批 id 由 (run, toolCallId) 派生）、等决定、作废。由原生运行时的审批实现，所以 CLI 和原生智能体进的是同一张审批表、同一个弹窗。",
+      "name": "RunExecutor",
+      "stereotype": "对外接口",
+      "responsibility": "Run 执行器对组件外的唯一入口：入队后唤醒、取消、等的事有了结果时续跑、停机。调用方不知道 run 会在哪个实例上跑；以后换成独立的 worker 进程，只换实现。",
       "methods": [
         [
           "+",
-          "check(run, tool_call, …) -> pending | approved | rejected | expired"
+          "submit(run_uuid)"
         ],
         [
           "+",
-          "wait(approval_uuid, timeout) · expire(approval_uuid)"
-        ]
-      ],
-      "at": [
-        2.75,
-        4.45
-      ]
-    },
-    {
-      "id": "bridge",
-      "kind": "class",
-      "name": "UpstreamServer",
-      "external": true,
-      "source": "会话 Pod · bridge · 上游通道领域",
-      "methods": [
+          "cancel(run_uuid)"
+        ],
         [
           "+",
-          "→ permission.ask · permission.withdraw"
+          "resume_if_ready(run_uuid) -> bool"
+        ],
+        [
+          "+",
+          "shutdown()"
         ]
       ],
       "at": [
-        1.6,
+        1.45,
         -0.95
       ]
     },
     {
-      "id": "store",
+      "id": "worker",
       "kind": "class",
-      "name": "ApprovalStore",
-      "external": true,
-      "source": "原生运行时 · 挂起与人机协作领域",
+      "name": "RunWorker",
+      "stereotype": "应用服务",
+      "responsibility": "一个实例上的执行器：订阅唤醒、定时领取扫描、领到就起一个执行槽交给「一段的执行」，有 run 在跑时续租，停机时交接。不自己装配运行时：运行时由组合根注入「一段的执行」。api 角色的实例只入队、不领取。",
+      "attributes": [
+        [
+          "-",
+          "_instance: str（租约的 owner）"
+        ],
+        [
+          "-",
+          "_slots: dict[run_uuid, ExecutionSlot]"
+        ]
+      ],
       "methods": [
         [
           "+",
-          "check · decide → 唤醒 · expire"
+          "start() · claim_available() -> int"
+        ],
+        [
+          "-",
+          "_spawn(run_uuid, reason)"
         ]
       ],
       "at": [
-        2.75,
-        6.1
+        1.45,
+        0.75
       ]
     },
     {
-      "id": "runtime",
+      "id": "admission",
       "kind": "class",
-      "name": "CliRuntime",
-      "external": true,
-      "source": "CLI 运行时 · 一轮的编排领域",
+      "name": "ClaimAdmission",
+      "stereotype": "策略",
+      "responsibility": "本实例能不能再领：并发上限（默认 32）减去在跑的槽；领取串行进行，几个唤醒同时到也不会一起冲过上限。停机中、或者是 api 角色，一律不领。",
+      "attributes": [
+        [
+          "+",
+          "max_concurrent: int"
+        ]
+      ],
       "methods": [
         [
           "+",
-          "产出事件（approval.required、tool.failed）"
+          "free_slots(slots, *, draining) -> int"
         ]
       ],
       "at": [
-        6.2,
-        1.7
+        -0.6,
+        0.75
       ]
     },
     {
-      "id": "runrec",
+      "id": "queue",
       "kind": "class",
-      "name": "RunRecordRepository",
+      "name": "RunQueue",
+      "stereotype": "仓储",
+      "responsibility": "run 表上与调度有关的读写。领取：排队中的、或租约已过期的在途 run，SELECT … FOR UPDATE SKIP LOCKED 再 UPDATE，同一个事务，多个实例并发领取互不阻塞，也不会领到同一行。续租：一条 SQL 续本实例的全部 run，返回仍由本实例持有的。交接：清掉 owner，让租约立即到期。续跑也走这里：把挂起的 run 放回队列。",
+      "methods": [
+        [
+          "+",
+          "claim_next(owner, lease_s) -> (run_uuid, TakeoverReason | None)"
+        ],
+        [
+          "+",
+          "renew(run_uuids, owner, lease_s) -> set[run_uuid]"
+        ],
+        [
+          "+",
+          "release(run_uuid)"
+        ],
+        [
+          "+",
+          "requeue(run_uuid) -> bool（挂起 → 排队，CAS）"
+        ]
+      ],
+      "at": [
+        4.25,
+        0.75
+      ]
+    },
+    {
+      "id": "reason",
+      "kind": "enum",
+      "name": "TakeoverReason",
+      "stereotype": "值对象",
+      "responsibility": "领到的是不是别人留下的：None 是新 run 或续跑；handoff 是上一个持有者停机前主动交接；expired 是持有者的租约过期，多半是进程死了。后两种要先收拾现场。",
+      "attributes": [
+        [
+          "",
+          "None（新 run、续跑）"
+        ],
+        [
+          "",
+          "HANDOFF（主动交接）"
+        ],
+        [
+          "",
+          "EXPIRED（租约过期）"
+        ]
+      ],
+      "at": [
+        4.25,
+        -0.95
+      ]
+    },
+    {
+      "id": "lease",
+      "kind": "class",
+      "name": "Lease",
+      "stereotype": "值对象",
+      "responsibility": "「进程还活着」的心跳：持有者、到期时刻、被接管过几次。默认 30 秒，每 10 秒续一次。它不是工作时长上限，长任务靠续租一直跑；挂起和终态时清掉。被接管得频繁，说明实例在频繁崩溃。",
+      "attributes": [
+        [
+          "+",
+          "owner: str | None"
+        ],
+        [
+          "+",
+          "until: datetime | None"
+        ],
+        [
+          "+",
+          "takeovers: int"
+        ]
+      ],
+      "at": [
+        4.6,
+        2.75
+      ]
+    },
+    {
+      "id": "renewer",
+      "kind": "class",
+      "name": "LeaseRenewer",
+      "stereotype": "领域服务",
+      "responsibility": "有 run 在跑时每 lease/3 续一次本实例的全部租约；没 run 了就停，下次领到再起。某个 run 续不上，就说明它已被别的实例接管，立即停掉它的执行槽。",
+      "attributes": [
+        [
+          "-",
+          "_interval = lease / 3"
+        ]
+      ],
+      "methods": [
+        [
+          "+",
+          "renew_once() -> set[run_uuid]（续不上的）"
+        ]
+      ],
+      "at": [
+        2.95,
+        2.75
+      ]
+    },
+    {
+      "id": "slot",
+      "kind": "class",
+      "name": "ExecutionSlot",
+      "stereotype": "实体",
+      "responsibility": "本实例上一个在跑的 run：执行任务、是否在交接、是不是 CLI 运行时（交接方式不同）。交接或续不上租约时，按这个槽停下对应的执行。",
+      "attributes": [
+        [
+          "+",
+          "run_uuid · task"
+        ],
+        [
+          "+",
+          "draining: bool · cli: bool"
+        ]
+      ],
+      "at": [
+        -0.6,
+        2.75
+      ]
+    },
+    {
+      "id": "wake",
+      "kind": "interface",
+      "name": "WakeChannel",
+      "stereotype": "扩展点",
+      "responsibility": "广播「有活了」，订阅方断了就退避重连。服务端用 Redis 发布订阅实现。它只是加速：唤醒丢了，定时领取扫描照样能领到。",
+      "methods": [
+        [
+          "+",
+          "broadcast()"
+        ],
+        [
+          "+",
+          "listen() -> AsyncIterator[None]"
+        ]
+      ],
+      "at": [
+        -0.6,
+        -0.95
+      ]
+    },
+    {
+      "id": "drain",
+      "kind": "class",
+      "name": "Drainer",
+      "stereotype": "领域服务",
+      "responsibility": "停机交接：先停止领取，再把在跑的 run 交给别的实例。原生运行时在下一个安全点（工具轮次落库之后）停下；CLI 运行时直接断开，那一轮在 Pod 里照常进行，接手的实例再连回去。等不到安全点的，到 drain_timeout（默认 60 秒）直接中止，最多丢一轮。交接 = 清租约 + 发唤醒，状态不动。",
+      "attributes": [
+        [
+          "+",
+          "timeout_s: float"
+        ]
+      ],
+      "methods": [
+        [
+          "+",
+          "drain()（可重复调用，只做一次）"
+        ]
+      ],
+      "at": [
+        0.6,
+        2.75
+      ]
+    },
+    {
+      "id": "segment",
+      "kind": "class",
+      "name": "SegmentExecution",
       "external": true,
       "source": "Run 执行器 · 一段的执行与落库领域",
       "methods": [
         [
           "+",
-          "set_awaiting_user(run_uuid, bool)"
+          "run(run_uuid, *, takeover, drain_signal)"
         ]
       ],
       "at": [
-        6.2,
-        3.3
+        0.85,
+        4.65
+      ]
+    },
+    {
+      "id": "cont",
+      "kind": "class",
+      "name": "Continuation",
+      "external": true,
+      "source": "Run 执行器 · 续跑、接管与取消领域",
+      "methods": [
+        [
+          "+",
+          "resume_if_ready(run_uuid) · settle_cancelled(run_uuid)"
+        ]
+      ],
+      "at": [
+        2.65,
+        4.65
+      ]
+    },
+    {
+      "id": "runsvc",
+      "kind": "class",
+      "name": "RunService",
+      "external": true,
+      "source": "会话管理 · 对话领域",
+      "methods": [
+        [
+          "+",
+          "create(…) → submit · cancel(…)"
+        ]
+      ],
+      "at": [
+        1.45,
+        -2.65
       ]
     }
   ],
   "relationships": [
     {
-      "from": "bridge",
-      "to": "desk",
+      "from": "runsvc",
+      "to": "iface",
       "type": "uses",
-      "description": "权限请求、撤回"
+      "description": "建好就入队、取消"
     },
     {
-      "from": "desk",
-      "to": "ask",
-      "type": "uses",
-      "description": "解析"
-    },
-    {
-      "from": "desk",
-      "to": "picker",
-      "type": "uses",
-      "description": "选选项"
-    },
-    {
-      "from": "picker",
-      "to": "answer",
-      "type": "uses",
-      "description": "creates"
-    },
-    {
-      "from": "desk",
-      "to": "denial",
-      "type": "uses",
-      "description": "被拒时"
-    },
-    {
-      "from": "desk",
-      "to": "waiter",
-      "type": "uses",
-      "description": "等决定"
-    },
-    {
-      "from": "desk",
-      "to": "port",
-      "type": "association",
-      "description": "登记、查状态"
-    },
-    {
-      "from": "waiter",
-      "to": "port",
-      "type": "uses",
-      "description": "等唤醒、兜底检查"
-    },
-    {
-      "from": "store",
-      "to": "port",
+      "from": "worker",
+      "to": "iface",
       "type": "implements"
     },
     {
-      "from": "desk",
-      "to": "runtime",
+      "from": "worker",
+      "to": "admission",
       "type": "uses",
-      "description": "approval.required",
-      "labelAt": 0.7
+      "description": "还能领几个"
     },
     {
-      "from": "denial",
-      "to": "runtime",
-      "type": "uses",
-      "description": "tool.failed"
+      "from": "worker",
+      "to": "queue",
+      "type": "association",
+      "description": "领取"
     },
     {
-      "from": "waiter",
-      "to": "runrec",
+      "from": "queue",
+      "to": "reason",
       "type": "uses",
-      "description": "等待期间 awaiting_user"
+      "description": "返回"
+    },
+    {
+      "from": "queue",
+      "to": "lease",
+      "type": "uses",
+      "description": "写入、续期、清除"
+    },
+    {
+      "from": "worker",
+      "to": "renewer",
+      "type": "composition",
+      "description": "有 run 时起"
+    },
+    {
+      "from": "renewer",
+      "to": "queue",
+      "type": "uses",
+      "description": "一条 SQL 续全部"
+    },
+    {
+      "from": "worker",
+      "to": "slot",
+      "type": "composition",
+      "description": "在跑的 run",
+      "multiplicity": "0..*"
+    },
+    {
+      "from": "worker",
+      "to": "wake",
+      "type": "association",
+      "description": "订阅唤醒"
+    },
+    {
+      "from": "worker",
+      "to": "drain",
+      "type": "composition",
+      "description": "停机时"
+    },
+    {
+      "from": "drain",
+      "to": "slot",
+      "type": "uses",
+      "description": "逐个交接"
+    },
+    {
+      "from": "drain",
+      "to": "queue",
+      "type": "uses",
+      "description": "清租约",
+      "labelAt": 0.72
+    },
+    {
+      "from": "worker",
+      "to": "segment",
+      "type": "uses",
+      "description": "领到就跑一段"
+    },
+    {
+      "from": "worker",
+      "to": "cont",
+      "type": "uses",
+      "description": "续跑、等待中取消"
     }
   ],
   "capabilities": [
     {
-      "name": "答复权限请求",
-      "entry": "PermissionDesk.ask(params)",
-      "callers": "bridge（经上游连接转来的请求）",
-      "description": "登记审批 → 发 approval.required → 等用户决定 → 批准选「允许一次」，否则拒绝；被拒的原因作为 tool.failed 送进事件流"
+      "name": "入队",
+      "entry": "RunExecutor.submit(run_uuid)",
+      "callers": "会话管理（建 Run、起子 run）",
+      "description": "run 行建好时已是排队状态；这里只广播唤醒，本实例有空位也立刻试领一次"
     },
     {
-      "name": "撤回",
-      "entry": "PermissionDesk.withdraw(params)",
-      "callers": "bridge",
-      "description": "bridge 已经给了 CLI 结果（到期按拒绝、或这一轮已结束），作废审批，弹窗消失"
+      "name": "领取与接管",
+      "entry": "RunWorker.claim_available()",
+      "callers": "唤醒、定时扫描、入队时",
+      "description": "领到并发上限为止；领到租约过期或被交接的 run 时，先交给续跑领域收拾现场再跑"
+    },
+    {
+      "name": "取消",
+      "entry": "RunExecutor.cancel(run_uuid)",
+      "callers": "会话管理",
+      "description": "在跑的由运行时下一步看到取消标记后自己收尾；挂起中的没有进程，交给续跑领域收尾"
+    },
+    {
+      "name": "停机交接",
+      "entry": "RunExecutor.shutdown()",
+      "callers": "进程退出钩子",
+      "description": "停止领取，安全点交接，超时直接中止；别的实例马上领走"
     }
   ],
   "decisions": [
     {
-      "decision": "和原生运行时共用审批表和弹窗",
-      "reason": "对用户来说只有一种审批：同一个弹窗、同一处历史、同一套权限。CLI 的请求进的是 kind = tool 的同一张表，审批那边的决定、作废、唤醒逻辑都复用。"
+      "decision": "Run 是数据库里的工作，任何实例都能领",
+      "reason": "以前 run 是「接到请求的那个进程里的任务」，进程一死就丢了。现在 run 行建好就是排队状态，入队只发唤醒；进程死了，租约过期后别的实例接着跑，最多丢一轮。"
     },
     {
-      "decision": "审批 id 由 (run, toolCallId) 派生，和原生一致",
-      "reason": "现在每次现生成一个 id，理由是 toolCallId 是任意字符串、放不进 uuid 列。用 uuid5 从任意字符串派生就行；派生之后，bridge 补发同一个请求、接管后重新询问时都落到同一行，不会弹出两个窗口。"
+      "decision": "领取用 SELECT … FOR UPDATE SKIP LOCKED 再 UPDATE，在同一个事务里",
+      "reason": "多个实例并发领取互不阻塞，也不会领到同一行。不写成 UPDATE … WHERE id = (子查询)：MySQL 不允许 UPDATE 的子查询读同一张表，这样两种方言同一份代码。"
     },
     {
-      "decision": "先登记，再发 approval.required",
-      "reason": "事件发出时审批行已经在库里，前端刷新页面去核对不会漏；反过来就可能出现弹窗出现了、点下去却找不到这件事。"
+      "decision": "租约是心跳，不是工作时长上限",
+      "reason": "运行不设到点结束的上限。租约短（30 秒）是为了进程死后尽快被接管；长任务靠每 10 秒续一次一直跑。挂起时清掉租约：等人可以等到第二天，不该占着实例。"
     },
     {
-      "decision": "批准只选「允许一次」",
-      "reason": "「永远允许」是 CLI 侧的全局策略，会让之后同类的动作都不再询问；它不能从用户点的一次「同意」里溜进来。"
+      "decision": "一条 SQL 续本实例的全部租约，续不上就立即停",
+      "reason": "逐个续，几十个 run 就是几十条 SQL。续不上说明租约已被别的实例接走（本实例卡顿过久），这时继续跑就是两个实例写同一个 run；检查点的第一条写也会再校验一次。"
     },
     {
-      "decision": "被拒的原因作为 tool.failed 送进事件流",
-      "reason": "CLI 只收到「拒绝」，不知道为什么，往往换个写法再试；把原因（用户的反馈、自动模式拦截的类别）显示出来，用户才知道它为什么停下。"
+      "decision": "唤醒只是加速，定时领取扫描兜底",
+      "reason": "Redis 发布订阅不保证送达，订阅断开期间的消息就丢了。定时扫描保证排队的 run 总会被领到，唤醒只让它更快。"
     },
     {
-      "decision": "等决定靠唤醒，低频检查兜底；不设期限",
-      "reason": "现在每秒查一次库，等一天就是八万多次查询。审批那边做了决定会发唤醒，这里等唤醒即可，偶尔检查一次防止唤醒丢失。审批只由人决定，这里不替用户按拒绝处理；bridge 给了期限才按它。"
+      "decision": "续跑就是重新入队，和新 run 走同一条领取路径",
+      "reason": "现在续跑另有一条领取路径（claim_for_resume），绕过了并发上限，接管、交接的判据也要在两处各写一遍。改成把挂起的 run 放回队列（CAS：挂起 → 排队）再唤醒，哪个实例领到都一样，背压规则只有一套。"
     },
     {
-      "decision": "在线等待期间，run 标 awaiting_user，状态仍是 running",
-      "reason": "CLI 的权限请求是在线等：进程在跑、bridge 在等，run 不能挂起，也不能被当成可以续跑的挂起态。用一个显式属性让界面显示「需要你处理」，不再挪用状态值（Run 执行器的状态机里已去掉 awaiting_approval）。"
+      "decision": "执行器不自己装配运行时，组合根在外面",
+      "reason": "现在 InProcessExecutor 在构造函数里自己建 HookAssembly 和 NativeRuntime，还把 executor=self 传进装配，让子智能体能起子 run，形成循环依赖。改成运行时由组合根注入；子智能体服务只依赖 RunExecutor.submit 这个接口。"
     },
     {
-      "decision": "什么时候问由 CLI 自己的权限模式决定，这里不再判断",
-      "reason": "平台的审批模式在每轮开始时（turn.start）翻成 CLI 的权限模式（一轮的编排里的模式对照），CLI 按它决定哪些动作要问、自动模式下拦哪些。这里再判一遍，就是两套规则打架。"
+      "decision": "停机时在安全点交接，等不到就中止",
+      "reason": "滚动发布时实例会被替换。原生运行时走到「本轮产生的都已落库、没有在跑的工具」再停，不丢工作；CLI 运行时断开即可，那一轮在 Pod 里照常跑。等不到安全点就中止，最多丢一轮。"
     }
   ]
 }

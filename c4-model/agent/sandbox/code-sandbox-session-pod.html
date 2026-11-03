@@ -33,7 +33,7 @@
   "description": "目标领域模型，只画期望的样子、不对照现状。建立在沙箱基座之上（code-sandbox-base-*.html）。外部 CLI 智能体的会话 Pod：按会话要 Pod，Pod 归人、由通用供给管理；凭据由凭据组件授权后传入、经 Credential Vault 注入，交给运行时的是 bridge 服务令牌。",
   "component": "沙箱",
   "package": "沙箱 · 会话 Pod（目标模型）",
-  "overview": "会话 Pod 是外部 CLI 智能体（经 bridge 接入）的运行环境。它按会话要 Pod：换算成通用供给的业务时，业务类型是 CLI_AGENT，业务 id 是这个会话的 uuid，人是会话的创建人；Pod 本身归人，由通用供给管理。工作区挂根会话的，技能和 CLI 的 HOME 挂自己的，HOME 持久化，Pod 重建后 CLI 能接着上次的会话。CLI 镜像、模型接入和凭据都由调用方准备好、作为参数传进来：镜像和模型来自这一轮的 Agent 版本快照，凭据由凭据组件按这一轮授权后给出；它不判断谁能用哪份凭据。凭据经 Credential Vault 注入，不进 Pod。交给 CLI 运行时的是 bridge 的地址和服务令牌，不是 execd 令牌。调用方是 CLI 运行时（每轮一次）、会话服务（删除级联）和维护任务。",
+  "overview": "会话 Pod 是外部 CLI 智能体（经 bridge 接入）的运行环境。它按会话要 Pod：换算成通用供给的业务时，业务类型是 CLI_AGENT，业务 id 是这个会话的 uuid，人是会话的创建人；Pod 本身归人，由通用供给管理。工作区挂根会话的，技能和 CLI 的 HOME 挂自己的，HOME 持久化，Pod 重建后 CLI 能接着上次的会话。CLI 镜像、模型接入和凭据都由调用方准备好、作为参数传进来：镜像和模型来自这一轮的 Agent 版本快照，凭据由凭据组件按这一轮授权后给出；它不判断谁能用哪份凭据。凭据经 Credential Vault 注入，不进 Pod。交给 CLI 运行时的是 bridge 的地址和服务令牌，不是 execd 令牌。调用方是 CLI 运行时（每轮一次）、会话管理 · 会话（删除级联）和维护任务。",
   "elements": [
     {
       "id": "provider",
@@ -331,7 +331,7 @@
       "kind": "class",
       "name": "RunRepository",
       "external": true,
-      "source": "数据访问组件（Run）",
+      "source": "Run 执行器（run 表的查询）",
       "methods": [
         [
           "+",
@@ -444,7 +444,7 @@
     {
       "name": "会话删除级联",
       "entry": "release(thread)",
-      "callers": "会话服务",
+      "callers": "会话管理 · 会话领域",
       "description": "经通用供给释放这个会话（reason=release），Pod 没有别的业务了才退役；失败只记日志"
     },
     {

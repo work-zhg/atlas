@@ -29,551 +29,346 @@
 -->
 <script type="application/json" id="c4-model">
 {
-  "title": "代码图：Agent 平台 - Agent 服务 - 沙箱 - 领域总览",
-  "description": "目标模型，只画期望的样子、不对照现状。沙箱组件的七个领域，每个只画对外入口和跨领域的扩展点，看依赖方向；领域内部见各自的 code-sandbox-*.html。",
-  "component": "沙箱",
-  "package": "沙箱（目标模型 · 领域总览）",
-  "overview": "沙箱组件分三层七个领域。业务层有三个：命令执行（在原生智能体的沙箱里跑命令）、原生沙箱（按工作区要沙箱、闲置回收）、会话 Pod（给 CLI 智能体要 Pod、交出 bridge 的地址）。中间是通用供给：按人管理沙箱，决定一个业务用哪个沙箱、什么时候建和退役。底下是基座，把 OpenSandbox 包成三个领域：生命周期（模板、建删查、生命周期日志）、沙箱内执行（execd：命令、文件、活动）、网络与凭据（出站策略、Credential Vault）。\n\n依赖只往下。通用供给经 SandboxKind 回调业务层，网络经 EgressLocator 向生命周期要地址，这两处是依赖倒置。组件外的调用方是引擎（Shell 工具）、工作区组件（读写选路）、CLI 运行时（确保会话 Pod）、会话服务和维护任务；凭据组件给出已授权的凭据。图上每个元素第一行写着它属于哪个领域。",
+  "title": "代码图：Agent 平台 - Agent 服务 - 智能体管理 - 身份与共享",
+  "description": "目标领域模型，只画期望的样子、不对照现状。智能体在平台外的身份（数字员工、数据对象、两把 Key）、共享授权、这一轮按谁的权限判。",
+  "component": "智能体管理",
+  "package": "智能体管理 · 身份与共享（目标模型）",
+  "overview": "身份与共享管智能体在平台外的存在：用户中心里的数字员工和数据对象（共享和可见范围靠它），模型管理平台和 MCP 网关上各一把 Key（能用哪些模型、工具靠它）。这些登记都按智能体 uuid 幂等，失败可以重做。共享就是数据对象的授权；权限类型决定这一轮按谁的权限判，规则只写在 AuthSubjectPolicy 一处。\n\n它只认 AgentRef 这几个值，不依赖智能体配置的类型，也不写 agent 表：数字员工 uid 由智能体配置拿到后自己存。",
   "elements": [
     {
-      "id": "shell",
+      "id": "reg",
       "kind": "class",
-      "name": "ShellSandbox",
+      "name": "AgentRegistrar",
       "stereotype": "应用服务",
-      "responsibility": "【命令执行】实现引擎的 SandboxProtocol：确保工作区的沙箱，后台执行一条命令并跟随到退出；重放不重跑、断线接着读、卡死和取消时中断。评测的原地执行 exec_in_running 也在这个领域。详见 code-sandbox-exec.html。",
-      "attributes": [
-        [
-          "",
-          "领域：命令执行"
-        ]
-      ],
+      "responsibility": "智能体在平台外的四处登记：用户中心的数字员工和数据对象（AtlasAgent，创建者为 OWNER），模型管理平台的客户端 Key，MCP 网关的 Key。每一处都按智能体 uuid 幂等，重做不会多出一份。数字员工和数据对象是必需的：失败就拒绝这次创建，重试时按 uuid 找回已建的那份；两把 Key 尽力而为，失败不挡住创建，编辑器打开和 Run 开始时补建。改名、改状态同步到各处，归档时收回 MCP Key。",
       "methods": [
         [
           "+",
-          "aexecute(command, *, timeout, cwd, exec_id)"
-        ]
-      ],
-      "at": [
-        0.0,
-        0.65
-      ]
-    },
-    {
-      "id": "native",
-      "kind": "class",
-      "name": "NativeSandboxService",
-      "stereotype": "应用服务",
-      "responsibility": "【原生沙箱】按工作区要沙箱（业务类型 NATIVE），档位选模板、镜像按档位准入；闲置回收、删除级联、孤儿回收都只释放自己的业务。详见 code-sandbox-native.html。",
-      "attributes": [
-        [
-          "",
-          "领域：原生沙箱"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "ensure · current · confirm_gone · profile_of"
+          "on_created(ref) -> digital_employee_uid"
         ],
         [
           "+",
-          "reap_idle · release · reap_orphans"
-        ]
-      ],
-      "at": [
-        1.85,
-        0.65
-      ]
-    },
-    {
-      "id": "pods",
-      "kind": "class",
-      "name": "SessionPods",
-      "stereotype": "应用服务",
-      "responsibility": "【会话 Pod】按会话要 Pod（业务类型 CLI_AGENT），交出 bridge 的地址和服务令牌；CLI、模型接入和已授权的凭据都由调用方作为参数传入；会话没有没结束的 run、闲置超过时限就释放。详见 code-sandbox-session-pod.html。",
-      "attributes": [
-        [
-          "",
-          "领域：会话 Pod"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "ensure(thread, cli, *, model, credentials)"
+          "on_renamed(ref) · on_status_changed(ref, before)"
         ],
         [
           "+",
-          "release · reap_idle · reap_orphans"
+          "ensure_digital_employee(ref) · ensure_keys(ref)"
         ]
       ],
       "at": [
-        4.75,
-        0.65
+        1.6,
+        2.6
       ]
     },
     {
-      "id": "nkind",
+      "id": "ref",
       "kind": "class",
-      "name": "NativeSandboxKind",
+      "name": "AgentRef",
+      "stereotype": "值对象",
+      "responsibility": "本领域只认智能体的这几个值，由智能体配置在调用时给出；本领域因此不依赖智能体配置的类型，依赖是单向的。",
+      "attributes": [
+        [
+          "+",
+          "agent_uuid · name · owner_uuid"
+        ],
+        [
+          "+",
+          "auth_subject · digital_employee_uid"
+        ]
+      ],
+      "at": [
+        -0.6,
+        2.6
+      ]
+    },
+    {
+      "id": "policy",
+      "kind": "class",
+      "name": "AuthSubjectPolicy",
       "stereotype": "策略",
-      "responsibility": "【原生沙箱】原生沙箱这一种：模板按档位、挂工作区和技能、就绪看 execd /ping。装配时按 biz_type = NATIVE 登记到通用供给。",
-      "attributes": [
-        [
-          "",
-          "领域：原生沙箱"
-        ]
-      ],
+      "responsibility": "这一轮按谁的权限判，权限类型只在这一处起作用。以人为权限：请求里的权限主体（人直接操作时就是发起人）。以 Agent 为权限：数字员工，与发起人无关；还没有数字员工就拒绝，不回退到发起人——回退会让「谁来用结果都一样」悄悄失效。子 run 沿用父 run 记下的主体，不再判。",
       "methods": [
         [
           "+",
-          "admit · build · ready"
+          "auth_uid_for(ref, requested) -> uuid"
         ]
       ],
       "at": [
-        1.15,
-        3.85
+        -0.6,
+        0.75
       ]
     },
     {
-      "id": "ckind",
+      "id": "sharing",
       "kind": "class",
-      "name": "CliPodKind",
-      "stereotype": "策略",
-      "responsibility": "【会话 Pod】会话 Pod 这一种：模板 cli、挂工作区 / 技能 / CLI 的 HOME，凭据非空才开凭据注入、每轮整份重写，就绪看 bridge /readyz。装配时按 biz_type = CLI_AGENT 登记。",
-      "attributes": [
-        [
-          "",
-          "领域：会话 Pod"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "build · attach · ready"
-        ]
-      ],
-      "at": [
-        5.15,
-        3.85
-      ]
-    },
-    {
-      "id": "prov",
-      "kind": "class",
-      "name": "SandboxProvisioning",
+      "name": "AgentSharing",
       "stereotype": "应用服务",
-      "responsibility": "【通用供给】按人管理沙箱：沙箱账户（名下沙箱、绑定的业务）、状态 CREATING / READY / RETIRING，先登记再建，版本号 CAS。一个业务至多绑一个沙箱，现在独占，以后共享只改分配策略。详见 code-sandbox-provisioning.html。",
-      "attributes": [
-        [
-          "",
-          "领域：通用供给"
-        ]
-      ],
+      "responsibility": "共享 = 用户中心里数据对象 AtlasAgent 的授权：READ 能用，WRITE 能改、能试跑草稿，OWNER 还能删、改权限类型、管共享；授给人、部门（可含下级）或角色。用户中心只校验授权行属于本应用的数据编码，这里再校验它属于这个智能体，免得拿别的智能体的授权行来改。没接用户中心时不能共享。",
       "methods": [
         [
           "+",
-          "ensure · current · confirm_gone · describe"
+          "grants(ref)"
         ],
         [
           "+",
-          "serving · release · retire · of_user"
+          "grant(ref, subjects, level, *, by)"
         ],
         [
           "+",
-          "reap_orphans · reconcile"
+          "update(ref, acl, level, *, by) · revoke(ref, acl, *, by)"
         ]
       ],
       "at": [
-        3.05,
-        2.25
+        3.85,
+        0.75
       ]
     },
     {
-      "id": "kind",
-      "kind": "interface",
-      "name": "SandboxKind",
-      "stereotype": "扩展点",
-      "responsibility": "【通用供给】一种业务用沙箱时和通用流程不一样的地方：准入、创建规格、附加配置、就绪判断。供给只认这个接口，不认识原生沙箱和会话 Pod。",
-      "attributes": [
-        [
-          "",
-          "领域：通用供给"
-        ]
-      ],
+      "id": "view",
+      "kind": "class",
+      "name": "IdentityView",
+      "stereotype": "应用服务",
+      "responsibility": "「身份」页签：数字员工（账号、名字、状态；用户中心里找不到就提示联系管理员）和权限类型。以 Agent 为权限时，列出所配的知识库数字员工读不读得到——读不到的运行时不可用，提示请库的所有者共享给它。",
       "methods": [
         [
           "+",
-          "admit · build · attach · ready"
+          "of(ref, dataset_ids) -> Identity"
         ]
       ],
       "at": [
-        2.5,
-        3.85
+        3.85,
+        2.6
       ]
     },
     {
-      "id": "rt",
-      "kind": "interface",
-      "name": "SandboxRuntime",
-      "stereotype": "对外接口",
-      "responsibility": "【基座 · 生命周期】把 OpenSandbox 的 lifecycle server 包起来：管理沙箱模板，按调用方给的 sandbox_uuid 建（幂等）、查、等落定、删（必须带原因），记生命周期日志、对账。令牌不出基座，唯一出基座的是 bridge 服务令牌。详见 code-sandbox-base-lifecycle.html。",
-      "attributes": [
-        [
-          "",
-          "领域：基座 · 生命周期"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "launch(sandbox_uuid, spec) · get · await_settled"
-        ],
-        [
-          "+",
-          "destroy(…, *, reason) · endpoint · service_token"
-        ],
-        [
-          "~",
-          "access(sandbox_uuid)（基座内部）"
-        ]
-      ],
-      "at": [
-        3.65,
-        5.6
-      ]
-    },
-    {
-      "id": "exec",
-      "kind": "interface",
-      "name": "SandboxExec",
-      "stereotype": "对外接口",
-      "responsibility": "【基座 · 沙箱内执行】把 execd 包起来：探测就绪、后台命令、文件会话，并按沙箱记活动（运行中的命令、最近活动时间）。只收 sandbox_uuid，地址和令牌经生命周期的 access 取。详见 code-sandbox-base-execution.html。",
-      "attributes": [
-        [
-          "",
-          "领域：基座 · 沙箱内执行"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "ping · start · read · status · interrupt · usage"
-        ],
-        [
-          "+",
-          "open_files · activity"
-        ]
-      ],
-      "at": [
-        0.25,
-        5.6
-      ]
-    },
-    {
-      "id": "egress",
-      "kind": "interface",
-      "name": "EgressControl",
-      "stereotype": "对外接口",
-      "responsibility": "【基座 · 网络与凭据】出站策略和 Credential Vault：建沙箱时声明策略（NetworkPolicy），运行期写凭据、改策略，告诉调用方怎样信任 MITM CA。不决定谁能用哪份凭据。详见 code-sandbox-base-network.html。",
-      "attributes": [
-        [
-          "",
-          "领域：基座 · 网络与凭据"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "bind(sandbox_uuid, bindings) · update_policy"
-        ]
-      ],
-      "at": [
-        5.6,
-        5.6
-      ]
-    },
-    {
-      "id": "locator",
-      "kind": "interface",
-      "name": "EgressLocator",
-      "stereotype": "扩展点",
-      "responsibility": "【基座 · 网络与凭据】找到沙箱里 egress 的地址和鉴权头。由生命周期实现，网络领域因此不依赖生命周期，基座内部没有环。",
-      "attributes": [
-        [
-          "",
-          "领域：基座 · 网络与凭据"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "locate(sandbox_uuid)"
-        ]
-      ],
-      "at": [
-        5.6,
-        7.1
-      ]
-    },
-    {
-      "id": "proto",
-      "kind": "interface",
-      "name": "SandboxProtocol",
+      "id": "agentSvc",
+      "kind": "class",
+      "name": "AgentService",
       "external": true,
-      "source": "引擎契约 atlas_engine.contracts",
+      "source": "智能体管理 · 智能体配置领域",
       "methods": [
         [
           "+",
-          "aexecute(…)"
+          "create · update · set_status · set_auth_subject"
         ]
       ],
       "at": [
-        0.0,
+        1.6,
         -0.95
       ]
     },
     {
-      "id": "router",
+      "id": "runSvc",
       "kind": "class",
-      "name": "StoreRouter",
+      "name": "RunService",
       "external": true,
-      "source": "工作区组件",
+      "source": "会话管理 · 对话领域",
       "methods": [
         [
           "+",
-          "pick · fallback"
+          "submit(…)"
         ]
       ],
       "at": [
-        -1.75,
-        2.25
-      ]
-    },
-    {
-      "id": "host",
-      "kind": "class",
-      "name": "HostRuntime",
-      "external": true,
-      "source": "CLI 运行时组件",
-      "methods": [
-        [
-          "+",
-          "每轮：凭据组件 resolve → ensure"
-        ]
-      ],
-      "at": [
-        4.75,
+        -0.6,
         -0.95
       ]
     },
     {
-      "id": "cset",
+      "id": "uc",
       "kind": "class",
-      "name": "CredentialSet",
+      "name": "UCClient",
       "external": true,
-      "source": "凭据组件",
+      "source": "鉴权组件（用户中心开放接口）",
       "methods": [
         [
           "+",
-          "bindings · empty()"
+          "digital_employee(…) · data_register(…)"
+        ],
+        [
+          "+",
+          "data_acl · data_grant · data_acl_update · data_acl_delete"
         ]
       ],
       "at": [
-        7.0,
-        2.25
+        1.6,
+        4.45
+      ]
+    },
+    {
+      "id": "models",
+      "kind": "class",
+      "name": "ModelPlatform",
+      "external": true,
+      "source": "模型接入组件",
+      "methods": [
+        [
+          "+",
+          "register_agent · rename_agent"
+        ]
+      ],
+      "at": [
+        -0.75,
+        4.45
+      ]
+    },
+    {
+      "id": "mcpkeys",
+      "kind": "class",
+      "name": "McpGatewayKeys",
+      "external": true,
+      "source": "工具接入组件",
+      "methods": [
+        [
+          "+",
+          "register · rename · revoke(agent)"
+        ]
+      ],
+      "at": [
+        3.75,
+        4.45
+      ]
+    },
+    {
+      "id": "kb",
+      "kind": "class",
+      "name": "KnowledgeClient",
+      "external": true,
+      "source": "工具接入组件",
+      "methods": [
+        [
+          "+",
+          "readable_as(subject, dataset_ids)"
+        ]
+      ],
+      "at": [
+        5.9,
+        4.45
       ]
     }
   ],
   "relationships": [
     {
-      "from": "shell",
-      "to": "proto",
-      "type": "implements"
-    },
-    {
-      "from": "host",
-      "to": "pods",
+      "from": "agentSvc",
+      "to": "reg",
       "type": "uses",
-      "description": "每轮确保"
+      "description": "建、改名、改状态时",
+      "labelAt": 0.3
     },
     {
-      "from": "shell",
-      "to": "native",
-      "type": "association",
-      "description": "ensure：拿 SandboxRef"
-    },
-    {
-      "from": "shell",
-      "to": "exec",
+      "from": "runSvc",
+      "to": "policy",
       "type": "uses",
-      "description": "提交、跟随、中断"
+      "description": "这一轮按谁判"
     },
     {
-      "from": "router",
-      "to": "native",
+      "from": "policy",
+      "to": "ref",
       "type": "uses",
-      "description": "current · confirm_gone"
+      "description": "权限类型、数字员工"
     },
     {
-      "from": "router",
-      "to": "exec",
+      "from": "reg",
+      "to": "ref",
       "type": "uses",
-      "description": "open_files"
+      "description": "按它登记"
     },
     {
-      "from": "native",
-      "to": "prov",
-      "type": "association",
-      "description": "确保、查询、释放"
-    },
-    {
-      "from": "native",
-      "to": "exec",
+      "from": "reg",
+      "to": "uc",
       "type": "uses",
-      "description": "activity：闲置判断"
+      "description": "数字员工、数据对象"
     },
     {
-      "from": "pods",
-      "to": "prov",
-      "type": "association",
-      "description": "确保、释放"
-    },
-    {
-      "from": "pods",
-      "to": "rt",
+      "from": "reg",
+      "to": "models",
       "type": "uses",
-      "description": "bridge 地址、服务令牌"
+      "description": "客户端 Key"
     },
     {
-      "from": "pods",
-      "to": "cset",
+      "from": "reg",
+      "to": "mcpkeys",
       "type": "uses",
-      "description": "已授权的凭据（参数）"
+      "description": "MCP Key",
+      "labelAt": 0.75
     },
     {
-      "from": "prov",
-      "to": "kind",
-      "type": "association",
-      "description": "按 biz_type 回调",
-      "multiplicity": "1..*"
-    },
-    {
-      "from": "nkind",
-      "to": "kind",
-      "type": "implements"
-    },
-    {
-      "from": "ckind",
-      "to": "kind",
-      "type": "implements"
-    },
-    {
-      "from": "nkind",
-      "to": "exec",
+      "from": "sharing",
+      "to": "uc",
       "type": "uses",
-      "description": "ping：就绪"
+      "description": "数据授权",
+      "labelAt": 0.35
     },
     {
-      "from": "ckind",
-      "to": "egress",
+      "from": "view",
+      "to": "uc",
       "type": "uses",
-      "description": "每轮写凭据"
+      "description": "数字员工信息",
+      "labelAt": 0.3
     },
     {
-      "from": "prov",
-      "to": "rt",
-      "type": "association",
-      "description": "建、查、等落定、删"
-    },
-    {
-      "from": "exec",
-      "to": "rt",
+      "from": "view",
+      "to": "kb",
       "type": "uses",
-      "description": "access：地址和令牌"
-    },
-    {
-      "from": "egress",
-      "to": "locator",
-      "type": "association",
-      "description": "找 egress 的地址"
-    },
-    {
-      "from": "rt",
-      "to": "locator",
-      "type": "implements"
+      "description": "能读哪些库"
     }
   ],
   "capabilities": [
     {
-      "name": "执行一条命令",
-      "entry": "SandboxProtocol.aexecute",
-      "callers": "原生运行时的 Shell 工具",
-      "description": "命令执行 → 原生沙箱确保 → 基座执行提交、跟随；沙箱按需建，第一次执行时才建"
+      "name": "外部登记",
+      "entry": "AgentRegistrar.on_created · on_renamed · on_status_changed",
+      "callers": "智能体配置（建、改名、改状态、切换权限类型）",
+      "description": "数字员工和数据对象必需、失败就拒；两把 Key 尽力而为、之后补建；全部按智能体 uuid 幂等"
     },
     {
-      "name": "评测原地执行",
-      "entry": "exec_in_running(ws, *, command, profile, files)",
-      "callers": "会话服务（评测接口）",
-      "description": "只在正在运行的评测档沙箱里执行，不新建"
+      "name": "补建 Key",
+      "entry": "AgentRegistrar.ensure_keys(ref)",
+      "callers": "编辑器（打开时）、Run 开始时",
+      "description": "建智能体时没建成的客户端 Key、MCP Key 在这里补上"
     },
     {
-      "name": "工作区读写选路",
-      "entry": "NativeSandboxService.current · confirm_gone，SandboxExec.open_files",
-      "callers": "工作区组件",
-      "description": "沙箱 READY 时工作区的读写经沙箱里的挂载，否则直连对象存储"
+      "name": "这一轮按谁判",
+      "entry": "AuthSubjectPolicy.auth_uid_for(ref, requested)",
+      "callers": "对话（建 run）",
+      "description": "以人为权限 = 请求里的主体；以 Agent 为权限 = 数字员工，没有就拒绝"
     },
     {
-      "name": "确保会话 Pod",
-      "entry": "PodProvider.ensure(thread, cli, *, model, credentials)",
-      "callers": "CLI 运行时（每轮一次）",
-      "description": "交出 bridge 的地址和服务令牌；凭据由凭据组件授权后传入"
+      "name": "共享",
+      "entry": "AgentSharing.grants · grant · update · revoke",
+      "callers": "HTTP 接口（所有者）",
+      "description": "用户中心数据对象 AtlasAgent 的授权；授权行必须属于这个智能体"
     },
     {
-      "name": "回收",
-      "entry": "reap_idle（原生沙箱、会话 Pod）· release · reap_orphans · reconcile",
-      "callers": "维护任务、会话服务（删除级联）",
-      "description": "业务领域只释放自己的业务，沙箱删不删由通用供给按绑定决定；对账兜底"
-    },
-    {
-      "name": "按人查看、退役、管理模板",
-      "entry": "SandboxProvisioning.of_user · retire，SandboxTemplates",
-      "callers": "管理界面（待接入）",
-      "description": "按人列出沙箱和它服务的业务；管理员可不看绑定直接退役；模板发布前强制校验"
+      "name": "身份页签",
+      "entry": "IdentityView.of(ref, dataset_ids)",
+      "callers": "HTTP 接口",
+      "description": "数字员工、权限类型；以 Agent 为权限时列出数字员工能不能读所配的知识库"
     }
   ],
   "decisions": [
     {
-      "decision": "分三层：业务领域 → 通用供给 → 基座，依赖只往下",
-      "reason": "OpenSandbox 升级或换后端，只改基座；新增一种要用沙箱的业务，只加一个种类；规则（分配、配额、状态）只在通用供给写一份。上层只拿 sandbox_uuid，不碰 OpenSandbox 的 id、地址和令牌。"
+      "decision": "外部登记都按智能体 uuid 幂等",
+      "reason": "用户中心、模型平台、MCP 网关和本库不在一个事务里，任何一步都可能失败后重试；幂等之后重做是安全的，不会多出一个数字员工或一把 Key。"
     },
     {
-      "decision": "通用供给经扩展点回调业务（SandboxKind），装配时登记",
-      "reason": "依赖倒置：供给定义接口，原生沙箱、会话 Pod 实现。供给不 import 业务领域，业务领域的服务也不直接调自己的种类，只依赖供给。"
+      "decision": "数字员工和数据对象必需，两把 Key 尽力而为",
+      "reason": "没有数据对象就没法共享和判可见范围，以 Agent 为权限的没有数字员工就不能运行，所以失败要拒；Key 只影响能不能运行，平台暂时不可用不该挡住建智能体，运行前补上即可。"
     },
     {
-      "decision": "基座内部：执行 → 生命周期（只用 access），生命周期 → 网络，网络经 EgressLocator 反向拿地址",
-      "reason": "地址和令牌只有生命周期有；网络要 egress 的地址，就声明一个接口让生命周期实现。三个领域之间没有环，各自能用假实现单独测试。"
+      "decision": "权限类型只在 AuthSubjectPolicy 一处起作用",
+      "reason": "它决定这一轮发出的所有调用 X-Auth-Uid 写谁。散在各处判的话，总有一处漏掉，「以 Agent 为权限时谁来用结果都一样」就不成立了。"
     },
     {
-      "decision": "令牌不出基座，唯一的例外是 bridge 服务令牌",
-      "reason": "CLI 运行时连 bridge 必须带令牌，所以单独给一个服务令牌；拿到它也不能在 Pod 里执行任意命令。execd 令牌只在基座里流转。"
+      "decision": "以 Agent 为权限而没有数字员工时拒绝，不回退到发起人",
+      "reason": "回退是静默的：同一个智能体，有时按数字员工判、有时按使用者判，结果因人而异，正好违背了选这个类型的初衷。"
     },
     {
-      "decision": "沙箱归人，业务只释放、不删除",
-      "reason": "闲置、会话删除、孤儿回收都只解绑自己的业务，沙箱没有业务了才由通用供给退役。现在独占，效果和直接删一样；以后共享沙箱只改分配策略。"
+      "decision": "只认 AgentRef，不依赖智能体配置的类型",
+      "reason": "智能体配置要调这里做登记；这里再反过来依赖配置的类型就成了双向依赖。登记、共享、判权限只需要几个值。"
     },
     {
-      "decision": "两本账分开：活动记在基座执行（按沙箱），重放记在命令执行（按 run 和工具调用）",
-      "reason": "活动回答「这个沙箱闲不闲」，所有经过 execd 的命令和文件读写都要记，放在唯一的入口就不会漏；重放回答「这个工具调用对应哪条命令」，是执行策略。两本账都在 Redis，用途和生命周期不同。"
-    },
-    {
-      "decision": "凭据授权、工作区选路不在沙箱组件里",
-      "reason": "谁能用哪份凭据归凭据组件，沙箱只接收已授权的通用绑定；读写走哪个底层归工作区组件，沙箱只提供 current 和文件会话。沙箱组件因此只管沙箱本身。工作区的布局（三个区的前缀）是工作区和沙箱共用的共享内核，放在两者之下，挂载前缀只算一次。"
-    },
-    {
-      "decision": "状态有两份，各管各的",
-      "reason": "运行状态以 OpenSandbox 为准，基座登记的是最近一次观测、靠对账纠正；供给的 CREATING / READY / RETIRING 回答「能不能交给业务」。上层只看供给的状态。"
+      "decision": "授权行属于这个智能体，由这里校验",
+      "reason": "用户中心按应用和数据编码校验，看不出授权行属于哪个数据对象；不校验的话，拿着 A 的所有权可以去改 B 的授权行。"
     }
   ]
 }

@@ -29,608 +29,358 @@
 -->
 <script type="application/json" id="c4-model">
 {
-  "title": "代码图：Agent 平台 - Agent 服务 - 原生运行时 - 挂起与人机协作",
-  "description": "目标领域模型，只画期望的样子、不对照现状。审批模式、向用户提问、派子智能体，都靠同一种挂起：登记等待、本段结束、等到了续跑。",
-  "component": "原生运行时",
-  "package": "原生运行时 · 挂起与人机协作（目标模型）",
-  "overview": "挂起与人机协作管「这一段要等外部的事」：等用户批准一个动作或一份计划、等用户回答一个问题、等子智能体跑完。三者是同一种挂起：能力方拦下工具调用，在 state.waiting_on 里登记一项，不写结果；挂起中间件看到有东西在等就结束本段，不调模型。等的事有了结果（用户在会话里做了决定、子 run 结束），Run 执行器把结果放进 decisions 续跑，各能力方把结果填进去，同一轮接着做。\n\n问不问人由审批模式（规划、手动、自动）和工具的副作用类别决定；自动模式下拿不准的交给判断器。它不管 Run 怎么续跑和接管（Run 执行器管），也不管子 run 怎么准入和建会话（会话服务管）。",
+  "title": "代码图：Agent 平台 - Agent 服务 - 会话管理 - 对话",
+  "description": "目标领域模型，只画期望的样子、不对照现状。提交一轮（串行、幂等、审批模式、权限主体）、取消级联、会话事件流。",
+  "component": "会话管理",
+  "package": "会话管理 · 对话（目标模型）",
+  "overview": "对话领域是用户和一轮执行之间的那一层：发消息就是提交一轮，按固定顺序定下这一轮的版本、权限主体和审批模式，占住会话，写下用户消息和 queued 的 run 行，交给执行器；停止就是取消，连同所有子孙 run。观看走会话事件流，一个会话一条，含子智能体的事件，归档段和 Redis 实时段按会话序号接上。\n\n它不跑 run（Run 执行器管），用户对审批、提问的决定也不在这里（审批组件管），也不拥有 run 表；会话串行 ThreadSerial 在这里，手动压缩和子智能体也经它占会话。",
   "elements": [
     {
-      "id": "collab",
+      "id": "svc",
       "kind": "class",
-      "name": "Collaboration",
+      "name": "RunService",
       "stereotype": "应用服务",
-      "responsibility": "本领域的入口：为一段交出四个中间件和它们的槽位——挂起（含补悬空调用）、提问（勾了才装）、审批、子智能体（配了才装），并接上服务端实现：审批闸门、子智能体发起方；智能体允许自动模式时装上判断器。",
+      "responsibility": "提交一轮：幂等键命中就回已有的 run（键按使用者隔离）→ 能用这个智能体吗（收回使用权后不能在已有会话里接着用）→ 取当前版本 → 这一轮按谁的权限判 → 定审批模式 → 占会话串行 → 用户消息和 run 行（queued）在同一个事务里写 → 交给执行器，立刻返回 run id。取消：写取消，再逐层取消还没结束的子孙 run，父 run 已结束也要做，否则页面上停不掉还在跑的子 run。界面要的 run 状态、轨迹、每个会话最近一轮也在这里查。",
       "methods": [
         [
           "+",
-          "contribute(segment, *, run_id) -> Contribution"
-        ]
-      ],
-      "at": [
-        2.4,
-        0.7
-      ]
-    },
-    {
-      "id": "susp",
-      "kind": "class",
-      "name": "SuspensionMiddleware",
-      "stereotype": "领域服务",
-      "responsibility": "挂起与续跑在图里的唯一支点，也负责入口自愈。图入口：补上被放弃的悬空调用（进程中途退出、没来得及写结果的），登记在等的不补。模型调用前：没有等待就照常；有一项已有结果就去 tools；都没结果就结束本段，不调模型。工具执行：续跑时同一批里已有结果的兄弟调用原样返回，不重跑。",
-      "methods": [
-        [
-          "+",
-          "before_agent(state)（补被放弃的悬空调用）"
+          "submit(thread_uuid, input, *, principal, idempotency_key) -> RunAccepted"
         ],
         [
           "+",
-          "before_model(state) -> tools | end | None"
+          "cancel(run_uuid)"
         ],
         [
           "+",
-          "awrap_tool_call(req, handler)"
+          "get · trace(run_uuid) · latest_of(thread_uuids)"
         ]
       ],
       "at": [
-        -0.35,
-        2.45
+        1.6,
+        2.6
       ]
     },
     {
-      "id": "ask",
+      "id": "serial",
       "kind": "class",
-      "name": "AskUserMiddleware",
-      "stereotype": "领域服务",
-      "responsibility": "提供 ask_user_question：需求不清时出选择题，推荐项是选项的属性。首次调用登记一条提问、挂起；用户回答后续跑，答案作为工具结果交给模型，同一轮接着做。排在审批外层、自己处理自己的工具：任何模式都允许提问，「不想回答」不会被当成「拒绝执行」。",
-      "methods": [
-        [
-          "+",
-          "awrap_tool_call(req, handler)"
-        ]
-      ],
-      "at": [
-        1.45,
-        2.45
-      ]
-    },
-    {
-      "id": "perm",
-      "kind": "class",
-      "name": "PermissionMiddleware",
+      "name": "ThreadSerial",
       "stereotype": "策略",
-      "responsibility": "按「审批模式 × 工具的副作用类别」决定放行、请示、拦下，或交给判断器；请示就是登记一项等待、不写结果。规划模式下提供 exit_plan_mode：提交计划，用户批准时选执行模式。工具列表在三种模式下完全一样，判定发生在调用时，切模式不动提示词前缀。",
-      "attributes": [
-        [
-          "+",
-          "mode: plan | manual | auto"
-        ],
-        [
-          "",
-          "read · plan：都放行"
-        ],
-        [
-          "",
-          "write：拦下 · 请示 · 放行"
-        ],
-        [
-          "",
-          "execute · external · delegate：拦下 · 请示 · 判断"
-        ],
-        [
-          "",
-          "不可逆的工具：自动模式也要判断"
-        ]
-      ],
+      "responsibility": "同一会话同时只做一件事：一个没结束的 run，或一次手动压缩。权威在库里——还有没结束的 run 就拒，挂起几小时也照样拦得住；Redis 锁只防两个请求同时查到「没有」。锁的 TTL 是一个租约，领到 run 的执行器续租时顺带续，持有者死了一个租约周期内过期。",
       "methods": [
         [
           "+",
-          "awrap_tool_call(req, handler)"
+          "occupy(thread_uuid, owner) -> bool"
+        ],
+        [
+          "+",
+          "release(thread_uuid, owner)"
         ]
       ],
       "at": [
-        3.45,
-        2.45
+        -0.6,
+        2.6
       ]
     },
     {
-      "id": "sub",
+      "id": "mode",
       "kind": "class",
-      "name": "SubAgentMiddleware",
-      "stereotype": "领域服务",
-      "responsibility": "提供 task：让 SubAgentSpawner 在子智能体自己的会话上起子 run，本段随即挂起；子 run 结束叫醒父 run，续跑时把结论填进 task 的结果。子智能体只有这一种执行形态，不在主图里内联跑子图。审批批准了 task 之后，等待从「审批」换成「子 run」，以内层登记的为准。",
-      "attributes": [
-        [
-          "+",
-          "agents: list[SubAgent]（名字、描述、会话模式）"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "awrap_tool_call(req, handler)"
-        ]
-      ],
-      "at": [
-        5.5,
-        2.45
-      ]
-    },
-    {
-      "id": "waits",
-      "kind": "class",
-      "name": "WaitingOn",
-      "stereotype": "值对象",
-      "responsibility": "挂起现场，图 state 里的两个字段。waiting_on：被拦下的调用 → 在等什么（审批、提问、子 run）和凭据；能力方拦下时登记，拿到结果时和结果放进同一个更新里删掉。decisions：凭据 → 结果，续跑时由服务端交进来，只进不出。挂起时 waiting_on 与消息在同一个事务里落进 run 表。",
-      "attributes": [
-        [
-          "+",
-          "waiting_on: dict[tool_call_id, Wait]"
-        ],
-        [
-          "+",
-          "Wait = (reason: approval | question | subagent, token)"
-        ],
-        [
-          "+",
-          "decisions: dict[token, result]"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "release(tool_call_id, result) -> Command"
-        ]
-      ],
-      "at": [
-        0.4,
-        4.4
-      ]
-    },
-    {
-      "id": "gate",
-      "kind": "interface",
-      "name": "ApprovalGate",
-      "stereotype": "扩展点",
-      "responsibility": "查一次事项的状态，第一次查时顺便登记。立刻返回、不阻塞：等待交给数据库，不占进程，可以等到第二天上班。",
-      "methods": [
-        [
-          "+",
-          "check(run_id, tool_call_id, *, kind, …) -> Outcome | None"
-        ]
-      ],
-      "at": [
-        2.3,
-        4.4
-      ]
-    },
-    {
-      "id": "effect",
-      "kind": "enum",
-      "name": "ToolEffect",
-      "stereotype": "值对象",
-      "responsibility": "工具的副作用类别，是工具的属性：内置工具由工具面的注册表声明，MCP 工具取官方注解 readOnlyHint，查不到的按 EXTERNAL（最保守）。不按工具名的前缀或字符串推断。",
-      "attributes": [
-        [
-          "",
-          "READ · PLAN · WRITE"
-        ],
-        [
-          "",
-          "EXECUTE · EXTERNAL · DELEGATE"
-        ]
-      ],
-      "at": [
-        3.8,
-        4.4
-      ]
-    },
-    {
-      "id": "judge",
-      "kind": "class",
-      "name": "AutoJudge",
+      "name": "ApprovalModePolicy",
       "stereotype": "策略",
-      "responsibility": "自动模式里「判断」那一格：独立配置的快模型，两阶段——先判拦不拦（拿不准就拦），拦的再复核、给出命中的规则和理由。只看用户的消息（从消息表取，不从被压缩过的 state 取）和非只读的工具调用，不看智能体的文字和工具结果，那是提示词注入的入口。出错就抛异常，由审批退回请示用户，不替用户做决定。",
+      "responsibility": "这一轮的审批模式：请求里选的 > 会话记住的 > 智能体默认。请求里选的必须在智能体允许的范围里——模式是权限，不能绕过作者的限制；会话记住的已经不在范围里（作者后来收窄了）就回落默认，不报错。CLI 智能体没有审批模式，它的权限由 CLI 自己的权限模式管。",
       "methods": [
         [
           "+",
-          "judge(call, record) -> JudgeVerdict"
+          "resolve(spec, remembered, requested) -> mode | None"
         ]
       ],
       "at": [
-        5.0,
-        4.4
+        3.85,
+        2.6
       ]
     },
     {
-      "id": "spawner",
-      "kind": "interface",
-      "name": "SubAgentSpawner",
-      "stereotype": "扩展点",
-      "responsibility": "把任务书交给某个子智能体，起一个子 run，返回它的 id。task 只认识这个接口。",
-      "methods": [
-        [
-          "+",
-          "spawn(name, brief, *, parent_run, mode) -> run_uuid"
-        ]
-      ],
-      "at": [
-        6.4,
-        4.4
-      ]
-    },
-    {
-      "id": "store",
+      "id": "ledger",
       "kind": "class",
-      "name": "ApprovalStore",
+      "name": "RunLedger",
       "stereotype": "仓储",
-      "responsibility": "ApprovalGate 的服务端实现：事项存在 approval 表里；用户在会话里做了决定，就经 Redis 发唤醒，让 Run 执行器续跑。",
+      "responsibility": "run、run_event 表上应用服务要的读写：建 queued 行、会话有没有没结束的 run、没结束的子 run、界面的状态和轨迹查询、事件归档段。表归 Run 执行器，执行有关的写都在那边。",
       "methods": [
         [
           "+",
-          "check(…) -> Outcome | None"
+          "create_queued(…) · active_of(thread)"
         ],
         [
           "+",
-          "decide(approval_uuid, status, outcome, by)"
+          "unfinished_children(run) · latest_of(threads)"
         ],
         [
           "+",
-          "pending(run_uuid) -> list[ApprovalRequest]"
+          "trace(run) · archived(thread, after_seq)"
         ]
       ],
       "at": [
-        2.3,
-        6.15
+        -0.6,
+        4.45
       ]
     },
     {
-      "id": "req",
+      "id": "stream",
       "kind": "class",
-      "name": "ApprovalRequest",
-      "stereotype": "聚合根",
-      "responsibility": "一件等人决定的事：工具调用的确认、规划模式的计划、向用户的提问，三者一张表，靠 kind 区分。id 由 (run, tool_call_id) 派生，重放和续跑都不会重复登记。状态 pending → approved / rejected；审批模式变了或 run 结束了就 expired。决策带回附加信息：计划选的执行模式、拒绝的原因、提问的答案。",
-      "attributes": [
-        [
-          "+",
-          "uuid（由 run + tool_call_id 派生）"
-        ],
-        [
-          "+",
-          "kind: tool | plan | question"
-        ],
-        [
-          "+",
-          "tool_name · args · source · reason"
-        ],
-        [
-          "+",
-          "status · outcome · decided_by · decided_at"
-        ]
-      ],
+      "name": "ThreadStream",
+      "stereotype": "应用服务",
+      "responsibility": "一条会话的事件流（SSE）。订阅单位是会话而不是 run：子孙 run 的事件、审批弹窗都在根会话这条流里，父 run 挂起时用户照样看得到。永不自动结束，终态事件不是关闭信号。先读归档段补到游标，再从 Redis 接着读，两段按会话序号接上；首连只回放最近 N 条；归档读完立刻还数据库连接。观看名额在构造响应之前占，满了回 503（现在在生成器里查，超限时是 200 加断流）。",
       "methods": [
         [
           "+",
-          "decide(status, outcome, by)"
-        ],
-        [
-          "+",
-          "expire()"
+          "open(thread_uuid, after_seq) -> frames"
         ]
       ],
       "at": [
-        4.4,
-        6.15
+        3.85,
+        4.45
       ]
     },
     {
-      "id": "subsvc",
+      "id": "access",
       "kind": "class",
-      "name": "SubAgentService",
+      "name": "AgentAccess",
       "external": true,
-      "source": "会话服务组件",
+      "source": "鉴权组件",
       "methods": [
         [
           "+",
-          "spawn(…)（按整棵 run 树的累计上限准入）"
+          "require_use(principal, agent)"
         ]
       ],
       "at": [
-        8.2,
-        4.4
+        0.2,
+        -0.95
+      ]
+    },
+    {
+      "id": "agents",
+      "kind": "class",
+      "name": "AgentService",
+      "external": true,
+      "source": "智能体管理 · 智能体配置领域",
+      "methods": [
+        [
+          "+",
+          "get(agent_uuid)（当前版本）"
+        ]
+      ],
+      "at": [
+        1.6,
+        -0.95
+      ]
+    },
+    {
+      "id": "policy",
+      "kind": "class",
+      "name": "AuthSubjectPolicy",
+      "external": true,
+      "source": "智能体管理 · 身份与共享领域",
+      "methods": [
+        [
+          "+",
+          "auth_uid_for(ref, requested)"
+        ]
+      ],
+      "at": [
+        3.0,
+        -0.95
       ]
     },
     {
       "id": "executor",
       "kind": "class",
-      "name": "InProcessExecutor",
+      "name": "RunExecutor",
       "external": true,
-      "source": "Run 执行器组件",
+      "source": "Run 执行器 · 调度与租约领域",
       "methods": [
         [
           "+",
-          "resume_if_ready(run)（等的事项都有结果才续跑）"
+          "submit(run_uuid) · cancel(run_uuid)"
         ]
       ],
       "at": [
-        2.3,
-        7.75
+        6.3,
+        4.45
+      ]
+    },
+    {
+      "id": "threads",
+      "kind": "class",
+      "name": "ThreadRepository",
+      "external": true,
+      "source": "会话管理 · 会话领域",
+      "methods": [
+        [
+          "+",
+          "add_message(user) · remember_mode"
+        ]
+      ],
+      "at": [
+        -2.9,
+        4.45
+      ]
+    },
+    {
+      "id": "relay",
+      "kind": "class",
+      "name": "EventRelay",
+      "external": true,
+      "source": "事件中继组件",
+      "methods": [
+        [
+          "+",
+          "tail_thread(thread, after_seq)"
+        ],
+        [
+          "+",
+          "thread_lock · idempotency"
+        ]
+      ],
+      "at": [
+        1.6,
+        6.3
       ]
     }
   ],
   "relationships": [
     {
-      "from": "collab",
-      "to": "susp",
+      "from": "svc",
+      "to": "access",
       "type": "uses",
-      "description": "creates（槽位 ①）"
+      "description": "能用吗"
     },
     {
-      "from": "collab",
-      "to": "ask",
+      "from": "svc",
+      "to": "agents",
       "type": "uses",
-      "description": "creates（槽位 ②）"
+      "description": "当前版本",
+      "labelAt": 0.6
     },
     {
-      "from": "collab",
-      "to": "perm",
+      "from": "svc",
+      "to": "policy",
       "type": "uses",
-      "description": "creates（槽位 ③）"
+      "description": "按谁判",
+      "labelAt": 0.6
     },
     {
-      "from": "collab",
-      "to": "sub",
+      "from": "svc",
+      "to": "mode",
       "type": "uses",
-      "description": "creates（槽位 ⑥）"
+      "description": "审批模式"
     },
     {
-      "from": "susp",
-      "to": "waits",
-      "type": "association",
-      "description": "读等待和结果"
-    },
-    {
-      "from": "ask",
-      "to": "waits",
+      "from": "svc",
+      "to": "serial",
       "type": "uses",
-      "description": "登记、取答案"
+      "description": "占会话"
     },
     {
-      "from": "perm",
-      "to": "waits",
+      "from": "svc",
+      "to": "ledger",
       "type": "uses",
-      "description": "请示时登记",
-      "labelAt": 0.65
+      "description": "建行、查"
     },
     {
-      "from": "ask",
-      "to": "gate",
+      "from": "svc",
+      "to": "threads",
       "type": "uses",
-      "description": "登记提问"
+      "description": "用户消息、记住模式",
+      "labelAt": 0.7
     },
     {
-      "from": "perm",
-      "to": "gate",
+      "from": "svc",
+      "to": "executor",
       "type": "uses",
-      "description": "批了没有"
+      "description": "交给执行器、取消"
     },
     {
-      "from": "perm",
-      "to": "effect",
+      "from": "serial",
+      "to": "ledger",
       "type": "uses",
-      "description": "按类别判定"
+      "description": "还有没结束的 run",
+      "labelAt": 0.35
     },
     {
-      "from": "perm",
-      "to": "judge",
-      "type": "association",
-      "description": "判断那一格"
-    },
-    {
-      "from": "sub",
-      "to": "spawner",
-      "type": "association",
-      "description": "起子 run"
-    },
-    {
-      "from": "store",
-      "to": "gate",
-      "type": "implements"
-    },
-    {
-      "from": "store",
-      "to": "req",
-      "type": "association",
-      "description": "存取"
-    },
-    {
-      "from": "subsvc",
-      "to": "spawner",
-      "type": "implements"
-    },
-    {
-      "from": "executor",
-      "to": "store",
+      "from": "serial",
+      "to": "relay",
       "type": "uses",
-      "description": "续跑前查事项结清没有"
+      "description": "防同时进来"
+    },
+    {
+      "from": "stream",
+      "to": "ledger",
+      "type": "uses",
+      "description": "归档段"
+    },
+    {
+      "from": "stream",
+      "to": "relay",
+      "type": "uses",
+      "description": "实时段"
     }
   ],
   "capabilities": [
     {
-      "name": "接上本段的人机协作",
-      "entry": "Collaboration.contribute(segment, *, run_id)",
-      "callers": "一轮的编排（CapabilityAssembly）",
-      "description": "交出挂起、提问、审批、子智能体四个中间件和槽位；接上审批闸门、子智能体发起方、判断器"
+      "name": "发消息（提交一轮）",
+      "entry": "RunService.submit(thread_uuid, input, *, principal, idempotency_key)",
+      "callers": "HTTP 接口（界面、业务应用）",
+      "description": "幂等；能用智能体才能发；会话里已有没结束的 run 回 409；用户消息和 run 行同一个事务；立刻返回 run id，事件走会话事件流"
     },
     {
-      "name": "等人决定",
-      "entry": "ApprovalGate.check(…)",
-      "callers": "审批、提问（图内）",
-      "description": "第一次查时登记事项、返回 None，本段挂起；有了结果就返回结果，续跑时执行或拒绝"
+      "name": "取消",
+      "entry": "RunService.cancel(run_uuid)",
+      "callers": "HTTP 接口（停止按钮）",
+      "description": "取消这个 run，并逐层取消还没结束的子孙 run；父 run 已结束时只取消子孙"
     },
     {
-      "name": "做决定",
-      "entry": "ApprovalStore.decide(approval_uuid, status, outcome, by)",
-      "callers": "会话接口（用户批准、拒绝、回答、批准计划）",
-      "description": "记下决定并发唤醒；计划获批时带回用户选的执行模式"
+      "name": "会话事件流",
+      "entry": "ThreadStream.open(thread_uuid, after_seq)",
+      "callers": "HTTP 接口（SSE，带 Last-Event-ID 重连）",
+      "description": "会话下所有 run 的事件；归档段 + Redis 实时段按会话序号接上；名额满了回 503"
     },
     {
-      "name": "派子智能体",
-      "entry": "task（模型调用）→ SubAgentSpawner.spawn",
-      "callers": "模型",
-      "description": "在子智能体自己的会话上起子 run，本段挂起；子 run 结束后续跑，把结论填进 task 的结果"
+      "name": "占会话",
+      "entry": "ThreadSerial.occupy · release",
+      "callers": "本领域（提交一轮）、工作区与上下文（手动压缩）、子智能体（起子 run）",
+      "description": "库里的 run 状态是权威，Redis 锁只防同时进来"
+    },
+    {
+      "name": "run 的查询",
+      "entry": "RunService.get · trace · latest_of",
+      "callers": "HTTP 接口（会话列表、详情、历史轮次的过程重现）",
+      "description": "会话领域不认识 run，列表里的最近一轮由这里补"
     }
   ],
   "decisions": [
     {
-      "decision": "审批、提问、子智能体是同一种挂起：登记一项等待，本段结束，等到了续跑",
-      "reason": "等人可能等到第二天，子 run 可能跑一小时，都不该占着进程。差别只在续跑时：审批要先把工具跑掉，提问把答案填进去，子智能体把结论填进去，各自的中间件处理；挂起中间件只认「有东西在等」。"
+      "decision": "提交和观看拆成两个请求",
+      "reason": "一次性的响应流扛不住刷新页面、切后台、网络抖动和多个标签页；提交立刻返回 run id，事件走会话事件流，断了带游标重连即可。"
     },
     {
-      "decision": "等待只记在 state.waiting_on 里，消息里不放占位",
-      "reason": "占位消息会进历史、进压缩、进模型的视野，还要在续跑时找出来替换。只在 state 里登记，挂起时和消息同一个事务落进 run 表，续跑时原样交回。"
+      "decision": "会话串行的权威在库里，Redis 锁只防并发",
+      "reason": "一个 run 可以挂起等一小时，这期间没有进程替它续 Redis 锁；只靠锁的话锁一过期第二个 run 就进来了。库里的 run 状态不过期、不依赖谁还活着。"
     },
     {
-      "decision": "补悬空调用并进挂起中间件",
-      "reason": "悬空的 tool_call 有两种：在等的不能补（补了续跑时同一个调用会有两份结果，模型调用被拒），被放弃的必须补（否则模型调用被拒）。判据都是 waiting_on。现在拆成两个中间件，一个在内核基础栈、一个在服务端外层，顺序靠注释维持；合成一个，判据只写一处。"
+      "decision": "用户消息和 run 行在同一个事务里写",
+      "reason": "只写成一半的话，要么有消息没 run（这句话永远没人回），要么有 run 没消息（执行器找不到这一轮的输入）。"
     },
     {
-      "decision": "工具确认、计划审批、提问共用一张表，id 由 (run, tool_call_id) 派生",
-      "reason": "三者都是「一件等人决定的事」，状态流转和唤醒方式相同。id 派生出来，重放、续跑、接管时查的是同一行，不会重复登记，也不会撞到别的 run 里同名的调用。"
+      "decision": "取消逐层级联到所有子孙 run",
+      "reason": "父 run 挂起时没有进程盯着子 run；不级联的话子 run 一直跑到结束，CLI 子 run 整段占着一个 Pod，跑完还会去唤醒一个已经取消的父 run。子智能体能再派子智能体，所以要一层层往下走。"
     },
     {
-      "decision": "问不问人看审批模式和工具的副作用类别，不看作者配的名单",
-      "reason": "类别是工具的属性，新工具声明了类别就自动按模式管住；作者逐个勾必审工具，漏勾一个就是一个口子。切模式不改工具列表和提示词，提示词缓存不失效。"
+      "decision": "订阅单位是会话，不是 run",
+      "reason": "父 run 挂起时自己不产出事件，子 run 的审批请求正发生在那段时间里；按 run 订阅就看不到。会话流永不自动结束，一轮跑完后面还有下一轮。"
     },
     {
-      "decision": "提问排在审批外层，自己处理自己的工具",
-      "reason": "任何模式下都允许向用户提问；而且续跑时提问的等待项不能落到审批手里，否则「用户不想回答」会被当成「用户拒绝执行这个工具」。"
-    },
-    {
-      "decision": "判断器不看工具结果和智能体的文字，出错就退回请示用户",
-      "reason": "工具结果是提示词注入的主要入口，智能体的文字可能已经被带偏；用户的消息从消息表取，因为 state 里的早期消息可能已被压缩成模型写的摘要。判断器失败时替用户放行或拦下都不对，所以交还给人。"
-    },
-    {
-      "decision": "续跑的条件在 Run 执行器：等的事项都有结果才续",
-      "reason": "审批挂起时没有子 run，子智能体挂起时没有审批，两种等待的结清条件不同，所以 waiting_on 要落库，续跑前逐项核对；只有一项结清就续跑的话，会续了又挂、挂了又续。"
-    }
-  ],
-  "schemaNote": "主键约定：id 是自增主键，只在库内使用，不对外、不做关联；xxx_uuid 是逻辑主键（UUIDv7，Python 侧生成），表间引用和 API 都用它。表间不建外键约束，引用由代码维护；引用会话、run 这些别的领域的表时只写列说明，不画连线。类型写的是 db/types.py 和 SQLAlchemy 的通用类型。",
-  "tables": [
-    {
-      "name": "approval",
-      "description": "等人决定的事（聚合根 ApprovalRequest）：工具确认、计划审批、提问。",
-      "at": [
-        0,
-        0
-      ],
-      "columns": [
-        {
-          "name": "id",
-          "type": "BigInteger",
-          "key": "PK",
-          "default": "自增",
-          "description": "库内主键"
-        },
-        {
-          "name": "approval_uuid",
-          "type": "UUIDType",
-          "key": "UK",
-          "description": "逻辑主键，由 (run_uuid, tool_call_id) 派生（uuid5），重放、续跑时是同一个"
-        },
-        {
-          "name": "run_uuid",
-          "type": "UUIDType",
-          "description": "哪个 run 在等（Run 执行器的表，逻辑引用）"
-        },
-        {
-          "name": "tool_call_id",
-          "type": "String(128)",
-          "description": "触发它的工具调用"
-        },
-        {
-          "name": "kind",
-          "type": "String(8)",
-          "default": "'tool'",
-          "description": "tool（工具确认）/ plan（计划审批）/ question（提问）"
-        },
-        {
-          "name": "tool_name",
-          "type": "String(128)",
-          "description": "工具名"
-        },
-        {
-          "name": "args",
-          "type": "JSONType",
-          "description": "调用参数；提问时是题目和选项"
-        },
-        {
-          "name": "source",
-          "type": "String(24)",
-          "nullable": true,
-          "description": "为什么问：manual_mode / plan_mode / auto_uncertain / judge_failed"
-        },
-        {
-          "name": "reason",
-          "type": "Text",
-          "nullable": true,
-          "description": "给用户看的一句话"
-        },
-        {
-          "name": "status",
-          "type": "String(16)",
-          "default": "'pending'",
-          "description": "pending / approved / rejected / expired"
-        },
-        {
-          "name": "outcome",
-          "type": "JSONType",
-          "nullable": true,
-          "description": "决定带回的信息：计划选的执行模式、拒绝原因、提问的答案"
-        },
-        {
-          "name": "decided_by_uuid",
-          "type": "UUIDType",
-          "nullable": true,
-          "description": "做决定的人"
-        },
-        {
-          "name": "decided_at",
-          "type": "UTCDateTime",
-          "nullable": true
-        },
-        {
-          "name": "created_at",
-          "type": "UTCDateTime",
-          "default": "now()"
-        }
-      ],
-      "indexes": [
-        {
-          "name": "uk_approval_uuid",
-          "columns": [
-            "approval_uuid"
-          ],
-          "unique": true
-        },
-        {
-          "name": "uk_approval_call",
-          "columns": [
-            "run_uuid",
-            "tool_call_id"
-          ],
-          "unique": true,
-          "description": "一个调用至多一件事"
-        },
-        {
-          "name": "ix_approval_run_status",
-          "columns": [
-            "run_uuid",
-            "status"
-          ],
-          "description": "续跑前查待决事项"
-        }
-      ]
+      "decision": "观看名额在构造响应之前占",
+      "reason": "现在名额在生成器里检查，那时响应头（200）已经发出，超限只能断流，客户端以为是网络问题、不停重连。先占名额，满了就能明确回 503。"
     }
   ]
 }

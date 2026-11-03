@@ -29,191 +29,188 @@
 -->
 <script type="application/json" id="c4-model">
 {
-  "title": "代码图：Agent 平台 - Agent 服务 - CLI 运行时 - 上游连接",
-  "description": "目标领域模型，只画期望的样子、不对照现状。server 到 bridge 的会话接续：attach / open、按序号去重和确认、断线重连补发、换实例接管。",
-  "component": "CLI 运行时",
-  "package": "CLI 运行时 · 上游连接（目标模型）",
-  "overview": "上游连接负责 server 和会话 Pod 里的 bridge 之间那条连接，讲上游协议 atlas.host.v1。它要保证的只有一件事：不管断线、server 换实例接管，还是 bridge 补发和已收到的重叠，事件流都完整、不重复。做法是：bridge 发来的每条消息都带会话内连续的序号，server 按序号去重、定期确认；断线或接管后，认识这个 bridge 就 attach，从确认点之后补发；bridge 重启过就让这一轮失败，下一轮 open 恢复。\n\n接续信息（CLI 的会话 id、bridge 实例、确认点）按会话存在 cli_session 表里。它运送 CLI 的内容但不理解它（内容翻译管），也不决定权限请求怎么答（权限转发管）。",
+  "title": "代码图：Agent 平台 - Agent 服务 - 工具接入 - 知识库",
+  "description": "目标领域模型，只画期望的样子、不对照现状。把智能体绑定的知识库接到运行时：检索工具、auto 模式、CLI 的 MCP 令牌、主体能读哪些库。",
+  "component": "工具接入",
+  "package": "工具接入 · 知识库（目标模型）",
+  "overview": "知识库领域把智能体绑定的知识库接到运行时，有四种方式：tool 模式给原生智能体一个只读的 knowledge_search 工具；auto 模式每轮先用提问检索，资料并入这一轮的输入；CLI 智能体开会话时拿到知识库的 MCP 地址和签名令牌；编辑器和保存时问某个主体能读哪些库。检索都按这一轮的主体判权限，由知识库执行；检索范围钉死在绑定的库上，模型改不了。\n\n它不做检索本身（召回、重排、阈值在知识库服务），也不决定智能体绑哪些库（智能体管理）。",
   "elements": [
     {
-      "id": "link",
+      "id": "svc",
       "kind": "class",
-      "name": "SessionLink",
+      "name": "KnowledgeService",
       "stereotype": "应用服务",
-      "responsibility": "server 到 bridge 的会话接续，一轮一条连接。接上会话：认识这个 bridge（实例号对得上）就 attach，从确认点之后补发；否则 open，带上 CLI 自己的会话 id 让 bridge 恢复。开一轮带 turnId（= run id），重复提交安全。一轮进行中断线就退避重连再 attach，补全事件流；bridge 重启过（实例号变了）就以 bridge_lost 结束这一轮。",
+      "responsibility": "智能体绑定的知识库接到运行时的四种方式，入口都在这里：tool 模式给原生智能体一个 knowledge_search 工具；auto 模式在这一轮调模型之前先检索，参考资料并入这一轮的输入；CLI 智能体在开会话时拿到知识库的 MCP 地址和令牌；编辑器和保存时问「这个主体能读哪些库」。绑定了知识库但服务没接入或不可用，明确失败，不静默少一种能力。",
       "methods": [
         [
           "+",
-          "join(endpoint, capabilities, segment) -> list[EventIntent]"
+          "tool(spec, ctx) -> knowledge_search"
         ],
         [
           "+",
-          "start_turn(turn_id, prompt, limits)"
+          "augment(input, spec, ctx) -> (input', notices)"
         ],
         [
           "+",
-          "notes() -> AsyncIterator[Note] · cancel_turn() · close()"
+          "cli_entry(spec, ctx) -> MCP 服务项"
+        ],
+        [
+          "+",
+          "readable(subject, dataset_ids) -> list"
         ]
       ],
       "at": [
         1.6,
         0.75
+      ]
+    },
+    {
+      "id": "tool",
+      "kind": "class",
+      "name": "KnowledgeSearchTool",
+      "stereotype": "领域服务",
+      "responsibility": "原生智能体的 knowledge_search：参数只有查询语句，检索范围钉死在绑定的库上、闭包捕获，不进参数——库 id 能由模型指定，提示词注入就能读到没绑定的库。声明只读（readOnlyHint），任何审批模式都不用问人。检索失败交回一句说明，不让整轮失败。",
+      "methods": [
+        [
+          "+",
+          "knowledge_search(query) -> str"
+        ]
+      ],
+      "at": [
+        0.0,
+        2.6
+      ]
+    },
+    {
+      "id": "auto",
+      "kind": "class",
+      "name": "AutoRetrieval",
+      "stereotype": "策略",
+      "responsibility": "auto 模式：用这一轮的提问先检索，参考资料并入这一轮的输入，要求模型优先依据资料、标注出处。只改模型这一轮看到的输入，用户消息照原文落库，下一轮按下一轮的提问重新检索；续跑的段不再检索；检索失败让这一轮明确失败，不当作「没查到」；高分放首尾，缓解长上下文中间被忽略。",
+      "methods": [
+        [
+          "+",
+          "augment(input, retrieved) -> input'"
+        ]
+      ],
+      "at": [
+        3.0,
+        2.6
       ]
     },
     {
       "id": "client",
       "kind": "class",
-      "name": "HostClient",
+      "name": "KnowledgeClient",
       "stereotype": "防腐层",
-      "responsibility": "一条到 bridge 的 WebSocket，讲上游协议 atlas.host.v1（JSON-RPC）。握手带服务令牌和会话绑定头（X-Session-Id），子协议不对、令牌不对都连不上。对方发来的请求（如权限请求）各起一个任务处理，等多久都不堵住读取；通知在读循环里按顺序串行处理，处理慢了读取就停，这就是背压。",
+      "responsibility": "知识库服务的内部接口。按谁判由调用方显式给出（subject → X-Auth-Uid 请求头），库级、文档级权限都由知识库按它判：绑定不是授权，读不到的库跳过并如实报出。带上调用链（traceparent），知识库那边的召回、重排挂到这次 run 下面。",
       "methods": [
         [
           "+",
-          "request(method, params) · notify(method, params)"
+          "retrieve(spec, query, *, subject, source, ref) -> Retrieved"
         ],
         [
           "+",
-          "close_code · wait_closed()"
-        ]
-      ],
-      "at": [
-        3.85,
-        0.75
-      ]
-    },
-    {
-      "id": "inbox",
-      "kind": "class",
-      "name": "TurnInbox",
-      "stereotype": "实体",
-      "responsibility": "一轮在 server 这边的收件状态。bridge 发来的每条消息都带会话内连续的序号：小于等于已处理的就是重复（补发和已收到的重叠），丢掉。每 1 秒或每 200 条确认一次，以先到者为准；一轮结束时强制确认。bridge 报告无法补发的序号区间时，产出一条说明，不假装没丢。",
-      "attributes": [
-        [
-          "+",
-          "last_seq · acked_seq"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "accept(note) -> bool"
-        ],
-        [
-          "+",
-          "ack(client, *, force) -> bool"
-        ]
-      ],
-      "at": [
-        -0.6,
-        0.75
-      ]
-    },
-    {
-      "id": "session",
-      "kind": "class",
-      "name": "CliSession",
-      "stereotype": "聚合根",
-      "responsibility": "server 对一个 CLI 会话的记忆：CLI 自己的会话 id（open 时恢复用），连着的是哪个 bridge 实例，已确认到哪个序号。序号是会话级的，跨连接、跨轮连续；换实例接管时，接手的 server 据此 attach 回去、从确认点之后补发，那一轮在 Pod 里一直在跑，工具不会重复执行。",
-      "attributes": [
-        [
-          "+",
-          "thread_uuid · agent_session_id"
-        ],
-        [
-          "+",
-          "bridge_instance · acked_seq"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "knows(bridge_instance) -> bool"
-        ],
-        [
-          "+",
-          "advance(acked_seq) · rebind(bridge_instance)"
+          "readable(subject, dataset_ids) -> list"
         ]
       ],
       "at": [
         1.6,
-        2.65
-      ]
-    },
-    {
-      "id": "repo",
-      "kind": "class",
-      "name": "CliSessionRepository",
-      "stereotype": "仓储",
-      "responsibility": "CLI 会话的接续信息存在 cli_session 表里，一个会话一行；每次确认时保存，接管的实例从这里读。",
-      "methods": [
-        [
-          "+",
-          "get(thread_uuid) -> CliSession"
-        ],
-        [
-          "+",
-          "save(session)"
-        ]
-      ],
-      "at": [
-        -0.6,
-        2.65
-      ]
-    },
-    {
-      "id": "retry",
-      "kind": "class",
-      "name": "ReconnectPolicy",
-      "stereotype": "策略",
-      "responsibility": "断线后要不要重连、怎么重连：先看关闭码，被取代和会话已结束不重连；其余（含没收到关闭码的异常断开）指数退避重连，没有时间窗口——断线只是通道断了，这一轮在 Pod 里照常进行。断线期间用户取消了，就不再重连，以取消收尾；bridge 上那一轮由下一轮开始时收掉。",
-      "methods": [
-        [
-          "+",
-          "next_delay(attempt, close_code, cancelled) -> float | None"
-        ]
-      ],
-      "at": [
-        3.85,
-        2.65
-      ]
-    },
-    {
-      "id": "close",
-      "kind": "enum",
-      "name": "CloseCode",
-      "stereotype": "值对象",
-      "responsibility": "上游连接的关闭码。核心用途是告诉 server 要不要重连：4409 被同一会话的新连接取代，4410 会话已结束，这两种不重连。",
-      "attributes": [
-        [
-          "",
-          "1000 · 1001 · 1006 · 1009 · 1011"
-        ],
-        [
-          "",
-          "4400 协议违规 · 4409 被取代 · 4410 会话已结束"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "should_reconnect(code) -> bool"
-        ]
-      ],
-      "at": [
-        3.85,
         4.45
       ]
     },
     {
-      "id": "runtime",
+      "id": "fmt",
       "kind": "class",
-      "name": "CliRuntime",
-      "external": true,
-      "source": "CLI 运行时 · 一轮的编排领域",
+      "name": "RecordFormatter",
+      "stereotype": "策略",
+      "responsibility": "检索结果 → 模型读的文本：编号、文档名、标题路径、所在库。没查到要明说，否则模型会把「没查到」当成工具坏了；有库没权限被跳过也要说。",
       "methods": [
         [
           "+",
-          "run_turn(…)"
+          "render(query, records, skipped) -> str"
+        ]
+      ],
+      "at": [
+        3.0,
+        4.45
+      ]
+    },
+    {
+      "id": "ret",
+      "kind": "class",
+      "name": "Retrieved",
+      "stereotype": "值对象",
+      "responsibility": "一次检索的结果：按相关度排好的片段，以及这一轮的主体读不到（或已删除）、被跳过的库。",
+      "attributes": [
+        [
+          "+",
+          "records: list[片段]"
+        ],
+        [
+          "+",
+          "skipped: list[dataset_id]"
+        ]
+      ],
+      "at": [
+        1.6,
+        6.3
+      ]
+    },
+    {
+      "id": "grant",
+      "kind": "class",
+      "name": "PodGrant",
+      "stereotype": "值对象",
+      "responsibility": "给会话 Pod（不可信代码）的能力凭据：HMAC(密钥, 绑定的库、会话、按谁判、发起人)。它只授予「读这几个已绑定的库」，换绑后新会话拿新令牌；不设过期——CLI 会话只在开会话时下发一次，可能挂起很久再恢复。内网去令牌之后它仍保留，因为持有它的是 Pod 里的 CLI。",
+      "attributes": [
+        [
+          "+",
+          "d: dataset_ids · t: thread"
+        ],
+        [
+          "+",
+          "u: auth_uid · o: 发起人"
+        ]
+      ],
+      "methods": [
+        [
+          "+",
+          "sign(secret) -> token"
+        ]
+      ],
+      "at": [
+        3.85,
+        0.75
+      ]
+    },
+    {
+      "id": "catalogFacade",
+      "kind": "class",
+      "name": "ToolCatalog",
+      "external": true,
+      "source": "工具接入 · 原生运行时的入口",
+      "methods": [
+        [
+          "+",
+          "for_segment(spec, ctx)"
+        ]
+      ],
+      "at": [
+        0.0,
+        -0.95
+      ]
+    },
+    {
+      "id": "assembly",
+      "kind": "class",
+      "name": "CapabilityAssembly",
+      "external": true,
+      "source": "原生运行时 · 一轮的编排领域",
+      "methods": [
+        [
+          "+",
+          "本轮输入（auto 模式）"
         ]
       ],
       "at": [
@@ -222,204 +219,197 @@
       ]
     },
     {
-      "id": "bridge",
+      "id": "cliFacade",
       "kind": "class",
-      "name": "UpstreamServer",
+      "name": "CliToolHandoff",
       "external": true,
-      "source": "会话 Pod · bridge · 上游通道领域",
+      "source": "工具接入 · CLI 运行时的入口",
       "methods": [
         [
           "+",
-          "session.open · attach · ack · close"
-        ],
-        [
-          "+",
-          "turn.start · turn.cancel"
-        ],
-        [
-          "+",
-          "→ agent.update · turn.state · permission.ask"
+          "mcp_servers(spec, user)"
         ]
       ],
       "at": [
-        6.3,
-        0.75
+        3.2,
+        -0.95
+      ]
+    },
+    {
+      "id": "scope",
+      "kind": "class",
+      "name": "KnowledgeScope",
+      "external": true,
+      "source": "智能体管理 · 智能体配置领域",
+      "methods": [
+        [
+          "+",
+          "编辑器可选的库、保存时校验"
+        ]
+      ],
+      "at": [
+        5.7,
+        2.6
+      ]
+    },
+    {
+      "id": "kb",
+      "kind": "class",
+      "name": "知识库服务",
+      "external": true,
+      "source": "知识库服务（atlas-knowledge）",
+      "methods": [
+        [
+          "+",
+          "/internal/v1/retrieve · /internal/v1/datasets/readable"
+        ],
+        [
+          "+",
+          "/mcp/（Pod 凭令牌直连）"
+        ]
+      ],
+      "at": [
+        -1.6,
+        5.6
       ]
     }
   ],
   "relationships": [
     {
-      "from": "runtime",
-      "to": "link",
-      "type": "association",
-      "description": "接会话、开一轮、收通知"
+      "from": "catalogFacade",
+      "to": "svc",
+      "type": "uses",
+      "description": "tool 模式"
     },
     {
-      "from": "link",
+      "from": "assembly",
+      "to": "svc",
+      "type": "uses",
+      "description": "auto 模式"
+    },
+    {
+      "from": "cliFacade",
+      "to": "svc",
+      "type": "uses",
+      "description": "CLI 下发"
+    },
+    {
+      "from": "scope",
+      "to": "svc",
+      "type": "uses",
+      "description": "能读哪些库"
+    },
+    {
+      "from": "svc",
+      "to": "tool",
+      "type": "uses",
+      "description": "creates（库 id 闭包捕获）"
+    },
+    {
+      "from": "svc",
+      "to": "auto",
+      "type": "uses",
+      "description": "并入本轮输入"
+    },
+    {
+      "from": "svc",
+      "to": "grant",
+      "type": "uses",
+      "description": "creates"
+    },
+    {
+      "from": "svc",
       "to": "client",
-      "type": "association",
-      "description": "一轮一条"
+      "type": "uses",
+      "description": "能读哪些库"
+    },
+    {
+      "from": "tool",
+      "to": "client",
+      "type": "uses",
+      "description": "检索"
+    },
+    {
+      "from": "auto",
+      "to": "client",
+      "type": "uses",
+      "description": "检索"
+    },
+    {
+      "from": "tool",
+      "to": "fmt",
+      "type": "uses",
+      "description": "渲染结果"
+    },
+    {
+      "from": "auto",
+      "to": "fmt",
+      "type": "uses",
+      "description": "渲染资料"
     },
     {
       "from": "client",
-      "to": "bridge",
+      "to": "ret",
       "type": "uses",
-      "description": "WebSocket（atlas.host.v1）"
+      "description": "creates"
     },
     {
-      "from": "link",
-      "to": "inbox",
-      "type": "composition",
-      "description": "本轮"
-    },
-    {
-      "from": "link",
-      "to": "session",
+      "from": "client",
+      "to": "kb",
       "type": "uses",
-      "description": "认识这个 bridge 吗"
-    },
-    {
-      "from": "link",
-      "to": "repo",
-      "type": "uses",
-      "description": "确认时保存"
-    },
-    {
-      "from": "repo",
-      "to": "session",
-      "type": "association",
-      "description": "存取"
-    },
-    {
-      "from": "link",
-      "to": "retry",
-      "type": "uses",
-      "description": "断线时"
-    },
-    {
-      "from": "retry",
-      "to": "close",
-      "type": "uses",
-      "description": "按关闭码"
+      "description": "内网接口（带主体请求头）"
     }
   ],
   "capabilities": [
     {
-      "name": "接上会话",
-      "entry": "SessionLink.join(endpoint, capabilities, segment)",
-      "callers": "一轮的编排",
-      "description": "认识这个 bridge 就 attach、从确认点之后补发；否则 open，带 CLI 的会话 id 恢复，并一次性下发 MCP 和模型配置"
+      "name": "knowledge_search 工具",
+      "entry": "KnowledgeService.tool(spec, ctx)",
+      "callers": "ToolCatalog（原生运行时每段装配，tool 模式）",
+      "description": "检索范围钉死在绑定的库上；只读；失败交回说明不让整轮失败"
     },
     {
-      "name": "开一轮、收通知",
-      "entry": "SessionLink.start_turn · notes",
-      "callers": "一轮的编排",
-      "description": "turnId = run id，重复提交安全；通知按序号去重、定期确认；断线自动重连补全"
+      "name": "并入本轮输入",
+      "entry": "KnowledgeService.augment(input, spec, ctx)",
+      "callers": "原生运行时 · 一轮的编排（auto 模式，每轮开始前）",
+      "description": "用本轮提问检索，资料只进模型这一轮的输入；失败就这一轮明确失败；读不到的库经提示告诉用户"
     },
     {
-      "name": "取消这一轮",
-      "entry": "SessionLink.cancel_turn()",
-      "callers": "一轮的编排（用户取消时）",
-      "description": "只发请求；取消流程（按 CLI 协议的义务取消、宽限、必要时终止 CLI）由 bridge 执行"
+      "name": "CLI 的知识库 MCP",
+      "entry": "KnowledgeService.cli_entry(spec, ctx)",
+      "callers": "CliToolHandoff（CLI 运行时开会话时）",
+      "description": "知识库 MCP 地址 + 签名令牌；Pod 里的 CLI 凭它调 knowledge_search"
+    },
+    {
+      "name": "主体能读哪些库",
+      "entry": "KnowledgeService.readable(subject, dataset_ids)",
+      "callers": "智能体管理（编辑器可选项、保存时校验、身份页签）",
+      "description": "按给出的主体问知识库；没接知识库返回空并说明"
     }
   ],
   "decisions": [
     {
-      "decision": "断线不等于这一轮结束",
-      "reason": "bridge 和 CLI 在 Pod 里照常进行，断的只是传话的通道。重连后 attach，bridge 从确认点之后补发，事件流完整，工具也不会重跑。"
+      "decision": "四种接法收成一个入口",
+      "reason": "现在 tool 模式的工具在执行器的 assembly 里建，auto 模式的检索和拼输入也在 assembly 里，CLI 的令牌在 CLI 运行时里签，编辑器的「能读哪些库」又是一个独立函数，四处各自拿客户端、各自处理「没接入」。收进 KnowledgeService 后规则只有一处。"
     },
     {
-      "decision": "按序号去重，定期确认",
-      "reason": "补发的范围和已经收到的可能重叠，按会话内连续的序号去重即可；确认太频繁浪费往返，太稀又让 bridge 的补发缓冲涨得太大，所以每 1 秒或每 200 条一次。"
+      "decision": "检索范围不进工具参数",
+      "reason": "库 id 由模型指定的话，一段提示词注入就能让它去读没绑定的库；钉在闭包里，模型能改的只有查询语句。"
     },
     {
-      "decision": "接续信息按会话落一张表（cli_session），不放进程内存，也不放 run 表",
-      "reason": "现在一半在进程内存（认识哪个 bridge、最后的序号），一半写在 run 行上（acp_bridge_instance、acp_acked_seq）。序号其实是会话级的（跨连接、跨轮连续），进程内存在换实例接管时就没了，写在 run 上又让执行记录带着运行时私有的字段。收成一张会话级的表，接管的实例也能读到。"
+      "decision": "按谁判显式传参，不临时替换出站身份",
+      "reason": "现在编辑器问「主体能读哪些库」时，临时把当前上下文的出站身份换成那个主体、调完再换回来；一旦中途抛错或并发复用上下文，身份就会串。KnowledgeClient 改成每次调用显式给出主体，运行时传这一轮的 auth_uid，编辑器传保存的人或数字员工。"
     },
     {
-      "decision": "bridge 重启过，就让这一轮以 bridge_lost 失败，下一轮 open 恢复",
-      "reason": "bridge 重启后内存里的轮次和补发缓冲都没了，这一轮补不全；下一轮带 CLI 自己的会话 id 去 open，CLI 从持久化的 HOME 里恢复对话。"
+      "decision": "绑定不是授权，运行时按这一轮的主体再判",
+      "reason": "绑定时能读，之后可能被收回；以 Agent 为权限时看数字员工、以人为权限时看使用者。读不到的库跳过并告诉用户，其余照常检索。"
     },
     {
-      "decision": "关闭码决定要不要重连",
-      "reason": "4409（被同一会话的新连接取代）说明别的 server 实例已经接管，再重连就是两个实例抢同一条流；4410（会话已结束）说明没东西可连。其余情况都重连。"
+      "decision": "auto 模式的资料只进这一轮的输入",
+      "reason": "用户消息照原文落库，历史里没有这段资料；下一轮按下一轮的提问重新检索，资料不会在上下文里越积越多，也不会把过期的资料当成对话的一部分。"
     },
     {
-      "decision": "server 发往 bridge 的请求不补发",
-      "reason": "server 方向发的都是短请求，失败了重试即可；turn.start 带 turnId 幂等，重复提交不会开两轮。只有 bridge 方向的长流需要序号和补发。"
-    },
-    {
-      "decision": "对方的请求各起一个任务，通知串行处理",
-      "reason": "权限请求可能等人决定等很久，不能堵住后面的读取；通知（内容更新）的顺序有意义，串行处理，处理慢了读取跟着停，背压自然传到 bridge。"
-    },
-    {
-      "decision": "上游协议运送 CLI 的内容，但不理解它",
-      "reason": "atlas.host.v1 只管会话、轮次、序号和权限的往返，CLI 的内容原样装在载荷里；协议库不依赖 CLI 内容协议的定义。理解内容的只有内容翻译领域，CLI 协议升级不影响连接。"
-    }
-  ],
-  "schemaNote": "主键约定：id 是自增主键，只在库内使用，不对外、不做关联；xxx_uuid 是逻辑主键（UUIDv7，Python 侧生成），表间引用和 API 都用它。表间不建外键约束，引用由代码维护；引用会话、run 这些别的领域的表时只写列说明，不画连线。类型写的是 db/types.py 和 SQLAlchemy 的通用类型。",
-  "tables": [
-    {
-      "name": "cli_session",
-      "description": "CLI 会话的接续信息（聚合根 CliSession），一个会话一行。",
-      "at": [
-        0,
-        0
-      ],
-      "columns": [
-        {
-          "name": "id",
-          "type": "BigInteger",
-          "key": "PK",
-          "default": "自增",
-          "description": "库内主键"
-        },
-        {
-          "name": "thread_uuid",
-          "type": "UUIDType",
-          "key": "UK",
-          "description": "CLI 智能体的会话（会话服务的表，逻辑引用）"
-        },
-        {
-          "name": "agent_session_id",
-          "type": "String(128)",
-          "nullable": true,
-          "description": "CLI 自己的会话 id，open 时交给 bridge 恢复对话（现在存在 thread.external_session_id）"
-        },
-        {
-          "name": "bridge_instance",
-          "type": "String(64)",
-          "nullable": true,
-          "description": "上次连着的 bridge 实例；对得上才 attach"
-        },
-        {
-          "name": "acked_seq",
-          "type": "Integer",
-          "default": "0",
-          "description": "已确认到的会话内序号；attach 时从这之后补发（现在存在 run.acp_acked_seq）"
-        },
-        {
-          "name": "created_at",
-          "type": "UTCDateTime",
-          "default": "now()"
-        },
-        {
-          "name": "updated_at",
-          "type": "UTCDateTime",
-          "default": "now()",
-          "description": "每次确认时刷新"
-        }
-      ],
-      "indexes": [
-        {
-          "name": "uk_cli_session_thread",
-          "columns": [
-            "thread_uuid"
-          ],
-          "unique": true,
-          "description": "一个会话一行"
-        }
-      ]
+      "decision": "Pod 用签名令牌，不用身份请求头",
+      "reason": "Pod 里跑的是不可信代码，请求头它想写什么都行；令牌只授予读这几个库，主体签在里面，改不了。"
     }
   ]
 }

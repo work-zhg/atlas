@@ -261,13 +261,13 @@
     {
       "id": "mcp",
       "kind": "class",
-      "name": "McpGateway",
+      "name": "CliToolHandoff",
       "external": true,
-      "source": "MCP 网关（工具接入组件）",
+      "source": "工具接入组件 · 组合入口",
       "methods": [
         [
           "+",
-          "servers_for(agent) -> list[McpServerConfig]"
+          "mcp_servers(spec, user)（网关上的服务 + 知识库 MCP）"
         ]
       ],
       "at": [
@@ -332,7 +332,7 @@
       "from": "assembly",
       "to": "mcp",
       "type": "uses",
-      "description": "MCP 配置"
+      "description": "MCP 和知识库"
     },
     {
       "from": "assembly",
