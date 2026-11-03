@@ -238,19 +238,6 @@ async def test_uc_operations_follow_auth_uid(uc_app: tuple[Any, FakeUC], clean_d
         assert (await m.get("/v1/me")).status_code == 403
 
 
-async def test_internal_principals_without_token(
-    uc_app: tuple[Any, FakeUC], clean_db: None
-) -> None:
-    """/internal 不再要服务间令牌（网关挡掉外部访问）；身份请求头原样透传给用户中心。"""
-    app, fake = uc_app
-    zhang = fake.add("zhang", ["chat:use"])
-    async with _client(app, caller="atlas", **{"X-Uid": zhang, "X-Tenant-Id": "t-1"}) as kb:
-        r = await kb.post("/internal/v1/auth/principals", json={"user_id": zhang})
-        assert r.status_code == 200, r.text
-        assert f"u:{zhang}" in r.json()["principals"] and "r:ATLAS_MEMBER" in r.json()["principals"]
-        assert fake.seen[-1]["x-tenant-id"] == "t-1"
-
-
 # ───────────────────────────── 数字员工与权限类型（doc/digital-employee-design.html）
 
 

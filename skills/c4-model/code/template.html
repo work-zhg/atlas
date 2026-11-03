@@ -12,6 +12,15 @@
   #c4-report { margin: 0 0 24px; padding: 12px 16px 12px 36px; border: 1px solid #e0b4b4; background: #fff6f6; font-size: 14px; line-height: 1.6; }
   #c4-report li[data-level="error"] { color: #b00020; }
   #c4-report li[data-level="warn"] { color: #8a5a00; }
+  #c4-overview p { max-width: 1100px; margin: 0 0 10px; font-size: 14px; line-height: 1.8; color: #333; }
+  section table { border-collapse: collapse; font-size: 14px; line-height: 1.6; color: #333; }
+  section th, section td { border: 1px solid #d0d0d0; padding: 6px 10px; text-align: left; vertical-align: top; }
+  section th { background: #f4f4f4; font-weight: 600; white-space: nowrap; }
+  section td.code { font-family: Menlo, Consolas, monospace; font-size: 13px; }
+  section td.nowrap { white-space: nowrap; }
+  #c4-tables h3 { margin: 28px 0 6px; font: 600 14px Menlo, Consolas, monospace; color: #333; }
+  #c4-tables h4 { margin: 14px 0 6px; font-size: 13px; font-weight: 600; color: #666; }
+  #c4-tables p { max-width: 1100px; margin: 0 0 10px; font-size: 14px; line-height: 1.8; color: #333; }
 </style>
 </head>
 <body>
@@ -61,6 +70,28 @@
 <main>
   <ul id="c4-report" hidden></ul>
   <svg id="c4-diagram" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+  <section id="c4-overview" hidden>
+    <h2>概述</h2>
+  </section>
+  <section id="c4-capabilities" hidden>
+    <h2>对外能力</h2>
+    <table><thead></thead><tbody></tbody></table>
+  </section>
+  <section id="c4-decisions" hidden>
+    <h2>设计决策</h2>
+    <table><thead></thead><tbody></tbody></table>
+  </section>
+  <section id="c4-elements" hidden>
+    <h2>元素职责</h2>
+    <table><thead></thead><tbody></tbody></table>
+  </section>
+  <section id="c4-er" hidden>
+    <h2>ER 图</h2>
+    <svg id="c4-er-diagram" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+  </section>
+  <section id="c4-tables" hidden>
+    <h2>表结构</h2>
+  </section>
   <h2>Diagram key</h2>
   <svg id="c4-key" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
 </main>
@@ -72,6 +103,7 @@
   const INK = '#181818';
   const EXTERNAL_INK = '#8a8a8a';           // 外部元素（不在本 component 里）
   const TITLE_INK = '#444444';
+  const SOURCE_INK = '#7a7a7a';             // 「现状：…」（目标模型的元素当前由哪段代码承担）
   // 元素类型：图标字母、名字是否斜体、图例文字
   const KINDS = {
     class: { letter: 'C', italic: false, key: 'Class' },
@@ -106,9 +138,27 @@
     mult: { size: 12, weight: 400, lh: 16 },
     frame: { size: 14, weight: 700, lh: 20 },
     key: { size: 13, weight: 400, lh: 18 },
+    stereo: { size: 12, weight: 400, lh: 16 },
+    source: { size: 12, weight: 400, lh: 16 },
   };
   const HEADER_H = 36, ICON_R = 11, PAD_X = 12, MEMBER_ICON = 16, MIN_W = 160, EMPTY_H = 8, MARGIN = 60;
   const LABEL_W = 200, ARROW_L = 14, ARROW_W = 12, GAP = 2;
+  // 标题栏有构造型或「现状」时：上下留白 + 名字行，构造型在上、现状在下
+  const HEADER_PAD = 6, NAME_H = 26, SOURCE_W = 280;
+  // 图下方的表格：[字段, 列名, 单元格样式（code 等宽字体，nowrap 不换行）]。必填的列总是显示，其余列有一行写了才显示
+  const CAP_COLS = [['name', '能力', 'nowrap'], ['entry', '入口', 'code'], ['callers', '调用方'], ['description', '说明'], ['source', '现状']];
+  const DECISION_COLS = [['decision', '决策', 'nowrap'], ['reason', '理由']];
+  const ELEMENT_COLS = [['name', '元素', 'code'], ['stereotype', '角色', 'nowrap'], ['responsibility', '职责'], ['source', '现状']];
+  // 表结构：列表、索引表的列（必填的列总是显示，其余列有一行写了才显示）
+  const COLUMN_COLS = [['name', '字段', 'code'], ['type', '类型', 'code nowrap'], ['null', '可空', 'nowrap'], ['key', '键', 'nowrap'],
+    ['references', '引用', 'code'], ['default', '默认值', 'code'], ['description', '说明']];
+  const INDEX_COLS = [['name', '索引', 'code'], ['columns', '字段', 'code'], ['unique', '唯一', 'nowrap'], ['description', '说明']];
+  const KEYS = ['PK', 'UK', 'FK'];
+  // ER 图：表头高、行高、左右留白、键标记列宽、列名与类型的间距、最小宽度
+  const ER = { header: 32, row: 22, padX: 10, badgeW: 30, gapType: 18, minW: 200 };
+  const ER_TXT = { name: { size: 14, weight: 700, lh: 20 }, col: { size: 13, weight: 400, lh: 22 }, type: { size: 12, weight: 400, lh: 22 }, badge: { size: 11, weight: 700, lh: 22 } };
+  // 连线端点：有且只有一个 ||、零或一个 o|、零或多个 o<
+  const ER_ENDS = { one: '有且只有一个', zeroOne: '零或一个', many: '零或多个' };
 
   const svgNS = 'http://www.w3.org/2000/svg';
   const problems = [];
@@ -197,9 +247,16 @@
     const nameW = measure(el.name, TXT.name, k.italic);
     const headerW = 2 * ICON_R + 8 + (VIS[el.visibility] ? 14 : 0) + nameW;
     const memberW = (list) => Math.max(0, ...list.map(([v, text]) => measure(text, TXT.member) + (VIS[v] ? MEMBER_ICON : 0)));
-    const w = Math.max(MIN_W, headerW + 2 * PAD_X, Math.max(memberW(el.attributes), memberW(el.methods)) + 2 * PAD_X);
+    el.stereo = el.stereotype ? `«${el.stereotype}»` : '';
+    let w = Math.max(MIN_W, headerW + 2 * PAD_X, measure(el.stereo, TXT.stereo) + 2 * PAD_X,
+      Math.max(memberW(el.attributes), memberW(el.methods)) + 2 * PAD_X);
+    el.sourceLines = el.source ? wrap(`现状：${el.source}`, TXT.source, Math.max(w - 2 * PAD_X, SOURCE_W)) : [];
+    w = Math.max(w, ...el.sourceLines.map((s) => measure(s, TXT.source) + 2 * PAD_X));
+    el.headerH = el.stereo || el.sourceLines.length
+      ? 2 * HEADER_PAD + (el.stereo ? TXT.stereo.lh : 0) + NAME_H + el.sourceLines.length * TXT.source.lh
+      : HEADER_H;
     const part = (list) => (list.length ? list.length * TXT.member.lh + 8 : EMPTY_H);
-    const h = HEADER_H + part(el.attributes) + part(el.methods);
+    const h = el.headerH + part(el.attributes) + part(el.methods);
     el.box = { x: el.at[0] * COL - w / 2, y: el.at[1] * ROW - h / 2, w, h };
     el.headerW = headerW;
   }
@@ -208,15 +265,20 @@
     const k = KINDS[el.kind];
     const ink = el.external ? EXTERNAL_INK : INK;
     node('rect', { x: box.x, y: box.y, width: box.w, height: box.h, rx: 3, fill: '#fff', stroke: ink, 'stroke-width': 1.2 }, g);
-    // 标题栏：图标 + 可见性 + 名字，整体居中
+    // 标题栏：«构造型»，图标 + 可见性 + 名字，「现状：…」，各自居中
+    const extra = el.stereo || el.sourceLines.length;
+    let top = box.y + (extra ? HEADER_PAD : 0);
+    if (el.stereo) { textLines(g, [el.stereo], box.x + box.w / 2, top, TXT.stereo, ink); top += TXT.stereo.lh; }
+    const nameH = extra ? NAME_H : HEADER_H;
     let x = box.x + (box.w - el.headerW) / 2;
-    const cy = box.y + HEADER_H / 2;
+    const cy = top + nameH / 2;
     kindIcon(g, el.kind, x + ICON_R, cy, ink);
     x += 2 * ICON_R + 8;
     if (VIS[el.visibility]) { visIcon(g, el.visibility, x + 4, cy, true, ink); x += 14; }
     textLines(g, [el.name], x, cy - TXT.name.lh / 2, TXT.name, ink, 'start', k.italic);
+    if (el.sourceLines.length) textLines(g, el.sourceLines, box.x + box.w / 2, top + nameH, TXT.source, el.external ? EXTERNAL_INK : SOURCE_INK);
     // 属性栏、方法栏
-    let y = box.y + HEADER_H;
+    let y = box.y + el.headerH;
     for (const list of [el.attributes, el.methods]) {
       node('line', { x1: box.x, y1: y, x2: box.x + box.w, y2: y, stroke: ink, 'stroke-width': 1 }, g);
       if (!list.length) { y += EMPTY_H; continue; }
@@ -275,6 +337,9 @@
       el.methods = el.methods || [];
       if (!memberOk(el.attributes) || !memberOk(el.methods)) { fail(`${who}：attributes / methods 的每一项都要写成 [可见性, 文本]，可见性取 + - # ~ 或空串`); continue; }
       if (el.visibility !== undefined && !(el.visibility in VIS)) fail(`${who}：visibility 只能是 + - # ~ 或空串`);
+      for (const f of ['stereotype', 'source', 'responsibility']) {
+        if (el[f] !== undefined && typeof el[f] !== 'string') { fail(`${who}：${f} 必须是字符串`); el[f] = undefined; }
+      }
       byId.set(el.id, el);
       els.push(el);
     }
@@ -414,7 +479,220 @@
     svg.setAttribute('width', vw);
     svg.setAttribute('aria-label', model.title || 'Code diagram');
 
+    renderOverview(model.overview);
+    renderList('c4-capabilities', '对外能力', model.capabilities, CAP_COLS, ['name', 'entry']);
+    renderList('c4-decisions', '设计决策', model.decisions, DECISION_COLS, ['decision', 'reason']);
+    const described = inside.filter((e) => e.responsibility);
+    if (described.length) {
+      for (const e of inside) if (!e.responsibility) warn(`「${e.name}」没写 responsibility：元素职责表里会缺它`);
+      renderTable('c4-elements', ELEMENT_COLS, described);
+    }
+    renderSchema(model.tables, model.schemaNote);
     renderKey(els, drawn);
+  }
+
+  // ---- 表：校验、ER 图、表结构（只在写了 tables 时显示）----
+  function renderSchema(tables, note) {
+    if (tables === undefined) return;
+    if (!Array.isArray(tables) || !tables.length) { fail('tables 必须是非空数组'); return; }
+    const byName = new Map();
+    for (const [i, t] of tables.entries()) {
+      const who = (t && t.name) || `第 ${i + 1} 张表`;
+      if (!t || typeof t !== 'object' || !t.name) { fail(`表「${who}」：缺少 name`); continue; }
+      if (byName.has(t.name)) { fail(`表名重复：${t.name}`); continue; }
+      if (!Array.isArray(t.columns) || !t.columns.length) { fail(`表 ${t.name}：columns 必须是非空数组`); continue; }
+      const seen = new Set();
+      if (t.columns.some((c) => !c || !c.name || !c.type)) { fail(`表 ${t.name}：每一列都要有 name 和 type`); continue; }
+      for (const c of t.columns) {
+        if (seen.has(c.name)) fail(`表 ${t.name}：列名重复 ${c.name}`);
+        seen.add(c.name);
+        if (c.key !== undefined && !KEYS.includes(c.key)) fail(`表 ${t.name}.${c.name}：key 只能是 ${KEYS.join(' / ')}`);
+        if (c.nullable !== undefined && typeof c.nullable !== 'boolean') fail(`表 ${t.name}.${c.name}：nullable 必须是 true / false`);
+        if (c.referenceOptional !== undefined && typeof c.referenceOptional !== 'boolean') fail(`表 ${t.name}.${c.name}：referenceOptional 必须是 true / false`);
+        for (const f of ['type', 'default', 'description', 'references']) {
+          if (c[f] !== undefined && typeof c[f] !== 'string') fail(`表 ${t.name}.${c.name}：${f} 必须是字符串`);
+        }
+      }
+      if (t.indexes !== undefined && (!Array.isArray(t.indexes) || t.indexes.some((ix) => !ix || !ix.name || !ix.columns))) {
+        fail(`表 ${t.name}：indexes 的每一项都要有 name 和 columns`);
+        t.indexes = [];
+      }
+      if (t.at !== undefined && !(Array.isArray(t.at) && t.at.length === 2 && t.at.every(Number.isFinite))) {
+        fail(`表 ${t.name}：at 必须是 [列, 行] 两个数字`);
+        t.at = undefined;
+      }
+      byName.set(t.name, t);
+    }
+    const ok = [...byName.values()];
+    // 引用关系：references 写成「表.列」，被引用的列应是 PK 或 UK
+    const links = [];
+    for (const t of ok) {
+      for (const c of t.columns) {
+        if (!c.references) continue;
+        const [rt, rc] = c.references.split('.');
+        const target = byName.get(rt);
+        const col = target && target.columns.find((x) => x.name === rc);
+        if (!col) { fail(`表 ${t.name}.${c.name}：references「${c.references}」指向不存在的表或列`); continue; }
+        if (!['PK', 'UK'].includes(col.key)) warn(`表 ${t.name}.${c.name}：引用的 ${c.references} 不是 PK 或 UK`);
+        if (target === t) { warn(`表 ${t.name}.${c.name}：自引用不画在 ER 图里`); continue; }
+        links.push({ child: t, column: c, parent: target });
+      }
+    }
+    drawER(ok, links);
+
+    const section = document.getElementById('c4-tables');
+    if (note !== undefined) {
+      if (typeof note !== 'string') fail('schemaNote 必须是字符串');
+      else section.appendChild(document.createElement('p')).textContent = note;
+    }
+    for (const t of ok) {
+      section.appendChild(document.createElement('h3')).textContent = t.name;
+      if (t.description) section.appendChild(document.createElement('p')).textContent = t.description;
+      const rows = t.columns.map((c) => ({ ...c, null: c.nullable ? '是' : '否' }));
+      buildTable(section, COLUMN_COLS.filter(([k]) => ['name', 'type', 'null'].includes(k) || rows.some((r) => r[k])), rows);
+      if (t.indexes && t.indexes.length) {
+        section.appendChild(document.createElement('h4')).textContent = '索引';
+        const ix = t.indexes.map((i) => ({ ...i, columns: [].concat(i.columns).join(', '), unique: i.unique ? '是' : '否' }));
+        buildTable(section, INDEX_COLS.filter(([k]) => k !== 'description' || ix.some((r) => r.description)), ix);
+      }
+    }
+    section.hidden = false;
+  }
+  function buildTable(parent, cols, rows) {
+    const table = parent.appendChild(document.createElement('table'));
+    const head = table.appendChild(document.createElement('thead')).appendChild(document.createElement('tr'));
+    for (const [, label] of cols) head.appendChild(document.createElement('th')).textContent = label;
+    const body = table.appendChild(document.createElement('tbody'));
+    for (const row of rows) {
+      const tr = body.appendChild(document.createElement('tr'));
+      for (const [k, , cls] of cols) {
+        const td = tr.appendChild(document.createElement('td'));
+        if (cls) td.className = cls;
+        td.textContent = row[k] || '';
+      }
+    }
+  }
+  // 连线一端的标记。p 在表框边上，(dx, dy) 是从线指向这张表的单位向量
+  function erEnd(g, p, dx, dy, kind) {
+    const nx = -dy, ny = dx;
+    const back = (d) => [p[0] - dx * d, p[1] - dy * d];
+    const seg = (a, b) => node('line', { x1: a[0], y1: a[1], x2: b[0], y2: b[1], stroke: INK, 'stroke-width': 1.2 }, g);
+    const bar = (d) => { const c = back(d); seg([c[0] + nx * 7, c[1] + ny * 7], [c[0] - nx * 7, c[1] - ny * 7]); };
+    const ring = (d) => { const c = back(d); node('circle', { cx: c[0], cy: c[1], r: 5, fill: '#fff', stroke: INK, 'stroke-width': 1.2 }, g); };
+    if (kind === 'one') { bar(8); bar(14); return; }
+    if (kind === 'zeroOne') { bar(8); ring(20); return; }
+    const c = back(16);
+    seg(c, [p[0] + nx * 8, p[1] + ny * 8]);
+    seg(c, [p[0] - nx * 8, p[1] - ny * 8]);
+    seg(c, p);
+    ring(24);
+  }
+  function drawER(tables, links) {
+    const svg = document.getElementById('c4-er-diagram');
+    tables.forEach((t, i) => {
+      const at = t.at || [i * 1.2, 0];
+      const rowW = Math.max(...t.columns.map((c) => ER.badgeW + measure(c.name, ER_TXT.col) + ER.gapType + measure(c.type, ER_TXT.type)));
+      const w = Math.max(ER.minW, measure(t.name, ER_TXT.name) + 2 * ER.padX, rowW + 2 * ER.padX);
+      const h = ER.header + t.columns.length * ER.row + 8;
+      t.box = { x: at[0] * COL - w / 2, y: at[1] * ROW - h / 2, w, h };
+    });
+    for (let i = 0; i < tables.length; i++) {
+      for (let j = i + 1; j < tables.length; j++) {
+        if (inter(tables[i].box, tables[j].box, 60)) fail(`表 ${tables[i].name} 和 ${tables[j].name} 在 ER 图里重叠或太近，调整 at`);
+      }
+    }
+    const gR = node('g', {}, svg), gT = node('g', {}, svg), gL = node('g', {}, svg);
+    const boxes = tables.map((t) => t.box);
+    for (const l of links) {
+      const a = l.child.box, b = l.parent.box;
+      const ac = [a.x + a.w / 2, a.y + a.h / 2], bc = [b.x + b.w / 2, b.y + b.h / 2];
+      const len = Math.hypot(bc[0] - ac[0], bc[1] - ac[1]);
+      const dx = (bc[0] - ac[0]) / len, dy = (bc[1] - ac[1]) / len;
+      const s = [ac[0] + dx * exitT(a, ac[0], ac[1], dx, dy), ac[1] + dy * exitT(a, ac[0], ac[1], dx, dy)];
+      const e = [bc[0] - dx * exitT(b, bc[0], bc[1], -dx, -dy), bc[1] - dy * exitT(b, bc[0], bc[1], -dx, -dy)];
+      node('line', { x1: s[0], y1: s[1], x2: e[0], y2: e[1], stroke: INK, 'stroke-width': 1.2 }, gR);
+      erEnd(gR, s, -dx, -dy, l.column.key === 'UK' ? 'zeroOne' : 'many');   // 引用方：列唯一时至多一个
+      // 被引用方：列可空，或被引用的行可能已经不在（referenceOptional，如日志指向已删除的实例）时，可以没有
+      erEnd(gR, e, dx, dy, l.column.nullable || l.column.referenceOptional ? 'zeroOne' : 'one');
+      const lw = measure(l.column.name, TXT.rel) + 8, lh = TXT.rel.lh + 4;
+      const label = { x: (s[0] + e[0]) / 2 - lw / 2, y: (s[1] + e[1]) / 2 - lh / 2, w: lw, h: lh };
+      node('rect', { x: label.x, y: label.y, width: lw, height: lh, fill: '#fff' }, gL);
+      textLines(gL, [l.column.name], label.x + lw / 2, label.y + 2, TXT.rel, INK);
+      boxes.push(label);
+      for (const t of tables) {
+        if (t !== l.child && t !== l.parent && segHitsRect(s, e, t.box)) warn(`ER 图：${l.child.name}.${l.column.name} 的连线穿过表 ${t.name}`);
+      }
+    }
+    for (const t of tables) {
+      const { x, y, w, h } = t.box;
+      const g = node('g', {}, gT);
+      node('rect', { x, y, width: w, height: h, rx: 3, fill: '#fff', stroke: INK, 'stroke-width': 1.2 }, g);
+      node('rect', { x, y, width: w, height: ER.header, rx: 3, fill: '#f4f4f4', stroke: INK, 'stroke-width': 1.2 }, g);
+      textLines(g, [t.name], x + w / 2, y + (ER.header - ER_TXT.name.lh) / 2, ER_TXT.name, INK);
+      t.columns.forEach((c, i) => {
+        const top = y + ER.header + 4 + i * ER.row;
+        if (c.key) textLines(g, [c.key], x + ER.padX, top, ER_TXT.badge, INK, 'start');
+        textLines(g, [c.name], x + ER.padX + ER.badgeW, top, ER_TXT.col, INK, 'start', !!c.nullable);
+        textLines(g, [c.type], x + w - ER.padX, top, ER_TXT.type, SOURCE_INK, 'end');
+      });
+    }
+    // 图例：三种端点，加键标记和斜体的含义
+    const minX = Math.min(...boxes.map((b) => b.x)), minY = Math.min(...boxes.map((b) => b.y));
+    let maxX = Math.max(...boxes.map((b) => b.x + b.w));
+    const keyY = Math.max(...boxes.map((b) => b.y + b.h)) + 40;
+    let kx = minX;
+    for (const [kind, text] of Object.entries(ER_ENDS)) {
+      node('line', { x1: kx, y1: keyY, x2: kx + 60, y2: keyY, stroke: INK, 'stroke-width': 1.2 }, gL);
+      erEnd(gL, [kx + 60, keyY], 1, 0, kind);
+      textLines(gL, [text], kx + 70, keyY - TXT.key.lh / 2, TXT.key, INK, 'start');
+      kx += 70 + measure(text, TXT.key) + 40;
+    }
+    const keys = 'PK 主键 · UK 唯一键 · FK 引用别的表 · 斜体列可为空';
+    textLines(gL, [keys], kx, keyY - TXT.key.lh / 2, TXT.key, INK, 'start');
+    maxX = Math.max(maxX, kx + measure(keys, TXT.key));
+    const maxY = keyY + TXT.key.lh;
+    const vw = maxX - minX + 2 * 30, vh = maxY - minY + 2 * 30;
+    svg.setAttribute('viewBox', `${minX - 30} ${minY - 30} ${vw} ${vh}`);
+    svg.setAttribute('width', vw);
+    svg.setAttribute('aria-label', 'ER diagram');
+    document.getElementById('c4-er').hidden = false;
+  }
+
+  // ---- 图下方的文字：概述（空行分段）和几张表 ----
+  function renderOverview(text) {
+    if (text === undefined) return;
+    if (typeof text !== 'string') { fail('overview 必须是字符串'); return; }
+    const section = document.getElementById('c4-overview');
+    for (const para of text.split(/\n\s*\n/)) if (para.trim()) section.appendChild(document.createElement('p')).textContent = para.trim();
+    section.hidden = false;
+  }
+  function renderList(id, label, list, cols, required) {
+    if (list === undefined) return;
+    if (!Array.isArray(list)) { fail(`${label}必须是数组`); return; }
+    const rows = list.filter((c, i) => {
+      const who = (c && c[cols[0][0]]) || `第 ${i + 1} 项`;
+      if (!c || typeof c !== 'object') { fail(`${label}${who}：要写成对象`); return false; }
+      if (required.some((k) => !c[k])) fail(`${label}「${who}」：${required.join(' 和 ')} 必填`);
+      for (const [k] of cols) if (c[k] !== undefined && typeof c[k] !== 'string') fail(`${label}「${who}」：${k} 必须是字符串`);
+      return true;
+    });
+    renderTable(id, cols.filter(([k]) => required.includes(k) || rows.some((c) => c[k])), rows);
+  }
+  function renderTable(id, cols, rows) {
+    if (!rows.length) return;
+    const section = document.getElementById(id);
+    const head = section.querySelector('thead').appendChild(document.createElement('tr'));
+    for (const [, label] of cols) head.appendChild(document.createElement('th')).textContent = label;
+    const body = section.querySelector('tbody');
+    for (const row of rows) {
+      const tr = body.appendChild(document.createElement('tr'));
+      for (const [k, , cls] of cols) {
+        const td = tr.appendChild(document.createElement('td'));
+        if (cls) td.className = cls;
+        td.textContent = row[k] || '';
+      }
+    }
+    section.hidden = false;
   }
 
   // ---- 图例：用到的元素类型、可见性符号、关系线型，各占一行 ----
@@ -441,6 +719,12 @@
     row(external ? ['external'] : [], (g, _, x, y0) => {
       node('rect', { x, y: y0 + 4, width: 2 * ICON_R + 4, height: 24, rx: 3, fill: '#fff', stroke: EXTERNAL_INK, 'stroke-width': 1.2 }, g);
       textLines(g, ['External（不在本 component 里）'], x + 2 * ICON_R + 12, y0 + 16 - TXT.key.lh / 2, TXT.key, EXTERNAL_INK, 'start');
+    });
+    const notes = [els.some((e) => e.stereo) && 'stereo', els.some((e) => e.sourceLines.length) && 'source'].filter(Boolean);
+    row(notes, (g, n, x, y0) => {
+      const [sample, text, color] = n === 'stereo' ? ['«…»', '构造型：领域模型里的角色', INK] : ['现状：…', '当前承担它的代码', SOURCE_INK];
+      textLines(g, [sample], x, y0 + 16 - TXT.key.lh / 2, TXT.key, color, 'start');
+      textLines(g, [text], x + measure(sample, TXT.key) + 10, y0 + 16 - TXT.key.lh / 2, TXT.key, INK, 'start');
     });
     row(vis, (g, v, x, y0) => {
       visIcon(g, v, x + 8, y0 + 16, true);

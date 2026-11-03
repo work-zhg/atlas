@@ -7,6 +7,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import httpx
 import pytest
 from atlas_knowledge.errors import Invalid
 from atlas_knowledge.rag.filters import BUILTIN_FIELDS, FieldDef, compile_filter, validate_filter
@@ -154,6 +155,49 @@ async def test_document_acl_enforced_for_agent_calls(client: Any, rt: Any) -> No
         f"/v1/datasets/{ds['id']}/documents/{sales['id']}", json={"acl": ["bob"]}, headers=ALICE
     )
     assert bad.status_code == 400
+
+
+async def test_principals_expanded_from_user_center() -> None:
+    """主体展开直接问用户中心：角色、所在部门及各级上级；带出站身份；失败只剩 u: 且不缓存。"""
+    from atlas_knowledge.auth import use_identity
+    from atlas_knowledge.principals import make_resolver
+    from atlas_knowledge.settings import get_settings
+
+    seen: list[httpx.Request] = []
+    down = True
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append(req)
+        if down:
+            return httpx.Response(503)
+        if req.url.path == "/open/v1/users/bob/authz":
+            return httpx.Response(200, json={"can_access": True, "roles": ["ATLAS_MEMBER"]})
+        if req.url.path == "/open/v1/users/bob":
+            return httpx.Response(200, json={"tenant_id": "t-1", "dept": {"id": "sales"}})
+        if req.url.path == "/open/v1/depts/tree":
+            return httpx.Response(
+                200,
+                json=[
+                    {"id": "company", "parent_id": None},
+                    {"id": "sales", "parent_id": "company"},
+                ],
+            )
+        return httpx.Response(404)
+
+    resolve = make_resolver(get_settings(), transport=httpx.MockTransport(handler))
+    use_identity("zhang", "bob", "t-1")
+    # 用户中心不可用：只按用户本人
+    assert await resolve("bob") == ["u:bob"]
+    # 失败不缓存：恢复后重新展开
+    down = False
+    full = ["u:bob", "r:ATLAS_MEMBER", "d:sales", "d:company"]
+    assert await resolve("bob") == full
+    assert seen[-1].headers["x-caller-app"] == "atlas"
+    assert seen[-1].headers["x-auth-uid"] == "bob" and seen[-1].headers["x-tenant-id"] == "t-1"
+    # 成功的结果缓存：不再请求用户中心
+    n = len(seen)
+    assert await resolve("bob") == full
+    assert len(seen) == n
 
 
 # ───────────────────────────────────────────── 元数据过滤 + 查询理解抽取

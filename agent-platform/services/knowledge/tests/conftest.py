@@ -296,7 +296,7 @@ def _fake_user_center(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 async def own_tags(user_id: str) -> list[str]:
-    """主体展开的替身：只有 u:用户（展开部门与角色要 atlas-server，测试里不接）。"""
+    """主体展开的替身：只有 u:用户（展开部门与角色要用户中心，测试里不接）。"""
     return [f"u:{user_id}"]
 
 

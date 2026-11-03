@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenSandbox 功能全景</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --border: #d1d9e0; --head: #f6f8fa;
+    --accent: #0969da; --ok: #1a7f37; --ok-bg: #dafbe1; --warn: #9a6700; --warn-bg: #fff8c5;
+    --bad: #cf222e; --bad-bg: #ffebe9; --code-bg: #f6f8fa;
+    --b1: #ddf4ff; --b1d: #54aeff; --b2: #fbefff; --b2d: #c297ff; --b3: #dafbe1; --b3d: #4ac26b;
+    --b4: #fff8c5; --b4d: #d4a72c; --b5: #ffebe9; --b5d: #ff8182;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --border: #3d444d; --head: #151b23;
+      --accent: #4493f8; --ok: #3fb950; --ok-bg: #12261e; --warn: #d29922; --warn-bg: #2b2111;
+      --bad: #f85149; --bad-bg: #2d1214; --code-bg: #151b23;
+      --b1: #12263f; --b1d: #1f6feb; --b2: #271a36; --b2d: #8957e5; --b3: #12261e; --b3d: #2ea043;
+      --b4: #2b2111; --b4d: #9e6a03; --b5: #2d1214; --b5d: #da3633;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 32px; background: var(--bg); color: var(--fg);
+         font: 14px/1.75 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif; }
+  main { max-width: 1120px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 44px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 15.5px; margin: 24px 0 8px; }
+  .sub { color: var(--muted); margin: 0 0 14px; }
+  code { font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code-bg); padding: 1px 4px; border-radius: 4px; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px 14px; overflow-x: auto; font-size: 12.5px; }
+  pre code { background: none; padding: 0; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0 16px; }
+  th, td { border: 1px solid var(--border); padding: 7px 10px; vertical-align: top; text-align: left; }
+  th { background: var(--head); white-space: nowrap; }
+  .callout { border-left: 4px solid var(--accent); background: var(--head); padding: 10px 14px; border-radius: 4px; margin: 14px 0; }
+  .callout.warn { border-color: var(--warn); background: var(--warn-bg); }
+  .toc { columns: 2; padding-left: 18px; }
+  .fig { border: 1px solid var(--border); border-radius: 6px; padding: 10px; overflow-x: auto; margin: 10px 0 6px; }
+  .cap { color: var(--muted); font-size: 12.5px; margin: 0 0 16px; text-align: center; }
+  svg text { fill: var(--fg); font-size: 12px; font-family: -apple-system, "PingFang SC", sans-serif; }
+  svg .s { font-size: 11px; fill: var(--muted); }
+  svg .b { font-weight: 600; }
+  svg .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+  svg .tw { fill: var(--warn); }
+  svg .tb { fill: var(--bad); }
+  svg .c1 { fill: var(--b1); stroke: var(--b1d); } svg .c2 { fill: var(--b2); stroke: var(--b2d); }
+  svg .c3 { fill: var(--b3); stroke: var(--b3d); } svg .c4 { fill: var(--b4); stroke: var(--b4d); }
+  svg .c5 { fill: var(--b5); stroke: var(--b5d); }
+  svg .inner { fill: var(--bg); stroke: var(--border); }
+  svg .ghost { fill: var(--head); stroke: var(--border); stroke-dasharray: 4 3; }
+  svg .ln { stroke: var(--fg); stroke-width: 1.3; fill: none; }
+  svg .dash { stroke-dasharray: 5 4; }
+  svg .life { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 4 4; fill: none; }
+  svg .arw { fill: var(--fg); }
+  svg .p-life { stroke: var(--b4d); stroke-width: 2; }
+  svg .p-exec { stroke: var(--b1d); stroke-width: 2; }
+  svg .p-out { stroke: var(--b3d); stroke-width: 2; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <marker id="ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="arw" d="M0,0 L8,4 L0,8 z"/></marker>
+</defs></svg>
+<main>
+<h1>OpenSandbox 功能全景</h1>
+<p class="sub">日期：2026-10-31 · 依据：OpenSandbox <code>release-1.2.0</code>（2026-10-27 发布）的仓库文档、<code>specs/</code> 下的 OpenAPI，以及 1.1.0～1.2.0 的 release notes。Atlas 部署的是 <code>release-1.1.1</code>，两版有差别的地方单独标出</p>
+
+<ol class="toc" start="0">
+  <li><a href="#s0">一页看懂</a></li>
+  <li><a href="#s1">组件</a></li>
+  <li><a href="#s2">运行时后端</a></li>
+  <li><a href="#s3">沙箱生命周期</a></li>
+  <li><a href="#s4">沙箱内执行：execd</a></li>
+  <li><a href="#s5">入站访问</a></li>
+  <li><a href="#s6">出站控制与 Credential Vault</a></li>
+  <li><a href="#s7">存储</a></li>
+  <li><a href="#s8">规模：池化与批量</a></li>
+  <li><a href="#s9">多租户与安全分层</a></li>
+  <li><a href="#s10">可观测与运维</a></li>
+  <li><a href="#s11">客户端：SDK、CLI、MCP</a></li>
+  <li><a href="#s12">后端能力矩阵</a></li>
+  <li><a href="#s13">Atlas 的使用现状</a></li>
+</ol>
+
+<!-- ====================================================================== -->
+<h2 id="s0">0. 一页看懂</h2>
+<p>OpenSandbox 是一个自托管的 AI Agent 沙箱平台（Apache-2.0，属于 Linux Foundation 下的 Agentic AI Foundation）。对外是一套统一的生命周期 API，背后可以接 Docker、Kubernetes 或 Fast Sandbox（Firecracker microVM）；沙箱里由 <code>execd</code> 提供命令、文件、代码执行，由 <code>egress</code> 管控出站流量。</p>
+
+<div class="fig">
+<svg viewBox="0 0 1080 430" width="100%" role="img" aria-label="OpenSandbox 总览">
+  <!-- 客户端 -->
+  <rect x="20" y="40" width="170" height="150" rx="6" class="c1"/>
+  <text x="105" y="66" text-anchor="middle" class="b">客户端</text>
+  <text x="105" y="90" text-anchor="middle" class="s">SDK（5 种语言）</text>
+  <text x="105" y="110" text-anchor="middle" class="s">osb CLI · MCP server</text>
+  <text x="105" y="130" text-anchor="middle" class="s">Developer Console</text>
+  <text x="105" y="150" text-anchor="middle" class="s">你的 Agent 平台</text>
+  <text x="105" y="170" text-anchor="middle" class="s">（自写 HTTP 客户端）</text>
+
+  <!-- lifecycle server -->
+  <rect x="270" y="40" width="230" height="120" rx="6" class="c2"/>
+  <text x="385" y="66" text-anchor="middle" class="b">Lifecycle Server</text>
+  <text x="385" y="88" text-anchor="middle" class="s">FastAPI · /v1 · API Key</text>
+  <text x="385" y="108" text-anchor="middle" class="s">建 / 查 / 删 / 续期 / 暂停恢复</text>
+  <text x="385" y="128" text-anchor="middle" class="s">快照 · 模板 · 端点 · 诊断</text>
+  <text x="385" y="148" text-anchor="middle" class="s">记录存 SQLite / PostgreSQL</text>
+
+  <!-- 运行时后端 -->
+  <text x="580" y="20" class="s">运行时后端（K8s 模式下容器与 Fast Sandbox 可并存）</text>
+  <rect x="580" y="30" width="240" height="40" rx="6" class="inner"/>
+  <text x="700" y="46" text-anchor="middle" class="b">Docker</text>
+  <text x="700" y="62" text-anchor="middle" class="s">单机：容器 · 本地镜像快照</text>
+  <rect x="580" y="78" width="240" height="40" rx="6" class="inner"/>
+  <text x="700" y="94" text-anchor="middle" class="b">Kubernetes 容器</text>
+  <text x="700" y="110" text-anchor="middle" class="s">BatchSandbox CRD · agent-sandbox</text>
+  <rect x="580" y="126" width="240" height="40" rx="6" class="inner"/>
+  <text x="700" y="142" text-anchor="middle" class="b">Fast Sandbox</text>
+  <text x="700" y="158" text-anchor="middle" class="s">Firecracker microVM · FastPath gRPC</text>
+
+  <path d="M190,100 H270" class="ln p-life" marker-end="url(#ar)"/>
+  <text x="230" y="92" text-anchor="middle" class="s">生命周期</text>
+  <path d="M500,100 H580" class="ln p-life" marker-end="url(#ar)"/>
+  <text x="540" y="92" text-anchor="middle" class="s">委托</text>
+  <path d="M700,166 V215" class="ln dash" marker-end="url(#ar)"/>
+  <text x="708" y="196" class="s">创建 / 回收</text>
+
+  <!-- 入站 -->
+  <rect x="270" y="255" width="230" height="60" rx="6" class="c1"/>
+  <text x="385" y="279" text-anchor="middle" class="b">入站：端点解析</text>
+  <text x="385" y="299" text-anchor="middle" class="s">直连 · server 代理 · ingress 网关</text>
+  <path d="M105,190 V285 H270" class="ln p-exec" marker-end="url(#ar)"/>
+  <text x="115" y="240" class="s">执行 / 访问服务</text>
+
+  <!-- 沙箱 -->
+  <rect x="560" y="215" width="360" height="195" rx="8" class="inner"/>
+  <text x="576" y="237" class="b">沙箱（容器 / Pod / microVM）</text>
+  <rect x="580" y="252" width="150" height="62" rx="6" class="c4"/>
+  <text x="655" y="276" text-anchor="middle" class="b">execd :44772</text>
+  <text x="655" y="296" text-anchor="middle" class="s">命令 · 文件 · PTY · 代码</text>
+  <rect x="750" y="252" width="150" height="62" rx="6" class="c4"/>
+  <text x="825" y="276" text-anchor="middle" class="b">用户进程</text>
+  <text x="825" y="296" text-anchor="middle" class="s">entrypoint · 服务端口</text>
+  <path d="M730,283 H750" class="ln" marker-end="url(#ar)"/>
+  <rect x="580" y="332" width="320" height="60" rx="6" class="c3"/>
+  <text x="740" y="356" text-anchor="middle" class="b">egress :18080</text>
+  <text x="740" y="376" text-anchor="middle" class="s">DNS / nft 策略 · TLS 拦截 · Credential Vault</text>
+  <path d="M500,285 H580" class="ln p-exec" marker-end="url(#ar)"/>
+  <path d="M825,314 V332" class="ln p-out" marker-end="url(#ar)"/>
+
+  <!-- 外部 -->
+  <rect x="960" y="328" width="110" height="70" rx="6" class="c5"/>
+  <text x="1015" y="352" text-anchor="middle" class="b">外部服务</text>
+  <text x="1015" y="370" text-anchor="middle" class="s">模型 API · Git</text>
+  <text x="1015" y="386" text-anchor="middle" class="s">包仓库 · 网页</text>
+  <path d="M900,362 H960" class="ln p-out" marker-end="url(#ar)"/>
+
+  <!-- 图例 -->
+  <path d="M20,350 H50" class="ln p-life"/>
+  <text x="58" y="354">生命周期：经 lifecycle server，委托给运行时后端</text>
+  <path d="M20,375 H50" class="ln p-exec"/>
+  <text x="58" y="379">执行与访问：解析端点后直连沙箱，不经编排</text>
+  <path d="M20,400 H50" class="ln p-out"/>
+  <text x="58" y="404">出站：沙箱发出的流量都经过 egress</text>
+</svg>
+</div>
+<p class="cap">图 0　三条路径。容器后端的 egress 是每个沙箱一个 sidecar；Fast Sandbox 是每个 Fastlet Pod 一个共享进程</p>
+
+<table>
+  <tr><th>类别</th><th>主要功能</th></tr>
+  <tr><td>生命周期</td><td>从镜像 / 快照 / 模板创建；TTL 与续期、访问即续期；暂停与恢复；快照；生命周期钩子；Pod 故障自愈；诊断</td></tr>
+  <tr><td>沙箱内执行</td><td>命令（前台流式 / 后台轮询）、bash 会话、PTY 终端、Jupyter 代码执行、完整文件 API、bubblewrap 隔离会话、资源指标、端口反代</td></tr>
+  <tr><td>网络</td><td>端点解析与统一入口网关、Secure Access（令牌与签名 URL）；出站按域名 / IP / 端口的策略，透明 TLS 拦截，Credential Vault 注入凭据</td></tr>
+  <tr><td>规模</td><td>BatchSandbox 批量创建与任务编排、Pool 预热池、SDK 端的客户端池、Fast Sandbox 毫秒级创建</td></tr>
+  <tr><td>隔离</td><td>runc / gVisor / Kata / Firecracker；execd 进程加固（Landlock、syscall 黑名单）；按租户分命名空间</td></tr>
+  <tr><td>运维</td><td>OpenTelemetry 指标、Node Agent 收集 stdout/stderr、Web 控制台、Helm chart、镜像签名</td></tr>
+  <tr><td>客户端</td><td>Python / JS / Kotlin / Go / C# SDK、<code>osb</code> CLI、MCP server；Claude Code、Codex 等 20 多个集成例子</td></tr>
+</table>
+
+<!-- ====================================================================== -->
+<h2 id="s1">1. 组件</h2>
+<table>
+  <tr><th>组件</th><th>位置</th><th>职责</th></tr>
+  <tr><td>Lifecycle Server<br><code>server/</code>（Python FastAPI）</td><td>控制面</td><td>鉴权（API Key、多租户）、请求校验、生命周期编排、端点解析与代理、诊断。数据库（SQLite 或 PostgreSQL）只存快照记录和 Fast Sandbox 模板目录，沙箱本身的状态在运行时后端里</td></tr>
+  <tr><td>Kubernetes Controller<br><code>kubernetes/</code>（Go operator）</td><td>控制面</td><td>三个 CRD：<code>BatchSandbox</code>（一个或一批同模板的沙箱，可带任务）、<code>Pool</code>（预热池）、<code>SandboxSnapshot</code>（暂停 / 快照的提交记录）</td></tr>
+  <tr><td>execd<br><code>components/execd</code>（Go）</td><td>沙箱内</td><td>执行 API：命令、会话、PTY、代码、文件、隔离会话、指标、端口反代；可以作为沙箱的 PID 1</td></tr>
+  <tr><td>egress<br><code>components/egress</code></td><td>沙箱的网络命名空间</td><td>出站策略（DNS + nftables）、透明 TLS 拦截、Credential Vault</td></tr>
+  <tr><td>ingress<br><code>components/ingress</code></td><td>K8s 入口</td><td>统一的 HTTP / WebSocket 网关，按 header 或 URI 路由到沙箱端口；Secure Access 校验；记录活动、唤醒暂停的沙箱</td></tr>
+  <tr><td>Node Agent<br><code>components/nodeagent</code></td><td>每个节点（可选 DaemonSet）</td><td>收集沙箱 stdout / stderr（可选 syscall），写到本地文件或 OSS，至少一次投递</td></tr>
+  <tr><td>Fast Sandbox 集成</td><td>对接外部平台</td><td>适配外部 <code>fast-sandbox</code> 平台（FastPath 控制面、预热的 Fastlet Pod、Firecracker），提供模板化的 microVM 沙箱</td></tr>
+  <tr><td>SDK / CLI / MCP / Console</td><td>客户端</td><td>五种语言的 SDK 和 Code Interpreter SDK、<code>osb</code> 命令行、MCP server、Web 控制台（React + BFF）</td></tr>
+  <tr><td><code>specs/</code></td><td>协议</td><td>四份 OpenAPI：<code>sandbox-lifecycle</code>、<code>diagnostic-api</code>、<code>execd-api</code>、<code>egress-api</code>。对外契约以它们为准，可以自己实现兼容的后端或执行服务</td></tr>
+</table>
+
+<!-- ====================================================================== -->
+<h2 id="s2">2. 运行时后端</h2>
+<p>server 的 <code>[runtime].type</code> 只有 <code>docker</code> 和 <code>kubernetes</code> 两个值。<code>kubernetes</code> 模式下由 <code>CompositeSandboxService</code> 分派：带 <code>templateId</code> 的创建请求交给 Fast Sandbox，带 <code>image</code> / <code>snapshotId</code> 的交给 K8s 容器提供者（<code>kubernetes.workload_provider</code> 选 <code>batchsandbox</code> 或 <code>agent-sandbox</code>）；已有沙箱按 ID 前缀分派，<code>fsb-</code> 开头的走 Fast Sandbox。</p>
+<table>
+  <tr><th>后端</th><th>形态</th><th>适合</th><th>要点</th></tr>
+  <tr><td>Docker</td><td>直接调 Docker daemon 建容器，把 execd 二进制拷进容器再启动 entrypoint</td><td>本地开发、单机</td><td>网络模式 host / bridge / none / pasta / slirp4netns / 自定义网络；为 execd 和服务端口分配宿主端口；egress 是独立容器，沙箱加入它的网络命名空间；server 重启后恢复过期计时</td></tr>
+  <tr><td>K8s · BatchSandbox（默认）</td><td>OpenSandbox 自己的 CRD 和控制器；init 容器把 execd 拷进 emptyDir</td><td>生产、批量、评测与 RL</td><td>模板文件与每次请求合并；Pool 预热；任务编排；rootfs 暂停 / 恢复；Pod 卡在拉镜像等故障时自动换节点重建</td></tr>
+  <tr><td>K8s · agent-sandbox</td><td>用 <code>kubernetes-sigs/agent-sandbox</code> 的 CRD</td><td>已经在用 SIG agent-sandbox 的集群</td><td>官方实测交付 100 个沙箱要 23～76 s（并发 1～50），BatchSandbox 加池是 0.92 s</td></tr>
+  <tr><td>Fast Sandbox</td><td>外部 fast-sandbox 平台：预热的 Fastlet Pod 里跑多个 Firecracker microVM，创建绕开 K8s 调度和 kubelet</td><td>高密度、要求毫秒级创建</td><td>只能从模板创建；创建 64 ms P50（串行）/ 125.4 ms P99（10 并发）；暂停 / 恢复保留内存和磁盘；不支持 volumes</td></tr>
+</table>
+
+<h3>2.1 安全容器运行时</h3>
+<p>隔离强度在创建时由运行时决定。Docker 模式通过 daemon 注册 runtime，K8s 模式通过 RuntimeClass；可以部署多个 server profile，各自对应一种运行时。</p>
+<table>
+  <tr><th>运行时</th><th>隔离机制</th><th>启动开销</th><th>内存开销</th><th>适合</th></tr>
+  <tr><td>runc（默认）</td><td>进程级（namespace + cgroup）</td><td>约 0 ms</td><td>很小</td><td>可信负载、本地开发</td></tr>
+  <tr><td>gVisor</td><td>用户态内核，拦截 syscall</td><td>约 10～50 ms</td><td>约 50 MB</td><td>一般负载、开销低</td></tr>
+  <tr><td>Kata（QEMU）</td><td>完整 VM</td><td>约 500 ms</td><td>约 20～50 MB</td><td>兼容性和隔离都要最好</td></tr>
+  <tr><td>Kata（Firecracker）</td><td>microVM</td><td>约 125 ms</td><td>约 5 MB</td><td>高密度</td></tr>
+  <tr><td>Kata（Cloud Hypervisor）</td><td>VM</td><td>约 200 ms</td><td>约 10～20 MB</td><td>性能与隔离折中</td></tr>
+</table>
+<div class="callout warn">gVisor 有两处限制：egress 的出站控制和 Credential Vault 在 gVisor 下不能用（官方建议改用 Kata）；K8s 的 rootfs 快照不支持 gVisor（<code>runsc</code>）。</div>
+
+<h3>2.2 其他形态</h3>
+<ul>
+  <li><b>Windows 沙箱</b>：<code>platform.os=windows</code>，基于 <code>dockur/windows</code> 在 Linux 容器里用 KVM / QEMU 跑 Windows guest；宿主需要 <code>/dev/kvm</code> 和 <code>/dev/net/tun</code>。</li>
+  <li><b>QEMU VM 状态快照</b>：在 runc 里跑 QEMU 的沙箱可以选择检查点模式，暂停时保留 guest 内存。</li>
+  <li><b>GPU</b>：<code>resourceLimits</code> 里的 GPU 在 K8s 上翻译成扩展资源。</li>
+</ul>
+
+<!-- ====================================================================== -->
+<h2 id="s3">3. 沙箱生命周期</h2>
+
+<h3>3.1 创建</h3>
+<p><code>POST /v1/sandboxes</code>，三种来源三选一：<code>image</code>（容器镜像，可带私有仓库认证）、<code>snapshotId</code>（从快照恢复）、<code>templateId</code>（Fast Sandbox 模板）。请求的其他字段：</p>
+<table>
+  <tr><th>字段</th><th>作用</th></tr>
+  <tr><td><code>entrypoint</code> / <code>env</code></td><td>启动命令与环境变量</td></tr>
+  <tr><td><code>timeout</code></td><td>TTL（秒），到期自动删除；为 <code>null</code> 时不过期。SDK 高层接口默认 10 分钟，模板沙箱必须显式给</td></tr>
+  <tr><td><code>resourceLimits</code> / <code>resourceRequests</code></td><td>CPU、内存、GPU 等</td></tr>
+  <tr><td><code>platform</code></td><td>OS / 架构约束</td></tr>
+  <tr><td><code>metadata</code></td><td>自定义键值，K8s 上会成为资源 label，列表接口可以按它过滤</td></tr>
+  <tr><td><code>volumes</code></td><td>挂载存储（第 7 节）</td></tr>
+  <tr><td><code>networkPolicy</code> / <code>credentialProxy</code></td><td>出站策略、启用凭据注入（第 6 节）</td></tr>
+  <tr><td><code>secureAccess</code></td><td>入站端点要求凭据（第 5 节）</td></tr>
+  <tr><td><code>lifecycle</code></td><td><code>preStart</code> / <code>periodic</code> 钩子、<code>renewalPolicy</code>（访问即续期）、<code>idlePolicy</code>（自动暂停，1.2.0）</td></tr>
+  <tr><td><code>extensions</code></td><td>后端相关的扩展，例如 <code>poolRef</code>（从预热池分配）</td></tr>
+</table>
+<p>创建在 API 层面是异步的：客户端要轮询 <code>GET /v1/sandboxes/{id}</code> 或用 SDK 的就绪等待。</p>
+
+<h3>3.2 状态</h3>
+<table>
+  <tr><th>状态</th><th>含义</th><th>从哪来</th></tr>
+  <tr><td><code>Pending</code></td><td>正在供给</td><td>创建</td></tr>
+  <tr><td><code>Running</code></td><td>就绪，可接受请求</td><td>Pending、Resuming</td></tr>
+  <tr><td><code>Pausing</code> → <code>Paused</code></td><td>暂停中 → 已暂停（状态保留）</td><td>Running 上请求暂停</td></tr>
+  <tr><td><code>Resuming</code></td><td>从暂停恢复中</td><td>Paused 上请求恢复</td></tr>
+  <tr><td><code>Stopping</code> → <code>Terminated</code></td><td>终止中 → 已终止</td><td>Running / Paused 上删除，或 TTL 到期</td></tr>
+  <tr><td><code>Failed</code></td><td>严重错误</td><td>Pending / Running / Paused / Resuming 出错</td></tr>
+</table>
+<p>状态还带 <code>reason</code>（如 <code>ttl_expiry</code>、<code>provision_timeout</code>）、<code>message</code> 和 <code>lastTransitionAt</code>。规范要求客户端容忍将来新增的状态值。</p>
+
+<h3>3.3 过期与续期</h3>
+<ul>
+  <li><b>手动续期</b>：<code>POST /sandboxes/{id}/renew-expiration</code>。</li>
+  <li><b>访问即续期</b>（OSEP-0009）：创建时声明 <code>lifecycle.renewalPolicy.extendSeconds</code>（300～86400）。server 代理收到请求，或 ingress 经 Redis 投递续期意图时，把过期时间推到 <code>max(now + extendSeconds, 当前过期时间)</code>，每个沙箱有冷却间隔。Docker 和 K8s 支持（包括池模式），Fast Sandbox 回 400。1.1.x 用的是 <code>extensions["access.renew.extend.seconds"]</code>，1.2.0 改成结构化字段，旧键在 1.x 内仍可用。</li>
+</ul>
+
+<h3>3.4 暂停与恢复</h3>
+<p><code>POST /sandboxes/{id}/pause</code> / <code>resume</code>，sandbox ID 前后不变。各后端的做法差别很大：</p>
+<table>
+  <tr><th>后端</th><th>做法</th><th>保留什么</th><th>限制</th></tr>
+  <tr><td>Docker</td><td>容器级 pause（冻结）；有 egress 时先冻沙箱再冻 sidecar，恢复反过来</td><td>进程原地冻结</td><td>不释放资源</td></tr>
+  <tr><td>BatchSandbox（rootfs-v1，默认）</td><td>建内部 <code>SandboxSnapshot</code>，在源节点跑 commit Job，把根文件系统提交成 OCI 镜像推到仓库，然后释放 Pod / 池位；恢复时改模板镜像并重建</td><td>根文件系统、环境变量；<b>进程和内存不保留</b>；Credential Vault 不保留（要重新写入）；volume 看类型</td><td>仅 <code>replicas=1</code>；不支持 gVisor；镜像仓库和推送凭据配在控制器上；快照 <code>Succeed</code> 之后才算持久</td></tr>
+  <tr><td>BatchSandbox（qemu-v1，可选）</td><td>QEMU-in-runc 的 VM 状态检查点</td><td>QEMU 进程和 guest 内存</td><td>要求镜像按 QEMU 快照约定构建</td></tr>
+  <tr><td>Fast Sandbox</td><td>FastPath 做 microVM 检查点，可以在别的 Fastlet 上恢复</td><td>内存和磁盘</td><td>恢复后要重新解析端点</td></tr>
+</table>
+
+<h3>3.5 自动暂停与按访问唤醒（1.2.0，仅 Fast Sandbox）</h3>
+<p>创建时声明 <code>lifecycle.idlePolicy</code>（<code>idleTimeoutSeconds</code> 30～86400、<code>onIdle: pause</code>、<code>wakeOnAccess</code>、可选 <code>activeProbe</code>）。ingress 把每个经过的请求记成活动写进 Redis，server 每 15 s 扫一次，闲置超时的就暂停。之后有请求到达时，ingress 先把请求挂住、触发恢复，恢复好了再转发；超出等待预算就回 <code>503</code> + <code>Retry-After</code> + <code>OpenSandbox-Wake: expired</code>，五种 SDK 都会据此自动重试。</p>
+<ul>
+  <li>server、ingress、沙箱三方都要开启，默认全关。</li>
+  <li>只有经 ingress 的<b>新 HTTP 请求</b>算活动，已建立的 WebSocket / SSE 里的帧不算；走 server 代理的流量既不记活动也不会唤醒。</li>
+  <li>过期时间是绝对的，暂停不会延长它。暂停的沙箱不会自己醒，定时任务要由外部先调 resume。</li>
+</ul>
+
+<h3>3.6 快照与模板</h3>
+<ul>
+  <li><b>公开快照 API</b>（<code>/snapshots</code>、<code>/sandboxes/{id}/snapshots</code>）：Docker 把容器提交成本地镜像；BatchSandbox 建 <code>SandboxSnapshot</code> 并推到 OCI 仓库；之后可以用 <code>snapshotId</code> 新建沙箱。和暂停的区别：快照是复制出一个新起点，原沙箱继续运行；暂停是同一个沙箱停下再接着跑。</li>
+  <li><b>模板</b>（<code>/templates</code>）：只用于 Fast Sandbox。把 OCI 镜像构建成 golden image（预置 init 和 execd），运行形态在构建时就固定。1.2.0 起模板和快照可以发布到 OCI 仓库、从仓库启动（OverlayBD）。Docker 模式回 501。</li>
+</ul>
+
+<h3>3.7 生命周期钩子</h3>
+<table>
+  <tr><th>钩子</th><th>个数</th><th>何时运行</th><th>失败时</th></tr>
+  <tr><td><code>preStart</code></td><td>0～1</td><td>execd 开始监听之后、用户 entrypoint 之前，阻塞</td><td>entrypoint 不启动</td></tr>
+  <tr><td><code>periodic</code></td><td>0～多</td><td>preStart 成功后按计划运行（如 <code>@every 5m</code>），不阻塞</td><td>记日志，下次照常；超时进程杀不掉时停用该钩子</td></tr>
+</table>
+<p>目前只有 K8s 提供者支持，Docker 和 Fast Sandbox 拒绝；不能和 <code>poolRef</code> 同时使用。钩子在沙箱里以可信代码运行，只是便利功能，不是安全边界。</p>
+
+<h3>3.8 自愈与诊断</h3>
+<ul>
+  <li><b>Pod 供给失败恢复</b>：从未 Ready 过的 BatchSandbox，如果 Pod 卡在 <code>ImagePullBackOff</code> 或被 kubelet 准入拒绝（<code>OutOfcpu</code>、<code>Evicted</code> 等）超过阈值（默认 1 分钟），控制器就删掉 Pod 让它重新调度，最多 3 次。镜像本身不存在、无权限这类在哪个节点都会失败的情况不浪费重试。配置在 <code>feature-flags</code> ConfigMap，热加载。</li>
+  <li><b>诊断</b>：<code>GET /v1/sandboxes/{id}/diagnostics/context</code>（1.2.0）返回后端类型、后端标识和状态，不需要连 execd，Pod 还没分配时也能查；另有日志 / 事件描述符，以及给运维和 AI 排障用的纯文本诊断路由（<code>osb devops</code>）。</li>
+  <li><b>删除语义</b>（1.2.0）：删除后先报 <code>Stopping</code>，运行时真正清理完才返回 404。多个沙箱共享同一个持久目录时，要等旧沙箱 404 之后再建替代的。</li>
+</ul>
+
+<!-- ====================================================================== -->
+<h2 id="s4">4. 沙箱内执行：execd</h2>
+<p>execd 默认监听 44772 端口。平台配置了访问令牌时，除健康检查外每个接口都要带 <code>X-EXECD-ACCESS-TOKEN</code>（令牌在解析端点时下发）。注入方式：Docker 把二进制拷进容器；K8s 用 init 容器；Fast Sandbox 预置在模板镜像里。</p>
+<table>
+  <tr><th>能力</th><th>接口</th><th>说明</th></tr>
+  <tr><td>命令</td><td><code>/command</code></td><td>shell 语法或 argv 两种写法。<b>前台</b>：SSE 流式返回输出，跟随连接；<b>后台</b>：立即返回命令 id，之后轮询状态、按游标取增量日志，完成后输出保留 24 小时。中断时 SIGTERM 整个进程组，宽限后 SIGKILL</td></tr>
+  <tr><td>bash 会话</td><td><code>/session</code></td><td>跨调用保留 cwd 和环境变量的持久 shell；镜像没有 bash 时退回 POSIX sh</td></tr>
+  <tr><td>终端</td><td><code>/pty</code>（WebSocket）</td><td>真正的 PTY，编辑器、REPL、Agent CLI 都能正常交互。一个 holder 输入，任意多个 viewer 旁观（先回放已有输出再跟随）。1.2.0 起浏览器可以用 WebSocket 子协议携带令牌</td></tr>
+  <tr><td>代码执行</td><td><code>/code</code>、<code>/code/contexts</code></td><td>以 Jupyter kernel 作为上下文，多次调用共享状态，像 notebook。官方 code-interpreter 镜像带 Python、Java、Node.js、Go 及对应 kernel</td></tr>
+  <tr><td>文件</td><td><code>/files/*</code>、<code>/directories</code></td><td>上传、下载（支持 Range）、列表、按 glob 搜索、移动、chmod、删除、原地替换内容。1.1.1 起可以加 <code>/v1/filesystem/{uid}/{gid}</code> 前缀，以指定的 Linux 身份执行文件操作</td></tr>
+  <tr><td>隔离会话</td><td><code>/v1/isolated/*</code></td><td>见 4.1</td></tr>
+  <tr><td>指标</td><td><code>/metrics</code>、<code>/metrics/watch</code></td><td>CPU、内存的快照或实时流，可导出 OTel。1.2.0 起设了资源上限时取沙箱自己 cgroup 的数字（之前读的是宿主的 <code>/proc</code>，是整机数字），并上报 OOM kill 次数</td></tr>
+  <tr><td>反向代理</td><td><code>/proxy/{port}</code></td><td>只暴露 execd 一个端口，就能访问沙箱里所有端口（Docker 单机网络用）</td></tr>
+  <tr><td>健康检查</td><td><code>/ping</code>、<code>/ready</code></td><td>不需要令牌</td></tr>
+</table>
+
+<h3>4.1 隔离会话</h3>
+<p>在一个沙箱里用 bubblewrap 起多个互相隔离的长驻 bash，每个会话有独立的 PID、mount、tmpfs、环境变量命名空间。创建约 100 ms，之后每次 <code>run</code> 复用同一个 bash 进程，开销几乎为零。适合 RL rollout、批量判题、多工具 Agent 运行：一个 worker 一个沙箱，里面跑很多互相隔离的任务。</p>
+<table>
+  <tr><th>工作区模式</th><th>语义</th></tr>
+  <tr><td><code>overlay</code>（默认）</td><td>overlayfs 写时复制，写入落在会话自己的 upper 目录，删除会话即丢弃</td></tr>
+  <tr><td><code>rw</code></td><td>读写绑定挂载，写入直接落到原目录</td></tr>
+  <tr><td><code>ro</code></td><td>只读挂载，写入报 <code>EROFS</code></td></tr>
+</table>
+<p>另外支持显式 bind 挂载和可写白名单（按解析后的真实路径校验，符号链接逃不出去），创建会话时会报告当前环境支持哪些能力。限制：只是 namespace + seccomp，挡不住内核漏洞（要配合 gVisor / Kata）；仅 Linux；同一会话里的 run 串行执行；<code>diff</code> / <code>commit</code> 尚未实现（返回 503）。</p>
+
+<h3>4.2 进程管理与加固</h3>
+<ul>
+  <li><b>execd 作 PID 1</b>（<code>execd_run_as_init</code>）：回收僵尸进程、转发信号、把 entrypoint 的退出码传给运行时，<code>Terminated</code> / <code>Failed</code> 反映进程的真实结果。</li>
+  <li><b>每次分配一份新身份</b>：池里预热的沙箱在分配时才收到 sandbox ID、环境变量、令牌、钩子，原子生效。拿到之前除 <code>/ping</code>、<code>/ready</code> 外一律 503，上一个使用者的环境不会泄漏给下一个。</li>
+  <li><b>加固底线</b>（运维开启）：用户进程都经一个 native launcher 启动，drop 能力、设 <code>no_new_privs</code>、装 syscall 黑名单、用 Landlock 限制可写路径。</li>
+  <li><b>eBPF 审计</b>（可选的 <code>execd-ebpf</code> 构建，需要 <code>CAP_BPF</code>）：记录 exec、网络 connect、提权，范围限于沙箱自己的 cgroup。</li>
+  <li>每一层都报告自己是 active、degraded 还是 unsupported，客户端可以核实实际生效了什么。</li>
+</ul>
+
+<!-- ====================================================================== -->
+<h2 id="s5">5. 入站访问</h2>
+
+<h3>5.1 端点解析</h3>
+<p><code>GET /v1/sandboxes/{id}/endpoints/{port}</code> 返回沙箱里某个端口的可达地址，以及访问时必须带的请求头。地址有三种：</p>
+<table>
+  <tr><th>形态</th><th>场景</th></tr>
+  <tr><td>Docker 映射的宿主端口</td><td>单机</td></tr>
+  <tr><td>Pod 地址或 ingress 网关地址</td><td>K8s</td></tr>
+  <tr><td>server 代理 <code>/sandboxes/{id}/proxy/{port}</code></td><td>开 <code>use_server_proxy</code> 时；支持 HTTP 和 WebSocket，也能触发访问即续期</td></tr>
+</table>
+<p>端点只承载 HTTP、SSE、WebSocket，不是通用的 TCP / UDP 隧道。端点背后可以是 execd，也可以是镜像自己的服务（例如 AIO 镜像在 8080 端口上的 shell / 浏览器 API）。</p>
+
+<h3>5.2 ingress 网关</h3>
+<ul>
+  <li><b>路由</b>：header 模式用 <code>OpenSandbox-Ingress-To: &lt;id&gt;-&lt;port&gt;</code> 或主机名 <code>&lt;id&gt;-&lt;port&gt;.example.com</code>；URI 模式用 <code>/&lt;id&gt;/&lt;port&gt;/&lt;path&gt;</code>。路由数据来自 BatchSandbox 的 endpoints 注解、agent-sandbox 的 <code>serviceFQDN</code>，或向 FastPath 查询。</li>
+  <li><b>错误码</b>：404 沙箱不存在、503 存在但未就绪、502 基础设施故障；沙箱自己的响应原样透传，网关不跟随重定向。</li>
+  <li><b>WebSocket</b>：单条消息最大 64 MiB，子协议和关闭码原样传递。</li>
+  <li><b>TLS</b>：网关只说明文 HTTP/1.1，不终止 TLS。前面的 L7 代理要把 WebSocket 升级降成 HTTP/1.1，不能用 HTTP/2 上的 WebSocket。</li>
+</ul>
+
+<h3>5.3 Secure Access</h3>
+<p>仅 K8s 且 ingress 为 gateway 模式时可用（Docker 回 400）。<code>secureAccess: true</code> 的沙箱，解析端点时返回一个静态令牌，调用方放在 <code>OpenSandbox-Secure-Access</code> 头里；带 <code>?expires=</code> 时还能签出一个有时效的路由令牌，可以直接放进 URL。网关先看请求头（不匹配直接 401，不再尝试签名），没有请求头才校验签名；通过后剥掉凭据再转发，沙箱里的程序看不到它。</p>
+
+<!-- ====================================================================== -->
+<h2 id="s6">6. 出站控制与 Credential Vault</h2>
+
+<h3>6.1 egress 策略</h3>
+<p>egress 和沙箱共享网络命名空间，所有出站包都经过它，应用不用做任何配置，沙箱里也绕不过去。策略在创建时用 <code>networkPolicy</code> 声明，运行期可以修改。</p>
+<table>
+  <tr><th>能力</th><th>说明</th></tr>
+  <tr><td>规则</td><td>按域名、通配域名（<code>*.pypi.org</code>）、IP、CIDR 允许或拒绝，加 <code>defaultAction</code>。1.2.0 起可以按 TCP 目的端口限定（只限端口时 target 可省略，域名规则不能带端口）</td></tr>
+  <tr><td><code>dns</code> 模式（默认）</td><td>53 端口流量都被重定向到 egress 的 DNS 代理，被拒绝的域名返回 NXDOMAIN；程序直连 IP 可以绕过</td></tr>
+  <tr><td><code>dns+nft</code> 模式</td><td>nftables 默认拒绝，只放行静态规则和 DNS 解析出来的地址；解析出的地址有租期，不会变成永久放行</td></tr>
+  <tr><td>平台底线</td><td>镜像里的 <code>deny.always</code> / <code>allow.always</code> 文件每分钟热加载，优先级 deny.always &gt; allow.always &gt; 用户策略；<code>reachable.ports.cap</code> 是 TCP 端口白名单，用户策略写 <code>defaultAction: allow</code> 也打不开白名单以外的端口</td></tr>
+  <tr><td>运行期修改</td><td>容器后端直接调 egress 的 <code>GET / PATCH / DELETE /policy</code>（端口 18080）；Fast Sandbox 走 lifecycle API 的 <code>/sandboxes/{id}/networkpolicy</code></td></tr>
+  <tr><td>透明 TLS 拦截</td><td>拦截 80 / 443（可以再加端口），能看到、控制、认证出站 HTTPS；可以串接上游代理（<code>[egress.upstream_proxy]</code>），可以额外信任一组 CA</td></tr>
+  <tr><td>失败即关闭</td><td>装不上规则时 egress 直接退出，不会以「没有规则」的状态放行流量</td></tr>
+</table>
+<table>
+  <tr><th>部署</th><th>形态</th></tr>
+  <tr><td>Docker</td><td>独立容器，沙箱加入它的网络命名空间</td></tr>
+  <tr><td>K8s</td><td>追加到沙箱 Pod 里，是 Pod 里唯一有 <code>NET_ADMIN</code> 的容器（主容器会被 drop 掉）</td></tr>
+  <tr><td>池化沙箱</td><td>预热的 Pod 没法逐请求加 sidecar，出站控制要写进 Pool 模板；请求里同时带 <code>networkPolicy</code> 和池引用会被拒绝</td></tr>
+  <tr><td>Fast Sandbox</td><td>每个 Fastlet Pod 一个共享 egress 进程，每个沙箱是其中的一个 subject</td></tr>
+</table>
+<div class="callout warn">egress 假定自己是网络命名空间里唯一的透明拦截层：同一个 Pod 里注入了 Istio / Envoy 这类 mesh sidecar 时，策略、TLS 拦截和 Credential Vault 都不可靠。</div>
+
+<h3>6.2 沙箱之间的网络隔离</h3>
+<p>K8s 上沙箱默认能互相直连 Pod IP。OpenSandbox 不依赖 K8s NetworkPolicy（沙箱 label 由平台注入、无法区分，沙箱又频繁创建销毁），推荐在 egress 的 <code>deny.always</code> 里写入集群 Pod CIDR 和 Service CIDR，再按需放行合法的集群内服务；逐沙箱的 NetworkPolicy 是备选方案。</p>
+
+<h3>6.3 Credential Vault</h3>
+<p>真实凭据存在 egress 里，沙箱里的进程只拿到假值或空值。Claude Code、git、curl、包管理器、模型 SDK 发出的 HTTPS 请求匹配到某条绑定时，egress 在出站途中注入认证信息。</p>
+<table>
+  <tr><th>auth 类型</th><th>注入方式</th></tr>
+  <tr><td><code>bearer</code></td><td><code>Authorization: Bearer &lt;凭据&gt;</code></td></tr>
+  <tr><td><code>basic</code></td><td><code>Authorization: Basic &lt;凭据&gt;</code>，凭据要预先 base64 编码 <code>user:password</code></td></tr>
+  <tr><td><code>apiKey</code></td><td>写进指定的请求头，如 <code>x-api-key</code></td></tr>
+  <tr><td><code>customHeaders</code></td><td>多个请求头，各自对应一个凭据</td></tr>
+  <tr><td><code>passthrough</code></td><td>不注入请求头，配合 <code>substitutions</code> 把凭据替换进路径、query 或 body 里的占位符</td></tr>
+</table>
+<ul>
+  <li><b>前提</b>：server 配 <code>[egress].mode = "dns+nft"</code>（DNS 模式下会被直连 IP 绕过，所以拒绝启用）；创建请求同时带 <code>networkPolicy</code> 和 <code>credentialProxy.enabled</code>；策略建议 <code>defaultAction: deny</code> 并放行绑定涉及的 host（默认放行目前仍兼容，但会告警）；沙箱里的工具要信任 MITM CA。</li>
+  <li><b>管理接口</b>：容器后端调 egress 的 <code>/credential-vault</code>；1.2.0 起 lifecycle API 也有 <code>/sandboxes/{id}/credential-vault</code>（Fast Sandbox 走这条），所有公开读接口都不返回凭据值。</li>
+  <li><b>持久性</b>：容器后端只存在 egress 内存里，rootfs 暂停 / 恢复之后要由可信控制面重新写入；Fast Sandbox（1.2.0）随检查点密封转移。</li>
+</ul>
+
+<!-- ====================================================================== -->
+<h2 id="s7">7. 存储</h2>
+<table>
+  <tr><th>volume 类型</th><th>含义</th><th>支持</th></tr>
+  <tr><td><code>host</code></td><td>宿主路径（受 <code>storage.allowed_host_paths</code> 限制）</td><td>Docker（bind mount）、K8s（hostPath）</td></tr>
+  <tr><td><code>pvc</code></td><td>平台管理的命名存储，可以挂子路径、只读</td><td>Docker（named volume）、K8s（PersistentVolumeClaim）</td></tr>
+  <tr><td><code>ossfs</code></td><td>挂载阿里云 OSS</td><td>Docker</td></tr>
+</table>
+<ul>
+  <li>Fast Sandbox 目前不支持 volume。官方例子还有 rclone 挂载、K8s PVC 挂载等；整体（OSEP-0003）仍处于 implementing。</li>
+  <li>rootfs 快照不包含 volume 里的数据。要扛住意外终止（OOM、驱逐、节点故障）的数据应放在持久卷或外部服务里，rootfs 快照只用来复现环境。</li>
+</ul>
+
+<!-- ====================================================================== -->
+<h2 id="s8">8. 规模：池化与批量</h2>
+
+<h3>8.1 Pool CRD（服务端预热池）</h3>
+<table>
+  <tr><th>字段</th><th>作用</th></tr>
+  <tr><td><code>template</code></td><td>预热 Pod 的模板</td></tr>
+  <tr><td><code>capacitySpec</code></td><td><code>bufferMin</code> / <code>bufferMax</code> 控制空闲就绪的数量，<code>poolMin</code> / <code>poolMax</code> 限制总量</td></tr>
+  <tr><td><code>scaleStrategy</code> / <code>updateStrategy</code></td><td>每轮最多增删多少 Pod（默认 25%），模板变更时滚动替换空闲 Pod</td></tr>
+  <tr><td><code>recycleStrategy</code></td><td>沙箱用完归还时：<code>Delete</code>（默认，换新 Pod）、<code>Restart</code>（原地重启容器）、<code>Noop</code>（原样复用，状态会泄漏给下一个）</td></tr>
+</table>
+<p>从池分配是常数时间的认领。没有空位时 BatchSandbox 带 <code>PoolAllocationPending</code> 条件，server 在有限时间内等不到就回可重试的 429。<code>poolRef</code> 为空时可以按插件（容量、镜像、资源、节点选择器）自动选池。池里的 Pod 是事先建好的：<code>entrypoint</code> / <code>env</code> 作为分配后的任务下发，<code>volumes</code> 和 <code>networkPolicy</code> 必须写在池模板里。</p>
+
+<h3>8.2 BatchSandbox 批量与任务编排</h3>
+<ul>
+  <li><code>replicas</code> 一次建一批；<code>shardPatches</code> 让每个副本的镜像、env、资源可以不同。</li>
+  <li><code>taskTemplate</code> / <code>shardTaskPatches</code>：分配后每个副本跑一个任务，可以在 task-executor 容器里（Local）或经 <code>nsenter</code> 在主容器里（Remote）执行，带 <code>preStart</code> / <code>postStop</code>。</li>
+  <li><code>taskResourcePolicyWhenCompleted</code>：任务结束后保留资源（<code>Retain</code>）或立即释放（<code>Release</code>）。</li>
+  <li>状态分开报告运行时健康（ready / phase）和任务进度（running / succeed / failed 计数）。面向评测和 RL 训练这类高吞吐场景，带池交付 100 个沙箱实测 0.92 s。</li>
+</ul>
+
+<h3>8.3 客户端池（SDK，实验性）</h3>
+<p>SDK 在服务端保持一小批已就绪的沙箱，<code>acquire()</code> 直接拿一个，省掉创建延迟。池里存的是沙箱 ID，不是连接；用 Redis 做状态存储时可以跨进程、跨 Pod 共享，补货只由持有主锁的节点做。没有 <code>release()</code>：拿到的沙箱用完要自己删。空池时的策略：<code>FAIL_FAST</code>、<code>DIRECT_CREATE</code>（默认，直接新建）、<code>RETRY_NEXT_IDLE</code>、<code>RETRY_NEXT_IDLE_THEN_CREATE</code>。C# SDK 没有客户端池。</p>
+
+<h3>8.4 Fast Sandbox 的密度</h3>
+<p>Fastlet Pod 预先准备好网络槽位，egress 和 DNS 由同一 Pod 里的沙箱共享，创建时不经过 K8s 调度、watch 和 kubelet。镜像块通过 DART 在节点间 P2P 分发。1.2.0 新增按资源放置（<code>ResourceAware</code>，可设 CPU / 内存超卖比）。</p>
+
+<!-- ====================================================================== -->
+<h2 id="s9">9. 多租户与安全分层</h2>
+
+<h3>9.1 多租户（OSEP-0014）</h3>
+<p>一个 server 服务多个租户：每个租户一个或多个 API Key，请求按 Key 自动落到该租户的 K8s 命名空间，建、列、查、删都只作用于这个命名空间。租户来源可以是文件（热加载）或 HTTP 服务。命名空间要由集群管理员预先建好，建议配 ResourceQuota 和 LimitRange。只支持 K8s，Docker 模式开租户会直接拒绝启动；多租户模式下代理路由也要带 API Key。</p>
+
+<h3>9.2 安全分层</h3>
+<table>
+  <tr><th>层</th><th>机制</th></tr>
+  <tr><td>工作负载边界</td><td>runc / gVisor / Kata / Firecracker；资源上限；能力 drop；seccomp、AppArmor</td></tr>
+  <tr><td>沙箱内进程</td><td>execd 加固底线（<code>no_new_privs</code>、syscall 黑名单、Landlock）；bubblewrap 隔离会话；按 UID/GID 执行文件操作；eBPF 审计</td></tr>
+  <tr><td>入站</td><td>lifecycle API Key；execd 访问令牌；Secure Access 静态令牌和签名 URL；egress sidecar 鉴权</td></tr>
+  <tr><td>出站</td><td>egress 策略；平台 <code>deny.always</code> 和端口底线；Credential Vault（凭据不进沙箱）</td></tr>
+  <tr><td>供应链</td><td>发布镜像用 Cosign 无密钥签名并带 provenance；生产环境建议按 digest 固定镜像</td></tr>
+</table>
+
+<!-- ====================================================================== -->
+<h2 id="s10">10. 可观测与运维</h2>
+<ul>
+  <li><b>OpenTelemetry 指标</b>：execd（CPU、内存、OOM kill）、egress（拒绝次数、DNS 结果、nftables 更新失败）、ingress；标签基数受控，域名和目的地址不会成为 label。SDK 会上报创建耗时（<code>POST /v1/metrics/events</code>）。</li>
+  <li><b>Node Agent</b>：每个节点一个，按 <code>opensandbox.io/id</code> label 发现沙箱 Pod（跳过池里的预热 Pod），收集 stdout / stderr（可选 syscall），写本地文件或 OSS，至少一次投递。</li>
+  <li><b>Developer Console</b>（1.2.0 MVP）：React 前端 + FastAPI BFF，API Key 留在 BFF，浏览器只拿 httpOnly 会话；包括租户概览、沙箱列表 / 创建 / 详情 / 日志、快照、诊断、管理员视图。</li>
+  <li><b>部署</b>：Helm chart（umbrella <code>opensandbox</code>，或 base / controller / server / ingress / node-agent 分别装）；K8s v1.21～v1.34；镜像同时发布在 Docker Hub、GHCR 和阿里云 ACR。</li>
+  <li><b>版本</b>：1.1.0 起 server、组件镜像、chart、CLI、全部 SDK 统一用一个平台版本号；server 与 SDK 同 minor 版本受支持，差一个 minor 会告警。</li>
+  <li><b>排障工具</b>：egress 镜像里带只读的 <code>egress-trace</code>（1.2.0），能看实时策略、nft 集合、DNS 租期和逐连接的判定。</li>
+</ul>
+
+<!-- ====================================================================== -->
+<h2 id="s11">11. 客户端：SDK、CLI、MCP</h2>
+<table>
+  <tr><th>能力</th><th>Python</th><th>JS/TS</th><th>Kotlin/Java</th><th>Go</th><th>C#</th></tr>
+  <tr><td>创建、连接、续期、暂停恢复、删除</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td></tr>
+  <tr><td>快照、模板</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td></tr>
+  <tr><td>资源、volume、生命周期钩子</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td></tr>
+  <tr><td>命令、文件、指标</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td></tr>
+  <tr><td>出站策略、Credential Vault</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td></tr>
+  <tr><td>隔离会话</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td></tr>
+  <tr><td>客户端池（含 Redis）</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✗</td></tr>
+  <tr><td>诊断</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td></tr>
+</table>
+<ul>
+  <li><b>Code Interpreter SDK</b>：在 sandbox SDK 之上管理代码上下文，提供按语言执行代码的接口。</li>
+  <li><b><code>osb</code> CLI</b>：命令组 <code>sandbox</code>、<code>command</code>、<code>file</code>、<code>egress</code>、<code>devops</code>、<code>skills</code>（给 Agent 安装 OpenSandbox 技能）；1.2.0 新增 <code>osb terminal</code>，打开沙箱里的真实 PTY。</li>
+  <li><b>MCP server</b>（<code>opensandbox-mcp</code>）：stdio 或 streamable-http，给 Claude Code、Cursor 等提供建沙箱、跑命令、读写文本文件的工具。</li>
+  <li><b>集成例子</b>：Claude Code、Codex CLI、Gemini CLI、Qwen Code、Kimi CLI、OpenCode、GitHub Copilot CLI、LangGraph、Google ADK、Deep Agents、DeerFlow、Microsoft Agent Framework、Playwright、Chrome、桌面（VNC）、VS Code Web、Harbor 评测等。</li>
+</ul>
+
+<!-- ====================================================================== -->
+<h2 id="s12">12. 后端能力矩阵</h2>
+<table>
+  <tr><th>功能</th><th>Docker</th><th>K8s · BatchSandbox</th><th>Fast Sandbox</th></tr>
+  <tr><td>创建来源</td><td>image、snapshot</td><td>image、snapshot、poolRef</td><td>只有 template</td></tr>
+  <tr><td>暂停 / 恢复</td><td>容器冻结，不释放资源</td><td>rootfs 提交成 OCI 镜像并释放 Pod；不保留进程（仅单副本，不支持 gVisor）</td><td>检查点，保留内存和磁盘</td></tr>
+  <tr><td>自动暂停 / 按访问唤醒</td><td>✗</td><td>✗</td><td>✓（1.2.0）</td></tr>
+  <tr><td>访问即续期</td><td>✓</td><td>✓（含池模式）</td><td>✗（400）</td></tr>
+  <tr><td>公开快照 API</td><td>✓ 本地镜像</td><td>✓ 推 OCI 仓库</td><td>✓ OCI（1.2.0）</td></tr>
+  <tr><td>模板管理</td><td>✗（501）</td><td>—（模板只给 Fast Sandbox 用）</td><td>✓</td></tr>
+  <tr><td>生命周期钩子</td><td>✗</td><td>✓（不能与 poolRef 同用）</td><td>✗</td></tr>
+  <tr><td>volume</td><td>host、pvc、ossfs</td><td>host、pvc</td><td>✗</td></tr>
+  <tr><td>出站策略</td><td>独立 egress 容器</td><td>egress sidecar（池化时写进池模板）</td><td>Fastlet 共享 egress，经 lifecycle API 管理</td></tr>
+  <tr><td>Credential Vault</td><td>✓ egress 接口</td><td>✓ egress 接口</td><td>✓ lifecycle API（1.2.0）</td></tr>
+  <tr><td>Secure Access</td><td>✗（400）</td><td>✓（ingress gateway 模式）</td><td>路由默认签名（<code>f1.</code> scope）</td></tr>
+  <tr><td>多租户</td><td>✗（拒绝启动）</td><td>✓</td><td>✓（租户映射到 fast-sandbox 命名空间）</td></tr>
+  <tr><td>服务端预热</td><td>✗</td><td>Pool CRD</td><td>Fastlet 池</td></tr>
+  <tr><td>安全运行时</td><td>gVisor、Kata（daemon 配置）</td><td>RuntimeClass（gVisor、Kata）</td><td>Firecracker microVM</td></tr>
+</table>
+<p class="cap">表 12　依据 1.2.0 文档；agent-sandbox 提供者不支持公开快照。具体以所用版本的文档为准</p>
+
+<!-- ====================================================================== -->
+<h2 id="s13">13. Atlas 的使用现状</h2>
+<p>Atlas 部署的是 <code>release-1.1.1</code>：K8s 运行时 + BatchSandbox 提供者，一个控制器，三个 lifecycle server（<code>deploy/local/opensandbox.sh</code>，模板在 <code>deploy/local/opensandbox/</code>）：</p>
+<table>
+  <tr><th>server</th><th>命名空间</th><th>模板</th><th>用途</th></tr>
+  <tr><td><code>opensandbox-sbx</code></td><td><code>atlas-sbx</code></td><td>strict：UID 1000、根只读、drop ALL、seccomp RuntimeDefault、禁止提权</td><td>原生沙箱</td></tr>
+  <tr><td><code>opensandbox-acp</code></td><td><code>atlas-acp</code></td><td>UID 1000 只设在主容器上（egress 要 root 跑 nft）；egress 为 <code>dns+nft</code></td><td>ACP Pod（Claude Code 等 CLI）</td></tr>
+  <tr><td><code>opensandbox-bench</code></td><td><code>atlas-sbx</code></td><td>root、根可写，与 <code>docker run</code> 默认一致</td><td>评测（Terminal-Bench 2），按需安装</td></tr>
+</table>
+<table>
+  <tr><th>功能</th><th>Atlas</th><th>说明</th></tr>
+  <tr><td>lifecycle API：建、查、列、删、端点</td><td>用</td><td>自写薄客户端（<code>providers/opensandbox/lifecycle.py</code>），不用官方 SDK；按 metadata（<code>atlas.thread</code>、<code>atlas.profile</code>）列出并复用沙箱</td></tr>
+  <tr><td>execd 后台命令、游标日志、中断</td><td>用</td><td>命令一律后台模式，断线后用同一个 id 和游标续读（<code>execd.py</code>）</td></tr>
+  <tr><td>execd 文件 API</td><td>用</td><td>工作区的异步读写路由到沙箱</td></tr>
+  <tr><td>execd 指标</td><td>用</td><td>命令无输出时看 CPU 判断是否卡死</td></tr>
+  <tr><td>execd 作 PID 1</td><td>用</td><td><code>execd_run_as_init = true</code></td></tr>
+  <tr><td>volume（pvc）</td><td>用</td><td>S3 CSI 整桶 PVC，按前缀（subPath）挂 <code>/workspace</code>、<code>/skills</code></td></tr>
+  <tr><td>egress + Credential Vault</td><td>用（仅 ACP 且配了 git 档案时）</td><td><code>networkPolicy: {defaultAction: allow}</code> + <code>credentialProxy</code>；git 凭据以 <code>basic</code> 绑定写入</td></tr>
+  <tr><td>TTL、续期</td><td>不用</td><td><code>timeout: null</code>，回收由 Atlas 自己做</td></tr>
+  <tr><td>暂停 / 恢复、快照、Pool、客户端池</td><td>不用</td><td></td></tr>
+  <tr><td>原生沙箱的出站策略、ingress、Secure Access、多租户</td><td>不用</td><td></td></tr>
+  <tr><td>隔离会话、PTY、Code Interpreter、生命周期钩子、OTel、Node Agent、Fast Sandbox</td><td>不用</td><td></td></tr>
+</table>
+
+<div class="callout warn">
+<b>1.1.1 → 1.2.0 与 Atlas 相关的变化</b>
+<ul>
+  <li><b>execd 指标</b>：1.1.1 的 <code>/metrics</code> 读的是容器里看到的宿主 <code>/proc</code>，CPU 是整个节点的数字，不是这个沙箱的。Atlas 的卡死判定依据它，在 1.1.1 上判断依据不准。1.2.0 在设了资源上限时改为沙箱 cgroup 的数字（Atlas 设了 <code>resourceLimits</code>）。</li>
+  <li><b>删除</b>：1.2.0 删除后先报 <code>Stopping</code>，清理完才 404。Atlas 的 <code>get()</code> 把 404 当作「已不存在」，语义对得上。1.1.1 上返回 404 时旧 Pod 可能还在跑；1.2.0 下等到 404 再建新沙箱，就不会和旧 Pod 同时写同一个工作区前缀。</li>
+  <li><b>BatchSandbox Pod 默认 <code>restartPolicy: Never</code></b>、<b>过期报 <code>Terminated</code></b>：Atlas 模板已显式写 Never、也不设 TTL，没有影响。</li>
+  <li><b>networkPolicy 的未知字段回 422</b>：ACP 请求里只用了 <code>defaultAction</code>，预计没有影响。</li>
+</ul>
+</div>
+
+</main>
+</body>
+</html>

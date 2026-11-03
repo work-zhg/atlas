@@ -24,82 +24,324 @@
   "description": "范围是 agent-platform/services/agent；控制台里知识库、技能、模型、MCP 几个页面直连对应服务，图中未画",
   "system": "Agent 平台",
   "elements": [
-    { "id": "employee", "kind": "person", "tag": "员工", "at": [1, 0],
+    {
+      "id": "employee",
+      "kind": "person",
+      "tag": "员工",
+      "at": [
+        1,
+        0
+      ],
       "name": "员工",
-      "description": "在控制台创建和配置智能体、与智能体对话，管理自己的记忆和持久指令。" },
-    { "id": "teamflow", "kind": "system", "at": [0, 0],
+      "description": "在控制台创建和配置智能体、与智能体对话，管理自己的记忆和持久指令。"
+    },
+    {
+      "id": "teamflow",
+      "kind": "system",
+      "at": [
+        0,
+        0
+      ],
       "name": "AI TeamFlow",
-      "description": "让 AI 智能体作为团队成员参与研发流程的产品。" },
-    { "id": "usercenter", "kind": "system", "at": [2.2, 0],
+      "description": "让 AI 智能体作为团队成员参与研发流程的产品。"
+    },
+    {
+      "id": "usercenter",
+      "kind": "system",
+      "at": [
+        2.2,
+        0
+      ],
       "name": "用户中心",
-      "description": "用户、组织与权限的唯一数据源，负责统一登录。" },
-    { "id": "model", "kind": "system", "tag": "同级服务", "at": [3.4, 3.4],
+      "description": "用户、组织与权限的唯一数据源，负责统一登录。"
+    },
+    {
+      "id": "model",
+      "kind": "system",
+      "tag": "同级服务",
+      "at": [
+        3.4,
+        3.4
+      ],
       "name": "模型平台",
-      "description": "管理模型和调用 Key，把模型调用转发给 DeepSeek 等供应商。" },
-    { "id": "mcp", "kind": "system", "tag": "同级服务", "at": [3.4, 4.2],
+      "description": "管理模型和调用 Key，把模型调用转发给 DeepSeek 等供应商。"
+    },
+    {
+      "id": "mcp",
+      "kind": "system",
+      "tag": "同级服务",
+      "at": [
+        3.4,
+        4.2
+      ],
       "name": "MCP 网关",
-      "description": "统一接入 MCP 服务和外部 API，如 SerpApi 搜索，按 Key 授权。" },
-    { "id": "skill", "kind": "system", "tag": "同级服务", "at": [3.4, 1.8],
+      "description": "统一接入 MCP 服务和外部 API，如 SerpApi 搜索，按 Key 授权。"
+    },
+    {
+      "id": "skill",
+      "kind": "system",
+      "tag": "同级服务",
+      "at": [
+        3.4,
+        1.8
+      ],
       "name": "技能应用",
-      "description": "技能包的上传、审查与发布。" },
-    { "id": "knowledge", "kind": "system", "tag": "同级服务", "at": [3.4, 2.6],
+      "description": "技能包的上传、审查与发布。"
+    },
+    {
+      "id": "knowledge",
+      "kind": "system",
+      "tag": "同级服务",
+      "at": [
+        3.4,
+        2.6
+      ],
       "name": "知识库服务",
-      "description": "文档入库与检索，按文档权限过滤结果。" },
-    { "id": "memory", "kind": "system", "tag": "同级服务", "at": [3.4, 1.0],
+      "description": "文档入库与检索，按文档权限过滤结果。"
+    },
+    {
+      "id": "memory",
+      "kind": "system",
+      "tag": "同级服务",
+      "at": [
+        3.4,
+        1.0
+      ],
       "name": "记忆服务",
-      "description": "存储用户的跨会话记忆。" },
-    { "id": "sandbox", "kind": "system", "at": [-1.8, 1.2],
+      "description": "存储用户的跨会话记忆。"
+    },
+    {
+      "id": "sandbox",
+      "kind": "system",
+      "at": [
+        -1.8,
+        1.2
+      ],
       "name": "OpenSandbox",
-      "description": "开源沙箱平台，在集群里按需创建隔离的沙箱和 Pod。" },
-    { "id": "gitee", "kind": "system", "at": [2.7, 4.9],
+      "description": "开源沙箱平台，在集群里按需创建隔离的沙箱和 Pod。"
+    },
+    {
+      "id": "gitee",
+      "kind": "system",
+      "at": [
+        2.7,
+        4.9
+      ],
       "name": "Gitee",
-      "description": "代码托管平台，存放智能体提交的代码和产物。" },
-
-    { "id": "web", "kind": "container", "shape": "browser", "technology": "Next.js / React", "at": [1, 1.2],
+      "description": "代码托管平台，存放智能体提交的代码和产物。"
+    },
+    {
+      "id": "web",
+      "kind": "container",
+      "shape": "browser",
+      "technology": "Next.js / React",
+      "at": [
+        1,
+        1.2
+      ],
       "name": "控制台",
-      "description": "编辑智能体、会话工作台；实时渲染每一轮的模型输出、工具调用和子智能体。" },
-    { "id": "server", "kind": "container", "shape": "server", "technology": "Python / FastAPI", "at": [1, 2.4],
+      "description": "编辑智能体、会话工作台；实时渲染每一轮的模型输出、工具调用和子智能体。"
+    },
+    {
+      "id": "server",
+      "kind": "container",
+      "shape": "server",
+      "technology": "Python / FastAPI",
+      "at": [
+        1,
+        2.4
+      ],
       "name": "Agent 服务",
-      "description": "REST 与 SSE 接口；在后台任务里跑每一轮对话，落库并发布运行事件。" },
-    { "id": "db", "kind": "container", "shape": "database", "technology": "PostgreSQL 16", "at": [-0.6, 2.4],
+      "description": "REST 与 SSE 接口；在后台任务里跑每一轮对话，落库并发布运行事件。"
+    },
+    {
+      "id": "db",
+      "kind": "container",
+      "shape": "database",
+      "technology": "PostgreSQL 16",
+      "at": [
+        -0.6,
+        2.4
+      ],
       "name": "数据库",
-      "description": "智能体、会话、消息、运行记录和执行检查点。" },
-    { "id": "redis", "kind": "container", "shape": "queue", "technology": "Redis 7", "at": [-0.6, 3.5],
+      "description": "智能体、会话、消息、运行记录和执行检查点。"
+    },
+    {
+      "id": "redis",
+      "kind": "container",
+      "shape": "queue",
+      "technology": "Redis 7",
+      "at": [
+        -0.6,
+        3.5
+      ],
       "name": "Redis",
-      "description": "运行事件流、会话锁、取消标记和缓存。" },
-    { "id": "shell", "kind": "container", "shape": "server", "technology": "K8s Pod：沙箱镜像 + execd", "at": [0.4, 3.8],
+      "description": "运行事件流、会话锁、取消标记和缓存。"
+    },
+    {
+      "id": "shell",
+      "kind": "container",
+      "shape": "server",
+      "technology": "K8s Pod：沙箱镜像 + execd",
+      "at": [
+        0.4,
+        3.8
+      ],
       "name": "Shell 沙箱",
-      "description": "给原生智能体执行 Shell 命令、读写工作区文件。" },
-    { "id": "acp", "kind": "container", "shape": "server", "technology": "K8s Pod：ACP bridge + CLI 智能体", "at": [1.9, 3.8],
+      "description": "给原生智能体执行 Shell 命令、读写工作区文件。"
+    },
+    {
+      "id": "acp",
+      "kind": "container",
+      "shape": "server",
+      "technology": "K8s Pod：bridge + CLI 智能体",
+      "at": [
+        1.9,
+        3.8
+      ],
       "name": "会话 Pod",
-      "description": "运行 Claude Code 等外部 CLI 智能体，由 bridge 接成平台的执行后端。" },
-    { "id": "workspace", "kind": "container", "shape": "bucket", "technology": "S3 兼容对象存储（MinIO）", "at": [1.15, 4.9],
+      "description": "运行 Claude Code 等外部 CLI 智能体，由 bridge 接成平台的执行后端。"
+    },
+    {
+      "id": "workspace",
+      "kind": "container",
+      "shape": "bucket",
+      "technology": "S3 兼容对象存储（MinIO）",
+      "at": [
+        1.15,
+        4.9
+      ],
       "name": "会话工作区",
-      "description": "每个会话的文件，以 /workspace 挂进沙箱和会话 Pod。" }
+      "description": "每个会话的文件，以 /workspace 挂进沙箱和会话 Pod。"
+    }
   ],
   "relationships": [
-    { "from": "employee", "to": "web", "description": "配置智能体并与之对话" },
-    { "from": "web", "to": "server", "description": "调用接口，订阅运行事件", "technology": "JSON/HTTPS、SSE" },
-    { "from": "teamflow", "to": "server", "description": "引用智能体，经会话下发任务并取回输出", "technology": "JSON/HTTP" },
-    { "from": "server", "to": "usercenter", "description": "读取用户的授权和组织信息", "technology": "JSON/HTTP" },
-    { "from": "server", "to": "memory", "description": "读写用户记忆", "technology": "JSON/HTTP" },
-    { "from": "server", "to": "skill", "description": "拉取已发布的技能", "technology": "JSON/HTTP" },
-    { "from": "server", "to": "model", "description": "取智能体的模型 Key，调用大模型", "technology": "JSON/HTTP、Anthropic Messages API" },
-    { "from": "server", "to": "mcp", "description": "读取工具定义，代智能体调用工具", "technology": "MCP/HTTP" },
-    { "from": "server", "to": "knowledge", "description": "检索智能体绑定的知识库", "technology": "JSON/HTTP", "labelAt": 0.3 },
-    { "from": "knowledge", "to": "server", "description": "查询用户的部门和角色", "technology": "JSON/HTTP", "labelAt": 0.3 },
-    { "from": "server", "to": "sandbox", "description": "创建和回收沙箱、会话 Pod", "technology": "JSON/HTTP" },
-    { "from": "server", "to": "db", "description": "读写智能体、会话和检查点", "technology": "SQL/TCP" },
-    { "from": "server", "to": "redis", "description": "发布运行事件，加锁，设取消标记", "technology": "Redis 协议" },
-    { "from": "server", "to": "shell", "description": "执行命令，读写文件", "technology": "HTTP（execd）" },
-    { "from": "server", "to": "acp", "description": "驱动 CLI 智能体跑一轮", "technology": "ACP/WebSocket" },
-    { "from": "server", "to": "workspace", "description": "读写会话文件", "technology": "S3 API/HTTP" },
-    { "from": "shell", "to": "workspace", "description": "挂载 /workspace", "technology": "S3 CSI" },
-    { "from": "acp", "to": "workspace", "description": "挂载 /workspace", "technology": "S3 CSI" },
-    { "from": "acp", "to": "model", "description": "CLI 调用大模型", "technology": "Anthropic Messages API" },
-    { "from": "acp", "to": "mcp", "description": "调用 MCP 工具", "technology": "MCP/HTTP" },
-    { "from": "acp", "to": "knowledge", "description": "检索知识库", "technology": "MCP/HTTP" },
-    { "from": "acp", "to": "gitee", "description": "拉取和提交代码", "technology": "Git/HTTPS" }
+    {
+      "from": "employee",
+      "to": "web",
+      "description": "配置智能体并与之对话"
+    },
+    {
+      "from": "web",
+      "to": "server",
+      "description": "调用接口，订阅运行事件",
+      "technology": "JSON/HTTPS、SSE"
+    },
+    {
+      "from": "teamflow",
+      "to": "server",
+      "description": "引用智能体，经会话下发任务并取回输出",
+      "technology": "JSON/HTTP"
+    },
+    {
+      "from": "server",
+      "to": "usercenter",
+      "description": "读取用户的授权和组织信息",
+      "technology": "JSON/HTTP"
+    },
+    {
+      "from": "server",
+      "to": "memory",
+      "description": "读写用户记忆",
+      "technology": "JSON/HTTP"
+    },
+    {
+      "from": "server",
+      "to": "skill",
+      "description": "拉取已发布的技能",
+      "technology": "JSON/HTTP"
+    },
+    {
+      "from": "server",
+      "to": "model",
+      "description": "取智能体的模型 Key，调用大模型",
+      "technology": "JSON/HTTP、Anthropic Messages API"
+    },
+    {
+      "from": "server",
+      "to": "mcp",
+      "description": "读取工具定义，代智能体调用工具",
+      "technology": "MCP/HTTP"
+    },
+    {
+      "from": "server",
+      "to": "knowledge",
+      "description": "检索智能体绑定的知识库",
+      "technology": "JSON/HTTP",
+      "labelAt": 0.3
+    },
+    {
+      "from": "server",
+      "to": "sandbox",
+      "description": "创建和回收沙箱、会话 Pod",
+      "technology": "JSON/HTTP"
+    },
+    {
+      "from": "server",
+      "to": "db",
+      "description": "读写智能体、会话和检查点",
+      "technology": "SQL/TCP"
+    },
+    {
+      "from": "server",
+      "to": "redis",
+      "description": "发布运行事件，加锁，设取消标记",
+      "technology": "Redis 协议"
+    },
+    {
+      "from": "server",
+      "to": "shell",
+      "description": "执行命令，读写文件",
+      "technology": "HTTP（execd）"
+    },
+    {
+      "from": "server",
+      "to": "acp",
+      "description": "驱动 CLI 智能体跑一轮",
+      "technology": "atlas.host.v1 / WebSocket"
+    },
+    {
+      "from": "server",
+      "to": "workspace",
+      "description": "读写会话文件",
+      "technology": "S3 API/HTTP"
+    },
+    {
+      "from": "shell",
+      "to": "workspace",
+      "description": "挂载 /workspace",
+      "technology": "S3 CSI"
+    },
+    {
+      "from": "acp",
+      "to": "workspace",
+      "description": "挂载 /workspace",
+      "technology": "S3 CSI"
+    },
+    {
+      "from": "acp",
+      "to": "model",
+      "description": "CLI 调用大模型",
+      "technology": "Anthropic Messages API"
+    },
+    {
+      "from": "acp",
+      "to": "mcp",
+      "description": "调用 MCP 工具",
+      "technology": "MCP/HTTP"
+    },
+    {
+      "from": "acp",
+      "to": "knowledge",
+      "description": "检索知识库",
+      "technology": "MCP/HTTP"
+    },
+    {
+      "from": "acp",
+      "to": "gitee",
+      "description": "拉取和提交代码",
+      "technology": "Git/HTTPS"
+    }
   ]
 }
 </script>

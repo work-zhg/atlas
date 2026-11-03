@@ -1,0 +1,1919 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Code View</title>
+<style>
+  body { margin: 0; background: #fff; color: #444; font-family: "Open Sans", "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
+  main { padding: 24px 32px 48px; }
+  svg { display: block; max-width: 100%; height: auto; }
+  h2 { margin: 40px 0 12px; font-size: 15px; font-weight: 600; color: #666; }
+  #c4-report { margin: 0 0 24px; padding: 12px 16px 12px 36px; border: 1px solid #e0b4b4; background: #fff6f6; font-size: 14px; line-height: 1.6; }
+  #c4-report li[data-level="error"] { color: #b00020; }
+  #c4-report li[data-level="warn"] { color: #8a5a00; }
+  #c4-overview p { max-width: 1100px; margin: 0 0 10px; font-size: 14px; line-height: 1.8; color: #333; }
+  section table { border-collapse: collapse; font-size: 14px; line-height: 1.6; color: #333; }
+  section th, section td { border: 1px solid #d0d0d0; padding: 6px 10px; text-align: left; vertical-align: top; }
+  section th { background: #f4f4f4; font-weight: 600; white-space: nowrap; }
+  section td.code { font-family: Menlo, Consolas, monospace; font-size: 13px; }
+  section td.nowrap { white-space: nowrap; }
+  #c4-tables h3 { margin: 28px 0 6px; font: 600 14px Menlo, Consolas, monospace; color: #333; }
+  #c4-tables h4 { margin: 14px 0 6px; font-size: 13px; font-weight: 600; color: #666; }
+  #c4-tables p { max-width: 1100px; margin: 0 0 10px; font-size: 14px; line-height: 1.8; color: #333; }
+</style>
+</head>
+<body>
+<!--
+  只改下面这段 JSON；渲染器不用动。字段说明见 code/RULES.md 的「数据格式」。
+-->
+<script type="application/json" id="c4-model">
+{
+  "title": "代码图：Agent 平台 - Agent 服务 - 沙箱 - 基座 · 生命周期",
+  "description": "目标领域模型。沙箱基座的底层：管理沙箱模板，把 OpenSandbox 的 lifecycle server 包成 SandboxRuntime，在数据库登记沙箱实例；对外只用 sandbox_uuid，令牌不出基座。领域总览见 code-sandbox.html",
+  "component": "沙箱",
+  "package": "沙箱 · 基座 · 生命周期（目标模型）",
+  "overview": "生命周期是沙箱基座的底层，管两样东西。一是沙箱模板：每个模板有 code、说明、版本和 BatchSandbox 模板 yaml，决定 Pod 的安全形态（UID、根只读、能力、可写目录），发布时写到它绑定的 lifecycle server 上。二是沙箱实例：按模板 code 在 OpenSandbox 上建、查、删沙箱，等过渡态落定，解析端口地址，并把实例登记在数据库里，连同它的模板版本和访问令牌。对外只用 Atlas 自己的 sandbox_uuid，令牌不出基座：基座内的沙箱内执行经 access 拿到 execd 的地址和令牌，网络与凭据经 EgressLocator 拿到 egress 的地址，上层只传 sandbox_uuid；唯一出基座的是会话 Pod 连 bridge 用的服务令牌。它不知道人、业务（工作区、会话）和配额，这些归通用供给。每次登记、建好、状态变化、暂停恢复、删除都追加一条生命周期事件，实例删了日志还在，用来回答「什么时候建的、什么时候因为什么被回收」。",
+  "elements": [
+    {
+      "id": "rt",
+      "kind": "interface",
+      "name": "SandboxRuntime",
+      "stereotype": "对外接口",
+      "source": "无：Provisioner 直接调 LifecycleClient / SandboxServers",
+      "responsibility": "沙箱实例的入口：建、查、等落定、解析端点、删（必须带原因）、查生命周期、对账，以及暂停恢复。对外只用 sandbox_uuid、不交出 execd 令牌；access 只给基座内的沙箱内执行用。",
+      "methods": [
+        [
+          "+",
+          "launch(sandbox_uuid, spec) -> SandboxInstance（同一 uuid 幂等）"
+        ],
+        [
+          "+",
+          "get(sandbox_uuid) -> SandboxInstance | None"
+        ],
+        [
+          "+",
+          "list() -> list[SandboxInstance]（对账用）"
+        ],
+        [
+          "+",
+          "await_settled(sandbox_uuid) -> SandboxInstance | None"
+        ],
+        [
+          "+",
+          "endpoint(sandbox_uuid, port) -> Endpoint"
+        ],
+        [
+          "+",
+          "service_token(sandbox_uuid) -> SecretStr | None"
+        ],
+        [
+          "+",
+          "destroy(sandbox_uuid, *, reason)"
+        ],
+        [
+          "+",
+          "history(sandbox_uuid) -> list[SandboxEvent]"
+        ],
+        [
+          "+",
+          "reconcile() · purge_history(before)"
+        ],
+        [
+          "+",
+          "pause · resume(sandbox_uuid)（未接入）"
+        ],
+        [
+          "~",
+          "access(sandbox_uuid) -> (url, token)（基座内部）"
+        ]
+      ],
+      "at": [
+        1.1,
+        0.7
+      ]
+    },
+    {
+      "id": "tplSvc",
+      "kind": "class",
+      "name": "SandboxTemplates",
+      "stereotype": "应用服务",
+      "source": "无：模板是 deploy/local/opensandbox/*-template.yaml，由 opensandbox.sh 建成 ConfigMap",
+      "responsibility": "模板管理的入口：新建、修订、发布、查询。提交前经 TemplatePolicy 校验；修订只改数据库、版本加一，发布后才对新建的沙箱生效。",
+      "methods": [
+        [
+          "+",
+          "create(code, description, server, yaml)"
+        ],
+        [
+          "+",
+          "revise(code, yaml, description) -> int"
+        ],
+        [
+          "+",
+          "publish(code)"
+        ],
+        [
+          "+",
+          "get(code) · list()"
+        ]
+      ],
+      "at": [
+        3.9,
+        0.7
+      ]
+    },
+    {
+      "id": "policy",
+      "kind": "class",
+      "name": "TemplatePolicy",
+      "stereotype": "策略",
+      "source": "无",
+      "responsibility": "模板的准入规则。模板决定 Pod 的 securityContext，能改模板就能建特权 Pod，所以发布前强制检查：拒绝特权、宿主命名空间和宿主目录，要求 seccomp 和名为 sandbox 的主容器；模板里多写的容器会被 OpenSandbox 覆盖，也一并拒绝。",
+      "attributes": [
+        [
+          "",
+          "拒绝：privileged、hostNetwork / hostPID / hostIPC、hostPath"
+        ],
+        [
+          "",
+          "要求：seccomp、主容器名为 sandbox、不加 sidecar"
+        ]
+      ],
+      "methods": [
+        [
+          "+",
+          "check(yaml)（不合规抛 TemplateRejected）"
+        ]
+      ],
+      "at": [
+        5.45,
+        0.7
+      ]
+    },
+    {
+      "id": "tpl",
+      "kind": "class",
+      "name": "SandboxTemplate",
+      "stereotype": "聚合根",
+      "source": "无：三份 *-template.yaml 和 *-values.yaml 里的 batchsandbox_template_file",
+      "responsibility": "一种 Pod 安全形态：code、说明、版本和 BatchSandbox 模板 yaml，绑定一个 lifecycle server。version 是数据库里的最新修订，published 是 server 上正在生效的版本；建沙箱时记下的是 published。",
+      "attributes": [
+        [
+          "+",
+          "code: str（如 sbx-strict、bench、cli）"
+        ],
+        [
+          "+",
+          "description: str"
+        ],
+        [
+          "+",
+          "version: int"
+        ],
+        [
+          "+",
+          "yaml: str（BatchSandbox 模板）"
+        ],
+        [
+          "+",
+          "server: str（绑定的 lifecycle server，1:1）"
+        ],
+        [
+          "+",
+          "published: int | None（及其 sha）"
+        ]
+      ],
+      "methods": [
+        [
+          "+",
+          "revise(yaml, description) -> int"
+        ],
+        [
+          "+",
+          "mark_published(version)"
+        ],
+        [
+          "+",
+          "sha() -> str"
+        ]
+      ],
+      "at": [
+        3.9,
+        2.6
+      ]
+    },
+    {
+      "id": "publisher",
+      "kind": "class",
+      "name": "TemplatePublisher",
+      "stereotype": "防腐层",
+      "source": "deploy/local/opensandbox.sh 的 install_server",
+      "responsibility": "把模板发布到它绑定的 lifecycle server：写 ConfigMap opensandbox-{server}-template，改 Deployment 上的模板哈希注解触发滚动重启，等新 Pod 就绪；也能读回 server 上生效的哈希，查出被手工改过的模板。K8s 权限用 resourceNames 只开到这几个 ConfigMap 和 Deployment。",
+      "attributes": [
+        [
+          "-",
+          "_k8s（只能改 opensandbox-*-template 和对应 Deployment）"
+        ]
+      ],
+      "methods": [
+        [
+          "+",
+          "publish(template)"
+        ],
+        [
+          "+",
+          "live_sha(server) -> str"
+        ]
+      ],
+      "at": [
+        5.45,
+        2.6
+      ]
+    },
+    {
+      "id": "tplRepo",
+      "kind": "class",
+      "name": "TemplateRepository",
+      "stereotype": "仓储",
+      "source": "无",
+      "responsibility": "模板存在 sandbox_template 表里，按 code 取。只存每个模板的当前内容，不留历史版本；另存已发布内容的 sha，用来查 server 上的模板有没有被手工改过。",
+      "methods": [
+        [
+          "+",
+          "get(code) -> SandboxTemplate | None"
+        ],
+        [
+          "+",
+          "list() -> list[SandboxTemplate]"
+        ],
+        [
+          "+",
+          "save(template)"
+        ]
+      ],
+      "at": [
+        3.9,
+        4.5
+      ]
+    },
+    {
+      "id": "spec",
+      "kind": "class",
+      "name": "CreateSpec",
+      "stereotype": "值对象",
+      "source": "sandbox_spec()、acp_spec() 返回的 dict；通用供给图里的 CreateSpec 移到这里",
+      "responsibility": "建一个沙箱需要的全部信息，和 OpenSandbox 的请求格式无关。template 是模板 code，选的是 Pod 形态而不是 server；机密环境变量和普通的分开放；service_token_env 声明沙箱里对外服务（bridge）的令牌变量，基座给它另生成一个令牌；network 必填。没有 TTL 字段：一律不过期。",
+      "attributes": [
+        [
+          "+",
+          "template: str（模板 code）"
+        ],
+        [
+          "+",
+          "image: str"
+        ],
+        [
+          "+",
+          "entrypoint: list[str]"
+        ],
+        [
+          "+",
+          "env: dict[str, str]"
+        ],
+        [
+          "+",
+          "secret_env: dict[str, SecretStr]"
+        ],
+        [
+          "+",
+          "service_token_env: str | None"
+        ],
+        [
+          "+",
+          "resources · volumes"
+        ],
+        [
+          "+",
+          "labels: Labels"
+        ],
+        [
+          "+",
+          "network: NetworkPolicy（网络与凭据领域）"
+        ]
+      ],
+      "at": [
+        -0.3,
+        0.7
+      ]
+    },
+    {
+      "id": "labels",
+      "kind": "class",
+      "name": "Labels",
+      "stereotype": "值对象",
+      "source": "sandbox_spec()、acp_spec() 里的 metadata 和 list() 的过滤条件",
+      "responsibility": "写进沙箱的标签，只写不查：库里不存，按人、按业务查归通用供给。OpenSandbox 把它直接变成 K8s label，所以构造时就按 label 规则校验；统一加 atlas. 前缀、atlas.managed=true，建沙箱时再加 atlas.sandbox=<sandbox_uuid>，对账靠它把沙箱和登记对上。",
+      "attributes": [
+        [
+          "+",
+          "pairs: dict[str, str]"
+        ]
+      ],
+      "methods": [
+        [
+          "+",
+          "of(**pairs) -> Labels"
+        ],
+        [
+          "",
+          "（值 ≤63 个字符，只含字母数字和 -_.）"
+        ]
+      ],
+      "at": [
+        -0.3,
+        2.6
+      ]
+    },
+    {
+      "id": "inst",
+      "kind": "class",
+      "name": "SandboxInstance",
+      "stereotype": "聚合根",
+      "source": "无类：OpenSandbox 返回的 dict 加 Redis 里的令牌",
+      "responsibility": "一个沙箱实例的登记：Atlas 的 uuid、OpenSandbox 的 id、建它的模板和版本、标签、最近一次观测到的状态和两个令牌。令牌是私有字段，只经 access / service_token 取；状态以 OpenSandbox 为准，用前刷新。观测到的状态和上次不同，observe 就产生一条 state_changed 事件。",
+      "attributes": [
+        [
+          "+",
+          "uuid: str（对外只用它）"
+        ],
+        [
+          "-",
+          "_external_id: str | None（OpenSandbox 的 id）"
+        ],
+        [
+          "+",
+          "template: str · template_version: int"
+        ],
+        [
+          "+",
+          "state: SandboxState（最近一次观测）"
+        ],
+        [
+          "+",
+          "created_at: datetime"
+        ],
+        [
+          "-",
+          "_access_token: SecretStr（execd，不出基座）"
+        ],
+        [
+          "-",
+          "_service_token: SecretStr | None（bridge）"
+        ]
+      ],
+      "methods": [
+        [
+          "+",
+          "usable() -> bool"
+        ],
+        [
+          "+",
+          "outdated(published) -> bool"
+        ],
+        [
+          "~",
+          "observe(state) -> SandboxEvent | None"
+        ]
+      ],
+      "at": [
+        1.1,
+        2.75
+      ]
+    },
+    {
+      "id": "state",
+      "kind": "enum",
+      "name": "SandboxState",
+      "stereotype": "值对象",
+      "source": "provision 的 _USABLE、_SETTLING、_LEAVING 和 _state()",
+      "responsibility": "OpenSandbox 报的状态分成六组；分组规则只在这里写一份，通用供给据此决定等待、可用还是删掉；配额按通用供给自己的状态算，不看它。",
+      "attributes": [
+        [
+          "",
+          "Pending · Pausing · Resuming（过渡）"
+        ],
+        [
+          "",
+          "Allocated · Running（可用）"
+        ],
+        [
+          "",
+          "Paused（暂停）"
+        ],
+        [
+          "",
+          "Stopping · Terminated（离开）"
+        ],
+        [
+          "",
+          "Failed（坏的）"
+        ],
+        [
+          "",
+          "Unknown（新状态：不用、不删）"
+        ]
+      ],
+      "methods": [
+        [
+          "+",
+          "settling · usable · leaving · broken() -> bool"
+        ]
+      ],
+      "at": [
+        -0.3,
+        4.6
+      ]
+    },
+    {
+      "id": "instRepo",
+      "kind": "class",
+      "name": "SandboxInstanceRepository",
+      "stereotype": "仓储",
+      "source": "Provisioner 的 Redis 令牌键 atlas:{kind}:token:{id}；SandboxServers 的跨 server 列表",
+      "responsibility": "沙箱实例存在 sandbox_instance 表里（令牌一起存）。按 uuid 取、列出全部（对账）、按 OpenSandbox 的 id 反查；删沙箱时整行删除。标签不进库。",
+      "methods": [
+        [
+          "+",
+          "add · save(instance)"
+        ],
+        [
+          "+",
+          "get(sandbox_uuid) -> SandboxInstance | None"
+        ],
+        [
+          "+",
+          "list() -> list[SandboxInstance]"
+        ],
+        [
+          "+",
+          "remove(sandbox_uuid)"
+        ]
+      ],
+      "at": [
+        0.85,
+        4.6
+      ]
+    },
+    {
+      "id": "osrt",
+      "kind": "class",
+      "name": "OpenSandboxRuntime",
+      "stereotype": "防腐层",
+      "source": "SandboxServers、lifecycle_clients()、Provisioner 的建沙箱与存令牌、_discard、_wait_settled",
+      "responsibility": "SandboxRuntime 的 OpenSandbox 实现。建：按 spec.template 找到绑定的 server 和已发布版本，生成 uuid 和令牌，先登记、再带标签建、再回填 OpenSandbox 的 id；建失败就删掉登记和半成品。查：读登记，再向它的 server 刷新状态。对账：只在 OpenSandbox 上有的删掉，只在库里有的按标签找回或删掉登记。每次登记、建好、状态变化、删除都追加一条生命周期事件，和实例的变化在同一个事务里提交。也替网络领域找到 egress 的地址。",
+      "attributes": [
+        [
+          "-",
+          "_servers: dict[str, LifecycleServer]"
+        ]
+      ],
+      "methods": [
+        [
+          "-",
+          "_server_of(template) -> LifecycleServer"
+        ],
+        [
+          "-",
+          "_refresh(instance)"
+        ],
+        [
+          "-",
+          "_new_token() -> SecretStr"
+        ]
+      ],
+      "at": [
+        2.5,
+        2.75
+      ]
+    },
+    {
+      "id": "server",
+      "kind": "class",
+      "name": "LifecycleServer",
+      "stereotype": "防腐层",
+      "source": "LifecycleClient、sandbox_spec() / acp_spec() 的格式部分、_state()、_parse_time()",
+      "responsibility": "一个 lifecycle server 的 HTTP 客户端和翻译：CreateSpec → 创建请求体（secret_env 和令牌并进 env、timeout 写 null、PVC 不自动建），返回的 JSON → 状态和 id；404 在查询里翻成「不在」、在删除里算成功；列表自动翻页。",
+      "attributes": [
+        [
+          "-",
+          "_base_url: str"
+        ],
+        [
+          "-",
+          "_api_key: SecretStr"
+        ]
+      ],
+      "methods": [
+        [
+          "+",
+          "create(spec, tokens) -> (id, state)"
+        ],
+        [
+          "+",
+          "list · get · delete · endpoint"
+        ],
+        [
+          "-",
+          "_request(spec, tokens) -> dict"
+        ]
+      ],
+      "at": [
+        3.35,
+        6.15
+      ]
+    },
+    {
+      "id": "event",
+      "kind": "class",
+      "name": "SandboxEvent",
+      "stereotype": "领域事件",
+      "responsibility": "沙箱生命周期里的一件事：登记、建好、建失败、状态变化、暂停、恢复、删除、对账处理。删除记原因；detail 记模板版本、标签快照、OpenSandbox 的 id 或错误信息。只记基座看得到的事，就绪、绑定、执行命令这些上层的事不在这里。",
+      "attributes": [
+        [
+          "+",
+          "sandbox_uuid: str"
+        ],
+        [
+          "+",
+          "type: registered | created | launch_failed"
+        ],
+        [
+          "",
+          "　| state_changed | paused | resumed"
+        ],
+        [
+          "",
+          "　| destroyed | reconciled"
+        ],
+        [
+          "+",
+          "state: SandboxState | None"
+        ],
+        [
+          "+",
+          "reason: str | None（删除原因）"
+        ],
+        [
+          "+",
+          "detail: dict"
+        ],
+        [
+          "+",
+          "occurred_at: datetime"
+        ]
+      ],
+      "at": [
+        1.75,
+        6.25
+      ]
+    },
+    {
+      "id": "eventLog",
+      "kind": "class",
+      "name": "SandboxEventLog",
+      "stereotype": "仓储",
+      "responsibility": "生命周期事件存在 sandbox_event 表里，只追加、不修改。实例删了日志还在；按沙箱查完整经历，按时间查，按保留期清理。",
+      "methods": [
+        [
+          "+",
+          "append(event)"
+        ],
+        [
+          "+",
+          "history(sandbox_uuid) -> list[SandboxEvent]"
+        ],
+        [
+          "+",
+          "between(since, until) -> list[SandboxEvent]"
+        ],
+        [
+          "+",
+          "purge(before)"
+        ]
+      ],
+      "at": [
+        2.2,
+        4.6
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "from": "osrt",
+      "to": "rt",
+      "type": "implements"
+    },
+    {
+      "from": "osrt",
+      "to": "server",
+      "type": "aggregation",
+      "description": "按模板绑定的 server",
+      "multiplicity": "1..*"
+    },
+    {
+      "from": "osrt",
+      "to": "instRepo",
+      "type": "association",
+      "description": "登记、查询、删除"
+    },
+    {
+      "from": "osrt",
+      "to": "tplRepo",
+      "type": "uses",
+      "description": "按 code 找 server 和已发布版本"
+    },
+    {
+      "from": "rt",
+      "to": "spec",
+      "type": "uses",
+      "description": "按规格建"
+    },
+    {
+      "from": "rt",
+      "to": "inst",
+      "type": "uses",
+      "description": "返回"
+    },
+    {
+      "from": "instRepo",
+      "to": "inst",
+      "type": "association",
+      "description": "存取（含令牌）"
+    },
+    {
+      "from": "inst",
+      "to": "state",
+      "type": "composition",
+      "description": "最近状态"
+    },
+    {
+      "from": "spec",
+      "to": "labels",
+      "type": "composition",
+      "description": "写进的标签"
+    },
+    {
+      "from": "tplSvc",
+      "to": "policy",
+      "type": "uses",
+      "description": "提交前校验"
+    },
+    {
+      "from": "tplSvc",
+      "to": "tpl",
+      "type": "uses",
+      "description": "新建、修订、标记已发布"
+    },
+    {
+      "from": "tplSvc",
+      "to": "publisher",
+      "type": "uses",
+      "description": "发布"
+    },
+    {
+      "from": "publisher",
+      "to": "tpl",
+      "type": "uses",
+      "description": "写到 server"
+    },
+    {
+      "from": "tplRepo",
+      "to": "tpl",
+      "type": "association",
+      "description": "按 code 存取"
+    },
+    {
+      "from": "osrt",
+      "to": "eventLog",
+      "type": "association",
+      "description": "每次变化追加一条"
+    },
+    {
+      "from": "eventLog",
+      "to": "event",
+      "type": "association",
+      "description": "按沙箱、按时间存取"
+    },
+    {
+      "from": "inst",
+      "to": "event",
+      "type": "uses",
+      "description": "状态变了时产生"
+    }
+  ],
+  "capabilities": [
+    {
+      "name": "管理模板",
+      "entry": "SandboxTemplates.create · revise · get · list",
+      "callers": "平台管理员（管理接口）",
+      "description": "提交前经 TemplatePolicy 校验；revise 版本加一，只改数据库，不立即生效",
+      "source": "无（手改 yaml 再跑 opensandbox.sh）"
+    },
+    {
+      "name": "发布模板",
+      "entry": "SandboxTemplates.publish(code)",
+      "callers": "平台管理员",
+      "description": "写 ConfigMap、滚动重启绑定的 lifecycle server，就绪后记下 published。之后新建的沙箱用新版本，已有的沙箱不变",
+      "source": "opensandbox.sh 的 install_server"
+    },
+    {
+      "name": "建沙箱",
+      "entry": "launch(sandbox_uuid, spec)",
+      "callers": "通用供给",
+      "description": "uuid 由调用方生成，同一个 uuid 再调一次返回已有实例、不再建；按 spec.template 找到 server 和已发布版本；生成 execd 令牌（声明了 service_token_env 时再生成服务令牌）；先登记，再带 atlas.sandbox 标签建，再回填 OpenSandbox 的 id。返回时里面的服务未必在监听（就绪由业务类型的种类判断）",
+      "source": "Provisioner._provision 的创建与存令牌、SandboxServers.create"
+    },
+    {
+      "name": "按 uuid 查",
+      "entry": "get(sandbox_uuid)",
+      "callers": "通用供给（确认沙箱已不在、对账）",
+      "description": "读登记，再向它的 server 刷新状态；不在返回 None",
+      "source": "SandboxServers.get"
+    },
+    {
+      "name": "列出实例",
+      "entry": "list()",
+      "callers": "通用供给（对账：找出没有登记的实例）",
+      "description": "列出全部登记的实例，逐个刷新状态",
+      "source": "SandboxServers.list、Provisioner._admit_quota 的循环"
+    },
+    {
+      "name": "等过渡态落定",
+      "entry": "await_settled(sandbox_uuid)",
+      "callers": "通用供给（建好之后、接着建 CREATING 的沙箱时）",
+      "description": "轮询到状态离开过渡态，或沙箱已不在",
+      "source": "Provisioner._wait_settled"
+    },
+    {
+      "name": "解析端点",
+      "entry": "endpoint(sandbox_uuid, port)",
+      "callers": "会话 Pod（bridge 端口）",
+      "description": "地址加访问时必须带的请求头，不含令牌",
+      "source": "LifecycleClient.endpoint · endpoint_with_headers"
+    },
+    {
+      "name": "取服务令牌",
+      "entry": "service_token(sandbox_uuid)",
+      "callers": "会话 Pod（HostRuntime 连 bridge）",
+      "description": "只给建沙箱时声明了 service_token_env 的沙箱；和 execd 令牌不是同一个",
+      "source": "现在 bridge 令牌兼作 execd 令牌，随 SandboxEndpoint 返回"
+    },
+    {
+      "name": "删沙箱",
+      "entry": "destroy(sandbox_uuid, *, reason)",
+      "callers": "通用供给",
+      "description": "原因必填：idle（闲置回收）、release（会话删除）、orphan（孤儿回收）、manual（管理员退役）、broken（坏的）。先删 OpenSandbox 上的，再删登记并记一条 destroyed；幂等",
+      "source": "Provisioner._discard"
+    },
+    {
+      "name": "对账",
+      "entry": "reconcile()",
+      "callers": "维护任务",
+      "description": "OpenSandbox 上有、登记里没有的删掉；登记里有、OpenSandbox 上没有的删登记；没回填 id 的按 atlas.sandbox 标签找回；每处理一个记一条 reconciled",
+      "source": "无"
+    },
+    {
+      "name": "查生命周期",
+      "entry": "history(sandbox_uuid)",
+      "callers": "管理界面、运维排障",
+      "description": "这个沙箱从登记到删除的全部事件，按时间排序；实例删了也查得到"
+    },
+    {
+      "name": "清理过期日志",
+      "entry": "purge_history(before)",
+      "callers": "维护任务",
+      "description": "删掉早于保留期的事件（保留期可配置）"
+    },
+    {
+      "name": "暂停 / 恢复",
+      "entry": "pause · resume(sandbox_uuid)",
+      "callers": "无（未接入，要产品决策）",
+      "description": "id 不变。BatchSandbox 默认只保留根文件系统，进程、内存和 Credential Vault 都不保留",
+      "source": "无"
+    },
+    {
+      "name": "取访问信息（基座内部）",
+      "entry": "access(sandbox_uuid)",
+      "callers": "沙箱内执行",
+      "description": "execd 的地址和令牌。执行 shell、读写文件因此只要 sandbox_uuid",
+      "source": "SandboxEndpoint 随路由表到处传"
+    },
+    {
+      "name": "定位 egress（实现网络领域的扩展点）",
+      "entry": "EgressLocator.locate(sandbox_uuid)",
+      "callers": "网络与凭据",
+      "description": "解析 egress 端口（18080）的地址和鉴权头",
+      "source": "AcpProvisioner._bind_git 里的 endpoint_with_headers"
+    }
+  ],
+  "decisions": [
+    {
+      "decision": "基座只讲运行时，不讲人、业务、配额",
+      "reason": "分配、绑定、配额这些规则在通用供给，基座只认模板和标签。OpenSandbox 升级或换后端只改基座，新增一种业务只改通用供给和种类，两边互不牵连。"
+    },
+    {
+      "decision": "模板进数据库，按 code 管理",
+      "reason": "现在三份模板是部署目录里的 yaml，应用代码却暗中依赖其中的卷和路径（HOME=/home/agent、/tmp、模型 Secret 的挂载点），两边没有显式约定，改模板的影响看不见。进库后有 code、说明和版本，沙箱记下自己是哪个模板的哪个版本建的。"
+    },
+    {
+      "decision": "一个模板绑定一个 lifecycle server；发布 = 写 ConfigMap + 滚动重启",
+      "reason": "OpenSandbox 1.1.1 的创建请求不能选模板，模板文件由 server 在启动时读一次。所以模板和 server 一一对应：新增一个模板 code 要先部署一个 server（部署脚本做），修改要重启它才生效。已建沙箱的 Pod spec 在建 BatchSandbox 时就定了，发布不影响它们。"
+    },
+    {
+      "decision": "发布前强制校验，K8s 权限收到最小",
+      "reason": "模板决定 Pod 的 securityContext：能改模板，就能建特权 Pod、挂宿主目录，等于拿到节点。TemplatePolicy 拒绝特权、宿主命名空间和 hostPath；Atlas 的 RBAC 用 resourceNames 只开到 opensandbox-*-template 这几个 ConfigMap 和对应的 Deployment。"
+    },
+    {
+      "decision": "模板不留历史版本",
+      "reason": "旧版本只对已建的沙箱有意义，而它们的 Pod spec 已经定在 BatchSandbox 里，用不上旧 yaml。回滚就是用旧内容再修订一次，版本号照样加一。"
+    },
+    {
+      "decision": "CreateSpec 用模板 code，不用 server",
+      "reason": "上层只关心要哪种 Pod 形态。server 是 OpenSandbox 1.1.1 表达形态的方式：以后换成支持按请求选模板的版本，或者几个模板合到一个 server 上，上层都不用改。"
+    },
+    {
+      "decision": "沙箱实例登记在数据库，状态仍以 OpenSandbox 为准",
+      "reason": "令牌只能 Atlas 自己存（查询接口不返回环境变量），现在存在 Redis，丢了所有沙箱都连不上；记下模板后，按 uuid 查能直接找到它的 server，不必逐个 server 问、列表也不用合并去重。这推翻了现状「不建表，避免两处真相」的约定，所以库里只存身份、模板版本和令牌，状态只是最近一次观测，用前向 OpenSandbox 刷新；两边不一致的由对账收敛。"
+    },
+    {
+      "decision": "对外用 Atlas 自己的 sandbox_uuid，由调用方生成；先登记再创建，同一 uuid 幂等",
+      "reason": "OpenSandbox 不能由调用方指定 id，进程崩在「建好」和「记下」之间，就会留下一个对不上号、令牌也丢了的沙箱。先生成 uuid 登记、写进 atlas.sandbox 标签再建，崩了也能按标签找回。上层也不再接触 OpenSandbox 的 id 格式。uuid 由调用方（通用供给）生成，是为了让它先落下自己的记录再调 launch：崩在中间时下一次用同一个 uuid 重试，基座按 uuid 判重，只建一次。"
+    },
+    {
+      "decision": "标签只写进 OpenSandbox，不在库里存",
+      "reason": "标签的用处是：在 K8s 和 OpenSandbox 里看得出沙箱是谁的；对账时按 atlas.sandbox 找回没回填 id 的实例（向 OpenSandbox 按标签查）。按人、按业务查归通用供给的登记。以前为「按标签复用、按标签算配额」建的标签表和 find(selector) 已经没有调用方，删掉，免得基座和供给两处都记归属。"
+    },
+    {
+      "decision": "令牌不出基座，执行只要 sandbox_uuid",
+      "reason": "现在 SandboxEndpoint 带着令牌经过路由表（Redis）、工作区、命令执行，到处都能直接调 execd。令牌收进 SandboxInstance 的私有字段，只有基座内的沙箱内执行经 access 拿到，上层只传 sandbox_uuid。"
+    },
+    {
+      "decision": "bridge 令牌和 execd 令牌分开",
+      "reason": "会话 Pod 的 HostRuntime 连 bridge 必须带令牌，这个令牌一定要出基座；现在它兼作 execd 令牌，拿到它就能在 Pod 里执行任意命令。分开后出基座的只有 bridge 令牌（Pod 里的 CLI 两个都读得到，这一点不变）。"
+    },
+    {
+      "decision": "创建规格类型化，标签构造时校验",
+      "reason": "OpenSandbox 会静默丢掉不认识的字段（把 networkPolicy 拼错就等于出站全放行）；metadata 直接成为 K8s label，值超过 63 个字符或含非法字符时创建回 400。CreateSpec 和 Labels 在 Atlas 这边就挡住，翻成请求体只在 LifecycleServer 一处做。"
+    },
+    {
+      "decision": "机密环境变量单独放",
+      "reason": "OpenSandbox 1.1.1 的创建接口只收明文 env，令牌和模型 Key 会明文写进 BatchSandbox 和 Pod spec。CreateSpec 先把 secret_env 分出来，现在由 LifecycleServer 并进 env；等 OpenSandbox 支持引用 Secret，只改这一处。"
+    },
+    {
+      "decision": "状态分组只写一份；不认识的状态既不用也不删",
+      "reason": "创建接口把 Allocated 改写成 Running 返回，GET 和列表却原样给 Allocated，两者都算可用。规范要求客户端容忍新增的状态值；现在的代码把不认识的状态当坏的删，接入暂停后 Paused 就会被误删。"
+    },
+    {
+      "decision": "不用 TTL；只等状态落定，不判服务就绪",
+      "reason": "运行不设到点结束的上限，回收由 Atlas 做，TTL 一到 OpenSandbox 会直接删沙箱。创建返回时 init 容器可能还没把 execd 拷进去，而服务算不算就绪因种类而异（execd 看 /ping，bridge 看 /readyz），交给种类和沙箱内执行判断。"
+    },
+    {
+      "decision": "快照、预热池、Fast Sandbox 不进接口",
+      "reason": "预热池不能和逐请求的 networkPolicy、volumes 同时用（源码里直接报错）；Fast Sandbox 不支持 volume，工作区却靠 PVC 挂载；快照目前没有用例。"
+    },
+    {
+      "decision": "生命周期日志单独成表，只追加",
+      "reason": "实例表只存当前状态，删沙箱时整行删掉，「什么时候建的、什么时候因为什么被回收」没有地方留。事件表只追加、不修改，和实例的增删改互不干扰。"
+    },
+    {
+      "decision": "日志不依赖实例行",
+      "reason": "引用是逻辑的、允许悬空：实例删了，日志还在。登记时把模板 code、版本和标签快照写进 detail，OpenSandbox 的 id 单独成列，删了之后还能按它去查 K8s 和 OpenSandbox 的日志。"
+    },
+    {
+      "decision": "和实例的变化在同一个事务里写",
+      "reason": "登记和 registered、删除登记和 destroyed 一起提交，不会出现实例变了、日志却没记的情况。调 OpenSandbox 在事务外，崩在中途的由对账收尾并记一条 reconciled。"
+    },
+    {
+      "decision": "状态变了才记",
+      "reason": "每次查询都会向 OpenSandbox 刷新状态，照单全记会把日志刷爆。实例表里存着上次观测的状态，和这次不同才追加 state_changed。"
+    },
+    {
+      "decision": "删除必须带原因",
+      "reason": "基座不知道为什么删，原因只有上层知道（闲置、会话删除、孤儿、管理员退役、坏的）；基座自己删的记 launch_failed 或 reconcile。没有原因的删除记录排障时没有用。"
+    },
+    {
+      "decision": "日志有保留期，定期清理",
+      "reason": "只追加的表会一直变大。保留期可配置，维护任务按 occurred_at 清理；按时间建了索引，清理不扫全表。"
+    }
+  ],
+  "schemaNote": "主键约定：id 是自增主键，只在库内使用，不对外、不做关联；xxx_uuid 是逻辑主键（UUIDv7，Python 侧生成），表间引用和 API 都用它。表间不建外键约束（Atlas 从迁移 0013 起的约定），引用完整性由代码维护：「引用」列和 ER 图里的连线都是逻辑引用。类型写的是 db/types.py 和 SQLAlchemy 的通用类型，不绑定数据库厂商。",
+  "tables": [
+    {
+      "name": "sandbox_template",
+      "description": "沙箱模板（聚合根 SandboxTemplate）。只存每个模板的当前内容，不留历史版本。",
+      "at": [
+        0,
+        0
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": "BigInteger",
+          "key": "PK",
+          "default": "自增",
+          "description": "库内主键，不对外、不做关联"
+        },
+        {
+          "name": "template_uuid",
+          "type": "UUIDType",
+          "key": "UK",
+          "default": "uuid7()",
+          "description": "逻辑主键"
+        },
+        {
+          "name": "code",
+          "type": "String(63)",
+          "key": "UK",
+          "description": "模板 code，CreateSpec.template 填它；只含小写字母、数字和 -"
+        },
+        {
+          "name": "description",
+          "type": "Text",
+          "default": "''",
+          "description": "说明"
+        },
+        {
+          "name": "server",
+          "type": "String(63)",
+          "key": "UK",
+          "description": "绑定的 lifecycle server 名，一个 server 只绑一个模板。地址和 API Key 来自部署配置，不进库"
+        },
+        {
+          "name": "version",
+          "type": "Integer",
+          "default": "1",
+          "description": "最新修订的版本号，每次修订加一"
+        },
+        {
+          "name": "yaml",
+          "type": "Text",
+          "description": "最新修订的 BatchSandbox 模板"
+        },
+        {
+          "name": "published_version",
+          "type": "Integer",
+          "nullable": true,
+          "description": "server 上正在生效的版本；从未发布时为空"
+        },
+        {
+          "name": "published_sha",
+          "type": "String(64)",
+          "nullable": true,
+          "description": "生效内容的 sha256。旧内容不留，和 server 上的 ConfigMap 比对漂移只能靠它"
+        },
+        {
+          "name": "published_at",
+          "type": "UTCDateTime",
+          "nullable": true,
+          "description": "最近一次发布完成的时间"
+        },
+        {
+          "name": "updated_by_uuid",
+          "type": "UUIDType",
+          "description": "最后修改人（用户 uuid）。模板改的是 Pod 的安全形态，要能追到人"
+        },
+        {
+          "name": "created_at",
+          "type": "UTCDateTime",
+          "default": "now()"
+        },
+        {
+          "name": "updated_at",
+          "type": "UTCDateTime",
+          "default": "now()",
+          "description": "每次写入时刷新"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "uk_sandbox_template_uuid",
+          "columns": [
+            "template_uuid"
+          ],
+          "unique": true
+        },
+        {
+          "name": "uk_sandbox_template_code",
+          "columns": [
+            "code"
+          ],
+          "unique": true
+        },
+        {
+          "name": "uk_sandbox_template_server",
+          "columns": [
+            "server"
+          ],
+          "unique": true,
+          "description": "一个 server 只绑一个模板"
+        }
+      ]
+    },
+    {
+      "name": "sandbox_instance",
+      "description": "沙箱实例的登记（聚合根 SandboxInstance）。存身份、模板版本和令牌；状态以 OpenSandbox 为准，这里只是最近一次观测。删沙箱时整行删除，不做软删。",
+      "at": [
+        1.05,
+        0
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": "BigInteger",
+          "key": "PK",
+          "default": "自增",
+          "description": "库内主键，不对外、不做关联"
+        },
+        {
+          "name": "sandbox_uuid",
+          "type": "UUIDType",
+          "key": "UK",
+          "default": "uuid7()",
+          "description": "对外的沙箱 id。先登记后创建，也写进标签 atlas.sandbox"
+        },
+        {
+          "name": "external_id",
+          "type": "String(64)",
+          "key": "UK",
+          "nullable": true,
+          "description": "OpenSandbox 的沙箱 id；建好回填之前为空"
+        },
+        {
+          "name": "template_uuid",
+          "type": "UUIDType",
+          "key": "FK",
+          "references": "sandbox_template.template_uuid",
+          "description": "建它的模板"
+        },
+        {
+          "name": "template_version",
+          "type": "Integer",
+          "description": "建它时模板的 published_version"
+        },
+        {
+          "name": "state",
+          "type": "String(16)",
+          "default": "'Pending'",
+          "description": "最近一次观测到的 OpenSandbox 状态，只作展示和粗筛；要据此判断时先向 OpenSandbox 刷新"
+        },
+        {
+          "name": "observed_at",
+          "type": "UTCDateTime",
+          "nullable": true,
+          "description": "最近一次观测的时间"
+        },
+        {
+          "name": "access_token",
+          "type": "Text",
+          "description": "execd 令牌，不出基座。现在明文存，加密随平台的统一方案"
+        },
+        {
+          "name": "service_token",
+          "type": "Text",
+          "nullable": true,
+          "description": "bridge 这类服务的令牌；建时声明了 service_token_env 才有"
+        },
+        {
+          "name": "created_at",
+          "type": "UTCDateTime",
+          "default": "now()"
+        },
+        {
+          "name": "updated_at",
+          "type": "UTCDateTime",
+          "default": "now()",
+          "description": "每次写入时刷新"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "uk_sandbox_instance_uuid",
+          "columns": [
+            "sandbox_uuid"
+          ],
+          "unique": true
+        },
+        {
+          "name": "uk_sandbox_instance_external",
+          "columns": [
+            "external_id"
+          ],
+          "unique": true,
+          "description": "NULL 不参与唯一；对账时按 OpenSandbox 的 id 反查"
+        },
+        {
+          "name": "ix_sandbox_instance_template",
+          "columns": [
+            "template_uuid"
+          ],
+          "description": "按模板统计、找出旧版本模板建的沙箱"
+        }
+      ]
+    },
+    {
+      "name": "sandbox_event",
+      "description": "沙箱生命周期日志（领域事件 SandboxEvent）。只追加、不修改；实例删了也保留，按保留期清理。",
+      "at": [
+        1.05,
+        1.55
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": "BigInteger",
+          "key": "PK",
+          "default": "自增",
+          "description": "库内主键，不对外、不做关联"
+        },
+        {
+          "name": "event_uuid",
+          "type": "UUIDType",
+          "key": "UK",
+          "default": "uuid7()",
+          "description": "逻辑主键"
+        },
+        {
+          "name": "sandbox_uuid",
+          "type": "UUIDType",
+          "key": "FK",
+          "references": "sandbox_instance.sandbox_uuid",
+          "referenceOptional": true,
+          "description": "哪个沙箱。逻辑引用：实例删了，日志还在"
+        },
+        {
+          "name": "external_id",
+          "type": "String(64)",
+          "nullable": true,
+          "description": "当时的 OpenSandbox 沙箱 id（建好之后的事件才有）。实例删了也能按它反查 K8s 和 OpenSandbox 的日志"
+        },
+        {
+          "name": "event_type",
+          "type": "String(32)",
+          "description": "registered（登记）、created（建好）、launch_failed（建失败）、state_changed（状态变化）、paused、resumed、destroyed（删除）、reconciled（对账处理）"
+        },
+        {
+          "name": "state",
+          "type": "String(16)",
+          "nullable": true,
+          "description": "这件事之后观测到的 OpenSandbox 状态"
+        },
+        {
+          "name": "reason",
+          "type": "String(32)",
+          "nullable": true,
+          "description": "删除原因：idle、release、orphan、manual、broken、launch_failed、reconcile"
+        },
+        {
+          "name": "detail",
+          "type": "JSONType",
+          "default": "{}",
+          "description": "补充信息，只展示不查询：registered 记模板 code、版本和标签快照，失败记错误信息"
+        },
+        {
+          "name": "occurred_at",
+          "type": "UTCDateTime",
+          "default": "now()",
+          "description": "发生时间"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "uk_sandbox_event_uuid",
+          "columns": [
+            "event_uuid"
+          ],
+          "unique": true
+        },
+        {
+          "name": "ix_sandbox_event_sandbox",
+          "columns": [
+            "sandbox_uuid",
+            "occurred_at"
+          ],
+          "description": "查一个沙箱的完整经历"
+        },
+        {
+          "name": "ix_sandbox_event_external",
+          "columns": [
+            "external_id"
+          ],
+          "description": "按 OpenSandbox 的 id 反查"
+        },
+        {
+          "name": "ix_sandbox_event_time",
+          "columns": [
+            "occurred_at"
+          ],
+          "description": "按时间查、按保留期清理"
+        }
+      ]
+    }
+  ]
+}
+</script>
+
+<main>
+  <ul id="c4-report" hidden></ul>
+  <svg id="c4-diagram" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+  <section id="c4-overview" hidden>
+    <h2>概述</h2>
+  </section>
+  <section id="c4-capabilities" hidden>
+    <h2>对外能力</h2>
+    <table><thead></thead><tbody></tbody></table>
+  </section>
+  <section id="c4-decisions" hidden>
+    <h2>设计决策</h2>
+    <table><thead></thead><tbody></tbody></table>
+  </section>
+  <section id="c4-elements" hidden>
+    <h2>元素职责</h2>
+    <table><thead></thead><tbody></tbody></table>
+  </section>
+  <section id="c4-er" hidden>
+    <h2>ER 图</h2>
+    <svg id="c4-er-diagram" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+  </section>
+  <section id="c4-tables" hidden>
+    <h2>表结构</h2>
+  </section>
+  <h2>Diagram key</h2>
+  <svg id="c4-key" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+</main>
+
+<script>
+(() => {
+  'use strict';
+  const FONT = '"Open Sans", "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
+  const INK = '#181818';
+  const EXTERNAL_INK = '#8a8a8a';           // 外部元素（不在本 component 里）
+  const TITLE_INK = '#444444';
+  const SOURCE_INK = '#7a7a7a';             // 「现状：…」（目标模型的元素当前由哪段代码承担）
+  // 元素类型：图标字母、名字是否斜体、图例文字
+  const KINDS = {
+    class: { letter: 'C', italic: false, key: 'Class' },
+    interface: { letter: 'I', italic: true, key: 'Interface' },
+    abstract: { letter: 'A', italic: true, key: 'Abstract class' },
+    enum: { letter: 'E', italic: false, key: 'Enum' },
+    function: { letter: 'F', italic: false, key: 'Function' },
+  };
+  // 可见性：元素名前用实心彩色符号，成员前用空心符号
+  const VIS = {
+    '+': { shape: 'circle', color: '#84be84', key: 'public' },
+    '-': { shape: 'square', color: '#c82930', key: 'private' },
+    '#': { shape: 'diamond', color: '#ffcc44', key: 'protected' },
+    '~': { shape: 'triangle', color: '#4177af', key: 'package' },
+    '': null,
+  };
+  // 关系：线型、目标端箭头、源端菱形、是否必须写说明
+  const RELS = {
+    implements: { dash: true, head: 'triangle', tail: null, needsText: false, key: 'Realization（implements）' },
+    extends: { dash: false, head: 'triangle', tail: null, needsText: false, key: 'Generalization（extends）' },
+    uses: { dash: true, head: 'open', tail: null, needsText: true, key: 'Dependency（uses）' },
+    association: { dash: false, head: 'open', tail: null, needsText: true, key: 'Association' },
+    composition: { dash: false, head: null, tail: 'filled', needsText: true, key: 'Composition' },
+    aggregation: { dash: false, head: null, tail: 'hollow', needsText: true, key: 'Aggregation' },
+  };
+  const COL = 440, ROW = 230;                // 网格间距：at 的一个单位
+  const MAX_ELEMENTS = 15;
+  const TXT = {
+    name: { size: 15, weight: 400, lh: 20 },
+    member: { size: 13, weight: 400, lh: 20 },
+    rel: { size: 13, weight: 400, lh: 17 },
+    mult: { size: 12, weight: 400, lh: 16 },
+    frame: { size: 14, weight: 700, lh: 20 },
+    key: { size: 13, weight: 400, lh: 18 },
+    stereo: { size: 12, weight: 400, lh: 16 },
+    source: { size: 12, weight: 400, lh: 16 },
+  };
+  const HEADER_H = 36, ICON_R = 11, PAD_X = 12, MEMBER_ICON = 16, MIN_W = 160, EMPTY_H = 8, MARGIN = 60;
+  const LABEL_W = 200, ARROW_L = 14, ARROW_W = 12, GAP = 2;
+  // 标题栏有构造型或「现状」时：上下留白 + 名字行，构造型在上、现状在下
+  const HEADER_PAD = 6, NAME_H = 26, SOURCE_W = 280;
+  // 图下方的表格：[字段, 列名, 单元格样式（code 等宽字体，nowrap 不换行）]。必填的列总是显示，其余列有一行写了才显示
+  const CAP_COLS = [['name', '能力', 'nowrap'], ['entry', '入口', 'code'], ['callers', '调用方'], ['description', '说明'], ['source', '现状']];
+  const DECISION_COLS = [['decision', '决策', 'nowrap'], ['reason', '理由']];
+  const ELEMENT_COLS = [['name', '元素', 'code'], ['stereotype', '角色', 'nowrap'], ['responsibility', '职责'], ['source', '现状']];
+  // 表结构：列表、索引表的列（必填的列总是显示，其余列有一行写了才显示）
+  const COLUMN_COLS = [['name', '字段', 'code'], ['type', '类型', 'code nowrap'], ['null', '可空', 'nowrap'], ['key', '键', 'nowrap'],
+    ['references', '引用', 'code'], ['default', '默认值', 'code'], ['description', '说明']];
+  const INDEX_COLS = [['name', '索引', 'code'], ['columns', '字段', 'code'], ['unique', '唯一', 'nowrap'], ['description', '说明']];
+  const KEYS = ['PK', 'UK', 'FK'];
+  // ER 图：表头高、行高、左右留白、键标记列宽、列名与类型的间距、最小宽度
+  const ER = { header: 32, row: 22, padX: 10, badgeW: 30, gapType: 18, minW: 200 };
+  const ER_TXT = { name: { size: 14, weight: 700, lh: 20 }, col: { size: 13, weight: 400, lh: 22 }, type: { size: 12, weight: 400, lh: 22 }, badge: { size: 11, weight: 700, lh: 22 } };
+  // 连线端点：有且只有一个 ||、零或一个 o|、零或多个 o<
+  const ER_ENDS = { one: '有且只有一个', zeroOne: '零或一个', many: '零或多个' };
+
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const problems = [];
+  const fail = (msg) => problems.push({ level: 'error', msg });
+  const warn = (msg) => problems.push({ level: 'warn', msg });
+
+  const ctx = document.createElement('canvas').getContext('2d');
+  const measure = (s, st, italic) => { ctx.font = `${italic ? 'italic ' : ''}${st.weight} ${st.size}px ${FONT}`; return ctx.measureText(s).width; };
+
+  // 中文按字断行，英文按词断行；行首不放标点
+  const CJK = '\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef\u3000-\u303f';
+  const TOKEN = new RegExp(`[${CJK}]|[^\\s${CJK}]+|\\s+`, 'g');
+  const NO_LINE_START = /^[，。、；：！？）》」』,.;:!?)]$/;
+  function wrap(text, st, maxW) {
+    const lines = [];
+    for (const para of String(text || '').split('\n')) {
+      let line = '';
+      for (const tok of para.match(TOKEN) || []) {
+        if (/^\s+$/.test(tok)) { if (line) line += ' '; continue; }
+        const next = line + tok;
+        if (line.trim() && measure(next.trimEnd(), st) > maxW && !NO_LINE_START.test(tok)) {
+          lines.push(line.trimEnd());
+          line = tok;
+        } else {
+          line = next;
+        }
+      }
+      if (line.trim()) lines.push(line.trimEnd());
+    }
+    return lines;
+  }
+
+  function node(tag, attrs, parent) {
+    const n = document.createElementNS(svgNS, tag);
+    for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+    parent.appendChild(n);
+    return n;
+  }
+  // top 是文字块上沿
+  function textLines(parent, lines, x, top, st, color, anchor = 'middle', italic = false) {
+    const t = node('text', { x, y: top + st.lh / 2 + st.size * 0.35, 'text-anchor': anchor,
+      'font-family': FONT, 'font-size': st.size, 'font-weight': st.weight, fill: color,
+      ...(italic ? { 'font-style': 'italic' } : {}) }, parent);
+    lines.forEach((ln, i) => { node('tspan', { x, dy: i ? st.lh : 0 }, t).textContent = ln; });
+    return t;
+  }
+  // 可见性符号，(cx, cy) 是中心
+  function visIcon(g, vis, cx, cy, filled, ink = INK) {
+    const v = VIS[vis];
+    if (!v) return;
+    const fill = filled ? v.color : 'none', stroke = filled ? v.color : ink, s = 4.5;
+    const a = { fill, stroke, 'stroke-width': 1.2 };
+    if (v.shape === 'circle') node('circle', { cx, cy, r: s, ...a }, g);
+    else if (v.shape === 'square') node('rect', { x: cx - s, y: cy - s, width: 2 * s, height: 2 * s, ...a }, g);
+    else if (v.shape === 'diamond') node('polygon', { points: `${cx},${cy - s - 1} ${cx + s + 1},${cy} ${cx},${cy + s + 1} ${cx - s - 1},${cy}`, ...a }, g);
+    else node('polygon', { points: `${cx},${cy - s} ${cx + s},${cy + s} ${cx - s},${cy + s}`, ...a }, g);
+  }
+  function kindIcon(g, kind, cx, cy, ink = INK) {
+    node('circle', { cx, cy, r: ICON_R, fill: '#fff', stroke: ink, 'stroke-width': 1.2 }, g);
+    textLines(g, [KINDS[kind].letter], cx, cy - TXT.name.lh / 2, { size: 14, weight: 700, lh: TXT.name.lh }, ink);
+  }
+
+  const inter = (a, b, m = 0) => a.x < b.x + b.w + m && b.x < a.x + a.w + m && a.y < b.y + b.h + m && b.y < a.y + a.h + m;
+  function segHitsRect([x0, y0], [x1, y1], r) {
+    let t0 = 0, t1 = 1;
+    const dx = x1 - x0, dy = y1 - y0;
+    for (const [p, q] of [[-dx, x0 - r.x], [dx, r.x + r.w - x0], [-dy, y0 - r.y], [dy, r.y + r.h - y0]]) {
+      if (p === 0) { if (q < 0) return false; continue; }
+      const t = q / p;
+      if (p < 0) { if (t > t1) return false; if (t > t0) t0 = t; }
+      else { if (t < t0) return false; if (t < t1) t1 = t; }
+    }
+    return true;
+  }
+  // 从矩形内部 (ox, oy) 沿 (dx, dy) 射出，返回离开矩形时的 t
+  function exitT(b, ox, oy, dx, dy) {
+    let t = Infinity;
+    if (dx > 0) t = Math.min(t, (b.x + b.w - ox) / dx); else if (dx < 0) t = Math.min(t, (b.x - ox) / dx);
+    if (dy > 0) t = Math.min(t, (b.y + b.h - oy) / dy); else if (dy < 0) t = Math.min(t, (b.y - oy) / dy);
+    return t;
+  }
+
+  // 元素尺寸：宽度按内容，高度 = 标题栏 + 属性栏 + 方法栏
+  function layoutElement(el) {
+    const k = KINDS[el.kind];
+    const nameW = measure(el.name, TXT.name, k.italic);
+    const headerW = 2 * ICON_R + 8 + (VIS[el.visibility] ? 14 : 0) + nameW;
+    const memberW = (list) => Math.max(0, ...list.map(([v, text]) => measure(text, TXT.member) + (VIS[v] ? MEMBER_ICON : 0)));
+    el.stereo = el.stereotype ? `«${el.stereotype}»` : '';
+    let w = Math.max(MIN_W, headerW + 2 * PAD_X, measure(el.stereo, TXT.stereo) + 2 * PAD_X,
+      Math.max(memberW(el.attributes), memberW(el.methods)) + 2 * PAD_X);
+    el.sourceLines = el.source ? wrap(`现状：${el.source}`, TXT.source, Math.max(w - 2 * PAD_X, SOURCE_W)) : [];
+    w = Math.max(w, ...el.sourceLines.map((s) => measure(s, TXT.source) + 2 * PAD_X));
+    el.headerH = el.stereo || el.sourceLines.length
+      ? 2 * HEADER_PAD + (el.stereo ? TXT.stereo.lh : 0) + NAME_H + el.sourceLines.length * TXT.source.lh
+      : HEADER_H;
+    const part = (list) => (list.length ? list.length * TXT.member.lh + 8 : EMPTY_H);
+    const h = el.headerH + part(el.attributes) + part(el.methods);
+    el.box = { x: el.at[0] * COL - w / 2, y: el.at[1] * ROW - h / 2, w, h };
+    el.headerW = headerW;
+  }
+  function drawElement(g, el) {
+    const { box } = el;
+    const k = KINDS[el.kind];
+    const ink = el.external ? EXTERNAL_INK : INK;
+    node('rect', { x: box.x, y: box.y, width: box.w, height: box.h, rx: 3, fill: '#fff', stroke: ink, 'stroke-width': 1.2 }, g);
+    // 标题栏：«构造型»，图标 + 可见性 + 名字，「现状：…」，各自居中
+    const extra = el.stereo || el.sourceLines.length;
+    let top = box.y + (extra ? HEADER_PAD : 0);
+    if (el.stereo) { textLines(g, [el.stereo], box.x + box.w / 2, top, TXT.stereo, ink); top += TXT.stereo.lh; }
+    const nameH = extra ? NAME_H : HEADER_H;
+    let x = box.x + (box.w - el.headerW) / 2;
+    const cy = top + nameH / 2;
+    kindIcon(g, el.kind, x + ICON_R, cy, ink);
+    x += 2 * ICON_R + 8;
+    if (VIS[el.visibility]) { visIcon(g, el.visibility, x + 4, cy, true, ink); x += 14; }
+    textLines(g, [el.name], x, cy - TXT.name.lh / 2, TXT.name, ink, 'start', k.italic);
+    if (el.sourceLines.length) textLines(g, el.sourceLines, box.x + box.w / 2, top + nameH, TXT.source, el.external ? EXTERNAL_INK : SOURCE_INK);
+    // 属性栏、方法栏
+    let y = box.y + el.headerH;
+    for (const list of [el.attributes, el.methods]) {
+      node('line', { x1: box.x, y1: y, x2: box.x + box.w, y2: y, stroke: ink, 'stroke-width': 1 }, g);
+      if (!list.length) { y += EMPTY_H; continue; }
+      y += 4;
+      for (const [v, text] of list) {
+        let mx = box.x + PAD_X;
+        if (VIS[v]) { visIcon(g, v, mx + 5, y + TXT.member.lh / 2, false, ink); mx += MEMBER_ICON; }
+        textLines(g, [text], mx, y, TXT.member, ink, 'start');
+        y += TXT.member.lh;
+      }
+      y += 4;
+    }
+  }
+  // 关系线：dash 虚线；head 目标端（triangle 空心三角 / open 开口箭头）；tail 源端菱形（filled / hollow）
+  function drawRelation(g, start, end, dx, dy, spec) {
+    const nx = -dy, ny = dx;
+    let a = start, b = end;
+    if (spec.tail) {
+      const L = 20, W = 9, tip = start, mid = [start[0] + dx * L / 2, start[1] + dy * L / 2], back = [start[0] + dx * L, start[1] + dy * L];
+      node('polygon', { points: [tip, [mid[0] + nx * W / 2, mid[1] + ny * W / 2], back, [mid[0] - nx * W / 2, mid[1] - ny * W / 2]].map((p) => p.join(',')).join(' '),
+        fill: spec.tail === 'filled' ? INK : '#fff', stroke: INK, 'stroke-width': 1.2 }, g);
+      a = back;
+    }
+    if (spec.head === 'triangle') {
+      const base = [end[0] - dx * ARROW_L, end[1] - dy * ARROW_L];
+      node('polygon', { points: [end, [base[0] + nx * ARROW_W / 2, base[1] + ny * ARROW_W / 2], [base[0] - nx * ARROW_W / 2, base[1] - ny * ARROW_W / 2]].map((p) => p.join(',')).join(' '),
+        fill: '#fff', stroke: INK, 'stroke-width': 1.2 }, g);
+      b = base;
+    }
+    node('line', { x1: a[0], y1: a[1], x2: b[0], y2: b[1], stroke: INK, 'stroke-width': 1.2, ...(spec.dash ? { 'stroke-dasharray': '6 5' } : {}) }, g);
+    if (spec.head === 'open') {
+      const base = [end[0] - dx * ARROW_L, end[1] - dy * ARROW_L];
+      node('polyline', { points: [[base[0] + nx * ARROW_W / 2, base[1] + ny * ARROW_W / 2], end, [base[0] - nx * ARROW_W / 2, base[1] - ny * ARROW_W / 2]].map((p) => p.join(',')).join(' '),
+        fill: 'none', stroke: INK, 'stroke-width': 1.2 }, g);
+    }
+  }
+
+  function render() {
+    const model = JSON.parse(document.getElementById('c4-model').textContent);
+    if (model.title) document.title = model.title;
+    else fail('缺少 title（建议「Code View: 系统名 - 容器名 - 组件名」）');
+    if (!model.component) fail('缺少 component（被展开的 component 的名字，和 Component 图里的一致）');
+
+    // ---- 元素 ----
+    const byId = new Map();
+    const els = [];
+    const memberOk = (list) => Array.isArray(list) && list.every((m) => Array.isArray(m) && m.length === 2 && m[0] in VIS && typeof m[1] === 'string');
+    for (const el of model.elements || []) {
+      const who = el.id || el.name || '(未命名元素)';
+      if (!el.id) { fail(`${who}：缺少 id`); continue; }
+      if (byId.has(el.id)) { fail(`元素 id 重复：${el.id}`); continue; }
+      if (!KINDS[el.kind]) { fail(`${who}：kind 只能是 ${Object.keys(KINDS).join(' / ')}`); continue; }
+      if (!Array.isArray(el.at) || el.at.length !== 2 || !el.at.every(Number.isFinite)) { fail(`${who}：at 必须是 [列, 行] 两个数字`); continue; }
+      if (!el.name) fail(`${who}：缺少 name`);
+      el.attributes = el.attributes || [];
+      el.methods = el.methods || [];
+      if (!memberOk(el.attributes) || !memberOk(el.methods)) { fail(`${who}：attributes / methods 的每一项都要写成 [可见性, 文本]，可见性取 + - # ~ 或空串`); continue; }
+      if (el.visibility !== undefined && !(el.visibility in VIS)) fail(`${who}：visibility 只能是 + - # ~ 或空串`);
+      for (const f of ['stereotype', 'source', 'responsibility']) {
+        if (el[f] !== undefined && typeof el[f] !== 'string') { fail(`${who}：${f} 必须是字符串`); el[f] = undefined; }
+      }
+      byId.set(el.id, el);
+      els.push(el);
+    }
+    const inside = els.filter((e) => !e.external);
+    if (!inside.length) fail('Code 图至少要有一个本 component 里的代码元素');
+    if (els.length > MAX_ELEMENTS) warn(`代码元素有 ${els.length} 个，超过 ${MAX_ELEMENTS} 个：只画讲清楚这件事需要的，或者拆成几张图`);
+    els.forEach(layoutElement);
+    for (let i = 0; i < els.length; i++) {
+      for (let j = i + 1; j < els.length; j++) {
+        if (inter(els[i].box, els[j].box, 30)) fail(`「${els[i].name}」和「${els[j].name}」重叠或太近，调整 at`);
+      }
+    }
+
+    // ---- 关系 ----
+    const rels = (model.relationships || []).filter((r) => {
+      const who = `${r.from} → ${r.to}`;
+      if (!byId.has(r.from) || !byId.has(r.to)) { fail(`关系 ${who}：端点 id 不存在`); return false; }
+      if (r.from === r.to) { fail(`关系 ${who}：不能指向自己`); return false; }
+      r.type = r.type || 'uses';
+      if (!RELS[r.type]) { fail(`关系 ${who}：type 只能是 ${Object.keys(RELS).join(' / ')}`); return false; }
+      if (RELS[r.type].needsText && !r.description) fail(`关系 ${who}：${r.type} 要写 description（说清做什么，如 creates、persists data using）`);
+      const a = byId.get(r.from), b = byId.get(r.to);
+      if (r.type === 'implements' && b.kind !== 'interface') fail(`关系 ${who}：implements 的目标必须是 interface`);
+      if (r.type === 'extends' && (a.kind === 'interface') !== (b.kind === 'interface')) fail(`关系 ${who}：extends 不能跨 class 和 interface，类实现接口用 implements`);
+      return true;
+    });
+    for (const el of els) {
+      if (!rels.some((r) => r.from === el.id || r.to === el.id)) warn(`「${el.name}」没有任何关系：与要讲的事无关就删掉`);
+    }
+    // 同一对元素之间的多条关系：平行错开，标签沿线错开。错开量按同一个参考方向（id 小的一端 → 大的一端）算，
+    // 再换算回每条关系自己的方向 —— 否则两条方向相反的关系，标签会落在同一点
+    const pairs = new Map();
+    for (const r of rels) {
+      const k = [r.from, r.to].sort().join('\u0000');
+      if (!pairs.has(k)) pairs.set(k, []);
+      pairs.get(k).push(r);
+    }
+    for (const list of pairs.values()) {
+      list.forEach((r, i) => {
+        const k = i - (list.length - 1) / 2;
+        const along = 0.5 + k * 0.3;
+        r.offset = k * 20;
+        r.t = Number.isFinite(r.labelAt) ? r.labelAt : r.from < r.to ? along : 1 - along;
+      });
+    }
+    for (const r of rels) {
+      const a = byId.get(r.from), b = byId.get(r.to);
+      const [p, q] = r.from < r.to ? [a, b] : [b, a];
+      const pc = [p.box.x + p.box.w / 2, p.box.y + p.box.h / 2], qc = [q.box.x + q.box.w / 2, q.box.y + q.box.h / 2];
+      let nx = pc[1] - qc[1], ny = qc[0] - pc[0];
+      const nl = Math.hypot(nx, ny) || 1;
+      nx /= nl; ny /= nl;
+      const ac = [a.box.x + a.box.w / 2 + nx * r.offset, a.box.y + a.box.h / 2 + ny * r.offset];
+      const bc = [b.box.x + b.box.w / 2 + nx * r.offset, b.box.y + b.box.h / 2 + ny * r.offset];
+      const len = Math.hypot(bc[0] - ac[0], bc[1] - ac[1]);
+      if (!len) { r.skip = true; continue; }
+      r.dx = (bc[0] - ac[0]) / len; r.dy = (bc[1] - ac[1]) / len;
+      const t0 = exitT(a.box, ac[0], ac[1], r.dx, r.dy) + GAP;
+      const t1 = exitT(b.box, bc[0], bc[1], -r.dx, -r.dy) + GAP;
+      if (t0 + t1 + ARROW_L + 24 >= len) { fail(`关系 ${r.from} → ${r.to} 两端元素太近，连线放不下`); r.skip = true; continue; }
+      r.start = [ac[0] + r.dx * t0, ac[1] + r.dy * t0];
+      r.end = [bc[0] - r.dx * t1, bc[1] - r.dy * t1];
+      r.lines = wrap(r.description, TXT.rel, LABEL_W);
+      if (r.lines.length) {
+        const lw = Math.max(...r.lines.map((s) => measure(s, TXT.rel))) + 8;
+        const lh = r.lines.length * TXT.rel.lh + 4;
+        const mx = r.start[0] + (r.end[0] - r.start[0]) * r.t, my = r.start[1] + (r.end[1] - r.start[1]) * r.t;
+        r.label = { x: mx - lw / 2, y: my - lh / 2, w: lw, h: lh };
+      }
+      if (r.multiplicity) {
+        // 多重性写在目标端附近，偏到线的一侧
+        const px = r.end[0] - r.dx * 26 - r.dy * 14, py = r.end[1] - r.dy * 26 + r.dx * 14;
+        const mw = measure(String(r.multiplicity), TXT.mult) + 6;
+        r.mult = { x: px - mw / 2, y: py - TXT.mult.lh / 2, w: mw, h: TXT.mult.lh };
+      }
+    }
+    const drawn = rels.filter((r) => !r.skip);
+    const labelled = drawn.filter((r) => r.label);
+    const who = (r) => r.description || `${r.from} → ${r.to}`;
+    for (const r of drawn) {
+      for (const el of els) {
+        if (r.from !== el.id && r.to !== el.id && segHitsRect(r.start, r.end, el.box)) warn(`关系「${who(r)}」的连线穿过「${el.name}」`);
+        if (r.label && inter(r.label, el.box, 4)) warn(`关系「${who(r)}」的标签压到「${el.name}」，调整 labelAt 或元素位置`);
+      }
+    }
+    for (let i = 0; i < labelled.length; i++) {
+      for (let j = i + 1; j < labelled.length; j++) {
+        if (inter(labelled[i].label, labelled[j].label, 3)) warn(`关系「${who(labelled[i])}」和「${who(labelled[j])}」的标签重叠`);
+      }
+    }
+
+    // ---- 包框：包住本 component 的元素（外部元素放在框外），左上角标签页写包名（没写 package 就写 component）----
+    let frame = null;
+    if (inside.length) {
+      const x0 = Math.min(...inside.map((e) => e.box.x)), y0 = Math.min(...inside.map((e) => e.box.y));
+      const x1 = Math.max(...inside.map((e) => e.box.x + e.box.w)), y1 = Math.max(...inside.map((e) => e.box.y + e.box.h));
+      const label = model.package || `${model.component || ''} [Component]`;
+      const tabW = measure(label, TXT.frame) + 20, tabH = 26;
+      frame = { x: x0 - 30, y: y0 - 30, w: Math.max(x1 - x0 + 60, tabW + 20), h: y1 - y0 + 60, label, tabW, tabH };
+      const tab = { x: frame.x, y: frame.y - tabH, w: tabW + 10, h: tabH };
+      for (const el of els) {
+        if (el.external && (inter(el.box, frame) || inter(el.box, tab))) fail(`「${el.name}」是外部元素，却落在包框里，调整 at`);
+      }
+    }
+
+    // ---- 绘制 ----
+    const svg = document.getElementById('c4-diagram');
+    const gB = node('g', {}, svg), gR = node('g', {}, svg), gE = node('g', {}, svg), gL = node('g', {}, svg), gT = node('g', {}, svg);
+    if (frame) {
+      const { x, y, w, h, tabW, tabH } = frame;
+      node('path', { d: `M${x} ${y} V${y - tabH + 3} Q${x} ${y - tabH} ${x + 3} ${y - tabH} H${x + tabW} L${x + tabW + 10} ${y}`,
+        fill: '#fff', stroke: INK, 'stroke-width': 1.6 }, gB);
+      node('rect', { x, y, width: w, height: h, rx: 3, fill: 'none', stroke: INK, 'stroke-width': 1.6 }, gB);
+      textLines(gB, [frame.label], x + 10, y - tabH + 2, { ...TXT.frame, lh: tabH - 2 }, INK, 'start');
+    }
+    for (const r of drawn) drawRelation(gR, r.start, r.end, r.dx, r.dy, RELS[r.type]);
+    for (const el of els) drawElement(node('g', {}, gE), el);
+    for (const r of drawn) {
+      if (r.label) {
+        node('rect', { x: r.label.x, y: r.label.y, width: r.label.w, height: r.label.h, fill: '#fff' }, gL);
+        textLines(gL, r.lines, r.label.x + r.label.w / 2, r.label.y + 2, TXT.rel, INK);
+      }
+      if (r.mult) textLines(gL, [String(r.multiplicity)], r.mult.x + r.mult.w / 2, r.mult.y, TXT.mult, INK);
+    }
+    const boxes = [...els.map((e) => e.box), ...labelled.map((r) => r.label),
+      ...(frame ? [frame, { x: frame.x, y: frame.y - frame.tabH, w: frame.tabW + 10, h: frame.tabH }] : [])];
+    if (!boxes.length) boxes.push({ x: 0, y: 0, w: 0, h: 0 });
+    const minX = Math.min(...boxes.map((b) => b.x)), minY = Math.min(...boxes.map((b) => b.y));
+    let maxX = Math.max(...boxes.map((b) => b.x + b.w)), maxY = Math.max(...boxes.map((b) => b.y + b.h));
+    const title = { size: 26, weight: 400, lh: 34 }, sub = { size: 15, weight: 400, lh: 22 };
+    textLines(gT, [model.title || ''], minX, maxY + 40, title, TITLE_INK, 'start');
+    if (model.description) textLines(gT, [model.description], minX, maxY + 40 + title.lh, sub, '#666', 'start');
+    maxX = Math.max(maxX, minX + measure(model.title || '', title), minX + measure(model.description || '', sub));
+    maxY += 40 + title.lh + (model.description ? sub.lh : 0);
+    const vw = maxX - minX + 2 * MARGIN, vh = maxY - minY + 2 * MARGIN;
+    svg.setAttribute('viewBox', `${minX - MARGIN} ${minY - MARGIN} ${vw} ${vh}`);
+    svg.setAttribute('width', vw);
+    svg.setAttribute('aria-label', model.title || 'Code diagram');
+
+    renderOverview(model.overview);
+    renderList('c4-capabilities', '对外能力', model.capabilities, CAP_COLS, ['name', 'entry']);
+    renderList('c4-decisions', '设计决策', model.decisions, DECISION_COLS, ['decision', 'reason']);
+    const described = inside.filter((e) => e.responsibility);
+    if (described.length) {
+      for (const e of inside) if (!e.responsibility) warn(`「${e.name}」没写 responsibility：元素职责表里会缺它`);
+      renderTable('c4-elements', ELEMENT_COLS, described);
+    }
+    renderSchema(model.tables, model.schemaNote);
+    renderKey(els, drawn);
+  }
+
+  // ---- 表：校验、ER 图、表结构（只在写了 tables 时显示）----
+  function renderSchema(tables, note) {
+    if (tables === undefined) return;
+    if (!Array.isArray(tables) || !tables.length) { fail('tables 必须是非空数组'); return; }
+    const byName = new Map();
+    for (const [i, t] of tables.entries()) {
+      const who = (t && t.name) || `第 ${i + 1} 张表`;
+      if (!t || typeof t !== 'object' || !t.name) { fail(`表「${who}」：缺少 name`); continue; }
+      if (byName.has(t.name)) { fail(`表名重复：${t.name}`); continue; }
+      if (!Array.isArray(t.columns) || !t.columns.length) { fail(`表 ${t.name}：columns 必须是非空数组`); continue; }
+      const seen = new Set();
+      if (t.columns.some((c) => !c || !c.name || !c.type)) { fail(`表 ${t.name}：每一列都要有 name 和 type`); continue; }
+      for (const c of t.columns) {
+        if (seen.has(c.name)) fail(`表 ${t.name}：列名重复 ${c.name}`);
+        seen.add(c.name);
+        if (c.key !== undefined && !KEYS.includes(c.key)) fail(`表 ${t.name}.${c.name}：key 只能是 ${KEYS.join(' / ')}`);
+        if (c.nullable !== undefined && typeof c.nullable !== 'boolean') fail(`表 ${t.name}.${c.name}：nullable 必须是 true / false`);
+        if (c.referenceOptional !== undefined && typeof c.referenceOptional !== 'boolean') fail(`表 ${t.name}.${c.name}：referenceOptional 必须是 true / false`);
+        for (const f of ['type', 'default', 'description', 'references']) {
+          if (c[f] !== undefined && typeof c[f] !== 'string') fail(`表 ${t.name}.${c.name}：${f} 必须是字符串`);
+        }
+      }
+      if (t.indexes !== undefined && (!Array.isArray(t.indexes) || t.indexes.some((ix) => !ix || !ix.name || !ix.columns))) {
+        fail(`表 ${t.name}：indexes 的每一项都要有 name 和 columns`);
+        t.indexes = [];
+      }
+      if (t.at !== undefined && !(Array.isArray(t.at) && t.at.length === 2 && t.at.every(Number.isFinite))) {
+        fail(`表 ${t.name}：at 必须是 [列, 行] 两个数字`);
+        t.at = undefined;
+      }
+      byName.set(t.name, t);
+    }
+    const ok = [...byName.values()];
+    // 引用关系：references 写成「表.列」，被引用的列应是 PK 或 UK
+    const links = [];
+    for (const t of ok) {
+      for (const c of t.columns) {
+        if (!c.references) continue;
+        const [rt, rc] = c.references.split('.');
+        const target = byName.get(rt);
+        const col = target && target.columns.find((x) => x.name === rc);
+        if (!col) { fail(`表 ${t.name}.${c.name}：references「${c.references}」指向不存在的表或列`); continue; }
+        if (!['PK', 'UK'].includes(col.key)) warn(`表 ${t.name}.${c.name}：引用的 ${c.references} 不是 PK 或 UK`);
+        if (target === t) { warn(`表 ${t.name}.${c.name}：自引用不画在 ER 图里`); continue; }
+        links.push({ child: t, column: c, parent: target });
+      }
+    }
+    drawER(ok, links);
+
+    const section = document.getElementById('c4-tables');
+    if (note !== undefined) {
+      if (typeof note !== 'string') fail('schemaNote 必须是字符串');
+      else section.appendChild(document.createElement('p')).textContent = note;
+    }
+    for (const t of ok) {
+      section.appendChild(document.createElement('h3')).textContent = t.name;
+      if (t.description) section.appendChild(document.createElement('p')).textContent = t.description;
+      const rows = t.columns.map((c) => ({ ...c, null: c.nullable ? '是' : '否' }));
+      buildTable(section, COLUMN_COLS.filter(([k]) => ['name', 'type', 'null'].includes(k) || rows.some((r) => r[k])), rows);
+      if (t.indexes && t.indexes.length) {
+        section.appendChild(document.createElement('h4')).textContent = '索引';
+        const ix = t.indexes.map((i) => ({ ...i, columns: [].concat(i.columns).join(', '), unique: i.unique ? '是' : '否' }));
+        buildTable(section, INDEX_COLS.filter(([k]) => k !== 'description' || ix.some((r) => r.description)), ix);
+      }
+    }
+    section.hidden = false;
+  }
+  function buildTable(parent, cols, rows) {
+    const table = parent.appendChild(document.createElement('table'));
+    const head = table.appendChild(document.createElement('thead')).appendChild(document.createElement('tr'));
+    for (const [, label] of cols) head.appendChild(document.createElement('th')).textContent = label;
+    const body = table.appendChild(document.createElement('tbody'));
+    for (const row of rows) {
+      const tr = body.appendChild(document.createElement('tr'));
+      for (const [k, , cls] of cols) {
+        const td = tr.appendChild(document.createElement('td'));
+        if (cls) td.className = cls;
+        td.textContent = row[k] || '';
+      }
+    }
+  }
+  // 连线一端的标记。p 在表框边上，(dx, dy) 是从线指向这张表的单位向量
+  function erEnd(g, p, dx, dy, kind) {
+    const nx = -dy, ny = dx;
+    const back = (d) => [p[0] - dx * d, p[1] - dy * d];
+    const seg = (a, b) => node('line', { x1: a[0], y1: a[1], x2: b[0], y2: b[1], stroke: INK, 'stroke-width': 1.2 }, g);
+    const bar = (d) => { const c = back(d); seg([c[0] + nx * 7, c[1] + ny * 7], [c[0] - nx * 7, c[1] - ny * 7]); };
+    const ring = (d) => { const c = back(d); node('circle', { cx: c[0], cy: c[1], r: 5, fill: '#fff', stroke: INK, 'stroke-width': 1.2 }, g); };
+    if (kind === 'one') { bar(8); bar(14); return; }
+    if (kind === 'zeroOne') { bar(8); ring(20); return; }
+    const c = back(16);
+    seg(c, [p[0] + nx * 8, p[1] + ny * 8]);
+    seg(c, [p[0] - nx * 8, p[1] - ny * 8]);
+    seg(c, p);
+    ring(24);
+  }
+  function drawER(tables, links) {
+    const svg = document.getElementById('c4-er-diagram');
+    tables.forEach((t, i) => {
+      const at = t.at || [i * 1.2, 0];
+      const rowW = Math.max(...t.columns.map((c) => ER.badgeW + measure(c.name, ER_TXT.col) + ER.gapType + measure(c.type, ER_TXT.type)));
+      const w = Math.max(ER.minW, measure(t.name, ER_TXT.name) + 2 * ER.padX, rowW + 2 * ER.padX);
+      const h = ER.header + t.columns.length * ER.row + 8;
+      t.box = { x: at[0] * COL - w / 2, y: at[1] * ROW - h / 2, w, h };
+    });
+    for (let i = 0; i < tables.length; i++) {
+      for (let j = i + 1; j < tables.length; j++) {
+        if (inter(tables[i].box, tables[j].box, 60)) fail(`表 ${tables[i].name} 和 ${tables[j].name} 在 ER 图里重叠或太近，调整 at`);
+      }
+    }
+    const gR = node('g', {}, svg), gT = node('g', {}, svg), gL = node('g', {}, svg);
+    const boxes = tables.map((t) => t.box);
+    for (const l of links) {
+      const a = l.child.box, b = l.parent.box;
+      const ac = [a.x + a.w / 2, a.y + a.h / 2], bc = [b.x + b.w / 2, b.y + b.h / 2];
+      const len = Math.hypot(bc[0] - ac[0], bc[1] - ac[1]);
+      const dx = (bc[0] - ac[0]) / len, dy = (bc[1] - ac[1]) / len;
+      const s = [ac[0] + dx * exitT(a, ac[0], ac[1], dx, dy), ac[1] + dy * exitT(a, ac[0], ac[1], dx, dy)];
+      const e = [bc[0] - dx * exitT(b, bc[0], bc[1], -dx, -dy), bc[1] - dy * exitT(b, bc[0], bc[1], -dx, -dy)];
+      node('line', { x1: s[0], y1: s[1], x2: e[0], y2: e[1], stroke: INK, 'stroke-width': 1.2 }, gR);
+      erEnd(gR, s, -dx, -dy, l.column.key === 'UK' ? 'zeroOne' : 'many');   // 引用方：列唯一时至多一个
+      // 被引用方：列可空，或被引用的行可能已经不在（referenceOptional，如日志指向已删除的实例）时，可以没有
+      erEnd(gR, e, dx, dy, l.column.nullable || l.column.referenceOptional ? 'zeroOne' : 'one');
+      const lw = measure(l.column.name, TXT.rel) + 8, lh = TXT.rel.lh + 4;
+      const label = { x: (s[0] + e[0]) / 2 - lw / 2, y: (s[1] + e[1]) / 2 - lh / 2, w: lw, h: lh };
+      node('rect', { x: label.x, y: label.y, width: lw, height: lh, fill: '#fff' }, gL);
+      textLines(gL, [l.column.name], label.x + lw / 2, label.y + 2, TXT.rel, INK);
+      boxes.push(label);
+      for (const t of tables) {
+        if (t !== l.child && t !== l.parent && segHitsRect(s, e, t.box)) warn(`ER 图：${l.child.name}.${l.column.name} 的连线穿过表 ${t.name}`);
+      }
+    }
+    for (const t of tables) {
+      const { x, y, w, h } = t.box;
+      const g = node('g', {}, gT);
+      node('rect', { x, y, width: w, height: h, rx: 3, fill: '#fff', stroke: INK, 'stroke-width': 1.2 }, g);
+      node('rect', { x, y, width: w, height: ER.header, rx: 3, fill: '#f4f4f4', stroke: INK, 'stroke-width': 1.2 }, g);
+      textLines(g, [t.name], x + w / 2, y + (ER.header - ER_TXT.name.lh) / 2, ER_TXT.name, INK);
+      t.columns.forEach((c, i) => {
+        const top = y + ER.header + 4 + i * ER.row;
+        if (c.key) textLines(g, [c.key], x + ER.padX, top, ER_TXT.badge, INK, 'start');
+        textLines(g, [c.name], x + ER.padX + ER.badgeW, top, ER_TXT.col, INK, 'start', !!c.nullable);
+        textLines(g, [c.type], x + w - ER.padX, top, ER_TXT.type, SOURCE_INK, 'end');
+      });
+    }
+    // 图例：三种端点，加键标记和斜体的含义
+    const minX = Math.min(...boxes.map((b) => b.x)), minY = Math.min(...boxes.map((b) => b.y));
+    let maxX = Math.max(...boxes.map((b) => b.x + b.w));
+    const keyY = Math.max(...boxes.map((b) => b.y + b.h)) + 40;
+    let kx = minX;
+    for (const [kind, text] of Object.entries(ER_ENDS)) {
+      node('line', { x1: kx, y1: keyY, x2: kx + 60, y2: keyY, stroke: INK, 'stroke-width': 1.2 }, gL);
+      erEnd(gL, [kx + 60, keyY], 1, 0, kind);
+      textLines(gL, [text], kx + 70, keyY - TXT.key.lh / 2, TXT.key, INK, 'start');
+      kx += 70 + measure(text, TXT.key) + 40;
+    }
+    const keys = 'PK 主键 · UK 唯一键 · FK 引用别的表 · 斜体列可为空';
+    textLines(gL, [keys], kx, keyY - TXT.key.lh / 2, TXT.key, INK, 'start');
+    maxX = Math.max(maxX, kx + measure(keys, TXT.key));
+    const maxY = keyY + TXT.key.lh;
+    const vw = maxX - minX + 2 * 30, vh = maxY - minY + 2 * 30;
+    svg.setAttribute('viewBox', `${minX - 30} ${minY - 30} ${vw} ${vh}`);
+    svg.setAttribute('width', vw);
+    svg.setAttribute('aria-label', 'ER diagram');
+    document.getElementById('c4-er').hidden = false;
+  }
+
+  // ---- 图下方的文字：概述（空行分段）和几张表 ----
+  function renderOverview(text) {
+    if (text === undefined) return;
+    if (typeof text !== 'string') { fail('overview 必须是字符串'); return; }
+    const section = document.getElementById('c4-overview');
+    for (const para of text.split(/\n\s*\n/)) if (para.trim()) section.appendChild(document.createElement('p')).textContent = para.trim();
+    section.hidden = false;
+  }
+  function renderList(id, label, list, cols, required) {
+    if (list === undefined) return;
+    if (!Array.isArray(list)) { fail(`${label}必须是数组`); return; }
+    const rows = list.filter((c, i) => {
+      const who = (c && c[cols[0][0]]) || `第 ${i + 1} 项`;
+      if (!c || typeof c !== 'object') { fail(`${label}${who}：要写成对象`); return false; }
+      if (required.some((k) => !c[k])) fail(`${label}「${who}」：${required.join(' 和 ')} 必填`);
+      for (const [k] of cols) if (c[k] !== undefined && typeof c[k] !== 'string') fail(`${label}「${who}」：${k} 必须是字符串`);
+      return true;
+    });
+    renderTable(id, cols.filter(([k]) => required.includes(k) || rows.some((c) => c[k])), rows);
+  }
+  function renderTable(id, cols, rows) {
+    if (!rows.length) return;
+    const section = document.getElementById(id);
+    const head = section.querySelector('thead').appendChild(document.createElement('tr'));
+    for (const [, label] of cols) head.appendChild(document.createElement('th')).textContent = label;
+    const body = section.querySelector('tbody');
+    for (const row of rows) {
+      const tr = body.appendChild(document.createElement('tr'));
+      for (const [k, , cls] of cols) {
+        const td = tr.appendChild(document.createElement('td'));
+        if (cls) td.className = cls;
+        td.textContent = row[k] || '';
+      }
+    }
+    section.hidden = false;
+  }
+
+  // ---- 图例：用到的元素类型、可见性符号、关系线型，各占一行 ----
+  function renderKey(els, rels) {
+    const svg = document.getElementById('c4-key');
+    const kinds = Object.keys(KINDS).filter((k) => els.some((e) => e.kind === k));
+    const used = new Set();
+    for (const e of els) { used.add(e.visibility || ''); for (const [v] of [...e.attributes, ...e.methods]) used.add(v); }
+    const vis = Object.keys(VIS).filter((v) => v && used.has(v));
+    const types = Object.keys(RELS).filter((t) => rels.some((r) => r.type === t));
+    const external = els.some((e) => e.external);
+    const CELL_W = 250, ROW_H = 46;
+    let y = 0, maxW = 0;
+    const row = (items, draw) => {
+      if (!items.length) return;
+      items.forEach((it, i) => draw(node('g', {}, svg), it, i * CELL_W, y));
+      maxW = Math.max(maxW, items.length * CELL_W);
+      y += ROW_H;
+    };
+    row(kinds, (g, k, x, y0) => {
+      kindIcon(g, k, x + ICON_R + 2, y0 + 16);
+      textLines(g, [KINDS[k].key], x + 2 * ICON_R + 12, y0 + 16 - TXT.key.lh / 2, TXT.key, INK, 'start', KINDS[k].italic);
+    });
+    row(external ? ['external'] : [], (g, _, x, y0) => {
+      node('rect', { x, y: y0 + 4, width: 2 * ICON_R + 4, height: 24, rx: 3, fill: '#fff', stroke: EXTERNAL_INK, 'stroke-width': 1.2 }, g);
+      textLines(g, ['External（不在本 component 里）'], x + 2 * ICON_R + 12, y0 + 16 - TXT.key.lh / 2, TXT.key, EXTERNAL_INK, 'start');
+    });
+    const notes = [els.some((e) => e.stereo) && 'stereo', els.some((e) => e.sourceLines.length) && 'source'].filter(Boolean);
+    row(notes, (g, n, x, y0) => {
+      const [sample, text, color] = n === 'stereo' ? ['«…»', '构造型：领域模型里的角色', INK] : ['现状：…', '当前承担它的代码', SOURCE_INK];
+      textLines(g, [sample], x, y0 + 16 - TXT.key.lh / 2, TXT.key, color, 'start');
+      textLines(g, [text], x + measure(sample, TXT.key) + 10, y0 + 16 - TXT.key.lh / 2, TXT.key, INK, 'start');
+    });
+    row(vis, (g, v, x, y0) => {
+      visIcon(g, v, x + 8, y0 + 16, true);
+      visIcon(g, v, x + 24, y0 + 16, false);
+      textLines(g, [`${v} ${VIS[v].key}（类型 / 成员）`], x + 38, y0 + 16 - TXT.key.lh / 2, TXT.key, INK, 'start');
+    });
+    row(types, (g, t, x, y0) => {
+      drawRelation(g, [x, y0 + 16], [x + 70, y0 + 16], 1, 0, RELS[t]);
+      textLines(g, [RELS[t].key], x + 82, y0 + 16 - TXT.key.lh / 2, TXT.key, INK, 'start');
+    });
+    svg.setAttribute('viewBox', `-10 -10 ${maxW + 20} ${y + 10}`);
+    svg.setAttribute('width', maxW + 20);
+    svg.setAttribute('aria-label', 'Diagram key');
+  }
+
+  try {
+    render();
+  } catch (e) {
+    fail(`渲染异常：${e && e.message}`);
+    console.error(e);
+  }
+  const status = problems.some((p) => p.level === 'error') ? 'error' : problems.length ? 'warn' : 'ok';
+  document.documentElement.dataset.c4Status = status;
+  const report = document.getElementById('c4-report');
+  for (const p of problems) {
+    const li = document.createElement('li');
+    li.dataset.level = p.level;
+    li.textContent = p.msg;
+    report.appendChild(li);
+  }
+  report.hidden = !problems.length;
+  if (problems.length) console.warn('[c4]', problems);
+})();
+</script>
+</body>
+</html>

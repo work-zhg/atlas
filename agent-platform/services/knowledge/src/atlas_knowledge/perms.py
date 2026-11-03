@@ -6,7 +6,7 @@
 ★ 本服务以 Atlas 应用的身份调用户中心开放接口（知识库是 Atlas 的数据，数据编码登记在
   Atlas 应用下）。内网免令牌：请求头 X-Caller-App: atlas，并透传本次调用的 X-Uid /
   X-Tenant-Id（auth.outbound_headers；用户中心据此建立租户上下文）。
-★ 文档级权限（主体标签 u:/d:/r:）不在这里：它走 atlas-server 的主体展开，本来就接着用户中心。
+★ 文档级权限（主体标签 u:/d:/r:）不在这里：见 principals.py，同样直接问用户中心。
 
 两个实现：
   UCDataPermissions   用户中心

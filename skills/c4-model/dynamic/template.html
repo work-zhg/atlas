@@ -12,6 +12,21 @@
   #c4-report { margin: 0 0 24px; padding: 12px 16px 12px 36px; border: 1px solid #e0b4b4; background: #fff6f6; font-size: 14px; line-height: 1.6; }
   #c4-report li[data-level="error"] { color: #b00020; }
   #c4-report li[data-level="warn"] { color: #8a5a00; }
+  #c4-details { max-width: 1280px; }
+  #c4-details article { margin: 0 0 28px; scroll-margin-top: 16px; }
+  #c4-details article:target h3 { background: #fff8d6; }
+  #c4-details h3 { margin: 0 0 8px; padding: 2px 4px; font-size: 15px; font-weight: 600; color: #333; }
+  #c4-details h3 .tech { margin-left: 8px; font-size: 13px; font-weight: 400; color: #888; }
+  #c4-details p { margin: 0 0 8px; font-size: 14px; line-height: 1.7; }
+  #c4-details table { width: 100%; margin: 0 0 8px; border-collapse: collapse; table-layout: fixed; font-size: 13px; line-height: 1.6; }
+  #c4-details th, #c4-details td { padding: 6px 10px; border: 1px solid #e3e3e3; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+  #c4-details th { background: #f6f8fa; font-weight: 600; }
+  #c4-details th:nth-child(1) { width: 14%; }
+  #c4-details th:nth-child(2) { width: 46%; }
+  #c4-details td.sample, #c4-details pre { font-family: Menlo, Consolas, "PingFang SC", monospace; }
+  #c4-details td.sample { word-break: break-all; }
+  #c4-details pre { margin: 0; padding: 10px 12px; border: 1px solid #e3e3e3; background: #f6f8fa; font-size: 12px; line-height: 1.5; overflow-x: auto; }
+  svg a { cursor: pointer; }
 </style>
 </head>
 <body>
@@ -50,6 +65,7 @@
 <main>
   <ul id="c4-report" hidden></ul>
   <svg id="c4-diagram" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+  <section id="c4-details" hidden></section>
   <h2>Diagram key</h2>
   <svg id="c4-key" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
 </main>
@@ -231,6 +247,21 @@
       const a = pById.get(m.from), b = pById.get(m.to);
       const crossProcess = a.kind !== 'person' && b.kind !== 'person' && !(a.kind === 'component' && b.kind === 'component') && a !== b;
       if (crossProcess && !m.technology) fail(`${who}：涉及 container 或软件系统，是跨进程交互，要写 technology`);
+      if (m.details !== undefined) {
+        const d = m.details;
+        const isText = (v) => typeof v === 'string';
+        if (!d || typeof d !== 'object' || Array.isArray(d)) {
+          fail(`${who}：details 要写成对象 { note, items, example }`);
+          m.details = undefined;
+        } else {
+          if (d.note !== undefined && !isText(d.note)) fail(`${who}：details.note 要写成字符串`);
+          if (d.example !== undefined && !isText(d.example)) fail(`${who}：details.example 要写成字符串，多行用 \\n`);
+          if (d.items !== undefined && !(Array.isArray(d.items) && d.items.every((r) => Array.isArray(r) && r.length === 3 && r.every(isText)))) {
+            fail(`${who}：details.items 的每一行要写成 [项, 来源, 样例] 三个字符串`);
+          }
+          if (!d.note && !d.example && !(Array.isArray(d.items) && d.items.length)) warn(`${who}：details 是空的，删掉或补上内容`);
+        }
+      }
       m.n = i + 1;
       return true;
     });
@@ -244,7 +275,7 @@
     for (const p of ps) p.size = headSize(p);
     const index = new Map(ps.map((p, i) => [p.id, i]));
     for (const m of msgs) {
-      m.lines = wrapBalanced(`${m.n}: ${m.description || ''}`, TXT.msg, LABEL_W);
+      m.lines = wrapBalanced(`${m.n}: ${m.description || ''}${m.details ? ' ⓘ' : ''}`, TXT.msg, LABEL_W);
       m.tech = m.technology ? `[${m.technology}]` : '';
       m.labelW = Math.max(...m.lines.map((s) => measure(s, TXT.msg)), m.tech ? measure(m.tech, TXT.tech) : 0);
       m.labelH = m.lines.length * TXT.msg.lh + (m.tech ? TXT.tech.lh : 0);
@@ -330,9 +361,11 @@
         drawArrow(gM, a.x, b.x, m.y);
         lx = Math.min(a.x, b.x) + 12;
       }
-      node('rect', { x: lx - 3, y: m.labelTop - 1, width: m.labelW + 6, height: m.labelH + 2, fill: '#fff' }, gM);
-      textLines(gM, m.lines, lx, m.labelTop, TXT.msg, INK, 'start');
-      if (m.tech) textLines(gM, [m.tech], lx, m.labelTop + m.lines.length * TXT.msg.lh, TXT.tech, INK, 'start');
+      // 有 details 的消息：标签链接到图下方「消息说明」里的同号条目
+      const gL = m.details ? node('a', { href: `#c4-msg-${m.n}` }, gM) : gM;
+      node('rect', { x: lx - 3, y: m.labelTop - 1, width: m.labelW + 6, height: m.labelH + 2, fill: '#fff' }, gL);
+      textLines(gL, m.lines, lx, m.labelTop, TXT.msg, INK, 'start');
+      if (m.tech) textLines(gL, [m.tech], lx, m.labelTop + m.lines.length * TXT.msg.lh, TXT.tech, INK, 'start');
     }
     const minX = Math.min(...ps.map((p) => p.x - p.size.w / 2), ...live.map((b) => b.rect.x));
     let maxX = Math.max(...ps.map((p) => p.x + p.size.w / 2 + (p === ps[ps.length - 1] ? rightExtra : 0)), ...live.map((b) => b.rect.x + b.rect.w));
@@ -348,6 +381,45 @@
     svg.setAttribute('aria-label', model.title || 'Dynamic diagram');
 
     renderKey(ps, live);
+    renderDetails(msgs);
+  }
+
+  // ---- 消息说明：每条带 details 的消息一节（说明、[项, 来源, 样例] 表、数据样例）----
+  function renderDetails(msgs) {
+    const list = msgs.filter((m) => m.details);
+    if (!list.length) return;
+    const sec = document.getElementById('c4-details');
+    const el = (tag, cls, text) => {
+      const e = document.createElement(tag);
+      if (cls) e.className = cls;
+      if (text !== undefined) e.textContent = text;
+      return e;
+    };
+    sec.appendChild(el('h2', '', '消息说明'));
+    for (const m of list) {
+      const d = m.details;
+      const art = el('article');
+      art.id = `c4-msg-${m.n}`;
+      const h = el('h3', '', `${m.n}: ${m.description || ''}`);
+      if (m.technology) h.appendChild(el('span', 'tech', `[${m.technology}]`));
+      art.appendChild(h);
+      if (typeof d.note === 'string' && d.note) art.appendChild(el('p', '', d.note));
+      const rows = Array.isArray(d.items) ? d.items.filter((r) => Array.isArray(r)) : [];
+      if (rows.length) {
+        const table = el('table');
+        const head = table.createTHead().insertRow();
+        for (const c of ['项', '来源', '样例']) head.appendChild(el('th', '', c));
+        const body = table.createTBody();
+        for (const r of rows) {
+          const tr = body.insertRow();
+          r.slice(0, 3).forEach((c, i) => tr.appendChild(el('td', i === 2 ? 'sample' : '', String(c))));
+        }
+        art.appendChild(table);
+      }
+      if (typeof d.example === 'string' && d.example) art.appendChild(el('pre', '', d.example));
+      sec.appendChild(art);
+    }
+    sec.hidden = false;
   }
 
   // ---- 图例：每种参与者一项，再加边界和消息 ----

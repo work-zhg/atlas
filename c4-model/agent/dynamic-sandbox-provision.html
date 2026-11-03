@@ -1,0 +1,1043 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dynamic View</title>
+<style>
+  body { margin: 0; background: #fff; color: #444; font-family: "Open Sans", "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
+  main { padding: 24px 32px 48px; }
+  svg { display: block; max-width: 100%; height: auto; }
+  h2 { margin: 40px 0 12px; font-size: 15px; font-weight: 600; color: #666; }
+  #c4-report { margin: 0 0 24px; padding: 12px 16px 12px 36px; border: 1px solid #e0b4b4; background: #fff6f6; font-size: 14px; line-height: 1.6; }
+  #c4-report li[data-level="error"] { color: #b00020; }
+  #c4-report li[data-level="warn"] { color: #8a5a00; }
+  #c4-details { max-width: 1280px; }
+  #c4-details article { margin: 0 0 28px; scroll-margin-top: 16px; }
+  #c4-details article:target h3 { background: #fff8d6; }
+  #c4-details h3 { margin: 0 0 8px; padding: 2px 4px; font-size: 15px; font-weight: 600; color: #333; }
+  #c4-details h3 .tech { margin-left: 8px; font-size: 13px; font-weight: 400; color: #888; }
+  #c4-details p { margin: 0 0 8px; font-size: 14px; line-height: 1.7; }
+  #c4-details table { width: 100%; margin: 0 0 8px; border-collapse: collapse; table-layout: fixed; font-size: 13px; line-height: 1.6; }
+  #c4-details th, #c4-details td { padding: 6px 10px; border: 1px solid #e3e3e3; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+  #c4-details th { background: #f6f8fa; font-weight: 600; }
+  #c4-details th:nth-child(1) { width: 14%; }
+  #c4-details th:nth-child(2) { width: 46%; }
+  #c4-details td.sample, #c4-details pre { font-family: Menlo, Consolas, "PingFang SC", monospace; }
+  #c4-details td.sample { word-break: break-all; }
+  #c4-details pre { margin: 0; padding: 10px 12px; border: 1px solid #e3e3e3; background: #f6f8fa; font-size: 12px; line-height: 1.5; overflow-x: auto; }
+  svg a { cursor: pointer; }
+</style>
+</head>
+<body>
+<!--
+  只改下面这段 JSON；渲染器不用动。字段说明见 dynamic/RULES.md 的「数据格式」。
+-->
+<script type="application/json" id="c4-model">
+{
+  "title": "动态图：Agent 平台 - OpenSandbox 建出沙箱 Pod",
+  "description": "展开「创建沙箱」第 8–11 步。依据 OpenSandbox release-1.1.1 源码和 deploy/local 清单；第 18–20 步与第 13–17 步并发。未画调度器、拉镜像、egress 和镜像拉取凭据（原生沙箱不用）。OpenSandbox、Kubernetes 的内部组成不在静态图里",
+  "boundaries": [
+    {
+      "id": "server",
+      "name": "Agent 服务",
+      "type": "Container: Python / FastAPI"
+    },
+    {
+      "id": "osb",
+      "name": "OpenSandbox",
+      "type": "Software System"
+    },
+    {
+      "id": "k8s",
+      "name": "Kubernetes 集群",
+      "type": "Software System"
+    }
+  ],
+  "participants": [
+    {
+      "id": "sandboxes",
+      "kind": "component",
+      "technology": "OpenSandbox / execd 客户端（httpx）",
+      "in": "server",
+      "name": "沙箱"
+    },
+    {
+      "id": "ls",
+      "kind": "container",
+      "technology": "Python / FastAPI（opensandbox-sbx）",
+      "in": "osb",
+      "color": "#5b6770",
+      "name": "Lifecycle Server"
+    },
+    {
+      "id": "ctrl",
+      "kind": "container",
+      "technology": "Go / controller-runtime",
+      "in": "osb",
+      "color": "#5b6770",
+      "name": "BatchSandbox 控制器"
+    },
+    {
+      "id": "api",
+      "kind": "container",
+      "technology": "kube-apiserver",
+      "in": "k8s",
+      "color": "#8a6d3b",
+      "name": "API Server"
+    },
+    {
+      "id": "kubelet",
+      "kind": "container",
+      "technology": "节点代理",
+      "in": "k8s",
+      "color": "#8a6d3b",
+      "name": "kubelet"
+    },
+    {
+      "id": "csi",
+      "kind": "container",
+      "technology": "k8s-csi-s3 + s3fs 1.95（DaemonSet）",
+      "in": "k8s",
+      "color": "#8a6d3b",
+      "name": "csi-s3 节点插件"
+    },
+    {
+      "id": "shell",
+      "kind": "container",
+      "technology": "K8s Pod：沙箱镜像 + execd",
+      "name": "Shell 沙箱"
+    },
+    {
+      "id": "workspace",
+      "kind": "container",
+      "technology": "S3 兼容对象存储（MinIO）",
+      "name": "会话工作区"
+    }
+  ],
+  "messages": [
+    {
+      "from": "sandboxes",
+      "to": "ls",
+      "technology": "JSON/HTTP",
+      "description": "创建沙箱（POST /v1/sandboxes，请求头带 API key）：镜像、env（含 Atlas 生成的 execd 令牌）、metadata、PVC 挂载",
+      "details": {
+        "note": "请求体由 providers/opensandbox/provision.py 的 sandbox_spec() 组装，LifecycleClient.create() 发出。server 要等到沙箱可用才返回，所以 Atlas 侧超时 opensandbox_timeout_s=200 秒，盖过 server 的 sandbox_create_timeout_seconds=180 秒。",
+        "items": [
+          [
+            "地址",
+            "环境变量 OPENSANDBOX_SBX_URL（deploy/local/30-server.yaml）",
+            "http://opensandbox-sbx.opensandbox-system.svc.cluster.local/v1/sandboxes"
+          ],
+          [
+            "API key",
+            "deploy/local/opensandbox.sh 首次部署时 openssl rand -hex 24 生成，同一个值写两处：Secret opensandbox-system/opensandbox-sbx-api-key（server 读成 OPENSANDBOX_SERVER_API_KEY 来校验）、Secret atlas-system/atlas-opensandbox 的 sbx_api_key（Atlas 读成 OPENSANDBOX_SBX_API_KEY）。之后重跑脚本沿用旧值",
+            "OPEN-SANDBOX-API-KEY: <48 位十六进制>"
+          ],
+          [
+            "image",
+            "Agent 版本快照的 spec.sandbox.image；为空用 SANDBOX_DEFAULT_IMAGE（默认 atlas-sandbox:dev）。不是默认镜像时要命中 SANDBOX_IMAGE_ALLOW_PREFIXES，在发请求前校验",
+            "{\"uri\": \"atlas-sandbox:dev\"}"
+          ],
+          [
+            "entrypoint",
+            "sandbox_spec() 写死：容器只负责常驻，命令都经 execd 执行",
+            "[\"tail\", \"-f\", \"/dev/null\"]"
+          ],
+          [
+            "timeout",
+            "写死 null：不让 OpenSandbox 到点删除，回收由 Atlas 的闲置回收做",
+            "null"
+          ],
+          [
+            "resourceLimits / Requests",
+            "配置 SANDBOX_CPU_LIMIT、SANDBOX_MEMORY_LIMIT、SANDBOX_CPU_REQUEST（部署改成 100m）、SANDBOX_MEMORY_REQUEST",
+            "limits {cpu: 2, memory: 4Gi}，requests {cpu: 100m, memory: 512Mi}"
+          ],
+          [
+            "env.EXECD_ACCESS_TOKEN",
+            "Atlas 每次新建时 secrets.token_urlsafe(24) 现生成；创建成功后存进 Redis atlas:sbx:token:{沙箱 id}，因为 OpenSandbox 不回传 env",
+            "<32 个 URL-safe 字符>"
+          ],
+          [
+            "env 其余",
+            "sandbox_spec() 写死：EXECD_INIT=1（execd 作 PID 1）、EXECD_ENVS 指到 /tmp、TMPDIR；strict 档另加 HOME=/home/agent（评测档用镜像自己的 HOME，还可能加代理变量）",
+            "EXECD_INIT=1、EXECD_ENVS=/tmp/.execd/env、TMPDIR=/tmp、HOME=/home/agent"
+          ],
+          [
+            "metadata",
+            "atlas.managed、atlas.kind 固定；atlas.profile 来自 spec.sandbox.profile；atlas.thread 是会话的 workspace_thread_id（子智能体用父会话的）；atlas.user 是会话创建者。之后按它找回沙箱、数配额、回收孤儿",
+            "{\"atlas.kind\": \"sbx\", \"atlas.thread\": \"<ws>\", \"atlas.user\": \"<uid>\", ...}"
+          ],
+          [
+            "volumes",
+            "claimName 来自 SANDBOX_PVC（默认 atlas-oss）；subPath 按 {uid}/{ws}/… 拼，和工作区组件 OssFilesystem 的对象 key 前缀一致，所以挂载里看到的就是对象存储里的同一批文件",
+            "/workspace ← <uid>/<ws>/workspace，/skills ← <uid>/<ws>/skills（只读）"
+          ]
+        ],
+        "example": "POST /v1/sandboxes\nOPEN-SANDBOX-API-KEY: <48 位十六进制>\nContent-Type: application/json\n\n{\n  \"image\": {\"uri\": \"atlas-sandbox:dev\"},\n  \"entrypoint\": [\"tail\", \"-f\", \"/dev/null\"],\n  \"timeout\": null,\n  \"resourceLimits\": {\"cpu\": \"2\", \"memory\": \"4Gi\"},\n  \"resourceRequests\": {\"cpu\": \"100m\", \"memory\": \"512Mi\"},\n  \"env\": {\n    \"EXECD_ACCESS_TOKEN\": \"<32 个 URL-safe 字符>\",\n    \"EXECD_INIT\": \"1\",\n    \"EXECD_ENVS\": \"/tmp/.execd/env\",\n    \"TMPDIR\": \"/tmp\",\n    \"HOME\": \"/home/agent\"\n  },\n  \"metadata\": {\n    \"atlas.managed\": \"true\",\n    \"atlas.kind\": \"sbx\",\n    \"atlas.profile\": \"strict\",\n    \"atlas.thread\": \"<工作区会话 uuid>\",\n    \"atlas.user\": \"<会话创建者 uid>\"\n  },\n  \"volumes\": [\n    {\"name\": \"workspace\",\n     \"pvc\": {\"claimName\": \"atlas-oss\", \"createIfNotExists\": false},\n     \"mountPath\": \"/workspace\", \"subPath\": \"<uid>/<ws>/workspace\", \"readOnly\": false},\n    {\"name\": \"skills\",\n     \"pvc\": {\"claimName\": \"atlas-oss\", \"createIfNotExists\": false},\n     \"mountPath\": \"/skills\", \"subPath\": \"<uid>/<ws>/skills\", \"readOnly\": true}\n  ]\n}"
+      }
+    },
+    {
+      "from": "ls",
+      "to": "api",
+      "technology": "K8s API",
+      "description": "读 PVC atlas-oss：确认存在、没被别的沙箱占用（不新建）",
+      "details": {
+        "note": "_ensure_pvc_volumes()：请求里每个 pvc 卷都先 GET 一次。createIfNotExists=false，所以不存在也不建（之后 kubelet 会因为找不到 PVC 起不来）。带 opensandbox.io/volume-managed-by=server 且属于别的沙箱的 PVC 直接拒绝，免得被别人的清理删掉。",
+        "items": [
+          [
+            "请求",
+            "claimName 来自请求的 volumes[].pvc；命名空间来自 server 配置 [kubernetes].namespace（sbx-values.yaml）",
+            "GET /api/v1/namespaces/atlas-sbx/persistentvolumeclaims/atlas-oss"
+          ],
+          [
+            "身份",
+            "server 的 ServiceAccount，上游 Helm chart 的 ClusterRole 带 PVC 的 get 权限",
+            "—"
+          ],
+          [
+            "PVC 本身",
+            "deploy/local/06-sbx-storage.yaml 预先建好：整桶静态 PV atlas-oss-atlas-sbx 绑到它，ReadWriteMany",
+            "phase: Bound，没有 opensandbox.io/* 标签"
+          ]
+        ]
+      }
+    },
+    {
+      "from": "ls",
+      "to": "ls",
+      "description": "生成沙箱 id，组装 Pod：execd-installer init 容器，bootstrap.sh 包住 entrypoint，两个 PVC 挂载合成一个卷",
+      "details": {
+        "note": "batchsandbox_provider.create_workload() 和 provider_common.py。沙箱镜像不用预装 execd：init 容器把它拷进共享的 emptyDir，主容器从那里启动。",
+        "items": [
+          [
+            "沙箱 id",
+            "server 生成 uuid4，也是 BatchSandbox 的名字",
+            "5d2c8f0e-7a41-4c1b-9e0a-3f6b2d8c9a10"
+          ],
+          [
+            "labels",
+            "系统 label + 请求的 metadata 原样。timeout 为 null 时加 manual-cleanup",
+            "opensandbox.io/id: <id>、opensandbox.io/manual-cleanup: \"true\"、atlas.*"
+          ],
+          [
+            "init 容器",
+            "镜像来自 server 配置 [runtime].execd_image（sbx-values.yaml）",
+            "execd-installer，镜像 …/opensandbox/execd:release-1.1.1，挂 emptyDir opensandbox-bin 到 /opt/opensandbox"
+          ],
+          [
+            "主容器 command",
+            "bootstrap.sh + 请求的 entrypoint",
+            "[\"/opt/opensandbox/bootstrap.sh\", \"tail\", \"-f\", \"/dev/null\"]"
+          ],
+          [
+            "主容器 env",
+            "请求的 env 原样，加 OPENSANDBOX_ID、EXECD=/opt/opensandbox/execd；[runtime].execd_run_as_init=true 时再加 EXECD_INIT=1",
+            "见第 5 步样例"
+          ],
+          [
+            "卷",
+            "两个挂载用同一个 claim：只生成一个 Pod 卷（名字取第一个，workspace），两条 volumeMount 各带 subPath",
+            "volumes: [{name: workspace, persistentVolumeClaim: {claimName: atlas-oss}}]"
+          ],
+          [
+            "ServiceAccount 令牌",
+            "固定不挂",
+            "automountServiceAccountToken: false：Pod 里没有 K8s 凭据"
+          ]
+        ]
+      }
+    },
+    {
+      "from": "ls",
+      "to": "ls",
+      "description": "与 BatchSandbox 模板深度合并：追加 /tmp、/home/agent、/repos 三个 emptyDir，合并 securityContext（UID 1000、根只读）",
+      "details": {
+        "note": "template_manager.merge_with_runtime_values() 做深度合并，再由 _merge_pod_spec_extras() 补卷、挂载和容器 securityContext。模板只能加东西、收紧权限，不能加 sidecar：containers / initContainers 这类列表会被运行时整体覆盖。",
+        "items": [
+          [
+            "模板从哪来",
+            "deploy/local/opensandbox/sbx-template.yaml → opensandbox.sh 建成 ConfigMap opensandbox-system/opensandbox-sbx-template → 挂进 server 的 /etc/opensandbox/templates/sbx.yaml（[kubernetes].batchsandbox_template_file）。模板内容变了，Pod 注解 atlas/template-sha 跟着变，server 滚动重启",
+            "—"
+          ],
+          [
+            "规则 1：深度合并",
+            "模板做底，运行时的值覆盖；Pod 级字段运行时不设，就取模板的",
+            "restartPolicy: Never、terminationGracePeriodSeconds: 30、enableServiceLinks: false、securityContext {runAsUser: 1000, runAsNonRoot: true, seccomp: RuntimeDefault}"
+          ],
+          [
+            "规则 2：卷按名字追加",
+            "模板 Pod 的 volumes、模板 sandbox 容器的 volumeMounts，按名字追加到运行时那份里（重名跳过）",
+            "tmp(2Gi) → /tmp、home(5Gi) → /home/agent、repos(10Gi) → /repos"
+          ],
+          [
+            "规则 3：容器 securityContext",
+            "模板做底，运行时优先；没有 networkPolicy 时运行时不设，模板整份生效",
+            "readOnlyRootFilesystem: true、allowPrivilegeEscalation: false、capabilities.drop: [ALL]"
+          ]
+        ],
+        "example": "# deploy/local/opensandbox/sbx-template.yaml（节选）\nspec:\n  replicas: 1\n  template:\n    spec:\n      restartPolicy: Never\n      terminationGracePeriodSeconds: 30\n      enableServiceLinks: false\n      securityContext: {runAsUser: 1000, runAsGroup: 1000, runAsNonRoot: true,\n                        seccompProfile: {type: RuntimeDefault}}\n      containers:\n        - name: sandbox\n          securityContext: {readOnlyRootFilesystem: true, allowPrivilegeEscalation: false,\n                            capabilities: {drop: [ALL]}}\n          volumeMounts:\n            - {name: tmp, mountPath: /tmp}\n            - {name: home, mountPath: /home/agent}\n            - {name: repos, mountPath: /repos}\n      volumes:\n        - {name: tmp, emptyDir: {sizeLimit: 2Gi}}\n        - {name: home, emptyDir: {sizeLimit: 5Gi}}\n        - {name: repos, emptyDir: {sizeLimit: 10Gi}}"
+      }
+    },
+    {
+      "from": "ls",
+      "to": "api",
+      "technology": "K8s API",
+      "description": "在 atlas-sbx 建 BatchSandbox（metadata 变成 label，env 明文写进 Pod 模板），并 watch 它",
+      "details": {
+        "note": "★ env 用的是明文 value，不是 secretKeyRef：能读 atlas-sbx 里 BatchSandbox 或 Pod 的人都能看到 execd 令牌，进而直接调 execd 执行命令。建完立刻 watch 这个 BatchSandbox（订阅失败就每秒轮询一次），最多等 180 秒。",
+        "items": [
+          [
+            "请求",
+            "group/version/plural 写死在 BatchSandboxProvider",
+            "POST /apis/sandbox.opensandbox.io/v1alpha1/namespaces/atlas-sbx/batchsandboxes"
+          ],
+          [
+            "身份",
+            "server 的 ServiceAccount",
+            "—"
+          ],
+          [
+            "内容",
+            "第 3 步组装 + 第 4 步合并的结果",
+            "见下方样例"
+          ]
+        ],
+        "example": "apiVersion: sandbox.opensandbox.io/v1alpha1\nkind: BatchSandbox\nmetadata:\n  name: <沙箱 id>\n  namespace: atlas-sbx\n  labels:                                   # 第 3 步：系统 label + 请求的 metadata\n    opensandbox.io/id: <沙箱 id>\n    opensandbox.io/manual-cleanup: \"true\"   # timeout 为 null：不自动过期\n    atlas.managed: \"true\"\n    atlas.kind: sbx\n    atlas.profile: strict\n    atlas.thread: <ws>\n    atlas.user: <uid>\nspec:\n  replicas: 1\n  template:\n    metadata:\n      labels: {同上}\n    spec:\n      automountServiceAccountToken: false\n      restartPolicy: Never                  # 模板\n      terminationGracePeriodSeconds: 30     # 模板\n      enableServiceLinks: false             # 模板\n      securityContext: {runAsUser: 1000, runAsGroup: 1000, runAsNonRoot: true,\n                        seccompProfile: {type: RuntimeDefault}}           # 模板\n      initContainers:\n        - name: execd-installer\n          image: sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/execd:release-1.1.1\n          command: [\"/bin/sh\", \"-c\"]\n          args: [\"cp ./execd /opt/opensandbox/execd && cp ./bootstrap.sh /opt/opensandbox/bootstrap.sh && ...\"]\n          volumeMounts: [{name: opensandbox-bin, mountPath: /opt/opensandbox}]\n      containers:\n        - name: sandbox\n          image: atlas-sandbox:dev\n          command: [\"/opt/opensandbox/bootstrap.sh\", \"tail\", \"-f\", \"/dev/null\"]\n          env:\n            - {name: EXECD_ACCESS_TOKEN, value: <令牌明文>}\n            - {name: EXECD_INIT, value: \"1\"}\n            - {name: EXECD_ENVS, value: /tmp/.execd/env}\n            - {name: TMPDIR, value: /tmp}\n            - {name: HOME, value: /home/agent}\n            - {name: OPENSANDBOX_ID, value: <沙箱 id>}     # server 加的\n            - {name: EXECD, value: /opt/opensandbox/execd} # server 加的\n          resources:\n            limits: {cpu: \"2\", memory: 4Gi}\n            requests: {cpu: 100m, memory: 512Mi}\n          securityContext: {readOnlyRootFilesystem: true, allowPrivilegeEscalation: false,\n                            capabilities: {drop: [ALL]}}                 # 模板\n          volumeMounts:\n            - {name: opensandbox-bin, mountPath: /opt/opensandbox}\n            - {name: workspace, mountPath: /workspace, subPath: <uid>/<ws>/workspace}\n            - {name: workspace, mountPath: /skills, subPath: <uid>/<ws>/skills, readOnly: true}\n            - {name: tmp, mountPath: /tmp}                  # 模板\n            - {name: home, mountPath: /home/agent}          # 模板\n            - {name: repos, mountPath: /repos}              # 模板\n      volumes:\n        - {name: opensandbox-bin, emptyDir: {}}\n        - {name: workspace, persistentVolumeClaim: {claimName: atlas-oss, readOnly: false}}\n        - {name: tmp, emptyDir: {sizeLimit: 2Gi}}           # 模板\n        - {name: home, emptyDir: {sizeLimit: 5Gi}}          # 模板\n        - {name: repos, emptyDir: {sizeLimit: 10Gi}}        # 模板"
+      }
+    },
+    {
+      "from": "api",
+      "to": "ctrl",
+      "technology": "K8s watch",
+      "description": "推送 BatchSandbox 新增事件",
+      "details": {
+        "items": [
+          [
+            "控制器",
+            "opensandbox.sh 用上游 controller chart 装在 opensandbox-system，全集群一个，同时服务 sbx、acp、bench 三个 server 建的 BatchSandbox",
+            "Deployment opensandbox-controller-manager"
+          ],
+          [
+            "事件",
+            "controller-runtime 的 informer",
+            "ADDED batchsandboxes atlas-sbx/<沙箱 id>"
+          ]
+        ]
+      }
+    },
+    {
+      "from": "ctrl",
+      "to": "api",
+      "technology": "K8s API",
+      "description": "按 Pod 模板建 Pod，ownerReference 指向 BatchSandbox",
+      "details": {
+        "note": "scaleBatchSandbox()：replicas=1，缺哪个下标就建哪个。BatchSandbox 被删时，K8s 垃圾回收顺着 ownerReference 删掉 Pod。",
+        "items": [
+          [
+            "Pod 名",
+            "BatchSandbox 名 + 下标",
+            "<沙箱 id>-0"
+          ],
+          [
+            "内容",
+            "spec.template 原样（labels 里有 atlas.* 和 opensandbox.io/id），加 ownerReference 和下标 label",
+            "ownerReferences: [{kind: BatchSandbox, name: <沙箱 id>, controller: true}]"
+          ]
+        ]
+      }
+    },
+    {
+      "from": "api",
+      "to": "kubelet",
+      "technology": "K8s watch",
+      "description": "Pod 调度到节点后推送给 kubelet",
+      "details": {
+        "note": "调度器（图里省略）按 requests（cpu 100m、memory 512Mi）选节点，写 spec.nodeName。那个节点上的 kubelet 只 watch 绑到自己的 Pod。"
+      }
+    },
+    {
+      "from": "kubelet",
+      "to": "api",
+      "technology": "K8s API",
+      "description": "读 PV 引用的 Secret atlas-oss-csi（S3 凭据）",
+      "details": {
+        "note": "对象存储凭据只在这一个 Secret 里，kubelet 读到后只交给 CSI 插件；不进 Pod spec，也不进容器环境。",
+        "items": [
+          [
+            "引用",
+            "PV atlas-oss-atlas-sbx 的 csi.nodeStageSecretRef / nodePublishSecretRef（06-sbx-storage.yaml）",
+            "{name: atlas-oss-csi, namespace: kube-system}"
+          ],
+          [
+            "Secret 内容",
+            "opensandbox.sh 从仓库根 .env 建：OSS_ACCESS_KEY_ID、OSS_ACCESS_KEY_SECRET、MinIO 地址、OSS_REGION",
+            "accessKeyID、secretAccessKey、endpoint、region 四个键"
+          ],
+          [
+            "endpoint",
+            "本机部署是宿主 LAN IP；112 上 deploy/server/deploy.sh 传 ATLAS_OSS_ADDR",
+            "本机 http://192.168.x.x:9000；112 上 http://minio.atlas-infra:9000"
+          ]
+        ]
+      }
+    },
+    {
+      "from": "kubelet",
+      "to": "csi",
+      "technology": "CSI gRPC（Unix socket）",
+      "description": "挂卷（NodeStage / NodePublish）：传入 S3 凭据和挂载参数",
+      "details": {
+        "note": "驱动是 CSIDriver ru.yandex.s3.csi（05-csi-s3.yaml），节点插件是 kube-system 里的 DaemonSet csi-s3，镜像 atlas-csi-s3:0.43.7（自建，s3fs 固定 1.95）。只有静态 PV，没装 provisioner。",
+        "items": [
+          [
+            "volume_id",
+            "PV 的 csi.volumeHandle = 桶名，表示挂整桶",
+            "atlas-dev"
+          ],
+          [
+            "volume_context",
+            "PV 的 csi.volumeAttributes",
+            "mounter: s3fs、options: -o uid=1000 -o gid=1000 -o umask=0022 -o stat_cache_expire=1 -o attr_timeout=0 -o entry_timeout=0"
+          ],
+          [
+            "secrets",
+            "第 9 步读到的 Secret",
+            "accessKeyID / secretAccessKey / endpoint / region"
+          ],
+          [
+            "target_path",
+            "kubelet 给这个 Pod 的卷目录",
+            "/var/lib/kubelet/pods/<pod uid>/volumes/kubernetes.io~csi/atlas-oss-atlas-sbx/mount"
+          ]
+        ],
+        "example": "NodePublishVolume {\n  volume_id: \"atlas-dev\"\n  target_path: \"/var/lib/kubelet/pods/<pod uid>/volumes/kubernetes.io~csi/atlas-oss-atlas-sbx/mount\"\n  volume_capability: {mount: {}, access_mode: MULTI_NODE_MULTI_WRITER}\n  volume_context: {\n    capacity: \"1Ti\"\n    mounter: \"s3fs\"\n    options: \"-o uid=1000 -o gid=1000 -o umask=0022 -o stat_cache_expire=1 -o attr_timeout=0 -o entry_timeout=0\"\n  }\n  secrets: {accessKeyID: \"<OSS_ACCESS_KEY_ID>\", secretAccessKey: \"***\",\n            endpoint: \"http://minio.atlas-infra:9000\", region: \"us-east-1\"}\n}"
+      }
+    },
+    {
+      "from": "csi",
+      "to": "workspace",
+      "technology": "S3 API",
+      "description": "s3fs 挂载整桶 atlas-dev；s3fs 进程在插件容器里，Pod 拿不到凭据",
+      "details": {
+        "items": [
+          [
+            "uid / gid / umask",
+            "PV 的挂载参数",
+            "文件属主是沙箱用户 1000，权限 0755 / 0644"
+          ],
+          [
+            "stat_cache_expire=1",
+            "同上",
+            "别处改了文件，挂载里最多 1 秒后看到新长度"
+          ],
+          [
+            "attr_timeout / entry_timeout=0",
+            "同上",
+            "内核不缓存属性和目录项"
+          ],
+          [
+            "写入语义",
+            "s3fs 写穿",
+            "flush / close 时同步上传：命令退出时它写的文件已经在 MinIO 里"
+          ],
+          [
+            "风险",
+            "s3fs 进程跑在插件容器里",
+            "插件容器重启会断掉这个节点上所有挂载（transport endpoint is not connected），用到它的沙箱要删掉重建"
+          ]
+        ]
+      }
+    },
+    {
+      "from": "kubelet",
+      "to": "shell",
+      "technology": "CRI",
+      "description": "卷挂好后建 Pod 沙箱（pause 容器 + 网络），分到 Pod IP",
+      "details": {
+        "note": "kubelet 先等这个 Pod 的卷全部挂好，再让容器运行时建 Pod 沙箱。Pod IP 在这一步就分配了，比任何容器启动都早。"
+      }
+    },
+    {
+      "from": "kubelet",
+      "to": "api",
+      "technology": "K8s API",
+      "description": "上报 Pod IP（Pod 仍是 Pending，容器还没起来）",
+      "details": {
+        "example": "status:\n  phase: Pending\n  podIP: 10.1.0.57\n  podIPs: [{ip: 10.1.0.57}]\n  initContainerStatuses:\n    - {name: execd-installer, ready: false, state: {running: {...}}}\n  containerStatuses:\n    - {name: sandbox, ready: false, state: {waiting: {reason: PodInitializing}}}"
+      }
+    },
+    {
+      "from": "api",
+      "to": "ctrl",
+      "technology": "K8s watch",
+      "description": "推送 Pod 状态变化",
+      "details": {
+        "note": "控制器 watch 自己建的 Pod（按 ownerReference 关联回 BatchSandbox），重新计算这个 BatchSandbox 的状态。"
+      }
+    },
+    {
+      "from": "ctrl",
+      "to": "api",
+      "technology": "K8s API",
+      "description": "Pod IP 写进注解 sandbox.opensandbox.io/endpoints，更新 BatchSandbox 状态",
+      "details": {
+        "note": "batchsandbox_status.go：endpoints 注解是 Pod IP 列表（merge patch）；status 里 allocated 数有 IP 的 Pod，ready 数 Ready 的 Pod。",
+        "example": "# BatchSandbox atlas-sbx/<沙箱 id>\nmetadata:\n  annotations:\n    sandbox.opensandbox.io/endpoints: '[\"10.1.0.57\"]'\nstatus:\n  replicas: 1\n  allocated: 1\n  ready: 0          # Pod 还没 Ready"
+      }
+    },
+    {
+      "from": "api",
+      "to": "ls",
+      "technology": "K8s watch",
+      "description": "推送 BatchSandbox 变化：有 IP、还没 Ready → Allocated",
+      "details": {
+        "note": "get_status()：ready=1 且有 IP 是 Running，有 IP 但没 Ready 是 Allocated。等待循环见到 Running 或 Allocated 中的任一个就结束，不等容器起来。",
+        "items": [
+          [
+            "IP 从哪读",
+            "BatchSandbox 注解 sandbox.opensandbox.io/endpoints 的第一个",
+            "10.1.0.57"
+          ],
+          [
+            "状态",
+            "status.ready、status.allocated + 注解",
+            "state: Allocated，reason: IP_ASSIGNED"
+          ]
+        ]
+      }
+    },
+    {
+      "from": "ls",
+      "to": "sandboxes",
+      "technology": "JSON/HTTP",
+      "description": "返回沙箱 id，状态写成 Running（实际是 Allocated）",
+      "details": {
+        "note": "_normalize_create_status() 把创建响应里的 Allocated 改写成 Running。所以 Atlas 收到 Running 时 execd 可能还没起来，这正是 Atlas 随后轮询 /ping 的原因（「创建沙箱」第 14 步）。Atlas 只用 id 和 status.state：state 不是 Running / Allocated 就删掉沙箱并报错。",
+        "example": "HTTP/1.1 202 Accepted   # 值为 null 的字段不输出（expiresAt 因此没有）；Atlas 只判断 >= 400\n{\n  \"id\": \"<沙箱 id>\",\n  \"status\": {\n    \"state\": \"Running\",\n    \"reason\": \"IP_ASSIGNED\",\n    \"message\": \"Pod has IP assigned and sandbox is ready for requests\",\n    \"lastTransitionAt\": \"2026-11-01T08:00:00Z\"\n  },\n  \"metadata\": {\"atlas.managed\": \"true\", \"atlas.kind\": \"sbx\", ...},\n  \"createdAt\": \"2026-11-01T08:00:00Z\",\n  \"entrypoint\": [\"tail\", \"-f\", \"/dev/null\"]\n}"
+      }
+    },
+    {
+      "from": "kubelet",
+      "to": "shell",
+      "technology": "CRI",
+      "description": "运行 init 容器 execd-installer：把 execd、bootstrap.sh 拷进 /opt/opensandbox（emptyDir）",
+      "details": {
+        "note": "第 18–20 步和第 13–17 步并发：kubelet 建完 Pod 沙箱就开始跑容器，不等 server 返回。",
+        "items": [
+          [
+            "镜像",
+            "server 配置 [runtime].execd_image",
+            "sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/execd:release-1.1.1"
+          ],
+          [
+            "做什么",
+            "provider_common._build_execd_init_container() 的脚本",
+            "cp execd、bootstrap.sh（以及 bwrap 等可选文件）到 /opt/opensandbox 并 chmod +x"
+          ],
+          [
+            "运行身份",
+            "Pod 级 securityContext（模板）",
+            "UID 1000"
+          ]
+        ]
+      }
+    },
+    {
+      "from": "kubelet",
+      "to": "shell",
+      "technology": "CRI",
+      "description": "按 subPath 绑定工作区和技能前缀（不存在先建目录），启动主容器",
+      "details": {
+        "items": [
+          [
+            "/workspace",
+            "卷 workspace 的 subPath <uid>/<ws>/workspace（第 11 步那个整桶挂载里的子目录）",
+            "读写"
+          ],
+          [
+            "/skills",
+            "同一个卷的 subPath <uid>/<ws>/skills",
+            "只读"
+          ],
+          [
+            "子目录不存在",
+            "kubelet 先建目录；在 s3fs 上就是往 MinIO 写一个目录标记对象",
+            "<uid>/<ws>/workspace/"
+          ],
+          [
+            "其他挂载",
+            "opensandbox-bin（第 18 步拷好的 execd）、模板的三个 emptyDir",
+            "/opt/opensandbox、/tmp、/home/agent、/repos"
+          ],
+          [
+            "运行身份",
+            "第 4 步合并进来的 securityContext",
+            "UID 1000、根只读、drop ALL、禁止提权"
+          ]
+        ]
+      }
+    },
+    {
+      "from": "shell",
+      "to": "shell",
+      "description": "bootstrap.sh 让 execd --init 作 PID 1：用 EXECD_ACCESS_TOKEN 保护 API、监听 44772，再拉起 tail -f /dev/null",
+      "details": {
+        "items": [
+          [
+            "启动命令",
+            "第 3 步组装的 command",
+            "/opt/opensandbox/bootstrap.sh tail -f /dev/null"
+          ],
+          [
+            "EXECD_INIT=1",
+            "请求的 env，server 也会加",
+            "exec execd --init -- tail -f /dev/null：execd 作 PID 1，回收僵尸进程、转发信号"
+          ],
+          [
+            "EXECD_ENVS",
+            "请求的 env（bootstrap 默认是 /opt/opensandbox/.env）",
+            "/tmp/.execd/env"
+          ],
+          [
+            "访问令牌",
+            "execd 启动时读环境变量 EXECD_ACCESS_TOKEN；之后每个请求要带请求头",
+            "X-EXECD-ACCESS-TOKEN: <令牌>"
+          ],
+          [
+            "端口",
+            "execd 默认值，Atlas 的 EXECD_PORT 与之一致",
+            "44772"
+          ]
+        ]
+      }
+    }
+  ]
+}
+</script>
+
+<main>
+  <ul id="c4-report" hidden></ul>
+  <svg id="c4-diagram" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+  <section id="c4-details" hidden></section>
+  <h2>Diagram key</h2>
+  <svg id="c4-key" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+</main>
+
+<script>
+(() => {
+  'use strict';
+  const FONT = '"Open Sans", "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
+  const INK = '#444444';
+  const LIFELINE = '#9a9a9a';
+  const SCOPE_COLOR = '#1168bd';
+  const PALETTE = {
+    person: ['#297e06', '#1a849c', '#6b8e23'],
+    system: ['#ed8609', '#bf101d', '#8411bd', '#5b6770', '#b8336a'],
+  };
+  const KIND_LABEL = { person: 'Person', system: 'Software System', container: 'Container', component: 'Component' };
+  const MAX_MESSAGES = 20;
+  const TXT = {
+    name: { size: 17, weight: 400, lh: 22 },
+    meta: { size: 12, weight: 400, lh: 16 },
+    msg: { size: 15, weight: 400, lh: 20 },
+    tech: { size: 12, weight: 400, lh: 16 },
+    bname: { size: 18, weight: 700, lh: 22 },
+    btype: { size: 12, weight: 700, lh: 16 },
+    key: { size: 13, weight: 400, lh: 18 },
+  };
+  const BOX_H = 52, ICON_H = 30, HEADER_H = 48, LABEL_W = 260, MIN_GAP = 70, SELF_W = 36, MARGIN = 50;
+
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const problems = [];
+  const fail = (msg) => problems.push({ level: 'error', msg });
+  const warn = (msg) => problems.push({ level: 'warn', msg });
+
+  const ctx = document.createElement('canvas').getContext('2d');
+  const measure = (s, st) => { ctx.font = `${st.weight} ${st.size}px ${FONT}`; return ctx.measureText(s).width; };
+
+  // 中文按字断行，英文按词断行；行首不放标点
+  const CJK = '\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef\u3000-\u303f';
+  const TOKEN = new RegExp(`[${CJK}]|[^\\s${CJK}]+|\\s+`, 'g');
+  const NO_LINE_START = /^[，。、；：！？）》」』,.;:!?)]$/;
+  function wrap(text, st, maxW) {
+    const lines = [];
+    for (const para of String(text || '').split('\n')) {
+      let line = '';
+      for (const tok of para.match(TOKEN) || []) {
+        if (/^\s+$/.test(tok)) { if (line) line += ' '; continue; }
+        const next = line + tok;
+        if (line.trim() && measure(next.trimEnd(), st) > maxW && !NO_LINE_START.test(tok)) {
+          lines.push(line.trimEnd());
+          line = tok;
+        } else {
+          line = next;
+        }
+      }
+      if (line.trim()) lines.push(line.trimEnd());
+    }
+    return lines;
+  }
+
+  // 行数不变的前提下收窄宽度，让各行长度接近，避免末行只剩一两个字
+  function wrapBalanced(text, st, maxW) {
+    const lines = wrap(text, st, maxW);
+    if (lines.length < 2) return lines;
+    let lo = maxW / 2, hi = maxW;
+    while (hi - lo > 4) {
+      const mid = (lo + hi) / 2;
+      if (wrap(text, st, mid).length > lines.length) lo = mid; else hi = mid;
+    }
+    return wrap(text, st, hi);
+  }
+
+  function node(tag, attrs, parent) {
+    const n = document.createElementNS(svgNS, tag);
+    for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+    parent.appendChild(n);
+    return n;
+  }
+  // top 是文字块上沿
+  function textLines(parent, lines, x, top, st, color, anchor = 'middle') {
+    const t = node('text', { x, y: top + st.lh / 2 + st.size * 0.35, 'text-anchor': anchor,
+      'font-family': FONT, 'font-size': st.size, 'font-weight': st.weight, fill: color }, parent);
+    lines.forEach((ln, i) => { node('tspan', { x, dy: i ? st.lh : 0 }, t).textContent = ln; });
+    return t;
+  }
+
+  // 参与者头：人员和数据库画图标 + 文字，其余画方框
+  const iconHead = (p) => p.kind === 'person' || (p.kind === 'container' && p.shape === 'database');
+  function headSize(p) {
+    const w = Math.max(measure(p.name, TXT.name), measure(p.meta, TXT.meta)) + 24;
+    return { w, h: iconHead(p) ? ICON_H + 4 + TXT.name.lh + TXT.meta.lh : BOX_H };
+  }
+  function drawHead(g, p, cx, top) {
+    const c = p.color;
+    let textTop = top + (BOX_H - TXT.name.lh - TXT.meta.lh) / 2;
+    if (p.kind === 'person') {
+      node('circle', { cx, cy: top + 8, r: 7, fill: '#fff', stroke: c, 'stroke-width': 1.8 }, g);
+      node('path', { d: `M${cx - 14} ${top + ICON_H} Q${cx - 14} ${top + 16} ${cx} ${top + 16} Q${cx + 14} ${top + 16} ${cx + 14} ${top + ICON_H} Z`, fill: '#fff', stroke: c, 'stroke-width': 1.8 }, g);
+      textTop = top + ICON_H + 4;
+    } else if (iconHead(p)) {
+      const rx = 17, ry = 5, y0 = top + ry, y1 = top + ICON_H - ry;
+      node('path', { d: `M${cx - rx} ${y0} V${y1} A${rx} ${ry} 0 0 0 ${cx + rx} ${y1} V${y0}`, fill: '#fff', stroke: c, 'stroke-width': 1.8 }, g);
+      node('ellipse', { cx, cy: y0, rx, ry, fill: '#fff', stroke: c, 'stroke-width': 1.8 }, g);
+      textTop = top + ICON_H + 4;
+    } else {
+      node('rect', { x: cx - p.size.w / 2, y: top, width: p.size.w, height: BOX_H, rx: 4, fill: '#fff', stroke: c, 'stroke-width': 1.6 }, g);
+    }
+    textLines(g, [p.name], cx, textTop, TXT.name, c);
+    textLines(g, [p.meta], cx, textTop + TXT.name.lh, TXT.meta, c);
+  }
+  function drawArrow(g, x0, x1, y) {
+    const dir = Math.sign(x1 - x0), L = 10, W = 7;
+    node('line', { x1: x0, y1: y, x2: x1 - dir * L, y2: y, stroke: INK, 'stroke-width': 1.6, 'stroke-dasharray': '8 5' }, g);
+    node('polygon', { points: `${x1},${y} ${x1 - dir * L},${y - W / 2} ${x1 - dir * L},${y + W / 2}`, fill: INK }, g);
+  }
+
+  function render() {
+    const model = JSON.parse(document.getElementById('c4-model').textContent);
+    if (model.title) document.title = model.title;
+    else fail('缺少 title（建议「Dynamic View: 系统名 - 场景」）');
+
+    // ---- 边界 ----
+    const bById = new Map();
+    for (const b of model.boundaries || []) {
+      if (!b.id) { fail(`边界 ${b.name || ''}：缺少 id`); continue; }
+      if (bById.has(b.id)) { fail(`边界 id 重复：${b.id}`); continue; }
+      if (!b.name || !b.type) fail(`边界 ${b.id}：name、type 都要写，type 如「Software System」「Container: Python / FastAPI」`);
+      bById.set(b.id, b);
+    }
+    const chain = (id) => {   // 从里到外的边界链
+      const out = [];
+      for (let cur = id; cur; cur = bById.get(cur) && bById.get(cur).in) {
+        if (!bById.has(cur) || out.includes(cur)) return null;
+        out.push(cur);
+      }
+      return out;
+    };
+    for (const b of bById.values()) {
+      if (b.in && !chain(b.id)) { fail(`边界 ${b.id}：in 指向不存在的边界，或者边界互相嵌套成了环`); b.broken = true; }
+    }
+
+    // ---- 参与者 ----
+    const pById = new Map();
+    const ps = [];
+    for (const p of model.participants || []) {
+      const who = p.id || p.name || '(未命名参与者)';
+      if (!p.id) { fail(`${who}：缺少 id`); continue; }
+      if (pById.has(p.id)) { fail(`参与者 id 重复：${p.id}`); continue; }
+      if (!KIND_LABEL[p.kind]) { fail(`${who}：kind 只能是 person / system / container / component`); continue; }
+      if (!p.name) fail(`${who}：缺少 name`);
+      if ((p.kind === 'container' || p.kind === 'component') && !p.technology) fail(`${who}：${p.kind} 缺少 technology`);
+      if (p.in && (!bById.has(p.in) || bById.get(p.in).broken)) { fail(`${who}：in 指向的边界 ${p.in} 不存在`); p.in = null; }
+      p.chain = p.in ? chain(p.in) : [];
+      p.meta = p.technology && (p.kind === 'container' || p.kind === 'component') ? `[${KIND_LABEL[p.kind]}: ${p.technology}]` : `[${KIND_LABEL[p.kind]}]`;
+      pById.set(p.id, p);
+      ps.push(p);
+    }
+    if (ps.length < 2) fail('至少要有两个参与者');
+    const assigned = new Map(), used = { person: 0, system: 0 };
+    for (const p of ps) {
+      if (p.color) continue;
+      if (p.kind === 'container' || p.kind === 'component' || (p.kind === 'system' && p.scope)) { p.color = SCOPE_COLOR; continue; }
+      const k = `${p.kind}:${p.tag || p.id}`;
+      if (!assigned.has(k)) assigned.set(k, PALETTE[p.kind][used[p.kind]++ % PALETTE[p.kind].length]);
+      p.color = assigned.get(k);
+    }
+    // 同一边界里的参与者在左右顺序上必须相邻，否则边界框会把别的参与者框进去
+    for (const b of bById.values()) {
+      const idx = ps.map((p, i) => (p.chain.includes(b.id) ? i : -1)).filter((i) => i >= 0);
+      b.members = idx.map((i) => ps[i]);
+      if (!idx.length) { fail(`边界「${b.name}」里没有任何参与者`); continue; }
+      if (idx[idx.length - 1] - idx[0] + 1 !== idx.length) fail(`边界「${b.name}」里的参与者在 participants 里不相邻，调整顺序`);
+    }
+
+    // ---- 消息 ----
+    const msgs = (model.messages || []).filter((m, i) => {
+      const who = `第 ${i + 1} 条消息（${m.from} → ${m.to}）`;
+      if (!pById.has(m.from) || !pById.has(m.to)) { fail(`${who}：端点 id 不存在`); return false; }
+      if (!m.description) fail(`${who}：缺少 description（写做什么）`);
+      const a = pById.get(m.from), b = pById.get(m.to);
+      const crossProcess = a.kind !== 'person' && b.kind !== 'person' && !(a.kind === 'component' && b.kind === 'component') && a !== b;
+      if (crossProcess && !m.technology) fail(`${who}：涉及 container 或软件系统，是跨进程交互，要写 technology`);
+      if (m.details !== undefined) {
+        const d = m.details;
+        const isText = (v) => typeof v === 'string';
+        if (!d || typeof d !== 'object' || Array.isArray(d)) {
+          fail(`${who}：details 要写成对象 { note, items, example }`);
+          m.details = undefined;
+        } else {
+          if (d.note !== undefined && !isText(d.note)) fail(`${who}：details.note 要写成字符串`);
+          if (d.example !== undefined && !isText(d.example)) fail(`${who}：details.example 要写成字符串，多行用 \\n`);
+          if (d.items !== undefined && !(Array.isArray(d.items) && d.items.every((r) => Array.isArray(r) && r.length === 3 && r.every(isText)))) {
+            fail(`${who}：details.items 的每一行要写成 [项, 来源, 样例] 三个字符串`);
+          }
+          if (!d.note && !d.example && !(Array.isArray(d.items) && d.items.length)) warn(`${who}：details 是空的，删掉或补上内容`);
+        }
+      }
+      m.n = i + 1;
+      return true;
+    });
+    if (!msgs.length) fail('至少要有一条消息');
+    if (msgs.length > MAX_MESSAGES) warn(`消息有 ${msgs.length} 条，超过 ${MAX_MESSAGES} 条：只画这个场景的关键交互，或者拆成几张图`);
+    for (const p of ps) {
+      if (!msgs.some((m) => m.from === p.id || m.to === p.id)) warn(`「${p.name}」没有参与任何消息：与这个场景无关就删掉`);
+    }
+
+    // ---- 横向：列间距按参与者宽度和消息标签宽度撑开 ----
+    for (const p of ps) p.size = headSize(p);
+    const index = new Map(ps.map((p, i) => [p.id, i]));
+    for (const m of msgs) {
+      m.lines = wrapBalanced(`${m.n}: ${m.description || ''}${m.details ? ' ⓘ' : ''}`, TXT.msg, LABEL_W);
+      m.tech = m.technology ? `[${m.technology}]` : '';
+      m.labelW = Math.max(...m.lines.map((s) => measure(s, TXT.msg)), m.tech ? measure(m.tech, TXT.tech) : 0);
+      m.labelH = m.lines.length * TXT.msg.lh + (m.tech ? TXT.tech.lh : 0);
+    }
+    const gaps = ps.slice(1).map((p, i) => (ps[i].size.w + p.size.w) / 2 + MIN_GAP);
+    let rightExtra = 0;
+    const spanOf = (m) => Math.abs(index.get(m.to) - index.get(m.from));
+    for (const m of [...msgs].sort((a, b) => spanOf(a) - spanOf(b))) {
+      const i = index.get(m.from), j = index.get(m.to);
+      if (i === j) {   // 自调用：标签在生命线右边，占下一列间距
+        const need = SELF_W + 16 + m.labelW + 20;
+        if (i < gaps.length) gaps[i] = Math.max(gaps[i], need); else rightExtra = Math.max(rightExtra, need);
+        continue;
+      }
+      const lo = Math.min(i, j), hi = Math.max(i, j);
+      const span = gaps.slice(lo, hi).reduce((s, g) => s + g, 0);
+      const need = m.labelW + 40;
+      if (span < need) for (let k = lo; k < hi; k++) gaps[k] += (need - span) / (hi - lo);
+    }
+    let x = 0;
+    ps.forEach((p, i) => { if (i) x += gaps[i - 1]; p.x = x; });
+
+    // ---- 纵向：边界标题 → 参与者头 → 消息 → 底部参与者头 ----
+    const depthOf = (b) => chain(b.id).length;
+    const live = [...bById.values()].filter((b) => !b.broken && b.members && b.members.length);
+    const maxDepth = Math.max(0, ...live.map(depthOf));
+    const headTop = maxDepth * HEADER_H + (maxDepth ? 10 : 0);
+    const headH = Math.max(...ps.map((p) => p.size.h), BOX_H);
+    let y = headTop + headH + 24;
+    for (const m of msgs) {
+      m.labelTop = y;
+      m.y = y + m.labelH + 8;
+      y = m.y + (m.from === m.to ? 46 : 26);
+    }
+    const bottomTop = y + 8, bottom = bottomTop + headH;
+
+    // 边界框：外层比内层多留一圈
+    const below = (b) => Math.max(0, ...live.filter((c) => c.in === b.id).map((c) => 1 + below(c)));
+    for (const b of live) {
+      const pad = 14 + 16 * below(b);
+      const d = depthOf(b);
+      b.rect = {
+        x: Math.min(...b.members.map((p) => p.x - p.size.w / 2)) - pad,
+        y: (d - 1) * HEADER_H,
+        w: 0, h: 0,
+      };
+      b.rect.w = Math.max(...b.members.map((p) => p.x + p.size.w / 2)) + pad - b.rect.x;
+      b.rect.h = bottom + 10 + 14 * below(b) - b.rect.y;
+      const titleW = Math.max(measure(b.name, TXT.bname), measure(`[${b.type}]`, TXT.btype)) + 20;
+      if (titleW > b.rect.w) warn(`边界「${b.name}」的标题比边界还宽，名字写短一点`);
+    }
+    for (const b of live) {
+      for (const p of ps) {
+        if (!b.members.includes(p) && p.x + p.size.w / 2 > b.rect.x && p.x - p.size.w / 2 < b.rect.x + b.rect.w) {
+          fail(`「${p.name}」不在边界「${b.name}」里，却和边界框重叠，调整 participants 顺序`);
+        }
+      }
+    }
+
+    // ---- 绘制 ----
+    const svg = document.getElementById('c4-diagram');
+    const gB = node('g', {}, svg), gLife = node('g', {}, svg), gM = node('g', {}, svg), gH = node('g', {}, svg), gT = node('g', {}, svg);
+    for (const b of [...live].sort((a, c) => depthOf(a) - depthOf(c))) {
+      const r = b.rect;
+      node('rect', { x: r.x, y: r.y, width: r.w, height: r.h, fill: 'none', stroke: SCOPE_COLOR, 'stroke-width': 1.6 }, gB);
+      textLines(gB, [b.name], r.x + r.w / 2, r.y + 4, TXT.bname, SCOPE_COLOR);
+      textLines(gB, [`[${b.type}]`], r.x + r.w / 2, r.y + 4 + TXT.bname.lh, TXT.btype, SCOPE_COLOR);
+    }
+    for (const p of ps) {
+      node('line', { x1: p.x, y1: headTop + p.size.h, x2: p.x, y2: bottomTop, stroke: LIFELINE, 'stroke-width': 1, 'stroke-dasharray': '4 4' }, gLife);
+      drawHead(gH, p, p.x, headTop);
+      drawHead(gH, p, p.x, bottomTop);
+    }
+    for (const m of msgs) {
+      const a = pById.get(m.from), b = pById.get(m.to);
+      let lx;
+      if (a === b) {
+        const x0 = a.x, x1 = a.x + SELF_W;
+        node('polyline', { points: `${x0},${m.y} ${x1},${m.y} ${x1},${m.y + 20} ${x0 + 10},${m.y + 20}`, fill: 'none', stroke: INK, 'stroke-width': 1.6, 'stroke-dasharray': '8 5' }, gM);
+        node('polygon', { points: `${x0},${m.y + 20} ${x0 + 10},${m.y + 16.5} ${x0 + 10},${m.y + 23.5}`, fill: INK }, gM);
+        lx = x1 + 12;
+      } else {
+        drawArrow(gM, a.x, b.x, m.y);
+        lx = Math.min(a.x, b.x) + 12;
+      }
+      // 有 details 的消息：标签链接到图下方「消息说明」里的同号条目
+      const gL = m.details ? node('a', { href: `#c4-msg-${m.n}` }, gM) : gM;
+      node('rect', { x: lx - 3, y: m.labelTop - 1, width: m.labelW + 6, height: m.labelH + 2, fill: '#fff' }, gL);
+      textLines(gL, m.lines, lx, m.labelTop, TXT.msg, INK, 'start');
+      if (m.tech) textLines(gL, [m.tech], lx, m.labelTop + m.lines.length * TXT.msg.lh, TXT.tech, INK, 'start');
+    }
+    const minX = Math.min(...ps.map((p) => p.x - p.size.w / 2), ...live.map((b) => b.rect.x));
+    let maxX = Math.max(...ps.map((p) => p.x + p.size.w / 2 + (p === ps[ps.length - 1] ? rightExtra : 0)), ...live.map((b) => b.rect.x + b.rect.w));
+    let maxY = Math.max(bottom, ...live.map((b) => b.rect.y + b.rect.h));
+    const title = { size: 26, weight: 400, lh: 34 }, sub = { size: 15, weight: 400, lh: 22 };
+    textLines(gT, [model.title || ''], minX, maxY + 36, title, INK, 'start');
+    if (model.description) textLines(gT, [model.description], minX, maxY + 36 + title.lh, sub, '#666', 'start');
+    maxX = Math.max(maxX, minX + measure(model.title || '', title), minX + measure(model.description || '', sub));
+    maxY += 36 + title.lh + (model.description ? sub.lh : 0);
+    const vw = maxX - minX + 2 * MARGIN, vh = maxY + 2 * MARGIN;
+    svg.setAttribute('viewBox', `${minX - MARGIN} ${-MARGIN} ${vw} ${vh}`);
+    svg.setAttribute('width', vw);
+    svg.setAttribute('aria-label', model.title || 'Dynamic diagram');
+
+    renderKey(ps, live);
+    renderDetails(msgs);
+  }
+
+  // ---- 消息说明：每条带 details 的消息一节（说明、[项, 来源, 样例] 表、数据样例）----
+  function renderDetails(msgs) {
+    const list = msgs.filter((m) => m.details);
+    if (!list.length) return;
+    const sec = document.getElementById('c4-details');
+    const el = (tag, cls, text) => {
+      const e = document.createElement(tag);
+      if (cls) e.className = cls;
+      if (text !== undefined) e.textContent = text;
+      return e;
+    };
+    sec.appendChild(el('h2', '', '消息说明'));
+    for (const m of list) {
+      const d = m.details;
+      const art = el('article');
+      art.id = `c4-msg-${m.n}`;
+      const h = el('h3', '', `${m.n}: ${m.description || ''}`);
+      if (m.technology) h.appendChild(el('span', 'tech', `[${m.technology}]`));
+      art.appendChild(h);
+      if (typeof d.note === 'string' && d.note) art.appendChild(el('p', '', d.note));
+      const rows = Array.isArray(d.items) ? d.items.filter((r) => Array.isArray(r)) : [];
+      if (rows.length) {
+        const table = el('table');
+        const head = table.createTHead().insertRow();
+        for (const c of ['项', '来源', '样例']) head.appendChild(el('th', '', c));
+        const body = table.createTBody();
+        for (const r of rows) {
+          const tr = body.insertRow();
+          r.slice(0, 3).forEach((c, i) => tr.appendChild(el('td', i === 2 ? 'sample' : '', String(c))));
+        }
+        art.appendChild(table);
+      }
+      if (typeof d.example === 'string' && d.example) art.appendChild(el('pre', '', d.example));
+      sec.appendChild(art);
+    }
+    sec.hidden = false;
+  }
+
+  // ---- 图例：每种参与者一项，再加边界和消息 ----
+  function renderKey(ps, boundaries) {
+    const svg = document.getElementById('c4-key');
+    const rank = { person: 0, system: 1, container: 2, component: 3 };
+    const label = (p) => {
+      if (p.kind === 'person') return `Person, ${p.tag || p.name}`;
+      if (p.kind === 'system') return p.tag || p.name;
+      if (p.kind === 'container') return p.shape === 'database' ? 'Container, Database' : 'Container';
+      return 'Component';
+    };
+    const groups = new Map();
+    for (const p of [...ps].sort((a, b) => rank[a.kind] - rank[b.kind])) {
+      const k = `${p.kind}|${iconHead(p)}|${p.color}`;
+      if (!groups.has(k)) groups.set(k, { proto: p, labels: [] });
+      if (!groups.get(k).labels.includes(label(p))) groups.get(k).labels.push(label(p));
+    }
+    const items = [...groups.values()].map((g) => ({ kind: 'head', proto: g.proto, text: g.labels.join('、') }));
+    if (boundaries.length) items.push({ kind: 'boundary', text: 'Boundary（系统 / 容器）' });
+    items.push({ kind: 'message', text: 'n: 交互（编号 = 先后顺序）' });
+    const CELL_W = 230, CELL_H = 110, PER_ROW = 6;
+    items.forEach((it, i) => {
+      const cx = (i % PER_ROW) * CELL_W + CELL_W / 2, top = Math.floor(i / PER_ROW) * CELL_H;
+      const g = node('g', {}, svg);
+      if (it.kind === 'head') {
+        const p = { ...it.proto, name: it.text.length > 22 ? it.text.slice(0, 21) + '…' : it.text, meta: '' };
+        p.size = { w: Math.min(CELL_W - 20, measure(p.name, TXT.name) + 24), h: BOX_H };
+        drawHead(g, p, cx, top + 10);
+        return;
+      }
+      if (it.kind === 'boundary') {
+        node('rect', { x: cx - 95, y: top + 10, width: 190, height: 56, fill: 'none', stroke: SCOPE_COLOR, 'stroke-width': 1.6 }, g);
+        textLines(g, [it.text], cx, top + 10 + 4, TXT.key, SCOPE_COLOR);
+        return;
+      }
+      drawArrow(g, cx - 90, cx + 90, top + 46);
+      textLines(g, [it.text], cx - 88, top + 18, TXT.key, INK, 'start');
+    });
+    const rows = Math.ceil(items.length / PER_ROW), cols = Math.min(items.length, PER_ROW);
+    svg.setAttribute('viewBox', `0 0 ${cols * CELL_W} ${rows * CELL_H}`);
+    svg.setAttribute('width', cols * CELL_W);
+    svg.setAttribute('aria-label', 'Diagram key');
+  }
+
+  try {
+    render();
+  } catch (e) {
+    fail(`渲染异常：${e && e.message}`);
+    console.error(e);
+  }
+  const status = problems.some((p) => p.level === 'error') ? 'error' : problems.length ? 'warn' : 'ok';
+  document.documentElement.dataset.c4Status = status;
+  const report = document.getElementById('c4-report');
+  for (const p of problems) {
+    const li = document.createElement('li');
+    li.dataset.level = p.level;
+    li.textContent = p.msg;
+    report.appendChild(li);
+  }
+  report.hidden = !problems.length;
+  if (problems.length) console.warn('[c4]', problems);
+})();
+</script>
+</body>
+</html>

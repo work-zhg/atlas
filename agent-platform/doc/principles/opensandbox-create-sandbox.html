@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenSandbox 创建沙箱接口的参数</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --border: #d1d9e0; --head: #f6f8fa;
+    --accent: #0969da; --ok: #1a7f37; --ok-bg: #dafbe1; --warn: #9a6700; --warn-bg: #fff8c5;
+    --bad: #cf222e; --bad-bg: #ffebe9; --code-bg: #f6f8fa;
+    --b1: #ddf4ff; --b1d: #54aeff; --b2: #fbefff; --b2d: #c297ff; --b3: #dafbe1; --b3d: #4ac26b;
+    --b4: #fff8c5; --b4d: #d4a72c; --b5: #ffebe9; --b5d: #ff8182;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --border: #3d444d; --head: #151b23;
+      --accent: #4493f8; --ok: #3fb950; --ok-bg: #12261e; --warn: #d29922; --warn-bg: #2b2111;
+      --bad: #f85149; --bad-bg: #2d1214; --code-bg: #151b23;
+      --b1: #12263f; --b1d: #1f6feb; --b2: #271a36; --b2d: #8957e5; --b3: #12261e; --b3d: #2ea043;
+      --b4: #2b2111; --b4d: #9e6a03; --b5: #2d1214; --b5d: #da3633;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 32px; background: var(--bg); color: var(--fg);
+         font: 14px/1.75 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif; }
+  main { max-width: 1120px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 44px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 15.5px; margin: 24px 0 8px; }
+  .sub { color: var(--muted); margin: 0 0 14px; }
+  code { font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code-bg); padding: 1px 4px; border-radius: 4px; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px 14px; overflow-x: auto; font-size: 12.5px; }
+  pre code { background: none; padding: 0; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0 16px; }
+  th, td { border: 1px solid var(--border); padding: 7px 10px; vertical-align: top; text-align: left; }
+  th { background: var(--head); white-space: nowrap; }
+  td.c { text-align: center; white-space: nowrap; }
+  .req { color: var(--bad); font-weight: 600; }
+  .opt { color: var(--muted); }
+  .no { color: var(--muted); text-decoration: line-through; }
+  .ok { color: var(--ok); font-weight: 600; }
+  .callout { border-left: 4px solid var(--accent); background: var(--head); padding: 10px 14px; border-radius: 4px; margin: 14px 0; }
+  .callout.warn { border-color: var(--warn); background: var(--warn-bg); }
+  .toc { columns: 2; padding-left: 18px; }
+  .fig { border: 1px solid var(--border); border-radius: 6px; padding: 10px; overflow-x: auto; margin: 10px 0 6px; }
+  .cap { color: var(--muted); font-size: 12.5px; margin: 0 0 16px; text-align: center; }
+  svg text { fill: var(--fg); font-size: 12px; font-family: -apple-system, "PingFang SC", sans-serif; }
+  svg .s { font-size: 11px; fill: var(--muted); }
+  svg .b { font-weight: 600; }
+  svg .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+  svg .k { fill: var(--accent); }
+  svg .c1 { fill: var(--b1); stroke: var(--b1d); } svg .c2 { fill: var(--b2); stroke: var(--b2d); }
+  svg .c3 { fill: var(--b3); stroke: var(--b3d); } svg .c4 { fill: var(--b4); stroke: var(--b4d); }
+  svg .c5 { fill: var(--b5); stroke: var(--b5d); }
+  svg .inner { fill: var(--bg); stroke: var(--border); }
+  svg .ghost { fill: var(--head); stroke: var(--border); stroke-dasharray: 4 3; }
+  svg .dashed { stroke-dasharray: 5 4; }
+</style>
+</head>
+<body>
+<main>
+<h1>OpenSandbox 创建沙箱接口的参数</h1>
+<p class="sub">日期：2026-11-01 · 依据：OpenSandbox <code>release-1.1.1</code>（commit <code>531700c</code>，即 Atlas 部署的版本）的 <code>specs/sandbox-lifecycle.yml</code> 与 server 源码（<code>api/schema.py</code>、<code>services/validators.py</code>、<code>services/k8s/</code>）。只写 Kubernetes 运行时、<code>batchsandbox</code> workload provider 下的行为；Docker 运行时的差异不展开。功能全貌见 <a href="opensandbox-features.html">OpenSandbox 功能全景</a></p>
+
+<ol class="toc" start="0">
+  <li><a href="#s0">一页看懂</a></li>
+  <li><a href="#s1">接口</a></li>
+  <li><a href="#s2">四种启动来源与必填矩阵</a></li>
+  <li><a href="#s3">顶层参数</a></li>
+  <li><a href="#s4">嵌套对象</a></li>
+  <li><a href="#s5">参数落到 Pod 的哪里</a></li>
+  <li><a href="#s6">校验顺序与错误</a></li>
+  <li><a href="#s7">规范与实现的出入</a></li>
+  <li><a href="#s8">我们的部署与 Atlas 的用法</a></li>
+</ol>
+
+<!-- ====================================================================== -->
+<h2 id="s0">0. 一页看懂</h2>
+<ul>
+  <li><b>接口</b>：<code>POST /v1/sandboxes</code>，请求头 <code>OPEN-SANDBOX-API-KEY</code>，请求体 JSON，共 <b>16 个顶层字段</b>。</li>
+  <li><b>同步</b>：server 建出 BatchSandbox 后一直等到 Pod 拿到 IP 才返回（状态码 202，但语义是「已就绪」），最长等 <code>[kubernetes].sandbox_create_timeout_seconds</code>（默认 60 秒，我们配了 180 秒），超时回 504 并删掉已建的 CR。</li>
+  <li><b>启动来源四选一</b>：<code>image</code>（镜像）、<code>snapshotId</code>（快照）、<code>extensions.poolRef</code>（预热池）、<code>templateId</code>（Fast Sandbox 模板）。决定了其余字段哪些必填、哪些禁止（第 2 节）。</li>
+  <li><b>最常用的形态</b>（镜像启动）只有三个必填：<code>image</code>、<code>entrypoint</code>、<code>resourceLimits</code>。</li>
+</ul>
+<pre><code>POST /v1/sandboxes
+OPEN-SANDBOX-API-KEY: &lt;key&gt;
+
+{
+  "image": {"uri": "python:3.11"},
+  "entrypoint": ["tail", "-f", "/dev/null"],
+  "resourceLimits": {"cpu": "500m", "memory": "512Mi"},
+  "timeout": 3600
+}</code></pre>
+
+<div class="callout warn">
+  <b>最容易踩的四点</b>（详见第 7 节）
+  <ol style="margin:4px 0 0">
+    <li><code>metadata</code> 会被原样写成 K8s label：值最长 63 个字符，只能用字母、数字和 <code>-_.</code>。规范示例里的 <code>"name": "Data Processing Sandbox"</code>（带空格）在 1.1.1 上会回 400。</li>
+    <li>拼错字段名<b>不会报错</b>，未知字段被静默丢弃。例如把 <code>networkPolicy</code> 写错，结果是不挂 egress sidecar、出站全放行。</li>
+    <li>返回的 <code>Running</code> 只表示 Pod 有了 IP，不表示 execd 已经在监听。调用方要自己轮询 execd 的 <code>/ping</code>。</li>
+    <li><code>env</code> 以明文写进 BatchSandbox 和 Pod spec，接口不支持 <code>secretKeyRef</code>。</li>
+  </ol>
+</div>
+
+<!-- ====================================================================== -->
+<h2 id="s1">1. 接口</h2>
+<table>
+  <tr><th>项</th><th>内容</th></tr>
+  <tr><td>方法与路径</td><td><code>POST /v1/sandboxes</code>（server 也挂了不带 <code>/v1</code> 的同名路由）</td></tr>
+  <tr><td>鉴权</td><td>请求头 <code>OPEN-SANDBOX-API-KEY: &lt;key&gt;</code>。server 的 <code>api_key</code> 为空时不校验</td></tr>
+  <tr><td>可选请求头</td><td><code>X-Request-ID</code>：链路追踪，不传则由 server 生成并在响应头回传</td></tr>
+  <tr><td>成功</td><td><code>202</code>，响应头带 <code>Location</code>，响应体见下表</td></tr>
+  <tr><td>等待</td><td>每次轮询 BatchSandbox 状态，见到 <code>Running</code> 或 <code>Allocated</code>（Pod 已分到 IP）就返回，并把 <code>Allocated</code> 改写成 <code>Running</code></td></tr>
+  <tr><td>失败回滚</td><td>CR 建出来之后的任何失败（超时、Pod Failed、配额、调度不上）都会先删掉 CR，再清理本次自动建的 PVC</td></tr>
+</table>
+
+<h3>1.1 响应体（CreateSandboxResponse）</h3>
+<table>
+  <tr><th>字段</th><th>说明</th></tr>
+  <tr><td><code>id</code></td><td>沙箱 id，也是 BatchSandbox 的名字和 label <code>opensandbox.io/id</code> 的值</td></tr>
+  <tr><td><code>status</code></td><td><code>{state, reason, message, lastTransitionAt}</code>。创建成功时 <code>state</code> 固定是 <code>Running</code></td></tr>
+  <tr><td><code>metadata</code></td><td>请求里的 <code>metadata</code> 原样回显</td></tr>
+  <tr><td><code>extensions</code></td><td>只回显能持久化的扩展键（<code>opensandbox.extensions.*</code>，见 4.9），不是请求的原样回显</td></tr>
+  <tr><td><code>platform</code></td><td>实际生效的平台约束（来自模板或请求），没有约束时为空</td></tr>
+  <tr><td><code>expiresAt</code></td><td><code>createdAt + timeout</code>；不自动过期时没有这个字段</td></tr>
+  <tr><td><code>createdAt</code></td><td>server 收到请求的时刻（UTC）</td></tr>
+  <tr><td><code>entrypoint</code></td><td>请求里的 <code>entrypoint</code></td></tr>
+</table>
+<p>响应里<b>没有</b> <code>image</code>、<code>snapshotId</code>、<code>updatedAt</code>，也没有访问地址。地址要另外调 <code>GET /v1/sandboxes/{id}/endpoints/{port}</code> 获取。</p>
+
+<!-- ====================================================================== -->
+<h2 id="s2">2. 四种启动来源与必填矩阵</h2>
+<table>
+  <tr><th>启动来源</th><th>判定</th><th>沙箱从哪来</th></tr>
+  <tr><td>镜像</td><td><code>image.uri</code> 非空</td><td>server 拼出 BatchSandbox（模板 + 本次参数），控制器建 Pod</td></tr>
+  <tr><td>快照</td><td><code>snapshotId</code> 非空</td><td>server 查快照记录，把恢复用的镜像填回 <code>image</code>，之后按镜像启动处理</td></tr>
+  <tr><td>预热池</td><td><code>extensions.poolRef</code> 非空（<code>"*"</code> 表示自动选池）</td><td>从 Pool CRD 预先建好的 Pod 里认领一个，<code>entrypoint</code> / <code>env</code> 作为分配后的任务下发</td></tr>
+  <tr><td>Fast Sandbox 模板</td><td><code>templateId</code> 非空</td><td>路由到 Fast Sandbox 后端（microVM），形态由模板的 golden image 固定</td></tr>
+</table>
+<p>判定的优先级是 <code>templateId</code> &gt; <code>poolRef</code> &gt; <code>image</code> / <code>snapshotId</code>。<code>image</code> 和 <code>snapshotId</code> 必须恰好给一个。</p>
+
+<table>
+  <tr><th>字段</th><th>镜像</th><th>快照</th><th>预热池</th><th>模板</th></tr>
+  <tr><td><code>image</code></td><td class="c req">必填</td><td class="c no">互斥</td><td class="c opt">不用（池模板定）</td><td class="c no">禁止</td></tr>
+  <tr><td><code>snapshotId</code></td><td class="c no">互斥</td><td class="c req">必填</td><td class="c no">禁止</td><td class="c no">禁止</td></tr>
+  <tr><td><code>entrypoint</code></td><td class="c req">必填</td><td class="c opt">可选，缺省 tail</td><td class="c opt">可选，缺省 tail</td><td class="c no">禁止</td></tr>
+  <tr><td><code>resourceLimits</code></td><td class="c req">必填</td><td class="c req">必填</td><td class="c opt">不用（池模板定）</td><td class="c no">禁止</td></tr>
+  <tr><td><code>resourceRequests</code></td><td class="c opt">可选</td><td class="c opt">可选</td><td class="c opt">不用</td><td class="c no">禁止</td></tr>
+  <tr><td><code>timeout</code></td><td class="c opt">可选</td><td class="c opt">可选</td><td class="c opt">可选</td><td class="c req">必填</td></tr>
+  <tr><td><code>env</code></td><td class="c opt">可选</td><td class="c opt">可选</td><td class="c opt">可选（随任务下发）</td><td class="c no">禁止</td></tr>
+  <tr><td><code>metadata</code></td><td class="c opt">可选</td><td class="c opt">可选</td><td class="c opt">可选</td><td class="c opt">可选</td></tr>
+  <tr><td><code>platform</code></td><td class="c opt">可选</td><td class="c opt">可选</td><td class="c no">禁止</td><td class="c no">禁止</td></tr>
+  <tr><td><code>volumes</code></td><td class="c opt">可选</td><td class="c opt">可选</td><td class="c no">禁止</td><td class="c no">禁止</td></tr>
+  <tr><td><code>networkPolicy</code></td><td class="c opt">可选</td><td class="c opt">可选</td><td class="c no">禁止</td><td class="c opt">可选</td></tr>
+  <tr><td><code>credentialProxy.enabled</code></td><td class="c opt">可选</td><td class="c opt">可选</td><td class="c no">禁止</td><td class="c no">禁止</td></tr>
+  <tr><td><code>secureAccess</code></td><td class="c opt">可选</td><td class="c opt">可选</td><td class="c opt">可选</td><td class="c no">禁止</td></tr>
+  <tr><td><code>lifecycle</code></td><td class="c opt">可选</td><td class="c opt">可选</td><td class="c no">禁止</td><td class="c no">禁止</td></tr>
+</table>
+<p>「缺省 tail」指 <code>["tail", "-f", "/dev/null"]</code>。「不用」指可以传，但 server 在池模式下不会读它（<code>_create_workload_from_pool</code> 不接收这些参数）。「禁止」会被拒绝，回 422 或 400，见第 6 节。</p>
+
+<!-- ====================================================================== -->
+<h2 id="s3">3. 顶层参数</h2>
+<table>
+  <tr><th>参数</th><th>类型</th><th>缺省</th><th>作用</th><th>1.1.1 server 的校验与行为</th></tr>
+  <tr><td><code>image</code></td><td>ImageSpec</td><td>—</td><td>容器镜像与拉取凭据（4.1）</td><td><code>uri</code> 全空白视同没给。带 <code>auth</code> 时 server 为本沙箱建一个 imagePullSecret</td></tr>
+  <tr><td><code>snapshotId</code></td><td>string</td><td>—</td><td>从快照恢复</td><td>快照不存在或不属于当前租户回 404 <code>SNAPSHOT::NOT_FOUND</code>；未就绪回 409 <code>SNAPSHOT::NOT_READY</code></td></tr>
+  <tr><td><code>templateId</code></td><td>string</td><td>—</td><td>Fast Sandbox 模板</td><td>与第 2 节表中标「禁止」的字段一起给回 422；需要装了 Fast Sandbox 组件</td></tr>
+  <tr><td><code>entrypoint</code></td><td>string[]，至少 1 项</td><td>见第 2 节</td><td>沙箱主进程（argv，不经 shell）</td><td>容器的 <code>command</code> 是 <code>["/opt/opensandbox/bootstrap.sh"] + entrypoint</code>，不设 <code>args</code>：<b>镜像自带的 ENTRYPOINT 和 CMD 都会被覆盖</b>。bootstrap 先拉起 execd，再 exec 你的命令</td></tr>
+  <tr><td><code>timeout</code></td><td>integer ≥ 60，或 null</td><td>null（不自动过期）</td><td>存活秒数</td><td>写成 BatchSandbox 的 <code>spec.expireTime</code>，到点由控制器删除。超过 <code>[server].max_sandbox_timeout_seconds</code> 回 400（没配则不限）。为 null 时加 label <code>opensandbox.io/manual-cleanup=true</code></td></tr>
+  <tr><td><code>resourceLimits</code></td><td>map&lt;string,string&gt;</td><td>镜像 / 快照模式必填</td><td>容器 <code>resources.limits</code>（4.3）</td><td>键不限：<code>cpu</code>、<code>memory</code> 原样透传，<code>gpu</code> 翻译成 <code>nvidia.com/gpu</code></td></tr>
+  <tr><td><code>resourceRequests</code></td><td>map&lt;string,string&gt;</td><td>等于 limits（Guaranteed QoS）</td><td>容器 <code>resources.requests</code></td><td>小于 limits 时为 Burstable QoS。limits 为空时整个 <code>resources</code> 都不设，requests 也一起丢掉</td></tr>
+  <tr><td><code>env</code></td><td>map&lt;string,string|null&gt;</td><td>—</td><td>主容器环境变量（4.4）</td><td><code>OPENSANDBOX_LIFECYCLE</code> 是保留名；<code>OPENSANDBOX_EGRESS_*</code> 分流给 egress sidecar；值为 null 时变量存在、值为空</td></tr>
+  <tr><td><code>metadata</code></td><td>map&lt;string,string&gt;</td><td>—</td><td>管理用标签，列表按它过滤（4.5）</td><td>按 K8s label 规则校验；键不能以 <code>opensandbox.io/</code> 开头</td></tr>
+  <tr><td><code>platform</code></td><td><code>{os, arch}</code></td><td>不约束</td><td>调度到指定 OS / 架构的节点（4.2）</td><td>注入 nodeSelector；与模板里的 nodeSelector 冲突回 400；调度不上回 400 <code>POD_PLATFORM_UNSCHEDULABLE</code></td></tr>
+  <tr><td><code>networkPolicy</code></td><td>NetworkPolicy</td><td>不挂 sidecar，出站全放行</td><td>出站域名策略（4.6）</td><td>要求 server 配了 <code>[egress].image</code>，否则回 400；secure runtime 是 gVisor 时回 400</td></tr>
+  <tr><td><code>credentialProxy</code></td><td><code>{enabled}</code></td><td><code>enabled: false</code></td><td>为 Credential Vault 开透明 MITM（4.6）</td><td>要求同时带 <code>networkPolicy</code>（否则 422），且 server 的 <code>[egress].mode = "dns+nft"</code>（否则 400）</td></tr>
+  <tr><td><code>secureAccess</code></td><td>boolean</td><td>false</td><td>访问沙箱端点要带令牌头</td><td>只支持 <code>[ingress].mode = "gateway"</code>，否则回 400。令牌存在 annotation 里，由端点接口在 <code>headers</code> 里返回</td></tr>
+  <tr><td><code>lifecycle</code></td><td>SandboxLifecycle</td><td>—</td><td>execd 执行的启动钩子和定时钩子（4.7）</td><td>序列化成 JSON，放进主容器的环境变量 <code>OPENSANDBOX_LIFECYCLE</code>；响应和 GET 里都不回显</td></tr>
+  <tr><td><code>volumes</code></td><td>Volume[]</td><td>—</td><td>挂载存储（4.8）</td><td>K8s 只支持 <code>pvc</code> 和 <code>host</code>，<code>ossfs</code> 回 400</td></tr>
+  <tr><td><code>extensions</code></td><td>map&lt;string,string&gt;</td><td>—</td><td>不进核心 API 的扩展参数（4.9）</td><td>只识别几个固定键，其余键丢弃；只有 <code>opensandbox.extensions.*</code> 会持久化</td></tr>
+</table>
+
+<!-- ====================================================================== -->
+<h2 id="s4">4. 嵌套对象</h2>
+
+<h3 id="s4-1">4.1 image（ImageSpec）</h3>
+<table>
+  <tr><th>字段</th><th>类型</th><th>说明</th></tr>
+  <tr><td><code>uri</code> <span class="req">必填</span></td><td>string</td><td>标准镜像引用，如 <code>python:3.11</code>、<code>registry.example.com:5000/app:v1</code>。拉取策略由 server 的 <code>[kubernetes].image_pull_policy</code> 决定，不能在请求里改</td></tr>
+  <tr><td><code>auth.username</code> / <code>auth.password</code></td><td>string</td><td>私有仓库凭据。给了 <code>auth</code> 就两个都要填。server 建 Secret <code>build_image_pull_secret_name(id)</code> 并挂到 <code>imagePullSecrets</code>；也可以不传，改在模板或 ServiceAccount 上配</td></tr>
+</table>
+
+<h3 id="s4-2">4.2 platform（PlatformSpec）</h3>
+<table>
+  <tr><th>字段</th><th>取值</th><th>说明</th></tr>
+  <tr><td><code>os</code> <span class="req">必填</span></td><td><code>linux</code> / <code>windows</code></td><td>大小写不敏感（server 会转小写）；注入 <code>kubernetes.io/os</code></td></tr>
+  <tr><td><code>arch</code> <span class="req">必填</span></td><td><code>amd64</code> / <code>arm64</code></td><td>注入 <code>kubernetes.io/arch</code></td></tr>
+</table>
+<p><code>os: windows</code> 会走 Windows profile，改写 Pod 的多处配置，并对 <code>resourceLimits</code> 做额外校验。不传 <code>platform</code> 时 server 不加任何 OS / 架构约束，镜像能不能在节点上跑由调用方自己保证。</p>
+
+<h3 id="s4-3">4.3 resourceLimits / resourceRequests</h3>
+<table>
+  <tr><th>键</th><th>例子</th><th>到 K8s</th></tr>
+  <tr><td><code>cpu</code></td><td><code>"500m"</code>、<code>"2"</code></td><td>原样</td></tr>
+  <tr><td><code>memory</code></td><td><code>"512Mi"</code>、<code>"4Gi"</code></td><td>原样</td></tr>
+  <tr><td><code>gpu</code></td><td><code>"1"</code></td><td>改名为 <code>nvidia.com/gpu</code>。值是 <code>"all"</code> 时回 400（K8s 的扩展资源只接受整数）；解析不了的值被丢掉</td></tr>
+  <tr><td>其他</td><td><code>"ephemeral-storage": "10Gi"</code></td><td>原样透传，能不能用由 K8s 决定</td></tr>
+</table>
+
+<h3 id="s4-4">4.4 env 的保留与分流</h3>
+<table>
+  <tr><th>变量</th><th>去向</th><th>说明</th></tr>
+  <tr><td>普通变量</td><td>主容器 <code>sandbox</code></td><td>以明文 <code>value</code> 写进 Pod spec</td></tr>
+  <tr><td><code>OPENSANDBOX_LIFECYCLE</code></td><td>拒绝（422）</td><td>保留给 <code>lifecycle</code> 字段</td></tr>
+  <tr><td><code>OPENSANDBOX_EGRESS_*</code>（白名单内）</td><td>egress sidecar</td><td>白名单：<code>LOG_LEVEL</code>、<code>DNS_UPSTREAM_TIMEOUT</code>、<code>MITMPROXY_SSL_INSECURE</code>、<code>MITMPROXY_TRANSPARENT</code>、<code>MITMPROXY_EXTRA_PORTS</code>、<code>DENY_WEBHOOK</code>、<code>METRICS_EXTRA_ATTRS</code>、<code>CREDENTIAL_VAULT_REQUIRE_TLS</code>、<code>CREDENTIAL_VAULT_REQUIRE_SCOPED_MATCH</code>、<code>CREDENTIAL_VAULT_TRUSTED_PROXY_CIDRS</code>、<code>POLICY_FILE</code>（都带 <code>OPENSANDBOX_EGRESS_</code> 前缀）。其中 <code>MITMPROXY_TRANSPARENT</code> 主容器也会收到一份</td></tr>
+  <tr><td><code>OPENSANDBOX_EGRESS_*</code>（白名单外）</td><td>拒绝（400）</td><td>例如 <code>UPSTREAM_PROXY</code> 这类只能由 server 配置注入的变量</td></tr>
+  <tr><td><code>OPENSANDBOX_EGRESS_*</code>（没带 networkPolicy）</td><td>丢弃</td><td>没有 sidecar 可以接收；server 只打一条 warning 日志，不报错</td></tr>
+</table>
+<p>server 另外往主容器注入以下变量。请求里传了同名变量会被覆盖或重复，不要这么做：</p>
+<ul>
+  <li><code>OPENSANDBOX_ID</code>（沙箱 id）</li>
+  <li><code>EXECD=/opt/opensandbox/execd</code></li>
+  <li><code>EXECD_INIT=1</code>（仅在 server 配了 <code>execd_run_as_init</code> 时）</li>
+  <li><code>OPENSANDBOX_EGRESS_MITMPROXY_TRANSPARENT=true</code>（仅在开了 credentialProxy 时）</li>
+  <li><code>OPENSANDBOX_LIFECYCLE</code>（仅在传了 <code>lifecycle</code> 时）</li>
+</ul>
+<p>execd 本身会读的变量（如 <code>EXECD_ACCESS_TOKEN</code>、<code>EXECD_ENVS</code>）也走 <code>env</code> 传入，server 对它们不做特殊处理。</p>
+
+<h3 id="s4-5">4.5 metadata</h3>
+<p>整份 <code>metadata</code> 被 <code>labels.update(metadata)</code> 合进 BatchSandbox 的 label。<code>GET /v1/sandboxes?metadata=k%3Dv</code> 就是用 label selector 过滤，所以规则和 K8s label 完全一致：</p>
+<table>
+  <tr><th>项</th><th>规则</th></tr>
+  <tr><td>键</td><td><code>[前缀/]名字</code>。名字最长 63 个字符，匹配 <code>[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?</code>。前缀可选，是最长 253 个字符的 DNS 子域名。键不能以 <code>opensandbox.io/</code> 开头</td></tr>
+  <tr><td>值</td><td>最长 63 个字符，可以为空；非空时首尾必须是字母或数字，中间只能有字母、数字和 <code>-_.</code></td></tr>
+  <tr><td>不符合</td><td>回 400 <code>INVALID_METADATA_LABEL</code></td></tr>
+</table>
+<p>中文、空格、<code>/</code>、<code>@</code>、<code>:</code> 都放不进值里。要存人类可读的名字或 URL，只能放到调用方自己的库里。</p>
+
+<h3 id="s4-6">4.6 networkPolicy 与 credentialProxy</h3>
+<table>
+  <tr><th>字段</th><th>类型</th><th>说明</th></tr>
+  <tr><td><code>networkPolicy.defaultAction</code></td><td><code>allow</code> / <code>deny</code></td><td>没有规则命中时的动作。省略时 sidecar 按 <code>deny</code> 处理</td></tr>
+  <tr><td><code>networkPolicy.egress[]</code></td><td>NetworkRule[]</td><td>按顺序匹配的规则</td></tr>
+  <tr><td><code>egress[].action</code> <span class="req">必填</span></td><td><code>allow</code> / <code>deny</code></td><td>K8s 路径上 server 不校验取值，原样交给 sidecar</td></tr>
+  <tr><td><code>egress[].target</code> <span class="req">必填</span></td><td>string</td><td>域名、通配域名、IP、CIDR 都支持（sidecar 的 <code>normalizePolicy</code> 已实现；规范里「IP/CIDR not yet supported」的说法已过时）。<code>*.example.com</code> 不匹配 <code>example.com</code> 本身</td></tr>
+  <tr><td><code>credentialProxy.enabled</code></td><td>boolean</td><td>sidecar 开透明 MITM，并把 MITM CA 装进主容器，供 Credential Vault 注入凭据。默认放行（<code>defaultAction: allow</code>）仍可用，但 server 会打弃用告警</td></tr>
+</table>
+<p>只要带了 <code>networkPolicy</code>（哪怕是空对象），server 就会：</p>
+<ul>
+  <li>加一个 egress sidecar；</li>
+  <li>生成一个 egress 令牌，存进 annotation，并作为 sidecar 的环境变量；</li>
+  <li>给主容器 <code>drop: [NET_ADMIN]</code>，保证只有 sidecar 能改网络栈。</li>
+</ul>
+<p><b>空对象等于全拒绝</b>：规范说空对象或 <code>egress</code> 为空时以全放行启动，但 1.1.1 的 sidecar 在 <code>defaultAction</code> 缺省时一律按 <code>deny</code> 处理，<code>{}</code> 的结果是只能访问 DNS 服务器和平台的 <code>allow.always</code>。要全放行必须显式写 <code>defaultAction: allow</code>。之后可以通过 <code>/networkpolicy</code> 接口修改策略。</p>
+<p>server 配了 <code>[egress.upstream_proxy]</code> 时，带 <code>networkPolicy</code> 的请求还必须满足以下其中之一，否则回 400：</p>
+<ul>
+  <li>开 <code>credentialProxy.enabled</code>；</li>
+  <li>在 env 里设 <code>OPENSANDBOX_EGRESS_MITMPROXY_TRANSPARENT=true</code>。</li>
+</ul>
+
+<h3 id="s4-7">4.7 lifecycle（SandboxLifecycle）</h3>
+<table>
+  <tr><th>字段</th><th>类型</th><th>约束</th><th>语义</th></tr>
+  <tr><td><code>preStart.command</code> <span class="req">必填</span></td><td>string[]</td><td>至少 1 项，首项非空白</td><td>execd 的 HTTP 服务就绪后、用户 entrypoint 之前执行，每次容器启动都会跑。失败或超时则 entrypoint 不启动。argv 不经 shell，需要 shell 语法时写 <code>["sh","-c","..."]</code></td></tr>
+  <tr><td><code>preStart.timeoutSeconds</code></td><td>integer</td><td>1～10800，缺省 60</td><td>超时时间</td></tr>
+  <tr><td><code>periodic[].name</code> <span class="req">必填</span></td><td>string</td><td>去掉首尾空白后非空，同一沙箱内唯一</td><td>钩子名</td></tr>
+  <tr><td><code>periodic[].schedule</code> <span class="req">必填</span></td><td>string</td><td>五段 cron、<code>@hourly</code> 或 <code>@every 30s</code>（整秒，至少 1 秒）</td><td>运行期由 execd 调度。同名钩子不会重叠，上一次还没跑完就跳过本次</td></tr>
+  <tr><td><code>periodic[].command</code> <span class="req">必填</span></td><td>string[]</td><td>同 preStart</td><td>—</td></tr>
+  <tr><td><code>periodic[].timeoutSeconds</code></td><td>integer</td><td>1～300，缺省 60</td><td>—</td></tr>
+</table>
+<p>只有这三个对象设了 <code>extra = "forbid"</code>，写错字段名会回 422。池模式下不能用 lifecycle，因为池里的 Pod 是事先建好的，那时还不知道本次请求的钩子。</p>
+
+<h3 id="s4-8">4.8 volumes（Volume[]）</h3>
+<table>
+  <tr><th>字段</th><th>类型</th><th>约束 / 说明</th></tr>
+  <tr><td><code>name</code> <span class="req">必填</span></td><td>string</td><td>DNS label（小写字母数字和 <code>-</code>，最长 63 个字符），本请求内唯一，不能与内部卷 <code>opensandbox-bin</code> 等重名</td></tr>
+  <tr><td><code>mountPath</code> <span class="req">必填</span></td><td>string</td><td>容器内的绝对路径</td></tr>
+  <tr><td><code>readOnly</code></td><td>boolean</td><td>缺省 false</td></tr>
+  <tr><td><code>subPath</code></td><td>string</td><td>后端路径下的子目录。必须是相对路径，不能包含 <code>..</code></td></tr>
+  <tr><td><code>pvc</code> / <code>host</code> / <code>ossfs</code></td><td>object</td><td>后端，必须恰好一个。K8s 只支持前两个</td></tr>
+</table>
+<table>
+  <tr><th>后端字段</th><th>说明</th></tr>
+  <tr><td><code>pvc.claimName</code> <span class="req">必填</span></td><td>同命名空间里的 PVC 名</td></tr>
+  <tr><td><code>pvc.createIfNotExists</code></td><td>缺省 <b>true</b>：PVC 不存在时 server 先建一个。为 false 且 PVC 不存在时，server 不提前报错，Pod 会一直 Pending，直到创建超时回 504（按代码推断，未实测）</td></tr>
+  <tr><td><code>pvc.deleteOnSandboxTermination</code></td><td>缺省 false。只对本次自动建的 PVC 生效：server 给 PVC 打上 label 和 ownerReference，CR 被删（包括到期删除）时随之回收</td></tr>
+  <tr><td><code>pvc.storageClass</code> / <code>storage</code> / <code>accessModes</code></td><td>只在自动建 PVC 时使用。缺省分别是集群默认 StorageClass、<code>[storage].volume_default_size</code>（默认 1Gi）、<code>["ReadWriteOnce"]</code></td></tr>
+  <tr><td><code>host.path</code> <span class="req">必填</span></td><td>宿主机绝对路径，以 <code>DirectoryOrCreate</code> 挂载。必须在 <code>[storage].allowed_host_paths</code> 之下，<b>该列表为空时一律拒绝</b>；不能含 <code>..</code>、<code>//</code> 或结尾的 <code>/</code></td></tr>
+  <tr><td><code>ossfs.*</code></td><td>Docker 运行时专用。K8s 下回 400（<code>Supported backends: pvc, host</code>）</td></tr>
+</table>
+<p><b>同一个 PVC 挂多次</b>（不同 <code>subPath</code> 挂到不同目录）是支持的，规则如下：</p>
+<ul>
+  <li>Pod 里只生成一个卷，卷名取第一个条目的 <code>name</code>；</li>
+  <li>只有所有挂载都只读时，卷源才只读；</li>
+  <li>各条目的 <code>createIfNotExists</code> 和 <code>deleteOnSandboxTermination</code> 必须一致，否则回 400。</li>
+</ul>
+<p>server 会对每个 PVC 先 <code>get</code> 一次，检查它是否属于别的沙箱（防止被别人的清理误删）。因此 server 的 RBAC 需要 PVC 的 <code>get</code> 权限，没有时回 500。</p>
+
+<h3 id="s4-9">4.9 extensions</h3>
+<table>
+  <tr><th>键</th><th>值</th><th>作用</th></tr>
+  <tr><td><code>poolRef</code></td><td>Pool 名，或 <code>"*"</code></td><td>切到池模式。Pool 不存在回 404 <code>K8S_POOL_NOT_FOUND</code>；在 <code>pool_acquisition_timeout_seconds</code>（默认 30 秒）内等不到空位，回 429 并带 <code>Retry-After</code></td></tr>
+  <tr><td><code>access.renew.extend.seconds</code></td><td>十进制整数字符串，300～86400</td><td>按访问自动续期（OSEP-0009）：每次访问把过期时间往后推这么多秒。需要 server 开 <code>[renew_intent]</code>，并且流量经过 server 代理或 ingress 网关。值不合法回 400</td></tr>
+  <tr><td><code>bootstrap.execd.isolation</code></td><td><code>"enable"</code></td><td>execd 隔离会话：主容器加 <code>SYS_ADMIN</code>，seccomp 和 AppArmor 设为 <code>Unconfined</code>，并挂一个 emptyDir 到 <code>/var/lib/execd/isolation</code>。<b>会明显放宽容器权限</b></td></tr>
+  <tr><td><code>opensandbox.extensions.&lt;x&gt;</code></td><td>任意字符串</td><td>原样写到 annotation <code>opensandbox.io/extensions.&lt;x&gt;</code>，并在响应和 GET 的 <code>extensions</code> 里回显</td></tr>
+  <tr><td>其他键</td><td>—</td><td>不报错，也不保存</td></tr>
+</table>
+
+<!-- ====================================================================== -->
+<h2 id="s5">5. 参数落到 Pod 的哪里</h2>
+<p>镜像启动、非池模式下，server 把 BatchSandbox 模板文件（我们的是 <code>sbx.yaml</code> / <code>acp.yaml</code> / <code>bench.yaml</code>）和本次参数合并成 BatchSandbox，再由控制器建出 Pod。图中蓝色等宽字是请求字段。</p>
+<p>合并规则（<code>template_manager._deep_merge</code>）：字典递归合并，列表整体替换。server 生成的 <code>containers</code>、<code>initContainers</code>、<code>volumes</code> 会覆盖模板里的同名列表，所以 server 会另外把以下三样从模板捞回来：</p>
+<ul>
+  <li>模板里的 Pod 卷；</li>
+  <li>模板 <code>sandbox</code> 容器的 <code>volumeMounts</code>；</li>
+  <li>模板 <code>sandbox</code> 容器的 <code>securityContext</code>。</li>
+</ul>
+<p>模板容器上的其他字段（如 <code>env</code>、<code>resources</code>、<code>workingDir</code>）以及模板里的其他容器都会丢失。Pod 级的标量和字典字段（如 Pod <code>securityContext</code>、<code>tolerations</code>、<code>nodeSelector</code>）在请求没有涉及时保留。</p>
+<div class="fig">
+<svg viewBox="0 0 1080 540" width="100%" role="img" aria-label="创建参数到 BatchSandbox 与 Pod 的映射">
+  <rect x="10" y="10" width="1060" height="520" rx="8" class="inner"/>
+  <text x="26" y="34" class="b">BatchSandbox（CR）</text>
+  <text x="160" y="34" class="s">命名空间 = server 的 [kubernetes].namespace；名字 = 沙箱 id</text>
+
+  <!-- 第一行：CR 元数据与 spec -->
+  <rect x="26" y="48" width="330" height="96" rx="6" class="c2"/>
+  <text x="40" y="70" class="b">metadata.labels（Pod 上也有一份）</text>
+  <text x="40" y="91" class="mono">opensandbox.io/id = 沙箱 id</text>
+  <text x="40" y="109" class="mono">opensandbox.io/manual-cleanup ← <tspan class="k">timeout</tspan>=null</text>
+  <text x="40" y="127" class="mono">＋ <tspan class="k">metadata</tspan> 的全部键值</text>
+
+  <rect x="372" y="48" width="340" height="96" rx="6" class="c2"/>
+  <text x="386" y="70" class="b">metadata.annotations（Pod 上也有一份）</text>
+  <text x="386" y="91" class="mono">opensandbox.io/extensions.* ← <tspan class="k">extensions</tspan></text>
+  <text x="386" y="109" class="mono">egress 令牌 ← <tspan class="k">networkPolicy</tspan></text>
+  <text x="386" y="127" class="mono">访问令牌 ← <tspan class="k">secureAccess</tspan></text>
+
+  <rect x="728" y="48" width="326" height="96" rx="6" class="c2"/>
+  <text x="742" y="70" class="b">spec</text>
+  <text x="742" y="91" class="mono">expireTime ← <tspan class="k">timeout</tspan>（null 则不设）</text>
+  <text x="742" y="109" class="mono">template ← server 的模板文件 + 下图</text>
+  <text x="742" y="127" class="s">池模式：poolRef + 任务（entrypoint、env）</text>
+
+  <!-- Pod -->
+  <rect x="26" y="160" width="1028" height="354" rx="6" class="ghost"/>
+  <text x="40" y="182" class="b">Pod spec</text>
+  <text x="40" y="203" class="mono">nodeSelector ← <tspan class="k">platform</tspan>  ·  imagePullSecrets ← <tspan class="k">image.auth</tspan>（server 先建 Secret）  ·  runtimeClassName ← server 配置</text>
+  <text x="40" y="221" class="mono">volumes ← <tspan class="k">volumes</tspan>（同一 claim 合成一个卷）＋ opensandbox-bin（emptyDir）  ·  automountServiceAccountToken: false</text>
+
+  <!-- init 容器 -->
+  <rect x="42" y="236" width="270" height="118" rx="6" class="c4"/>
+  <text x="56" y="258" class="b">initContainer：execd-installer</text>
+  <text x="56" y="280" class="mono">image ← server 的 execd_image</text>
+  <text x="56" y="300" class="s">把 execd、bootstrap.sh 拷进</text>
+  <text x="56" y="318" class="s">opensandbox-bin（/opt/opensandbox）</text>
+  <text x="56" y="338" class="s">不受请求参数影响</text>
+
+  <!-- PVC -->
+  <rect x="42" y="370" width="270" height="130" rx="6" class="c5"/>
+  <text x="56" y="392" class="b">Pod 之外：PVC</text>
+  <text x="56" y="414" class="s"><tspan class="mono k">createIfNotExists</tspan> 且不存在</text>
+  <text x="56" y="432" class="s">→ server 在建 CR 之前先建</text>
+  <text x="56" y="454" class="s"><tspan class="mono k">deleteOnSandboxTermination</tspan></text>
+  <text x="56" y="472" class="s">→ 打 label 与 ownerReference，</text>
+  <text x="56" y="490" class="s">随 CR 删除（含到期删除）</text>
+
+  <!-- 主容器 -->
+  <rect x="328" y="236" width="440" height="264" rx="6" class="c1"/>
+  <text x="342" y="258" class="b">container：sandbox（主容器）</text>
+  <text x="342" y="282" class="mono">image ← <tspan class="k">image.uri</tspan></text>
+  <text x="342" y="302" class="mono">command ← ["/opt/opensandbox/bootstrap.sh"] + <tspan class="k">entrypoint</tspan></text>
+  <text x="342" y="322" class="mono">env ← <tspan class="k">env</tspan>（去掉 OPENSANDBOX_EGRESS_*）</text>
+  <text x="342" y="340" class="mono">      ＋ OPENSANDBOX_ID · EXECD · EXECD_INIT</text>
+  <text x="342" y="358" class="mono">      ＋ OPENSANDBOX_LIFECYCLE ← <tspan class="k">lifecycle</tspan></text>
+  <text x="342" y="380" class="mono">resources.limits   ← <tspan class="k">resourceLimits</tspan>（gpu→nvidia.com/gpu）</text>
+  <text x="342" y="398" class="mono">resources.requests ← <tspan class="k">resourceRequests</tspan>，缺省 = limits</text>
+  <text x="342" y="420" class="mono">volumeMounts ← <tspan class="k">volumes[]</tspan>.mountPath / subPath / readOnly</text>
+  <text x="342" y="438" class="mono">           ＋ opensandbox-bin → /opt/opensandbox</text>
+  <text x="342" y="460" class="mono">securityContext.drop NET_ADMIN ← 有 <tspan class="k">networkPolicy</tspan></text>
+  <text x="342" y="478" class="mono">SYS_ADMIN、Unconfined ← <tspan class="k">bootstrap.execd.isolation</tspan></text>
+
+  <!-- egress -->
+  <rect x="784" y="236" width="254" height="180" rx="6" class="c3 dashed"/>
+  <text x="798" y="258" class="b">container：egress</text>
+  <text x="798" y="276" class="s">仅当带了 networkPolicy</text>
+  <text x="798" y="300" class="mono">image ← server [egress].image</text>
+  <text x="798" y="320" class="mono">mode  ← server [egress].mode</text>
+  <text x="798" y="340" class="mono">规则  ← <tspan class="k">networkPolicy</tspan></text>
+  <text x="798" y="360" class="mono">MITM  ← <tspan class="k">credentialProxy</tspan></text>
+  <text x="798" y="380" class="mono">OPENSANDBOX_EGRESS_*</text>
+  <text x="798" y="398" class="mono">      ← <tspan class="k">env</tspan> 白名单</text>
+
+  <rect x="784" y="426" width="254" height="82" rx="6" class="inner"/>
+  <text x="798" y="446" class="s">与模板合并：字典深合并、列表整体替换</text>
+  <text x="798" y="463" class="s">模板的 Pod 级字段（tolerations 等）保留</text>
+  <text x="798" y="480" class="s">模板容器只并回 volumeMounts、</text>
+  <text x="798" y="497" class="s">securityContext；模板的卷也并回</text>
+</svg>
+</div>
+<p class="cap">图 1　创建参数在 BatchSandbox 和 Pod 上的落点（K8s 运行时、batchsandbox provider、非池模式）</p>
+
+<!-- ====================================================================== -->
+<h2 id="s6">6. 校验顺序与错误</h2>
+<h3>6.1 顺序</h3>
+<ol>
+  <li><b>pydantic 模型</b>（<code>api/schema.py</code>）：检查类型、必填、范围（如 <code>timeout ≥ 60</code>）、格式（卷名、PVC 名、storage），以及 <code>model_validator</code> 里的互斥规则。失败回 <b>422</b>。</li>
+  <li><b>extensions</b>：只检查 <code>access.renew.extend.seconds</code>，失败回 400。</li>
+  <li><b>快照解析</b>：对应 404 / 409。</li>
+  <li><b>建 CR 前的业务校验</b>（<code>kubernetes_service.create_sandbox</code>），依次检查：
+    <ul>
+      <li>池模式下不兼容的字段</li>
+      <li>entrypoint 非空</li>
+      <li>metadata 是否符合 label 规则</li>
+      <li>platform 取值</li>
+      <li>timeout 上限</li>
+      <li>secureAccess</li>
+      <li>egress 配置、gVisor</li>
+      <li>image.auth</li>
+      <li>egress 环境变量白名单与 upstream proxy</li>
+      <li>卷</li>
+      <li>池是否存在</li>
+    </ul>
+    失败回 400 / 404，此时没有任何副作用。</li>
+  <li><b>建 PVC、建 CR</b>：provider 的预检失败（如 <code>ossfs</code>、平台冲突）回 400。</li>
+  <li><b>等待就绪</b>：失败时先删掉 CR 再返回，对应 400 / 403 / 429 / 500 / 504。</li>
+</ol>
+
+<h3>6.2 错误码</h3>
+<table>
+  <tr><th>状态码</th><th>格式</th><th>典型原因</th></tr>
+  <tr><td>422</td><td>FastAPI 默认格式 <code>{"detail": [{loc, msg, type}]}</code>，<b>不是</b> <code>{code, message}</code></td><td>
+    <ul>
+      <li><code>image</code> 和 <code>snapshotId</code> 都给了或都没给</li>
+      <li>镜像启动缺 <code>entrypoint</code></li>
+      <li>非池模式缺 <code>resourceLimits</code></li>
+      <li><code>timeout &lt; 60</code></li>
+      <li>env 里有 <code>OPENSANDBOX_LIFECYCLE</code></li>
+      <li><code>credentialProxy.enabled</code> 但没带 <code>networkPolicy</code></li>
+      <li>一个卷给了零个或多个后端</li>
+      <li>lifecycle 字段写错或钩子重名</li>
+      <li><code>templateId</code> 带了禁止字段</li>
+      <li><code>poolRef</code> 同时带了 <code>snapshotId</code> 或 <code>lifecycle</code></li>
+    </ul></td></tr>
+  <tr><td>400</td><td><code>{code, message}</code></td><td>
+    <ul>
+      <li><code>INVALID_PARAMETER</code>：platform、timeout 上限、secureAccess、egress 未配、dns+nft、gVisor、image.auth、池模式冲突、egress 变量白名单、ossfs、平台调度不上（<code>POD_PLATFORM_UNSCHEDULABLE</code>）、命名空间不存在</li>
+      <li><code>INVALID_METADATA_LABEL</code></li>
+      <li><code>INVALID_ENTRYPOINT</code></li>
+      <li>卷系列：<code>DUPLICATE_VOLUME_NAME</code>、<code>INVALID_HOST_PATH</code>、<code>HOST_PATH_NOT_ALLOWED</code>、<code>INVALID_SUB_PATH</code>、<code>INVALID_PVC_NAME</code> 等</li>
+    </ul></td></tr>
+  <tr><td>401</td><td><code>{code, message}</code></td><td>API key 缺失或错误</td></tr>
+  <tr><td>403</td><td><code>{code, message}</code></td><td><code>KUBERNETES::QUOTA_EXCEEDED</code>：命名空间 ResourceQuota 不够。规范说 batchsandbox provider 下不会快速失败，而是等到超时；但 1.1.1 的等待循环会识别状态消息里的 <code>exceeded quota</code>，是否生效取决于控制器有没有把拒绝原因写进状态（未实测）</td></tr>
+  <tr><td>404</td><td><code>{code, message}</code></td><td>快照、Pool、模板不存在</td></tr>
+  <tr><td>409</td><td><code>{code, message}</code></td><td>快照未就绪</td></tr>
+  <tr><td>429</td><td><code>{code, message}</code> + <code>Retry-After</code></td><td>池在 <code>pool_acquisition_timeout_seconds</code> 内没有空位</td></tr>
+  <tr><td>500</td><td><code>{code, message}</code></td><td><code>K8S_POD_FAILED</code>（Pod 进入 Failed）、K8s API 错误、没有 PVC 的 <code>get</code> 权限</td></tr>
+  <tr><td>503</td><td><code>{code, message}</code></td><td>并发建同名 PVC 时，复查归属失败（可重试）</td></tr>
+  <tr><td>504</td><td><code>{code, message}</code></td><td><code>K8S_POD_READY_TIMEOUT</code>：在 <code>sandbox_create_timeout_seconds</code> 内 Pod 没拿到 IP，常见原因是镜像拉取慢、调度不上、PVC 不存在</td></tr>
+</table>
+
+<!-- ====================================================================== -->
+<h2 id="s7">7. 规范与实现的出入</h2>
+<table>
+  <tr><th>#</th><th>现象</th><th>影响</th></tr>
+  <tr><td>1</td><td><code>metadata</code> 就是 K8s label。规范示例 <code>"name": "Data Processing Sandbox"</code> 在 1.1.1 上回 400</td><td>不能存可读名称、URL、邮箱、中文；只能放 id 类短值</td></tr>
+  <tr><td>2</td><td><code>CreateSandboxRequest</code> 和大多数嵌套对象没设 <code>extra = "forbid"</code>（只有 lifecycle 的三个对象设了），未知字段被静默丢弃；规范写的 <code>additionalProperties: false</code> 在 server 端不生效</td><td>拼错 <code>networkPolicy</code> 会得到一个出站全放行的沙箱。另外 server 开了 <code>populate_by_name</code>，<code>resource_limits</code> 这类下划线写法也被接受。1.2.0 对 <code>networkPolicy</code> 里的未知字段改为回 422</td></tr>
+  <tr><td>3</td><td>结构错误回 422，格式是 FastAPI 默认的 <code>{"detail": [...]}</code>；规范只列了 400 和 <code>ErrorResponse</code></td><td>客户端解析错误时要同时兼容 <code>message</code> 和 <code>detail</code></td></tr>
+  <tr><td>4</td><td>返回 <code>Running</code> 时，实际可能只是 <code>Allocated</code>（Pod 有 IP，但 init 容器或主容器还没就绪）</td><td>拿到响应后立刻调 execd 可能连不上，必须轮询 <code>/ping</code></td></tr>
+  <tr><td>5</td><td><code>resourceLimits: {}</code> 能通过校验，Pod 不设任何 resources，<code>resourceRequests</code> 也被丢掉</td><td>沙箱变成 BestEffort，只受命名空间 LimitRange 约束</td></tr>
+  <tr><td>6</td><td><code>env</code> 只能传明文值</td><td>令牌、密钥会出现在 BatchSandbox 和 Pod spec 里，能读这两类对象的人都能拿到</td></tr>
+  <tr><td>7</td><td>规范列了 <code>ossfs</code> 卷，K8s 运行时不支持</td><td>回 400</td></tr>
+  <tr><td>8</td><td><code>createIfNotExists</code> 缺省是 true</td><td>claimName 写错时不会报错，而是悄悄建一个新的空 PVC（默认 1Gi）</td></tr>
+  <tr><td>9</td><td><code>OPENSANDBOX_EGRESS_*</code> 在没带 <code>networkPolicy</code> 时被丢弃，只打一条 warning 日志</td><td>以为配上了，实际没生效</td></tr>
+  <tr><td>10</td><td>池模式下 <code>image</code>、<code>resourceLimits</code>、<code>resourceRequests</code> 可以传，但不会被使用</td><td>以为覆盖了池模板，实际没有</td></tr>
+  <tr><td>11</td><td>规范说 <code>networkPolicy: {}</code> 是全放行，sidecar 的实际行为是全拒绝</td><td>只想挂上 sidecar（比如为了 Credential Vault）却没写 <code>defaultAction: allow</code>，沙箱就断网了</td></tr>
+  <tr><td>12</td><td>规范说 <code>target</code> 不支持 IP / CIDR，sidecar 其实支持</td><td>可以直接按网段放行或封禁，比如封掉集群内网段</td></tr>
+</table>
+
+<!-- ====================================================================== -->
+<h2 id="s8">8. 我们的部署与 Atlas 的用法</h2>
+<h3>8.1 三个 lifecycle server 上各参数能否使用</h3>
+<p>依据 <code>deploy/local/opensandbox/{sbx,acp,bench}-values.yaml</code>。三者都是 <code>runtime.type = "kubernetes"</code>、<code>workload_provider = "batchsandbox"</code>、<code>sandbox_create_timeout_seconds = 180</code>、<code>execd_run_as_init = true</code>，都没配以下几项：</p>
+<ul>
+  <li><code>max_sandbox_timeout_seconds</code>（不设超时上限）</li>
+  <li><code>[ingress]</code> gateway</li>
+  <li><code>allowed_host_paths</code></li>
+  <li><code>[renew_intent]</code></li>
+  <li>Fast Sandbox</li>
+</ul>
+<table>
+  <tr><th>参数</th><th>opensandbox-sbx（atlas-sbx）</th><th>opensandbox-bench（atlas-sbx）</th><th>opensandbox-acp（atlas-acp）</th></tr>
+  <tr><td>image / entrypoint / env / metadata / resources / timeout</td><td class="c ok">可用</td><td class="c ok">可用</td><td class="c ok">可用</td></tr>
+  <tr><td><code>volumes.pvc</code></td><td class="c ok">可用</td><td class="c ok">可用</td><td class="c ok">可用</td></tr>
+  <tr><td><code>volumes.host</code></td><td class="c">400（白名单为空）</td><td class="c">400</td><td class="c">400</td></tr>
+  <tr><td><code>networkPolicy</code></td><td class="c">400（没配 egress）</td><td class="c">400</td><td class="c ok">可用（dns+nft）</td></tr>
+  <tr><td><code>credentialProxy.enabled</code></td><td class="c">400</td><td class="c">400</td><td class="c ok">可用</td></tr>
+  <tr><td><code>secureAccess</code></td><td class="c">400</td><td class="c">400</td><td class="c">400</td></tr>
+  <tr><td><code>platform</code></td><td class="c ok">可用</td><td class="c ok">可用</td><td class="c ok">可用</td></tr>
+  <tr><td><code>lifecycle</code></td><td class="c ok">可用（未用）</td><td class="c ok">可用（未用）</td><td class="c ok">可用（未用）</td></tr>
+  <tr><td><code>snapshotId</code> / <code>poolRef</code> / <code>templateId</code></td><td colspan="3" class="c">没有快照、Pool、模板，不可用</td></tr>
+  <tr><td><code>access.renew.extend.seconds</code></td><td colspan="3" class="c">校验能过，但没开 renew_intent，不会续期</td></tr>
+</table>
+
+<h3>8.2 Atlas 实际发出的请求</h3>
+<p>原生沙箱（<code>providers/opensandbox/provision.py</code> 中的 <code>sandbox_spec</code>），strict 档：</p>
+<pre><code>{
+  "image": {"uri": "&lt;AgentSpec.sandbox.image 或默认镜像&gt;"},
+  "entrypoint": ["tail", "-f", "/dev/null"],
+  "timeout": null,                                  // 不自动过期，回收由 Atlas 负责
+  "resourceLimits":   {"cpu": "...", "memory": "..."},
+  "resourceRequests": {"cpu": "...", "memory": "..."},
+  "env": {
+    "EXECD_ACCESS_TOKEN": "&lt;令牌&gt;",               // ★ 明文进 Pod spec（第 7 节 #6）
+    "EXECD_INIT": "1",
+    "EXECD_ENVS": "/tmp/.execd/env",                // strict 档根目录只读
+    "TMPDIR": "/tmp",
+    "HOME": "/home/agent"                           // 评测档不设；配了代理时改为设 http(s)_proxy / no_proxy
+  },
+  "metadata": {"atlas.managed": "true", "atlas.kind": "sbx", "atlas.profile": "strict",
+               "atlas.thread": "&lt;ws&gt;", "atlas.user": "&lt;user&gt;"},
+  "volumes": [
+    {"name": "workspace", "pvc": {"claimName": "atlas-oss", "createIfNotExists": false},
+     "mountPath": "/workspace", "subPath": "&lt;user&gt;/&lt;ws&gt;/workspace", "readOnly": false},
+    {"name": "skills",    "pvc": {"claimName": "atlas-oss", "createIfNotExists": false},
+     "mountPath": "/skills",    "subPath": "&lt;user&gt;/&lt;ws&gt;/skills",    "readOnly": true}
+  ]
+}</code></pre>
+<p>ACP Pod（<code>providers/opensandbox/acp.py</code>）与原生沙箱的不同点：</p>
+<ul>
+  <li><code>entrypoint</code> 是 sh 包装：把令牌写进文件，把模型 key 读成环境变量。</li>
+  <li><code>env</code> 多了 <code>ATLAS_BRIDGE_*</code> 与 agent 环境变量白名单。</li>
+  <li>多挂一个 <code>state</code> 卷，作为 CLI 的 HOME。</li>
+  <li>工作区挂父会话的前缀。</li>
+  <li>有 git 档案时加 <code>networkPolicy: {defaultAction: allow}</code> 和 <code>credentialProxy: {enabled: true}</code>。</li>
+</ul>
+<table>
+  <tr><th>对照</th><th>结论</th></tr>
+  <tr><td>metadata 是否符合 label 规则</td><td>键是 <code>atlas.xxx</code>（无前缀名字，含 <code>.</code>，合法）。值里 <code>&lt;ws&gt;</code> 和 <code>&lt;user&gt;</code> 必须是不超过 63 个字符、只含字母数字和 <code>-_.</code> 的 id。UUID 没问题；如果以后改成邮箱这类用户标识，创建会直接 400</td></tr>
+  <tr><td>同一 PVC 挂多次</td><td>两三个条目都是 <code>atlas-oss</code>，标志位一致（都是 <code>createIfNotExists: false</code> 且没设删除），合法。Pod 里只有一个卷，名为 <code>workspace</code>；因为 workspace 可写，卷源可写</td></tr>
+  <tr><td><code>createIfNotExists: false</code></td><td>整桶 PVC 是预先建好的，所以设成 false 是对的。如果 PVC 丢了，症状是 180 秒后回 504，而不是 404</td></tr>
+  <tr><td>超时配合</td><td>server 最多等 180 秒，Atlas 的 <code>LifecycleClient</code> 超时是 200 秒，能收到 server 的 504，不会先在客户端超时</td></tr>
+  <tr><td>错误解析</td><td><code>lifecycle.py::_detail</code> 先取 <code>message</code>，再取 <code>detail</code>，422 和 400 两种格式都能带出原因</td></tr>
+  <tr><td>未用到的能力</td><td><code>lifecycle</code> 钩子、<code>platform</code>、<code>networkPolicy</code>（原生沙箱）、<code>secureAccess</code>、池、快照</td></tr>
+</table>
+
+</main>
+</body>
+</html>

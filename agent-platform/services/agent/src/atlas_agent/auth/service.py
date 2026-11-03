@@ -101,10 +101,6 @@ async def listen_invalidations(settings: Settings) -> None:
         delay = min(delay * 2, 30.0)
 
 
-#: 部门 id → 上级部门 id（用户中心部门树；展开文档级权限的「含上级部门」用）
-_dept_parents: tuple[float, dict[str, str | None]] = (0.0, {})
-
-
 class AuthService:
     def __init__(self, session: AsyncSession, settings: Settings, uc: UCClient | None) -> None:
         self.session = session
@@ -207,40 +203,3 @@ class AuthService:
             return {}
         data_level_cache.put(user_id, levels, self.settings.authz_snapshot_ttl_s)
         return levels
-
-    # ───────────────────────────── 文档级权限的主体展开（知识库 §7.4）
-
-    async def principal_tags(self, user_id: UUID) -> list[str]:
-        """用户 → 主体标签：u:用户、d:所在部门及各级上级、r:角色（Atlas 应用内）。
-
-        知识库检索拿它和文档的 acl 求交集。未接入用户中心（dev）时只有 u:。
-        """
-        tags = [f"u:{user_id}"]
-        if self.uc is None:
-            return tags
-        snap = await self._snapshot(user_id)
-        user = await self.session.get(AppUser, user_id)
-        if user is None:
-            return tags
-        tags += [f"r:{r}" for r in snap.get("roles") or []]
-        if user.dept_id:
-            parents = await self._dept_parents()
-            dept: str | None = str(user.dept_id)
-            seen: set[str] = set()
-            while dept and dept not in seen:
-                seen.add(dept)
-                tags.append(f"d:{dept}")
-                dept = parents.get(dept)
-        return tags
-
-    async def _dept_parents(self) -> dict[str, str | None]:
-        global _dept_parents
-        expires, parents = _dept_parents
-        if expires > time.monotonic():
-            return parents
-        rows = await self._uc().depts_tree()
-        parents = {
-            str(d["id"]): (str(d["parent_id"]) if d.get("parent_id") else None) for d in rows
-        }
-        _dept_parents = (time.monotonic() + self.settings.authz_snapshot_ttl_s, parents)
-        return parents

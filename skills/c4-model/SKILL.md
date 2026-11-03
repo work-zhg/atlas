@@ -12,7 +12,7 @@ C4 按层级逐级放大：Level 1 System Context → Level 2 Container → Leve
 | System Context | [context/RULES.md](context/RULES.md) | [context/template.html](context/template.html) | `system-context.html` |
 | Container | [container/RULES.md](container/RULES.md) | [container/template.html](container/template.html) | `container.html` |
 | Component | [component/RULES.md](component/RULES.md) | [component/template.html](component/template.html) | `component-<container 短名>.html`，每个 container 一张 |
-| Code | [code/RULES.md](code/RULES.md) | [code/template.html](code/template.html) | `code-<component 短名>.html`，每个 component 一张 |
+| Code | [code/RULES.md](code/RULES.md) | [code/template.html](code/template.html) | `code-<component 短名>.html`，每个 component 一张；按 DDD 领域拆时 `code-<component 短名>-<领域短名>.html`，每个领域一张 |
 | Dynamic（sequence） | [dynamic/RULES.md](dynamic/RULES.md) | [dynamic/template.html](dynamic/template.html) | `dynamic-<场景短名>.html`，每个场景一张 |
 | Deployment | [deployment/RULES.md](deployment/RULES.md) | [deployment/template.html](deployment/template.html) | `deployment-<环境短名>.html`，每个环境一张 |
 

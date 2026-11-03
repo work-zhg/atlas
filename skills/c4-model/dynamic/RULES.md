@@ -55,6 +55,11 @@ C4 的 Dynamic 图有 collaboration 和 sequence 两种画法，表达的信息�
 - 跨进程的消息必须写 `technology`，包括 container 之间、软件系统之间、component 和 container 或软件系统之间的消息；component 之间和人员发起的消息可以不写。
 - 自己调用自己（如开始一个后台任务）画成回到自己生命线的回环。
 - 只画这个场景的关键交互，不要把每次日志、每次缓存读取都画出来。
+- 消息带的数据需要说清「从哪来、长什么样」时（请求体、凭据、配置、生成的资源），写在 `details` 里，不要塞进 `description`：标签只留一句话，细节显示在图下方的「消息说明」里，标签末尾带 ⓘ，点击跳过去。
+  - `note`：一段补充说明，比如为什么这么做、和别的消息的先后关系。
+  - `items`：一行一项，`[项, 来源, 样例]`。来源写到能查到的地方（配置名、Secret 名、文件路径、函数名），样例写真实的值或形状，敏感值打码或写成占位符（如 `<会话创建者 uid>`）。
+  - `example`：完整的数据样例（请求体、资源清单），原样显示在代码框里。
+  - 不是每条消息都要写：只给数据不显然的消息写。
 
 ## 图面要求
 
@@ -64,6 +69,7 @@ C4 的 Dynamic 图有 collaboration 和 sequence 两种画法，表达的信息�
 - 参与者头上下各画一排，写名字和 `[类型: 技术]`；人员和数据库画成图标。
 - 边界框标题居中，写名字和 `[类型]`。
 - 每条消息写「编号: 说明」，下一行写 `[技术]`。
+- 有 `details` 的消息，图下方有「消息说明」：按编号一节一节列出说明、[项 / 来源 / 样例] 表和数据样例。
 - 图下方有图例：每种参与者、边界、消息各一项。
 
 ## 样式（模板内置）
@@ -99,7 +105,14 @@ C4 的 Dynamic 图有 collaboration 和 sequence 两种画法，表达的信息�
   ],
   "messages": [                           // 数组顺序 = 编号顺序
     { "from": "ui", "to": "signIn", "description": "Submits credentials to",
-      "technology": "JSON/HTTP" }         // 跨进程必填
+      "technology": "JSON/HTTP",          // 跨进程必填
+      "details": {                        // 可选：显示在图下方的「消息说明」里
+        "note": "一段补充说明",
+        "items": [                        // 每行 [项, 来源, 样例]
+          ["username", "登录表单输入", "\"alice\""]
+        ],
+        "example": "{\n  \"username\": \"alice\",\n  \"password\": \"***\"\n}"   // 原样显示，多行用 \n
+      } }
   ]
 }
 ```
@@ -118,8 +131,8 @@ C4 的 Dynamic 图有 collaboration 和 sequence 两种画法，表达的信息�
 
 | 状态 | 含义 |
 |---|---|
-| `error` | 数据不合规：缺字段、`kind` 取值不对、container 或 component 缺 technology、边界缺 name 或 type、边界嵌套成环、边界里没有参与者、同一边界的参与者不相邻、边界外的参与者和边界框重叠、消息端点不存在、消息缺 description、跨进程的消息缺 technology |
-| `warn` | 消息超过 20 条；某个参与者没有参与任何消息；边界标题比边界还宽 |
+| `error` | 数据不合规：缺字段、`kind` 取值不对、container 或 component 缺 technology、边界缺 name 或 type、边界嵌套成环、边界里没有参与者、同一边界的参与者不相邻、边界外的参与者和边界框重叠、消息端点不存在、消息缺 description、跨进程的消息缺 technology、`details` 格式不对（不是对象，`note` / `example` 不是字符串，`items` 的行不是三个字符串） |
+| `warn` | 消息超过 20 条；某个参与者没有参与任何消息；边界标题比边界还宽；`details` 是空的 |
 | `ok` | 全部通过；页面顶部不显示提示框 |
 
 每条问题会以 `<li data-level="error|warn">` 的形式显示在页面顶部的提示框里。

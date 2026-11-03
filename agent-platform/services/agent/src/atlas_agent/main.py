@@ -13,7 +13,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.requests import Request
 
-from .api.internal import router as internal_router
 from .api.v1 import router as v1_router
 from .api.v1.previews import install_log_mask
 from .auth.service import listen_invalidations
@@ -180,7 +179,6 @@ def create_app() -> FastAPI:
     install_log_mask()
 
     app.include_router(v1_router)
-    app.include_router(internal_router)
 
     # ★ SSE 并发闸门。会话流的寿命是「用户开着这个会话多久」，而不是「一轮
     #   多久」—— 每条占一个 Redis 连接，不设限的表现是**所有** HTTP 请求一起

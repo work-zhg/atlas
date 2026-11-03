@@ -75,14 +75,13 @@ class KnowledgeSettings(BaseSettings):
 
     # ── 认证（内网身份传递 §3、§8；见 auth.py）────────────────────────────
     #: 缺 X-Uid 一律 401，操作码按 X-Auth-Uid 取用户中心授权快照（没有免鉴权的模式）
-    #: atlas-server（文档级权限的主体展开 /internal/v1/auth/principals）
-    server_url: str = "http://127.0.0.1:8000"
     #: 知识库 MCP 令牌的签名密钥（与 atlas-server 的 KNOWLEDGE_MCP_SECRET 一致）。
     #: ★ 给会话 Pod（不可信代码）的能力凭据，不是服务间令牌 —— 内网去令牌后仍保留（§5.3）
     mcp_secret: SecretStr | None = None
     #: 授权快照（操作码）的进程内缓存
     authz_ttl_s: float = 30.0
-    #: 用户中心（库级权限 = 数据编码 AtlasKnowledgeBase，见 perms.py）。内网免令牌：
+    #: 用户中心（库级权限 = 数据编码 AtlasKnowledgeBase，见 perms.py；文档级权限的主体展开，
+    #: 见 principals.py）。内网免令牌：
     #: 请求头 X-Caller-App: atlas 即应用身份
     uc_base_url: str = "http://127.0.0.1:8030"
     #: Atlas 在用户中心的应用编码（知识库属于 Atlas 应用），出站请求头 X-Caller-App 写它
