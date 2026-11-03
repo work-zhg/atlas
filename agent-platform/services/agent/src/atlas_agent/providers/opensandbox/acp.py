@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
+from ...domain.workspace_layout import SKILLS_MOUNT, WORKSPACE_MOUNT, Area, WorkspaceLayout
 from ..pods import AcpModel, PodEndpoint
 from .lifecycle import LifecycleError
 from .provision import Provisioner, SandboxEndpoint, pvc_volume
@@ -43,8 +44,6 @@ __all__ = ["AcpProvisioner", "GitProfileDenied", "OpenSandboxPods", "acp_spec"]
 logger = logging.getLogger(__name__)
 
 EGRESS_PORT = 18080
-WORKSPACE_MOUNT = "/workspace"
-SKILLS_MOUNT = "/skills"
 #: CLI 的 HOME。★ 必须持久化：resume 靠它（CLI 把会话记录写在 HOME 下），而 Pod 会被删掉重建
 STATE_MOUNT = "/state"
 #: bridge 读令牌的文件（entrypoint 从 env 写出来；/tmp 是模板里的 emptyDir）
@@ -120,6 +119,7 @@ def acp_spec(
 
     model：经模型网关时的模型接入（网关地址、主体 Key、模型名）；None = 照旧按部署配置。
     """
+    layout = WorkspaceLayout.of(user, thread, workspace_thread)
     claude = cli.cli_type == "claude-code" and bool(settings.acp_model_base_url) and model is None
     agent_env: dict[str, str] = {}
     secret_env: dict[str, str] = {}
@@ -187,12 +187,13 @@ def acp_spec(
             "atlas.user": user,
         },
         "volumes": [
-            # ★ 工作区挂父会话的前缀（子智能体与主 agent 共享），技能与状态挂自己的
+            # ★ 工作区挂根会话的前缀（子智能体与主 agent 共享），技能与 CLI 的 HOME 挂自己的。
+            #   前缀都从共享内核 WorkspaceLayout 取，和工作区直连对象存储的 key 是同一个
+            pvc_volume(settings, "workspace", layout.prefix(Area.WORKSPACE), WORKSPACE_MOUNT),
             pvc_volume(
-                settings, "workspace", f"{user}/{workspace_thread}/workspace", WORKSPACE_MOUNT
+                settings, "skills", layout.prefix(Area.SKILLS), SKILLS_MOUNT, read_only=True
             ),
-            pvc_volume(settings, "skills", f"{user}/{thread}/skills", SKILLS_MOUNT, read_only=True),
-            pvc_volume(settings, "state", f"{user}/{thread}/system/cli-home", STATE_MOUNT),
+            pvc_volume(settings, "state", layout.key(Area.SYSTEM, "cli-home"), STATE_MOUNT),
         ],
     }
     if profile is not None:

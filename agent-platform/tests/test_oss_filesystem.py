@@ -1,4 +1,4 @@
-"""OssFilesystem 的行为契约。
+"""Workspace 的行为契约。
 
 用 moto 的内存 S3 —— 与真实 OSS / MinIO 是同一套 S3 API，所以这些断言
 在三种环境上等价成立。
@@ -13,14 +13,11 @@ from uuid import uuid4
 
 import boto3
 import pytest
+from atlas_agent.domain.workspace_layout import Area
+from atlas_agent.providers.filesystem import PathEscape, Workspace
+from atlas_agent.providers.filesystem.workspace import READ_MAX_BYTES
 from atlas_engine.contracts import EDIT_MAX_BYTES, FilesystemProtocol
 from moto import mock_aws
-
-from atlas_agent.providers.filesystem.oss import (
-    READ_MAX_BYTES,
-    OssFilesystem,
-    PathEscape,
-)
 
 BUCKET = "atlas-test"
 USER = "u-test"
@@ -37,7 +34,7 @@ def s3():
 
 @pytest.fixture
 def fs(s3):
-    return OssFilesystem(s3, bucket=BUCKET, user_id=USER, thread_id=uuid4())
+    return Workspace(s3, bucket=BUCKET, user_id=USER, thread_id=uuid4())
 
 
 @pytest.fixture
@@ -46,8 +43,8 @@ def two_sessions():
     with mock_aws():
         s3 = boto3.client("s3", region_name="us-east-1")
         s3.create_bucket(Bucket=BUCKET)
-        a = OssFilesystem(s3, bucket=BUCKET, user_id=USER, thread_id="t-a")
-        b = OssFilesystem(s3, bucket=BUCKET, user_id=USER, thread_id="t-b")
+        a = Workspace(s3, bucket=BUCKET, user_id=USER, thread_id="t-a")
+        b = Workspace(s3, bucket=BUCKET, user_id=USER, thread_id="t-b")
         yield a, b
 
 
@@ -71,24 +68,40 @@ def test_satisfies_filesystem_protocol(fs) -> None:
         "/../../x",
     ],
 )
-def test_path_escapes_are_absorbed_not_followed(fs, escape: str) -> None:
-    """逃逸路径被归一进工作区，绝不指向工作区之外。
+def test_path_escapes_are_rejected(fs, escape: str) -> None:
+    """越出区根的路径直接拒绝（PathGate），文件工具拿到的是错误结果。
 
-    ★ 规范化必须在拼前缀之前做。先拼后归一的话这些路径会落到
-      别的会话（甚至别的 root）上，而调用方拿到的是一个成功的 WriteResult。
+    ★ 规范化必须在拼前缀之前做。先拼后归一的话这些路径会落到别的会话（甚至别的用户）上，
+      而调用方拿到的是一个成功的 WriteResult。
+    ★ 原先是把它们悄悄归进本会话的工作区：模型以为写的是 ../x，实际落在别处，收不到任何提示。
     """
-    key = fs._to_key(escape)
-    assert key.startswith(f"{USER}/"), key
-    assert "/../" not in key and not key.endswith("/..")
-    # 归一之后必须仍在本会话的 workspace 下
-    assert "/workspace/" in key
+    with pytest.raises(PathEscape, match="越出"):
+        fs.key_of(escape)
+    assert "越出" in (fs.write(escape, "x").error or "")
+    assert "越出" in (fs.read(escape).error or "")
+
+
+def test_dot_dot_inside_the_workspace_is_fine(fs) -> None:
+    """没越界的 .. 照常规范化。"""
+    assert fs.key_of("a/b/../c.md") == fs.key_of("a/c.md")
+    assert fs.key_of("/workspace/a/../c.md") == fs.key_of("c.md")
+
+
+async def test_escaping_into_another_session_is_rejected(two_sessions) -> None:
+    """★ 用 ../../ 逃到同一个用户的别的会话：被拒，读不到、也写不进去（同步、异步两条路）。"""
+    a, b = two_sessions
+    b.write("secret.md", "b 的秘密")
+    other = "../../t-b/workspace/secret.md"
+    assert (await a.aread(other)).error and "越出" in (await a.aread(other)).error
+    assert "越出" in ((await a.awrite(other, "覆盖")).error or "")
+    assert b.read("secret.md").file_data["content"] == "b 的秘密"
 
 
 @pytest.mark.parametrize("bad", ["", "/", ".", "./", "/.."])
 def test_root_itself_is_not_a_file(fs, bad: str) -> None:
     """工作区根不是文件 —— 读写它必须显式失败而不是落到某个空 key 上。"""
     with pytest.raises(PathEscape):
-        fs._to_key(bad)
+        fs.key_of(bad)
 
 
 @pytest.mark.parametrize("bad", ["/workspace", "/"])
@@ -102,7 +115,7 @@ def test_root_operations_return_errors_not_raise(fs, bad: str) -> None:
 
 def test_null_byte_is_rejected(fs) -> None:
     with pytest.raises(PathEscape):
-        fs._to_key("a\x00b")
+        fs.key_of("a\x00b")
 
 
 def test_sessions_cannot_reach_each_other(two_sessions) -> None:
@@ -329,8 +342,8 @@ def test_skills_are_not_in_the_workspace_at_all(fs) -> None:
     fs.write("/skills/dataviz/SKILL.md", "技能")
 
     # 落到两个不同的绝对前缀
-    assert fs._ws != fs._skills
-    assert fs._skills.endswith("/skills")
+    assert fs.layout.prefix(Area.WORKSPACE) != fs.layout.prefix(Area.SKILLS)
+    assert fs.layout.prefix(Area.SKILLS).endswith("/skills")
 
     # search("") 只看 workspace —— 技能不在其中
     assert fs.search("").keys == ["report.md"]
@@ -348,8 +361,8 @@ def test_subagent_shares_parent_workspace_but_keeps_own_skills(s3) -> None:
     这一条红了意味着子智能体要么看不见父 agent 的产物（协作断了），
     要么读到了父的技能（隔离断了）—— 两个方向都是回归。
     """
-    parent = OssFilesystem(s3, bucket=BUCKET, user_id=USER, thread_id="t-parent")
-    child = OssFilesystem(
+    parent = Workspace(s3, bucket=BUCKET, user_id=USER, thread_id="t-parent")
+    child = Workspace(
         s3,
         bucket=BUCKET,
         user_id=USER,
@@ -357,8 +370,10 @@ def test_subagent_shares_parent_workspace_but_keeps_own_skills(s3) -> None:
         workspace_thread_id="t-parent",
     )
 
-    assert child._ws == parent._ws            # 同一份工作区
-    assert child._skills != parent._skills    # 各自的技能
+    assert child.layout.prefix(Area.WORKSPACE) == parent.layout.prefix(
+        Area.WORKSPACE
+    )  # 同一份工作区
+    assert child.layout.prefix(Area.SKILLS) != parent.layout.prefix(Area.SKILLS)  # 各自的技能
 
     parent.write("shared.md", "父写的")
     assert child.read("shared.md").file_data["content"].strip() == "父写的"
@@ -383,9 +398,12 @@ def test_system_area_is_sibling_of_workspace(fs) -> None:
     压缩归档与大结果外置放进工作区的话，模型 search 时会被它们淹没。
     平级之后它们对文件工具结构性不可见 —— 不是靠过滤，是根本不在前缀内。
     """
-    assert fs._sys.endswith("/system")
-    assert not fs._sys.startswith(fs._ws)
-    assert fs._ws.rsplit("/", 1)[0] == fs._sys.rsplit("/", 1)[0]
+    assert fs.layout.prefix(Area.SYSTEM).endswith("/system")
+    assert not fs.layout.prefix(Area.SYSTEM).startswith(fs.layout.prefix(Area.WORKSPACE))
+    assert (
+        fs.layout.prefix(Area.WORKSPACE).rsplit("/", 1)[0]
+        == fs.layout.prefix(Area.SYSTEM).rsplit("/", 1)[0]
+    )
 
 
 def test_subagent_skills_land_under_its_own_thread_prefix(s3) -> None:
@@ -400,8 +418,8 @@ def test_subagent_skills_land_under_its_own_thread_prefix(s3) -> None:
 
     s3.put_object(Bucket=BUCKET, Key="_skills/dataviz/1/SKILL.md", Body=b"v1")
 
-    parent = OssFilesystem(s3, bucket=BUCKET, user_id=USER, thread_id="t-parent")
-    child = OssFilesystem(
+    parent = Workspace(s3, bucket=BUCKET, user_id=USER, thread_id="t-parent")
+    child = Workspace(
         s3,
         bucket=BUCKET,
         user_id=USER,
@@ -413,9 +431,7 @@ def test_subagent_skills_land_under_its_own_thread_prefix(s3) -> None:
     asyncio.run(seed_session_skills(child, metas))
 
     # 同一个技能，两份副本，落在两个 thread 前缀下
-    keys = {
-        o["Key"] for o in s3.list_objects_v2(Bucket=BUCKET, Prefix=USER)["Contents"]
-    }
+    keys = {o["Key"] for o in s3.list_objects_v2(Bucket=BUCKET, Prefix=USER)["Contents"]}
     assert f"{USER}/t-parent/skills/dataviz/SKILL.md" in keys
     assert f"{USER}/t-child/skills/dataviz/SKILL.md" in keys
 

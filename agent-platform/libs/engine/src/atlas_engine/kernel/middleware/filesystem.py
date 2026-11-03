@@ -823,7 +823,7 @@ class FilesystemMiddleware(AgentMiddleware[AgentState, ContextT, ResponseT]):
     ★ 不管 `execute`：它归 SandboxMiddleware（沙箱与文件系统是两个独立的能力）。
       这里曾按「文件系统对象是否实现 SandboxProtocol」过滤 execute —— 沙箱拆出去
       之后那段检查把 SandboxMiddleware 注册的 execute 也从模型请求里剔掉了
-      （OssFilesystem 从不实现它），2026-10-19 随死代码一并删除。
+      （server 的工作区从不实现它），2026-10-19 随死代码一并删除。
 
     ★ 只在勾了文件工具时装（c4-model/agent/native-runtime/code-native-runtime-tools.html
       · FileTools）。大结果外置、超长用户输入外置原先也挂在这里，它因此是「恒装的脚手架」；
@@ -831,7 +831,7 @@ class FilesystemMiddleware(AgentMiddleware[AgentState, ContextT, ResponseT]):
 
     Args:
         filesystem: The agent's filesystem —— a `FilesystemProtocol` instance
-            (Atlas: `OssFilesystem`, the session workspace plus its `/skills`).
+            (Atlas: `Workspace`, the session workspace plus its `/skills`).
 
             `None` means no file capability: no file tools are registered
             (there is no ephemeral fallback).

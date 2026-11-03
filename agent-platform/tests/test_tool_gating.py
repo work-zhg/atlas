@@ -233,7 +233,7 @@ async def test_the_model_sees_execute_when_a_sandbox_is_configured() -> None:
 
     2026-10-19 排查死代码时发现：FilesystemMiddleware 还留着 execute 归它管时的能力过滤 ——
     文件系统对象不实现 SandboxProtocol 就把 execute 从模型请求里剔掉。生产上的
-    OssFilesystem 从不实现它，于是配了 bash 的智能体模型侧根本看不到 execute。
+    Workspace 从不实现它，于是配了 bash 的智能体模型侧根本看不到 execute。
     上面那批测试用假模型硬发 tool_call，绑没绑定都照样执行，所以一直没撞上 ——
     这条只看模型拿到了哪些工具。
     """

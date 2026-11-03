@@ -1,7 +1,7 @@
 """Pod 里 execd 的薄客户端（doc/sandbox-opensandbox-design.html §8、§9）。
 
     ExecdClient   命令（异步）：后台提交 → init 事件里的命令 id；状态；游标日志；中断；指标
-    ExecdFiles    文件（同步）：OssFilesystem 的同步核心跑在线程里，经它读写 Pod 里的 /workspace
+    ExecdFiles    文件（同步）：工作区的同步核心跑在线程里，经它读写 Pod 里的 /workspace
 
 ★ 命令一律后台模式（设计 E2）：execd 的前台命令在连接断开时会被 SIGKILL（上游 runtime/command.go）；
   后台命令不随连接走，完成后输出保留 24 小时，断线后用同一个 id 和游标接着读。

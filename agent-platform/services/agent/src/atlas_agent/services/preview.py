@@ -23,8 +23,7 @@ import redis.asyncio as aioredis
 
 from ..config import Settings
 from ..errors import NotFound
-from ..providers.filesystem import make_workspace
-from ..providers.filesystem.oss import WorkspaceListing
+from ..providers.filesystem import WorkspaceListing, make_workspace
 from ..repositories.thread import ThreadRepository
 
 _KEY = "atlas:preview:{}"

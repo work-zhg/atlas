@@ -1,4 +1,4 @@
-"""OssFilesystem 对着**真对象存储**（这里是 GCS 的 S3 兼容 XML API）。
+"""Workspace 对着**真对象存储**（这里是 GCS 的 S3 兼容 XML API）。
 
 没配就整体跳过 —— 与 tests/test_cluster_k8s.py 同款门控。要跑的话在仓库根
 .env 里配好：
@@ -36,8 +36,8 @@ from uuid import uuid4
 
 import pytest
 from atlas_agent.config import Settings
-from atlas_agent.providers.filesystem import make_workspace
-from atlas_agent.providers.filesystem.oss import SKILLS_MOUNT
+from atlas_agent.domain.workspace_layout import SKILLS_MOUNT, Area
+from atlas_agent.providers.filesystem import PathEscape, make_workspace
 
 from .conftest import REPO_ROOT
 
@@ -53,7 +53,7 @@ def _real_settings() -> Settings | None:
         return None
     try:
         settings = Settings(_env_file=env)
-    except Exception:  # noqa: BLE001 - .env 不全就是"没配"
+    except Exception:
         return None
     if not (settings.workspace_configured and settings.oss_endpoint):
         return None
@@ -140,9 +140,9 @@ def test_workspace_and_skills_land_on_different_prefixes(fs) -> None:
     fs.write(f"{SKILLS_MOUNT}/dataviz/SKILL.md", "技能")
 
     assert _keys_under(fs, "") == ["report.md"], "技能漏进了工作区列表"
-    assert fs._ws != fs._skills
-    assert fs._ws.endswith("/workspace")
-    assert fs._skills.endswith("/skills")
+    assert fs.layout.prefix(Area.WORKSPACE) != fs.layout.prefix(Area.SKILLS)
+    assert fs.layout.prefix(Area.WORKSPACE).endswith("/workspace")
+    assert fs.layout.prefix(Area.SKILLS).endswith("/skills")
 
 
 def test_deleting_the_workspace_leaves_skills_alone(fs) -> None:
@@ -256,7 +256,7 @@ def test_the_workspace_mount_point_is_not_a_subdirectory(fs) -> None:
     assert "absolute.md" in fs.search("").keys
     assert fs.read("absolute.md").file_data["content"] == "用绝对路径写的"
     assert fs.read("/workspace/absolute.md").file_data["content"] == "用绝对路径写的"
-    assert fs._to_key("/workspace/absolute.md") == f"{fs._ws}/absolute.md"
+    assert fs.key_of("/workspace/absolute.md") == f"{fs.layout.prefix(Area.WORKSPACE)}/absolute.md"
 
 
 def test_a_relative_workspace_directory_still_means_a_directory(fs) -> None:
@@ -267,7 +267,10 @@ def test_a_relative_workspace_directory_still_means_a_directory(fs) -> None:
     """
     fs.write("workspace/nested.md", "这是子目录")
 
-    assert fs._to_key("workspace/nested.md") == f"{fs._ws}/workspace/nested.md"
+    assert (
+        fs.key_of("workspace/nested.md")
+        == f"{fs.layout.prefix(Area.WORKSPACE)}/workspace/nested.md"
+    )
     assert fs.search("").common_prefixes == ["workspace/"]
     assert fs.read("workspace/nested.md").file_data["content"] == "这是子目录"
 
@@ -285,15 +288,13 @@ def test_search_and_write_agree_on_the_mount_prefix(fs) -> None:
     assert fs.search("reports/").keys == ["reports/q3.md"]
 
 
-def test_path_escape_is_absorbed_in_the_real_key_namespace(fs) -> None:
-    """★ `../` 必须被吸收进会话前缀，而不是真的爬出去。
+def test_path_escape_is_rejected_before_it_reaches_the_key_namespace(fs) -> None:
+    """★ `../` 越出区根直接拒绝，绝不真的爬出去。
 
-    对象存储的 key 是扁平字符串，`..` 没有特殊含义 —— 所以这条只能靠
-    我们自己归一化。归一化漏了的话，一个用户能读写另一个用户的前缀。
+    对象存储的 key 是扁平字符串，`..` 没有特殊含义 —— 所以这条只能靠我们自己的路径关卡。
+    漏了的话，一个用户能读写另一个用户的前缀。
     """
-    key = fs._to_key("../../../other-user/secrets.txt")
-    assert key.startswith(f"{fs._ws}/"), f"逃出了会话前缀：{key}"
-    assert ".." not in key
-
-    fs.write("../../escaped.txt", "还在里面")
-    assert _keys_under(fs, "") == ["escaped.txt"]
+    with pytest.raises(PathEscape):
+        fs.key_of("../../../other-user/secrets.txt")
+    assert "越出" in (fs.write("../../escaped.txt", "x").error or "")
+    assert _keys_under(fs, "") == []

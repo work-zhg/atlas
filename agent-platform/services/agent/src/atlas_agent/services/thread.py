@@ -20,8 +20,7 @@ from ..db.models import Agent, AgentVersion, Message, Thread
 from ..db.session import fetch_one
 from ..errors import AppError, BadCursor, Conflict, DependencyUnavailable, Forbidden, NotFound
 from ..pagination import InvalidCursor, decode_cursor, encode_cursor
-from ..providers.filesystem import make_workspace
-from ..providers.filesystem.oss import PathEscape, WorkspaceListing
+from ..providers.filesystem import PathEscape, WorkspaceListing, WorkspaceRouting, make_workspace
 from ..providers.filesystem.skill_copy import resolve_skills, seed_session_skills
 from ..providers.opensandbox import BENCH, AcpProvisioner, SandboxProvisioner
 from ..providers.sandbox import SandboxNotRunning, SandboxProfileDenied, exec_in_running
@@ -46,6 +45,8 @@ from ..schemas.thread import (
 from ..skills import skill_directory
 
 if TYPE_CHECKING:
+    import redis.asyncio as aioredis
+
     from ..memory import MemoryRuntime
 
 
@@ -388,13 +389,21 @@ class ThreadService:
             raise NotFound(f"工作区里没有文件 {path}", path=path) from exc
 
     async def put_file(self, thread_id: UUID, path: str, data: bytes) -> int:
-        listing = await self._listing(thread_id)
-        if listing is None:
-            raise NotFound("没有配置对象存储，这个部署没有文件能力")
+        """用户上传：和模型的写走同一个选路 —— 沙箱在跑时经沙箱写，只有一个写入方。"""
+        redis = make_redis(self._settings) if self._settings.sandbox_enabled else None
         try:
-            return await asyncio.to_thread(listing.put, path, data)
-        except PathEscape as exc:
-            raise BadRequest(str(exc), path=path) from exc
+            listing = await self._listing(thread_id, redis=redis)
+            if listing is None:
+                raise NotFound("没有配置对象存储，这个部署没有文件能力")
+            try:
+                return await listing.put(path, data)
+            except PathEscape as exc:
+                raise BadRequest(str(exc), path=path) from exc
+            except OSError as exc:  # 沙箱在跑却不响应：不悄悄改写对象存储
+                raise DependencyUnavailable(str(exc), thread_id=str(thread_id)) from exc
+        finally:
+            if redis is not None:
+                await redis.aclose()
 
     # ------------------------------------------------------------------ 沙箱
 
@@ -444,14 +453,23 @@ class ThreadService:
             exit_code=result.exit_code, output=result.output, truncated=result.truncated
         )
 
-    async def _listing(self, thread_id: UUID) -> WorkspaceListing | None:
+    async def _listing(
+        self, thread_id: UUID, *, redis: aioredis.Redis | None = None
+    ) -> WorkspaceListing | None:
+        """redis：要按沙箱选路时给（上传）；列举、打开直连对象存储，不用给。"""
         thread, _ = await self._require(thread_id)
+        ws_thread = str(thread.workspace_thread_id)
         fs = make_workspace(
             self._settings,
             thread.created_by_uuid,
             thread.thread_uuid,
             # ★ 子会话的工作区是父会话的（共享挂载）
             workspace_thread_id=thread.workspace_thread_id,
+            routing=(
+                WorkspaceRouting(SandboxProvisioner(self._settings, redis), ws_thread)
+                if redis is not None
+                else None
+            ),
         )
         return None if fs is None else WorkspaceListing(fs)
 

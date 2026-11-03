@@ -162,7 +162,7 @@ _CUSTOM_EVENTS = {
     "context.compacted": EventType.CONTEXT_COMPACTED,
     "context.cleared": EventType.CONTEXT_CLEARED,
     "context.usage": EventType.CONTEXT_USAGE,
-    # 文件不走 graph state 时的补发通道（OssFilesystem 的写路径经此）
+    # 文件不走 graph state 时的补发通道（工作区的写路径经此）
     "file.written": EventType.FILE_WRITTEN,
     # 审批模式变了（规划模式下计划获批）：执行器据此把新模式随检查点落库
     "agent.mode": EventType.AGENT_MODE,

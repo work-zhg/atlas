@@ -11,11 +11,10 @@ from uuid import uuid4
 
 import boto3
 import pytest
-from moto import mock_aws
-
 from atlas_agent.config import Settings
-from atlas_agent.providers.filesystem import make_workspace
-from atlas_agent.providers.filesystem.oss import OssFilesystem
+from atlas_agent.domain.workspace_layout import Area
+from atlas_agent.providers.filesystem import Workspace, make_workspace
+from moto import mock_aws
 
 _BASE = {"litellm_key": "x"}
 
@@ -31,7 +30,7 @@ def test_bucket_yields_oss_filesystem() -> None:
     with mock_aws():
         settings = Settings(**_BASE, oss_bucket="atlas-test", oss_endpoint="http://x")
         fs = make_workspace(settings, uuid4(), uuid4())
-        assert isinstance(fs, OssFilesystem)
+        assert isinstance(fs, Workspace)
 
 
 def test_each_session_gets_its_own_prefix() -> None:
@@ -40,8 +39,8 @@ def test_each_session_gets_its_own_prefix() -> None:
         settings = Settings(**_BASE, oss_bucket="atlas-test", oss_endpoint="http://x")
         a = make_workspace(settings, "u1", "t-a")
         b = make_workspace(settings, "u1", "t-b")
-        assert a._ws != b._ws
-        assert a._ws == "u1/t-a/workspace"
+        assert a.layout.prefix(Area.WORKSPACE) != b.layout.prefix(Area.WORKSPACE)
+        assert a.layout.prefix(Area.WORKSPACE) == "u1/t-a/workspace"
 
 
 @pytest.mark.parametrize("tools", [("filesystem",), ("filesystem", "bash")])

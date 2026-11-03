@@ -10,7 +10,7 @@ from uuid import uuid4
 
 import boto3
 import pytest
-from atlas_agent.providers.filesystem.oss import OssFilesystem, PathEscape, WorkspaceListing
+from atlas_agent.providers.filesystem import PathEscape, Workspace, WorkspaceListing
 from moto import mock_aws
 
 BUCKET = "ws-files"
@@ -27,8 +27,8 @@ def s3():
 
 def test_lists_files_written_outside_the_platform(s3) -> None:  # type: ignore[no-untyped-def]
     parent = uuid4()
-    fs = OssFilesystem(s3, bucket=BUCKET, user_id=USER, thread_id=parent)
-    # 模拟 CLI 在 Pod 里直接写挂载的工作区：不经 OssFilesystem、没有任何事件
+    fs = Workspace(s3, bucket=BUCKET, user_id=USER, thread_id=parent)
+    # 模拟 CLI 在 Pod 里直接写挂载的工作区：不经 Workspace、没有任何事件
     ws = f"{USER}/{parent}/workspace"
     s3.put_object(Bucket=BUCKET, Key=f"{ws}/index.html", Body=b"<html>")
     s3.put_object(Bucket=BUCKET, Key=f"{ws}/assets/app.js", Body=b"x" * 10)
@@ -42,14 +42,14 @@ def test_lists_files_written_outside_the_platform(s3) -> None:  # type: ignore[n
     assert all(f["modified_at"] for f in files)
 
     # 子会话共享父会话的工作区：看到的是同一份
-    child = OssFilesystem(
+    child = Workspace(
         s3, bucket=BUCKET, user_id=USER, thread_id=uuid4(), workspace_thread_id=parent
     )
     assert [f["path"] for f in WorkspaceListing(child).list()[0]] == ["assets/app.js", "index.html"]
 
 
 def test_truncates_long_listings(s3) -> None:  # type: ignore[no-untyped-def]
-    fs = OssFilesystem(s3, bucket=BUCKET, user_id=USER, thread_id=uuid4())
+    fs = Workspace(s3, bucket=BUCKET, user_id=USER, thread_id=uuid4())
     for i in range(5):
         fs.write(f"f{i}.txt", "x")
     files, truncated = WorkspaceListing(fs).list(max_keys=3)
@@ -57,7 +57,7 @@ def test_truncates_long_listings(s3) -> None:  # type: ignore[no-untyped-def]
 
 
 def test_download_is_confined_to_the_workspace(s3) -> None:  # type: ignore[no-untyped-def]
-    fs = OssFilesystem(s3, bucket=BUCKET, user_id=USER, thread_id=uuid4())
+    fs = Workspace(s3, bucket=BUCKET, user_id=USER, thread_id=uuid4())
     fs.write("report.md", "# 报告")
     body, size = WorkspaceListing(fs).open("report.md")
     assert body.read().decode() == "# 报告" and size == len("# 报告".encode())

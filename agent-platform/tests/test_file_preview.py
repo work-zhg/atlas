@@ -20,7 +20,7 @@ import pytest
 from atlas_agent.api.v1 import previews
 from atlas_agent.config import Settings, get_settings
 from atlas_agent.deps import get_redis
-from atlas_agent.providers.filesystem.oss import OssFilesystem, WorkspaceListing
+from atlas_agent.providers.filesystem import Workspace, WorkspaceListing
 from atlas_agent.services import preview as preview_mod
 from atlas_agent.services.preview import PreviewService
 from fastapi import FastAPI
@@ -60,8 +60,8 @@ def sessions():
     with mock_aws():
         s3 = boto3.client("s3", region_name="us-east-1")
         s3.create_bucket(Bucket=BUCKET)
-        a = OssFilesystem(s3, bucket=BUCKET, user_id=USER, thread_id="t-a")
-        b = OssFilesystem(s3, bucket=BUCKET, user_id=USER, thread_id="t-b")
+        a = Workspace(s3, bucket=BUCKET, user_id=USER, thread_id="t-a")
+        b = Workspace(s3, bucket=BUCKET, user_id=USER, thread_id="t-b")
         a.write("/workspace/index.html", "<script src='assets/app.js'></script>")
         a.write("/workspace/assets/app.js", "console.log('hi')")
         a.write("/workspace/docs/index.html", "<p>docs</p>")

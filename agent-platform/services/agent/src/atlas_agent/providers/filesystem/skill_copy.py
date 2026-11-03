@@ -6,7 +6,7 @@
     {user}/{thread}/skills/       ← 恒为自己的
     _skills/{slug}/{version}/     ← 源仓库，全局只读
 
-模型看到的是 `/skills/<slug>/`，由 `OssFilesystem._to_key` 路由过去。
+模型看到的是 `/skills/<slug>/`，由工作区的路径关卡（PathGate）路由到技能区。
 Pod 侧是一个**独立的挂载点** —— 所以 `execute` 能直接跑技能里的脚本，
 不需要第二条投送路径、不需要物化的幂等判断、不需要清理残留。
 
@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Any
 
 from atlas_engine.contracts import SkillRef
 
+from ...domain.workspace_layout import SKILLS_MOUNT, Area
 from ...errors import CapabilityUnavailable
 
 if TYPE_CHECKING:
@@ -45,13 +46,6 @@ __all__ = [
     "skill_refs_for",
 ]
 
-#: 模型看到的技能挂载点。★ 它**不在 workspace 之内** —— OssFilesystem 把
-#: 这个前缀路由到本会话的 skills 前缀（与 workspace 平级的兄弟目录）。
-#:
-#: 为什么必须平级：workspace 是**共享挂载**的 —— 子智能体的 Pod 挂父 agent
-#: 的 workspace。技能若住在里面，挂载时会连父的技能一起带上，而它应该有
-#: 自己的一套。平级之后这是结构性的，不是约定：挂载根本带不上。
-SKILLS_MOUNT = "/skills"
 
 #: 并发拷贝的批大小。CopyObject 是服务端拷贝（不下载不上传），
 #: 单对象 10–50ms；ui-ux-pro-max 有 76 个对象，并发 20 时 < 1s。
@@ -135,9 +129,13 @@ def skill_refs_for(metas: Sequence[SkillMeta]) -> list[SkillRef]:
     ]
 
 
+#: 技能源仓库（全局只读，配置平面按版本发布）。会话副本从这里拷
+_SKILLS_REPO = "_skills"
+
+
 def _skill_prefix(fs: Any, slug: str, version: int) -> str:
     """技能源仓库里某个版本的绝对 key 前缀（全局只读）。"""
-    return f"{fs._skills_repo}/{slug}/{version}/"
+    return f"{_SKILLS_REPO}/{slug}/{version}/"
 
 
 async def seed_session_skills(fs: Any, metas: Sequence[SkillMeta]) -> list[SkillRef]:
@@ -156,7 +154,7 @@ def _copy_one(fs: Any, meta: SkillMeta) -> None:
     src_prefix = _skill_prefix(fs, meta.slug, meta.version)
     # ★ 拷进**本会话的** skills 前缀，不是 workspace —— 子智能体因此
     #   有自己的一套，而它挂的 workspace 是父 agent 的。
-    dst_prefix = f"{fs._skills}/{meta.slug}/"
+    dst_prefix = fs.layout.key(Area.SKILLS, f"{meta.slug}/")
 
     keys: list[str] = []
     token: str | None = None

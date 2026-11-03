@@ -31,7 +31,7 @@ __all__ = ["FilesystemProtocol", "MemoryFilesystem"]
 
 
 class MemoryFilesystem:
-    """内存实现，语义与 `OssFilesystem` 对齐。
+    """内存实现，语义与 `Workspace` 对齐。
 
     对齐的点逐条都有测试（tests/test_filesystem_parity.py）：路径归一、
     search 的一层/递归语义、edit 的歧义拒绝、delete 的递归与空前缀报错。

@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 import httpx
 from atlas_redislock import LockBusy, LockLost, RedisLock
 
+from ...domain.workspace_layout import SKILLS_MOUNT, WORKSPACE_MOUNT, Area, WorkspaceLayout
 from .execd import TOKEN_HEADER, ExecdClient, ExecdGone
 from .lifecycle import LifecycleClient, LifecycleError
 
@@ -445,7 +446,9 @@ def sandbox_spec(
     image: str,
     profile: str = "strict",
 ) -> dict[str, Any]:
-    """原生沙箱的创建请求（设计 §8.1）。前缀布局与 OssFilesystem 一致：{user}/{ws}/workspace。"""
+    """原生沙箱的创建请求（设计 §8.1）。挂载前缀从共享内核 WorkspaceLayout 取，和工作区直连
+    对象存储的 key 是同一个。沙箱按工作区建（根会话），技能挂根会话的；系统区不挂进沙箱。"""
+    layout = WorkspaceLayout.of(user, ws)
     env = {
         "EXECD_ACCESS_TOKEN": token,
         "EXECD_INIT": "1",  # execd 作 PID 1：回收僵尸进程、转发信号
@@ -482,8 +485,10 @@ def sandbox_spec(
             "atlas.user": user,
         },
         "volumes": [
-            pvc_volume(settings, "workspace", f"{user}/{ws}/workspace", "/workspace"),
-            pvc_volume(settings, "skills", f"{user}/{ws}/skills", "/skills", read_only=True),
+            pvc_volume(settings, "workspace", layout.prefix(Area.WORKSPACE), WORKSPACE_MOUNT),
+            pvc_volume(
+                settings, "skills", layout.prefix(Area.SKILLS), SKILLS_MOUNT, read_only=True
+            ),
         ],
     }
 

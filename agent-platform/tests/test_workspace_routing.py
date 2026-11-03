@@ -20,8 +20,7 @@ from uuid import uuid4
 import boto3
 import pytest
 from atlas_agent.config import get_settings
-from atlas_agent.providers.filesystem import WorkspaceRouting
-from atlas_agent.providers.filesystem.oss import OssFilesystem
+from atlas_agent.providers.filesystem import Workspace, WorkspaceRouting
 from atlas_agent.providers.opensandbox import SandboxProvisioner
 from atlas_agent.providers.sandbox import PodSandbox
 from atlas_agent.redisx import make_redis
@@ -68,11 +67,11 @@ def provisioner(fake: FakeOpenSandbox, redis: Any) -> SandboxProvisioner:
 
 def _fs(
     s3: Any, ws: str, provisioner: SandboxProvisioner | None, fake: FakeOpenSandbox
-) -> OssFilesystem:
+) -> Workspace:
     routing = (
         WorkspaceRouting(provisioner, ws, transport=fake.sync_transport) if provisioner else None
     )
-    return OssFilesystem(s3, bucket=BUCKET, user_id=USER, thread_id=ws, routing=routing)
+    return Workspace(s3, bucket=BUCKET, user_id=USER, thread_id=ws, routing=routing)
 
 
 def _objects(s3: Any, prefix: str) -> list[str]:
@@ -101,7 +100,7 @@ _OPS: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = [
     ("aread", ("a.txt",), {}),
     ("aread", ("/workspace/a.txt",), {"offset": 1, "limit": 1}),
     ("aread", ("missing.txt",), {}),
-    ("aread", ("../../a.txt",), {}),  # 逃逸被归一回工作区
+    ("aread", ("../../a.txt",), {}),  # 越出工作区：两条路给出同一个错误
     ("aread", ("/workspace",), {}),
     ("aedit", ("dir/sub/c.md", "c", "e"), {}),  # 出现多次：拒绝
     ("aedit", ("dir/sub/c.md", "c", "e"), {"replace_all": True}),
@@ -165,6 +164,22 @@ async def test_commands_see_what_file_tools_wrote_and_vice_versa(
     await sbx.aexecute("echo 'step 2' >> notes/plan.md; echo out > result.txt")
     assert (await fs.aread("notes/plan.md")).file_data["content"] == "step 1\nstep 2\n"
     assert (await fs.asearch("")).keys == ["result.txt"]
+
+
+async def test_ui_upload_goes_through_the_running_sandbox(
+    s3: Any, fake: FakeOpenSandbox, provisioner: SandboxProvisioner, ws: str
+) -> None:
+    """★ 界面上传和模型的写走同一个选路：沙箱在跑时经沙箱写，只有一个写入方。
+
+    原先界面上传一律直连对象存储，沙箱在跑时可能和沙箱里的进程互相覆盖（s3fs 有缓存）。
+    """
+    from atlas_agent.providers.filesystem import WorkspaceListing
+
+    await provisioner.ensure(ws, user=USER)
+    fs = _fs(s3, ws, provisioner, fake)
+    assert await WorkspaceListing(fs).put("data/input.csv", b"a,b\n1,2\n") == 8
+    assert (fake.workspace(ws) / "data" / "input.csv").read_bytes() == b"a,b\n1,2\n"
+    assert _objects(s3, f"{USER}/{ws}/") == []  # 没有绕过沙箱直写对象存储
 
 
 async def test_without_a_running_sandbox_files_go_to_object_storage(

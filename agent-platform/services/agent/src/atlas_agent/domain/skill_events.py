@@ -2,7 +2,7 @@
 
 渐进式披露下，模型选中一个技能的唯一可观测信号是：它读了 `/skills/<slug>/SKILL.md`。
 native 与 acp 的读文件工具都用 `file_path` 参数，挂载点也都是 /skills（native 由
-OssFilesystem 路由、acp 由 Pod 模板挂载），所以一份规则两边共用。
+Workspace 路由、acp 由 Pod 模板挂载），所以一份规则两边共用。
 
 ★ 在 tool.completed 时才算：读失败（文件不存在、被拦）不算选中。
 ★ 纯函数 + 小状态机，不碰 IO —— 它在 domain 层（import-linter 守着）。

@@ -5,7 +5,7 @@
 能力协议（Filesystem / Sandbox / SubAgentSpawner / ApprovalGate）与它们的结果类型**定义在
 这里**，kernel 与 server 都向下依赖本层：
 
-    server（实现方）   OssFilesystem / DockerSandbox / SubAgentService
+    server（实现方）   Workspace / PodSandbox / SubAgentService
         ↓ 实现                          ↑ 消费
     contracts（本层）  ←──────  kernel 中间件 / engine 装配
 

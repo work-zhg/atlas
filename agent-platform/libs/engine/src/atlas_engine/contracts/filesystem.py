@@ -1,7 +1,7 @@
 """FilesystemProtocol —— 会话工作区的文件访问契约。
 
 ★ 定义住在 contracts（架构的最底层），不在 kernel：协议是 server 侧实现的
-  目标契约（OssFilesystem），也是 kernel 中间件的消费对象 —— 两边都认的
+  目标契约（server 的 Workspace），也是 kernel 中间件的消费对象 —— 两边都认的
   东西必须住在两边都够得着、且**谁都不拥有**的地方。kernel 反向依赖本层。
 
 与 `SandboxProtocol` **并列**，不是继承关系。旧的
@@ -14,7 +14,7 @@
 
 文末的几个函数（create_file_data / slice_read_response …）是读窗口分页
 语义的**参考实现** —— `ReadResult.__post_init__` 的校验与 slice 的产出是
-同一份语义的两半，实现方（server 的 OssFilesystem、kernel 的中间件）共用
+同一份语义的两半，实现方（server 的 Workspace、kernel 的中间件）共用
 它们以保持行为一致。
 
 本协议只声明**对象存储能做到的事**：

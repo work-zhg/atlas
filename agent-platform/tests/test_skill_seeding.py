@@ -10,7 +10,7 @@ from uuid import uuid4
 
 import boto3
 import pytest
-from atlas_agent.providers.filesystem.oss import OssFilesystem
+from atlas_agent.providers.filesystem import Workspace
 from atlas_agent.providers.filesystem.skill_copy import (
     SkillMeta,
     SkillUnavailable,
@@ -27,16 +27,14 @@ def env():
     with mock_aws():
         s3 = boto3.client("s3", region_name="us-east-1")
         s3.create_bucket(Bucket=BUCKET)
-        fs = OssFilesystem(s3, bucket=BUCKET, user_id=USER, thread_id=uuid4())
+        fs = Workspace(s3, bucket=BUCKET, user_id=USER, thread_id=uuid4())
         yield s3, fs
 
 
 def _publish(s3, slug: str, version: int, files: dict[str, str]) -> None:
     """往技能区发布一个版本。"""
     for rel, body in files.items():
-        s3.put_object(
-            Bucket=BUCKET, Key=f"_skills/{slug}/{version}/{rel}", Body=body.encode()
-        )
+        s3.put_object(Bucket=BUCKET, Key=f"_skills/{slug}/{version}/{rel}", Body=body.encode())
 
 
 async def test_l1_instructions_only(env) -> None:
@@ -64,7 +62,9 @@ async def test_l3_scripts_land_at_a_real_path(env) -> None:
     这是「技能进工作区」这个设计成立的关键 —— 不需要第二条投送路径。
     """
     s3, fs = env
-    _publish(s3, "ui", 3, {"SKILL.md": "# UI", "scripts/search.py": "print(1)", "data/x.csv": "a,b"})
+    _publish(
+        s3, "ui", 3, {"SKILL.md": "# UI", "scripts/search.py": "print(1)", "data/x.csv": "a,b"}
+    )
 
     await seed_session_skills(fs, [SkillMeta("ui", 3, "UI 检索")])
 
@@ -141,7 +141,9 @@ async def test_creating_a_thread_seeds_the_agents_skills(clean_db) -> None:
     with mock_aws():
         s3 = boto3.client("s3", region_name="us-east-1")
         s3.create_bucket(Bucket="atlas-seed")
-        s3.put_object(Bucket="atlas-seed", Key="_skills/dataviz/1/SKILL.md", Body="画图技能".encode())
+        s3.put_object(
+            Bucket="atlas-seed", Key="_skills/dataviz/1/SKILL.md", Body="画图技能".encode()
+        )
         s3.put_object(
             Bucket="atlas-seed", Key="_skills/dataviz/1/scripts/plot.py", Body=b"print(1)"
         )

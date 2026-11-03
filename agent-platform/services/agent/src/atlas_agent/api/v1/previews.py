@@ -26,7 +26,7 @@ from starlette.concurrency import iterate_in_threadpool
 
 from ...config import Settings
 from ...deps import RedisDep, SettingsDep
-from ...providers.filesystem.oss import PathEscape
+from ...providers.filesystem import PathEscape
 from ...services.preview import PreviewService
 
 router = APIRouter(prefix="/previews", tags=["previews"])
