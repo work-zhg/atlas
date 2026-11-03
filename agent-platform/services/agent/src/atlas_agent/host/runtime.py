@@ -78,7 +78,7 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from ..config import Settings
-    from ..executor.assembly import PreparedRun
+    from ..executor.segment_data import Segment
     from ..providers.pods import PodProvider
     from ..stream.relay import EventRelay
 
@@ -224,7 +224,7 @@ class HostRuntime:
 
     async def run_turn(
         self,
-        prepared: PreparedRun,
+        segment: Segment,
         *,
         run_id: UUID,
         redis: aioredis.Redis,
@@ -232,9 +232,9 @@ class HostRuntime:
         transcript: Any = None,
     ) -> AsyncIterator[TraceEvent]:
         events = EventFactory(
-            run_id, self._clock, start_seq=prepared.start_seq, base_depth=prepared.base_depth
+            run_id, self._clock, start_seq=segment.start_seq, base_depth=segment.base_depth
         )
-        spec = prepared.spec
+        spec = segment.spec
         yield events.make(
             EventType.RUN_STARTED,
             {
@@ -248,7 +248,7 @@ class HostRuntime:
                 **(
                     {
                         "permission_mode": acp_permission_mode(
-                            spec.cli.permission_mode, prepared.approval_mode
+                            spec.cli.permission_mode, segment.approval_mode
                         )
                     }
                     if spec.cli
@@ -261,7 +261,7 @@ class HostRuntime:
             return
         # ★ MCP 在建会话（session.open）时一次性下发，之后整个会话沿用（§10）
         try:
-            mcp_servers, notices = await self._mcp_servers(prepared, redis)
+            mcp_servers, notices = await self._mcp_servers(segment, redis)
         except CapabilityUnavailable as exc:
             yield events.make(*_failed(CapabilityUnavailable.kind, str(exc)))
             return
@@ -269,12 +269,12 @@ class HostRuntime:
             yield events.make(kind, data)
         # 模型（模型管理方案设计 8.1）：经平台时检查智能体的客户端 Key，下发 LiteLLM 地址和这把 Key
         try:
-            model = await self._acp_model(prepared)
+            model = await self._acp_model(segment)
         except CapabilityUnavailable as exc:
             yield events.make(*_failed(CapabilityUnavailable.kind, str(exc)))
             return
         try:
-            endpoint = await self._pods.ensure(prepared.thread, spec.cli, model=model)
+            endpoint = await self._pods.ensure(segment.thread, spec.cli, model=model)
         except Exception as exc:
             yield events.make(*_failed("pod_unavailable", f"会话 Pod 不可用：{exc}"))
             return
@@ -302,14 +302,14 @@ class HostRuntime:
         link = _Link(
             _host_url(endpoint.url),
             token=endpoint.token,
-            session_id=str(prepared.thread_id),
+            session_id=str(segment.thread_id),
             on_notification=on_notification,
             on_request=on_request,
             connect_timeout_s=self._settings.acp_ws_connect_timeout_s,
         )
         try:
             async for event in self._drive(
-                link, prepared, turn, events, relay, run_id, mcp_servers
+                link, segment, turn, events, relay, run_id, mcp_servers
             ):
                 yield event
         finally:
@@ -320,7 +320,7 @@ class HostRuntime:
     async def _drive(
         self,
         link: _Link,
-        prepared: PreparedRun,
+        segment: Segment,
         turn: _Turn,
         events: EventFactory,
         relay: EventRelay,
@@ -328,24 +328,24 @@ class HostRuntime:
         mcp_servers: list[dict[str, Any]],
     ) -> AsyncIterator[TraceEvent]:
         #: 只用于解读结果的措辞：一轮不设截止，bridge 不会因时间结束它
-        timeout = float(prepared.spec.limits.timeout_s)
+        timeout = float(segment.spec.limits.timeout_s)
         try:
-            for kind, data in await self._join(link, prepared, mcp_servers):
+            for kind, data in await self._join(link, segment, mcp_servers):
                 yield events.make(kind, data)
             # 本轮从已处理到的位置接着收：断线重连时 attach 从这里补发
-            turn.last_seq = self._known[prepared.thread_id].last_seq
-            await self._save_progress(run_id, prepared, turn)
-            await self._start(link.client, prepared, turn)
+            turn.last_seq = self._known[segment.thread_id].last_seq
+            await self._save_progress(run_id, segment, turn)
+            await self._start(link.client, segment, turn)
         except _Abort as abort:
             yield events.make(*abort.intent)
             return
 
         translator = AcpV1Translator()
         # CLI 读了 /skills/<slug>/SKILL.md → skill.loaded（与 native 同一份规则）
-        skills = SkillLoadTracker(prepared.spec.skills)
+        skills = SkillLoadTracker(segment.spec.skills)
         failed_tools: dict[str, str] = {}
         cancel_sent = False
-        known = self._known[prepared.thread_id]
+        known = self._known[segment.thread_id]
 
         while True:
             try:
@@ -363,7 +363,7 @@ class HostRuntime:
                 _, method, params = item
                 if not turn.accept(params):
                     continue
-                intents, outcome = await self._on_note(method, params, prepared, turn, translator)
+                intents, outcome = await self._on_note(method, params, segment, turn, translator)
                 for kind, data in intents:
                     event = events.make(kind, data)
                     if event.type is EventType.TOOL_FAILED:
@@ -379,15 +379,15 @@ class HostRuntime:
                     await turn.ack(link.client, force=True)
                     return
                 if await turn.ack(link.client):
-                    await self._save_progress(run_id, prepared, turn)
+                    await self._save_progress(run_id, segment, turn)
                 continue
 
             if await turn.ack(link.client):
-                await self._save_progress(run_id, prepared, turn)
+                await self._save_progress(run_id, segment, turn)
             if link.client.closed and turn.queue.empty():
                 # ★ 断线不等于这一轮结束：bridge 那边照常进行（§7.2）。重连并 attach，补全事件流
                 try:
-                    reattached = await self._reconnect(link, prepared, turn, relay, run_id)
+                    reattached = await self._reconnect(link, segment, turn, relay, run_id)
                 except _Abort as abort:
                     yield events.make(*abort.intent)
                     return
@@ -409,13 +409,13 @@ class HostRuntime:
     # ------------------------------------------------------------------ MCP
 
     async def _mcp_servers(
-        self, prepared: PreparedRun, redis: aioredis.Redis
+        self, segment: Segment, redis: aioredis.Redis
     ) -> tuple[list[dict[str, Any]], list[tuple[EventType, dict[str, Any]]]]:
-        spec = prepared.spec
+        spec = segment.spec
         servers: list[dict[str, Any]] = []
         notices: list[tuple[EventType, dict[str, Any]]] = []
         if any(name.startswith(MCP_PREFIX) for name in spec.tool_names):
-            servers, notices = await self._mcp_from_gateway(prepared, redis)
+            servers, notices = await self._mcp_from_gateway(segment, redis)
         # 知识库：Pod 里的 CLI 经 MCP 调 knowledge_search（doc/atlas-rag-design.html §10）
         if spec.knowledge.enabled:
             servers = [
@@ -423,12 +423,12 @@ class HostRuntime:
                 mcp_server_entry(
                     require_client(self._settings),
                     spec.knowledge,
-                    thread_id=prepared.thread_id,
+                    thread_id=segment.thread_id,
                 ),
             ]
         return servers, notices
 
-    async def _acp_model(self, prepared: PreparedRun) -> AcpModel | None:
+    async def _acp_model(self, segment: Segment) -> AcpModel | None:
         """经模型管理平台时 Pod 里 CLI 的模型接入（模型管理方案设计 8.1）。
 
         没接平台、不是 Claude Code → None（照旧按部署配置）。Key 待分配、停用或模型没分配
@@ -438,12 +438,12 @@ class HostRuntime:
         ★ Claude Code 只会 Anthropic Messages：LiteLLM 负责转换，任何已分配的模型都能用。
         ★ CLI 的轻量模型也指向同一个模型：不指的话 CLI 会去找一个它默认的、Key 里未必有的模型。
         """
-        spec = prepared.spec
+        spec = segment.spec
         if not uses_model_platform(self._settings) or spec.cli is None:
             return None
         if spec.cli.cli_type != "claude-code":
             return None
-        key = await agent_key(self._settings, prepared.thread.agent_uuid, spec.name)
+        key = await agent_key(self._settings, segment.thread.agent_uuid, spec.name)
         admit_models(key, [spec.model.model])
         assert key.key is not None
         return AcpModel(
@@ -455,15 +455,15 @@ class HostRuntime:
         )
 
     async def _mcp_from_gateway(
-        self, prepared: PreparedRun, redis: aioredis.Redis
+        self, segment: Segment, redis: aioredis.Redis
     ) -> tuple[list[dict[str, Any]], list[tuple[EventType, dict[str, Any]]]]:
-        spec = prepared.spec
+        spec = segment.spec
         catalog = await make_mcp_catalog(self._settings, redis)
         # 按这个智能体的 Key 过滤、下发它的 Key（与权限类型无关）
-        agent_id = prepared.thread.agent_uuid
+        agent_id = segment.thread.agent_uuid
         try:
             access = await mcp_agent_access(
-                self._settings, agent_id, name=spec.name, owner=prepared.thread.created_by_uuid
+                self._settings, agent_id, name=spec.name, owner=segment.thread.created_by_uuid
             )
         except GatewayUnavailable as exc:
             # 网关不可用 = 这些服务此刻用不了：不下发并提示，会话照常（§6.7 ③）
@@ -484,7 +484,7 @@ class HostRuntime:
         return await acp_mcp_servers(
             spec.tool_names,
             catalog,
-            user_id=prepared.thread.created_by_uuid,
+            user_id=segment.thread.created_by_uuid,
             digests=spec.mcp_tool_digests,
             drift_policy=spec.mcp_drift_policy,
             access=access,
@@ -493,28 +493,28 @@ class HostRuntime:
     # ------------------------------------------------------------------ 接上会话
 
     async def _join(
-        self, link: _Link, prepared: PreparedRun, mcp_servers: list[dict[str, Any]]
+        self, link: _Link, segment: Segment, mcp_servers: list[dict[str, Any]]
     ) -> list[tuple[EventType, dict[str, Any]]]:
         """连上 bridge 并接上会话：认识这个 bridge 就 attach，否则 open。"""
         try:
             await link.connect()
         except HostUnreachable as exc:
             raise _Abort(_failed("runtime_unreachable", str(exc))) from exc
-        known = self._known.get(prepared.thread_id)
-        if prepared.takeover is not None and prepared.cli_bridge_instance:
+        known = self._known.get(segment.thread_id)
+        if segment.takeover is not None and segment.cli_bridge_instance:
             # ★ 接管（§5.2）：上一个 server 实例确认到哪，就从哪 attach —— 进程内的记忆
             #   在那个实例上，这里只认库里的（cli_session）
-            known = _Known(prepared.cli_bridge_instance, prepared.cli_acked_seq)
-            self._known[prepared.thread_id] = known
+            known = _Known(segment.cli_bridge_instance, segment.cli_acked_seq)
+            self._known[segment.thread_id] = known
         if known is not None:
             try:
                 await self._attach(link, known.instance, known.last_seq)
                 return []
             except RpcFault as fault:
-                if prepared.takeover is not None:
+                if segment.takeover is not None:
                     # ★ 接管时接不回去 = bridge 重启过，那一轮的进度已不在。不能 open 后
                     #   重新 turn.start —— 那会把同一句话再交给 CLI 做一遍
-                    self._known.pop(prepared.thread_id, None)
+                    self._known.pop(segment.thread_id, None)
                     raise _Abort(
                         _failed("bridge_lost", "会话 Pod 里的 bridge 重启了，这一轮的进度丢失")
                     ) from fault
@@ -522,8 +522,8 @@ class HostRuntime:
                     raise _Abort(_fault_intent(fault)) from fault
                 # bridge 重启过（或还没打开过会话）：它的进程内状态已不在，重新 open 恢复
                 logger.info("bridge 不认识这个会话了（%s），改为 session.open", fault.data)
-                self._known.pop(prepared.thread_id, None)
-        return await self._open(link, prepared, mcp_servers)
+                self._known.pop(segment.thread_id, None)
+        return await self._open(link, segment, mcp_servers)
 
     async def _attach(self, link: _Link, instance: str, last_seq: int) -> dict[str, Any]:
         try:
@@ -540,9 +540,9 @@ class HostRuntime:
         return result  # type: ignore[no-any-return]
 
     async def _open(
-        self, link: _Link, prepared: PreparedRun, mcp_servers: list[dict[str, Any]]
+        self, link: _Link, segment: Segment, mcp_servers: list[dict[str, Any]]
     ) -> list[tuple[EventType, dict[str, Any]]]:
-        existing = prepared.cli_session_id
+        existing = segment.cli_session_id
         params: dict[str, Any] = {
             "mcpServers": mcp_servers,
             # ★ 只下发静默检测的两个阈值（唯一的「卡死」判据）。截止、审批等待、
@@ -563,7 +563,7 @@ class HostRuntime:
             if fault.code == HostErrorCode.SESSION_ALREADY_OPEN and data.get("bridgeInstance"):
                 # Pod 上的会话已由之前的连接打开（server 重启过、忘了它）：attach 接上
                 instance = str(data["bridgeInstance"])
-                self._known[prepared.thread_id] = _Known(instance)
+                self._known[segment.thread_id] = _Known(instance)
                 try:
                     await self._attach(link, instance, 0)
                 except (RpcFault, HostUnreachable) as exc:
@@ -573,10 +573,10 @@ class HostRuntime:
         except (ChannelClosed, TimeoutError) as exc:
             raise _Abort(_failed("runtime_unreachable", f"session.open 失败：{exc!r}")) from exc
 
-        self._known[prepared.thread_id] = _Known(str(opened["bridge"]["instance"]))
+        self._known[segment.thread_id] = _Known(str(opened["bridge"]["instance"]))
         session_id = str(opened.get("agentSessionId", ""))
         if session_id and session_id != existing:
-            await self._sessions.remember(prepared.thread_id, session_id)
+            await self._sessions.remember(segment.thread_id, session_id)
         if existing and not opened.get("resumed"):
             # 恢复失败必须可见，不能只写日志
             return [
@@ -588,7 +588,7 @@ class HostRuntime:
         return []
 
     async def _reconnect(
-        self, link: _Link, prepared: PreparedRun, turn: _Turn, relay: EventRelay, run_id: UUID
+        self, link: _Link, segment: Segment, turn: _Turn, relay: EventRelay, run_id: UUID
     ) -> bool:
         """一轮进行中断线：退避重连并 attach（§7.5）。返回 False = 断线期间用户取消了。
 
@@ -601,7 +601,7 @@ class HostRuntime:
         if code in (CloseCode.SUPERSEDED, CloseCode.SESSION_GONE):
             why = "被另一条连接取代" if code == CloseCode.SUPERSEDED else "会话已被 bridge 结束"
             raise _Abort(_failed("runtime_unreachable", f"与 bridge 的连接关闭：{why}"))
-        known = self._known[prepared.thread_id]
+        known = self._known[segment.thread_id]
         delay = 0.5
         logger.warning("与 bridge 的连接断开（%s），重连中", code)
         while True:
@@ -609,9 +609,9 @@ class HostRuntime:
                 logger.info("断线期间收到取消，不再重连")
                 return False
             try:
-                assert prepared.spec.cli is not None
+                assert segment.spec.cli is not None
                 endpoint = await self._pods.ensure(
-                    prepared.thread, prepared.spec.cli, model=turn.model
+                    segment.thread, segment.spec.cli, model=turn.model
                 )
                 link.retarget(_host_url(endpoint.url), endpoint.token)
                 await link.connect()
@@ -622,7 +622,7 @@ class HostRuntime:
                 data = fault.data if isinstance(fault.data, dict) else {}
                 if data.get("cause") == "bridge_restarted":
                     # bridge 重启过：进程内的这一轮已不存在（§7.6）
-                    self._known.pop(prepared.thread_id, None)
+                    self._known.pop(segment.thread_id, None)
                     raise _Abort(
                         _failed("bridge_lost", "会话 Pod 里的 bridge 重启了，这一轮的进度丢失")
                     ) from fault
@@ -632,31 +632,31 @@ class HostRuntime:
                 await asyncio.sleep(delay * random.uniform(0.8, 1.2))
                 delay = min(delay * 2, _RECONNECT_MAX_DELAY_S)
 
-    async def _save_progress(self, run_id: UUID, prepared: PreparedRun, turn: _Turn) -> None:
+    async def _save_progress(self, run_id: UUID, segment: Segment, turn: _Turn) -> None:
         """已处理到的 bridge 实例与序号写进 cli_session（§5.2，会话级）。
 
         失败只记日志：最坏是接管时多补发一段。
         """
-        known = self._known.get(prepared.thread_id)
+        known = self._known.get(segment.thread_id)
         if known is None:
             return
         try:
             await self._progress.save(
-                prepared.thread_id, instance=known.instance, acked_seq=turn.last_seq
+                segment.thread_id, instance=known.instance, acked_seq=turn.last_seq
             )
         except Exception:
             logger.warning("acp 进度写库失败 run=%s", run_id, exc_info=True)
 
-    async def _start(self, client: HostClient, prepared: PreparedRun, turn: _Turn) -> None:
+    async def _start(self, client: HostClient, segment: Segment, turn: _Turn) -> None:
         params: dict[str, Any] = {
             "turnId": turn.turn_id,
-            "prompt": [{"type": "text", "text": _text_of(prepared.input_content)}],
+            "prompt": [{"type": "text", "text": _text_of(segment.input_content)}],
         }
-        cli = prepared.spec.cli
+        cli = segment.spec.cli
         if cli is not None:
             # ★ 每一轮都带：agent 每次新建 / 恢复会话都会把模式重置，bridge 据此按需重设。
             #   作为 SubAgent 时与父 run 的审批模式取更严格的（native 审批模式设计 D6）
-            mode = acp_permission_mode(cli.permission_mode, prepared.approval_mode)
+            mode = acp_permission_mode(cli.permission_mode, segment.approval_mode)
             params["mode"] = ACP_MODE_ID[mode]
         loop = asyncio.get_running_loop()
         until = loop.time() + _START_RETRY_S
@@ -690,7 +690,7 @@ class HostRuntime:
         self,
         method: str,
         params: dict[str, Any],
-        prepared: PreparedRun,
+        segment: Segment,
         turn: _Turn,
         translator: AcpV1Translator,
     ) -> tuple[list[tuple[EventType, dict[str, Any]]], dict[str, Any] | None]:
@@ -715,7 +715,7 @@ class HostRuntime:
             if params.get("state") == "ready":
                 new_id = agent.get("agentSessionId")
                 if new_id:
-                    await self._sessions.remember(prepared.thread_id, str(new_id))
+                    await self._sessions.remember(segment.thread_id, str(new_id))
                 if agent.get("resumed") is False:
                     return [
                         (

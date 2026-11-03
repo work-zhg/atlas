@@ -44,7 +44,8 @@ if TYPE_CHECKING:
     from ..domain.events import TraceEvent
     from ..domain.messages import Transcript
     from ..stream.relay import EventRelay
-    from .assembly import HookAssembly, PreparedRun
+    from .assembly import HookAssembly
+    from .segment_data import Segment
 
 __all__ = ["AgentRuntime", "NativeRuntime", "select_runtime"]
 
@@ -65,7 +66,7 @@ class AgentRuntime(Protocol):
 
     def run_turn(
         self,
-        prepared: PreparedRun,
+        segment: Segment,
         *,
         run_id: UUID,
         redis: aioredis.Redis,
@@ -104,7 +105,7 @@ class NativeRuntime:
 
     async def run_turn(
         self,
-        prepared: PreparedRun,
+        segment: Segment,
         *,
         run_id: UUID,
         redis: aioredis.Redis,
@@ -120,12 +121,12 @@ class NativeRuntime:
         try:
             try:
                 # 模型先于一切：Key 待分配、停用，或模型没分配就本轮不开始（模型管理方案设计 7.3）
-                prepared = await self._assembly.with_models(prepared)
-                prepared = await self._assembly.with_knowledge(
-                    prepared, run_id=run_id, notices=notices
+                segment = await self._assembly.with_models(segment)
+                segment = await self._assembly.with_knowledge(
+                    segment, run_id=run_id, notices=notices
                 )
                 graph, titler = await self._assembly.build(
-                    prepared,
+                    segment,
                     run_id=run_id,
                     redis=redis,
                     relay=relay,
@@ -138,34 +139,24 @@ class NativeRuntime:
                 #   BaseException，不在这里 —— 取消照常穿透。
                 kind, message, details = _classify_assembly_error(exc)
                 for event in failed_before_start(
-                    prepared.spec,
+                    segment.spec,
                     run_id=run_id,
                     kind=kind,
                     message=message,
                     details=details,
-                    start_seq=prepared.start_seq,
-                    base_depth=prepared.base_depth,
+                    start_seq=segment.start_seq,
+                    base_depth=segment.base_depth,
                 ):
                     yield event
                 return
             async for event in engine_run(
-                prepared.spec,
+                segment,
                 run_id=run_id,
                 graph=graph,
-                input_content=prepared.input_content,
-                history=prepared.history,
                 cancel=RedisCancelToken(relay, run_id),
                 titler=titler,
                 transcript=transcript,
-                start_seq=prepared.start_seq,
-                resume=prepared.resume,
-                prior_tokens=prepared.prior_tokens,
-                base_depth=prepared.base_depth,
                 notices=notices,
-                waiting_on=prepared.waiting_on,
-                decisions=prepared.decisions,
-                approval_mode=prepared.approval_mode,
-                run_state=prepared.run_state,
             ):
                 yield event
         finally:
@@ -200,7 +191,7 @@ def _classify_assembly_error(exc: Exception) -> tuple[str, str, dict[str, object
 
 
 def select_runtime(
-    prepared: PreparedRun, *, native: NativeRuntime, cli: AgentRuntime | None = None
+    segment: Segment, *, native: NativeRuntime, cli: AgentRuntime | None = None
 ) -> AgentRuntime:
     """按 agent 类型选执行方式。
 
@@ -211,9 +202,9 @@ def select_runtime(
       回落的后果是「配了 CLI 助理，实际跑的是进程内 LangGraph」，两者的
       工具面与上下文语义完全不同，而事件流上看不出区别（§13.2）。
     """
-    if prepared.spec.kind == "cli":
+    if segment.spec.kind == "cli":
         if cli is None:
             msg = "agent 的 kind='cli' 但未注入 CLI 运行时（需配置会话 Pod 执行环境）"
-            raise InvalidSpec(msg, agent=prepared.spec.slug)
+            raise InvalidSpec(msg, agent=segment.spec.slug)
         return cli
     return native

@@ -57,9 +57,9 @@ from ..schemas.agent import AgentSpecIn
 from ..services.subagent import subagent_result
 from ..stream.relay import EventRelay
 from ..telemetry.run_trace import RunTrace
-from .assembly import PreparedRun
 from .continuation import Continuation
 from .runtime import AgentRuntime, NativeRuntime, select_runtime
+from .segment_data import Segment
 
 logger = logging.getLogger(__name__)
 
@@ -124,8 +124,8 @@ class RuntimeRegistry:
         self._native = native
         self._cli = cli
 
-    def select(self, prepared: PreparedRun) -> AgentRuntime:
-        return select_runtime(prepared, native=self._native, cli=self._cli)
+    def select(self, segment: Segment) -> AgentRuntime:
+        return select_runtime(segment, native=self._native, cli=self._cli)
 
 
 class SegmentLoader:
@@ -138,7 +138,7 @@ class SegmentLoader:
         run: Run,
         thread: Thread,
         version: AgentVersion,
-    ) -> PreparedRun:
+    ) -> Segment:
         """从库里还原「任务是什么」（spec / 输入 / 历史 / 摘要边界）。"""
         from ..repositories.agent import AgentRepository
 
@@ -182,7 +182,7 @@ class SegmentLoader:
 
         rows = await RunRepository(session).history(thread.thread_uuid, after=summary_upto)
         if not rows:
-            return PreparedRun(
+            return Segment(
                 **cli,
                 compact_count=compacted,
                 compaction_failures=failures,
@@ -224,7 +224,7 @@ class SegmentLoader:
         if context is not None and context.summary:
             history.insert(0, AIMessage(content=SUMMARY_PREFIX + context.summary))
 
-        return PreparedRun(
+        return Segment(
             **cli,
             compact_count=compacted,
             compaction_failures=failures,
@@ -381,14 +381,14 @@ class SegmentExecution:
                     )
                     # recover 的 UPDATE 让 ORM 行过期了；异步会话不能懒加载，显式刷新
                     await session.refresh(run)
-                prepared = await self._loader.load(session, run, thread, version)
+                segment = await self._loader.load(session, run, thread, version)
                 if resumed is not None:
-                    prepared = replace(prepared, start_seq=resumed.seq, takeover=takeover)
+                    segment = replace(segment, start_seq=resumed.seq, takeover=takeover)
                 await records.mark_running(run_id)
                 await session.commit()
 
-            slot.cli = prepared.spec.kind == "cli"
-            last_seq = prepared.start_seq
+            slot.cli = segment.spec.kind == "cli"
+            last_seq = segment.start_seq
             # 会话锁跟随租约（§4.4）：接管时原来的锁多半已经过期，重新占上
             with contextlib.suppress(Exception):
                 await relay.renew_thread_lock(
@@ -420,15 +420,15 @@ class SegmentExecution:
             # ★ 「一轮怎么跑」在 runtime 里（acp 详设 §02）。本方法的前后两段
             #   ——载入/标记运行中，与收事件/落库/释放锁——与 agent 类型无关，
             #   acp 接进来时一行都不用改。
-            runtime = self._runtimes.select(prepared)
+            runtime = self._runtimes.select(segment)
             stream = runtime.run_turn(
-                prepared, run_id=run_id, redis=redis, relay=relay, transcript=transcript
+                segment, run_id=run_id, redis=redis, relay=relay, transcript=transcript
             )
             # ★ Run 是 trace 的根（可观测性设计 §04）。子 span 由事件流派生 ——
             #   native 与 acp 产出同形事件，所以这一处覆盖两条执行路径。
             #   未启用遥测时 RunTrace 里拿到的是 no-op span，零开销。
             with RunTrace.start(
-                prepared,
+                segment,
                 run_id=str(run_id),
                 parent_run_id=str(parent_run_id) if parent_run_id else None,
             ) as run_trace:

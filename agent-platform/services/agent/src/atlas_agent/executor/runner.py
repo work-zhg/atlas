@@ -74,6 +74,36 @@ class CancelToken(Protocol):
 Titler = Callable[[str], Awaitable["dict[str, Any] | None"]]
 
 
+class SegmentInput(Protocol):
+    """runner 从一段里读的东西（executor/segment_data.py::Segment 满足它）。
+
+    ★ runner 是纯计算层，不认识 Segment 本身：那上面带着会话的 ORM 行和模型端点。
+    """
+
+    @property
+    def spec(self) -> AgentSpec: ...
+    @property
+    def input_content(self) -> Any: ...
+    @property
+    def history(self) -> Sequence[BaseMessage]: ...
+    @property
+    def start_seq(self) -> int: ...
+    @property
+    def resume(self) -> bool: ...
+    @property
+    def prior_tokens(self) -> int: ...
+    @property
+    def base_depth(self) -> int: ...
+    @property
+    def waiting_on(self) -> Mapping[str, Any]: ...
+    @property
+    def decisions(self) -> Mapping[str, Any]: ...
+    @property
+    def approval_mode(self) -> str | None: ...
+    @property
+    def run_state(self) -> Mapping[str, Any]: ...
+
+
 class _NeverCancelled:
     async def is_cancelled(self) -> bool:
         return False
@@ -189,65 +219,53 @@ def failed_before_start(
 
 
 async def run(
-    spec: AgentSpec,
+    segment: SegmentInput,
     *,
     run_id: UUID,
     graph: Any,
-    input_content: str | list[dict],
-    history: Sequence[BaseMessage] = (),
     cancel: CancelToken | None = None,
     clock: Callable[[], datetime] | None = None,
     titler: Titler | None = None,
     transcript: Transcript | None = None,
-    start_seq: int = 0,
-    resume: bool = False,
-    prior_tokens: int = 0,
-    base_depth: int = 0,
     notices: Sequence[tuple[EventType, dict[str, Any]]] = (),
-    waiting_on: Mapping[str, Any] | None = None,
-    decisions: Mapping[str, Any] | None = None,
-    approval_mode: str | None = None,
-    run_state: Mapping[str, Any] | None = None,
 ) -> AsyncIterator[TraceEvent]:
-    """驱动一张**已装配好的图**，产出 TraceEvent 流。
+    """驱动一张**已装配好的图**跑一段，产出 TraceEvent 流（TurnDriver）。
 
     ★ 图由调用方装配（server/executor/build.py::build_graph）—— runner 只管
-      执行循环与事件推导。曾经的 RunHooks 参数对象随图外置一起消失：能力
-      对象直接进中间件构造，这里只剩 runner 自己消费的三个注入点
-      （cancel / clock / titler）。
+      执行循环与事件推导。这一段要跑什么都在 segment 里（SegmentInput：
+      输入、历史、续跑、序号起点、跨段累计的 token、委派深度、挂起现场、审批模式、
+      跨段 state），这里只剩 runner 自己消费的注入点：
 
-    spec 在这里只读两样：run.started 的元信息、max_total_tokens ——
-    调用方必须保证 graph 与 spec 出自同一份配置（build.py 是唯一装配点）。
+    cancel / clock / titler  取消信号、时钟、标题生成器（测试可注入）
 
     transcript: 收集本轮**实际产生**的消息（模型的 tool_use、工具的结果）。
         调用方要落库这些消息时传进来；不传就不收集，零开销。见
         domain/messages.py::Transcript。
 
-    start_seq: 事件序号的起点。同一个 run 分多段执行时，第二段必须接着第一段
-        的 seq 往下数 —— 前端靠 seq 去重与补齐，从 1 重数会让断线重连拿到
-        错乱的历史（契约规则 2）。
-
-    resume: True = 本次是续跑，输入已在 history 里，不要再 append。
-
-    prior_tokens: 这个 run 在之前几段里已经花掉的 token。max_total_tokens 是
-        **跨段**的累计上限 —— 每段各算各的话，分三段就能烧三倍预算。
-
-    base_depth: 这个 run 在委派树里的深度（主 run 0，子 run 1）。叠加到所有
-        事件的 depth 上，前端据此决定渲染位置。
-
     notices: 装配期发现、要让用户看见的情况（技能被下架跳过、MCP 工具定义变了）。
         紧跟 run.started 产出 —— 装配发生在事件工厂之前，由这里统一编号才能
         保住 seq 无空洞（契约规则 2）。
 
-    waiting_on / decisions: 续跑时交回图的挂起现场（contracts/suspension.py）——
-        上一段落在 run.waiting_on 里的等待项，和 server 查好的结果。首段不传。
+    spec 在这里只读两样：run.started 的元信息、max_total_tokens ——
+    调用方必须保证 graph 与 spec 出自同一份配置（build.py 是唯一装配点）。
 
-    approval_mode: 本段开始时的审批模式（run.approval_mode）。计划获批时图内会改它，
-        改动经 agent.mode 事件交给执行器落库。
-
-    run_state: 上一段落库的图 state（run_state 表，如 todos），原样作为图的输入交回。
-        本段里的改动经事件（todos.updated）交给执行器落库。首段为空。
+    ★ segment 里几个字段在这里的语义：
+      start_seq     事件序号的起点。同一个 run 分多段执行时，第二段必须接着第一段往下数
+                    —— 前端靠 seq 去重与补齐（契约规则 2）
+      resume        本次是续跑，输入已在 history 里，不要再 append
+      prior_tokens  之前几段已经花掉的 token：max_total_tokens 是**跨段**的累计上限
+      base_depth    委派树里的深度（主 run 0，子 run 1），叠加到所有事件的 depth 上
+      waiting_on / decisions  续跑时交回图的挂起现场（contracts/suspension.py）
+      approval_mode 本段开始时的审批模式；计划获批时图内会改它，经 agent.mode 事件落库
+      run_state     上一段落库的图 state（如 todos），原样作为图的输入交回
     """
+    spec = segment.spec
+    input_content = segment.input_content
+    history: Sequence[BaseMessage] = segment.history
+    start_seq, resume = segment.start_seq, segment.resume
+    prior_tokens, base_depth = segment.prior_tokens, segment.base_depth
+    waiting_on, decisions = segment.waiting_on, segment.decisions
+    approval_mode, run_state = segment.approval_mode, segment.run_state
     spec.validate()
 
     cancel = cancel or _NeverCancelled()

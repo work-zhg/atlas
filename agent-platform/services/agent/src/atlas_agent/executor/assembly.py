@@ -4,7 +4,7 @@
 executor/scheduling.py 与 segment.py）分开：换执行器时搬走的是循环，HookAssembly 原样复用。
 它由组合根（executor/compose.py）构造，不认识执行器；委派只拿到入队这一个回调。
 
-PreparedRun 是「任务是什么」的载体（对应 engine run() 签名的前半），
+Segment 是「任务是什么」的载体（对应 engine run() 签名的前半），
 HookAssembly.build() 产出「用什么能力跑」（RunHooks，签名的后半）。
 """
 
@@ -14,7 +14,7 @@ import dataclasses
 import json
 import logging
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 from uuid import UUID
@@ -22,15 +22,15 @@ from uuid import UUID
 import redis.asyncio as aioredis
 from atlas_engine.kernel.middleware.auto_judge import AutoJudge, Instruction, JudgeSetup
 from atlas_engine.kernel.middleware.compaction import CompactionMiddleware
-from langchain_core.messages import BaseMessage
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from atlas_agent.domain.spec import AgentSpec, ModelSpec, resolve_summarizer_model
+from atlas_agent.domain.spec import ModelSpec, resolve_summarizer_model
 from atlas_agent.domain.tool_registry import BASH_TOOL, MEMORY_TOOL
 from atlas_agent.domain.translator import extract_text
 from atlas_agent.errors import CapabilityUnavailable
 from atlas_agent.executor.context import load_instructions
 from atlas_agent.executor.runner import Titler
+from atlas_agent.executor.segment_data import Segment
 from atlas_agent.providers.knowledge import (
     format_context,
     make_knowledge_tool,
@@ -168,67 +168,6 @@ class MemoryNotConfigured(CapabilityUnavailable):
     """
 
 
-@dataclass(frozen=True)
-class PreparedRun:
-    """从库里还原出的「任务是什么」。
-
-    history_upto: 本轮起始时历史末尾的时间 —— 若本轮触发压缩，摘要覆盖到
-    这里。★ 必须随任务传递而不是存在执行器实例上：执行器是进程级单例，
-    同时跑多个 run，实例属性会互相覆盖。
-    """
-
-    spec: AgentSpec
-    input_content: Any
-    thread: Thread
-    #: 本次执行用的配置版本。子 run 沿用**同一个** —— 子智能体的配置就住在
-    #: 这份快照的 subagents 里，换一份等于换掉了「当时用的哪份配置」。
-    agent_version_id: UUID | None = None
-    history: list[BaseMessage] = field(default_factory=list)
-    history_upto: datetime | None = None
-    #: 事件序号的起点 = 已发出的最后一个 seq。一个 run 分多段执行时，后一段
-    #: 必须接着前一段往下数（契约规则 2 的「无空洞」是跨段成立的）。
-    #: 0 = 全新的 run。
-    start_seq: int = 0
-    #: True = 这个 run 之前已经跑过一段，本次是续跑。本轮输入早已在 history
-    #: 里，不能再 append 一遍（那会让模型看到同一个问题问了两次）。
-    resume: bool = False
-    #: 这个 run 在之前几段里已经花掉的 token。max_total_tokens 是跨段累计的。
-    prior_tokens: int = 0
-    #: 这个 run 在委派树里的深度：主 run 是 0，子 run 是 1。进 TraceEvent.depth，
-    #: 前端据此把子智能体的过程渲染进卡片而不是主对话。
-    base_depth: int = 0
-    #: 本段是接管来的（横向扩展设计 §5）：None = 正常领取；"handoff" / "expired" = 上一个
-    #: 执行器停机交接 / 租约过期。acp 据此只 attach 不重开一轮。
-    takeover: str | None = None
-    #: acp：会话的接续信息（cli_session 表，段开始时读出）—— CLI 自己的会话 id（open 时恢复），
-    #: 以及已处理到的 bridge 实例与序号（§5.2，接管时从这里 attach 补发）
-    cli_session_id: str | None = None
-    cli_bridge_instance: str | None = None
-    cli_acked_seq: int = 0
-    #: 续跑时交回图的挂起现场（contracts/suspension.py）：上一段还在等的调用
-    #: （run.waiting_on，已剪掉历史里有结果的），和 server 查好的结果。首段都为空。
-    waiting_on: dict[str, Any] = field(default_factory=dict)
-    #: approval → ApprovalOutcome（结构体）；subagent → 结论文本
-    decisions: dict[str, Any] = field(default_factory=dict)
-    #: 上一段落库的图 state（run_state 表，如 todos），作为图的输入交回。全新的 run 为空
-    run_state: dict[str, Any] = field(default_factory=dict)
-    #: 本段开始时的审批模式（run.approval_mode；doc/native-approval-mode-design.html）。
-    #: native 交给图；acp 子智能体据此与自己的 permission_mode 取更严格的
-    approval_mode: str | None = None
-    #: 本轮用户消息的时间。Agent 在这一轮写入记忆时用它作为「信息成立的时间」（记忆设计 §6.4）
-    input_at: datetime | None = None
-    #: 会话的上下文状态（thread_context）：压缩过几次（记忆据此重建常驻快照）、
-    #: 自动压缩连续失败了几次（熔断用）
-    compact_count: int = 0
-    compaction_failures: int = 0
-    #: 这一轮的模型端点与目录（HookAssembly.with_models 填）。None = 还没解析，按直连处理
-    models: RunModels | None = None
-
-    @property
-    def thread_id(self) -> UUID:
-        return self.thread.thread_uuid
-
-
 class HookAssembly:
     """把一次 run 所需的全部能力注入组装成 RunHooks。"""
 
@@ -250,7 +189,7 @@ class HookAssembly:
 
     async def build(
         self,
-        prepared: PreparedRun,
+        segment: Segment,
         *,
         run_id: UUID,
         redis: aioredis.Redis,
@@ -269,7 +208,7 @@ class HookAssembly:
         # （§14）。解析失败要冒泡成 run.failed，而不是少装几个工具就默默跑
         # （§13.2）。工具定义读目录缓存，命中时装配不连网（MCP 详设 §05）。
         extra_tools = await self._mcp_tool_list(
-            prepared, run_id=run_id, redis=redis, notices=notices, closers=closers
+            segment, run_id=run_id, redis=redis, notices=notices, closers=closers
         )
         # MCP 工具多时改为按需加载：定义不常驻上下文，模型用 tool_search 加载（上下文管理 §13）
         deferred = _deferred_mcp_tools(extra_tools, self._settings)
@@ -280,18 +219,18 @@ class HookAssembly:
         # 记忆（doc/memory-design.html §4–§5）：常驻块进系统提示词，load_memory 随记忆挂上；
         # 勾了「记忆」的主会话再挂 save_memory / forget_memory。★ 关联主键（会话所属用户）
         # 闭包捕获，不进工具参数 —— 一旦可由模型指定，提示词注入就能读写别人的记忆（§4.8）。
-        wants_write = MEMORY_TOOL in prepared.spec.tool_names
-        if wants_write and self._memory is None and prepared.thread.memory != "off":
+        wants_write = MEMORY_TOOL in segment.spec.tool_names
+        if wants_write and self._memory is None and segment.thread.memory != "off":
             raise MemoryNotConfigured("勾选了「记忆」但服务端未接入记忆服务（MEMORY_BASE_URL）")
         memory = (
             await self._memory.turn(
-                prepared.thread,
+                segment.thread,
                 run_id=run_id,
                 writable=wants_write,
-                resume=prepared.resume,
-                history_upto=prepared.history_upto,
-                occurred_at=prepared.input_at,
-                compact_count=prepared.compact_count,
+                resume=segment.resume,
+                history_upto=segment.history_upto,
+                occurred_at=segment.input_at,
+                compact_count=segment.compact_count,
             )
             if self._memory is not None
             else None
@@ -300,7 +239,7 @@ class HookAssembly:
             extra_tools = [*extra_tools, *memory.tools()]
 
         # 知识库（tool 模式）：库 id 闭包捕获，不进参数（doc/atlas-rag-design.html §10）
-        knowledge = prepared.spec.knowledge
+        knowledge = segment.spec.knowledge
         if knowledge.enabled and knowledge.mode == "tool":
             extra_tools = [
                 *extra_tools,
@@ -308,19 +247,19 @@ class HookAssembly:
                     require_client(self._settings),
                     knowledge,
                     names=None,
-                    source_ref=f"thread:{prepared.thread_id}/run:{run_id}",
+                    source_ref=f"thread:{segment.thread_id}/run:{run_id}",
                 ),
             ]
 
         # Shell 沙箱（doc/sandbox-opensandbox-design.html）。★ 这里只构造客户端，不建沙箱 ——
         #   沙箱在第一次 execute 时才按需创建（多数原生会话用不到）。
         #   按工作区建：子智能体（workspace_thread_id = 父会话）与父会话共用一个。
-        ws_thread = str(prepared.thread.workspace_thread_id)
+        ws_thread = str(segment.thread.workspace_thread_id)
         provisioner = (
             SandboxProvisioner(self._settings, redis) if self._settings.sandbox_enabled else None
         )
         sandbox = None
-        if BASH_TOOL in prepared.spec.tool_names:
+        if BASH_TOOL in segment.spec.tool_names:
             if provisioner is None:
                 raise SandboxNotEnabled(
                     "勾选了 Shell（bash）但服务端未开启沙箱（SANDBOX_ENABLED=false）"
@@ -329,10 +268,10 @@ class HookAssembly:
             sandbox = PodSandbox(
                 provisioner=provisioner,
                 workspace_thread_id=ws_thread,
-                user_id=str(prepared.thread.created_by_uuid),
+                user_id=str(segment.thread.created_by_uuid),
                 run_id=str(run_id),
-                image=prepared.spec.sandbox.image,
-                profile=prepared.spec.sandbox.profile,
+                image=segment.spec.sandbox.image,
+                profile=segment.spec.sandbox.profile,
                 poll_min_s=settings.sandbox_poll_min_s,
                 poll_max_s=settings.sandbox_poll_max_s,
                 output_limit=settings.sandbox_output_limit_bytes,
@@ -348,9 +287,9 @@ class HookAssembly:
         #     与父会话共用工作区，父会话的沙箱在跑时它的文件工具也要进沙箱（与命令同一个挂载，§9）。
         workspace = make_workspace(
             self._settings,
-            prepared.thread.created_by_uuid,
-            prepared.thread_id,
-            workspace_thread_id=prepared.thread.workspace_thread_id,
+            segment.thread.created_by_uuid,
+            segment.thread_id,
+            workspace_thread_id=segment.thread.workspace_thread_id,
             routing=WorkspaceRouting(provisioner, ws_thread) if provisioner else None,
         )
 
@@ -358,7 +297,7 @@ class HookAssembly:
 
         # 技能清单：描述取自技能应用；已下架的跳过并告诉用户（技能 / MCP 设计 §7.3）
         skill_metas, skipped = await resolve_skills(
-            prepared.spec.skills, skill_directory(self._settings)
+            segment.spec.skills, skill_directory(self._settings)
         )
         for item in skipped:
             if notices is not None:
@@ -367,9 +306,9 @@ class HookAssembly:
                 # ★ 删掉本会话里的副本：只从索引里拿掉的话，模型仍可能凭记忆去读
                 await workspace.adelete(f"/skills/{item['slug']}", recursive=True)
 
-        endpoint = self._models(prepared).endpoint
+        endpoint = self._models(segment).endpoint
         chat = self._build_model(
-            prepared.spec.model,
+            segment.spec.model,
             base_url=endpoint.base_url,
             api_key=endpoint.api_key,
             headers=endpoint.headers,
@@ -377,11 +316,11 @@ class HookAssembly:
 
         # 持久指令（L1）：读不到时跳过，不让本轮失败
         instructions = await load_instructions(
-            self._sessionmaker, workspace, prepared.thread.created_by_uuid
+            self._sessionmaker, workspace, segment.thread.created_by_uuid
         )
 
         graph = build_graph(
-            prepared.spec,
+            segment.spec,
             chat,
             instructions=instructions,
             memory=memory.block if memory is not None else None,
@@ -389,9 +328,9 @@ class HookAssembly:
             filesystem=workspace,
             sandbox=sandbox,
             approvals=approvals,
-            judge=self._auto_judge(prepared),
+            judge=self._auto_judge(segment),
             compactor=await self._compactor(
-                prepared,
+                segment,
                 workspace=workspace,
                 # 记忆的更新提示（§5.5）：每次调模型时现取，Agent 重新加载过的主题不再列出
                 dynamic_attachments=memory.reminders if memory is not None else None,
@@ -401,15 +340,15 @@ class HookAssembly:
             skills=skill_refs_for(skill_metas),
             extra_tools=extra_tools,
             # ★ SubAgent 不在图内跑子图 —— SubAgentService 在子会话上起子 run，本段挂起。
-            spawner=self._subagent_spawner(prepared, run_id=run_id, relay=relay),
-            prompt_cache_ttl=await self._prompt_cache_ttl(prepared),
+            spawner=self._subagent_spawner(segment, run_id=run_id, relay=relay),
+            prompt_cache_ttl=await self._prompt_cache_ttl(segment),
         )
-        return graph, self._titler(prepared)
+        return graph, self._titler(segment)
 
-    def _models(self, prepared: PreparedRun) -> RunModels:
-        return prepared.models or RunModels(direct_endpoint(self._settings))
+    def _models(self, segment: Segment) -> RunModels:
+        return segment.models or RunModels(direct_endpoint(self._settings))
 
-    async def with_models(self, prepared: PreparedRun) -> PreparedRun:
+    async def with_models(self, segment: Segment) -> Segment:
         """这一轮用到的模型能不能用、怎么连（模型管理方案设计 7.3）。
 
         经模型管理平台时：取这个智能体的客户端 Key（每轮都取最新的；没有就补建，「待分配」），
@@ -420,13 +359,13 @@ class HookAssembly:
         """
         s = self._settings
         if not uses_model_platform(s):
-            return dataclasses.replace(prepared, models=RunModels(direct_endpoint(s)))
-        spec = prepared.spec
+            return dataclasses.replace(segment, models=RunModels(direct_endpoint(s)))
+        spec = segment.spec
         needed = [spec.model.model]
         if spec.compaction.enabled:
             cfg = spec.compaction
             needed.append(resolve_summarizer_model(cfg.summarizer_model, spec.model.model))
-        key = await agent_key(s, prepared.thread.agent_uuid, spec.name)
+        key = await agent_key(s, segment.thread.agent_uuid, spec.name)
         admit_models(key, needed)
         assert key.key is not None
         spec = dataclasses.replace(
@@ -438,15 +377,15 @@ class HookAssembly:
             ),
         )
         models = RunModels(key_endpoint(s, key.key), {m.name: m for m in key.models})
-        return dataclasses.replace(prepared, spec=spec, models=models)
+        return dataclasses.replace(segment, spec=spec, models=models)
 
     async def with_knowledge(
         self,
-        prepared: PreparedRun,
+        segment: Segment,
         *,
         run_id: UUID,
         notices: list[tuple[EventType, dict[str, Any]]] | None = None,
-    ) -> PreparedRun:
+    ) -> Segment:
         """auto 模式：先用本轮提问检索，参考资料并入**这一轮**的输入（同 Dify 对话应用的上下文）。
 
         ★ 只改模型这一轮看到的输入：用户消息早已按原文落库，Transcript 也只收模型与工具的输出，
@@ -455,17 +394,17 @@ class HookAssembly:
         ★ 检索失败让这一轮明确失败（KnowledgeUnavailable），不静默当作「没查到」（§13.2）。
         ★ 权限主体读不到的库由知识库跳过：其余照常检索，经 notices 告知用户（同 MCP）。
         """
-        knowledge = prepared.spec.knowledge
-        if not knowledge.enabled or knowledge.mode != "auto" or prepared.resume:
-            return prepared
-        query = extract_text(prepared.input_content).strip()
+        knowledge = segment.spec.knowledge
+        if not knowledge.enabled or knowledge.mode != "auto" or segment.resume:
+            return segment
+        query = extract_text(segment.input_content).strip()
         if not query:
-            return prepared
+            return segment
         got = await require_client(self._settings).retrieve(
             knowledge,
             query[:2000],
             source="agent",
-            source_ref=f"thread:{prepared.thread_id}/run:{run_id}",
+            source_ref=f"thread:{segment.thread_id}/run:{run_id}",
         )
         if got.skipped and notices is not None:
             ident = current_identity()
@@ -483,12 +422,12 @@ class HookAssembly:
                 )
             )
         return dataclasses.replace(
-            prepared, input_content=format_context(prepared.input_content, got.records)
+            segment, input_content=format_context(segment.input_content, got.records)
         )
 
     async def _mcp_tool_list(
         self,
-        prepared: PreparedRun,
+        segment: Segment,
         *,
         run_id: UUID,
         redis: aioredis.Redis,
@@ -502,26 +441,26 @@ class HookAssembly:
         同一个 Run 段对同一个服务复用一个会话，段结束时经 closers 关掉。
         ★ 子智能体的会话记在父智能体名下：用同一把 Key。
         """
-        if not any(name.startswith(MCP_PREFIX) for name in prepared.spec.tool_names):
+        if not any(name.startswith(MCP_PREFIX) for name in segment.spec.tool_names):
             return []  # 不碰注册表：没用 MCP 的 agent 不该因为 MCP 网关不可用而失败
         s = self._settings
         ident = current_identity()
         ctx = CallContext(
             run_id=run_id,
-            thread_id=prepared.thread_id,
-            user_id=prepared.thread.created_by_uuid,
+            thread_id=segment.thread_id,
+            user_id=segment.thread.created_by_uuid,
             # 执行器在 run 开始时设好的出站身份（以 Agent 为权限时是数字员工）
             auth_uid=ident.auth_uid if ident else None,
         )
         catalog = await make_mcp_catalog(s, redis)
-        agent_id = prepared.thread.agent_uuid
+        agent_id = segment.thread.agent_uuid
         try:
             access = await mcp_agent_access(
-                s, agent_id, name=prepared.spec.name, owner=prepared.thread.created_by_uuid
+                s, agent_id, name=segment.spec.name, owner=segment.thread.created_by_uuid
             )
         except GatewayUnavailable as exc:
             # 网关不可用 = 这些服务此刻用不了：跳过并提示，对话照常（§6.7 ③）
-            for server in sorted(servers_in(prepared.spec.tool_names)):
+            for server in sorted(servers_in(segment.spec.tool_names)):
                 if notices is not None:
                     notices.append(
                         (
@@ -538,7 +477,7 @@ class HookAssembly:
             return []
         sessions = McpSessions(
             auth=KeyAuth(access.key) if access.key else None,
-            fetch_key=self._key_fetcher(prepared),
+            fetch_key=self._key_fetcher(segment),
         )
         if closers is not None:
             closers.append(sessions.aclose)
@@ -548,19 +487,19 @@ class HookAssembly:
             max_result_chars=s.mcp_max_result_chars,
         )
         return await tools.tools_for(
-            prepared.spec.tool_names,
+            segment.spec.tool_names,
             ctx,
-            digests=prepared.spec.mcp_tool_digests,
-            drift_policy=prepared.spec.mcp_drift_policy,
+            digests=segment.spec.mcp_tool_digests,
+            drift_policy=segment.spec.mcp_drift_policy,
             reviews=catalog.reviews(),
             notices=notices,
             access=access,
             sessions=sessions,
         )
 
-    def _key_fetcher(self, prepared: PreparedRun) -> Callable[[], Awaitable[str | None]]:
+    def _key_fetcher(self, segment: Segment) -> Callable[[], Awaitable[str | None]]:
         """Key 被网关拒绝时重新取一次（可能刚被重置）。取不到（网关也不可用）当作没有新 Key。"""
-        agent_id = prepared.thread.agent_uuid
+        agent_id = segment.thread.agent_uuid
 
         async def fetch() -> str | None:
             forget_access(agent_id)
@@ -568,8 +507,8 @@ class HookAssembly:
                 access = await mcp_agent_access(
                     self._settings,
                     agent_id,
-                    name=prepared.spec.name,
-                    owner=prepared.thread.created_by_uuid,
+                    name=segment.spec.name,
+                    owner=segment.thread.created_by_uuid,
                 )
             except GatewayUnavailable:
                 return None
@@ -577,7 +516,7 @@ class HookAssembly:
 
         return fetch
 
-    def _subagent_spawner(self, prepared: PreparedRun, *, run_id: UUID, relay: EventRelay) -> Any:
+    def _subagent_spawner(self, segment: Segment, *, run_id: UUID, relay: EventRelay) -> Any:
         """构造本段派 SubAgent 的入口（SubAgentSpawner 的实现）。
 
         没有 SubAgent 就返回 None —— kernel 据此**根本不装** `task`，
@@ -586,9 +525,9 @@ class HookAssembly:
         ★ 子 run 也走这里：native SubAgent 的 spec 带着同一份名录（spec_for_subagent），
           所以它也能继续派 SubAgent；acp SubAgent 的名录为空，天然返回 None。
         """
-        if not prepared.spec.subagents or self._submit_run is None:
+        if not segment.spec.subagents or self._submit_run is None:
             return None
-        if prepared.agent_version_id is None:
+        if segment.agent_version_id is None:
             logger.warning("run %s 缺 agent_version_id，SubAgent 不启用", run_id)
             return None
 
@@ -600,9 +539,9 @@ class HookAssembly:
             self._submit_run,
             relay,
             parent_run_id=run_id,
-            parent_thread=prepared.thread,
-            parent_spec=prepared.spec,
-            agent_version_id=prepared.agent_version_id,
+            parent_thread=segment.thread,
+            parent_spec=segment.spec,
+            agent_version_id=segment.agent_version_id,
             seed_skills=self._seed_subagent_skills,
         )
 
@@ -629,17 +568,17 @@ class HookAssembly:
 
     # ------------------------------------------------------------------ 各能力
 
-    def _titler(self, prepared: PreparedRun) -> Titler | None:
+    def _titler(self, segment: Segment) -> Titler | None:
         """仅当会话还没有标题时才返回生成器（§8.1）。
 
         返回 None 时 engine 直接跳过，不产出 thread.title_generated ——
         已有标题的会话不该每轮都重新生成，那既费钱又会覆盖用户改过的名字。
         """
-        thread = prepared.thread
+        thread = segment.thread
         if thread.title_source != "pending":
             return None
 
-        question = extract_text(prepared.input_content)
+        question = extract_text(segment.input_content)
         service = TitleService(self._settings, self._build_model)
 
         async def titler(answer: str) -> dict[str, Any] | None:
@@ -647,7 +586,7 @@ class HookAssembly:
 
         return titler
 
-    def _auto_judge(self, prepared: PreparedRun) -> AutoJudge | None:
+    def _auto_judge(self, segment: Segment) -> AutoJudge | None:
         """自动模式的判断器（kernel/middleware/auto_judge.py）。智能体不允许自动模式时不装。
 
         ★ 模型和用户消息在第一次判断时才取：多数段落用不到判断器，不该为它多一次平台请求。
@@ -656,12 +595,12 @@ class HookAssembly:
         ★ 没配置 → None（PermissionMiddleware 按没有判断器处理）；
           配了但现在用不了 → 抛错（退回请示）
         """
-        if "auto" not in prepared.spec.approval.allowed_modes:
+        if "auto" not in segment.spec.approval.allowed_modes:
             return None
         settings = self._settings
         build_model = self._build_model
         sessionmaker = self._sessionmaker
-        thread = prepared.thread
+        thread = segment.thread
 
         async def setup() -> JudgeSetup | None:
             found = await resolve_service_model(
@@ -693,22 +632,22 @@ class HookAssembly:
 
         return AutoJudge(setup, timeout_s=settings.approval_judge_timeout_s)
 
-    async def _prompt_cache_ttl(self, prepared: PreparedRun) -> Literal["5m", "1h"] | None:
+    async def _prompt_cache_ttl(self, segment: Segment) -> Literal["5m", "1h"] | None:
         """开了缓存、且模型实测支持时才打 cache_control —— 编辑器里的开关就是这里生效。
 
         ★ supports_cache 为假的模型（DeepSeek）塞了 cache_control 也不起作用（迁移 0008 实测），
           它自己的上下文缓存不受影响。
         """
-        if not prepared.spec.model.prompt_cache:
+        if not segment.spec.model.prompt_cache:
             return None
         async with self._sessionmaker() as session:
-            if not await ModelCatalogRepository(session).supports_cache(prepared.spec.model.model):
+            if not await ModelCatalogRepository(session).supports_cache(segment.spec.model.model):
                 return None
         return self._settings.prompt_cache_ttl
 
     async def _compactor(
         self,
-        prepared: PreparedRun,
+        segment: Segment,
         *,
         workspace: Any = None,
         dynamic_attachments: Any = None,
@@ -718,13 +657,13 @@ class HookAssembly:
         context_window / max_output_tokens 来自 model_catalog —— 实测落库（§3 D3），
         不能硬编码：opus/sonnet/fable 是 1M，haiku 只有 200k，差 5 倍。
         """
-        spec = prepared.spec
+        spec = segment.spec
         cfg = spec.compaction
         if not cfg.enabled:
             return None
 
         # 经平台时上限来自 LiteLLM 里登记的规格；没登记、没接平台时读 model_catalog 表
-        entry = self._models(prepared).entry(spec.model.model)
+        entry = self._models(segment).entry(spec.model.model)
         limits = (
             (entry.max_input_tokens, entry.max_output_tokens)
             if entry is not None and entry.max_input_tokens and entry.max_output_tokens
@@ -743,8 +682,8 @@ class HookAssembly:
 
         # 距上次回复多久：超过缓存有效期 → 缓存反正失效，顺手清旧工具结果（§8 ②）
         idle_s = None
-        if prepared.history_upto is not None:
-            idle_s = (datetime.now(UTC) - prepared.history_upto).total_seconds()
+        if segment.history_upto is not None:
+            idle_s = (datetime.now(UTC) - segment.history_upto).total_seconds()
 
         return CompactionMiddleware(
             context_window=window,
@@ -764,23 +703,23 @@ class HookAssembly:
             attachment_budget_tokens=int(
                 (window - min(effective_max_output, 20_000)) * cfg.attachment_budget_ratio
             ),
-            failure_count=prepared.compaction_failures,
-            on_failed=make_failure_hook(self._sessionmaker, prepared.thread_id),
-            summarizer=self._summarizer(prepared),
+            failure_count=segment.compaction_failures,
+            on_failed=make_failure_hook(self._sessionmaker, segment.thread_id),
+            summarizer=self._summarizer(segment),
             on_compacted=make_persist_hook(
-                self._sessionmaker, prepared.thread_id, prepared.history_upto
+                self._sessionmaker, segment.thread_id, segment.history_upto
             ),
         )
 
-    def _summarizer(self, prepared: PreparedRun) -> ThreadSummarizer:
+    def _summarizer(self, segment: Segment) -> ThreadSummarizer:
         """压缩用的摘要器：智能体的推理，和主模型同一个端点（Run 开始时已检查过）。"""
-        spec = prepared.spec
+        spec = segment.spec
         name = resolve_summarizer_model(spec.compaction.summarizer_model, spec.model.model)
         return ThreadSummarizer(
             self._settings,
             self._build_model,
             model=name,
-            endpoint=self._models(prepared).endpoint,
+            endpoint=self._models(segment).endpoint,
             provider=spec.model.provider,
         )
 

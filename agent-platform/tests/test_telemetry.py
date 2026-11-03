@@ -69,7 +69,7 @@ def make_spec(kind: str = "native") -> AgentSpec:
 
 
 class _Prepared:
-    """PreparedRun 的最小替身 —— RunTrace 只读 spec 与 thread_id。"""
+    """Segment 的最小替身 —— RunTrace 只读 spec 与 thread_id。"""
 
     def __init__(self, spec: AgentSpec) -> None:
         self.spec = spec
@@ -356,7 +356,7 @@ class _Thread:
 
 
 class _Run:
-    """带 thread / 输入 / 深度的 PreparedRun 替身。"""
+    """带 thread / 输入 / 深度的 Segment 替身。"""
 
     def __init__(
         self,

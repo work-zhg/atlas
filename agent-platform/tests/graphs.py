@@ -13,6 +13,7 @@ from atlas_agent.domain.events import EventType, TraceEvent
 from atlas_agent.domain.messages import Transcript
 from atlas_agent.executor.build import build_graph
 from atlas_agent.executor.runner import run as engine_run
+from atlas_agent.executor.segment_data import Segment
 from langchain_core.messages import HumanMessage
 
 __all__ = ["build_graph", "run_agent", "run_to_end"]
@@ -49,23 +50,27 @@ def run_agent(
     不传时图按 spec.approval.default_mode 判定。
     """
     graph = build_graph(spec, model, **capabilities)
+    segment = Segment(
+        spec=spec,
+        input_content=input_content,
+        thread=None,  # type: ignore[arg-type]  # runner 不读会话行
+        history=list(history),
+        resume=resume,
+        base_depth=base_depth,
+        start_seq=start_seq,
+        waiting_on=dict(waiting_on or {}),
+        decisions=dict(decisions or {}),
+        approval_mode=approval_mode,
+        run_state=dict(run_state or {}),
+    )
     return engine_run(
-        spec,
+        segment,
         run_id=run_id,
         graph=graph,
-        input_content=input_content,
-        history=history,
         cancel=cancel,
         clock=clock,
         titler=titler,
         transcript=transcript,
-        resume=resume,
-        base_depth=base_depth,
-        start_seq=start_seq,
-        waiting_on=waiting_on,
-        decisions=decisions,
-        approval_mode=approval_mode,
-        run_state=run_state,
     )
 
 

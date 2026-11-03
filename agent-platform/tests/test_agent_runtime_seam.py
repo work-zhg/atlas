@@ -45,7 +45,7 @@ def test_run_turn_takes_per_run_plumbing_as_parameters() -> None:
       会话的工具调用。放在签名上是让这个错误压根写不出来。
     """
     params = inspect.signature(NativeRuntime.run_turn).parameters
-    assert set(params) == {"self", "prepared", "run_id", "redis", "relay", "transcript"}
+    assert set(params) == {"self", "segment", "run_id", "redis", "relay", "transcript"}
     for name in ("run_id", "redis", "relay", "transcript"):
         assert params[name].kind is inspect.Parameter.KEYWORD_ONLY, name
 

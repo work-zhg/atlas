@@ -36,7 +36,7 @@ if TYPE_CHECKING:
     from datetime import datetime
 
     from ..domain.events import TraceEvent
-    from ..executor.assembly import PreparedRun
+    from ..executor.segment_data import Segment
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +84,7 @@ class RunTrace:
 
     用法（executor/segment.py::SegmentExecution.run）：
 
-        with RunTrace.start(prepared, run_id=run_id, parent_run_id=...) as rt:
+        with RunTrace.start(segment, run_id=run_id, parent_run_id=...) as rt:
             async for event in runtime.run_turn(...):
                 rt.observe(event)
                 ...
@@ -123,7 +123,7 @@ class RunTrace:
 
     @classmethod
     def start(
-        cls, prepared: PreparedRun, *, run_id: str, parent_run_id: str | None = None
+        cls, segment: Segment, *, run_id: str, parent_run_id: str | None = None
     ) -> RunTrace:
         import time
 
@@ -131,13 +131,13 @@ class RunTrace:
 
         from . import tracer
 
-        spec = prepared.spec
-        thread = getattr(prepared, "thread", None)
-        thread_id = str(prepared.thread_id)
+        spec = segment.spec
+        thread = getattr(segment, "thread", None)
+        thread_id = str(segment.thread_id)
         # ★ 会话 = 根会话：子 run 在子会话上，但它是父会话那段对话的一部分（设计 §7）
         session_id = str(getattr(thread, "stream_thread_id", None) or thread_id)
         user_id = getattr(thread, "created_by_uuid", None)
-        resumed = bool(getattr(prepared, "resume", False))
+        resumed = bool(getattr(segment, "resume", False))
 
         attributes: dict[str, Any] = {
             sc.OPERATION_NAME: sc.OP_INVOKE_AGENT,
@@ -162,7 +162,7 @@ class RunTrace:
         from ..instance import instance_id
 
         attributes["atlas.instance"] = instance_id()
-        if takeover := getattr(prepared, "takeover", None):
+        if takeover := getattr(segment, "takeover", None):
             attributes["atlas.resumed_from"] = takeover
         if parent_run_id:
             attributes[sc.PARENT_RUN_ID] = parent_run_id
@@ -171,7 +171,7 @@ class RunTrace:
         if environment:
             attributes[sc.LF_ENVIRONMENT] = environment
         # trace 的输入 = 用户这一轮的消息。续跑的段不重复写（输入早已在第一段里）
-        user_input = getattr(prepared, "input_content", None)
+        user_input = getattr(segment, "input_content", None)
         if not resumed and (text := content.render(user_input, "io")) is not None:
             attributes[sc.LF_TRACE_INPUT] = text
 
@@ -194,7 +194,7 @@ class RunTrace:
             span,
             run_id,
             kind=spec.kind,
-            base_depth=int(getattr(prepared, "base_depth", 0) or 0),
+            base_depth=int(getattr(segment, "base_depth", 0) or 0),
             model=spec.model.model,
             started_ns=started_ns,
         )

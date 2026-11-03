@@ -102,6 +102,7 @@ def test_skill_slug_of(args: Any, slug: str | None) -> None:
 async def test_runner_emits_notices_right_after_run_started() -> None:
     from atlas_agent.executor.build import build_graph
     from atlas_agent.executor.runner import run as engine_run
+    from atlas_agent.executor.segment_data import Segment
 
     from tests.fakes import text_model
 
@@ -110,10 +111,9 @@ async def test_runner_emits_notices_right_after_run_started() -> None:
     events = [
         e
         async for e in engine_run(
-            spec,
+            Segment(spec=spec, input_content="q", thread=None),  # type: ignore[arg-type]
             run_id=uuid.uuid4(),
             graph=build_graph(spec, text_model("hi")),
-            input_content="q",
             notices=[notice],
         )
     ]
