@@ -298,8 +298,8 @@ async def test_requesting_an_approval_is_recorded_as_a_span(traced, monkeypatch)
       会话流上、同一个 run_id 下。那是个查询，不是一个 span —— 而它本来就
       更准（含进程重启的那段）。
     """
-    import atlas_agent.services.approval as approval_mod
-    from atlas_agent.services.approval import RedisApprovalGate
+    import atlas_agent.approval.service as approval_mod
+    from atlas_agent.approval import RunApprovalGate
 
     provider_tracer = traced  # exporter
     import atlas_agent.telemetry as telemetry
@@ -333,7 +333,7 @@ async def test_requesting_an_approval_is_recorded_as_a_span(traced, monkeypatch)
     monkeypatch.setattr(approval_mod, "ApprovalRepository", _Approvals)
 
     # ★ 没有 timeout_s 了：超时判定搬到恢复扫描（S8）
-    gate = RedisApprovalGate(_Maker(), None, RUN_ID)
+    gate = RunApprovalGate(_Maker(), RUN_ID)
     state = await gate.check(approval_id=str(THREAD_ID), tool_name="Write /workspace/a.md", args={})
 
     assert state == "pending"

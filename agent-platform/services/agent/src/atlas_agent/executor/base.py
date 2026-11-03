@@ -35,6 +35,10 @@ class RunExecutor(Protocol):
         """
         ...
 
+    async def decided(self, run_id: UUID, approval_id: UUID) -> None:
+        """审批组件的 DecisionListener：用户做了决定，等的事项都有结果了就续跑。"""
+        ...
+
     async def shutdown(self) -> None:
         """优雅停机：给在跑的 run 一点时间收尾（§12.1 的 30s 窗口）。"""
         ...

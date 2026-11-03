@@ -39,7 +39,7 @@ Emit = Callable[[EventType, dict[str, Any]], None]
 
 
 class ApprovalPort(Protocol):
-    """平台审批的最小接口。生产实现包装 RedisApprovalGate 与 ApprovalRepository。"""
+    """平台审批的最小接口。生产实现包装审批组件（RunApprovalGate 与 ApprovalRepository）。"""
 
     async def check(
         self,

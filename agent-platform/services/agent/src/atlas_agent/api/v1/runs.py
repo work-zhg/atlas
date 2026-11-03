@@ -3,13 +3,11 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import APIRouter
-from sqlalchemy import select
 
+from ...approval import ApprovalService
 from ...auth.authz import PrincipalDep, ensure_run_owner
-from ...db.models import Approval
 from ...deps import ExecutorDep, RunServiceDep, SessionDep
-from ...errors import Conflict, NotFound
-from ...repositories.approval import ApprovalRepository
+from ...errors import NotFound
 from ...schemas.run import (
     ApprovalDecision,
     ApprovalOut,
@@ -18,7 +16,6 @@ from ...schemas.run import (
     RunOut,
     RunTraceOut,
 )
-from ...services.approval import decision_outcome, submit_decision
 
 router = APIRouter(prefix="/runs", tags=["runs"])
 
@@ -63,7 +60,7 @@ async def list_pending_approvals(
     这个端点直接查库，是更硬的恢复路径。
     """
     await ensure_run_owner(session, run_id, principal)
-    rows = await ApprovalRepository(session).list_pending(run_id)
+    rows = await ApprovalService(session).pending(run_id)
     return PendingApprovalList(
         data=[
             PendingApproval(
@@ -97,36 +94,20 @@ async def decide_approval(
     # ★ 归属按审批**实际所在**的 run 判：只看路径里的 run 会让人拿自己的 run id
     #   去批别人的审批（子智能体的审批可能挂在子 run 上，所以不要求两者相等）
     await ensure_run_owner(session, run_id, principal, write=True)
-    approval = await session.scalar(select(Approval).where(Approval.approval_uuid == approval_id))
+    # 做了决定由审批组件通知执行器续跑（DecisionListener）
+    approvals = ApprovalService(session, listener=executor)
+    approval = await approvals.get(approval_id)
     if approval is None:
         raise NotFound("确认项不存在", approval_id=str(approval_id))
     await ensure_run_owner(session, approval.run_uuid, principal, write=True)
-    outcome = await decision_outcome(
-        session,
-        approval,
-        decision=payload.decision,
-        approval_mode=payload.approval_mode,
+    await approvals.decide(
+        approval_id,
+        payload.decision,
+        by=principal.uid,
+        mode=payload.approval_mode,
         feedback=payload.feedback,
         answers=(
             [a.model_dump() for a in payload.answers] if payload.answers is not None else None
         ),
     )
-    ok = await submit_decision(
-        session,
-        approval_id=approval_id,
-        decision=payload.decision,
-        user_id=principal.uid,
-        outcome=outcome,
-    )
-    if not ok:
-        raise Conflict("该确认已被处理过或已超时", approval_id=str(approval_id))
-
-    # ★ 决策到了 —— 立刻唤醒那个挂起的 run。
-    #
-    #   原生智能体的审批是挂起而不是在线阻塞（detail/suspension.html §06）：run 落成
-    #   suspended 之后**没有进程**在等这个决策。不在这里唤醒的话要等到
-    #   周期扫描（默认 60s），用户点完「允许」得干等一分钟，看着像没生效。
-    #
-    #   ★ 幂等：resume_if_ready 内部有 CAS，与周期扫描撞上时只有一个能赢。
-    await executor.resume_if_ready(run_id)
     return ApprovalOut(approval_id=approval_id, run_id=run_id, decision=payload.decision)

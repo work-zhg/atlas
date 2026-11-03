@@ -41,11 +41,11 @@ from atlas_agent.domain.messages import (
 )
 from atlas_agent.domain.spec import AgentSpec, spec_for_subagent
 
+from ..approval import ApprovalService
 from ..config import Settings
 from ..db.models import AgentVersion, Message, Run, Thread
 from ..outbound import CallIdentity, use_identity
 from ..redisx import make_redis
-from ..repositories.approval import ApprovalRepository
 from ..repositories.cli_session import CliSessionRepository
 from ..repositories.event_archive import EventArchive
 from ..repositories.run import LeaseLost, RunRepository
@@ -58,7 +58,7 @@ from ..services.subagent import subagent_result
 from ..stream.relay import EventRelay
 from ..telemetry.run_trace import RunTrace
 from .assembly import PreparedRun
-from .continuation import Continuation, approval_outcome
+from .continuation import Continuation
 from .runtime import AgentRuntime, NativeRuntime, select_runtime
 
 logger = logging.getLogger(__name__)
@@ -274,11 +274,11 @@ class SegmentLoader:
         answered = {m.tool_call_id for m in history if isinstance(m, ToolMessage)}
         waits = {cid: w for cid, w in waits.items() if cid not in answered and isinstance(w, dict)}
         decisions: dict[str, Any] = {}
-        approvals = ApprovalRepository(session)
+        approvals = ApprovalService(session)
         for wait in waits.values():
             token = str(wait.get("token") or "")
             if wait.get("reason") == "approval":
-                outcome = await approval_outcome(approvals, token)
+                outcome = await approvals.result(token)
                 if outcome["status"] != "pending":
                     decisions[token] = outcome
             elif wait.get("reason") == "subagent":
@@ -355,6 +355,7 @@ class SegmentExecution:
                         error_message="会话或配置版本已不存在",
                         owner=self._instance,
                     )
+                    await ApprovalService(session).expire_run(run_id)
                     await session.commit()
                     return False
                 run, thread, version = loaded
@@ -725,6 +726,8 @@ class SegmentExecution:
             #   在里面。
             await EventArchive(session).archive_events(events, thread_id=stream_thread_id)
             if not suspended:
+                # run 结束：还挂着的审批一并作废（CLI 的权限请求可能没等到撤回），弹窗随之消失
+                await ApprovalService(session).expire_run(run_id)
                 # 归档之后再汇总：这一段的 skill.loaded 也要算进去（跨段的 run 只算一次）
                 await SkillUsageRepository(session).record_run(
                     run_id, succeeded=status == "succeeded", day=_today()
@@ -745,4 +748,5 @@ class SegmentExecution:
                 # 围栏：已被别的实例接管的 run 不能被这里判死
                 owner=self._instance,
             )
+            await ApprovalService(session).expire_run(run_id)
             await session.commit()

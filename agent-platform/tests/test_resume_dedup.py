@@ -15,7 +15,7 @@ from typing import Any, ClassVar
 from uuid import UUID, uuid4
 
 import pytest
-from atlas_agent.executor import segment
+from atlas_agent.approval import service as approval_service
 from atlas_agent.executor.runner import Answer, EventFactory, _from_updates, _transcript_messages
 from atlas_agent.executor.scheduling import RunWorker
 from atlas_agent.executor.segment import SegmentLoader
@@ -76,7 +76,7 @@ class _FakeApprovals:
 
 @pytest.fixture
 def approvals(monkeypatch: pytest.MonkeyPatch) -> type[_FakeApprovals]:
-    monkeypatch.setattr(segment, "ApprovalRepository", _FakeApprovals)
+    monkeypatch.setattr(approval_service, "ApprovalRepository", _FakeApprovals)
     _FakeApprovals.rows = {}
     return _FakeApprovals
 

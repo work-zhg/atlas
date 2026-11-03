@@ -17,7 +17,6 @@ import contextlib
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
-from typing import Any
 from uuid import UUID
 
 import redis.asyncio as aioredis
@@ -26,10 +25,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from atlas_agent.domain.events import EventFactory, EventType, TraceEvent
 from atlas_agent.domain.messages import interrupted_results
 
+from ..approval import ApprovalService
 from ..config import Settings
 from ..db.models import Run, Thread
 from ..redisx import make_redis
-from ..repositories.approval import ApprovalRepository
 from ..repositories.continuation import ContinuationQueries
 from ..repositories.event_archive import EventArchive
 from ..repositories.run import SUSPENDED_STATUSES, RunRepository
@@ -61,34 +60,6 @@ def _discarded_chars(events: list[TraceEvent], depth: int) -> int:
         elif event.type is EventType.MESSAGE_DELTA and event.depth == depth:
             chars += len(str(event.data.get("text") or ""))
     return chars
-
-
-async def approval_decision(approvals: ApprovalRepository, token: str) -> str:
-    """approval 行的状态；行丢了（或 token 非法）按 "failed"。"""
-    try:
-        row = await approvals.get(UUID(token))
-    except ValueError:
-        logger.warning("waiting_on 里的 approval token 非法：%r", token)
-        return "failed"
-    return "failed" if row is None else row.status
-
-
-async def approval_outcome(approvals: ApprovalRepository, token: str) -> dict[str, Any]:
-    """续跑交给图的审批结果（contracts/permission.py::ApprovalOutcome）。
-
-    status 之外，计划审批带回用户选的执行模式，拒绝带回原因，问题带回答案（approval.outcome）。
-    行丢了（或 token 非法）按 "failed"。
-    """
-    try:
-        row = await approvals.get(UUID(token))
-    except ValueError:
-        logger.warning("waiting_on 里的 approval token 非法：%r", token)
-        return {"status": "failed"}
-    if row is None:
-        return {"status": "failed"}
-    extra = row.outcome if isinstance(row.outcome, dict) else {}
-    picked = {k: extra[k] for k in ("mode", "feedback", "answers") if extra.get(k)}
-    return {"status": row.status, **picked}
 
 
 class Continuation:
@@ -167,14 +138,14 @@ class Continuation:
             return False
 
         queries = ContinuationQueries(session)
-        approvals = ApprovalRepository(session)
+        approvals = ApprovalService(session)
         for wait in waits.values():
             reason = (wait or {}).get("reason")
             token = (wait or {}).get("token") or ""
             if reason == "approval":
                 # ★ 记录丢了算「已结清」，不是「继续等」：等一个不存在的审批 = run 永久
                 #   挂起、会话一直被锁。续跑时按门禁故障告诉模型（SegmentLoader）。
-                if await approval_decision(approvals, token) == "pending":
+                if await approvals.status(token) == "pending":
                     return False
             elif reason == "subagent":
                 if await queries.has_unfinished_children(run.run_uuid):
@@ -185,6 +156,10 @@ class Continuation:
                 logger.warning("run %s 的 waiting_on 里有未知 reason：%r", run.run_uuid, reason)
                 return False
         return True
+
+    async def decided(self, run_id: UUID, approval_id: UUID) -> None:
+        """审批组件的 DecisionListener：用户做了决定，查一次续跑条件。"""
+        await self.resume_if_ready(run_id)
 
     async def sweep_suspended(self) -> int:
         """扫一遍挂起的 run，能续的续上。返回续了几个。
@@ -255,6 +230,8 @@ class Continuation:
                     last_seq=event.seq,
                     usage={},  # 累加语义下空字典 = 不动账
                 )
+                # 还挂着的审批一并作废：弹窗随之消失
+                await ApprovalService(session).expire_run(run_id)
                 await archive.archive_events([event], thread_id=stream_thread_id)
                 await session.commit()
                 thread_id = run.thread_uuid

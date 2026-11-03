@@ -44,6 +44,7 @@ from uuid import UUID
 from atlas_host import CloseCode, HostErrorCode, methods
 from atlas_jsonrpc import ChannelClosed, ErrorCode, RpcFault
 
+from ..approval import RunApprovalGate
 from ..domain.events import EventFactory, EventType, TraceEvent
 from ..domain.mcp_naming import MCP_PREFIX
 from ..domain.skill_events import SkillLoadTracker
@@ -62,7 +63,6 @@ from ..providers.mcp.gateway import servers_in
 from ..providers.pods import AcpModel
 from ..repositories.approval import ApprovalRepository
 from ..repositories.cli_session import CliSessionRepository
-from ..services.approval import RedisApprovalGate
 from .approvals import ApprovalPort, PermissionDesk
 from .client import HostClient, HostUnreachable
 from .translate.acp_v1 import (
@@ -158,7 +158,7 @@ class _DbApprovals:
     ) -> None:
         self._sessionmaker = sessionmaker
         self._run_id = run_id
-        self._gate = RedisApprovalGate(sessionmaker, redis, run_id)
+        self._gate = RunApprovalGate(sessionmaker, run_id)
 
     async def check(
         self,

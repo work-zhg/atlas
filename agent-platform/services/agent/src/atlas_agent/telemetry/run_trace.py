@@ -202,7 +202,7 @@ class RunTrace:
     def __enter__(self) -> RunTrace:
         # ★ 必须把根 span 设成**当前 span**，不能只是建出来。
         #
-        #   模型调用（model_callback）与审批等待（services/approval）都是靠
+        #   模型调用（model_callback）与审批等待（approval/service.py）都是靠
         #   「当前上下文里的 span」找父的。不设的话它们全成了各自独立的根 ——
         #   Jaeger 上看到的是一堆平行的 chat span，与 Run 没有任何关系，
         #   而这正是 trace 存在的意义。实测就是这么发现的：工具 span 挂对了

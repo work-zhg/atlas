@@ -42,6 +42,7 @@ from atlas_agent.providers.opensandbox import SandboxProvisioner
 from atlas_agent.providers.sandbox import PodSandbox
 from atlas_agent.telemetry.model_callback import ModelSpanHandler
 
+from ..approval import RunApprovalGate
 from ..config import Settings
 from ..db.models import Thread
 from ..domain.events import EventType
@@ -75,7 +76,6 @@ from ..providers.mcp import (
 from ..providers.mcp.gateway import forget_access, servers_in
 from ..repositories.model_catalog import ModelCatalogRepository
 from ..repositories.run import RunRepository
-from ..services.approval import RedisApprovalGate
 from ..services.compaction import ThreadSummarizer, make_failure_hook, make_persist_hook
 from ..services.service_models import resolve_service_model, service_model_configured
 from ..services.title import TitleService
@@ -354,7 +354,7 @@ class HookAssembly:
             routing=WorkspaceRouting(provisioner, ws_thread) if provisioner else None,
         )
 
-        approvals = RedisApprovalGate(self._sessionmaker, redis, run_id)
+        approvals = RunApprovalGate(self._sessionmaker, run_id)
 
         # 技能清单：描述取自技能应用；已下架的跳过并告诉用户（技能 / MCP 设计 §7.3）
         skill_metas, skipped = await resolve_skills(

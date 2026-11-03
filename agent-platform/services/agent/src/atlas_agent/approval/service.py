@@ -1,25 +1,25 @@
-"""人工确认的服务端实现（文档 §12.2）。
+"""审批：等人决定的事（c4-model/agent/code-approval.html）。
 
-engine 只认 `ApprovalGate` 协议；这里把它落到 Postgres（审计）+ Redis（唤醒）。
+工具调用的确认、规划模式提交的计划、向用户的提问 —— 三者一张表（approval），原生智能体和
+CLI 智能体共用、弹同一个窗口：
 
-★ 等待从「在线阻塞」改成「挂起」（detail/suspension.html §06）。
+    登记、查状态    RunApprovalGate.check（原生运行时的审批、提问中间件；CLI 的权限转发经它）
+                    第一次查时登记，立刻返回，不阻塞 —— 等待交给数据库，可以等到第二天
+    做决定          ApprovalService.decide：校验执行模式和答案，条件更新只成功一次，
+                    然后通知 DecisionListener（Run 执行器）续跑
+    续跑前核对      ApprovalService.status / result（Run 执行器）
+    作废            ApprovalService.expire_run：run 进入终态时，还挂着的一律 expired
 
-  原先 gate 用短 BLPOP 累积到 600s 等决策 —— 一个 asyncio.Task 全程挂着，
-  进程重启即丢，而 600s 对小时级任务根本不够。现在 `check()` 立刻返回状态，
-  没结果时中间件登记 waiting_on 让本段结束，决策到达后续跑。
-
-  Redis 的决策队列（`run:approval:{id}`）随之整个删掉 —— 它没有消费者了。
-  唤醒现在由 HTTP 端点触发（`executor.resume_if_ready`），而决策的权威记录
-  始终是 `Approval.status`。留一个没人读的队列只会让下一个人以为有等待方。
+它不判断该不该问（原生运行时按审批模式和工具类别、CLI 按自己的权限模式），不发
+approval.required 事件（运行时发），也不续跑（Run 执行器）。
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Protocol
 from uuid import UUID
 
-import redis.asyncio as aioredis
 from atlas_engine.contracts import ApprovalState, Decision
 from atlas_engine.kernel.middleware.ask_user import resolve_answers
 from sqlalchemy import select
@@ -27,27 +27,120 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ..db.models import Approval
 from ..domain.spec import ApprovalSpec
-from ..errors import InvalidAnswers, InvalidApprovalMode
+from ..errors import Conflict, InvalidAnswers, InvalidApprovalMode, NotFound
 from ..repositories.approval import ApprovalRepository
 from ..telemetry import semconv as _sc
 from ..telemetry import tracer as _tracer
 
 logger = logging.getLogger(__name__)
 
-class RedisApprovalGate:
-    """注入给 engine 的审批门禁。
+
+class DecisionListener(Protocol):
+    """做了决定通知谁。由 Run 执行器实现：等的事项都有结果了就放回队列续跑。
+
+    ★ 审批因此不认识执行器：执行器既要查事项状态（依赖审批），又要被审批唤醒，唤醒做成
+      这里定义的接口，依赖就是单向的。唤醒丢了也不要紧：执行器有定时补扫。
+    """
+
+    async def decided(self, run_id: UUID, approval_id: UUID) -> None: ...
+
+
+class ApprovalService:
+    """等人决定的事的入口（按请求或段的会话构造）：做决定、待决事项、续跑前核对、作废。"""
+
+    def __init__(self, session: AsyncSession, *, listener: DecisionListener | None = None) -> None:
+        self._session = session
+        self._repo = ApprovalRepository(session)
+        self._listener = listener
+
+    async def get(self, approval_id: UUID) -> Approval | None:
+        return await self._repo.get(approval_id)
+
+    async def pending(self, run_id: UUID) -> list[Approval]:
+        """刷新页面后恢复弹窗：直接查库，不依赖 Redis 里的事件还在。"""
+        return await self._repo.list_pending(run_id)
+
+    async def decide(
+        self,
+        approval_id: UUID,
+        decision: Decision,
+        *,
+        by: UUID,
+        mode: str | None = None,
+        feedback: str | None = None,
+        answers: list[dict[str, Any]] | None = None,
+    ) -> Approval:
+        """记下用户的决定，然后通知 Run 执行器续跑。
+
+        拒绝**不终止 run** —— 智能体收到「用户拒绝」和理由作为工具结果，换个方案继续。
+        ★ 只成功一次：条件更新只改 pending 的行，重复决定（两个标签页同时点）回冲突。
+        """
+        approval = await self._repo.get(approval_id)
+        if approval is None:
+            raise NotFound("确认项不存在", approval_id=str(approval_id))
+        outcome = await _decision_outcome(
+            self._session,
+            approval,
+            decision=decision,
+            approval_mode=mode,
+            feedback=feedback,
+            answers=answers,
+        )
+        if not await self._repo.decide(
+            approval_id, decision=decision, user_id=by, outcome=outcome
+        ):
+            raise Conflict("该确认已被处理过或已超时", approval_id=str(approval_id))
+        await self._session.commit()
+        # ★ 原生智能体的审批是挂起：run 落成 suspended 之后没有进程在等这个决定。
+        #   不在这里通知的话要等定时补扫（默认 60s），用户点完「允许」得干等一分钟。
+        #   通知是幂等的：放回队列有 CAS，与补扫撞上只有一个能赢。
+        if self._listener is not None:
+            await self._listener.decided(approval.run_uuid, approval_id)
+        return approval
+
+    async def status(self, token: str) -> str:
+        """续跑前核对：事项的状态；行丢了（或 token 非法）按 "failed"。
+
+        ★ 记录丢了算「已结清」，不是「继续等」：等一个不存在的审批 = run 永久挂起。
+        """
+        try:
+            row = await self._repo.get(UUID(token))
+        except ValueError:
+            logger.warning("waiting_on 里的 approval token 非法：%r", token)
+            return "failed"
+        return "failed" if row is None else row.status
+
+    async def result(self, token: str) -> dict[str, Any]:
+        """续跑交给图的审批结果（contracts/permission.py::ApprovalOutcome）。
+
+        status 之外，计划审批带回用户选的执行模式，拒绝带回原因，提问带回答案。
+        行丢了（或 token 非法）按 "failed"（门禁故障）。
+        """
+        try:
+            row = await self._repo.get(UUID(token))
+        except ValueError:
+            logger.warning("waiting_on 里的 approval token 非法：%r", token)
+            return {"status": "failed"}
+        if row is None:
+            return {"status": "failed"}
+        extra = row.outcome if isinstance(row.outcome, dict) else {}
+        picked = {k: extra[k] for k in ("mode", "feedback", "answers") if extra.get(k)}
+        return {"status": row.status, **picked}
+
+    async def expire_run(self, run_id: UUID) -> int:
+        """run 进入终态：还挂着的事项一律 expired，弹窗随之消失。不提交，跟着调用方的事务。"""
+        return await self._repo.expire_pending(run_id)
+
+
+class RunApprovalGate:
+    """注入给 engine 的审批门禁（ApprovalGate），一个 run 一个。
 
     engine 在工具执行前问它「这次批了吗」；它负责登记，然后**立刻**返回状态 ——
     等待由挂起机制承担。run 的状态不在这里动：原生智能体随后挂起（suspended），
     CLI 在线等权限由 CLI 运行时标 awaiting_user。
     """
 
-    def __init__(
-        self,
-        sessionmaker: async_sessionmaker[AsyncSession],
-        redis: aioredis.Redis,
-        run_id: UUID,
-    ) -> None:
+    def __init__(self, sessionmaker: async_sessionmaker[AsyncSession], run_id: UUID) -> None:
         """★ 不再有 timeout_s。
 
         超时判定搬到了恢复扫描（executor 的 sweep_suspended）—— 挂起之后没有
@@ -55,7 +148,6 @@ class RedisApprovalGate:
         await 的超时分支。gate 因此不需要知道时限。
         """
         self._sessionmaker = sessionmaker
-        self._redis = redis
         self._run_id = run_id
 
     async def check(
@@ -133,38 +225,6 @@ def _tool_call_id_of(args: dict[str, Any]) -> str | None:
     return str(found) if found else None
 
 
-async def submit_decision(
-    session: AsyncSession,
-    *,
-    approval_id: UUID,
-    decision: Decision,
-    user_id: UUID,
-    outcome: dict[str, Any] | None = None,
-) -> bool:
-    """HTTP 侧写入决策。返回是否成功（重复决策返回 False）。
-
-    ★ **只落库，不唤醒**。唤醒是调用方的事（api/v1/runs.py 在这之后调
-      `executor.resume_if_ready`）—— 这里拿不到执行器，而把它注进来只为
-      唤醒会让「写决策」和「调度」耦合在一个函数里。
-
-    ★ redis 参数删掉了：那个决策队列没有消费者了（见模块开头）。
-    """
-    updated = await ApprovalRepository(session).decide(
-        approval_id, decision=decision, user_id=user_id, outcome=outcome
-    )
-    if not updated:
-        return False
-    await session.commit()
-
-    # ★ 这里曾经往 Redis 推一条决策消息唤醒阻塞中的 gate（BLPOP）。
-    #   审批改成挂起之后那个队列**没有消费者**了 —— 一并删掉，而不是留着。
-    #
-    #   留着的代价不是那点开销，是误导：下一个人看到 rpush 会以为有等待方，
-    #   而真正的唤醒发生在 HTTP 端点里（api/v1/runs.py::decide_approval 调
-    #   executor.resume_if_ready）。决策的权威记录始终是 Approval.status。
-    return True
-
-
 async def approval_spec_of_run(session: AsyncSession, run_id: UUID) -> ApprovalSpec:
     """这个 run 所用版本快照里的审批模式配置（默认值与允许范围）。"""
     from ..db.models import AgentVersion, Run
@@ -178,7 +238,7 @@ async def approval_spec_of_run(session: AsyncSession, run_id: UUID) -> ApprovalS
     return AgentSpecIn.model_validate(spec or {"model": {"model": "unknown"}}).approval.to_engine()
 
 
-async def decision_outcome(
+async def _decision_outcome(
     session: AsyncSession,
     approval: Approval,
     *,

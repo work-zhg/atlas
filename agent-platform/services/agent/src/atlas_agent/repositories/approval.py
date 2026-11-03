@@ -22,7 +22,7 @@ def _fit_tool_name(name: str) -> str:
       来说是 CLI 给的 `toolCall.title` —— 而 Terminal 工具的 title **就是整条
       命令**，几百字符是常态。两种语义共用一列，宽度取多少都是猜。
 
-      真正的代价在失败方向上：`RedisApprovalGate.check()` 把任何落库异常都按
+      真正的代价在失败方向上：`RunApprovalGate.check()` 把任何落库异常都按
       **拒绝**处理（那条红线本身是对的），于是一次 StringDataRightTruncation
       会静默地变成一次「用户拒了」—— CLI 收到 reject_once 就停手，子 run 零
       文本产出，父模型只能看到一句「没有产出文本结论」，从那里根本推不回
@@ -124,3 +124,12 @@ class ApprovalRepository:
             .values(status="expired", decided_at=datetime.now(UTC))
         )
         return bool((await self._session.execute(stmt)).rowcount)
+
+    async def expire_pending(self, run_id: UUID) -> int:
+        """这个 run 还挂着的事项全部作废（run 进入终态时）。返回作废了几件。"""
+        stmt = (
+            update(Approval)
+            .where(Approval.run_uuid == run_id, Approval.status == "pending")
+            .values(status="expired", decided_at=datetime.now(UTC))
+        )
+        return int((await self._session.execute(stmt)).rowcount or 0)  # type: ignore[attr-defined]

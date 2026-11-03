@@ -379,16 +379,16 @@ async def test_a_very_long_tool_name_still_registers(
 
     截断放在仓储层，所以这条测试走的就是生产路径的那个 gate。
     """
+    from atlas_agent.approval import RunApprovalGate
     from atlas_agent.db.models import Approval
     from atlas_agent.repositories.approval import _TOOL_NAME_MAX
-    from atlas_agent.services.approval import RedisApprovalGate
 
     run_id, _ = await _start_guarded_run(client)
 
     long_name = "`" + " && ".join(f"cat /workspace/file-{i}.txt" for i in range(20)) + "`"
     assert len(long_name) > _TOOL_NAME_MAX, "这条测试的前提是名字真的超长"
 
-    gate = RedisApprovalGate(get_sessionmaker(), redis, UUID(run_id))
+    gate = RunApprovalGate(get_sessionmaker(), UUID(run_id))
     approval_id = str(uuid4())
     state = await gate.check(approval_id=approval_id, tool_name=long_name, args={"x": 1})
 
@@ -400,3 +400,23 @@ async def test_a_very_long_tool_name_still_registers(
         assert len(row.tool_name) <= _TOOL_NAME_MAX
         # 截断保留开头：排查时一眼能认出是哪条命令
         assert row.tool_name.startswith("`cat /workspace/file-0.txt")
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_cancelling_a_suspended_run_expires_its_approvals(client: httpx.AsyncClient) -> None:
+    """★ run 进入终态时还挂着的审批一律作废（c4-model/agent/code-approval.html）：
+    取消之后刷新页面，待决端点不再列出它，弹窗不会回来；事后再点也是冲突，不会续跑。"""
+    from atlas_agent.db.models import Approval
+
+    run_id, approval_id = await _start_guarded_run(client)
+    await _wait_suspended(client, run_id)
+
+    assert (await client.post(f"/v1/runs/{run_id}/cancel")).status_code == 200
+    assert (await client.get(f"/v1/runs/{run_id}")).json()["status"] == "cancelled"
+    assert (await client.get(f"/v1/runs/{run_id}/approvals")).json()["data"] == []
+    async with get_sessionmaker()() as session:
+        row = await fetch_one(session, Approval, Approval.approval_uuid == UUID(approval_id))
+        assert row is not None and row.status == "expired", row.status if row else None
+
+    late = await client.post(f"/v1/runs/{run_id}/approvals/{approval_id}", json=APPROVE)
+    assert late.status_code == 409, late.text

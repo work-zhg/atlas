@@ -136,6 +136,10 @@ class RunWorker:
         """等的东西都到了就把这个挂起的 run 续上（判据在续跑领域）。"""
         return await self._continuation.resume_if_ready(run_id)
 
+    async def decided(self, run_id: UUID, approval_id: UUID) -> None:
+        """审批组件的 DecisionListener：做了决定就查一次续跑条件。"""
+        await self._continuation.decided(run_id, approval_id)
+
     async def shutdown(self) -> None:
         """停机：先交接在跑的 run（§6），再停周期任务。"""
         await self.drain()
