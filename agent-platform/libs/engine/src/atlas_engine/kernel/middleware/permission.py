@@ -181,7 +181,8 @@ class PermissionMiddleware(AgentMiddleware):
         effects          模型侧工具名 → 副作用类别。查不到的按 EXTERNAL（最保守）
         default_mode     state 里没有 approval_mode 时用它（单测、旧数据）
         gate             审批门禁；None 时请示一律按「门禁故障」不放行
-        execution_modes  计划获批时用户可选的执行模式（作者允许的范围），随 approval.required 发给前端
+        execution_modes  计划获批时用户可选的执行模式（作者允许的范围）。登记计划审批时一并记下
+                         （做决定时按它校验），也随 approval.required 发给前端
         irreversible     不可逆的工具（delete）：自动模式下即使属于工作区写入也不直接放行
         judge            自动模式的判断器；None = 没有配置
         """
@@ -307,6 +308,7 @@ class PermissionMiddleware(AgentMiddleware):
             source=source,
             reason=reason,
             tool_call_id=call_id,
+            execution_modes=list(self._execution_modes) if kind == "plan" else None,
         )
         if status != "pending":
             # 已经有结果（接管后重放到这里）或门禁故障：按结果处理，不再挂起

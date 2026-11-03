@@ -17,16 +17,15 @@ approval.required 事件（运行时发），也不续跑（Run 执行器）。
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from typing import Any, Protocol
 from uuid import UUID
 
 from atlas_engine.contracts import ApprovalState, Decision
 from atlas_engine.kernel.middleware.ask_user import resolve_answers
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ..db.models import Approval
-from ..domain.spec import ApprovalSpec
 from ..errors import Conflict, InvalidAnswers, InvalidApprovalMode, NotFound
 from ..repositories.approval import ApprovalRepository
 from ..telemetry import semconv as _sc
@@ -78,17 +77,16 @@ class ApprovalService:
         approval = await self._repo.get(approval_id)
         if approval is None:
             raise NotFound("确认项不存在", approval_id=str(approval_id))
-        outcome = await _decision_outcome(
-            self._session,
+        if approval.status != "pending":
+            raise Conflict("该确认已被处理过或已超时", approval_id=str(approval_id))
+        outcome = _decision_outcome(
             approval,
             decision=decision,
             approval_mode=mode,
             feedback=feedback,
             answers=answers,
         )
-        if not await self._repo.decide(
-            approval_id, decision=decision, user_id=by, outcome=outcome
-        ):
+        if not await self._repo.decide(approval_id, decision=decision, user_id=by, outcome=outcome):
             raise Conflict("该确认已被处理过或已超时", approval_id=str(approval_id))
         await self._session.commit()
         # ★ 原生智能体的审批是挂起：run 落成 suspended 之后没有进程在等这个决定。
@@ -160,6 +158,7 @@ class RunApprovalGate:
         source: str | None = None,
         reason: str | None = None,
         tool_call_id: str | None = None,
+        execution_modes: Sequence[str] | None = None,
     ) -> ApprovalState:
         """查一次状态。**立刻返回，不阻塞**。
 
@@ -189,6 +188,7 @@ class RunApprovalGate:
                     kind=kind,
                     source=source,
                     reason=reason,
+                    execution_modes=list(execution_modes) if execution_modes is not None else None,
                 )
                 await session.commit()
         except Exception:
@@ -225,21 +225,7 @@ def _tool_call_id_of(args: dict[str, Any]) -> str | None:
     return str(found) if found else None
 
 
-async def approval_spec_of_run(session: AsyncSession, run_id: UUID) -> ApprovalSpec:
-    """这个 run 所用版本快照里的审批模式配置（默认值与允许范围）。"""
-    from ..db.models import AgentVersion, Run
-    from ..schemas.agent import AgentSpecIn
-
-    spec = await session.scalar(
-        select(AgentVersion.spec)
-        .join(Run, Run.agent_version_uuid == AgentVersion.agent_version_uuid)
-        .where(Run.run_uuid == run_id)
-    )
-    return AgentSpecIn.model_validate(spec or {"model": {"model": "unknown"}}).approval.to_engine()
-
-
-async def _decision_outcome(
-    session: AsyncSession,
+def _decision_outcome(
     approval: Approval,
     *,
     decision: Decision,
@@ -249,7 +235,7 @@ async def _decision_outcome(
 ) -> dict[str, Any]:
     """决策带回的附加信息（approval.outcome），续跑时交给图（contracts/permission.py::ApprovalOutcome）。
 
-    ★ 计划审批批准时必须带执行模式，且在智能体允许的范围里 —— 模式是权限，不能由请求随便指定。
+    ★ 计划审批批准时必须带执行模式，且在登记时记下的范围里 —— 模式是权限，不能由请求随便指定。
     ★ 问题批准时校验答案并补上每题的来源；不带答案 = 全部按推荐
       （doc/ask-user-question-design.html D8），由这里**显式**写进 outcome ——
       审计看得到当时按什么继续的。
@@ -264,12 +250,12 @@ async def _decision_outcome(
         except ValueError as exc:
             raise InvalidAnswers(str(exc)) from exc
     if approval.kind == "plan" and decision == "approved":
-        allowed = (await approval_spec_of_run(session, approval.run_uuid)).execution_modes()
+        allowed = list(approval.execution_modes or [])
         if approval_mode not in allowed:
             raise InvalidApprovalMode(
                 "批准计划时要选一个执行模式，且必须在智能体允许的范围里",
                 approval_mode=approval_mode,
-                allowed=list(allowed),
+                allowed=allowed,
             )
         outcome["mode"] = approval_mode
     return outcome

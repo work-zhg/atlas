@@ -17,6 +17,7 @@ engine 因此不知道 Postgres 与 Redis 的存在。
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any, Literal, Protocol
 
 __all__ = ["ApprovalGate", "ApprovalState", "Decision"]
@@ -55,6 +56,7 @@ class ApprovalGate(Protocol):
         source: str | None = None,
         reason: str | None = None,
         tool_call_id: str | None = None,
+        execution_modes: Sequence[str] | None = None,
     ) -> ApprovalState:
         """这次调用批了吗？**立刻返回，不阻塞**。
 
@@ -68,6 +70,8 @@ class ApprovalGate(Protocol):
                   judge_failed（判断器出错）
           reason  给用户看的一句话
           tool_call_id  被拦下的那个调用；一个调用至多一件待决的事（approval 表的唯一键）
+          execution_modes  计划审批：批准时允许选的执行模式。登记时记下，做决定时按它校验 ——
+                  模式是权限，作者之后收窄了配置，这次计划也按提交那一刻的范围
 
         ★ approval_id 必须由调用方**可复现地**派生，否则续跑时算出一个新 id、
           查到 pending、再挂起一次 —— 死循环。kernel 用

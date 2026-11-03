@@ -55,6 +55,7 @@ class ApprovalRepository:
         kind: str = "tool",
         source: str | None = None,
         reason: str | None = None,
+        execution_modes: list[str] | None = None,
     ) -> Approval:
         """id 由 engine 生成并一同发进 approval.required 事件 ——
         前端拿到事件就能直接构造决策 URL，不必再查一次。
@@ -73,6 +74,7 @@ class ApprovalRepository:
             kind=kind,
             source=source,
             reason=reason,
+            execution_modes=execution_modes,
         )
         self._session.add(row)
         await self._session.flush()

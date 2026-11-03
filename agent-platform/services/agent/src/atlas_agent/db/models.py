@@ -145,9 +145,7 @@ class Agent(Base, TimestampMixin):
         UUIDType,
         nullable=True,
     )
-    created_by_uuid: Mapped[UUID] = mapped_column(
-        UUIDType, nullable=False
-    )
+    created_by_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
     #: 权限类型（迁移 0023，数字员工设计 §7.1）：只决定这个 Agent 的 run 发出的调用
     #: X-Auth-Uid 写谁。
     #:   user   以人为权限：X-Auth-Uid = 使用者，能做的就是使用者自己能做的
@@ -176,14 +174,10 @@ class AgentVersion(Base):
 
     id: Mapped[int] = _pk()
     agent_version_uuid: Mapped[UUID] = _logical_key()
-    agent_uuid: Mapped[UUID] = mapped_column(
-        UUIDType, nullable=False
-    )
+    agent_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     spec: Mapped[dict] = mapped_column(JSONType, nullable=False)
-    created_by_uuid: Mapped[UUID] = mapped_column(
-        UUIDType, nullable=False
-    )
+    created_by_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         UTCDateTime, server_default=func.now(), nullable=False
     )
@@ -199,9 +193,7 @@ class Thread(Base, TimestampMixin):
 
     id: Mapped[int] = _pk()
     thread_uuid: Mapped[UUID] = _logical_key()
-    agent_uuid: Mapped[UUID] = mapped_column(
-        UUIDType, nullable=False
-    )
+    agent_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
     title: Mapped[str] = mapped_column(Text, nullable=False, default="")
     # 决策 5：pending|generated|fallback|manual。manual 永不被自动覆盖。
     title_source: Mapped[str] = mapped_column(String(16), nullable=False, server_default="pending")
@@ -213,9 +205,7 @@ class Thread(Base, TimestampMixin):
     # ── 子会话（迁移 0007）─────────────────────────────────────────
     # NULL = 用户会话；非空 = 某个会话的子智能体会话。子会话不出现在
     # 会话列表里 —— 它是父会话的一部分，不是用户的一段独立对话。
-    parent_thread_uuid: Mapped[UUID | None] = mapped_column(
-        UUIDType, nullable=True
-    )
+    parent_thread_uuid: Mapped[UUID | None] = mapped_column(UUIDType, nullable=True)
     #: 与 parent_thread_id 组成恢复的查找键（唯一）。
     subagent_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
     #: git 凭据档案（cluster 配置里的名字）：acp 会话的 Pod 据此挂载 git 凭据。
@@ -229,9 +219,7 @@ class Thread(Base, TimestampMixin):
     #: 用户在会话里选的审批模式 plan | manual | auto（迁移 0022），作用于下一个 run。
     #: NULL = 用智能体的默认模式（doc/native-approval-mode-design.html）
     approval_mode: Mapped[str | None] = mapped_column(String(8), nullable=True)
-    created_by_uuid: Mapped[UUID] = mapped_column(
-        UUIDType, nullable=False
-    )
+    created_by_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
     #: 会话树的根（迁移 0021）。NULL = 自己就是根；子会话建出时取父会话的根
     #: （ThreadRepository.create）。SubAgent 可以继续派 SubAgent，所以不能再由
     #: `parent_thread_id or id` 派生 —— 那只往上看一层。
@@ -294,9 +282,7 @@ class Message(Base):
 
     id: Mapped[int] = _pk()
     message_uuid: Mapped[UUID] = _logical_key()
-    thread_uuid: Mapped[UUID] = mapped_column(
-        UUIDType, nullable=False
-    )
+    thread_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
     run_uuid: Mapped[UUID | None] = mapped_column(UUIDType, nullable=True)
     role: Mapped[str] = mapped_column(String(16), nullable=False)
     #: 'chat' = 对话轮（用户提问 / 助手回答，后者可带 tool_use）；
@@ -416,9 +402,7 @@ class Run(Base):
         Index(
             "ix_run_active",
             "status",
-            postgresql_where=text(
-                "status IN ('queued','running','suspended')"
-            ),
+            postgresql_where=text("status IN ('queued','running','suspended')"),
         ),
         CheckConstraint(
             "status IN ('queued','running','succeeded','failed','cancelled',"
@@ -450,9 +434,7 @@ class RunEvent(Base):
     thread_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
     #: 会话内单调递增（契约规则 2 的新口径）。由 Redis INCR 分配，见 EventRelay。
     thread_seq: Mapped[int] = mapped_column(Integer, nullable=False)
-    run_uuid: Mapped[UUID] = mapped_column(
-        UUIDType, nullable=False
-    )
+    run_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
     #: run 内单调递增。过渡期前端仍用它做游标；thread 流切换后只剩诊断价值。
     seq: Mapped[int] = mapped_column(Integer, nullable=False)
     ts: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
@@ -500,12 +482,8 @@ class RunFile(Base):
 
     id: Mapped[int] = _pk()
     run_file_uuid: Mapped[UUID] = _logical_key()
-    thread_uuid: Mapped[UUID] = mapped_column(
-        UUIDType, nullable=False
-    )
-    run_uuid: Mapped[UUID] = mapped_column(
-        UUIDType, nullable=False
-    )
+    thread_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
+    run_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
     # 同理：它是 ix_run_file_thread 的一部分
     path: Mapped[str] = mapped_column(String(512), nullable=False)
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -528,9 +506,7 @@ class Approval(Base):
 
     id: Mapped[int] = _pk()
     approval_uuid: Mapped[UUID] = _logical_key()
-    run_uuid: Mapped[UUID] = mapped_column(
-        UUIDType, nullable=False
-    )
+    run_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
     tool_name: Mapped[str] = mapped_column(String(128), nullable=False)
     args: Mapped[dict] = mapped_column(JSONType, nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="pending")
@@ -543,13 +519,14 @@ class Approval(Base):
     #:            judge_failed（判断器出错）
     #:   reason   给用户看的一句话
     #:   outcome  决策带回的附加信息：{"mode": 计划审批选的执行模式, "feedback": 拒绝原因}
+    #: 迁移 0034：execution_modes  计划审批登记时允许的执行模式。做决定时按它校验 —— 不再回头查
+    #:   智能体版本，作者之后收窄了配置，这次计划也按提交那一刻的范围
     kind: Mapped[str] = mapped_column(String(8), nullable=False, server_default="tool")
     source: Mapped[str | None] = mapped_column(String(24), nullable=True)
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     outcome: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
-    decided_by_uuid: Mapped[UUID | None] = mapped_column(
-        UUIDType, nullable=True
-    )
+    execution_modes: Mapped[list | None] = mapped_column(JSONType, nullable=True)
+    decided_by_uuid: Mapped[UUID | None] = mapped_column(UUIDType, nullable=True)
     decided_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         UTCDateTime, server_default=func.now(), nullable=False
@@ -686,9 +663,9 @@ class ThreadMemory(Base):
 class MemoryUserSetting(Base):
     """用户级的记忆设置（§7；迁移 0025）。
 
-      paused  暂停：两条写入路径都停止写入；已有记忆照常常驻、照常可以加载（「暂停优于删除」）
-      epoch   用户在管理界面每做一次影响记忆的操作就加一：会话的常驻快照记着它，
-              不一致就在下一轮刷新（§5.3「用户明确的意图，必须在下一轮生效」）
+    paused  暂停：两条写入路径都停止写入；已有记忆照常常驻、照常可以加载（「暂停优于删除」）
+    epoch   用户在管理界面每做一次影响记忆的操作就加一：会话的常驻快照记着它，
+            不一致就在下一轮刷新（§5.3「用户明确的意图，必须在下一轮生效」）
     """
 
     __tablename__ = "memory_user_setting"

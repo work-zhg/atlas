@@ -18,6 +18,7 @@ from ...schemas.run import (
 
 router = APIRouter(prefix="/runs", tags=["runs"])
 
+
 @router.get("/{run_id}", response_model=RunOut)
 async def get_run(
     run_id: UUID, service: RunServiceDep, session: SessionDep, principal: PrincipalDep
@@ -68,6 +69,7 @@ async def list_pending_approvals(
                 args=r.args,
                 kind=r.kind,
                 reason=r.reason,
+                execution_modes=r.execution_modes,
                 created_at=r.created_at,
             )
             for r in rows

@@ -66,6 +66,8 @@ class PendingApproval(BaseModel):
     #: tool = 工具调用的确认；plan = 规划模式提交的计划；question = 向用户提的问题（args.questions）
     kind: str = "tool"
     reason: str | None = None
+    #: 计划审批：批准时可选的执行模式（登记时记下的范围）；其余为空
+    execution_modes: list[str] | None = None
     created_at: datetime
 
 

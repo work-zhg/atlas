@@ -122,9 +122,7 @@ async def test_approve_resumes_the_run(client: httpx.AsyncClient) -> None:
     """★ 整条链路的接缝：HTTP 决策 → Redis → 阻塞中的执行器被唤醒。"""
     run_id, approval_id = await _start_guarded_run(client)
 
-    res = await client.post(
-        f"/v1/runs/{run_id}/approvals/{approval_id}", json=APPROVE
-    )
+    res = await client.post(f"/v1/runs/{run_id}/approvals/{approval_id}", json=APPROVE)
     assert res.status_code == 200, res.text
 
     run = await wait_for_status(client, run_id)
@@ -145,6 +143,33 @@ async def test_approving_a_plan_requires_an_allowed_execution_mode(
     missing = await client.post(url, json={"decision": "approved"})
     assert missing.status_code == 400, missing.text
     assert (await client.get(f"/v1/runs/{run_id}/approvals")).json()["data"], "被错误地消费了"
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_the_allowed_modes_are_the_ones_registered_with_the_plan(
+    client: httpx.AsyncClient,
+) -> None:
+    """可选的执行模式在登记时记下（刷新页面也拿得到），做决定时按记下的范围校验。"""
+    from atlas_agent.db.models import Approval
+    from sqlalchemy import update
+
+    run_id, approval_id = await _start_guarded_run(client)
+    (pending,) = (await client.get(f"/v1/runs/{run_id}/approvals")).json()["data"]
+    assert pending["kind"] == "plan" and pending["execution_modes"] == ["manual", "auto"]
+
+    # 记下的范围才算数：收窄成只许手动后，选自动被拒、选手动通过
+    async with get_sessionmaker()() as session:
+        await session.execute(
+            update(Approval)
+            .where(Approval.approval_uuid == UUID(approval_id))
+            .values(execution_modes=["manual"])
+        )
+        await session.commit()
+    url = f"/v1/runs/{run_id}/approvals/{approval_id}"
+    assert (await client.post(url, json=APPROVE)).status_code == 400
+    ok = await client.post(url, json={"decision": "approved", "approval_mode": "manual"})
+    assert ok.status_code == 200, ok.text
+    await wait_for_status(client, run_id)
 
 
 @pytest.mark.usefixtures("clean_db")
@@ -179,9 +204,7 @@ async def test_second_decision_conflicts(client: httpx.AsyncClient) -> None:
     """★ 多标签页 / 重复点击：只有第一次决策生效。"""
     run_id, approval_id = await _start_guarded_run(client)
 
-    first = await client.post(
-        f"/v1/runs/{run_id}/approvals/{approval_id}", json=APPROVE
-    )
+    first = await client.post(f"/v1/runs/{run_id}/approvals/{approval_id}", json=APPROVE)
     second = await client.post(
         f"/v1/runs/{run_id}/approvals/{approval_id}", json={"decision": "rejected"}
     )
@@ -225,9 +248,7 @@ async def test_an_approval_survives_a_process_restart(client: httpx.AsyncClient)
     assert still["status"] == "suspended", f"被孤儿回收误杀了：{still}"
 
     # 决策到了 —— 新进程把它续起来
-    res = await client.post(
-        f"/v1/runs/{run_id}/approvals/{approval_id}", json=APPROVE
-    )
+    res = await client.post(f"/v1/runs/{run_id}/approvals/{approval_id}", json=APPROVE)
     assert res.status_code == 200, res.text
 
     final = await wait_for_status(client, run_id)
@@ -281,9 +302,7 @@ async def test_an_old_approval_never_expires(client: httpx.AsyncClient) -> None:
         assert row is not None and row.status == "pending", row.status if row else None
 
     # 人终于做了决定 —— 照样生效
-    res = await client.post(
-        f"/v1/runs/{run_id}/approvals/{approval_id}", json=APPROVE
-    )
+    res = await client.post(f"/v1/runs/{run_id}/approvals/{approval_id}", json=APPROVE)
     assert res.status_code == 200, res.text
     final = await wait_for_status(client, run_id)
     assert final["status"] == "succeeded", final

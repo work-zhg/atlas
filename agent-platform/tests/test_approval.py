@@ -463,6 +463,8 @@ async def test_submitting_a_plan_suspends_for_approval() -> None:
     assert required.data["args"] == {"plan": _PLAN}
     assert required.data["execution_modes"] == ["manual", "auto"]
     assert gate.asked[0]["kind"] == "plan"
+    # 登记时一并记下允许的执行模式：做决定时按它校验，不回头查智能体版本
+    assert gate.asked[0]["execution_modes"] == ["manual", "auto"]
     assert events[-1].type is EventType.RUN_SUSPENDED
 
 

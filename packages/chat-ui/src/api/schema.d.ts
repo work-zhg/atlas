@@ -2064,6 +2064,8 @@ export interface components {
             kind: string;
             /** Reason */
             reason?: string | null;
+            /** Execution Modes */
+            execution_modes?: string[] | null;
             /**
              * Created At
              * Format: date-time
