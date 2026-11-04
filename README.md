@@ -1,15 +1,54 @@
 # Atlas
 
-一个自建的多智能体对话平台：在 Web 工作台里配置智能体（模型、提示词、工具、子智能体、运行限制），
-然后与它多轮对话 —— 并把这一轮里**模型说了什么、调了哪些工具、委派了哪些子智能体、写了哪些文件**，
-作为一条可回放的事件流实时呈现出来。
+企业内部的智能体平台。在控制台里配置智能体——模型、提示词、工具、技能、知识库、子智能体——然后与它多轮对话。
+每一轮里模型说了什么、调了哪些工具、派了哪些子智能体、写了哪些文件，都作为一条有序的事件流实时推给前端；
+刷新页面、断线重连都能从断点接着看。
 
-左侧是会话列表，中间是对话流与执行计划，右侧 Inspector 分「计划 / 工具 / 文件」三页实时展开
-这一轮的全过程，底部是本轮 token 消耗。运行中可随时停止 —— 取消是协作式的，不会切断
-进行中的工具调用。
+智能体有两种跑法：
 
-> 📊 **[交互式架构图](agent-platform/doc/atlas-overview.html)** —— 下载后用浏览器打开，支持明暗主题切换，
-> 可单独点亮「请求主链路」「事件回传通道」「会话 Pod 执行路径」三条链路。
+- **原生智能体**：在 Agent 服务的进程里跑（基于 LangGraph 的内核），Shell 命令在隔离的沙箱里执行。
+- **CLI 智能体**：Claude Code 这类外部 CLI 跑在会话 Pod 里（每个会话一个），由 Pod 里的 bridge 接成平台的执行后端。
+
+仓库里还有两个和它平级的产品：**用户中心**（统一登录、组织与权限）和 **AI TeamFlow**（让智能体作为团队成员参与研发流程）。
+
+> **架构图**在 [`c4-model/`](c4-model/)：每个系统一套 C4 图，从系统上下文、容器、组件、按领域拆的代码图，到关键场景的时序图和 112 部署图。
+> 都是单文件 HTML，浏览器直接打开。
+
+---
+
+## 系统组成
+
+### Agent 平台（`agent-platform/`）
+
+| 服务 | 目录 · 包 | 端口 | 做什么 |
+|---|---|---|---|
+| Agent 服务 | `services/agent` · `atlas_agent` | 8000 | 智能体、会话、run；原生和 CLI 两种运行时；运行事件经 Redis Stream 推成 SSE |
+| 控制台 | `web`（Next.js） | 3000 | 会话工作台、智能体编辑器，以及技能、知识库、模型、MCP 的管理页 |
+| 技能应用 | `services/skill` · `atlas_skill` | 8020 | 技能包的上传、检查、审查、发布、停用和下架 |
+| 知识库服务 | `services/knowledge` · `atlas_knowledge` | 8050 | 文档入库（Celery worker）与混合检索，按库、按文档判权限 |
+| 记忆服务 | `services/memory` · `atlas_memory` | 8060 | 按作用域（目前是「用户」）保存跨会话记忆，带修订历史 |
+| MCP 网关 | `services/mcpgateway` · `atlas_mcpgateway` | 8070 | 所有 MCP 调用的唯一入口：代理 MCP Server，把 REST / gRPC 转成工具，按 API Key 授权 |
+| 模型平台 | `services/modelgateway` · `atlas_modelgateway`，加 LiteLLM | 8090 / 4000 | LiteLLM 是模型网关；平台管模型登记、私有模型授权和 API Key，不在调用路径上 |
+| bridge | `pod/bridge` · `atlas_bridge` | — | 会话 Pod 里的 1 号进程：一头连 Agent 服务（WebSocket），一头连 CLI（ACP over stdio） |
+| 评测 | `bench` · `atlas_bench` | — | RAG 评测和 Agent 评测（含 Terminal-Bench 2），只经各服务的公开接口 |
+
+库（不单独部署）：
+
+| 库 | 目录 | 说明 |
+|---|---|---|
+| `atlas_engine` | `agent-platform/libs/engine` | 智能体内核（kernel：图 + 中间件）和能力协议（contracts）；纯库，不碰 Web 框架和数据库 |
+| `atlas_host` | `agent-platform/libs/host` | Agent 服务 ⇄ bridge 的上游协议 |
+| `atlas_acp` | `agent-platform/libs/acp` | ACP 协议的帧模型；要装进 Pod 镜像，不依赖本仓库任何其它包 |
+| `atlas_jsonrpc` | `agent-platform/libs/jsonrpc` | JSON-RPC 2.0 |
+| `atlas_redislock` | `infra-platform/libs/redislock` | Redis 分布式锁，跨产品共用 |
+| `@atlas/chat-ui` | `packages/chat-ui` | 控制台和 TeamFlow 共用的对话组件 |
+
+### 其他产品
+
+| 产品 | 目录 · 包 | 端口 | 说明 |
+|---|---|---|---|
+| 用户中心 | `usercenter/` · `atlas_usercenter` | 8030，前端 3100 | 用户、组织与权限的唯一数据源，也是统一登录的地方；各应用经开放接口 `/open/v1` 取授权。见 [usercenter/README.md](usercenter/README.md) |
+| AI TeamFlow | `teamflow/` · `atlas_teamflow` | 8040，前端 3200 | 让智能体作为团队成员参与研发流程。见 [teamflow/README.md](teamflow/README.md) |
 
 ---
 
@@ -17,326 +56,212 @@
 
 ```mermaid
 flowchart LR
-  web["web · Next.js 15<br/>会话工作台 · 事件归约"]
+  user["员工（浏览器）"]
+  nginx["前端网关 nginx<br/>校验登录 · 写身份请求头"]
+  uc["用户中心"]
 
-  subgraph server["server · atlas_agent（FastAPI）"]
-    direction LR
-    api["api/v1<br/>agents · threads · runs"]
-    services["services/<br/>幂等 · 会话串行锁"]
-    executor["executor/<br/>后台 asyncio.Task"]
-    runtime["AgentRuntime<br/>「一轮怎么跑」的接缝"]
-    api --> services --> executor --> runtime
+  subgraph ap["Agent 平台"]
+    web["控制台"]
+    agent["Agent 服务"]
+    skill["技能应用"]
+    kb["知识库服务"]
+    mem["记忆服务"]
+    mcp["MCP 网关"]
+    mp["模型平台<br/>+ LiteLLM"]
   end
 
-  engine["engine · atlas_engine<br/>kernel（图+中间件）· contracts"]
-  bridge["bridge<br/>Pod 内 1 号进程"]
-  osb["OpenSandbox<br/>lifecycle server + 控制器"]
-  gw["Higress AI 网关<br/>模型调用 · MCP 代理"]
-  oss[("对象存储 · S3<br/>会话工作区")]
-  pg[("PostgreSQL 16")]
-  redis[("Redis 7<br/>Stream · 锁 · 取消位")]
+  osb["OpenSandbox"]
+  sbx["Shell 沙箱<br/>（原生智能体）"]
+  pod["会话 Pod<br/>bridge + CLI"]
+  pg[("PostgreSQL")]
+  redis[("Redis")]
+  oss[("对象存储<br/>会话工作区 · 技能包")]
+  up["上游 MCP / REST / gRPC"]
+  llm["模型供应商"]
 
-  web -->|"HTTP · SSE"| api
-  runtime -->|"native：装配 kernel 图"| engine
-  runtime -->|"ACP over WS"| bridge
-  runtime -->|"ensure Pod（幂等）"| osb
-  osb -->|"建 Pod"| bridge
-  engine -->|"模型调用（stream）"| gw
-  engine -.->|"FilesystemProtocol"| oss
-  bridge -->|"挂载 /workspace"| oss
-  services -->|"repositories/ 唯一入口"| pg
-  executor -->|"XADD run:events"| redis
-  redis -.->|"XREAD → SSE 推流"| api
+  user --> nginx
+  nginx -->|"登录校验"| uc
+  nginx --> web & agent
+  agent -->|"取 Key、调模型"| mp
+  agent --> mcp & kb & mem & skill
+  agent -->|"建沙箱、建会话 Pod"| osb
+  osb --> sbx & pod
+  agent -->|"执行命令"| sbx
+  agent -->|"WebSocket"| pod
+  pod -->|"调模型、MCP"| mp & mcp
+  agent --> pg & redis
+  sbx & pod -->|"挂载 /workspace"| oss
+  mcp --> up
+  mp --> llm
 ```
 
-三层，依赖严格单向：
+图里省略了：各服务都有自己的库（同一个 PostgreSQL 实例上的不同 database）、都向用户中心判权限，以及控制台的管理页经 nginx 直接调技能、知识库、模型、MCP 各自的管理接口。
 
-| 层 | 职责 | 关键约定 |
-|---|---|---|
-| `web` | 会话工作台 · 智能体编辑器 · 事件归约与渲染 | 只认事件契约与 REST 契约，不感知内核 |
-| `server` | 路由 / 编排 / 装配 / 执行循环 / 持久化 / 凭据注入 | 唯一接触数据库的地方在 repository 层；`domain/` 与 `executor/{build,runner}` 是其中的**纯计算层**，禁碰基础设施 |
-| `engine` | `kernel`（图 + 全部中间件）+ `contracts`（能力协议与错误分类学） | **纯库**：无 Web 框架、无 DB session、无 HTTP、无凭据 |
+### 贯穿全局的约定
 
-依赖方向不靠自觉，靠 CI —— import-linter 契约规定 `engine` 里出现 Web 框架或数据库的
-import 就红；`server` 的纯计算层同样有 contract 拦着，「run 一轮」始终能用假模型脱离
-数据库单测。`acp` 与 `bridge` 另有独立契约：前者要能脱离整个依赖树装进 Pod 镜像，
-后者不许认识 `server`（Pod 在跑时无法原地升级）。
-
-### 一轮 run 的骨架
-
-- `POST /threads/{id}/runs` 立刻返回 `202 {run_id}`，不等执行
-- `executor` 在后台 `asyncio.Task` 里跑完整轮
-- **终态必须先落库，再发布 `run.finished`** —— 顺序反了会让前端看到「结束了但读不到结果」
-
-### AgentRuntime 的两个实现
-
-「一轮怎么跑」被收敛成一个接缝，两个实现产出同样的 `AsyncIterator[TraceEvent]`，
-落库、串行锁、取消与审批都在外层共用：
-
-| 实现 | 怎么跑 | 用于 |
-|---|---|---|
-| `NativeRuntime` | 本进程装配 kernel 图，直连模型网关 | 平台自己的智能体 |
-| `AcpRuntime` | ACP over WebSocket 接会话 Pod 内的 `bridge` | 把外部 CLI 智能体接成平台的一种后端 |
+- **一轮 run 怎么跑**：`POST /threads/{id}/runs` 立刻返回 `202 {run_id}`，执行器在后台跑完整轮。事件先写进 Redis Stream 再推成 SSE，
+  游标是事件序号，断线重连自动补发缺口。终态先落库，再发 `run.finished`。不设到点结束的超时：等审批、等用户回答时挂起，回来接着跑。
+- **身份**：只有 nginx 网关校验登录（交给用户中心），通过后写入 `X-Uid`、`X-Tenant-Id`，外部带来的身份请求头一律丢弃。
+  服务之间内网免令牌，身份在请求头里透传：`X-Uid` 是谁在用，`X-Auth-Uid` 是按谁的权限判，`X-Caller-App` 是哪个应用在调。
+  权限都在用户中心：操作码管「能不能做这类事」，数据权限管「对哪些数据」。
+- **外部能力都是独立服务，Agent 服务只经 HTTP 调用**：模型只经 LiteLLM（每个智能体一把客户端 Key，由模型平台分配模型）；
+  MCP 只经 MCP 网关（上游凭据只在网关里）；技能、知识库、记忆各是一个服务。
+- **隔离执行**：Shell 沙箱和会话 Pod 都由 [OpenSandbox](https://github.com/opensandbox-group/OpenSandbox) 创建，平台的服务都不持有 K8s 权限。
+  会话工作区在对象存储里，经 S3 CSI 挂进 Pod 的 `/workspace`；Git 之类的凭据经 Credential Vault 注入，Pod 里看不到。
+- **依赖方向由 CI 守**（import-linter，`make arch`）：`atlas_engine` 是纯库；bridge 只认 ACP、不认识 Agent 服务；`atlas_acp` 是叶子；
+  Agent 服务只能用技能应用的 `schemas`；用户中心和其它包互不 import。
+- **可观测性**：各服务只把 OTLP 发给 OTel Collector，由它分流：Jaeger 看调用链路，Langfuse 看模型调用。
 
 ---
 
 ## 核心能力
 
-### 过程可见、可回放
-
-待办清单、每次工具调用的入参与结果、子智能体的委派边界、文件产物、token 消耗，
-按严格有序的事件流实时推送。刷新页面、切后台、开多个标签页都能从断点续上 ——
-**游标是事件序号，断线重连自动补发缺口**。
-
-事件经 Redis Stream 出站，这同时解决了两个问题：多 worker 部署下 `POST` 与 `GET` 落在
-不同进程，以及断线重连。超出 Stream TTL 的历史从 Postgres 的归档表回放。
-
-### 智能体配置与版本
-
-- 模型、提示词、工具、子智能体、运行限制均可配置
-- **保存即产生新版本**：历史会话永远指向当时那份配置快照，可复现、可回滚
-- 草稿态可直接试跑，不落会话、不产生版本
-- 工具按需勾选；勾了却缺前提的会明确报出来，而不是静默失效
-
-### 隔离执行 · 会话 Pod
-
-ACP 会话对应 `atlas-acp` 命名空间里的一个 Pod，原生智能体的 Shell 沙箱在 `atlas-sbx`。
-两种 Pod 都由开源的 [OpenSandbox](https://github.com/opensandbox-group/OpenSandbox) 创建
-（`agent-platform/doc/sandbox-opensandbox-design.html`）：复用、配额、git 档案授权、回收这些按会话的判断在
-`server`，**Atlas 的服务都不持有 K8s 权限**。
-
-工作区是挂进 Pod 的 `/workspace`，背后是对象存储（整桶的写穿式 S3 CSI 卷，按会话 subPath 挂载）；
-对象存储凭据只在 CSI 驱动里，git 凭据经 Credential Vault 注入，Pod 里都看不到。
-
-### 子智能体委派
-
-主智能体把子任务整体交给另一个智能体，在**独立上下文**里执行，只拿回结论 ——
-子任务的中间过程不会污染主对话。委派深度结构性封顶为 1。
-
-**子智能体持有自己的会话。** 第二次委派给同一个子智能体时恢复上次的上下文，
-不用把背景重抄一遍；它有自己的技能、自己的压缩边界，工作区与主智能体共享。
-一次委派就是子会话上的一个 run —— 于是它有独立的事件流、独立的审批、独立的取消。
-
-两点由此而来的约束：
-
-- **并行只能跨不同的子智能体**。同名委派会撞上会话串行锁，工具层直接拒绝并给出
-  替代方案，而不是让模型等到超时。需要真并行时把子智能体配成 `session_mode: ephemeral`。
-- **重试会看到上次的痕迹**。模型可以用 `fresh=true` 主动要一个干净的开始
-  （旧会话归档而非删除）。
-
-### 人工确认（HITL）
-
-高风险工具执行前挂起等人点头，弹窗展示完整参数。
-**拒绝不终止本轮** —— 作为工具结果回给智能体，它可以换个方案继续。
-Shell 默认强制进入审批，这条写在 schema 层，绕过前端直接调 API 同样被拦。
-
-### 上下文压缩与跨会话记忆
-
-接近上下文窗口时自动摘要，并以事件明确告诉用户「这里压缩过」——
-压缩只改变模型视角，原始消息一条不丢。跨会话记忆走 Mem0，Qdrant 是它的向量后端。
-
-### 技能与 MCP
-
-技能按 `(slug, version)` 从注册表投送，不扫描文件系统。MCP 工具经网关代理接入，
-与内置工具走同一套门禁与审批。
-
-### 可观测性
-
-`server` 只往 OTel Collector 发 OTLP，不直连任何后端 —— Collector 是唯一收口，
-换后端只改一份配置。**Jaeger 看 APM 维度**（冷启动、NAS 抖动、WS 断连），
-**Langfuse 看 LLM 维度**，两者分流不是二选一。
-
----
-
-## 部署形态
-
-```mermaid
-flowchart LR
-  browser["web :3000"]
-
-  subgraph sys["K8s · atlas-system"]
-    server["atlas-server<br/>FastAPI :8000"]
-  end
-
-  osb["K8s · opensandbox-system<br/>lifecycle server ×2 + 控制器"]
-
-  subgraph sess["K8s · atlas-acp（每会话一个）"]
-    bridge["bridge<br/>WS 服务端"]
-    cli["CLI adapter<br/>+ 真 CLI（黑盒）"]
-  end
-
-  subgraph obs["可观测性 —— Collector 唯一收口"]
-    otel["OTel Collector<br/>:4318 / :4317"]
-    jaeger["Jaeger :16686"]
-    langfuse["Langfuse :3001"]
-  end
-
-  subgraph data["有状态依赖"]
-    pg[("PostgreSQL :5433")]
-    redis[("Redis :6380")]
-    qdrant[("Qdrant :6333")]
-    minio[("MinIO S3 :9000")]
-  end
-
-  gw["Higress AI 网关"]
-
-  browser -->|"HTTP · SSE"| server
-  server -->|"ensure / delete / reap"| osb
-  osb -->|"建 Pod"| bridge
-  server -->|"ACP over WS（per-Pod token）"| bridge
-  bridge -->|"ACP over stdio"| cli
-  cli -->|"模型调用"| gw
-  server -.->|"OTLP"| otel
-  otel --> jaeger
-  otel -.-> langfuse
-  server --> pg & redis & qdrant & minio
-  bridge -->|"挂载 /workspace"| minio
-```
-
-**ACP 是两段传输**：`server ↔ bridge` 走 WebSocket（不经过 OpenSandbox），
-`bridge ↔ CLI adapter` 走 stdio 上的行分隔 JSON。两端共用同一份帧模型（`atlas_acp`），
-理解漂移会在类型层当场暴露，而不是到线上才发现。
+- **过程可见、可回放**：待办清单、每次工具调用的入参和结果、子智能体的边界、文件产物、token 用量，按序实时推送，断线可续。
+- **智能体配置与版本**：保存即产生新版本，历史会话钉在当时的版本上；可以按使用者的权限跑，也可以按智能体自己的数字员工身份跑。
+- **子智能体**：主智能体把子任务整个交给另一个智能体，在独立的上下文里执行，只拿回结论；子智能体持有自己的会话，再次委派时接着上次的上下文。
+- **人工确认与需求澄清**：高风险工具执行前挂起等人确认，拒绝不会终止本轮，智能体可以换个办法继续；智能体也可以反过来向用户提问。
+- **上下文管理**：接近上下文窗口时压缩，并告诉用户「这里压缩过」；原始消息一条不丢。
+- **技能、知识库、记忆、MCP**：技能按 `(slug, 版本)` 引用、建会话时拷进会话；知识库按库级和文档级权限检索；记忆跨会话保留；MCP 工具和内置工具走同一套审批。
+- **评测**：RAG 评测（含 C-MTEB 数据集导入）和 Agent 评测（含 Terminal-Bench 2），见 [agent-platform/bench/README.md](agent-platform/bench/README.md)。
 
 ---
 
 ## 目录结构
 
-仓库里有三个**平级的产品**：Agent 平台（Atlas）、用户中心、AI TeamFlow，外加它们共用的基础设施平台。
-顶层按产品分，产品内部再按部署形态分。服务目录与包同名（`services/agent` 即 `atlas_agent`）——
-一个产品以后可以有多个服务，目录名要说明是哪一个，而不是统一叫 server。
-
 ```
 agent-platform/            Agent 平台（Atlas）
-├── services/              平台后端服务（独立部署，K8s）
-│   ├── agent/             API + 执行器（atlas_agent）
-│   ├── knowledge/         知识库与检索（atlas_knowledge）
-│   └── skill/             技能应用：技能包的上传、审查、发布（atlas_skill）
-├── libs/                  纯库，不单独部署
-│   ├── engine/            智能体内核（atlas_engine）
-│   ├── host/              server ⇄ bridge 上游协议（atlas_host）
-│   ├── acp/               ACP 协议（atlas_acp）
-│   └── jsonrpc/           JSON-RPC 2.0（atlas_jsonrpc）
-├── pod/                   跑在会话 Pod 里的进程
-│   └── bridge/            ACP bridge（atlas_bridge）
-├── web/                   控制台前端
-├── bench/                 评测（RAG + Agent）
-└── tests/                 平台的测试（agent / engine / bridge）
-infra-platform/            基础设施平台（跨产品共用）
-└── libs/
-    └── redislock/         Redis 分布式锁（atlas_redislock）
-usercenter/                用户中心
-├── services/usercenter/   后端（atlas_usercenter）：pyproject.toml src/ tests/
-└── web/                   前端
-teamflow/                  AI TeamFlow
-├── services/teamflow/     后端 API 与 worker（atlas_teamflow）：pyproject.toml src/ tests/
-└── web/                   前端
-packages/chat-ui/          跨产品共享的对话组件（控制台与 TeamFlow 共用）
-deploy/  docker/           部署清单与镜像（跨产品）
-doc/  prototype/           设计文档与原型
+├── services/              后端服务，各自独立部署
+│   ├── agent/             Agent 服务（atlas_agent），迁移脚本在 migrations/
+│   ├── skill/             技能应用（atlas_skill）
+│   ├── knowledge/         知识库服务（atlas_knowledge）
+│   ├── memory/            记忆服务（atlas_memory）
+│   ├── mcpgateway/        MCP 网关（atlas_mcpgateway）
+│   └── modelgateway/      模型平台（atlas_modelgateway）
+├── libs/                  纯库：engine、host、acp、jsonrpc
+├── pod/bridge/            会话 Pod 里的 bridge（atlas_bridge）
+├── web/                   控制台
+├── bench/                 评测（atlas_bench）
+├── demo/                  技术验证的小例子（审批、沙箱、SSE、子智能体、挂起恢复……）
+├── doc/                   设计文档与原型（design/、prototype/、principles/）
+└── tests/                 Agent 服务、engine、bridge 的测试
+usercenter/                用户中心：services/usercenter（atlas_usercenter）、web/
+teamflow/                  AI TeamFlow：services/teamflow（atlas_teamflow）、web/
+infra-platform/libs/       跨产品共用的基础库（redislock）
+packages/chat-ui/          跨产品共用的前端对话组件
+deploy/local/              本机 K8s（Docker Desktop）的清单和脚本；服务器部署也复用这些清单
+deploy/server/             部署到服务器的脚本（单节点 K8s）
+docker/                    镜像：app（所有 Python 服务共用）、frontends、bridge、sandbox、csi-s3
+c4-model/                  各系统的 C4 架构图
+skills/                    Claude Code 技能（c4-model：按规则生成上面那些 C4 图）
+scripts/                   构建、验证用的零散脚本
 ```
+
+Python 是一个 uv workspace（根目录 `pyproject.toml` 列出全部成员），前端是一个 pnpm workspace（`pnpm-workspace.yaml`；用户中心前端单独安装）。
+服务目录和包同名（`services/agent` 即 `atlas_agent`），每个服务都是 `python -m atlas_xxx <子命令>`：`serve`、`migrate`、`register-uc` 等。
 
 ## 技术栈
 
-Python 3.13 · FastAPI · SQLAlchemy (async) · PostgreSQL 16 · Redis 7 · Qdrant ·
-MinIO/S3 · Kubernetes · OpenTelemetry · Next.js 15 · Ant Design 5 · LangGraph
+Python 3.13 · FastAPI · SQLAlchemy（async）· Alembic · LangGraph · Celery · PostgreSQL 16 · Redis 7 · Qdrant · MinIO / S3 ·
+LiteLLM · MCP · OpenSandbox · Kubernetes · OpenTelemetry · Next.js · React · Ant Design
 
 ---
 
-## 快速开始
+## 本机开发
+
+需要：Python 3.13 和 [uv](https://docs.astral.sh/uv/)、Node.js 和 pnpm、Docker Desktop（开启 Kubernetes）、kubectl、helm。
+
+### 1. 依赖服务和依赖包
 
 ```bash
-# 1. 依赖服务（PostgreSQL :5433 / Redis :6380，非标端口避免与本机冲突；
-#    MinIO :9000 提供 S3 会话工作区，控制台 :9001，桶自动建好；
-#    OTel Collector :4318 + Jaeger UI :16686，遥测默认关，见 .env.example；
-#    Qdrant :6333 承载跨会话记忆，记忆默认关，见 .env.example）
-#
-# 可选：Langfuse（LLM 维度的可观测性，与 Jaeger 分流不是二选一）
-#   OTEL_COLLECTOR_CONFIG=collector-langfuse.yaml \
-#     docker compose --profile langfuse up -d      # UI http://localhost:3001
-make up
-
-# 2. Python 依赖与数据库迁移
-make sync
-make migrate
-
-# 3. 前端依赖
-make web-install
-
-# 4. 配置环境变量
-cp .env.example .env       # 填入模型网关地址与 key
-cp agent-platform/web/.env.local.example agent-platform/web/.env.local
-
-# 5. 前后端一起起（后端 :8000，前端 :3000）
-make dev
+cp .env.example .env    # 模型、对象存储等配置，说明见文件里的注释
+make up                 # PostgreSQL :5433 · Redis :6380 · MinIO :9000（控制台 :9001）· Qdrant :6333
+                        # · OTel Collector :4318 · Jaeger :16686；各服务的库和 MinIO 的桶自动建好
+make sync               # Python 依赖
+make web-install        # 前端依赖
 ```
 
-浏览器打开 http://127.0.0.1:3000
-
-### 常用命令
+端口刻意避开了标准端口，免得和本机已有的 PostgreSQL、Redis 冲突。可选：起 Langfuse（:3001），Collector 同时换成分流到 Langfuse 的配置：
 
 ```bash
-make check        # lint + 依赖契约 + 测试
-make test         # 测试
-make arch         # 校验分层依赖方向
-make web-check    # 前端类型检查
-make web-gen      # 从运行中的后端重新生成 API 类型（结果需提交）
+OTEL_COLLECTOR_CONFIG=collector-langfuse.yaml docker compose --profile langfuse up -d
 ```
 
-> ⚠️ 测试会清空所配置数据库中的非内置数据。请用独立的测试库：
-> ```bash
-> DATABASE_URL='postgresql+asyncpg://atlas:atlas@localhost:5433/atlas_test' uv run pytest
-> ```
+### 2. 在本机 K8s 里跑全套
 
-### 本机的 OpenSandbox
-
-会话 Pod 由 OpenSandbox 创建。本机（Docker Desktop K8s）装 CSI 驱动、控制器与两个 lifecycle server：
-`deploy/local/opensandbox.sh`；对真 OpenSandbox 的实测：`deploy/local/opensandbox_probe.sh`。
-单测用进程内的假 OpenSandbox（`agent-platform/tests/opensandbox_fake.py`），不需要集群。
-
-### 部署到服务器
-
-单节点 K8s（默认 192.168.0.112），全套一起：依赖服务（PG / Redis / MinIO / Qdrant / OTel + Jaeger / Langfuse /
-Higress）放在 `atlas-infra`，只开 ClusterIP；对外只有 traefik 上的 `atlas.<IP>.nip.io` 与 `langfuse.<IP>.nip.io`。
+所有服务都跑在 Pod 里，依赖服务用宿主上 `make up` 起的那些；登录和身份请求头只有经过 nginx 网关才有，所以要用全套才能在浏览器里正常使用。
 
 ```bash
-deploy/server/images.sh            # 自建镜像构建 amd64 并导入节点；third = 第三方镜像
-deploy/server/deploy.sh            # 依赖服务 → OpenSandbox → server 迁移 → 后端 → 前端 → Ingress → MCP → 首个管理员
-deploy/server/register.sh          # 首次：admin 改过密码后，把 Atlas、TeamFlow 登记到用户中心
+# 镜像
+docker/app/requirements.sh
+docker build -f docker/app/Dockerfile    -t atlas-app:dev .
+docker build -f docker/bridge/Dockerfile -t atlas-acp-bridge:0.4.0 .
+
+deploy/local/opensandbox.sh     # OpenSandbox：CSI 驱动、控制器、lifecycle server
+make migrate                    # Agent 服务的库；其余服务在 Pod 的 initContainer 里自己迁移
+deploy/local/apply.sh           # 后端服务（凭据从 .env 建成 K8s Secret，不进 YAML）
+deploy/local/frontends.sh       # 三个前端 + nginx 网关 → http://localhost:8080
 ```
 
-应用清单与本机共用 `deploy/local/*.yaml`，差别只在依赖服务的地址（`apply.sh` 的 `render`）。
+第一次还要在用户中心建首个超级管理员，再把各应用登记到用户中心（不登记，它们调用户中心会 403）：
+
+```bash
+kubectl -n atlas-system exec deploy/atlas-usercenter -- python -m atlas_usercenter bootstrap \
+  --company 星海科技 --account admin --name 管理员 --email admin@example.com   # 临时密码只输出这一次
+# 浏览器打开 http://localhost:8080/uc/login，用临时密码登录、改密码，然后：
+deploy/server/register.sh       # 用当前 kubectl 上下文，本机集群一样适用
+```
+
+只调试单个服务时也可以在宿主上直接起（`make serve`、`make skill-serve`、`make memory-serve` 等，见 `Makefile`），这时要自己在请求里带 `X-Uid`。
+
+### 3. 检查与测试
+
+```bash
+make lint          # ruff
+make arch          # 依赖方向（import-linter）
+make web-check     # 前端类型检查
+make web-gen       # 从运行中的 Agent 服务重新生成前端的 API 类型（结果要提交）
+make smoke         # 部署后的冒烟（会真实调用模型）
+make regress       # Agent 评测 L1 回归，和基线比较
+```
+
+测试**按目录跑，并且用独立的测试库**：
+
+```bash
+DATABASE_URL='postgresql+asyncpg://atlas:atlas@localhost:5433/atlas_test' REDIS_URL='redis://localhost:6380/15' \
+  uv run pytest agent-platform/tests
+uv run pytest agent-platform/services/knowledge/tests
+uv run pytest usercenter/services/usercenter/tests     # 各服务的测试各自一个目录
+```
+
+> ⚠️ Agent 服务的测试会清空所连数据库里的数据，千万别指向开发库。
+> 一次跑全部测试目录（`make test` / `make check`）现在会在收集阶段失败：几个服务的 `conftest.py` 同名，互相顶掉。
 
 ---
 
-## 实现进度
+## 部署到服务器
 
-上面描述的是**目标形态**。当前各能力的落地状态：
+目标是单节点 K8s（默认 192.168.0.112）。依赖服务（PostgreSQL、Redis、MinIO、Qdrant、OTel Collector、Jaeger、Langfuse）放在 `atlas-infra`，
+平台服务在 `atlas-system`，沙箱和会话 Pod 在 `atlas-sbx`、`atlas-acp`。对外入口在 Traefik 上：`atlas.<IP>.nip.io`（三个产品共用的前端网关）
+和 `langfuse.<IP>.nip.io`。
 
-| 能力 | 状态 | 说明 |
-|---|---|---|
-| 事件流 · 断线续传 · 回放 | ✅ 可用 | Redis Stream + Postgres 归档 |
-| 智能体配置与版本快照 | ✅ 可用 | |
-| 子智能体委派（持有会话） | ✅ 可用 | 深度封顶 1，串行锁生效 |
-| 人工确认（HITL） | ✅ 可用 | schema 层强制，API 直调同样拦 |
-| 上下文压缩 | ✅ 可用 | |
-| ACP 执行形态（`bridge` / OpenSandbox） | ✅ 可用 | 会话 Pod 由 OpenSandbox 创建；集群内实测见 `deploy/local/opensandbox_probe.sh` |
-| 跨会话记忆（Mem0 + Qdrant） | ✅ 可用 | 默认关，见 `.env.example` |
-| 可观测性（OTel / Jaeger / Langfuse） | ✅ 可用 | 默认关 |
-| 技能投送 · MCP 接入 | ✅ 可用 | MCP 经 Higress 收口（本机：`docker compose --profile higress up -d higress` + `deploy/local/higress/setup.py`）；网页搜索即 Higress 上的 serpapi MCP，不再是内置工具 |
-| **native 形态的隔离执行** | 🚧 **接入中** | `SandboxProtocol` 与 `SandboxMiddleware` 的接缝已在位，但**尚无实现方** —— K8s Pod 执行环境待接入。期间 `bash` 在工具目录里标为不可用，勾了会明确报出来而不是静默失效 |
-| 模型网关切到 Higress | 📋 规划 | MCP 已经过 Higress；模型调用仍直连 LiteLLM 网关，切换后两者收口到同一处 |
-| 鉴权 / 多租户 | 📋 规划 | 当前身份注入收敛在 `identity.py` 单点，换成 JWT / SSO 只改这一个函数 |
+```bash
+deploy/server/images.sh           # 构建 amd64 镜像并导入节点（third = 第三方镜像）；app、frontends 每次构建打新标签
+deploy/server/deploy.sh           # 全部：依赖服务 → OpenSandbox → Agent 服务迁移 → 后端 → 前端 → Ingress → 首个超级管理员 → 登记到用户中心
+deploy/server/deploy.sh app       # 改了代码之后：只更新应用
+```
+
+应用清单和本机共用 `deploy/local/*.yaml`，差别只在依赖服务的地址（`apply.sh` 的 `render`）。脚本都是幂等的，重复执行只更新有变化的部分。
 
 ---
 
 ## 文档
 
-设计文档在 [`agent-platform/doc/`](agent-platform/doc/README.md)，浏览器直接打开 HTML 即可，不需要起服务。
-顶层一个系统一页，讲清楚它解决什么问题、边界在哪、哪些做法被否决过以及为什么；
-[`agent-platform/doc/detail/`](agent-platform/doc/detail/index.html) 是几处需要展开推导的深水区。
-
-**这些文档会被修正** —— 设计先写、实现后跑，跑通之后发现设计错了的地方会回来改文档，
-并且写明原来错在哪。
+- **架构**：[`c4-model/`](c4-model/)。每个系统一个目录（`agent`、`knowledge`、`memory`、`mcpgateway`、`modelgateway`、`skill`、`infra-platform`），
+  里面有 `system-context.html`、`container.html`、`component-*.html`、`code-*.html`（按领域拆，画的是目标模型）、`dynamic/`（时序图）和 `deployment-112.html`。
+  画法规则在 [`skills/c4-model/`](skills/c4-model/SKILL.md)。
+- **设计文档**：[`agent-platform/doc/design/`](agent-platform/doc/design/)（Agent 评测、MCP、记忆、模型），
+  原型在 [`agent-platform/doc/prototype/`](agent-platform/doc/prototype/)，LangGraph、OpenSandbox 的原理笔记在 [`agent-platform/doc/principles/`](agent-platform/doc/principles/)。
+- **各产品**：[用户中心](usercenter/README.md)、[AI TeamFlow](teamflow/README.md)、[评测](agent-platform/bench/README.md)。
 
 ---
 
