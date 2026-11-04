@@ -14,10 +14,12 @@ schema 定义里出现厂商名，整张表就和那一家焊死了。
 
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, date, datetime
 from typing import Any
 from uuid import UUID
 
+from pydantic import SecretStr
 from sqlalchemy import (
     BigInteger,
     Boolean,
@@ -36,6 +38,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ..ids import uuid7
+from ..sandbox.base.lifecycle.state import SandboxState
 from .base import Base, TimestampMixin
 from .types import JSONType, UTCDateTime, UUIDType
 
@@ -757,4 +760,200 @@ class Instruction(Base):
     __table_args__ = (
         UniqueConstraint("scope", "owner_id", name="uk_instruction_owner"),
         CheckConstraint("scope IN ('platform','user')", name="scope_enum"),
+    )
+
+
+# ─────────────────────────────────────────────── 沙箱 · 基座 · 生命周期（迁移 0035）
+
+
+def template_sha(text: str) -> str:
+    """模板内容的 sha256。已发布内容不留原文，和 server 上的 ConfigMap 比对漂移只能靠它。"""
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+class SandboxTemplate(Base, TimestampMixin):
+    """沙箱模板（聚合根 SandboxTemplate）：一种 Pod 安全形态，绑定一个 lifecycle server。
+
+    见 c4-model/agent/sandbox/code-sandbox-base-lifecycle.html。只存当前内容，不留历史版本。
+    version 是数据库里的最新修订；published_version 是 server 上正在生效的版本，建沙箱时记下它。
+    """
+
+    __tablename__ = "sandbox_template"
+
+    id: Mapped[int] = _pk()
+    template_uuid: Mapped[UUID] = _logical_key()
+    #: CreateSpec.template 填它：只含小写字母、数字和 -
+    code: Mapped[str] = mapped_column(String(63), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    #: 绑定的 lifecycle server 名，一个 server 只绑一个模板。地址和 API Key 来自部署配置
+    server: Mapped[str] = mapped_column(String(63), nullable=False)
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
+    yaml: Mapped[str] = mapped_column(Text, nullable=False)
+    published_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    published_sha: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    #: 模板改的是 Pod 的安全形态，要能追到人
+    updated_by_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("template_uuid", name="uk_sandbox_template_uuid"),
+        UniqueConstraint("code", name="uk_sandbox_template_code"),
+        UniqueConstraint("server", name="uk_sandbox_template_server"),
+    )
+
+    def revise(self, text: str, description: str | None, *, by: UUID) -> int:
+        """修订只改数据库、版本加一，发布后才对新建的沙箱生效。"""
+        self.yaml = text
+        if description is not None:
+            self.description = description
+        self.version += 1
+        self.updated_by_uuid = by
+        return self.version
+
+    def mark_published(self, version: int, sha: str, *, at: datetime, by: UUID) -> None:
+        self.published_version, self.published_sha, self.published_at = version, sha, at
+        self.updated_by_uuid = by
+
+    def sha(self) -> str:
+        return template_sha(self.yaml)
+
+
+class SandboxInstance(Base, TimestampMixin):
+    """沙箱实例的登记（聚合根 SandboxInstance）：身份、模板版本和两个令牌。
+
+    状态以 OpenSandbox 为准，这里只是最近一次观测，用前刷新。删沙箱时整行删除。
+    ★ 令牌是私有字段（_access_token / _service_token），只经 SandboxRuntime 的 access /
+      service_token 取：execd 令牌不出基座，唯一出基座的是 bridge 这类服务的令牌。
+    """
+
+    __tablename__ = "sandbox_instance"
+
+    id: Mapped[int] = _pk()
+    #: 对外的沙箱 id：先登记后创建，也写进标签 atlas.sandbox
+    sandbox_uuid: Mapped[UUID] = _logical_key()
+    #: OpenSandbox 的沙箱 id；建好回填之前为空
+    external_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    template_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
+    #: 建它时模板的 published_version
+    template_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    #: 最近一次观测到的 OpenSandbox 状态（SandboxState 的值），只作展示和粗筛
+    state: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="Pending", server_default="Pending"
+    )
+    observed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    #: execd 令牌，不出基座。现在明文存，加密随平台的统一方案
+    _access_token: Mapped[str] = mapped_column("access_token", Text, nullable=False)
+    #: bridge 这类服务的令牌；建时声明了 service_token_env 才有
+    _service_token: Mapped[str | None] = mapped_column("service_token", Text, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("sandbox_uuid", name="uk_sandbox_instance_uuid"),
+        UniqueConstraint("external_id", name="uk_sandbox_instance_external"),
+        Index("ix_sandbox_instance_template", "template_uuid"),
+    )
+
+    @classmethod
+    def register(
+        cls,
+        sandbox_uuid: UUID,
+        *,
+        template_uuid: UUID,
+        template_version: int,
+        access_token: SecretStr,
+        service_token: SecretStr | None,
+    ) -> SandboxInstance:
+        row = cls(
+            sandbox_uuid=sandbox_uuid,
+            template_uuid=template_uuid,
+            template_version=template_version,
+            state="Pending",
+            created_at=datetime.now(UTC),
+        )
+        row._access_token = access_token.get_secret_value()
+        row._service_token = service_token.get_secret_value() if service_token else None
+        return row
+
+    @property
+    def sandbox_state(self) -> SandboxState:
+        return SandboxState.parse(self.state)
+
+    @property
+    def access_token_secret(self) -> SecretStr:
+        return SecretStr(self._access_token)
+
+    @property
+    def service_token_secret(self) -> SecretStr | None:
+        return SecretStr(self._service_token) if self._service_token else None
+
+    @service_token_secret.setter
+    def service_token_secret(self, value: SecretStr | None) -> None:
+        self._service_token = value.get_secret_value() if value else None
+
+    def usable(self) -> bool:
+        return self.external_id is not None and self.sandbox_state.usable
+
+    def outdated(self, published: int | None) -> bool:
+        """模板发布了更新的版本。复用时不看它：强制重建会丢掉装好的软件和后台进程。"""
+        return published is not None and self.template_version < published
+
+    def observe(self, state: SandboxState, at: datetime) -> SandboxEvent | None:
+        """记下这次观测；和上次不同才产生一条 state_changed。
+
+        每次查询都会刷新状态，照单全记会把日志刷爆。
+        """
+        if state.value == self.state:
+            return None
+        self.state, self.observed_at = state.value, at
+        return self.event("state_changed", at=at)
+
+    def event(
+        self,
+        event_type: str,
+        *,
+        at: datetime,
+        reason: str | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> SandboxEvent:
+        return SandboxEvent(
+            sandbox_uuid=self.sandbox_uuid,
+            external_id=self.external_id,
+            event_type=event_type,
+            state=self.state,
+            reason=reason,
+            detail=detail or {},
+            occurred_at=at,
+        )
+
+
+class SandboxEvent(Base):
+    """沙箱生命周期日志（领域事件 SandboxEvent）：只追加、不修改；实例删了也保留，按保留期清理。
+
+    event_type：registered、created、launch_failed、state_changed、paused、resumed、destroyed、
+    reconciled。reason 是删除原因：idle、release、orphan、manual、broken、launch_failed、reconcile。
+    ★ sandbox_uuid 是逻辑引用，允许悬空；对账删掉的存量沙箱没有登记，这一列为空，靠 external_id 查。
+    """
+
+    __tablename__ = "sandbox_event"
+
+    id: Mapped[int] = _pk()
+    event_uuid: Mapped[UUID] = _logical_key()
+    sandbox_uuid: Mapped[UUID | None] = mapped_column(UUIDType, nullable=True)
+    #: 当时的 OpenSandbox 沙箱 id：实例删了也能按它反查 K8s 和 OpenSandbox 的日志
+    external_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    event_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    state: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    #: 只展示不查询：registered 记模板 code、版本和标签快照，失败记错误信息
+    detail: Mapped[dict[str, Any]] = mapped_column(JSONType, nullable=False, default=dict)
+    occurred_at: Mapped[datetime] = mapped_column(
+        UTCDateTime, server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint("event_uuid", name="uk_sandbox_event_uuid"),
+        Index("ix_sandbox_event_sandbox", "sandbox_uuid", "occurred_at"),
+        Index("ix_sandbox_event_external", "external_id"),
+        Index("ix_sandbox_event_time", "occurred_at"),
     )

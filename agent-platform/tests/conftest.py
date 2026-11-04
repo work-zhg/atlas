@@ -174,6 +174,9 @@ _TEST_DATA_TABLES = (
     "cli_session",
     "memory_backfill",
     "skill_usage_daily",
+    # 沙箱基座：实例登记和生命周期日志（模板是迁移种子，保留）
+    "sandbox_instance",
+    "sandbox_event",
     "thread",
     "agent_version",
     "agent",

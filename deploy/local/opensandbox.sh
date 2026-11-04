@@ -63,15 +63,23 @@ api_key() {
   echo "$key"
 }
 
-install_server() {  # $1 = sbx | cli | bench
-  local kind="$1" key="$2" sha
+# 沙箱模板的种子（迁移 0035 也从这里写进 sandbox_template）
+SEED=agent-platform/services/agent/src/atlas_agent/sandbox/base/lifecycle/seed
+
+install_server() {  # $1 = server 名 sbx | cli | bench；$2 = API key；$3 = 绑定的模板 code
+  local kind="$1" key="$2" code="$3" sha
   kubectl -n opensandbox-system create secret generic "opensandbox-${kind}-api-key" \
     --from-literal=api-key="${key}" --dry-run=client -o yaml | kubectl apply -f -
-  kubectl -n opensandbox-system create configmap "opensandbox-${kind}-template" \
-    --from-file="${kind}.yaml=deploy/local/opensandbox/${kind}-template.yaml" \
-    --dry-run=client -o yaml | kubectl apply -f -
-  # ★ server 只在启动时读模板：模板的哈希进 Pod 注解，模板变了才滚动重启
-  sha="$(shasum -a 256 "deploy/local/opensandbox/${kind}-template.yaml" | cut -c1-16)"
+  # ★ 模板归 Atlas 管（sandbox_template 表，经管理接口修订、发布）：ConfigMap 只在不存在时用种子建，
+  #   重跑脚本不会盖掉发布过的模板
+  if ! kubectl -n opensandbox-system get configmap "opensandbox-${kind}-template" >/dev/null 2>&1; then
+    kubectl -n opensandbox-system create configmap "opensandbox-${kind}-template" \
+      --from-file="${kind}.yaml=${SEED}/${code}.yaml"
+  fi
+  # ★ server 只在启动时读模板：生效内容的哈希进 Pod 注解（Atlas 发布时改的是同一个注解），
+  #   内容变了才滚动重启
+  sha="$(kubectl -n opensandbox-system get configmap "opensandbox-${kind}-template" \
+    -o jsonpath="{.data.${kind}\.yaml}" | shasum -a 256 | cut -c1-16)"
   "$HELM" upgrade --install "opensandbox-${kind}" "$CHARTS/server" -n opensandbox-system \
     -f "deploy/local/opensandbox/${kind}-values.yaml" \
     --set-string "server.podAnnotations.atlas/template-sha=${sha}"
@@ -107,8 +115,8 @@ fi
 kubectl -n atlas-cli create secret generic atlas-cli-model \
   --from-literal=model_api_key="${MODEL_KEY}" --dry-run=client -o yaml | kubectl apply -f -
 
-install_server sbx "$SBX_KEY"
-install_server cli "$CLI_KEY"
+install_server sbx "$SBX_KEY" sbx-strict
+install_server cli "$CLI_KEY" cli
 echo "就绪：集群内 http://opensandbox-sbx.opensandbox-system、http://opensandbox-cli.opensandbox-system"
 
 # ── 4. 评测档（可选）────────────────────────────────────────────────
@@ -117,7 +125,7 @@ echo "就绪：集群内 http://opensandbox-sbx.opensandbox-system、http://open
 #   要关：kubectl -n atlas-system delete configmap atlas-sandbox-bench
 #         helm uninstall opensandbox-bench -n opensandbox-system，再重启 atlas-server
 if [ "${OPENSANDBOX_BENCH:-0}" = 1 ]; then
-  install_server bench "$BENCH_KEY"
+  install_server bench "$BENCH_KEY" bench
   kubectl -n atlas-system create configmap atlas-sandbox-bench \
     --from-literal=url="http://opensandbox-bench.opensandbox-system.svc.cluster.local" \
     --from-literal=image_prefixes="${OPENSANDBOX_BENCH_IMAGE_PREFIXES:-[\"alexgshaw/\"]}" \

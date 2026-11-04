@@ -24,8 +24,10 @@ spec:
     metadata:
       labels: {app: atlas-server}
     spec:
-      # ★ 不给 ServiceAccount 任何 Role：server 不碰 K8s，Pod 生命周期
-      #   归 cluster。这里的默认 SA 什么权限都没有，正是想要的。
+      # ★ 只为发布沙箱模板碰 K8s（改造计划 B2）：ServiceAccount atlas-server 的 Role 用 resourceNames
+      #   只开到 opensandbox-*-template 这几个 ConfigMap 和对应的 Deployment（本文件末尾）。
+      #   沙箱本身仍由 OpenSandbox 建，server 不碰 Pod。
+      serviceAccountName: atlas-server
       # ★ 停机交接（doc/horizontal-scaling-design.html §6）：SIGTERM 后 native run 走到
       #   安全点、CLI run 断开，交给别的副本（或重建后的本副本）接着跑。宽限期要盖过
       #   DRAIN_TIMEOUT_S（默认 60s）+ 关连接与 flush 遥测的时间。
@@ -142,3 +144,41 @@ spec:
   type: ClusterIP
   selector: {app: atlas-server}
   ports: [{port: 8000, targetPort: 8000}]
+---
+# 沙箱模板的发布（sandbox/base/lifecycle/templates.py 的 KubeTemplatePublisher）：写 ConfigMap
+# opensandbox-{server}-template、给 Deployment opensandbox-{server} 打模板哈希注解触发滚动重启。
+# ★ 模板决定 Pod 的 securityContext，能改它就能建特权 Pod：权限只开到这几个对象，不给 list / create。
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: atlas-server
+  namespace: atlas-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: atlas-template-publisher
+  namespace: opensandbox-system
+rules:
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [opensandbox-sbx-template, opensandbox-cli-template, opensandbox-bench-template]
+    verbs: [get, patch]
+  - apiGroups: [apps]
+    resources: [deployments]
+    resourceNames: [opensandbox-sbx, opensandbox-cli, opensandbox-bench]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: atlas-template-publisher
+  namespace: opensandbox-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: atlas-template-publisher
+subjects:
+  - kind: ServiceAccount
+    name: atlas-server
+    namespace: atlas-system

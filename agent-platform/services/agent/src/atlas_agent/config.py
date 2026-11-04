@@ -149,6 +149,10 @@ class Settings(BaseSettings):
     opensandbox_sbx_api_key: SecretStr = SecretStr("")
     #: 创建会等到沙箱 Running 才返回（OpenSandbox 侧 sandbox_create_timeout_seconds），这里要盖过它
     opensandbox_timeout_s: float = 200.0
+    #: lifecycle server 所在的命名空间：发布沙箱模板时写那里的 ConfigMap、滚动重启那里的 Deployment
+    opensandbox_namespace: str = "opensandbox-system"
+    #: 沙箱生命周期日志（sandbox_event）保留多久
+    sandbox_event_retention_days: int = 90
     #: 整桶的静态 PVC（运维预建，写穿式 S3 CSI）。每个沙箱按 subPath 挂自己的前缀（§6）
     sandbox_pvc: str = "atlas-oss"
     sandbox_default_image: str = "atlas-sandbox:dev"

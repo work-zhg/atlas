@@ -20,6 +20,8 @@ dependencies = [
   "pydantic-settings>=2.6",
   "redis>=5.2",
   "httpx>=0.27",
+  # 沙箱模板（BatchSandbox 的 yaml）发布前的准入校验（sandbox/base/lifecycle/templates.py）
+  "pyyaml>=6.0",
   # MCP 客户端：langchain.mcp（langchain 主包，beta）+ FastMCP 的 client。
   #   langchain[mcp] 拉的是整个 fastmcp（含 server 那一套），这里只要 client。
   "fastmcp-slim[client]>=4.0.11,<5",

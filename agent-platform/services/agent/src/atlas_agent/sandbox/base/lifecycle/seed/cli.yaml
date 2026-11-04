@@ -1,4 +1,6 @@
-# 会话 Pod 的 BatchSandbox 模板（doc/sandbox-opensandbox-design.html §7），opensandbox-cli 用。合并规则见 sbx-template.yaml。
+# 会话 Pod 的 BatchSandbox 模板（doc/sandbox-opensandbox-design.html §7），opensandbox-cli 用。合并规则见 sbx-strict.yaml。
+# ★ 种子：迁移 0035 把它写进 sandbox_template（模板 code = 文件名），deploy/local/opensandbox.sh 首次部署时
+#   拿它建 ConfigMap。之后改模板走管理接口（修订、发布），不改这个文件。
 #
 # ★ UID 1000 只设在主容器上，不设在 pod 级：有 git 档案的会话会带 egress sidecar（Credential Vault），
 #   它要以 root 跑 nft（只加了 NET_ADMIN）。pod 级 runAsUser 会让 sidecar 也变成 1000，nft 配不上。

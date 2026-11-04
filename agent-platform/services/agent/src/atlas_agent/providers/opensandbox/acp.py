@@ -51,7 +51,7 @@ EGRESS_PORT = 18080
 STATE_MOUNT = "/state"
 #: bridge 读令牌的文件（entrypoint 从 env 写出来；/tmp 是模板里的 emptyDir）
 TOKEN_FILE = "/tmp/.atlas-bridge-token"
-#: ACP 模板把 Secret atlas-cli-model 挂在这里（deploy/local/opensandbox/cli-template.yaml）
+#: ACP 模板把 Secret atlas-cli-model 挂在这里（sandbox/base/lifecycle/seed/cli.yaml）
 MODEL_KEY_FILE = "/run/secrets/atlas/model_api_key"
 #: execd 的 bootstrap 把系统根证书与 MITM CA 合并成这份（P0-3 实测路径）
 MERGED_CA = "/opt/opensandbox/merged-ca-certificates.pem"

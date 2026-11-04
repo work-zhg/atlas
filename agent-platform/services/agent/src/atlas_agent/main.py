@@ -28,6 +28,7 @@ from .memory import Backfiller, make_memory_runtime
 from .outbound import IdentityScopeMiddleware
 from .providers.opensandbox import OpenSandboxPods
 from .redisx import make_redis
+from .sandbox.base.lifecycle.templates import template_publisher
 from .stream.gate import StreamGate, StreamsBusy
 from .telemetry import setup_telemetry, shutdown_telemetry
 
@@ -79,6 +80,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     #   补记据此完全跳过，不回落任何假实现。
     memory = make_memory_runtime(settings, get_sessionmaker())
     app.state.memory = memory
+    # 沙箱模板的发布（改造计划 B2）：只在集群里才有 ServiceAccount；不在集群里（本机 make serve）
+    #   模板照样能查、能修订，发布时报「没有配置」
+    app.state.template_publisher = template_publisher(settings)
     app.state.executor = build_executor(
         get_sessionmaker(),
         settings,
