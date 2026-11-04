@@ -109,6 +109,7 @@ def test_spec_is_what_the_bridge_expects() -> None:
         workspace_thread="t-parent",
         user=USER,
         token="tok",
+        execd_token="exec-tok",
         cli=CLI,
         profile=None,
     )
@@ -125,8 +126,9 @@ def test_spec_is_what_the_bridge_expects() -> None:
     assert agent["ANTHROPIC_AUTH_TOKEN"] == "k"  # entrypoint 从文件读出来的那个要放行
     assert agent["HOME"] == "/state"
     assert "ATLAS_BRIDGE_TOKEN" not in agent and "EXECD_ACCESS_TOKEN" not in agent
-    # 令牌兼作 execd 令牌：execd 不能无鉴权
-    assert env["EXECD_ACCESS_TOKEN"] == env["ATLAS_BRIDGE_TOKEN"] == "tok"
+    # ★ 两个令牌分开：execd 不能无鉴权，拿到 bridge 令牌也不能在 Pod 里执行命令
+    assert env["ATLAS_BRIDGE_TOKEN"] == "tok"
+    assert env["EXECD_ACCESS_TOKEN"] == "exec-tok"
     assert spec["timeout"] is None
     assert "networkPolicy" not in spec and "credentialProxy" not in spec
 
@@ -139,6 +141,7 @@ def test_spec_prefixes_match_the_old_layout() -> None:
         workspace_thread="t-parent",
         user=USER,
         token="tok",
+        execd_token="exec-tok",
         cli=CLI,
         profile=None,
     )
@@ -162,6 +165,7 @@ def test_model_key_never_appears_in_the_spec() -> None:
         workspace_thread="t",
         user=USER,
         token="tok",
+        execd_token="exec-tok",
         cli=CLI,
         profile=PROFILE,
     )
@@ -177,6 +181,7 @@ def test_non_claude_cli_gets_no_model_env() -> None:
         workspace_thread="t",
         user=USER,
         token="tok",
+        execd_token="exec-tok",
         cli=codex,
         profile=None,
     )
@@ -192,6 +197,7 @@ def test_git_profile_spec_enables_vault_and_trusts_the_mitm_ca() -> None:
         workspace_thread="t",
         user=USER,
         token="tok",
+        execd_token="exec-tok",
         cli=CLI,
         profile=PROFILE,
     )
@@ -234,6 +240,7 @@ def test_entrypoint_writes_the_token_file_and_hides_the_token(
         workspace_thread="t",
         user=USER,
         token="tok-123",
+        execd_token="exec-tok",
         cli=CLI,
         profile=None,
     )
@@ -264,6 +271,8 @@ async def test_ensure_waits_for_the_bridge_and_returns_a_ws_endpoint(
     (sb,) = fake.created
     assert ep.url == f"ws://{sb.id}.execd:8900"
     assert ep.token == sb.spec["env"]["ATLAS_BRIDGE_TOKEN"]
+    # 交出去的只有 bridge 令牌；execd 令牌是另一个，只在 Pod 的环境里
+    assert sb.spec["env"]["EXECD_ACCESS_TOKEN"] not in (ep.token, "")
     assert sb.bridge_unready == 0  # 等到 /readyz 回 200 才交出端点
     assert sb.spec["image"] == {"uri": CLI.image}
 
@@ -360,6 +369,20 @@ async def test_git_profile_allowed_users(fake: FakeOpenSandbox, redis: Any, tid:
     }
     with pytest.raises(GitProfileDenied, match="无权"):
         await _pods(fake, redis, git_profiles=profiles).ensure(_thread(tid, git_profile="p"), CLI)
+
+
+def test_an_unrestricted_git_profile_fails_to_load() -> None:
+    """★ 允许的用户和应用都为空 = 谁都能用，等于把仓库写权限给了所有人。加载时就报错，
+    应用启动失败（c4-model/agent/sandbox/code-credentials.html「规则必填」）。"""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="allowed_users 或 allowed_apps"):
+        GitProfile(username="bot", token=SecretStr("x"))
+    with pytest.raises(ValidationError, match="allowed_users 或 allowed_apps"):
+        get_settings().model_validate(
+            get_settings().model_dump()
+            | {"git_profiles": {"p": {"username": "bot", "token": "x", "allowed_users": []}}}
+        )
 
 
 # ──────────────────────────────────────────────── 回收与配额

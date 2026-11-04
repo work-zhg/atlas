@@ -2,7 +2,7 @@
 # 构建自建镜像的 amd64 版本，导入服务器节点的 containerd（k8s.io 命名空间）。
 #
 #   deploy/server/images.sh                 全部构建并导入
-#   deploy/server/images.sh app sandbox     只做这几个（app frontends bridge sandbox csi）
+#   deploy/server/images.sh app sandbox     只做这几个（app frontends bridge sandbox csi egress）
 #   deploy/server/images.sh third           第三方镜像：在服务器上用 crane 拉好、导入（kubelet 经国内加速源
 #                                           拉很慢且串行，一个大镜像会堵住后面所有 Pod）
 #   deploy/server/images.sh check           只检查：清单要用的镜像服务器上是否都有（deploy.sh 的前置检查调它）
@@ -40,6 +40,8 @@ spec() {
     bridge)    echo "atlas-acp-bridge:0.4.0-amd64|atlas-acp-bridge:0.4.0|docker/bridge/Dockerfile|." ;;
     sandbox)   echo "atlas-sandbox:dev-amd64|atlas-sandbox:dev|docker/sandbox/Dockerfile|docker/sandbox" ;;
     csi)       echo "atlas-csi-s3:0.43.7-amd64|atlas-csi-s3:0.43.7|docker/csi-s3/Dockerfile|docker/csi-s3" ;;
+    # deny.always 先用 deploy/local/egress-rules.sh 按服务器集群生成（kubectl 上下文指向服务器）
+    egress)    echo "atlas-egress:release-1.1.1-amd64|atlas-egress:release-1.1.1|docker/egress/Dockerfile|docker/egress" ;;
     *) echo "未知镜像 $1" >&2; exit 1 ;;
   esac
 }
@@ -69,7 +71,7 @@ THIRD_DIGEST=(
 )
 
 # 标签固定的自建镜像（版本变了要改清单）：check 时与第三方镜像一起检查
-FIXED=(atlas-acp-bridge:0.4.0 atlas-sandbox:dev atlas-csi-s3:0.43.7)
+FIXED=(atlas-acp-bridge:0.4.0 atlas-sandbox:dev atlas-csi-s3:0.43.7 atlas-egress:release-1.1.1)
 
 if [ "${1:-}" = "check" ]; then
   have="$(ssh "$TARGET" "ctr -n k8s.io images ls -q")"
@@ -134,7 +136,14 @@ if [ "${1:-}" = "third" ] || [ "${1:-}" = "pull" ]; then
 fi
 
 NAMES=("$@")
-[ ${#NAMES[@]} -gt 0 ] || NAMES=(app frontends bridge sandbox csi)
+[ ${#NAMES[@]} -gt 0 ] || NAMES=(app frontends bridge sandbox csi egress)
+for name in "${NAMES[@]}"; do
+  # ★ 构建之前就查：deny.always 因集群而异，不进仓库，缺了不能拿一份空的去建镜像
+  if [ "$name" = egress ] && [ -z "${SKIP_BUILD:-}" ] && [ ! -s docker/egress/deny.always ]; then
+    echo "缺 docker/egress/deny.always：先把 kubectl 上下文指向服务器集群，跑 deploy/local/egress-rules.sh"
+    exit 1
+  fi
+done
 
 for name in "${NAMES[@]}"; do
   IFS='|' read -r local_tag remote_tag dockerfile context <<<"$(spec "$name")"

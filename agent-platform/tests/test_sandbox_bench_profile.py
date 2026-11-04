@@ -127,6 +127,21 @@ async def test_strict_profile_stays_on_the_strict_server(
     assert sb.spec["env"]["HOME"] == "/home/agent"
 
 
+async def test_only_strict_sandboxes_carry_an_egress_policy(
+    strict: FakeOpenSandbox, bench: FakeOpenSandbox, redis: Any, ws: str
+) -> None:
+    """★ strict 档带默认放行的出站策略：有策略才会加 egress sidecar，集群网段由 sidecar 镜像的
+    deny.always 拒绝。评测档的出网代理在集群内，暂不带（拒绝集群网段会把代理也挡掉）。"""
+    p = _p(strict, bench, redis)
+    await p.ensure(ws, user=USER)
+    await p.ensure(f"{ws}-b", user=USER, image=BENCH_IMAGE, profile="bench")
+    try:
+        assert strict.created[0].spec["networkPolicy"] == {"defaultAction": "allow"}
+        assert "networkPolicy" not in bench.created[0].spec
+    finally:
+        await p.release(f"{ws}-b")
+
+
 async def test_only_bench_sandboxes_get_the_egress_proxy(
     strict: FakeOpenSandbox, bench: FakeOpenSandbox, redis: Any, ws: str
 ) -> None:

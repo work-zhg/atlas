@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import AnyHttpUrl, BaseModel, SecretStr, field_validator
+from pydantic import AnyHttpUrl, BaseModel, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -34,11 +34,19 @@ class GitProfile(BaseModel):
     #: 提交作者（原来写在 gitconfig 里，现在经 GIT_AUTHOR_* / GIT_COMMITTER_* 交给 CLI）
     author_name: str = "Atlas Agent"
     author_email: str = ""
-    #: 允许使用该档案的会话创建者（Atlas 用户 id）。空 = 不限
+    #: 允许使用该档案的会话创建者（Atlas 用户 id）。空 = 这一项不限
     allowed_users: list[str] = []
-    #: 允许使用该档案的业务应用（会话的 source_app，如 teamflow）。空 = 不限。
+    #: 允许使用该档案的业务应用（会话的 source_app，如 teamflow）。空 = 这一项不限。
     #: ★ 共享机器人账号的档案用它限定「只有 TeamFlow 建的会话能用」（内网身份传递 §9）
     allowed_apps: list[str] = []
+
+    @model_validator(mode="after")
+    def _restricted(self) -> GitProfile:
+        """★ 两项至少填一项（c4-model/agent/sandbox/code-credentials.html「规则必填」）。两项都空
+        等于谁都能用，把仓库的写权限给了所有人 —— 加载时就报错，应用启动失败，不跳过。"""
+        if not self.allowed_users and not self.allowed_apps:
+            raise ValueError("git 凭据档案必须限定 allowed_users 或 allowed_apps 至少一项")
+        return self
 
 
 class Settings(BaseSettings):

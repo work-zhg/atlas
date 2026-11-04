@@ -447,7 +447,13 @@ def sandbox_spec(
     profile: str = "strict",
 ) -> dict[str, Any]:
     """原生沙箱的创建请求（设计 §8.1）。挂载前缀从共享内核 WorkspaceLayout 取，和工作区直连
-    对象存储的 key 是同一个。沙箱按工作区建（根会话），技能挂根会话的；系统区不挂进沙箱。"""
+    对象存储的 key 是同一个。沙箱按工作区建（根会话），技能挂根会话的；系统区不挂进沙箱。
+
+    ★ strict 档带出站策略（默认放行）：有策略才会加 egress sidecar，集群网段由 sidecar 镜像里的
+      deny.always 拒绝（docker/egress，c4-model/agent/sandbox/code-sandbox-base-network.html）。
+      不带的话沙箱能直连集群里的任何服务。代价是多一个 sidecar，execd 就绪晚约 1 秒。
+      评测档暂不带：它的出网代理是集群内的服务，拒绝集群网段会把它也挡掉（B4 再定）。
+    """
     layout = WorkspaceLayout.of(user, ws)
     env = {
         "EXECD_ACCESS_TOKEN": token,
@@ -464,7 +470,7 @@ def sandbox_spec(
         for name in ("http_proxy", "https_proxy"):
             env[name] = env[name.upper()] = proxy
         env["no_proxy"] = env["NO_PROXY"] = "localhost,127.0.0.1,::1,.svc,.cluster.local"
-    return {
+    spec: dict[str, Any] = {
         "image": {"uri": image},
         "entrypoint": ["tail", "-f", "/dev/null"],
         "timeout": None,  # 不自动过期：回收由 Atlas 做（不设运行上限）
@@ -491,6 +497,9 @@ def sandbox_spec(
             ),
         ],
     }
+    if profile != BENCH:
+        spec["networkPolicy"] = {"defaultAction": "allow"}
+    return spec
 
 
 def pvc_volume(

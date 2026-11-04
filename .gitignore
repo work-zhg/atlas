@@ -33,3 +33,5 @@ var/
 
 # app 镜像的依赖约束：构建前由 uv.lock 导出（deploy/server/images.sh），不入库以免与锁文件不同步
 docker/app/requirements.txt
+# 按目标集群生成（deploy/local/egress-rules.sh）
+docker/egress/deny.always

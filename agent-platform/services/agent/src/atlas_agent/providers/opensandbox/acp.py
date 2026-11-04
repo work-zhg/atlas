@@ -8,8 +8,10 @@ doc/sandbox-opensandbox-design.html §11、§12。
 
 ★ entrypoint 是一小段 sh：把 env 里的令牌写成 bridge 认的令牌文件、把挂进来的模型 key 读成 CLI 认的
   环境变量，再 exec bridge。bridge 因此一行不改，已有的 CLI 镜像照用（设计 §11.2 原计划改 bridge）。
-★ bridge 令牌兼作 execd 令牌：execd 每个沙箱都会注入，不设令牌就是集群内无鉴权的命令执行入口。
-  同 UID 的 CLI 本来就读得到 /proc/1/environ，分成两个令牌挡不住什么（§12）。
+★ bridge 令牌和 execd 令牌分开：execd 每个沙箱都会注入，不设令牌就是集群内无鉴权的命令执行入口；
+  而 bridge 令牌要交给 CLI 运行时、随端点四处传，兼作 execd 令牌的话，拿到它就能在 Pod 里执行任意
+  命令。server 从不对会话 Pod 调 execd，所以 execd 令牌每次建 Pod 现生成，只写进 Pod 的环境，
+  不存、不交出去（c4-model/agent/sandbox/code-sandbox-base-lifecycle.html）。
 ★ 有 git 档案时：networkPolicy(allow) + credentialProxy → egress sidecar 透明 MITM；
   ensure 时把凭据写进 Credential Vault。MITM 拦的是全部 HTTPS（P0-3 实测），
   所以 CLI 及其子进程都要信任 MITM 的 CA。
@@ -22,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import secrets
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -111,14 +114,18 @@ def acp_spec(
     workspace_thread: str,
     user: str,
     token: str,
+    execd_token: str,
     cli: CliSpec,
     profile: GitProfile | None,
     model: AcpModel | None = None,
 ) -> dict[str, Any]:
     """ACP Pod 的创建请求（设计 §11.1）。三个前缀与 cluster 时代完全一致，存量数据不用迁移。
 
+    token：bridge 令牌（交给 CLI 运行时）；execd_token：execd 令牌（只进 Pod，不能与 token 相同）。
     model：经模型网关时的模型接入（网关地址、主体 Key、模型名）；None = 照旧按部署配置。
     """
+    if execd_token == token:
+        raise ValueError("execd 令牌不能与 bridge 令牌相同")
     layout = WorkspaceLayout.of(user, thread, workspace_thread)
     claude = cli.cli_type == "claude-code" and bool(settings.acp_model_base_url) and model is None
     agent_env: dict[str, str] = {}
@@ -164,7 +171,7 @@ def acp_spec(
             "memory": settings.acp_memory_request,
         },
         "env": {
-            "EXECD_ACCESS_TOKEN": token,
+            "EXECD_ACCESS_TOKEN": execd_token,
             "EXECD_ENVS": "/tmp/.execd/env",
             "ATLAS_BRIDGE_TOKEN": token,
             "ATLAS_BRIDGE_TOKEN_FILE": TOKEN_FILE,
@@ -233,6 +240,7 @@ class AcpProvisioner(Provisioner):
                     workspace_thread=str(thread.workspace_thread_id),
                     user=user,
                     token=token,
+                    execd_token=secrets.token_urlsafe(24),
                     cli=cli,
                     profile=profile,
                     model=model,

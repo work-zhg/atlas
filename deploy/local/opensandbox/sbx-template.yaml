@@ -6,6 +6,10 @@
 #   · ★ 其余列表字段（containers、initContainers）被运行时整体覆盖：模板里加 sidecar 没用
 # ★ strict 档：UID 1000、根只读、drop ALL、seccomp RuntimeDefault、禁止提权。
 #   可写区只有 emptyDir（/tmp、/home/agent、/repos）和创建请求挂进来的 /workspace。
+# ★ UID 1000 只设在主容器上，不设在 pod 级：strict 档带出站策略，会加 egress sidecar，它要以 root
+#   跑 nft（只加了 NET_ADMIN）。pod 级 runAsUser 会让 sidecar 也变成 1000，nft 配不上（同 acp-template）。
+# ★ 带 networkPolicy 时运行时会给主容器设 capabilities.drop: [NET_ADMIN]，列表以运行时为准，
+#   这里的 drop: [ALL] 会被它替换；主容器非 root、禁止提权，默认能力本来不生效。
 metadata: {}
 spec:
   replicas: 1
@@ -15,13 +19,13 @@ spec:
       terminationGracePeriodSeconds: 30
       enableServiceLinks: false
       securityContext:
-        runAsUser: 1000
-        runAsGroup: 1000
-        runAsNonRoot: true
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: sandbox
           securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            runAsNonRoot: true
             readOnlyRootFilesystem: true
             allowPrivilegeEscalation: false
             capabilities: {drop: [ALL]}

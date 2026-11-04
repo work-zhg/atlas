@@ -8,7 +8,9 @@
 # 前置：
 #   · make up（宿主的 MinIO）；仓库根 .env 里有 OSS_ACCESS_KEY_ID / OSS_ACCESS_KEY_SECRET，
 #     以及 ACP 的模型 key ATLAS_ACP_MODEL_API_KEY（没有就退回旧名 ATLAS_CLUSTER_MODEL_API_KEY）
-#   · 镜像 atlas-csi-s3:0.43.7（docker/csi-s3/Dockerfile）、atlas-sandbox:dev（docker/sandbox/Dockerfile）
+#   · 镜像 atlas-csi-s3:0.43.7（docker/csi-s3/Dockerfile）、atlas-sandbox:dev（docker/sandbox/Dockerfile）、
+#     atlas-egress:release-1.1.1（原生沙箱的 egress sidecar：deploy/local/egress-rules.sh 生成拒绝集群网段的
+#     deny.always，再 docker build -t atlas-egress:release-1.1.1 docker/egress）
 #   · helm 3；OpenSandbox 源码检出在 release-1.1.1（上游 chart 不单独发布，只能从源码装）：
 #       git clone --depth 1 --branch release-1.1.1 https://github.com/opensandbox-group/OpenSandbox.git
 #     用 OPENSANDBOX_SRC 指向它

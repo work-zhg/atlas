@@ -47,3 +47,9 @@ configToml: |
   [store]
   type = "sqlite"
   path = "/var/lib/opensandbox/opensandbox.db"
+
+  # strict 档带出站策略（默认放行）。镜像是上游 egress 加平台底线 deny.always（拒绝集群网段，
+  # docker/egress）；dns+nft 才拦得住直连 IP
+  [egress]
+  image = "atlas-egress:release-1.1.1"
+  mode = "dns+nft"
