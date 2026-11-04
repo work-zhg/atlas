@@ -305,7 +305,7 @@
     </svg>
 
     <h2>取消原理</h2>
-    <p>一句话：<b>取消</b>就是在 Redis 里写一个键 <code>run:cancel:{run}</code>。谁在跑这个 run，谁就在自己的安全点看见它、自己收尾；挂起中的 run 没有进程在跑，由接到请求的执行器当场收尾。取消是<b>协作式</b>的：不硬打断正在执行的工具，在帧与帧之间停下。下面四张图，场景同上面的时序图：父 run 在跑，它派出的子 run 挂起等审批，用户点「停止」。橙色是这个场景实际走的路，灰色虚线是没走的分支。讲的是现在代码里的做法，和上面时序图（目标模型）不一样的地方列在最后。</p>
+    <p>一句话：<b>取消</b>就是在 Redis 里写一个键 <code>run:cancel:{run}</code>。谁在跑这个 run，谁就在自己的安全点看见它、自己收尾；挂起中的 run 没有进程在跑，由接到请求的执行器当场收尾。取消是<b>协作式</b>的：不硬打断正在执行的工具，在帧与帧之间停下。下面四张图，场景同上面的时序图：父 run 在跑，它派出的子 run 挂起等审批，用户点「停止」。橙色是这个场景实际走的路，灰色虚线是没走的分支。</p>
 
     <h3>图 1　一次取消分几条路：看 run 此刻在哪</h3>
     <svg width="1240" viewBox="0 0 1240 410" role="img" aria-label="一次取消分几条路">
@@ -465,11 +465,12 @@
       <text x="720" y="184">造一个 run.cancelled，序号在落库前盖好</text>
       <text x="720" y="206">归档 → 提交 → 发布；清取消位、放会话锁</text>
       <line class="sep" x1="630" y1="220" x2="1220" y2="220"/>
-      <rect class="gap" x="714" y="230" width="496" height="80" rx="3"/>
-      <text class="t-key" x="644" y="252">还悬空</text>
-      <text class="t-hot" x="722" y="252">waiting_on 里的调用，在消息里仍然没有结果</text>
-      <text class="t-hot" x="722" y="274">它挂着的审批现在还是 pending：刷新后还会弹窗，</text>
-      <text class="t-hot" x="722" y="296">点「允许」能成功，只是不再续跑</text>
+      <text class="t-key" x="644" y="244">审批</text>
+      <text x="720" y="244">它挂着的审批同一个事务里作废：弹窗随之消失</text>
+      <line class="sep" x1="630" y1="258" x2="1220" y2="258"/>
+      <rect class="gap" x="714" y="266" width="496" height="44" rx="3"/>
+      <text class="t-key" x="644" y="293">还悬空</text>
+      <text class="t-hot" x="722" y="293">waiting_on 里的调用，在消息里仍然没有结果：下一轮补</text>
       <path class="e-mute" d="M315 320 V358" marker-end="url(#pr-m)"/>
       <path class="e-hot" d="M962 310 V358" marker-end="url(#pr-h)"/>
       <rect class="node" x="20" y="360" width="1200" height="64" rx="4"/>
@@ -481,7 +482,7 @@
     </svg>
     <ol>
       <li><span class="n">1</span>在跑的 run：段收尾把还没落检查点的消息落库，发出了、没拿到结果的调用补一条「中断，结果未知」——不删那个调用，删了等于告诉模型「没发生过」，它会原样再做一遍。run 行写成 cancelled，先落库、再发布 <code>run.cancelled</code>，最后清取消位、放会话锁。</li>
-      <li><span class="n">2</span>挂起中的 run：<code>settle_cancelled</code> 不装图、不跑任何东西，造一个 <code>run.cancelled</code>，和 run 行的终态同一个事务落库，再发布、清取消位、放会话锁。不当场收的话，run 一直躺在挂起状态，会话锁也一直不放，用户连下一句都发不出。</li>
+      <li><span class="n">2</span>挂起中的 run：<code>settle_cancelled</code> 不装图、不跑任何东西，造一个 <code>run.cancelled</code>，和 run 行的终态、它挂着的审批作废同一个事务落库，再发布、清取消位、放会话锁。不当场收的话，run 一直躺在挂起状态，会话锁也一直不放，用户连下一句都发不出。</li>
       <li><span class="n">3</span>挂起中被取消的 run，<code>waiting_on</code> 里的调用在消息里仍然没有结果。下一轮进图时它们已经不在新 run 的 <code>waiting_on</code> 里，<code>PatchToolCallsMiddleware</code> 补一条「was cancelled」，模型看到的历史始终合法（每个 tool_use 恰好一条结果）。</li>
     </ol>
 
@@ -566,19 +567,8 @@
         <tr><td>CLI 的取消交给 bridge 去走</td><td>平台看不到 CLI 内部的工具调用，只能请 bridge 转告 CLI；权限询问、宽限、重启都在 Pod 里处理，平台只等「这一轮结束了」。</td></tr>
       </tbody>
     </table>
-
-    <h3>现在的代码和上面时序图的差别</h3>
-    <table>
-      <thead><tr><th>地方</th><th>现在</th></tr></thead>
-      <tbody>
-        <tr><td>挂起中的 run 挂着的审批</td><td>没有作废（时序图第 9 步的 <code>expire_run</code> 还没有）：审批行仍是 pending，刷新页面后列表里还会出现，点「允许」能成功，只是不再续跑。</td></tr>
-        <tr><td>CLI 运行时查取消位的时机</td><td>只在 0.5 秒内没取到消息时才查，收到事件、通知都直接进下一轮循环：CLI 连续输出时，取消要等出现空档。</td></tr>
-        <tr><td>取消位的过期时间</td><td>1 小时。运行本身不设时长上限，一个工具执行超过 1 小时，取消位会在它返回前过期，这次取消就丢了。</td></tr>
-        <tr><td>排队中的 run</td><td>领取时不查取消位：等被领走、装配完（模型、知识库、MCP），跑到第一帧才停，白装配一次。</td></tr>
-        <tr><td>当场收尾和唤醒撞在一起</td><td>执行器读到 suspended 之后，若审批决定或子 run 结束恰好把它改成 queued、又看到取消位，两边会各收一次尾、发两个 <code>run.cancelled</code>：<code>settle_cancelled</code> 写终态时不看当前状态。</td></tr>
-      </tbody>
-    </table>
   </section>
+
 
 </main>
 

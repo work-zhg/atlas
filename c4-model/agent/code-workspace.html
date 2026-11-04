@@ -30,10 +30,10 @@
 <script type="application/json" id="c4-model">
 {
   "title": "代码图：Agent 平台 - Agent 服务 - 工作区",
-  "description": "目标模型，只画期望的样子、不对照现状。会话文件的读写：两种底层（直连对象存储、经沙箱）是同一接口的两个策略，按每次操作选路。",
+  "description": "目标模型，只画期望的样子、不对照现状。一个人的文件的读写：两种底层（直连对象存储、经沙箱）是同一接口的两个策略，按每次操作选路。",
   "component": "工作区",
   "package": "工作区（目标模型）",
-  "overview": "工作区是会话的文件。对象存储里有三个区：工作区区由根会话共享（子智能体和父会话共用），技能区和系统区按本会话各有一套。模型经文件工具读写，界面经文件面板浏览、预览、上传。读写有两种底层：直连对象存储，或者经沙箱，读写 Pod 里挂载的 /workspace。每次操作先过路径关卡，再选路：技能区、系统区始终直连；工作区区在原生沙箱 READY 时经沙箱，否则直连。沙箱在跑时只经沙箱写，是为了只有一个写入方。\n\n它不管沙箱什么时候建、什么时候回收（原生沙箱管），也不管技能怎么拷进技能区（技能拷贝，未画）。布局沿用现在的 {user}/{会话}/{区}；按人共享沙箱时可能要改成区在前，那时只改 WorkspaceLayout。",
+  "overview": "工作区是一个人的文件。对象存储里按人分前缀：根会话各有一个 workspace（子孙会话共用，压缩归档、外置的大结果放在其中的隐藏目录 .atlas/{会话}/），技能 skills/{slug}/{版本} 这个人所有会话共用，CLI 的会话记录在 home/.claude。整个前缀挂进这个人的沙箱的 /data，路径就是沙箱里的真实路径 /data/…，文件工具和 Shell 看到的是同一套。模型经文件工具读写，界面经文件面板浏览、预览、上传。读写有两种底层：直连对象存储，或者经沙箱读写挂载的 /data。每次操作先过路径关卡，再选路：这个人的沙箱 READY 时经沙箱，否则直连；沙箱在跑时只经沙箱写，是为了只有一个写入方。\n\n它不管沙箱什么时候建、什么时候回收（原生沙箱管），也不管技能怎么拷进技能目录（技能拷贝，未画）。",
   "elements": [
     {
       "id": "ws",
@@ -71,7 +71,7 @@
       "kind": "class",
       "name": "PathGate",
       "stereotype": "策略",
-      "responsibility": "把模型给的路径换成「哪个区 + 区内相对路径」：先规范化、再判断区，拒绝空字节、越出区根和指向区根本身的路径。/skills/… 落技能区；绝对路径 /workspace/… 剥掉挂载点；其余都落工作区区。界面接口也用它。",
+      "responsibility": "把模型给的路径换成这个人前缀下的相对路径：先规范化，再看落没落在本会话能用的根里——所用工作区（根会话的 workspace）和本智能体绑定的技能版本；拒绝空字节、越出这些根和指向根本身的路径。相对路径写成 workspace/… 的也接受，按所用工作区补全。界面接口也用它。",
       "methods": [
         [
           "+",
@@ -92,21 +92,21 @@
       "kind": "class",
       "name": "FilePath",
       "stereotype": "值对象",
-      "responsibility": "关卡放行后的路径：哪个区、区内相对路径。工作区区由根会话共享（子智能体和父会话共用）；技能区和系统区按本会话，各有一套。只有工作区区会走沙箱。",
+      "responsibility": "关卡放行后的路径：相对这个人前缀的路径，以及落在哪个根。同一个路径在沙箱里是 /data/{rel}，在对象存储里是 {user}/{rel}，两种底层用的是同一个路径，不用换算。",
       "attributes": [
         [
           "+",
-          "area: workspace | skills | system"
+          "rel: str（相对这个人的前缀，规范化后）"
         ],
         [
           "+",
-          "rel: str（规范化后，不以 / 开头）"
+          "root: workspace | skills"
         ]
       ],
       "methods": [
         [
           "+",
-          "in_sandbox() -> bool（只有 workspace）"
+          "abs() -> /data/{rel}（沙箱里的路径）"
         ]
       ],
       "at": [
@@ -119,7 +119,7 @@
       "kind": "function",
       "name": "make_workspace",
       "stereotype": "工厂",
-      "responsibility": "Run 装配时按会话建工作区：布局取根会话、本会话和创建人，选路接上原生沙箱。没配对象存储时返回 None，文件工具一个都不注册。",
+      "responsibility": "Run 装配时按会话建工作区：布局取创建人、根会话、本会话和本智能体绑定的技能版本，选路接上这个人的原生沙箱。没配对象存储时返回 None，文件工具一个都不注册。",
       "methods": [
         [
           "+",
@@ -136,11 +136,11 @@
       "kind": "class",
       "name": "StoreRouter",
       "stereotype": "策略",
-      "responsibility": "每次操作选底层：技能区、系统区一律直连对象存储；工作区区问原生沙箱 current，有 READY 的沙箱就经沙箱，否则直连。经沙箱失败时先 confirm_gone：确实不在了，这一次改走对象存储重试；还在或问不到就报错，不悄悄换写入方。",
+      "responsibility": "每次操作选底层：问原生沙箱这个人当前的沙箱，READY 就经沙箱，否则直连对象存储。所有路径都在同一个挂载下，不分目录。经沙箱失败时先 confirm_gone：确实不在了，这一次改走对象存储重试；还在或问不到就报错，不悄悄换写入方。",
       "attributes": [
         [
           "-",
-          "_ws: WorkspaceRef（根会话 + 创建人）"
+          "_owner: 这个人的沙箱键（人 + 模板）"
         ],
         [
           "-",
@@ -188,7 +188,7 @@
       "kind": "class",
       "name": "ObjectStoreFiles",
       "stereotype": "策略",
-      "responsibility": "直连对象存储（S3 API）。三个区都能走；按布局把区内路径换成 key。常驻，一个工作区一个。",
+      "responsibility": "直连对象存储（S3 API）。按布局把相对路径换成 key {user}/{rel}。常驻，一个工作区一个。",
       "attributes": [
         [
           "-",
@@ -209,7 +209,7 @@
       "kind": "class",
       "name": "SandboxFiles",
       "stereotype": "策略",
-      "responsibility": "经沙箱读写：用基座执行的文件会话，读写 Pod 里挂载的 /workspace，和沙箱里的命令是同一个挂载。只服务工作区区；每次操作开一个文件会话，用完关掉。基座在打开文件会话时顺带记活动，这里不用再记。",
+      "responsibility": "经沙箱读写：用基座执行的文件会话，读写 Pod 里挂载的 /data，和沙箱里的命令是同一个挂载。每次操作开一个文件会话，用完关掉。基座在打开文件会话时顺带记活动，这里不用再记。",
       "attributes": [
         [
           "-",
@@ -219,7 +219,7 @@
       "methods": [
         [
           "-",
-          "_abs(rel) -> /workspace/{rel}"
+          "_abs(rel) -> /data/{rel}"
         ]
       ],
       "at": [
@@ -232,21 +232,29 @@
       "kind": "class",
       "name": "WorkspaceLayout",
       "stereotype": "值对象",
-      "responsibility": "（共享内核）三个区在对象存储里的前缀：工作区 {user}/{根会话}/workspace，技能 {user}/{本会话}/skills，系统 {user}/{本会话}/system。三者平级：工作区整个挂进沙箱时，技能和系统区不会被一起带进去。前缀里有 user 段，路径越界因此也挡住了跨用户。这是共享内核：原生沙箱和会话 Pod 的挂载前缀也从它取，所以放在工作区和沙箱都能依赖的底层模块里，避免两个组件互相依赖。",
+      "responsibility": "（共享内核）这个人在对象存储里的前缀和各目录：整个 {user}/ 挂到沙箱的 /data；工作区 {user}/{根会话}/workspace，本会话的隐藏目录 .atlas/{会话}/ 在其中；技能 {user}/skills/{slug}/{版本}；CLI 的会话记录 {user}/home/.claude。前缀里有 user 段，路径越界因此也挡住了跨用户。原生沙箱的挂载前缀也从它取，所以放在工作区和沙箱都能依赖的底层模块里，避免两个组件互相依赖。",
       "attributes": [
         [
           "+",
           "user_uuid · root_thread_uuid · thread_uuid"
+        ],
+        [
+          "+",
+          "skills: [(slug, 版本)]"
         ]
       ],
       "methods": [
         [
           "+",
-          "key(path: FilePath) -> str"
+          "key(path: FilePath) -> str（{user}/{rel}）"
         ],
         [
           "+",
-          "prefix(area) -> str（挂载用）"
+          "mount() -> ({user}/, /data)"
+        ],
+        [
+          "+",
+          "workspace() · archive() · skill(slug) -> 相对路径"
         ]
       ],
       "at": [
@@ -259,7 +267,7 @@
       "kind": "class",
       "name": "WorkspaceListing",
       "stereotype": "应用服务",
-      "responsibility": "界面上的工作区：列文件、打开、按 Range / ETag 预览、上传。读和预览直连对象存储（写穿式挂载下文件 close 后就在对象存储里）；上传和模型的写走同一个选路，沙箱在跑时经沙箱写。",
+      "responsibility": "界面上的工作区：列文件、打开、按 Range / ETag 预览、上传。读和预览直连对象存储（写穿式挂载下文件 close 后就在对象存储里）；上传和模型的写走同一个选路，这个人的沙箱在跑时经沙箱写。",
       "methods": [
         [
           "+",
@@ -305,7 +313,7 @@
       "methods": [
         [
           "+",
-          "current(ws) · confirm_gone(ws, ref)"
+          "current(owner) · confirm_gone(owner, ref)"
         ]
       ],
       "at": [
@@ -397,7 +405,7 @@
       "from": "router",
       "to": "native",
       "type": "uses",
-      "description": "查当前沙箱、确认已不在"
+      "description": "查这个人的沙箱、确认已不在"
     },
     {
       "from": "objects",
@@ -409,7 +417,7 @@
       "from": "sandbox",
       "to": "fsession",
       "type": "association",
-      "description": "读写 Pod 里的 /workspace"
+      "description": "读写 Pod 里的 /data"
     },
     {
       "from": "listing",
@@ -430,7 +438,7 @@
       "name": "模型的文件读写",
       "entry": "FilesystemProtocol.aread · asearch · awrite · aedit · adelete",
       "callers": "原生运行时的文件工具（Run 装配时按 run 创建）",
-      "description": "先过路径关卡；工作区区按沙箱是否 READY 选底层，技能区、系统区始终直连对象存储；写入规则对两种底层一致"
+      "description": "先过路径关卡；按这个人的沙箱是否 READY 选底层；写入规则对两种底层一致"
     },
     {
       "name": "界面浏览与预览",
@@ -454,15 +462,15 @@
   "decisions": [
     {
       "decision": "两种底层是同一个接口（FileStore）的两个策略，每次操作选一次",
-      "reason": "「沙箱在不在跑」只决定这一次走哪条路；路径关卡和写入规则只写一份，对两种底层都成立。现在的实现以对象存储为主，经沙箱那条路是 OssFilesystem 里的旁路（_routed），规则容易只在一边生效。"
+      "reason": "「沙箱在不在跑」只决定这一次走哪条路；路径关卡和写入规则只写一份，对两种底层都成立，不会只在一边生效。"
     },
     {
-      "decision": "沙箱 READY 时工作区区走沙箱，不直连对象存储",
+      "decision": "这个人的沙箱 READY 时一律走沙箱，不直连对象存储",
       "reason": "沙箱用 s3fs 挂着同一个前缀，有目录和属性缓存。这时绕过它直写对象存储，沙箱里的进程可能好一阵都看不到，同一个文件还会有两个写入方互相覆盖。都走同一个挂载，就只有一个写入方。"
     },
     {
-      "decision": "只有工作区区走沙箱，技能区、系统区始终直连对象存储",
-      "reason": "技能区在沙箱里是只读挂载，系统区（压缩归档、外置的大结果）根本不挂进沙箱，经沙箱写不了，也没必要。"
+      "decision": "路径就是沙箱里的真实路径 /data/…",
+      "reason": "沙箱把整个 {user}/ 挂到 /data，Shell 看到的就是 /data/…；文件工具用同一套路径，模型不用在两套路径之间换算。直连时把 /data/ 换成 {user}/，一一对应，不用查表。"
     },
     {
       "decision": "经沙箱失败先确认沙箱还在不在，确实不在才回落到对象存储",
@@ -470,15 +478,15 @@
     },
     {
       "decision": "路径先规范化、再拼前缀",
-      "reason": "先拼后归一，../../other/x 会被归一成另一个会话的真实 key，从调用方看毫无异常。前缀里有 user 段，所以同一道关卡也挡住了跨用户。"
+      "reason": "先拼后归一，../../other/x 会被归一成另一个会话的真实 key，从调用方看毫无异常。关卡只放行本会话能用的根，前缀里又有 user 段，所以同一道关卡也挡住了跨用户。"
     },
     {
       "decision": "界面上的读和预览直连对象存储，上传按同一规则选路",
-      "reason": "写穿式挂载下，文件 close 后就在对象存储里，直接读就行，还能用 Range 和 ETag。写要和模型的写走同一个写入方；现在界面上传一律直连，沙箱在跑时有互相覆盖的风险。"
+      "reason": "写穿式挂载下，文件 close 后就在对象存储里，直接读就行，还能用 Range 和 ETag。写要和模型的写走同一个写入方。"
     },
     {
       "decision": "布局是共享内核，前缀只算一次",
-      "reason": "直连对象存储的 key、原生沙箱和会话 Pod 的挂载前缀必须是同一个前缀，现在却三处各拼一遍，靠注释「与 OssFilesystem 一致」维持。放进工作区组件又会和沙箱互相依赖（工作区要问沙箱选路，沙箱要按布局挂载），所以单独放在两者之下，两边都只读它。"
+      "reason": "直连对象存储的 key 和原生沙箱的挂载前缀必须出自同一处。放进工作区组件又会和沙箱互相依赖（工作区要问沙箱选路，沙箱要按布局挂载），所以单独放在两者之下，两边都只读它。"
     },
     {
       "decision": "不记活动，也不缓存选路",
