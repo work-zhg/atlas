@@ -53,7 +53,7 @@ RUN pip install --no-cache-dir --upgrade pip build \
 # ── 最终镜像 ────────────────────────────────────────────────────────
 FROM python:3.14-slim
 
-LABEL org.opencontainers.image.title="atlas-acp-bridge" \
+LABEL org.opencontainers.image.title="atlas-cli-bridge" \
       org.opencontainers.image.description="Atlas 会话 Pod：bridge + Claude Code ACP adapter"
 
 # Node 运行时。只拷 /usr/local 下的那份 —— npm/npx 一并带上，

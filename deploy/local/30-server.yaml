@@ -1,4 +1,4 @@
-# server：API + 进程内执行器 + HostRuntime（经会话 Pod 里的 bridge 执行 acp agent）。
+# server：API + 进程内执行器 + HostRuntime（经会话 Pod 里的 bridge 执行 CLI 智能体）。
 #
 # ★ 为什么 server 也跑在集群里，而不是留在宿主上跑 make serve：
 #   cluster 交给 server 的是 `ws://<podIP>:8900`（manager._url 用 Pod IP，
@@ -27,7 +27,7 @@ spec:
       # ★ 不给 ServiceAccount 任何 Role：server 不碰 K8s，Pod 生命周期
       #   归 cluster。这里的默认 SA 什么权限都没有，正是想要的。
       # ★ 停机交接（doc/horizontal-scaling-design.html §6）：SIGTERM 后 native run 走到
-      #   安全点、acp run 断开，交给别的副本（或重建后的本副本）接着跑。宽限期要盖过
+      #   安全点、CLI run 断开，交给别的副本（或重建后的本副本）接着跑。宽限期要盖过
       #   DRAIN_TIMEOUT_S（默认 60s）+ 关连接与 flush 遥测的时间。
       terminationGracePeriodSeconds: 90
       containers:
@@ -51,17 +51,17 @@ spec:
             # ★ 前提：deploy/local/opensandbox.sh 已执行（CSI 驱动、整桶 PVC atlas-oss、控制器、
             #   opensandbox-sbx）；API key 由它写进 Secret atlas-opensandbox
             - {name: SANDBOX_ENABLED, value: "true"}
-            # 沙箱与 ACP Pod 的 CPU request（limit 仍是 2 核）。★ 小机器（4 核）上 250m 只够同时开三四个会话
+            # 沙箱与 会话 Pod 的 CPU request（limit 仍是 2 核）。★ 小机器（4 核）上 250m 只够同时开三四个会话
             - {name: SANDBOX_CPU_REQUEST, value: 100m}
-            - {name: ACP_CPU_REQUEST, value: 100m}
+            - {name: CLI_CPU_REQUEST, value: 100m}
             - {name: OPENSANDBOX_SBX_URL, value: "http://opensandbox-sbx.opensandbox-system.svc.cluster.local"}
             - name: OPENSANDBOX_SBX_API_KEY
               valueFrom: {secretKeyRef: {name: atlas-opensandbox, key: sbx_api_key}}
-            # ACP 智能体的 CLI Pod：OpenSandbox 的 opensandbox-acp（设计 §11）。模型 key 不在这里：
-            # 在 atlas-acp 的 Secret atlas-acp-model 里，由 ACP 模板以文件挂进 Pod
-            - {name: OPENSANDBOX_ACP_URL, value: "http://opensandbox-acp.opensandbox-system.svc.cluster.local"}
-            - name: OPENSANDBOX_ACP_API_KEY
-              valueFrom: {secretKeyRef: {name: atlas-opensandbox, key: acp_api_key}}
+            # CLI 智能体的 CLI Pod：OpenSandbox 的 opensandbox-cli（设计 §11）。模型 key 不在这里：
+            # 在 atlas-cli 的 Secret atlas-cli-model 里，由 会话 Pod 模板以文件挂进 Pod
+            - {name: OPENSANDBOX_CLI_URL, value: "http://opensandbox-cli.opensandbox-system.svc.cluster.local"}
+            - name: OPENSANDBOX_CLI_API_KEY
+              valueFrom: {secretKeyRef: {name: atlas-opensandbox, key: cli_api_key}}
             # 评测档沙箱（opensandbox-bench：root、根可写，只给评测用）。★ 全部 optional：
             #   没装（OPENSANDBOX_BENCH=1 deploy/local/opensandbox.sh 才装）就没有这几个键 → 没有评测档
             - name: OPENSANDBOX_BENCH_URL
@@ -73,9 +73,9 @@ spec:
             # 评测档沙箱的出网代理（deploy/server/bench-egress.sh 建；没有就直连）
             - name: SANDBOX_BENCH_PROXY
               valueFrom: {secretKeyRef: {name: atlas-sandbox-bench-proxy, key: url, optional: true}}
-            - {name: ACP_MODEL_NAME, value: deepseek-chat}
-            - name: ACP_MODEL_BASE_URL
-              valueFrom: {secretKeyRef: {name: atlas-server-creds, key: acp_model_base_url}}
+            - {name: CLI_MODEL_NAME, value: deepseek-chat}
+            - name: CLI_MODEL_BASE_URL
+              valueFrom: {secretKeyRef: {name: atlas-server-creds, key: cli_model_base_url}}
             # git 凭据档案（JSON：名字 → 凭据 + 允许使用的业务应用），git-profile.sh 从 .env 建。
             # 凭据经 Credential Vault 交给 Pod 的 egress sidecar，Pod 里看不到（设计 §12）
             - name: GIT_PROFILES
@@ -102,7 +102,7 @@ spec:
             # 模型（agent-platform/doc/design/model-design.html）：ConfigMap atlas-model-platform 有了才经
             #   模型管理平台（38-modelgateway.yaml）和 LiteLLM（39-litellm.yaml）—— deploy/server/model-cutover.sh
             #   建它；没有时照旧直连 LITELLM_BASE_URL。
-            #   ★ 经平台时每个智能体一把客户端 Key，调用直连 LiteLLM；ACP Pod 拿到的是 LiteLLM 地址和这把 Key
+            #   ★ 经平台时每个智能体一把客户端 Key，调用直连 LiteLLM；会话 Pod 拿到的是 LiteLLM 地址和这把 Key
             - name: MODEL_PLATFORM_URL
               valueFrom: {configMapKeyRef: {name: atlas-model-platform, key: platform_url, optional: true}}
             - name: MODEL_LITELLM_URL

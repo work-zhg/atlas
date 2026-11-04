@@ -85,7 +85,7 @@ AGENT = {
                 "cli": {
                     "cli_type": "claude-code",
                     "adapter": "node /opt/acp-cli/bin/claude-acp",
-                    "image": "atlas-acp-bridge:0.4.0",
+                    "image": "atlas-cli-bridge:0.4.0",
                 },
             }
         ],

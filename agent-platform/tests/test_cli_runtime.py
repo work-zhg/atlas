@@ -147,9 +147,9 @@ class Env:
         self.sessions = Sessions()
         self.relay = Relay()
         settings = SimpleNamespace(
-            acp_ws_connect_timeout_s=5.0,
-            acp_prompt_idle_timeout_s=120.0,
-            acp_tool_idle_timeout_s=600.0,
+            cli_ws_connect_timeout_s=5.0,
+            cli_prompt_idle_timeout_s=120.0,
+            cli_tool_idle_timeout_s=600.0,
             # 没接模型管理平台：CLI 的模型照旧按部署配置
             model_platform_url=None,
         )
@@ -367,8 +367,8 @@ async def test_a_turn_has_no_time_limit(env: Any) -> None:
 async def test_open_sends_only_the_idle_thresholds(env: Any) -> None:
     """截止、审批等待、重连窗口都不下发（= 不限）；静默阈值来自 server 配置。"""
     e = await env()
-    e.settings.acp_prompt_idle_timeout_s = 77.0
-    e.settings.acp_tool_idle_timeout_s = 777.0
+    e.settings.cli_prompt_idle_timeout_s = 77.0
+    e.settings.cli_tool_idle_timeout_s = 777.0
     await e.run()
     limits = e.app.host.limits
     assert (limits.idle_s, limits.tool_idle_s) == (77.0, 777.0)

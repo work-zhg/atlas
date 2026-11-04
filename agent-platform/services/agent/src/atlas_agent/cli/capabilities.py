@@ -19,9 +19,9 @@ from ..domain.mcp_naming import MCP_PREFIX
 from ..providers.knowledge import mcp_server_entry, require_client
 from ..providers.llm.model_platform import admit_models, agent_key, litellm_url, uses_model_platform
 from ..providers.mcp import GatewayUnavailable, make_mcp_catalog, mcp_agent_access
-from ..providers.mcp.acp import acp_mcp_servers
+from ..providers.mcp.cli import cli_mcp_servers
 from ..providers.mcp.gateway import servers_in
-from ..providers.pods import AcpModel
+from ..providers.pods import CliModel
 
 if TYPE_CHECKING:
     import redis.asyncio as aioredis
@@ -43,7 +43,7 @@ class CliCapabilities:
     #: 解析时要告诉用户的（比如 MCP 网关不可用，这些服务本会话不下发）
     notices: list[tuple[EventType, dict[str, Any]]] = field(default_factory=list)
     #: 经平台时的模型接入；None = 照旧按部署配置
-    model: AcpModel | None = None
+    model: CliModel | None = None
     #: 一轮的时限：只下发静默检测的两个阈值（唯一的「卡死」判据）。截止、审批等待、
     #: 重连窗口不下发 = 不限：CLI 在干活就不中断，审批只由人决定
     limits: dict[str, float] = field(default_factory=dict)
@@ -61,8 +61,8 @@ class CliCapabilityAssembly:
             notices=notices,
             model=await self._model(segment),
             limits={
-                "idleS": self._settings.acp_prompt_idle_timeout_s,
-                "toolIdleS": self._settings.acp_tool_idle_timeout_s,
+                "idleS": self._settings.cli_prompt_idle_timeout_s,
+                "toolIdleS": self._settings.cli_tool_idle_timeout_s,
             },
         )
 
@@ -86,7 +86,7 @@ class CliCapabilityAssembly:
             ]
         return servers, notices
 
-    async def _model(self, segment: Segment) -> AcpModel | None:
+    async def _model(self, segment: Segment) -> CliModel | None:
         """经模型管理平台时 Pod 里 CLI 的模型接入（模型管理方案设计 8.1）。
 
         没接平台、不是 Claude Code → None（照旧按部署配置）。Key 待分配、停用或模型没分配
@@ -104,7 +104,7 @@ class CliCapabilityAssembly:
         key = await agent_key(self._settings, segment.thread.agent_uuid, spec.name)
         admit_models(key, [spec.model.model])
         assert key.key is not None
-        return AcpModel(
+        return CliModel(
             base_url=litellm_url(self._settings),
             key=key.key,
             model=spec.model.model,
@@ -139,7 +139,7 @@ class CliCapabilityAssembly:
                 )
                 for server in sorted(servers_in(spec.tool_names))
             ]
-        return await acp_mcp_servers(
+        return await cli_mcp_servers(
             spec.tool_names,
             catalog,
             user_id=segment.thread.created_by_uuid,

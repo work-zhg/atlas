@@ -30,8 +30,8 @@ from atlas_agent.providers.mcp import (
     McpUnavailable,
     NativeMcpTools,
 )
-from atlas_agent.providers.mcp.acp import acp_mcp_servers
 from atlas_agent.providers.mcp.catalog import McpToolDef, ServerSnapshot
+from atlas_agent.providers.mcp.cli import cli_mcp_servers
 from atlas_agent.schemas.agent import AgentSpecIn, SkillRefIn, SubAgentSpecIn
 from atlas_agent.services.spec_refs import resolve_spec_refs
 from atlas_agent.skills import (
@@ -262,9 +262,7 @@ async def real_skill_app(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Any]:
 
     await asyncio.to_thread(skill_main.migrate)
     async with skill_sessions()() as session:
-        await session.execute(
-            text("TRUNCATE skill, skill_version, skill_audit")
-        )
+        await session.execute(text("TRUNCATE skill, skill_version, skill_audit"))
         await session.commit()
     try:
         with mock_aws():
@@ -521,7 +519,7 @@ async def test_no_recorded_digest_means_no_drift_check() -> None:
 async def test_acp_gets_gateway_address_and_subject_key() -> None:
     catalog = _FakeCatalog(_cfg(), [_tool("srv", "search")])
     user = uuid.uuid4()
-    servers, notices = await acp_mcp_servers(
+    servers, notices = await cli_mcp_servers(
         ["mcp:srv:search"],
         catalog,
         user_id=user,
@@ -549,7 +547,7 @@ async def test_acp_unreviewed_tools_are_left_to_the_gateway() -> None:
     catalog = _FakeCatalog(
         _cfg(review_required=True), [_tool("srv", "search"), _tool("srv", "other")]
     )
-    servers, notices = await acp_mcp_servers(
+    servers, notices = await cli_mcp_servers(
         ["mcp:srv:search"],
         catalog,
         user_id=uuid.uuid4(),
@@ -565,13 +563,13 @@ async def test_acp_skips_services_without_permission_or_key() -> None:
     catalog = _FakeCatalog(_cfg(), [_tool("srv", "search")])
     kw: dict[str, Any] = dict(user_id=uuid.uuid4(), digests={}, drift_policy="warn")
     no_key = AgentAccess(subject="u", servers={"srv": frozenset({"search"})}, key_status="blocked")
-    servers, notices = await acp_mcp_servers(["mcp:srv:search"], catalog, access=no_key, **kw)
+    servers, notices = await cli_mcp_servers(["mcp:srv:search"], catalog, access=no_key, **kw)
     assert servers == [] and notices[0][1]["reason"] == "no_key"
     forbidden = AgentAccess(subject="u", servers={}, key="k")
-    servers, notices = await acp_mcp_servers(["mcp:srv:search"], catalog, access=forbidden, **kw)
+    servers, notices = await cli_mcp_servers(["mcp:srv:search"], catalog, access=forbidden, **kw)
     assert servers == [] and notices[0][1]["reason"] == "forbidden"
     with pytest.raises(McpUnavailable, match="未在 MCP 网关注册"):
-        await acp_mcp_servers(["mcp:nope:x"], catalog, access=ACCESS, **kw)
+        await cli_mcp_servers(["mcp:nope:x"], catalog, access=ACCESS, **kw)
 
 
 # ═══════════════════════════════════════════════ 保存时记录 MCP 指纹

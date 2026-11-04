@@ -43,7 +43,7 @@ from tests.opensandbox_fake import FakeOpenSandbox, fake_settings, wipe
 
 USER = "u-1"
 CLI = CliSpec(
-    cli_type="claude-code", adapter="node /opt/acp/index.js", image="atlas-acp-bridge:0.4.0"
+    cli_type="claude-code", adapter="node /opt/acp/index.js", image="atlas-cli-bridge:0.4.0"
 )
 PROFILE = GitProfile(
     username="bot",
@@ -75,10 +75,10 @@ async def redis(fake: FakeOpenSandbox, tid: str) -> AsyncIterator[Any]:
 
 def _settings(**over: Any) -> Any:
     base = {
-        "acp_model_base_url": "https://llm.example/anthropic",
-        "acp_model_name": "m-1",
+        "cli_model_base_url": "https://llm.example/anthropic",
+        "cli_model_name": "m-1",
         "git_profiles": {"teamflow-gitee": PROFILE},
-        "acp_ready_timeout_s": 5.0,
+        "cli_ready_timeout_s": 5.0,
     }
     return fake_settings(**(base | over))
 
@@ -151,7 +151,7 @@ def test_spec_prefixes_match_the_old_layout() -> None:
     assert mounts["/state"]["subPath"] == f"{USER}/t-sub/system/cli-home"
     assert spec["metadata"] == {
         "atlas.managed": "true",
-        "atlas.kind": "acp",
+        "atlas.kind": "cli",
         "atlas.thread": "t-sub",
         "atlas.workspace": "t-parent",
         "atlas.user": USER,
@@ -303,7 +303,7 @@ async def test_bridge_that_never_gets_ready_fails_the_run(
 ) -> None:
     fake.bridge_unready = 10_000
     with pytest.raises(LifecycleError, match="没有就绪"):
-        await _pods(fake, redis, acp_ready_timeout_s=1.0).ensure(_thread(tid), CLI)
+        await _pods(fake, redis, cli_ready_timeout_s=1.0).ensure(_thread(tid), CLI)
 
 
 async def test_missing_image_is_reported(fake: FakeOpenSandbox, redis: Any, tid: str) -> None:

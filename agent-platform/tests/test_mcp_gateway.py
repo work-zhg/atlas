@@ -21,7 +21,7 @@ from typing import Any
 
 import pytest
 from atlas_agent.domain.events import EventType
-from atlas_agent.providers.mcp.acp import acp_mcp_servers
+from atlas_agent.providers.mcp.cli import cli_mcp_servers
 from atlas_agent.providers.mcp.gateway import agent_access, gateway_catalog, reset_gateway_cache
 
 # 夹具 gateway_environment / gateway / upstream 在 conftest.py（来自 tests/gateway_env.py）
@@ -224,7 +224,7 @@ async def test_acp_gets_gateway_address_and_agent_key(env: Any) -> None:
     _app, _perms, _c, _key = env
     catalog = await gateway_catalog(GATEWAY, ttl_s=0, redis=None)
     access = await agent_access(GATEWAY, AGENT, name="x", owner=ALICE, ttl_s=0)
-    servers, notices = await acp_mcp_servers(
+    servers, notices = await cli_mcp_servers(
         ["mcp:weather:get_weather", "mcp:ticket:create_ticket"],
         catalog,
         user_id=ALICE,

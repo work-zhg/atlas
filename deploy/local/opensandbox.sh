@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # 本机 K8s（Docker Desktop）上的 OpenSandbox（doc/sandbox-opensandbox-design.html §17）：
 #   S3 CSI 驱动 + 整桶静态 PV / PVC → CRD + 控制器 → 两个 lifecycle server：
-#   opensandbox-sbx（原生沙箱，命名空间 atlas-sbx）、opensandbox-acp（ACP Pod，命名空间 atlas-acp）。
+#   opensandbox-sbx（原生沙箱，命名空间 atlas-sbx）、opensandbox-cli（会话 Pod，命名空间 atlas-cli）。
 #   OPENSANDBOX_BENCH=1 时再装第三个：opensandbox-bench（评测档：root、根可写，也建在 atlas-sbx），
 #   放行的镜像前缀用 OPENSANDBOX_BENCH_IMAGE_PREFIXES（JSON 数组，默认 ["alexgshaw/"] = Terminal-Bench 2）。
 #
 # 前置：
 #   · make up（宿主的 MinIO）；仓库根 .env 里有 OSS_ACCESS_KEY_ID / OSS_ACCESS_KEY_SECRET，
-#     以及 ACP 的模型 key ATLAS_ACP_MODEL_API_KEY（没有就退回旧名 ATLAS_CLUSTER_MODEL_API_KEY）
+#     以及 会话 Pod 的模型 key ATLAS_ACP_MODEL_API_KEY（没有就退回旧名 ATLAS_CLUSTER_MODEL_API_KEY）
 #   · 镜像 atlas-csi-s3:0.43.7（docker/csi-s3/Dockerfile）、atlas-sandbox:dev（docker/sandbox/Dockerfile）、
 #     atlas-egress:release-1.1.1（原生沙箱的 egress sidecar：deploy/local/egress-rules.sh 生成拒绝集群网段的
 #     deny.always，再 docker build -t atlas-egress:release-1.1.1 docker/egress）
@@ -46,7 +46,7 @@ kubectl -n kube-system create secret generic atlas-oss-csi \
 kubectl apply -f deploy/local/05-csi-s3.yaml
 kubectl -n kube-system rollout status ds/csi-s3 --timeout=180s
 kubectl apply -f deploy/local/06-sbx-storage.yaml
-kubectl apply -f deploy/local/07-acp-storage.yaml
+kubectl apply -f deploy/local/07-cli-storage.yaml
 
 # ── 2. CRD + 控制器（全集群一个）────────────────────────────────────
 "$HELM" upgrade --install opensandbox-base "$CHARTS/base"
@@ -63,7 +63,7 @@ api_key() {
   echo "$key"
 }
 
-install_server() {  # $1 = sbx | acp | bench
+install_server() {  # $1 = sbx | cli | bench
   local kind="$1" key="$2" sha
   kubectl -n opensandbox-system create secret generic "opensandbox-${kind}-api-key" \
     --from-literal=api-key="${key}" --dry-run=client -o yaml | kubectl apply -f -
@@ -79,7 +79,7 @@ install_server() {  # $1 = sbx | acp | bench
 }
 
 SBX_KEY="$(api_key sbx)"
-ACP_KEY="$(api_key acp)"
+CLI_KEY="$(api_key cli)"
 # 评测档这次要装、或以前装过（它的 key 在）：Secret 里都要带上 —— 不带的话 apply 会把 key 删掉，
 # 而 server 仍按 ConfigMap 去连评测档，就成了 401
 BENCH_ARGS=()
@@ -88,28 +88,28 @@ if [ "${OPENSANDBOX_BENCH:-0}" = 1 ] \
   BENCH_KEY="$(api_key bench)"
   BENCH_ARGS=(--from-literal=bench_api_key="${BENCH_KEY}")
 fi
-# atlas-server 用同样的 key（30-server.yaml 的 OPENSANDBOX_SBX_API_KEY / OPENSANDBOX_ACP_API_KEY /
+# atlas-server 用同样的 key（30-server.yaml 的 OPENSANDBOX_SBX_API_KEY / OPENSANDBOX_CLI_API_KEY /
 # OPENSANDBOX_BENCH_API_KEY）。★ 不开评测档时 Secret 里就没有 bench_api_key：server 那边是 optional
 # ★ 空数组要写成 ${a[@]+"${a[@]}"}：macOS 自带的 bash 3.2 在 set -u 下展开空数组会报 unbound
 kubectl -n atlas-system create secret generic atlas-opensandbox \
-  --from-literal=sbx_api_key="${SBX_KEY}" --from-literal=acp_api_key="${ACP_KEY}" \
+  --from-literal=sbx_api_key="${SBX_KEY}" --from-literal=cli_api_key="${CLI_KEY}" \
   ${BENCH_ARGS[@]+"${BENCH_ARGS[@]}"} --dry-run=client -o yaml | kubectl apply -f -
-# ACP Pod 的模型 key：ACP 模板把它以文件挂进 Pod（/run/secrets/atlas/model_api_key）
-MODEL_KEY="${ATLAS_ACP_MODEL_API_KEY:-${ATLAS_CLUSTER_MODEL_API_KEY:-}}"
+# 会话 Pod 的模型 key：会话 Pod 模板把它以文件挂进 Pod（/run/secrets/atlas/model_api_key）
+MODEL_KEY="${ATLAS_CLI_MODEL_API_KEY:-${ATLAS_ACP_MODEL_API_KEY:-${ATLAS_CLUSTER_MODEL_API_KEY:-}}}"
 # ★ 已切到模型管理平台（ConfigMap atlas-model-platform 在）：Pod 拿 LiteLLM 地址和智能体的客户端 Key，
 #   不再放供应商 Key（agent-platform/doc/design/model-design.html、deploy/server/model-cutover.sh）
 if kubectl -n atlas-system get configmap atlas-model-platform >/dev/null 2>&1; then
   MODEL_KEY=""
-  echo "· 已经经模型管理平台：ACP Pod 里不放供应商 Key"
+  echo "· 已经经模型管理平台：会话 Pod 里不放供应商 Key"
 elif [ -z "$MODEL_KEY" ]; then
-  echo "⚠ 没有 ACP 模型 key：ACP 会话的 CLI 将无法调用模型"
+  echo "⚠ 没有会话 Pod 的模型 key：CLI 智能体将无法调用模型"
 fi
-kubectl -n atlas-acp create secret generic atlas-acp-model \
+kubectl -n atlas-cli create secret generic atlas-cli-model \
   --from-literal=model_api_key="${MODEL_KEY}" --dry-run=client -o yaml | kubectl apply -f -
 
 install_server sbx "$SBX_KEY"
-install_server acp "$ACP_KEY"
-echo "就绪：集群内 http://opensandbox-sbx.opensandbox-system、http://opensandbox-acp.opensandbox-system"
+install_server cli "$CLI_KEY"
+echo "就绪：集群内 http://opensandbox-sbx.opensandbox-system、http://opensandbox-cli.opensandbox-system"
 
 # ── 4. 评测档（可选）────────────────────────────────────────────────
 # ★ server 从 ConfigMap atlas-sandbox-bench 读地址与镜像前缀（30-server.yaml 里是 optional）。

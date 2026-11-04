@@ -29,7 +29,7 @@ BASE = "http://127.0.0.1:8000"
 SLUG = "native-parent"
 SUB = "cli-hand"
 ADAPTER = "node /opt/acp-cli/bin/claude-acp"
-IMAGE = "atlas-acp-bridge:0.3.0"
+IMAGE = "atlas-cli-bridge:0.3.0"
 
 
 def call(method: str, path: str, body: dict | None = None) -> dict:
@@ -190,7 +190,7 @@ def main() -> None:
         print(f"  thread={tid}\n    子智能体={sub_name}  标题={title}\n    CLI 会话={cli_session}")
 
     print("\n=== 两个会话各自的 Pod ===")
-    subprocess.run(["kubectl", "-n", "atlas-acp", "get", "pods", "--no-headers"], check=False)
+    subprocess.run(["kubectl", "-n", "atlas-cli", "get", "pods", "--no-headers"], check=False)
 
 
 if __name__ == "__main__":

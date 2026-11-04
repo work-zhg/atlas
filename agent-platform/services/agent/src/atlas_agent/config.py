@@ -22,7 +22,7 @@ _REPO_ROOT = _repo_root()
 class GitProfile(BaseModel):
     """一个 git 凭据档案（doc/sandbox-opensandbox-design.html §12）：凭据 + 允许使用它的身份。
 
-    ★ 凭据不进 Pod：ensure 之后经 Credential Vault 交给 ACP Pod 的 egress sidecar，由它在发往
+    ★ 凭据不进 Pod：ensure 之后经 Credential Vault 交给 会话 Pod 的 egress sidecar，由它在发往
       hosts 的 HTTPS 请求上注入 Basic 认证（透明 MITM）。Pod 里没有凭据文件，也没有环境变量。
     ★ 整个 git_profiles 来自 Secret（GIT_PROFILES 环境变量，JSON），不进任何 YAML。
     """
@@ -158,7 +158,7 @@ class Settings(BaseSettings):
     sandbox_cpu_limit: str = "2"
     sandbox_memory_request: str = "512Mi"
     sandbox_memory_limit: str = "4Gi"
-    #: 每用户同时存在的沙箱上限，原生沙箱与 ACP Pod 合计。★ 先数再建：软上限（§13）
+    #: 每用户同时存在的沙箱上限，原生沙箱与 会话 Pod 合计。★ 先数再建：软上限（§13）
     sandbox_quota_per_user: int = 10
     #: 原生沙箱闲置多久回收（没有运行中的命令、最近没有命令和文件操作）
     sandbox_idle_ttl_s: float = 1800.0
@@ -169,7 +169,7 @@ class Settings(BaseSettings):
     sandbox_poll_max_s: float = 2.0
     #: 回给模型的命令输出：头尾各一半
     sandbox_output_limit_bytes: int = 100_000
-    #: 卡死判定：本命令连续 acp_tool_idle_timeout_s 没有新输出，且这段时间容器 CPU 一直低于它
+    #: 卡死判定：本命令连续 cli_tool_idle_timeout_s 没有新输出，且这段时间容器 CPU 一直低于它
     sandbox_stall_cpu_pct: float = 2.0
     #: 路由表在进程内缓存多久（§9）。操作失败时立即作废
     sandbox_route_cache_s: float = 2.0
@@ -185,33 +185,33 @@ class Settings(BaseSettings):
     #:   （校验时还要从 GitHub 装 uv），而部署环境未必直连得了。空 = 不设代理
     sandbox_bench_proxy: SecretStr = SecretStr("")
 
-    # ── ACP Pod：OpenSandbox 的 opensandbox-acp 实例（doc/sandbox-opensandbox-design.html §11）──
-    opensandbox_acp_url: AnyHttpUrl = AnyHttpUrl("http://opensandbox-acp:8080")
-    opensandbox_acp_api_key: SecretStr = SecretStr("")
+    # ── 会话 Pod：OpenSandbox 的 opensandbox-cli 实例（doc/sandbox-opensandbox-design.html §11）──
+    opensandbox_cli_url: AnyHttpUrl = AnyHttpUrl("http://opensandbox-cli:8080")
+    opensandbox_cli_api_key: SecretStr = SecretStr("")
     #: bridge 在 Pod 内监听的端口
-    acp_bridge_port: int = 8900
-    acp_cpu_request: str = "250m"
-    acp_cpu_limit: str = "2"
-    acp_memory_request: str = "512Mi"
-    acp_memory_limit: str = "4Gi"
+    cli_bridge_port: int = 8900
+    cli_cpu_request: str = "250m"
+    cli_cpu_limit: str = "2"
+    cli_memory_request: str = "512Mi"
+    cli_memory_limit: str = "4Gi"
     #: 等 bridge 就绪（/readyz：拉起 agent + initialize 完成）的上限。★ 模板合并会丢掉容器的
     #: readinessProbe，所以由 Atlas 自己等；不等的话第一轮必然连不上 bridge
-    acp_ready_timeout_s: float = 120.0
-    #: 真 CLI 的模型接入（claude-code 认 ANTHROPIC_*）。key 不在这里：在 atlas-acp 命名空间的
-    #: Secret atlas-acp-model 里，由 ACP 模板以文件挂进 Pod，entrypoint 读出后交给 bridge
-    acp_model_base_url: str = ""
-    acp_model_name: str = ""
+    cli_ready_timeout_s: float = 120.0
+    #: 真 CLI 的模型接入（claude-code 认 ANTHROPIC_*）。key 不在这里：在 atlas-cli 命名空间的
+    #: Secret atlas-cli-model 里，由 会话 Pod 模板以文件挂进 Pod，entrypoint 读出后交给 bridge
+    cli_model_base_url: str = ""
+    cli_model_name: str = ""
     #: git 凭据档案：名字 → GitProfile（JSON，来自 Secret）
     git_profiles: dict[str, GitProfile] = {}
 
     # ── acp 执行环境（acp 详设 §11）────────────────────────────────
     #: 握手超时。Pod 刚被调度时会慢（镜像拉取），比普通 HTTP 宽松。
-    acp_ws_connect_timeout_s: float = 10.0
+    cli_ws_connect_timeout_s: float = 10.0
     #: 两条 update 之间的最大静默（在等模型）—— CLI 卡死的唯一探测器。
     #: ★ 一轮本身没有时间上限：CLI 在干活就不中断。open 时下发为 bridge 的 idleS。
-    acp_prompt_idle_timeout_s: float = 120.0
+    cli_prompt_idle_timeout_s: float = 120.0
     #: 有工具在执行时的最大静默（长命令可以很久没有输出）。下发为 bridge 的 toolIdleS。
-    acp_tool_idle_timeout_s: float = 600.0
+    cli_tool_idle_timeout_s: float = 600.0
 
     # ── SubAgent（detail/subagent.html §06）──────────────────────────
     # 准入控制**与普通 run 分开计**，且必须是全局的：acp SubAgent 各吃一个

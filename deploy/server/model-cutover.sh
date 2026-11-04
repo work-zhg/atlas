@@ -24,7 +24,7 @@
 #      滚动重启 atlas-server 与知识库：都从此经平台
 #   4. Atlas 里配平台服务模型（service-model set）
 #   5. 存量智能体补建客户端 Key，按 AGENT_MODELS 分配
-#   6. ACP Pod 里不放供应商 Key（Secret atlas-acp-model 清空）：Pod 拿 LiteLLM 地址和智能体的 Key
+#   6. 会话 Pod 里不放供应商 Key（Secret atlas-cli-model 清空）：Pod 拿 LiteLLM 地址和智能体的 Key
 #
 # ★ 回退：kubectl -n atlas-system delete configmap atlas-model-platform，再滚动重启 atlas-server；
 #   ACP 的供应商 Key 要重跑 deploy/local/opensandbox.sh 恢复。
@@ -100,8 +100,8 @@ if [ -n "$AGENT_MODELS" ]; then
   done <<< "$AGENTS"
 fi
 
-echo "── 6. 撤掉 ACP Pod 里的供应商 Key"
-kubectl -n atlas-acp create secret generic atlas-acp-model \
+echo "── 6. 撤掉 会话 Pod 里的供应商 Key"
+kubectl -n atlas-cli create secret generic atlas-cli-model \
   --from-literal=model_api_key= --dry-run=client -o yaml | kubectl apply -f -
 
 echo "✓ 完成。新建的智能体要在模型管理端给它的客户端 Key 分配模型之后才能运行。"

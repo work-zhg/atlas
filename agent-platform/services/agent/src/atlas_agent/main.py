@@ -70,7 +70,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # ★ 遥测要在任何 span 产生之前装好。装不上不拦着进程起（它是旁路），
     #   但会把失败喊出来 —— 否则就成了「以为在采集其实没有」。
     setup_telemetry(settings)
-    # acp 的执行环境：OpenSandbox 的 opensandbox-acp 建 Pod
+    # acp 的执行环境：OpenSandbox 的 opensandbox-cli 建 Pod
     # （doc/sandbox-opensandbox-design.html §11）。
     # server 自己仍不碰 K8s。★ 进程级的 Redis 客户端：ensure 的锁与令牌在 Redis
     pods_redis = make_redis(settings)

@@ -2,7 +2,7 @@
 # 把用户中心、server、技能应用、knowledge、memory、MCP 网关、模型网关与 TeamFlow 后端部署到本机 K8s（Docker Desktop）。
 #
 # 前置：make up（宿主的 PG / Redis / MinIO）、镜像已构建：
-#   docker build -f docker/bridge/Dockerfile -t atlas-acp-bridge:0.4.0 .   # ACP 会话的 CLI 镜像
+#   docker build -f docker/bridge/Dockerfile -t atlas-cli-bridge:0.4.0 .   # CLI 会话的 CLI 镜像
 #   docker/app/requirements.sh                                             # 按 uv.lock 导出第三方依赖
 #   docker build -f docker/app/Dockerfile    -t atlas-app:dev .
 # 会话 Pod（原生沙箱、ACP）由 OpenSandbox 创建：先跑 deploy/local/opensandbox.sh。
@@ -28,7 +28,7 @@ kubectl -n atlas-system create secret generic atlas-server-creds \
   --from-literal=oss_access_key_secret="${OSS_ACCESS_KEY_SECRET}" \
   --from-literal=litellm_base_url="${LITELLM_BASE_URL}" \
   --from-literal=litellm_key="${LITELLM_KEY}" \
-  --from-literal=acp_model_base_url="${ATLAS_ACP_MODEL_BASE_URL:-${ATLAS_CLUSTER_MODEL_BASE_URL:-}}" \
+  --from-literal=cli_model_base_url="${ATLAS_CLI_MODEL_BASE_URL:-${ATLAS_ACP_MODEL_BASE_URL:-${ATLAS_CLUSTER_MODEL_BASE_URL:-}}}" \
   --dry-run=client -o yaml | kubectl apply -f -
 
 # 知识库 MCP 令牌的签名密钥（atlas-server 签、知识库验）：给会话 Pod 的能力凭据（§5.3）。
@@ -74,7 +74,7 @@ kubectl -n atlas-system create secret generic atlas-teamflow-creds \
   --from-literal=gitee_token="${ATLAS_TF_GITEE_TOKEN:-}" \
   --dry-run=client -o yaml | kubectl apply -f -
 
-# TeamFlow 的 git 凭据档案（ACP Pod 里 git push 产物，经 Credential Vault）：.env 没有 Gitee 令牌就跳过
+# TeamFlow 的 git 凭据档案（会话 Pod 里 git push 产物，经 Credential Vault）：.env 没有 Gitee 令牌就跳过
 if [ -n "${ATLAS_GIT_TEAMFLOW_TOKEN:-${ATLAS_TF_GITEE_TOKEN:-}}" ]; then
   deploy/local/git-profile.sh
 fi

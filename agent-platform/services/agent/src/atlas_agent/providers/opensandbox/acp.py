@@ -3,7 +3,7 @@
 doc/sandbox-opensandbox-design.html §11、§12。
 
     OpenSandboxPods   CliRuntime 用的 PodProvider：ensure(thread, cli) → ws://PodIP:8900 + 令牌
-    AcpProvisioner    opensandbox-acp 上的供给：按会话复用、git 档案授权、Credential Vault、
+    AcpProvisioner    opensandbox-cli 上的供给：按会话复用、git 档案授权、Credential Vault、
                       等 bridge 就绪
 
 ★ entrypoint 是一小段 sh：把 env 里的令牌写成 bridge 认的令牌文件、把挂进来的模型 key 读成 CLI 认的
@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 from ...domain.workspace_layout import SKILLS_MOUNT, WORKSPACE_MOUNT, Area, WorkspaceLayout
-from ..pods import AcpModel, PodEndpoint
+from ..pods import CliModel, PodEndpoint
 from .lifecycle import LifecycleError
 from .provision import Provisioner, SandboxEndpoint, pvc_volume
 
@@ -51,7 +51,7 @@ EGRESS_PORT = 18080
 STATE_MOUNT = "/state"
 #: bridge 读令牌的文件（entrypoint 从 env 写出来；/tmp 是模板里的 emptyDir）
 TOKEN_FILE = "/tmp/.atlas-bridge-token"
-#: ACP 模板把 Secret atlas-acp-model 挂在这里（deploy/local/opensandbox/acp-template.yaml）
+#: ACP 模板把 Secret atlas-cli-model 挂在这里（deploy/local/opensandbox/cli-template.yaml）
 MODEL_KEY_FILE = "/run/secrets/atlas/model_api_key"
 #: execd 的 bootstrap 把系统根证书与 MITM CA 合并成这份（P0-3 实测路径）
 MERGED_CA = "/opt/opensandbox/merged-ca-certificates.pem"
@@ -117,7 +117,7 @@ def acp_spec(
     execd_token: str,
     cli: CliSpec,
     profile: GitProfile | None,
-    model: AcpModel | None = None,
+    model: CliModel | None = None,
 ) -> dict[str, Any]:
     """ACP Pod 的创建请求（设计 §11.1）。三个前缀与 cluster 时代完全一致，存量数据不用迁移。
 
@@ -127,7 +127,7 @@ def acp_spec(
     if execd_token == token:
         raise ValueError("execd 令牌不能与 bridge 令牌相同")
     layout = WorkspaceLayout.of(user, thread, workspace_thread)
-    claude = cli.cli_type == "claude-code" and bool(settings.acp_model_base_url) and model is None
+    claude = cli.cli_type == "claude-code" and bool(settings.cli_model_base_url) and model is None
     agent_env: dict[str, str] = {}
     secret_env: dict[str, str] = {}
     allow = list(_AGENT_ENV_BASE)
@@ -150,11 +150,11 @@ def acp_spec(
         allow.append("ANTHROPIC_AUTH_TOKEN")  # entrypoint 从 ATLAS_MODEL_KEY 转过来
     if claude:
         # ★ base_url 指向任何 Anthropic 兼容端点即可（DeepSeek 的 /anthropic 能驱动真 Claude Code）
-        agent_env["ANTHROPIC_BASE_URL"] = settings.acp_model_base_url
-        if settings.acp_model_name:
-            agent_env["ANTHROPIC_MODEL"] = settings.acp_model_name
+        agent_env["ANTHROPIC_BASE_URL"] = settings.cli_model_base_url
+        if settings.cli_model_name:
+            agent_env["ANTHROPIC_MODEL"] = settings.cli_model_name
             # 小模型也指过去：不指的话 CLI 会去找端点上不存在的 haiku（生成标题等旁路上失败）
-            agent_env["ANTHROPIC_SMALL_FAST_MODEL"] = settings.acp_model_name
+            agent_env["ANTHROPIC_SMALL_FAST_MODEL"] = settings.cli_model_name
         allow.append("ANTHROPIC_AUTH_TOKEN")  # entrypoint 从文件读出来
     if profile is not None:
         agent_env.update(_git_env(profile))
@@ -165,10 +165,10 @@ def acp_spec(
         "image": {"uri": cli.image},
         "entrypoint": _entrypoint(model_key=claude, gateway_key=model is not None),
         "timeout": None,
-        "resourceLimits": {"cpu": settings.acp_cpu_limit, "memory": settings.acp_memory_limit},
+        "resourceLimits": {"cpu": settings.cli_cpu_limit, "memory": settings.cli_memory_limit},
         "resourceRequests": {
-            "cpu": settings.acp_cpu_request,
-            "memory": settings.acp_memory_request,
+            "cpu": settings.cli_cpu_request,
+            "memory": settings.cli_memory_request,
         },
         "env": {
             "EXECD_ACCESS_TOKEN": execd_token,
@@ -177,7 +177,7 @@ def acp_spec(
             "ATLAS_BRIDGE_TOKEN_FILE": TOKEN_FILE,
             # 会话绑定：握手头 X-Session-Id 必须等于它，token 对也不行（Bridge 设计 §4.3）
             "ATLAS_BRIDGE_SESSION_ID": thread,
-            "ATLAS_BRIDGE_LISTEN_PORT": str(settings.acp_bridge_port),
+            "ATLAS_BRIDGE_LISTEN_PORT": str(settings.cli_bridge_port),
             "ATLAS_BRIDGE_AGENT_CMD": cli.adapter,
             "ATLAS_BRIDGE_WORKSPACE": WORKSPACE_MOUNT,
             # agent 只拿到白名单里的变量（§8.3）
@@ -188,7 +188,7 @@ def acp_spec(
         },
         "metadata": {
             "atlas.managed": "true",
-            "atlas.kind": "acp",
+            "atlas.kind": "cli",
             "atlas.thread": thread,
             "atlas.workspace": workspace_thread,
             "atlas.user": user,
@@ -212,14 +212,14 @@ def acp_spec(
 
 
 class AcpProvisioner(Provisioner):
-    kind = "acp"
+    kind = "cli"
 
     @property
     def port(self) -> int:  # type: ignore[override]
-        return self._settings.acp_bridge_port
+        return self._settings.cli_bridge_port
 
     async def ensure(
-        self, thread: Thread, cli: CliSpec, *, model: AcpModel | None = None
+        self, thread: Thread, cli: CliSpec, *, model: CliModel | None = None
     ) -> SandboxEndpoint:
         if not cli.image:
             raise LifecycleError("acp agent 的 cli.image 为空，无法创建 Pod")
@@ -292,7 +292,7 @@ class AcpProvisioner(Provisioner):
                 }
             ],
         }
-        deadline = time.monotonic() + self._settings.acp_ready_timeout_s
+        deadline = time.monotonic() + self._settings.cli_ready_timeout_s
         async with httpx.AsyncClient(
             timeout=10.0, transport=self._transport, trust_env=False, headers=headers
         ) as client:
@@ -321,7 +321,7 @@ class AcpProvisioner(Provisioner):
 
         ★ 每 5 秒问一次沙箱状态：bridge 起不来时容器退出、沙箱变 Failed，没必要等满超时。
         """
-        deadline = time.monotonic() + self._settings.acp_ready_timeout_s
+        deadline = time.monotonic() + self._settings.cli_ready_timeout_s
         next_check = time.monotonic() + 5
         async with httpx.AsyncClient(
             timeout=5.0, transport=self._transport, trust_env=False
@@ -357,7 +357,7 @@ class OpenSandboxPods:
         self._p = AcpProvisioner(settings, redis, transport=transport)
 
     async def ensure(
-        self, thread: Thread, cli: CliSpec, *, model: AcpModel | None = None
+        self, thread: Thread, cli: CliSpec, *, model: CliModel | None = None
     ) -> PodEndpoint:
         ep = await self._p.ensure(thread, cli, model=model)
         return PodEndpoint(url="ws://" + ep.url.removeprefix("http://"), token=ep.token)

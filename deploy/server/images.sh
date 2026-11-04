@@ -37,7 +37,7 @@ spec() {
   case "$1" in
     app)       echo "atlas-app:amd64|atlas-app:${TAG}|docker/app/Dockerfile|." ;;
     frontends) echo "atlas-frontends:amd64|atlas-frontends:${TAG}|docker/frontends/Dockerfile|." ;;
-    bridge)    echo "atlas-acp-bridge:0.4.0-amd64|atlas-acp-bridge:0.4.0|docker/bridge/Dockerfile|." ;;
+    bridge)    echo "atlas-cli-bridge:0.4.0-amd64|atlas-cli-bridge:0.4.0|docker/bridge/Dockerfile|." ;;
     sandbox)   echo "atlas-sandbox:dev-amd64|atlas-sandbox:dev|docker/sandbox/Dockerfile|docker/sandbox" ;;
     csi)       echo "atlas-csi-s3:0.43.7-amd64|atlas-csi-s3:0.43.7|docker/csi-s3/Dockerfile|docker/csi-s3" ;;
     # deny.always 先用 deploy/local/egress-rules.sh 按服务器集群生成（kubectl 上下文指向服务器）
@@ -71,7 +71,7 @@ THIRD_DIGEST=(
 )
 
 # 标签固定的自建镜像（版本变了要改清单）：check 时与第三方镜像一起检查
-FIXED=(atlas-acp-bridge:0.4.0 atlas-sandbox:dev atlas-csi-s3:0.43.7 atlas-egress:release-1.1.1)
+FIXED=(atlas-cli-bridge:0.4.0 atlas-sandbox:dev atlas-csi-s3:0.43.7 atlas-egress:release-1.1.1)
 
 if [ "${1:-}" = "check" ]; then
   have="$(ssh "$TARGET" "ctr -n k8s.io images ls -q")"

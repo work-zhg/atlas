@@ -89,6 +89,6 @@ dev:
 #   而 BuildKit 的独立二进制自带 runc，装了就能用。导出 OCI 归档之后
 #   直接进 k3s 的 containerd —— 镜像是本地构建的，registry 上没有，
 #   所以 Pod 那边必须靠 import 而不是 pull。
-BRIDGE_IMAGE ?= atlas-acp-bridge:0.4.0
+BRIDGE_IMAGE ?= atlas-cli-bridge:0.4.0
 bridge-image:
 	./scripts/build_bridge_image.sh $(BRIDGE_IMAGE)

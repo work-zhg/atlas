@@ -190,7 +190,7 @@ class CliRuntime:
             self._sessions,
             on_note=on_note,
             on_request=on_request,
-            connect_timeout_s=self._settings.acp_ws_connect_timeout_s,
+            connect_timeout_s=self._settings.cli_ws_connect_timeout_s,
         )
         try:
             async for event in self._drive(link, queue, segment, caps, events, relay, run_id):

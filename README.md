@@ -100,7 +100,7 @@ import 就红；`server` 的纯计算层同样有 contract 拦着，「run 一�
 
 ### 隔离执行 · 会话 Pod
 
-ACP 会话对应 `atlas-acp` 命名空间里的一个 Pod，原生智能体的 Shell 沙箱在 `atlas-sbx`。
+CLI 会话对应 `atlas-cli` 命名空间里的一个 Pod，原生智能体的 Shell 沙箱在 `atlas-sbx`。
 两种 Pod 都由开源的 [OpenSandbox](https://github.com/opensandbox-group/OpenSandbox) 创建
 （`agent-platform/doc/sandbox-opensandbox-design.html`）：复用、配额、git 档案授权、回收这些按会话的判断在
 `server`，**Atlas 的服务都不持有 K8s 权限**。
@@ -160,7 +160,7 @@ flowchart LR
 
   osb["K8s · opensandbox-system<br/>lifecycle server ×2 + 控制器"]
 
-  subgraph sess["K8s · atlas-acp（每会话一个）"]
+  subgraph sess["K8s · atlas-cli（每会话一个）"]
     bridge["bridge<br/>WS 服务端"]
     cli["CLI adapter<br/>+ 真 CLI（黑盒）"]
   end

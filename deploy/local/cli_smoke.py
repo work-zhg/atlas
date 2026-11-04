@@ -1,13 +1,13 @@
-"""acp 全链路冒烟：建 agent → 建会话 → 跑一轮 → 读事件流。
+"""CLI 全链路冒烟：建 agent → 建会话 → 跑一轮 → 读事件流。
 
-    POST /v1/agents (kind=acp) → POST /v1/threads → POST /threads/{id}/runs
+    POST /v1/agents (kind=cli) → POST /v1/threads → POST /threads/{id}/runs
       → server 向 OpenSandbox ensure Pod → Pod 起来（CSI 挂 MinIO + 真 CLI）
       → server 连 ws://<podIP>:8900/host（上游协议）→ turn.start → agent.update 流
       → TraceEvent → GET /v1/threads/{id}/events (SSE)
 
 用法：
-    python deploy/local/acp_smoke.py "帮我在工作区写一个 hello.md"
-    python deploy/local/acp_smoke.py --thread <id> "刚才那个文件叫什么？"   # 第二轮 resume
+    python deploy/local/cli_smoke.py "帮我在工作区写一个 hello.md"
+    python deploy/local/cli_smoke.py --thread <id> "刚才那个文件叫什么？"   # 第二轮 resume
 """
 
 from __future__ import annotations
@@ -21,11 +21,11 @@ import urllib.error
 import urllib.request
 
 BASE = "http://127.0.0.1:8000"
-SLUG = "acp-smoke"
+SLUG = "cli-smoke"
 # ★ 必须显式给：模板把 cli.adapter 原样写进 ATLAS_BRIDGE_AGENT_CMD，空字符串会
 #   覆盖掉镜像里的默认值，bridge 启动时的配置校验随即失败退出（agent_cmd 不能为空）。
 ADAPTER = "node /opt/acp-cli/bin/claude-acp"
-IMAGE = "atlas-acp-bridge:0.3.0"
+IMAGE = "atlas-cli-bridge:0.3.0"
 
 
 def call(method: str, path: str, body: dict | None = None) -> dict:
@@ -53,7 +53,7 @@ def ensure_agent() -> str:
         "/v1/agents",
         {
             "slug": SLUG,
-            "name": "ACP 冒烟",
+            "name": "CLI 冒烟",
             "spec": {
                 "kind": "cli",
                 "system_prompt": "你是跑在会话 Pod 里的助手。工作区是当前目录。",
@@ -132,7 +132,7 @@ def main() -> None:
     print(f"agent = {agent_id}")
 
     thread_id = args.thread or call(
-        "POST", "/v1/threads", {"agent_id": agent_id, "title": "acp 冒烟"}
+        "POST", "/v1/threads", {"agent_id": agent_id, "title": "CLI 冒烟"}
     )["id"]
     print(f"thread = {thread_id}")
 
@@ -152,7 +152,7 @@ def main() -> None:
     finally:
         stop.set()
     print(f"\n总耗时 {time.time() - t0:.1f}s")
-    print(f"下一轮复用会话： python deploy/local/acp_smoke.py --thread {thread_id} '…'")
+    print(f"下一轮复用会话： python deploy/local/cli_smoke.py --thread {thread_id} '…'")
 
 
 if __name__ == "__main__":

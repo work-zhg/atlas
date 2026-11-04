@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 建 git 凭据档案 teamflow-gitee：TeamFlow 节点会话的 ACP Pod 里，Agent 用它 git push 产物。
+# 建 git 凭据档案 teamflow-gitee：TeamFlow 节点会话的 会话 Pod 里，Agent 用它 git push 产物。
 #
 # 档案是 atlas-server 的 GIT_PROFILES（JSON），放在 Secret atlas-git-profiles 里（30-server.yaml 引用）。
 # atlas-server 只给 source_app = teamflow 的会话用它：ensure 之后把凭据写进 Pod 的 Credential Vault，

@@ -165,10 +165,10 @@ class SandboxRoutes:
 def lifecycle_clients(
     settings: Settings, *, transport: httpx.AsyncBaseTransport | None = None
 ) -> dict[str, LifecycleClient]:
-    """lifecycle server 实例（§7）：sbx、acp，部署了评测档时还有 bench。名字 → 客户端。"""
+    """lifecycle server 实例（§7）：sbx、cli，部署了评测档时还有 bench。名字 → 客户端。"""
     pairs = {
         "sbx": (settings.opensandbox_sbx_url, settings.opensandbox_sbx_api_key),
-        "acp": (settings.opensandbox_acp_url, settings.opensandbox_acp_api_key),
+        "cli": (settings.opensandbox_cli_url, settings.opensandbox_cli_api_key),
     }
     if settings.opensandbox_bench_url is not None:
         pairs[BENCH] = (settings.opensandbox_bench_url, settings.opensandbox_bench_api_key)

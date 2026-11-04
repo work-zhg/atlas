@@ -133,7 +133,7 @@ class ToolSurface:
                 poll_min_s=settings.sandbox_poll_min_s,
                 poll_max_s=settings.sandbox_poll_max_s,
                 output_limit=settings.sandbox_output_limit_bytes,
-                idle_s=settings.acp_tool_idle_timeout_s,
+                idle_s=settings.cli_tool_idle_timeout_s,
                 stall_cpu_pct=settings.sandbox_stall_cpu_pct,
             )
 

@@ -23,10 +23,10 @@ from ...domain.mcp_naming import parse_tool_id
 from .catalog import McpCatalog, McpUnavailable
 from .gateway import AgentAccess
 
-__all__ = ["acp_mcp_servers"]
+__all__ = ["cli_mcp_servers"]
 
 
-async def acp_mcp_servers(
+async def cli_mcp_servers(
     tool_names: tuple[str, ...] | list[str],
     catalog: McpCatalog,
     *,

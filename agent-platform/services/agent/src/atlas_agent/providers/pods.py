@@ -1,7 +1,7 @@
 """Pod 供给的接缝：CliRuntime 通过它拿到会话 Pod 里 bridge 的地址与凭据。
 
 生产实现是 providers/opensandbox/acp.py 的 OpenSandboxPods
-（经 OpenSandbox 的 opensandbox-acp 建 Pod）；
+（经 OpenSandbox 的 opensandbox-cli 建 Pod）；
 测试用假实现直接指向一个本地起的 bridge，端到端链路因此不依赖 K8s。
 """
 
@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from ..db.models import Thread
     from ..domain.spec import CliSpec
 
-__all__ = ["AcpModel", "PodEndpoint", "PodProvider"]
+__all__ = ["CliModel", "PodEndpoint", "PodProvider"]
 
 
 class PodEndpoint(NamedTuple):
@@ -27,7 +27,7 @@ class PodEndpoint(NamedTuple):
     token: str
 
 
-class AcpModel(NamedTuple):
+class CliModel(NamedTuple):
     """经模型网关时交给 Pod 里 CLI 的模型接入（doc/model-design.html §8.1）。
 
     ★ 只有网关地址、这一轮权限主体的 Key 和模型名：供应商 Key 不进 Pod。
@@ -45,7 +45,7 @@ class AcpModel(NamedTuple):
 @runtime_checkable
 class PodProvider(Protocol):
     async def ensure(
-        self, thread: Thread, cli: CliSpec, *, model: AcpModel | None = None
+        self, thread: Thread, cli: CliSpec, *, model: CliModel | None = None
     ) -> PodEndpoint:
         """确保该会话的 Pod 在跑，返回连接信息。
 

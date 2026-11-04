@@ -1,6 +1,6 @@
 # Atlas 的命名空间。
 #
-# ★ 服务与会话 Pod 分开：会话 Pod（原生沙箱、ACP）由 OpenSandbox 在 atlas-sbx / atlas-acp 里建，
+# ★ 服务与会话 Pod 分开：会话 Pod（原生沙箱、ACP）由 OpenSandbox 在 atlas-sbx / atlas-cli 里建，
 #   Atlas 的服务都不持有 K8s 权限（doc/sandbox-opensandbox-design.html §13）。
 #   opensandbox-system 由 OpenSandbox 的 base chart 自己建（opensandbox.sh）。
 apiVersion: v1
@@ -14,8 +14,8 @@ kind: Namespace
 metadata:
   name: atlas-sbx
 ---
-# ACP 智能体的 CLI Pod（doc/sandbox-opensandbox-design.html §7、§11）：opensandbox-acp 在这里建
+# CLI 智能体的 CLI Pod（doc/sandbox-opensandbox-design.html §7、§11）：opensandbox-cli 在这里建
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: atlas-acp
+  name: atlas-cli

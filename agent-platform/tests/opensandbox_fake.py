@@ -403,8 +403,8 @@ def fake_settings(**overrides: Any) -> Settings:
         "opensandbox_sbx_url": LIFECYCLE_URL,
         "opensandbox_sbx_api_key": SecretStr("test-key"),
         # 两个实例指向同一个假 server：配额按 base_url 去重，只数一次
-        "opensandbox_acp_url": LIFECYCLE_URL,
-        "opensandbox_acp_api_key": SecretStr("test-key"),
+        "opensandbox_cli_url": LIFECYCLE_URL,
+        "opensandbox_cli_api_key": SecretStr("test-key"),
         "opensandbox_timeout_s": 5.0,
         "sandbox_route_cache_s": 0.0,
     }
@@ -412,10 +412,10 @@ def fake_settings(**overrides: Any) -> Settings:
 
 
 async def wipe(redis: aioredis.Redis, *needles: str) -> None:
-    """删掉本用例留下的 atlas:sbx:* / atlas:acp:* 键（会话 id、沙箱 id 前缀都可以当 needle）。"""
+    """删掉本用例留下的 atlas:sbx:* / atlas:cli:* 键（会话 id、沙箱 id 前缀都可以当 needle）。"""
     keys = [
         k
-        for pattern in ("atlas:sbx:*", "atlas:acp:*")
+        for pattern in ("atlas:sbx:*", "atlas:cli:*")
         async for k in redis.scan_iter(match=pattern)
         if any(n in k for n in needles)
     ]

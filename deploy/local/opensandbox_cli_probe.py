@@ -1,4 +1,4 @@
-"""ACP Pod 对真 OpenSandbox 的实测（doc/sandbox-opensandbox-design.html §20.1 的 P0-3、P0-6）。
+"""会话 Pod 对真 OpenSandbox 的实测（doc/sandbox-opensandbox-design.html §20.1 的 P0-3、P0-6）。
 
 用 OpenSandboxPods / AcpProvisioner 在集群内跑（Pod IP 只在集群网络里可达），真 CLI 镜像；
 由 opensandbox_probe.sh acp 起一个一次性 Pod 执行。
@@ -146,7 +146,7 @@ async def main():
     async with httpx.AsyncClient(timeout=30) as c:
         await c.delete(
             f"{prov.lifecycle.base_url}/v1/sandboxes/{sid}",
-            headers={"OPEN-SANDBOX-API-KEY": settings.opensandbox_acp_api_key.get_secret_value()},
+            headers={"OPEN-SANDBOX-API-KEY": settings.opensandbox_cli_api_key.get_secret_value()},
         )
     t2 = time.monotonic()
     ep2 = await pods.ensure(thread, cli)
