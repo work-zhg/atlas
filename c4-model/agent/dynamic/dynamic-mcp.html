@@ -1,0 +1,1154 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dynamic View</title>
+<style>
+  body { margin: 0; background: #fff; color: #444; font-family: "Open Sans", "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
+  main { padding: 24px 32px 48px; }
+  svg { display: block; max-width: 100%; height: auto; }
+  h2 { margin: 40px 0 12px; font-size: 15px; font-weight: 600; color: #666; }
+  #c4-report { margin: 0 0 24px; padding: 12px 16px 12px 36px; border: 1px solid #e0b4b4; background: #fff6f6; font-size: 14px; line-height: 1.6; }
+  #c4-report li[data-level="error"] { color: #b00020; }
+  #c4-report li[data-level="warn"] { color: #8a5a00; }
+  #c4-details { max-width: 1280px; }
+  #c4-details article { margin: 0 0 28px; scroll-margin-top: 16px; }
+  #c4-details article:target h3 { background: #fff8d6; }
+  #c4-details h3 { margin: 0 0 8px; padding: 2px 4px; font-size: 15px; font-weight: 600; color: #333; }
+  #c4-details h3 .tech { margin-left: 8px; font-size: 13px; font-weight: 400; color: #888; }
+  #c4-details p { margin: 0 0 8px; font-size: 14px; line-height: 1.7; }
+  #c4-details table { width: 100%; margin: 0 0 8px; border-collapse: collapse; table-layout: fixed; font-size: 13px; line-height: 1.6; }
+  #c4-details th, #c4-details td { padding: 6px 10px; border: 1px solid #e3e3e3; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+  #c4-details th { background: #f6f8fa; font-weight: 600; }
+  #c4-details th:nth-child(1) { width: 14%; }
+  #c4-details th:nth-child(2) { width: 46%; }
+  #c4-details td.sample, #c4-details pre { font-family: Menlo, Consolas, "PingFang SC", monospace; }
+  #c4-details td.sample { word-break: break-all; }
+  #c4-details pre { margin: 0; padding: 10px 12px; border: 1px solid #e3e3e3; background: #f6f8fa; font-size: 12px; line-height: 1.5; overflow-x: auto; }
+  svg a { cursor: pointer; }
+  /* MCP 原理：手写的静态图，不经渲染器 */
+  #principle { max-width: 1280px; }
+  #principle h3 { margin: 32px 0 8px; font-size: 15px; font-weight: 600; color: #333; }
+  #principle p { margin: 0 0 8px; font-size: 14px; line-height: 1.7; }
+  #principle code { padding: 0 3px; background: #f6f8fa; font-family: Menlo, Consolas, monospace; font-size: 12.5px; }
+  #principle ol { margin: 8px 0 0; padding: 0; list-style: none; }
+  #principle ol li { position: relative; margin: 0 0 6px; padding-left: 30px; font-size: 14px; line-height: 1.7; }
+  #principle ol li .n { position: absolute; left: 0; top: 2px; width: 20px; height: 20px; border-radius: 50%; background: #d9480f; color: #fff; font-size: 12px; font-weight: 700; line-height: 20px; text-align: center; }
+  #principle table { width: 100%; margin: 8px 0 0; border-collapse: collapse; font-size: 13px; line-height: 1.6; }
+  #principle th, #principle td { padding: 6px 10px; border: 1px solid #e3e3e3; text-align: left; vertical-align: top; }
+  #principle th { background: #f6f8fa; font-weight: 600; }
+  #principle th:first-child { width: 28%; }
+  #principle svg { margin: 8px 0 4px; }
+  #principle svg text { font-size: 13px; fill: #444; }
+  #principle svg .t-name { font-size: 15px; fill: #1168bd; text-anchor: middle; }
+  #principle svg .t-sub { font-size: 12px; fill: #888; text-anchor: middle; }
+  #principle svg .t-head { font-size: 14px; font-weight: 600; fill: #1168bd; }
+  #principle svg .t-key { font-size: 12px; fill: #888; }
+  #principle svg .t-lab { font-size: 12px; fill: #666; }
+  #principle svg .t-hot { font-size: 12px; fill: #d9480f; }
+  #principle svg .t-mute { font-size: 12px; fill: #aaa; }
+  #principle svg .t-ghost { font-size: 14px; font-weight: 600; fill: #888; }
+  #principle svg .hot { fill: #d9480f; }
+  #principle svg .mid { text-anchor: middle; }
+  #principle svg .end { text-anchor: end; }
+  #principle svg .b { font-weight: 700; }
+  #principle svg .node { fill: #fff; stroke: #1168bd; stroke-width: 1.6; }
+  #principle svg .head { fill: #f6f8fa; stroke: none; }
+  #principle svg .sep { stroke: #e3e3e3; stroke-width: 1; }
+  #principle svg .bnd { fill: none; stroke: #1168bd; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .ghost { fill: #fafafa; stroke: #aaa; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .gap { fill: #fff6f0; stroke: #d9480f; stroke-width: 1.2; stroke-dasharray: 5 4; }
+  #principle svg .e { fill: none; stroke: #444; stroke-width: 1.6; }
+  #principle svg .e-hot { fill: none; stroke: #d9480f; stroke-width: 2.4; }
+  #principle svg .e-mute { fill: none; stroke: #bbb; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .e-link { fill: none; stroke: #d9480f; stroke-width: 1.4; stroke-dasharray: 4 3; }
+  #principle svg .badge circle { fill: #d9480f; stroke: #fff; stroke-width: 2; }
+  #principle svg .badge text { fill: #fff; font-size: 12px; font-weight: 700; text-anchor: middle; }
+</style>
+</head>
+<body>
+<!--
+  只改下面这段 JSON；渲染器不用动。字段说明见 dynamic/RULES.md 的「数据格式」。
+-->
+<script type="application/json" id="c4-model">
+{
+  "title": "动态图：Agent 平台 - 原生智能体调用 MCP 工具",
+  "description": "按现在的代码画（MCP 的部分归工具接入组件）。智能体勾了 mcp:serpapi:google_search，模型在一段里调用两次：装配时只读缓存、不连 MCP 服务；第一次调用时建会话，第二次复用；段结束关会话。提交、领取同 dynamic-run.html；网关内部见 mcpgateway/dynamic/dynamic-call-tool.html",
+  "boundaries": [
+    {
+      "id": "platform",
+      "name": "Agent 平台",
+      "type": "Software System"
+    },
+    {
+      "id": "server",
+      "name": "Agent 服务",
+      "type": "Container: Python / FastAPI",
+      "in": "platform"
+    }
+  ],
+  "participants": [
+    {
+      "id": "executor",
+      "kind": "component",
+      "technology": "asyncio 后台任务",
+      "in": "server",
+      "name": "Run 执行器"
+    },
+    {
+      "id": "native",
+      "kind": "component",
+      "technology": "atlas_engine 内核 / LangGraph",
+      "in": "server",
+      "name": "原生运行时"
+    },
+    {
+      "id": "tools",
+      "kind": "component",
+      "technology": "MCP 客户端 / httpx",
+      "in": "server",
+      "name": "工具接入"
+    },
+    {
+      "id": "redis",
+      "kind": "container",
+      "technology": "Redis 7",
+      "in": "platform",
+      "name": "Redis"
+    },
+    {
+      "id": "mcp",
+      "kind": "system",
+      "tag": "同级服务",
+      "color": "#8411bd",
+      "name": "MCP 网关"
+    },
+    {
+      "id": "model",
+      "kind": "system",
+      "tag": "同级服务",
+      "color": "#8411bd",
+      "name": "模型平台"
+    }
+  ],
+  "messages": [
+    {
+      "from": "executor",
+      "to": "native",
+      "description": "跑这一段（Segment）",
+      "details": {
+        "note": "提交、排队、领取同 dynamic-run.html 的 1–9 步。执行器同时交给装配一个 closers 列表：段结束时要关的东西（这里是 MCP 会话）都登记在里面。"
+      }
+    },
+    {
+      "from": "native",
+      "to": "tools",
+      "description": "这一段要装的 MCP 工具",
+      "details": {
+        "note": "ToolSurface._mcp_tool_list。spec 里没有 mcp:* 就直接返回，不碰网关：没用 MCP 的智能体不该因为网关不可用而发不出消息。",
+        "items": [
+          [
+            "spec 标识",
+            "agent 版本快照的 tool_names",
+            "mcp:serpapi:google_search"
+          ],
+          [
+            "身份（CallContext）",
+            "run、会话、使用者、权限主体；闭包捕获，不进工具参数",
+            "X-Run-Id、X-Thread-Id、X-Uid、X-Auth-Uid"
+          ]
+        ]
+      }
+    },
+    {
+      "from": "tools",
+      "to": "mcp",
+      "description": "读元数据：服务和工具定义（缓存过期才问）",
+      "technology": "JSON/HTTP（GET /internal/metadata）",
+      "details": {
+        "note": "进程内缓存 60 秒（mcp_metadata_ttl_s）；过期了问网关，问不到就用上一份，进程里没有就读 Redis 里的副本。元数据是网关拉取、存库、检查过的工具定义，Atlas 只读，不自己发现工具。"
+      }
+    },
+    {
+      "from": "tools",
+      "to": "redis",
+      "description": "元数据留一份副本（7 天）",
+      "technology": "Redis 协议（SET … EX）",
+      "details": {
+        "note": "只存元数据，不存 Key。网关暂时不可用、进程又刚重启时，装配照样能从这份副本造出工具；真正能不能调，由网关在调用时判。"
+      }
+    },
+    {
+      "from": "tools",
+      "to": "mcp",
+      "description": "这个智能体的 Key 和它此刻能用的服务、工具",
+      "technology": "JSON/HTTP（GET /internal/client-keys?code=<智能体 id>）",
+      "details": {
+        "note": "每个智能体一把 Key（客户端类型 Agent），和智能体的权限类型无关。网关上还没有就补申请（POST）。结果缓存 30 秒（mcp_access_ttl_s）；网关不可用时沿用这个进程上次取到的，从没取到过就跳过这些服务并提示，对话照常。Key 只在内存和传输层，不进 Redis、不进日志。",
+        "example": "{\"key_uid\": \"<Key 的主体>\", \"status\": \"active\", \"key\": \"mk_…\",\n \"servers\": [{\"name\": \"serpapi\", \"tools\": [\"google_search\"]}, …]}"
+      }
+    },
+    {
+      "from": "tools",
+      "to": "tools",
+      "description": "过三道闸门，造带护栏的工具（不连 MCP 服务）",
+      "details": {
+        "note": "闸门一：Key 停用、服务没授给它 → 跳过；闸门二：工具没授给它、管理员停用、定义不合规 → 跳过；闸门三：复核状态和定义指纹（和保存时记下的不同，按智能体的策略照用并提示，或拦下）。跳过一律发 mcp.tool_skipped / mcp.tool_drift 告诉用户。服务没注册、工具不存在是配置错误，本轮 run.failed。每个服务建一个 MCP 客户端（身份请求头、Key 写在传输层），每个工具包一层护栏。原理图 2。"
+      }
+    },
+    {
+      "from": "tools",
+      "to": "native",
+      "description": "工具、要告诉用户的提示；段末关会话登记进 closers",
+      "details": {
+        "note": "模型看到的名字是 serpapi__google_search。只读注解（readOnlyHint）平铺到工具的元数据上，审批按它判副作用类别。MCP 工具多（数量或定义总量超过阈值）时改为延迟工具：模型平时只看到名字，用 tool_search 按需加载定义。"
+      }
+    },
+    {
+      "from": "native",
+      "to": "model",
+      "description": "调模型（工具定义里有 serpapi__google_search）",
+      "technology": "Anthropic Messages API / HTTPS"
+    },
+    {
+      "from": "model",
+      "to": "native",
+      "description": "tool_use：serpapi__google_search(q=…)",
+      "technology": "Anthropic Messages API / HTTPS（流式）"
+    },
+    {
+      "from": "native",
+      "to": "native",
+      "description": "审批判定：注解是只读，不请示",
+      "details": {
+        "note": "PermissionMiddleware 按审批模式 × 副作用类别判定。MCP 工具没声明 readOnlyHint 的一律按 EXTERNAL（最保守）处理，手动模式下要请示，见 dynamic-approval.html。"
+      }
+    },
+    {
+      "from": "native",
+      "to": "tools",
+      "description": "执行 google_search（护栏）",
+      "details": {
+        "example": "{\"q\": \"bun 1.3 release notes\", \"num\": 5}"
+      }
+    },
+    {
+      "from": "tools",
+      "to": "tools",
+      "description": "本段没记住它用不了；按参数定义校验参数",
+      "details": {
+        "note": "缺必填、类型不对、多了定义里没有的字段，直接把错误交回模型改正，不发请求。本段里已经记住「用不了」（整段、这个服务或这个工具）的，直接交回同样的说明。"
+      }
+    },
+    {
+      "from": "tools",
+      "to": "mcp",
+      "description": "第一次用这个服务：建会话（initialize）",
+      "technology": "MCP / Streamable HTTP（POST /mcp/serpapi）",
+      "details": {
+        "note": "同一段里对同一个服务复用一个会话（McpSessions.hold，按服务加锁，并发的调用只建一次）。建会话也算在这次调用的超时里（默认 60 秒，服务可单独配）。",
+        "items": [
+          [
+            "Authorization",
+            "KeyAuth：智能体的 Key，每个请求现取",
+            "Bearer mk_…"
+          ],
+          [
+            "身份请求头",
+            "identity_headers(CallContext)，审计用，网关改写成它确认过的身份",
+            "X-Run-Id、X-Thread-Id、X-Uid、X-Auth-Uid"
+          ]
+        ]
+      }
+    },
+    {
+      "from": "tools",
+      "to": "mcp",
+      "description": "initialized 通知，补拉一次工具列表",
+      "technology": "MCP / Streamable HTTP（notifications/initialized、tools/list）",
+      "details": {
+        "note": "这两个请求是 MCP SDK 建会话时自己发的。之后这一段里每次调用只发 1 个 tools/call：N 次调用从 4N 个请求降到 N + 3。"
+      }
+    },
+    {
+      "from": "tools",
+      "to": "mcp",
+      "description": "tools/call google_search",
+      "technology": "MCP / Streamable HTTP（JSON-RPC）",
+      "details": {
+        "note": "网关认 Key、按工具判权、转给上游，见 c4-model/mcpgateway/dynamic/dynamic-call-tool.html。"
+      }
+    },
+    {
+      "from": "mcp",
+      "to": "tools",
+      "description": "CallToolResult",
+      "technology": "MCP / Streamable HTTP",
+      "details": {
+        "note": "网关拒绝时 JSON-RPC 错误体里带 data.reason（key_invalid、forbidden、service_disabled、tool_unknown…），护栏据此决定给模型怎么说、能不能先修复再重试一次、在本段记住到什么范围（原理图 4）。上游自己返回的业务错误（isError）原样交给模型。"
+      }
+    },
+    {
+      "from": "tools",
+      "to": "native",
+      "description": "工具结果（超大文本掐头去尾）",
+      "details": {
+        "note": "超过 10 万字符（mcp_max_result_chars）的文本块留头 70%、尾 30%。阈值高于上下文管理的外置阈值：一般大小的结果交给上下文管理去外置，这里只拦一次返回几 MB 的。"
+      }
+    },
+    {
+      "from": "native",
+      "to": "model",
+      "description": "带工具结果接着调模型；第二次搜索只发 1 个 tools/call",
+      "technology": "Anthropic Messages API / HTTPS",
+      "details": {
+        "note": "模型又调了一次 google_search（中间的调用和第 11–17 步相同，只是不再建会话），图中省略。"
+      }
+    },
+    {
+      "from": "executor",
+      "to": "tools",
+      "description": "段结束：执行 closers，关掉本段建过的会话",
+      "details": {
+        "note": "完成、挂起、取消、被接管都算段结束。会话不跨段、不跨进程：挂起可能等很久，续跑的段（可能在另一个实例上）重新建。一个会话关不掉不影响别的。"
+      }
+    },
+    {
+      "from": "tools",
+      "to": "mcp",
+      "description": "关会话",
+      "technology": "MCP / Streamable HTTP（DELETE /mcp/serpapi）"
+    }
+  ]
+}
+</script>
+
+<main>
+  <ul id="c4-report" hidden></ul>
+  <svg id="c4-diagram" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+  <section id="c4-details" hidden></section>
+  <h2>Diagram key</h2>
+  <svg id="c4-key" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+
+  <!-- MCP 原理（Agent 一侧）：静态图，不经上面的渲染器。场景同时序图：原生智能体在一段里调两次 serpapi__google_search -->
+  <section id="principle">
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+      <defs>
+        <marker id="pr-a" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#444"/></marker>
+        <marker id="pr-h" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#d9480f"/></marker>
+        <marker id="pr-m" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#bbb"/></marker>
+      </defs>
+    </svg>
+
+    <h2>MCP 原理（Agent 一侧）</h2>
+    <p>一句话：Atlas <b>只连 MCP 网关、只做远程</b>。服务和工具定义从网关读，调用经网关、带这个智能体的 Key，上游凭据只在网关。原生智能体每段装配时只读缓存、过三道闸门，<b>不连 MCP 服务</b>；第一次调用时才建会话，同一段里同一个服务复用一个会话，段结束就关。每次调用都经过一层护栏：参数校验、超时、按网关给的原因分类失败、能先修复的重试一次、结论在本段记住。失败转成给模型的工具结果，不让整轮失败。CLI 智能体的 MCP 客户端在 Pod 里，Atlas 只在开会话时交给它服务级的网关地址和 Key。下面五张图，场景同上面的时序图：原生智能体勾了 <code>mcp:serpapi:google_search</code>，在这一段里调了两次。橙色是这次实际走的路，灰色虚线是没走的分支。讲的是现在的代码，和代码图（目标模型）不一样的地方列在最后。</p>
+
+    <h3>图 1　只连网关：原生和 CLI 两条路，Key 和凭据在哪</h3>
+    <svg width="1240" viewBox="0 0 1240 450" role="img" aria-label="只连网关：原生和 CLI 两条路">
+      <rect class="bnd" x="20" y="30" width="480" height="250" rx="6"/>
+      <text class="t-head" x="36" y="54">Agent 服务</text>
+      <rect class="node" x="40" y="70" width="440" height="86" rx="4"/>
+      <text class="t-name" x="260" y="96">工具接入（进程内的 MCP 客户端）</text>
+      <text class="t-sub" x="260" y="118">每个服务一个客户端：身份请求头和 Key 写在传输层</text>
+      <text class="t-sub" x="260" y="138">每次调用都经护栏：校验、超时、失败分类、截断</text>
+      <rect class="node" x="40" y="176" width="440" height="86" rx="4"/>
+      <text class="t-name" x="260" y="202">CLI 运行时</text>
+      <text class="t-sub" x="260" y="224">开会话时把服务级的网关地址和 Key 交给 Pod</text>
+      <text class="t-sub" x="260" y="244">同一份元数据、Key 和服务级闸门</text>
+
+      <rect class="bnd" x="20" y="300" width="480" height="100" rx="6"/>
+      <text class="t-head" x="36" y="322">会话 Pod</text>
+      <rect class="node" x="40" y="332" width="440" height="56" rx="4"/>
+      <text class="t-name" x="260" y="356">CLI（Pod 里的 MCP 客户端）</text>
+      <text class="t-sub" x="260" y="376">自己握手、tools/list、调用，Atlas 拦截不到单次调用</text>
+      <path class="e" d="M260 262 V330" marker-end="url(#pr-a)"/>
+      <text class="t-lab" x="272" y="294">session.open：mcpServers</text>
+
+      <rect class="node" x="640" y="30" width="360" height="370"/>
+      <rect class="head" x="641" y="31" width="358" height="30"/>
+      <text class="t-head" x="654" y="51">MCP 网关（同级服务）</text>
+      <line class="sep" x1="640" y1="61" x2="1000" y2="61"/>
+      <text class="t-key" x="654" y="86">/internal/metadata</text>
+      <text x="654" y="110">服务、工具定义（网关拉取、检查过的）</text>
+      <line class="sep" x1="640" y1="124" x2="1000" y2="124"/>
+      <text class="t-key" x="654" y="149">/internal/client-keys</text>
+      <text x="654" y="173">智能体的 Key、此刻能用的服务和工具</text>
+      <line class="sep" x1="640" y1="187" x2="1000" y2="187"/>
+      <text class="t-key" x="654" y="212">/mcp/{服务}</text>
+      <text class="hot" x="654" y="236">Streamable HTTP：每个请求认 Key、</text>
+      <text class="hot" x="654" y="258">判权到工具；拒绝时带 data.reason</text>
+      <line class="sep" x1="640" y1="300" x2="1000" y2="300"/>
+      <text class="t-key" x="654" y="325">上游凭据</text>
+      <text x="654" y="349">只在网关，Atlas 和 Pod 都拿不到</text>
+
+      <rect class="node" x="1060" y="200" width="160" height="80" rx="4"/>
+      <text class="t-name" x="1140" y="232">上游服务</text>
+      <text class="t-sub" x="1140" y="254">serpapi.com 等</text>
+      <path class="e" d="M1000 240 H1058" marker-end="url(#pr-a)"/>
+      <text class="t-lab mid" x="1030" y="230">转发</text>
+
+      <path class="e" d="M480 100 H638" marker-end="url(#pr-a)"/>
+      <text class="t-lab" x="508" y="92">装配：元数据、Key</text>
+      <path class="e-hot" d="M480 140 H590 V236 H638" marker-end="url(#pr-h)"/>
+      <text class="t-hot" x="508" y="132">tools/call</text>
+      <path class="e-hot" d="M480 360 H615 V256 H638" marker-end="url(#pr-h)"/>
+      <text class="t-hot" x="508" y="352">CLI 自己调</text>
+
+      <text class="t-lab" x="20" y="430">三种名字：spec 标识 mcp:serpapi:google_search → 模型看到的 serpapi__google_search → 网关上的线上名 google_search（服务名不许有下划线，审计时才能还原来源）</text>
+
+      <g class="badge"><circle cx="638" cy="100" r="10"/><text x="638" y="104">1</text></g>
+      <g class="badge"><circle cx="480" cy="70" r="10"/><text x="480" y="74">2</text></g>
+      <g class="badge"><circle cx="480" cy="332" r="10"/><text x="480" y="336">3</text></g>
+      <g class="badge"><circle cx="1000" cy="300" r="10"/><text x="1000" y="304">4</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>只经网关、只做远程：服务和工具定义从网关的内部接口读，Atlas 不自己发现工具，也不在平台里拉起 stdio 进程。装配时读的只有元数据和 Key，两样都有缓存，不连 MCP 服务（图 2）。</li>
+      <li><span class="n">2</span>原生智能体的调用由工具接入里的 MCP 客户端发出：每个服务一个客户端，智能体的 Key 和身份请求头写在传输层，模型看不到、改不了；每次调用都经过护栏（图 3）。</li>
+      <li><span class="n">3</span>CLI 智能体的 MCP 客户端在 Pod 里：Atlas 只在开会话时把服务级的网关地址和 Key 交给它，之后握手、拉工具列表、调用都是 CLI 自己做（图 5）。</li>
+      <li><span class="n">4</span>网关是唯一的治理点：每个请求认 Key、判权到工具，原生和 CLI 走的是同一条路；上游凭据只在网关。</li>
+    </ol>
+
+    <h3>图 2　装配：读缓存、过三道闸门，不连 MCP 服务</h3>
+    <svg width="1240" viewBox="0 0 1240 400" role="img" aria-label="装配：三道闸门">
+      <rect class="node" x="20" y="50" width="170" height="60" rx="4"/>
+      <text class="t-name" x="105" y="76">spec 里的 mcp:*</text>
+      <text class="t-sub" x="105" y="96">mcp:serpapi:google_search</text>
+      <path class="e-hot" d="M190 80 H208" marker-end="url(#pr-h)"/>
+      <rect class="node" x="210" y="50" width="180" height="60" rx="4"/>
+      <text class="t-name" x="300" y="76">元数据</text>
+      <text class="t-sub" x="300" y="96">进程 60 秒 · Redis 7 天</text>
+      <path class="e-hot" d="M390 80 H408" marker-end="url(#pr-h)"/>
+      <rect class="node" x="410" y="50" width="190" height="60" rx="4"/>
+      <text class="t-name" x="505" y="76">Key 和能用什么</text>
+      <text class="t-sub" x="505" y="96">30 秒；网关挂了沿用上次</text>
+      <path class="e-hot" d="M600 80 H618" marker-end="url(#pr-h)"/>
+      <rect class="node" x="620" y="50" width="180" height="60" rx="4"/>
+      <text class="t-name" x="710" y="76">闸门一：服务</text>
+      <text class="t-sub" x="710" y="96">Key 停用？服务没授给它？</text>
+      <path class="e-hot" d="M800 80 H818" marker-end="url(#pr-h)"/>
+      <rect class="node" x="820" y="50" width="190" height="60" rx="4"/>
+      <text class="t-name" x="915" y="76">闸门二：工具</text>
+      <text class="t-sub" x="915" y="96">没授权？停用？不合规？</text>
+      <path class="e-hot" d="M1010 80 H1028" marker-end="url(#pr-h)"/>
+      <rect class="node" x="1030" y="50" width="190" height="60" rx="4"/>
+      <text class="t-name" x="1125" y="76">闸门三：定义</text>
+      <text class="t-sub" x="1125" y="96">复核、指纹和保存时一样？</text>
+
+      <path class="e-mute" d="M300 110 V158" marker-end="url(#pr-m)"/>
+      <rect class="ghost" x="210" y="160" width="180" height="56" rx="4"/>
+      <text class="t-ghost mid" x="300" y="184">服务没注册、工具不存在</text>
+      <text class="t-mute mid" x="300" y="204">配置错误，本轮 run.failed</text>
+      <path class="e-mute" d="M505 110 V158" marker-end="url(#pr-m)"/>
+      <rect class="ghost" x="410" y="160" width="190" height="56" rx="4"/>
+      <text class="t-ghost mid" x="505" y="184">网关挂了、没取到过</text>
+      <text class="t-mute mid" x="505" y="204">这些服务跳过并提示</text>
+      <path class="e-mute" d="M710 110 V158" marker-end="url(#pr-m)"/>
+      <path class="e-mute" d="M915 110 V158" marker-end="url(#pr-m)"/>
+      <path class="e-mute" d="M1080 110 V158" marker-end="url(#pr-m)"/>
+      <rect class="ghost" x="620" y="160" width="560" height="56" rx="4"/>
+      <text class="t-mute" x="636" y="184">闸门一、二：跳过并提示（mcp.tool_skipped），模型看不见就不会去调</text>
+      <text class="t-mute" x="636" y="204">闸门三：定义变了，按智能体的策略照用并提示，或拦下（mcp.tool_drift）</text>
+
+      <path class="e-hot" d="M1220 80 H1232 V290 H1222" marker-end="url(#pr-h)"/>
+      <rect class="node" x="1000" y="260" width="220" height="60" rx="4"/>
+      <text class="t-name" x="1110" y="286">每个服务一个客户端</text>
+      <text class="t-sub" x="1110" y="306">身份请求头、Key 写在传输层</text>
+      <path class="e-hot" d="M1000 290 H982" marker-end="url(#pr-h)"/>
+      <rect class="node" x="760" y="260" width="220" height="60" rx="4"/>
+      <text class="t-name" x="870" y="286">每个工具包一层护栏</text>
+      <text class="t-sub" x="870" y="306">改名为 serpapi__google_search</text>
+      <path class="e-hot" d="M760 290 H742" marker-end="url(#pr-h)"/>
+      <rect class="node" x="520" y="260" width="220" height="60" rx="4"/>
+      <text class="t-name" x="630" y="286">注解平铺进元数据</text>
+      <text class="t-sub" x="630" y="306">readOnlyHint：审批判只读</text>
+      <path class="e-hot" d="M520 290 H502" marker-end="url(#pr-h)"/>
+      <rect class="node" x="260" y="260" width="240" height="60" rx="4"/>
+      <text class="t-name" x="380" y="286">多了就改为延迟工具</text>
+      <text class="t-sub" x="380" y="306">模型用 tool_search 按需加载</text>
+      <path class="e-hot" d="M260 290 H242" marker-end="url(#pr-h)"/>
+      <rect class="node" x="20" y="260" width="220" height="60" rx="4"/>
+      <text class="t-name" x="130" y="286">交给原生运行时</text>
+      <text class="t-sub" x="130" y="306">工具、提示、closers</text>
+
+      <text class="t-lab" x="20" y="356">装配只读缓存、不连 MCP 服务：一个慢的服务不拖慢每一轮，一个宕机的服务也不让所有挂了它的智能体发不出消息。</text>
+      <text class="t-lab" x="20" y="380">真正建连推迟到第一次调用（图 3）；没用 MCP 的智能体根本不碰网关。</text>
+
+      <g class="badge"><circle cx="390" cy="50" r="10"/><text x="390" y="54">1</text></g>
+      <g class="badge"><circle cx="600" cy="50" r="10"/><text x="600" y="54">2</text></g>
+      <g class="badge"><circle cx="1180" cy="160" r="10"/><text x="1180" y="164">3</text></g>
+      <g class="badge"><circle cx="760" cy="260" r="10"/><text x="760" y="264">4</text></g>
+      <g class="badge"><circle cx="500" cy="260" r="10"/><text x="500" y="264">5</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>元数据（服务、工具定义）进程内缓存 60 秒；过期了问网关，问不到就用上一份，进程里没有就读 Redis 里的副本（7 天）。</li>
+      <li><span class="n">2</span>智能体的 Key 和它此刻能用什么，是网关算好的（公开的服务 + 授给这把 Key 的），和网关数据面判权是同一份。缓存 30 秒；网关上还没有这把 Key 就补申请；网关不可用时沿用这个进程上次取到的。每个智能体一把 Key，和智能体的权限类型无关。</li>
+      <li><span class="n">3</span>三道闸门，跳过一定要提示：静默少一个工具，模型照常做事、只是做不好，用户不知道为什么。闸门三里的复核状态现在恒为通过（网关已不做人工复核），真正起作用的是指纹：它覆盖名字、描述、参数定义和注解，因为只改描述、不改名字是注入风险最高的变更。</li>
+      <li><span class="n">4</span>每个服务一个 MCP 客户端，每个工具包一层护栏（图 3）。只读注解（readOnlyHint）平铺进工具的元数据，审批按它判副作用类别；没声明只读的一律按 EXTERNAL，最保守。</li>
+      <li><span class="n">5</span>工具数量或定义总量超过阈值时，全部改为延迟工具：定义不常驻上下文，模型用 tool_search 按需加载。</li>
+    </ol>
+
+    <h3>图 3　调用：每次都经护栏</h3>
+    <svg width="1240" viewBox="0 0 1240 440" role="img" aria-label="调用：每次都经护栏">
+      <rect class="node" x="20" y="50" width="200" height="60" rx="4"/>
+      <text class="t-name" x="120" y="76">模型调工具</text>
+      <text class="t-sub" x="120" y="96">serpapi__google_search</text>
+      <path class="e-hot" d="M220 80 H238" marker-end="url(#pr-h)"/>
+      <polygon class="node" points="240,80 310,40 380,80 310,120"/>
+      <text class="t-name" x="310" y="77">本段记住</text>
+      <text class="t-name" x="310" y="96">用不了？</text>
+      <path class="e-hot" d="M380 80 H418" marker-end="url(#pr-h)"/>
+      <text class="t-hot mid" x="399" y="72">否</text>
+      <rect class="node" x="420" y="50" width="170" height="60" rx="4"/>
+      <text class="t-name" x="505" y="76">校验参数</text>
+      <text class="t-sub" x="505" y="96">按工具的参数定义</text>
+      <path class="e-hot" d="M590 80 H608" marker-end="url(#pr-h)"/>
+      <rect class="node" x="610" y="50" width="200" height="60" rx="4"/>
+      <text class="t-name" x="710" y="76">持有会话</text>
+      <text class="t-sub" x="710" y="96">第一次才建：握手 + 工具列表</text>
+      <path class="e-hot" d="M810 80 H828" marker-end="url(#pr-h)"/>
+      <rect class="node" x="830" y="50" width="180" height="60" rx="4"/>
+      <text class="t-name" x="920" y="76">tools/call</text>
+      <text class="t-sub" x="920" y="96">在超时之内（默认 60 秒）</text>
+      <path class="e-hot" d="M1010 80 H1038" marker-end="url(#pr-h)"/>
+      <text class="t-hot mid" x="1024" y="72">成功</text>
+      <rect class="node" x="1040" y="50" width="180" height="60" rx="4"/>
+      <text class="t-name" x="1130" y="76">工具结果</text>
+      <text class="t-sub" x="1130" y="96">超大文本掐头去尾</text>
+
+      <path class="e-mute" d="M310 120 V148" marker-end="url(#pr-m)"/>
+      <rect class="ghost" x="210" y="150" width="200" height="56" rx="4"/>
+      <text class="t-ghost mid" x="310" y="174">直接交回同样的说明</text>
+      <text class="t-mute mid" x="310" y="194">不再发请求</text>
+      <path class="e-mute" d="M505 110 V148" marker-end="url(#pr-m)"/>
+      <rect class="ghost" x="420" y="150" width="190" height="56" rx="4"/>
+      <text class="t-ghost mid" x="515" y="174">交回模型改正</text>
+      <text class="t-mute mid" x="515" y="194">缺必填、类型错、多字段</text>
+
+      <path class="e-mute" d="M920 110 V256" marker-end="url(#pr-m)"/>
+      <text class="t-mute" x="932" y="150">失败</text>
+      <polygon class="ghost" points="840,300 920,258 1000,300 920,342"/>
+      <text class="t-ghost mid" x="920" y="296">按原因分类：</text>
+      <text class="t-ghost mid" x="920" y="316">能先修复？</text>
+      <path class="e-mute" d="M840 300 H782" marker-end="url(#pr-m)"/>
+      <text class="t-mute mid" x="811" y="292">能</text>
+      <rect class="ghost" x="580" y="272" width="200" height="56" rx="4"/>
+      <text class="t-ghost mid" x="680" y="296">修好，重试一次</text>
+      <text class="t-mute mid" x="680" y="316">重取 Key · 重建会话</text>
+      <path class="e-mute" d="M680 272 V112" marker-end="url(#pr-m)"/>
+      <path class="e-mute" d="M1000 300 H1038" marker-end="url(#pr-m)"/>
+      <text class="t-mute mid" x="1019" y="292">不能</text>
+      <rect class="ghost" x="1040" y="272" width="180" height="56" rx="4"/>
+      <text class="t-ghost mid" x="1130" y="296">记住范围</text>
+      <text class="t-mute mid" x="1130" y="316">整段 · 服务 · 工具</text>
+      <path class="e-mute" d="M1130 328 V366" marker-end="url(#pr-m)"/>
+      <rect class="ghost" x="840" y="368" width="380" height="56" rx="4"/>
+      <text class="t-ghost mid" x="1030" y="392">转成给模型的工具结果</text>
+      <text class="t-mute mid" x="1030" y="412">说明能不能重试、该找谁；整轮不失败</text>
+
+      <text class="t-lab" x="20" y="252">只有确定请求没到后端、原因又能先修复的才自动重试，而且只一次：</text>
+      <text class="t-lab" x="20" y="274">Key 刚被重置、会话失效。超时、后端出错一律不自动重试，</text>
+      <text class="t-lab" x="20" y="296">有副作用的工具执行两次，就是两张工单、两封邮件。</text>
+      <text class="t-lab" x="20" y="330">取消、编程错误不归失败分类，照旧抛出：</text>
+      <text class="t-lab" x="20" y="352">不让 bug 伪装成「服务不可用」被模型绕过去。</text>
+
+      <g class="badge"><circle cx="310" cy="40" r="10"/><text x="310" y="44">1</text></g>
+      <g class="badge"><circle cx="590" cy="50" r="10"/><text x="590" y="54">2</text></g>
+      <g class="badge"><circle cx="810" cy="50" r="10"/><text x="810" y="54">3</text></g>
+      <g class="badge"><circle cx="920" cy="258" r="10"/><text x="920" y="262">4</text></g>
+      <g class="badge"><circle cx="1220" cy="50" r="10"/><text x="1220" y="54">5</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>本段里已经记住「用不了」的（整段、这个服务或这个工具），直接交回同样的说明，不再打扰网关。</li>
+      <li><span class="n">2</span>按工具的参数定义校验参数，错了直接交回模型改正。要在 Atlas 这边做，是因为服务自己校不校验因服务而异，网关从 REST 转出来的服务可能把错参数直接传给后端。</li>
+      <li><span class="n">3</span>同一段里同一个服务复用一个会话：第一次调用时建（initialize、initialized、tools/list），之后每次只发一个 tools/call。建会话也算在这次调用的超时里。</li>
+      <li><span class="n">4</span>失败按网关给的原因分类（下表）。能先修复的修好后重试一次；不能的，按原因在本段记住到相应范围，然后转成给模型的工具结果。一个外部服务出问题，模型可以换方法、告诉用户找谁；整轮失败的话用户什么都拿不到。</li>
+      <li><span class="n">5</span>成功：超过 10 万字符的文本块留头 70%、尾 30%。这个阈值高于上下文管理的外置阈值，一般大小的结果交给上下文管理去外置，这里只拦返回几 MB 的。</li>
+    </ol>
+
+    <h3>图 4　一段之内：会话和 Key 的一生</h3>
+    <svg width="1240" viewBox="0 0 1240 300" role="img" aria-label="一段之内：会话和 Key 的一生">
+      <path class="e" d="M30 60 H1215" marker-end="url(#pr-a)"/>
+      <text class="t-key end" x="1215" y="46">这一段</text>
+      <circle cx="115" cy="60" r="6" class="hot"/>
+      <circle cx="317" cy="60" r="6" class="hot"/>
+      <circle cx="519" cy="60" r="6" class="hot"/>
+      <circle cx="721" cy="60" r="6" fill="#bbb"/>
+      <circle cx="923" cy="60" r="6" fill="#bbb"/>
+      <circle cx="1125" cy="60" r="6" class="hot"/>
+
+      <rect class="node" x="20" y="90" width="190" height="130" rx="4"/>
+      <text class="t-name" x="115" y="116">装配</text>
+      <text class="t-sub" x="115" y="142">读元数据、Key 的缓存</text>
+      <text class="t-sub" x="115" y="164">造客户端和工具</text>
+      <text class="hot mid b" x="115" y="200">请求：0</text>
+
+      <rect class="node" x="222" y="90" width="190" height="130" rx="4"/>
+      <text class="t-name" x="317" y="116">第 1 次调用</text>
+      <text class="t-sub" x="317" y="142">建会话：initialize、</text>
+      <text class="t-sub" x="317" y="164">initialized、tools/list</text>
+      <text class="t-sub" x="317" y="186">再 tools/call</text>
+      <text class="hot mid b" x="317" y="210">请求：4</text>
+
+      <rect class="node" x="424" y="90" width="190" height="130" rx="4"/>
+      <text class="t-name" x="519" y="116">第 2 次调用</text>
+      <text class="t-sub" x="519" y="142">复用会话</text>
+      <text class="t-sub" x="519" y="164">只发 tools/call</text>
+      <text class="hot mid b" x="519" y="200">请求：1</text>
+
+      <rect class="ghost" x="626" y="90" width="190" height="130" rx="4"/>
+      <text class="t-ghost mid" x="721" y="116">Key 被重置了</text>
+      <text class="t-mute mid" x="721" y="142">网关回 key_invalid</text>
+      <text class="t-mute mid" x="721" y="164">重取 Key，换进传输层</text>
+      <text class="t-mute mid" x="721" y="186">重试一次，会话不重建</text>
+      <text class="t-mute mid" x="721" y="208">取不到：整段记住</text>
+
+      <rect class="ghost" x="828" y="90" width="190" height="130" rx="4"/>
+      <text class="t-ghost mid" x="923" y="116">服务重启了</text>
+      <text class="t-mute mid" x="923" y="142">带会话标识的请求回 404</text>
+      <text class="t-mute mid" x="923" y="164">关掉会话、重新握手</text>
+      <text class="t-mute mid" x="923" y="186">重试一次</text>
+
+      <rect class="node" x="1030" y="90" width="190" height="130" rx="4"/>
+      <text class="t-name" x="1125" y="116">段结束</text>
+      <text class="t-sub" x="1125" y="142">完成、挂起、取消、接管</text>
+      <text class="t-sub" x="1125" y="164">执行 closers：DELETE</text>
+      <text class="t-sub" x="1125" y="186">续跑的段重新建</text>
+
+      <text class="t-lab" x="20" y="256">N 次调用 = N + 3 个请求。会话、Key、「用不了」的结论都只活在这一段里：不跨段、不跨进程，挂起可能等很久，续跑的段可能在另一个实例上，重新建就好。</text>
+      <text class="t-lab" x="20" y="280">Key 每个请求现取（KeyAuth）：网关上重置了 Key，被拒的那次重新取一次就能接着用，已打开的会话不用重建。</text>
+    </svg>
+    <p>失败怎么分类（<code>providers/mcp/native.py</code> 的 <code>_classify</code>、<code>_gateway_failure</code>）：</p>
+    <table>
+      <thead><tr><th>情况</th><th>给模型的说明</th><th>自动重试</th><th>本段记住</th></tr></thead>
+      <tbody>
+        <tr><td>key_missing、key_invalid</td><td>智能体的 Key 已失效或停用，告知用户联系 MCP 管理员；不要重试</td><td>重取 Key，取到新的就重试一次</td><td>取不到或仍被拒：整段</td></tr>
+        <tr><td>forbidden</td><td>没被授权使用这个服务，联系服务所有者或 MCP 管理员；不要重试</td><td>否</td><td>这个服务</td></tr>
+        <tr><td>service_disabled、service_not_found</td><td>服务不存在或已停用，联系 MCP 管理员；不要重试</td><td>否</td><td>这个服务</td></tr>
+        <tr><td>tool_unknown、invalid_params</td><td>工具暂时不可用（带网关的说明）；不要重试</td><td>否</td><td>这个工具</td></tr>
+        <tr><td>authz_unavailable</td><td>服务暂时不可用，可以稍后重试</td><td>否</td><td>不记住</td></tr>
+        <tr><td>upstream_error、upstream_unavailable，以及以后新增的原因</td><td>服务返回了错误 / 暂时不可用，可稍后重试或换一种方式</td><td>否</td><td>不记住</td></tr>
+        <tr><td>会话失效（带会话标识的请求回 404）</td><td>会话已失效，可稍后重试</td><td>重建会话，重试一次</td><td>不记住</td></tr>
+        <tr><td>认证被拒、没有网关的原因（401 / 403）</td><td>网关前面的一层拒绝了认证，联系管理员检查凭据；不要重试</td><td>否</td><td>不记住</td></tr>
+        <tr><td>超时</td><td>只读工具：可以稍后重试；有副作用的：结果未知，可能已经执行，重试前先确认</td><td>否</td><td>不记住</td></tr>
+        <tr><td>上游返回的业务错误（isError）</td><td>原样交给模型（同样截断）</td><td>否</td><td>不记住</td></tr>
+        <tr><td>取消、编程错误</td><td>不归这里，照旧抛出</td><td>—</td><td>—</td></tr>
+      </tbody>
+    </table>
+
+    <h3>图 5　CLI 智能体：开会话时下发服务级的网关地址和 Key</h3>
+    <svg width="1240" viewBox="0 0 1240 470" role="img" aria-label="CLI 智能体的 MCP">
+      <rect class="node" x="20" y="50" width="190" height="60" rx="4"/>
+      <text class="t-name" x="115" y="76">每轮解析能力</text>
+      <text class="t-sub" x="115" y="96">CLI 运行时</text>
+      <path class="e-hot" d="M210 80 H238" marker-end="url(#pr-h)"/>
+      <rect class="node" x="240" y="50" width="200" height="60" rx="4"/>
+      <text class="t-name" x="340" y="76">元数据 + Key</text>
+      <text class="t-sub" x="340" y="96">和原生同一份缓存</text>
+      <path class="e-hot" d="M440 80 H468" marker-end="url(#pr-h)"/>
+      <rect class="node" x="470" y="50" width="240" height="60" rx="4"/>
+      <text class="t-name" x="590" y="76">服务级闸门</text>
+      <text class="t-sub" x="590" y="96">没授权、定义变了且拦：整个不下发</text>
+      <path class="e-hot" d="M710 80 H738" marker-end="url(#pr-h)"/>
+      <rect class="node" x="740" y="50" width="230" height="60" rx="4"/>
+      <text class="t-name" x="855" y="76">mcpServers</text>
+      <text class="t-sub" x="855" y="96">网关地址 · Bearer Key · X-Uid</text>
+      <path class="e-hot" d="M970 80 H998" marker-end="url(#pr-h)"/>
+      <rect class="node" x="1000" y="50" width="220" height="60" rx="4"/>
+      <text class="t-name" x="1110" y="76">session.open 时下发</text>
+      <text class="t-sub" x="1110" y="96">attach 沿用当时那份</text>
+
+      <rect class="node" x="20" y="150" width="1200" height="301"/>
+      <rect class="head" x="21" y="151" width="1198" height="30"/>
+      <text class="t-head" x="34" y="171">原生和 CLI 的对照</text>
+      <text class="t-key" x="230" y="171">原生智能体</text>
+      <text class="t-key" x="720" y="171">CLI 智能体</text>
+      <line class="sep" x1="20" y1="181" x2="1220" y2="181"/>
+      <text class="t-key" x="34" y="205">谁发请求</text>
+      <text x="230" y="205">Agent 服务（工具接入）</text>
+      <text x="720" y="205">Pod 里的 CLI，自己握手、tools/list、调用</text>
+      <line class="sep" x1="20" y1="215" x2="1220" y2="215"/>
+      <text class="t-key" x="34" y="239">下发粒度</text>
+      <text x="230" y="239">工具</text>
+      <text x="720" y="239">服务（ACP 的 mcpServers 是服务级的）</text>
+      <line class="sep" x1="20" y1="249" x2="1220" y2="249"/>
+      <text class="t-key" x="34" y="273">Key 在哪</text>
+      <text x="230" y="273">内存和传输层，每个请求现取</text>
+      <text class="hot" x="720" y="273">进 Pod（mcpServers 的请求头）：有意接受的风险</text>
+      <line class="sep" x1="20" y1="283" x2="1220" y2="283"/>
+      <text class="t-key" x="34" y="307">护栏</text>
+      <text x="230" y="307">校验、超时、失败分类、重试一次、截断</text>
+      <text class="hot" x="720" y="307">没有：Atlas 拦截不到单次调用，CLI 自己处理</text>
+      <line class="sep" x1="20" y1="317" x2="1220" y2="317"/>
+      <text class="t-key" x="34" y="341">什么时候定</text>
+      <text x="230" y="341">每段装配一次</text>
+      <text x="720" y="341">开会话时一次，会话内不变（CLI 进程启动时读）</text>
+      <line class="sep" x1="20" y1="351" x2="1220" y2="351"/>
+      <text class="t-key" x="34" y="375">工具级授权、停用</text>
+      <text x="230" y="375">装配时跳过，网关每次再判</text>
+      <text x="720" y="375">只靠网关每次判：工具从 CLI 拿到的列表里消失、调用被拒</text>
+      <line class="sep" x1="20" y1="385" x2="1220" y2="385"/>
+      <text class="t-key" x="34" y="409">中途收回授权</text>
+      <text x="230" y="409">下一段装配就生效；本段的调用被网关拒</text>
+      <text x="720" y="409">已打开的会话照样生效：网关每个请求都判</text>
+      <line class="sep" x1="20" y1="419" x2="1220" y2="419"/>
+      <text class="t-key" x="34" y="443">审批</text>
+      <text x="230" y="443">按 readOnlyHint 判副作用类别</text>
+      <text x="720" y="443">CLI 的权限请求转成审批（dynamic-cli-run.html）</text>
+
+      <g class="badge"><circle cx="710" cy="50" r="10"/><text x="710" y="54">1</text></g>
+      <g class="badge"><circle cx="970" cy="50" r="10"/><text x="970" y="54">2</text></g>
+      <g class="badge"><circle cx="1220" cy="268" r="10"/><text x="1220" y="272">3</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>CLI 只能按服务下发：它自己 tools/list，看得到服务的全部工具。Key 停用、服务没授权的不下发并提示；block 策略下有一个工具的定义变了，整个服务这一轮不下发。</li>
+      <li><span class="n">2</span>下发的是网关上的地址和这个智能体的 Key（ACP 的请求头是数组），外加使用者 X-Uid（只作审计，权限主体由网关按 Key 写入）。CLI 运行时每轮都解析一次，但只在 session.open 时用得上：CLI 进程启动时读这些配置，中途换不了。</li>
+      <li><span class="n">3</span>Key 进 Pod 是有意接受的风险：它的能力不超出授给它的权限，工具级的授权和停用由网关在每个请求上执行。原生智能体那层护栏 CLI 没有，失败怎么处理由 CLI 自己决定。</li>
+    </ol>
+
+    <h3>为什么这样做</h3>
+    <table>
+      <thead><tr><th>做法</th><th>为什么</th></tr></thead>
+      <tbody>
+        <tr><td>只连 MCP 网关，只做远程</td><td>服务注册、工具定义、授权、上游凭据都在网关，Atlas 不自己发现工具、不持有上游凭据，也不在平台里拉起 stdio 进程。网关是唯一的治理点，原生和 CLI 都经它。</td></tr>
+        <tr><td>装配时只读缓存，建连推迟到第一次调用</td><td>一个慢的服务不该拖慢每一轮，一个宕机的服务也不该让所有挂了它的智能体发不出消息；元数据在进程内和 Redis 各有一份，网关短暂不可用时照样装配。</td></tr>
+        <tr><td>跳过必须提示</td><td>静默少一个工具，模型照常做事、只是做不好，用户不知道为什么。</td></tr>
+        <tr><td>Key 写在传输层，每个请求现取</td><td>模型看不到、改不了；Key 在网关被重置后，被拒的那次请求重新取一次就能接着用，已打开的会话不用重建。</td></tr>
+        <tr><td>身份闭包捕获，不进工具参数</td><td>身份能由模型指定，就是冒用他人身份的口子；身份写成请求头只作审计，网关会改写成它确认过的身份。</td></tr>
+        <tr><td>一段之内复用会话，段结束就关</td><td>每次都新建会话要 4 个请求，复用后 N 次调用 N + 3 个。会话不跨段、不跨进程：挂起可能等很久，接管的实例重新建就好。</td></tr>
+        <tr><td>只有能先修复的失败才自动重试，而且只一次</td><td>Key 刚被重置、会话失效时，请求确定没到后端，修好重试是安全的；超时、后端出错时结果未知，有副作用的工具执行两次就是两张工单、两封邮件。</td></tr>
+        <tr><td>失败转成给模型的工具结果，不让整轮失败</td><td>模型可以换方法、告诉用户找谁；确定用不了的在本段内记住，模型再调直接给同样的说明，不再打扰网关。</td></tr>
+        <tr><td>Atlas 侧校验参数</td><td>服务自己校不校验因服务而异，网关从 REST 转出来的服务可能把错参数直接传给后端；LangChain 和 langchain.mcp 都不做这个校验。</td></tr>
+        <tr><td>CLI 拿服务级的网关地址和 Key</td><td>CLI 的 MCP 客户端在 Pod 里，Atlas 拦截不到单次调用，只能在开会话时下发；工具级的授权和停用由网关在每个请求上执行。</td></tr>
+      </tbody>
+    </table>
+
+    <h3>现在的代码和代码图（目标模型）的差别</h3>
+    <table>
+      <thead><tr><th>代码图（tools/code-tools-mcp.html）</th><th>现在的代码</th></tr></thead>
+      <tbody>
+        <tr><td>装配收进 McpToolset，原生和 CLI 各调一个入口</td><td>原生的装配在 <code>executor/tool_surface.py</code>（取目录、取 Key、建 McpSessions、Key 重取）和 <code>providers/mcp/native.py</code>；CLI 的下发在 CLI 运行时和 <code>providers/mcp/acp.py</code>（refactor/track-a 上已改名 <code>providers/mcp/cli.py</code>）。</td></tr>
+        <tr><td>闸门只有一份（McpAdmission），CLI 也过闸门二：一个工具被拦，整个服务不下发</td><td>服务级闸门写了两份（<code>_admitted</code>、<code>_skip_reason</code>，注释里写着「与 Native 同一套规则」）；CLI 只判服务授权和指纹，工具级的授权、停用交给网关。</td></tr>
+        <tr><td>去掉复核</td><td><code>review.py</code> 还在；网关的 review_required 恒为假，闸门三里的复核判断走不到。</td></tr>
+        <tr><td>护栏是 GuardedCall + FailurePolicy</td><td>同样的逻辑在 <code>native.py</code> 的 <code>_guarded</code>、<code>_classify</code>、<code>_gateway_failure</code> 里，行为一致，只是还没拆成类。</td></tr>
+      </tbody>
+    </table>
+  </section>
+</main>
+
+<script>
+(() => {
+  'use strict';
+  const FONT = '"Open Sans", "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
+  const INK = '#444444';
+  const LIFELINE = '#9a9a9a';
+  const SCOPE_COLOR = '#1168bd';
+  const PALETTE = {
+    person: ['#297e06', '#1a849c', '#6b8e23'],
+    system: ['#ed8609', '#bf101d', '#8411bd', '#5b6770', '#b8336a'],
+  };
+  const KIND_LABEL = { person: 'Person', system: 'Software System', container: 'Container', component: 'Component' };
+  const MAX_MESSAGES = 20;
+  const TXT = {
+    name: { size: 17, weight: 400, lh: 22 },
+    meta: { size: 12, weight: 400, lh: 16 },
+    msg: { size: 15, weight: 400, lh: 20 },
+    tech: { size: 12, weight: 400, lh: 16 },
+    bname: { size: 18, weight: 700, lh: 22 },
+    btype: { size: 12, weight: 700, lh: 16 },
+    key: { size: 13, weight: 400, lh: 18 },
+  };
+  const BOX_H = 52, ICON_H = 30, HEADER_H = 48, LABEL_W = 260, MIN_GAP = 70, SELF_W = 36, MARGIN = 50;
+
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const problems = [];
+  const fail = (msg) => problems.push({ level: 'error', msg });
+  const warn = (msg) => problems.push({ level: 'warn', msg });
+
+  const ctx = document.createElement('canvas').getContext('2d');
+  const measure = (s, st) => { ctx.font = `${st.weight} ${st.size}px ${FONT}`; return ctx.measureText(s).width; };
+
+  // 中文按字断行，英文按词断行；行首不放标点
+  const CJK = '\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef\u3000-\u303f';
+  const TOKEN = new RegExp(`[${CJK}]|[^\\s${CJK}]+|\\s+`, 'g');
+  const NO_LINE_START = /^[，。、；：！？）》」』,.;:!?)]$/;
+  function wrap(text, st, maxW) {
+    const lines = [];
+    for (const para of String(text || '').split('\n')) {
+      let line = '';
+      for (const tok of para.match(TOKEN) || []) {
+        if (/^\s+$/.test(tok)) { if (line) line += ' '; continue; }
+        const next = line + tok;
+        if (line.trim() && measure(next.trimEnd(), st) > maxW && !NO_LINE_START.test(tok)) {
+          lines.push(line.trimEnd());
+          line = tok;
+        } else {
+          line = next;
+        }
+      }
+      if (line.trim()) lines.push(line.trimEnd());
+    }
+    return lines;
+  }
+
+  // 行数不变的前提下收窄宽度，让各行长度接近，避免末行只剩一两个字
+  function wrapBalanced(text, st, maxW) {
+    const lines = wrap(text, st, maxW);
+    if (lines.length < 2) return lines;
+    let lo = maxW / 2, hi = maxW;
+    while (hi - lo > 4) {
+      const mid = (lo + hi) / 2;
+      if (wrap(text, st, mid).length > lines.length) lo = mid; else hi = mid;
+    }
+    return wrap(text, st, hi);
+  }
+
+  function node(tag, attrs, parent) {
+    const n = document.createElementNS(svgNS, tag);
+    for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+    parent.appendChild(n);
+    return n;
+  }
+  // top 是文字块上沿
+  function textLines(parent, lines, x, top, st, color, anchor = 'middle') {
+    const t = node('text', { x, y: top + st.lh / 2 + st.size * 0.35, 'text-anchor': anchor,
+      'font-family': FONT, 'font-size': st.size, 'font-weight': st.weight, fill: color }, parent);
+    lines.forEach((ln, i) => { node('tspan', { x, dy: i ? st.lh : 0 }, t).textContent = ln; });
+    return t;
+  }
+
+  // 参与者头：人员和数据库画图标 + 文字，其余画方框
+  const iconHead = (p) => p.kind === 'person' || (p.kind === 'container' && p.shape === 'database');
+  function headSize(p) {
+    const w = Math.max(measure(p.name, TXT.name), measure(p.meta, TXT.meta)) + 24;
+    return { w, h: iconHead(p) ? ICON_H + 4 + TXT.name.lh + TXT.meta.lh : BOX_H };
+  }
+  function drawHead(g, p, cx, top) {
+    const c = p.color;
+    let textTop = top + (BOX_H - TXT.name.lh - TXT.meta.lh) / 2;
+    if (p.kind === 'person') {
+      node('circle', { cx, cy: top + 8, r: 7, fill: '#fff', stroke: c, 'stroke-width': 1.8 }, g);
+      node('path', { d: `M${cx - 14} ${top + ICON_H} Q${cx - 14} ${top + 16} ${cx} ${top + 16} Q${cx + 14} ${top + 16} ${cx + 14} ${top + ICON_H} Z`, fill: '#fff', stroke: c, 'stroke-width': 1.8 }, g);
+      textTop = top + ICON_H + 4;
+    } else if (iconHead(p)) {
+      const rx = 17, ry = 5, y0 = top + ry, y1 = top + ICON_H - ry;
+      node('path', { d: `M${cx - rx} ${y0} V${y1} A${rx} ${ry} 0 0 0 ${cx + rx} ${y1} V${y0}`, fill: '#fff', stroke: c, 'stroke-width': 1.8 }, g);
+      node('ellipse', { cx, cy: y0, rx, ry, fill: '#fff', stroke: c, 'stroke-width': 1.8 }, g);
+      textTop = top + ICON_H + 4;
+    } else {
+      node('rect', { x: cx - p.size.w / 2, y: top, width: p.size.w, height: BOX_H, rx: 4, fill: '#fff', stroke: c, 'stroke-width': 1.6 }, g);
+    }
+    textLines(g, [p.name], cx, textTop, TXT.name, c);
+    textLines(g, [p.meta], cx, textTop + TXT.name.lh, TXT.meta, c);
+  }
+  function drawArrow(g, x0, x1, y) {
+    const dir = Math.sign(x1 - x0), L = 10, W = 7;
+    node('line', { x1: x0, y1: y, x2: x1 - dir * L, y2: y, stroke: INK, 'stroke-width': 1.6, 'stroke-dasharray': '8 5' }, g);
+    node('polygon', { points: `${x1},${y} ${x1 - dir * L},${y - W / 2} ${x1 - dir * L},${y + W / 2}`, fill: INK }, g);
+  }
+
+  function render() {
+    const model = JSON.parse(document.getElementById('c4-model').textContent);
+    if (model.title) document.title = model.title;
+    else fail('缺少 title（建议「Dynamic View: 系统名 - 场景」）');
+
+    // ---- 边界 ----
+    const bById = new Map();
+    for (const b of model.boundaries || []) {
+      if (!b.id) { fail(`边界 ${b.name || ''}：缺少 id`); continue; }
+      if (bById.has(b.id)) { fail(`边界 id 重复：${b.id}`); continue; }
+      if (!b.name || !b.type) fail(`边界 ${b.id}：name、type 都要写，type 如「Software System」「Container: Python / FastAPI」`);
+      bById.set(b.id, b);
+    }
+    const chain = (id) => {   // 从里到外的边界链
+      const out = [];
+      for (let cur = id; cur; cur = bById.get(cur) && bById.get(cur).in) {
+        if (!bById.has(cur) || out.includes(cur)) return null;
+        out.push(cur);
+      }
+      return out;
+    };
+    for (const b of bById.values()) {
+      if (b.in && !chain(b.id)) { fail(`边界 ${b.id}：in 指向不存在的边界，或者边界互相嵌套成了环`); b.broken = true; }
+    }
+
+    // ---- 参与者 ----
+    const pById = new Map();
+    const ps = [];
+    for (const p of model.participants || []) {
+      const who = p.id || p.name || '(未命名参与者)';
+      if (!p.id) { fail(`${who}：缺少 id`); continue; }
+      if (pById.has(p.id)) { fail(`参与者 id 重复：${p.id}`); continue; }
+      if (!KIND_LABEL[p.kind]) { fail(`${who}：kind 只能是 person / system / container / component`); continue; }
+      if (!p.name) fail(`${who}：缺少 name`);
+      if ((p.kind === 'container' || p.kind === 'component') && !p.technology) fail(`${who}：${p.kind} 缺少 technology`);
+      if (p.in && (!bById.has(p.in) || bById.get(p.in).broken)) { fail(`${who}：in 指向的边界 ${p.in} 不存在`); p.in = null; }
+      p.chain = p.in ? chain(p.in) : [];
+      p.meta = p.technology && (p.kind === 'container' || p.kind === 'component') ? `[${KIND_LABEL[p.kind]}: ${p.technology}]` : `[${KIND_LABEL[p.kind]}]`;
+      pById.set(p.id, p);
+      ps.push(p);
+    }
+    if (ps.length < 2) fail('至少要有两个参与者');
+    const assigned = new Map(), used = { person: 0, system: 0 };
+    for (const p of ps) {
+      if (p.color) continue;
+      if (p.kind === 'container' || p.kind === 'component' || (p.kind === 'system' && p.scope)) { p.color = SCOPE_COLOR; continue; }
+      const k = `${p.kind}:${p.tag || p.id}`;
+      if (!assigned.has(k)) assigned.set(k, PALETTE[p.kind][used[p.kind]++ % PALETTE[p.kind].length]);
+      p.color = assigned.get(k);
+    }
+    // 同一边界里的参与者在左右顺序上必须相邻，否则边界框会把别的参与者框进去
+    for (const b of bById.values()) {
+      const idx = ps.map((p, i) => (p.chain.includes(b.id) ? i : -1)).filter((i) => i >= 0);
+      b.members = idx.map((i) => ps[i]);
+      if (!idx.length) { fail(`边界「${b.name}」里没有任何参与者`); continue; }
+      if (idx[idx.length - 1] - idx[0] + 1 !== idx.length) fail(`边界「${b.name}」里的参与者在 participants 里不相邻，调整顺序`);
+    }
+
+    // ---- 消息 ----
+    const msgs = (model.messages || []).filter((m, i) => {
+      const who = `第 ${i + 1} 条消息（${m.from} → ${m.to}）`;
+      if (!pById.has(m.from) || !pById.has(m.to)) { fail(`${who}：端点 id 不存在`); return false; }
+      if (!m.description) fail(`${who}：缺少 description（写做什么）`);
+      const a = pById.get(m.from), b = pById.get(m.to);
+      const crossProcess = a.kind !== 'person' && b.kind !== 'person' && !(a.kind === 'component' && b.kind === 'component') && a !== b;
+      if (crossProcess && !m.technology) fail(`${who}：涉及 container 或软件系统，是跨进程交互，要写 technology`);
+      if (m.details !== undefined) {
+        const d = m.details;
+        const isText = (v) => typeof v === 'string';
+        if (!d || typeof d !== 'object' || Array.isArray(d)) {
+          fail(`${who}：details 要写成对象 { note, items, example }`);
+          m.details = undefined;
+        } else {
+          if (d.note !== undefined && !isText(d.note)) fail(`${who}：details.note 要写成字符串`);
+          if (d.example !== undefined && !isText(d.example)) fail(`${who}：details.example 要写成字符串，多行用 \\n`);
+          if (d.items !== undefined && !(Array.isArray(d.items) && d.items.every((r) => Array.isArray(r) && r.length === 3 && r.every(isText)))) {
+            fail(`${who}：details.items 的每一行要写成 [项, 来源, 样例] 三个字符串`);
+          }
+          if (!d.note && !d.example && !(Array.isArray(d.items) && d.items.length)) warn(`${who}：details 是空的，删掉或补上内容`);
+        }
+      }
+      m.n = i + 1;
+      return true;
+    });
+    if (!msgs.length) fail('至少要有一条消息');
+    if (msgs.length > MAX_MESSAGES) warn(`消息有 ${msgs.length} 条，超过 ${MAX_MESSAGES} 条：只画这个场景的关键交互，或者拆成几张图`);
+    for (const p of ps) {
+      if (!msgs.some((m) => m.from === p.id || m.to === p.id)) warn(`「${p.name}」没有参与任何消息：与这个场景无关就删掉`);
+    }
+
+    // ---- 横向：列间距按参与者宽度和消息标签宽度撑开 ----
+    for (const p of ps) p.size = headSize(p);
+    const index = new Map(ps.map((p, i) => [p.id, i]));
+    for (const m of msgs) {
+      m.lines = wrapBalanced(`${m.n}: ${m.description || ''}${m.details ? ' ⓘ' : ''}`, TXT.msg, LABEL_W);
+      m.tech = m.technology ? `[${m.technology}]` : '';
+      m.labelW = Math.max(...m.lines.map((s) => measure(s, TXT.msg)), m.tech ? measure(m.tech, TXT.tech) : 0);
+      m.labelH = m.lines.length * TXT.msg.lh + (m.tech ? TXT.tech.lh : 0);
+    }
+    const gaps = ps.slice(1).map((p, i) => (ps[i].size.w + p.size.w) / 2 + MIN_GAP);
+    let rightExtra = 0;
+    const spanOf = (m) => Math.abs(index.get(m.to) - index.get(m.from));
+    for (const m of [...msgs].sort((a, b) => spanOf(a) - spanOf(b))) {
+      const i = index.get(m.from), j = index.get(m.to);
+      if (i === j) {   // 自调用：标签在生命线右边，占下一列间距
+        const need = SELF_W + 16 + m.labelW + 20;
+        if (i < gaps.length) gaps[i] = Math.max(gaps[i], need); else rightExtra = Math.max(rightExtra, need);
+        continue;
+      }
+      const lo = Math.min(i, j), hi = Math.max(i, j);
+      const span = gaps.slice(lo, hi).reduce((s, g) => s + g, 0);
+      const need = m.labelW + 40;
+      if (span < need) for (let k = lo; k < hi; k++) gaps[k] += (need - span) / (hi - lo);
+    }
+    let x = 0;
+    ps.forEach((p, i) => { if (i) x += gaps[i - 1]; p.x = x; });
+
+    // ---- 纵向：边界标题 → 参与者头 → 消息 → 底部参与者头 ----
+    const depthOf = (b) => chain(b.id).length;
+    const live = [...bById.values()].filter((b) => !b.broken && b.members && b.members.length);
+    const maxDepth = Math.max(0, ...live.map(depthOf));
+    const headTop = maxDepth * HEADER_H + (maxDepth ? 10 : 0);
+    const headH = Math.max(...ps.map((p) => p.size.h), BOX_H);
+    let y = headTop + headH + 24;
+    for (const m of msgs) {
+      m.labelTop = y;
+      m.y = y + m.labelH + 8;
+      y = m.y + (m.from === m.to ? 46 : 26);
+    }
+    const bottomTop = y + 8, bottom = bottomTop + headH;
+
+    // 边界框：外层比内层多留一圈
+    const below = (b) => Math.max(0, ...live.filter((c) => c.in === b.id).map((c) => 1 + below(c)));
+    for (const b of live) {
+      const pad = 14 + 16 * below(b);
+      const d = depthOf(b);
+      b.rect = {
+        x: Math.min(...b.members.map((p) => p.x - p.size.w / 2)) - pad,
+        y: (d - 1) * HEADER_H,
+        w: 0, h: 0,
+      };
+      b.rect.w = Math.max(...b.members.map((p) => p.x + p.size.w / 2)) + pad - b.rect.x;
+      b.rect.h = bottom + 10 + 14 * below(b) - b.rect.y;
+      const titleW = Math.max(measure(b.name, TXT.bname), measure(`[${b.type}]`, TXT.btype)) + 20;
+      if (titleW > b.rect.w) warn(`边界「${b.name}」的标题比边界还宽，名字写短一点`);
+    }
+    for (const b of live) {
+      for (const p of ps) {
+        if (!b.members.includes(p) && p.x + p.size.w / 2 > b.rect.x && p.x - p.size.w / 2 < b.rect.x + b.rect.w) {
+          fail(`「${p.name}」不在边界「${b.name}」里，却和边界框重叠，调整 participants 顺序`);
+        }
+      }
+    }
+
+    // ---- 绘制 ----
+    const svg = document.getElementById('c4-diagram');
+    const gB = node('g', {}, svg), gLife = node('g', {}, svg), gM = node('g', {}, svg), gH = node('g', {}, svg), gT = node('g', {}, svg);
+    for (const b of [...live].sort((a, c) => depthOf(a) - depthOf(c))) {
+      const r = b.rect;
+      node('rect', { x: r.x, y: r.y, width: r.w, height: r.h, fill: 'none', stroke: SCOPE_COLOR, 'stroke-width': 1.6 }, gB);
+      textLines(gB, [b.name], r.x + r.w / 2, r.y + 4, TXT.bname, SCOPE_COLOR);
+      textLines(gB, [`[${b.type}]`], r.x + r.w / 2, r.y + 4 + TXT.bname.lh, TXT.btype, SCOPE_COLOR);
+    }
+    for (const p of ps) {
+      node('line', { x1: p.x, y1: headTop + p.size.h, x2: p.x, y2: bottomTop, stroke: LIFELINE, 'stroke-width': 1, 'stroke-dasharray': '4 4' }, gLife);
+      drawHead(gH, p, p.x, headTop);
+      drawHead(gH, p, p.x, bottomTop);
+    }
+    for (const m of msgs) {
+      const a = pById.get(m.from), b = pById.get(m.to);
+      let lx;
+      if (a === b) {
+        const x0 = a.x, x1 = a.x + SELF_W;
+        node('polyline', { points: `${x0},${m.y} ${x1},${m.y} ${x1},${m.y + 20} ${x0 + 10},${m.y + 20}`, fill: 'none', stroke: INK, 'stroke-width': 1.6, 'stroke-dasharray': '8 5' }, gM);
+        node('polygon', { points: `${x0},${m.y + 20} ${x0 + 10},${m.y + 16.5} ${x0 + 10},${m.y + 23.5}`, fill: INK }, gM);
+        lx = x1 + 12;
+      } else {
+        drawArrow(gM, a.x, b.x, m.y);
+        lx = Math.min(a.x, b.x) + 12;
+      }
+      // 有 details 的消息：标签链接到图下方「消息说明」里的同号条目
+      const gL = m.details ? node('a', { href: `#c4-msg-${m.n}` }, gM) : gM;
+      node('rect', { x: lx - 3, y: m.labelTop - 1, width: m.labelW + 6, height: m.labelH + 2, fill: '#fff' }, gL);
+      textLines(gL, m.lines, lx, m.labelTop, TXT.msg, INK, 'start');
+      if (m.tech) textLines(gL, [m.tech], lx, m.labelTop + m.lines.length * TXT.msg.lh, TXT.tech, INK, 'start');
+    }
+    const minX = Math.min(...ps.map((p) => p.x - p.size.w / 2), ...live.map((b) => b.rect.x));
+    let maxX = Math.max(...ps.map((p) => p.x + p.size.w / 2 + (p === ps[ps.length - 1] ? rightExtra : 0)), ...live.map((b) => b.rect.x + b.rect.w));
+    let maxY = Math.max(bottom, ...live.map((b) => b.rect.y + b.rect.h));
+    const title = { size: 26, weight: 400, lh: 34 }, sub = { size: 15, weight: 400, lh: 22 };
+    textLines(gT, [model.title || ''], minX, maxY + 36, title, INK, 'start');
+    if (model.description) textLines(gT, [model.description], minX, maxY + 36 + title.lh, sub, '#666', 'start');
+    maxX = Math.max(maxX, minX + measure(model.title || '', title), minX + measure(model.description || '', sub));
+    maxY += 36 + title.lh + (model.description ? sub.lh : 0);
+    const vw = maxX - minX + 2 * MARGIN, vh = maxY + 2 * MARGIN;
+    svg.setAttribute('viewBox', `${minX - MARGIN} ${-MARGIN} ${vw} ${vh}`);
+    svg.setAttribute('width', vw);
+    svg.setAttribute('aria-label', model.title || 'Dynamic diagram');
+
+    renderKey(ps, live);
+    renderDetails(msgs);
+  }
+
+  // ---- 消息说明：每条带 details 的消息一节（说明、[项, 来源, 样例] 表、数据样例）----
+  function renderDetails(msgs) {
+    const list = msgs.filter((m) => m.details);
+    if (!list.length) return;
+    const sec = document.getElementById('c4-details');
+    const el = (tag, cls, text) => {
+      const e = document.createElement(tag);
+      if (cls) e.className = cls;
+      if (text !== undefined) e.textContent = text;
+      return e;
+    };
+    sec.appendChild(el('h2', '', '消息说明'));
+    for (const m of list) {
+      const d = m.details;
+      const art = el('article');
+      art.id = `c4-msg-${m.n}`;
+      const h = el('h3', '', `${m.n}: ${m.description || ''}`);
+      if (m.technology) h.appendChild(el('span', 'tech', `[${m.technology}]`));
+      art.appendChild(h);
+      if (typeof d.note === 'string' && d.note) art.appendChild(el('p', '', d.note));
+      const rows = Array.isArray(d.items) ? d.items.filter((r) => Array.isArray(r)) : [];
+      if (rows.length) {
+        const table = el('table');
+        const head = table.createTHead().insertRow();
+        for (const c of ['项', '来源', '样例']) head.appendChild(el('th', '', c));
+        const body = table.createTBody();
+        for (const r of rows) {
+          const tr = body.insertRow();
+          r.slice(0, 3).forEach((c, i) => tr.appendChild(el('td', i === 2 ? 'sample' : '', String(c))));
+        }
+        art.appendChild(table);
+      }
+      if (typeof d.example === 'string' && d.example) art.appendChild(el('pre', '', d.example));
+      sec.appendChild(art);
+    }
+    sec.hidden = false;
+  }
+
+  // ---- 图例：每种参与者一项，再加边界和消息 ----
+  function renderKey(ps, boundaries) {
+    const svg = document.getElementById('c4-key');
+    const rank = { person: 0, system: 1, container: 2, component: 3 };
+    const label = (p) => {
+      if (p.kind === 'person') return `Person, ${p.tag || p.name}`;
+      if (p.kind === 'system') return p.tag || p.name;
+      if (p.kind === 'container') return p.shape === 'database' ? 'Container, Database' : 'Container';
+      return 'Component';
+    };
+    const groups = new Map();
+    for (const p of [...ps].sort((a, b) => rank[a.kind] - rank[b.kind])) {
+      const k = `${p.kind}|${iconHead(p)}|${p.color}`;
+      if (!groups.has(k)) groups.set(k, { proto: p, labels: [] });
+      if (!groups.get(k).labels.includes(label(p))) groups.get(k).labels.push(label(p));
+    }
+    const items = [...groups.values()].map((g) => ({ kind: 'head', proto: g.proto, text: g.labels.join('、') }));
+    if (boundaries.length) items.push({ kind: 'boundary', text: 'Boundary（系统 / 容器）' });
+    items.push({ kind: 'message', text: 'n: 交互（编号 = 先后顺序）' });
+    const CELL_W = 230, CELL_H = 110, PER_ROW = 6;
+    items.forEach((it, i) => {
+      const cx = (i % PER_ROW) * CELL_W + CELL_W / 2, top = Math.floor(i / PER_ROW) * CELL_H;
+      const g = node('g', {}, svg);
+      if (it.kind === 'head') {
+        const p = { ...it.proto, name: it.text.length > 22 ? it.text.slice(0, 21) + '…' : it.text, meta: '' };
+        p.size = { w: Math.min(CELL_W - 20, measure(p.name, TXT.name) + 24), h: BOX_H };
+        drawHead(g, p, cx, top + 10);
+        return;
+      }
+      if (it.kind === 'boundary') {
+        node('rect', { x: cx - 95, y: top + 10, width: 190, height: 56, fill: 'none', stroke: SCOPE_COLOR, 'stroke-width': 1.6 }, g);
+        textLines(g, [it.text], cx, top + 10 + 4, TXT.key, SCOPE_COLOR);
+        return;
+      }
+      drawArrow(g, cx - 90, cx + 90, top + 46);
+      textLines(g, [it.text], cx - 88, top + 18, TXT.key, INK, 'start');
+    });
+    const rows = Math.ceil(items.length / PER_ROW), cols = Math.min(items.length, PER_ROW);
+    svg.setAttribute('viewBox', `0 0 ${cols * CELL_W} ${rows * CELL_H}`);
+    svg.setAttribute('width', cols * CELL_W);
+    svg.setAttribute('aria-label', 'Diagram key');
+  }
+
+  try {
+    render();
+  } catch (e) {
+    fail(`渲染异常：${e && e.message}`);
+    console.error(e);
+  }
+  const status = problems.some((p) => p.level === 'error') ? 'error' : problems.length ? 'warn' : 'ok';
+  document.documentElement.dataset.c4Status = status;
+  const report = document.getElementById('c4-report');
+  for (const p of problems) {
+    const li = document.createElement('li');
+    li.dataset.level = p.level;
+    li.textContent = p.msg;
+    report.appendChild(li);
+  }
+  report.hidden = !problems.length;
+  if (problems.length) console.warn('[c4]', problems);
+})();
+</script>
+</body>
+</html>
