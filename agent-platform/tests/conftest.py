@@ -177,6 +177,10 @@ _TEST_DATA_TABLES = (
     # 沙箱基座：实例登记和生命周期日志（模板是迁移种子，保留）
     "sandbox_instance",
     "sandbox_event",
+    # 沙箱通用供给：按人的账户、名下的沙箱、绑定
+    "sandbox_binding",
+    "user_sandbox",
+    "sandbox_account",
     "thread",
     "agent_version",
     "agent",

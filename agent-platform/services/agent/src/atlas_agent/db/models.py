@@ -960,3 +960,78 @@ class SandboxEvent(Base):
         Index("ix_sandbox_event_external", "external_id"),
         Index("ix_sandbox_event_time", "occurred_at"),
     )
+
+
+# ─────────────────────────────────────────────── 沙箱 · 通用供给（迁移 0037）
+
+
+class SandboxAccountRow(Base, TimestampMixin):
+    """一个人的沙箱账户（聚合根 SandboxAccount 的锚点）：只有版本号，是按人判配额时的并发锚点。
+
+    见 c4-model/agent/sandbox/code-sandbox-provisioning.html。第一次给这个人分配沙箱时建。
+    ★ 领域对象在 sandbox/provisioning/model.py；这三张表的行只在 SandboxAccountRepository 里用。
+    """
+
+    __tablename__ = "sandbox_account"
+
+    id: Mapped[int] = _pk()
+    user_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+
+    __table_args__ = (UniqueConstraint("user_uuid", name="uk_sandbox_account_user"),)
+
+
+class UserSandboxRow(Base, TimestampMixin):
+    """这个人名下的一个沙箱（实体 UserSandbox）。
+
+    和基座的 sandbox_instance 一对一、共用 sandbox_uuid。
+
+    退役完成后整行删除；历史看基座的生命周期日志 sandbox_event。
+    """
+
+    __tablename__ = "user_sandbox"
+
+    id: Mapped[int] = _pk()
+    sandbox_uuid: Mapped[UUID] = _logical_key()
+    user_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
+    #: 建它用的模板 code 和镜像，建好后不变
+    template_code: Mapped[str] = mapped_column(String(63), nullable=False)
+    image: Mapped[str] = mapped_column(String(255), nullable=False)
+    #: creating / ready / retiring
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="creating", server_default="creating"
+    )
+    ready_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("sandbox_uuid", name="uk_user_sandbox_uuid"),
+        Index("ix_user_sandbox_user", "user_uuid"),
+    )
+
+
+class SandboxBindingRow(Base):
+    """沙箱正在服务的业务（实体 SandboxBinding）。解绑、退役时删除；只增删、不修改。
+
+    ★ (biz_type, biz_id) 唯一：一个业务至多绑一个沙箱，由唯一约束兜底（不靠分布式锁）。
+    """
+
+    __tablename__ = "sandbox_binding"
+
+    id: Mapped[int] = _pk()
+    binding_uuid: Mapped[UUID] = _logical_key()
+    sandbox_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
+    #: native / cli_agent
+    biz_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    #: 原生是工作区所属根会话的 uuid，CLI Agent 是 CLI Agent 会话的 uuid
+    biz_id: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
+    bound_at: Mapped[datetime] = mapped_column(
+        UTCDateTime, server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint("binding_uuid", name="uk_sandbox_binding_uuid"),
+        UniqueConstraint("biz_type", "biz_id", name="uk_sandbox_binding_biz"),
+        Index("ix_sandbox_binding_sandbox", "sandbox_uuid"),
+    )
