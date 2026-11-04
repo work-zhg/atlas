@@ -27,6 +27,44 @@
   #c4-details td.sample { word-break: break-all; }
   #c4-details pre { margin: 0; padding: 10px 12px; border: 1px solid #e3e3e3; background: #f6f8fa; font-size: 12px; line-height: 1.5; overflow-x: auto; }
   svg a { cursor: pointer; }
+  /* 记忆原理：手写的静态图，不经渲染器 */
+  #principle { max-width: 1280px; }
+  #principle h3 { margin: 32px 0 8px; font-size: 15px; font-weight: 600; color: #333; }
+  #principle p { margin: 0 0 8px; font-size: 14px; line-height: 1.7; }
+  #principle code { padding: 0 3px; background: #f6f8fa; font-family: Menlo, Consolas, monospace; font-size: 12.5px; }
+  #principle ol { margin: 8px 0 0; padding: 0; list-style: none; }
+  #principle ol li { position: relative; margin: 0 0 6px; padding-left: 30px; font-size: 14px; line-height: 1.7; }
+  #principle ol li .n { position: absolute; left: 0; top: 2px; width: 20px; height: 20px; border-radius: 50%; background: #d9480f; color: #fff; font-size: 12px; font-weight: 700; line-height: 20px; text-align: center; }
+  #principle table { width: 100%; margin: 8px 0 0; border-collapse: collapse; font-size: 13px; line-height: 1.6; }
+  #principle th, #principle td { padding: 6px 10px; border: 1px solid #e3e3e3; text-align: left; vertical-align: top; }
+  #principle th { background: #f6f8fa; font-weight: 600; }
+  #principle th:first-child { width: 28%; }
+  #principle svg { margin: 8px 0 4px; }
+  #principle svg text { font-size: 13px; fill: #444; }
+  #principle svg .t-name { font-size: 15px; fill: #1168bd; text-anchor: middle; }
+  #principle svg .t-sub { font-size: 12px; fill: #888; text-anchor: middle; }
+  #principle svg .t-head { font-size: 14px; font-weight: 600; fill: #1168bd; }
+  #principle svg .t-key { font-size: 12px; fill: #888; }
+  #principle svg .t-lab { font-size: 12px; fill: #666; }
+  #principle svg .t-hot { font-size: 12px; fill: #d9480f; }
+  #principle svg .t-mute { font-size: 12px; fill: #aaa; }
+  #principle svg .t-ghost { font-size: 14px; font-weight: 600; fill: #888; }
+  #principle svg .hot { fill: #d9480f; }
+  #principle svg .mid { text-anchor: middle; }
+  #principle svg .end { text-anchor: end; }
+  #principle svg .b { font-weight: 700; }
+  #principle svg .node { fill: #fff; stroke: #1168bd; stroke-width: 1.6; }
+  #principle svg .head { fill: #f6f8fa; stroke: none; }
+  #principle svg .sep { stroke: #e3e3e3; stroke-width: 1; }
+  #principle svg .bnd { fill: none; stroke: #1168bd; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .ghost { fill: #fafafa; stroke: #aaa; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .gap { fill: #fff6f0; stroke: #d9480f; stroke-width: 1.2; stroke-dasharray: 5 4; }
+  #principle svg .e { fill: none; stroke: #444; stroke-width: 1.6; }
+  #principle svg .e-hot { fill: none; stroke: #d9480f; stroke-width: 2.4; }
+  #principle svg .e-mute { fill: none; stroke: #bbb; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .e-link { fill: none; stroke: #d9480f; stroke-width: 1.4; stroke-dasharray: 4 3; }
+  #principle svg .badge circle { fill: #d9480f; stroke: #fff; stroke-width: 2; }
+  #principle svg .badge text { fill: #fff; font-size: 12px; font-weight: 700; text-anchor: middle; }
 </style>
 </head>
 <body>
@@ -288,6 +326,464 @@
   <section id="c4-details" hidden></section>
   <h2>Diagram key</h2>
   <svg id="c4-key" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+
+  <!-- 记忆原理：静态图，不经上面的渲染器。场景同时序图：用户说「以后前端项目都用 bun」，模型用一条新记忆取代 #12 -->
+  <section id="principle">
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+      <defs>
+        <marker id="pr-a" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#444"/></marker>
+        <marker id="pr-h" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#d9480f"/></marker>
+        <marker id="pr-m" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#bbb"/></marker>
+      </defs>
+    </svg>
+
+    <h2>记忆原理</h2>
+    <p>一句话：记忆服务只管「一个实例里一串带编号的条目」。<b>一次写入 = 删除若干旧条目 + 至多新增一条</b>，在实例行锁里串行、一个事务提交；删掉的条目不消失，只记下「被谁取代」，后到的写入沿取代关系找到现状，按客户端给的时间<b>以晚的为准</b>；主题每变一次，就从实例计数器拿一个新版本号。Atlas 一侧只多一条规则：<b>写之前必须看过目标主题的最新版本</b>。它为每个会话记一张版本表，对不上就先把最新条目交给模型，这次不写。下面五张图按时间顺序，场景同上面的时序图：用户说「以后前端项目都用 bun」，模型要用一条新记忆取代 <code>#12</code>「前端项目用 pnpm」（本轮用户发话的时间记作 08:15）。橙色是这次实际走的路，灰色虚线是没走的分支。讲的是现在代码里的做法，和上面时序图（目标模型）不一样的地方列在最后。</p>
+
+    <h3>图 1　写入之前的现场：记忆服务存什么，Atlas 记着什么</h3>
+    <svg width="1240" viewBox="0 0 1240 400" role="img" aria-label="写入之前的现场">
+      <rect class="bnd" x="20" y="20" width="790" height="366" rx="6"/>
+      <text class="t-head" x="36" y="44">记忆服务 · 记忆库（只按实例隔离，不解释内容）</text>
+      <rect class="bnd" x="840" y="20" width="380" height="366" rx="6"/>
+      <text class="t-head" x="856" y="44">Agent 平台 · 会话的记忆状态</text>
+
+      <rect class="node" x="36" y="64" width="220" height="121"/>
+      <rect class="head" x="37" y="65" width="218" height="30"/>
+      <text class="t-head" x="50" y="85">mem_scope 作用域</text>
+      <line class="sep" x1="36" y1="95" x2="256" y2="95"/>
+      <text class="t-key" x="50" y="115">code</text>
+      <text x="140" y="115">user</text>
+      <line class="sep" x1="36" y1="125" x2="256" y2="125"/>
+      <text class="t-key" x="50" y="145">key_fields</text>
+      <text x="140" y="145">["uid"]</text>
+      <line class="sep" x1="36" y1="155" x2="256" y2="155"/>
+      <text class="t-key" x="50" y="175">数据权限</text>
+      <text x="140" y="175">打开</text>
+
+      <path class="e" d="M256 124 H294" marker-end="url(#pr-a)"/>
+      <rect class="node" x="296" y="64" width="230" height="121"/>
+      <rect class="head" x="297" y="65" width="228" height="30"/>
+      <text class="t-head" x="310" y="85">mem_instance 实例</text>
+      <line class="sep" x1="296" y1="95" x2="526" y2="95"/>
+      <text class="t-key" x="310" y="115">key_text</text>
+      <text x="396" y="115">uid=&lt;uid&gt;</text>
+      <line class="sep" x1="296" y1="125" x2="526" y2="125"/>
+      <text class="t-key" x="310" y="145">version_seq</text>
+      <text class="b" x="396" y="145">40</text>
+      <text class="t-key" x="424" y="145">版本号计数器</text>
+      <line class="sep" x1="296" y1="155" x2="526" y2="155"/>
+      <text class="t-key" x="310" y="175">entry_seq</text>
+      <text class="b" x="396" y="175">30</text>
+      <text class="t-key" x="424" y="175">条目编号计数器</text>
+
+      <path class="e" d="M526 124 H564" marker-end="url(#pr-a)"/>
+      <rect class="node" x="566" y="64" width="228" height="91"/>
+      <rect class="head" x="567" y="65" width="226" height="30"/>
+      <text class="t-head" x="580" y="85">mem_topic 主题</text>
+      <line class="sep" x1="566" y1="95" x2="794" y2="95"/>
+      <text class="t-key" x="580" y="115">沟通偏好</text>
+      <text x="656" y="115">v23 · 2 条 · 常驻</text>
+      <line class="sep" x1="566" y1="125" x2="794" y2="125"/>
+      <text class="t-key" x="580" y="145">工具链</text>
+      <text x="656" y="145"><tspan class="hot b">v40</tspan> · 3 条</text>
+
+      <text class="t-lab" x="36" y="212">作用域编码 + 关联主键定位一个实例，不用单独建；实例之间完全隔离</text>
+
+      <path class="e" d="M680 155 V234" marker-end="url(#pr-a)"/>
+      <text class="t-lab" x="692" y="200">主题下是条目</text>
+
+      <rect class="node" x="36" y="236" width="230" height="121"/>
+      <rect class="head" x="37" y="237" width="228" height="30"/>
+      <text class="t-head" x="50" y="257">mem_revision 修订</text>
+      <line class="sep" x1="36" y1="267" x2="266" y2="267"/>
+      <text x="50" y="290">每次写入记一条：</text>
+      <text x="50" y="313">删了哪些、新增了哪条，</text>
+      <text x="50" y="336">结果副本、幂等键</text>
+
+      <rect class="node" x="296" y="236" width="498" height="121"/>
+      <rect class="head" x="297" y="237" width="496" height="30"/>
+      <text class="t-head" x="310" y="257">mem_entry 条目（主题：工具链）</text>
+      <line class="sep" x1="296" y1="267" x2="794" y2="267"/>
+      <text class="hot b" x="310" y="287">#12</text>
+      <text x="360" y="287">前端项目用 pnpm</text>
+      <text x="590" y="287">2026-09-01</text>
+      <text class="t-key" x="700" y="287">active</text>
+      <line class="sep" x1="296" y1="297" x2="794" y2="297"/>
+      <text class="t-key" x="310" y="317">#19</text>
+      <text x="360" y="317">Python 项目用 uv</text>
+      <text x="590" y="317">2026-09-20</text>
+      <text class="t-key" x="700" y="317">active</text>
+      <line class="sep" x1="296" y1="327" x2="794" y2="327"/>
+      <text class="t-key" x="310" y="347">#26</text>
+      <text x="360" y="347">提交前先跑 make lint</text>
+      <text x="590" y="347">2026-10-11</text>
+      <text class="t-key" x="700" y="347">active</text>
+
+      <rect class="node" x="856" y="64" width="348" height="151"/>
+      <rect class="head" x="857" y="65" width="346" height="30"/>
+      <text class="t-head" x="870" y="85">thread_memory 行（随会话存库）</text>
+      <line class="sep" x1="856" y1="95" x2="1204" y2="95"/>
+      <text class="t-key" x="870" y="115">snapshot.block</text>
+      <text x="1000" y="115">&lt;memory&gt; 常驻块</text>
+      <line class="sep" x1="856" y1="125" x2="1204" y2="125"/>
+      <text class="t-key" x="870" y="145">snapshot.catalog</text>
+      <text x="1000" y="145">沟通偏好 23 · 工具链 40</text>
+      <line class="sep" x1="856" y1="155" x2="1204" y2="155"/>
+      <text class="t-key" x="870" y="175">snapshot.resident</text>
+      <text x="1000" y="175">沟通偏好 v23 · 2 条</text>
+      <line class="sep" x1="856" y1="185" x2="1204" y2="185"/>
+      <text class="t-key" x="870" y="205">known</text>
+      <text x="1000" y="205">沟通偏好 23 · <tspan class="hot b">工具链 40</tspan></text>
+
+      <text class="t-lab" x="856" y="244">snapshot：放进系统提示词的常驻块。只在首次、</text>
+      <text class="t-lab" x="856" y="264">压缩、空闲超过缓存期、记忆页操作过时重建</text>
+      <text class="t-lab" x="856" y="294">known：模型在上下文里看到的各主题是哪个版本</text>
+      <text class="t-lab" x="856" y="314">（常驻块 + 历史里的加载、写入结果）</text>
+      <text class="t-hot" x="856" y="344">工具链 40：本会话前面 load_memory 过，</text>
+      <text class="t-hot" x="856" y="364">和服务端的 v40 一致</text>
+
+      <g class="badge"><circle cx="296" cy="64" r="10"/><text x="296" y="68">1</text></g>
+      <g class="badge"><circle cx="526" cy="140" r="10"/><text x="526" y="144">2</text></g>
+      <g class="badge"><circle cx="1204" cy="200" r="10"/><text x="1204" y="204">3</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>作用域 → 实例 → 主题 → 条目。作用域由管理员配置；「作用域编码 + 关联主键」定位一个实例，第一次登记或写入时建行。Atlas 本期只用作用域 <code>user</code>，关联主键是会话所属用户的 uid，由 Atlas 按会话填，模型的工具参数里没有这一项。主题、条目都是 Atlas 写进来的，服务端不解释内容，「常驻」只是主题扩展属性里的一个标记。</li>
+      <li><span class="n">2</span>实例行上有两个计数器，只在实例锁里递增：条目编号（<code>#31</code> 这样的号，实例内唯一，移动、拆分都不变）和版本号（主题每变一次就取一个新值，整个实例共用一个序列）。服务端只报告主题的大小（条数、字数），不按大小拒绝写入。</li>
+      <li><span class="n">3</span>Atlas 为每个会话存一行 thread_memory：<code>snapshot</code> 是常驻块的快照，<code>known</code> 是模型看到的各主题版本。本例中模型前面已经 load_memory 过「工具链」，所以 <code>known</code> 里是 40，和服务端一致。</li>
+    </ol>
+
+    <h3>图 2　写之前（Atlas）：没看过最新内容就不写</h3>
+    <svg width="1240" viewBox="0 0 1240 360" role="img" aria-label="写之前：没看过最新内容就不写">
+      <rect class="node" x="20" y="50" width="200" height="60" rx="4"/>
+      <text class="t-name" x="120" y="76">模型调 save_memory</text>
+      <text class="t-sub" x="120" y="96">topic=工具链 · replaces=[12]</text>
+      <path class="e-hot" d="M220 80 H258" marker-end="url(#pr-h)"/>
+      <rect class="node" x="260" y="50" width="190" height="60" rx="4"/>
+      <text class="t-name" x="355" y="76">守卫</text>
+      <text class="t-sub" x="355" y="96">暂停了？本轮写满 8 次？</text>
+      <path class="e-hot" d="M450 80 H488" marker-end="url(#pr-h)"/>
+      <text class="t-hot mid" x="469" y="72">否</text>
+      <rect class="node" x="490" y="50" width="230" height="60" rx="4"/>
+      <text class="t-name" x="605" y="76">加载目标主题</text>
+      <text class="t-sub" x="605" y="96">GET …/topics/工具链 → v40 · 3 条</text>
+      <path class="e-hot" d="M720 80 H758" marker-end="url(#pr-h)"/>
+      <polygon class="node" points="760,80 850,36 940,80 850,124"/>
+      <text class="t-name" x="850" y="77">已知版本</text>
+      <text class="t-name" x="850" y="96">= 40？</text>
+      <path class="e-hot" d="M940 80 H1008" marker-end="url(#pr-h)"/>
+      <text class="t-hot mid" x="974" y="72">是</text>
+      <rect class="node" x="1010" y="50" width="210" height="60" rx="4"/>
+      <text class="t-name" x="1115" y="76">发写入</text>
+      <text class="t-sub" x="1115" y="96">POST …/writes → 图 3</text>
+
+      <path class="e-mute" d="M355 110 V168" marker-end="url(#pr-m)"/>
+      <text class="t-mute" x="365" y="145">是</text>
+      <rect class="ghost" x="260" y="170" width="190" height="56" rx="4"/>
+      <text class="t-ghost mid" x="355" y="194">这次没有保存</text>
+      <text class="t-mute mid" x="355" y="214">工具结果里说明原因</text>
+
+      <path class="e-mute" d="M605 110 V168" marker-end="url(#pr-m)"/>
+      <text class="t-mute" x="615" y="145">TOPIC_NOT_FOUND</text>
+      <rect class="ghost" x="490" y="170" width="230" height="56" rx="4"/>
+      <text class="t-ghost mid" x="605" y="194">新建主题</text>
+      <text class="t-mute mid" x="605" y="214">给了 topic_description 才建，接着写</text>
+
+      <path class="e-mute" d="M850 124 V168" marker-end="url(#pr-m)"/>
+      <text class="t-mute" x="862" y="145">否：没看过，或之后有更新</text>
+      <rect class="ghost" x="750" y="170" width="200" height="56" rx="4"/>
+      <text class="t-ghost mid" x="850" y="194">不写，交回最新条目</text>
+      <text class="t-mute mid" x="850" y="214">已知版本记成当前的</text>
+      <path class="e-mute" d="M850 226 V262 H120 V112" marker-end="url(#pr-m)"/>
+      <text class="t-mute mid" x="485" y="254">模型看完最新条目、重新判断后再调一次：这回已知版本一致，就能写</text>
+
+      <rect class="node" x="20" y="286" width="1200" height="60"/>
+      <line class="sep" x1="420" y1="286" x2="420" y2="346"/>
+      <line class="sep" x1="820" y1="286" x2="820" y2="346"/>
+      <text class="t-head" x="34" y="309">remove</text>
+      <text x="34" y="333">= replaces = [12]：要取代的旧条目编号</text>
+      <text class="t-head" x="434" y="309">occurred_at</text>
+      <text x="434" y="333">本轮用户发话的时间 08:15，不是调用的时间</text>
+      <text class="t-head" x="834" y="309">idempotency_key</text>
+      <text x="834" y="333">agent: + sha256(run · 作用域 · 主题 · 内容 · 编号)</text>
+
+      <g class="badge"><circle cx="450" cy="50" r="10"/><text x="450" y="54">1</text></g>
+      <g class="badge"><circle cx="720" cy="50" r="10"/><text x="720" y="54">2</text></g>
+      <g class="badge"><circle cx="940" cy="50" r="10"/><text x="940" y="54">3</text></g>
+      <g class="badge"><circle cx="1220" cy="286" r="10"/><text x="1220" y="290">4</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>守卫：用户在记忆页暂停了写入，或本轮已写满 <code>memory_max_writes_per_run</code>（8）次，就不写，工具结果里说明原因。同一轮的 save_memory、forget_memory 在一把进程内的锁里排队，计数不会算错。</li>
+      <li><span class="n">2</span>不管模型看没看过，都先加载一次目标主题，拿到服务端当前的版本号和全部有效条目。主题不存在时：给了 <code>topic_description</code> 就新建（<code>attrs.resident</code> 按参数定），新建的主题是空的，版本直接记入已知，接着写。</li>
+      <li><span class="n">3</span>比的是版本号，不是内容。版本表里没有这个主题（本会话没看过），或者有但和当前版本不同（之后被别的会话、补记、拆分或记忆页改过），这次就<b>不写入</b>：把最新条目作为工具结果交回，同时把已知版本记成当前版本。模型看完重新判断，再调一次就能写。这样冲突判断总是基于目标主题最新、完整的内容。</li>
+      <li><span class="n">4</span>一致就发写入（时序图消息 1）。<code>replaces</code> 原样作为 <code>remove</code>；时间取本轮用户发话的时间（补记取它依据的那条用户消息的时间）；幂等键由 run、作用域、主题、内容、删除的编号算出，网络重试、run 被接管后重放同一个调用，算出来都一样。</li>
+    </ol>
+
+    <h3>图 3　服务端一次写入：锁内判定，时间晚的为准</h3>
+    <svg width="1240" viewBox="0 0 1240 380" role="img" aria-label="服务端一次写入">
+      <rect class="node" x="20" y="50" width="170" height="60" rx="4"/>
+      <text class="t-name" x="105" y="76">定位实例、查权限</text>
+      <text class="t-sub" x="105" y="96">锁外 · 消息 2–5</text>
+      <path class="e-hot" d="M190 80 H218" marker-end="url(#pr-h)"/>
+      <rect class="node" x="220" y="50" width="180" height="60" rx="4"/>
+      <text class="t-name" x="310" y="76">锁实例行</text>
+      <text class="t-sub" x="310" y="96">SELECT … FOR UPDATE</text>
+      <path class="e-hot" d="M400 80 H418" marker-end="url(#pr-h)"/>
+      <polygon class="node" points="420,80 480,40 540,80 480,120"/>
+      <text class="t-name" x="480" y="77">幂等键</text>
+      <text class="t-name" x="480" y="96">写过？</text>
+      <path class="e-hot" d="M540 80 H588" marker-end="url(#pr-h)"/>
+      <text class="t-hot mid" x="564" y="72">否</text>
+      <rect class="node" x="590" y="50" width="190" height="60" rx="4"/>
+      <text class="t-name" x="685" y="76">找要删条目的现状</text>
+      <text class="t-sub" x="685" y="96">#12 还有效 → 就是它</text>
+      <path class="e-hot" d="M780 80 H808" marker-end="url(#pr-h)"/>
+      <polygon class="node" points="810,80 870,40 930,80 870,120"/>
+      <text class="t-name" x="870" y="77">现状比</text>
+      <text class="t-name" x="870" y="96">本次晚？</text>
+      <path class="e-mute" d="M930 80 H978" marker-end="url(#pr-m)"/>
+      <text class="t-mute mid" x="954" y="72">是</text>
+      <rect class="ghost" x="980" y="52" width="240" height="56" rx="4"/>
+      <text class="t-ghost mid" x="1100" y="76">整次作废 discarded</text>
+      <text class="t-mute mid" x="1100" y="96">什么都不写，返回冲突条目（图 5）</text>
+
+      <path class="e-mute" d="M480 120 V158" marker-end="url(#pr-m)"/>
+      <text class="t-mute" x="490" y="144">是</text>
+      <rect class="ghost" x="390" y="160" width="180" height="56" rx="4"/>
+      <text class="t-ghost mid" x="480" y="184">原样返回第一次结果</text>
+      <text class="t-mute mid" x="480" y="204">replayed: true</text>
+
+      <path class="e-hot" d="M870 120 V236 H120 V258" marker-end="url(#pr-h)"/>
+      <text class="t-hot" x="882" y="160">否：#12 是 2026-09-01，早于 08:15</text>
+
+      <rect class="node" x="20" y="260" width="200" height="60" rx="4"/>
+      <text class="t-name" x="120" y="286">新增 #31</text>
+      <text class="t-sub" x="120" y="306">entry_seq 30 → 31</text>
+      <path class="e-hot" d="M220 290 H253" marker-end="url(#pr-h)"/>
+      <rect class="node" x="255" y="260" width="240" height="60" rx="4"/>
+      <text class="t-name" x="375" y="286">#12 → deleted</text>
+      <text class="t-sub" x="375" y="306">superseded_by 31 · retired_at 08:15</text>
+      <path class="e-hot" d="M495 290 H528" marker-end="url(#pr-h)"/>
+      <rect class="node" x="530" y="260" width="220" height="60" rx="4"/>
+      <text class="t-name" x="640" y="286">工具链 v40 → v41</text>
+      <text class="t-sub" x="640" y="306">version_seq +1 · 重算大小</text>
+      <path class="e-hot" d="M750 290 H783" marker-end="url(#pr-h)"/>
+      <rect class="node" x="785" y="260" width="200" height="60" rx="4"/>
+      <text class="t-name" x="885" y="286">记一条修订</text>
+      <text class="t-sub" x="885" y="306">write · 结果副本 · 幂等键</text>
+      <path class="e-hot" d="M985 290 H1018" marker-end="url(#pr-h)"/>
+      <rect class="node" x="1020" y="260" width="200" height="60" rx="4"/>
+      <text class="t-name" x="1120" y="286">COMMIT</text>
+      <text class="t-sub" x="1120" y="306">释放锁 · 返回 changed</text>
+
+      <text class="t-lab" x="20" y="352">从加锁到提交，同一实例的其它写入（包括拆分的提交）都在等这把锁；读不加锁。重放和作废都不写任何东西。</text>
+
+      <g class="badge"><circle cx="400" cy="50" r="10"/><text x="400" y="54">1</text></g>
+      <g class="badge"><circle cx="480" cy="40" r="10"/><text x="480" y="44">2</text></g>
+      <g class="badge"><circle cx="780" cy="50" r="10"/><text x="780" y="54">3</text></g>
+      <g class="badge"><circle cx="870" cy="40" r="10"/><text x="870" y="44">4</text></g>
+      <g class="badge"><circle cx="495" cy="260" r="10"/><text x="495" y="264">5</text></g>
+      <g class="badge"><circle cx="750" cy="260" r="10"/><text x="750" y="264">6</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>访问控制在锁外定位实例、查数据权限（时序图消息 2–5），然后锁实例行（不存在先建）。从这里起，同一实例的写入和拆分的提交一个一个来，锁随事务提交释放。加锁后重新读实例行：查权限时读进来的计数器可能已经被别的事务推进过，以锁里读到的为准。</li>
+      <li><span class="n">2</span>先按幂等键查修订：这个键写过，就原样返回第一次存下的结果（<code>replayed: true</code>），后面都不做。</li>
+      <li><span class="n">3</span>对要删的每一条找「现状」：还有效就是它；被取代过（deleted 且有 <code>superseded_by</code>），就沿取代关系往后走，找到现在有效的那条；被遗忘过（deleted 且没有后继），就取那次遗忘的时间。本例 <code>#12</code> 还有效。目标主题已被拆分时报 <code>TOPIC_GONE</code>，带上拆成了哪些。</li>
+      <li><span class="n">4</span>时间晚的为准：只要有一条的现状晚于本次写入的时间，就整次作废（<code>outcome: discarded</code>，带上冲突条目），什么都不写。遗忘早于本次的，只做新增（<code>skipped</code>）；时间相同的，后到的为准。</li>
+      <li><span class="n">5</span>执行：实例的条目编号 +1，得到 <code>#31</code>。<code>#12</code> 不真删，只改状态，记下 <code>superseded_by=31</code>、<code>retired_at</code>（本次的时间）和删除它的那次修订。</li>
+      <li><span class="n">6</span>实例的 <code>version_seq</code> +1，得到 41，写给这次受影响的每个主题（同一次操作共用一个值），顺带重算条数和字数。最后记一条修订（<code>kind=write</code>、removed [12]、added [31]、结果副本、幂等键），然后提交。</li>
+    </ol>
+
+    <h3>图 4　写入之后的现场：旧条目挂在取代链上，版本号前进</h3>
+    <svg width="1240" viewBox="0 0 1240 420" role="img" aria-label="写入之后的现场">
+      <rect class="node" x="20" y="30" width="560" height="151"/>
+      <rect class="head" x="21" y="31" width="558" height="30"/>
+      <text class="t-head" x="34" y="51">mem_entry（主题：工具链）</text>
+      <line class="sep" x1="20" y1="61" x2="580" y2="61"/>
+      <text class="t-mute b" x="34" y="81">#12</text>
+      <text class="t-mute" x="84" y="81">前端项目用 pnpm</text>
+      <text class="t-mute" x="260" y="81">2026-09-01</text>
+      <text class="t-hot" x="400" y="81">deleted · superseded_by 31</text>
+      <line class="sep" x1="20" y1="91" x2="580" y2="91"/>
+      <text class="t-key" x="34" y="111">#19</text>
+      <text x="84" y="111">Python 项目用 uv</text>
+      <text x="260" y="111">2026-09-20</text>
+      <text class="t-key" x="400" y="111">active</text>
+      <line class="sep" x1="20" y1="121" x2="580" y2="121"/>
+      <text class="t-key" x="34" y="141">#26</text>
+      <text x="84" y="141">提交前先跑 make lint</text>
+      <text x="260" y="141">2026-10-11</text>
+      <text class="t-key" x="400" y="141">active</text>
+      <line class="sep" x1="20" y1="151" x2="580" y2="151"/>
+      <text class="hot b" x="34" y="171">#31</text>
+      <text class="b" x="84" y="171">前端项目改用 bun</text>
+      <text x="260" y="171">2026-11-03 08:15</text>
+      <text class="t-key" x="400" y="171">active · source agent</text>
+      <path class="e-link" d="M580 76 H604 V166 H584" marker-end="url(#pr-h)"/>
+      <text class="t-hot" x="612" y="126">取代链</text>
+
+      <rect class="node" x="660" y="30" width="270" height="151"/>
+      <rect class="head" x="661" y="31" width="268" height="30"/>
+      <text class="t-head" x="674" y="51">mem_topic / mem_instance</text>
+      <line class="sep" x1="660" y1="61" x2="930" y2="61"/>
+      <text class="t-key" x="674" y="81">工具链 version</text>
+      <text class="hot b" x="800" y="81">40 → 41</text>
+      <line class="sep" x1="660" y1="91" x2="930" y2="91"/>
+      <text class="t-key" x="674" y="111">沟通偏好 version</text>
+      <text x="800" y="111">23（没变）</text>
+      <line class="sep" x1="660" y1="121" x2="930" y2="121"/>
+      <text class="t-key" x="674" y="141">version_seq</text>
+      <text x="800" y="141">40 → 41</text>
+      <line class="sep" x1="660" y1="151" x2="930" y2="151"/>
+      <text class="t-key" x="674" y="171">entry_seq</text>
+      <text x="800" y="171">30 → 31</text>
+
+      <rect class="node" x="960" y="30" width="260" height="151"/>
+      <rect class="head" x="961" y="31" width="258" height="30"/>
+      <text class="t-head" x="974" y="51">mem_revision（这次写入）</text>
+      <line class="sep" x1="960" y1="61" x2="1220" y2="61"/>
+      <text class="t-key" x="974" y="81">kind</text>
+      <text x="1090" y="81">write</text>
+      <line class="sep" x1="960" y1="91" x2="1220" y2="91"/>
+      <text class="t-key" x="974" y="111">removed / added</text>
+      <text x="1090" y="111">[12] / [31]</text>
+      <line class="sep" x1="960" y1="121" x2="1220" y2="121"/>
+      <text class="t-key" x="974" y="141">idempotency_key</text>
+      <text x="1090" y="141">agent:3f9c0e…</text>
+      <line class="sep" x1="960" y1="151" x2="1220" y2="151"/>
+      <text class="t-key" x="974" y="171">result</text>
+      <text x="1090" y="171">applied · 40 → 41</text>
+
+      <text class="t-lab" x="20" y="208">这些行在一个事务里写下：要么都生效，要么都不生效。#12 不再被列出和加载，但还留着：能撤销这次写入、能恢复，后到的写入也能沿取代链找到现状（图 5）。</text>
+
+      <rect class="node" x="20" y="236" width="250" height="60" rx="4"/>
+      <text class="t-name" x="145" y="262">写入结果 changed</text>
+      <text class="t-sub" x="145" y="282">工具链：before 40 · after 41</text>
+      <path class="e-hot" d="M270 266 H318" marker-end="url(#pr-h)"/>
+      <polygon class="node" points="320,266 420,222 520,266 420,310"/>
+      <text class="t-name" x="420" y="263">before 40</text>
+      <text class="t-name" x="420" y="282">= 已知 40？</text>
+      <path class="e-hot" d="M520 266 H568" marker-end="url(#pr-h)"/>
+      <text class="t-hot mid" x="544" y="258">是</text>
+      <rect class="node" x="570" y="236" width="230" height="60" rx="4"/>
+      <text class="t-name" x="685" y="262">已知推进到 41</text>
+      <text class="t-sub" x="685" y="282">上下文里的 + 这次写入 = 最新</text>
+      <path class="e-hot" d="M800 266 H848" marker-end="url(#pr-h)"/>
+      <rect class="node" x="850" y="236" width="370" height="60" rx="4"/>
+      <text class="t-name" x="1035" y="262">工具结果「已记住 #31，取代了 #12」</text>
+      <text class="t-sub" x="1035" y="282">留在对话历史里；控制台给出撤销入口</text>
+
+      <path class="e-mute" d="M420 310 V338" marker-end="url(#pr-m)"/>
+      <text class="t-mute" x="432" y="328">否：中间有别人写过</text>
+      <rect class="ghost" x="290" y="340" width="260" height="56" rx="4"/>
+      <text class="t-ghost mid" x="420" y="364">已知保持 40</text>
+      <text class="t-mute mid" x="420" y="384">下次加载返回全部条目，并提示「有更新」</text>
+
+      <rect class="node" x="600" y="340" width="620" height="56" rx="4"/>
+      <text class="t-name" x="910" y="364">常驻快照不动，系统提示词不变</text>
+      <text class="t-sub" x="910" y="384">Agent 自己写入不重建常驻块，前缀缓存保住；下次该刷新时再按版本号重拉</text>
+
+      <g class="badge"><circle cx="20" cy="76" r="10"/><text x="20" y="80">1</text></g>
+      <g class="badge"><circle cx="930" cy="76" r="10"/><text x="930" y="80">2</text></g>
+      <g class="badge"><circle cx="1220" cy="76" r="10"/><text x="1220" y="80">3</text></g>
+      <g class="badge"><circle cx="420" cy="222" r="10"/><text x="420" y="226">4</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span><code>#12</code> 没有被删掉：<code>status=deleted</code>、<code>superseded_by=31</code>、<code>retired_at=08:15</code>。只有 active 的条目会被列出和加载；删除的留在库里，可以撤销这次写入（恢复 <code>#12</code>、删掉 <code>#31</code>），也可以单独恢复。用户在记忆页彻底删除 <code>#31</code> 时，整条取代链（含 <code>#12</code>）一起删，不会删了「改用 bun」还留着「用 pnpm」。</li>
+      <li><span class="n">2</span>实例的两个计数器各进一格。受影响的只有「工具链」，版本 40 → 41；「沟通偏好」不动。版本号不依赖任何时钟、只增不减；整个实例共用一个序列，主题拆掉后再建同名主题，也不会撞上客户端记着的旧值。</li>
+      <li><span class="n">3</span>修订记下这次删了哪些、加了哪条，还原样留一份返回给客户端的结果：同一个幂等键再来，就照它返回。撤销就是按修订反向执行。</li>
+      <li><span class="n">4</span>Atlas 拿 <code>changed</code> 推进版本表。写入前的版本等于已知版本，说明中间没人写过，上下文里的内容加上这次写入就是最新，已知推进到 41；不相等就保持原值，下次加载会重新返回全部条目，调模型时也会附一条「有更新」的提示。</li>
+    </ol>
+
+    <h3>图 5　后到的旧信息：沿取代链找现状，比时间</h3>
+    <svg width="1240" viewBox="0 0 1240 420" role="img" aria-label="后到的旧信息">
+      <path class="e" d="M40 70 H1200" marker-end="url(#pr-a)"/>
+      <text class="t-key end" x="1200" y="56">时间</text>
+      <circle cx="150" cy="70" r="6" fill="#444"/>
+      <text class="b mid" x="150" y="52">07:50</text>
+      <text class="mid" x="150" y="98">会话 A：用户说「前端改用 yarn」</text>
+      <text class="t-lab mid" x="150" y="118">Agent 没记</text>
+      <circle cx="560" cy="70" r="6" fill="#d9480f"/>
+      <text class="b mid hot" x="560" y="52">08:15</text>
+      <text class="mid" x="560" y="98">会话 B：本次写入</text>
+      <text class="t-lab mid" x="560" y="118">#12 → #31「改用 bun」</text>
+      <circle cx="960" cy="70" r="6" fill="#444"/>
+      <text class="b mid" x="960" y="52">08:50</text>
+      <text class="mid" x="960" y="98">会话 A 空闲 30 分钟后补记</text>
+      <text class="t-lab mid" x="960" y="118">删 #12、新增「改用 yarn」，时间取 07:50</text>
+
+      <rect class="node" x="20" y="170" width="230" height="60" rx="4"/>
+      <text class="t-name" x="135" y="196">补记的写入</text>
+      <text class="t-sub" x="135" y="216">remove [12] · occurred_at 07:50</text>
+      <path class="e-hot" d="M250 200 H318" marker-end="url(#pr-h)"/>
+      <text class="t-hot mid" x="284" y="192">找现状</text>
+      <rect class="node" x="320" y="170" width="190" height="60" rx="4"/>
+      <text class="t-name" x="415" y="196">#12 · deleted</text>
+      <text class="t-sub" x="415" y="216">superseded_by 31</text>
+      <path class="e-hot" d="M510 200 H578" marker-end="url(#pr-h)"/>
+      <text class="t-hot mid" x="544" y="192">沿取代链</text>
+      <rect class="node" x="580" y="170" width="190" height="60" rx="4"/>
+      <text class="t-name" x="675" y="196">#31 · active</text>
+      <text class="t-sub" x="675" y="216">occurred_at 08:15</text>
+      <path class="e-hot" d="M770 200 H808" marker-end="url(#pr-h)"/>
+      <polygon class="node" points="810,200 900,156 990,200 900,244"/>
+      <text class="t-name" x="900" y="197">08:15 晚于</text>
+      <text class="t-name" x="900" y="216">07:50？</text>
+      <path class="e-hot" d="M990 200 H1018" marker-end="url(#pr-h)"/>
+      <text class="t-hot mid" x="1004" y="192">是</text>
+      <rect class="node" x="1020" y="170" width="200" height="60" rx="4"/>
+      <text class="t-name" x="1120" y="196">整次作废</text>
+      <text class="t-sub" x="1120" y="216">conflicts：#12 现在是 #31</text>
+
+      <path class="e-mute" d="M900 244 V284" marker-end="url(#pr-m)"/>
+      <text class="t-mute" x="912" y="268">否（真是更新的信息）</text>
+      <rect class="ghost" x="780" y="286" width="240" height="56" rx="4"/>
+      <text class="t-ghost mid" x="900" y="310">删 #31，新增一条</text>
+      <text class="t-mute mid" x="900" y="330">取代链接着往后长</text>
+
+      <rect class="ghost" x="20" y="286" width="700" height="56" rx="4"/>
+      <text class="t-ghost" x="34" y="310">如果 #31 后来被遗忘（只删除、没有新增，没有后继）</text>
+      <text class="t-mute" x="34" y="330">就和那次遗忘的时间比：遗忘更晚，作废；遗忘更早，不用删了，只做新增（skipped）</text>
+
+      <text class="t-lab" x="20" y="380">作废之后：补记直接放弃这一条；对话里的 save_memory 收到作废，从版本表里去掉这个主题，让模型先 load_memory 重新查看再判断。</text>
+      <text class="t-lab" x="20" y="404">结果仍然是「改用 bun」：08:15 用户在会话 B 里说的是更新的情况，不会被晚到的 07:50 盖掉。</text>
+
+      <g class="badge"><circle cx="1004" cy="47" r="10"/><text x="1004" y="51">1</text></g>
+      <g class="badge"><circle cx="675" cy="170" r="10"/><text x="675" y="174">2</text></g>
+      <g class="badge"><circle cx="1220" cy="170" r="10"/><text x="1220" y="174">3</text></g>
+      <g class="badge"><circle cx="720" cy="286" r="10"/><text x="720" y="290">4</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>补记在会话空闲后才跑，写入时间取它依据的那条用户消息的时间（07:50），不取执行的时间（08:50）。如果按到达顺序处理，晚到的补记就会盖掉用户 08:15 在另一个会话里说的新情况。</li>
+      <li><span class="n">2</span>服务端找 <code>#12</code> 的现状：它已被取代，沿 <code>superseded_by</code> 走到 <code>#31</code>。<code>#31</code> 的时间 08:15 晚于 07:50，于是整次作废，什么都不写，返回 <code>conflicts</code>。</li>
+      <li><span class="n">3</span>作废之后，补记直接放弃这一条；对话里的 save_memory 收到作废，会把这个主题从版本表里去掉，让模型先 load_memory 重新查看再判断。</li>
+      <li><span class="n">4</span>如果 <code>#31</code> 后来被遗忘了，就和遗忘的时间比。服务端只管「针对同一批旧条目」的先后：两次写入如果互相没看到对方、又都只做新增，两条会同时存在。读的时候以日期新的为准，下一次写入这个主题的客户端看完整个主题后再清理。</li>
+    </ol>
+
+    <h3>为什么这样做</h3>
+    <table>
+      <thead><tr><th>做法</th><th>为什么</th></tr></thead>
+      <tbody>
+        <tr><td>实例锁用数据库行锁（<code>SELECT … FOR UPDATE</code>），不用 Redis 锁</td><td>锁和事务同生共死：多副本部署同样有效，没有「锁过期了，事务还在写」的窗口；条目编号、版本号也就能直接在实例行上递增。</td></tr>
+        <tr><td>以客户端给的时间为准，不按到达顺序</td><td>补记晚到、重试晚到都很常见（图 5）。客户端时间表示「这条信息成立的时间」，这要求各客户端的时钟基本一致。</td></tr>
+        <tr><td>删除只改状态，记下被谁取代</td><td>删错了能撤销、能恢复；后到的写入能沿取代链找到现状再比时间；用户彻底删除时能连整条链一起删。</td></tr>
+        <tr><td>有冲突就整次作废，不部分执行</td><td>一次写入表达的是一条记忆（「把 pnpm 改成 bun」）。只执行新增的话，新旧两条会同时有效。</td></tr>
+        <tr><td>主题变没变看版本号，不看更新时间，也不比内容</td><td>条目时间是客户端给的，补记的时间还可能早于已有条目，看不出主题变没变；多副本的时钟也不严格一致。版本号在实例锁里分配，只增不减。</td></tr>
+        <tr><td>「写前必看」由 Atlas 判断，服务端不管</td><td>服务端不知道客户端看过什么，它只保证并发和先后。Atlas 只比版本号，加载一次就能判断。</td></tr>
+        <tr><td>幂等键由 run、作用域、主题、内容、删除的编号算出</td><td>网络重试、run 被接管后重放同一个工具调用时，算出的键是同一个。服务端照修订上存的结果返回，不会写出两条。</td></tr>
+        <tr><td>Agent 自己写入不重建常驻块</td><td>常驻块在系统提示词里，一变，整段对话的前缀缓存就失效。写入结果已经在对话历史里，模型已经知道。</td></tr>
+        <tr><td>服务端不按主题大小拒绝写入</td><td>合适的上限因客户端、场景而异，所以上限由客户端自己定（Atlas 约 2000 字，超了提示模型合并或拆分）；服务端只报告条数和字数。</td></tr>
+      </tbody>
+    </table>
+
+    <h3>现在的代码和上面时序图的差别</h3>
+    <table>
+      <thead><tr><th>时序图（目标模型）</th><th>现在的代码</th></tr></thead>
+      <tbody>
+        <tr><td>作用域与实例、主题与条目、修订历史是三个组件</td><td>都在 <code>store.py</code> 的 <code>MemoryStore</code> 一个类里，访问控制在 <code>api/deps.py</code>、<code>perms.py</code>。上面五张图讲的规则不变。</td></tr>
+        <tr><td>消息 17：响应发出前提交</td><td><code>get_session</code> 在 yield 之后才 commit；在 FastAPI 0.121+ 下，commit 要等响应发出后才执行。提交失败时客户端已经收到成功的响应，紧接着的读也可能读不到（未修）。</td></tr>
+      </tbody>
+    </table>
+  </section>
 </main>
 
 <script>
