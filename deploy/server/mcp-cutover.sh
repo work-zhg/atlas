@@ -14,7 +14,6 @@
 #
 # ★ 之后在 MCP 管理端「API Key · 智能体 Key」里给要用它的智能体分配 serpapi（智能体的 Key 由 Atlas
 #   在编辑、运行智能体时自动申请）。也可以在服务详情里把它改成公开：任何 Key 都能用。
-# ★ Higress 不再在 MCP 的链路上：上面的 serpapi MCP Server、消费者 mcp-gateway 可以在控制台删掉。
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 

@@ -1,8 +1,8 @@
 # 服务器（单节点 K8s）上的依赖服务：本机 docker-compose.yml 那一套，搬进 atlas-infra 命名空间。
 #
-#   postgres · redis · minio · qdrant · jaeger · otel-collector · langfuse（clickhouse / redis / worker / web）· higress
+#   postgres · redis · minio · qdrant · jaeger · otel-collector · langfuse（clickhouse / redis / worker / web）
 #
-# ★ Service 名与 compose 的服务名一致（redis、jaeger、langfuse-web …）：Higress 的 setup.py、collector 的配置里
+# ★ Service 名与 compose 的服务名一致（redis、jaeger、langfuse-web …）：collector 的配置里
 #   写的就是这些名字，原样可用。
 # ★ 只开 ClusterIP：局域网访问不到这些依赖；对外只有 traefik 上的 Ingress（20-ingress.yaml）。
 # ★ 数据卷用 local-path-retain：误删 PVC 时数据还在节点的 /opt/local-path-provisioner 下。
@@ -459,38 +459,3 @@ metadata: {name: langfuse-web, namespace: atlas-infra}
 spec:
   selector: {app: langfuse-web}
   ports: [{port: 3000, targetPort: 3000}]
----
-# ── Higress（MCP 网关；all-in-one，配置在 /data，setup.py 经控制台写入）──────
-apiVersion: apps/v1
-kind: StatefulSet
-metadata: {name: higress, namespace: atlas-infra}
-spec:
-  serviceName: higress
-  replicas: 1
-  selector: {matchLabels: {app: higress}}
-  template:
-    metadata: {labels: {app: higress}}
-    spec:
-      containers:
-        - name: higress
-          image: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/all-in-one:2.2.4
-          ports: [{containerPort: 8080}, {containerPort: 8001}]
-          resources:
-            requests: {cpu: 100m, memory: 256Mi}
-            limits: {memory: 2Gi}
-          volumeMounts: [{name: data, mountPath: /data}]
-  volumeClaimTemplates:
-    - metadata: {name: data}
-      spec:
-        storageClassName: local-path-retain
-        accessModes: [ReadWriteOnce]
-        resources: {requests: {storage: 2Gi}}
----
-apiVersion: v1
-kind: Service
-metadata: {name: higress, namespace: atlas-infra}
-spec:
-  selector: {app: higress}
-  ports:
-    - {name: gateway, port: 8080, targetPort: 8080}
-    - {name: console, port: 8001, targetPort: 8001}

@@ -313,7 +313,7 @@ class Registry:
         try:
             await self.perms.register(DATA_SERVER, name, display_name, owners=[owner])
         except Conflict:
-            # ★ 网关库里没有这个服务，用户中心里却有：旧版本（Higress 时代）或登记到一半失败留下的。
+            # ★ 网关库里没有这个服务，用户中心里却有：旧版本或登记到一半失败留下的。
             #   网关库是服务是否存在的事实源，清掉重来
             logger.warning("用户中心里有没人管的 McpServer %s，清掉后重新登记", name)
             await self.perms.drop(DATA_SERVER, name)
