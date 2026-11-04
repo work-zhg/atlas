@@ -27,6 +27,51 @@
   #c4-details td.sample { word-break: break-all; }
   #c4-details pre { margin: 0; padding: 10px 12px; border: 1px solid #e3e3e3; background: #f6f8fa; font-size: 12px; line-height: 1.5; overflow-x: auto; }
   svg a { cursor: pointer; }
+  /* 事件中继原理：手写的静态图，不经渲染器 */
+  #principle { max-width: 1280px; }
+  #principle h3 { margin: 32px 0 8px; font-size: 15px; font-weight: 600; color: #333; }
+  #principle p { max-width: 1100px; margin: 0 0 8px; font-size: 14px; line-height: 1.8; color: #333; }
+  #principle code { padding: 0 3px; background: #f6f8fa; font-family: Menlo, Consolas, monospace; font-size: 12.5px; }
+  #principle ol { margin: 8px 0 0; padding: 0; list-style: none; }
+  #principle ol li { position: relative; margin: 0 0 6px; padding-left: 30px; font-size: 14px; line-height: 1.7; color: #333; }
+  #principle ol li .n { position: absolute; left: 0; top: 2px; width: 20px; height: 20px; border-radius: 50%; background: #d9480f; color: #fff; font-size: 12px; font-weight: 700; line-height: 20px; text-align: center; }
+  #principle table { width: 100%; margin: 8px 0 0; border-collapse: collapse; font-size: 13px; line-height: 1.6; color: #333; }
+  #principle th, #principle td { padding: 6px 10px; border: 1px solid #e3e3e3; text-align: left; vertical-align: top; }
+  #principle th { background: #f6f8fa; font-weight: 600; }
+  #principle th:first-child { width: 22%; }
+  #principle svg { margin: 8px 0 4px; }
+  #principle svg text { font-size: 13px; fill: #444; }
+  #principle svg .t-name { font-size: 15px; fill: #1168bd; text-anchor: middle; }
+  #principle svg .t-sub { font-size: 12px; fill: #888; text-anchor: middle; }
+  #principle svg .t-head { font-size: 14px; font-weight: 600; fill: #1168bd; }
+  #principle svg .t-key { font-size: 12px; fill: #888; }
+  #principle svg .t-lab { font-size: 12px; fill: #666; }
+  #principle svg .t-hot { font-size: 12px; fill: #d9480f; }
+  #principle svg .t-mute { font-size: 12px; fill: #aaa; }
+  #principle svg .hot { fill: #d9480f; }
+  #principle svg .mid { text-anchor: middle; }
+  #principle svg .end { text-anchor: end; }
+  #principle svg .b { font-weight: 700; }
+  #principle svg .node { fill: #fff; stroke: #1168bd; stroke-width: 1.6; }
+  #principle svg .bnd { fill: none; stroke: #1168bd; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .gap { fill: #fff6f0; stroke: #d9480f; stroke-width: 1.2; stroke-dasharray: 5 4; }
+  #principle svg .band-a { fill: #eef4fb; stroke: #1168bd; stroke-width: 1.2; }
+  #principle svg .band-b { fill: #fff3ea; stroke: #d9480f; stroke-width: 1.2; }
+  #principle svg .cell { fill: #fff; stroke: #bbb; stroke-width: 1.2; }
+  #principle svg .lifeline { stroke: #bbb; stroke-width: 1; stroke-dasharray: 4 4; }
+  #principle svg .e { fill: none; stroke: #444; stroke-width: 1.6; }
+  #principle svg .e-dash { fill: none; stroke: #444; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .e-hot { fill: none; stroke: #d9480f; stroke-width: 2.4; }
+  #principle svg .e-hot-dash { fill: none; stroke: #d9480f; stroke-width: 2; stroke-dasharray: 6 4; }
+  #principle svg .e-blue { fill: none; stroke: #1168bd; stroke-width: 2.4; }
+  #principle svg .e-mute { fill: none; stroke: #bbb; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .e-link { fill: none; stroke: #d9480f; stroke-width: 1.4; stroke-dasharray: 4 3; }
+  #principle svg .cursor { stroke: #1168bd; stroke-width: 1.6; stroke-dasharray: 3 3; }
+  #principle svg .cursor-old { stroke: #aaa; stroke-width: 1.4; stroke-dasharray: 3 3; }
+  #principle svg .brace-a { fill: none; stroke: #1168bd; stroke-width: 1.2; }
+  #principle svg .brace-b { fill: none; stroke: #d9480f; stroke-width: 1.2; }
+  #principle svg .badge circle { fill: #d9480f; stroke: #fff; stroke-width: 2; }
+  #principle svg .badge text { fill: #fff; font-size: 12px; font-weight: 700; text-anchor: middle; }
 </style>
 </head>
 <body>
@@ -89,7 +134,7 @@
     {
       "id": "llm",
       "kind": "component",
-      "technology": "LangChain ChatAnthropic",
+      "technology": "httpx（模型平台内部接口）",
       "in": "server",
       "name": "模型接入"
     },
@@ -273,15 +318,18 @@
     {
       "from": "native",
       "to": "llm",
-      "description": "调用模型（流式）"
+      "description": "取这一段的模型：端点、Key、规格和能力",
+      "details": {
+        "note": "ModelResolver.resolve：向模型平台取智能体最新的 Key，检查主模型和压缩模型都在 Key 里，用不了本段不开始。"
+      }
     },
     {
-      "from": "llm",
+      "from": "native",
       "to": "model",
-      "description": "带智能体的客户端 Key 调用",
+      "description": "带智能体的客户端 Key 流式调用模型",
       "technology": "Anthropic Messages API / HTTPS",
       "details": {
-        "note": "Run 开始时已检查过：Key 可用、所选模型在 Key 的可用模型里；经模型平台（LiteLLM）转发给供应商。"
+        "note": "模型客户端由原生运行时按规格和端点建，参数按能力决定传不传；经模型平台（LiteLLM）转发给供应商。"
       }
     },
     {
@@ -365,6 +413,289 @@
   <section id="c4-details" hidden></section>
   <h2>Diagram key</h2>
   <svg id="c4-key" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+
+  <!-- 事件中继原理：静态图，不经上面的渲染器。场景：会话 T，父 run R 在实例 A，并行委派的子 run S1 在实例 C，用户连在实例 B -->
+  <section id="principle">
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+      <defs>
+        <marker id="pr-a" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#444"/></marker>
+        <marker id="pr-h" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#d9480f"/></marker>
+        <marker id="pr-b" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#1168bd"/></marker>
+        <marker id="pr-m" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#bbb"/></marker>
+      </defs>
+    </svg>
+
+    <h2>事件中继原理</h2>
+    <p>一句话：写的一方给每个事件盖上<b>会话序号</b>（<code>thread_seq</code>），写进根会话的那<b>一条</b> Redis 流；看的一方连在任何实例上，先读数据库里的归档段，再接上 Redis 段，两段只认 <code>thread_seq</code> 这一个游标；断线后带着最后的 <code>thread_seq</code> 重连。所以「在哪个实例上跑」和「在哪个实例上看」无关。Redis 里只放丢了也能恢复的东西。上面时序图里「订阅会话流」「事件盖序号后发布」「检查点」「收尾先落库再发布」这几步，靠的就是这些机制。下面五张图的场景比时序图多一个并行委派的子 run，用来说明多个生产者：会话 <code>T</code>，父 run <code>R</code> 跑在实例 A，子 run <code>S1</code> 跑在实例 C，用户的浏览器连在实例 B。</p>
+
+    <h3>图 1　写在哪、读在哪都无关：一个根会话一条流</h3>
+    <svg width="1240" viewBox="0 0 1240 400" role="img" aria-label="跨实例的写入与读取">
+      <rect class="node" x="20" y="60" width="220" height="64" rx="4"/>
+      <text class="t-name" x="130" y="88">实例 A · Run 执行器</text>
+      <text class="t-sub" x="130" y="108">父 run R</text>
+      <rect class="node" x="20" y="170" width="220" height="64" rx="4"/>
+      <text class="t-name" x="130" y="198">实例 C · Run 执行器</text>
+      <text class="t-sub" x="130" y="218">子 run S1（并行委派）</text>
+
+      <rect class="bnd" x="300" y="30" width="480" height="232" rx="6"/>
+      <text class="t-head" x="316" y="54">Redis</text>
+      <rect class="node" x="320" y="66" width="220" height="52" rx="4"/>
+      <text class="t-name" x="430" y="89">thread:seq:{T}</text>
+      <text class="t-sub" x="430" y="108">会话序号计数器 · Lua 原子递增</text>
+      <text class="t-key" x="320" y="152">thread:events:{T}</text>
+      <rect class="cell" x="320" y="160" width="44" height="36"/><text class="mid" x="342" y="183">…</text>
+      <rect class="band-a" x="364" y="160" width="44" height="36"/><text class="mid" x="386" y="183">38</text>
+      <rect class="band-a" x="408" y="160" width="44" height="36"/><text class="mid" x="430" y="183">39</text>
+      <rect class="band-b" x="452" y="160" width="44" height="36"/><text class="mid" x="474" y="183">40</text>
+      <rect class="band-a" x="496" y="160" width="44" height="36"/><text class="mid" x="518" y="183">41</text>
+      <rect class="band-b" x="540" y="160" width="44" height="36"/><text class="mid" x="562" y="183">42</text>
+      <rect class="band-b" x="584" y="160" width="44" height="36"/><text class="mid" x="606" y="183">43</text>
+      <rect class="band-a" x="628" y="160" width="44" height="36"/><text class="mid" x="650" y="183">44</text>
+      <rect class="band-a" x="672" y="160" width="44" height="36"/><text class="mid" x="694" y="183">45</text>
+      <rect class="cell" x="716" y="160" width="44" height="36"/><text class="mid" x="738" y="183">…</text>
+      <text class="t-lab" x="320" y="222">蓝 = R 的事件，橙 = S1 的事件：交错写进同一条流，序号连续、不撞</text>
+      <text class="t-lab" x="320" y="242">MAXLEN ~1 万（近似裁剪）· 每次写续期 1 天；计数器 30 天</text>
+
+      <rect class="bnd" x="300" y="292" width="480" height="92" rx="6"/>
+      <text class="t-head" x="316" y="316">Postgres · run_event 归档</text>
+      <text class="t-lab" x="316" y="342">检查点、段收尾时批量落库，主键（根会话, thread_seq）</text>
+      <text class="t-lab" x="316" y="364">delta（打字效果）不归档：回放时正文看 message.completed</text>
+
+      <rect class="node" x="850" y="146" width="200" height="64" rx="4"/>
+      <text class="t-name" x="950" y="173">实例 B · 会话管理</text>
+      <text class="t-sub" x="950" y="193">GET /threads/{T}/events</text>
+      <rect class="node" x="1100" y="146" width="120" height="64" rx="4"/>
+      <text class="t-name" x="1160" y="173">控制台</text>
+      <text class="t-sub" x="1160" y="193">EventSource</text>
+      <text class="t-lab mid" x="1160" y="234">断线后带</text>
+      <text class="t-lab mid" x="1160" y="250">Last-Event-ID 重连，</text>
+      <text class="t-lab mid" x="1160" y="266">可能连到别的实例</text>
+
+      <path class="e" d="M240 92 H318" marker-end="url(#pr-a)"/>
+      <path class="e" d="M240 202 H270 V108 H318" marker-end="url(#pr-a)"/>
+      <path class="e" d="M480 118 V158" marker-end="url(#pr-a)"/>
+      <path class="e-dash" d="M130 234 V338 H298" marker-end="url(#pr-a)"/>
+      <path class="e" d="M760 178 H848" marker-end="url(#pr-a)"/>
+      <path class="e" d="M780 338 H900 V212" marker-end="url(#pr-a)"/>
+      <path class="e" d="M1050 170 H1098" marker-end="url(#pr-a)"/>
+      <path class="e-dash" d="M1100 192 H1052" marker-end="url(#pr-a)"/>
+
+      <g class="badge"><circle cx="286" cy="92" r="10"/><text x="286" y="96">1</text></g>
+      <g class="badge"><circle cx="480" cy="138" r="10"/><text x="480" y="142">2</text></g>
+      <g class="badge"><circle cx="130" cy="290" r="10"/><text x="130" y="294">3</text></g>
+      <g class="badge"><circle cx="840" cy="338" r="10"/><text x="840" y="342">4</text></g>
+      <g class="badge"><circle cx="804" cy="178" r="10"/><text x="804" y="182">5</text></g>
+      <g class="badge"><circle cx="1075" cy="170" r="10"/><text x="1075" y="174">6</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>盖号：每发一个事件，先在 <code>thread:seq:{T}</code> 上取下一个会话序号。R 和 S1 在不同实例上同时写，号只能在 Redis 里统一分（图 2）。</li>
+      <li><span class="n">2</span>发布：带着会话序号 XADD 进根会话的那一条流。不管是哪个实例、哪个 run（包括子孙 run 的过程和审批弹窗），同一个会话的事件都在这一条里，不用把子 run 的事件「冒泡」转发到父流。</li>
+      <li><span class="n">3</span>归档：执行器在每个检查点、每段收尾时把这一批事件按 <code>thread_seq</code> 落进 run_event。所以归档总比 Redis 晚一截（图 4、图 5）。</li>
+      <li><span class="n">4</span>读归档段：用户的事件流连在哪个实例都行。会话管理先读 run_event 里游标之后的事件，读完立刻还掉数据库连接。</li>
+      <li><span class="n">5</span>读 Redis 段：再从这条流按 <code>thread_seq</code> 接着读，读完已有的就阻塞等新的（图 3）。</li>
+      <li><span class="n">6</span>推给浏览器：SSE 帧的 <code>id</code> 就是 <code>thread_seq</code>。断线后浏览器自动带 <code>Last-Event-ID</code> 重连，连到哪个实例，都从这个号之后接着读。</li>
+    </ol>
+
+    <h3>图 2　会话序号：多个生产者共用一个计数器</h3>
+    <svg width="1240" viewBox="0 0 1240 420" role="img" aria-label="会话序号的分配">
+      <rect class="node" x="20" y="56" width="180" height="52" rx="4"/>
+      <text class="t-name" x="110" y="80">父 run R</text>
+      <text class="t-sub" x="110" y="98">实例 A</text>
+      <rect class="node" x="20" y="136" width="180" height="52" rx="4"/>
+      <text class="t-name" x="110" y="160">子 run S1</text>
+      <text class="t-sub" x="110" y="178">实例 C</text>
+      <path class="e" d="M200 82 H236 V162 H200"/>
+      <path class="e" d="M236 116 H288" marker-end="url(#pr-a)"/>
+      <text class="t-lab mid" x="110" y="126">同时取号</text>
+
+      <rect class="bnd" x="260" y="30" width="640" height="190" rx="6"/>
+      <text class="t-head" x="276" y="54">一段 Lua：Redis 单线程执行，中间插不进别的命令</text>
+      <rect class="node" x="290" y="86" width="240" height="60" rx="4"/>
+      <text class="t-name" x="410" y="111">键不在：SET 为水位</text>
+      <text class="t-sub" x="410" y="131">Redis 重建、键过期后才会走到</text>
+      <path class="e" d="M530 116 H578" marker-end="url(#pr-a)"/>
+      <rect class="node" x="580" y="86" width="120" height="60" rx="4"/>
+      <text class="t-name" x="640" y="111">INCR</text>
+      <text class="t-sub" x="640" y="131">取下一个号</text>
+      <path class="e" d="M700 116 H748" marker-end="url(#pr-a)"/>
+      <rect class="node" x="750" y="86" width="130" height="60" rx="4"/>
+      <text class="t-name" x="815" y="111">EXPIRE</text>
+      <text class="t-sub" x="815" y="131">续 30 天</text>
+      <path class="e" d="M880 116 H938" marker-end="url(#pr-a)"/>
+
+      <rect class="node" x="290" y="240" width="240" height="60" rx="4"/>
+      <text class="t-name" x="410" y="265">SeqWatermark</text>
+      <text class="t-sub" x="410" y="285">归档里这条会话最大的 thread_seq</text>
+      <path class="e-dash" d="M410 240 V148" marker-end="url(#pr-a)"/>
+      <text class="t-lab" x="420" y="186">传进脚本的水位，只在键不在时用上</text>
+
+      <rect class="node" x="940" y="56" width="280" height="150" rx="4"/>
+      <text class="t-head" x="954" y="80">返回给各个调用方：连续、不重复</text>
+      <rect class="band-a" x="954" y="94" width="44" height="30"/><text class="mid" x="976" y="114">41</text>
+      <text x="1010" y="114">父 run R</text>
+      <rect class="band-b" x="954" y="130" width="44" height="30"/><text class="mid" x="976" y="150">42</text>
+      <text x="1010" y="150">子 run S1</text>
+      <rect class="band-b" x="954" y="166" width="44" height="30"/><text class="mid" x="976" y="186">43</text>
+      <text x="1010" y="186">子 run S1</text>
+
+      <rect class="gap" x="20" y="322" width="590" height="84" rx="4"/>
+      <text class="t-hot b" x="34" y="346">反例 1：各个进程自己数</text>
+      <text x="34" y="370">R 和 S1 各自从 40 往上数，都发出 41</text>
+      <text x="34" y="392">前端按序号去重：后到的那个 41 被当成重复丢掉</text>
+      <rect class="gap" x="630" y="322" width="590" height="84" rx="4"/>
+      <text class="t-hot b" x="644" y="346">反例 2：键丢了，从 1 重来</text>
+      <text x="644" y="370">Redis 重建或键过期，新事件的号是 1、2、3……</text>
+      <text x="644" y="392">全都 ≤ 前端已收到的 45：被静默丢弃，没有报错，界面就是不再更新</text>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>R 和 S1 在不同实例上同时发事件，写的是同一条流，所以号不能在各自进程里数，只能在 Redis 里统一分（反例 1）。</li>
+      <li><span class="n">2</span>「键不在就用水位初始化」和「递增」放在同一段 Lua 里，中间没有窗口：不会出现两个调用方都看到键不在、各自初始化的情况。</li>
+      <li><span class="n">3</span>水位来自 SeqWatermark，由 Run 执行器的事件归档实现。键丢了就从水位接着数，前端已经收到的号不会再出现（反例 2）。计数器每次分配都续期 30 天，活跃会话只有 Redis 重建时才会用到水位。</li>
+    </ol>
+
+    <h3>图 3　读一条会话流：归档段 + Redis 段，按 thread_seq 接上</h3>
+    <svg width="1240" viewBox="0 0 1240 340" role="img" aria-label="两段接力读取">
+      <text class="t-lab" x="40" y="30">thread_seq（会话序号），越往右越新</text>
+      <path class="e" d="M40 70 H1196" marker-end="url(#pr-a)"/>
+      <path class="e" d="M40 64 V76 M380 64 V76 M980 64 V76 M1120 64 V76"/>
+      <text class="t-lab" x="40" y="58">1</text>
+      <text class="t-lab mid" x="380" y="58">Redis 里最早还留着的</text>
+      <text class="t-lab mid" x="980" y="58">归档到的最大号</text>
+      <text class="t-lab mid" x="1120" y="58">最新</text>
+
+      <rect class="band-a" x="40" y="92" width="940" height="34"/>
+      <text class="t-lab" x="56" y="114">Postgres run_event 归档：从 1 到「归档到的最大号」，不含 delta</text>
+      <rect class="band-b" x="380" y="140" width="740" height="34"/>
+      <text class="t-lab" x="396" y="162">Redis 流：最近约 1 万条（含 delta）</text>
+      <path class="brace-b" d="M980 180 V186 H1120 V180"/>
+      <text class="t-hot mid" x="1050" y="202">发布了、还没归档的一截</text>
+
+      <line class="cursor-old" x1="200" y1="80" x2="200" y2="196"/>
+      <text class="t-mute" x="208" y="192">老游标：早于 Redis 留着的，只能从归档读</text>
+      <line class="cursor" x1="700" y1="36" x2="700" y2="300"/>
+      <text class="t-head" x="712" y="30">游标：重连 = Last-Event-ID；首连 = 最近 500 条之前</text>
+
+      <path class="e-blue" d="M702 228 H976" marker-end="url(#pr-b)"/>
+      <text class="t-lab" x="740" y="250">归档段：thread_seq &gt; 游标，一次读完、还掉数据库连接</text>
+      <path class="e-mute" d="M380 284 H976"/>
+      <text class="t-mute" x="390" y="276">≤ 游标的跳过（和归档重叠）</text>
+      <path class="e-hot" d="M980 284 H1118" marker-end="url(#pr-h)"/>
+      <path class="e-hot-dash" d="M1122 284 H1196" marker-end="url(#pr-h)"/>
+      <text class="t-hot end" x="976" y="306">Redis 段：XRANGE 读完已有的，按游标过滤</text>
+      <text class="t-hot end" x="976" y="324">再 XREAD 阻塞等新的，空闲 15 秒发一次心跳</text>
+
+      <g class="badge"><circle cx="724" cy="228" r="10"/><text x="724" y="232">1</text></g>
+      <g class="badge"><circle cx="1000" cy="284" r="10"/><text x="1000" y="288">2</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>归档段：读 run_event 里 <code>thread_seq &gt; 游标</code> 的事件，一次读完，随后立刻还掉数据库连接，之后几个小时只占一个 Redis 连接。游标推进到读到的最大号。首连（没有 <code>Last-Event-ID</code>）只回放最近 500 条，免得打开老会话时灌进几万个事件；重连补的是断线那段缺口，不截断。</li>
+      <li><span class="n">2</span>Redis 段：从流头 XRANGE 读完已有的，再 XREAD 阻塞等新的，全按 <code>thread_seq</code> 过滤，不认 Redis 的条目 id。和归档重叠的部分自然被跳过；归档读完到开始读 Redis 之间新发布的事件也不会丢，因为 XRANGE 是从流头读起的。</li>
+    </ol>
+    <p>两段缺一不可：Redis 只留最近约 1 万条，老游标（老标签页、长时间断线）之前的事件只在归档里；归档又比 Redis 晚一个检查点，最新的那一截只在 Redis 里。流不因 <code>run.finished</code> 结束，一轮完了还有下一轮，中间还夹着挂起等待。只有两种情况会结束：客户端断开；本实例停机，这时在下一帧后发 <code>retry: 1000</code> 结束，浏览器一秒后带游标重连到别的实例。</p>
+
+    <h3>图 4　收尾事件：先盖号，再落库，最后发布</h3>
+    <svg width="1240" viewBox="0 0 1240 450" role="img" aria-label="收尾事件的顺序">
+      <rect class="node" x="40" y="20" width="220" height="48" rx="4"/>
+      <text class="t-name" x="150" y="42">实例 A · Run 执行器</text>
+      <text class="t-sub" x="150" y="60">跑 run R 的这一段</text>
+      <rect class="node" x="380" y="20" width="180" height="48" rx="4"/>
+      <text class="t-name" x="470" y="42">Redis</text>
+      <text class="t-sub" x="470" y="60">thread:events:{T}</text>
+      <rect class="node" x="700" y="20" width="180" height="48" rx="4"/>
+      <text class="t-name" x="790" y="42">Postgres</text>
+      <text class="t-sub" x="790" y="60">run 行 · run_event</text>
+      <rect class="node" x="990" y="20" width="220" height="48" rx="4"/>
+      <text class="t-name" x="1100" y="42">浏览器</text>
+      <text class="t-sub" x="1100" y="60">经实例 B 的 SSE</text>
+      <line class="lifeline" x1="150" y1="68" x2="150" y2="440"/>
+      <line class="lifeline" x1="470" y1="68" x2="470" y2="440"/>
+      <line class="lifeline" x1="790" y1="68" x2="790" y2="440"/>
+      <line class="lifeline" x1="1100" y1="68" x2="1100" y2="440"/>
+
+      <path class="e" d="M150 110 H468" marker-end="url(#pr-a)"/>
+      <text x="190" y="100">普通事件：取号 + XADD，马上可见</text>
+      <path class="e" d="M150 160 H788" marker-end="url(#pr-a)"/>
+      <text x="190" y="150">检查点：消息 + 这批事件归档（一个事务）</text>
+      <path class="e-hot" d="M150 210 H468" marker-end="url(#pr-h)"/>
+      <text class="hot" x="190" y="200">run.finished：只取号 45，先不发</text>
+      <path class="e-hot" d="M150 260 H788" marker-end="url(#pr-h)"/>
+      <text class="hot" x="190" y="250">收尾事务：run 终态、用量 + 归档（含 45）</text>
+      <path class="e-hot" d="M150 310 H468" marker-end="url(#pr-h)"/>
+      <text class="hot" x="190" y="300">落库之后才 XADD 45</text>
+      <path class="e" d="M470 360 H1098" marker-end="url(#pr-a)"/>
+      <text x="510" y="350">推送 run.finished（会话管理按 thread_seq 转成 SSE 帧）</text>
+      <path class="e" d="M1100 410 H792" marker-end="url(#pr-a)"/>
+      <text x="810" y="400">马上 GET /runs/{id}：一定是终态和最终用量</text>
+
+      <g class="badge"><circle cx="172" cy="110" r="10"/><text x="172" y="114">1</text></g>
+      <g class="badge"><circle cx="172" cy="160" r="10"/><text x="172" y="164">2</text></g>
+      <g class="badge"><circle cx="172" cy="210" r="10"/><text x="172" y="214">3</text></g>
+      <g class="badge"><circle cx="172" cy="260" r="10"/><text x="172" y="264">4</text></g>
+      <g class="badge"><circle cx="172" cy="310" r="10"/><text x="172" y="314">5</text></g>
+      <g class="badge"><circle cx="492" cy="360" r="10"/><text x="492" y="364">6</text></g>
+      <g class="badge"><circle cx="1078" cy="410" r="10"/><text x="1078" y="414">7</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>普通事件盖号后立刻发布，前端马上能看到。</li>
+      <li><span class="n">2</span>归档跟着检查点走（模型说完一轮、或一批工具结果收齐），和那批消息在同一个事务里。</li>
+      <li><span class="n">3</span>收尾事件（终态、挂起）先只盖号：归档按 <code>thread_seq</code> 落库（它是主键的一半），这个号必须在落库事务之前定下来。</li>
+      <li><span class="n">4</span>收尾事务一起写：剩下的消息、run 的终态和用量、事件归档（包括这条收尾事件）。</li>
+      <li><span class="n">5</span>落库之后才发布。</li>
+      <li><span class="n">6</span>前端收到 <code>run.finished</code>。</li>
+      <li><span class="n">7</span>前端收到就去取最终用量。因为第 5 步在第 4 步之后，「看到终态」就说明「库里已是终态」，不会读到 running、tokens=0。挂起同理：看到 <code>run.suspended</code>，库里已经是 suspended。</li>
+    </ol>
+
+    <h3>图 5　接管：发布了、还没归档的那一截从 Redis 找回来</h3>
+    <svg width="1240" viewBox="0 0 1240 290" role="img" aria-label="接管时补扫">
+      <path class="brace-a" d="M140 60 V54 H364 V60"/>
+      <text class="t-lab mid" x="252" y="46">已归档：检查点记下 last_seq = 30</text>
+      <path class="brace-b" d="M364 60 V54 H588 V60"/>
+      <text class="t-hot mid" x="476" y="46">已发布到 Redis、用户已看到，还没归档</text>
+      <text class="t-lab b" x="20" y="93">run R 的事件</text>
+      <rect class="band-a" x="140" y="70" width="56" height="36"/><text class="mid" x="168" y="93">27</text>
+      <rect class="band-a" x="196" y="70" width="56" height="36"/><text class="mid" x="224" y="93">28</text>
+      <rect class="band-a" x="252" y="70" width="56" height="36"/><text class="mid" x="280" y="93">29</text>
+      <rect class="band-a" x="308" y="70" width="56" height="36"/><text class="mid" x="336" y="93">30</text>
+      <rect class="band-b" x="364" y="70" width="56" height="36"/><text class="mid" x="392" y="93">31</text>
+      <rect class="band-b" x="420" y="70" width="56" height="36"/><text class="mid" x="448" y="93">32</text>
+      <rect class="band-b" x="476" y="70" width="56" height="36"/><text class="mid" x="504" y="93">33</text>
+      <rect class="band-b" x="532" y="70" width="56" height="36"/><text class="mid" x="560" y="93">34</text>
+      <text class="t-hot b" x="604" y="94" style="font-size:15px">✗ 实例 A 在这里被杀（下一个检查点之前）</text>
+
+      <path class="e-link" d="M476 106 V178" marker-end="url(#pr-h)"/>
+      <text class="t-hot" x="486" y="146">从流里找回</text>
+
+      <rect class="node" x="20" y="180" width="250" height="60" rx="4"/>
+      <text class="t-name" x="145" y="205">实例 B 接管 R</text>
+      <text class="t-sub" x="145" y="225">租约过期，领到这个 run</text>
+      <path class="e" d="M270 210 H318" marker-end="url(#pr-a)"/>
+      <rect class="node" x="320" y="180" width="290" height="60" rx="4"/>
+      <text class="t-name" x="465" y="205">扫 Redis 流</text>
+      <text class="t-sub" x="465" y="225">R 在 seq 30 之后的 → 31…34</text>
+      <path class="e" d="M610 210 H658" marker-end="url(#pr-a)"/>
+      <rect class="node" x="660" y="180" width="260" height="60" rx="4"/>
+      <text class="t-name" x="790" y="205">补归档</text>
+      <text class="t-sub" x="790" y="225">已归档的 thread_seq 跳过</text>
+      <path class="e" d="M920 210 H968" marker-end="url(#pr-a)"/>
+      <rect class="node" x="970" y="180" width="250" height="60" rx="4"/>
+      <text class="t-name" x="1095" y="205">从 35 接着数</text>
+      <text class="t-sub" x="1095" y="225">发 run.resumed，序号不重</text>
+      <text class="t-lab" x="20" y="272">以上和接管的检查点在同一个事务里做；第一条写是租约围栏：租约已不在本实例，就整个回滚</text>
+    </svg>
+    <p>整条流扫一遍有 MAXLEN 封顶，而且只在接管时发生，不在热路径上。不补的话，这一截事件用户实时看到过，刷新后却从历史里消失（后面的事件归档了，游标越过了它们）；run 内序号也会从 31 重新数，和已经发出的 31…34 撞号。</p>
+
+    <h3>Redis 是易失的：每样东西丢了靠什么兜底</h3>
+    <table>
+      <thead><tr><th>Redis 里的</th><th>丢了 / 过期会怎样</th><th>兜底</th></tr></thead>
+      <tbody>
+        <tr><td>会话流 <code>thread:events:{T}</code></td><td>Redis 段读不到</td><td>归档里都有（delta 除外，回放正文看 message.completed）；读取本来就先读归档</td></tr>
+        <tr><td>会话序号 <code>thread:seq:{T}</code></td><td>从 1 重来，新事件被前端静默丢弃</td><td>键不在就用归档水位初始化，和递增在同一段 Lua 里（图 2）</td></tr>
+        <tr><td>会话锁 <code>run:lock:{会话}</code></td><td>同时进来的两个请求可能都占到</td><td>串行的权威在数据库：会话里有没结束的 run 就不让起新的</td></tr>
+        <tr><td>取消标记 <code>run:cancel:{run}</code></td><td>这次停止没生效</td><td>运行时查不到按未取消处理，不让 run 因 Redis 抖动挂掉；挂起中的 run 由执行器当场收尾，不靠它</td></tr>
+        <tr><td>唤醒频道 <code>run:wake</code></td><td>执行器晚一点才领到</td><td>定时领取扫描：排队的真相在数据库</td></tr>
+      </tbody>
+    </table>
+  </section>
 </main>
 
 <script>

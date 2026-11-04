@@ -27,6 +27,44 @@
   #c4-details td.sample { word-break: break-all; }
   #c4-details pre { margin: 0; padding: 10px 12px; border: 1px solid #e3e3e3; background: #f6f8fa; font-size: 12px; line-height: 1.5; overflow-x: auto; }
   svg a { cursor: pointer; }
+  /* 挂起与续跑原理：手写的静态图，不经渲染器 */
+  #principle { max-width: 1280px; }
+  #principle h3 { margin: 32px 0 8px; font-size: 15px; font-weight: 600; color: #333; }
+  #principle p { margin: 0 0 8px; font-size: 14px; line-height: 1.7; }
+  #principle code { padding: 0 3px; background: #f6f8fa; font-family: Menlo, Consolas, monospace; font-size: 12.5px; }
+  #principle ol { margin: 8px 0 0; padding: 0; list-style: none; }
+  #principle ol li { position: relative; margin: 0 0 6px; padding-left: 30px; font-size: 14px; line-height: 1.7; }
+  #principle ol li .n { position: absolute; left: 0; top: 2px; width: 20px; height: 20px; border-radius: 50%; background: #d9480f; color: #fff; font-size: 12px; font-weight: 700; line-height: 20px; text-align: center; }
+  #principle table { width: 100%; margin: 8px 0 0; border-collapse: collapse; font-size: 13px; line-height: 1.6; }
+  #principle th, #principle td { padding: 6px 10px; border: 1px solid #e3e3e3; text-align: left; vertical-align: top; }
+  #principle th { background: #f6f8fa; font-weight: 600; }
+  #principle th:first-child { width: 28%; }
+  #principle svg { margin: 8px 0 4px; }
+  #principle svg text { font-size: 13px; fill: #444; }
+  #principle svg .t-name { font-size: 15px; fill: #1168bd; text-anchor: middle; }
+  #principle svg .t-sub { font-size: 12px; fill: #888; text-anchor: middle; }
+  #principle svg .t-head { font-size: 14px; font-weight: 600; fill: #1168bd; }
+  #principle svg .t-key { font-size: 12px; fill: #888; }
+  #principle svg .t-lab { font-size: 12px; fill: #666; }
+  #principle svg .t-hot { font-size: 12px; fill: #d9480f; }
+  #principle svg .t-mute { font-size: 12px; fill: #aaa; }
+  #principle svg .t-ghost { font-size: 14px; font-weight: 600; fill: #888; }
+  #principle svg .hot { fill: #d9480f; }
+  #principle svg .mid { text-anchor: middle; }
+  #principle svg .end { text-anchor: end; }
+  #principle svg .b { font-weight: 700; }
+  #principle svg .node { fill: #fff; stroke: #1168bd; stroke-width: 1.6; }
+  #principle svg .head { fill: #f6f8fa; stroke: none; }
+  #principle svg .sep { stroke: #e3e3e3; stroke-width: 1; }
+  #principle svg .bnd { fill: none; stroke: #1168bd; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .ghost { fill: #fafafa; stroke: #aaa; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .gap { fill: #fff6f0; stroke: #d9480f; stroke-width: 1.2; stroke-dasharray: 5 4; }
+  #principle svg .e { fill: none; stroke: #444; stroke-width: 1.6; }
+  #principle svg .e-hot { fill: none; stroke: #d9480f; stroke-width: 2.4; }
+  #principle svg .e-mute { fill: none; stroke: #bbb; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .e-link { fill: none; stroke: #d9480f; stroke-width: 1.4; stroke-dasharray: 4 3; }
+  #principle svg .badge circle { fill: #d9480f; stroke: #fff; stroke-width: 2; }
+  #principle svg .badge text { fill: #fff; font-size: 12px; font-weight: 700; text-anchor: middle; }
 </style>
 </head>
 <body>
@@ -296,6 +334,283 @@
   <section id="c4-details" hidden></section>
   <h2>Diagram key</h2>
   <svg id="c4-key" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+
+  <!-- 挂起与续跑原理：静态图，不经上面的渲染器。场景同时序图：模型要删 tmp/，手动模式下要请示 -->
+  <section id="principle">
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+      <defs>
+        <marker id="pr-a" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#444"/></marker>
+        <marker id="pr-h" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#d9480f"/></marker>
+        <marker id="pr-m" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#bbb"/></marker>
+      </defs>
+    </svg>
+
+    <h2>挂起与续跑原理</h2>
+    <p>一句话：<b>挂起</b>就是图在 before_model 直接跳到 END，把「在等什么」（<code>waiting_on</code>）和消息在同一个事务里落库，进程里什么都不留；<b>续跑</b>就是新建一张图，把消息、<code>waiting_on</code> 和审批结果一起交回，before_model 直接跳到 tools，把当初拦下的那个调用执行掉。下面四张图按时间顺序，场景同上面的时序图：手动模式下模型要删 <code>tmp/</code>（调用 id 记作 <code>call_1</code>，审批 id 记作 <code>A</code>）。橙色是这一段实际走的路，灰色虚线是这一段没走的边。</p>
+
+    <h3>图 1　段 1：图内走到 END（挂起）</h3>
+    <svg width="1240" viewBox="0 0 1240 330" role="img" aria-label="段 1：图内走到 END">
+      <rect class="bnd" x="20" y="20" width="1200" height="296" rx="6"/>
+      <text class="t-head" x="36" y="44">LangGraph 图（create_agent；不装 checkpointer，不用 interrupt）</text>
+
+      <path class="e-hot" d="M1170 120 V56 H440 V118" marker-end="url(#pr-h)"/>
+      <text class="t-hot mid" x="805" y="48">工具节点的出边：总是回到 before_model（middleware 没有 after_tools 钩子）</text>
+      <path class="e-mute" d="M560 120 V90 H1030 V118" marker-end="url(#pr-m)"/>
+      <text class="t-mute mid" x="830" y="84">jump_to tools：等的有结果了（段 2 才走）</text>
+
+      <circle cx="60" cy="152" r="11" fill="#444"/>
+      <text class="t-sub" x="60" y="186">START</text>
+      <path class="e-hot" d="M71 152 H98" marker-end="url(#pr-h)"/>
+      <rect class="node" x="100" y="120" width="200" height="64" rx="4"/>
+      <text class="t-name" x="200" y="148">补悬空调用</text>
+      <text class="t-sub" x="200" y="168">PatchToolCalls · before_agent</text>
+      <path class="e-hot" d="M300 152 H378" marker-end="url(#pr-h)"/>
+      <rect class="node" x="380" y="120" width="220" height="64" rx="4"/>
+      <text class="t-name" x="490" y="148">挂起支点</text>
+      <text class="t-sub" x="490" y="168">Suspension · before_model</text>
+      <path class="e-hot" d="M600 152 H728" marker-end="url(#pr-h)"/>
+      <text class="t-hot mid" x="665" y="144">waiting_on 为空</text>
+      <rect class="node" x="730" y="120" width="150" height="64" rx="4"/>
+      <text class="t-name" x="805" y="148">调模型</text>
+      <text class="t-sub" x="805" y="168">model</text>
+      <path class="e-hot" d="M880 152 H998" marker-end="url(#pr-h)"/>
+      <text class="t-hot mid" x="940" y="144">有 tool_calls</text>
+      <rect class="node" x="1000" y="120" width="200" height="64" rx="4"/>
+      <text class="t-name" x="1100" y="148">执行工具</text>
+      <text class="t-sub" x="1100" y="168">tools（Permission 包裹）</text>
+
+      <path class="e-hot" d="M490 184 V270 H636" marker-end="url(#pr-h)"/>
+      <text class="t-hot end b" x="478" y="230">jump_to end</text>
+      <text class="t-hot end" x="478" y="248">还在等、没有结果：本段结束，不调模型</text>
+      <path class="e-mute" d="M805 184 V270 H664" marker-end="url(#pr-m)"/>
+      <text class="t-mute" x="817" y="236">没有 tool_calls：本轮结束</text>
+      <circle cx="650" cy="270" r="12" fill="#fff" stroke="#444" stroke-width="2"/>
+      <circle cx="650" cy="270" r="6" fill="#444"/>
+      <text class="t-sub" x="650" y="302">END</text>
+
+      <g class="badge"><circle cx="940" cy="174" r="10"/><text x="940" y="178">1</text></g>
+      <g class="badge"><circle cx="1200" cy="120" r="10"/><text x="1200" y="124">2</text></g>
+      <g class="badge"><circle cx="490" cy="204" r="10"/><text x="490" y="208">3</text></g>
+      <g class="badge"><circle cx="600" cy="270" r="10"/><text x="600" y="274">4</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>正常进图：没有悬空调用，<code>waiting_on</code> 为空 → 调模型。模型返回 AIMessage，<code>tool_calls = [call_1: delete_file]</code>。</li>
+      <li><span class="n">2</span>工具节点执行 <code>call_1</code>，先经过 PermissionMiddleware：手动模式 × write → 请示。ApprovalGate.check 登记审批 <code>A = uuid5(run_uuid, call_1)</code>（pending），发 <code>approval.required</code>；然后<b>只</b>返回 <code>Command(update={"waiting_on": {"call_1": {"reason": "approval", "token": "A"}}})</code>。不执行工具、不写 ToolMessage，<code>call_1</code> 在消息里悬空。</li>
+      <li><span class="n">3</span>工具节点的出边回到 before_model。SuspensionMiddleware 看到 <code>waiting_on</code> 非空、<code>A</code> 不在 <code>decisions</code> 里 → <code>jump_to: "end"</code>。不跳出的话，模型会拿到悬空的 tool_call，provider 直接 400。</li>
+      <li><span class="n">4</span>图正常跑完：不是异常，也不是 interrupt。runner 从 values 流的最后一帧取出 <code>waiting_on</code>，产出 <code>run.suspended</code>；执行器先落库（图 2）再发布，看到 <code>run.suspended</code> 就说明库里已经是 suspended。</li>
+    </ol>
+
+    <h3>图 2　挂起期间的全部现场：库里三行数据，进程里什么都没有</h3>
+    <svg width="1240" viewBox="0 0 1240 380" role="img" aria-label="挂起期间的现场">
+      <rect class="node" x="20" y="30" width="400" height="152"/>
+      <rect class="head" x="21" y="31" width="398" height="31"/>
+      <text class="t-head" x="34" y="52">message 表（会话历史）</text>
+      <line class="sep" x1="20" y1="62" x2="420" y2="62"/>
+      <text class="t-key" x="34" y="87">user</text>
+      <text x="110" y="87">清理一下 tmp/ 目录</text>
+      <line class="sep" x1="20" y1="102" x2="420" y2="102"/>
+      <text class="t-key" x="34" y="127">assistant</text>
+      <text x="110" y="127">tool_calls = [ <tspan class="hot b">call_1</tspan> · delete_file ]</text>
+      <line class="sep" x1="20" y1="142" x2="420" y2="142"/>
+      <rect class="gap" x="28" y="148" width="384" height="28" rx="3"/>
+      <text class="t-key" x="34" y="167">tool</text>
+      <text class="t-hot" x="110" y="167">没有 call_1 的结果 —— 故意悬空，不写占位</text>
+
+      <rect class="node" x="530" y="30" width="360" height="192"/>
+      <rect class="head" x="531" y="31" width="358" height="31"/>
+      <text class="t-head" x="544" y="52">run 行</text>
+      <line class="sep" x1="530" y1="62" x2="890" y2="62"/>
+      <text class="t-key" x="544" y="85">status</text>
+      <text class="b" x="650" y="85">suspended</text>
+      <line class="sep" x1="530" y1="98" x2="890" y2="98"/>
+      <text class="t-key" x="544" y="120">waiting_on</text>
+      <text x="650" y="120">{ <tspan class="hot b">call_1</tspan>: {</text>
+      <text x="664" y="140">reason: approval, token: <tspan class="hot b">A</tspan> } }</text>
+      <line class="sep" x1="530" y1="150" x2="890" y2="150"/>
+      <text class="t-key" x="544" y="173">租约</text>
+      <text x="650" y="173">清空 —— 没有进程持有它</text>
+      <line class="sep" x1="530" y1="186" x2="890" y2="186"/>
+      <text class="t-key" x="544" y="209">approval_mode</text>
+      <text x="650" y="209">manual</text>
+
+      <rect class="node" x="960" y="74" width="260" height="156"/>
+      <rect class="head" x="961" y="75" width="258" height="31"/>
+      <text class="t-head" x="974" y="96">approval 行</text>
+      <line class="sep" x1="960" y1="106" x2="1220" y2="106"/>
+      <text class="t-key" x="974" y="128">approval_uuid</text>
+      <text class="hot b" x="1070" y="128">A</text>
+      <text class="t-key" x="974" y="148">= uuid5(run_uuid, call_1)</text>
+      <line class="sep" x1="960" y1="158" x2="1220" y2="158"/>
+      <text class="t-key" x="974" y="181">kind</text>
+      <text x="1070" y="181">tool</text>
+      <line class="sep" x1="960" y1="194" x2="1220" y2="194"/>
+      <text class="t-key" x="974" y="217">status</text>
+      <text class="hot b" x="1070" y="217">pending</text>
+
+      <path class="e-link" d="M530 124 H424" marker-end="url(#pr-h)"/>
+      <text class="t-hot mid" x="476" y="100">同一个</text>
+      <text class="t-hot mid" x="476" y="114">tool_call_id</text>
+      <path class="e-link" d="M890 132 H958" marker-end="url(#pr-h)"/>
+      <text class="t-hot mid" x="924" y="124">同一个审批</text>
+
+      <text class="t-lab" x="20" y="252">message 表里本段的消息和 run 行：段收尾时同一个事务写下（先落库，再发布 run.suspended）。approval 行：图 1 第 2 步请示时就已登记</text>
+
+      <rect class="node" x="20" y="272" width="560" height="92"/>
+      <text class="t-head" x="34" y="296">Redis</text>
+      <text x="34" y="322">会话锁：不放 —— 等待期间同一会话插不进第二个 run</text>
+      <text x="34" y="346">事件流：approval.required、run.suspended（控制台据此弹审批窗）</text>
+      <rect class="ghost" x="620" y="272" width="600" height="92"/>
+      <text class="t-ghost" x="634" y="296">进程内</text>
+      <text x="634" y="322">什么都没有：没有协程在 await，没有 checkpointer 快照，没有计时器</text>
+      <text x="634" y="346">所以审批可以等到第二天；续跑段可以落在任何一个实例上</text>
+    </svg>
+    <p>只看消息，只能看出 <code>call_1</code> 还没有结果，看不出它是「在等」还是「被放弃」（比如进程在工具执行到一半时被杀）；这件事只记在 <code>run.waiting_on</code> 里，所以两样必须一起落库、续跑时一起交回。</p>
+
+    <h3>图 3　人工审批之后：怎么被唤醒</h3>
+    <svg width="1240" viewBox="0 0 1240 430" role="img" aria-label="审批之后的唤醒">
+      <rect class="node" x="20" y="30" width="220" height="60" rx="4"/>
+      <text class="t-name" x="130" y="56">员工点「允许」</text>
+      <text class="t-sub" x="130" y="76">控制台审批窗，可附理由</text>
+      <path class="e" d="M240 60 H298" marker-end="url(#pr-a)"/>
+      <rect class="node" x="300" y="30" width="320" height="60" rx="4"/>
+      <text class="t-name" x="460" y="56">提交决定</text>
+      <text class="t-sub" x="460" y="76">POST /v1/runs/{run}/approvals/A</text>
+      <path class="e" d="M620 60 H678" marker-end="url(#pr-a)"/>
+      <rect class="node" x="680" y="30" width="360" height="60" rx="4"/>
+      <text class="t-name" x="860" y="56">approval 行：pending → approved</text>
+      <text class="t-sub" x="860" y="76">只改 pending 的行，并发提交只有一次成功</text>
+      <path class="e" d="M860 90 V128 H145 V158" marker-end="url(#pr-a)"/>
+      <text class="t-lab mid" x="500" y="120">DecisionListener：通知执行器「做了决定」</text>
+
+      <rect class="node" x="20" y="160" width="250" height="56" rx="4"/>
+      <text class="t-name" x="145" y="184">做了决定</text>
+      <text class="t-sub" x="145" y="204">子 run 结束时同理</text>
+      <rect class="node" x="20" y="236" width="250" height="56" rx="4"/>
+      <text class="t-name" x="145" y="260">自己挂起落库之后</text>
+      <text class="t-sub" x="145" y="280">决定可能早于挂起落库，再查一次</text>
+      <rect class="node" x="20" y="312" width="250" height="56" rx="4"/>
+      <text class="t-name" x="145" y="336">定时补扫</text>
+      <text class="t-sub" x="145" y="356">唤醒丢了（进程被杀）的兜底</text>
+      <path class="e" d="M270 188 H300 V340 M270 264 H300 M270 340 H300"/>
+      <path class="e" d="M300 264 H328" marker-end="url(#pr-a)"/>
+
+      <rect class="node" x="330" y="236" width="200" height="56" rx="4"/>
+      <text class="t-name" x="430" y="260">resume_if_ready</text>
+      <text class="t-sub" x="430" y="280">三个入口，同一套判据</text>
+      <path class="e" d="M530 264 H568" marker-end="url(#pr-a)"/>
+      <polygon class="node" points="570,264 660,218 750,264 660,310"/>
+      <text class="t-name" x="660" y="261">每一项等待</text>
+      <text class="t-name" x="660" y="280">都有结果了？</text>
+      <path class="e" d="M750 264 H808" marker-end="url(#pr-a)"/>
+      <text class="t-lab mid" x="779" y="256">是</text>
+      <path class="e" d="M660 310 V336" marker-end="url(#pr-a)"/>
+      <text class="t-lab mid" x="660" y="356">否：什么都不做，继续等</text>
+      <text class="t-lab mid" x="660" y="374">不设超时，审批只由人决定</text>
+
+      <rect class="node" x="810" y="236" width="200" height="56" rx="4"/>
+      <text class="t-name" x="910" y="260">suspended → queued</text>
+      <text class="t-sub" x="910" y="280">requeue：CAS，只有一个赢</text>
+      <path class="e" d="M1010 264 H1048" marker-end="url(#pr-a)"/>
+      <rect class="node" x="1050" y="236" width="170" height="56" rx="4"/>
+      <text class="t-name" x="1135" y="260">PUBLISH run:wake</text>
+      <text class="t-sub" x="1135" y="280">Redis Pub/Sub</text>
+      <path class="e" d="M1135 292 V338" marker-end="url(#pr-a)"/>
+      <rect class="node" x="1050" y="340" width="170" height="56" rx="4"/>
+      <text class="t-name" x="1135" y="364">任一实例领取</text>
+      <text class="t-sub" x="1135" y="384">加租约 · status=running</text>
+      <text class="t-hot mid b" x="1135" y="418">→ 段 2（图 4）</text>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>提交决定只改 approval 行，它是决定的唯一记录；图不在运行，没有东西要「通知到图里」。改 run 的状态是执行器的事，经 DecisionListener 通知。</li>
+      <li><span class="n">2</span>barrier 按 <code>reason</code> 分派：approval 看审批行已不是 pending，subagent 看子 run 已到终态。<code>waiting_on</code> 里每一项都有结果才续；同一批里有两个请示时，批了一个不会续。</li>
+      <li><span class="n">3</span>续跑 = 放回队列。<code>UPDATE run SET status='queued' WHERE status='suspended'</code>：三个入口撞在一起时只有一个能改成；唤醒只是让调度别等下一次轮询，谁领到都一样。</li>
+    </ol>
+
+    <h3>图 4　段 2：新建一张图，before_model 直接跳到 tools</h3>
+    <svg width="1240" viewBox="0 0 1240 460" role="img" aria-label="段 2：续跑">
+      <rect class="node" x="20" y="20" width="270" height="60" rx="4"/>
+      <text class="t-name" x="155" y="46">messages</text>
+      <text class="t-sub" x="155" y="66">message 表，原样交回、不改写</text>
+      <rect class="node" x="320" y="20" width="290" height="60" rx="4"/>
+      <text class="t-name" x="465" y="46">waiting_on</text>
+      <text class="t-sub" x="465" y="66">run 行，剪掉历史里已有结果的项</text>
+      <rect class="node" x="640" y="20" width="290" height="60" rx="4"/>
+      <text class="t-name" x="785" y="46">decisions = { A: approved }</text>
+      <text class="t-sub" x="785" y="66">approval 行，只放已经有结果的</text>
+      <rect class="node" x="960" y="20" width="260" height="60" rx="4"/>
+      <text class="t-name" x="1090" y="46">approval_mode</text>
+      <text class="t-sub" x="1090" y="66">run 行</text>
+      <path class="e" d="M155 80 V104 H1090 V80 M465 80 V104 M785 80 V104"/>
+      <path class="e" d="M620 104 V146" marker-end="url(#pr-a)"/>
+      <text class="t-lab" x="632" y="130">graph_input：新建一张图（这一段可能在另一个实例上跑）</text>
+
+      <g transform="translate(0,130)">
+        <rect class="bnd" x="20" y="20" width="1200" height="296" rx="6"/>
+        <text class="t-head" x="36" y="44">LangGraph 图（和段 1 同一份定义，重新编译）</text>
+
+        <path class="e-hot" d="M1170 120 V56 H440 V118" marker-end="url(#pr-h)"/>
+        <text class="t-hot mid" x="805" y="48">工具节点的出边：总是回到 before_model</text>
+        <path class="e-hot" d="M560 120 V90 H1030 V118" marker-end="url(#pr-h)"/>
+        <text class="t-hot mid b" x="830" y="84">jump_to tools：A 在 decisions 里</text>
+
+        <circle cx="60" cy="152" r="11" fill="#444"/>
+        <text class="t-sub" x="60" y="186">START</text>
+        <path class="e-hot" d="M71 152 H98" marker-end="url(#pr-h)"/>
+        <rect class="node" x="100" y="120" width="200" height="64" rx="4"/>
+        <text class="t-name" x="200" y="148">补悬空调用</text>
+        <text class="t-sub" x="200" y="168">PatchToolCalls · before_agent</text>
+        <path class="e-hot" d="M300 152 H378" marker-end="url(#pr-h)"/>
+        <rect class="node" x="380" y="120" width="220" height="64" rx="4"/>
+        <text class="t-name" x="490" y="148">挂起支点</text>
+        <text class="t-sub" x="490" y="168">Suspension · before_model</text>
+        <path class="e-hot" d="M600 152 H728" marker-end="url(#pr-h)"/>
+        <text class="t-hot mid" x="665" y="144">waiting_on 已空</text>
+        <rect class="node" x="730" y="120" width="150" height="64" rx="4"/>
+        <text class="t-name" x="805" y="148">调模型</text>
+        <text class="t-sub" x="805" y="168">model</text>
+        <path class="e-mute" d="M880 152 H998" marker-end="url(#pr-m)"/>
+        <text class="t-mute mid" x="940" y="144">有 tool_calls（照常）</text>
+        <rect class="node" x="1000" y="120" width="200" height="64" rx="4"/>
+        <text class="t-name" x="1100" y="148">执行工具</text>
+        <text class="t-sub" x="1100" y="168">tools（Permission 包裹）</text>
+
+        <path class="e-mute" d="M490 184 V270 H636" marker-end="url(#pr-m)"/>
+        <text class="t-mute end b" x="478" y="230">jump_to end</text>
+        <text class="t-mute end" x="478" y="248">又遇到要请示的工具：再挂起（回到图 1）</text>
+        <path class="e-hot" d="M805 184 V270 H664" marker-end="url(#pr-h)"/>
+        <text class="t-hot" x="817" y="236">没有 tool_calls：本轮结束，run.finished</text>
+        <circle cx="650" cy="270" r="12" fill="#fff" stroke="#444" stroke-width="2"/>
+        <circle cx="650" cy="270" r="6" fill="#444"/>
+        <text class="t-sub" x="650" y="302">END</text>
+
+        <g class="badge"><circle cx="300" cy="120" r="10"/><text x="300" y="124">1</text></g>
+        <g class="badge"><circle cx="640" cy="90" r="10"/><text x="640" y="94">2</text></g>
+        <g class="badge"><circle cx="1200" cy="120" r="10"/><text x="1200" y="124">3</text></g>
+        <g class="badge"><circle cx="665" cy="172" r="10"/><text x="665" y="176">4</text></g>
+        <g class="badge"><circle cx="805" cy="206" r="10"/><text x="805" y="210">5</text></g>
+      </g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>图入口的 PatchToolCalls：<code>call_1</code> 没有结果，但在 <code>waiting_on</code> 里，说明是「在等」，不补 cancelled。只有不在 <code>waiting_on</code> 里的悬空调用才补。</li>
+      <li><span class="n">2</span>before_model：<code>A</code> 已在 <code>decisions</code> 里 → <code>jump_to: "tools"</code>，不先调模型。</li>
+      <li><span class="n">3</span>工具节点重新执行最后一条 AIMessage 的调用。PermissionMiddleware 认出 <code>call_1</code> 登记过等待、结果是 approved → 真正执行 delete_file；<code>release_wait</code> 把工具结果和「删掉 <code>waiting_on.call_1</code>」放进同一个更新。同一批里已有结果的兄弟调用由 SuspensionMiddleware 原样返回，不重跑。被拒绝时回一条失败的工具结果（带理由），模型换个方案继续，run 不终止。</li>
+      <li><span class="n">4</span>回到 before_model：<code>waiting_on</code> 已空 → 调模型。模型看到 delete_file 的结果，接着这一轮。</li>
+      <li><span class="n">5</span>之后照常：没有 tool_calls 就结束，发 <code>run.finished</code>，释放会话锁；又遇到要请示的工具，就再挂起一次（回到图 1），一个 run 可以分很多段。</li>
+    </ol>
+
+    <h3>为什么这样做</h3>
+    <table>
+      <thead><tr><th>做法</th><th>为什么</th></tr></thead>
+      <tbody>
+        <tr><td>跳到 END，不用 <code>interrupt()</code> + checkpointer</td><td>图的 state 只有消息和 <code>waiting_on</code>，事实源分别是 message 表和 run 行。checkpointer 会多出第二个状态源，还要求续跑回到存了快照的地方。续跑只需要知道「这一段从哪个节点开始」，before_model 的 <code>jump_to</code> 已经能做到。</td></tr>
+        <tr><td>判断放在 before_model</td><td>middleware 没有 after_tools 钩子。工具节点的出边指向 before_model，那里是「整批工具执行完、下次调模型之前」，是唯一既能看到整批结果、又来得及不调模型的位置。</td></tr>
+        <tr><td>被拦下的调用不写占位结果</td><td>写了的话，续跑执行后同一个调用就有两条结果，下一次模型调用会被拒（每个 tool_use 恰好一条 tool_result）。悬空调用是「在等」还是「被放弃」，靠 <code>waiting_on</code> 区分。</td></tr>
+        <tr><td><code>waiting_on</code> 和消息同一个事务落库</td><td>漏了 <code>waiting_on</code>，续跑时 Patch 会把 <code>call_1</code> 当成被放弃、补一句 cancelled，模型照着回答，批准了的工具永远不执行。</td></tr>
+        <tr><td>barrier 按 <code>reason</code> 分派</td><td>审批挂起时没有子 run，按子 run 判会立刻满足 → 续跑、又挂起、再续跑，死循环。</td></tr>
+        <tr><td>结果和删除等待项放进同一个更新</td><td>等待项留着的话，回到 before_model 时它的 token 仍在 <code>decisions</code> 里，于是又跳 tools，来回跳到 GraphRecursionError。</td></tr>
+      </tbody>
+    </table>
+  </section>
 </main>
 
 <script>

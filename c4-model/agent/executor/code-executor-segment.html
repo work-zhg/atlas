@@ -315,7 +315,7 @@
       "methods": [
         [
           "+",
-          "next_thread_seq · publish · renew / release_thread_lock"
+          "stamp · publish · emit · renew / release_thread_lock"
         ]
       ],
       "at": [
@@ -457,7 +457,7 @@
   "decisions": [
     {
       "decision": "一段的执行拆成编排、事件流水线、检查点、收尾",
-      "reason": "现在 _execute 一个方法约 400 行：载入、身份、会话锁、选运行时、序号、发布、检查点、审批模式和待办落库、安全点交接、收尾、挂起后的竞态补救全在里面，改其中一处要读懂全部。拆开后编排只剩顺序，每一步能单独测。"
+      "reason": "原来 _execute 一个方法约 400 行：载入、身份、会话锁、选运行时、序号、发布、检查点、审批模式和待办落库、安全点交接、收尾、挂起后的竞态补救全在里面，改其中一处要读懂全部。A1 已拆成载入、执行、落库几段，但 SegmentExecution.run 仍有 260 多行，按本图继续拆到编排只剩顺序、每一步能单独测。"
     },
     {
       "decision": "收尾事件先落库再发布，序号先盖",
@@ -477,7 +477,7 @@
     },
     {
       "decision": "状态机去掉 awaiting_approval，「等人」改成显式属性",
-      "reason": "现在 awaiting_approval 一个状态两种意思：原生运行时的审批挂起（没有进程在跑），和 CLI 运行时在线等权限响应（进程还在跑）。续跑判据只能靠「有没有等待项」去猜，猜错了就会把在跑的 CLI 再执行一遍。改成：挂起就是 suspended，等什么看 waiting_on 的原因；CLI 在线等权限是 running + awaiting_user。"
+      "reason": "原来 awaiting_approval 一个状态两种意思：原生运行时的审批挂起（没有进程在跑），和 CLI 运行时在线等权限响应（进程还在跑）。续跑判据只能靠「有没有等待项」去猜，猜错了就会把在跑的 CLI 再执行一遍。改成：挂起就是 suspended，等什么看 waiting_on 的原因；CLI 在线等权限是 running + awaiting_user（A2 已改）。"
     },
     {
       "decision": "运行时私有的进度不进 run 表",
@@ -485,7 +485,7 @@
     },
     {
       "decision": "RunRepository 按领域拆",
-      "reason": "现在一个 RunRepository 有约 30 个方法：执行要的、归档要的、事件回放要的、会话列表要的、子智能体准入要的都在里面。拆成调度的 RunQueue、本领域的 RunRecordRepository 和 EventArchive、续跑的查询；界面的读查询归会话管理组件。"
+      "reason": "原来一个 RunRepository 有约 30 个方法：执行要的、归档要的、事件回放要的、会话列表要的、子智能体准入要的都在里面。拆成调度的 RunQueue、本领域的 RunRecordRepository 和 EventArchive、续跑的查询；界面的读查询归会话管理组件（A1 已拆）。"
     },
     {
       "decision": "会话锁跟随租约",

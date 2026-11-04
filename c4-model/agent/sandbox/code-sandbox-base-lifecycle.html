@@ -765,7 +765,7 @@
     {
       "name": "取服务令牌",
       "entry": "service_token(sandbox_uuid)",
-      "callers": "会话 Pod（HostRuntime 连 bridge）",
+      "callers": "CLI 运行时（HostClient 连 bridge）",
       "description": "只给建沙箱时声明了 service_token_env 的沙箱；和 execd 令牌不是同一个",
       "source": "现在 bridge 令牌兼作 execd 令牌，随 SandboxEndpoint 返回"
     },
@@ -860,7 +860,7 @@
     },
     {
       "decision": "bridge 令牌和 execd 令牌分开",
-      "reason": "会话 Pod 的 HostRuntime 连 bridge 必须带令牌，这个令牌一定要出基座；现在它兼作 execd 令牌，拿到它就能在 Pod 里执行任意命令。分开后出基座的只有 bridge 令牌（Pod 里的 CLI 两个都读得到，这一点不变）。"
+      "reason": "CLI 运行时连会话 Pod 的 bridge 必须带令牌，这个令牌一定要出基座；现在它兼作 execd 令牌，拿到它就能在 Pod 里执行任意命令。分开后出基座的只有 bridge 令牌（Pod 里的 CLI 两个都读得到，这一点不变）。"
     },
     {
       "decision": "创建规格类型化，标签构造时校验",

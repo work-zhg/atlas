@@ -33,7 +33,7 @@
   "description": "目标模型，只画期望的样子、不对照现状。bridge 的五个领域，每个只画对外入口和关键元素，看依赖方向；领域内部见各自的 code-bridge-*.html。",
   "component": "bridge",
   "package": "bridge（目标模型 · 领域总览）",
-  "overview": "bridge 是会话 Pod 的 1 号进程，把 Pod 里的外部 CLI 智能体接成平台的执行后端：对上经 WebSocket 讲 atlas.host.v1，和 Agent 服务的 CLI 运行时配对；对下把 CLI 适配器作为子进程拉起，经 stdio 讲 ACP。一个 bridge 只服务一个会话。它分五个领域：CLI 会话是核心，管会话的状态机和 CLI 失联后的恢复；一轮管一次 prompt 的计时和取消；权限询问把 CLI 的权限请求转给 server、保证不自动批准；上游通道保证发往 server 的消息按序到达、断线可补；CLI 进程管子进程和 ACP 握手。\n\nPod 里还有 bridge 之外的东西，不在这张图里：工作区、技能、CLI 的 HOME 经 s3fs 挂载，凭据由 egress 的 Credential Vault 注入，这些由沙箱组件的会话 Pod 领域在建 Pod 时准备。图上每个元素第一行写着它属于哪个领域。",
+  "overview": "bridge 是会话 Pod 的主进程（OpenSandbox 的 execd 作 1 号进程拉起它），把 Pod 里的外部 CLI 智能体接成平台的执行后端：对上经 WebSocket 讲 atlas.host.v1，和 Agent 服务的 CLI 运行时配对；对下把 CLI 适配器作为子进程拉起，经 stdio 讲 ACP。一个 bridge 只服务一个会话。它分五个领域：CLI 会话是核心，管会话的状态机和 CLI 失联后的恢复；一轮管一次 prompt 的计时和取消；权限询问把 CLI 的权限请求转给 server、保证不自动批准；上游通道保证发往 server 的消息按序到达、断线可补；CLI 进程管子进程和 ACP 握手。\n\nPod 里还有 bridge 之外的东西，不在这张图里：工作区、技能、CLI 的 HOME 经 s3fs 挂载，凭据由 egress 的 Credential Vault 注入，这些由沙箱组件的会话 Pod 领域在建 Pod 时准备。图上每个元素第一行写着它属于哪个领域。",
   "elements": [
     {
       "id": "app",

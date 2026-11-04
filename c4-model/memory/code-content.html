@@ -1,0 +1,1501 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Code View</title>
+<style>
+  body { margin: 0; background: #fff; color: #444; font-family: "Open Sans", "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
+  main { padding: 24px 32px 48px; }
+  svg { display: block; max-width: 100%; height: auto; }
+  h2 { margin: 40px 0 12px; font-size: 15px; font-weight: 600; color: #666; }
+  #c4-report { margin: 0 0 24px; padding: 12px 16px 12px 36px; border: 1px solid #e0b4b4; background: #fff6f6; font-size: 14px; line-height: 1.6; }
+  #c4-report li[data-level="error"] { color: #b00020; }
+  #c4-report li[data-level="warn"] { color: #8a5a00; }
+  #c4-overview p { max-width: 1100px; margin: 0 0 10px; font-size: 14px; line-height: 1.8; color: #333; }
+  section table { border-collapse: collapse; font-size: 14px; line-height: 1.6; color: #333; }
+  section th, section td { border: 1px solid #d0d0d0; padding: 6px 10px; text-align: left; vertical-align: top; }
+  section th { background: #f4f4f4; font-weight: 600; white-space: nowrap; }
+  section td.code { font-family: Menlo, Consolas, monospace; font-size: 13px; }
+  section td.nowrap { white-space: nowrap; }
+  #c4-tables h3 { margin: 28px 0 6px; font: 600 14px Menlo, Consolas, monospace; color: #333; }
+  #c4-tables h4 { margin: 14px 0 6px; font-size: 13px; font-weight: 600; color: #666; }
+  #c4-tables p { max-width: 1100px; margin: 0 0 10px; font-size: 14px; line-height: 1.8; color: #333; }
+</style>
+</head>
+<body>
+<!--
+  只改下面这段 JSON；渲染器不用动。字段说明见 code/RULES.md 的「数据格式」。
+-->
+<script type="application/json" id="c4-model">
+{
+  "title": "代码图：记忆服务 - 记忆接口 - 主题与条目",
+  "description": "目标模型，每个元素下方的「现状」是现在承担它的代码。主题目录与加载，写入的取代规则，移动、拆分和版本号",
+  "component": "主题与条目",
+  "package": "atlas_memory.content（目标模型）",
+  "overview": "主题与条目管一个实例里存的东西：主题是客户端建的分类（编码、描述、扩展属性），条目是一句句内容（编号、客户端时间、来源、出处）。写入一次删除若干、至多新增一条，以客户端时间判先后、时间晚的为准，被删的条目记下被谁取代；条目可以在主题之间移动，主题可以按客户端给的分组拆分。主题有任何变化就换一个版本号，客户端据此判断本地内容是否最新。\n\n它不解释内容、不判断两条是否重复、不管主题该多大（都归客户端），不管撤销、恢复和彻底删除（修订历史），也不校验权限（访问控制）。",
+  "elements": [
+    {
+      "id": "svc",
+      "kind": "class",
+      "name": "ContentService",
+      "stereotype": "应用服务",
+      "at": [
+        1.5,
+        0.3
+      ],
+      "source": "MemoryStore.catalog / load_topic / create_topic / update_topic / delete_topic / write / move / split / list_entries / entry_detail",
+      "responsibility": "主题和条目的全部入口，实例接口按请求调用，写操作拿到的都是已锁住的实例。目标主题已拆分或删除时报 TOPIC_GONE，带上拆成了哪些和当前主题目录，客户端据此重选；不存在报 TOPIC_NOT_FOUND，也带目录。每次改动经修订日志记一条修订，返回受影响主题改前、改后的版本号。",
+      "methods": [
+        [
+          "+",
+          "catalog(inst) -> list[Topic]"
+        ],
+        [
+          "+",
+          "load(inst, code) -> (Topic, list[Entry])"
+        ],
+        [
+          "+",
+          "create_topic(inst, code, description, attrs) -> Topic"
+        ],
+        [
+          "+",
+          "update_topic(inst, code, *, description, attrs) -> TopicChange"
+        ],
+        [
+          "+",
+          "delete_topic(inst, code)"
+        ],
+        [
+          "+",
+          "write(inst, req: WriteRequest) -> WriteResult"
+        ],
+        [
+          "+",
+          "move(inst, numbers, to_code) -> list[TopicChange]"
+        ],
+        [
+          "+",
+          "split(inst, code, plan: SplitPlan) -> list[TopicChange]"
+        ],
+        [
+          "+",
+          "browse(inst, filter) · detail(inst, number)"
+        ]
+      ]
+    },
+    {
+      "id": "req",
+      "kind": "class",
+      "name": "WriteRequest",
+      "stereotype": "值对象",
+      "at": [
+        -0.85,
+        1.75
+      ],
+      "source": "store.WriteRequest；MemoryStore.write 开头的校验",
+      "responsibility": "一次写入 = 删除若干 + 至多新增一条。content 为空表示只遗忘；时间必须带时区；单条内容不超过 4000 字符（防一次写进整篇文档，不是主题大小上限），一次最多删 50 条，出处不超过 2 KB。",
+      "attributes": [
+        [
+          "+",
+          "topic: str | None"
+        ],
+        [
+          "+",
+          "content: str | None  # None = 只遗忘"
+        ],
+        [
+          "+",
+          "remove: list[int]"
+        ],
+        [
+          "+",
+          "occurred_at: datetime（客户端时间）"
+        ],
+        [
+          "+",
+          "source · origin · idempotency_key"
+        ]
+      ]
+    },
+    {
+      "id": "plan",
+      "kind": "class",
+      "name": "SplitPlan",
+      "stereotype": "值对象",
+      "at": [
+        0.25,
+        1.75
+      ],
+      "source": "store.SplitGroup；MemoryStore.split 前半的校验",
+      "responsibility": "客户端给的拆分方案。原主题的版本号和 expected_version 不一致就拒绝（VERSION_MISMATCH）；至少两组、每组至少一条、编码不重复且不撞别的有效主题、正好覆盖原主题的全部有效条目（SPLIT_COVERAGE，带缺的和多出来的编号）。子主题可以沿用原编码。",
+      "attributes": [
+        [
+          "+",
+          "expected_version: int"
+        ],
+        [
+          "+",
+          "groups: list[(code, description, entries, attrs)]"
+        ]
+      ],
+      "methods": [
+        [
+          "+",
+          "check(topic, active_numbers)"
+        ]
+      ]
+    },
+    {
+      "id": "versioning",
+      "kind": "class",
+      "name": "TopicVersioning",
+      "stereotype": "领域服务",
+      "at": [
+        2.8,
+        1.75
+      ],
+      "source": "MemoryStore._touch / _recount",
+      "responsibility": "一次操作从实例计数器取一个新值，写给所有受影响的主题，按需重算有效条目数和字符数；返回每个主题改前、改后的版本号，客户端据此判断本地内容是否最新。",
+      "methods": [
+        [
+          "+",
+          "touch(inst, topics, *, recount=True) -> list[TopicChange]"
+        ]
+      ]
+    },
+    {
+      "id": "journal",
+      "kind": "interface",
+      "name": "ChangeJournal",
+      "stereotype": "扩展点",
+      "at": [
+        4.0,
+        1.75
+      ],
+      "source": "无：现在 MemoryStore 直接建 Revision 行、查幂等键",
+      "responsibility": "本领域要的修订日志：每次改动（写入、移动、拆分）记一条，写入带结果副本；同一幂等键再来时取回第一次的结果。由修订历史领域实现，本领域不认识修订表。",
+      "methods": [
+        [
+          "+",
+          "replay(inst, idempotency_key) -> WriteResult | None"
+        ],
+        [
+          "+",
+          "record(inst, change: ChangeRecord)"
+        ]
+      ]
+    },
+    {
+      "id": "chain",
+      "kind": "class",
+      "name": "SupersessionChain",
+      "stereotype": "领域服务",
+      "at": [
+        0.4,
+        3.05
+      ],
+      "source": "MemoryStore._current / _component",
+      "responsibility": "沿取代关系走。current 找一条条目「现在的样子」：还有效就是它，被取代就沿后继找到有效的，被遗忘就返回那次遗忘的时间；component 找前驱、后继连起来的全部条目，条目详情和彻底删除用。两者都防环。",
+      "methods": [
+        [
+          "+",
+          "current(inst, entry) -> Entry | Forgotten"
+        ],
+        [
+          "+",
+          "component(inst, entry) -> list[Entry]"
+        ]
+      ]
+    },
+    {
+      "id": "policy",
+      "kind": "class",
+      "name": "LatestWins",
+      "stereotype": "策略",
+      "at": [
+        2.65,
+        3.05
+      ],
+      "source": "MemoryStore.write 里判定 heads / skipped / conflicts 的循环",
+      "responsibility": "时间晚的为准。要删的条目现状晚于本次写入，或那次遗忘晚于本次写入，本次作废（discarded，带冲突的条目）；否则删现状那条；已被更早遗忘的只做新增（skipped）。时间相同按后到的为准。两次互相没看到对方、都只新增的写入，两条都留下，由下次写这个主题的客户端清理。",
+      "methods": [
+        [
+          "+",
+          "judge(req, currents) -> Verdict  # 要删的、跳过的、冲突的"
+        ]
+      ]
+    },
+    {
+      "id": "repo",
+      "kind": "class",
+      "name": "ContentRepository",
+      "stereotype": "仓储",
+      "at": [
+        1.5,
+        4.35
+      ],
+      "source": "MemoryStore._active_topic / _latest_topic / _topics_of / _entry，list_entries 里的查询",
+      "responsibility": "读写 mem_topic、mem_entry。条目浏览按状态、主题、来源、出处（JSONB 包含）、关键词过滤，按编号倒序分页。",
+      "methods": [
+        [
+          "+",
+          "active_topic(inst, code) · latest_topic(inst, code)"
+        ],
+        [
+          "+",
+          "topics(inst, uuids) -> list[Topic]"
+        ],
+        [
+          "+",
+          "entry(inst, number) -> Entry"
+        ],
+        [
+          "+",
+          "entries(topic) · search(inst, filter)"
+        ],
+        [
+          "+",
+          "delete_entries(inst, numbers) · purge(inst)"
+        ]
+      ]
+    },
+    {
+      "id": "topic",
+      "kind": "class",
+      "name": "Topic",
+      "stereotype": "实体",
+      "at": [
+        0.75,
+        5.75
+      ],
+      "source": "db.models.Topic；store.check_topic_code",
+      "responsibility": "实例里的一个主题。编码在有效主题之间唯一；描述说明收什么、不收什么；扩展属性由客户端定义、原样保存（Atlas 用 resident 标常驻）。大小只报告、不限制。拆分、删除后行保留：写入的目标刚被拆掉时，要能告诉客户端拆成了哪些。",
+      "attributes": [
+        [
+          "+",
+          "code: str · description: str"
+        ],
+        [
+          "+",
+          "attrs: dict（客户端定义）"
+        ],
+        [
+          "+",
+          "status: active | split | deleted"
+        ],
+        [
+          "+",
+          "version: int"
+        ],
+        [
+          "+",
+          "entry_count · char_count"
+        ],
+        [
+          "+",
+          "split_into: list[str] | None"
+        ]
+      ],
+      "methods": [
+        [
+          "+",
+          "revise(description, attrs)"
+        ],
+        [
+          "+",
+          "mark_split(codes) · retire()"
+        ]
+      ]
+    },
+    {
+      "id": "entry",
+      "kind": "class",
+      "name": "Entry",
+      "stereotype": "实体",
+      "at": [
+        2.3,
+        5.75
+      ],
+      "source": "db.models.Entry",
+      "responsibility": "一条条目：内容、编号、客户端时间、来源、出处。删除只改状态，并记下是哪次修订、什么时间删的、被哪条取代（为空 = 被遗忘），留在修订历史里，可以撤销、恢复；只有彻底删除才真删。",
+      "attributes": [
+        [
+          "+",
+          "number: int（实例内唯一，移动、拆分都不变）"
+        ],
+        [
+          "+",
+          "content · occurred_at"
+        ],
+        [
+          "+",
+          "source · origin（客户端给，原样保存）"
+        ],
+        [
+          "+",
+          "status: active | deleted"
+        ],
+        [
+          "+",
+          "superseded_by: int | None"
+        ],
+        [
+          "+",
+          "created_rev_uuid · retired_rev_uuid · retired_at"
+        ]
+      ],
+      "methods": [
+        [
+          "+",
+          "retire(rev_uuid, at, successor)"
+        ],
+        [
+          "+",
+          "revive(topic) · move_to(topic)"
+        ]
+      ]
+    },
+    {
+      "id": "routes",
+      "kind": "class",
+      "name": "InstanceRoutes",
+      "external": true,
+      "source": "实例接口组件",
+      "methods": [
+        [
+          "+",
+          "topics · writes · moves · topics/{code}/split · entries"
+        ]
+      ],
+      "at": [
+        1.5,
+        -1.25
+      ]
+    },
+    {
+      "id": "inst",
+      "kind": "class",
+      "name": "MemoryInstance",
+      "external": true,
+      "source": "作用域与实例领域",
+      "methods": [
+        [
+          "+",
+          "next_version() · next_number()"
+        ]
+      ],
+      "at": [
+        5.2,
+        0.3
+      ]
+    },
+    {
+      "id": "revLog",
+      "kind": "class",
+      "name": "RevisionLog",
+      "external": true,
+      "source": "修订历史领域",
+      "methods": [
+        [
+          "+",
+          "replay · record"
+        ]
+      ],
+      "at": [
+        5.35,
+        1.75
+      ]
+    },
+    {
+      "id": "revSvc",
+      "kind": "class",
+      "name": "RevisionService",
+      "external": true,
+      "source": "修订历史领域",
+      "methods": [
+        [
+          "+",
+          "undo · restore · purge_entry · purge_instance"
+        ]
+      ],
+      "at": [
+        5.0,
+        4.35
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "from": "routes",
+      "to": "svc",
+      "description": "目录、加载、写入、移动、拆分、浏览"
+    },
+    {
+      "from": "svc",
+      "to": "inst",
+      "description": "取条目编号"
+    },
+    {
+      "from": "svc",
+      "to": "req",
+      "description": "按它写入"
+    },
+    {
+      "from": "svc",
+      "to": "plan",
+      "description": "核对方案"
+    },
+    {
+      "from": "svc",
+      "to": "versioning",
+      "description": "换版本号"
+    },
+    {
+      "from": "svc",
+      "to": "journal",
+      "description": "查重放、记修订"
+    },
+    {
+      "from": "svc",
+      "to": "chain",
+      "description": "找要删条目的现状"
+    },
+    {
+      "from": "svc",
+      "to": "policy",
+      "description": "判定作废或执行"
+    },
+    {
+      "from": "svc",
+      "to": "repo",
+      "description": "查、存主题和条目"
+    },
+    {
+      "from": "versioning",
+      "to": "inst",
+      "description": "取新版本号"
+    },
+    {
+      "from": "revLog",
+      "to": "journal",
+      "type": "implements"
+    },
+    {
+      "from": "chain",
+      "to": "repo",
+      "description": "按编号查前驱、后继"
+    },
+    {
+      "from": "repo",
+      "to": "topic",
+      "type": "association",
+      "description": "存取"
+    },
+    {
+      "from": "repo",
+      "to": "entry",
+      "type": "association",
+      "description": "存取"
+    },
+    {
+      "from": "entry",
+      "to": "topic",
+      "type": "association",
+      "description": "所在主题"
+    },
+    {
+      "from": "revSvc",
+      "to": "repo",
+      "description": "取、改、删条目"
+    },
+    {
+      "from": "revSvc",
+      "to": "chain",
+      "description": "整条取代链"
+    },
+    {
+      "from": "revSvc",
+      "to": "versioning",
+      "description": "换版本号"
+    }
+  ],
+  "capabilities": [
+    {
+      "name": "主题目录",
+      "entry": "catalog(inst)",
+      "callers": "实例接口（Atlas 装配常驻块、模型调 load_memory 前）",
+      "description": "只列有效主题：编码、描述、扩展属性、当前大小、版本号；实例还没建就是空目录"
+    },
+    {
+      "name": "加载主题",
+      "entry": "load(inst, code)",
+      "callers": "实例接口（Atlas 的 load_memory、save_memory 写之前）",
+      "description": "一个主题和它的全部有效条目，按编号排"
+    },
+    {
+      "name": "新建、修改、删除主题",
+      "entry": "create_topic · update_topic · delete_topic",
+      "callers": "实例接口",
+      "description": "编码 1–64 个字符、不含 / 和控制字符；描述、扩展属性变了也换版本号；只能删空主题，条目要先移走或遗忘"
+    },
+    {
+      "name": "写入",
+      "entry": "write(inst, req)",
+      "callers": "实例接口（Atlas 的 save_memory、forget_memory、补记）",
+      "description": "删除若干 + 至多新增一条，一个事务。返回 outcome（applied / discarded）、新条目、实际删除的编号、跳过的编号、受影响主题前后的版本号、冲突；同一幂等键返回第一次的结果"
+    },
+    {
+      "name": "移动",
+      "entry": "move(inst, numbers, to_code)",
+      "callers": "实例接口（记忆页）",
+      "description": "只改所在主题，不改内容、编号、时间和来源；已删除的条目不能移"
+    },
+    {
+      "name": "拆分",
+      "entry": "split(inst, code, plan)",
+      "callers": "实例接口（Atlas 补记的最后一步，主题超过客户端的上限时）",
+      "description": "新建子主题、移动条目、原主题标为已拆分，一个事务；只移动、不改写"
+    },
+    {
+      "name": "浏览条目、看演变",
+      "entry": "browse(inst, filter) · detail(inst, number)",
+      "callers": "实例接口（记忆页）",
+      "description": "按状态、主题、来源、出处、关键词过滤；详情带整条取代链"
+    },
+    {
+      "name": "给修订历史用的底层操作",
+      "entry": "ContentRepository · SupersessionChain · TopicVersioning",
+      "callers": "修订历史",
+      "description": "撤销、恢复、彻底删除时取、改、删条目，找整条取代链，换版本号"
+    }
+  ],
+  "decisions": [
+    {
+      "decision": "一次写入 = 删除若干 + 至多新增一条，在一个事务里",
+      "reason": "「改用 bun」就是删掉「用 pnpm」再新增一条，两步必须一起成功，不能出现只删了旧的、新的没写进去。被删的条目记下 superseded_by，演变过程在详情里看得到。"
+    },
+    {
+      "decision": "以客户端给的时间判先后，时间晚的为准",
+      "reason": "Atlas 的补记在会话空闲 30 分钟后才跑，入库顺序不等于发生顺序；按入库顺序，补记出来的旧信息会覆盖会话里刚说的新信息。"
+    },
+    {
+      "decision": "要删的条目先沿取代关系找到现状再删",
+      "reason": "客户端手里的编号可能已经被别的写入取代：直接删旧编号什么也删不掉，新旧两条会并存。找到现状后再按时间比较，后到的旧信息也不会覆盖新信息。"
+    },
+    {
+      "decision": "服务端不判断语义、不管主题大小上限",
+      "reason": "什么算重复、主题多大该拆，取决于客户端（Atlas 按上下文预算定上限）。服务端只保证隔离、并发、事务和修订历史，只报告大小；这样别的应用也能用同一份数据。"
+    },
+    {
+      "decision": "拆分按版本号乐观校验，分组要正好覆盖",
+      "reason": "分组由客户端调模型完成，耗时长，不能锁着实例等。提交时版本号变了说明分组期间有新写入，拒绝后下次再拆；漏掉一条就等于删了它，所以必须正好覆盖。"
+    },
+    {
+      "decision": "已拆分、删除的主题保留行，编码只在有效主题之间唯一",
+      "reason": "写入的目标主题刚被拆掉时，要告诉客户端拆成了哪些（TOPIC_GONE + split_into + 当前目录），客户端据此重选；部分唯一索引只管 status = 'active'，子主题可以沿用原编码。"
+    },
+    {
+      "decision": "描述、扩展属性变了也换版本号",
+      "reason": "Atlas 的常驻块里有主题描述和常驻标记，只看条目变化会让客户端以为快照还是最新的。"
+    },
+    {
+      "decision": "修订经 ChangeJournal 记，不直接建修订行",
+      "reason": "修订历史要反过来改条目和主题（撤销、恢复、彻底删除），两个领域互相引用就成了环。依赖倒置后只有修订历史 → 主题与条目；幂等重放也走它，网络重试不会写出两条。"
+    }
+  ],
+  "schemaNote": "主键约定：id 是自增主键，只在库内使用；uuid 是逻辑主键（UUIDv7，Python 侧生成），API 用它，表间引用的列叫 xxx_uuid。表间不建外键约束，引用由代码维护；引用别的领域的表时只写列说明，不画连线。类型写的是 PostgreSQL 类型；每张表还有 created_at、updated_at（timestamptz，UTC），下面不重复列出。",
+  "tables": [
+    {
+      "name": "mem_topic",
+      "description": "对应实体 Topic",
+      "at": [
+        0,
+        0
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": "bigint",
+          "key": "PK",
+          "default": "自增",
+          "description": "库内主键"
+        },
+        {
+          "name": "uuid",
+          "type": "uuid",
+          "key": "UK",
+          "description": "逻辑主键（UUIDv7）"
+        },
+        {
+          "name": "instance_uuid",
+          "type": "uuid",
+          "description": "所属实例（mem_instance.uuid，作用域与实例领域）"
+        },
+        {
+          "name": "code",
+          "type": "varchar(64)",
+          "description": "主题编码，有效主题之间唯一"
+        },
+        {
+          "name": "description",
+          "type": "text",
+          "default": "''",
+          "description": "收什么、不收什么"
+        },
+        {
+          "name": "attrs",
+          "type": "jsonb",
+          "default": "'{}'",
+          "description": "扩展属性，客户端定义、原样保存，≤ 4 KB"
+        },
+        {
+          "name": "status",
+          "type": "varchar(16)",
+          "default": "'active'",
+          "description": "active / split / deleted"
+        },
+        {
+          "name": "version",
+          "type": "bigint",
+          "default": "0",
+          "description": "版本号，取自实例计数器"
+        },
+        {
+          "name": "entry_count",
+          "type": "integer",
+          "default": "0",
+          "description": "有效条目数"
+        },
+        {
+          "name": "char_count",
+          "type": "integer",
+          "default": "0",
+          "description": "有效条目的字符数"
+        },
+        {
+          "name": "split_into",
+          "type": "jsonb",
+          "nullable": true,
+          "description": "拆成了哪些主题编码（status = split 时）"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "ux_mem_topic_code",
+          "columns": [
+            "instance_uuid",
+            "code"
+          ],
+          "unique": true,
+          "description": "部分唯一索引，WHERE status = 'active'"
+        }
+      ]
+    },
+    {
+      "name": "mem_entry",
+      "description": "对应实体 Entry",
+      "at": [
+        1.2,
+        0
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": "bigint",
+          "key": "PK",
+          "default": "自增",
+          "description": "库内主键"
+        },
+        {
+          "name": "uuid",
+          "type": "uuid",
+          "key": "UK",
+          "description": "逻辑主键（UUIDv7）"
+        },
+        {
+          "name": "instance_uuid",
+          "type": "uuid",
+          "description": "所属实例（mem_instance.uuid，作用域与实例领域）"
+        },
+        {
+          "name": "topic_uuid",
+          "type": "uuid",
+          "references": "mem_topic.uuid",
+          "description": "所在主题；移动、拆分时改它"
+        },
+        {
+          "name": "number",
+          "type": "bigint",
+          "description": "条目编号，实例内唯一，取自实例计数器"
+        },
+        {
+          "name": "content",
+          "type": "text",
+          "description": "内容，≤ 4000 字符"
+        },
+        {
+          "name": "occurred_at",
+          "type": "timestamptz",
+          "description": "客户端给的时间，判断先后用；created_at 是入库时间"
+        },
+        {
+          "name": "source",
+          "type": "varchar(32)",
+          "default": "''",
+          "description": "来源标签，原样保存（Atlas：user / agent / backfill）"
+        },
+        {
+          "name": "origin",
+          "type": "jsonb",
+          "nullable": true,
+          "description": "出处，原样保存（Atlas：{thread, run}）"
+        },
+        {
+          "name": "status",
+          "type": "varchar(16)",
+          "default": "'active'",
+          "description": "active / deleted"
+        },
+        {
+          "name": "created_rev_uuid",
+          "type": "uuid",
+          "description": "新增它的那次修订（mem_revision.uuid，修订历史领域）"
+        },
+        {
+          "name": "retired_rev_uuid",
+          "type": "uuid",
+          "nullable": true,
+          "description": "删除它的那次修订"
+        },
+        {
+          "name": "retired_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "description": "那次修订的客户端时间，和后到的写入比较先后"
+        },
+        {
+          "name": "superseded_by",
+          "type": "bigint",
+          "nullable": true,
+          "description": "取代它的条目编号（同实例的 number）；删除了但为空 = 被遗忘"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "uq_mem_entry_instance_uuid_number",
+          "columns": [
+            "instance_uuid",
+            "number"
+          ],
+          "unique": true
+        },
+        {
+          "name": "ix_mem_entry_topic",
+          "columns": [
+            "topic_uuid",
+            "status"
+          ],
+          "description": "加载主题、重算大小"
+        }
+      ]
+    }
+  ]
+}
+</script>
+
+<main>
+  <ul id="c4-report" hidden></ul>
+  <svg id="c4-diagram" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+  <section id="c4-overview" hidden>
+    <h2>概述</h2>
+  </section>
+  <section id="c4-capabilities" hidden>
+    <h2>对外能力</h2>
+    <table><thead></thead><tbody></tbody></table>
+  </section>
+  <section id="c4-decisions" hidden>
+    <h2>设计决策</h2>
+    <table><thead></thead><tbody></tbody></table>
+  </section>
+  <section id="c4-elements" hidden>
+    <h2>元素职责</h2>
+    <table><thead></thead><tbody></tbody></table>
+  </section>
+  <section id="c4-er" hidden>
+    <h2>ER 图</h2>
+    <svg id="c4-er-diagram" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+  </section>
+  <section id="c4-tables" hidden>
+    <h2>表结构</h2>
+  </section>
+  <h2>Diagram key</h2>
+  <svg id="c4-key" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+</main>
+
+<script>
+(() => {
+  'use strict';
+  const FONT = '"Open Sans", "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
+  const INK = '#181818';
+  const EXTERNAL_INK = '#8a8a8a';           // 外部元素（不在本 component 里）
+  const TITLE_INK = '#444444';
+  const SOURCE_INK = '#7a7a7a';             // 「现状：…」（目标模型的元素当前由哪段代码承担）
+  // 元素类型：图标字母、名字是否斜体、图例文字
+  const KINDS = {
+    class: { letter: 'C', italic: false, key: 'Class' },
+    interface: { letter: 'I', italic: true, key: 'Interface' },
+    abstract: { letter: 'A', italic: true, key: 'Abstract class' },
+    enum: { letter: 'E', italic: false, key: 'Enum' },
+    function: { letter: 'F', italic: false, key: 'Function' },
+  };
+  // 可见性：元素名前用实心彩色符号，成员前用空心符号
+  const VIS = {
+    '+': { shape: 'circle', color: '#84be84', key: 'public' },
+    '-': { shape: 'square', color: '#c82930', key: 'private' },
+    '#': { shape: 'diamond', color: '#ffcc44', key: 'protected' },
+    '~': { shape: 'triangle', color: '#4177af', key: 'package' },
+    '': null,
+  };
+  // 关系：线型、目标端箭头、源端菱形、是否必须写说明
+  const RELS = {
+    implements: { dash: true, head: 'triangle', tail: null, needsText: false, key: 'Realization（implements）' },
+    extends: { dash: false, head: 'triangle', tail: null, needsText: false, key: 'Generalization（extends）' },
+    uses: { dash: true, head: 'open', tail: null, needsText: true, key: 'Dependency（uses）' },
+    association: { dash: false, head: 'open', tail: null, needsText: true, key: 'Association' },
+    composition: { dash: false, head: null, tail: 'filled', needsText: true, key: 'Composition' },
+    aggregation: { dash: false, head: null, tail: 'hollow', needsText: true, key: 'Aggregation' },
+  };
+  const COL = 440, ROW = 230;                // 网格间距：at 的一个单位
+  const MAX_ELEMENTS = 15;
+  const TXT = {
+    name: { size: 15, weight: 400, lh: 20 },
+    member: { size: 13, weight: 400, lh: 20 },
+    rel: { size: 13, weight: 400, lh: 17 },
+    mult: { size: 12, weight: 400, lh: 16 },
+    frame: { size: 14, weight: 700, lh: 20 },
+    key: { size: 13, weight: 400, lh: 18 },
+    stereo: { size: 12, weight: 400, lh: 16 },
+    source: { size: 12, weight: 400, lh: 16 },
+  };
+  const HEADER_H = 36, ICON_R = 11, PAD_X = 12, MEMBER_ICON = 16, MIN_W = 160, EMPTY_H = 8, MARGIN = 60;
+  const LABEL_W = 200, ARROW_L = 14, ARROW_W = 12, GAP = 2;
+  // 标题栏有构造型或「现状」时：上下留白 + 名字行，构造型在上、现状在下
+  const HEADER_PAD = 6, NAME_H = 26, SOURCE_W = 280;
+  // 图下方的表格：[字段, 列名, 单元格样式（code 等宽字体，nowrap 不换行）]。必填的列总是显示，其余列有一行写了才显示
+  const CAP_COLS = [['name', '能力', 'nowrap'], ['entry', '入口', 'code'], ['callers', '调用方'], ['description', '说明'], ['source', '现状']];
+  const DECISION_COLS = [['decision', '决策', 'nowrap'], ['reason', '理由']];
+  const ELEMENT_COLS = [['name', '元素', 'code'], ['stereotype', '角色', 'nowrap'], ['responsibility', '职责'], ['source', '现状']];
+  // 表结构：列表、索引表的列（必填的列总是显示，其余列有一行写了才显示）
+  const COLUMN_COLS = [['name', '字段', 'code'], ['type', '类型', 'code nowrap'], ['null', '可空', 'nowrap'], ['key', '键', 'nowrap'],
+    ['references', '引用', 'code'], ['default', '默认值', 'code'], ['description', '说明']];
+  const INDEX_COLS = [['name', '索引', 'code'], ['columns', '字段', 'code'], ['unique', '唯一', 'nowrap'], ['description', '说明']];
+  const KEYS = ['PK', 'UK', 'FK'];
+  // ER 图：表头高、行高、左右留白、键标记列宽、列名与类型的间距、最小宽度
+  const ER = { header: 32, row: 22, padX: 10, badgeW: 30, gapType: 18, minW: 200 };
+  const ER_TXT = { name: { size: 14, weight: 700, lh: 20 }, col: { size: 13, weight: 400, lh: 22 }, type: { size: 12, weight: 400, lh: 22 }, badge: { size: 11, weight: 700, lh: 22 } };
+  // 连线端点：有且只有一个 ||、零或一个 o|、零或多个 o<
+  const ER_ENDS = { one: '有且只有一个', zeroOne: '零或一个', many: '零或多个' };
+
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const problems = [];
+  const fail = (msg) => problems.push({ level: 'error', msg });
+  const warn = (msg) => problems.push({ level: 'warn', msg });
+
+  const ctx = document.createElement('canvas').getContext('2d');
+  const measure = (s, st, italic) => { ctx.font = `${italic ? 'italic ' : ''}${st.weight} ${st.size}px ${FONT}`; return ctx.measureText(s).width; };
+
+  // 中文按字断行，英文按词断行；行首不放标点
+  const CJK = '\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef\u3000-\u303f';
+  const TOKEN = new RegExp(`[${CJK}]|[^\\s${CJK}]+|\\s+`, 'g');
+  const NO_LINE_START = /^[，。、；：！？）》」』,.;:!?)]$/;
+  function wrap(text, st, maxW) {
+    const lines = [];
+    for (const para of String(text || '').split('\n')) {
+      let line = '';
+      for (const tok of para.match(TOKEN) || []) {
+        if (/^\s+$/.test(tok)) { if (line) line += ' '; continue; }
+        const next = line + tok;
+        if (line.trim() && measure(next.trimEnd(), st) > maxW && !NO_LINE_START.test(tok)) {
+          lines.push(line.trimEnd());
+          line = tok;
+        } else {
+          line = next;
+        }
+      }
+      if (line.trim()) lines.push(line.trimEnd());
+    }
+    return lines;
+  }
+
+  function node(tag, attrs, parent) {
+    const n = document.createElementNS(svgNS, tag);
+    for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+    parent.appendChild(n);
+    return n;
+  }
+  // top 是文字块上沿
+  function textLines(parent, lines, x, top, st, color, anchor = 'middle', italic = false) {
+    const t = node('text', { x, y: top + st.lh / 2 + st.size * 0.35, 'text-anchor': anchor,
+      'font-family': FONT, 'font-size': st.size, 'font-weight': st.weight, fill: color,
+      ...(italic ? { 'font-style': 'italic' } : {}) }, parent);
+    lines.forEach((ln, i) => { node('tspan', { x, dy: i ? st.lh : 0 }, t).textContent = ln; });
+    return t;
+  }
+  // 可见性符号，(cx, cy) 是中心
+  function visIcon(g, vis, cx, cy, filled, ink = INK) {
+    const v = VIS[vis];
+    if (!v) return;
+    const fill = filled ? v.color : 'none', stroke = filled ? v.color : ink, s = 4.5;
+    const a = { fill, stroke, 'stroke-width': 1.2 };
+    if (v.shape === 'circle') node('circle', { cx, cy, r: s, ...a }, g);
+    else if (v.shape === 'square') node('rect', { x: cx - s, y: cy - s, width: 2 * s, height: 2 * s, ...a }, g);
+    else if (v.shape === 'diamond') node('polygon', { points: `${cx},${cy - s - 1} ${cx + s + 1},${cy} ${cx},${cy + s + 1} ${cx - s - 1},${cy}`, ...a }, g);
+    else node('polygon', { points: `${cx},${cy - s} ${cx + s},${cy + s} ${cx - s},${cy + s}`, ...a }, g);
+  }
+  function kindIcon(g, kind, cx, cy, ink = INK) {
+    node('circle', { cx, cy, r: ICON_R, fill: '#fff', stroke: ink, 'stroke-width': 1.2 }, g);
+    textLines(g, [KINDS[kind].letter], cx, cy - TXT.name.lh / 2, { size: 14, weight: 700, lh: TXT.name.lh }, ink);
+  }
+
+  const inter = (a, b, m = 0) => a.x < b.x + b.w + m && b.x < a.x + a.w + m && a.y < b.y + b.h + m && b.y < a.y + a.h + m;
+  function segHitsRect([x0, y0], [x1, y1], r) {
+    let t0 = 0, t1 = 1;
+    const dx = x1 - x0, dy = y1 - y0;
+    for (const [p, q] of [[-dx, x0 - r.x], [dx, r.x + r.w - x0], [-dy, y0 - r.y], [dy, r.y + r.h - y0]]) {
+      if (p === 0) { if (q < 0) return false; continue; }
+      const t = q / p;
+      if (p < 0) { if (t > t1) return false; if (t > t0) t0 = t; }
+      else { if (t < t0) return false; if (t < t1) t1 = t; }
+    }
+    return true;
+  }
+  // 从矩形内部 (ox, oy) 沿 (dx, dy) 射出，返回离开矩形时的 t
+  function exitT(b, ox, oy, dx, dy) {
+    let t = Infinity;
+    if (dx > 0) t = Math.min(t, (b.x + b.w - ox) / dx); else if (dx < 0) t = Math.min(t, (b.x - ox) / dx);
+    if (dy > 0) t = Math.min(t, (b.y + b.h - oy) / dy); else if (dy < 0) t = Math.min(t, (b.y - oy) / dy);
+    return t;
+  }
+
+  // 元素尺寸：宽度按内容，高度 = 标题栏 + 属性栏 + 方法栏
+  function layoutElement(el) {
+    const k = KINDS[el.kind];
+    const nameW = measure(el.name, TXT.name, k.italic);
+    const headerW = 2 * ICON_R + 8 + (VIS[el.visibility] ? 14 : 0) + nameW;
+    const memberW = (list) => Math.max(0, ...list.map(([v, text]) => measure(text, TXT.member) + (VIS[v] ? MEMBER_ICON : 0)));
+    el.stereo = el.stereotype ? `«${el.stereotype}»` : '';
+    let w = Math.max(MIN_W, headerW + 2 * PAD_X, measure(el.stereo, TXT.stereo) + 2 * PAD_X,
+      Math.max(memberW(el.attributes), memberW(el.methods)) + 2 * PAD_X);
+    el.sourceLines = el.source ? wrap(`现状：${el.source}`, TXT.source, Math.max(w - 2 * PAD_X, SOURCE_W)) : [];
+    w = Math.max(w, ...el.sourceLines.map((s) => measure(s, TXT.source) + 2 * PAD_X));
+    el.headerH = el.stereo || el.sourceLines.length
+      ? 2 * HEADER_PAD + (el.stereo ? TXT.stereo.lh : 0) + NAME_H + el.sourceLines.length * TXT.source.lh
+      : HEADER_H;
+    const part = (list) => (list.length ? list.length * TXT.member.lh + 8 : EMPTY_H);
+    const h = el.headerH + part(el.attributes) + part(el.methods);
+    el.box = { x: el.at[0] * COL - w / 2, y: el.at[1] * ROW - h / 2, w, h };
+    el.headerW = headerW;
+  }
+  function drawElement(g, el) {
+    const { box } = el;
+    const k = KINDS[el.kind];
+    const ink = el.external ? EXTERNAL_INK : INK;
+    node('rect', { x: box.x, y: box.y, width: box.w, height: box.h, rx: 3, fill: '#fff', stroke: ink, 'stroke-width': 1.2 }, g);
+    // 标题栏：«构造型»，图标 + 可见性 + 名字，「现状：…」，各自居中
+    const extra = el.stereo || el.sourceLines.length;
+    let top = box.y + (extra ? HEADER_PAD : 0);
+    if (el.stereo) { textLines(g, [el.stereo], box.x + box.w / 2, top, TXT.stereo, ink); top += TXT.stereo.lh; }
+    const nameH = extra ? NAME_H : HEADER_H;
+    let x = box.x + (box.w - el.headerW) / 2;
+    const cy = top + nameH / 2;
+    kindIcon(g, el.kind, x + ICON_R, cy, ink);
+    x += 2 * ICON_R + 8;
+    if (VIS[el.visibility]) { visIcon(g, el.visibility, x + 4, cy, true, ink); x += 14; }
+    textLines(g, [el.name], x, cy - TXT.name.lh / 2, TXT.name, ink, 'start', k.italic);
+    if (el.sourceLines.length) textLines(g, el.sourceLines, box.x + box.w / 2, top + nameH, TXT.source, el.external ? EXTERNAL_INK : SOURCE_INK);
+    // 属性栏、方法栏
+    let y = box.y + el.headerH;
+    for (const list of [el.attributes, el.methods]) {
+      node('line', { x1: box.x, y1: y, x2: box.x + box.w, y2: y, stroke: ink, 'stroke-width': 1 }, g);
+      if (!list.length) { y += EMPTY_H; continue; }
+      y += 4;
+      for (const [v, text] of list) {
+        let mx = box.x + PAD_X;
+        if (VIS[v]) { visIcon(g, v, mx + 5, y + TXT.member.lh / 2, false, ink); mx += MEMBER_ICON; }
+        textLines(g, [text], mx, y, TXT.member, ink, 'start');
+        y += TXT.member.lh;
+      }
+      y += 4;
+    }
+  }
+  // 关系线：dash 虚线；head 目标端（triangle 空心三角 / open 开口箭头）；tail 源端菱形（filled / hollow）
+  function drawRelation(g, start, end, dx, dy, spec) {
+    const nx = -dy, ny = dx;
+    let a = start, b = end;
+    if (spec.tail) {
+      const L = 20, W = 9, tip = start, mid = [start[0] + dx * L / 2, start[1] + dy * L / 2], back = [start[0] + dx * L, start[1] + dy * L];
+      node('polygon', { points: [tip, [mid[0] + nx * W / 2, mid[1] + ny * W / 2], back, [mid[0] - nx * W / 2, mid[1] - ny * W / 2]].map((p) => p.join(',')).join(' '),
+        fill: spec.tail === 'filled' ? INK : '#fff', stroke: INK, 'stroke-width': 1.2 }, g);
+      a = back;
+    }
+    if (spec.head === 'triangle') {
+      const base = [end[0] - dx * ARROW_L, end[1] - dy * ARROW_L];
+      node('polygon', { points: [end, [base[0] + nx * ARROW_W / 2, base[1] + ny * ARROW_W / 2], [base[0] - nx * ARROW_W / 2, base[1] - ny * ARROW_W / 2]].map((p) => p.join(',')).join(' '),
+        fill: '#fff', stroke: INK, 'stroke-width': 1.2 }, g);
+      b = base;
+    }
+    node('line', { x1: a[0], y1: a[1], x2: b[0], y2: b[1], stroke: INK, 'stroke-width': 1.2, ...(spec.dash ? { 'stroke-dasharray': '6 5' } : {}) }, g);
+    if (spec.head === 'open') {
+      const base = [end[0] - dx * ARROW_L, end[1] - dy * ARROW_L];
+      node('polyline', { points: [[base[0] + nx * ARROW_W / 2, base[1] + ny * ARROW_W / 2], end, [base[0] - nx * ARROW_W / 2, base[1] - ny * ARROW_W / 2]].map((p) => p.join(',')).join(' '),
+        fill: 'none', stroke: INK, 'stroke-width': 1.2 }, g);
+    }
+  }
+
+  function render() {
+    const model = JSON.parse(document.getElementById('c4-model').textContent);
+    if (model.title) document.title = model.title;
+    else fail('缺少 title（建议「Code View: 系统名 - 容器名 - 组件名」）');
+    if (!model.component) fail('缺少 component（被展开的 component 的名字，和 Component 图里的一致）');
+
+    // ---- 元素 ----
+    const byId = new Map();
+    const els = [];
+    const memberOk = (list) => Array.isArray(list) && list.every((m) => Array.isArray(m) && m.length === 2 && m[0] in VIS && typeof m[1] === 'string');
+    for (const el of model.elements || []) {
+      const who = el.id || el.name || '(未命名元素)';
+      if (!el.id) { fail(`${who}：缺少 id`); continue; }
+      if (byId.has(el.id)) { fail(`元素 id 重复：${el.id}`); continue; }
+      if (!KINDS[el.kind]) { fail(`${who}：kind 只能是 ${Object.keys(KINDS).join(' / ')}`); continue; }
+      if (!Array.isArray(el.at) || el.at.length !== 2 || !el.at.every(Number.isFinite)) { fail(`${who}：at 必须是 [列, 行] 两个数字`); continue; }
+      if (!el.name) fail(`${who}：缺少 name`);
+      el.attributes = el.attributes || [];
+      el.methods = el.methods || [];
+      if (!memberOk(el.attributes) || !memberOk(el.methods)) { fail(`${who}：attributes / methods 的每一项都要写成 [可见性, 文本]，可见性取 + - # ~ 或空串`); continue; }
+      if (el.visibility !== undefined && !(el.visibility in VIS)) fail(`${who}：visibility 只能是 + - # ~ 或空串`);
+      for (const f of ['stereotype', 'source', 'responsibility']) {
+        if (el[f] !== undefined && typeof el[f] !== 'string') { fail(`${who}：${f} 必须是字符串`); el[f] = undefined; }
+      }
+      byId.set(el.id, el);
+      els.push(el);
+    }
+    const inside = els.filter((e) => !e.external);
+    if (!inside.length) fail('Code 图至少要有一个本 component 里的代码元素');
+    if (els.length > MAX_ELEMENTS) warn(`代码元素有 ${els.length} 个，超过 ${MAX_ELEMENTS} 个：只画讲清楚这件事需要的，或者拆成几张图`);
+    els.forEach(layoutElement);
+    for (let i = 0; i < els.length; i++) {
+      for (let j = i + 1; j < els.length; j++) {
+        if (inter(els[i].box, els[j].box, 30)) fail(`「${els[i].name}」和「${els[j].name}」重叠或太近，调整 at`);
+      }
+    }
+
+    // ---- 关系 ----
+    const rels = (model.relationships || []).filter((r) => {
+      const who = `${r.from} → ${r.to}`;
+      if (!byId.has(r.from) || !byId.has(r.to)) { fail(`关系 ${who}：端点 id 不存在`); return false; }
+      if (r.from === r.to) { fail(`关系 ${who}：不能指向自己`); return false; }
+      r.type = r.type || 'uses';
+      if (!RELS[r.type]) { fail(`关系 ${who}：type 只能是 ${Object.keys(RELS).join(' / ')}`); return false; }
+      if (RELS[r.type].needsText && !r.description) fail(`关系 ${who}：${r.type} 要写 description（说清做什么，如 creates、persists data using）`);
+      const a = byId.get(r.from), b = byId.get(r.to);
+      if (r.type === 'implements' && b.kind !== 'interface') fail(`关系 ${who}：implements 的目标必须是 interface`);
+      if (r.type === 'extends' && (a.kind === 'interface') !== (b.kind === 'interface')) fail(`关系 ${who}：extends 不能跨 class 和 interface，类实现接口用 implements`);
+      return true;
+    });
+    for (const el of els) {
+      if (!rels.some((r) => r.from === el.id || r.to === el.id)) warn(`「${el.name}」没有任何关系：与要讲的事无关就删掉`);
+    }
+    // 同一对元素之间的多条关系：平行错开，标签沿线错开。错开量按同一个参考方向（id 小的一端 → 大的一端）算，
+    // 再换算回每条关系自己的方向 —— 否则两条方向相反的关系，标签会落在同一点
+    const pairs = new Map();
+    for (const r of rels) {
+      const k = [r.from, r.to].sort().join('\u0000');
+      if (!pairs.has(k)) pairs.set(k, []);
+      pairs.get(k).push(r);
+    }
+    for (const list of pairs.values()) {
+      list.forEach((r, i) => {
+        const k = i - (list.length - 1) / 2;
+        const along = 0.5 + k * 0.3;
+        r.offset = k * 20;
+        r.t = Number.isFinite(r.labelAt) ? r.labelAt : r.from < r.to ? along : 1 - along;
+      });
+    }
+    for (const r of rels) {
+      const a = byId.get(r.from), b = byId.get(r.to);
+      const [p, q] = r.from < r.to ? [a, b] : [b, a];
+      const pc = [p.box.x + p.box.w / 2, p.box.y + p.box.h / 2], qc = [q.box.x + q.box.w / 2, q.box.y + q.box.h / 2];
+      let nx = pc[1] - qc[1], ny = qc[0] - pc[0];
+      const nl = Math.hypot(nx, ny) || 1;
+      nx /= nl; ny /= nl;
+      const ac = [a.box.x + a.box.w / 2 + nx * r.offset, a.box.y + a.box.h / 2 + ny * r.offset];
+      const bc = [b.box.x + b.box.w / 2 + nx * r.offset, b.box.y + b.box.h / 2 + ny * r.offset];
+      const len = Math.hypot(bc[0] - ac[0], bc[1] - ac[1]);
+      if (!len) { r.skip = true; continue; }
+      r.dx = (bc[0] - ac[0]) / len; r.dy = (bc[1] - ac[1]) / len;
+      const t0 = exitT(a.box, ac[0], ac[1], r.dx, r.dy) + GAP;
+      const t1 = exitT(b.box, bc[0], bc[1], -r.dx, -r.dy) + GAP;
+      if (t0 + t1 + ARROW_L + 24 >= len) { fail(`关系 ${r.from} → ${r.to} 两端元素太近，连线放不下`); r.skip = true; continue; }
+      r.start = [ac[0] + r.dx * t0, ac[1] + r.dy * t0];
+      r.end = [bc[0] - r.dx * t1, bc[1] - r.dy * t1];
+      r.lines = wrap(r.description, TXT.rel, LABEL_W);
+      if (r.lines.length) {
+        const lw = Math.max(...r.lines.map((s) => measure(s, TXT.rel))) + 8;
+        const lh = r.lines.length * TXT.rel.lh + 4;
+        const mx = r.start[0] + (r.end[0] - r.start[0]) * r.t, my = r.start[1] + (r.end[1] - r.start[1]) * r.t;
+        r.label = { x: mx - lw / 2, y: my - lh / 2, w: lw, h: lh };
+      }
+      if (r.multiplicity) {
+        // 多重性写在目标端附近，偏到线的一侧
+        const px = r.end[0] - r.dx * 26 - r.dy * 14, py = r.end[1] - r.dy * 26 + r.dx * 14;
+        const mw = measure(String(r.multiplicity), TXT.mult) + 6;
+        r.mult = { x: px - mw / 2, y: py - TXT.mult.lh / 2, w: mw, h: TXT.mult.lh };
+      }
+    }
+    const drawn = rels.filter((r) => !r.skip);
+    const labelled = drawn.filter((r) => r.label);
+    const who = (r) => r.description || `${r.from} → ${r.to}`;
+    for (const r of drawn) {
+      for (const el of els) {
+        if (r.from !== el.id && r.to !== el.id && segHitsRect(r.start, r.end, el.box)) warn(`关系「${who(r)}」的连线穿过「${el.name}」`);
+        if (r.label && inter(r.label, el.box, 4)) warn(`关系「${who(r)}」的标签压到「${el.name}」，调整 labelAt 或元素位置`);
+      }
+    }
+    for (let i = 0; i < labelled.length; i++) {
+      for (let j = i + 1; j < labelled.length; j++) {
+        if (inter(labelled[i].label, labelled[j].label, 3)) warn(`关系「${who(labelled[i])}」和「${who(labelled[j])}」的标签重叠`);
+      }
+    }
+
+    // ---- 包框：包住本 component 的元素（外部元素放在框外），左上角标签页写包名（没写 package 就写 component）----
+    let frame = null;
+    if (inside.length) {
+      const x0 = Math.min(...inside.map((e) => e.box.x)), y0 = Math.min(...inside.map((e) => e.box.y));
+      const x1 = Math.max(...inside.map((e) => e.box.x + e.box.w)), y1 = Math.max(...inside.map((e) => e.box.y + e.box.h));
+      const label = model.package || `${model.component || ''} [Component]`;
+      const tabW = measure(label, TXT.frame) + 20, tabH = 26;
+      frame = { x: x0 - 30, y: y0 - 30, w: Math.max(x1 - x0 + 60, tabW + 20), h: y1 - y0 + 60, label, tabW, tabH };
+      const tab = { x: frame.x, y: frame.y - tabH, w: tabW + 10, h: tabH };
+      for (const el of els) {
+        if (el.external && (inter(el.box, frame) || inter(el.box, tab))) fail(`「${el.name}」是外部元素，却落在包框里，调整 at`);
+      }
+    }
+
+    // ---- 绘制 ----
+    const svg = document.getElementById('c4-diagram');
+    const gB = node('g', {}, svg), gR = node('g', {}, svg), gE = node('g', {}, svg), gL = node('g', {}, svg), gT = node('g', {}, svg);
+    if (frame) {
+      const { x, y, w, h, tabW, tabH } = frame;
+      node('path', { d: `M${x} ${y} V${y - tabH + 3} Q${x} ${y - tabH} ${x + 3} ${y - tabH} H${x + tabW} L${x + tabW + 10} ${y}`,
+        fill: '#fff', stroke: INK, 'stroke-width': 1.6 }, gB);
+      node('rect', { x, y, width: w, height: h, rx: 3, fill: 'none', stroke: INK, 'stroke-width': 1.6 }, gB);
+      textLines(gB, [frame.label], x + 10, y - tabH + 2, { ...TXT.frame, lh: tabH - 2 }, INK, 'start');
+    }
+    for (const r of drawn) drawRelation(gR, r.start, r.end, r.dx, r.dy, RELS[r.type]);
+    for (const el of els) drawElement(node('g', {}, gE), el);
+    for (const r of drawn) {
+      if (r.label) {
+        node('rect', { x: r.label.x, y: r.label.y, width: r.label.w, height: r.label.h, fill: '#fff' }, gL);
+        textLines(gL, r.lines, r.label.x + r.label.w / 2, r.label.y + 2, TXT.rel, INK);
+      }
+      if (r.mult) textLines(gL, [String(r.multiplicity)], r.mult.x + r.mult.w / 2, r.mult.y, TXT.mult, INK);
+    }
+    const boxes = [...els.map((e) => e.box), ...labelled.map((r) => r.label),
+      ...(frame ? [frame, { x: frame.x, y: frame.y - frame.tabH, w: frame.tabW + 10, h: frame.tabH }] : [])];
+    if (!boxes.length) boxes.push({ x: 0, y: 0, w: 0, h: 0 });
+    const minX = Math.min(...boxes.map((b) => b.x)), minY = Math.min(...boxes.map((b) => b.y));
+    let maxX = Math.max(...boxes.map((b) => b.x + b.w)), maxY = Math.max(...boxes.map((b) => b.y + b.h));
+    const title = { size: 26, weight: 400, lh: 34 }, sub = { size: 15, weight: 400, lh: 22 };
+    textLines(gT, [model.title || ''], minX, maxY + 40, title, TITLE_INK, 'start');
+    if (model.description) textLines(gT, [model.description], minX, maxY + 40 + title.lh, sub, '#666', 'start');
+    maxX = Math.max(maxX, minX + measure(model.title || '', title), minX + measure(model.description || '', sub));
+    maxY += 40 + title.lh + (model.description ? sub.lh : 0);
+    const vw = maxX - minX + 2 * MARGIN, vh = maxY - minY + 2 * MARGIN;
+    svg.setAttribute('viewBox', `${minX - MARGIN} ${minY - MARGIN} ${vw} ${vh}`);
+    svg.setAttribute('width', vw);
+    svg.setAttribute('aria-label', model.title || 'Code diagram');
+
+    renderOverview(model.overview);
+    renderList('c4-capabilities', '对外能力', model.capabilities, CAP_COLS, ['name', 'entry']);
+    renderList('c4-decisions', '设计决策', model.decisions, DECISION_COLS, ['decision', 'reason']);
+    const described = inside.filter((e) => e.responsibility);
+    if (described.length) {
+      for (const e of inside) if (!e.responsibility) warn(`「${e.name}」没写 responsibility：元素职责表里会缺它`);
+      renderTable('c4-elements', ELEMENT_COLS, described);
+    }
+    renderSchema(model.tables, model.schemaNote);
+    renderKey(els, drawn);
+  }
+
+  // ---- 表：校验、ER 图、表结构（只在写了 tables 时显示）----
+  function renderSchema(tables, note) {
+    if (tables === undefined) return;
+    if (!Array.isArray(tables) || !tables.length) { fail('tables 必须是非空数组'); return; }
+    const byName = new Map();
+    for (const [i, t] of tables.entries()) {
+      const who = (t && t.name) || `第 ${i + 1} 张表`;
+      if (!t || typeof t !== 'object' || !t.name) { fail(`表「${who}」：缺少 name`); continue; }
+      if (byName.has(t.name)) { fail(`表名重复：${t.name}`); continue; }
+      if (!Array.isArray(t.columns) || !t.columns.length) { fail(`表 ${t.name}：columns 必须是非空数组`); continue; }
+      const seen = new Set();
+      if (t.columns.some((c) => !c || !c.name || !c.type)) { fail(`表 ${t.name}：每一列都要有 name 和 type`); continue; }
+      for (const c of t.columns) {
+        if (seen.has(c.name)) fail(`表 ${t.name}：列名重复 ${c.name}`);
+        seen.add(c.name);
+        if (c.key !== undefined && !KEYS.includes(c.key)) fail(`表 ${t.name}.${c.name}：key 只能是 ${KEYS.join(' / ')}`);
+        if (c.nullable !== undefined && typeof c.nullable !== 'boolean') fail(`表 ${t.name}.${c.name}：nullable 必须是 true / false`);
+        if (c.referenceOptional !== undefined && typeof c.referenceOptional !== 'boolean') fail(`表 ${t.name}.${c.name}：referenceOptional 必须是 true / false`);
+        for (const f of ['type', 'default', 'description', 'references']) {
+          if (c[f] !== undefined && typeof c[f] !== 'string') fail(`表 ${t.name}.${c.name}：${f} 必须是字符串`);
+        }
+      }
+      if (t.indexes !== undefined && (!Array.isArray(t.indexes) || t.indexes.some((ix) => !ix || !ix.name || !ix.columns))) {
+        fail(`表 ${t.name}：indexes 的每一项都要有 name 和 columns`);
+        t.indexes = [];
+      }
+      if (t.at !== undefined && !(Array.isArray(t.at) && t.at.length === 2 && t.at.every(Number.isFinite))) {
+        fail(`表 ${t.name}：at 必须是 [列, 行] 两个数字`);
+        t.at = undefined;
+      }
+      byName.set(t.name, t);
+    }
+    const ok = [...byName.values()];
+    // 引用关系：references 写成「表.列」，被引用的列应是 PK 或 UK
+    const links = [];
+    for (const t of ok) {
+      for (const c of t.columns) {
+        if (!c.references) continue;
+        const [rt, rc] = c.references.split('.');
+        const target = byName.get(rt);
+        const col = target && target.columns.find((x) => x.name === rc);
+        if (!col) { fail(`表 ${t.name}.${c.name}：references「${c.references}」指向不存在的表或列`); continue; }
+        if (!['PK', 'UK'].includes(col.key)) warn(`表 ${t.name}.${c.name}：引用的 ${c.references} 不是 PK 或 UK`);
+        if (target === t) { warn(`表 ${t.name}.${c.name}：自引用不画在 ER 图里`); continue; }
+        links.push({ child: t, column: c, parent: target });
+      }
+    }
+    drawER(ok, links);
+
+    const section = document.getElementById('c4-tables');
+    if (note !== undefined) {
+      if (typeof note !== 'string') fail('schemaNote 必须是字符串');
+      else section.appendChild(document.createElement('p')).textContent = note;
+    }
+    for (const t of ok) {
+      section.appendChild(document.createElement('h3')).textContent = t.name;
+      if (t.description) section.appendChild(document.createElement('p')).textContent = t.description;
+      const rows = t.columns.map((c) => ({ ...c, null: c.nullable ? '是' : '否' }));
+      buildTable(section, COLUMN_COLS.filter(([k]) => ['name', 'type', 'null'].includes(k) || rows.some((r) => r[k])), rows);
+      if (t.indexes && t.indexes.length) {
+        section.appendChild(document.createElement('h4')).textContent = '索引';
+        const ix = t.indexes.map((i) => ({ ...i, columns: [].concat(i.columns).join(', '), unique: i.unique ? '是' : '否' }));
+        buildTable(section, INDEX_COLS.filter(([k]) => k !== 'description' || ix.some((r) => r.description)), ix);
+      }
+    }
+    section.hidden = false;
+  }
+  function buildTable(parent, cols, rows) {
+    const table = parent.appendChild(document.createElement('table'));
+    const head = table.appendChild(document.createElement('thead')).appendChild(document.createElement('tr'));
+    for (const [, label] of cols) head.appendChild(document.createElement('th')).textContent = label;
+    const body = table.appendChild(document.createElement('tbody'));
+    for (const row of rows) {
+      const tr = body.appendChild(document.createElement('tr'));
+      for (const [k, , cls] of cols) {
+        const td = tr.appendChild(document.createElement('td'));
+        if (cls) td.className = cls;
+        td.textContent = row[k] || '';
+      }
+    }
+  }
+  // 连线一端的标记。p 在表框边上，(dx, dy) 是从线指向这张表的单位向量
+  function erEnd(g, p, dx, dy, kind) {
+    const nx = -dy, ny = dx;
+    const back = (d) => [p[0] - dx * d, p[1] - dy * d];
+    const seg = (a, b) => node('line', { x1: a[0], y1: a[1], x2: b[0], y2: b[1], stroke: INK, 'stroke-width': 1.2 }, g);
+    const bar = (d) => { const c = back(d); seg([c[0] + nx * 7, c[1] + ny * 7], [c[0] - nx * 7, c[1] - ny * 7]); };
+    const ring = (d) => { const c = back(d); node('circle', { cx: c[0], cy: c[1], r: 5, fill: '#fff', stroke: INK, 'stroke-width': 1.2 }, g); };
+    if (kind === 'one') { bar(8); bar(14); return; }
+    if (kind === 'zeroOne') { bar(8); ring(20); return; }
+    const c = back(16);
+    seg(c, [p[0] + nx * 8, p[1] + ny * 8]);
+    seg(c, [p[0] - nx * 8, p[1] - ny * 8]);
+    seg(c, p);
+    ring(24);
+  }
+  function drawER(tables, links) {
+    const svg = document.getElementById('c4-er-diagram');
+    tables.forEach((t, i) => {
+      const at = t.at || [i * 1.2, 0];
+      const rowW = Math.max(...t.columns.map((c) => ER.badgeW + measure(c.name, ER_TXT.col) + ER.gapType + measure(c.type, ER_TXT.type)));
+      const w = Math.max(ER.minW, measure(t.name, ER_TXT.name) + 2 * ER.padX, rowW + 2 * ER.padX);
+      const h = ER.header + t.columns.length * ER.row + 8;
+      t.box = { x: at[0] * COL - w / 2, y: at[1] * ROW - h / 2, w, h };
+    });
+    for (let i = 0; i < tables.length; i++) {
+      for (let j = i + 1; j < tables.length; j++) {
+        if (inter(tables[i].box, tables[j].box, 60)) fail(`表 ${tables[i].name} 和 ${tables[j].name} 在 ER 图里重叠或太近，调整 at`);
+      }
+    }
+    const gR = node('g', {}, svg), gT = node('g', {}, svg), gL = node('g', {}, svg);
+    const boxes = tables.map((t) => t.box);
+    for (const l of links) {
+      const a = l.child.box, b = l.parent.box;
+      const ac = [a.x + a.w / 2, a.y + a.h / 2], bc = [b.x + b.w / 2, b.y + b.h / 2];
+      const len = Math.hypot(bc[0] - ac[0], bc[1] - ac[1]);
+      const dx = (bc[0] - ac[0]) / len, dy = (bc[1] - ac[1]) / len;
+      const s = [ac[0] + dx * exitT(a, ac[0], ac[1], dx, dy), ac[1] + dy * exitT(a, ac[0], ac[1], dx, dy)];
+      const e = [bc[0] - dx * exitT(b, bc[0], bc[1], -dx, -dy), bc[1] - dy * exitT(b, bc[0], bc[1], -dx, -dy)];
+      node('line', { x1: s[0], y1: s[1], x2: e[0], y2: e[1], stroke: INK, 'stroke-width': 1.2 }, gR);
+      erEnd(gR, s, -dx, -dy, l.column.key === 'UK' ? 'zeroOne' : 'many');   // 引用方：列唯一时至多一个
+      // 被引用方：列可空，或被引用的行可能已经不在（referenceOptional，如日志指向已删除的实例）时，可以没有
+      erEnd(gR, e, dx, dy, l.column.nullable || l.column.referenceOptional ? 'zeroOne' : 'one');
+      const lw = measure(l.column.name, TXT.rel) + 8, lh = TXT.rel.lh + 4;
+      const label = { x: (s[0] + e[0]) / 2 - lw / 2, y: (s[1] + e[1]) / 2 - lh / 2, w: lw, h: lh };
+      node('rect', { x: label.x, y: label.y, width: lw, height: lh, fill: '#fff' }, gL);
+      textLines(gL, [l.column.name], label.x + lw / 2, label.y + 2, TXT.rel, INK);
+      boxes.push(label);
+      for (const t of tables) {
+        if (t !== l.child && t !== l.parent && segHitsRect(s, e, t.box)) warn(`ER 图：${l.child.name}.${l.column.name} 的连线穿过表 ${t.name}`);
+      }
+    }
+    for (const t of tables) {
+      const { x, y, w, h } = t.box;
+      const g = node('g', {}, gT);
+      node('rect', { x, y, width: w, height: h, rx: 3, fill: '#fff', stroke: INK, 'stroke-width': 1.2 }, g);
+      node('rect', { x, y, width: w, height: ER.header, rx: 3, fill: '#f4f4f4', stroke: INK, 'stroke-width': 1.2 }, g);
+      textLines(g, [t.name], x + w / 2, y + (ER.header - ER_TXT.name.lh) / 2, ER_TXT.name, INK);
+      t.columns.forEach((c, i) => {
+        const top = y + ER.header + 4 + i * ER.row;
+        if (c.key) textLines(g, [c.key], x + ER.padX, top, ER_TXT.badge, INK, 'start');
+        textLines(g, [c.name], x + ER.padX + ER.badgeW, top, ER_TXT.col, INK, 'start', !!c.nullable);
+        textLines(g, [c.type], x + w - ER.padX, top, ER_TXT.type, SOURCE_INK, 'end');
+      });
+    }
+    // 图例：三种端点，加键标记和斜体的含义
+    const minX = Math.min(...boxes.map((b) => b.x)), minY = Math.min(...boxes.map((b) => b.y));
+    let maxX = Math.max(...boxes.map((b) => b.x + b.w));
+    const keyY = Math.max(...boxes.map((b) => b.y + b.h)) + 40;
+    let kx = minX;
+    for (const [kind, text] of Object.entries(ER_ENDS)) {
+      node('line', { x1: kx, y1: keyY, x2: kx + 60, y2: keyY, stroke: INK, 'stroke-width': 1.2 }, gL);
+      erEnd(gL, [kx + 60, keyY], 1, 0, kind);
+      textLines(gL, [text], kx + 70, keyY - TXT.key.lh / 2, TXT.key, INK, 'start');
+      kx += 70 + measure(text, TXT.key) + 40;
+    }
+    const keys = 'PK 主键 · UK 唯一键 · FK 引用别的表 · 斜体列可为空';
+    textLines(gL, [keys], kx, keyY - TXT.key.lh / 2, TXT.key, INK, 'start');
+    maxX = Math.max(maxX, kx + measure(keys, TXT.key));
+    const maxY = keyY + TXT.key.lh;
+    const vw = maxX - minX + 2 * 30, vh = maxY - minY + 2 * 30;
+    svg.setAttribute('viewBox', `${minX - 30} ${minY - 30} ${vw} ${vh}`);
+    svg.setAttribute('width', vw);
+    svg.setAttribute('aria-label', 'ER diagram');
+    document.getElementById('c4-er').hidden = false;
+  }
+
+  // ---- 图下方的文字：概述（空行分段）和几张表 ----
+  function renderOverview(text) {
+    if (text === undefined) return;
+    if (typeof text !== 'string') { fail('overview 必须是字符串'); return; }
+    const section = document.getElementById('c4-overview');
+    for (const para of text.split(/\n\s*\n/)) if (para.trim()) section.appendChild(document.createElement('p')).textContent = para.trim();
+    section.hidden = false;
+  }
+  function renderList(id, label, list, cols, required) {
+    if (list === undefined) return;
+    if (!Array.isArray(list)) { fail(`${label}必须是数组`); return; }
+    const rows = list.filter((c, i) => {
+      const who = (c && c[cols[0][0]]) || `第 ${i + 1} 项`;
+      if (!c || typeof c !== 'object') { fail(`${label}${who}：要写成对象`); return false; }
+      if (required.some((k) => !c[k])) fail(`${label}「${who}」：${required.join(' 和 ')} 必填`);
+      for (const [k] of cols) if (c[k] !== undefined && typeof c[k] !== 'string') fail(`${label}「${who}」：${k} 必须是字符串`);
+      return true;
+    });
+    renderTable(id, cols.filter(([k]) => required.includes(k) || rows.some((c) => c[k])), rows);
+  }
+  function renderTable(id, cols, rows) {
+    if (!rows.length) return;
+    const section = document.getElementById(id);
+    const head = section.querySelector('thead').appendChild(document.createElement('tr'));
+    for (const [, label] of cols) head.appendChild(document.createElement('th')).textContent = label;
+    const body = section.querySelector('tbody');
+    for (const row of rows) {
+      const tr = body.appendChild(document.createElement('tr'));
+      for (const [k, , cls] of cols) {
+        const td = tr.appendChild(document.createElement('td'));
+        if (cls) td.className = cls;
+        td.textContent = row[k] || '';
+      }
+    }
+    section.hidden = false;
+  }
+
+  // ---- 图例：用到的元素类型、可见性符号、关系线型，各占一行 ----
+  function renderKey(els, rels) {
+    const svg = document.getElementById('c4-key');
+    const kinds = Object.keys(KINDS).filter((k) => els.some((e) => e.kind === k));
+    const used = new Set();
+    for (const e of els) { used.add(e.visibility || ''); for (const [v] of [...e.attributes, ...e.methods]) used.add(v); }
+    const vis = Object.keys(VIS).filter((v) => v && used.has(v));
+    const types = Object.keys(RELS).filter((t) => rels.some((r) => r.type === t));
+    const external = els.some((e) => e.external);
+    const CELL_W = 250, ROW_H = 46;
+    let y = 0, maxW = 0;
+    const row = (items, draw) => {
+      if (!items.length) return;
+      items.forEach((it, i) => draw(node('g', {}, svg), it, i * CELL_W, y));
+      maxW = Math.max(maxW, items.length * CELL_W);
+      y += ROW_H;
+    };
+    row(kinds, (g, k, x, y0) => {
+      kindIcon(g, k, x + ICON_R + 2, y0 + 16);
+      textLines(g, [KINDS[k].key], x + 2 * ICON_R + 12, y0 + 16 - TXT.key.lh / 2, TXT.key, INK, 'start', KINDS[k].italic);
+    });
+    row(external ? ['external'] : [], (g, _, x, y0) => {
+      node('rect', { x, y: y0 + 4, width: 2 * ICON_R + 4, height: 24, rx: 3, fill: '#fff', stroke: EXTERNAL_INK, 'stroke-width': 1.2 }, g);
+      textLines(g, ['External（不在本 component 里）'], x + 2 * ICON_R + 12, y0 + 16 - TXT.key.lh / 2, TXT.key, EXTERNAL_INK, 'start');
+    });
+    const notes = [els.some((e) => e.stereo) && 'stereo', els.some((e) => e.sourceLines.length) && 'source'].filter(Boolean);
+    row(notes, (g, n, x, y0) => {
+      const [sample, text, color] = n === 'stereo' ? ['«…»', '构造型：领域模型里的角色', INK] : ['现状：…', '当前承担它的代码', SOURCE_INK];
+      textLines(g, [sample], x, y0 + 16 - TXT.key.lh / 2, TXT.key, color, 'start');
+      textLines(g, [text], x + measure(sample, TXT.key) + 10, y0 + 16 - TXT.key.lh / 2, TXT.key, INK, 'start');
+    });
+    row(vis, (g, v, x, y0) => {
+      visIcon(g, v, x + 8, y0 + 16, true);
+      visIcon(g, v, x + 24, y0 + 16, false);
+      textLines(g, [`${v} ${VIS[v].key}（类型 / 成员）`], x + 38, y0 + 16 - TXT.key.lh / 2, TXT.key, INK, 'start');
+    });
+    row(types, (g, t, x, y0) => {
+      drawRelation(g, [x, y0 + 16], [x + 70, y0 + 16], 1, 0, RELS[t]);
+      textLines(g, [RELS[t].key], x + 82, y0 + 16 - TXT.key.lh / 2, TXT.key, INK, 'start');
+    });
+    svg.setAttribute('viewBox', `-10 -10 ${maxW + 20} ${y + 10}`);
+    svg.setAttribute('width', maxW + 20);
+    svg.setAttribute('aria-label', 'Diagram key');
+  }
+
+  try {
+    render();
+  } catch (e) {
+    fail(`渲染异常：${e && e.message}`);
+    console.error(e);
+  }
+  const status = problems.some((p) => p.level === 'error') ? 'error' : problems.length ? 'warn' : 'ok';
+  document.documentElement.dataset.c4Status = status;
+  const report = document.getElementById('c4-report');
+  for (const p of problems) {
+    const li = document.createElement('li');
+    li.dataset.level = p.level;
+    li.textContent = p.msg;
+    report.appendChild(li);
+  }
+  report.hidden = !problems.length;
+  if (problems.length) console.warn('[c4]', problems);
+})();
+</script>
+</body>
+</html>

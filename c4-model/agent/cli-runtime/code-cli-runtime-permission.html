@@ -334,7 +334,7 @@
     },
     {
       "decision": "审批 id 由 (run, toolCallId) 派生，和原生一致",
-      "reason": "现在每次现生成一个 id，理由是 toolCallId 是任意字符串、放不进 uuid 列。用 uuid5 从任意字符串派生就行；派生之后，bridge 补发同一个请求、接管后重新询问时都落到同一行，不会弹出两个窗口。"
+      "reason": "原来每次现生成一个 id，理由是 toolCallId 是任意字符串、放不进 uuid 列。用 uuid5 从任意字符串派生就行（A2 已改）；派生之后，bridge 补发同一个请求、接管后重新询问时都落到同一行，不会弹出两个窗口。"
     },
     {
       "decision": "先登记，再发 approval.required",
