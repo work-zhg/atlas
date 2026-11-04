@@ -175,6 +175,9 @@ class Settings(BaseSettings):
     sandbox_output_limit_bytes: int = 100_000
     #: 卡死判定：本命令连续 cli_tool_idle_timeout_s 没有新输出，且这段时间容器 CPU 一直低于它
     sandbox_stall_cpu_pct: float = 2.0
+    #: execd /metrics 的 CPU 统计口径：OpenSandbox 1.1.1 读宿主的 /proc，是整个节点的数字（node）；
+    #: 1.2.0 在设了资源上限时才是沙箱自己的 cgroup（sandbox）。整节点口径时卡死判定不下结论
+    sandbox_usage_scope: Literal["sandbox", "node"] = "node"
     #: 路由表在进程内缓存多久（§9）。操作失败时立即作废
     sandbox_route_cache_s: float = 2.0
 
