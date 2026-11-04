@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import AnyHttpUrl, BaseModel, SecretStr, field_validator, model_validator
+from pydantic import AnyHttpUrl, BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -46,6 +46,42 @@ class GitProfile(BaseModel):
         等于谁都能用，把仓库的写权限给了所有人 —— 加载时就报错，应用启动失败，不跳过。"""
         if not self.allowed_users and not self.allowed_apps:
             raise ValueError("git 凭据档案必须限定 allowed_users 或 allowed_apps 至少一项")
+        return self
+
+
+class CredentialProfileIn(BaseModel):
+    """一份出站凭据档案（c4-model/agent/code-credentials.html）：注入方式 + 主机 + 凭据 + 谁能用。
+
+    ★ 来自部署的 Secret（CREDENTIAL_PROFILES 环境变量，JSON：code → 档案），不进 YAML、不进库。
+    ★ git over HTTPS 是 basic 的一种用法；私有 npm / PyPI 源、API token 按 bearer 或 api_key 写。
+    ★ 加载时逐个校验，有一个不合规就启动失败，不跳过。
+    """
+
+    auth: Literal["basic", "bearer", "api_key"]
+    #: 凭据注入到哪些主机（只认 HTTPS）
+    hosts: list[str] = Field(min_length=1)
+    secret: SecretStr
+    #: basic 的用户名
+    username: str | None = None
+    #: api_key 注入到哪个请求头
+    header: str | None = None
+    #: 谁能用：会话创建者（Atlas 用户 id）、建会话的业务应用。至少写一项；两项都写时都要满足
+    users: list[str] = []
+    apps: list[str] = []
+    #: 会话 Pod 里 git 提交的作者（用这份凭据推代码的机器人账号）。不给就用 CLI 默认
+    author_name: str | None = None
+    author_email: str | None = None
+
+    @model_validator(mode="after")
+    def _valid(self) -> CredentialProfileIn:
+        if not self.users and not self.apps:
+            raise ValueError("凭据档案必须限定 users 或 apps 至少一项：都不写等于谁都能用")
+        if not self.secret.get_secret_value():
+            raise ValueError("凭据档案的 secret 不能为空")
+        if self.auth == "basic" and not self.username:
+            raise ValueError("basic 档案要给出 username")
+        if self.auth == "api_key" and not self.header:
+            raise ValueError("api_key 档案要给出注入的请求头 header")
         return self
 
 
@@ -208,8 +244,11 @@ class Settings(BaseSettings):
     #: Secret atlas-cli-model 里，由 会话 Pod 模板以文件挂进 Pod，entrypoint 读出后交给 bridge
     cli_model_base_url: str = ""
     cli_model_name: str = ""
-    #: git 凭据档案：名字 → GitProfile（JSON，来自 Secret）
+    #: git 凭据档案：名字 → GitProfile（JSON，来自 Secret）。
+    #: 旧格式，B6 切到 credential_profiles 后删
     git_profiles: dict[str, GitProfile] = {}
+    #: 出站凭据档案：code → CredentialProfileIn（JSON，来自 Secret CREDENTIAL_PROFILES）
+    credential_profiles: dict[str, CredentialProfileIn] = {}
 
     # ── acp 执行环境（acp 详设 §11）────────────────────────────────
     #: 握手超时。Pod 刚被调度时会慢（镜像拉取），比普通 HTTP 宽松。

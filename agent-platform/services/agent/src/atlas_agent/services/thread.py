@@ -16,9 +16,23 @@ from ..auth.agent_access import AgentAccess
 from ..auth.principal import Principal
 from ..auth.uc import UCClient
 from ..config import Settings
+from ..credentials import (
+    CredentialDenied,
+    CredentialGrants,
+    CredentialProfileStore,
+    CredentialSubject,
+)
 from ..db.models import Agent, AgentVersion, Message, Thread
 from ..db.session import fetch_one
-from ..errors import AppError, BadCursor, Conflict, DependencyUnavailable, Forbidden, NotFound
+from ..errors import (
+    AppError,
+    BadCursor,
+    Conflict,
+    CredentialDeniedError,
+    DependencyUnavailable,
+    Forbidden,
+    NotFound,
+)
 from ..pagination import InvalidCursor, decode_cursor, encode_cursor
 from ..providers.filesystem import PathEscape, WorkspaceListing, WorkspaceRouting, make_workspace
 from ..providers.filesystem.skill_copy import resolve_skills, seed_session_skills
@@ -125,7 +139,8 @@ def _to_out(
         status=thread.status,  # type: ignore[arg-type]
         parent_thread_id=thread.parent_thread_uuid,
         subagent_name=thread.subagent_name,
-        git_profile=thread.git_profile,
+        credential_profiles=list(thread.credential_profiles or []),
+        git_profile=(thread.credential_profiles or [None])[0],
         memory=thread.memory,
         approval_mode=thread.approval_mode,
         approval=approval,
@@ -182,6 +197,8 @@ class ThreadService:
         self._agents = AgentRepository(session)
         #: 谁能用这个 Agent（AtlasAgent 数据权限）。没接用户中心时不限制
         self._access = AgentAccess(uc)
+        #: 会话选的凭据档案在建的时候校验（凭据组件）
+        self._grants = CredentialGrants(CredentialProfileStore.from_settings(settings))
 
     # ------------------------------------------------------------------ 读
 
@@ -293,11 +310,22 @@ class ThreadService:
         # 业务应用（TeamFlow、评测…）建的会话默认关闭用户记忆：节点会话不是人的私人对话。
         # 调用方可以显式指定（评测的跨会话记忆用例要打开）
         memory = payload.memory or ("off" if principal.app else "on")
+        # 凭据档案在建会话时选定、校验一次（每轮还会再授权）：写错或无权当场报错，不等到 Pod 里
+        # git 鉴权失败才发现（c4-model/agent/code-credentials.html）
+        profiles = list(
+            dict.fromkeys([*payload.credential_profiles, *filter(None, [payload.git_profile])])
+        )
+        try:
+            self._grants.check(
+                CredentialSubject(str(user_id), principal.app or "", tuple(profiles))
+            )
+        except CredentialDenied as exc:
+            raise CredentialDeniedError(str(exc)) from exc
         thread = await self._repo.create(
             agent_id=agent.agent_uuid,
             title=payload.title,
             created_by=user_id,
-            git_profile=payload.git_profile,
+            credential_profiles=profiles,
             source_app=principal.app,
             memory=memory,
         )

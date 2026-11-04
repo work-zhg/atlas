@@ -5,6 +5,7 @@ from . import (
     agents,
     auth,
     catalog,
+    credentials,
     directory,
     instructions,
     memories,
@@ -32,5 +33,6 @@ router.include_router(previews.router)
 router.include_router(directory.router, dependencies=_authed)
 router.include_router(service_models.router, dependencies=_authed)
 router.include_router(sandbox_templates.router, dependencies=_authed)
+router.include_router(credentials.router, dependencies=_authed)
 
 __all__ = ["router"]

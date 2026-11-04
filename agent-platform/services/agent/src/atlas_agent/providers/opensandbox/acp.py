@@ -3,8 +3,8 @@
 doc/sandbox-opensandbox-design.html §11、§12。
 
     OpenSandboxPods   CliRuntime 用的 PodProvider：ensure(thread, cli) → ws://PodIP:8900 + 令牌
-    AcpProvisioner    opensandbox-cli 上的供给：按会话复用、git 档案授权、Credential Vault、
-                      等 bridge 就绪
+    AcpProvisioner    opensandbox-cli 上的供给：按会话复用、凭据档案授权（凭据组件）、
+                      Credential Vault、等 bridge 就绪
 
 ★ entrypoint 是一小段 sh：把 env 里的令牌写成 bridge 认的令牌文件、把挂进来的模型 key 读成 CLI 认的
   环境变量，再 exec bridge。bridge 因此一行不改，已有的 CLI 镜像照用（设计 §11.2 原计划改 bridge）。
@@ -12,7 +12,7 @@ doc/sandbox-opensandbox-design.html §11、§12。
   而 bridge 令牌要交给 CLI 运行时、随端点四处传，兼作 execd 令牌的话，拿到它就能在 Pod 里执行任意
   命令。server 从不对会话 Pod 调 execd，所以 execd 令牌每次建 Pod 现生成，只写进 Pod 的环境，
   不存、不交出去（c4-model/agent/sandbox/code-sandbox-base-lifecycle.html）。
-★ 有 git 档案时：networkPolicy(allow) + credentialProxy → egress sidecar 透明 MITM；
+★ 有凭据档案时：networkPolicy(allow) + credentialProxy → egress sidecar 透明 MITM；
   ensure 时把凭据写进 Credential Vault。MITM 拦的是全部 HTTPS（P0-3 实测），
   所以 CLI 及其子进程都要信任 MITM 的 CA。
 ★ 不在 ensure 外缓存端点：每一轮都在锁里查一遍沙箱状态（CliRuntime 每轮调一次，频率很低），
@@ -22,7 +22,6 @@ doc/sandbox-opensandbox-design.html §11、§12。
 from __future__ import annotations
 
 import asyncio
-import base64
 import logging
 import secrets
 import time
@@ -30,7 +29,16 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
+from ...credentials import (
+    CredentialDenied,
+    CredentialGrants,
+    CredentialProfileStore,
+    CredentialSet,
+    CredentialSubject,
+    GitAuthor,
+)
 from ...domain.workspace_layout import SKILLS_MOUNT, WORKSPACE_MOUNT, Area, WorkspaceLayout
+from ...sandbox.base.network.vault import vault_body
 from ..pods import CliModel, PodEndpoint
 from .lifecycle import LifecycleError
 from .provision import Provisioner, SandboxEndpoint, pvc_volume
@@ -38,7 +46,7 @@ from .provision import Provisioner, SandboxEndpoint, pvc_volume
 if TYPE_CHECKING:
     import redis.asyncio as aioredis
 
-    from ...config import GitProfile, Settings
+    from ...config import Settings
     from ...db.models import Thread
     from ...domain.spec import CliSpec
 
@@ -61,8 +69,8 @@ _AGENT_ENV_BASE = ("PATH", "HOME", "LANG", "LC_ALL", "TZ", "TERM")
 _CA_ENV = ("NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE")
 
 
-class GitProfileDenied(PermissionError):
-    """请求的 git 凭据档案不存在，或会话无权使用它。"""
+#: 会话选的凭据档案不存在或无权使用（凭据组件的 CredentialDenied，旧名保留到 B6）
+GitProfileDenied = CredentialDenied
 
 
 #: 经模型网关时，主体 Key 随 Pod 的环境变量进来（entrypoint 转成 CLI 认的变量）
@@ -85,19 +93,14 @@ def _entrypoint(*, model_key: bool, gateway_key: bool = False) -> list[str]:
     return ["/bin/sh", "-c", script + f"exec env {unset} python -m atlas_bridge"]
 
 
-def _git_env(profile: GitProfile) -> dict[str, str]:
+def _git_env(author: GitAuthor | None) -> dict[str, str]:
     """git 的身份与行为。凭据不在这里 —— 在 Credential Vault 里。"""
-    email = profile.author_email or f"{profile.username}@users.noreply.{profile.hosts[0]}"
-    return {
+    env = {
         # 没有凭据时立刻失败，而不是卡在交互式输入用户名上（Pod 里没有终端）
         "GIT_TERMINAL_PROMPT": "0",
         # ★ git 不认 SSL_CERT_FILE（Debian 的 libcurl 编译期写死了 CA 路径）：不给就过不了 MITM
         "GIT_SSL_CAINFO": MERGED_CA,
         "CURL_CA_BUNDLE": MERGED_CA,
-        "GIT_AUTHOR_NAME": profile.author_name,
-        "GIT_AUTHOR_EMAIL": email,
-        "GIT_COMMITTER_NAME": profile.author_name,
-        "GIT_COMMITTER_EMAIL": email,
         # 原来写在 gitconfig 里的两条（git ≥ 2.31 的环境变量配置）
         "GIT_CONFIG_COUNT": "2",
         "GIT_CONFIG_KEY_0": "init.defaultBranch",
@@ -105,6 +108,14 @@ def _git_env(profile: GitProfile) -> dict[str, str]:
         "GIT_CONFIG_KEY_1": "pull.rebase",
         "GIT_CONFIG_VALUE_1": "true",
     }
+    if author is not None:
+        env |= {
+            "GIT_AUTHOR_NAME": author.name,
+            "GIT_AUTHOR_EMAIL": author.email,
+            "GIT_COMMITTER_NAME": author.name,
+            "GIT_COMMITTER_EMAIL": author.email,
+        }
+    return env
 
 
 def acp_spec(
@@ -116,7 +127,7 @@ def acp_spec(
     token: str,
     execd_token: str,
     cli: CliSpec,
-    profile: GitProfile | None,
+    credentials: CredentialSet | None,
     model: CliModel | None = None,
 ) -> dict[str, Any]:
     """ACP Pod 的创建请求（设计 §11.1）。三个前缀与 cluster 时代完全一致，存量数据不用迁移。
@@ -156,8 +167,8 @@ def acp_spec(
             # 小模型也指过去：不指的话 CLI 会去找端点上不存在的 haiku（生成标题等旁路上失败）
             agent_env["ANTHROPIC_SMALL_FAST_MODEL"] = settings.cli_model_name
         allow.append("ANTHROPIC_AUTH_TOKEN")  # entrypoint 从文件读出来
-    if profile is not None:
-        agent_env.update(_git_env(profile))
+    if credentials is not None and not credentials.empty():
+        agent_env.update(_git_env(credentials.git_author))
         allow.extend(_CA_ENV)
     allow.extend(agent_env)
 
@@ -203,7 +214,7 @@ def acp_spec(
             pvc_volume(settings, "state", layout.key(Area.SYSTEM, "cli-home"), STATE_MOUNT),
         ],
     }
-    if profile is not None:
+    if credentials is not None and not credentials.empty():
         # Credential Vault 要透明 MITM，而 MITM 要一个网络策略。默认放行
         # （设计 §15：默认拒绝放到以后）
         spec["networkPolicy"] = {"defaultAction": "allow"}
@@ -225,7 +236,7 @@ class AcpProvisioner(Provisioner):
             raise LifecycleError("acp agent 的 cli.image 为空，无法创建 Pod")
         key = str(thread.thread_uuid)
         user = str(thread.created_by_uuid)
-        profile = self._git_profile(thread)
+        credentials = self._credentials(thread)
 
         async def locked() -> SandboxEndpoint:
             previous = await self.routes.get(key, fresh=True)
@@ -242,36 +253,29 @@ class AcpProvisioner(Provisioner):
                     token=token,
                     execd_token=secrets.token_urlsafe(24),
                     cli=cli,
-                    profile=profile,
+                    credentials=credentials,
                     model=model,
                 ),
-                after_create=(lambda sid: self._bind_git(sid, profile)) if profile else None,
+                after_create=(
+                    (lambda sid: self._bind_credentials(sid, credentials))
+                    if not credentials.empty()
+                    else None
+                ),
             )
-            if profile is not None:
-                await self._bind_git(ep.sandbox_id, profile, only_if_missing=True)
+            if not credentials.empty():
+                await self._bind_credentials(ep.sandbox_id, credentials, only_if_missing=True)
             return ep
 
         return await self._locked(key, locked)
 
-    def _git_profile(self, thread: Thread) -> GitProfile | None:
-        """★ 档案是凭据：谁能用由 Atlas 决定 —— 名字写错或无权一律拒绝，而不是静默不给
+    def _credentials(self, thread: Thread) -> CredentialSet:
+        """★ 档案是凭据：谁能用由凭据组件决定 —— 名字写错或无权一律拒绝，而不是静默不给
         （静默的表现是 git 在 Pod 里鉴权失败，原因很难追到这里）。"""
-        name = thread.git_profile or ""
-        if not name:
-            return None
-        profile = self._settings.git_profiles.get(name)
-        if profile is None:
-            raise GitProfileDenied(f"git 凭据档案 {name!r} 不存在")
-        if profile.allowed_users and str(thread.created_by_uuid) not in profile.allowed_users:
-            raise GitProfileDenied(f"会话创建者无权使用 git 凭据档案 {name!r}")
-        source_app = thread.source_app or ""
-        if profile.allowed_apps and source_app not in profile.allowed_apps:
-            apps = "、".join(profile.allowed_apps)
-            raise GitProfileDenied(f"只有 {apps} 建的会话能用 git 凭据档案 {name!r}")
-        return profile
+        grants = CredentialGrants(CredentialProfileStore.from_settings(self._settings))
+        return grants.resolve(CredentialSubject.of(thread))
 
-    async def _bind_git(
-        self, sandbox_id: str, profile: GitProfile, *, only_if_missing: bool = False
+    async def _bind_credentials(
+        self, sandbox_id: str, credentials: CredentialSet, *, only_if_missing: bool = False
     ) -> None:
         """把档案凭据写进沙箱的 Credential Vault（egress sidecar 的内存里，Pod 里看不到）。
 
@@ -279,19 +283,7 @@ class AcpProvisioner(Provisioner):
           的那种（建沙箱的进程崩在两步之间）。
         """
         url, headers = await self.lifecycle.endpoint_with_headers(sandbox_id, EGRESS_PORT)
-        cred = base64.b64encode(
-            f"{profile.username}:{profile.token.get_secret_value()}".encode()
-        ).decode()
-        body = {
-            "credentials": [{"name": "git", "source": {"type": "inline", "value": cred}}],
-            "bindings": [
-                {
-                    "name": "git",
-                    "match": {"hosts": profile.hosts},
-                    "auth": {"type": "basic", "credential": "git"},
-                }
-            ],
-        }
+        body = vault_body(list(credentials.bindings))
         deadline = time.monotonic() + self._settings.cli_ready_timeout_s
         async with httpx.AsyncClient(
             timeout=10.0, transport=self._transport, trust_env=False, headers=headers
@@ -304,7 +296,7 @@ class AcpProvisioner(Provisioner):
                             return
                     resp = await client.post(f"{url}/credential-vault", json=body)
                     if resp.status_code < 300:
-                        logger.info("沙箱 %s 已写入 git 凭据（主机 %s）", sandbox_id, profile.hosts)
+                        logger.info("沙箱 %s 已写入凭据 %s", sandbox_id, sorted(credentials.codes))
                         return
                     if resp.status_code < 500:
                         raise LifecycleError(

@@ -211,9 +211,12 @@ class Thread(Base, TimestampMixin):
     parent_thread_uuid: Mapped[UUID | None] = mapped_column(UUIDType, nullable=True)
     #: 与 parent_thread_id 组成恢复的查找键（唯一）。
     subagent_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    #: git 凭据档案（cluster 配置里的名字）：acp 会话的 Pod 据此挂载 git 凭据。
-    #: 建会话时由调用方声明（如 AI TeamFlow 给节点会话声明产物仓库的档案）；子会话继承父会话。
-    git_profile: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    #: 建会话时选定的出站凭据档案 code（迁移 0036，原 git_profile）：CLI 会话的 Pod 经
+    #: Credential Vault 拿到这些凭据。由调用方声明（如 AI TeamFlow 给节点会话声明产物仓库的
+    #: 档案），经凭据组件校验；之后不改，子会话继承父会话（c4-model/agent/code-credentials.html）
+    credential_profiles: Mapped[list[str]] = mapped_column(
+        JSONType, nullable=False, default=list, server_default=text("'[]'")
+    )
     #: 建会话的业务应用（X-Caller-App，如 teamflow；内网身份传递 §7.3）。人直接建的为空。
     #: 同一应用来访时信任它已做过授权；从别处来只读。子会话继承父会话
     source_app: Mapped[str | None] = mapped_column(String(32), nullable=True)

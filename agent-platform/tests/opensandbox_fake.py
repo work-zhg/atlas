@@ -70,6 +70,9 @@ class FakeSandbox:
     #: egress sidecar 内存里的 Credential Vault（None = 还没建）
     vault: dict[str, Any] | None = None
     vault_posts: list[dict[str, Any]] = field(default_factory=list)
+    vault_patches: list[dict[str, Any]] = field(default_factory=list)
+    #: egress 运行期的出站策略（PUT /policy）
+    policy: dict[str, Any] | None = None
 
     @property
     def metadata(self) -> dict[str, str]:
@@ -289,21 +292,54 @@ class FakeOpenSandbox:
             raise httpx.ConnectError("没有 egress sidecar", request=request)
         if request.headers.get("OPENSANDBOX-EGRESS-AUTH") != f"egress-{sb.id}":
             return httpx.Response(401)
+        if request.url.path == "/policy" and request.method == "PUT":
+            sb.policy = json.loads(request.content)
+            return httpx.Response(200, json=sb.policy)
         if request.url.path != "/credential-vault":
             return httpx.Response(404)
         if request.method == "GET":
             if sb.vault is None:
                 return httpx.Response(404)
+            # 读接口不返回凭据值：只有名字
+            creds = [{"name": c["name"]} for c in sb.vault["credentials"]]
             return httpx.Response(
-                200, json={"revision": 1, "credentials": [], "bindings": sb.vault["bindings"]}
+                200,
+                json={
+                    "revision": sb.vault["revision"],
+                    "credentials": creds,
+                    "bindings": sb.vault["bindings"],
+                },
             )
         if request.method == "POST":
             if sb.vault is not None:
                 return httpx.Response(409)
             body = json.loads(request.content)
             sb.vault_posts.append(body)
-            sb.vault = body
+            sb.vault = body | {"revision": 1}
             return httpx.Response(201, json={"revision": 1})
+        if request.method == "PATCH":
+            # 上游 MutationRequest：credentials / bindings 各自 add、replace、delete，一次原子生效
+            if sb.vault is None:
+                return httpx.Response(404)
+            body = json.loads(request.content)
+            if body.get("expectedRevision") not in (None, sb.vault["revision"]):
+                return httpx.Response(409)
+            sb.vault_patches.append(body)
+            for key in ("credentials", "bindings"):
+                change = body.get(key) or {}
+                items = {i["name"]: i for i in sb.vault[key]}
+                for name in change.get("delete", []):
+                    items.pop(name, None)
+                for item in [*change.get("replace", []), *change.get("add", [])]:
+                    items[item["name"]] = item
+                sb.vault[key] = list(items.values())
+            sb.vault["revision"] += 1
+            return httpx.Response(200, json={"revision": sb.vault["revision"]})
+        if request.method == "DELETE":
+            if sb.vault is None:
+                return httpx.Response(404)
+            sb.vault = None
+            return httpx.Response(204)
         return httpx.Response(405)
 
     def _start(self, sb: FakeSandbox, body: dict[str, Any]) -> httpx.Response:

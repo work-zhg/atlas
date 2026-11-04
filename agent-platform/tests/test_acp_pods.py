@@ -24,6 +24,12 @@ from uuid import uuid4
 
 import pytest
 from atlas_agent.config import GitProfile, get_settings
+from atlas_agent.credentials import (
+    CredentialGrants,
+    CredentialProfileStore,
+    CredentialSet,
+    CredentialSubject,
+)
 from atlas_agent.domain.spec import CliSpec
 from atlas_agent.providers.opensandbox import (
     AcpProvisioner,
@@ -88,10 +94,16 @@ def _thread(tid: str, **over: Any) -> Any:
         "thread_uuid": tid,
         "created_by_uuid": USER,
         "workspace_thread_id": tid,
-        "git_profile": "",
+        "credential_profiles": [],
         "source_app": "",
     }
     return SimpleNamespace(**(fields | over))
+
+
+def _granted() -> CredentialSet:
+    """PROFILE 授权给 TeamFlow 建的会话之后的凭据集合。"""
+    grants = CredentialGrants(CredentialProfileStore.from_settings(_settings()))
+    return grants.resolve(CredentialSubject(USER, "teamflow", ("teamflow-gitee",)))
 
 
 def _pods(fake: FakeOpenSandbox, redis: Any, **over: Any) -> OpenSandboxPods:
@@ -111,7 +123,7 @@ def test_spec_is_what_the_bridge_expects() -> None:
         token="tok",
         execd_token="exec-tok",
         cli=CLI,
-        profile=None,
+        credentials=None,
     )
     env = spec["env"]
     cfg = BridgeConfig.from_env(env)
@@ -143,7 +155,7 @@ def test_spec_prefixes_match_the_old_layout() -> None:
         token="tok",
         execd_token="exec-tok",
         cli=CLI,
-        profile=None,
+        credentials=None,
     )
     mounts = {v["mountPath"]: v for v in spec["volumes"]}
     assert mounts["/workspace"]["subPath"] == f"{USER}/t-parent/workspace"
@@ -167,7 +179,7 @@ def test_model_key_never_appears_in_the_spec() -> None:
         token="tok",
         execd_token="exec-tok",
         cli=CLI,
-        profile=PROFILE,
+        credentials=_granted(),
     )
     assert "ANTHROPIC_AUTH_TOKEN" not in spec["env"]
     assert "gitee-secret" not in str(spec)  # git 凭据走 Credential Vault，也不进 spec
@@ -183,7 +195,7 @@ def test_non_claude_cli_gets_no_model_env() -> None:
         token="tok",
         execd_token="exec-tok",
         cli=codex,
-        profile=None,
+        credentials=None,
     )
     assert not any(k.startswith("ANTHROPIC_") for k in spec["env"])
     assert "ANTHROPIC_AUTH_TOKEN" not in spec["env"]["ATLAS_BRIDGE_AGENT_ENV_ALLOW"]
@@ -199,7 +211,7 @@ def test_git_profile_spec_enables_vault_and_trusts_the_mitm_ca() -> None:
         token="tok",
         execd_token="exec-tok",
         cli=CLI,
-        profile=PROFILE,
+        credentials=_granted(),
     )
     assert spec["networkPolicy"] == {"defaultAction": "allow"}
     assert spec["credentialProxy"] == {"enabled": True}
@@ -242,7 +254,7 @@ def test_entrypoint_writes_the_token_file_and_hides_the_token(
         token="tok-123",
         execd_token="exec-tok",
         cli=CLI,
-        profile=None,
+        credentials=None,
     )
     env = spec["env"] | {
         "PATH": f"{bin_dir}:/usr/bin:/bin",
@@ -319,7 +331,7 @@ async def test_git_profile_is_bound_into_the_vault(
     fake: FakeOpenSandbox, redis: Any, tid: str
 ) -> None:
     await _pods(fake, redis).ensure(
-        _thread(tid, git_profile="teamflow-gitee", source_app="teamflow"), CLI
+        _thread(tid, credential_profiles=["teamflow-gitee"], source_app="teamflow"), CLI
     )
     (sb,) = fake.created
     (body,) = sb.vault_posts
@@ -334,7 +346,7 @@ async def test_vault_is_rebound_when_missing_on_reuse(
     fake: FakeOpenSandbox, redis: Any, tid: str
 ) -> None:
     """建沙箱的进程崩在「建好」与「写 vault」之间：复用时补上；已经有了就不重复写。"""
-    thread = _thread(tid, git_profile="teamflow-gitee", source_app="teamflow")
+    thread = _thread(tid, credential_profiles=["teamflow-gitee"], source_app="teamflow")
     pods = _pods(fake, redis)
     await pods.ensure(thread, CLI)
     await pods.ensure(thread, CLI)
@@ -358,7 +370,7 @@ async def test_git_profile_is_denied_before_anything_is_created(
 ) -> None:
     with pytest.raises(GitProfileDenied, match=match):
         await _pods(fake, redis).ensure(
-            _thread(tid, git_profile=profile, source_app=source_app), CLI
+            _thread(tid, credential_profiles=[profile], source_app=source_app), CLI
         )
     assert fake.created == []
 
@@ -368,7 +380,9 @@ async def test_git_profile_allowed_users(fake: FakeOpenSandbox, redis: Any, tid:
         "p": GitProfile(username="bot", token=SecretStr("x"), allowed_users=["someone-else"])
     }
     with pytest.raises(GitProfileDenied, match="无权"):
-        await _pods(fake, redis, git_profiles=profiles).ensure(_thread(tid, git_profile="p"), CLI)
+        await _pods(fake, redis, git_profiles=profiles).ensure(
+            _thread(tid, credential_profiles=["p"]), CLI
+        )
 
 
 def test_an_unrestricted_git_profile_fails_to_load() -> None:

@@ -83,9 +83,7 @@ class ThreadRepository:
           只有 tool_result block，而 MessageStream 的 blocksOf 只认 text。
           工具调用的展示本来就走事件流（Inspector 的「工具」页），不走这里。
         """
-        stmt = select(Message).where(
-            Message.thread_uuid == thread_id, Message.kind == KIND_CHAT
-        )
+        stmt = select(Message).where(Message.thread_uuid == thread_id, Message.kind == KIND_CHAT)
         if cursor is not None:
             ts, last_id = cursor
             stmt = stmt.where(
@@ -122,7 +120,7 @@ class ThreadRepository:
         parent_thread_id: UUID | None = None,
         subagent_name: str | None = None,
         status: str = "active",
-        git_profile: str | None = None,
+        credential_profiles: list[str] | None = None,
         source_app: str | None = None,
         memory: str = "on",
     ) -> Thread:
@@ -134,7 +132,7 @@ class ThreadRepository:
             parent = (
                 await self._session.execute(
                     select(
-                        Thread.git_profile,
+                        Thread.credential_profiles,
                         Thread.source_app,
                         Thread.memory,
                         Thread.root_thread_uuid,
@@ -144,8 +142,8 @@ class ThreadRepository:
             # 会话树的根：父会话的根，父会话自己是根就是父会话（SubAgent 可以层层派下去）
             root_thread_id = parent_thread_id
             if parent is not None:
-                if git_profile is None:
-                    git_profile = parent.git_profile
+                if credential_profiles is None:
+                    credential_profiles = list(parent.credential_profiles or [])
                 source_app, memory = parent.source_app, parent.memory
                 root_thread_id = parent.root_thread_uuid or parent_thread_id
         thread = Thread(
@@ -158,7 +156,7 @@ class ThreadRepository:
             parent_thread_uuid=parent_thread_id,
             root_thread_uuid=root_thread_id,
             subagent_name=subagent_name,
-            git_profile=git_profile,
+            credential_profiles=credential_profiles or [],
             source_app=source_app,
             memory=memory,
         )
@@ -277,8 +275,10 @@ class ThreadRepository:
         工具结果也数进去的话，会话列表上的「N 条消息」会随工具调用次数
         暴涨 —— 一轮里调十次工具就多二十条，而用户只发了一句话。
         """
-        stmt = select(func.count()).select_from(Message).where(
-            Message.thread_uuid == thread_id, Message.kind == KIND_CHAT
+        stmt = (
+            select(func.count())
+            .select_from(Message)
+            .where(Message.thread_uuid == thread_id, Message.kind == KIND_CHAT)
         )
         return int((await self._session.execute(stmt)).scalar_one())
 
@@ -292,9 +292,12 @@ class ThreadRepository:
         """
         from ..db.models import Approval, Message, Run, RunEvent, RunFile, RunState
 
-        ids = [thread.thread_uuid, *await self._session.scalars(
-            select(Thread.thread_uuid).where(Thread.parent_thread_uuid == thread.thread_uuid)
-        )]
+        ids = [
+            thread.thread_uuid,
+            *await self._session.scalars(
+                select(Thread.thread_uuid).where(Thread.parent_thread_uuid == thread.thread_uuid)
+            ),
+        ]
         run_ids = select(Run.run_uuid).where(Run.thread_uuid.in_(ids)).scalar_subquery()
         for stmt in (
             delete(Approval).where(Approval.run_uuid.in_(run_ids)),

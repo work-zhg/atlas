@@ -2425,6 +2425,8 @@ export interface components {
              * @default
              */
             title: string;
+            /** Credential Profiles */
+            credential_profiles?: string[];
             /** Git Profile */
             git_profile?: string | null;
             /** Memory */
@@ -2471,6 +2473,11 @@ export interface components {
             parent_thread_id?: string | null;
             /** Subagent Name */
             subagent_name?: string | null;
+            /**
+             * Credential Profiles
+             * @default []
+             */
+            credential_profiles: string[];
             /** Git Profile */
             git_profile?: string | null;
             /**

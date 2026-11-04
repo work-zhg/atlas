@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
+
+#: 凭据档案 code（credentials.profiles.PROFILE_CODE 的同一条规则）
+PROFILE_PATTERN = r"^[a-z0-9][a-z0-9-]*$"
 
 #: 用户可以把会话设成的状态。
 ThreadStatusIn = Literal["active", "archived"]
@@ -25,9 +28,13 @@ TitleSource = Literal["pending", "generated", "fallback", "manual"]
 class ThreadCreate(BaseModel):
     agent_id: UUID
     title: str = Field(default="", max_length=256)
-    #: git 凭据档案（cluster 配置里的名字）。acp 会话的 Pod 据此挂载 git 凭据；
-    #: 档案是否存在、调用者能否使用由 cluster 校验。不需要 git 时不传。
-    git_profile: str | None = Field(default=None, max_length=64, pattern=r"^[a-z0-9][a-z0-9-]*$")
+    #: 出站凭据档案（部署配置里的 code）：CLI 会话的 Pod 经 Credential Vault 拿到这些凭据。建会话时
+    #: 经凭据组件校验（不存在或无权直接 403），之后不改，子会话继承。不需要凭据时不传
+    credential_profiles: list[Annotated[str, Field(max_length=64, pattern=PROFILE_PATTERN)]] = (
+        Field(default_factory=list, max_length=8)
+    )
+    #: ★ 旧字段，等于只选一个档案：TeamFlow 还在用它。和 credential_profiles 同时给时合并
+    git_profile: str | None = Field(default=None, max_length=64, pattern=PROFILE_PATTERN)
     #: 用户记忆：传 off 关闭（不抽取、不注入、不挂检索工具）。服务账号的会话按账号设置，默认关闭
     memory: Literal["on", "off"] | None = None
 
@@ -74,7 +81,9 @@ class ThreadOut(BaseModel):
     #: 只作为父会话详情页上的可展开分支（设计 §02）。
     parent_thread_id: UUID | None = None
     subagent_name: str | None = None
-    #: git 凭据档案名（不含凭据）；子会话继承父会话
+    #: 出站凭据档案 code（不含凭据）；子会话继承父会话
+    credential_profiles: list[str] = []
+    #: 旧字段：第一个档案（兼容只认它的调用方）
     git_profile: str | None = None
     memory: str = "on"
     #: 会话记住的审批模式选择（NULL = 没选过，用智能体默认）

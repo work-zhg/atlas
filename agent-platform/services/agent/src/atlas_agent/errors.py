@@ -38,6 +38,12 @@ class Forbidden(AppError):
     kind = "forbidden"
 
 
+class CredentialDeniedError(Forbidden):
+    """会话选的凭据档案不存在，或调用者无权使用（c4-model/agent/code-credentials.html）。"""
+
+    kind = "credential_denied"
+
+
 class Conflict(AppError):
     status_code = 409
     kind = "conflict"
