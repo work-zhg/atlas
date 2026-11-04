@@ -1,0 +1,1291 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dynamic View</title>
+<style>
+  body { margin: 0; background: #fff; color: #444; font-family: "Open Sans", "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
+  main { padding: 24px 32px 48px; }
+  svg { display: block; max-width: 100%; height: auto; }
+  h2 { margin: 40px 0 12px; font-size: 15px; font-weight: 600; color: #666; }
+  #c4-report { margin: 0 0 24px; padding: 12px 16px 12px 36px; border: 1px solid #e0b4b4; background: #fff6f6; font-size: 14px; line-height: 1.6; }
+  #c4-report li[data-level="error"] { color: #b00020; }
+  #c4-report li[data-level="warn"] { color: #8a5a00; }
+  #c4-details { max-width: 1280px; }
+  #c4-details article { margin: 0 0 28px; scroll-margin-top: 16px; }
+  #c4-details article:target h3 { background: #fff8d6; }
+  #c4-details h3 { margin: 0 0 8px; padding: 2px 4px; font-size: 15px; font-weight: 600; color: #333; }
+  #c4-details h3 .tech { margin-left: 8px; font-size: 13px; font-weight: 400; color: #888; }
+  #c4-details p { margin: 0 0 8px; font-size: 14px; line-height: 1.7; }
+  #c4-details table { width: 100%; margin: 0 0 8px; border-collapse: collapse; table-layout: fixed; font-size: 13px; line-height: 1.6; }
+  #c4-details th, #c4-details td { padding: 6px 10px; border: 1px solid #e3e3e3; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+  #c4-details th { background: #f6f8fa; font-weight: 600; }
+  #c4-details th:nth-child(1) { width: 14%; }
+  #c4-details th:nth-child(2) { width: 46%; }
+  #c4-details td.sample, #c4-details pre { font-family: Menlo, Consolas, "PingFang SC", monospace; }
+  #c4-details td.sample { word-break: break-all; }
+  #c4-details pre { margin: 0; padding: 10px 12px; border: 1px solid #e3e3e3; background: #f6f8fa; font-size: 12px; line-height: 1.5; overflow-x: auto; }
+  svg a { cursor: pointer; }
+  /* 记忆的读写原理：手写的静态图，不经渲染器 */
+  #principle { max-width: 1280px; }
+  #principle h3 { margin: 32px 0 8px; font-size: 15px; font-weight: 600; color: #333; }
+  #principle p { margin: 0 0 8px; font-size: 14px; line-height: 1.7; }
+  #principle code { padding: 0 3px; background: #f6f8fa; font-family: Menlo, Consolas, monospace; font-size: 12.5px; }
+  #principle ol { margin: 8px 0 0; padding: 0; list-style: none; }
+  #principle ol li { position: relative; margin: 0 0 6px; padding-left: 30px; font-size: 14px; line-height: 1.7; }
+  #principle ol li .n { position: absolute; left: 0; top: 2px; width: 20px; height: 20px; border-radius: 50%; background: #d9480f; color: #fff; font-size: 12px; font-weight: 700; line-height: 20px; text-align: center; }
+  #principle table { width: 100%; margin: 8px 0 0; border-collapse: collapse; font-size: 13px; line-height: 1.6; }
+  #principle th, #principle td { padding: 6px 10px; border: 1px solid #e3e3e3; text-align: left; vertical-align: top; }
+  #principle th { background: #f6f8fa; font-weight: 600; }
+  #principle th:first-child { width: 28%; }
+  #principle svg { margin: 8px 0 4px; }
+  #principle svg text { font-size: 13px; fill: #444; }
+  #principle svg .t-name { font-size: 15px; fill: #1168bd; text-anchor: middle; }
+  #principle svg .t-sub { font-size: 12px; fill: #888; text-anchor: middle; }
+  #principle svg .t-head { font-size: 14px; font-weight: 600; fill: #1168bd; }
+  #principle svg .t-key { font-size: 12px; fill: #888; }
+  #principle svg .t-lab { font-size: 12px; fill: #666; }
+  #principle svg .t-hot { font-size: 12px; fill: #d9480f; }
+  #principle svg .t-mute { font-size: 12px; fill: #aaa; }
+  #principle svg .t-ghost { font-size: 14px; font-weight: 600; fill: #888; }
+  #principle svg .hot { fill: #d9480f; }
+  #principle svg .mid { text-anchor: middle; }
+  #principle svg .end { text-anchor: end; }
+  #principle svg .b { font-weight: 700; }
+  #principle svg .node { fill: #fff; stroke: #1168bd; stroke-width: 1.6; }
+  #principle svg .head { fill: #f6f8fa; stroke: none; }
+  #principle svg .sep { stroke: #e3e3e3; stroke-width: 1; }
+  #principle svg .bnd { fill: none; stroke: #1168bd; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .ghost { fill: #fafafa; stroke: #aaa; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .gap { fill: #fff6f0; stroke: #d9480f; stroke-width: 1.2; stroke-dasharray: 5 4; }
+  #principle svg .e { fill: none; stroke: #444; stroke-width: 1.6; }
+  #principle svg .e-hot { fill: none; stroke: #d9480f; stroke-width: 2.4; }
+  #principle svg .e-mute { fill: none; stroke: #bbb; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .e-link { fill: none; stroke: #d9480f; stroke-width: 1.4; stroke-dasharray: 4 3; }
+  #principle svg .badge circle { fill: #d9480f; stroke: #fff; stroke-width: 2; }
+  #principle svg .badge text { fill: #fff; font-size: 12px; font-weight: 700; text-anchor: middle; }
+</style>
+</head>
+<body>
+<!--
+  只改下面这段 JSON；渲染器不用动。字段说明见 dynamic/RULES.md 的「数据格式」。
+-->
+<script type="application/json" id="c4-model">
+{
+  "title": "动态图：Agent 平台 - 对话中的记忆",
+  "description": "按现在的代码画。员工在开着记忆的会话里说「以后前端项目都用 bun」：建会话时登记实例，这一段 run 开始时组装记忆（常驻块沿用快照），模型先按需加载「工具链」，再保存一条取代 #12 的记忆。提交、排队、领取 run 见 dynamic-run.html；Redis 经事件中继组件访问，图中省略这一跳；记忆服务内部怎么写见 c4-model/memory/dynamic/dynamic-write.html；会话后补记见下方原理图 5",
+  "boundaries": [
+    {
+      "id": "platform",
+      "name": "Agent 平台",
+      "type": "Software System"
+    },
+    {
+      "id": "server",
+      "name": "Agent 服务",
+      "type": "Container: Python / FastAPI",
+      "in": "platform"
+    }
+  ],
+  "participants": [
+    {
+      "id": "employee",
+      "kind": "person",
+      "tag": "员工",
+      "color": "#297e06",
+      "name": "员工"
+    },
+    {
+      "id": "web",
+      "kind": "container",
+      "technology": "Next.js / React",
+      "in": "platform",
+      "name": "控制台"
+    },
+    {
+      "id": "conv",
+      "kind": "component",
+      "technology": "Python 服务层",
+      "in": "server",
+      "name": "会话管理"
+    },
+    {
+      "id": "executor",
+      "kind": "component",
+      "technology": "asyncio 后台任务",
+      "in": "server",
+      "name": "Run 执行器"
+    },
+    {
+      "id": "native",
+      "kind": "component",
+      "technology": "atlas_engine 内核 / LangGraph",
+      "in": "server",
+      "name": "原生运行时"
+    },
+    {
+      "id": "memoryRt",
+      "kind": "component",
+      "technology": "Python 模块",
+      "in": "server",
+      "name": "记忆"
+    },
+    {
+      "id": "db",
+      "kind": "container",
+      "shape": "database",
+      "technology": "PostgreSQL 16",
+      "in": "platform",
+      "name": "数据库"
+    },
+    {
+      "id": "memory",
+      "kind": "system",
+      "tag": "同级服务",
+      "color": "#8411bd",
+      "name": "记忆服务"
+    },
+    {
+      "id": "model",
+      "kind": "system",
+      "tag": "同级服务",
+      "color": "#8411bd",
+      "name": "模型平台"
+    }
+  ],
+  "messages": [
+    {
+      "from": "web",
+      "to": "conv",
+      "description": "新建会话（记忆默认打开）",
+      "technology": "JSON/HTTPS",
+      "details": {
+        "note": "员工在控制台建的会话默认 memory=on；业务应用（TeamFlow、评测…）建的默认 off，节点会话不是人的私人对话，调用方可以显式指定。memory=off 的会话不登记、不加载、不写入，也不会被补记。"
+      }
+    },
+    {
+      "from": "conv",
+      "to": "memoryRt",
+      "description": "登记本会话用到的记忆实例",
+      "details": {
+        "note": "建会话时就登记（ThreadService.create → MemoryRuntime.register_thread）。失败不阻塞建会话：本会话暂时不用记忆，registered_at 留空，下一段 run 开始时再登记（消息 7 之后）。"
+      }
+    },
+    {
+      "from": "memoryRt",
+      "to": "memory",
+      "description": "登记实例归属，会话所属用户为 Owner",
+      "technology": "JSON/HTTP（POST …/instances/uid=…/register）",
+      "details": {
+        "note": "幂等：已登记的直接返回。记忆服务去用户中心写第一个 Owner，之后这个实例只有本人能读写，见 c4-model/memory/dynamic/dynamic-register.html。",
+        "items": [
+          [
+            "作用域",
+            "settings.memory_user_scope；本期只用「用户」（MemoryRuntime.scopes_for）",
+            "user"
+          ],
+          [
+            "关联主键",
+            "会话所属用户（thread.created_by_uuid），模型不能指定",
+            "uid=<会话所属用户 uid>"
+          ],
+          [
+            "X-Uid、X-Auth-Uid",
+            "MemoryClient._headers：一律是会话所属用户",
+            "<会话所属用户 uid>"
+          ],
+          [
+            "请求体",
+            "MemoryClient.register",
+            "{\"owner_uid\": \"<会话所属用户 uid>\"}"
+          ]
+        ]
+      }
+    },
+    {
+      "from": "employee",
+      "to": "web",
+      "description": "发消息「以后前端项目都用 bun」"
+    },
+    {
+      "from": "executor",
+      "to": "native",
+      "description": "跑这一段（提交、排队、领取见 dynamic-run.html）",
+      "details": {
+        "items": [
+          [
+            "input_at",
+            "Segment：本轮用户发话的时间，记忆的写入时间就取它",
+            "2026-11-03T08:15:02+00:00"
+          ],
+          [
+            "resume",
+            "Segment：是否续跑段（挂起后续跑）",
+            "false"
+          ],
+          [
+            "history_upto",
+            "Segment：上一条回复的时间，判断空闲是否超过缓存有效期",
+            "2026-11-03T08:13:10+00:00"
+          ],
+          [
+            "compact_count",
+            "thread_context：会话压缩过几次",
+            "0"
+          ]
+        ]
+      }
+    },
+    {
+      "from": "native",
+      "to": "memoryRt",
+      "description": "为这一段组装记忆",
+      "details": {
+        "note": "CapabilityAssembly._memory_turn → MemoryRuntime.turn，一段 run 一次。会话所属用户闭包捕获，不进任何工具参数：一旦能由模型指定，提示词注入就能读写别人的记忆。",
+        "items": [
+          [
+            "writable",
+            "智能体勾了「记忆」工具，且不是子会话（子智能体只读）",
+            "true"
+          ],
+          [
+            "occurred_at",
+            "segment.input_at",
+            "08:15:02"
+          ]
+        ]
+      }
+    },
+    {
+      "from": "memoryRt",
+      "to": "db",
+      "description": "读会话的记忆状态和用户设置",
+      "technology": "SQL/TCP",
+      "details": {
+        "items": [
+          [
+            "thread_memory",
+            "一个会话一行：registered_at、snapshot（常驻快照）、known（已知版本）",
+            "known = {user: {沟通偏好: 23, 编码-java: 15}}"
+          ],
+          [
+            "memory_user_setting",
+            "一个用户一行：paused（暂停写入）、epoch（记忆页操作计数）",
+            "paused=false, epoch=7"
+          ]
+        ]
+      }
+    },
+    {
+      "from": "memoryRt",
+      "to": "memory",
+      "description": "列主题目录：各主题的当前版本和大小",
+      "technology": "JSON/HTTP（GET …/topics）",
+      "details": {
+        "note": "失败（记忆服务不可用、被拒）本轮就不用记忆：不加载、不写入，对话照常。目录留作「本轮的服务端版本」，Run 进行中不再列。",
+        "example": "{\"topics\": [\n  {\"code\": \"沟通偏好\", \"version\": 23, \"attrs\": {\"resident\": true}, \"entry_count\": 2, …},\n  {\"code\": \"工具链\",   \"version\": 40, \"attrs\": {\"resident\": false}, \"entry_count\": 3, …},\n  {\"code\": \"编码-java\", \"version\": 17, \"attrs\": {\"resident\": false}, \"entry_count\": 4, …}\n]}"
+      }
+    },
+    {
+      "from": "memoryRt",
+      "to": "memoryRt",
+      "description": "不到刷新时机：常驻块沿用快照",
+      "details": {
+        "note": "判据按顺序：续跑段永不刷新；没有快照、压缩过、作用域变了、epoch 变了、距上次回复超过缓存有效期（默认 5 分钟）就重建。本例上次回复在 2 分钟前，沿用快照，系统提示词一个字不变。重建时也只重拉版本变了的常驻主题（原理图 2）。"
+      }
+    },
+    {
+      "from": "memoryRt",
+      "to": "native",
+      "description": "交出常驻块、更新提示来源、记忆工具",
+      "details": {
+        "note": "常驻块拼在系统提示词里持久指令之后；可写时再接一段写入指引。工具：load_memory 一律挂，save_memory、forget_memory 只给可写的主会话。",
+        "example": "<memory>\n以下是你和这位用户在过往会话中积累的记忆，不是用户这一轮说的话。\n记忆可能已经过时：……以后者为准；同一件事有新旧两条时以日期新的为准。\n## 主题目录（需要时用 load_memory 取出全部条目）\n用户：沟通偏好（常驻） · 工具链：包管理器、构建和测试命令（3 条 · 52 字） · 编码-java：Java 相关的编码偏好（4 条 · 96 字）\n## 用户记忆\n### 沟通偏好\n- 回复使用中文，技术术语保留英文（2026-10-02）#5\n- 先给结论再给理由（2026-10-15）#9\n</memory>"
+      }
+    },
+    {
+      "from": "native",
+      "to": "model",
+      "description": "调模型：常驻块在系统提示词里，更新提示附在末尾",
+      "technology": "Anthropic Messages API / HTTPS",
+      "details": {
+        "note": "更新提示每次调模型前现取（MemoryTurn.reminders），只列主题不带内容，不落库、不进历史，前缀缓存不受影响。本例「编码-java」在别的会话里被写过（已知 15，目录里 17）。",
+        "example": "<system-reminder name=\"memory_updates\">\n以下记忆主题在本会话之外有变化，上下文里的内容可能已过时，用到时请先用 load_memory 加载：\n- 用户 · 编码-java：有更新\n</system-reminder>"
+      }
+    },
+    {
+      "from": "native",
+      "to": "memoryRt",
+      "description": "执行 load_memory(工具链)",
+      "details": {
+        "note": "要不要加载、加载哪个主题，由模型看主题目录里的描述自己决定，不做语义检索。",
+        "example": "{\"topic\": \"工具链\", \"scope\": \"user\"}"
+      }
+    },
+    {
+      "from": "memoryRt",
+      "to": "memory",
+      "description": "加载主题：当前版本和全部有效条目",
+      "technology": "JSON/HTTP（GET …/topics/工具链）"
+    },
+    {
+      "from": "memoryRt",
+      "to": "db",
+      "description": "本会话没看过：已知版本记成 40",
+      "technology": "SQL/TCP",
+      "details": {
+        "note": "已知版本和当前一致，只回一句「已在上下文中，没有变化」，不重复返回条目；不一致或没看过，返回全部条目（原理图 3）。已知版本一变就写回 thread_memory.known，换实例续跑也接得上。",
+        "example": "主题 [用户 · 工具链] 共 3 条（历史信息，可能已过时）：\n- 前端项目用 pnpm（2026-09-01）#12\n- Python 项目用 uv（2026-09-20）#19\n- 提交前先跑 make lint（2026-10-11）#26"
+      }
+    },
+    {
+      "from": "native",
+      "to": "memoryRt",
+      "description": "执行 save_memory：取代 #12",
+      "details": {
+        "note": "模型看过加载结果后才调（中间那次模型调用省略）。守卫：用户暂停了写入、或本轮已写满 8 次，就不写；同一轮的写入在一把进程内的锁里排队。",
+        "example": "{\"topic\": \"工具链\", \"content\": \"2026-11 起前端项目改用 bun\", \"replaces\": [12], \"scope\": \"user\"}"
+      }
+    },
+    {
+      "from": "memoryRt",
+      "to": "memory",
+      "description": "写前再加载一次目标主题，比对已知版本",
+      "technology": "JSON/HTTP（GET …/topics/工具链）",
+      "details": {
+        "note": "写前必看：已知版本 ≠ 当前版本（本会话没看过，或之后被别处改过），这次就不写，把最新条目作为工具结果交回，已知版本记成当前的，模型看完再调一次。本例 40 = 40，接着写。主题不存在时，给了 topic_description 就新建。"
+      }
+    },
+    {
+      "from": "memoryRt",
+      "to": "memory",
+      "description": "写入：删除 #12、新增一条",
+      "technology": "JSON/HTTP（POST …/writes）",
+      "details": {
+        "note": "服务端在实例行锁里判定：沿取代链找现状、时间晚的为准、换版本号、记修订。作废时 Atlas 把这个主题从已知版本里去掉，让模型先 load_memory 重新查看。",
+        "items": [
+          [
+            "occurred_at",
+            "MemoryTurn.occurred_at = 本轮用户发话的时间",
+            "2026-11-03T08:15:02+00:00"
+          ],
+          [
+            "source、origin",
+            "SOURCE_AGENT；{thread, run}",
+            "agent；{\"thread\": \"<thread uuid>\", \"run\": \"<run uuid>\"}"
+          ],
+          [
+            "idempotency_key",
+            "MemoryTurn._idempotency_key：run + 作用域 + 主题 + 内容 + 删除的编号的哈希",
+            "agent:3f9c0e…"
+          ]
+        ],
+        "example": "{\n  \"outcome\": \"applied\",\n  \"added\": {\"number\": 31, \"topic\": \"工具链\", …},\n  \"removed\": [12],\n  \"changed\": [{\"topic\": \"工具链\", \"version_before\": 40, \"version_after\": 41}],\n  \"revision\": \"<修订 uuid>\"\n}"
+      }
+    },
+    {
+      "from": "memoryRt",
+      "to": "db",
+      "description": "写入前 40 = 已知 40：已知推进到 41",
+      "technology": "SQL/TCP",
+      "details": {
+        "note": "写入前的版本不等于已知版本，说明中间有别人写过，已知保持原值，下次调模型会提示「有更新」。自己写入不重建常驻块：系统提示词不变，缓存保住。"
+      }
+    },
+    {
+      "from": "memoryRt",
+      "to": "native",
+      "description": "工具结果「已记住 #31，取代了 #12」",
+      "details": {
+        "note": "主题超过约 2000 字时，结果里再提示模型合并重复条目或拆成更细的主题。结果带一张卡片（artifact），控制台据此显示提示和撤销入口。",
+        "example": "{\"memory\": {\"action\": \"saved\", \"scope\": \"user\", \"topic\": \"工具链\", \"number\": 31,\n  \"content\": \"2026-11 起前端项目改用 bun\", \"removed\": [12], \"revision\": \"<修订 uuid>\"}}"
+      }
+    },
+    {
+      "from": "conv",
+      "to": "web",
+      "description": "推送工具结果，显示「已记住 #31［撤销］」",
+      "technology": "SSE",
+      "details": {
+        "note": "点「撤销」走 POST /v1/memories/revisions/{修订}/undo：记忆服务按修订反向执行（删除 #31、恢复 #12），Atlas 把用户的 epoch 加一，各会话下一轮刷新常驻块。"
+      }
+    }
+  ]
+}
+</script>
+
+<main>
+  <ul id="c4-report" hidden></ul>
+  <svg id="c4-diagram" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+  <section id="c4-details" hidden></section>
+  <h2>Diagram key</h2>
+  <svg id="c4-key" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+
+  <!-- 记忆的读写原理：静态图，不经上面的渲染器。场景同时序图：员工说「以后前端项目都用 bun」，模型加载「工具链」后取代 #12 -->
+  <section id="principle">
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+      <defs>
+        <marker id="pr-a" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#444"/></marker>
+        <marker id="pr-h" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#d9480f"/></marker>
+        <marker id="pr-m" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#bbb"/></marker>
+      </defs>
+    </svg>
+
+    <h2>记忆的读写原理</h2>
+    <p>一句话：<b>读</b>分两条路：每次都要用的记忆放进系统提示词里的常驻块，其余的由模型看主题目录、按需整块加载，不做语义检索。常驻块按会话存成快照，只在缓存本来就会失效、或用户明确操作过时才重建，保住前缀缓存。<b>写</b>也分两条路：对话中由模型调 save_memory，当轮生效、当场可撤销；漏记的由会话后补记补上。两条路都遵守同一条规则：<b>写之前必须看过目标主题的最新版本</b>。读和写靠同一张版本表串起来：Atlas 为每个会话记下模型在上下文里看到的各主题是哪个版本，只和记忆服务给的版本号比，不比内容。下面五张图按时间顺序，场景同上面的时序图（本轮 08:15，上一次回复在 08:13）。橙色是这次实际走的路，灰色虚线是没走的分支。记忆服务内部怎么判定一次写入，见 <code>c4-model/memory/dynamic/dynamic-write.html</code> 的「记忆原理」。</p>
+
+    <h3>图 1　记忆进上下文的三个位置，和 Atlas 记着的状态</h3>
+    <svg width="1240" viewBox="0 0 1240 440" role="img" aria-label="记忆进上下文的三个位置">
+      <rect class="node" x="20" y="30" width="580" height="190"/>
+      <rect class="head" x="21" y="31" width="578" height="30"/>
+      <text class="t-head" x="34" y="51">系统提示词（每轮一样，才能命中前缀缓存）</text>
+      <line class="sep" x1="20" y1="61" x2="600" y2="61"/>
+      <text class="t-lab" x="34" y="86">智能体的系统提示词、工具说明</text>
+      <line class="sep" x1="20" y1="101" x2="600" y2="101"/>
+      <text class="t-lab" x="34" y="126">持久指令：平台 → 用户 → 工作区</text>
+      <line class="sep" x1="20" y1="141" x2="600" y2="141"/>
+      <rect class="gap" x="28" y="147" width="564" height="66" rx="3"/>
+      <text class="t-hot b" x="40" y="172">&lt;memory&gt; 常驻块</text>
+      <text x="40" y="198">主题目录（编码、描述、大小）+ 常驻主题的全部条目，每条带 #编号</text>
+
+      <rect class="node" x="20" y="240" width="580" height="112"/>
+      <rect class="head" x="21" y="241" width="578" height="30"/>
+      <text class="t-head" x="34" y="261">对话历史（messages，随消息落库）</text>
+      <line class="sep" x1="20" y1="271" x2="600" y2="271"/>
+      <text class="t-key" x="34" y="293">user</text>
+      <text x="100" y="293">以后前端项目都用 bun</text>
+      <text class="t-key" x="34" y="318">tool</text>
+      <text class="hot" x="100" y="318">load_memory → 主题 [用户 · 工具链] 共 3 条：#12 #19 #26</text>
+      <text class="t-key" x="34" y="343">tool</text>
+      <text x="100" y="343">save_memory → 已记住 #31（用户 · 工具链），取代了 #12</text>
+
+      <rect class="gap" x="20" y="372" width="580" height="56" rx="3"/>
+      <text class="t-hot b" x="34" y="395">请求末尾：&lt;system-reminder name="memory_updates"&gt;</text>
+      <text class="t-lab" x="34" y="417">只列在本会话之外变过的主题，不带内容；只进这一次请求，不落库</text>
+
+      <path class="e-link" d="M720 92 H660 V180 H596" marker-end="url(#pr-h)"/>
+      <text class="t-hot mid" x="690" y="84">原样拼接</text>
+
+      <rect class="node" x="720" y="30" width="500" height="181"/>
+      <rect class="head" x="721" y="31" width="498" height="30"/>
+      <text class="t-head" x="734" y="51">thread_memory（每个会话一行）</text>
+      <line class="sep" x1="720" y1="61" x2="1220" y2="61"/>
+      <text class="t-key" x="734" y="83">snapshot</text>
+      <text x="880" y="83">常驻块文本 + 各主题版本 + 刷新依据</text>
+      <line class="sep" x1="720" y1="91" x2="1220" y2="91"/>
+      <text class="t-key" x="734" y="113">known</text>
+      <text x="880" y="113">沟通偏好 23 · 编码-java 15</text>
+      <line class="sep" x1="720" y1="121" x2="1220" y2="121"/>
+      <text class="t-key" x="734" y="143">registered_at</text>
+      <text x="880" y="143">实例登记成功的时刻</text>
+      <line class="sep" x1="720" y1="151" x2="1220" y2="151"/>
+      <text class="t-key" x="734" y="173">backfill_upto</text>
+      <text x="880" y="173">补记处理到哪条消息</text>
+      <line class="sep" x1="720" y1="181" x2="1220" y2="181"/>
+      <text class="t-key" x="734" y="203">backfill_seen</text>
+      <text x="880" y="203">上次补记时会话的 updated_at</text>
+
+      <rect class="node" x="720" y="230" width="500" height="91"/>
+      <rect class="head" x="721" y="231" width="498" height="30"/>
+      <text class="t-head" x="734" y="251">memory_user_setting（每个用户一行）</text>
+      <line class="sep" x1="720" y1="261" x2="1220" y2="261"/>
+      <text class="t-key" x="734" y="283">paused</text>
+      <text x="880" y="283">暂停写入：两条写入路径都不写，已有的照常读</text>
+      <line class="sep" x1="720" y1="291" x2="1220" y2="291"/>
+      <text class="t-key" x="734" y="313">epoch</text>
+      <text x="880" y="313">记忆页每操作一次 +1：各会话下一轮刷新常驻块</text>
+
+      <rect class="node" x="720" y="340" width="500" height="88"/>
+      <rect class="head" x="721" y="341" width="498" height="30"/>
+      <text class="t-head" x="734" y="361">记忆服务（同级服务，事实源）</text>
+      <line class="sep" x1="720" y1="371" x2="1220" y2="371"/>
+      <text x="734" y="394">主题目录：沟通偏好 v23 · 工具链 v40 · 编码-java v17</text>
+      <text class="t-lab" x="734" y="416">Atlas 本地只存快照和版本号，条目以记忆服务为准</text>
+
+      <g class="badge"><circle cx="600" cy="147" r="10"/><text x="600" y="151">1</text></g>
+      <g class="badge"><circle cx="600" cy="312" r="10"/><text x="600" y="316">2</text></g>
+      <g class="badge"><circle cx="600" cy="372" r="10"/><text x="600" y="376">3</text></g>
+      <g class="badge"><circle cx="1220" cy="106" r="10"/><text x="1220" y="110">4</text></g>
+      <g class="badge"><circle cx="1220" cy="276" r="10"/><text x="1220" y="280">5</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>常驻块在系统提示词里，排在持久指令之后，原样取自快照（<code>snapshot.block</code>），不放时间、计数这类每轮都变的东西。系统提示词一变，后面整段对话历史的前缀缓存就全部失效，所以它只在该刷新时才变（图 2）。可写的主会话在它后面再接一段写入指引。</li>
+      <li><span class="n">2</span>按需加载和写入的结果是普通的工具结果，留在对话历史里，随消息落库；会话压缩后就没了，需要时重新加载。</li>
+      <li><span class="n">3</span>更新提示附在请求末尾，每次调模型前现取，只列主题不带内容，只有几十个 token，不影响前面的缓存。</li>
+      <li><span class="n">4</span><code>thread_memory</code> 随会话存库、不放进程内存：run 挂起后在另一个实例续跑、被接管，快照和已知版本都接得上。<code>known</code> 记的是模型在上下文里看到的各主题版本：常驻块里的，加上历史里加载、写入的结果。本例中「编码-java」是本会话早先加载过的。</li>
+      <li><span class="n">5</span><code>memory_user_setting</code> 是用户级的：暂停只停写入，已有的记忆照常常驻、照常加载；用户在记忆页里撤销、更正、删除、恢复、改主题，epoch 都会加一，让各会话的常驻块在下一轮刷新。</li>
+    </ol>
+
+    <h3>图 2　读 · Run 开始：常驻块沿用快照还是重建</h3>
+    <svg width="1240" viewBox="0 0 1240 430" role="img" aria-label="Run 开始：常驻块沿用快照还是重建">
+      <rect class="node" x="20" y="50" width="190" height="60" rx="4"/>
+      <text class="t-name" x="115" y="76">读记忆状态</text>
+      <text class="t-sub" x="115" y="96">thread_memory · epoch</text>
+      <path class="e-hot" d="M210 80 H238" marker-end="url(#pr-h)"/>
+      <rect class="node" x="240" y="50" width="200" height="60" rx="4"/>
+      <text class="t-name" x="340" y="76">列主题目录</text>
+      <text class="t-sub" x="340" y="96">GET …/topics → 各主题版本</text>
+      <path class="e-hot" d="M440 80 H478" marker-end="url(#pr-h)"/>
+      <polygon class="node" points="480,80 560,38 640,80 560,122"/>
+      <text class="t-name" x="560" y="77">该刷新</text>
+      <text class="t-name" x="560" y="96">常驻块吗？</text>
+      <path class="e-hot" d="M640 80 H688" marker-end="url(#pr-h)"/>
+      <text class="t-hot mid" x="664" y="72">否</text>
+      <rect class="node" x="690" y="50" width="200" height="60" rx="4"/>
+      <text class="t-name" x="790" y="76">沿用快照</text>
+      <text class="t-sub" x="790" y="96">常驻块一个字不变</text>
+      <path class="e-hot" d="M890 80 H918" marker-end="url(#pr-h)"/>
+      <rect class="node" x="920" y="50" width="300" height="60" rx="4"/>
+      <text class="t-name" x="1070" y="76">交出这一段的记忆</text>
+      <text class="t-sub" x="1070" y="96">常驻块 · 更新提示来源 · 记忆工具</text>
+
+      <path class="e-mute" d="M340 110 V140 H130 V148" marker-end="url(#pr-m)"/>
+      <text class="t-mute" x="352" y="132">失败</text>
+      <rect class="ghost" x="20" y="150" width="220" height="56" rx="4"/>
+      <text class="t-ghost mid" x="130" y="174">本轮不用记忆</text>
+      <text class="t-mute mid" x="130" y="194">不加载、不写入，对话照常</text>
+
+      <path class="e-mute" d="M560 122 V150 H900 V168" marker-end="url(#pr-m)"/>
+      <text class="t-mute" x="572" y="144">是</text>
+      <rect class="ghost" x="580" y="170" width="640" height="112" rx="4"/>
+      <text class="t-ghost" x="596" y="194">重建常驻块（本例没走）</text>
+      <text class="t-mute" x="596" y="220">每个常驻主题：版本和快照里一样 → 沿用快照里的条目；变了 → 重新加载</text>
+      <text class="t-mute" x="596" y="244">常驻总预算 6000 字：放不下的常驻主题改为按需，目录里标出来</text>
+      <text class="t-mute" x="596" y="268">写回 snapshot；首次、压缩后已知版本重置为常驻主题的版本，否则保留</text>
+
+      <rect class="node" x="20" y="226" width="540" height="190"/>
+      <rect class="head" x="21" y="227" width="538" height="30"/>
+      <text class="t-head" x="34" y="247">判据（按顺序，命中一条就重建）</text>
+      <line class="sep" x1="20" y1="257" x2="560" y2="257"/>
+      <text class="t-key" x="34" y="278">续跑段（resume）</text>
+      <text x="230" y="278">永不重建：同一个 run 的系统提示词不变</text>
+      <line class="sep" x1="20" y1="283" x2="560" y2="283"/>
+      <text class="t-key" x="34" y="304">还没有快照</text>
+      <text x="230" y="304">initial</text>
+      <line class="sep" x1="20" y1="309" x2="560" y2="309"/>
+      <text class="t-key" x="34" y="330">会话压缩过</text>
+      <text x="230" y="330">compaction：历史已改写，缓存本来就失效</text>
+      <line class="sep" x1="20" y1="335" x2="560" y2="335"/>
+      <text class="t-key" x="34" y="356">作用域变了</text>
+      <text x="230" y="356">scopes</text>
+      <line class="sep" x1="20" y1="361" x2="560" y2="361"/>
+      <text class="t-key" x="34" y="382">epoch 变了</text>
+      <text x="230" y="382">user：用户在记忆页操作过，下一轮必须生效</text>
+      <line class="sep" x1="20" y1="387" x2="560" y2="387"/>
+      <text class="t-key" x="34" y="408">距上次回复超过 5 分钟</text>
+      <text class="hot" x="230" y="408">idle：缓存已过期。本例 2 分钟，不重建</text>
+
+      <g class="badge"><circle cx="210" cy="50" r="10"/><text x="210" y="54">1</text></g>
+      <g class="badge"><circle cx="440" cy="50" r="10"/><text x="440" y="54">2</text></g>
+      <g class="badge"><circle cx="560" cy="38" r="10"/><text x="560" y="42">3</text></g>
+      <g class="badge"><circle cx="1220" cy="170" r="10"/><text x="1220" y="174">4</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>每一段 run 开始时组装一次（续跑段也是）：读会话的记忆状态和用户设置。会话还没登记过实例（建会话时登记失败），就在这里补登记。</li>
+      <li><span class="n">2</span>列主题目录，拿到每个主题的当前版本、大小、是否常驻。这一步失败（记忆服务不可用、被拒），本轮就不用记忆：不加载、不写入，对话照常——记忆不能成为会话的硬依赖。目录同时留作「本轮的服务端版本」，更新提示和加载都拿它比；Run 进行中不再列。</li>
+      <li><span class="n">3</span>判据都是「缓存本来就会失效」或「用户明确操作过」的时机，在这些时候重建不额外丢缓存。缓存有效期取 <code>prompt_cache_ttl</code>（默认 5 分钟）。Agent 在本会话里自己写入不触发重建：写入结果已经在对话历史里。</li>
+      <li><span class="n">4</span>重建也不全量重拉：版本号和快照里一样的常驻主题，直接沿用快照里的条目。单个主题有上限不代表常驻总量有上限，所以还有一个常驻总预算（<code>memory_resident_budget_chars</code>，6000 字）。</li>
+    </ol>
+
+    <h3>图 3　读 · 版本表：模型看到的是不是最新</h3>
+    <svg width="1240" viewBox="0 0 1240 410" role="img" aria-label="版本表">
+      <rect class="node" x="20" y="30" width="600" height="121"/>
+      <rect class="head" x="21" y="31" width="598" height="30"/>
+      <text class="t-head" x="34" y="51">本轮开始时</text>
+      <text class="t-key" x="160" y="51">已知（known）</text>
+      <text class="t-key" x="290" y="51">本轮目录</text>
+      <text class="t-key" x="400" y="51">更新提示</text>
+      <line class="sep" x1="20" y1="61" x2="620" y2="61"/>
+      <text x="34" y="83">沟通偏好</text>
+      <text x="160" y="83">23</text>
+      <text x="290" y="83">23</text>
+      <text class="t-lab" x="400" y="83">一致，不提示</text>
+      <line class="sep" x1="20" y1="91" x2="620" y2="91"/>
+      <text x="34" y="113">工具链</text>
+      <text x="160" y="113">—（没看过）</text>
+      <text x="290" y="113">40</text>
+      <text class="t-lab" x="400" y="113">快照目录里有，不提示</text>
+      <line class="sep" x1="20" y1="121" x2="620" y2="121"/>
+      <text x="34" y="143">编码-java</text>
+      <text x="160" y="143">15</text>
+      <text class="hot b" x="290" y="143">17</text>
+      <text class="t-hot" x="400" y="143">别的会话写过 → 有更新</text>
+
+      <path class="e-link" d="M620 136 H658" marker-end="url(#pr-h)"/>
+      <rect class="gap" x="660" y="30" width="560" height="121" rx="3"/>
+      <text class="t-hot b" x="676" y="54">请求末尾（每次调模型前现取）</text>
+      <text x="676" y="80">&lt;system-reminder name="memory_updates"&gt;</text>
+      <text x="676" y="102">以下记忆主题在本会话之外有变化……请先 load_memory 加载：</text>
+      <text class="hot b" x="676" y="124">- 用户 · 编码-java：有更新</text>
+      <text x="676" y="144">&lt;/system-reminder&gt;</text>
+
+      <rect class="node" x="20" y="190" width="285" height="151"/>
+      <rect class="head" x="21" y="191" width="283" height="30"/>
+      <text class="t-head" x="34" y="211">每次调模型前</text>
+      <line class="sep" x1="20" y1="221" x2="305" y2="221"/>
+      <text class="t-lab" x="34" y="243">已知 = 当前：不提示</text>
+      <line class="sep" x1="20" y1="251" x2="305" y2="251"/>
+      <text class="t-hot" x="34" y="273">已知 ≠ 当前：「有更新」</text>
+      <line class="sep" x1="20" y1="281" x2="305" y2="281"/>
+      <text class="t-lab" x="34" y="303">没看过、快照目录里也没有：「新主题」</text>
+      <line class="sep" x1="20" y1="311" x2="305" y2="311"/>
+      <text class="t-lab" x="34" y="333">看过、目录里没了：「已拆分或删除」</text>
+
+      <path class="e-hot" d="M305 266 H323" marker-end="url(#pr-h)"/>
+      <rect class="node" x="325" y="190" width="285" height="151"/>
+      <rect class="head" x="326" y="191" width="283" height="30"/>
+      <text class="t-head" x="339" y="211">load_memory(工具链)</text>
+      <line class="sep" x1="325" y1="221" x2="610" y2="221"/>
+      <text class="t-lab" x="339" y="243">已知 = 当前：</text>
+      <text class="t-lab" x="339" y="263">只回「已在上下文中，没有变化」</text>
+      <line class="sep" x1="325" y1="281" x2="610" y2="281"/>
+      <text class="t-hot" x="339" y="303">没看过 / 不一致：返回全部条目，</text>
+      <text class="t-hot" x="339" y="323">已知记成当前的 40</text>
+
+      <path class="e-hot" d="M610 266 H628" marker-end="url(#pr-h)"/>
+      <rect class="node" x="630" y="190" width="285" height="151"/>
+      <rect class="head" x="631" y="191" width="283" height="30"/>
+      <text class="t-head" x="644" y="211">save_memory(工具链)</text>
+      <line class="sep" x1="630" y1="221" x2="915" y2="221"/>
+      <text class="t-hot" x="644" y="243">先加载，已知 40 = 当前 40：</text>
+      <text class="t-hot" x="644" y="263">写入（图 4）</text>
+      <line class="sep" x1="630" y1="281" x2="915" y2="281"/>
+      <text class="t-lab" x="644" y="303">没看过 / 不一致：不写，交回</text>
+      <text class="t-lab" x="644" y="323">最新条目，已知记成当前的</text>
+
+      <path class="e-hot" d="M915 266 H933" marker-end="url(#pr-h)"/>
+      <rect class="node" x="935" y="190" width="285" height="151"/>
+      <rect class="head" x="936" y="191" width="283" height="30"/>
+      <text class="t-head" x="949" y="211">写入之后（changed）</text>
+      <line class="sep" x1="935" y1="221" x2="1220" y2="221"/>
+      <text class="t-hot" x="949" y="243">写入前 40 = 已知 40：</text>
+      <text class="t-hot" x="949" y="263">已知推进到 41</text>
+      <line class="sep" x1="935" y1="281" x2="1220" y2="281"/>
+      <text class="t-lab" x="949" y="303">写入前 ≠ 已知（中间有人写过）：</text>
+      <text class="t-lab" x="949" y="323">已知不动，下次算「有更新」</text>
+
+      <text class="t-lab" x="20" y="372">已知版本一变就写回 thread_memory.known。会话压缩后常驻块重建，已知重置为常驻主题的版本；按需加载过的主题从表里去掉，用到时重新加载。</text>
+      <text class="t-lab" x="20" y="396">Run 开始以后别处的更新，要到下一个 Run 列目录时才提示；写前的检查不受影响，每次保存都会重新加载。</text>
+
+      <g class="badge"><circle cx="620" cy="46" r="10"/><text x="620" y="50">1</text></g>
+      <g class="badge"><circle cx="1220" cy="46" r="10"/><text x="1220" y="50">2</text></g>
+      <g class="badge"><circle cx="610" cy="190" r="10"/><text x="610" y="194">3</text></g>
+      <g class="badge"><circle cx="915" cy="190" r="10"/><text x="915" y="194">4</text></g>
+      <g class="badge"><circle cx="1220" cy="190" r="10"/><text x="1220" y="194">5</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>Atlas 不比内容，只比记忆服务给的版本号：版本号在实例锁里分配、只增不减，列一次目录就知道哪些主题变了。本轮开始时：「沟通偏好」一致；「工具链」本会话没看过，但它在常驻快照的目录里，模型知道有这个主题，不提示；「编码-java」本会话早先加载过 15，之后在别的会话里被写成 17。</li>
+      <li><span class="n">2</span>于是请求末尾附一行「有更新」，要不要重新加载由模型决定；常驻块不动，保住缓存。模型重新加载过、或常驻块重建之后，提示里就不再列它。</li>
+      <li><span class="n">3</span>load_memory：「工具链」没看过 → 返回全部 3 条，已知记成 40 并存库。之后再加载一次、版本没变，就只回一句「已在上下文中，没有变化」，不重复占上下文。</li>
+      <li><span class="n">4</span>save_memory：写前一律先加载，已知和当前一致才写。这样冲突判断总是基于目标主题最新、完整的内容；没看过就先把内容交给模型，这一次不写。</li>
+      <li><span class="n">5</span>写入之后按返回的 <code>changed</code> 推进：写入前的版本等于已知，说明中间没人写过，上下文里的内容加上这次写入就是最新，推进到 41；不等就不动，下一次就会被当作「有更新」。</li>
+    </ol>
+
+    <h3>图 4　写 · 对话中存：save_memory</h3>
+    <svg width="1240" viewBox="0 0 1240 430" role="img" aria-label="对话中存">
+      <rect class="node" x="20" y="50" width="180" height="60" rx="4"/>
+      <text class="t-name" x="110" y="76">save_memory</text>
+      <text class="t-sub" x="110" y="96">工具链 · replaces [12]</text>
+      <path class="e-hot" d="M200 80 H223" marker-end="url(#pr-h)"/>
+      <rect class="node" x="225" y="50" width="170" height="60" rx="4"/>
+      <text class="t-name" x="310" y="76">守卫</text>
+      <text class="t-sub" x="310" y="96">暂停？本轮写满 8 次？</text>
+      <path class="e-hot" d="M395 80 H418" marker-end="url(#pr-h)"/>
+      <text class="t-hot mid" x="407" y="72">否</text>
+      <rect class="node" x="420" y="50" width="200" height="60" rx="4"/>
+      <text class="t-name" x="520" y="76">加载目标主题</text>
+      <text class="t-sub" x="520" y="96">GET …/topics/工具链 → v40</text>
+      <path class="e-hot" d="M620 80 H678" marker-end="url(#pr-h)"/>
+      <polygon class="node" points="680,80 760,38 840,80 760,122"/>
+      <text class="t-name" x="760" y="77">已知</text>
+      <text class="t-name" x="760" y="96">= 40？</text>
+      <path class="e-hot" d="M840 80 H898" marker-end="url(#pr-h)"/>
+      <text class="t-hot mid" x="869" y="72">是</text>
+      <rect class="node" x="900" y="50" width="320" height="60" rx="4"/>
+      <text class="t-name" x="1060" y="76">发写入</text>
+      <text class="t-sub" x="1060" y="96">POST …/writes（服务端判定见记忆服务的原理图）</text>
+
+      <path class="e-mute" d="M310 110 V138" marker-end="url(#pr-m)"/>
+      <rect class="ghost" x="225" y="140" width="170" height="56" rx="4"/>
+      <text class="t-ghost mid" x="310" y="164">不写</text>
+      <text class="t-mute mid" x="310" y="184">工具结果里说明原因</text>
+      <path class="e-mute" d="M520 110 V138" marker-end="url(#pr-m)"/>
+      <rect class="ghost" x="420" y="140" width="200" height="56" rx="4"/>
+      <text class="t-ghost mid" x="520" y="164">主题不存在</text>
+      <text class="t-mute mid" x="520" y="184">给了描述就新建，接着写</text>
+      <path class="e-mute" d="M760 122 V138" marker-end="url(#pr-m)"/>
+      <rect class="ghost" x="660" y="140" width="200" height="56" rx="4"/>
+      <text class="t-ghost mid" x="760" y="164">不写，交回最新条目</text>
+      <text class="t-mute mid" x="760" y="184">已知记成当前的</text>
+
+      <path class="e-hot" d="M1060 110 V216 H110 V238" marker-end="url(#pr-h)"/>
+      <polygon class="node" points="30,280 110,240 190,280 110,320"/>
+      <text class="t-name" x="110" y="277">结果？</text>
+      <text class="t-sub" x="110" y="296">outcome</text>
+      <path class="e-hot" d="M190 280 H238" marker-end="url(#pr-h)"/>
+      <text class="t-hot mid" x="214" y="272">applied</text>
+      <rect class="node" x="240" y="250" width="220" height="60" rx="4"/>
+      <text class="t-name" x="350" y="276">推进已知版本</text>
+      <text class="t-sub" x="350" y="296">写入前 = 已知 → 写入后</text>
+      <path class="e-hot" d="M460 280 H488" marker-end="url(#pr-h)"/>
+      <rect class="node" x="490" y="250" width="300" height="60" rx="4"/>
+      <text class="t-name" x="640" y="276">工具结果交回模型</text>
+      <text class="t-sub" x="640" y="296">已记住 #31（用户 · 工具链），取代了 #12</text>
+      <path class="e-hot" d="M790 280 H818" marker-end="url(#pr-h)"/>
+      <rect class="node" x="820" y="250" width="400" height="60" rx="4"/>
+      <text class="t-name" x="1020" y="276">控制台：已记住 #31［撤销］</text>
+      <text class="t-sub" x="1020" y="296">工具结果带卡片（artifact）；撤销按修订反向执行</text>
+
+      <path class="e-mute" d="M110 320 V348" marker-end="url(#pr-m)"/>
+      <text class="t-mute" x="122" y="340">discarded</text>
+      <rect class="ghost" x="20" y="350" width="420" height="56" rx="4"/>
+      <text class="t-ghost mid" x="230" y="374">作废：要取代的条目已有更新的信息</text>
+      <text class="t-mute mid" x="230" y="394">已知里去掉这个主题，让模型先 load_memory 再判断</text>
+
+      <rect class="node" x="490" y="350" width="730" height="56"/>
+      <text class="t-head" x="504" y="372">写入带的东西</text>
+      <text x="504" y="394">关联主键 = 会话所属用户 · 时间 = 本轮发话的 08:15 · 来源 agent · 出处 {thread, run} · 幂等键</text>
+
+      <g class="badge"><circle cx="395" cy="50" r="10"/><text x="395" y="54">1</text></g>
+      <g class="badge"><circle cx="760" cy="38" r="10"/><text x="760" y="42">2</text></g>
+      <g class="badge"><circle cx="1220" cy="350" r="10"/><text x="1220" y="354">3</text></g>
+      <g class="badge"><circle cx="40" cy="316" r="10"/><text x="40" y="320">4</text></g>
+      <g class="badge"><circle cx="1220" cy="250" r="10"/><text x="1220" y="254">5</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>只有可写的主会话才挂 save_memory、forget_memory：智能体勾了「记忆」工具，而且不是子会话（子智能体只读，有常驻块和 load_memory）。守卫：用户暂停了写入、或本轮已写满 <code>memory_max_writes_per_run</code>（8）次，就不写；同一轮的写入在一把进程内的锁里排队。</li>
+      <li><span class="n">2</span>写前必看（图 3）：先加载，已知版本和当前版本一致才写；不一致就把最新条目交给模型，这一次不写。新建的主题是空的，直接算看过。</li>
+      <li><span class="n">3</span>关联主键由会话决定，不在工具参数里；调用记忆服务的用户也一律是会话所属用户，数字员工代用户跑时也一样。时间取本轮用户发话的时间，不取调用的时间。幂等键由 run、作用域、主题、内容、删除的编号算出：网络重试、run 被接管后重放同一个调用，服务端只写一次。</li>
+      <li><span class="n">4</span>作废：要取代的条目在服务端已有更晚的信息（比如用户刚在别的会话里改过）。不写任何东西，已知版本里去掉这个主题，让模型先重新加载再判断。</li>
+      <li><span class="n">5</span>写成了：按 <code>changed</code> 推进已知版本；工具结果告诉模型「已记住 #31，取代了 #12」，主题超过约 2000 字（<code>memory_topic_max_chars</code>）时再提示它合并重复条目或拆成更细的主题。结果带一张卡片，控制台据此显示「已记住 #31［撤销］」；撤销后 epoch 加一，下一轮刷新常驻块。forget_memory 是只删除、不新增的写入，走同一条路。</li>
+    </ol>
+
+    <h3>图 5　写 · 会话后补记：补上漏记的，拆小超限的主题</h3>
+    <svg width="1240" viewBox="0 0 1240 440" role="img" aria-label="会话后补记">
+      <rect class="node" x="20" y="44" width="200" height="72" rx="4"/>
+      <text class="t-name" x="120" y="70">维护者扫描</text>
+      <text class="t-sub" x="120" y="90">每 60 秒一次</text>
+      <text class="t-sub" x="120" y="106">本例 08:47 扫到这个会话</text>
+      <path class="e-hot" d="M220 80 H248" marker-end="url(#pr-h)"/>
+      <rect class="node" x="250" y="44" width="240" height="72" rx="4"/>
+      <text class="t-name" x="370" y="70">挑到期的会话</text>
+      <text class="t-sub" x="370" y="90">开着记忆的主会话，空闲 30 分钟</text>
+      <text class="t-sub" x="370" y="106">或已归档，之后有变化，没在跑</text>
+      <path class="e-hot" d="M490 80 H518" marker-end="url(#pr-h)"/>
+      <rect class="node" x="520" y="44" width="200" height="72" rx="4"/>
+      <text class="t-name" x="620" y="70">取新增正文</text>
+      <text class="t-sub" x="620" y="90">backfill_upto 之后的</text>
+      <text class="t-sub" x="620" y="106">用户、助手消息，不含工具</text>
+      <path class="e-hot" d="M720 80 H748" marker-end="url(#pr-h)"/>
+      <rect class="node" x="750" y="44" width="470" height="72" rx="4"/>
+      <text class="t-name" x="985" y="70">抽取：一次 LLM 调用（服务模型「记忆补记」）</text>
+      <text class="t-sub" x="985" y="90">输入新增正文 + 现有记忆 + 本会话已写入的</text>
+      <text class="t-sub" x="985" y="106">输出要写的条目，每条带所依据的那条用户消息</text>
+
+      <path class="e-hot" d="M985 116 V196 H130 V218" marker-end="url(#pr-h)"/>
+      <text class="t-hot end" x="973" y="146">本例找到一条：用户 08:05 说「我习惯先写测试再写实现」</text>
+      <text class="t-hot end" x="973" y="166">Agent 当时没记</text>
+
+      <rect class="node" x="20" y="220" width="220" height="72" rx="4"/>
+      <text class="t-name" x="130" y="246">按取代限制过滤</text>
+      <text class="t-sub" x="130" y="266">用户亲自写的、本会话 Agent</text>
+      <text class="t-sub" x="130" y="282">刚写的，不能取代</text>
+      <path class="e-hot" d="M240 256 H268" marker-end="url(#pr-h)"/>
+      <rect class="node" x="270" y="220" width="230" height="72" rx="4"/>
+      <text class="t-name" x="385" y="246">写入（来源 backfill）</text>
+      <text class="t-sub" x="385" y="266">时间取依据消息的 08:05，</text>
+      <text class="t-sub" x="385" y="282">不取执行的 08:47</text>
+      <path class="e-hot" d="M500 256 H528" marker-end="url(#pr-h)"/>
+      <rect class="node" x="530" y="220" width="220" height="72" rx="4"/>
+      <text class="t-name" x="640" y="246">拆分超限的主题</text>
+      <text class="t-sub" x="640" y="266">分组在锁外（一次 LLM），</text>
+      <text class="t-sub" x="640" y="282">提交时确认版本没变</text>
+      <path class="e-hot" d="M750 256 H778" marker-end="url(#pr-h)"/>
+      <rect class="node" x="780" y="220" width="200" height="72" rx="4"/>
+      <text class="t-name" x="880" y="246">推进进度</text>
+      <text class="t-sub" x="880" y="266">backfill_upto</text>
+      <text class="t-sub" x="880" y="282">backfill_seen</text>
+      <path class="e-hot" d="M980 256 H1008" marker-end="url(#pr-h)"/>
+      <rect class="node" x="1010" y="220" width="210" height="72" rx="4"/>
+      <text class="t-name" x="1115" y="246">留一条补记结果</text>
+      <text class="t-sub" x="1115" y="266">下次打开会话时提示</text>
+      <text class="t-sub" x="1115" y="282">「补记了 1 条」，可撤销</text>
+
+      <path class="e-mute" d="M130 292 V318" marker-end="url(#pr-m)"/>
+      <rect class="ghost" x="20" y="320" width="220" height="56" rx="4"/>
+      <text class="t-ghost mid" x="130" y="344">冲突受保护条目</text>
+      <text class="t-mute mid" x="130" y="364">这一条整条放弃</text>
+      <path class="e-mute" d="M385 292 V318" marker-end="url(#pr-m)"/>
+      <rect class="ghost" x="270" y="320" width="230" height="56" rx="4"/>
+      <text class="t-ghost mid" x="385" y="344">作废</text>
+      <text class="t-mute mid" x="385" y="364">已有更晚的信息，放弃这一条</text>
+      <path class="e-mute" d="M640 292 V318" marker-end="url(#pr-m)"/>
+      <rect class="ghost" x="530" y="320" width="220" height="56" rx="4"/>
+      <text class="t-ghost mid" x="640" y="344">提交被拒</text>
+      <text class="t-mute mid" x="640" y="364">期间有写入或已被拆，下次再拆</text>
+
+      <text class="t-lab" x="20" y="404">暂停期间不写入，进度照样推进（暂停时说的话，恢复后也不补）。失败不推进进度，下一轮扫描重试；连续失败 3 次就等会话有新变化再试。</text>
+      <text class="t-lab" x="20" y="426">每个会话先拿一把 Redis 锁，交接维护者时两边不会同时补同一个会话。</text>
+
+      <g class="badge"><circle cx="490" cy="44" r="10"/><text x="490" y="48">1</text></g>
+      <g class="badge"><circle cx="720" cy="44" r="10"/><text x="720" y="48">2</text></g>
+      <g class="badge"><circle cx="1220" cy="44" r="10"/><text x="1220" y="48">3</text></g>
+      <g class="badge"><circle cx="240" cy="220" r="10"/><text x="240" y="224">4</text></g>
+      <g class="badge"><circle cx="750" cy="220" r="10"/><text x="750" y="224">5</text></g>
+      <g class="badge"><circle cx="1220" cy="220" r="10"/><text x="1220" y="224">6</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>维护者每 60 秒（<code>memory_backfill_scan_s</code>）扫一批到期的会话：开着记忆的主会话（子智能体的会话不补，里面没有用户本人说的话），空闲超过 30 分钟或已归档，上次补记之后有变化，而且没有在跑的 run。补记按会话做、不按 run 做：能看到完整过程，用户中途改口只记最终说法，也不会和对话中正在进行的写入撞上。</li>
+      <li><span class="n">2</span>只取上次补记之后新增的用户、助手正文，不含工具调用和工具结果（文件、网页里要求改记忆的话也就进不来）；太长只留最近的部分。没有用户的话、或总共不到 12 个字，就跳过抽取。</li>
+      <li><span class="n">3</span>一次 LLM 调用，用平台服务模型「记忆补记」。输入里有现有记忆（展开到 16000 字为止，没展开的主题不往里写）和本会话已经写入的记忆，所以只补缺的部分。宁缺毋滥：用户不在场，拿不准就不记。</li>
+      <li><span class="n">4</span>来源可信度从高到低是用户亲自 → Agent 写入 → 会话后补记，取代限制在代码里执行、不只靠提示词：用户亲自写的、本会话 Agent 刚写的不能取代，和它们冲突的那一条整条放弃（只做新增会留下两条矛盾的记忆）。写入时间取所依据的那条用户消息的时间，补记晚到也不会盖掉用户之后在别的会话里说的新情况；作废就放弃这一条。每次最多写 8 条。</li>
+      <li><span class="n">5</span>最后一步拆分超过约 2000 字的主题，抽取被跳过时也照常检查，不管主题是谁写满的。每个主题一次 LLM 分组，分组在锁外进行，不挡对话中的写入；提交时带上分组时看到的版本号，记忆服务确认没变才拆。拆分只移动条目，不合并、不删除，子主题沿用常驻标记。</li>
+      <li><span class="n">6</span>推进进度。写了或拆了东西就留一条补记结果，用户下次打开会话时提示「补记了 N 条」，每条都能查看、撤销。补记写入的东西，要等这些会话下一次刷新常驻块，或者 Run 开始时的更新提示，才会进到上下文里。</li>
+    </ol>
+
+    <h3>为什么这样做</h3>
+    <table>
+      <thead><tr><th>做法</th><th>为什么</th></tr></thead>
+      <tbody>
+        <tr><td>常驻 + 按需整块加载，不做语义检索</td><td>偏好类记忆和用户的提问在语义上并不接近，靠检索召回不到，但每次对话都要用；主题有上限，可以整块放进上下文、整块加载。代价是模型可能漏加载。</td></tr>
+        <tr><td>常驻块按会话存快照，只在缓存本来就会失效、或用户明确操作过时重建</td><td>常驻块在系统提示词里，内容一变，后面整段对话的前缀缓存就全部失效。</td></tr>
+        <tr><td>别处的更新只附提示，不改常驻块</td><td>提示只有几十个 token，附在请求末尾，不影响前缀缓存；要不要重新加载由模型决定。</td></tr>
+        <tr><td>比版本号，不比内容</td><td>版本号在记忆服务的实例锁里分配、只增不减，一次列目录就知道哪些主题变了；条目的时间是客户端给的，看不出主题变没变。</td></tr>
+        <tr><td>写前必看</td><td>写入方看到目标主题的全部条目，冲突判断才不会因为「没看到」而漏掉。服务端不知道客户端看过什么，所以这条由 Atlas 执行。</td></tr>
+        <tr><td>关联主键和调用用户都取会话所属用户，不进工具参数</td><td>一旦可以由模型指定，提示词注入就能读写别人的记忆；数字员工代用户跑时也取使用者本人，否则同一个数字员工的所有使用者会共用一份记忆。记忆服务还会按数据权限再校验一次。</td></tr>
+        <tr><td>快照、已知版本随会话存库</td><td>挂起后续跑、被接管的 run 可能落在另一个实例上。</td></tr>
+        <tr><td>记忆失败不让对话失败</td><td>记忆是增强，不是会话的硬依赖：登记、列目录失败时本轮不用记忆，下一轮再试。</td></tr>
+        <tr><td>两条写入路径：过程中存为主，补记为辅</td><td>用户明确要求的当轮生效、当场可撤销；主模型漏记的、不会主动调工具的智能体，由补记兜住。两条路径共用作用域、主题、取代限制、来源标记和撤销。</td></tr>
+        <tr><td>补记的时间取原消息的时间</td><td>补记晚到，记忆服务按时间晚的为准，不会盖掉用户之后在别的会话里说的新情况。</td></tr>
+        <tr><td>拆分放在补记里，分组在锁外</td><td>上限只有客户端知道；补记本来就在会话空闲后跑、本来就要调 LLM。调 LLM 期间不挡对话中的写入，提交时靠版本号确认主题没变。</td></tr>
+      </tbody>
+    </table>
+
+    <h3>和设计文档、组件图不一样的地方</h3>
+    <table>
+      <thead><tr><th>设计文档 / 组件图</th><th>现在的代码</th></tr></thead>
+      <tbody>
+        <tr><td>设计文档：用户、用户项目两个作用域</td><td>本期只接了「用户」作用域（<code>MemoryRuntime.scopes_for</code>），用户项目要等项目实体定了再接。</td></tr>
+        <tr><td>组件图里「记忆」的描述写的是「按需检索」</td><td>没有检索：按主题目录整块加载（load_memory）。</td></tr>
+      </tbody>
+    </table>
+  </section>
+</main>
+
+<script>
+(() => {
+  'use strict';
+  const FONT = '"Open Sans", "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
+  const INK = '#444444';
+  const LIFELINE = '#9a9a9a';
+  const SCOPE_COLOR = '#1168bd';
+  const PALETTE = {
+    person: ['#297e06', '#1a849c', '#6b8e23'],
+    system: ['#ed8609', '#bf101d', '#8411bd', '#5b6770', '#b8336a'],
+  };
+  const KIND_LABEL = { person: 'Person', system: 'Software System', container: 'Container', component: 'Component' };
+  const MAX_MESSAGES = 20;
+  const TXT = {
+    name: { size: 17, weight: 400, lh: 22 },
+    meta: { size: 12, weight: 400, lh: 16 },
+    msg: { size: 15, weight: 400, lh: 20 },
+    tech: { size: 12, weight: 400, lh: 16 },
+    bname: { size: 18, weight: 700, lh: 22 },
+    btype: { size: 12, weight: 700, lh: 16 },
+    key: { size: 13, weight: 400, lh: 18 },
+  };
+  const BOX_H = 52, ICON_H = 30, HEADER_H = 48, LABEL_W = 260, MIN_GAP = 70, SELF_W = 36, MARGIN = 50;
+
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const problems = [];
+  const fail = (msg) => problems.push({ level: 'error', msg });
+  const warn = (msg) => problems.push({ level: 'warn', msg });
+
+  const ctx = document.createElement('canvas').getContext('2d');
+  const measure = (s, st) => { ctx.font = `${st.weight} ${st.size}px ${FONT}`; return ctx.measureText(s).width; };
+
+  // 中文按字断行，英文按词断行；行首不放标点
+  const CJK = '\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef\u3000-\u303f';
+  const TOKEN = new RegExp(`[${CJK}]|[^\\s${CJK}]+|\\s+`, 'g');
+  const NO_LINE_START = /^[，。、；：！？）》」』,.;:!?)]$/;
+  function wrap(text, st, maxW) {
+    const lines = [];
+    for (const para of String(text || '').split('\n')) {
+      let line = '';
+      for (const tok of para.match(TOKEN) || []) {
+        if (/^\s+$/.test(tok)) { if (line) line += ' '; continue; }
+        const next = line + tok;
+        if (line.trim() && measure(next.trimEnd(), st) > maxW && !NO_LINE_START.test(tok)) {
+          lines.push(line.trimEnd());
+          line = tok;
+        } else {
+          line = next;
+        }
+      }
+      if (line.trim()) lines.push(line.trimEnd());
+    }
+    return lines;
+  }
+
+  // 行数不变的前提下收窄宽度，让各行长度接近，避免末行只剩一两个字
+  function wrapBalanced(text, st, maxW) {
+    const lines = wrap(text, st, maxW);
+    if (lines.length < 2) return lines;
+    let lo = maxW / 2, hi = maxW;
+    while (hi - lo > 4) {
+      const mid = (lo + hi) / 2;
+      if (wrap(text, st, mid).length > lines.length) lo = mid; else hi = mid;
+    }
+    return wrap(text, st, hi);
+  }
+
+  function node(tag, attrs, parent) {
+    const n = document.createElementNS(svgNS, tag);
+    for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+    parent.appendChild(n);
+    return n;
+  }
+  // top 是文字块上沿
+  function textLines(parent, lines, x, top, st, color, anchor = 'middle') {
+    const t = node('text', { x, y: top + st.lh / 2 + st.size * 0.35, 'text-anchor': anchor,
+      'font-family': FONT, 'font-size': st.size, 'font-weight': st.weight, fill: color }, parent);
+    lines.forEach((ln, i) => { node('tspan', { x, dy: i ? st.lh : 0 }, t).textContent = ln; });
+    return t;
+  }
+
+  // 参与者头：人员和数据库画图标 + 文字，其余画方框
+  const iconHead = (p) => p.kind === 'person' || (p.kind === 'container' && p.shape === 'database');
+  function headSize(p) {
+    const w = Math.max(measure(p.name, TXT.name), measure(p.meta, TXT.meta)) + 24;
+    return { w, h: iconHead(p) ? ICON_H + 4 + TXT.name.lh + TXT.meta.lh : BOX_H };
+  }
+  function drawHead(g, p, cx, top) {
+    const c = p.color;
+    let textTop = top + (BOX_H - TXT.name.lh - TXT.meta.lh) / 2;
+    if (p.kind === 'person') {
+      node('circle', { cx, cy: top + 8, r: 7, fill: '#fff', stroke: c, 'stroke-width': 1.8 }, g);
+      node('path', { d: `M${cx - 14} ${top + ICON_H} Q${cx - 14} ${top + 16} ${cx} ${top + 16} Q${cx + 14} ${top + 16} ${cx + 14} ${top + ICON_H} Z`, fill: '#fff', stroke: c, 'stroke-width': 1.8 }, g);
+      textTop = top + ICON_H + 4;
+    } else if (iconHead(p)) {
+      const rx = 17, ry = 5, y0 = top + ry, y1 = top + ICON_H - ry;
+      node('path', { d: `M${cx - rx} ${y0} V${y1} A${rx} ${ry} 0 0 0 ${cx + rx} ${y1} V${y0}`, fill: '#fff', stroke: c, 'stroke-width': 1.8 }, g);
+      node('ellipse', { cx, cy: y0, rx, ry, fill: '#fff', stroke: c, 'stroke-width': 1.8 }, g);
+      textTop = top + ICON_H + 4;
+    } else {
+      node('rect', { x: cx - p.size.w / 2, y: top, width: p.size.w, height: BOX_H, rx: 4, fill: '#fff', stroke: c, 'stroke-width': 1.6 }, g);
+    }
+    textLines(g, [p.name], cx, textTop, TXT.name, c);
+    textLines(g, [p.meta], cx, textTop + TXT.name.lh, TXT.meta, c);
+  }
+  function drawArrow(g, x0, x1, y) {
+    const dir = Math.sign(x1 - x0), L = 10, W = 7;
+    node('line', { x1: x0, y1: y, x2: x1 - dir * L, y2: y, stroke: INK, 'stroke-width': 1.6, 'stroke-dasharray': '8 5' }, g);
+    node('polygon', { points: `${x1},${y} ${x1 - dir * L},${y - W / 2} ${x1 - dir * L},${y + W / 2}`, fill: INK }, g);
+  }
+
+  function render() {
+    const model = JSON.parse(document.getElementById('c4-model').textContent);
+    if (model.title) document.title = model.title;
+    else fail('缺少 title（建议「Dynamic View: 系统名 - 场景」）');
+
+    // ---- 边界 ----
+    const bById = new Map();
+    for (const b of model.boundaries || []) {
+      if (!b.id) { fail(`边界 ${b.name || ''}：缺少 id`); continue; }
+      if (bById.has(b.id)) { fail(`边界 id 重复：${b.id}`); continue; }
+      if (!b.name || !b.type) fail(`边界 ${b.id}：name、type 都要写，type 如「Software System」「Container: Python / FastAPI」`);
+      bById.set(b.id, b);
+    }
+    const chain = (id) => {   // 从里到外的边界链
+      const out = [];
+      for (let cur = id; cur; cur = bById.get(cur) && bById.get(cur).in) {
+        if (!bById.has(cur) || out.includes(cur)) return null;
+        out.push(cur);
+      }
+      return out;
+    };
+    for (const b of bById.values()) {
+      if (b.in && !chain(b.id)) { fail(`边界 ${b.id}：in 指向不存在的边界，或者边界互相嵌套成了环`); b.broken = true; }
+    }
+
+    // ---- 参与者 ----
+    const pById = new Map();
+    const ps = [];
+    for (const p of model.participants || []) {
+      const who = p.id || p.name || '(未命名参与者)';
+      if (!p.id) { fail(`${who}：缺少 id`); continue; }
+      if (pById.has(p.id)) { fail(`参与者 id 重复：${p.id}`); continue; }
+      if (!KIND_LABEL[p.kind]) { fail(`${who}：kind 只能是 person / system / container / component`); continue; }
+      if (!p.name) fail(`${who}：缺少 name`);
+      if ((p.kind === 'container' || p.kind === 'component') && !p.technology) fail(`${who}：${p.kind} 缺少 technology`);
+      if (p.in && (!bById.has(p.in) || bById.get(p.in).broken)) { fail(`${who}：in 指向的边界 ${p.in} 不存在`); p.in = null; }
+      p.chain = p.in ? chain(p.in) : [];
+      p.meta = p.technology && (p.kind === 'container' || p.kind === 'component') ? `[${KIND_LABEL[p.kind]}: ${p.technology}]` : `[${KIND_LABEL[p.kind]}]`;
+      pById.set(p.id, p);
+      ps.push(p);
+    }
+    if (ps.length < 2) fail('至少要有两个参与者');
+    const assigned = new Map(), used = { person: 0, system: 0 };
+    for (const p of ps) {
+      if (p.color) continue;
+      if (p.kind === 'container' || p.kind === 'component' || (p.kind === 'system' && p.scope)) { p.color = SCOPE_COLOR; continue; }
+      const k = `${p.kind}:${p.tag || p.id}`;
+      if (!assigned.has(k)) assigned.set(k, PALETTE[p.kind][used[p.kind]++ % PALETTE[p.kind].length]);
+      p.color = assigned.get(k);
+    }
+    // 同一边界里的参与者在左右顺序上必须相邻，否则边界框会把别的参与者框进去
+    for (const b of bById.values()) {
+      const idx = ps.map((p, i) => (p.chain.includes(b.id) ? i : -1)).filter((i) => i >= 0);
+      b.members = idx.map((i) => ps[i]);
+      if (!idx.length) { fail(`边界「${b.name}」里没有任何参与者`); continue; }
+      if (idx[idx.length - 1] - idx[0] + 1 !== idx.length) fail(`边界「${b.name}」里的参与者在 participants 里不相邻，调整顺序`);
+    }
+
+    // ---- 消息 ----
+    const msgs = (model.messages || []).filter((m, i) => {
+      const who = `第 ${i + 1} 条消息（${m.from} → ${m.to}）`;
+      if (!pById.has(m.from) || !pById.has(m.to)) { fail(`${who}：端点 id 不存在`); return false; }
+      if (!m.description) fail(`${who}：缺少 description（写做什么）`);
+      const a = pById.get(m.from), b = pById.get(m.to);
+      const crossProcess = a.kind !== 'person' && b.kind !== 'person' && !(a.kind === 'component' && b.kind === 'component') && a !== b;
+      if (crossProcess && !m.technology) fail(`${who}：涉及 container 或软件系统，是跨进程交互，要写 technology`);
+      if (m.details !== undefined) {
+        const d = m.details;
+        const isText = (v) => typeof v === 'string';
+        if (!d || typeof d !== 'object' || Array.isArray(d)) {
+          fail(`${who}：details 要写成对象 { note, items, example }`);
+          m.details = undefined;
+        } else {
+          if (d.note !== undefined && !isText(d.note)) fail(`${who}：details.note 要写成字符串`);
+          if (d.example !== undefined && !isText(d.example)) fail(`${who}：details.example 要写成字符串，多行用 \\n`);
+          if (d.items !== undefined && !(Array.isArray(d.items) && d.items.every((r) => Array.isArray(r) && r.length === 3 && r.every(isText)))) {
+            fail(`${who}：details.items 的每一行要写成 [项, 来源, 样例] 三个字符串`);
+          }
+          if (!d.note && !d.example && !(Array.isArray(d.items) && d.items.length)) warn(`${who}：details 是空的，删掉或补上内容`);
+        }
+      }
+      m.n = i + 1;
+      return true;
+    });
+    if (!msgs.length) fail('至少要有一条消息');
+    if (msgs.length > MAX_MESSAGES) warn(`消息有 ${msgs.length} 条，超过 ${MAX_MESSAGES} 条：只画这个场景的关键交互，或者拆成几张图`);
+    for (const p of ps) {
+      if (!msgs.some((m) => m.from === p.id || m.to === p.id)) warn(`「${p.name}」没有参与任何消息：与这个场景无关就删掉`);
+    }
+
+    // ---- 横向：列间距按参与者宽度和消息标签宽度撑开 ----
+    for (const p of ps) p.size = headSize(p);
+    const index = new Map(ps.map((p, i) => [p.id, i]));
+    for (const m of msgs) {
+      m.lines = wrapBalanced(`${m.n}: ${m.description || ''}${m.details ? ' ⓘ' : ''}`, TXT.msg, LABEL_W);
+      m.tech = m.technology ? `[${m.technology}]` : '';
+      m.labelW = Math.max(...m.lines.map((s) => measure(s, TXT.msg)), m.tech ? measure(m.tech, TXT.tech) : 0);
+      m.labelH = m.lines.length * TXT.msg.lh + (m.tech ? TXT.tech.lh : 0);
+    }
+    const gaps = ps.slice(1).map((p, i) => (ps[i].size.w + p.size.w) / 2 + MIN_GAP);
+    let rightExtra = 0;
+    const spanOf = (m) => Math.abs(index.get(m.to) - index.get(m.from));
+    for (const m of [...msgs].sort((a, b) => spanOf(a) - spanOf(b))) {
+      const i = index.get(m.from), j = index.get(m.to);
+      if (i === j) {   // 自调用：标签在生命线右边，占下一列间距
+        const need = SELF_W + 16 + m.labelW + 20;
+        if (i < gaps.length) gaps[i] = Math.max(gaps[i], need); else rightExtra = Math.max(rightExtra, need);
+        continue;
+      }
+      const lo = Math.min(i, j), hi = Math.max(i, j);
+      const span = gaps.slice(lo, hi).reduce((s, g) => s + g, 0);
+      const need = m.labelW + 40;
+      if (span < need) for (let k = lo; k < hi; k++) gaps[k] += (need - span) / (hi - lo);
+    }
+    let x = 0;
+    ps.forEach((p, i) => { if (i) x += gaps[i - 1]; p.x = x; });
+
+    // ---- 纵向：边界标题 → 参与者头 → 消息 → 底部参与者头 ----
+    const depthOf = (b) => chain(b.id).length;
+    const live = [...bById.values()].filter((b) => !b.broken && b.members && b.members.length);
+    const maxDepth = Math.max(0, ...live.map(depthOf));
+    const headTop = maxDepth * HEADER_H + (maxDepth ? 10 : 0);
+    const headH = Math.max(...ps.map((p) => p.size.h), BOX_H);
+    let y = headTop + headH + 24;
+    for (const m of msgs) {
+      m.labelTop = y;
+      m.y = y + m.labelH + 8;
+      y = m.y + (m.from === m.to ? 46 : 26);
+    }
+    const bottomTop = y + 8, bottom = bottomTop + headH;
+
+    // 边界框：外层比内层多留一圈
+    const below = (b) => Math.max(0, ...live.filter((c) => c.in === b.id).map((c) => 1 + below(c)));
+    for (const b of live) {
+      const pad = 14 + 16 * below(b);
+      const d = depthOf(b);
+      b.rect = {
+        x: Math.min(...b.members.map((p) => p.x - p.size.w / 2)) - pad,
+        y: (d - 1) * HEADER_H,
+        w: 0, h: 0,
+      };
+      b.rect.w = Math.max(...b.members.map((p) => p.x + p.size.w / 2)) + pad - b.rect.x;
+      b.rect.h = bottom + 10 + 14 * below(b) - b.rect.y;
+      const titleW = Math.max(measure(b.name, TXT.bname), measure(`[${b.type}]`, TXT.btype)) + 20;
+      if (titleW > b.rect.w) warn(`边界「${b.name}」的标题比边界还宽，名字写短一点`);
+    }
+    for (const b of live) {
+      for (const p of ps) {
+        if (!b.members.includes(p) && p.x + p.size.w / 2 > b.rect.x && p.x - p.size.w / 2 < b.rect.x + b.rect.w) {
+          fail(`「${p.name}」不在边界「${b.name}」里，却和边界框重叠，调整 participants 顺序`);
+        }
+      }
+    }
+
+    // ---- 绘制 ----
+    const svg = document.getElementById('c4-diagram');
+    const gB = node('g', {}, svg), gLife = node('g', {}, svg), gM = node('g', {}, svg), gH = node('g', {}, svg), gT = node('g', {}, svg);
+    for (const b of [...live].sort((a, c) => depthOf(a) - depthOf(c))) {
+      const r = b.rect;
+      node('rect', { x: r.x, y: r.y, width: r.w, height: r.h, fill: 'none', stroke: SCOPE_COLOR, 'stroke-width': 1.6 }, gB);
+      textLines(gB, [b.name], r.x + r.w / 2, r.y + 4, TXT.bname, SCOPE_COLOR);
+      textLines(gB, [`[${b.type}]`], r.x + r.w / 2, r.y + 4 + TXT.bname.lh, TXT.btype, SCOPE_COLOR);
+    }
+    for (const p of ps) {
+      node('line', { x1: p.x, y1: headTop + p.size.h, x2: p.x, y2: bottomTop, stroke: LIFELINE, 'stroke-width': 1, 'stroke-dasharray': '4 4' }, gLife);
+      drawHead(gH, p, p.x, headTop);
+      drawHead(gH, p, p.x, bottomTop);
+    }
+    for (const m of msgs) {
+      const a = pById.get(m.from), b = pById.get(m.to);
+      let lx;
+      if (a === b) {
+        const x0 = a.x, x1 = a.x + SELF_W;
+        node('polyline', { points: `${x0},${m.y} ${x1},${m.y} ${x1},${m.y + 20} ${x0 + 10},${m.y + 20}`, fill: 'none', stroke: INK, 'stroke-width': 1.6, 'stroke-dasharray': '8 5' }, gM);
+        node('polygon', { points: `${x0},${m.y + 20} ${x0 + 10},${m.y + 16.5} ${x0 + 10},${m.y + 23.5}`, fill: INK }, gM);
+        lx = x1 + 12;
+      } else {
+        drawArrow(gM, a.x, b.x, m.y);
+        lx = Math.min(a.x, b.x) + 12;
+      }
+      // 有 details 的消息：标签链接到图下方「消息说明」里的同号条目
+      const gL = m.details ? node('a', { href: `#c4-msg-${m.n}` }, gM) : gM;
+      node('rect', { x: lx - 3, y: m.labelTop - 1, width: m.labelW + 6, height: m.labelH + 2, fill: '#fff' }, gL);
+      textLines(gL, m.lines, lx, m.labelTop, TXT.msg, INK, 'start');
+      if (m.tech) textLines(gL, [m.tech], lx, m.labelTop + m.lines.length * TXT.msg.lh, TXT.tech, INK, 'start');
+    }
+    const minX = Math.min(...ps.map((p) => p.x - p.size.w / 2), ...live.map((b) => b.rect.x));
+    let maxX = Math.max(...ps.map((p) => p.x + p.size.w / 2 + (p === ps[ps.length - 1] ? rightExtra : 0)), ...live.map((b) => b.rect.x + b.rect.w));
+    let maxY = Math.max(bottom, ...live.map((b) => b.rect.y + b.rect.h));
+    const title = { size: 26, weight: 400, lh: 34 }, sub = { size: 15, weight: 400, lh: 22 };
+    textLines(gT, [model.title || ''], minX, maxY + 36, title, INK, 'start');
+    if (model.description) textLines(gT, [model.description], minX, maxY + 36 + title.lh, sub, '#666', 'start');
+    maxX = Math.max(maxX, minX + measure(model.title || '', title), minX + measure(model.description || '', sub));
+    maxY += 36 + title.lh + (model.description ? sub.lh : 0);
+    const vw = maxX - minX + 2 * MARGIN, vh = maxY + 2 * MARGIN;
+    svg.setAttribute('viewBox', `${minX - MARGIN} ${-MARGIN} ${vw} ${vh}`);
+    svg.setAttribute('width', vw);
+    svg.setAttribute('aria-label', model.title || 'Dynamic diagram');
+
+    renderKey(ps, live);
+    renderDetails(msgs);
+  }
+
+  // ---- 消息说明：每条带 details 的消息一节（说明、[项, 来源, 样例] 表、数据样例）----
+  function renderDetails(msgs) {
+    const list = msgs.filter((m) => m.details);
+    if (!list.length) return;
+    const sec = document.getElementById('c4-details');
+    const el = (tag, cls, text) => {
+      const e = document.createElement(tag);
+      if (cls) e.className = cls;
+      if (text !== undefined) e.textContent = text;
+      return e;
+    };
+    sec.appendChild(el('h2', '', '消息说明'));
+    for (const m of list) {
+      const d = m.details;
+      const art = el('article');
+      art.id = `c4-msg-${m.n}`;
+      const h = el('h3', '', `${m.n}: ${m.description || ''}`);
+      if (m.technology) h.appendChild(el('span', 'tech', `[${m.technology}]`));
+      art.appendChild(h);
+      if (typeof d.note === 'string' && d.note) art.appendChild(el('p', '', d.note));
+      const rows = Array.isArray(d.items) ? d.items.filter((r) => Array.isArray(r)) : [];
+      if (rows.length) {
+        const table = el('table');
+        const head = table.createTHead().insertRow();
+        for (const c of ['项', '来源', '样例']) head.appendChild(el('th', '', c));
+        const body = table.createTBody();
+        for (const r of rows) {
+          const tr = body.insertRow();
+          r.slice(0, 3).forEach((c, i) => tr.appendChild(el('td', i === 2 ? 'sample' : '', String(c))));
+        }
+        art.appendChild(table);
+      }
+      if (typeof d.example === 'string' && d.example) art.appendChild(el('pre', '', d.example));
+      sec.appendChild(art);
+    }
+    sec.hidden = false;
+  }
+
+  // ---- 图例：每种参与者一项，再加边界和消息 ----
+  function renderKey(ps, boundaries) {
+    const svg = document.getElementById('c4-key');
+    const rank = { person: 0, system: 1, container: 2, component: 3 };
+    const label = (p) => {
+      if (p.kind === 'person') return `Person, ${p.tag || p.name}`;
+      if (p.kind === 'system') return p.tag || p.name;
+      if (p.kind === 'container') return p.shape === 'database' ? 'Container, Database' : 'Container';
+      return 'Component';
+    };
+    const groups = new Map();
+    for (const p of [...ps].sort((a, b) => rank[a.kind] - rank[b.kind])) {
+      const k = `${p.kind}|${iconHead(p)}|${p.color}`;
+      if (!groups.has(k)) groups.set(k, { proto: p, labels: [] });
+      if (!groups.get(k).labels.includes(label(p))) groups.get(k).labels.push(label(p));
+    }
+    const items = [...groups.values()].map((g) => ({ kind: 'head', proto: g.proto, text: g.labels.join('、') }));
+    if (boundaries.length) items.push({ kind: 'boundary', text: 'Boundary（系统 / 容器）' });
+    items.push({ kind: 'message', text: 'n: 交互（编号 = 先后顺序）' });
+    const CELL_W = 230, CELL_H = 110, PER_ROW = 6;
+    items.forEach((it, i) => {
+      const cx = (i % PER_ROW) * CELL_W + CELL_W / 2, top = Math.floor(i / PER_ROW) * CELL_H;
+      const g = node('g', {}, svg);
+      if (it.kind === 'head') {
+        const p = { ...it.proto, name: it.text.length > 22 ? it.text.slice(0, 21) + '…' : it.text, meta: '' };
+        p.size = { w: Math.min(CELL_W - 20, measure(p.name, TXT.name) + 24), h: BOX_H };
+        drawHead(g, p, cx, top + 10);
+        return;
+      }
+      if (it.kind === 'boundary') {
+        node('rect', { x: cx - 95, y: top + 10, width: 190, height: 56, fill: 'none', stroke: SCOPE_COLOR, 'stroke-width': 1.6 }, g);
+        textLines(g, [it.text], cx, top + 10 + 4, TXT.key, SCOPE_COLOR);
+        return;
+      }
+      drawArrow(g, cx - 90, cx + 90, top + 46);
+      textLines(g, [it.text], cx - 88, top + 18, TXT.key, INK, 'start');
+    });
+    const rows = Math.ceil(items.length / PER_ROW), cols = Math.min(items.length, PER_ROW);
+    svg.setAttribute('viewBox', `0 0 ${cols * CELL_W} ${rows * CELL_H}`);
+    svg.setAttribute('width', cols * CELL_W);
+    svg.setAttribute('aria-label', 'Diagram key');
+  }
+
+  try {
+    render();
+  } catch (e) {
+    fail(`渲染异常：${e && e.message}`);
+    console.error(e);
+  }
+  const status = problems.some((p) => p.level === 'error') ? 'error' : problems.length ? 'warn' : 'ok';
+  document.documentElement.dataset.c4Status = status;
+  const report = document.getElementById('c4-report');
+  for (const p of problems) {
+    const li = document.createElement('li');
+    li.dataset.level = p.level;
+    li.textContent = p.msg;
+    report.appendChild(li);
+  }
+  report.hidden = !problems.length;
+  if (problems.length) console.warn('[c4]', problems);
+})();
+</script>
+</body>
+</html>
