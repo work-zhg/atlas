@@ -36,13 +36,14 @@ from ..errors import (
 from ..pagination import InvalidCursor, decode_cursor, encode_cursor
 from ..providers.filesystem import PathEscape, WorkspaceListing, WorkspaceRouting, make_workspace
 from ..providers.filesystem.skill_copy import resolve_skills, seed_session_skills
-from ..providers.opensandbox import BENCH, AcpProvisioner, SandboxProvisioner
-from ..providers.sandbox import SandboxNotRunning, SandboxProfileDenied, exec_in_running
 from ..redisx import make_redis
 from ..repositories.agent import AgentRepository
 from ..repositories.run import RunRepository
 from ..repositories.thread import ThreadRepository
 from ..repositories.thread_context import ThreadContextRepository
+from ..sandbox.component import SandboxComponent
+from ..sandbox.exec import PollingPolicy, SandboxNotRunning, SandboxProfileDenied, exec_in_running
+from ..sandbox.native import WorkspaceRef
 from ..schemas.agent import AgentSpecIn
 from ..schemas.thread import (
     MessageListOut,
@@ -140,7 +141,7 @@ def _to_out(
         parent_thread_id=thread.parent_thread_uuid,
         subagent_name=thread.subagent_name,
         credential_profiles=list(thread.credential_profiles or []),
-        git_profile=(thread.credential_profiles or [None])[0],
+        git_profile=next(iter(thread.credential_profiles or []), None),
         memory=thread.memory,
         approval_mode=thread.approval_mode,
         approval=approval,
@@ -384,13 +385,17 @@ class ThreadService:
     async def delete(self, thread_id: UUID) -> None:
         thread, _ = await self._require(thread_id)
         await self._repo.delete(thread)
-        # 沙箱级联：清理失败不该挡住会话删除（只记日志），残留由维护者的孤儿回收兜底
+        # 沙箱级联：经沙箱组件释放这个会话的业务（会话 Pod、工作区沙箱），失败不挡住会话删除
+        #   （只记日志），残留由维护者的孤儿回收兜底
         redis = make_redis(self._settings)
         try:
-            await AcpProvisioner(self._settings, redis).release(str(thread_id))
-            if self._settings.sandbox_enabled:
-                # 原生沙箱按工作区建：删的是工作区所有者时它才有沙箱
-                await SandboxProvisioner(self._settings, redis).release(str(thread_id))
+            sandbox = SandboxComponent.build(self._settings, redis)
+            await sandbox.pods.release(thread.thread_uuid, thread.created_by_uuid)
+            if self._settings.sandbox_enabled and thread.workspace_thread_id == thread.thread_uuid:
+                # 原生沙箱按工作区建：删的是工作区所有者（根会话）时它才有沙箱
+                await sandbox.native.release(
+                    WorkspaceRef(thread.thread_uuid, thread.created_by_uuid)
+                )
         finally:
             await redis.aclose()
 
@@ -438,7 +443,7 @@ class ThreadService:
     async def exec_in_sandbox(self, thread_id: UUID, payload: SandboxExecIn) -> SandboxExecOut:
         """在会话正在运行的**评测档**沙箱里执行一条命令，等它结束（评测原地校验）。
 
-        不新建沙箱、只认评测档：见 providers/sandbox.py::exec_in_running。
+        不新建沙箱、只认评测档：见 sandbox/exec 的 exec_in_running。
         """
         thread, _ = await self._require(thread_id)
         if not self._settings.sandbox_enabled:
@@ -455,18 +460,19 @@ class ThreadService:
         redis = make_redis(settings)
         try:
             logger.info("会话 %s 在评测档沙箱里直接执行命令", thread_id)
+            sandbox = SandboxComponent.build(settings, redis)
             result = await exec_in_running(
-                SandboxProvisioner(settings, redis),
-                str(thread.workspace_thread_id),
-                user_id=str(thread.created_by_uuid),
+                sandbox.native,
+                sandbox.exec,
+                sandbox.ledger,
+                WorkspaceRef(thread.workspace_thread_id, thread.created_by_uuid),
                 command=payload.command,
-                profile=BENCH,
+                profile="bench",
                 cwd=payload.cwd,
                 timeout=payload.timeout_s,
                 files=files,
                 output_limit=settings.sandbox_output_limit_bytes,
-                poll_min_s=settings.sandbox_poll_min_s,
-                poll_max_s=settings.sandbox_poll_max_s,
+                polling=PollingPolicy(settings.sandbox_poll_min_s, settings.sandbox_poll_max_s),
             )
         except SandboxNotRunning as exc:
             raise SandboxNotRunningError(str(exc), thread_id=str(thread_id)) from exc
@@ -486,20 +492,20 @@ class ThreadService:
     ) -> WorkspaceListing | None:
         """redis：要按沙箱选路时给（上传）；列举、打开直连对象存储，不用给。"""
         thread, _ = await self._require(thread_id)
-        ws_thread = str(thread.workspace_thread_id)
         fs = make_workspace(
             self._settings,
             thread.created_by_uuid,
             thread.thread_uuid,
             # ★ 子会话的工作区是父会话的（共享挂载）
             workspace_thread_id=thread.workspace_thread_id,
-            routing=(
-                WorkspaceRouting(SandboxProvisioner(self._settings, redis), ws_thread)
-                if redis is not None
-                else None
-            ),
+            routing=self._routing(thread, redis) if redis is not None else None,
         )
         return None if fs is None else WorkspaceListing(fs)
+
+    def _routing(self, thread: Thread, redis: aioredis.Redis) -> WorkspaceRouting:
+        sandbox = SandboxComponent.build(self._settings, redis)
+        ws = WorkspaceRef(thread.workspace_thread_id, thread.created_by_uuid)
+        return WorkspaceRouting(sandbox.native, sandbox.exec, ws)
 
     # ------------------------------------------------------------------ 内部
 

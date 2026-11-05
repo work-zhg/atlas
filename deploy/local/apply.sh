@@ -76,7 +76,7 @@ kubectl -n atlas-system create secret generic atlas-teamflow-creds \
 
 # TeamFlow 的 git 凭据档案（会话 Pod 里 git push 产物，经 Credential Vault）：.env 没有 Gitee 令牌就跳过
 if [ -n "${ATLAS_GIT_TEAMFLOW_TOKEN:-${ATLAS_TF_GITEE_TOKEN:-}}" ]; then
-  deploy/local/git-profile.sh
+  deploy/local/credential-profiles.sh
 fi
 
 # ★ 宿主地址用 LAN IP，不用 host.docker.internal —— 后者会被 Docker Desktop

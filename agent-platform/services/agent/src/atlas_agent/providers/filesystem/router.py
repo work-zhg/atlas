@@ -8,6 +8,7 @@
 ★ 经沙箱失败时先确认沙箱还在不在：确实不在了，这一次改走对象存储重试，模型无感；还在、问不到
   就不悄悄换写入方 —— 写报错；读降级到对象存储（读不会多出一个写入方，比让一次读失败好）。
 ★ 文件操作不会触发建沙箱：没有运行中的沙箱就走对象存储（多数会话一直是这样）。
+★ 活动不在这里记：打开文件会话时基座的沙箱内执行顺带记一次（原先要工作区回头通知原生沙箱）。
 """
 
 from __future__ import annotations
@@ -19,11 +20,13 @@ from typing import TYPE_CHECKING, TypeVar
 
 import httpx
 
-from ..opensandbox.execd import ExecdFiles
+from ...sandbox.base.execution.values import SandboxGone
 from .stores import FileStore, ObjectStoreFiles, SandboxFiles
 
 if TYPE_CHECKING:
-    from ..opensandbox import SandboxEndpoint, SandboxProvisioner
+    from ...sandbox.base.execution.ports import SandboxExec
+    from ...sandbox.native import NativeSandboxService, WorkspaceRef
+    from ...sandbox.provisioning.model import SandboxRef
 
 __all__ = ["StoreRouter", "WorkspaceRouting"]
 
@@ -32,35 +35,22 @@ T = TypeVar("T")
 
 
 class WorkspaceRouting:
-    """原生沙箱这一侧：问工作区现在有没有 READY 的沙箱、确认沙箱是否还在、记活动。"""
+    """原生沙箱这一侧：工作区现在有没有 READY 的沙箱、确认沙箱是否还在、打开沙箱里的文件会话。"""
 
-    def __init__(
-        self,
-        provisioner: SandboxProvisioner,
-        workspace_thread_id: str,
-        *,
-        transport: httpx.BaseTransport | None = None,
-    ) -> None:
-        self._p = provisioner
-        self._ws = workspace_thread_id
-        self._transport = transport
+    def __init__(self, native: NativeSandboxService, exec: SandboxExec, ws: WorkspaceRef) -> None:
+        self._native = native
+        self._exec = exec
+        self._ws = ws
 
-    async def current(self) -> SandboxEndpoint | None:
-        return await self._p.routes.get(self._ws)
+    async def current(self) -> SandboxRef | None:
+        return await self._native.current(self._ws)
 
-    def store(self, ep: SandboxEndpoint) -> SandboxFiles:
-        return SandboxFiles(ExecdFiles(ep.url, ep.token, transport=self._transport))
+    async def store(self, ref: SandboxRef) -> SandboxFiles:
+        return SandboxFiles(await self._exec.open_files(ref.sandbox_uuid))
 
-    async def gone(self, ep: SandboxEndpoint) -> bool:
-        """请求失败后问一句：沙箱确实不在了就删路由（返回 True）。"""
-        self._p.routes.forget_cached(self._ws)
-        if await self._p.is_gone(ep):
-            await self._p.forget(self._ws, ep)
-            return True
-        return False
-
-    async def touch(self) -> None:
-        await self._p.routes.touch(self._ws)
+    async def gone(self, ref: SandboxRef) -> bool:
+        """请求失败后问一句：沙箱确实不在了就去掉记录（返回 True），之后走对象存储。"""
+        return await self._native.confirm_gone(self._ws, ref)
 
 
 class StoreRouter:
@@ -81,21 +71,23 @@ class StoreRouter:
         refuse：写操作给出「不可写」的结果；读操作给 None —— 沙箱不响应时降级到对象存储。
         """
         routing = self._sandbox if in_sandbox else None
-        ep = await routing.current() if routing is not None else None
-        if routing is None or ep is None:
+        ref = await routing.current() if routing is not None else None
+        if routing is None or ref is None:
             return await asyncio.to_thread(fn, self.direct)
-        store = routing.store(ep)
         try:
-            result = await asyncio.to_thread(fn, store)
+            store = await routing.store(ref)
+        except SandboxGone:
+            await routing.gone(ref)
+            return await asyncio.to_thread(fn, self.direct)
+        try:
+            return await asyncio.to_thread(fn, store)
         except httpx.HTTPError as exc:
-            if await routing.gone(ep):
-                logger.info("沙箱 %s 已不在，工作区改走对象存储：%s", ep.sandbox_id, exc)
+            if await routing.gone(ref):
+                logger.info("沙箱 %s 已不在，工作区改走对象存储：%s", ref.sandbox_uuid, exc)
                 return await asyncio.to_thread(fn, self.direct)
             if refuse is None:
-                logger.warning("沙箱 %s 不响应，这次读降级到对象存储：%s", ep.sandbox_id, exc)
+                logger.warning("沙箱 %s 不响应，这次读降级到对象存储：%s", ref.sandbox_uuid, exc)
                 return await asyncio.to_thread(fn, self.direct)
             return refuse("工作区暂时不可写：沙箱没有响应，请稍后重试")
         finally:
             store.close()
-        await routing.touch()
-        return result

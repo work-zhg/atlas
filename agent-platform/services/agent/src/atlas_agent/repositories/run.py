@@ -72,8 +72,6 @@ def _held_by(owner: str | None) -> tuple[Any, ...]:
 _ARCHIVED_EXCLUDED = frozenset({EventType.MESSAGE_DELTA, EventType.THINKING_DELTA})
 
 
-
-
 def _wait_reasons(status: str, waiting_on: Any) -> set[str]:
     """挂起中的 run 在等哪几类东西。
 
@@ -177,6 +175,15 @@ class RunRepository:
             .limit(1)
         )
         return (await self._session.execute(stmt)).scalars().one_or_none()
+
+    async def has_open_run(self, thread_id: UUID) -> bool:
+        """会话还有没结束的 run 吗（挂起、等审批都算没结束）。会话 Pod 的闲置回收用。"""
+        return await self.active_run_of(thread_id) is not None
+
+    async def last_ended_at(self, thread_id: UUID) -> datetime | None:
+        """会话最近一次 run 结束的时间；一个都没结束过返回 None。"""
+        stmt = select(func.max(Run.finished_at)).where(Run.thread_uuid == thread_id)
+        return (await self._session.execute(stmt)).scalar_one_or_none()
 
     async def latest_runs_of(self, thread_ids: list[UUID]) -> dict[UUID, dict[str, Any]]:
         """一页会话各自**最近一个** run 的状态 —— 会话列表的状态徽标用。
@@ -350,14 +357,3 @@ class RunRepository:
         return run
 
     # ------------------------------------------------------------------ 租约
-
-
-
-
-
-
-
-
-
-
-

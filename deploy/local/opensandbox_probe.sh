@@ -4,12 +4,12 @@
 #   deploy/local/opensandbox_probe.sh [镜像] [--restart-server]   原生沙箱（opensandbox_probe.py）
 #   deploy/local/opensandbox_probe.sh [镜像] cli                  会话 Pod（opensandbox_cli_probe.py）
 #
-# 镜像默认 atlas-app:dev，要包含 providers/opensandbox。
+# 镜像默认 atlas-app:dev，要包含 sandbox/（沙箱组件）。
 # --restart-server：脚本跑到「现在重启 opensandbox-sbx」时，在另一个终端执行
 #   kubectl -n opensandbox-system rollout restart deploy/opensandbox-sbx
-# cli：用 git 档案 teamflow-gitee（Secret atlas-git-profiles，git-profile.sh 建）与 CLI 镜像
+# cli：用凭据档案 teamflow-gitee（Secret atlas-credential-profiles，credential-profiles.sh 建）与 CLI 镜像
 #   ${PROBE_CLI_IMAGE:-atlas-cli-bridge:0.4.0}；PROBE_GIT_REPO 给一个该档案能读的私有仓库才测 git（只读）。
-# ★ Redis 用测试库（db 14），数据库只是凑配置、不会连；跑完 release 掉建的沙箱。
+# ★ Redis 用测试库（db 14）；沙箱先登记再建，要连测试库（迁移到最新）。跑完 release 掉建的沙箱。
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 IMAGE="${1:-atlas-app:dev}"; shift || true
@@ -52,8 +52,8 @@ spec:
           valueFrom: {secretKeyRef: {name: atlas-opensandbox, key: cli_api_key}}
         - {name: CLI_MODEL_BASE_URL, value: "${MODEL_URL}"}
         - {name: CLI_MODEL_NAME, value: deepseek-chat}
-        - name: GIT_PROFILES
-          valueFrom: {secretKeyRef: {name: atlas-git-profiles, key: profiles, optional: true}}
+        - name: CREDENTIAL_PROFILES
+          valueFrom: {secretKeyRef: {name: atlas-credential-profiles, key: profiles, optional: true}}
         - {name: CLI_IMAGE, value: "${PROBE_CLI_IMAGE:-atlas-cli-bridge:0.4.0}"}
         - {name: ADAPTER, value: "node /opt/acp-cli/bin/claude-acp"}
         - {name: PROBE_GIT_REPO, value: "${PROBE_GIT_REPO:-}"}

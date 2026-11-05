@@ -14,14 +14,17 @@ from uuid import UUID, uuid4
 
 from atlas_agent.db.models import SandboxInstance, SandboxTemplate
 from atlas_agent.db.session import get_sessionmaker
+from atlas_agent.ids import uuid7
 from atlas_agent.sandbox.base.lifecycle.runtime import OpenSandboxRuntime
 from atlas_agent.sandbox.base.lifecycle.server import LifecycleServer
 from atlas_agent.sandbox.base.lifecycle.spec import CreateSpec, Labels, Resources
 from atlas_agent.sandbox.base.network.policy import NetworkPolicy
+from atlas_agent.sandbox.component import SandboxComponent
+from atlas_agent.sandbox.native import WorkspaceRef
 from pydantic import SecretStr
 from sqlalchemy import delete
 
-from tests.opensandbox_fake import LIFECYCLE_URL, FakeOpenSandbox
+from tests.opensandbox_fake import LIFECYCLE_URL, FakeOpenSandbox, fake_settings
 
 ADMIN = UUID(int=7)
 TEMPLATE_YAML = """
@@ -89,3 +92,25 @@ def simple_spec(template: str, *, image: str = "img", **labels: str) -> CreateSp
         resources=Resources("100m", "2", "512Mi", "4Gi"),
         labels=Labels.of(**labels),
     )
+
+
+def component(fake: FakeOpenSandbox, redis: Any, **settings: Any) -> SandboxComponent:
+    """整套沙箱组件，lifecycle 和 execd 都指向 fake。
+
+    模板用迁移的种子（sbx-strict → sbx、cli → cli）。
+    """
+    return SandboxComponent.build(
+        fake_settings(**settings),
+        redis,
+        transport=fake.async_transport,
+        files_transport=fake.sync_transport,
+    )
+
+
+def new_workspace() -> WorkspaceRef:
+    return WorkspaceRef(uuid7(), uuid7())
+
+
+def workspace_dir(fake: FakeOpenSandbox, ws: WorkspaceRef) -> Any:
+    """沙箱里 /workspace 对应的本地目录（同一个前缀的沙箱共用）。"""
+    return fake.workspace(f"{ws.user_uuid}/{ws.root_thread_uuid}/workspace")

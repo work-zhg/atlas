@@ -78,10 +78,10 @@ spec:
             - {name: CLI_MODEL_NAME, value: deepseek-chat}
             - name: CLI_MODEL_BASE_URL
               valueFrom: {secretKeyRef: {name: atlas-server-creds, key: cli_model_base_url}}
-            # git 凭据档案（JSON：名字 → 凭据 + 允许使用的业务应用），git-profile.sh 从 .env 建。
+            # 出站凭据档案（JSON：code → 注入方式 + 主机 + 凭据 + 谁能用），credential-profiles.sh 从 .env 建。
             # 凭据经 Credential Vault 交给 Pod 的 egress sidecar，Pod 里看不到（设计 §12）
-            - name: GIT_PROFILES
-              valueFrom: {secretKeyRef: {name: atlas-git-profiles, key: profiles, optional: true}}
+            - name: CREDENTIAL_PROFILES
+              valueFrom: {secretKeyRef: {name: atlas-credential-profiles, key: profiles, optional: true}}
             # 知识库 MCP 令牌的签名密钥：给会话 Pod（不可信代码）的能力凭据，不是服务间令牌
             # （内网身份传递 §5.3）。与知识库的 ATLAS_KB_MCP_SECRET 是同一个
             - name: KNOWLEDGE_MCP_SECRET

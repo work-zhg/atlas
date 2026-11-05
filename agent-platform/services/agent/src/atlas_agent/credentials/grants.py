@@ -5,8 +5,8 @@
     available(user, app)  某人在某个来源应用下能选哪些档案：只有 code、注入方式和主机，不含凭据值
 
 ★ 写错或无权一律拒绝，不静默不给：静默的表现是 git 在 Pod 里鉴权失败，原因很难追到这里。
-★ 档案来自部署的 Secret（CREDENTIAL_PROFILES；旧格式 GIT_PROFILES 在 B6 切换前一并读），不进数据库：
-  凭据原文进库要先有加密和审计方案。仓储接口只有按 code 取和列出，以后换成库或外部 Vault 不影响调用方。
+★ 档案来自部署的 Secret（CREDENTIAL_PROFILES），不进数据库：凭据原文进库要先有加密和审计方案。
+  仓储接口只有按 code 取和列出，以后换成库或外部 Vault 不影响调用方。
 """
 
 from __future__ import annotations
@@ -44,7 +44,10 @@ class ProfileInfo:
 
 
 class CredentialProfileStore:
-    """档案的来源：部署 Secret 里的 JSON。加载时逐个校验，有一个不合规就启动失败（设置校验时已做）。"""
+    """档案的来源：部署 Secret 里的 JSON。
+
+    加载时逐个校验，有一个不合规就启动失败（设置校验时已做）。
+    """
 
     def __init__(self, profiles: dict[str, CredentialProfile]) -> None:
         self._profiles = dict(profiles)
@@ -63,21 +66,6 @@ class CredentialProfileStore:
                 username=p.username,
                 header=p.header,
                 author=author,
-            )
-        # 旧格式（GIT_PROFILES）：B6 把部署切到 CREDENTIAL_PROFILES 之前一并读
-        for code, g in settings.git_profiles.items():
-            if code in profiles:
-                raise ValueError(f"凭据档案 {code} 在 CREDENTIAL_PROFILES 和 GIT_PROFILES 里都有")
-            profiles[_checked(code)] = CredentialProfile(
-                code=code,
-                auth=AuthKind.BASIC,
-                hosts=tuple(g.hosts),
-                grant=GrantRule(frozenset(g.allowed_users), frozenset(g.allowed_apps)),
-                _secret=g.token,
-                username=g.username,
-                author=GitAuthor(
-                    g.author_name, g.author_email or f"{g.username}@users.noreply.{g.hosts[0]}"
-                ),
             )
         return cls(profiles)
 

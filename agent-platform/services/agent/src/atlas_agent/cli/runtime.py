@@ -48,7 +48,7 @@ if TYPE_CHECKING:
 
     from ..config import Settings
     from ..executor.segment_data import Segment
-    from ..providers.pods import PodEndpoint, PodProvider
+    from ..sandbox.session_pod import PodEndpoint, PodProvider
     from ..stream.relay import EventRelay
 
 __all__ = ["CliRuntime"]
@@ -147,7 +147,9 @@ class CliRuntime:
         for kind, data in caps.notices:
             yield events.make(kind, data)
         try:
-            endpoint = await self._pods.ensure(segment.thread, cli, model=caps.model)
+            endpoint = await self._pods.ensure(
+                segment.thread, cli, model=caps.model, credentials=caps.credentials
+            )
         except Exception as exc:
             yield events.make(*failed("pod_unavailable", f"会话 Pod 不可用：{exc}"))
             return
@@ -240,7 +242,9 @@ class CliRuntime:
 
         async def reach() -> PodEndpoint:
             # 断线重连时 Pod 可能被重建：下发同一份模型接入
-            return await self._pods.ensure(segment.thread, cli, model=caps.model)
+            return await self._pods.ensure(
+                segment.thread, cli, model=caps.model, credentials=caps.credentials
+            )
 
         async def cancelled() -> bool:
             return await relay.is_cancelled(run_id)

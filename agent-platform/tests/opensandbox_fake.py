@@ -39,7 +39,6 @@ import httpx
 from pydantic import SecretStr
 
 if TYPE_CHECKING:
-    import redis.asyncio as aioredis
     from atlas_agent.config import Settings
 
 LIFECYCLE_URL = "http://osb"
@@ -123,8 +122,15 @@ class FakeOpenSandbox:
     def add(
         self, spec: dict[str, Any], *, state: str = "Running", age_s: float = 0.0
     ) -> FakeSandbox:
-        """不经 Atlas 直接放一个沙箱进去（别的进程建的、崩溃留下的）。"""
-        ws = (spec.get("metadata") or {}).get("atlas.thread", "none")
+        """不经 Atlas 直接放一个沙箱进去（别的进程建的、崩溃留下的）。
+
+        挂载的模拟：/workspace 卷的 subPath 相同的沙箱共用一个目录（同一个前缀的写穿挂载）；
+        没有卷的按 metadata 的 atlas.thread 分。
+        """
+        mounts = {v.get("mountPath"): v for v in spec.get("volumes") or []}
+        ws = (mounts.get("/workspace") or {}).get("subPath") or (spec.get("metadata") or {}).get(
+            "atlas.thread", "none"
+        )
         sb = FakeSandbox(
             id=f"{self.prefix}-{next(self._ids)}",
             spec=spec,
@@ -431,7 +437,7 @@ def _kill(proc: subprocess.Popen[bytes]) -> None:
 
 
 def fake_settings(**overrides: Any) -> Settings:
-    """指向假 lifecycle 的配置；路由缓存关掉（用例直接改 Redis，要立刻看得到）。"""
+    """指向假 lifecycle 的配置；绑定的缓存关掉（用例直接改库，要立刻看得到）。"""
     from atlas_agent.config import get_settings
 
     base: dict[str, Any] = {
@@ -442,18 +448,6 @@ def fake_settings(**overrides: Any) -> Settings:
         "opensandbox_cli_url": LIFECYCLE_URL,
         "opensandbox_cli_api_key": SecretStr("test-key"),
         "opensandbox_timeout_s": 5.0,
-        "sandbox_route_cache_s": 0.0,
+        "sandbox_binding_cache_s": 0.0,
     }
     return get_settings().model_copy(update=base | overrides)
-
-
-async def wipe(redis: aioredis.Redis, *needles: str) -> None:
-    """删掉本用例留下的 atlas:sbx:* / atlas:cli:* 键（会话 id、沙箱 id 前缀都可以当 needle）。"""
-    keys = [
-        k
-        for pattern in ("atlas:sbx:*", "atlas:cli:*")
-        async for k in redis.scan_iter(match=pattern)
-        if any(n in k for n in needles)
-    ]
-    if keys:
-        await redis.delete(*keys)

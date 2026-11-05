@@ -26,9 +26,9 @@ from .instance import instance_id
 from .maintainer import Maintainer
 from .memory import Backfiller, make_memory_runtime
 from .outbound import IdentityScopeMiddleware
-from .providers.opensandbox import OpenSandboxPods
 from .redisx import make_redis
 from .sandbox.base.lifecycle.templates import template_publisher
+from .sandbox.component import SandboxComponent
 from .stream.gate import StreamGate, StreamsBusy
 from .telemetry import setup_telemetry, shutdown_telemetry
 
@@ -71,11 +71,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # ★ 遥测要在任何 span 产生之前装好。装不上不拦着进程起（它是旁路），
     #   但会把失败喊出来 —— 否则就成了「以为在采集其实没有」。
     setup_telemetry(settings)
-    # acp 的执行环境：OpenSandbox 的 opensandbox-cli 建 Pod
-    # （doc/sandbox-opensandbox-design.html §11）。
-    # server 自己仍不碰 K8s。★ 进程级的 Redis 客户端：ensure 的锁与令牌在 Redis
+    # CLI 智能体的执行环境：沙箱组件的会话 Pod（c4-model/agent/sandbox/
+    # code-sandbox-session-pod.html），由 OpenSandbox 的 opensandbox-cli 建。
+    # ★ 进程级的 Redis 客户端：建沙箱的效率锁在 Redis
     pods_redis = make_redis(settings)
-    pods = OpenSandboxPods(settings, pods_redis)
+    pods = SandboxComponent.build(settings, pods_redis).pods
     # 跨会话记忆（doc/memory-design.html）。★ 没接入记忆服务就是 None —— 执行器、管理接口、
     #   补记据此完全跳过，不回落任何假实现。
     memory = make_memory_runtime(settings, get_sessionmaker())

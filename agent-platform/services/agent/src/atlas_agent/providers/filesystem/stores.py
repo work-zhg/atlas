@@ -11,11 +11,13 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from ...domain.workspace_layout import WORKSPACE_MOUNT, Area, WorkspaceLayout
-from ..opensandbox.execd import ExecdFiles
 from .paths import FilePath
+
+if TYPE_CHECKING:
+    from ...sandbox.base.execution.ports import FileSession
 
 __all__ = ["FileStore", "ObjectStoreFiles", "SandboxFiles"]
 
@@ -100,7 +102,7 @@ class SandboxFiles:
       空目录因此不出现。
     """
 
-    def __init__(self, files: ExecdFiles) -> None:
+    def __init__(self, files: FileSession) -> None:
         self._f = files
 
     @staticmethod
@@ -131,7 +133,7 @@ class SandboxFiles:
         rels = sorted(
             rel
             for f in self._f.search(f"{WORKSPACE_MOUNT}/{directory}".rstrip("/") or WORKSPACE_MOUNT)
-            if (rel := str(f["path"]).removeprefix(root)).startswith(prefix.rel)
+            if (rel := f.path.removeprefix(root)).startswith(prefix.rel)
         )
         if recursive:
             yield rels, []

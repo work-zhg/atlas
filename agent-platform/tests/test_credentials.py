@@ -1,7 +1,7 @@
 """凭据组件和基座的网络与凭据（改造计划 B4）。
 
 凭据组件（c4-model/agent/code-credentials.html）
-    档案       通用化为注入方式（basic、bearer、api_key）+ 主机；规则必填；新旧两种配置格式都读
+    档案       通用化为注入方式（basic、bearer、api_key）+ 主机；规则必填
     授权       check 建会话时校验，resolve 每轮重新授权，available 不含凭据值
     会话       建会话时选定、校验（不存在或无权 403），子会话继承；旧字段 git_profile 仍收
 
@@ -68,7 +68,6 @@ def _settings(**over: Any) -> Any:
     return get_settings().model_copy(
         update={
             "credential_profiles": {k: CredentialProfileIn(**v) for k, v in PROFILES.items()},
-            "git_profiles": {},
         }
         | over
     )
@@ -147,19 +146,6 @@ def test_available_lists_codes_and_hosts_without_secrets() -> None:
     ]
     assert [p.code for p in _grants().available("u-2", "")] == []
     assert "token" not in repr(shown)
-
-
-def test_legacy_git_profiles_are_read_as_basic_profiles() -> None:
-    """B6 把部署切到 CREDENTIAL_PROFILES 之前，GIT_PROFILES 一并读。"""
-    from atlas_agent.config import GitProfile
-
-    legacy = {"old": GitProfile(username="bot", token=SecretStr("t"), allowed_apps=["teamflow"])}
-    creds = _grants(git_profiles=legacy).resolve(CredentialSubject("u", "teamflow", ("old",)))
-    (binding,) = creds.bindings
-    assert binding.auth == "basic" and binding.hosts == ("gitee.com",)
-    assert creds.git_author is not None and creds.git_author.email == "bot@users.noreply.gitee.com"
-    with pytest.raises(ValueError, match="都有"):
-        _grants(git_profiles={"npm": legacy["old"]})
 
 
 # ──────────────────────────────────────────────── 写凭据、改策略

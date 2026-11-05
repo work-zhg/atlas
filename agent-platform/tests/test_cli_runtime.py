@@ -19,7 +19,7 @@ from atlas_agent.cli import runtime as cli_runtime_mod
 from atlas_agent.cli.runtime import CliRuntime
 from atlas_agent.domain.events import EventType, TraceEvent
 from atlas_agent.domain.spec import CliSpec, KnowledgeSpec
-from atlas_agent.providers.pods import PodEndpoint
+from atlas_agent.sandbox.session_pod import PodEndpoint
 from atlas_bridge.app import BridgeApp
 from atlas_bridge.config import BridgeConfig
 from atlas_bridge.testing.fake_agent import Script
@@ -35,7 +35,9 @@ class Pods:
         self.url = url
         self.fail: Exception | None = None
 
-    async def ensure(self, thread: Any, cli: CliSpec, *, model: Any = None) -> PodEndpoint:
+    async def ensure(
+        self, thread: Any, cli: CliSpec, *, model: Any = None, credentials: Any = None
+    ) -> PodEndpoint:
         if self.fail is not None:
             raise self.fail
         return PodEndpoint(url=self.url, token=TOKEN)
@@ -152,6 +154,8 @@ class Env:
             cli_tool_idle_timeout_s=600.0,
             # 没接模型管理平台：CLI 的模型照旧按部署配置
             model_platform_url=None,
+            # 会话没选凭据档案
+            credential_profiles={},
         )
         self.settings = settings
         self.runtime = CliRuntime(
@@ -183,7 +187,9 @@ class Env:
 @pytest.fixture
 async def env(tmp_path: Path) -> AsyncIterator[Callable[..., Awaitable[Env]]]:
     apps: list[tuple[BridgeApp, asyncio.Task[int]]] = []
-    thread = SimpleNamespace(thread_uuid=uuid4())
+    thread = SimpleNamespace(
+        thread_uuid=uuid4(), created_by_uuid=uuid4(), source_app=None, credential_profiles=[]
+    )
 
     async def start(script: Script | None = None, **cfg: Any) -> Env:
         token_file = tmp_path / "token"

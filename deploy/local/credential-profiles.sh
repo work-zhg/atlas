@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# 建 git 凭据档案 teamflow-gitee：TeamFlow 节点会话的 会话 Pod 里，Agent 用它 git push 产物。
+# 建出站凭据档案 teamflow-gitee：TeamFlow 节点会话的会话 Pod 里，Agent 用它 git push 产物。
 #
-# 档案是 atlas-server 的 GIT_PROFILES（JSON），放在 Secret atlas-git-profiles 里（30-server.yaml 引用）。
-# atlas-server 只给 source_app = teamflow 的会话用它：ensure 之后把凭据写进 Pod 的 Credential Vault，
-# 由 egress sidecar 在发往 gitee.com 的 HTTPS 请求上注入（doc/sandbox-opensandbox-design.html §12）——
-# Pod 里没有凭据文件，也没有环境变量。
+# 档案是 atlas-server 的 CREDENTIAL_PROFILES（JSON：code → 注入方式 + 主机 + 凭据 + 谁能用，
+# c4-model/agent/code-credentials.html），放在 Secret atlas-credential-profiles 里（30-server.yaml 引用）。
+# 凭据组件只给 source_app = teamflow 的会话授权；会话 Pod 每轮把凭据整份写进 Pod 的 Credential Vault，
+# 由 egress sidecar 在发往 gitee.com 的 HTTPS 请求上注入（basic）—— Pod 里没有凭据文件，也没有环境变量。
+# 要加别的档案（私有 npm / PyPI 源按 bearer 或 api_key 写），在下面的 JSON 里加一项。
 #
 # .env：
 #   ATLAS_GIT_TEAMFLOW_TOKEN     写入账号的 Gitee 私人令牌（只需能写产物仓库）
@@ -37,11 +38,12 @@ echo "写入账号 = ${USERNAME}"
 PROFILES="$(TOKEN="$TOKEN" USERNAME="$USERNAME" EMAIL="$EMAIL" python3 -c '
 import json, os
 print(json.dumps({"teamflow-gitee": {
-    "username": os.environ["USERNAME"], "token": os.environ["TOKEN"], "hosts": ["gitee.com"],
+    "auth": "basic", "hosts": ["gitee.com"],
+    "username": os.environ["USERNAME"], "secret": os.environ["TOKEN"],
+    "apps": ["teamflow"],
     "author_name": "TeamFlow Agent", "author_email": os.environ["EMAIL"],
-    "allowed_apps": ["teamflow"],
 }}))')"
 
-kubectl -n atlas-system create secret generic atlas-git-profiles \
+kubectl -n atlas-system create secret generic atlas-credential-profiles \
   --from-literal=profiles="${PROFILES}" \
   --dry-run=client -o yaml | kubectl apply -f -

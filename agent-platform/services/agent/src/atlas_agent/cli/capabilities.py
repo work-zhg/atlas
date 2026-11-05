@@ -1,6 +1,7 @@
 """本轮交给 CLI 的能力（code-cli-runtime-turn.html · CliCapabilityAssembly）。
 
-MCP 服务的连接配置（经 MCP 网关）、模型接入（平台的模型网关地址和智能体的客户端 Key）、时限。
+MCP 服务的连接配置（经 MCP 网关）、模型接入（平台的模型网关地址和智能体的客户端 Key）、这一轮
+授权过的出站凭据（凭据组件，每轮重新授权：收回权限、换了令牌下一轮就生效）、时限。
 任何一项不可用就在开始前报 run.failed，并说明是哪一项 —— CLI 跑起来也会在中途失败，而且错误
 藏在 CLI 的输出里。
 
@@ -14,14 +15,22 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from ..credentials import (
+    CredentialDenied,
+    CredentialGrants,
+    CredentialProfileStore,
+    CredentialSet,
+    CredentialSubject,
+)
 from ..domain.events import EventType
 from ..domain.mcp_naming import MCP_PREFIX
+from ..errors import CapabilityUnavailable
 from ..providers.knowledge import mcp_server_entry, require_client
 from ..providers.llm.model_platform import admit_models, agent_key, litellm_url, uses_model_platform
 from ..providers.mcp import GatewayUnavailable, make_mcp_catalog, mcp_agent_access
 from ..providers.mcp.cli import cli_mcp_servers
 from ..providers.mcp.gateway import servers_in
-from ..providers.pods import CliModel
+from ..sandbox.session_pod import CliModel
 
 if TYPE_CHECKING:
     import redis.asyncio as aioredis
@@ -29,9 +38,13 @@ if TYPE_CHECKING:
     from ..config import Settings
     from ..executor.segment_data import Segment
 
-__all__ = ["CliCapabilities", "CliCapabilityAssembly"]
+__all__ = ["CliCapabilities", "CliCapabilityAssembly", "CredentialsUnavailable"]
 
 logger = logging.getLogger(__name__)
+
+
+class CredentialsUnavailable(CapabilityUnavailable):
+    """会话选的凭据档案这一轮用不了（不存在，或权限被收回）。"""
 
 
 @dataclass
@@ -44,6 +57,8 @@ class CliCapabilities:
     notices: list[tuple[EventType, dict[str, Any]]] = field(default_factory=list)
     #: 经平台时的模型接入；None = 照旧按部署配置
     model: CliModel | None = None
+    #: 这一轮授权过的出站凭据（会话 Pod 经 Credential Vault 注入）；空 = 会话没选凭据档案
+    credentials: CredentialSet = field(default_factory=CredentialSet)
     #: 一轮的时限：只下发静默检测的两个阈值（唯一的「卡死」判据）。截止、审批等待、
     #: 重连窗口不下发 = 不限：CLI 在干活就不中断，审批只由人决定
     limits: dict[str, float] = field(default_factory=dict)
@@ -52,6 +67,7 @@ class CliCapabilities:
 class CliCapabilityAssembly:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
+        self._grants = CredentialGrants(CredentialProfileStore.from_settings(settings))
 
     async def resolve(self, segment: Segment, redis: aioredis.Redis) -> CliCapabilities:
         """解析本轮的能力。不可用抛 CapabilityUnavailable（调用方报 run.failed）。"""
@@ -60,6 +76,7 @@ class CliCapabilityAssembly:
             mcp_servers=servers,
             notices=notices,
             model=await self._model(segment),
+            credentials=self._credentials(segment),
             limits={
                 "idleS": self._settings.cli_prompt_idle_timeout_s,
                 "toolIdleS": self._settings.cli_tool_idle_timeout_s,
@@ -85,6 +102,16 @@ class CliCapabilityAssembly:
                 ),
             ]
         return servers, notices
+
+    def _credentials(self, segment: Segment) -> CredentialSet:
+        """每轮按当前的档案和规则重新授权（c4-model/agent/code-credentials.html）。
+
+        档案不存在或权限被收回：这一轮不开始（run.failed 说明是哪份档案）。
+        """
+        try:
+            return self._grants.resolve(CredentialSubject.of(segment.thread))
+        except CredentialDenied as exc:
+            raise CredentialsUnavailable(str(exc)) from exc
 
     async def _model(self, segment: Segment) -> CliModel | None:
         """经模型管理平台时 Pod 里 CLI 的模型接入（模型管理方案设计 8.1）。

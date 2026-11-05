@@ -33,7 +33,8 @@ from atlas_agent.providers.knowledge import (
     require_client,
     skipped_message,
 )
-from atlas_agent.providers.opensandbox import SandboxProvisioner
+from atlas_agent.sandbox.component import SandboxComponent
+from atlas_agent.sandbox.native import WorkspaceRef
 
 from ..config import Settings
 from ..domain.events import EventType
@@ -110,20 +111,22 @@ class CapabilityAssembly:
         """
         # ── 段内共享的资源：几个领域都要用，在这里建一次 ──────────────────────────
         memory = await self._memory_turn(segment, run_id=run_id)
-        provisioner = (
-            SandboxProvisioner(self._settings, redis) if self._settings.sandbox_enabled else None
+        sandbox = (
+            SandboxComponent.build(self._settings, redis)
+            if self._settings.sandbox_enabled
+            else None
         )
+        ws = WorkspaceRef(segment.thread.workspace_thread_id, segment.thread.created_by_uuid)
         # ★ workspace 挂**父会话的**前缀，skills / system 仍按自己的 thread 走。
         #   没配对象存储 = **没有文件能力**（make_workspace 返回 None，不回落任何内存实现）。
         #   ★ 工作区的读写路由跟着**工作区**走，不跟着本智能体有没有 bash 走：没勾 bash 的子智能体
         #     与父会话共用工作区，父会话的沙箱在跑时它的文件工具也要进沙箱（与命令同一个挂载，§9）。
-        ws_thread = str(segment.thread.workspace_thread_id)
         workspace = make_workspace(
             self._settings,
             segment.thread.created_by_uuid,
             segment.thread_id,
             workspace_thread_id=segment.thread.workspace_thread_id,
-            routing=WorkspaceRouting(provisioner, ws_thread) if provisioner else None,
+            routing=WorkspaceRouting(sandbox.native, sandbox.exec, ws) if sandbox else None,
         )
 
         # ── 三个能力领域，顺序固定 ────────────────────────────────────────────
@@ -131,7 +134,7 @@ class CapabilityAssembly:
             segment,
             run_id=run_id,
             redis=redis,
-            provisioner=provisioner,
+            sandbox=sandbox,
             workspace=workspace,
             memory=memory,
             notices=notices,

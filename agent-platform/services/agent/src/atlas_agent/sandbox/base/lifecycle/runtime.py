@@ -309,8 +309,12 @@ class OpenSandboxRuntime:
             if row.external_id is None:
                 out.append(row)
                 continue
-            server = await self._server_of(row)
-            refreshed = await self._refresh(row, await server.get(row.external_id))
+            try:
+                server = await self._server_of(row)
+                refreshed = await self._refresh(row, await server.get(row.external_id))
+            except LifecycleError:
+                out.append(row)  # 问不到：按上次观测的样子交出去，不当它不在了
+                continue
             if refreshed is not None:
                 out.append(refreshed)
         return out
@@ -420,12 +424,19 @@ class OpenSandboxRuntime:
         """
         report = ReconcileReport()
         remote: dict[str, tuple[LifecycleServer, RemoteSandbox]] = {}
-        seen: set[str] = set()
+        listed: dict[str, bool] = {}  # base_url → 这一轮列出来了没有
         for server in self._servers.values():
-            if server.base_url in seen:  # 两个名字指向同一个 server（测试、单实例部署）只列一次
+            if server.base_url in listed:  # 两个名字指向同一个 server（测试、单实例部署）只列一次
                 continue
-            seen.add(server.base_url)
-            for sb in await server.list({"atlas.managed": "true"}):
+            try:
+                found = await server.list({"atlas.managed": "true"})
+            except LifecycleError:
+                # ★ 列不出来的 server：它名下的登记这一轮一律不动（看不到它上面有什么）
+                logger.warning("对账时 lifecycle server %s 不可达，这一轮跳过它", server.name)
+                listed[server.base_url] = False
+                continue
+            listed[server.base_url] = True
+            for sb in found:
                 remote.setdefault(sb.external_id, (server, sb))
         async with self._sessions() as session:
             rows = await SandboxInstanceRepository(session).list()
@@ -434,7 +445,9 @@ class OpenSandboxRuntime:
         ours = [
             r
             for r in rows
-            if (t := templates.get(r.template_uuid)) is not None and t.server in self._servers
+            if (t := templates.get(r.template_uuid)) is not None
+            and t.server in self._servers
+            and listed.get(self._servers[t.server].base_url, False)
         ]
 
         # 登记了、还没回填 id 的：按标签找回；找不到又已经老了的，删登记

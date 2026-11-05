@@ -19,36 +19,6 @@ def _repo_root() -> Path:
 _REPO_ROOT = _repo_root()
 
 
-class GitProfile(BaseModel):
-    """一个 git 凭据档案（doc/sandbox-opensandbox-design.html §12）：凭据 + 允许使用它的身份。
-
-    ★ 凭据不进 Pod：ensure 之后经 Credential Vault 交给 会话 Pod 的 egress sidecar，由它在发往
-      hosts 的 HTTPS 请求上注入 Basic 认证（透明 MITM）。Pod 里没有凭据文件，也没有环境变量。
-    ★ 整个 git_profiles 来自 Secret（GIT_PROFILES 环境变量，JSON），不进任何 YAML。
-    """
-
-    username: str
-    token: SecretStr
-    #: 凭据注入到哪些主机（只认 HTTPS）
-    hosts: list[str] = ["gitee.com"]
-    #: 提交作者（原来写在 gitconfig 里，现在经 GIT_AUTHOR_* / GIT_COMMITTER_* 交给 CLI）
-    author_name: str = "Atlas Agent"
-    author_email: str = ""
-    #: 允许使用该档案的会话创建者（Atlas 用户 id）。空 = 这一项不限
-    allowed_users: list[str] = []
-    #: 允许使用该档案的业务应用（会话的 source_app，如 teamflow）。空 = 这一项不限。
-    #: ★ 共享机器人账号的档案用它限定「只有 TeamFlow 建的会话能用」（内网身份传递 §9）
-    allowed_apps: list[str] = []
-
-    @model_validator(mode="after")
-    def _restricted(self) -> GitProfile:
-        """★ 两项至少填一项（c4-model/agent/sandbox/code-credentials.html「规则必填」）。两项都空
-        等于谁都能用，把仓库的写权限给了所有人 —— 加载时就报错，应用启动失败，不跳过。"""
-        if not self.allowed_users and not self.allowed_apps:
-            raise ValueError("git 凭据档案必须限定 allowed_users 或 allowed_apps 至少一项")
-        return self
-
-
 class CredentialProfileIn(BaseModel):
     """一份出站凭据档案（c4-model/agent/code-credentials.html）：注入方式 + 主机 + 凭据 + 谁能用。
 
@@ -202,8 +172,9 @@ class Settings(BaseSettings):
     sandbox_quota_per_user: int = 10
     #: 原生沙箱闲置多久回收（没有运行中的命令、最近没有命令和文件操作）
     sandbox_idle_ttl_s: float = 1800.0
-    #: 孤儿回收只回收建好超过这么久的 —— 取活会话名单与回收之间新建的沙箱还很年轻
-    sandbox_reap_min_age_s: float = 600.0
+    #: 会话 Pod 闲置多久回收：会话没有没结束的 run，且最近一次结束超过这么久。Pod 重建代价低
+    #: （HOME 持久化、工作区在对象存储），长期不用的会话不该一直占着资源和配额
+    cli_pod_idle_ttl_s: float = 3600.0
     #: 命令轮询节奏：有输出时贴着最小值，没有输出时逐步放慢到最大值（§8.2）
     sandbox_poll_min_s: float = 0.3
     sandbox_poll_max_s: float = 2.0
@@ -214,8 +185,8 @@ class Settings(BaseSettings):
     #: execd /metrics 的 CPU 统计口径：OpenSandbox 1.1.1 读宿主的 /proc，是整个节点的数字（node）；
     #: 1.2.0 在设了资源上限时才是沙箱自己的 cgroup（sandbox）。整节点口径时卡死判定不下结论
     sandbox_usage_scope: Literal["sandbox", "node"] = "node"
-    #: 路由表在进程内缓存多久（§9）。操作失败时立即作废
-    sandbox_route_cache_s: float = 2.0
+    #: 「这个业务绑着哪个沙箱」在进程内缓存多久（工作区每次读写文件都要问）。本进程的写入立即作废
+    sandbox_binding_cache_s: float = 2.0
 
     # ── 评测档沙箱：OpenSandbox 的 opensandbox-bench 实例（root、根可写）──────────────
     #: ★ 只给评测用：Terminal-Bench 这类题目按 root 设计。不配地址 = 这个部署没有评测档，
@@ -244,9 +215,6 @@ class Settings(BaseSettings):
     #: Secret atlas-cli-model 里，由 会话 Pod 模板以文件挂进 Pod，entrypoint 读出后交给 bridge
     cli_model_base_url: str = ""
     cli_model_name: str = ""
-    #: git 凭据档案：名字 → GitProfile（JSON，来自 Secret）。
-    #: 旧格式，B6 切到 credential_profiles 后删
-    git_profiles: dict[str, GitProfile] = {}
     #: 出站凭据档案：code → CredentialProfileIn（JSON，来自 Secret CREDENTIAL_PROFILES）
     credential_profiles: dict[str, CredentialProfileIn] = {}
 

@@ -2,9 +2,12 @@
 
 每个执行器都参与竞选（Redis SET NX PX + 续租），持有者定期执行，进程退出后别的实例接任：
 
-    孤儿沙箱回收     每 pod_reap_interval_s：会话已不存在或已归档的 ACP Pod 与原生沙箱
-    沙箱闲置回收     每分钟：没有运行中的命令且闲置超过 sandbox_idle_ttl_s 的原生沙箱
-                     （先删路由再删沙箱）
+    孤儿沙箱回收     每 pod_reap_interval_s：会话已不存在或已归档的会话 Pod 与原生沙箱（只释放业务，
+                     沙箱退不退役由通用供给按绑定决定）；随后两层对账：通用供给重试卡在退役的、
+                     删基座里没有登记的实例；基座删 OpenSandbox 上没有登记的（存量沙箱也在其中），
+                     并按保留期清理生命周期日志
+    沙箱闲置回收     每分钟：原生沙箱没有命令在跑且闲置超过 sandbox_idle_ttl_s；会话 Pod 没有没结束
+                     的 run 且最近一次结束超过 cli_pod_idle_ttl_s
     会话后补记       每 memory_backfill_scan_s：空闲 / 归档的会话补上漏记的记忆、拆小超限的主题
                      （doc/memory-design.html §4.5）。★ 另起任务跑：一批要调几次 LLM，不能挡住
                      上面几项；上一批没跑完就不起下一批
@@ -20,12 +23,13 @@ import asyncio
 import contextlib
 import logging
 import time
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from .instance import instance_id
-from .providers.opensandbox import AcpProvisioner, SandboxProvisioner
 from .redisx import make_redis
 from .repositories.thread import ThreadRepository
+from .sandbox.component import SandboxComponent
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -123,9 +127,9 @@ class Maintainer:
         if now >= self._due.get("pods", now + 1):
             self._due["pods"] = now + self._settings.pod_reap_interval_s
             await self._reap_pods(redis)
-        if self._settings.sandbox_enabled and now >= self._due.get("sandbox_idle", now + 1):
+        if now >= self._due.get("sandbox_idle", now + 1):
             self._due["sandbox_idle"] = now + _SANDBOX_IDLE_S
-            await SandboxProvisioner(self._settings, redis).reap_idle()
+            await self._reap_idle(redis)
         if self._backfiller is not None and now >= self._due.get("memory_backfill", now + 1):
             self._due["memory_backfill"] = now + self._settings.memory_backfill_scan_s
             if self._backfill_task is None or self._backfill_task.done():
@@ -141,19 +145,41 @@ class Maintainer:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
 
-    async def _reap_pods(self, redis: Any) -> None:
-        """会话已不存在（或已归档）的 ACP Pod 与原生沙箱一律删掉。
+    async def _reap_idle(self, redis: Any) -> None:
+        sandbox = SandboxComponent.build(self._settings, redis, sessions=self._sessionmaker)
+        try:
+            await sandbox.pods.reap_idle()
+        except Exception:
+            logger.warning("会话 Pod 闲置回收失败", exc_info=True)
+        if self._settings.sandbox_enabled:
+            await sandbox.native.reap_idle()
 
-        ★ 名单是**取完马上用**的：取名单与回收之间新建的会话，其沙箱还很年轻，
-          只回收建好超过 sandbox_reap_min_age_s 的，不会误删。
+    async def _reap_pods(self, redis: Any) -> None:
+        """会话已不存在（或已归档）的会话 Pod 与原生沙箱：释放它们的业务，再两层对账。
+
+        ★ 名单是**取完马上用**的：先登记再建，取名单与回收之间新建的会话，它的业务早已登记，
+          孤儿回收只看业务在不在名单上，不会误删。
         ★ 归档的会话不算活（ThreadRepository.live_ids）：task 的 fresh=true 每丢一次子会话，
-          就会留下一个再也用不上的 ACP Pod。
+          就会留下一个再也用不上的会话 Pod。
         """
         async with self._sessionmaker() as session:
-            live = {str(thread_id) for thread_id in await ThreadRepository(session).live_ids()}
-        try:
-            await AcpProvisioner(self._settings, redis).reap_orphans(live)
-        except Exception:
-            logger.warning("ACP Pod 孤儿回收失败", exc_info=True)
+            live = list(await ThreadRepository(session).live_ids())
+        sandbox = SandboxComponent.build(self._settings, redis, sessions=self._sessionmaker)
+        steps: list[tuple[str, Any]] = [("会话 Pod 孤儿回收", sandbox.pods.reap_orphans(live))]
         if self._settings.sandbox_enabled:
-            await SandboxProvisioner(self._settings, redis).reap_orphans(live)
+            steps.append(("原生沙箱孤儿回收", sandbox.native.reap_orphans(live)))
+        steps += [
+            ("通用供给对账", sandbox.provisioning.reconcile()),
+            ("沙箱基座对账", sandbox.runtime.reconcile()),
+            (
+                "清理沙箱生命周期日志",
+                sandbox.runtime.purge_history(
+                    datetime.now(UTC) - timedelta(days=self._settings.sandbox_event_retention_days)
+                ),
+            ),
+        ]
+        for name, step in steps:
+            try:
+                await step
+            except Exception:
+                logger.warning("%s失败", name, exc_info=True)

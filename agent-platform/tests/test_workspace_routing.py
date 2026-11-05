@@ -1,12 +1,12 @@
-"""工作区读写的两条路（doc/sandbox-opensandbox-design.html §9、§10）。
+"""工作区读写的两条路（c4-model/agent/code-workspace.html · StoreRouter；改造计划 B6）。
 
     没有运行中的沙箱   文件工具直连对象存储（moto）
-    沙箱在跑           工作区的 key 经 execd 文件 API 走 Pod 里的挂载 —— 与命令同一个挂载；
+    沙箱在跑           工作区的 key 经沙箱内执行的文件会话走 Pod 里的挂载 —— 与命令同一个挂载；
                        技能区仍走对象存储
 
 最重要的一组是对齐测试：同一串操作在两条路上必须给出一样的结果（列举语义、错误文案、隐藏文件、
 递归删除），否则模型会因为「沙箱是否在跑」看到两个不同的文件系统。另外覆盖：命令看得见工具写的文件、
-沙箱没了回退对象存储并删路由、沙箱不响应时读降级写报错、同步方法不走路由。
+沙箱没了回退对象存储并去掉记录、沙箱不响应时读降级写报错、同步方法不走路由。
 """
 
 from __future__ import annotations
@@ -15,21 +15,22 @@ import dataclasses
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 import boto3
 import pytest
 from atlas_agent.config import get_settings
+from atlas_agent.domain.spec import SandboxSpec
 from atlas_agent.providers.filesystem import Workspace, WorkspaceRouting
-from atlas_agent.providers.opensandbox import SandboxProvisioner
-from atlas_agent.providers.sandbox import PodSandbox
 from atlas_agent.redisx import make_redis
+from atlas_agent.sandbox.component import SandboxComponent
+from atlas_agent.sandbox.exec import PollingPolicy, ShellSandbox
+from atlas_agent.sandbox.native import WorkspaceRef
 from moto import mock_aws
 
-from tests.opensandbox_fake import FakeOpenSandbox, fake_settings, wipe
+from tests.opensandbox_fake import FakeOpenSandbox
+from tests.sandbox_env import component, new_workspace, workspace_dir
 
 BUCKET = "atlas-test"
-USER = "u-1"
 
 
 @pytest.fixture
@@ -40,15 +41,14 @@ def fake(tmp_path: Path) -> Iterator[FakeOpenSandbox]:
 
 
 @pytest.fixture
-def ws() -> str:
-    return f"ws-{uuid4().hex[:10]}"
+def ws() -> WorkspaceRef:
+    return new_workspace()
 
 
 @pytest.fixture
-async def redis(fake: FakeOpenSandbox, ws: str) -> AsyncIterator[Any]:
+async def redis(clean_db: None) -> AsyncIterator[Any]:
     client = make_redis(get_settings())
     yield client
-    await wipe(client, ws, fake.prefix)
     await client.aclose()
 
 
@@ -61,17 +61,19 @@ def s3() -> Iterator[Any]:
 
 
 @pytest.fixture
-def provisioner(fake: FakeOpenSandbox, redis: Any) -> SandboxProvisioner:
-    return SandboxProvisioner(fake_settings(), redis, transport=fake.async_transport)
+def c(fake: FakeOpenSandbox, redis: Any) -> SandboxComponent:
+    return component(fake, redis)
 
 
-def _fs(
-    s3: Any, ws: str, provisioner: SandboxProvisioner | None, fake: FakeOpenSandbox
-) -> Workspace:
-    routing = (
-        WorkspaceRouting(provisioner, ws, transport=fake.sync_transport) if provisioner else None
+def _fs(s3: Any, ws: WorkspaceRef, c: SandboxComponent | None) -> Workspace:
+    routing = WorkspaceRouting(c.native, c.exec, ws) if c else None
+    return Workspace(
+        s3, bucket=BUCKET, user_id=ws.user_uuid, thread_id=ws.root_thread_uuid, routing=routing
     )
-    return Workspace(s3, bucket=BUCKET, user_id=USER, thread_id=ws, routing=routing)
+
+
+def _prefix(ws: WorkspaceRef) -> str:
+    return f"{ws.user_uuid}/{ws.root_thread_uuid}/"
 
 
 def _objects(s3: Any, prefix: str) -> list[str]:
@@ -127,17 +129,17 @@ _OPS: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = [
 
 
 async def test_routed_and_direct_paths_give_identical_results(
-    s3: Any, fake: FakeOpenSandbox, provisioner: SandboxProvisioner, ws: str
+    s3: Any, fake: FakeOpenSandbox, c: SandboxComponent, ws: WorkspaceRef
 ) -> None:
-    direct = _fs(s3, f"{ws}-direct", None, fake)
-    await provisioner.ensure(ws, user=USER)
-    routed = _fs(s3, ws, provisioner, fake)
+    direct = _fs(s3, new_workspace(), None)
+    await c.native.ensure(ws, SandboxSpec())
+    routed = _fs(s3, ws, c)
     for name, args, kwargs in _OPS:
         want = _norm(await getattr(direct, name)(*args, **kwargs))
         got = _norm(await getattr(routed, name)(*args, **kwargs))
         assert got == want, f"{name}{args}{kwargs}"
-    assert _objects(s3, f"{USER}/{ws}/") == []  # 沙箱在跑时一个字节都没直接写进对象存储
-    mount = fake.workspace(ws)
+    assert _objects(s3, _prefix(ws)) == []  # 沙箱在跑时一个字节都没直接写进对象存储
+    mount = workspace_dir(fake, ws)
     on_mount = sorted(f.relative_to(mount).as_posix() for f in mount.rglob("*") if f.is_file())
     assert on_mount == [".cache/x", "a.txt"]  # 都落在了 Pod 的挂载上
 
@@ -146,19 +148,19 @@ async def test_routed_and_direct_paths_give_identical_results(
 
 
 async def test_commands_see_what_file_tools_wrote_and_vice_versa(
-    s3: Any, fake: FakeOpenSandbox, provisioner: SandboxProvisioner, ws: str
+    s3: Any, c: SandboxComponent, ws: WorkspaceRef
 ) -> None:
-    sbx = PodSandbox(
-        provisioner=provisioner,
-        workspace_thread_id=ws,
-        user_id=USER,
-        run_id=f"run-{ws}",
-        poll_min_s=0.02,
-        poll_max_s=0.05,
-        transport=fake.async_transport,
+    sbx = ShellSandbox(
+        native=c.native,
+        exec=c.exec,
+        ledger=c.ledger,
+        ws=ws,
+        run_id=f"run-{ws.root_thread_uuid}",
+        spec=SandboxSpec(),
+        polling=PollingPolicy(0.02, 0.05),
     )
-    await sbx.aexecute("true")  # 沙箱起来 → 路由表有记录
-    fs = _fs(s3, ws, provisioner, fake)
+    await sbx.aexecute("true")  # 沙箱起来 → 通用供给标为 READY
+    fs = _fs(s3, ws, c)
     await fs.awrite("notes/plan.md", "step 1\n")
     assert (await sbx.aexecute("cat notes/plan.md")).output == "step 1\n"
     await sbx.aexecute("echo 'step 2' >> notes/plan.md; echo out > result.txt")
@@ -167,86 +169,81 @@ async def test_commands_see_what_file_tools_wrote_and_vice_versa(
 
 
 async def test_ui_upload_goes_through_the_running_sandbox(
-    s3: Any, fake: FakeOpenSandbox, provisioner: SandboxProvisioner, ws: str
+    s3: Any, fake: FakeOpenSandbox, c: SandboxComponent, ws: WorkspaceRef
 ) -> None:
-    """★ 界面上传和模型的写走同一个选路：沙箱在跑时经沙箱写，只有一个写入方。
-
-    原先界面上传一律直连对象存储，沙箱在跑时可能和沙箱里的进程互相覆盖（s3fs 有缓存）。
-    """
+    """★ 界面上传和模型的写走同一个选路：沙箱在跑时经沙箱写，只有一个写入方。"""
     from atlas_agent.providers.filesystem import WorkspaceListing
 
-    await provisioner.ensure(ws, user=USER)
-    fs = _fs(s3, ws, provisioner, fake)
+    await c.native.ensure(ws, SandboxSpec())
+    fs = _fs(s3, ws, c)
     assert await WorkspaceListing(fs).put("data/input.csv", b"a,b\n1,2\n") == 8
-    assert (fake.workspace(ws) / "data" / "input.csv").read_bytes() == b"a,b\n1,2\n"
-    assert _objects(s3, f"{USER}/{ws}/") == []  # 没有绕过沙箱直写对象存储
+    assert (workspace_dir(fake, ws) / "data" / "input.csv").read_bytes() == b"a,b\n1,2\n"
+    assert _objects(s3, _prefix(ws)) == []  # 没有绕过沙箱直写对象存储
 
 
 async def test_without_a_running_sandbox_files_go_to_object_storage(
-    s3: Any, fake: FakeOpenSandbox, provisioner: SandboxProvisioner, ws: str
+    s3: Any, fake: FakeOpenSandbox, c: SandboxComponent, ws: WorkspaceRef
 ) -> None:
     """★ 文件操作不建沙箱：多数会话从不跑命令，一直直连对象存储。"""
-    fs = _fs(s3, ws, provisioner, fake)
+    fs = _fs(s3, ws, c)
     await fs.awrite("a.txt", "x")
     assert (await fs.aread("a.txt")).file_data["content"] == "x"
-    assert _objects(s3, f"{USER}/{ws}/") == [f"{USER}/{ws}/workspace/a.txt"]
+    assert _objects(s3, _prefix(ws)) == [f"{_prefix(ws)}workspace/a.txt"]
     assert fake.created == []
 
 
 async def test_skills_always_come_from_object_storage(
-    s3: Any, fake: FakeOpenSandbox, provisioner: SandboxProvisioner, ws: str
+    s3: Any, fake: FakeOpenSandbox, c: SandboxComponent, ws: WorkspaceRef
 ) -> None:
-    s3.put_object(Bucket=BUCKET, Key=f"{USER}/{ws}/skills/pdf/SKILL.md", Body=b"# pdf")
-    await provisioner.ensure(ws, user=USER)
-    fs = _fs(s3, ws, provisioner, fake)
+    s3.put_object(Bucket=BUCKET, Key=f"{_prefix(ws)}skills/pdf/SKILL.md", Body=b"# pdf")
+    await c.native.ensure(ws, SandboxSpec())
+    fs = _fs(s3, ws, c)
     assert (await fs.aread("/skills/pdf/SKILL.md")).file_data["content"] == "# pdf"
     assert (await fs.asearch("/skills/")).common_prefixes == ["skills/pdf/"]
-    assert list(fake.workspace(ws).iterdir()) == []
+    assert list(workspace_dir(fake, ws).iterdir()) == []
 
 
 async def test_sync_methods_never_route(
-    s3: Any, fake: FakeOpenSandbox, provisioner: SandboxProvisioner, ws: str
+    s3: Any, fake: FakeOpenSandbox, c: SandboxComponent, ws: WorkspaceRef
 ) -> None:
-    await provisioner.ensure(ws, user=USER)
-    fs = _fs(s3, ws, provisioner, fake)
+    await c.native.ensure(ws, SandboxSpec())
+    fs = _fs(s3, ws, c)
     fs.write("a.txt", "x")
-    assert _objects(s3, f"{USER}/{ws}/") == [f"{USER}/{ws}/workspace/a.txt"]
-    assert list(fake.workspace(ws).iterdir()) == []
+    assert _objects(s3, _prefix(ws)) == [f"{_prefix(ws)}workspace/a.txt"]
+    assert list(workspace_dir(fake, ws).iterdir()) == []
 
 
 # ──────────────────────────────────────────────── 沙箱出问题时
 
 
-async def test_vanished_sandbox_falls_back_and_drops_the_route(
-    s3: Any, fake: FakeOpenSandbox, provisioner: SandboxProvisioner, ws: str
+async def test_vanished_sandbox_falls_back_and_is_forgotten(
+    s3: Any, fake: FakeOpenSandbox, c: SandboxComponent, ws: WorkspaceRef
 ) -> None:
     """Pod 没了：写穿挂载下文件早已在对象存储里，改走对象存储即可。"""
-    s3.put_object(Bucket=BUCKET, Key=f"{USER}/{ws}/workspace/a.txt", Body=b"persisted")
-    ep = await provisioner.ensure(ws, user=USER)
-    fake.vanish(ep.sandbox_id)
-    fs = _fs(s3, ws, provisioner, fake)
+    s3.put_object(Bucket=BUCKET, Key=f"{_prefix(ws)}workspace/a.txt", Body=b"persisted")
+    await c.native.ensure(ws, SandboxSpec())
+    fake.vanish(fake.created[0].id)
+    fs = _fs(s3, ws, c)
     assert (await fs.aread("a.txt")).file_data["content"] == "persisted"
-    assert await provisioner.routes.get(ws) is None
+    assert await c.native.current(ws) is None
     assert (await fs.awrite("b.txt", "y")).error is None  # 之后的写也直连对象存储
-    assert f"{USER}/{ws}/workspace/b.txt" in _objects(s3, f"{USER}/{ws}/")
+    assert f"{_prefix(ws)}workspace/b.txt" in _objects(s3, _prefix(ws))
 
 
 async def test_unresponsive_sandbox_degrades_reads_and_refuses_writes(
-    s3: Any, fake: FakeOpenSandbox, provisioner: SandboxProvisioner, ws: str
+    s3: Any, fake: FakeOpenSandbox, c: SandboxComponent, ws: WorkspaceRef
 ) -> None:
-    """沙箱还在但 execd 不响应：读降级到对象存储；写不降级（那会多出一个写入方），报错让模型重试。
+    """沙箱还在但 execd 不响应：读降级到对象存储。
 
-    ★ 写不降级的原因：沙箱里的进程还可能在写同一个文件。
+    写不降级（那会多出一个写入方），报错让模型重试。
     """
-    s3.put_object(Bucket=BUCKET, Key=f"{USER}/{ws}/workspace/a.txt", Body=b"persisted")
-    ep = await provisioner.ensure(ws, user=USER)
-    fs = _fs(s3, ws, provisioner, fake)
+    s3.put_object(Bucket=BUCKET, Key=f"{_prefix(ws)}workspace/a.txt", Body=b"persisted")
+    ref = await c.native.ensure(ws, SandboxSpec())
+    fs = _fs(s3, ws, c)
     fake.break_execd(100)
     assert (await fs.aread("a.txt")).file_data["content"] == "persisted"
     result = await fs.awrite("a.txt", "overwritten")
     assert result.error is not None and "暂时不可写" in result.error
-    assert (
-        s3.get_object(Bucket=BUCKET, Key=f"{USER}/{ws}/workspace/a.txt")["Body"].read()
-        == b"persisted"
-    )
-    assert await provisioner.routes.get(ws) == ep  # 不是沙箱没了：路由保留
+    key = f"{_prefix(ws)}workspace/a.txt"
+    assert s3.get_object(Bucket=BUCKET, Key=key)["Body"].read() == b"persisted"
+    assert await c.native.current(ws) == ref  # 不是沙箱没了：记录保留

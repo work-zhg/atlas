@@ -34,7 +34,7 @@ from .translate.acp_v1 import EventIntent
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-    from ..providers.pods import PodEndpoint
+    from ..sandbox.session_pod import PodEndpoint
 
 __all__ = [
     "CliSession",

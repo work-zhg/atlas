@@ -19,8 +19,9 @@ from atlas_agent.domain.tool_registry import BASH_TOOL, FILESYSTEM_TOOL, reminde
 from atlas_agent.errors import CapabilityUnavailable
 from atlas_agent.executor.segment_data import Segment
 from atlas_agent.providers.knowledge import make_knowledge_tool, require_client
-from atlas_agent.providers.opensandbox import SandboxProvisioner
-from atlas_agent.providers.sandbox import PodSandbox
+from atlas_agent.sandbox.component import SandboxComponent
+from atlas_agent.sandbox.exec import PollingPolicy, ShellSandbox
+from atlas_agent.sandbox.native import WorkspaceRef
 
 from ..config import Settings
 from ..domain.events import EventType
@@ -78,7 +79,7 @@ class ToolSurface:
         *,
         run_id: UUID,
         redis: aioredis.Redis,
-        provisioner: SandboxProvisioner | None,
+        sandbox: SandboxComponent | None,
         workspace: Any,
         memory: MemoryTurn | None,
         notices: list[tuple[EventType, dict[str, Any]]] | None = None,
@@ -116,22 +117,21 @@ class ToolSurface:
         # Shell 沙箱（doc/sandbox-opensandbox-design.html）。★ 这里只构造客户端，不建沙箱 ——
         #   沙箱在第一次 execute 时才按需创建（多数原生会话用不到）。
         #   按工作区建：子智能体（workspace_thread_id = 父会话）与父会话共用一个。
-        sandbox = None
+        shell = None
         if BASH_TOOL in segment.spec.tool_names:
-            if provisioner is None:
+            if sandbox is None:
                 raise SandboxNotEnabled(
                     "勾选了 Shell（bash）但服务端未开启沙箱（SANDBOX_ENABLED=false）"
                 )
             settings = self._settings
-            sandbox = PodSandbox(
-                provisioner=provisioner,
-                workspace_thread_id=str(segment.thread.workspace_thread_id),
-                user_id=str(segment.thread.created_by_uuid),
+            shell = ShellSandbox(
+                native=sandbox.native,
+                exec=sandbox.exec,
+                ledger=sandbox.ledger,
+                ws=WorkspaceRef(segment.thread.workspace_thread_id, segment.thread.created_by_uuid),
                 run_id=str(run_id),
-                image=segment.spec.sandbox.image,
-                profile=segment.spec.sandbox.profile,
-                poll_min_s=settings.sandbox_poll_min_s,
-                poll_max_s=settings.sandbox_poll_max_s,
+                spec=segment.spec.sandbox,
+                polling=PollingPolicy(settings.sandbox_poll_min_s, settings.sandbox_poll_max_s),
                 output_limit=settings.sandbox_output_limit_bytes,
                 idle_s=settings.cli_tool_idle_timeout_s,
                 stall_cpu_pct=settings.sandbox_stall_cpu_pct,
@@ -151,7 +151,7 @@ class ToolSurface:
         return ToolContribution(
             extra_tools=extra_tools,
             deferred_tools=deferred,
-            sandbox=sandbox,
+            sandbox=shell,
             # ★ 技能在**会话创建**时就已拷进 skills 前缀（见 skill_copy），
             #   这里只把清单渲染给中间件 —— 不扫描、不读文件。
             skills=skill_refs_for(skill_metas),

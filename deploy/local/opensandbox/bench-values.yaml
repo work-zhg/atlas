@@ -40,7 +40,7 @@ configToml: |
 
   [kubernetes]
   # ★ 与 opensandbox-sbx 同一个命名空间：共用整桶 PVC atlas-oss（第三个整桶 PV 没有可用的 volumeHandle）。
-  #   两个 server 都列得到对方的沙箱，Atlas 按 id 去重；评测档的沙箱带标签 atlas.profile=bench
+  #   两个 server 都列得到对方的沙箱，Atlas 对账时按 OpenSandbox 的 id 去重
   namespace = "atlas-sbx"
   workload_provider = "batchsandbox"
   batchsandbox_template_file = "/etc/opensandbox/templates/bench.yaml"
@@ -50,3 +50,10 @@ configToml: |
   [store]
   type = "sqlite"
   path = "/var/lib/opensandbox/opensandbox.db"
+
+  # 每个沙箱都带出站策略（默认放行），所以要配 egress。★ 用上游镜像、不带拒绝集群网段的 deny.always：
+  #   评测档的出网代理（26-bench-egress.yaml）是集群内的服务，拒绝集群网段会把它也挡掉。
+  #   评测档因此没有集群隔离 —— 只给评测题镜像用（Atlas 按镜像前缀准入）
+  [egress]
+  image = "sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/egress:release-1.1.1"
+  mode = "dns+nft"
