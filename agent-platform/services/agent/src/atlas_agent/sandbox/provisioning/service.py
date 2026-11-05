@@ -20,6 +20,8 @@ c4-model/agent/sandbox/code-sandbox-provisioning.html。
 ★ 先登记再建：sandbox_uuid 由这里生成，以 CREATING 和绑定一起落库，再交基座建。基座里的每个实例
   在这里都有登记，找不到登记的就是孤儿。
 ★ 不含任何业务类型特有的逻辑：准入、创建规格、附加配置、就绪判断都由 SandboxKind 给出。
+★ 配额可以是固定的，也可以每次分配时现取（运行期配置 sandbox.quota_per_user，runtime_config.py）：
+  管理员改了上限，下一次分配就按新的判。
 """
 
 from __future__ import annotations
@@ -65,7 +67,7 @@ class SandboxKind(Protocol):
 
     biz_type: BizType
 
-    def admit(self, req: Any) -> None:
+    async def admit(self, req: Any) -> None:
         """准入（如镜像白名单）。不通过抛异常。"""
 
     def build(self, req: Any, biz: BizRef) -> CreateSpec:
@@ -84,7 +86,7 @@ class SandboxProvisioning:
         runtime: SandboxRuntime,
         sessions: async_sessionmaker[AsyncSession],
         *,
-        quota: QuotaPolicy,
+        quota: QuotaPolicy | Callable[[], Awaitable[QuotaPolicy]],
         allocation: AllocationPolicy | None = None,
         cache_s: float = 2.0,
     ) -> None:
@@ -120,7 +122,7 @@ class SandboxProvisioning:
                 continue
             if current is not None and current.status is SandboxStatus.CREATING:
                 return await self._bring_up(current, kind, kind.build(req, biz), req)
-            kind.admit(req)
+            await kind.admit(req)
             spec = kind.build(req, biz)
             try:
                 allocated = await self._allocate(biz, spec)
@@ -132,6 +134,7 @@ class SandboxProvisioning:
         raise SandboxUnavailableError("沙箱分配反复冲突，请稍后重试")
 
     async def _allocate(self, biz: BizRef, spec: CreateSpec) -> UserSandbox:
+        quota = self._quota if isinstance(self._quota, QuotaPolicy) else await self._quota()
         async with self._sessions() as session:
             repo = SandboxAccountRepository(session, cache_s=self._cache_s)
             account = await repo.load(biz.user_uuid)
@@ -139,7 +142,7 @@ class SandboxProvisioning:
             if stale is not None and stale.status is SandboxStatus.RETIRING:
                 # 绑着一个正在退役的沙箱：解绑，给它分配新的（退役那边删完自己收尾）
                 account.unbind(biz)
-            sandbox = account.allocate(biz, spec, policy=self._allocation, quota=self._quota)
+            sandbox = account.allocate(biz, spec, policy=self._allocation, quota=quota)
             await repo.save(account)
             await session.commit()
             return sandbox

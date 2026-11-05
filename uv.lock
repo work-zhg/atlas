@@ -16,6 +16,7 @@ members = [
     "atlas",
     "atlas-acp",
     "atlas-agent",
+    "atlas-appconfig",
     "atlas-bench",
     "atlas-bridge",
     "atlas-engine",
@@ -332,6 +333,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "atlas-acp" },
     { name = "atlas-agent" },
+    { name = "atlas-appconfig" },
     { name = "atlas-bench" },
     { name = "atlas-bridge" },
     { name = "atlas-engine" },
@@ -363,6 +365,7 @@ dev = [
 requires-dist = [
     { name = "atlas-acp", editable = "agent-platform/libs/acp" },
     { name = "atlas-agent", editable = "agent-platform/services/agent" },
+    { name = "atlas-appconfig", editable = "infra-platform/libs/appconfig" },
     { name = "atlas-bench", editable = "agent-platform/bench" },
     { name = "atlas-bridge", editable = "agent-platform/pod/bridge" },
     { name = "atlas-engine", editable = "agent-platform/libs/engine" },
@@ -409,6 +412,7 @@ dependencies = [
     { name = "alembic" },
     { name = "asyncpg" },
     { name = "atlas-acp" },
+    { name = "atlas-appconfig" },
     { name = "atlas-engine" },
     { name = "atlas-host" },
     { name = "atlas-jsonrpc" },
@@ -435,6 +439,7 @@ requires-dist = [
     { name = "alembic", specifier = ">=1.14" },
     { name = "asyncpg", specifier = ">=0.30" },
     { name = "atlas-acp", editable = "agent-platform/libs/acp" },
+    { name = "atlas-appconfig", editable = "infra-platform/libs/appconfig" },
     { name = "atlas-engine", editable = "agent-platform/libs/engine" },
     { name = "atlas-host", editable = "agent-platform/libs/host" },
     { name = "atlas-jsonrpc", editable = "agent-platform/libs/jsonrpc" },
@@ -454,6 +459,25 @@ requires-dist = [
     { name = "redis", specifier = ">=5.2" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.36" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
+]
+
+[[package]]
+name = "atlas-appconfig"
+version = "0.1.0"
+source = { editable = "infra-platform/libs/appconfig" }
+dependencies = [
+    { name = "alembic" },
+    { name = "fastapi" },
+    { name = "pydantic" },
+    { name = "sqlalchemy", extra = ["asyncio"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "alembic", specifier = ">=1.14" },
+    { name = "fastapi", specifier = ">=0.115" },
+    { name = "pydantic", specifier = ">=2.9" },
+    { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.36" },
 ]
 
 [[package]]

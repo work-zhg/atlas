@@ -184,7 +184,7 @@ class CliPodKind:
         self._egress = egress
         self._transport = transport
 
-    def admit(self, req: PodRequest) -> None:
+    async def admit(self, req: PodRequest) -> None:
         if not req.cli.image:
             raise ValueError("CLI 智能体的 cli.image 为空，无法创建会话 Pod")
 

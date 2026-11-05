@@ -5,6 +5,8 @@ description = "Atlas agent 服务 — FastAPI, Postgres, Redis."
 requires-python = ">=3.13"
 dependencies = [
   "atlas-acp",
+  # 运行期可改的业务参数（配额、镜像白名单）：runtime_config.py
+  "atlas-appconfig",
   "atlas-engine",
   "atlas-host",
   "atlas-jsonrpc",

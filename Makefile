@@ -12,7 +12,8 @@ lint:    ; uv run ruff check . && uv run ruff format --check .
 types:   ; uv run mypy agent-platform/libs/engine/src agent-platform/services/agent/src
 arch:    ; uv run lint-imports
 test:    ; uv run pytest -q
-migrate: ; cd agent-platform/services/agent && uv run alembic upgrade head
+# 应用配置库（atlas_appconfig）的表跟在 Atlas 自己的迁移后面，版本表单独一张
+migrate: ; cd agent-platform/services/agent && uv run alembic upgrade head && uv run python -m atlas_agent migrate-appconfig
 serve:   ; uv run uvicorn atlas_agent.main:app --reload --port 8000
 # 技能应用（技能包的上传、审查、发布）。库是同一 PG 上的 atlas_skill（make up 会建）。
 #   用户中心里是独立应用「技能」：首次要 python -m atlas_skill register-uc --account admin

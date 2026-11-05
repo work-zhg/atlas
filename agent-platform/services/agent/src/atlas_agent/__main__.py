@@ -1,6 +1,8 @@
 """atlas-server 命令行（服务本身由 uvicorn 启动：atlas_agent.main:create_app）。
 
   python -m atlas_agent register-uc --account admin   把 Atlas 登记到用户中心（权限设计 §6）
+  python -m atlas_agent migrate-appconfig              应用配置库的表（alembic upgrade head 之后跑；
+                                                       版本表 app_config_alembic_version 单独一张）
   python -m atlas_agent reassign-threads map.json      TeamFlow 的存量会话改归真实的人（§14）
   python -m atlas_agent backfill-agent-identity        存量 Agent 补数字员工、登记 AtlasAgent
                                                        （数字员工设计 §12，迁移 0023 之后）
@@ -29,6 +31,10 @@ def main(argv: list[str] | None = None) -> int:
     reg.add_argument("--uc-url", default=None)
     reg.add_argument(
         "--tenant", default=None, help="管理员所在的企业代码（用户中心有多个租户时必填）"
+    )
+    sub.add_parser(
+        "migrate-appconfig",
+        help="应用配置（atlas_appconfig）的表迁移到最新；和 alembic upgrade head 一起跑",
     )
     rt = sub.add_parser(
         "reassign-threads",
@@ -68,6 +74,21 @@ def main(argv: list[str] | None = None) -> int:
         register(
             args.uc_url or get_settings().uc_base_url, args.account, password, tenant=args.tenant
         )
+    elif args.command == "migrate-appconfig":
+        import asyncio
+
+        from atlas_appconfig import upgrade
+
+        from .db.session import get_engine
+
+        async def _migrate() -> None:
+            try:
+                async with get_engine().begin() as conn:
+                    await conn.run_sync(upgrade)
+            finally:
+                await get_engine().dispose()
+
+        asyncio.run(_migrate())
     elif args.command == "reassign-threads":
         import asyncio
         import json

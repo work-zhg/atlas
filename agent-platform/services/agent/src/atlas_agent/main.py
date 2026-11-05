@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 from starlette.requests import Request
 
 from .api.v1 import router as v1_router
+from .api.v1.configs import config_router
 from .api.v1.previews import install_log_mask
 from .auth.service import listen_invalidations
 from .auth.uc import UCClient
@@ -27,6 +28,7 @@ from .maintainer import Maintainer
 from .memory import Backfiller, make_memory_runtime
 from .outbound import IdentityScopeMiddleware
 from .redisx import make_redis
+from .runtime_config import RuntimeConfig
 from .sandbox.base.lifecycle.templates import template_publisher
 from .sandbox.component import SandboxComponent
 from .stream.gate import StreamGate, StreamsBusy
@@ -71,6 +73,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # ★ 遥测要在任何 span 产生之前装好。装不上不拦着进程起（它是旁路），
     #   但会把失败喊出来 —— 否则就成了「以为在采集其实没有」。
     setup_telemetry(settings)
+    # 运行期配置（支线 C）：把 Atlas 声明的 key 登记到库里。★ 类型和库里的对不上直接启动失败 ——
+    #   要改类型就换 key 名（滚动发布时新旧两版同时读同一行）
+    await app.state.runtime_config.config.register()
     # CLI 智能体的执行环境：沙箱组件的会话 Pod（c4-model/agent/sandbox/
     # code-sandbox-session-pod.html），由 OpenSandbox 的 opensandbox-cli 建。
     # ★ 进程级的 Redis 客户端：建沙箱的效率锁在 Redis
@@ -168,7 +173,7 @@ def create_app() -> FastAPI:
         CORSMiddleware,
         allow_origins=settings.cors_origins,
         allow_credentials=True,
-        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         # Range：文件预览按前 1 MiB 取文本（doc/detail/file-preview.html §08）
         allow_headers=[
             "Content-Type",
@@ -183,6 +188,9 @@ def create_app() -> FastAPI:
     install_log_mask()
 
     app.include_router(v1_router)
+    # 运行期配置（每人沙箱配额、镜像白名单）的管理接口；lifespan 里登记 key
+    app.state.runtime_config = RuntimeConfig(settings, get_sessionmaker())
+    app.include_router(config_router(app.state.runtime_config.config))
 
     # ★ SSE 并发闸门。会话流的寿命是「用户开着这个会话多久」，而不是「一轮
     #   多久」—— 每条占一个 Redis 连接，不设限的表现是**所有** HTTP 请求一起

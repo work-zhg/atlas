@@ -160,13 +160,13 @@ OPENSANDBOX_SRC="$OPENSANDBOX_SRC" ATLAS_HOST_IP="$SERVER_IP" ATLAS_OSS_ADDR="mi
   deploy/local/opensandbox.sh
 fi
 
-# ── 3. server 的库迁移（server 自己启动时不迁移）─────────────────────────
+# ── 3. server 的库迁移（server 自己启动时不迁移；应用配置库的表跟在后面）──────
 kubectl -n atlas-system delete pod atlas-migrate --ignore-not-found --wait=true >/dev/null
 kubectl -n atlas-system run atlas-migrate --image="$APP_IMAGE" --image-pull-policy=Never \
   --restart=Never --attach --rm --quiet \
   --env="DATABASE_URL=postgresql+asyncpg://atlas:atlas@postgres.${INFRA}:5432/atlas" \
   --env="REDIS_URL=redis://redis.${INFRA}:6379/0" --env="LITELLM_KEY=unused" \
-  -- alembic upgrade head
+  -- sh -c 'alembic upgrade head && python -m atlas_agent migrate-appconfig'
 
 # ── 4. 后端与前端 ───────────────────────────────────────────────────
 ATLAS_HOST_IP="$SERVER_IP" \

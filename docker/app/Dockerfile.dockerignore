@@ -13,6 +13,7 @@
 !agent-platform/libs/host/
 !agent-platform/libs/engine/
 !infra-platform/libs/redislock/
+!infra-platform/libs/appconfig/
 !agent-platform/services/skill/
 !agent-platform/services/knowledge/
 !agent-platform/services/memory/

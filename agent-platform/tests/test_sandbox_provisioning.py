@@ -57,7 +57,7 @@ class FakeKind:
         self.readied: list[UUID] = []
         self.fail_ready = False
 
-    def admit(self, req: Any) -> None:
+    async def admit(self, req: Any) -> None:
         if req == "denied":
             raise PermissionError("镜像不在白名单里")
         self.admitted.append(req)

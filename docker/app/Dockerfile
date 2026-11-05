@@ -50,6 +50,7 @@ COPY agent-platform/libs/jsonrpc/ jsonrpc/
 COPY agent-platform/libs/host/ host/
 COPY agent-platform/libs/engine/ engine/
 COPY infra-platform/libs/redislock/ redislock/
+COPY infra-platform/libs/appconfig/ appconfig/
 COPY agent-platform/services/skill/ skill/
 COPY agent-platform/services/knowledge/ knowledge/
 COPY agent-platform/services/memory/ memory/
@@ -60,7 +61,7 @@ COPY agent-platform/services/agent/ server/
 COPY usercenter/services/usercenter/ usercenter/
 COPY teamflow/services/teamflow/ teamflow/
 
-# ★ 本仓的包一次装：它们彼此按名字依赖（server → engine/acp/redislock），
+# ★ 本仓的包一次装：它们彼此按名字依赖（server → engine/acp/redislock/appconfig），
 #   分开装的话 pip 会去 PyPI 找 atlas-engine，而那里没有这个包。
 #
 # ★ skill 要在 server 之前：server 依赖 atlas-skill（只用它的 schemas）。
@@ -69,7 +70,7 @@ COPY teamflow/services/teamflow/ teamflow/
 #   requirements.txt 时在这里构建失败，而不是到 Pod 里才 ImportError。
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --no-deps \
-                ./jsonrpc ./host ./acp ./engine ./redislock ./skill ./knowledge ./memory ./mcpgateway \
+                ./jsonrpc ./host ./acp ./engine ./redislock ./appconfig ./skill ./knowledge ./memory ./mcpgateway \
                 ./modelgateway \
                 ./server \
                 ./usercenter ./teamflow \

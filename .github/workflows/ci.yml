@@ -57,7 +57,9 @@ jobs:
         run: uv run lint-imports
 
       - name: Migrate
-        run: cd agent-platform/services/agent && uv run alembic upgrade head
+        run: |
+          cd agent-platform/services/agent && uv run alembic upgrade head
+          uv run python -m atlas_agent migrate-appconfig
 
       - name: Test
         run: uv run pytest -q

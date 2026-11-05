@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -77,13 +77,21 @@ class WorkspaceRef:
         return cls(biz.biz_id, biz.user_uuid)
 
 
+#: 按档位的镜像前缀白名单
+AllowList = dict[str, list[str]]
+
+
 class ImagePolicy:
-    """镜像准入。★ 任意镜像 = 任意代码以会话身份跑在集群里；评测档是 root，只该跑评测题的镜像。"""
+    """镜像准入。★ 任意镜像 = 任意代码以会话身份跑在集群里；评测档是 root，只该跑评测题的镜像。
+
+    白名单可以是固定的，也可以每次准入时现取（运行期配置 sandbox.image_allow_prefixes，
+    runtime_config.py）：管理员改了，下一个新建的沙箱就按新的判。平台默认镜像总是放行。
+    """
 
     def __init__(
         self,
         default_image: str,
-        allow: dict[str, list[str]],
+        allow: AllowList | Callable[[], Awaitable[AllowList]],
         *,
         bench_available: bool,
     ) -> None:
@@ -94,12 +102,13 @@ class ImagePolicy:
     def resolve(self, image: str) -> str:
         return image or self._default
 
-    def check(self, image: str, profile: SandboxProfile) -> None:
+    async def check(self, image: str, profile: SandboxProfile) -> None:
         if profile == "bench" and not self._bench:
             raise ImageDenied("这个部署没有评测档沙箱（未配置 OPENSANDBOX_BENCH_URL）")
         if image == self._default:
             return
-        if not any(image.startswith(p) for p in self._allow.get(profile, [])):
+        allow = self._allow if isinstance(self._allow, dict) else await self._allow()
+        if not any(image.startswith(p) for p in allow.get(profile, [])):
             scope = "评测档的" if profile == "bench" else ""
             raise ImageDenied(f"沙箱镜像 {image!r} 不在{scope}允许范围内")
 
@@ -119,8 +128,8 @@ class NativeSandboxKind:
         self._exec = exec
         self._images = images
 
-    def admit(self, req: SandboxSpec) -> None:
-        self._images.check(self._images.resolve(req.image), req.profile)
+    async def admit(self, req: SandboxSpec) -> None:
+        await self._images.check(self._images.resolve(req.image), req.profile)
 
     def build(self, req: SandboxSpec, biz: BizRef) -> CreateSpec:
         s = self._settings

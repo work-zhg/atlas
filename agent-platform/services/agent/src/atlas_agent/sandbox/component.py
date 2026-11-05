@@ -8,6 +8,7 @@
   （供给的 by_biz、execd 的地址）跟着各自的生命周期走。
 ★ 通用供给在这里登记两种业务类型（NATIVE、CLI_AGENT）：供给不认识它们，业务领域的服务也不直接调
   自己的种类。
+★ 每人配额、镜像白名单读运行期配置（runtime_config.py），每次分配 / 准入时查库，改了不用重启。
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from uuid import UUID
 import httpx
 
 from ..db.session import get_sessionmaker
+from ..runtime_config import RuntimeConfig
 from .base.execution.execd import ExecdChannel
 from .base.execution.ledger import ActivityLedger
 from .base.lifecycle.runtime import OpenSandboxRuntime
@@ -96,18 +98,18 @@ class SandboxComponent:
         egress = OpenSandboxEgress(
             runtime, ready_timeout_s=settings.cli_ready_timeout_s, transport=transport
         )
+        # 配额和镜像白名单是运行期配置：每次分配 / 准入时现取，默认值是同名的部署配置
+        config = RuntimeConfig(settings, sessions)
+
+        async def quota() -> QuotaPolicy:
+            return QuotaPolicy(await config.sandbox_quota())
+
         provisioning = SandboxProvisioning(
-            runtime,
-            sessions,
-            quota=QuotaPolicy(settings.sandbox_quota_per_user),
-            cache_s=settings.sandbox_binding_cache_s,
+            runtime, sessions, quota=quota, cache_s=settings.sandbox_binding_cache_s
         )
         images = ImagePolicy(
             settings.sandbox_default_image,
-            {
-                "strict": list(settings.sandbox_image_allow_prefixes),
-                "bench": list(settings.sandbox_bench_image_allow_prefixes),
-            },
+            config.image_allow_prefixes,
             bench_available=settings.opensandbox_bench_url is not None,
         )
         provisioning.register(NativeSandboxKind(settings, exec, images))
