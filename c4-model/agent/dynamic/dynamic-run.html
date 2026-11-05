@@ -446,12 +446,12 @@
       <rect class="cell" x="320" y="160" width="44" height="36"/><text class="mid" x="342" y="183">…</text>
       <rect class="band-a" x="364" y="160" width="44" height="36"/><text class="mid" x="386" y="183">38</text>
       <rect class="band-a" x="408" y="160" width="44" height="36"/><text class="mid" x="430" y="183">39</text>
-      <rect class="band-b" x="452" y="160" width="44" height="36"/><text class="mid" x="474" y="183">40</text>
-      <rect class="band-a" x="496" y="160" width="44" height="36"/><text class="mid" x="518" y="183">41</text>
-      <rect class="band-b" x="540" y="160" width="44" height="36"/><text class="mid" x="562" y="183">42</text>
+      <rect class="band-a" x="452" y="160" width="44" height="36"/><text class="mid" x="474" y="183">40</text>
+      <rect class="band-b" x="496" y="160" width="44" height="36"/><text class="mid" x="518" y="183">41</text>
+      <rect class="band-a" x="540" y="160" width="44" height="36"/><text class="mid" x="562" y="183">42</text>
       <rect class="band-b" x="584" y="160" width="44" height="36"/><text class="mid" x="606" y="183">43</text>
-      <rect class="band-a" x="628" y="160" width="44" height="36"/><text class="mid" x="650" y="183">44</text>
-      <rect class="band-a" x="672" y="160" width="44" height="36"/><text class="mid" x="694" y="183">45</text>
+      <rect class="band-b" x="628" y="160" width="44" height="36"/><text class="mid" x="650" y="183">44</text>
+      <rect class="band-b" x="672" y="160" width="44" height="36"/><text class="mid" x="694" y="183">45</text>
       <rect class="cell" x="716" y="160" width="44" height="36"/><text class="mid" x="738" y="183">…</text>
       <text class="t-lab" x="320" y="222">蓝 = R 的事件，橙 = S1 的事件：交错写进同一条流，序号连续、不撞</text>
       <text class="t-lab" x="320" y="242">MAXLEN ~1 万（近似裁剪）· 每次写续期 1 天；计数器 30 天</text>
@@ -495,6 +495,47 @@
       <li><span class="n">5</span>读 Redis 段：再从这条流按 <code>thread_seq</code> 接着读，读完已有的就阻塞等新的（图 3）。</li>
       <li><span class="n">6</span>推给浏览器：SSE 帧的 <code>id</code> 就是 <code>thread_seq</code>。断线后浏览器自动带 <code>Last-Event-ID</code> 重连，连到哪个实例，都从这个号之后接着读。</li>
     </ol>
+
+    <p style="margin-top: 16px"><b>流里的一条事件长什么样。</b>不管是哪个 run、原生还是 CLI 智能体，每条事件都是同一个格式（TraceEvent）：</p>
+    <table>
+      <thead><tr><th style="width: 14%">字段</th><th>意思</th><th style="width: 26%">例子</th></tr></thead>
+      <tbody>
+        <tr><td><code>thread_seq</code></td><td>会话序号：这是整个根会话（包括子孙 run）里的第几条事件，发布时由 Redis 统一分配。断线重连的游标就是它</td><td><code>42</code></td></tr>
+        <tr><td><code>seq</code></td><td>run 内序号：这是发它的那个 run 自己的第几条事件，从 1 开始、没有空洞，挂起续跑、接管后都接着数</td><td><code>15</code></td></tr>
+        <tr><td><code>run_id</code></td><td>哪个 run 发的</td><td>R 的 id</td></tr>
+        <tr><td><code>depth</code></td><td>0 = 主智能体，1 = 子智能体。前端据此决定画进主对话，还是画进子智能体的卡片</td><td><code>0</code></td></tr>
+        <tr><td><code>ts</code></td><td>产生的时间</td><td><code>2026-11-05T10:21:07Z</code></td></tr>
+        <tr><td><code>type</code></td><td>事件类型，前端按它决定怎么画</td><td><code>run.suspended</code></td></tr>
+        <tr><td><code>data</code></td><td>这一类事件自己的内容；字段只增不删，要改语义就换一个新类型</td><td><code>{"waiting_on": [...]}</code></td></tr>
+      </tbody>
+    </table>
+
+    <p style="margin-top: 16px">图 1 里 38～45 这一截展开是这样的。场景：父 run R 派了两个子智能体 S1、S2 并行去查资料（S2 的事件没画），S1 跑在实例 C 上：</p>
+    <table>
+      <thead><tr><th style="width: 7%">会话序号</th><th style="width: 13%">谁发的 · run 内序号 · depth</th><th style="width: 13%">type</th><th>data（节选）</th><th style="width: 22%">控制台上的样子</th></tr></thead>
+      <tbody>
+        <tr><td>38</td><td>R · 12 · 0</td><td><code>message.delta</code></td><td><code>{"text": "分头去查。", "block": 0}</code></td><td>接在前几条 delta 后面，主对话里「我派两个子智能体分头去查。」这句打完（一句话要好几条 delta，见下面的说明）</td></tr>
+        <tr><td>39</td><td>R · 13 · 0</td><td><code>subagent.started</code></td><td><code>{"subagent_run_id": "call_a", "name": "researcher", "title": "查年假制度", "task": "在员工手册里找年假能不能分次休……"}</code></td><td>出现一张子智能体卡片「查年假制度 · 运行中」</td></tr>
+        <tr><td>40</td><td>R · 14 · 0</td><td><code>subagent.started</code></td><td><code>{"subagent_run_id": "call_b", "name": "researcher", "title": "查请假流程", …}</code></td><td>第二张卡片</td></tr>
+        <tr><td>41</td><td>S1 · 1 · 1</td><td><code>run.started</code></td><td><code>{"agent_slug": "researcher", "model": "deepseek-chat", …}</code></td><td>主对话不单独显示（子 run 的开始已经由 39 那张卡片表示），主轮次保持「等待子智能体」</td></tr>
+        <tr><td>42</td><td>R · 15 · 0</td><td><code>run.suspended</code></td><td><code>{"waiting_on": [{"tool_call_id": "call_a", "reason": "subagent", …}, {"tool_call_id": "call_b", …}], "partial_text_len": 12}</code></td><td>主对话显示「等待子智能体」；这不是结束，流不关</td></tr>
+        <tr><td>43</td><td>S1 · 2 · 1</td><td><code>tool.started</code></td><td><code>{"call_id": "call_x", "name": "knowledge_search", "args": {"query": "年假 分几次"}, "args_preview": …}</code></td><td>主对话的时间线上多一行缩进的工具调用（属于子智能体）「knowledge_search · 运行中」</td></tr>
+        <tr><td>44</td><td>S1 · 3 · 1</td><td><code>tool.completed</code></td><td><code>{"call_id": "call_x", "name": "knowledge_search", "status": "success", "result_preview": "员工手册 3.1 年假：可以分两次休……"}</code></td><td>这一行变成已完成，可以展开看结果</td></tr>
+        <tr><td>45</td><td>S1 · 4 · 1</td><td><code>message.delta</code></td><td><code>{"text": "查到了：年假", "block": 0}</code></td><td>不进主对话：前端按子 run 先收着，暂不显示。子智能体的结论等 R 续跑时随 <code>subagent.finished</code> 回到卡片上</td></tr>
+      </tbody>
+    </table>
+
+    <p style="margin-top: 16px">推给浏览器时，每条事件变成一帧 SSE。以第 42 条为例：</p>
+    <pre style="margin: 8px 0; padding: 10px 12px; border: 1px solid #e3e3e3; background: #f6f8fa; font-family: Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.5; white-space: pre-wrap; word-break: break-all">id: 42
+event: run.suspended
+data: {"seq": 15, "thread_seq": 42, "run_id": "…R…", "ts": "2026-11-05T10:21:07Z", "type": "run.suspended", "depth": 0, "data": {"waiting_on": [{"tool_call_id": "call_a", "reason": "subagent", …}, {"tool_call_id": "call_b", …}], "partial_text_len": 12}}</pre>
+    <ul style="margin: 8px 0 0; padding-left: 20px; font-size: 14px; line-height: 1.7">
+      <li><code>id</code> 写的是会话序号。浏览器断线后带 <code>Last-Event-ID: 42</code> 重连，从第 43 条接着读，连到哪个实例都一样。</li>
+      <li>两个序号各管各的：R、S1 交错写，会话序号仍然连续、不撞（38～45）；run 内序号各数各的（R 是 12～15，S1 是 1～4），用来看「这是那个 run 的第几条」。</li>
+      <li><code>run.suspended</code> 不是结束事件：R 这一段跑完了，但这一轮还在等子智能体，流不关。S1、S2 都结束后 R 续跑，接着从 run 内序号 16 往下发。真正结束一轮的只有 <code>run.finished</code>、<code>run.failed</code>、<code>run.cancelled</code>。</li>
+      <li><code>message.delta</code> 是一小块，不是整段回答：模型每吐出一块文字（通常一两个 token，几个字）就发一条，后端不攒批。所以一句话要好几条 delta，各有自己的会话序号；前端把 <code>text</code> 依次拼到第 <code>block</code> 段的末尾，看起来就是逐字打出来的。<code>block</code> 是段号：模型调一次工具，这一段话就说完了，下一条 delta 从下一段开始。</li>
+      <li><code>message.delta</code> 只为打字效果，不归档（③）。这一段说完时会发一条 <code>message.completed</code>，里面是完整的各段正文，前端用它替换拼出来的文字（中途漏收一条 delta 也能自愈）；刷新页面回放历史时，正文也看它。</li>
+    </ul>
 
     <h3>图 2　会话序号：多个生产者共用一个计数器</h3>
     <svg width="1240" viewBox="0 0 1240 420" role="img" aria-label="会话序号的分配">

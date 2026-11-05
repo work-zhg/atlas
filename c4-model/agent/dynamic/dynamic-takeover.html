@@ -27,6 +27,42 @@
   #c4-details td.sample { word-break: break-all; }
   #c4-details pre { margin: 0; padding: 10px 12px; border: 1px solid #e3e3e3; background: #f6f8fa; font-size: 12px; line-height: 1.5; overflow-x: auto; }
   svg a { cursor: pointer; }
+  /* 接管原理：手写的静态图，不经渲染器 */
+  #principle { max-width: 1280px; }
+  #principle h3 { margin: 32px 0 8px; font-size: 15px; font-weight: 600; color: #333; }
+  #principle p { margin: 0 0 8px; font-size: 14px; line-height: 1.7; }
+  #principle code { padding: 0 3px; background: #f6f8fa; font-family: Menlo, Consolas, monospace; font-size: 12.5px; }
+  #principle ol { margin: 8px 0 0; padding: 0; list-style: none; }
+  #principle ol li { position: relative; margin: 0 0 6px; padding-left: 30px; font-size: 14px; line-height: 1.7; }
+  #principle ol li .n { position: absolute; left: 0; top: 2px; width: 20px; height: 20px; border-radius: 50%; background: #d9480f; color: #fff; font-size: 12px; font-weight: 700; line-height: 20px; text-align: center; }
+  #principle table { width: 100%; margin: 8px 0 0; border-collapse: collapse; font-size: 13px; line-height: 1.6; }
+  #principle th, #principle td { padding: 6px 10px; border: 1px solid #e3e3e3; text-align: left; vertical-align: top; }
+  #principle th { background: #f6f8fa; font-weight: 600; }
+  #principle th:first-child { width: 28%; }
+  #principle svg { margin: 8px 0 4px; }
+  #principle svg text { font-size: 13px; fill: #444; }
+  #principle svg .t-name { font-size: 15px; fill: #1168bd; text-anchor: middle; }
+  #principle svg .t-sub { font-size: 12px; fill: #888; text-anchor: middle; }
+  #principle svg .t-head { font-size: 14px; font-weight: 600; fill: #1168bd; }
+  #principle svg .t-key { font-size: 12px; fill: #888; }
+  #principle svg .t-lab { font-size: 12px; fill: #666; }
+  #principle svg .t-hot { font-size: 12px; fill: #d9480f; }
+  #principle svg .t-mute { font-size: 12px; fill: #aaa; }
+  #principle svg .t-ghost { font-size: 14px; font-weight: 600; fill: #888; }
+  #principle svg .hot { fill: #d9480f; }
+  #principle svg .mid { text-anchor: middle; }
+  #principle svg .end { text-anchor: end; }
+  #principle svg .b { font-weight: 700; }
+  #principle svg .node { fill: #fff; stroke: #1168bd; stroke-width: 1.6; }
+  #principle svg .head { fill: #f6f8fa; stroke: none; }
+  #principle svg .bnd { fill: none; stroke: #1168bd; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .ghost { fill: #fafafa; stroke: #aaa; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .gap { fill: #fff6f0; stroke: #d9480f; stroke-width: 1.2; stroke-dasharray: 5 4; }
+  #principle svg .e { fill: none; stroke: #444; stroke-width: 1.6; }
+  #principle svg .e-hot { fill: none; stroke: #d9480f; stroke-width: 2.4; }
+  #principle svg .e-link { fill: none; stroke: #d9480f; stroke-width: 1.4; stroke-dasharray: 4 3; }
+  #principle svg .badge circle { fill: #d9480f; stroke: #fff; stroke-width: 2; }
+  #principle svg .badge text { fill: #fff; font-size: 12px; font-weight: 700; text-anchor: middle; }
 </style>
 </head>
 <body>
@@ -314,6 +350,164 @@
   <section id="c4-details" hidden></section>
   <h2>Diagram key</h2>
   <svg id="c4-key" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+
+  <!-- 接管原理：静态图，不经上面的渲染器。场景同时序图：实例 A 刚发出一条 execute 就崩溃，实例 B 接管 -->
+  <section id="principle">
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+      <defs>
+        <marker id="pr-a" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#444"/></marker>
+        <marker id="pr-h" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#d9480f"/></marker>
+      </defs>
+    </svg>
+
+    <h2>接管原理：租约过期，别的实例收拾现场接着跑</h2>
+    <p>一句话：<b>接管</b>就是一个实例不再续租（崩溃、卡死，或者停机时主动交出）之后，别的实例把它手里的 run 领走：先在一个事务里收拾上一个实例留下的现场，再从最近的检查点接着跑这一段。租约是<b>心跳</b>，不是工作时长上限；所有写都带<b>租约围栏</b>，同一时刻只有一个实例能写这个 run。最多重做一个工具轮次。CLI 智能体的 run 不重做：那一轮一直在 Pod 里跑，接手的实例接回事件流就行。下面两张图，场景同上面的时序图：实例 A 刚发出一条 execute 就崩溃，实例 B 接管。橙色是这个场景实际走的路，灰色虚线是没走的分支。</p>
+
+    <h3>图 1　租约：心跳停了，别的实例才接手</h3>
+    <svg width="1240" viewBox="0 0 1240 330" role="img" aria-label="实例 A 崩溃，租约过期，实例 B 接管">
+      <text class="t-key" x="20" y="77">实例 A</text>
+      <text class="t-key" x="20" y="153">run 的租约</text>
+      <text class="t-key" x="20" y="247">实例 B</text>
+
+      <rect class="node" x="140" y="46" width="320" height="52" rx="4"/>
+      <text class="t-name" x="300" y="68">跑 run</text>
+      <text class="t-sub" x="300" y="88">每 10 秒续租 · 每个工具轮次一个检查点</text>
+      <text class="hot b" x="474" y="77">✕ 崩溃</text>
+      <text class="t-lab" x="540" y="77">execute 已发出，命令在 Pod 里照常跑</text>
+      <rect class="ghost" x="780" y="46" width="440" height="52" rx="4"/>
+      <text class="t-ghost mid" x="1000" y="68">若 A 只是假死</text>
+      <text class="t-mute mid" x="1000" y="88">醒来续租时发现 run 已不归它 → 立即停下；还要写就被围栏回滚</text>
+
+      <rect class="node" x="140" y="130" width="330" height="36" rx="4"/>
+      <text class="t-name" x="305" y="153">owner = A，不断往后续</text>
+      <rect class="gap" x="470" y="130" width="170" height="36" rx="4"/>
+      <text class="t-hot mid" x="555" y="153">没人续，≤ 30 秒过期</text>
+      <rect class="node" x="660" y="130" width="560" height="36" rx="4"/>
+      <text class="t-name" x="940" y="153">owner = B，每 10 秒续</text>
+      <path class="e-link" d="M640 166 V188 H700 V212" marker-end="url(#pr-h)"/>
+      <path class="e-hot" d="M760 214 V168" marker-end="url(#pr-h)"/>
+
+      <rect class="node" x="650" y="214" width="170" height="56" rx="4"/>
+      <text class="t-name" x="735" y="238">定时领取</text>
+      <text class="t-sub" x="735" y="258">running 且租约已过期</text>
+      <path class="e-hot" d="M820 242 H834" marker-end="url(#pr-h)"/>
+      <rect class="node" x="836" y="214" width="190" height="56" rx="4"/>
+      <text class="t-name hot" x="931" y="238">收拾现场</text>
+      <text class="t-sub" x="931" y="258">一个事务里四件事 → 图 2</text>
+      <path class="e-hot" d="M1026 242 H1040" marker-end="url(#pr-h)"/>
+      <rect class="node" x="1042" y="214" width="178" height="56" rx="4"/>
+      <text class="t-name" x="1131" y="238">从检查点接着跑</text>
+      <text class="t-sub" x="1131" y="258">最多重做一个工具轮次</text>
+
+      <path class="e" d="M140 300 H1210" marker-end="url(#pr-a)"/>
+      <text class="t-key end" x="1220" y="322">时间</text>
+
+      <g class="badge"><circle cx="140" cy="46" r="10"/><text x="140" y="50">1</text></g>
+      <g class="badge"><circle cx="470" cy="130" r="10"/><text x="470" y="134">2</text></g>
+      <g class="badge"><circle cx="650" cy="214" r="10"/><text x="650" y="218">3</text></g>
+      <g class="badge"><circle cx="780" cy="46" r="10"/><text x="780" y="50">4</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>A 在跑：每 10 秒用一条 SQL 续本实例手里全部 run 的租约；每个工具轮次写一个检查点（消息、事件归档、序号水位）。事件实时发进 Redis，归档是批量的。A 发出 execute 后崩溃；命令在沙箱 Pod 里照常跑，不随 server 进程一起死。</li>
+      <li><span class="n">2</span>没人续租，租约最多 30 秒就过期。租约短，是为了尽快发现死掉的实例；长任务只要还在续，就一直跑。</li>
+      <li><span class="n">3</span>B 定时扫描，领到状态是 running、租约已过期的 run（同一个事务里 <code>SELECT … FOR UPDATE SKIP LOCKED</code> 再 <code>UPDATE</code>，多个实例同时扫也不会领到同一行），写上自己的租约，先收拾现场（图 2），再从检查点接着跑。停机交接走同一条路：A 在安全点停下、清掉租约并广播唤醒，B 立刻领走，不用等过期。</li>
+      <li><span class="n">4</span>A 若只是卡住了：醒来续租时，返回的「仍由自己持有的 run」里已经没有这一个，立即停掉它的执行槽。万一停下之前还要写检查点，第一条写就是围栏，整个回滚。</li>
+    </ol>
+
+    <h3>图 2　收拾现场：一个事务里的四件事</h3>
+    <svg width="1240" viewBox="0 0 1240 410" role="img" aria-label="收拾现场：围栏、补归档、续序号、处理悬空调用">
+      <rect class="node" x="20" y="30" width="380" height="100" rx="4"/>
+      <text class="t-name" x="210" y="56">最近的检查点（数据库）</text>
+      <text class="t-sub" x="210" y="80">消息：到上一个工具轮次为止</text>
+      <text class="t-sub" x="210" y="100">事件归档到 run 内序号 12 · 水位 last_seq = 12</text>
+
+      <rect class="node" x="430" y="30" width="380" height="100" rx="4"/>
+      <text class="t-name" x="620" y="56">会话流（Redis）里这个 run 的事件</text>
+      <rect class="head" x="446" y="72" width="48" height="30" rx="3"/>
+      <text class="t-sub" x="470" y="92">11</text>
+      <rect class="head" x="500" y="72" width="48" height="30" rx="3"/>
+      <text class="t-sub" x="524" y="92">12</text>
+      <rect class="gap" x="554" y="72" width="48" height="30" rx="3"/>
+      <text class="t-hot mid" x="578" y="92">13</text>
+      <rect class="gap" x="608" y="72" width="48" height="30" rx="3"/>
+      <text class="t-hot mid" x="632" y="92">14</text>
+      <rect class="gap" x="662" y="72" width="48" height="30" rx="3"/>
+      <text class="t-hot mid" x="686" y="92">15</text>
+      <text class="t-sub" x="497" y="120">已归档</text>
+      <text class="t-hot" x="554" y="120">13–15：发布了，还没归档</text>
+
+      <rect class="node" x="840" y="30" width="380" height="100" rx="4"/>
+      <text class="t-name" x="1030" y="56">消息里悬空的工具调用</text>
+      <text class="t-sub" x="1030" y="80">发出了、没有结果</text>
+      <text class="t-lab mid" x="1030" y="104">call_7：execute（命令在 Pod 里还在跑）</text>
+
+      <rect class="bnd" x="20" y="166" width="1200" height="140" rx="6"/>
+      <text class="t-head" x="36" y="296">同一个事务（和第一个检查点一起提交）</text>
+      <path class="e" d="M170 130 V194" marker-end="url(#pr-a)"/>
+      <text class="t-lab" x="178" y="158">载入</text>
+      <path class="e-hot" d="M620 130 V150 H460 V194" marker-end="url(#pr-h)"/>
+      <text class="t-hot" x="468" y="186">取回</text>
+      <path class="e-hot" d="M1030 130 V194" marker-end="url(#pr-h)"/>
+
+      <rect class="node" x="40" y="196" width="260" height="74" rx="4"/>
+      <text class="t-name" x="170" y="220">围栏</text>
+      <text class="t-sub" x="170" y="240">第一条写：owner 还是 B 吗</text>
+      <text class="t-sub" x="170" y="258">不是就整个回滚</text>
+      <path class="e-hot" d="M300 233 H328" marker-end="url(#pr-h)"/>
+      <rect class="node" x="330" y="196" width="260" height="74" rx="4"/>
+      <text class="t-name" x="460" y="220">补归档</text>
+      <text class="t-sub" x="460" y="240">13–15 从会话流里取回来</text>
+      <text class="t-sub" x="460" y="258">写进事件归档</text>
+      <path class="e-hot" d="M590 233 H618" marker-end="url(#pr-h)"/>
+      <rect class="node" x="620" y="196" width="260" height="74" rx="4"/>
+      <text class="t-name" x="750" y="220">续序号</text>
+      <text class="t-sub" x="750" y="240">last_seq = 15</text>
+      <text class="t-sub" x="750" y="258">B 的事件从 16 接着数</text>
+      <path class="e-hot" d="M880 233 H908" marker-end="url(#pr-h)"/>
+      <rect class="node" x="910" y="196" width="290" height="74" rx="4"/>
+      <text class="t-name" x="1055" y="220">处理悬空调用</text>
+      <text class="t-sub" x="1055" y="240">execute：用同一个调用 id 重放</text>
+      <text class="t-sub" x="1055" y="258">其余：记「中断，结果未知」</text>
+
+      <path class="e-hot" d="M310 306 V334" marker-end="url(#pr-h)"/>
+      <rect class="node" x="20" y="336" width="580" height="60" rx="4"/>
+      <text class="t-name" x="310" y="360">发布 run.resumed</text>
+      <text class="t-sub" x="310" y="382">reason = expired · discard_chars = N：前端丢掉最后 N 个已流出、没落库的字</text>
+      <path class="e-hot" d="M930 306 V334" marker-end="url(#pr-h)"/>
+      <rect class="node" x="640" y="336" width="580" height="60" rx="4"/>
+      <text class="t-name" x="930" y="360">从检查点接着跑这一段</text>
+      <text class="t-sub" x="930" y="382">重放 execute：执行账本里有这条命令，还在跑就接上，跑完了就取结果</text>
+
+      <g class="badge"><circle cx="40" cy="196" r="10"/><text x="40" y="200">1</text></g>
+      <g class="badge"><circle cx="330" cy="196" r="10"/><text x="330" y="200">2</text></g>
+      <g class="badge"><circle cx="620" cy="196" r="10"/><text x="620" y="200">3</text></g>
+      <g class="badge"><circle cx="910" cy="196" r="10"/><text x="910" y="200">4</text></g>
+      <g class="badge"><circle cx="20" cy="336" r="10"/><text x="20" y="340">5</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>围栏：收拾现场的第一条写先校验这个 run 的 owner 还是 B。收拾到一半租约又被别人领走，整个事务回滚，不会两个实例各补一半。</li>
+      <li><span class="n">2</span>补归档：A 发进 Redis、还没批量落库的那一截（检查点之后的 13–15），从会话流里取回来写进事件归档。</li>
+      <li><span class="n">3</span>续序号：run 的序号水位改成 A 实际发到的 15，B 产出的事件从 16 接着数。前端按序号去重、补齐，不会重号或断档。</li>
+      <li><span class="n">4</span>悬空调用：可接续的工具用同一个调用 id 重放。execute 可以：沙箱按（run，调用）记了执行账本，命令还在跑就接上等结果，已经跑完就直接取结果，命令只跑一遍。副作用无法确认的工具记「中断，结果未知」，交给模型去确认。</li>
+      <li><span class="n">5</span>发布 run.resumed，带上要丢掉的字数：A 最后一次模型调用已经流到前端、没进检查点的正文，B 会重做这次调用，前端先删掉，同一段话不会出现两遍。会话锁的持有者仍是这个 run，跟着 B 的租约续。</li>
+    </ol>
+
+    <h3>为什么这样做</h3>
+    <table>
+      <thead><tr><th>做法</th><th>为什么</th></tr></thead>
+      <tbody>
+        <tr><td>租约是心跳，不是工作时长上限</td><td>短租约（30 秒）让死掉的实例尽快被发现；长任务只要还在续，就一直跑，运行不设到点结束的上限。挂起时清掉租约，等人不占实例。</td></tr>
+        <tr><td>一条 SQL 续本实例的全部租约，续不上就立即停</td><td>逐个续，几十个 run 就是几十条 SQL。续不上说明 run 已被别的实例接走，继续跑就是两个实例写同一个 run。</td></tr>
+        <tr><td>所有写都带租约围栏</td><td>停下之前可能还有一次写在路上；围栏让它整个回滚，同一个 run 只有一个写入方。</td></tr>
+        <tr><td>收拾现场和第一个检查点在同一个事务里</td><td>补归档、续序号、补工具结果要么一起生效、要么一起不生效；收拾到一半被别人接走，也不会留下半套现场。</td></tr>
+        <tr><td>领取用 SKIP LOCKED，在同一个事务里领</td><td>多个实例并发扫描互不阻塞，也不会领到同一行。</td></tr>
+        <tr><td>可接续的工具重放，其余记「结果未知」</td><td>都记「结果未知」的话，模型多半会再发一次，命令就跑了两遍；而 execute 的命令在 Pod 里不随 server 死，执行账本能接上。副作用无法确认的工具如实说未知，模型才会先去确认状态。</td></tr>
+        <tr><td>告诉前端丢掉没落库的正文</td><td>接手的实例会重做最后一次模型调用；不丢的话，同一段话会出现两遍。</td></tr>
+        <tr><td>停机交接走同一条路，只是不等过期</td><td>滚动发布时实例会被替换：在安全点清掉租约并广播唤醒，别的实例立刻领走；等不到安全点就中止，最多重做一个工具轮次。</td></tr>
+        <tr><td>CLI 智能体的 run 接管时不重做</td><td>那一轮在 Pod 里一直在跑，工具也在 Pod 里；接手的实例按记下的 bridge 实例号和确认点接回事件流，补发之后的部分。bridge 重启过，这一轮才以失败结束。</td></tr>
+      </tbody>
+    </table>
+  </section>
 </main>
 
 <script>
