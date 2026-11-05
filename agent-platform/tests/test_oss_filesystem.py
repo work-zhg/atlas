@@ -406,6 +406,30 @@ def test_system_area_is_sibling_of_workspace(fs) -> None:
     )
 
 
+def test_offloads_land_in_the_system_area_under_the_same_paths(fs) -> None:
+    """引擎外置的大结果 / 被压缩的历史：模型照原路径读写，落在系统区，不进工作区。
+
+    红了意味着它们回到了工作区 —— 混进界面的文件面板，还被挂进沙箱。
+    """
+    from atlas_engine.kernel.context.offload import INPUT_DIR, OFFLOAD_DIR
+
+    fs.write("report.md", "我的产物")
+    fs.write(f"{OFFLOAD_DIR}/call-1", "很长的结果")
+    fs.write(f"{INPUT_DIR}/turns.md", "被压缩的历史")
+
+    assert fs.key_of(f"{OFFLOAD_DIR}/call-1") == fs.layout.key(
+        Area.SYSTEM, "large_tool_results/call-1"
+    )
+    assert fs.read(f"{OFFLOAD_DIR}/call-1").file_data["content"].strip() == "很长的结果"
+    assert fs.search(f"{OFFLOAD_DIR}/").keys == ["large_tool_results/call-1"]
+    assert fs.search("").keys == ["report.md"]  # 工作区里没有它们
+    assert fs.search("").common_prefixes == []
+    # 只有这两个保留目录进系统区：相对路径、系统区里的其它东西（CLI 的 HOME）都碰不到
+    relative = "large_tool_results/x"
+    assert fs.key_of(relative) == fs.layout.key(Area.WORKSPACE, relative)
+    assert fs.key_of("/cli-home/x") == fs.layout.key(Area.WORKSPACE, "cli-home/x")
+
+
 def test_subagent_skills_land_under_its_own_thread_prefix(s3) -> None:
     """子智能体的技能拷进**自己的** thread 前缀，改它不影响主 agent。
 

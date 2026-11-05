@@ -15,9 +15,11 @@ from uuid import uuid4
 import pytest
 from atlas_agent.config import Settings
 from atlas_agent.domain.spec import AgentSpec, LimitSpec, ModelSpec
+from atlas_engine.contracts import APPROVAL_MODES
 from langchain_anthropic import ChatAnthropic
-from langchain_core.messages import AIMessageChunk, SystemMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage
 from langchain_core.outputs import ChatGenerationChunk
+from langchain_core.tools import tool
 
 from tests.graphs import run_agent as run
 
@@ -25,11 +27,13 @@ _SEEN: list[dict[str, Any]] = []
 
 
 class _RecordingAnthropic(ChatAnthropic):
-    """不发网络请求：记下送进来的系统提示词与参数，回一句话。"""
+    """不发网络请求：记下送进来的系统提示词、消息与参数，回一句话。"""
 
     async def _astream(self, messages, stop=None, run_manager=None, **kwargs):
         system = next((m for m in messages if isinstance(m, SystemMessage)), None)
-        _SEEN.append({"kwargs": kwargs, "system": system.content if system else None})
+        _SEEN.append(
+            {"kwargs": kwargs, "system": system.content if system else None, "messages": messages}
+        )
         yield ChatGenerationChunk(message=AIMessageChunk(content="好"))
 
 
@@ -67,6 +71,42 @@ async def test_no_ttl_means_no_cache_control_at_all() -> None:
 
     assert "cache_control" not in seen["kwargs"]
     assert seen["system"] == "你是客服助手。"
+
+
+@tool
+def _send_report(to: str) -> str:
+    """把报告发给某人。"""
+    return "已发送"
+
+
+async def test_the_cached_prefix_is_identical_in_all_three_approval_modes() -> None:
+    """改造计划 A3 的验收：切审批模式不能击穿 prompt 缓存。
+
+    缓存的前缀是工具定义 + 系统提示词 + 历史消息。三种模式下这些必须逐字节相同：模式只在调用工具时
+    判定；规划模式的说明附在用户本轮那条消息上，只进请求。
+    """
+    history = [HumanMessage(content="上一轮的问题"), AIMessage(content="上一轮的回答")]
+    seen = {}
+    for mode in APPROVAL_MODES:
+        seen[mode] = await _request(
+            prompt_cache_ttl="1h", approval_mode=mode, history=history, extra_tools=[_send_report]
+        )
+    manual = seen["manual"]
+    tools = [t["name"] for t in manual["kwargs"]["tools"]]
+    assert "_send_report" in tools and "exit_plan_mode" in tools  # 工具列表在每种模式下都齐全
+    for mode in ("plan", "auto"):
+        assert seen[mode]["kwargs"]["tools"] == manual["kwargs"]["tools"], mode
+        assert seen[mode]["system"] == manual["system"], mode
+        assert seen[mode]["kwargs"].get("cache_control") == manual["kwargs"].get("cache_control")
+        # 历史（最后那条用户消息之前的全部）也一样
+        assert _dump(seen[mode]["messages"][:-1]) == _dump(manual["messages"][:-1]), mode
+    # 只有规划模式在本轮用户消息上多一段说明
+    assert _dump(seen["auto"]["messages"]) == _dump(manual["messages"])
+    assert "exit_plan_mode" in str(seen["plan"]["messages"][-1].content)
+
+
+def _dump(messages: list[Any]) -> list[Any]:
+    return [(m.type, m.content) for m in messages]
 
 
 # ── assembly：spec 开关 × 模型目录 ────────────────────────────────────────────

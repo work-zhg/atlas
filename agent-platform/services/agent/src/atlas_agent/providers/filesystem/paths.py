@@ -5,7 +5,12 @@
     /skills/...           技能区（相对的 skills/... 历史上也算，保持不变）
     /workspace/...        工作区区，剥掉挂载点（只剥绝对路径：相对的 workspace/a.md 是工作区里一个
                           叫 workspace 的子目录）
+    /large_tool_results/... 和 /conversation_history/...
+                          系统区，保留目录名（引擎外置大结果 / 被压缩的历史用这两个保留目录）
     其余                  工作区区
+
+★ 外置的东西放系统区：模型看到的路径不变、照样能读，但不进工作区 —— 不出现在界面的文件面板里，
+  也不挂进沙箱（沙箱里的进程碰不到）。原先它们落在工作区，和用户的文件混在一起。
 
 ★ 会话隔离全靠这一道关卡。它是本组件唯一的安全关键点 —— 写错了等于会话之间可以互相读写。
 ★ 先规范化、再拼前缀：先拼后归一的话，../../other-thread/x 会被归一成另一个会话的真实 key，
@@ -19,7 +24,7 @@ from dataclasses import dataclass
 
 from ...domain.workspace_layout import SKILLS_MOUNT, WORKSPACE_MOUNT, Area
 
-__all__ = ["FilePath", "PathEscape", "PathGate"]
+__all__ = ["SYSTEM_DIRS", "FilePath", "PathEscape", "PathGate"]
 
 
 class PathEscape(ValueError):
@@ -59,6 +64,8 @@ def _components(path: str, original: str) -> list[str]:
 
 _SKILLS = SKILLS_MOUNT.strip("/")
 _WORKSPACE = WORKSPACE_MOUNT.strip("/")
+#: 系统区里模型可读写的保留目录（与 atlas_engine 的 OFFLOAD_DIR / INPUT_DIR 对应）
+SYSTEM_DIRS = frozenset({"large_tool_results", "conversation_history"})
 
 
 class PathGate:
@@ -77,7 +84,8 @@ class PathGate:
 
     @staticmethod
     def shown(fp: FilePath) -> str:
-        """区内路径 → 模型看到的路径（search 的结果用）。技能区带上 skills/ 根。"""
+        """区内路径 → 模型看到的路径（search 的结果用）。技能区带上 skills/ 根；系统区的 rel
+        本来就以保留目录开头。"""
         return f"{_SKILLS}/{fp.rel}" if fp.area is Area.SKILLS else fp.rel
 
     def _resolve(self, path: str) -> FilePath:
@@ -89,4 +97,6 @@ class PathGate:
             return FilePath(Area.SKILLS, "/".join(parts[1:]))
         if absolute and parts and parts[0] == _WORKSPACE:
             return FilePath(Area.WORKSPACE, "/".join(parts[1:]))
+        if absolute and parts and parts[0] in SYSTEM_DIRS:
+            return FilePath(Area.SYSTEM, "/".join(parts))
         return FilePath(Area.WORKSPACE, "/".join(parts))
