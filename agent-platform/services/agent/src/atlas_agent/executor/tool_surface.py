@@ -94,8 +94,8 @@ class ToolSurface:
         # MCP 工具多时改为按需加载：定义不常驻上下文，模型用 tool_search 加载（上下文管理 §13）
         deferred = _deferred_mcp_tools(extra_tools, self._settings)
 
-        # ★ 网页搜索不再是内置工具：它经 Higress 以 MCP 提供
-        #   （mcp:serpapi:google_search），后端 key 只在网关里，走上面那条路。
+        # ★ 网页搜索不再是内置工具：它是 MCP 网关上的 serpapi 服务
+        #   （mcp:serpapi:google_search），上游 key 只在网关里，走上面那条路。
 
         # 记忆工具：load_memory 随记忆挂上；勾了「记忆」的主会话再挂 save_memory / forget_memory
         if memory is not None:

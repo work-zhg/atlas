@@ -50,8 +50,8 @@ def client_for(
     auth：httpx2.Auth —— 主体 Key（session.KeyAuth）。每个请求现取，Key 被重置后换一个值，
           已打开的会话不用重建（§6.7 ④）。
 
-    ★ mode="legacy"：沿用 initialize 握手（当初的上游 Higress 2.2.4 只懂它）。现在网关自己是 MCP
-      服务端（SDK 2.3），两种握手都支持；改回 "auto" 要先实测请求数再定（§8.2）。
+    ★ mode="legacy"：用 initialize 握手。网关是 MCP 服务端（SDK 2.3），两种握手都支持；
+      改成 "auto" 要先实测请求数再定（§8.2）。
     """
     from fastmcp import Client
     from fastmcp.client.transports import StreamableHttpTransport

@@ -28,7 +28,6 @@
 #
 # ★ 回退：kubectl -n atlas-system delete configmap atlas-model-platform，再滚动重启 atlas-server；
 #   ACP 的供应商 Key 要重跑 deploy/local/opensandbox.sh 恢复。
-# ★ 自研网关时期 Higress 上的模型路由（deepseek 供应商与 AI 路由）不再使用，可在 Higress 控制台删掉。
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 

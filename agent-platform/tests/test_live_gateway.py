@@ -129,9 +129,9 @@ async def test_live_tools_produce_inspector_data() -> None:
 
 
 async def test_live_mcp_web_search_via_gateway() -> None:
-    """网页搜索的真实链路：模型 → MCP 工具 → MCP 网关 → Higress → serpapi。
+    """网页搜索的真实链路：模型 → MCP 工具 → MCP 网关 → serpapi.com。
 
-    前提：MCP 网关在跑、serpapi 已在网关登记（Higress 上只认网关凭据），主体有授权、有 Key。
+    前提：MCP 网关在跑、serpapi 已在网关登记，主体有授权、有 Key。
     ATLAS_LIVE_MCP_GATEWAY_URL（默认本机 8070）、ATLAS_LIVE_MCP_SUBJECT（主体的用户中心 uid）。
     """
     import uuid

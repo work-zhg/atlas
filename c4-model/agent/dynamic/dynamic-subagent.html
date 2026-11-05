@@ -27,6 +27,92 @@
   #c4-details td.sample { word-break: break-all; }
   #c4-details pre { margin: 0; padding: 10px 12px; border: 1px solid #e3e3e3; background: #f6f8fa; font-size: 12px; line-height: 1.5; overflow-x: auto; }
   svg a { cursor: pointer; }
+  /* 委派原理：手写的静态图，不经渲染器 */
+  #principle-delegate { max-width: 1280px; }
+  #principle-delegate h3 { margin: 32px 0 8px; font-size: 15px; font-weight: 600; color: #333; }
+  #principle-delegate p { margin: 0 0 8px; font-size: 14px; line-height: 1.7; }
+  #principle-delegate code { padding: 0 3px; background: #f6f8fa; font-family: Menlo, Consolas, monospace; font-size: 12.5px; }
+  #principle-delegate ol { margin: 8px 0 0; padding: 0; list-style: none; }
+  #principle-delegate ol li { position: relative; margin: 0 0 6px; padding-left: 30px; font-size: 14px; line-height: 1.7; }
+  #principle-delegate ol li .n { position: absolute; left: 0; top: 2px; width: 20px; height: 20px; border-radius: 50%; background: #d9480f; color: #fff; font-size: 12px; font-weight: 700; line-height: 20px; text-align: center; }
+  #principle-delegate table { width: 100%; margin: 8px 0 0; border-collapse: collapse; font-size: 13px; line-height: 1.6; }
+  #principle-delegate th, #principle-delegate td { padding: 6px 10px; border: 1px solid #e3e3e3; text-align: left; vertical-align: top; }
+  #principle-delegate th { background: #f6f8fa; font-weight: 600; }
+  #principle-delegate th:first-child { width: 28%; }
+  #principle-delegate svg { margin: 8px 0 4px; }
+  #principle-delegate svg text { font-size: 13px; fill: #444; }
+  #principle-delegate svg .t-name { font-size: 15px; fill: #1168bd; text-anchor: middle; }
+  #principle-delegate svg .t-sub { font-size: 12px; fill: #888; text-anchor: middle; }
+  #principle-delegate svg .t-head { font-size: 14px; font-weight: 600; fill: #1168bd; }
+  #principle-delegate svg .t-key { font-size: 12px; fill: #888; }
+  #principle-delegate svg .t-lab { font-size: 12px; fill: #666; }
+  #principle-delegate svg .t-hot { font-size: 12px; fill: #d9480f; }
+  #principle-delegate svg .t-mute { font-size: 12px; fill: #aaa; }
+  #principle-delegate svg .t-ghost { font-size: 14px; font-weight: 600; fill: #888; }
+  #principle-delegate svg .hot { fill: #d9480f; }
+  #principle-delegate svg .mid { text-anchor: middle; }
+  #principle-delegate svg .end { text-anchor: end; }
+  #principle-delegate svg .b { font-weight: 700; }
+  #principle-delegate svg .node { fill: #fff; stroke: #1168bd; stroke-width: 1.6; }
+  #principle-delegate svg .head { fill: #f6f8fa; stroke: none; }
+  #principle-delegate svg .sep { stroke: #e3e3e3; stroke-width: 1; }
+  #principle-delegate svg .bnd { fill: none; stroke: #1168bd; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle-delegate svg .ghost { fill: #fafafa; stroke: #aaa; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle-delegate svg .gap { fill: #fff6f0; stroke: #d9480f; stroke-width: 1.2; stroke-dasharray: 5 4; }
+  #principle-delegate svg .e { fill: none; stroke: #444; stroke-width: 1.6; }
+  #principle-delegate svg .e-hot { fill: none; stroke: #d9480f; stroke-width: 2.4; }
+  #principle-delegate svg .e-mute { fill: none; stroke: #bbb; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle-delegate svg .e-link { fill: none; stroke: #d9480f; stroke-width: 1.4; stroke-dasharray: 4 3; }
+  #principle-delegate svg .badge circle { fill: #d9480f; stroke: #fff; stroke-width: 2; }
+  #principle-delegate svg .badge text { fill: #fff; font-size: 12px; font-weight: 700; text-anchor: middle; }
+  #principle-delegate svg .t-blue { font-size: 12px; fill: #1168bd; }
+  #principle-delegate svg .t-mono { font-family: Menlo, Consolas, monospace; font-size: 12px; fill: #333; }
+  /* 工作区与沙箱原理：手写的静态图，不经渲染器 */
+  #principle { max-width: 1280px; }
+  #principle h3 { margin: 32px 0 8px; font-size: 15px; font-weight: 600; color: #333; }
+  #principle p { margin: 0 0 8px; font-size: 14px; line-height: 1.7; }
+  #principle code { padding: 0 3px; background: #f6f8fa; font-family: Menlo, Consolas, monospace; font-size: 12.5px; }
+  #principle ol { margin: 8px 0 0; padding: 0; list-style: none; }
+  #principle ol li { position: relative; margin: 0 0 6px; padding-left: 30px; font-size: 14px; line-height: 1.7; }
+  #principle ol li .n { position: absolute; left: 0; top: 2px; width: 20px; height: 20px; border-radius: 50%; background: #d9480f; color: #fff; font-size: 12px; font-weight: 700; line-height: 20px; text-align: center; }
+  #principle table { width: 100%; margin: 8px 0 0; border-collapse: collapse; font-size: 13px; line-height: 1.6; }
+  #principle th, #principle td { padding: 6px 10px; border: 1px solid #e3e3e3; text-align: left; vertical-align: top; }
+  #principle th { background: #f6f8fa; font-weight: 600; }
+  #principle th:first-child { width: 28%; }
+  #principle svg { margin: 8px 0 4px; }
+  #principle svg text { font-size: 13px; fill: #444; }
+  #principle svg .t-name { font-size: 15px; fill: #1168bd; text-anchor: middle; }
+  #principle svg .t-sub { font-size: 12px; fill: #888; text-anchor: middle; }
+  #principle svg .t-head { font-size: 14px; font-weight: 600; fill: #1168bd; }
+  #principle svg .t-key { font-size: 12px; fill: #888; }
+  #principle svg .t-lab { font-size: 12px; fill: #666; }
+  #principle svg .t-hot { font-size: 12px; fill: #d9480f; }
+  #principle svg .t-mute { font-size: 12px; fill: #aaa; }
+  #principle svg .t-ghost { font-size: 14px; font-weight: 600; fill: #888; }
+  #principle svg .hot { fill: #d9480f; }
+  #principle svg .mid { text-anchor: middle; }
+  #principle svg .end { text-anchor: end; }
+  #principle svg .b { font-weight: 700; }
+  #principle svg .node { fill: #fff; stroke: #1168bd; stroke-width: 1.6; }
+  #principle svg .head { fill: #f6f8fa; stroke: none; }
+  #principle svg .sep { stroke: #e3e3e3; stroke-width: 1; }
+  #principle svg .bnd { fill: none; stroke: #1168bd; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .ghost { fill: #fafafa; stroke: #aaa; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .gap { fill: #fff6f0; stroke: #d9480f; stroke-width: 1.2; stroke-dasharray: 5 4; }
+  #principle svg .e { fill: none; stroke: #444; stroke-width: 1.6; }
+  #principle svg .e-hot { fill: none; stroke: #d9480f; stroke-width: 2.4; }
+  #principle svg .e-mute { fill: none; stroke: #bbb; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .e-link { fill: none; stroke: #d9480f; stroke-width: 1.4; stroke-dasharray: 4 3; }
+  #principle svg .badge circle { fill: #d9480f; stroke: #fff; stroke-width: 2; }
+  #principle svg .badge text { fill: #fff; font-size: 12px; font-weight: 700; text-anchor: middle; }
+  #principle svg .band-a { fill: #eef4fb; stroke: #1168bd; stroke-width: 1.4; }
+  #principle svg .band-b { fill: #fff3ea; stroke: #d9480f; stroke-width: 1.4; }
+  #principle svg .row-a { fill: #eef4fb; stroke: none; }
+  #principle svg .e-blue { fill: none; stroke: #1168bd; stroke-width: 2.4; }
+  #principle svg .t-blue { font-size: 12px; fill: #1168bd; }
+  #principle svg .t-mono { font-family: Menlo, Consolas, monospace; font-size: 12.5px; fill: #333; }
+  #principle svg .t-mono.hot { fill: #d9480f; }
+  #principle svg .sep-d { fill: none; stroke: #bbb; stroke-width: 1; }
 </style>
 </head>
 <body>
@@ -111,7 +197,7 @@
       "description": "找或建子会话：持久的按（父会话, 名字）复用，一次性的新建",
       "technology": "SQL/TCP",
       "details": {
-        "note": "子会话挂在派出它的那一层下面；工作区和事件流归根会话，技能按子会话自己的投送（新建时拷进它的技能区）。"
+        "note": "子会话挂在派出它的那一层下面；工作区（/{user}/{根会话}/workspace）和事件流归根会话；技能按子会话自己的智能体投送，放在这个人共用的 /{user}/skills/{slug}/{版本}，缺了才拷。"
       }
     },
     {
@@ -250,6 +336,581 @@
   <section id="c4-details" hidden></section>
   <h2>Diagram key</h2>
   <svg id="c4-key" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+
+  <!-- 委派原理：静态图，不经上面的渲染器。场景同时序图：根会话 P 的 run 调 task 派子智能体，子智能体再派 -->
+  <section id="principle-delegate">
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+      <defs>
+        <marker id="pd-a" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#444"/></marker>
+        <marker id="pd-h" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#d9480f"/></marker>
+        <marker id="pd-m" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#bbb"/></marker>
+        <marker id="pd-b" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#1168bd"/></marker>
+      </defs>
+    </svg>
+
+    <h2>委派原理：派完就挂起，子 run 都跑完了再叫醒父 run</h2>
+    <p>一句话：<b>派一个子智能体，就是在它自己的会话上起一个子 run</b>。父 run 不等，拿到子 run 的 id 就把这次 <code>task</code> 调用登记成一项等待、挂起；子 run 和普通 run 走同一条执行链路，可能在任何实例上跑；它跑完时去叫醒父 run，父 run 续跑时把结论作为 <code>task</code> 的结果交给模型，在同一轮里接着做。这和审批是同一种挂起（<code>waiting_on</code>），只是等的东西不同。子智能体还能再派，每一层都是同一件事。下面四张图，场景同上面的时序图。</p>
+
+    <h3>图 1　一次 task 调用：派出去，立刻挂起</h3>
+    <svg width="1240" viewBox="0 0 1240 460" role="img" aria-label="一次 task 调用：派出去，立刻挂起">
+      <rect class="node" x="20" y="30" width="330" height="60" rx="4"/>
+      <text class="t-name" x="185.0" y="56.0">模型发出 task 调用</text>
+      <text class="t-sub" x="185.0" y="76.0">description 标题 · prompt 任务书 · subagent_type · fresh</text>
+      <path class="e-hot" d="M350 60 H388" marker-end="url(#pd-h)"/>
+      <rect class="node" x="390" y="30" width="400" height="60" rx="4"/>
+      <text class="t-name" x="590.0" y="56.0">SubAgentMiddleware 接管</text>
+      <text class="t-sub" x="590.0" y="76.0">task 的函数体永远不执行：行为全在这里</text>
+      <path class="e-hot" d="M790 60 H828" marker-end="url(#pd-h)"/>
+      <rect class="node" x="830" y="30" width="390" height="60" rx="4"/>
+      <text class="t-name" x="1025.0" y="56.0">SubAgentService.spawn（会话管理）</text>
+      <text class="t-sub" x="1025.0" y="76.0">下面四步，哪一步不过就拒</text>
+      <path class="e-hot" d="M1025 90 V112 H160 V148" marker-end="url(#pd-h)"/>
+      <rect class="node" x="20" y="150" width="280" height="72" rx="4"/>
+      <text class="t-name" x="160.0" y="182.0">名录里有？同批没有同名？</text>
+      <text class="t-sub" x="160.0" y="202.0">持久的同名必须串行</text>
+      <path class="e-hot" d="M300 186 H324" marker-end="url(#pd-h)"/>
+      <rect class="node" x="326" y="150" width="280" height="72" rx="4"/>
+      <text class="t-name" x="466.0" y="182.0">准入：两道闸</text>
+      <text class="t-sub" x="466.0" y="202.0">在跑的子 run < 3 · 这一轮累计 < 6</text>
+      <path class="e-hot" d="M606 186 H630" marker-end="url(#pd-h)"/>
+      <rect class="node" x="632" y="150" width="280" height="72" rx="4"/>
+      <text class="t-name" x="772.0" y="182.0">找或建子会话</text>
+      <text class="t-sub" x="772.0" y="202.0">持久的复用 · 一次性的每次新建</text>
+      <path class="e-hot" d="M912 186 H936" marker-end="url(#pd-h)"/>
+      <rect class="node" x="938" y="150" width="280" height="72" rx="4"/>
+      <text class="t-name" x="1078.0" y="182.0">子会话空闲？建子 run</text>
+      <text class="t-sub" x="1078.0" y="202.0">建 run 行、写任务书、入队</text>
+      <path class="e-mute" d="M160 222 V260" marker-end="url(#pd-m)"/>
+      <path class="e-mute" d="M466 222 V260" marker-end="url(#pd-m)"/>
+      <path class="e-mute" d="M1000 222 V287 H902" marker-end="url(#pd-m)"/>
+      <rect class="ghost" x="20" y="262" width="880" height="50" rx="4"/>
+      <text class="t-ghost mid" x="460.0" y="283.0">拒：回一条失败的工具结果（status=error），不挂起</text>
+      <text class="t-mute mid" x="460.0" y="303.0">模型看到原因，可以改派、合并任务或自己动手；名字不在名录里也是这样</text>
+      <path class="e-hot" d="M1150 222 V348" marker-end="url(#pd-h)"/>
+      <text class="t-hot" x="1160" y="292">子 run id</text>
+      <rect class="node" x="938" y="350" width="280" height="64" rx="4"/>
+      <text class="t-name hot" x="1078.0" y="378.0">登记一项等待，不写结果</text>
+      <text class="t-sub" x="1078.0" y="398.0">waiting_on[调用] = subagent · 子 run id</text>
+      <path class="e-hot" d="M938 382 H902" marker-end="url(#pd-h)"/>
+      <rect class="node" x="632" y="350" width="268" height="64" rx="4"/>
+      <text class="t-name" x="766.0" y="378.0">同一批的别的调用照常执行</text>
+      <text class="t-sub" x="766.0" y="398.0">可以同时派好几个、混着别的工具</text>
+      <path class="e-hot" d="M632 382 H598" marker-end="url(#pd-h)"/>
+      <rect class="node" x="326" y="350" width="270" height="64" rx="4"/>
+      <text class="t-name" x="461.0" y="378.0">下一次调模型之前</text>
+      <text class="t-sub" x="461.0" y="398.0">有还没结果的等待：不调模型，本段结束</text>
+      <path class="e-hot" d="M326 382 H292" marker-end="url(#pd-h)"/>
+      <rect class="node" x="20" y="350" width="270" height="64" rx="4"/>
+      <text class="t-name" x="155.0" y="378.0">run.suspended → 段收尾</text>
+      <text class="t-sub" x="155.0" y="398.0">waiting_on 落库、清租约，会话锁留着</text>
+      <text class="t-lab" x="20" y="444">落库之后再查一次能不能续：子 run 秒回时，它叫父的那一刻父还在跑（图 3）</text>
+      <g class="badge"><circle cx="390" cy="30" r="10"/><text x="390" y="34">1</text></g>
+      <g class="badge"><circle cx="20" cy="150" r="10"/><text x="20" y="154">2</text></g>
+      <g class="badge"><circle cx="326" cy="150" r="10"/><text x="326" y="154">3</text></g>
+      <g class="badge"><circle cx="632" cy="150" r="10"/><text x="632" y="154">4</text></g>
+      <g class="badge"><circle cx="938" cy="150" r="10"/><text x="938" y="154">5</text></g>
+      <g class="badge"><circle cx="938" cy="350" r="10"/><text x="938" y="354">6</text></g>
+      <g class="badge"><circle cx="326" cy="350" r="10"/><text x="326" y="354">7</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span><code>task</code> 工具只有 schema 和描述，函数体永远不执行：起子 run、登记等待、续跑时填结论，全在 <code>SubAgentMiddleware</code> 里，和审批接管高风险工具是同一个做法。它排在审批之后：<code>task</code> 要请示时先过审批，起子 run 永远是最后一步，不会重复起，也不会绕过审批。</li>
+      <li><span class="n">2</span>名字不在名录里当场拒。持久的子智能体持有会话，同一批里第二个同名的 <code>task</code> 直接拒；检查和占位之间没有 await，并发的两个调用不会都通过。一次性的不受这条限制。</li>
+      <li><span class="n">3</span>准入两道闸：全平台排队和在跑的子 run 不超过 3 个（挂起的不算，它不占进程）；这一轮整棵 run 树累计派出的不超过 6 个，含子智能体再派的。</li>
+      <li><span class="n">4</span>找或建子会话：持久的按（父会话，名字）找，找到就复用，这就是「它记得上次」；<code>fresh=true</code> 时归档旧的、新建一个。一次性的每次新建。新建时把子智能体的技能投送好。</li>
+      <li><span class="n">5</span>子会话空闲才建子 run：库里没有它未结束的 run，会话锁也占得到，否则拒。子 run 记下 parent、root、depth；发起人和按谁判权限沿用父 run；审批模式取父 run 此刻的模式。任务书写成子会话里的一条 user 消息，然后入队，任何实例都能领走。</li>
+      <li><span class="n">6</span>中间件拿到子 run id，在 <code>waiting_on</code> 里登记这一项，不写结果，让这个调用悬空。同一批的其他调用照常执行，可以同时派好几个。</li>
+      <li><span class="n">7</span>下一次调模型之前，<code>SuspensionMiddleware</code> 看到有还没结果的等待项：不调模型，本段结束，产出 <code>run.suspended</code>。段收尾把 <code>waiting_on</code> 落库、清租约；会话锁不放，这一轮没结束，用户这时发不了第二句。</li>
+    </ol>
+
+    <h3>图 2　子会话和子 run：会话一棵树，run 一棵树</h3>
+    <svg width="1240" viewBox="0 0 1240 440" role="img" aria-label="会话树与 run 树">
+      <rect class="bnd" x="20" y="20" width="590" height="400" rx="6"/>
+      <text class="t-head" x="36" y="44">会话（thread）：子智能体的会话也是一行 thread</text>
+      <rect class="node" x="40" y="64" width="250" height="56" rx="4"/>
+      <text class="t-name" x="165.0" y="88.0">会话 P · 根会话</text>
+      <text class="t-sub" x="165.0" y="108.0">用户在这里说话</text>
+      <rect class="node" x="40" y="184" width="250" height="56" rx="4"/>
+      <text class="t-name" x="165.0" y="208.0">会话 C · researcher</text>
+      <text class="t-sub" x="165.0" y="228.0">持久：键（P，researcher）</text>
+      <rect class="node" x="40" y="304" width="250" height="56" rx="4"/>
+      <text class="t-name" x="165.0" y="328.0">会话 G · coder</text>
+      <text class="t-sub" x="165.0" y="348.0">持久：键（C，coder）</text>
+      <path class="e" d="M165 120 V182" marker-end="url(#pd-a)"/>
+      <text class="t-lab" x="175" y="156">派</text>
+      <path class="e" d="M165 240 V302" marker-end="url(#pd-a)"/>
+      <text class="t-lab" x="175" y="276">派</text>
+      <rect class="node" x="346" y="178" width="240" height="56" rx="4"/>
+      <rect class="node" x="340" y="184" width="240" height="56" rx="4"/>
+      <text class="t-name" x="460.0" y="208.0">一次性子会话 ×2</text>
+      <text class="t-sub" x="460.0" y="228.0">每次新建，同一批可以并行</text>
+      <path class="e" d="M290 92 H460 V176" marker-end="url(#pd-a)"/>
+      <text class="t-lab" x="470" y="140">派</text>
+      <text class="t-lab" x="340" y="270">status=ephemeral：不被复用，</text>
+      <text class="t-lab" x="340" y="290">也不占（父会话，名字）这个键</text>
+      <text class="t-lab" x="340" y="330">持久的传 fresh=true：归档旧会话、</text>
+      <text class="t-lab" x="340" y="350">新建一个（历史不删）</text>
+      <text class="t-lab" x="40" y="396">历史各是各的：子会话看不到父会话的对话，任务书是它唯一的输入</text>
+      <rect class="bnd" x="630" y="20" width="590" height="400" rx="6"/>
+      <text class="t-head" x="646" y="44">run：一次 task 是子会话上的一个 run</text>
+      <rect class="node" x="650" y="64" width="260" height="56" rx="4"/>
+      <text class="t-name" x="780.0" y="88.0">run R0 · 会话 P</text>
+      <text class="t-sub" x="780.0" y="108.0">depth 0 · 根 run</text>
+      <rect class="node" x="650" y="184" width="260" height="56" rx="4"/>
+      <text class="t-name" x="780.0" y="208.0">run R1 · 会话 C</text>
+      <text class="t-sub" x="780.0" y="228.0">parent R0 · root R0 · depth 1</text>
+      <rect class="node" x="650" y="304" width="260" height="56" rx="4"/>
+      <text class="t-name" x="780.0" y="328.0">run R2 · 会话 G</text>
+      <text class="t-sub" x="780.0" y="348.0">parent R1 · root R0 · depth 2</text>
+      <path class="e-hot" d="M780 120 V182" marker-end="url(#pd-h)"/>
+      <text class="t-hot" x="790" y="156">task</text>
+      <path class="e-hot" d="M780 240 V302" marker-end="url(#pd-h)"/>
+      <text class="t-hot" x="790" y="276">task</text>
+      <text class="t-hot b" x="930" y="90">挂起</text>
+      <text class="t-hot" x="930" y="110">waiting_on 等 R1</text>
+      <text class="t-hot b" x="930" y="210">挂起</text>
+      <text class="t-hot" x="930" y="230">waiting_on 等 R2</text>
+      <text class="t-blue b" x="930" y="330">在跑</text>
+      <text class="t-blue" x="930" y="350">可能在另一个实例上</text>
+      <text class="t-lab" x="666" y="396">三个 run 的事件都发到根会话 P 的流，depth 区分层级</text>
+      <g class="badge"><circle cx="40" cy="64" r="10"/><text x="40" y="68">1</text></g>
+      <g class="badge"><circle cx="340" cy="184" r="10"/><text x="340" y="188">2</text></g>
+      <g class="badge"><circle cx="650" cy="64" r="10"/><text x="650" y="68">3</text></g>
+      <g class="badge"><circle cx="40" cy="304" r="10"/><text x="40" y="308">4</text></g>
+      <g class="badge"><circle cx="652" cy="391" r="10"/><text x="652" y="395">5</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>子智能体的会话是一行 thread，挂在派出它的那一层下面，会话随 run 一起长成一棵树。子会话不进会话列表，只在父会话详情页的分支上出现。</li>
+      <li><span class="n">2</span>持久的子会话有记忆：它的历史是之前派给它的任务书和它的回答，再派时任务书只需补新的；同名必须串行。一次性的零上下文，可以在同一批里并行（「同时调研五个选项」）。两种都看不到父会话的对话：任务书是它唯一的输入。</li>
+      <li><span class="n">3</span>一次 <code>task</code> 是子会话上的一个 run：parent 指回派出它的 run，root 指向用户输入的那个 run。子 run 走和普通 run 完全同一条执行链路：历史重建、压缩、审批、取消、接管都复用；它有自己的 run id、事件、审批和取消位。</li>
+      <li><span class="n">4</span>原生子智能体带着同一份名录，可以继续派，层数不设上限；跑飞的递归靠整棵树的累计上限兜住。CLI 子智能体的工具由 CLI 自带，不能再派。子智能体都不能向用户提问：用户看到的会是一个没有上下文的问题，该问的由主智能体在派活前问清，缺信息写在结论里。</li>
+      <li><span class="n">5</span>所有 run 的事件都发到根会话的流，用 depth 区分层级。用户只订阅根会话：子 run 里的审批弹窗也在根会话里出现，挂在子会话自己的流上就没人看得见。</li>
+    </ol>
+
+    <h3>图 3　叫醒：子 run 都终态了，父 run 才续跑</h3>
+    <svg width="1240" viewBox="0 0 1240 496" role="img" aria-label="叫醒：子 run 都终态了，父 run 才续跑">
+      <text class="t-key" x="20" y="89">父 run R0</text>
+      <text class="t-key" x="20" y="179">子 run A</text>
+      <text class="t-key" x="20" y="259">子 run B</text>
+      <rect class="node" x="140" y="64" width="160" height="40" rx="4"/>
+      <text class="t-sub" x="220.0" y="89.0">跑：派 A、B</text>
+      <rect class="gap" x="300" y="64" width="600" height="40" rx="3"/>
+      <text class="t-hot mid" x="600" y="89">挂起：waiting_on = {A, B}，没有进程在等</text>
+      <path class="e-hot" d="M900 84 H938" marker-end="url(#pd-h)"/>
+      <text class="t-hot mid" x="920" y="56">任一实例领走</text>
+      <rect class="node" x="940" y="64" width="280" height="40" rx="4"/>
+      <text class="t-sub" x="1080.0" y="89.0">续跑：两个结论填进 task 的结果</text>
+      <rect class="node" x="310" y="154" width="300" height="40" rx="4"/>
+      <text class="t-sub" x="460.0" y="179.0">A 跑完 → succeeded</text>
+      <path class="e-mute" d="M610 154 V106" marker-end="url(#pd-m)"/>
+      <text class="t-mute" x="620" y="132">叫父：B 还没完 → 不续</text>
+      <rect class="node" x="320" y="234" width="560" height="40" rx="4"/>
+      <text class="t-sub" x="600.0" y="259.0">B 跑得久，中间还可能挂起等审批</text>
+      <path class="e-hot" d="M880 234 V106" marker-end="url(#pd-h)"/>
+      <text class="t-hot" x="890" y="186">叫父：都终态了</text>
+      <text class="t-hot" x="890" y="206">CAS 挂起 → 排队</text>
+      <rect class="node" x="20" y="320" width="290" height="56" rx="4"/>
+      <text class="t-name" x="165.0" y="344.0">① 子 run 收尾时叫父 run</text>
+      <text class="t-sub" x="165.0" y="364.0">正常路径</text>
+      <rect class="node" x="330" y="320" width="290" height="56" rx="4"/>
+      <text class="t-name" x="475.0" y="344.0">② 父挂起落库后再查一次</text>
+      <text class="t-sub" x="475.0" y="364.0">防子 run 秒回时的竞态</text>
+      <rect class="node" x="640" y="320" width="290" height="56" rx="4"/>
+      <text class="t-name" x="785.0" y="344.0">③ 每 60 秒补扫挂起的 run</text>
+      <text class="t-sub" x="785.0" y="364.0">叫醒信号丢了的唯一出路</text>
+      <path class="e" d="M165 376 V418" marker-end="url(#pd-a)"/>
+      <path class="e" d="M475 376 V418" marker-end="url(#pd-a)"/>
+      <path class="e" d="M785 376 V418" marker-end="url(#pd-a)"/>
+      <rect class="node" x="20" y="420" width="910" height="56" rx="4"/>
+      <text class="t-name hot" x="475.0" y="444.0">resume_if_ready：三个入口，一套判据</text>
+      <text class="t-sub" x="475.0" y="464.0">子智能体：没有未结束的子 run · 审批：已有决定 · 都齐了才 CAS 挂起 → 排队，只有一个抢得到</text>
+      <path class="e-hot" d="M930 448 H958" marker-end="url(#pd-h)"/>
+      <rect class="node" x="960" y="320" width="260" height="156" rx="4"/>
+      <text class="t-head" x="976" y="344">续跑这一段</text>
+      <text x="976" y="370">按 waiting_on 取每个子 run 的结论</text>
+      <text x="976" y="392">放进 decisions 交给图</text>
+      <text x="976" y="414">不调模型，先去执行工具：</text>
+      <text x="976" y="436">task 填结论，别的调用不重跑</text>
+      <text class="t-lab" x="976" y="462">等待期间被取消：不续，当场收尾</text>
+      <g class="badge"><circle cx="300" cy="64" r="10"/><text x="300" y="68">1</text></g>
+      <g class="badge"><circle cx="610" cy="154" r="10"/><text x="610" y="158">2</text></g>
+      <g class="badge"><circle cx="880" cy="234" r="10"/><text x="880" y="238">3</text></g>
+      <g class="badge"><circle cx="330" cy="320" r="10"/><text x="330" y="324">4</text></g>
+      <g class="badge"><circle cx="20" cy="420" r="10"/><text x="20" y="424">5</text></g>
+      <g class="badge"><circle cx="960" cy="320" r="10"/><text x="960" y="324">6</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>父 run 挂起后没有进程在等。它等的是独立可寻址的子 run，不是某个进程里的 await，所以中途重启、换实例都不丢。</li>
+      <li><span class="n">2</span>A 收尾时去叫父 run。判据是「父 run 还有没有未结束的子 run」：B 还在跑，不续。</li>
+      <li><span class="n">3</span>B 也终态了，判据满足：CAS 把父 run 从挂起改成排队，几个子 run 同时结束也只有一个抢得到，之后任何实例都能领走它。B 中途挂起等审批不影响这条路：它没有终态，父就一直等。</li>
+      <li><span class="n">4</span>叫醒有三个入口：① 子 run 收尾时叫父 run，是正常路径。② 父挂起落库后自己再查一次：子 run 秒回时，它叫父的那一刻父还在 running，CAS 失败，唤醒就丢了。③ 每 60 秒补扫挂起的 run：子 run 收尾时进程正好被杀，叫醒信号就没了，补扫是唯一的出路。补扫不判超时，子 run 跑多久都等。</li>
+      <li><span class="n">5</span>三个入口共用一套判据，按等待项的原因分：子智能体看子 run 是否终态，审批看有没有决定。一批里同时有 <code>task</code> 和要审批的工具，两样都齐了才续。</li>
+      <li><span class="n">6</span>续跑时按 <code>waiting_on</code> 逐项取子 run 的结论，放进 decisions 交给图。图看到有结论，不调模型，先去执行工具：<code>SubAgentMiddleware</code> 把结论作为 <code>task</code> 的结果交出、删掉那一项；同一批里已有结果的调用原样返回，不重跑。然后才调模型，同一轮接着做。等待期间被取消的，不续跑，当场收尾（见「取消原理」）。</li>
+    </ol>
+
+    <h3>图 4　结论怎么交回：三种结局都不能被读成「没有发现」</h3>
+    <svg width="1240" viewBox="0 0 1240 400" role="img" aria-label="结论怎么交回">
+      <rect class="node" x="20" y="30" width="390" height="250" rx="4"/>
+      <rect class="head" x="21" y="31" width="388" height="31"/>
+      <text class="t-head" x="34" y="52">成功，有结论</text>
+      <line class="sep" x1="20" y1="62" x2="410" y2="62"/>
+      <text class="t-lab" x="34" y="88">子智能体最后一条回答的原文：</text>
+      <text x="34" y="110">找到 3 处调用：</text>
+      <text x="34" y="132">· api/orders.py:42 …</text>
+      <text x="34" y="154">· jobs/sync.py:17 …</text>
+      <text class="t-mono" x="34" y="214">&lt;subagent subagent="researcher"</text>
+      <text class="t-mono" x="34" y="234"> status="succeeded" session="persistent"</text>
+      <text class="t-mono" x="34" y="254"> tokens="18234" tool_calls="12" duration_s="95"/&gt;</text>
+      <rect class="node" x="425" y="30" width="390" height="250" rx="4"/>
+      <rect class="head" x="426" y="31" width="388" height="31"/>
+      <text class="t-head" x="439" y="52">成功，没给文字结论</text>
+      <line class="sep" x1="425" y1="62" x2="815" y2="62"/>
+      <text class="t-hot" x="439" y="88">（researcher 完成了任务，但没有给出</text>
+      <text class="t-hot" x="439" y="110">文字结论。这不等于「没有发现」：</text>
+      <text class="t-hot" x="439" y="132">需要结论的话再派一次让它补上，</text>
+      <text class="t-hot" x="439" y="154">或者自己核实。）</text>
+      <text class="t-mono" x="439" y="214">&lt;subagent subagent="researcher"</text>
+      <text class="t-mono" x="439" y="234"> status="succeeded" session="persistent"</text>
+      <text class="t-mono" x="439" y="254"> tokens="18234" tool_calls="12" duration_s="95"/&gt;</text>
+      <rect class="node" x="830" y="30" width="390" height="250" rx="4"/>
+      <rect class="head" x="831" y="31" width="388" height="31"/>
+      <text class="t-head" x="844" y="52">失败，或被停止</text>
+      <line class="sep" x1="830" y1="62" x2="1220" y2="62"/>
+      <text class="t-hot" x="844" y="88">researcher 以 cancelled 结束：……。</text>
+      <text x="844" y="110">它停下之前的最后一段输出</text>
+      <text x="844" y="132">（部分结果，可能不完整，使用前请核实）：</text>
+      <text class="t-lab" x="844" y="154">……最多 4000 字，超出截断……</text>
+      <text class="t-mono" x="844" y="214">&lt;subagent subagent="researcher"</text>
+      <text class="t-mono" x="844" y="234"> status="cancelled" session="persistent"</text>
+      <text class="t-mono" x="844" y="254"> tokens="18234" tool_calls="12" duration_s="95"/&gt;</text>
+      <path class="e-hot" d="M215 280 V318" marker-end="url(#pd-h)"/>
+      <path class="e-hot" d="M620 280 V318" marker-end="url(#pd-h)"/>
+      <path class="e-hot" d="M1025 280 V318" marker-end="url(#pd-h)"/>
+      <rect class="node" x="20" y="320" width="1200" height="60" rx="4"/>
+      <text class="t-name" x="620.0" y="346.0">成了 task 调用的工具结果（ToolMessage），父模型在同一轮里接着做</text>
+      <text class="t-sub" x="620.0" y="366.0">末尾一行统计让它判断这次花了多少、值不值得再派 · 结论不直接给用户看，父智能体自己转述要紧的</text>
+      <g class="badge"><circle cx="20" cy="30" r="10"/><text x="20" y="34">1</text></g>
+      <g class="badge"><circle cx="425" cy="30" r="10"/><text x="425" y="34">2</text></g>
+      <g class="badge"><circle cx="830" cy="30" r="10"/><text x="830" y="34">3</text></g>
+      <g class="badge"><circle cx="20" cy="320" r="10"/><text x="20" y="324">4</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>成功、有结论：取子 run 最后一条回答的原文。</li>
+      <li><span class="n">2</span>成功、没给文字结论：明说「这不等于没有发现」和怎么补救，父模型不能把空结果读成没找到。</li>
+      <li><span class="n">3</span>失败或被停止：照实写状态和原因；有输出就附上最后一段（最多 4000 字），并标明可能不完整。</li>
+      <li><span class="n">4</span>末尾一行统计：状态、会话类型、token、工具调用数、时长。父模型据此判断值不值得再派；持久的还提示它下次只补新信息。结论不直接给用户看，由父智能体转述。</li>
+    </ol>
+
+    <h3>为什么这样做</h3>
+    <table>
+      <thead><tr><th>做法</th><th>为什么</th></tr></thead>
+      <tbody>
+        <tr><td>父 run 不等，派完就挂起</td><td>子 run 可能跑一小时。在进程里等，会一直占着执行槽和租约，进程重启就丢了。挂起后没有进程在等，谁都能接着做；和审批走同一条路，不用另一套机制。</td></tr>
+        <tr><td>子智能体的会话是一行 thread，一次 task 是它上面的一个 run</td><td>子 run 因此和普通 run 走完全同一条执行链路，历史、压缩、审批、取消、接管一行新代码都不用写；在图里跑子图的话，这些都要再装一套，两份语义迟早漂移。</td></tr>
+        <tr><td>派不出去时回失败的工具结果，不抛异常、不等锁</td><td>撞上限、同批同名、会话被占都是局部问题，模型可以改派、合并任务或自己动手。抛异常会让整个 run 失败；等锁的表现是「卡住直到超时」，模型既不知道原因也拿不到替代方案。</td></tr>
+        <tr><td>准入按整棵树累计数</td><td>层数不设上限，挂起中的子 run 又不占并发名额：只按父 run 数的话，「A 派 A 再派 A」每层只派一个，永远撞不上限。</td></tr>
+        <tr><td>在跑的子 run 有全局上限</td><td>CLI 子智能体各占一个 Pod：按 run 各自限流的话，并发会话数一乘就爆。</td></tr>
+        <tr><td>持久的复用会话，一次性的每次新建</td><td>持久的记得之前派给它的事，任务书只需补新的，代价是同名必须串行。一次性的零上下文，换来可以并行。</td></tr>
+        <tr><td>事件进根会话的流</td><td>用户只订阅根会话。子 run 的事件留在子会话的流上，就是一条没人订阅的流，审批弹窗会在子智能体挂起时消失。</td></tr>
+        <tr><td>叫醒有三个入口、一套判据</td><td>漏掉任何一个入口，run 都会永久停在挂起：没有报错、没有事件，只是一个一直转圈的界面。判据按原因分：用子智能体的判据去判审批会立刻满足，续跑、又挂起，死循环。</td></tr>
+        <tr><td>子智能体不能向用户提问</td><td>用户看到的会是一个没有上下文的问题；任务书本该完整，缺信息写在结论里，由主智能体决定问不问用户。</td></tr>
+        <tr><td>审批模式取派活那一刻父 run 的</td><td>计划获批后父 run 的模式可能已经变了。CLI 子智能体与它自己的 permission_mode 取更严的。</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- 工作区与沙箱原理：静态图，不经上面的渲染器。场景：u 的根会话 P 派 C，C 再派 G（原生）；u 另开根会话 Q（CLI） -->
+  <section id="principle">
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+      <defs>
+        <marker id="pr-a" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#444"/></marker>
+        <marker id="pr-h" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#d9480f"/></marker>
+        <marker id="pr-m" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#bbb"/></marker>
+        <marker id="pr-b" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#1168bd"/></marker>
+      </defs>
+    </svg>
+
+    <h2>工作区与沙箱原理：一个人一个沙箱，父子、多会话共用</h2>
+    <p>一句话：对象存储<b>按人分前缀</b>：根会话一个 <code>workspace</code>，这个人所有会话共用一份 <code>skills</code> 和一份 <code>home/.claude</code>；<b>沙箱按人要</b>，整个 <code>/{user}/</code> 挂到 <code>/data</code>，这个人的新会话随时加入，不用改 Pod。父、子、孙智能体都以根会话的 <code>workspace</code> 为 cwd，技能从共用的目录里取各自智能体绑定的那几个版本；CLI 智能体也在同一个沙箱里跑，会话记录写进 <code>/data/home/.claude</code>，沙箱重建后接着原来的会话。下面的场景：用户 <code>u</code> 的根会话 <code>P</code>（原生智能体）派子会话 <code>C</code>，<code>C</code> 再派孙会话 <code>G</code>；<code>u</code> 同时开着另一个根会话 <code>Q</code>，是 CLI 智能体（Claude Code）。<code>{user}</code> 是会话的创建人。</p>
+
+    <h3>图 1　对象存储：按人分前缀，根会话一个 workspace，一个人一份 skills 和 .claude</h3>
+    <svg width="1240" viewBox="0 0 1240 576" role="img" aria-label="对象存储的布局">
+      <text class="t-key mid" x="150" y="40">会话</text>
+      <text class="t-key" x="360" y="40">对象存储 · 桶里的路径</text>
+      <text class="t-key" x="800" y="40">说明</text>
+      <rect class="row-a" x="430" y="116" width="790" height="90" rx="3"/>
+      <rect class="row-a" x="402" y="234" width="818" height="120" rx="3"/>
+      <rect class="band-b" x="430" y="500" width="790" height="28" rx="3"/>
+      <path class="sep-d" d="M386 101 H404"/>
+      <path class="sep-d" d="M414 112 V131 H432"/>
+      <path class="sep-d" d="M442 161 H460"/>
+      <path class="sep-d" d="M442 142 V191 H460"/>
+      <path class="sep-d" d="M386 249 H404"/>
+      <path class="sep-d" d="M414 279 H432"/>
+      <path class="sep-d" d="M414 309 H432"/>
+      <path class="sep-d" d="M414 260 V339 H432"/>
+      <path class="sep-d" d="M386 397 H404"/>
+      <path class="sep-d" d="M414 408 V427 H432"/>
+      <path class="sep-d" d="M386 82 V485 H404"/>
+      <path class="sep-d" d="M414 496 V515 H432"/>
+      <text class="t-mono b" x="380" y="76">/{user}/</text>
+      <text class="t-lab" x="800" y="76">一个人一个前缀：沙箱把它整个挂到 /data</text>
+      <text class="t-mono" x="408" y="106">{P}/</text>
+      <text class="t-lab" x="800" y="106">只有根会话有目录，里面只有 workspace</text>
+      <text class="t-mono b" x="436" y="136">workspace/</text>
+      <text class="t-blue b" x="800" y="136">P、C、G 共用的工作区：三个智能体的 cwd</text>
+      <text class="t-mono" x="464" y="166">report.md  data/raw.csv  data/clean.csv</text>
+      <text class="t-lab" x="800" y="166">谁写的，大家都看得见</text>
+      <text class="t-mono" x="464" y="196">.atlas/{P}/  .atlas/{C}/  .atlas/{G}/</text>
+      <text class="t-lab" x="800" y="196">压缩归档、外置的大结果：每个会话一个隐藏目录</text>
+      <text class="t-mono b" x="408" y="254">skills/</text>
+      <text class="t-blue b" x="800" y="254">这个人所有会话共用：按技能、版本各一份</text>
+      <text class="t-mono" x="436" y="284">pdf/1.2.0/</text>
+      <text class="t-lab" x="800" y="284">P、C 的智能体都绑了这一版：只拷一次，两个会话共用</text>
+      <text class="t-mono" x="436" y="314">pdf/1.3.0/</text>
+      <text class="t-lab" x="800" y="314">Q 的智能体绑的是新版：和旧版并排放，互不覆盖</text>
+      <text class="t-mono" x="436" y="344">xlsx/2.0.0/</text>
+      <text class="t-lab" x="800" y="344">G 的智能体绑的</text>
+      <text class="t-mono" x="408" y="402">{Q}/</text>
+      <text class="t-mono b" x="436" y="432">workspace/</text>
+      <text class="t-lab" x="800" y="432">Q 的工作区：Claude Code 的 cwd</text>
+      <text class="t-mono" x="408" y="490">home/</text>
+      <text class="t-lab" x="800" y="490">一个人一份，不属于任何会话</text>
+      <text class="t-mono b" x="436" y="520">.claude/</text>
+      <text class="t-hot b" x="800" y="520">CLI 的会话记录和配置：沙箱重建后据此恢复（图 3）</text>
+      <rect class="node" x="20" y="75" width="260" height="52" rx="4"/>
+      <text class="t-name" x="150.0" y="97.0">会话 P · 原生智能体</text>
+      <text class="t-sub" x="150.0" y="117.0">根会话</text>
+      <path class="e" d="M280 101 H382" marker-end="url(#pr-a)"/>
+      <rect class="node" x="20" y="174" width="260" height="52" rx="4"/>
+      <text class="t-name" x="150.0" y="196.0">会话 C · 子智能体</text>
+      <text class="t-sub" x="150.0" y="216.0">P 调 task 派的</text>
+      <rect class="node" x="20" y="264" width="260" height="52" rx="4"/>
+      <text class="t-name" x="150.0" y="286.0">会话 G · 孙智能体</text>
+      <text class="t-sub" x="150.0" y="306.0">C 调 task 派的</text>
+      <text class="t-lab mid" x="150" y="340">C、G 没有自己的目录</text>
+      <rect class="node" x="20" y="371" width="260" height="52" rx="4"/>
+      <text class="t-name" x="150.0" y="393.0">会话 Q · CLI 智能体</text>
+      <text class="t-sub" x="150.0" y="413.0">另一个根会话 · Claude Code</text>
+      <path class="e" d="M280 397 H382" marker-end="url(#pr-a)"/>
+      <path class="e" d="M150 127 V172" marker-end="url(#pr-a)"/>
+      <text class="t-lab" x="160" y="154">派</text>
+      <path class="e" d="M150 226 V262" marker-end="url(#pr-a)"/>
+      <text class="t-lab" x="160" y="248">派</text>
+      <rect class="ghost" x="20" y="486" width="260" height="52" rx="4"/>
+      <text class="t-ghost mid" x="150.0" y="508.0">_skills/{slug}/{版本}/</text>
+      <text class="t-mute mid" x="150.0" y="528.0">技能源仓库 · 在桶根，不在人的前缀下</text>
+      <text class="t-lab mid" x="150" y="560">会话创建时，缺了才拷进 skills/{slug}/{版本}</text>
+      <g class="badge"><circle cx="364" cy="71" r="10"/><text x="364" y="75">1</text></g>
+      <g class="badge"><circle cx="430" cy="116" r="10"/><text x="430" y="120">2</text></g>
+      <g class="badge"><circle cx="786" cy="191" r="10"/><text x="786" y="195">3</text></g>
+      <g class="badge"><circle cx="402" cy="234" r="10"/><text x="402" y="238">4</text></g>
+      <g class="badge"><circle cx="430" cy="500" r="10"/><text x="430" y="504">5</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>桶里按人分前缀。会话目录下只有 <code>workspace</code>，目录名就是会话 id：<code>/{user}/{会话}/workspace</code>。技能和 CLI 的会话记录不按会话分，一个人一份。</li>
+      <li><span class="n">2</span>工作区只有根会话有。子、孙会话不建 <code>workspace</code>，读写根会话的（取 <code>root_thread_uuid</code>，不是父会话，所以 G 也落到 P）。委派常常就是「帮我处理这批文件」，产物要互相看得见。</li>
+      <li><span class="n">3</span>压缩归档、外置的大结果放进所用工作区下的隐藏目录 <code>.atlas/{本会话}/</code>：跟着工作区走，各会话分开。文件工具列目录、搜索时默认跳过它，模型不会被它们淹没。</li>
+      <li><span class="n">4</span>技能一个人一个目录 <code>/{user}/skills</code>，所有会话共用，按技能、版本分子目录 <code>{slug}/{版本}/</code>。会话创建时按智能体绑定的版本逐个看，缺了才从源仓库 <code>_skills/{slug}/{版本}/</code> 拷进来，已经有就直接用；同一技能的不同版本并排放，绑不同版本的智能体互不覆盖。每个会话的提示词只列出自己智能体绑定的技能和路径，目录里别的技能不会出现。</li>
+      <li><span class="n">5</span><code>home/.claude</code> 一个人一份，不属于任何会话：放 CLI 智能体的会话记录和配置，沙箱重建后据此恢复（图 3）。别的 CLI 同理，放 <code>home/</code> 下自己的目录。</li>
+    </ol>
+
+    <h3>图 2　一个人一个沙箱：整个 /{user}/ 挂到 /data，新会话加入不用改 Pod</h3>
+    <svg width="1240" viewBox="0 0 1240 656" role="img" aria-label="一个人一个沙箱">
+      <rect class="node" x="20" y="70" width="270" height="64" rx="4"/>
+      <text class="t-name" x="155.0" y="98.0">Agent 服务 · 原生运行时</text>
+      <text class="t-sub" x="155.0" y="118.0">P、C、G 的 Shell 和文件工具</text>
+      <rect class="node" x="20" y="230" width="270" height="64" rx="4"/>
+      <text class="t-name" x="155.0" y="258.0">Agent 服务 · CLI 运行时</text>
+      <text class="t-sub" x="155.0" y="278.0">Q 的每一轮：turn.*</text>
+      <rect class="bnd" x="330" y="20" width="890" height="530" rx="6"/>
+      <text class="t-head" x="346" y="44">沙箱 Pod · 键 =（人 u，模板）：u 的所有会话共用这一个</text>
+      <rect class="node" x="350" y="70" width="260" height="64" rx="4"/>
+      <text class="t-name" x="480.0" y="98.0">execd</text>
+      <text class="t-sub" x="480.0" y="118.0">按会话起 shell，命令带本会话的 cwd</text>
+      <path class="e" d="M290 102 H348" marker-end="url(#pr-a)"/>
+      <text class="t-key" x="640" y="82">P 的命令</text>
+      <text class="t-blue" x="720" y="82">cwd = /data/{P}/workspace</text>
+      <text class="t-key" x="640" y="106">C 的命令</text>
+      <text class="t-blue" x="720" y="106">cwd = /data/{P}/workspace</text>
+      <text class="t-key" x="640" y="130">G 的命令</text>
+      <text class="t-blue" x="720" y="130">cwd = /data/{P}/workspace</text>
+      <text class="t-lab" x="960" y="106">技能：/data/skills/{slug}/{版本}</text>
+      <rect class="node" x="350" y="230" width="240" height="64" rx="4"/>
+      <text class="t-name" x="470.0" y="258.0">bridge · 会话 Q</text>
+      <text class="t-sub" x="470.0" y="278.0">按会话起，端口按会话分</text>
+      <path class="e" d="M290 262 H348" marker-end="url(#pr-a)"/>
+      <rect class="node" x="650" y="230" width="260" height="64" rx="4"/>
+      <text class="t-name" x="780.0" y="258.0">Claude Code（Q）</text>
+      <text class="t-sub" x="780.0" y="278.0">cwd = /data/{Q}/workspace</text>
+      <path class="e" d="M590 262 H648" marker-end="url(#pr-a)"/>
+      <text class="t-lab" x="960" y="256">再开一个 CLI 会话：</text>
+      <text class="t-lab" x="960" y="276">再起一对 bridge + CLI</text>
+      <rect class="node" x="350" y="390" width="380" height="140" rx="4"/>
+      <text class="t-head" x="366" y="414">本地盘 · emptyDir · 快，重建后清空</text>
+      <text class="t-mono" x="366" y="440">HOME：缓存、装的包</text>
+      <text class="t-mono" x="366" y="462">/repos：git 仓库、依赖</text>
+      <text class="t-mono hot b" x="366" y="484">~/.claude</text>
+      <text class="t-lab" x="366" y="506">软链，或设 CLAUDE_CONFIG_DIR</text>
+      <path class="e-hot" d="M448 480 H700 V501 H770" marker-end="url(#pr-h)"/>
+      <rect class="band-a" x="760" y="390" width="440" height="140" rx="4"/>
+      <text class="t-head" x="776" y="414">/data ← s3fs 挂 {user}/ · 读写 · 唯一的挂载</text>
+      <text class="t-mono" x="776" y="440">/data/{P}/workspace  /data/{Q}/workspace</text>
+      <text class="t-mono" x="776" y="462">/data/skills/pdf/1.2.0  …/pdf/1.3.0</text>
+      <text class="t-mono" x="776" y="484">/data/skills/xlsx/2.0.0</text>
+      <text class="t-mono hot b" x="776" y="506">/data/home/.claude</text>
+      <path class="e-blue" d="M480 134 V180 H940 V388" marker-end="url(#pr-b)"/>
+      <text class="t-blue" x="950" y="370">读写 /data</text>
+      <path class="e-blue" d="M780 294 V388" marker-end="url(#pr-b)"/>
+      <text class="t-blue" x="790" y="370">读写 /data</text>
+      <rect class="node" x="760" y="580" width="440" height="56" rx="4"/>
+      <text class="t-name" x="980.0" y="604.0">对象存储</text>
+      <text class="t-sub" x="980.0" y="624.0">{user}/ 前缀下的一切</text>
+      <path class="e-blue" d="M980 580 V532" marker-end="url(#pr-b)"/>
+      <text class="t-blue" x="990" y="562">s3fs</text>
+      <g class="badge"><circle cx="330" cy="20" r="10"/><text x="330" y="24">1</text></g>
+      <g class="badge"><circle cx="760" cy="390" r="10"/><text x="760" y="394">2</text></g>
+      <g class="badge"><circle cx="625" cy="78" r="10"/><text x="625" y="82">3</text></g>
+      <g class="badge"><circle cx="350" cy="230" r="10"/><text x="350" y="234">4</text></g>
+      <g class="badge"><circle cx="350" cy="390" r="10"/><text x="350" y="394">5</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>沙箱按人要，键是（人，模板）。u 的会话第一次执行命令时找这个人的沙箱，没有就建；建在锁里，同一时刻只建一个。一个人默认只用一个模板（镜像同时装好 CLI），所以就是一个沙箱。</li>
+      <li><span class="n">2</span>只有一个读写挂载：s3fs 把 <code>{user}/</code> 整个挂到 <code>/data</code>。Pod 的卷在创建时就定死了，挂父前缀是会话后加入也能看到自己目录的唯一办法：新会话的目录一建好，Pod 里就看得见。</li>
+      <li><span class="n">3</span>每条命令带上本会话的 cwd：P、C、G 都是 <code>/data/{P}/workspace</code>；技能在 <code>/data/skills/{slug}/{版本}</code>，提示词里给的就是这个路径。文件工具和 Shell 用同一套路径（沙箱里的真实路径），模型看到的路径只有一种。</li>
+      <li><span class="n">4</span>CLI 会话 Q 在同一个 Pod 里起自己的 bridge 和 Claude Code，cwd 是 <code>/data/{Q}/workspace</code>。再开一个 CLI 会话就再起一对，端口按会话分配。</li>
+      <li><span class="n">5</span>本地盘是 emptyDir：HOME、<code>/repos</code>、装的包都在这里，快，但沙箱重建后清空。只把 <code>~/.claude</code> 指到 <code>/data/home/.claude</code>（软链，或设 <code>CLAUDE_CONFIG_DIR</code>）。整个 HOME 放 s3fs 上，装包、缓存都会很慢。</li>
+    </ol>
+
+    <h3>图 3　CLI 智能体：沙箱重建后接着原来的会话</h3>
+    <svg width="1240" viewBox="0 0 1240 456" role="img" aria-label="CLI 沙箱重建后接着原来的会话">
+      <text class="t-key" x="24" y="106">平台</text>
+      <text class="t-key" x="24" y="265">沙箱 Pod</text>
+      <text class="t-key" x="24" y="410">对象存储</text>
+      <text class="t-head mid" x="290" y="40">第一次：新建会话</text>
+      <text class="t-head mid" x="690" y="40">沙箱被回收</text>
+      <text class="t-head mid" x="1055" y="40">重建后：接着原来的会话</text>
+      <path class="sep" d="M510 56 V440"/>
+      <path class="sep" d="M870 56 V440"/>
+      <rect class="node" x="110" y="74" width="360" height="56" rx="4"/>
+      <text class="t-name" x="290.0" y="98.0">cli_session：Q → agent_session_id = sid</text>
+      <text class="t-sub" x="290.0" y="118.0">一个会话一行</text>
+      <rect class="node" x="110" y="190" width="360" height="56" rx="4"/>
+      <text class="t-name" x="290.0" y="214.0">bridge → Claude Code：session/new</text>
+      <text class="t-sub" x="290.0" y="234.0">cwd = /data/{Q}/workspace，拿到 sid</text>
+      <path class="e" d="M290 190 V132" marker-end="url(#pr-a)"/>
+      <text class="t-lab" x="300" y="166">报给平台，记下 sid</text>
+      <rect class="node" x="110" y="276" width="360" height="56" rx="4"/>
+      <text class="t-name" x="290.0" y="300.0">边对话边追加会话记录</text>
+      <text class="t-sub" x="290.0" y="320.0">~/.claude/projects/-data-{Q}-workspace/sid.jsonl</text>
+      <path class="e" d="M290 246 V274" marker-end="url(#pr-a)"/>
+      <path class="e-hot" d="M290 332 V378" marker-end="url(#pr-h)"/>
+      <rect class="gap" x="530" y="190" width="320" height="142" rx="4"/>
+      <text class="t-hot mid b" x="690" y="222">闲置回收、节点故障、换镜像</text>
+      <text class="t-hot mid" x="690" y="250">本地盘清空：HOME、/repos、装的包</text>
+      <text class="t-hot mid" x="690" y="274">/data 下的东西都在</text>
+      <text class="t-hot mid" x="690" y="298">cli_session 里的 sid 也在</text>
+      <rect class="node" x="890" y="74" width="330" height="56" rx="4"/>
+      <text class="t-name" x="1055.0" y="98.0">CLI 运行时开下一轮</text>
+      <text class="t-sub" x="1055.0" y="118.0">从 cli_session 取出 sid，带上 resume</text>
+      <rect class="node" x="890" y="190" width="330" height="56" rx="4"/>
+      <text class="t-name" x="1055.0" y="214.0">新沙箱 · bridge：session/load(sid)</text>
+      <text class="t-sub" x="1055.0" y="234.0">按能力位选 load 或 resume；失败才新建</text>
+      <path class="e" d="M1055 130 V188" marker-end="url(#pr-a)"/>
+      <rect class="node" x="890" y="276" width="330" height="56" rx="4"/>
+      <text class="t-name" x="1055.0" y="300.0">Claude Code 读回会话记录</text>
+      <text class="t-sub" x="1055.0" y="320.0">cwd 没变 → 同一个目录 → 上下文还在</text>
+      <path class="e" d="M1055 246 V274" marker-end="url(#pr-a)"/>
+      <path class="e-hot" d="M1055 378 V334" marker-end="url(#pr-h)"/>
+      <rect class="band-b" x="110" y="380" width="1110" height="56" rx="4"/>
+      <text class="t-mono mid b" x="665" y="404">{user}/home/.claude/projects/-data-{Q}-workspace/sid.jsonl</text>
+      <text class="t-hot mid" x="665" y="426">沙箱没了它还在：路径里只有会话 id 和固定的挂载点，重建前后一样</text>
+      <g class="badge"><circle cx="110" cy="190" r="10"/><text x="110" y="194">1</text></g>
+      <g class="badge"><circle cx="110" cy="276" r="10"/><text x="110" y="280">2</text></g>
+      <g class="badge"><circle cx="530" cy="190" r="10"/><text x="530" y="194">3</text></g>
+      <g class="badge"><circle cx="890" cy="190" r="10"/><text x="890" y="194">4</text></g>
+      <g class="badge"><circle cx="110" cy="380" r="10"/><text x="110" y="384">5</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>Claude Code 新建会话，拿到自己的会话 id（sid）；bridge 报给平台，平台记进 <code>cli_session</code>（<code>agent_session_id</code>，一个会话一行）。</li>
+      <li><span class="n">2</span>Claude Code 边对话边把会话记录追加到 <code>~/.claude/projects/&lt;cwd 编码&gt;/&lt;sid&gt;.jsonl</code>，目录名是把 cwd 里的 <code>/</code> 换成 <code>-</code>。<code>~/.claude</code> 在 <code>/data</code> 上，记录落进对象存储。</li>
+      <li><span class="n">3</span>沙箱被回收（闲置、节点故障、换镜像），本地盘清空；<code>/data</code> 下的东西都在，平台记下的 sid 也在。</li>
+      <li><span class="n">4</span>下一轮来时新建沙箱，bridge 按 CLI 的能力位选 <code>session/load</code> 或 <code>session/resume</code>，带上记下的 sid。Claude Code 用同一个 cwd 找到同一个目录，读回记录，上下文还在。恢复失败才新建会话，并如实报告 <code>resumed=false</code>。</li>
+      <li><span class="n">5</span>前提是 cwd 重建前后一样：路径里只有会话 id 和固定的挂载点 <code>/data</code>，不含 Pod 名、不含随机目录。CLI 子会话的 cwd 是根会话的 workspace，记录落进同一个 projects 目录，按 sid 分文件。</li>
+    </ol>
+
+    <h3>图 4　只有一个写入方：这个人的沙箱在跑时，文件读写都经它</h3>
+    <svg width="1240" viewBox="0 0 1240 376" role="img" aria-label="只有一个写入方">
+      <rect class="node" x="20" y="40" width="260" height="56" rx="4"/>
+      <text class="t-name" x="150.0" y="64.0">文件工具</text>
+      <text class="t-sub" x="150.0" y="84.0">u 的所有会话：P、C、G、Q</text>
+      <rect class="node" x="20" y="130" width="260" height="56" rx="4"/>
+      <text class="t-name" x="150.0" y="154.0">界面上传</text>
+      <text class="t-sub" x="150.0" y="174.0">同一个规则</text>
+      <path class="e" d="M280 68 H310 V113 H328" marker-end="url(#pr-a)"/>
+      <path class="e" d="M280 158 H310 V113"/>
+      <polygon class="node" points="330,113 420,65 510,113 420,161"/>
+      <text class="t-name mid" x="420" y="109">u 的沙箱</text>
+      <text class="t-name mid" x="420" y="129">READY？</text>
+      <path class="e-hot" d="M510 113 H540 V70 H568" marker-end="url(#pr-h)"/>
+      <text class="t-hot b" x="546" y="100">是</text>
+      <rect class="node" x="570" y="40" width="300" height="60" rx="4"/>
+      <text class="t-name hot" x="720.0" y="66.0">经 execd 读写</text>
+      <text class="t-sub" x="720.0" y="86.0">路径原样传：/data/{P}/workspace/…</text>
+      <path class="e-hot" d="M870 70 H918" marker-end="url(#pr-h)"/>
+      <rect class="node" x="920" y="40" width="300" height="60" rx="4"/>
+      <text class="t-name" x="1070.0" y="66.0">沙箱 Pod · s3fs 挂载</text>
+      <text class="t-sub" x="1070.0" y="86.0">Shell 命令、Claude Code 也在这里写</text>
+      <path class="e-hot" d="M1070 100 V198" marker-end="url(#pr-h)"/>
+      <path class="e" d="M420 161 V230 H568" marker-end="url(#pr-a)"/>
+      <text class="t-lab b" x="430" y="200">否</text>
+      <rect class="node" x="570" y="200" width="300" height="60" rx="4"/>
+      <text class="t-name" x="720.0" y="226.0">直连对象存储</text>
+      <text class="t-sub" x="720.0" y="246.0">/data/… 换成 {user}/…，一一对应</text>
+      <path class="e" d="M870 230 H918" marker-end="url(#pr-a)"/>
+      <rect class="node" x="920" y="200" width="300" height="60" rx="4"/>
+      <text class="t-name" x="1070.0" y="226.0">对象存储</text>
+      <text class="t-sub" x="1070.0" y="246.0">{user}/…</text>
+      <rect class="gap" x="20" y="300" width="850" height="56" rx="4"/>
+      <text class="t-hot" x="36" y="324">例外：技能缺的版本用对象存储的服务端复制，直写 {user}/skills/{slug}/{版本}</text>
+      <text class="t-lab" x="36" y="344">源仓库 _skills 不在人的前缀下，沙箱里看不到；目标目录刚确认过不存在，沙箱里没人看过，没有缓存可冲突</text>
+      <path class="e-mute" d="M870 328 H1070 V262" marker-end="url(#pr-m)"/>
+      <g class="badge"><circle cx="420" cy="65" r="10"/><text x="420" y="69">1</text></g>
+      <g class="badge"><circle cx="570" cy="40" r="10"/><text x="570" y="44">2</text></g>
+      <g class="badge"><circle cx="570" cy="200" r="10"/><text x="570" y="204">3</text></g>
+      <g class="badge"><circle cx="20" cy="300" r="10"/><text x="20" y="304">4</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>选路看这个人的沙箱，不看本会话、也不看本智能体有没有勾 Shell。s3fs 有目录和属性缓存：沙箱在跑时，文件工具要是绕过它直写对象存储，Pod 里的进程可能好一阵都看不到，同一个文件还会有两个写入方互相覆盖。</li>
+      <li><span class="n">2</span>沙箱 READY 时经 execd 读写，路径原样传。经沙箱失败时，先确认沙箱确实不在了才改回直连；问不到就报错，不悄悄换写入方。</li>
+      <li><span class="n">3</span>没有沙箱时直连对象存储：<code>/data/…</code> 换成 <code>{user}/…</code>，一一对应，不用查表。</li>
+      <li><span class="n">4</span>例外是技能缺的版本的拷贝：源仓库不在沙箱里，只能在对象存储里服务端复制；目标目录刚确认过不存在，不会和 Pod 里的缓存冲突。拷完最后写一个完成标记，没有标记的目录当作没拷完，下次重拷。界面上传和文件工具同一个规则。</li>
+    </ol>
+
+    <h3>为什么这样做</h3>
+    <table>
+      <thead><tr><th>做法</th><th>为什么</th></tr></thead>
+      <tbody>
+        <tr><td>整个 <code>/{user}/</code> 挂一个点</td><td>Pod 的卷在创建时就定死了。按会话挂 subPath，后加入的会话（子会话、这个人新开的会话）挂不上自己的目录。挂父前缀，新目录一建好就看得见。</td></tr>
+        <tr><td>子、孙会话用根会话的 workspace</td><td>委派常常就是处理同一批文件，产物要互相看得见。子会话另建 workspace 的话，父会话还得再把结果拷一遍。</td></tr>
+        <tr><td>技能一个人一份，按技能、版本分子目录</td><td>同一版技能只拷一次，新会话、子会话大多不用再拷；沙箱里也只有一个技能目录。不同智能体可能绑同一技能的不同版本，按版本分开才不会互相覆盖。</td></tr>
+        <tr><td>提示词只列本智能体绑定的技能</td><td>共用目录里有这个人所有智能体的技能；技能清单本来就来自智能体的配置（先有清单、再有文件），不扫描目录，所以别的技能不会混进来。</td></tr>
+        <tr><td>压缩归档、外置结果放进 workspace 下的 <code>.atlas/{会话}/</code></td><td>会话目录只有 <code>workspace</code>，不用再多一个系统区；归档跟着工作区走，删根会话时子孙会话的归档一起清掉。</td></tr>
+        <tr><td>HOME 放本地盘，只把 <code>.claude</code> 放 <code>/data</code></td><td>HOME 里多是可以再生的缓存和装的包，放 s3fs 上很慢，重建后重装就行；要跨重建留下的只有 CLI 的会话记录和配置。</td></tr>
+        <tr><td><code>.claude</code> 一个人一份，不按会话分</td><td>会话记录本来就按 sid 分文件，放一起不冲突；登录状态、设置也只需要一份。</td></tr>
+        <tr><td>路径里只用会话 id 和固定挂载点</td><td>CLI 按 cwd 找会话目录，cwd 一变，旧记录就找不到了。</td></tr>
+        <tr><td>文件工具和 Shell 用同一套路径</td><td>挂父前缀之后 Shell 看到的是 <code>/data/…</code>，文件工具跟着用，模型不用在两套路径之间换算。</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+
+
+
+
+
+
+
+
 </main>
 
 <script>

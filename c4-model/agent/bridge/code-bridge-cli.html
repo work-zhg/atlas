@@ -456,7 +456,7 @@
   "decisions": [
     {
       "decision": "CLI 是 bridge 的子进程，经 stdio 说 ACP，两者打在同一个镜像里",
-      "reason": "bridge 和 CLI 必须同生共死：CLI 崩了 bridge 立刻从管道关闭得知，不用跨容器靠信号去发现；bridge 是 Pod 的 1 号进程，收到 SIGTERM 能先收拾 CLI 再退出。"
+      "reason": "bridge 和 CLI 必须同生共死：CLI 崩了 bridge 立刻从管道关闭得知，不用跨容器靠信号去发现；bridge 是 Pod 的主进程（execd 作 1 号进程，把 SIGTERM 转给它），收到后能先收拾 CLI 再退出。"
     },
     {
       "decision": "只管进程和握手，不知道会话和轮次",

@@ -1,4 +1,4 @@
-"""上游：网关直接连的服务（没有 Higress）。
+"""上游：网关直接连的服务。
 
     mcp.py    MCP 代理：已有的远程 MCP Server（Streamable HTTP / 旧版 SSE），网关作为客户端调它
     rest.py   REST 转换：解析 OpenAPI、按映射拼 HTTP 请求

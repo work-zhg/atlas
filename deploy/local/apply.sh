@@ -43,7 +43,7 @@ kubectl -n atlas-system create secret generic atlas-knowledge-mcp \
   --from-literal=secret="${MCP_SECRET}" \
   --dry-run=client -o yaml | kubectl apply -f -
 
-# MCP 网关经 Higress 时期的网关凭据：网关已改为直连上游（上游凭据存在网关库里），不再需要
+# 旧版 MCP 网关的凭据：网关直连上游、上游凭据存在网关库里之后不再需要
 kubectl -n atlas-system delete secret atlas-mcpgateway-creds --ignore-not-found
 
 # LiteLLM（39-litellm.yaml）：master key（管理接口，只给模型管理平台）与 salt key（加密库里的供应商凭据）。
@@ -58,7 +58,7 @@ kubectl -n atlas-system create secret generic atlas-litellm-creds \
   --from-literal=master_key="${LITELLM_MASTER}" \
   --from-literal=salt_key="${LITELLM_SALT}" \
   --dry-run=client -o yaml | kubectl apply -f -
-# 自研网关时期的网关凭据：Higress 上的模型路由已经撤掉，不再需要
+# 自研模型网关时期的凭据：模型调用改走 LiteLLM 之后不再需要
 kubectl -n atlas-system delete secret atlas-modelgateway-creds --ignore-not-found
 
 # ★ 内网免令牌（doc/identity-propagation-design.html）：服务间令牌、用户中心 App Key / Secret、

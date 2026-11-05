@@ -98,7 +98,7 @@ async def test_tools_catalog_availability(client: httpx.AsyncClient) -> None:
     assert "SANDBOX_ENABLED" in by_name["bash"]["note"]
     assert "coding_task" not in by_name
 
-    # ★ 网页搜索已改走 MCP（Higress 上的 serpapi），不再是内置工具
+    # ★ 网页搜索已改走 MCP（MCP 网关上的 serpapi），不再是内置工具
     assert "web_search" not in by_name
 
     # 无外部前提的工具恒可用

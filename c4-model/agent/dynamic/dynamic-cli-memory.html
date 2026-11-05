@@ -1,0 +1,1126 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dynamic View</title>
+<style>
+  body { margin: 0; background: #fff; color: #444; font-family: "Open Sans", "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
+  main { padding: 24px 32px 48px; }
+  svg { display: block; max-width: 100%; height: auto; }
+  h2 { margin: 40px 0 12px; font-size: 15px; font-weight: 600; color: #666; }
+  #c4-report { margin: 0 0 24px; padding: 12px 16px 12px 36px; border: 1px solid #e0b4b4; background: #fff6f6; font-size: 14px; line-height: 1.6; }
+  #c4-report li[data-level="error"] { color: #b00020; }
+  #c4-report li[data-level="warn"] { color: #8a5a00; }
+  #c4-details { max-width: 1280px; }
+  #c4-details article { margin: 0 0 28px; scroll-margin-top: 16px; }
+  #c4-details article:target h3 { background: #fff8d6; }
+  #c4-details h3 { margin: 0 0 8px; padding: 2px 4px; font-size: 15px; font-weight: 600; color: #333; }
+  #c4-details h3 .tech { margin-left: 8px; font-size: 13px; font-weight: 400; color: #888; }
+  #c4-details p { margin: 0 0 8px; font-size: 14px; line-height: 1.7; }
+  #c4-details table { width: 100%; margin: 0 0 8px; border-collapse: collapse; table-layout: fixed; font-size: 13px; line-height: 1.6; }
+  #c4-details th, #c4-details td { padding: 6px 10px; border: 1px solid #e3e3e3; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+  #c4-details th { background: #f6f8fa; font-weight: 600; }
+  #c4-details th:nth-child(1) { width: 14%; }
+  #c4-details th:nth-child(2) { width: 46%; }
+  #c4-details td.sample, #c4-details pre { font-family: Menlo, Consolas, "PingFang SC", monospace; }
+  #c4-details td.sample { word-break: break-all; }
+  #c4-details pre { margin: 0; padding: 10px 12px; border: 1px solid #e3e3e3; background: #f6f8fa; font-size: 12px; line-height: 1.5; overflow-x: auto; }
+  svg a { cursor: pointer; }
+  /* CLI 智能体接入记忆的原理：手写的静态图，不经渲染器 */
+  #principle { max-width: 1280px; }
+  #principle h3 { margin: 32px 0 8px; font-size: 15px; font-weight: 600; color: #333; }
+  #principle p { margin: 0 0 8px; font-size: 14px; line-height: 1.7; }
+  #principle code { padding: 0 3px; background: #f6f8fa; font-family: Menlo, Consolas, monospace; font-size: 12.5px; }
+  #principle ol { margin: 8px 0 0; padding: 0; list-style: none; }
+  #principle ol li { position: relative; margin: 0 0 6px; padding-left: 30px; font-size: 14px; line-height: 1.7; }
+  #principle ol li .n { position: absolute; left: 0; top: 2px; width: 20px; height: 20px; border-radius: 50%; background: #d9480f; color: #fff; font-size: 12px; font-weight: 700; line-height: 20px; text-align: center; }
+  #principle table { width: 100%; margin: 8px 0 0; border-collapse: collapse; font-size: 13px; line-height: 1.6; }
+  #principle th, #principle td { padding: 6px 10px; border: 1px solid #e3e3e3; text-align: left; vertical-align: top; }
+  #principle th { background: #f6f8fa; font-weight: 600; }
+  #principle th:first-child { width: 28%; }
+  #principle svg { margin: 8px 0 4px; }
+  #principle svg text { font-size: 13px; fill: #444; }
+  #principle svg .t-name { font-size: 15px; fill: #1168bd; text-anchor: middle; }
+  #principle svg .t-sub { font-size: 12px; fill: #888; text-anchor: middle; }
+  #principle svg .t-head { font-size: 14px; font-weight: 600; fill: #1168bd; }
+  #principle svg .t-key { font-size: 12px; fill: #888; }
+  #principle svg .t-lab { font-size: 12px; fill: #666; }
+  #principle svg .t-hot { font-size: 12px; fill: #d9480f; }
+  #principle svg .t-mute { font-size: 12px; fill: #aaa; }
+  #principle svg .t-ghost { font-size: 14px; font-weight: 600; fill: #888; }
+  #principle svg .hot { fill: #d9480f; }
+  #principle svg .mid { text-anchor: middle; }
+  #principle svg .end { text-anchor: end; }
+  #principle svg .b { font-weight: 700; }
+  #principle svg .node { fill: #fff; stroke: #1168bd; stroke-width: 1.6; }
+  #principle svg .head { fill: #f6f8fa; stroke: none; }
+  #principle svg .sep { stroke: #e3e3e3; stroke-width: 1; }
+  #principle svg .bnd { fill: none; stroke: #1168bd; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .ghost { fill: #fafafa; stroke: #aaa; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .gap { fill: #fff6f0; stroke: #d9480f; stroke-width: 1.2; stroke-dasharray: 5 4; }
+  #principle svg .e { fill: none; stroke: #444; stroke-width: 1.6; }
+  #principle svg .e-hot { fill: none; stroke: #d9480f; stroke-width: 2.4; }
+  #principle svg .e-mute { fill: none; stroke: #bbb; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .e-link { fill: none; stroke: #d9480f; stroke-width: 1.4; stroke-dasharray: 4 3; }
+  #principle svg .badge circle { fill: #d9480f; stroke: #fff; stroke-width: 2; }
+  #principle svg .badge text { fill: #fff; font-size: 12px; font-weight: 700; text-anchor: middle; }
+</style>
+</head>
+<body>
+<!--
+  只改下面这段 JSON；渲染器不用动。字段说明见 dynamic/RULES.md 的「数据格式」。
+-->
+<script type="application/json" id="c4-model">
+{
+  "title": "动态图：Agent 平台 - CLI 智能体的记忆",
+  "description": "目标设计，现在的代码里 CLI 智能体不加载、不写入记忆。用户隔了 40 分钟回到会话，说「以后前端项目都用 bun」：常驻块重建、变了，以新系统提示词恢复 CLI 会话；CLI 经 bridge 的本机 MCP 调 save_memory，调用回到 server，由和原生同一份的记忆组件执行。提交、领取同 dynamic-run.html，权限请求同 dynamic-cli-run.html",
+  "boundaries": [
+    {
+      "id": "platform",
+      "name": "Agent 平台",
+      "type": "Software System"
+    },
+    {
+      "id": "server",
+      "name": "Agent 服务",
+      "type": "Container: Python / FastAPI",
+      "in": "platform"
+    },
+    {
+      "id": "pod",
+      "name": "会话 Pod",
+      "type": "Container: K8s Pod：bridge + CLI 智能体",
+      "in": "platform"
+    }
+  ],
+  "participants": [
+    {
+      "id": "executor",
+      "kind": "component",
+      "technology": "asyncio 后台任务",
+      "in": "server",
+      "name": "Run 执行器"
+    },
+    {
+      "id": "acp",
+      "kind": "component",
+      "technology": "atlas_host 协议客户端",
+      "in": "server",
+      "name": "CLI 运行时"
+    },
+    {
+      "id": "memoryRt",
+      "kind": "component",
+      "technology": "Python 模块",
+      "in": "server",
+      "name": "记忆"
+    },
+    {
+      "id": "db",
+      "kind": "container",
+      "shape": "database",
+      "technology": "PostgreSQL 16",
+      "in": "platform",
+      "name": "数据库"
+    },
+    {
+      "id": "bridge",
+      "kind": "component",
+      "technology": "Python / asyncio（atlas_bridge）",
+      "in": "pod",
+      "name": "bridge"
+    },
+    {
+      "id": "cli",
+      "kind": "component",
+      "technology": "Node 子进程（claude-agent-acp + Claude Code）",
+      "in": "pod",
+      "name": "CLI 适配器"
+    },
+    {
+      "id": "memory",
+      "kind": "system",
+      "tag": "同级服务",
+      "color": "#8411bd",
+      "name": "记忆服务"
+    }
+  ],
+  "messages": [
+    {
+      "from": "executor",
+      "to": "acp",
+      "description": "跑一轮（AgentRuntime.run_turn）",
+      "details": {
+        "note": "Run 已提交并被领取（同 dynamic-run.html 的 1–9 步）。和原生同一个接口：给一段，拿回一串平台事件。"
+      }
+    },
+    {
+      "from": "acp",
+      "to": "memoryRt",
+      "description": "为这一轮组装记忆（和原生同一个入口）",
+      "details": {
+        "note": "新增：CLI 运行时在解析能力（CliCapabilityAssembly）时调 MemoryRuntime.turn，参数和原生一样。CLI 的轮次不会挂起，resume 恒为 false；会话压缩由 CLI 自己做，不看 thread_context 的 compact_count（原理图 4）。",
+        "items": [
+          [
+            "writable",
+            "智能体勾了「记忆」工具，且不是子会话",
+            "true"
+          ],
+          [
+            "occurred_at",
+            "segment.input_at：本轮用户发话的时间",
+            "2026-11-03T08:55:20+00:00"
+          ],
+          [
+            "history_upto",
+            "上一条回复的时间，判断空闲是否超过缓存有效期",
+            "2026-11-03T08:15:40+00:00"
+          ]
+        ]
+      }
+    },
+    {
+      "from": "memoryRt",
+      "to": "db",
+      "description": "读会话的记忆状态和用户设置",
+      "technology": "SQL/TCP",
+      "details": {
+        "items": [
+          [
+            "thread_memory",
+            "snapshot（常驻快照）、known（已知版本）",
+            "known = {user: {沟通偏好: 23, 工具链: 40}}"
+          ],
+          [
+            "memory_user_setting",
+            "paused、epoch",
+            "epoch = 8（用户在记忆页改过「沟通偏好」）"
+          ]
+        ]
+      }
+    },
+    {
+      "from": "memoryRt",
+      "to": "memory",
+      "description": "列主题目录",
+      "technology": "JSON/HTTP（GET …/topics）",
+      "details": {
+        "note": "失败就本轮不用记忆：不下发常驻块和记忆工具，CLI 照常跑这一轮。"
+      }
+    },
+    {
+      "from": "memoryRt",
+      "to": "acp",
+      "description": "常驻块重建了：常驻块 + 写入指引、更新提示、工具清单",
+      "details": {
+        "note": "判据同原生：epoch 变了、距上次回复 40 分钟超过缓存有效期，都会重建。重建只重拉版本变了的常驻主题（沟通偏好 23 → 24）。CLI 运行时把「常驻块 + 写入指引」的哈希和 cli_session 里记着的比：不一样，就要以新系统提示词恢复 CLI 会话（下一条）。"
+      }
+    },
+    {
+      "from": "acp",
+      "to": "bridge",
+      "description": "session.open：恢复这个 CLI 会话，换上新的系统提示词追加",
+      "technology": "atlas.host.v1 / WebSocket",
+      "details": {
+        "note": "新增字段 systemPrompt.append。常驻块没变就照常 attach，不重开。bridge 重启过需要 open 时，也带上同一份追加，CLI 看到的系统提示词不会因为重连而变。mcpServers 里多一个 bridge 本机的 atlas（记忆工具）；不可写时只有 load_memory。",
+        "example": "{\n  \"resume\": {\"agentSessionId\": \"<CLI 会话 id>\"},\n  \"mcpServers\": [ …网关上的服务、知识库…, {\"type\": \"http\", \"name\": \"atlas\", \"url\": \"http://127.0.0.1:<端口>/mcp\", \"headers\": [{\"name\": \"Authorization\", \"value\": \"Bearer <本会话随机密钥>\"}]} ],\n  \"systemPrompt\": {\"append\": \"<memory>…</memory>\\n\\n## 记忆的写入（save_memory / forget_memory）…\"}\n}"
+      }
+    },
+    {
+      "from": "bridge",
+      "to": "cli",
+      "description": "session/resume（_meta.systemPrompt.append、allowedTools）",
+      "technology": "ACP v1 / stdio",
+      "details": {
+        "note": "claude-agent-acp 0.85.1 按会话指纹判断：systemPrompt、mcpServers 变了就重建 Claude Code 进程，从会话记录（~/.claude/projects/…/sid.jsonl）恢复上下文。三个记忆工具列进 _meta.claudeCode.options.allowedTools，调用时不弹权限请求，和原生一样写入不审批，换来的是当场可见、可撤销。恢复成功后 server 把新哈希写回 cli_session。",
+        "example": "{\"sessionId\": \"<CLI 会话 id>\", \"cwd\": \"/data/<会话>/workspace\", \"mcpServers\": […],\n \"_meta\": {\"systemPrompt\": {\"append\": \"<memory>…\"},\n           \"claudeCode\": {\"options\": {\"allowedTools\": [\"mcp__atlas__load_memory\", \"mcp__atlas__save_memory\", \"mcp__atlas__forget_memory\"]}}}}"
+      }
+    },
+    {
+      "from": "acp",
+      "to": "bridge",
+      "description": "turn.start：prompt = 更新提示 + 用户消息",
+      "technology": "atlas.host.v1 / WebSocket",
+      "details": {
+        "note": "CLI 的每次模型调用 server 插不进去，所以更新提示在这一轮开始时拼在 prompt 开头，只列主题不带内容，几十个 token，会留在 CLI 的历史里。本例常驻块刚重建，没有要提示的主题。"
+      }
+    },
+    {
+      "from": "bridge",
+      "to": "cli",
+      "description": "session/prompt",
+      "technology": "ACP v1 / stdio"
+    },
+    {
+      "from": "cli",
+      "to": "bridge",
+      "description": "调 save_memory（mcp__atlas__save_memory）",
+      "technology": "MCP / Streamable HTTP（127.0.0.1）",
+      "details": {
+        "note": "新增：bridge 在 Pod 里开一个只听 127.0.0.1 的 MCP 服务，带本会话随机密钥。它不自己执行，只把调用转回 server。「工具链」本会话早先加载过（已知 40），所以模型直接写。",
+        "example": "{\"name\": \"save_memory\", \"arguments\": {\"topic\": \"工具链\", \"content\": \"2026-11 起前端项目改用 bun\", \"replaces\": [12]}}"
+      }
+    },
+    {
+      "from": "bridge",
+      "to": "acp",
+      "description": "tool.call（新）：转交平台工具调用，等结果",
+      "technology": "atlas.host.v1 / WebSocket",
+      "details": {
+        "note": "新增的 bridge → server 请求，和 permission.ask 同一种形态：带 turnId，不属于本轮的直接拒绝；断线时这次调用在 bridge 里等着，重连 attach 后再交，等多久不限。",
+        "example": "{\"seq\": 418, \"turnId\": \"<run id>\", \"callId\": \"<bridge 分配>\", \"tool\": \"save_memory\", \"arguments\": {…}}"
+      }
+    },
+    {
+      "from": "acp",
+      "to": "memoryRt",
+      "description": "执行 save_memory（这一轮的 MemoryTurn）",
+      "details": {
+        "note": "和原生是同一个 MemoryTurn：守卫（暂停、本轮写满 8 次）、写前必看、幂等键、作废处理都一样。关联主键取会话所属用户，不在参数里。"
+      }
+    },
+    {
+      "from": "memoryRt",
+      "to": "memory",
+      "description": "加载目标主题，比对已知版本：40 = 40",
+      "technology": "JSON/HTTP（GET …/topics/工具链）"
+    },
+    {
+      "from": "memoryRt",
+      "to": "memory",
+      "description": "写入：删除 #12、新增一条",
+      "technology": "JSON/HTTP（POST …/writes）",
+      "details": {
+        "note": "服务端怎么判定见 c4-model/memory/dynamic/dynamic-write.html 的「记忆原理」。时间取本轮用户发话的时间，来源 agent，出处 {thread, run}。"
+      }
+    },
+    {
+      "from": "memoryRt",
+      "to": "db",
+      "description": "已知版本推进到 41",
+      "technology": "SQL/TCP"
+    },
+    {
+      "from": "acp",
+      "to": "bridge",
+      "description": "tool.call 的结果：文本 + 记忆卡片",
+      "technology": "atlas.host.v1 / WebSocket",
+      "details": {
+        "example": "{\"content\": [{\"type\": \"text\", \"text\": \"已记住 #31（用户 · 工具链），取代了 #12。\"}],\n \"structuredContent\": {\"memory\": {\"action\": \"saved\", \"topic\": \"工具链\", \"number\": 31, \"removed\": [12], \"revision\": \"<修订 uuid>\"}}}"
+      }
+    },
+    {
+      "from": "bridge",
+      "to": "cli",
+      "description": "MCP 调用结果",
+      "technology": "MCP / Streamable HTTP（127.0.0.1）"
+    },
+    {
+      "from": "cli",
+      "to": "bridge",
+      "description": "session/update：工具调用完成，带结果",
+      "technology": "ACP v1 / stdio"
+    },
+    {
+      "from": "bridge",
+      "to": "acp",
+      "description": "agent.update：带序号原样转交",
+      "technology": "atlas.host.v1 / WebSocket"
+    },
+    {
+      "from": "acp",
+      "to": "executor",
+      "description": "翻成 tool.completed，卡片放进 artifact",
+      "details": {
+        "note": "翻译层认出 mcp__atlas__* 的结果，把 structuredContent 里的 memory 放进 artifact，和原生的 tool.completed 逐字段一致；执行器落库、发布，控制台照常显示「已记住 #31［撤销］」。需要验证适配器的 rawOutput 带不带 structuredContent，不带就由 CLI 运行时按工具名和参数把 tool.call 的结果对上。"
+      }
+    }
+  ]
+}
+</script>
+
+<main>
+  <ul id="c4-report" hidden></ul>
+  <svg id="c4-diagram" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+  <section id="c4-details" hidden></section>
+  <h2>Diagram key</h2>
+  <svg id="c4-key" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+
+  <!-- CLI 智能体接入记忆的原理（目标设计）：静态图，不经上面的渲染器。场景同时序图 -->
+  <section id="principle">
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+      <defs>
+        <marker id="pr-a" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#444"/></marker>
+        <marker id="pr-h" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#d9480f"/></marker>
+        <marker id="pr-m" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#bbb"/></marker>
+      </defs>
+    </svg>
+
+    <h2>CLI 智能体接入记忆的原理（目标设计）</h2>
+    <p>一句话：记忆的语义全留在 server，CLI 只多拿到两样东西。<b>一是系统提示词里追加的常驻块</b>：开会话、恢复会话时经 ACP 的 <code>_meta.systemPrompt.append</code> 交给适配器，常驻块变了就以新提示词恢复 CLI 会话。<b>二是三个 MCP 工具</b>：由 bridge 在 Pod 里开的本机 MCP 提供，调用经 atlas.host.v1 回到 server，由和原生同一份的 MemoryTurn 执行。快照、版本表、写前必看、幂等、卡片和撤销都不用为 CLI 再写一遍；Pod 里也没有记忆服务的地址和令牌。CLI 自带的记忆（<code>~/.claude</code> 里的 CLAUDE.md 和自动记忆）不关，和 Atlas 记忆并存。下面五张图，场景同上面的时序图：用户隔了 40 分钟回到会话，期间在别的会话里改过「沟通偏好」（23 → 24），这一轮 CLI 用 save_memory 取代 <code>#12</code>。橙色是这次实际走的路，灰色虚线是没走的分支。现在的代码里这些都还没有，要做的改动列在最后。</p>
+
+    <h3>图 1　CLI 拿到记忆的路：常驻块、工具，加上照旧的补记</h3>
+    <svg width="1240" viewBox="0 0 1240 450" role="img" aria-label="CLI 拿到记忆的路">
+      <rect class="bnd" x="20" y="30" width="330" height="300" rx="6"/>
+      <text class="t-head" x="36" y="54">Agent 服务</text>
+      <rect class="node" x="40" y="70" width="290" height="70" rx="4"/>
+      <text class="t-name" x="185" y="98">CLI 运行时</text>
+      <text class="t-sub" x="185" y="120">组装记忆、比常驻块哈希、接 tool.call</text>
+      <rect class="node" x="40" y="220" width="290" height="70" rx="4"/>
+      <text class="t-name" x="185" y="248">记忆（MemoryTurn）</text>
+      <text class="t-sub" x="185" y="270">和原生同一份：快照、版本表、写前必看</text>
+      <path class="e-hot" d="M140 140 V218" marker-end="url(#pr-h)"/>
+      <text class="t-hot end" x="132" y="184">执行工具</text>
+      <path class="e-hot" d="M230 220 V142" marker-end="url(#pr-h)"/>
+      <text class="t-hot" x="238" y="184">常驻块</text>
+
+      <rect class="bnd" x="470" y="30" width="410" height="300" rx="6"/>
+      <text class="t-head" x="486" y="54">会话 Pod</text>
+      <rect class="node" x="490" y="70" width="370" height="70" rx="4"/>
+      <text class="t-name" x="675" y="98">bridge</text>
+      <text class="t-sub" x="675" y="120">本机 MCP「atlas」（127.0.0.1）· 转交 tool.call</text>
+      <rect class="node" x="490" y="200" width="370" height="112" rx="4"/>
+      <text class="t-name" x="675" y="226">CLI 适配器 · Claude Code</text>
+      <text class="hot" x="506" y="252">系统提示词 = 预设 + 追加的 &lt;memory&gt; 常驻块</text>
+      <text x="506" y="276">工具：mcp__atlas__load / save / forget_memory</text>
+      <text class="t-lab" x="506" y="298">会话记录：~/.claude/projects/…/sid.jsonl</text>
+      <path class="e-hot" d="M560 140 V198" marker-end="url(#pr-h)"/>
+      <text class="t-hot" x="568" y="174">session/resume（_meta）</text>
+      <path class="e-hot" d="M780 200 V142" marker-end="url(#pr-h)"/>
+      <text class="t-hot" x="788" y="174">MCP 调用</text>
+
+      <path class="e-hot" d="M330 92 H488" marker-end="url(#pr-h)"/>
+      <text class="t-hot mid" x="410" y="84">session.open</text>
+      <path class="e-hot" d="M490 120 H332" marker-end="url(#pr-h)"/>
+      <text class="t-hot mid" x="410" y="136">tool.call</text>
+
+      <rect class="ghost" x="940" y="60" width="280" height="96" rx="4"/>
+      <text class="t-ghost" x="956" y="86">CLI 自带的记忆（并存）</text>
+      <text class="t-mute" x="956" y="110">~/.claude/CLAUDE.md、自动记忆</text>
+      <text class="t-mute" x="956" y="132">home/.claude 一人一份，跨会话保留</text>
+      <path class="e-mute" d="M860 226 H900 V108 H938" marker-end="url(#pr-m)"/>
+      <text class="t-mute" x="890" y="96">读写</text>
+
+      <rect class="node" x="940" y="220" width="280" height="70" rx="4"/>
+      <text class="t-name" x="1080" y="248">记忆服务</text>
+      <text class="t-sub" x="1080" y="270">同级服务 · 事实源</text>
+      <path class="e" d="M330 270 H400 V350 H1040 V292" marker-end="url(#pr-a)"/>
+      <text class="t-lab mid" x="700" y="344">目录、加载、写入（只有 server 调）</text>
+
+      <rect class="node" x="40" y="370" width="340" height="62" rx="4"/>
+      <text class="t-name" x="210" y="396">会话后补记（维护者）</text>
+      <text class="t-sub" x="210" y="416">读 message 表里 CLI 会话的正文，照旧</text>
+      <path class="e" d="M380 400 H1140 V292" marker-end="url(#pr-a)"/>
+      <text class="t-lab mid" x="760" y="394">写入（来源 backfill）</text>
+
+      <g class="badge"><circle cx="230" cy="200" r="10"/><text x="230" y="204">1</text></g>
+      <g class="badge"><circle cx="780" cy="160" r="10"/><text x="780" y="164">2</text></g>
+      <g class="badge"><circle cx="380" cy="370" r="10"/><text x="380" y="374">3</text></g>
+      <g class="badge"><circle cx="1220" cy="60" r="10"/><text x="1220" y="64">4</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>常驻块进 CLI 的系统提示词：记忆组件算出常驻块（可写时加上写入指引），CLI 运行时在 session.open 里交给 bridge，bridge 用 ACP 的 <code>_meta.systemPrompt.append</code> 交给适配器，追加在 Claude Code 的预设提示词之后。和原生一样按会话存快照，只在该刷新时才变（图 2）。</li>
+      <li><span class="n">2</span>记忆工具：bridge 在 Pod 里开一个只听 127.0.0.1 的 MCP，CLI 看到的是三个普通的 MCP 工具（不可写时只有 load_memory）。调用经 tool.call 回到 server，由这一轮的 MemoryTurn 执行（图 3）。Pod 里没有记忆服务的地址和任何令牌，关联主键也只在 server 这边。</li>
+      <li><span class="n">3</span>会话后补记照旧：维护者读 message 表里这个会话的用户、助手正文（CLI 的回答也落在这里），补上漏记的。CLI 接上 save_memory 之后，补记对它和对原生一样，只补缺的部分。</li>
+      <li><span class="n">4</span>CLI 自带的记忆不关，和 Atlas 记忆并存：Atlas 不读不写它，记忆页也看不到（图 5）。</li>
+    </ol>
+
+    <h3>图 2　常驻块：什么时候以新提示词恢复 CLI 会话</h3>
+    <svg width="1240" viewBox="0 0 1240 420" role="img" aria-label="常驻块：什么时候以新提示词恢复 CLI 会话">
+      <rect class="node" x="20" y="50" width="190" height="60" rx="4"/>
+      <text class="t-name" x="115" y="76">组装记忆</text>
+      <text class="t-sub" x="115" y="96">常驻块重建了（epoch、空闲）</text>
+      <path class="e-hot" d="M210 80 H238" marker-end="url(#pr-h)"/>
+      <rect class="node" x="240" y="50" width="190" height="60" rx="4"/>
+      <text class="t-name" x="335" y="76">算追加内容的哈希</text>
+      <text class="t-sub" x="335" y="96">常驻块 + 写入指引</text>
+      <path class="e-hot" d="M430 80 H458" marker-end="url(#pr-h)"/>
+      <polygon class="node" points="460,80 550,38 640,80 550,122"/>
+      <text class="t-name" x="550" y="77">和 CLI 会话</text>
+      <text class="t-name" x="550" y="96">用的一样？</text>
+      <path class="e-hot" d="M640 80 H678" marker-end="url(#pr-h)"/>
+      <text class="t-hot mid" x="659" y="72">否</text>
+      <rect class="node" x="680" y="50" width="170" height="60" rx="4"/>
+      <text class="t-name" x="765" y="76">session.open</text>
+      <text class="t-sub" x="765" y="96">resume + 新的追加</text>
+      <path class="e-hot" d="M850 80 H878" marker-end="url(#pr-h)"/>
+      <rect class="node" x="880" y="50" width="200" height="60" rx="4"/>
+      <text class="t-name" x="980" y="76">适配器重建进程</text>
+      <text class="t-sub" x="980" y="96">指纹变了，从会话记录恢复</text>
+      <path class="e-hot" d="M1080 80 H1108" marker-end="url(#pr-h)"/>
+      <rect class="node" x="1110" y="50" width="110" height="60" rx="4"/>
+      <text class="t-name" x="1165" y="76">记下哈希</text>
+      <text class="t-sub" x="1165" y="96">cli_session</text>
+
+      <path class="e-mute" d="M550 122 V150" marker-end="url(#pr-m)"/>
+      <text class="t-mute" x="562" y="142">是</text>
+      <rect class="ghost" x="420" y="152" width="260" height="56" rx="4"/>
+      <text class="t-ghost mid" x="550" y="176">照常 attach，不重开</text>
+      <text class="t-mute mid" x="550" y="196">bridge 重启过就 open，带同一份追加</text>
+      <path class="e-mute" d="M980 110 V150" marker-end="url(#pr-m)"/>
+      <text class="t-mute" x="992" y="142">恢复不成</text>
+      <rect class="ghost" x="860" y="152" width="360" height="56" rx="4"/>
+      <text class="t-ghost mid" x="1040" y="176">session.lost：上下文丢了</text>
+      <text class="t-mute mid" x="1040" y="196">新会话带新追加；已知版本按首次处理，只留常驻主题</text>
+
+      <rect class="node" x="20" y="236" width="1200" height="170"/>
+      <rect class="head" x="21" y="237" width="1198" height="30"/>
+      <text class="t-head" x="34" y="257">刷新判据</text>
+      <text class="t-key" x="300" y="257">原生</text>
+      <text class="t-key" x="700" y="257">CLI</text>
+      <line class="sep" x1="20" y1="267" x2="1220" y2="267"/>
+      <text x="34" y="290">还没有快照</text>
+      <text x="300" y="290">重建</text>
+      <text x="700" y="290">重建；第一次 open 就带上追加</text>
+      <line class="sep" x1="20" y1="301" x2="1220" y2="301"/>
+      <text x="34" y="324">会话压缩过</text>
+      <text x="300" y="324">Atlas 改写了历史 → 重建</text>
+      <text x="700" y="324">CLI 自己压缩，系统提示词不动 → 不重建，只重置已知版本（图 4）</text>
+      <line class="sep" x1="20" y1="335" x2="1220" y2="335"/>
+      <text class="hot" x="34" y="358">作用域、epoch 变了，空闲超过缓存期</text>
+      <text x="300" y="358">重建</text>
+      <text class="hot" x="700" y="358">重建；变了就以新提示词恢复会话（本例）</text>
+      <line class="sep" x1="20" y1="369" x2="1220" y2="369"/>
+      <text x="34" y="392">续跑段</text>
+      <text x="300" y="392">永不重建</text>
+      <text x="700" y="392">没有：CLI 的轮次在线等审批，不挂起</text>
+
+      <g class="badge"><circle cx="550" cy="38" r="10"/><text x="550" y="42">1</text></g>
+      <g class="badge"><circle cx="850" cy="50" r="10"/><text x="850" y="54">2</text></g>
+      <g class="badge"><circle cx="1220" cy="152" r="10"/><text x="1220" y="156">3</text></g>
+      <g class="badge"><circle cx="1220" cy="236" r="10"/><text x="1220" y="240">4</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>CLI 的系统提示词在进程启动时就定了，中途换不了（和 MCP、模型一样）。所以 server 记下 CLI 会话现在用的是哪份追加（<code>cli_session</code> 里的哈希），每轮开始时比一次：一样就照常 attach；bridge 重启过需要 open 时，也带上同一份追加，CLI 看到的系统提示词不会因为重连而变。</li>
+      <li><span class="n">2</span>不一样就以新提示词恢复会话：session.open 带上 resume 和新的追加，bridge 发 session/resume。适配器按会话指纹（systemPrompt、mcpServers…）发现变了，重建 Claude Code 进程，从会话记录恢复上下文。这只发生在缓存本来就会失效的时候，不额外丢缓存，只多一次进程启动。</li>
+      <li><span class="n">3</span>恢复不成时沿用现在的处理：报 <code>session.lost</code>，新会话带上新的追加；新会话里只有常驻块，已知版本按首次处理。</li>
+      <li><span class="n">4</span>判据和原生同一份代码，只有两处不同：压缩由 CLI 自己做，不动系统提示词，所以不重建；CLI 的轮次在线等审批、不挂起，没有续跑段。</li>
+    </ol>
+
+    <h3>图 3　工具调用：从 CLI 经 bridge 回到 server</h3>
+    <svg width="1240" viewBox="0 0 1240 400" role="img" aria-label="工具调用：从 CLI 经 bridge 回到 server">
+      <rect class="node" x="20" y="50" width="200" height="60" rx="4"/>
+      <text class="t-name" x="120" y="76">CLI 调 save_memory</text>
+      <text class="t-sub" x="120" y="96">mcp__atlas__save_memory</text>
+      <path class="e-hot" d="M220 80 H248" marker-end="url(#pr-h)"/>
+      <rect class="node" x="250" y="50" width="200" height="60" rx="4"/>
+      <text class="t-name" x="350" y="76">bridge 本机 MCP</text>
+      <text class="t-sub" x="350" y="96">127.0.0.1 · 验本会话密钥</text>
+      <path class="e-hot" d="M450 80 H478" marker-end="url(#pr-h)"/>
+      <rect class="node" x="480" y="50" width="200" height="60" rx="4"/>
+      <text class="t-name" x="580" y="76">tool.call</text>
+      <text class="t-sub" x="580" y="96">turnId · callId · 工具 · 参数</text>
+      <path class="e-hot" d="M680 80 H718" marker-end="url(#pr-h)"/>
+      <polygon class="node" points="720,80 800,40 880,80 800,120"/>
+      <text class="t-name" x="800" y="77">本轮的</text>
+      <text class="t-name" x="800" y="96">调用？</text>
+      <path class="e-hot" d="M880 80 H918" marker-end="url(#pr-h)"/>
+      <text class="t-hot mid" x="899" y="72">是</text>
+      <rect class="node" x="920" y="50" width="300" height="60" rx="4"/>
+      <text class="t-name" x="1070" y="76">本轮的 MemoryTurn 执行</text>
+      <text class="t-sub" x="1070" y="96">守卫、写前必看、写入、推进已知版本</text>
+
+      <path class="e-mute" d="M800 120 V150" marker-end="url(#pr-m)"/>
+      <text class="t-mute" x="812" y="142">否</text>
+      <rect class="ghost" x="690" y="152" width="220" height="56" rx="4"/>
+      <text class="t-ghost mid" x="800" y="176">拒绝</text>
+      <text class="t-mute mid" x="800" y="196">上一轮遗留的调用，没人等它</text>
+      <path class="e-mute" d="M580 110 V150" marker-end="url(#pr-m)"/>
+      <text class="t-mute" x="592" y="142">server 断线</text>
+      <rect class="ghost" x="450" y="152" width="230" height="56" rx="4"/>
+      <text class="t-ghost mid" x="565" y="176">在 bridge 里等</text>
+      <text class="t-mute mid" x="565" y="196">重连 attach 后再交，同 permission.ask</text>
+
+      <path class="e-hot" d="M1070 110 V258" marker-end="url(#pr-h)"/>
+      <rect class="node" x="920" y="260" width="300" height="60" rx="4"/>
+      <text class="t-name" x="1070" y="286">结果：文本 + 记忆卡片</text>
+      <text class="t-sub" x="1070" y="306">卡片放在 structuredContent.memory</text>
+      <path class="e-hot" d="M920 290 H862" marker-end="url(#pr-h)"/>
+      <rect class="node" x="660" y="260" width="200" height="60" rx="4"/>
+      <text class="t-name" x="760" y="286">MCP 结果交回 CLI</text>
+      <text class="t-sub" x="760" y="306">模型看到「已记住 #31」</text>
+      <path class="e-hot" d="M660 290 H602" marker-end="url(#pr-h)"/>
+      <rect class="node" x="380" y="260" width="220" height="60" rx="4"/>
+      <text class="t-name" x="490" y="286">tool_call_update</text>
+      <text class="t-sub" x="490" y="306">CLI 报工具完成，经 agent.update</text>
+      <path class="e-hot" d="M380 290 H322" marker-end="url(#pr-h)"/>
+      <rect class="node" x="20" y="260" width="300" height="60" rx="4"/>
+      <text class="t-name" x="170" y="286">翻成 tool.completed</text>
+      <text class="t-sub" x="170" y="306">卡片进 artifact，控制台显示［撤销］</text>
+
+      <text class="t-lab" x="20" y="356">三个工具在开会话时列进 allowedTools：调用不弹权限请求，和原生一样写入不审批，换来的是当场可见、可撤销。</text>
+      <text class="t-lab" x="20" y="380">bridge 不解析参数、不执行，只转交；工具清单也由 server 在 session.open 时给出（不可写时只有 load_memory）。</text>
+
+      <g class="badge"><circle cx="450" cy="50" r="10"/><text x="450" y="54">1</text></g>
+      <g class="badge"><circle cx="680" cy="50" r="10"/><text x="680" y="54">2</text></g>
+      <g class="badge"><circle cx="1220" cy="50" r="10"/><text x="1220" y="54">3</text></g>
+      <g class="badge"><circle cx="320" cy="260" r="10"/><text x="320" y="264">4</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>本机 MCP 只听 127.0.0.1，带一把本会话的随机密钥（随 MCP 配置交给适配器）。它对 CLI 来说就是一个普通的 HTTP MCP 服务，换别的 CLI 也一样能接。</li>
+      <li><span class="n">2</span><code>tool.call</code> 是 atlas.host.v1 新增的 bridge → server 请求，和 <code>permission.ask</code> 同一种形态：带 turnId 和会话内序号；不属于本轮的直接拒绝；server 断线时在 bridge 里等着，重连 attach 后再交，等多久不限。处理它的是连着这个 bridge 的那个 server 实例，也就是正在跑这一轮的那个。</li>
+      <li><span class="n">3</span>执行的是这一轮的 MemoryTurn，和原生同一份代码：守卫、写前必看、幂等键、作废处理、版本推进都一样。CLI 没看过「工具链」就调 save_memory 时，同样不写，先把最新条目作为工具结果交回。</li>
+      <li><span class="n">4</span>卡片随 MCP 结果的 <code>structuredContent</code> 回到 CLI，CLI 报工具完成时带出来，翻译层认出 <code>mcp__atlas__*</code> 的结果，把卡片放进 <code>tool.completed</code> 的 artifact，和原生逐字段一致。适配器的 rawOutput 带不带 structuredContent 要验证；不带的话，CLI 运行时按工具名和参数把 tool.call 的结果对上。</li>
+    </ol>
+
+    <h3>图 4　版本表：CLI 自己压缩之后</h3>
+    <svg width="1240" viewBox="0 0 1240 360" role="img" aria-label="版本表：CLI 自己压缩之后">
+      <rect class="node" x="20" y="50" width="220" height="60" rx="4"/>
+      <text class="t-name" x="130" y="76">turn.start</text>
+      <text class="t-sub" x="130" y="96">prompt = 更新提示 + 用户消息</text>
+      <path class="e-hot" d="M240 80 H268" marker-end="url(#pr-h)"/>
+      <rect class="node" x="270" y="50" width="200" height="60" rx="4"/>
+      <text class="t-name" x="370" y="76">CLI 干活</text>
+      <text class="t-sub" x="370" y="96">加载、写入的结果进历史</text>
+      <path class="e-hot" d="M470 80 H498" marker-end="url(#pr-h)"/>
+      <rect class="node" x="500" y="50" width="220" height="60" rx="4"/>
+      <text class="t-name" x="610" y="76">CLI 自动压缩</text>
+      <text class="t-sub" x="610" y="96">compaction_update（经 bridge）</text>
+      <path class="e-hot" d="M720 80 H748" marker-end="url(#pr-h)"/>
+      <rect class="node" x="750" y="50" width="230" height="60" rx="4"/>
+      <text class="t-name" x="865" y="76">已知版本重置</text>
+      <text class="t-sub" x="865" y="96">只留常驻主题的版本</text>
+      <path class="e-hot" d="M980 80 H1008" marker-end="url(#pr-h)"/>
+      <rect class="node" x="1010" y="50" width="210" height="60" rx="4"/>
+      <text class="t-name" x="1115" y="76">之后用到再加载</text>
+      <text class="t-sub" x="1115" y="96">返回全部条目</text>
+
+      <rect class="node" x="20" y="150" width="580" height="121"/>
+      <rect class="head" x="21" y="151" width="578" height="30"/>
+      <text class="t-head" x="34" y="171">已知版本</text>
+      <text class="t-key" x="200" y="171">压缩前</text>
+      <text class="t-key" x="300" y="171">压缩后</text>
+      <text class="t-key" x="400" y="171">为什么</text>
+      <line class="sep" x1="20" y1="181" x2="600" y2="181"/>
+      <text x="34" y="203">沟通偏好（常驻）</text>
+      <text x="200" y="203">24</text>
+      <text x="300" y="203">24</text>
+      <text class="t-lab" x="400" y="203">在系统提示词里，压缩不动</text>
+      <line class="sep" x1="20" y1="211" x2="600" y2="211"/>
+      <text x="34" y="233">工具链</text>
+      <text x="200" y="233">41</text>
+      <text class="hot b" x="300" y="233">—</text>
+      <text class="t-hot" x="400" y="233">加载、写入结果被摘要掉了</text>
+      <line class="sep" x1="20" y1="241" x2="600" y2="241"/>
+      <text x="34" y="263">编码-java</text>
+      <text x="200" y="263">15</text>
+      <text class="hot b" x="300" y="263">—</text>
+      <text class="t-hot" x="400" y="263">同上</text>
+
+      <rect class="gap" x="640" y="150" width="580" height="121" rx="3"/>
+      <text class="t-hot b" x="656" y="174">不重置会怎样</text>
+      <text x="656" y="200">load_memory 会说「已在上下文中，没有变化」，其实模型已经看不到了；</text>
+      <text x="656" y="224">save_memory 会直接写，冲突判断不再基于完整的主题内容。</text>
+      <text class="t-lab" x="656" y="252">bridge 在 ACP initialize 里声明 session.compaction，适配器才发 compaction_update</text>
+
+      <text class="t-lab" x="20" y="304">更新提示：CLI 的每次模型调用 server 插不进去，只能在一轮开始时拼在 prompt 开头。它只列主题、不带内容，几十个 token，会留在 CLI 的历史里。</text>
+      <text class="t-lab" x="20" y="328">原生是每次调模型前现取、附在请求末尾、不进历史；CLI 一轮只算一次，这一轮里别处的更新要到下一轮才提示（原生也是 Run 开始时列一次目录）。</text>
+
+      <g class="badge"><circle cx="240" cy="50" r="10"/><text x="240" y="54">1</text></g>
+      <g class="badge"><circle cx="720" cy="50" r="10"/><text x="720" y="54">2</text></g>
+      <g class="badge"><circle cx="980" cy="50" r="10"/><text x="980" y="54">3</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>更新提示拼在这一轮 prompt 的开头，用的是和原生同一个 <code>MemoryTurn.reminders()</code>，形状也一样（<code>&lt;system-reminder name="memory_updates"&gt;</code>）。</li>
+      <li><span class="n">2</span>原生的压缩是 Atlas 做的，压缩后重建常驻块、重置已知版本；CLI 的压缩是 Claude Code 自己做的，Atlas 只能靠通知知道。bridge 在 ACP initialize 里声明 <code>session.compaction</code> 能力，适配器每次压缩都会发 <code>compaction_update</code>，bridge 原样经 agent.update 转交，翻译层认出它。</li>
+      <li><span class="n">3</span>认出后，已知版本里只留常驻主题（它们在系统提示词里，压缩不动），按需加载过、写入过的主题全部去掉并存库：之后加载会返回全部条目，保存会先把最新条目交回。常驻块本身不用重建。</li>
+    </ol>
+
+    <h3>图 5　CLI 自带的记忆和 Atlas 记忆并存</h3>
+    <svg width="1240" viewBox="0 0 1240 360" role="img" aria-label="CLI 自带的记忆和 Atlas 记忆并存">
+      <rect class="node" x="20" y="30" width="590" height="211"/>
+      <rect class="head" x="21" y="31" width="588" height="30"/>
+      <text class="t-head" x="34" y="51">Atlas 记忆（记忆服务）</text>
+      <line class="sep" x1="20" y1="61" x2="610" y2="61"/>
+      <text class="t-key" x="34" y="85">谁写</text>
+      <text x="120" y="85">save_memory、会话后补记、用户在记忆页</text>
+      <line class="sep" x1="20" y1="97" x2="610" y2="97"/>
+      <text class="t-key" x="34" y="121">怎么进上下文</text>
+      <text x="120" y="121">常驻块（系统提示词）+ load_memory</text>
+      <line class="sep" x1="20" y1="133" x2="610" y2="133"/>
+      <text class="t-key" x="34" y="157">用户</text>
+      <text x="120" y="157">记忆页能查看、更正、撤销、删除</text>
+      <line class="sep" x1="20" y1="169" x2="610" y2="169"/>
+      <text class="t-key" x="34" y="193">范围</text>
+      <text x="120" y="193">这个人的所有会话：原生和 CLI 都能读</text>
+      <line class="sep" x1="20" y1="205" x2="610" y2="205"/>
+      <text class="t-key" x="34" y="229">冲突</text>
+      <text x="120" y="229">写前必看、时间晚的为准、取代链</text>
+
+      <rect class="ghost" x="630" y="30" width="590" height="211"/>
+      <text class="t-ghost" x="644" y="51">CLI 自带的记忆（home/.claude，一人一份）</text>
+      <line class="sep" x1="630" y1="61" x2="1220" y2="61"/>
+      <text class="t-key" x="644" y="85">谁写</text>
+      <text x="730" y="85">CLI 自己：自动记忆、改 CLAUDE.md</text>
+      <line class="sep" x1="630" y1="97" x2="1220" y2="97"/>
+      <text class="t-key" x="644" y="121">怎么进上下文</text>
+      <text x="730" y="121">CLI 开会话时自己加载</text>
+      <line class="sep" x1="630" y1="133" x2="1220" y2="133"/>
+      <text class="t-key" x="644" y="157">用户</text>
+      <text x="730" y="157">记忆页看不到，只能去沙箱文件里找</text>
+      <line class="sep" x1="630" y1="169" x2="1220" y2="169"/>
+      <text class="t-key" x="644" y="193">范围</text>
+      <text x="730" y="193">只有这个人的 CLI 会话，原生智能体看不到</text>
+      <line class="sep" x1="630" y1="205" x2="1220" y2="205"/>
+      <text class="t-key" x="644" y="229">冲突</text>
+      <text x="730" y="229">Atlas 不管，也看不见</text>
+
+      <rect class="gap" x="20" y="266" width="1200" height="82" rx="3"/>
+      <text class="t-hot b" x="36" y="290">并存的代价和约束</text>
+      <text x="36" y="314">同一件事可能两边各记一份、说法不一致。写入指引给 CLI 多一句：要跨会话记住的用户偏好和事实用 save_memory（用户能在记忆页看到、撤销）。</text>
+      <text x="36" y="336">常驻块的说明照旧：和用户当前的说法、工作区实际情况冲突时，以后者为准。补记只读对话正文，不读 CLI 自己的记忆文件。</text>
+
+      <g class="badge"><circle cx="1220" cy="30" r="10"/><text x="1220" y="34">1</text></g>
+      <g class="badge"><circle cx="1220" cy="266" r="10"/><text x="1220" y="270">2</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>按拍板的方案，CLI 自带的记忆不关。它存在 <code>/data/home/.claude</code>，一人一份、跨会话保留，这个人的所有 CLI 会话都会加载；Atlas 不读、不写、不展示。</li>
+      <li><span class="n">2</span>代价是两套记忆可能重复或矛盾，用户也只能管 Atlas 那一套。约束只放在提示词上：写入指引让 CLI 优先用 save_memory。后面如果发现两边打架多，可以再改成关掉 CLI 自带的自动记忆（按 CLI 版本的设置项或环境变量）。</li>
+    </ol>
+
+    <h3>为什么这样做</h3>
+    <table>
+      <thead><tr><th>做法</th><th>为什么</th></tr></thead>
+      <tbody>
+        <tr><td>工具调用经 bridge 回到 server，不让 CLI 直连记忆服务或 Agent 服务</td><td>记忆的语义（快照、版本表、写前必看、守卫、幂等、卡片）都在 server 的 MemoryTurn 里，回到 server 才能和原生共用一份；处理它的正是跑这一轮的实例，状态都在手边。Pod 里不放记忆服务地址和令牌，也不用放通 Pod → server 的入站；断线等重连的做法和 permission.ask 一样。</td></tr>
+        <tr><td>本机 MCP，不改 CLI</td><td>MCP 是 CLI 都认的工具接口，换别的 CLI 也能接；bridge 只转交，不理解参数。</td></tr>
+        <tr><td>常驻块进系统提示词，不拼进每轮的 prompt</td><td>系统提示词不受 CLI 压缩影响，前缀缓存也稳；拼进 prompt 的话会被压缩摘要掉，Atlas 还不知道，而且每次刷新都在历史里多一份。</td></tr>
+        <tr><td>常驻块变了才以新提示词恢复会话</td><td>CLI 的系统提示词进程启动时就定了。变的时机和原生刷新同一套判据，都是缓存本来就会失效的时候，重开不额外丢缓存。</td></tr>
+        <tr><td>CLI 压缩后重置已知版本</td><td>不重置的话，加载会误报「已在上下文中」，写入也不再基于完整内容。</td></tr>
+        <tr><td>记忆工具免询问</td><td>和原生一致：写入不审批，换来的是每次写入当场可见、一键撤销；只能取代或遗忘，都可以恢复。</td></tr>
+        <tr><td>CLI 自带的记忆并存</td><td>拍板的方案：不改 CLI 自己的行为，代价是两套记忆可能重复或矛盾（图 5）。</td></tr>
+      </tbody>
+    </table>
+
+    <h3>和现在代码的差别：要做的改动</h3>
+    <table>
+      <thead><tr><th>地方</th><th>改动</th></tr></thead>
+      <tbody>
+        <tr><td>atlas.host.v1（<code>libs/host</code>）</td><td><code>session.open</code> 加 <code>systemPrompt.append</code>；新增 bridge → server 请求 <code>tool.call</code>（turnId、callId、工具、参数 → content、structuredContent、isError）。</td></tr>
+        <tr><td>bridge（<code>pod/bridge</code>）</td><td>起本机 MCP（127.0.0.1，本会话密钥），把 server 给的工具清单挂上、调用转成 tool.call；open 时把追加放进 <code>_meta.systemPrompt</code>、三个工具放进 <code>allowedTools</code>；ACP initialize 声明 <code>session.compaction</code>。</td></tr>
+        <tr><td>CLI 运行时（<code>atlas_agent/cli</code>）</td><td>能力解析时调 <code>MemoryRuntime.turn</code>；比对 <code>cli_session</code> 里的追加哈希，变了就带新追加 open；prompt 前拼更新提示；接 <code>tool.call</code> 交给 MemoryTurn；翻译层认出 <code>mcp__atlas__*</code> 的卡片和 <code>compaction_update</code>。</td></tr>
+        <tr><td>数据库</td><td><code>cli_session</code> 加一列：CLI 会话现在用的追加内容的哈希。</td></tr>
+        <tr><td>记忆组件（<code>atlas_agent/memory</code>）</td><td>MemoryTurn 加「已知版本重置为常驻主题」的入口（CLI 压缩时调）；写入指引给 CLI 多一句优先用 save_memory。其余不变。</td></tr>
+        <tr><td>要先验证</td><td>适配器的 tool_call_update 里 rawOutput 带不带 MCP 的 structuredContent；resume 换 systemPrompt 时恢复出的上下文是否完整。</td></tr>
+      </tbody>
+    </table>
+  </section>
+</main>
+
+<script>
+(() => {
+  'use strict';
+  const FONT = '"Open Sans", "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
+  const INK = '#444444';
+  const LIFELINE = '#9a9a9a';
+  const SCOPE_COLOR = '#1168bd';
+  const PALETTE = {
+    person: ['#297e06', '#1a849c', '#6b8e23'],
+    system: ['#ed8609', '#bf101d', '#8411bd', '#5b6770', '#b8336a'],
+  };
+  const KIND_LABEL = { person: 'Person', system: 'Software System', container: 'Container', component: 'Component' };
+  const MAX_MESSAGES = 20;
+  const TXT = {
+    name: { size: 17, weight: 400, lh: 22 },
+    meta: { size: 12, weight: 400, lh: 16 },
+    msg: { size: 15, weight: 400, lh: 20 },
+    tech: { size: 12, weight: 400, lh: 16 },
+    bname: { size: 18, weight: 700, lh: 22 },
+    btype: { size: 12, weight: 700, lh: 16 },
+    key: { size: 13, weight: 400, lh: 18 },
+  };
+  const BOX_H = 52, ICON_H = 30, HEADER_H = 48, LABEL_W = 260, MIN_GAP = 70, SELF_W = 36, MARGIN = 50;
+
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const problems = [];
+  const fail = (msg) => problems.push({ level: 'error', msg });
+  const warn = (msg) => problems.push({ level: 'warn', msg });
+
+  const ctx = document.createElement('canvas').getContext('2d');
+  const measure = (s, st) => { ctx.font = `${st.weight} ${st.size}px ${FONT}`; return ctx.measureText(s).width; };
+
+  // 中文按字断行，英文按词断行；行首不放标点
+  const CJK = '\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef\u3000-\u303f';
+  const TOKEN = new RegExp(`[${CJK}]|[^\\s${CJK}]+|\\s+`, 'g');
+  const NO_LINE_START = /^[，。、；：！？）》」』,.;:!?)]$/;
+  function wrap(text, st, maxW) {
+    const lines = [];
+    for (const para of String(text || '').split('\n')) {
+      let line = '';
+      for (const tok of para.match(TOKEN) || []) {
+        if (/^\s+$/.test(tok)) { if (line) line += ' '; continue; }
+        const next = line + tok;
+        if (line.trim() && measure(next.trimEnd(), st) > maxW && !NO_LINE_START.test(tok)) {
+          lines.push(line.trimEnd());
+          line = tok;
+        } else {
+          line = next;
+        }
+      }
+      if (line.trim()) lines.push(line.trimEnd());
+    }
+    return lines;
+  }
+
+  // 行数不变的前提下收窄宽度，让各行长度接近，避免末行只剩一两个字
+  function wrapBalanced(text, st, maxW) {
+    const lines = wrap(text, st, maxW);
+    if (lines.length < 2) return lines;
+    let lo = maxW / 2, hi = maxW;
+    while (hi - lo > 4) {
+      const mid = (lo + hi) / 2;
+      if (wrap(text, st, mid).length > lines.length) lo = mid; else hi = mid;
+    }
+    return wrap(text, st, hi);
+  }
+
+  function node(tag, attrs, parent) {
+    const n = document.createElementNS(svgNS, tag);
+    for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+    parent.appendChild(n);
+    return n;
+  }
+  // top 是文字块上沿
+  function textLines(parent, lines, x, top, st, color, anchor = 'middle') {
+    const t = node('text', { x, y: top + st.lh / 2 + st.size * 0.35, 'text-anchor': anchor,
+      'font-family': FONT, 'font-size': st.size, 'font-weight': st.weight, fill: color }, parent);
+    lines.forEach((ln, i) => { node('tspan', { x, dy: i ? st.lh : 0 }, t).textContent = ln; });
+    return t;
+  }
+
+  // 参与者头：人员和数据库画图标 + 文字，其余画方框
+  const iconHead = (p) => p.kind === 'person' || (p.kind === 'container' && p.shape === 'database');
+  function headSize(p) {
+    const w = Math.max(measure(p.name, TXT.name), measure(p.meta, TXT.meta)) + 24;
+    return { w, h: iconHead(p) ? ICON_H + 4 + TXT.name.lh + TXT.meta.lh : BOX_H };
+  }
+  function drawHead(g, p, cx, top) {
+    const c = p.color;
+    let textTop = top + (BOX_H - TXT.name.lh - TXT.meta.lh) / 2;
+    if (p.kind === 'person') {
+      node('circle', { cx, cy: top + 8, r: 7, fill: '#fff', stroke: c, 'stroke-width': 1.8 }, g);
+      node('path', { d: `M${cx - 14} ${top + ICON_H} Q${cx - 14} ${top + 16} ${cx} ${top + 16} Q${cx + 14} ${top + 16} ${cx + 14} ${top + ICON_H} Z`, fill: '#fff', stroke: c, 'stroke-width': 1.8 }, g);
+      textTop = top + ICON_H + 4;
+    } else if (iconHead(p)) {
+      const rx = 17, ry = 5, y0 = top + ry, y1 = top + ICON_H - ry;
+      node('path', { d: `M${cx - rx} ${y0} V${y1} A${rx} ${ry} 0 0 0 ${cx + rx} ${y1} V${y0}`, fill: '#fff', stroke: c, 'stroke-width': 1.8 }, g);
+      node('ellipse', { cx, cy: y0, rx, ry, fill: '#fff', stroke: c, 'stroke-width': 1.8 }, g);
+      textTop = top + ICON_H + 4;
+    } else {
+      node('rect', { x: cx - p.size.w / 2, y: top, width: p.size.w, height: BOX_H, rx: 4, fill: '#fff', stroke: c, 'stroke-width': 1.6 }, g);
+    }
+    textLines(g, [p.name], cx, textTop, TXT.name, c);
+    textLines(g, [p.meta], cx, textTop + TXT.name.lh, TXT.meta, c);
+  }
+  function drawArrow(g, x0, x1, y) {
+    const dir = Math.sign(x1 - x0), L = 10, W = 7;
+    node('line', { x1: x0, y1: y, x2: x1 - dir * L, y2: y, stroke: INK, 'stroke-width': 1.6, 'stroke-dasharray': '8 5' }, g);
+    node('polygon', { points: `${x1},${y} ${x1 - dir * L},${y - W / 2} ${x1 - dir * L},${y + W / 2}`, fill: INK }, g);
+  }
+
+  function render() {
+    const model = JSON.parse(document.getElementById('c4-model').textContent);
+    if (model.title) document.title = model.title;
+    else fail('缺少 title（建议「Dynamic View: 系统名 - 场景」）');
+
+    // ---- 边界 ----
+    const bById = new Map();
+    for (const b of model.boundaries || []) {
+      if (!b.id) { fail(`边界 ${b.name || ''}：缺少 id`); continue; }
+      if (bById.has(b.id)) { fail(`边界 id 重复：${b.id}`); continue; }
+      if (!b.name || !b.type) fail(`边界 ${b.id}：name、type 都要写，type 如「Software System」「Container: Python / FastAPI」`);
+      bById.set(b.id, b);
+    }
+    const chain = (id) => {   // 从里到外的边界链
+      const out = [];
+      for (let cur = id; cur; cur = bById.get(cur) && bById.get(cur).in) {
+        if (!bById.has(cur) || out.includes(cur)) return null;
+        out.push(cur);
+      }
+      return out;
+    };
+    for (const b of bById.values()) {
+      if (b.in && !chain(b.id)) { fail(`边界 ${b.id}：in 指向不存在的边界，或者边界互相嵌套成了环`); b.broken = true; }
+    }
+
+    // ---- 参与者 ----
+    const pById = new Map();
+    const ps = [];
+    for (const p of model.participants || []) {
+      const who = p.id || p.name || '(未命名参与者)';
+      if (!p.id) { fail(`${who}：缺少 id`); continue; }
+      if (pById.has(p.id)) { fail(`参与者 id 重复：${p.id}`); continue; }
+      if (!KIND_LABEL[p.kind]) { fail(`${who}：kind 只能是 person / system / container / component`); continue; }
+      if (!p.name) fail(`${who}：缺少 name`);
+      if ((p.kind === 'container' || p.kind === 'component') && !p.technology) fail(`${who}：${p.kind} 缺少 technology`);
+      if (p.in && (!bById.has(p.in) || bById.get(p.in).broken)) { fail(`${who}：in 指向的边界 ${p.in} 不存在`); p.in = null; }
+      p.chain = p.in ? chain(p.in) : [];
+      p.meta = p.technology && (p.kind === 'container' || p.kind === 'component') ? `[${KIND_LABEL[p.kind]}: ${p.technology}]` : `[${KIND_LABEL[p.kind]}]`;
+      pById.set(p.id, p);
+      ps.push(p);
+    }
+    if (ps.length < 2) fail('至少要有两个参与者');
+    const assigned = new Map(), used = { person: 0, system: 0 };
+    for (const p of ps) {
+      if (p.color) continue;
+      if (p.kind === 'container' || p.kind === 'component' || (p.kind === 'system' && p.scope)) { p.color = SCOPE_COLOR; continue; }
+      const k = `${p.kind}:${p.tag || p.id}`;
+      if (!assigned.has(k)) assigned.set(k, PALETTE[p.kind][used[p.kind]++ % PALETTE[p.kind].length]);
+      p.color = assigned.get(k);
+    }
+    // 同一边界里的参与者在左右顺序上必须相邻，否则边界框会把别的参与者框进去
+    for (const b of bById.values()) {
+      const idx = ps.map((p, i) => (p.chain.includes(b.id) ? i : -1)).filter((i) => i >= 0);
+      b.members = idx.map((i) => ps[i]);
+      if (!idx.length) { fail(`边界「${b.name}」里没有任何参与者`); continue; }
+      if (idx[idx.length - 1] - idx[0] + 1 !== idx.length) fail(`边界「${b.name}」里的参与者在 participants 里不相邻，调整顺序`);
+    }
+
+    // ---- 消息 ----
+    const msgs = (model.messages || []).filter((m, i) => {
+      const who = `第 ${i + 1} 条消息（${m.from} → ${m.to}）`;
+      if (!pById.has(m.from) || !pById.has(m.to)) { fail(`${who}：端点 id 不存在`); return false; }
+      if (!m.description) fail(`${who}：缺少 description（写做什么）`);
+      const a = pById.get(m.from), b = pById.get(m.to);
+      const crossProcess = a.kind !== 'person' && b.kind !== 'person' && !(a.kind === 'component' && b.kind === 'component') && a !== b;
+      if (crossProcess && !m.technology) fail(`${who}：涉及 container 或软件系统，是跨进程交互，要写 technology`);
+      if (m.details !== undefined) {
+        const d = m.details;
+        const isText = (v) => typeof v === 'string';
+        if (!d || typeof d !== 'object' || Array.isArray(d)) {
+          fail(`${who}：details 要写成对象 { note, items, example }`);
+          m.details = undefined;
+        } else {
+          if (d.note !== undefined && !isText(d.note)) fail(`${who}：details.note 要写成字符串`);
+          if (d.example !== undefined && !isText(d.example)) fail(`${who}：details.example 要写成字符串，多行用 \\n`);
+          if (d.items !== undefined && !(Array.isArray(d.items) && d.items.every((r) => Array.isArray(r) && r.length === 3 && r.every(isText)))) {
+            fail(`${who}：details.items 的每一行要写成 [项, 来源, 样例] 三个字符串`);
+          }
+          if (!d.note && !d.example && !(Array.isArray(d.items) && d.items.length)) warn(`${who}：details 是空的，删掉或补上内容`);
+        }
+      }
+      m.n = i + 1;
+      return true;
+    });
+    if (!msgs.length) fail('至少要有一条消息');
+    if (msgs.length > MAX_MESSAGES) warn(`消息有 ${msgs.length} 条，超过 ${MAX_MESSAGES} 条：只画这个场景的关键交互，或者拆成几张图`);
+    for (const p of ps) {
+      if (!msgs.some((m) => m.from === p.id || m.to === p.id)) warn(`「${p.name}」没有参与任何消息：与这个场景无关就删掉`);
+    }
+
+    // ---- 横向：列间距按参与者宽度和消息标签宽度撑开 ----
+    for (const p of ps) p.size = headSize(p);
+    const index = new Map(ps.map((p, i) => [p.id, i]));
+    for (const m of msgs) {
+      m.lines = wrapBalanced(`${m.n}: ${m.description || ''}${m.details ? ' ⓘ' : ''}`, TXT.msg, LABEL_W);
+      m.tech = m.technology ? `[${m.technology}]` : '';
+      m.labelW = Math.max(...m.lines.map((s) => measure(s, TXT.msg)), m.tech ? measure(m.tech, TXT.tech) : 0);
+      m.labelH = m.lines.length * TXT.msg.lh + (m.tech ? TXT.tech.lh : 0);
+    }
+    const gaps = ps.slice(1).map((p, i) => (ps[i].size.w + p.size.w) / 2 + MIN_GAP);
+    let rightExtra = 0;
+    const spanOf = (m) => Math.abs(index.get(m.to) - index.get(m.from));
+    for (const m of [...msgs].sort((a, b) => spanOf(a) - spanOf(b))) {
+      const i = index.get(m.from), j = index.get(m.to);
+      if (i === j) {   // 自调用：标签在生命线右边，占下一列间距
+        const need = SELF_W + 16 + m.labelW + 20;
+        if (i < gaps.length) gaps[i] = Math.max(gaps[i], need); else rightExtra = Math.max(rightExtra, need);
+        continue;
+      }
+      const lo = Math.min(i, j), hi = Math.max(i, j);
+      const span = gaps.slice(lo, hi).reduce((s, g) => s + g, 0);
+      const need = m.labelW + 40;
+      if (span < need) for (let k = lo; k < hi; k++) gaps[k] += (need - span) / (hi - lo);
+    }
+    let x = 0;
+    ps.forEach((p, i) => { if (i) x += gaps[i - 1]; p.x = x; });
+
+    // ---- 纵向：边界标题 → 参与者头 → 消息 → 底部参与者头 ----
+    const depthOf = (b) => chain(b.id).length;
+    const live = [...bById.values()].filter((b) => !b.broken && b.members && b.members.length);
+    const maxDepth = Math.max(0, ...live.map(depthOf));
+    const headTop = maxDepth * HEADER_H + (maxDepth ? 10 : 0);
+    const headH = Math.max(...ps.map((p) => p.size.h), BOX_H);
+    let y = headTop + headH + 24;
+    for (const m of msgs) {
+      m.labelTop = y;
+      m.y = y + m.labelH + 8;
+      y = m.y + (m.from === m.to ? 46 : 26);
+    }
+    const bottomTop = y + 8, bottom = bottomTop + headH;
+
+    // 边界框：外层比内层多留一圈
+    const below = (b) => Math.max(0, ...live.filter((c) => c.in === b.id).map((c) => 1 + below(c)));
+    for (const b of live) {
+      const pad = 14 + 16 * below(b);
+      const d = depthOf(b);
+      b.rect = {
+        x: Math.min(...b.members.map((p) => p.x - p.size.w / 2)) - pad,
+        y: (d - 1) * HEADER_H,
+        w: 0, h: 0,
+      };
+      b.rect.w = Math.max(...b.members.map((p) => p.x + p.size.w / 2)) + pad - b.rect.x;
+      b.rect.h = bottom + 10 + 14 * below(b) - b.rect.y;
+      const titleW = Math.max(measure(b.name, TXT.bname), measure(`[${b.type}]`, TXT.btype)) + 20;
+      if (titleW > b.rect.w) warn(`边界「${b.name}」的标题比边界还宽，名字写短一点`);
+    }
+    for (const b of live) {
+      for (const p of ps) {
+        if (!b.members.includes(p) && p.x + p.size.w / 2 > b.rect.x && p.x - p.size.w / 2 < b.rect.x + b.rect.w) {
+          fail(`「${p.name}」不在边界「${b.name}」里，却和边界框重叠，调整 participants 顺序`);
+        }
+      }
+    }
+
+    // ---- 绘制 ----
+    const svg = document.getElementById('c4-diagram');
+    const gB = node('g', {}, svg), gLife = node('g', {}, svg), gM = node('g', {}, svg), gH = node('g', {}, svg), gT = node('g', {}, svg);
+    for (const b of [...live].sort((a, c) => depthOf(a) - depthOf(c))) {
+      const r = b.rect;
+      node('rect', { x: r.x, y: r.y, width: r.w, height: r.h, fill: 'none', stroke: SCOPE_COLOR, 'stroke-width': 1.6 }, gB);
+      textLines(gB, [b.name], r.x + r.w / 2, r.y + 4, TXT.bname, SCOPE_COLOR);
+      textLines(gB, [`[${b.type}]`], r.x + r.w / 2, r.y + 4 + TXT.bname.lh, TXT.btype, SCOPE_COLOR);
+    }
+    for (const p of ps) {
+      node('line', { x1: p.x, y1: headTop + p.size.h, x2: p.x, y2: bottomTop, stroke: LIFELINE, 'stroke-width': 1, 'stroke-dasharray': '4 4' }, gLife);
+      drawHead(gH, p, p.x, headTop);
+      drawHead(gH, p, p.x, bottomTop);
+    }
+    for (const m of msgs) {
+      const a = pById.get(m.from), b = pById.get(m.to);
+      let lx;
+      if (a === b) {
+        const x0 = a.x, x1 = a.x + SELF_W;
+        node('polyline', { points: `${x0},${m.y} ${x1},${m.y} ${x1},${m.y + 20} ${x0 + 10},${m.y + 20}`, fill: 'none', stroke: INK, 'stroke-width': 1.6, 'stroke-dasharray': '8 5' }, gM);
+        node('polygon', { points: `${x0},${m.y + 20} ${x0 + 10},${m.y + 16.5} ${x0 + 10},${m.y + 23.5}`, fill: INK }, gM);
+        lx = x1 + 12;
+      } else {
+        drawArrow(gM, a.x, b.x, m.y);
+        lx = Math.min(a.x, b.x) + 12;
+      }
+      // 有 details 的消息：标签链接到图下方「消息说明」里的同号条目
+      const gL = m.details ? node('a', { href: `#c4-msg-${m.n}` }, gM) : gM;
+      node('rect', { x: lx - 3, y: m.labelTop - 1, width: m.labelW + 6, height: m.labelH + 2, fill: '#fff' }, gL);
+      textLines(gL, m.lines, lx, m.labelTop, TXT.msg, INK, 'start');
+      if (m.tech) textLines(gL, [m.tech], lx, m.labelTop + m.lines.length * TXT.msg.lh, TXT.tech, INK, 'start');
+    }
+    const minX = Math.min(...ps.map((p) => p.x - p.size.w / 2), ...live.map((b) => b.rect.x));
+    let maxX = Math.max(...ps.map((p) => p.x + p.size.w / 2 + (p === ps[ps.length - 1] ? rightExtra : 0)), ...live.map((b) => b.rect.x + b.rect.w));
+    let maxY = Math.max(bottom, ...live.map((b) => b.rect.y + b.rect.h));
+    const title = { size: 26, weight: 400, lh: 34 }, sub = { size: 15, weight: 400, lh: 22 };
+    textLines(gT, [model.title || ''], minX, maxY + 36, title, INK, 'start');
+    if (model.description) textLines(gT, [model.description], minX, maxY + 36 + title.lh, sub, '#666', 'start');
+    maxX = Math.max(maxX, minX + measure(model.title || '', title), minX + measure(model.description || '', sub));
+    maxY += 36 + title.lh + (model.description ? sub.lh : 0);
+    const vw = maxX - minX + 2 * MARGIN, vh = maxY + 2 * MARGIN;
+    svg.setAttribute('viewBox', `${minX - MARGIN} ${-MARGIN} ${vw} ${vh}`);
+    svg.setAttribute('width', vw);
+    svg.setAttribute('aria-label', model.title || 'Dynamic diagram');
+
+    renderKey(ps, live);
+    renderDetails(msgs);
+  }
+
+  // ---- 消息说明：每条带 details 的消息一节（说明、[项, 来源, 样例] 表、数据样例）----
+  function renderDetails(msgs) {
+    const list = msgs.filter((m) => m.details);
+    if (!list.length) return;
+    const sec = document.getElementById('c4-details');
+    const el = (tag, cls, text) => {
+      const e = document.createElement(tag);
+      if (cls) e.className = cls;
+      if (text !== undefined) e.textContent = text;
+      return e;
+    };
+    sec.appendChild(el('h2', '', '消息说明'));
+    for (const m of list) {
+      const d = m.details;
+      const art = el('article');
+      art.id = `c4-msg-${m.n}`;
+      const h = el('h3', '', `${m.n}: ${m.description || ''}`);
+      if (m.technology) h.appendChild(el('span', 'tech', `[${m.technology}]`));
+      art.appendChild(h);
+      if (typeof d.note === 'string' && d.note) art.appendChild(el('p', '', d.note));
+      const rows = Array.isArray(d.items) ? d.items.filter((r) => Array.isArray(r)) : [];
+      if (rows.length) {
+        const table = el('table');
+        const head = table.createTHead().insertRow();
+        for (const c of ['项', '来源', '样例']) head.appendChild(el('th', '', c));
+        const body = table.createTBody();
+        for (const r of rows) {
+          const tr = body.insertRow();
+          r.slice(0, 3).forEach((c, i) => tr.appendChild(el('td', i === 2 ? 'sample' : '', String(c))));
+        }
+        art.appendChild(table);
+      }
+      if (typeof d.example === 'string' && d.example) art.appendChild(el('pre', '', d.example));
+      sec.appendChild(art);
+    }
+    sec.hidden = false;
+  }
+
+  // ---- 图例：每种参与者一项，再加边界和消息 ----
+  function renderKey(ps, boundaries) {
+    const svg = document.getElementById('c4-key');
+    const rank = { person: 0, system: 1, container: 2, component: 3 };
+    const label = (p) => {
+      if (p.kind === 'person') return `Person, ${p.tag || p.name}`;
+      if (p.kind === 'system') return p.tag || p.name;
+      if (p.kind === 'container') return p.shape === 'database' ? 'Container, Database' : 'Container';
+      return 'Component';
+    };
+    const groups = new Map();
+    for (const p of [...ps].sort((a, b) => rank[a.kind] - rank[b.kind])) {
+      const k = `${p.kind}|${iconHead(p)}|${p.color}`;
+      if (!groups.has(k)) groups.set(k, { proto: p, labels: [] });
+      if (!groups.get(k).labels.includes(label(p))) groups.get(k).labels.push(label(p));
+    }
+    const items = [...groups.values()].map((g) => ({ kind: 'head', proto: g.proto, text: g.labels.join('、') }));
+    if (boundaries.length) items.push({ kind: 'boundary', text: 'Boundary（系统 / 容器）' });
+    items.push({ kind: 'message', text: 'n: 交互（编号 = 先后顺序）' });
+    const CELL_W = 230, CELL_H = 110, PER_ROW = 6;
+    items.forEach((it, i) => {
+      const cx = (i % PER_ROW) * CELL_W + CELL_W / 2, top = Math.floor(i / PER_ROW) * CELL_H;
+      const g = node('g', {}, svg);
+      if (it.kind === 'head') {
+        const p = { ...it.proto, name: it.text.length > 22 ? it.text.slice(0, 21) + '…' : it.text, meta: '' };
+        p.size = { w: Math.min(CELL_W - 20, measure(p.name, TXT.name) + 24), h: BOX_H };
+        drawHead(g, p, cx, top + 10);
+        return;
+      }
+      if (it.kind === 'boundary') {
+        node('rect', { x: cx - 95, y: top + 10, width: 190, height: 56, fill: 'none', stroke: SCOPE_COLOR, 'stroke-width': 1.6 }, g);
+        textLines(g, [it.text], cx, top + 10 + 4, TXT.key, SCOPE_COLOR);
+        return;
+      }
+      drawArrow(g, cx - 90, cx + 90, top + 46);
+      textLines(g, [it.text], cx - 88, top + 18, TXT.key, INK, 'start');
+    });
+    const rows = Math.ceil(items.length / PER_ROW), cols = Math.min(items.length, PER_ROW);
+    svg.setAttribute('viewBox', `0 0 ${cols * CELL_W} ${rows * CELL_H}`);
+    svg.setAttribute('width', cols * CELL_W);
+    svg.setAttribute('aria-label', 'Diagram key');
+  }
+
+  try {
+    render();
+  } catch (e) {
+    fail(`渲染异常：${e && e.message}`);
+    console.error(e);
+  }
+  const status = problems.some((p) => p.level === 'error') ? 'error' : problems.length ? 'warn' : 'ok';
+  document.documentElement.dataset.c4Status = status;
+  const report = document.getElementById('c4-report');
+  for (const p of problems) {
+    const li = document.createElement('li');
+    li.dataset.level = p.level;
+    li.textContent = p.msg;
+    report.appendChild(li);
+  }
+  report.hidden = !problems.length;
+  if (problems.length) console.warn('[c4]', problems);
+})();
+</script>
+</body>
+</html>

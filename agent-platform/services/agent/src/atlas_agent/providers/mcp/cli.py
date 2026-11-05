@@ -90,7 +90,7 @@ async def cli_mcp_servers(
             {
                 "type": "http",
                 "name": name,
-                # 网关上的地址：Pod 看不到 Higress
+                # 网关上的地址：Pod 只连网关，看不到上游
                 "url": config.url,
                 # ★ ACP 的 headers 是数组，不是对象
                 "headers": [

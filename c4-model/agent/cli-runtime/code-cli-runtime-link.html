@@ -334,7 +334,7 @@
     },
     {
       "decision": "接续信息按会话落一张表（cli_session），不放进程内存，也不放 run 表",
-      "reason": "现在一半在进程内存（认识哪个 bridge、最后的序号），一半写在 run 行上（acp_bridge_instance、acp_acked_seq）。序号其实是会话级的（跨连接、跨轮连续），进程内存在换实例接管时就没了，写在 run 上又让执行记录带着运行时私有的字段。收成一张会话级的表，接管的实例也能读到。"
+      "reason": "原来一半在进程内存（认识哪个 bridge、最后的序号），一半写在 run 行上（acp_bridge_instance、acp_acked_seq）。序号其实是会话级的（跨连接、跨轮连续），进程内存在换实例接管时就没了，写在 run 上又让执行记录带着运行时私有的字段。收成一张会话级的表，接管的实例也能读到（A2 已改）。"
     },
     {
       "decision": "bridge 重启过，就让这一轮以 bridge_lost 失败，下一轮 open 恢复",
@@ -384,7 +384,7 @@
           "name": "agent_session_id",
           "type": "String(128)",
           "nullable": true,
-          "description": "CLI 自己的会话 id，open 时交给 bridge 恢复对话（现在存在 thread.external_session_id）"
+          "description": "CLI 自己的会话 id，open 时交给 bridge 恢复对话（原来存在 thread.external_session_id）"
         },
         {
           "name": "bridge_instance",
@@ -396,7 +396,7 @@
           "name": "acked_seq",
           "type": "Integer",
           "default": "0",
-          "description": "已确认到的会话内序号；attach 时从这之后补发（现在存在 run.acp_acked_seq）"
+          "description": "已确认到的会话内序号；attach 时从这之后补发（原来存在 run.acp_acked_seq）"
         },
         {
           "name": "created_at",

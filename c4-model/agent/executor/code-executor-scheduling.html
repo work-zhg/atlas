@@ -479,11 +479,11 @@
     },
     {
       "decision": "续跑就是重新入队，和新 run 走同一条领取路径",
-      "reason": "现在续跑另有一条领取路径（claim_for_resume），绕过了并发上限，接管、交接的判据也要在两处各写一遍。改成把挂起的 run 放回队列（CAS：挂起 → 排队）再唤醒，哪个实例领到都一样，背压规则只有一套。"
+      "reason": "原来续跑另有一条领取路径（claim_for_resume），绕过了并发上限，接管、交接的判据也要在两处各写一遍。改成把挂起的 run 放回队列（CAS：挂起 → 排队）再唤醒，哪个实例领到都一样，背压规则只有一套（A2 已改为 RunQueue.requeue）。"
     },
     {
       "decision": "执行器不自己装配运行时，组合根在外面",
-      "reason": "现在 InProcessExecutor 在构造函数里自己建 HookAssembly 和 NativeRuntime，还把 executor=self 传进装配，让子智能体能起子 run，形成循环依赖。改成运行时由组合根注入；子智能体服务只依赖 RunExecutor.submit 这个接口。"
+      "reason": "原来 InProcessExecutor 在构造函数里自己建 HookAssembly 和 NativeRuntime，还把 executor=self 传进装配，让子智能体能起子 run，形成循环依赖。改成运行时由组合根注入；子智能体服务只依赖 RunExecutor.submit 这个接口（A1 已移到组合根 executor/compose.py）。"
     },
     {
       "decision": "停机时在安全点交接，等不到就中止",

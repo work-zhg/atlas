@@ -1,0 +1,1069 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dynamic View</title>
+<style>
+  body { margin: 0; background: #fff; color: #444; font-family: "Open Sans", "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
+  main { padding: 24px 32px 48px; }
+  svg { display: block; max-width: 100%; height: auto; }
+  h2 { margin: 40px 0 12px; font-size: 15px; font-weight: 600; color: #666; }
+  #c4-report { margin: 0 0 24px; padding: 12px 16px 12px 36px; border: 1px solid #e0b4b4; background: #fff6f6; font-size: 14px; line-height: 1.6; }
+  #c4-report li[data-level="error"] { color: #b00020; }
+  #c4-report li[data-level="warn"] { color: #8a5a00; }
+  #c4-details { max-width: 1280px; }
+  #c4-details article { margin: 0 0 28px; scroll-margin-top: 16px; }
+  #c4-details article:target h3 { background: #fff8d6; }
+  #c4-details h3 { margin: 0 0 8px; padding: 2px 4px; font-size: 15px; font-weight: 600; color: #333; }
+  #c4-details h3 .tech { margin-left: 8px; font-size: 13px; font-weight: 400; color: #888; }
+  #c4-details p { margin: 0 0 8px; font-size: 14px; line-height: 1.7; }
+  #c4-details table { width: 100%; margin: 0 0 8px; border-collapse: collapse; table-layout: fixed; font-size: 13px; line-height: 1.6; }
+  #c4-details th, #c4-details td { padding: 6px 10px; border: 1px solid #e3e3e3; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+  #c4-details th { background: #f6f8fa; font-weight: 600; }
+  #c4-details th:nth-child(1) { width: 14%; }
+  #c4-details th:nth-child(2) { width: 46%; }
+  #c4-details td.sample, #c4-details pre { font-family: Menlo, Consolas, "PingFang SC", monospace; }
+  #c4-details td.sample { word-break: break-all; }
+  #c4-details pre { margin: 0; padding: 10px 12px; border: 1px solid #e3e3e3; background: #f6f8fa; font-size: 12px; line-height: 1.5; overflow-x: auto; }
+  svg a { cursor: pointer; }
+  /* 上下文管理原理：手写的静态图，不经渲染器 */
+  #principle { max-width: 1280px; }
+  #principle h3 { margin: 32px 0 8px; font-size: 15px; font-weight: 600; color: #333; }
+  #principle p { margin: 0 0 8px; font-size: 14px; line-height: 1.7; }
+  #principle code { padding: 0 3px; background: #f6f8fa; font-family: Menlo, Consolas, monospace; font-size: 12.5px; }
+  #principle ol { margin: 8px 0 0; padding: 0; list-style: none; }
+  #principle ol li { position: relative; margin: 0 0 6px; padding-left: 30px; font-size: 14px; line-height: 1.7; }
+  #principle ol li .n { position: absolute; left: 0; top: 2px; width: 20px; height: 20px; border-radius: 50%; background: #d9480f; color: #fff; font-size: 12px; font-weight: 700; line-height: 20px; text-align: center; }
+  #principle table { width: 100%; margin: 8px 0 0; border-collapse: collapse; font-size: 13px; line-height: 1.6; }
+  #principle th, #principle td { padding: 6px 10px; border: 1px solid #e3e3e3; text-align: left; vertical-align: top; }
+  #principle th { background: #f6f8fa; font-weight: 600; }
+  #principle th:first-child { width: 28%; }
+  #principle svg { margin: 8px 0 4px; }
+  #principle svg text { font-size: 13px; fill: #444; }
+  #principle svg .t-name { font-size: 15px; fill: #1168bd; text-anchor: middle; }
+  #principle svg .t-sub { font-size: 12px; fill: #888; text-anchor: middle; }
+  #principle svg .t-head { font-size: 14px; font-weight: 600; fill: #1168bd; }
+  #principle svg .t-key { font-size: 12px; fill: #888; }
+  #principle svg .t-lab { font-size: 12px; fill: #666; }
+  #principle svg .t-hot { font-size: 12px; fill: #d9480f; }
+  #principle svg .t-mute { font-size: 12px; fill: #aaa; }
+  #principle svg .t-ghost { font-size: 14px; font-weight: 600; fill: #888; }
+  #principle svg .hot { fill: #d9480f; }
+  #principle svg .mid { text-anchor: middle; }
+  #principle svg .end { text-anchor: end; }
+  #principle svg .b { font-weight: 700; }
+  #principle svg .node { fill: #fff; stroke: #1168bd; stroke-width: 1.6; }
+  #principle svg .head { fill: #f6f8fa; stroke: none; }
+  #principle svg .sep { stroke: #e3e3e3; stroke-width: 1; }
+  #principle svg .bnd { fill: none; stroke: #1168bd; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .ghost { fill: #fafafa; stroke: #aaa; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .gap { fill: #fff6f0; stroke: #d9480f; stroke-width: 1.2; stroke-dasharray: 5 4; }
+  #principle svg .e { fill: none; stroke: #444; stroke-width: 1.6; }
+  #principle svg .e-hot { fill: none; stroke: #d9480f; stroke-width: 2.4; }
+  #principle svg .e-mute { fill: none; stroke: #bbb; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .e-link { fill: none; stroke: #d9480f; stroke-width: 1.4; stroke-dasharray: 4 3; }
+  #principle svg .badge circle { fill: #d9480f; stroke: #fff; stroke-width: 2; }
+  #principle svg .badge text { fill: #fff; font-size: 12px; font-weight: 700; text-anchor: middle; }
+  #principle svg .band-a { fill: #eef4fb; stroke: #1168bd; stroke-width: 1.4; }
+  #principle svg .band-b { fill: #fff3ea; stroke: #d9480f; stroke-width: 1.4; }
+  #principle svg .t-blue { font-size: 12px; fill: #1168bd; }
+  #principle svg .t-mono { font-family: Menlo, Consolas, monospace; font-size: 12.5px; fill: #333; }
+  #principle svg .sep-d { stroke: #999; stroke-width: 1; stroke-dasharray: 3 3; }
+</style>
+</head>
+<body>
+<!--
+  只改下面这段 JSON；渲染器不用动。字段说明见 dynamic/RULES.md 的「数据格式」。
+-->
+<script type="application/json" id="c4-model">
+{
+  "title": "动态图：Agent 平台 - 上下文管理",
+  "description": "目标模型。一个很长的会话里的一轮：历史里已有一份摘要；这一轮有个工具结果太大被外置，随后占用超过压缩档，自动压缩一次。上下文管理是原生运行时里的一个领域（见它的代码图）；工具怎么执行、事件怎么发布、取消检查都没画",
+  "boundaries": [
+    {
+      "id": "platform",
+      "name": "Agent 平台",
+      "type": "Software System"
+    },
+    {
+      "id": "server",
+      "name": "Agent 服务",
+      "type": "Container: Python / FastAPI",
+      "in": "platform"
+    }
+  ],
+  "participants": [
+    {
+      "id": "executor",
+      "kind": "component",
+      "technology": "asyncio 后台任务",
+      "in": "server",
+      "name": "Run 执行器"
+    },
+    {
+      "id": "native",
+      "kind": "component",
+      "technology": "atlas_engine 内核 / LangGraph",
+      "in": "server",
+      "name": "原生运行时"
+    },
+    {
+      "id": "memoryRt",
+      "kind": "component",
+      "technology": "Python 模块",
+      "in": "server",
+      "name": "记忆"
+    },
+    {
+      "id": "files",
+      "kind": "component",
+      "technology": "boto3 / execd 文件 API",
+      "in": "server",
+      "name": "工作区"
+    },
+    {
+      "id": "db",
+      "kind": "container",
+      "shape": "database",
+      "technology": "PostgreSQL 16",
+      "in": "platform",
+      "name": "数据库"
+    },
+    {
+      "id": "model",
+      "kind": "system",
+      "tag": "同级服务",
+      "color": "#8411bd",
+      "name": "模型平台"
+    }
+  ],
+  "messages": [
+    {
+      "from": "executor",
+      "to": "db",
+      "technology": "SQL/TCP",
+      "description": "取会话的上下文状态，和覆盖边界之后的消息",
+      "details": {
+        "note": "SegmentLoader。摘要覆盖到哪条消息，边界就记在哪：边界之前的消息不再送给模型，由摘要代替，摘要放在历史的最前面。消息表本身从不改写。",
+        "items": [
+          [
+            "上下文状态",
+            "thread_context（ThreadContextRepository.get）",
+            "summary · summary_upto · compact_count · failure_count"
+          ],
+          [
+            "历史",
+            "RunRepository.history(after=summary_upto)",
+            "message 表里 created_at > summary_upto 的消息，按时间正序"
+          ]
+        ]
+      }
+    },
+    {
+      "from": "executor",
+      "to": "native",
+      "description": "跑一段（Segment：摘要在最前的历史、本轮输入、失败计数）"
+    },
+    {
+      "from": "native",
+      "to": "db",
+      "technology": "SQL/TCP",
+      "description": "读平台和用户两层持久指令",
+      "details": {
+        "note": "ContextManager.contribute。每轮开始读一次，本轮内不变；读不到就跳过、记日志，不让这一轮失败。"
+      }
+    },
+    {
+      "from": "native",
+      "to": "files",
+      "description": "读工作区的 ATLAS.md（工作区约定）"
+    },
+    {
+      "from": "native",
+      "to": "memoryRt",
+      "description": "取记忆常驻块"
+    },
+    {
+      "from": "native",
+      "to": "native",
+      "description": "拼系统提示词：作者 → 工具提示 → 持久指令 → 记忆常驻块",
+      "details": {
+        "note": "PromptLayers。顺序固定，越靠后越贴近具体场景、优先级越高；一轮内不变，续跑的段沿用同一份，提示词缓存的前缀因此稳定。"
+      }
+    },
+    {
+      "from": "native",
+      "to": "native",
+      "description": "调模型前：外置超长输入；距上次回复超过缓存有效期，先清一次旧工具结果",
+      "details": {
+        "note": "ContextMiddleware 的调模型前一步。缓存反正已经失效，这时清理不会多击穿一次缓存；没超过有效期就等占用到了清理档再清。"
+      }
+    },
+    {
+      "from": "native",
+      "to": "memoryRt",
+      "description": "取这次调用的提醒：有更新的记忆主题"
+    },
+    {
+      "from": "native",
+      "to": "model",
+      "technology": "Anthropic Messages API / HTTPS",
+      "description": "调模型；提醒追加在最后一条之后，只进这一次请求",
+      "details": {
+        "note": "<system-reminder> 不落库、不进历史。占用到了提醒档再加一条用量提醒。调用后发 context.usage 事件（各层 token、档位），控制台的上下文面板据此显示。"
+      }
+    },
+    {
+      "from": "native",
+      "to": "native",
+      "description": "执行模型要的工具：一条结果有 5 万 token",
+      "details": {
+        "note": "工具经工具接入或沙箱执行，这里省略。"
+      }
+    },
+    {
+      "from": "native",
+      "to": "files",
+      "description": "单条结果超过 32k token：全文写进 .atlas/{会话}/，消息里留头尾预览和路径",
+      "details": {
+        "note": "ResultOffloader.on_result。模型要看全文就用 read_file 分页读回来。没勾文件工具（读不回来）或写失败时只能截断，并说明全文没有保存；read_file 和写类工具不外置。",
+        "items": [
+          [
+            "阈值",
+            "context_result_limit_tokens",
+            "32000"
+          ],
+          [
+            "写到哪",
+            "ResultOffloader",
+            "/data/{根会话}/workspace/.atlas/{会话}/large_tool_results/{调用 id}"
+          ]
+        ]
+      }
+    },
+    {
+      "from": "native",
+      "to": "native",
+      "description": "下一次调模型前：占用超过压缩档，在完整回合的边界上切",
+      "details": {
+        "note": "ContextBudget：有效窗口 = 窗口 − min(最大输出, 20k)，压缩档是有效窗口的 80%；占用以上次调用的实际用量为基线，加上之后新增消息的估算。保留最近 3 个回合；只有一个回合时退到回合内，保留最近 3 轮工具调用。"
+      }
+    },
+    {
+      "from": "native",
+      "to": "model",
+      "technology": "Anthropic Messages API / HTTPS",
+      "description": "摘要器：把切出的部分压成八段摘要",
+      "details": {
+        "note": "默认用智能体自己的模型，同一个端点。思考块先丢掉，单条消息截到 2000 字；旧摘要在切出的部分里，一并压进新摘要。失败就降级成「早期对话已省略」，失败计数加一。"
+      }
+    },
+    {
+      "from": "native",
+      "to": "files",
+      "description": "恢复工作集：重读切掉的部分里最近用过的文件和技能",
+      "details": {
+        "note": "最多 5 个文件，单个 5k token、合计 40k，技能另算 20k；读的是当前版本。外置目录不恢复。"
+      }
+    },
+    {
+      "from": "native",
+      "to": "db",
+      "technology": "SQL/TCP",
+      "description": "存摘要和覆盖边界；压缩次数加一，失败计数清零",
+      "details": {
+        "note": "覆盖边界 = 摘要覆盖到的最后一条消息的时间。回合内的压缩不存：本轮的完整过程结束时照常落库，存了的话下一轮会「摘要 + 原文」重复。"
+      }
+    },
+    {
+      "from": "native",
+      "to": "native",
+      "description": "清空 state、按序重写：摘要（附恢复的文件）→ 保留的回合",
+      "details": {
+        "note": "只改模型看到的 state。只删压缩区再追加摘要的话，摘要会排到最后，下一次调用就成了对摘要的续写。"
+      }
+    },
+    {
+      "from": "native",
+      "to": "model",
+      "technology": "Anthropic Messages API / HTTPS",
+      "description": "用压缩后的上下文接着调模型"
+    },
+    {
+      "from": "executor",
+      "to": "db",
+      "technology": "SQL/TCP",
+      "description": "段收尾：消息原样落库",
+      "details": {
+        "note": "清理和压缩只改模型看到的 state，落库的是原始消息；外置的那条结果存的是预览和路径，全文在文件里。"
+      }
+    }
+  ]
+}
+</script>
+
+<main>
+  <ul id="c4-report" hidden></ul>
+  <svg id="c4-diagram" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+  <section id="c4-details" hidden></section>
+  <h2>Diagram key</h2>
+  <svg id="c4-key" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+
+  <!-- 上下文管理原理：静态图，不经上面的渲染器。场景同时序图：长会话里的一轮，一个工具结果被外置，随后自动压缩一次 -->
+  <section id="principle">
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+      <defs>
+        <marker id="pr-a" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#444"/></marker>
+        <marker id="pr-h" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#d9480f"/></marker>
+        <marker id="pr-m" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#bbb"/></marker>
+      </defs>
+    </svg>
+
+    <h2>上下文管理原理：放得下，又不把缓存搞失效</h2>
+    <p>一句话：上下文管理让一段对话在有限的窗口里一直跑得下去。每次调模型前后，它按占用的档位做几件事：大结果外置进文件、旧工具结果换成占位、超过压缩档就把早期回合压成摘要；摘要和覆盖边界存进会话的上下文状态，下一轮重建历史时，边界之前的消息由摘要代替。所有改写只作用于模型看到的 state，消息表从不改写。系统提示词按固定顺序分层、一轮内不变，提醒只追加在这一次请求的最后，提示词缓存的前缀因此稳定。下面五张图，场景同上面的时序图。</p>
+
+    <h3>图 1　流水线：一次模型调用前后做什么</h3>
+    <svg width="1240" viewBox="0 0 1240 440" role="img" aria-label="上下文流水线">
+      <text class="t-head" x="20" y="40">调模型前：改 state，本段后面的调用都看到</text>
+      <text class="t-head" x="430" y="40">这一次调用：不改 state</text>
+      <text class="t-head" x="840" y="40">每次工具调用后</text>
+      <rect class="node" x="20" y="60" width="380" height="56" rx="4"/>
+      <text class="t-name" x="210.0" y="84.0">⓪ 写回上次强制压缩的结果</text>
+      <text class="t-sub" x="210.0" y="104.0">上一次调用因上下文过长压缩过</text>
+      <path class="e-hot" d="M210 116 V134" marker-end="url(#pr-h)"/>
+      <rect class="node" x="20" y="136" width="380" height="56" rx="4"/>
+      <text class="t-name" x="210.0" y="160.0">① 外置</text>
+      <text class="t-sub" x="210.0" y="180.0">超长的用户输入 · 最后一批结果合计超限</text>
+      <path class="e-hot" d="M210 192 V210" marker-end="url(#pr-h)"/>
+      <rect class="node" x="20" y="212" width="380" height="56" rx="4"/>
+      <text class="t-name" x="210.0" y="236.0">② 旧工具结果清理</text>
+      <text class="t-sub" x="210.0" y="256.0">到了清理档，或距上次回复超过缓存有效期</text>
+      <path class="e-hot" d="M210 268 V286" marker-end="url(#pr-h)"/>
+      <rect class="node" x="20" y="288" width="380" height="56" rx="4"/>
+      <text class="t-name" x="210.0" y="312.0">③ 自动压缩</text>
+      <text class="t-sub" x="210.0" y="332.0">超过压缩档；连续失败 3 次就熔断</text>
+      <path class="e-hot" d="M400 316 H415 V88 H428" marker-end="url(#pr-h)"/>
+      <rect class="node" x="430" y="60" width="380" height="56" rx="4"/>
+      <text class="t-name" x="620.0" y="84.0">④ 提醒追加在最后</text>
+      <text class="t-sub" x="620.0" y="104.0">记忆更新 · 待办 · 用量；只进这一次请求</text>
+      <path class="e-hot" d="M620 116 V134" marker-end="url(#pr-h)"/>
+      <rect class="node" x="430" y="136" width="380" height="56" rx="4"/>
+      <text class="t-name hot" x="620.0" y="160.0">调模型</text>
+      <text class="t-sub" x="620.0" y="180.0">经模型平台</text>
+      <path class="e-mute" d="M620 192 V210" marker-end="url(#pr-m)"/>
+      <rect class="node" x="430" y="212" width="380" height="56" rx="4"/>
+      <text class="t-name" x="620.0" y="236.0">⑤ 失败恢复，各只试一次</text>
+      <text class="t-sub" x="620.0" y="256.0">过长 → 强制压缩后重试 · 截断 → 调高输出上限重试</text>
+      <path class="e" d="M620 268 V286" marker-end="url(#pr-a)"/>
+      <rect class="node" x="430" y="288" width="380" height="56" rx="4"/>
+      <text class="t-name" x="620.0" y="312.0">⑥ 发 context.usage</text>
+      <text class="t-sub" x="620.0" y="332.0">各层 token、档位、是否熔断</text>
+      <path class="e-hot" d="M810 164 H825 V88 H838" marker-end="url(#pr-h)"/>
+      <rect class="node" x="840" y="60" width="380" height="56" rx="4"/>
+      <text class="t-name" x="1030.0" y="84.0">执行工具</text>
+      <text class="t-sub" x="1030.0" y="104.0">回复里有工具调用</text>
+      <path class="e-hot" d="M1030 116 V134" marker-end="url(#pr-h)"/>
+      <rect class="node" x="840" y="136" width="380" height="56" rx="4"/>
+      <text class="t-name" x="1030.0" y="160.0">⑦ 单条大结果外置</text>
+      <text class="t-sub" x="1030.0" y="180.0">超过 32k token；read_file、写类工具除外</text>
+      <path class="e-mute" d="M1030 192 V210" marker-end="url(#pr-m)"/>
+      <rect class="ghost" x="840" y="212" width="380" height="56" rx="4"/>
+      <text class="t-ghost mid" x="1030.0" y="236.0">下一次调模型</text>
+      <text class="t-mute mid" x="1030.0" y="256.0">回到最左边，从 ⓪ 开始</text>
+      <rect class="ghost" x="20" y="372" width="1200" height="50" rx="4"/>
+      <text class="t-ghost mid" x="620.0" y="393.0">关了自动压缩，或者查不到模型的窗口：没有预算</text>
+      <text class="t-mute mid" x="620.0" y="413.0">②③、过长恢复和用量提醒都不做，只留 ① ⑦ 外置和 ④ 提醒 —— 它们不是压缩</text>
+      <g class="badge"><circle cx="20" cy="60" r="10"/><text x="20" y="64">1</text></g>
+      <g class="badge"><circle cx="430" cy="60" r="10"/><text x="430" y="64">2</text></g>
+      <g class="badge"><circle cx="430" cy="212" r="10"/><text x="430" y="216">3</text></g>
+      <g class="badge"><circle cx="430" cy="288" r="10"/><text x="430" y="292">4</text></g>
+      <g class="badge"><circle cx="840" cy="136" r="10"/><text x="840" y="140">5</text></g>
+      <g class="badge"><circle cx="20" cy="372" r="10"/><text x="20" y="376">6</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>调模型前的几步改的是 state，本段后面的调用都看得到：先写回上一次强制压缩的结果，再外置、清理，最后看要不要压缩。只改模型看到的消息，消息表不动。</li>
+      <li><span class="n">2</span>提醒追加在最后一条消息之后，只进这一次请求，不落库、不进历史。来源有三个：记忆的更新提示（记忆组件现取）、待办提醒、到了提醒档时的用量提醒；总量有预算，是有效窗口的 10%。</li>
+      <li><span class="n">3</span>失败恢复各只试一次：模型说上下文过长，就强制压缩后重试；回复被输出上限截断，就调高上限重试（图 5）。</li>
+      <li><span class="n">4</span>每次调用后发一个 <code>context.usage</code> 事件：系统提示词、工具定义、摘要、对话、工具结果、提醒各占多少 token，现在在哪一档，有没有熔断。控制台的上下文面板据此显示。</li>
+      <li><span class="n">5</span>每次工具调用后检查这条结果，太大就外置（图 4）。</li>
+      <li><span class="n">6</span>智能体关了自动压缩，或者查不到模型的窗口：没有预算，按档位的清理、压缩、用量提醒和过长恢复都不做，只留外置和提醒。外置保护的是单次调用不被一条超大结果撑爆，提醒传的是记忆和待办，都不是压缩。</li>
+    </ol>
+
+    <h3>图 2　预算和档位：按有效窗口的比例算</h3>
+    <svg width="1240" viewBox="0 0 1240 364" role="img" aria-label="预算和档位">
+      <text class="t-lab" x="20" y="36">例：窗口 128k、最大输出 8k → 有效窗口 = 128k − min(8k, 20k) = 120k；各档按有效窗口的比例算</text>
+      <text class="t-key" x="20" y="135">占用</text>
+      <rect class="node" x="100.0" y="110" width="607.5" height="40"/>
+      <rect class="band-a" x="707.5" y="110" width="202.5" height="40"/>
+      <rect class="band-b" x="910.0" y="110" width="101.20000000000005" height="40"/>
+      <rect class="gap" x="1011.2" y="110" width="101.29999999999995" height="40"/>
+      <rect class="ghost" x="1112.5" y="110" width="67.5" height="40"/>
+      <text class="t-sub" x="403.75" y="135">正常</text>
+      <text class="t-blue mid" x="808.75" y="135">清理</text>
+      <text class="t-hot mid" x="960.6" y="135">压缩</text>
+      <text class="t-hot mid" x="1061.85" y="135">提醒</text>
+      <text class="t-mute mid" x="1146.25" y="135">留给回复</text>
+      <line class="sep-d" x1="707.5" y1="80" x2="707.5" y2="160"/>
+      <text class="t-blue mid b" x="707.5" y="72">60% · 72k</text>
+      <line class="sep-d" x1="910.0" y1="80" x2="910.0" y2="160"/>
+      <text class="t-hot mid b" x="910.0" y="72">80% · 96k</text>
+      <line class="sep-d" x1="1011.2" y1="80" x2="1011.2" y2="160"/>
+      <text class="t-hot mid b" x="1011.2" y="72">90% · 108k</text>
+      <line class="sep-d" x1="1112.5" y1="80" x2="1112.5" y2="160"/>
+      <text class="t-lab mid" x="1112.5" y="72">有效窗口 120k</text>
+      <rect class="node" x="100" y="190" width="340" height="64" rx="4"/>
+      <text class="t-name" x="270.0" y="218.0">到了清理档（≥ 60%）</text>
+      <text class="t-sub" x="270.0" y="238.0">较早的工具结果换成一句占位（图 4）</text>
+      <rect class="node" x="460" y="190" width="340" height="64" rx="4"/>
+      <text class="t-name hot" x="630.0" y="218.0">超过压缩档（> 80%）</text>
+      <text class="t-sub" x="630.0" y="238.0">自动压缩（图 3）</text>
+      <rect class="node" x="820" y="190" width="360" height="64" rx="4"/>
+      <text class="t-name" x="1000.0" y="218.0">到了提醒档（≥ 90%）</text>
+      <text class="t-sub" x="1000.0" y="238.0">提醒模型精简输出、把中间结果写进文件</text>
+      <rect class="node" x="100" y="280" width="1080" height="64" rx="4"/>
+      <text class="t-name" x="640.0" y="308.0">占用怎么量</text>
+      <text class="t-sub" x="640.0" y="328.0">上一次调用返回的实际用量（输入 + 输出）+ 之后新增消息的估算；没有基线时整体估算，再加系统提示词和工具定义的开销</text>
+      <g class="badge"><circle cx="1112.5" cy="110" r="10"/><text x="1112.5" y="114">1</text></g>
+      <g class="badge"><circle cx="707.5" cy="110" r="10"/><text x="707.5" y="114">2</text></g>
+      <g class="badge"><circle cx="100" cy="280" r="10"/><text x="100" y="284">3</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>有效窗口 = 窗口 − min(最大输出, 20k)，给回复和压缩时的摘要输出留位置。窗口和最大输出取模型平台里登记的规格，没登记就查模型目录；都查不到时不猜，不按档位清理和压缩。</li>
+      <li><span class="n">2</span>三档都是有效窗口的比例，智能体可以配：清理 60%、压缩 80%、提醒 90%。压缩档是「超过」，另两档是「达到」。提醒档在压缩档上面：正常情况下压缩会先把占用压下去，到了提醒档说明没压下来（熔断了，或者没什么可压）。</li>
+      <li><span class="n">3</span>占用优先用模型返回的实际用量：以上一次调用的输入加输出为基线，再加之后新增消息的估算，工具调用的入参也算。新会话的第一次调用、从库里重建的历史都没有基线，这时整体估算，再加上系统提示词和工具定义的开销。</li>
+    </ol>
+
+    <h3>图 3　压缩：在哪切、摘要什么、留下什么</h3>
+    <svg width="1240" viewBox="0 0 1240 560" role="img" aria-label="压缩：在哪切、摘要什么、留下什么">
+      <text class="t-key" x="20" y="50">压缩前：模型看到的 state</text>
+      <text class="t-hot" x="636" y="50">切点：倒数第 3 个回合的开头；不是安全边界就往前退</text>
+      <rect class="node" x="20" y="64" width="120" height="56" rx="4"/>
+      <text class="t-name" x="80.0" y="88.0">旧摘要</text>
+      <text class="t-sub" x="80.0" y="108.0">上次压缩的</text>
+      <rect class="node" x="150" y="64" width="150" height="56" rx="4"/>
+      <text class="t-name" x="225.0" y="88.0">回合 1</text>
+      <text class="t-sub" x="225.0" y="108.0">用户 · 助手 · 工具</text>
+      <rect class="node" x="310" y="64" width="150" height="56" rx="4"/>
+      <text class="t-name" x="385.0" y="88.0">回合 2</text>
+      <text class="t-sub" x="385.0" y="108.0">用户 · 助手 · 工具</text>
+      <rect class="node" x="470" y="64" width="150" height="56" rx="4"/>
+      <text class="t-name" x="545.0" y="88.0">回合 3</text>
+      <text class="t-sub" x="545.0" y="108.0">用户 · 助手 · 工具</text>
+      <path class="e-link" d="M630 56 V140"/>
+      <rect class="node" x="640" y="64" width="170" height="56" rx="4"/>
+      <text class="t-name" x="725.0" y="88.0">回合 4</text>
+      <text class="t-sub" x="725.0" y="108.0">用户 · 助手 · 工具</text>
+      <rect class="node" x="820" y="64" width="170" height="56" rx="4"/>
+      <text class="t-name" x="905.0" y="88.0">回合 5</text>
+      <text class="t-sub" x="905.0" y="108.0">用户 · 助手 · 工具</text>
+      <rect class="node" x="1000" y="64" width="220" height="56" rx="4"/>
+      <text class="t-name" x="1110.0" y="88.0">回合 6 · 本轮</text>
+      <text class="t-sub" x="1110.0" y="108.0">进行中</text>
+      <path class="e-hot" d="M20 128 V136 H620 V128"/>
+      <text class="t-hot mid" x="320" y="156">压缩区：交给摘要器</text>
+      <path class="e" d="M640 128 V136 H1220 V128"/>
+      <text class="t-lab mid" x="930" y="156">保留最近 3 个回合，原样</text>
+      <path class="e-hot" d="M320 164 V186" marker-end="url(#pr-h)"/>
+      <rect class="node" x="20" y="188" width="600" height="64" rx="4"/>
+      <text class="t-name" x="320.0" y="216.0">摘要器：写八段摘要</text>
+      <text class="t-sub" x="320.0" y="236.0">丢掉思考块、单条截到 2000 字；先在 &lt;analysis&gt; 里起草，只留 &lt;summary&gt;</text>
+      <path class="e-mute" d="M620 220 H638" marker-end="url(#pr-m)"/>
+      <rect class="ghost" x="640" y="188" width="580" height="64" rx="4"/>
+      <text class="t-ghost mid" x="930.0" y="216.0">摘要器失败</text>
+      <text class="t-mute mid" x="930.0" y="236.0">降级成「早期对话已省略」，这份不存；失败计数 +1，连续 3 次熔断</text>
+      <text class="t-key" x="20" y="290">压缩后：清空 state，按序重写</text>
+      <path class="e-hot" d="M320 252 V298" marker-end="url(#pr-h)"/>
+      <rect class="node" x="20" y="300" width="600" height="56" rx="4"/>
+      <text class="t-name hot" x="320.0" y="324.0">新摘要 + 恢复的工作集</text>
+      <text class="t-sub" x="320.0" y="344.0">重读切掉的部分里最近用过的文件和技能（当前版本）</text>
+      <rect class="node" x="640" y="300" width="170" height="56" rx="4"/>
+      <text class="t-name" x="725.0" y="324.0">回合 4</text>
+      <text class="t-sub" x="725.0" y="344.0">原样</text>
+      <rect class="node" x="820" y="300" width="170" height="56" rx="4"/>
+      <text class="t-name" x="905.0" y="324.0">回合 5</text>
+      <text class="t-sub" x="905.0" y="344.0">原样</text>
+      <rect class="node" x="1000" y="300" width="220" height="56" rx="4"/>
+      <text class="t-name" x="1110.0" y="324.0">回合 6 · 本轮</text>
+      <text class="t-sub" x="1110.0" y="344.0">原样</text>
+      <path class="e-hot" d="M320 356 V398" marker-end="url(#pr-h)"/>
+      <rect class="node" x="20" y="400" width="600" height="64" rx="4"/>
+      <text class="t-name" x="320.0" y="428.0">存进会话的上下文状态（thread_context）</text>
+      <text class="t-sub" x="320.0" y="448.0">summary = 新摘要 · 边界 = 回合 3 的最后一条 · 次数 +1 · 失败清零</text>
+      <path class="e-hot" d="M620 432 H638" marker-end="url(#pr-h)"/>
+      <rect class="node" x="640" y="400" width="580" height="64" rx="4"/>
+      <text class="t-name" x="930.0" y="428.0">下一轮重建历史</text>
+      <text class="t-sub" x="930.0" y="448.0">摘要放最前 + 边界之后的消息（回合 4 起）；消息表从不改写</text>
+      <rect class="ghost" x="20" y="490" width="1200" height="50" rx="4"/>
+      <text class="t-ghost mid" x="620.0" y="511.0">只有一个回合（一个任务几十次工具调用）：在回合内切，保留最近 3 轮工具调用</text>
+      <text class="t-mute mid" x="620.0" y="531.0">这份摘要不存：本轮结束时完整过程照常落库，下一轮有了新回合再按回合压</text>
+      <g class="badge"><circle cx="630" cy="64" r="10"/><text x="630" y="68">1</text></g>
+      <g class="badge"><circle cx="20" cy="188" r="10"/><text x="20" y="192">2</text></g>
+      <g class="badge"><circle cx="20" cy="300" r="10"/><text x="20" y="304">3</text></g>
+      <g class="badge"><circle cx="20" cy="400" r="10"/><text x="20" y="404">4</text></g>
+      <g class="badge"><circle cx="20" cy="490" r="10"/><text x="20" y="494">5</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>保留最近 3 个回合（可配），想切在倒数第 3 个回合的开头。一个回合从一条真实的用户输入开始；工具结果虽然也走 user 角色，但不算新回合。切点必须是安全边界：前面发出的每个 tool_use 都已经有结果，不是就往前退，宁可少压一点也不拆散一对。</li>
+      <li><span class="n">2</span>切出的部分交给摘要器：思考块先丢掉，单条消息截到 2000 字；旧摘要也在里面，一并压进新摘要。默认用智能体自己的模型，同一个端点。摘要分八段：原始目标与约束、带来源的关键事实、做过的决定和已排除的方案、涉及的文件和命令、错误与用户的纠正、全部用户消息、未完成的事、当前在做什么和下一步。</li>
+      <li><span class="n">3</span>清空 state 后按序重写：新摘要在最前，后面附上重新读取的工作集（切掉的部分里最近用过的文件和技能，读当前版本），再接保留的回合。只删压缩区再追加摘要的话，摘要会被追加到最后，下一次调用就成了对摘要的续写。</li>
+      <li><span class="n">4</span>摘要和覆盖边界存进会话的上下文状态，边界是摘要覆盖到的最后一条消息；压缩次数加一，失败计数清零。下一轮重建历史时，摘要放最前，后面只接边界之后的消息，压一次管到下次再压。</li>
+      <li><span class="n">5</span>只有一个回合时（一条用户消息、几十次工具调用），按回合切不动，就在回合内切，保留最近 3 轮工具调用，补一句「接着做」的衔接。这份摘要不存：本轮的完整过程结束时照常落库，存了的话下一轮会「摘要 + 原文」重复。</li>
+    </ol>
+
+    <h3>图 4　外置和清理：不压缩也能省出位置</h3>
+    <svg width="1240" viewBox="0 0 1240 510" role="img" aria-label="外置和清理">
+      <rect class="bnd" x="20" y="20" width="590" height="470" rx="6"/>
+      <text class="t-head" x="36" y="44">大结果外置：全文进文件，消息里留预览</text>
+      <rect class="node" x="40" y="60" width="550" height="50" rx="4"/>
+      <text class="t-name" x="315.0" y="81.0">单条工具结果 > 32k token</text>
+      <text class="t-sub" x="315.0" y="101.0">每次工具调用后；read_file、写类工具不外置</text>
+      <rect class="node" x="40" y="120" width="550" height="50" rx="4"/>
+      <text class="t-name" x="315.0" y="141.0">最后一批结果合计 > 80k</text>
+      <text class="t-sub" x="315.0" y="161.0">调模型前，从最大的挑，挑到不超为止</text>
+      <rect class="node" x="40" y="180" width="550" height="50" rx="4"/>
+      <text class="t-name" x="315.0" y="201.0">用户一次贴进来 > 80k</text>
+      <text class="t-sub" x="315.0" y="221.0">调模型前；写不进去就原样给模型，不截断</text>
+      <path class="e-hot" d="M315 230 V256" marker-end="url(#pr-h)"/>
+      <rect class="node" x="40" y="258" width="550" height="56" rx="4"/>
+      <text class="t-name hot" x="315.0" y="282.0">全文写进 .atlas/{会话}/</text>
+      <text class="t-sub" x="315.0" y="302.0">large_tool_results/{调用 id} · conversation_history/{uuid}.md</text>
+      <path class="e-hot" d="M315 314 V332" marker-end="url(#pr-h)"/>
+      <rect class="node" x="40" y="334" width="550" height="56" rx="4"/>
+      <text class="t-name" x="315.0" y="358.0">消息里换成：头尾各 5 行预览 + 路径</text>
+      <text class="t-sub" x="315.0" y="378.0">模型要看全文就用 read_file 分页读回来</text>
+      <rect class="ghost" x="40" y="410" width="550" height="56" rx="4"/>
+      <text class="t-ghost mid" x="315.0" y="434.0">没勾文件工具，或者写失败：只能截断</text>
+      <text class="t-mute mid" x="315.0" y="454.0">头 70%、尾 30%，并说明全文没有保存</text>
+      <rect class="bnd" x="630" y="20" width="590" height="470" rx="6"/>
+      <text class="t-head" x="646" y="44">旧结果清理：换成一句占位</text>
+      <rect class="node" x="650" y="60" width="550" height="56" rx="4"/>
+      <text class="t-name" x="925.0" y="84.0">什么时候清</text>
+      <text class="t-sub" x="925.0" y="104.0">到了清理档；或距上次回复超过缓存有效期（本段第一次调模型前）</text>
+      <path class="e-hot" d="M925 116 V134" marker-end="url(#pr-h)"/>
+      <rect class="node" x="650" y="136" width="550" height="150" rx="4"/>
+      <text class="t-head" x="666" y="160">清哪些</text>
+      <text x="666" y="186">可再生的工具：read_file、search、execute、</text>
+      <text x="666" y="206">knowledge_search、search_memory</text>
+      <text x="666" y="232">保留最近 5 条；最后一批从不清（模型马上要读）</text>
+      <text x="666" y="258">tool_search 不清：清了，延迟加载的工具就「消失」了</text>
+      <path class="e-hot" d="M925 286 V304" marker-end="url(#pr-h)"/>
+      <rect class="node" x="650" y="306" width="550" height="84" rx="4"/>
+      <text class="t-mono" x="666" y="332">[旧的工具结果已清除以节省上下文；</text>
+      <text class="t-mono" x="666" y="352"> 需要时请重新调用 read_file 获取]</text>
+      <text class="t-lab" x="666" y="376">同 id 替换，不改消息顺序；只改模型看到的 state</text>
+      <g class="badge"><circle cx="40" cy="60" r="10"/><text x="40" y="64">1</text></g>
+      <g class="badge"><circle cx="40" cy="258" r="10"/><text x="40" y="262">2</text></g>
+      <g class="badge"><circle cx="40" cy="410" r="10"/><text x="40" y="414">3</text></g>
+      <g class="badge"><circle cx="650" cy="60" r="10"/><text x="650" y="64">4</text></g>
+      <g class="badge"><circle cx="650" cy="136" r="10"/><text x="650" y="140">5</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>三种情况外置：单条工具结果超过 32k token（每次工具调用后）；最后一批结果合计超过 80k（调模型前，从最大的挑，挑到不超为止）；用户一次贴进来超过 80k。三处用同一套规则。</li>
+      <li><span class="n">2</span>全文写进本会话在工作区里的隐藏目录 <code>.atlas/{会话}/</code>，消息里换成头尾各 5 行的预览和路径。模型先看预览判断要不要读全文，要读就用 <code>read_file</code> 分页读回来。<code>read_file</code> 自带分页，写类工具的结果本来就短，这两类不外置。</li>
+      <li><span class="n">3</span>没勾文件工具（模型读不回来），或者写失败：只能截断，留头 70%、尾 30%，并说明全文没有保存。用户的原话例外：写不进去就原样交给模型，不截断。</li>
+      <li><span class="n">4</span>清理的时机：占用到了清理档；或者距上次回复已经超过提示词缓存的有效期，这时缓存反正已经失效，本段第一次调模型前顺手清一次。</li>
+      <li><span class="n">5</span>只清可再生的工具，也就是同样的调用能把结果再拿回来的那些；最近 5 条和最后一批从不清。<code>tool_search</code> 不清：已加载的延迟工具是从它的结果里推出来的。清掉的结果按 id 原地换成一句占位，不改消息顺序。</li>
+    </ol>
+
+    <h3>图 5　失败恢复与熔断：各只试一次</h3>
+    <svg width="1240" viewBox="0 0 1240 364" role="img" aria-label="失败恢复与熔断">
+      <rect class="node" x="20" y="30" width="280" height="56" rx="4"/>
+      <text class="t-name" x="160.0" y="54.0">模型说上下文过长</text>
+      <text class="t-sub" x="160.0" y="74.0">按各家网关的措辞认，只认 4xx</text>
+      <rect class="node" x="330" y="30" width="280" height="56" rx="4"/>
+      <text class="t-name hot" x="470.0" y="54.0">强制压缩</text>
+      <text class="t-sub" x="470.0" y="74.0">不看档位，也不看熔断</text>
+      <path class="e-hot" d="M300 58 H328" marker-end="url(#pr-h)"/>
+      <rect class="node" x="640" y="30" width="280" height="56" rx="4"/>
+      <text class="t-name" x="780.0" y="54.0">用压缩后的消息重试一次</text>
+      <text class="t-sub" x="780.0" y="74.0">结果在下一次调模型前写进 state</text>
+      <path class="e-hot" d="M610 58 H638" marker-end="url(#pr-h)"/>
+      <rect class="ghost" x="950" y="30" width="270" height="56" rx="4"/>
+      <text class="t-ghost mid" x="1085.0" y="54.0">还不行：报错</text>
+      <text class="t-mute mid" x="1085.0" y="74.0">不在同一个错误上反复试</text>
+      <path class="e-hot" d="M920 58 H948" marker-end="url(#pr-h)"/>
+      <g class="badge"><circle cx="20" cy="30" r="10"/><text x="20" y="34">1</text></g>
+      <rect class="node" x="20" y="116" width="280" height="56" rx="4"/>
+      <text class="t-name" x="160.0" y="140.0">回复被输出上限截断</text>
+      <text class="t-sub" x="160.0" y="160.0">stop_reason = max_tokens / length</text>
+      <rect class="node" x="330" y="116" width="280" height="56" rx="4"/>
+      <text class="t-name hot" x="470.0" y="140.0">输出上限翻倍</text>
+      <text class="t-sub" x="470.0" y="160.0">至少 8k，不超过模型的上限</text>
+      <path class="e-hot" d="M300 144 H328" marker-end="url(#pr-h)"/>
+      <rect class="node" x="640" y="116" width="280" height="56" rx="4"/>
+      <text class="t-name" x="780.0" y="140.0">重试一次</text>
+      <text class="t-sub" x="780.0" y="160.0">已经到上限、调不高了就不试</text>
+      <path class="e-hot" d="M610 144 H638" marker-end="url(#pr-h)"/>
+      <g class="badge"><circle cx="20" cy="116" r="10"/><text x="20" y="120">2</text></g>
+      <rect class="node" x="20" y="202" width="280" height="56" rx="4"/>
+      <text class="t-name" x="160.0" y="226.0">摘要器失败</text>
+      <text class="t-sub" x="160.0" y="246.0">压缩时调模型出错</text>
+      <rect class="node" x="330" y="202" width="280" height="56" rx="4"/>
+      <text class="t-name" x="470.0" y="226.0">降级</text>
+      <text class="t-sub" x="470.0" y="246.0">早期对话换成「已省略」，这份不存</text>
+      <path class="e-hot" d="M300 230 H328" marker-end="url(#pr-h)"/>
+      <rect class="node" x="640" y="202" width="280" height="56" rx="4"/>
+      <text class="t-name" x="780.0" y="226.0">失败计数 +1</text>
+      <text class="t-sub" x="780.0" y="246.0">存进上下文状态，跨轮累计</text>
+      <path class="e-hot" d="M610 230 H638" marker-end="url(#pr-h)"/>
+      <rect class="node" x="950" y="202" width="270" height="56" rx="4"/>
+      <text class="t-name hot" x="1085.0" y="226.0">连续 3 次：熔断</text>
+      <text class="t-sub" x="1085.0" y="246.0">不再自动压缩；压缩成功一次就清零</text>
+      <path class="e-hot" d="M920 230 H948" marker-end="url(#pr-h)"/>
+      <g class="badge"><circle cx="20" cy="202" r="10"/><text x="20" y="206">3</text></g>
+      <rect class="node" x="20" y="288" width="280" height="56" rx="4"/>
+      <text class="t-name" x="160.0" y="312.0">切不动</text>
+      <text class="t-sub" x="160.0" y="332.0">最近 3 轮工具调用本身就装不下</text>
+      <rect class="ghost" x="330" y="288" width="280" height="56" rx="4"/>
+      <text class="t-ghost mid" x="470.0" y="312.0">报上下文溢出</text>
+      <text class="t-mute mid" x="470.0" y="332.0">不无限压缩</text>
+      <path class="e-hot" d="M300 316 H328" marker-end="url(#pr-h)"/>
+      <g class="badge"><circle cx="20" cy="288" r="10"/><text x="20" y="292">4</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>模型说上下文过长（各家网关措辞不同，按关键词认，只认 4xx）：不看档位、也不看熔断，强制压缩后用压缩过的消息重试一次；压缩结果在下一次调模型前写进 state。还不行就报错。</li>
+      <li><span class="n">2</span>回复被输出上限截断：把输出上限翻倍（至少 8k，不超过模型的上限）重试一次；已经在上限了就不试。</li>
+      <li><span class="n">3</span>摘要器失败：这一段里早期对话换成「早期对话已省略：摘要生成失败」，这份不存；失败计数加一，存进上下文状态，跨轮累计。连续 3 次就熔断，不再自动压缩，照常对话；压缩成功一次（包括用户手动压缩）就清零。</li>
+      <li><span class="n">4</span>连最近 3 轮工具调用本身都装不下，切不动：报上下文溢出，不无限压缩。</li>
+    </ol>
+
+    <h3>为什么这样做</h3>
+    <table>
+      <thead><tr><th>做法</th><th>为什么</th></tr></thead>
+      <tbody>
+        <tr><td>所有改写只作用于模型看到的 state，消息表不动</td><td>用户看到的历史、审计和评测都以消息表为准；清理、外置、压缩只是为了让模型放得下，不能把原始记录改掉。</td></tr>
+        <tr><td>摘要和覆盖边界存在会话的上下文状态里</td><td>没有 checkpointer，历史每轮从消息表重建。不存的话每轮都要重压一次：摘要的 token 重复付，提示词缓存每轮击穿。</td></tr>
+        <tr><td>只在完整回合的边界上切</td><td>assistant 消息里的每个 tool_use 都必须紧跟着它的 tool_result，切在两者之间，请求会被拒。</td></tr>
+        <tr><td>回合内也能切</td><td>智能体最常见的形态就是一条用户消息、几十次工具调用；只按回合切的话，单轮长任务一超阈值就只能报溢出。</td></tr>
+        <tr><td>摘要单列「已排除的方案」和「全部用户消息」</td><td>已排除的方案最容易丢，丢了模型会兜回去重试已经否决的路；用户消息是意图的变化轨迹，最容易被摘要抹平。用户对提问的回答也算用户消息。</td></tr>
+        <tr><td>压缩后重读最近用过的文件和技能</td><td>摘要只记得改过哪个文件，记不住内容；重读当前版本，模型不用自己再读一遍，也不会拿旧内容当真。</td></tr>
+        <tr><td>系统提示词分层，顺序固定，一轮内不变</td><td>提示词缓存的前缀因此稳定；持久指令和记忆的修改从下一轮生效。</td></tr>
+        <tr><td>提醒追加在最后，只进这一次请求</td><td>提醒每次都可能变；放进系统提示词或写进历史，提示词缓存的前缀每次都会失效。</td></tr>
+        <tr><td>缓存过期了就先清一次旧结果</td><td>缓存反正失效了，这时清理不多花钱；缓存还热时清理会让前缀失效，所以平时等到清理档再清。</td></tr>
+        <tr><td>外置，而不是截断</td><td>截掉的内容就永远没了；外置后模型能按需读回来，预览让它先判断要不要读。</td></tr>
+        <tr><td>外置只有一处</td><td>单条、整批、超长输入用同一套规则：预览格式、写到哪、写不进去怎么办都一样。</td></tr>
+        <tr><td>关了自动压缩，只留外置和提醒</td><td>关压缩是不想要摘要，不是不要大结果保护和记忆提醒。</td></tr>
+        <tr><td>查不到窗口就不按档位做</td><td>猜大了压缩永远不触发，猜小了每轮都压；宁可不压，让模型的上限兜底。</td></tr>
+        <tr><td>连续失败就熔断，失败恢复只试一次</td><td>摘要器坏了时，每次调模型前都重压一遍只会持续烧钱；在同一个错误上反复重试没有意义。</td></tr>
+      </tbody>
+    </table>
+  </section>
+</main>
+
+<script>
+(() => {
+  'use strict';
+  const FONT = '"Open Sans", "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
+  const INK = '#444444';
+  const LIFELINE = '#9a9a9a';
+  const SCOPE_COLOR = '#1168bd';
+  const PALETTE = {
+    person: ['#297e06', '#1a849c', '#6b8e23'],
+    system: ['#ed8609', '#bf101d', '#8411bd', '#5b6770', '#b8336a'],
+  };
+  const KIND_LABEL = { person: 'Person', system: 'Software System', container: 'Container', component: 'Component' };
+  const MAX_MESSAGES = 20;
+  const TXT = {
+    name: { size: 17, weight: 400, lh: 22 },
+    meta: { size: 12, weight: 400, lh: 16 },
+    msg: { size: 15, weight: 400, lh: 20 },
+    tech: { size: 12, weight: 400, lh: 16 },
+    bname: { size: 18, weight: 700, lh: 22 },
+    btype: { size: 12, weight: 700, lh: 16 },
+    key: { size: 13, weight: 400, lh: 18 },
+  };
+  const BOX_H = 52, ICON_H = 30, HEADER_H = 48, LABEL_W = 260, MIN_GAP = 70, SELF_W = 36, MARGIN = 50;
+
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const problems = [];
+  const fail = (msg) => problems.push({ level: 'error', msg });
+  const warn = (msg) => problems.push({ level: 'warn', msg });
+
+  const ctx = document.createElement('canvas').getContext('2d');
+  const measure = (s, st) => { ctx.font = `${st.weight} ${st.size}px ${FONT}`; return ctx.measureText(s).width; };
+
+  // 中文按字断行，英文按词断行；行首不放标点
+  const CJK = '\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef\u3000-\u303f';
+  const TOKEN = new RegExp(`[${CJK}]|[^\\s${CJK}]+|\\s+`, 'g');
+  const NO_LINE_START = /^[，。、；：！？）》」』,.;:!?)]$/;
+  function wrap(text, st, maxW) {
+    const lines = [];
+    for (const para of String(text || '').split('\n')) {
+      let line = '';
+      for (const tok of para.match(TOKEN) || []) {
+        if (/^\s+$/.test(tok)) { if (line) line += ' '; continue; }
+        const next = line + tok;
+        if (line.trim() && measure(next.trimEnd(), st) > maxW && !NO_LINE_START.test(tok)) {
+          lines.push(line.trimEnd());
+          line = tok;
+        } else {
+          line = next;
+        }
+      }
+      if (line.trim()) lines.push(line.trimEnd());
+    }
+    return lines;
+  }
+
+  // 行数不变的前提下收窄宽度，让各行长度接近，避免末行只剩一两个字
+  function wrapBalanced(text, st, maxW) {
+    const lines = wrap(text, st, maxW);
+    if (lines.length < 2) return lines;
+    let lo = maxW / 2, hi = maxW;
+    while (hi - lo > 4) {
+      const mid = (lo + hi) / 2;
+      if (wrap(text, st, mid).length > lines.length) lo = mid; else hi = mid;
+    }
+    return wrap(text, st, hi);
+  }
+
+  function node(tag, attrs, parent) {
+    const n = document.createElementNS(svgNS, tag);
+    for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+    parent.appendChild(n);
+    return n;
+  }
+  // top 是文字块上沿
+  function textLines(parent, lines, x, top, st, color, anchor = 'middle') {
+    const t = node('text', { x, y: top + st.lh / 2 + st.size * 0.35, 'text-anchor': anchor,
+      'font-family': FONT, 'font-size': st.size, 'font-weight': st.weight, fill: color }, parent);
+    lines.forEach((ln, i) => { node('tspan', { x, dy: i ? st.lh : 0 }, t).textContent = ln; });
+    return t;
+  }
+
+  // 参与者头：人员和数据库画图标 + 文字，其余画方框
+  const iconHead = (p) => p.kind === 'person' || (p.kind === 'container' && p.shape === 'database');
+  function headSize(p) {
+    const w = Math.max(measure(p.name, TXT.name), measure(p.meta, TXT.meta)) + 24;
+    return { w, h: iconHead(p) ? ICON_H + 4 + TXT.name.lh + TXT.meta.lh : BOX_H };
+  }
+  function drawHead(g, p, cx, top) {
+    const c = p.color;
+    let textTop = top + (BOX_H - TXT.name.lh - TXT.meta.lh) / 2;
+    if (p.kind === 'person') {
+      node('circle', { cx, cy: top + 8, r: 7, fill: '#fff', stroke: c, 'stroke-width': 1.8 }, g);
+      node('path', { d: `M${cx - 14} ${top + ICON_H} Q${cx - 14} ${top + 16} ${cx} ${top + 16} Q${cx + 14} ${top + 16} ${cx + 14} ${top + ICON_H} Z`, fill: '#fff', stroke: c, 'stroke-width': 1.8 }, g);
+      textTop = top + ICON_H + 4;
+    } else if (iconHead(p)) {
+      const rx = 17, ry = 5, y0 = top + ry, y1 = top + ICON_H - ry;
+      node('path', { d: `M${cx - rx} ${y0} V${y1} A${rx} ${ry} 0 0 0 ${cx + rx} ${y1} V${y0}`, fill: '#fff', stroke: c, 'stroke-width': 1.8 }, g);
+      node('ellipse', { cx, cy: y0, rx, ry, fill: '#fff', stroke: c, 'stroke-width': 1.8 }, g);
+      textTop = top + ICON_H + 4;
+    } else {
+      node('rect', { x: cx - p.size.w / 2, y: top, width: p.size.w, height: BOX_H, rx: 4, fill: '#fff', stroke: c, 'stroke-width': 1.6 }, g);
+    }
+    textLines(g, [p.name], cx, textTop, TXT.name, c);
+    textLines(g, [p.meta], cx, textTop + TXT.name.lh, TXT.meta, c);
+  }
+  function drawArrow(g, x0, x1, y) {
+    const dir = Math.sign(x1 - x0), L = 10, W = 7;
+    node('line', { x1: x0, y1: y, x2: x1 - dir * L, y2: y, stroke: INK, 'stroke-width': 1.6, 'stroke-dasharray': '8 5' }, g);
+    node('polygon', { points: `${x1},${y} ${x1 - dir * L},${y - W / 2} ${x1 - dir * L},${y + W / 2}`, fill: INK }, g);
+  }
+
+  function render() {
+    const model = JSON.parse(document.getElementById('c4-model').textContent);
+    if (model.title) document.title = model.title;
+    else fail('缺少 title（建议「Dynamic View: 系统名 - 场景」）');
+
+    // ---- 边界 ----
+    const bById = new Map();
+    for (const b of model.boundaries || []) {
+      if (!b.id) { fail(`边界 ${b.name || ''}：缺少 id`); continue; }
+      if (bById.has(b.id)) { fail(`边界 id 重复：${b.id}`); continue; }
+      if (!b.name || !b.type) fail(`边界 ${b.id}：name、type 都要写，type 如「Software System」「Container: Python / FastAPI」`);
+      bById.set(b.id, b);
+    }
+    const chain = (id) => {   // 从里到外的边界链
+      const out = [];
+      for (let cur = id; cur; cur = bById.get(cur) && bById.get(cur).in) {
+        if (!bById.has(cur) || out.includes(cur)) return null;
+        out.push(cur);
+      }
+      return out;
+    };
+    for (const b of bById.values()) {
+      if (b.in && !chain(b.id)) { fail(`边界 ${b.id}：in 指向不存在的边界，或者边界互相嵌套成了环`); b.broken = true; }
+    }
+
+    // ---- 参与者 ----
+    const pById = new Map();
+    const ps = [];
+    for (const p of model.participants || []) {
+      const who = p.id || p.name || '(未命名参与者)';
+      if (!p.id) { fail(`${who}：缺少 id`); continue; }
+      if (pById.has(p.id)) { fail(`参与者 id 重复：${p.id}`); continue; }
+      if (!KIND_LABEL[p.kind]) { fail(`${who}：kind 只能是 person / system / container / component`); continue; }
+      if (!p.name) fail(`${who}：缺少 name`);
+      if ((p.kind === 'container' || p.kind === 'component') && !p.technology) fail(`${who}：${p.kind} 缺少 technology`);
+      if (p.in && (!bById.has(p.in) || bById.get(p.in).broken)) { fail(`${who}：in 指向的边界 ${p.in} 不存在`); p.in = null; }
+      p.chain = p.in ? chain(p.in) : [];
+      p.meta = p.technology && (p.kind === 'container' || p.kind === 'component') ? `[${KIND_LABEL[p.kind]}: ${p.technology}]` : `[${KIND_LABEL[p.kind]}]`;
+      pById.set(p.id, p);
+      ps.push(p);
+    }
+    if (ps.length < 2) fail('至少要有两个参与者');
+    const assigned = new Map(), used = { person: 0, system: 0 };
+    for (const p of ps) {
+      if (p.color) continue;
+      if (p.kind === 'container' || p.kind === 'component' || (p.kind === 'system' && p.scope)) { p.color = SCOPE_COLOR; continue; }
+      const k = `${p.kind}:${p.tag || p.id}`;
+      if (!assigned.has(k)) assigned.set(k, PALETTE[p.kind][used[p.kind]++ % PALETTE[p.kind].length]);
+      p.color = assigned.get(k);
+    }
+    // 同一边界里的参与者在左右顺序上必须相邻，否则边界框会把别的参与者框进去
+    for (const b of bById.values()) {
+      const idx = ps.map((p, i) => (p.chain.includes(b.id) ? i : -1)).filter((i) => i >= 0);
+      b.members = idx.map((i) => ps[i]);
+      if (!idx.length) { fail(`边界「${b.name}」里没有任何参与者`); continue; }
+      if (idx[idx.length - 1] - idx[0] + 1 !== idx.length) fail(`边界「${b.name}」里的参与者在 participants 里不相邻，调整顺序`);
+    }
+
+    // ---- 消息 ----
+    const msgs = (model.messages || []).filter((m, i) => {
+      const who = `第 ${i + 1} 条消息（${m.from} → ${m.to}）`;
+      if (!pById.has(m.from) || !pById.has(m.to)) { fail(`${who}：端点 id 不存在`); return false; }
+      if (!m.description) fail(`${who}：缺少 description（写做什么）`);
+      const a = pById.get(m.from), b = pById.get(m.to);
+      const crossProcess = a.kind !== 'person' && b.kind !== 'person' && !(a.kind === 'component' && b.kind === 'component') && a !== b;
+      if (crossProcess && !m.technology) fail(`${who}：涉及 container 或软件系统，是跨进程交互，要写 technology`);
+      if (m.details !== undefined) {
+        const d = m.details;
+        const isText = (v) => typeof v === 'string';
+        if (!d || typeof d !== 'object' || Array.isArray(d)) {
+          fail(`${who}：details 要写成对象 { note, items, example }`);
+          m.details = undefined;
+        } else {
+          if (d.note !== undefined && !isText(d.note)) fail(`${who}：details.note 要写成字符串`);
+          if (d.example !== undefined && !isText(d.example)) fail(`${who}：details.example 要写成字符串，多行用 \\n`);
+          if (d.items !== undefined && !(Array.isArray(d.items) && d.items.every((r) => Array.isArray(r) && r.length === 3 && r.every(isText)))) {
+            fail(`${who}：details.items 的每一行要写成 [项, 来源, 样例] 三个字符串`);
+          }
+          if (!d.note && !d.example && !(Array.isArray(d.items) && d.items.length)) warn(`${who}：details 是空的，删掉或补上内容`);
+        }
+      }
+      m.n = i + 1;
+      return true;
+    });
+    if (!msgs.length) fail('至少要有一条消息');
+    if (msgs.length > MAX_MESSAGES) warn(`消息有 ${msgs.length} 条，超过 ${MAX_MESSAGES} 条：只画这个场景的关键交互，或者拆成几张图`);
+    for (const p of ps) {
+      if (!msgs.some((m) => m.from === p.id || m.to === p.id)) warn(`「${p.name}」没有参与任何消息：与这个场景无关就删掉`);
+    }
+
+    // ---- 横向：列间距按参与者宽度和消息标签宽度撑开 ----
+    for (const p of ps) p.size = headSize(p);
+    const index = new Map(ps.map((p, i) => [p.id, i]));
+    for (const m of msgs) {
+      m.lines = wrapBalanced(`${m.n}: ${m.description || ''}${m.details ? ' ⓘ' : ''}`, TXT.msg, LABEL_W);
+      m.tech = m.technology ? `[${m.technology}]` : '';
+      m.labelW = Math.max(...m.lines.map((s) => measure(s, TXT.msg)), m.tech ? measure(m.tech, TXT.tech) : 0);
+      m.labelH = m.lines.length * TXT.msg.lh + (m.tech ? TXT.tech.lh : 0);
+    }
+    const gaps = ps.slice(1).map((p, i) => (ps[i].size.w + p.size.w) / 2 + MIN_GAP);
+    let rightExtra = 0;
+    const spanOf = (m) => Math.abs(index.get(m.to) - index.get(m.from));
+    for (const m of [...msgs].sort((a, b) => spanOf(a) - spanOf(b))) {
+      const i = index.get(m.from), j = index.get(m.to);
+      if (i === j) {   // 自调用：标签在生命线右边，占下一列间距
+        const need = SELF_W + 16 + m.labelW + 20;
+        if (i < gaps.length) gaps[i] = Math.max(gaps[i], need); else rightExtra = Math.max(rightExtra, need);
+        continue;
+      }
+      const lo = Math.min(i, j), hi = Math.max(i, j);
+      const span = gaps.slice(lo, hi).reduce((s, g) => s + g, 0);
+      const need = m.labelW + 40;
+      if (span < need) for (let k = lo; k < hi; k++) gaps[k] += (need - span) / (hi - lo);
+    }
+    let x = 0;
+    ps.forEach((p, i) => { if (i) x += gaps[i - 1]; p.x = x; });
+
+    // ---- 纵向：边界标题 → 参与者头 → 消息 → 底部参与者头 ----
+    const depthOf = (b) => chain(b.id).length;
+    const live = [...bById.values()].filter((b) => !b.broken && b.members && b.members.length);
+    const maxDepth = Math.max(0, ...live.map(depthOf));
+    const headTop = maxDepth * HEADER_H + (maxDepth ? 10 : 0);
+    const headH = Math.max(...ps.map((p) => p.size.h), BOX_H);
+    let y = headTop + headH + 24;
+    for (const m of msgs) {
+      m.labelTop = y;
+      m.y = y + m.labelH + 8;
+      y = m.y + (m.from === m.to ? 46 : 26);
+    }
+    const bottomTop = y + 8, bottom = bottomTop + headH;
+
+    // 边界框：外层比内层多留一圈
+    const below = (b) => Math.max(0, ...live.filter((c) => c.in === b.id).map((c) => 1 + below(c)));
+    for (const b of live) {
+      const pad = 14 + 16 * below(b);
+      const d = depthOf(b);
+      b.rect = {
+        x: Math.min(...b.members.map((p) => p.x - p.size.w / 2)) - pad,
+        y: (d - 1) * HEADER_H,
+        w: 0, h: 0,
+      };
+      b.rect.w = Math.max(...b.members.map((p) => p.x + p.size.w / 2)) + pad - b.rect.x;
+      b.rect.h = bottom + 10 + 14 * below(b) - b.rect.y;
+      const titleW = Math.max(measure(b.name, TXT.bname), measure(`[${b.type}]`, TXT.btype)) + 20;
+      if (titleW > b.rect.w) warn(`边界「${b.name}」的标题比边界还宽，名字写短一点`);
+    }
+    for (const b of live) {
+      for (const p of ps) {
+        if (!b.members.includes(p) && p.x + p.size.w / 2 > b.rect.x && p.x - p.size.w / 2 < b.rect.x + b.rect.w) {
+          fail(`「${p.name}」不在边界「${b.name}」里，却和边界框重叠，调整 participants 顺序`);
+        }
+      }
+    }
+
+    // ---- 绘制 ----
+    const svg = document.getElementById('c4-diagram');
+    const gB = node('g', {}, svg), gLife = node('g', {}, svg), gM = node('g', {}, svg), gH = node('g', {}, svg), gT = node('g', {}, svg);
+    for (const b of [...live].sort((a, c) => depthOf(a) - depthOf(c))) {
+      const r = b.rect;
+      node('rect', { x: r.x, y: r.y, width: r.w, height: r.h, fill: 'none', stroke: SCOPE_COLOR, 'stroke-width': 1.6 }, gB);
+      textLines(gB, [b.name], r.x + r.w / 2, r.y + 4, TXT.bname, SCOPE_COLOR);
+      textLines(gB, [`[${b.type}]`], r.x + r.w / 2, r.y + 4 + TXT.bname.lh, TXT.btype, SCOPE_COLOR);
+    }
+    for (const p of ps) {
+      node('line', { x1: p.x, y1: headTop + p.size.h, x2: p.x, y2: bottomTop, stroke: LIFELINE, 'stroke-width': 1, 'stroke-dasharray': '4 4' }, gLife);
+      drawHead(gH, p, p.x, headTop);
+      drawHead(gH, p, p.x, bottomTop);
+    }
+    for (const m of msgs) {
+      const a = pById.get(m.from), b = pById.get(m.to);
+      let lx;
+      if (a === b) {
+        const x0 = a.x, x1 = a.x + SELF_W;
+        node('polyline', { points: `${x0},${m.y} ${x1},${m.y} ${x1},${m.y + 20} ${x0 + 10},${m.y + 20}`, fill: 'none', stroke: INK, 'stroke-width': 1.6, 'stroke-dasharray': '8 5' }, gM);
+        node('polygon', { points: `${x0},${m.y + 20} ${x0 + 10},${m.y + 16.5} ${x0 + 10},${m.y + 23.5}`, fill: INK }, gM);
+        lx = x1 + 12;
+      } else {
+        drawArrow(gM, a.x, b.x, m.y);
+        lx = Math.min(a.x, b.x) + 12;
+      }
+      // 有 details 的消息：标签链接到图下方「消息说明」里的同号条目
+      const gL = m.details ? node('a', { href: `#c4-msg-${m.n}` }, gM) : gM;
+      node('rect', { x: lx - 3, y: m.labelTop - 1, width: m.labelW + 6, height: m.labelH + 2, fill: '#fff' }, gL);
+      textLines(gL, m.lines, lx, m.labelTop, TXT.msg, INK, 'start');
+      if (m.tech) textLines(gL, [m.tech], lx, m.labelTop + m.lines.length * TXT.msg.lh, TXT.tech, INK, 'start');
+    }
+    const minX = Math.min(...ps.map((p) => p.x - p.size.w / 2), ...live.map((b) => b.rect.x));
+    let maxX = Math.max(...ps.map((p) => p.x + p.size.w / 2 + (p === ps[ps.length - 1] ? rightExtra : 0)), ...live.map((b) => b.rect.x + b.rect.w));
+    let maxY = Math.max(bottom, ...live.map((b) => b.rect.y + b.rect.h));
+    const title = { size: 26, weight: 400, lh: 34 }, sub = { size: 15, weight: 400, lh: 22 };
+    textLines(gT, [model.title || ''], minX, maxY + 36, title, INK, 'start');
+    if (model.description) textLines(gT, [model.description], minX, maxY + 36 + title.lh, sub, '#666', 'start');
+    maxX = Math.max(maxX, minX + measure(model.title || '', title), minX + measure(model.description || '', sub));
+    maxY += 36 + title.lh + (model.description ? sub.lh : 0);
+    const vw = maxX - minX + 2 * MARGIN, vh = maxY + 2 * MARGIN;
+    svg.setAttribute('viewBox', `${minX - MARGIN} ${-MARGIN} ${vw} ${vh}`);
+    svg.setAttribute('width', vw);
+    svg.setAttribute('aria-label', model.title || 'Dynamic diagram');
+
+    renderKey(ps, live);
+    renderDetails(msgs);
+  }
+
+  // ---- 消息说明：每条带 details 的消息一节（说明、[项, 来源, 样例] 表、数据样例）----
+  function renderDetails(msgs) {
+    const list = msgs.filter((m) => m.details);
+    if (!list.length) return;
+    const sec = document.getElementById('c4-details');
+    const el = (tag, cls, text) => {
+      const e = document.createElement(tag);
+      if (cls) e.className = cls;
+      if (text !== undefined) e.textContent = text;
+      return e;
+    };
+    sec.appendChild(el('h2', '', '消息说明'));
+    for (const m of list) {
+      const d = m.details;
+      const art = el('article');
+      art.id = `c4-msg-${m.n}`;
+      const h = el('h3', '', `${m.n}: ${m.description || ''}`);
+      if (m.technology) h.appendChild(el('span', 'tech', `[${m.technology}]`));
+      art.appendChild(h);
+      if (typeof d.note === 'string' && d.note) art.appendChild(el('p', '', d.note));
+      const rows = Array.isArray(d.items) ? d.items.filter((r) => Array.isArray(r)) : [];
+      if (rows.length) {
+        const table = el('table');
+        const head = table.createTHead().insertRow();
+        for (const c of ['项', '来源', '样例']) head.appendChild(el('th', '', c));
+        const body = table.createTBody();
+        for (const r of rows) {
+          const tr = body.insertRow();
+          r.slice(0, 3).forEach((c, i) => tr.appendChild(el('td', i === 2 ? 'sample' : '', String(c))));
+        }
+        art.appendChild(table);
+      }
+      if (typeof d.example === 'string' && d.example) art.appendChild(el('pre', '', d.example));
+      sec.appendChild(art);
+    }
+    sec.hidden = false;
+  }
+
+  // ---- 图例：每种参与者一项，再加边界和消息 ----
+  function renderKey(ps, boundaries) {
+    const svg = document.getElementById('c4-key');
+    const rank = { person: 0, system: 1, container: 2, component: 3 };
+    const label = (p) => {
+      if (p.kind === 'person') return `Person, ${p.tag || p.name}`;
+      if (p.kind === 'system') return p.tag || p.name;
+      if (p.kind === 'container') return p.shape === 'database' ? 'Container, Database' : 'Container';
+      return 'Component';
+    };
+    const groups = new Map();
+    for (const p of [...ps].sort((a, b) => rank[a.kind] - rank[b.kind])) {
+      const k = `${p.kind}|${iconHead(p)}|${p.color}`;
+      if (!groups.has(k)) groups.set(k, { proto: p, labels: [] });
+      if (!groups.get(k).labels.includes(label(p))) groups.get(k).labels.push(label(p));
+    }
+    const items = [...groups.values()].map((g) => ({ kind: 'head', proto: g.proto, text: g.labels.join('、') }));
+    if (boundaries.length) items.push({ kind: 'boundary', text: 'Boundary（系统 / 容器）' });
+    items.push({ kind: 'message', text: 'n: 交互（编号 = 先后顺序）' });
+    const CELL_W = 230, CELL_H = 110, PER_ROW = 6;
+    items.forEach((it, i) => {
+      const cx = (i % PER_ROW) * CELL_W + CELL_W / 2, top = Math.floor(i / PER_ROW) * CELL_H;
+      const g = node('g', {}, svg);
+      if (it.kind === 'head') {
+        const p = { ...it.proto, name: it.text.length > 22 ? it.text.slice(0, 21) + '…' : it.text, meta: '' };
+        p.size = { w: Math.min(CELL_W - 20, measure(p.name, TXT.name) + 24), h: BOX_H };
+        drawHead(g, p, cx, top + 10);
+        return;
+      }
+      if (it.kind === 'boundary') {
+        node('rect', { x: cx - 95, y: top + 10, width: 190, height: 56, fill: 'none', stroke: SCOPE_COLOR, 'stroke-width': 1.6 }, g);
+        textLines(g, [it.text], cx, top + 10 + 4, TXT.key, SCOPE_COLOR);
+        return;
+      }
+      drawArrow(g, cx - 90, cx + 90, top + 46);
+      textLines(g, [it.text], cx - 88, top + 18, TXT.key, INK, 'start');
+    });
+    const rows = Math.ceil(items.length / PER_ROW), cols = Math.min(items.length, PER_ROW);
+    svg.setAttribute('viewBox', `0 0 ${cols * CELL_W} ${rows * CELL_H}`);
+    svg.setAttribute('width', cols * CELL_W);
+    svg.setAttribute('aria-label', 'Diagram key');
+  }
+
+  try {
+    render();
+  } catch (e) {
+    fail(`渲染异常：${e && e.message}`);
+    console.error(e);
+  }
+  const status = problems.some((p) => p.level === 'error') ? 'error' : problems.length ? 'warn' : 'ok';
+  document.documentElement.dataset.c4Status = status;
+  const report = document.getElementById('c4-report');
+  for (const p of problems) {
+    const li = document.createElement('li');
+    li.dataset.level = p.level;
+    li.textContent = p.msg;
+    report.appendChild(li);
+  }
+  report.hidden = !problems.length;
+  if (problems.length) console.warn('[c4]', problems);
+})();
+</script>
+</body>
+</html>

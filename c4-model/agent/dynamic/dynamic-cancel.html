@@ -27,6 +27,44 @@
   #c4-details td.sample { word-break: break-all; }
   #c4-details pre { margin: 0; padding: 10px 12px; border: 1px solid #e3e3e3; background: #f6f8fa; font-size: 12px; line-height: 1.5; overflow-x: auto; }
   svg a { cursor: pointer; }
+  /* 取消原理：手写的静态图，不经渲染器 */
+  #principle { max-width: 1280px; }
+  #principle h3 { margin: 32px 0 8px; font-size: 15px; font-weight: 600; color: #333; }
+  #principle p { margin: 0 0 8px; font-size: 14px; line-height: 1.7; }
+  #principle code { padding: 0 3px; background: #f6f8fa; font-family: Menlo, Consolas, monospace; font-size: 12.5px; }
+  #principle ol { margin: 8px 0 0; padding: 0; list-style: none; }
+  #principle ol li { position: relative; margin: 0 0 6px; padding-left: 30px; font-size: 14px; line-height: 1.7; }
+  #principle ol li .n { position: absolute; left: 0; top: 2px; width: 20px; height: 20px; border-radius: 50%; background: #d9480f; color: #fff; font-size: 12px; font-weight: 700; line-height: 20px; text-align: center; }
+  #principle table { width: 100%; margin: 8px 0 0; border-collapse: collapse; font-size: 13px; line-height: 1.6; }
+  #principle th, #principle td { padding: 6px 10px; border: 1px solid #e3e3e3; text-align: left; vertical-align: top; }
+  #principle th { background: #f6f8fa; font-weight: 600; }
+  #principle th:first-child { width: 28%; }
+  #principle svg { margin: 8px 0 4px; }
+  #principle svg text { font-size: 13px; fill: #444; }
+  #principle svg .t-name { font-size: 15px; fill: #1168bd; text-anchor: middle; }
+  #principle svg .t-sub { font-size: 12px; fill: #888; text-anchor: middle; }
+  #principle svg .t-head { font-size: 14px; font-weight: 600; fill: #1168bd; }
+  #principle svg .t-key { font-size: 12px; fill: #888; }
+  #principle svg .t-lab { font-size: 12px; fill: #666; }
+  #principle svg .t-hot { font-size: 12px; fill: #d9480f; }
+  #principle svg .t-mute { font-size: 12px; fill: #aaa; }
+  #principle svg .t-ghost { font-size: 14px; font-weight: 600; fill: #888; }
+  #principle svg .hot { fill: #d9480f; }
+  #principle svg .mid { text-anchor: middle; }
+  #principle svg .end { text-anchor: end; }
+  #principle svg .b { font-weight: 700; }
+  #principle svg .node { fill: #fff; stroke: #1168bd; stroke-width: 1.6; }
+  #principle svg .head { fill: #f6f8fa; stroke: none; }
+  #principle svg .sep { stroke: #e3e3e3; stroke-width: 1; }
+  #principle svg .bnd { fill: none; stroke: #1168bd; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .ghost { fill: #fafafa; stroke: #aaa; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .gap { fill: #fff6f0; stroke: #d9480f; stroke-width: 1.2; stroke-dasharray: 5 4; }
+  #principle svg .e { fill: none; stroke: #444; stroke-width: 1.6; }
+  #principle svg .e-hot { fill: none; stroke: #d9480f; stroke-width: 2.4; }
+  #principle svg .e-mute { fill: none; stroke: #bbb; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .e-link { fill: none; stroke: #d9480f; stroke-width: 1.4; stroke-dasharray: 4 3; }
+  #principle svg .badge circle { fill: #d9480f; stroke: #fff; stroke-width: 2; }
+  #principle svg .badge text { fill: #fff; font-size: 12px; font-weight: 700; text-anchor: middle; }
 </style>
 </head>
 <body>
@@ -255,6 +293,283 @@
   <section id="c4-details" hidden></section>
   <h2>Diagram key</h2>
   <svg id="c4-key" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+
+  <!-- 取消原理：静态图，不经上面的渲染器。场景同时序图：父 run 在跑，它派出的子 run 挂起等审批，用户点「停止」 -->
+  <section id="principle">
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+      <defs>
+        <marker id="pr-a" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#444"/></marker>
+        <marker id="pr-h" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#d9480f"/></marker>
+        <marker id="pr-m" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#bbb"/></marker>
+      </defs>
+    </svg>
+
+    <h2>取消原理</h2>
+    <p>一句话：<b>取消</b>就是在 Redis 里写一个键 <code>run:cancel:{run}</code>。谁在跑这个 run，谁就在自己的安全点看见它、自己收尾；挂起中的 run 没有进程在跑，由接到请求的执行器当场收尾。取消是<b>协作式</b>的：不硬打断正在执行的工具，在帧与帧之间停下。下面四张图，场景同上面的时序图：父 run 在跑，它派出的子 run 挂起等审批，用户点「停止」。橙色是这个场景实际走的路，灰色虚线是没走的分支。</p>
+
+    <h3>图 1　一次取消分几条路：看 run 此刻在哪</h3>
+    <svg width="1240" viewBox="0 0 1240 410" role="img" aria-label="一次取消分几条路">
+      <rect class="node" x="20" y="30" width="190" height="64" rx="4"/>
+      <text class="t-name" x="115.0" y="58.0">员工点「停止」</text>
+      <text class="t-sub" x="115.0" y="78.0">控制台</text>
+      <path class="e" d="M210 62 H248" marker-end="url(#pr-a)"/>
+      <rect class="node" x="250" y="30" width="270" height="64" rx="4"/>
+      <text class="t-name" x="385.0" y="58.0">提交取消</text>
+      <text class="t-sub" x="385.0" y="78.0">POST /v1/runs/{run}/cancel</text>
+      <path class="e" d="M520 62 H558" marker-end="url(#pr-a)"/>
+      <rect class="node" x="560" y="30" width="260" height="64" rx="4"/>
+      <text class="t-name" x="690.0" y="58.0">RunService.cancel</text>
+      <text class="t-sub" x="690.0" y="78.0">已结束：只级联子孙，一个都没有才 409</text>
+      <path class="e-hot" d="M820 62 H858" marker-end="url(#pr-h)"/>
+      <rect class="node" x="860" y="30" width="360" height="64" rx="4"/>
+      <text class="t-name hot" x="1040.0" y="58.0">写取消位</text>
+      <text class="t-sub" x="1040.0" y="78.0">SET run:cancel:{run} 1 EX 3600 · 重复写无害</text>
+      <path class="e-hot" d="M690 94 V118 H170 V148" marker-end="url(#pr-h)"/>
+      <text class="t-hot mid" x="430" y="112">再逐层取消还没结束的子孙 run</text>
+      <rect class="node" x="20" y="150" width="300" height="64" rx="4"/>
+      <text class="t-name" x="170.0" y="178.0">逐层级联子孙 run</text>
+      <text class="t-sub" x="170.0" y="198.0">子智能体可以再派子智能体：一直往下走</text>
+      <path class="e-hot" d="M170 214 V279 H468" marker-end="url(#pr-h)"/>
+      <text class="t-hot" x="184" y="262">每个子 run 都走一遍</text>
+      <path class="e-hot" d="M1040 94 V128 H560 V231" marker-end="url(#pr-h)"/>
+      <text class="t-hot mid" x="800" y="122">执行器看 run 此刻的状态</text>
+      <polygon class="node" points="470,279 560,233 650,279 560,325"/>
+      <text class="t-name mid" x="560" y="275">run 此刻</text>
+      <text class="t-name mid" x="560" y="295">在哪？</text>
+      <path class="e-hot" d="M650 279 H680 V192 H708" marker-end="url(#pr-h)"/>
+      <path class="e-mute" d="M680 250 H708" marker-end="url(#pr-m)"/>
+      <path class="e-hot" d="M680 279 V308 H708" marker-end="url(#pr-h)"/>
+      <path class="e-mute" d="M680 308 V366 H708" marker-end="url(#pr-m)"/>
+      <rect class="node" x="710" y="168" width="510" height="48" rx="4"/>
+      <text class="t-name" x="965.0" y="188.0">running · 原生智能体</text>
+      <text class="t-sub" x="965.0" y="208.0">runner 每一帧之前查一次，到安全点自己收尾 → 图 2、图 3</text>
+      <rect class="ghost" x="710" y="226" width="510" height="48" rx="4"/>
+      <text class="t-ghost mid" x="965.0" y="246.0">running · CLI 智能体</text>
+      <text class="t-mute mid" x="965.0" y="266.0">CLI 运行时空闲时查一次，请 bridge 去取消 → 图 4</text>
+      <rect class="node" x="710" y="284" width="510" height="48" rx="4"/>
+      <text class="t-name" x="965.0" y="304.0">suspended · 挂起中</text>
+      <text class="t-sub" x="965.0" y="324.0">没有进程会看见取消位：执行器当场收尾 → 图 3</text>
+      <rect class="ghost" x="710" y="342" width="510" height="48" rx="4"/>
+      <text class="t-ghost mid" x="965.0" y="362.0">queued · 排队中</text>
+      <text class="t-mute mid" x="965.0" y="382.0">不处理：等被领走、装配完，跑到第一帧时才看见</text>
+      <g class="badge"><circle cx="860" cy="30" r="10"/><text x="860" y="34">1</text></g>
+      <g class="badge"><circle cx="20" cy="150" r="10"/><text x="20" y="154">2</text></g>
+      <g class="badge"><circle cx="470" cy="279" r="10"/><text x="470" y="283">3</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>执行器写取消位：一个 Redis 键，1 小时过期。重复写没有副作用，所以级联时对在跑的父 run 再写一遍也无妨。</li>
+      <li><span class="n">2</span><code>RunService.cancel</code> 写完这个 run，再逐层找还没结束的子孙 run（<code>unfinished_children_of</code>），每个都走一遍同样的流程。父 run 已经结束也要做：页面上的「停止」针对的是父 run，直接回 409 的话，还在跑的子 run 永远停不掉；一个子孙都没有才回 409。</li>
+      <li><span class="n">3</span>执行器只在 run <b>挂起中</b>时当场收尾。在跑的交给跑它的那个实例自己看见，那个实例不一定是接到请求的这个；排队中的什么都不做。场景里父 run 走第一条（原生、在跑），子 run 走第三条（挂起中）。</li>
+    </ol>
+
+    <h3>图 2　原生智能体：只在图吐出帧时检查</h3>
+    <svg width="1240" viewBox="0 0 1240 320" role="img" aria-label="原生智能体：只在帧之间检查">
+      <rect class="bnd" x="20" y="20" width="1200" height="290" rx="6"/>
+      <text class="t-head" x="36" y="46">runner 的主循环：async for frame in graph.astream(…) —— 每一帧之前先 is_cancelled()</text>
+      <text class="t-key" x="36" y="107">图吐出的帧</text>
+      <text class="t-key" x="36" y="167">取消位检查</text>
+      <rect class="node" x="150" y="84" width="12" height="36" rx="2"/>
+      <path class="e" d="M156 150 V172"/>
+      <rect class="node" x="170" y="84" width="12" height="36" rx="2"/>
+      <path class="e" d="M176 150 V172"/>
+      <rect class="node" x="190" y="84" width="12" height="36" rx="2"/>
+      <path class="e" d="M196 150 V172"/>
+      <rect class="node" x="210" y="84" width="12" height="36" rx="2"/>
+      <path class="e" d="M216 150 V172"/>
+      <rect class="node" x="230" y="84" width="12" height="36" rx="2"/>
+      <path class="e" d="M236 150 V172"/>
+      <rect class="node" x="250" y="84" width="12" height="36" rx="2"/>
+      <path class="e" d="M256 150 V172"/>
+      <rect class="node" x="270" y="84" width="12" height="36" rx="2"/>
+      <path class="e" d="M276 150 V172"/>
+      <rect class="node" x="290" y="84" width="12" height="36" rx="2"/>
+      <path class="e" d="M296 150 V172"/>
+      <rect class="node" x="310" y="84" width="12" height="36" rx="2"/>
+      <path class="e" d="M316 150 V172"/>
+      <rect class="node" x="330" y="84" width="12" height="36" rx="2"/>
+      <path class="e" d="M336 150 V172"/>
+      <rect class="node" x="350" y="84" width="12" height="36" rx="2"/>
+      <path class="e" d="M356 150 V172"/>
+      <rect class="node" x="370" y="84" width="12" height="36" rx="2"/>
+      <path class="e" d="M376 150 V172"/>
+      <text class="t-lab mid" x="270" y="196">模型逐个吐 token（messages 帧）</text>
+      <rect class="node" x="410" y="84" width="130" height="36" rx="2"/>
+      <text class="t-sub" x="475" y="107">updates：tool_calls</text>
+      <path class="e" d="M475 150 V172"/>
+      <rect class="gap" x="560" y="84" width="400" height="36" rx="3"/>
+      <text class="t-hot mid" x="760" y="100">工具执行中：图里没有帧</text>
+      <text class="t-hot mid" x="760" y="115">Shell 命令、MCP 调用、读写文件都是这样</text>
+      <text class="t-hot mid b" x="760" y="167">盲区：没有检查点</text>
+      <rect class="node" x="980" y="84" width="110" height="36" rx="2"/>
+      <text class="t-sub" x="1035" y="107">updates：结果</text>
+      <path class="e-hot" d="M1035 148 V174"/>
+      <rect class="ghost" x="1110" y="84" width="12" height="36" rx="2"/>
+      <rect class="ghost" x="1130" y="84" width="12" height="36" rx="2"/>
+      <rect class="ghost" x="1150" y="84" width="12" height="36" rx="2"/>
+      <rect class="ghost" x="1170" y="84" width="12" height="36" rx="2"/>
+      <text class="t-mute mid" x="1160" y="140">不会再有</text>
+      <path class="e-link" d="M585 70 V230"/>
+      <text class="t-hot mid b" x="585" y="250">用户点「停止」：取消位已写</text>
+      <text class="t-hot mid b" x="1035" y="196">下一帧才看见</text>
+      <path class="e-hot" d="M1035 204 V226" marker-end="url(#pr-h)"/>
+      <rect class="node" x="820" y="228" width="390" height="64" rx="4"/>
+      <text class="t-name" x="1015.0" y="256.0">usage.updated → run.cancelled → return</text>
+      <text class="t-sub" x="1015.0" y="276.0">退出循环：图里没跑完的节点随之被取消</text>
+      <text class="t-lab" x="150" y="250">在吐 token 时点「停止」：</text>
+      <text class="t-lab" x="150" y="270">下一个 token 之前就停</text>
+      <g class="badge"><circle cx="150" cy="84" r="10"/><text x="150" y="88">1</text></g>
+      <g class="badge"><circle cx="585" cy="70" r="10"/><text x="585" y="74">2</text></g>
+      <g class="badge"><circle cx="1035" cy="174" r="10"/><text x="1035" y="178">3</text></g>
+      <g class="badge"><circle cx="820" cy="228" r="10"/><text x="820" y="232">4</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>runner 每收到一帧（模型的 token、状态更新、审批这类自定义事件），先经注入的取消令牌查一次取消位；引擎只认令牌，不认识 Redis。Redis 查不到时按未取消处理，下一帧再查。</li>
+      <li><span class="n">2</span>工具在执行时点「停止」，图里没有帧，也就没有检查点：要等这个工具返回、图吐出下一帧才停。Shell 命令、MCP 调用、读写文件都一样；并行的一批工具里，先返回的那个会带来一帧。</li>
+      <li><span class="n">3</span>看见之后：先补记这一段已经花掉的 token（<code>usage.updated</code>），再产出 <code>run.cancelled</code>（带已经吐出的字数），然后 return。</li>
+      <li><span class="n">4</span>退出 astream 循环，图里还没完成的节点随之被取消：模型的流式请求断开；同一批里还在跑的工具收到 <code>CancelledError</code>，Shell 工具据此到沙箱里中断那条命令（execd interrupt），不会留一个没人管的进程。段内复用的 MCP 会话在收尾时关掉，收尾本身屏蔽了取消。</li>
+    </ol>
+
+    <h3>图 3　收尾：两条路写下同样的终态</h3>
+    <svg width="1240" viewBox="0 0 1240 440" role="img" aria-label="收尾：两条路写下同样的终态">
+      <rect class="node" x="20" y="30" width="590" height="290"/>
+      <rect class="head" x="21" y="31" width="588" height="31"/>
+      <text class="t-head" x="34" y="52">在跑的 run：runner 停下之后，段收尾</text>
+      <line class="sep" x1="20" y1="62" x2="610" y2="62"/>
+      <text class="t-key" x="34" y="86">消息</text>
+      <text x="110" y="86">已完成的模型发言、工具结果：照常落库</text>
+      <text x="110" y="108">发出了、没拿到结果的调用：补一条 is_error 的结果</text>
+      <rect class="gap" x="104" y="116" width="496" height="26" rx="3"/>
+      <text class="t-hot" x="112" y="134">「工具执行被中断，结果未知（上一轮未正常结束）。」</text>
+      <text x="110" y="162">说到一半的文字：不是完整的消息，不进历史，只在事件里</text>
+      <line class="sep" x1="20" y1="176" x2="610" y2="176"/>
+      <text class="t-key" x="34" y="200">run 行</text>
+      <text x="110" y="200">status = cancelled，用量照常累加</text>
+      <text x="110" y="222">围栏：租约还在本实例才写，被接管了整个收尾回滚</text>
+      <line class="sep" x1="20" y1="236" x2="610" y2="236"/>
+      <text class="t-key" x="34" y="260">然后</text>
+      <text x="110" y="260">事件归档 → 提交 → 发布 run.cancelled</text>
+      <text x="110" y="282">最后才清取消位、放会话锁</text>
+      <text class="t-lab" x="110" y="304">先落库再发布：前端看到 run.cancelled 时，库里已经是 cancelled</text>
+      <rect class="node" x="630" y="30" width="590" height="290"/>
+      <rect class="head" x="631" y="31" width="588" height="31"/>
+      <text class="t-head" x="644" y="52">挂起中的 run：执行器当场收尾（settle_cancelled）</text>
+      <line class="sep" x1="630" y1="62" x2="1220" y2="62"/>
+      <text class="t-key" x="644" y="86">进程</text>
+      <text x="720" y="86">什么都不跑：不装图、不调模型</text>
+      <text x="720" y="108">消息在挂起的那一段收尾时就已经落库</text>
+      <line class="sep" x1="630" y1="122" x2="1220" y2="122"/>
+      <text class="t-key" x="644" y="146">run 行</text>
+      <text x="720" y="146">status = cancelled，用量不动（空字典 = 不动账）</text>
+      <line class="sep" x1="630" y1="160" x2="1220" y2="160"/>
+      <text class="t-key" x="644" y="184">然后</text>
+      <text x="720" y="184">造一个 run.cancelled，序号在落库前盖好</text>
+      <text x="720" y="206">归档 → 提交 → 发布；清取消位、放会话锁</text>
+      <line class="sep" x1="630" y1="220" x2="1220" y2="220"/>
+      <text class="t-key" x="644" y="244">审批</text>
+      <text x="720" y="244">它挂着的审批同一个事务里作废：弹窗随之消失</text>
+      <line class="sep" x1="630" y1="258" x2="1220" y2="258"/>
+      <rect class="gap" x="714" y="266" width="496" height="44" rx="3"/>
+      <text class="t-key" x="644" y="293">还悬空</text>
+      <text class="t-hot" x="722" y="293">waiting_on 里的调用，在消息里仍然没有结果：下一轮补</text>
+      <path class="e-mute" d="M315 320 V358" marker-end="url(#pr-m)"/>
+      <path class="e-hot" d="M962 310 V358" marker-end="url(#pr-h)"/>
+      <rect class="node" x="20" y="360" width="1200" height="64" rx="4"/>
+      <text class="t-name" x="620.0" y="388.0">下一轮进图时：PatchToolCalls（before_agent）</text>
+      <text class="t-sub" x="620.0" y="408.0">历史里还悬空、又不在本轮 waiting_on 里的调用，补一条「was cancelled」—— 主要接住挂起中被取消的那些</text>
+      <g class="badge"><circle cx="20" cy="30" r="10"/><text x="20" y="34">1</text></g>
+      <g class="badge"><circle cx="630" cy="30" r="10"/><text x="630" y="34">2</text></g>
+      <g class="badge"><circle cx="20" cy="360" r="10"/><text x="20" y="364">3</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>在跑的 run：段收尾把还没落检查点的消息落库，发出了、没拿到结果的调用补一条「中断，结果未知」——不删那个调用，删了等于告诉模型「没发生过」，它会原样再做一遍。run 行写成 cancelled，先落库、再发布 <code>run.cancelled</code>，最后清取消位、放会话锁。</li>
+      <li><span class="n">2</span>挂起中的 run：<code>settle_cancelled</code> 不装图、不跑任何东西，造一个 <code>run.cancelled</code>，和 run 行的终态、它挂着的审批作废同一个事务落库，再发布、清取消位、放会话锁。不当场收的话，run 一直躺在挂起状态，会话锁也一直不放，用户连下一句都发不出。</li>
+      <li><span class="n">3</span>挂起中被取消的 run，<code>waiting_on</code> 里的调用在消息里仍然没有结果。下一轮进图时它们已经不在新 run 的 <code>waiting_on</code> 里，<code>PatchToolCallsMiddleware</code> 补一条「was cancelled」，模型看到的历史始终合法（每个 tool_use 恰好一条结果）。</li>
+    </ol>
+
+    <h3>图 4　CLI 智能体：取消在 Pod 里走完</h3>
+    <svg width="1240" viewBox="0 0 1240 470" role="img" aria-label="CLI 智能体：取消在 Pod 里走完">
+      <rect class="bnd" x="20" y="20" width="330" height="440" rx="6"/>
+      <text class="t-head" x="36" y="44">Agent 服务 · CLI 运行时</text>
+      <rect class="bnd" x="430" y="20" width="390" height="440" rx="6"/>
+      <text class="t-head" x="446" y="44">会话 Pod · bridge（Turn）</text>
+      <rect class="bnd" x="860" y="20" width="360" height="440" rx="6"/>
+      <text class="t-head" x="876" y="44">会话 Pod · CLI（Claude Code 等）</text>
+      <rect class="node" x="36" y="64" width="298" height="56" rx="4"/>
+      <text class="t-name" x="185.0" y="88.0">队列 0.5 秒没取到消息</text>
+      <text class="t-sub" x="185.0" y="108.0">收到事件、通知时 continue，不查</text>
+      <path class="e" d="M185 120 V142" marker-end="url(#pr-a)"/>
+      <rect class="node" x="36" y="144" width="298" height="56" rx="4"/>
+      <text class="t-name hot" x="185.0" y="168.0">查取消位：已取消</text>
+      <text class="t-sub" x="185.0" y="188.0">relay.is_cancelled(run)</text>
+      <path class="e-hot" d="M334 172 H448" marker-end="url(#pr-h)"/>
+      <text class="t-hot mid b" x="391" y="164">turn.cancel</text>
+      <text class="t-hot mid" x="391" y="190">只发一次</text>
+      <rect class="node" x="450" y="144" width="350" height="56" rx="4"/>
+      <text class="t-name" x="625.0" y="168.0">Turn.begin_cancel</text>
+      <text class="t-sub" x="625.0" y="188.0">state = cancelling，推 turn.state</text>
+      <path class="e-hot" d="M625 200 V222" marker-end="url(#pr-h)"/>
+      <rect class="node" x="450" y="224" width="350" height="56" rx="4"/>
+      <text class="t-name" x="625.0" y="248.0">挂起的权限询问全部回 cancelled</text>
+      <text class="t-sub" x="625.0" y="268.0">并向平台撤回；取消期间的新询问直接回 cancelled</text>
+      <path class="e-hot" d="M625 280 V302" marker-end="url(#pr-h)"/>
+      <rect class="node" x="450" y="304" width="350" height="56" rx="4"/>
+      <text class="t-name" x="625.0" y="328.0">ACP session/cancel（通知）</text>
+      <text class="t-sub" x="625.0" y="348.0">同时开始 15 秒宽限计时</text>
+      <path class="e-hot" d="M800 332 H888" marker-end="url(#pr-h)"/>
+      <rect class="node" x="890" y="304" width="310" height="56" rx="4"/>
+      <text class="t-name" x="1045.0" y="328.0">停下手上的事</text>
+      <text class="t-sub" x="1045.0" y="348.0">session/prompt 以 stopReason = cancelled 返回</text>
+      <path class="e-hot" d="M1045 360 V412 H802" marker-end="url(#pr-h)"/>
+      <rect class="node" x="450" y="384" width="350" height="56" rx="4"/>
+      <text class="t-name" x="625.0" y="408.0">Cancelled → turn.ended</text>
+      <text class="t-sub" x="625.0" y="428.0">结束只宣告一次：先到的生效</text>
+      <path class="e-hot" d="M450 412 H336" marker-end="url(#pr-h)"/>
+      <rect class="node" x="36" y="384" width="298" height="56" rx="4"/>
+      <text class="t-name" x="185.0" y="408.0">翻成 run.cancelled</text>
+      <text class="t-sub" x="185.0" y="428.0">→ 段收尾（同图 3 左）</text>
+      <path class="e-mute" d="M800 318 H845 V200 H888" marker-end="url(#pr-m)"/>
+      <rect class="ghost" x="890" y="144" width="310" height="112" rx="4"/>
+      <text class="t-ghost" x="904" y="168">宽限到点还没结果</text>
+      <text class="t-mute" x="904" y="192">判定 agent 坏了（cancel_unanswered）</text>
+      <text class="t-mute" x="904" y="212">重启 CLI 进程，恢复同一个会话</text>
+      <text class="t-mute" x="904" y="232">这一轮记为失败，不是取消</text>
+      <rect class="ghost" x="36" y="224" width="298" height="136" rx="4"/>
+      <text class="t-ghost" x="50" y="248">断线期间收到取消</text>
+      <text class="t-mute" x="50" y="272">重连循环里先查取消位：不再重连，</text>
+      <text class="t-mute" x="50" y="292">直接以取消收尾</text>
+      <text class="t-mute" x="50" y="316">bridge 上没结束的那一轮，由下一轮的</text>
+      <text class="t-mute" x="50" y="336">turn.start 先取消掉（TURN_BUSY）</text>
+      <g class="badge"><circle cx="36" cy="64" r="10"/><text x="36" y="68">1</text></g>
+      <g class="badge"><circle cx="391" cy="136" r="10"/><text x="391" y="140">2</text></g>
+      <g class="badge"><circle cx="450" cy="144" r="10"/><text x="450" y="148">3</text></g>
+      <g class="badge"><circle cx="890" cy="304" r="10"/><text x="890" y="308">4</text></g>
+      <g class="badge"><circle cx="890" cy="144" r="10"/><text x="890" y="148">5</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>CLI 运行时的循环每次最多等 0.5 秒取一条 bridge 发来的消息，只有一条都没取到时才查取消位。</li>
+      <li><span class="n">2</span>看见取消就发 <code>turn.cancel</code>（只发一次），然后照常收消息，等 bridge 宣告这一轮结束。</li>
+      <li><span class="n">3</span>bridge 的 Turn 进入取消：挂起的权限询问全部回 cancelled 并向平台撤回，给 CLI 发 ACP 的 <code>session/cancel</code>，同时开始 15 秒宽限。</li>
+      <li><span class="n">4</span>CLI 停下，<code>session/prompt</code> 以 <code>stopReason = cancelled</code> 返回 → <code>turn.ended</code> → CLI 运行时翻成 <code>run.cancelled</code>，和原生一样走段收尾。取消期间 CLI 若以别的原因正常结束，以它的实际结果为准（completed）。</li>
+      <li><span class="n">5</span>宽限到点还没结果：判定 agent 坏了，bridge 重启 CLI 进程、恢复同一个会话，这一轮记为失败。断线期间收到取消则不再重连，直接以取消收尾。</li>
+    </ol>
+
+    <h3>为什么这样做</h3>
+    <table>
+      <thead><tr><th>做法</th><th>为什么</th></tr></thead>
+      <tbody>
+        <tr><td>取消位是 Redis 里的一个键，不是去 cancel 那个 asyncio.Task</td><td>跑这个 run 的可能是任何一个实例，接到请求的进程不一定持有它；续跑、接管之后还会换实例。一个键谁都能写、谁都能读，进程重启也不丢；而且天然幂等，级联时重复写无害。</td></tr>
+        <tr><td>协作式：在帧之间停，不硬打断正在执行的工具</td><td>硬打断会留下半截副作用（写了一半的文件、发出去一半的请求），而且结果未知。在帧之间停下，已经完成的模型发言和工具结果都能完整落库。代价是长工具执行期间看不见取消（图 2 的盲区）。</td></tr>
+        <tr><td>挂起中的由执行器当场收尾</td><td>没有进程会读到取消位。不当场收，run 会一直躺在挂起状态，直到某个子 run 恰好跑完来唤醒它，而子 run 可能要跑一小时。不等子 run：它已经被级联取消，会自己收尾。</td></tr>
+        <tr><td>逐层级联，父已结束也要做</td><td>子智能体能再派子智能体，只取消直接子 run 的话，孙 run 还在跑，跑完还会去叫醒一个已经被取消的父 run。</td></tr>
+        <tr><td>被中断的调用补「结果未知」，不删那个 tool_use</td><td>删掉等于告诉模型这次调用没发生过，它会原样再做一遍，而中断的工具可能已经产生了副作用；如实说「中断，结果未知」，它才有机会先去确认状态。</td></tr>
+        <tr><td>先落库再发布 run.cancelled</td><td>前端看到 run.cancelled 时库里已经是 cancelled，不会出现「停了，刷新后却读到还在跑」。</td></tr>
+        <tr><td>查取消位失败按未取消处理</td><td>Redis 抖一下不该让在跑的 run 失败；代价只是那一帧没看见，下一帧再查。</td></tr>
+        <tr><td>CLI 的取消交给 bridge 去走</td><td>平台看不到 CLI 内部的工具调用，只能请 bridge 转告 CLI；权限询问、宽限、重启都在 Pod 里处理，平台只等「这一轮结束了」。</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+
 </main>
 
 <script>
