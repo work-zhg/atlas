@@ -41,6 +41,7 @@ pytestmark = pytest.mark.usefixtures("clean_db")
 PARENT_MODEL = "claude-sonnet-5"
 CHILD_MODEL = "claude-haiku-4-5"
 
+
 def _task_call(brief: str, name: str, call_id: str) -> AIMessageChunk:
     args = json.dumps({"description": brief, "subagent_type": name}, ensure_ascii=False)
     return tool_call_chunk("task", args, call_id)
@@ -56,9 +57,7 @@ def make_app(parent: TurnModel, child: TurnModel):
         # 标题/摘要模型不在脚本里 —— 回落到子模型，它们的输出本测试不看。
         return models.get(model_spec.model, child)
 
-    app.state.executor = build_executor(
-        get_sessionmaker(), settings, model_builder=builder
-    )
+    app.state.executor = build_executor(get_sessionmaker(), settings, model_builder=builder)
     return app
 
 
@@ -67,9 +66,7 @@ async def client_factory():
     clients: list[httpx.AsyncClient] = []
     executors: list[RunWorker] = []
 
-    async def make(
-        parent: TurnModel, child: TurnModel
-    ) -> tuple[httpx.AsyncClient, RunWorker]:
+    async def make(parent: TurnModel, child: TurnModel) -> tuple[httpx.AsyncClient, RunWorker]:
         app = make_app(parent, child)
         c = httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test", headers=AS_USER
@@ -150,9 +147,7 @@ async def events_of(run_id: str) -> list:
     from atlas_agent.db.models import RunEvent
 
     async with get_sessionmaker()() as session:
-        stmt = (
-            select(RunEvent).where(RunEvent.run_uuid == UUID(run_id)).order_by(RunEvent.seq)
-        )
+        stmt = select(RunEvent).where(RunEvent.run_uuid == UUID(run_id)).order_by(RunEvent.seq)
         return list((await session.execute(stmt)).scalars())
 
 
@@ -643,3 +638,151 @@ async def test_a_suspended_run_still_holds_the_thread(client_factory) -> None:
     )
     assert second.status_code == 409, second.text
     assert second.json()["error"]["kind"] == "thread_locked"
+
+
+# ──────────────────────────────────────────────── 续跑的竞态（改造计划 A2 的验收）
+
+
+def _parallel_parent() -> TurnModel:
+    """一轮里同时派两个子智能体，第二轮拿着两份结论收尾。"""
+    both = AIMessageChunk(
+        content="",
+        tool_call_chunks=[
+            {
+                "name": "task",
+                "args": json.dumps({"description": "写排序", "subagent_type": "coder"}),
+                "id": "c1",
+                "index": 0,
+            },
+            {
+                "name": "task",
+                "args": json.dumps({"description": "写测试", "subagent_type": "tester"}),
+                "id": "c2",
+                "index": 1,
+            },
+        ],
+    )
+    return TurnModel(scripts=[[both], [AIMessageChunk(content="两边都做完了。")]])
+
+
+async def _two_subagents_thread(client: httpx.AsyncClient) -> str:
+    subagent = {"model": {"model": CHILD_MODEL}, "session_mode": "ephemeral"}
+    agent = await client.post(
+        "/v1/agents",
+        json={
+            "slug": "fanout",
+            "name": "并行委派",
+            "spec": {
+                "system_prompt": "你会并行委派。",
+                "model": {"model": PARENT_MODEL},
+                "tool_names": ["task"],
+                "subagents": [
+                    {
+                        "name": "coder",
+                        "description": "写代码",
+                        "system_prompt": "coder",
+                        **subagent,
+                    },
+                    {
+                        "name": "tester",
+                        "description": "写测试",
+                        "system_prompt": "tester",
+                        **subagent,
+                    },
+                ],
+            },
+        },
+    )
+    assert agent.status_code == 201, agent.text
+    return (await client.post("/v1/threads", json={"agent_id": agent.json()["id"]})).json()["id"]
+
+
+async def test_a_child_that_finishes_before_the_parent_suspends_does_not_strand_it(
+    client_factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """验收（A2）：子 run 在父 run 挂起落库之前就结束了，父 run 不卡住。
+
+    子 run 结束时去唤醒父 run，父还是 running，CAS 落空；父随后落成 suspended。没有「落库后再查
+    一次」的话就再没人叫它，只能等周期补扫（这里不跑补扫）。用例把父 run 的挂起落库挡到子 run 结束
+    之后，确保真的走进了这个窗口。
+    """
+    from atlas_agent.repositories.run_record import RunRecordRepository
+
+    original = RunRecordRepository.suspend
+    child_done_first: list[bool] = []
+
+    async def late_suspend(self: Any, run_id: UUID, **kw: Any) -> Any:
+        deadline = asyncio.get_running_loop().time() + 10
+        done = False
+        while not done and asyncio.get_running_loop().time() < deadline:
+            async with get_sessionmaker()() as session:
+                kids = list(
+                    await session.scalars(select(Run.status).where(Run.parent_run_uuid == run_id))
+                )
+            done = bool(kids) and all(k in TERMINAL for k in kids)
+            if not done:
+                await asyncio.sleep(0.05)
+        child_done_first.append(done)
+        return await original(self, run_id, **kw)
+
+    monkeypatch.setattr(RunRecordRepository, "suspend", late_suspend)
+    parent = _delegating_parent()
+    client, _ = await client_factory(parent, TurnModel(scripts=[[AIMessageChunk(content="42")]]))
+    run_id = await start_run(client, await setup_thread(client), "帮我写个排序函数")
+
+    final = await wait_status(client, run_id, TERMINAL)
+    assert child_done_first == [True], "没走进「子先结束」的窗口"
+    assert final["status"] == "succeeded", final
+    assert parent.call_count == 2
+
+
+async def test_children_finishing_together_resume_the_parent_once(
+    client_factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """验收（A2）：几个子 run 同时结束，父 run 只续跑一次。
+
+    续跑就是 CAS 把 suspended 放回 queued：同时到的几次唤醒只有一个抢得到。用例让发给父 run 的
+    唤醒两两凑齐了再一起放行，确保真的并发。
+    """
+    from atlas_agent.executor.continuation import Continuation
+    from atlas_agent.repositories.run_queue import RunQueue
+
+    original_resume = Continuation.resume_if_ready
+    original_requeue = RunQueue.requeue
+    parent_id: list[UUID] = []
+    waiting: list[asyncio.Event] = []
+    requeued: list[bool] = []
+
+    async def together(self: Any, run_id: UUID) -> bool:
+        if parent_id and run_id == parent_id[0]:
+            gate = asyncio.Event()
+            waiting.append(gate)
+            if len(waiting) % 2 == 0:
+                for g in waiting[-2:]:
+                    g.set()
+            await asyncio.wait({asyncio.ensure_future(gate.wait())}, timeout=3)
+        return await original_resume(self, run_id)
+
+    async def counted(self: Any, run_id: UUID) -> bool:
+        ok = await original_requeue(self, run_id)
+        if parent_id and run_id == parent_id[0]:
+            requeued.append(ok)
+        return ok
+
+    monkeypatch.setattr(Continuation, "resume_if_ready", together)
+    monkeypatch.setattr(RunQueue, "requeue", counted)
+    parent = _parallel_parent()
+    child = TurnModel(
+        scripts=[[AIMessageChunk(content="排好了")], [AIMessageChunk(content="测好了")]]
+    )
+    client, _ = await client_factory(parent, child)
+    thread_id = await _two_subagents_thread(client)
+    run_id = await start_run(client, thread_id, "并行写排序和测试")
+    parent_id.append(UUID(run_id))
+
+    final = await wait_status(client, run_id, TERMINAL)
+    assert final["status"] == "succeeded", final
+    assert parent.call_count == 2  # 一段发委派、一段收尾：没有多跑一段
+    assert requeued.count(True) == 1, requeued
+    resumed = [e for e in await events_of(run_id) if e.type == "run.resumed"]
+    assert len(resumed) == 1
