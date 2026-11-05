@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Atlas Agent 平台介绍</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --border: #d1d9e0; --head: #f6f8fa;
+    --accent: #0969da; --ok: #1a7f37; --ok-bg: #dafbe1; --warn: #9a6700; --warn-bg: #fff8c5;
+    --bad: #cf222e; --bad-bg: #ffebe9; --code-bg: #f6f8fa; --hl: #bc4c00;
+    --b1: #ddf4ff; --b1d: #54aeff; --b2: #fbefff; --b2d: #c297ff; --b3: #dafbe1; --b3d: #4ac26b;
+    --b4: #fff8c5; --b4d: #d4a72c; --b5: #ffebe9; --b5d: #ff8182;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --border: #3d444d; --head: #151b23;
+      --accent: #4493f8; --ok: #3fb950; --ok-bg: #12261e; --warn: #d29922; --warn-bg: #2b2111;
+      --bad: #f85149; --bad-bg: #2d1214; --code-bg: #151b23; --hl: #f0883e;
+      --b1: #12263f; --b1d: #1f6feb; --b2: #271a36; --b2d: #8957e5; --b3: #12261e; --b3d: #2ea043;
+      --b4: #2b2111; --b4d: #9e6a03; --b5: #2d1214; --b5d: #da3633;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 32px; background: var(--bg); color: var(--fg);
+         font: 14px/1.75 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif; }
+  main { max-width: 1120px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 48px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 15.5px; margin: 24px 0 8px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .sub { color: var(--muted); margin: 0 0 14px; }
+  code { font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code-bg); padding: 1px 4px; border-radius: 4px; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0 16px; }
+  th, td { border: 1px solid var(--border); padding: 7px 10px; vertical-align: top; text-align: left; }
+  th { background: var(--head); white-space: nowrap; }
+  td.k { white-space: nowrap; font-weight: 600; }
+  .callout { border-left: 4px solid var(--accent); background: var(--head); padding: 10px 14px; border-radius: 4px; margin: 14px 0; }
+  .lead { font-size: 15px; }
+  .toc { columns: 2; padding-left: 22px; }
+  .fig { border: 1px solid var(--border); border-radius: 6px; padding: 10px; overflow-x: auto; margin: 12px 0 6px; }
+  .cap { color: var(--muted); font-size: 12.5px; margin: 0 0 18px; text-align: center; }
+  svg text { fill: var(--fg); font-size: 12px; font-family: -apple-system, "PingFang SC", sans-serif; }
+  svg .s { font-size: 11px; fill: var(--muted); }
+  svg .b { font-weight: 600; }
+  svg .tl { font-size: 13.5px; font-weight: 600; }
+  svg .c1 { fill: var(--b1); stroke: var(--b1d); } svg .c2 { fill: var(--b2); stroke: var(--b2d); }
+  svg .c3 { fill: var(--b3); stroke: var(--b3d); } svg .c4 { fill: var(--b4); stroke: var(--b4d); }
+  svg .c5 { fill: var(--b5); stroke: var(--b5d); }
+  svg .inner { fill: var(--bg); stroke: var(--border); }
+  svg .frame { fill: none; stroke: var(--muted); }
+  svg .ln { stroke: var(--fg); stroke-width: 1.3; fill: none; }
+  svg .dash { stroke-dasharray: 5 4; }
+  svg .arw { fill: var(--fg); }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <marker id="ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="arw" d="M0,0 L8,4 L0,8 z"/></marker>
+</defs></svg>
+<main>
+<h1>Atlas Agent 平台介绍</h1>
+<p class="sub">日期：2026-11-04 · 配套的 C4 图在 <a target="_blank" rel="noopener" href="../../c4-model/agent/system-context.html">c4-model/agent/</a></p>
+
+<div class="callout lead">
+Agent 平台管智能体的<b>配置、会话和执行</b>。它用同一套会话、审批、事件流和容错机制，同时跑两种智能体：在服务进程里执行的<b>原生智能体</b>，以及跑在沙箱里、由 bridge 接进来的<b>外部 CLI 智能体</b>（如 Claude Code）。它按长任务设计：没有到点结束的超时，等人的时候不占进程，实例挂了别的实例接着跑。
+</div>
+
+<ol class="toc">
+  <li><a href="#s1">它是什么</a></li>
+  <li><a href="#s2">几个基本概念</a></li>
+  <li><a href="#s3">由哪些部分组成</a></li>
+  <li><a href="#s4">原理</a></li>
+</ol>
+
+<!-- ============================================================ -->
+<h2 id="s1">1　它是什么</h2>
+
+<p>员工在控制台里创建、配置智能体，和它对话；业务应用（如 AI TeamFlow）引用智能体，经会话下发任务、取回输出。每一轮对话在后台执行，模型的输出、工具调用、子智能体的过程实时推到控制台。</p>
+<p>平台自己不托管模型、工具和知识。模型平台、MCP 网关、知识库服务、技能应用、记忆服务都是独立部署的同级服务，Agent 平台按智能体的 Key 或签名令牌去调用。用户、组织和权限以用户中心为准。执行命令用的沙箱由开源的 OpenSandbox 在 K8s 里按需创建。</p>
+
+<div class="fig">
+<svg viewBox="0 0 1080 430" width="100%" role="img" aria-label="Agent 平台和周边系统">
+  <rect x="290" y="16" width="220" height="60" rx="6" class="c1"/>
+  <text x="400" y="41" text-anchor="middle" class="b">员工</text>
+  <text x="400" y="61" text-anchor="middle" class="s">在控制台配置智能体、对话、做决定</text>
+  <rect x="570" y="16" width="220" height="60" rx="6" class="c1"/>
+  <text x="680" y="41" text-anchor="middle" class="b">业务应用（如 AI TeamFlow）</text>
+  <text x="680" y="61" text-anchor="middle" class="s">引用智能体，经会话下发任务</text>
+
+  <rect x="240" y="140" width="600" height="96" rx="8" class="c2"/>
+  <text x="540" y="170" text-anchor="middle" class="tl">Agent 平台</text>
+  <text x="540" y="194" text-anchor="middle" class="s">智能体的配置、会话与执行</text>
+  <text x="540" y="214" text-anchor="middle" class="s">在后台跑每一轮对话，把模型输出、工具调用、子智能体的过程实时推给控制台</text>
+
+  <path d="M400,76 V140" class="ln" marker-end="url(#ar)"/>
+  <text x="408" y="112" class="s">配置 · 对话 · 审批</text>
+  <path d="M680,76 V140" class="ln" marker-end="url(#ar)"/>
+  <text x="688" y="112" class="s">下发任务、取回输出</text>
+
+  <rect x="20" y="158" width="160" height="60" rx="6" class="c3"/>
+  <text x="100" y="183" text-anchor="middle" class="b">用户中心</text>
+  <text x="100" y="203" text-anchor="middle" class="s">登录、组织、权限</text>
+  <path d="M240,188 H180" class="ln" marker-end="url(#ar)"/>
+  <text x="210" y="181" text-anchor="middle" class="s">授权</text>
+
+  <rect x="900" y="160" width="160" height="56" rx="6" class="c4"/>
+  <text x="980" y="184" text-anchor="middle" class="b">OpenSandbox</text>
+  <text x="980" y="203" text-anchor="middle" class="s">在 K8s 里建沙箱 Pod</text>
+  <path d="M840,188 H900" class="ln" marker-end="url(#ar)"/>
+
+  <path d="M540,236 V300" class="ln" marker-end="url(#ar)"/>
+  <text x="550" y="272" class="s">调模型 · 调工具 · 检索知识库 · 拉技能 · 读写记忆</text>
+
+  <rect x="40" y="300" width="1000" height="116" rx="8" class="frame dash"/>
+  <text x="56" y="322" class="b">同级服务</text>
+  <text x="120" y="322" class="s">各自独立部署；Agent 平台按智能体的 Key 或签名令牌调用</text>
+  <rect x="64" y="338" width="176" height="60" rx="6" class="c3"/>
+  <text x="152" y="362" text-anchor="middle" class="b">模型平台</text>
+  <text x="152" y="382" text-anchor="middle" class="s">Key 与模型，转发到供应商</text>
+  <rect x="258" y="338" width="176" height="60" rx="6" class="c3"/>
+  <text x="346" y="362" text-anchor="middle" class="b">MCP 网关</text>
+  <text x="346" y="382" text-anchor="middle" class="s">外部工具，按 Key 授权</text>
+  <rect x="452" y="338" width="176" height="60" rx="6" class="c3"/>
+  <text x="540" y="362" text-anchor="middle" class="b">知识库服务</text>
+  <text x="540" y="382" text-anchor="middle" class="s">入库与检索，按文档权限过滤</text>
+  <rect x="646" y="338" width="176" height="60" rx="6" class="c3"/>
+  <text x="734" y="362" text-anchor="middle" class="b">技能应用</text>
+  <text x="734" y="382" text-anchor="middle" class="s">技能包上传、审查、发布</text>
+  <rect x="840" y="338" width="176" height="60" rx="6" class="c3"/>
+  <text x="928" y="362" text-anchor="middle" class="b">记忆服务</text>
+  <text x="928" y="382" text-anchor="middle" class="s">用户的跨会话记忆</text>
+</svg>
+</div>
+<p class="cap">图 1　Agent 平台和它周边的系统</p>
+
+<p>和一般的「对话 + 工具」系统相比，它有两点不同：</p>
+<ul>
+  <li><b>两种智能体，一套平台。</b>除了在进程里执行的原生智能体，还能把 Claude Code 这类外部 CLI 智能体接进来，两者共用会话、审批、事件流和容错。</li>
+  <li><b>按长任务设计。</b>没有到点结束的超时。等人批准、等子智能体的时候整段挂起，不占进程。实例挂了，别的实例接着跑。</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="s2">2　几个基本概念</h2>
+
+<div class="fig">
+<svg viewBox="0 0 1080 360" width="100%" role="img" aria-label="智能体、会话、Run、段的关系">
+  <rect x="20" y="40" width="180" height="124" rx="6" class="c2"/>
+  <text x="110" y="66" text-anchor="middle" class="b">智能体</text>
+  <text x="110" y="86" text-anchor="middle" class="s">保存一次 = 一个新版本</text>
+  <rect x="40" y="100" width="40" height="26" rx="4" class="inner"/><text x="60" y="118" text-anchor="middle" class="s">v1</text>
+  <rect x="90" y="100" width="40" height="26" rx="4" class="inner"/><text x="110" y="118" text-anchor="middle" class="s">v2</text>
+  <rect x="140" y="100" width="40" height="26" rx="4" class="inner"/><text x="160" y="118" text-anchor="middle" class="s">v3</text>
+  <text x="110" y="150" text-anchor="middle" class="s">模型 · 提示词 · 工具 · 技能…</text>
+  <path d="M200,113 H250" class="ln" marker-end="url(#ar)"/>
+  <text x="225" y="104" text-anchor="middle" class="s">钉版本</text>
+
+  <rect x="250" y="20" width="590" height="325" rx="8" class="inner"/>
+  <text x="266" y="44" class="tl">根会话</text>
+  <text x="322" y="44" class="s">消息历史 · 一个工作区 · 一条事件流；同一时刻只有一个 Run 在进行</text>
+
+  <rect x="270" y="60" width="550" height="44" rx="6" class="c2"/>
+  <text x="286" y="87" class="b">Run 1</text>
+  <text x="340" y="87" class="s">一条用户消息 → 一次回答；中途没有等待，只有一段</text>
+  <text x="804" y="87" text-anchor="end" class="s">已结束</text>
+
+  <rect x="270" y="116" width="550" height="96" rx="6" class="c2"/>
+  <text x="286" y="138" class="b">Run 2</text>
+  <text x="340" y="138" class="s">中途要等外部的事：被挂起切成两段</text>
+  <rect x="290" y="152" width="150" height="44" rx="5" class="inner"/>
+  <text x="365" y="170" text-anchor="middle" class="b">段 1</text>
+  <text x="365" y="187" text-anchor="middle" class="s">派出一个子智能体</text>
+  <rect x="456" y="152" width="190" height="44" rx="5" class="c5 dash"/>
+  <text x="551" y="170" text-anchor="middle" class="b">挂起</text>
+  <text x="551" y="187" text-anchor="middle" class="s">不占进程，等子 Run 跑完</text>
+  <rect x="662" y="152" width="140" height="44" rx="5" class="inner"/>
+  <text x="732" y="170" text-anchor="middle" class="b">段 2</text>
+  <text x="732" y="187" text-anchor="middle" class="s">拿到结论接着做</text>
+  <path d="M440,174 H456" class="ln" marker-end="url(#ar)"/>
+  <path d="M646,174 H662" class="ln" marker-end="url(#ar)"/>
+
+  <rect x="270" y="226" width="550" height="104" rx="6" class="frame dash"/>
+  <text x="286" y="248" class="b">子会话</text>
+  <text x="804" y="248" text-anchor="end" class="s">子智能体在自己的会话上干活，会话是一棵树</text>
+  <rect x="290" y="262" width="300" height="50" rx="5" class="c2"/>
+  <text x="440" y="283" text-anchor="middle" class="b">子 Run</text>
+  <text x="440" y="301" text-anchor="middle" class="s">和普通 Run 走同一条执行链路</text>
+  <rect x="610" y="262" width="192" height="50" rx="5" class="inner dash"/>
+  <text x="706" y="283" text-anchor="middle" class="b">孙会话 …</text>
+  <text x="706" y="301" text-anchor="middle" class="s">还能再派，层数不限</text>
+  <path d="M420,196 V262" class="ln dash" marker-end="url(#ar)"/>
+  <text x="428" y="240" class="s">派出</text>
+
+  <rect x="900" y="140" width="160" height="70" rx="6" class="c1"/>
+  <text x="980" y="167" text-anchor="middle" class="b">控制台</text>
+  <text x="980" y="187" text-anchor="middle" class="s">订阅根会话的事件流</text>
+  <path d="M840,175 H900" class="ln" marker-end="url(#ar)"/>
+  <text x="870" y="166" text-anchor="middle" class="s">事件</text>
+  <text x="980" y="232" text-anchor="middle" class="s">子孙会话的事件也在这条流里</text>
+</svg>
+</div>
+<p class="cap">图 2　智能体、会话、Run、段</p>
+
+<table>
+  <tr><th>概念</th><th>是什么</th></tr>
+  <tr><td class="k">智能体</td><td>一份配置：模型、系统提示词、工具、知识库、技能、审批模式、权限类型。每保存一次就是一个新版本，会话和 Run 都指向某个版本，改配置不影响正在跑的。</td></tr>
+  <tr><td class="k">原生 / CLI 智能体</td><td>智能体的两种类型。原生智能体在 Agent 服务进程里，由自研内核（基于 LangGraph）执行。CLI 智能体是 Claude Code 这类外部命令行智能体，跑在沙箱里，由 bridge 接进平台。</td></tr>
+  <tr><td class="k">会话</td><td>一段对话：消息历史、一个工作区、一条事件流。子智能体在自己的子会话上干活，所以会话是一棵树。</td></tr>
+  <tr><td class="k">Run（一轮）</td><td>从用户发一条消息到智能体给出回答，是一个 Run。同一个会话同一时刻只有一个 Run 在进行。</td></tr>
+  <tr><td class="k">段</td><td>Run 的一次连续执行。要等外部的事（审批、提问、子智能体）时本段结束、Run 挂起，等到了再跑下一段。不需要等的 Run 只有一段。</td></tr>
+  <tr><td class="k">事件</td><td>Run 里发生的每件事：模型输出的片段、工具调用和结果、审批请求、上下文用量…… 原生和 CLI 智能体产出的是同一套事件。</td></tr>
+  <tr><td class="k">等人决定的事</td><td>工具调用的确认、计划审批、向用户提问，统称审批事项。用户在会话里做决定。</td></tr>
+  <tr><td class="k">沙箱</td><td>K8s 里的隔离 Pod，智能体在里面执行命令、读写文件。按人管理：一个人默认一个，这个人的会话共用。</td></tr>
+  <tr><td class="k">工作区</td><td>一个人的文件，存在对象存储里，整个挂进沙箱的 <code>/data</code>。根会话有一个 workspace，子孙会话共用它。</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="s3">3　由哪些部分组成</h2>
+
+<div class="fig">
+<svg viewBox="0 0 1080 390" width="100%" role="img" aria-label="容器：控制台、Agent 服务、数据库、Redis、沙箱、对象存储">
+<g transform="translate(0,20)">
+  <rect x="20" y="40" width="180" height="64" rx="6" class="c1"/>
+  <text x="110" y="66" text-anchor="middle" class="b">控制台</text>
+  <text x="110" y="86" text-anchor="middle" class="s">Next.js · 编辑器 · 会话工作台</text>
+  <rect x="20" y="130" width="180" height="56" rx="6" class="c1"/>
+  <text x="110" y="154" text-anchor="middle" class="b">业务应用</text>
+  <text x="110" y="173" text-anchor="middle" class="s">如 AI TeamFlow</text>
+
+  <rect x="270" y="40" width="310" height="146" rx="8" class="c2"/>
+  <text x="425" y="66" text-anchor="middle" class="tl">Agent 服务</text>
+  <text x="425" y="86" text-anchor="middle" class="s">Python / FastAPI</text>
+  <text x="425" y="112" text-anchor="middle">REST 接口 · SSE 事件流</text>
+  <text x="425" y="134" text-anchor="middle">Run 执行器在后台跑每一轮</text>
+  <text x="425" y="156" text-anchor="middle">可多实例：任一实例都能跑、都能看</text>
+
+  <path d="M200,72 H270" class="ln" marker-end="url(#ar)"/>
+  <text x="235" y="64" text-anchor="middle" class="s">接口 · SSE</text>
+  <path d="M200,158 H270" class="ln" marker-end="url(#ar)"/>
+  <text x="235" y="150" text-anchor="middle" class="s">接口</text>
+
+  <rect x="270" y="240" width="145" height="64" rx="6" class="c4"/>
+  <text x="342" y="265" text-anchor="middle" class="b">PostgreSQL</text>
+  <text x="342" y="285" text-anchor="middle" class="s">事实源：配置、会话、Run</text>
+  <rect x="435" y="240" width="145" height="64" rx="6" class="c4"/>
+  <text x="507" y="265" text-anchor="middle" class="b">Redis</text>
+  <text x="507" y="285" text-anchor="middle" class="s">事件流、锁、取消、唤醒</text>
+  <path d="M342,186 V240" class="ln" marker-end="url(#ar)"/>
+  <path d="M507,186 V240" class="ln" marker-end="url(#ar)"/>
+
+  <rect x="660" y="30" width="240" height="200" rx="8" class="c4"/>
+  <text x="780" y="54" text-anchor="middle" class="b">沙箱 Pod（按人）</text>
+  <text x="780" y="72" text-anchor="middle" class="s">OpenSandbox 按需建</text>
+  <rect x="676" y="86" width="208" height="56" rx="5" class="inner"/>
+  <text x="780" y="108" text-anchor="middle" class="b">execd</text>
+  <text x="780" y="127" text-anchor="middle" class="s">原生智能体的命令和文件</text>
+  <rect x="676" y="154" width="208" height="60" rx="5" class="inner"/>
+  <text x="780" y="176" text-anchor="middle" class="b">bridge + CLI 智能体</text>
+  <text x="780" y="196" text-anchor="middle" class="s">每个 CLI 会话一对进程</text>
+  <path d="M580,114 H676" class="ln" marker-end="url(#ar)"/>
+  <text x="628" y="106" text-anchor="middle" class="s">命令、文件</text>
+  <path d="M580,180 H676" class="ln" marker-end="url(#ar)"/>
+  <text x="628" y="172" text-anchor="middle" class="s">驱动一轮</text>
+
+  <rect x="660" y="290" width="240" height="64" rx="6" class="c4"/>
+  <text x="780" y="315" text-anchor="middle" class="b">对象存储（OSS）</text>
+  <text x="780" y="335" text-anchor="middle" class="s">按人分目录：工作区、技能、CLI 记录</text>
+  <path d="M780,230 V290" class="ln" marker-end="url(#ar)"/>
+  <text x="772" y="265" text-anchor="end" class="s">s3fs 把这个人的目录挂到 /data</text>
+
+  <rect x="940" y="30" width="120" height="284" rx="8" class="c3"/>
+  <text x="1000" y="54" text-anchor="middle" class="b">同级服务</text>
+  <rect x="950" y="66" width="100" height="32" rx="4" class="inner"/><text x="1000" y="87" text-anchor="middle" class="s">模型平台</text>
+  <rect x="950" y="106" width="100" height="32" rx="4" class="inner"/><text x="1000" y="127" text-anchor="middle" class="s">MCP 网关</text>
+  <rect x="950" y="146" width="100" height="32" rx="4" class="inner"/><text x="1000" y="167" text-anchor="middle" class="s">知识库服务</text>
+  <rect x="950" y="186" width="100" height="32" rx="4" class="inner"/><text x="1000" y="207" text-anchor="middle" class="s">技能应用</text>
+  <rect x="950" y="226" width="100" height="32" rx="4" class="inner"/><text x="1000" y="247" text-anchor="middle" class="s">记忆服务</text>
+  <rect x="950" y="266" width="100" height="32" rx="4" class="inner"/><text x="1000" y="287" text-anchor="middle" class="s">用户中心</text>
+  <path d="M480,40 V14 H1000 V30" class="ln" marker-end="url(#ar)"/>
+  <text x="740" y="8" text-anchor="middle" class="s">按智能体的 Key / 令牌调用</text>
+  <path d="M900,184 H940" class="ln" marker-end="url(#ar)"/>
+  <text x="920" y="176" text-anchor="middle" class="s">直连</text>
+</g>
+</svg>
+</div>
+<p class="cap">图 3　运行起来的几个部分。CLI 智能体自己直接调用模型平台、MCP 网关和知识库</p>
+
+<ul>
+  <li><b>控制台</b>：Next.js 写的，提供智能体编辑器和会话工作台。知识库、技能、模型、MCP 的管理页面直连对应的服务。</li>
+  <li><b>Agent 服务</b>：Python / FastAPI。接口和 Run 执行器在同一个服务里，可以部署多个实例。任何实例都能领 Run、都能给用户推事件，进程本身不保存状态。</li>
+  <li><b>PostgreSQL</b>：事实源。智能体和它的版本、会话和消息、Run 和检查点、审批事项都存在这里。</li>
+  <li><b>Redis</b>：存事件流、会话锁、取消标记、唤醒广播。这里只放丢了也能恢复的东西。</li>
+  <li><b>沙箱 Pod</b>：由 OpenSandbox 按人创建。原生智能体的命令经 execd 在里面执行；CLI 智能体由 bridge 拉起，也在里面跑。</li>
+  <li><b>对象存储</b>：OSS。按人分目录，每个人的整个目录挂进他的沙箱的 <code>/data</code>。</li>
+</ul>
+
+<h3>Agent 服务里面</h3>
+<div class="fig">
+<svg viewBox="0 0 1080 466" width="100%" role="img" aria-label="Agent 服务的组件">
+  <text x="20" y="44" class="s">入口</text>
+  <text x="20" y="133" class="s">会话页与配置</text>
+  <text x="20" y="228" class="s">执行</text>
+  <text x="20" y="322" class="s">运行时</text>
+  <text x="20" y="420" class="s">能力</text>
+
+  <rect x="150" y="16" width="730" height="46" rx="6" class="c1"/>
+  <text x="166" y="44" class="b">HTTP 接口 + 鉴权</text>
+  <text x="290" y="44" class="s">REST 与 SSE；按用户中心的授权快照判断操作权限和数据权限</text>
+
+  <rect x="150" y="96" width="170" height="64" rx="6" class="c2"/>
+  <text x="235" y="121" text-anchor="middle" class="b">智能体管理</text>
+  <text x="235" y="141" text-anchor="middle" class="s">配置、版本、身份、共享</text>
+  <rect x="334" y="96" width="200" height="64" rx="6" class="c2"/>
+  <text x="434" y="121" text-anchor="middle" class="b">会话管理</text>
+  <text x="434" y="141" text-anchor="middle" class="s">会话、提交、取消、子智能体</text>
+  <rect x="548" y="96" width="160" height="64" rx="6" class="c5"/>
+  <text x="628" y="121" text-anchor="middle" class="b">审批</text>
+  <text x="628" y="141" text-anchor="middle" class="s">等人决定的事</text>
+  <rect x="722" y="96" width="158" height="64" rx="6" class="c2"/>
+  <text x="801" y="121" text-anchor="middle" class="b">平台管理</text>
+  <text x="801" y="141" text-anchor="middle" class="s">持久指令（两层）</text>
+  <path d="M235,62 V96" class="ln" marker-end="url(#ar)"/>
+  <path d="M434,62 V96" class="ln" marker-end="url(#ar)"/>
+  <path d="M628,62 V96" class="ln" marker-end="url(#ar)"/>
+  <path d="M801,62 V96" class="ln" marker-end="url(#ar)"/>
+
+  <rect x="150" y="196" width="730" height="56" rx="6" class="c2"/>
+  <text x="515" y="219" text-anchor="middle" class="b">Run 执行器</text>
+  <text x="515" y="239" text-anchor="middle" class="s">领取 Run、续租约、写检查点 · 挂起的等到了就放回队列 · 接管时收拾现场</text>
+  <path d="M434,160 V196" class="ln" marker-end="url(#ar)"/>
+  <text x="442" y="182" class="s">提交、取消</text>
+  <path d="M628,160 V196" class="ln" marker-end="url(#ar)"/>
+  <text x="636" y="182" class="s">做了决定 → 唤醒</text>
+
+  <rect x="150" y="288" width="355" height="60" rx="6" class="c2"/>
+  <text x="327" y="312" text-anchor="middle" class="b">原生运行时</text>
+  <text x="327" y="332" text-anchor="middle" class="s">进程内跑一段：中间件、模型、工具、上下文</text>
+  <rect x="525" y="288" width="355" height="60" rx="6" class="c2"/>
+  <text x="702" y="312" text-anchor="middle" class="b">CLI 运行时</text>
+  <text x="702" y="332" text-anchor="middle" class="s">驱动沙箱里的 CLI 跑一轮，翻成同一套事件</text>
+  <path d="M327,252 V288" class="ln" marker-end="url(#ar)"/>
+  <path d="M702,252 V288" class="ln" marker-end="url(#ar)"/>
+
+  <rect x="150" y="384" width="113" height="64" rx="6" class="c3"/>
+  <text x="206" y="409" text-anchor="middle" class="b">模型接入</text>
+  <text x="206" y="429" text-anchor="middle" class="s">Key、模型规格</text>
+  <rect x="273" y="384" width="113" height="64" rx="6" class="c3"/>
+  <text x="329" y="409" text-anchor="middle" class="b">工具接入</text>
+  <text x="329" y="429" text-anchor="middle" class="s">MCP·知识库·技能</text>
+  <rect x="396" y="384" width="113" height="64" rx="6" class="c3"/>
+  <text x="452" y="409" text-anchor="middle" class="b">记忆</text>
+  <text x="452" y="429" text-anchor="middle" class="s">常驻·按需加载</text>
+  <rect x="519" y="384" width="113" height="64" rx="6" class="c4"/>
+  <text x="575" y="409" text-anchor="middle" class="b">工作区</text>
+  <text x="575" y="429" text-anchor="middle" class="s">一个人的文件</text>
+  <rect x="642" y="384" width="113" height="64" rx="6" class="c4"/>
+  <text x="698" y="409" text-anchor="middle" class="b">沙箱</text>
+  <text x="698" y="429" text-anchor="middle" class="s">按人供给 Pod</text>
+  <rect x="765" y="384" width="115" height="64" rx="6" class="c5"/>
+  <text x="822" y="409" text-anchor="middle" class="b">凭据</text>
+  <text x="822" y="429" text-anchor="middle" class="s">出站凭据授权</text>
+  <path d="M327,348 V384" class="ln" marker-end="url(#ar)"/>
+  <path d="M702,348 V384" class="ln" marker-end="url(#ar)"/>
+  <text x="335" y="370" class="s">按需调用</text>
+  <text x="710" y="370" class="s">按需调用</text>
+
+  <rect x="910" y="96" width="150" height="252" rx="6" class="c4"/>
+  <text x="985" y="122" text-anchor="middle" class="b">事件中继</text>
+  <text x="985" y="150" text-anchor="middle" class="s">会话事件流</text>
+  <text x="985" y="172" text-anchor="middle" class="s">会话锁</text>
+  <text x="985" y="194" text-anchor="middle" class="s">取消标记</text>
+  <text x="985" y="216" text-anchor="middle" class="s">唤醒广播</text>
+  <text x="985" y="238" text-anchor="middle" class="s">提交幂等</text>
+  <text x="985" y="260" text-anchor="middle" class="s">观看名额</text>
+  <text x="985" y="296" text-anchor="middle" class="s">唯一碰 Redis 的组件</text>
+  <text x="985" y="316" text-anchor="middle" class="s">执行器写，会话管理读</text>
+  <path d="M880,224 H910" class="ln" marker-end="url(#ar)"/>
+  <path d="M880,318 H910" class="ln" marker-end="url(#ar)"/>
+</svg>
+</div>
+<p class="cap">图 4　Agent 服务里的组件。运行时登记审批事项、起子 Run，是经审批组件和会话管理组件提供的接口完成的，图中没画这两条</p>
+
+<table>
+  <tr><th>组件</th><th>管什么</th></tr>
+  <tr><td class="k">智能体管理</td><td>智能体的配置和版本（保存即新版本）。在用户中心登记数字员工和数据对象，共享靠它；在模型平台、MCP 网关各要一把 Key。决定这一轮按谁的权限判断：以人为权限，还是以智能体的数字员工为权限。</td></tr>
+  <tr><td class="k">会话管理</td><td>会话和消息、提交一轮与取消、会话事件流、子智能体、文件和上下文面板。「同一个会话同时只做一件事」的闸门也在这里。</td></tr>
+  <tr><td class="k">审批</td><td>管等人决定的事：登记、记下决定并唤醒 Run、作废。原生和 CLI 智能体共用。</td></tr>
+  <tr><td class="k">平台管理</td><td>持久指令：人主动写下、每轮都带给智能体的规则，分平台和个人两层。</td></tr>
+  <tr><td class="k">Run 执行器</td><td>领取 Run、续租约、写检查点、收尾。挂起的 Run 等到了就放回队列；实例挂了，由接管的实例收拾现场。</td></tr>
+  <tr><td class="k">原生运行时</td><td>在进程里跑原生智能体的一段：按槽位叠中间件，调模型和工具，管上下文。要等外部的事就挂起。</td></tr>
+  <tr><td class="k">CLI 运行时</td><td>让沙箱里的 CLI 跑一轮：接上会话，把权限请求转成审批，把内容翻成事件。断线或接管后接回事件流。</td></tr>
+  <tr><td class="k">事件中继</td><td>Agent 服务里唯一碰 Redis 的组件，负责会话事件流、会话锁、取消标记、唤醒、提交幂等、观看名额。</td></tr>
+  <tr><td class="k">模型接入</td><td>取智能体的 Key，检查要用的模型都已分配，交出调用端点和模型的规格、能力。</td></tr>
+  <tr><td class="k">工具接入</td><td>MCP 工具、知识库检索、技能目录。编辑器里能选的和运行时能用的出自同一个来源。</td></tr>
+  <tr><td class="k">记忆</td><td>常驻记忆放进系统提示词，其余的按主题按需加载。对话中写入，会话结束后补记。</td></tr>
+  <tr><td class="k">工作区</td><td>一个人的文件：他的沙箱在跑时经沙箱读写，否则直连对象存储。</td></tr>
+  <tr><td class="k">沙箱</td><td>按人供给和回收沙箱，在沙箱里执行命令。沙箱的地址和令牌不出这个组件。</td></tr>
+  <tr><td class="k">凭据</td><td>决定一个会话这一轮能用哪些出站凭据，如某个仓库的推送权限。</td></tr>
+</table>
+<p class="sub">深入：<a target="_blank" rel="noopener" href="../../c4-model/agent/container.html">容器图</a> · <a target="_blank" rel="noopener" href="../../c4-model/agent/component-server.html">Agent 服务组件图</a> · <a target="_blank" rel="noopener" href="../../c4-model/agent/component-session-pod.html">会话 Pod 组件图</a></p>
+
+<!-- ============================================================ -->
+<h2 id="s4">4　原理</h2>
+
+<table>
+  <tr><th>原理</th><th>链接</th></tr>
+  <tr><td>事件中继原理</td><td><a target="_blank" rel="noopener" href="../../c4-model/agent/dynamic/dynamic-run.html#principle">dynamic/dynamic-run.html</a></td></tr>
+  <tr><td>TraceEvent 原理：原生和 CLI 智能体翻成同一套事件</td><td><a target="_blank" rel="noopener" href="../../c4-model/agent/dynamic/dynamic-cli-run.html#principle">dynamic/dynamic-cli-run.html</a></td></tr>
+  <tr><td>挂起与续跑原理</td><td><a target="_blank" rel="noopener" href="../../c4-model/agent/dynamic/dynamic-approval.html#principle">dynamic/dynamic-approval.html</a></td></tr>
+  <tr><td>委派原理：派完就挂起，子 run 都跑完了再叫醒父 run</td><td><a target="_blank" rel="noopener" href="../../c4-model/agent/dynamic/dynamic-subagent.html#principle-delegate">dynamic/dynamic-subagent.html</a></td></tr>
+  <tr><td>取消原理</td><td><a target="_blank" rel="noopener" href="../../c4-model/agent/dynamic/dynamic-cancel.html#principle">dynamic/dynamic-cancel.html</a></td></tr>
+  <tr><td>接管原理：租约过期，别的实例收拾现场接着跑</td><td><a target="_blank" rel="noopener" href="../../c4-model/agent/dynamic/dynamic-takeover.html#principle">dynamic/dynamic-takeover.html</a></td></tr>
+  <tr><td>上下文管理原理：放得下，又不把缓存搞失效</td><td><a target="_blank" rel="noopener" href="../../c4-model/agent/dynamic/dynamic-context.html#principle">dynamic/dynamic-context.html</a></td></tr>
+  <tr><td>MCP 原理（Agent 一侧）</td><td><a target="_blank" rel="noopener" href="../../c4-model/agent/dynamic/dynamic-mcp.html#principle">dynamic/dynamic-mcp.html</a></td></tr>
+  <tr><td>记忆的读写原理</td><td><a target="_blank" rel="noopener" href="../../c4-model/agent/dynamic/dynamic-memory.html#principle">dynamic/dynamic-memory.html</a></td></tr>
+  <tr><td>CLI 智能体接入记忆的原理</td><td><a target="_blank" rel="noopener" href="../../c4-model/agent/dynamic/dynamic-cli-memory.html#principle">dynamic/dynamic-cli-memory.html</a></td></tr>
+  <tr><td>工作区与沙箱原理：一个人一个沙箱，父子、多会话共用</td><td><a target="_blank" rel="noopener" href="../../c4-model/agent/dynamic/dynamic-subagent.html#principle">dynamic/dynamic-subagent.html</a></td></tr>
+  <tr><td>OpenSandbox 原理：一个沙箱就是一个 BatchSandbox 和它的一个 Pod</td><td><a target="_blank" rel="noopener" href="../../c4-model/agent/sandbox/dynamic-sandbox-provision.html#principle">sandbox/dynamic-sandbox-provision.html</a></td></tr>
+</table>
+
+</main>
+</body>
+</html>

@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Atlas 知识库服务介绍</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --border: #d1d9e0; --head: #f6f8fa;
+    --accent: #0969da; --code-bg: #f6f8fa;
+    --b1: #ddf4ff; --b1d: #54aeff; --b2: #fbefff; --b2d: #c297ff; --b3: #dafbe1; --b3d: #4ac26b;
+    --b4: #fff8c5; --b4d: #d4a72c; --b5: #ffebe9; --b5d: #ff8182;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --border: #3d444d; --head: #151b23;
+      --accent: #4493f8; --code-bg: #151b23;
+      --b1: #12263f; --b1d: #1f6feb; --b2: #271a36; --b2d: #8957e5; --b3: #12261e; --b3d: #2ea043;
+      --b4: #2b2111; --b4d: #9e6a03; --b5: #2d1214; --b5d: #da3633;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 32px; background: var(--bg); color: var(--fg);
+         font: 14px/1.75 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif; }
+  main { max-width: 1120px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 48px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 15.5px; margin: 24px 0 8px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .sub { color: var(--muted); margin: 0 0 14px; }
+  code { font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code-bg); padding: 1px 4px; border-radius: 4px; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0 16px; }
+  th, td { border: 1px solid var(--border); padding: 7px 10px; vertical-align: top; text-align: left; }
+  th { background: var(--head); white-space: nowrap; }
+  td.k { white-space: nowrap; font-weight: 600; }
+  .callout { border-left: 4px solid var(--accent); background: var(--head); padding: 10px 14px; border-radius: 4px; margin: 14px 0; }
+  .lead { font-size: 15px; }
+  .toc { columns: 2; padding-left: 22px; }
+  .fig { border: 1px solid var(--border); border-radius: 6px; padding: 10px; overflow-x: auto; margin: 12px 0 6px; }
+  .cap { color: var(--muted); font-size: 12.5px; margin: 0 0 18px; text-align: center; }
+  svg text { fill: var(--fg); font-size: 12px; font-family: -apple-system, "PingFang SC", sans-serif; }
+  svg .s { font-size: 11px; fill: var(--muted); }
+  svg .b { font-weight: 600; }
+  svg .tl { font-size: 13.5px; font-weight: 600; }
+  svg .c1 { fill: var(--b1); stroke: var(--b1d); } svg .c2 { fill: var(--b2); stroke: var(--b2d); }
+  svg .c3 { fill: var(--b3); stroke: var(--b3d); } svg .c4 { fill: var(--b4); stroke: var(--b4d); }
+  svg .c5 { fill: var(--b5); stroke: var(--b5d); }
+  svg .inner { fill: var(--bg); stroke: var(--border); }
+  svg .frame { fill: none; stroke: var(--muted); }
+  svg .ln { stroke: var(--fg); stroke-width: 1.3; fill: none; }
+  svg .dash { stroke-dasharray: 5 4; }
+  svg .arw { fill: var(--fg); }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <marker id="ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="arw" d="M0,0 L8,4 L0,8 z"/></marker>
+</defs></svg>
+<main>
+<h1>Atlas 知识库服务介绍</h1>
+<p class="sub">日期：2026-11-04 · 配套的 C4 图在 <a target="_blank" rel="noopener" href="../../c4-model/knowledge/system-context.html">c4-model/knowledge/</a></p>
+
+<div class="callout lead">
+知识库服务管文档的<b>入库与检索</b>：把各种格式的文档解析、分段、向量化，再按<b>库级和文档级权限</b>检索，给智能体提供领域知识。员工在控制台里建库、上传文档、调检索设置、做召回测试；智能体在运行时检索它绑定的库。
+</div>
+
+<ol class="toc">
+  <li><a href="#s1">它是什么</a></li>
+  <li><a href="#s2">几个基本概念</a></li>
+  <li><a href="#s3">由哪些部分组成</a></li>
+  <li><a href="#s4">时序图</a></li>
+</ol>
+
+<!-- ============================================================ -->
+<h2 id="s1">1　它是什么</h2>
+
+<p>有两类调用方。员工在控制台的知识库页面里管理知识库和文档，浏览器经网关直接调本服务。Agent 平台在智能体运行时检索它绑定的库：原生智能体经内部接口检索，会话 Pod 里的 CLI 智能体经 MCP 端点检索。</p>
+<p>知识库服务依赖两个外部服务：用户中心负责操作码、库级权限和主体展开，库的授权也登记在那里；向量、重排、对话模型都经模型平台调用。</p>
+
+<div class="fig">
+<svg viewBox="0 0 1080 376" width="100%" role="img" aria-label="知识库服务和周边系统">
+  <rect x="250" y="16" width="240" height="60" rx="6" class="c1"/>
+  <text x="370" y="41" text-anchor="middle" class="b">员工</text>
+  <text x="370" y="61" text-anchor="middle" class="s">建库、上传文档、召回测试、共享</text>
+  <rect x="590" y="16" width="240" height="60" rx="6" class="c1"/>
+  <text x="710" y="41" text-anchor="middle" class="b">Agent 平台</text>
+  <text x="710" y="61" text-anchor="middle" class="s">智能体运行时检索绑定的库</text>
+
+  <rect x="240" y="140" width="600" height="96" rx="8" class="c2"/>
+  <text x="540" y="170" text-anchor="middle" class="tl">知识库服务</text>
+  <text x="540" y="194" text-anchor="middle" class="s">文档入库与检索：解析、分段、向量化各种格式的文档</text>
+  <text x="540" y="214" text-anchor="middle" class="s">按库级、文档级权限检索，给智能体提供领域知识</text>
+
+  <path d="M370,76 V140" class="ln" marker-end="url(#ar)"/>
+  <text x="378" y="112" class="s">管理知识库和文档 · 召回测试</text>
+  <path d="M710,76 V140" class="ln" marker-end="url(#ar)"/>
+  <text x="718" y="112" class="s">检索（内部接口 / MCP）</text>
+
+  <rect x="240" y="300" width="260" height="60" rx="6" class="c3"/>
+  <text x="370" y="325" text-anchor="middle" class="b">用户中心</text>
+  <text x="370" y="345" text-anchor="middle" class="s">操作码、库级权限、主体展开、登记授权</text>
+  <rect x="580" y="300" width="260" height="60" rx="6" class="c3"/>
+  <text x="710" y="325" text-anchor="middle" class="b">模型平台</text>
+  <text x="710" y="345" text-anchor="middle" class="s">向量、重排、对话模型（服务级 Key）</text>
+  <path d="M370,236 V300" class="ln" marker-end="url(#ar)"/>
+  <text x="378" y="272" class="s">校验权限 · 写授权</text>
+  <path d="M710,236 V300" class="ln" marker-end="url(#ar)"/>
+  <text x="718" y="272" class="s">调模型</text>
+</svg>
+</div>
+<p class="cap">图 1　知识库服务和它周边的系统</p>
+
+<p>它有几个值得先知道的特点：</p>
+<ul>
+  <li><b>两层权限，授权都在用户中心。</b>库级权限决定能动哪些库（读 &lt; 写 &lt; Owner）；文档级权限把文档的 ACL 和调用者的主体标签求交，决定能看到库里哪些文档。智能体检索时一律按这一轮的身份判断：绑定不是授权，每次检索都逐库校验，撤权立即生效。</li>
+  <li><b>入库看得见、停得下、续得上。</b>一个文档一个入库任务，按阶段跑，每个阶段的状态立刻可见；可以暂停、恢复、重试。进程死了，巡检会把停住的文档续上。不设到点结束的超时。</li>
+  <li><b>换向量模型不停服。</b>新建一个索引版本，在后台重建，期间新入库的文档双写；建好后原子切换，旧版本保留，随时可以切回去。</li>
+  <li><b>混合检索。</b>稠密向量和 BM25 稀疏向量放在向量库的同一条记录上，BM25 的分词和 IDF 统计由 Milvus 内置完成；检索前做查询理解，召回后融合、重排。每次检索都记下过程，可以看到每个分段在哪一环掉的。</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="s2">2　几个基本概念</h2>
+
+<div class="fig">
+<svg viewBox="0 0 1080 390" width="100%" role="img" aria-label="知识库、文档、分段、索引版本和权限">
+  <rect x="20" y="20" width="580" height="350" rx="8" class="c2"/>
+  <text x="36" y="46" class="tl">知识库</text>
+  <text x="90" y="46" class="s">分段结构 · 检索设置 · 增强 / 审核开关 · 元数据字段</text>
+
+  <rect x="40" y="66" width="540" height="230" rx="6" class="inner"/>
+  <text x="56" y="90" class="b">文档</text>
+  <text x="92" y="90" class="s">原文件 · 状态 · 元数据 · ACL · 版本与生效区间</text>
+
+  <rect x="60" y="108" width="245" height="124" rx="5" class="c4"/>
+  <text x="182" y="132" text-anchor="middle" class="b">父分段</text>
+  <text x="182" y="150" text-anchor="middle" class="s">返回给模型的上下文</text>
+  <rect x="74" y="166" width="66" height="48" rx="4" class="inner"/>
+  <text x="107" y="186" text-anchor="middle" class="b">子块</text><text x="107" y="203" text-anchor="middle" class="s">检索入口</text>
+  <rect x="148" y="166" width="66" height="48" rx="4" class="inner"/>
+  <text x="181" y="186" text-anchor="middle" class="b">子块</text><text x="181" y="203" text-anchor="middle" class="s">检索入口</text>
+  <rect x="222" y="166" width="66" height="48" rx="4" class="inner"/>
+  <text x="255" y="186" text-anchor="middle" class="b">子块</text><text x="255" y="203" text-anchor="middle" class="s">检索入口</text>
+
+  <rect x="320" y="108" width="245" height="124" rx="5" class="c4"/>
+  <text x="442" y="132" text-anchor="middle" class="b">父分段</text>
+  <text x="442" y="150" text-anchor="middle" class="s">返回给模型的上下文</text>
+  <rect x="334" y="166" width="66" height="48" rx="4" class="inner"/>
+  <text x="367" y="186" text-anchor="middle" class="b">子块</text><text x="367" y="203" text-anchor="middle" class="s">检索入口</text>
+  <rect x="408" y="166" width="66" height="48" rx="4" class="inner"/>
+  <text x="441" y="186" text-anchor="middle" class="b">子块</text><text x="441" y="203" text-anchor="middle" class="s">检索入口</text>
+  <rect x="482" y="166" width="66" height="48" rx="4" class="inner"/>
+  <text x="515" y="186" text-anchor="middle" class="b">子块</text><text x="515" y="203" text-anchor="middle" class="s">检索入口</text>
+
+  <text x="60" y="258" class="s">父子模式：子块是检索入口，命中后回到它的父分段</text>
+  <text x="60" y="278" class="s">通用模式：分段自己就是检索入口</text>
+
+  <text x="36" y="330" class="s">上传 → 解析成 DocIR → 切成父分段和子块 → 向量化</text>
+  <text x="36" y="352" class="s">文档级字段（启用、审核、元数据、ACL、时效）变了只改向量库里的标量字段，不重新向量化</text>
+
+  <rect x="650" y="20" width="410" height="210" rx="8" class="c4"/>
+  <text x="666" y="46" class="b">向量库（Milvus）</text>
+  <text x="790" y="46" class="s">每个索引版本一个 collection</text>
+  <rect x="670" y="62" width="180" height="150" rx="5" class="inner"/>
+  <text x="760" y="86" text-anchor="middle" class="b">索引版本 v2</text>
+  <text x="760" y="104" text-anchor="middle" class="s">向量模型 B · 当前生效</text>
+  <text x="760" y="134" text-anchor="middle" class="s">主键 = 子块 id</text>
+  <text x="760" y="154" text-anchor="middle" class="s">稠密向量 + BM25 稀疏向量</text>
+  <text x="760" y="174" text-anchor="middle" class="s">BM25 由 Milvus 从检索文本生成</text>
+  <text x="760" y="194" text-anchor="middle" class="s">标量字段：文档级字段</text>
+  <rect x="866" y="62" width="180" height="150" rx="5" class="inner dash"/>
+  <text x="956" y="86" text-anchor="middle" class="b">索引版本 v1</text>
+  <text x="956" y="104" text-anchor="middle" class="s">向量模型 A · 已退役</text>
+  <text x="956" y="134" text-anchor="middle" class="s">保留并继续双写</text>
+  <text x="956" y="154" text-anchor="middle" class="s">随时切回（回滚）</text>
+  <path d="M548,190 H620 V150 H670" class="ln" marker-end="url(#ar)"/>
+  <text x="608" y="142" class="s">向量化</text>
+
+  <rect x="650" y="256" width="410" height="114" rx="8" class="c5"/>
+  <text x="666" y="282" class="b">两层权限</text>
+  <text x="666" y="308">库级：用户中心的数据权限，读 &lt; 写 &lt; Owner</text>
+  <text x="666" y="332">文档级：文档的 ACL 与调用者的主体标签求交</text>
+  <text x="666" y="356" class="s">都按这一次调用的身份判；本服务自己不存授权</text>
+</svg>
+</div>
+<p class="cap">图 2　知识库、文档、分段、索引版本和权限</p>
+
+<table>
+  <tr><th>概念</th><th>是什么</th></tr>
+  <tr><td class="k">知识库</td><td>一组文档，以及它们的处理和检索规则：分段结构、默认检索设置、入库增强和审核开关、文档可以带的元数据字段。库级权限（谁能读、写、管理）登记在用户中心。</td></tr>
+  <tr><td class="k">文档</td><td>上传的一个文件。带启用、归档、审核状态，以及业务元数据、ACL、版本与生效区间。这些变了只改向量库里的标量字段，不重新向量化。上传新版本会取代旧版本。</td></tr>
+  <tr><td class="k">DocIR</td><td>解析的产物：带类型（标题、段落、列表、表格、图片……）、层级、页码和坐标的块序列，附一份解析质量报告。解析和分段之间只隔这一层。</td></tr>
+  <tr><td class="k">父分段 / 子块</td><td>分段把 DocIR 切成父分段和子块：父分段是返回给模型的上下文，子块是检索入口。默认按标题切小节。通用模式下分段自己就是检索入口。</td></tr>
+  <tr><td class="k">入库</td><td>从上传到能被检索的过程：解析 → 分段 → 增强 → 写分段 → 分批向量化。每个阶段的状态都看得到，可以暂停、恢复、重试。</td></tr>
+  <tr><td class="k">增强</td><td>入库时用对话模型给分段补上下文、给大表写摘要。没配对话模型或开关关着就不做；失败只是少了增强，不影响入库。</td></tr>
+  <tr><td class="k">索引版本</td><td>一个库用某个向量模型建出的一套向量，对应向量库里的一个 collection。换向量模型或改分词规则，都是新建一个版本，建好后切换；旧版本保留，用于回滚。</td></tr>
+  <tr><td class="k">查询理解</td><td>检索前改写问题、生成多种表述、拆子问题、抽取过滤条件。失败就用原问题检索。</td></tr>
+  <tr><td class="k">主体标签</td><td>调用者展开后的身份：本人、所在的角色和部门。文档的 ACL 和它求交，决定能看到哪些文档。</td></tr>
+  <tr><td class="k">检索记录</td><td>每次检索的过程：每一环的候选、分数和名次，控制台画成漏斗，用来排查「为什么没检索到」。分段的命中次数也从这里汇总。</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="s3">3　由哪些部分组成</h2>
+
+<div class="fig">
+<svg viewBox="0 0 1080 466" width="100%" role="img" aria-label="容器：知识库接口、入库 worker、存储和外部服务">
+  <rect x="20" y="40" width="180" height="60" rx="6" class="c1"/>
+  <text x="110" y="64" text-anchor="middle" class="b">员工 · 控制台</text>
+  <text x="110" y="84" text-anchor="middle" class="s">知识库页面，经网关</text>
+  <rect x="20" y="130" width="180" height="74" rx="6" class="c1"/>
+  <text x="110" y="154" text-anchor="middle" class="b">Agent 平台</text>
+  <text x="110" y="174" text-anchor="middle" class="s">原生智能体 → 内部接口</text>
+  <text x="110" y="192" text-anchor="middle" class="s">会话 Pod → MCP 端点</text>
+
+  <rect x="260" y="40" width="500" height="164" rx="8" class="c2"/>
+  <text x="510" y="64" text-anchor="middle" class="tl">知识库接口</text>
+  <text x="510" y="84" text-anchor="middle" class="s">Python / FastAPI</text>
+  <rect x="276" y="100" width="150" height="56" rx="5" class="inner"/>
+  <text x="351" y="122" text-anchor="middle" class="b">管理接口</text>
+  <text x="351" y="142" text-anchor="middle" class="s">给控制台</text>
+  <rect x="436" y="100" width="150" height="56" rx="5" class="inner"/>
+  <text x="511" y="122" text-anchor="middle" class="b">内部接口</text>
+  <text x="511" y="142" text-anchor="middle" class="s">给原生智能体</text>
+  <rect x="596" y="100" width="150" height="56" rx="5" class="inner"/>
+  <text x="671" y="122" text-anchor="middle" class="b">MCP 端点</text>
+  <text x="671" y="142" text-anchor="middle" class="s">给会话 Pod，只认令牌</text>
+  <text x="510" y="186" text-anchor="middle" class="s">还跑着入库巡检：进程死后把停住的文档重新投递</text>
+
+  <path d="M200,70 H260" class="ln" marker-end="url(#ar)"/>
+  <text x="230" y="62" text-anchor="middle" class="s">管理</text>
+  <path d="M200,167 H260" class="ln" marker-end="url(#ar)"/>
+  <text x="230" y="159" text-anchor="middle" class="s">检索</text>
+
+  <rect x="840" y="40" width="220" height="64" rx="6" class="c3"/>
+  <text x="950" y="64" text-anchor="middle" class="b">用户中心</text>
+  <text x="950" y="84" text-anchor="middle" class="s">操作码、库级权限、主体展开</text>
+  <path d="M760,72 H840" class="ln" marker-end="url(#ar)"/>
+  <text x="800" y="64" text-anchor="middle" class="s">权限 · 授权</text>
+  <rect x="840" y="140" width="220" height="64" rx="6" class="c3"/>
+  <text x="950" y="164" text-anchor="middle" class="b">模型平台</text>
+  <text x="950" y="184" text-anchor="middle" class="s">向量、重排、对话模型</text>
+  <path d="M760,172 H840" class="ln" marker-end="url(#ar)"/>
+  <text x="800" y="164" text-anchor="middle" class="s">调模型</text>
+
+  <rect x="250" y="240" width="520" height="84" rx="8" class="frame dash"/>
+  <rect x="260" y="250" width="116" height="64" rx="6" class="c4"/>
+  <text x="318" y="274" text-anchor="middle" class="b">PostgreSQL</text>
+  <text x="318" y="294" text-anchor="middle" class="s">库、文档、分段…</text>
+  <rect x="388" y="250" width="116" height="64" rx="6" class="c4"/>
+  <text x="446" y="274" text-anchor="middle" class="b">Redis</text>
+  <text x="446" y="294" text-anchor="middle" class="s">队列、锁、缓存</text>
+  <rect x="516" y="250" width="116" height="64" rx="6" class="c4"/>
+  <text x="574" y="274" text-anchor="middle" class="b">向量库 Milvus</text>
+  <text x="574" y="294" text-anchor="middle" class="s">按索引版本分集合</text>
+  <rect x="644" y="250" width="116" height="64" rx="6" class="c4"/>
+  <text x="702" y="274" text-anchor="middle" class="b">对象存储 OSS</text>
+  <text x="702" y="294" text-anchor="middle" class="s">原文件、DocIR、图片</text>
+  <path d="M510,204 V240" class="ln" marker-end="url(#ar)"/>
+  <text x="518" y="226" class="s">读写</text>
+
+  <rect x="260" y="360" width="500" height="90" rx="8" class="c2"/>
+  <text x="510" y="386" text-anchor="middle" class="tl">入库 worker</text>
+  <text x="510" y="406" text-anchor="middle" class="s">Python / Celery · 和接口同一个镜像，只消费入库队列</text>
+  <text x="510" y="432" text-anchor="middle">解析 → 分段 → 增强 → 写分段 → 分批向量化 · 重建索引版本</text>
+  <path d="M510,360 V324" class="ln" marker-end="url(#ar)"/>
+  <text x="518" y="346" class="s">读写</text>
+  <path d="M760,405 H950 V204" class="ln" marker-end="url(#ar)"/>
+  <text x="958" y="300" class="s">增强、向量化</text>
+</svg>
+</div>
+<p class="cap">图 3　运行起来的几个部分。接口和 worker 是同一个包、同一个镜像，以两个子命令分别运行</p>
+
+<ul>
+  <li><b>知识库接口</b>：Python / FastAPI，有三个入口。管理接口给控制台；内部接口给 Agent 服务，用于运行时检索和编辑智能体时列出可读的库，网关不转发；MCP 端点给会话 Pod 里的 CLI 智能体，只认 Atlas 签发的令牌。接口进程里还跑着入库巡检。</li>
+  <li><b>入库 worker</b>：Celery，只消费入库队列。负责解析、分段、增强、向量化上传的文档，以及重建索引版本。</li>
+  <li><b>PostgreSQL</b>：知识库、文档、分段与子块、索引版本、元数据字段、检索记录和文档向量缓存。</li>
+  <li><b>Redis</b>：入库任务队列、入库锁、暂停标记，以及查询向量和查询理解的缓存。</li>
+  <li><b>向量库 Milvus</b>：每个知识库的每个索引版本一个 collection，里面是稠密向量、BM25 稀疏向量（由 Milvus 内置的 BM25 从检索文本生成）和文档级标量字段。</li>
+  <li><b>对象存储</b>：OSS。存上传的原文件，以及解析出的 DocIR 和图片。</li>
+</ul>
+
+<h3>两个进程里的组件</h3>
+<div class="fig">
+<svg viewBox="0 0 1080 440" width="100%" role="img" aria-label="入库 worker 和知识库接口里的组件">
+  <rect x="10" y="10" width="1060" height="196" rx="8" class="frame dash"/>
+  <text x="26" y="34" class="b">入库 worker</text>
+  <text x="106" y="34" class="s">一个文档一个任务，按阶段跑，每个阶段的状态立刻可见</text>
+
+  <rect x="30" y="52" width="140" height="64" rx="6" class="c2"/>
+  <text x="100" y="78" text-anchor="middle" class="b">入库任务</text>
+  <text x="100" y="98" text-anchor="middle" class="s">Celery，按文档</text>
+  <rect x="200" y="52" width="160" height="64" rx="6" class="c2"/>
+  <text x="280" y="78" text-anchor="middle" class="b">文档与入库</text>
+  <text x="280" y="98" text-anchor="middle" class="s">编排、锁、暂停</text>
+  <rect x="390" y="52" width="150" height="64" rx="6" class="c2"/>
+  <text x="465" y="78" text-anchor="middle" class="b">解析</text>
+  <text x="465" y="98" text-anchor="middle" class="s">文件 → DocIR</text>
+  <rect x="570" y="52" width="150" height="64" rx="6" class="c2"/>
+  <text x="645" y="78" text-anchor="middle" class="b">分段</text>
+  <text x="645" y="98" text-anchor="middle" class="s">切分、增强</text>
+  <rect x="750" y="52" width="150" height="64" rx="6" class="c2"/>
+  <text x="825" y="78" text-anchor="middle" class="b">向量索引</text>
+  <text x="825" y="98" text-anchor="middle" class="s">向量化、写入向量库</text>
+  <rect x="930" y="52" width="120" height="64" rx="6" class="c4"/>
+  <text x="990" y="78" text-anchor="middle" class="b">向量库</text>
+  <text x="990" y="98" text-anchor="middle" class="s">Milvus</text>
+  <path d="M170,84 H200" class="ln" marker-end="url(#ar)"/>
+  <path d="M360,84 H390" class="ln" marker-end="url(#ar)"/>
+  <path d="M540,84 H570" class="ln" marker-end="url(#ar)"/>
+  <path d="M720,84 H750" class="ln" marker-end="url(#ar)"/>
+  <path d="M900,84 H930" class="ln" marker-end="url(#ar)"/>
+
+  <rect x="30" y="140" width="140" height="50" rx="6" class="c4"/>
+  <text x="100" y="161" text-anchor="middle" class="b">Redis</text>
+  <text x="100" y="179" text-anchor="middle" class="s">入库队列、锁、暂停</text>
+  <rect x="200" y="140" width="160" height="50" rx="6" class="c4"/>
+  <text x="280" y="161" text-anchor="middle" class="b">对象存储 OSS</text>
+  <text x="280" y="179" text-anchor="middle" class="s">原文件、DocIR、图片</text>
+  <rect x="570" y="140" width="330" height="50" rx="6" class="c2"/>
+  <text x="735" y="161" text-anchor="middle" class="b">模型接入</text>
+  <text x="735" y="179" text-anchor="middle" class="s">增强用对话模型、向量化用向量模型 → 模型平台</text>
+  <path d="M100,140 V116" class="ln" marker-end="url(#ar)"/>
+  <path d="M280,116 V140" class="ln" marker-end="url(#ar)"/>
+  <path d="M645,116 V140" class="ln" marker-end="url(#ar)"/>
+  <path d="M825,116 V140" class="ln" marker-end="url(#ar)"/>
+
+  <rect x="10" y="224" width="1060" height="206" rx="8" class="frame dash"/>
+  <text x="26" y="248" class="b">知识库接口</text>
+  <text x="110" y="248" class="s">智能体检索走内部接口或 MCP 端点；管理接口给控制台</text>
+
+  <rect x="30" y="266" width="170" height="64" rx="6" class="c2"/>
+  <text x="115" y="292" text-anchor="middle" class="b">内部接口 · MCP 端点</text>
+  <text x="115" y="312" text-anchor="middle" class="s">智能体检索</text>
+  <rect x="240" y="266" width="420" height="64" rx="6" class="c2"/>
+  <text x="450" y="292" text-anchor="middle" class="b">检索</text>
+  <text x="450" y="312" text-anchor="middle" class="s">查询理解 → 按权限和版本混合召回 → 融合、重排 → 组装</text>
+  <rect x="700" y="266" width="200" height="64" rx="6" class="c2"/>
+  <text x="800" y="292" text-anchor="middle" class="b">向量索引</text>
+  <text x="800" y="312" text-anchor="middle" class="s">按库的 active 版本查</text>
+  <rect x="930" y="266" width="120" height="64" rx="6" class="c4"/>
+  <text x="990" y="292" text-anchor="middle" class="b">向量库</text>
+  <text x="990" y="312" text-anchor="middle" class="s">Milvus</text>
+  <path d="M200,298 H240" class="ln" marker-end="url(#ar)"/>
+  <path d="M660,298 H700" class="ln" marker-end="url(#ar)"/>
+  <path d="M900,298 H930" class="ln" marker-end="url(#ar)"/>
+
+  <rect x="30" y="354" width="170" height="56" rx="6" class="c2"/>
+  <text x="115" y="377" text-anchor="middle" class="b">管理接口</text>
+  <text x="115" y="397" text-anchor="middle" class="s">给控制台</text>
+  <rect x="240" y="354" width="200" height="56" rx="6" class="c2"/>
+  <text x="340" y="377" text-anchor="middle" class="b">访问控制</text>
+  <text x="340" y="397" text-anchor="middle" class="s">→ 用户中心：逐库校验</text>
+  <rect x="460" y="354" width="200" height="56" rx="6" class="c2"/>
+  <text x="560" y="377" text-anchor="middle" class="b">模型接入</text>
+  <text x="560" y="397" text-anchor="middle" class="s">→ 模型平台：查询理解、重排</text>
+  <rect x="700" y="354" width="350" height="56" rx="6" class="inner dash"/>
+  <text x="875" y="377" text-anchor="middle" class="b">知识库 · 文档与入库 · 分段</text>
+  <text x="875" y="397" text-anchor="middle" class="s">建库、上传、改状态、编辑分段、共享</text>
+  <path d="M340,330 V354" class="ln" marker-end="url(#ar)"/>
+  <path d="M560,330 V354" class="ln" marker-end="url(#ar)"/>
+  <path d="M200,382 H220 V318 H240" class="ln" marker-end="url(#ar)"/>
+  <path d="M115,410 V422 H875 V410" class="ln" marker-end="url(#ar)"/>
+</svg>
+</div>
+<p class="cap">图 4　入库一条线，检索一条线。两个进程里同名的组件是同一份代码；管理接口还会做召回测试，走的也是检索</p>
+
+<table>
+  <tr><th>组件</th><th>在哪个进程</th><th>管什么</th></tr>
+  <tr><td class="k">管理接口</td><td>接口</td><td>给控制台：知识库、文档、分段、共享、索引版本、元数据、召回测试和检索记录。</td></tr>
+  <tr><td class="k">内部接口</td><td>接口</td><td>给 Agent 服务：智能体运行时检索，编辑智能体时列出可读的库。网关不转发。</td></tr>
+  <tr><td class="k">MCP 端点</td><td>接口</td><td>给会话 Pod 里的 CLI 智能体提供检索工具。只认 Atlas 签发的令牌，库和身份都取自令牌，不认身份请求头。</td></tr>
+  <tr><td class="k">入库任务</td><td>worker</td><td>Celery 任务：一个文档一个入库任务；重建索引版本。</td></tr>
+  <tr><td class="k">知识库</td><td>两者</td><td>库的配置、共享（直接改用户中心）和元数据字段。删库、加字段发事件，各领域处理自己的数据。</td></tr>
+  <tr><td class="k">文档与入库</td><td>两者</td><td>上传、文档状态（暂停、恢复、重试、启用、审核、删除）和属性。worker 里持锁按阶段编排入库；进程死了，接口里的巡检把停住的文档重新投递。</td></tr>
+  <tr><td class="k">解析</td><td>worker（分段预览也用）</td><td>各种格式 → DocIR，附解析质量报告。PDF 做版面分析；不做 OCR，扫描页标记出来，先进待审核。</td></tr>
+  <tr><td class="k">分段</td><td>两者</td><td>切父分段和子块，做上下文补全和大表摘要。人在控制台编辑分段后，同步重写向量。</td></tr>
+  <tr><td class="k">向量索引</td><td>两者</td><td>稠密向量和 BM25 稀疏向量写进同一条记录，BM25 的分词和 IDF 交给 Milvus；文档级字段只改标量字段；索引版本的重建与切换。</td></tr>
+  <tr><td class="k">检索</td><td>接口</td><td>查询理解、检索范围（权限、版本、元数据）、混合召回、融合与重排、组装。每次检索记一条过程记录。</td></tr>
+  <tr><td class="k">访问控制</td><td>接口</td><td>调用身份、操作码、库级权限、文档级主体标签、MCP 令牌。自己不存授权，都在用户中心；用户中心不可用时一律拒绝。</td></tr>
+  <tr><td class="k">模型接入</td><td>两者</td><td>向量、重排、对话模型。本地 fastembed 模型打在镜像里；远程模型一律经模型平台，取服务级 Key。对话模型可以不配，增强和查询理解就不做。</td></tr>
+</table>
+<p class="sub">深入：<a target="_blank" rel="noopener" href="../../c4-model/knowledge/container.html">容器图</a> · <a target="_blank" rel="noopener" href="../../c4-model/knowledge/component-api.html">知识库接口组件图</a> · <a target="_blank" rel="noopener" href="../../c4-model/knowledge/component-worker.html">入库 worker 组件图</a><br>
+领域代码图：<a target="_blank" rel="noopener" href="../../c4-model/knowledge/code-dataset.html">知识库</a> · <a target="_blank" rel="noopener" href="../../c4-model/knowledge/code-document.html">文档与入库</a> · <a target="_blank" rel="noopener" href="../../c4-model/knowledge/code-parse.html">解析</a> · <a target="_blank" rel="noopener" href="../../c4-model/knowledge/code-segment.html">分段</a> · <a target="_blank" rel="noopener" href="../../c4-model/knowledge/code-index.html">向量索引</a> · <a target="_blank" rel="noopener" href="../../c4-model/knowledge/code-retrieval.html">检索</a> · <a target="_blank" rel="noopener" href="../../c4-model/knowledge/code-access.html">访问控制</a> · <a target="_blank" rel="noopener" href="../../c4-model/knowledge/code-models.html">模型接入</a></p>
+
+<!-- ============================================================ -->
+<h2 id="s4">4　时序图</h2>
+
+<table>
+  <tr><th>场景</th><th>链接</th></tr>
+  <tr><td>上传文档并入库</td><td><a target="_blank" rel="noopener" href="../../c4-model/knowledge/dynamic/dynamic-ingest.html">dynamic/dynamic-ingest.html</a></td></tr>
+  <tr><td>智能体检索</td><td><a target="_blank" rel="noopener" href="../../c4-model/knowledge/dynamic/dynamic-retrieve.html">dynamic/dynamic-retrieve.html</a></td></tr>
+  <tr><td>会话 Pod 经 MCP 检索</td><td><a target="_blank" rel="noopener" href="../../c4-model/knowledge/dynamic/dynamic-mcp.html">dynamic/dynamic-mcp.html</a></td></tr>
+  <tr><td>换向量模型</td><td><a target="_blank" rel="noopener" href="../../c4-model/knowledge/dynamic/dynamic-reindex.html">dynamic/dynamic-reindex.html</a></td></tr>
+</table>
+
+</main>
+</body>
+</html>
