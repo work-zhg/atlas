@@ -126,12 +126,12 @@
       ]
     },
     {
-      "id": "qdrant",
+      "id": "vdb",
       "kind": "container",
       "shape": "database",
-      "technology": "Qdrant",
+      "technology": "Milvus 2.6",
       "name": "向量库",
-      "description": "每个知识库的每个索引版本一个 collection：稠密向量、BM25 稀疏向量和文档级 payload。",
+      "description": "每个知识库的每个索引版本一个 collection：稠密向量、BM25 稀疏向量（Milvus 内置的 BM25 生成）和文档级标量字段。",
       "at": [
         1.3,
         3.85
@@ -183,9 +183,9 @@
     },
     {
       "from": "api",
-      "to": "qdrant",
-      "description": "检索，改文档级 payload，删向量",
-      "technology": "HTTP（Qdrant REST）"
+      "to": "vdb",
+      "description": "检索，改文档级字段，删向量",
+      "technology": "gRPC（pymilvus）"
     },
     {
       "from": "worker",
@@ -207,9 +207,9 @@
     },
     {
       "from": "worker",
-      "to": "qdrant",
-      "description": "写向量和 payload",
-      "technology": "HTTP（Qdrant REST）"
+      "to": "vdb",
+      "description": "写向量和标量字段",
+      "technology": "gRPC（pymilvus）"
     },
     {
       "from": "worker",

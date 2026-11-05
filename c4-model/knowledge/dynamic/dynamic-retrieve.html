@@ -27,6 +27,44 @@
   #c4-details td.sample { word-break: break-all; }
   #c4-details pre { margin: 0; padding: 10px 12px; border: 1px solid #e3e3e3; background: #f6f8fa; font-size: 12px; line-height: 1.5; overflow-x: auto; }
   svg a { cursor: pointer; }
+  /* 检索原理：手写的静态图，不经渲染器 */
+  #principle { max-width: 1280px; }
+  #principle h3 { margin: 32px 0 8px; font-size: 15px; font-weight: 600; color: #333; }
+  #principle p { margin: 0 0 8px; font-size: 14px; line-height: 1.7; }
+  #principle code { padding: 0 3px; background: #f6f8fa; font-family: Menlo, Consolas, monospace; font-size: 12.5px; }
+  #principle ol { margin: 8px 0 0; padding: 0; list-style: none; }
+  #principle ol li { position: relative; margin: 0 0 6px; padding-left: 30px; font-size: 14px; line-height: 1.7; }
+  #principle ol li .n { position: absolute; left: 0; top: 2px; width: 20px; height: 20px; border-radius: 50%; background: #d9480f; color: #fff; font-size: 12px; font-weight: 700; line-height: 20px; text-align: center; }
+  #principle table { width: 100%; margin: 8px 0 0; border-collapse: collapse; font-size: 13px; line-height: 1.6; }
+  #principle th, #principle td { padding: 6px 10px; border: 1px solid #e3e3e3; text-align: left; vertical-align: top; }
+  #principle th { background: #f6f8fa; font-weight: 600; }
+  #principle th:first-child { width: 28%; }
+  #principle svg { margin: 8px 0 4px; }
+  #principle svg text { font-size: 13px; fill: #444; }
+  #principle svg .t-name { font-size: 15px; fill: #1168bd; text-anchor: middle; }
+  #principle svg .t-sub { font-size: 12px; fill: #888; text-anchor: middle; }
+  #principle svg .t-head { font-size: 14px; font-weight: 600; fill: #1168bd; }
+  #principle svg .t-key { font-size: 12px; fill: #888; }
+  #principle svg .t-lab { font-size: 12px; fill: #666; }
+  #principle svg .t-hot { font-size: 12px; fill: #d9480f; }
+  #principle svg .t-mute { font-size: 12px; fill: #aaa; }
+  #principle svg .t-ghost { font-size: 14px; font-weight: 600; fill: #888; }
+  #principle svg .hot { fill: #d9480f; }
+  #principle svg .mid { text-anchor: middle; }
+  #principle svg .end { text-anchor: end; }
+  #principle svg .b { font-weight: 700; }
+  #principle svg .node { fill: #fff; stroke: #1168bd; stroke-width: 1.6; }
+  #principle svg .head { fill: #f6f8fa; stroke: none; }
+  #principle svg .sep { stroke: #e3e3e3; stroke-width: 1; }
+  #principle svg .bnd { fill: none; stroke: #1168bd; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .ghost { fill: #fafafa; stroke: #aaa; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .gap { fill: #fff6f0; stroke: #d9480f; stroke-width: 1.2; stroke-dasharray: 5 4; }
+  #principle svg .e { fill: none; stroke: #444; stroke-width: 1.6; }
+  #principle svg .e-hot { fill: none; stroke: #d9480f; stroke-width: 2.4; }
+  #principle svg .e-mute { fill: none; stroke: #bbb; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .e-link { fill: none; stroke: #d9480f; stroke-width: 1.4; stroke-dasharray: 4 3; }
+  #principle svg .badge circle { fill: #d9480f; stroke: #fff; stroke-width: 2; }
+  #principle svg .badge text { fill: #fff; font-size: 12px; font-weight: 700; text-anchor: middle; }
 </style>
 </head>
 <body>
@@ -82,7 +120,7 @@
       "id": "index",
       "kind": "component",
       "name": "向量索引",
-      "technology": "qdrant-client + jieba",
+      "technology": "pymilvus",
       "in": "apiB"
     },
     {
@@ -101,10 +139,10 @@
       "in": "kb"
     },
     {
-      "id": "qdrant",
+      "id": "vdb",
       "kind": "container",
       "name": "向量库",
-      "technology": "Qdrant",
+      "technology": "Milvus 2.6",
       "shape": "database",
       "in": "kb"
     },
@@ -227,17 +265,17 @@
     },
     {
       "from": "index",
-      "to": "qdrant",
+      "to": "vdb",
       "description": "稠密检索、BM25 检索（混合时两路并发）",
-      "technology": "HTTP（Qdrant REST）",
+      "technology": "gRPC（pymilvus）",
       "details": {
-        "note": "查询向量先查 Redis 缓存；远程向量模型时经模型接入调模型平台（图中省略）。collection 用 active 索引版本的。"
+        "note": "查询向量先查 Redis 缓存；远程向量模型时经模型接入调模型平台（图中省略）。BM25 一路直接传问题文本，由 Milvus 分词。collection 用 active 索引版本的；过滤用表达式模板传参；一致性用默认的有界一致性。"
       }
     },
     {
       "from": "retrieval",
       "to": "retrieval",
-      "description": "按 point 去重，多个表述按 RRF 融合"
+      "description": "按主键去重，多个表述按 RRF 融合"
     },
     {
       "from": "retrieval",
@@ -296,6 +334,451 @@
   <section id="c4-details" hidden></section>
   <h2>Diagram key</h2>
   <svg id="c4-key" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+
+  <!-- 检索原理：静态图，不经上面的渲染器。场景同时序图：原生智能体绑了库 A、库 B，这一轮的身份看不了库 B -->
+  <section id="principle">
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+      <defs>
+        <marker id="pr-a" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#444"/></marker>
+        <marker id="pr-h" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#d9480f"/></marker>
+        <marker id="pr-m" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#bbb"/></marker>
+      </defs>
+    </svg>
+
+    <h2>检索原理：从一个问题到几段资料</h2>
+    <p>一句话：智能体问一个问题，知识库要从成千上万段资料里挑出最能回答它的几段。做法有点像招聘：先按条件筛掉不能看的（权限），再把问题弄清楚、换几种问法（理解问题），然后用两种方式各找一批候选——按意思找、按关键词找——把几份候选名单合成一份、重新打分排名，最后去掉太像的、截取前几名交回去。每一步留下了谁、淘汰了谁都记下来，事后能查「为什么没搜到」。下面先解释几个词，再用六张图走一遍：图 1 讲向量库里存了什么、分数从哪来，图 2 到图 5 是检索的四个步骤，图 6 是去重复的一个算例。场景同上面的时序图：智能体绑了库 A、库 B，这一轮的身份看不了库 B。橙色是这个场景实际走的路，灰色虚线是没走的分支。</p>
+
+    <h3>先认识几个词</h3>
+    <table>
+      <thead><tr><th>词</th><th>意思</th></tr></thead>
+      <tbody>
+        <tr><td>分段、父分段、子块</td><td>入库时把文档切成的小段。父分段是一整个小节，交给模型看；子块是父分段里的一两句，专门用来被搜到。例：「3.1 年假」这一节是一个父分段，「年假可以分两次休」是它的一个子块。</td></tr>
+        <tr><td>向量</td><td>向量模型把一段文字变成一串数字（几百到上千个）。意思相近的两段文字，算出来的数字串也相近。入库时给每个子块算好存起来；检索时给问题现算一个，叫查询向量。</td></tr>
+        <tr><td>相似度</td><td>两串数字有多像，用余弦相似度算，越接近 1 越像。</td></tr>
+        <tr><td>向量库记录（entity）</td><td>向量库里的一行，对应一个子块，存着它的向量、检索文本和一组筛选用的字段（图 1）。</td></tr>
+        <tr><td>召回</td><td>先从几万条记录里粗选出一批候选，求快，宁多勿漏。</td></tr>
+        <tr><td>重排</td><td>对召回来的几十条候选再仔细打一遍分，按新分数排序。</td></tr>
+        <tr><td>名次融合（RRF）</td><td>把几份排好序的名单合成一份：只看每条在各名单里排第几，不看原来的分数（图 4）。</td></tr>
+        <tr><td>门槛（阈值）</td><td>分数低于它的候选直接丢掉。默认不开。</td></tr>
+        <tr><td>top_k</td><td>最后交回几段，默认 4，最多 20。</td></tr>
+        <tr><td>主体标签</td><td>把「谁在查」展开成一组标签：本人、角色、所在部门和上级部门。文档的可见范围里写的也是这种标签（图 2）。</td></tr>
+        <tr><td>漏斗</td><td>每一步进来多少候选、留下多少、谁在哪一步被淘汰，存成一条检索记录（图 5）。</td></tr>
+      </tbody>
+    </table>
+
+    <h3>图 1　向量库里的一条记录长什么样，两种分数从哪来</h3>
+    <svg width="1240" viewBox="0 0 1240 408" role="img" aria-label="向量库里的一条记录有哪些字段，两种分数从哪来">
+      <rect class="node" x="20" y="30" width="600" height="362" rx="4"/>
+      <text class="t-head" x="36" y="54">向量库里的一条记录（entity）：对应一个子块</text>
+      <text class="t-lab b" x="36" y="88">主键</text>
+      <text class="t-lab" x="170" y="88">子块的 uuid，入库时生成</text>
+      <path class="sep" d="M30 98 H610"/>
+      <text class="t-hot b" x="36" y="116">dense</text>
+      <text class="t-lab" x="170" y="116">一串数字（向量）：向量模型把「标题路径 + 子块原文」算出来</text>
+      <path class="sep" d="M30 126 H610"/>
+      <text class="t-hot b" x="36" y="144">text</text>
+      <text class="t-lab" x="170" y="144">检索文本：差旅制度 > 住宿标准　一线城市每晚不超过……</text>
+      <path class="sep" d="M30 154 H610"/>
+      <text class="t-hot b" x="36" y="172">sparse</text>
+      <text class="t-lab" x="170" y="172">词 → 权重：Milvus 从 text 自动算出，给关键词打分用</text>
+      <path class="sep" d="M30 182 H610"/>
+      <text class="t-lab b" x="36" y="200">kind</text>
+      <text class="t-lab" x="170" y="200">子块 / 分段 / 表格摘要</text>
+      <path class="sep" d="M30 210 H610"/>
+      <text class="t-lab b" x="36" y="228">segment_uuid</text>
+      <text class="t-lab" x="170" y="228">搜到后回到哪个父分段</text>
+      <path class="sep" d="M30 238 H610"/>
+      <text class="t-lab b" x="36" y="256">document_uuid</text>
+      <text class="t-lab" x="170" y="256">属于哪份文档（还有 dataset_uuid：哪个库）</text>
+      <path class="sep" d="M30 266 H610"/>
+      <text class="t-lab b" x="36" y="284">enabled · doc_ok</text>
+      <text class="t-lab" x="170" y="284">这一段开着吗；文档能不能被检索（启用、未归档、审核通过）</text>
+      <path class="sep" d="M30 294 H610"/>
+      <text class="t-lab b" x="36" y="312">acl</text>
+      <text class="t-lab" x="170" y="312">谁能看：如 [d:研发部, r:hr]；没设就是 public（公开）</text>
+      <path class="sep" d="M30 322 H610"/>
+      <text class="t-lab b" x="36" y="340">is_current · 有效期</text>
+      <text class="t-lab" x="170" y="340">是不是当前版本；valid_from ~ valid_to</text>
+      <path class="sep" d="M30 350 H610"/>
+      <text class="t-lab b" x="36" y="368">meta</text>
+      <text class="t-lab" x="170" y="368">业务元数据，如 {"year": 2026, "类别": "制度"}</text>
+      <rect class="node" x="660" y="30" width="560" height="50" rx="4"/>
+      <text class="t-name" x="940.0" y="60.0">问题：年假可以分几次休？</text>
+      <path class="e-hot" d="M790 80 V108" marker-end="url(#pr-h)"/>
+      <path class="e-hot" d="M1090 80 V108" marker-end="url(#pr-h)"/>
+      <rect class="node" x="660" y="110" width="260" height="56" rx="4"/>
+      <text class="t-name" x="790.0" y="134.0">向量模型</text>
+      <text class="t-sub" x="790.0" y="154.0">把问题也算成一串数字（查询向量）</text>
+      <path class="e-hot" d="M790 166 V194" marker-end="url(#pr-h)"/>
+      <rect class="node" x="660" y="196" width="260" height="64" rx="4"/>
+      <text class="t-name" x="790.0" y="224.0">和每条记录的 dense 比</text>
+      <text class="t-sub" x="790.0" y="244.0">余弦相似度：越像越接近 1</text>
+      <path class="e-hot" d="M790 260 V288" marker-end="url(#pr-h)"/>
+      <rect class="node" x="660" y="290" width="260" height="48" rx="4"/>
+      <text class="t-name hot" x="790.0" y="319.0">语义分 0.83</text>
+      <rect class="node" x="960" y="110" width="260" height="56" rx="4"/>
+      <text class="t-name" x="1090.0" y="134.0">Milvus 把问题切成词</text>
+      <text class="t-sub" x="1090.0" y="154.0">年假 / 可以 / 分 / 几次 / 休</text>
+      <path class="e-hot" d="M1090 166 V194" marker-end="url(#pr-h)"/>
+      <rect class="node" x="960" y="196" width="260" height="64" rx="4"/>
+      <text class="t-name" x="1090.0" y="224.0">和每条记录的 sparse 比</text>
+      <text class="t-sub" x="1090.0" y="244.0">BM25：词越少见、出现越多，分越高</text>
+      <path class="e-hot" d="M1090 260 V288" marker-end="url(#pr-h)"/>
+      <rect class="node" x="960" y="290" width="260" height="48" rx="4"/>
+      <text class="t-name hot" x="1090.0" y="319.0">关键词分 12.6</text>
+      <rect class="gap" x="660" y="352" width="560" height="40" rx="4"/>
+      <text class="t-hot mid" x="940" y="377">尺度不同：一个在 0~1，一个没有上限，不能直接相加比较</text>
+      <g class="badge"><circle cx="20" cy="30" r="10"/><text x="20" y="34">1</text></g>
+      <g class="badge"><circle cx="660" cy="110" r="10"/><text x="660" y="114">2</text></g>
+      <g class="badge"><circle cx="960" cy="110" r="10"/><text x="960" y="114">3</text></g>
+      <g class="badge"><circle cx="660" cy="352" r="10"/><text x="660" y="356">4</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>向量库里每一条记录对应一个子块（通用模式下对应一个分段，表格摘要也单独一条），入库时写进去。检索真正拿来比的是 dense 和 sparse 两个字段；其余字段一部分用来筛选（acl、is_current、有效期、enabled、doc_ok、meta），一部分用来找回原文（segment_uuid、document_uuid）。</li>
+      <li><span class="n">2</span>按意思找（语义检索）：用同一个向量模型把问题也算成一串数字，叫查询向量，再和每条记录的 dense 比有多像（余弦相似度），意思越接近，分数越接近 1。「年假能休几次」和「年假可以分两次休」用词不同，但意思近，分数也高。</li>
+      <li><span class="n">3</span>按关键词找（BM25）：Milvus 把问题切成词，和每条记录的 sparse 比。问题里的词在这条记录里出现得越多、这个词在整个库里越少见，分越高：「年假」到处都有，权重低；「几次」少见一些，权重高。它擅长找专有名词和编号，比如「GB/T 7714」。</li>
+      <li><span class="n">4</span>两种分数的尺度不一样：语义分在 0~1 之间，关键词分没有上限，常见十几、几十。所以后面不能把它们直接加起来比，只能按名次合并，或者统一重新打分（图 4）。</li>
+    </ol>
+
+    <h3>图 2　第一步：先确定能看什么</h3>
+    <svg width="1240" viewBox="0 0 1240 360" role="img" aria-label="先确定能看什么：库、文档两道关，都由服务端加上">
+      <rect class="node" x="20" y="40" width="200" height="64" rx="4"/>
+      <text class="t-name" x="120.0" y="68.0">这一轮的请求</text>
+      <text class="t-sub" x="120.0" y="88.0">要查的库来自智能体配置</text>
+      <text class="t-lab mid" x="120" y="126">绑定了：库 A、库 B</text>
+      <text class="t-lab mid" x="120" y="146">按谁的身份查：这一轮的使用者</text>
+      <text class="t-lab mid" x="120" y="164">（或智能体的数字员工）</text>
+      <path class="e-hot" d="M220 72 H268" marker-end="url(#pr-h)"/>
+      <rect class="node" x="270" y="40" width="230" height="64" rx="4"/>
+      <text class="t-name" x="385.0" y="68.0">能不能看这个库</text>
+      <text class="t-sub" x="385.0" y="88.0">每个库都问用户中心，不留缓存</text>
+      <path class="e-hot" d="M500 60 H525 V44 H548" marker-end="url(#pr-h)"/>
+      <path class="e-hot" d="M500 84 H525 V100 H548" marker-end="url(#pr-h)"/>
+      <rect class="node" x="550" y="24" width="150" height="40" rx="4"/>
+      <text class="t-name" x="625.0" y="49.0">库 A：能看</text>
+      <rect class="gap" x="550" y="80" width="150" height="40" rx="4"/>
+      <text class="t-hot mid" x="625.0" y="105.0">库 B：不能看</text>
+      <text class="t-hot" x="712" y="104">→ 跳过，提示「另有 1 个知识库没有访问权限」</text>
+      <path class="e-hot" d="M120 172 V202 H268" marker-end="url(#pr-h)"/>
+      <rect class="node" x="270" y="170" width="230" height="64" rx="4"/>
+      <text class="t-name" x="385.0" y="198.0">能看库里哪些文档</text>
+      <text class="t-sub" x="385.0" y="218.0">把身份展开成一组标签</text>
+      <path class="e-hot" d="M500 202 H548" marker-end="url(#pr-h)"/>
+      <rect class="node" x="550" y="186" width="80" height="32" rx="4"/>
+      <text class="t-lab mid" x="590.0" y="207">u:本人</text>
+      <rect class="node" x="640" y="186" width="80" height="32" rx="4"/>
+      <text class="t-lab mid" x="680.0" y="207">r:角色</text>
+      <rect class="node" x="730" y="186" width="100" height="32" rx="4"/>
+      <text class="t-lab mid" x="780.0" y="207">d:所在部门</text>
+      <rect class="node" x="840" y="186" width="130" height="32" rx="4"/>
+      <text class="t-lab mid" x="905.0" y="207">d:各级上级部门</text>
+      <path class="e-hot" d="M700 44 H1180 V260" marker-end="url(#pr-h)"/>
+      <text class="t-hot end" x="1172" y="150">只给能看的库生成</text>
+      <path class="e-hot" d="M905 218 V260" marker-end="url(#pr-h)"/>
+      <rect class="bnd" x="20" y="262" width="1200" height="86" rx="6"/>
+      <text class="t-head" x="36" y="284">给每个能看的库生成一个筛选条件，向量库只在这个范围里找</text>
+      <rect class="gap" x="36" y="296" width="760" height="40" rx="4"/>
+      <text class="t-hot" x="48" y="321">必须满足（服务端加上）：可见范围里有你的标签或是公开的 · 当前版本 · 在有效期内 · 已启用、审核通过</text>
+      <rect class="ghost" x="810" y="296" width="394" height="40" rx="4"/>
+      <text class="t-mute mid" x="1007" y="321">只能再缩小（可选）：调用方给的筛选、从问题里抽出的条件</text>
+      <g class="badge"><circle cx="20" cy="40" r="10"/><text x="20" y="44">1</text></g>
+      <g class="badge"><circle cx="270" cy="40" r="10"/><text x="270" y="44">2</text></g>
+      <g class="badge"><circle cx="550" cy="80" r="10"/><text x="550" y="84">3</text></g>
+      <g class="badge"><circle cx="270" cy="170" r="10"/><text x="270" y="174">4</text></g>
+      <g class="badge"><circle cx="20" cy="262" r="10"/><text x="20" y="266">5</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>智能体能查哪些库，是在它的配置里绑定好的，模型不能自己指定库；否则被诱导的模型就能去查没绑定的库。「按谁的身份查」是这一轮的使用者；如果智能体设成「以 Agent 为权限」，就按它的数字员工查。</li>
+      <li><span class="n">2</span>第一道关：能不能看这个库。每次检索都逐个库去问用户中心，不留缓存，所以收回权限后下一次检索立刻生效。用户中心连不上时，一律当作不能看。</li>
+      <li><span class="n">3</span>不能看的库直接跳过，只把库 id 告诉智能体，不透露库里有什么；智能体会提示用户「另有 N 个知识库没有访问权限」。一个库都看不了，就直接返回空结果。</li>
+      <li><span class="n">4</span>第二道关：能看库里的哪些文档。每份文档可以设可见范围（ACL），写的是一组标签，比如「研发部」「HR 角色」。检索时把查询的人展开成同样格式的标签：<code>u:</code> 本人、<code>r:</code> 角色、<code>d:</code> 所在部门以及各级上级部门（研发三组 → 研发部 → 公司），两边有交集就能看。展开失败时只用本人标签，结果只会更少，不会多看。</li>
+      <li><span class="n">5</span>最后给每个能看的库生成一个筛选条件，交给向量库：只在满足条件的记录里找。前一半由服务端强制加上，谁也去不掉；后一半是可选的，只能把范围再缩小。条件里的值用参数传进去，不直接拼进字符串，防止被注入。</li>
+    </ol>
+
+    <h3>图 3　第二步：把问题理解清楚，换几种问法</h3>
+    <svg width="1240" viewBox="0 0 1240 410" role="img" aria-label="把问题理解清楚：一次大模型调用，只做需要的事">
+      <rect class="node" x="20" y="50" width="220" height="130" rx="4"/>
+      <text class="t-name" x="130.0" y="79.0">输入</text>
+      <text class="t-sub" x="130.0" y="99.0">问题 + 最近 6 轮对话</text>
+      <text class="t-sub" x="130.0" y="119.0">库的检索设置</text>
+      <text class="t-sub" x="130.0" y="139.0">库里可抽取的字段</text>
+      <text class="t-sub" x="130.0" y="159.0">绑定的库</text>
+      <path class="e-hot" d="M240 110 H278" marker-end="url(#pr-h)"/>
+      <rect class="bnd" x="280" y="30" width="560" height="230" rx="6"/>
+      <text class="t-head" x="296" y="54">只做需要的：一次让大模型把这几件事一起做完</text>
+      <rect class="node" x="296" y="68" width="120" height="26" rx="4"/>
+      <text class="t-lab mid" x="356" y="86">补全问题</text>
+      <text class="t-lab" x="430" y="86">问题里有「它」「这个」，或太短时，结合前文补全</text>
+      <rect class="node" x="296" y="99" width="120" height="26" rx="4"/>
+      <text class="t-lab mid" x="356" y="117">换几种说法</text>
+      <text class="t-lab" x="430" y="117">库开了多查询：再出 2–3 种问法</text>
+      <rect class="node" x="296" y="130" width="120" height="26" rx="4"/>
+      <text class="t-lab mid" x="356" y="148">假设答案</text>
+      <text class="t-lab" x="430" y="148">库开了 HyDE：先写一段可能的答案，用它按意思找</text>
+      <rect class="node" x="296" y="161" width="120" height="26" rx="4"/>
+      <text class="t-lab mid" x="356" y="179">拆成小问题</text>
+      <text class="t-lab" x="430" y="179">库开了：「A 和 B 有什么区别」拆成问 A、问 B</text>
+      <rect class="node" x="296" y="192" width="120" height="26" rx="4"/>
+      <text class="t-lab mid" x="356" y="210">抽筛选条件</text>
+      <text class="t-lab" x="430" y="210">库里定义了可抽的字段：「2026 年的制度」→ 年份 = 2026</text>
+      <rect class="node" x="296" y="223" width="120" height="26" rx="4"/>
+      <text class="t-lab mid" x="356" y="241">挑库</text>
+      <text class="t-lab" x="430" y="241">绑的库超过 5 个：先挑出最相关的几个</text>
+      <path class="e-hot" d="M840 130 H888" marker-end="url(#pr-h)"/>
+      <rect class="node" x="890" y="50" width="330" height="160" rx="4"/>
+      <text class="t-name" x="1055.0" y="84.0">查询计划</text>
+      <text class="t-sub" x="1055.0" y="104.0">主问题：补全后的问题</text>
+      <text class="t-sub" x="1055.0" y="124.0">几种问法：假设答案只按意思找</text>
+      <text class="t-sub" x="1055.0" y="144.0">拆出来的小问题</text>
+      <text class="t-sub" x="1055.0" y="164.0">筛选条件（已校验）</text>
+      <text class="t-sub" x="1055.0" y="184.0">挑中的库</text>
+      <text class="t-sub" x="1080" y="236">同样的问题和前文，</text>
+      <text class="t-sub" x="1080" y="254">结果缓存 1 小时</text>
+      <path class="e-mute" d="M130 180 V282 H900 V212" marker-end="url(#pr-m)"/>
+      <text class="t-mute mid" x="560" y="276">一件都不需要做（或没配大模型）：不调用，直接用原问题</text>
+      <rect class="gap" x="280" y="298" width="560" height="40" rx="4"/>
+      <text class="t-hot mid" x="560" y="323">大模型出错、超时（20 秒）、回答格式不对 → 就用原问题检索</text>
+      <rect class="node" x="20" y="356" width="1200" height="40" rx="4"/>
+      <text class="t-lab mid" x="620" y="381">自动补救：第一轮最好的结果也低于库设的门槛、且只用了一种问法 → 换几种说法再查一次；漏斗里只留第二轮</text>
+      <g class="badge"><circle cx="280" cy="30" r="10"/><text x="280" y="34">1</text></g>
+      <g class="badge"><circle cx="890" cy="50" r="10"/><text x="890" y="54">2</text></g>
+      <g class="badge"><circle cx="130" cy="282" r="10"/><text x="130" y="286">3</text></g>
+      <g class="badge"><circle cx="280" cy="298" r="10"/><text x="280" y="302">4</text></g>
+      <g class="badge"><circle cx="20" cy="356" r="10"/><text x="20" y="360">5</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>「理解问题」是一次大模型调用，只把需要做的事放进去：问题里有「它」「这个」「上面」这类指代、或者不到 8 个字时，结合最近的对话把它补全；换几种说法、写假设答案、拆小问题，要看库的设置开没开；库里定义了可以从问题里抽取的字段（比如年份），才抽筛选条件；绑的库超过 5 个，才先挑库。</li>
+      <li><span class="n">2</span>大模型交回一份查询计划：补全后的主问题、几种问法（原问题排第一个；假设答案只用来按意思找，不按关键词找）、拆出来的小问题、校验过的筛选条件、挑中的库。</li>
+      <li><span class="n">3</span>一件都不需要做（或者没配大模型）就不调用，直接用原问题。同样的问题和前文，结果缓存 1 小时。</li>
+      <li><span class="n">4</span>大模型出错、超时（20 秒）、回答格式不对，都退回用原问题检索，不让检索失败。从问题里抽出的筛选条件只能缩小范围，碰不到图 2 里服务端强制加的权限和版本。</li>
+      <li><span class="n">5</span>自动补救：库设了门槛时，如果第一轮最好的结果分数都低于门槛、而且只用了一种问法，就换几种说法再查一次。漏斗里只留第二轮，免得同一段「被淘汰了又回来」。</li>
+    </ol>
+
+    <h3>图 4　第三步：两种方式各找一批，合成一份名单，再重新打分</h3>
+    <svg width="1240" viewBox="0 0 1240 360" role="img" aria-label="两种方式各找一批，按名次合成一份名单，再重新打分">
+      <text class="t-head" x="20" y="30">库 A · 两种方式都用（混合检索）· 三种问法</text>
+      <rect class="node" x="20" y="60" width="150" height="56" rx="4"/>
+      <text class="t-name" x="95.0" y="84.0">问法 1</text>
+      <text class="t-sub" x="95.0" y="104.0">原问题</text>
+      <path class="e-hot" d="M170 74 H208" marker-end="url(#pr-h)"/>
+      <rect class="node" x="210" y="60" width="150" height="24" rx="3"/>
+      <text class="t-lab mid" x="285" y="77">按意思找</text>
+      <path class="e-hot" d="M170 104 H208" marker-end="url(#pr-h)"/>
+      <rect class="node" x="210" y="92" width="150" height="24" rx="3"/>
+      <text class="t-lab mid" x="285" y="109">按关键词找</text>
+      <path class="e-hot" d="M360 72 H375 V88 H388" marker-end="url(#pr-h)"/>
+      <path class="e-hot" d="M360 104 H375 V88"/>
+      <rect class="node" x="390" y="60" width="140" height="56" rx="4"/>
+      <text class="t-name" x="460.0" y="84.0">按名次合并</text>
+      <text class="t-sub" x="460.0" y="104.0">两份名单 → 一份</text>
+      <path class="e-hot" d="M530 88 H550 V168 H568" marker-end="url(#pr-h)"/>
+      <rect class="node" x="20" y="140" width="150" height="56" rx="4"/>
+      <text class="t-name" x="95.0" y="164.0">问法 2</text>
+      <text class="t-sub" x="95.0" y="184.0">换个说法</text>
+      <path class="e-hot" d="M170 154 H208" marker-end="url(#pr-h)"/>
+      <rect class="node" x="210" y="140" width="150" height="24" rx="3"/>
+      <text class="t-lab mid" x="285" y="157">按意思找</text>
+      <path class="e-hot" d="M170 184 H208" marker-end="url(#pr-h)"/>
+      <rect class="node" x="210" y="172" width="150" height="24" rx="3"/>
+      <text class="t-lab mid" x="285" y="189">按关键词找</text>
+      <path class="e-hot" d="M360 152 H375 V168 H388" marker-end="url(#pr-h)"/>
+      <path class="e-hot" d="M360 184 H375 V168"/>
+      <rect class="node" x="390" y="140" width="140" height="56" rx="4"/>
+      <text class="t-name" x="460.0" y="164.0">按名次合并</text>
+      <text class="t-sub" x="460.0" y="184.0">两份名单 → 一份</text>
+      <path class="e-hot" d="M530 168 H550 V168 H568" marker-end="url(#pr-h)"/>
+      <rect class="node" x="20" y="220" width="150" height="56" rx="4"/>
+      <text class="t-name" x="95.0" y="244.0">假设答案</text>
+      <text class="t-sub" x="95.0" y="264.0">HyDE</text>
+      <path class="e-hot" d="M170 234 H208" marker-end="url(#pr-h)"/>
+      <rect class="node" x="210" y="220" width="150" height="24" rx="3"/>
+      <text class="t-lab mid" x="285" y="237">按意思找</text>
+      <rect class="ghost" x="210" y="252" width="150" height="24" rx="3"/>
+      <text class="t-mute mid" x="285" y="269">不按关键词找</text>
+      <path class="e-hot" d="M360 232 H550 V168 H568" marker-end="url(#pr-h)"/>
+      <rect class="node" x="570" y="120" width="150" height="96" rx="4"/>
+      <text class="t-name" x="645.0" y="164.0">按名次合并</text>
+      <text class="t-sub" x="645.0" y="184.0">几种问法 → 一份</text>
+      <path class="e-hot" d="M720 168 H758" marker-end="url(#pr-h)"/>
+      <rect class="node" x="760" y="120" width="170" height="96" rx="4"/>
+      <text class="t-name" x="845.0" y="164.0">重新打分</text>
+      <text class="t-sub" x="845.0" y="184.0">重排模型或加权打分</text>
+      <path class="e-hot" d="M930 168 H958" marker-end="url(#pr-h)"/>
+      <rect class="node" x="960" y="130" width="120" height="76" rx="4"/>
+      <text class="t-name" x="1020.0" y="164.0">门槛</text>
+      <text class="t-sub" x="1020.0" y="184.0">分太低的丢掉</text>
+      <path class="e-hot" d="M1080 168 H1108" marker-end="url(#pr-h)"/>
+      <rect class="node" x="1110" y="130" width="110" height="76" rx="4"/>
+      <text class="t-name" x="1165.0" y="164.0">候选</text>
+      <text class="t-sub" x="1165.0" y="184.0">一条条记录</text>
+      <text class="t-lab" x="20" y="310">只有一种问法时：两份名单去掉重复后直接重新打分</text>
+      <text class="t-lab" x="20" y="330">父子模式：每种方式多找 4 倍</text>
+      <rect class="ghost" x="570" y="290" width="650" height="56" rx="4"/>
+      <text class="t-ghost mid" x="895.0" y="314.0">多个库</text>
+      <text class="t-mute mid" x="895.0" y="334.0">每个库各走一遍上面这条线，合在一起再重新打分、过门槛</text>
+      <g class="badge"><circle cx="210" cy="60" r="10"/><text x="210" y="64">1</text></g>
+      <g class="badge"><circle cx="390" cy="60" r="10"/><text x="390" y="64">2</text></g>
+      <g class="badge"><circle cx="20" cy="220" r="10"/><text x="20" y="224">3</text></g>
+      <g class="badge"><circle cx="570" cy="120" r="10"/><text x="570" y="124">4</text></g>
+      <g class="badge"><circle cx="760" cy="120" r="10"/><text x="760" y="124">5</text></g>
+      <g class="badge"><circle cx="570" cy="290" r="10"/><text x="570" y="294">6</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>每种问法同时用两种方式找（图 1 的两种分数），各取 top_k 条（默认 4 条）。父子模式下每种方式多找 4 倍：几个子块可能属于同一个父分段，合并后会变少。两种方式都只在图 2 的筛选范围里找。</li>
+      <li><span class="n">2</span>两份名单按名次合并（RRF）：一条记录在某份名单里排第几，就得 1 /(60 + 名次) 分，几份名单的分加起来。例：子块 X 按意思排第 1、按关键词排第 3，得 1/61 + 1/63 ≈ 0.0323；子块 Y 只在关键词名单里排第 1，得 1/61 ≈ 0.0164。X 排在 Y 前面：在两种方式里都靠前的更可信。只看名次，所以尺度不同的两种分数也能合并。</li>
+      <li><span class="n">3</span>假设答案只按意思找：它是模型编的一段「可能的答案」，用来让查询向量更接近真正写着答案的段落；拿它按关键词找，编出来的词也会被当成搜索条件。</li>
+      <li><span class="n">4</span>几种问法的名单再用同样的办法合并：在几种问法里都排得靠前的，排到前面。</li>
+      <li><span class="n">5</span>重新打分（重排）：召回为了快，分数比较粗，这里对合并后的几十条候选再仔细打一遍分。<b>重排模型</b>：把「问题 + 候选原文」一起交给专门的模型读一遍，给出 0~1 的分；两段放在一起读，比各算一个向量再比较更准，但也更慢，所以只用在少量候选上。<b>加权打分</b>：0.7 × 语义相似度 + 0.3 × 关键词相似度；关键词相似度是在这批候选里用 jieba 抽出关键词，看问题和候选有多少重要的词重合。两种方式都用时必须重新打分，因为两种原始分数没法比。之后分数低于门槛的丢掉。</li>
+      <li><span class="n">6</span>绑了多个库时，每个库按自己的设置各走一遍，合在一起再重新打分、过门槛。加权打分要求这几个库用同一个向量模型，否则语义相似度没法比。</li>
+    </ol>
+
+    <h3>图 5　第四步：整理成几段交回去，并记下每一步</h3>
+    <svg width="1240" viewBox="0 0 1240 364" role="img" aria-label="整理成几段交回去：回到父分段、去重复、截取，并记下每一步">
+      <rect class="node" x="20" y="40" width="150" height="64" rx="4"/>
+      <text class="t-name" x="95.0" y="68.0">候选</text>
+      <text class="t-sub" x="95.0" y="88.0">一条条记录，已排好序</text>
+      <path class="e-hot" d="M170 72 H198" marker-end="url(#pr-h)"/>
+      <rect class="node" x="200" y="40" width="170" height="64" rx="4"/>
+      <text class="t-name" x="285.0" y="68.0">去重复（MMR）</text>
+      <text class="t-sub" x="285.0" y="88.0">可选：太像已选的往后排</text>
+      <path class="e-hot" d="M370 72 H398" marker-end="url(#pr-h)"/>
+      <rect class="node" x="400" y="40" width="200" height="64" rx="4"/>
+      <text class="t-name hot" x="500.0" y="68.0">回到父分段</text>
+      <text class="t-sub" x="500.0" y="88.0">子块 → 它所在的父分段</text>
+      <path class="e-hot" d="M600 72 H628" marker-end="url(#pr-h)"/>
+      <rect class="node" x="630" y="40" width="170" height="64" rx="4"/>
+      <text class="t-name" x="715.0" y="68.0">每文档限几段</text>
+      <text class="t-sub" x="715.0" y="88.0">可选：防一份文档占满</text>
+      <path class="e-hot" d="M800 72 H828" marker-end="url(#pr-h)"/>
+      <rect class="node" x="830" y="40" width="170" height="64" rx="4"/>
+      <text class="t-name" x="915.0" y="68.0">相邻的拼一起</text>
+      <text class="t-sub" x="915.0" y="88.0">可选：挨着的两段并成一段</text>
+      <path class="e-hot" d="M1000 72 H1028" marker-end="url(#pr-h)"/>
+      <rect class="node" x="1030" y="40" width="190" height="64" rx="4"/>
+      <text class="t-name" x="1125.0" y="68.0">取前几名（top_k）</text>
+      <text class="t-sub" x="1125.0" y="88.0">交回给智能体</text>
+      <text class="t-key" x="400" y="144">父子模式：</text>
+      <path class="e" d="M500 104 V128" marker-end="url(#pr-a)"/>
+      <rect class="node" x="400" y="156" width="110" height="28" rx="3"/>
+      <text class="t-lab mid" x="455" y="175">子块 a1 · 0.82</text>
+      <rect class="node" x="400" y="192" width="110" height="28" rx="3"/>
+      <text class="t-lab mid" x="455" y="211">子块 a3 · 0.64</text>
+      <rect class="node" x="400" y="228" width="110" height="28" rx="3"/>
+      <text class="t-lab mid" x="455" y="247">子块 b2 · 0.71</text>
+      <rect class="node" x="560" y="150" width="240" height="48" rx="4"/>
+      <text class="t-name" x="680.0" y="170.0">父分段 A · 0.82</text>
+      <text class="t-sub" x="680.0" y="190.0">附上搜到的 a1、a3</text>
+      <rect class="node" x="560" y="210" width="240" height="48" rx="4"/>
+      <text class="t-name" x="680.0" y="230.0">父分段 B · 0.71</text>
+      <text class="t-sub" x="680.0" y="250.0">附上搜到的 b2</text>
+      <path class="e" d="M510 170 H558" marker-end="url(#pr-a)"/>
+      <path class="e" d="M510 206 H535 V180 H558" marker-end="url(#pr-a)"/>
+      <path class="e" d="M510 242 H535 V234 H558" marker-end="url(#pr-a)"/>
+      <text class="t-lab" x="830" y="180">交回去的是原文、标题路径和出处（第几页）；</text>
+      <text class="t-lab" x="830" y="200">建向量时拼的前缀不带</text>
+      <rect class="bnd" x="20" y="276" width="1200" height="76" rx="6"/>
+      <text class="t-head" x="36" y="298">每一步都记下来：谁进来、排第几、多少分（不存正文），控制台画成漏斗</text>
+      <rect class="node" x="36" y="312" width="134" height="28" rx="3"/>
+      <text class="t-lab mid" x="103" y="331">理解问题</text>
+      <path class="e" d="M170 326 H182" marker-end="url(#pr-a)"/>
+      <rect class="node" x="184" y="312" width="134" height="28" rx="3"/>
+      <text class="t-lab mid" x="251" y="331">按意思 / 关键词找</text>
+      <path class="e" d="M318 326 H330" marker-end="url(#pr-a)"/>
+      <rect class="node" x="332" y="312" width="134" height="28" rx="3"/>
+      <text class="t-lab mid" x="399" y="331">合并</text>
+      <path class="e" d="M466 326 H478" marker-end="url(#pr-a)"/>
+      <rect class="node" x="480" y="312" width="134" height="28" rx="3"/>
+      <text class="t-lab mid" x="547" y="331">重新打分</text>
+      <path class="e" d="M614 326 H626" marker-end="url(#pr-a)"/>
+      <rect class="node" x="628" y="312" width="134" height="28" rx="3"/>
+      <text class="t-lab mid" x="695" y="331">门槛</text>
+      <path class="e" d="M762 326 H774" marker-end="url(#pr-a)"/>
+      <rect class="node" x="776" y="312" width="134" height="28" rx="3"/>
+      <text class="t-lab mid" x="843" y="331">去重复</text>
+      <path class="e" d="M910 326 H922" marker-end="url(#pr-a)"/>
+      <rect class="node" x="924" y="312" width="134" height="28" rx="3"/>
+      <text class="t-lab mid" x="991" y="331">回到分段</text>
+      <path class="e" d="M1058 326 H1070" marker-end="url(#pr-a)"/>
+      <rect class="node" x="1072" y="312" width="134" height="28" rx="3"/>
+      <text class="t-lab mid" x="1139" y="331">最终结果</text>
+      <g class="badge"><circle cx="200" cy="40" r="10"/><text x="200" y="44">1</text></g>
+      <g class="badge"><circle cx="400" cy="40" r="10"/><text x="400" y="44">2</text></g>
+      <g class="badge"><circle cx="630" cy="40" r="10"/><text x="630" y="44">3</text></g>
+      <g class="badge"><circle cx="830" cy="40" r="10"/><text x="830" y="44">4</text></g>
+      <g class="badge"><circle cx="1030" cy="40" r="10"/><text x="1030" y="44">5</text></g>
+      <g class="badge"><circle cx="20" cy="276" r="10"/><text x="20" y="280">6</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>去重复（MMR，库开了才做）：把和已经选上的结果太像的候选往后排。它用到的「相关性」和「相似度」从哪来、怎么算，见图 6 的算例。</li>
+      <li><span class="n">2</span>回到父分段：搜到的是子块，交回去的是它所在的父分段，因为父分段更完整，模型看得懂上下文。几个子块属于同一个父分段时只交一次，分数取其中最高的，并附上搜到的子块。正文、标题路径、出处（第几页）从数据库的分段表取，交回去的是原文。</li>
+      <li><span class="n">3</span>每文档限几段（库设了才做）：同一份文档最多交回几段，避免一份长文档占满所有名额。</li>
+      <li><span class="n">4</span>相邻的拼一起（库开了才做）：同一份文档里挨着的两段都被搜到时，拼成一段交回去，读起来更连贯。</li>
+      <li><span class="n">5</span>取前几名（top_k，默认 4，最多 20）交回给智能体：每段带分数、文档名、标题路径和出处，另外附上跳过了哪些库、这次检索记录的 id。问题被拆成几个小问题时，每个小问题各走一遍，再按名次合并，保证每个小问题都有依据。</li>
+      <li><span class="n">6</span>每一步都记下来：哪些候选进来、排第几、多少分（只存 id 和分数，不存正文），一次检索存成一条记录。控制台把它画成漏斗，能看到某一段在哪一步被淘汰，用来排查「为什么没搜到」。记录里的环节名依次是 query_understanding、semantic / full_text、merged、rerank、threshold、diversity、assemble、final。</li>
+    </ol>
+
+    <h3>图 6　去重复（MMR）的算例</h3>
+    <svg width="1240" viewBox="0 0 1240 310" role="img" aria-label="去重复（MMR）的算例">
+      <rect class="node" x="20" y="40" width="330" height="56" rx="4"/>
+      <text class="t-name" x="185.0" y="64.0">子块 A · 分 0.90</text>
+      <text class="t-sub" x="185.0" y="84.0">「年假可以分两次休，每次不少于半天」</text>
+      <rect class="gap" x="20" y="110" width="330" height="56" rx="4"/>
+      <text class="t-hot mid" x="185.0" y="134.0">子块 B · 分 0.88</text>
+      <text class="t-sub" x="185.0" y="154.0">和 A 几乎一样：另一份文件里的同一条</text>
+      <rect class="node" x="20" y="180" width="330" height="56" rx="4"/>
+      <text class="t-name" x="185.0" y="204.0">子块 C · 分 0.70</text>
+      <text class="t-sub" x="185.0" y="224.0">「年假需提前 3 天在系统里申请」</text>
+      <path class="e-hot" d="M350 138 H378" marker-end="url(#pr-h)"/>
+      <rect class="node" x="380" y="40" width="380" height="196" rx="4"/>
+      <text class="t-name" x="570.0" y="92.0">每一轮挑「得分」最高的</text>
+      <text class="t-lab mid" x="570.0" y="112.0">得分 = 0.7 × 相关性 − 0.3 × 和已选结果的最大相似度</text>
+      <text class="t-lab mid" x="570.0" y="132.0">相关性 = 候选的分 ÷ 最高分：A 1.00、B 0.98、C 0.78</text>
+      <text class="t-lab mid" x="570.0" y="152.0">相似度 = 两个子块 dense 向量的余弦</text>
+      <text class="t-lab mid" x="570.0" y="172.0">A 与 B：0.95　　A 与 C：0.20</text>
+      <text class="t-sub" x="570.0" y="192.0">0.7 就是 λ：越大越看重相关，越小越看重不重复</text>
+      <path class="e-hot" d="M760 138 H788" marker-end="url(#pr-h)"/>
+      <rect class="node" x="790" y="40" width="430" height="56" rx="4"/>
+      <text class="t-name" x="1005.0" y="64.0">第 1 轮：还没选任何结果</text>
+      <text class="t-sub" x="1005.0" y="84.0">不扣分，只比相关性 → 选 A</text>
+      <rect class="node" x="790" y="106" width="430" height="84" rx="4"/>
+      <text class="t-name" x="1005.0" y="132.0">第 2 轮：已选 A</text>
+      <text class="t-lab mid" x="1005.0" y="152.0">B：0.7 × 0.98 − 0.3 × 0.95 ≈ 0.40</text>
+      <text class="t-hot mid" x="1005.0" y="172.0">C：0.7 × 0.78 − 0.3 × 0.20 ≈ 0.48　→ 选 C</text>
+      <rect class="node" x="790" y="200" width="430" height="40" rx="4"/>
+      <text class="t-name" x="1005.0" y="225.0">第 3 轮：只剩 B → 顺序是 A、C、B</text>
+      <rect class="gap" x="20" y="256" width="1200" height="40" rx="4"/>
+      <text class="t-hot mid" x="620" y="281">MMR 不删候选，只调顺序：和已选结果太像的往后排，最后取前几名时自然被挤掉</text>
+      <g class="badge"><circle cx="380" cy="40" r="10"/><text x="380" y="44">1</text></g>
+      <g class="badge"><circle cx="20" cy="110" r="10"/><text x="20" y="114">2</text></g>
+      <g class="badge"><circle cx="790" cy="40" r="10"/><text x="790" y="44">3</text></g>
+      <g class="badge"><circle cx="790" cy="106" r="10"/><text x="790" y="110">4</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>每一轮把还没选的候选都算一遍得分，挑最高的放进结果，直到挑完。<b>相关性</b>就是候选现在的分（重新打分之后的分），除以这批候选里的最高分，换算到 0~1。<b>相似度</b>是两个子块的 dense 向量的余弦相似度：召回时向量库把每条记录的向量一起返回，所以不用再查一次；没有向量的候选按 0 算。</li>
+      <li><span class="n">2</span>B 的分本来很高，但它和 A 讲的是同一条规定（比如两份文件里都抄了这一句），向量几乎一样。</li>
+      <li><span class="n">3</span>第 1 轮还没有已选结果，不扣分，只比相关性，选 A。</li>
+      <li><span class="n">4</span>第 2 轮：B 和已选的 A 太像（0.95），被扣掉一大截；C 和 A 讲的是另一件事（0.20），几乎不扣分，所以先选 C。如果最后只取前 2 名，交回去的是 A 和 C，智能体能多看到一条不同的信息。λ 默认 0.7；MMR 默认不开，在库的检索设置里打开。</li>
+    </ol>
+
+    <h3>为什么这样做</h3>
+    <table>
+      <thead><tr><th>做法</th><th>为什么</th></tr></thead>
+      <tbody>
+        <tr><td>要查的库写在智能体配置里，不让模型指定</td><td>如果模型能自己填库，被诱导的模型就能去查没绑定的库。</td></tr>
+        <tr><td>每次检索都问一遍用户中心，不留缓存</td><td>收回某人的权限后，下一次检索就要生效；绑定了一个库，不等于有权看它。</td></tr>
+        <tr><td>筛选条件里有一部分由服务端强制加上</td><td>调用方给的筛选、从问题里抽出的条件都可能受提示词影响，只能缩小范围；权限和版本必须单独加上，谁也去不掉。</td></tr>
+        <tr><td>用户中心连不上就当作不能看，标签展开失败只用本人</td><td>库的权限是硬边界，放行就可能把别人的资料给出去；文档标签少一个只会少看到，不会多看到。</td></tr>
+        <tr><td>理解问题只做需要的，出错就用原问题</td><td>它只是锦上添花：每多做一件事就多一点等待；出错时用原问题检索，总比检索失败好。</td></tr>
+        <tr><td>名单按名次合并，不按分数相加</td><td>按意思找和按关键词找的分数尺度不同，几种问法的分数也不可比；名次是可比的。</td></tr>
+        <tr><td>两种方式都用时必须重新打分</td><td>原始分数没法放在一起比，只能统一打一遍分再排。</td></tr>
+        <tr><td>两种方式分开查，不用 Milvus 的 hybrid_search</td><td>合并、重新打分要跨问法、跨小问题、跨库一起做，漏斗也要记每种方式各找到了什么；hybrid_search 只返回它合并好的结果。</td></tr>
+        <tr><td>父子模式多找一些候选，整理完再截取</td><td>top_k 按父分段算，搜到的却是子块；几个子块可能属于同一个父分段，只找 top_k 个子块常常凑不满 top_k 段。</td></tr>
+        <tr><td>去重复只调顺序，不删候选</td><td>太像的那条并不是错的，只是信息重复；往后排、交给截取去挤掉，名额够时它照样能交回去。</td></tr>
+        <tr><td>漏斗只存 id 和分数，不存正文</td><td>正文可能很大，也可能之后被删了；看漏斗时再去分段表里取，已删的标出来。</td></tr>
+        <tr><td>命中次数从检索记录里统计</td><td>检索时不改分段表，不和入库、编辑抢着写；重新入库时分段整篇重建，次数也不会清零。</td></tr>
+      </tbody>
+    </table>
+  </section>
 </main>
 
 <script>

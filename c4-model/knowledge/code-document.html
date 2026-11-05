@@ -33,7 +33,7 @@
   "description": "目标模型，每个元素下方的「现状」是现在承担它的代码。文档的上传、状态和属性，入库编排、锁、暂停和巡检；入库编排跑在入库 worker 里",
   "component": "文档与入库",
   "package": "atlas_knowledge.document（目标模型）",
-  "overview": "文档与入库管一份文档从上传到能被检索的全过程：上传时存原文件、建文档行，提交后投递入库任务；worker 里的入库编排持锁按阶段跑（解析、分段与增强、写分段、分批向量化），每个阶段的状态立刻可见，可以暂停、恢复、重试，进程死了由巡检续上。文档还带着启用、归档、审核状态和业务元数据、ACL、版本与生效区间，这些变了只改向量库里的 payload。\n\n它不解析文件、不切分段（解析、分段），不向量化（向量索引），也不判断谁能操作（访问控制，接口层带进 DatasetAccess）。",
+  "overview": "文档与入库管一份文档从上传到能被检索的全过程：上传时存原文件、建文档行，提交后投递入库任务；worker 里的入库编排持锁按阶段跑（解析、分段与增强、写分段、分批向量化），每个阶段的状态立刻可见，可以暂停、恢复、重试，进程死了由巡检续上。文档还带着启用、归档、审核状态和业务元数据、ACL、版本与生效区间，这些变了只改向量库里的标量字段。\n\n它不解析文件、不切分段（解析、分段），不向量化（向量索引），也不判断谁能操作（访问控制，接口层带进 DatasetAccess）。",
   "elements": [
     {
       "id": "svc",
@@ -45,7 +45,7 @@
         0.3
       ],
       "source": "services/documents.py DocumentService；services/metadata.py update_document / link_version",
-      "responsibility": "文档的全部入口：上传、列出、暂停恢复重试、启用归档、审核、改属性、删除。上传在一个事务里存原文件、建文档行，提交之后才按文档逐个投递入库任务——否则 worker 可能比提交更早读库。文档级字段（启用、审核、元数据、ACL、时效）变了只让向量索引改 payload，不重新向量化。",
+      "responsibility": "文档的全部入口：上传、列出、暂停恢复重试、启用归档、审核、改属性、删除。上传在一个事务里存原文件、建文档行，提交之后才按文档逐个投递入库任务——否则 worker 可能比提交更早读库。文档级字段（启用、审核、元数据、ACL、时效）变了只让向量索引改标量字段，不重新向量化。",
       "methods": [
         [
           "+",
@@ -83,7 +83,7 @@
         0.3
       ],
       "source": "indexing/runner.py IndexingRunner",
-      "responsibility": "入库编排：持锁跑一个文档，解析 → 分段与增强 → 写分段 → 分批向量化 → 完成，每个阶段一个短事务，状态 API 立刻看得到。分段已写库就跳过前几步，只把没完成的分段继续向量化。每阶段、每批之前看暂停标记。完成时按文档再同步一次 payload（防并发改 ACL 留下旧值），新版本取代同组旧版本。不设到点结束的超时。",
+      "responsibility": "入库编排：持锁跑一个文档，解析 → 分段与增强 → 写分段 → 分批向量化 → 完成，每个阶段一个短事务，状态 API 立刻看得到。分段已写库就跳过前几步，只把没完成的分段继续向量化。每阶段、每批之前看暂停标记。完成时按文档再同步一次文档级字段（防并发改 ACL 留下旧值），新版本取代同组旧版本。不设到点结束的超时。",
       "methods": [
         [
           "+",
@@ -433,7 +433,7 @@
     {
       "from": "svc",
       "to": "index",
-      "description": "同步 payload、删向量",
+      "description": "同步字段、删向量",
       "labelAt": 0.8
     },
     {
@@ -461,7 +461,7 @@
     {
       "from": "pipeline",
       "to": "index",
-      "description": "分批写向量、同步 payload"
+      "description": "分批写向量、同步字段"
     },
     {
       "from": "pipeline",
@@ -515,7 +515,7 @@
       "name": "入库",
       "entry": "IngestionPipeline.run(document_uuid)",
       "callers": "入库 worker（indexing_task）",
-      "description": "持锁按阶段跑；分段已写库就只续跑向量化；暂停、失败都留在库里可见；完成后同步 payload、取代旧版本"
+      "description": "持锁按阶段跑；分段已写库就只续跑向量化；暂停、失败都留在库里可见；完成后同步文档级字段、取代旧版本"
     },
     {
       "name": "暂停、恢复、重试",
@@ -527,13 +527,13 @@
       "name": "启用、归档、审核",
       "entry": "set_status · review",
       "callers": "管理接口（读写；审核要 Owner，或操作码 kb:review 且能读）",
-      "description": "只改文档行和 payload 里的 doc_ok，不重新向量化"
+      "description": "只改文档行和向量库里的 doc_ok，不重新向量化"
     },
     {
       "name": "改文档属性",
       "entry": "update_attributes(access, doc, …)",
       "callers": "管理接口（要读写）",
-      "description": "元数据、ACL、生效区间；改完按文档整体改 payload"
+      "description": "元数据、ACL、生效区间；改完按文档整体改向量库里的字段"
     },
     {
       "name": "删除",
@@ -570,15 +570,15 @@
       "reason": "Atlas 原则：慢就慢，用暂停、删除控制；锁的 TTL 只决定进程死后空悬多久，不是工作时长上限。"
     },
     {
-      "decision": "完成时按文档再同步一次 payload",
-      "reason": "入库中途改 ACL、元数据时，改 payload 和正在写的那一批会竞态，个别 point 留着旧值（现状问题）。完成时按文档整体覆盖一次就收敛了，代价只是一次按 document_uuid 的 payload 更新。"
+      "decision": "完成时按文档再同步一次文档级字段",
+      "reason": "入库中途改 ACL、元数据时，改字段和正在写的那一批会竞态，个别 entity 留着旧值（现状问题）。完成时按文档整体覆盖一次就收敛了，代价是按这份文档的主键再 partial upsert 一遍。"
     },
     {
       "decision": "解析质量差的文档先进待审核",
       "reason": "扫描页、乱码多的文档直接参与检索会召回一堆垃圾；进待审核后不参与检索，人看过解析预览再放行或换解析器重来。"
     }
   ],
-  "schemaNote": "主键约定：id 是自增主键，只在库内使用；uuid 是逻辑主键（Python 侧生成），API 和向量库的 point id 用它，表间引用的列叫 xxx_uuid。表间不建外键约束，引用由代码维护；引用别的领域的表时只写列说明，不画连线。类型写的是 PostgreSQL 类型；每张表还有 created_at、updated_at（timestamptz，UTC），下面不重复列出。人员字段存用户中心用户 id 的字符串。",
+  "schemaNote": "主键约定：id 是自增主键，只在库内使用；uuid 是逻辑主键（Python 侧生成），API 和向量库的主键用它，表间引用的列叫 xxx_uuid。表间不建外键约束，引用由代码维护；引用别的领域的表时只写列说明，不画连线。类型写的是 PostgreSQL 类型；每张表还有 created_at、updated_at（timestamptz，UTC），下面不重复列出。人员字段存用户中心用户 id 的字符串。",
   "tables": [
     {
       "name": "kb_document",

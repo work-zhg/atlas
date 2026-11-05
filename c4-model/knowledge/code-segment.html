@@ -75,7 +75,7 @@
         0.3
       ],
       "source": "services/segments.py SegmentService；runner._save",
-      "responsibility": "分段的读写入口。入库时整篇替换一个文档的分段（先让向量索引删旧 point）；人工编辑单个分段、子块是同步的（向量化一段只要几十毫秒，改完立刻能在召回测试里看到）；父子模式改父分段内容时按文档的子块规则重切子块。文档还没入库完不能编辑。",
+      "responsibility": "分段的读写入口。入库时整篇替换一个文档的分段（先让向量索引删旧 entity）；人工编辑单个分段、子块是同步的（向量化一段只要几十毫秒，改完立刻能在召回测试里看到）；父子模式改父分段内容时按文档的子块规则重切子块。文档还没入库完不能编辑。",
       "methods": [
         [
           "+",
@@ -279,7 +279,7 @@
         5.0
       ],
       "source": "db.models.ChildChunk",
-      "responsibility": "父块里的一个检索单元，命中后回到父分段。summary 是大表摘要（通用分段里也单独建 point），customized 是人工加的。",
+      "responsibility": "父块里的一个检索单元，命中后回到父分段。summary 是大表摘要（通用分段里也单独建 entity），customized 是人工加的。",
       "attributes": [
         [
           "+",
@@ -351,7 +351,7 @@
       "methods": [
         [
           "+",
-          "index_segments · remove_points"
+          "index_segments · remove_entities"
         ],
         [
           "+",
@@ -472,7 +472,7 @@
       "name": "切分",
       "entry": "Chunker.transform(ir, *, doc_form, rule, doc_title, embed)",
       "callers": "文档与入库（入库的 split 阶段）",
-      "description": "按结构或按规则切出父块和子块，带标题路径、引用定位和向量化前缀；分段 uuid 在这里生成，之后就是向量库的 point id"
+      "description": "按结构或按规则切出父块和子块，带标题路径、引用定位和向量化前缀；分段 uuid 在这里生成，之后就是向量库的主键"
     },
     {
       "name": "分段预览",
@@ -490,13 +490,13 @@
       "name": "写分段",
       "entry": "SegmentService.replace_document(doc, parents)",
       "callers": "文档与入库（save 阶段，一个事务）",
-      "description": "先让向量索引删这份文档的旧 point，再删旧分段、写新分段，记下 splitting_completed_at"
+      "description": "先让向量索引删这份文档的旧 entity，再删旧分段、写新分段，记下 splitting_completed_at"
     },
     {
       "name": "编辑分段和子块",
       "entry": "SegmentService.create · update · delete · add_child · update_child · delete_child",
       "callers": "管理接口（要读写）",
-      "description": "同步重写向量；改 enabled 只改 payload；改分段级元数据只改这一段的 meta"
+      "description": "同步重写向量；改 enabled 只改向量库里的标量字段；改分段级元数据只改这一段的 meta"
     },
     {
       "name": "删库时清分段",
@@ -531,7 +531,7 @@
       "reason": "现在每次检索都 UPDATE kb_segment.hit_count，和入库、编辑抢同一批行；重新入库时分段整篇重建，计数清零。命中次数从检索记录汇总（检索领域）。"
     }
   ],
-  "schemaNote": "主键约定：id 是自增主键，只在库内使用；uuid 是逻辑主键（Python 侧生成），API 和向量库的 point id 用它，表间引用的列叫 xxx_uuid。表间不建外键约束，引用由代码维护；引用别的领域的表时只写列说明，不画连线。类型写的是 PostgreSQL 类型；每张表还有 created_at、updated_at（timestamptz，UTC），下面不重复列出。人员字段存用户中心用户 id 的字符串。",
+  "schemaNote": "主键约定：id 是自增主键，只在库内使用；uuid 是逻辑主键（Python 侧生成），API 和向量库的主键用它，表间引用的列叫 xxx_uuid。表间不建外键约束，引用由代码维护；引用别的领域的表时只写列说明，不画连线。类型写的是 PostgreSQL 类型；每张表还有 created_at、updated_at（timestamptz，UTC），下面不重复列出。人员字段存用户中心用户 id 的字符串。",
   "tables": [
     {
       "name": "kb_process_rule",
@@ -648,7 +648,7 @@
           "name": "index_node_id",
           "type": "varchar(64)",
           "nullable": true,
-          "description": "向量库 point id；父子模式下父分段为空"
+          "description": "向量库主键；父子模式下父分段为空"
         },
         {
           "name": "index_node_hash",

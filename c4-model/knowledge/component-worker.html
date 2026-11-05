@@ -49,12 +49,12 @@
       ]
     },
     {
-      "id": "qdrant",
+      "id": "vdb",
       "kind": "container",
       "shape": "database",
-      "technology": "Qdrant",
+      "technology": "Milvus 2.6",
       "name": "向量库",
-      "description": "每个知识库的每个索引版本一个 collection：稠密向量、BM25 稀疏向量和文档级 payload。",
+      "description": "每个知识库的每个索引版本一个 collection：稠密向量、BM25 稀疏向量（Milvus 内置的 BM25 生成）和文档级标量字段。",
       "at": [
         2.6,
         5.5
@@ -131,8 +131,8 @@
       "id": "index",
       "kind": "component",
       "name": "向量索引",
-      "technology": "qdrant-client + jieba",
-      "description": "向量化（带缓存）、BM25 稀疏向量、写 point、同步 payload；重建索引版本、构建完成后切换。",
+      "technology": "pymilvus",
+      "description": "向量化（带缓存）、写 entity（BM25 稀疏向量由 Milvus 生成）、同步文档级字段；重建索引版本、构建完成后切换。",
       "at": [
         2.7,
         2.5
@@ -197,7 +197,7 @@
     {
       "from": "pipeline",
       "to": "index",
-      "description": "分批写向量、同步 payload"
+      "description": "分批写向量、同步文档级字段"
     },
     {
       "from": "segment",
@@ -211,9 +211,9 @@
     },
     {
       "from": "index",
-      "to": "qdrant",
-      "description": "建 collection、写 point",
-      "technology": "HTTP（Qdrant REST）"
+      "to": "vdb",
+      "description": "建 collection、写 entity",
+      "technology": "gRPC（pymilvus）"
     },
     {
       "from": "models",

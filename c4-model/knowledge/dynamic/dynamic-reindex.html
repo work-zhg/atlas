@@ -27,6 +27,44 @@
   #c4-details td.sample { word-break: break-all; }
   #c4-details pre { margin: 0; padding: 10px 12px; border: 1px solid #e3e3e3; background: #f6f8fa; font-size: 12px; line-height: 1.5; overflow-x: auto; }
   svg a { cursor: pointer; }
+  /* 换向量模型原理：手写的静态图，不经渲染器 */
+  #principle { max-width: 1280px; }
+  #principle h3 { margin: 32px 0 8px; font-size: 15px; font-weight: 600; color: #333; }
+  #principle p { margin: 0 0 8px; font-size: 14px; line-height: 1.7; }
+  #principle code { padding: 0 3px; background: #f6f8fa; font-family: Menlo, Consolas, monospace; font-size: 12.5px; }
+  #principle ol { margin: 8px 0 0; padding: 0; list-style: none; }
+  #principle ol li { position: relative; margin: 0 0 6px; padding-left: 30px; font-size: 14px; line-height: 1.7; }
+  #principle ol li .n { position: absolute; left: 0; top: 2px; width: 20px; height: 20px; border-radius: 50%; background: #d9480f; color: #fff; font-size: 12px; font-weight: 700; line-height: 20px; text-align: center; }
+  #principle table { width: 100%; margin: 8px 0 0; border-collapse: collapse; font-size: 13px; line-height: 1.6; }
+  #principle th, #principle td { padding: 6px 10px; border: 1px solid #e3e3e3; text-align: left; vertical-align: top; }
+  #principle th { background: #f6f8fa; font-weight: 600; }
+  #principle th:first-child { width: 28%; }
+  #principle svg { margin: 8px 0 4px; }
+  #principle svg text { font-size: 13px; fill: #444; }
+  #principle svg .t-name { font-size: 15px; fill: #1168bd; text-anchor: middle; }
+  #principle svg .t-sub { font-size: 12px; fill: #888; text-anchor: middle; }
+  #principle svg .t-head { font-size: 14px; font-weight: 600; fill: #1168bd; }
+  #principle svg .t-key { font-size: 12px; fill: #888; }
+  #principle svg .t-lab { font-size: 12px; fill: #666; }
+  #principle svg .t-hot { font-size: 12px; fill: #d9480f; }
+  #principle svg .t-mute { font-size: 12px; fill: #aaa; }
+  #principle svg .t-ghost { font-size: 14px; font-weight: 600; fill: #888; }
+  #principle svg .hot { fill: #d9480f; }
+  #principle svg .mid { text-anchor: middle; }
+  #principle svg .end { text-anchor: end; }
+  #principle svg .b { font-weight: 700; }
+  #principle svg .node { fill: #fff; stroke: #1168bd; stroke-width: 1.6; }
+  #principle svg .head { fill: #f6f8fa; stroke: none; }
+  #principle svg .sep { stroke: #e3e3e3; stroke-width: 1; }
+  #principle svg .bnd { fill: none; stroke: #1168bd; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .ghost { fill: #fafafa; stroke: #aaa; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .gap { fill: #fff6f0; stroke: #d9480f; stroke-width: 1.2; stroke-dasharray: 5 4; }
+  #principle svg .e { fill: none; stroke: #444; stroke-width: 1.6; }
+  #principle svg .e-hot { fill: none; stroke: #d9480f; stroke-width: 2.4; }
+  #principle svg .e-mute { fill: none; stroke: #bbb; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .e-link { fill: none; stroke: #d9480f; stroke-width: 1.4; stroke-dasharray: 4 3; }
+  #principle svg .badge circle { fill: #d9480f; stroke: #fff; stroke-width: 2; }
+  #principle svg .badge text { fill: #fff; font-size: 12px; font-weight: 700; text-anchor: middle; }
 </style>
 </head>
 <body>
@@ -82,7 +120,7 @@
       "id": "index",
       "kind": "component",
       "name": "向量索引",
-      "technology": "qdrant-client + jieba",
+      "technology": "pymilvus",
       "in": "apiB"
     },
     {
@@ -96,7 +134,7 @@
       "id": "windex",
       "kind": "component",
       "name": "向量索引",
-      "technology": "qdrant-client + jieba",
+      "technology": "pymilvus",
       "in": "wrkB"
     },
     {
@@ -115,10 +153,10 @@
       "in": "kb"
     },
     {
-      "id": "qdrant",
+      "id": "vdb",
       "kind": "container",
       "name": "向量库",
-      "technology": "Qdrant",
+      "technology": "Milvus 2.6",
       "shape": "database",
       "in": "kb"
     },
@@ -199,11 +237,11 @@
     },
     {
       "from": "windex",
-      "to": "qdrant",
-      "description": "建 collection kb_{库}_v{n}，建全部 payload 索引",
-      "technology": "HTTP（Qdrant REST）",
+      "to": "vdb",
+      "description": "建 collection kb_{库}_v{n}，建全部标量索引，加载",
+      "technology": "gRPC（pymilvus）",
       "details": {
-        "note": "基础索引加库里全部元数据字段的 meta.* 索引（现在只建基础索引）。"
+        "note": "schema 同 active 版本，只是 dense 的维度跟新模型走；text 用 chinese 分析器、BM25 Function 生成 sparse。基础标量索引加库里全部元数据字段的 meta 路径索引（现在只建基础索引）。加载后召回测试就能指定这个构建中的版本。"
       }
     },
     {
@@ -226,14 +264,14 @@
     },
     {
       "from": "windex",
-      "to": "qdrant",
-      "description": "upsert point（只写新版本）",
-      "technology": "HTTP（Qdrant REST）"
+      "to": "vdb",
+      "description": "upsert entity（只写新版本）",
+      "technology": "gRPC（pymilvus）"
     },
     {
       "from": "windex",
       "to": "db",
-      "description": "记进度 {documents, done, points}",
+      "description": "记进度 {documents, done, entities}",
       "technology": "SQL/TCP",
       "details": {
         "note": "进度每个文档一记；版本在构建中被删掉就停下。"
@@ -249,11 +287,11 @@
     },
     {
       "from": "windex",
-      "to": "qdrant",
-      "description": "删库里已不存在的 point",
-      "technology": "HTTP（Qdrant REST）",
+      "to": "vdb",
+      "description": "删库里已不存在的 entity",
+      "technology": "gRPC（pymilvus）",
       "details": {
-        "note": "构建期间被删掉的分段、文档留下的 point。"
+        "note": "构建期间被删掉的分段、文档留下的 entity：按主键分批取出来和库里对账。"
       }
     },
     {
@@ -262,7 +300,7 @@
       "description": "ready；auto_activate 时切换 active",
       "technology": "SQL/TCP",
       "details": {
-        "note": "切换在一个事务里：新版本 active、旧 active 版本 retired。检索按请求读 active 版本，看到的要么是旧的、要么是新的。旧版本的 collection 保留并继续双写，可以随时切回去，直到手动删除。"
+        "note": "切换在一个事务里：新版本 active、旧 active 版本 retired。检索按请求读 active 版本，看到的要么是旧的、要么是新的。旧版本的 collection 保留、保持加载（开 mmap）并继续双写，可以随时切回去，直到手动删除。"
       }
     }
   ]
@@ -275,6 +313,357 @@
   <section id="c4-details" hidden></section>
   <h2>Diagram key</h2>
   <svg id="c4-key" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+
+  <!-- 换向量模型原理：静态图，不经上面的渲染器。场景同时序图：库的所有者把库 A 的向量模型从 bge-small-zh 换成 bge-m3 -->
+  <section id="principle">
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+      <defs>
+        <marker id="pr-a" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#444"/></marker>
+        <marker id="pr-h" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#d9480f"/></marker>
+        <marker id="pr-m" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#bbb"/></marker>
+      </defs>
+    </svg>
+
+    <h2>换向量模型原理：新旧两套并存，建好了再切换</h2>
+    <p>一句话：换了向量模型，库里所有文字都要用新模型重新算一遍向量；新旧模型算出来的数字串长度和含义都不一样，不能混在一起比。所以不是原地改，而是另起一套：新建一个<b>索引版本</b>，对应向量库里一个新的 collection，后台用新模型把库里的分段重算一遍写进去；这期间检索照常用旧的那套，新上传的文档两套都写；全部建好后，改一个开关切到新的。旧的那套留着，新模型效果不好可以随时切回来。下面先解释几个词，再用六张图走一遍：图 1 讲为什么不能原地换，图 2 是版本的几种状态，图 3 到图 6 依次是新建、重建、构建期间的双写、切换与回滚。场景同上面的时序图：库的所有者把库 A 的向量模型从 bge-small-zh 换成 bge-m3。橙色是这个场景实际走的路，灰色虚线是没走的分支。</p>
+
+    <h3>先认识几个词</h3>
+    <table>
+      <thead><tr><th>词</th><th>意思</th></tr></thead>
+      <tbody>
+        <tr><td>向量模型</td><td>把一段文字变成一串数字（向量）的模型。不同模型算出来的数字串长度（维度）不同，含义也不同：bge-small-zh 是 512 个数，bge-m3 是 1024 个数。</td></tr>
+        <tr><td>索引版本</td><td>一个库用某个向量模型建出来的一整套向量。一个库可以有好几个版本，但同一时刻只有一个在用。版本号从 1 往上加。</td></tr>
+        <tr><td>collection</td><td>向量库里的一张「表」，一个索引版本对应一个，名字是 kb_{库}_v{版本号}（库的 uuid 去掉连字符）。</td></tr>
+        <tr><td>当前版本（active）</td><td>检索时用的那个版本。每个库恰好一个。</td></tr>
+        <tr><td>写入目标</td><td>写向量时要写进哪些版本：当前版本，加上还没删掉的其他版本（构建中的、待切换的、退役的）。</td></tr>
+        <tr><td>双写</td><td>一份新内容同时写进几个版本，每个版本用自己的模型各算一遍向量。</td></tr>
+        <tr><td>重建</td><td>后台把库里已经入库完的文档，用新模型重新算向量，写进新的 collection。分段的文字不变，不重新解析、不重新切。</td></tr>
+        <tr><td>切换、回滚</td><td>切换：把当前版本从旧的改成新的。回滚：再切回旧的。都只改一处，在一个数据库事务里完成。</td></tr>
+        <tr><td>召回测试</td><td>在控制台输入一个问题，看库会搜出哪几段。可以指定版本，用来比较新旧模型的效果。</td></tr>
+      </tbody>
+    </table>
+
+    <h3>图 1　为什么不能原地换：同一段文字，新旧模型算出两套向量</h3>
+    <svg width="1240" viewBox="0 0 1240 266" role="img" aria-label="为什么不能原地换：同一段文字，新旧模型算出两套向量">
+      <rect class="node" x="20" y="108" width="200" height="64" rx="4"/>
+      <text class="t-name" x="120.0" y="136.0">一个分段</text>
+      <text class="t-sub" x="120.0" y="156.0">「年假可以分两次休」</text>
+      <text class="t-sub" x="120" y="196">文字只存一份，在数据库里</text>
+      <path class="e" d="M220 140 H245 V68 H268" marker-end="url(#pr-a)"/>
+      <path class="e-hot" d="M245 140 V218 H268" marker-end="url(#pr-h)"/>
+      <rect class="node" x="270" y="40" width="220" height="56" rx="4"/>
+      <text class="t-name" x="380.0" y="64.0">旧模型 bge-small-zh</text>
+      <text class="t-sub" x="380.0" y="84.0">算出 512 个数</text>
+      <path class="e" d="M490 68 H538" marker-end="url(#pr-a)"/>
+      <rect class="node" x="540" y="40" width="300" height="56" rx="4"/>
+      <text class="t-name" x="690.0" y="64.0">[0.12, -0.03, 0.27, …]</text>
+      <text class="t-sub" x="690.0" y="84.0">一串 512 个数</text>
+      <path class="e" d="M840 68 H888" marker-end="url(#pr-a)"/>
+      <rect class="node" x="890" y="40" width="330" height="56" rx="4"/>
+      <text class="t-name" x="1055.0" y="64.0">v1 的 collection</text>
+      <text class="t-sub" x="1055.0" y="84.0">当前版本（active）</text>
+      <rect class="node" x="270" y="190" width="220" height="56" rx="4"/>
+      <text class="t-name hot" x="380.0" y="214.0">新模型 bge-m3</text>
+      <text class="t-sub" x="380.0" y="234.0">算出 1024 个数</text>
+      <path class="e-hot" d="M490 218 H538" marker-end="url(#pr-h)"/>
+      <rect class="node" x="540" y="190" width="300" height="56" rx="4"/>
+      <text class="t-name" x="690.0" y="214.0">[0.08, 0.41, -0.15, …]</text>
+      <text class="t-sub" x="690.0" y="234.0">一串 1024 个数</text>
+      <path class="e-hot" d="M840 218 H888" marker-end="url(#pr-h)"/>
+      <rect class="node" x="890" y="190" width="330" height="56" rx="4"/>
+      <text class="t-name hot" x="1055.0" y="214.0">v2 的 collection</text>
+      <text class="t-sub" x="1055.0" y="234.0">构建中（building）</text>
+      <rect class="gap" x="540" y="108" width="680" height="64" rx="4"/>
+      <text class="t-hot mid" x="880" y="134">问题的向量必须和库里的向量出自同一个模型，才能比</text>
+      <text class="t-sub" x="880" y="156">长度不同没法比；长度相同，两个模型的编码方式也不同。所以要用新模型重算一遍，放进另一个 collection</text>
+      <g class="badge"><circle cx="20" cy="108" r="10"/><text x="20" y="112">1</text></g>
+      <g class="badge"><circle cx="270" cy="40" r="10"/><text x="270" y="44">2</text></g>
+      <g class="badge"><circle cx="270" cy="190" r="10"/><text x="270" y="194">3</text></g>
+      <g class="badge"><circle cx="540" cy="108" r="10"/><text x="540" y="112">4</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>分段的文字只在数据库里存一份。向量库里存的是它算出来的向量；用哪个模型算的，记在索引版本上。</li>
+      <li><span class="n">2</span>旧模型（例：bge-small-zh）把它算成 512 个数，放在 v1 的 collection 里。</li>
+      <li><span class="n">3</span>新模型（例：bge-m3）要把同样的文字重新算一遍，得到 1024 个数，放进另一个 collection（v2）。</li>
+      <li><span class="n">4</span>为什么不能原地覆盖：检索时问题也要用同一个模型算向量，才能和库里的向量比。新旧模型的数字串长度不同（512 对 1024），根本没法比；就算长度一样，两个模型对「意思」的编码方式也不同，比出来没有意义。原地一条条改的话，改到一半时库里新旧混杂，检索结果全乱。所以另起一套，全部算完再切过去。</li>
+    </ol>
+
+    <h3>图 2　一个索引版本的状态怎么变</h3>
+    <svg width="1240" viewBox="0 0 1240 300" role="img" aria-label="一个索引版本的状态怎么变">
+      <rect class="node" x="40" y="120" width="170" height="56" rx="4"/>
+      <text class="t-name" x="125.0" y="144.0">building</text>
+      <text class="t-sub" x="125.0" y="164.0">构建中</text>
+      <rect class="node" x="300" y="120" width="170" height="56" rx="4"/>
+      <text class="t-name" x="385.0" y="144.0">ready</text>
+      <text class="t-sub" x="385.0" y="164.0">建好了，待切换</text>
+      <rect class="node" x="560" y="120" width="170" height="56" rx="4"/>
+      <text class="t-name hot" x="645.0" y="144.0">active</text>
+      <text class="t-sub" x="645.0" y="164.0">当前版本：检索用它</text>
+      <rect class="node" x="820" y="120" width="170" height="56" rx="4"/>
+      <text class="t-name" x="905.0" y="144.0">retired</text>
+      <text class="t-sub" x="905.0" y="164.0">退役：保留、继续写</text>
+      <path class="e-hot" d="M210 148 H298" marker-end="url(#pr-h)"/>
+      <text class="t-hot mid" x="254" y="140">全部算完</text>
+      <path class="e-hot" d="M470 148 H558" marker-end="url(#pr-h)"/>
+      <text class="t-hot mid" x="514" y="140">切换</text>
+      <path class="e" d="M730 148 H818" marker-end="url(#pr-a)"/>
+      <text class="t-lab mid" x="774" y="140">被别的换下</text>
+      <path class="e-link" d="M125 120 V44 H645 V118" marker-end="url(#pr-h)"/>
+      <text class="t-hot mid" x="385" y="38">勾了「建完自动切换」：跳过 ready，直接切换</text>
+      <path class="e" d="M905 120 V80 H680 V118" marker-end="url(#pr-a)"/>
+      <text class="t-lab mid" x="792" y="74">回滚：再切回来</text>
+      <rect class="gap" x="40" y="236" width="170" height="52" rx="4"/>
+      <text class="t-hot mid" x="125.0" y="258.0">failed</text>
+      <text class="t-sub" x="125.0" y="278.0">出错，记下原因</text>
+      <path class="e" d="M125 176 V234" marker-end="url(#pr-a)"/>
+      <text class="t-lab" x="133" y="208">出错</text>
+      <rect class="ghost" x="820" y="236" width="170" height="52" rx="4"/>
+      <text class="t-ghost mid" x="905.0" y="258.0">deleted</text>
+      <text class="t-mute mid" x="905.0" y="278.0">collection 一起删</text>
+      <path class="e-mute" d="M905 176 V234" marker-end="url(#pr-m)"/>
+      <text class="t-mute" x="913" y="208">手动删</text>
+      <path class="e-mute" d="M385 176 V262 H818" marker-end="url(#pr-m)"/>
+      <text class="t-key" x="1010" y="140">每个库：</text>
+      <text class="t-lab" x="1010" y="162">· 只能有一个 building</text>
+      <text class="t-lab" x="1010" y="184">· 恰好一个 active</text>
+      <text class="t-lab" x="1010" y="206">· active 不能删</text>
+      <g class="badge"><circle cx="40" cy="120" r="10"/><text x="40" y="124">1</text></g>
+      <g class="badge"><circle cx="300" cy="120" r="10"/><text x="300" y="124">2</text></g>
+      <g class="badge"><circle cx="560" cy="120" r="10"/><text x="560" y="124">3</text></g>
+      <g class="badge"><circle cx="820" cy="120" r="10"/><text x="820" y="124">4</text></g>
+      <g class="badge"><circle cx="820" cy="236" r="10"/><text x="820" y="240">5</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>building（构建中）：刚建好记录，后台正在用新模型重算。同一个库同一时刻只能有一个构建中的版本。出错就变成 failed，记下原因；要重来就删掉它，再建一个。</li>
+      <li><span class="n">2</span>ready（待切换）：全部算完了。可以先用召回测试对比两个版本的效果，满意了再手动切换。建版本时勾了「建完自动切换」，就跳过这一步直接切换；在库设置里直接改向量模型，就相当于勾了它。</li>
+      <li><span class="n">3</span>active（当前版本）：检索用的就是它。每个库恰好一个，不能删。</li>
+      <li><span class="n">4</span>retired（已退役）：被新版本换下来的旧版本。collection 留着，新内容照样写进去，随时可以切回来（回滚）。</li>
+      <li><span class="n">5</span>deleted（已删除）：手动删掉一个不在用的版本，它的 collection 一起删掉，从此不再往里写。删掉一个构建中的版本，后台重建会在做完当前这份文档后停下。</li>
+    </ol>
+
+    <h3>图 3　新建版本：探维度、写记录，提交之后再投递重建</h3>
+    <svg width="1240" viewBox="0 0 1240 256" role="img" aria-label="新建版本：探维度、写记录，提交之后再投递重建">
+      <rect class="node" x="20" y="40" width="190" height="64" rx="4"/>
+      <text class="t-name" x="115.0" y="68.0">选新模型</text>
+      <text class="t-sub" x="115.0" y="88.0">库设置里改模型也走这里</text>
+      <path class="e-hot" d="M210 72 H238" marker-end="url(#pr-h)"/>
+      <g class="badge"><circle cx="20" cy="40" r="10"/><text x="20" y="44">1</text></g>
+      <rect class="node" x="240" y="40" width="170" height="64" rx="4"/>
+      <text class="t-name" x="325.0" y="68.0">要 Owner</text>
+      <text class="t-sub" x="325.0" y="88.0">换模型属于「管理」</text>
+      <path class="e-hot" d="M410 72 H438" marker-end="url(#pr-h)"/>
+      <g class="badge"><circle cx="240" cy="40" r="10"/><text x="240" y="44">2</text></g>
+      <rect class="node" x="440" y="40" width="190" height="64" rx="4"/>
+      <text class="t-name" x="535.0" y="68.0">没有构建中的</text>
+      <text class="t-sub" x="535.0" y="88.0">同一时刻只能有一个</text>
+      <path class="e-hot" d="M630 72 H658" marker-end="url(#pr-h)"/>
+      <g class="badge"><circle cx="440" cy="40" r="10"/><text x="440" y="44">3</text></g>
+      <rect class="node" x="660" y="40" width="190" height="64" rx="4"/>
+      <text class="t-name" x="755.0" y="68.0">探维度</text>
+      <text class="t-sub" x="755.0" y="88.0">加载一次，算出 1024</text>
+      <path class="e-hot" d="M850 72 H878" marker-end="url(#pr-h)"/>
+      <g class="badge"><circle cx="660" cy="40" r="10"/><text x="660" y="44">4</text></g>
+      <rect class="node" x="880" y="40" width="170" height="64" rx="4"/>
+      <text class="t-name" x="965.0" y="68.0">写一行版本</text>
+      <text class="t-sub" x="965.0" y="88.0">building，然后提交</text>
+      <path class="e-hot" d="M1050 72 H1078" marker-end="url(#pr-h)"/>
+      <g class="badge"><circle cx="880" cy="40" r="10"/><text x="880" y="44">5</text></g>
+      <rect class="node" x="1080" y="40" width="140" height="64" rx="4"/>
+      <text class="t-name hot" x="1150.0" y="68.0">投递重建</text>
+      <text class="t-sub" x="1150.0" y="88.0">交给 worker</text>
+      <g class="badge"><circle cx="1080" cy="40" r="10"/><text x="1080" y="44">6</text></g>
+      <path class="e-hot" d="M965 104 V138" marker-end="url(#pr-h)"/>
+      <rect class="bnd" x="20" y="140" width="1200" height="104" rx="6"/>
+      <text class="t-head" x="36" y="162">提交之后，「写入目标」里就多了 v2</text>
+      <text class="t-lab" x="36" y="188">· 新上传的文档、人工编辑的分段：写向量时 v1、v2 都写，各用各的模型</text>
+      <text class="t-lab" x="36" y="208">· 删除、开关、改文档属性：v1、v2 一起改</text>
+      <text class="t-lab" x="36" y="228">· 检索：照旧只用 v1</text>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>库的所有者在库的设置里选新模型。可选的模型 = 镜像里自带的本地模型 + 模型平台分配给知识库的远程模型。</li>
+      <li><span class="n">2</span>换模型属于「管理」，要 Owner 权限（包括「全部知识库 · Owner」的授权）。</li>
+      <li><span class="n">3</span>同一时刻只能有一个构建中的版本：两个同时重建会互相抢 worker 和模型调用额度，最后切到哪一个也说不清。</li>
+      <li><span class="n">4</span>先把新模型加载一次，算一段测试文字，看它输出多少个数（维度），记在版本上；建 collection 时要按这个长度建向量字段。</li>
+      <li><span class="n">5</span>写一行版本记录：版本号 = 上一个 + 1，状态 building，collection 名 kb_{库}_v{版本号}，然后提交。</li>
+      <li><span class="n">6</span>提交之后再投递重建任务，worker 才看得到这个版本。从提交这一刻起，写入目标里就多了 v2：新上传的文档、人工编辑的分段，写向量时 v1、v2 都写；删除、开关、改文档属性，两边一起改。检索照旧只用 v1。</li>
+    </ol>
+
+    <h3>图 4　重建：把已入库的文档用新模型再算一遍</h3>
+    <svg width="1240" viewBox="0 0 1240 340" role="img" aria-label="重建：把已入库的文档用新模型再算一遍">
+      <rect class="node" x="20" y="40" width="170" height="64" rx="4"/>
+      <text class="t-name" x="105.0" y="68.0">拿重建锁</text>
+      <text class="t-sub" x="105.0" y="88.0">进程死了，巡检能续上</text>
+      <path class="e-hot" d="M190 72 H218" marker-end="url(#pr-h)"/>
+      <rect class="node" x="220" y="40" width="230" height="64" rx="4"/>
+      <text class="t-name" x="335.0" y="68.0">建新 collection</text>
+      <text class="t-sub" x="335.0" y="88.0">建好全部筛选索引，再加载</text>
+      <path class="e-hot" d="M450 72 H478" marker-end="url(#pr-h)"/>
+      <rect class="node" x="480" y="40" width="220" height="64" rx="4"/>
+      <text class="t-name" x="590.0" y="68.0">列出已入库完的文档</text>
+      <text class="t-sub" x="590.0" y="88.0">状态是 completed 的</text>
+      <path class="e-hot" d="M700 72 H725 V88 H748" marker-end="url(#pr-h)"/>
+      <rect class="bnd" x="730" y="24" width="490" height="200" rx="6"/>
+      <text class="t-head" x="746" y="46">逐个文档</text>
+      <rect class="node" x="750" y="60" width="210" height="56" rx="4"/>
+      <text class="t-name" x="855.0" y="84.0">读它的分段</text>
+      <text class="t-sub" x="855.0" y="104.0">文字不变，不重新解析</text>
+      <path class="e-hot" d="M960 88 H988" marker-end="url(#pr-h)"/>
+      <rect class="node" x="990" y="60" width="210" height="56" rx="4"/>
+      <text class="t-name" x="1095.0" y="84.0">新模型算向量</text>
+      <text class="t-sub" x="1095.0" y="104.0">旧缓存用不上，全部重算</text>
+      <path class="e-hot" d="M1095 116 V138" marker-end="url(#pr-h)"/>
+      <rect class="node" x="990" y="140" width="210" height="56" rx="4"/>
+      <text class="t-name" x="1095.0" y="164.0">写进新 collection</text>
+      <text class="t-sub" x="1095.0" y="184.0">只写 v2</text>
+      <path class="e-hot" d="M990 168 H962" marker-end="url(#pr-h)"/>
+      <rect class="node" x="750" y="140" width="210" height="56" rx="4"/>
+      <text class="t-name" x="855.0" y="164.0">记进度</text>
+      <text class="t-sub" x="855.0" y="184.0">例：已完成 120 / 300 份</text>
+      <path class="e" d="M855 140 V118" marker-end="url(#pr-a)"/>
+      <text class="t-lab" x="863" y="132">下一个</text>
+      <path class="e-hot" d="M975 224 V242 H145 V258" marker-end="url(#pr-h)"/>
+      <rect class="node" x="20" y="260" width="250" height="64" rx="4"/>
+      <text class="t-name" x="145.0" y="288.0">补扫</text>
+      <text class="t-sub" x="145.0" y="308.0">还有新完成的文档？有就回去接着做</text>
+      <path class="e-hot" d="M270 292 H298" marker-end="url(#pr-h)"/>
+      <rect class="node" x="300" y="260" width="290" height="64" rx="4"/>
+      <text class="t-name" x="445.0" y="288.0">重写「早开始」的文档</text>
+      <text class="t-sub" x="445.0" y="308.0">版本建立前就在写的，完成后整篇重写</text>
+      <path class="e-hot" d="M590 292 H618" marker-end="url(#pr-h)"/>
+      <rect class="node" x="620" y="260" width="250" height="64" rx="4"/>
+      <text class="t-name" x="745.0" y="288.0">清孤儿</text>
+      <text class="t-sub" x="745.0" y="308.0">删掉库里已经没有的分段留下的记录</text>
+      <path class="e-hot" d="M870 292 H898" marker-end="url(#pr-h)"/>
+      <rect class="node" x="900" y="260" width="140" height="64" rx="4"/>
+      <text class="t-name hot" x="970.0" y="288.0">ready</text>
+      <text class="t-sub" x="970.0" y="308.0">构建完成</text>
+      <path class="e-hot" d="M1040 292 H1068" marker-end="url(#pr-h)"/>
+      <rect class="node" x="1070" y="260" width="150" height="64" rx="4"/>
+      <text class="t-name" x="1145.0" y="288.0">自动切换？</text>
+      <text class="t-sub" x="1145.0" y="308.0">勾了就直接 active</text>
+      <g class="badge"><circle cx="20" cy="40" r="10"/><text x="20" y="44">1</text></g>
+      <g class="badge"><circle cx="220" cy="40" r="10"/><text x="220" y="44">2</text></g>
+      <g class="badge"><circle cx="480" cy="40" r="10"/><text x="480" y="44">3</text></g>
+      <g class="badge"><circle cx="730" cy="24" r="10"/><text x="730" y="28">4</text></g>
+      <g class="badge"><circle cx="20" cy="260" r="10"/><text x="20" y="264">5</text></g>
+      <g class="badge"><circle cx="300" cy="260" r="10"/><text x="300" y="264">6</text></g>
+      <g class="badge"><circle cx="620" cy="260" r="10"/><text x="620" y="264">7</text></g>
+      <g class="badge"><circle cx="900" cy="260" r="10"/><text x="900" y="264">8</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>重建任务先拿这个版本的重建锁，并按文档记进度。进程死了，锁过期后巡检会把它重新投递，从记下的进度接着做，不会一直卡在构建中。</li>
+      <li><span class="n">2</span>在向量库里建新 collection：向量字段的长度按新模型的维度；同时建好所有筛选字段的索引（包括库里定义的每个元数据字段），否则切过去以后按元数据筛选会变成全表扫描。建好后加载，召回测试就能指定这个还在构建中的版本试效果。</li>
+      <li><span class="n">3</span>列出这个库里已经入库完成的文档。还在入库的不在这里做，它们自己会双写（图 5）。</li>
+      <li><span class="n">4</span>一个一个文档做：读出它的分段（文字不变，不重新解析、不重新切），用新模型算向量，写进新 collection，再记一次进度（例：已完成 120 / 300 份）。文档向量的缓存是按模型分开存的，换了模型就用不上，都要重算；远程模型经模型平台调用。</li>
+      <li><span class="n">5</span>补扫：做完一轮再查一次，有没有这期间新入库完成的文档，有就接着做，直到没有为止。</li>
+      <li><span class="n">6</span>重写「早开始」的文档：版本建立之前就已经开始写向量的文档，前几批只写进了 v1（图 5 的文档 Y）。等它们入库完成，把整篇再写一遍进 v2，补上缺的那几批。</li>
+      <li><span class="n">7</span>清孤儿：构建期间被删掉的分段、文档，可能在新 collection 里留下记录。拿新 collection 里的主键和数据库里现有的分段对一遍，多出来的删掉。</li>
+      <li><span class="n">8</span>全部做完，版本改成 ready；勾了「建完自动切换」的，在同一个事务里直接切成当前版本（图 6）。</li>
+    </ol>
+
+    <h3>图 5　构建期间：三种文档怎么进到新版本里</h3>
+    <svg width="1240" viewBox="0 0 1240 316" role="img" aria-label="构建期间：三种文档怎么进到新版本里">
+      <text class="t-key" x="20" y="80">文档 Z：早已入库完</text>
+      <text class="t-key" x="20" y="150">文档 Y：v2 建立前开始</text>
+      <text class="t-key" x="20" y="220">文档 X：v2 建立后上传</text>
+      <text class="t-key" x="20" y="290">检索用哪套</text>
+      <path class="e-link" d="M520 44 V304"/>
+      <text class="t-hot b" x="528" y="38">v2 建立</text>
+      <path class="e-link" d="M1100 44 V304"/>
+      <text class="t-hot b" x="1108" y="38">切换到 v2</text>
+      <rect class="node" x="180" y="62" width="300" height="30" rx="4"/>
+      <text class="t-lab mid" x="330" y="82">入库：只写进 v1</text>
+      <rect class="gap" x="600" y="62" width="260" height="30" rx="4"/>
+      <text class="t-hot mid" x="730" y="82">重建任务把它写进 v2</text>
+      <rect class="node" x="340" y="132" width="180" height="30" rx="4"/>
+      <text class="t-lab mid" x="430" y="152">第 1、2 批：只写 v1</text>
+      <rect class="node" x="520" y="132" width="260" height="30" rx="4"/>
+      <text class="t-lab mid" x="650" y="152">第 3 批起：v1、v2 都写</text>
+      <rect class="gap" x="800" y="132" width="260" height="30" rx="4"/>
+      <text class="t-hot mid" x="930" y="152">完成后，整篇重写进 v2</text>
+      <rect class="node" x="600" y="202" width="380" height="30" rx="4"/>
+      <text class="t-lab mid" x="790" y="222">每一批都写 v1 和 v2：v2 里一开始就是全的</text>
+      <rect class="node" x="180" y="272" width="920" height="30" rx="4"/>
+      <text class="t-lab mid" x="640" y="292">v1</text>
+      <rect class="gap" x="1100" y="272" width="120" height="30" rx="4"/>
+      <text class="t-hot mid" x="1160" y="292">v2</text>
+      <g class="badge"><circle cx="180" cy="62" r="10"/><text x="180" y="66">1</text></g>
+      <g class="badge"><circle cx="340" cy="132" r="10"/><text x="340" y="136">2</text></g>
+      <g class="badge"><circle cx="600" cy="202" r="10"/><text x="600" y="206">3</text></g>
+      <g class="badge"><circle cx="180" cy="272" r="10"/><text x="180" y="276">4</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>文档 Z 在 v2 建立之前就入库完了，它的向量只在 v1 里。重建任务会把它写进 v2（图 4 的 ④）。</li>
+      <li><span class="n">2</span>文档 Y 在 v2 建立之前就开始入库：前两批写的时候还没有 v2，只写进了 v1；入库每一批开始前都会重新读一次写入目标，所以 v2 建立后，第 3 批起两边都写。它完成之后，重建任务把整篇再写一遍进 v2，补上前两批（图 4 的 ⑥）。</li>
+      <li><span class="n">3</span>文档 X 在 v2 建立之后才上传，每一批都两边写，v2 里一开始就是全的。</li>
+      <li><span class="n">4</span>检索在切换之前一直用 v1，切换之后用 v2。重建要跑几个小时也没关系：期间检索照常可用，新文档也照常入库。</li>
+    </ol>
+
+    <h3>图 6　切换与回滚：只改「当前版本」这一处</h3>
+    <svg width="1240" viewBox="0 0 1240 292" role="img" aria-label="切换与回滚：只改「当前版本」这一处">
+      <text class="t-head" x="36" y="40">切换前</text>
+      <rect class="node" x="80" y="60" width="300" height="56" rx="4"/>
+      <text class="t-name hot" x="230.0" y="84.0">v1 · bge-small-zh</text>
+      <text class="t-sub" x="230.0" y="104.0">active：检索用它</text>
+      <text class="t-hot mid" x="46" y="93">检索</text>
+      <path class="e-hot" d="M62 88 H78" marker-end="url(#pr-h)"/>
+      <rect class="node" x="80" y="130" width="300" height="56" rx="4"/>
+      <text class="t-name" x="230.0" y="154.0">v2 · bge-m3</text>
+      <text class="t-sub" x="230.0" y="174.0">ready：建好了，可以先做召回测试</text>
+      <text class="t-lab mid" x="230" y="214">建好了，还没用</text>
+      <text class="t-head" x="446" y="40">切换后</text>
+      <rect class="node" x="490" y="60" width="300" height="56" rx="4"/>
+      <text class="t-name" x="640.0" y="84.0">v1 · bge-small-zh</text>
+      <text class="t-sub" x="640.0" y="104.0">retired：保留，继续双写</text>
+      <rect class="node" x="490" y="130" width="300" height="56" rx="4"/>
+      <text class="t-name hot" x="640.0" y="154.0">v2 · bge-m3</text>
+      <text class="t-sub" x="640.0" y="174.0">active：检索用它</text>
+      <text class="t-hot mid" x="456" y="163">检索</text>
+      <path class="e-hot" d="M472 158 H488" marker-end="url(#pr-h)"/>
+      <text class="t-lab mid" x="640" y="214">一个事务：v2 改 active，v1 改 retired</text>
+      <text class="t-head" x="856" y="40">回滚后</text>
+      <rect class="node" x="900" y="60" width="300" height="56" rx="4"/>
+      <text class="t-name hot" x="1050.0" y="84.0">v1 · bge-small-zh</text>
+      <text class="t-sub" x="1050.0" y="104.0">active：检索用它</text>
+      <text class="t-hot mid" x="866" y="93">检索</text>
+      <path class="e-hot" d="M882 88 H898" marker-end="url(#pr-h)"/>
+      <rect class="node" x="900" y="130" width="300" height="56" rx="4"/>
+      <text class="t-name" x="1050.0" y="154.0">v2 · bge-m3</text>
+      <text class="t-sub" x="1050.0" y="174.0">retired：保留，继续双写</text>
+      <text class="t-lab mid" x="1050" y="214">觉得新模型不好：再切一次</text>
+      <path class="e-hot" d="M380 124 H428" marker-end="url(#pr-h)"/>
+      <path class="e" d="M790 124 H838" marker-end="url(#pr-a)"/>
+      <rect class="gap" x="20" y="240" width="1200" height="40" rx="4"/>
+      <text class="t-hot mid" x="620" y="265">检索每次先读「当前是哪个版本」：要么全用旧的，要么全用新的，不会一半一半</text>
+      <g class="badge"><circle cx="80" cy="130" r="10"/><text x="80" y="134">1</text></g>
+      <g class="badge"><circle cx="490" cy="130" r="10"/><text x="490" y="134">2</text></g>
+      <g class="badge"><circle cx="490" cy="60" r="10"/><text x="490" y="64">3</text></g>
+      <g class="badge"><circle cx="900" cy="60" r="10"/><text x="900" y="64">4</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>切换前：v1 是当前版本，v2 已经建好（ready）。可以先在召回测试里分别用 v1、v2 搜几个问题，对比效果。</li>
+      <li><span class="n">2</span>切换是一个数据库事务：v2 改成 active，v1 改成 retired。检索每次都先读「当前是哪个版本」，所以一次检索要么全用 v1，要么全用 v2，不会一半一半；问题的向量也跟着改用 v2 的模型算。</li>
+      <li><span class="n">3</span>v1 退役后 collection 不删，继续双写，也保持加载（开 mmap，主要占磁盘而不是内存）：新内容照样写进去，回滚时数据是全的，切过去马上能查。</li>
+      <li><span class="n">4</span>回滚就是再切换一次：觉得新模型效果不好，把 v1 切回当前版本。确定不要的版本可以手动删掉，从此不再双写；正在用的版本不能删。</li>
+    </ol>
+
+    <h3>为什么这样做</h3>
+    <table>
+      <thead><tr><th>做法</th><th>为什么</th></tr></thead>
+      <tbody>
+        <tr><td>换模型不原地改，另建一套</td><td>重算可能要几个小时，原地改的话，这期间库里一部分是新向量、一部分是旧向量，检索结果全乱；另建一套，旧的照常用。</td></tr>
+        <tr><td>同一时刻只有一个构建中的版本</td><td>两个同时建会互相抢 worker 和模型调用额度，最后切到哪一个也说不清。</td></tr>
+        <tr><td>新内容同时写进所有还在的版本（双写）</td><td>重建期间库还在用，新上传、编辑的内容如果只进旧版本，切过去以后就少了这一部分。</td></tr>
+        <tr><td>写入目标每一批都重新读</td><td>版本是在某个文档入库到一半时建立的，下一批就能写进去，不用等这个文档重新入库。</td></tr>
+        <tr><td>重建完再补扫，并重写「早开始」的文档</td><td>版本建立前就在写的文档，前几批只进了旧版本；不补的话，新版本里这些文档会缺几段。</td></tr>
+        <tr><td>重建可以续跑，按文档记进度</td><td>几千份文档要跑很久，进程随时可能被重启；每次从头再来，既慢又费模型调用。</td></tr>
+        <tr><td>新 collection 建好全部筛选索引</td><td>否则切过去以后，按元数据筛选会变成全表扫描，检索突然变慢。</td></tr>
+        <tr><td>切换只改「当前版本」一处，在一个事务里</td><td>检索看到的要么是旧版本、要么是新版本，不会一半一半。</td></tr>
+        <tr><td>旧版本保留、继续双写、保持加载</td><td>新模型效果不好时能马上切回去，而且回滚后的数据是全的；代价是多写一份、多占一份存储，直到手动删除。</td></tr>
+        <tr><td>「当前用哪个版本」只记在索引版本上</td><td>知识库本身不再另记模型和 collection；只记一处，切换时不会两边对不上。</td></tr>
+      </tbody>
+    </table>
+  </section>
 </main>
 
 <script>

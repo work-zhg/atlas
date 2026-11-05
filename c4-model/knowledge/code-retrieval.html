@@ -121,7 +121,7 @@
         3.55
       ],
       "source": "RetrievalService._recall / _candidates",
-      "responsibility": "一个库、一个表述的召回：语义（查询向量 → 稠密检索）、全文（jieba → BM25 稀疏检索）或混合（两路并发，按 point 去重后必须重排）。多个表述各自召回再交给融合。",
+      "responsibility": "一个库、一个表述的召回：语义（查询向量 → 稠密检索）、全文（问题文本 → BM25 检索，由 Milvus 分词）或混合（两路分别检索、并发，按主键去重后必须重排）。多个表述各自召回再交给融合。",
       "methods": [
         [
           "+",
@@ -161,7 +161,7 @@
         1.95
       ],
       "source": "RetrievalService._assemble / _mmr / _per_document / _merge_adjacent / _point_contents；rerank.reorder",
-      "responsibility": "把命中的 point 变成给模型的分段：重排后先按 MMR 去掉高度相似的；子块命中回到父分段（分段分数取命中子块的最高分），附上命中的子块；每份文档最多几段；相邻分段合并；最后高分放到首尾（缓解长上下文中间被忽略）。正文、标题路径、引用定位从分段领域取。",
+      "responsibility": "把命中的 entity 变成给模型的分段：重排后先按 MMR 去掉高度相似的；子块命中回到父分段（分段分数取命中子块的最高分），附上命中的子块；每份文档最多几段；相邻分段合并；最后高分放到首尾（缓解长上下文中间被忽略）。正文、标题路径、引用定位从分段领域取。",
       "methods": [
         [
           "+",
@@ -468,8 +468,12 @@
       "reason": "它是锦上添花：LLM 超时、限流、输出不合法时，用原问题检索总比检索失败好；只问需要的任务，一个都不需要就不调用。"
     },
     {
-      "decision": "混合检索两路放在同一个 point 上、必须重排",
+      "decision": "混合检索两路放在同一个 entity 上、必须重排",
       "reason": "稠密和 BM25 的分数不可比，去重后必须统一重排；多个表述、子问题之间用 RRF，只看名次，不受分数尺度影响。"
+    },
+    {
+      "decision": "两路分别检索，不用 Milvus 的 hybrid_search",
+      "reason": "融合和重排要跨表述、子问题、多个库在服务端统一做，漏斗还要记每一路的候选；hybrid_search 只返回它融合后的结果。"
     },
     {
       "decision": "漏斗只存 id、分数、名次",
@@ -480,7 +484,7 @@
       "reason": "现在检索时 UPDATE kb_segment.hit_count：读路径上多一次写、和入库编辑抢行锁，重新入库后还会清零。检索记录本来就有每次的结果。"
     }
   ],
-  "schemaNote": "主键约定：id 是自增主键，只在库内使用；uuid 是逻辑主键（Python 侧生成），API 和向量库的 point id 用它，表间引用的列叫 xxx_uuid。表间不建外键约束，引用由代码维护；引用别的领域的表时只写列说明，不画连线。类型写的是 PostgreSQL 类型；每张表还有 created_at、updated_at（timestamptz，UTC），下面不重复列出。人员字段存用户中心用户 id 的字符串。",
+  "schemaNote": "主键约定：id 是自增主键，只在库内使用；uuid 是逻辑主键（Python 侧生成），API 和向量库的主键用它，表间引用的列叫 xxx_uuid。表间不建外键约束，引用由代码维护；引用别的领域的表时只写列说明，不画连线。类型写的是 PostgreSQL 类型；每张表还有 created_at、updated_at（timestamptz，UTC），下面不重复列出。人员字段存用户中心用户 id 的字符串。",
   "tables": [
     {
       "name": "kb_retrieval",
@@ -536,7 +540,7 @@
         {
           "name": "stages",
           "type": "jsonb",
-          "description": "[{name, dataset_uuid, elapsed_ms, attrs, items: [{point, segment, kind, score}]}]"
+          "description": "[{name, dataset_uuid, elapsed_ms, attrs, items: [{entity, segment, kind, score}]}]"
         },
         {
           "name": "results",

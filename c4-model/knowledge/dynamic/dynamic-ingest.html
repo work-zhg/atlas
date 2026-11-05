@@ -27,6 +27,44 @@
   #c4-details td.sample { word-break: break-all; }
   #c4-details pre { margin: 0; padding: 10px 12px; border: 1px solid #e3e3e3; background: #f6f8fa; font-size: 12px; line-height: 1.5; overflow-x: auto; }
   svg a { cursor: pointer; }
+  /* 入库原理：手写的静态图，不经渲染器 */
+  #principle { max-width: 1280px; }
+  #principle h3 { margin: 32px 0 8px; font-size: 15px; font-weight: 600; color: #333; }
+  #principle p { margin: 0 0 8px; font-size: 14px; line-height: 1.7; }
+  #principle code { padding: 0 3px; background: #f6f8fa; font-family: Menlo, Consolas, monospace; font-size: 12.5px; }
+  #principle ol { margin: 8px 0 0; padding: 0; list-style: none; }
+  #principle ol li { position: relative; margin: 0 0 6px; padding-left: 30px; font-size: 14px; line-height: 1.7; }
+  #principle ol li .n { position: absolute; left: 0; top: 2px; width: 20px; height: 20px; border-radius: 50%; background: #d9480f; color: #fff; font-size: 12px; font-weight: 700; line-height: 20px; text-align: center; }
+  #principle table { width: 100%; margin: 8px 0 0; border-collapse: collapse; font-size: 13px; line-height: 1.6; }
+  #principle th, #principle td { padding: 6px 10px; border: 1px solid #e3e3e3; text-align: left; vertical-align: top; }
+  #principle th { background: #f6f8fa; font-weight: 600; }
+  #principle th:first-child { width: 28%; }
+  #principle svg { margin: 8px 0 4px; }
+  #principle svg text { font-size: 13px; fill: #444; }
+  #principle svg .t-name { font-size: 15px; fill: #1168bd; text-anchor: middle; }
+  #principle svg .t-sub { font-size: 12px; fill: #888; text-anchor: middle; }
+  #principle svg .t-head { font-size: 14px; font-weight: 600; fill: #1168bd; }
+  #principle svg .t-key { font-size: 12px; fill: #888; }
+  #principle svg .t-lab { font-size: 12px; fill: #666; }
+  #principle svg .t-hot { font-size: 12px; fill: #d9480f; }
+  #principle svg .t-mute { font-size: 12px; fill: #aaa; }
+  #principle svg .t-ghost { font-size: 14px; font-weight: 600; fill: #888; }
+  #principle svg .hot { fill: #d9480f; }
+  #principle svg .mid { text-anchor: middle; }
+  #principle svg .end { text-anchor: end; }
+  #principle svg .b { font-weight: 700; }
+  #principle svg .node { fill: #fff; stroke: #1168bd; stroke-width: 1.6; }
+  #principle svg .head { fill: #f6f8fa; stroke: none; }
+  #principle svg .sep { stroke: #e3e3e3; stroke-width: 1; }
+  #principle svg .bnd { fill: none; stroke: #1168bd; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .ghost { fill: #fafafa; stroke: #aaa; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .gap { fill: #fff6f0; stroke: #d9480f; stroke-width: 1.2; stroke-dasharray: 5 4; }
+  #principle svg .e { fill: none; stroke: #444; stroke-width: 1.6; }
+  #principle svg .e-hot { fill: none; stroke: #d9480f; stroke-width: 2.4; }
+  #principle svg .e-mute { fill: none; stroke: #bbb; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .e-link { fill: none; stroke: #d9480f; stroke-width: 1.4; stroke-dasharray: 4 3; }
+  #principle svg .badge circle { fill: #d9480f; stroke: #fff; stroke-width: 2; }
+  #principle svg .badge text { fill: #fff; font-size: 12px; font-weight: 700; text-anchor: middle; }
 </style>
 </head>
 <body>
@@ -117,7 +155,7 @@
       "id": "windex",
       "kind": "component",
       "name": "向量索引",
-      "technology": "qdrant-client + jieba",
+      "technology": "pymilvus",
       "in": "wrkB"
     },
     {
@@ -143,10 +181,10 @@
       "in": "kb"
     },
     {
-      "id": "qdrant",
+      "id": "vdb",
       "kind": "container",
       "name": "向量库",
-      "technology": "Qdrant",
+      "technology": "Milvus 2.6",
       "shape": "database",
       "in": "kb"
     },
@@ -308,7 +346,7 @@
       "description": "整篇替换分段与子块；记 splitting_completed_at",
       "technology": "SQL/TCP",
       "details": {
-        "note": "先让向量索引删这份文档的旧 point（重新入库时），一个事务。"
+        "note": "先让向量索引删这份文档的旧 entity（重新入库时），一个事务。"
       }
     },
     {
@@ -330,19 +368,25 @@
     },
     {
       "from": "windex",
-      "to": "qdrant",
-      "description": "upsert point：稠密 + BM25 + payload",
-      "technology": "HTTP（Qdrant REST）",
+      "to": "vdb",
+      "description": "upsert entity：稠密向量 + 检索文本 + 标量字段",
+      "technology": "gRPC（pymilvus）",
       "details": {
+        "note": "BM25 稀疏向量不由客户端算：Milvus 的 BM25 Function 用 chinese 分析器从检索文本生成，IDF 按 collection 统计。",
         "items": [
           [
-            "point id",
-            "分段或子块的 uuid（重跑是覆盖）",
+            "主键",
+            "分段或子块的 uuid（upsert 是覆盖）",
             "0c91…"
           ],
           [
-            "payload",
-            "PointPayload",
+            "text",
+            "检索文本：标题路径 + 正文",
+            "差旅制度 > 住宿标准\n一线城市…"
+          ],
+          [
+            "标量字段",
+            "EntityFields",
             "{kind, segment_uuid, document_uuid, doc_ok, meta, acl, is_current, …}"
           ]
         ]
@@ -351,10 +395,10 @@
     {
       "from": "pipeline",
       "to": "db",
-      "description": "completed；按文档同步 payload；新版本取代旧版本",
+      "description": "completed；按文档同步文档级字段；新版本取代旧版本",
       "technology": "SQL/TCP",
       "details": {
-        "note": "记字数、耗时；完成时再按文档整体同步一次 payload（防入库中途改 ACL 留下旧值），带 supersedes 的新版本让同组旧版本 is_current = false。"
+        "note": "记字数、耗时；完成时再按文档整体同步一次向量库里的文档级字段（防入库中途改 ACL 留下旧值），带 supersedes 的新版本让同组旧版本 is_current = false。"
       }
     }
   ]
@@ -367,6 +411,590 @@
   <section id="c4-details" hidden></section>
   <h2>Diagram key</h2>
   <svg id="c4-key" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+
+  <!-- 入库原理：静态图，不经上面的渲染器。场景同时序图：员工上传一份文档，worker 把它入库 -->
+  <section id="principle">
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+      <defs>
+        <marker id="pr-a" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#444"/></marker>
+        <marker id="pr-h" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#d9480f"/></marker>
+        <marker id="pr-m" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#bbb"/></marker>
+      </defs>
+    </svg>
+
+    <h2>入库原理：一个文档一个任务，按阶段落库，停得下、续得上</h2>
+    <p>一句话：<b>入库</b>就是一个文档一个任务：worker 拿到任务先抢这个文档的入库锁，然后按阶段跑——解析、分段与增强、写分段、分批向量化、完成——每个阶段一个短事务，状态立刻看得到。分段写进库就是<b>续跑点</b>：之后再中断，只把还没向量化的分段接着做，不重新解析；每一批先写向量库、再把这批分段标成完成，重跑就是按主键覆盖。暂停和删除靠 Redis 里的一个标记，任务在每个阶段、每一批之前看；进程死了，锁一分钟内过期，接口进程的巡检把停在中间状态的文档重新投递。下面九张图：图 1 是总览，图 2 到图 7 逐个讲每个阶段怎么做，图 8、图 9 讲暂停、失败和中断。场景同上面的时序图，橙色是这个场景实际走的路，灰色虚线是没走的分支。</p>
+
+    <h3>图 1　一个文档走一遍：阶段、状态和落下的东西</h3>
+    <svg width="1240" viewBox="0 0 1240 300" role="img" aria-label="一个文档的入库：阶段、状态和落下的东西">
+      <rect class="bnd" x="214" y="32" width="1014" height="88" rx="6"/>
+      <text class="t-key end" x="1222" y="26">入库 worker：一个任务持着这个文档的锁跑完</text>
+      <rect class="node" x="20" y="44" width="170" height="64" rx="4"/>
+      <text class="t-name" x="105.0" y="72.0">上传</text>
+      <text class="t-sub" x="105.0" y="92.0">接口进程 · waiting</text>
+      <path class="e" d="M105 108 V158" marker-end="url(#pr-a)"/>
+      <rect class="head" x="20" y="160" width="170" height="86" rx="4"/>
+      <text class="t-sub" x="105.0" y="187.0">OSS：原文件</text>
+      <text class="t-sub" x="105.0" y="207.0">库：文档行、处理规则</text>
+      <text class="t-sub" x="105.0" y="227.0">提交之后才投递任务</text>
+      <path class="e-hot" d="M190 76 H226" marker-end="url(#pr-h)"/>
+      <rect class="node" x="226" y="44" width="170" height="64" rx="4"/>
+      <text class="t-name" x="311.0" y="72.0">解析</text>
+      <text class="t-sub" x="311.0" y="92.0">parsing</text>
+      <path class="e" d="M311 108 V158" marker-end="url(#pr-a)"/>
+      <rect class="head" x="226" y="160" width="170" height="86" rx="4"/>
+      <text class="t-sub" x="311.0" y="187.0">OSS：docir.json、图片</text>
+      <text class="t-sub" x="311.0" y="207.0">库：解析报告</text>
+      <text class="t-sub" x="311.0" y="227.0">质量差 → 先进待审核</text>
+      <path class="e-hot" d="M396 76 H432" marker-end="url(#pr-h)"/>
+      <rect class="node" x="432" y="44" width="170" height="64" rx="4"/>
+      <text class="t-name" x="517.0" y="72.0">分段与增强</text>
+      <text class="t-sub" x="517.0" y="92.0">splitting</text>
+      <path class="e" d="M517 108 V158" marker-end="url(#pr-a)"/>
+      <rect class="head" x="432" y="160" width="170" height="86" rx="4"/>
+      <text class="t-sub" x="517.0" y="187.0">分段只在内存里</text>
+      <text class="t-sub" x="517.0" y="207.0">增强结果缓存在 Redis</text>
+      <text class="t-sub" x="517.0" y="227.0">单段增强失败不影响</text>
+      <path class="e-hot" d="M602 76 H638" marker-end="url(#pr-h)"/>
+      <rect class="node" x="638" y="44" width="170" height="64" rx="4"/>
+      <text class="t-name hot" x="723.0" y="72.0">写分段</text>
+      <text class="t-sub" x="723.0" y="92.0">splitting · 一个事务</text>
+      <path class="e" d="M723 108 V158" marker-end="url(#pr-a)"/>
+      <rect class="head" x="638" y="160" width="170" height="86" rx="4"/>
+      <text class="t-sub" x="723.0" y="187.0">库：分段与子块</text>
+      <text class="t-sub" x="723.0" y="207.0">记下分段完成时间</text>
+      <text class="t-hot mid" x="723.0" y="227.0">← 续跑从这之后开始</text>
+      <path class="e-hot" d="M808 76 H844" marker-end="url(#pr-h)"/>
+      <rect class="node" x="844" y="44" width="170" height="64" rx="4"/>
+      <text class="t-name" x="929.0" y="72.0">分批向量化</text>
+      <text class="t-sub" x="929.0" y="92.0">indexing · 每批 64 段</text>
+      <path class="e" d="M929 108 V158" marker-end="url(#pr-a)"/>
+      <rect class="head" x="844" y="160" width="170" height="86" rx="4"/>
+      <text class="t-sub" x="929.0" y="187.0">向量库：upsert entity</text>
+      <text class="t-sub" x="929.0" y="207.0">库：这批分段 completed</text>
+      <text class="t-sub" x="929.0" y="227.0">每批一个事务</text>
+      <path class="e-hot" d="M1014 76 H1050" marker-end="url(#pr-h)"/>
+      <rect class="node" x="1050" y="44" width="170" height="64" rx="4"/>
+      <text class="t-name" x="1135.0" y="72.0">完成</text>
+      <text class="t-sub" x="1135.0" y="92.0">completed</text>
+      <path class="e" d="M1135 108 V158" marker-end="url(#pr-a)"/>
+      <rect class="head" x="1050" y="160" width="170" height="86" rx="4"/>
+      <text class="t-sub" x="1135.0" y="187.0">库：字数、耗时</text>
+      <text class="t-sub" x="1135.0" y="207.0">向量库：文档级字段再同步</text>
+      <text class="t-sub" x="1135.0" y="227.0">新版本取代旧版本</text>
+      <circle cx="208" cy="76" r="6" fill="#d9480f"/>
+      <circle cx="414" cy="76" r="6" fill="#d9480f"/>
+      <circle cx="826" cy="76" r="6" fill="#d9480f"/>
+      <text class="t-hot" x="936" y="140">每一批之前也看</text>
+      <g class="badge"><circle cx="20" cy="44" r="10"/><text x="20" y="48">1</text></g>
+      <g class="badge"><circle cx="226" cy="44" r="10"/><text x="226" y="48">2</text></g>
+      <g class="badge"><circle cx="432" cy="44" r="10"/><text x="432" y="48">3</text></g>
+      <g class="badge"><circle cx="638" cy="44" r="10"/><text x="638" y="48">4</text></g>
+      <g class="badge"><circle cx="844" cy="44" r="10"/><text x="844" y="48">5</text></g>
+      <g class="badge"><circle cx="1050" cy="44" r="10"/><text x="1050" y="48">6</text></g>
+      <circle cx="30" cy="280" r="6" fill="#d9480f"/>
+      <text class="t-hot" x="44" y="284">看暂停标记的地方：解析之前、分段之前、每一批向量化之前</text>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>上传在接口进程里：校验、存原文件、建文档行（waiting），提交之后才给每个文档投递一条入库任务（图 2）。</li>
+      <li><span class="n">2</span>解析：原文件 → DocIR，DocIR 和图片存回 OSS；解析质量差的文档先进待审核（图 3）。</li>
+      <li><span class="n">3</span>分段与增强：DocIR 切成父分段和子块，按库开关补上下文、写表格摘要；这一步的结果只在内存里（图 4）。</li>
+      <li><span class="n">4</span>写分段：一个事务整篇替换这个文档的分段，记下 <code>splitting_completed_at</code>。这是入库唯一的续跑点（图 5）。</li>
+      <li><span class="n">5</span>分批向量化：每批 64 个还没 completed 的分段，先写向量库、再在一个事务里标 completed（图 6）。</li>
+      <li><span class="n">6</span>完成：再同步一次文档级字段，带 supersedes 的新版本取代旧版本（图 7）。</li>
+    </ol>
+
+    <h3>图 2　上传：校验、存原文件、建文档，提交之后再投递</h3>
+    <svg width="1240" viewBox="0 0 1240 282" role="img" aria-label="上传：校验、存原文件、建文档，提交之后再投递">
+      <rect class="bnd" x="10" y="20" width="1220" height="170" rx="6"/>
+      <text class="t-key" x="26" y="44">接口进程</text>
+      <rect class="node" x="20" y="60" width="190" height="64" rx="4"/>
+      <text class="t-name" x="115.0" y="88.0">收到上传</text>
+      <text class="t-sub" x="115.0" y="108.0">文件、处理规则、文档属性</text>
+      <path class="e-hot" d="M210 92 H238" marker-end="url(#pr-h)"/>
+      <rect class="node" x="240" y="60" width="190" height="64" rx="4"/>
+      <text class="t-name" x="335.0" y="88.0">校验</text>
+      <text class="t-sub" x="335.0" y="108.0">可写？格式、大小、数量</text>
+      <path class="e-hot" d="M430 92 H458" marker-end="url(#pr-h)"/>
+      <rect class="node" x="460" y="60" width="180" height="64" rx="4"/>
+      <text class="t-name" x="550.0" y="88.0">存处理规则</text>
+      <text class="t-sub" x="550.0" y="108.0">这一批文档都引用它</text>
+      <path class="e-hot" d="M640 92 H668" marker-end="url(#pr-h)"/>
+      <rect class="node" x="670" y="60" width="170" height="64" rx="4"/>
+      <text class="t-name" x="755.0" y="88.0">存原文件</text>
+      <text class="t-sub" x="755.0" y="108.0">PUT 到 OSS</text>
+      <path class="e-hot" d="M840 92 H868" marker-end="url(#pr-h)"/>
+      <rect class="node" x="870" y="60" width="170" height="64" rx="4"/>
+      <text class="t-name" x="955.0" y="88.0">建文档行</text>
+      <text class="t-sub" x="955.0" y="108.0">waiting · 同一个批次</text>
+      <path class="e-hot" d="M1040 92 H1068" marker-end="url(#pr-h)"/>
+      <rect class="node" x="1070" y="60" width="150" height="64" rx="4"/>
+      <text class="t-name hot" x="1145.0" y="88.0">提交</text>
+      <text class="t-sub" x="1145.0" y="108.0">然后才投递</text>
+      <text class="t-sub" x="335" y="148">单个文件 ≤ 50 MB，单库 ≤ 5000 份</text>
+      <text class="t-sub" x="335" y="166">元数据按库定义的字段校验</text>
+      <text class="t-sub" x="550" y="148">库记下这次的规则</text>
+      <text class="t-sub" x="550" y="166">下次上传沿用</text>
+      <text class="t-sub" x="755" y="148">{前缀}/{库}/{文档}/{文件名}</text>
+      <text class="t-sub" x="955" y="148">要求审核的库：先待审核</text>
+      <text class="t-sub" x="955" y="166">supersedes：加入旧版本的版本组</text>
+      <path class="e-hot" d="M1145 124 V214" marker-end="url(#pr-h)"/>
+      <text class="t-hot" x="1153" y="206">每个文档一条</text>
+      <text class="t-lab" x="20" y="238">接口立刻返回批次和文档（waiting），</text>
+      <text class="t-lab" x="20" y="258">控制台按批次轮询进度</text>
+      <rect class="node" x="320" y="216" width="200" height="50" rx="4"/>
+      <text class="t-name" x="420.0" y="237.0">worker 并发领取</text>
+      <text class="t-sub" x="420.0" y="257.0">一个任务一个文档</text>
+      <rect class="node" x="560" y="216" width="660" height="50" rx="4"/>
+      <text class="t-lab" x="576" y="246">Redis 队列 dataset</text>
+      <path class="e-hot" d="M560 241 H522" marker-end="url(#pr-h)"/>
+      <rect class="head" x="710" y="226" width="160" height="30" rx="3"/>
+      <text class="t-sub" x="790" y="246">indexing_task（文档 1）</text>
+      <rect class="head" x="880" y="226" width="160" height="30" rx="3"/>
+      <text class="t-sub" x="960" y="246">indexing_task（文档 2）</text>
+      <rect class="head" x="1050" y="226" width="160" height="30" rx="3"/>
+      <text class="t-sub" x="1130" y="246">indexing_task（文档 3）</text>
+      <g class="badge"><circle cx="20" cy="60" r="10"/><text x="20" y="64">1</text></g>
+      <g class="badge"><circle cx="240" cy="60" r="10"/><text x="240" y="64">2</text></g>
+      <g class="badge"><circle cx="460" cy="60" r="10"/><text x="460" y="64">3</text></g>
+      <g class="badge"><circle cx="670" cy="60" r="10"/><text x="670" y="64">4</text></g>
+      <g class="badge"><circle cx="870" cy="60" r="10"/><text x="870" y="64">5</text></g>
+      <g class="badge"><circle cx="1070" cy="60" r="10"/><text x="1070" y="64">6</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>控制台经网关上传一个或多个文件，带上处理规则（切法、长度、解析器）和文档属性（元数据、ACL、生效区间、supersedes）。接口先确认调用者能写这个库：库级权限问用户中心。</li>
+      <li><span class="n">2</span>校验：格式在支持列表里、单个文件不超过 50 MB、单库最多 5000 份文档；同一个库的文档必须用同一种分段结构；元数据按库定义的字段校验，ACL 规范化；上传新版本时一次只能传一个文件。</li>
+      <li><span class="n">3</span>处理规则存一份，这一批文档都引用它；库记下最近一次用的规则，下次上传默认沿用。</li>
+      <li><span class="n">4</span>原文件写进 OSS，key 是 <code>{前缀}/{库}/{文档}/{文件名}</code>。之后的 DocIR 和图片也放在这个前缀下，删文档时一起清掉。</li>
+      <li><span class="n">5</span>建文档行：waiting、同一个批次号、库里的位置。要求审核的库，新文档先待审核（照常入库，审核通过前不参与检索）；带 supersedes 的加入旧文档的版本组，入库完成时才取代它（图 7）。</li>
+      <li><span class="n">6</span>提交之后才投递：每个文档一条 <code>indexing_task</code> 进 Redis 队列 dataset，各 worker 并发领取。先提交是因为 worker 可能比提交更早读库，读不到文档就直接退出。接口立刻返回批次和文档，控制台按批次轮询进度。</li>
+    </ol>
+
+    <h3>图 3　解析：原文件 → DocIR，顺带出一份质量报告</h3>
+    <svg width="1240" viewBox="0 0 1240 345" role="img" aria-label="解析：原文件 → DocIR，顺带出一份质量报告">
+      <rect class="node" x="20" y="146" width="140" height="64" rx="4"/>
+      <text class="t-name" x="90.0" y="174.0">原文件</text>
+      <text class="t-sub" x="90.0" y="194.0">从 OSS 取</text>
+      <path class="e-hot" d="M160 178 H188" marker-end="url(#pr-h)"/>
+      <rect class="node" x="190" y="146" width="150" height="64" rx="4"/>
+      <text class="t-name" x="265.0" y="174.0">按扩展名选</text>
+      <text class="t-sub" x="265.0" y="194.0">解析器</text>
+      <rect class="node" x="380" y="40" width="300" height="52" rx="4"/>
+      <text class="t-name" x="530.0" y="62.0">PDF：版面分析</text>
+      <text class="t-sub" x="530.0" y="82.0">双栏、页眉页脚、书签标题、框线表格、图注</text>
+      <path class="e-hot" d="M340 178 H360 V66 H378" marker-end="url(#pr-h)"/>
+      <path class="e-hot" d="M680 66 H700 V165 H718" marker-end="url(#pr-h)"/>
+      <rect class="node" x="380" y="100" width="300" height="52" rx="4"/>
+      <text class="t-name" x="530.0" y="122.0">DOCX / PPTX</text>
+      <text class="t-sub" x="530.0" y="142.0">按样式还原标题、列表；PPTX 一页一节</text>
+      <path class="e-mute" d="M340 178 H360 V126 H378" marker-end="url(#pr-m)"/>
+      <path class="e-mute" d="M680 126 H700"/>
+      <rect class="node" x="380" y="160" width="300" height="52" rx="4"/>
+      <text class="t-name" x="530.0" y="182.0">XLSX / CSV</text>
+      <text class="t-sub" x="530.0" y="202.0">一个工作表一张表，第一行是表头</text>
+      <path class="e-mute" d="M340 178 H360 V186 H378" marker-end="url(#pr-m)"/>
+      <path class="e-mute" d="M680 186 H700"/>
+      <rect class="node" x="380" y="220" width="300" height="52" rx="4"/>
+      <text class="t-name" x="530.0" y="242.0">TXT / MD / HTML / JSON / YAML</text>
+      <text class="t-sub" x="530.0" y="262.0">整段原文一块，结构交给分段识别</text>
+      <path class="e-mute" d="M340 178 H360 V246 H378" marker-end="url(#pr-m)"/>
+      <path class="e-mute" d="M680 246 H700"/>
+      <rect class="ghost" x="380" y="280" width="300" height="52" rx="4"/>
+      <text class="t-ghost mid" x="530.0" y="302.0">parser = text（退路）</text>
+      <text class="t-mute mid" x="530.0" y="322.0">每页一块纯文本，版面分析出错时用</text>
+      <path class="e-mute" d="M340 178 H360 V306 H378" marker-end="url(#pr-m)"/>
+      <path class="e-mute" d="M680 306 H700"/>
+      <rect class="node" x="720" y="60" width="250" height="220" rx="4"/>
+      <text class="t-name" x="845" y="86">DocIR</text>
+      <text class="t-sub" x="845" y="106">带类型、层级、页码、坐标的块</text>
+      <text class="t-lab" x="736" y="136">heading · L1 · 第 1 页 · 第三章 假期</text>
+      <text class="t-lab" x="736" y="160">heading · L2 · 第 1 页 · 3.1 年假</text>
+      <text class="t-lab" x="736" y="184">paragraph · 第 1 页 · 员工每年……</text>
+      <text class="t-lab" x="736" y="208">table · 第 2 页 · 表头 + 12 行</text>
+      <text class="t-lab" x="736" y="232">image · 第 2 页 · 按坐标裁下的图</text>
+      <text class="t-lab" x="736" y="256">caption · 第 2 页 · 图 3 请假流程</text>
+      <path class="e-hot" d="M970 92 H1008" marker-end="url(#pr-h)"/>
+      <rect class="node" x="1010" y="60" width="210" height="64" rx="4"/>
+      <text class="t-name" x="1115.0" y="88.0">存回 OSS</text>
+      <text class="t-sub" x="1115.0" y="108.0">docir.json · assets/ 图片</text>
+      <path class="e-hot" d="M970 198 H1008" marker-end="url(#pr-h)"/>
+      <rect class="node" x="1010" y="150" width="210" height="96" rx="4"/>
+      <text class="t-name" x="1115.0" y="182.0">解析报告</text>
+      <text class="t-sub" x="1115.0" y="202.0">页数、扫描页、空页、双栏页</text>
+      <text class="t-sub" x="1115.0" y="222.0">乱码比例、标题 / 表格 / 图片数</text>
+      <path class="e-link" d="M1115 246 V272" marker-end="url(#pr-h)"/>
+      <rect class="gap" x="1010" y="274" width="210" height="56" rx="4"/>
+      <text class="t-hot mid" x="1115.0" y="298.0">needs_review</text>
+      <text class="t-sub" x="1115.0" y="318.0">先进待审核，照常入库</text>
+      <g class="badge"><circle cx="190" cy="146" r="10"/><text x="190" y="150">1</text></g>
+      <g class="badge"><circle cx="380" cy="40" r="10"/><text x="380" y="44">2</text></g>
+      <g class="badge"><circle cx="380" cy="280" r="10"/><text x="380" y="284">3</text></g>
+      <g class="badge"><circle cx="720" cy="60" r="10"/><text x="720" y="64">4</text></g>
+      <g class="badge"><circle cx="1010" cy="60" r="10"/><text x="1010" y="64">5</text></g>
+      <g class="badge"><circle cx="1010" cy="150" r="10"/><text x="1010" y="154">6</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>worker 从 OSS 取原文件，按扩展名选解析器；不支持的格式报错并列出支持的格式。解析是纯计算、不碰 IO，读写 OSS 都由入库编排做。</li>
+      <li><span class="n">2</span>PDF 用字符坐标做版面分析，CPU 就能跑，不用版面模型：词拼成行（双栏时同一高度拆开）；剔除跨页重复的页眉页脚和页码；双栏页先左后右；行按行距、缩进、字号合并成段落；标题优先用书签，没有书签按字号、加粗、编号打分；只认有框线的表格，跨页续表合并；图片按坐标裁下来，关联「图 X」图注。DOCX 按样式还原标题和列表，PPTX 一页一个小节；表格类文件一个工作表一张表；纯文本类整段原文一块，结构留给分段识别。</li>
+      <li><span class="n">3</span>处理规则可以指定 <code>parser = text</code>：每页一块纯文本、保留页码，分段时再识别结构。个别文档版面分析出错时，换它重新入库。</li>
+      <li><span class="n">4</span>DocIR 是解析和分段之间唯一的契约：带类型、层级、页码和坐标的块序列。分段直接按块组装，不再从纯文本里猜标题和表格；页码和坐标一路带到分段上，用于引用定位。</li>
+      <li><span class="n">5</span>DocIR 存成 <code>docir.json</code>，图片写到 <code>assets/</code>，都在原文件的前缀下。解析预览、换分段规则时直接读它，不用重新解析。</li>
+      <li><span class="n">6</span>解析报告记页数、扫描页、空页、双栏页、乱码比例和标题、表格、图片数。缺文字（扫描件）或乱码多时 needs_review：文档先进待审核，照常入库，人看过解析预览再放行，或换解析器重来。不做 OCR。</li>
+    </ol>
+
+    <h3>图 4　分段与增强：DocIR → 父分段和子块，再按库开关补上下文、写表格摘要</h3>
+    <svg width="1240" viewBox="0 0 1240 396" role="img" aria-label="分段与增强：DocIR → 父分段和子块，再按库开关补上下文、写表格摘要">
+      <rect class="node" x="20" y="40" width="190" height="200" rx="4"/>
+      <text class="t-name" x="115" y="64">DocIR 的块</text>
+      <text class="t-lab" x="34" y="92">H1 第三章 假期</text>
+      <text class="t-lab" x="50" y="114">H2 3.1 年假</text>
+      <text class="t-lab" x="50" y="136">段落 · 段落</text>
+      <text class="t-lab" x="50" y="158">表格（12 行）</text>
+      <text class="t-lab" x="50" y="180">H2 3.2 病假</text>
+      <text class="t-lab" x="50" y="202">段落</text>
+      <path class="e-hot" d="M210 68 H238" marker-end="url(#pr-h)"/>
+      <path class="e-mute" d="M225 68 V134 H238" marker-end="url(#pr-m)"/>
+      <path class="e-mute" d="M225 134 V200 H238" marker-end="url(#pr-m)"/>
+      <rect class="node" x="240" y="40" width="260" height="56" rx="4"/>
+      <text class="t-name hot" x="370.0" y="64.0">按结构（默认）</text>
+      <text class="t-sub" x="370.0" y="84.0">按标题切小节，一个小节一个父分段</text>
+      <rect class="ghost" x="240" y="106" width="260" height="56" rx="4"/>
+      <text class="t-ghost mid" x="370.0" y="130.0">按规则</text>
+      <text class="t-mute mid" x="370.0" y="150.0">分隔符 + 长度，递归细分、可重叠</text>
+      <rect class="ghost" x="240" y="172" width="260" height="56" rx="4"/>
+      <text class="t-ghost mid" x="370.0" y="196.0">整篇</text>
+      <text class="t-mute mid" x="370.0" y="216.0">整篇一个父分段</text>
+      <path class="e-hot" d="M500 68 H520 V94 H538" marker-end="url(#pr-h)"/>
+      <path class="e-hot" d="M520 94 V200 H538" marker-end="url(#pr-h)"/>
+      <rect class="node" x="540" y="40" width="330" height="108" rx="4"/>
+      <text class="t-name" x="705" y="62">父分段 1</text>
+      <text class="t-sub" x="705" y="82">标题路径：第三章 假期 > 3.1 年假</text>
+      <rect class="node" x="540" y="160" width="330" height="80" rx="4"/>
+      <text class="t-name" x="705" y="182">父分段 2</text>
+      <text class="t-sub" x="705" y="202">标题路径：第三章 假期 > 3.2 病假</text>
+      <rect class="head" x="556" y="98" width="96" height="36" rx="3"/>
+      <text class="t-lab mid" x="604" y="121">子块 1</text>
+      <rect class="head" x="659" y="98" width="96" height="36" rx="3"/>
+      <text class="t-lab mid" x="707" y="121">子块 2</text>
+      <rect class="head" x="762" y="98" width="96" height="36" rx="3"/>
+      <text class="t-lab mid" x="810" y="121">子块 3</text>
+      <rect class="head" x="556" y="210" width="96" height="24" rx="3"/>
+      <text class="t-lab mid" x="604" y="227">子块 1</text>
+      <rect class="head" x="659" y="210" width="96" height="24" rx="3"/>
+      <text class="t-lab mid" x="707" y="227">子块 2</text>
+      <text class="t-lab" x="900" y="64">· 正文存原文</text>
+      <text class="t-lab" x="900" y="88">· 标题路径、引用定位（页、框、图片）单独存</text>
+      <text class="t-lab" x="900" y="112">· 向量化前缀 = 标题路径（表格行再加表头）</text>
+      <text class="t-lab" x="900" y="136">· 超长小节按单元边界拆，表格不拆</text>
+      <text class="t-lab" x="900" y="160">· 子块：太短并入下一个，太长按句切</text>
+      <text class="t-lab" x="900" y="184">· uuid 在这里生成，就是向量库的主键</text>
+      <path class="e-hot" d="M705 240 V270" marker-end="url(#pr-h)"/>
+      <rect class="bnd" x="20" y="272" width="1200" height="112" rx="6"/>
+      <text class="t-head" x="36" y="294">增强：按库开关，都可以失败</text>
+      <rect class="node" x="40" y="306" width="360" height="64" rx="4"/>
+      <text class="t-name" x="220.0" y="334.0">上下文补全</text>
+      <text class="t-sub" x="220.0" y="354.0">每个父分段一句「这一段在全文中讲什么」→ 拼进向量化前缀</text>
+      <rect class="node" x="430" y="306" width="360" height="64" rx="4"/>
+      <text class="t-name" x="610.0" y="334.0">大表摘要</text>
+      <text class="t-sub" x="610.0" y="354.0">≥ 8 行的表写一段摘要 → summary 子块，汇总类问题靠它</text>
+      <rect class="head" x="820" y="302" width="384" height="72" rx="4"/>
+      <text class="t-sub" x="1012.0" y="322.0">结果缓存在 Redis 30 天</text>
+      <text class="t-sub" x="1012.0" y="342.0">键：模型、提示词版本、文档哈希、分段哈希</text>
+      <text class="t-sub" x="1012.0" y="362.0">最多 4 个并发；失败只是少了增强</text>
+      <g class="badge"><circle cx="240" cy="40" r="10"/><text x="240" y="44">1</text></g>
+      <g class="badge"><circle cx="240" cy="106" r="10"/><text x="240" y="110">2</text></g>
+      <g class="badge"><circle cx="540" cy="40" r="10"/><text x="540" y="44">3</text></g>
+      <g class="badge"><circle cx="890" cy="52" r="10"/><text x="890" y="56">4</text></g>
+      <g class="badge"><circle cx="40" cy="306" r="10"/><text x="40" y="310">5</text></g>
+      <g class="badge"><circle cx="430" cy="306" r="10"/><text x="430" y="310">6</text></g>
+      <g class="badge"><circle cx="820" cy="302" r="10"/><text x="820" y="306">7</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>默认按结构切：维护一个标题栈，一个小节一个父分段，标题层级默认到三级；同一上级下相邻的短小节可以合并，超长的按单元边界拆（父分段默认上限 3000 字，通用模式一段默认 800 字，因为它要整体进向量模型）。没有标题的文档自然退回按段落打包。可选语义分段：相邻句向量相似度骤降处断开。</li>
+      <li><span class="n">2</span>按规则切：先按分隔符切，超长的按换行、句号、空格依次递归细分，相邻小块合并到上限内、按重叠拼接；也可以整篇一个父分段。切之前先清洗：去控制字符，按规则压空白、去 URL 和邮箱。</li>
+      <li><span class="n">3</span>父子模式下，父分段是返回给模型的上下文，子块是它里面的结构单元、是检索入口：太短的并入下一个，太长的按句切（子块默认上限 300 字）。通用模式下分段自己就是检索入口。</li>
+      <li><span class="n">4</span>正文存原文；标题路径、引用定位（页、框、图片）单独存。建向量时在前面拼上前缀：标题路径，表格行再加表头。表格是原子块，放得下就不拆。分段和子块的 uuid 在这里生成，之后就是向量库的主键。</li>
+      <li><span class="n">5</span>上下文补全（库开了才做）：给每个父分段生成一句「这一段在全文中讲什么」，拼进向量化前缀。文档正文放在提示词前面作固定前缀（最多 3 万字，超长改用邻近内容），同一文档的调用前缀相同，能命中模型网关的前缀缓存。</li>
+      <li><span class="n">6</span>大表摘要（库开了才做）：行数达到阈值（默认 8 行）的表格生成一段摘要（主题、维度、关键数字），作为 summary 子块挂到包含它单元格最多的分段上。「哪种假期最长」这类汇总问题匹配不到任何单行时，靠它召回。表格从 DocIR 取，不从分段里找：一张表可能被切进好几段。</li>
+      <li><span class="n">7</span>增强结果按模型、提示词版本、文档哈希、分段哈希缓存在 Redis 30 天，重跑不用再调模型；最多 4 个并发。单个调用失败只是那一段少了增强，失败数写进解析报告。</li>
+    </ol>
+
+    <h3>图 5　写分段：一个事务整篇替换，记下续跑点</h3>
+    <svg width="1240" viewBox="0 0 1240 266" role="img" aria-label="写分段：一个事务整篇替换，记下续跑点">
+      <rect class="node" x="20" y="124" width="200" height="64" rx="4"/>
+      <text class="t-name" x="120.0" y="152.0">新的分段和子块</text>
+      <text class="t-sub" x="120.0" y="172.0">在内存里，uuid 已生成</text>
+      <path class="e-hot" d="M220 156 H274" marker-end="url(#pr-h)"/>
+      <rect class="node" x="260" y="24" width="300" height="56" rx="4"/>
+      <text class="t-name" x="410.0" y="48.0">先删旧 entity</text>
+      <text class="t-sub" x="410.0" y="68.0">向量库：这个文档，所有活着的版本</text>
+      <text class="t-key" x="572" y="56">不在数据库事务里，先做</text>
+      <path class="e-hot" d="M410 80 V108" marker-end="url(#pr-h)"/>
+      <rect class="bnd" x="260" y="110" width="560" height="140" rx="6"/>
+      <text class="t-head" x="276" y="238">一个数据库事务</text>
+      <rect class="node" x="276" y="124" width="170" height="64" rx="4"/>
+      <text class="t-name" x="361.0" y="161.0">删旧分段、子块</text>
+      <path class="e-hot" d="M446 156 H460" marker-end="url(#pr-h)"/>
+      <rect class="node" x="462" y="124" width="170" height="64" rx="4"/>
+      <text class="t-name" x="547.0" y="152.0">写新分段、子块</text>
+      <text class="t-sub" x="547.0" y="172.0">status = waiting</text>
+      <path class="e-hot" d="M632 156 H646" marker-end="url(#pr-h)"/>
+      <rect class="node" x="648" y="124" width="160" height="64" rx="4"/>
+      <text class="t-name hot" x="728.0" y="152.0">记续跑点</text>
+      <text class="t-sub" x="728.0" y="172.0">splitting_completed_at</text>
+      <path class="e-mute" d="M820 120 H840 V72 H858" marker-end="url(#pr-m)"/>
+      <rect class="ghost" x="860" y="40" width="360" height="64" rx="4"/>
+      <text class="t-ghost mid" x="1040.0" y="68.0">提交之前中断</text>
+      <text class="t-mute mid" x="1040.0" y="88.0">续跑点为空 → 重跑从解析开始</text>
+      <path class="e-hot" d="M820 162 H858" marker-end="url(#pr-h)"/>
+      <text class="t-hot mid" x="839" y="154">提交</text>
+      <rect class="node" x="860" y="130" width="360" height="64" rx="4"/>
+      <text class="t-name hot" x="1040.0" y="158.0">提交之后</text>
+      <text class="t-sub" x="1040.0" y="178.0">续跑点有值 → 之后只做向量化</text>
+      <g class="badge"><circle cx="20" cy="124" r="10"/><text x="20" y="128">1</text></g>
+      <g class="badge"><circle cx="260" cy="24" r="10"/><text x="260" y="28">2</text></g>
+      <g class="badge"><circle cx="462" cy="124" r="10"/><text x="462" y="128">3</text></g>
+      <g class="badge"><circle cx="648" cy="124" r="10"/><text x="648" y="128">4</text></g>
+      <g class="badge"><circle cx="860" cy="130" r="10"/><text x="860" y="134">5</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>切出来的父分段和子块此时只在内存里，uuid 已经生成好。</li>
+      <li><span class="n">2</span>先删向量库里这个文档的旧 entity，所有 collection 还在的索引版本都删。重新入库时新分段的 uuid 是新的，旧的不删就成了孤儿：搜得到，却回不到任何分段，白白占掉候选名额。向量库不在数据库事务里，所以放在事务前面；删完之后事务失败也没关系，重跑会重新写。</li>
+      <li><span class="n">3</span>一个事务里删旧分段和子块、写新分段（status = waiting）和子块：正文、标题路径、引用定位、向量化前缀都在这里落库。</li>
+      <li><span class="n">4</span>同一个事务里记下 <code>splitting_completed_at</code>：入库唯一的续跑点。</li>
+      <li><span class="n">5</span>提交之前中断，续跑点为空，重跑从解析开始（原文件还在 OSS）；提交之后中断，续跑点有值，重跑跳过解析和分段，只把还没 completed 的分段接着向量化（图 9）。</li>
+    </ol>
+
+    <h3>图 6　分批向量化：先写向量库，再在一个事务里标完成</h3>
+    <svg width="1240" viewBox="0 0 1240 310" role="img" aria-label="一批向量化：先写向量库，再标记完成">
+      <circle cx="120" cy="30" r="6" fill="#d9480f"/>
+      <text class="t-hot" x="132" y="34">先看暂停标记</text>
+      <rect class="node" x="20" y="56" width="200" height="64" rx="4"/>
+      <text class="t-name" x="120.0" y="84.0">取一批</text>
+      <text class="t-sub" x="120.0" y="104.0">≤ 64 个 status ≠ completed 的分段</text>
+      <path class="e-hot" d="M220 88 H258" marker-end="url(#pr-h)"/>
+      <rect class="node" x="260" y="56" width="220" height="64" rx="4"/>
+      <text class="t-name" x="370.0" y="84.0">写入目标</text>
+      <text class="t-sub" x="370.0" y="104.0">每批重读：active + 构建中 + 已退役</text>
+      <text class="t-sub" x="370" y="142">构建中途新建的索引版本</text>
+      <text class="t-sub" x="370" y="160">从下一批起就写得到</text>
+      <rect class="bnd" x="520" y="24" width="500" height="160" rx="6"/>
+      <text class="t-head" x="536" y="46">对每个写入目标（索引版本）</text>
+      <path class="e-hot" d="M480 88 H538" marker-end="url(#pr-h)"/>
+      <rect class="node" x="540" y="60" width="220" height="56" rx="4"/>
+      <text class="t-name" x="650.0" y="84.0">向量化</text>
+      <text class="t-sub" x="650.0" y="104.0">先查文档向量缓存，只算没缓存的</text>
+      <path class="e-hot" d="M760 88 H778" marker-end="url(#pr-h)"/>
+      <rect class="node" x="780" y="60" width="220" height="56" rx="4"/>
+      <text class="t-name" x="890.0" y="84.0">upsert entity</text>
+      <text class="t-sub" x="890.0" y="104.0">主键 = 分段或子块 uuid</text>
+      <text class="t-sub" x="770" y="146">dense 用这个版本的向量模型；BM25 由 Milvus 从检索文本生成</text>
+      <text class="t-sub" x="770" y="166">标量字段带上文档级字段：doc_ok、meta、acl、is_current…</text>
+      <path class="e-hot" d="M1000 88 H1038" marker-end="url(#pr-h)"/>
+      <rect class="node" x="1040" y="56" width="180" height="64" rx="4"/>
+      <text class="t-name hot" x="1130.0" y="84.0">标记完成</text>
+      <text class="t-sub" x="1130.0" y="104.0">一个事务：这批 completed</text>
+      <path class="e" d="M1130 120 V204 H120 V122" marker-end="url(#pr-a)"/>
+      <text class="t-lab mid" x="620" y="220">还有没 completed 的分段就取下一批；没有就进入「完成」</text>
+      <rect class="gap" x="520" y="240" width="700" height="56" rx="4"/>
+      <text class="t-hot mid b" x="870" y="262">✕ 写进向量库之后、提交之前进程死了</text>
+      <text class="t-sub" x="870" y="283">这批在库里还没 completed：重跑时整批再写一遍；主键相同、upsert 覆盖，向量库里不会多出东西</text>
+      <g class="badge"><circle cx="20" cy="56" r="10"/><text x="20" y="60">1</text></g>
+      <g class="badge"><circle cx="260" cy="56" r="10"/><text x="260" y="60">2</text></g>
+      <g class="badge"><circle cx="540" cy="60" r="10"/><text x="540" y="64">3</text></g>
+      <g class="badge"><circle cx="780" cy="60" r="10"/><text x="780" y="64">4</text></g>
+      <g class="badge"><circle cx="1040" cy="56" r="10"/><text x="1040" y="60">5</text></g>
+      <g class="badge"><circle cx="520" cy="240" r="10"/><text x="520" y="244">6</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>每一批之前先看暂停标记，再取最多 64 个还没 completed 的分段（父子模式下写进向量库的是它们的子块）。</li>
+      <li><span class="n">2</span>写入目标每批重新读一次：active 版本，加上 collection 还在的其他版本（构建中、待切换、已退役）。换向量模型时新建的版本，从下一批起就会被写到。</li>
+      <li><span class="n">3</span>每个目标用它自己的向量模型向量化。文档向量先查 <code>kb_embedding_cache</code>（模型 + 文本哈希），只算没缓存的；远程模型经模型平台调用。</li>
+      <li><span class="n">4</span>upsert 进这个版本的 collection：主键是分段或子块的 uuid，dense 是刚算的向量，检索文本交给 Milvus 生成 BM25 稀疏向量，标量字段带上文档级字段。</li>
+      <li><span class="n">5</span>所有目标都写完，才在一个事务里把这批分段标成 completed 并提交。</li>
+      <li><span class="n">6</span>写进向量库之后、提交之前进程死了：这批在库里还没 completed，重跑时整批再写一遍；主键相同、upsert 覆盖，结果和只写一次一样。</li>
+    </ol>
+
+    <h3>图 7　完成：同步文档级字段，新版本取代旧版本</h3>
+    <svg width="1240" viewBox="0 0 1240 316" role="img" aria-label="完成：同步文档级字段，新版本取代旧版本">
+      <rect class="node" x="20" y="40" width="200" height="64" rx="4"/>
+      <text class="t-name" x="120.0" y="68.0">汇总</text>
+      <text class="t-sub" x="120.0" y="88.0">字数、耗时</text>
+      <path class="e-hot" d="M220 72 H248" marker-end="url(#pr-h)"/>
+      <rect class="node" x="250" y="40" width="200" height="64" rx="4"/>
+      <text class="t-name" x="350.0" y="68.0">completed</text>
+      <text class="t-sub" x="350.0" y="88.0">改状态、记完成时间</text>
+      <path class="e-hot" d="M450 72 H478" marker-end="url(#pr-h)"/>
+      <rect class="node" x="480" y="40" width="300" height="64" rx="4"/>
+      <text class="t-name hot" x="630.0" y="68.0">再同步一次文档级字段</text>
+      <text class="t-sub" x="630.0" y="88.0">按文档查主键 → 分批 partial upsert</text>
+      <path class="e-hot" d="M780 72 H808" marker-end="url(#pr-h)"/>
+      <rect class="node" x="810" y="40" width="410" height="64" rx="4"/>
+      <text class="t-name" x="1015.0" y="68.0">新版本取代旧版本</text>
+      <text class="t-sub" x="1015.0" y="88.0">只有上传时带了 supersedes 的文档才有这一步</text>
+      <text class="t-sub" x="630" y="126">入库中途改过 ACL、元数据的，以这一次为准</text>
+      <path class="e-hot" d="M1015 104 V150" marker-end="url(#pr-h)"/>
+      <text class="t-key" x="20" y="197">旧版本</text>
+      <text class="t-key" x="20" y="239">新版本</text>
+      <rect class="node" x="100" y="176" width="560" height="32" rx="4"/>
+      <text class="t-lab mid" x="380" y="197">is_current = false · 有效期截止到切换时刻</text>
+      <rect class="node" x="660" y="218" width="560" height="32" rx="4"/>
+      <text class="t-hot mid" x="940" y="239">is_current = true · 从切换时刻起生效</text>
+      <path class="e-link" d="M660 156 V268"/>
+      <text class="t-hot" x="672" y="166">切换时刻：新版本的生效时间，没写就是现在</text>
+      <path class="e" d="M100 282 H1210" marker-end="url(#pr-a)"/>
+      <text class="t-key end" x="1220" y="300">时间</text>
+      <text class="t-lab" x="100" y="302">按时间点检索：时间点落在哪个版本的有效期里，就返回哪个版本</text>
+      <g class="badge"><circle cx="20" cy="40" r="10"/><text x="20" y="44">1</text></g>
+      <g class="badge"><circle cx="480" cy="40" r="10"/><text x="480" y="44">2</text></g>
+      <g class="badge"><circle cx="810" cy="40" r="10"/><text x="810" y="44">3</text></g>
+      <g class="badge"><circle cx="100" cy="176" r="10"/><text x="100" y="180">4</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>汇总这个文档所有分段的字数，记下耗时，文档改成 completed、记完成时间。</li>
+      <li><span class="n">2</span>按文档把文档级字段（启用、审核、元数据、ACL、时效）再同步一次到向量库：按 document_uuid 查出主键，分批 partial upsert。入库中途有人改过 ACL、元数据时，正在写的那一批可能带着旧值；完成时整体覆盖一次就收敛了。</li>
+      <li><span class="n">3</span>上传时带了 supersedes 的新版本，入库完成这一刻才取代旧版本：同组其他当前版本 <code>is_current = false</code>，有效期截止到切换时刻；新版本从切换时刻起生效。切换时刻是新版本的生效时间，没写就是现在。新旧两版的文档级字段都同步到向量库。</li>
+      <li><span class="n">4</span>默认检索只要当前版本；按时间点检索时，时间点落在哪个版本的有效期里就返回哪个版本。新版本入库完成之前，检索一直看到旧版本，不会出现「新的还没好、旧的已下线」的空窗。</li>
+    </ol>
+
+    <h3>图 8　状态与控制：暂停、恢复、重试、删除</h3>
+    <svg width="1240" viewBox="0 0 1240 350" role="img" aria-label="文档的入库状态，以及暂停、恢复、重试、删除">
+      <rect class="node" x="40" y="60" width="150" height="52" rx="4"/>
+      <text class="t-name" x="115.0" y="82.0">waiting</text>
+      <text class="t-sub" x="115.0" y="102.0">排队中</text>
+      <rect class="bnd" x="245" y="40" width="630" height="92" rx="6"/>
+      <rect class="node" x="260" y="60" width="150" height="52" rx="4"/>
+      <text class="t-name" x="335.0" y="91.0">parsing</text>
+      <rect class="node" x="480" y="60" width="150" height="52" rx="4"/>
+      <text class="t-name" x="555.0" y="91.0">splitting</text>
+      <rect class="node" x="700" y="60" width="150" height="52" rx="4"/>
+      <text class="t-name" x="775.0" y="91.0">indexing</text>
+      <text class="t-key end" x="868" y="126">只有持锁的任务会写这三个状态</text>
+      <rect class="node" x="1010" y="60" width="170" height="52" rx="4"/>
+      <text class="t-name" x="1095.0" y="82.0">completed</text>
+      <text class="t-sub" x="1095.0" y="102.0">再收到任务直接返回</text>
+      <path class="e-hot" d="M190 86 H258" marker-end="url(#pr-h)"/>
+      <text class="t-hot mid" x="224" y="78">拿到锁</text>
+      <path class="e-hot" d="M410 86 H478" marker-end="url(#pr-h)"/>
+      <path class="e-hot" d="M630 86 H698" marker-end="url(#pr-h)"/>
+      <path class="e-hot" d="M850 86 H1008" marker-end="url(#pr-h)"/>
+      <text class="t-hot mid" x="940" y="78">最后一批完成</text>
+      <path class="e-link" d="M820 40 V18 H300 V38" marker-end="url(#pr-h)"/>
+      <text class="t-hot mid" x="560" y="14">进程死了：状态不变、锁过期 → 巡检重新投递，从续跑点接着做</text>
+      <rect class="node" x="360" y="220" width="170" height="52" rx="4"/>
+      <text class="t-name" x="445.0" y="242.0">paused</text>
+      <text class="t-sub" x="445.0" y="262.0">暂停标记还在</text>
+      <rect class="node" x="620" y="220" width="170" height="52" rx="4"/>
+      <text class="t-name" x="705.0" y="242.0">error</text>
+      <text class="t-sub" x="705.0" y="262.0">记下错误信息</text>
+      <path class="e" d="M445 132 V218" marker-end="url(#pr-a)"/>
+      <text class="t-lab" x="453" y="176">看到暂停标记：</text>
+      <text class="t-lab" x="453" y="194">下一个检查点停下</text>
+      <path class="e" d="M705 132 V218" marker-end="url(#pr-a)"/>
+      <text class="t-lab" x="713" y="185">任何阶段抛异常</text>
+      <path class="e" d="M115 112 V246 H358" marker-end="url(#pr-a)"/>
+      <text class="t-lab" x="125" y="238">还在排队就被暂停</text>
+      <path class="e" d="M705 272 V316 H445"/>
+      <path class="e" d="M445 272 V316 H60 V114" marker-end="url(#pr-a)"/>
+      <text class="t-lab" x="70" y="336">恢复（paused）/ 重试（error）：清暂停标记 → 改回 waiting → 重新投递</text>
+      <rect class="ghost" x="920" y="220" width="260" height="52" rx="4"/>
+      <text class="t-ghost mid" x="1050.0" y="242.0">删除</text>
+      <text class="t-mute mid" x="1050.0" y="262.0">先设暂停标记，再删向量、分段、文档</text>
+      <path class="e-mute" d="M860 132 V176 H1050 V218" marker-end="url(#pr-m)"/>
+      <g class="badge"><circle cx="360" cy="220" r="10"/><text x="360" y="224">1</text></g>
+      <g class="badge"><circle cx="620" cy="220" r="10"/><text x="620" y="224">2</text></g>
+      <g class="badge"><circle cx="445" cy="316" r="10"/><text x="445" y="320">3</text></g>
+      <g class="badge"><circle cx="300" cy="18" r="10"/><text x="300" y="22">4</text></g>
+      <g class="badge"><circle cx="920" cy="220" r="10"/><text x="920" y="224">5</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>暂停：接口在 Redis 里设 <code>kb:doc:{uuid}:paused</code>。正在跑的任务在下一个检查点看到，停下并把文档改成 paused；还在排队的文档直接改成 paused。已经写进库和向量库的部分都留着。</li>
+      <li><span class="n">2</span>失败：任何阶段抛异常，文档改成 error、记下错误信息，锁随任务结束释放。</li>
+      <li><span class="n">3</span>恢复和重试是同一个动作：清掉暂停标记、改回 waiting、重新投递。只有 paused 能恢复，只有 error 能重试。重跑时按 <code>splitting_completed_at</code> 决定从哪开始（图 5）。</li>
+      <li><span class="n">4</span>进程死了（部署、OOM、节点故障）：文档停在 parsing / splitting / indexing，锁过期后没人持有。巡检把它重新投递，状态不变，接着做（图 9）。重复投递是无害的：多出来的任务拿不到锁就跳过，已经 completed 的直接返回。</li>
+      <li><span class="n">5</span>删除：先设暂停标记（1 小时过期），再删向量、分段、文档行和原文件前缀。正在跑的任务要么在下一个检查点停下，要么发现文档已经不在、直接退出。</li>
+    </ol>
+
+    <h3>图 9　中断以后：锁过期、巡检重投、从没做完的分段接着做</h3>
+    <svg width="1240" viewBox="0 0 1240 392" role="img" aria-label="中断以后：锁过期、巡检重投、从没做完的分段接着做">
+      <text class="t-key" x="20" y="74">worker A</text>
+      <text class="t-key" x="20" y="145">入库锁</text>
+      <text class="t-key" x="20" y="214">接口进程 · 巡检</text>
+      <text class="t-key" x="20" y="292">worker B</text>
+      <text class="t-key end" x="1222" y="24">时间 →</text>
+      <rect class="node" x="140" y="48" width="420" height="52" rx="4"/>
+      <text class="t-name" x="350.0" y="70.0">持锁入库</text>
+      <text class="t-sub" x="350.0" y="90.0">解析 → 分段 → 写分段 → 第 1、2 批已完成</text>
+      <text class="t-hot b" x="574" y="70">✕ 第 3 批写了一半，</text>
+      <text class="t-hot b" x="574" y="88">进程被杀</text>
+      <rect class="node" x="140" y="128" width="440" height="30" rx="4"/>
+      <text class="t-lab mid" x="360" y="148">持有：TTL 60 秒，看门狗每 20 秒续一次</text>
+      <rect class="gap" x="580" y="128" width="170" height="30" rx="4"/>
+      <text class="t-hot mid" x="665" y="148">没人续，≤ 60 秒过期</text>
+      <rect class="node" x="790" y="128" width="430" height="30" rx="4"/>
+      <text class="t-lab mid" x="1005" y="148">B 持有</text>
+      <rect class="ghost" x="170" y="192" width="170" height="40" rx="4"/>
+      <text class="t-mute mid" x="255.0" y="217.0">有锁 → 不管</text>
+      <rect class="ghost" x="420" y="192" width="170" height="40" rx="4"/>
+      <text class="t-mute mid" x="505.0" y="217.0">有锁 → 不管</text>
+      <rect class="node" x="760" y="192" width="300" height="40" rx="4"/>
+      <text class="t-name hot" x="910.0" y="217.0">indexing 且没锁 → 重新投递</text>
+      <path class="e-link" d="M750 158 V176 H770 V190" marker-end="url(#pr-h)"/>
+      <path class="e-hot" d="M910 232 V262" marker-end="url(#pr-h)"/>
+      <rect class="node" x="790" y="264" width="430" height="56" rx="4"/>
+      <text class="t-name" x="1005.0" y="288.0">worker B 拿到锁接着做</text>
+      <text class="t-sub" x="1005.0" y="308.0">splitting_completed_at 有值：跳过解析和分段，从第 3 批开始</text>
+      <path class="e-hot" d="M1150 264 V160" marker-end="url(#pr-h)"/>
+      <text class="t-hot" x="1158" y="214">拿锁</text>
+      <text class="t-key" x="140" y="342">这个文档的分段</text>
+      <rect class="head" x="250" y="326" width="120" height="30" rx="3"/>
+      <text class="t-sub" x="310" y="346">第 1 批 ✓</text>
+      <rect class="head" x="376" y="326" width="120" height="30" rx="3"/>
+      <text class="t-sub" x="436" y="346">第 2 批 ✓</text>
+      <rect class="gap" x="502" y="326" width="120" height="30" rx="3"/>
+      <text class="t-hot mid" x="562" y="346">第 3 批</text>
+      <rect class="node" x="628" y="326" width="120" height="30" rx="3"/>
+      <text class="t-sub" x="688" y="346">第 4 批</text>
+      <rect class="node" x="754" y="326" width="120" height="30" rx="3"/>
+      <text class="t-sub" x="814" y="346">第 5 批</text>
+      <path class="e-link" d="M960 320 V341 H876" marker-end="url(#pr-h)"/>
+      <text class="t-lab" x="250" y="378">B 只取 status ≠ completed 的分段：第 3 批整批重写（按主键覆盖），再做第 4、5 批</text>
+      <g class="badge"><circle cx="140" cy="48" r="10"/><text x="140" y="52">1</text></g>
+      <g class="badge"><circle cx="580" cy="128" r="10"/><text x="580" y="132">2</text></g>
+      <g class="badge"><circle cx="760" cy="192" r="10"/><text x="760" y="196">3</text></g>
+      <g class="badge"><circle cx="790" cy="264" r="10"/><text x="790" y="268">4</text></g>
+      <g class="badge"><circle cx="502" cy="326" r="10"/><text x="502" y="330">5</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>A 拿到锁 <code>kb:doc:{uuid}:indexing</code>（TTL 60 秒）开始跑，看门狗每 20 秒续一次。TTL 不是工作时长上限：进程活着，跑多久都行。第 3 批写到一半，进程被杀。</li>
+      <li><span class="n">2</span>没人续，锁最多 60 秒过期。文档的状态还是 indexing：只有持锁的任务会写 parsing / splitting / indexing，所以「处在这三个状态之一、却没有锁」就说明那个任务已经死了。</li>
+      <li><span class="n">3</span>接口进程里的巡检每 60 秒扫一次（每个副本各一份），把这种文档重新投递。不看 waiting：排队中的文档本来就没有锁，它的消息还在队列里。</li>
+      <li><span class="n">4</span>B 拿到锁，看到 <code>splitting_completed_at</code> 有值，跳过解析、分段、写分段，直接进入分批向量化。</li>
+      <li><span class="n">5</span>B 只取 status ≠ completed 的分段。第 3 批有一部分已经写进向量库，但没提交 completed，所以整批重写：主键是分段或子块的 uuid，upsert 是覆盖，不会多出重复的向量。</li>
+    </ol>
+
+    <h3>为什么这样做</h3>
+    <table>
+      <thead><tr><th>做法</th><th>为什么</th></tr></thead>
+      <tbody>
+        <tr><td>一个文档一个入库任务</td><td>各文档能分散到多个 worker；Pod 被杀时只有正在跑的那一个停在中间状态。一批文档串在一个任务里的话，还没轮到的会一直停在 waiting，巡检也不看 waiting。</td></tr>
+        <tr><td>提交之后才投递</td><td>worker 可能比提交更早读库，读不到文档就直接退出，文档永远停在 waiting。</td></tr>
+        <tr><td>每个阶段一个短事务</td><td>大文件解析、向量化可能跑很久：状态要让控制台立刻看到，也不能长时间占着数据库连接。</td></tr>
+        <tr><td>解析和分段之间只隔一个 DocIR，DocIR 存进 OSS</td><td>分段直接按块组装，不再从纯文本里猜结构，页码和坐标能带到引用定位；预览、换分段规则时不用重新解析，换解析器也不影响分段。</td></tr>
+        <tr><td>扫描件不做 OCR，只标记、进待审核</td><td>OCR 要额外的模型和算力，结果也要人核对；先把问题暴露在解析报告里，不让一堆空分段悄悄进库。</td></tr>
+        <tr><td>正文存原文，标题路径和前缀单独存</td><td>建向量时拼上标题路径、表头和上下文能明显提升召回；但返回给模型和用户看的、人工编辑的都应该是原文，混在一起改一次就乱了。</td></tr>
+        <tr><td>增强失败只是少了增强</td><td>增强靠 LLM，会限流、超时；不能因为一句上下文生成失败就让整篇入库失败。失败数写进解析报告，看得到。</td></tr>
+        <tr><td>「写完分段」是唯一的续跑点</td><td>解析和分段的中间结果不落库，它们之前中断了从头再来最简单；分段落库以后，向量化按段记完成，中断只补没做完的，大文件不用重新解析。</td></tr>
+        <tr><td>先写向量库、再标 completed，主键用 uuid</td><td>向量库和数据库不在一个事务里。顺序反过来的话，死在中间会留下「标了完成却没有向量」的分段，永远搜不到；现在的顺序最坏是重写一遍，覆盖无害。</td></tr>
+        <tr><td>新版本入库完成才取代旧版本</td><td>新版本还在解析、向量化时，旧版本照常可检索；切换只发生在完成那一刻，不会有空窗。</td></tr>
+        <tr><td>锁：短 TTL + 看门狗续租，拿不到就跳过</td><td>TTL 只决定进程死后锁空悬多久，不限制工作时长；重复投递的任务拿不到锁就退出，同一个文档不会有两个任务同时写。放锁时校验持有者，不会删掉别人后来拿到的锁。</td></tr>
+        <tr><td>恢复靠巡检，不靠 Celery 重新投递</td><td>acks_late 下整个 Pod 被杀，消息要等 visibility_timeout（7 天）才回到队列；它又不能设短，到期会重复投递。看「中间状态且没锁」，进程死后一两分钟就续上。</td></tr>
+        <tr><td>暂停是一个 Redis 标记，在检查点停</td><td>不硬杀正在跑的任务：做完的阶段和批次都留着，恢复时从续跑点接着做。删除也借这个标记让正在跑的任务停下。</td></tr>
+        <tr><td>不设到点结束的超时</td><td>慢就慢，用暂停、删除控制；锁的 TTL 不是工作时长上限。</td></tr>
+        <tr><td>完成时按文档再同步一次文档级字段</td><td>入库中途改 ACL、元数据，和正在写的那一批会竞态，个别 entity 留着旧值；完成时按文档整体覆盖一次就收敛了。</td></tr>
+      </tbody>
+    </table>
+  </section>
 </main>
 
 <script>

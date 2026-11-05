@@ -177,7 +177,7 @@
         0.3
       ],
       "source": "无：现在 DatasetService.delete 直接删各表、collection 和原文件；create_field 直接给每个 collection 建索引",
-      "responsibility": "知识库的生命周期事件，在同一个事务里同步分发给订阅方：建库后向量索引登记第 1 个索引版本；删库后文档与入库、分段、向量索引、检索各自删掉自己的数据；加字段后向量索引给每个 collection 建 payload 索引。",
+      "responsibility": "知识库的生命周期事件，在同一个事务里同步分发给订阅方：建库后向量索引登记第 1 个索引版本；删库后文档与入库、分段、向量索引、检索各自删掉自己的数据；加字段后向量索引给每个 collection 的 meta 建这个字段的路径索引。",
       "attributes": [
         [
           "+",
@@ -538,7 +538,7 @@
       "name": "元数据字段",
       "entry": "define_field · drop_field · MetadataSchema.fields / normalize",
       "callers": "管理接口；文档与入库、检索、向量索引",
-      "description": "加字段后向量索引给每个 collection 建 payload 索引；文档和检索按字段校验值、编译过滤"
+      "description": "加字段后向量索引给每个 collection 的 meta 建路径索引；文档和检索按字段校验值、编译过滤"
     }
   ],
   "decisions": [
@@ -564,10 +564,10 @@
     },
     {
       "decision": "元数据字段归知识库，值归文档",
-      "reason": "字段是库的 schema（类型、可选值、能不能被查询理解抽取），多份文档共用；值随文档变，改值只改 payload、不重新向量化。"
+      "reason": "字段是库的 schema（类型、可选值、能不能被查询理解抽取），多份文档共用；值随文档变，改值只改向量库里的标量字段、不重新向量化。"
     }
   ],
-  "schemaNote": "主键约定：id 是自增主键，只在库内使用；uuid 是逻辑主键（Python 侧生成），API 和向量库的 point id 用它，表间引用的列叫 xxx_uuid。表间不建外键约束，引用由代码维护；引用别的领域的表时只写列说明，不画连线。类型写的是 PostgreSQL 类型；每张表还有 created_at、updated_at（timestamptz，UTC），下面不重复列出。人员字段存用户中心用户 id 的字符串。",
+  "schemaNote": "主键约定：id 是自增主键，只在库内使用；uuid 是逻辑主键（Python 侧生成），API 和向量库的主键用它，表间引用的列叫 xxx_uuid。表间不建外键约束，引用由代码维护；引用别的领域的表时只写列说明，不画连线。类型写的是 PostgreSQL 类型；每张表还有 created_at、updated_at（timestamptz，UTC），下面不重复列出。人员字段存用户中心用户 id 的字符串。",
   "tables": [
     {
       "name": "kb_dataset",

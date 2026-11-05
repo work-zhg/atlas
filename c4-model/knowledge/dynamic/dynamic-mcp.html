@@ -82,7 +82,7 @@
       "id": "index",
       "kind": "component",
       "name": "向量索引",
-      "technology": "qdrant-client + jieba",
+      "technology": "pymilvus",
       "in": "apiB"
     },
     {
@@ -94,10 +94,10 @@
       "in": "kb"
     },
     {
-      "id": "qdrant",
+      "id": "vdb",
       "kind": "container",
       "name": "向量库",
-      "technology": "Qdrant",
+      "technology": "Milvus 2.6",
       "shape": "database",
       "in": "kb"
     },
@@ -213,9 +213,9 @@
     },
     {
       "from": "index",
-      "to": "qdrant",
+      "to": "vdb",
       "description": "混合检索（带文档级权限、版本过滤）",
-      "technology": "HTTP（Qdrant REST）"
+      "technology": "gRPC（pymilvus）"
     },
     {
       "from": "retrieval",
