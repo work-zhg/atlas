@@ -1,6 +1,6 @@
 {
   "name": "@atlas/chat-ui",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Atlas 对话组件：Atlas 前端与 AI TeamFlow 共用的同一份实现（以源码形式被消费方转译）",
   "main": "src/index.ts",

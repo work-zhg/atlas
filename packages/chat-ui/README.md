@@ -37,3 +37,8 @@ import "@atlas/chat-ui/src/theme/tokens.css";
 - 依赖在前端 workspace（仓库根 `pnpm-workspace.yaml`）里安装，React / antd / react-query 与消费方是同一实例（peerDependencies）。
 - 组件里调用的接口路径与 Atlas 后端完全一致；新增调用的接口时，TeamFlow 代理的放行清单（`atlas_proxy.py`）要同步。
 - 改完跑：`pnpm --filter atlas-web check`、`pnpm --filter atlas-teamflow-web typecheck`、`cd packages/chat-ui && pnpm typecheck`。
+
+## 版本
+
+- 1.0.0：跟随 Atlas 的对外契约变更（改造计划 A2）—— run 状态 `awaiting_approval` 换成 `awaiting_user`，
+  智能体类型 `acp` 改名 `cli`。按旧取值写的消费方要一起改。
