@@ -1,0 +1,1922 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Code View</title>
+<style>
+  body { margin: 0; background: #fff; color: #444; font-family: "Open Sans", "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
+  main { padding: 24px 32px 48px; }
+  svg { display: block; max-width: 100%; height: auto; }
+  h2 { margin: 40px 0 12px; font-size: 15px; font-weight: 600; color: #666; }
+  #c4-report { margin: 0 0 24px; padding: 12px 16px 12px 36px; border: 1px solid #e0b4b4; background: #fff6f6; font-size: 14px; line-height: 1.6; }
+  #c4-report li[data-level="error"] { color: #b00020; }
+  #c4-report li[data-level="warn"] { color: #8a5a00; }
+  #c4-overview p { max-width: 1100px; margin: 0 0 10px; font-size: 14px; line-height: 1.8; color: #333; }
+  section table { border-collapse: collapse; font-size: 14px; line-height: 1.6; color: #333; }
+  section th, section td { border: 1px solid #d0d0d0; padding: 6px 10px; text-align: left; vertical-align: top; }
+  section th { background: #f4f4f4; font-weight: 600; white-space: nowrap; }
+  section td.code { font-family: Menlo, Consolas, monospace; font-size: 13px; }
+  section td.nowrap { white-space: nowrap; }
+  #c4-tables h3 { margin: 28px 0 6px; font: 600 14px Menlo, Consolas, monospace; color: #333; }
+  #c4-tables h4 { margin: 14px 0 6px; font-size: 13px; font-weight: 600; color: #666; }
+  #c4-tables p { max-width: 1100px; margin: 0 0 10px; font-size: 14px; line-height: 1.8; color: #333; }
+  /* 原理：手写的静态图，不经渲染器 */
+  #principle { max-width: 1280px; }
+  #principle h2 { margin: 40px 0 12px; }
+  #principle h3 { margin: 32px 0 8px; font-size: 15px; font-weight: 600; color: #333; }
+  #principle p { max-width: 1100px; margin: 0 0 8px; font-size: 14px; line-height: 1.8; color: #333; }
+  #principle code { padding: 0 3px; background: #f6f8fa; font-family: Menlo, Consolas, monospace; font-size: 12.5px; }
+  #principle pre { margin: 12px 0 0; padding: 10px 12px; border: 1px solid #e3e3e3; background: #f6f8fa; font-family: Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.5; }
+  #principle ol { margin: 8px 0 0; padding: 0; list-style: none; }
+  #principle ol li { position: relative; margin: 0 0 6px; padding-left: 30px; font-size: 14px; line-height: 1.7; color: #333; }
+  #principle ol li .n { position: absolute; left: 0; top: 2px; width: 20px; height: 20px; border-radius: 50%; background: #d9480f; color: #fff; font-size: 12px; font-weight: 700; line-height: 20px; text-align: center; }
+  #principle table { width: 100%; margin: 8px 0 0; border-collapse: collapse; font-size: 13px; line-height: 1.6; color: #333; }
+  #principle th, #principle td { padding: 6px 10px; border: 1px solid #e3e3e3; text-align: left; vertical-align: top; }
+  #principle th { background: #f6f8fa; font-weight: 600; }
+  #principle svg { display: block; max-width: 100%; height: auto; margin: 8px 0 4px; }
+  #principle svg text { font-size: 13px; fill: #444; }
+  #principle svg .t-name { font-size: 15px; fill: #1168bd; text-anchor: middle; }
+  #principle svg .t-sub { font-size: 12px; fill: #888; text-anchor: middle; }
+  #principle svg .t-head { font-size: 14px; font-weight: 600; fill: #1168bd; }
+  #principle svg .t-key { font-size: 12px; fill: #888; }
+  #principle svg .t-lab { font-size: 12px; fill: #666; }
+  #principle svg .t-hot { font-size: 12px; fill: #d9480f; }
+  #principle svg .hot { fill: #d9480f; }
+  #principle svg .mid { text-anchor: middle; }
+  #principle svg .b { font-weight: 700; }
+  #principle svg .node { fill: #fff; stroke: #1168bd; stroke-width: 1.6; }
+  #principle svg .node-hot { fill: #fff6f0; stroke: #d9480f; stroke-width: 1.6; }
+  #principle svg .bnd { fill: none; stroke: #1168bd; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .gap { fill: #fff6f0; stroke: #d9480f; stroke-width: 1.2; stroke-dasharray: 5 4; }
+  #principle svg .band-a { fill: #eef4fb; stroke: #1168bd; stroke-width: 1.2; }
+  #principle svg .band-b { fill: #fff3ea; stroke: #d9480f; stroke-width: 1.2; }
+  #principle svg .cell { fill: #fff; stroke: #bbb; stroke-width: 1.2; }
+  #principle svg .e { fill: none; stroke: #444; stroke-width: 1.6; }
+  #principle svg .e-dash { fill: none; stroke: #444; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .e-hot { fill: none; stroke: #d9480f; stroke-width: 2.2; }
+  #principle svg .tick { stroke: #444; stroke-width: 1.2; }
+  #principle svg .badge circle { fill: #d9480f; stroke: #fff; stroke-width: 2; }
+  #principle svg .badge text { fill: #fff; font-size: 12px; font-weight: 700; text-anchor: middle; }
+</style>
+</head>
+<body>
+<!--
+  只改下面这段 JSON；渲染器不用动。字段说明见 code/RULES.md 的「数据格式」。
+-->
+<script type="application/json" id="c4-model">
+{
+  "title": "代码图：基础设施平台 - 公共库 - 定时任务",
+  "description": "目标模型（新库 infra-platform/libs/jobs）。应用只写任务的 execute，调度、线程、进程、停机都由库负责。两种作用域：集群任务和 Java 的 Quartz 一样，定义存在宿主的库里、全集群同一时刻只跑一份；实例任务和 Spring 的 @Scheduled 一样，定义在代码里、每个进程各跑一份。",
+  "component": "定时任务",
+  "package": "atlas_jobs",
+  "overview": "定时任务是一个嵌入式库，目标是让应用只写任务本身的逻辑（Job 接口的 execute），调度、线程、进程、停机都交给库。任务分两种作用域，用同一个 Job 接口，注册时声明：\n\n集群任务（默认），做的事和 Java 的 Quartz 一样：任务类型在代码里注册（类型名、参数 schema、execute），任务定义存在宿主自己的库里（用哪个类型、什么时候触发、带什么参数、是否启用），经管理接口增删改，不用发版；同一个类型可以有多条定义。每个进程跑一个调度协程，每秒查一次到期的定义，抢到那一行的进程来执行、续租、跑完结算，同一条定义同一时刻全集群只跑一份。适合运维类任务：清理、回收、对账、告警。\n\n实例任务，和 Spring 的 @Scheduled 一样：定义只在代码里（间隔、抖动），每个进程各跑一份，不抢行、不要租约、不写执行记录，只出指标。上一轮没跑完，下一轮跳过。适合进程内的机制，比如 Run 执行器的兜底和续租；它们关系到宿主能不能正常运行，所以管理接口里只能看，不能暂停、不能改。\n\n两种任务都是：async 写法的在宿主的事件循环上跑，同步写法的在库自己的线程池里跑。集群任务每个进程同时最多 max_concurrent 个；默认嵌在 Web 进程里，重的用同一个镜像单独部署只跑任务的进程。停机由宿主调 stop()，时机由宿主决定（比如 Run 执行器要先交接完、续租要一直续到交接完，再停）。集群任务保证「至少执行一次」，任务必须幂等。不提供进程池执行；不设执行超时。鉴权由宿主实现 JobGuard。",
+  "elements": [
+    {
+      "id": "routes",
+      "kind": "class",
+      "name": "JobRoutes",
+      "stereotype": "对外接口",
+      "responsibility": "管理接口，宿主 include_router 挂上：看有哪些任务类型和各自的参数 schema；增删改集群任务的定义（改要带期望版本）；立即触发（可以临时覆盖这一轮的参数）、暂停、恢复；看执行历史。实例任务只能看状态和指标，不能暂停、不能改。查看和操作分别经 JobGuard 鉴权。",
+      "methods": [
+        [
+          "+",
+          "router -> APIRouter"
+        ],
+        [
+          "",
+          "GET    /jobs/types · /jobs · /jobs/{uuid}/runs · /jobs/instance"
+        ],
+        [
+          "",
+          "POST /jobs · PUT /jobs/{uuid} · DELETE /jobs/{uuid}"
+        ],
+        [
+          "",
+          "POST /jobs/{uuid}/trigger · /pause · /resume"
+        ]
+      ],
+      "at": [
+        0,
+        0
+      ]
+    },
+    {
+      "id": "guard",
+      "kind": "interface",
+      "name": "JobGuard",
+      "stereotype": "扩展点",
+      "responsibility": "宿主实现的鉴权：能不能看、能不能操作，返回操作人，记进定义的 updated_by 和执行记录。",
+      "methods": [
+        [
+          "+",
+          "view(request) -> str（操作人）"
+        ],
+        [
+          "+",
+          "operate(request) -> str（操作人）"
+        ]
+      ],
+      "at": [
+        0,
+        1.8
+      ]
+    },
+    {
+      "id": "sched",
+      "kind": "class",
+      "name": "JobScheduler",
+      "stereotype": "应用服务",
+      "responsibility": "库的入口。register：检查库里每条定义的类型都已在代码里注册（没注册的记警告、不调度），补上库自带的定义。start 起本进程的集群调度协程和全部实例任务；stop 由宿主在自己的收尾做完之后调用，先停止抢新的集群任务，再等在跑的结束，最后停实例任务。管理操作只改库里那一行：新建和修改先按类型的 schema 校验参数、用版本号 CAS；立即触发就是把下一次触发时间改成现在。",
+      "methods": [
+        [
+          "+",
+          "register() · start() · stop()"
+        ],
+        [
+          "+",
+          "create(name, type, trigger, params, *, by) -> JobDefinition"
+        ],
+        [
+          "+",
+          "update(uuid, …, *, expected_version, by) · delete(uuid, *, by)"
+        ],
+        [
+          "+",
+          "trigger(uuid, *, params=None, by) · pause(uuid, *, by) · resume(uuid, *, by)"
+        ],
+        [
+          "+",
+          "list() · history(uuid)"
+        ]
+      ],
+      "at": [
+        1.8,
+        0
+      ]
+    },
+    {
+      "id": "registry",
+      "kind": "class",
+      "name": "JobRegistry",
+      "stereotype": "工厂",
+      "responsibility": "代码里注册的任务：类型名 → 任务类，加上作用域。集群任务的定义在库里，这里只登记类型和参数 schema；实例任务的周期也在这里登记（间隔、抖动），不进库。只有注册过的类型能被执行：库里只存类型名，不存可导入的函数路径，能改表的人也没法让服务执行任意代码。参数按类型声明的 schema 校验，存定义时一次、执行前再一次。",
+      "methods": [
+        [
+          "+",
+          "register(cls, *, scope=\"cluster\" | \"instance\", every=None, jitter=0)"
+        ],
+        [
+          "+",
+          "types() · instance_jobs()"
+        ],
+        [
+          "+",
+          "create(type) -> Job · parse(type, params) -> BaseModel"
+        ]
+      ],
+      "at": [
+        3.7,
+        0
+      ]
+    },
+    {
+      "id": "job",
+      "kind": "interface",
+      "name": "Job",
+      "stereotype": "扩展点",
+      "responsibility": "宿主实现的任务类，两种作用域共用：type 是全局唯一的类型名（带应用前缀，如 agent.cleanup_runs）；Params 是参数的 pydantic 模型，实例任务一般没有参数；execute 可以写成 async def（在事件循环上跑，里面不能有阻塞调用）或者 def（在库的线程池里跑）。集群任务必须幂等：同一轮可能因为进程死掉被重跑。",
+      "attributes": [
+        [
+          "+",
+          "type: ClassVar[str]"
+        ],
+        [
+          "+",
+          "Params: ClassVar[type[BaseModel]]"
+        ]
+      ],
+      "methods": [
+        [
+          "+",
+          "execute(ctx: JobContext, params: Params)（async 或同步）"
+        ]
+      ],
+      "at": [
+        5.6,
+        0
+      ]
+    },
+    {
+      "id": "runner",
+      "kind": "class",
+      "name": "ClusterRunner",
+      "stereotype": "领域服务",
+      "responsibility": "集群任务的调度，每个进程一个协程，跑在宿主的事件循环上：每秒（加一点抖动）按执行器的空槽数去抢到期的定义；抢到就记一条执行记录（running）、交给执行器；有任务在跑时每 lease/3 一条 SQL 续本进程全部集群任务的租约，续不上的立即取消；任务结束后结算：结果、下一次触发时间、清租约。停机时不再抢，等在跑的结束，超过宿主的宽限就取消。",
+      "attributes": [
+        [
+          "-",
+          "_owner: str（进程 id）"
+        ],
+        [
+          "-",
+          "_tick = 1s · _lease = 30s"
+        ]
+      ],
+      "methods": [
+        [
+          "+",
+          "start() · stop()"
+        ],
+        [
+          "-",
+          "_tick() · _renew() · _settle(run, outcome)"
+        ]
+      ],
+      "at": [
+        2.6,
+        1.9
+      ]
+    },
+    {
+      "id": "executor",
+      "kind": "class",
+      "name": "JobExecutor",
+      "stereotype": "领域服务",
+      "responsibility": "执行任务。async 写法的作为协程跑在宿主的事件循环上；同步写法的放进库自己的线程池，不用 AnyIO 的默认线程池：那 40 个线程是给宿主的同步接口用的。集群任务同时最多 max_concurrent 个（默认 4，相当于 Quartz 的 threadCount），先占槽再抢行；实例任务不占这些槽，每个实例任务自己不重叠，线程池给它们另外留位置。",
+      "attributes": [
+        [
+          "-",
+          "_slots: int（剩余槽数）"
+        ],
+        [
+          "-",
+          "_pool: ThreadPoolExecutor"
+        ]
+      ],
+      "methods": [
+        [
+          "+",
+          "free_slots() -> int"
+        ],
+        [
+          "+",
+          "submit(definition, run, params) -> Task"
+        ],
+        [
+          "+",
+          "cancel_all()"
+        ]
+      ],
+      "at": [
+        4.6,
+        1.9
+      ]
+    },
+    {
+      "id": "ctx",
+      "kind": "class",
+      "name": "JobContext",
+      "stereotype": "值对象",
+      "responsibility": "交给任务的这一轮：定义的名字、这一轮的编号、计划触发时刻、是到点触发还是手动触发、上一轮是不是没跑完就丢了；still_held 查租约还在不在本进程，长循环里定期查，不在了就停。",
+      "attributes": [
+        [
+          "+",
+          "job_name · run_uuid · fired_at"
+        ],
+        [
+          "+",
+          "trigger: schedule | manual · retried: bool"
+        ]
+      ],
+      "methods": [
+        [
+          "+",
+          "still_held() -> bool"
+        ]
+      ],
+      "at": [
+        6.9,
+        3.8
+      ]
+    },
+    {
+      "id": "settings",
+      "kind": "class",
+      "name": "JobSettings",
+      "stereotype": "值对象",
+      "responsibility": "本进程跑不跑集群任务、跑哪些、同时几个，由宿主在启动时传入（一般来自环境变量）。同一个镜像，Web 进程设成不跑或只跑轻量类型，专门跑任务的进程设成全部类型、并发调大，就是拆出模式。实例任务不受它控制：宿主在哪个进程里注册了，就在哪个进程跑。",
+      "attributes": [
+        [
+          "+",
+          "enabled: bool（默认 true）"
+        ],
+        [
+          "+",
+          "types: set[str] | None（白名单，空 = 全部）"
+        ],
+        [
+          "+",
+          "max_concurrent: int（默认 4）"
+        ]
+      ],
+      "at": [
+        -0.8,
+        3.8
+      ]
+    },
+    {
+      "id": "repo",
+      "kind": "class",
+      "name": "JobRepository",
+      "stereotype": "仓储",
+      "responsibility": "读写 app_job、app_job_run。抢：SELECT … FOR UPDATE SKIP LOCKED 再 UPDATE，同一个事务，条件是启用、已到期、没有有效租约、类型在本进程能跑的范围里，一次最多取空槽数那么多；抢到的是租约过期的，就把上一轮的执行记录记成 lost。续租和结算都校验 owner。改定义用版本号 CAS。",
+      "methods": [
+        [
+          "+",
+          "claim_due(owner, types, limit, lease_s) -> list[Claim]"
+        ],
+        [
+          "+",
+          "renew(uuids, owner, lease_s) -> set[uuid]"
+        ],
+        [
+          "+",
+          "settle(uuid, owner, outcome, next_fire_at)"
+        ],
+        [
+          "+",
+          "add · save(expected_version) · remove"
+        ],
+        [
+          "+",
+          "add_run · finish_run · prune_runs(before) -> int"
+        ]
+      ],
+      "at": [
+        1.0,
+        3.8
+      ]
+    },
+    {
+      "id": "defn",
+      "kind": "class",
+      "name": "JobDefinition",
+      "stereotype": "聚合根",
+      "responsibility": "一条任务定义，相当于 Quartz 的 JobDetail 加 Trigger：名字、类型、触发规则、参数、是否启用、版本，以及运行状态（下一次触发时间、租约、上一轮结果）。下一次触发时间在跑完结算时才算：按触发规则从「计划触发时刻」往后找第一个晚于现在的时刻，错过的几轮合并成一次。",
+      "attributes": [
+        [
+          "+",
+          "name · type · params · enabled · version"
+        ],
+        [
+          "+",
+          "next_fire_at · owner · lease_until"
+        ],
+        [
+          "+",
+          "last_status · last_error"
+        ]
+      ],
+      "methods": [
+        [
+          "+",
+          "next_after(fired_at, now) -> datetime | None"
+        ]
+      ],
+      "at": [
+        1.0,
+        5.7
+      ]
+    },
+    {
+      "id": "trigger",
+      "kind": "class",
+      "name": "Trigger",
+      "stereotype": "值对象",
+      "responsibility": "触发规则，三种：cron（按定义里写的时区算，用 croniter，不自己写解析）、固定间隔（秒）、一次性（某个时刻跑一次，跑完 next_fire_at 置空）。",
+      "attributes": [
+        [
+          "+",
+          "kind: cron | interval | once"
+        ],
+        [
+          "+",
+          "cron · timezone · every_s · run_at"
+        ]
+      ],
+      "methods": [
+        [
+          "+",
+          "next_after(t) -> datetime | None"
+        ]
+      ],
+      "at": [
+        2.9,
+        5.7
+      ]
+    },
+    {
+      "id": "run",
+      "kind": "class",
+      "name": "JobRun",
+      "stereotype": "实体",
+      "responsibility": "一轮执行的记录：哪个进程跑的、怎么触发的、这一轮实际用的参数、计划触发时刻、开始和结束、结果（running / succeeded / failed / lost）、错误。只追加，按保留期清理。",
+      "attributes": [
+        [
+          "+",
+          "owner · trigger · params · fired_at"
+        ],
+        [
+          "+",
+          "started_at · finished_at · status · error"
+        ]
+      ],
+      "at": [
+        -0.8,
+        5.7
+      ]
+    },
+    {
+      "id": "prune",
+      "kind": "class",
+      "name": "PruneRuns",
+      "stereotype": "领域服务",
+      "responsibility": "库自带的任务类型 atlas_jobs.prune_runs，register 时补一条默认定义（每小时一次，保留 7 天），宿主可以改参数或停用，不能删。间隔 10 秒的任务一天就是 8640 条执行记录，不清会一直涨。",
+      "attributes": [
+        [
+          "+",
+          "type = \"atlas_jobs.prune_runs\""
+        ],
+        [
+          "+",
+          "Params: keep_days = 7"
+        ]
+      ],
+      "methods": [
+        [
+          "+",
+          "execute(ctx, params)"
+        ]
+      ],
+      "at": [
+        5.6,
+        3.8
+      ]
+    },
+    {
+      "id": "inst",
+      "kind": "class",
+      "name": "InstanceRunner",
+      "stereotype": "领域服务",
+      "responsibility": "实例任务的调度：每个实例任务一个协程，跑在宿主的事件循环上，按登记的间隔加随机抖动触发（各进程错开）；上一轮没跑完，下一轮跳过；出错只记日志、算进失败次数，循环不退出。不抢行、不要租约、不写执行记录，只更新指标：最近一次开始和结束时刻、耗时、连续失败次数，供管理接口和监控读取。",
+      "attributes": [
+        [
+          "-",
+          "_loops: dict[type, Task]"
+        ],
+        [
+          "-",
+          "_metrics: dict[type, InstanceMetrics]"
+        ]
+      ],
+      "methods": [
+        [
+          "+",
+          "start() · stop()"
+        ],
+        [
+          "+",
+          "metrics() -> list[InstanceMetrics]"
+        ]
+      ],
+      "at": [
+        6.6,
+        1.9
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "from": "routes",
+      "to": "sched",
+      "type": "uses",
+      "description": "增删改、触发、暂停"
+    },
+    {
+      "from": "routes",
+      "to": "guard",
+      "type": "uses",
+      "description": "鉴权"
+    },
+    {
+      "from": "sched",
+      "to": "registry",
+      "type": "uses",
+      "description": "校验类型和参数"
+    },
+    {
+      "from": "sched",
+      "to": "repo",
+      "type": "uses",
+      "description": "存定义"
+    },
+    {
+      "from": "sched",
+      "to": "runner",
+      "type": "composition",
+      "description": "start 时起"
+    },
+    {
+      "from": "runner",
+      "to": "settings",
+      "type": "uses",
+      "description": "跑不跑、跑哪些"
+    },
+    {
+      "from": "runner",
+      "to": "repo",
+      "type": "uses",
+      "description": "抢、续租、结算"
+    },
+    {
+      "from": "runner",
+      "to": "executor",
+      "type": "association",
+      "description": "空槽数、交给执行"
+    },
+    {
+      "from": "executor",
+      "to": "registry",
+      "type": "uses",
+      "description": "取任务类、解析参数"
+    },
+    {
+      "from": "executor",
+      "to": "job",
+      "type": "uses",
+      "description": "execute(ctx, params)"
+    },
+    {
+      "from": "executor",
+      "to": "ctx",
+      "type": "uses",
+      "description": "创建"
+    },
+    {
+      "from": "repo",
+      "to": "defn",
+      "type": "association",
+      "description": "存取"
+    },
+    {
+      "from": "defn",
+      "to": "trigger",
+      "type": "composition",
+      "description": "触发规则"
+    },
+    {
+      "from": "repo",
+      "to": "run",
+      "type": "uses",
+      "description": "追加、清理"
+    },
+    {
+      "from": "prune",
+      "to": "job",
+      "type": "implements"
+    },
+    {
+      "from": "prune",
+      "to": "repo",
+      "type": "uses",
+      "description": "清理过期记录"
+    },
+    {
+      "from": "sched",
+      "to": "inst",
+      "type": "composition",
+      "description": "start 时起",
+      "labelAt": 0.8
+    },
+    {
+      "from": "inst",
+      "to": "executor",
+      "type": "uses",
+      "description": "交给执行"
+    }
+  ],
+  "capabilities": [
+    {
+      "name": "建表",
+      "entry": "atlas_jobs.upgrade(connection)",
+      "callers": "宿主的迁移步骤（make migrate）",
+      "description": "库自带 alembic 迁移，版本表 app_job_alembic_version 和宿主自己的分开"
+    },
+    {
+      "name": "注册任务",
+      "entry": "@jobs.register(scope=\"cluster\") · @jobs.register(scope=\"instance\", every=10, jitter=3)",
+      "callers": "宿主代码（模块级）",
+      "description": "集群任务只登记类型，定义经管理接口建在库里；实例任务连周期一起写在代码里。execute 写成 async def 在事件循环上跑，写成 def 在库的线程池里跑；集群任务必须幂等"
+    },
+    {
+      "name": "登记与启动",
+      "entry": "JobScheduler(sessions, settings).register() · start()",
+      "callers": "宿主 lifespan",
+      "description": "检查库里定义的类型都已注册，补上库自带的定义；start 起本进程的集群调度协程和全部实例任务。settings.enabled = false 时不跑集群任务，实例任务照跑"
+    },
+    {
+      "name": "管理任务定义",
+      "entry": "create · update(expected_version) · delete · pause · resume",
+      "callers": "管理接口、宿主代码",
+      "description": "参数按类型的 schema 校验；改定义用版本号 CAS；改了不影响正在跑的这一轮，这一轮用抢到时的参数"
+    },
+    {
+      "name": "立即触发",
+      "entry": "trigger(uuid, *, params=None, by)",
+      "callers": "管理接口",
+      "description": "把下一次触发时间改成现在，可以临时覆盖这一轮的参数；正在跑的不会再起一份，等它结束后马上跑"
+    },
+    {
+      "name": "实例任务状态",
+      "entry": "InstanceRunner.metrics() · GET /jobs/instance",
+      "callers": "管理接口、监控",
+      "description": "每个实例任务最近一次的开始、结束、耗时、连续失败次数；只读"
+    },
+    {
+      "name": "停机",
+      "entry": "JobScheduler.stop()",
+      "callers": "宿主退出钩子",
+      "description": "宿主在自己的收尾做完之后调用：先停止抢新的集群任务，等在跑的结束（超过宽限就取消，这一轮在租约过期后由别的进程重跑），最后停实例任务"
+    },
+    {
+      "name": "管理接口",
+      "entry": "JobRoutes(scheduler, guard).router",
+      "callers": "宿主 include_router",
+      "description": "任务类型、定义的增删改、立即触发、暂停恢复、执行历史；查看和操作分别经 JobGuard.view / operate 鉴权"
+    }
+  ],
+  "decisions": [
+    {
+      "decision": "嵌入宿主应用，表建在宿主自己的库里",
+      "reason": "和应用配置一样：不多一个服务、不多一次网络调用，不依赖统一的调度平台；任务的运行状态和宿主的业务数据在同一个库里，宿主的迁移、备份照旧。"
+    },
+    {
+      "decision": "两种作用域：集群任务和实例任务，共用一个 Job 接口",
+      "reason": "应用只写 execute，调度、线程、停机交给库，这一点两种任务一样；不同的是「谁跑」。运维类任务全集群跑一份就够（Quartz 的集群模式）；进程内的机制每个进程都要跑（Spring 的 @Scheduled），比如 Run 执行器的兜底要把 run 抢到本进程来跑。只做前一种，后一种就只能各自手写循环；把后一种塞进前一种，会变成全集群只有一个进程在兜底。"
+    },
+    {
+      "decision": "实例任务的定义只在代码里，管理接口只读",
+      "reason": "实例任务是宿主正常运行的一部分（兜底、续租），有人在管理界面上误点暂停或改了间隔，run 就会卡住没人管。所以它们的周期跟着代码和发版走，管理接口只能看状态。"
+    },
+    {
+      "decision": "实例任务不抢行、不写执行记录，只出指标；自己不重叠",
+      "reason": "它们每个进程每几秒就跑一轮，3 个进程一天就是几万条，写执行记录全是噪音；也不需要「至少执行一次」：这一轮没跑完进程就死了，别的进程下一轮照样会做。上一轮没跑完下一轮跳过，免得慢的时候越积越多。"
+    },
+    {
+      "decision": "停机由宿主调 stop()，顺序是：先停抢新的集群任务、等在跑的，最后停实例任务",
+      "reason": "停机时机只有宿主知道。比如 Run 执行器停机要先交接，交接期间 run 还得续租，所以续租这个实例任务要一直跑到交接完；宿主在自己的收尾做完之后再调 stop()。兜底这类不该在停机时继续的实例任务，在 execute 开头自己判断「停机中」就返回。"
+    },
+    {
+      "decision": "两层：任务类型在代码里注册，任务定义存在库里",
+      "reason": "定义要能运行时增删改（什么时候跑、带什么参数），所以放库里；能执行什么必须由代码决定，所以库里只存注册过的类型名，不存可导入的函数路径，能改表的人也没法让服务执行任意代码。一个类型可以有多条定义，参数各不相同。"
+    },
+    {
+      "decision": "参数按类型的 schema 校验两次：存定义时、执行前",
+      "reason": "存的时候校验，填错的参数当场报错，不会等到半夜触发才失败；执行前再校验一次，因为类型的 schema 可能随发版变了，库里的旧参数不一定还合法，这时这一轮记失败，不带着坏参数跑。"
+    },
+    {
+      "decision": "按定义互斥：一条定义一行，抢表行加租约，不用 Redis 选主",
+      "reason": "SELECT … FOR UPDATE SKIP LOCKED 再 UPDATE，PostgreSQL 和 MySQL 同一份代码，不依赖 Redis。相当于 Quartz 的 JDBC 集群模式。按定义互斥而不是选一个「调度主节点」：不同定义能落在不同进程上，一个任务跑得慢也不挡别的任务。"
+    },
+    {
+      "decision": "至少执行一次，任务必须幂等",
+      "reason": "跑任务的进程可能在任何时刻死掉，租约过期后别的进程重跑这一轮。要做到恰好一次，得让任务的副作用和任务状态在同一个事务里提交，跨服务调用、长任务都做不到。"
+    },
+    {
+      "decision": "下一次触发时间在跑完结算时才算",
+      "reason": "如果抢到时就把下一次时间写回，进程中途死掉，丢掉的这一轮要等到下一个周期才会再跑，至少执行一次就保证不了。结算前下一次时间不动，租约一过期，这条定义仍是「已到期、没人拿着」，别的进程马上能抢到重跑。"
+    },
+    {
+      "decision": "同一条定义同一时刻只跑一份，错过的几轮合并成一次",
+      "reason": "抢的条件里有「没有有效租约」，跑着的那一行别的进程抢不到，相当于 Quartz 的 @DisallowConcurrentExecution。结算时从计划触发时刻往后找第一个晚于现在的时刻：这一轮跑得比间隔还久、或者集群停过一阵，都只补跑一次。周期任务关心的是「现在的状态」，补跑十次和跑一次结果一样。"
+    },
+    {
+      "decision": "调度都跑在宿主的事件循环上：集群任务一个调度协程每秒查一次，实例任务每个一个循环",
+      "reason": "集群调度只是一条走 (enabled, next_fire_at) 索引的查询，实例任务的循环只是睡眠和计时，都很轻。不用 APScheduler 的后台线程：它只管单进程，多进程会把每个集群任务各跑一遍；它的任务又在自己的线程池里跑，和宿主「只在事件循环线程里改状态」的约定冲突。"
+    },
+    {
+      "decision": "执行有上限：async 任务在事件循环上，同步任务进库自己的线程池",
+      "reason": "集群任务的 max_concurrent 默认 4，相当于 Quartz 的 threadCount，任务再多也不会挤占宿主的 CPU 和数据库连接；实例任务数量固定、各自不重叠，不占这些槽（Spring @Scheduled 默认只有 1 个线程、一个慢任务拖住全部，是反面例子）。同步任务不能用 AnyIO 的默认线程池：那 40 个线程是给宿主的同步接口用的，任务一占，请求就排队。async 任务里不能有阻塞调用，用 ruff 的 ASYNC 规则检查。"
+    },
+    {
+      "decision": "默认嵌在 Web 进程里，重的任务单独部署只跑任务的进程，同一个库靠配置切换",
+      "reason": "嵌入省部署，适合轻任务；CPU 或内存重的任务会拖慢同进程的接口和 SSE，用同一个镜像另起一组进程（enabled、白名单、并发数调大），和 Web 分开扩缩，这是 Celery、procrastinate 这类库的通行做法。不在库里做进程池，第一版保持简单。"
+    },
+    {
+      "decision": "只抢本进程注册过、且在白名单里的类型",
+      "reason": "滚动发布时新旧版本的进程同时在：新加的类型旧进程不认识，抢到也没有任务类；拆出模式下 Web 进程只该跑轻量类型。代码里删掉的类型没有进程再抢，定义留着、管理接口里标出来。"
+    },
+    {
+      "decision": "支持 cron、固定间隔、一次性三种触发，cron 按定义里的时区算",
+      "reason": "定义放在库里，运维类任务常要「每天凌晨 3 点」「工作日 9 点」；cron 用 croniter 解析，不自己写。时区写在定义上，不依赖各个节点的系统时区，几个进程算出来的时刻一致。"
+    },
+    {
+      "decision": "改定义用版本号 CAS，改了不影响正在跑的这一轮",
+      "reason": "两个人同时改同一条定义，后提交的一方会因版本不对失败，不会悄悄覆盖。正在跑的这一轮用抢到时的参数快照，改动从下一轮生效。"
+    },
+    {
+      "decision": "不设执行超时，跑的时候续租",
+      "reason": "和 run 的租约一样，租约是「进程还活着」的心跳：默认 30 秒，每 10 秒续一次。任务跑多久都行，进程死了才算丢。任务在长循环里用 ctx.still_held() 检查，租约丢了就停。"
+    },
+    {
+      "decision": "执行记录有保留期，库自带清理类型和一条默认定义",
+      "reason": "间隔 10 秒的任务一天就是 8640 条，不清会一直涨。默认每小时清理一次、保留 7 天，宿主可以改参数或停用，不能删。"
+    },
+    {
+      "decision": "鉴权交给宿主实现 JobGuard",
+      "reason": "各服务的身份体系不一样（有的接用户中心，有的只在内网），库不认识任何一种；只要求能区分「看」和「操作」，并给出操作人。"
+    }
+  ],
+  "schemaNote": "主键约定：id 是自增主键，只在库内使用，不对外、不做关联；xxx_uuid 是逻辑主键（UUIDv7，Python 侧生成），表间引用和 API 都用它。表间不建外键约束（与本仓各服务一致），「引用」列和 ER 图里的连线都是逻辑引用。类型写的是 SQLAlchemy 通用类型，以及库里自带的 UUIDType、UTCDateTime、JSONType，不绑定数据库厂商。两张表建在宿主的库里，表名带 app_job 前缀，以免和宿主的表重名。",
+  "tables": [
+    {
+      "name": "app_job",
+      "description": "任务定义（聚合根 JobDefinition）加它的运行状态，一条定义一行。",
+      "at": [
+        0,
+        0
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": "BigInteger",
+          "key": "PK",
+          "default": "自增",
+          "description": "库内主键，不对外、不做关联"
+        },
+        {
+          "name": "job_uuid",
+          "type": "UUIDType",
+          "key": "UK",
+          "default": "uuid7()",
+          "description": "逻辑主键"
+        },
+        {
+          "name": "name",
+          "type": "String(128)",
+          "key": "UK",
+          "description": "给人看的名字，如「每天清理 30 天前的 run」"
+        },
+        {
+          "name": "type",
+          "type": "String(128)",
+          "description": "代码里注册的任务类型名，如 agent.cleanup_runs"
+        },
+        {
+          "name": "trigger_kind",
+          "type": "String(8)",
+          "description": "cron / interval / once"
+        },
+        {
+          "name": "cron",
+          "type": "String(64)",
+          "nullable": true,
+          "description": "cron 表达式，trigger_kind = cron 时有"
+        },
+        {
+          "name": "timezone",
+          "type": "String(64)",
+          "default": "'Asia/Shanghai'",
+          "description": "cron 按哪个时区算"
+        },
+        {
+          "name": "every_s",
+          "type": "Integer",
+          "nullable": true,
+          "description": "间隔秒数，trigger_kind = interval 时有"
+        },
+        {
+          "name": "run_at",
+          "type": "UTCDateTime",
+          "nullable": true,
+          "description": "一次性任务的触发时刻"
+        },
+        {
+          "name": "params",
+          "type": "JSONType",
+          "default": "'{}'",
+          "description": "参数，按类型的 schema 校验"
+        },
+        {
+          "name": "pending_params",
+          "type": "JSONType",
+          "nullable": true,
+          "description": "手动触发时临时覆盖的参数，只用这一轮，用完清掉"
+        },
+        {
+          "name": "enabled",
+          "type": "Boolean",
+          "default": "true",
+          "description": "停用 = 暂停，不再调度"
+        },
+        {
+          "name": "system",
+          "type": "Boolean",
+          "default": "false",
+          "description": "库自带的定义，可以改参数、停用，不能删"
+        },
+        {
+          "name": "version",
+          "type": "Integer",
+          "default": "1",
+          "description": "定义的版本，修改时用它做 CAS"
+        },
+        {
+          "name": "next_fire_at",
+          "type": "UTCDateTime",
+          "nullable": true,
+          "description": "下一次触发时刻；跑完结算时才算；为空 = 不再触发（一次性的已跑完）"
+        },
+        {
+          "name": "owner",
+          "type": "String(64)",
+          "nullable": true,
+          "description": "正在跑它的进程；没在跑为空"
+        },
+        {
+          "name": "lease_until",
+          "type": "UTCDateTime",
+          "nullable": true,
+          "description": "租约到期时刻；过了没续，别的进程就能抢"
+        },
+        {
+          "name": "last_status",
+          "type": "String(16)",
+          "nullable": true,
+          "description": "上一轮的结果：succeeded / failed / lost"
+        },
+        {
+          "name": "last_error",
+          "type": "Text",
+          "nullable": true,
+          "description": "上一轮失败时的错误摘要"
+        },
+        {
+          "name": "description",
+          "type": "Text",
+          "default": "''"
+        },
+        {
+          "name": "updated_by",
+          "type": "String(64)",
+          "description": "最后操作人（库自带的定义是 system）"
+        },
+        {
+          "name": "created_at",
+          "type": "UTCDateTime",
+          "default": "now()"
+        },
+        {
+          "name": "updated_at",
+          "type": "UTCDateTime",
+          "default": "now()"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "uk_app_job_uuid",
+          "columns": [
+            "job_uuid"
+          ],
+          "unique": true
+        },
+        {
+          "name": "uk_app_job_name",
+          "columns": [
+            "name"
+          ],
+          "unique": true
+        },
+        {
+          "name": "ix_app_job_due",
+          "columns": [
+            "enabled",
+            "next_fire_at"
+          ],
+          "description": "调度协程按它抢到期的"
+        }
+      ]
+    },
+    {
+      "name": "app_job_run",
+      "description": "一轮执行的记录（实体 JobRun），只追加，按保留期清理。",
+      "at": [
+        1.45,
+        0
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": "BigInteger",
+          "key": "PK",
+          "default": "自增",
+          "description": "库内主键，不对外、不做关联"
+        },
+        {
+          "name": "run_uuid",
+          "type": "UUIDType",
+          "key": "UK",
+          "default": "uuid7()",
+          "description": "逻辑主键，即 JobContext.run_uuid"
+        },
+        {
+          "name": "job_uuid",
+          "type": "UUIDType",
+          "references": "app_job.job_uuid",
+          "referenceOptional": true,
+          "description": "哪条定义；定义删了记录还留着"
+        },
+        {
+          "name": "owner",
+          "type": "String(64)",
+          "description": "跑它的进程"
+        },
+        {
+          "name": "trigger",
+          "type": "String(16)",
+          "description": "schedule（到点）/ manual（手动触发）"
+        },
+        {
+          "name": "params",
+          "type": "JSONType",
+          "description": "这一轮实际用的参数"
+        },
+        {
+          "name": "fired_at",
+          "type": "UTCDateTime",
+          "description": "计划触发时刻"
+        },
+        {
+          "name": "status",
+          "type": "String(16)",
+          "description": "running / succeeded / failed / lost（进程死了，租约过期后被别的进程记下）"
+        },
+        {
+          "name": "error",
+          "type": "Text",
+          "nullable": true,
+          "description": "失败时的错误摘要"
+        },
+        {
+          "name": "started_at",
+          "type": "UTCDateTime"
+        },
+        {
+          "name": "finished_at",
+          "type": "UTCDateTime",
+          "nullable": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "uk_app_job_run_uuid",
+          "columns": [
+            "run_uuid"
+          ],
+          "unique": true
+        },
+        {
+          "name": "ix_app_job_run_job",
+          "columns": [
+            "job_uuid",
+            "started_at"
+          ],
+          "description": "按定义看历史"
+        },
+        {
+          "name": "ix_app_job_run_started",
+          "columns": [
+            "started_at"
+          ],
+          "description": "按保留期清理"
+        }
+      ]
+    }
+  ]
+}
+</script>
+
+<main>
+  <ul id="c4-report" hidden></ul>
+  <svg id="c4-diagram" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+  <section id="c4-overview" hidden>
+    <h2>概述</h2>
+  </section>
+  <section id="c4-capabilities" hidden>
+    <h2>对外能力</h2>
+    <table><thead></thead><tbody></tbody></table>
+  </section>
+  <section id="c4-decisions" hidden>
+    <h2>设计决策</h2>
+    <table><thead></thead><tbody></tbody></table>
+  </section>
+  <section id="c4-elements" hidden>
+    <h2>元素职责</h2>
+    <table><thead></thead><tbody></tbody></table>
+  </section>
+  <section id="c4-er" hidden>
+    <h2>ER 图</h2>
+    <svg id="c4-er-diagram" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+  </section>
+  <section id="c4-tables" hidden>
+    <h2>表结构</h2>
+  </section>
+  <h2>Diagram key</h2>
+  <svg id="c4-key" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+
+  <!-- 原理：手写的静态图，不经上面的渲染器 -->
+  <section id="principle">
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+      <defs>
+        <marker id="pj-a" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#444"/></marker>
+        <marker id="pj-h" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#d9480f"/></marker>
+      </defs>
+    </svg>
+
+    <h2>原理</h2>
+    <p>一句话：<b>应用只写 execute，调度、线程、停机都交给库</b>。任务分两种作用域：集群任务在代码里注册「能做什么」，在库里存「什么时候、用什么参数做」，每个进程的调度协程每秒去库里抢到期的定义，抢到的进程执行、续租、跑完结算；实例任务连周期一起写在代码里，每个进程各跑一份。下面图 1～3 讲集群任务的两层结构、一次触发的全过程、进程和线程怎么规划，图 4 讲两种作用域的区别。</p>
+
+    <p>管理页面的原型见 <a href="ui-jobs.html" target="_blank" rel="noopener">ui-jobs.html</a>：列表、详情、新建编辑、立即触发，以及只读用户看到的样子。</p>
+
+    <h3>图 1　两层：代码里的任务类型，库里的任务定义</h3>
+    <svg width="1240" viewBox="0 0 1240 280" role="img" aria-label="任务类型与任务定义">
+      <rect class="bnd" x="20" y="30" width="340" height="230" rx="6"/>
+      <text class="t-head" x="36" y="54">代码里注册的任务类型（随发版变）</text>
+      <rect class="node" x="40" y="70" width="300" height="56" rx="4"/>
+      <text class="t-name" x="190" y="94">CleanupRuns</text>
+      <text class="t-sub" x="190" y="114">type = agent.cleanup_runs · 参数 keep_days</text>
+      <rect class="node" x="40" y="176" width="300" height="56" rx="4"/>
+      <text class="t-name" x="190" y="200">ReapSandboxes</text>
+      <text class="t-sub" x="190" y="220">type = agent.reap_sandboxes · 参数 idle_minutes</text>
+
+      <rect class="bnd" x="420" y="30" width="470" height="230" rx="6"/>
+      <text class="t-head" x="436" y="54">库里的任务定义 app_job（运行时增删改）</text>
+      <rect class="cell" x="440" y="68" width="430" height="46" rx="3"/>
+      <text x="456" y="87">每天清理 30 天前的 run</text>
+      <text class="t-lab" x="456" y="105">cron 0 3 * * * · {"keep_days": 30}</text>
+      <rect class="cell" x="440" y="124" width="430" height="46" rx="3"/>
+      <text x="456" y="143">每小时清理 1 天前的临时记录</text>
+      <text class="t-lab" x="456" y="161">每 3600 秒 · {"keep_days": 1}</text>
+      <rect class="cell" x="440" y="182" width="430" height="46" rx="3"/>
+      <text x="456" y="201">回收闲置沙箱</text>
+      <text class="t-lab" x="456" y="219">每 60 秒 · {"idle_minutes": 30}</text>
+      <path class="e-dash" d="M440 91 H342" marker-end="url(#pj-a)"/>
+      <path class="e-dash" d="M440 147 H392 V112 H342" marker-end="url(#pj-a)"/>
+      <path class="e-dash" d="M440 205 H342" marker-end="url(#pj-a)"/>
+      <text class="t-lab mid" x="391" y="84">type</text>
+
+      <path class="e-hot" d="M890 91 H928" marker-end="url(#pj-h)"/>
+      <rect class="node-hot" x="930" y="62" width="290" height="62" rx="4"/>
+      <text class="t-name" x="1075" y="88">到点：执行</text>
+      <text class="t-sub" x="1075" y="108">execute(ctx, Params(keep_days=30))</text>
+      <text class="t-lab" x="930" y="150">只认注册过的类型；</text>
+      <text class="t-lab" x="930" y="170">参数存的时候、执行前各校验一次</text>
+      <g class="badge"><circle cx="20" cy="30" r="10"/><text x="20" y="34">1</text></g>
+      <g class="badge"><circle cx="420" cy="30" r="10"/><text x="420" y="34">2</text></g>
+      <g class="badge"><circle cx="930" cy="62" r="10"/><text x="930" y="66">3</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>任务类型写在代码里，随发版变：类型名全局唯一、带应用前缀；<code>Params</code> 是参数的 pydantic 模型；<code>execute</code> 写成 <code>async def</code> 或 <code>def</code>。只有注册过的类型才能被执行，库里不存可以任意导入的函数路径。</li>
+      <li><span class="n">2</span>任务定义存在库里，运行时增删改，不用发版。同一个类型可以有多条定义：图里两条清理定义，周期和参数各不相同。参数存成 JSON，存的时候按类型的 schema 校验，填错当场报错，不会等到半夜触发才失败。</li>
+      <li><span class="n">3</span>到点时，抢到这一行的进程按类型名找到任务类，把 JSON 参数解析成 <code>Params</code>，调用 <code>execute</code>。执行前再校验一次：发版改了 schema、库里的旧参数已经不合法时，这一轮记失败，不带着坏参数跑。</li>
+    </ol>
+    <pre>@jobs.register
+class CleanupRuns:
+    type = "agent.cleanup_runs"
+
+    class Params(BaseModel):
+        keep_days: int = 7
+
+    async def execute(self, ctx: JobContext, params: Params) -> None:
+        ...   # 删掉 keep_days 天前的记录；进程死了这一轮会被重跑，写法要幂等</pre>
+
+    <h3>图 2　一次触发：抢行、执行、续租、结算；进程死了别人重跑</h3>
+    <svg width="1240" viewBox="0 0 1240 340" role="img" aria-label="一次触发的时间线">
+      <text class="t-key" x="20" y="76">进程 A</text>
+      <text class="t-key" x="20" y="156">app_job 这一行</text>
+      <text class="t-key" x="20" y="250">进程 B</text>
+
+      <rect class="node" x="180" y="52" width="380" height="40" rx="4"/>
+      <text class="t-name" x="370" y="77">抢到 → 执行（每 10 秒续一次租）</text>
+      <text class="hot b" x="570" y="77">✕ 崩溃</text>
+
+      <rect class="band-a" x="180" y="132" width="380" height="44"/>
+      <text class="t-lab mid" x="370" y="159">owner = A，租约不断往后续</text>
+      <rect class="gap" x="560" y="132" width="210" height="44"/>
+      <text class="t-hot mid" x="665" y="159">没人续，30 秒内过期</text>
+      <rect class="band-a" x="790" y="132" width="270" height="44"/>
+      <text class="t-lab mid" x="925" y="159">owner = B</text>
+      <rect class="cell" x="1060" y="126" width="160" height="56" rx="3"/>
+      <text class="mid" x="1140" y="150">结算：成功</text>
+      <text class="t-lab mid" x="1140" y="170">下一次 = 明天 03:00</text>
+      <text class="t-hot" x="180" y="200">整个过程中 next_fire_at 一直是今天 03:00：跑完结算时才往后推</text>
+
+      <path class="e-hot" d="M780 178 V226" marker-end="url(#pj-h)"/>
+      <rect class="node-hot" x="790" y="228" width="270" height="40" rx="4"/>
+      <text class="t-name" x="925" y="253">抢到（A 那轮记 lost）→ 重跑</text>
+
+      <path class="e" d="M140 306 H1210" marker-end="url(#pj-a)"/>
+      <path class="tick" d="M180 301 V311 M560 301 V311 M770 301 V311 M1060 301 V311"/>
+      <text class="t-lab mid" x="180" y="328">03:00:00 到期</text>
+      <text class="t-lab mid" x="560" y="328">03:00:25</text>
+      <text class="t-lab mid" x="770" y="328">03:00:50 过期</text>
+      <text class="t-lab mid" x="1060" y="328">03:02 跑完</text>
+      <g class="badge"><circle cx="180" cy="52" r="10"/><text x="180" y="56">1</text></g>
+      <g class="badge"><circle cx="560" cy="132" r="10"/><text x="560" y="136">2</text></g>
+      <g class="badge"><circle cx="790" cy="228" r="10"/><text x="790" y="232">3</text></g>
+      <g class="badge"><circle cx="1060" cy="126" r="10"/><text x="1060" y="130">4</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>03:00:00 这条定义到期。各进程的调度协程每秒查一次，A 先抢到：同一个事务里用 <code>SKIP LOCKED</code> 锁住这一行，写上 owner 和租约，记一条执行记录（running）。别的进程同时查到也抢不到。</li>
+      <li><span class="n">2</span>A 执行期间，每 10 秒续一次租约。03:00:25 A 崩溃，不再续，租约在 03:00:50 过期。这期间 <code>next_fire_at</code> 一直是今天 03:00，没有往后推。</li>
+      <li><span class="n">3</span>B 在 03:00:51 那一轮查到这一行「已到期、没人拿着」，抢到，把 A 那条执行记录记成 lost，用同样的参数重跑（<code>ctx.retried = true</code>）。所以任务必须幂等。如果在抢到时就把下一次时间推到明天，A 一死，今天这一轮就要等到明天才会再跑。</li>
+      <li><span class="n">4</span>B 跑完结算：记成功，从今天 03:00 往后找第一个晚于现在的 cron 时刻（明天 03:00）写回，清掉租约。要是这一轮跑了两天，中间错过的那次不补跑，合并成这一次。</li>
+    </ol>
+
+    <h3>图 3　进程与线程：默认嵌在 Web 进程里，重的拆出去</h3>
+    <svg width="1240" viewBox="0 0 1240 340" role="img" aria-label="进程与线程规划">
+      <rect class="bnd" x="20" y="30" width="590" height="290" rx="6"/>
+      <text class="t-head" x="36" y="54">嵌入模式（默认）：一个 Web 进程里</text>
+      <rect class="band-a" x="40" y="70" width="330" height="176" rx="4"/>
+      <text class="t-head" x="56" y="94">事件循环线程（1 个）</text>
+      <text class="t-lab" x="56" y="120">宿主的请求、SSE ……</text>
+      <text x="56" y="146">集群调度：每秒抢一次，每 10 秒续租</text>
+      <text x="56" y="172">实例任务：每个一个循环，按间隔跑</text>
+      <text x="56" y="198">async 任务：每个一个协程</text>
+      <text class="t-lab" x="56" y="222">集群任务同时最多 max_concurrent 个</text>
+      <rect class="band-b" x="390" y="70" width="200" height="116" rx="4"/>
+      <text class="t-head" x="406" y="94">库自己的线程池</text>
+      <text x="406" y="120">同步任务（def execute）</text>
+      <text class="t-lab" x="406" y="144">大小 = max_concurrent</text>
+      <rect class="cell" x="390" y="196" width="200" height="50" rx="4"/>
+      <text class="t-lab" x="406" y="216">AnyIO 默认线程池（40 个）</text>
+      <text class="t-lab" x="406" y="236">宿主的同步接口用，任务不占</text>
+      <text class="t-lab" x="40" y="280">开了 --workers N：每个 worker 进程一个调度协程，</text>
+      <text class="t-lab" x="40" y="300">靠抢行互斥，同一条定义仍然只跑一份</text>
+
+      <rect class="bnd" x="640" y="30" width="580" height="290" rx="6"/>
+      <text class="t-head" x="656" y="54">拆出模式：同一个镜像，两组 Pod</text>
+      <rect class="node" x="660" y="72" width="260" height="100" rx="4"/>
+      <text class="t-name" x="790" y="98">Web Pod</text>
+      <text class="t-sub" x="790" y="120">enabled = false</text>
+      <text class="t-sub" x="790" y="140">或者只跑轻量类型</text>
+      <text class="t-sub" x="790" y="160">max_concurrent = 2</text>
+      <rect class="node-hot" x="940" y="72" width="260" height="100" rx="4"/>
+      <text class="t-name" x="1070" y="98">Job Pod</text>
+      <text class="t-sub" x="1070" y="120">enabled = true，类型 = 重的或全部</text>
+      <text class="t-sub" x="1070" y="140">max_concurrent = 16</text>
+      <text class="t-sub" x="1070" y="160">只留健康检查，不对外</text>
+      <path class="e" d="M790 172 V198 H880 V222" marker-end="url(#pj-a)"/>
+      <path class="e" d="M1070 172 V198 H980 V222" marker-end="url(#pj-a)"/>
+      <rect class="node" x="800" y="224" width="260" height="52" rx="4"/>
+      <text class="t-name" x="930" y="246">app_job</text>
+      <text class="t-sub" x="930" y="266">抢行互斥：谁抢到谁跑</text>
+      <text class="t-lab" x="656" y="304">什么时候拆：任务吃 CPU、占大量内存，或者要和 Web 分开扩缩</text>
+      <g class="badge"><circle cx="40" cy="70" r="10"/><text x="40" y="74">1</text></g>
+      <g class="badge"><circle cx="390" cy="70" r="10"/><text x="390" y="74">2</text></g>
+      <g class="badge"><circle cx="660" cy="72" r="10"/><text x="660" y="76">3</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>集群调度协程、实例任务的循环和 async 任务都跑在宿主的事件循环上：集群调度只是每秒一条走索引的查询，实例任务的循环只是睡眠和计时，都很轻。async 任务里不能有阻塞调用，否则同进程的请求和 SSE 一起卡住，用 ruff 的 <code>ASYNC</code> 规则检查。</li>
+      <li><span class="n">2</span>同步任务进库自己的线程池，大小等于 <code>max_concurrent</code>；不用 AnyIO 的默认线程池，那 40 个线程是给宿主同步接口用的，任务一占，请求就排队。每个进程同时跑的集群任务（async 加同步）不超过 <code>max_concurrent</code>，默认 4，相当于 Quartz 的 <code>threadCount</code>；实例任务数量固定、各自不重叠，不占这些槽。数据库连接池要给任务预留这么多个连接，再加抢行、续租用的 1 到 2 个。</li>
+      <li><span class="n">3</span>重的任务拆出去：同一个镜像另起一组 Pod 只跑任务，并发调大；Web Pod 关掉，或者只跑轻量类型。两组都连同一张表，靠抢行互斥，不需要额外的协调。</li>
+    </ol>
+
+    <h3>图 4　两种作用域：集群任务全集群一份，实例任务每个进程一份</h3>
+    <svg width="1240" viewBox="0 0 1240 300" role="img" aria-label="集群任务与实例任务">
+      <rect class="bnd" x="20" y="30" width="360" height="180" rx="6"/>
+      <text class="t-head" x="36" y="54">实例 A</text>
+      <rect class="node-hot" x="36" y="66" width="328" height="44" rx="4"/>
+      <text class="t-name" x="200" y="93">集群任务「每天清理旧 run」：抢到，在跑</text>
+      <rect class="band-a" x="36" y="122" width="328" height="72" rx="4"/>
+      <text class="t-head" x="52" y="146">实例任务（代码里定义）</text>
+      <text class="t-lab" x="52" y="170">兜底 run、续租 run：本进程自己跑一份</text>
+
+      <rect class="bnd" x="440" y="30" width="360" height="180" rx="6"/>
+      <text class="t-head" x="456" y="54">实例 B</text>
+      <rect class="cell" x="456" y="66" width="328" height="44" rx="4"/>
+      <text class="t-lab mid" x="620" y="93">集群任务：同一条定义没抢到，这一轮不跑</text>
+      <rect class="band-a" x="456" y="122" width="328" height="72" rx="4"/>
+      <text class="t-head" x="472" y="146">实例任务（代码里定义）</text>
+      <text class="t-lab" x="472" y="170">兜底 run、续租 run：本进程自己跑一份</text>
+
+      <rect class="bnd" x="860" y="30" width="360" height="180" rx="6"/>
+      <text class="t-head" x="876" y="54">实例 C</text>
+      <rect class="cell" x="876" y="66" width="328" height="44" rx="4"/>
+      <text class="t-lab mid" x="1040" y="93">集群任务：同一条定义没抢到，这一轮不跑</text>
+      <rect class="band-a" x="876" y="122" width="328" height="72" rx="4"/>
+      <text class="t-head" x="892" y="146">实例任务（代码里定义）</text>
+      <text class="t-lab" x="892" y="170">兜底 run、续租 run：本进程自己跑一份</text>
+
+      <path class="e-hot" d="M200 210 V261 H468" marker-end="url(#pj-h)"/>
+      <path class="e-dash" d="M620 210 V232" marker-end="url(#pj-a)"/>
+      <path class="e-dash" d="M1040 210 V261 H772" marker-end="url(#pj-a)"/>
+      <rect class="node" x="470" y="236" width="300" height="52" rx="4"/>
+      <text class="t-name" x="620" y="258">app_job</text>
+      <text class="t-sub" x="620" y="278">只存集群任务的定义；实例任务不进库</text>
+      <g class="badge"><circle cx="36" cy="66" r="10"/><text x="36" y="70">1</text></g>
+      <g class="badge"><circle cx="36" cy="122" r="10"/><text x="36" y="126">2</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>集群任务「每天清理旧 run」只有一条定义。三个实例的集群调度协程都去抢，A 抢到就 A 跑，B、C 这一轮什么都不做。定义存在 <code>app_job</code> 里，可以在管理接口里改 cron、改参数、暂停。适合运维类任务：清理、回收、对账、告警。</li>
+      <li><span class="n">2</span>实例任务「兜底 run」「续租 run」写在代码里，三个实例各跑一份、互不相干：A 兜底抢到的 run 在 A 上跑，B 抢到的在 B 上跑。它们不进库、不抢行、不写执行记录，只出指标；上一轮没跑完，下一轮跳过。它们关系到宿主能不能正常运行，管理接口里只能看，不能暂停、不能改。</li>
+    </ol>
+    <p>两种任务的业务代码写法完全一样，都是实现 <code>Job</code> 的 <code>execute</code>，区别只在注册时声明的作用域：</p>
+    <pre>@jobs.register(scope="instance", every=10, jitter=3)
+class RecoverRuns:
+    type = "agent.recover_runs"
+
+    async def execute(self, ctx: JobContext, params) -> None:
+        if worker.draining or not worker.free_slots():
+            return            # 停机中或者没空槽：这一轮什么都不做
+        ...                   # 翻页拉候选、逐个抢锁</pre>
+    <p>停机顺序由宿主决定：宿主先做完自己的收尾（比如 Run 执行器先把在跑的 run 交接完，期间「续租 run」这个实例任务还要一直跑），再调 <code>stop()</code>。库按「停止抢新的集群任务 → 等在跑的结束 → 停实例任务」的顺序停。像兜底这种停机时不该继续的实例任务，在 <code>execute</code> 开头自己判断「停机中」就返回。</p>
+
+    <h3>三种部署形态下各有几个集群调度协程</h3>
+    <table>
+      <thead><tr><th>宿主怎么部署</th><th>调度协程</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td>每个 Pod 1 个进程，3 个副本（Atlas 现在）</td><td>3 个</td><td>每秒 3 条查询；同一条定义只有一个进程抢得到</td></tr>
+        <tr><td>gunicorn 4 个 worker，2 个 Pod（aiassistant 那种）</td><td>8 个</td><td>每秒 8 条查询，仍然很轻；任务多是同步写法，全部进库的线程池</td></tr>
+        <tr><td>进程有几十个</td><td>几十个</td><td>把查询间隔调大；只用 PostgreSQL 的话可以改用 LISTEN/NOTIFY 通知，不用每秒去查</td></tr>
+      </tbody>
+    </table>
+  </section>
+</main>
+
+<script>
+(() => {
+  'use strict';
+  const FONT = '"Open Sans", "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
+  const INK = '#181818';
+  const EXTERNAL_INK = '#8a8a8a';           // 外部元素（不在本 component 里）
+  const TITLE_INK = '#444444';
+  const SOURCE_INK = '#7a7a7a';             // 「现状：…」（目标模型的元素当前由哪段代码承担）
+  // 元素类型：图标字母、名字是否斜体、图例文字
+  const KINDS = {
+    class: { letter: 'C', italic: false, key: 'Class' },
+    interface: { letter: 'I', italic: true, key: 'Interface' },
+    abstract: { letter: 'A', italic: true, key: 'Abstract class' },
+    enum: { letter: 'E', italic: false, key: 'Enum' },
+    function: { letter: 'F', italic: false, key: 'Function' },
+  };
+  // 可见性：元素名前用实心彩色符号，成员前用空心符号
+  const VIS = {
+    '+': { shape: 'circle', color: '#84be84', key: 'public' },
+    '-': { shape: 'square', color: '#c82930', key: 'private' },
+    '#': { shape: 'diamond', color: '#ffcc44', key: 'protected' },
+    '~': { shape: 'triangle', color: '#4177af', key: 'package' },
+    '': null,
+  };
+  // 关系：线型、目标端箭头、源端菱形、是否必须写说明
+  const RELS = {
+    implements: { dash: true, head: 'triangle', tail: null, needsText: false, key: 'Realization（implements）' },
+    extends: { dash: false, head: 'triangle', tail: null, needsText: false, key: 'Generalization（extends）' },
+    uses: { dash: true, head: 'open', tail: null, needsText: true, key: 'Dependency（uses）' },
+    association: { dash: false, head: 'open', tail: null, needsText: true, key: 'Association' },
+    composition: { dash: false, head: null, tail: 'filled', needsText: true, key: 'Composition' },
+    aggregation: { dash: false, head: null, tail: 'hollow', needsText: true, key: 'Aggregation' },
+  };
+  const COL = 440, ROW = 230;                // 网格间距：at 的一个单位
+  const MAX_ELEMENTS = 15;
+  const TXT = {
+    name: { size: 15, weight: 400, lh: 20 },
+    member: { size: 13, weight: 400, lh: 20 },
+    rel: { size: 13, weight: 400, lh: 17 },
+    mult: { size: 12, weight: 400, lh: 16 },
+    frame: { size: 14, weight: 700, lh: 20 },
+    key: { size: 13, weight: 400, lh: 18 },
+    stereo: { size: 12, weight: 400, lh: 16 },
+    source: { size: 12, weight: 400, lh: 16 },
+  };
+  const HEADER_H = 36, ICON_R = 11, PAD_X = 12, MEMBER_ICON = 16, MIN_W = 160, EMPTY_H = 8, MARGIN = 60;
+  const LABEL_W = 200, ARROW_L = 14, ARROW_W = 12, GAP = 2;
+  // 标题栏有构造型或「现状」时：上下留白 + 名字行，构造型在上、现状在下
+  const HEADER_PAD = 6, NAME_H = 26, SOURCE_W = 280;
+  // 图下方的表格：[字段, 列名, 单元格样式（code 等宽字体，nowrap 不换行）]。必填的列总是显示，其余列有一行写了才显示
+  const CAP_COLS = [['name', '能力', 'nowrap'], ['entry', '入口', 'code'], ['callers', '调用方'], ['description', '说明'], ['source', '现状']];
+  const DECISION_COLS = [['decision', '决策', 'nowrap'], ['reason', '理由']];
+  const ELEMENT_COLS = [['name', '元素', 'code'], ['stereotype', '角色', 'nowrap'], ['responsibility', '职责'], ['source', '现状']];
+  // 表结构：列表、索引表的列（必填的列总是显示，其余列有一行写了才显示）
+  const COLUMN_COLS = [['name', '字段', 'code'], ['type', '类型', 'code nowrap'], ['null', '可空', 'nowrap'], ['key', '键', 'nowrap'],
+    ['references', '引用', 'code'], ['default', '默认值', 'code'], ['description', '说明']];
+  const INDEX_COLS = [['name', '索引', 'code'], ['columns', '字段', 'code'], ['unique', '唯一', 'nowrap'], ['description', '说明']];
+  const KEYS = ['PK', 'UK', 'FK'];
+  // ER 图：表头高、行高、左右留白、键标记列宽、列名与类型的间距、最小宽度
+  const ER = { header: 32, row: 22, padX: 10, badgeW: 30, gapType: 18, minW: 200 };
+  const ER_TXT = { name: { size: 14, weight: 700, lh: 20 }, col: { size: 13, weight: 400, lh: 22 }, type: { size: 12, weight: 400, lh: 22 }, badge: { size: 11, weight: 700, lh: 22 } };
+  // 连线端点：有且只有一个 ||、零或一个 o|、零或多个 o<
+  const ER_ENDS = { one: '有且只有一个', zeroOne: '零或一个', many: '零或多个' };
+
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const problems = [];
+  const fail = (msg) => problems.push({ level: 'error', msg });
+  const warn = (msg) => problems.push({ level: 'warn', msg });
+
+  const ctx = document.createElement('canvas').getContext('2d');
+  const measure = (s, st, italic) => { ctx.font = `${italic ? 'italic ' : ''}${st.weight} ${st.size}px ${FONT}`; return ctx.measureText(s).width; };
+
+  // 中文按字断行，英文按词断行；行首不放标点
+  const CJK = '\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef\u3000-\u303f';
+  const TOKEN = new RegExp(`[${CJK}]|[^\\s${CJK}]+|\\s+`, 'g');
+  const NO_LINE_START = /^[，。、；：！？）》」』,.;:!?)]$/;
+  function wrap(text, st, maxW) {
+    const lines = [];
+    for (const para of String(text || '').split('\n')) {
+      let line = '';
+      for (const tok of para.match(TOKEN) || []) {
+        if (/^\s+$/.test(tok)) { if (line) line += ' '; continue; }
+        const next = line + tok;
+        if (line.trim() && measure(next.trimEnd(), st) > maxW && !NO_LINE_START.test(tok)) {
+          lines.push(line.trimEnd());
+          line = tok;
+        } else {
+          line = next;
+        }
+      }
+      if (line.trim()) lines.push(line.trimEnd());
+    }
+    return lines;
+  }
+
+  function node(tag, attrs, parent) {
+    const n = document.createElementNS(svgNS, tag);
+    for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+    parent.appendChild(n);
+    return n;
+  }
+  // top 是文字块上沿
+  function textLines(parent, lines, x, top, st, color, anchor = 'middle', italic = false) {
+    const t = node('text', { x, y: top + st.lh / 2 + st.size * 0.35, 'text-anchor': anchor,
+      'font-family': FONT, 'font-size': st.size, 'font-weight': st.weight, fill: color,
+      ...(italic ? { 'font-style': 'italic' } : {}) }, parent);
+    lines.forEach((ln, i) => { node('tspan', { x, dy: i ? st.lh : 0 }, t).textContent = ln; });
+    return t;
+  }
+  // 可见性符号，(cx, cy) 是中心
+  function visIcon(g, vis, cx, cy, filled, ink = INK) {
+    const v = VIS[vis];
+    if (!v) return;
+    const fill = filled ? v.color : 'none', stroke = filled ? v.color : ink, s = 4.5;
+    const a = { fill, stroke, 'stroke-width': 1.2 };
+    if (v.shape === 'circle') node('circle', { cx, cy, r: s, ...a }, g);
+    else if (v.shape === 'square') node('rect', { x: cx - s, y: cy - s, width: 2 * s, height: 2 * s, ...a }, g);
+    else if (v.shape === 'diamond') node('polygon', { points: `${cx},${cy - s - 1} ${cx + s + 1},${cy} ${cx},${cy + s + 1} ${cx - s - 1},${cy}`, ...a }, g);
+    else node('polygon', { points: `${cx},${cy - s} ${cx + s},${cy + s} ${cx - s},${cy + s}`, ...a }, g);
+  }
+  function kindIcon(g, kind, cx, cy, ink = INK) {
+    node('circle', { cx, cy, r: ICON_R, fill: '#fff', stroke: ink, 'stroke-width': 1.2 }, g);
+    textLines(g, [KINDS[kind].letter], cx, cy - TXT.name.lh / 2, { size: 14, weight: 700, lh: TXT.name.lh }, ink);
+  }
+
+  const inter = (a, b, m = 0) => a.x < b.x + b.w + m && b.x < a.x + a.w + m && a.y < b.y + b.h + m && b.y < a.y + a.h + m;
+  function segHitsRect([x0, y0], [x1, y1], r) {
+    let t0 = 0, t1 = 1;
+    const dx = x1 - x0, dy = y1 - y0;
+    for (const [p, q] of [[-dx, x0 - r.x], [dx, r.x + r.w - x0], [-dy, y0 - r.y], [dy, r.y + r.h - y0]]) {
+      if (p === 0) { if (q < 0) return false; continue; }
+      const t = q / p;
+      if (p < 0) { if (t > t1) return false; if (t > t0) t0 = t; }
+      else { if (t < t0) return false; if (t < t1) t1 = t; }
+    }
+    return true;
+  }
+  // 从矩形内部 (ox, oy) 沿 (dx, dy) 射出，返回离开矩形时的 t
+  function exitT(b, ox, oy, dx, dy) {
+    let t = Infinity;
+    if (dx > 0) t = Math.min(t, (b.x + b.w - ox) / dx); else if (dx < 0) t = Math.min(t, (b.x - ox) / dx);
+    if (dy > 0) t = Math.min(t, (b.y + b.h - oy) / dy); else if (dy < 0) t = Math.min(t, (b.y - oy) / dy);
+    return t;
+  }
+
+  // 元素尺寸：宽度按内容，高度 = 标题栏 + 属性栏 + 方法栏
+  function layoutElement(el) {
+    const k = KINDS[el.kind];
+    const nameW = measure(el.name, TXT.name, k.italic);
+    const headerW = 2 * ICON_R + 8 + (VIS[el.visibility] ? 14 : 0) + nameW;
+    const memberW = (list) => Math.max(0, ...list.map(([v, text]) => measure(text, TXT.member) + (VIS[v] ? MEMBER_ICON : 0)));
+    el.stereo = el.stereotype ? `«${el.stereotype}»` : '';
+    let w = Math.max(MIN_W, headerW + 2 * PAD_X, measure(el.stereo, TXT.stereo) + 2 * PAD_X,
+      Math.max(memberW(el.attributes), memberW(el.methods)) + 2 * PAD_X);
+    el.sourceLines = el.source ? wrap(`现状：${el.source}`, TXT.source, Math.max(w - 2 * PAD_X, SOURCE_W)) : [];
+    w = Math.max(w, ...el.sourceLines.map((s) => measure(s, TXT.source) + 2 * PAD_X));
+    el.headerH = el.stereo || el.sourceLines.length
+      ? 2 * HEADER_PAD + (el.stereo ? TXT.stereo.lh : 0) + NAME_H + el.sourceLines.length * TXT.source.lh
+      : HEADER_H;
+    const part = (list) => (list.length ? list.length * TXT.member.lh + 8 : EMPTY_H);
+    const h = el.headerH + part(el.attributes) + part(el.methods);
+    el.box = { x: el.at[0] * COL - w / 2, y: el.at[1] * ROW - h / 2, w, h };
+    el.headerW = headerW;
+  }
+  function drawElement(g, el) {
+    const { box } = el;
+    const k = KINDS[el.kind];
+    const ink = el.external ? EXTERNAL_INK : INK;
+    node('rect', { x: box.x, y: box.y, width: box.w, height: box.h, rx: 3, fill: '#fff', stroke: ink, 'stroke-width': 1.2 }, g);
+    // 标题栏：«构造型»，图标 + 可见性 + 名字，「现状：…」，各自居中
+    const extra = el.stereo || el.sourceLines.length;
+    let top = box.y + (extra ? HEADER_PAD : 0);
+    if (el.stereo) { textLines(g, [el.stereo], box.x + box.w / 2, top, TXT.stereo, ink); top += TXT.stereo.lh; }
+    const nameH = extra ? NAME_H : HEADER_H;
+    let x = box.x + (box.w - el.headerW) / 2;
+    const cy = top + nameH / 2;
+    kindIcon(g, el.kind, x + ICON_R, cy, ink);
+    x += 2 * ICON_R + 8;
+    if (VIS[el.visibility]) { visIcon(g, el.visibility, x + 4, cy, true, ink); x += 14; }
+    textLines(g, [el.name], x, cy - TXT.name.lh / 2, TXT.name, ink, 'start', k.italic);
+    if (el.sourceLines.length) textLines(g, el.sourceLines, box.x + box.w / 2, top + nameH, TXT.source, el.external ? EXTERNAL_INK : SOURCE_INK);
+    // 属性栏、方法栏
+    let y = box.y + el.headerH;
+    for (const list of [el.attributes, el.methods]) {
+      node('line', { x1: box.x, y1: y, x2: box.x + box.w, y2: y, stroke: ink, 'stroke-width': 1 }, g);
+      if (!list.length) { y += EMPTY_H; continue; }
+      y += 4;
+      for (const [v, text] of list) {
+        let mx = box.x + PAD_X;
+        if (VIS[v]) { visIcon(g, v, mx + 5, y + TXT.member.lh / 2, false, ink); mx += MEMBER_ICON; }
+        textLines(g, [text], mx, y, TXT.member, ink, 'start');
+        y += TXT.member.lh;
+      }
+      y += 4;
+    }
+  }
+  // 关系线：dash 虚线；head 目标端（triangle 空心三角 / open 开口箭头）；tail 源端菱形（filled / hollow）
+  function drawRelation(g, start, end, dx, dy, spec) {
+    const nx = -dy, ny = dx;
+    let a = start, b = end;
+    if (spec.tail) {
+      const L = 20, W = 9, tip = start, mid = [start[0] + dx * L / 2, start[1] + dy * L / 2], back = [start[0] + dx * L, start[1] + dy * L];
+      node('polygon', { points: [tip, [mid[0] + nx * W / 2, mid[1] + ny * W / 2], back, [mid[0] - nx * W / 2, mid[1] - ny * W / 2]].map((p) => p.join(',')).join(' '),
+        fill: spec.tail === 'filled' ? INK : '#fff', stroke: INK, 'stroke-width': 1.2 }, g);
+      a = back;
+    }
+    if (spec.head === 'triangle') {
+      const base = [end[0] - dx * ARROW_L, end[1] - dy * ARROW_L];
+      node('polygon', { points: [end, [base[0] + nx * ARROW_W / 2, base[1] + ny * ARROW_W / 2], [base[0] - nx * ARROW_W / 2, base[1] - ny * ARROW_W / 2]].map((p) => p.join(',')).join(' '),
+        fill: '#fff', stroke: INK, 'stroke-width': 1.2 }, g);
+      b = base;
+    }
+    node('line', { x1: a[0], y1: a[1], x2: b[0], y2: b[1], stroke: INK, 'stroke-width': 1.2, ...(spec.dash ? { 'stroke-dasharray': '6 5' } : {}) }, g);
+    if (spec.head === 'open') {
+      const base = [end[0] - dx * ARROW_L, end[1] - dy * ARROW_L];
+      node('polyline', { points: [[base[0] + nx * ARROW_W / 2, base[1] + ny * ARROW_W / 2], end, [base[0] - nx * ARROW_W / 2, base[1] - ny * ARROW_W / 2]].map((p) => p.join(',')).join(' '),
+        fill: 'none', stroke: INK, 'stroke-width': 1.2 }, g);
+    }
+  }
+
+  function render() {
+    const model = JSON.parse(document.getElementById('c4-model').textContent);
+    if (model.title) document.title = model.title;
+    else fail('缺少 title（建议「Code View: 系统名 - 容器名 - 组件名」）');
+    if (!model.component) fail('缺少 component（被展开的 component 的名字，和 Component 图里的一致）');
+
+    // ---- 元素 ----
+    const byId = new Map();
+    const els = [];
+    const memberOk = (list) => Array.isArray(list) && list.every((m) => Array.isArray(m) && m.length === 2 && m[0] in VIS && typeof m[1] === 'string');
+    for (const el of model.elements || []) {
+      const who = el.id || el.name || '(未命名元素)';
+      if (!el.id) { fail(`${who}：缺少 id`); continue; }
+      if (byId.has(el.id)) { fail(`元素 id 重复：${el.id}`); continue; }
+      if (!KINDS[el.kind]) { fail(`${who}：kind 只能是 ${Object.keys(KINDS).join(' / ')}`); continue; }
+      if (!Array.isArray(el.at) || el.at.length !== 2 || !el.at.every(Number.isFinite)) { fail(`${who}：at 必须是 [列, 行] 两个数字`); continue; }
+      if (!el.name) fail(`${who}：缺少 name`);
+      el.attributes = el.attributes || [];
+      el.methods = el.methods || [];
+      if (!memberOk(el.attributes) || !memberOk(el.methods)) { fail(`${who}：attributes / methods 的每一项都要写成 [可见性, 文本]，可见性取 + - # ~ 或空串`); continue; }
+      if (el.visibility !== undefined && !(el.visibility in VIS)) fail(`${who}：visibility 只能是 + - # ~ 或空串`);
+      for (const f of ['stereotype', 'source', 'responsibility']) {
+        if (el[f] !== undefined && typeof el[f] !== 'string') { fail(`${who}：${f} 必须是字符串`); el[f] = undefined; }
+      }
+      byId.set(el.id, el);
+      els.push(el);
+    }
+    const inside = els.filter((e) => !e.external);
+    if (!inside.length) fail('Code 图至少要有一个本 component 里的代码元素');
+    if (els.length > MAX_ELEMENTS) warn(`代码元素有 ${els.length} 个，超过 ${MAX_ELEMENTS} 个：只画讲清楚这件事需要的，或者拆成几张图`);
+    els.forEach(layoutElement);
+    for (let i = 0; i < els.length; i++) {
+      for (let j = i + 1; j < els.length; j++) {
+        if (inter(els[i].box, els[j].box, 30)) fail(`「${els[i].name}」和「${els[j].name}」重叠或太近，调整 at`);
+      }
+    }
+
+    // ---- 关系 ----
+    const rels = (model.relationships || []).filter((r) => {
+      const who = `${r.from} → ${r.to}`;
+      if (!byId.has(r.from) || !byId.has(r.to)) { fail(`关系 ${who}：端点 id 不存在`); return false; }
+      if (r.from === r.to) { fail(`关系 ${who}：不能指向自己`); return false; }
+      r.type = r.type || 'uses';
+      if (!RELS[r.type]) { fail(`关系 ${who}：type 只能是 ${Object.keys(RELS).join(' / ')}`); return false; }
+      if (RELS[r.type].needsText && !r.description) fail(`关系 ${who}：${r.type} 要写 description（说清做什么，如 creates、persists data using）`);
+      const a = byId.get(r.from), b = byId.get(r.to);
+      if (r.type === 'implements' && b.kind !== 'interface') fail(`关系 ${who}：implements 的目标必须是 interface`);
+      if (r.type === 'extends' && (a.kind === 'interface') !== (b.kind === 'interface')) fail(`关系 ${who}：extends 不能跨 class 和 interface，类实现接口用 implements`);
+      return true;
+    });
+    for (const el of els) {
+      if (!rels.some((r) => r.from === el.id || r.to === el.id)) warn(`「${el.name}」没有任何关系：与要讲的事无关就删掉`);
+    }
+    // 同一对元素之间的多条关系：平行错开，标签沿线错开。错开量按同一个参考方向（id 小的一端 → 大的一端）算，
+    // 再换算回每条关系自己的方向 —— 否则两条方向相反的关系，标签会落在同一点
+    const pairs = new Map();
+    for (const r of rels) {
+      const k = [r.from, r.to].sort().join('\u0000');
+      if (!pairs.has(k)) pairs.set(k, []);
+      pairs.get(k).push(r);
+    }
+    for (const list of pairs.values()) {
+      list.forEach((r, i) => {
+        const k = i - (list.length - 1) / 2;
+        const along = 0.5 + k * 0.3;
+        r.offset = k * 20;
+        r.t = Number.isFinite(r.labelAt) ? r.labelAt : r.from < r.to ? along : 1 - along;
+      });
+    }
+    for (const r of rels) {
+      const a = byId.get(r.from), b = byId.get(r.to);
+      const [p, q] = r.from < r.to ? [a, b] : [b, a];
+      const pc = [p.box.x + p.box.w / 2, p.box.y + p.box.h / 2], qc = [q.box.x + q.box.w / 2, q.box.y + q.box.h / 2];
+      let nx = pc[1] - qc[1], ny = qc[0] - pc[0];
+      const nl = Math.hypot(nx, ny) || 1;
+      nx /= nl; ny /= nl;
+      const ac = [a.box.x + a.box.w / 2 + nx * r.offset, a.box.y + a.box.h / 2 + ny * r.offset];
+      const bc = [b.box.x + b.box.w / 2 + nx * r.offset, b.box.y + b.box.h / 2 + ny * r.offset];
+      const len = Math.hypot(bc[0] - ac[0], bc[1] - ac[1]);
+      if (!len) { r.skip = true; continue; }
+      r.dx = (bc[0] - ac[0]) / len; r.dy = (bc[1] - ac[1]) / len;
+      const t0 = exitT(a.box, ac[0], ac[1], r.dx, r.dy) + GAP;
+      const t1 = exitT(b.box, bc[0], bc[1], -r.dx, -r.dy) + GAP;
+      if (t0 + t1 + ARROW_L + 24 >= len) { fail(`关系 ${r.from} → ${r.to} 两端元素太近，连线放不下`); r.skip = true; continue; }
+      r.start = [ac[0] + r.dx * t0, ac[1] + r.dy * t0];
+      r.end = [bc[0] - r.dx * t1, bc[1] - r.dy * t1];
+      r.lines = wrap(r.description, TXT.rel, LABEL_W);
+      if (r.lines.length) {
+        const lw = Math.max(...r.lines.map((s) => measure(s, TXT.rel))) + 8;
+        const lh = r.lines.length * TXT.rel.lh + 4;
+        const mx = r.start[0] + (r.end[0] - r.start[0]) * r.t, my = r.start[1] + (r.end[1] - r.start[1]) * r.t;
+        r.label = { x: mx - lw / 2, y: my - lh / 2, w: lw, h: lh };
+      }
+      if (r.multiplicity) {
+        // 多重性写在目标端附近，偏到线的一侧
+        const px = r.end[0] - r.dx * 26 - r.dy * 14, py = r.end[1] - r.dy * 26 + r.dx * 14;
+        const mw = measure(String(r.multiplicity), TXT.mult) + 6;
+        r.mult = { x: px - mw / 2, y: py - TXT.mult.lh / 2, w: mw, h: TXT.mult.lh };
+      }
+    }
+    const drawn = rels.filter((r) => !r.skip);
+    const labelled = drawn.filter((r) => r.label);
+    const who = (r) => r.description || `${r.from} → ${r.to}`;
+    for (const r of drawn) {
+      for (const el of els) {
+        if (r.from !== el.id && r.to !== el.id && segHitsRect(r.start, r.end, el.box)) warn(`关系「${who(r)}」的连线穿过「${el.name}」`);
+        if (r.label && inter(r.label, el.box, 4)) warn(`关系「${who(r)}」的标签压到「${el.name}」，调整 labelAt 或元素位置`);
+      }
+    }
+    for (let i = 0; i < labelled.length; i++) {
+      for (let j = i + 1; j < labelled.length; j++) {
+        if (inter(labelled[i].label, labelled[j].label, 3)) warn(`关系「${who(labelled[i])}」和「${who(labelled[j])}」的标签重叠`);
+      }
+    }
+
+    // ---- 包框：包住本 component 的元素（外部元素放在框外），左上角标签页写包名（没写 package 就写 component）----
+    let frame = null;
+    if (inside.length) {
+      const x0 = Math.min(...inside.map((e) => e.box.x)), y0 = Math.min(...inside.map((e) => e.box.y));
+      const x1 = Math.max(...inside.map((e) => e.box.x + e.box.w)), y1 = Math.max(...inside.map((e) => e.box.y + e.box.h));
+      const label = model.package || `${model.component || ''} [Component]`;
+      const tabW = measure(label, TXT.frame) + 20, tabH = 26;
+      frame = { x: x0 - 30, y: y0 - 30, w: Math.max(x1 - x0 + 60, tabW + 20), h: y1 - y0 + 60, label, tabW, tabH };
+      const tab = { x: frame.x, y: frame.y - tabH, w: tabW + 10, h: tabH };
+      for (const el of els) {
+        if (el.external && (inter(el.box, frame) || inter(el.box, tab))) fail(`「${el.name}」是外部元素，却落在包框里，调整 at`);
+      }
+    }
+
+    // ---- 绘制 ----
+    const svg = document.getElementById('c4-diagram');
+    const gB = node('g', {}, svg), gR = node('g', {}, svg), gE = node('g', {}, svg), gL = node('g', {}, svg), gT = node('g', {}, svg);
+    if (frame) {
+      const { x, y, w, h, tabW, tabH } = frame;
+      node('path', { d: `M${x} ${y} V${y - tabH + 3} Q${x} ${y - tabH} ${x + 3} ${y - tabH} H${x + tabW} L${x + tabW + 10} ${y}`,
+        fill: '#fff', stroke: INK, 'stroke-width': 1.6 }, gB);
+      node('rect', { x, y, width: w, height: h, rx: 3, fill: 'none', stroke: INK, 'stroke-width': 1.6 }, gB);
+      textLines(gB, [frame.label], x + 10, y - tabH + 2, { ...TXT.frame, lh: tabH - 2 }, INK, 'start');
+    }
+    for (const r of drawn) drawRelation(gR, r.start, r.end, r.dx, r.dy, RELS[r.type]);
+    for (const el of els) drawElement(node('g', {}, gE), el);
+    for (const r of drawn) {
+      if (r.label) {
+        node('rect', { x: r.label.x, y: r.label.y, width: r.label.w, height: r.label.h, fill: '#fff' }, gL);
+        textLines(gL, r.lines, r.label.x + r.label.w / 2, r.label.y + 2, TXT.rel, INK);
+      }
+      if (r.mult) textLines(gL, [String(r.multiplicity)], r.mult.x + r.mult.w / 2, r.mult.y, TXT.mult, INK);
+    }
+    const boxes = [...els.map((e) => e.box), ...labelled.map((r) => r.label),
+      ...(frame ? [frame, { x: frame.x, y: frame.y - frame.tabH, w: frame.tabW + 10, h: frame.tabH }] : [])];
+    if (!boxes.length) boxes.push({ x: 0, y: 0, w: 0, h: 0 });
+    const minX = Math.min(...boxes.map((b) => b.x)), minY = Math.min(...boxes.map((b) => b.y));
+    let maxX = Math.max(...boxes.map((b) => b.x + b.w)), maxY = Math.max(...boxes.map((b) => b.y + b.h));
+    const title = { size: 26, weight: 400, lh: 34 }, sub = { size: 15, weight: 400, lh: 22 };
+    textLines(gT, [model.title || ''], minX, maxY + 40, title, TITLE_INK, 'start');
+    if (model.description) textLines(gT, [model.description], minX, maxY + 40 + title.lh, sub, '#666', 'start');
+    maxX = Math.max(maxX, minX + measure(model.title || '', title), minX + measure(model.description || '', sub));
+    maxY += 40 + title.lh + (model.description ? sub.lh : 0);
+    const vw = maxX - minX + 2 * MARGIN, vh = maxY - minY + 2 * MARGIN;
+    svg.setAttribute('viewBox', `${minX - MARGIN} ${minY - MARGIN} ${vw} ${vh}`);
+    svg.setAttribute('width', vw);
+    svg.setAttribute('aria-label', model.title || 'Code diagram');
+
+    renderOverview(model.overview);
+    renderList('c4-capabilities', '对外能力', model.capabilities, CAP_COLS, ['name', 'entry']);
+    renderList('c4-decisions', '设计决策', model.decisions, DECISION_COLS, ['decision', 'reason']);
+    const described = inside.filter((e) => e.responsibility);
+    if (described.length) {
+      for (const e of inside) if (!e.responsibility) warn(`「${e.name}」没写 responsibility：元素职责表里会缺它`);
+      renderTable('c4-elements', ELEMENT_COLS, described);
+    }
+    renderSchema(model.tables, model.schemaNote);
+    renderKey(els, drawn);
+  }
+
+  // ---- 表：校验、ER 图、表结构（只在写了 tables 时显示）----
+  function renderSchema(tables, note) {
+    if (tables === undefined) return;
+    if (!Array.isArray(tables) || !tables.length) { fail('tables 必须是非空数组'); return; }
+    const byName = new Map();
+    for (const [i, t] of tables.entries()) {
+      const who = (t && t.name) || `第 ${i + 1} 张表`;
+      if (!t || typeof t !== 'object' || !t.name) { fail(`表「${who}」：缺少 name`); continue; }
+      if (byName.has(t.name)) { fail(`表名重复：${t.name}`); continue; }
+      if (!Array.isArray(t.columns) || !t.columns.length) { fail(`表 ${t.name}：columns 必须是非空数组`); continue; }
+      const seen = new Set();
+      if (t.columns.some((c) => !c || !c.name || !c.type)) { fail(`表 ${t.name}：每一列都要有 name 和 type`); continue; }
+      for (const c of t.columns) {
+        if (seen.has(c.name)) fail(`表 ${t.name}：列名重复 ${c.name}`);
+        seen.add(c.name);
+        if (c.key !== undefined && !KEYS.includes(c.key)) fail(`表 ${t.name}.${c.name}：key 只能是 ${KEYS.join(' / ')}`);
+        if (c.nullable !== undefined && typeof c.nullable !== 'boolean') fail(`表 ${t.name}.${c.name}：nullable 必须是 true / false`);
+        if (c.referenceOptional !== undefined && typeof c.referenceOptional !== 'boolean') fail(`表 ${t.name}.${c.name}：referenceOptional 必须是 true / false`);
+        for (const f of ['type', 'default', 'description', 'references']) {
+          if (c[f] !== undefined && typeof c[f] !== 'string') fail(`表 ${t.name}.${c.name}：${f} 必须是字符串`);
+        }
+      }
+      if (t.indexes !== undefined && (!Array.isArray(t.indexes) || t.indexes.some((ix) => !ix || !ix.name || !ix.columns))) {
+        fail(`表 ${t.name}：indexes 的每一项都要有 name 和 columns`);
+        t.indexes = [];
+      }
+      if (t.at !== undefined && !(Array.isArray(t.at) && t.at.length === 2 && t.at.every(Number.isFinite))) {
+        fail(`表 ${t.name}：at 必须是 [列, 行] 两个数字`);
+        t.at = undefined;
+      }
+      byName.set(t.name, t);
+    }
+    const ok = [...byName.values()];
+    // 引用关系：references 写成「表.列」，被引用的列应是 PK 或 UK
+    const links = [];
+    for (const t of ok) {
+      for (const c of t.columns) {
+        if (!c.references) continue;
+        const [rt, rc] = c.references.split('.');
+        const target = byName.get(rt);
+        const col = target && target.columns.find((x) => x.name === rc);
+        if (!col) { fail(`表 ${t.name}.${c.name}：references「${c.references}」指向不存在的表或列`); continue; }
+        if (!['PK', 'UK'].includes(col.key)) warn(`表 ${t.name}.${c.name}：引用的 ${c.references} 不是 PK 或 UK`);
+        if (target === t) { warn(`表 ${t.name}.${c.name}：自引用不画在 ER 图里`); continue; }
+        links.push({ child: t, column: c, parent: target });
+      }
+    }
+    drawER(ok, links);
+
+    const section = document.getElementById('c4-tables');
+    if (note !== undefined) {
+      if (typeof note !== 'string') fail('schemaNote 必须是字符串');
+      else section.appendChild(document.createElement('p')).textContent = note;
+    }
+    for (const t of ok) {
+      section.appendChild(document.createElement('h3')).textContent = t.name;
+      if (t.description) section.appendChild(document.createElement('p')).textContent = t.description;
+      const rows = t.columns.map((c) => ({ ...c, null: c.nullable ? '是' : '否' }));
+      buildTable(section, COLUMN_COLS.filter(([k]) => ['name', 'type', 'null'].includes(k) || rows.some((r) => r[k])), rows);
+      if (t.indexes && t.indexes.length) {
+        section.appendChild(document.createElement('h4')).textContent = '索引';
+        const ix = t.indexes.map((i) => ({ ...i, columns: [].concat(i.columns).join(', '), unique: i.unique ? '是' : '否' }));
+        buildTable(section, INDEX_COLS.filter(([k]) => k !== 'description' || ix.some((r) => r.description)), ix);
+      }
+    }
+    section.hidden = false;
+  }
+  function buildTable(parent, cols, rows) {
+    const table = parent.appendChild(document.createElement('table'));
+    const head = table.appendChild(document.createElement('thead')).appendChild(document.createElement('tr'));
+    for (const [, label] of cols) head.appendChild(document.createElement('th')).textContent = label;
+    const body = table.appendChild(document.createElement('tbody'));
+    for (const row of rows) {
+      const tr = body.appendChild(document.createElement('tr'));
+      for (const [k, , cls] of cols) {
+        const td = tr.appendChild(document.createElement('td'));
+        if (cls) td.className = cls;
+        td.textContent = row[k] || '';
+      }
+    }
+  }
+  // 连线一端的标记。p 在表框边上，(dx, dy) 是从线指向这张表的单位向量
+  function erEnd(g, p, dx, dy, kind) {
+    const nx = -dy, ny = dx;
+    const back = (d) => [p[0] - dx * d, p[1] - dy * d];
+    const seg = (a, b) => node('line', { x1: a[0], y1: a[1], x2: b[0], y2: b[1], stroke: INK, 'stroke-width': 1.2 }, g);
+    const bar = (d) => { const c = back(d); seg([c[0] + nx * 7, c[1] + ny * 7], [c[0] - nx * 7, c[1] - ny * 7]); };
+    const ring = (d) => { const c = back(d); node('circle', { cx: c[0], cy: c[1], r: 5, fill: '#fff', stroke: INK, 'stroke-width': 1.2 }, g); };
+    if (kind === 'one') { bar(8); bar(14); return; }
+    if (kind === 'zeroOne') { bar(8); ring(20); return; }
+    const c = back(16);
+    seg(c, [p[0] + nx * 8, p[1] + ny * 8]);
+    seg(c, [p[0] - nx * 8, p[1] - ny * 8]);
+    seg(c, p);
+    ring(24);
+  }
+  function drawER(tables, links) {
+    const svg = document.getElementById('c4-er-diagram');
+    tables.forEach((t, i) => {
+      const at = t.at || [i * 1.2, 0];
+      const rowW = Math.max(...t.columns.map((c) => ER.badgeW + measure(c.name, ER_TXT.col) + ER.gapType + measure(c.type, ER_TXT.type)));
+      const w = Math.max(ER.minW, measure(t.name, ER_TXT.name) + 2 * ER.padX, rowW + 2 * ER.padX);
+      const h = ER.header + t.columns.length * ER.row + 8;
+      t.box = { x: at[0] * COL - w / 2, y: at[1] * ROW - h / 2, w, h };
+    });
+    for (let i = 0; i < tables.length; i++) {
+      for (let j = i + 1; j < tables.length; j++) {
+        if (inter(tables[i].box, tables[j].box, 60)) fail(`表 ${tables[i].name} 和 ${tables[j].name} 在 ER 图里重叠或太近，调整 at`);
+      }
+    }
+    const gR = node('g', {}, svg), gT = node('g', {}, svg), gL = node('g', {}, svg);
+    const boxes = tables.map((t) => t.box);
+    for (const l of links) {
+      const a = l.child.box, b = l.parent.box;
+      const ac = [a.x + a.w / 2, a.y + a.h / 2], bc = [b.x + b.w / 2, b.y + b.h / 2];
+      const len = Math.hypot(bc[0] - ac[0], bc[1] - ac[1]);
+      const dx = (bc[0] - ac[0]) / len, dy = (bc[1] - ac[1]) / len;
+      const s = [ac[0] + dx * exitT(a, ac[0], ac[1], dx, dy), ac[1] + dy * exitT(a, ac[0], ac[1], dx, dy)];
+      const e = [bc[0] - dx * exitT(b, bc[0], bc[1], -dx, -dy), bc[1] - dy * exitT(b, bc[0], bc[1], -dx, -dy)];
+      node('line', { x1: s[0], y1: s[1], x2: e[0], y2: e[1], stroke: INK, 'stroke-width': 1.2 }, gR);
+      erEnd(gR, s, -dx, -dy, l.column.key === 'UK' ? 'zeroOne' : 'many');   // 引用方：列唯一时至多一个
+      // 被引用方：列可空，或被引用的行可能已经不在（referenceOptional，如日志指向已删除的实例）时，可以没有
+      erEnd(gR, e, dx, dy, l.column.nullable || l.column.referenceOptional ? 'zeroOne' : 'one');
+      const lw = measure(l.column.name, TXT.rel) + 8, lh = TXT.rel.lh + 4;
+      const label = { x: (s[0] + e[0]) / 2 - lw / 2, y: (s[1] + e[1]) / 2 - lh / 2, w: lw, h: lh };
+      node('rect', { x: label.x, y: label.y, width: lw, height: lh, fill: '#fff' }, gL);
+      textLines(gL, [l.column.name], label.x + lw / 2, label.y + 2, TXT.rel, INK);
+      boxes.push(label);
+      for (const t of tables) {
+        if (t !== l.child && t !== l.parent && segHitsRect(s, e, t.box)) warn(`ER 图：${l.child.name}.${l.column.name} 的连线穿过表 ${t.name}`);
+      }
+    }
+    for (const t of tables) {
+      const { x, y, w, h } = t.box;
+      const g = node('g', {}, gT);
+      node('rect', { x, y, width: w, height: h, rx: 3, fill: '#fff', stroke: INK, 'stroke-width': 1.2 }, g);
+      node('rect', { x, y, width: w, height: ER.header, rx: 3, fill: '#f4f4f4', stroke: INK, 'stroke-width': 1.2 }, g);
+      textLines(g, [t.name], x + w / 2, y + (ER.header - ER_TXT.name.lh) / 2, ER_TXT.name, INK);
+      t.columns.forEach((c, i) => {
+        const top = y + ER.header + 4 + i * ER.row;
+        if (c.key) textLines(g, [c.key], x + ER.padX, top, ER_TXT.badge, INK, 'start');
+        textLines(g, [c.name], x + ER.padX + ER.badgeW, top, ER_TXT.col, INK, 'start', !!c.nullable);
+        textLines(g, [c.type], x + w - ER.padX, top, ER_TXT.type, SOURCE_INK, 'end');
+      });
+    }
+    // 图例：三种端点，加键标记和斜体的含义
+    const minX = Math.min(...boxes.map((b) => b.x)), minY = Math.min(...boxes.map((b) => b.y));
+    let maxX = Math.max(...boxes.map((b) => b.x + b.w));
+    const keyY = Math.max(...boxes.map((b) => b.y + b.h)) + 40;
+    let kx = minX;
+    for (const [kind, text] of Object.entries(ER_ENDS)) {
+      node('line', { x1: kx, y1: keyY, x2: kx + 60, y2: keyY, stroke: INK, 'stroke-width': 1.2 }, gL);
+      erEnd(gL, [kx + 60, keyY], 1, 0, kind);
+      textLines(gL, [text], kx + 70, keyY - TXT.key.lh / 2, TXT.key, INK, 'start');
+      kx += 70 + measure(text, TXT.key) + 40;
+    }
+    const keys = 'PK 主键 · UK 唯一键 · FK 引用别的表 · 斜体列可为空';
+    textLines(gL, [keys], kx, keyY - TXT.key.lh / 2, TXT.key, INK, 'start');
+    maxX = Math.max(maxX, kx + measure(keys, TXT.key));
+    const maxY = keyY + TXT.key.lh;
+    const vw = maxX - minX + 2 * 30, vh = maxY - minY + 2 * 30;
+    svg.setAttribute('viewBox', `${minX - 30} ${minY - 30} ${vw} ${vh}`);
+    svg.setAttribute('width', vw);
+    svg.setAttribute('aria-label', 'ER diagram');
+    document.getElementById('c4-er').hidden = false;
+  }
+
+  // ---- 图下方的文字：概述（空行分段）和几张表 ----
+  function renderOverview(text) {
+    if (text === undefined) return;
+    if (typeof text !== 'string') { fail('overview 必须是字符串'); return; }
+    const section = document.getElementById('c4-overview');
+    for (const para of text.split(/\n\s*\n/)) if (para.trim()) section.appendChild(document.createElement('p')).textContent = para.trim();
+    section.hidden = false;
+  }
+  function renderList(id, label, list, cols, required) {
+    if (list === undefined) return;
+    if (!Array.isArray(list)) { fail(`${label}必须是数组`); return; }
+    const rows = list.filter((c, i) => {
+      const who = (c && c[cols[0][0]]) || `第 ${i + 1} 项`;
+      if (!c || typeof c !== 'object') { fail(`${label}${who}：要写成对象`); return false; }
+      if (required.some((k) => !c[k])) fail(`${label}「${who}」：${required.join(' 和 ')} 必填`);
+      for (const [k] of cols) if (c[k] !== undefined && typeof c[k] !== 'string') fail(`${label}「${who}」：${k} 必须是字符串`);
+      return true;
+    });
+    renderTable(id, cols.filter(([k]) => required.includes(k) || rows.some((c) => c[k])), rows);
+  }
+  function renderTable(id, cols, rows) {
+    if (!rows.length) return;
+    const section = document.getElementById(id);
+    const head = section.querySelector('thead').appendChild(document.createElement('tr'));
+    for (const [, label] of cols) head.appendChild(document.createElement('th')).textContent = label;
+    const body = section.querySelector('tbody');
+    for (const row of rows) {
+      const tr = body.appendChild(document.createElement('tr'));
+      for (const [k, , cls] of cols) {
+        const td = tr.appendChild(document.createElement('td'));
+        if (cls) td.className = cls;
+        td.textContent = row[k] || '';
+      }
+    }
+    section.hidden = false;
+  }
+
+  // ---- 图例：用到的元素类型、可见性符号、关系线型，各占一行 ----
+  function renderKey(els, rels) {
+    const svg = document.getElementById('c4-key');
+    const kinds = Object.keys(KINDS).filter((k) => els.some((e) => e.kind === k));
+    const used = new Set();
+    for (const e of els) { used.add(e.visibility || ''); for (const [v] of [...e.attributes, ...e.methods]) used.add(v); }
+    const vis = Object.keys(VIS).filter((v) => v && used.has(v));
+    const types = Object.keys(RELS).filter((t) => rels.some((r) => r.type === t));
+    const external = els.some((e) => e.external);
+    const CELL_W = 250, ROW_H = 46;
+    let y = 0, maxW = 0;
+    const row = (items, draw) => {
+      if (!items.length) return;
+      items.forEach((it, i) => draw(node('g', {}, svg), it, i * CELL_W, y));
+      maxW = Math.max(maxW, items.length * CELL_W);
+      y += ROW_H;
+    };
+    row(kinds, (g, k, x, y0) => {
+      kindIcon(g, k, x + ICON_R + 2, y0 + 16);
+      textLines(g, [KINDS[k].key], x + 2 * ICON_R + 12, y0 + 16 - TXT.key.lh / 2, TXT.key, INK, 'start', KINDS[k].italic);
+    });
+    row(external ? ['external'] : [], (g, _, x, y0) => {
+      node('rect', { x, y: y0 + 4, width: 2 * ICON_R + 4, height: 24, rx: 3, fill: '#fff', stroke: EXTERNAL_INK, 'stroke-width': 1.2 }, g);
+      textLines(g, ['External（不在本 component 里）'], x + 2 * ICON_R + 12, y0 + 16 - TXT.key.lh / 2, TXT.key, EXTERNAL_INK, 'start');
+    });
+    const notes = [els.some((e) => e.stereo) && 'stereo', els.some((e) => e.sourceLines.length) && 'source'].filter(Boolean);
+    row(notes, (g, n, x, y0) => {
+      const [sample, text, color] = n === 'stereo' ? ['«…»', '构造型：领域模型里的角色', INK] : ['现状：…', '当前承担它的代码', SOURCE_INK];
+      textLines(g, [sample], x, y0 + 16 - TXT.key.lh / 2, TXT.key, color, 'start');
+      textLines(g, [text], x + measure(sample, TXT.key) + 10, y0 + 16 - TXT.key.lh / 2, TXT.key, INK, 'start');
+    });
+    row(vis, (g, v, x, y0) => {
+      visIcon(g, v, x + 8, y0 + 16, true);
+      visIcon(g, v, x + 24, y0 + 16, false);
+      textLines(g, [`${v} ${VIS[v].key}（类型 / 成员）`], x + 38, y0 + 16 - TXT.key.lh / 2, TXT.key, INK, 'start');
+    });
+    row(types, (g, t, x, y0) => {
+      drawRelation(g, [x, y0 + 16], [x + 70, y0 + 16], 1, 0, RELS[t]);
+      textLines(g, [RELS[t].key], x + 82, y0 + 16 - TXT.key.lh / 2, TXT.key, INK, 'start');
+    });
+    svg.setAttribute('viewBox', `-10 -10 ${maxW + 20} ${y + 10}`);
+    svg.setAttribute('width', maxW + 20);
+    svg.setAttribute('aria-label', 'Diagram key');
+  }
+
+  try {
+    render();
+  } catch (e) {
+    fail(`渲染异常：${e && e.message}`);
+    console.error(e);
+  }
+  const status = problems.some((p) => p.level === 'error') ? 'error' : problems.length ? 'warn' : 'ok';
+  document.documentElement.dataset.c4Status = status;
+  const report = document.getElementById('c4-report');
+  for (const p of problems) {
+    const li = document.createElement('li');
+    li.dataset.level = p.level;
+    li.textContent = p.msg;
+    report.appendChild(li);
+  }
+  report.hidden = !problems.length;
+  if (problems.length) console.warn('[c4]', problems);
+})();
+</script>
+</body>
+</html>

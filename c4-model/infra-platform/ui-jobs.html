@@ -1,0 +1,552 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>原型：定时任务管理</title>
+<style>
+  /* 设计变量与 packages/chat-ui/src/theme/tokens.css 保持一致 */
+  :root {
+    --bg-app: #0b1220; --bg: #0f172a; --bg-1: #111b31; --bg-2: #16223c; --bg-3: #1e293b; --bg-code: #0c1526;
+    --line: #22304d; --line-2: #3a4c72;
+    --fg: #f8fafc; --fg-2: #94a3b8; --fg-3: #64748b;
+    --primary: #4f46e5; --primary-hover: #6366f1; --primary-text: #818cf8; --primary-soft: rgba(99,102,241,.14); --primary-soft-2: rgba(99,102,241,.24);
+    --success: #22c55e; --success-soft: rgba(34,197,94,.14); --warning: #f59e0b; --warning-soft: rgba(245,158,11,.14);
+    --danger: #ef4444; --danger-soft: rgba(239,68,68,.14); --info: #38bdf8; --info-soft: rgba(56,189,248,.14);
+    --r-sm: 6px; --r-md: 8px; --r-lg: 12px; --r-full: 999px; --h-md: 28px; --h-lg: 32px; --rail-w: 64px;
+    --s-2: 4px; --s-3: 8px; --s-4: 12px; --s-5: 16px; --s-6: 24px; --s-7: 32px;
+    --ease: cubic-bezier(0.16, 1, 0.3, 1); --t-mid: 180ms;
+    --shadow-lg: 0 12px 32px rgba(0,0,0,.45);
+    --font: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    --mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #070c17; color: var(--fg); font: 13px/1.6 var(--font); }
+  button, input, select, textarea { font: inherit; color: inherit; }
+
+  /* 原型外壳：场景切换条 + 应用框 + 设计说明 */
+  .proto-bar { display: flex; align-items: center; gap: var(--s-3); padding: 10px 20px; background: #050913; border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 50; }
+  .proto-bar b { margin-right: var(--s-4); }
+  .proto-bar .hint { margin-left: auto; color: var(--fg-3); font-size: 12px; }
+  .app { display: flex; height: 900px; margin: 16px 20px; border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden; position: relative; background: var(--bg); }
+
+  /* Rail */
+  .rail { width: var(--rail-w); background: var(--bg-app); border-right: 1px solid var(--line); display: flex; flex-direction: column; align-items: center; padding: 12px 0; gap: 6px; }
+  .rail .logo { width: 32px; height: 32px; border-radius: var(--r-md); background: var(--primary); display: grid; place-items: center; font-weight: 700; margin-bottom: 10px; }
+  .rail a { width: 44px; padding: 6px 0; border-radius: var(--r-md); color: var(--fg-2); text-align: center; font-size: 11px; text-decoration: none; }
+  .rail a .ico { display: block; font-size: 16px; line-height: 20px; }
+  .rail a.on { background: var(--primary-soft); color: var(--primary-text); }
+
+  /* 内容区 */
+  .main { flex: 1; min-width: 0; overflow: auto; padding: 24px 28px; }
+  .page-head { display: flex; align-items: flex-start; gap: var(--s-5); }
+  .page-head h1 { margin: 0; font-size: 18px; font-weight: 600; }
+  .page-head p { margin: 4px 0 0; color: var(--fg-2); max-width: 760px; }
+  .page-head .actions { margin-left: auto; display: flex; gap: var(--s-3); }
+  .host { display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; height: var(--h-md); border: 1px solid var(--line); border-radius: var(--r-md); color: var(--fg-2); }
+
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--s-4); margin: var(--s-6) 0 var(--s-5); }
+  .stat { background: var(--bg-1); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 12px 16px; cursor: pointer; }
+  .stat:hover { border-color: var(--line-2); }
+  .stat .k { color: var(--fg-2); font-size: 12px; }
+  .stat .v { font-size: 22px; font-weight: 600; margin-top: 2px; }
+  .stat .v small { font-size: 12px; font-weight: 400; color: var(--fg-2); margin-left: 6px; }
+  .stat.danger .v { color: var(--danger); }
+  .stat.run .v { color: var(--info); }
+
+  .toolbar { display: flex; align-items: center; gap: var(--s-3); margin-bottom: var(--s-4); }
+  .seg { display: inline-flex; background: var(--bg-1); border: 1px solid var(--line); border-radius: var(--r-md); padding: 2px; }
+  .seg button { border: 0; background: none; padding: 0 12px; height: 24px; border-radius: var(--r-sm); color: var(--fg-2); cursor: pointer; }
+  .seg button.on { background: var(--bg-3); color: var(--fg); }
+  .input, .select { height: var(--h-md); padding: 0 10px; background: var(--bg-1); border: 1px solid var(--line); border-radius: var(--r-md); outline: none; }
+  .input:focus, .select:focus, textarea:focus { border-color: var(--primary-hover); }
+  .input.search { width: 220px; }
+  .toolbar .right { margin-left: auto; display: flex; gap: var(--s-3); align-items: center; color: var(--fg-2); }
+
+  .btn { height: var(--h-md); padding: 0 12px; border-radius: var(--r-md); border: 1px solid var(--line-2); background: var(--bg-2); cursor: pointer; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .btn:hover { border-color: var(--primary-hover); }
+  .btn.primary { background: var(--primary); border-color: var(--primary); }
+  .btn.primary:hover { background: var(--primary-hover); }
+  .btn.danger { color: var(--danger); }
+  .btn.text { border-color: transparent; background: none; color: var(--primary-text); padding: 0 6px; }
+  .btn.text:hover { background: var(--primary-soft); }
+  .btn[disabled] { opacity: .45; cursor: not-allowed; }
+  .btn.sm { height: 24px; padding: 0 8px; font-size: 12px; }
+
+  table { width: 100%; border-collapse: collapse; }
+  .table { background: var(--bg-1); border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden; }
+  .table th { text-align: left; font-weight: 500; color: var(--fg-2); font-size: 12px; padding: 9px 12px; background: var(--bg-2); border-bottom: 1px solid var(--line); white-space: nowrap; }
+  .table td { padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .table tbody tr:last-child td { border-bottom: 0; }
+  .table tbody tr.row { cursor: pointer; }
+  .table tbody tr.row:hover td { background: var(--bg-2); }
+  .name { font-weight: 500; }
+  .sub { color: var(--fg-2); font-size: 12px; }
+  .mono { font-family: var(--mono); font-size: 12px; }
+  .tag { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 7px; border-radius: var(--r-sm); font-size: 12px; background: var(--bg-3); color: var(--fg-2); white-space: nowrap; }
+  .tag.success { background: var(--success-soft); color: var(--success); }
+  .tag.warning { background: var(--warning-soft); color: var(--warning); }
+  .tag.danger { background: var(--danger-soft); color: var(--danger); }
+  .tag.info { background: var(--info-soft); color: var(--info); }
+  .tag.primary { background: var(--primary-soft); color: var(--primary-text); }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; display: inline-block; }
+  .pulse { animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .35; } }
+  .progress { height: 4px; background: var(--bg-3); border-radius: 2px; margin-top: 6px; width: 120px; overflow: hidden; }
+  .progress i { display: block; height: 100%; background: var(--info); }
+  .ops { display: flex; gap: 2px; white-space: nowrap; }
+  .lock { color: var(--fg-3); }
+
+  /* 抽屉、弹窗 */
+  .mask { position: absolute; inset: 0; background: rgba(2,6,16,.55); opacity: 0; pointer-events: none; transition: opacity var(--t-mid) var(--ease); z-index: 10; }
+  .mask.show { opacity: 1; pointer-events: auto; }
+  .drawer { position: absolute; top: 0; right: 0; bottom: 0; width: 620px; background: var(--bg-1); border-left: 1px solid var(--line); box-shadow: var(--shadow-lg); transform: translateX(100%); transition: transform var(--t-mid) var(--ease); z-index: 11; display: flex; flex-direction: column; }
+  .drawer.show { transform: none; }
+  .drawer header { padding: 16px 20px; border-bottom: 1px solid var(--line); display: flex; align-items: flex-start; gap: var(--s-3); }
+  .drawer header h2 { margin: 0; font-size: 16px; font-weight: 600; }
+  .drawer header .x { margin-left: auto; }
+  .drawer .body { flex: 1; overflow: auto; padding: 16px 20px 24px; }
+  .drawer footer { padding: 12px 20px; border-top: 1px solid var(--line); display: flex; gap: var(--s-3); justify-content: flex-end; }
+  .sec { margin-top: 20px; }
+  .sec h3 { margin: 0 0 8px; font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .sec h3 .muted { font-weight: 400; color: var(--fg-2); font-size: 12px; }
+  .kv { display: grid; grid-template-columns: 110px 1fr; gap: 6px 12px; }
+  .kv .k { color: var(--fg-2); }
+  pre.json { margin: 0; padding: 10px 12px; background: var(--bg-code); border: 1px solid var(--line); border-radius: var(--r-md); font-family: var(--mono); font-size: 12px; color: #cbd5e1; white-space: pre-wrap; }
+  .alert { padding: 8px 12px; border-radius: var(--r-md); font-size: 12.5px; display: flex; gap: 8px; }
+  .alert.warning { background: var(--warning-soft); color: #fcd34d; }
+  .alert.info { background: var(--info-soft); color: #bae6fd; }
+  .alert.danger { background: var(--danger-soft); color: #fecaca; }
+  .tabs { display: flex; gap: 18px; border-bottom: 1px solid var(--line); margin-top: 16px; }
+  .tabs button { border: 0; background: none; padding: 8px 0; color: var(--fg-2); cursor: pointer; border-bottom: 2px solid transparent; }
+  .tabs button.on { color: var(--fg); border-color: var(--primary-hover); }
+  .mini th { background: transparent; padding: 6px 8px; }
+  .mini td { padding: 7px 8px; font-size: 12.5px; }
+  .err { color: #fca5a5; font-family: var(--mono); font-size: 12px; }
+
+  .form .item { margin-bottom: 16px; }
+  .form label.l { display: block; margin-bottom: 6px; color: var(--fg-2); }
+  .form label.l em { color: var(--danger); font-style: normal; margin-left: 2px; }
+  .form .input, .form .select { width: 100%; height: var(--h-lg); }
+  .form textarea { width: 100%; min-height: 110px; padding: 8px 10px; background: var(--bg-code); border: 1px solid var(--line); border-radius: var(--r-md); font-family: var(--mono); font-size: 12px; outline: none; }
+  .form .help { color: var(--fg-3); font-size: 12px; margin-top: 4px; }
+  .form .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .radio-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .radio-card { border: 1px solid var(--line); border-radius: var(--r-md); padding: 8px 10px; cursor: pointer; background: var(--bg-2); }
+  .radio-card.on { border-color: var(--primary-hover); background: var(--primary-soft); }
+  .radio-card.off { opacity: .45; cursor: not-allowed; }
+  .radio-card b { display: block; font-weight: 500; }
+  .radio-card span { color: var(--fg-2); font-size: 12px; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+  .chip { height: 22px; padding: 0 8px; border-radius: var(--r-full); border: 1px solid var(--line); background: none; color: var(--fg-2); font-size: 12px; cursor: pointer; }
+  .chip:hover { color: var(--fg); border-color: var(--line-2); }
+  .preview { background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--r-md); padding: 8px 12px; margin-top: 8px; font-size: 12.5px; }
+  .preview ol { margin: 4px 0 0; padding-left: 18px; color: var(--fg-2); }
+  .switch { width: 32px; height: 18px; border-radius: 9px; background: var(--bg-3); position: relative; display: inline-block; vertical-align: middle; cursor: pointer; }
+  .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #cbd5e1; transition: left var(--t-mid) var(--ease); }
+  .switch.on { background: var(--primary); }
+  .switch.on::after { left: 16px; background: #fff; }
+
+  .modal { position: absolute; left: 50%; top: 140px; width: 520px; transform: translate(-50%, -12px); background: var(--bg-1); border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: var(--shadow-lg); opacity: 0; pointer-events: none; transition: all var(--t-mid) var(--ease); z-index: 12; }
+  .modal.show { opacity: 1; pointer-events: auto; transform: translate(-50%, 0); }
+  .modal header { padding: 14px 18px; border-bottom: 1px solid var(--line); font-weight: 600; }
+  .modal .body { padding: 16px 18px; }
+  .modal footer { padding: 10px 18px; border-top: 1px solid var(--line); display: flex; justify-content: flex-end; gap: 8px; }
+  .toast { position: absolute; top: 18px; left: 50%; transform: translateX(-50%); background: var(--bg-3); border: 1px solid var(--line-2); padding: 8px 14px; border-radius: var(--r-md); box-shadow: var(--shadow-lg); opacity: 0; transition: opacity var(--t-mid); z-index: 20; }
+  .toast.show { opacity: 1; }
+
+  /* 设计说明 */
+  .notes { margin: 8px 20px 60px; max-width: 1240px; color: #cbd5e1; }
+  .notes h2 { font-size: 16px; margin: 28px 0 8px; color: var(--fg); }
+  .notes table { margin-top: 8px; border: 1px solid var(--line); }
+  .notes th, .notes td { border: 1px solid var(--line); padding: 7px 10px; text-align: left; vertical-align: top; font-size: 13px; }
+  .notes th { background: var(--bg-2); color: var(--fg-2); font-weight: 500; }
+  .notes td:first-child { white-space: nowrap; }
+  .notes p { margin: 6px 0; }
+</style>
+</head>
+<body>
+
+<div class="proto-bar">
+  <b>原型：定时任务管理</b>
+  <span class="sub">打开场景：</span>
+  <button class="btn sm" onclick="openDetail('reindex')">分片任务详情</button>
+  <button class="btn sm" onclick="openDetail('idle')">失败任务详情</button>
+  <button class="btn sm" onclick="openDetail('recover')">系统机制</button>
+  <button class="btn sm" onclick="openForm()">新建任务</button>
+  <button class="btn sm" onclick="openTrigger('prune_events')">立即触发</button>
+  <button class="btn sm" onclick="toggleViewer()">切换为只读用户</button>
+  <span class="hint">静态原型，数据是假的；页面所在：Atlas 控制台 › 平台管理 › 定时任务</span>
+</div>
+
+<div class="app" id="app">
+  <nav class="rail">
+    <div class="logo">A</div>
+    <a href="#"><span class="ico">💬</span>对话</a>
+    <a href="#"><span class="ico">🤖</span>智能体</a>
+    <a href="#"><span class="ico">📚</span>知识库</a>
+    <a href="#"><span class="ico">🧩</span>技能</a>
+    <a href="#"><span class="ico">🔌</span>MCP</a>
+    <a href="#" class="on"><span class="ico">⏱</span>定时任务</a>
+    <a href="#"><span class="ico">⚙</span>设置</a>
+  </nav>
+
+  <main class="main">
+    <div class="page-head">
+      <div>
+        <h1>定时任务</h1>
+        <p>到点自动执行的后台任务。任务可以在这里新建、修改、暂停和立即触发；名称前带 🔒 的是系统机制，系统运行必需，只能查看。所有时间按任务自己的时区计算，列表里按你的本地时间显示。</p>
+      </div>
+      <div class="actions">
+        <button class="btn primary" id="btnNew" onclick="openForm()">＋ 新建任务</button>
+      </div>
+    </div>
+
+    <div style="height:24px"></div>
+    <div class="toolbar">
+      <div class="seg" id="filterSeg">
+        <button data-f="all" class="on">全部</button>
+        <button data-f="running">运行中</button>
+        <button data-f="paused">已暂停</button>
+        <button data-f="code">系统机制</button>
+      </div>
+      <input class="input search" placeholder="搜索名称或类型" oninput="render(this.value)">
+      <select class="select"><option>全部类型</option><option>agent.prune_run_events</option><option>knowledge.reindex</option></select>
+      <div class="right"><span class="sub">每 5 秒自动刷新</span><button class="btn sm" onclick="toast('已刷新')">刷新</button></div>
+    </div>
+
+    <div class="table">
+      <table>
+        <thead><tr>
+          <th style="width:32%">名称</th><th style="width:22%">触发规则</th><th style="width:12%">运行份数</th>
+          <th style="width:16%">状态</th><th>操作</th>
+        </tr></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </main>
+
+  <div class="mask" id="mask" onclick="closeAll()"></div>
+
+  <!-- 详情抽屉 -->
+  <aside class="drawer" id="detail">
+    <header>
+      <div>
+        <h2 id="dName"></h2>
+        <div class="sub" id="dMeta" style="margin-top:4px"></div>
+      </div>
+      <div class="x"><button class="btn text" onclick="closeAll()">✕</button></div>
+    </header>
+    <div class="body" id="dBody"></div>
+    <footer id="dFoot"></footer>
+  </aside>
+
+  <!-- 新建 / 编辑抽屉 -->
+  <aside class="drawer" id="form" style="width:640px">
+    <header>
+      <div><h2 id="fTitle">新建任务</h2><div class="sub" style="margin-top:4px">保存后从下一次触发开始生效；正在跑的这一轮不受影响</div></div>
+      <div class="x"><button class="btn text" onclick="closeAll()">✕</button></div>
+    </header>
+    <div class="body form">
+      <div class="item"><label class="l">名称<em>*</em></label><input class="input" value="每天清理 30 天前的事件归档"><div class="help">给人看的名字，全局唯一</div></div>
+      <div class="item">
+        <label class="l">任务类型<em>*</em></label>
+        <select class="select" id="fType" onchange="onType()">
+          <option value="agent.prune_run_events">agent.prune_run_events · 清理过期的事件归档</option>
+          <option value="knowledge.reindex">knowledge.reindex · 重建知识库索引（支持分片）</option>
+          <option value="agent.alert_stuck_runs">agent.alert_stuck_runs · run 长时间无进展告警</option>
+        </select>
+        <div class="help">只能选系统里已有的任务类型；下面的参数表单按类型自动生成</div>
+      </div>
+
+      <div class="item">
+        <label class="l">触发方式<em>*</em></label>
+        <div class="seg" id="trigSeg"><button class="on" data-t="cron">cron</button><button data-t="interval">固定间隔</button><button data-t="once">一次性</button></div>
+        <div id="trig-cron" style="margin-top:10px">
+          <div class="row2">
+            <input class="input mono" value="0 3 * * *">
+            <select class="select"><option>Asia/Shanghai（UTC+8）</option><option>UTC</option></select>
+          </div>
+          <div class="chips"><button class="chip">每小时</button><button class="chip">每天 03:00</button><button class="chip">工作日 09:00</button><button class="chip">每周一 08:00</button></div>
+          <div class="preview">每天 03:00（Asia/Shanghai），接下来 5 次：
+            <ol><li>2026-11-07 03:00</li><li>2026-11-08 03:00</li><li>2026-11-09 03:00</li><li>2026-11-10 03:00</li><li>2026-11-11 03:00</li></ol>
+          </div>
+        </div>
+        <div id="trig-interval" style="margin-top:10px;display:none">
+          <div class="row2"><input class="input" value="10"><select class="select"><option>分钟</option><option>秒</option><option>小时</option></select></div>
+          <div class="help">从上一次计划触发时刻往后算；这一轮跑得比间隔还久，错过的不补，跑完马上接下一轮</div>
+        </div>
+        <div id="trig-once" style="margin-top:10px;display:none">
+          <input class="input" value="2026-11-07 02:00"><div class="help">跑完后不再触发，定义保留，可以再「立即触发」</div>
+        </div>
+      </div>
+
+      <div class="item">
+        <label class="l">运行份数</label>
+        <div class="radio-cards" id="shardCards">
+          <div class="radio-card on" data-s="1"><b>1 份</b><span>全集群同一时刻只跑一份</span></div>
+          <div class="radio-card off" data-s="n" title="这个类型没有声明支持分片"><b>N 片 <input class="input" style="width:52px;height:22px;margin-left:4px" value="4" disabled></b><span>每片拿到「第 i 片 / 共 N 片」</span></div>
+          <div class="radio-card off" title="每个实例都跑的只有系统机制，不能在这里新建"><b>每个实例</b><span>只有系统机制这样跑</span></div>
+        </div>
+        <div class="help" id="shardHelp">这个类型没有声明支持分片，只能跑 1 份。分片任务必须按分片号划分数据，否则会重复执行</div>
+      </div>
+
+      <div class="item">
+        <label class="l">参数 <span class="sub">· agent.prune_run_events 的 Params</span>
+          <button class="btn text sm" style="float:right" onclick="toggleJson()">以 JSON 编辑</button></label>
+        <div id="paramForm">
+          <div class="row2">
+            <div><label class="l">keep_days（整数，≥ 1）</label><input class="input" value="30"><div class="help">保留最近多少天的事件</div></div>
+            <div><label class="l">batch_size（整数，默认 1000）</label><input class="input" value="1000"><div class="help">每批删多少条，避免长事务</div></div>
+          </div>
+        </div>
+        <textarea id="paramJson" style="display:none">{
+  "keep_days": 30,
+  "batch_size": 1000
+}</textarea>
+      </div>
+      <div class="item"><label class="l">说明</label><input class="input" value="归档保留 30 天，前端回放历史最多看到 30 天前"></div>
+      <div class="item"><label class="l">保存后立即启用</label><span class="switch on" onclick="this.classList.toggle('on')"></span></div>
+    </div>
+    <footer>
+      <span class="sub" style="margin-right:auto">版本 3 · 最后由 zhou 修改于 11-05 18:20</span>
+      <button class="btn" onclick="closeAll()">取消</button>
+      <button class="btn primary" onclick="closeAll();toast('已保存，从下一次触发开始生效')">保存</button>
+    </footer>
+  </aside>
+
+  <!-- 立即触发 -->
+  <div class="modal" id="trigger">
+    <header id="tTitle">立即触发</header>
+    <div class="body form">
+      <div id="tRunning" class="alert warning" style="display:none;margin-bottom:12px">⚠ 这个任务正在运行，不会再起一份；等这一轮结束后马上开始。</div>
+      <div class="item"><label class="l">这一轮用的参数 <span class="sub">· 只用这一次，不改定义</span></label>
+        <textarea id="tParams"></textarea>
+        <div class="help">保存前按类型的 schema 校验；留空 = 用定义里的参数</div>
+      </div>
+      <div class="alert info">触发后由抢到它的实例执行；进度和结果在详情的「执行历史」里看。</div>
+    </div>
+    <footer><button class="btn" onclick="closeAll()">取消</button><button class="btn primary" onclick="closeAll();toast('已触发，几秒内开始')">触发</button></footer>
+  </div>
+
+  <div class="toast" id="toast"></div>
+</div>
+
+<section class="notes">
+  <h2>设计说明</h2>
+  <p>这个页面只调用定时任务库自带的管理接口（JobRoutes），不依赖 Atlas 的业务接口，所以 aiassistant、TeamFlow 这些宿主可以复用同一个页面组件；每个宿主把它挂在自己的管理后台里，权限由宿主实现的 JobGuard 决定。</p>
+  <table>
+    <thead><tr><th>主题</th><th>规则</th></tr></thead>
+    <tbody>
+      <tr><td>页面结构</td><td>列表页（筛选 + 表格，列只有名称、触发规则、运行份数、状态、操作）→ 点一行打开右侧详情抽屉（概览、当前这一次、执行历史）；新建、编辑也是右侧抽屉；立即触发是弹窗。和控制台其他管理页一致：深色主题、Rail + 内容区。</td></tr>
+      <tr><td>普通任务、预置任务、系统机制</td><td>普通任务：管理员在这里建的，可新建、编辑、删除、暂停、立即触发。预置任务：安装时自动建好的（如「清理任务执行记录」），名称旁带「预置」标签，可以改参数、停用，不能删除。系统机制：系统运行必需的（如兜底 run、续租 run），名称前带 🔒，所有操作按钮不出现，详情只显示每个实例的运行情况；鼠标悬停解释「系统运行必需，只能查看」。实现上，系统机制的定义写在代码里，另外两种存在库里。</td></tr>
+      <tr><td>运行份数</td><td>列表里显示「1 份」「4 片」「每个实例」。分片任务运行中显示进度（已完成片数 / 总片数）和进度条，详情里有每一片的实例、开始时间、最近续租、状态。表单里「N 片」只有类型声明支持分片时可选；「每个实例」在表单里不可选，只有系统机制这样跑。</td></tr>
+      <tr><td>触发规则</td><td>cron 旁边显示人话（「每天 03:00」）和时区；表单里给常用模板，输入后实时预览接下来 5 次触发时刻，表达式非法时红字提示、不能保存。固定间隔、一次性各有自己的输入。</td></tr>
+      <tr><td>参数</td><td>按类型的 JSON schema 自动生成表单（字段名、类型、默认值、说明都来自任务类型自己声明的参数模型），可以切到 JSON 编辑；保存时服务端再校验一次。立即触发可以临时覆盖这一轮的参数，不改定义。</td></tr>
+      <tr><td>状态</td><td>只有三种：启用 / 已暂停 / 运行中（带脉冲圆点，显示在哪个实例上跑、已跑多久；分片任务显示已完成片数）。系统机制也按这三种显示，只靠名称前的 🔒 区分。上一次的结果、失败原因不放在列表里，在详情的提示条和执行历史里看。任务类型已经从系统里移除的，显示「类型不存在」黄色标签，不再调度。</td></tr>
+      <tr><td>暂停与恢复</td><td>暂停只影响以后的触发，正在跑的这一轮跑完为止；按钮旁有确认气泡。恢复后从下一个计划时刻开始，不补跑暂停期间错过的。</td></tr>
+      <tr><td>编辑冲突</td><td>保存时带版本号；别人先改过时提示「已被 xx 在 hh:mm 修改」，提供「查看对方的修改」和「刷新后重新编辑」，不覆盖。</td></tr>
+      <tr><td>删除</td><td>二次确认，说明「执行历史保留，到期自动清理」；预置任务只能停用、不能删除，删除按钮置灰并说明原因。</td></tr>
+      <tr><td>执行历史</td><td>按时间倒序，可按结果筛选；每条显示触发时刻（计划的）、触发方式（到点 / 手动 + 操作人）、分片、实例、耗时、结果。失败展开看错误摘要和这一轮的参数；lost 表示跑它的实例中途没了，下一条通常就是重跑。</td></tr>
+      <tr><td>只读用户</td><td>JobGuard.view 通过、operate 不通过的人：看得到全部内容，「新建任务」和行内操作不出现，详情底部只有「关闭」。原型顶部「切换为只读用户」可以看效果。</td></tr>
+      <tr><td>刷新</td><td>列表和详情每 5 秒自动刷新运行中的状态；页面不在前台时停止刷新。</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<script>
+const JOBS = [
+  { id: 'prune_events', name: '每天清理 30 天前的事件归档', type: 'agent.prune_run_events', src: 'db', trig: 'cron', expr: '0 3 * * *', human: '每天 03:00', tz: 'Asia/Shanghai',
+    shards: '1', state: 'enabled', next: '明天 03:00', last: { r: 'ok', d: '2 分 13 秒', at: '今天 03:00' }, params: { keep_days: 30, batch_size: 1000 }, ver: 3, by: 'zhou · 11-05 18:20' },
+  { id: 'orphan', name: '回收孤儿沙箱', type: 'agent.reap_orphan_sandboxes', src: 'db', trig: 'interval', human: '每 10 分钟', tz: 'Asia/Shanghai',
+    shards: '1', state: 'running', runOn: 'atlas-server-7d9f-x2', runFor: '6 秒', next: '—', last: { r: 'ok', d: '8 秒', at: '10:30' }, params: { dry_run: false }, ver: 1, by: '安装时 · 10-29' },
+  { id: 'idle', name: '清理闲置沙箱', type: 'agent.reap_idle_sandboxes', src: 'db', trig: 'interval', human: '每 1 分钟', tz: 'Asia/Shanghai',
+    shards: '1', state: 'enabled', next: '10:41:00', last: { r: 'fail', d: '3 秒', at: '10:40', streak: 2, err: 'OpenSandbox 503 Service Unavailable: GET /sandboxes?state=idle' }, params: { idle_minutes: 30 }, ver: 2, by: 'li · 11-02 09:13' },
+  { id: 'backfill', name: '会话记忆补记', type: 'agent.memory_backfill', src: 'db', trig: 'interval', human: '每 5 分钟', tz: 'Asia/Shanghai',
+    shards: '1', state: 'paused', next: '—', last: { r: 'ok', d: '1 分 2 秒', at: '昨天 18:20' }, params: { batch: 20 }, ver: 4, by: 'zhou · 11-05 18:25' },
+  { id: 'stuck', name: 'run 长时间无进展告警', type: 'agent.alert_stuck_runs', src: 'db', trig: 'interval', human: '每 1 分钟', tz: 'Asia/Shanghai',
+    shards: '1', state: 'enabled', next: '10:41:00', last: { r: 'ok', d: '0.4 秒', at: '10:40' }, params: { idle_minutes: 15, notify: 'feishu' }, ver: 1, by: 'zhou · 11-06 10:02' },
+  { id: 'reindex', name: '重建知识库索引（换向量模型）', type: 'knowledge.reindex', src: 'db', trig: 'once', human: '一次性', tz: 'Asia/Shanghai',
+    shards: '4', state: 'running', progress: [3, 4], next: '—', last: { r: 'ok', d: '41 分', at: '11-01 02:00' }, params: { model: 'bge-m3', batch: 200 }, ver: 2, by: 'wang · 11-06 10:00' },
+  { id: 'prune_runs', name: '清理任务执行记录', type: 'atlas_jobs.prune_runs', src: 'db', preset: true, trig: 'cron', expr: '0 * * * *', human: '每小时整点', tz: 'Asia/Shanghai',
+    shards: '1', state: 'enabled', next: '11:00', last: { r: 'ok', d: '1.2 秒', at: '10:00' }, params: { keep_days: 7 }, ver: 1, by: '安装时', upcoming: '11:00、12:00、13:00 …' },
+  { id: 'recover', name: '兜底 run', type: 'agent.recover_runs', src: 'code', trig: 'interval', human: '每 10 秒 ± 3', shards: 'all', state: 'code', inst: [
+      ['atlas-server-7d9f-x2', '10:40:52', '38 毫秒', 0], ['atlas-server-7d9f-k8', '10:40:55', '41 毫秒', 0], ['atlas-server-7d9f-p1', '10:40:49', '1.3 秒', 0]] },
+  { id: 'renew', name: '续租 run', type: 'agent.renew_leases', src: 'code', trig: 'interval', human: '每 10 秒', shards: 'all', state: 'code', inst: [
+      ['atlas-server-7d9f-x2', '10:40:58', '6 毫秒', 0], ['atlas-server-7d9f-k8', '10:41:00', '5 毫秒', 0], ['atlas-server-7d9f-p1', '10:40:57', '7 毫秒', 0]] },
+];
+let filter = 'all', keyword = '', viewer = false;
+
+const lastCell = (j) => {
+  if (j.src === 'code') return '<span class="sub">3 个实例正常</span>';
+  const l = j.last;
+  const r = l.r === 'ok' ? '<span class="tag success">成功</span>' : `<span class="tag danger">失败${l.streak > 1 ? ' · 连续 ' + l.streak + ' 次' : ''}</span>`;
+  return `${r}<div class="sub">${l.at} · ${l.d}</div>`;
+};
+const stateCell = (j) => {
+  if (j.state === 'code') return '<span class="tag success">启用</span>';
+  if (j.state === 'paused') return '<span class="tag warning">已暂停</span>';
+  if (j.state === 'running') {
+    if (j.progress) return `<span class="tag info"><span class="dot pulse"></span>运行中 · ${j.progress[0]}/${j.progress[1]} 片</span><div class="progress"><i style="width:${j.progress[0] / j.progress[1] * 100}%"></i></div>`;
+    return `<span class="tag info"><span class="dot pulse"></span>运行中</span><div class="sub">${j.runOn} · ${j.runFor}</div>`;
+  }
+  return '<span class="tag success">启用</span>';
+};
+const shardCell = (j) => j.shards === 'all' ? '<span class="tag primary">每个实例</span>' : j.shards === '1' ? '1 份' : `<span class="tag primary">${j.shards} 片</span>`;
+const trigCell = (j) => `${j.human}${j.expr ? `<div class="sub mono">${j.expr}</div>` : ''}${j.trig === 'once' ? '<div class="sub">今天 10:00 手动触发</div>' : ''}`;
+const opsCell = (j) => {
+  if (j.src === 'code') return '<span class="sub lock" title="系统机制：系统运行必需，只能查看">🔒 只读</span>';
+  if (viewer) return '<span class="sub">—</span>';
+  const pause = j.state === 'paused' ? `<button class="btn text sm" onclick="event.stopPropagation();toast('已恢复，从下一个计划时刻开始')">恢复</button>`
+                                     : `<button class="btn text sm" onclick="event.stopPropagation();toast('已暂停，正在跑的这一轮会跑完')">暂停</button>`;
+  return `<div class="ops"><button class="btn text sm" onclick="event.stopPropagation();openTrigger('${j.id}')">立即触发</button>${pause}<button class="btn text sm" onclick="event.stopPropagation();openForm('${j.id}')">编辑</button></div>`;
+};
+
+function render(kw) {
+  if (kw !== undefined) keyword = kw.trim();
+  const rows = JOBS.filter((j) => {
+    if (keyword && !(j.name + j.type).includes(keyword)) return false;
+    if (filter === 'running') return j.state === 'running';
+    if (filter === 'paused') return j.state === 'paused';
+    if (filter === 'code') return j.src === 'code';
+    return true;
+  });
+  document.getElementById('tbody').innerHTML = rows.map((j) => `
+    <tr class="row" onclick="openDetail('${j.id}')">
+      <td><div class="name">${j.src === 'code' ? '<span class="lock">🔒</span> ' : ''}${j.name}${j.preset ? ' <span class="tag" title="安装时自动建好的：可以改参数、停用，不能删除">预置</span>' : ''}</div><div class="sub mono">${j.type}</div></td>
+      <td>${trigCell(j)}</td><td>${shardCell(j)}</td><td>${stateCell(j)}</td>
+      <td>${opsCell(j)}</td>
+    </tr>`).join('') || `<tr><td colspan="5" style="text-align:center;padding:40px" class="sub">没有符合条件的任务</td></tr>`;
+}
+
+function setFilter(f) {
+  filter = f;
+  document.querySelectorAll('#filterSeg button').forEach((b) => b.classList.toggle('on', b.dataset.f === f));
+  render();
+}
+document.querySelectorAll('#filterSeg button').forEach((b) => b.onclick = () => setFilter(b.dataset.f));
+
+function history(j) {
+  if (j.id === 'reindex') return [
+    ['今天 10:00', '手动 · wang', '0 / 4', 'atlas-server-7d9f-x2', '38 分', 'ok'],
+    ['今天 10:00', '手动 · wang', '1 / 4', 'atlas-server-7d9f-k8', '35 分', 'ok'],
+    ['今天 10:00', '手动 · wang', '2 / 4', 'atlas-server-7d9f-p1', '—', 'lost'],
+    ['今天 10:00', '手动 · wang', '2 / 4', 'atlas-server-7d9f-x2', '29 分', 'ok'],
+    ['今天 10:00', '手动 · wang', '3 / 4', 'atlas-server-7d9f-k8', '运行中', 'run'],
+  ];
+  if (j.id === 'idle') return [
+    ['10:40', '到点', '—', 'atlas-server-7d9f-k8', '3 秒', 'fail'],
+    ['10:39', '到点', '—', 'atlas-server-7d9f-x2', '3 秒', 'fail'],
+    ['10:38', '到点', '—', 'atlas-server-7d9f-p1', '1.1 秒', 'ok'],
+    ['10:37', '到点', '—', 'atlas-server-7d9f-x2', '0.9 秒', 'ok'],
+  ];
+  if (j.id === 'prune_runs') return [['10:00', '到点', '—', 'atlas-server-7d9f-p1', '1.2 秒', 'ok'], ['09:00', '到点', '—', 'atlas-server-7d9f-x2', '1.4 秒', 'ok'], ['08:00', '到点', '—', 'atlas-server-7d9f-k8', '1.1 秒', 'ok']];
+  return [['今天 03:00', '到点', '—', 'atlas-server-7d9f-k8', '2 分 13 秒', 'ok'], ['昨天 03:00', '到点', '—', 'atlas-server-7d9f-x2', '2 分 40 秒', 'ok'], ['11-04 03:00', '到点', '—', 'atlas-server-7d9f-p1', '2 分 05 秒', 'ok']];
+}
+const resTag = { ok: '<span class="tag success">成功</span>', fail: '<span class="tag danger">失败</span>', lost: '<span class="tag warning" title="跑它的实例中途没了，下一条是重跑">lost</span>', run: '<span class="tag info"><span class="dot pulse"></span>运行中</span>' };
+
+function openDetail(id) {
+  const j = JOBS.find((x) => x.id === id);
+  document.getElementById('dName').innerHTML = `${j.src === 'code' ? '🔒 ' : ''}${j.name}`;
+  document.getElementById('dMeta').innerHTML = `<span class="mono">${j.type}</span> · ${j.src === 'code' ? '系统机制（只读）' : (j.preset ? '预置 · ' : '') + '版本 ' + j.ver + ' · 最后修改 ' + j.by}`;
+  let html = '';
+  if (j.src === 'code') {
+    html += `<div class="alert info">这是系统机制，系统运行必需：每个实例各跑一份，不能在这里暂停或修改。下表是每个实例最近一次的情况。</div>
+      <div class="sec"><h3>概览</h3><div class="kv"><div class="k">触发</div><div>${j.human}（每个实例自己计时，互相错开）</div><div class="k">运行份数</div><div>每个实例一份 · 当前 3 个实例</div><div class="k">保证</div><div>不抢、不写执行记录；上一轮没跑完，下一轮跳过</div></div></div>
+      <div class="sec"><h3>各实例的情况 <span class="muted">每 5 秒刷新</span></h3><table class="mini table"><thead><tr><th>实例</th><th>最近一次开始</th><th>耗时</th><th>连续失败</th></tr></thead><tbody>
+      ${j.inst.map((r) => `<tr><td class="mono">${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td><td>${r[3] ? '<span class="tag danger">' + r[3] + '</span>' : '<span class="tag success">0</span>'}</td></tr>`).join('')}
+      </tbody></table></div>`;
+    document.getElementById('dFoot').innerHTML = '<button class="btn" onclick="closeAll()">关闭</button>';
+  } else {
+    if (j.last && j.last.r === 'fail') html += `<div class="alert danger">✕ 上一次失败（连续 ${j.last.streak} 次）：<span class="err">${j.last.err}</span></div>`;
+    if (j.state === 'paused') html += `<div class="alert warning">已暂停：不会再触发。恢复后从下一个计划时刻开始，不补跑暂停期间错过的。</div>`;
+    html += `<div class="sec"><h3>概览</h3><div class="kv">
+      <div class="k">触发规则</div><div>${j.human}${j.expr ? ' · <span class="mono">' + j.expr + '</span>' : ''} · ${j.tz}</div>
+      <div class="k">接下来</div><div>${j.trig === 'cron' ? (j.upcoming || '明天 03:00、后天 03:00、11-09 03:00 …') : j.trig === 'once' ? '一次性，已触发；可以再「立即触发」' : (j.next === '—' ? '—' : j.next + ' 起，每隔 ' + j.human.replace('每 ', ''))}</div>
+      <div class="k">运行份数</div><div>${j.shards === '1' ? '1 份（全集群同一时刻只跑一份）' : j.shards + ' 片（每片拿到「第 i 片 / 共 ' + j.shards + ' 片」）'}</div>
+      <div class="k">状态</div><div>${stateCell(j)}</div>
+    </div></div>
+    <div class="sec"><h3>参数</h3><pre class="json">${JSON.stringify(j.params, null, 2)}</pre></div>`;
+    if (j.progress) html += `<div class="sec"><h3>这一次触发 <span class="muted">今天 10:00 手动触发 · 已运行 41 分</span></h3><table class="mini table"><thead><tr><th>分片</th><th>实例</th><th>开始</th><th>最近续租</th><th>状态</th></tr></thead><tbody>
+      <tr><td>0 / 4</td><td class="mono">atlas-server-7d9f-x2</td><td>10:00:01</td><td>—</td><td>${resTag.ok} 38 分</td></tr>
+      <tr><td>1 / 4</td><td class="mono">atlas-server-7d9f-k8</td><td>10:00:01</td><td>—</td><td>${resTag.ok} 35 分</td></tr>
+      <tr><td>2 / 4</td><td class="mono">atlas-server-7d9f-x2</td><td>10:12:40</td><td>—</td><td>${resTag.ok} 29 分（重跑）</td></tr>
+      <tr><td>3 / 4</td><td class="mono">atlas-server-7d9f-k8</td><td>10:35:10</td><td>10:40:58</td><td>${resTag.run} 6 分</td></tr>
+      </tbody></table><div class="sub" style="margin-top:6px">4 片都结束才算这次触发完成；第 2 片的实例中途没了（lost），由别的实例重跑。</div></div>`;
+    else if (j.state === 'running') html += `<div class="sec"><h3>这一次触发</h3><div class="kv"><div class="k">实例</div><div class="mono">${j.runOn}</div><div class="k">已运行</div><div>${j.runFor}</div><div class="k">最近续租</div><div>2 秒前</div></div></div>`;
+    html += `<div class="tabs"><button class="on">执行历史</button><button>修改记录</button></div>
+      <table class="mini table" style="margin-top:8px"><thead><tr><th>计划触发</th><th>方式</th><th>分片</th><th>实例</th><th>耗时</th><th>结果</th></tr></thead><tbody>
+      ${history(j).map((r) => `<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td><td class="mono">${r[3]}</td><td>${r[4]}</td><td>${resTag[r[5]]}</td></tr>`).join('')}
+      </tbody></table>
+      <div class="sub" style="margin-top:6px">点一行展开错误摘要和这一轮的参数 · 只保留最近 7 天</div>`;
+    document.getElementById('dFoot').innerHTML = viewer ? '<button class="btn" onclick="closeAll()">关闭</button>' :
+      `<button class="btn danger" ${j.preset ? 'disabled title="预置任务只能停用，不能删除"' : ''} style="margin-right:auto" onclick="toast('（原型）删除前会二次确认，执行历史保留')">删除</button>
+       <button class="btn" onclick="toast('${j.state === 'paused' ? '已恢复' : '已暂停'}')">${j.state === 'paused' ? '恢复' : '暂停'}</button>
+       <button class="btn" onclick="openForm('${j.id}')">编辑</button>
+       <button class="btn primary" onclick="openTrigger('${j.id}')">立即触发</button>`;
+  }
+  document.getElementById('dBody').innerHTML = html;
+  show('detail');
+}
+
+function openForm(id) {
+  hideAll();
+  document.getElementById('fTitle').textContent = id ? '编辑任务' : '新建任务';
+  show('form');
+}
+function onType() {
+  const t = document.getElementById('fType').value;
+  const shardable = t === 'knowledge.reindex';
+  const cards = document.querySelectorAll('#shardCards .radio-card');
+  cards[1].classList.toggle('off', !shardable);
+  cards[1].querySelector('input').disabled = !shardable;
+  document.getElementById('shardHelp').textContent = shardable
+    ? '这个类型声明了支持分片：每片拿到「第 i 片 / 共 N 片」，按分片号划分数据；N 片都结束才算这次触发完成'
+    : '这个类型没有声明支持分片，只能跑 1 份。分片任务必须按分片号划分数据，否则会重复执行';
+}
+document.querySelectorAll('#shardCards .radio-card').forEach((c) => c.onclick = () => {
+  if (c.classList.contains('off')) return;
+  document.querySelectorAll('#shardCards .radio-card').forEach((x) => x.classList.toggle('on', x === c));
+});
+document.querySelectorAll('#trigSeg button').forEach((b) => b.onclick = () => {
+  document.querySelectorAll('#trigSeg button').forEach((x) => x.classList.toggle('on', x === b));
+  ['cron', 'interval', 'once'].forEach((t) => document.getElementById('trig-' + t).style.display = t === b.dataset.t ? '' : 'none');
+});
+function toggleJson() {
+  const f = document.getElementById('paramForm'), t = document.getElementById('paramJson');
+  const json = t.style.display === 'none';
+  f.style.display = json ? 'none' : ''; t.style.display = json ? '' : 'none';
+}
+
+function openTrigger(id) {
+  hideAll();
+  const j = JOBS.find((x) => x.id === id);
+  document.getElementById('tTitle').textContent = '立即触发：' + j.name;
+  document.getElementById('tRunning').style.display = j.state === 'running' ? '' : 'none';
+  document.getElementById('tParams').value = JSON.stringify(j.params, null, 2);
+  show('trigger');
+}
+
+function show(id) { document.getElementById('mask').classList.add('show'); document.getElementById(id).classList.add('show'); }
+function hideAll() { ['detail', 'form', 'trigger'].forEach((x) => document.getElementById(x).classList.remove('show')); }
+function closeAll() { hideAll(); document.getElementById('mask').classList.remove('show'); }
+function toast(t) { const el = document.getElementById('toast'); el.textContent = t; el.classList.add('show'); clearTimeout(el._t); el._t = setTimeout(() => el.classList.remove('show'), 1800); }
+function toggleViewer() {
+  viewer = !viewer;
+  document.getElementById('btnNew').style.display = viewer ? 'none' : '';
+  toast(viewer ? '现在是只读用户：看得到，不能操作' : '现在是管理员');
+  closeAll(); render();
+}
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeAll(); });
+render();
+// 按锚点直接打开某个场景：#detail=reindex、#new、#trigger=prune_events、#viewer（不和元素 id 同名，免得浏览器滚过去）
+(() => {
+  const [k, v] = location.hash.slice(1).split('=');
+  if (k === 'viewer') toggleViewer();
+  if (k === 'detail' && v) openDetail(v);
+  if (k === 'new') openForm();
+  if (k === 'trigger' && v) openTrigger(v);
+})();
+</script>
+</body>
+</html>

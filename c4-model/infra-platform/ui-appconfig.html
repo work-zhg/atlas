@@ -1,0 +1,416 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>原型：应用配置</title>
+<style>
+  /* 设计变量与 packages/chat-ui/src/theme/tokens.css 保持一致 */
+  :root {
+    --bg-app: #0b1220; --bg: #0f172a; --bg-1: #111b31; --bg-2: #16223c; --bg-3: #1e293b; --bg-code: #0c1526;
+    --line: #22304d; --line-2: #3a4c72;
+    --fg: #f8fafc; --fg-2: #94a3b8; --fg-3: #64748b;
+    --primary: #4f46e5; --primary-hover: #6366f1; --primary-text: #818cf8; --primary-soft: rgba(99,102,241,.14); --primary-soft-2: rgba(99,102,241,.24);
+    --success: #22c55e; --success-soft: rgba(34,197,94,.14); --warning: #f59e0b; --warning-soft: rgba(245,158,11,.14);
+    --danger: #ef4444; --danger-soft: rgba(239,68,68,.14); --info: #38bdf8; --info-soft: rgba(56,189,248,.14);
+    --r-sm: 6px; --r-md: 8px; --r-lg: 12px; --r-full: 999px; --h-md: 28px; --h-lg: 32px; --rail-w: 64px;
+    --s-2: 4px; --s-3: 8px; --s-4: 12px; --s-5: 16px; --s-6: 24px; --s-7: 32px;
+    --ease: cubic-bezier(0.16, 1, 0.3, 1); --t-mid: 180ms;
+    --shadow-lg: 0 12px 32px rgba(0,0,0,.45);
+    --font: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    --mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #070c17; color: var(--fg); font: 13px/1.6 var(--font); }
+  button, input, select, textarea { font: inherit; color: inherit; }
+
+  /* 原型外壳：场景切换条 + 应用框 + 设计说明 */
+  .proto-bar { display: flex; align-items: center; gap: var(--s-3); padding: 10px 20px; background: #050913; border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 50; }
+  .proto-bar b { margin-right: var(--s-4); }
+  .proto-bar .hint { margin-left: auto; color: var(--fg-3); font-size: 12px; }
+  .app { display: flex; height: 900px; margin: 16px 20px; border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden; position: relative; background: var(--bg); }
+
+  /* Rail */
+  .rail { width: var(--rail-w); background: var(--bg-app); border-right: 1px solid var(--line); display: flex; flex-direction: column; align-items: center; padding: 12px 0; gap: 6px; }
+  .rail .logo { width: 32px; height: 32px; border-radius: var(--r-md); background: var(--primary); display: grid; place-items: center; font-weight: 700; margin-bottom: 10px; }
+  .rail a { width: 44px; padding: 6px 0; border-radius: var(--r-md); color: var(--fg-2); text-align: center; font-size: 11px; text-decoration: none; }
+  .rail a .ico { display: block; font-size: 16px; line-height: 20px; }
+  .rail a.on { background: var(--primary-soft); color: var(--primary-text); }
+
+  /* 内容区 */
+  .main { flex: 1; min-width: 0; overflow: auto; padding: 24px 28px; }
+  .page-head { display: flex; align-items: flex-start; gap: var(--s-5); }
+  .page-head h1 { margin: 0; font-size: 18px; font-weight: 600; }
+  .page-head p { margin: 4px 0 0; color: var(--fg-2); max-width: 760px; }
+  .page-head .actions { margin-left: auto; display: flex; gap: var(--s-3); }
+  .host { display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; height: var(--h-md); border: 1px solid var(--line); border-radius: var(--r-md); color: var(--fg-2); }
+
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--s-4); margin: var(--s-6) 0 var(--s-5); }
+  .stat { background: var(--bg-1); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 12px 16px; cursor: pointer; }
+  .stat:hover { border-color: var(--line-2); }
+  .stat .k { color: var(--fg-2); font-size: 12px; }
+  .stat .v { font-size: 22px; font-weight: 600; margin-top: 2px; }
+  .stat .v small { font-size: 12px; font-weight: 400; color: var(--fg-2); margin-left: 6px; }
+  .stat.danger .v { color: var(--danger); }
+  .stat.run .v { color: var(--info); }
+
+  .toolbar { display: flex; align-items: center; gap: var(--s-3); margin-bottom: var(--s-4); }
+  .seg { display: inline-flex; background: var(--bg-1); border: 1px solid var(--line); border-radius: var(--r-md); padding: 2px; }
+  .seg button { border: 0; background: none; padding: 0 12px; height: 24px; border-radius: var(--r-sm); color: var(--fg-2); cursor: pointer; }
+  .seg button.on { background: var(--bg-3); color: var(--fg); }
+  .input, .select { height: var(--h-md); padding: 0 10px; background: var(--bg-1); border: 1px solid var(--line); border-radius: var(--r-md); outline: none; }
+  .input:focus, .select:focus, textarea:focus { border-color: var(--primary-hover); }
+  .input.search { width: 220px; }
+  .toolbar .right { margin-left: auto; display: flex; gap: var(--s-3); align-items: center; color: var(--fg-2); }
+
+  .btn { height: var(--h-md); padding: 0 12px; border-radius: var(--r-md); border: 1px solid var(--line-2); background: var(--bg-2); cursor: pointer; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .btn:hover { border-color: var(--primary-hover); }
+  .btn.primary { background: var(--primary); border-color: var(--primary); }
+  .btn.primary:hover { background: var(--primary-hover); }
+  .btn.danger { color: var(--danger); }
+  .btn.text { border-color: transparent; background: none; color: var(--primary-text); padding: 0 6px; }
+  .btn.text:hover { background: var(--primary-soft); }
+  .btn[disabled] { opacity: .45; cursor: not-allowed; }
+  .btn.sm { height: 24px; padding: 0 8px; font-size: 12px; }
+
+  table { width: 100%; border-collapse: collapse; }
+  .table { background: var(--bg-1); border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden; }
+  .table th { text-align: left; font-weight: 500; color: var(--fg-2); font-size: 12px; padding: 9px 12px; background: var(--bg-2); border-bottom: 1px solid var(--line); white-space: nowrap; }
+  .table td { padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .table tbody tr:last-child td { border-bottom: 0; }
+  .table tbody tr.row { cursor: pointer; }
+  .table tbody tr.row:hover td { background: var(--bg-2); }
+  .name { font-weight: 500; }
+  .sub { color: var(--fg-2); font-size: 12px; }
+  .mono { font-family: var(--mono); font-size: 12px; }
+  .tag { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 7px; border-radius: var(--r-sm); font-size: 12px; background: var(--bg-3); color: var(--fg-2); white-space: nowrap; }
+  .tag.success { background: var(--success-soft); color: var(--success); }
+  .tag.warning { background: var(--warning-soft); color: var(--warning); }
+  .tag.danger { background: var(--danger-soft); color: var(--danger); }
+  .tag.info { background: var(--info-soft); color: var(--info); }
+  .tag.primary { background: var(--primary-soft); color: var(--primary-text); }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; display: inline-block; }
+  .pulse { animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .35; } }
+  .progress { height: 4px; background: var(--bg-3); border-radius: 2px; margin-top: 6px; width: 120px; overflow: hidden; }
+  .progress i { display: block; height: 100%; background: var(--info); }
+  .ops { display: flex; gap: 2px; white-space: nowrap; }
+  .lock { color: var(--fg-3); }
+
+  /* 抽屉、弹窗 */
+  .mask { position: absolute; inset: 0; background: rgba(2,6,16,.55); opacity: 0; pointer-events: none; transition: opacity var(--t-mid) var(--ease); z-index: 10; }
+  .mask.show { opacity: 1; pointer-events: auto; }
+  .drawer { position: absolute; top: 0; right: 0; bottom: 0; width: 620px; background: var(--bg-1); border-left: 1px solid var(--line); box-shadow: var(--shadow-lg); transform: translateX(100%); transition: transform var(--t-mid) var(--ease); z-index: 11; display: flex; flex-direction: column; }
+  .drawer.show { transform: none; }
+  .drawer header { padding: 16px 20px; border-bottom: 1px solid var(--line); display: flex; align-items: flex-start; gap: var(--s-3); }
+  .drawer header h2 { margin: 0; font-size: 16px; font-weight: 600; }
+  .drawer header .x { margin-left: auto; }
+  .drawer .body { flex: 1; overflow: auto; padding: 16px 20px 24px; }
+  .drawer footer { padding: 12px 20px; border-top: 1px solid var(--line); display: flex; gap: var(--s-3); justify-content: flex-end; }
+  .sec { margin-top: 20px; }
+  .sec h3 { margin: 0 0 8px; font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .sec h3 .muted { font-weight: 400; color: var(--fg-2); font-size: 12px; }
+  .kv { display: grid; grid-template-columns: 110px 1fr; gap: 6px 12px; }
+  .kv .k { color: var(--fg-2); }
+  pre.json { margin: 0; padding: 10px 12px; background: var(--bg-code); border: 1px solid var(--line); border-radius: var(--r-md); font-family: var(--mono); font-size: 12px; color: #cbd5e1; white-space: pre-wrap; }
+  .alert { padding: 8px 12px; border-radius: var(--r-md); font-size: 12.5px; display: flex; gap: 8px; }
+  .alert.warning { background: var(--warning-soft); color: #fcd34d; }
+  .alert.info { background: var(--info-soft); color: #bae6fd; }
+  .alert.danger { background: var(--danger-soft); color: #fecaca; }
+  .tabs { display: flex; gap: 18px; border-bottom: 1px solid var(--line); margin-top: 16px; }
+  .tabs button { border: 0; background: none; padding: 8px 0; color: var(--fg-2); cursor: pointer; border-bottom: 2px solid transparent; }
+  .tabs button.on { color: var(--fg); border-color: var(--primary-hover); }
+  .mini th { background: transparent; padding: 6px 8px; }
+  .mini td { padding: 7px 8px; font-size: 12.5px; }
+  .err { color: #fca5a5; font-family: var(--mono); font-size: 12px; }
+
+  .form .item { margin-bottom: 16px; }
+  .form label.l { display: block; margin-bottom: 6px; color: var(--fg-2); }
+  .form label.l em { color: var(--danger); font-style: normal; margin-left: 2px; }
+  .form .input, .form .select { width: 100%; height: var(--h-lg); }
+  .form textarea { width: 100%; min-height: 110px; padding: 8px 10px; background: var(--bg-code); border: 1px solid var(--line); border-radius: var(--r-md); font-family: var(--mono); font-size: 12px; outline: none; }
+  .form .help { color: var(--fg-3); font-size: 12px; margin-top: 4px; }
+  .form .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .radio-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .radio-card { border: 1px solid var(--line); border-radius: var(--r-md); padding: 8px 10px; cursor: pointer; background: var(--bg-2); }
+  .radio-card.on { border-color: var(--primary-hover); background: var(--primary-soft); }
+  .radio-card.off { opacity: .45; cursor: not-allowed; }
+  .radio-card b { display: block; font-weight: 500; }
+  .radio-card span { color: var(--fg-2); font-size: 12px; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+  .chip { height: 22px; padding: 0 8px; border-radius: var(--r-full); border: 1px solid var(--line); background: none; color: var(--fg-2); font-size: 12px; cursor: pointer; }
+  .chip:hover { color: var(--fg); border-color: var(--line-2); }
+  .preview { background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--r-md); padding: 8px 12px; margin-top: 8px; font-size: 12.5px; }
+  .preview ol { margin: 4px 0 0; padding-left: 18px; color: var(--fg-2); }
+  .switch { width: 32px; height: 18px; border-radius: 9px; background: var(--bg-3); position: relative; display: inline-block; vertical-align: middle; cursor: pointer; }
+  .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #cbd5e1; transition: left var(--t-mid) var(--ease); }
+  .switch.on { background: var(--primary); }
+  .switch.on::after { left: 16px; background: #fff; }
+
+  .modal { position: absolute; left: 50%; top: 140px; width: 520px; transform: translate(-50%, -12px); background: var(--bg-1); border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: var(--shadow-lg); opacity: 0; pointer-events: none; transition: all var(--t-mid) var(--ease); z-index: 12; }
+  .modal.show { opacity: 1; pointer-events: auto; transform: translate(-50%, 0); }
+  .modal header { padding: 14px 18px; border-bottom: 1px solid var(--line); font-weight: 600; }
+  .modal .body { padding: 16px 18px; }
+  .modal footer { padding: 10px 18px; border-top: 1px solid var(--line); display: flex; justify-content: flex-end; gap: 8px; }
+  .toast { position: absolute; top: 18px; left: 50%; transform: translateX(-50%); background: var(--bg-3); border: 1px solid var(--line-2); padding: 8px 14px; border-radius: var(--r-md); box-shadow: var(--shadow-lg); opacity: 0; transition: opacity var(--t-mid); z-index: 20; }
+  .toast.show { opacity: 1; }
+
+  /* 设计说明 */
+  .notes { margin: 8px 20px 60px; max-width: 1240px; color: #cbd5e1; }
+  .notes h2 { font-size: 16px; margin: 28px 0 8px; color: var(--fg); }
+  .notes table { margin-top: 8px; border: 1px solid var(--line); }
+  .notes th, .notes td { border: 1px solid var(--line); padding: 7px 10px; text-align: left; vertical-align: top; font-size: 13px; }
+  .notes th { background: var(--bg-2); color: var(--fg-2); font-weight: 500; }
+  .notes td:first-child { white-space: nowrap; }
+  .notes p { margin: 6px 0; }
+  .kv { grid-template-columns: 130px 1fr; }
+</style>
+</head>
+<body>
+
+<div class="proto-bar">
+  <b>原型：应用配置</b>
+  <span class="sub">打开场景：</span>
+  <button class="btn sm" onclick="openEdit('sandbox.quota_per_user')">改数值</button>
+  <button class="btn sm" onclick="openEdit('sandbox.image_allow_prefixes')">改列表</button>
+  <button class="btn sm" onclick="openEdit('model.fallback_map')">改映射</button>
+  <button class="btn sm" onclick="openHistory('sandbox.quota_per_user')">历史与回滚</button>
+  <button class="btn sm" onclick="openEdit('sandbox.quota_per_user', true)">版本冲突</button>
+  <button class="btn sm" onclick="toggleViewer()">切换为只读用户</button>
+  <span class="hint">静态原型，数据是假的；页面所在：Atlas 控制台 › 平台管理 › 应用配置</span>
+</div>
+
+<div class="app" id="app">
+  <nav class="rail">
+    <div class="logo">A</div>
+    <a href="#"><span class="ico">💬</span>对话</a>
+    <a href="#"><span class="ico">🤖</span>智能体</a>
+    <a href="#"><span class="ico">📚</span>知识库</a>
+    <a href="#"><span class="ico">🧩</span>技能</a>
+    <a href="#"><span class="ico">⏱</span>定时任务</a>
+    <a href="#" class="on"><span class="ico">🎛</span>应用配置</a>
+    <a href="#"><span class="ico">⚙</span>设置</a>
+  </nav>
+
+  <main class="main">
+    <div class="page-head">
+      <div>
+        <h1>应用配置</h1>
+        <p>运行期间可以调整的业务参数，比如配额、开关、白名单。改完下一次读取就生效，不用重启。配置项由系统定义，这里只能改值；数据库地址、密钥这类启动参数不在这里。值以明文保存，不要填密码、密钥。</p>
+      </div>
+    </div>
+    <div style="height:24px"></div>
+
+    <div class="toolbar">
+      <div class="seg" id="filterSeg">
+        <button data-f="all" class="on">全部</button>
+        <button data-f="changed">已修改</button>
+        <button data-f="default">默认值</button>
+      </div>
+      <input class="input search" placeholder="搜索配置项或说明" oninput="render(this.value)">
+    </div>
+
+    <div class="table">
+      <table>
+        <thead><tr><th style="width:38%">配置项</th><th style="width:13%">类型</th><th style="width:33%">当前值</th><th>操作</th></tr></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </main>
+
+  <div class="mask" id="mask" onclick="closeAll()"></div>
+
+  <!-- 编辑抽屉 -->
+  <aside class="drawer" id="edit">
+    <header>
+      <div><h2 class="mono" id="eKey" style="font-size:15px"></h2><div class="sub" id="eDesc" style="margin-top:4px"></div></div>
+      <div class="x"><button class="btn text" onclick="closeAll()">✕</button></div>
+    </header>
+    <div class="body form" id="eBody"></div>
+    <footer id="eFoot"></footer>
+  </aside>
+
+  <!-- 历史抽屉 -->
+  <aside class="drawer" id="hist">
+    <header>
+      <div><h2>修改历史</h2><div class="sub mono" id="hKey" style="margin-top:4px"></div></div>
+      <div class="x"><button class="btn text" onclick="closeAll()">✕</button></div>
+    </header>
+    <div class="body" id="hBody"></div>
+    <footer><button class="btn" onclick="closeAll()">关闭</button></footer>
+  </aside>
+
+  <!-- 回滚确认 -->
+  <div class="modal" id="rollback">
+    <header id="rTitle">回滚到第 3 版</header>
+    <div class="body" id="rBody"></div>
+    <footer><button class="btn" onclick="hide('rollback')">取消</button><button class="btn primary" onclick="closeAll();toast('已回滚，记为第 7 版；下一次读取就生效')">回滚</button></footer>
+  </div>
+
+  <div class="toast" id="toast"></div>
+</div>
+
+<section class="notes">
+  <h2>设计说明</h2>
+  <p>页面只调用应用配置库自带的管理接口（ConfigRoutes：列表、查看、改值、历史、回滚），宿主各自挂在自己的管理后台里；能不能看、能不能改由宿主实现的 ConfigGuard 决定。</p>
+  <table>
+    <thead><tr><th>主题</th><th>规则</th></tr></thead>
+    <tbody>
+      <tr><td>页面结构</td><td>列表（按配置项前缀分组：sandbox、approval……）→ 点「修改」打开右侧编辑抽屉，点「历史」打开修改历史抽屉；回滚是确认弹窗。没有「新建」：配置项由系统在代码里定义，页面上只能改值。</td></tr>
+      <tr><td>当前值</td><td>显示生效的值。没改过的旁边是灰色「默认」标签；改过的是蓝色「已修改」标签，下面小字显示默认值，方便对比。列表、映射超过 3 项只显示前 3 项和「等 N 项」。</td></tr>
+      <tr><td>按类型编辑</td><td>整数、小数：数字框，按类型校验；开关：开关控件；文本：多行输入框；列表：一行一项，可以增删、上下移动；映射：键 + 值两列，键不能重复。列表和映射都可以切到 JSON 编辑。元素类型不对时红字提示，不能保存。</td></tr>
+      <tr><td>修改前后对比</td><td>编辑抽屉底部实时显示「当前 → 修改后」，列表、映射按项标出增加和删除的，避免误删一项还不知道。</td></tr>
+      <tr><td>恢复默认</td><td>编辑抽屉里单独一个「恢复默认」按钮（值清空，以后跟着代码里的默认值走），同样记一个新版本。已经是默认值时不出现。</td></tr>
+      <tr><td>修改说明</td><td>可选，最多 500 字，记进历史。建议写「为什么改」，回头查历史时最有用。</td></tr>
+      <tr><td>生效范围</td><td>保存按钮旁提示「保存后对所有实例立即生效（下一次读取）」；不是逐个实例生效，也不需要重启。</td></tr>
+      <tr><td>版本冲突</td><td>保存时带上打开编辑时的版本号；别人先改过时不覆盖，提示「已被 xx 在 hh:mm 改成 …」，给出「用最新值重新编辑」。原型顶部「版本冲突」可以看效果。</td></tr>
+      <tr><td>历史与回滚</td><td>每个版本一行：版本号、值（和上一版的差异）、修改说明、修改人、时间；最新的在前。任意一版可以「回滚到这一版」：确认弹窗里显示当前值 → 目标值的差异；回滚是把那一版的值写成一个新版本，不删除任何历史。当前这一版没有回滚按钮。</td></tr>
+      <tr><td>只读用户</td><td>ConfigGuard.view 通过、edit 不通过的人：能看列表和历史，「修改」「回滚」按钮不出现。原型顶部「切换为只读用户」可以看效果。</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<script>
+const CFG = [
+  { key: 'sandbox.quota_per_user', type: 'int', desc: '每人同时几个沙箱 / 会话 Pod（原生沙箱与会话 Pod 合计）', def: 3, value: 5, ver: 6, by: 'zhou', at: '11-05 18:20',
+    hist: [[6, 5, '评测期间临时放宽到 5', 'zhou', '11-05 18:20'], [5, 3, '回滚到第 3 版', 'li', '11-03 10:02'], [4, 8, '压测', 'li', '11-02 21:40'], [3, 3, '', 'zhou', '10-30 09:15'], [2, 4, '', 'zhou', '10-29 17:00'], [1, null, '登记', '系统', '10-29 16:58']] },
+  { key: 'sandbox.image_allow_prefixes', type: 'list<string>', desc: 'strict 档可用的沙箱镜像前缀（平台默认镜像总是可用）', def: ['registry.caijj.net/atlas/'], value: ['registry.caijj.net/atlas/', 'registry.caijj.net/ailab/', 'ghcr.io/atlas-sandbox/'], ver: 3, by: 'wang', at: '11-04 11:30',
+    hist: [[3, ['registry.caijj.net/atlas/', 'registry.caijj.net/ailab/', 'ghcr.io/atlas-sandbox/'], '加 ghcr 上的评测镜像', 'wang', '11-04 11:30'], [2, ['registry.caijj.net/atlas/', 'registry.caijj.net/ailab/'], '', 'wang', '11-01 15:10'], [1, null, '登记', '系统', '10-29 16:58']] },
+  { key: 'sandbox.bench_image_allow_prefixes', type: 'list<string>', desc: '评测档可用的沙箱镜像前缀（root、根可写：只该放评测题的镜像）', def: ['registry.caijj.net/bench/'], value: null, ver: 1, by: '系统', at: '10-29 16:58', hist: [[1, null, '登记', '系统', '10-29 16:58']] },
+  { key: 'approval.auto_judge_enabled', type: 'bool', desc: '自动审批模式下，拿不准的调用是否交给判断器（关掉就一律请示用户）', def: true, value: null, ver: 1, by: '系统', at: '10-29 16:58', hist: [[1, null, '登记', '系统', '10-29 16:58']] },
+  { key: 'context.compact_ratio', type: 'float', desc: '上下文用到窗口的多少比例时自动压缩（0.5 ~ 0.95）', def: 0.8, value: 0.75, ver: 2, by: 'zhou', at: '11-03 14:05', hist: [[2, 0.75, 'deepseek 窗口小，提前压缩', 'zhou', '11-03 14:05'], [1, null, '登记', '系统', '10-29 16:58']] },
+  { key: 'chat.welcome_message', type: 'string', desc: '新会话的欢迎语（为空就不显示）', def: '', value: '你好，我是 Atlas。可以把要做的事直接告诉我。', ver: 2, by: 'li', at: '11-01 09:00', hist: [[2, '你好，我是 Atlas。可以把要做的事直接告诉我。', '', 'li', '11-01 09:00'], [1, null, '登记', '系统', '10-29 16:58']] },
+  { key: 'model.fallback_map', type: 'map<string>', desc: '主模型不可用时换成哪个模型（键：主模型，值：备用模型）', def: {}, value: { 'deepseek-chat': 'qwen-plus', 'claude-sonnet-5': 'deepseek-chat' }, ver: 2, by: 'zhou', at: '11-06 10:15', hist: [[2, { 'deepseek-chat': 'qwen-plus', 'claude-sonnet-5': 'deepseek-chat' }, '', 'zhou', '11-06 10:15'], [1, null, '登记', '系统', '10-29 16:58']] },
+];
+let filter = 'all', keyword = '', viewer = false;
+
+const fmt = (v, type, short) => {
+  if (type === 'bool') return v ? '<span class="tag success">开</span>' : '<span class="tag">关</span>';
+  if (type.startsWith('list')) {
+    if (!v.length) return '<span class="sub">（空列表）</span>';
+    const items = short ? v.slice(0, 3) : v;
+    return items.map((x) => `<span class="tag mono" style="margin:0 4px 4px 0">${esc(x)}</span>`).join('') + (short && v.length > 3 ? `<span class="sub">等 ${v.length} 项</span>` : '');
+  }
+  if (type.startsWith('map')) {
+    const ks = Object.keys(v);
+    if (!ks.length) return '<span class="sub">（空）</span>';
+    const items = short ? ks.slice(0, 3) : ks;
+    return items.map((k) => `<div class="mono" style="font-size:12px">${esc(k)} → ${esc(v[k])}</div>`).join('') + (short && ks.length > 3 ? `<span class="sub">等 ${ks.length} 项</span>` : '');
+  }
+  if (type === 'string') return v === '' ? '<span class="sub">（空）</span>' : esc(v);
+  return `<span class="mono" style="font-size:13px">${v}</span>`;
+};
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const eff = (c) => c.value === null ? c.def : c.value;
+
+function render(kw) {
+  if (kw !== undefined) keyword = kw.trim();
+  const rows = CFG.filter((c) => (!keyword || (c.key + c.desc).includes(keyword)) &&
+    (filter === 'all' || (filter === 'changed' ? c.value !== null : c.value === null)));
+  let html = '', group = '';
+  for (const c of rows) {
+    const g = c.key.split('.')[0];
+    if (g !== group) { group = g; html += `<tr><td colspan="4" style="background:var(--bg);padding:6px 12px" class="sub mono">${g}.*</td></tr>`; }
+    const tag = c.value === null ? '<span class="tag" style="margin-left:6px">默认</span>' : '<span class="tag primary" style="margin-left:6px">已修改</span>';
+    html += `<tr class="row" onclick="openEdit('${c.key}')">
+      <td><div class="name mono" style="font-size:13px">${c.key}</div><div class="sub">${c.desc}</div></td>
+      <td><span class="tag mono">${esc(c.type)}</span></td>
+      <td>${fmt(eff(c), c.type, true)}${tag}${c.value !== null ? `<div class="sub" style="margin-top:4px">默认：${c.type.startsWith('list') || c.type.startsWith('map') ? esc(JSON.stringify(c.def)) : (c.type === 'bool' ? (c.def ? '开' : '关') : esc(c.def === '' ? '（空）' : c.def))}</div>` : ''}</td>
+      <td><div class="ops">${viewer ? '' : `<button class="btn text sm" onclick="event.stopPropagation();openEdit('${c.key}')">修改</button>`}<button class="btn text sm" onclick="event.stopPropagation();openHistory('${c.key}')">历史</button></div></td>
+    </tr>`;
+  }
+  document.getElementById('tbody').innerHTML = html || '<tr><td colspan="4" style="text-align:center;padding:40px" class="sub">没有符合条件的配置项</td></tr>';
+}
+function setFilter(f) { filter = f; document.querySelectorAll('#filterSeg button').forEach((b) => b.classList.toggle('on', b.dataset.f === f)); render(); }
+document.querySelectorAll('#filterSeg button').forEach((b) => b.onclick = () => setFilter(b.dataset.f));
+
+function editor(c) {
+  const v = eff(c);
+  if (c.type === 'int' || c.type === 'float') return `<input class="input mono" value="${v}" oninput="diffNum(this.value)"><div class="help">${c.type === 'int' ? '整数' : '小数'} · 默认 ${c.def}</div>`;
+  if (c.type === 'bool') return `<span class="switch ${v ? 'on' : ''}" onclick="this.classList.toggle('on')"></span> <span class="sub" style="margin-left:6px">默认：${c.def ? '开' : '关'}</span>`;
+  if (c.type === 'string') return `<textarea style="font-family:var(--font);font-size:13px">${esc(v)}</textarea><div class="help">默认：${c.def === '' ? '（空）' : esc(c.def)}</div>`;
+  if (c.type.startsWith('list')) return `<div id="listRows">${v.map((x, i) => listRow(x, i, v.length)).join('')}</div>
+    <button class="btn sm" style="margin-top:6px" onclick="toast('（原型）新增一行')">＋ 加一项</button>
+    <div class="help">一行一项，元素类型 string；默认：${esc(JSON.stringify(c.def))}</div>`;
+  return `<table class="mini table"><thead><tr><th>键（主模型）</th><th>值（备用模型）</th><th style="width:40px"></th></tr></thead><tbody>
+    ${Object.keys(v).map((k) => `<tr><td><input class="input mono" value="${esc(k)}"></td><td><input class="input mono" value="${esc(v[k])}"></td><td><button class="btn text sm" onclick="toast('（原型）删除这一项')">✕</button></td></tr>`).join('')}
+    </tbody></table><button class="btn sm" style="margin-top:6px" onclick="toast('（原型）新增一项')">＋ 加一项</button><div class="help">键不能重复；值的类型 string；默认：（空）</div>`;
+}
+const listRow = (x, i, n) => `<div style="display:flex;gap:6px;margin-bottom:6px"><input class="input mono" value="${esc(x)}">
+  <button class="btn sm" ${i === 0 ? 'disabled' : ''} title="上移">↑</button><button class="btn sm" ${i === n - 1 ? 'disabled' : ''} title="下移">↓</button>
+  <button class="btn sm danger" onclick="toast('（原型）删除这一项')">✕</button></div>`;
+
+function diffBlock(c) {
+  if (c.key === 'sandbox.image_allow_prefixes') return `<div class="preview"><b>修改前后</b>（假设删掉第 3 项）<div class="mono" style="font-size:12px;margin-top:6px">
+    <div>  registry.caijj.net/atlas/</div><div>  registry.caijj.net/ailab/</div><div style="color:#fca5a5">− ghcr.io/atlas-sandbox/</div></div></div>`;
+  if (c.type === 'int' || c.type === 'float') return `<div class="preview" id="numDiff"><b>修改前后</b><div class="mono" style="margin-top:6px">${eff(c)} → ${eff(c)}（没有变化）</div></div>`;
+  return '';
+}
+function diffNum(x) { const el = document.getElementById('numDiff'); if (el) el.innerHTML = `<b>修改前后</b><div class="mono" style="margin-top:6px">5 → <span style="color:var(--primary-text)">${esc(x)}</span></div>`; }
+
+function openEdit(key, conflict) {
+  hideAll();
+  const c = CFG.find((x) => x.key === key);
+  document.getElementById('eKey').textContent = c.key;
+  document.getElementById('eDesc').innerHTML = `<span class="tag mono">${esc(c.type)}</span> ${c.desc}`;
+  let html = '';
+  if (conflict) html += `<div class="alert danger" style="margin-bottom:14px">✕ 没有保存：这个配置已经被 li 在 10:42 改成了 4（第 7 版），你是基于第 6 版改的。<button class="btn sm" style="margin-left:auto" onclick="toast('（原型）已载入最新值，请重新修改')">用最新值重新编辑</button></div>`;
+  if (viewer) html += `<div class="alert info" style="margin-bottom:14px">你没有修改配置的权限，只能查看。</div>`;
+  html += `<div class="kv" style="margin-bottom:16px"><div class="k">当前</div><div>${fmt(eff(c), c.type)} ${c.value === null ? '<span class="tag">默认</span>' : '<span class="tag primary">已修改</span>'}</div>
+    <div class="k">版本</div><div>第 ${c.ver} 版 · ${c.by} · ${c.at} <button class="btn text sm" onclick="openHistory('${c.key}')">看历史</button></div></div>`;
+  if (!viewer) html += `<div class="item"><label class="l">新的值</label>${editor(c)}</div>${diffBlock(c)}
+    <div class="item" style="margin-top:16px"><label class="l">修改说明 <span class="sub">· 可选，会记进历史</span></label><input class="input" placeholder="为什么改？比如：评测期间临时放宽" maxlength="500"></div>`;
+  document.getElementById('eBody').innerHTML = html;
+  document.getElementById('eFoot').innerHTML = viewer ? '<button class="btn" onclick="closeAll()">关闭</button>' :
+    `${c.value !== null ? `<button class="btn" style="margin-right:auto" onclick="closeAll();toast('已恢复默认值，记为第 ${c.ver + 1} 版')">恢复默认</button>` : '<span style="margin-right:auto"></span>'}
+     <span class="sub" style="align-self:center">保存后对所有实例立即生效</span>
+     <button class="btn" onclick="closeAll()">取消</button>
+     <button class="btn primary" onclick="closeAll();toast('已保存为第 ${c.ver + 1} 版；下一次读取就生效')">保存</button>`;
+  show('edit');
+}
+
+function openHistory(key) {
+  hideAll();
+  const c = CFG.find((x) => x.key === key);
+  document.getElementById('hKey').textContent = c.key;
+  document.getElementById('hBody').innerHTML = `<div class="sub" style="margin-bottom:10px">最新的在前。回滚 = 把那一版的值写成一个新版本，不删除任何历史。</div>
+    <table class="mini table"><thead><tr><th style="width:72px">版本</th><th>值</th><th>修改说明</th><th style="width:120px">修改人 · 时间</th><th style="width:76px"></th></tr></thead><tbody>
+    ${c.hist.map((h, i) => `<tr><td>第 ${h[0]} 版${i === 0 ? '<div><span class="tag success">当前</span></div>' : ''}</td>
+      <td>${h[1] === null ? '<span class="tag">默认</span>' : fmt(h[1], c.type, true)}</td>
+      <td>${h[2] ? esc(h[2]) : '<span class="sub">—</span>'}</td><td>${h[3]}<div class="sub">${h[4]}</div></td>
+      <td>${i === 0 || viewer ? '' : `<button class="btn text sm" onclick="openRollback('${c.key}', ${h[0]})">回滚到这一版</button>`}</td></tr>`).join('')}
+    </tbody></table>`;
+  show('hist');
+}
+
+function openRollback(key, ver) {
+  const c = CFG.find((x) => x.key === key);
+  const h = c.hist.find((x) => x[0] === ver);
+  document.getElementById('rTitle').textContent = `回滚到第 ${ver} 版`;
+  document.getElementById('rBody').innerHTML = `<div class="kv"><div class="k">配置项</div><div class="mono">${c.key}</div>
+    <div class="k">当前（第 ${c.ver} 版）</div><div>${fmt(eff(c), c.type)}</div>
+    <div class="k">回滚后</div><div>${h[1] === null ? fmt(c.def, c.type) + ' <span class="tag">默认</span>' : fmt(h[1], c.type)}</div></div>
+    <div class="alert info" style="margin-top:12px">会记为第 ${c.ver + 1} 版，保存后对所有实例立即生效。</div>`;
+  document.getElementById('rollback').classList.add('show');
+}
+
+function show(id) { document.getElementById('mask').classList.add('show'); document.getElementById(id).classList.add('show'); }
+function hide(id) { document.getElementById(id).classList.remove('show'); }
+function hideAll() { ['edit', 'hist', 'rollback'].forEach(hide); }
+function closeAll() { hideAll(); document.getElementById('mask').classList.remove('show'); }
+function toast(t) { const el = document.getElementById('toast'); el.textContent = t; el.classList.add('show'); clearTimeout(el._t); el._t = setTimeout(() => el.classList.remove('show'), 1800); }
+function toggleViewer() { viewer = !viewer; toast(viewer ? '现在是只读用户：看得到，不能改' : '现在是管理员'); closeAll(); render(); }
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeAll(); });
+render();
+// 按锚点直接打开某个场景：#edit=sandbox.quota_per_user、#conflict、#history=sandbox.quota_per_user、#revert、#viewer（不和元素 id 同名）
+(() => {
+  const [k, v] = location.hash.slice(1).split('=');
+  if (k === 'viewer') toggleViewer();
+  if (k === 'edit' && v) openEdit(v);
+  if (k === 'conflict') openEdit('sandbox.quota_per_user', true);
+  if (k === 'history' && v) openHistory(v);
+  if (k === 'revert') { openHistory('sandbox.quota_per_user'); openRollback('sandbox.quota_per_user', 3); }
+})();
+</script>
+</body>
+</html>
