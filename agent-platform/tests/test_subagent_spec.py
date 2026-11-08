@@ -12,7 +12,8 @@
 from __future__ import annotations
 
 import pytest
-from atlas_agent.domain.spec import (
+from atlas_engine.contracts import InvalidSpec
+from atlas_engine.contracts.spec import (
     AgentSpec,
     CompactionSpec,
     LimitSpec,
@@ -21,7 +22,6 @@ from atlas_agent.domain.spec import (
     SubAgentSpec,
     spec_for_subagent,
 )
-from atlas_engine.contracts import InvalidSpec
 
 MODEL = ModelSpec(model="claude-sonnet-5")
 HAIKU = ModelSpec(model="claude-haiku-4-5")
@@ -85,7 +85,7 @@ def test_a_native_subagent_keeps_the_roster() -> None:
 
 def test_an_acp_subagent_has_no_roster() -> None:
     """acp SubAgent 不带名录：它的工具面由 CLI 自带，task 装不进它的图（AgentSpec.validate）。"""
-    from atlas_agent.domain.spec import CliSpec
+    from atlas_engine.contracts.spec import CliSpec
 
     child = spec_for_subagent(_parent(kind="cli", cli=CliSpec(cli_type="claude-code")), "coder")
     assert child.subagents == ()
@@ -165,7 +165,7 @@ async def test_task_spawns_a_sub_run_instead_of_running_a_subgraph() -> None:
     """
     from uuid import uuid4
 
-    from atlas_agent.domain.events import EventType
+    from atlas_engine.contracts.events import EventType
 
     from .fakes import Spawner
     from .graphs import run_agent

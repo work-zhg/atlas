@@ -386,9 +386,12 @@ class Run(Base):
     total_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
     #: 租约（迁移 0018，横向扩展设计 §4）：哪个执行器实例持有它、续到什么时候。
     #: ★ 只对「有进程在跑」的 run 有意义；挂起与终态时清掉租约。
-    #:   owner 为空而 status=running = 被主动交接，等别的实例领取（§6）。
+    #:   owner 为空而 status=running = 被主动交接，等别的实例的兜底任务抢走。
     owner: Mapped[str | None] = mapped_column(String(64), nullable=True)
     lease_until: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    #: 进入排队的时刻（迁移 0038）：建 run、续跑放回排队时写，被抢到时清掉。兜底任务只碰
+    #: 排队超过 5 秒的，免得和请求那条路抢（design-run-dispatch.html 原理 2）
+    queued_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     claimed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     #: 被接管（交接或租约过期）的次数 —— 频繁接管 = 实例在频繁崩溃。
     takeovers: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
@@ -403,7 +406,7 @@ class Run(Base):
         Index("ix_run_thread", "thread_uuid", text("created_at DESC")),
         Index("ix_run_parent", "parent_run_uuid"),
         Index("ix_run_root", "root_run_uuid"),
-        Index("ix_run_status_created", "status", "created_at"),
+        Index("ix_run_queued", "status", "queued_at"),
         Index("ix_run_status_lease", "status", "lease_until"),
         Index(
             "ix_run_active",

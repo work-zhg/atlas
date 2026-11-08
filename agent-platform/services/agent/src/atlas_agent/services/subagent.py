@@ -22,14 +22,13 @@ from __future__ import annotations
 import logging
 from uuid import UUID, uuid4
 
+from atlas_engine.contracts.spec import AgentSpec, SubAgentSpec
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from atlas_agent.domain.spec import AgentSpec, SubAgentSpec
-
 from ..config import Settings
 from ..db.models import Run, Thread
-from ..executor.base import SubmitRun
+from ..executor.base import DispatchRun
 from ..repositories.run import RunRepository
 from ..repositories.thread import ThreadRepository
 from ..stream.relay import EventRelay
@@ -66,7 +65,7 @@ class SubAgentService:
         self,
         sessionmaker: async_sessionmaker[AsyncSession],
         settings: Settings,
-        submit: SubmitRun,
+        dispatch: DispatchRun,
         relay: EventRelay,
         *,
         parent_run_id: UUID,
@@ -77,8 +76,8 @@ class SubAgentService:
     ) -> None:
         self._sessionmaker = sessionmaker
         self._settings = settings
-        #: 起子 run：与用户发起的 run 同一条链路（Run 执行器的入队）
-        self._submit = submit
+        #: 起子 run：与用户发起的 run 同一条链路（Run 执行器的派发，在父 run 所在的实例上起）
+        self._dispatch = dispatch
         self._relay = relay
         self._parent_run_id = parent_run_id
         self._parent_thread_id = parent_thread.thread_uuid
@@ -259,7 +258,7 @@ class SubAgentService:
             )
             await session.commit()
 
-        await self._submit(run_id)
+        await self._dispatch(run_id)
         logger.info(
             "派出 SubAgent %s → 子会话 %s 子 run %s（父 run %s，深度 %d）",
             sub.name,

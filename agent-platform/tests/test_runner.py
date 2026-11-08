@@ -12,8 +12,8 @@ from typing import Any
 from uuid import UUID
 
 import pytest
-from atlas_agent.domain.events import EventType
-from atlas_agent.domain.spec import AgentSpec, LimitSpec, ModelSpec
+from atlas_engine.contracts.events import EventType
+from atlas_engine.contracts.spec import AgentSpec, LimitSpec, ModelSpec
 
 from tests.fakes import (
     blocks_model,

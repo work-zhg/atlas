@@ -88,9 +88,12 @@ def test_deferred_threshold() -> None:
     from atlas_agent.config import Settings
     from atlas_agent.executor.tool_surface import _deferred_mcp_tools
 
+    from tests.fakes import tool_spec
+
+    specs = [tool_spec(t) for t in TOOLS]
     s = Settings(deferred_tools_min_count=2, deferred_tools_min_tokens=10_000)
     assert _deferred_mcp_tools([], s) == []
-    assert _deferred_mcp_tools(TOOLS[:2], s) == []
-    assert [t.name for t in _deferred_mcp_tools(TOOLS, s)] == [t.name for t in TOOLS]
+    assert _deferred_mcp_tools(specs[:2], s) == []
+    assert [t.name for t in _deferred_mcp_tools(specs, s)] == [t.name for t in TOOLS]
     s2 = Settings(deferred_tools_min_count=100, deferred_tools_min_tokens=10)
-    assert len(_deferred_mcp_tools(TOOLS[:1], s2)) == 1  # 定义总量超阈值
+    assert len(_deferred_mcp_tools(specs[:1], s2)) == 1  # 定义总量超阈值

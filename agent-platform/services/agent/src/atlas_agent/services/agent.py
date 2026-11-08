@@ -12,6 +12,8 @@ import logging
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+from atlas_engine.contracts.mcp_naming import parse_tool_id
+from atlas_engine.contracts.spec import resolve_summarizer_model
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth.agent_access import AgentAccess
@@ -19,8 +21,6 @@ from ..auth.catalog import AGENT_DATA
 from ..auth.digital import AgentIdentity
 from ..auth.uc import UCError
 from ..db.models import Agent, AgentVersion
-from ..domain.mcp_naming import parse_tool_id
-from ..domain.spec import resolve_summarizer_model
 from ..errors import (
     CapabilityUnavailable,
     DependencyUnavailable,

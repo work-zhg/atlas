@@ -21,6 +21,7 @@ members = [
     "atlas-bridge",
     "atlas-engine",
     "atlas-host",
+    "atlas-jobs",
     "atlas-jsonrpc",
     "atlas-knowledge",
     "atlas-mcpgateway",
@@ -338,6 +339,7 @@ dependencies = [
     { name = "atlas-bridge" },
     { name = "atlas-engine" },
     { name = "atlas-host" },
+    { name = "atlas-jobs" },
     { name = "atlas-jsonrpc" },
     { name = "atlas-knowledge" },
     { name = "atlas-mcpgateway" },
@@ -370,6 +372,7 @@ requires-dist = [
     { name = "atlas-bridge", editable = "agent-platform/pod/bridge" },
     { name = "atlas-engine", editable = "agent-platform/libs/engine" },
     { name = "atlas-host", editable = "agent-platform/libs/host" },
+    { name = "atlas-jobs", editable = "infra-platform/libs/jobs" },
     { name = "atlas-jsonrpc", editable = "agent-platform/libs/jsonrpc" },
     { name = "atlas-knowledge", editable = "agent-platform/services/knowledge" },
     { name = "atlas-mcpgateway", editable = "agent-platform/services/mcpgateway" },
@@ -415,6 +418,7 @@ dependencies = [
     { name = "atlas-appconfig" },
     { name = "atlas-engine" },
     { name = "atlas-host" },
+    { name = "atlas-jobs" },
     { name = "atlas-jsonrpc" },
     { name = "atlas-redislock" },
     { name = "atlas-skill" },
@@ -442,6 +446,7 @@ requires-dist = [
     { name = "atlas-appconfig", editable = "infra-platform/libs/appconfig" },
     { name = "atlas-engine", editable = "agent-platform/libs/engine" },
     { name = "atlas-host", editable = "agent-platform/libs/host" },
+    { name = "atlas-jobs", editable = "infra-platform/libs/jobs" },
     { name = "atlas-jsonrpc", editable = "agent-platform/libs/jsonrpc" },
     { name = "atlas-redislock", editable = "infra-platform/libs/redislock" },
     { name = "atlas-skill", editable = "agent-platform/services/skill" },
@@ -563,6 +568,17 @@ requires-dist = [
 name = "atlas-host"
 version = "0.1.0"
 source = { editable = "agent-platform/libs/host" }
+dependencies = [
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pydantic", specifier = ">=2.9" }]
+
+[[package]]
+name = "atlas-jobs"
+version = "0.1.0"
+source = { editable = "infra-platform/libs/jobs" }
 dependencies = [
     { name = "pydantic" },
 ]

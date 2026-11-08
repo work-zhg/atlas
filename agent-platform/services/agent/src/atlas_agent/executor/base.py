@@ -1,9 +1,7 @@
-"""RunExecutor 协议（文档 §12.1）。
+"""RunExecutor 协议：Run 执行器对组件外的唯一入口（c4-model/agent/executor/code-executor.html）。
 
-刻意做成 Protocol：MVP 用进程内 asyncio.Task，将来换成 arq / Celery worker 时
-**只加一个实现类 + 改一处依赖注入**，API 层与 engine 层零改动。
-触发迁移的信号：单 run 常态超 5 分钟 / 部署频繁到 interrupted 成为常见投诉 /
-需要排队与优先级。
+调用方只管「让这个 run 跑起来」：本实例接得下就当场跑，接不下也不报错，兜底任务会处理
+（design-run-dispatch.html）。由哪个实例跑、租约、续跑都在执行器里。
 """
 
 from __future__ import annotations
@@ -12,26 +10,23 @@ from collections.abc import Awaitable, Callable
 from typing import Protocol
 from uuid import UUID
 
-#: 入队一个 run：子智能体服务起子 run 只依赖它，不认识执行器（RunExecutor.submit）
-SubmitRun = Callable[[UUID], Awaitable[None]]
+#: 派发一个 run：子智能体服务起子 run 只依赖它，不认识执行器（RunExecutor.dispatch）
+DispatchRun = Callable[[UUID], Awaitable[None]]
 
 
 class RunExecutor(Protocol):
-    async def submit(self, run_id: UUID) -> None:
-        """排入执行。不阻塞调用方 —— HTTP 请求要立刻返回 run_id。"""
+    async def dispatch(self, run_id: UUID) -> None:
+        """派发：run 行已建好（queued），在本实例抢锁开跑。不等这一轮跑完 —— HTTP 请求要
+        立刻返回 run_id。"""
         ...
 
     async def cancel(self, run_id: UUID) -> None: ...
 
     async def resume_if_ready(self, run_id: UUID) -> bool:
-        """等的东西到了就把这个挂起的 run 续上。返回是否真的续了。
+        """等的事都有结果了就把这个挂起的 run 放回排队，并在本实例抢锁。返回是否放回去了。
 
-        ★ 为什么要进协议：**唤醒有两个来源**，都在执行器之外。
-            · 子 run 跑完   → 执行器自己的收尾路径调它
-            · 审批被决策   → HTTP 端点调它（api/v1/runs.py::decide_approval）
-
-          少了 HTTP 那一路，一个等审批的 run 要等到周期扫描（默认 60s）才动 ——
-          用户点了「允许」之后界面要干等一分钟，看着像没生效。
+        ★ 为什么要进协议：续跑的入口有一个在执行器之外 —— 审批被决定时，HTTP 端点
+          （api/v1/runs.py::decide_approval）经 decided 调它，run 就在接到决定的实例上续。
         """
         ...
 
@@ -40,5 +35,5 @@ class RunExecutor(Protocol):
         ...
 
     async def shutdown(self) -> None:
-        """优雅停机：给在跑的 run 一点时间收尾（§12.1 的 30s 窗口）。"""
+        """停机交接：关准入、在安全点停下、清租约，剩下的交给别的实例的兜底任务。"""
         ...

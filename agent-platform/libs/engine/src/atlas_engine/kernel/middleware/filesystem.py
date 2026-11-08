@@ -850,7 +850,7 @@ class FilesystemMiddleware(AgentMiddleware[AgentState, ContextT, ResponseT]):
         # The session workspace on object storage (server: providers/filesystem)
         agent = create_agent(middleware=[FilesystemMiddleware(filesystem=oss_filesystem)])
 
-        # No file capability: don't install it at all (create_deep_agent skips it)
+        # No file capability: don't install it at all (runtime/assemble.py skips it)
         ```
     """
 
@@ -887,7 +887,7 @@ class FilesystemMiddleware(AgentMiddleware[AgentState, ContextT, ResponseT]):
         """
         if filesystem is None or (isinstance(tools, list) and tools == []):
             # ★ Atlas 改动（Sandbox S0）：空白名单 = 完全关闭文件工具。
-            #   原实现没预想过这个模式（校验要求 read_file 恒在）。create_deep_agent
+            #   原实现没预想过这个模式（校验要求 read_file 恒在）。runtime/assemble.py
             #   在这种情况下已经不装本中间件，这里只是让直接构造的调用方也得到同样的结果。
             #
             # ★ filesystem is None 走同一条路：没有配置对象存储 = 没有文件能力。

@@ -23,7 +23,7 @@ from typing import Any, Protocol
 from uuid import UUID
 
 from atlas_engine.contracts import ApprovalState, Decision
-from atlas_engine.kernel.middleware.ask_user import resolve_answers
+from atlas_engine.runtime import resolve_answers
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ..db.models import Approval
@@ -153,9 +153,8 @@ class RunApprovalGate:
     def __init__(self, sessionmaker: async_sessionmaker[AsyncSession], run_id: UUID) -> None:
         """★ 不再有 timeout_s。
 
-        超时判定搬到了恢复扫描（executor 的 sweep_suspended）—— 挂起之后没有
-        进程在等，所以「等够了吗」只能由一个周期性的扫描来问，而不是某个
-        await 的超时分支。gate 因此不需要知道时限。
+        挂起之后没有进程在等，审批也不判超时（只由人决定）：做了决定就在接到决定的
+        实例上续跑，续跑信号丢了由执行器的兜底任务补查。gate 因此不需要知道时限。
         """
         self._sessionmaker = sessionmaker
         self._run_id = run_id

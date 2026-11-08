@@ -25,7 +25,6 @@ from uuid import UUID, uuid4
 
 import httpx
 import pytest
-from atlas_agent.domain.events import EventType
 from atlas_agent.providers.mcp import CallContext, KeyAuth, McpSessions, NativeMcpTools
 from atlas_agent.providers.mcp import config as mcp_config
 from atlas_agent.providers.mcp.gateway import (
@@ -35,6 +34,7 @@ from atlas_agent.providers.mcp.gateway import (
     gateway_catalog,
     reset_gateway_cache,
 )
+from atlas_engine.contracts.events import EventType
 from sqlalchemy import text
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "services/mcpgateway/tests"))
@@ -274,8 +274,10 @@ async def assemble(
 
 
 async def call(tools: list[Any], name: str, **args: Any) -> Any:
+    from .fakes import invoke
+
     tool = next(t for t in tools if t.name == name)
-    return await tool.ainvoke({"type": "tool_call", "id": "c1", "name": name, "args": args})
+    return await invoke(tool, **args)
 
 
 def text_of(message: Any) -> str:

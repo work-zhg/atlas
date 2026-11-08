@@ -23,8 +23,8 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
 from atlas_engine.contracts import ExecuteResponse, SandboxUnavailable
+from atlas_engine.contracts.spec import SandboxProfile, SandboxSpec
 
-from ...domain.spec import SandboxProfile, SandboxSpec
 from ...telemetry import tracer
 from ..base.execution.ports import SandboxExec
 from ..base.execution.values import (

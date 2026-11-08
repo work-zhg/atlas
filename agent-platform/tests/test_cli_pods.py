@@ -27,7 +27,6 @@ from atlas_agent.credentials import (
     CredentialSet,
     CredentialSubject,
 )
-from atlas_agent.domain.spec import CliSpec, SandboxSpec
 from atlas_agent.ids import uuid7
 from atlas_agent.redisx import make_redis
 from atlas_agent.sandbox import session_pod as pod_mod
@@ -37,6 +36,7 @@ from atlas_agent.sandbox.provisioning.model import BizRef, BizType, QuotaExceede
 from atlas_agent.sandbox.provisioning.service import SandboxUnavailableError
 from atlas_agent.sandbox.session_pod import CliModel, PodRequest, SessionPods
 from atlas_bridge.config import BridgeConfig
+from atlas_engine.contracts.spec import CliSpec, SandboxSpec
 from pydantic import SecretStr
 
 from tests.opensandbox_fake import FakeOpenSandbox

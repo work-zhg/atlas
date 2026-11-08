@@ -28,12 +28,12 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Protocol
 from uuid import UUID
 
+from atlas_engine.contracts.events import EventFactory, EventType, TraceEvent
+from atlas_engine.runtime.skill_events import SkillLoadTracker
 from atlas_host import methods
 from atlas_jsonrpc import ErrorCode, RpcFault
 
 from ..approval import ApprovalService, DecisionChannel, OnlineApprovals
-from ..domain.events import EventFactory, EventType, TraceEvent
-from ..domain.skill_events import SkillLoadTracker
 from ..errors import CapabilityUnavailable
 from .capabilities import CliCapabilities, CliCapabilityAssembly
 from .link import CliSession, CliSessionStore, DbCliSessions, SessionLink

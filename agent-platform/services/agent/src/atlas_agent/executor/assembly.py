@@ -20,13 +20,15 @@ from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID
 
 import redis.asyncio as aioredis
+from atlas_engine.contracts.events import EventType
+from atlas_engine.contracts.spec import resolve_summarizer_model
+from atlas_engine.runtime.assemble import Capabilities
+from atlas_engine.runtime.runner import Titler
+from atlas_engine.runtime.tool_registry import MEMORY_TOOL
+from atlas_engine.runtime.translator import extract_text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from atlas_agent.domain.spec import resolve_summarizer_model
-from atlas_agent.domain.tool_registry import MEMORY_TOOL
-from atlas_agent.domain.translator import extract_text
 from atlas_agent.errors import CapabilityUnavailable
-from atlas_agent.executor.runner import Titler
 from atlas_agent.executor.segment_data import Segment
 from atlas_agent.providers.knowledge import (
     format_context,
@@ -37,7 +39,6 @@ from atlas_agent.sandbox.component import SandboxComponent
 from atlas_agent.sandbox.native import WorkspaceRef
 
 from ..config import Settings
-from ..domain.events import EventType
 from ..outbound import current_identity
 from ..providers.filesystem import WorkspaceRouting, make_workspace
 from ..providers.llm.model_platform import (
@@ -51,8 +52,7 @@ from ..providers.llm.model_platform import (
 from ..repositories.model_catalog import ModelCatalogRepository
 from ..services.title import TitleService
 from ..stream.relay import EventRelay
-from .base import SubmitRun
-from .build import build_graph
+from .base import DispatchRun
 from .collaboration import Collaboration
 from .context_manager import ContextManager
 from .run_models import ModelBuilder, RunModels, models_of
@@ -81,7 +81,7 @@ class CapabilityAssembly:
         sessionmaker: async_sessionmaker[AsyncSession],
         settings: Settings,
         model_builder: ModelBuilder,
-        submit_run: SubmitRun | None = None,
+        dispatch_run: DispatchRun | None = None,
         memory: MemoryRuntime | None = None,
     ) -> None:
         self._sessionmaker = sessionmaker
@@ -90,10 +90,10 @@ class CapabilityAssembly:
         #: 记忆（doc/memory-design.html）。None = 没接入记忆服务
         self._memory = memory
         self._tools = ToolSurface(settings)
-        self._collaboration = Collaboration(sessionmaker, settings, model_builder, submit_run)
+        self._collaboration = Collaboration(sessionmaker, settings, model_builder, dispatch_run)
         self._context = ContextManager(sessionmaker, settings, model_builder)
 
-    async def build(
+    async def capabilities(
         self,
         segment: Segment,
         *,
@@ -102,10 +102,10 @@ class CapabilityAssembly:
         relay: EventRelay,
         notices: list[tuple[EventType, dict[str, Any]]] | None = None,
         closers: list[Callable[[], Awaitable[None]]] | None = None,
-    ) -> tuple[Any, Titler | None]:
-        """问三个能力领域要本段的东西，装配出图。返回 (graph, titler)。
+    ) -> tuple[Capabilities, Titler | None]:
+        """问三个能力领域要本段的东西，收成交给 engine 的能力端口。返回 (能力, titler)。
 
-        策略（装什么、什么顺序）在 build.py::build_graph —— 那里是纯函数；IO 都在各领域里。
+        这里只做 IO；装什么、什么顺序在 engine（atlas_engine/runtime/assemble.py）。
         titler 单独返回：它是 runner 的注入点，不进图。
         closers: 本 Run 段结束时要收尾的（MCP 会话），由调用方在段结束时执行。
         """
@@ -156,23 +156,22 @@ class CapabilityAssembly:
             api_key=endpoint.api_key,
             headers=endpoint.headers,
         )
-        graph = build_graph(
-            segment.spec,
-            chat,
-            instructions=context.instructions,
-            memory=context.memory_block,
-            context=context.middleware,
+        caps = Capabilities(
+            model=chat,
+            tools=tools.extra_tools,
             deferred_tools=tools.deferred_tools,
             filesystem=workspace,
             sandbox=tools.sandbox,
             skills=tools.skills,
-            extra_tools=tools.extra_tools,
             approvals=collaboration.approvals,
             judge=collaboration.judge,
             spawner=collaboration.spawner,
+            context=context.ports,
+            instructions=context.instructions,
+            memory=context.memory_block,
             prompt_cache_ttl=await self._prompt_cache_ttl(segment),
         )
-        return graph, self._titler(segment)
+        return caps, self._titler(segment)
 
     async def _memory_turn(self, segment: Segment, *, run_id: UUID) -> MemoryTurn | None:
         """这一段的记忆：常驻块进系统提示词（上下文管理），记忆工具挂上（工具面）。

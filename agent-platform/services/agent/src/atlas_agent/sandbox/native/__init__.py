@@ -22,7 +22,8 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from ...domain.spec import SandboxProfile, SandboxSpec
+from atlas_engine.contracts.spec import SandboxProfile, SandboxSpec
+
 from ...domain.workspace_layout import SKILLS_MOUNT, WORKSPACE_MOUNT, Area, WorkspaceLayout
 from ..base.execution.ports import SandboxExec
 from ..base.lifecycle.spec import CreateSpec, Labels, Resources, Volume

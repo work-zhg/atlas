@@ -19,37 +19,35 @@
 
 ★ 纯计算层：只认 langchain_core 的消息类型，不碰 DB / ORM。`from_storage`
   接受任何有 role / kind / content 三个属性的对象（repository 传 ORM 行，
-  测试传 dataclass）—— 这样映射逻辑能脱离数据库单测。
+  测试传 dataclass）—— 这样映射逻辑能脱离数据库单测。存储格式本身（StoredMessage、
+  kind、接管时的悬空调用）在 atlas_engine.contracts.messages，server 只认那一层。
 """
 
 from __future__ import annotations
 
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
+from atlas_engine.contracts.messages import (
+    INTERRUPTED_RESULT,
+    KIND_CHAT,
+    KIND_TOOL_RESULT,
+    StoredLike,
+    StoredMessage,
+    interrupted_block,
+)
+from atlas_engine.kernel.context import SUMMARY_PREFIX
+
 __all__ = [
-    "KIND_CHAT",
-    "KIND_TOOL_RESULT",
-    "StoredMessage",
     "Transcript",
-    "dangling_calls",
     "from_storage",
+    "history_messages",
+    "map_messages",
     "to_storage",
-    "unknown_results",
 ]
-
-#: 对话轮：用户的提问、助手的回答（后者可携带 tool_use blocks）。
-KIND_CHAT = "chat"
-
-#: 工具结果：role=user，content 是 tool_result blocks。
-#:
-#: ★ 必须与 chat 分开。它也是 role=user，而「最后一条 user 消息是本轮输入」
-#:   这条判据不加区分就会把一批工具结果当成用户的新提问 —— 表现是模型莫名
-#:   回答一段 JSON，而用户的问题被当成历史。
-KIND_TOOL_RESULT = "tool_result"
 
 #: 这些 block 类型原样保留在 assistant 的 content 里。
 #:
@@ -57,26 +55,6 @@ KIND_TOOL_RESULT = "tool_result"
 #:   assistant turn 把 thinking block 原样回传。丢了轻则降级、重则 400，而
 #:   两种都难查 —— 报错指向的是「消息格式」，根因却在两个 run 之前的落库。
 _PRESERVED_BLOCKS = frozenset({"text", "thinking", "redacted_thinking"})
-
-
-class _StoredLike(Protocol):
-    """存储行的形状。ORM 的 Message 与测试里的 dataclass 都满足它。"""
-
-    @property
-    def role(self) -> str: ...
-    @property
-    def kind(self) -> str: ...
-    @property
-    def content(self) -> Any: ...
-
-
-@dataclass(frozen=True)
-class StoredMessage:
-    """一条待写入（或刚读出）的消息。`to_storage` 的产物。"""
-
-    role: str
-    kind: str
-    content: list[dict[str, Any]]
 
 
 # --------------------------------------------------------------------------- 出
@@ -101,10 +79,14 @@ def to_storage(
       它们**故意**悬空，续跑时才拿到结果（contracts/suspension.py）；补成「中断」
       的话续跑后同一个调用就有两份结果。它们与 run.waiting_on 在同一个事务里落库。
     """
-    return _seal_dangling_tool_calls(_map_messages(messages), waiting)
+    return _seal_dangling_tool_calls(map_messages(messages), waiting)
 
 
-def _map_messages(messages: Sequence[BaseMessage]) -> list[StoredMessage]:
+def map_messages(messages: Sequence[BaseMessage]) -> list[StoredMessage]:
+    """LC 消息 → 存储行，**不补悬空**（检查点用：这一刻的悬空 tool_use 只是工具还在跑）。
+
+    要保证每个 tool_use 都有结果，用 `to_storage`。
+    """
     out: list[StoredMessage] = []
     pending_results: list[dict[str, Any]] = []
 
@@ -136,23 +118,10 @@ def _map_messages(messages: Sequence[BaseMessage]) -> list[StoredMessage]:
             if blocks:
                 out.append(StoredMessage(role="user", kind=KIND_CHAT, content=blocks))
         # 其它类型（SystemMessage / RemoveMessage）不落库：system 每轮由 spec
-        # 重新拼（build.py 是唯一装配点），RemoveMessage 是压缩的内部指令。
+        # 重新拼（assemble.py 是唯一装配点），RemoveMessage 是压缩的内部指令。
 
     flush_results()
     return out
-
-
-#: 补给中断的工具调用的结果文本。
-#:
-#: ★ 为什么要补，而不是把那个 tool_use 丢掉。一轮在工具执行途中失败（网关
-#:   挂了、进程被杀、超时）时，序列里会留下一个没有结果的 tool_use。下一轮
-#:   带着它重建历史，provider 直接回 400 —— 而报错指向「消息格式」，根因
-#:   却在上一个 run 的收尾。
-#:
-#: ★ 丢掉 tool_use 也能满足格式，但那等于告诉模型「这次调用没发生过」。
-#:   它会原样重试一遍，而中断的工具可能已经产生了副作用（文件已经写了一半）。
-#:   如实说「中断，结果未知」才让它有机会先去确认状态。
-_INTERRUPTED_RESULT = "工具执行被中断，结果未知（上一轮未正常结束）。"
 
 
 def _seal_dangling_tool_calls(
@@ -189,7 +158,7 @@ def _seal_dangling_tool_calls(
                 stored[index] = StoredMessage(
                     role=following.role,
                     kind=following.kind,
-                    content=[*following.content, *(_interrupted_block(i) for i in missing)],
+                    content=[*following.content, *(interrupted_block(i) for i in missing)],
                 )
             continue
 
@@ -198,28 +167,10 @@ def _seal_dangling_tool_calls(
             StoredMessage(
                 role="user",
                 kind=KIND_TOOL_RESULT,
-                content=[_interrupted_block(call_id) for call_id in wanted],
+                content=[interrupted_block(call_id) for call_id in wanted],
             )
         )
     return out
-
-
-#: 接管时补给悬空调用的结果（横向扩展设计 §5.1）。与 _INTERRUPTED_RESULT 的区别：
-#: 那一轮并没有结束，是执行它的实例中途退出、由别的实例接着跑 —— 模型要据此先查状态。
-_TAKEOVER_RESULT = (
-    "执行这个工具的服务实例中途退出，工具是否已执行、执行到哪一步都未知。"
-    "请先检查当前状态，再决定是否重试。"
-)
-
-
-def _interrupted_block(call_id: str, text: str = _INTERRUPTED_RESULT) -> dict[str, Any]:
-    return {
-        "type": "tool_result",
-        "tool_use_id": call_id,
-        "content": text,
-        "is_error": True,
-        "atlas_name": "",
-    }
 
 
 def _preserved_blocks(content: Any) -> list[dict[str, Any]]:
@@ -263,7 +214,7 @@ def _tool_result_block(message: ToolMessage) -> dict[str, Any]:
 # --------------------------------------------------------------------------- 入
 
 
-def from_storage(rows: Sequence[_StoredLike]) -> list[BaseMessage]:
+def from_storage(rows: Sequence[StoredLike]) -> list[BaseMessage]:
     """存储行 → LC 消息序列。`to_storage` 的逆。
 
     ★ 重建出的 AIMessage 的 content 里**不放** tool_use block，工具调用只体现
@@ -290,6 +241,20 @@ def from_storage(rows: Sequence[_StoredLike]) -> list[BaseMessage]:
         else:
             out.append(HumanMessage(content=[b for b in blocks if _is_preserved(b)]))
     return out
+
+
+def history_messages(
+    rows: Sequence[StoredLike], *, summary: str | None = None
+) -> list[BaseMessage]:
+    """一段的历史：存储行 → LC 消息；压缩过的早期对话以摘要打头。
+
+    ★ 已压缩的早期消息以摘要形式回填，而不是重新送原文（上下文管理 §7.4）：不然每个 run
+      都要重压一次 —— 摘要 token 重复付、提示词缓存每轮击穿。
+    """
+    messages = from_storage(rows)
+    if summary:
+        messages.insert(0, AIMessage(content=SUMMARY_PREFIX + summary))
+    return messages
 
 
 def _tool_messages(blocks: Sequence[Any]) -> list[ToolMessage]:
@@ -372,7 +337,7 @@ class Transcript:
             「结果未知」给模型，而不是让它不知情地再做一遍（§5.1 副作用工具的去重）。
           · 这一批工具结果收齐（末尾是 ToolMessage 且没有待返回的调用）。
 
-        ★ **不补悬空**：用的是 _map_messages 而不是 to_storage。这一刻的悬空 tool_use
+        ★ **不补悬空**：用的是 map_messages 而不是 to_storage。这一刻的悬空 tool_use
           只是工具还在跑，结果马上就来；补成「中断」就把一次正常调用写成了失败。
         """
         fresh = self.messages[self.flushed :]
@@ -381,7 +346,7 @@ class Transcript:
         if isinstance(fresh[-1], ToolMessage) and self.pending_calls():
             return []  # 一批工具的结果还没收齐：一批结果要落成一条
         self.flushed = len(self.messages)
-        return _map_messages(fresh)
+        return map_messages(fresh)
 
     def remaining_rows(self, *, waiting: Collection[str] = ()) -> list[StoredMessage]:
         """段结束时还没落库的消息 —— 收尾落库用。保证每个 tool_use 都有结果。
@@ -400,49 +365,10 @@ class Transcript:
         }
         for call_id in sorted((self.pending_calls() & earlier) - set(waiting)):
             fresh.append(
-                ToolMessage(content=_INTERRUPTED_RESULT, tool_call_id=call_id, status="error")
+                ToolMessage(content=INTERRUPTED_RESULT, tool_call_id=call_id, status="error")
             )
         self.flushed = len(self.messages)
         return to_storage(fresh, waiting=waiting)
 
     def __bool__(self) -> bool:
         return bool(self.messages)
-
-
-def dangling_calls(rows: Sequence[_StoredLike]) -> list[tuple[str, str]]:
-    """接管时：库里最后一条带 tool_use 的回答，有哪些调用没有结果 → [(tool_call_id, 工具名)]。
-
-    ★ 那些调用的 tool_use 已在检查点里落库（意图记录），结果却没有 —— 进程死在工具执行中。
-      怎么处理由续跑领域的 DanglingCallPolicy 决定：工具声明了可接续的用同一个调用重放，
-      其余的补「结果未知」（unknown_results）。都不处理的话 SuspensionMiddleware 在图入口
-      会补成「被取消」，模型会以为没执行过而直接重放有副作用的调用。
-
-    空列表 = 没有悬空（或最后一条回答之后已经有新的对话）。
-    """
-    wanted: list[tuple[str, str]] = []
-    answered: set[str] = set()
-    for row in rows:
-        blocks = row.content if isinstance(row.content, list) else []
-        kind = getattr(row, "kind", KIND_CHAT) or KIND_CHAT
-        if kind == KIND_TOOL_RESULT:
-            answered.update(str(b.get("tool_use_id") or "") for b in blocks if isinstance(b, dict))
-        elif row.role == "assistant":
-            wanted = [
-                (str(b.get("id") or ""), str(b.get("name") or ""))
-                for b in blocks
-                if _is_type(b, "tool_use")
-            ]
-            answered = set()
-        else:
-            wanted, answered = [], set()  # 用户的新提问之后，前面的悬空不归这一轮管
-    return [(call_id, name) for call_id, name in wanted if call_id not in answered]
-
-
-def unknown_results(call_ids: Sequence[str]) -> StoredMessage:
-    """给接管时不能接续的悬空调用补一条「结果未知」：是否执行过、执行到哪一步都不知道，
-    如实告诉模型，让它先检查状态再决定是否重试（§5.1）。"""
-    return StoredMessage(
-        role="user",
-        kind=KIND_TOOL_RESULT,
-        content=[_interrupted_block(call_id, _TAKEOVER_RESULT) for call_id in call_ids],
-    )

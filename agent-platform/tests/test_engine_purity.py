@@ -10,16 +10,16 @@ import subprocess
 import sys
 
 import pytest
-from atlas_agent.domain.events import TERMINAL_EVENTS, EventType, TraceEvent
-from atlas_agent.domain.spec import AgentSpec, CompactionSpec, ModelSpec, SubAgentSpec
 from atlas_engine.contracts import InvalidSpec
+from atlas_engine.contracts.events import TERMINAL_EVENTS, EventType, TraceEvent
+from atlas_engine.contracts.spec import AgentSpec, CompactionSpec, ModelSpec, SubAgentSpec
 
 FORBIDDEN = ("sqlalchemy", "fastapi", "redis", "alembic", "uvicorn", "pydantic_settings")
 
 
 def test_engine_import_pulls_no_server_dependency() -> None:
     """在干净子进程里 import engine，确认没有 DB / web 框架被拉进来。"""
-    modules = ("contracts", "kernel")
+    modules = ("contracts", "kernel", "runtime")
     code = (
         "import sys, importlib;"
         f"[importlib.import_module('atlas_engine.' + m) for m in {modules!r}];"
@@ -261,22 +261,13 @@ def test_kernel_imports_from_the_host_only_via_contracts() -> None:
     assert offenders == [], f"kernel 越过 contracts 依赖了外层：{offenders}"
 
 
-def test_server_pure_layer_pulls_no_infrastructure() -> None:
-    """server 里的纯计算层（词汇 / 装配 / 执行循环）不许拖进基础设施。
+def test_cli_translation_pulls_no_infrastructure() -> None:
+    """server 里留下的纯计算层（CLI 运行时的 ACP 翻译）不许拖进基础设施。
 
-    外层搬进 server 之后，「run 一轮可以脱离 DB/Redis 测试」这条性质不再由
-    包边界天然保证 —— 有人在 runner 里顺手 import 一个 repository，性质就
-    静默消失了。import-linter 有同款 contract（CI），这里让本地套件也兜住。
+    原生运行时的词汇、装配、执行循环已搬进 engine（test_engine_import_pulls_no_server_dependency
+    兜住）；这里只剩 server 自己的那一块。import-linter 有同款 contract（CI）。
     """
-    modules = (
-        "atlas_agent.domain.spec",
-        "atlas_agent.domain.events",
-        "atlas_agent.domain.translator",
-        "atlas_agent.domain.tool_registry",
-        "atlas_agent.executor.runner",
-        "atlas_agent.executor.build",
-        "atlas_agent.cli.translate.acp_v1",
-    )
+    modules = ("atlas_agent.cli.translate.acp_v1",)
     code = (
         "import sys, importlib;"
         f"[importlib.import_module(m) for m in {modules!r}];"

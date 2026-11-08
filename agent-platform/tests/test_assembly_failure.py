@@ -15,12 +15,12 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from atlas_agent.domain.events import EventType
-from atlas_agent.domain.spec import AgentSpec, ModelSpec
 from atlas_agent.executor.assembly import MemoryNotConfigured
 from atlas_agent.executor.runtime import NativeRuntime
 from atlas_agent.providers.mcp import MissingTool
 from atlas_engine.contracts import InvalidSpec
+from atlas_engine.contracts.events import EventType
+from atlas_engine.contracts.spec import AgentSpec, ModelSpec
 
 SPEC = AgentSpec(
     slug="a",
@@ -36,12 +36,12 @@ class _FailingAssembly:
         self._exc = exc
 
     async def with_models(self, prepared: Any, **_kw: Any) -> Any:
-        return prepared  # 本文件测的是 build 失败；模型检查不参与
+        return prepared  # 本文件测的是装配失败；模型检查不参与
 
     async def with_knowledge(self, prepared: Any, **_kw: Any) -> Any:
-        return prepared  # 本文件测的是 build 失败；知识库注入不参与
+        return prepared  # 本文件测的是装配失败；知识库注入不参与
 
-    async def build(self, *_a: Any, **_kw: Any) -> Any:
+    async def capabilities(self, *_a: Any, **_kw: Any) -> Any:
         raise self._exc
 
 

@@ -15,9 +15,9 @@ from typing import Any
 from uuid import UUID
 
 import pytest
-from atlas_agent.domain.events import EventType
-from atlas_agent.domain.spec import AgentSpec, ApprovalSpec, LimitSpec, ModelSpec
 from atlas_engine.contracts import ApprovalState, InvalidSpec, ToolEffect
+from atlas_engine.contracts.events import EventType
+from atlas_engine.contracts.spec import AgentSpec, ApprovalSpec, LimitSpec, ModelSpec
 from atlas_engine.kernel.middleware.approval import (
     EXPIRED_RESULT,
     GATE_FAILED_RESULT,
@@ -35,7 +35,7 @@ from langchain_core.tools import StructuredTool
 
 from tests.graphs import run_agent as run
 
-from .fakes import TurnModel, tool_call_chunk
+from .fakes import TurnModel, tool_call_chunk, tool_spec
 
 RUN_ID = UUID("77777777-7777-7777-7777-777777777777")
 
@@ -111,7 +111,7 @@ async def _collect(
             model=model or _report_model(),
             input_content=kw.pop("input_content", "发周报"),
             approvals=gate,
-            extra_tools=[SEND_REPORT, LOOKUP],
+            extra_tools=[tool_spec(SEND_REPORT), tool_spec(LOOKUP)],
             approval_mode=mode,
             **kw,
         )
@@ -259,7 +259,7 @@ async def _resume(
             history=_resume_history(name, args or {"text": "周报"}),
             resume=True,
             approvals=gate or ScriptedGate("pending"),
-            extra_tools=[SEND_REPORT, LOOKUP],
+            extra_tools=[tool_spec(SEND_REPORT), tool_spec(LOOKUP)],
             waiting_on={"c1": {"reason": "approval", "token": token}},
             decisions={token: outcome},
             approval_mode=mode,
@@ -430,7 +430,7 @@ async def test_auto_mode_asks_for_external_tools_until_the_classifier_exists() -
 async def test_plan_mode_appends_a_reminder_to_the_request_only() -> None:
     """★ 规划提醒附在用户本轮那条消息上，只进请求：系统提示词与工具定义不变（prompt 缓存的前缀），
     也不进 transcript（不落库）。"""
-    from atlas_agent.domain.messages import Transcript
+    from atlas_engine.runtime.messages import Transcript
 
     model = _calls(("lookup", '{"q":"x"}'))
     transcript = Transcript()

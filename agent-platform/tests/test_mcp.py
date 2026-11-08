@@ -115,14 +115,15 @@ async def test_unknown_tool_raises(env: Any) -> None:
 
 
 async def test_read_only_annotation_reaches_approval(env: Any) -> None:
-    """★ 审批按 metadata["readOnlyHint"] 判只读。langchain.mcp 把注解收在
-    metadata["mcp"] 下、键是 snake_case；装配时要平铺回来，否则只读工具全被当成外部。"""
-    from atlas_agent.domain.tool_registry import tool_effects
+    """★ 审批按 readOnlyHint 判只读：MCP 的注解要原样进 ToolSpec.annotations（键按线上的写法），
+    否则只读工具全被当成外部。"""
     from atlas_engine.contracts import ToolEffect
+    from atlas_engine.runtime.tool_registry import tool_effects
+    from atlas_engine.runtime.tools import to_langchain
 
     tools, _, sessions = await assemble([tool_id(SRV, "lookup"), tool_id(SRV, "add")])
     await sessions.aclose()
-    effects = tool_effects(tools)
+    effects = tool_effects([to_langchain(t) for t in tools])
     assert effects[f"{SRV}__lookup"] is ToolEffect.READ
     assert effects[f"{SRV}__add"] is ToolEffect.EXTERNAL
 

@@ -121,8 +121,8 @@ class Settings(BaseSettings):
     models_cache_ttl_s: int = 300
 
     # ── 横向扩展（doc/horizontal-scaling-design.html）──────────────
-    #: 进程角色：api 只接请求与 SSE（run 只入队）；runner 只领取执行 run；
-    #: all 两者都做（小规模部署 / 本机开发，即原来的形态）。
+    #: 进程角色：api 只接请求与 SSE（并发上限为 0，它接到的 run 由别的实例的兜底任务接走）；
+    #: runner 只执行 run；all 两者都做（小规模部署 / 本机开发）。
     server_role: Literal["api", "runner", "all"] = "all"
     #: 实例 id（run 租约的 owner）。空 = 启动时按 主机名-pid-随机串 生成。
     #: ★ 必须每个进程不同：同名的两个实例会互相续对方的租约。
@@ -131,10 +131,14 @@ class Settings(BaseSettings):
     #: ★ 租约是「进程还活着」的心跳，不是 run 的时长上限：活着就一直续。
     #:   会话串行锁（Redis）的 TTL 也取它 —— 锁跟着租约续，持有者死了锁随之过期。
     run_lease_s: float = 30.0
-    #: 领取扫描的间隔。唤醒（Redis 发布/订阅）丢了也不会丢 run —— 扫描兜底。
-    run_claim_scan_s: float = 5.0
-    #: 本实例同时执行的 run 上限。满了就不再领取（背压），排队的由别的实例领走。
+    #: 本实例同时执行的 run 上限。满了就不接（派发不报错，run 留在库里给兜底任务）。挂起的不占。
     max_concurrent_runs: int = 32
+    #: 兜底任务的间隔（design-run-dispatch.html 原理 2）：每个实例都跑，各自加 ±30% 的抖动错开。
+    #: 满了没接的、发版交出来的、崩溃后租约过期的、续跑信号丢了的 run，都靠它接走。
+    run_recovery_interval_s: float = 10.0
+    #: 排队超过这么久还没人接，才算兜底候选。★ 不碰刚排队的：请求那条路从建 run 到本实例
+    #: 抢锁只有几毫秒，兜底任务不该和它抢 —— run 要确实跟着请求走
+    run_recovery_queued_s: float = 5.0
     #: 停机时等 run 走到安全点交接的上限。超过的直接中止并交接（丢最近一个工具轮次）。
     #: ★ 不是 run 的超时：它限制的是进程多久必须退出。要小于 K8s 的
     #:   terminationGracePeriodSeconds，留出关连接与 flush 遥测的时间。
@@ -241,12 +245,6 @@ class Settings(BaseSettings):
     #:   上面的并发名额 —— 没有它，一条「A 派 A 再派 A……」的链会一直跑下去。
     #:   也防「在每个规划点派一批合法尺寸的 SubAgent」累计起来远超并发限制。
     subagent_max_per_run: int = 6
-    #: 补扫 suspended run 的间隔（唤醒信号丢失时的唯一出路）。
-    #:
-    #: ★ 正常路径是子 run 终态时**主动**唤醒父 run。这个扫描只兜一种情况：
-    #:   子 run 跑完的那一刻进程正好在重启，唤醒信号就此消失，父 run 会
-    #:   永远停在 suspended —— 没有报错、没有事件，只是一个永远转圈的界面。
-    suspended_sweep_interval_s: float = 60.0
 
     # ── 会话工作区（对象存储） ──────────────────────────────────────
     # 走 S3 协议：阿里云 OSS 的 S3 兼容端点、MinIO、AWS S3 同一份实现。

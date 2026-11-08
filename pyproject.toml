@@ -3,7 +3,7 @@ name = "atlas"
 version = "0.1.0"
 description = "Atlas — agent platform (workspace root)"
 requires-python = ">=3.13"
-dependencies = ["atlas-acp", "atlas-agent", "atlas-appconfig", "atlas-bench", "atlas-bridge", "atlas-engine", "atlas-host", "atlas-jsonrpc", "atlas-knowledge", "atlas-mcpgateway", "atlas-memory", "atlas-modelgateway", "atlas-redislock", "atlas-skill", "atlas-teamflow", "atlas-usercenter"]
+dependencies = ["atlas-acp", "atlas-agent", "atlas-appconfig", "atlas-bench", "atlas-bridge", "atlas-engine", "atlas-host", "atlas-jobs", "atlas-jsonrpc", "atlas-knowledge", "atlas-mcpgateway", "atlas-memory", "atlas-modelgateway", "atlas-redislock", "atlas-skill", "atlas-teamflow", "atlas-usercenter"]
 
 # Workspace root is a container, not an installable package.
 [tool.uv]
@@ -19,6 +19,7 @@ members = [
   "agent-platform/libs/host",
   "agent-platform/libs/jsonrpc",
   "infra-platform/libs/appconfig",
+  "infra-platform/libs/jobs",
   "infra-platform/libs/redislock",
   "agent-platform/services/knowledge",
   "agent-platform/services/mcpgateway",
@@ -37,6 +38,7 @@ atlas-bench = { workspace = true }
 atlas-bridge = { workspace = true }
 atlas-engine = { workspace = true }
 atlas-host = { workspace = true }
+atlas-jobs = { workspace = true }
 atlas-jsonrpc = { workspace = true }
 atlas-knowledge = { workspace = true }
 atlas-mcpgateway = { workspace = true }
@@ -66,7 +68,7 @@ dev = [
 # ★ 依赖单向的硬约束（文档 §2.1）。engine 一旦 import server/db/web 就 CI 红。
 # ---------------------------------------------------------------------------
 [tool.importlinter]
-root_packages = ["atlas_acp", "atlas_agent", "atlas_appconfig", "atlas_bench", "atlas_bridge", "atlas_engine", "atlas_host", "atlas_jsonrpc", "atlas_knowledge", "atlas_mcpgateway", "atlas_memory", "atlas_modelgateway", "atlas_redislock", "atlas_skill", "atlas_teamflow", "atlas_usercenter"]
+root_packages = ["atlas_acp", "atlas_agent", "atlas_appconfig", "atlas_bench", "atlas_bridge", "atlas_engine", "atlas_host", "atlas_jobs", "atlas_jsonrpc", "atlas_knowledge", "atlas_mcpgateway", "atlas_memory", "atlas_modelgateway", "atlas_redislock", "atlas_skill", "atlas_teamflow", "atlas_usercenter"]
 # forbidden_modules 里有第三方包（fastapi/sqlalchemy/...），必须打开这个开关
 include_external_packages = true
 
@@ -104,18 +106,46 @@ name = "分层：server -> engine 单向"
 type = "layers"
 layers = ["atlas_agent", "atlas_engine"]
 
-# layers contract 把 atlas_engine 当一个节点，拦不住「server 穿过外层直捅
-# kernel 内部」。kernel 是仍在持续重写的内部层，模块路径随时可能变、不是
-# 公共契约 —— server 需要的协议与结果类型一律走 atlas_engine.contracts
-# （那里的 re-export 才是承诺面）。
-# 运行时兜底见 tests/test_engine_purity.py。
-# 协议与错误分类学定义在 contracts（最底层），kernel 反向依赖它 —— 但只许
-# 依赖它。运行时同款守卫（正则扫 import 语句）见 tests/test_engine_purity.py。
+# engine = 原生运行时（方案 3，2026-11-07）：contracts（类型与协议，最底层）← kernel（中间件，
+# 只依赖 contracts）← runtime（装配、驱动、消息/模型/工具适配，唯一面向框架的一层）。
+# server 只认 contracts 和 runtime：不 import 框架，也不直捅 kernel —— langchain 升级的
+# 影响面因此只有 engine。运行时同款守卫见 tests/test_engine_purity.py。
 #
-# 历史注：engine 外层（spec / events / runner / model_factory …）已整体搬进
-# server —— kernel 的方向守卫禁止它们被 kernel 认识之后，消费者只剩 server
-# 自己，「共享词汇」的前提不复存在。atlas_engine 从此 = kernel + contracts。
-# 曾经的「server 禁 import kernel」contract 随 agent.py 防腐层一起撤销。
+# 历史注：10 月曾把 spec / events / runner 搬进 server（「只有 server 一个使用方」），server 随之
+# 到处 import langchain 和 kernel 内部。方案 3 把它们搬回 engine：理由不是共享词汇，而是框架
+# 隔离 —— 边界切在 AgentRuntime 这条接缝上。
+[[tool.importlinter.contracts]]
+name = "server 不 import 框架（langchain / langgraph 只在 engine）"
+type = "forbidden"
+source_modules = ["atlas_agent"]
+forbidden_modules = [
+  "langchain",
+  "langchain_core",
+  "langchain_anthropic",
+  "langchain_openai",
+  "langgraph",
+  "langsmith",
+]
+# 经 atlas_engine.runtime 间接用到框架是设计本身
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "server 不直捅 kernel（只认 atlas_engine.contracts 与 atlas_engine.runtime）"
+type = "forbidden"
+source_modules = ["atlas_agent"]
+forbidden_modules = ["atlas_engine.kernel"]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "engine 内部分层：runtime -> kernel -> contracts"
+type = "layers"
+layers = ["atlas_engine.runtime", "atlas_engine.kernel", "atlas_engine.contracts"]
+
+[[tool.importlinter.contracts]]
+name = "contracts 不碰框架"
+type = "forbidden"
+source_modules = ["atlas_engine.contracts"]
+forbidden_modules = ["langchain", "langchain_core", "langchain_anthropic", "langgraph"]
 
 # atlas_acp 会被装进 **Pod 镜像**（bridge 依赖它）。它必须能脱离整个 atlas
 # 依赖树独立安装 —— 拖进 atlas_agent 就等于把 sqlalchemy/fastapi 塞进每个
@@ -434,16 +464,13 @@ forbidden_modules = [
   "atlas_usercenter",
 ]
 
-# server 里的纯计算层：装配（build）、执行循环（runner）、词汇（spec/events/
-# translator/tool_registry）不许碰基础设施 —— 「run 一轮」必须继续可以用
-# 假模型脱离 DB/Redis 测试。IO 归 assembly / services / repositories。
+# server 里留下的纯计算层不许碰基础设施。原生运行时的装配、执行循环、词汇已在 engine，
+# 由上面「engine 不得依赖 server / web / DB」兜住。
 [[tool.importlinter.contracts]]
 name = "server 纯计算层不得依赖基础设施"
 type = "forbidden"
 source_modules = [
   "atlas_agent.domain",
-  "atlas_agent.executor.runner",
-  "atlas_agent.executor.build",
   # translate 是纯函数：一条 update 进、零或多条事件意图出。它必须能脱离
   # WS 与 DB 单测 —— §06 的表就是它的测试用例（acp 详设 §03）。
   "atlas_agent.cli.translate",
@@ -496,7 +523,7 @@ exclude = ["agent-platform/libs/engine/src/atlas_engine/kernel/**"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["agent-platform/tests", "agent-platform/services/skill/tests", "usercenter/services/usercenter/tests", "teamflow/services/teamflow/tests", "agent-platform/services/knowledge/tests", "agent-platform/services/memory/tests", "agent-platform/services/mcpgateway/tests", "agent-platform/services/modelgateway/tests", "agent-platform/bench/tests", "infra-platform/libs/redislock/tests", "infra-platform/libs/appconfig/tests"]
+testpaths = ["agent-platform/tests", "agent-platform/services/skill/tests", "usercenter/services/usercenter/tests", "teamflow/services/teamflow/tests", "agent-platform/services/knowledge/tests", "agent-platform/services/memory/tests", "agent-platform/services/mcpgateway/tests", "agent-platform/services/modelgateway/tests", "agent-platform/bench/tests", "infra-platform/libs/redislock/tests", "infra-platform/libs/appconfig/tests", "infra-platform/libs/jobs/tests"]
 addopts = "-ra"
 
 [tool.mypy]
@@ -519,3 +546,10 @@ name = "atlas_appconfig 不依赖本仓任何其它包"
 type = "forbidden"
 source_modules = ["atlas_appconfig"]
 forbidden_modules = ["atlas_acp", "atlas_bench", "atlas_bridge", "atlas_skill", "atlas_engine", "atlas_host", "atlas_jsonrpc", "atlas_knowledge", "atlas_agent", "atlas_teamflow", "atlas_usercenter", "atlas_redislock"]
+
+[[tool.importlinter.contracts]]
+# 定时任务嵌入宿主应用（c4-model/infra-platform/code-jobs.html）：谁都可以用，因此它不能认识其中任何一个
+name = "atlas_jobs 不依赖本仓任何其它包"
+type = "forbidden"
+source_modules = ["atlas_jobs"]
+forbidden_modules = ["atlas_acp", "atlas_bench", "atlas_bridge", "atlas_skill", "atlas_engine", "atlas_host", "atlas_jsonrpc", "atlas_knowledge", "atlas_agent", "atlas_teamflow", "atlas_usercenter", "atlas_redislock", "atlas_appconfig"]

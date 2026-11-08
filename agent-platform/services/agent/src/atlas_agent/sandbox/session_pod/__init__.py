@@ -41,9 +41,10 @@ from ..provisioning.model import BizRef, BizType, SandboxRef
 from ..provisioning.service import SandboxProvisioning
 
 if TYPE_CHECKING:
+    from atlas_engine.contracts.spec import CliSpec
+
     from ...config import Settings
     from ...db.models import Thread
-    from ...domain.spec import CliSpec
 
 __all__ = [
     "CLI_TEMPLATE",

@@ -22,10 +22,9 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 from uuid import UUID, uuid4
 
-from atlas_engine.kernel.middleware.approval import approval_id_for
+from atlas_engine.contracts.approval import approval_id_for
+from atlas_engine.contracts.events import EventType
 from atlas_jsonrpc import current_request_id
-
-from ..domain.events import EventType
 
 __all__ = ["ApprovalPort", "PermissionDesk"]
 

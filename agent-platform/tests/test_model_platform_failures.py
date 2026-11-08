@@ -15,9 +15,6 @@ from uuid import UUID
 import anthropic
 import httpx
 import pytest
-from atlas_agent.domain.events import EventType
-from atlas_agent.domain.spec import AgentSpec, ModelSpec
-from atlas_agent.providers.llm.failures import model_call_failure
 from atlas_agent.providers.llm.model_platform import (
     ClientKey,
     ModelNotAllowed,
@@ -29,6 +26,9 @@ from atlas_agent.providers.llm.model_platform import (
     client_key,
     reset_model_platform_cache,
 )
+from atlas_engine.contracts.events import EventType
+from atlas_engine.contracts.spec import AgentSpec, ModelSpec
+from atlas_engine.runtime.failures import model_call_failure
 
 from tests.fakes import raising_model
 from tests.graphs import run_agent

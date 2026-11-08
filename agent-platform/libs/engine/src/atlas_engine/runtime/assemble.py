@@ -1,27 +1,39 @@
-"""spec + 能力对象 → agent 图。装配策略的唯一住所。
+"""spec + 能力对象 → agent 图。装配的唯一住所：装哪些中间件、什么顺序、系统提示词怎么拼，
+都只在这里定（原生运行时，c4-model/agent/native-runtime/code-native-runtime-turn.html）。
 
-前身是 engine 的 `agent.py`（防腐层）。kernel 永久内化之后那层防腐失去了
-对象，装配策略随之收进 server —— **知道配置、知道能力从哪来的层才有资格
-决定装什么、什么顺序**。engine 只剩词汇（spec / events）与执行循环（runner）。
+原先分在三处：server 的 build.py 装一半中间件，kernel 的 create_deep_agent 再装技能、文件、
+子智能体和提示词缓存，最后才交给 langchain 的 create_agent。现在合成一处，kernel 只提供
+中间件本身。
 
-★ 本模块刻意保持纯净：只 import engine / kernel，不碰 DB、Redis、Settings。
-  测试用假模型 + 假能力对象即可脱离一切基础设施装配出真实的图 ——
-  IO 的收集在 assembly.py，那里才认识 boto3 与 Redis。
+★ 中间件的顺序带语义，按槽位交给 MiddlewareStack（kernel/stack.py 写着每个槽位为什么在那里）；
+  这里只说「放进哪个槽位」，不排先后。提示词缓存不占槽位，永远在最内层：改系统提示词的
+  中间件都在它外面，缓存前缀才不会每轮失效。
+★ 不按模型做任何调整：系统提示词、工具、中间件只由 spec 和能力对象决定（原先的
+  HarnessProfile 2026-10-19 删除）。也不装压缩：上下文管理只有调用方交来的那一套（槽位 ④）。
+★ 本模块刻意保持纯净：不碰 DB、Redis、配置。测试用假模型 + 假能力对象即可脱离一切基础设施
+  装配出真实的图 —— IO 的收集在 server 的 executor/assembly.py。
 """
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
 from atlas_engine.contracts import InvalidSpec
+from atlas_engine.contracts.mcp_naming import parse_tool_id
+from atlas_engine.contracts.tools import ToolSpec
 from atlas_engine.kernel.middleware.ask_user import AskUserMiddleware
+from atlas_engine.kernel.middleware.auto_judge import AutoJudge, JudgeSetup
+from atlas_engine.kernel.middleware.filesystem import FilesystemMiddleware
 from atlas_engine.kernel.middleware.limits import StepLimitMiddleware, ToolGovernorMiddleware
 from atlas_engine.kernel.middleware.permission import PermissionMiddleware
+from atlas_engine.kernel.middleware.skills import SkillsMiddleware
+from atlas_engine.kernel.middleware.subagents import SubAgentMiddleware
 from atlas_engine.kernel.middleware.suspension import SuspensionMiddleware
 from atlas_engine.kernel.stack import MiddlewareStack, Slot
-
-from atlas_agent.domain.mcp_naming import parse_tool_id
-from atlas_agent.domain.tool_registry import (
+from atlas_engine.runtime.context import ContextPorts, context_pipeline
+from atlas_engine.runtime.tool_registry import (
     ASK_USER_TOOL,
     FILESYSTEM_TOOL,
     filesystem_tools_for,
@@ -29,8 +41,11 @@ from atlas_agent.domain.tool_registry import (
     middleware_for,
     tool_effects,
 )
+from atlas_engine.runtime.tools import to_langchain
 
 if TYPE_CHECKING:
+    from langchain_core.language_models import BaseChatModel
+
     from atlas_engine.contracts import (
         ApprovalGate,
         FilesystemProtocol,
@@ -38,12 +53,70 @@ if TYPE_CHECKING:
         SkillRef,
         SubAgentSpawner,
     )
-    from atlas_engine.kernel.middleware.auto_judge import AutoJudge
-    from langchain_core.language_models import BaseChatModel
+    from atlas_engine.contracts.spec import AgentSpec
 
-    from atlas_agent.domain.spec import AgentSpec
+__all__ = ["Capabilities", "JudgePort", "assemble", "build_graph", "compile_agent"]
 
-__all__ = ["build_graph"]
+
+@dataclass(frozen=True)
+class JudgePort:
+    """自动模式的判断器从哪拿模型和用户的要求。
+
+    setup 在第一次判断时才调（多数段落用不到判断器，不该为它多一次平台请求）：返回 None =
+    没有配置判断器（按没有判断器处理）；配了但现在用不了就抛错（退回请示）。
+    """
+
+    setup: Callable[[], Awaitable[JudgeSetup | None]]
+    timeout_s: float
+
+
+@dataclass(frozen=True)
+class Capabilities:
+    """一段的能力：server 收集好交进来（IO 都在 server），engine 据此装配。
+
+    一律可缺省 —— None / 空的含义是**该能力结构性不存在**（对应工具不注册），不是「注册后调用
+    才报错」：后者模型看得见、每次尝试烧一轮 token。
+    """
+
+    #: 主模型（runtime.models.build_chat_model 造的，server 只当它是个不透明的对象）
+    model: Any
+    tools: Sequence[ToolSpec] = ()
+    #: MCP 工具多时改成按需加载：模型平时只看到名字，用 tool_search 加载定义
+    deferred_tools: Sequence[ToolSpec] = ()
+    filesystem: FilesystemProtocol | None = None
+    sandbox: SandboxProtocol | None = None
+    skills: Sequence[SkillRef] = ()
+    approvals: ApprovalGate | None = None
+    judge: JudgePort | None = None
+    spawner: SubAgentSpawner | None = None
+    #: 上下文流水线的端口；None = 不装（测试）
+    context: ContextPorts | None = None
+    #: 持久指令（平台 → 用户 → 工作区）、记忆常驻块
+    instructions: str | None = None
+    memory: str | None = None
+    #: 提示词缓存的 TTL。None = 不打缓存标记（模型不支持，或智能体没开）
+    prompt_cache_ttl: Literal["5m", "1h"] | None = None
+
+
+def assemble(spec: AgentSpec, caps: Capabilities) -> Any:
+    """原生运行时装配的入口：spec + 能力 → 图（交给 runner.run 驱动）。"""
+    return build_graph(
+        spec,
+        caps.model,
+        filesystem=caps.filesystem,
+        sandbox=caps.sandbox,
+        approvals=caps.approvals,
+        judge=AutoJudge(caps.judge.setup, timeout_s=caps.judge.timeout_s) if caps.judge else None,
+        context=context_pipeline(spec, caps.context) if caps.context is not None else None,
+        skills=list(caps.skills),
+        extra_tools=caps.tools,
+        spawner=caps.spawner,
+        instructions=caps.instructions,
+        memory=caps.memory,
+        deferred_tools=caps.deferred_tools,
+        prompt_cache_ttl=caps.prompt_cache_ttl,
+    )
+
 
 #: 文件工具那一段。它与沙箱无关 —— 没配 bash 的 agent 也有工作区。
 _FILESYSTEM_HINT = (
@@ -93,14 +166,14 @@ def build_graph(
     judge: AutoJudge | None = None,
     context: Any = None,
     skills: list[SkillRef] | None = None,
-    extra_tools: list[Any] | None = None,
+    extra_tools: Sequence[ToolSpec] = (),
     spawner: SubAgentSpawner | None = None,
     instructions: str | None = None,
     memory: str | None = None,
-    deferred_tools: list[Any] | None = None,
+    deferred_tools: Sequence[ToolSpec] = (),
     prompt_cache_ttl: Literal["5m", "1h"] | None = None,
 ) -> Any:
-    """按 spec 组装 agent 图。返回 CompiledStateGraph，交给 runner.run 驱动。
+    """按 spec 组装 agent 图。返回编译好的图，交给 runner.run 驱动。
 
     能力对象一律可缺省 —— None 的含义是**该能力结构性不存在**（对应工具
     不注册），不是"注册后调用才报错"：后者模型看得见、每次尝试烧一轮 token。
@@ -109,9 +182,12 @@ def build_graph(
     模型目录实测支持」决定 —— 本模块不碰 DB 与 Settings。
 
     judge 是自动模式的判断器（None = 没有配置：判断格按没有判断器处理，见 PermissionMiddleware）。
-    """
-    from atlas_engine.kernel.graph import FilesystemConfig, SubAgentConfig, create_deep_agent
 
+    extra_tools / deferred_tools：server 实现的工具（MCP、知识库、记忆），在这里转成框架的工具；
+    后者只给名字，模型用 tool_search 按需加载定义（上下文管理 §13）。
+    """
+    tools = [to_langchain(t) for t in extra_tools]
+    deferred = [to_langchain(t) for t in deferred_tools]
     system_prompt = spec.system_prompt or ""
     if FILESYSTEM_TOOL in spec.tool_names:
         system_prompt = f"{system_prompt}\n\n{_FILESYSTEM_HINT}".strip()
@@ -130,7 +206,7 @@ def build_graph(
 
     # ★ SubAgent 不设层数：native SubAgent 的 spec 带着同一份名录（spec_for_subagent），
     #   它的子 run 在这里同样装上 task。跑飞的递归由整棵树的累计上限兜住（SubAgentService）。
-    subagent_config: SubAgentConfig | None = None
+    subagents: SubAgentMiddleware | None = None
     if spec.subagents:
         if spawner is None:
             # §13.2 不允许静默降级：配了 SubAgent 却没注入 spawner，砍掉 task
@@ -142,9 +218,10 @@ def build_graph(
             )
         # 只交 name / description / session_mode 给 task 的工具描述 —— SubAgent 的模型、
         # 中间件、权限都在**子 run** 里按 spec_for_subagent 派生的 AgentSpec
-        # 重新装配（detail/subagent.html §09）。
-        subagent_config = SubAgentConfig(
-            agents=[
+        # 重新装配（detail/subagent.html §09）。task 不在图内跑子图：spawner 在 SubAgent
+        # 自己的会话上起子 run，本段随即挂起；SubAgent 的图在这里完全不编译。
+        subagents = SubAgentMiddleware(
+            subagents=[
                 {
                     "name": sub.name,
                     "description": sub.description,
@@ -157,9 +234,8 @@ def build_graph(
             spawner=spawner,
         )
 
-    # ★ 中间件顺序即语义，只在一处定：按槽位交给 MiddlewareStack（atlas_engine/kernel/stack.py
-    #   写着每个槽位为什么在那里）。挂起 → 提问 → 审批 → 上下文 → 工具 → 限额 → 子智能体，
-    #   提示词缓存永远在最内层。这里只说「放进哪个槽位」，不排先后。
+    # ★ 中间件顺序即语义：挂起 → 提问 → 审批 → 上下文 → 工具 → 限额 → 子智能体，
+    #   提示词缓存永远在最内层（见模块文档）。
     stack = MiddlewareStack()
     # ★ 无条件装：它无状态、零开销（只扫最后几条消息），而「悬空的 tool_call
     #   续跑时自愈」这条判据对任何 agent 都有价值 —— 不只是配了子智能体或
@@ -173,7 +249,7 @@ def build_graph(
     stack.add(
         Slot.PERMISSION,
         PermissionMiddleware(
-            effects=tool_effects([*(extra_tools or ()), *(deferred_tools or ())]),
+            effects=tool_effects([*tools, *deferred]),
             default_mode=spec.approval.default_mode,
             gate=approvals,
             execution_modes=spec.approval.execution_modes(),
@@ -185,37 +261,68 @@ def build_graph(
     #   槽位 ④ 包在工具（⑤）外面，execute、MCP 等所有工具的结果都经过它
     if context is not None:
         stack.add(Slot.CONTEXT, context)
+    # 工具槽位里技能清单、文件工具在最前（同槽位按交进来的先后）
+    if skills:
+        # 空列表不装：一个内容为空的技能段只会白占提示词
+        stack.add(Slot.TOOLS, SkillsMiddleware(skills=list(skills)))
+    # 文件工具白名单：未勾 filesystem 是空表，不装文件中间件，模型看不到任何文件工具。
+    # 没注入 filesystem = 没有存储 = 没有文件能力，白名单无从谈起。execute 不在此列，它归
+    # SandboxMiddleware
+    fs_tools = filesystem_tools_for(set(spec.tool_names))
+    if filesystem is not None and fs_tools:
+        stack.add(Slot.TOOLS, FilesystemMiddleware(filesystem=filesystem, tools=fs_tools))
     if sandbox is not None:
         from atlas_engine.kernel.middleware.sandbox import SandboxMiddleware
 
         stack.add(Slot.TOOLS, SandboxMiddleware(sandbox=sandbox))
     # 延迟工具（上下文管理 §13）：MCP 工具多时只给名字，模型用 tool_search 按需加载定义
-    if deferred_tools:
+    if deferred:
         from atlas_engine.kernel.middleware.tool_search import ToolSearchMiddleware
 
-        stack.add(Slot.TOOLS, ToolSearchMiddleware(deferred_tools))
+        stack.add(Slot.TOOLS, ToolSearchMiddleware(deferred))
     stack.extend(Slot.TOOLS, middleware_for(set(spec.tool_names)))
     stack.add(Slot.LIMITS, StepLimitMiddleware(spec.limits.max_steps))
     stack.add(Slot.LIMITS, ToolGovernorMiddleware(concurrency=spec.limits.tool_concurrency))
 
-    return create_deep_agent(
-        model=model,
-        system_prompt=system_prompt or None,
-        tools=list(extra_tools) if extra_tools else None,
-        # 空列表传 None：装一个内容为空的技能段只会白占提示词
-        skills=list(skills) if skills else None,
-        # 文件工具白名单：未勾 filesystem 传空表 —— kernel 不装文件中间件，
-        # 模型看不到任何文件工具。execute 已不在此列，它归 SandboxMiddleware。
-        # 没注入 filesystem 就传 None：没有存储 = 没有文件能力，白名单无从谈起。
-        filesystem=(
-            FilesystemConfig(
-                filesystem=filesystem, tools=filesystem_tools_for(set(spec.tool_names))
-            )
-            if filesystem is not None
-            else None
-        ),
-        middleware=stack,
-        # 没配子智能体（或深度为 0）是 None：kernel 不装 task
-        subagents=subagent_config,
+    if subagents is not None:
+        stack.add(Slot.SUBAGENTS, subagents)
+
+    return compile_agent(
+        model,
+        system_prompt=system_prompt,
+        tools=tools,
+        stack=stack,
         prompt_cache_ttl=prompt_cache_ttl,
     )
+
+
+def compile_agent(
+    model: BaseChatModel,
+    *,
+    system_prompt: str = "",
+    tools: Sequence[Any] = (),
+    stack: MiddlewareStack | None = None,
+    prompt_cache_ttl: Literal["5m", "1h"] | None = None,
+) -> Any:
+    """按槽位排好的中间件 + 模型 + 工具 → 编译好的图。只做机械的事，装什么在 build_graph 定。
+
+    ★ 提示词缓存排在最内层：它给最终的请求打标记（系统提示词、最后一个工具、消息尾），
+      在它外面改系统提示词的中间件才不会让缓存前缀每轮失效。装不装、TTL 多长由调用方定
+      （模型支不支持、用户开没开只有 server 知道）。
+    ★ 图状态就是 langchain 的 AgentState；不用 checkpointer —— 历史每轮从 message 表重建。
+    """
+    from langchain.agents import create_agent
+    from langchain_anthropic.middleware import AnthropicPromptCachingMiddleware
+
+    middleware = (stack or MiddlewareStack()).ordered()
+    if prompt_cache_ttl is not None:
+        caching = AnthropicPromptCachingMiddleware(
+            ttl=prompt_cache_ttl, unsupported_model_behavior="ignore"
+        )
+        middleware.append(caching)
+    return create_agent(
+        model,
+        system_prompt=system_prompt,
+        tools=list(tools) or None,
+        middleware=middleware,
+    ).with_config({"recursion_limit": 9_999})

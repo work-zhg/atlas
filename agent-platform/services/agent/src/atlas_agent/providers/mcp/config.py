@@ -9,9 +9,8 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
+from atlas_engine.contracts.mcp_naming import SERVER_NAME_PATTERN
 from pydantic import BaseModel, Field
-
-from ...domain.mcp_naming import SERVER_NAME_PATTERN
 
 ResponseHook = Callable[[Any], Awaitable[None]]
 

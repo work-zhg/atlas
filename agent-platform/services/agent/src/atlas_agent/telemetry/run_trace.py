@@ -35,7 +35,8 @@ from . import semconv as sc
 if TYPE_CHECKING:
     from datetime import datetime
 
-    from ..domain.events import TraceEvent
+    from atlas_engine.contracts.events import TraceEvent
+
     from ..executor.segment_data import Segment
 
 logger = logging.getLogger(__name__)
@@ -242,7 +243,7 @@ class RunTrace:
             logger.debug("事件转 span 失败：%s", event.type, exc_info=True)
 
     def _observe(self, event: TraceEvent) -> None:
-        from ..domain.events import EventType
+        from atlas_engine.contracts.events import EventType
 
         kind = event.type
         data = event.data or {}

@@ -14,14 +14,6 @@ from typing import Any
 import httpx
 import pytest
 from atlas_agent.config import get_settings
-from atlas_agent.domain.spec import (
-    AgentSpec,
-    CliSpec,
-    ModelSpec,
-    SandboxSpec,
-    SubAgentSpec,
-    spec_for_subagent,
-)
 from atlas_agent.redisx import make_redis
 from atlas_agent.sandbox.component import SandboxComponent
 from atlas_agent.sandbox.exec import (
@@ -32,6 +24,14 @@ from atlas_agent.sandbox.exec import (
 )
 from atlas_agent.sandbox.native import ImageDenied, WorkspaceRef
 from atlas_engine.contracts import InvalidSpec
+from atlas_engine.contracts.spec import (
+    AgentSpec,
+    CliSpec,
+    ModelSpec,
+    SandboxSpec,
+    SubAgentSpec,
+    spec_for_subagent,
+)
 from pydantic import SecretStr
 
 from tests.opensandbox_fake import FakeOpenSandbox, fake_settings

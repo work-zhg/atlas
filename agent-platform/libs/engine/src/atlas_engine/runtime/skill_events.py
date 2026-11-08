@@ -14,7 +14,7 @@ import re
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from .events import EventType
+from atlas_engine.contracts.events import EventType
 
 __all__ = ["SkillLoadTracker", "skill_slug_of"]
 

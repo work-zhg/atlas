@@ -16,9 +16,10 @@ from uuid import UUID, uuid4
 
 import pytest
 from atlas_agent.approval import service as approval_service
-from atlas_agent.executor.runner import Answer, EventFactory, _from_updates, _transcript_messages
 from atlas_agent.executor.scheduling import RunWorker
 from atlas_agent.executor.segment import SegmentLoader
+from atlas_engine.runtime.messages import map_messages
+from atlas_engine.runtime.runner import Answer, EventFactory, _from_updates, _transcript_messages
 from langchain_core.messages import AIMessage, ToolMessage
 
 AP_1 = str(uuid4())
@@ -84,7 +85,8 @@ def approvals(monkeypatch: pytest.MonkeyPatch) -> type[_FakeApprovals]:
 async def _resume_state(waiting_on: Any, history: list[Any]) -> tuple[dict, dict]:
     run = SimpleNamespace(run_uuid=uuid4(), waiting_on=waiting_on)
     # 只走审批分支，不碰 session / self 的其它部分
-    return await SegmentLoader().resume_state(None, run, history)  # type: ignore[arg-type]
+    # 历史交存储格式（与 SegmentLoader.load 一致）
+    return await SegmentLoader().resume_state(None, run, map_messages(history))  # type: ignore[arg-type]
 
 
 async def test_second_resume_drops_waits_that_already_have_a_result(approvals: Any) -> None:
@@ -131,13 +133,12 @@ async def test_old_array_shaped_waiting_on_is_ignored(approvals: Any) -> None:
 
 
 async def test_resubmit_keeps_strong_ref_to_new_task() -> None:
-    """续跑时同一个 run_id 被再次领取：上一段任务结束不能把新任务的引用删掉。"""
+    """续跑时同一个 run_id 被再次抢到：上一段任务结束不能把新任务的引用删掉。"""
     import asyncio
 
     ex = RunWorker.__new__(RunWorker)
     ex._slots = {}
-    # 续租任务已在跑（这里用一个永不完成的 future 占位，不让 _spawn 去起真的）
-    ex._renewer = asyncio.get_running_loop().create_future()
+    ex._draining = False
     release = asyncio.Event()
 
     async def guarded(run_id: object, slot: object, takeover: object = None) -> None:
@@ -146,10 +147,10 @@ async def test_resubmit_keeps_strong_ref_to_new_task() -> None:
     ex._guarded = guarded  # type: ignore[method-assign]
 
     rid = uuid4()
-    ex._spawn(rid, None)
+    ex._start(rid, None)
     first = ex._slots[rid]
     first.task.cancel()  # 上一段先结束
-    ex._spawn(rid, None)  # 续跑段
+    ex._start(rid, None)  # 续跑段
     second = ex._slots[rid]
     await asyncio.sleep(0)
     assert ex._slots.get(rid) is second, "上一段的回调删掉了续跑段的引用"

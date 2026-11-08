@@ -17,12 +17,12 @@ from uuid import UUID, uuid4
 import pytest
 from atlas_agent.cli import runtime as cli_runtime_mod
 from atlas_agent.cli.runtime import CliRuntime
-from atlas_agent.domain.events import EventType, TraceEvent
-from atlas_agent.domain.spec import CliSpec, KnowledgeSpec
 from atlas_agent.sandbox.session_pod import PodEndpoint
 from atlas_bridge.app import BridgeApp
 from atlas_bridge.config import BridgeConfig
 from atlas_bridge.testing.fake_agent import Script
+from atlas_engine.contracts.events import EventType, TraceEvent
+from atlas_engine.contracts.spec import CliSpec, KnowledgeSpec
 
 TOKEN = "tok-" + "y" * 40
 

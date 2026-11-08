@@ -18,13 +18,13 @@ from typing import Any
 import httpx
 import pytest
 from atlas_agent.config import get_settings
-from atlas_agent.domain.spec import SandboxSpec
 from atlas_agent.redisx import make_redis
 from atlas_agent.sandbox.base.execution.ledger import ActivityLedger
 from atlas_agent.sandbox.base.execution.values import CommandSpec
 from atlas_agent.sandbox.component import SandboxComponent
 from atlas_agent.sandbox.native import ImageDenied
 from atlas_agent.sandbox.provisioning.model import QuotaExceeded
+from atlas_engine.contracts.spec import SandboxSpec
 
 from tests.opensandbox_fake import FakeOpenSandbox, fake_settings
 from tests.sandbox_env import component, new_workspace

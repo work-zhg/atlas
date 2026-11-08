@@ -14,13 +14,14 @@ from uuid import uuid4
 
 import pytest
 from atlas_agent.config import Settings
-from atlas_agent.domain.spec import AgentSpec, LimitSpec, ModelSpec
 from atlas_engine.contracts import APPROVAL_MODES
+from atlas_engine.contracts.spec import AgentSpec, LimitSpec, ModelSpec
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage
 from langchain_core.outputs import ChatGenerationChunk
 from langchain_core.tools import tool
 
+from tests.fakes import tool_spec
 from tests.graphs import run_agent as run
 
 _SEEN: list[dict[str, Any]] = []
@@ -89,7 +90,10 @@ async def test_the_cached_prefix_is_identical_in_all_three_approval_modes() -> N
     seen = {}
     for mode in APPROVAL_MODES:
         seen[mode] = await _request(
-            prompt_cache_ttl="1h", approval_mode=mode, history=history, extra_tools=[_send_report]
+            prompt_cache_ttl="1h",
+            approval_mode=mode,
+            history=history,
+            extra_tools=[tool_spec(_send_report)],
         )
     manual = seen["manual"]
     tools = [t["name"] for t in manual["kwargs"]["tools"]]

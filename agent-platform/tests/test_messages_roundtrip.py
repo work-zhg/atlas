@@ -14,13 +14,8 @@
 
 from __future__ import annotations
 
-from atlas_agent.domain.messages import (
-    KIND_CHAT,
-    KIND_TOOL_RESULT,
-    StoredMessage,
-    from_storage,
-    to_storage,
-)
+from atlas_engine.contracts.messages import KIND_CHAT, KIND_TOOL_RESULT, StoredMessage
+from atlas_engine.runtime.messages import from_storage, to_storage
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 

@@ -1,6 +1,6 @@
 """执行循环：驱动装好的图，产出 TraceEvent 流（文档 §4.5）。
 
-★ 与 build.py 是一对：build 管「图长什么样」，这里管「怎么跑完一轮」。
+★ 与 assemble.py 是一对：assemble 管「图长什么样」，这里管「怎么跑完一轮」。
   刻意保持无基础设施（不碰 DB / Redis / Settings）—— 守卫见
   test_engine_purity.py 的 server 纯层测试。
 
@@ -32,15 +32,6 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 from uuid import UUID
 
-from atlas_engine.contracts import (
-    REFUSAL_STOP_REASONS,
-    EngineError,
-    LimitExceeded,
-    ModelRefused,
-    WaitingOn,
-    classify,
-)
-from atlas_engine.kernel.middleware.subagents import SUBAGENT_TOOL, task_brief
 from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
@@ -49,19 +40,29 @@ from langchain_core.messages import (
     ToolMessage,
 )
 
-from ..domain.events import Answer, EventFactory, EventType, TraceEvent
-from ..domain.messages import Transcript
-from ..domain.skill_events import SkillLoadTracker
-from ..domain.spec import AgentSpec
-from ..domain.tool_registry import unsupported_tools
-from ..domain.translator import (
+from atlas_engine.contracts import (
+    REFUSAL_STOP_REASONS,
+    EngineError,
+    LimitExceeded,
+    ModelRefused,
+    WaitingOn,
+    classify,
+)
+from atlas_engine.contracts.events import Answer, EventFactory, EventType, TraceEvent
+from atlas_engine.contracts.messages import StoredLike
+from atlas_engine.contracts.spec import AgentSpec
+from atlas_engine.kernel.middleware.subagents import SUBAGENT_TOOL, task_brief
+from atlas_engine.runtime.failures import model_call_failure
+from atlas_engine.runtime.messages import Transcript, history_messages
+from atlas_engine.runtime.skill_events import SkillLoadTracker
+from atlas_engine.runtime.tool_registry import unsupported_tools
+from atlas_engine.runtime.translator import (
     extract_text,
     has_thinking,
     normalize_usage,
     tool_calls_from,
     tool_result_from,
 )
-from ..providers.llm.failures import model_call_failure
 
 
 class CancelToken(Protocol):
@@ -75,9 +76,11 @@ Titler = Callable[[str], Awaitable["dict[str, Any] | None"]]
 
 
 class SegmentInput(Protocol):
-    """runner 从一段里读的东西（executor/segment_data.py::Segment 满足它）。
+    """runner 从一段里读的东西（server 的 executor/segment_data.py::Segment 满足它）。
 
     ★ runner 是纯计算层，不认识 Segment 本身：那上面带着会话的 ORM 行和模型端点。
+    ★ 历史交的是**存储格式**（contracts.messages）和压缩摘要：转成框架的消息是原生运行时
+      自己的事，server 和 CLI 运行时都不认识 LangChain 的消息类型。
     """
 
     @property
@@ -85,7 +88,9 @@ class SegmentInput(Protocol):
     @property
     def input_content(self) -> Any: ...
     @property
-    def history(self) -> Sequence[BaseMessage]: ...
+    def history(self) -> Sequence[StoredLike]: ...
+    @property
+    def summary(self) -> str | None: ...
     @property
     def start_seq(self) -> int: ...
     @property
@@ -231,7 +236,7 @@ async def run(
 ) -> AsyncIterator[TraceEvent]:
     """驱动一张**已装配好的图**跑一段，产出 TraceEvent 流（TurnDriver）。
 
-    ★ 图由调用方装配（server/executor/build.py::build_graph）—— runner 只管
+    ★ 图由调用方装配（runtime/assemble.py::build_graph）—— runner 只管
       执行循环与事件推导。这一段要跑什么都在 segment 里（SegmentInput：
       输入、历史、续跑、序号起点、跨段累计的 token、委派深度、挂起现场、审批模式、
       跨段 state），这里只剩 runner 自己消费的注入点：
@@ -240,14 +245,14 @@ async def run(
 
     transcript: 收集本轮**实际产生**的消息（模型的 tool_use、工具的结果）。
         调用方要落库这些消息时传进来；不传就不收集，零开销。见
-        domain/messages.py::Transcript。
+        runtime/messages.py::Transcript。
 
     notices: 装配期发现、要让用户看见的情况（技能被下架跳过、MCP 工具定义变了）。
         紧跟 run.started 产出 —— 装配发生在事件工厂之前，由这里统一编号才能
         保住 seq 无空洞（契约规则 2）。
 
     spec 在这里只读两样：run.started 的元信息、max_total_tokens ——
-    调用方必须保证 graph 与 spec 出自同一份配置（build.py 是唯一装配点）。
+    调用方必须保证 graph 与 spec 出自同一份配置（assemble.py 是唯一装配点）。
 
     ★ segment 里几个字段在这里的语义：
       start_seq     事件序号的起点。同一个 run 分多段执行时，第二段必须接着第一段往下数
@@ -261,7 +266,7 @@ async def run(
     """
     spec = segment.spec
     input_content = segment.input_content
-    history: Sequence[BaseMessage] = segment.history
+    history = history_messages(segment.history, summary=segment.summary)
     start_seq, resume = segment.start_seq, segment.resume
     prior_tokens, base_depth = segment.prior_tokens, segment.base_depth
     waiting_on, decisions = segment.waiting_on, segment.decisions

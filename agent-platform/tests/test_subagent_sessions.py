@@ -719,9 +719,9 @@ async def test_subagent_approvals_land_on_the_thread_stream(client_factory) -> N
     from uuid import uuid4
 
     from atlas_agent.db.models import Approval
-    from atlas_agent.domain.events import EventFactory, EventType
     from atlas_agent.redisx import make_redis
     from atlas_agent.stream.relay import EventRelay
+    from atlas_engine.contracts.events import EventFactory, EventType
 
     parent = TurnModel(
         scripts=[

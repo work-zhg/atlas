@@ -14,6 +14,7 @@ engine 侧的时序与决策语义见 test_approval.py。
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -24,6 +25,7 @@ from atlas_agent.config import get_settings
 from atlas_agent.db.session import fetch_one, get_sessionmaker
 from atlas_agent.executor.compose import build_executor
 from atlas_agent.main import create_app
+from atlas_jobs import JobContext, NoParams
 from httpx import ASGITransport
 from langchain_core.messages import AIMessageChunk
 
@@ -268,7 +270,7 @@ async def test_a_pending_approval_does_not_resume_early(client: httpx.AsyncClien
     executor = client._transport.app.state.executor  # type: ignore[attr-defined]
 
     assert await executor.resume_if_ready(run_id) is False, "没决策就被续跑了"
-    assert await executor.sweep_suspended() == 0
+    await _recover(executor)
 
     run = (await client.get(f"/v1/runs/{run_id}")).json()
     assert run["status"] == "suspended", run
@@ -295,7 +297,7 @@ async def test_an_old_approval_never_expires(client: httpx.AsyncClient) -> None:
         )
         await session.commit()
 
-    assert await executor.sweep_suspended() == 0
+    await _recover(executor)
     assert (await client.get(f"/v1/runs/{run_id}")).json()["status"] == "suspended"
     async with get_sessionmaker()() as session:
         row = await fetch_one(session, Approval, Approval.approval_uuid == UUID(approval_id))
@@ -318,7 +320,7 @@ async def test_an_old_approval_never_expires(client: httpx.AsyncClient) -> None:
 async def test_an_online_wait_is_not_mistaken_for_a_suspension(
     client: httpx.AsyncClient,
 ) -> None:
-    """★ CLI 在线等权限是 running + awaiting_user，扫描和续跑都不能碰它。
+    """★ CLI 在线等权限是 running + awaiting_user，兜底任务和续跑都不能碰它。
 
         原生   图已跳出、进程已结束 —— 真挂起（suspended），waiting_on 有值
         CLI    CLI 在 Pod 里发起的同步 RPC，**run 还在跑** —— bridge 正等着
@@ -345,7 +347,7 @@ async def test_an_online_wait_is_not_mistaken_for_a_suspension(
         )
         await session.commit()
 
-    assert await executor.sweep_suspended() == 0, "在线等待的 run 被当成挂起续跑了"
+    await _recover(executor)
     assert await executor.resume_if_ready(UUID(run_id)) is False
 
     run = (await client.get(f"/v1/runs/{run_id}")).json()
@@ -446,3 +448,10 @@ async def test_cancelling_a_suspended_run_expires_its_approvals(client: httpx.As
 
     late = await client.post(f"/v1/runs/{run_id}/approvals/{approval_id}", json=APPROVE)
     assert late.status_code == 409, late.text
+
+
+async def _recover(executor: Any) -> None:
+    """执行器的兜底任务跑一轮（定时任务库的实例任务；测试里直接调 execute，不起调度）。"""
+    await executor.recovery.execute(
+        JobContext(job_name="test", fired_at=datetime.now(UTC)), NoParams()
+    )

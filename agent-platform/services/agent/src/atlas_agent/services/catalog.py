@@ -13,12 +13,12 @@ from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+from atlas_engine.contracts.mcp_naming import parse_tool_id, tool_id
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from ..db.models import Agent, AgentVersion, Thread
-from ..domain.mcp_naming import parse_tool_id, tool_id
 from ..errors import AppError, CapabilityUnavailable, DependencyUnavailable, NotFound
 from ..providers.mcp import GatewayCatalog, make_mcp_catalog, review_status
 from ..providers.mcp.catalog import McpToolDef, ServerSnapshot

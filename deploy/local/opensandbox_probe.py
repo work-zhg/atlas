@@ -22,7 +22,6 @@ from uuid import UUID
 
 import httpx
 from atlas_agent.config import get_settings
-from atlas_agent.domain.spec import SandboxSpec
 from atlas_agent.ids import uuid7
 from atlas_agent.redisx import make_redis
 from atlas_agent.sandbox.base.execution.values import CommandGone, CommandSpec
@@ -30,6 +29,7 @@ from atlas_agent.sandbox.base.lifecycle.runtime import EXECD_PORT
 from atlas_agent.sandbox.component import SandboxComponent
 from atlas_agent.sandbox.exec import ShellSandbox
 from atlas_agent.sandbox.native import WorkspaceRef
+from atlas_engine.contracts.spec import SandboxSpec
 
 RESULTS: list[tuple[str, bool, str]] = []
 

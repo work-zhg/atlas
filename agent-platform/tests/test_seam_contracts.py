@@ -7,8 +7,8 @@
 
 from __future__ import annotations
 
-from atlas_agent.domain.tool_registry import SUBAGENT_TOOL
 from atlas_engine import contracts
+from atlas_engine.runtime.tool_registry import SUBAGENT_TOOL
 
 
 def test_task_tool_name_matches_the_event_discriminator() -> None:
@@ -44,8 +44,8 @@ def test_subagent_service_satisfies_the_protocol() -> None:
     from types import SimpleNamespace
     from uuid import uuid4
 
-    from atlas_agent.domain.spec import AgentSpec, ModelSpec
     from atlas_agent.services.subagent import SubAgentService
+    from atlas_engine.contracts.spec import AgentSpec, ModelSpec
 
     thread = SimpleNamespace(thread_uuid=uuid4(), agent_uuid=uuid4(), created_by_uuid=uuid4())
     service = SubAgentService(

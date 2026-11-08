@@ -4,11 +4,10 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
+from atlas_engine.contracts.events import EventType
+from atlas_engine.contracts.messages import KIND_CHAT
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from atlas_agent.domain.events import EventType
-from atlas_agent.domain.messages import KIND_CHAT
 
 from ..db.models import Message, Run
 from ..db.session import fetch_one
@@ -347,6 +346,7 @@ class RunRepository:
             auth_uid=auth_uid or created_by,
             auth_subject=auth_subject,
             status="queued",
+            queued_at=_utcnow(),
             approval_mode=approval_mode,
         )
         if run_id is not None:

@@ -13,14 +13,13 @@ from typing import Any
 from uuid import UUID
 
 import pytest
+from atlas_agent.config import Settings
+from atlas_engine.contracts import ContextOverflow
+from atlas_engine.contracts.events import EventType
+from atlas_engine.contracts.spec import AgentSpec, CompactionSpec, LimitSpec, ModelSpec
 from atlas_engine.kernel.context import SUMMARY_PREFIX, ContextMiddleware, estimate_tokens
 from atlas_engine.kernel.context._split import would_split_tool_pair
 from atlas_engine.kernel.context.compactor import facts_from
-from atlas_engine.contracts import ContextOverflow
-from atlas_agent.domain.events import EventType
-from tests.graphs import context_pipeline
-from tests.graphs import run_agent as run
-from atlas_agent.domain.spec import AgentSpec, CompactionSpec, LimitSpec, ModelSpec
 from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
@@ -29,7 +28,8 @@ from langchain_core.messages import (
     ToolMessage,
 )
 
-from atlas_agent.config import Settings
+from tests.graphs import context_pipeline
+from tests.graphs import run_agent as run
 
 from .fakes import TurnModel
 
@@ -314,12 +314,20 @@ async def test_disabled_compaction_leaves_only_offload_and_reminders() -> None:
         spec = _spec(compaction=CompactionSpec(enabled=False))
         thread = _Thread()
 
-    manager = ContextManager(None, Settings(litellm_key="x"), None)  # type: ignore[arg-type]
-    middleware = await manager._pipeline(
-        _Segment(),  # type: ignore[arg-type]
-        workspace=None,
-        readable_store=None,
-        sources=[],
+    from atlas_engine.runtime.context import ContextPorts
+    from atlas_engine.runtime.context import context_pipeline as pipeline_for
+
+    settings = Settings(litellm_key="x")
+    manager = ContextManager(None, settings, None)  # type: ignore[arg-type]
+    # 关了压缩连窗口都不去查（sessionmaker 是 None，查了就会炸）
+    assert await manager._limits_for(_Segment(), workspace=None) is None  # type: ignore[arg-type]
+    middleware = pipeline_for(
+        _Segment.spec,
+        ContextPorts(
+            offload_store=None,
+            result_limit_tokens=settings.context_result_limit_tokens,
+            batch_cap_tokens=settings.context_batch_cap_tokens,
+        ),
     )
     assert middleware._budget is None and middleware._compactor is None
     assert middleware._offloader is not None

@@ -11,7 +11,8 @@ import asyncio
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from ...domain.mcp_naming import model_name
+from atlas_engine.contracts.mcp_naming import model_name
+
 from ...errors import CapabilityUnavailable
 from .config import McpServerConfig
 
@@ -54,18 +55,6 @@ class McpToolDef:
     @property
     def usable(self) -> bool:
         return not self.issues
-
-    def to_mcp_tool(self) -> Any:
-        from mcp.types import Tool, ToolAnnotations
-
-        return Tool(
-            name=self.name,
-            description=self.description,
-            input_schema=self.input_schema,
-            annotations=ToolAnnotations.model_validate(self.annotations)
-            if self.annotations
-            else None,
-        )
 
 
 @dataclass(frozen=True)

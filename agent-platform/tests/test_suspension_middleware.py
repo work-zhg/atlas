@@ -144,7 +144,7 @@ class ScriptedGate:
 
 
 def _agent(model: TurnModel, gate: ScriptedGate, executed: list[str]) -> Any:
-    """与 create_deep_agent 同序：Patch（核心栈）→ Suspension → Permission。
+    """与装配（runtime/assemble.py）同序：Patch（核心栈）→ Suspension → Permission。
 
     自动模式：danger 是外部副作用（P1 没有判断器 → 请示），write 是工作区写入（放行）。
     """
@@ -319,11 +319,11 @@ def test_the_graph_always_has_a_tools_node() -> None:
     而那句错误离根因（某个 agent 一个工具都没配）很远，且只在跑那个 agent 时
     才出现。
 
-    生产路径安全的理由是 create_deep_agent 总会装内置工具（write_todos 等），
+    生产路径安全的理由是装配总会装内置工具（write_todos 等），
     所以即使 spec 的 tool_names 是空的，tools 节点也在。这条测试钉住它：
     将来 kernel 改成「没勾工具就不装 tools 节点」时先在这里红。
     """
-    from atlas_agent.domain.spec import AgentSpec, LimitSpec, ModelSpec
+    from atlas_engine.contracts.spec import AgentSpec, LimitSpec, ModelSpec
 
     from .graphs import build_graph
 

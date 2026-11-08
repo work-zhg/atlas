@@ -4,9 +4,8 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
+from atlas_engine.contracts.events import TraceEvent
 from pydantic import BaseModel, Field
-
-from atlas_agent.domain.events import TraceEvent
 
 #: 审批模式（doc/native-approval-mode-design.html）
 ApprovalModeIn = Literal["plan", "manual", "auto"]

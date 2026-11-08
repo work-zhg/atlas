@@ -11,9 +11,8 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from langchain_core.messages import BaseMessage
-
-from ..domain.spec import AgentSpec
+from atlas_engine.contracts.messages import StoredMessage
+from atlas_engine.contracts.spec import AgentSpec
 
 if TYPE_CHECKING:
     from ..db.models import Thread
@@ -41,7 +40,10 @@ class Segment:
     #: 本次执行用的配置版本。子 run 沿用**同一个** —— 子智能体的配置就住在
     #: 这份快照的 subagents 里，换一份等于换掉了「当时用的哪份配置」。
     agent_version_id: UUID | None = None
-    history: list[BaseMessage] = field(default_factory=list)
+    #: 本轮之前的历史（摘要边界之后的部分），存储格式：转成框架的消息是原生运行时的事
+    history: list[StoredMessage] = field(default_factory=list)
+    #: 压缩摘要：覆盖边界之前的早期对话。None = 没压缩过
+    summary: str | None = None
     history_upto: datetime | None = None
     #: 事件序号的起点 = 已发出的最后一个 seq。一个 run 分多段执行时，后一段
     #: 必须接着前一段往下数（契约规则 2 的「无空洞」是跨段成立的）。

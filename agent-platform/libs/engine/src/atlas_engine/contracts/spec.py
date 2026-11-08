@@ -15,8 +15,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from atlas_engine.contracts import APPROVAL_MODES, ApprovalMode, InvalidSpec
-from atlas_engine.kernel.middleware.ask_user import ASK_USER_QUESTION
-from atlas_engine.kernel.middleware.subagents import SUBAGENT_TOOL
+from atlas_engine.contracts.tool_names import ASK_USER_QUESTION, SUBAGENT_TOOL
 
 Effort = Literal["low", "medium", "high", "xhigh", "max"]
 # auto = 按模型能力自动选择（推荐默认）；adaptive / off 是显式要求，不支持就报错

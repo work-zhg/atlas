@@ -23,7 +23,7 @@ def _resumed() -> dict:
 
 
 def _spec() -> object:
-    from atlas_agent.domain.spec import AgentSpec, LimitSpec, ModelSpec
+    from atlas_engine.contracts.spec import AgentSpec, LimitSpec, ModelSpec
 
     return AgentSpec(
         slug="todo",

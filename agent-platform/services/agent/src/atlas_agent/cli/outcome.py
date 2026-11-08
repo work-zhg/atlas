@@ -9,10 +9,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from atlas_engine.contracts.events import EventType
 from atlas_host import HostErrorCode
 from atlas_jsonrpc import RpcFault
 
-from ..domain.events import EventType
 from .translate.acp_v1 import (
     AcpV1Translator,
     EventIntent,

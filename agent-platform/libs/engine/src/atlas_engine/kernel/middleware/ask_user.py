@@ -24,6 +24,7 @@ from langgraph.types import Command
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from atlas_engine.contracts import ApprovalGate, QuestionAnswer
+from atlas_engine.contracts.tool_names import ASK_USER_QUESTION
 from atlas_engine.kernel.middleware.approval import approval_id_for, run_id_of
 from atlas_engine.kernel.middleware.suspension import SuspensionState, release_wait
 
@@ -35,8 +36,6 @@ __all__ = [
     "resolve_answers",
 ]
 
-#: 沿用 Claude Code AskUserQuestion 的约定，取蛇形名（同 exit_plan_mode 的取名规则）
-ASK_USER_QUESTION = "ask_user_question"
 
 #: 「其他」里能填多长
 OTHER_MAX_CHARS = 500

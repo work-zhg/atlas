@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..domain.spec import ACP_MODE_ID, PLATFORM_MODE, CliSpec, acp_permission_mode
+from atlas_engine.contracts.spec import ACP_MODE_ID, PLATFORM_MODE, CliSpec, acp_permission_mode
 
 __all__ = ["ModeMapping"]
 

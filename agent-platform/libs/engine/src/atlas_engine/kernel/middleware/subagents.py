@@ -37,12 +37,9 @@ from langgraph.types import Command
 from pydantic import BaseModel, Field
 
 from atlas_engine.contracts import SubAgentSpawner
+from atlas_engine.contracts.tool_names import SUBAGENT_TOOL
 from atlas_engine.kernel.middleware._utils import append_to_system_message
 from atlas_engine.kernel.middleware.suspension import SuspensionState, release_wait
-
-#: SubAgent 工具在模型侧的名字。runner 的事件推导（subagent.started/finished 的
-#: 判别）与 tool_registry 的目录都引用这里 —— 单一来源，改名只改一处。
-SUBAGENT_TOOL = "task"
 
 __all__ = [
     "SESSION_TASK_TOOL_DESCRIPTION",
@@ -189,7 +186,7 @@ class SubAgentMiddleware(AgentMiddleware[Any, ContextT, ResponseT]):
                 在 waiting_on 里登记（reason=subagent），**不写结果** —— 本段随即挂起
         续跑    这个调用的结论已在 decisions 里 → 作为 `task` 的结果交出，删掉那一项
 
-    ★ 它排在调用方中间件**之后**（create_deep_agent）：已经有结果的兄弟调用由外层的
+    ★ 它排在调用方中间件**之后**（runtime/assemble.py）：已经有结果的兄弟调用由外层的
       SuspensionMiddleware 原样返回，`task` 需要请示时（手动模式等）由外层的 PermissionMiddleware
       先放行 —— 起子 run 永远是最后一步，不会重复起、也不会绕过审批。
 

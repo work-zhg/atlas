@@ -1,7 +1,7 @@
 [project]
 name = "atlas-engine"
 version = "0.1.0"
-description = "Atlas engine — pure library. No FastAPI, no DB session, no HTTP server."
+description = "Atlas engine — 原生运行时（contracts / kernel / runtime）。纯库：不碰 FastAPI、DB、HTTP 服务。"
 requires-python = ">=3.13"
 
 dependencies = [
@@ -11,8 +11,9 @@ dependencies = [
   # ★ P4 升到 1.x：kernel 要求 langchain-core>=1.5.0、
   #   langchain-anthropic>=1.5.4，0.3.* 与之不兼容（主版本级差距）。
   #   版本钉死，见文档 §4.7 / 风险 R1。
-  # ★ 1.7：server 的 MCP 改用 langchain.mcp（langchain 1.4 起才有），
-  #   它要求 langchain-core>=1.6.13。langchain-anthropic 1.5 接受 core <2，不跟着升。
+  # ★ 1.7：当初为 langchain.mcp 升的（要求 langchain-core>=1.6.13）。2026-11-07 起 MCP 由 server
+  #   直接调 FastMCP、交 ToolSpec，不再用 langchain.mcp；版本照旧钉着。
+  #   langchain-anthropic 1.5 接受 core <2，不跟着升。
   "langchain-core==1.7.*",
   "langchain-anthropic==1.5.*",
   # ★ kernel/ 所需的运行时依赖。全部钉死。

@@ -2,32 +2,33 @@
 
 一段结束之后的三件事：
 
-    续跑    挂起的 run 等的事都有结果了，CAS 放回队列并唤醒。入口有三个（子 run 结束时、
-            自己挂起落库后、定时补扫），判据只有一套（waits_are_settled）
+    续跑    挂起的 run 等的事都有结果了，CAS 放回排队，交给调用方在本实例抢锁。入口有三个
+            （审批决定、子 run 结束时、自己挂起落库后），兜底任务补查用同一个；判据只有一套
+            （waits_are_settled）
     接管    领到交接或租约过期的 run，跑之前收拾上一个实例留下的现场（recover）；
             悬空的工具调用按 DanglingCallPolicy：可接续的重放，其余记「结果未知」
     取消    挂起中被取消的 run 没有进程，由这里落终态、放会话锁（settle_cancelled）
 
-它不领取 run（调度与租约管），也不跑一段（一段的执行管）；放回队列之后由谁领走，
-交给组合根注入的 requeue。
+它不派发 run（派发与租约管），也不跑一段（一段的执行管）：放回排队之后由派发与租约
+在本实例抢锁，依赖保持单向。
 """
 
 from __future__ import annotations
 
 import contextlib
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Literal
 from uuid import UUID
 
 import redis.asyncio as aioredis
+from atlas_engine.contracts.events import EventFactory, EventType, TraceEvent
+from atlas_engine.contracts.messages import dangling_calls, unknown_results
+from atlas_engine.runtime.tool_registry import resumable
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from atlas_agent.domain.events import EventFactory, EventType, TraceEvent
-from atlas_agent.domain.messages import dangling_calls, unknown_results
-from atlas_agent.domain.tool_registry import resumable
 from atlas_agent.executor.segment_data import Segment
 
 from ..approval import ApprovalService
@@ -37,7 +38,7 @@ from ..redisx import make_redis
 from ..repositories.continuation import ContinuationQueries
 from ..repositories.event_archive import EventArchive
 from ..repositories.run import SUSPENDED_STATUSES, RunRepository
-from ..repositories.run_queue import RunQueue
+from ..repositories.run_queue import Candidate, RunQueue
 from ..repositories.run_record import RunRecordRepository
 from ..repositories.thread import ThreadRepository
 from ..repositories.thread_context import ThreadContextRepository
@@ -47,9 +48,6 @@ logger = logging.getLogger(__name__)
 
 #: 不算「正文还在流」的事件 —— 接管时算要丢弃的正文用
 _DELTAS = frozenset({EventType.MESSAGE_DELTA, EventType.THINKING_DELTA})
-
-#: 放回队列之后：唤醒调度，让任意实例领走
-Requeue = Callable[[UUID], Awaitable[None]]
 
 
 def _utcnow() -> datetime:
@@ -113,13 +111,11 @@ class Continuation:
         settings: Settings,
         *,
         instance: str,
-        requeue: Requeue,
     ) -> None:
         self._sessionmaker = sessionmaker
         self._settings = settings
         #: 租约的 owner：接管时收拾现场的第一条写是租约围栏
         self._instance = instance
-        self._requeue = requeue
         self._dangling = DanglingCallPolicy()
 
     def _redis(self) -> aioredis.Redis:
@@ -128,15 +124,15 @@ class Continuation:
     # ------------------------------------------------------------------ 续跑
 
     async def resume_if_ready(self, run_id: UUID) -> bool:
-        """等的东西都到了就把这个 suspended 的 run 续上。返回是否真的续了。
+        """等的东西都到了就把这个 suspended 的 run 放回排队。返回是否放回去了 ——
+        放回去了，调用方随即在本实例抢锁。
 
-        ★ 三个调用点，同一套判据：子 run 跑完时、父自己挂起落库后（关竞态
-          窗口）、周期 reaper 补扫时。做成一个方法是因为这三处漏掉任何一个
-          都会让 run 永久卡在 suspended，而那是最难发现的故障形态 ——
-          没有报错、没有事件，只是一个永远转圈的界面。
+        ★ 几个调用点，同一套判据：审批决定时、子 run 跑完时、父自己挂起落库后（关竞态
+          窗口）、兜底任务补查时。做成一个方法是因为漏掉任何一个都会让 run 永久卡在
+          suspended，而那是最难发现的故障形态 —— 没有报错、没有事件，只是一个永远转圈的界面。
 
         ★ CAS 在 RunQueue.requeue 里。几个子 run 同时结束时它们都会走到这，
-          只有一个能抢到。
+          只有一个能放回去。
         """
         async with self._sessionmaker() as session:
             run = await RunRepository(session).get(run_id)
@@ -157,7 +153,6 @@ class Continuation:
             return False
 
         logger.info("run %s 等的都有结果了，续跑", run_id)
-        await self._requeue(run_id)
         return True
 
     async def waits_are_settled(self, session: AsyncSession, run: Run) -> bool:
@@ -203,28 +198,16 @@ class Continuation:
                 return False
         return True
 
-    async def decided(self, run_id: UUID, approval_id: UUID) -> None:
-        """审批组件的 DecisionListener：用户做了决定，查一次续跑条件。"""
-        await self.resume_if_ready(run_id)
+    async def suspended_candidates(self, *, after_id: int, limit: int) -> list[Candidate]:
+        """给兜底任务的挂起候选：SQL 先滤掉还有待决审批、还有没结束子 run 的。
 
-    async def sweep_suspended(self) -> int:
-        """扫一遍挂起的 run，能续的续上。返回续了几个。
-
-        ★ 为什么不能只靠子 run 主动唤醒：那个唤醒发生在子 run 收尾的代码里，
-          而进程可能正好在那一刻被 SIGKILL。信号没了之后**没有任何其它机制**
-          会再碰这个父 run。这个扫描是它唯一的出路。
-
-        ★ 不判超时：审批只由人决定，等多久都不替用户按拒绝处理。
+        兜底任务拿到后逐个 resume_if_ready，放回去了就抢锁。不判超时：审批只由人决定，
+        等多久都不替用户按拒绝处理；兜底只补丢掉的续跑信号，不催促。
         """
         async with self._sessionmaker() as session:
-            candidates = await ContinuationQueries(session).suspended_runs()
-        resumed = 0
-        for run_id in candidates:
-            if await self.resume_if_ready(run_id):
-                resumed += 1
-        if resumed:
-            logger.info("补唤醒了 %d 个等待中的 run", resumed)
-        return resumed
+            return await ContinuationQueries(session).suspended_candidates(
+                after_id=after_id, limit=limit
+            )
 
     # ------------------------------------------------------------------ 取消
 

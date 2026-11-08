@@ -14,10 +14,10 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
-from atlas_agent.domain.events import EventType
-from atlas_agent.domain.spec import AgentSpec, ApprovalSpec, LimitSpec, ModelSpec
 from atlas_agent.executor.collaboration import _judge_instructions
 from atlas_engine.contracts import ToolEffect
+from atlas_engine.contracts.events import EventType
+from atlas_engine.contracts.spec import AgentSpec, ApprovalSpec, LimitSpec, ModelSpec
 from atlas_engine.kernel.middleware.auto_judge import (
     JUDGE_RULES,
     STAGE1_ASK,
@@ -45,7 +45,7 @@ from pydantic import Field, PrivateAttr
 
 from tests.graphs import run_agent as run
 
-from .fakes import TurnModel, tool_call_chunk
+from .fakes import TurnModel, tool_call_chunk, tool_spec
 
 RUN_ID = UUID("88888888-8888-8888-8888-888888888888")
 EXECUTED: list[str] = []
@@ -331,7 +331,7 @@ async def _run(judge: AutoJudge | None, gate: ScriptedGate) -> list:
             input_content="发周报",
             approvals=gate,
             judge=judge,
-            extra_tools=[SEND_REPORT],
+            extra_tools=[tool_spec(SEND_REPORT)],
             approval_mode="auto",
         )
     ]

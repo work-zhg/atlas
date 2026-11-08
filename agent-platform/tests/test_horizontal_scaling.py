@@ -1,8 +1,9 @@
-"""横向扩展：run 的领取、租约、检查点、接管与交接（doc/horizontal-scaling-design.html）。
+"""横向扩展：run 的派发、租约、检查点、接管与交接（executor/design-run-dispatch.html）。
 
 两个执行器实例 = 同一个进程里两个 RunWorker，各自换一个实例 id。
 「实例死了」= 把它的本地任务当成被接管掐掉（不让它碰库），再把租约改成已过期 ——
 与进程被 SIGKILL 后租约自然到期在数据库里看到的是同一个状态。
+兜底任务、续租是定时任务库的实例任务：这里直接调一轮 execute，不起调度。
 """
 
 from __future__ import annotations
@@ -18,21 +19,18 @@ import pytest
 from atlas_agent.config import get_settings
 from atlas_agent.db.models import Message, Run, RunEvent
 from atlas_agent.db.session import fetch_one, get_sessionmaker
-from atlas_agent.domain.events import EventFactory, EventType
-from atlas_agent.domain.messages import (
-    StoredMessage,
-    Transcript,
-    dangling_calls,
-    unknown_results,
-)
 from atlas_agent.executor.compose import build_executor
 from atlas_agent.executor.continuation import DanglingCallPolicy, _discarded_chars
 from atlas_agent.executor.scheduling import RunWorker
 from atlas_agent.main import create_app
 from atlas_agent.repositories.run import LeaseLost, RunRepository
-from atlas_agent.repositories.run_queue import RunQueue
+from atlas_agent.repositories.run_queue import RunQueue, Taken, TakeoverReason
 from atlas_agent.repositories.run_record import RunRecordRepository
 from atlas_agent.repositories.thread import ThreadRepository
+from atlas_engine.contracts.events import EventFactory, EventType
+from atlas_engine.contracts.messages import StoredMessage, dangling_calls, unknown_results
+from atlas_engine.runtime.messages import Transcript
+from atlas_jobs import JobContext, NoParams
 from httpx import ASGITransport
 from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, ToolMessage
@@ -163,25 +161,28 @@ def _call(call_id: str) -> dict[str, Any]:
 
 
 @pytest.mark.usefixtures("clean_db")
-async def test_claim_renew_fence_and_takeover() -> None:
+async def test_take_renew_fence_and_takeover() -> None:
     run_id = await _bare_queued_run()
     lease = 30.0
     sm = get_sessionmaker()
 
     async with sm() as s:
-        assert await _claim_until(RunQueue(s), run_id, "A", lease) is None
+        assert await RunQueue(s).take(run_id, owner="A", lease_s=lease) == Taken(None)
         await s.commit()
+    run = await _run(run_id)
+    assert run.queued_at is None, "抢到时清掉排队时刻"
     async with sm() as s:
-        # 同一个 run 不会被第二个实例领到
-        assert await _claim_until(RunQueue(s), run_id, "B", lease) is False
+        # 同一个 run 不会被第二个实例抢到
+        assert await RunQueue(s).take(run_id, owner="B", lease_s=lease) is None
         await s.commit()
 
     await _expire(run_id)
     async with sm() as s:
-        assert await _claim_until(RunQueue(s), run_id, "B", lease) == "expired"
+        taken = await RunQueue(s).take(run_id, owner="B", lease_s=lease)
+        assert taken == Taken(TakeoverReason.EXPIRED)
         await s.commit()
     async with sm() as s:
-        assert await RunQueue(s).renew_leases([run_id], owner="A", lease_s=lease) == set(), (
+        assert await RunQueue(s).renew([run_id], owner="A", lease_s=lease) == set(), (
             "被接管后旧实例续不上"
         )
         with pytest.raises(LeaseLost):
@@ -189,15 +190,61 @@ async def test_claim_renew_fence_and_takeover() -> None:
         await s.rollback()
     async with sm() as s:
         queue = RunQueue(s)
-        assert await queue.renew_leases([run_id], owner="B", lease_s=lease) == {run_id}
-        assert await queue.release_lease(run_id, owner="B")
+        assert await queue.renew([run_id], owner="B", lease_s=lease) == {run_id}
+        assert await queue.release(run_id, owner="B")
         await s.commit()
     async with sm() as s:
-        assert await _claim_until(RunQueue(s), run_id, "C", lease) == "handoff"
+        assert await RunQueue(s).take(run_id, owner="C", lease_s=lease) == Taken(
+            TakeoverReason.HANDOFF
+        )
         await s.commit()
     async with sm() as s:
         run = await RunRepository(s).get(run_id)
         assert run is not None and run.owner == "C" and run.takeovers == 2
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_two_instances_taking_the_same_run_only_one_wins() -> None:
+    """几个实例同时按 run 号抢同一个 run：只有一个抢得到（SKIP LOCKED，不排队等）。"""
+    run_id = await _bare_queued_run()
+    sm = get_sessionmaker()
+
+    async def take(owner: str) -> Taken | None:
+        async with sm() as s:
+            taken = await RunQueue(s).take(run_id, owner=owner, lease_s=30.0)
+            await s.commit()
+            return taken
+
+    results = await asyncio.gather(*(take(f"i{n}") for n in range(5)))
+    assert sum(r is not None for r in results) == 1, results
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_candidates_skip_fresh_queued_and_page_by_id() -> None:
+    """兜底候选：刚排队的不碰（请求那条路正在抢），排队久了的、租约过期的、交出来的才算。"""
+    fresh = await _bare_queued_run(queued_at=datetime.now(UTC))
+    stale = await _bare_queued_run(queued_at=datetime.now(UTC) - timedelta(seconds=30))
+    expired = await _bare_queued_run()
+    handed = await _bare_queued_run()
+    held = await _bare_queued_run()
+    sm = get_sessionmaker()
+    async with sm() as s:
+        queue = RunQueue(s)
+        for run_id in (expired, handed, held):
+            assert await queue.take(run_id, owner="A", lease_s=30.0)
+        assert await queue.release(handed, owner="A")
+        await s.commit()
+    await _expire(expired)
+
+    async with sm() as s:
+        queue = RunQueue(s)
+        first = await queue.candidates(after_id=0, limit=2, queued_for_s=5.0)
+        rest = await queue.candidates(after_id=first[-1].id, limit=2, queued_for_s=5.0)
+        tail = await queue.candidates(after_id=rest[-1].id, limit=2, queued_for_s=5.0)
+    assert [c.run_uuid for c in first + rest] == [stale, expired, handed]
+    assert tail == []
+    assert fresh not in {c.run_uuid for c in first + rest}
+    assert held not in {c.run_uuid for c in first + rest}
 
 
 # --------------------------------------------------------------------------- 接管（端到端）
@@ -282,7 +329,7 @@ async def test_expired_lease_is_taken_over_from_the_last_checkpoint(
             "instance-b",
             lambda *_a, **_k: RecordingModel(scripts=[[AIMessageChunk(content="接着办完了")]]),
         )
-        assert await b.claim_available() >= 1
+        await _recover(b)
         run = await _until(lambda: _run(run_id), lambda r: r.status == "succeeded")
 
     assert run.takeovers == 1 and run.owner == "instance-b"
@@ -340,7 +387,7 @@ async def test_takeover_marks_a_tool_that_was_running_as_unknown(
             "instance-b",
             lambda *_a, **_k: RecordingModel(scripts=[[AIMessageChunk(content="我先检查一下")]]),
         )
-        await b.claim_available()
+        await _recover(b)
         await _until(lambda: _run(run_id), lambda r: r.status == "succeeded")
 
     tool_results = [
@@ -361,7 +408,7 @@ async def test_takeover_replays_a_resumable_tool_with_the_same_call(
     """
     import dataclasses
 
-    from atlas_agent.domain import tool_registry
+    from atlas_engine.runtime import tool_registry
 
     monkeypatch.setattr(
         tool_registry,
@@ -408,7 +455,7 @@ async def test_takeover_replays_a_resumable_tool_with_the_same_call(
             "instance-b",
             lambda *_a, **_k: RecordingModel(scripts=[[AIMessageChunk(content="继续")]]),
         )
-        await b.claim_available()
+        await _recover(b)
         await _until(lambda: _run(run_id), lambda r: r.status == "succeeded")
 
     results = [m for m in SEEN[0] if isinstance(m, ToolMessage) and m.tool_call_id == "c9"]
@@ -451,7 +498,7 @@ async def test_drain_hands_the_run_to_another_instance(
             "instance-b",
             lambda *_a, **_k: TurnModel(scripts=[[AIMessageChunk(content="接着办完了")]]),
         )
-        await b.claim_available()
+        await _recover(b)
         run = await _until(lambda: _run(run_id), lambda r: r.status == "succeeded")
     assert run.owner == "instance-b"
     resumed = await _archived(run_id, EventType.RUN_RESUMED)
@@ -473,13 +520,96 @@ async def test_lost_lease_stops_local_execution_without_touching_the_run(
         async with get_sessionmaker()() as s:
             await s.execute(update(Run).where(Run.run_uuid == run_id).values(owner="someone-else"))
             await s.commit()
-        await a.renew_leases()
+        await a.renewer.execute(_ctx(), NoParams())
         assert slot.task is not None
         await asyncio.wait([slot.task], timeout=5)
         assert slot.task.done() and slot.lost
 
     run = await _run(run_id)
     assert run.status == "running" and run.owner == "someone-else", "旧实例碰了已被接管的 run"
+
+
+# --------------------------------------------------------------------------- 派发与兜底
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_a_full_instance_leaves_the_run_for_another_instances_recovery(
+    executors: list[RunWorker],
+) -> None:
+    """接请求的实例满了：派发不报错，run 留在库里排队；排队超过几秒，别的实例的兜底任务接走。"""
+    a = _executor(
+        executors,
+        "instance-a",
+        lambda *_a, **_k: TurnModel(scripts=[[AIMessageChunk(content="不该是我")]]),
+        max_concurrent_runs=0,
+    )
+    async with _client(a) as client:
+        run_id = await _start(client)
+        queued = await _run(run_id)
+        assert queued.status == "queued" and queued.owner is None and queued.queued_at
+
+        patient = _executor(executors, "instance-b", lambda *_a, **_k: TurnModel(scripts=[]))
+        await _recover(patient)
+        assert (await _run(run_id)).status == "queued", "刚排队的不该被兜底任务抢"
+
+        c = _executor(
+            executors,
+            "instance-c",
+            lambda *_a, **_k: TurnModel(scripts=[[AIMessageChunk(content="我来办")]]),
+            run_recovery_queued_s=0.0,
+        )
+        await _recover(c)
+        run = await _until(lambda: _run(run_id), lambda r: r.status == "succeeded")
+    assert run.owner == "instance-c" and run.takeovers == 0
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_recovery_stops_taking_when_the_instance_is_full(
+    executors: list[RunWorker],
+) -> None:
+    """兜底任务抢一个占一个槽，没空槽就停：剩下的留给别的实例。"""
+    runs = [await _bare_queued_run() for _ in range(3)]
+    b = _executor(
+        executors, "instance-b", lambda *_a, **_k: TurnModel(scripts=[]), max_concurrent_runs=1
+    )
+    await _recover(b)
+    states = [await _run(run_id) for run_id in runs]
+    assert sum(r.owner == "instance-b" for r in states) == 1, [r.status for r in states]
+    assert sum(r.status == "queued" for r in states) == 2
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_a_draining_instance_takes_nothing(executors: list[RunWorker]) -> None:
+    """停机中关了准入：派发留在库里，兜底任务也不抢。"""
+    a = _executor(
+        executors, "instance-a", lambda *_a, **_k: TurnModel(scripts=[]), run_recovery_queued_s=0.0
+    )
+    await a.drain()
+    run_id = await _bare_queued_run()
+    await a.dispatch(run_id)
+    await _recover(a)
+    assert (await _run(run_id)).status == "queued"
+
+
+async def test_api_role_runs_no_recovery() -> None:
+    """api 角色不执行 run：并发上限为 0、不注册兜底任务；续租照常注册（没有 run 就什么都不做）。"""
+    from atlas_agent.executor.compose import register_jobs
+    from atlas_jobs import JobScheduler
+
+    for role, expected in (
+        ("all", {"agent.run_recovery", "agent.run_lease_renewer"}),
+        ("api", {"agent.run_lease_renewer"}),
+    ):
+        settings = get_settings().model_copy(update={"server_role": role})
+        worker = build_executor(get_sessionmaker(), settings, instance=f"{role}-1")
+        jobs = JobScheduler()
+        register_jobs(jobs, worker, settings)
+        jobs.start()
+        try:
+            assert {m.type for m in jobs.metrics()} == expected
+        finally:
+            await jobs.stop()
+        assert worker.has_free_slot() is (role != "api")
 
 
 # --------------------------------------------------------------------------- 工具
@@ -557,26 +687,25 @@ async def _until(fetch: Any, ok: Any, *, timeout: float = 20.0) -> Any:
     raise AssertionError(f"等不到期望状态，最后一次：{last!r}")
 
 
-async def _bare_queued_run() -> UUID:
-    """一个排队中的 run（不经 API —— 只测仓库层的领取语义）。"""
+async def _bare_queued_run(*, queued_at: datetime | None = None) -> UUID:
+    """一个排队中的 run（不经 API —— 只测仓库层的抢锁语义）。queued_at 为空 = 迁移前的旧数据。"""
     async with get_sessionmaker()() as s:
         run = Run(
             run_uuid=uuid4(),
             thread_uuid=uuid4(),
             agent_version_uuid=uuid4(),
             status="queued",
-            created_at=datetime(2000, 1, 1, tzinfo=UTC),  # 排在所有残留 run 前面
+            queued_at=queued_at,
         )
         s.add(run)
         await s.commit()
         return run.run_uuid
 
 
-async def _claim_until(
-    runs: RunQueue, run_id: UUID, owner: str, lease: float
-) -> str | bool | None:
-    """领取直到领到 run_id（库里可能有别的测试残留的排队 run）。没领到它返回 False。"""
-    while (got := await runs.claim_next(owner=owner, lease_s=lease)) is not None:
-        if got[0] == run_id:
-            return got[1]
-    return False
+def _ctx() -> JobContext:
+    return JobContext(job_name="test", fired_at=datetime.now(UTC))
+
+
+async def _recover(executor: RunWorker) -> None:
+    """这个实例的兜底任务跑一轮。"""
+    await executor.recovery.execute(_ctx(), NoParams())

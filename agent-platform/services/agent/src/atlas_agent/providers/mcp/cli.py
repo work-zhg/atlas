@@ -18,8 +18,9 @@ from collections.abc import Mapping
 from typing import Any
 from uuid import UUID
 
-from ...domain.events import EventType
-from ...domain.mcp_naming import parse_tool_id
+from atlas_engine.contracts.events import EventType
+from atlas_engine.contracts.mcp_naming import parse_tool_id
+
 from .catalog import McpCatalog, McpUnavailable
 from .gateway import AgentAccess
 

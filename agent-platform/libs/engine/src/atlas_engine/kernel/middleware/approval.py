@@ -11,8 +11,10 @@
 
 from __future__ import annotations
 
-import uuid
 from typing import Any
+
+#: 审批 id 的派生规则是契约（原生和 CLI 运行时必须算出同一个 id），定义在 contracts
+from atlas_engine.contracts.approval import approval_id_for
 
 __all__ = [
     "EXPIRED_RESULT",
@@ -38,28 +40,6 @@ GATE_FAILED_RESULT = (
     "审批系统故障，该工具未被执行 —— 这不是用户的拒绝，没有人看到过这次请求。"
     "请把这个故障如实报告给用户，不要改用别的方式绕过它。"
 )
-
-#: 派生 approval_id 的命名空间。固定值 —— 换了它等于让所有历史审批的 id 变样。
-_NS = uuid.UUID("6f9619ff-8b86-d011-b42d-00c04fc964ff")
-
-
-def approval_id_for(run_id: str, tool_call_id: str) -> str:
-    """从 (run_id, tool_call_id) 派生 approval_id。
-
-    ★ **必须可复现**，这是审批能挂起的前提。
-
-      随机 id（原先是 `uuid4()`）在续跑时会算出一个**新的** id：gate 查不到
-      记录 → 当成首次 → 返回 pending → 再挂起一次。**死循环**，而且看起来
-      像「批准了但没反应」。
-
-    ★ 为什么这两个值够：tool_call_id 由工具节点生成、落在 message 表里、跨段
-      稳定；run_id 让不同 run 之间不会撞（同一个 tool_call_id 在另一个 run 里
-      重复出现是可能的）。
-
-    ★ 顺带修掉一个既有隐患：随机 id 在重试路径上会留下孤儿 Approval 行。
-    """
-    return str(uuid.uuid5(_NS, f"{run_id}:{tool_call_id}"))
-
 
 def run_id_of(request: Any) -> str:
     """从工具调用的上下文里取 run_id —— runner 每段都把它放进图的 state（SuspensionState.run_id）。

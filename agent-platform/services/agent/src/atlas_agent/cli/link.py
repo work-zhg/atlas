@@ -22,10 +22,10 @@ from typing import TYPE_CHECKING, Any, Protocol
 from urllib.parse import urlparse
 from uuid import UUID
 
+from atlas_engine.contracts.events import EventType
 from atlas_host import CloseCode, HostErrorCode, methods
 from atlas_jsonrpc import ChannelClosed, RpcFault
 
-from ..domain.events import EventType
 from ..repositories.cli_session import CliSessionRepository
 from .client import HostClient, HostUnreachable
 from .outcome import TurnAbort, failed, fault_intent

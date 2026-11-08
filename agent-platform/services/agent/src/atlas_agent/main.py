@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 
 from atlas_engine.contracts import EngineError
+from atlas_jobs import JobScheduler
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -22,7 +23,7 @@ from .cli.runtime import CliRuntime
 from .config import get_settings
 from .db.session import get_sessionmaker
 from .errors import AppError
-from .executor.compose import build_executor
+from .executor.compose import build_executor, register_jobs
 from .instance import instance_id
 from .maintainer import Maintainer
 from .memory import Backfiller, make_memory_runtime
@@ -63,7 +64,7 @@ def _on_sigterm(start_drain: Callable[[], None]) -> None:
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """执行器、维护者与各后台任务的生命周期（横向扩展设计 §3 · §6 · §7）。
 
-    ★ 启动时不再做「本进程专属」的回收：在途 run 由任何执行器按租约接管，
+    ★ 启动时不再做「本进程专属」的回收：在途 run 由各实例的兜底任务按租约接管，
       孤儿 Pod 由维护者（全局一个）定期回收 —— 多副本下每个副本启动各跑一遍
       reap 会与别的副本正在建的 Pod 竞态。
     """
@@ -97,15 +98,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
 
     executor = app.state.executor
-    if executes:
-        try:
-            # ★ 重启会丢掉「子 run 跑完时叫醒父 run」那个信号，所以启动时立刻补扫
-            #   一次挂起的 run，不等周期到点。
-            await executor.sweep_suspended()
-        except Exception:  # 补扫失败不该阻止服务启动：周期扫描还会来
-            logger.warning("启动补扫失败", exc_info=True)
-        # 领取扫描、唤醒订阅、补唤醒扫描。排队的 run 与租约过期的 run 都从这里被领走
-        executor.start()
+    # 兜底与续租是定时任务库的实例任务（design-run-dispatch.html）：满了没接的、发版交出来的、
+    # 崩溃后租约过期的、续跑信号丢了的 run 都由兜底任务接走。★ 停机时先交接、再停它 ——
+    # 交接期间在跑的 run 还要续租
+    jobs = JobScheduler()
+    register_jobs(jobs, executor, settings)
+    jobs.start()
 
     # ★ 停机交接：信号到达即开始（见 _on_sigterm），lifespan 的 shutdown 只是等它做完
     gate: StreamGate = app.state.stream_gate
@@ -114,7 +112,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if getattr(app.state, "draining", False):
             return
         app.state.draining = True
-        logger.info("收到停机信号：停止领取、关闭事件流、交接在跑的 run")
+        logger.info("收到停机信号：关准入、关闭事件流、交接在跑的 run")
         gate.drain()
         app.state.drain_task = asyncio.create_task(executor.drain(), name="drain")
 
@@ -144,6 +142,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         start_drain()  # 没收到 SIGTERM 的停机（本机 Ctrl-C、测试）也走交接
         await executor.shutdown()
+        await jobs.stop()
         for task in background:
             task.cancel()
         for task in background:

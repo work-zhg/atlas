@@ -20,18 +20,15 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from atlas_engine.contracts import ToolEffect
-from atlas_engine.kernel.middleware.ask_user import ASK_USER_QUESTION
+from atlas_engine.contracts.tool_names import ASK_USER_QUESTION, SUBAGENT_TOOL
 
 if TYPE_CHECKING:
-    from .spec import AgentSpec
+    from atlas_engine.contracts.spec import AgentSpec
 
 #: MCP 工具的命名前缀：mcp:<server>:<tool>。
 #: 它们由 server 解析后以 extra_tools 注入，不在本表内。
 MCP_PREFIX = "mcp:"
 
-from atlas_engine.kernel.middleware.subagents import (
-    SUBAGENT_TOOL,
-)
 
 TODO_TOOL = "write_todos"
 FILESYSTEM_TOOL = "filesystem"
@@ -75,7 +72,7 @@ FS_TOOL_NAMES: tuple[str, ...] = (
 
 
 def filesystem_tools_for(tool_names: frozenset[str] | set[str]) -> list[str]:
-    """交给 create_deep_agent 的 FilesystemConfig.tools 的白名单。
+    """装配（assemble.build_graph）交给文件中间件的工具白名单。
 
     未勾 filesystem 时传空表：kernel 不装 FilesystemMiddleware，模型看不到任何文件工具。
     （它以前是恒装的脚手架 —— 大结果外置挂在上面；外置已归上下文管理。）
@@ -95,7 +92,7 @@ class ToolDef:
 
     implemented: 本期是否接入 —— 目录里的 available 列。
     middleware:  装配进 agent 图的中间件工厂；None 表示该工具不经中间件
-                 提供（task 走 create_deep_agent(subagents=)，见 agent.py）。
+                 提供（task 由 assemble.build_graph 按 spec.subagents 装）。
     requires:    spec 层面的额外前提。不满足时该工具视同未接入，
                  会出现在 unsupported_tools() 里 —— §13.2 不允许
                  「勾了却静默不生效」。

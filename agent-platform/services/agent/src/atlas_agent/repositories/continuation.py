@@ -1,6 +1,6 @@
 """续跑要的读查询（Run 执行器 · 续跑、接管与取消，code-executor-continuation.html）。
 
-真正挂起的 run（有等待项的）、某个 run 还没结束的直接子 run。
+给兜底任务的挂起候选（先在 SQL 里过滤）、某个 run 还没结束的直接子 run。
 """
 
 from __future__ import annotations
@@ -9,12 +9,14 @@ from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
-from ..db.models import Run
+from ..db.models import Approval, Run
 from .run import (
     _SUSPENDED,
     _UNFINISHED,
 )
+from .run_queue import Candidate
 
 
 class ContinuationQueries:
@@ -23,19 +25,41 @@ class ContinuationQueries:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def suspended_runs(self) -> list[UUID]:
-        """**真正挂起**的 run（含等审批的）。周期扫描用来补唤醒。
+    async def suspended_candidates(self, *, after_id: int, limit: int) -> list[Candidate]:
+        """给兜底任务的挂起候选：等的事**看起来**都有结果了的。按 id 往后翻。
 
-        ★ 为什么需要补：正常路径是「等的东西到了就主动唤醒」—— 子 run 收尾时、
-          HTTP 决策提交时。但那一刻进程可能正好在重启，唤醒信号就这么没了，
-          run 会永远挂着。这个扫描是它唯一的出路。
-
+        ★ 为什么要补查：正常路径是「等的事有了结果就主动续」—— 子 run 收尾时、审批决定的
+          请求里。但那一刻进程可能正好被杀，续跑信号就没了，run 会永远挂着。
+        ★ 先在 SQL 里滤掉还有待决审批、还有没结束子 run 的：等人批的挂起 run 可能有成百上千个、
+          一等就是几天，不能每 10 秒逐个去查。剩下的通常是零个，偶尔几个再逐个用续跑条件确认。
         ★ 没有等待项的挂起（旧格式的遗留数据）不续跑。CLI 在线等权限不是挂起：它是
           running + awaiting_user，进程还在跑 —— 续跑它等于把同一个 run 执行两遍，第二条
           上游连接会把第一个按 CLOSE_SUPERSEDED(4409) 关掉，整轮崩掉。
         """
-        stmt = select(Run.run_uuid).where(Run.status.in_(_SUSPENDED), Run.waiting_on.isnot(None))
-        return list((await self._session.execute(stmt)).scalars())
+        child = aliased(Run)
+        pending = (
+            select(Approval.id)
+            .where(Approval.run_uuid == Run.run_uuid, Approval.status == "pending")
+            .exists()
+        )
+        working = (
+            select(child.id)
+            .where(child.parent_run_uuid == Run.run_uuid, child.status.in_(_UNFINISHED))
+            .exists()
+        )
+        stmt = (
+            select(Run.id, Run.run_uuid)
+            .where(
+                Run.id > after_id,
+                Run.status.in_(_SUSPENDED),
+                Run.waiting_on.isnot(None),
+                ~pending,
+                ~working,
+            )
+            .order_by(Run.id)
+            .limit(limit)
+        )
+        return [Candidate(id=i, run_uuid=u) for i, u in (await self._session.execute(stmt)).all()]
 
     async def has_unfinished_children(self, run_id: UUID) -> bool:
         """这个 run 还有没跑完的子 run 吗 —— 续跑的 join barrier。

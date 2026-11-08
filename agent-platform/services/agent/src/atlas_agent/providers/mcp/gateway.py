@@ -448,6 +448,6 @@ async def delete_agent_key(settings: Settings, agent_id: UUID | str) -> None:
 
 
 def servers_in(tool_names: Iterable[str]) -> set[str]:
-    from ...domain.mcp_naming import parse_tool_id
+    from atlas_engine.contracts.mcp_naming import parse_tool_id
 
     return {p[0] for name in tool_names if (p := parse_tool_id(name)) is not None}

@@ -118,7 +118,7 @@ class SuspensionMiddleware(AgentMiddleware):
     #:   LangGraph 在编译时就报 "found unknown target 'tools'"，而那句错误离
     #:   根因（某个 agent 一个工具都没配）很远。
     #:
-    #:   生产路径安全：create_deep_agent 总会装内置工具（write_todos 等），
+    #:   生产路径安全：装配（runtime/assemble.py）总会装内置工具（write_todos 等），
     #:   所以 tools 节点必然存在 —— 即使 spec 的 tool_names 是空的。
     #:   这条前提由 tests/test_suspension_middleware.py 钉着，将来 kernel 改成
     #:   「没勾工具就不装 tools 节点」时会先在那里红，而不是在某次部署时炸。

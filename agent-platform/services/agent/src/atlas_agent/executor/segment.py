@@ -3,9 +3,10 @@
 领到之后怎么跑、跑完留下什么：从库里还原这一段（SegmentLoader），按智能体类型选运行时
 （RuntimeRegistry），把运行时产出的事件逐个盖序号、发布、攒着归档；每个工具轮次落一次检查点
 （消息、事件、序号、变了的审批模式和待办，一个事务，第一条写校验租约）；段结束时按结果收尾：
-终态、挂起或交接。收尾事件先落库再发布，前端看到它时库里已经是对应状态。
+终态、挂起或交接。收尾事件先落库再发布，前端看到它时库里已经是对应状态。段的结局
+（SegmentOutcome）交回派发与租约，由它决定接着续谁。
 
-它不管 run 由哪个实例领（调度与租约管），也不管挂起后何时续、接管时怎么收拾现场（续跑、
+它不管 run 由哪个实例跑（派发与租约管），也不管挂起后何时续、接管时怎么收拾现场（续跑、
 接管与取消管），更不管一段在运行时内部怎么跑（AgentRuntime 的实现管）。
 
 ★ 前后两段——载入/标记运行中，与收事件/落库/释放锁——与智能体类型无关，接一种新的运行时
@@ -20,26 +21,19 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from collections.abc import Mapping
-from dataclasses import replace
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 from uuid import UUID
 
 import redis.asyncio as aioredis
-from atlas_engine.kernel.context import SUMMARY_PREFIX
-from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+from atlas_engine.contracts.events import EventType, TraceEvent
+from atlas_engine.contracts.messages import KIND_CHAT, StoredLike, StoredMessage, answered_calls
+from atlas_engine.contracts.spec import AgentSpec, spec_for_subagent
+from atlas_engine.runtime.messages import Transcript
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-
-from atlas_agent.domain.events import EventType, TraceEvent
-from atlas_agent.domain.messages import (
-    KIND_CHAT,
-    StoredMessage,
-    Transcript,
-    from_storage,
-)
-from atlas_agent.domain.spec import AgentSpec, spec_for_subagent
 
 from ..approval import ApprovalService
 from ..config import Settings
@@ -99,8 +93,21 @@ def _today() -> date:
     return datetime.now(UTC).date()
 
 
+@dataclass(frozen=True)
+class SegmentOutcome:
+    """一段怎么结束的，交回派发与租约决定接着做什么。
+
+    terminal    run 结束了；子 run 的话，parent_to_resume 是等着它的父 run
+    suspended   挂起已落库：要马上再查一次自己的续跑条件
+    handed_off  停机中走到了安全点：清租约，交给别的实例
+    """
+
+    kind: Literal["terminal", "suspended", "handed_off"]
+    parent_to_resume: UUID | None = None
+
+
 class SegmentControl(Protocol):
-    """调度与一段的执行之间的信号：调度的执行槽（ExecutionSlot）实现它。
+    """派发与一段的执行之间的信号：派发的执行槽（ExecutionSlot）实现它。
 
     drain    停机中：native 到安全点就交接
     settled  收尾已开始落库：不再续租、续不上也不算「被接管」
@@ -194,7 +201,7 @@ class SegmentLoader:
             )
 
         # ★ 本轮输入是最后一条 **kind='chat' 的用户消息**，不是最后一条消息。
-        #   工具结果在 Anthropic 的格式里同样是 role='user'（domain/messages.py），
+        #   工具结果在 Anthropic 的格式里同样是 role='user'（contracts/messages.py），
         #   不加区分就会把一批工具结果当成用户的新提问 —— 表现是模型莫名回答
         #   一段 JSON，而用户真正的问题被归进了历史。
         input_index = _last_chat_input(rows)
@@ -204,12 +211,14 @@ class SegmentLoader:
         #   问了两次。判据取自数据本身，不靠额外的标记位。
         resume = input_index is not None and input_index < len(rows) - 1
 
+        # 历史交存储格式：转成框架的消息是原生运行时自己的事（runtime.messages）
+        stored = [StoredMessage(role=r.role, kind=r.kind, content=r.content) for r in rows]
         if input_index is None or resume:
-            history = from_storage(rows)
+            history = stored
             input_content: Any = ""
             upto = rows[-1].created_at
         else:
-            history = from_storage(rows[:input_index])
+            history = stored[:input_index]
             input_content = rows[input_index].content
             upto = rows[input_index - 1].created_at if input_index > 0 else None
 
@@ -218,12 +227,6 @@ class SegmentLoader:
         #   按 decisions 执行或填结论（contracts/suspension.py）。
         waiting_on, decisions = await self.resume_state(session, run, history)
 
-        # §7.4：已压缩的早期消息以摘要形式回填，而不是重新送原文。
-        # 没有这一步，每个 run 都要重压一次 —— 摘要 token 重复付、
-        # prompt cache 每轮击穿（§7.3 坑 2 的抖动）。
-        if context is not None and context.summary:
-            history.insert(0, AIMessage(content=SUMMARY_PREFIX + context.summary))
-
         return Segment(
             **cli,
             compact_count=compacted,
@@ -231,6 +234,8 @@ class SegmentLoader:
             spec=spec,
             input_content=input_content,
             history=history,
+            # §7.4：已压缩的早期消息以摘要形式交给运行时，而不是重新送原文
+            summary=context.summary if context is not None and context.summary else None,
             history_upto=upto,
             thread=thread,
             agent_version_id=version.agent_version_uuid,
@@ -250,7 +255,7 @@ class SegmentLoader:
         )
 
     async def resume_state(
-        self, session: AsyncSession, run: Run, history: list[BaseMessage]
+        self, session: AsyncSession, run: Run, history: Sequence[StoredLike]
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         """续跑交回图的挂起现场：(还在等的调用, 已经有的结果)。
 
@@ -271,7 +276,7 @@ class SegmentLoader:
             subagent    子 run 的结论文本（关卡保证子 run 都已终态）
         """
         waits = run.waiting_on if isinstance(run.waiting_on, dict) else {}
-        answered = {m.tool_call_id for m in history if isinstance(m, ToolMessage)}
+        answered = answered_calls(history)
         waits = {cid: w for cid, w in waits.items() if cid not in answered and isinstance(w, dict)}
         decisions: dict[str, Any] = {}
         approvals = ApprovalService(session)
@@ -318,12 +323,14 @@ class SegmentExecution:
     def _redis(self) -> aioredis.Redis:
         return make_redis(self._settings)
 
-    async def run(self, run_id: UUID, slot: SegmentControl, takeover: str | None = None) -> bool:
-        """跑一段并留下记录。返回 True = 停机中走到了安全点，交给调度去交接。
+    async def run(
+        self, run_id: UUID, slot: SegmentControl, takeover: str | None = None
+    ) -> SegmentOutcome:
+        """跑一段并留下记录，返回段的结局。
 
         顺序：载入 → 接管来的先收拾现场 → 标记运行中 → 会话锁跟着租约续上 → 选运行时 →
         事件逐个盖序号、发布、攒着归档 → 每个工具轮次落一次检查点 → 安全点上响应交接 →
-        段末按结果收尾；挂起收尾后再查一次续跑条件。
+        段末按结果收尾。挂起了要不要马上续、子 run 结束后父 run 能不能续，由派发与租约查。
         """
         redis = self._redis()
         relay = EventRelay(redis, ttl_s=self._settings.run_events_ttl_s)
@@ -360,7 +367,7 @@ class SegmentExecution:
                     )
                     await ApprovalService(session).expire_run(run_id)
                     await session.commit()
-                    return False
+                    return SegmentOutcome("terminal")
                 run, thread, version = loaded
                 thread_id = thread.thread_uuid
                 slot.thread_id = thread_id
@@ -520,7 +527,7 @@ class SegmentExecution:
                             approval_mode=mode_changed,
                             run_state=state_changed,
                         )
-                return True
+                return SegmentOutcome("handed_off")
 
             suspended = segment_end is not None and segment_end.type is EventType.RUN_SUSPENDED
 
@@ -546,22 +553,13 @@ class SegmentExecution:
                 await relay.emit(segment_end, thread_id=stream_thread_id)
 
             if suspended:
-                # ★ 必须在落库之后**再查一次** join barrier，否则有一个必然会
-                #   踩到的竞态：子 run 可能在父这段收尾之前就跑完了，那一刻它
-                #   去唤醒父 run，而父还是 running —— CAS 失败，唤醒丢掉；随后
-                #   父落成 suspended，从此再没有人来叫它。
-                #   委派越短这个窗口命中率越高（子 run 秒回时几乎必现）。
-                await self._continuation.resume_if_ready(run_id)
-                return False
+                return SegmentOutcome("suspended")
 
             # ★ 记忆不在 run 收尾时抽取：Agent 在对话中自己保存，漏记的由会话空闲后的补记补上
             #   （doc/memory-design.html §4.3；维护者调度，memory/backfill.py）。
 
-            # ★ 这是个**子 run**，而且刚跑完 —— 去叫醒等着它的父 run。
-            #   放在最后：父续跑会起一个新任务，不该让它排在本 run 的收尾前面。
-            if parent_run_id is not None:
-                await self._continuation.resume_if_ready(parent_run_id)
-            return False
+            # 这是个子 run、而且刚跑完：派发与租约去续等着它的父 run
+            return SegmentOutcome("terminal", parent_to_resume=parent_run_id)
         except asyncio.CancelledError:
             interrupted = True
             raise

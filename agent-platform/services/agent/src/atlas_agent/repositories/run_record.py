@@ -11,10 +11,9 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
+from atlas_engine.contracts.messages import KIND_CHAT
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from atlas_agent.domain.messages import KIND_CHAT
 
 from ..db.models import AgentVersion, Message, Run, RunState, Thread
 from .run import (

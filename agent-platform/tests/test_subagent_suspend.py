@@ -15,11 +15,12 @@ import json
 from typing import Any
 from uuid import UUID
 
-from atlas_agent.domain.events import EventType
-from atlas_agent.domain.messages import KIND_TOOL_RESULT, Transcript, to_storage
-from atlas_agent.domain.spec import AgentSpec, ApprovalSpec, LimitSpec, ModelSpec, SubAgentSpec
 from atlas_engine.contracts import ApprovalState
+from atlas_engine.contracts.events import EventType
+from atlas_engine.contracts.messages import KIND_TOOL_RESULT
+from atlas_engine.contracts.spec import AgentSpec, ApprovalSpec, LimitSpec, ModelSpec, SubAgentSpec
 from atlas_engine.kernel.middleware.approval import approval_id_for
+from atlas_engine.runtime.messages import Transcript, to_storage
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 
 from .fakes import Spawner, TurnModel, tool_call_chunk
@@ -206,7 +207,7 @@ async def test_resume_does_not_re_append_the_user_question() -> None:
 async def test_a_finished_sibling_is_not_spawned_again_on_resume() -> None:
     """★ 一批两个 task：一个派不出去（当场回失败结果），一个挂起。续跑跳 tools 时 ToolNode
     会把整批再执行一遍 —— 已有结果的那个由外层的 SuspensionMiddleware 原样返回，
-    不会走到 SubAgentMiddleware 去再派一次（它排在调用方中间件之后，create_deep_agent）。"""
+    不会走到 SubAgentMiddleware 去再派一次（它排在调用方中间件之后，见 runtime/assemble.py）。"""
     spawner = Spawner("结论")
     parent = TurnModel(
         scripts=[[_task("c1", name="nobody"), _task("c2")], [AIMessageChunk(content="好了。")]]

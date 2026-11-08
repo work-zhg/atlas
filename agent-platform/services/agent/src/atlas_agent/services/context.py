@@ -11,16 +11,13 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from atlas_engine.kernel.context import SUMMARY_PREFIX
-from langchain_core.messages import AIMessage
+from atlas_engine.contracts.spec import resolve_summarizer_model
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import Settings
 from ..db.models import Agent, AgentVersion, RunEvent, Thread
 from ..db.session import fetch_one
-from ..domain.messages import from_storage
-from ..domain.spec import resolve_summarizer_model
 from ..errors import Conflict, NotFound
 from ..providers.llm.model_platform import (
     admit_models,
@@ -30,7 +27,7 @@ from ..providers.llm.model_platform import (
 )
 from ..repositories.run import RunRepository
 from ..repositories.thread_context import ThreadContextRepository
-from .compaction import ThreadSummarizer
+from .compaction import thread_summarizer
 
 __all__ = ["ContextService"]
 
@@ -87,12 +84,6 @@ class ContextService:
         )
         if len(rows) < 2:
             raise Conflict("没有可压缩的新内容", thread_id=str(thread_id))
-        history = from_storage(rows)
-        prior = (
-            [AIMessage(content=SUMMARY_PREFIX + context.summary)]
-            if context is not None and context.summary
-            else []
-        )
 
         agent = await fetch_one(self._s, Agent, Agent.agent_uuid == thread.agent_uuid)
         model = ""
@@ -115,10 +106,12 @@ class ContextService:
             admit_models(key, [model or self._settings.summarizer_model])
             assert key.key is not None
             endpoint = key_endpoint(self._settings, key.key)
-        summarizer = ThreadSummarizer(
+        summarizer = thread_summarizer(
             self._settings, self._build_model, model=model or None, endpoint=endpoint
         )
-        summary = await summarizer([*prior, *history], focus=focus)
+        summary = await summarizer.summarize_history(
+            rows, summary=context.summary if context is not None else None, focus=focus
+        )
 
         await ThreadContextRepository(self._s).save_summary(
             thread_id, summary=summary, upto=rows[-1].created_at

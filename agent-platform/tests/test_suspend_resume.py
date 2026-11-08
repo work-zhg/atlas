@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -28,6 +29,7 @@ from atlas_agent.db.session import fetch_one, get_sessionmaker
 from atlas_agent.executor.compose import build_executor
 from atlas_agent.executor.scheduling import RunWorker
 from atlas_agent.main import create_app
+from atlas_jobs import JobContext, NoParams
 from httpx import ASGITransport
 from langchain_core.messages import AIMessageChunk
 from sqlalchemy import select
@@ -59,6 +61,13 @@ def make_app(parent: TurnModel, child: TurnModel):
 
     app.state.executor = build_executor(get_sessionmaker(), settings, model_builder=builder)
     return app
+
+
+async def _recover(executor: Any) -> None:
+    """执行器的兜底任务跑一轮（定时任务库的实例任务；测试里直接调 execute，不起调度）。"""
+    await executor.recovery.execute(
+        JobContext(job_name="test", fired_at=datetime.now(UTC)), NoParams()
+    )
 
 
 @pytest.fixture
@@ -473,13 +482,13 @@ async def _suspend_a_run(
     return client, executor, thread_id, run_id
 
 
-async def test_the_sweeper_recovers_a_lost_wakeup(client_factory) -> None:
-    """★ 唤醒信号丢了之后，只有这个扫描能把 run 捞回来。
+async def test_the_recovery_job_resumes_a_lost_wakeup(client_factory) -> None:
+    """★ 续跑信号丢了之后，只有兜底任务能把 run 捞回来。
 
     正常路径是子 run 收尾时主动叫醒父 run。但进程可能正好在那一刻被
     SIGKILL —— 信号没了，而父 run **不在** active_runs 里（那是故意的：
     suspended 没有进程是正常的），所以 reap_orphans 也不会管它。
-    没有这个扫描，它会永远停在「等待子智能体」：没有报错、没有事件，
+    没有兜底任务补查，它会永远停在「等待子智能体」：没有报错、没有事件，
     只是一个永远转圈的界面。
     """
     # 子 run 其实已经跑完了，只是那声「我好了」没送到
@@ -487,17 +496,18 @@ async def test_the_sweeper_recovers_a_lost_wakeup(client_factory) -> None:
         client_factory, child_status="succeeded"
     )
 
-    assert await executor.sweep_suspended() == 1
+    await _recover(executor)
     final = await wait_status(client, run_id, TERMINAL)
     assert final["status"] == "succeeded", final
 
 
-async def test_the_sweeper_leaves_runs_whose_children_are_still_working(
+async def test_the_recovery_job_leaves_runs_whose_children_are_still_working(
     client_factory,
 ) -> None:
     """子 run 还在跑就不能续 —— 续了模型会拿到一句「尚未结束」当结论。"""
-    _client, executor, _thread_id, _run_id = await _suspend_a_run(client_factory)
-    assert await executor.sweep_suspended() == 0
+    client, executor, _thread_id, run_id = await _suspend_a_run(client_factory)
+    await _recover(executor)
+    assert (await client.get(f"/v1/runs/{run_id}")).json()["status"] == "suspended"
 
 
 async def test_cancelling_a_suspended_run_settles_it(client_factory) -> None:
@@ -573,10 +583,10 @@ async def test_an_approval_during_suspension_reaches_the_thread_stream(
     订阅单位换成会话之后这个问题由架构消解：子 run 的事件本来就在同一条流上。
     这条测试钉住的就是「挂起中的 run，其子 run 的事件仍然进得来」。
     """
-    from atlas_agent.domain.events import EventFactory, EventType
     from atlas_agent.redisx import make_redis
     from atlas_agent.repositories.event_archive import EventArchive
     from atlas_agent.stream.relay import EventRelay, thread_stream_key
+    from atlas_engine.contracts.events import EventFactory, EventType
 
     _client, _executor, thread_id, run_id = await _suspend_a_run(client_factory)
 

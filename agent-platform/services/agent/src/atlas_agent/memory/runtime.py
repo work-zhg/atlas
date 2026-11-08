@@ -39,7 +39,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, TypeVar
 from uuid import UUID
 
-from langchain_core.tools import StructuredTool
+from atlas_engine.contracts.tools import ToolResult, ToolSpec
 from pydantic import BaseModel, Field
 from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
@@ -490,24 +490,23 @@ class MemoryTurn:
 
     # ── 工具
 
-    def tools(self) -> list[StructuredTool]:
+    def tools(self) -> list[ToolSpec]:
         out = [
-            StructuredTool.from_function(
-                coroutine=self._load,
+            ToolSpec(
                 name=LOAD_MEMORY_TOOL,
                 description=(
                     "加载一个记忆主题的全部条目。主题目录在系统提示词的 <memory> 里；"
                     "开始一类工作前（例如写 Java 代码前），加载与之相关的主题。"
                     "常驻主题的内容已经在上下文里，不用再加载。"
                 ),
-                args_schema=_LoadArgs,
-                metadata={"readOnlyHint": True},
+                parameters=_LoadArgs,
+                call=self._load,
+                annotations={"readOnlyHint": True},
             )
         ]
         if self.writable:
             out += [
-                StructuredTool.from_function(
-                    coroutine=self._save,
+                ToolSpec(
                     name=SAVE_MEMORY_TOOL,
                     description=(
                         "保存一条关于这位用户的长期记忆（跨会话有效），可同时取代旧条目。"
@@ -515,18 +514,17 @@ class MemoryTurn:
                         "而是先返回最新内容，请据此判断后再调用。"
                         "写入规则见 <memory> 之后的写入指引。"
                     ),
-                    args_schema=_SaveArgs,
-                    response_format="content_and_artifact",
+                    parameters=_SaveArgs,
+                    call=_with_artifact(self._save),
                 ),
-                StructuredTool.from_function(
-                    coroutine=self._forget,
+                ToolSpec(
                     name=FORGET_MEMORY_TOOL,
                     description=(
                         "遗忘记忆条目：用户说某条记忆不对、或明确要求忘掉时使用。"
                         "遗忘可以撤销，不是彻底删除。"
                     ),
-                    args_schema=_ForgetArgs,
-                    response_format="content_and_artifact",
+                    parameters=_ForgetArgs,
+                    call=_with_artifact(self._forget),
                 ),
             ]
         return out
@@ -759,3 +757,15 @@ def _conflicts(result: dict[str, Any]) -> str:
         cur = f"现在是 #{c['current']}" if c.get("current") else "已被遗忘"
         parts.append(f"#{c['number']} {cur}，时间 {str(c.get('current_at') or '')[:16]}")
     return "；".join(parts)
+
+
+def _with_artifact(
+    call: Callable[..., Awaitable[tuple[str, dict[str, Any] | None]]],
+) -> Callable[..., Awaitable[ToolResult]]:
+    """(给模型的文本, 给事件的 artifact) → ToolResult。"""
+
+    async def wrapped(**arguments: Any) -> ToolResult:
+        text, artifact = await call(**arguments)
+        return ToolResult(content=text, artifact=artifact)
+
+    return wrapped

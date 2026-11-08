@@ -8,10 +8,9 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from atlas_engine.contracts.events import TraceEvent
 from sqlalchemy import func, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from atlas_agent.domain.events import TraceEvent
 
 from ..db.models import Run, RunEvent
 from .run import (

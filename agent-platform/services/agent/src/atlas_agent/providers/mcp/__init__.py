@@ -4,21 +4,22 @@
 1. **只经 MCP 网关**：服务、工具定义都从网关读；调用经网关、带这个智能体的 API Key。
    Atlas 不自己发现工具，不持有上游凭据。
 2. **只做远程**（Streamable HTTP），不在平台里拉起 stdio 进程。
-3. **engine 不认识 MCP**：这里把工具解析成 BaseTool 以 extra_tools 注入。
+3. **engine 不认识 MCP**：这里把工具解析成 ToolSpec（contracts/tools.py）以 extra_tools 注入。
 
   gateway.py    网关的内部接口：元数据（GatewayCatalog）、智能体的 Key 能用什么（AgentAccess）
   catalog.py    目录的形状：工具定义、服务快照、目录协议
   config.py     网关上的一个服务、连它的 MCP 客户端
-  native.py     native agent 的装配与调用链（langchain.mcp + FastMCP client）
+  native.py     native agent 的装配与调用链（FastMCP client）
   session.py    一个 Run 段的会话复用、Key、「用不了」的记忆
   arguments.py  调用前的参数校验
   acp.py        acp 会话的下发（网关地址 + 智能体 Key）
 
-命名规则（三种名字）在 domain/mcp_naming.py —— build.py 要用它，而 build.py
-只允许 import 纯层。
+命名规则（三种名字）在 atlas_engine/contracts/mcp_naming.py —— 装配（runtime/assemble.py）
+要用它，spec 里的 mcp:服务:工具 也按它写。
 """
 
-from ...domain.mcp_naming import MCP_PREFIX, model_name, parse_tool_id, tool_id
+from atlas_engine.contracts.mcp_naming import MCP_PREFIX, model_name, parse_tool_id, tool_id
+
 from .catalog import McpCatalog, McpToolDef, McpUnavailable, ServerSnapshot
 from .config import McpServerConfig
 from .gateway import (

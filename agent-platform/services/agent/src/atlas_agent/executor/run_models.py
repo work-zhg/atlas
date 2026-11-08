@@ -6,8 +6,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
-from atlas_agent.providers.llm.factory import build_chat_model
-from atlas_agent.telemetry.model_callback import ModelSpanHandler
+from atlas_engine.runtime.models import build_chat_model
+
+from atlas_agent.telemetry.model_callback import ModelSpanObserver
 
 from ..config import Settings
 from ..providers.llm.model_platform import ModelEndpoint, PlatformModel, direct_endpoint
@@ -34,16 +35,19 @@ def default_model_builder(
     标题生成、上下文摘要。挂在这里三处一并覆盖，而且不用碰 runner ——
     它是纯计算层，往那里塞回调会让「run 一轮」不再能脱离基础设施单测。
 
-    ★ 用构造器级 callbacks 而不是逐次调用传 config：调用点分散在三处，
-      漏一处的表现是「某类模型调用在链路图上凭空消失」，而那恰恰最难发现。
+    ★ 观察者挂在构造器上而不是逐次调用传：调用点分散在好几处，漏一处的表现是「某类模型调用
+      在链路图上凭空消失」，而那恰恰最难发现。
 
-    未启用遥测时回调照常挂着，但它拿到的是 no-op span —— 不写 if 分支。
+    未启用遥测时观察者照常挂着，但它拿到的是 no-op span —— 不写 if 分支。
     """
+    from ..config import get_settings
+
     return build_chat_model(
         model_spec,
         base_url=base_url,
         api_key=api_key,
-        callbacks=[ModelSpanHandler()],
+        request_timeout_s=get_settings().litellm_timeout_s,
+        observers=[ModelSpanObserver()],
         headers=headers,
     )
 

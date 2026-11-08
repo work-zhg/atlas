@@ -1,10 +1,8 @@
-"""原生运行时 · 上下文管理（c4-model/agent/native-runtime/code-native-runtime-context.html）。
+"""原生运行时 · 上下文管理的 server 一侧（native-runtime/code-native-runtime-context.html）。
 
-为一段交出系统提示词分层（持久指令、记忆常驻块）和上下文流水线（槽位 ④：外置、清理、
-压缩、提醒、失败恢复）。摘要和覆盖边界存在 thread_context。
-
-★ 智能体关了自动压缩、或者模型目录里查不到窗口时，流水线只剩外置和提醒 —— 它们不是压缩，
-  关压缩不该把大结果保护和记忆提醒一起关掉。
+为一段交出系统提示词分层（持久指令、记忆常驻块），和上下文流水线（槽位 ④）要的端口：窗口
+从模型目录查、摘要用哪个模型、摘要和覆盖边界存在 thread_context。流水线本身由 engine 按
+spec 拼（atlas_engine/runtime/context.py）。
 """
 
 from __future__ import annotations
@@ -15,35 +13,23 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from atlas_engine.kernel.context import (
-    CallRecovery,
-    Compactor,
-    ContextBudget,
-    ContextMiddleware,
-    Reminders,
-    ReminderSource,
-    ResultClearing,
-    ResultOffloader,
-)
+from atlas_engine.contracts.spec import resolve_summarizer_model
+from atlas_engine.runtime.context import ContextLimits, ContextPorts, ReminderSource
+from atlas_engine.runtime.summarize import Summarizer
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from atlas_agent.domain.spec import resolve_summarizer_model
 from atlas_agent.executor.context import load_instructions
 from atlas_agent.executor.segment_data import Segment
 
 from ..config import Settings
 from ..repositories.model_catalog import ModelCatalogRepository
-from ..services.compaction import ThreadSummarizer, make_failure_hook, make_persist_hook
+from ..services.compaction import make_failure_hook, make_persist_hook, thread_summarizer
 from .run_models import ModelBuilder, models_of
 
 if TYPE_CHECKING:
     from ..memory import MemoryTurn
 
 logger = logging.getLogger(__name__)
-
-#: 不知道窗口时提醒的总量上限（知道时按 attachment_budget_ratio 算）
-_REMINDER_BUDGET_WITHOUT_WINDOW = 4_000
-
 
 @dataclass
 class ContextContribution:
@@ -53,8 +39,8 @@ class ContextContribution:
     instructions: Any
     #: 记忆常驻块。None = 没有记忆
     memory_block: str | None
-    #: 上下文流水线（槽位 ④）
-    middleware: ContextMiddleware
+    #: 上下文流水线要的端口（engine 按 spec 拼成槽位 ④ 的中间件）
+    ports: ContextPorts
 
 
 class ContextManager:
@@ -91,67 +77,39 @@ class ContextManager:
                 self._sessionmaker, workspace, segment.thread.created_by_uuid
             ),
             memory_block=memory.block if memory is not None else None,
-            middleware=await self._pipeline(
-                segment, workspace=workspace, readable_store=readable_store, sources=sources
+            ports=ContextPorts(
+                offload_store=readable_store,
+                result_limit_tokens=self._settings.context_result_limit_tokens,
+                batch_cap_tokens=self._settings.context_batch_cap_tokens,
+                reminder_sources=sources,
+                limits=await self._limits_for(segment, workspace=workspace),
             ),
         )
 
-    async def _pipeline(
-        self,
-        segment: Segment,
-        *,
-        workspace: Any,
-        readable_store: Any,
-        sources: Sequence[ReminderSource],
-    ) -> ContextMiddleware:
-        """按 spec 与模型目录构造流水线（doc/context-management-design.html）。"""
-        offloader = ResultOffloader(
-            store=readable_store,
-            single_limit_tokens=self._settings.context_result_limit_tokens,
-            batch_cap_tokens=self._settings.context_batch_cap_tokens,
-        )
-        cfg = segment.spec.compaction
-        limits = await self._limits(segment) if cfg.enabled else None
+    async def _limits_for(self, segment: Segment, *, workspace: Any) -> ContextLimits | None:
+        """压缩要的东西。关了自动压缩、或者模型目录里查不到窗口时为 None。"""
+        if not segment.spec.compaction.enabled:
+            return None
+        limits = await self._limits(segment)
         if limits is None:
-            return ContextMiddleware(
-                offloader=offloader,
-                reminders=Reminders(budget_tokens=_REMINDER_BUDGET_WITHOUT_WINDOW, sources=sources),
-            )
+            return None
         window, model_max_output = limits
-        budget = ContextBudget(
-            context_window=window,
-            max_output_tokens=min(segment.spec.model.max_output_tokens, model_max_output),
-            compact_ratio=cfg.trigger_ratio,
-            clear_ratio=cfg.clear_ratio,
-            warn_ratio=cfg.warn_ratio,
-        )
-        compactor = Compactor(
-            summarizer=self._summarizer(segment),
-            keep_recent_turns=cfg.keep_recent_turns,
-            workspace=workspace,
-            restore_files=cfg.restore_files,
-            failure_count=segment.compaction_failures,
-            on_failed=make_failure_hook(self._sessionmaker, segment.thread_id),
-            on_compacted=make_persist_hook(
-                self._sessionmaker, segment.thread_id, segment.history_upto
-            ),
-        )
         # 距上次回复已超过缓存有效期 → 缓存反正失效，第一次调模型前顺手清旧工具结果（§8 ②）
         cache_expired = segment.history_upto is not None and (
             (datetime.now(UTC) - segment.history_upto).total_seconds()
             >= self._settings.prompt_cache_ttl_s
         )
-        return ContextMiddleware(
-            offloader=offloader,
-            reminders=Reminders(
-                budget_tokens=int(budget.effective * cfg.attachment_budget_ratio), sources=sources
+        return ContextLimits(
+            window=window,
+            model_max_output=model_max_output,
+            summarizer=self._summarizer(segment),
+            workspace=workspace,
+            failure_count=segment.compaction_failures,
+            on_failed=make_failure_hook(self._sessionmaker, segment.thread_id),
+            on_compacted=make_persist_hook(
+                self._sessionmaker, segment.thread_id, segment.history_upto
             ),
-            budget=budget,
-            clearing=ResultClearing(
-                keep_recent=cfg.keep_recent_tool_results, cache_expired=cache_expired
-            ),
-            compactor=compactor,
-            recovery=CallRecovery(compactor=compactor, max_output_cap=model_max_output),
+            cache_expired=cache_expired,
         )
 
     async def _limits(self, segment: Segment) -> tuple[int, int] | None:
@@ -170,11 +128,11 @@ class ContextManager:
             logger.warning("model_catalog 无 %s 的窗口，不按档位清理和压缩", model)
         return limits
 
-    def _summarizer(self, segment: Segment) -> ThreadSummarizer:
+    def _summarizer(self, segment: Segment) -> Summarizer:
         """压缩用的摘要器：智能体的推理，和主模型同一个端点（Run 开始时已检查过）。"""
         spec = segment.spec
         name = resolve_summarizer_model(spec.compaction.summarizer_model, spec.model.model)
-        return ThreadSummarizer(
+        return thread_summarizer(
             self._settings,
             self._build_model,
             model=name,

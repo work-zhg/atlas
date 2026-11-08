@@ -12,9 +12,9 @@ import os
 from uuid import UUID
 
 import pytest
-from atlas_agent.domain.events import EventType
-from atlas_agent.domain.spec import AgentSpec, LimitSpec, ModelSpec
-from atlas_agent.providers.llm.factory import build_chat_model
+from atlas_engine.contracts.events import EventType
+from atlas_engine.contracts.spec import AgentSpec, LimitSpec, ModelSpec
+from atlas_engine.runtime.models import build_chat_model
 
 from tests.graphs import run_agent as run
 
@@ -49,7 +49,7 @@ async def test_live_stream_end_to_end(model: str) -> None:
     """★ 回归护栏：litellm 的 context_management 曾让流式整个崩掉（见 compat.py）。"""
     base, key = _creds()
     spec = _spec(model)
-    chat = build_chat_model(spec.model, base_url=base, api_key=key)
+    chat = build_chat_model(spec.model, base_url=base, api_key=key, request_timeout_s=120)
 
     events = [
         e
@@ -76,7 +76,10 @@ async def test_live_temperature_rejected_by_gateway() -> None:
     # engine 侧先拦下来
     with pytest.raises(InvalidSpec):
         build_chat_model(
-            ModelSpec(model="claude-opus-5", temperature=0.2), base_url=base, api_key=key
+            ModelSpec(model="claude-opus-5", temperature=0.2),
+            base_url=base,
+            api_key=key,
+            request_timeout_s=120,
         )
 
 
@@ -95,7 +98,7 @@ async def test_live_tools_produce_inspector_data() -> None:
         tool_names=("write_todos", "filesystem"),
         limits=LimitSpec(timeout_s=180),
     )
-    chat = build_chat_model(spec.model, base_url=base, api_key=key)
+    chat = build_chat_model(spec.model, base_url=base, api_key=key, request_timeout_s=120)
 
     events = [
         e
@@ -169,7 +172,7 @@ async def test_live_mcp_web_search_via_gateway() -> None:
         sessions=sessions,
     )
     assert tools, "serpapi 没装上：主体没有授权或没有 Key"
-    chat = build_chat_model(spec.model, base_url=base, api_key=key)
+    chat = build_chat_model(spec.model, base_url=base, api_key=key, request_timeout_s=120)
     events = [
         e
         async for e in run(

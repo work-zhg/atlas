@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -14,8 +13,11 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 import redis.asyncio as aioredis
+from atlas_engine.contracts.events import EventType
+from atlas_engine.contracts.tools import ToolSpec
+from atlas_engine.runtime.tool_registry import BASH_TOOL, FILESYSTEM_TOOL, reminders_for
+from atlas_engine.runtime.tools import estimate_tokens
 
-from atlas_agent.domain.tool_registry import BASH_TOOL, FILESYSTEM_TOOL, reminders_for
 from atlas_agent.errors import CapabilityUnavailable
 from atlas_agent.executor.segment_data import Segment
 from atlas_agent.providers.knowledge import make_knowledge_tool, require_client
@@ -24,7 +26,6 @@ from atlas_agent.sandbox.exec import PollingPolicy, ShellSandbox
 from atlas_agent.sandbox.native import WorkspaceRef
 
 from ..config import Settings
-from ..domain.events import EventType
 from ..outbound import current_identity
 from ..providers.filesystem.skill_copy import resolve_skills, skill_refs_for
 from ..providers.mcp import (
@@ -55,9 +56,9 @@ class ToolContribution:
     """工具面为一段交出的东西。"""
 
     #: 直接可见的外部工具（MCP、知识库、记忆）
-    extra_tools: list[Any] = field(default_factory=list)
+    extra_tools: list[ToolSpec] = field(default_factory=list)
     #: MCP 工具多时改为延迟工具：模型平时只看到名字，用 tool_search 按需加载
-    deferred_tools: list[Any] = field(default_factory=list)
+    deferred_tools: list[ToolSpec] = field(default_factory=list)
     #: execute 背后的沙箱。None = 没勾 Shell
     sandbox: Any = None
     #: 技能清单（已拷进会话的技能，只渲染、不扫描）
@@ -86,7 +87,7 @@ class ToolSurface:
         closers: list[Callable[[], Awaitable[None]]] | None = None,
     ) -> ToolContribution:
         """装上这一段的工具。MCP 解析失败冒泡成 run.failed，而不是少装几个工具就默默跑（§13.2）。"""
-        # MCP 工具在这里解析成 BaseTool —— engine 不认识 MCP 的传输与凭据
+        # MCP 工具在这里解析成 ToolSpec —— engine 不认识 MCP 的传输与凭据
         # （§14）。工具定义读目录缓存，命中时装配不连网（MCP 详设 §05）。
         extra_tools = await self._mcp_tool_list(
             segment, run_id=run_id, redis=redis, notices=notices, closers=closers
@@ -251,19 +252,11 @@ class ToolSurface:
         return fetch
 
 
-def _deferred_mcp_tools(tools: list[Any], settings: Settings) -> list[Any]:
+def _deferred_mcp_tools(tools: list[ToolSpec], settings: Settings) -> list[ToolSpec]:
     """MCP 工具数量或定义总量超过阈值 → 全部改为延迟工具；否则照常常驻。"""
     if not tools:
         return []
-    from atlas_engine.kernel.context import estimate_text
-    from langchain_core.utils.function_calling import convert_to_openai_tool
-
-    size = 0
-    for t in tools:
-        try:
-            size += estimate_text(json.dumps(convert_to_openai_tool(t), ensure_ascii=False))
-        except Exception:
-            size += estimate_text(str(getattr(t, "description", "")))
+    size = sum(estimate_tokens(t) for t in tools)
     if len(tools) > settings.deferred_tools_min_count or size > settings.deferred_tools_min_tokens:
         return list(tools)
     return []

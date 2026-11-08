@@ -15,9 +15,9 @@ from uuid import UUID
 
 import redis.asyncio as aioredis
 from atlas_engine.contracts import ModelUnavailable
+from atlas_engine.runtime.tool_registry import BASH_TOOL, BUILTIN_TOOLS, MEMORY_TOOL
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from atlas_agent.domain.tool_registry import BASH_TOOL, BUILTIN_TOOLS, MEMORY_TOOL
 from atlas_agent.providers.llm.gateway import GatewayConfig, list_models
 from atlas_agent.providers.llm.model_platform import (
     ModelPlatformUnavailable,

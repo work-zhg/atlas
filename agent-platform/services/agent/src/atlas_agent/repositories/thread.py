@@ -5,12 +5,12 @@ from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
+from atlas_engine.contracts.messages import KIND_CHAT, StoredMessage
 from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.models import Agent, Message, Run, Thread
 from ..db.session import fetch_one
-from ..domain.messages import KIND_CHAT, StoredMessage
 
 
 class ThreadRepository:

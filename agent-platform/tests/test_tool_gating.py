@@ -6,7 +6,7 @@
   2. execute 是「注册后运行时报错」而非「不注册」—— 模型看得见它，
      每次尝试烧一轮 token
 
-修法是文件工具白名单（现为 FilesystemConfig.tools）贯通三处注入点。
+修法是文件工具白名单（tool_registry.filesystem_tools_for）贯通装配（runtime/assemble.py）。
 全部用**行为断言**（让模型真调一次，看拿到什么）—— P6 的教训：
 查图结构在这类问题上会写出永远通过的空断言。
 """
@@ -17,13 +17,12 @@ from typing import Any
 from uuid import UUID
 
 import pytest
-
-from atlas_agent.domain.events import EventType
-from tests.graphs import run_agent as run
-from atlas_agent.domain.spec import AgentSpec, LimitSpec, ModelSpec
-
 from atlas_agent.providers.filesystem.base import MemoryFilesystem
+from atlas_engine.contracts.events import EventType
+from atlas_engine.contracts.spec import AgentSpec, LimitSpec, ModelSpec
 from langchain_core.messages import AIMessageChunk
+
+from tests.graphs import run_agent as run
 
 from .fakes import TurnModel, tool_call_chunk
 
@@ -192,7 +191,7 @@ def test_bash_alone_is_supported() -> None:
     execute —— 报的和实际的对不上。
     部署是否开启沙箱不在这里判：没开时装配期明确报错（SandboxNotEnabled），见 test_sandbox_provider。
     """
-    from atlas_agent.domain.tool_registry import unsupported_tools
+    from atlas_engine.runtime.tool_registry import unsupported_tools
 
     assert unsupported_tools(_spec(("bash",))) == []
     assert unsupported_tools(_spec(("bash", "filesystem"))) == []
@@ -288,19 +287,19 @@ def test_file_middleware_installed_only_with_file_tools(
     monkeypatch: pytest.MonkeyPatch, tools: list[str], installed: bool
 ) -> None:
     """文件中间件勾了才装，不再是恒装的脚手架（大结果外置已归上下文管理）。"""
-    from atlas_engine.kernel import graph as kernel_graph
-    from atlas_engine.kernel.graph import FilesystemConfig, create_deep_agent
+    from atlas_engine.runtime import assemble
 
     built: list[Any] = []
-    real = kernel_graph.FilesystemMiddleware
+    real = assemble.FilesystemMiddleware
 
     def spy(*args: Any, **kwargs: Any) -> Any:
         built.append(kwargs)
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(kernel_graph, "FilesystemMiddleware", spy)
-    create_deep_agent(
-        model=TurnModel(scripts=[]),
-        filesystem=FilesystemConfig(filesystem=MemoryFilesystem(), tools=tools),
+    monkeypatch.setattr(assemble, "FilesystemMiddleware", spy)
+    assemble.build_graph(
+        _spec(("filesystem",) if tools else ()),
+        TurnModel(scripts=[]),
+        filesystem=MemoryFilesystem(),
     )
     assert bool(built) is installed

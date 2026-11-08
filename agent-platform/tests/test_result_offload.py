@@ -126,7 +126,7 @@ def test_stages_that_need_levels_need_a_budget() -> None:
 
 def test_the_todo_reminder_comes_from_the_registry() -> None:
     """待办提醒的内容由工具面的 TodoList 给，勾了 write_todos 才有。"""
-    from atlas_agent.domain.tool_registry import reminders_for
+    from atlas_engine.runtime.tool_registry import reminders_for
 
     assert reminders_for(set()) == []
     (source,) = reminders_for({"write_todos"})

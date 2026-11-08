@@ -90,7 +90,7 @@ class SkillsMiddleware(AgentMiddleware):
     Args:
         skills: 已投送到工作区的技能。**空列表时不应该装配这个中间件** ——
             装一个内容为空的技能段只会白占提示词；这个判断在调用方
-            （`create_deep_agent`）。
+            （`runtime/assemble.py`）。
         system_prompt: 覆盖默认模板，必须含 `{skills_list}` 占位符。
     """
 

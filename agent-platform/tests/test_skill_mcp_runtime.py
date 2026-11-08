@@ -16,9 +16,6 @@ from typing import Any
 import httpx
 import pytest
 from atlas_agent.config import Settings
-from atlas_agent.domain.events import EventType
-from atlas_agent.domain.skill_events import SkillLoadTracker, skill_slug_of
-from atlas_agent.domain.spec import AgentSpec, ModelSpec, SkillRefSpec
 from atlas_agent.errors import InvalidReference
 from atlas_agent.providers.filesystem.skill_copy import SkillUnavailable, resolve_skills
 from atlas_agent.providers.mcp import (
@@ -43,6 +40,9 @@ from atlas_agent.skills import (
 )
 from atlas_agent.skills.client import SkillClient
 from atlas_agent.skills.directory import SkillNotFound
+from atlas_engine.contracts.events import EventType
+from atlas_engine.contracts.spec import AgentSpec, ModelSpec, SkillRefSpec
+from atlas_engine.runtime.skill_events import SkillLoadTracker, skill_slug_of
 from atlas_skill.schemas import SkillCatalogItem, SkillVersionBrief, SkillVersionOut
 
 from tests.fake_uc import AS_USER
@@ -100,9 +100,9 @@ def test_skill_slug_of(args: Any, slug: str | None) -> None:
 
 
 async def test_runner_emits_notices_right_after_run_started() -> None:
-    from atlas_agent.executor.build import build_graph
-    from atlas_agent.executor.runner import run as engine_run
     from atlas_agent.executor.segment_data import Segment
+    from atlas_engine.runtime.assemble import build_graph
+    from atlas_engine.runtime.runner import run as engine_run
 
     from tests.fakes import text_model
 

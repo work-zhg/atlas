@@ -27,12 +27,12 @@ from typing import Any
 from uuid import UUID
 
 import httpx
-from langchain_core.tools import StructuredTool
+from atlas_engine.contracts.spec import KnowledgeSpec
+from atlas_engine.contracts.tools import ToolSpec
 from opentelemetry import propagate
 from opentelemetry.trace import SpanKind
 from pydantic import BaseModel, Field
 
-from ..domain.spec import KnowledgeSpec
 from ..errors import CapabilityUnavailable
 from ..outbound import CallIdentity, current_identity, outbound_headers, use_identity
 from ..telemetry import tracer
@@ -256,7 +256,7 @@ def make_knowledge_tool(
     *,
     names: list[str] | None,
     source_ref: str,
-) -> StructuredTool:
+) -> ToolSpec:
     """库 id 走闭包捕获，不进参数（见模块开头）。按谁判看本次 run 的出站身份。"""
 
     async def knowledge_search(query: str) -> str:
@@ -268,17 +268,17 @@ def make_knowledge_tool(
         return format_records(query, got.records, len(got.skipped))
 
     scope = f"（可查的知识库：{'、'.join(names)}）" if names else ""
-    return StructuredTool.from_function(
-        coroutine=knowledge_search,
+    return ToolSpec(
         name=KNOWLEDGE_SEARCH_TOOL,
         description=(
             "在为你配置的知识库里检索资料：产品文档、制度规范、FAQ 等领域知识。"
             "回答涉及这些领域的问题前先检索，并在回答里注明出处。"
             f"只读。{scope}"
         ),
-        args_schema=_Args,
-        # 按 MCP 的注解约定声明只读：审批模式据此判定（domain/tool_registry.py::tool_effects）
-        metadata={"readOnlyHint": True},
+        parameters=_Args,
+        call=knowledge_search,
+        # 按 MCP 的注解约定声明只读：审批模式据此判定（runtime/tool_registry.py::tool_effects）
+        annotations={"readOnlyHint": True},
     )
 
 

@@ -15,10 +15,9 @@ SSE 回放、孤儿回收全部原样生效，因为它们都挂在 **run 的生
 ★ 这是 server 内部的缝，不进 contracts：两端（executor 与各 runtime）都是
   server 的东西，kernel 与 bridge 都不认识它。
 
-★ 本模块**不在纯计算层**（与 build.py / runner.py 不同）：它经
-  RedisCancelToken 拖进 redis。这条边界是对的 —— build 管「图长什么样」、
-  runner 管「怎么跑完一轮」，两者都能脱离基础设施单测；runtime 正是把
-  它们接到基础设施上的那一层，本来就该认识 redis。
+★ 原生运行时的本体在 engine（atlas_engine.runtime：assemble 管「图长什么样」、runner 管
+  「怎么跑完一轮」，都能脱离基础设施单测）。NativeRuntime 只是把它接到 server 的基础设施上：
+  CapabilityAssembly 收集能力端口（IO），RedisCancelToken 接取消位。
 """
 
 from __future__ import annotations
@@ -30,19 +29,19 @@ from uuid import UUID
 
 import anyio
 from atlas_engine.contracts import EngineError, InvalidSpec
+from atlas_engine.contracts.events import EventType
+from atlas_engine.runtime.assemble import assemble
+from atlas_engine.runtime.runner import failed_before_start
+from atlas_engine.runtime.runner import run as engine_run
 
-from atlas_agent.executor.runner import failed_before_start
-from atlas_agent.executor.runner import run as engine_run
-
-from ..domain.events import EventType
 from ..errors import CapabilityUnavailable
 from ..stream.relay import RedisCancelToken
 
 if TYPE_CHECKING:
     import redis.asyncio as aioredis
+    from atlas_engine.contracts.events import TraceEvent
+    from atlas_engine.runtime.messages import Transcript
 
-    from ..domain.events import TraceEvent
-    from ..domain.messages import Transcript
     from ..stream.relay import EventRelay
     from .assembly import CapabilityAssembly
     from .segment_data import Segment
@@ -112,8 +111,8 @@ class NativeRuntime:
         relay: EventRelay,
         transcript: Transcript | None = None,
     ) -> AsyncIterator[TraceEvent]:
-        # 图在 server 侧装配（build.py 是策略，assembly 收集 IO 能力），
-        # runner 只驱动已装好的图 —— cancel / titler 是 runner 自己的注入点。
+        # server 只收集能力端口（IO）；engine 先装配（assemble）、再驱动（runner）——
+        # cancel / titler 是 runner 自己的注入点。
         notices: list[tuple[EventType, dict[str, Any]]] = []
         # ★ 本 Run 段结束（完成、挂起、取消、被接管、装配失败）时收尾：MCP 会话在段内复用，
         #   这里关掉（MCP 方案设计 §6.3）。恢复后的下一段重新建立，不跨段、不跨进程
@@ -125,7 +124,7 @@ class NativeRuntime:
                 segment = await self._assembly.with_knowledge(
                     segment, run_id=run_id, notices=notices
                 )
-                graph, titler = await self._assembly.build(
+                caps, titler = await self._assembly.capabilities(
                     segment,
                     run_id=run_id,
                     redis=redis,
@@ -133,6 +132,7 @@ class NativeRuntime:
                     notices=notices,
                     closers=closers,
                 )
+                graph = assemble(segment.spec, caps)
             except Exception as exc:
                 # ★ 装配失败也要有 run.started → run.failed，否则 SSE 上一个事件都
                 #   没有，用户只能干等（见 failed_before_start）。CancelledError 是

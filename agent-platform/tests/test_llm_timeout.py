@@ -7,12 +7,12 @@
 from __future__ import annotations
 
 from atlas_agent.config import get_settings
-from atlas_agent.domain.spec import ModelSpec
-from atlas_agent.providers.llm.factory import build_chat_model
+from atlas_agent.executor.run_models import default_model_builder
+from atlas_engine.contracts.spec import ModelSpec
 
 
 def test_anthropic_client_gets_request_timeout() -> None:
-    m = build_chat_model(
+    m = default_model_builder(
         ModelSpec(model="deepseek-chat", provider="anthropic"), base_url="http://x", api_key="k"
     )
     assert m.default_request_timeout == get_settings().litellm_timeout_s

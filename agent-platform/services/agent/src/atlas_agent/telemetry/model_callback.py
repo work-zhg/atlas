@@ -1,12 +1,10 @@
-"""模型调用的 span —— LangChain 回调（可观测性设计 §04 的 llm.chat）。
+"""模型调用的 span（可观测性设计 §04 的 llm.chat）。
 
-★ 为什么不从事件流派生：事件流里没有「模型调用开始/结束」这回事，
-  message.delta 只是 token 增量，usage.updated 是**整轮**的累计值。
-  要拿到单次调用的耗时与用量，只能从模型自己那层取。
+engine 的模型构造器把框架的回调翻成三件事（atlas_engine/runtime/observe.py 的 ModelObserver）：
+开始、结束、失败。这里把它们记成 OTel span —— 不认识 LangChain。
 
-★ 为什么挂在 default_model_builder：全部模型构造都过那一个函数 ——
-  主对话（assembly.py:154）、标题生成（:238）、上下文摘要（:267）。
-  挂在那里，三处一并覆盖，而且不用碰 runner（它是纯计算层）。
+★ 为什么挂在 default_model_builder：全部模型构造都过那一个函数 —— 主对话、标题生成、
+  上下文摘要、自动模式判断器。挂在那里一并覆盖，而且不用碰 runner（它是纯计算层）。
 
 ★ 默认只记元数据（§08）。提示词与回答只在内容档位为 full 时记录，且经过脱敏和截断
   （telemetry/content.py）：那里面有用户的私有代码与密钥，一旦进了遥测管道，
@@ -16,56 +14,33 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from collections.abc import Mapping
+from typing import Any
 from uuid import UUID
-
-from langchain_core.callbacks import BaseCallbackHandler
 
 from . import content
 from . import semconv as sc
 
-if TYPE_CHECKING:
-    from langchain_core.outputs import LLMResult
-
 logger = logging.getLogger(__name__)
 
-__all__ = ["ModelSpanHandler"]
+__all__ = ["ModelSpanObserver"]
 
 
-class ModelSpanHandler(BaseCallbackHandler):
-    """每次模型调用产出一个 `chat` span。
-
-    LangChain 用 run_id（它自己的，与我们的 run 无关）配对 start/end，
-    这里用同一个键索引未结束的 span。
-    """
+class ModelSpanObserver:
+    """每次模型调用产出一个 `chat` span（实现 engine 的 ModelObserver）。"""
 
     def __init__(self) -> None:
         self._spans: dict[UUID, Any] = {}
 
-    # ------------------------------------------------------------------ 开始
-
-    def on_chat_model_start(
-        self, serialized: dict[str, Any], messages: Any, *, run_id: UUID, **kwargs: Any
-    ) -> None:
-        self._start(run_id, kwargs, messages=messages)
-
-    def on_llm_start(
-        self, serialized: dict[str, Any], prompts: list[str], *, run_id: UUID, **kwargs: Any
-    ) -> None:
-        # 聊天模型走 on_chat_model_start；这条是补给非聊天模型的，同样处理。
-        self._start(run_id, kwargs)
-
-    def _start(self, run_id: UUID, kwargs: dict[str, Any], *, messages: Any = None) -> None:
+    def started(self, call_id: UUID, *, model: str, messages: list[dict[str, Any]] | None) -> None:
         try:
             from opentelemetry import trace as ot
 
             from . import tracer
 
-            params = kwargs.get("invocation_params") or {}
-            model = str(params.get("model") or params.get("model_name") or "")
             # ★ 不传 context：让它挂在**当前上下文**的 span 上。模型调用发生在
             #   RunTrace 的根 span 之内（同一个 task），所以父子关系天然成立。
-            self._spans[run_id] = tracer().start_span(
+            self._spans[call_id] = tracer().start_span(
                 f"chat {model}".strip(),
                 kind=ot.SpanKind.CLIENT,
                 attributes={
@@ -76,26 +51,47 @@ class ModelSpanHandler(BaseCallbackHandler):
                 },
             )
             # full 档：这次调用的完整输入（系统提示词 + 历史 + 本轮）
-            if (text := content.render(_messages_of(messages), "full")) is not None:
-                self._spans[run_id].set_attribute(sc.LF_OBSERVATION_INPUT, text)
+            if (text := content.render(messages, "full")) is not None:
+                self._spans[call_id].set_attribute(sc.LF_OBSERVATION_INPUT, text)
         except Exception:
             logger.debug("模型 span 开启失败", exc_info=True)
 
-    # ------------------------------------------------------------------ 结束
-
-    def on_llm_end(self, response: LLMResult, *, run_id: UUID, **_kw: Any) -> None:
-        span = self._spans.pop(run_id, None)
+    def finished(
+        self,
+        call_id: UUID,
+        *,
+        usage: Mapping[str, int],
+        message: dict[str, Any] | None,
+        response_model: str | None,
+        stop_reason: str | None,
+    ) -> None:
+        span = self._spans.pop(call_id, None)
         if span is None:
             return
         try:
-            self._fill_usage(span, response)
+            for attr, key in (
+                (sc.USAGE_INPUT, "input_tokens"),
+                (sc.USAGE_OUTPUT, "output_tokens"),
+                (sc.USAGE_CACHE_READ, "cache_read"),
+                (sc.USAGE_CACHE_CREATION, "cache_creation"),
+                (sc.USAGE_REASONING, "thinking_tokens"),
+            ):
+                if isinstance(usage.get(key), int):
+                    span.set_attribute(attr, usage[key])
+            if (text := content.render(message, "full")) is not None:
+                span.set_attribute(sc.LF_OBSERVATION_OUTPUT, text)
+            if response_model:
+                span.set_attribute(sc.RESPONSE_MODEL, response_model)
+            if stop_reason:
+                # semconv 规定它是**数组** —— 一次响应可能有多个候选
+                span.set_attribute(sc.FINISH_REASONS, [stop_reason])
         except Exception:
             logger.debug("模型 span 用量填充失败", exc_info=True)
         finally:
             span.end()
 
-    def on_llm_error(self, error: BaseException, *, run_id: UUID, **_kw: Any) -> None:
-        span = self._spans.pop(run_id, None)
+    def failed(self, call_id: UUID, error: BaseException) -> None:
+        span = self._spans.pop(call_id, None)
         if span is None:
             return
         try:
@@ -105,64 +101,3 @@ class ModelSpanHandler(BaseCallbackHandler):
             span.set_attribute("error.type", type(error).__name__)
         finally:
             span.end()
-
-    # ------------------------------------------------------------------ 内部
-
-    @staticmethod
-    def _fill_usage(span: Any, response: LLMResult) -> None:
-        """用量与 finish_reason。
-
-        ★ 复用 translator.normalize_usage —— 它已经把缓存与推理 token 拆成
-          独立字段了（网关实测口径），这里不要另写一份解析：两份解析必然
-          在某次上游变更后漂移，而漂移的表现是成本报表悄悄对不上。
-        """
-        from ..domain.translator import normalize_usage
-
-        generations = [g for batch in (response.generations or []) for g in batch]
-        message = getattr(generations[0], "message", None) if generations else None
-
-        usage = normalize_usage(getattr(message, "usage_metadata", None))
-        for attr, key in (
-            (sc.USAGE_INPUT, "input_tokens"),
-            (sc.USAGE_OUTPUT, "output_tokens"),
-            (sc.USAGE_CACHE_READ, "cache_read"),
-            (sc.USAGE_CACHE_CREATION, "cache_creation"),
-            (sc.USAGE_REASONING, "thinking_tokens"),
-        ):
-            if isinstance(usage.get(key), int):
-                span.set_attribute(attr, usage[key])
-
-        if (text := content.render(_message_of(message), "full")) is not None:
-            span.set_attribute(sc.LF_OBSERVATION_OUTPUT, text)
-
-        meta = getattr(message, "response_metadata", None) or {}
-        if model := meta.get("model_name") or meta.get("model"):
-            span.set_attribute(sc.RESPONSE_MODEL, str(model))
-        if stop := meta.get("stop_reason") or meta.get("finish_reason"):
-            # semconv 规定它是**数组** —— 一次响应可能有多个候选
-            span.set_attribute(sc.FINISH_REASONS, [str(stop)])
-
-
-def _message_of(message: Any) -> dict[str, Any] | None:
-    """LangChain 消息 → {role, content[, tool_calls]}。只取展示需要的字段。"""
-    if message is None:
-        return None
-    out: dict[str, Any] = {
-        "role": getattr(message, "type", "unknown"),
-        "content": getattr(message, "content", ""),
-    }
-    if tool_calls := getattr(message, "tool_calls", None):
-        out["tool_calls"] = [
-            {"name": c.get("name"), "args": c.get("args")}
-            for c in tool_calls
-            if isinstance(c, dict)
-        ]
-    return out
-
-
-def _messages_of(messages: Any) -> list[dict[str, Any]] | None:
-    """on_chat_model_start 的 messages 是「批次 × 消息」的二维列表；只记第一批。"""
-    if not messages or not isinstance(messages, list):
-        return None
-    batch = messages[0] if isinstance(messages[0], list) else messages
-    return [m for m in (_message_of(x) for x in batch) if m is not None]

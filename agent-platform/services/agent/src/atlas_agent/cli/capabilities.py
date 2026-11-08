@@ -15,6 +15,9 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from atlas_engine.contracts.events import EventType
+from atlas_engine.contracts.mcp_naming import MCP_PREFIX
+
 from ..credentials import (
     CredentialDenied,
     CredentialGrants,
@@ -22,8 +25,6 @@ from ..credentials import (
     CredentialSet,
     CredentialSubject,
 )
-from ..domain.events import EventType
-from ..domain.mcp_naming import MCP_PREFIX
 from ..errors import CapabilityUnavailable
 from ..providers.knowledge import mcp_server_entry, require_client
 from ..providers.llm.model_platform import admit_models, agent_key, litellm_url, uses_model_platform

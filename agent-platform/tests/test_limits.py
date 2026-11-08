@@ -19,15 +19,16 @@ from atlas_engine.contracts import (
     ModelUnavailable,
     classify,
 )
-from atlas_agent.domain.events import EventType
+from atlas_engine.contracts.events import EventType
+from atlas_engine.contracts.spec import AgentSpec, LimitSpec, ModelSpec, SubAgentSpec
 from atlas_engine.kernel.middleware.limits import (
     CIRCUIT_THRESHOLD,
     StepLimitMiddleware,
     ToolGovernorMiddleware,
 )
-from tests.graphs import run_agent as run
-from atlas_agent.domain.spec import AgentSpec, LimitSpec, ModelSpec, SubAgentSpec
 from langchain_core.messages import AIMessageChunk, ToolMessage
+
+from tests.graphs import run_agent as run
 
 from .fakes import Spawner, TurnModel, raising_model, text_model, tool_call_chunk
 

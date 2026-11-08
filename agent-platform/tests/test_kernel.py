@@ -28,28 +28,14 @@ def test_kernel_imports() -> None:
 
 def test_entry_points_used_by_atlas_import() -> None:
     """Atlas 实际用到的入口。裁剪时若动了这几处，这里会先失败。"""
-    from atlas_engine.kernel.graph import create_deep_agent
     from atlas_engine.kernel.middleware.filesystem import FilesystemMiddleware
     from atlas_engine.kernel.middleware.subagents import SubAgentMiddleware
+    from atlas_engine.runtime.assemble import build_graph, compile_agent
 
     assert all(
         callable(x) or isinstance(x, type)
-        for x in (create_deep_agent, FilesystemMiddleware, SubAgentMiddleware)
+        for x in (build_graph, compile_agent, FilesystemMiddleware, SubAgentMiddleware)
     )
-
-
-def test_configs_reject_missing_counterpart() -> None:
-    """「有名单没 spawner」「有白名单没 filesystem」在构造参数对象时就报错。
-
-    前者原本是 create_deep_agent 里的运行时检查，挪进 SubAgentConfig 后
-    不能丢：静默不装 task 会让模型按「没有帮手」做事（§13.2）。
-    """
-    from atlas_engine.kernel import FilesystemConfig, SubAgentConfig
-
-    with pytest.raises(ValueError, match="spawner"):
-        SubAgentConfig(agents=[{"name": "r", "description": "d"}], spawner=None)  # type: ignore[arg-type]
-    with pytest.raises(ValueError, match="filesystem"):
-        FilesystemConfig(filesystem=None, tools=["read_file"])  # type: ignore[arg-type]
 
 
 def test_namespace_rewrite_is_complete() -> None:

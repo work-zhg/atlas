@@ -14,6 +14,7 @@ import asyncio
 from collections.abc import AsyncIterator, Iterator, Sequence
 from typing import Any
 
+from atlas_engine.contracts.tools import ToolSpec
 from langchain_core.callbacks import (
     AsyncCallbackManagerForLLMRun,
     CallbackManagerForLLMRun,
@@ -254,3 +255,31 @@ def allow_judge() -> ReplyModel:
 def allowing_judge(settings: Any) -> Any:
     """settings 的副本，判断器指向 JUDGE_MODEL（builder 里接 allow_judge()）。"""
     return settings.model_copy(update={"approval_judge_model": JUDGE_MODEL})
+
+
+def tool_spec(tool: Any) -> ToolSpec:
+    """测试里用 LangChain 写的工具 → server 交给 engine 的 ToolSpec。
+
+    生产上 server 只交 ToolSpec（MCP、知识库、记忆）；测试工具用 StructuredTool / @tool 写更省事，
+    在这里包一层：参数定义沿用它推出来的 schema，调用时照常校验参数、执行。
+    """
+
+    async def call(**arguments: Any) -> str:
+        return str(await tool.ainvoke(arguments))
+
+    return ToolSpec(
+        name=tool.name,
+        description=tool.description,
+        parameters=tool.args_schema,
+        call=call,
+        annotations=dict(tool.metadata or {}),
+    )
+
+
+async def invoke(spec: ToolSpec, call_id: str = "c1", **args: Any) -> Any:
+    """像图里那样调一次 ToolSpec：经 engine 的适配器，返回 ToolMessage。"""
+    from atlas_engine.runtime.tools import to_langchain
+
+    return await to_langchain(spec).ainvoke(
+        {"type": "tool_call", "id": call_id, "name": spec.name, "args": args}
+    )

@@ -29,9 +29,9 @@ import pytest
 from atlas_agent.config import Settings
 from atlas_agent.db.models import MemoryBackfill, MemoryUserSetting, Message, Thread, ThreadMemory
 from atlas_agent.db.session import get_sessionmaker
-from atlas_agent.domain.tool_registry import MEMORY_TOOL, tool_effects
 from atlas_agent.memory import Backfiller, MemoryClient, MemoryRuntime
 from atlas_engine.contracts import ToolEffect
+from atlas_engine.runtime.tool_registry import MEMORY_TOOL, tool_effects
 from sqlalchemy import delete, select, text
 
 MEMORY_DB = "atlas_memory_test"
@@ -478,8 +478,9 @@ class FakeModel:
     ) -> FakeModel:
         return self
 
-    async def ainvoke(self, messages: list[dict[str, str]]) -> Any:
-        self.prompts.append(messages[-1]["content"])
+    async def ainvoke(self, messages: list[Any]) -> Any:
+        # engine 的 complete() 交来的是一条用户消息（框架的消息对象）
+        self.prompts.append(messages[-1].content)
         reply = self.replies.pop(0)
         return SimpleNamespace(content=reply if isinstance(reply, str) else json.dumps(reply))
 

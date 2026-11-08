@@ -17,12 +17,12 @@ from typing import Any
 
 import pytest
 from atlas_agent.config import get_settings
-from atlas_agent.domain.spec import SandboxSpec
 from atlas_agent.ids import uuid7
 from atlas_agent.redisx import make_redis
 from atlas_agent.sandbox.exec import ExecutionLedger, PollingPolicy, ShellSandbox, StallDetector
 from atlas_agent.sandbox.native import WorkspaceRef
 from atlas_engine.contracts import SandboxUnavailable
+from atlas_engine.contracts.spec import SandboxSpec
 
 from tests.opensandbox_fake import FakeOpenSandbox
 from tests.sandbox_env import component, new_workspace, workspace_dir

@@ -20,9 +20,9 @@ import asyncio
 from typing import Any
 
 import pytest
-from atlas_agent.domain.events import EventType
 from atlas_agent.providers.mcp.cli import cli_mcp_servers
 from atlas_agent.providers.mcp.gateway import agent_access, gateway_catalog, reset_gateway_cache
+from atlas_engine.contracts.events import EventType
 
 # 夹具 gateway_environment / gateway / upstream 在 conftest.py（来自 tests/gateway_env.py）
 from tests.gateway_env import (

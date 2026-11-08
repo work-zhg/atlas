@@ -14,11 +14,11 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from atlas_engine.kernel.middleware.auto_judge import AutoJudge, Instruction, JudgeSetup
+from atlas_engine.contracts.spec import ModelSpec
+from atlas_engine.runtime import Instruction, JudgePort, JudgeSetup
+from atlas_engine.runtime.translator import extract_text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from atlas_agent.domain.spec import ModelSpec
-from atlas_agent.domain.translator import extract_text
 from atlas_agent.errors import CapabilityUnavailable
 from atlas_agent.executor.segment_data import Segment
 
@@ -32,7 +32,7 @@ from ..repositories.run import RunRepository
 from ..services.service_models import resolve_service_model, service_model_configured
 from ..skills import skill_directory
 from ..stream.relay import EventRelay
-from .base import SubmitRun
+from .base import DispatchRun
 from .run_models import ModelBuilder
 
 if TYPE_CHECKING:
@@ -48,8 +48,8 @@ class CollaborationContribution:
 
     #: ApprovalGate 的实现（审批组件）
     approvals: Any
-    #: 自动模式的判断器。None = 智能体不允许自动模式，或没配置判断器
-    judge: AutoJudge | None
+    #: 自动模式的判断器从哪拿模型。None = 智能体不允许自动模式
+    judge: JudgePort | None
     #: 派子智能体的入口（SubAgentSpawner）。None = 没有子智能体：内核根本不装 task
     spawner: Any
 
@@ -60,13 +60,13 @@ class Collaboration:
         sessionmaker: async_sessionmaker[AsyncSession],
         settings: Settings,
         model_builder: ModelBuilder,
-        submit_run: SubmitRun | None = None,
+        dispatch_run: DispatchRun | None = None,
     ) -> None:
         self._sessionmaker = sessionmaker
         self._settings = settings
         self._build_model = model_builder
-        #: 委派要能起子 run：入队由组合根注入，装配不认识执行器。None = 不能委派
-        self._submit_run = submit_run
+        #: 委派要能起子 run：派发由组合根注入，装配不认识执行器。None = 不能委派
+        self._dispatch_run = dispatch_run
 
     def contribute(
         self, segment: Segment, *, run_id: UUID, relay: EventRelay
@@ -87,7 +87,7 @@ class Collaboration:
         ★ 子 run 也走这里：native SubAgent 的 spec 带着同一份名录（spec_for_subagent），
           所以它也能继续派 SubAgent；acp SubAgent 的名录为空，天然返回 None。
         """
-        if not segment.spec.subagents or self._submit_run is None:
+        if not segment.spec.subagents or self._dispatch_run is None:
             return None
         if segment.agent_version_id is None:
             logger.warning("run %s 缺 agent_version_id，SubAgent 不启用", run_id)
@@ -98,7 +98,7 @@ class Collaboration:
         return SubAgentService(
             self._sessionmaker,
             self._settings,
-            self._submit_run,
+            self._dispatch_run,
             relay,
             parent_run_id=run_id,
             parent_thread=segment.thread,
@@ -128,8 +128,9 @@ class Collaboration:
         )
         await seed_session_skills(fs, metas)
 
-    def _auto_judge(self, segment: Segment) -> AutoJudge | None:
-        """自动模式的判断器（kernel/middleware/auto_judge.py）。智能体不允许自动模式时不装。
+    def _auto_judge(self, segment: Segment) -> JudgePort | None:
+        """自动模式的判断器的端口（engine 据此装 kernel/middleware/auto_judge.py）。智能体不允许
+        自动模式时不装。
 
         ★ 模型和用户消息在第一次判断时才取：多数段落用不到判断器，不该为它多一次平台请求。
           模型按平台服务模型配置（service_model「自动模式判断器」）取 Key；没接平台时用部署配置里的
@@ -172,7 +173,7 @@ class Collaboration:
                 ).supports_cache(found.model)
             return JudgeSetup(model=model, instructions=instructions, cache=cache)
 
-        return AutoJudge(setup, timeout_s=settings.approval_judge_timeout_s)
+        return JudgePort(setup=setup, timeout_s=settings.approval_judge_timeout_s)
 
 
 async def _judge_instructions(runs: RunRepository, thread: Thread) -> list[Instruction]:

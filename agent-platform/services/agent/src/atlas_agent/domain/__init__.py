@@ -1,12 +1,8 @@
-"""领域词汇层 —— run 是什么，用什么词说。
+"""server 自己的领域词汇。
 
-spec           AgentSpec：一次 run 的配置词汇（schemas 翻译进来、build 装配、
-               runner 读 limits），含 spec_for_subagent 派生
-events         TraceEvent / EventType：事件流契约，server↔web 的公共语言
-translator     LangChain 消息 → 文本/用量/工具调用 的中立表示
-tool_registry  内置工具目录：名字、可用性、中间件工厂的唯一来源
+workspace_layout  工作区在对象存储里的布局（按人、按会话）
 
-★ 纯计算层：禁碰 sqlalchemy / fastapi / redis（import-linter contract +
-  test_engine_purity 双守卫）—— 「run 一轮」必须始终能用假模型脱离
-  基础设施测试。IO 归 services / repositories / providers。
+★ run 的配置词汇（AgentSpec）、事件流契约（TraceEvent）、存储格式的消息在
+  atlas_engine.contracts；内置工具目录、消息互转在 atlas_engine.runtime —— 它们是
+  原生运行时与 server 之间的契约，2026-11-07 随方案 3 搬进 engine。
 """

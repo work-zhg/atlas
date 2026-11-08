@@ -32,13 +32,13 @@ from typing import Any
 from uuid import UUID
 
 from atlas_engine.contracts import InvalidSpec
-from atlas_agent.domain.events import EventType
-from atlas_agent.domain.spec import AgentSpec, LimitSpec, ModelSpec, SubAgentSpec
-from atlas_agent.domain.tool_registry import unsupported_tools
+from atlas_engine.contracts.events import EventType
+from atlas_engine.contracts.spec import AgentSpec, LimitSpec, ModelSpec, SubAgentSpec
+from atlas_engine.runtime.tool_registry import unsupported_tools
 from langchain_core.messages import AIMessageChunk
 from langchain_core.tools import StructuredTool
 
-from .fakes import Spawner, TurnModel, tool_call_chunk
+from .fakes import Spawner, TurnModel, tool_call_chunk, tool_spec
 from .graphs import build_graph, run_to_end
 
 RUN_ID = UUID("55555555-5555-5555-5555-555555555555")
@@ -267,7 +267,7 @@ async def test_text_before_a_tool_call_is_a_separate_block() -> None:
             [AIMessageChunk(content="查完了，结论是 42。")],
         ]
     )
-    events = await _collect(_spec(), parent, Spawner(), extra_tools=[lookup])
+    events = await _collect(_spec(), parent, Spawner(), extra_tools=[tool_spec(lookup)])
 
     completed = next(e for e in events if e.type is EventType.MESSAGE_COMPLETED)
     assert completed.data["content"] == [

@@ -13,7 +13,6 @@ from uuid import uuid4
 
 import httpx
 import pytest
-from atlas_agent.domain.spec import KnowledgeSpec
 from atlas_agent.outbound import CallIdentity, use_identity
 from atlas_agent.providers.knowledge import (
     KnowledgeClient,
@@ -25,6 +24,7 @@ from atlas_agent.providers.knowledge import (
 )
 from atlas_agent.schemas.agent import AgentSpecIn
 from atlas_engine.contracts import InvalidSpec
+from atlas_engine.contracts.spec import KnowledgeSpec
 
 RECORDS = [
     {
@@ -96,12 +96,12 @@ async def test_client_and_tool() -> None:
     k = KnowledgeSpec(dataset_ids=("d1",), mode="tool", top_k=2, score_threshold=0.3)
     tool = make_knowledge_tool(_client(seen), k, names=None, source_ref="thread:x")
     # ★ 库 id 不在参数里
-    assert set(tool.args) == {"query"}
+    assert set(tool.parameters.model_fields) == {"query"}
     # 内网免令牌：带这一轮 run 的身份请求头（按谁判 = auth-uid，内网身份传递 §8）
     uid, auth_uid = uuid4(), uuid4()
     use_identity(CallIdentity(uid=uid, auth_uid=auth_uid))
     try:
-        text = await tool.ainvoke({"query": "退款"})
+        text = await tool.call(query="退款")
     finally:
         use_identity(None)
     assert "退款七天内可申请" in text
@@ -115,7 +115,7 @@ async def test_client_and_tool() -> None:
     )
 
     broken = make_knowledge_tool(_client([], status=500), k, names=None, source_ref="x")
-    assert "暂时不可用" in await broken.ainvoke({"query": "退款"})
+    assert "暂时不可用" in await broken.call(query="退款")
     with pytest.raises(KnowledgeUnavailable):
         await _client([], status=500).retrieve(k, "q", source="agent", source_ref=None)
 
@@ -196,7 +196,7 @@ async def test_skipped_datasets_are_reported() -> None:
     got = await client.retrieve(k, "退款", source="agent", source_ref=None)
     assert got.skipped == ["d2"] and len(got.records) == 1
     tool = make_knowledge_tool(client, k, names=None, source_ref="x")
-    text = await tool.ainvoke({"query": "退款"})
+    text = await tool.call(query="退款")
     assert "退款七天内可申请" in text and "1 个知识库没有访问权限" in text
 
 
@@ -205,8 +205,8 @@ async def test_auto_mode_notice_when_skipped(monkeypatch: pytest.MonkeyPatch) ->
     import dataclasses
     from types import SimpleNamespace
 
-    from atlas_agent.domain.events import EventType
     from atlas_agent.executor import assembly as asm
+    from atlas_engine.contracts.events import EventType
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"records": [], "skipped": ["d2"]})

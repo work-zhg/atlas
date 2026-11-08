@@ -1,7 +1,7 @@
 """中间件顺序的唯一来源（c4-model/agent/native-runtime/code-native-runtime-turn.html）。
 
 各领域交中间件时带上槽位，这里按槽位从外到内排好；同一槽位内保持交进来的先后。
-提示词缓存不占槽位，永远在最内层（create_deep_agent 追加）：改系统提示词的中间件都在它
+提示词缓存不占槽位，永远在最内层（runtime/assemble.py 的 compile_agent 追加）：改系统提示词的中间件都在它
 外面，缓存前缀才不会每轮失效。
 
     ① SUSPEND     挂起与续跑的支点，含图入口的补悬空调用 —— 要在任何「为模型调用做准备」

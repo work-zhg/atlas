@@ -9,6 +9,8 @@ dependencies = [
   "atlas-appconfig",
   "atlas-engine",
   "atlas-host",
+  # Run 执行器的兜底和续租是它的实例任务（c4-model/agent/executor/design-run-dispatch.html）
+  "atlas-jobs",
   "atlas-jsonrpc",
   # 沙箱 ensure 的会话级锁（doc/sandbox-opensandbox-design.html §13）
   "atlas-redislock",
@@ -24,8 +26,8 @@ dependencies = [
   "httpx>=0.27",
   # 沙箱模板（BatchSandbox 的 yaml）发布前的准入校验（sandbox/base/lifecycle/templates.py）
   "pyyaml>=6.0",
-  # MCP 客户端：langchain.mcp（langchain 主包，beta）+ FastMCP 的 client。
-  #   langchain[mcp] 拉的是整个 fastmcp（含 server 那一套），这里只要 client。
+  # MCP 客户端：FastMCP 的 client（server 不依赖 langchain，工具交 ToolSpec 给 engine）。
+  #   fastmcp 全包含 server 那一套，这里只要 client。
   "fastmcp-slim[client]>=4.0.11,<5",
   "mcp>=2.3,<3",
   # 调 MCP 工具前按参数定义校验参数（MCP 方案设计 §6.2）。mcp 本来就依赖它，这里写明

@@ -21,12 +21,12 @@ import httpx
 from atlas_agent.cli.client import HostClient
 from atlas_agent.config import get_settings
 from atlas_agent.credentials import CredentialGrants, CredentialProfileStore, CredentialSubject
-from atlas_agent.domain.spec import CliSpec
 from atlas_agent.ids import uuid7
 from atlas_agent.redisx import make_redis
 from atlas_agent.sandbox.base.execution.values import CommandSpec
 from atlas_agent.sandbox.component import SandboxComponent
 from atlas_agent.sandbox.provisioning.model import BizRef, BizType
+from atlas_engine.contracts.spec import CliSpec
 
 REPO = os.environ.get("PROBE_GIT_REPO", "")
 RESULTS = []

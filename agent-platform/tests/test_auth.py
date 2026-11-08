@@ -29,9 +29,9 @@ TEXT = {"content": [{"type": "text", "text": "hi"}]}
 
 
 class _NoopExecutor:
-    """只接住 submit：这里测的是归属与发起人，不需要 run 真跑起来。"""
+    """只接住 dispatch：这里测的是归属与发起人，不需要 run 真跑起来。"""
 
-    async def submit(self, run_id: Any) -> None:
+    async def dispatch(self, run_id: Any) -> None:
         return None
 
 

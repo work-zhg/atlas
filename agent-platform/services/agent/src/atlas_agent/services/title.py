@@ -14,10 +14,8 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
-from langchain_core.messages import HumanMessage
-
-from atlas_agent.domain.spec import ModelSpec
-from atlas_agent.domain.translator import extract_text
+from atlas_engine.contracts.spec import ModelSpec
+from atlas_engine.runtime.models import complete
 
 from ..config import Settings
 from .service_models import resolve_service_model
@@ -148,8 +146,6 @@ class TitleService:
             headers=found.endpoint.headers,
         )
         prompt = _PROMPT.format(question=question, answer=answer[:_ANSWER_LIMIT])
-        result = await chat.ainvoke([HumanMessage(content=prompt)])
-        # ★ 必须走 extract_text 而不是 str(content)：模型返回 content blocks 时
-        #   （DeepSeek 的 Anthropic 兼容层就是如此，块里还带 signature），
-        #   str() 出来的是 Python repr，会被当成标题原样写进 thread.title。
-        return _clean(extract_text(result.content))
+        # complete 取正文走 extract_text：str(content) 会把 content blocks 变成 Python repr，
+        # 被当成标题原样写进 thread.title
+        return _clean((await complete(chat, prompt)).text)

@@ -15,12 +15,12 @@ import pytest
 import sqlalchemy as sa
 from atlas_agent.config import get_settings
 from atlas_agent.db.session import get_sessionmaker
-from atlas_agent.domain.spec import SandboxSpec
 from atlas_agent.main import create_app
 from atlas_agent.redisx import make_redis
 from atlas_agent.sandbox.native import ImageDenied
 from atlas_agent.sandbox.provisioning.model import QuotaExceeded
 from atlas_appconfig.db import config_table, revision_table
+from atlas_engine.contracts.spec import SandboxSpec
 from fastapi import FastAPI
 from httpx import ASGITransport
 

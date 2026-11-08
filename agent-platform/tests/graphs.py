@@ -9,11 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from atlas_agent.domain.events import EventType, TraceEvent
-from atlas_agent.domain.messages import Transcript
-from atlas_agent.executor.build import build_graph
-from atlas_agent.executor.runner import run as engine_run
 from atlas_agent.executor.segment_data import Segment
+from atlas_engine.contracts.events import EventType, TraceEvent
 from atlas_engine.kernel.context import (
     CallRecovery,
     Compactor,
@@ -23,6 +20,9 @@ from atlas_engine.kernel.context import (
     ResultClearing,
     ResultOffloader,
 )
+from atlas_engine.runtime.assemble import build_graph
+from atlas_engine.runtime.messages import Transcript, map_messages
+from atlas_engine.runtime.runner import run as engine_run
 from langchain_core.messages import HumanMessage
 
 __all__ = ["build_graph", "context_pipeline", "run_agent", "run_to_end"]
@@ -104,13 +104,16 @@ def run_agent(
 
     approval_mode：本段的审批模式。生产路径上执行器总会交进来（run.approval_mode 解析后），
     不传时图按 spec.approval.default_mode 判定。
+
+    history 用 LangChain 消息写（测试好读）；交给 runner 的是存储格式（map_messages，不补悬空 ——
+    和库里一样：挂起时在等的调用本来就是悬空的）。
     """
     graph = build_graph(spec, model, **capabilities)
     segment = Segment(
         spec=spec,
         input_content=input_content,
         thread=None,  # type: ignore[arg-type]  # runner 不读会话行
-        history=list(history),
+        history=map_messages(list(history)),
         resume=resume,
         base_depth=base_depth,
         start_seq=start_seq,

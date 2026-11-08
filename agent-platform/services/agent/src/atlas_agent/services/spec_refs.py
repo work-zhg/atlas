@@ -13,7 +13,8 @@ import logging
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
-from ..domain.mcp_naming import parse_tool_id
+from atlas_engine.contracts.mcp_naming import parse_tool_id
+
 from ..errors import CapabilityUnavailable, DependencyUnavailable, InvalidReference
 from ..providers.mcp import make_mcp_catalog
 from ..schemas.agent import AgentSpecIn, SkillRefIn

@@ -1,38 +1,38 @@
 """native agent 的 MCP 工具装配（MCP 详设 §06）。
 
-装配期：从目录缓存构造 BaseTool，零网络。缺什么明确失败（§13.2）。
-MCP 客户端是 langchain.mcp（beta）+ FastMCP client：每个 run × server 一个 client，
-工具由 as_langchain_tool(定义, client) 造出，每次调用 `async with client` → tools/call。
+装配期：从目录缓存构造 ToolSpec，零网络。缺什么明确失败（§13.2）。
+MCP 客户端是 FastMCP client：每个 run × server 一个 client，每次调用 `async with client` →
+tools/call，结果转成交给模型的 content blocks。
 
-langchain.mcp 没有拦截器，调用期的逻辑分两处：
+调用期的逻辑分两处：
 
   ① 传输层        身份请求头（X-Run-Id / X-Thread-Id / X-Uid / X-Auth-Uid，审计用）；
                   经 MCP 网关时还有主体 Key（session.KeyAuth）—— 模型看不到也改不了
-  ② 包执行函数    本 Run 段记住的「用不了」→ 按参数定义校验参数 → 持有会话（Run 段内复用）
+  ② 执行函数      本 Run 段记住的「用不了」→ 按参数定义校验参数 → 持有会话（Run 段内复用）
                   → 超时 → 失败转成给模型的工具结果（能修复的自动重试一次）→ 超大文本结果掐头去尾
 
 全部经 MCP 网关：装配时先问网关「这个智能体的 Key 能用哪些服务和工具、Key 是什么」，
 没被授权的服务、工具和管理员停用的工具跳过并提示（模型看不见就不会去调）。网关的拒绝带原因
 （error.data.reason），据此给模型不同的说明。
 
-engine 不认识 MCP：这里产出的就是普通 BaseTool，名字已是模型侧名
-（server__tool），审批中间件按名字匹配自然生效。
+engine 不认识 MCP：这里产出的就是普通 ToolSpec（contracts/tools.py），名字已是模型侧名
+（server__tool），审批中间件按名字匹配自然生效。原先用 langchain.mcp 的 as_langchain_tool 造
+LangChain 工具，2026-11-07 随方案 3 改为直接调 FastMCP：server 不再碰框架类型。
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import warnings
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
-from langchain_core.tools import ToolException
+from atlas_engine.contracts.events import EventType
+from atlas_engine.contracts.mcp_naming import parse_tool_id, tool_id
+from atlas_engine.contracts.tools import ToolResult, ToolSpec
 
-from ...domain.events import EventType
-from ...domain.mcp_naming import parse_tool_id, tool_id
 from ...errors import CapabilityUnavailable
 from .arguments import argument_problems
 from .catalog import McpCatalog, ServerSnapshot, describe_error, root_causes
@@ -43,7 +43,7 @@ from .session import McpSessions
 
 logger = logging.getLogger(__name__)
 
-ToolCall = Callable[..., Awaitable[Any]]
+ToolCall = Callable[..., Awaitable[ToolResult]]
 
 _RETRY_HINT = "可稍后重试，或换一种方式完成任务。"
 
@@ -89,10 +89,6 @@ def identity_headers(ctx: CallContext) -> dict[str, str]:
     headers |= {old: headers[new] for new, old in LEGACY_IDENTITY_HEADERS.items()}
     headers["X-Atlas-User"] = headers["X-Uid"]
     return headers
-
-
-class McpCallFailed(ToolException):
-    """调用失败但不该让整轮失败（§6.7）：转成给模型的工具结果，说明能不能重试、该找谁。"""
 
 
 @dataclass
@@ -262,32 +258,32 @@ class _CallSite:
     watch: ResponseWatch
 
 
-def _guarded(call: ToolCall, site: _CallSite, sessions: McpSessions) -> ToolCall:
-    """包 langchain.mcp 的执行函数（§6.2、§6.7）。
+def _caller(site: _CallSite, sessions: McpSessions, client: Any) -> ToolCall:
+    """一个 MCP 工具的执行函数（§6.2、§6.7）：调用失败交给模型，不让整轮失败。
 
     ★ 自动重试只在确定请求没到后端、原因又能先修复时做，各一次：Key 刚被重置（网关拒绝、
       标明没有转发）、会话失效（协议的「会话不存在」，请求没有被执行）。超时、后端出错一律
       不自动重试：有副作用的工具执行两次，就是两张工单、两封邮件。
     ★ 超时在错误转换里面，否则接不住超时；会话的建立也在超时里面。
-    ★ 服务返回的业务错误（isError）在 langchain.mcp 里是 ToolException，原样放过，
-      由工具自己的 handle_tool_error 交给模型（见 _error_handler）。
+    ★ 服务返回的业务错误（isError）不是异常：服务自己的说明原样交给模型，它可以改了再试。
     """
 
-    async def guarded(**arguments: Any) -> Any:
+    async def call(**arguments: Any) -> ToolResult:
         if known := sessions.blocked(site.server, site.tool):
-            raise McpCallFailed(known)
+            return ToolResult(content=known, is_error=True)
         if problems := argument_problems(site.input_schema, arguments):
-            raise McpCallFailed(
-                f"参数不合法：{'；'.join(problems)}。请按工具的参数定义改正后再调用。"
+            return ToolResult(
+                content=f"参数不合法：{'；'.join(problems)}。请按工具的参数定义改正后再调用。",
+                is_error=True,
             )
         for attempt in (1, 2):
             site.watch.clear()
             try:
                 async with asyncio.timeout(site.timeout_s):
                     await sessions.hold(site.server)
-                    content, artifact = await call(**arguments)
-            except ToolException:
-                raise
+                    # FastMCP 的客户端可重入：会话已由 sessions 持有，这里只是借用
+                    async with client:
+                        result = await client.call_tool(site.tool, arguments, raise_on_error=False)
             except BaseException as exc:
                 failure = _classify(
                     exc,
@@ -309,11 +305,11 @@ def _guarded(call: ToolCall, site: _CallSite, sessions: McpSessions) -> ToolCall
                     site.tool,
                     describe_error(exc),
                 )
-                raise McpCallFailed(failure.message) from exc
-            return _clip_blocks(content, site.max_chars), artifact
+                return ToolResult(content=failure.message, is_error=True)
+            return _tool_result(result, site.max_chars)
         raise AssertionError("unreachable")
 
-    return guarded
+    return call
 
 
 async def _recover(failure: _Failure, sessions: McpSessions, server: str) -> bool:
@@ -334,19 +330,79 @@ def _settle(failure: _Failure, sessions: McpSessions, site: _CallSite) -> _Failu
     return failure
 
 
-def _error_handler(original: Any, max_chars: int) -> Callable[[ToolException], Any]:
-    """工具错误 → ToolMessage(status="error") 的内容。
+#: 服务报了错、却没给内容时交给模型的说明（空的工具结果对有些模型是不稳定的形状）
+_EMPTY_ERROR = "MCP 工具报告了错误，但没有给出说明。"
 
-    ★ langchain.mcp 自带的处理器只认它自己的业务错误，别的 ToolException 一律
-      重新抛出 —— McpCallFailed 要在这里先接住。业务错误的内容同样要截断。
+
+def _content_block(block: Any) -> dict[str, Any]:
+    """MCP 的 content block → 交给模型的标准 block（与 langchain-mcp-adapters 的形状一致）。"""
+    from mcp.types import (
+        AudioContent,
+        BlobResourceContents,
+        EmbeddedResource,
+        ImageContent,
+        ResourceLink,
+        TextContent,
+        TextResourceContents,
+    )
+
+    if isinstance(block, TextContent):
+        return {"type": "text", "text": block.text}
+    if isinstance(block, ImageContent):
+        return {"type": "image", "base64": block.data, "mime_type": block.mime_type}
+    if isinstance(block, AudioContent):
+        raise NotImplementedError(f"不支持 MCP 的音频结果（{block.mime_type}）")
+    if isinstance(block, ResourceLink):
+        mime = block.mime_type or None
+        kind = "image" if mime and mime.startswith("image/") else "file"
+        return {"type": kind, "url": str(block.uri), "mime_type": mime}
+    if isinstance(block, EmbeddedResource):
+        resource = block.resource
+        if isinstance(resource, TextResourceContents):
+            return {"type": "text", "text": resource.text}
+        if isinstance(resource, BlobResourceContents):
+            mime = resource.mime_type or None
+            kind = "image" if mime and mime.startswith("image/") else "file"
+            return {"type": kind, "base64": resource.blob, "mime_type": mime}
+    raise ValueError(f"不认识的 MCP 结果类型：{type(block).__name__}")
+
+
+def _tool_result(result: Any, max_chars: int) -> ToolResult:
+    """tools/call 的结果 → ToolResult。structuredContent 只进 artifact，不进模型的上下文。"""
+    blocks = [_content_block(b) for b in result.content]
+    if result.is_error:
+        return ToolResult(
+            content=_clip_blocks(blocks or [{"type": "text", "text": _EMPTY_ERROR}], max_chars),
+            is_error=True,
+        )
+    artifact = None
+    if result.structured_content is not None:
+        artifact = {"structured_content": result.structured_content}
+    return ToolResult(content=_clip_blocks(blocks, max_chars), artifact=artifact)
+
+
+def _normalize_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """没写 properties 的对象参数显式标成开放（additionalProperties: true）。
+
+    ★ 不标的话，转成各家模型的工具格式时会被当成「不许有任何字段」的空对象，模型就没法传值。
     """
-
-    def handle(error: ToolException) -> Any:
-        if isinstance(error, McpCallFailed):
-            return str(error)
-        return _clip_blocks(original(error), max_chars)
-
-    return handle
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        return dict(schema)
+    fixed = dict(properties)
+    for name, value in properties.items():
+        if not isinstance(value, dict):
+            continue
+        types = value.get("type")
+        is_object = types == "object" or (isinstance(types, list) and "object" in types)
+        if (
+            is_object
+            and not value.get("properties")
+            and "additionalProperties" not in value
+            and "unevaluatedProperties" not in value
+        ):
+            fixed[name] = {**value, "additionalProperties": True}
+    return {**schema, "properties": fixed}
 
 
 # ---------------------------------------------------------------- 装配
@@ -381,7 +437,7 @@ class NativeMcpTools:
         notices: list[tuple[EventType, dict[str, Any]]] | None = None,
         access: AgentAccess,
         sessions: McpSessions,
-    ) -> list[Any]:
+    ) -> list[ToolSpec]:
         """按 spec.tool_names 里的 `mcp:*` 条目构造工具。
 
         缺 server / 缺工具 / 工具不可用 / 缺凭据 —— 一律抛出，冒泡成 run.failed，
@@ -544,14 +600,7 @@ class NativeMcpTools:
         names: set[str],
         ctx: CallContext,
         sessions: McpSessions,
-    ) -> list[Any]:
-        from langchain_core._api import LangChainBetaWarning
-
-        with warnings.catch_warnings():
-            # 导入即警告 beta：有意采用（只用最底层的 as_langchain_tool，见 pyproject）
-            warnings.simplefilter("ignore", LangChainBetaWarning)
-            from langchain.mcp import as_langchain_tool
-
+    ) -> list[ToolSpec]:
         if not names:
             return []  # 全被闸门拦下：不必解析凭据
         config = self.catalog.server(snap.server)
@@ -571,12 +620,10 @@ class NativeMcpTools:
             config, headers=identity_headers(ctx), on_response=watch.record, auth=sessions.auth
         )
         sessions.register(snap.server, client)
-        out = []
+        out: list[ToolSpec] = []
         for name in sorted(names):
             d = snap.tool(name)
             assert d is not None and d.model_name is not None
-            tool = await as_langchain_tool(d.to_mcp_tool(), client)
-            assert tool.coroutine is not None
             site = _CallSite(
                 server=snap.server,
                 tool=name,
@@ -587,13 +634,16 @@ class NativeMcpTools:
                 max_chars=self.max_result_chars,
                 watch=watch,
             )
-            tool.coroutine = _guarded(tool.coroutine, site, sessions)
-            tool.handle_tool_error = _error_handler(tool.handle_tool_error, self.max_result_chars)
-            # ★ 审批按 metadata["readOnlyHint"] 判只读（tool_registry.tool_effects）。
-            #   langchain.mcp 把注解收在 metadata["mcp"]["tool"] 下、键是 snake_case，
-            #   这里按线上名平铺回顶层；值取目录里那份（复核、指纹看的也是它）
-            tool.metadata = {**(tool.metadata or {}), **(d.annotations or {})}
-            # ★ 改的是 LangChain 侧的名字；线上名在 langchain.mcp 的闭包里，不受影响
-            tool.name = d.model_name
-            out.append(tool)
+            out.append(
+                ToolSpec(
+                    # ★ 模型侧名（server__tool）；调用时用线上名（site.tool），两者互不影响
+                    name=d.model_name,
+                    description=d.description or "",
+                    parameters=_normalize_schema(d.input_schema),
+                    call=_caller(site, sessions, client),
+                    # ★ 审批按 readOnlyHint 判只读（tool_registry.tool_effects），键名按线上的写法；
+                    #   值取目录里那份（复核、指纹看的也是它）
+                    annotations=dict(d.annotations or {}),
+                )
+            )
         return out

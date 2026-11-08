@@ -12,9 +12,7 @@ from typing import Any, Literal
 from uuid import UUID
 
 from atlas_engine.contracts import APPROVAL_MODES, ApprovalMode, InvalidSpec
-from pydantic import BaseModel, Field, field_validator
-
-from atlas_agent.domain.spec import (
+from atlas_engine.contracts.spec import (
     AgentSpec,
     ApprovalSpec,
     CliSpec,
@@ -29,6 +27,7 @@ from atlas_agent.domain.spec import (
     SkillRefSpec,
     SubAgentSpec,
 )
+from pydantic import BaseModel, Field, field_validator
 
 Effort = Literal["low", "medium", "high", "xhigh", "max"]
 Thinking = Literal["auto", "adaptive", "off"]

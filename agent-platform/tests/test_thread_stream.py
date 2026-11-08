@@ -23,10 +23,10 @@ import httpx
 import pytest
 from atlas_agent.config import Settings, get_settings
 from atlas_agent.db.session import get_sessionmaker
-from atlas_agent.domain.events import TraceEvent
 from atlas_agent.executor.compose import build_executor
 from atlas_agent.main import create_app
 from atlas_agent.stream.gate import StreamGate, StreamsBusy
+from atlas_engine.contracts.events import TraceEvent
 from httpx import ASGITransport
 
 from tests.fake_uc import AS_USER

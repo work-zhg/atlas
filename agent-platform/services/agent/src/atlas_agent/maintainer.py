@@ -14,7 +14,8 @@
 
 另外每个实例都写心跳（atlas:instance:{id}）—— 「所属实例还在不在」靠它判断。
 
-★ 挂起 run 的补唤醒**不在这里**：它靠 CAS 幂等，每个执行器都扫，多扫几遍只是多几次查询。
+★ run 的兜底（满了没接的、交接的、租约过期的、续跑信号丢了的）**不在这里**：它是执行器的
+  兜底任务，每个实例都跑、逐个抢锁（executor/scheduling.py 的 RecoveryJob），不需要选主。
 """
 
 from __future__ import annotations

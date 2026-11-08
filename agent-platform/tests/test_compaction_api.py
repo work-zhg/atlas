@@ -15,7 +15,7 @@ from atlas_agent.executor.compose import build_executor
 from atlas_agent.main import create_app
 from atlas_agent.repositories.run import RunRepository
 from atlas_agent.repositories.thread_context import ThreadContextRepository
-from atlas_agent.services.compaction import ThreadSummarizer, make_persist_hook
+from atlas_agent.services.compaction import make_persist_hook, thread_summarizer
 from httpx import ASGITransport
 from sqlalchemy import select
 
@@ -162,7 +162,7 @@ async def test_summarizer_uses_injected_builder_and_haiku() -> None:
         return text_model("这是摘要正文")
 
     settings = get_settings()
-    summarizer = ThreadSummarizer(settings, fake_builder)
+    summarizer = thread_summarizer(settings, fake_builder)
     result = await summarizer([HumanMessage(content="早期对话")])
 
     assert result == "这是摘要正文"

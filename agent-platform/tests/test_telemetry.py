@@ -16,10 +16,10 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import pytest
-from atlas_agent.domain.events import EventFactory, EventType, TraceEvent
-from atlas_agent.domain.spec import AgentSpec, CliSpec, ModelSpec
 from atlas_agent.telemetry import semconv as sc
 from atlas_agent.telemetry.run_trace import RunTrace
+from atlas_engine.contracts.events import EventFactory, EventType, TraceEvent
+from atlas_engine.contracts.spec import AgentSpec, CliSpec, ModelSpec
 
 RUN_ID = UUID("77777777-7777-7777-7777-777777777777")
 THREAD_ID = UUID("88888888-8888-8888-8888-888888888888")
@@ -541,10 +541,11 @@ def test_mode_and_denial_become_root_events(traced) -> None:
 def test_model_call_is_a_generation_with_content_only_at_full(traced, capture) -> None:
     import atlas_agent.telemetry.model_callback as mc
     from atlas_agent.telemetry import tracer as _tracer  # noqa: F401  （确保模块已加载）
+    from atlas_engine.runtime.observe import callback_for
     from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
     from langchain_core.outputs import ChatGeneration, LLMResult
 
-    handler = mc.ModelSpanHandler()
+    handler = callback_for(mc.ModelSpanObserver())
     for level, expect_content in (("io", False), ("full", True)):
         traced.clear()
         capture(level)

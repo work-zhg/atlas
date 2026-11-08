@@ -17,8 +17,8 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
-from ...domain.events import Answer, EventType
-from ...domain.translator import preview_args
+from atlas_engine.contracts.events import Answer, EventType
+from atlas_engine.runtime.translator import preview_args
 
 __all__ = [
     "STOP_REASONS",

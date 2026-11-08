@@ -23,8 +23,7 @@ from collections.abc import AsyncIterator
 from uuid import UUID
 
 import redis.asyncio as aioredis
-
-from atlas_agent.domain.events import TERMINAL_EVENTS, EventType, TraceEvent
+from atlas_engine.contracts.events import TERMINAL_EVENTS, EventType, TraceEvent
 
 logger = logging.getLogger(__name__)
 
@@ -50,11 +49,6 @@ def thread_lock_key(thread_id: UUID) -> str:
 
 def idempotency_key(key: str) -> str:
     return f"idem:run:{key}"
-
-
-#: 「有新 run 可以领了」的广播频道（横向扩展设计 §4.2）。
-#: ★ 只是加速：丢了也没关系，执行器的定期领取扫描兜底 —— 排队的真相在数据库。
-RUN_WAKE_CHANNEL = "run:wake"
 
 
 #: 会话级序号的分配。**必须原子** —— 见 next_thread_seq 的说明。

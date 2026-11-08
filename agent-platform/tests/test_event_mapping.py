@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from atlas_agent.domain.translator import tool_calls_from, tool_result_from
+from atlas_engine.runtime.translator import tool_calls_from, tool_result_from
 from langchain_core.messages import AIMessage, ToolMessage
 
 
@@ -59,7 +59,7 @@ def test_tool_result_from_non_tool_message_is_none() -> None:
 
 
 def _spec_with(tool_names: tuple[str, ...], **over: object) -> object:
-    from atlas_agent.domain.spec import AgentSpec, LimitSpec, ModelSpec
+    from atlas_engine.contracts.spec import AgentSpec, LimitSpec, ModelSpec
 
     return AgentSpec(
         slug="mapping",
@@ -81,8 +81,8 @@ async def test_patched_history_is_not_replayed() -> None:
     """
     from uuid import uuid4
 
-    from atlas_agent.domain.events import EventType
-    from atlas_agent.domain.spec import ModelSpec, SubAgentSpec
+    from atlas_engine.contracts.events import EventType
+    from atlas_engine.contracts.spec import ModelSpec, SubAgentSpec
     from langchain_core.messages import AIMessageChunk, HumanMessage
 
     from .fakes import Spawner, TurnModel
@@ -136,7 +136,7 @@ async def test_results_added_by_a_hook_still_reach_the_frontend() -> None:
     """
     from uuid import uuid4
 
-    from atlas_agent.domain.events import EventType
+    from atlas_engine.contracts.events import EventType
     from langchain_core.messages import AIMessageChunk
 
     from .fakes import TurnModel
@@ -175,8 +175,8 @@ def test_rewrite_in_the_middle_of_a_run_does_not_repeat_started() -> None:
     from datetime import UTC, datetime
     from uuid import uuid4
 
-    from atlas_agent.domain.events import EventType
-    from atlas_agent.executor.runner import Answer, EventFactory, _from_updates
+    from atlas_engine.contracts.events import EventType
+    from atlas_engine.runtime.runner import Answer, EventFactory, _from_updates
     from langchain_core.messages import RemoveMessage
     from langgraph.graph.message import REMOVE_ALL_MESSAGES
 

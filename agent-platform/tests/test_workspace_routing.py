@@ -19,12 +19,12 @@ from typing import Any
 import boto3
 import pytest
 from atlas_agent.config import get_settings
-from atlas_agent.domain.spec import SandboxSpec
 from atlas_agent.providers.filesystem import Workspace, WorkspaceRouting
 from atlas_agent.redisx import make_redis
 from atlas_agent.sandbox.component import SandboxComponent
 from atlas_agent.sandbox.exec import PollingPolicy, ShellSandbox
 from atlas_agent.sandbox.native import WorkspaceRef
+from atlas_engine.contracts.spec import SandboxSpec
 from moto import mock_aws
 
 from tests.opensandbox_fake import FakeOpenSandbox

@@ -29,14 +29,15 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+from atlas_engine.contracts.messages import KIND_CHAT
+from atlas_engine.contracts.spec import ModelSpec
+from atlas_engine.runtime.models import complete
+from atlas_engine.runtime.translator import extract_text
 from atlas_redislock import LockBusy, RedisLock
 from sqlalchemy import or_, select
 
 from ..db.models import MemoryBackfill, Message, Run, Thread, ThreadMemory
 from ..db.session import fetch_one
-from ..domain.messages import KIND_CHAT
-from ..domain.spec import ModelSpec
-from ..domain.translator import extract_text
 from ..services.service_models import resolve_service_model
 from .client import MemoryEntry, MemoryRejected, MemoryTopic, MemoryUnavailable, ScopeRef
 from .prompts import EXTRACT_PROMPT, SOURCE_LABELS, SPLIT_PROMPT
@@ -435,9 +436,7 @@ class Backfiller:
             api_key=found.endpoint.api_key,
             headers=found.endpoint.headers,
         )
-        # ★ 消息用 dict 传：不在 server 里新增 langchain 类型的 import（server 不依赖框架的方向）
-        result = await chat.ainvoke([{"role": "user", "content": prompt}])
-        return _parse_json(extract_text(result.content))
+        return _parse_json((await complete(chat, prompt)).text)
 
 
 def _int(value: Any) -> int:

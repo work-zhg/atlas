@@ -10,9 +10,9 @@ from typing import Any
 from uuid import UUID
 
 import pytest
-from atlas_agent.domain.events import EventType
-from atlas_agent.domain.messages import from_storage, to_storage
-from atlas_agent.domain.spec import (
+from atlas_engine.contracts import ApprovalState
+from atlas_engine.contracts.events import EventType
+from atlas_engine.contracts.spec import (
     AgentSpec,
     ApprovalSpec,
     LimitSpec,
@@ -20,8 +20,6 @@ from atlas_agent.domain.spec import (
     SubAgentSpec,
     spec_for_subagent,
 )
-from atlas_agent.services.compaction import _render
-from atlas_engine.contracts import ApprovalState
 from atlas_engine.kernel.middleware.approval import REJECTED_RESULT, approval_id_for
 from atlas_engine.kernel.middleware.ask_user import (
     ALL_SKIPPED_RESULT,
@@ -30,6 +28,8 @@ from atlas_engine.kernel.middleware.ask_user import (
     SUMMARY_INSTRUCTION,
     resolve_answers,
 )
+from atlas_engine.runtime.messages import from_storage, to_storage
+from atlas_engine.runtime.summarize import render_conversation
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 
 from tests.graphs import run_agent as run
@@ -365,5 +365,5 @@ def test_answers_survive_compaction_as_user_messages() -> None:
             ToolMessage(content="# a", tool_call_id="c2", name="read_file"),
         ]
     )
-    rendered = _render(from_storage(stored))
+    rendered = render_conversation(from_storage(stored))
     assert rendered.splitlines()[-2:] == ["[用户（回答提问）] 用户的回答：审批流", "[工具返回] # a"]

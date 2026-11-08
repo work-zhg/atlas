@@ -17,9 +17,8 @@ from collections.abc import AsyncIterator
 from uuid import UUID, uuid4
 
 import redis.asyncio as aioredis
+from atlas_engine.contracts.events import TraceEvent
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from atlas_agent.domain.events import TraceEvent
 
 from ..config import Settings
 from ..db.models import Agent, Run
@@ -185,7 +184,7 @@ class RunService:
         if idempotency_key:
             await self._relay.remember_idempotency(idempotency_key, run.run_uuid)
 
-        await self._executor.submit(run.run_uuid)
+        await self._executor.dispatch(run.run_uuid)
         return RunAccepted(run_id=run.run_uuid, message_id=message.message_uuid, status="queued")
 
     def _lock_ttl_s(self) -> int:
