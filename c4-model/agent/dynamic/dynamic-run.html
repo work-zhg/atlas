@@ -27,7 +27,7 @@
   #c4-details td.sample { word-break: break-all; }
   #c4-details pre { margin: 0; padding: 10px 12px; border: 1px solid #e3e3e3; background: #f6f8fa; font-size: 12px; line-height: 1.5; overflow-x: auto; }
   svg a { cursor: pointer; }
-  /* 事件中继原理：手写的静态图，不经渲染器 */
+  /* 涉及的表、事件中继原理：手写的静态图，不经渲染器 */
   #principle { max-width: 1280px; }
   #principle h3 { margin: 32px 0 8px; font-size: 15px; font-weight: 600; color: #333; }
   #principle p { max-width: 1100px; margin: 0 0 8px; font-size: 14px; line-height: 1.8; color: #333; }
@@ -72,6 +72,21 @@
   #principle svg .brace-b { fill: none; stroke: #d9480f; stroke-width: 1.2; }
   #principle svg .badge circle { fill: #d9480f; stroke: #fff; stroke-width: 2; }
   #principle svg .badge text { fill: #fff; font-size: 12px; font-weight: 700; text-anchor: middle; }
+  /* ER 图：画法同代码图的 ER 图；表头橙色 = 这一轮会写 */
+  #principle svg .er-box { fill: #fff; stroke: #444; stroke-width: 1.2; }
+  #principle svg .er-head { fill: #f4f4f4; stroke: #444; stroke-width: 1.2; }
+  #principle svg .er-head-w { fill: #fff3ea; stroke: #444; stroke-width: 1.2; }
+  #principle svg .er-name { font-size: 14px; font-weight: 700; fill: #181818; }
+  #principle svg .er-owner { font-size: 12px; fill: #888; text-anchor: end; }
+  #principle svg .er-key { font-size: 11px; font-weight: 700; fill: #181818; }
+  #principle svg .er-col { font-size: 13px; fill: #181818; }
+  #principle svg .er-col.null { font-style: italic; }
+  #principle svg .er-type { font-size: 12px; fill: #7a7a7a; text-anchor: end; }
+  #principle svg .er-foot { font-size: 12px; fill: #888; }
+  #principle svg .er-lab { font-size: 12px; fill: #444; text-anchor: middle; }
+  #principle svg .er-ln { fill: none; stroke: #444; stroke-width: 1.2; }
+  #principle svg .er-ln-dash { fill: none; stroke: #444; stroke-width: 1.2; stroke-dasharray: 6 4; }
+  #principle svg .er-ring { fill: #fff; stroke: #444; stroke-width: 1.2; }
 </style>
 </head>
 <body>
@@ -287,27 +302,19 @@
     {
       "from": "conv",
       "to": "executor",
-      "description": "交给执行器；广播唤醒，任一实例都可能领取",
-      "technology": "进程内调用 + Redis Pub/Sub",
+      "description": "交给本实例的执行器派发",
       "details": {
-        "items": [
-          [
-            "频道",
-            "RUN_WAKE_CHANNEL",
-            "run:wake"
-          ]
-        ],
-        "note": "唤醒只是加速，丢了也没关系：执行器定时扫描兜底，排队的真相在数据库。"
+        "note": "RunExecutor.dispatch。run 跟着请求走：提交经负载均衡落到哪个实例，这一轮就在哪个实例上跑。本实例没有空槽就什么都不做，run 留在库里排队，5 秒后由某个有空槽的实例的兜底任务抢走。响应不等这一轮跑完。整体设计见 executor/design-run-dispatch.html。"
       }
     },
     {
       "from": "executor",
       "to": "db",
-      "description": "领取 run、加租约、标 running",
+      "description": "按 run 号抢锁：写租约、标 running",
       "technology": "SQL/TCP",
       "details": {
-        "note": "RunQueue.claim。多个实例并发领取互不阻塞、也不会领到同一行；租约在后台每 1/3 个租约续一次，顺带续会话锁。",
-        "example": "SELECT id FROM run\n WHERE status = 'queued' OR (status IN (...) AND lease_until < now())\n ORDER BY created_at LIMIT 1\n FOR UPDATE SKIP LOCKED;\nUPDATE run SET status = 'running', owner = :me, lease_until = now() + :lease WHERE id = :id;"
+        "note": "RunQueue.take：锁就是 run 行上的租约，一条 CAS，同一个 run 被几方同时抢时只有一个成功。租约在本进程的后台任务里续：每 1/3 个租约一条 SQL 续本实例的全部 run，顺带续会话锁。",
+        "example": "UPDATE run\n   SET status = 'running', owner = :me, lease_until = now() + :lease,\n       queued_at = NULL, claimed_at = now()\n WHERE run_uuid = :id\n   AND (status = 'queued'\n        OR (status = 'running' AND (owner IS NULL OR lease_until < now())));\n-- 改到 1 行 = 抢到了；0 行 = 别人已经抢了，什么都不做"
       }
     },
     {
@@ -414,7 +421,8 @@
   <h2>Diagram key</h2>
   <svg id="c4-key" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
 
-  <!-- 事件中继原理：静态图，不经上面的渲染器。场景：会话 T，父 run R 在实例 A，并行委派的子 run S1 在实例 C，用户连在实例 B -->
+  <!-- 涉及的表、事件中继原理：静态图，不经上面的渲染器。ER 图由各组件代码图的表结构摘出关键列。
+       事件中继的场景：会话 T，父 run R 在实例 A，并行委派的子 run S1 在实例 C，用户连在实例 B -->
   <section id="principle">
     <svg width="0" height="0" style="position:absolute" aria-hidden="true">
       <defs>
@@ -424,6 +432,342 @@
         <marker id="pr-m" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#bbb"/></marker>
       </defs>
     </svg>
+
+    <h2>这一轮涉及的表</h2>
+    <p>上面时序图里写着「数据库」的那几步，读写的都是同一个 PostgreSQL 库里的这 9 张表。图里只画关键列，完整的表结构见各组件代码图：智能体管理（<code>agents/code-agents-config</code>）、会话管理（<code>conversation/code-conversation-thread</code>）、Run 执行器（<code>executor/code-executor-segment</code>）、原生运行时（<code>native-runtime/code-native-runtime-turn</code>、<code>-context</code>）、模型接入（<code>code-model-access</code>）。</p>
+
+    <h3>ER 图</h3>
+    <svg width="1240" viewBox="0 0 1240 1090" role="img" aria-label="一个 Run 涉及的表">
+      <path class="er-ln" d="M520 109 L280 109"/>
+      <line class="er-ln" x1="504" y1="109" x2="520" y2="117"/>
+      <line class="er-ln" x1="504" y1="109" x2="520" y2="101"/>
+      <line class="er-ln" x1="504" y1="109" x2="520" y2="109"/>
+      <circle class="er-ring" cx="496" cy="109" r="5"/>
+      <line class="er-ln" x1="288" y1="102" x2="288" y2="116"/>
+      <line class="er-ln" x1="294" y1="102" x2="294" y2="116"/>
+      <path class="er-ln" d="M100 350 L100 146"/>
+      <line class="er-ln" x1="100" y1="334" x2="92" y2="350"/>
+      <line class="er-ln" x1="100" y1="334" x2="108" y2="350"/>
+      <line class="er-ln" x1="100" y1="334" x2="100" y2="350"/>
+      <circle class="er-ring" cx="100" cy="326" r="5"/>
+      <line class="er-ln" x1="107" y1="154" x2="93" y2="154"/>
+      <line class="er-ln" x1="107" y1="160" x2="93" y2="160"/>
+      <path class="er-ln" d="M200 146 L200 350"/>
+      <line class="er-ln" x1="200" y1="162" x2="208" y2="146"/>
+      <line class="er-ln" x1="200" y1="162" x2="192" y2="146"/>
+      <line class="er-ln" x1="200" y1="162" x2="200" y2="146"/>
+      <circle class="er-ring" cx="200" cy="170" r="5"/>
+      <line class="er-ln" x1="193" y1="342" x2="207" y2="342"/>
+      <circle class="er-ring" cx="200" cy="330" r="5"/>
+      <path class="er-ln-dash" d="M150 456 L150 690"/>
+      <line class="er-ln" x1="150" y1="472" x2="158" y2="456"/>
+      <line class="er-ln" x1="150" y1="472" x2="142" y2="456"/>
+      <line class="er-ln" x1="150" y1="472" x2="150" y2="456"/>
+      <circle class="er-ring" cx="150" cy="480" r="5"/>
+      <line class="er-ln" x1="143" y1="682" x2="157" y2="682"/>
+      <circle class="er-ring" cx="150" cy="670" r="5"/>
+      <path class="er-ln" d="M990 87 L800 87"/>
+      <line class="er-ln" x1="982" y1="94" x2="982" y2="80"/>
+      <circle class="er-ring" cx="970" cy="87" r="5"/>
+      <line class="er-ln" x1="808" y1="80" x2="808" y2="94"/>
+      <line class="er-ln" x1="814" y1="80" x2="814" y2="94"/>
+      <path class="er-ln" d="M565 350 L565 234"/>
+      <line class="er-ln" x1="565" y1="334" x2="557" y2="350"/>
+      <line class="er-ln" x1="565" y1="334" x2="573" y2="350"/>
+      <line class="er-ln" x1="565" y1="334" x2="565" y2="350"/>
+      <circle class="er-ring" cx="565" cy="326" r="5"/>
+      <line class="er-ln" x1="572" y1="242" x2="558" y2="242"/>
+      <line class="er-ln" x1="572" y1="248" x2="558" y2="248"/>
+      <path class="er-ln" d="M745 350 L745 234"/>
+      <line class="er-ln" x1="745" y1="334" x2="737" y2="350"/>
+      <line class="er-ln" x1="745" y1="334" x2="753" y2="350"/>
+      <line class="er-ln" x1="745" y1="334" x2="745" y2="350"/>
+      <circle class="er-ring" cx="745" cy="326" r="5"/>
+      <line class="er-ln" x1="752" y1="242" x2="738" y2="242"/>
+      <line class="er-ln" x1="752" y1="248" x2="738" y2="248"/>
+      <path class="er-ln" d="M565 544 L565 690"/>
+      <line class="er-ln" x1="565" y1="560" x2="573" y2="544"/>
+      <line class="er-ln" x1="565" y1="560" x2="557" y2="544"/>
+      <line class="er-ln" x1="565" y1="560" x2="565" y2="544"/>
+      <circle class="er-ring" cx="565" cy="568" r="5"/>
+      <line class="er-ln" x1="558" y1="682" x2="572" y2="682"/>
+      <circle class="er-ring" cx="565" cy="670" r="5"/>
+      <path class="er-ln" d="M745 588 L745 690"/>
+      <line class="er-ln" x1="745" y1="604" x2="753" y2="588"/>
+      <line class="er-ln" x1="745" y1="604" x2="737" y2="588"/>
+      <line class="er-ln" x1="745" y1="604" x2="745" y2="588"/>
+      <circle class="er-ring" cx="745" cy="612" r="5"/>
+      <line class="er-ln" x1="738" y1="682" x2="752" y2="682"/>
+      <line class="er-ln" x1="738" y1="676" x2="752" y2="676"/>
+      <path class="er-ln" d="M650 690 L650 234"/>
+      <line class="er-ln" x1="650" y1="674" x2="642" y2="690"/>
+      <line class="er-ln" x1="650" y1="674" x2="658" y2="690"/>
+      <line class="er-ln" x1="650" y1="674" x2="650" y2="690"/>
+      <circle class="er-ring" cx="650" cy="666" r="5"/>
+      <line class="er-ln" x1="657" y1="242" x2="643" y2="242"/>
+      <line class="er-ln" x1="657" y1="248" x2="643" y2="248"/>
+      <path class="er-ln" d="M520 781 L315 781 L315 410 L280 410"/>
+      <line class="er-ln" x1="504" y1="781" x2="520" y2="789"/>
+      <line class="er-ln" x1="504" y1="781" x2="520" y2="773"/>
+      <line class="er-ln" x1="504" y1="781" x2="520" y2="781"/>
+      <circle class="er-ring" cx="496" cy="781" r="5"/>
+      <line class="er-ln" x1="288" y1="403" x2="288" y2="417"/>
+      <line class="er-ln" x1="294" y1="403" x2="294" y2="417"/>
+      <path class="er-ln" d="M990 737 L800 737"/>
+      <line class="er-ln" x1="974" y1="737" x2="990" y2="745"/>
+      <line class="er-ln" x1="974" y1="737" x2="990" y2="729"/>
+      <line class="er-ln" x1="974" y1="737" x2="990" y2="737"/>
+      <circle class="er-ring" cx="966" cy="737" r="5"/>
+      <line class="er-ln" x1="808" y1="730" x2="808" y2="744"/>
+      <line class="er-ln" x1="814" y1="730" x2="814" y2="744"/>
+      <rect x="360.2" y="99" width="79.6" height="20" fill="#fff"/>
+      <text class="er-lab" x="400" y="113">agent_uuid</text>
+      <rect x="60.2" y="218" width="79.6" height="20" fill="#fff"/>
+      <text class="er-lab" x="100" y="232">agent_uuid</text>
+      <rect x="125.4" y="262" width="149.2" height="20" fill="#fff"/>
+      <text class="er-lab" x="200" y="276">current_version_uuid</text>
+      <rect x="97.6" y="563" width="104.8" height="20" fill="#fff"/>
+      <text class="er-lab" x="150" y="577">spec 里的模型名</text>
+      <rect x="851.7" y="77" width="86.6" height="20" fill="#fff"/>
+      <text class="er-lab" x="895" y="91">thread_uuid</text>
+      <rect x="521.7" y="280" width="86.6" height="20" fill="#fff"/>
+      <text class="er-lab" x="565" y="294">thread_uuid</text>
+      <rect x="671.7" y="280" width="146.6" height="20" fill="#fff"/>
+      <text class="er-lab" x="745" y="294">thread_uuid（根会话）</text>
+      <rect x="532.2" y="607" width="65.7" height="20" fill="#fff"/>
+      <text class="er-lab" x="565" y="621">run_uuid</text>
+      <rect x="712.2" y="626" width="65.7" height="20" fill="#fff"/>
+      <text class="er-lab" x="745" y="640">run_uuid</text>
+      <rect x="606.7" y="440" width="86.6" height="20" fill="#fff"/>
+      <text class="er-lab" x="650" y="454">thread_uuid</text>
+      <rect x="350.4" y="771" width="135.3" height="20" fill="#fff"/>
+      <text class="er-lab" x="418" y="785">agent_version_uuid</text>
+      <rect x="862.2" y="727" width="65.7" height="20" fill="#fff"/>
+      <text class="er-lab" x="895" y="741">run_uuid</text>
+      <g>
+      <rect class="er-box" x="20" y="40" width="260" height="106" rx="3"/>
+      <rect class="er-head" x="20" y="40" width="260" height="32" rx="3"/>
+      <text class="er-name" x="30" y="61">agent</text>
+      <text class="er-owner" x="270" y="60">智能体管理</text>
+      <text class="er-key" x="30" y="91">UK</text>
+      <text class="er-col" x="60" y="91">agent_uuid</text>
+      <text class="er-type" x="270" y="91">UUIDType</text>
+      <text class="er-key" x="30" y="113">FK</text>
+      <text class="er-col null" x="60" y="113">current_version_uuid</text>
+      <text class="er-type" x="270" y="113">UUIDType</text>
+      <text class="er-col" x="60" y="135">auth_subject</text>
+      <text class="er-type" x="270" y="135">String(8)</text>
+      </g>
+      <g>
+      <rect class="er-box" x="20" y="350" width="260" height="106" rx="3"/>
+      <rect class="er-head" x="20" y="350" width="260" height="32" rx="3"/>
+      <text class="er-name" x="30" y="371">agent_version</text>
+      <text class="er-owner" x="270" y="370">智能体管理</text>
+      <text class="er-key" x="30" y="401">UK</text>
+      <text class="er-col" x="60" y="401">agent_version_uuid</text>
+      <text class="er-type" x="270" y="401">UUIDType</text>
+      <text class="er-key" x="30" y="423">FK</text>
+      <text class="er-col" x="60" y="423">agent_uuid</text>
+      <text class="er-type" x="270" y="423">UUIDType</text>
+      <text class="er-col" x="60" y="445">spec</text>
+      <text class="er-type" x="270" y="445">JSONType</text>
+      </g>
+      <g>
+      <rect class="er-box" x="20" y="690" width="260" height="128" rx="3"/>
+      <rect class="er-head" x="20" y="690" width="260" height="32" rx="3"/>
+      <text class="er-name" x="30" y="711">model_catalog</text>
+      <text class="er-owner" x="270" y="710">模型接入</text>
+      <text class="er-key" x="30" y="741">UK</text>
+      <text class="er-col" x="60" y="741">model</text>
+      <text class="er-type" x="270" y="741">String(128)</text>
+      <text class="er-col" x="60" y="763">context_window</text>
+      <text class="er-type" x="270" y="763">Integer</text>
+      <text class="er-col" x="60" y="785">max_output_tokens</text>
+      <text class="er-type" x="270" y="785">Integer</text>
+      <text class="er-col" x="60" y="807">supports_cache</text>
+      <text class="er-type" x="270" y="807">Boolean</text>
+      </g>
+      <g>
+      <rect class="er-box" x="520" y="40" width="280" height="194" rx="3"/>
+      <rect class="er-head-w" x="520" y="40" width="280" height="32" rx="3"/>
+      <text class="er-name" x="530" y="61">thread</text>
+      <text class="er-owner" x="790" y="60">会话管理</text>
+      <text class="er-key" x="530" y="91">UK</text>
+      <text class="er-col" x="560" y="91">thread_uuid</text>
+      <text class="er-type" x="790" y="91">UUIDType</text>
+      <text class="er-key" x="530" y="113">FK</text>
+      <text class="er-col" x="560" y="113">agent_uuid</text>
+      <text class="er-type" x="790" y="113">UUIDType</text>
+      <text class="er-col null" x="560" y="135">root_thread_uuid</text>
+      <text class="er-type" x="790" y="135">UUIDType</text>
+      <text class="er-col null" x="560" y="157">approval_mode</text>
+      <text class="er-type" x="790" y="157">String(8)</text>
+      <text class="er-col" x="560" y="179">title</text>
+      <text class="er-type" x="790" y="179">Text</text>
+      <text class="er-col" x="560" y="201">message_count</text>
+      <text class="er-type" x="790" y="201">Integer</text>
+      <text class="er-col" x="560" y="223">updated_at</text>
+      <text class="er-type" x="790" y="223">UTCDateTime</text>
+      </g>
+      <g>
+      <rect class="er-box" x="990" y="40" width="230" height="150" rx="3"/>
+      <rect class="er-head" x="990" y="40" width="230" height="32" rx="3"/>
+      <text class="er-name" x="1000" y="61">thread_context</text>
+      <text class="er-owner" x="1210" y="60">原生运行时</text>
+      <text class="er-key" x="1000" y="91">UK</text>
+      <text class="er-col" x="1030" y="91">thread_uuid</text>
+      <text class="er-type" x="1210" y="91">UUIDType</text>
+      <text class="er-col null" x="1030" y="113">summary</text>
+      <text class="er-type" x="1210" y="113">Text</text>
+      <text class="er-col null" x="1030" y="135">summary_upto</text>
+      <text class="er-type" x="1210" y="135">UTCDateTime</text>
+      <text class="er-col" x="1030" y="157">compact_count</text>
+      <text class="er-type" x="1210" y="157">Integer</text>
+      <text class="er-col" x="1030" y="179">failure_count</text>
+      <text class="er-type" x="1210" y="179">Integer</text>
+      </g>
+      <g>
+      <rect class="er-box" x="350" y="350" width="260" height="194" rx="3"/>
+      <rect class="er-head-w" x="350" y="350" width="260" height="32" rx="3"/>
+      <text class="er-name" x="360" y="371">message</text>
+      <text class="er-owner" x="600" y="370">会话管理</text>
+      <text class="er-key" x="360" y="401">UK</text>
+      <text class="er-col" x="390" y="401">message_uuid</text>
+      <text class="er-type" x="600" y="401">UUIDType</text>
+      <text class="er-key" x="360" y="423">FK</text>
+      <text class="er-col" x="390" y="423">thread_uuid</text>
+      <text class="er-type" x="600" y="423">UUIDType</text>
+      <text class="er-key" x="360" y="445">FK</text>
+      <text class="er-col null" x="390" y="445">run_uuid</text>
+      <text class="er-type" x="600" y="445">UUIDType</text>
+      <text class="er-col" x="390" y="467">role</text>
+      <text class="er-type" x="600" y="467">String(16)</text>
+      <text class="er-col" x="390" y="489">kind</text>
+      <text class="er-type" x="600" y="489">String(16)</text>
+      <text class="er-col" x="390" y="511">content</text>
+      <text class="er-type" x="600" y="511">JSONType</text>
+      <text class="er-col" x="390" y="533">created_at</text>
+      <text class="er-type" x="600" y="533">UTCDateTime</text>
+      </g>
+      <g>
+      <rect class="er-box" x="690" y="350" width="260" height="238" rx="3"/>
+      <rect class="er-head-w" x="690" y="350" width="260" height="32" rx="3"/>
+      <text class="er-name" x="700" y="371">run_event</text>
+      <text class="er-owner" x="940" y="370">Run 执行器</text>
+      <text class="er-key" x="700" y="401">UK</text>
+      <text class="er-col" x="730" y="401">event_uuid</text>
+      <text class="er-type" x="940" y="401">UUIDType</text>
+      <text class="er-key" x="700" y="423">FK</text>
+      <text class="er-col" x="730" y="423">thread_uuid</text>
+      <text class="er-type" x="940" y="423">UUIDType</text>
+      <text class="er-col" x="730" y="445">thread_seq</text>
+      <text class="er-type" x="940" y="445">Integer</text>
+      <text class="er-key" x="700" y="467">FK</text>
+      <text class="er-col" x="730" y="467">run_uuid</text>
+      <text class="er-type" x="940" y="467">UUIDType</text>
+      <text class="er-col" x="730" y="489">seq</text>
+      <text class="er-type" x="940" y="489">Integer</text>
+      <text class="er-col" x="730" y="511">type</text>
+      <text class="er-type" x="940" y="511">String(48)</text>
+      <text class="er-col" x="730" y="533">depth</text>
+      <text class="er-type" x="940" y="533">SmallInteger</text>
+      <text class="er-col" x="730" y="555">data</text>
+      <text class="er-type" x="940" y="555">JSONType</text>
+      <text class="er-foot" x="730" y="577">(thread_uuid, thread_seq) 唯一</text>
+      </g>
+      <g>
+      <rect class="er-box" x="520" y="690" width="280" height="282" rx="3"/>
+      <rect class="er-head-w" x="520" y="690" width="280" height="32" rx="3"/>
+      <text class="er-name" x="530" y="711">run</text>
+      <text class="er-owner" x="790" y="710">Run 执行器</text>
+      <text class="er-key" x="530" y="741">UK</text>
+      <text class="er-col" x="560" y="741">run_uuid</text>
+      <text class="er-type" x="790" y="741">UUIDType</text>
+      <text class="er-key" x="530" y="763">FK</text>
+      <text class="er-col" x="560" y="763">thread_uuid</text>
+      <text class="er-type" x="790" y="763">UUIDType</text>
+      <text class="er-key" x="530" y="785">FK</text>
+      <text class="er-col" x="560" y="785">agent_version_uuid</text>
+      <text class="er-type" x="790" y="785">UUIDType</text>
+      <text class="er-col null" x="560" y="807">auth_uid</text>
+      <text class="er-type" x="790" y="807">UUIDType</text>
+      <text class="er-col" x="560" y="829">status</text>
+      <text class="er-type" x="790" y="829">String(16)</text>
+      <text class="er-col null" x="560" y="851">approval_mode</text>
+      <text class="er-type" x="790" y="851">String(8)</text>
+      <text class="er-col null" x="560" y="873">owner</text>
+      <text class="er-type" x="790" y="873">String(64)</text>
+      <text class="er-col null" x="560" y="895">lease_until</text>
+      <text class="er-type" x="790" y="895">UTCDateTime</text>
+      <text class="er-col" x="560" y="917">last_seq</text>
+      <text class="er-type" x="790" y="917">Integer</text>
+      <text class="er-col" x="560" y="939">total_tokens</text>
+      <text class="er-type" x="790" y="939">BigInteger</text>
+      <text class="er-col null" x="560" y="961">finished_at</text>
+      <text class="er-type" x="790" y="961">UTCDateTime</text>
+      </g>
+      <g>
+      <rect class="er-box" x="990" y="690" width="230" height="128" rx="3"/>
+      <rect class="er-head-w" x="990" y="690" width="230" height="32" rx="3"/>
+      <text class="er-name" x="1000" y="711">run_state</text>
+      <text class="er-owner" x="1210" y="710">原生运行时</text>
+      <text class="er-key" x="1000" y="741">FK</text>
+      <text class="er-col" x="1030" y="741">run_uuid</text>
+      <text class="er-type" x="1210" y="741">UUIDType</text>
+      <text class="er-col" x="1030" y="763">key</text>
+      <text class="er-type" x="1210" y="763">String(64)</text>
+      <text class="er-col" x="1030" y="785">value</text>
+      <text class="er-type" x="1210" y="785">JSONType</text>
+      <text class="er-foot" x="1030" y="807">(run_uuid, key) 唯一</text>
+      </g>
+      <line class="er-ln" x1="20" y1="1012" x2="80" y2="1012"/>
+      <line class="er-ln" x1="72" y1="1019" x2="72" y2="1005"/>
+      <line class="er-ln" x1="66" y1="1019" x2="66" y2="1005"/>
+      <text x="90" y="1016">有且只有一个</text>
+      <line class="er-ln" x1="208" y1="1012" x2="268" y2="1012"/>
+      <line class="er-ln" x1="260" y1="1019" x2="260" y2="1005"/>
+      <circle class="er-ring" cx="248" cy="1012" r="5"/>
+      <text x="278" y="1016">零或一个</text>
+      <line class="er-ln" x1="370" y1="1012" x2="430" y2="1012"/>
+      <line class="er-ln" x1="414" y1="1012" x2="430" y2="1020"/>
+      <line class="er-ln" x1="414" y1="1012" x2="430" y2="1004"/>
+      <line class="er-ln" x1="414" y1="1012" x2="430" y2="1012"/>
+      <circle class="er-ring" cx="406" cy="1012" r="5"/>
+      <text x="440" y="1016">零或多个</text>
+      <text x="532" y="1016">UK 唯一键（xxx_uuid 是逻辑主键）· FK 引用别的表 · 斜体列可为空</text>
+      <rect class="er-head-w" x="20" y="1035" width="28" height="18"/>
+      <text x="56" y="1048">这一轮会写</text>
+      <rect class="er-head" x="150" y="1035" width="28" height="18"/>
+      <text x="186" y="1048">这一轮只读</text>
+      <path class="er-ln-dash" d="M290 1044 H350"/>
+      <text x="360" y="1048">引用写在 JSON 里（按模型名），不是一列</text>
+      <text class="t-key" x="20" y="1078">表头右侧是表所属的组件。表间不建外键约束，连线都是逻辑引用；自增 id 只在库内用，不画</text>
+    </svg>
+
+    <h3>每张表在哪一步读写</h3>
+    <p>粗体数字是上面时序图的步骤号。第 10 步之前执行器要从库里装配 Segment，时序图把这些读并进了第 10 步。</p>
+    <table>
+      <thead><tr><th style="width: 13%">表</th><th style="width: 27%">存什么</th><th>这一轮怎么读写</th></tr></thead>
+      <tbody>
+        <tr><td><code>agent</code></td><td>智能体；<code>current_version_uuid</code> 指向当前版本</td><td><b>5</b> 读：取当前版本；按 <code>auth_subject</code> 定这一轮按谁的权限判，结果记进 <code>run.auth_uid</code></td></tr>
+        <tr><td><code>agent_version</code></td><td>配置版本，只追加；<code>spec</code> 是配置快照</td><td><b>5</b> 读当前版本的 <code>spec</code> 定审批模式，版本号记进 <code>run.agent_version_uuid</code>。<b>10</b> 按 run 记下的版本读 <code>spec</code>，不重新取当前版本：排队期间改了配置也不影响这一轮</td></tr>
+        <tr><td><code>model_catalog</code></td><td>每个模型实测的能力和兜底的规格，按模型名查</td><td><b>11</b> 读 <code>spec</code> 里主模型、压缩模型的能力，决定参数传不传；窗口和最大输出以模型平台登记的为准，没登记才用这里的。表里没有的模型按什么都不支持处理</td></tr>
+        <tr><td><code>thread</code></td><td>会话；子智能体的会话也在这张表。事件流归根会话（<code>root_thread_uuid</code>，为空就是自己）</td><td><b>1</b> 确认会话存在。<b>5</b> 读所属智能体和会话记住的 <code>approval_mode</code>。<b>7</b> 请求带了审批模式就写回 <code>approval_mode</code>，作用于之后的消息。<b>18</b> 写生成的标题（用户改过名的不覆盖），刷新 <code>message_count</code>、<code>updated_at</code></td></tr>
+        <tr><td><code>thread_context</code></td><td>会话的摘要和覆盖边界，一个会话最多一行；没压缩过就没有</td><td><b>10</b> 读：覆盖边界之前的消息用摘要代替，不再读原文。这一轮只读，压缩时才写（图里没画）</td></tr>
+        <tr><td><code>message</code></td><td>消息，只追加；<code>content</code> 是原始的 content blocks</td><td><b>7</b> 插入用户消息（user / chat）。<b>10</b> 按 <code>created_at</code> 读摘要边界之后的历史，最后一条 chat 的用户消息就是这一轮的输入。<b>17</b> 插入这一个工具轮次的模型回复（带 tool_use）和工具结果（user / tool_result）。<b>18</b> 插入剩下的，即最终回答</td></tr>
+        <tr><td><code>run</code></td><td>一轮的执行记录：状态、租约、序号水位、用量。行由会话管理建，之后只由执行器改</td><td><b>5</b> 查会话里有没有 queued / running / suspended 的 run，有就 409。<b>7</b> 插入 queued 行，带版本、<code>auth_uid</code>、审批模式。<b>9</b> 抢锁：<code>status</code> = running，写 <code>owner</code>、<code>lease_until</code>，之后每 1/3 个租约续一次。<b>17</b> 租约围栏（<code>owner</code> 不是自己就整个回滚），推进 <code>last_seq</code>。<b>18</b> 终态、用量（<code>step_count</code> 和各类 tokens）、<code>finished_at</code>，清掉租约</td></tr>
+        <tr><td><code>run_event</code></td><td>事件归档。Redis 是实时通道，这里是历史；按（根会话, <code>thread_seq</code>）唯一</td><td><b>1</b> 读 <code>thread_seq</code> &gt; 游标的归档段。<b>10</b> 读这条会话流归档到的最大 <code>thread_seq</code>，作为 Redis 序号键丢失时的水位（见下面事件中继原理的图 2）。<b>17</b> 归档这一批事件（<code>message.delta</code> 除外）。<b>18</b> 归档剩下的，包括 <code>run.finished</code></td></tr>
+        <tr><td><code>run_state</code></td><td>跨段的图 state（如 todos），一个 run 的一个字段一行</td><td><b>10</b> 读回上一段写下的字段，新 run 没有行。<b>17</b>、<b>18</b> 写回这一段变了的字段，和写下它的那条工具结果同一个事务</td></tr>
+      </tbody>
+    </table>
+
+    <p style="margin-top: 16px"><b>写库是三个事务。</b>每个事务里的表要么一起写进去，要么都不写：</p>
+    <ul style="margin: 8px 0 0; padding-left: 20px; font-size: 14px; line-height: 1.7">
+      <li><b>7</b> 提交一轮：<code>message</code>（用户消息）、<code>run</code>（queued 行）、<code>thread</code>（审批模式）。失败就释放第 6 步占的会话锁。</li>
+      <li><b>17</b> 检查点：<code>run</code>（围栏、<code>last_seq</code>）、<code>message</code>、<code>run_state</code>、<code>run_event</code>。第一条写是围栏，接管的实例和假死复活的旧实例不会双写。</li>
+      <li><b>18</b> 收尾：<code>message</code>、<code>run_state</code>、<code>thread</code>（标题、计数）、<code>run</code>（终态、用量，带围栏）、<code>run_event</code>。提交之后才发布 <code>run.finished</code>（第 19 步），所以前端收到它再来取用量，读到的一定是终态。</li>
+    </ul>
+    <p style="margin-top: 8px">没画的表：<code>approval</code> 在审批挂起时才有行（这张图没画挂起），第 18 步收尾时会把这个 run 还没决定的审批作废；<code>cli_session</code> 只有 CLI 智能体用；<code>instruction</code>（持久指令）在上下文装配时读，这张图没画装配。<code>thread.root_thread_uuid</code>、<code>run.parent_run_uuid</code> 这类自引用只在子智能体时用到，不画连线。</p>
 
     <h2>事件中继原理</h2>
     <p>一句话：写的一方给每个事件盖上<b>会话序号</b>（<code>thread_seq</code>），写进根会话的那<b>一条</b> Redis 流；看的一方连在任何实例上，先读数据库里的归档段，再接上 Redis 段，两段只认 <code>thread_seq</code> 这一个游标；断线后带着最后的 <code>thread_seq</code> 重连。所以「在哪个实例上跑」和「在哪个实例上看」无关。Redis 里只放丢了也能恢复的东西。上面时序图里「订阅会话流」「事件盖序号后发布」「检查点」「收尾先落库再发布」这几步，靠的就是这些机制。下面五张图的场景比时序图多一个并行委派的子 run，用来说明多个生产者：会话 <code>T</code>，父 run <code>R</code> 跑在实例 A，子 run <code>S1</code> 跑在实例 C，用户的浏览器连在实例 B。</p>
@@ -733,7 +1077,6 @@ data: {"seq": 15, "thread_seq": 42, "run_id": "…R…", "ts": "2026-11-05T10:21
         <tr><td>会话序号 <code>thread:seq:{T}</code></td><td>从 1 重来，新事件被前端静默丢弃</td><td>键不在就用归档水位初始化，和递增在同一段 Lua 里（图 2）</td></tr>
         <tr><td>会话锁 <code>run:lock:{会话}</code></td><td>同时进来的两个请求可能都占到</td><td>串行的权威在数据库：会话里有没结束的 run 就不让起新的</td></tr>
         <tr><td>取消标记 <code>run:cancel:{run}</code></td><td>这次停止没生效</td><td>运行时查不到按未取消处理，不让 run 因 Redis 抖动挂掉；挂起中的 run 由执行器当场收尾，不靠它</td></tr>
-        <tr><td>唤醒频道 <code>run:wake</code></td><td>执行器晚一点才领到</td><td>定时领取扫描：排队的真相在数据库</td></tr>
       </tbody>
     </table>
   </section>

@@ -33,18 +33,18 @@
   "description": "目标领域模型，只画期望的样子、不对照现状。跑一段并留下记录：还原 Segment、选运行时、事件编号与发布、检查点、收尾。",
   "component": "Run 执行器",
   "package": "Run 执行器 · 一段的执行与落库（目标模型）",
-  "overview": "一段的执行与落库负责「领到之后怎么跑、跑完留下什么」。它从库里还原这一段（Segment），按智能体类型选运行时，把运行时产出的事件逐个盖序号、发布到事件中继、攒着归档；每个工具轮次落一次检查点（消息、事件、序号、变了的审批模式和待办，一个事务，第一条写校验租约）；段结束时按结果收尾：终态、挂起或交接。收尾事件先落库再发布，前端看到它时库里已经是对应状态。\n\n它不管 run 由哪个实例领（调度与租约管），也不管挂起后何时续、接管时怎么收拾现场（续跑、接管与取消管），更不管一段在运行时内部怎么跑（原生 / CLI 运行时管）。",
+  "overview": "一段的执行与落库负责「领到之后怎么跑、跑完留下什么」。它从库里还原这一段（Segment），按智能体类型选运行时，把运行时产出的事件逐个盖序号、发布到事件中继、攒着归档；每个工具轮次落一次检查点（消息、事件、序号、变了的审批模式和待办，一个事务，第一条写校验租约）；段结束时按结果收尾：终态、挂起或交接。收尾事件先落库再发布，前端看到它时库里已经是对应状态。\n\n它不管 run 由哪个实例跑（派发与租约管），也不管挂起后何时续、接管时怎么收拾现场（续跑、接管与取消管），更不管一段在运行时内部怎么跑（原生 / CLI 运行时管）。",
   "elements": [
     {
       "id": "seg",
       "kind": "class",
       "name": "SegmentExecution",
       "stereotype": "应用服务",
-      "responsibility": "跑一段并留下记录，只编排。顺序：载入（会话或版本没了就判失败收掉）→ 接管来的先交给续跑领域收拾现场 → 标记运行中 → 会话锁跟着租约续上 → 按智能体类型选运行时 → 事件逐个过事件流水线 → 每个工具轮次落一次检查点 → 安全点上响应交接 → 段末按结果收尾；挂起收尾后再请续跑领域查一次续跑条件。出站身份按 run 行重建，不继承任何请求。",
+      "responsibility": "跑一段并留下记录，只编排。顺序：载入（会话或版本没了就判失败收掉）→ 接管来的先交给续跑领域收拾现场 → 标记运行中 → 会话锁跟着租约续上 → 按智能体类型选运行时 → 事件逐个过事件流水线 → 每个工具轮次落一次检查点 → 安全点上响应交接 → 段末按结果收尾，把结局交回派发与租约（挂起了要不要马上续、子 run 结束后父 run 能不能续，由那边查条件、派发）。出站身份按 run 行重建，不继承任何请求。",
       "methods": [
         [
           "+",
-          "run(run_uuid, *, takeover, drain_signal)"
+          "run(run_uuid, *, takeover, drain_signal) -> SegmentOutcome"
         ]
       ],
       "at": [
@@ -192,7 +192,7 @@
       "kind": "class",
       "name": "SegmentOutcome",
       "stereotype": "值对象",
-      "responsibility": "一段怎么结束的：终态（成功、失败、取消、中断）、挂起（带 waiting_on）、交接（状态不动），加上本段用量的增量和错误信息。收尾按它落库，挂起和终态都清掉租约。",
+      "responsibility": "一段怎么结束的：终态（成功、失败、取消、中断）、挂起（带 waiting_on）、交接（状态不动），加上本段用量的增量和错误信息，以及该去续的父 run（子 run 进入终态时）。收尾按它落库，挂起和终态都清掉租约；派发与租约拿它决定接着派发谁。",
       "attributes": [
         [
           "+",
@@ -201,6 +201,10 @@
         [
           "+",
           "status · waiting_on · usage · error"
+        ],
+        [
+          "+",
+          "parent_to_resume: run_uuid | None"
         ]
       ],
       "at": [
@@ -332,7 +336,7 @@
       "methods": [
         [
           "+",
-          "recover(run_uuid, reason) · resume_if_ready(run_uuid)"
+          "recover(run_uuid, reason)"
         ]
       ],
       "at": [
@@ -437,15 +441,15 @@
       "from": "seg",
       "to": "cont",
       "type": "uses",
-      "description": "接管先收拾、挂起后查条件"
+      "description": "接管时先收拾现场"
     }
   ],
   "capabilities": [
     {
       "name": "跑一段",
       "entry": "SegmentExecution.run(run_uuid, *, takeover, drain_signal)",
-      "callers": "调度与租约（领到 run 时）",
-      "description": "载入 → 选运行时 → 驱动并逐个处理事件 → 检查点 → 收尾；接管来的先收拾现场，挂起的收尾后再查一次续跑条件"
+      "callers": "派发与租约（接手 run 时）",
+      "description": "载入 → 选运行时 → 驱动并逐个处理事件 → 检查点 → 收尾；接管来的先收拾现场；返回段的结局，由派发与租约决定接着派发谁"
     },
     {
       "name": "查执行记录",
@@ -493,7 +497,7 @@
     },
     {
       "decision": "载入不到会话或版本就判失败收掉",
-      "reason": "run 行还在、会话被删了或版本没了时，不判失败的话它会一遍遍被领取、一遍遍跳过。"
+      "reason": "run 行还在、会话被删了或版本没了时，不判失败的话它会被兜底任务一遍遍抢到、一遍遍跳过。"
     }
   ],
   "schemaNote": "主键约定：id 是自增主键，只在库内使用，不对外、不做关联；xxx_uuid 是逻辑主键（UUIDv7，Python 侧生成），表间引用和 API 都用它。表间不建外键约束，引用由代码维护；引用会话、run 这些别的领域的表时只写列说明，不画连线。类型写的是 db/types.py 和 SQLAlchemy 的通用类型。run 表的 parent_run_uuid、root_run_uuid 引用的是 run 表自己的 run_uuid（逻辑引用，ER 图里不画自连线）。",
@@ -641,7 +645,7 @@
           "name": "owner",
           "type": "String(64)",
           "nullable": true,
-          "description": "租约持有者（实例 id）；为空且 running = 被交接，等别的实例领走"
+          "description": "租约持有者（实例 id），即这个 run 的锁；为空且 running = 被交接，等别的实例的兜底任务抢走"
         },
         {
           "name": "lease_until",
@@ -650,9 +654,16 @@
           "description": "租约到期时刻；挂起和终态时清掉"
         },
         {
+          "name": "queued_at",
+          "type": "UTCDateTime",
+          "nullable": true,
+          "description": "进入排队的时刻：建 run、续跑放回排队时写，被抢到时清掉。兜底任务只碰排队超过 5 秒的，免得和请求那条路抢"
+        },
+        {
           "name": "claimed_at",
           "type": "UTCDateTime",
-          "nullable": true
+          "nullable": true,
+          "description": "最近一次被接手的时刻"
         },
         {
           "name": "takeovers",
@@ -686,12 +697,12 @@
           "unique": true
         },
         {
-          "name": "ix_run_claim",
+          "name": "ix_run_queued",
           "columns": [
             "status",
-            "created_at"
+            "queued_at"
           ],
-          "description": "领取扫描：排队中的按先后"
+          "description": "兜底候选：排队超过 5 秒的"
         },
         {
           "name": "ix_run_lease",
@@ -699,7 +710,7 @@
             "status",
             "lease_until"
           ],
-          "description": "接管扫描：租约过期的在途 run"
+          "description": "兜底候选：租约过期的、交接了没人接的在途 run"
         },
         {
           "name": "ix_run_thread",

@@ -30,10 +30,10 @@
 <script type="application/json" id="c4-model">
 {
   "title": "代码图：Agent 平台 - Agent 服务 - 事件中继",
-  "description": "目标模型，只画期望的样子、不对照现状。会话事件流（盖号、发布、读取、接管时补扫）、会话锁、取消标记、唤醒、提交幂等、观看名额。",
+  "description": "目标模型，只画期望的样子、不对照现状。会话事件流（盖号、发布、读取、接管时补扫）、会话锁、取消标记、提交幂等、观看名额。",
   "component": "事件中继",
   "package": "事件中继（目标模型）",
-  "overview": "事件中继让「在哪个实例上跑」和「在哪个实例上看」无关：执行器把事件盖上会话序号写进根会话的 Redis 流，用户的事件流连在任何实例上都从这里读，断线后带最后的序号重连，从那之后接着读。同一个会话的事件——包括子孙 run 的过程和审批弹窗——都在一条流里。它还管几样跨实例的小状态：会话锁（防两个请求同时起 run）、取消标记、唤醒执行器的广播、提交的幂等键，以及每个进程能同时开多少条事件流。\n\n它不碰数据库：事件归档、序号水位由 Run 执行器管，读归档段、拼接两段由会话管理做；它也不决定什么时候发什么事件。",
+  "overview": "事件中继让「在哪个实例上跑」和「在哪个实例上看」无关：执行器把事件盖上会话序号写进根会话的 Redis 流，用户的事件流连在任何实例上都从这里读，断线后带最后的序号重连，从那之后接着读。同一个会话的事件——包括子孙 run 的过程和审批弹窗——都在一条流里。它还管几样跨实例的小状态：会话锁（防两个请求同时起 run）、取消标记、提交的幂等键，以及每个进程能同时开多少条事件流。\n\n它不碰数据库：事件归档、序号水位由 Run 执行器管，读归档段、拼接两段由会话管理做；它也不决定什么时候发什么事件。",
   "elements": [
     {
       "id": "relay",
@@ -264,29 +264,6 @@
       ]
     },
     {
-      "id": "wake",
-      "kind": "class",
-      "name": "RedisWakeChannel",
-      "stereotype": "防腐层",
-      "responsibility": "「有新 run 可以领了」的广播，用 Redis 发布订阅实现；订阅断了退避重连。它只是加速，丢了由执行器的定时领取扫描兜底。",
-      "attributes": [
-        [
-          "-",
-          "频道 run:wake"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "broadcast() · listen()"
-        ]
-      ],
-      "at": [
-        -0.67,
-        4.45
-      ]
-    },
-    {
       "id": "archive",
       "kind": "class",
       "name": "EventArchive",
@@ -317,23 +294,6 @@
       ],
       "at": [
         6.0,
-        6.3
-      ]
-    },
-    {
-      "id": "wakechannel",
-      "kind": "interface",
-      "name": "WakeChannel",
-      "external": true,
-      "source": "Run 执行器 · 调度与租约领域",
-      "methods": [
-        [
-          "+",
-          "broadcast() · listen()"
-        ]
-      ],
-      "at": [
-        -0.67,
         6.3
       ]
     }
@@ -400,11 +360,6 @@
       "type": "implements"
     },
     {
-      "from": "wake",
-      "to": "wakechannel",
-      "type": "implements"
-    },
-    {
       "from": "archive",
       "to": "watermark",
       "type": "implements"
@@ -448,12 +403,6 @@
       "description": "写标记；运行时经 CancelToken 查，Redis 抖动按未取消"
     },
     {
-      "name": "唤醒",
-      "entry": "WakeChannel.broadcast · listen（RedisWakeChannel 实现）",
-      "callers": "Run 执行器（入队、续跑、交接后广播；调度订阅）",
-      "description": "只是加速，丢了由定时领取扫描兜底"
-    },
-    {
       "name": "提交幂等",
       "entry": "EventRelay.remember / lookup_idempotency",
       "callers": "会话管理（提交一轮时带 Idempotency-Key）",
@@ -479,7 +428,7 @@
     },
     {
       "decision": "Agent 服务里只有事件中继碰 Redis",
-      "reason": "键名、过期时间、Lua 脚本都在一处；现在执行器的调度自己往唤醒频道发消息，会话锁的键也在别处拼。收进来后别的组件只认接口（WakeChannel、CancelToken），换实现、查键都只看这里。"
+      "reason": "键名、过期时间、Lua 脚本都在一处；现在会话锁的键在别处拼。收进来后别的组件只认接口（CancelToken 等），换实现、查键都只看这里。派发不经 Redis：run 跟着请求走，异常由各实例的兜底任务从库里拉（见 executor/design-run-dispatch.html），不再有唤醒广播。"
     },
     {
       "decision": "会话锁只挡同时进来，串行的权威在数据库",

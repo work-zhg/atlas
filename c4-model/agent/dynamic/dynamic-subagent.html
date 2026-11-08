@@ -122,7 +122,7 @@
 <script type="application/json" id="c4-model">
 {
   "title": "动态图：Agent 平台 - 派子智能体",
-  "description": "目标模型。原生智能体调 task 把一件事交给子智能体：父 run 不等，派完就挂起；子 run 在子会话上跑完后叫醒父 run，续跑时把结论交回。子 run 可能被另一个实例领取；子智能体可以再派子智能体，这条路一层层叠上去。Redis 经事件中继组件访问，唤醒广播省略",
+  "description": "目标模型。原生智能体调 task 把一件事交给子智能体：父 run 不等，派完就挂起；子 run 在子会话上跑完后叫醒父 run，续跑时把结论交回。子 run 在父 run 所在的实例上起（那里没空槽就留给兜底任务），父 run 在最后一个结束的子 run 所在的实例上续；子智能体可以再派子智能体，这条路一层层叠上去。Redis 经事件中继组件访问，图中省略这一跳",
   "boundaries": [
     {
       "id": "platform",
@@ -240,7 +240,7 @@
     {
       "from": "conv",
       "to": "executor",
-      "description": "交给执行器"
+      "description": "交给本实例派发（没空槽就留给兜底任务）"
     },
     {
       "from": "conv",
@@ -261,7 +261,7 @@
     {
       "from": "executor",
       "to": "db",
-      "description": "领取子 run（可能是另一个实例）",
+      "description": "按 run 号抢锁：子 run 写租约、标 running",
       "technology": "SQL/TCP"
     },
     {
@@ -293,14 +293,17 @@
       "description": "父 run 等的事项都有结果了？挂起 → 排队（CAS）",
       "technology": "SQL/TCP",
       "details": {
-        "note": "子 run 结束是续跑的三个入口之一（另两个：挂起落库后自查、定时补扫），判据只有一套。父 run 同时还在等审批的话，要等那一项也有结果。"
+        "note": "子 run 结束是续跑的三个入口之一（另两个：挂起落库后自查、兜底任务补查），判据只有一套。父 run 同时还在等审批的话，要等那一项也有结果。"
       }
     },
     {
       "from": "executor",
       "to": "db",
-      "description": "领取父 run",
-      "technology": "SQL/TCP"
+      "description": "放回去了：在本实例抢锁接着跑父 run",
+      "technology": "SQL/TCP",
+      "details": {
+        "note": "跟着触发它的一方走：最后结束的子 run 在哪个实例收尾，父 run 就在哪个实例续，它刚空出一个槽。那里没空槽就留在排队里，由兜底任务抢走。"
+      }
     },
     {
       "from": "executor",
@@ -349,7 +352,7 @@
     </svg>
 
     <h2>委派原理：派完就挂起，子 run 都跑完了再叫醒父 run</h2>
-    <p>一句话：<b>派一个子智能体，就是在它自己的会话上起一个子 run</b>。父 run 不等，拿到子 run 的 id 就把这次 <code>task</code> 调用登记成一项等待、挂起；子 run 和普通 run 走同一条执行链路，可能在任何实例上跑；它跑完时去叫醒父 run，父 run 续跑时把结论作为 <code>task</code> 的结果交给模型，在同一轮里接着做。这和审批是同一种挂起（<code>waiting_on</code>），只是等的东西不同。子智能体还能再派，每一层都是同一件事。下面四张图，场景同上面的时序图。</p>
+    <p>一句话：<b>派一个子智能体，就是在它自己的会话上起一个子 run</b>。父 run 不等，拿到子 run 的 id 就把这次 <code>task</code> 调用登记成一项等待、挂起；子 run 和普通 run 走同一条执行链路，先在父 run 所在的实例上跑；它跑完时去叫醒父 run，父 run 续跑时把结论作为 <code>task</code> 的结果交给模型，在同一轮里接着做。这和审批是同一种挂起（<code>waiting_on</code>），只是等的东西不同。子智能体还能再派，每一层都是同一件事。下面四张图，场景同上面的时序图。</p>
 
     <h3>图 1　一次 task 调用：派出去，立刻挂起</h3>
     <svg width="1240" viewBox="0 0 1240 460" role="img" aria-label="一次 task 调用：派出去，立刻挂起">
@@ -379,7 +382,7 @@
       <path class="e-hot" d="M912 186 H936" marker-end="url(#pd-h)"/>
       <rect class="node" x="938" y="150" width="280" height="72" rx="4"/>
       <text class="t-name" x="1078.0" y="182.0">子会话空闲？建子 run</text>
-      <text class="t-sub" x="1078.0" y="202.0">建 run 行、写任务书、入队</text>
+      <text class="t-sub" x="1078.0" y="202.0">建 run 行、写任务书、派发</text>
       <path class="e-mute" d="M160 222 V260" marker-end="url(#pd-m)"/>
       <path class="e-mute" d="M466 222 V260" marker-end="url(#pd-m)"/>
       <path class="e-mute" d="M1000 222 V287 H902" marker-end="url(#pd-m)"/>
@@ -417,7 +420,7 @@
       <li><span class="n">2</span>名字不在名录里当场拒。持久的子智能体持有会话，同一批里第二个同名的 <code>task</code> 直接拒；检查和占位之间没有 await，并发的两个调用不会都通过。一次性的不受这条限制。</li>
       <li><span class="n">3</span>准入两道闸：全平台排队和在跑的子 run 不超过 3 个（挂起的不算，它不占进程）；这一轮整棵 run 树累计派出的不超过 6 个，含子智能体再派的。</li>
       <li><span class="n">4</span>找或建子会话：持久的按（父会话，名字）找，找到就复用，这就是「它记得上次」；<code>fresh=true</code> 时归档旧的、新建一个。一次性的每次新建。新建时把子智能体的技能投送好。</li>
-      <li><span class="n">5</span>子会话空闲才建子 run：库里没有它未结束的 run，会话锁也占得到，否则拒。子 run 记下 parent、root、depth；发起人和按谁判权限沿用父 run；审批模式取父 run 此刻的模式。任务书写成子会话里的一条 user 消息，然后入队，任何实例都能领走。</li>
+      <li><span class="n">5</span>子会话空闲才建子 run：库里没有它未结束的 run，会话锁也占得到，否则拒。子 run 记下 parent、root、depth；发起人和按谁判权限沿用父 run；审批模式取父 run 此刻的模式。任务书写成子会话里的一条 user 消息，然后在本实例派发，没空槽就留给兜底任务。</li>
       <li><span class="n">6</span>中间件拿到子 run id，在 <code>waiting_on</code> 里登记这一项，不写结果，让这个调用悬空。同一批的其他调用照常执行，可以同时派好几个。</li>
       <li><span class="n">7</span>下一次调模型之前，<code>SuspensionMiddleware</code> 看到有还没结果的等待项：不调模型，本段结束，产出 <code>run.suspended</code>。段收尾把 <code>waiting_on</code> 落库、清租约；会话锁不放，这一轮没结束，用户这时发不了第二句。</li>
     </ol>
@@ -470,7 +473,7 @@
       <text class="t-hot b" x="930" y="210">挂起</text>
       <text class="t-hot" x="930" y="230">waiting_on 等 R2</text>
       <text class="t-blue b" x="930" y="330">在跑</text>
-      <text class="t-blue" x="930" y="350">可能在另一个实例上</text>
+      <text class="t-blue" x="930" y="350">本实例满了时在别的实例上</text>
       <text class="t-lab" x="666" y="396">三个 run 的事件都发到根会话 P 的流，depth 区分层级</text>
       <g class="badge"><circle cx="40" cy="64" r="10"/><text x="40" y="68">1</text></g>
       <g class="badge"><circle cx="340" cy="184" r="10"/><text x="340" y="188">2</text></g>
@@ -496,7 +499,7 @@
       <rect class="gap" x="300" y="64" width="600" height="40" rx="3"/>
       <text class="t-hot mid" x="600" y="89">挂起：waiting_on = {A, B}，没有进程在等</text>
       <path class="e-hot" d="M900 84 H938" marker-end="url(#pd-h)"/>
-      <text class="t-hot mid" x="920" y="56">任一实例领走</text>
+      <text class="t-hot mid" x="920" y="56">在 B 收尾的实例上接手</text>
       <rect class="node" x="940" y="64" width="280" height="40" rx="4"/>
       <text class="t-sub" x="1080.0" y="89.0">续跑：两个结论填进 task 的结果</text>
       <rect class="node" x="310" y="154" width="300" height="40" rx="4"/>
@@ -515,7 +518,7 @@
       <text class="t-name" x="475.0" y="344.0">② 父挂起落库后再查一次</text>
       <text class="t-sub" x="475.0" y="364.0">防子 run 秒回时的竞态</text>
       <rect class="node" x="640" y="320" width="290" height="56" rx="4"/>
-      <text class="t-name" x="785.0" y="344.0">③ 每 60 秒补扫挂起的 run</text>
+      <text class="t-name" x="785.0" y="344.0">③ 兜底任务补查挂起的 run</text>
       <text class="t-sub" x="785.0" y="364.0">叫醒信号丢了的唯一出路</text>
       <path class="e" d="M165 376 V418" marker-end="url(#pd-a)"/>
       <path class="e" d="M475 376 V418" marker-end="url(#pd-a)"/>
@@ -541,8 +544,8 @@
     <ol>
       <li><span class="n">1</span>父 run 挂起后没有进程在等。它等的是独立可寻址的子 run，不是某个进程里的 await，所以中途重启、换实例都不丢。</li>
       <li><span class="n">2</span>A 收尾时去叫父 run。判据是「父 run 还有没有未结束的子 run」：B 还在跑，不续。</li>
-      <li><span class="n">3</span>B 也终态了，判据满足：CAS 把父 run 从挂起改成排队，几个子 run 同时结束也只有一个抢得到，之后任何实例都能领走它。B 中途挂起等审批不影响这条路：它没有终态，父就一直等。</li>
-      <li><span class="n">4</span>叫醒有三个入口：① 子 run 收尾时叫父 run，是正常路径。② 父挂起落库后自己再查一次：子 run 秒回时，它叫父的那一刻父还在 running，CAS 失败，唤醒就丢了。③ 每 60 秒补扫挂起的 run：子 run 收尾时进程正好被杀，叫醒信号就没了，补扫是唯一的出路。补扫不判超时，子 run 跑多久都等。</li>
+      <li><span class="n">3</span>B 也终态了，判据满足：CAS 把父 run 从挂起改成排队，几个子 run 同时结束也只有一个抢得到；抢到的一方在自己的实例上抢锁、续跑父 run，它刚收尾一个子 run，正好空出一个槽。B 中途挂起等审批不影响这条路：它没有终态，父就一直等。</li>
+      <li><span class="n">4</span>叫醒有三个入口：① 子 run 收尾时叫父 run，是正常路径。② 父挂起落库后自己再查一次：子 run 秒回时，它叫父的那一刻父还在 running，CAS 失败，唤醒就丢了。③ 每个实例的兜底任务每 10 秒补查挂起的 run：子 run 收尾时进程正好被杀，叫醒信号就没了，补查是唯一的出路；谁查到、抢到锁，谁就接着跑。补查不判超时，子 run 跑多久都等。</li>
       <li><span class="n">5</span>三个入口共用一套判据，按等待项的原因分：子智能体看子 run 是否终态，审批看有没有决定。一批里同时有 <code>task</code> 和要审批的工具，两样都齐了才续。</li>
       <li><span class="n">6</span>续跑时按 <code>waiting_on</code> 逐项取子 run 的结论，放进 decisions 交给图。图看到有结论，不调模型，先去执行工具：<code>SubAgentMiddleware</code> 把结论作为 <code>task</code> 的结果交出、删掉那一项；同一批里已有结果的调用原样返回，不重跑。然后才调模型，同一轮接着做。等待期间被取消的，不续跑，当场收尾（见「取消原理」）。</li>
     </ol>

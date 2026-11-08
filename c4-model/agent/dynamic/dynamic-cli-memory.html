@@ -74,7 +74,7 @@
 <script type="application/json" id="c4-model">
 {
   "title": "动态图：Agent 平台 - CLI 智能体的记忆",
-  "description": "目标设计，现在的代码里 CLI 智能体不加载、不写入记忆。用户隔了 40 分钟回到会话，说「以后前端项目都用 bun」：常驻块重建、变了，以新系统提示词恢复 CLI 会话；CLI 经 bridge 的本机 MCP 调 save_memory，调用回到 server，由和原生同一份的记忆组件执行。提交、领取同 dynamic-run.html，权限请求同 dynamic-cli-run.html",
+  "description": "目标设计，现在的代码里 CLI 智能体不加载、不写入记忆。用户隔了 40 分钟回到会话，说「以后前端项目都用 bun」：常驻块重建、变了，以新系统提示词恢复 CLI 会话；CLI 经 bridge 的本机 MCP 调 save_memory，调用回到 server，由和原生同一份的记忆组件执行。提交、派发同 dynamic-run.html，权限请求同 dynamic-cli-run.html",
   "boundaries": [
     {
       "id": "platform",
@@ -152,7 +152,7 @@
       "to": "acp",
       "description": "跑一轮（AgentRuntime.run_turn）",
       "details": {
-        "note": "Run 已提交并被领取（同 dynamic-run.html 的 1–9 步）。和原生同一个接口：给一段，拿回一串平台事件。"
+        "note": "Run 已提交并被接手（同 dynamic-run.html 的 1–9 步）。和原生同一个接口：给一段，拿回一串平台事件。"
       }
     },
     {

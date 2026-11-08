@@ -74,7 +74,7 @@
 <script type="application/json" id="c4-model">
 {
   "title": "动态图：Agent 平台 - 对话中的记忆",
-  "description": "按现在的代码画。员工在开着记忆的会话里说「以后前端项目都用 bun」：建会话时登记实例，这一段 run 开始时组装记忆（常驻块沿用快照），模型先按需加载「工具链」，再保存一条取代 #12 的记忆。提交、排队、领取 run 见 dynamic-run.html；Redis 经事件中继组件访问，图中省略这一跳；记忆服务内部怎么写见 c4-model/memory/dynamic/dynamic-write.html；会话后补记见下方原理图 5",
+  "description": "按现在的代码画。员工在开着记忆的会话里说「以后前端项目都用 bun」：建会话时登记实例，这一段 run 开始时组装记忆（常驻块沿用快照），模型先按需加载「工具链」，再保存一条取代 #12 的记忆。提交、派发、接手 run 见 dynamic-run.html；Redis 经事件中继组件访问，图中省略这一跳；记忆服务内部怎么写见 c4-model/memory/dynamic/dynamic-write.html；会话后补记见下方原理图 5",
   "boundaries": [
     {
       "id": "platform",
@@ -211,7 +211,7 @@
     {
       "from": "executor",
       "to": "native",
-      "description": "跑这一段（提交、排队、领取见 dynamic-run.html）",
+      "description": "跑这一段（提交、派发、接手见 dynamic-run.html）",
       "details": {
         "items": [
           [

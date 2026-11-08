@@ -74,7 +74,7 @@
 <script type="application/json" id="c4-model">
 {
   "title": "动态图：Agent 平台 - 原生智能体调用 MCP 工具",
-  "description": "按现在的代码画（MCP 的部分归工具接入组件）。智能体勾了 mcp:serpapi:google_search，模型在一段里调用两次：装配时只读缓存、不连 MCP 服务；第一次调用时建会话，第二次复用；段结束关会话。提交、领取同 dynamic-run.html；网关内部见 mcpgateway/dynamic/dynamic-call-tool.html",
+  "description": "按现在的代码画（MCP 的部分归工具接入组件）。智能体勾了 mcp:serpapi:google_search，模型在一段里调用两次：装配时只读缓存、不连 MCP 服务；第一次调用时建会话，第二次复用；段结束关会话。提交、派发同 dynamic-run.html；网关内部见 mcpgateway/dynamic/dynamic-call-tool.html",
   "boundaries": [
     {
       "id": "platform",
@@ -138,7 +138,7 @@
       "to": "native",
       "description": "跑这一段（Segment）",
       "details": {
-        "note": "提交、排队、领取同 dynamic-run.html 的 1–9 步。执行器同时交给装配一个 closers 列表：段结束时要关的东西（这里是 MCP 会话）都登记在里面。"
+        "note": "提交、派发、接手同 dynamic-run.html 的 1–9 步。执行器同时交给装配一个 closers 列表：段结束时要关的东西（这里是 MCP 会话）都登记在里面。"
       }
     },
     {

@@ -264,7 +264,10 @@
     {
       "from": "approval",
       "to": "executor",
-      "description": "做了决定（DecisionListener）"
+      "description": "做了决定（DecisionListener）",
+      "details": {
+        "note": "通知的是接到决定请求的这个实例（请求经负载均衡落到哪个实例都行），续跑就先在它上面跑。"
+      }
     },
     {
       "from": "executor",
@@ -272,28 +275,21 @@
       "description": "等的事项都有结果了？挂起 → 排队（CAS）",
       "technology": "SQL/TCP",
       "details": {
-        "note": "判据只有一套：waiting_on 里每一项都有结果才续。和定时补扫撞上时 CAS 只让一个赢。"
+        "note": "判据只有一套：waiting_on 里每一项都有结果才续。和兜底任务的补查撞上时 CAS 只让一个赢，只有赢的一方去抢锁。"
       }
     },
     {
       "from": "executor",
-      "to": "redis",
-      "description": "广播唤醒，任一实例都可能领取",
-      "technology": "Redis Pub/Sub",
+      "to": "executor",
+      "description": "放回去了：在本实例抢锁（没空槽就留给兜底任务）",
       "details": {
-        "items": [
-          [
-            "频道",
-            "RUN_WAKE_CHANNEL",
-            "run:wake"
-          ]
-        ]
+        "note": "RunExecutor.resume_if_ready → try_take。run 跟着请求走：哪个实例接到这次决定，就在哪个实例续跑。整体设计见 executor/design-run-dispatch.html。"
       }
     },
     {
       "from": "executor",
       "to": "db",
-      "description": "领取、加租约、标 running",
+      "description": "按 run 号抢锁：写租约、标 running",
       "technology": "SQL/TCP"
     },
     {
@@ -489,8 +485,8 @@
       <text class="t-name" x="145" y="260">自己挂起落库之后</text>
       <text class="t-sub" x="145" y="280">决定可能早于挂起落库，再查一次</text>
       <rect class="node" x="20" y="312" width="250" height="56" rx="4"/>
-      <text class="t-name" x="145" y="336">定时补扫</text>
-      <text class="t-sub" x="145" y="356">唤醒丢了（进程被杀）的兜底</text>
+      <text class="t-name" x="145" y="336">兜底任务补查</text>
+      <text class="t-sub" x="145" y="356">续跑信号丢了（进程被杀）的兜底</text>
       <path class="e" d="M270 188 H300 V340 M270 264 H300 M270 340 H300"/>
       <path class="e" d="M300 264 H328" marker-end="url(#pr-a)"/>
 
@@ -512,18 +508,18 @@
       <text class="t-sub" x="910" y="280">requeue：CAS，只有一个赢</text>
       <path class="e" d="M1010 264 H1048" marker-end="url(#pr-a)"/>
       <rect class="node" x="1050" y="236" width="170" height="56" rx="4"/>
-      <text class="t-name" x="1135" y="260">PUBLISH run:wake</text>
-      <text class="t-sub" x="1135" y="280">Redis Pub/Sub</text>
+      <text class="t-name" x="1135" y="260">本实例抢锁</text>
+      <text class="t-sub" x="1135" y="280">没空槽留给兜底任务</text>
       <path class="e" d="M1135 292 V338" marker-end="url(#pr-a)"/>
       <rect class="node" x="1050" y="340" width="170" height="56" rx="4"/>
-      <text class="t-name" x="1135" y="364">任一实例领取</text>
+      <text class="t-name" x="1135" y="364">抢到：写租约</text>
       <text class="t-sub" x="1135" y="384">加租约 · status=running</text>
       <text class="t-hot mid b" x="1135" y="418">→ 段 2（图 4）</text>
     </svg>
     <ol>
       <li><span class="n">1</span>提交决定只改 approval 行，它是决定的唯一记录；图不在运行，没有东西要「通知到图里」。改 run 的状态是执行器的事，经 DecisionListener 通知。</li>
       <li><span class="n">2</span>barrier 按 <code>reason</code> 分派：approval 看审批行已不是 pending，subagent 看子 run 已到终态。<code>waiting_on</code> 里每一项都有结果才续；同一批里有两个请示时，批了一个不会续。</li>
-      <li><span class="n">3</span>续跑 = 放回队列。<code>UPDATE run SET status='queued' WHERE status='suspended'</code>：三个入口撞在一起时只有一个能改成；唤醒只是让调度别等下一次轮询，谁领到都一样。</li>
+      <li><span class="n">3</span>续跑 = 先放回排队，再抢锁。<code>UPDATE run SET status='queued' WHERE status='suspended'</code>：三个入口撞在一起时只有一个能改成，只有它去抢锁。做决定的请求落在哪个实例，就在哪个实例抢；那里没有空槽，run 就留在排队里，由某个实例的兜底任务抢走；兜底任务补查到的，由补查的实例自己抢。</li>
     </ol>
 
     <h3>图 4　段 2：新建一张图，before_model 直接跳到 tools</h3>

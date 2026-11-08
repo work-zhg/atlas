@@ -33,18 +33,22 @@
   "description": "目标领域模型，只画期望的样子、不对照现状。一段结束之后怎么接着跑：挂起的何时续、接管时怎么收拾现场、挂起中被取消怎么收尾。",
   "component": "Run 执行器",
   "package": "Run 执行器 · 续跑、接管与取消（目标模型）",
-  "overview": "续跑、接管与取消管「一段结束之后」的三件事。挂起的 run 在等外部的事（审批、提问、子 run），等的事都有结果了就 CAS 放回队列，由任意实例领走续跑；入口有三个（子 run 结束、自己挂起落库后、定时补扫），判据只有一套，按等待原因分别判。接管来的 run（交接或租约过期）在跑之前先收拾上一个实例留下的现场：补归档、续序号、处理悬空的工具调用、告诉前端丢掉没落库的正文。挂起中被取消的 run 没有进程，由这里落终态、放会话锁。\n\n它不领取 run（调度与租约管），也不跑一段（一段的执行管）；事项的决定由审批那边做，这里只看结果。",
+  "overview": "续跑、接管与取消管「一段结束之后」的三件事。挂起的 run 在等外部的事（审批、提问、子 run），等的事都有结果了就 CAS 放回排队，交给派发与租约在本实例抢锁接着跑：审批决定、子 run 结束时在触发它的实例上，兜底任务补查到的在补查的实例上；入口有三个（子 run 结束、自己挂起落库后、兜底任务补查），判据只有一套，按等待原因分别判。接管来的 run（交接或租约过期）在跑之前先收拾上一个实例留下的现场：补归档、续序号、处理悬空的工具调用、告诉前端丢掉没落库的正文。挂起中被取消的 run 没有进程，由这里落终态、放会话锁。\n\n它不派发 run（派发与租约管），也不跑一段（一段的执行管）；事项的决定由审批那边做，这里只看结果。",
   "elements": [
     {
       "id": "cont",
       "kind": "class",
       "name": "Continuation",
       "stereotype": "应用服务",
-      "responsibility": "一段结束之后怎么接着跑。挂起的 run：等的事都有结果了，就放回队列续跑——入口有三个（子 run 结束时、自己挂起落库后、定时补扫），判据只有一套。接管来的 run：在跑之前收拾上一个实例留下的现场。挂起中被取消的 run：没有进程在跑，由这里收尾。",
+      "responsibility": "一段结束之后怎么接着跑。挂起的 run：等的事都有结果了，就放回排队，返回给调用方去抢锁——入口有三个（子 run 结束时、自己挂起落库后、兜底任务补查），判据只有一套。给兜底任务的挂起候选也从这里出。接管来的 run：在跑之前收拾上一个实例留下的现场。挂起中被取消的 run：没有进程在跑，由这里收尾。",
       "methods": [
         [
           "+",
-          "resume_if_ready(run_uuid) -> bool"
+          "resume_if_ready(run_uuid) -> bool（放回排队了吗）"
+        ],
+        [
+          "+",
+          "suspended_candidates(after_id, limit) -> list[run_uuid]"
         ],
         [
           "+",
@@ -74,29 +78,6 @@
       ],
       "at": [
         0.0,
-        2.6
-      ]
-    },
-    {
-      "id": "sweep",
-      "kind": "class",
-      "name": "SuspendedSweep",
-      "stereotype": "领域服务",
-      "responsibility": "定时（默认 60 秒）扫一遍挂起的 run，能续的续上，补上丢掉的唤醒。不判超时：审批只由人决定，等多久都不替用户按拒绝处理。",
-      "attributes": [
-        [
-          "+",
-          "interval_s: float"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "sweep() -> int（续了几个）"
-        ]
-      ],
-      "at": [
-        2.0,
         2.6
       ]
     },
@@ -139,11 +120,11 @@
       "kind": "class",
       "name": "ContinuationQueries",
       "stereotype": "仓储",
-      "responsibility": "续跑要的读查询：真正挂起的 run（有等待项的），某个 run 还没结束的直接子 run，子 run 的状态。",
+      "responsibility": "续跑要的读查询：某个 run 还没结束的直接子 run、子 run 的状态；给兜底任务的挂起候选——按 id 往后翻页，先在 SQL 里滤掉还有待决审批、还有没结束子 run 的，剩下的才逐个用续跑条件确认。等人批的挂起 run 可能很多，不能每轮都逐个去查。",
       "methods": [
         [
           "+",
-          "suspended_runs() -> list[run_uuid]"
+          "suspended_candidates(after_id, limit) -> list[run_uuid]"
         ],
         [
           "+",
@@ -181,7 +162,7 @@
       "methods": [
         [
           "+",
-          "接管时 · 挂起落库后 · 子 run 结束时"
+          "接管时（收拾现场）"
         ]
       ],
       "at": [
@@ -194,11 +175,15 @@
       "kind": "class",
       "name": "RunWorker",
       "external": true,
-      "source": "Run 执行器 · 调度与租约领域",
+      "source": "Run 执行器 · 派发与租约领域",
       "methods": [
         [
           "+",
-          "cancel(…)（挂起中的）"
+          "resume_if_ready(…)：审批决定、子 run 结束、挂起落库后"
+        ],
+        [
+          "+",
+          "try_take(…) · cancel(…)（挂起中的）"
         ]
       ],
       "at": [
@@ -211,7 +196,7 @@
       "kind": "class",
       "name": "RunQueue",
       "external": true,
-      "source": "Run 执行器 · 调度与租约领域",
+      "source": "Run 执行器 · 派发与租约领域",
       "methods": [
         [
           "+",
@@ -232,7 +217,7 @@
       "methods": [
         [
           "+",
-          "status(tokens) · decide(…) → 唤醒"
+          "status(tokens)"
         ]
       ],
       "at": [
@@ -273,6 +258,23 @@
         4.1,
         6.15
       ]
+    },
+    {
+      "id": "job",
+      "kind": "class",
+      "name": "RecoveryJob",
+      "external": true,
+      "source": "Run 执行器 · 派发与租约领域",
+      "methods": [
+        [
+          "+",
+          "execute(ctx)：挂起的候选，能续的本实例抢锁"
+        ]
+      ],
+      "at": [
+        6.6,
+        -1.0
+      ]
     }
   ],
   "relationships": [
@@ -280,25 +282,19 @@
       "from": "seg",
       "to": "cont",
       "type": "uses",
-      "description": "收拾现场、查续跑条件"
+      "description": "接管时收拾现场"
     },
     {
       "from": "worker",
       "to": "cont",
       "type": "uses",
-      "description": "挂起中取消"
-    },
-    {
-      "from": "approval",
-      "to": "cont",
-      "type": "uses",
-      "description": "做了决定就查条件"
+      "description": "续跑、挂起中取消"
     },
     {
       "from": "cont",
       "to": "queue",
       "type": "uses",
-      "description": "条件满足：放回队列"
+      "description": "条件满足：放回排队"
     },
     {
       "from": "cont",
@@ -317,18 +313,6 @@
       "to": "queries",
       "type": "uses",
       "description": "子 run 状态"
-    },
-    {
-      "from": "cont",
-      "to": "sweep",
-      "type": "composition",
-      "description": "定时补扫"
-    },
-    {
-      "from": "sweep",
-      "to": "queries",
-      "type": "uses",
-      "description": "挂起的 run"
     },
     {
       "from": "cont",
@@ -365,32 +349,50 @@
       "to": "relay",
       "type": "uses",
       "description": "发 run.cancelled、放锁"
+    },
+    {
+      "from": "job",
+      "to": "cont",
+      "type": "uses",
+      "description": "每轮补查"
+    },
+    {
+      "from": "cont",
+      "to": "queries",
+      "type": "uses",
+      "description": "挂起的候选"
     }
   ],
   "capabilities": [
     {
       "name": "续跑",
       "entry": "Continuation.resume_if_ready(run_uuid)",
-      "callers": "一段的执行（子 run 结束时、自己挂起落库后）、审批事项被决定时、定时补扫",
-      "description": "等的事都有结果了，就 CAS 把 run 放回队列并唤醒；几个入口同时到时只有一个放得回去"
+      "callers": "派发与租约（审批做了决定、子 run 结束、自己挂起落库后、兜底任务补查）",
+      "description": "等的事都有结果了，就 CAS 把 run 放回排队并返回 true，调用方随即在本实例抢锁；几个入口同时到时只有一个放得回去"
+    },
+    {
+      "name": "挂起的候选",
+      "entry": "Continuation.suspended_candidates(after_id, limit)",
+      "callers": "兜底任务（每轮翻页）",
+      "description": "SQL 先滤掉还有待决审批、还有没结束子 run 的；兜底任务拿到后逐个 resume_if_ready，放回去了就抢锁"
     },
     {
       "name": "接管时收拾现场",
       "entry": "Continuation.recover(run_uuid, reason)",
-      "callers": "一段的执行（领到交接或租约过期的 run 时）",
+      "callers": "一段的执行（抢到交接或租约过期的 run 时）",
       "description": "补归档、续序号、处理悬空调用，返回 run.resumed（带要丢掉的正文字数）"
     },
     {
       "name": "挂起中取消",
       "entry": "Continuation.settle_cancelled(run_uuid)",
-      "callers": "调度与租约（RunExecutor.cancel）",
+      "callers": "派发与租约（RunExecutor.cancel）",
       "description": "落终态、发 run.cancelled、放会话锁"
     }
   ],
   "decisions": [
     {
       "decision": "三个续跑入口，同一套判据",
-      "reason": "子 run 结束时、自己挂起落库后、定时补扫时都可能该续。漏掉任何一个，run 就会永久卡在挂起：没有报错、没有事件，只是一个一直转圈的界面，这是最难发现的故障。"
+      "reason": "子 run 结束时、自己挂起落库后、兜底任务补查时都可能该续。漏掉任何一个，run 就会永久卡在挂起：没有报错、没有事件，只是一个一直转圈的界面，这是最难发现的故障。"
     },
     {
       "decision": "续跑条件按等待原因分别判",
@@ -398,15 +400,19 @@
     },
     {
       "decision": "自己挂起落库之后，再查一次续跑条件",
-      "reason": "子 run 可能在父 run 这段收尾之前就跑完了：它去叫父 run 时，父还是 running，放回队列的 CAS 失败、唤醒丢掉；随后父落成挂起，从此再没人叫它。子 run 秒回时几乎必现。"
+      "reason": "子 run 可能在父 run 这段收尾之前就跑完了：它去续父 run 时，父还是 running，放回排队的 CAS 失败，这次续跑信号就丢了；随后父落成挂起，从此再没人叫它。子 run 秒回时几乎必现。"
     },
     {
-      "decision": "续跑就是 CAS 放回队列",
-      "reason": "几个子 run 同时结束时都会来续父 run，只有一个能 CAS 成功；放回队列后和新 run 走同一条领取路径，背压和接管的规则只有一套。"
+      "decision": "挂起的候选先在 SQL 里过滤",
+      "reason": "等人批的挂起 run 可能有成百上千个、一等就是几天，每个实例每 10 秒逐个查续跑条件太重。先在 SQL 里排除还有待决审批、还有没结束子 run 的，剩下的通常是零个，偶尔几个再逐个确认。"
+    },
+    {
+      "decision": "续跑只放回排队，派发交回派发与租约",
+      "reason": "几个子 run 同时结束时都会来续父 run，只有一个能 CAS 成功，只有它去抢锁。抢锁在派发与租约里，规则只有一套：本实例有空槽就在本实例跑（子 run 刚结束，正好空出一个槽），没有就留在排队里给兜底任务。一段的执行也不直接叫续跑：段结束后把「该续谁」交回调度，依赖保持单向。"
     },
     {
       "decision": "不判超时",
-      "reason": "审批只由人决定，等到第二天也不替用户按拒绝处理；挂起时已清掉租约，等待不占实例。定时补扫只补丢掉的唤醒，不催促。"
+      "reason": "审批只由人决定，等到第二天也不替用户按拒绝处理；挂起时已清掉租约，等待不占实例。兜底任务只补丢掉的续跑信号，不催促。"
     },
     {
       "decision": "接管时收拾现场和第一个检查点在同一个事务里，第一条写是围栏",

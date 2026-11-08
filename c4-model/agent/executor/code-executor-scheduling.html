@@ -29,22 +29,22 @@
 -->
 <script type="application/json" id="c4-model">
 {
-  "title": "代码图：Agent 平台 - Agent 服务 - Run 执行器 - 调度与租约",
-  "description": "目标领域模型，只画期望的样子、不对照现状。谁来跑：入队唤醒、CAS 领取、背压、续租、停机交接。",
+  "title": "代码图：Agent 平台 - Agent 服务 - Run 执行器 - 派发与租约",
+  "description": "目标领域模型，只画期望的样子、不对照现状。谁来跑：run 跟着请求走，在接请求的实例上接手；满了、发版、崩溃都交给兜底任务——每个实例都跑，分页拉候选、逐个抢锁（租约），抢到就在本实例跑。整体设计见 design-run-dispatch.html。",
   "component": "Run 执行器",
-  "package": "Run 执行器 · 调度与租约（目标模型）",
-  "overview": "调度与租约回答「这个 run 由哪个实例来跑」。run 是数据库里的工作：建好时就是排队状态，入队只广播一声唤醒。每个执行器实例订阅唤醒、也定时扫描，在并发上限内用 CAS 领取，领到就起一个执行槽，交给「一段的执行」。持有期间靠租约证明进程还活着：每 lease/3 一条 SQL 续本实例的全部租约，续不上就说明被接管了，立即停下。租约过期的 run 会被别的实例领走（接管）；停机时主动交接，别的实例立刻领走。\n\n它不管一段怎么跑、怎么落库（一段的执行管），也不管挂起的 run 什么时候该续、接管时怎么收拾现场（续跑、接管与取消管）。",
+  "package": "Run 执行器 · 派发与租约（目标模型）",
+  "overview": "派发与租约回答「这个 run 由哪个实例来跑」。常态下 run 跟着请求走：提交一轮、做出审批决定这些请求经负载均衡落到哪个实例，run 就在哪个实例上接手、开跑；子 run 在父 run 所在的实例上起，父 run 在最后一个结束的子 run 所在的实例上续。接手就是拿这个 run 的锁，锁就是 run 行上的租约：按 run 号一条 CAS 写上 owner 和到期时刻，几个实例同时拿只有一个成功。\n\n其余情况都算异常，交给兜底任务：本实例满了没接的、发版时交出来的、实例崩溃后租约过期的、续跑信号丢了的挂起 run。每个实例都跑同一个兜底任务，每 10 秒一轮：从库里分页拉候选，每页 10 条，逐个抢锁，抢到就在本实例跑，抢不到就看下一个，直到翻完或者本实例没有空槽。持有期间每 lease/3 一条 SQL 续本实例的全部租约。兜底和续租都是定时任务库（atlas_jobs）里的实例任务：执行器只写 execute，循环、抖动、出错隔离、停机由库负责。停机时在安全点停下、清掉租约，剩下的交给别的实例的兜底任务；交接完宿主再停定时任务库，续租一直续到那时。\n\n它不管一段怎么跑、怎么落库（一段的执行管），也不管挂起的 run 什么时候该续、接管时怎么收拾现场（续跑、接管与取消管）。",
   "elements": [
     {
       "id": "iface",
       "kind": "interface",
       "name": "RunExecutor",
       "stereotype": "对外接口",
-      "responsibility": "Run 执行器对组件外的唯一入口：入队后唤醒、取消、等的事有了结果时续跑、停机。调用方不知道 run 会在哪个实例上跑；以后换成独立的 worker 进程，只换实现。",
+      "responsibility": "Run 执行器对组件外的唯一入口：派发、取消、等的事有了结果时续跑、停机。调用方只管「让这个 run 跑起来」：本实例接得下就当场跑，接不下也不报错，兜底任务会处理。",
       "methods": [
         [
           "+",
-          "submit(run_uuid)"
+          "dispatch(run_uuid)"
         ],
         [
           "+",
@@ -60,7 +60,7 @@
         ]
       ],
       "at": [
-        1.45,
+        2.2,
         -0.95
       ]
     },
@@ -69,7 +69,7 @@
       "kind": "class",
       "name": "RunWorker",
       "stereotype": "应用服务",
-      "responsibility": "一个实例上的执行器：订阅唤醒、定时领取扫描、领到就起一个执行槽交给「一段的执行」，有 run 在跑时续租，停机时交接。不自己装配运行时：运行时由组合根注入「一段的执行」。api 角色的实例只入队、不领取。",
+      "responsibility": "一个实例上的执行器。派发和兜底都落到同一个动作 try_take：先向准入占一个槽，再按 run 号抢锁（CAS 写租约），抢到就起执行槽交给「一段的执行」，抢不到就把槽还回去。派发时抢不到不报错，run 留在库里给兜底任务。一段结束后，把「该续谁」（自己挂起后、子 run 结束后的父 run）交给续跑领域查条件，放回排队的就地 try_take。不自己装配运行时：运行时由组合根注入「一段的执行」。",
       "attributes": [
         [
           "-",
@@ -83,24 +83,28 @@
       "methods": [
         [
           "+",
-          "start() · claim_available() -> int"
+          "dispatch(run_uuid)"
+        ],
+        [
+          "+",
+          "try_take(run_uuid) -> bool"
         ],
         [
           "-",
-          "_spawn(run_uuid, reason)"
+          "_start(run_uuid, reason)"
         ]
       ],
       "at": [
-        1.45,
+        2.2,
         0.75
       ]
     },
     {
       "id": "admission",
       "kind": "class",
-      "name": "ClaimAdmission",
+      "name": "SlotAdmission",
       "stereotype": "策略",
-      "responsibility": "本实例能不能再领：并发上限（默认 32）减去在跑的槽；领取串行进行，几个唤醒同时到也不会一起冲过上限。停机中、或者是 api 角色，一律不领。",
+      "responsibility": "本实例还能不能接：并发上限（默认 32）减去在跑的槽。先占槽再抢锁，派发和兜底同时到也不会一起冲过上限；抢锁没成功就把槽还回去。停机中一律不给槽。",
       "attributes": [
         [
           "+",
@@ -110,11 +114,15 @@
       "methods": [
         [
           "+",
-          "free_slots(slots, *, draining) -> int"
+          "reserve() -> bool"
+        ],
+        [
+          "+",
+          "release()"
         ]
       ],
       "at": [
-        -0.6,
+        -0.7,
         0.75
       ]
     },
@@ -123,11 +131,11 @@
       "kind": "class",
       "name": "RunQueue",
       "stereotype": "仓储",
-      "responsibility": "run 表上与调度有关的读写。领取：排队中的、或租约已过期的在途 run，SELECT … FOR UPDATE SKIP LOCKED 再 UPDATE，同一个事务，多个实例并发领取互不阻塞，也不会领到同一行。续租：一条 SQL 续本实例的全部 run，返回仍由本实例持有的。交接：清掉 owner，让租约立即到期。续跑也走这里：把挂起的 run 放回队列。",
+      "responsibility": "run 表上与派发有关的读写。抢锁：按 run 号一条 CAS，只有没人持有的才抢得到——排队中的、租约已过期的、交接了还没人接的，几个实例同时抢只有一个成功。续租：一条 SQL 续本实例的全部 run，返回仍由本实例持有的。交接：清掉 owner，让租约立即到期。续跑：把挂起的 run 放回排队（CAS）。候选：给兜底任务按 id 往后翻页，每页最多 10 条，排队中的只取排队超过 5 秒的（免得和请求那条路抢）。",
       "methods": [
         [
           "+",
-          "claim_next(owner, lease_s) -> (run_uuid, TakeoverReason | None)"
+          "take(run_uuid, owner, lease_s) -> TakeoverReason | 没抢到"
         ],
         [
           "+",
@@ -139,11 +147,15 @@
         ],
         [
           "+",
-          "requeue(run_uuid) -> bool（挂起 → 排队，CAS）"
+          "requeue(run_uuid) -> bool（挂起 → 排队）"
+        ],
+        [
+          "+",
+          "candidates(after_id, limit=10) -> list[run_uuid]"
         ]
       ],
       "at": [
-        4.25,
+        5.1,
         0.75
       ]
     },
@@ -152,7 +164,7 @@
       "kind": "enum",
       "name": "TakeoverReason",
       "stereotype": "值对象",
-      "responsibility": "领到的是不是别人留下的：None 是新 run 或续跑；handoff 是上一个持有者停机前主动交接；expired 是持有者的租约过期，多半是进程死了。后两种要先收拾现场。",
+      "responsibility": "抢到的是不是别人留下的：None 是新 run 或续跑；HANDOFF 是上一个持有者停机前主动交出的；EXPIRED 是持有者的租约过期，多半是进程死了。后两种要先收拾现场。",
       "attributes": [
         [
           "",
@@ -168,7 +180,7 @@
         ]
       ],
       "at": [
-        4.25,
+        5.1,
         -0.95
       ]
     },
@@ -177,7 +189,7 @@
       "kind": "class",
       "name": "Lease",
       "stereotype": "值对象",
-      "responsibility": "「进程还活着」的心跳：持有者、到期时刻、被接管过几次。默认 30 秒，每 10 秒续一次。它不是工作时长上限，长任务靠续租一直跑；挂起和终态时清掉。被接管得频繁，说明实例在频繁崩溃。",
+      "responsibility": "这个 run 的锁，也是「进程还活着」的心跳：持有者、到期时刻、被接管过几次。默认 30 秒，每 10 秒续一次。不另用 Redis 锁：写进度时本来就要按它挡住旧实例（围栏），两把锁会说法不一。它不是工作时长上限，长任务靠续租一直跑；挂起和终态时清掉。",
       "attributes": [
         [
           "+",
@@ -193,8 +205,8 @@
         ]
       ],
       "at": [
-        4.6,
-        2.75
+        5.1,
+        2.6
       ]
     },
     {
@@ -202,22 +214,17 @@
       "kind": "class",
       "name": "LeaseRenewer",
       "stereotype": "领域服务",
-      "responsibility": "有 run 在跑时每 lease/3 续一次本实例的全部租约；没 run 了就停，下次领到再起。某个 run 续不上，就说明它已被别的实例接管，立即停掉它的执行槽。",
-      "attributes": [
-        [
-          "-",
-          "_interval = lease / 3"
-        ]
-      ],
+      "responsibility": "续租，定时任务库里的实例任务：每个实例一份，库按 lease/3 调度（不是单独的进程，跑在宿主的事件循环上）。execute 一条 SQL 续本实例全部在跑的 run 的租约；本实例没有在跑的 run 就直接返回；某个 run 续不上，说明它已被别的实例抢走，立即停掉它的执行槽。不放进每个 run 自己的流程里续：run 大部分时间在等模型和工具，一个工具可能跑几十分钟，那段时间续不上。停机交接期间它要一直跑，所以宿主交接完才停定时任务库。",
+      "attributes": null,
       "methods": [
         [
           "+",
-          "renew_once() -> set[run_uuid]（续不上的）"
+          "execute(ctx)（实例任务，每 lease/3）"
         ]
       ],
       "at": [
-        2.95,
-        2.75
+        3.65,
+        2.6
       ]
     },
     {
@@ -237,29 +244,8 @@
         ]
       ],
       "at": [
-        -0.6,
-        2.75
-      ]
-    },
-    {
-      "id": "wake",
-      "kind": "interface",
-      "name": "WakeChannel",
-      "stereotype": "扩展点",
-      "responsibility": "广播「有活了」，订阅方断了就退避重连。服务端用 Redis 发布订阅实现。它只是加速：唤醒丢了，定时领取扫描照样能领到。",
-      "methods": [
-        [
-          "+",
-          "broadcast()"
-        ],
-        [
-          "+",
-          "listen() -> AsyncIterator[None]"
-        ]
-      ],
-      "at": [
-        -0.6,
-        -0.95
+        -0.7,
+        2.6
       ]
     },
     {
@@ -267,7 +253,7 @@
       "kind": "class",
       "name": "Drainer",
       "stereotype": "领域服务",
-      "responsibility": "停机交接：先停止领取，再把在跑的 run 交给别的实例。原生运行时在下一个安全点（工具轮次落库之后）停下；CLI 运行时直接断开，那一轮在 Pod 里照常进行，接手的实例再连回去。等不到安全点的，到 drain_timeout（默认 60 秒）直接中止，最多丢一轮。交接 = 清租约 + 发唤醒，状态不动。",
+      "responsibility": "停机交接：先关准入，不再接新的派发（兜底任务看到停机中，也不再抢）；再让在跑的 run 停下：原生运行时到下一个安全点（工具轮次落库之后），CLI 运行时直接断开（那一轮在 Pod 里照常进行，接手的实例再连回去）。停下的清掉租约，状态不动，剩下的交给别的实例的兜底任务，最多 10 秒内被抢走。等不到安全点的，到 drain_timeout（默认 60 秒）直接中止，最多丢一轮。交接期间续租照常进行，交接完宿主再停定时任务库。",
       "attributes": [
         [
           "+",
@@ -281,8 +267,25 @@
         ]
       ],
       "at": [
-        0.6,
-        2.75
+        0.75,
+        2.6
+      ]
+    },
+    {
+      "id": "job",
+      "kind": "class",
+      "name": "RecoveryJob",
+      "stereotype": "领域服务",
+      "responsibility": "兜底任务，定时任务库里的实例任务：每个实例一份、逻辑一样，库按每 10 秒加随机抖动调度，不抢行、不写执行记录。execute 开头先看本实例是不是在停机、有没有空槽，是就直接返回；否则按 id 往后翻候选，每页 10 条——没人接的、租约过期的、交接了没人接的从 RunQueue 拉，等的事可能都有结果的挂起 run 从续跑领域拉；逐个 try_take（挂起的先放回排队），抢到就在本实例跑，抢不到看下一个；翻完或者没空槽就停，剩下的留给别的实例。不需要选主：抢锁本身保证一个 run 只被一个实例拿到。",
+      "methods": [
+        [
+          "+",
+          "execute(ctx)（实例任务，每 10 秒 ± 3）"
+        ]
+      ],
+      "at": [
+        3.65,
+        4.4
       ]
     },
     {
@@ -294,12 +297,12 @@
       "methods": [
         [
           "+",
-          "run(run_uuid, *, takeover, drain_signal)"
+          "run(run_uuid, *, takeover, drain_signal) -> 段的结局"
         ]
       ],
       "at": [
-        0.85,
-        4.65
+        1.3,
+        6.2
       ]
     },
     {
@@ -311,12 +314,16 @@
       "methods": [
         [
           "+",
-          "resume_if_ready(run_uuid) · settle_cancelled(run_uuid)"
+          "resume_if_ready(run_uuid) · suspended_candidates(after_id, limit)"
+        ],
+        [
+          "+",
+          "settle_cancelled(run_uuid)"
         ]
       ],
       "at": [
-        2.65,
-        4.65
+        3.0,
+        6.2
       ]
     },
     {
@@ -328,12 +335,29 @@
       "methods": [
         [
           "+",
-          "create(…) → submit · cancel(…)"
+          "create(…) → dispatch · cancel(…)"
         ]
       ],
       "at": [
-        1.45,
+        2.2,
         -2.65
+      ]
+    },
+    {
+      "id": "jobi",
+      "kind": "interface",
+      "name": "Job",
+      "external": true,
+      "source": "定时任务库 atlas_jobs（实例任务）",
+      "methods": [
+        [
+          "+",
+          "execute(ctx, params)"
+        ]
+      ],
+      "at": [
+        6.7,
+        4.4
       ]
     }
   ],
@@ -342,7 +366,7 @@
       "from": "runsvc",
       "to": "iface",
       "type": "uses",
-      "description": "建好就入队、取消"
+      "description": "建好就派发、取消"
     },
     {
       "from": "worker",
@@ -353,13 +377,13 @@
       "from": "worker",
       "to": "admission",
       "type": "uses",
-      "description": "还能领几个"
+      "description": "占一个槽"
     },
     {
       "from": "worker",
       "to": "queue",
       "type": "association",
-      "description": "领取"
+      "description": "按 run 号抢锁"
     },
     {
       "from": "queue",
@@ -372,12 +396,6 @@
       "to": "lease",
       "type": "uses",
       "description": "写入、续期、清除"
-    },
-    {
-      "from": "worker",
-      "to": "renewer",
-      "type": "composition",
-      "description": "有 run 时起"
     },
     {
       "from": "renewer",
@@ -394,12 +412,6 @@
     },
     {
       "from": "worker",
-      "to": "wake",
-      "type": "association",
-      "description": "订阅唤醒"
-    },
-    {
-      "from": "worker",
       "to": "drain",
       "type": "composition",
       "description": "停机时"
@@ -408,40 +420,75 @@
       "from": "drain",
       "to": "slot",
       "type": "uses",
-      "description": "逐个交接"
+      "description": "停在安全点"
     },
     {
       "from": "drain",
       "to": "queue",
       "type": "uses",
       "description": "清租约",
-      "labelAt": 0.72
+      "labelAt": 0.78
+    },
+    {
+      "from": "job",
+      "to": "queue",
+      "type": "uses",
+      "description": "分页拉候选"
+    },
+    {
+      "from": "job",
+      "to": "worker",
+      "type": "uses",
+      "description": "逐个 try_take"
+    },
+    {
+      "from": "job",
+      "to": "cont",
+      "type": "uses",
+      "description": "挂起的候选"
     },
     {
       "from": "worker",
       "to": "segment",
       "type": "uses",
-      "description": "领到就跑一段"
+      "description": "抢到就跑一段"
     },
     {
       "from": "worker",
       "to": "cont",
       "type": "uses",
-      "description": "续跑、等待中取消"
+      "description": "续跑、挂起中取消"
+    },
+    {
+      "from": "renewer",
+      "to": "worker",
+      "type": "uses",
+      "description": "在跑的 run、停掉续不上的",
+      "labelAt": 0.4
+    },
+    {
+      "from": "job",
+      "to": "jobi",
+      "type": "implements"
+    },
+    {
+      "from": "renewer",
+      "to": "jobi",
+      "type": "implements"
     }
   ],
   "capabilities": [
     {
-      "name": "入队",
-      "entry": "RunExecutor.submit(run_uuid)",
+      "name": "派发",
+      "entry": "RunExecutor.dispatch(run_uuid)",
       "callers": "会话管理（建 Run、起子 run）",
-      "description": "run 行建好时已是排队状态；这里只广播唤醒，本实例有空位也立刻试领一次"
+      "description": "本实例占到槽、抢到锁就当场开跑；占不到槽就什么都不做，run 留在库里排队，5 秒后由兜底任务处理。调用方不等这一轮跑完"
     },
     {
-      "name": "领取与接管",
-      "entry": "RunWorker.claim_available()",
-      "callers": "唤醒、定时扫描、入队时",
-      "description": "领到并发上限为止；领到租约过期或被交接的 run 时，先交给续跑领域收拾现场再跑"
+      "name": "续跑",
+      "entry": "RunExecutor.resume_if_ready(run_uuid)",
+      "callers": "审批（做了决定）、执行器自己（子 run 结束、挂起落库后）",
+      "description": "续跑领域判条件、放回排队，放回去了就在本实例 try_take；几个入口同时到时只有一个放得回去"
     },
     {
       "name": "取消",
@@ -452,42 +499,60 @@
     {
       "name": "停机交接",
       "entry": "RunExecutor.shutdown()",
-      "callers": "进程退出钩子",
-      "description": "停止领取，安全点交接，超时直接中止；别的实例马上领走"
+      "callers": "进程退出钩子（SIGTERM）",
+      "description": "关准入、安全点停下、清租约；剩下的交给别的实例的兜底任务。交接期间续租照常，交接完宿主再停定时任务库。超时直接中止"
+    },
+    {
+      "name": "兜底",
+      "entry": "RecoveryJob.execute(ctx)",
+      "callers": "定时任务库（实例任务，每个实例一份，每 10 秒）",
+      "description": "分页拉候选（每页 10 条），逐个抢锁，抢到就在本实例跑；翻完或者没空槽就停"
     }
   ],
   "decisions": [
     {
-      "decision": "Run 是数据库里的工作，任何实例都能领",
-      "reason": "以前 run 是「接到请求的那个进程里的任务」，进程一死就丢了。现在 run 行建好就是排队状态，入队只发唤醒；进程死了，租约过期后别的实例接着跑，最多丢一轮。"
+      "decision": "run 跟着请求走：哪个实例接到请求，run 就在哪个实例上跑",
+      "reason": "实例前面已经有负载均衡把请求分到各实例，run 在接请求的实例上跑就分摊开了，不用再建一套排队领取（广播唤醒、每个实例定时扫队列）。子 run 跟着父 run、续跑跟着触发它的那一方，也是同一个道理：触发的那一刻就知道要跑什么。"
     },
     {
-      "decision": "领取用 SELECT … FOR UPDATE SKIP LOCKED 再 UPDATE，在同一个事务里",
-      "reason": "多个实例并发领取互不阻塞，也不会领到同一行。不写成 UPDATE … WHERE id = (子查询)：MySQL 不允许 UPDATE 的子查询读同一张表，这样两种方言同一份代码。"
+      "decision": "满了、发版、崩溃、续跑信号丢失都算异常，统一交给兜底任务",
+      "reason": "这几种情况的共同点是「该接手的那一刻没人接」，run 留在库里。只用一套逻辑处理：从库里拉出来、抢锁、跑。不再给「满了」单独做实例间转发，也不给「发版」单独做交接通道。"
+    },
+    {
+      "decision": "兜底任务每个实例都跑，逐个抢锁，抢到的实例自己跑",
+      "reason": "兜底是定时任务库里的实例任务：每个实例一份、不抢行，循环、抖动、出错隔离、停机都由库负责，执行器只写 execute。不用选主：抢锁本身保证一个 run 只被一个实例拿到。抢到要占槽，没空槽就停，剩下的留给别的实例。不能做成集群任务：那样全集群同一时刻只有一个实例在兜底，一个实例崩溃留下的 run 会全压到它身上。"
+    },
+    {
+      "decision": "锁就是 run 行上的租约，不另用 Redis 锁",
+      "reason": "抢锁 = 按 run 号一条 CAS 写 owner 和到期时刻。写进度时本来就要按租约挡住旧实例（围栏）；再加一把 Redis 锁，两处说法可能不一致，Redis 重启还会丢。"
+    },
+    {
+      "decision": "按 id 分页，每页 10 条，没有空槽就停",
+      "reason": "按 id 往后翻，一轮里每条只看一次，抢不到的（别人抢了、挂起的条件其实没满足）不会被反复拉到。每页小，抢锁冲突时浪费也小。没有空槽还继续抢，就会接下跑不动的 run。"
+    },
+    {
+      "decision": "排队中的只取排队超过 5 秒的",
+      "reason": "请求那条路是「建 run 行（排队）→ 马上本实例抢锁」，中间只有几毫秒。兜底任务不碰刚排队的，run 才确实跟着请求走；5 秒后还在排队，说明本实例没接下。"
     },
     {
       "decision": "租约是心跳，不是工作时长上限",
-      "reason": "运行不设到点结束的上限。租约短（30 秒）是为了进程死后尽快被接管；长任务靠每 10 秒续一次一直跑。挂起时清掉租约：等人可以等到第二天，不该占着实例。"
+      "reason": "运行不设到点结束的上限。租约短（30 秒）是为了进程死后尽快被兜底；长任务靠每 10 秒续一次一直跑。挂起时清掉租约：等人可以等到第二天，不该占着实例。"
     },
     {
-      "decision": "一条 SQL 续本实例的全部租约，续不上就立即停",
-      "reason": "逐个续，几十个 run 就是几十条 SQL。续不上说明租约已被别的实例接走（本实例卡顿过久），这时继续跑就是两个实例写同一个 run；检查点的第一条写也会再校验一次。"
+      "decision": "一条 SQL 续本实例的全部租约，作为定时任务库的实例任务续",
+      "reason": "逐个续，几十个 run 就是几十条 SQL。放进每个 run 自己的流程里续也不行：run 大部分时间在等模型和工具，等的时候续不上。交给定时任务库的实例任务，执行器不再自己写循环。续不上说明租约已被别的实例抢走（本实例卡顿过久），这时继续跑就是两个实例写同一个 run；检查点的第一条写也会再校验一次。"
     },
     {
-      "decision": "唤醒只是加速，定时领取扫描兜底",
-      "reason": "Redis 发布订阅不保证送达，订阅断开期间的消息就丢了。定时扫描保证排队的 run 总会被领到，唤醒只让它更快。"
-    },
-    {
-      "decision": "续跑就是重新入队，和新 run 走同一条领取路径",
-      "reason": "原来续跑另有一条领取路径（claim_for_resume），绕过了并发上限，接管、交接的判据也要在两处各写一遍。改成把挂起的 run 放回队列（CAS：挂起 → 排队）再唤醒，哪个实例领到都一样，背压规则只有一套（A2 已改为 RunQueue.requeue）。"
+      "decision": "停机时在安全点停下、清租约，剩下交给兜底任务",
+      "reason": "原生运行时走到「本轮产生的都已落库、没有在跑的工具」再停，不丢工作；CLI 运行时断开即可，那一轮在 Pod 里照常跑。清掉租约后，别的实例的兜底任务最多 10 秒就能抢走，不用等 30 秒过期。"
     },
     {
       "decision": "执行器不自己装配运行时，组合根在外面",
-      "reason": "原来 InProcessExecutor 在构造函数里自己建 HookAssembly 和 NativeRuntime，还把 executor=self 传进装配，让子智能体能起子 run，形成循环依赖。改成运行时由组合根注入；子智能体服务只依赖 RunExecutor.submit 这个接口（A1 已移到组合根 executor/compose.py）。"
+      "reason": "原来 InProcessExecutor 在构造函数里自己建 HookAssembly 和 NativeRuntime，还把 executor=self 传进装配，让子智能体能起子 run，形成循环依赖。改成运行时由组合根注入；子智能体服务只依赖 RunExecutor.dispatch 这个接口。"
     },
     {
-      "decision": "停机时在安全点交接，等不到就中止",
-      "reason": "滚动发布时实例会被替换。原生运行时走到「本轮产生的都已落库、没有在跑的工具」再停，不丢工作；CLI 运行时断开即可，那一轮在 Pod 里照常跑。等不到安全点就中止，最多丢一轮。"
+      "decision": "停机顺序：先交接，再停定时任务库",
+      "reason": "交接要等在跑的 run 走到安全点，可能要几十秒，这期间租约还得续，否则会被别的实例当成崩溃抢走。所以宿主先让执行器交接完，再调定时任务库的 stop()；兜底任务不用等这一步，它在 execute 开头看到「停机中」就返回。"
     }
   ]
 }

@@ -218,11 +218,11 @@
       "kind": "class",
       "name": "RunExecutor",
       "external": true,
-      "source": "Run 执行器 · 调度与租约领域",
+      "source": "Run 执行器 · 派发与租约领域",
       "methods": [
         [
           "+",
-          "submit · cancel"
+          "dispatch · cancel"
         ]
       ],
       "at": [
@@ -292,7 +292,7 @@
       "from": "subSvc",
       "to": "executor",
       "type": "uses",
-      "description": "提交子 run",
+      "description": "派发子 run",
       "labelAt": 0.4
     },
     {
@@ -325,7 +325,7 @@
       "from": "runSvc",
       "to": "executor",
       "type": "uses",
-      "description": "提交、取消"
+      "description": "派发、取消"
     },
     {
       "from": "runSvc",

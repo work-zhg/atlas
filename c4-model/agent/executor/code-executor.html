@@ -33,24 +33,24 @@
   "description": "目标模型，只画期望的样子、不对照现状。Run 执行器的三个领域，每个只画对外入口和关键元素，看依赖方向；领域内部见各自的 code-executor-*.html。",
   "component": "Run 执行器",
   "package": "Run 执行器（目标模型 · 领域总览）",
-  "overview": "Run 执行器把数据库里排队的 run 变成一段段的执行，并保证进程随时死掉也不丢工作。它分三个领域，按一段工作的生命周期排：调度与租约决定由哪个实例跑（CAS 领取、续租、停机交接）；一段的执行与落库跑一段并留下记录（选运行时、事件编号与发布、检查点、收尾）；续跑、接管与取消处理一段结束之后的事（等的事有了结果就放回队列、接管时收拾现场、挂起中被取消的收尾）。\n\n运行时（原生、CLI）经 AgentRuntime 接入；事件经事件中继发布。建 Run、查列表和轨迹归会话管理组件，等人决定的事归审批组件，不在这里。图上每个元素第一行写着它属于哪个领域。",
+  "overview": "Run 执行器把一个个 run 变成一段段的执行，并保证进程随时死掉也不丢工作。它分三个领域，按一段工作的生命周期排：派发与租约决定由哪个实例跑（run 跟着请求走，在接请求的实例上抢锁接手；续租；停机交接；满了、发版、崩溃这类异常由每个实例都跑的兜底任务处理）；一段的执行与落库跑一段并留下记录（选运行时、事件编号与发布、检查点、收尾）；续跑、接管与取消处理一段结束之后的事（等的事有了结果就放回排队、接管时收拾现场、挂起中被取消的收尾）。\n\n运行时（原生、CLI）经 AgentRuntime 接入；事件经事件中继发布；建 Run、查列表和轨迹归会话管理组件，等人决定的事归审批组件，不在这里。图上每个元素第一行写着它属于哪个领域。整体设计见 design-run-dispatch.html。",
   "elements": [
     {
       "id": "iface",
       "kind": "interface",
       "name": "RunExecutor",
       "stereotype": "对外接口",
-      "responsibility": "【调度与租约】组件对外的唯一入口：入队、取消、续跑、停机。调用方不知道 run 会在哪个实例上跑。",
+      "responsibility": "【派发与租约】组件对外的唯一入口：派发、取消、续跑、停机。调用方不管 run 最后在哪个实例上跑。",
       "attributes": [
         [
           "",
-          "领域：调度与租约"
+          "领域：派发与租约"
         ]
       ],
       "methods": [
         [
           "+",
-          "submit · cancel · resume_if_ready · shutdown"
+          "dispatch · cancel · resume_if_ready · shutdown"
         ]
       ],
       "at": [
@@ -63,17 +63,17 @@
       "kind": "class",
       "name": "RunWorker",
       "stereotype": "应用服务",
-      "responsibility": "【调度与租约】一个实例上的执行器：唤醒加定时扫描，在并发上限内 CAS 领取，续租，停机交接。详见 code-executor-scheduling.html。",
+      "responsibility": "【派发与租约】一个实例上的执行器：占槽、按 run 号抢锁（租约），抢到就在本实例跑；续租；停机交接；一段结束后按结局续跑。详见 code-executor-scheduling.html。",
       "attributes": [
         [
           "",
-          "领域：调度与租约"
+          "领域：派发与租约"
         ]
       ],
       "methods": [
         [
           "+",
-          "claim_available() · drain()"
+          "dispatch(run_uuid) · try_take(run_uuid) · drain()"
         ]
       ],
       "at": [
@@ -86,17 +86,17 @@
       "kind": "class",
       "name": "RunQueue",
       "stereotype": "仓储",
-      "responsibility": "【调度与租约】run 表上的领取、续租、交接、放回队列；领取用 SKIP LOCKED，续租一条 SQL 续全部。",
+      "responsibility": "【派发与租约】run 表上的抢锁、续租、交接、放回排队、给兜底任务的候选；抢锁按 run 号 CAS，续租一条 SQL 续全部。",
       "attributes": [
         [
           "",
-          "领域：调度与租约"
+          "领域：派发与租约"
         ]
       ],
       "methods": [
         [
           "+",
-          "claim_next · renew · release · requeue"
+          "take · renew · release · requeue · candidates"
         ]
       ],
       "at": [
@@ -119,7 +119,7 @@
       "methods": [
         [
           "+",
-          "run(run_uuid, *, takeover, drain_signal)"
+          "run(run_uuid, *, takeover, drain_signal) -> SegmentOutcome"
         ]
       ],
       "at": [
@@ -199,7 +199,7 @@
       "kind": "class",
       "name": "Continuation",
       "stereotype": "应用服务",
-      "responsibility": "【续跑、接管与取消】等的事都有结果就放回队列；接管时收拾现场（悬空调用：可接续的重放，其余记结果未知）；挂起中取消的收尾。详见 code-executor-continuation.html。",
+      "responsibility": "【续跑、接管与取消】等的事都有结果就放回排队，派发交回派发与租约；接管时收拾现场（悬空调用：可接续的重放，其余记结果未知）；挂起中取消的收尾。详见 code-executor-continuation.html。",
       "attributes": [
         [
           "",
@@ -209,7 +209,7 @@
       "methods": [
         [
           "+",
-          "resume_if_ready · recover · settle_cancelled"
+          "resume_if_ready · suspended_candidates · recover · settle_cancelled"
         ]
       ],
       "at": [
@@ -226,7 +226,7 @@
       "methods": [
         [
           "+",
-          "create → submit · cancel"
+          "create → dispatch · cancel"
         ]
       ],
       "at": [
@@ -243,7 +243,7 @@
       "methods": [
         [
           "+",
-          "spawn → submit"
+          "spawn → dispatch"
         ]
       ],
       "at": [
@@ -260,12 +260,12 @@
       "methods": [
         [
           "+",
-          "decide → 唤醒"
+          "decide → resume_if_ready"
         ]
       ],
       "at": [
-        6.4,
-        0.55
+        4.1,
+        -1.15
       ]
     },
     {
@@ -273,7 +273,7 @@
       "kind": "class",
       "name": "NativeRuntime",
       "external": true,
-      "source": "审批组件",
+      "source": "原生运行时组件",
       "methods": [
         [
           "+",
@@ -318,6 +318,29 @@
         -2.7,
         4.15
       ]
+    },
+    {
+      "id": "job",
+      "kind": "class",
+      "name": "RecoveryJob",
+      "stereotype": "领域服务",
+      "responsibility": "【派发与租约】兜底任务，定时任务库里的实例任务：每个实例一份、每 10 秒，分页拉候选（每页 10 条），逐个抢锁，抢到就在本实例跑；翻完或者没空槽就停。处理满了没接的、发版交出来的、崩溃后租约过期的、续跑信号丢了的。",
+      "attributes": [
+        [
+          "",
+          "领域：派发与租约"
+        ]
+      ],
+      "methods": [
+        [
+          "+",
+          "execute(ctx)（实例任务）"
+        ]
+      ],
+      "at": [
+        -0.75,
+        0.55
+      ]
     }
   ],
   "relationships": [
@@ -325,7 +348,7 @@
       "from": "runsvc",
       "to": "iface",
       "type": "uses",
-      "description": "入队、取消"
+      "description": "派发、取消"
     },
     {
       "from": "subsvc",
@@ -342,19 +365,19 @@
       "from": "worker",
       "to": "queue",
       "type": "association",
-      "description": "领取、续租、交接"
+      "description": "接手、续租、交接"
     },
     {
       "from": "worker",
       "to": "seg",
       "type": "uses",
-      "description": "领到就跑一段"
+      "description": "接手就跑一段"
     },
     {
       "from": "worker",
       "to": "cont",
       "type": "uses",
-      "description": "挂起中取消"
+      "description": "续跑、挂起中取消"
     },
     {
       "from": "seg",
@@ -401,29 +424,41 @@
       "from": "seg",
       "to": "cont",
       "type": "uses",
-      "description": "接管先收拾、挂起后查条件",
+      "description": "接管先收拾现场",
       "labelAt": 0.62
     },
     {
       "from": "cont",
       "to": "queue",
       "type": "uses",
-      "description": "条件满足：放回队列",
+      "description": "条件满足：放回排队",
       "labelAt": 0.3
     },
     {
       "from": "approval",
-      "to": "cont",
+      "to": "iface",
       "type": "uses",
-      "description": "做了决定"
+      "description": "做了决定：续跑"
+    },
+    {
+      "from": "job",
+      "to": "queue",
+      "type": "uses",
+      "description": "拉候选"
+    },
+    {
+      "from": "job",
+      "to": "worker",
+      "type": "uses",
+      "description": "逐个抢锁"
     }
   ],
   "capabilities": [
     {
-      "name": "入队",
-      "entry": "RunExecutor.submit(run_uuid)",
+      "name": "派发",
+      "entry": "RunExecutor.dispatch(run_uuid)",
       "callers": "会话管理（建 Run、起子 run）",
-      "description": "run 行建好时已在队列里，这里只发唤醒；任何实例都可能领走"
+      "description": "本实例占到槽、抢到锁就当场开跑；占不到就留在库里排队，由兜底任务处理"
     },
     {
       "name": "取消",
@@ -434,24 +469,34 @@
     {
       "name": "续跑",
       "entry": "RunExecutor.resume_if_ready(run_uuid)",
-      "callers": "审批（做了决定）、执行器自己（子 run 结束、挂起落库后、定时补扫）",
-      "description": "等的事都有结果了就放回队列"
+      "callers": "审批（做了决定）、执行器自己（子 run 结束、挂起落库后）",
+      "description": "等的事都有结果了就放回排队，在触发它的实例上抢锁"
     },
     {
       "name": "停机",
       "entry": "RunExecutor.shutdown()",
       "callers": "进程退出钩子",
-      "description": "停止领取，在安全点把在跑的 run 交给别的实例"
+      "description": "关准入，在安全点停下、清租约，剩下的交给别的实例的兜底任务；交接完宿主再停定时任务库"
+    },
+    {
+      "name": "兜底",
+      "entry": "RecoveryJob.execute(ctx)",
+      "callers": "定时任务库（实例任务，每个实例一份，每 10 秒）",
+      "description": "分页拉候选，逐个抢锁，抢到就在本实例跑"
     }
   ],
   "decisions": [
     {
       "decision": "三个领域按「一段工作的生命周期」分：谁来跑 → 跑一段并落库 → 结束之后怎么接着跑",
-      "reason": "调度只关心租约和并发，不知道一段里发生了什么；执行只关心一段内的顺序和落库；续跑只关心挂起、接管、取消之后的收尾。原来三者都在 InProcessExecutor 一个类里，改一处要读懂 1300 行；A1 已按这三个领域拆成 scheduling、segment、continuation。"
+      "reason": "派发只关心由哪个实例跑、租约和并发，不知道一段里发生了什么；执行只关心一段内的顺序和落库；续跑只关心挂起、接管、取消之后的收尾。原来三者都在 InProcessExecutor 一个类里，改一处要读懂 1300 行。"
     },
     {
-      "decision": "依赖方向：调度 → 执行 → 续跑 → 调度的队列；续跑不依赖执行",
-      "reason": "续跑满足条件后只是把 run 放回队列，由调度重新领取，不直接调执行；执行在接管和挂起时调续跑。这样没有环，续跑的入口（审批、子 run、补扫）也都汇到同一条领取路径。"
+      "decision": "run 跟着请求走，异常由每个实例都跑的兜底任务处理",
+      "reason": "实例前面已经有负载均衡，run 在接请求的实例上跑就分摊开了，不再需要排队领取（广播唤醒、每个实例定时扫队列）。满了、发版、崩溃都算异常：每个实例的兜底任务从库里分页拉候选、逐个抢锁，抢到的自己跑，不用选主、不用转发。兜底和续租都是定时任务库的实例任务，执行器只写 execute。"
+    },
+    {
+      "decision": "依赖方向：派发 → 执行、派发 → 续跑 → 派发的仓储；执行只在接管时用续跑",
+      "reason": "续跑满足条件后只是把 run 放回排队，派发由派发与租约做，续跑不直接调执行；一段结束后把结局交回派发与租约，由它决定续谁、派发到哪。这样没有环，续跑的入口（审批、子 run、兜底任务）也都汇到同一条派发路径。"
     },
     {
       "decision": "运行时经 AgentRuntime 接入，由组合根注册",
@@ -463,7 +508,7 @@
     },
     {
       "decision": "不设到点结束的超时",
-      "reason": "租约是心跳，长任务靠续租一直跑；挂起不占实例，等人可以等到第二天；定时补扫只补丢掉的唤醒，不替用户做决定。"
+      "reason": "租约是心跳，长任务靠续租一直跑；挂起不占实例，等人可以等到第二天；兜底任务只补丢掉的接手，不替用户做决定。"
     }
   ]
 }
