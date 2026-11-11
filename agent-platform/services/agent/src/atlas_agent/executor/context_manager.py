@@ -22,6 +22,7 @@ from atlas_agent.executor.context import load_instructions
 from atlas_agent.executor.segment_data import Segment
 
 from ..config import Settings
+from ..domain.workspace_layout import WorkspaceLayout
 from ..repositories.model_catalog import ModelCatalogRepository
 from ..services.compaction import make_failure_hook, make_persist_hook, thread_summarizer
 from .run_models import ModelBuilder, models_of
@@ -83,6 +84,10 @@ class ContextManager:
                 batch_cap_tokens=self._settings.context_batch_cap_tokens,
                 reminder_sources=sources,
                 limits=await self._limits_for(segment, workspace=workspace),
+                # ★ 外置的东西放进所用工作区下本会话的隐藏目录：跟着工作区走，各会话分开；
+                #   列目录、搜索默认跳过它
+                offload_dir=f"{_atlas_dir(segment)}/large_tool_results",
+                input_dir=f"{_atlas_dir(segment)}/conversation_history",
             ),
         )
 
@@ -139,3 +144,10 @@ class ContextManager:
             endpoint=models_of(segment, self._settings).endpoint,
             provider=spec.model.provider,
         )
+
+
+def _atlas_dir(segment: Segment) -> str:
+    """本会话的隐藏目录在沙箱里的路径（/data/{根会话}/workspace/.atlas/{会话}）。"""
+    t = segment.thread
+    layout = WorkspaceLayout.of(t.created_by_uuid, t.thread_uuid, t.workspace_thread_id)
+    return layout.real(layout.atlas_dir)

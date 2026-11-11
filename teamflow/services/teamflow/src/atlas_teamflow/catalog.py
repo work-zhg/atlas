@@ -69,13 +69,23 @@ MENUS: list[dict[str, Any]] = [
         "path": "/settings",
         "parent": "sys",
     },
+    {
+        "type": "menu",
+        "code": "jobs",
+        "name": "定时任务",
+        "icon": "⏱",
+        "path": "/jobs",
+        "parent": "sys",
+    },
 ]
 
 ROLES: list[dict[str, Any]] = [
     {
         "code": "TF_PLATFORM_ADMIN",
         "name": "平台管理员",
-        "description": "系统设置（流程模板、文件模板、集成配置）；新建团队、调整任意团队的管理员",
+        "description": (
+            "系统设置（流程模板、文件模板、集成配置、定时任务）；新建团队、调整任意团队的管理员"
+        ),
         "operations": [
             "flow_template:view",
             "flow_template:manage",
@@ -87,7 +97,7 @@ ROLES: list[dict[str, Any]] = [
             "team:member",
             "settings:manage",
         ],
-        "menus": ["sys", "flow_tpl", "file_tpl", "settings"],
+        "menus": ["sys", "flow_tpl", "file_tpl", "settings", "jobs"],
     },
     {
         "code": "TF_TEAM_ADMIN",

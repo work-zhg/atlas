@@ -20,13 +20,17 @@ function Section({
   id,
   title,
   desc,
+  bare,
   children,
 }: {
   id?: string;
   title: string;
   desc?: string;
+  /** 放在编辑页的折叠分组里：不要自己的标题和说明 */
+  bare?: boolean;
   children: React.ReactNode;
 }) {
+  if (bare) return <>{children}</>;
   return (
     <div id={id} className={styles.section}>
       <h2 className={styles.sectionTitle}>{title}</h2>
@@ -49,11 +53,13 @@ export function SkillsSection({
   catalog,
   readOnly,
   onChange,
+  bare,
 }: {
   skills: SkillRefIn[];
   catalog: SkillListOut | undefined;
   readOnly: boolean;
   onChange: (skills: SkillRefIn[]) => void;
+  bare?: boolean;
 }) {
   const configured = catalog?.directory_configured ?? false;
   const bySlug = useMemo(() => new Map((catalog?.data ?? []).map((s) => [s.slug, s])), [catalog]);
@@ -65,11 +71,7 @@ export function SkillsSection({
   const budget = skills.reduce((n, s) => n + (bySlug.get(s.slug)?.description?.length ?? 0), 0);
 
   return (
-    <Section
-      id="e-skills"
-      title="技能"
-      desc="可复用的工作方法。只有描述常驻上下文，正文在模型选中时才读取；保存时版本钉死，建会话时拷进会话的 /skills/。"
-    >
+    <Section id="e-skills" title="技能" desc="让它按固定的方法完成某类工作" bare={bare}>
       {!configured && (
         <Alert
           type="info"
@@ -214,17 +216,15 @@ const KEY_STATUS: Record<string, string> = {
 function McpSubjectBanner({ subject }: { subject: McpSubjectInfo }) {
   const keyOk = subject.key_status === "active";
   return (
-    <div style={{ marginBottom: 12, fontSize: 12, color: "var(--fg-2)" }}>
-      <div>
-        MCP 服务按这个智能体的 MCP Key 列出（与权限类型无关） ·{" "}
-        <Tag color={keyOk ? "success" : "warning"} style={{ marginInlineEnd: 0 }}>
-          {KEY_STATUS[subject.key_status] ?? subject.key_status}
-        </Tag>
-      </div>
+    <div style={{ marginBottom: 12, fontSize: 12.5, color: "var(--fg-2)" }}>
+      {!keyOk && (
+        <div>
+          这个智能体暂时用不了外部工具（{KEY_STATUS[subject.key_status] ?? subject.key_status}），请联系管理员
+        </div>
+      )}
       {subject.hidden_servers > 0 && (
         <div style={{ marginTop: 4 }}>
-          另有 {subject.hidden_servers} 个私有 MCP 服务这个智能体的 Key 没有被授权，需要的话请联系服务所有者或 MCP 管理员在
-          MCP 网关的「API Key · 智能体 Key」里分配
+          另有 {subject.hidden_servers} 个服务没有开放给这个智能体，需要的话请联系服务负责人
         </div>
       )}
       {subject.notes.map((n) => (
@@ -246,7 +246,9 @@ export function McpToolsSection({
   readOnly,
   onToggle,
   onPolicy,
+  bare,
 }: {
+  bare?: boolean;
   tools: ToolInfo[];
   /** 经 MCP 网关时才有 */
   subject?: McpSubjectInfo | null;
@@ -269,15 +271,11 @@ export function McpToolsSection({
   const missing = picked.filter((n) => n.startsWith("mcp:") && !known.has(n));
 
   return (
-    <Section
-      id="e-mcp"
-      title="MCP"
-      desc="外部服务提供的工具，模型侧名为 server__tool。保存时记录每个工具当时的定义指纹，之后定义变了运行时会提示。"
-    >
+    <Section id="e-mcp" title="工具" desc="连接外部系统，例如搜索网页、查询客户、创建工单" bare={bare}>
       {subject && <McpSubjectBanner subject={subject} />}
       {groups.length === 0 && !subject && (
         <p className={styles.toolDesc}>
-          还没有可用的 MCP server —— 到 <Link href="/mcp">MCP 页</Link> 查看。
+          还没有能用的外部工具 —— 到 <Link href="/mcp">MCP</Link> 看看有哪些服务。
         </p>
       )}
       {missing.length > 0 && (
@@ -353,7 +351,7 @@ export function McpToolsSection({
       })}
       {groups.length > 0 && (
         <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--fg-2)" }}>
-          定义与保存时不一致时
+          工具定义有变化时
           <Select
             size="small"
             style={{ width: 260 }}

@@ -14,7 +14,7 @@ const config: NextConfig = {
   //   不钉死的话 Next 会向上搜索 lockfile，可能一路找到 ~/package-lock.json。
   outputFileTracingRoot: path.join(__dirname, "../.."),
   // antd v5 的 ESM 产物需要 Next 转译，否则 App Router 下会报 ESM/CJS 混用
-  transpilePackages: ["@atlas/chat-ui", "antd", "@ant-design/icons", "rc-util", "rc-picker", "rc-tree", "rc-table"],
+  transpilePackages: ["@atlas/chat-ui", "@atlas/appconfig-ui", "@atlas/jobs-ui", "antd", "@ant-design/icons", "rc-util", "rc-picker", "rc-tree", "rc-table"],
 };
 
 export default config;

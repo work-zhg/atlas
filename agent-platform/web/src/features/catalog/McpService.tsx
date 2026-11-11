@@ -27,6 +27,7 @@ import {
   Typography,
 } from "antd";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 
 import { useMcpServer } from "@/api/catalog";
@@ -50,6 +51,7 @@ import {
   useGwToolActions,
 } from "@/api/mcp-gateway";
 import { Icon } from "@/components/Icon";
+import pageStyles from "@/features/agents/agents.module.css";
 import { relativeTime } from "@/lib/format";
 import styles from "./catalog.module.css";
 import {
@@ -78,7 +80,8 @@ import { ServiceGrants } from "./McpGrants";
 
 const json = (v: unknown) => JSON.stringify(v, null, 2);
 
-export function ServiceDetail({ name, me, onClose }: { name: string; me: GwMe; onClose: () => void }) {
+export function ServiceDetail({ name, me }: { name: string; me: GwMe }) {
+  const router = useRouter();
   const { modal, message } = AntdApp.useApp();
   const detailQ = useGwService(name);
   const actions = useGwServiceActions(name);
@@ -87,10 +90,14 @@ export function ServiceDetail({ name, me, onClose }: { name: string; me: GwMe; o
   const d = detailQ.data;
 
   if (!d) {
-    return detailQ.error ? (
-      <Alert type="error" showIcon message={detailQ.error.message} />
-    ) : (
-      <Skeleton active paragraph={{ rows: 10 }} />
+    return (
+      <div className={pageStyles.body}>
+        {detailQ.error ? (
+          <Alert type="error" showIcon message={detailQ.error.message} />
+        ) : (
+          <Skeleton active paragraph={{ rows: 10 }} />
+        )}
+      </div>
     );
   }
 
@@ -100,8 +107,7 @@ export function ServiceDetail({ name, me, onClose }: { name: string; me: GwMe; o
           title: `停用「${d.display_name}」`,
           okText: "停用",
           okButtonProps: { danger: true },
-          content:
-            "停用后经网关的调用都会被拒绝（service_disabled），Atlas 编辑器里也选不到。授权和工具定义保留，重新启用后恢复。服务不能删除：服务名是工具名前缀、用户中心里的数据标识、智能体配置里的引用。",
+          content: "停用后所有人和智能体都调不了它，配置智能体时也选不到。授权和工具保留，重新启用后恢复。",
           onOk: () =>
             actions.setEnabled.mutateAsync(false).then(
               () => message.success("已停用"),
@@ -116,53 +122,52 @@ export function ServiceDetail({ name, me, onClose }: { name: string; me: GwMe; o
   const endpoint = me.public_url ? `${me.public_url}/mcp/${d.name}` : null;
   const items = [
     { key: "tools", label: `工具 ${d.tools.length}`, children: <ToolsTab service={d} me={me} /> },
-    ...(d.can_assign
-      ? [{ key: "grants", label: d.visibility === "public" ? "所有者" : "授权", children: <ServiceGrants service={d} /> }]
-      : []),
-    ...(d.can_assign || d.can_manage ? [{ key: "conn", label: "连接与凭据", children: <ConnTab service={d} /> }] : []),
-    { key: "refs", label: "被引用", children: <RefsTab name={d.name} /> },
+    ...(d.can_assign ? [{ key: "grants", label: "谁能用", children: <ServiceGrants service={d} /> }] : []),
+    ...(d.can_assign || d.can_manage ? [{ key: "conn", label: "连接设置", children: <ConnTab service={d} /> }] : []),
+    { key: "refs", label: "在用的智能体", children: <RefsTab name={d.name} /> },
   ];
 
   return (
-    <>
-      <div className={styles.detailHead}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <h2 className={styles.detailTitle}>
-            {d.display_name} <span className={styles.sub}>{d.name}</span>
-          </h2>
-          <div style={{ marginTop: 6 }}>
-            <KindTag kind={d.kind} />
-            <VisibilityTag visibility={d.visibility} />
-            {d.enabled ? <Tag color="success">启用</Tag> : <Tag>已停用</Tag>}
+    <div className={pageStyles.page}>
+      <header className={pageStyles.head}>
+        <div className={pageStyles.titleRow}>
+          <Button type="text" icon={<Icon name="left" size={16} />} onClick={() => router.push("/mcp")} aria-label="返回" />
+          <span className={pageStyles.avatar} style={{ background: "#e0f2fe", color: "#0369a1" }}>
+            <Icon name="plug" size={18} />
+          </span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <h1 className={pageStyles.title} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              {d.display_name}
+              {d.visibility === "public" ? <Tag>公开</Tag> : <Tag>需授权</Tag>}
+              {!d.enabled && <Tag>已停用</Tag>}
+            </h1>
+            <div className={styles.muted} style={{ fontSize: 13 }}>
+              {d.description || <span style={{ fontFamily: "var(--mono)" }}>{d.name}</span>}
+            </div>
           </div>
+          {d.can_manage && (
+            <Space>
+              <Button onClick={() => setEditing(true)}>编辑</Button>
+              <Button danger={d.enabled} loading={actions.setEnabled.isPending} onClick={toggle}>
+                {d.enabled ? "停用" : "启用"}
+              </Button>
+            </Space>
+          )}
         </div>
-        {d.can_manage && (
-          <Space>
-            <Button size="small" onClick={() => setEditing(true)}>
-              编辑
-            </Button>
-            <Button size="small" danger={d.enabled} loading={actions.setEnabled.isPending} onClick={toggle}>
-              {d.enabled ? "停用" : "启用"}
-            </Button>
-          </Space>
+      </header>
+      <div className={pageStyles.body} style={{ paddingTop: 4 }}>
+        {endpoint && (
+          <div className={styles.muted} style={{ fontSize: 12.5 }}>
+            在 Claude Code、Cursor 里使用的地址：
+            <Typography.Text copyable={{ text: endpoint }} code>
+              {endpoint}
+            </Typography.Text>
+          </div>
         )}
-        <Button size="small" type="text" icon={<Icon name="x" size={14} />} onClick={onClose} />
+        <Tabs style={{ marginTop: 4 }} activeKey={tab} onChange={setTab} items={items} />
       </div>
-      {d.description && <p className={styles.muted}>{d.description}</p>}
-      <div className={styles.muted} style={{ fontSize: 12 }}>
-        外部客户端地址：
-        {endpoint ? (
-          <Typography.Text copyable={{ text: endpoint }} code>
-            {endpoint}
-          </Typography.Text>
-        ) : (
-          "MCP 网关还没对集群外开放（请咨询管理员）"
-        )}
-        {" · "}登记于 {fmtTime(d.created_at)}
-      </div>
-      <Tabs style={{ marginTop: 8 }} activeKey={tab} onChange={setTab} items={items} />
       {editing && <EditServiceModal service={d} onClose={() => setEditing(false)} />}
-    </>
+    </div>
   );
 }
 
@@ -178,7 +183,7 @@ function mappingCell(s: GwServiceDetail, t: GwTool) {
         {m.stream && m.stream !== "unary" ? <Tag style={{ marginLeft: 4 }}>{STREAM_LABEL[String(m.stream)]}</Tag> : null}
       </span>
     );
-  return <span className={styles.muted}>上游同名工具</span>;
+  return <span className={styles.muted}>服务自带</span>;
 }
 
 function ToolStatus({ t }: { t: GwTool }) {
@@ -224,7 +229,7 @@ function ToolsTab({ service: s, me }: { service: GwServiceDetail; me: GwMe }) {
       title: `停用工具 ${t.name}`,
       okText: "停用",
       okButtonProps: { danger: true },
-      content: "停用后对所有 Key 都不可用（tools/list 不再返回，调用被拒绝），和授权无关；授权保留，重新启用后恢复。",
+      content: "停用后所有人和智能体都用不了这个工具；授权保留，重新启用后恢复。",
       onOk: () =>
         tools.setEnabled.mutateAsync({ tool: t.name, on: false }).then(
           () => message.success(`已停用 ${s.name} · ${t.name}`),
@@ -233,8 +238,8 @@ function ToolsTab({ service: s, me }: { service: GwServiceDetail; me: GwMe }) {
     });
 
   const head = {
-    mcp: `工具定义从上游拉取 · 上次 ${relativeTime(s.fetched_at)} · 上游新增的工具拉到就能用`,
-    rest: `${specUrl ? `从 OpenAPI 导入：${specUrl}` : "手工定义"} · 工具定义由网关维护，保存后生效`,
+    mcp: `${relativeTime(s.fetched_at)}同步 · 服务新增的工具同步后就能用`,
+    rest: `${specUrl ? `从接口文档导入：${specUrl}` : "手工填写"} · 保存后生效`,
     grpc: `${s.connection.discovery === "descriptor" ? "描述文件" : "服务端反射"}发现${services.length ? `：${services.join("、")}` : ""} · 描述、副作用可以改`,
   }[s.kind];
 
@@ -255,7 +260,7 @@ function ToolsTab({ service: s, me }: { service: GwServiceDetail; me: GwMe }) {
             disabled={!s.enabled}
             onClick={() =>
               actions.refresh.mutate(undefined, {
-                onSuccess: () => message.success("已从上游重新拉取工具定义"),
+                onSuccess: () => message.success("已同步工具"),
                 onError: (e) => message.error(e.message),
               })
             }
@@ -336,13 +341,9 @@ function ToolsTab({ service: s, me }: { service: GwServiceDetail; me: GwMe }) {
       />
       {s.removed_tools.length > 0 && (
         <p className={styles.muted} style={{ marginTop: 8 }}>
-          上游已删除：<span className={styles.del}>{s.removed_tools.join("、")}</span>（引用它们的智能体运行时会提示缺工具）
+          服务已删除：<span className={styles.del}>{s.removed_tools.join("、")}</span>（用到它们的智能体会提示缺工具）
         </p>
       )}
-      <p className={styles.muted} style={{ fontSize: 12, marginTop: 8 }}>
-        tools/list 由网关按已存的定义生成，并按 Key 的权限过滤{s.kind === "mcp" ? "，不转发给上游" : ""}。停用的工具对所有 Key
-        都不可用，和授权无关。
-      </p>
       {viewing && <ToolModal service={s} tool={viewing === "new" ? null : viewing} onClose={() => setViewing(undefined)} />}
       {trying && <TryModal service={s} tool={trying} me={me} onClose={() => setTrying(undefined)} />}
       {rediscovering && <RediscoverModal service={s} onClose={() => setRediscovering(false)} />}
@@ -453,7 +454,7 @@ function ToolModal({ service: s, tool: t, onClose }: { service: GwServiceDetail;
           <span>副作用</span>
           <span>
             <EffectTag effect={t.effect} />
-            {s.kind === "mcp" && <span className={styles.muted}>取自上游注解；上游没标注只读的按「有副作用」处理</span>}
+            {s.kind === "mcp" && <span className={styles.muted}>服务没标注只读的，按「会修改数据」处理</span>}
           </span>
         </div>
         <div className={styles.kv}>
@@ -471,7 +472,7 @@ function ToolModal({ service: s, tool: t, onClose }: { service: GwServiceDetail;
               <code>{`${String(m.method ?? "")}（${STREAM_LABEL[String(m.stream)] ?? ""}）`}</code>
             ) : (
               <>
-                上游 <code>{String(s.connection.url ?? "")}</code> 的同名工具
+                <code>{String(s.connection.url ?? "")}</code> 的同名工具
               </>
             )}
           </span>
@@ -480,7 +481,7 @@ function ToolModal({ service: s, tool: t, onClose }: { service: GwServiceDetail;
         <div className={styles.secTitle}>参数</div>
         <ParamTable schema={t.input_schema} />
         <details style={{ marginTop: 12 }}>
-          <summary className={styles.muted}>MCP 工具定义（tools/list 返回给调用方的）</summary>
+          <summary className={styles.muted}>模型看到的工具定义</summary>
           <pre className={styles.code}>{json({ ...preview, annotations: t.annotations ?? preview.annotations })}</pre>
         </details>
       </Modal>
@@ -549,11 +550,11 @@ function ToolModal({ service: s, tool: t, onClose }: { service: GwServiceDetail;
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
         <FormField
           label="工具名"
-          hint={isNew ? "保存后不能改：它是智能体配置里的引用、用户中心里工具级授权的数据标识" : "不能修改"}
+          hint={isNew ? "保存后不能修改" : "不能修改"}
         >
           <Input value={name} disabled={!isNew} onChange={(e) => setName(e.target.value.trim())} placeholder="小写字母、数字、下划线" />
         </FormField>
-        <FormField label="副作用" hint="写进 MCP 工具注解；Atlas 审批按它判断要不要确认">
+        <FormField label="副作用" hint="会修改数据的工具，执行前可以要求确认">
           <Select
             value={effect}
             onChange={setEffect}
@@ -646,7 +647,7 @@ function ToolModal({ service: s, tool: t, onClose }: { service: GwServiceDetail;
               ＋ 添加参数
             </Button>
             <span className={styles.muted} style={{ fontSize: 12 }}>
-              填了固定值的参数每次都按固定值发给上游，不出现在工具参数里
+              填了固定值的参数每次都按固定值调用，模型看不到它
             </span>
           </div>
           <div className={styles.secTitle}>结果</div>
@@ -691,7 +692,7 @@ function ToolModal({ service: s, tool: t, onClose }: { service: GwServiceDetail;
         )
       )}
       <details style={{ marginTop: 12 }}>
-        <summary className={styles.muted}>MCP 工具定义预览（tools/list 返回给调用方的）</summary>
+        <summary className={styles.muted}>模型看到的工具定义（预览）</summary>
         <pre className={styles.code}>{json(preview)}</pre>
       </details>
     </Modal>
@@ -810,7 +811,7 @@ function TryModal({ service: s, tool: t, me, onClose }: { service: GwServiceDeta
         label="用哪把 Key 调用"
         hint={
           <>
-            和真实调用一样：认 Key → 以 Key 的主体作 X-Auth-Uid 调用户中心判权 → 调上游。
+            按这把 Key 的权限调用，和真实调用一样。
             {t.effect !== "read" && <b> 这个工具有副作用，会真的执行。</b>}
           </>
         }
@@ -828,7 +829,7 @@ function TryModal({ service: s, tool: t, me, onClose }: { service: GwServiceDeta
       {out && !("parse" in out) && (
         <>
           <div className={styles.secTitle}>
-            {out.error ? (out.error.data?.forwarded ? "上游返回了错误" : "网关直接返回（没有转发给上游）") : "返回给调用方的 MCP 结果"}
+            {out.error ? (out.error.data?.forwarded ? "服务返回了错误" : "没有调到服务") : "调用结果"}
           </div>
           <pre className={styles.code}>{json(out.error ?? out.result)}</pre>
           {out.trace_id && (
@@ -848,7 +849,7 @@ function ConnTab({ service: s }: { service: GwServiceDetail }) {
   const { message } = AntdApp.useApp();
   const actions = useGwServiceActions(s.name);
   const [editing, setEditing] = useState<"conn" | "cred">();
-  const ids = s.kind === "grpc" ? "metadata x-auth-uid（Key 的主体）、x-uid（使用者）" : "请求头 X-Auth-Uid（Key 的主体）、X-Uid（使用者）";
+  const ids = s.kind === "grpc" ? "metadata x-auth-uid、x-uid（使用者）" : "请求头 X-Auth-Uid、X-Uid（使用者）";
   const traceparent = { mcp: "请求头 traceparent，并写进 params._meta", rest: "请求头 traceparent", grpc: "metadata traceparent" }[s.kind];
 
   return (
@@ -886,7 +887,7 @@ function ConnTab({ service: s }: { service: GwServiceDetail }) {
       </div>
       <div>
         <div className={styles.secTitle}>
-          上游凭据与透传
+          认证与身份传递
           <span style={{ flex: 1 }} />
           {s.can_manage && (
             <Button size="small" onClick={() => setEditing("cred")}>
@@ -895,7 +896,7 @@ function ConnTab({ service: s }: { service: GwServiceDetail }) {
           )}
         </div>
         <div className={styles.kv}>
-          <span>上游凭据</span>
+          <span>服务凭据</span>
           <span>{credentialLabel(s.credential)}</span>
         </div>
         <div className={styles.kv}>
@@ -908,7 +909,7 @@ function ConnTab({ service: s }: { service: GwServiceDetail }) {
         </div>
         <div className={styles.kv}>
           <span>调用方的 Key</span>
-          <span>不转发：网关认完 Key 就去掉 Authorization</span>
+          <span>不会传给服务</span>
         </div>
       </div>
       {editing === "conn" && <ConnectionModal service={s} onClose={() => setEditing(undefined)} />}
@@ -957,14 +958,14 @@ function CredentialModal({ service: s, onClose }: { service: GwServiceDetail; on
     <Modal
       open
       width={640}
-      title={`替换上游凭据 · ${s.display_name}`}
+      title={`替换凭据 · ${s.display_name}`}
       okText="保存"
       okButtonProps={{ loading: actions.credential.isPending }}
       onCancel={onClose}
       onOk={() =>
         actions.credential.mutate(credentialBody(credential), {
           onSuccess: () => {
-            message.success("已替换上游凭据：从下一次调用开始用");
+            message.success("已替换凭据，下一次调用开始生效");
             onClose();
           },
           onError: (e) => message.error(e.message),
@@ -1036,7 +1037,7 @@ function RefsTab({ name }: { name: string }) {
   const refsQ = useMcpServer(name);
   const refs = (refsQ.data?.referenced_by ?? []) as Array<Record<string, unknown>>;
   if (refsQ.isPending) return <Skeleton active paragraph={{ rows: 3 }} />;
-  if (refsQ.error) return <Alert type="warning" showIcon message={`Atlas 暂时取不到引用：${refsQ.error.message}`} />;
+  if (refsQ.error) return <Alert type="warning" showIcon message={`暂时看不到在用的智能体：${refsQ.error.message}`} />;
   if (!refs.length) return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有智能体引用它" />;
   return (
     <>

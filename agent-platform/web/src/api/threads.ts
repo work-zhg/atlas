@@ -150,3 +150,33 @@ export async function downloadThreadFile(threadId: string, path: string): Promis
   a.click();
   URL.revokeObjectURL(url);
 }
+
+/**
+ * 发消息前添加的文件：放进会话工作区的 uploads/ 下，返回在工作区里的路径（消息里附上它）。
+ * ★ 走 fetch：请求体是文件原文，不是 JSON。
+ */
+export async function uploadThreadFile(threadId: string, file: File): Promise<string> {
+  const path = `uploads/${file.name}`;
+  const res = await fetch(apiUrl(`/v1/threads/${threadId}/files`, { path }), {
+    method: "PUT",
+    headers: authHeaders(),
+    body: file,
+  });
+  if (!res.ok) {
+    let detail = `${res.status}`;
+    try {
+      const body = (await res.json()) as { error?: { message?: string } };
+      detail = body.error?.message ?? detail;
+    } catch {
+      // 不是 JSON：用状态码
+    }
+    throw new Error(`「${file.name}」上传失败：${detail}`);
+  }
+  return ((await res.json()) as { path: string }).path;
+}
+
+/** 附件路径并进消息正文：智能体按路径去工作区里读（与对话页同一种写法） */
+export function withAttachments(text: string, paths: string[]): string {
+  if (paths.length === 0) return text;
+  return `${text}\n\n附件：\n${paths.map((p) => `- ${p}`).join("\n")}`;
+}

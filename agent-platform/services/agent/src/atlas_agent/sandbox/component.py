@@ -30,7 +30,7 @@ from .exec import ExecutionLedger
 from .native import ImagePolicy, NativeSandboxKind, NativeSandboxService
 from .provisioning.model import QuotaPolicy
 from .provisioning.service import SandboxProvisioning
-from .session_pod import CliPodKind, SessionPods
+from .session_pod import BridgeLauncher, CliPodKind, SessionPods
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -113,7 +113,7 @@ class SandboxComponent:
             bench_available=settings.opensandbox_bench_url is not None,
         )
         provisioning.register(NativeSandboxKind(settings, exec, images))
-        provisioning.register(CliPodKind(settings, runtime, egress, transport=transport))
+        provisioning.register(CliPodKind(settings, egress, exec))
 
         async def open_runs(thread_uuid: UUID) -> tuple[bool, datetime | None]:
             from ..repositories.run import RunRepository
@@ -128,6 +128,11 @@ class SandboxComponent:
             egress=egress,
             provisioning=provisioning,
             native=NativeSandboxService(provisioning, exec, idle_ttl_s=settings.sandbox_idle_ttl_s),
-            pods=SessionPods(provisioning, runtime, settings, runs=open_runs),
-            ledger=ExecutionLedger(redis),
+            pods=SessionPods(
+                provisioning,
+                BridgeLauncher(settings, runtime, exec, transport=transport),
+                settings,
+                runs=open_runs,
+            ),
+            ledger=ExecutionLedger(sessions, redis),
         )

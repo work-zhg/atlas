@@ -376,6 +376,7 @@ class RecoveryJob(Job):
     """
 
     type = "agent.run_recovery"
+    description = "兜底 run"
 
     def __init__(
         self,
@@ -448,6 +449,7 @@ class LeaseRenewer(Job):
     """
 
     type = "agent.run_lease_renewer"
+    description = "续租 run"
 
     def __init__(
         self,

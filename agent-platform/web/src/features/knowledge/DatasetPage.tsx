@@ -13,6 +13,7 @@ import {
   Form,
   Input,
   InputNumber,
+  Modal,
   Popconfirm,
   Radio,
   Segmented,
@@ -55,44 +56,59 @@ import { RetrievalFunnel } from "./RetrievalFunnel";
 import { SharingTab } from "./SharingTab";
 
 export function DatasetPage({ datasetId }: { datasetId: string }) {
+  const router = useRouter();
   const { data: ds, error } = useDataset(datasetId);
+  const { data: me } = useMe();
   const [tab, setTab] = useState("documents");
+  const [sharing, setSharing] = useState(false);
 
   if (error) return <Alert type="error" showIcon message={(error as Error).message} style={{ margin: 24 }} />;
   if (!ds) return null;
   return (
-    <div style={{ flex: 1, overflow: "auto", padding: "20px 28px" }}>
-      <Link href="/knowledge" style={{ fontSize: 13, color: "var(--fg-3)" }}>
-        ← 知识库
-      </Link>
-      <div style={{ display: "flex", gap: 12, alignItems: "center", margin: "8px 0 4px" }}>
-        <span style={{ fontSize: 28 }}>{ds.icon}</span>
-        <div>
+    <div style={{ flex: 1, overflow: "auto", padding: "22px 32px 48px" }}>
+      <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+        <Button type="text" icon={<Icon name="left" size={16} />} onClick={() => router.push("/knowledge")} aria-label="返回" />
+        <span
+          style={{ width: 40, height: 40, borderRadius: 10, background: "var(--primary-soft)", display: "grid", placeItems: "center", fontSize: 20, flex: "none" }}
+        >
+          {ds.icon}
+        </span>
+        <div style={{ flex: 1, minWidth: 0 }}>
           <Typography.Title level={4} style={{ margin: 0 }}>
             {ds.name}
+            {ds.review_required && (
+              <Tag color="gold" style={{ marginLeft: 8, verticalAlign: 3 }}>
+                需审核
+              </Tag>
+            )}
           </Typography.Title>
-          <Typography.Text type="secondary" style={{ fontSize: 13 }}>
-            {ds.description || "暂无描述"}
-          </Typography.Text>
+          <div style={{ fontSize: 13, color: "var(--fg-3)", marginTop: 2 }}>
+            {ds.description || "（没有描述）"}
+          </div>
+          <div style={{ fontSize: 12.5, color: "var(--fg-3)", marginTop: 4 }}>
+            {ds.document_count} 份文档 · {ds.word_count.toLocaleString()} 字 ·{" "}
+            {ds.owner_id === me?.id ? "我创建的" : ds.my_level ? `我${LEVEL_LABEL[ds.my_level]}` : ""}
+          </div>
         </div>
+        {ds.owner_kind !== "service" && (
+          <Button icon={<Icon name="share" size={14} />} onClick={() => setSharing(true)}>
+            共享
+          </Button>
+        )}
       </div>
-      <Space size={4} style={{ marginBottom: 8 }}>
-        {ds.my_level && <Tag>{LEVEL_LABEL[ds.my_level]}</Tag>}
-        <Tag>{ds.doc_form === "hierarchical_model" ? "父子分段" : "通用分段"}</Tag>
-        <Tag>{METHOD_LABEL[ds.retrieval_config.search_method]}</Tag>
-        <Tag>{ds.embedding_model}</Tag>
-        {ds.review_required && <Tag color="gold">入库审核</Tag>}
-      </Space>
       <Tabs
+        style={{ marginTop: 12 }}
         activeKey={tab}
         onChange={setTab}
         items={[
           { key: "documents", label: "文档", children: <DocumentsTab ds={ds} /> },
-          { key: "hit", label: "召回测试", children: <HitTestingTab ds={ds} /> },
-          { key: "sharing", label: "共享", children: <SharingTab ds={ds} /> },
+          { key: "hit", label: "检索测试", children: <HitTestingTab ds={ds} /> },
           { key: "settings", label: "设置", children: <SettingsTab ds={ds} /> },
         ]}
       />
+      <Modal open={sharing} title="共享" footer={null} width={680} onCancel={() => setSharing(false)} destroyOnHidden>
+        <SharingTab ds={ds} />
+      </Modal>
     </div>
   );
 }

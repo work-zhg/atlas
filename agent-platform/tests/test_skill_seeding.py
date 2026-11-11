@@ -1,7 +1,7 @@
-"""技能随会话拷贝进 .skills/。
+"""技能拷进这个人的技能目录 {user}/skills/{slug}/{版本}/（沙箱里是 /data/skills/…）。
 
-三个层级各验一遍 —— L3（含可执行脚本）是这条路径的关键：技能进了工作区
-之后，沙箱挂的就是同一份数据，脚本在容器里天然有真实路径。
+三个层级各验一遍 —— L3（含可执行脚本）是这条路径的关键：技能在 /data 下，沙箱挂的就是同一份
+数据，脚本在容器里天然有真实路径。一个人一份、缺了才拷、拷完写完成标记。
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ import boto3
 import pytest
 from atlas_agent.providers.filesystem import Workspace
 from atlas_agent.providers.filesystem.skill_copy import (
+    COMPLETE_MARKER,
     SkillMeta,
     SkillUnavailable,
     seed_session_skills,
@@ -27,8 +28,12 @@ def env():
     with mock_aws():
         s3 = boto3.client("s3", region_name="us-east-1")
         s3.create_bucket(Bucket=BUCKET)
-        fs = Workspace(s3, bucket=BUCKET, user_id=USER, thread_id=uuid4())
-        yield s3, fs
+        yield s3
+
+
+def _ws(s3, *skills: tuple[str, int], user: str = USER) -> Workspace:
+    """一个新会话的工作区，绑了这些技能版本。"""
+    return Workspace(s3, bucket=BUCKET, user_id=user, thread_id=uuid4(), skills=skills)
 
 
 def _publish(s3, slug: str, version: int, files: dict[str, str]) -> None:
@@ -38,73 +43,104 @@ def _publish(s3, slug: str, version: int, files: dict[str, str]) -> None:
 
 
 async def test_l1_instructions_only(env) -> None:
-    s3, fs = env
+    s3 = env
+    fs = _ws(s3, ("style", 1))
     _publish(s3, "style", 1, {"SKILL.md": "# 写作口径"})
 
     refs = await seed_session_skills(fs, [SkillMeta("style", 1, "写作口径")])
 
-    assert refs == [SkillRef(name="style", description="写作口径", path="/skills/style/SKILL.md")]
-    assert fs.read("/skills/style/SKILL.md").file_data["content"] == "# 写作口径"
+    path = "/data/skills/style/1/SKILL.md"
+    assert refs == [SkillRef(name="style", description="写作口径", path=path)]
+    assert fs.read(path).file_data["content"] == "# 写作口径"
 
 
 async def test_l2_with_references(env) -> None:
-    s3, fs = env
+    s3 = env
+    fs = _ws(s3, ("dataviz", 2))
     _publish(s3, "dataviz", 2, {"SKILL.md": "# 图表", "references/color.md": "配色"})
 
     await seed_session_skills(fs, [SkillMeta("dataviz", 2, "图表设计")])
 
-    assert fs.read("/skills/dataviz/references/color.md").file_data["content"] == "配色"
+    content = fs.read("/data/skills/dataviz/2/references/color.md").file_data["content"]
+    assert content == "配色"
 
 
 async def test_l3_scripts_land_at_a_real_path(env) -> None:
-    """★ 可执行技能：脚本落在工作区里，沙箱挂的是同一份数据。
-
-    这是「技能进工作区」这个设计成立的关键 —— 不需要第二条投送路径。
-    """
-    s3, fs = env
+    """★ 可执行技能：脚本落在 /data 下，沙箱挂的是同一份数据，不需要第二条投送路径。"""
+    s3 = env
+    fs = _ws(s3, ("ui", 3))
     _publish(
         s3, "ui", 3, {"SKILL.md": "# UI", "scripts/search.py": "print(1)", "data/x.csv": "a,b"}
     )
 
     await seed_session_skills(fs, [SkillMeta("ui", 3, "UI 检索")])
 
-    assert fs.read("/skills/ui/scripts/search.py").file_data["content"] == "print(1)"
-    assert fs.read("/skills/ui/data/x.csv").file_data["content"] == "a,b"
+    assert fs.read("/data/skills/ui/3/scripts/search.py").file_data["content"] == "print(1)"
+    assert fs.read("/data/skills/ui/3/data/x.csv").file_data["content"] == "a,b"
 
 
 async def test_missing_version_fails_loudly(env) -> None:
     """少拷几个文件就默默开始的话，表现是模型「照技能说的做了但脚本不存在」。"""
-    _s3, fs = env
+    fs = _ws(env)
     with pytest.raises(SkillUnavailable, match="v9"):
         await seed_session_skills(fs, [SkillMeta("nope", 9, "x")])
 
 
-async def test_pinned_version_decides_what_is_copied(env) -> None:
-    """spec 钉死版本 —— 发了新版不影响已有会话。"""
-    s3, fs = env
+async def test_versions_sit_side_by_side(env) -> None:
+    """spec 钉死版本：绑不同版本的智能体各用各的，互不覆盖。"""
+    s3 = env
     _publish(s3, "style", 1, {"SKILL.md": "旧版"})
     _publish(s3, "style", 2, {"SKILL.md": "新版"})
+    old, new = _ws(s3, ("style", 1)), _ws(s3, ("style", 2))
 
-    await seed_session_skills(fs, [SkillMeta("style", 1, "口径")])
-    assert fs.read("/skills/style/SKILL.md").file_data["content"] == "旧版"
+    await seed_session_skills(old, [SkillMeta("style", 1, "口径")])
+    await seed_session_skills(new, [SkillMeta("style", 2, "口径")])
+
+    assert old.read("/data/skills/style/1/SKILL.md").file_data["content"] == "旧版"
+    assert new.read("/data/skills/style/2/SKILL.md").file_data["content"] == "新版"
+    # 文件工具只放行本智能体绑定的版本
+    assert old.read("/data/skills/style/2/SKILL.md").error
 
 
-async def test_session_copy_is_editable_and_isolated(env) -> None:
-    """会话可以改自己的技能副本，技能区那份不动。"""
-    s3, fs = env
+async def test_copied_once_per_user_and_shared_across_sessions(env) -> None:
+    """★ 一个人一份：第二个会话不再拷；会话里改了，这个人别的会话也看得到（用户 11-09 定的）。
+
+    技能区那份不动；别的用户有自己的一份。
+    """
+    s3 = env
     _publish(s3, "style", 1, {"SKILL.md": "原文"})
-    await seed_session_skills(fs, [SkillMeta("style", 1, "口径")])
+    a, b = _ws(s3, ("style", 1)), _ws(s3, ("style", 1))
+    await seed_session_skills(a, [SkillMeta("style", 1, "口径")])
+    marker = f"{USER}/skills/style/1/{COMPLETE_MARKER}"
+    assert s3.head_object(Bucket=BUCKET, Key=marker)
 
-    fs.write("/skills/style/SKILL.md", "本会话改过")
+    a.write("/data/skills/style/1/SKILL.md", "会话 a 改过")
+    await seed_session_skills(b, [SkillMeta("style", 1, "口径")])  # 标记在：不重拷，不覆盖
 
-    assert fs.read("/skills/style/SKILL.md").file_data["content"] == "本会话改过"
+    assert b.read("/data/skills/style/1/SKILL.md").file_data["content"] == "会话 a 改过"
     src = s3.get_object(Bucket=BUCKET, Key="_skills/style/1/SKILL.md")["Body"].read()
     assert src.decode() == "原文"
+    other = _ws(s3, ("style", 1), user="u-other")
+    await seed_session_skills(other, [SkillMeta("style", 1, "口径")])
+    assert other.read("/data/skills/style/1/SKILL.md").file_data["content"] == "原文"
+
+
+async def test_half_copied_version_is_copied_again(env) -> None:
+    """没有完成标记的目录当作没拷完：崩在中途的，下次重拷。"""
+    s3 = env
+    _publish(s3, "ui", 1, {"SKILL.md": "x", "scripts/a.py": "1"})
+    s3.put_object(Bucket=BUCKET, Key=f"{USER}/skills/ui/1/SKILL.md", Body=b"x")  # 只拷了一半
+    fs = _ws(s3, ("ui", 1))
+
+    await seed_session_skills(fs, [SkillMeta("ui", 1, "UI")])
+
+    assert fs.read("/data/skills/ui/1/scripts/a.py").file_data["content"] == "1"
 
 
 async def test_skills_do_not_pollute_workspace_listing(env) -> None:
     """模型 search("") 看到的是自己的产物，不是几十个技能文件。"""
-    s3, fs = env
+    s3 = env
+    fs = _ws(s3, ("ui", 1))
     _publish(s3, "ui", 1, {"SKILL.md": "x", "scripts/a.py": "1", "data/b.csv": "2"})
     await seed_session_skills(fs, [SkillMeta("ui", 1, "UI")])
     fs.write("report.md", "我的产物")
@@ -174,9 +210,10 @@ async def test_creating_a_thread_seeds_the_agents_skills(clean_db) -> None:
             await session.commit()
 
         keys = {o["Key"] for o in s3.list_objects_v2(Bucket="atlas-seed")["Contents"]}
-        # 技能落在本会话自己的 skills 前缀下（与 workspace 平级）
-        assert f"{user_id}/{out.id}/skills/dataviz/SKILL.md" in keys
-        assert f"{user_id}/{out.id}/skills/dataviz/scripts/plot.py" in keys
+        # 技能落在这个人的技能目录下（按版本），不在会话目录里
+        assert f"{user_id}/skills/dataviz/1/SKILL.md" in keys
+        assert f"{user_id}/skills/dataviz/1/scripts/plot.py" in keys
+        assert not any(k.startswith(f"{user_id}/{out.id}/") for k in keys)
 
 
 async def test_thread_creation_without_object_storage_is_not_an_error(clean_db) -> None:

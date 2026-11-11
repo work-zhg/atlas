@@ -580,11 +580,15 @@ name = "atlas-jobs"
 version = "0.1.0"
 source = { editable = "infra-platform/libs/jobs" }
 dependencies = [
+    { name = "fastapi" },
     { name = "pydantic" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "pydantic", specifier = ">=2.9" }]
+requires-dist = [
+    { name = "fastapi", specifier = ">=0.115" },
+    { name = "pydantic", specifier = ">=2.9" },
+]
 
 [[package]]
 name = "atlas-jsonrpc"
@@ -598,6 +602,7 @@ source = { editable = "agent-platform/services/knowledge" }
 dependencies = [
     { name = "alembic" },
     { name = "asyncpg" },
+    { name = "atlas-jobs" },
     { name = "atlas-redislock" },
     { name = "beautifulsoup4" },
     { name = "boto3" },
@@ -629,6 +634,7 @@ dependencies = [
 requires-dist = [
     { name = "alembic", specifier = ">=1.14" },
     { name = "asyncpg", specifier = ">=0.30" },
+    { name = "atlas-jobs", editable = "infra-platform/libs/jobs" },
     { name = "atlas-redislock", editable = "infra-platform/libs/redislock" },
     { name = "beautifulsoup4", specifier = ">=4.12" },
     { name = "boto3", specifier = ">=1.35" },
@@ -663,6 +669,7 @@ source = { editable = "agent-platform/services/mcpgateway" }
 dependencies = [
     { name = "alembic" },
     { name = "asyncpg" },
+    { name = "atlas-jobs" },
     { name = "fastapi" },
     { name = "fastmcp-slim", extra = ["client"] },
     { name = "grpcio" },
@@ -683,6 +690,7 @@ dependencies = [
 requires-dist = [
     { name = "alembic", specifier = ">=1.14" },
     { name = "asyncpg", specifier = ">=0.30" },
+    { name = "atlas-jobs", editable = "infra-platform/libs/jobs" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "fastmcp-slim", extras = ["client"], specifier = ">=4.0.11,<5" },
     { name = "grpcio", specifier = ">=1.70" },
@@ -731,6 +739,7 @@ source = { editable = "agent-platform/services/modelgateway" }
 dependencies = [
     { name = "alembic" },
     { name = "asyncpg" },
+    { name = "atlas-jobs" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "pydantic-settings" },
@@ -742,6 +751,7 @@ dependencies = [
 requires-dist = [
     { name = "alembic", specifier = ">=1.14" },
     { name = "asyncpg", specifier = ">=0.30" },
+    { name = "atlas-jobs", editable = "infra-platform/libs/jobs" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "pydantic-settings", specifier = ">=2.6" },
@@ -796,6 +806,7 @@ source = { editable = "teamflow/services/teamflow" }
 dependencies = [
     { name = "alembic" },
     { name = "asyncpg" },
+    { name = "atlas-jobs" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "pydantic-settings" },
@@ -809,6 +820,7 @@ dependencies = [
 requires-dist = [
     { name = "alembic", specifier = ">=1.14" },
     { name = "asyncpg", specifier = ">=0.30" },
+    { name = "atlas-jobs", editable = "infra-platform/libs/jobs" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "pydantic-settings", specifier = ">=2.6" },

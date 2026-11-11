@@ -1,7 +1,7 @@
 "use client";
 
 import { Alert, Button, Skeleton, Tag } from "antd";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 
 import { useRunTrace } from "../api/runs";
 import type { Message } from "../api/types";
@@ -9,15 +9,24 @@ import { Icon } from "../components/Icon";
 import { Markdown } from "../components/Markdown";
 import { relativeTime } from "../lib/format";
 import { APPROVAL_MODE_LABEL, type AgentModeData, type ApprovalMode } from "../lib/events";
-import { isStreamDone, type Notice, type RunState, type TimelineItem } from "../lib/run-reducer";
+import {
+  isStreamDone,
+  orphanSubRuns,
+  type Notice,
+  type RunState,
+  type SubagentRun,
+  type TimelineItem,
+  type ToolCall,
+} from "../lib/run-reducer";
 import { avatarBackground, avatarLetter } from "../lib/avatar";
 import { ApprovalCard } from "./ApprovalCard";
 import { CompactionDivider } from "./CompactionDivider";
 import styles from "./chat.module.css";
 import { QuestionCard } from "./QuestionCard";
 import { SubAgentCard } from "./SubAgentCard";
+import { MessageActions } from "./MessageActions";
+import { Steps } from "./Steps";
 import { TodoCard } from "./TodoCard";
-import { ToolCallRow } from "./ToolCallRow";
 
 interface Props {
   messages: Message[];
@@ -33,6 +42,12 @@ interface Props {
   agentAvatarKey: string;
   reconnecting: boolean;
   streamError: Error | null;
+  /** 会话 id：回答下的反馈要用 */
+  threadId: string;
+  /** 回答下的反馈按钮（嵌入方没有反馈接口时关掉） */
+  feedback?: boolean;
+  /** 重新生成：用最后一个问题再问一次。不给 = 不显示这个按钮 */
+  onRegenerate?: () => void;
 }
 
 function textOf(content: Message["content"]): string {
@@ -73,8 +88,23 @@ function AssistantText({ blocks }: { blocks: string[] }) {
  *
  * ★ 正文段落要区分「过程」与「结论」：后面还跟着工具、委派、审批的那段话是
  *   过程（弱化显示）；排在最后、后面什么都没有的那段才是结论。
+ * ★ live 是这一项所属 run 的状态（主轮次或某个子 run），root 是主轮次的：
+ *   子 run 的过程（subRuns）与「审批还在等」（pendingApprovals）只在 root 上有。
  */
-function LiveItem({ item, live, isLast }: { item: TimelineItem; live: RunState; isLast: boolean }) {
+function LiveItem({
+  item,
+  live,
+  root,
+  isLast,
+  streaming,
+}: {
+  item: TimelineItem;
+  live: RunState;
+  root: RunState;
+  isLast: boolean;
+  /** 这一轮还在进行（实时区）；历史轮次为 false */
+  streaming: boolean;
+}) {
   switch (item.kind) {
     case "text": {
       const text = live.blocks[item.block] ?? "";
@@ -85,22 +115,19 @@ function LiveItem({ item, live, isLast }: { item: TimelineItem; live: RunState; 
         </Markdown>
       );
     }
-    case "tool": {
-      // 向用户提问的那次调用由问题卡片完整呈现，不再单独显示一行（按 tool_call_id 关联）
-      if (live.approvals.some((a) => a.kind === "question" && a.toolCallId === item.callId)) {
-        return null;
-      }
-      const call = live.toolCalls.find((c) => c.callId === item.callId);
-      return call ? <ToolCallRow call={call} /> : null;
-    }
+    case "tool":
+      // 工具调用由 TurnTimeline 把连续的几个归成一组「步骤」，不走这里
+      return null;
     case "subagent": {
       const run = live.subagents.find((s) => s.runId === item.runId);
-      return run ? <SubAgentCard run={run} /> : null;
+      if (!run) return null;
+      const subId = live.subRunOf[run.runId];
+      return <SubRun run={run} sub={subId ? root.subRuns[subId] : undefined} root={root} streaming={streaming} />;
     }
     case "approval": {
       const approval = live.approvals.find((a) => a.approvalId === item.approvalId);
       if (!approval) return null;
-      const waiting = live.pendingApprovals.some((a) => a.approvalId === item.approvalId);
+      const waiting = root.pendingApprovals.some((a) => a.approvalId === item.approvalId);
       if (approval.kind === "question") {
         return (
           <QuestionCard
@@ -167,7 +194,12 @@ function NoticeRow({ notice }: { notice: Notice }) {
     return (
       <div className={styles.modeBadge}>
         <Icon name="book" size={13} />
-        知识库 <Tag color="warning" style={{ marginInlineEnd: 0 }}>跳过 {notice.data.dataset_ids.length} 个</Tag>
+        {/* 没有库 id = 整个知识库这一轮没用上（服务不可用），不是跳过了某几个库 */}
+        {notice.data.dataset_ids.length > 0 && (
+          <>
+            知识库 <Tag color="warning" style={{ marginInlineEnd: 0 }}>跳过 {notice.data.dataset_ids.length} 个</Tag>
+          </>
+        )}
         <span className={styles.modeHint}>{notice.data.message}</span>
       </div>
     );
@@ -240,14 +272,86 @@ function ModeBadge({ mode }: { mode: AgentModeData }) {
   );
 }
 
-/** 一轮的过程时间线。实时区与历史轮次共用。 */
-function TurnTimeline({ state }: { state: RunState }) {
+/** 委派卡片，里面是子 run 自己的时间线（它再委派的卡片也在里面，层层嵌套）。 */
+function SubRun({
+  run,
+  sub,
+  root,
+  streaming,
+}: {
+  run: SubagentRun;
+  sub?: RunState;
+  root: RunState;
+  streaming: boolean;
+}) {
+  return (
+    <SubAgentCard run={run} sub={sub}>
+      {sub && <TurnTimeline state={sub} root={root} streaming={streaming} />}
+    </SubAgentCard>
+  );
+}
+
+const ORPHAN_STATUS: Record<RunState["status"], SubagentRun["status"]> = {
+  idle: "running",
+  running: "running",
+  suspended: "running",
+  succeeded: "ok",
+  failed: "error",
+  cancelled: "error",
+};
+
+/**
+ * 一个 run 的过程时间线。实时区与历史轮次共用，子 run 的卡片里也是它。
+ *
+ * root 缺省 = state，即主轮次。找不到所属卡片的子 run（见 orphanSubRuns）排在主轮次末尾。
+ */
+function TurnTimeline({
+  state,
+  root = state,
+  streaming,
+}: {
+  state: RunState;
+  root?: RunState;
+  streaming: boolean;
+}) {
   const last = state.timeline.length - 1;
+  const orphans = state === root ? orphanSubRuns(root) : [];
+
+  // ★ 连续的工具调用归成一组「步骤」：中间夹了正文、委派、审批就另起一组 —— 先后顺序不能乱
+  const out: ReactNode[] = [];
+  let group: ToolCall[] = [];
+  const flush = () => {
+    if (group.length) out.push(<Steps key={`steps:${group[0]!.callId}`} calls={group} live={streaming} />);
+    group = [];
+  };
+  state.timeline.forEach((item, i) => {
+    if (item.kind === "tool") {
+      // 向用户提问的那次调用由问题卡片完整呈现，不算一个步骤（按 tool_call_id 关联）
+      if (state.approvals.some((a) => a.kind === "question" && a.toolCallId === item.callId)) return;
+      const call = state.toolCalls.find((c) => c.callId === item.callId);
+      if (call) group.push(call);
+      return;
+    }
+    flush();
+    out.push(
+      <LiveItem key={itemKey(item)} item={item} live={state} root={root} isLast={i === last} streaming={streaming} />,
+    );
+  });
+  flush();
+
   return (
     <>
-      {state.timeline.map((item, i) => (
-        <LiveItem key={itemKey(item)} item={item} live={state} isLast={i === last} />
-      ))}
+      {out}
+      {orphans.map((id) => {
+        const sub = root.subRuns[id]!;
+        const run: SubagentRun = {
+          runId: id,
+          name: sub.meta?.agent_name || "子智能体",
+          task: "",
+          status: ORPHAN_STATUS[sub.status],
+        };
+        return <SubRun key={`orphan:${id}`} run={run} sub={sub} root={root} streaming={streaming} />;
+      })}
     </>
   );
 }
@@ -263,16 +367,19 @@ function TurnTimeline({ state }: { state: RunState }) {
  */
 function AssistantTurnBody({
   message,
+  blocks,
   traceEnabled,
   fallback,
 }: {
   message: Message;
+  /** 这一轮所有助手消息的正文段（挂起续跑的一轮会落下好几条，合成一块显示） */
+  blocks: string[];
   traceEnabled: boolean;
   fallback?: RunState;
 }) {
   const traceQ = useRunTrace(message.run_id ?? undefined, traceEnabled);
-  const state = traceQ.data ?? fallback;
-  const blocks = blocksOf(message.content);
+  // ★ 只认 enabled 时的数据：同一个 key 的缓存在 enabled=false 时照样会返回，拿来用就会把整段过程画两遍
+  const state = (traceEnabled ? traceQ.data : undefined) ?? fallback;
   if (!state || state.timeline.length === 0) return <AssistantText blocks={blocks} />;
   // ★ 历史轮次里不会再有待决定的审批：卡片一律显示「已结束」，也不去查库核对
   const settled: RunState = { ...state, pendingApprovals: [] };
@@ -280,7 +387,7 @@ function AssistantTurnBody({
   const hasText = state.timeline.some((t) => t.kind === "text");
   return (
     <>
-      <TurnTimeline state={settled} />
+      <TurnTimeline state={settled} streaming={false} />
       {!hasText && <AssistantText blocks={blocks} />}
       {state.status === "failed" && state.error && (
         <Alert
@@ -331,6 +438,9 @@ export function MessageStream({
   agentAvatarKey,
   reconnecting,
   streamError,
+  threadId,
+  feedback = false,
+  onRegenerate,
 }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const liveText = live?.text ?? "";
@@ -365,6 +475,21 @@ export function MessageStream({
   };
   // ★ 分页边界可能把一轮切成两条消息：轨迹只挂在第一条上，避免整段过程出现两遍
   const tracedRuns = new Set<string>();
+  const shown = messages.filter((m) => !coveredByLive(m));
+  // ★ 一轮只画一块：挂起续跑的一轮会落下好几条助手消息（每段一条），过程在轨迹里本来就是一整段。
+  //   第一条承载整轮（正文段合并），后面几条不再单独画；反馈指向最后一条（结论所在）。
+  const runOf = (m: Message) => m.run_id ?? m.id;
+  const firstOfRun = new Map<string, string>();
+  const lastOfRun = new Map<string, string>();
+  const runBlocks = new Map<string, string[]>();
+  for (const m of shown) {
+    if (m.role !== "assistant") continue;
+    const run = runOf(m);
+    if (!firstOfRun.has(run)) firstOfRun.set(run, m.id);
+    lastOfRun.set(run, m.id);
+    runBlocks.set(run, [...(runBlocks.get(run) ?? []), ...blocksOf(m.content)]);
+  }
+  const lastAnswer = [...shown].reverse().find((m) => m.role === "assistant");
 
   return (
     <div className={styles.paneBody} ref={bodyRef}>
@@ -382,8 +507,8 @@ export function MessageStream({
         </div>
       )}
 
-      {messages.filter((m) => !coveredByLive(m)).map((m) =>
-        m.role === "user" ? (
+      {shown.map((m) =>
+        m.role === "assistant" && firstOfRun.get(runOf(m)) !== m.id ? null : m.role === "user" ? (
           <div key={m.id} className={`${styles.msg} ${styles.msgUser}`}>
             <div className={styles.bubble}>{textOf(m.content)}</div>
           </div>
@@ -402,6 +527,7 @@ export function MessageStream({
             </div>
             <AssistantTurnBody
               message={m}
+              blocks={runBlocks.get(runOf(m)) ?? []}
               traceEnabled={(() => {
                 // 进行中（含挂起）的那一轮走实时区，不取轨迹 —— 否则会缓存一份残缺的
                 if (!m.run_id || (m.run_id === liveRunId && !turnOver)) return false;
@@ -410,6 +536,13 @@ export function MessageStream({
                 return true;
               })()}
               fallback={m.run_id && m.run_id === liveRunId && turnOver ? live : undefined}
+            />
+            <MessageActions
+              threadId={threadId}
+              messageId={lastOfRun.get(runOf(m)) ?? m.id}
+              text={(runBlocks.get(runOf(m)) ?? []).join("\n\n")}
+              feedback={feedback}
+              onRegenerate={lastAnswer && runOf(lastAnswer) === runOf(m) && !showLive ? onRegenerate : undefined}
             />
           </div>
         ),
@@ -426,11 +559,6 @@ export function MessageStream({
               {avatarLetter(agentName)}
             </span>
             <span className={styles.msgName}>{agentName}</span>
-            {live.meta && (
-              <Tag style={{ marginInlineEnd: 0 }} className={styles.toolName}>
-                {live.meta.model}
-              </Tag>
-            )}
             {reconnecting && (
               <Tag color="warning" style={{ marginInlineEnd: 0 }}>
                 重新连接中…
@@ -450,7 +578,7 @@ export function MessageStream({
 
           {/* ★ 按发生的先后排：先说的话、再发起的委派、中途的审批，各在各的位置。
               压缩（§7.5）、待办也在其中 —— 它们同样有「在哪一步发生」的含义。 */}
-          <TurnTimeline state={live} />
+          <TurnTimeline state={live} streaming={!isStreamDone(live.status)} />
 
           {live.status === "running" && <span className={styles.cursor} aria-hidden="true" />}
 
@@ -458,7 +586,7 @@ export function MessageStream({
             等子智能体。★ 必须说出来：一次委派可以跑一小时，这段时间里事件流
             一个字都不产出 —— 不提示的话用户分不清「在等」和「挂了」。
           */}
-          {live.status === "suspended" && (
+          {live.status === "suspended" && live.pendingApprovals.length === 0 && (
             <Alert
               type="info"
               showIcon

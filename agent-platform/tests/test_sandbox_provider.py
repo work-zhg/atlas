@@ -55,7 +55,7 @@ def _sandbox(
     settings: dict[str, Any] | None = None,
     **kw: Any,
 ) -> ShellSandbox:
-    """run_id 随工作区唯一：执行账本在共用的测试 Redis 里，用例之间不能共用 {run}:{tool_call}。"""
+    """run_id 随工作区唯一：执行账本在共用的测试库里，用例之间不能共用 (run, tool_call)。"""
     c = component(fake, redis, **(settings or {}))
     kw.setdefault("polling", PollingPolicy(0.02, 0.05))
     kw.setdefault("spec", SandboxSpec())
@@ -64,7 +64,7 @@ def _sandbox(
         exec=c.exec,
         ledger=c.ledger,
         ws=ws,
-        run_id=f"run-{ws.root_thread_uuid}",
+        run_id=ws.root_thread_uuid,
         **kw,
     )
 
@@ -88,13 +88,14 @@ async def test_first_execute_creates_the_sandbox_and_later_ones_reuse_it(
     assert (first.output, first.exit_code) == ("hi\n", 0)
     assert (second.output, second.exit_code) == ("hi\n", 3)
     assert len(fake.created) == 1
-    assert (workspace_dir(fake, ws) / "a.txt").read_text() == "hi\n"  # cwd 是 /workspace
+    # cwd 是本会话的工作区 /data/{根会话}/workspace（第一次执行前建好）
+    assert (workspace_dir(fake, ws) / "a.txt").read_text() == "hi\n"
 
 
 async def test_create_request_matches_the_design(
     fake: FakeOpenSandbox, redis: Any, ws: WorkspaceRef
 ) -> None:
-    """不过期、标签只写人和 sandbox_uuid、令牌经 env 下发、工作区与技能区按 subPath 挂同一个 PVC、
+    """不过期、标签只写人和 sandbox_uuid、令牌经 env 下发、整个 {user}/ 按 subPath 读写挂到 /data、
     带出站策略（strict 档：默认放行，集群网段由 egress 镜像的 deny.always 拒绝）。"""
     await _sandbox(fake, redis, ws).aexecute("true")
     (sb,) = fake.created
@@ -105,13 +106,10 @@ async def test_create_request_matches_the_design(
     assert spec["metadata"]["atlas.user"] == str(ws.user_uuid)
     assert spec["networkPolicy"] == {"defaultAction": "allow"}
     assert spec["env"]["HOME"] == "/home/agent"
-    mounts = {v["mountPath"]: v for v in spec["volumes"]}
-    user, root = ws.user_uuid, ws.root_thread_uuid
-    assert mounts["/workspace"]["subPath"] == f"{user}/{root}/workspace"
-    assert mounts["/workspace"]["readOnly"] is False
-    assert mounts["/skills"]["subPath"] == f"{user}/{root}/skills"
-    assert mounts["/skills"]["readOnly"] is True
-    assert {v["pvc"]["createIfNotExists"] for v in spec["volumes"]} == {False}
+    # ★ 唯一的挂载：会话特有的东西不进规格（这个人的别的会话也用这个沙箱）
+    (volume,) = spec["volumes"]
+    assert volume["mountPath"] == "/data" and volume["subPath"] == str(ws.user_uuid)
+    assert volume["readOnly"] is False and volume["pvc"]["createIfNotExists"] is False
     assert len(spec["env"]["EXECD_ACCESS_TOKEN"]) >= 24
 
 
@@ -199,8 +197,9 @@ async def test_execd_restart_mid_command_is_reported_not_rerun(
     task = asyncio.create_task(sbx.aexecute("echo x >> marker; sleep 5"))
     await _until(marker.exists)
     fake.restart_execd(fake.created[0].id)
-    with pytest.raises(SandboxUnavailable, match="沙箱重启"):
+    with pytest.raises(SandboxUnavailable, match="沙箱重启") as caught:
         await task
+    assert caught.value.kind == "lost"
     assert marker.read_text() == "x\n"
 
 
@@ -212,13 +211,15 @@ async def test_replaced_sandbox_fails_the_command_and_is_announced_next_time(
     task = asyncio.create_task(sbx.aexecute("sleep 5"))
     await _until(lambda: len(fake.created[0].commands) == 2)
     fake.vanish(fake.created[0].id)  # Pod 被驱逐
-    with pytest.raises(SandboxUnavailable, match="沙箱重启"):
+    with pytest.raises(SandboxUnavailable, match="沙箱重启") as caught:
         await task
+    assert caught.value.kind == "lost"
     r = await sbx.aexecute("echo ok")  # 下一次执行：供给确认旧的不能用了，退役、建新的
     assert len(fake.created) == 2
-    assert r.output.startswith("[沙箱环境已重建")
+    assert r.output.startswith("[沙箱环境已重建") and r.rebuilt
     assert r.output.endswith("ok\n")
-    assert (await sbx.aexecute("echo ok")).output == "ok\n"  # 只提示一次
+    again = await sbx.aexecute("echo ok")  # 只提示一次
+    assert again.output == "ok\n" and not again.rebuilt
 
 
 async def test_disconnect_before_init_reports_unknown_result(
@@ -227,8 +228,9 @@ async def test_disconnect_before_init_reports_unknown_result(
     sbx = _sandbox(fake, redis, ws)
     await sbx.aexecute("true")
     fake.drop_init = True
-    with pytest.raises(SandboxUnavailable, match="结果未知"):
+    with pytest.raises(SandboxUnavailable, match="结果未知") as caught:
         await sbx.aexecute("echo x >> marker", exec_id="c")
+    assert caught.value.kind == "result_unknown"
     marker = workspace_dir(fake, ws) / "marker"
     await _until(marker.exists)
     assert marker.read_text() == "x\n"  # 命令确实跑了 —— 所以不能重跑
@@ -238,8 +240,9 @@ async def test_sandbox_start_failure_becomes_tool_error(
     fake: FakeOpenSandbox, redis: Any, ws: WorkspaceRef
 ) -> None:
     fake.create_state = "Failed"
-    with pytest.raises(SandboxUnavailable, match="沙箱启动失败"):
+    with pytest.raises(SandboxUnavailable, match="沙箱启动失败") as caught:
         await _sandbox(fake, redis, ws).aexecute("true")
+    assert caught.value.kind == "unavailable"
     assert fake.deleted == [fake.created[0].id]  # 起不来的当场删掉
 
 
@@ -300,10 +303,23 @@ async def test_unreliable_cpu_never_kills(
     assert (r.output, r.exit_code) == ("done\n", 0)
 
 
-async def test_cancel_interrupts_the_command(
+class _Cancel:
+    """run 的取消位：置位 = 用户点了「停止」；不置位时的取消是交接、租约丢失。"""
+
+    def __init__(self, cancelled: bool = False, *, broken: bool = False) -> None:
+        self.cancelled = cancelled
+        self.broken = broken
+
+    async def is_cancelled(self) -> bool:
+        if self.broken:
+            raise ConnectionError("Redis 不可用")
+        return self.cancelled
+
+
+async def test_user_cancel_interrupts_the_command(
     fake: FakeOpenSandbox, redis: Any, ws: WorkspaceRef
 ) -> None:
-    sbx = _sandbox(fake, redis, ws)
+    sbx = _sandbox(fake, redis, ws, cancel=_Cancel(True))
     task = asyncio.create_task(sbx.aexecute("sleep 30", exec_id="c"))
     await _until(lambda: fake.created and fake.created[0].commands)
     (cmd,) = fake.created[0].commands.values()
@@ -311,27 +327,113 @@ async def test_cancel_interrupts_the_command(
     with pytest.raises(asyncio.CancelledError):
         await task
     await _until(lambda: cmd.proc.poll() is not None)
-    # ★ 账本里还记着它：重放同一个调用（比如接管的实例）读到的是中断时的输出，不再跑一遍
+    # ★ 账本里还记着它：重放同一个调用读到的是中断时的输出，不再跑一遍
     again = await sbx.aexecute("sleep 30", exec_id="c")
     assert again.exit_code != 0 and len(fake.created[0].commands) == 1
 
 
-async def test_cancel_during_submit_still_interrupts(
-    fake: FakeOpenSandbox, redis: Any, ws: WorkspaceRef
+@pytest.mark.parametrize("cancel", [_Cancel(False), _Cancel(broken=True)], ids=["handoff", "redis"])
+async def test_cancel_without_the_cancel_flag_leaves_the_command_running(
+    fake: FakeOpenSandbox, redis: Any, ws: WorkspaceRef, cancel: _Cancel
 ) -> None:
-    """取消落在「execd 已经开跑、init 还没回来」之间：拿到 id 后照样中断（不然没人管它）。"""
+    """交接、租约丢失（取消位没置位）只停止跟随；查不到取消位时同样不中断 —— 宁可多跑，也不误杀。
+    接手的实例重放同一个调用，凭执行账本接上还在跑的命令，拿到完整输出。"""
+    cmd_line = "echo x >> marker; sleep 0.5; echo done"
+    sbx = _sandbox(fake, redis, ws, cancel=cancel)
+    task = asyncio.create_task(sbx.aexecute(cmd_line, exec_id="c"))
+    await _until(lambda: fake.created and fake.created[0].commands)
+    (cmd,) = fake.created[0].commands.values()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await asyncio.sleep(0.1)
+    assert cmd.proc.poll() is None, "命令被中断了"
+    r = await _sandbox(fake, redis, ws).aexecute(cmd_line, exec_id="c")
+    assert (r.output, r.exit_code) == ("done\n", 0)
+    assert (workspace_dir(fake, ws) / "marker").read_text() == "x\n"
+
+
+async def test_cancel_while_recording_the_id_still_lets_the_successor_attach(
+    fake: FakeOpenSandbox, redis: Any, ws: WorkspaceRef, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """交接的取消恰好落在补记命令 id 的那次写库上：后台补完，接手的实例照样接上（不报结果未知）。"""
+    put = ExecutionLedger.put
+    recording = asyncio.Event()
+
+    async def slow_put(self: ExecutionLedger, *a: Any) -> None:
+        recording.set()
+        await asyncio.sleep(0.3)
+        await put(self, *a)
+
+    monkeypatch.setattr(ExecutionLedger, "put", slow_put)
+    cmd_line = "sleep 0.6; echo done"
+    sbx = _sandbox(fake, redis, ws, cancel=_Cancel(False))
+    task = asyncio.create_task(sbx.aexecute(cmd_line, exec_id="c"))
+    await recording.wait()
+    task.cancel()  # 命令已经提交上，补记还在路上
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await asyncio.sleep(0.5)
+    r = await _sandbox(fake, redis, ws).aexecute(cmd_line, exec_id="c")
+    assert (r.output, r.exit_code) == ("done\n", 0)
+    assert len(fake.created[0].commands) == 1
+
+
+@pytest.mark.parametrize("user", [True, False], ids=["user", "handoff"])
+async def test_cancel_during_submit_records_the_command_once_it_has_an_id(
+    fake: FakeOpenSandbox, redis: Any, ws: WorkspaceRef, user: bool
+) -> None:
+    """取消落在「execd 已经开跑、init 还没回来」之间：拿到 id 后补记账本（接手的实例凭它接上）；
+    用户取消的再中断它（不然没人管它）。"""
     fake.submit_delay_s = 0.3
-    sbx = _sandbox(fake, redis, ws)
+    sbx = _sandbox(fake, redis, ws, cancel=_Cancel(user))
     await sbx.aexecute("true")  # 先把沙箱建好：取消要落在提交上，而不是 ensure 上
-    task = asyncio.create_task(sbx.aexecute("sleep 30", exec_id="c"))
+    task = asyncio.create_task(sbx.aexecute("sleep 0.8; echo done", exec_id="c"))
     await _until(lambda: len(fake.created[0].commands) == 2)
     cmd = list(fake.created[0].commands.values())[-1]
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    await _until(lambda: cmd.proc.poll() is not None)
-    # 提交途中取消：账本里没有它（拿到 id 时调用已经取消），重放就是新的执行
-    assert await ExecutionLedger(redis).get(f"run-{ws.root_thread_uuid}", "c") is None
+    ledger = sbx._ledger
+    await _until(lambda: cmd.proc.poll() is not None if user else True)
+    deadline = asyncio.get_running_loop().time() + 5
+    while (got := await ledger.get(ws.root_thread_uuid, "c")) is None or got.cmd_id is None:
+        assert asyncio.get_running_loop().time() < deadline, "拿到 id 后没有补记账本"
+        await asyncio.sleep(0.05)
+    fake.submit_delay_s = 0.0
+    r = await _sandbox(fake, redis, ws).aexecute("sleep 0.8; echo done", exec_id="c")
+    assert len(fake.created[0].commands) == 2  # 接上原命令，没有再提交
+    assert (r.exit_code == 0) is not user
+
+
+async def test_submission_left_pending_is_reported_unknown_not_rerun(
+    fake: FakeOpenSandbox, redis: Any, ws: WorkspaceRef
+) -> None:
+    """账本里只有「提交中」（上一个执行者死在提交途中）：不再提交，如实报结果未知。"""
+    sbx = _sandbox(fake, redis, ws)
+    await sbx.aexecute("true")
+    (box,) = fake.created
+    ref = await sbx._native.current(ws)
+    assert ref is not None
+    await sbx._ledger.intend(ws.root_thread_uuid, "c", ref.sandbox_uuid)
+    with pytest.raises(SandboxUnavailable, match="结果未知") as caught:
+        await sbx.aexecute("echo x >> marker", exec_id="c")
+    assert caught.value.kind == "result_unknown"
+    assert len(box.commands) == 1
+
+
+async def test_rejected_submission_is_dropped_from_the_ledger(
+    fake: FakeOpenSandbox, redis: Any, ws: WorkspaceRef
+) -> None:
+    """确定没提交上（沙箱拒绝）：去掉「提交中」，重放时照常提交。"""
+    sbx = _sandbox(fake, redis, ws)
+    await sbx.aexecute("true")
+    fake.reject_commands = True
+    with pytest.raises(SandboxUnavailable, match="拒绝"):
+        await sbx.aexecute("echo ok", exec_id="c")
+    assert await sbx._ledger.get(ws.root_thread_uuid, "c") is None
+    fake.reject_commands = False
+    assert (await sbx.aexecute("echo ok", exec_id="c")).output == "ok\n"
 
 
 # ──────────────────────────────────────────────── 装配
@@ -357,9 +459,48 @@ def test_execute_tool_gets_runtime_injected() -> None:
         exec=None,  # type: ignore[arg-type]
         ledger=None,  # type: ignore[arg-type]
         ws=WorkspaceRef(uuid7(), uuid7()),
-        run_id="r",
+        run_id=uuid7(),
         spec=SandboxSpec(),
     )
     tool = SandboxMiddleware(sandbox=box).tools[0]
     assert "runtime" in tool._injected_args_keys
     assert set(tool.tool_call_schema.model_json_schema()["properties"]) == {"command", "timeout"}
+
+
+async def test_sandbox_errors_and_rebuilds_are_marked_in_the_tool_artifact() -> None:
+    """模型看消息，评测与监控看 artifact：沙箱错误带类别，重建后的第一条命令带标记。"""
+    from types import SimpleNamespace
+
+    from atlas_engine.contracts import ExecuteResponse
+    from atlas_engine.kernel.middleware.sandbox import SandboxMiddleware
+
+    class _Box:
+        id = "probe"
+
+        def __init__(self) -> None:
+            self.outcomes: list[Any] = [
+                SandboxUnavailable("命令执行期间沙箱重启", kind="lost"),
+                SandboxUnavailable("沙箱启动失败：配额"),
+                ExecuteResponse(output="[沙箱环境已重建…]\nok\n", exit_code=0, rebuilt=True),
+                ExecuteResponse(output="ok\n", exit_code=0),
+            ]
+
+        def execute(self, command: str, **kw: Any) -> Any:
+            raise NotImplementedError
+
+        async def aexecute(self, command: str, **kw: Any) -> Any:
+            outcome = self.outcomes.pop(0)
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+    run = SandboxMiddleware(sandbox=_Box()).tools[0].coroutine
+    assert run is not None
+    rt = SimpleNamespace(tool_call_id="c1")
+    lost, down, rebuilt, plain = [await run(command="x", runtime=rt) for _ in range(4)]
+    assert lost.status == "error" and lost.artifact == {"sandbox_error": "lost"}
+    assert str(lost.content).startswith("Error: Sandbox unavailable. 命令执行期间沙箱重启")
+    assert down.artifact == {"sandbox_error": "unavailable"}
+    assert rebuilt.status == "success"
+    assert rebuilt.artifact == {"exit_code": 0, "sandbox_rebuilt": True}
+    assert plain.artifact == {"exit_code": 0}

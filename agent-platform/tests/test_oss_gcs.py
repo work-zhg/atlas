@@ -36,7 +36,6 @@ from uuid import uuid4
 
 import pytest
 from atlas_agent.config import Settings
-from atlas_agent.domain.workspace_layout import SKILLS_MOUNT, Area
 from atlas_agent.providers.filesystem import PathEscape, make_workspace
 
 from .conftest import REPO_ROOT
@@ -79,7 +78,11 @@ def workspaces():
 
     def _make(thread_id: str, *, workspace_thread_id: str | None = None):
         workspace = make_workspace(
-            _SETTINGS, "test-user", thread_id, workspace_thread_id=workspace_thread_id
+            _SETTINGS,
+            "test-user",
+            thread_id,
+            workspace_thread_id=workspace_thread_id,
+            skills=[_SKILL],
         )
         assert workspace is not None
         created.append(workspace)
@@ -89,9 +92,14 @@ def workspaces():
         yield _make
     finally:
         for workspace in created:
-            # ★ 两次 delete：skills 是与 workspace **平级**的前缀，不在它下面。
-            workspace.delete(f"{SKILLS_MOUNT}/", recursive=True)
+            # ★ 两次 delete：技能在这个人的 skills/ 下，不在工作区里
+            workspace.delete(f"{_SKILL_DIR}/", recursive=True)
             workspace.delete("", recursive=True)
+
+
+#: 用例里用的技能版本（绑在每个工作区上）
+_SKILL = (f"gcs-test-{uuid4().hex[:8]}", 1)
+_SKILL_DIR = f"/data/skills/{_SKILL[0]}/{_SKILL[1]}"
 
 
 @pytest.fixture
@@ -131,37 +139,34 @@ def test_the_client_disables_default_checksums(fs) -> None:
 
 
 def test_workspace_and_skills_land_on_different_prefixes(fs) -> None:
-    """★ subagent §03 的那条：/skills 与 workspace 是两个**平级**前缀。
+    """工作区和技能是这个人前缀下两个不同的目录：{user}/{根会话}/workspace、{user}/skills/…。
 
-    路由错了的表现不是报错，是子智能体把技能写进了父会话的工作区 ——
-    一个静默的越权写。
+    路由错了的表现不是报错，是技能写进了工作区 —— 一个静默的越权写。
     """
     fs.write("report.md", "工作区")
-    fs.write(f"{SKILLS_MOUNT}/dataviz/SKILL.md", "技能")
+    fs.write(f"{_SKILL_DIR}/SKILL.md", "技能")
 
     assert _keys_under(fs, "") == ["report.md"], "技能漏进了工作区列表"
-    assert fs.layout.prefix(Area.WORKSPACE) != fs.layout.prefix(Area.SKILLS)
-    assert fs.layout.prefix(Area.WORKSPACE).endswith("/workspace")
-    assert fs.layout.prefix(Area.SKILLS).endswith("/skills")
+    skill_key = f"test-user{_SKILL_DIR.removeprefix('/data')}/SKILL.md"
+    assert fs.key_of(f"{_SKILL_DIR}/SKILL.md") == skill_key
+    assert fs.key_of("report.md") == f"test-user/{fs.layout.workspace}/report.md"
 
 
 def test_deleting_the_workspace_leaves_skills_alone(fs) -> None:
-    """清空工作区不该连技能一起清掉 —— 技能是只读挂载的另一份资产。"""
+    """清空工作区不该连技能一起清掉 —— 技能是这个人所有会话共用的另一份资产。"""
     fs.write("scratch.txt", "x")
-    fs.write(f"{SKILLS_MOUNT}/dataviz/SKILL.md", "技能")
+    fs.write(f"{_SKILL_DIR}/SKILL.md", "技能")
 
     fs.delete("", recursive=True)
 
     assert _keys_under(fs, "") == []
-    assert fs.search(f"{SKILLS_MOUNT}/").common_prefixes == ["skills/dataviz/"]
+    assert fs.search(f"{_SKILL_DIR}/").keys == [f"{_SKILL_DIR}/SKILL.md"]
 
 
-def test_a_subagent_shares_the_parents_workspace_but_not_its_skills(workspaces) -> None:
-    """子会话：workspace 指父的 thread，skills 指自己的。
+def test_a_subagent_shares_the_parents_workspace_and_the_persons_skills(workspaces) -> None:
+    """子会话：工作区用根会话的；技能一个人一份，父子看到的是同一份。
 
-    这是 Pod 双 subPath 挂载在对象存储侧的对应物 —— 两边必须说同一件事。
-    共享工作区是有意的（委派常常就是「帮我处理这批文件」，产物要互相看得
-    见），而技能各带各的。
+    共享工作区是有意的（委派常常就是「帮我处理这批文件」，产物要互相看得见）。
     """
     parent_thread = f"test-parent-{uuid4()}"
     parent = workspaces(parent_thread)
@@ -173,8 +178,8 @@ def test_a_subagent_shares_the_parents_workspace_but_not_its_skills(workspaces) 
     child.write("child-note.md", "子写的")
     assert parent.read("child-note.md").file_data["content"] == "子写的"
 
-    parent.write(f"{SKILLS_MOUNT}/only-parent/SKILL.md", "父的技能")
-    assert child.search(f"{SKILLS_MOUNT}/").common_prefixes == [], "子智能体看见了父的技能"
+    parent.write(f"{_SKILL_DIR}/SKILL.md", "父改的技能")
+    assert child.read(f"{_SKILL_DIR}/SKILL.md").file_data["content"] == "父改的技能"
 
 
 # ──────────────────────────────────────────────── 真服务的 delimiter 语义
@@ -242,21 +247,20 @@ def test_non_ascii_survives_the_round_trip(fs) -> None:
 
 
 def test_the_workspace_mount_point_is_not_a_subdirectory(fs) -> None:
-    """★ `/workspace/a.md` 指的是挂载点下的 a.md，不是一个叫 workspace 的子目录。
+    """★ 沙箱里的真实路径 `/data/{根会话}/workspace/a.md` 指的是工作区根上的 a.md。
 
-    模型看得见 `/workspace` —— adapter 的 cwd 就是它 —— 所以它会很自然地
-    写出绝对路径。不认这个前缀的话对象会落在 `<ws>/workspace/a.md`，
-    而错法是**静默**的：写入成功、事件照发，只是文件出现在一个谁也不会去
-    看的地方。真跑第一轮就撞上了：模型写了 /workspace/domain.md，
-    桶里出现的是 .../workspace/workspace/domain.md。
+    模型看得见这个路径 —— 命令和 CLI 的 cwd 就是它 —— 所以它会很自然地写出绝对路径。
+    不认的话对象会落在一层子目录里，而错法是**静默**的：写入成功、事件照发，只是文件出现在
+    一个谁也不会去看的地方（旧布局真跑第一轮就撞上过：.../workspace/workspace/domain.md）。
     """
-    fs.write("/workspace/absolute.md", "用绝对路径写的")
+    fs.write(f"{fs.workdir}/absolute.md", "用绝对路径写的")
 
     # 落在工作区根上，search("") 就看得见 —— 而不是藏在一层子目录里
     assert "absolute.md" in fs.search("").keys
     assert fs.read("absolute.md").file_data["content"] == "用绝对路径写的"
-    assert fs.read("/workspace/absolute.md").file_data["content"] == "用绝对路径写的"
-    assert fs.key_of("/workspace/absolute.md") == f"{fs.layout.prefix(Area.WORKSPACE)}/absolute.md"
+    assert fs.read(f"{fs.workdir}/absolute.md").file_data["content"] == "用绝对路径写的"
+    key = f"test-user/{fs.layout.workspace}/absolute.md"
+    assert fs.key_of(f"{fs.workdir}/absolute.md") == key
 
 
 def test_a_relative_workspace_directory_still_means_a_directory(fs) -> None:
@@ -267,9 +271,8 @@ def test_a_relative_workspace_directory_still_means_a_directory(fs) -> None:
     """
     fs.write("workspace/nested.md", "这是子目录")
 
-    assert (
-        fs.key_of("workspace/nested.md")
-        == f"{fs.layout.prefix(Area.WORKSPACE)}/workspace/nested.md"
+    assert fs.key_of("workspace/nested.md") == (
+        f"test-user/{fs.layout.workspace}/workspace/nested.md"
     )
     assert fs.search("").common_prefixes == ["workspace/"]
     assert fs.read("workspace/nested.md").file_data["content"] == "这是子目录"
@@ -281,10 +284,10 @@ def test_search_and_write_agree_on_the_mount_prefix(fs) -> None:
     不一致的表现是"写进去了但 search 看不见" —— 模型会以为自己没写成功，
     然后重写一遍。
     """
-    fs.write("/workspace/reports/q3.md", "季报")
+    fs.write(f"{fs.workdir}/reports/q3.md", "季报")
 
-    assert fs.search("/workspace/").common_prefixes == ["reports/"]
-    assert fs.search("/workspace/reports/").keys == ["reports/q3.md"]
+    assert fs.search(f"{fs.workdir}/").common_prefixes == ["reports/"]
+    assert fs.search(f"{fs.workdir}/reports/").keys == ["reports/q3.md"]
     assert fs.search("reports/").keys == ["reports/q3.md"]
 
 

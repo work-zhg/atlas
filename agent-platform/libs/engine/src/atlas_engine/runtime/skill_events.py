@@ -1,8 +1,8 @@
 """从工具事件里认出「技能被加载」（设计 §7.4）。
 
-渐进式披露下，模型选中一个技能的唯一可观测信号是：它读了 `/skills/<slug>/SKILL.md`。
-native 与 acp 的读文件工具都用 `file_path` 参数，挂载点也都是 /skills（native 由
-Workspace 路由、acp 由 Pod 模板挂载），所以一份规则两边共用。
+渐进式披露下，模型选中一个技能的唯一可观测信号是：它读了 `…/skills/<slug>/<版本>/SKILL.md`
+（Atlas 的布局是 /data/skills/<slug>/<版本>/，旧会话是 /skills/<slug>/）。native 与 CLI 的读文件工具
+都用 `file_path` 参数，看到的也是同一个沙箱里的同一套路径，所以一份规则两边共用。
 
 ★ 在 tool.completed 时才算：读失败（文件不存在、被拦）不算选中。
 ★ 纯函数 + 小状态机，不碰 IO —— 它在 domain 层（import-linter 守着）。
@@ -18,7 +18,10 @@ from atlas_engine.contracts.events import EventType
 
 __all__ = ["SkillLoadTracker", "skill_slug_of"]
 
-_SKILL_MD = re.compile(r"^/?skills/([a-z][a-z0-9-]{0,62})/SKILL\.md$")
+#: 按版本分目录的布局：…/skills/<slug>/<版本>/SKILL.md（Atlas 是 /data/skills/…）
+_SKILL_MD = re.compile(r"(?:^|/)skills/([a-z][a-z0-9-]{0,62})/[^/]+/SKILL\.md$")
+#: 旧布局（技能目录挂在根上）：/skills/<slug>/SKILL.md
+_LEGACY_SKILL_MD = re.compile(r"^/?skills/([a-z][a-z0-9-]{0,62})/SKILL\.md$")
 #: 读文件工具里可能装着路径的参数名（native: read_file.file_path；Claude Code: Read.file_path）
 _PATH_KEYS = ("file_path", "path", "filePath")
 
@@ -28,7 +31,9 @@ def skill_slug_of(args: Any) -> str | None:
         return None
     for key in _PATH_KEYS:
         value = args.get(key)
-        if isinstance(value, str) and (match := _SKILL_MD.match(value.strip())):
+        if isinstance(value, str) and (
+            match := _SKILL_MD.search(value.strip()) or _LEGACY_SKILL_MD.match(value.strip())
+        ):
             return match.group(1)
     return None
 

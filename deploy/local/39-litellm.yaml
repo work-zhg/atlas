@@ -41,6 +41,15 @@ spec:
             - {name: UI_USERNAME, value: admin}
             - name: UI_PASSWORD
               valueFrom: {secretKeyRef: {name: atlas-litellm-creds, key: master_key}}
+            # ★ 境外供应商（Gemini）经服务器的出网代理：Secret atlas-litellm-egress 由
+            #   deploy/server/bench-egress.sh 建；没有就直连（本机部署）。国内供应商不走代理 ——
+            #   新登记国内供应商时把它的域名补进 NO_PROXY
+            - name: HTTPS_PROXY
+              valueFrom: {secretKeyRef: {name: atlas-litellm-egress, key: url, optional: true}}
+            - name: HTTP_PROXY
+              valueFrom: {secretKeyRef: {name: atlas-litellm-egress, key: url, optional: true}}
+            - name: NO_PROXY
+              value: "localhost,127.0.0.1,.svc,.cluster.local,deepseek.com,aliyuncs.com,volces.com,moonshot.cn"
           readinessProbe:
             httpGet: {path: /health/readiness, port: 4000}
             periodSeconds: 5

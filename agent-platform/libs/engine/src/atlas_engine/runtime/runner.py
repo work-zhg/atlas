@@ -114,6 +114,61 @@ class _NeverCancelled:
         return False
 
 
+class _CancelWatch:
+    """等图的下一帧时盯着取消位：每 every_s 秒查一次，看到置位就取消正在执行的图。
+
+    ★ 为什么要盯：工具跑着的时候图没有新帧，只在两帧之间查的话，一条长命令要跑完才停得下来。
+      取消正在执行的图，正在跑的工具随之收到取消（沙箱命令由它自己按取消位中断）。
+    ★ 只在「正在等下一帧」时取消本任务：调用方处理事件（落库、推流）时不打断它，那时由两帧之间的
+      检查接住。等帧时本任务一定挂在图里，取消只会落进图的 await 链。
+    """
+
+    def __init__(self, cancel: CancelToken, every_s: float) -> None:
+        self._cancel = cancel
+        self._every_s = every_s
+        #: 驱动这一轮的任务（每次等帧时取：调用方换任务驱动生成器也不会打错）
+        self._task: asyncio.Task[Any] | None = None
+        self._watcher: asyncio.Task[None] | None = None
+        #: 正在等图的下一帧
+        self.waiting = False
+        self.fired = False
+
+    def start(self) -> None:
+        self._watcher = asyncio.create_task(self._watch(), name="run-cancel-watch")
+
+    def stop(self) -> None:
+        if self._watcher is not None:
+            self._watcher.cancel()
+
+    async def _watch(self) -> None:
+        while not self.fired:
+            await asyncio.sleep(self._every_s)
+            # 查完再看一次 waiting：查的这一会儿图可能已经交出了下一帧
+            if self.waiting and await self._cancel.is_cancelled() and self.waiting:
+                self.fired = True
+                if self._task is not None:
+                    self._task.cancel()
+
+    def claim(self) -> bool:
+        """本任务收到的取消是不是自己发的。是就收回（uncancel）；同时还有别人取消（交接、租约
+        丢失）就不算 —— 交给调用方，接手的实例会看到取消位。"""
+        if not self.fired or self._task is None:
+            return False
+        return self._task.uncancel() == 0
+
+    async def frames(self, stream: AsyncIterator[Any]) -> AsyncIterator[Any]:
+        it = aiter(stream)
+        while True:
+            self._task, self.waiting = asyncio.current_task(), True
+            try:
+                frame = await anext(it)
+            except StopAsyncIteration:
+                return
+            finally:
+                self.waiting = False
+            yield frame
+
+
 def _utcnow() -> datetime:
     return datetime.now(UTC)
 
@@ -233,6 +288,7 @@ async def run(
     titler: Titler | None = None,
     transcript: Transcript | None = None,
     notices: Sequence[tuple[EventType, dict[str, Any]]] = (),
+    cancel_poll_s: float = 1.0,
 ) -> AsyncIterator[TraceEvent]:
     """驱动一张**已装配好的图**跑一段，产出 TraceEvent 流（TurnDriver）。
 
@@ -242,6 +298,7 @@ async def run(
       跨段 state），这里只剩 runner 自己消费的注入点：
 
     cancel / clock / titler  取消信号、时钟、标题生成器（测试可注入）
+    cancel_poll_s  等下一帧时多久查一次取消位（工具跑着时没有新帧，见 _CancelWatch）
 
     transcript: 收集本轮**实际产生**的消息（模型的 tool_use、工具的结果）。
         调用方要落库这些消息时传进来；不传就不收集，零开销。见
@@ -310,6 +367,8 @@ async def run(
     skills = SkillLoadTracker(spec.skills)
     # 图最终的 waiting_on —— 非空说明图是因为挂起才跳出的（取自 values 流的最后一帧）
     waits: WaitingOn = {}
+    watch = _CancelWatch(cancel, cancel_poll_s)
+    watch.start()
 
     try:
         # ★ 一轮没有时间上限：在干活就不中断。单次模型调用（litellm_timeout_s）与
@@ -318,7 +377,7 @@ async def run(
         # ★ subgraphs=True：子智能体的内部步骤会以带命名空间的形式流出来。
         #   命名空间深度就是 agent 深度 —— 主 agent 是 ()，子智能体是
         #   ('tools:<id>',)。这是 TraceEvent.depth 的唯一来源。
-        async for ns, mode, chunk in graph.astream(
+        stream = graph.astream(
             _graph_input(
                 history,
                 input_content,
@@ -334,8 +393,10 @@ async def run(
             # values 只为取最终的 waiting_on：挂起时它要与消息一起落库。
             stream_mode=["updates", "messages", "custom", "values"],
             subgraphs=True,
-        ):
+        )
+        async for ns, mode, chunk in watch.frames(stream):
             if await cancel.is_cancelled():
+                watch.claim()  # 盯取消位的那边发过取消、被图吞掉了：收回，别留给后面的 await
                 if usage:  # 取消前已经花掉的也要入账（见下面失败分支的说明）
                     yield events.make(EventType.USAGE_UPDATED, dict(usage))
                 yield events.make(
@@ -408,6 +469,13 @@ async def run(
                     payload = {k: v for k, v in chunk.items() if k != "kind"}
                     yield events.make(_CUSTOM_EVENTS[kind], payload, local_depth)
 
+    except asyncio.CancelledError:
+        if not watch.claim():  # 不是取消位触发的（交接、租约丢失、停机）：照常往上抛
+            raise
+        if usage:
+            yield events.make(EventType.USAGE_UPDATED, dict(usage))
+        yield events.make(EventType.RUN_CANCELLED, {"partial_text_len": len(answer.text)})
+        return
     except EngineError as exc:
         # ★ 失败前已经花掉的 token 也要入账：inprocess 只从 usage.updated 取用量，
         #   不发的话失败 run 记成 0 —— 成本、max_total_tokens 的跨段累计都会偏低
@@ -441,6 +509,8 @@ async def run(
             },
         )
         return
+    finally:
+        watch.stop()
 
     if usage:
         usage["thinking_occurred"] = thinking_seen  # type: ignore[assignment]

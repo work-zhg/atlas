@@ -295,8 +295,12 @@ class ThreadService:
         *,
         principal: Principal | None = None,
         user_id: UUID | None = None,
+        preview: bool = False,
     ) -> ThreadOut:
-        """principal 来自接口层；只给 user_id 的调用方（脚本、测试）按人直接操作处理。"""
+        """principal 来自接口层；只给 user_id 的调用方（脚本、测试）按人直接操作处理。
+
+        preview = 智能体编辑页的调试预览：不进会话列表，每一轮按草稿运行（见 create_run）。
+        """
         if principal is None:
             if user_id is None:
                 raise TypeError("需要 principal 或 user_id")
@@ -329,6 +333,7 @@ class ThreadService:
             credential_profiles=profiles,
             source_app=principal.app,
             memory=memory,
+            status="preview" if preview else "active",
         )
         await self._session.refresh(thread)
         await self._seed_skills(version, thread_id=thread.thread_uuid, user_id=user_id)

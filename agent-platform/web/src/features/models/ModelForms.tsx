@@ -162,7 +162,7 @@ export function ModelFormModal({
           type="warning"
           showIcon
           style={{ marginBottom: 12 }}
-          message="LiteLLM 中的部署已不存在。重新登记会按下面的参数在 LiteLLM 新建部署，并把平台记录指向它；可见性和授权不变。供应商 API Key 平台没有保存，需要重新填写。"
+          message="这个模型已经失效。按下面的参数重新添加，谁能用保持不变；API Key 需要重新填写。"
         />
       )}
       {kind === "adopt" && (
@@ -170,7 +170,7 @@ export function ModelFormModal({
           type="info"
           showIcon
           style={{ marginBottom: 12 }}
-          message={`这个模型已在 LiteLLM 里配置（${m?.origin === "config" ? "配置文件" : "管理界面"}）。纳入平台只写平台记录、在用户中心登记，不改 LiteLLM；纳入后才能放进 Key。`}
+          message="这个模型已经在模型服务里配置好了，纳入平台后才能授权、放进 Key。"
         />
       )}
       <Form form={form} layout="vertical" initialValues={initial} requiredMark>
@@ -226,7 +226,7 @@ export function ModelFormModal({
 
         {hasRoute ? (
           <>
-            <div className={styles.secTitle}>路由（只提交给 LiteLLM）</div>
+            <div className={styles.secTitle}>调用配置</div>
             <Space.Compact block style={{ gap: 12 }}>
               <Form.Item
                 name="name"
@@ -239,7 +239,7 @@ export function ModelFormModal({
                   {
                     validator: (_, value: string) =>
                       kind === "new" && models.some((x) => x.name === value?.trim())
-                        ? Promise.reject(new Error("已有同名模型（含 LiteLLM 直配的）；模型名就是调用名，不能重复"))
+                        ? Promise.reject(new Error("已有同名模型；模型名就是调用名，不能重复"))
                         : Promise.resolve(),
                   },
                 ]}
@@ -258,7 +258,7 @@ export function ModelFormModal({
             <Form.Item
               name="api_key"
               label="供应商 API Key"
-              extra="只提交给 LiteLLM 加密保存，平台不落库"
+              extra="加密保存，保存后不再显示"
               rules={[{ required: keyRequired, message: "请填写供应商 API Key" }]}
             >
               <Input.Password
@@ -276,7 +276,7 @@ export function ModelFormModal({
                 </span>
               )}
             </Space>
-            <div className={styles.secTitle}>规格与价格（写入 LiteLLM）</div>
+            <div className={styles.secTitle}>规格与价格</div>
             <Space.Compact block style={{ gap: 12 }}>
               <Form.Item name="max_input_tokens" label="上下文窗口（token）" style={{ flex: 1 }}>
                 <InputNumber min={1} style={{ width: "100%" }} placeholder="如 131072" />
@@ -297,7 +297,7 @@ export function ModelFormModal({
         ) : (
           m && (
             <>
-              <div className={styles.secTitle}>LiteLLM 中的配置（只读，到 LiteLLM 管理界面修改）</div>
+              <div className={styles.secTitle}>调用配置（只读）</div>
               <Kv k="模型名" v={m.name} />
               <Kv k="API Base" v={m.api_base || "供应商默认地址"} />
               <Kv k="上下文 / 输出" v={`${fmtTokens(m.max_input_tokens)} / ${fmtTokens(m.max_output_tokens)}`} />
@@ -350,7 +350,7 @@ export function GrantsModal({ model: m, onClose }: { model: MgModel; onClose: ()
         type="info"
         showIcon
         style={{ marginBottom: 12 }}
-        message="私有模型授权给用户或部门后，他们才能把它放进自己的用户 Key；撤销后 Key 里的这个模型随之失效。管理员拥有全部模型，不用在这里授权；客户端 Key 也不看授权，由管理员直接分配。"
+        message="授权给人或部门后，他们才能在自己的 Key 里使用这个模型；收回后随之失效。"
       />
       <Table
         size="small"

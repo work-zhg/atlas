@@ -41,9 +41,6 @@ function KeyCell({ k }: { k: GwKeyRef }) {
   return (
     <div>
       <b>{k.name || k.client_code}</b> <Tag>{k.key_type === "user" ? "用户 Key" : "智能体 Key"}</Tag>
-      <div className={styles.desc2} style={{ fontFamily: "var(--mono)" }}>
-        主体 {k.subject_uid}
-      </div>
     </div>
   );
 }
@@ -106,10 +103,10 @@ export function ServiceGrants({ service: s }: { service: GwServiceDetail }) {
     });
   const removeOwner = (userId: string, name: string) =>
     modal.confirm({
-      title: "移除所有者",
+      title: "移除负责人",
       okText: "移除",
       okButtonProps: { danger: true },
-      content: `移除 ${name} 的所有者权限？已经分配给 Key 的权限不受影响。`,
+      content: `移除 ${name} 的负责人权限？已经分配给 Key 的权限不受影响。`,
       onOk: () => actions.removeOwner.mutateAsync(userId).then(() => message.success("已移除"), (e: Error) => message.error(e.message)),
     });
 
@@ -120,13 +117,12 @@ export function ServiceGrants({ service: s }: { service: GwServiceDetail }) {
           type="info"
           showIcon
           style={{ marginBottom: 16 }}
-          message="公开服务：任何有效的 API Key 都能调用全部工具，不需要授权。改成私有后，授给 Key 的权限才起作用。"
+          message="这个服务对所有人公开，不需要授权。改成需授权后，下面的授权才起作用。"
         />
       ) : (
         <>
           <div className={styles.secTitle}>
-            授权的 API Key
-            <span className={styles.muted}>服务级 = 全部工具（含以后新增的）；工具级 = 只能用指定的工具</span>
+            已授权
             <span style={{ flex: 1 }} />
             <Button size="small" type="primary" icon={<Icon name="plus" size={13} />} onClick={() => setEditing("new")}>
               授权 Key
@@ -163,16 +159,16 @@ export function ServiceGrants({ service: s }: { service: GwServiceDetail }) {
             ]}
           />
           <p className={styles.muted} style={{ fontSize: 12, marginTop: 8 }}>
-            网关判权时以 Key 的主体作 X-Auth-Uid 调用户中心，结果按 Key 缓存 30 秒：新授、收回的授权最长 30 秒生效。
+            新授、收回的授权最长 30 秒生效。
           </p>
         </>
       )}
       <div className={styles.secTitle}>
-        所有者
-        <span className={styles.muted}>能给 API Key 分配这个服务的权限；不能改连接和工具</span>
+        负责人
+        <span className={styles.muted}>能给别人授权，不能改连接和工具</span>
         <span style={{ flex: 1 }} />
         <Button size="small" onClick={() => setAddingOwner(true)}>
-          ＋ 添加所有者
+          ＋ 添加负责人
         </Button>
       </div>
       <Table
@@ -180,7 +176,7 @@ export function ServiceGrants({ service: s }: { service: GwServiceDetail }) {
         rowKey="user_id"
         dataSource={g.owners}
         pagination={false}
-        locale={{ emptyText: "没有所有者（只有 MCP 管理员能授权）" }}
+        locale={{ emptyText: "没有负责人（只有管理员能授权）" }}
         columns={[
           { title: "用户", dataIndex: "name", render: (v: string, o) => v || o.user_id },
           {
@@ -195,7 +191,7 @@ export function ServiceGrants({ service: s }: { service: GwServiceDetail }) {
         ]}
       />
       <p className={styles.muted} style={{ fontSize: 12, marginTop: 8 }}>
-        所有者是人（数据权限 McpServer = OWNER），登记人自动成为所有者。MCP 管理员有「全部 MCP 服务 · 所有者」（数据编码级授权），不在列表里。
+        负责人能给别人授权；接入服务的人自动成为负责人。
       </p>
       {editing && <KeyGrantModal service={s} editing={editing === "new" ? null : editing} granted={g.keys} onClose={() => setEditing(undefined)} />}
       {addingOwner && <OwnerModal service={s} owners={g.owners.map((o) => o.user_id)} onClose={() => setAddingOwner(false)} />}
@@ -257,7 +253,7 @@ function KeyGrantModal({
           {s.display_name} <code>{s.name}</code>
         </span>
       </FormField>
-      <FormField label="API Key" hint={!editing && old ? "这把 Key 已有授权，保存后替换原来的" : "授权授给 Key 在用户中心的主体"}>
+      <FormField label="API Key" hint={!editing && old ? "这把 Key 已有授权，保存后替换原来的" : undefined}>
         {editing ? (
           <KeyCell k={editing.key} />
         ) : (
@@ -298,7 +294,7 @@ function OwnerModal({ service: s, owners, onClose }: { service: GwServiceDetail;
   return (
     <Modal
       open
-      title={`添加所有者 · ${s.display_name}`}
+      title={`添加负责人 · ${s.display_name}`}
       okText="添加"
       okButtonProps={{ disabled: !userId, loading: actions.addOwner.isPending }}
       onCancel={onClose}
@@ -306,14 +302,14 @@ function OwnerModal({ service: s, owners, onClose }: { service: GwServiceDetail;
         userId &&
         actions.addOwner.mutate(userId, {
           onSuccess: () => {
-            message.success("已添加所有者");
+            message.success("已添加负责人");
             onClose();
           },
           onError: (e) => message.error(e.message),
         })
       }
     >
-      <FormField label="用户" hint="所有者能给 API Key 分配这个服务的权限、增删所有者；改连接和工具仍然只有 MCP 管理员">
+      <FormField label="用户" hint="负责人能给别人授权、增删负责人；连接和工具只有管理员能改">
         <Select
           showSearch
           style={{ width: "100%" }}
@@ -344,7 +340,7 @@ interface Draft {
 const sameDraft = (a: Draft, b: GwServiceScope | undefined) =>
   a.on ? !!b && a.scope === b.scope && (a.scope === "all" || [...a.tools].sort().join() === [...b.tools].sort().join()) : !b;
 
-/** 一次给一把 Key 配多个私有服务；只能改自己是所有者的服务（MCP 管理员是全部） */
+/** 一次给一把 Key 配多个私有服务；只能改自己是负责人的服务（MCP 管理员是全部） */
 export function AssignModal({ k, onClose }: { k: GwKey; onClose: () => void }) {
   const { message } = AntdApp.useApp();
   const servicesQ = useGwServices();
@@ -421,7 +417,7 @@ export function AssignModal({ k, onClose }: { k: GwKey; onClose: () => void }) {
                 <code className={styles.muted}>{s.name}</code>
                 <KindTag kind={s.kind} />
                 {!s.enabled && <Tag>已停用</Tag>}
-                {!can && <span className={styles.muted} style={{ fontSize: 12 }}>你不是所有者，只能看</span>}
+                {!can && <span className={styles.muted} style={{ fontSize: 12 }}>你不是负责人，只能看</span>}
               </div>
               {d.on && (
                 <div style={{ paddingLeft: 24, marginTop: 6 }}>
@@ -436,7 +432,7 @@ export function AssignModal({ k, onClose }: { k: GwKey; onClose: () => void }) {
           );
         })}
       <p className={styles.muted} style={{ fontSize: 12, marginTop: 8 }}>
-        写进用户中心，授给这把 Key 的主体；修改最长 30 秒生效，Key 本身不变。
+        修改最长 30 秒生效，Key 本身不变。
       </p>
     </Modal>
   );

@@ -8,14 +8,16 @@
 LiteLLM 里找不到的 Key 只记 sync_error，不自动重建（要人看一眼：是不是被手工删了）。
 
 ★ 多副本各自跑：同步是幂等的，重复做只是多问几次 LiteLLM。
+★ 定时是定时任务库 atlas_jobs 的实例任务（Reconcile）：循环、出错隔离、停机交给库，运行情况在
+  /api/v1/jobs 看。
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from dataclasses import dataclass
 
+from atlas_jobs import Job, JobContext, NoParams
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -28,7 +30,7 @@ from .registry import DeploymentsCache, ModelRegistry
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["ReconcileReport", "reconcile_once", "run_reconciler"]
+__all__ = ["Reconcile", "ReconcileReport", "reconcile_once"]
 
 
 @dataclass
@@ -72,19 +74,19 @@ async def reconcile_once(
     return report
 
 
-async def run_reconciler(
-    interval_s: float,
-    sessionmaker: async_sessionmaker[AsyncSession],
-    litellm: LiteLLM,
-    deployments: DeploymentsCache,
-    perms: Permissions,
-    subjects: SubjectsCache,
-) -> None:
-    while True:
-        await asyncio.sleep(interval_s)
-        try:
-            await reconcile_once(sessionmaker, litellm, deployments, perms, subjects)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("对账失败，下次再试")
+class Reconcile(Job):
+    type = "modelgateway.reconcile"
+    description = "LiteLLM 对账"
+
+    def __init__(
+        self,
+        sessionmaker: async_sessionmaker[AsyncSession],
+        litellm: LiteLLM,
+        deployments: DeploymentsCache,
+        perms: Permissions,
+        subjects: SubjectsCache,
+    ) -> None:
+        self._args = (sessionmaker, litellm, deployments, perms, subjects)
+
+    async def execute(self, ctx: JobContext, params: NoParams) -> None:
+        await reconcile_once(*self._args)

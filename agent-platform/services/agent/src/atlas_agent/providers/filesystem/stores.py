@@ -1,11 +1,11 @@
 """文件的两种底层（c4-model/agent/code-workspace.html · FileStore）。
 
-    ObjectStoreFiles   直连对象存储（S3 API）。三个区都能走；按布局把区内路径换成 key
-    SandboxFiles       经沙箱：读写 Pod 里挂载的 /workspace（和沙箱里的命令同一个挂载）。
-                       只服务工作区区
+    ObjectStoreFiles   直连对象存储（S3 API）：相对路径 rel → key {user}/{rel}
+    SandboxFiles       经沙箱：读写 Pod 里挂载的 /data（和沙箱里的命令同一个挂载）：
+                       rel → /data/{rel}
 
-两者语义一致（Workspace 不知道这一次走的是哪个）：按区内路径查大小、读、写、删、列。列举按对象存储的
-语义：「前缀匹配 + delimiter 分组」，空目录不出现（对象存储里没有空目录）。
+两者语义一致（Workspace 不知道这一次走的是哪个）：按相对这个人前缀的路径查大小、读、写、删、列。
+列举按对象存储的语义：「前缀匹配 + delimiter 分组」，空目录不出现（对象存储里没有空目录）。
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any, Protocol
 
-from ...domain.workspace_layout import WORKSPACE_MOUNT, Area, WorkspaceLayout
+from ...domain.workspace_layout import DATA_MOUNT, WorkspaceLayout
 from .paths import FilePath
 
 if TYPE_CHECKING:
@@ -24,7 +24,7 @@ __all__ = ["FileStore", "ObjectStoreFiles", "SandboxFiles"]
 #: 批量删除单次的 key 上限。S3 的 DeleteObjects 规定 1000，OSS 同。
 _DELETE_BATCH = 1000
 
-#: 一页列举：(这一层的文件, 下一层的「目录」)，都是区内相对路径；目录以 / 结尾
+#: 一页列举：(这一层的文件, 下一层的「目录」)，都是相对这个人前缀的路径；目录以 / 结尾
 Page = tuple[list[str], list[str]]
 
 
@@ -45,7 +45,7 @@ class ObjectStoreFiles:
         self._s3, self._bucket, self._layout = client, bucket, layout
 
     def key(self, path: FilePath) -> str:
-        return self._layout.key(path.area, path.rel)
+        return self._layout.key(path.rel)
 
     def size(self, path: FilePath) -> int | None:
         try:
@@ -73,7 +73,7 @@ class ObjectStoreFiles:
 
     def pages(self, prefix: FilePath, *, recursive: bool) -> Iterator[Page]:
         """不递归时用 delimiter 模拟「一层」—— 对象存储没有真正的目录。"""
-        base = self._layout.key(prefix.area, "")
+        base = self._layout.key("")
         kwargs: dict[str, Any] = {
             "Bucket": self._bucket,
             "Prefix": self.key(prefix),
@@ -96,7 +96,7 @@ class ObjectStoreFiles:
 
 
 class SandboxFiles:
-    """经 execd 的文件 API 读写 Pod 里的 /workspace。只服务工作区区（调用方保证）。
+    """经 execd 的文件 API 读写 Pod 里的 /data。
 
     ★ 列举语义与对象存储对齐：execd 列出的是真实目录树，这里换算成「前缀匹配 + delimiter 分组」，
       空目录因此不出现。
@@ -107,8 +107,7 @@ class SandboxFiles:
 
     @staticmethod
     def _abs(path: FilePath) -> str:
-        assert path.area is Area.WORKSPACE, "只有工作区区会走沙箱"
-        return f"{WORKSPACE_MOUNT}/{path.rel}"
+        return path.real
 
     def size(self, path: FilePath) -> int | None:
         return self._f.size(self._abs(path))
@@ -129,10 +128,10 @@ class SandboxFiles:
         directory = (
             prefix.rel.rsplit("/", 1)[0] if "/" in prefix.rel else ""
         )  # 可以停在半个文件名上
-        root = f"{WORKSPACE_MOUNT}/"
+        root = f"{DATA_MOUNT}/"
         rels = sorted(
             rel
-            for f in self._f.search(f"{WORKSPACE_MOUNT}/{directory}".rstrip("/") or WORKSPACE_MOUNT)
+            for f in self._f.search(WorkspaceLayout.real(directory))
             if (rel := f.path.removeprefix(root)).startswith(prefix.rel)
         )
         if recursive:

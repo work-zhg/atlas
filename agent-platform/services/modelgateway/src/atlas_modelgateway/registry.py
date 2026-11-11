@@ -56,6 +56,7 @@ PROVIDERS: dict[str, dict[str, Any]] = {
     "dashscope": {"name": "通义千问（DashScope）"},
     "volcengine": {"name": "火山方舟"},
     "moonshot": {"name": "Moonshot（Kimi）"},
+    "gemini": {"name": "Google AI Studio（Gemini）"},
     "hosted_vllm": {"name": "vLLM 自部署", "needs_base": True, "key_optional": True},
 }
 

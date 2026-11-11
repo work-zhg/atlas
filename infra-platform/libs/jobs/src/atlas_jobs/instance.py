@@ -16,7 +16,7 @@ import random
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from .job import JobContext
 from .registry import InstanceJob
@@ -30,6 +30,12 @@ class InstanceMetrics:
 
     type: str
     every: float
+    jitter: float = 0.0
+    description: str = ""
+    #: 这一轮正在跑
+    running: bool = False
+    #: 下一轮大约什么时候开始（含抖动）；正在跑时为空 —— 跑完才排下一轮
+    next_fire_at: datetime | None = None
     runs: int = 0
     failures: int = 0
     #: 连续失败次数：成功一次就清零。一直涨说明这个任务在本进程里已经不起作用了
@@ -44,7 +50,12 @@ class InstanceRunner:
     def __init__(self, jobs: list[InstanceJob], *, rng: random.Random | None = None) -> None:
         self._jobs = jobs
         self._rng = rng or random.Random()
-        self._metrics = {j.job.type: InstanceMetrics(type=j.job.type, every=j.every) for j in jobs}
+        self._metrics = {
+            j.job.type: InstanceMetrics(
+                type=j.job.type, every=j.every, jitter=j.jitter, description=j.job.description
+            )
+            for j in jobs
+        }
         self._loops: list[asyncio.Task[None]] = []
         # ★ 同步任务进库自己的线程池，不用 AnyIO 的默认线程池：那 40 个线程是给宿主的同步接口
         #   用的。实例任务各自不重叠，一个同步任务最多占一个线程
@@ -84,8 +95,11 @@ class InstanceRunner:
 
     async def _loop(self, entry: InstanceJob) -> None:
         # ★ 一轮跑完才睡下一段：慢的时候不会越积越多（上一轮没跑完，下一轮跳过）
+        metrics = self._metrics[entry.job.type]
         while True:
-            await asyncio.sleep(self._delay(entry))
+            delay = self._delay(entry)
+            metrics.next_fire_at = datetime.now(UTC) + timedelta(seconds=delay)
+            await asyncio.sleep(delay)
             await self._run_once(entry)
 
     async def _run_once(self, entry: InstanceJob) -> None:
@@ -94,6 +108,7 @@ class InstanceRunner:
         fired_at = datetime.now(UTC)
         started = time.monotonic()
         metrics.last_started_at = fired_at
+        metrics.running, metrics.next_fire_at = True, None
         ctx = JobContext(job_name=job.type, fired_at=fired_at)
         try:
             params = job.Params()
@@ -114,6 +129,7 @@ class InstanceRunner:
             metrics.consecutive_failures = 0
             metrics.last_error = None
         finally:
+            metrics.running = False
             metrics.runs += 1
             metrics.last_finished_at = datetime.now(UTC)
             metrics.last_duration_s = time.monotonic() - started

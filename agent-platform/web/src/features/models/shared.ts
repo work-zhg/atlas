@@ -22,7 +22,7 @@ export function grantLabel(g: MgGrant): string {
 
 /** 调用示例：OpenAI 兼容入口。地址空 = LiteLLM 还没对集群外开放 */
 export function curlFor(litellmUrl: string | null, model: string, key = "$MODEL_API_KEY"): string {
-  const base = (litellmUrl || "<LiteLLM 地址，请咨询管理员>").replace(/\/+$/, "");
+  const base = (litellmUrl || "<模型地址，请咨询管理员>").replace(/\/+$/, "");
   return [
     `curl ${base}/v1/chat/completions \\`,
     `  -H "Authorization: Bearer ${key}" \\`,

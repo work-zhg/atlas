@@ -44,7 +44,9 @@ async def get_run_trace(
 async def cancel_run(
     run_id: UUID, service: RunServiceDep, session: SessionDep, principal: PrincipalDep
 ) -> RunOut:
-    """写取消信号；engine 每步检查一次，到安全点后产出 run.cancelled。"""
+    """写取消信号；engine 每秒查一次（工具跑着时也查），正在跑的工具随之取消，
+    然后产出 run.cancelled。
+    """
     await ensure_run_owner(session, run_id, principal, write=True)
     return await service.cancel(run_id)
 

@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import asyncio
-import contextlib
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import httpx
+from atlas_jobs import JobScheduler
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
@@ -14,10 +13,11 @@ from ..db.session import get_sessionmaker
 from ..errors import GatewayError
 from ..litellm_api import LiteLLM
 from ..perms import Permissions, SubjectsCache, UCPermissions
-from ..reconcile import run_reconciler
+from ..reconcile import Reconcile
 from ..registry import DeploymentsCache
 from ..settings import get_settings
 from . import admin, internal
+from .jobs import jobs_router
 
 __all__ = ["create_app"]
 
@@ -29,6 +29,8 @@ def create_app(
 ) -> FastAPI:
     """perms、litellm_transport 可注入 —— 测试用内存实现；不注入则按设置连用户中心、LiteLLM。"""
     settings = get_settings()
+    # 定时任务（LiteLLM 对账）：lifespan 里注册、启动；/api/v1/jobs 看运行情况
+    jobs = JobScheduler()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -44,32 +46,29 @@ def create_app(
         )
         app.state.litellm = litellm
         app.state.deployments = DeploymentsCache(litellm, settings.litellm_models_ttl_s)
-        reconciler = (
-            asyncio.create_task(
-                run_reconciler(
-                    settings.reconcile_interval_s,
+        if settings.reconcile_interval_s > 0:
+            jobs.register(
+                Reconcile(
                     get_sessionmaker(),
                     litellm,
                     app.state.deployments,
                     app.state.perms,
                     app.state.subjects,
-                )
+                ),
+                scope="instance",
+                every=settings.reconcile_interval_s,
             )
-            if settings.reconcile_interval_s > 0
-            else None
-        )
+        jobs.start()
         try:
             yield
         finally:
-            if reconciler is not None:
-                reconciler.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await reconciler
+            await jobs.stop()
             await litellm.aclose()
             if owned is not None:
                 await owned.aclose()
 
     app = FastAPI(title="Model Management", version="0.2.0", lifespan=lifespan)
+    app.state.jobs = jobs
     if perms is not None:
         _wire_perms(app, perms)
     # 身份请求头透传：管理接口里调用户中心都带上（auth.py）
@@ -91,6 +90,7 @@ def create_app(
         return {"status": "ok"}
 
     app.include_router(admin.router)
+    app.include_router(jobs_router(jobs))
     app.include_router(internal.router)
     return app
 

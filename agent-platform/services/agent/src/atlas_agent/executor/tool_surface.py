@@ -27,7 +27,12 @@ from atlas_agent.sandbox.native import WorkspaceRef
 
 from ..config import Settings
 from ..outbound import current_identity
-from ..providers.filesystem.skill_copy import resolve_skills, skill_refs_for
+from ..providers.filesystem.skill_copy import (
+    resolve_skills,
+    seed_session_skills,
+    skill_dir,
+    skill_refs_for,
+)
 from ..providers.mcp import (
     MCP_PREFIX,
     CallContext,
@@ -40,6 +45,7 @@ from ..providers.mcp import (
 )
 from ..providers.mcp.gateway import forget_access, servers_in
 from ..skills import skill_directory
+from ..stream.relay import EventRelay, RedisCancelToken
 
 if TYPE_CHECKING:
     from ..memory import MemoryTurn
@@ -130,8 +136,10 @@ class ToolSurface:
                 exec=sandbox.exec,
                 ledger=sandbox.ledger,
                 ws=WorkspaceRef(segment.thread.workspace_thread_id, segment.thread.created_by_uuid),
-                run_id=str(run_id),
+                run_id=run_id,
                 spec=segment.spec.sandbox,
+                # 被取消时分辨「用户要停」（中断命令）和交接、租约丢失（命令留着，接手的实例接上）
+                cancel=RedisCancelToken(EventRelay(redis), run_id),
                 polling=PollingPolicy(settings.sandbox_poll_min_s, settings.sandbox_poll_max_s),
                 output_limit=settings.sandbox_output_limit_bytes,
                 idle_s=settings.cli_tool_idle_timeout_s,
@@ -146,16 +154,22 @@ class ToolSurface:
             if notices is not None:
                 notices.append((EventType.SKILL_SKIPPED, item))
             if workspace is not None:
-                # ★ 删掉本会话里的副本：只从索引里拿掉的话，模型仍可能凭记忆去读
-                await workspace.adelete(f"/skills/{item['slug']}", recursive=True)
+                # ★ 删掉技能目录里的这一版：只从索引里拿掉的话，模型仍可能凭记忆去读。
+                #   技能目录一个人共用，下架的版本对他所有会话都该消失
+                await workspace.adelete(skill_dir(item["slug"], item["version"]), recursive=True)
 
+        # ★ 技能在会话创建时已经拷过；这里再确认一次（只是一次 HEAD）：老会话、改了智能体的技能
+        #   配置都靠这一次补上。清单直接来自配置 —— 不扫描目录
+        skills = (
+            await seed_session_skills(workspace, skill_metas)
+            if workspace is not None
+            else skill_refs_for(skill_metas)
+        )
         return ToolContribution(
             extra_tools=extra_tools,
             deferred_tools=deferred,
             sandbox=shell,
-            # ★ 技能在**会话创建**时就已拷进 skills 前缀（见 skill_copy），
-            #   这里只把清单渲染给中间件 —— 不扫描、不读文件。
-            skills=skill_refs_for(skill_metas),
+            skills=skills,
             reminders=reminders_for(set(segment.spec.tool_names)),
             readable_store=workspace if FILESYSTEM_TOOL in segment.spec.tool_names else None,
         )

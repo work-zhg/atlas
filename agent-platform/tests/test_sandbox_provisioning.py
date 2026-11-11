@@ -6,6 +6,8 @@
     并发      同一个业务并发确保只建一个；同一个人并发新建不超过配额（验收）
     可重入    崩在「登记」和「建」之间，下一次用同一个 sandbox_uuid 接着建
     查询      current 只认 READY；confirm_gone 确实不在才去掉；describe / of_user / serving
+    共享      共享键相同的业务共用一个沙箱，槽位各不相同；满了另建；最后一个释放才退役；
+              current_of_user 退到这个人服务同类业务的沙箱
     回收      release 解绑后退役空出来的沙箱；reap_orphans 只释放不在活名单上的业务
     对账      重试卡在 RETIRING 的；基座里有、供给里没有登记的按 orphan 删掉
 """
@@ -34,6 +36,7 @@ from atlas_agent.sandbox.provisioning.model import (
     QuotaPolicy,
     SandboxRef,
     SandboxStatus,
+    Sharing,
 )
 from atlas_agent.sandbox.provisioning.service import (
     SandboxProvisioning,
@@ -56,6 +59,8 @@ class FakeKind:
         self.attached: list[tuple[UUID, bool]] = []
         self.readied: list[UUID] = []
         self.fail_ready = False
+        #: None = 独占（每个业务一个沙箱）
+        self.sharing: Sharing | None = None
 
     async def admit(self, req: Any) -> None:
         if req == "denied":
@@ -64,6 +69,9 @@ class FakeKind:
 
     def build(self, req: Any, biz: BizRef) -> CreateSpec:
         return simple_spec(self.template, user=str(biz.user_uuid))
+
+    def share(self, req: Any) -> Sharing | None:
+        return self.sharing
 
     async def attach(self, ref: SandboxRef, req: Any, *, created: bool) -> None:
         self.attached.append((ref.sandbox_uuid, created))
@@ -293,3 +301,92 @@ async def test_a_launch_failure_surfaces_as_sandbox_unavailable(
     with pytest.raises(SandboxUnavailableError, match="没有起来"):
         await env["prov"].ensure(biz, "req")
     assert await env["prov"].of_user(biz.user_uuid) == []
+
+
+# ──────────────────────────────────────────────── 共享
+
+
+async def test_one_person_shares_one_sandbox_with_distinct_slots(
+    env: dict[str, Any], fake: FakeOpenSandbox
+) -> None:
+    """共享键相同的业务共用一个沙箱：只建一个、只占一个配额，槽位各不相同。"""
+    prov, kind = env["prov"], env["kind"]
+    kind.sharing = Sharing()
+    user = uuid7()
+    a, b, c = (_biz(env, user) for _ in range(3))
+    refs = [await prov.ensure(x, "req") for x in (a, b, c)]
+    assert len(set(refs)) == 1 and len(fake.created) == 1
+    assert [await prov.slot(x) for x in (a, b, c)] == [0, 1, 2]
+    [sandbox] = await prov.of_user(user)
+    assert sandbox.share_key is not None and len(sandbox.bindings) == 3
+
+    # 中间的释放了，槽位空出来给下一个
+    await prov.release(b, reason="release")
+    d = _biz(env, user)
+    assert await prov.ensure(d, "req") == refs[0]
+    assert await prov.slot(d) == 1
+    # 别人不共用
+    other = _biz(env)
+    assert await prov.ensure(other, "req") != refs[0]
+
+
+async def test_concurrent_businesses_of_one_person_end_up_in_one_sandbox(
+    env: dict[str, Any], fake: FakeOpenSandbox
+) -> None:
+    """同一个人同时开几个会话：账户版本号 CAS 让它们挑同一个（在建的也挑），只建一个。"""
+    fake.create_delay_s = 0.2
+    env["kind"].sharing = Sharing()
+    user = uuid7()
+    bizs = [_biz(env, user) for _ in range(4)]
+    refs = await asyncio.gather(*(env["prov"].ensure(b, "req") for b in bizs))
+    assert len(set(refs)) == 1 and len(fake.created) == 1
+    assert sorted([await env["prov"].slot(b) for b in bizs]) == [0, 1, 2, 3]
+
+
+async def test_a_full_sandbox_makes_room_in_a_new_one(
+    env: dict[str, Any], fake: FakeOpenSandbox
+) -> None:
+    env["kind"].sharing = Sharing(capacity=2)
+    user = uuid7()
+    refs = [await env["prov"].ensure(_biz(env, user), "req") for _ in range(3)]
+    assert refs[0] == refs[1] != refs[2]
+    assert len(fake.created) == 2
+
+
+async def test_different_share_keys_do_not_share(env: dict[str, Any]) -> None:
+    """凭据集合这类业务给的键不同：各建各的。"""
+    prov, kind = env["prov"], env["kind"]
+    user = uuid7()
+    kind.sharing = Sharing("creds:a")
+    first = await prov.ensure(_biz(env, user), "req")
+    kind.sharing = Sharing("creds:b")
+    assert await prov.ensure(_biz(env, user), "req") != first
+
+
+async def test_a_shared_sandbox_retires_only_after_the_last_release(
+    env: dict[str, Any], fake: FakeOpenSandbox
+) -> None:
+    prov = env["prov"]
+    env["kind"].sharing = Sharing()
+    user = uuid7()
+    a, b = _biz(env, user), _biz(env, user)
+    ref = await prov.ensure(a, "req")
+    await prov.ensure(b, "req")
+
+    await prov.release(a, reason="idle")
+    assert fake.deleted == [] and await prov.current(b) == ref
+    await prov.release(b, reason="idle")
+    assert len(fake.deleted) == 1 and await prov.of_user(user) == []
+
+
+async def test_current_of_user_falls_back_to_the_persons_sandbox(env: dict[str, Any]) -> None:
+    """文件读写的选路：业务自己没绑，就用这个人服务同类业务的 READY 沙箱（挂的是同一个前缀）。"""
+    prov = env["prov"]
+    env["kind"].sharing = Sharing()
+    user = uuid7()
+    bound, unbound = _biz(env, user), _biz(env, user)
+    assert await prov.current_of_user(unbound) is None
+    ref = await prov.ensure(bound, "req")
+    assert await prov.current(unbound) is None
+    assert await prov.current_of_user(unbound) == ref
+    assert await prov.current_of_user(_biz(env)) is None  # 别人的不算

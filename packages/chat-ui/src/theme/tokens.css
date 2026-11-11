@@ -6,40 +6,42 @@
  */
 :root,
 .atlas-chat-root {
-  /* 背景分层 */
-  --bg-app: #0b1220;   /* rail / 最底层 */
-  --bg: #0f172a;       /* 页面底色 */
-  --bg-1: #111b31;     /* 面板 colorBgContainer */
-  --bg-2: #16223c;     /* 卡片 / hover  colorBgElevated */
-  --bg-3: #1e293b;     /* 选中 / 抬起 */
-  --bg-code: #0c1526;
+  /* 背景分层（浅色；与用户中心、TeamFlow、模型平台原型同一套） */
+  --bg-app: #ffffff;   /* 顶栏 */
+  --bg: #f6f7f9;       /* 页面底色 */
+  --bg-1: #ffffff;     /* 面板 / 卡片  colorBgContainer */
+  --bg-2: #f2f4f8;     /* hover */
+  --bg-3: #e9ebf3;     /* 选中 / 抬起 */
+  --bg-side: #fbfbfd;  /* 左侧菜单 */
+  --bg-code: #f6f8fb;
 
   /* 描边 */
-  --line: #22304d;
-  --line-2: #3a4c72;
+  --line: #e6e8ee;
+  --line-2: #d5d9e2;
 
-  /* 文字 —— 括号内为 on --bg 的实测对比度 */
-  --fg: #f8fafc;       /* 17.1:1 */
-  --fg-2: #94a3b8;     /* 6.96:1 */
-  --fg-3: #64748b;     /* 3.75:1 — 仅 placeholder/disabled，禁止用于正文 */
+  /* 文字 —— 括号内为 on #fff 的实测对比度 */
+  --fg: #0f172a;       /* 17.9:1 */
+  --fg-2: #475569;     /* 7.6:1 */
+  --fg-3: #64748b;     /* 4.8:1 —— 次要文字的下限 */
+  --fg-4: #94a3b8;     /* 2.6:1 —— 仅 placeholder / 装饰，禁止用于正文 */
 
   /* 主色 */
   --primary: #4f46e5;
   --primary-hover: #6366f1;
   --primary-fg: #ffffff;
-  --primary-text: #818cf8;
-  --primary-soft: rgba(99, 102, 241, 0.14);
-  --primary-soft-2: rgba(99, 102, 241, 0.24);
+  --primary-text: #4338ca;
+  --primary-soft: #eef0ff;
+  --primary-soft-2: #e0e3ff;
 
   /* 语义 */
-  --success: #22c55e;
-  --success-soft: rgba(34, 197, 94, 0.14);
-  --warning: #f59e0b;
-  --warning-soft: rgba(245, 158, 11, 0.14);
-  --danger: #ef4444;
-  --danger-soft: rgba(239, 68, 68, 0.14);
-  --info: #38bdf8;
-  --info-soft: rgba(56, 189, 248, 0.14);
+  --success: #16a34a;
+  --success-soft: #e7f6ec;
+  --warning: #d97706;
+  --warning-soft: #fef3e2;
+  --danger: #dc2626;
+  --danger-soft: #fdeaea;
+  --info: #0284c7;
+  --info-soft: #e6f6fe;
 
   /* 尺寸 */
   --r-sm: 6px;
@@ -50,6 +52,9 @@
   --h-md: 28px;
   --h-lg: 32px;
   --rail-w: 64px;
+  --top-h: 52px;
+  --sider-w: 248px;
+  --sider-w-min: 60px;
   --list-w: 264px;
   --inspector-w: 340px;
 
@@ -67,8 +72,9 @@
   --t-fast: 120ms;
   --t-mid: 180ms;
 
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.35);
-  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.45);
+  --shadow-xs: 0 1px 2px rgba(16, 24, 40, 0.05);
+  --shadow-md: 0 6px 18px rgba(16, 24, 40, 0.08), 0 2px 6px rgba(16, 24, 40, 0.05);
+  --shadow-lg: 0 20px 48px rgba(16, 24, 40, 0.16);
 
   --font: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
     "Microsoft YaHei", sans-serif;

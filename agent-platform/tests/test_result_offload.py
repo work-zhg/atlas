@@ -45,6 +45,17 @@ async def test_a_large_result_is_written_whole_and_previewed() -> None:
     assert len(out.content) < 20_000
 
 
+async def test_the_caller_decides_where_offloads_go() -> None:
+    """外置目录由调用方给：消息里给模型的就是那里的路径。"""
+    store = Store()
+    offloader = ResultOffloader(
+        store=store, offload_dir="/data/r/workspace/.atlas/t/large_tool_results"
+    )
+    out = await offloader.on_result(_result(), tool_name="execute")
+    path = "/data/r/workspace/.atlas/t/large_tool_results/c1"
+    assert list(store.files) == [path] and path in out.content
+
+
 async def test_small_results_and_file_tools_are_left_alone() -> None:
     store = Store()
     offloader = ResultOffloader(store=store)

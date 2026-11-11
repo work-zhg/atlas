@@ -11,6 +11,7 @@
     jobs.start()            # 宿主 lifespan 里
     ...
     await jobs.stop()       # 宿主自己的收尾做完之后
+    app.include_router(JobRoutes(jobs, guard).router)   # 只读管理接口（本实例的指标）
 
 这一版只有实例任务（和 Spring 的 @Scheduled 一样）：定义只在代码里，每个进程各跑一份，
 不抢行、不要租约、不写执行记录，只出指标。集群任务（库里定义、全集群一份，和 Quartz 一样）
@@ -19,6 +20,15 @@
 
 from .instance import InstanceMetrics
 from .job import Job, JobContext, NoParams
+from .routes import JobGuard, JobRoutes
 from .scheduler import JobScheduler
 
-__all__ = ["InstanceMetrics", "Job", "JobContext", "JobScheduler", "NoParams"]
+__all__ = [
+    "InstanceMetrics",
+    "Job",
+    "JobContext",
+    "JobGuard",
+    "JobRoutes",
+    "JobScheduler",
+    "NoParams",
+]

@@ -1,23 +1,25 @@
-"""把技能包拷进会话的 skills 前缀。
+"""把技能包拷进这个人的技能目录。
 
-## 布局：与 workspace 平级
+## 布局：一个人一份，按技能、版本分子目录
 
-    {user}/{thread}/workspace/    ← 可被子智能体共享挂载
-    {user}/{thread}/skills/       ← 恒为自己的
-    _skills/{slug}/{version}/     ← 源仓库，全局只读
+    {user}/skills/{slug}/{version}/    ← 这个人所有会话共用；沙箱里是 /data/skills/{slug}/{version}/
+    _skills/{slug}/{version}/          ← 源仓库，全局只读，在桶根（沙箱里看不到）
 
-模型看到的是 `/skills/<slug>/`，由工作区的路径关卡（PathGate）路由到技能区。
-Pod 侧是一个**独立的挂载点** —— 所以 `execute` 能直接跑技能里的脚本，
-不需要第二条投送路径、不需要物化的幂等判断、不需要清理残留。
+同一版技能只拷一次，新会话、子会话大多不用再拷；不同智能体可能绑同一技能的不同版本，按版本分开才
+不会互相覆盖。每个会话的提示词只列出自己智能体绑定的技能和路径（清单来自智能体的配置，不扫描目录），
+目录里别的技能不会混进来。
 
-代价是每个会话持有一份副本：会话可以改自己的技能，改动只对本会话生效。
-`run.agent_version_id` 因此回答的是「这个会话开始时拷了哪一版」，而不是
-「这一轮实际用的是什么」—— 要还原实际内容，会话副本本身就在 OSS 里。
+★ 目录可写、一个人共用：会话里改了技能，这个人所有绑同一版本的会话都会看到（用户 2026-11-09 定的）。
+  `run.agent_version_id` 回答的是「绑的是哪一版」，不是「这一轮实际读到的内容」。
 
-## 时机
+## 时机：缺了才拷，拷完写完成标记
 
-**会话创建**，不是首次 run。用户对「新建会话」的延迟容忍度更高，而首轮
-对话的等待是最刺眼的。
+会话创建时拷（建会话的延迟比首轮对话的等待好接受），每轮装配时再确认一次（老会话、改了智能体的技能
+配置都靠这一次补上）。确认只是一次 HEAD：标记在就跳过。没有标记的目录当作没拷完，重拷一遍（同名对象
+覆盖，幂等）。
+
+★ 例外的写入路径：拷贝用对象存储的服务端复制，直写 {user}/skills/…，不经沙箱。源仓库不在沙箱里，只能
+  这样；目标目录刚确认过没拷完，沙箱里没人用过它，不会和 Pod 里的缓存冲突。
 """
 
 from __future__ import annotations
@@ -29,7 +31,7 @@ from typing import TYPE_CHECKING, Any
 
 from atlas_engine.contracts import SkillRef
 
-from ...domain.workspace_layout import SKILLS_MOUNT, Area
+from ...domain.workspace_layout import WorkspaceLayout
 from ...errors import CapabilityUnavailable
 
 if TYPE_CHECKING:
@@ -38,18 +40,18 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    "SKILLS_MOUNT",
+    "COMPLETE_MARKER",
     "SkillMeta",
     "SkillUnavailable",
     "resolve_skills",
     "seed_session_skills",
+    "skill_dir",
     "skill_refs_for",
 ]
 
 
-#: 并发拷贝的批大小。CopyObject 是服务端拷贝（不下载不上传），
-#: 单对象 10–50ms；ui-ux-pro-max 有 76 个对象，并发 20 时 < 1s。
-_COPY_CONCURRENCY = 20
+#: 拷完最后写的完成标记（技能版本目录里的隐藏文件）
+COMPLETE_MARKER = ".atlas-copied"
 
 
 class SkillUnavailable(CapabilityUnavailable):
@@ -117,13 +119,16 @@ async def resolve_skills(
     return metas, skipped
 
 
+def skill_dir(slug: str, version: int | str) -> str:
+    """技能版本目录在沙箱里的路径（模型看到的）。"""
+    return WorkspaceLayout.real(WorkspaceLayout.skill(slug, version))
+
+
 def skill_refs_for(metas: Sequence[SkillMeta]) -> list[SkillRef]:
     """元数据 → 中间件要的 SkillRef（含模型看到的路径）。"""
     return [
         SkillRef(
-            name=m.slug,
-            description=m.description,
-            path=f"{SKILLS_MOUNT}/{m.slug}/SKILL.md",
+            name=m.slug, description=m.description, path=f"{skill_dir(m.slug, m.version)}/SKILL.md"
         )
         for m in metas
     ]
@@ -139,9 +144,9 @@ def _skill_prefix(fs: Any, slug: str, version: int) -> str:
 
 
 async def seed_session_skills(fs: Any, metas: Sequence[SkillMeta]) -> list[SkillRef]:
-    """把技能包拷进本会话的 skills 前缀，返回中间件要的清单。
+    """确保技能都在这个人的技能目录里（缺了才拷），返回中间件要的清单。
 
-    幂等：目标已存在同名对象则跳过 —— 会话重建、创建重试都会撞到。
+    幂等：完成标记在就跳过 —— 会话创建、每轮装配、子会话都会调。
     """
     if not metas:
         return []
@@ -152,9 +157,13 @@ async def seed_session_skills(fs: Any, metas: Sequence[SkillMeta]) -> list[Skill
 
 def _copy_one(fs: Any, meta: SkillMeta) -> None:
     src_prefix = _skill_prefix(fs, meta.slug, meta.version)
-    # ★ 拷进**本会话的** skills 前缀，不是 workspace —— 子智能体因此
-    #   有自己的一套，而它挂的 workspace 是父 agent 的。
-    dst_prefix = fs.layout.key(Area.SKILLS, f"{meta.slug}/")
+    dst_prefix = fs.layout.key(WorkspaceLayout.skill(meta.slug, meta.version)) + "/"
+    marker = f"{dst_prefix}{COMPLETE_MARKER}"
+    try:
+        fs._s3.head_object(Bucket=fs._bucket, Key=marker)
+        return  # 已经拷完
+    except Exception:
+        pass
 
     keys: list[str] = []
     token: str | None = None
@@ -179,4 +188,6 @@ def _copy_one(fs: Any, meta: SkillMeta) -> None:
             CopySource={"Bucket": fs._bucket, "Key": key},
             Key=f"{dst_prefix}{rel}",
         )
-    logger.info("技能 %s@v%d 已拷入会话：%d 个对象", meta.slug, meta.version, len(keys))
+    # ★ 最后写标记：崩在中途的，下次看不到标记就重拷
+    fs._s3.put_object(Bucket=fs._bucket, Key=marker, Body=b"")
+    logger.info("技能 %s@v%d 已拷入技能目录：%d 个对象", meta.slug, meta.version, len(keys))

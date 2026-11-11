@@ -42,6 +42,8 @@ dependencies = [
   "opentelemetry-exporter-otlp-proto-http>=1.30",
   # 入库锁（短 TTL + 看门狗续租，indexing/runner.py）
   "atlas-redislock",
+  # 入库巡检是它的实例任务（jobs.py）
+  "atlas-jobs",
 ]
 
 [build-system]

@@ -33,8 +33,8 @@ def test_lists_files_written_outside_the_platform(s3) -> None:  # type: ignore[n
     s3.put_object(Bucket=BUCKET, Key=f"{ws}/index.html", Body=b"<html>")
     s3.put_object(Bucket=BUCKET, Key=f"{ws}/assets/app.js", Body=b"x" * 10)
     s3.put_object(Bucket=BUCKET, Key=f"{ws}/.cache/tmp", Body=b"hidden")
-    s3.put_object(Bucket=BUCKET, Key=f"{USER}/{parent}/skills/a/SKILL.md", Body=b"skill")
-    s3.put_object(Bucket=BUCKET, Key=f"{USER}/{parent}/system/x", Body=b"sys")
+    s3.put_object(Bucket=BUCKET, Key=f"{USER}/skills/a/1/SKILL.md", Body=b"skill")
+    s3.put_object(Bucket=BUCKET, Key=f"{ws}/.atlas/{parent}/large_tool_results/x", Body=b"sys")
 
     files, truncated = WorkspaceListing(fs).list()
     assert [(f["path"], f["size"]) for f in files] == [("assets/app.js", 10), ("index.html", 6)]
@@ -61,8 +61,12 @@ def test_download_is_confined_to_the_workspace(s3) -> None:  # type: ignore[no-u
     fs.write("report.md", "# 报告")
     body, size = WorkspaceListing(fs).open("report.md")
     assert body.read().decode() == "# 报告" and size == len("# 报告".encode())
-    # 挂载点前缀写法也认
-    assert WorkspaceListing(fs).open("/workspace/report.md")[1] == size
-    # 技能区不经这里下载
+    # 沙箱里的真实路径也认
+    assert WorkspaceListing(fs).open(f"{fs.workdir}/report.md")[1] == size
+    # 技能目录不经这里下载（即使是本智能体绑定的技能）
+    bound = Workspace(s3, bucket=BUCKET, user_id=USER, thread_id=uuid4(), skills=[("a", 1)])
     with pytest.raises(PathEscape):
-        WorkspaceListing(fs).open("/skills/a/SKILL.md")
+        WorkspaceListing(bound).open("/data/skills/a/1/SKILL.md")
+    # 别的会话的工作区也不行
+    with pytest.raises(PathEscape):
+        WorkspaceListing(fs).open(f"/data/{uuid4()}/workspace/report.md")

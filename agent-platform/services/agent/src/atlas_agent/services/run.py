@@ -103,7 +103,9 @@ class RunService:
         idempotency_key: str | None,
         initiator: UUID | None = None,
         auth_uid: UUID | None = None,
+        agent_version_id: UUID | None = None,
     ) -> RunAccepted:
+        """agent_version_id：这一轮用哪份配置。不给 = 智能体的当前版本；调试预览给草稿的快照。"""
         if idempotency_key:
             existing = await self._relay.lookup_idempotency(idempotency_key)
             if existing is not None:
@@ -125,6 +127,11 @@ class RunService:
         if agent_row is None or agent_row[0].current_version_uuid is None:
             raise NotFound(f"智能体 {agent.agent_uuid} 无可用版本", agent_id=str(agent.agent_uuid))
         version = agent_row[1]
+        if agent_version_id is not None and agent_version_id != version.agent_version_uuid:
+            override = await self._agents.version(agent_version_id)
+            if override is None or override.agent_uuid != agent.agent_uuid:
+                raise NotFound("配置版本不存在", agent_version_id=str(agent_version_id))
+            version = override
         auth_uid = run_auth_uid(agent_row[0], auth_uid or initiator)
         approval_mode = _approval_mode_for(
             version.spec, thread.approval_mode, payload.approval_mode

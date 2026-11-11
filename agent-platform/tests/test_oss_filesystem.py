@@ -13,7 +13,6 @@ from uuid import uuid4
 
 import boto3
 import pytest
-from atlas_agent.domain.workspace_layout import Area
 from atlas_agent.providers.filesystem import PathEscape, Workspace
 from atlas_agent.providers.filesystem.workspace import READ_MAX_BYTES
 from atlas_engine.contracts import EDIT_MAX_BYTES, FilesystemProtocol
@@ -84,7 +83,7 @@ def test_path_escapes_are_rejected(fs, escape: str) -> None:
 def test_dot_dot_inside_the_workspace_is_fine(fs) -> None:
     """没越界的 .. 照常规范化。"""
     assert fs.key_of("a/b/../c.md") == fs.key_of("a/c.md")
-    assert fs.key_of("/workspace/a/../c.md") == fs.key_of("c.md")
+    assert fs.key_of(f"{fs.workdir}/a/../c.md") == fs.key_of("c.md")
 
 
 async def test_escaping_into_another_session_is_rejected(two_sessions) -> None:
@@ -104,13 +103,54 @@ def test_root_itself_is_not_a_file(fs, bad: str) -> None:
         fs.key_of(bad)
 
 
-@pytest.mark.parametrize("bad", ["/workspace", "/"])
-def test_root_operations_return_errors_not_raise(fs, bad: str) -> None:
+@pytest.mark.parametrize("workdir", [True, False])
+def test_root_operations_return_errors_not_raise(fs, workdir: bool) -> None:
     """模型对工作区根调用文件工具：返回错误结果让它自己纠正，而不是抛出去打断 run。"""
-    assert "工作区本身" in (fs.read(bad).error or "")
-    assert "工作区本身" in (fs.write(bad, "x").error or "")
-    assert "工作区本身" in (fs.edit(bad, "a", "b").error or "")
-    assert "工作区本身" in (fs.delete(bad).error or "")
+    bad = fs.workdir if workdir else "/"
+    assert "目录本身" in (fs.read(bad).error or "")
+    assert "目录本身" in (fs.write(bad, "x").error or "")
+    assert "目录本身" in (fs.edit(bad, "a", "b").error or "")
+    assert "目录本身" in (fs.delete(bad).error or "")
+
+
+@pytest.mark.parametrize("legacy", ["/workspace/a.md", "/skills/x/SKILL.md"])
+def test_legacy_mount_paths_are_rejected_with_the_new_one(fs, legacy: str) -> None:
+    """旧布局的 /workspace、/skills 直接拒绝，报错里给出新路径。
+
+    ★ 按「其余相对工作区」的规则，它们会悄悄落进工作区里一个叫 workspace 的子目录：模型以为写到了
+      工作区根，Shell 里却找不到。
+    """
+    error = fs.write(legacy, "x").error or ""
+    assert "旧的路径" in error and fs.workdir in error
+
+
+def test_real_paths_and_relative_paths_are_the_same_file(fs) -> None:
+    """沙箱里的真实路径 /data/… 和相对工作区的路径指向同一个对象。"""
+    fs.write(f"{fs.workdir}/reports/q3.md", "三季度")
+    assert fs.read("reports/q3.md").file_data["content"] == "三季度"
+    assert fs.key_of("reports/q3.md") == f"{USER}/{fs.layout.workspace}/reports/q3.md"
+
+
+def test_a_relative_data_directory_is_a_workspace_subdirectory(fs) -> None:
+    """★ 相对路径 data/raw.csv 到这里已经被引擎补成 /data/raw.csv：raw.csv 不是布局里的东西
+    （技能、home、会话 id），所以按工作区里的 data 子目录算 —— data 是很常见的目录名。"""
+    fs.write("/data/raw.csv", "a,b")
+    assert fs.key_of("/data/raw.csv") == f"{USER}/{fs.layout.workspace}/data/raw.csv"
+    assert fs.read(f"{fs.workdir}/data/raw.csv").file_data["content"] == "a,b"
+    assert fs.search("data/").keys == ["data/raw.csv"]
+    with pytest.raises(PathEscape, match="越出"):
+        fs.key_of("/data/../etc/passwd")
+
+
+def test_other_roots_under_data_are_not_reachable(fs) -> None:
+    """/data 下不是本会话能用的根（别的会话的工作区、没绑定的技能、CLI 的 home）一律拒绝。"""
+    others = (
+        f"/data/{uuid4()}/workspace/a.md",
+        "/data/skills/x/1/SKILL.md",
+        "/data/home/.claude/x",
+    )
+    for path in others:
+        assert "不在本会话能用的目录里" in (fs.read(path).error or "")
 
 
 def test_null_byte_is_rejected(fs) -> None:
@@ -331,35 +371,30 @@ def test_search_shows_hidden_when_prefix_is_explicit(fs) -> None:
     assert fs.search(".cache/build/").keys == [".cache/build/a.o"]
 
 
-def test_skills_are_not_in_the_workspace_at_all(fs) -> None:
-    """技能不靠「隐藏」躲开列举 —— 它根本不在 workspace 前缀下。
+def test_skills_are_not_in_the_workspace_at_all(s3) -> None:
+    """技能不靠「隐藏」躲开列举 —— 它在这个人的技能目录 {user}/skills/ 下，不在工作区里。
 
-    ★ 这是结构性的，不是约定：workspace 是**共享挂载**的（子智能体的 Pod
-      挂父 agent 的 workspace）。技能若住在里面，挂载会连父的技能一起带上，
-      而子智能体应该有自己的一套。平级之后挂载根本带不上。
+    文件工具只放行本智能体绑定的版本；结果以沙箱里的真实路径回来。
     """
+    fs = Workspace(s3, bucket=BUCKET, user_id=USER, thread_id=uuid4(), skills=[("dataviz", 1)])
     fs.write("report.md", "我的产物")
-    fs.write("/skills/dataviz/SKILL.md", "技能")
+    fs.write("/data/skills/dataviz/1/SKILL.md", "技能")
 
-    # 落到两个不同的绝对前缀
-    assert fs.layout.prefix(Area.WORKSPACE) != fs.layout.prefix(Area.SKILLS)
-    assert fs.layout.prefix(Area.SKILLS).endswith("/skills")
+    assert fs.key_of("/data/skills/dataviz/1/SKILL.md") == f"{USER}/skills/dataviz/1/SKILL.md"
 
     # search("") 只看 workspace —— 技能不在其中
     assert fs.search("").keys == ["report.md"]
     assert fs.search("").common_prefixes == []
 
-    # 显式走挂载点才看得到，路径以模型侧的形态回来
-    assert fs.search("/skills/").common_prefixes == ["skills/dataviz/"]
-    assert fs.search("/skills/dataviz/").keys == ["skills/dataviz/SKILL.md"]
-    assert fs.read("/skills/dataviz/SKILL.md").file_data["content"].strip() == "技能"
+    # 显式给技能目录才看得到，路径以沙箱里的形态回来
+    assert fs.search("/data/skills/dataviz/1/").keys == ["/data/skills/dataviz/1/SKILL.md"]
+    assert fs.read("/data/skills/dataviz/1/SKILL.md").file_data["content"].strip() == "技能"
 
 
-def test_subagent_shares_parent_workspace_but_keeps_own_skills(s3) -> None:
-    """子会话的挂载形态：workspace 是父的，skills 是自己的。
+def test_subagent_shares_parent_workspace(s3) -> None:
+    """子会话用根会话的工作区：父写的子看得到，子写的父也看得到。
 
-    这一条红了意味着子智能体要么看不见父 agent 的产物（协作断了），
-    要么读到了父的技能（隔离断了）—— 两个方向都是回归。
+    这一条红了意味着子智能体看不见父 agent 的产物（协作断了）。
     """
     parent = Workspace(s3, bucket=BUCKET, user_id=USER, thread_id="t-parent")
     child = Workspace(
@@ -370,19 +405,14 @@ def test_subagent_shares_parent_workspace_but_keeps_own_skills(s3) -> None:
         workspace_thread_id="t-parent",
     )
 
-    assert child.layout.prefix(Area.WORKSPACE) == parent.layout.prefix(
-        Area.WORKSPACE
-    )  # 同一份工作区
-    assert child.layout.prefix(Area.SKILLS) != parent.layout.prefix(Area.SKILLS)  # 各自的技能
+    assert child.workdir == parent.workdir == "/data/t-parent/workspace"  # 同一份工作区
+    assert child.layout.atlas_dir != parent.layout.atlas_dir  # 隐藏目录各自一个
 
     parent.write("shared.md", "父写的")
     assert child.read("shared.md").file_data["content"].strip() == "父写的"
 
     child.write("child.md", "子写的")
     assert parent.read("child.md").file_data["content"].strip() == "子写的"
-
-    parent.write("/skills/a/SKILL.md", "父的技能")
-    assert child.search("/skills/").common_prefixes == []
 
 
 def test_hidden_is_judged_per_segment(fs) -> None:
@@ -392,73 +422,52 @@ def test_hidden_is_judged_per_segment(fs) -> None:
     assert fs.search("reports/").keys == ["reports/final.md"]
 
 
-def test_system_area_is_sibling_of_workspace(fs) -> None:
-    """系统区与 workspace **平级**，不在它下面。
+def test_offloads_land_in_the_sessions_hidden_dir(fs) -> None:
+    """外置的大结果 / 被压缩的历史：写进所用工作区下本会话的隐藏目录 .atlas/{会话}/。
 
-    压缩归档与大结果外置放进工作区的话，模型 search 时会被它们淹没。
-    平级之后它们对文件工具结构性不可见 —— 不是靠过滤，是根本不在前缀内。
+    模型照给它的路径读回来；search("") 默认跳过隐藏目录，不会被它们淹没；界面的文件面板也不列。
     """
-    assert fs.layout.prefix(Area.SYSTEM).endswith("/system")
-    assert not fs.layout.prefix(Area.SYSTEM).startswith(fs.layout.prefix(Area.WORKSPACE))
-    assert (
-        fs.layout.prefix(Area.WORKSPACE).rsplit("/", 1)[0]
-        == fs.layout.prefix(Area.SYSTEM).rsplit("/", 1)[0]
-    )
+    from atlas_agent.providers.filesystem import WorkspaceListing
 
-
-def test_offloads_land_in_the_system_area_under_the_same_paths(fs) -> None:
-    """引擎外置的大结果 / 被压缩的历史：模型照原路径读写，落在系统区，不进工作区。
-
-    红了意味着它们回到了工作区 —— 混进界面的文件面板，还被挂进沙箱。
-    """
-    from atlas_engine.kernel.context.offload import INPUT_DIR, OFFLOAD_DIR
-
+    atlas = fs.layout.real(fs.layout.atlas_dir)
     fs.write("report.md", "我的产物")
-    fs.write(f"{OFFLOAD_DIR}/call-1", "很长的结果")
-    fs.write(f"{INPUT_DIR}/turns.md", "被压缩的历史")
+    fs.write(f"{atlas}/large_tool_results/call-1", "很长的结果")
 
-    assert fs.key_of(f"{OFFLOAD_DIR}/call-1") == fs.layout.key(
-        Area.SYSTEM, "large_tool_results/call-1"
+    assert fs.key_of(f"{atlas}/large_tool_results/call-1") == (
+        f"{USER}/{fs.layout.workspace}/.atlas/{fs.layout.thread_id}/large_tool_results/call-1"
     )
-    assert fs.read(f"{OFFLOAD_DIR}/call-1").file_data["content"].strip() == "很长的结果"
-    assert fs.search(f"{OFFLOAD_DIR}/").keys == ["large_tool_results/call-1"]
-    assert fs.search("").keys == ["report.md"]  # 工作区里没有它们
+    assert fs.read(f"{atlas}/large_tool_results/call-1").file_data["content"] == "很长的结果"
+    assert fs.search("").keys == ["report.md"]
     assert fs.search("").common_prefixes == []
-    # 只有这两个保留目录进系统区：相对路径、系统区里的其它东西（CLI 的 HOME）都碰不到
-    relative = "large_tool_results/x"
-    assert fs.key_of(relative) == fs.layout.key(Area.WORKSPACE, relative)
-    assert fs.key_of("/cli-home/x") == fs.layout.key(Area.WORKSPACE, "cli-home/x")
+    assert [f["path"] for f in WorkspaceListing(fs).list()[0]] == ["report.md"]
 
 
-def test_subagent_skills_land_under_its_own_thread_prefix(s3) -> None:
-    """子智能体的技能拷进**自己的** thread 前缀，改它不影响主 agent。
-
-    ★ 设计 §11 步骤 1 的验收点。红了意味着「技能完全隔离」退化成了约定：
-      共享挂载会把主 agent 的技能一起带给子智能体，而它应该有自己的一套。
-    """
+def test_subagent_and_parent_share_one_skill_copy(s3) -> None:
+    """技能一个人一份：父、子会话绑同一版本时只拷一次，用的是同一份。"""
     import asyncio
 
     from atlas_agent.providers.filesystem.skill_copy import SkillMeta, seed_session_skills
 
     s3.put_object(Bucket=BUCKET, Key="_skills/dataviz/1/SKILL.md", Body=b"v1")
 
-    parent = Workspace(s3, bucket=BUCKET, user_id=USER, thread_id="t-parent")
+    parent = Workspace(
+        s3, bucket=BUCKET, user_id=USER, thread_id="t-parent", skills=[("dataviz", 1)]
+    )
     child = Workspace(
         s3,
         bucket=BUCKET,
         user_id=USER,
         thread_id="t-child",
         workspace_thread_id="t-parent",
+        skills=[("dataviz", 1)],
     )
     metas = [SkillMeta("dataviz", 1, "画图")]
     asyncio.run(seed_session_skills(parent, metas))
     asyncio.run(seed_session_skills(child, metas))
 
-    # 同一个技能，两份副本，落在两个 thread 前缀下
     keys = {o["Key"] for o in s3.list_objects_v2(Bucket=BUCKET, Prefix=USER)["Contents"]}
-    assert f"{USER}/t-parent/skills/dataviz/SKILL.md" in keys
-    assert f"{USER}/t-child/skills/dataviz/SKILL.md" in keys
+    assert f"{USER}/skills/dataviz/1/SKILL.md" in keys
+    assert not any("/t-parent/" in k or "/t-child/" in k for k in keys)
 
-    # 子智能体改自己那份，主 agent 的不受影响
-    child.write("/skills/dataviz/SKILL.md", "子智能体改过的")
-    assert parent.read("/skills/dataviz/SKILL.md").file_data["content"].strip() == "v1"
+    child.write("/data/skills/dataviz/1/SKILL.md", "子智能体改过的")
+    assert parent.read("/data/skills/dataviz/1/SKILL.md").file_data["content"] == "子智能体改过的"

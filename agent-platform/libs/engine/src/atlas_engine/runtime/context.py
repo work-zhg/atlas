@@ -25,6 +25,7 @@ from atlas_engine.kernel.context import (
     ResultClearing,
     ResultOffloader,
 )
+from atlas_engine.kernel.context.offload import INPUT_DIR, OFFLOAD_DIR
 
 __all__ = ["ContextLimits", "ContextPorts", "ReminderSource", "context_pipeline"]
 
@@ -65,6 +66,9 @@ class ContextPorts:
     reminder_sources: Sequence[ReminderSource] = field(default_factory=tuple)
     #: None = 关了自动压缩，或者不知道窗口
     limits: ContextLimits | None = None
+    #: 外置的工具结果、超长用户输入写进 offload_store 的哪个目录（模型看到的就是这里的路径）
+    offload_dir: str = OFFLOAD_DIR
+    input_dir: str = INPUT_DIR
 
 
 def context_pipeline(spec: AgentSpec, ports: ContextPorts) -> ContextMiddleware:
@@ -72,6 +76,8 @@ def context_pipeline(spec: AgentSpec, ports: ContextPorts) -> ContextMiddleware:
         store=ports.offload_store,
         single_limit_tokens=ports.result_limit_tokens,
         batch_cap_tokens=ports.batch_cap_tokens,
+        offload_dir=ports.offload_dir,
+        input_dir=ports.input_dir,
     )
     sources = list(ports.reminder_sources)
     limits = ports.limits
@@ -96,6 +102,7 @@ def context_pipeline(spec: AgentSpec, ports: ContextPorts) -> ContextMiddleware:
         failure_count=limits.failure_count,
         on_failed=limits.on_failed,
         on_compacted=limits.on_compacted,
+        offload_dir=ports.offload_dir,
     )
     return ContextMiddleware(
         offloader=offloader,

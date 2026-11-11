@@ -33,11 +33,12 @@ from atlas_engine.kernel.middleware._fs_utils import (
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["NOT_OFFLOADED", "OFFLOAD_DIR", "ResultOffloader", "batch_overflow"]
+__all__ = ["INPUT_DIR", "NOT_OFFLOADED", "OFFLOAD_DIR", "ResultOffloader", "batch_overflow"]
 
-#: 外置的工具结果写在这里。★ 压缩后的工作集恢复跳过这个目录（它不是模型自己的文件）
+#: 外置的工具结果默认写在这里（调用方可以另给目录，见 ContextPorts）。
+#: ★ 压缩后的工作集恢复跳过这个目录（它不是模型自己的文件）
 OFFLOAD_DIR = "/large_tool_results"
-#: 外置的超长用户输入写在这里
+#: 外置的超长用户输入默认写在这里
 INPUT_DIR = "/conversation_history"
 #: 不外置的工具：read_file 自带分页（外置了模型只会再用 read_file 读一遍），写类工具的结果本来就短
 NOT_OFFLOADED = frozenset({"read_file", "write_file", "edit_file", "delete"})
@@ -96,7 +97,8 @@ def _with_text(message: BaseMessage, text: str) -> str | list[Any]:
 class ResultOffloader:
     """大结果外置。store 是模型能用 read_file 读回来的那个文件系统；None = 只能截断。
 
-    阈值都按 token 粗估（与预算同一个口径）。
+    阈值都按 token 粗估（与预算同一个口径）。offload_dir / input_dir 是写进 store 的目录，消息里给模型
+    的路径就是它们下面的路径。
     """
 
     def __init__(
@@ -106,11 +108,15 @@ class ResultOffloader:
         single_limit_tokens: int = 32_000,
         batch_cap_tokens: int | None = None,
         input_limit_tokens: int = 80_000,
+        offload_dir: str = OFFLOAD_DIR,
+        input_dir: str = INPUT_DIR,
     ) -> None:
         self._store = store
         self._single_limit = single_limit_tokens
         self._batch_cap = batch_cap_tokens
         self._input_limit = input_limit_tokens
+        self._offload_dir = offload_dir.rstrip("/")
+        self._input_dir = input_dir.rstrip("/")
 
     # ------------------------------------------------------------------ 入口
 
@@ -139,7 +145,7 @@ class ResultOffloader:
             if not m.id:
                 continue  # 按 id 替换回 state，没有 id 的换不回去
             text = plain_text(m)
-            path = await self._write(f"{OFFLOAD_DIR}/{sanitize_tool_call_id(str(m.tool_call_id))}", text)
+            path = await self._write(f"{self._offload_dir}/{sanitize_tool_call_id(str(m.tool_call_id))}", text)
             out.append(self._replace(m, text, path=path, subject="本批工具结果总量过大，此条",
                                      clip=_BATCH_CLIP_CHARS))  # fmt: skip
         return out
@@ -152,7 +158,7 @@ class ResultOffloader:
         text = plain_text(last)
         if estimate_text(text) <= self._input_limit:
             return None
-        path = await self._write(f"{INPUT_DIR}/{uuid.uuid4()}.md", text)
+        path = await self._write(f"{self._input_dir}/{uuid.uuid4()}.md", text)
         if path is None:
             return None  # 用户的原话：写不进去就原样给模型，不截断
         note = (f"[消息过长，全文已保存到 {path}，需要时用 read_file 分页读取（offset / limit）]\n"
@@ -168,7 +174,7 @@ class ResultOffloader:
         text = plain_text(message)
         if estimate_text(text) <= self._single_limit:
             return message
-        path = await self._write(f"{OFFLOAD_DIR}/{sanitize_tool_call_id(str(message.tool_call_id))}", text)
+        path = await self._write(f"{self._offload_dir}/{sanitize_tool_call_id(str(message.tool_call_id))}", text)
         return self._replace(message, text, path=path, subject="工具结果过大",
                              clip=int(self._single_limit * CHARS_PER_TOKEN))  # fmt: skip
 

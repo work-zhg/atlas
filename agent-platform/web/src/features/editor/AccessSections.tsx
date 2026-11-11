@@ -8,7 +8,7 @@
  *   共享      谁能用 / 改它：用户中心数据权限 AtlasAgent（§8.1），所有者维护
  */
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, App, Button, Card, Checkbox, Descriptions, Radio, Select, Space, Table, Tag, TreeSelect, Typography } from "antd";
+import { Alert, App, Button, Card, Checkbox, Descriptions, Radio, Select, Space, Switch, Table, Tag, TreeSelect, Typography } from "antd";
 import { useMemo, useState } from "react";
 
 import {
@@ -185,6 +185,11 @@ export function SharingPanel({ detail }: { detail: AgentDetail }) {
   const [pickedDepts, setPickedDepts] = useState<string[]>([]);
   const [includeSub, setIncludeSub] = useState(true);
   const tree = useMemo(() => deptTree(depts.data ?? []), [depts.data]);
+  // 所有人可用 = 共享给根部门（含下级部门），可使用
+  const root = (depts.data ?? []).find((d) => !d.parent_id);
+  const everyone = (grants.data?.data ?? []).find(
+    (g) => g.subject.type === "DEPT" && g.subject.id === root?.id && g.include_sub,
+  );
 
   const act = async (fn: () => Promise<unknown>, ok: string) => {
     try {
@@ -209,11 +214,35 @@ export function SharingPanel({ detail }: { detail: AgentDetail }) {
 
   return (
     <Space direction="vertical" size={12} style={{ width: "100%" }}>
+      {manage && root && (
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ flex: 1 }}>
+            <b>所有人可用</b>
+            <div style={{ fontSize: 12.5, color: "var(--fg-3)" }}>公司内所有人都能找到并使用它</div>
+          </div>
+          <Switch
+            checked={!!everyone}
+            onChange={(on) =>
+              act(
+                () =>
+                  on
+                    ? agentGrantsApi.add(detail.id, {
+                        level: "READ",
+                        subjects: [{ type: "dept", id: root.id }],
+                        include_sub: true,
+                      })
+                    : agentGrantsApi.revoke(detail.id, everyone!.id),
+                on ? "已对所有人开放" : "已取消对所有人开放",
+              )
+            }
+          />
+        </div>
+      )}
       {detail.auth_subject === "agent" && (
         <Alert
           type="warning"
           showIcon
-          message="以 Agent 为权限：共享给谁，谁就能经它用到数字员工的全部权限（知识库、MCP 等），即使本人没有。"
+          message="这个智能体以自己的身份访问资料：共享给谁，谁就能经它查到它有权限的全部内容，即使本人没有。"
         />
       )}
       <Table<AgentGrant>

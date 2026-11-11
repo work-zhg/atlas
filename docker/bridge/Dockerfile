@@ -1,9 +1,9 @@
 # 会话 Pod 的镜像：bridge（Python）+ ACP adapter（Node CLI）。
 #
-# ★ 一个镜像里两套运行时，是因为 acp 详设 §04 的那条分工：bridge 是 Pod 的
-#   1 号进程、说 WS 上的线协议；adapter 是它拉起的子进程、说 stdio 上的
-#   JSON-RPC。两者必须同生共死，所以打在一起而不是拆两个容器 —— 拆开的话
-#   "adapter 崩了"要靠跨容器信号去发现，而那条路没法保证时序。
+# ★ 一个人的 CLI 会话共用一个 Pod：Pod 的入口是 execd（tail 占住），每个会话的 bridge 由 Atlas
+#   经 execd 在后台拉起（端口按会话分），adapter 是 bridge 拉起的子进程、说 stdio 上的 JSON-RPC。
+#   两者同生共死，所以打在一起而不是拆两个容器 —— 拆开的话"adapter 崩了"要靠跨容器信号去发现，
+#   而那条路没法保证时序。
 #
 # ★ 镜像即版本组合。cli_type / adapter / image 三个字段一起进 agent 版本快照
 #   且不可改（domain/spec.py::CliSpec）—— 换 CLI 版本就是换镜像 tag，
@@ -81,23 +81,24 @@ RUN pip install --no-cache-dir /tmp/wheels/*.whl \
 #   （CreateContainerConfigError）。模板那边也显式给了 runAsUser，
 #   两边说同一件事。
 #
-# ★ HOME 指向 /state：根文件系统是只读的（模板里 readOnlyRootFilesystem），
-#   而 CLI 要往 HOME 写会话记录。/state 由挂载器挂到对象存储上 ——
-#   resume 跨 Pod 重建就靠它。
+# ★ 根文件系统是只读的（模板里 readOnlyRootFilesystem）：HOME 放 /tmp/home（emptyDir，
+#   Atlas 拉起 bridge 时设）；CLI 的会话记录在 CLAUDE_CONFIG_DIR=/data/home/.claude，
+#   /data 是整个 {user}/ 的挂载 —— resume 跨 Pod 重建就靠它。
 RUN useradd --uid 1000 --create-home --home-dir /home/agent agent \
-    && mkdir -p /workspace /skills /state /repos \
-    && chown agent:agent /workspace /skills /state /repos
+    && mkdir -p /data /repos \
+    && chown agent:agent /data /repos
 USER 1000:1000
-ENV HOME=/state \
+ENV HOME=/tmp/home \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
-WORKDIR /workspace
+WORKDIR /data
 
 # agent（ACP 适配器）的默认启动命令。模板用 ATLAS_BRIDGE_AGENT_CMD 覆盖它 ——
 # 放在这里是为了让镜像自己能说清"我带的是哪个 adapter"。
 ENV ATLAS_BRIDGE_AGENT_CMD="node /opt/acp-cli/bin/claude-acp"
 
 EXPOSE 8900
+# 本机单独跑一个 bridge 时用（会话 Pod 里不用它：入口被换成 tail，bridge 按会话另起）。
 # ★ 用 exec 形式：shell 形式会让 PID 1 变成 sh，SIGTERM 到不了 bridge，
 #   它就没法在收到信号时关闭连接、终止 agent 的进程组。
 CMD ["python", "-m", "atlas_bridge"]

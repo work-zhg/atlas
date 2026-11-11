@@ -11,7 +11,7 @@
  *
  * ★ 只有「指定模型」：新登记的模型不会自动进任何 Key。
  */
-import { Alert, App as AntdApp, Button, Checkbox, Empty, Form, Input, Modal, Segmented, Select, Space, Table, Tag, Typography } from "antd";
+import { Alert, App as AntdApp, Button, Checkbox, Empty, Form, Input, Modal, Select, Space, Table, Tag, Typography } from "antd";
 import { useMemo, useState } from "react";
 
 import {
@@ -31,41 +31,50 @@ import { Icon } from "@/components/Icon";
 import pageStyles from "@/features/agents/agents.module.css";
 import styles from "@/features/catalog/catalog.module.css";
 import { useMe } from "@/lib/session";
+import { MgGate } from "./ModelsPage";
 import { curlFor } from "./shared";
 
-export function KeysTab({ manage, litellmUrl }: { manage: boolean; litellmUrl: string | null }) {
-  const [tab, setTab] = useState<"user" | "client">("user");
-  const clientsQ = useMgClientKeys(manage);
-  const clients = clientsQ.data ?? [];
-  const pending = clients.filter((k) => k.status === "pending").length;
-
+function KeysPage({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <>
-      {manage && (
-        <Segmented
-          style={{ marginBottom: 12 }}
-          value={tab}
-          onChange={(v) => setTab(v as "user" | "client")}
-          options={[
-            { value: "user", label: "我的用户 Key" },
-            {
-              value: "client",
-              label: (
-                <span>
-                  客户端 Key {clients.length > 0 && <span className={styles.muted}>{clients.length}</span>}
-                  {pending > 0 && (
-                    <Tag color="warning" style={{ marginLeft: 6, marginRight: 0 }}>
-                      待分配 {pending}
-                    </Tag>
-                  )}
-                </span>
-              ),
-            },
-          ]}
-        />
+    <div className={pageStyles.page}>
+      <header className={pageStyles.head}>
+        <div className={pageStyles.titleRow}>
+          <h1 className={pageStyles.title}>{title}</h1>
+        </div>
+      </header>
+      <div className={pageStyles.body}>{children}</div>
+    </div>
+  );
+}
+
+/** 我的 Key：每人一把，在 Claude Code、Cursor、脚本里用平台上的模型 */
+export function MgUserKeyPage() {
+  return (
+    <MgGate>
+      {(me) => (
+        <KeysPage title="我的 Key">
+          <UserKey manage={me.can_manage} litellmUrl={me.litellm_url ?? null} />
+        </KeysPage>
       )}
-      {tab === "client" && manage ? <ClientKeys keys={clients} loading={clientsQ.isPending} /> : <UserKey manage={manage} litellmUrl={litellmUrl} />}
-    </>
+    </MgGate>
+  );
+}
+
+/** 客户端 Key（管理员）：智能体、平台服务用的 Key，分配模型后才能用 */
+export function MgClientKeysPage() {
+  return <MgGate>{(me) => <ClientKeysLoader manage={me.can_manage} />}</MgGate>;
+}
+
+function ClientKeysLoader({ manage }: { manage: boolean }) {
+  const clientsQ = useMgClientKeys(manage);
+  return (
+    <KeysPage title="客户端 Key">
+      {manage ? (
+        <ClientKeys keys={clientsQ.data ?? []} loading={clientsQ.isPending} />
+      ) : (
+        <Empty description="只有管理员能管理客户端 Key" />
+      )}
+    </KeysPage>
   );
 }
 
@@ -92,7 +101,7 @@ function KeyModels({ k }: { k: MgKey }) {
         </Tag>
       ))}
       {k.no_models && (
-        <Tag color="error" title="分配的模型都不可用了：LiteLLM 里这把 Key 已停用">
+        <Tag color="error" title="分配的模型都不可用了">
           无可用模型
         </Tag>
       )}
@@ -106,7 +115,7 @@ function KeyStatus({ k }: { k: MgKey }) {
       <Tag color={MG_KEY_STATUS[k.status].color}>{MG_KEY_STATUS[k.status].label}</Tag>
       {k.sync_error && (
         <Tag color="error" title={k.sync_error}>
-          同步 LiteLLM 失败
+          同步失败
         </Tag>
       )}
     </span>
@@ -147,7 +156,7 @@ function UserKey({ manage, litellmUrl }: { manage: boolean; litellmUrl: string |
       title: "停用用户 Key",
       okText: "停用",
       okButtonProps: { danger: true },
-      content: "停用后 LiteLLM 拒绝这把 Key 的所有调用，可以随时启用。",
+      content: "停用后用这把 Key 的调用都会失败，可以随时启用。",
       onOk: () => act.mutateAsync("block").then(() => message.success("已停用"), (e: Error) => message.error(e.message)),
     });
   const del = () =>
@@ -165,7 +174,7 @@ function UserKey({ manage, litellmUrl }: { manage: boolean; litellmUrl: string |
         type="info"
         showIcon
         style={{ marginBottom: 12 }}
-        message={`每人一把用户 Key，只能为本人申请，用在 Claude Code、Cursor、脚本等个人工具里，直接调用 LiteLLM${litellmUrl ? `（${litellmUrl}）` : ""}。模型从${manage ? "全部已登记模型" : "公有模型和授权给你或你所在部门的私有模型"}里逐个选；私有模型的授权撤销后，Key 里的这个模型随之失效。`}
+        message="在 Claude Code、Cursor 或脚本里使用平台上的模型。从你能用的模型里选，授权收回后对应的模型随之失效。"
       />
       {keyQ.error && <Alert type="error" showIcon style={{ marginBottom: 12 }} message={keyQ.error.message} />}
       <Table
@@ -236,7 +245,7 @@ function UserKey({ manage, litellmUrl }: { manage: boolean; litellmUrl: string |
           okText={k ? "保存" : "申请"}
           allowed={allowed}
           current={k}
-          hint={`${manage ? "管理员可选全部已登记模型" : "可选公有模型和授权给你或你所在部门的私有模型"}；以后登记的新模型不会自动加入`}
+          hint="以后新增的模型不会自动加入"
           empty="还没有你能用的模型。请联系管理员登记公有模型，或给你授权私有模型。"
           loading={apply.isPending || assign.isPending}
           onClose={() => setPicking(false)}
@@ -281,8 +290,8 @@ function UserKey({ manage, litellmUrl }: { manage: boolean; litellmUrl: string |
           <Alert type="warning" showIcon style={{ marginTop: 12 }} message="Key 只显示这一次，关闭后无法再查看；忘记了可以「重置」。" />
           <div className={styles.secTitle}>怎么用</div>
           <p className={styles.muted}>
-            在 Claude Code、Cursor 或脚本里把 Base URL 设为 LiteLLM 的地址
-            {litellmUrl ? `（${litellmUrl}）` : "（请咨询管理员）"}，API Key 填这把 Key。
+            在 Claude Code、Cursor 或脚本里把 Base URL 设为
+            {litellmUrl ? ` ${litellmUrl}` : "平台的模型地址（请咨询管理员）"}，API Key 填这把 Key。
           </p>
           <pre className={styles.code}>{curlFor(litellmUrl, secret.model ?? "deepseek-chat", secret.value)}</pre>
         </Modal>
@@ -322,7 +331,7 @@ function ClientKeys({ keys, loading }: { keys: MgKey[]; loading: boolean }) {
     modal.confirm({
       title: "重置客户端 Key",
       okText: "重置",
-      content: `为「${title(k)}」生成新 Key，旧 Key ${k.masked ?? ""} 立即失效。正在用旧 Key 的调用会失败，应用下一次获取时拿到新的。分配的模型、停用状态保持不变。`,
+      content: `为「${title(k)}」生成新 Key，旧 Key ${k.masked ?? ""} 立即失效，使用方会自动换用新的。分配的模型不变。`,
       onOk: () =>
         act.mutateAsync({ id: k.uuid, action: "reset" }).then(
           () => message.success("已重置"),
@@ -334,7 +343,7 @@ function ClientKeys({ keys, loading }: { keys: MgKey[]; loading: boolean }) {
       title: "停用客户端 Key",
       okText: "停用",
       okButtonProps: { danger: true },
-      content: `停用后 LiteLLM 拒绝「${title(k)}」这把 Key 的所有调用${k.client_type === "Agent" ? "，这个智能体在 Atlas 里不能运行" : ""}。可以随时启用。`,
+      content: `停用后「${title(k)}」调不了任何模型${k.client_type === "Agent" ? "，这个智能体不能运行" : ""}。可以随时启用。`,
       onOk: () =>
         act.mutateAsync({ id: k.uuid, action: "block" }).then(
           () => message.success("已停用"),
@@ -346,9 +355,9 @@ function ClientKeys({ keys, loading }: { keys: MgKey[]; loading: boolean }) {
       title: "删除客户端 Key",
       okText: "删除",
       okButtonProps: { danger: true },
-      content: `删除「${title(k)}」的客户端 Key${k.masked ? `（${k.masked}）` : ""}，LiteLLM 里的 Key 一并删除。${
+      content: `删除「${title(k)}」的客户端 Key${k.masked ? `（${k.masked}）` : ""}，不可恢复。${
         k.client_type === "Agent"
-          ? "这个智能体之后不能运行；Atlas 下次用到它时会重新建一把「待分配」的 Key。"
+          ? "这个智能体之后不能运行，直到重新分配模型。"
           : "引用它的平台功能会停止，直到重新建好并分配模型。"
       }只是临时不让用，请选「停用」。`,
       onOk: () => remove.mutateAsync(k.uuid).then(() => message.success("已删除"), (e: Error) => message.error(e.message)),
@@ -360,7 +369,7 @@ function ClientKeys({ keys, loading }: { keys: MgKey[]; loading: boolean }) {
         type="info"
         showIcon
         style={{ marginBottom: 12 }}
-        message="客户端 Key 由应用调接口创建：Atlas 新建智能体时创建一条（客户端类型 Agent，客户端编码 = 智能体 id）。新建的 Key「待分配模型」，分配模型后才在 LiteLLM 生成 Key，应用按客户端类型 + 客户端编码获取。会话标题、记忆补记、知识库这类平台服务的 Key（类型 Service）由管理员在这里事先建好、分配模型，再在 Atlas、知识库的配置里引用。"
+        message="每个智能体一把 Key，创建智能体时自动建好，分配模型后才能运行。会话标题、知识库这类平台功能的 Key 在这里新建。"
       />
       <div className={pageStyles.filterRow}>
         <Select
@@ -487,13 +496,11 @@ function ClientKeys({ keys, loading }: { keys: MgKey[]; loading: boolean }) {
           current={picking}
           intro={
             picking.status === "pending"
-              ? `这是${appsOf(picking.client_type) || "应用"}新建的客户端 Key。分配模型后才在 LiteLLM 生成 Key，应用随后就能取到并调用。`
+              ? `这是${appsOf(picking.client_type) || "应用"}新建的客户端 Key，分配模型后就能用。`
               : undefined
           }
-          hint={`客户端 Key 可分配全部已登记模型，公有、私有都行；以后登记的新模型不会自动加入${
-            picking.status === "pending" ? "" : "。修改立即生效，Key 本身不变"
-          }${picking.client_type === "Agent" ? "；Atlas 编辑这个智能体时，可选模型随之变化" : ""}`}
-          empty="还没有已登记的模型：先在「模型」里登记。"
+          hint={`以后新增的模型不会自动加入${picking.status === "pending" ? "" : "；修改立即生效"}`}
+          empty="还没有模型：先在「模型」里添加。"
           loading={assign.isPending}
           onClose={() => setPicking(undefined)}
           onSubmit={(models) =>
@@ -563,7 +570,7 @@ function NewClientModal({
         type="info"
         showIcon
         style={{ marginBottom: 12 }}
-        message="智能体的 Key 由 Atlas 自动创建。这里用来事先建平台服务这类 Key（如会话标题），建好后分配模型，再在 Atlas、知识库的配置里引用它。"
+        message="智能体的 Key 会自动创建。这里给平台功能（如会话标题）建 Key，建好后分配模型。"
       />
       <Form form={form} layout="vertical" initialValues={{ client_type: types.includes("Service") ? "Service" : types[0] }}>
         <Form.Item name="client_type" label="客户端类型" rules={[{ required: true }]}>

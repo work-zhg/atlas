@@ -2,9 +2,11 @@
 # 而 Terminal-Bench 的题目按「能上网」设计（校验时从 GitHub 装 uv、Python）。
 #
 #   评测档沙箱 ──HTTP(S)_PROXY──▶ 节点:28118（gost，带口令）──SOCKS5──▶ 节点 127.0.0.1:1080（trojan）
+#   LiteLLM ────┘（调 Gemini 等境外模型；国内供应商按 39-litellm.yaml 的 NO_PROXY 直连）
 #
 # ★ hostNetwork：trojan 只绑节点的 127.0.0.1，Pod 网络里够不着它。代价是 28118 在局域网可见 —— 靠口令挡。
-# ★ 只有评测档沙箱拿到代理地址（atlas-server 的 SANDBOX_BENCH_PROXY）；strict 档与 ACP 照旧直连。
+# ★ 只有评测档沙箱和 LiteLLM 拿到代理地址（SANDBOX_BENCH_PROXY、Secret atlas-litellm-egress）；
+#   strict 档与 ACP 照旧直连。
 # ★ 口令在 Secret bench-egress（deploy/server/bench-egress.sh 生成，已有就沿用），不进 YAML。
 apiVersion: apps/v1
 kind: Deployment

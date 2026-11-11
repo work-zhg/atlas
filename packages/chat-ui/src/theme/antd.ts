@@ -7,24 +7,24 @@
  */
 import { theme, type ThemeConfig } from "antd";
 
-/** 语义色 —— 与 globals.css 的 CSS 变量保持一致，两边都要改。 */
+/** 语义色 —— 与 tokens.css 的 CSS 变量保持一致，两边都要改。 */
 export const palette = {
-  bgBase: "#0F172A",
-  bgContainer: "#111B31",
-  bgElevated: "#16223C",
-  bgRail: "#0B1220",
-  borderSplit: "#22304D",
-  borderControl: "#3A4C72",
-  text: "#F8FAFC",
-  textSecondary: "#94A3B8",
-  /** ⚠️ 3.75:1 —— 仅 placeholder / disabled，禁止用于正文 */
+  bgBase: "#FFFFFF",
+  bgLayout: "#F6F7F9",
+  bgContainer: "#FFFFFF",
+  bgElevated: "#FFFFFF",
+  bgSide: "#FBFBFD",
+  borderSplit: "#E6E8EE",
+  borderControl: "#D5D9E2",
+  text: "#0F172A",
+  textSecondary: "#475569",
   textTertiary: "#64748B",
   primary: "#4F46E5",
-  /** 深底上的链接/焦点色，5.98:1 */
-  primaryText: "#818CF8",
-  success: "#22C55E",
-  warning: "#F59E0B",
-  error: "#EF4444",
+  /** 浅底上的链接 / 焦点色 */
+  primaryText: "#4338CA",
+  success: "#16A34A",
+  warning: "#D97706",
+  error: "#DC2626",
 } as const;
 
 /** MASTER.md §6：不走 Google Fonts CDN（大陆不可达且 FOIT），用系统字体栈。 */
@@ -32,7 +32,7 @@ export const FONT_STACK =
   'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif';
 
 export const atlasTheme: ThemeConfig = {
-  algorithm: theme.darkAlgorithm,
+  algorithm: theme.defaultAlgorithm,
   token: {
     colorPrimary: palette.primary,
     colorInfo: palette.primary,
@@ -40,6 +40,7 @@ export const atlasTheme: ThemeConfig = {
     colorWarning: palette.warning,
     colorError: palette.error,
     colorBgBase: palette.bgBase,
+    colorBgLayout: palette.bgLayout,
     colorBgContainer: palette.bgContainer,
     colorBgElevated: palette.bgElevated,
     colorBorder: palette.borderControl,
@@ -54,10 +55,7 @@ export const atlasTheme: ThemeConfig = {
     motionDurationMid: "0.18s",
   },
   components: {
-    Layout: { siderBg: palette.bgRail, headerBg: palette.bgBase },
-    Menu: {
-      darkItemBg: "transparent",
-      darkItemSelectedBg: "rgba(99,102,241,0.14)",
-    },
+    Layout: { siderBg: palette.bgSide, headerBg: palette.bgBase, bodyBg: palette.bgLayout },
+    Menu: { itemSelectedBg: "#EEF0FF", itemSelectedColor: palette.primaryText },
   },
 };

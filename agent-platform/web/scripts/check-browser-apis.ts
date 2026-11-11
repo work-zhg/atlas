@@ -13,10 +13,12 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
-/** 扫描范围：Atlas 前端源码 + 共享对话组件包（对话代码在那里，嵌入方也会跑到）。 */
+/** 扫描范围：Atlas 前端源码 + 共享组件包（对话、应用配置、定时任务的代码在那里，嵌入方也会跑到）。 */
 const ROOTS = [
   { dir: join(import.meta.dirname, "..", "src"), label: "src" },
   { dir: join(import.meta.dirname, "..", "..", "..", "packages", "chat-ui", "src"), label: "packages/chat-ui/src" },
+  { dir: join(import.meta.dirname, "..", "..", "..", "packages", "appconfig-ui", "src"), label: "packages/appconfig-ui/src" },
+  { dir: join(import.meta.dirname, "..", "..", "..", "packages", "jobs-ui", "src"), label: "packages/jobs-ui/src" },
 ];
 
 /** 只在安全上下文可用的 API —— 裸用即报错。 */
@@ -39,7 +41,7 @@ const FORBIDDEN: { pattern: RegExp; api: string; hint: string }[] = [
 ];
 
 /** 已知安全的例外：回落实现本身要提到这些名字。 */
-const ALLOWLIST = new Set(["lib/id.ts"]);
+const ALLOWLIST = new Set(["lib/id.ts", "lib/clipboard.ts"]);
 
 function* walk(dir: string): Generator<string> {
   for (const entry of readdirSync(dir)) {

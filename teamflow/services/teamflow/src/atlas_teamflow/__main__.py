@@ -46,10 +46,13 @@ def worker() -> None:
     import asyncio
     import signal
 
+    from atlas_jobs import JobScheduler
+
     from .agents.supervisor import AgentSupervisor
     from .api.app import check_deployment
     from .atlas import AtlasClient
     from .db.session import get_engine, get_sessionmaker
+    from .jobs import NodeSweep
     from .process.bus import make_coordinator, set_coordinator
     from .process.repo_host import make_repo_host
 
@@ -74,18 +77,22 @@ def worker() -> None:
             host,
             git_profile=settings.atlas_git_profile,
             lease_seconds=settings.worker_lease_seconds,
-            sweep_seconds=settings.worker_sweep_seconds,
         )
+        # 定期扫描待处理节点（接手崩溃实例留下的、补漏掉的唤醒）：定时任务库的实例任务
+        jobs = JobScheduler()
+        jobs.register(NodeSweep(sup), scope="instance", every=settings.worker_sweep_seconds)
         stop = asyncio.Event()
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, stop.set)
         await coord.start()
         await sup.start()
+        jobs.start()
         logging.getLogger("atlas_teamflow").info(
             "worker 已启动（实例 %s）", getattr(coord, "instance", "-")
         )
         await stop.wait()
+        await jobs.stop()
         await sup.close()
         await coord.close()
         await atlas.aclose()

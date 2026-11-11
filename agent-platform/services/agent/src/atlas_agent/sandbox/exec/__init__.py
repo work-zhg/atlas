@@ -1,30 +1,36 @@
 """沙箱 · 命令执行（c4-model/agent/sandbox/code-sandbox-exec.html）：在工作区的沙箱里后台执行命令。
 
     ShellSandbox      实现引擎的 SandboxProtocol：确保沙箱 → 后台提交 → 跟随到退出；重放不重跑、断线
-                      接上、卡死和取消时中断；失败一律抛 SandboxUnavailable
+                      接上、卡死和用户取消时中断；失败一律抛 SandboxUnavailable
     exec_in_running   评测原地校验：只在已经在跑的评测档沙箱里执行，不新建
-    ExecutionLedger   (run, 工具调用) → (sandbox_uuid, 命令 id)，Redis，24 小时过期
+    ExecutionLedger   (run, 工具调用) → (sandbox_uuid, 命令 id)：库里，先记「提交中」再提交
     PollingPolicy · StallDetector · CommandExecution · OutputBuffer
 
 ★ 只拿 sandbox_uuid：地址和令牌都在基座里。沙箱换了（SandboxGone）或重启过（CommandGone）如实报错、
   不重跑；连接断了用同一个 sandbox_uuid 接着读（基座重新解析地址）。
 ★ 活动不在这里记：基座执行在提交、命令结束、打开文件时自动记，命令执行不用回头通知原生沙箱。
+  只有跟随中定期确认一次「还在跑」（confirm_running），Redis 丢过数据也补得回来。
+★ 中断沙箱里的命令只在用户取消时发生（看 run 的取消位）：交接、租约丢失、停机也会取消这个任务，
+  那时只停止跟随，命令留在沙箱里接着跑，接手的实例凭执行账本接上。
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 from uuid import UUID, uuid4
 
+import httpx
 from atlas_engine.contracts import ExecuteResponse, SandboxUnavailable
 from atlas_engine.contracts.spec import SandboxProfile, SandboxSpec
+from sqlalchemy import delete, update
 
+from ...db.models import SandboxExecution
+from ...db.session import fetch_one
 from ...telemetry import tracer
 from ..base.execution.ports import SandboxExec
 from ..base.execution.values import (
@@ -42,9 +48,10 @@ from ..provisioning.model import SandboxRef
 
 if TYPE_CHECKING:
     import redis.asyncio as aioredis
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 __all__ = [
-    "WORKDIR",
+    "CancelSignal",
     "CommandExecution",
     "ExecutionLedger",
     "OutputBuffer",
@@ -53,23 +60,30 @@ __all__ = [
     "SandboxProfileDenied",
     "ShellSandbox",
     "StallDetector",
+    "Submission",
     "exec_in_running",
 ]
 
 logger = logging.getLogger(__name__)
 
-WORKDIR = "/workspace"
 #: 取消时发出的中断请求（持有引用，防止任务被回收）
 _BACKGROUND: set[asyncio.Task[Any]] = set()
-#: 沙箱换了的提示：/workspace 还在，别的都没了
+#: 沙箱换了的提示：/data 下的文件（工作区、技能）还在，别的都没了
 REBUILT = (
-    "[沙箱环境已重建：/workspace 内的文件仍在；"
+    "[沙箱环境已重建：/data 下的文件（工作区、技能）仍在；"
     "安装的软件包、HOME 与 /repos 里的内容、后台进程已丢失]\n"
 )
 _GONE = (
     "命令执行期间沙箱重启（可能内存不足或被回收），命令已中断、结果丢失；"
-    "/workspace 里已经写入的文件仍在"
+    "工作区里已经写入的文件仍在"
 )
+_SUBMIT_UNKNOWN = (
+    "提交命令时连接中断：命令可能已经开始执行，结果未知；可以先检查工作区的状态再决定是否重试"
+)
+#: 跟随中多久确认一次「命令还在跑」（活动账本）
+_CONFIRM_RUNNING_S = 60.0
+#: 被取消时查取消位最多等多久：查不到就当没置位（不中断）
+_CANCEL_CHECK_S = 2.0
 
 
 class SandboxNotRunning(RuntimeError):
@@ -80,44 +94,85 @@ class SandboxProfileDenied(RuntimeError):
     """沙箱的档位不允许直接执行。"""
 
 
+class CancelSignal(Protocol):
+    """run 的取消位（注入 RedisCancelToken）：用户点了「停止」才置位，交接、租约丢失不置位。"""
+
+    async def is_cancelled(self) -> bool: ...
+
+
+@dataclass(frozen=True)
+class Submission:
+    """执行账本里的一次调用：在哪个沙箱；cmd_id 为空 = 提交中（请求可能已经到了 execd）。"""
+
+    sandbox_uuid: UUID
+    cmd_id: str | None
+
+
 class ExecutionLedger:
-    """(run, tool_call) → (sandbox_uuid, cmd_id)，存在 Redis。
+    """(run, tool_call) → (sandbox_uuid, cmd_id)：同一个调用被重放时接上原来的命令，而不是再跑一遍
+    —— 接管的实例重放也接得上。
 
-    24 小时过期，和 execd 保留输出的时长一致。
-
-    同一个调用被重放时接上原来的命令，而不是再跑一遍 —— 接管的实例重放也接得上。另记每个工作区
-    上次执行用的沙箱，用来提示环境已重建。
+    ★ 调用记录在库里（sandbox_execution）：提交前先记「提交中」，拿到命令 id 再补上。实例死在两者
+      之间，重放看到「提交中」就不再提交（execd 的提交没有幂等键，没法让它自己去重）。
+    ★ 另记每个工作区上次执行用的沙箱（Redis，24 小时过期），用来提示环境已重建；丢了只是少一次提示。
     """
 
-    _TTL_S = 24 * 3600
+    _SEEN_TTL_S = 24 * 3600
 
-    def __init__(self, redis: aioredis.Redis, *, prefix: str = "atlas:exec") -> None:
+    def __init__(
+        self,
+        sessions: async_sessionmaker[AsyncSession],
+        redis: aioredis.Redis,
+        *,
+        prefix: str = "atlas:exec",
+    ) -> None:
+        self._sessions = sessions
         self._r = redis
         self._prefix = prefix
 
-    def _key(self, run: str, call: str) -> str:
-        return f"{self._prefix}:{run}:{call}"
+    async def get(self, run: UUID, call: str) -> Submission | None:
+        async with self._sessions() as session:
+            row = await fetch_one(
+                session,
+                SandboxExecution,
+                SandboxExecution.run_uuid == run,
+                SandboxExecution.tool_call_id == call,
+            )
+        return None if row is None else Submission(row.sandbox_uuid, row.cmd_id)
 
-    async def get(self, run: str, call: str) -> tuple[UUID, str] | None:
-        raw = await self._r.get(self._key(run, call))
-        if not raw:
-            return None
-        sandbox_uuid, cmd_id = json.loads(raw)
-        return UUID(str(sandbox_uuid)), str(cmd_id)
+    async def intend(self, run: UUID, call: str, sandbox_uuid: UUID) -> None:
+        """要在这个沙箱里提交了：记「提交中」。"""
+        async with self._sessions() as session:
+            session.add(
+                SandboxExecution(run_uuid=run, tool_call_id=call, sandbox_uuid=sandbox_uuid)
+            )
+            await session.commit()
 
-    async def put(self, run: str, call: str, sandbox_uuid: UUID, cmd_id: str) -> None:
-        await self._r.set(
-            self._key(run, call), json.dumps([str(sandbox_uuid), cmd_id]), ex=self._TTL_S
-        )
+    async def put(self, run: UUID, call: str, sandbox_uuid: UUID, cmd_id: str) -> None:
+        """提交上了：补上命令 id。"""
+        async with self._sessions() as session:
+            await session.execute(
+                update(SandboxExecution)
+                .where(SandboxExecution.run_uuid == run, SandboxExecution.tool_call_id == call)
+                .values(sandbox_uuid=sandbox_uuid, cmd_id=cmd_id)
+            )
+            await session.commit()
 
-    async def drop(self, run: str, call: str) -> None:
-        await self._r.delete(self._key(run, call))
+    async def drop(self, run: UUID, call: str) -> None:
+        """确定没提交上（沙箱拒绝、连不上）：去掉「提交中」，重放时照常提交。"""
+        async with self._sessions() as session:
+            await session.execute(
+                delete(SandboxExecution).where(
+                    SandboxExecution.run_uuid == run, SandboxExecution.tool_call_id == call
+                )
+            )
+            await session.commit()
 
     async def remember(self, ws: WorkspaceRef, sandbox_uuid: UUID) -> UUID | None:
         """记下工作区这次用的沙箱，返回上一次用的（没有就 None）。"""
         key = f"{self._prefix}:seen:{ws.root_thread_uuid}"
         previous = await self._r.getset(key, str(sandbox_uuid))
-        await self._r.expire(key, self._TTL_S)
+        await self._r.expire(key, self._SEEN_TTL_S)
         if isinstance(previous, bytes):
             previous = previous.decode()
         return UUID(previous) if previous else None
@@ -125,20 +180,22 @@ class ExecutionLedger:
 
 @dataclass(frozen=True)
 class PollingPolicy:
-    """跟随时多久问一次：有输出时快，没输出时逐步放慢到上限；断线后指数退避重连，次数用完就放弃。"""
+    """跟随时多久问一次：有输出时快，没输出时逐步放慢到上限；断线后指数退避重连，有封顶。
+
+    ★ 重连不设次数上限：沙箱还在就一直按同一个游标接着读，确认沙箱没了（SandboxGone）才报。次数上限
+      就是一个到点放弃的超时 —— 放弃时命令其实还在跑，模型拿到「结果未知」常常原样重跑。
+      用户等不及可以取消。
+    """
 
     min_s: float = 0.3
     max_s: float = 2.0
-    #: 断线后重新接上的尝试次数（指数退避，封顶 10 秒；合计约两分钟）
-    reconnects: int = 15
+    reconnect_max_s: float = 30.0
 
     def next_poll(self, current: float, had_output: bool) -> float:
         return self.min_s if had_output else min(current * 2, self.max_s)
 
-    def reconnect_delay(self, attempt: int) -> float | None:
-        if attempt > self.reconnects:
-            return None
-        return float(min(2 ** (attempt - 1), 10))
+    def reconnect_delay(self, attempt: int) -> float:
+        return float(min(2 ** (attempt - 1), self.reconnect_max_s))
 
 
 class StallDetector:
@@ -231,7 +288,9 @@ class CommandExecution:
         text, truncated = self.out.text()
         if self.notes:
             text += "\n" + "\n".join(f"[{n}]" for n in self.notes)
-        return ExecuteResponse(output=notice + text, exit_code=exit_code, truncated=truncated)
+        return ExecuteResponse(
+            output=notice + text, exit_code=exit_code, truncated=truncated, rebuilt=bool(notice)
+        )
 
 
 class _Gone(Exception):
@@ -241,6 +300,8 @@ class _Gone(Exception):
 class ShellSandbox:
     """一个 run 一个实例；同一工作区的多个实例共用一个沙箱。
 
+    cancel：run 的取消位，被取消时用它分辨「用户要停」和「这个实例不跟了」。不给（评测原地执行，
+        没有交接这回事）就把每次取消都当用户要停。
     existing_only：只用已经在跑的沙箱、不新建（评测原地执行）。
     """
 
@@ -251,8 +312,9 @@ class ShellSandbox:
         exec: SandboxExec,
         ledger: ExecutionLedger,
         ws: WorkspaceRef,
-        run_id: str,
+        run_id: UUID,
         spec: SandboxSpec,
+        cancel: CancelSignal | None = None,
         polling: PollingPolicy | None = None,
         output_limit: int = 100_000,
         idle_s: float | None = None,
@@ -265,15 +327,23 @@ class ShellSandbox:
         self._ws = ws
         self._run = run_id
         self._spec = spec
+        self._cancel = cancel
         self._poll = polling or PollingPolicy()
         self._limit = output_limit
         self._idle_s = idle_s
         self._stall_pct = stall_cpu_pct
         self._existing_only = existing_only
+        #: 工作区目录已经确认存在的沙箱（换了沙箱要再建一次）
+        self._workdir_ready: UUID | None = None
 
     @property
     def id(self) -> str:
         return f"sbx:{self._ws.root_thread_uuid}"
+
+    @property
+    def workdir(self) -> str:
+        """命令默认的 cwd：本会话所用工作区在沙箱里的路径（沙箱是这个人共用的，cwd 按工作区分）。"""
+        return self._ws.layout().workdir
 
     def execute(self, command: str, *, timeout: int | None = None, cwd: str | None = None) -> Any:
         raise NotImplementedError("沙箱只支持异步调用（aexecute）")
@@ -293,23 +363,38 @@ class ShellSandbox:
             notice = await self._notice(ref)
             submitted = await self._ledger.get(self._run, exec_id) if exec_id else None
             if submitted is None:
-                ex = await self._submit(ref, command, cwd or WORKDIR, timeout)
-                if exec_id:
-                    await self._ledger.put(self._run, exec_id, ex.sandbox_uuid, ex.cmd_id)
+                if cwd is None:
+                    await self._prepare_workdir(ref)
+                ex = await self._submit(ref, command, cwd or self.workdir, timeout, exec_id)
+            elif submitted.cmd_id is None:
+                # 上一个执行者记了「提交中」就没了：命令可能已经开跑，不能再提交一次
+                raise SandboxUnavailable(_SUBMIT_UNKNOWN, kind="result_unknown")
             else:
-                logger.info("%s:%s 已提交过（%s）→ 接上，不重跑", self._run, exec_id, submitted[1])
-                ex = CommandExecution(submitted[0], submitted[1], OutputBuffer(self._limit))
+                logger.info(
+                    "%s:%s 已提交过（%s）→ 接上，不重跑", self._run, exec_id, submitted.cmd_id
+                )
+                ex = CommandExecution(
+                    submitted.sandbox_uuid, submitted.cmd_id, OutputBuffer(self._limit)
+                )
             span.set_attribute("atlas.sandbox.uuid", str(ex.sandbox_uuid))
             span.set_attribute("atlas.sandbox.cmd_id", ex.cmd_id)
+            pending = exec_id if submitted is None else None  # 还没补上命令 id 的调用
             try:  # ★ 拿到命令 id 之后的每个 await 都可能被取消：都要在这个 try 里
+                if pending:
+                    await self._record(pending, ex)
+                    pending = None
                 if ex.sandbox_uuid != ref.sandbox_uuid:
                     raise _Gone(ex.cmd_id)  # 重放时沙箱已经换过
                 exit_code = await self._follow(ex)
             except _Gone as exc:
-                raise SandboxUnavailable(_GONE) from exc
+                raise SandboxUnavailable(_GONE, kind="lost") from exc
             except asyncio.CancelledError:
-                # ★ 不从账本里划掉：重放同一个调用读到的是它中断时的输出，不会再跑一遍
-                self._interrupt_later(ex.sandbox_uuid, ex.cmd_id)
+                if pending:  # 取消落在补记上：后台补完，接手的实例凭它接上
+                    _in_background(self._record(pending, ex))
+                # ★ 只有用户取消才中断；交接、租约丢失时命令留在沙箱里，接手的实例凭账本接上。
+                #   账本都不划掉：重放同一个调用读到的是它中断时的输出，不会再跑一遍
+                if await self._user_cancelled():
+                    self._interrupt_later(ex.sandbox_uuid, ex.cmd_id)
                 raise
             span.set_attribute("atlas.sandbox.exit_code", -1 if exit_code is None else exit_code)
             span.set_attribute(
@@ -334,28 +419,56 @@ class ShellSandbox:
             except Exception as exc:  # 配额、镜像准入、建不起来、没就绪……一律变成工具错误
                 raise SandboxUnavailable(f"沙箱启动失败：{exc}") from exc
 
+    async def _prepare_workdir(self, ref: SandboxRef) -> None:
+        """工作区目录在沙箱里可能还不存在：沙箱是这个人共用的，挂的是整个 {user}/，新会话还没写过
+        文件时对象存储里没有这个前缀。execd 不接受不存在的 cwd，先建好。每个沙箱只建一次。"""
+        if self._workdir_ready == ref.sandbox_uuid:
+            return
+        try:
+            files = await self._exec.open_files(ref.sandbox_uuid)
+        except (SandboxGone, ExecdUnreachable, ExecdRejected) as exc:
+            raise SandboxUnavailable(f"沙箱拒绝了命令：{exc}") from exc
+        try:
+            await asyncio.to_thread(files.mkdir, self.workdir)
+        except httpx.HTTPError as exc:
+            raise SandboxUnavailable(f"在沙箱里建工作区目录失败：{exc}") from exc
+        finally:
+            files.close()
+        self._workdir_ready = ref.sandbox_uuid
+
     async def _notice(self, ref: SandboxRef) -> str:
         previous = await self._ledger.remember(self._ws, ref.sandbox_uuid)
         return REBUILT if previous is not None and previous != ref.sandbox_uuid else ""
 
     async def _submit(
-        self, ref: SandboxRef, command: str, cwd: str, timeout: int | None
+        self, ref: SandboxRef, command: str, cwd: str, timeout: int | None, exec_id: str | None
     ) -> CommandExecution:
+        if exec_id:
+            await self._ledger.intend(self._run, exec_id, ref.sandbox_uuid)  # ★ 先记后提交
         start = asyncio.ensure_future(
             self._exec.start(ref.sandbox_uuid, CommandSpec(command, cwd=cwd, timeout_s=timeout))
         )
         try:
             cmd_id = await asyncio.shield(start)
         except asyncio.CancelledError:
-            # 取消落在提交途中：请求可能已经到了 execd。等它拿到 id 再中断，免得命令在沙箱里没人管
-            start.add_done_callback(lambda t: self._interrupt_submitted(ref.sandbox_uuid, t))
+            # 取消落在提交途中：请求可能已经到了 execd。等它拿到 id 再补记账本（接手的实例凭它
+            # 接上），用户取消的再中断它，免得命令在沙箱里没人管
+            stop = False
+            try:
+                stop = await self._user_cancelled()
+            finally:  # 查取消位时又被取消也要挂上：拿到 id 之后总得有人记账
+                start.add_done_callback(
+                    lambda t: self._settle_cancelled_submit(ref.sandbox_uuid, exec_id, t, stop=stop)
+                )
             raise
         except SubmitUnknown as exc:
-            raise SandboxUnavailable(
-                "提交命令时连接中断：命令可能已经开始执行，结果未知；"
-                "可以先检查 /workspace 的状态再决定是否重试"
-            ) from exc
+            raise SandboxUnavailable(_SUBMIT_UNKNOWN, kind="result_unknown") from exc
         except (SandboxGone, ExecdUnreachable, ExecdRejected) as exc:
+            if exec_id:  # 确定没提交上：去掉「提交中」，重放时照常提交
+                try:
+                    await self._ledger.drop(self._run, exec_id)
+                except Exception:
+                    logger.warning("去掉调用 %s 的「提交中」失败", exec_id, exc_info=True)
             raise SandboxUnavailable(f"沙箱拒绝了命令：{exc}") from exc
         return CommandExecution(ref.sandbox_uuid, cmd_id, OutputBuffer(self._limit))
 
@@ -363,6 +476,7 @@ class ShellSandbox:
         delay, attempts = self._poll.min_s, 0
         stall = StallDetector(self._idle_s, self._stall_pct)
         sid = ex.sandbox_uuid
+        next_confirm = 0.0
         while True:
             try:
                 had_output = ex.advance(await self._exec.read(sid, ex.cmd_id, ex.cursor))
@@ -374,6 +488,9 @@ class ShellSandbox:
                     return status.exit_code
                 attempts = 0
                 now = time.monotonic()
+                if now >= next_confirm:  # 活动账本丢过数据也补得回来：闲置回收不会删掉在跑的命令
+                    await self._exec.confirm_running(sid, ex.cmd_id)
+                    next_confirm = now + _CONFIRM_RUNNING_S
                 stall.observe(had_output, now)
                 delay = self._poll.next_poll(delay, had_output)
                 if stall.due(now) and stall.judge(await self._exec.usage(sid), now):
@@ -387,29 +504,67 @@ class ShellSandbox:
                 raise _Gone(ex.cmd_id) from exc
             except ExecdUnreachable as exc:
                 attempts += 1
-                wait = self._poll.reconnect_delay(attempts)
                 logger.info("命令 %s 的连接中断（第 %d 次）：%s", ex.cmd_id, attempts, exc)
-                if wait is None:
-                    raise SandboxUnavailable("与沙箱的连接中断且无法恢复，命令结果未知") from exc
-                await asyncio.sleep(wait)  # 下一次按同一个 sandbox_uuid 重新解析地址
+                # 不设次数上限：下一次按同一个 sandbox_uuid 重新解析地址，沙箱没了会抛 SandboxGone
+                await asyncio.sleep(self._poll.reconnect_delay(attempts))
 
-    def _interrupt_submitted(self, sandbox_uuid: UUID, start: asyncio.Future[str]) -> None:
+    async def _record(self, exec_id: str, ex: CommandExecution) -> None:
+        """补上命令 id。写不进去也接着跟随：账本停在「提交中」，重放时报结果未知，不会重跑。"""
+        try:
+            await self._ledger.put(self._run, exec_id, ex.sandbox_uuid, ex.cmd_id)
+        except Exception:
+            logger.warning("记命令 %s 的执行账本失败", ex.cmd_id, exc_info=True)
+
+    async def _user_cancelled(self) -> bool:
+        """这次取消是不是用户要停（取消位置位）。
+
+        ★ 查不到（Redis 不可用、超时）当没置位：宁可让命令多跑，也不误杀。这时取消本身也送不到
+          runner（它查的是同一个取消位），行为一致。
+        """
+        if self._cancel is None:
+            return True
+        try:
+            async with asyncio.timeout(_CANCEL_CHECK_S):
+                return await self._cancel.is_cancelled()
+        except Exception:
+            logger.warning(
+                "run %s 查取消位失败，按未取消处理（不中断命令）", self._run, exc_info=True
+            )
+            return False
+
+    def _settle_cancelled_submit(
+        self, sandbox_uuid: UUID, exec_id: str | None, start: asyncio.Future[str], *, stop: bool
+    ) -> None:
         if start.cancelled() or start.exception() is not None:
-            return  # 没提交成功：没有要中断的
-        self._interrupt_later(sandbox_uuid, start.result())
+            return  # 没拿到 id：账本里留着「提交中」，重放时如实报结果未知
+        cmd_id = start.result()
+
+        async def settle() -> None:
+            if exec_id:
+                try:
+                    await self._ledger.put(self._run, exec_id, sandbox_uuid, cmd_id)
+                except Exception:
+                    logger.warning("补记命令 %s 的执行账本失败", cmd_id, exc_info=True)
+            if stop:
+                await self._interrupt(sandbox_uuid, cmd_id)
+
+        _in_background(settle())
 
     def _interrupt_later(self, sandbox_uuid: UUID, cmd_id: str) -> None:
-        """这一轮被取消：结束沙箱里的命令（不等它回来）。"""
+        """用户取消了这一轮：结束沙箱里的命令（不等它回来）。"""
+        _in_background(self._interrupt(sandbox_uuid, cmd_id))
 
-        async def interrupt() -> None:
-            try:
-                await self._exec.interrupt(sandbox_uuid, cmd_id)
-            except Exception:
-                logger.warning("取消沙箱命令 %s 失败", cmd_id, exc_info=True)
+    async def _interrupt(self, sandbox_uuid: UUID, cmd_id: str) -> None:
+        try:
+            await self._exec.interrupt(sandbox_uuid, cmd_id)
+        except Exception:
+            logger.warning("取消沙箱命令 %s 失败", cmd_id, exc_info=True)
 
-        task = asyncio.get_running_loop().create_task(interrupt())
-        _BACKGROUND.add(task)
-        task.add_done_callback(_BACKGROUND.discard)
+
+def _in_background(work: Any) -> None:
+    task = asyncio.get_running_loop().create_task(work)
+    _BACKGROUND.add(task)
+    task.add_done_callback(_BACKGROUND.discard)
 
 
 async def exec_in_running(
@@ -420,7 +575,7 @@ async def exec_in_running(
     *,
     command: str,
     profile: SandboxProfile,
-    cwd: str = WORKDIR,
+    cwd: str | None = None,
     timeout: int | None = None,
     files: Sequence[tuple[str, bytes]] = (),
     output_limit: int = 100_000,
@@ -457,7 +612,7 @@ async def exec_in_running(
         exec=exec,
         ledger=ledger,
         ws=ws,
-        run_id=f"exec-{uuid4().hex}",
+        run_id=uuid4(),
         spec=SandboxSpec(profile=actual),
         polling=polling,
         output_limit=output_limit,

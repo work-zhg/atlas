@@ -21,9 +21,9 @@ export type GwVisibility = "public" | "private";
 export type GwEffect = "read" | "write" | "destructive";
 
 export const GW_KIND: Record<GwKind, { label: string; desc: string }> = {
-  mcp: { label: "MCP 代理", desc: "连接远程 MCP Server（Streamable HTTP 或旧版 SSE），工具定义从上游拉取" },
-  rest: { label: "REST 转换", desc: "导入 OpenAPI 或手工定义，把 HTTP 接口转换成 MCP 工具" },
-  grpc: { label: "gRPC 转换", desc: "服务端反射或上传描述文件，把 gRPC 方法转换成 MCP 工具" },
+  mcp: { label: "MCP 服务", desc: "填写服务地址，自动读取工具列表" },
+  rest: { label: "接口文档导入", desc: "导入 OpenAPI 文档或手工填写，每个接口变成一个工具" },
+  grpc: { label: "gRPC 导入", desc: "自动发现服务里的方法，每个方法变成一个工具" },
 };
 
 export const GW_EFFECT: Record<GwEffect, { label: string; color: string }> = {

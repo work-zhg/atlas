@@ -95,6 +95,8 @@ class Backfiller:
             .where(
                 Thread.memory == "on",
                 Thread.parent_thread_uuid.is_(None),
+                # 编辑页的调试预览是试用，不从里面补记关于用户的记忆
+                Thread.status != "preview",
                 Thread.updated_at > now - timedelta(days=_HORIZON_DAYS),
                 or_(
                     Thread.status == "archived",

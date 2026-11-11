@@ -20,6 +20,7 @@ export const qk = {
     list: (agentId?: string) => ["threads", "list", agentId ?? "all"] as const,
     detail: (id: string) => ["threads", "detail", id] as const,
     messages: (id: string) => ["threads", "messages", id] as const,
+    feedback: (id: string) => ["threads", "feedback", id] as const,
   },
 
   /** 技能 / MCP。运行时视图（引用、用量、MCP 当前定义）与技能应用视图分开缓存 */

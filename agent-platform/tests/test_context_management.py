@@ -110,6 +110,21 @@ def test_working_set_orders_by_recency_and_splits_skills() -> None:
     assert files == ["/a.py", "/b.py"] and skills == ["/skills/pdf/SKILL.md"]
 
 
+def test_working_set_follows_the_callers_layout() -> None:
+    """外置目录由调用方给（Atlas 放在工作区的 .atlas/{会话}/ 下）。
+
+    技能按 …/skills/<技能>/<版本>/SKILL.md 认。
+    """
+    atlas = "/data/r/workspace/.atlas/t"
+    msgs = [
+        *_turn(0, path="/data/r/workspace/a.py"),
+        *_turn(1, path="/data/skills/pdf/3/SKILL.md"),
+        *_turn(2, path=f"{atlas}/large_tool_results/x.txt"),
+    ]
+    files, skills = working_set(msgs, max_files=5, offload_dir=f"{atlas}/large_tool_results")
+    assert files == ["/data/r/workspace/a.py"] and skills == ["/data/skills/pdf/3/SKILL.md"]
+
+
 def test_overflow_detection() -> None:
     class E(Exception):
         status_code = 400

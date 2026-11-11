@@ -99,7 +99,12 @@ async def test_only_config_admins_see_and_change_configs(
     r = await client.get("/v1/configs", headers=users["admin"])
     assert r.status_code == 200, r.text
     listed = {c["key"]: c for c in r.json()}
-    assert set(listed) == {QUOTA, IMAGES, "sandbox.bench_image_allow_prefixes"}
+    assert set(listed) == {
+        QUOTA,
+        IMAGES,
+        "sandbox.bench_image_allow_prefixes",
+        "platform.default_agent",
+    }
     # 没改过的取部署配置
     assert listed[QUOTA]["effective"] == get_settings().sandbox_quota_per_user
     assert listed[QUOTA]["overridden"] is False
@@ -124,15 +129,19 @@ async def test_a_changed_quota_applies_to_the_next_allocation(
     fake: FakeOpenSandbox,
     redis: Any,
 ) -> None:
-    c = component(fake, redis, sandbox_quota_per_user=10)
+    c = component(
+        fake, redis, sandbox_quota_per_user=10, sandbox_image_allow_prefixes=["other/"]
+    )
     ws = new_workspace()
     await c.native.ensure(ws, SandboxSpec())
     await _set(client, users["admin"], QUOTA, 1)
+    # 同一个人换了镜像：要另建一个沙箱（同镜像的会共用，不占新配额）
     same_person = type(ws)(new_workspace().root_thread_uuid, ws.user_uuid)
+    other_image = SandboxSpec(image="other/py:3.12")
     with pytest.raises(QuotaExceeded, match="上限 1"):
-        await c.native.ensure(same_person, SandboxSpec())
+        await c.native.ensure(same_person, other_image)
     await _set(client, users["admin"], QUOTA, None)  # 恢复默认（部署配置的 10）
-    await c.native.ensure(same_person, SandboxSpec())
+    await c.native.ensure(same_person, other_image)
 
 
 async def test_a_changed_image_allowlist_applies_to_the_next_sandbox(

@@ -18,6 +18,8 @@ dependencies = [
   "python-multipart>=0.0.9",
   # 多实例协调（广播、唤醒、节点租约锁）；单实例不配 ATLAS_TF_REDIS_URL 时不连接
   "redis>=5",
+  # 协作者对账、扫描待处理节点是它的实例任务（jobs.py）
+  "atlas-jobs",
 ]
 
 [build-system]

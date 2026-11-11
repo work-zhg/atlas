@@ -44,3 +44,8 @@ export function threadBadge(thread: Pick<Thread, "last_run">): ThreadBadge | nul
       return null;
   }
 }
+
+/** 会话来自哪个业务应用（source_app）的显示名 */
+export function appName(code: string): string {
+  return ({ teamflow: "TeamFlow", bench: "评测" } as Record<string, string>)[code] ?? code;
+}

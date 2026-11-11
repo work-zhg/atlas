@@ -49,10 +49,13 @@ export function ContextMeter({
   threadId,
   live,
   running,
+  minPercent = 0,
 }: {
   threadId: string;
   live?: ContextUsageData;
   running: boolean;
+  /** 用量低于它就不显示：1M 窗口下长期 0%，常驻只是噪音，接近上限时才提示 */
+  minPercent?: number;
 }) {
   const { message } = App.useApp();
   const [open, setOpen] = useState(false);
@@ -64,6 +67,7 @@ export function ContextMeter({
 
   const eff = usage.effective_window || usage.context_window || 1;
   const pct = Math.min(100, Math.round((usage.tokens * 100) / eff));
+  if (pct < minPercent && !open) return null;
   const comp = usage.composition;
   const total = comp ? Object.values(comp).reduce((a, b) => a + b, 0) : 0;
 

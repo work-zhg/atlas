@@ -30,11 +30,10 @@ export interface paths {
         };
         /**
          * List Models
-         * @description 可选的模型。
+         * @description 可选的模型。agent_id：编辑已有的智能体；新建时不给。
          *
-         *     经模型网关时按这个 Agent 的权限主体列出（doc/model-design.html §6.4、§11.2），参数同 /tools：
-         *     以人为权限 = 当前用户自己的权限；以 Agent 为权限 = 它的数字员工的权限。
-         *     没接模型网关时：model_catalog ⋈ 网关 /v1/models 巡检结果，不分人。
+         *     经模型管理平台时按这个智能体的客户端 Key 列出（模型管理方案设计 7.2），与权限类型无关；
+         *     没接平台时：model_catalog ⋈ litellm /v1/models 巡检结果。
          */
         get: operations["list_models_v1_models_get"];
         put?: never;
@@ -56,9 +55,9 @@ export interface paths {
          * List Tools
          * @description 内置工具 + 已接入 MCP 工具。bash 返回 available=false（决策 2）。
          *
-         *     经 MCP 网关时，MCP 工具按这个 Agent 的权限主体列出（MCP 方案设计 §5.4、§9.2）：
-         *     以人为权限 = 当前用户自己的权限；以 Agent 为权限 = 它的数字员工的权限。
-         *     agent_id：编辑已有的 Agent；新建时不给，按 auth_subject（缺省 = 以人为权限）。
+         *     经 MCP 网关时，MCP 工具按这个智能体的 Key 列出（公开服务 + 授给它的），与权限类型无关。
+         *     agent_id：编辑已有的智能体；新建时不给（还没有 Key，只列公开服务）。
+         *     auth_subject：只对知识库有意义，这里不用。
          */
         get: operations["list_tools_v1_tools_get"];
         put?: never;
@@ -112,6 +111,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/agents/default": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Default Agent
+         * @description 首页输入框默认用的智能体（平台配置 platform.default_agent）。
+         *
+         *     没设、已不是启用状态、或这个人看不到它 → 404：前端退回让用户自己选。
+         *     ★ 默认智能体就是普通智能体：能不能看到照常按共享判，这里不开任何口子。
+         */
+        get: operations["get_default_agent_v1_agents_default_get"];
+        /**
+         * Set Default Agent
+         * @description 设为默认智能体（agent_id 为空 = 取消默认）。只有平台管理员能改：它影响所有人的首页。
+         */
+        put: operations["set_default_agent_v1_agents_default_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/agents/{agent_id}": {
         parameters: {
             query?: never;
@@ -137,6 +163,70 @@ export interface paths {
          * @description ★ 保存即产生新版本并切换 current_version_id，不做原地更新（§5.4）。
          */
         patch: operations["update_agent_v1_agents__agent_id__patch"];
+        trace?: never;
+    };
+    "/v1/agents/{agent_id}/draft": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Save Draft
+         * @description 编辑器自动保存草稿：不产生版本，「发布」时才写版本。
+         */
+        put: operations["save_draft_v1_agents__agent_id__draft_put"];
+        post?: never;
+        /**
+         * Discard Draft
+         * @description 放弃未发布的修改，回到当前版本。
+         */
+        delete: operations["discard_draft_v1_agents__agent_id__draft_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/agents/{agent_id}/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Publish Agent
+         * @description 发布：草稿写成新版本，新对话用它。草稿状态的智能体同时启用 —— 启用要所有者。
+         */
+        post: operations["publish_agent_v1_agents__agent_id__publish_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/agents/{agent_id}/preview-thread": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Preview Thread
+         * @description 调试预览用的会话：不进会话列表，里面的每一轮按草稿（没有草稿就是当前版本）运行。
+         */
+        post: operations["create_preview_thread_v1_agents__agent_id__preview_thread_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/v1/agents/{agent_id}/status": {
@@ -366,6 +456,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/threads/{thread_id}/sandbox/exec": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Exec In Sandbox
+         * @description 在会话正在运行的评测档沙箱里执行一条命令，等它结束后返回输出。
+         *
+         *     用途：评测在 Agent 留下的现场里校验（Terminal-Bench 的 tests/test.sh）。
+         *     409 = 没有正在运行的沙箱（不会为它新建）；403 = 不是评测档；503 = 执行途中沙箱没了。
+         */
+        post: operations["exec_in_sandbox_v1_threads__thread_id__sandbox_exec_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/threads/{thread_id}/context": {
         parameters: {
             query?: never;
@@ -480,6 +593,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/threads/{thread_id}/feedback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Feedback
+         * @description 我对这条会话里各条回答的反馈：刷新后按钮仍显示我点过的那个。
+         */
+        get: operations["list_feedback_v1_threads__thread_id__feedback_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/threads/{thread_id}/messages/{message_id}/feedback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Put Feedback
+         * @description 有帮助 / 没帮助。再点一次就是改（一个人对一条回答只有一条）。
+         */
+        put: operations["put_feedback_v1_threads__thread_id__messages__message_id__feedback_put"];
+        post?: never;
+        /**
+         * Delete Feedback
+         * @description 撤回反馈（再点一次已选中的按钮）。
+         */
+        delete: operations["delete_feedback_v1_threads__thread_id__messages__message_id__feedback_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/runs/{run_id}": {
         parameters: {
             query?: never;
@@ -531,7 +688,8 @@ export interface paths {
         put?: never;
         /**
          * Cancel Run
-         * @description 写取消信号；engine 每步检查一次，到安全点后产出 run.cancelled。
+         * @description 写取消信号；engine 每秒查一次（工具跑着时也查），正在跑的工具随之取消，
+         *     然后产出 run.cancelled。
          */
         post: operations["cancel_run_v1_runs__run_id__cancel_post"];
         delete?: never;
@@ -831,6 +989,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/instructions/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Mine */
+        get: operations["get_mine_v1_instructions_me_get"];
+        /** Put Mine */
+        put: operations["put_mine_v1_instructions_me_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/instructions/platform": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Platform */
+        get: operations["get_platform_v1_instructions_platform_get"];
+        /** Put Platform */
+        put: operations["put_platform_v1_instructions_platform_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/skills": {
         parameters: {
             query?: never;
@@ -982,6 +1176,214 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/service-models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Service Models */
+        get: operations["list_service_models_v1_service_models_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/service-models/{purpose}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set Service Model */
+        put: operations["set_service_model_v1_service_models__purpose__put"];
+        post?: never;
+        /** Clear Service Model */
+        delete: operations["clear_service_model_v1_service_models__purpose__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/sandbox-templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Templates */
+        get: operations["list_templates_v1_sandbox_templates_get"];
+        put?: never;
+        /** Create Template */
+        post: operations["create_template_v1_sandbox_templates_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/sandbox-templates/{code}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Template */
+        get: operations["get_template_v1_sandbox_templates__code__get"];
+        /** Revise Template */
+        put: operations["revise_template_v1_sandbox_templates__code__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/sandbox-templates/{code}/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Publish Template */
+        post: operations["publish_template_v1_sandbox_templates__code__publish_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/sandboxes/{sandbox_uuid}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Sandbox Events */
+        get: operations["sandbox_events_v1_sandboxes__sandbox_uuid__events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/credential-profiles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Available Profiles */
+        get: operations["available_profiles_v1_credential_profiles_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/configs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List */
+        get: operations["list_v1_configs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/configs/{key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get */
+        get: operations["get_v1_configs__key__get"];
+        /** Put */
+        put: operations["put_v1_configs__key__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/configs/{key}/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Revisions */
+        get: operations["revisions_v1_configs__key__revisions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/configs/{key}/rollback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Rollback */
+        post: operations["rollback_v1_configs__key__rollback_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List */
+        get: operations["list_v1_jobs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1083,12 +1485,39 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            /** My Level */
+            my_level?: string | null;
+            /**
+             * Mine
+             * @default false
+             */
+            mine: boolean;
+            /** Owner Name */
+            owner_name?: string | null;
+            /** Last Used At */
+            last_used_at?: string | null;
+            /**
+             * Has Draft
+             * @default false
+             */
+            has_draft: boolean;
             /** Spec */
             spec: {
                 [key: string]: unknown;
             };
-            /** My Level */
-            my_level?: string | null;
+            /** Draft Spec */
+            draft_spec?: {
+                [key: string]: unknown;
+            } | null;
+            /** Draft Updated At */
+            draft_updated_at?: string | null;
+        };
+        /**
+         * AgentDraftIn
+         * @description 编辑器自动保存的草稿：只校验结构，引用与引擎规则留到发布时校验。
+         */
+        AgentDraftIn: {
+            spec: components["schemas"]["AgentSpecIn"];
         };
         /** AgentGrantCreate */
         AgentGrantCreate: {
@@ -1214,6 +1643,30 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            /** My Level */
+            my_level?: string | null;
+            /**
+             * Mine
+             * @default false
+             */
+            mine: boolean;
+            /** Owner Name */
+            owner_name?: string | null;
+            /** Last Used At */
+            last_used_at?: string | null;
+            /**
+             * Has Draft
+             * @default false
+             */
+            has_draft: boolean;
+        };
+        /** AgentPublishIn */
+        AgentPublishIn: {
+            /**
+             * Note
+             * @default
+             */
+            note: string;
         };
         /**
          * AgentSpecIn
@@ -1305,6 +1758,11 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /**
+             * Note
+             * @default
+             */
+            note: string;
         };
         /**
          * ApprovalDecision
@@ -1482,6 +1940,54 @@ export interface components {
              */
             attachment_budget_ratio: number;
         };
+        /** ConfigOut */
+        ConfigOut: {
+            /** Key */
+            key: string;
+            /** Type */
+            type: string;
+            /** Description */
+            description: string;
+            /** Default */
+            default: unknown;
+            /**
+             * Value
+             * @description 库里覆盖的值；null = 用默认值
+             */
+            value: unknown | null;
+            /** Effective */
+            effective: unknown;
+            /** Overridden */
+            overridden: boolean;
+            /** Version */
+            version: number;
+            /** Updated By */
+            updated_by: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** CredentialProfileOut */
+        CredentialProfileOut: {
+            /** Code */
+            code: string;
+            /** Auth */
+            auth: string;
+            /** Hosts */
+            hosts: string[];
+        };
+        /** DefaultAgentIn */
+        DefaultAgentIn: {
+            /** Agent Id */
+            agent_id?: string | null;
+        };
+        /** DefaultAgentOut */
+        DefaultAgentOut: {
+            /** Agent Id */
+            agent_id?: string | null;
+        };
         /** DigitalEmployeeOut */
         DigitalEmployeeOut: {
             /**
@@ -1570,6 +2076,49 @@ export interface components {
          * @enum {string}
          */
         EventType: "run.started" | "run.finished" | "run.failed" | "run.cancelled" | "run.suspended" | "run.resumed" | "thinking.delta" | "message.delta" | "message.completed" | "todos.updated" | "tool.started" | "tool.updated" | "tool.completed" | "tool.failed" | "subagent.started" | "subagent.step" | "subagent.finished" | "file.written" | "file.deleted" | "usage.updated" | "approval.required" | "question.answered" | "context.compacted" | "context.cleared" | "context.usage" | "session.lost" | "agent.mode" | "thread.title_generated" | "skill.loaded" | "skill.skipped" | "mcp.tool_drift" | "mcp.tool_skipped" | "knowledge.skipped" | "model.deprecated";
+        /** FeedbackIn */
+        FeedbackIn: {
+            /**
+             * Rating
+             * @enum {string}
+             */
+            rating: "up" | "down";
+            /** Reasons */
+            reasons?: string[];
+            /**
+             * Comment
+             * @default
+             */
+            comment: string;
+        };
+        /** FeedbackListOut */
+        FeedbackListOut: {
+            /** Data */
+            data: components["schemas"]["FeedbackOut"][];
+        };
+        /** FeedbackOut */
+        FeedbackOut: {
+            /**
+             * Message Id
+             * Format: uuid
+             */
+            message_id: string;
+            /**
+             * Rating
+             * @enum {string}
+             */
+            rating: "up" | "down";
+            /**
+             * Reasons
+             * @default []
+             */
+            reasons: string[];
+            /**
+             * Comment
+             * @default
+             */
+            comment: string;
+        };
         /** GrantSubject */
         GrantSubject: {
             /**
@@ -1584,6 +2133,87 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /** InstanceJobOut */
+        InstanceJobOut: {
+            /** Type */
+            type: string;
+            /** Description */
+            description: string;
+            /**
+             * Scope
+             * @description instance = 每个实例各跑一份
+             * @constant
+             */
+            scope: "instance";
+            /**
+             * Every
+             * @description 两轮之间隔多久（秒）
+             */
+            every: number;
+            /**
+             * Jitter
+             * @description 每轮在 every 上随机加减的秒数
+             */
+            jitter: number;
+            /** Running */
+            running: boolean;
+            /**
+             * Next Fire At
+             * @description 下一轮大约什么时候开始；正在跑时为空
+             */
+            next_fire_at: string | null;
+            /** Runs */
+            runs: number;
+            /** Failures */
+            failures: number;
+            /**
+             * Consecutive Failures
+             * @description 连续失败次数，成功一次就清零
+             */
+            consecutive_failures: number;
+            /** Last Started At */
+            last_started_at: string | null;
+            /** Last Finished At */
+            last_finished_at: string | null;
+            /** Last Duration S */
+            last_duration_s: number | null;
+            /** Last Error */
+            last_error: string | null;
+        };
+        /** InstructionIn */
+        InstructionIn: {
+            /**
+             * Content
+             * @default
+             */
+            content: string;
+        };
+        /** InstructionOut */
+        InstructionOut: {
+            /** Scope */
+            scope: string;
+            /** Content */
+            content: string;
+            /** Updated At */
+            updated_at?: string | null;
+            /** Updated By */
+            updated_by?: string | null;
+            /**
+             * Max Chars
+             * @default 10000
+             */
+            max_chars: number;
+        };
+        /** JobsOut */
+        JobsOut: {
+            /**
+             * Instance
+             * @description 回应这个请求的实例：指标只是它的
+             */
+            instance: string;
+            /** Jobs */
+            jobs: components["schemas"]["InstanceJobOut"][];
         };
         /** KnowledgeAccessOut */
         KnowledgeAccessOut: {
@@ -1624,6 +2254,12 @@ export interface components {
              * @enum {string}
              */
             mode: "auto" | "tool";
+            /**
+             * Scope
+             * @default selected
+             * @enum {string}
+             */
+            scope: "selected" | "all_readable";
             /**
              * Top K
              * @default 4
@@ -1797,11 +2433,12 @@ export interface components {
         };
         /**
          * McpSubjectOut
-         * @description 编辑器里 MCP 工具按谁的权限列出（MCP 方案设计 §9.2）。只在经 MCP 网关时给出。
+         * @description 编辑器里 MCP 工具按谁的权限列出：这个智能体的 MCP Key。只在经 MCP 网关时给出。
          */
         McpSubjectOut: {
             /**
              * Kind
+             * @default agent
              * @enum {string}
              */
             kind: "user" | "agent";
@@ -1925,47 +2562,31 @@ export interface components {
              */
             is_available: boolean;
             /**
-             * Status
-             * @default available
-             */
-            status: string;
-            /**
              * Selectable
              * @default true
              */
             selectable: boolean;
+        };
+        /**
+         * ModelKeyOut
+         * @description 编辑器里的模型从哪来（模型管理方案设计 7.2）。只在经模型管理平台时给出。
+         *
+         *     status  none            新建的智能体（还没保存）：列出平台上登记的全部模型
+         *             pending_models  客户端 Key 还没分配模型：同上，保存后要等管理员分配才能运行
+         *             active          列出 Key 的可用模型
+         *             blocked         Key 被停用；no_models 分配的模型都不可用了
+         */
+        ModelKeyOut: {
             /**
-             * Description
-             * @default
+             * Status
+             * @enum {string}
              */
-            description: string;
+            status: "none" | "pending_models" | "active" | "blocked" | "no_models";
             /**
-             * Tags
+             * Notes
              * @default []
              */
-            tags: string[];
-            /**
-             * Input Modalities
-             * @default [
-             *       "text"
-             *     ]
-             */
-            input_modalities: string[];
-            /** Replacement */
-            replacement?: string | null;
-            /** Retire At */
-            retire_at?: string | null;
-            /**
-             * Data Policy
-             * @default {}
-             */
-            data_policy: {
-                [key: string]: unknown;
-            };
-            /** Price */
-            price?: {
-                [key: string]: unknown;
-            } | null;
+            notes: string[];
         };
         /** ModelListResponse */
         ModelListResponse: {
@@ -1973,12 +2594,10 @@ export interface components {
             data: components["schemas"]["ModelInfo"][];
             /**
              * Gateway Reachable
-             * @description false 表示巡检失败，is_available 退化为 catalog 中的存量值
+             * @description false 表示取不到模型列表（巡检失败、模型管理平台不可用）
              */
             gateway_reachable: boolean;
-            subject?: components["schemas"]["ModelSubjectOut"] | null;
-            /** Default Model */
-            default_model?: string | null;
+            key?: components["schemas"]["ModelKeyOut"] | null;
         };
         /** ModelSpecIn */
         ModelSpecIn: {
@@ -1991,7 +2610,7 @@ export interface components {
              */
             provider: "anthropic" | "openai";
             /** Effort */
-            effort?: ("low" | "medium" | "high" | "xhigh" | "max") | null;
+            effort?: ("max" | "xhigh" | "high" | "medium" | "low") | null;
             /**
              * Thinking
              * @default auto
@@ -2010,29 +2629,6 @@ export interface components {
             prompt_cache: boolean;
             /** Temperature */
             temperature?: number | null;
-        };
-        /**
-         * ModelSubjectOut
-         * @description 编辑器里模型按谁的权限列出（doc/model-design.html §11.2）。只在经模型网关时给出。
-         */
-        ModelSubjectOut: {
-            /**
-             * Kind
-             * @enum {string}
-             */
-            kind: "user" | "agent";
-            /** Uid */
-            uid?: string | null;
-            /**
-             * Hidden Models
-             * @default 0
-             */
-            hidden_models: number;
-            /**
-             * Notes
-             * @default []
-             */
-            notes: string[];
         };
         /** MoveIn */
         MoveIn: {
@@ -2105,37 +2701,24 @@ export interface components {
             /** Other */
             other?: string | null;
         };
+        /** RevisionIn */
+        RevisionIn: {
+            /** Yaml */
+            yaml: string;
+            /** Description */
+            description?: string | null;
+        };
         /** RevisionListOut */
         RevisionListOut: {
             /** Data */
-            data: components["schemas"]["RevisionOut"][];
+            data: components["schemas"]["atlas_agent__schemas__memory__RevisionOut"][];
         };
-        /** RevisionOut */
-        RevisionOut: {
-            /** Id */
-            id: string;
-            /** Kind */
-            kind: string;
-            /** Topic */
-            topic: string | null;
-            /** Removed */
-            removed: number[];
-            /** Added */
-            added: number[];
-            /** Occurred At */
-            occurred_at: string;
-            /** Source */
-            source: string | null;
-            /** Origin */
-            origin?: {
-                [key: string]: unknown;
-            } | null;
-            /** Undoes */
-            undoes?: string | null;
-            /** Undone By */
-            undone_by?: string | null;
-            /** Created At */
-            created_at: string;
+        /** RollbackIn */
+        RollbackIn: {
+            /** To Version */
+            to_version: number;
+            /** Expected Version */
+            expected_version: number;
         };
         /** RunAccepted */
         RunAccepted: {
@@ -2231,7 +2814,67 @@ export interface components {
             /** Data */
             data: components["schemas"]["TraceEvent"][];
         };
-        /** SandboxSpecIn */
+        /** SandboxEventOut */
+        SandboxEventOut: {
+            /**
+             * Event Uuid
+             * Format: uuid
+             */
+            event_uuid: string;
+            /** Sandbox Uuid */
+            sandbox_uuid: string | null;
+            /** External Id */
+            external_id: string | null;
+            /** Event Type */
+            event_type: string;
+            /** State */
+            state: string | null;
+            /** Reason */
+            reason: string | null;
+            /** Detail */
+            detail: {
+                [key: string]: unknown;
+            };
+            /**
+             * Occurred At
+             * Format: date-time
+             */
+            occurred_at: string;
+        };
+        /**
+         * SandboxExecIn
+         * @description 在会话正在运行的评测档沙箱里执行一条命令（评测原地校验用）。
+         */
+        SandboxExecIn: {
+            /** Command */
+            command: string;
+            /** Cwd */
+            cwd?: string | null;
+            /** Timeout S */
+            timeout_s?: number | null;
+            /** Files */
+            files?: components["schemas"]["SandboxFileIn"][];
+        };
+        /** SandboxExecOut */
+        SandboxExecOut: {
+            /** Exit Code */
+            exit_code: number | null;
+            /** Output */
+            output: string;
+            /** Truncated */
+            truncated: boolean;
+        };
+        /** SandboxFileIn */
+        SandboxFileIn: {
+            /** Path */
+            path: string;
+            /** Content B64 */
+            content_b64: string;
+        };
+        /**
+         * SandboxSpecIn
+         * @description native 的 Shell 沙箱（见 domain/spec.py::SandboxSpec）。快照纪律：字段都有默认值。
+         */
         SandboxSpecIn: {
             /**
              * Image
@@ -2244,6 +2887,44 @@ export interface components {
              * @enum {string}
              */
             profile: "strict" | "bench";
+        };
+        /** ServiceModelIn */
+        ServiceModelIn: {
+            /** Client Type */
+            client_type: string;
+            /** Client Code */
+            client_code: string;
+            /** Model */
+            model: string;
+        };
+        /** ServiceModelOut */
+        ServiceModelOut: {
+            /** Purpose */
+            purpose: string;
+            /** Name */
+            name: string;
+            /** Client Type */
+            client_type?: string | null;
+            /** Client Code */
+            client_code?: string | null;
+            /** Model */
+            model?: string | null;
+            /** Ready */
+            ready: boolean;
+            /** Problem */
+            problem?: string | null;
+        };
+        /** SetIn */
+        SetIn: {
+            /** Value */
+            value?: unknown | null;
+            /** Expected Version */
+            expected_version: number;
+            /**
+             * Note
+             * @default
+             */
+            note: string;
         };
         /** SkillListItem */
         SkillListItem: {
@@ -2401,6 +3082,76 @@ export interface components {
             /** Source Agent Id */
             source_agent_id?: string | null;
         };
+        /** TemplateDetailOut */
+        TemplateDetailOut: {
+            /**
+             * Template Uuid
+             * Format: uuid
+             */
+            template_uuid: string;
+            /** Code */
+            code: string;
+            /** Description */
+            description: string;
+            /** Server */
+            server: string;
+            /** Version */
+            version: number;
+            /** Published Version */
+            published_version: number | null;
+            /** Published At */
+            published_at: string | null;
+            /**
+             * Updated By
+             * Format: uuid
+             */
+            updated_by: string;
+            /** Yaml */
+            yaml: string;
+            /** Published Sha */
+            published_sha: string | null;
+            /** Drifted */
+            drifted?: boolean | null;
+        };
+        /** TemplateIn */
+        TemplateIn: {
+            /** Code */
+            code: string;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /** Server */
+            server: string;
+            /** Yaml */
+            yaml: string;
+        };
+        /** TemplateOut */
+        TemplateOut: {
+            /**
+             * Template Uuid
+             * Format: uuid
+             */
+            template_uuid: string;
+            /** Code */
+            code: string;
+            /** Description */
+            description: string;
+            /** Server */
+            server: string;
+            /** Version */
+            version: number;
+            /** Published Version */
+            published_version: number | null;
+            /** Published At */
+            published_at: string | null;
+            /**
+             * Updated By
+             * Format: uuid
+             */
+            updated_by: string;
+        };
         /**
          * ThreadApprovalOut
          * @description 审批模式（doc/native-approval-mode-design.html）：输入框旁的选择器据此渲染。
@@ -2468,7 +3219,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "active" | "archived" | "ephemeral";
+            status: "active" | "archived" | "ephemeral" | "preview";
             /** Parent Thread Id */
             parent_thread_id?: string | null;
             /** Subagent Name */
@@ -2704,6 +3455,49 @@ export interface components {
             /** Removed */
             removed: number[];
         };
+        /** RevisionOut */
+        atlas_agent__schemas__memory__RevisionOut: {
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /** Topic */
+            topic: string | null;
+            /** Removed */
+            removed: number[];
+            /** Added */
+            added: number[];
+            /** Occurred At */
+            occurred_at: string;
+            /** Source */
+            source: string | null;
+            /** Origin */
+            origin?: {
+                [key: string]: unknown;
+            } | null;
+            /** Undoes */
+            undoes?: string | null;
+            /** Undone By */
+            undone_by?: string | null;
+            /** Created At */
+            created_at: string;
+        };
+        /** RevisionOut */
+        atlas_appconfig__routes__RevisionOut: {
+            /** Version */
+            version: number;
+            /** Value */
+            value: unknown | null;
+            /** Note */
+            note: string;
+            /** Changed By */
+            changed_by: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
     };
     responses: never;
     parameters: never;
@@ -2739,7 +3533,6 @@ export interface operations {
         parameters: {
             query?: {
                 agent_id?: string | null;
-                auth_subject?: ("user" | "agent") | null;
             };
             header?: never;
             path?: never;
@@ -2839,6 +3632,8 @@ export interface operations {
                 status?: string | null;
                 /** @description 按模型 id 过滤 */
                 model?: string | null;
+                /** @description mine = 我创建的；shared = 共享给我的；不传 = 全部能看到的 */
+                scope?: ("mine" | "shared") | null;
                 limit?: number;
             };
             header?: never;
@@ -2887,6 +3682,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AgentDetailOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_default_agent_v1_agents_default_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentDetailOut"];
+                };
+            };
+        };
+    };
+    set_default_agent_v1_agents_default_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DefaultAgentIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DefaultAgentOut"];
                 };
             };
             /** @description Validation Error */
@@ -2986,6 +3834,134 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AgentDetailOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_draft_v1_agents__agent_id__draft_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentDraftIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    discard_draft_v1_agents__agent_id__draft_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    publish_agent_v1_agents__agent_id__publish_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentPublishIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentDetailOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_preview_thread_v1_agents__agent_id__preview_thread_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThreadOut"];
                 };
             };
             /** @description Validation Error */
@@ -3560,6 +4536,41 @@ export interface operations {
             };
         };
     };
+    exec_in_sandbox_v1_threads__thread_id__sandbox_exec_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SandboxExecIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SandboxExecOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_context_v1_threads__thread_id__context_get: {
         parameters: {
             query?: never;
@@ -3724,6 +4735,103 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["MessageListOut"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_feedback_v1_threads__thread_id__feedback_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeedbackListOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_feedback_v1_threads__thread_id__messages__message_id__feedback_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thread_id: string;
+                message_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FeedbackIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeedbackOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_feedback_v1_threads__thread_id__messages__message_id__feedback_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thread_id: string;
+                message_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
@@ -4443,6 +5551,112 @@ export interface operations {
             };
         };
     };
+    get_mine_v1_instructions_me_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InstructionOut"];
+                };
+            };
+        };
+    };
+    put_mine_v1_instructions_me_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InstructionIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InstructionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_platform_v1_instructions_platform_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InstructionOut"];
+                };
+            };
+        };
+    };
+    put_platform_v1_instructions_platform_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InstructionIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InstructionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_skills_v1_skills_get: {
         parameters: {
             query?: never;
@@ -4660,6 +5874,467 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     }[];
+                };
+            };
+        };
+    };
+    list_service_models_v1_service_models_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceModelOut"][];
+                };
+            };
+        };
+    };
+    set_service_model_v1_service_models__purpose__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                purpose: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ServiceModelIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceModelOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    clear_service_model_v1_service_models__purpose__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                purpose: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: boolean;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_templates_v1_sandbox_templates_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemplateOut"][];
+                };
+            };
+        };
+    };
+    create_template_v1_sandbox_templates_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TemplateIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemplateDetailOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_template_v1_sandbox_templates__code__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                code: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemplateDetailOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revise_template_v1_sandbox_templates__code__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                code: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RevisionIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemplateDetailOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    publish_template_v1_sandbox_templates__code__publish_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                code: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemplateDetailOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    sandbox_events_v1_sandboxes__sandbox_uuid__events_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sandbox_uuid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SandboxEventOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    available_profiles_v1_credential_profiles_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialProfileOut"][];
+                };
+            };
+        };
+    };
+    list_v1_configs_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigOut"][];
+                };
+            };
+        };
+    };
+    get_v1_configs__key__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_v1_configs__key__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revisions_v1_configs__key__revisions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["atlas_appconfig__routes__RevisionOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rollback_v1_configs__key__rollback_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RollbackIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_v1_jobs_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobsOut"];
                 };
             };
         };

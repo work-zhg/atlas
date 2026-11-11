@@ -21,7 +21,8 @@ ThreadStatusIn = Literal["active", "archived"]
 #:   (parent, subagent_name) 的部分唯一索引只覆盖 active（于是同一个一次性
 #:   子智能体可以真并行）、以及在界面上一眼区分「持续协作的助理」与
 #:   「跑完就算」的一次性执行体。
-ThreadStatus = Literal["active", "archived", "ephemeral"]
+#: preview = 智能体编辑页的调试预览（不进会话列表，每一轮按草稿运行）
+ThreadStatus = Literal["active", "archived", "ephemeral", "preview"]
 TitleSource = Literal["pending", "generated", "fallback", "manual"]
 
 
@@ -152,7 +153,8 @@ class SandboxExecIn(BaseModel):
     """在会话正在运行的评测档沙箱里执行一条命令（评测原地校验用）。"""
 
     command: str = Field(min_length=1, max_length=100_000)
-    cwd: str = Field(default="/workspace", pattern=r"^/")
+    #: 省略 = 会话所用工作区（/data/{根会话}/workspace）
+    cwd: str | None = Field(default=None, pattern=r"^/")
     #: 秒；省略 = 不限
     timeout_s: int | None = Field(default=None, gt=0)
     #: 执行前先写进沙箱的文件
@@ -180,3 +182,21 @@ class MessageListOut(BaseModel):
 
     data: list[MessageOut]
     next_cursor: str | None = None
+
+
+class FeedbackIn(BaseModel):
+    rating: Literal["up", "down"]
+    #: 没帮助的原因（界面上的固定选项）
+    reasons: list[str] = Field(default_factory=list, max_length=10)
+    comment: str = Field(default="", max_length=2000)
+
+
+class FeedbackOut(BaseModel):
+    message_id: UUID
+    rating: Literal["up", "down"]
+    reasons: list[str] = []
+    comment: str = ""
+
+
+class FeedbackListOut(BaseModel):
+    data: list[FeedbackOut]

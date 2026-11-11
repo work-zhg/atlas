@@ -13,6 +13,7 @@
 ★ 没有超时：Agent 运行可能持续数十分钟（atlas-no-timeouts 原则）。
 ★ 多实例：每个实例（API 内嵌或独立 Worker）都可以运行监督器。唤醒经协调层广播到全部实例，
   谁拿到节点租约锁谁干活；持有者每 lease/3 续租，进程死掉后租约过期，其他实例经定期扫描接手。
+  定期扫描是定时任务库的实例任务（jobs.py 的 NodeSweep 调 resume），由宿主（API 或 Worker）注册。
 """
 
 from __future__ import annotations
@@ -50,7 +51,6 @@ class AgentSupervisor:
         *,
         retry_seconds: float = 3.0,
         lease_seconds: int = 30,
-        sweep_seconds: float = 15.0,
         coord: LocalCoordinator | None = None,
         git_profile: str = "",
     ) -> None:
@@ -61,18 +61,18 @@ class AgentSupervisor:
         self.git_profile = git_profile
         self.retry_seconds = retry_seconds
         self.lease_seconds = lease_seconds
-        self.sweep_seconds = sweep_seconds
         self._tasks: dict[UUID, asyncio.Task[None]] = {}
         self._again: set[UUID] = set()
-        self._sweeper: asyncio.Task[None] | None = None
         self.coord = coord or coordinator()
         self.coord.on_wake(self.wake)
 
     async def start(self) -> None:
-        """续接重启前未完成的工作，并定期扫描（接管崩溃实例留下的节点、补漏掉的唤醒）。"""
+        """续接重启前未完成的工作：推进进行中的流程，并立即扫一次（之后由 NodeSweep 定期扫）。"""
         await self._advance_running()
-        if self._sweeper is None:
-            self._sweeper = asyncio.get_running_loop().create_task(self._sweep_forever())
+        try:
+            await self.resume()
+        except Exception as exc:
+            log.warning("扫描待处理节点失败：%s", exc)
 
     async def _advance_running(self) -> None:
         """进行中的流程各推进一次（幂等，流程行锁串行）：补上升级前停在旧状态的流程，
@@ -101,16 +101,6 @@ class AgentSupervisor:
             return
         self._tasks[node_uuid] = asyncio.get_running_loop().create_task(self._drive(node_uuid))
 
-    async def _sweep_forever(self) -> None:
-        while True:
-            try:
-                await self.resume()
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                log.warning("扫描待处理节点失败：%s", exc)
-            await asyncio.sleep(self.sweep_seconds)
-
     async def resume(self) -> None:
         """有运行中 run 的节点、有排队指令的节点 → 本地唤醒（拿不到租约就是别的实例在处理）。"""
         async with self._sm()() as s:
@@ -134,8 +124,6 @@ class AgentSupervisor:
             await asyncio.gather(*[t for t in self._tasks.values() if not t.done()])
 
     async def close(self) -> None:
-        if self._sweeper:
-            self._sweeper.cancel()
         for t in list(self._tasks.values()):
             t.cancel()
 

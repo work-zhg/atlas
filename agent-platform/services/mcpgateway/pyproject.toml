@@ -32,6 +32,8 @@ dependencies = [
   "opentelemetry-exporter-otlp-proto-http>=1.30",
   # OpenAPI 可以是 YAML
   "pyyaml>=6.0",
+  # 定期刷新工具定义是它的实例任务（maintainer.py）
+  "atlas-jobs",
 ]
 
 [build-system]

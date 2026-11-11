@@ -88,7 +88,8 @@ def test_failed_read_and_unknown_skill_are_not_loads() -> None:
 @pytest.mark.parametrize(
     ("args", "slug"),
     [
-        ({"file_path": "/skills/demo/SKILL.md"}, "demo"),  # native read_file / Claude Code Read
+        ({"file_path": "/data/skills/demo/3/SKILL.md"}, "demo"),  # 一个人共用的技能目录
+        ({"file_path": "/skills/demo/SKILL.md"}, "demo"),  # 旧布局
         ({"path": "skills/demo/SKILL.md"}, "demo"),
         ({"file_path": "/skills/demo/references/a.md"}, None),  # 读参考文档不算「选中」
         ({"file_path": "/workspace/skills/demo/SKILL.md"}, None),

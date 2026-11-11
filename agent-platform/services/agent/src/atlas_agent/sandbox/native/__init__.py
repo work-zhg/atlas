@@ -5,10 +5,13 @@ uuid、人是会话的创建人。沙箱归人，由通用供给管理；strict 
 
     WorkspaceRef          一个工作区：根会话 + 人
     ImagePolicy           镜像准入：空镜像换成默认，按档位只放行各自的前缀
-    NativeSandboxKind     原生沙箱这一种（SandboxKind）：档位选模板、挂工作区和技能、
-                          就绪看 execd /ping
-    NativeSandboxService  ensure · current · confirm_gone · profile_of · reap_idle · release ·
-                          reap_orphans
+    NativeSandboxKind     原生沙箱这一种（SandboxKind）：档位选模板、把这个人的整个前缀挂到 /data、
+                          strict 档按（模板，镜像）共享、评测档独占，就绪看 execd /ping
+    NativeSandboxService  ensure · current · current_of_user · confirm_gone · profile_of ·
+                          reap_idle · release · reap_orphans
+
+★ 一个人一个沙箱（同模板、同镜像）：这个人的工作区都绑在它上面，每条命令带自己工作区的 cwd。
+  会话之间不隔离（Shell 能读写别的会话的文件），这是共享的前提。评测档独占：题目之间不能互相污染。
 """
 
 from __future__ import annotations
@@ -24,11 +27,11 @@ from uuid import UUID
 
 from atlas_engine.contracts.spec import SandboxProfile, SandboxSpec
 
-from ...domain.workspace_layout import SKILLS_MOUNT, WORKSPACE_MOUNT, Area, WorkspaceLayout
+from ...domain.workspace_layout import DATA_MOUNT, WorkspaceLayout
 from ..base.execution.ports import SandboxExec
 from ..base.lifecycle.spec import CreateSpec, Labels, Resources, Volume
 from ..base.network.policy import NetworkPolicy
-from ..provisioning.model import BizRef, BizType, SandboxRef
+from ..provisioning.model import BizRef, BizType, SandboxRef, Sharing
 from ..provisioning.service import SandboxProvisioning
 
 if TYPE_CHECKING:
@@ -117,6 +120,9 @@ class ImagePolicy:
 class NativeSandboxKind:
     """原生沙箱这一种。无状态：装配时按 biz_type = NATIVE 登记到通用供给，由它在确保沙箱时回调。
 
+    ★ 规格里不能有某个会话特有的东西（会被同一个人的别的会话共用）：挂的是整个 {user}/，cwd 由每条
+      命令自己带。
+
     ★ 出站放行公网，集群网段由平台底线（strict 档 egress 镜像的 deny.always）拒绝；评测档的
       lifecycle server 用不带底线的 egress（它的出网代理在集群内），另给评测代理（集群内地址
       不走代理）。
@@ -131,6 +137,10 @@ class NativeSandboxKind:
 
     async def admit(self, req: SandboxSpec) -> None:
         await self._images.check(self._images.resolve(req.image), req.profile)
+
+    def share(self, req: SandboxSpec) -> Sharing | None:
+        """strict 档按（模板，镜像）共享，不限个数；评测档独占。"""
+        return None if req.profile == "bench" else Sharing()
 
     def build(self, req: SandboxSpec, biz: BizRef) -> CreateSpec:
         s = self._settings
@@ -161,16 +171,9 @@ class NativeSandboxKind:
                 s.sandbox_memory_limit,
             ),
             env=env,
-            volumes=(
-                Volume("workspace", s.sandbox_pvc, layout.prefix(Area.WORKSPACE), WORKSPACE_MOUNT),
-                Volume(
-                    "skills",
-                    s.sandbox_pvc,
-                    layout.prefix(Area.SKILLS),
-                    SKILLS_MOUNT,
-                    read_only=True,
-                ),
-            ),
+            # ★ 唯一的挂载：整个 {user}/ 读写挂到 /data。工作区、技能都在它下面，这个人新开的会话
+            #   一建好目录就看得见，不用改 Pod
+            volumes=(Volume("data", s.sandbox_pvc, layout.user_prefix, DATA_MOUNT),),
             labels=Labels.of(user=str(biz.user_uuid)),
         )
 
@@ -204,8 +207,13 @@ class NativeSandboxService:
         return await self._prov.ensure(ws.biz(), spec)
 
     async def current(self, ws: WorkspaceRef) -> SandboxRef | None:
-        """通用供给标为 READY 的沙箱；没有就走对象存储，不会触发新建。"""
+        """这个工作区绑着、通用供给标为 READY 的沙箱；没有返回 None，不会触发新建。"""
         return await self._prov.current(ws.biz())
+
+    async def current_of_user(self, ws: WorkspaceRef) -> SandboxRef | None:
+        """文件读写的选路：工作区自己绑着的，或者这个人的任一个 READY 原生沙箱（它们都把这个人的
+        整个前缀挂在 /data）。没有就走对象存储，不会触发新建。"""
+        return await self._prov.current_of_user(ws.biz())
 
     async def confirm_gone(self, ws: WorkspaceRef, ref: SandboxRef) -> bool:
         return await self._prov.confirm_gone(ws.biz(), ref)

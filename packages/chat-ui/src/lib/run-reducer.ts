@@ -31,6 +31,7 @@ import {
   type ApprovalRequiredData,
   type QuestionAnsweredData,
   type RunStartedData,
+  type RunSuspendedData,
   type SubagentStartedData,
   type Todo,
   type ToolArtifact,
@@ -71,7 +72,7 @@ export interface ToolCall {
   deniedReason?: string;
   fallbackApplied?: boolean;
   /**
-   * = run 在委派树里的深度：0 主 agent，1 子智能体。缩进用。
+   * = run 在委派树里的深度：0 主 agent，1 子智能体。
    *
    * ★ 语义变过一次：原先量的是 LangGraph 子图的命名空间深度，而委派改成
    *   「独立子 run」之后图内不再编译子图，那个口径恒为 0。现在它由后端按
@@ -185,25 +186,23 @@ export interface RunState {
   toolCalls: ToolCall[];
   files: FileEntry[];
   /**
-   * 委派出去的子智能体（P5）。
-   *
-   * ★ 子智能体的**内部过程**目前不在这条流上 —— 它跑在自己的子 run 里，
-   *   有自己的事件流（doc/detail/subagent.html）。这里只有边界：
-   *   subagent.started 给任务书，subagent.finished 给结论。
-   *
-   *   `ToolCall.depth≥1` 要等 thread 级事件流上线才会真的出现值
-   *   （doc/detail/suspension.html §04/§05）。在那之前它恒为 0。
+   * 这个 run 委派出去的子智能体（卡片）。只有边界：subagent.started 给任务书，
+   * subagent.finished 给结论；子智能体的过程在 subRuns 里。
    */
   subagents: SubagentRun[];
   usage: Usage;
   /**
-   * 子智能体的实时正文，按**子 run 的 run_id** 聚合。
+   * 子智能体的过程：每个子 run 一份与主轮次同形的状态，按**子 run 的 run_id**。
    *
    * ★ 刻意与主对话分开：混进去的话用户会看到一段语气都不一样的话突然冒出来。
-   *   渲染进对应的 SubAgentCard 还需要 tool_call_id ↔ sub_run_id 的关联
-   *   （`SubagentRun.runId` 现在存的是 tool_call_id），那一步随 S6 一起做。
+   * ★ 只在主轮次的状态上有值，孙 run 也平铺在这里；子 run 状态里的这一项恒为空。
    */
-  subRunText: Record<string, string>;
+  subRuns: Record<string, RunState>;
+  /**
+   * task 调用（`SubagentRun.runId`）→ 子 run 的 run_id，卡片据此找到 subRuns 里的过程。
+   * 来自这个 run 的 run.suspended（waiting_on 的 token 就是子 run id）。
+   */
+  subRunOf: Record<string, string>;
   /** 当前这一轮的 run —— 取消按钮、GET /runs/{id} 都用它。 */
   activeRunId?: string;
   /** 已处理的最大 thread_seq —— **会话级**游标，断线续传用 */
@@ -248,7 +247,8 @@ export const initialRunState: RunState = {
   files: [],
   subagents: [],
   usage: {},
-  subRunText: {},
+  subRuns: {},
+  subRunOf: {},
   lastSeq: 0,
   compactions: [],
   notices: [],
@@ -393,106 +393,63 @@ function withoutApprovalsOf(list: PendingApproval[], runId: string): PendingAppr
 }
 
 /**
- * 子智能体的事件（depth≥1）。只取对用户有意义的四类。
+ * 子智能体的事件（depth≥1）：归约进**它自己那个 run** 的状态（subRuns），不进主轮次。
  *
- * ★ approval.required 是这里最要紧的一条 —— 它是「委派挂起期间审批弹窗
- *   消失」这个问题的解法本身（doc/detail/suspension.html §06）。子智能体
- *   请求权限时，事件带着子 run 的 run_id 直接到前端，ApprovalCard 据此
- *   提交到正确的端点，不再依赖父 run 代为转发。
+ * ★ 与主轮次用同一个归约（applyRunEvent）：子智能体说的话、工具、待办、技能提示、
+ *   压缩、审批、它再委派出去的 SubAgent，在它的卡片里与主对话同样呈现。
+ *
+ * ★ 不隔离进主轮次的后果是两个具体的 bug：子 run 的 run.finished 会把主轮次标成
+ *   已结束（取消按钮消失、消息列表提前刷新），它的 message.delta 会让子智能体的话
+ *   直接冒进主对话气泡。
+ *
+ * 主轮次只额外记一样：**还在等人决定的审批**。头部的「待审批」要算上子智能体的，
+ * 卡片的「还在等」也以主轮次这张表为准（历史轮次整张清空即可）。子智能体请求权限时
+ * 事件带着子 run 的 run_id，ApprovalCard 据此提交到子 run 的端点
+ * （doc/detail/suspension.html §06）。
  */
-function applySubEvent(
-  base: RunState,
-  event: AnyTraceEvent,
-  d: Record<string, unknown>,
-): RunState {
+function applySubEvent(base: RunState, event: AnyTraceEvent): RunState {
+  const sub = applyRunEvent(base.subRuns[event.run_id] ?? initialRunState, event);
+  const next = { ...base, subRuns: { ...base.subRuns, [event.run_id]: sub } };
+
   switch (event.type) {
     case EventType.ApprovalRequired: {
-      const a = d as unknown as ApprovalRequiredData;
-      return withApproval(base, {
-        ...approvalOf(a),
-        // ★ 会话流里每个事件都带 run_id，不需要 data 里再给一份 ——
-        //   决策必须 POST 到**子** run 的端点。
-        runId: a.run_id ?? event.run_id,
-      });
+      const id = (event.data as ApprovalRequiredData).approval_id;
+      const approval = sub.approvals.find((a) => a.approvalId === id);
+      if (!approval || base.pendingApprovals.some((a) => a.approvalId === id)) return next;
+      return { ...next, pendingApprovals: [...base.pendingApprovals, approval] };
     }
 
-    case EventType.QuestionAnswered:
-      return withAnswer(base, d as unknown as QuestionAnsweredData);
-
-    case EventType.ToolStarted: {
-      const t = d as unknown as ToolStartedData;
-      return {
-        ...base,
-        toolCalls: upsertTool(base.toolCalls, t.call_id, {
-          callId: t.call_id,
-          name: t.name,
-          argsPreview: t.args_preview,
-          args: t.args,
-          status: "running",
-          depth: event.depth, // Inspector 据此缩进
-        }),
-        timeline: appendOnce(base.timeline, { kind: "tool", callId: t.call_id }),
-      };
-    }
-
-    case EventType.ToolUpdated: {
-      // 参数 / 名字补全：合并进已有的行。缺席的字段由 upsertTool 的 definedOnly 跳过，不会抹掉旧值
-      const t = d as unknown as ToolUpdatedData;
-      return {
-        ...base,
-        toolCalls: upsertTool(base.toolCalls, t.call_id, {
-          name: t.name,
-          argsPreview: t.args_preview,
-          args: t.args,
-        }),
-      };
-    }
-
-    case EventType.ToolCompleted:
-    case EventType.ToolFailed: {
-      const t = d as unknown as ToolCompletedData & Partial<ToolFailedData>;
-      return {
-        ...base,
-        toolCalls: upsertTool(base.toolCalls, t.call_id, {
-          status: event.type === EventType.ToolFailed ? "error" : "ok",
-          durationMs: t.duration_ms,
-          resultPreview: t.result_preview,
-          result: t.result,
-          artifact: t.artifact,
-          error: t.error,
-          errorKind: t.error_kind,
-          deniedReason: t.denied_reason,
-        }),
-      };
-    }
-
-    case EventType.AgentMode:
-      // 子智能体（acp）这一轮的权限模式：在它出现的位置显示
-      return withMode(base, event.run_id, d as unknown as AgentModeData);
-
-    case EventType.MessageDelta: {
-      // 子智能体的正文按子 run 聚合，**不进**主对话。
-      // 渲染进具体卡片要等 tool_call_id ↔ sub_run_id 的关联（S6）——
-      // 在那之前它只是被收着，不会污染任何东西。
-      const md = d as unknown as MessageDeltaData;
-      const prev = base.subRunText[event.run_id] ?? "";
-      return {
-        ...base,
-        subRunText: { ...base.subRunText, [event.run_id]: prev + (md.text ?? "") },
-      };
+    case EventType.QuestionAnswered: {
+      const id = (event.data as QuestionAnsweredData).approval_id;
+      return { ...next, pendingApprovals: base.pendingApprovals.filter((a) => a.approvalId !== id) };
     }
 
     case EventType.RunFinished:
     case EventType.RunFailed:
     case EventType.RunCancelled:
-      // 子 run 结束**不**改主轮次的状态（见 applyEvent 开头的隔离说明），
-      // 只把它名下的审批出列。
-      return { ...base, pendingApprovals: withoutApprovalsOf(base.pendingApprovals, event.run_id) };
+      // 子 run 结束**不**改主轮次的状态，只把它名下的审批出列
+      return { ...next, pendingApprovals: withoutApprovalsOf(base.pendingApprovals, event.run_id) };
 
     default:
-      // 子 run 的其余 run.*/usage/todos/file 等一概不进主状态。
-      return base;
+      return next;
   }
+}
+
+/**
+ * 找不到所属卡片的子 run。首连只回放最近一段事件，派出它的 subagent.started /
+ * run.suspended 可能不在里面 —— 不单独显示的话，刷新后子智能体的过程整个看不见。
+ *
+ * ★ 还有卡片在等对应关系（task 调了、run.suspended 还没到）时一个也不报：子 run 一派出
+ *   就开始出事件，比父 run 的 run.suspended 早到一会儿，这时报出来卡片会先在末尾闪一下。
+ */
+export function orphanSubRuns(root: RunState): string[] {
+  const states = [root, ...Object.values(root.subRuns)];
+  const awaiting = states.some((s) =>
+    s.subagents.some((c) => c.status === "running" && !s.subRunOf[c.runId]),
+  );
+  if (awaiting) return [];
+  const mapped = new Set(states.flatMap((s) => Object.values(s.subRunOf)));
+  return Object.keys(root.subRuns).filter((id) => !mapped.has(id));
 }
 
 /**
@@ -530,14 +487,13 @@ export function applyEvent(state: RunState, event: AnyTraceEvent): RunState {
   if (event.thread_seq <= state.lastSeq) return state;
 
   const base = { ...state, lastSeq: event.thread_seq };
-  const d = event.data as Record<string, unknown>;
+  // 子智能体的事件（depth≥1）进它自己的状态，不进主轮次（见 applySubEvent）
+  return event.depth > 0 ? applySubEvent(base, event) : applyRunEvent(base, event);
+}
 
-  // ★ 子智能体的事件（depth≥1）只取三类，其余一律不进主轮次的状态。
-  //
-  //   不隔离的后果是两个具体的 bug：子 run 的 run.finished 会把主轮次标成
-  //   已结束（取消按钮消失、消息列表提前刷新），它的 message.delta 会让
-  //   子智能体的话直接冒进主对话气泡 —— 语气都不一样的一段话。
-  if (event.depth > 0) return applySubEvent(base, event, d);
+/** 一个 run 自己的事件 → 它的状态。主轮次与每个子 run 共用（子 run 的状态在 subRuns 里）。 */
+function applyRunEvent(base: RunState, event: AnyTraceEvent): RunState {
+  const d = event.data as Record<string, unknown>;
 
   switch (event.type) {
     case EventType.RunStarted:
@@ -845,9 +801,17 @@ export function applyEvent(state: RunState, event: AnyTraceEvent): RunState {
         subagents: settleSubagents(base.subagents, "error"),
       };
 
-    case EventType.RunSuspended:
+    case EventType.RunSuspended: {
       // 等子智能体。流不关，后面还会来这一轮真正的结束。
-      return { ...base, status: "suspended" };
+      // ★ waiting_on 里有 task 调用 → 子 run 的对应，卡片靠它找到子智能体的过程。
+      //   合并而不是替换：一轮可以先后挂起几次、每次等不同的子智能体
+      const waits = (d as unknown as RunSuspendedData).waiting_on ?? [];
+      const subRunOf = { ...base.subRunOf };
+      for (const w of waits) {
+        if (w.reason === "subagent" && w.tool_call_id) subRunOf[w.tool_call_id] = w.token;
+      }
+      return { ...base, status: "suspended", subRunOf };
+    }
 
     case EventType.RunResumed: {
       // 换了一个服务实例继续跑。上一个实例最后一次模型调用已经流出、没落库的那段正文

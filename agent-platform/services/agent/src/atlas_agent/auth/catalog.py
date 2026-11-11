@@ -27,6 +27,7 @@ OPERATIONS: list[tuple[str, str, str]] = [
     ("系统", "model:manage", "模型目录"),
     ("系统", "sandbox:manage", "沙箱模板"),
     ("系统", "config:manage", "运行期配置"),
+    ("系统", "job:manage", "定时任务"),
 ]
 
 ALL_OPERATIONS = frozenset(code for _, code, _ in OPERATIONS)
@@ -61,7 +62,7 @@ ROLES: list[dict[str, Any]] = [
         "code": "ATLAS_ADMIN",
         "name": "管理员",
         "description": (
-            "平台负责人：模型目录、平台指令、沙箱模板、运行期配置"
+            "平台负责人：模型目录、平台指令、沙箱模板、运行期配置、定时任务"
             "（管理全部智能体 / 知识库另授数据权限「全部智能体 / 全部知识库 · Owner」）"
         ),
         "operations": sorted(ALL_OPERATIONS),

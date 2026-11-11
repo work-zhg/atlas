@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { http } from "@/lib/http";
+import { ApiError, http } from "@/lib/http";
 import { qk } from "./keys";
 import type {
   Agent,
@@ -14,25 +14,29 @@ import type {
   AgentVersion,
   AuthSubject,
   Page,
+  Thread,
 } from "./types";
 
 export interface AgentListParams {
   q?: string;
   status?: AgentStatus | "all";
   model?: string;
+  /** mine = 我创建的；shared = 共享给我的 */
+  scope?: "mine" | "shared";
   limit?: number;
 }
 
 /** 注意：/v1/agents 只有 limit（≤200），**没有游标** —— 智能体数量级不需要分页。 */
 export function useAgents(params: AgentListParams = {}) {
-  const { q, status, model, limit = 100 } = params;
+  const { q, status, model, scope, limit = 100 } = params;
   return useQuery({
-    queryKey: [...qk.agents.list(status), { q, model, limit }],
+    queryKey: [...qk.agents.list(status), { q, model, scope, limit }],
     queryFn: () =>
       http.get<Page<Agent>>("/v1/agents", {
         q,
         status: status === "all" ? undefined : status,
         model,
+        scope,
         limit,
       }),
   });
@@ -142,4 +146,42 @@ export const agentGrantsApi = {
   update: (agentId: string, aclId: string, body: { level?: AgentLevel; include_sub?: boolean }) =>
     http.patch(`/v1/agents/${agentId}/grants/${aclId}`, body),
   revoke: (agentId: string, aclId: string) => http.del(`/v1/agents/${agentId}/grants/${aclId}`),
+};
+
+// ---------- 默认智能体（平台配置 platform.default_agent；首页输入框默认用它）
+
+/** 没设、没启用、或我看不到它 → null（首页退回让用户自己选） */
+export function useDefaultAgent() {
+  return useQuery({
+    queryKey: ["agents", "default"],
+    queryFn: async () => {
+      try {
+        return await http.get<AgentDetail>("/v1/agents/default");
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 404) return null;
+        throw e;
+      }
+    },
+    staleTime: 60_000,
+  });
+}
+
+/** 设为默认（只有平台管理员）。agentId 为 null = 取消默认 */
+export function useSetDefaultAgent() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (agentId: string | null) => http.put("/v1/agents/default", { agent_id: agentId }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["agents", "default"] }),
+  });
+}
+
+// ---------- 草稿 / 发布 / 调试预览（编辑页：修改自动存草稿，发布后新对话才用）
+
+export const agentDraftApi = {
+  save: (agentId: string, spec: unknown) => http.put<void>(`/v1/agents/${agentId}/draft`, { spec }),
+  discard: (agentId: string) => http.del<void>(`/v1/agents/${agentId}/draft`),
+  publish: (agentId: string, note: string) =>
+    http.post<AgentDetail>(`/v1/agents/${agentId}/publish`, { note }),
+  /** 调试预览用的会话：不进会话列表，每一轮按草稿运行 */
+  previewThread: (agentId: string) => http.post<Thread>(`/v1/agents/${agentId}/preview-thread`),
 };

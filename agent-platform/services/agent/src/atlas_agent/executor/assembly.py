@@ -32,6 +32,7 @@ from atlas_agent.errors import CapabilityUnavailable
 from atlas_agent.executor.segment_data import Segment
 from atlas_agent.providers.knowledge import (
     format_context,
+    materialize_scope,
     require_client,
     skipped_message,
 )
@@ -39,6 +40,7 @@ from atlas_agent.sandbox.component import SandboxComponent
 from atlas_agent.sandbox.native import WorkspaceRef
 
 from ..config import Settings
+from ..domain.workspace_layout import WorkspaceLayout
 from ..outbound import current_identity
 from ..providers.filesystem import WorkspaceRouting, make_workspace
 from ..providers.llm.model_platform import (
@@ -117,15 +119,16 @@ class CapabilityAssembly:
             else None
         )
         ws = WorkspaceRef(segment.thread.workspace_thread_id, segment.thread.created_by_uuid)
-        # ★ workspace 挂**父会话的**前缀，skills / system 仍按自己的 thread 走。
+        # ★ 用根会话的工作区，隐藏目录 .atlas/{会话}/ 按自己；技能只放行本智能体绑定的版本。
         #   没配对象存储 = **没有文件能力**（make_workspace 返回 None，不回落任何内存实现）。
-        #   ★ 工作区的读写路由跟着**工作区**走，不跟着本智能体有没有 bash 走：没勾 bash 的子智能体
-        #     与父会话共用工作区，父会话的沙箱在跑时它的文件工具也要进沙箱（与命令同一个挂载，§9）。
+        #   ★ 读写路由跟着**这个人的沙箱**走，不跟着本智能体有没有 bash 走：沙箱把这个人的整个前缀
+        #     挂在 /data，它在跑时文件工具也要进沙箱（与命令同一个挂载，只有一个写入方）。
         workspace = make_workspace(
             self._settings,
             segment.thread.created_by_uuid,
             segment.thread_id,
             workspace_thread_id=segment.thread.workspace_thread_id,
+            skills=[(s.slug, s.version) for s in segment.spec.skills],
             routing=WorkspaceRouting(sandbox.native, sandbox.exec, ws) if sandbox else None,
         )
 
@@ -170,6 +173,11 @@ class CapabilityAssembly:
             instructions=context.instructions,
             memory=context.memory_block,
             prompt_cache_ttl=await self._prompt_cache_ttl(segment),
+            workdir=WorkspaceLayout.of(
+                segment.thread.created_by_uuid,
+                segment.thread_id,
+                segment.thread.workspace_thread_id,
+            ).workdir,
         )
         return caps, self._titler(segment)
 
@@ -240,7 +248,19 @@ class CapabilityAssembly:
         ★ 检索失败让这一轮明确失败（KnowledgeUnavailable），不静默当作「没查到」（§13.2）。
         ★ 权限主体读不到的库由知识库跳过：其余照常检索，经 notices 告知用户（同 MCP）。
         """
-        knowledge = segment.spec.knowledge
+        # 「使用者能查阅的全部」先展开成具体的库：后面的工具面（tool 模式）也读展开后的 spec
+        knowledge, unavailable = await materialize_scope(self._settings, segment.spec.knowledge)
+        if knowledge is not segment.spec.knowledge:
+            segment = dataclasses.replace(
+                segment, spec=dataclasses.replace(segment.spec, knowledge=knowledge)
+            )
+        if unavailable and notices is not None:
+            notices.append(
+                (
+                    EventType.KNOWLEDGE_SKIPPED,
+                    {"dataset_ids": [], "subject": None, "message": unavailable},
+                )
+            )
         if not knowledge.enabled or knowledge.mode != "auto" or segment.resume:
             return segment
         query = extract_text(segment.input_content).strip()

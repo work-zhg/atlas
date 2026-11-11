@@ -10,7 +10,10 @@ const GRADIENTS: Record<string, string> = {
   research: "linear-gradient(135deg,#F59E0B,#EA580C)",
   sre: "linear-gradient(135deg,#EF4444,#BE123C)",
   doc: "linear-gradient(135deg,#10B981,#059669)",
-  general: "linear-gradient(135deg,#64748B,#334155)",
+  general: "linear-gradient(135deg,#6366F1,#4F46E5)",
+  coder: "linear-gradient(135deg,#38BDF8,#0284C7)",
+  support: "linear-gradient(135deg,#34D399,#059669)",
+  writer: "linear-gradient(135deg,#FBBF24,#D97706)",
 };
 
 export const AVATAR_KEYS = Object.keys(GRADIENTS);

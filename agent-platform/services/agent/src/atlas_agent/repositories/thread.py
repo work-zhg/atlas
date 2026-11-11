@@ -57,6 +57,9 @@ class ThreadRepository:
             stmt = stmt.where(Thread.created_by_uuid == owner)
         if status:
             stmt = stmt.where(Thread.status == status)
+        else:
+            # 调试预览的会话是编辑页的一部分，不算用户的对话
+            stmt = stmt.where(Thread.status != "preview")
         if cursor is not None:
             ts, last_id = cursor
             # keyset：(updated_at, id) 严格小于游标
@@ -284,13 +287,21 @@ class ThreadRepository:
 
     async def delete(self, thread: Thread) -> None:
         """会话是真删：连同子会话，以及它们的 message / run / run_event / run_state /
-        approval / run_file。
+        approval / run_file / sandbox_execution。
 
         ★ 迁移 0013 去掉了外键（引用完整性由代码保证），ON DELETE CASCADE 不复存在 ——
           只删 thread 行会留下大量孤儿行（残留的未结束 run 还会占用全局的子智能体名额）。
         与 agent 不同：会话没有"别的行还指着它"的问题。
         """
-        from ..db.models import Approval, Message, Run, RunEvent, RunFile, RunState
+        from ..db.models import (
+            Approval,
+            Message,
+            Run,
+            RunEvent,
+            RunFile,
+            RunState,
+            SandboxExecution,
+        )
 
         ids = [
             thread.thread_uuid,
@@ -302,6 +313,7 @@ class ThreadRepository:
         for stmt in (
             delete(Approval).where(Approval.run_uuid.in_(run_ids)),
             delete(RunState).where(RunState.run_uuid.in_(run_ids)),
+            delete(SandboxExecution).where(SandboxExecution.run_uuid.in_(run_ids)),
             delete(RunEvent).where(RunEvent.thread_uuid.in_(ids)),
             delete(RunFile).where(RunFile.thread_uuid.in_(ids)),
             delete(Message).where(Message.thread_uuid.in_(ids)),

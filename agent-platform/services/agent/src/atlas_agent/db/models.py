@@ -40,7 +40,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from ..ids import uuid7
 from ..sandbox.base.lifecycle.state import SandboxState
 from .base import Base, TimestampMixin
-from .types import JSONType, UTCDateTime, UUIDType
+from .types import JSONType, JSONTypeNullable, UTCDateTime, UUIDType
 
 
 def _pk() -> Mapped[int]:
@@ -157,6 +157,9 @@ class Agent(Base, TimestampMixin):
     auth_subject: Mapped[str] = mapped_column(String(8), nullable=False, server_default="user")
     #: 用户中心里这个 Agent 的数字员工（两种类型都有：审计、切换类型都用它）。回填前为空
     digital_employee_uid: Mapped[UUID | None] = mapped_column(UUIDType, nullable=True)
+    #: 编辑器里自动保存的草稿（迁移 0042）：不产生版本，「发布」时才写版本。None = 没有未发布的修改
+    draft_spec: Mapped[dict | None] = mapped_column(JSONTypeNullable, nullable=True)
+    draft_updated_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
     __table_args__ = (
         UniqueConstraint("agent_uuid", name="uk_agent_uuid"),
@@ -184,10 +187,16 @@ class AgentVersion(Base):
     created_at: Mapped[datetime] = mapped_column(
         UTCDateTime, server_default=func.now(), nullable=False
     )
+    #: release = 发布出的版本；preview = 调试预览按草稿拍的快照（迁移 0042）：
+    #: 不进版本历史，版本号取负数，不占发布版本的编号
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, server_default="release")
+    #: 发布时写的「这次改了什么」
+    note: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
     __table_args__ = (
         UniqueConstraint("agent_version_uuid", name="uk_agent_version_uuid"),
         UniqueConstraint("agent_uuid", "version", name="uq_agent_version"),
+        CheckConstraint("kind IN ('release','preview')", name="ck_agent_version_kind"),
     )
 
 
@@ -317,6 +326,40 @@ class Message(Base):
         Index("ix_message_thread", "thread_uuid", "created_at"),
         CheckConstraint("role IN ('user','assistant')", name="role_enum"),
         CheckConstraint("kind IN ('chat','tool_result')", name="kind_enum"),
+    )
+
+
+class MessageFeedback(Base):
+    """对一条回答的反馈（有帮助 / 没帮助）。一个人对一条回答只有一条，再点就是改（迁移 0041）。"""
+
+    __tablename__ = "message_feedback"
+
+    id: Mapped[int] = _pk()
+    feedback_uuid: Mapped[UUID] = _logical_key()
+    message_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
+    thread_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
+    run_uuid: Mapped[UUID | None] = mapped_column(UUIDType, nullable=True)
+    user_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
+    #: up | down
+    rating: Mapped[str] = mapped_column(String(8), nullable=False)
+    #: 没帮助的原因（固定选项的文字），可以为空
+    reasons: Mapped[list] = mapped_column(JSONType, nullable=False, default=list)
+    comment: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime, default=lambda: datetime.now(UTC), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime,
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        UniqueConstraint("feedback_uuid", name="uk_message_feedback_uuid"),
+        UniqueConstraint("message_uuid", "user_uuid", name="uk_message_feedback_user"),
+        CheckConstraint("rating IN ('up','down')", name="ck_message_feedback_rating"),
+        Index("ix_message_feedback_thread", "thread_uuid"),
     )
 
 
@@ -1007,6 +1050,8 @@ class UserSandboxRow(Base, TimestampMixin):
         String(16), nullable=False, default="creating", server_default="creating"
     )
     ready_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    #: 共享键：相同的业务可以共用这个沙箱（业务类型|模板|镜像|业务给的键）；NULL = 独占
+    share_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
     __table_args__ = (
         UniqueConstraint("sandbox_uuid", name="uk_user_sandbox_uuid"),
@@ -1018,6 +1063,7 @@ class SandboxBindingRow(Base):
     """沙箱正在服务的业务（实体 SandboxBinding）。解绑、退役时删除；只增删、不修改。
 
     ★ (biz_type, biz_id) 唯一：一个业务至多绑一个沙箱，由唯一约束兜底（不靠分布式锁）。
+    ★ (sandbox_uuid, slot) 唯一：共享的沙箱里槽位号不重复（分配在账户聚合里做，唯一约束兜底）。
     """
 
     __tablename__ = "sandbox_binding"
@@ -1032,9 +1078,36 @@ class SandboxBindingRow(Base):
     bound_at: Mapped[datetime] = mapped_column(
         UTCDateTime, server_default=func.now(), nullable=False
     )
+    #: 沙箱内的槽位号：同一个沙箱里的业务各不相同（CLI Agent 按它分 bridge 的端口）
+    slot: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
 
     __table_args__ = (
         UniqueConstraint("binding_uuid", name="uk_sandbox_binding_uuid"),
         UniqueConstraint("biz_type", "biz_id", name="uk_sandbox_binding_biz"),
+        UniqueConstraint("sandbox_uuid", "slot", name="uk_sandbox_binding_slot"),
         Index("ix_sandbox_binding_sandbox", "sandbox_uuid"),
+    )
+
+
+class SandboxExecution(Base, TimestampMixin):
+    """执行账本（命令执行领域的 ExecutionLedger）：哪一次工具调用对应沙箱里哪条命令（迁移 0040）。
+
+    ★ 先记后提交：提交之前落一行（cmd_id 为空 = 提交中），拿到命令 id 再补上。实例死在两者之间时，
+      接手的实例重放看到「提交中」就不再提交、回「结果未知」—— 宁可让模型多查一次，也不能跑两遍。
+    ★ 在库里不在 Redis：它是接管时不重跑的唯一依据，要持久。随会话删除（ThreadRepository.delete）。
+    """
+
+    __tablename__ = "sandbox_execution"
+
+    id: Mapped[int] = _pk()
+    execution_uuid: Mapped[UUID] = _logical_key()
+    run_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
+    tool_call_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    sandbox_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
+    #: execd 的命令 id；空 = 提交中（请求可能已经到了 execd，命令可能已经开跑）
+    cmd_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("execution_uuid", name="uk_sandbox_execution_uuid"),
+        UniqueConstraint("run_uuid", "tool_call_id", name="uk_sandbox_execution_call"),
     )

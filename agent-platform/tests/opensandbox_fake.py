@@ -3,13 +3,15 @@
 doc/sandbox-opensandbox-design.html §8、§9。
 
     lifecycle   http://osb/v1/sandboxes…   建 / 列（metadata 过滤、分页）/ 查 / 删 / 端点
-    execd       http://{id}.execd:44772/…  后台命令（真跑 bash）、游标日志、状态、中断、指标、
-                                           文件 API
-    bridge      http://{id}.execd:8900/readyz  ACP Pod 的 bridge 就绪（可设成先回几次 503）
+    execd       http://{id}.execd:44772/…  后台命令（真跑 bash，带 envs）、游标日志、状态、中断、
+                                           指标、文件 API
+    bridge      http://{id}.execd:{端口}/readyz  会话 Pod 里按会话拉起的 bridge：拉起命令带
+                                           ATLAS_BRIDGE_SESSION_ID / LISTEN_PORT 时登记一个假 bridge
+                                           （不真跑），/readyz 回 X-Session-Id；可设成先回几次 503
     egress      http://{id}.execd:18080/…      Credential Vault（要 OPENSANDBOX-EGRESS-AUTH）
 
-挂载的模拟：同一个工作区的所有沙箱共用 root/{ws} 这个目录（= 同一个 subPath 的写穿挂载），
-命令的 cwd 与文件 API 里的 /workspace 都换算到它。
+挂载的模拟：subPath 相同的沙箱共用 root/{subPath} 这个目录（= 同一个前缀的写穿挂载），命令的 cwd
+与文件 API 里挂载点（/data，没有卷时 /workspace）下的路径都换算到它。
 
 ★ 只模拟 Atlas 依赖的那部分语义，且尽量照上游实现：未知命令 id 的日志请求回 400、状态回 404；
   SSE 是逐行 JSON（没有 data: 前缀）；execd 重启后命令记录全丢。
@@ -26,6 +28,7 @@ import email.policy
 import itertools
 import json
 import os
+import re
 import signal
 import subprocess
 import urllib.parse
@@ -60,7 +63,14 @@ class FakeSandbox:
     spec: dict[str, Any]
     state: str
     created_at: datetime
+    #: 挂载点在本地的目录
     workspace: Path
+    #: 挂载点在沙箱里的路径
+    mount: str = "/workspace"
+    #: 按会话拉起的 bridge：端口 → 会话
+    bridges: dict[int, str] = field(default_factory=dict)
+    #: 会话 → 拉起它的命令 id
+    bridge_cmds: dict[str, str] = field(default_factory=dict)
     #: 还要被 GET 几次才离开 Pending
     pending_gets: int = 0
     commands: dict[str, _Command] = field(default_factory=dict)
@@ -108,7 +118,11 @@ class FakeOpenSandbox:
         self.cpu_pct: float | None = 50.0
         #: 新建的沙箱，bridge 的 /readyz 先回几次 503
         self.bridge_unready = 0
+        #: 拉起 bridge 的命令立刻退出（bridge 或 CLI 起不来）
+        self.bridge_fails = False
         self.drop_init = False
+        #: execd 拒绝提交的命令（400）：确定没有开跑
+        self.reject_commands = False
         self.page_size = 100
         self._broken = 0
         #: 沙箱 id 带随机前缀：Redis 里的令牌键以它为后缀，用例之间不能撞
@@ -124,19 +138,19 @@ class FakeOpenSandbox:
     ) -> FakeSandbox:
         """不经 Atlas 直接放一个沙箱进去（别的进程建的、崩溃留下的）。
 
-        挂载的模拟：/workspace 卷的 subPath 相同的沙箱共用一个目录（同一个前缀的写穿挂载）；
-        没有卷的按 metadata 的 atlas.thread 分。
+        挂载的模拟：卷的 subPath 相同的沙箱共用一个目录（同一个前缀的写穿挂载）；
+        没有卷的按 metadata 的 atlas.thread 分，挂载点算 /workspace。
         """
-        mounts = {v.get("mountPath"): v for v in spec.get("volumes") or []}
-        ws = (mounts.get("/workspace") or {}).get("subPath") or (spec.get("metadata") or {}).get(
-            "atlas.thread", "none"
-        )
+        volumes = spec.get("volumes") or []
+        volume = volumes[0] if volumes else {}
+        ws = volume.get("subPath") or (spec.get("metadata") or {}).get("atlas.thread", "none")
         sb = FakeSandbox(
             id=f"{self.prefix}-{next(self._ids)}",
             spec=spec,
             state=state,
             created_at=datetime.fromtimestamp(datetime.now(UTC).timestamp() - age_s, UTC),
             workspace=self.workspace(ws),
+            mount=volume.get("mountPath") or "/workspace",
             pending_gets=self.pending_gets if state == "Pending" else 0,
             bridge_unready=self.bridge_unready,
         )
@@ -246,10 +260,10 @@ class FakeOpenSandbox:
         sb = self.sandboxes.get(request.url.host.removesuffix(".execd"))
         if sb is None or sb.state not in ("Running", "Allocated"):  # Allocated：有 IP，可以接请求
             raise httpx.ConnectError("no route to host", request=request)
-        if request.url.port == BRIDGE_PORT:
-            return self._bridge(sb, request)
         if request.url.port == EGRESS_PORT:
             return self._egress(sb, request)
+        if request.url.port != EXECD_PORT:
+            return self._bridge(sb, request)
         if request.headers.get("X-EXECD-ACCESS-TOKEN") != sb.token:
             return httpx.Response(401, json={"message": "bad token"})
         path, method, params = request.url.path, request.method, request.url.params
@@ -281,16 +295,24 @@ class FakeOpenSandbox:
             return httpx.Response(200, json={"cpu_used_pct": self.cpu_pct})
         if path.startswith("/files"):
             return self._files(sb, request)
+        if path == "/directories" and method == "POST":
+            for pod_path in json.loads(request.content):
+                self._local(sb, pod_path).mkdir(parents=True, exist_ok=True)
+            return httpx.Response(200)
         return httpx.Response(404)
 
     @staticmethod
     def _bridge(sb: FakeSandbox, request: httpx.Request) -> httpx.Response:
+        session = sb.bridges.get(int(request.url.port or 0))
+        if session is None:
+            raise httpx.ConnectError("connection refused", request=request)
         if request.url.path != "/readyz":
             return httpx.Response(404)
+        headers = {"X-Session-Id": session}
         if sb.bridge_unready > 0:
             sb.bridge_unready -= 1
-            return httpx.Response(503)
-        return httpx.Response(200)
+            return httpx.Response(503, headers=headers)
+        return httpx.Response(200, headers=headers)
 
     @staticmethod
     def _egress(sb: FakeSandbox, request: httpx.Request) -> httpx.Response:
@@ -350,12 +372,34 @@ class FakeOpenSandbox:
 
     def _start(self, sb: FakeSandbox, body: dict[str, Any]) -> httpx.Response:
         assert body.get("background") is True, "命令必须后台提交（前台命令断线即被杀）"
+        if self.reject_commands:
+            return httpx.Response(400, json={"message": "rejected"})
         cmd_id = f"cmd-{next(self._ids)}"
         log = self.root / f"{cmd_id}.log"
+        envs: dict[str, str] = body.get("envs") or {}
+        command = body["command"]
+        if "ATLAS_BRIDGE_SESSION_ID" in envs:
+            # 拉起 bridge：不真跑，登记一个假 bridge；进程用 sleep 占着（状态是在跑）
+            session = envs["ATLAS_BRIDGE_SESSION_ID"]
+            if self.bridge_fails:
+                command = "echo 'bridge 起不来' >&2; exit 1"
+            else:
+                sb.bridges[int(envs["ATLAS_BRIDGE_LISTEN_PORT"])] = session
+                sb.bridge_cmds[session] = cmd_id
+                command = "sleep 600"
+            envs = {}
+        elif (stop := re.search(r"atlas-bridge/([^/.\s]+)\.pid", command)) and "kill" in command:
+            # 停 bridge：去掉登记、结束占位的进程（不碰宿主的 /tmp）
+            session = stop.group(1)
+            sb.bridges = {p: s for p, s in sb.bridges.items() if s != session}
+            if (old := sb.commands.get(sb.bridge_cmds.pop(session, ""))) is not None:
+                _kill(old.proc)
+            command = "true"
         with log.open("wb") as out:
             proc = subprocess.Popen(
-                ["bash", "-c", body["command"]],
-                cwd=self._local(sb, body.get("cwd") or "/workspace"),
+                ["bash", "-c", command],
+                cwd=self._local(sb, body.get("cwd") or sb.mount),
+                env={**os.environ, **envs},
                 stdin=subprocess.DEVNULL,
                 stdout=out,
                 stderr=subprocess.STDOUT,
@@ -408,12 +452,14 @@ class FakeOpenSandbox:
 
     @staticmethod
     def _local(sb: FakeSandbox, pod_path: str) -> Path:
-        assert pod_path == "/workspace" or pod_path.startswith("/workspace/"), pod_path
-        return sb.workspace / pod_path.removeprefix("/workspace").lstrip("/")
+        if pod_path == "/tmp":  # 拉起 / 停 bridge 的命令在 /tmp 跑（本地盘，不在挂载里）
+            return sb.workspace
+        assert pod_path == sb.mount or pod_path.startswith(f"{sb.mount}/"), pod_path
+        return sb.workspace / pod_path.removeprefix(sb.mount).lstrip("/")
 
     @staticmethod
     def _pod(sb: FakeSandbox, local: Path) -> str:
-        return "/workspace/" + local.relative_to(sb.workspace).as_posix()
+        return f"{sb.mount}/" + local.relative_to(sb.workspace).as_posix()
 
 
 def _multipart(request: httpx.Request) -> tuple[dict[str, Any], bytes]:

@@ -1,8 +1,8 @@
 """工作区读写的两条路（c4-model/agent/code-workspace.html · StoreRouter；改造计划 B6）。
 
     没有运行中的沙箱   文件工具直连对象存储（moto）
-    沙箱在跑           工作区的 key 经沙箱内执行的文件会话走 Pod 里的挂载 —— 与命令同一个挂载；
-                       技能区仍走对象存储
+    这个人的沙箱在跑   一律经沙箱内执行的文件会话走 Pod 里的挂载（/data）—— 与命令同一个挂载；
+                       工作区、技能都在它下面
 
 最重要的一组是对齐测试：同一串操作在两条路上必须给出一样的结果（列举语义、错误文案、隐藏文件、
 递归删除），否则模型会因为「沙箱是否在跑」看到两个不同的文件系统。另外覆盖：命令看得见工具写的文件、
@@ -95,15 +95,15 @@ def _norm(result: Any) -> dict[str, Any]:
 
 _OPS: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = [
     ("awrite", ("a.txt", "hello\nworld\n"), {}),
-    ("awrite", ("/workspace/dir/b.txt", "b"), {}),
+    ("awrite", ("dir/b.txt", "b"), {}),
     ("awrite", ("dir/sub/c.md", "c c c"), {}),
     ("awrite", ("dir/sub/d.md", "d"), {}),
     ("awrite", (".cache/x", "hidden"), {}),
     ("aread", ("a.txt",), {}),
-    ("aread", ("/workspace/a.txt",), {"offset": 1, "limit": 1}),
+    ("aread", ("a.txt",), {"offset": 1, "limit": 1}),
     ("aread", ("missing.txt",), {}),
     ("aread", ("../../a.txt",), {}),  # 越出工作区：两条路给出同一个错误
-    ("aread", ("/workspace",), {}),
+    ("aread", ("/",), {}),
     ("aedit", ("dir/sub/c.md", "c", "e"), {}),  # 出现多次：拒绝
     ("aedit", ("dir/sub/c.md", "c", "e"), {"replace_all": True}),
     ("aedit", ("a.txt", "world", "there"), {}),
@@ -155,7 +155,7 @@ async def test_commands_see_what_file_tools_wrote_and_vice_versa(
         exec=c.exec,
         ledger=c.ledger,
         ws=ws,
-        run_id=f"run-{ws.root_thread_uuid}",
+        run_id=ws.root_thread_uuid,
         spec=SandboxSpec(),
         polling=PollingPolicy(0.02, 0.05),
     )
@@ -192,15 +192,37 @@ async def test_without_a_running_sandbox_files_go_to_object_storage(
     assert fake.created == []
 
 
-async def test_skills_always_come_from_object_storage(
+async def test_skills_are_read_through_the_same_mount(
     s3: Any, fake: FakeOpenSandbox, c: SandboxComponent, ws: WorkspaceRef
 ) -> None:
-    s3.put_object(Bucket=BUCKET, Key=f"{_prefix(ws)}skills/pdf/SKILL.md", Body=b"# pdf")
+    """技能也在 /data 下：沙箱在跑时经沙箱读，和 Shell 看到的是同一份。"""
     await c.native.ensure(ws, SandboxSpec())
-    fs = _fs(s3, ws, c)
-    assert (await fs.aread("/skills/pdf/SKILL.md")).file_data["content"] == "# pdf"
-    assert (await fs.asearch("/skills/")).common_prefixes == ["skills/pdf/"]
-    assert list(workspace_dir(fake, ws).iterdir()) == []
+    skill = fake.workspace(f"{ws.user_uuid}/skills/pdf/1")
+    (skill / "SKILL.md").write_text("# pdf")
+    fs = Workspace(
+        s3,
+        bucket=BUCKET,
+        user_id=ws.user_uuid,
+        thread_id=ws.root_thread_uuid,
+        skills=[("pdf", 1)],
+        routing=WorkspaceRouting(c.native, c.exec, ws),
+    )
+    assert (await fs.aread("/data/skills/pdf/1/SKILL.md")).file_data["content"] == "# pdf"
+    assert (await fs.asearch("/data/skills/pdf/1/")).keys == ["/data/skills/pdf/1/SKILL.md"]
+    assert _objects(s3, f"{ws.user_uuid}/") == []  # 没碰对象存储
+
+
+async def test_another_session_of_the_same_person_routes_through_the_running_sandbox(
+    s3: Any, fake: FakeOpenSandbox, c: SandboxComponent, ws: WorkspaceRef
+) -> None:
+    """★ 选路看这个人的沙箱：本会话没执行过命令（没绑沙箱），这个人的沙箱在跑，读写也经它 ——
+    它挂着整个 {user}/，绕过它直写对象存储就成了第二个写入方。"""
+    await c.native.ensure(ws, SandboxSpec())
+    other = WorkspaceRef(new_workspace().root_thread_uuid, ws.user_uuid)
+    fs = _fs(s3, other, c)
+    assert (await fs.awrite("a.txt", "x")).error is None
+    assert _objects(s3, f"{ws.user_uuid}/") == []
+    assert (workspace_dir(fake, other) / "a.txt").read_text() == "x"
 
 
 async def test_sync_methods_never_route(

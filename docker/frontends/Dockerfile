@@ -23,12 +23,14 @@ ENV npm_config_registry=$NPM_REGISTRY \
 RUN npm install -g pnpm@11.7.0
 WORKDIR /src
 
-# ── 前端 workspace（Atlas + AI TeamFlow + 共享对话组件 @atlas/chat-ui）：依赖只装一次
+# ── 前端 workspace（Atlas + AI TeamFlow + 共享组件 @atlas/chat-ui、@atlas/appconfig-ui、@atlas/jobs-ui）：依赖只装一次
 FROM base AS ws
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY agent-platform/web/package.json agent-platform/web/
 COPY teamflow/web/package.json teamflow/web/
 COPY packages/chat-ui/package.json packages/chat-ui/
+COPY packages/appconfig-ui/package.json packages/appconfig-ui/
+COPY packages/jobs-ui/package.json packages/jobs-ui/
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm-store,sharing=locked \
     pnpm install --frozen-lockfile --store-dir /pnpm-store
 COPY packages/ packages/

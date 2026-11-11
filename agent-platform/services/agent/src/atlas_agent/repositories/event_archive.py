@@ -6,9 +6,10 @@ Redis 是实时通道，这里是历史：归档、接管时查哪些会话序�
 
 from __future__ import annotations
 
+from typing import Any
 from uuid import UUID
 
-from atlas_engine.contracts.events import TraceEvent
+from atlas_engine.contracts.events import EventType, TraceEvent
 from sqlalchemy import func, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,13 +34,17 @@ class EventArchive:
         return list((await self._session.execute(stmt)).scalars())
 
     async def archived_run_trace(self, run_id: UUID, *, limit: int = 5_000) -> list[RunEvent]:
-        """一轮的完整归档轨迹：这个 run 自己的事件 + 它委派出去的子 run 的事件。
+        """一轮的完整归档轨迹：这个 run 自己的事件 + 它委派出去的整棵子 run 树的事件。
 
-        ★ 子 run 靠 parent_run_id 找。委派深度结构性封顶 1，一层子查询就够。
+        ★ SubAgent 可以再派 SubAgent，层数不设上限：子孙都靠 root_run_id 找（派出时记下的
+          整棵树的根），只看 parent_run_id 会漏掉孙 run，历史轮次里第二层卡片就没有过程。
+          parent_run_id 仍然带上：查的是一个子 run 时，它的子 run 的根不是它。
         ★ 按 thread_seq 排：父子交错发生，thread_seq 才是它们在会话流上的真实顺序。
         ★ 归档被清理后这里返回空 —— 前端据此退回只显示正文。
         """
-        children = select(Run.run_uuid).where(Run.parent_run_uuid == run_id)
+        children = select(Run.run_uuid).where(
+            (Run.parent_run_uuid == run_id) | (Run.root_run_uuid == run_id)
+        )
         stmt = (
             select(RunEvent)
             .where((RunEvent.run_uuid == run_id) | RunEvent.run_uuid.in_(children))
@@ -104,29 +109,37 @@ class EventArchive:
         thread_id 是**事件流归属的会话**（根会话，Thread.stream_thread_id），
         与 run.thread_id 在子 run 上是不同的值。
 
-        ★ delta 类事件不归档（_ARCHIVED_EXCLUDED）。它们的价值是实时打字
-          效果；回放历史时正文来自 message.completed 一次到位，而前端读
-          历史本来就走 message 表。不滤的话一个长会话能到几十万行，其中
-          绝大多数永远不会被读到。
+        ★ message.delta 合并后归档：同一段（block）连着的增量并成一行，用第一条的序号、
+          拼起来的全文。正文出现在**哪个位置**只有 delta 知道 —— message.completed 在
+          一段的末尾才来，只靠它回放的话，模型调工具前说的话全被排到工具后面去
+          （刷新后过程性发言「掉到下面」）。并成一行后回放等价于逐条重放，行数只是
+          每段一行。thinking.delta 仍不归档（_ARCHIVED_EXCLUDED）。
 
         ★ 只落已盖过会话序号的事件。thread_seq 是主键的一半，为 0 说明它
           没经过 publish —— 那是个 bug，宁可少归档一条也不能让整批 INSERT
           撞主键（那会让整段的收尾失败，run 卡在 running）。
         """
-        rows = [
-            {
-                "thread_uuid": thread_id,
-                "thread_seq": e.thread_seq,
-                "run_uuid": e.run_id,
-                "seq": e.seq,
-                "ts": e.ts,
-                "type": e.type.value,
-                "depth": e.depth,
-                "data": e.data,
-            }
-            for e in events
-            if e.type not in _ARCHIVED_EXCLUDED and e.thread_seq > 0
-        ]
+        rows: list[dict[str, Any]] = []
+        for e in events:
+            if e.type in _ARCHIVED_EXCLUDED or e.thread_seq <= 0:
+                continue
+            if e.type is EventType.MESSAGE_DELTA and rows and _same_block(rows[-1], e):
+                prev = rows[-1]["data"]
+                text = f"{prev.get('text') or ''}{e.data.get('text') or ''}"
+                rows[-1]["data"] = {**prev, "text": text}
+                continue
+            rows.append(
+                {
+                    "thread_uuid": thread_id,
+                    "thread_seq": e.thread_seq,
+                    "run_uuid": e.run_id,
+                    "seq": e.seq,
+                    "ts": e.ts,
+                    "type": e.type.value,
+                    "depth": e.depth,
+                    "data": e.data,
+                }
+            )
         if not rows:
             return
         await self._session.execute(insert(RunEvent), rows)
@@ -139,3 +152,17 @@ class EventArchive:
         """
         stmt = select(func.max(RunEvent.thread_seq)).where(RunEvent.thread_uuid == thread_id)
         return int((await self._session.execute(stmt)).scalar() or 0)
+
+
+def _same_block(row: dict[str, Any], event: TraceEvent) -> bool:
+    """这条 delta 能否并进上一行：上一行也是同一个 run、同一段的 delta。
+
+    ★ 只并**紧挨着的**：中间夹了别的事件就另起一行。回放时前端按段号把文本接上，
+      多一行不影响结果；而跨过别的事件去并，一个 run 挂起续跑后段号从 0 重数，就可能
+      并错段。
+    """
+    return (
+        row["type"] == EventType.MESSAGE_DELTA.value
+        and row["run_uuid"] == event.run_id
+        and row["data"].get("block") == event.data.get("block")
+    )

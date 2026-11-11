@@ -1,7 +1,7 @@
 """SandboxExec 和 FileSession 的 execd 实现（防腐层）。
 
     ExecdChannel       按 sandbox_uuid 经生命周期的 access 取 execd 的地址和令牌（进程内缓存，
-                       连不上就作废重取）；后台提交、游标读、状态、中断、指标；顺带记活动
+                       连不上就作废重取）；后台提交、起常驻服务、游标读、状态、中断、指标；顺带记活动
     ExecdFileSession   /files/info、/files/download、/files/upload、/files/search、DELETE /files
 
 execd 的协议细节都在这里翻译：
@@ -23,6 +23,7 @@ from uuid import UUID
 import httpx
 
 from ..lifecycle.runtime import SandboxAccess
+from ..lifecycle.server import LifecycleError
 from .ledger import ActivityLedger
 from .ports import AccessProvider, FileSession
 from .values import (
@@ -76,10 +77,20 @@ class ExecdChannel:
     # ------------------------------------------------------------------ 地址和令牌
 
     async def _target(self, sandbox_uuid: UUID) -> SandboxAccess:
-        """缓存命中就用；没有就经 access 取（沙箱不在抛 SandboxGone）。"""
+        """缓存命中就用；没有就经 access 取（沙箱不在抛 SandboxGone）。
+
+        ★ lifecycle server 连不上或回 5xx：翻成 ExecdUnreachable，和连不上 execd 同一类 —— 跟随接着
+          重试、提交报不可用。只有它说「不存在」（404，access 已翻成 SandboxGone）才是沙箱没了；
+          其余 4xx 是拒绝，翻成 ExecdRejected。
+        """
         if (hit := self._targets.get(sandbox_uuid)) is not None:
             return hit
-        target = await self._runtime.access(sandbox_uuid)
+        try:
+            target = await self._runtime.access(sandbox_uuid)
+        except LifecycleError as exc:
+            if exc.status is None or exc.status >= 500:
+                raise ExecdUnreachable(f"取沙箱 {sandbox_uuid} 的地址失败：{exc}") from exc
+            raise ExecdRejected(f"取沙箱 {sandbox_uuid} 的地址被拒绝：{exc}") from exc
         self._targets[sandbox_uuid] = target
         return target
 
@@ -116,19 +127,26 @@ class ExecdChannel:
             return False
 
     async def start(self, sandbox_uuid: UUID, cmd: CommandSpec) -> str:
-        """后台提交，读到 init 事件就返回命令 id；此后命令和这条连接无关。"""
+        """后台提交，读到 init 事件就返回命令 id；此后命令和这条连接无关。记进活动账本。"""
+        cmd_id = await self.spawn(sandbox_uuid, cmd)
+        await self._ledger.started(sandbox_uuid, cmd_id)
+        return cmd_id
+
+    async def spawn(self, sandbox_uuid: UUID, cmd: CommandSpec) -> str:
+        """起一个常驻服务（如会话的 bridge）：同样后台提交，但不记活动 —— 它一直在跑，记了的话
+        沙箱永远不闲置；它的活动由它服务的业务自己判断（CLI 看 run 的状态）。"""
         target = await self._target(sandbox_uuid)
         body: dict[str, Any] = {"command": cmd.command, "cwd": cmd.cwd, "background": True}
         if cmd.timeout_s:
             body["timeout"] = int(cmd.timeout_s) * 1000  # 毫秒；省略 = 不限
+        if cmd.env:
+            body["envs"] = dict(cmd.env)
         try:
-            cmd_id = await self._submit(target, body)
+            return await self._submit(target, body)
         except httpx.TransportError as exc:
             self._forget(sandbox_uuid)
             # ★ 请求可能已经到了 execd：不重试，交给上层告诉模型先检查现场
             raise SubmitUnknown(f"提交途中和沙箱 {sandbox_uuid} 断开：命令可能已经开始") from exc
-        await self._ledger.started(sandbox_uuid, cmd_id)
-        return cmd_id
 
     async def _submit(self, target: SandboxAccess, body: dict[str, Any]) -> str:
         async with (
@@ -168,6 +186,14 @@ class ExecdChannel:
         if not status.running:
             await self._ledger.finished(sandbox_uuid, cmd_id)
         return status
+
+    async def confirm_running(self, sandbox_uuid: UUID, cmd_id: str) -> None:
+        """跟随方确认命令还在跑：在活动账本里再登记一次（幂等），Redis 丢过数据也能补回来。
+
+        ★ 不放进 status：常驻服务（会话的 bridge）也查 status，它不能被记成在跑的命令，否则沙箱
+          永远不闲置。
+        """
+        await self._ledger.still_running(sandbox_uuid, cmd_id)
 
     async def _status(self, sandbox_uuid: UUID, cmd_id: str) -> CommandStatus:
         resp = await self._request(sandbox_uuid, "GET", f"/command/status/{cmd_id}")
@@ -299,6 +325,10 @@ class ExecdFileSession:
     def remove(self, paths: list[str]) -> None:
         if paths:
             self._client.delete("/files", params=[("path", p) for p in paths]).raise_for_status()
+
+    def mkdir(self, path: str) -> None:
+        """建目录（连同不存在的上级），已经有了也算成功。mode 0 = 不改权限。"""
+        self._client.post("/directories", json={path: {"mode": 0}}).raise_for_status()
 
 
 def _raise_for(resp: httpx.Response) -> None:

@@ -5,6 +5,7 @@ c4-model/infra-platform/code-appconfig.html。
     sandbox.quota_per_user              每人同时几个沙箱 / 会话 Pod（原生沙箱与会话 Pod 合计）
     sandbox.image_allow_prefixes        strict 档可用的镜像前缀
     sandbox.bench_image_allow_prefixes  评测档可用的镜像前缀
+    platform.default_agent              首页输入框默认用的智能体（空 = 没有默认）
 
 ★ 默认值取部署配置（同名环境变量）：没在运行期改过的，行为和以前一样；管理员经 /v1/configs 改了，
   下一次读就生效（读不缓存），不用重启。
@@ -31,6 +32,7 @@ class RuntimeKeys:
     sandbox_quota: ConfigKey[int]
     sandbox_images: ConfigKey[list[str]]
     bench_images: ConfigKey[list[str]]
+    default_agent: ConfigKey[str]
 
     @classmethod
     def of(cls, settings: Settings) -> RuntimeKeys:
@@ -53,10 +55,17 @@ class RuntimeKeys:
                 default=list(settings.sandbox_bench_image_allow_prefixes),
                 description="评测档可用的沙箱镜像前缀（root、根可写：只该放评测题的镜像）",
             ),
+            # ★ 只是一个指针：默认智能体是普通智能体，权限、共享、编辑与其他智能体完全一样
+            default_agent=ConfigKey(
+                "platform.default_agent",
+                str,
+                default="",
+                description="首页输入框默认用的智能体 id（空 = 没有默认）",
+            ),
         )
 
     def all(self) -> list[ConfigKey[Any]]:
-        return [self.sandbox_quota, self.sandbox_images, self.bench_images]
+        return [self.sandbox_quota, self.sandbox_images, self.bench_images, self.default_agent]
 
 
 class RuntimeConfig:
@@ -68,6 +77,18 @@ class RuntimeConfig:
 
     async def sandbox_quota(self) -> int:
         return await self.config.get(self.keys.sandbox_quota)
+
+    async def default_agent(self) -> str:
+        return await self.config.get(self.keys.default_agent)
+
+    async def set_default_agent(self, agent_id: str, *, by: str) -> None:
+        entry = await self.config.entry(self.keys.default_agent.name)
+        await self.config.set(
+            self.keys.default_agent.name,
+            agent_id or None,
+            expected_version=entry.item.version,
+            by=by,
+        )
 
     async def image_allow_prefixes(self) -> dict[str, list[str]]:
         strict, bench = await self.config.get_many(self.keys.sandbox_images, self.keys.bench_images)

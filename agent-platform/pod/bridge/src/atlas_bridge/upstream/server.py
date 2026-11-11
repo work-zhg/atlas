@@ -1,7 +1,9 @@
 """UpstreamServer：监听、握手鉴权、健康检查、连接取代（Bridge 设计 §4.3 · §8.2 · §8.5）。
 
 握手前（``process_request``）按顺序检查，全部在升级之前完成：
-  /healthz、/readyz  → 直接回 HTTP，不升级（健康检查不在日志里留下连接噪音）
+  /healthz、/readyz  → 直接回 HTTP，不升级（健康检查不在日志里留下连接噪音）。
+                       响应头带 X-Session-Id：一个 Pod 里按会话起多个 bridge，
+                       拉起方据此确认端口上的是不是自己会话的那个
   路径               → 只有 /host 可以升级，其余 404
   token              → 常数时间比较，失败 401
   X-Session-Id       → 必须等于本 Pod 的会话，失败 403（旧名 X-Atlas-Session 过渡一个版本）
@@ -82,11 +84,11 @@ class UpstreamServer:
     def _process_request(self, conn: ServerConnection, request: Request) -> Response | None:
         path = request.path.split("?", 1)[0]
         if path == "/healthz":
-            return conn.respond(HTTPStatus.OK, "ok\n")
+            return self._probe(conn, HTTPStatus.OK, "ok")
         if path == "/readyz":
             ready, phase = self._host.readiness()
             status = HTTPStatus.OK if ready else HTTPStatus.SERVICE_UNAVAILABLE
-            return conn.respond(status, f"{phase}\n")
+            return self._probe(conn, status, phase)
         if path != PATH:
             return conn.respond(HTTPStatus.NOT_FOUND, "not found\n")
 
@@ -106,6 +108,11 @@ class UpstreamServer:
         if SUBPROTOCOL_V1 not in offered:
             return conn.respond(HTTPStatus.UPGRADE_REQUIRED, f"supported: {SUBPROTOCOL_V1}\n")
         return None
+
+    def _probe(self, conn: ServerConnection, status: HTTPStatus, text: str) -> Response:
+        resp = conn.respond(status, f"{text}\n")
+        resp.headers[HEADER_SESSION] = self._session_id
+        return resp
 
     def _token_ok(self, headers: Headers) -> bool:
         auth = headers.get("Authorization", "")

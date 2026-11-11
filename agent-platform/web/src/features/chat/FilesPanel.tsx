@@ -10,24 +10,32 @@
  * ★ 不放计划 / 工具 / token：计划与工具调用已经按发生顺序出现在对话里，
  *   这里只回答「这个会话产出了什么、怎么拿走」。
  */
-import { App as AntdApp, Button, Empty, Skeleton } from "antd";
-import { useEffect, useState } from "react";
+import { App as AntdApp, Button, Drawer, Empty, Skeleton } from "antd";
+import { useEffect, useRef, useState } from "react";
 
-import { downloadThreadFile, useThreadFiles } from "@/api/threads";
+import { downloadThreadFile, uploadThreadFile, useThreadFiles } from "@/api/threads";
 import { Icon } from "@/components/Icon";
 import { compactNumber, relativeTime } from "@/lib/format";
 import { BASE_PATH } from "@/lib/http";
 import styles from "@atlas/chat-ui/src/chat/chat.module.css";
 
-export function FilesPanel({
+/**
+ * 会话的文件：按需打开的抽屉（不再常驻一栏，对话区更宽）。
+ * 文件数显示在对话头部的按钮上，所以这里的列表关着时也照常刷新。
+ */
+export function FilesDrawer({
   threadId,
   running,
   writtenCount,
+  open,
+  onClose,
 }: {
-  threadId?: string;
+  threadId: string;
   running: boolean;
   /** 本轮 file.written 的条数：变了就立刻刷新，不等定时器 */
   writtenCount: number;
+  open: boolean;
+  onClose: () => void;
 }) {
   const { message } = AntdApp.useApp();
   const filesQ = useThreadFiles(threadId, running);
@@ -53,29 +61,64 @@ export function FilesPanel({
     }
   };
 
-  return (
-    <aside className={`${styles.pane} ${styles.inspector}`} aria-label="会话文件">
-      <div className={styles.paneHead} style={{ justifyContent: "space-between" }}>
-        <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 600 }}>
-          <Icon name="folder" size={14} />
-          文件
-          {files.length > 0 && <span className={styles.toolCost}>{files.length}</span>}
-        </span>
-        {threadId && (
-          <Button
-            size="small"
-            type="text"
-            aria-label="刷新文件列表"
-            loading={filesQ.isFetching}
-            icon={<Icon name="retry" size={13} />}
-            onClick={() => void refetch()}
-          />
-        )}
-      </div>
+  const pickRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+  const upload = async (picked: File[]) => {
+    setUploading(true);
+    try {
+      for (const f of picked) await uploadThreadFile(threadId, f);
+      message.success(`已上传 ${picked.length} 个文件`);
+      void refetch();
+    } catch (err) {
+      message.error((err as Error).message);
+    } finally {
+      setUploading(false);
+    }
+  };
 
-      <div className={styles.paneBody} style={{ padding: "var(--s-3)" }}>
-        {!threadId && <Empty description="选择会话后显示它的文件" image={Empty.PRESENTED_IMAGE_SIMPLE} />}
-        {threadId && filesQ.isPending && <Skeleton active paragraph={{ rows: 4 }} />}
+  return (
+    <Drawer
+      open={open}
+      onClose={onClose}
+      width={460}
+      title="文件"
+      extra={
+        <Button
+          size="small"
+          type="text"
+          aria-label="刷新文件列表"
+          loading={filesQ.isFetching}
+          icon={<Icon name="refresh" size={14} />}
+          onClick={() => void refetch()}
+        />
+      }
+      footer={
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ fontSize: 12, color: "var(--fg-3)" }}>这次对话的工作区，智能体生成的文件都在这里</span>
+          <Button
+            style={{ marginLeft: "auto" }}
+            icon={<Icon name="upload" size={14} />}
+            loading={uploading}
+            onClick={() => pickRef.current?.click()}
+          >
+            上传
+          </Button>
+          <input
+            ref={pickRef}
+            type="file"
+            multiple
+            hidden
+            onChange={(e) => {
+              const picked = Array.from(e.target.files ?? []);
+              e.target.value = "";
+              if (picked.length) void upload(picked);
+            }}
+          />
+        </div>
+      }
+    >
+      <div>
+        {filesQ.isPending && <Skeleton active paragraph={{ rows: 4 }} />}
         {filesQ.error && (
           <p style={{ color: "var(--danger)", fontSize: 12.5 }}>加载失败：{filesQ.error.message}</p>
         )}
@@ -90,7 +133,6 @@ export function FilesPanel({
         )}
         {files.length > 0 && (
           <>
-            <p className={styles.insSection}>工作区 · 与子智能体共享</p>
             {files.map((f) => {
               const slash = f.path.lastIndexOf("/");
               const dir = slash >= 0 ? f.path.slice(0, slash + 1) : "";
@@ -129,6 +171,11 @@ export function FilesPanel({
           </>
         )}
       </div>
-    </aside>
+    </Drawer>
   );
+}
+
+/** 头部按钮上的文件数：和抽屉里的列表同一个查询，抽屉关着也能看到有几个 */
+export function useFileCount(threadId: string, running: boolean): number {
+  return useThreadFiles(threadId, running).data?.data.length ?? 0;
 }

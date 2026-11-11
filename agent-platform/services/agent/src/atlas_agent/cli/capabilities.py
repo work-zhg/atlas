@@ -26,7 +26,7 @@ from ..credentials import (
     CredentialSubject,
 )
 from ..errors import CapabilityUnavailable
-from ..providers.knowledge import mcp_server_entry, require_client
+from ..providers.knowledge import materialize_scope, mcp_server_entry, require_client
 from ..providers.llm.model_platform import admit_models, agent_key, litellm_url, uses_model_platform
 from ..providers.mcp import GatewayUnavailable, make_mcp_catalog, mcp_agent_access
 from ..providers.mcp.cli import cli_mcp_servers
@@ -92,13 +92,22 @@ class CliCapabilityAssembly:
         notices: list[tuple[EventType, dict[str, Any]]] = []
         if any(name.startswith(MCP_PREFIX) for name in spec.tool_names):
             servers, notices = await self._mcp_from_gateway(segment, redis)
-        # 知识库：Pod 里的 CLI 经 MCP 调 knowledge_search（doc/atlas-rag-design.html §10）
-        if spec.knowledge.enabled:
+        # 知识库：Pod 里的 CLI 经 MCP 调 knowledge_search（doc/atlas-rag-design.html §10）。
+        # 「使用者能查阅的全部」先展开成具体的库，令牌里签的是展开后的库
+        knowledge, unavailable = await materialize_scope(self._settings, spec.knowledge)
+        if unavailable:
+            notices.append(
+                (
+                    EventType.KNOWLEDGE_SKIPPED,
+                    {"dataset_ids": [], "subject": None, "message": unavailable},
+                )
+            )
+        if knowledge.enabled:
             servers = [
                 *servers,
                 mcp_server_entry(
                     require_client(self._settings),
-                    spec.knowledge,
+                    knowledge,
                     thread_id=segment.thread_id,
                 ),
             ]

@@ -9,7 +9,7 @@
  *   智能体 Key   一个智能体一把（客户端类型 Agent，编码 = 智能体 id）。Atlas 建智能体时申请、删智能体时
  *                删除；管理员可以给还没有 Key 的智能体补申请。原文不在页面上显示
  */
-import { Alert, App as AntdApp, Button, Empty, Input, Modal, Segmented, Select, Space, Table, Tag, Typography } from "antd";
+import { Alert, App as AntdApp, Button, Empty, Input, Modal, Select, Space, Table, Tag, Typography } from "antd";
 import { useMemo, useState } from "react";
 
 import { useAgents } from "@/api/agents";
@@ -31,37 +31,50 @@ import pageStyles from "@/features/agents/agents.module.css";
 import { useMe } from "@/lib/session";
 import styles from "./catalog.module.css";
 import { AssignModal, KeyScopes } from "./McpGrants";
+import { GwGate } from "./McpPage";
 import { FormField, fmtTime } from "./McpForms";
 
-export function McpKeys({ me }: { me: GwMe }) {
-  const [tab, setTab] = useState<"user" | "client">("user");
+function KeysPage({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className={pageStyles.page}>
+      <header className={pageStyles.head}>
+        <div className={pageStyles.titleRow}>
+          <h1 className={pageStyles.title}>{title}</h1>
+        </div>
+      </header>
+      <div className={pageStyles.body}>{children}</div>
+    </div>
+  );
+}
+
+/** 我的 Key：每人一把，在 Claude Code、Cursor 这类工具里用。管理员在这里也能看到别人的 */
+export function McpUserKeysPage() {
+  return (
+    <GwGate>
+      {(me) => (
+        <KeysPage title="我的 Key">
+          <UserKeys me={me} />
+        </KeysPage>
+      )}
+    </GwGate>
+  );
+}
+
+/** 智能体 Key：一个智能体一把，建智能体时自动申请；管理员在这里给它分配能用的服务 */
+export function McpAgentKeysPage() {
+  return <GwGate>{(me) => <AgentKeysLoader me={me} />}</GwGate>;
+}
+
+function AgentKeysLoader({ me }: { me: GwMe }) {
   const clientsQ = useGwKeys("client", me.can_manage);
   return (
-    <>
-      {me.can_manage && (
-        <Segmented
-          style={{ marginBottom: 12 }}
-          value={tab}
-          onChange={(v) => setTab(v as "user" | "client")}
-          options={[
-            { value: "user", label: "用户 Key" },
-            {
-              value: "client",
-              label: (
-                <span>
-                  智能体 Key {clientsQ.data && <span className={styles.muted}>{clientsQ.data.length}</span>}
-                </span>
-              ),
-            },
-          ]}
-        />
-      )}
-      {tab === "client" && me.can_manage ? (
+    <KeysPage title="智能体 Key">
+      {me.can_manage ? (
         <AgentKeys keys={clientsQ.data ?? []} loading={clientsQ.isPending} error={clientsQ.error} />
       ) : (
-        <UserKeys me={me} />
+        <Empty description="只有管理员能管理智能体 Key" />
       )}
-    </>
+    </KeysPage>
   );
 }
 
@@ -72,12 +85,7 @@ function KeyStatusTag({ k }: { k: GwKey }) {
 
 function KeyMasked({ k }: { k: GwKey }) {
   return (
-    <div>
-      <code>{k.masked}</code>
-      <div className={styles.desc2} style={{ fontFamily: "var(--mono)" }} title="用户中心里的主体：授权授给它">
-        主体 {k.subject_uid.slice(0, 8)}…
-      </div>
-    </div>
+    <code>{k.masked}</code>
   );
 }
 
@@ -125,15 +133,14 @@ function UserKeys({ me }: { me: GwMe }) {
     modal.confirm({
       title: "申请用户 Key",
       okText: "申请",
-      content:
-        "申请后马上能调用公开服务；私有服务要由服务所有者或管理员给这把 Key 分配权限。申请时网关在用户中心为这把 Key 登记一个主体（不能登录、没有部门），之后的授权都授给它。",
+      content: "申请后马上能用公开的服务；需授权的服务要由服务负责人或管理员给这把 Key 授权。",
       onOk: () => mine.apply.mutateAsync().then(show("已申请用户 Key"), fail),
     });
   const reset = (k: GwKey) =>
     modal.confirm({
       title: "重置用户 Key",
       okText: "重置",
-      content: `生成新的原文，旧 Key ${k.masked} 立即失效，用旧 Key 的外部客户端要换成新的。主体和分配的权限不变。`,
+      content: `生成新的 Key，旧 Key ${k.masked} 立即失效，用旧 Key 的工具要换成新的。授权不变。`,
       onOk: () => mine.reset.mutateAsync().then(show("已重置用户 Key"), fail),
     });
   const block = (k: GwKey) =>
@@ -141,7 +148,7 @@ function UserKeys({ me }: { me: GwMe }) {
       title: "停用 Key",
       okText: "停用",
       okButtonProps: { danger: true },
-      content: "停用后网关拒绝这把 Key 的所有调用（key_invalid）。授权保留，可以随时启用。",
+      content: "停用后用这把 Key 的调用都会失败。授权保留，可以随时启用。",
       onOk: () =>
         (k.id === own?.id ? mine.setBlocked.mutateAsync(true) : others.act.mutateAsync({ id: k.id, action: "block" })).then(
           () => message.success("已停用"),
@@ -158,7 +165,7 @@ function UserKeys({ me }: { me: GwMe }) {
       title: "删除用户 Key",
       okText: "删除",
       okButtonProps: { danger: true },
-      content: `删除你的用户 Key ${k.masked}，不可恢复；用户中心里的主体停用，它的授权随之失效。重新申请后要重新分配权限。只是临时不用，请选「停用」。`,
+      content: `删除 Key ${k.masked}，不可恢复，它的授权也一起失效；重新申请后要重新授权。只是临时不用，请选「停用」。`,
       onOk: () => mine.remove.mutateAsync().then(() => message.success("已删除"), fail),
     });
 
@@ -168,7 +175,7 @@ function UserKeys({ me }: { me: GwMe }) {
         type="info"
         showIcon
         style={{ marginBottom: 12 }}
-        message="每人一把用户 Key，只能为本人申请，给 Claude Code、Cursor 这类外部客户端用。申请后马上能调用公开服务；私有服务要由服务所有者或管理员给这把 Key 分配权限（可以细到工具）。"
+        message="在 Claude Code、Cursor 这类工具里使用平台上的服务。公开的服务马上能用，需授权的服务由服务负责人或管理员授权。"
       />
       {myQ.error && <Alert type="error" showIcon style={{ marginBottom: 12 }} message={myQ.error.message} />}
       {!own && !myQ.isPending && (
@@ -240,7 +247,7 @@ function UserKeys({ me }: { me: GwMe }) {
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24, marginTop: 16 }}>
           <div>
             <div className={styles.secTitle}>
-              我的 Key 能用的服务和工具 <span className={styles.muted}>变化最长 30 秒生效</span>
+              能用的服务
             </div>
             <Table<GwService>
               size="small"
@@ -281,11 +288,11 @@ function UserKeys({ me }: { me: GwMe }) {
           </div>
           <div>
             <div className={styles.secTitle}>
-              在外部客户端里用 <span className={styles.muted}>Claude Code、Cursor 等</span>
+              在 Claude Code、Cursor 里使用
             </div>
             <pre className={styles.code}>{clientConfig(me, services.slice(0, 2).map((s) => s.name))}</pre>
             <div className={styles.muted} style={{ fontSize: 12 }}>
-              每个服务一个地址；tools/list 只返回这把 Key 有权限的工具。
+              每个服务一个地址，只会列出这把 Key 能用的工具。
             </div>
           </div>
         </div>
@@ -307,8 +314,8 @@ function UserKeys({ me }: { me: GwMe }) {
           <Typography.Paragraph copyable={{ text: secret.value }} className={styles.code} style={{ marginBottom: 0 }}>
             {secret.value}
           </Typography.Paragraph>
-          <Alert type="warning" showIcon style={{ marginTop: 12 }} message="Key 只显示这一次，关闭后无法再查看；忘了可以「重置」（主体和权限不变）。" />
-          <div className={styles.secTitle}>在外部客户端里用</div>
+          <Alert type="warning" showIcon style={{ marginTop: 12 }} message="Key 只显示这一次，关闭后无法再查看；忘了可以「重置」（授权不变）。" />
+          <div className={styles.secTitle}>在 Claude Code、Cursor 里使用</div>
           <pre className={styles.code}>{clientConfig(me, services.slice(0, 2).map((s) => s.name), secret.value)}</pre>
         </Modal>
       )}
@@ -340,7 +347,7 @@ function AgentKeys({ keys, loading, error }: { keys: GwKey[]; loading: boolean; 
     modal.confirm({
       title: "重置智能体 Key",
       okText: "重置",
-      content: `为「${title(k)}」生成新的原文，旧 Key ${k.masked} 立即失效。Atlas 下一次获取时拿到新的；正在用旧 Key 的调用会失败一次后自动重取。主体和权限不变。`,
+      content: `为「${title(k)}」生成新的 Key，旧 Key ${k.masked} 立即失效，智能体会自动换用新的。授权不变。`,
       onOk: () => act.mutateAsync({ id: k.id, action: "reset" }).then(() => message.success("已重置"), fail),
     });
   const block = (k: GwKey) =>
@@ -348,7 +355,7 @@ function AgentKeys({ keys, loading, error }: { keys: GwKey[]; loading: boolean; 
       title: "停用智能体 Key",
       okText: "停用",
       okButtonProps: { danger: true },
-      content: `停用后网关拒绝「${title(k)}」的所有调用（key_invalid），这个智能体在 Atlas 里调不了 MCP 工具。授权保留，可以随时启用。`,
+      content: `停用后「${title(k)}」调不了任何服务。授权保留，可以随时启用。`,
       onOk: () => act.mutateAsync({ id: k.id, action: "block" }).then(() => message.success("已停用"), fail),
     });
   const del = (k: GwKey) =>
@@ -356,7 +363,7 @@ function AgentKeys({ keys, loading, error }: { keys: GwKey[]; loading: boolean; 
       title: "删除智能体 Key",
       okText: "删除",
       okButtonProps: { danger: true },
-      content: `删除「${title(k)}」的 Key（${k.masked}），不可恢复；用户中心里的主体停用，授权随之失效。Atlas 下次用到这个智能体时会重新申请一把（只能调公开服务，要重新分配权限）。只是临时不用，请选「停用」。`,
+      content: `删除「${title(k)}」的 Key（${k.masked}），不可恢复，授权一起失效。智能体下次运行时会重新申请一把，只能用公开的服务，需要重新授权。只是临时不用，请选「停用」。`,
       onOk: () => remove.mutateAsync(k.id).then(() => message.success("已删除"), fail),
     });
 
@@ -366,7 +373,7 @@ function AgentKeys({ keys, loading, error }: { keys: GwKey[]; loading: boolean; 
         type="info"
         showIcon
         style={{ marginBottom: 12 }}
-        message="一个智能体一把 Key（客户端类型 Agent，客户端编码 = 智能体 id）。Atlas 新建智能体时调接口申请、删除智能体时调接口删除；还没有 Key 的智能体可以在这里补申请。Atlas 编辑、运行智能体时按类型 + 编码取 Key 和能用的工具，和智能体的权限类型无关。原文不在页面上显示。"
+        message="每个智能体一把 Key，创建智能体时自动申请。在这里给智能体授权它能用的服务。"
       />
       {error && <Alert type="error" showIcon style={{ marginBottom: 12 }} message={error.message} />}
       <div className={pageStyles.filterRow}>
@@ -378,7 +385,7 @@ function AgentKeys({ keys, loading, error }: { keys: GwKey[]; loading: boolean; 
           onChange={setStatus}
           options={Object.entries(GW_KEY_STATUS).map(([value, s]) => ({ value, label: s.label }))}
         />
-        <Input allowClear placeholder="搜索智能体 id / 名称" style={{ width: 240 }} value={q} onChange={(e) => setQ(e.target.value)} />
+        <Input allowClear placeholder="搜索智能体" style={{ width: 240 }} value={q} onChange={(e) => setQ(e.target.value)} />
         <Button type="primary" style={{ marginLeft: "auto" }} icon={<Icon name="plus" size={14} />} onClick={() => setCreating(true)}>
           为智能体申请 Key
         </Button>
@@ -497,7 +504,7 @@ function NewAgentKeyModal({
         type="info"
         showIcon
         style={{ marginBottom: 12 }}
-        message="Atlas 新建智能体时会自动申请。这里给还没有 Key 的智能体补申请；申请人成为用户中心里这个主体的负责人。"
+        message="创建智能体时会自动申请，这里给还没有 Key 的智能体补一把。"
       />
       <FormField label="智能体" hint="列表来自 Atlas；一个智能体只有一把 Key（按客户端类型 + 编码唯一）">
         <Select

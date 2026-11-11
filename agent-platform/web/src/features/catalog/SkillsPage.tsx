@@ -11,6 +11,7 @@ import {
   Alert,
   App as AntdApp,
   Button,
+  Drawer,
   Empty,
   Input,
   Modal,
@@ -37,7 +38,7 @@ import {
 import type { ManagedSkill, ManagedSkillVersion } from "@/api/skill-types";
 import { Icon } from "@/components/Icon";
 import { relativeTime } from "@/lib/format";
-import { ApiError, SKILL_API_BASE } from "@/lib/http";
+import { ApiError } from "@/lib/http";
 import pageStyles from "@/features/agents/agents.module.css";
 import styles from "./catalog.module.css";
 
@@ -51,11 +52,19 @@ export const SKILL_STATUS: Record<string, { label: string; color: string }> = {
 
 const SOURCE_LABEL: Record<string, string> = {
   builtin: "内置",
-  tenant: "租户",
+  tenant: "团队",
   imported: "第三方",
 };
 
-type Scope = "all" | "published" | "pending" | "inactive";
+/** 左侧菜单的三个入口：技能广场（已发布）/ 我上传的 / 待审查 */
+export type SkillsView = "market" | "mine" | "review";
+
+const VIEW_TITLE: Record<SkillsView, string> = { market: "技能广场", mine: "我上传的", review: "待审查" };
+const VIEW_EMPTY: Record<SkillsView, string> = {
+  market: "还没有发布的技能",
+  mine: "你还没有上传过技能",
+  review: "没有等待审查的技能",
+};
 
 interface Row {
   skill: ManagedSkill;
@@ -71,12 +80,14 @@ function latestReleased(skill: ManagedSkill): ManagedSkillVersion | undefined {
     .sort((a, b) => (b.version ?? 0) - (a.version ?? 0))[0];
 }
 
-export function SkillsPage() {
+export function SkillsPage({ view = "market" }: { view?: SkillsView }) {
   const skillsQ = useSkills();
   const { data: me } = useSkMe();
   const runtimeQ = useSkillCatalog();
-  const [scope, setScope] = useState<Scope>("all");
   const [keyword, setKeyword] = useState("");
+  const [source, setSource] = useState("");
+  const [sort, setSort] = useState<"uses" | "updated">("uses");
+  /** 打开详情抽屉的技能 */
   const [selected, setSelected] = useState<string>();
   const [uploading, setUploading] = useState(false);
 
@@ -96,164 +107,209 @@ export function SkillsPage() {
     if (kw && ![r.skill.slug, r.latest?.description ?? r.pending?.description ?? ""].some((s) => s.toLowerCase().includes(kw))) {
       return false;
     }
-    if (scope === "published") return r.latest?.status === "published";
-    if (scope === "pending") return !!r.pending;
-    if (scope === "inactive") return !!r.latest && r.latest.status !== "published";
-    return true;
+    if (view === "market") return r.latest?.status === "published" && (!source || r.skill.source === source);
+    if (view === "review") return !!r.pending;
+    return r.skill.created_by === me?.uid || r.skill.versions.some((v) => v.uploaded_by === me?.uid);
   });
+  // 广场默认按使用量排：用的智能体越多越靠前
+  if (view === "market")
+    visible.sort((a, b) =>
+      sort === "uses"
+        ? b.references - a.references || b.loads7d - a.loads7d
+        : (b.latest?.published_at ?? "").localeCompare(a.latest?.published_at ?? ""),
+    );
 
-  const current = rows.find((r) => r.skill.slug === selected) ?? visible[0];
-  const pendingCount = rows.filter((r) => r.pending).length;
+  const current = rows.find((r) => r.skill.slug === selected);
 
   return (
-    <div className={styles.split}>
-      <div className={styles.list}>
-        <header className={pageStyles.head}>
-          <div className={pageStyles.titleRow}>
-            <div>
-              <h1 className={pageStyles.title}>技能</h1>
-              <p className={pageStyles.desc}>
-                可复用的工作方法。版本发布后不可变；含脚本或非内置的技能必须经人工审查。
-              </p>
-            </div>
-            {me?.can_upload && (
-              <Button
-                type="primary"
-                className={pageStyles.action}
-                icon={<Icon name="upload" size={14} />}
-                onClick={() => setUploading(true)}
-              >
-                上传技能
-              </Button>
-            )}
-          </div>
-          <div className={pageStyles.filterRow}>
-            <Input
-              allowClear
-              value={keyword}
-              onChange={(e) => setKeyword(e.target.value)}
-              placeholder="搜索名称或描述…"
-              prefix={<Icon name="search" size={14} />}
-              style={{ width: 240 }}
-            />
-            <Segmented
-              value={scope}
-              onChange={(v) => setScope(v as Scope)}
-              options={[
-                { value: "all", label: "全部" },
-                { value: "published", label: "已发布" },
-                { value: "pending", label: `待审查${pendingCount ? ` ${pendingCount}` : ""}` },
-                { value: "inactive", label: "停用 / 下架" },
-              ]}
-            />
-          </div>
-        </header>
-
-        <div className={pageStyles.body}>
-          {skillsQ.error && (
-            <Alert
-              type="error"
-              showIcon
-              style={{ marginBottom: 16 }}
-              message="连不上技能应用"
-              description={`${SKILL_API_BASE} —— ${skillsQ.error.message}。本机启动：make skill-serve`}
-            />
-          )}
-          {runtimeQ.error && (
-            <Alert
-              type="warning"
-              showIcon
-              style={{ marginBottom: 16 }}
-              message="拿不到运行时的引用与用量"
-              description={
-                (runtimeQ.error as ApiError).status === 404
-                  ? "正在运行的 server 是旧版本（没有 /v1/skills），重新部署后「引用」「7 天加载」才有数据。"
-                  : runtimeQ.error.message
-              }
-            />
-          )}
-          {runtimeQ.data && !runtimeQ.data.directory_configured && (
-            <Alert
-              type="warning"
-              showIcon
-              style={{ marginBottom: 16 }}
-              message="运行时还没有接入技能目录"
-              description="server 未配置 SKILL_BASE_URL：智能体里引用技能必须手写版本号，技能描述以名称代替。"
-            />
-          )}
-          {skillsQ.isPending && <Skeleton active paragraph={{ rows: 6 }} />}
-          {skillsQ.data && visible.length === 0 && (
-            <Empty
-              style={{ marginTop: 64 }}
-              description={rows.length ? "没有匹配的技能" : "还没有技能 —— 上传一个 zip 包开始"}
-            />
-          )}
-          {visible.length > 0 && (
-            <Table<Row>
-              size="middle"
-              rowKey={(r) => r.skill.slug}
-              dataSource={visible}
-              pagination={false}
-              onRow={(r) => ({ onClick: () => setSelected(r.skill.slug), style: { cursor: "pointer" } })}
-              rowClassName={(r) => (r.skill.slug === current?.skill.slug ? styles.rowSel! : "")}
-              columns={[
-                {
-                  title: "技能",
-                  render: (_, r) => (
-                    <div>
-                      <b>{r.skill.slug}</b>{" "}
-                      {(r.latest ?? r.pending)?.has_scripts && <Tag>含脚本</Tag>}
-                      <div className={styles.desc2}>
-                        {(r.latest ?? r.pending)?.description ?? "—"}
-                      </div>
-                    </div>
-                  ),
-                },
-                {
-                  title: "最新版本",
-                  width: 130,
-                  render: (_, r) => (
-                    <span style={{ fontFamily: "var(--mono)" }}>
-                      {r.latest ? `v${r.latest.version}` : "—"}
-                      {r.pending && (
-                        <Tag color="warning" style={{ marginLeft: 6 }}>
-                          新上传待审
-                        </Tag>
-                      )}
-                    </span>
-                  ),
-                },
-                {
-                  title: "状态",
-                  width: 90,
-                  render: (_, r) => {
-                    const st = SKILL_STATUS[(r.latest ?? r.pending)?.status ?? ""];
-                    return st ? <Tag color={st.color}>{st.label}</Tag> : null;
-                  },
-                },
-                {
-                  title: "来源",
-                  width: 80,
-                  render: (_, r) => <Tag>{SOURCE_LABEL[r.skill.source] ?? r.skill.source}</Tag>,
-                },
-                { title: "引用", width: 70, dataIndex: "references" },
-                {
-                  title: "7 天加载",
-                  width: 90,
-                  render: (_, r) => (
-                    // 长期为 0：不报错，但一直占着索引预算 —— 标出来该复查描述或下掉
-                    <span style={{ color: r.loads7d === 0 && r.references > 0 ? "var(--warning)" : undefined }}>
-                      {r.loads7d}
-                    </span>
-                  ),
-                },
-              ]}
-            />
+    <div className={pageStyles.page}>
+      <header className={pageStyles.head}>
+        <div className={pageStyles.titleRow}>
+          <h1 className={pageStyles.title}>{VIEW_TITLE[view]}</h1>
+          {me?.can_upload && (
+            <Button
+              type="primary"
+              className={pageStyles.action}
+              icon={<Icon name="upload" size={14} />}
+              onClick={() => setUploading(true)}
+            >
+              上传技能
+            </Button>
           )}
         </div>
+        <div className={pageStyles.toolbar}>
+          {view === "market" && (
+            <Segmented
+              value={source}
+              onChange={(v) => setSource(v as string)}
+              options={[
+                { value: "", label: "全部" },
+                { value: "tenant", label: "团队" },
+                { value: "builtin", label: "内置" },
+                { value: "imported", label: "第三方" },
+              ]}
+            />
+          )}
+          <Input
+            allowClear
+            value={keyword}
+            onChange={(e) => setKeyword(e.target.value)}
+            placeholder="搜索技能"
+            prefix={<Icon name="search" size={14} style={{ color: "var(--fg-4)" }} />}
+            style={{ width: 260 }}
+          />
+          {view === "market" && (
+            <>
+              <span style={{ flex: 1 }} />
+              <Select
+                style={{ width: 120 }}
+                value={sort}
+                onChange={setSort}
+                options={[
+                  { value: "uses", label: "最多使用" },
+                  { value: "updated", label: "最近更新" },
+                ]}
+              />
+            </>
+          )}
+        </div>
+      </header>
+
+      <div className={pageStyles.body}>
+        {skillsQ.error && (
+          <Alert
+            type="error"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message="暂时连不上技能服务"
+            description={skillsQ.error.message}
+          />
+        )}
+        {runtimeQ.error && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message="暂时看不到技能的使用情况"
+            description={(runtimeQ.error as ApiError).message}
+          />
+        )}
+        {runtimeQ.data && !runtimeQ.data.directory_configured && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message="技能目录还没有接入"
+            description="接入之前，智能体里暂时不能选择技能。请联系管理员。"
+          />
+        )}
+        {skillsQ.isPending && <Skeleton active paragraph={{ rows: 6 }} />}
+        {skillsQ.data && visible.length === 0 && (
+          <Empty
+            style={{ marginTop: 64 }}
+            description={keyword ? "没有找到，换个关键词试试" : VIEW_EMPTY[view]}
+          />
+        )}
+        {view === "market" && visible.length > 0 && (
+          <div className={pageStyles.grid}>
+            {visible.map((r) => (
+              <div
+                key={r.skill.slug}
+                className={pageStyles.card}
+                role="button"
+                tabIndex={0}
+                onClick={() => setSelected(r.skill.slug)}
+                onKeyDown={(e) => e.key === "Enter" && setSelected(r.skill.slug)}
+              >
+                <div className={pageStyles.cardHead}>
+                  <span className={pageStyles.avatar} style={{ background: "#fef3c7", color: "#b45309" }}>
+                    <Icon name="spark" size={18} />
+                  </span>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div className={pageStyles.cardName}>
+                      {r.skill.slug}
+                      {r.latest?.has_scripts && <Tag style={{ marginInlineEnd: 0 }}>含脚本</Tag>}
+                    </div>
+                    <div className={pageStyles.cardSub}>{SOURCE_LABEL[r.skill.source] ?? r.skill.source}</div>
+                  </div>
+                </div>
+                <div className={pageStyles.cardDesc}>{r.latest?.description || "（没有描述）"}</div>
+                <div className={pageStyles.cardFoot}>
+                  <Icon name="bot" size={13} />
+                  <span>{r.references} 个智能体在用</span>
+                  <span style={{ flex: 1 }} />
+                  <span style={{ fontFamily: "var(--mono)" }}>v{r.latest?.version}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {view !== "market" && visible.length > 0 && (
+          <Table<Row>
+            size="middle"
+            rowKey={(r) => r.skill.slug}
+            dataSource={visible}
+            pagination={false}
+            onRow={(r) => ({ onClick: () => setSelected(r.skill.slug), style: { cursor: "pointer" } })}
+            columns={[
+              {
+                title: "技能",
+                render: (_, r) => (
+                  <div>
+                    <b>{r.skill.slug}</b>{" "}
+                    {(r.latest ?? r.pending)?.has_scripts && <Tag>含脚本</Tag>}
+                    <div className={styles.desc2}>
+                      {(r.latest ?? r.pending)?.description ?? "—"}
+                    </div>
+                  </div>
+                ),
+              },
+              {
+                title: "最新版本",
+                width: 130,
+                render: (_, r) => (
+                  <span style={{ fontFamily: "var(--mono)" }}>
+                    {r.latest ? `v${r.latest.version}` : "—"}
+                    {r.pending && (
+                      <Tag color="warning" style={{ marginLeft: 6 }}>
+                        新上传待审
+                      </Tag>
+                    )}
+                  </span>
+                ),
+              },
+              {
+                title: "状态",
+                width: 90,
+                render: (_, r) => {
+                  const st = SKILL_STATUS[(r.latest ?? r.pending)?.status ?? ""];
+                  return st ? <Tag color={st.color}>{st.label}</Tag> : null;
+                },
+              },
+              {
+                title: "来源",
+                width: 80,
+                render: (_, r) => <Tag>{SOURCE_LABEL[r.skill.source] ?? r.skill.source}</Tag>,
+              },
+              { title: "使用中", width: 100, render: (_, r) => `${r.references} 个智能体` },
+              {
+                title: "7 天加载",
+                width: 90,
+                render: (_, r) => (
+                  // 长期为 0：不报错，但一直占着索引预算 —— 标出来该复查描述或下掉
+                  <span style={{ color: r.loads7d === 0 && r.references > 0 ? "var(--warning)" : undefined }}>
+                    {r.loads7d}
+                  </span>
+                ),
+              },
+            ]}
+          />
+        )}
       </div>
 
-      {current && <SkillDetail key={current.skill.slug} row={current} />}
+      <Drawer open={!!current} width={520} title={null} onClose={() => setSelected(undefined)} destroyOnClose>
+        {current && <SkillDetail key={current.skill.slug} row={current} />}
+      </Drawer>
       <UploadModal open={uploading} onClose={() => setUploading(false)} onDone={(slug) => setSelected(slug)} />
     </div>
   );
@@ -333,7 +389,7 @@ function SkillDetail({ row }: { row: Row }) {
   const scan = version.scan_result as Record<string, { result?: string; hits?: string[]; by?: string; note?: string } | null>;
 
   return (
-    <aside className={styles.detail}>
+    <div>
       <div className={styles.detailHead}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <h2 className={styles.detailTitle}>{skill.slug}</h2>
@@ -394,18 +450,18 @@ function SkillDetail({ row }: { row: Row }) {
           showIcon
           style={{ marginTop: 12 }}
           message="已紧急下架"
-          description={`${version.status_reason ?? ""} —— 所有引用在装配时跳过；ACP 会话要等 Pod 重建才生效。`}
+          description={`${version.status_reason ?? ""}。用到它的智能体之后都不会再加载它。`}
         />
       )}
 
-      <div className={styles.secTitle}>描述（只有它常驻模型上下文）</div>
+      <div className={styles.secTitle}>描述</div>
       <pre className={styles.code}>{version.description}</pre>
       <div className={styles.muted} style={{ marginTop: 4 }}>
         {version.description.length} 字符
       </div>
 
       <div className={styles.secTitle}>
-        包结构 · {version.file_count} 个文件 · {(version.size_bytes / 1024).toFixed(1)} KB
+        文件 · {version.file_count} 个 · {(version.size_bytes / 1024).toFixed(1)} KB
       </div>
       {version.files.map((f) => (
         <button
@@ -442,11 +498,11 @@ function SkillDetail({ row }: { row: Row }) {
       </div>
       {(
         [
-          ["archive", "1 归档安全"],
-          ["structure", "2 结构与元数据"],
-          ["content", "3 内容模式"],
-          ["similarity", "描述冲突"],
-          ["review", "4 人工审查"],
+          ["archive", "压缩包安全"],
+          ["structure", "文件结构"],
+          ["content", "没有敏感内容"],
+          ["similarity", "与已有技能不冲突"],
+          ["review", "人工审查"],
         ] as const
       ).map(([key, label]) => {
         const layer = scan[key];
@@ -478,7 +534,7 @@ function SkillDetail({ row }: { row: Row }) {
         );
       })}
 
-      <div className={styles.secTitle}>被引用（停用 / 下架前必查）</div>
+      <div className={styles.secTitle}>在用的智能体</div>
       {refsQ.data?.data.length ? (
         refsQ.data.data.map((r) => (
           <div key={`${r.agent_id}-${r.subagent ?? ""}`} className={styles.kv}>
@@ -507,7 +563,7 @@ function SkillDetail({ row }: { row: Row }) {
           {loads > 0 && `（${Math.round((completed / loads) * 100)}%）`}
         </span>
       </div>
-    </aside>
+    </div>
   );
 }
 
@@ -579,9 +635,9 @@ function UploadModal({
           onChange={setSource}
           style={{ width: 200 }}
           options={[
-            { value: "builtin", label: "内置（无脚本免审）" },
-            { value: "tenant", label: "租户（必审）" },
-            { value: "imported", label: "第三方（必审）" },
+            { value: "builtin", label: "内置" },
+            { value: "tenant", label: "团队" },
+            { value: "imported", label: "第三方" },
           ]}
         />
         {source === "imported" && (

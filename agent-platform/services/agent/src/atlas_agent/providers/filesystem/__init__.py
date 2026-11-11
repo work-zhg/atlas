@@ -1,16 +1,17 @@
 """会话工作区（c4-model/agent/code-workspace.html）。
 
-    paths      路径关卡：先规范化、再判断区，拒绝空字节、越出区根和指向区根本身的路径
+    paths      路径关卡：先规范化、再看落没落在本会话能用的根里（所用工作区、绑定的技能版本）
     stores     两种底层：直连对象存储、经沙箱
-    router     每次操作选底层：技能区、系统区直连；工作区区在原生沙箱 READY 时经沙箱
+    router     每次操作选底层：这个人的原生沙箱 READY 时经沙箱，否则直连
     workspace  一个 run 的文件能力（实现引擎的 FilesystemProtocol）
     listing    界面上的工作区：列、打开、预览、上传
 
-三个区的前缀在 domain/workspace_layout.py（和沙箱共用的共享内核）。
+布局在 domain/workspace_layout.py（和沙箱共用的共享内核）。
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any
 from uuid import UUID
 
@@ -37,13 +38,15 @@ def make_workspace(
     thread_id: UUID | str,
     workspace_thread_id: UUID | str | None = None,
     *,
+    skills: Iterable[tuple[str, int | str]] = (),
     routing: WorkspaceRouting | None = None,
 ) -> Workspace | None:
     """按配置构造会话工作区；没配对象存储则返回 None。
 
-    workspace_thread_id: 工作区归属的会话。None = 自己；子智能体传父会话的 id
-        —— 它与主 agent 共享同一份工作区，而技能区、系统区仍是自己的。
-    routing: 工作区的沙箱路由。沙箱在跑时，工作区的读写经它走 Pod 里的挂载；
+    workspace_thread_id: 所用工作区的根会话。None = 自己；子、孙会话传根会话的 id
+        —— 它们共用同一份工作区，隐藏目录 .atlas/{会话}/ 仍按自己。
+    skills: 本智能体绑定的技能 (slug, 版本)：文件工具只放行这几个技能目录。
+    routing: 沙箱路由。这个人的沙箱在跑时，读写经它走 Pod 里的挂载；
         None = 永远直连对象存储。
 
     ★ 返回 None 不是降级，是**关闭文件能力**：文件工具一个都不注册。回落到某个内存实现才是有害的 ——
@@ -91,5 +94,6 @@ def make_workspace(
         user_id=user_id,
         thread_id=thread_id,
         workspace_thread_id=workspace_thread_id,
+        skills=skills,
         routing=routing,
     )

@@ -28,15 +28,19 @@ class WorkspaceListing:
     def __init__(self, fs: Workspace) -> None:
         self._fs = fs
 
+    def _real(self, path: str) -> str:
+        """界面给的是相对工作区的路径（和 list 返回的一样）；/data/… 的真实路径也认。"""
+        return path if path.startswith("/") else f"{self._fs.workdir}/{path}"
+
     def _workspace_key(self, path: str, action: str) -> str:
-        """只认工作区区的文件（不经界面碰技能区 / 系统区），和模型同一道路径关卡。"""
-        fp = self._fs.gate.resolve(path if path.startswith("/") else f"/workspace/{path}")
+        """只认工作区里的文件（不经界面碰技能目录），和模型同一道路径关卡。"""
+        fp = self._fs.gate.resolve(self._real(path))
         if fp.area is not Area.WORKSPACE:
             raise PathEscape(f"只能{action}工作区里的文件：{path!r}")
         return self._fs.objects.key(fp)
 
     def list(self, *, max_keys: int = 2000) -> tuple[list[dict[str, Any]], bool]:
-        prefix = self._fs.layout.key(Area.WORKSPACE, "")
+        prefix = self._fs.layout.key(f"{self._fs.layout.workspace}/")
         files: list[dict[str, Any]] = []
         for page in _paginate(self._fs._s3, self._fs._bucket, prefix):
             for item in page.get("Contents", ()):
@@ -59,7 +63,7 @@ class WorkspaceListing:
         return files, False
 
     def open(self, path: str) -> tuple[Any, int]:
-        """→ (流式 body, 字节数)。只允许工作区内的文件 —— 不经这里下载技能区 / 系统区。"""
+        """→ (流式 body, 字节数)。只允许工作区内的文件 —— 不经这里下载技能目录。"""
         key = self._workspace_key(path, "下载")
         obj = self._fs._s3.get_object(Bucket=self._fs._bucket, Key=key)
         return obj["Body"], int(obj.get("ContentLength", 0))
@@ -73,7 +77,7 @@ class WorkspaceListing:
         if path.endswith("/"):
             raise PathEscape(f"只能上传到工作区里的文件路径：{path!r}")
         self._workspace_key(path, "上传到")
-        result = await self._fs.aput(path if path.startswith("/") else f"/workspace/{path}", data)
+        result = await self._fs.aput(self._real(path), data)
         if result.error:
             raise OSError(result.error)
         return len(data)

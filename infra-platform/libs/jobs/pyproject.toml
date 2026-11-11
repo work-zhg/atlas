@@ -3,7 +3,7 @@ name = "atlas-jobs"
 version = "0.1.0"
 description = "Atlas 定时任务 —— 嵌入宿主应用；应用只写 execute，调度、线程、停机交给库。"
 requires-python = ">=3.13"
-dependencies = ["pydantic>=2.9"]
+dependencies = ["pydantic>=2.9", "fastapi>=0.115"]
 
 [build-system]
 requires = ["hatchling"]

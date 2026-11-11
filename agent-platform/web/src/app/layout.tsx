@@ -5,7 +5,7 @@ import type { Metadata, Viewport } from "next";
 import "@ant-design/v5-patch-for-react-19";
 
 import { AuthGate } from "@/components/AuthGate";
-import { Rail } from "@/components/Rail";
+import { AppShell } from "@/components/shell/AppShell";
 import { Providers } from "@/lib/providers";
 import "@atlas/chat-ui/src/theme/tokens.css";
 import "./globals.css";
@@ -28,11 +28,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <Providers>
           {/* 登录守卫在最外层：没登录不渲染导航与页面（权限设计 §13） */}
           <AuthGate>
-            {/* Console Shell 三段式的最外层：Rail + 内容区（MASTER.md §1） */}
-            <div style={{ display: "flex", height: "100vh", overflow: "hidden" }}>
-              <Rail />
-              <div style={{ flex: 1, minWidth: 0, display: "flex" }}>{children}</div>
-            </div>
+            {/* 顶部一级菜单（平台）+ 左侧二级菜单 + 内容区 */}
+            <AppShell>{children}</AppShell>
           </AuthGate>
         </Providers>
       </body>

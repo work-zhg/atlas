@@ -1,110 +1,167 @@
 "use client";
 
-import { Tag } from "antd";
+/**
+ * 智能体卡片：谁的、做什么、我最近用没用过；主操作是「对话」，能改的才有「编辑」。
+ *
+ * ★ 不显示标识、版本号、工具个数这类实现信息 —— 用户挑智能体看的是它能帮自己做什么。
+ */
+import { App as AntdApp, Button, Dropdown, Tag, Tooltip } from "antd";
 import { useRouter } from "next/navigation";
 
+import { useCreateAgent, useSetAgentStatus, useSetDefaultAgent } from "@/api/agents";
 import type { Agent } from "@/api/types";
 import { Icon } from "@/components/Icon";
+import { http } from "@/lib/http";
 import { relativeTime } from "@/lib/format";
+import type { AgentDetail } from "@/api/types";
+
 import styles from "./agents.module.css";
 import { avatarBackground, avatarLetter } from "./avatar";
-import { AGENT_STATUS_META } from "./status";
+import { newSlug } from "./templates";
 
-const MODE_SHORT: Record<string, string> = {
-  auto: "Auto",
-  manual: "手动",
-  accept_edits: "自动编辑",
-  plan: "仅规划",
-};
+/** 能不能改它：以使用者身份的要「编辑」，以它自己身份的要「所有者」 */
+export function canEditAgent(a: Pick<Agent, "my_level" | "auth_subject">): boolean {
+  return a.my_level === "OWNER" || (a.my_level === "WRITE" && a.auth_subject === "user");
+}
 
-/** 卡片上直接看出能力面（prototype/atlas-v2.html 智能体列表 ⑥）。 */
-export function AgentCard({ agent }: { agent: Agent }) {
+export function AgentCard({
+  agent,
+  isDefault,
+  isAdmin,
+  archivedView,
+  onProfile,
+}: {
+  agent: Agent;
+  isDefault: boolean;
+  isAdmin: boolean;
+  archivedView?: boolean;
+  /** 只能使用的：点开是简介 */
+  onProfile: (a: Agent) => void;
+}) {
   const router = useRouter();
-  const status = AGENT_STATUS_META[agent.status];
-  const isCli = agent.kind === "cli";
+  const { message, modal } = AntdApp.useApp();
+  const setStatus = useSetAgentStatus(agent.id);
+  const setDefault = useSetDefaultAgent();
+  const createAgent = useCreateAgent();
+  const editable = canEditAgent(agent);
+  const owner = agent.my_level === "OWNER";
+  const who = agent.mine ? "我创建的" : (agent.owner_name ?? "共享给我的");
+
+  const duplicate = async () => {
+    try {
+      const src = await http.get<AgentDetail>(`/v1/agents/${agent.id}`);
+      const copy = await createAgent.mutateAsync({
+        slug: newSlug("agent"),
+        name: `${agent.name} 副本`,
+        description: agent.description,
+        avatar_key: agent.avatar_key,
+        spec: src.spec as never,
+        auth_subject: "user",
+      });
+      message.success("已复制为新的智能体（草稿）");
+      router.push(`/agents/${copy.id}`);
+    } catch (e) {
+      message.error((e as Error).message);
+    }
+  };
+
+  const archive = () =>
+    modal.confirm({
+      title: `归档「${agent.name}」？`,
+      content: "归档后不能再发起新对话，已有的对话仍然保留。可以随时在「已归档」里恢复。",
+      okText: "归档",
+      okButtonProps: { danger: true },
+      cancelText: "取消",
+      onOk: () => setStatus.mutateAsync("archived").then(() => message.success("已归档")),
+    });
+
+  const menu = [
+    { key: "dup", icon: <Icon name="copy" size={14} />, label: "复制为新智能体" },
+    ...(isAdmin && agent.status === "enabled" && !isDefault
+      ? [{ key: "default", icon: <Icon name="star" size={14} />, label: "设为默认智能体" }]
+      : []),
+    ...(owner ? [{ type: "divider" as const }, { key: "archive", icon: <Icon name="archive" size={14} />, label: "归档", danger: true }] : []),
+  ];
 
   return (
     <div
-      className={`${styles.card} ${agent.status === "archived" ? styles.cardMuted : ""}`}
+      className={styles.card}
       role="button"
       tabIndex={0}
-      onClick={() => router.push(`/agents/${agent.id}`)}
-      onKeyDown={(e) => {
-        // 键盘可达：div 当按钮用就必须自己处理 Enter/Space
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          router.push(`/agents/${agent.id}`);
-        }
-      }}
+      onClick={() => (archivedView ? undefined : editable ? router.push(`/agents/${agent.id}`) : onProfile(agent))}
+      onKeyDown={(e) => e.key === "Enter" && !archivedView && (editable ? router.push(`/agents/${agent.id}`) : onProfile(agent))}
     >
       <div className={styles.cardHead}>
-        <span
-          className={styles.avatar}
-          style={{ background: avatarBackground(agent.avatar_key) }}
-          aria-hidden="true"
-        >
+        <span className={styles.avatar} style={{ background: avatarBackground(agent.avatar_key) }} aria-hidden="true">
           {avatarLetter(agent.name)}
         </span>
-        <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ minWidth: 0, flex: 1 }}>
           <div className={styles.cardName}>
             {agent.name}
+            {isDefault && <Tag color="processing" style={{ marginInlineEnd: 0 }}>默认</Tag>}
+            {agent.status === "draft" && <Tag color="warning" style={{ marginInlineEnd: 0 }}>草稿</Tag>}
+            {agent.kind === "cli" && <Tag color="blue" style={{ marginInlineEnd: 0 }}>Claude Code</Tag>}
           </div>
-          <div className={styles.cardSlug}>
-            {agent.slug} · v{agent.version}
-          </div>
+          <div className={styles.cardSub}>{who}</div>
         </div>
-        <Tag color={status.color} style={{ marginInlineEnd: 0 }}>
-          {status.label}
-        </Tag>
       </div>
-
-      <p className={styles.cardDesc}>{agent.description || "暂无描述"}</p>
-
-      <div className={styles.cardTags}>
-        {isCli ? (
-          <Tag color="orange" style={{ marginInlineEnd: 0 }}>
-            ACP · CLI
-          </Tag>
+      <div className={styles.cardDesc}>{agent.description || "（没有描述）"}</div>
+      <div className={styles.cardFoot} onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+        {archivedView ? (
+          <>
+            <span>归档于 {relativeTime(agent.updated_at)}</span>
+            <span style={{ flex: 1 }} />
+            {owner && (
+              <Button
+                size="small"
+                loading={setStatus.isPending}
+                onClick={() => setStatus.mutate("enabled", { onSuccess: () => message.success("已恢复") })}
+              >
+                恢复
+              </Button>
+            )}
+          </>
         ) : (
-          <Tag color="purple" style={{ marginInlineEnd: 0 }}>
-            Native
-          </Tag>
+          <>
+            <Icon name="clock" size={13} />
+            <span>{agent.last_used_at ? `最近使用 ${relativeTime(agent.last_used_at)}` : "还没用过"}</span>
+            <span style={{ flex: 1 }} />
+            {editable && (
+              <Button size="small" type="text" onClick={() => router.push(`/agents/${agent.id}`)}>
+                编辑
+              </Button>
+            )}
+            <Tooltip title={agent.status === "draft" ? "发布后才能对话" : undefined}>
+              <Button
+                size="small"
+                type="primary"
+                icon={<Icon name="chat" size={13} />}
+                disabled={agent.status !== "enabled"}
+                onClick={() => router.push(`/?agent=${agent.id}`)}
+              >
+                对话
+              </Button>
+            </Tooltip>
+            <Dropdown
+              trigger={["click"]}
+              placement="bottomRight"
+              menu={{
+                items: menu,
+                onClick: ({ key }) => {
+                  if (key === "dup") void duplicate();
+                  if (key === "default")
+                    setDefault.mutate(agent.id, {
+                      onSuccess: () => message.success("已设为默认智能体"),
+                      onError: (e) => message.error(e.message),
+                    });
+                  if (key === "archive") archive();
+                },
+              }}
+            >
+              <Button size="small" type="text" icon={<Icon name="more" size={15} />} aria-label="更多" />
+            </Dropdown>
+          </>
         )}
-        <Tag className={styles.mono} style={{ marginInlineEnd: 0 }}>
-          {agent.model}
-        </Tag>
-        {agent.auth_subject === "agent" && (
-          <Tag color="geekblue" style={{ marginInlineEnd: 0 }} title="按数字员工的授权干活，谁来用结果都一样">
-            以 Agent 为权限
-          </Tag>
-        )}
-        {agent.builtin_tool_count > 0 && (
-          <Tag style={{ marginInlineEnd: 0 }}>工具 {agent.builtin_tool_count}</Tag>
-        )}
-        {agent.skill_count > 0 && <Tag style={{ marginInlineEnd: 0 }}>技能 {agent.skill_count}</Tag>}
-        {agent.mcp_servers.length > 0 && (
-          <Tag color="cyan" style={{ marginInlineEnd: 0 }} title={agent.mcp_servers.join("、")}>
-            MCP {agent.mcp_servers.length}
-          </Tag>
-        )}
-        {/* 委派关系：卡片上直接看出它会把活交给谁、以什么权限模式 */}
-        {agent.subagents.map((s) => (
-          <Tag
-            key={String(s.name)}
-            color={s.kind === "cli" ? "orange" : "processing"}
-            style={{ marginInlineEnd: 0 }}
-          >
-            → {String(s.name)}
-            {s.kind === "cli" && ` · ${MODE_SHORT[String(s.permission_mode ?? "auto")] ?? s.permission_mode}`}
-          </Tag>
-        ))}
-      </div>
-
-      <div className={styles.cardFoot}>
-        <span>
-          <Icon name="clock" size={13} />
-          更新于 {relativeTime(agent.updated_at)}
-        </span>
       </div>
     </div>
   );

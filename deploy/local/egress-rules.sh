@@ -16,8 +16,13 @@ cd "$(dirname "$0")/../.."
 out=docker/egress/deny.always
 cidrs="${SANDBOX_DENY_CIDRS:-}"
 if [ -z "$cidrs" ]; then
-  # Pod 网段：各节点分到的 podCIDR（单节点集群就是整个 Pod 网段）
-  pods="$(kubectl get nodes -o jsonpath='{range .items[*]}{.spec.podCIDRs[*]}{"\n"}{end}' | tr ' ' '\n')"
+  # Pod 网段：有 Calico 就读它的 IP 池 —— Calico 自己分配 Pod IP，不按节点的 podCIDR
+  #   （112 上 podCIDR 是 10.244.0.0/24，Pod 实际在 10.244.201.x，池是 10.244.0.0/16）；
+  #   没有就用各节点分到的 podCIDR（单节点集群就是整个 Pod 网段）
+  pods="$(kubectl get ippools.crd.projectcalico.org -o jsonpath='{range .items[*]}{.spec.cidr}{"\n"}{end}' \
+    2>/dev/null || true)"
+  [ -n "$pods" ] || pods="$(kubectl get nodes -o jsonpath='{range .items[*]}{.spec.podCIDRs[*]}{"\n"}{end}' \
+    | tr ' ' '\n')"
   # Service 网段：有 ServiceCIDR 资源（K8s 1.31+）就读它；否则用一个不合法的 clusterIP 让 apiserver
   # 在报错里说出合法范围（dry-run，不建任何东西）
   svcs="$(kubectl get servicecidrs -o jsonpath='{range .items[*]}{.spec.cidrs[*]}{"\n"}{end}' 2>/dev/null \
@@ -38,5 +43,5 @@ fi
   echo "# 链路本地（云上的元数据服务 169.254.169.254）"
   echo "169.254.0.0/16"
 } >"$out"
-echo "已写 $out：" >&2
+echo "已写 ${out}：" >&2
 cat "$out" >&2

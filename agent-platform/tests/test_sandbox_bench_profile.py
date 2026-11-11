@@ -302,7 +302,7 @@ async def test_exec_writes_files_then_runs_in_the_existing_bench_sandbox(
         c,
         ws,
         command="cat t/check.sh && exit 3",  # 假 execd 在宿主上跑 bash：cwd 换算成工作区目录
-        files=[("/workspace/t/check.sh", b"echo checked\n")],
+        files=[(f"{ws.layout().workdir}/t/check.sh", b"echo checked\n")],
     )
     assert res.exit_code == 3
     assert "echo checked" in res.output

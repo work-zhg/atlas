@@ -75,6 +75,7 @@ from .sandbox import (
     DEFAULT_WORKDIR,
     ExecuteArtifact,
     ExecuteResponse,
+    SandboxErrorKind,
     SandboxProtocol,
     SandboxUnavailable,
 )
@@ -110,6 +111,7 @@ __all__ = [
     "ModelUnavailable",
     "QuestionAnswer",
     "ReadResult",
+    "SandboxErrorKind",
     "SandboxProtocol",
     "SandboxUnavailable",
     "SearchResult",

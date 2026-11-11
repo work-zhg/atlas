@@ -55,7 +55,10 @@ import { localDate } from "./time";
 const PAGE_SIZE = 50;
 const SOURCE_COLOR: Record<string, string> = { user: "blue", agent: "purple", backfill: "gold" };
 
-export function MemoryPage() {
+/**
+ * embedded = 放在「个性化」的页签里：不要页面标题；「清除全部」放到底部，不和常用操作挨着。
+ */
+export function MemoryPage({ embedded = false }: { embedded?: boolean } = {}) {
   const { message } = AntdApp.useApp();
   const topicsQ = useMemoryTopics();
   const settingsQ = useMemorySettings();
@@ -80,38 +83,7 @@ export function MemoryPage() {
 
   const paused = settingsQ.data?.paused ?? false;
 
-  return (
-    <div className={pageStyles.page}>
-      <header className={pageStyles.head}>
-        <div className={pageStyles.titleRow}>
-          <div>
-            <h1 className={pageStyles.title}>记忆</h1>
-            <p className={pageStyles.desc}>
-              关于你的长期记忆，按主题整理。常驻主题每次对话都会带上，其余主题由智能体需要时加载。记错了可以更正、撤销或删除。
-            </p>
-          </div>
-          {!disabled && (
-            <Space className={pageStyles.action} size={12}>
-              <Tooltip title="暂停期间智能体和会话后补记都不再写入；已有的记忆照常使用">
-                <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13 }}>
-                  <Switch
-                    size="small"
-                    checked={paused}
-                    loading={setPaused.isPending}
-                    disabled={!settingsQ.data}
-                    onChange={(v) =>
-                      setPaused
-                        .mutateAsync(v)
-                        .then(() => message.success(v ? "已暂停写入" : "已恢复写入"))
-                        .catch((e: Error) => message.error(e.message))
-                    }
-                  />
-                  暂停写入
-                </span>
-              </Tooltip>
-              <Button icon={<Icon name="plus" size={14} />} onClick={() => setAdding(true)} disabled={!topicsQ.data}>
-                添加记忆
-              </Button>
+  const purgeButton = (
               <Popconfirm
                 title="删除全部记忆？"
                 description="彻底删除，连同修订历史，不可恢复。"
@@ -126,15 +98,52 @@ export function MemoryPage() {
                 }
               >
                 <Button danger type="text" disabled={!topics.length}>
-                  删除全部
+                  {embedded ? "清除全部记忆" : "删除全部"}
                 </Button>
               </Popconfirm>
-            </Space>
-          )}
-        </div>
-      </header>
+  );
+  const actions = !disabled && (
+    <Space className={embedded ? undefined : pageStyles.action} size={12}>
+      <Tooltip title="关掉后智能体不会再记住新内容；已有的记忆照常使用">
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13 }}>
+          允许记住新内容
+          <Switch
+            size="small"
+            checked={!paused}
+            loading={setPaused.isPending}
+            disabled={!settingsQ.data}
+            onChange={(on) =>
+              setPaused
+                .mutateAsync(!on)
+                .then(() => message.success(on ? "已恢复记住新内容" : "已暂停：不会再记住新内容"))
+                .catch((e: Error) => message.error(e.message))
+            }
+          />
+        </span>
+      </Tooltip>
+      <Button icon={<Icon name="plus" size={14} />} onClick={() => setAdding(true)} disabled={!topicsQ.data}>
+        添加
+      </Button>
+      {!embedded && purgeButton}
+    </Space>
+  );
 
-      <div className={pageStyles.body}>
+  return (
+    <div className={embedded ? undefined : pageStyles.page}>
+      {embedded ? (
+        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>{actions}</div>
+      ) : (
+        <header className={pageStyles.head}>
+          <div className={pageStyles.titleRow}>
+            <div>
+              <h1 className={pageStyles.title}>记忆</h1>
+            </div>
+            {actions}
+          </div>
+        </header>
+      )}
+
+      <div className={embedded ? undefined : pageStyles.body}>
         {disabled && (
           <Alert
             type="info"
@@ -191,6 +200,9 @@ export function MemoryPage() {
               />
             </div>
           </div>
+        )}
+        {embedded && !disabled && topics.length > 0 && (
+          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 24 }}>{purgeButton}</div>
         )}
       </div>
 
@@ -474,7 +486,7 @@ function EntriesPanel({
               render: (_, e) => (
                 <Space size={0}>
                   <Button size="small" type="text" onClick={() => onOpenEntry(e.number)}>
-                    演变
+                    历史
                   </Button>
                   {e.status === "active" ? (
                     <>

@@ -20,7 +20,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
-from atlas_engine.contracts import InvalidSpec
+from atlas_engine.contracts import DEFAULT_WORKDIR, InvalidSpec
 from atlas_engine.contracts.mcp_naming import parse_tool_id
 from atlas_engine.contracts.tools import ToolSpec
 from atlas_engine.kernel.middleware.ask_user import AskUserMiddleware
@@ -96,6 +96,8 @@ class Capabilities:
     memory: str | None = None
     #: 提示词缓存的 TTL。None = 不打缓存标记（模型不支持，或智能体没开）
     prompt_cache_ttl: Literal["5m", "1h"] | None = None
+    #: 工作区在沙箱里的路径：命令的 cwd，也是提示词里告诉模型的工作区
+    workdir: str = DEFAULT_WORKDIR
 
 
 def assemble(spec: AgentSpec, caps: Capabilities) -> Any:
@@ -115,33 +117,37 @@ def assemble(spec: AgentSpec, caps: Capabilities) -> Any:
         memory=caps.memory,
         deferred_tools=caps.deferred_tools,
         prompt_cache_ttl=caps.prompt_cache_ttl,
+        workdir=caps.workdir,
     )
 
 
-#: 文件工具那一段。它与沙箱无关 —— 没配 bash 的 agent 也有工作区。
+#: 文件工具那一段。它与沙箱无关 —— 没配 bash 的 agent 也有工作区。{workdir} 是工作区的路径。
 _FILESYSTEM_HINT = (
-    "文件工具作用于会话工作区，内容跨轮保留。"
+    "文件工具作用于会话工作区 {workdir}，内容跨轮保留；相对路径都相对它。"
     "search 只匹配路径与文件名，**不搜索文件内容** —— 要按内容查找，用 execute 跑 grep。"
 )
 
 #: 沙箱那一段（doc/native-sandbox-design.html）。
 #:
-#: ★ /workspace 与文件工具是**同一份数据**（对象存储的 FUSE 挂载 + 每次执行前后的一致性屏障），
+#: ★ 工作区与文件工具是**同一份数据**（对象存储的 FUSE 挂载 + 每次执行前后的一致性屏障），
 #:   所以 write_file 之后可以直接执行。本地盘（HOME、/repos、/tmp）沙箱重建后清空 —— 必须明写，
 #:   否则模型会把依赖装进 HOME、下一次闲置回收后又当它还在。
+#: ★ 沙箱是这个人所有会话共用的：本地盘、后台进程别的会话也看得到，所以不说「本会话专属」。
 _SANDBOX_HINT = (
-    "execute 在本会话专属的 Linux 沙箱里执行命令。工作目录 /workspace 就是文件工具的工作区"
+    "execute 在 Linux 沙箱里执行命令。工作目录 {workdir} 就是文件工具的工作区"
     "（同一份数据：write_file 之后可以直接执行，命令写的文件 read_file 也读得到）。"
     "\n其它可写目录：HOME（/home/agent）、/repos、/tmp 是本地盘，速度快，但沙箱重建后清空 —— "
-    "git 仓库与依赖安装放 /repos 或 HOME，需要保留的产物写回 /workspace。"
+    "git 仓库与依赖安装放 /repos 或 HOME，需要保留的产物写回工作区。"
+    "\n这个沙箱由同一个用户的多个会话共用：/repos、/tmp 里的东西和后台进程别的会话也看得到，"
+    "放东西时用能区分的名字。"
     "\n首次使用要启动沙箱，会慢几秒。命令没有时长上限；不要运行等待交互输入的命令。"
-    "后台服务用 `nohup cmd > /tmp/x.log 2>&1 &` 启动，它在本会话内持续存在。"
+    "后台服务用 `nohup cmd > /tmp/x.log 2>&1 &` 启动，它在沙箱里持续存在。"
 )
 
-#: 评测档沙箱（root、根可写，镜像由题目给定）那一段：上面那段的目录布局在这里不成立
+#: 评测档沙箱（root、根可写，镜像由题目给定，本会话专属）那一段：上面那段的目录布局在这里不成立
 _BENCH_SANDBOX_HINT = (
     "execute 在本会话专属的 Linux 沙箱里执行命令，以 root 身份运行，整个文件系统可写。"
-    "/workspace 是文件工具的工作区（同一份数据）；文件工具只作用于 /workspace，"
+    "{workdir} 是文件工具的工作区（同一份数据）；文件工具只作用于工作区，"
     "其它路径要用 execute 读写。"
     "\n首次使用要启动沙箱，会慢几秒。命令没有时长上限；不要运行等待交互输入的命令。"
     "后台服务用 `nohup cmd > /tmp/x.log 2>&1 &` 启动，它在本会话内持续存在。"
@@ -172,6 +178,7 @@ def build_graph(
     memory: str | None = None,
     deferred_tools: Sequence[ToolSpec] = (),
     prompt_cache_ttl: Literal["5m", "1h"] | None = None,
+    workdir: str = DEFAULT_WORKDIR,
 ) -> Any:
     """按 spec 组装 agent 图。返回编译好的图，交给 runner.run 驱动。
 
@@ -190,10 +197,11 @@ def build_graph(
     deferred = [to_langchain(t) for t in deferred_tools]
     system_prompt = spec.system_prompt or ""
     if FILESYSTEM_TOOL in spec.tool_names:
-        system_prompt = f"{system_prompt}\n\n{_FILESYSTEM_HINT}".strip()
+        hint = _FILESYSTEM_HINT.format(workdir=workdir)
+        system_prompt = f"{system_prompt}\n\n{hint}".strip()
     if sandbox is not None:
         hint = _BENCH_SANDBOX_HINT if spec.sandbox.profile == "bench" else _SANDBOX_HINT
-        system_prompt = f"{system_prompt}\n\n{hint}".strip()
+        system_prompt = f"{system_prompt}\n\n{hint.format(workdir=workdir)}".strip()
     if any(parse_tool_id(name) is not None for name in spec.tool_names):
         system_prompt = f"{system_prompt}\n\n{_MCP_HINT}".strip()
     # 持久指令（上下文分层 L1）：平台 → 用户 → 工作区，排在系统提示词与工具说明之后

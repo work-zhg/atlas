@@ -61,14 +61,10 @@ def _held_by(owner: str | None) -> tuple[Any, ...]:
 
 #: 不进归档表的事件类型。
 #:
-#: ★ delta 是 token 级的，一次回答几百到几千条。它们的价值是**实时**打字
-#:   效果 —— 而归档的唯一用途是「超过 Redis TTL 之后回放」，那时用户看的是
-#:   历史，正文从 message.completed 一次到位即可（前端读历史本来走 message
-#:   表，不靠 delta）。
-#:
-#: ★ 不滤的代价是实打实的：一个长会话几十万行，加上子 run 的 delta 还要
-#:   翻倍，而其中绝大多数永远不会被读到。
-_ARCHIVED_EXCLUDED = frozenset({EventType.MESSAGE_DELTA, EventType.THINKING_DELTA})
+#: ★ delta 是 token 级的，一次回答几百到几千条，逐条归档一个长会话能到几十万行。
+#:   thinking.delta 前端不展示，直接不归档；message.delta 带着正文的**位置**，
+#:   合并成每段一行后归档（EventArchive.archive_events）。
+_ARCHIVED_EXCLUDED = frozenset({EventType.THINKING_DELTA})
 
 
 def _wait_reasons(status: str, waiting_on: Any) -> set[str]:

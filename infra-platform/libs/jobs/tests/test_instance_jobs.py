@@ -169,3 +169,66 @@ async def test_cannot_register_after_start() -> None:
             jobs.register(Counting(), scope="instance", every=10)
     finally:
         await jobs.stop()
+
+
+async def test_metrics_show_the_round_in_progress_and_the_next_one() -> None:
+    gate = asyncio.Event()
+
+    class Gated(Job):
+        type = "test.gated"
+        description = "等放行的任务"
+
+        async def execute(self, ctx: JobContext, params: NoParams) -> None:
+            await gate.wait()
+
+    jobs = JobScheduler()
+    jobs.register(Gated(), scope="instance", every=0.02, jitter=0.01)
+    jobs.start()
+    try:
+        await _until(lambda: jobs.metrics()[0].running)
+        [m] = jobs.metrics()
+        assert m.next_fire_at is None, "正在跑时下一轮还没排"
+        assert (m.description, m.every, m.jitter) == ("等放行的任务", 0.02, 0.01)
+        gate.set()
+        await _until(
+            lambda: not jobs.metrics()[0].running and jobs.metrics()[0].next_fire_at is not None
+        )
+        [m] = jobs.metrics()
+        assert m.runs >= 1 and m.last_finished_at is not None
+        assert m.next_fire_at > m.last_finished_at  # type: ignore[operator]
+    finally:
+        await jobs.stop()
+
+
+async def test_routes_list_this_instance_and_ask_the_guard() -> None:
+    from atlas_jobs import JobRoutes
+    from fastapi import FastAPI, HTTPException, Request
+    from httpx import ASGITransport, AsyncClient
+
+    class Guard:
+        async def view(self, request: Request) -> str:
+            if request.headers.get("x-user") != "admin":
+                raise HTTPException(403, "没有权限")
+            return "admin"
+
+    job = Counting()
+    jobs = JobScheduler()
+    jobs.register(job, scope="instance", every=0.02, jitter=0.005)
+    app = FastAPI()
+    app.include_router(JobRoutes(jobs, Guard(), prefix="/v1/jobs", instance="pod-a").router)
+    jobs.start()
+    try:
+        await _until(lambda: len(job.calls) >= 1)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+            assert (await client.get("/v1/jobs")).status_code == 403
+            res = await client.get("/v1/jobs", headers={"x-user": "admin"})
+    finally:
+        await jobs.stop()
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["instance"] == "pod-a"
+    [item] = body["jobs"]
+    assert item["type"] == "test.counting" and item["scope"] == "instance"
+    assert (item["every"], item["jitter"]) == (0.02, 0.005)
+    assert item["runs"] >= 1 and item["failures"] == 0 and item["last_started_at"]

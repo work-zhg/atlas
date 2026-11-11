@@ -201,6 +201,8 @@ class SandboxSpecIn(BaseModel):
 class KnowledgeSpecIn(BaseModel):
     dataset_ids: list[str] = Field(default_factory=list, max_length=10)
     mode: Literal["auto", "tool"] = "auto"
+    #: all_readable = 使用者能查阅的全部（以使用者为权限时按这一轮的人；dataset_ids 不用）
+    scope: Literal["selected", "all_readable"] = "selected"
     top_k: int = Field(default=4, ge=1, le=20)
     score_threshold: float | None = Field(default=None, ge=0, le=1)
     rerank: bool = False
@@ -209,6 +211,7 @@ class KnowledgeSpecIn(BaseModel):
         return KnowledgeSpec(
             dataset_ids=tuple(dict.fromkeys(self.dataset_ids)),
             mode=self.mode,
+            scope=self.scope,
             top_k=self.top_k,
             score_threshold=self.score_threshold,
             rerank=self.rerank,
@@ -346,11 +349,33 @@ class AgentGrantPatch(BaseModel):
     include_sub: bool | None = None
 
 
+class DefaultAgentIn(BaseModel):
+    #: None = 取消默认
+    agent_id: UUID | None = None
+
+
+class DefaultAgentOut(BaseModel):
+    agent_id: UUID | None = None
+
+
 class AgentVersionOut(BaseModel):
     id: UUID
     version: int
     spec: dict[str, Any]
     created_at: datetime
+    #: 发布时写的「这次改了什么」
+    note: str = ""
+
+
+class AgentDraftIn(BaseModel):
+    """编辑器自动保存的草稿：只校验结构，引用与引擎规则留到发布时校验。"""
+
+    spec: AgentSpecIn
+
+
+class AgentPublishIn(BaseModel):
+    #: 这次改了什么（可选）
+    note: str = Field(default="", max_length=500)
 
 
 class AgentOut(BaseModel):
@@ -379,12 +404,23 @@ class AgentOut(BaseModel):
     digital_employee_uid: UUID | None = None
     created_at: datetime
     updated_at: datetime
+    #: 当前主体对它的有效级别（READ / WRITE / OWNER）：前端据此决定能不能编辑、共享
+    my_level: str | None = None
+    #: 是不是我创建的（列表的「我创建的 / 共享给我的」）
+    mine: bool = False
+    #: 创建者姓名
+    owner_name: str | None = None
+    #: 我最近一次用它的时间（我的会话里最近的更新）
+    last_used_at: datetime | None = None
+    #: 有没有未发布的修改
+    has_draft: bool = False
 
 
 class AgentDetailOut(AgentOut):
     spec: dict[str, Any]
-    #: 当前主体对它的有效级别（READ / WRITE / OWNER）：前端据此决定能不能编辑、共享
-    my_level: str | None = None
+    #: 未发布的修改（编辑器打开时用它；None = 和当前版本一样）
+    draft_spec: dict[str, Any] | None = None
+    draft_updated_at: datetime | None = None
 
 
 class AgentListOut(BaseModel):

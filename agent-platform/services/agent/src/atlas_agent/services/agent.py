@@ -16,9 +16,10 @@ from atlas_engine.contracts.mcp_naming import parse_tool_id
 from atlas_engine.contracts.spec import resolve_summarizer_model
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..auth.agent_access import AgentAccess
+from ..auth.agent_access import AgentAccess, Visibility
 from ..auth.catalog import AGENT_DATA
 from ..auth.digital import AgentIdentity
+from ..auth.principal import LEVEL_RANK
 from ..auth.uc import UCError
 from ..db.models import Agent, AgentVersion
 from ..errors import (
@@ -99,7 +100,18 @@ def _summarize(agent: Agent, version: AgentVersion) -> AgentOut:
         digital_employee_uid=agent.digital_employee_uid,
         created_at=agent.created_at,
         updated_at=agent.updated_at,
+        has_draft=agent.draft_spec is not None,
     )
+
+
+def _level_of(vis: Visibility | None, agent: Agent) -> str | None:
+    """列表里每个智能体的有效级别：单条授权与编码级授权取大（与 AgentAccess.level 同一口径）。"""
+    if vis is None:
+        return None
+    if vis.all_:
+        return "OWNER"
+    own = vis.levels.get(agent.agent_uuid, "NONE")
+    return max(own, vis.type_level, key=lambda lv: LEVEL_RANK.get(lv, 0))
 
 
 class AgentService:
@@ -131,18 +143,52 @@ class AgentService:
         model: str | None,
         limit: int,
         principal: Principal | None = None,
+        scope: str | None = None,
     ) -> AgentListOut:
-        """只列看得到的（数字员工设计 §8.1）：已启用要 READ、草稿要 WRITE、已归档要 OWNER。"""
-        visible = (await self.access.visibility(principal)).condition() if principal else None
-        rows = await self._repo.list(q=q, status=status, model=model, limit=limit, visible=visible)
-        return AgentListOut(data=[_summarize(a, v) for a, v in rows])
+        """只列看得到的（数字员工设计 §8.1）：已启用要 READ、草稿要 WRITE、已归档要 OWNER。
+
+        scope：mine = 我创建的；shared = 别人创建、共享给我的。每条带上我的级别、创建者、
+        我最近一次用它的时间 —— 列表按「和我的关系」组织，不按类型。
+        """
+        vis = await self.access.visibility(principal) if principal else None
+        uid = principal.uid if principal else None
+        rows = await self._repo.list(
+            q=q,
+            status=status,
+            model=model,
+            limit=limit,
+            visible=vis.condition() if vis else None,
+            created_by=uid if scope == "mine" else None,
+            not_created_by=uid if scope == "shared" else None,
+        )
+        owners = await self._repo.owner_names([a.created_by_uuid for a, _ in rows])
+        used = (
+            await self._repo.last_used([a.agent_uuid for a, _ in rows], user_id=uid)
+            if uid
+            else {}
+        )
+        out: builtins.list[AgentOut] = []
+        for a, v in rows:
+            item = _summarize(a, v)
+            item.my_level = _level_of(vis, a)
+            item.mine = uid is not None and a.created_by_uuid == uid
+            item.owner_name = owners.get(a.created_by_uuid)
+            item.last_used_at = used.get(a.agent_uuid)
+            out.append(item)
+        return AgentListOut(data=out)
 
     async def get(self, agent_id: UUID, *, principal: Principal | None = None) -> AgentDetailOut:
         agent, version = await self._require(agent_id)
         level = await self.access.require(principal, agent) if principal else None
-        return AgentDetailOut(
-            **_summarize(agent, version).model_dump(), spec=version.spec, my_level=level
+        out = AgentDetailOut(
+            **_summarize(agent, version).model_dump(),
+            spec=version.spec,
+            draft_spec=agent.draft_spec,
+            draft_updated_at=agent.draft_updated_at,
         )
+        out.my_level = level
+        out.mine = principal is not None and agent.created_by_uuid == principal.uid
+        return out
 
     async def agent(self, agent_id: UUID) -> Agent:
         return (await self._require(agent_id))[0]
@@ -153,7 +199,11 @@ class AgentService:
         return AgentVersionListOut(
             data=[
                 AgentVersionOut(
-                    id=v.agent_version_uuid, version=v.version, spec=v.spec, created_at=v.created_at
+                    id=v.agent_version_uuid,
+                    version=v.version,
+                    spec=v.spec,
+                    created_at=v.created_at,
+                    note=v.note,
                 )
                 for v in versions
             ]
@@ -200,9 +250,9 @@ class AgentService:
             # MCP 网关上的 Key（只能调公开服务，私有服务要所有者给它分配）。同样尽力而为
             await register_agent_key(self._settings, agent.agent_uuid, agent.name, owner=user_id)
         await self._session.refresh(agent)  # updated_at 是 onupdate：flush 后要重新读
-        return AgentDetailOut(
-            **_summarize(agent, version).model_dump(), spec=version.spec, my_level="OWNER"
-        )
+        out = AgentDetailOut(**_summarize(agent, version).model_dump(), spec=version.spec)
+        out.my_level, out.mine = "OWNER", True
+        return out
 
     async def update(
         self,
@@ -211,6 +261,7 @@ class AgentService:
         *,
         user_id: UUID,
         principal: Principal | None = None,
+        note: str = "",
     ) -> AgentDetailOut:
         agent, current = await self._require(agent_id)
         renamed = payload.name is not None and payload.name != agent.name
@@ -233,7 +284,7 @@ class AgentService:
             await self._check_models(spec, previous=previous, agent=agent)
             spec.to_engine(slug=agent.slug, name=agent.name).validate()
             version = await self._repo.add_version(
-                agent=agent, spec=spec.model_dump(mode="json"), created_by=user_id
+                agent=agent, spec=spec.model_dump(mode="json"), created_by=user_id, note=note
             )
         else:
             # 只改了元信息也要刷新 updated_at，列表页按它排序
@@ -246,6 +297,55 @@ class AgentService:
 
         await self._session.refresh(agent)
         return AgentDetailOut(**_summarize(agent, version).model_dump(), spec=version.spec)
+
+    # ------------------------------------------------------------------ 草稿 / 发布 / 调试预览
+
+    async def save_draft(self, agent_id: UUID, spec: AgentSpecIn) -> None:
+        """编辑器自动保存：只存，不产生版本。引用、权限与引擎规则留到发布时校验。"""
+        agent, _ = await self._require(agent_id)
+        await self._repo.save_draft(agent, spec.model_dump(mode="json"))
+
+    async def discard_draft(self, agent_id: UUID) -> None:
+        agent, _ = await self._require(agent_id)
+        await self._repo.save_draft(agent, None)
+
+    async def publish(
+        self, agent_id: UUID, *, note: str, user_id: UUID, principal: Principal | None = None
+    ) -> AgentDetailOut:
+        """草稿 → 新版本（与保存同一套校验），清掉草稿；草稿状态的智能体同时启用。
+
+        没有草稿时不写重复的版本：草稿状态的就只是启用。
+        """
+        agent, _ = await self._require(agent_id)
+        if agent.draft_spec is not None:
+            await self.update(
+                agent_id,
+                AgentUpdate(spec=AgentSpecIn.model_validate(agent.draft_spec)),
+                user_id=user_id,
+                principal=principal,
+                note=note,
+            )
+            await self._repo.save_draft(agent, None)
+        if agent.status == "draft":
+            await self.set_status(agent_id, "enabled")
+        return await self.get(agent_id, principal=principal)
+
+    async def preview_version(self, agent_id: UUID, *, user_id: UUID) -> UUID:
+        """调试预览的一轮用哪份配置：按草稿（没有就是当前版本）拍一个快照。
+
+        ★ 和发布走同一套引用解析与引擎校验：配置有误就当场 400，而不是跑到一半才失败。
+          知识库、MCP、模型的授权不在这里查 —— 运行时照常按权限判（读不到的跳过并提示）。
+        """
+        agent, current = await self._require(agent_id)
+        if agent.draft_spec is None:
+            return current.agent_version_uuid
+        previous = AgentSpecIn.model_validate(current.spec)
+        spec = await self._resolve(AgentSpecIn.model_validate(agent.draft_spec), previous=previous)
+        spec.to_engine(slug=agent.slug, name=agent.name).validate()
+        version = await self._repo.preview_version(
+            agent=agent, spec=spec.model_dump(mode="json"), created_by=user_id
+        )
+        return version.agent_version_uuid
 
     async def set_status(self, agent_id: UUID, status: str) -> AgentDetailOut:
         agent, version = await self._require(agent_id)
@@ -388,9 +488,25 @@ class AgentService:
     # ------------------------------------------------------------------ 内部
 
     async def _resolve(self, spec: AgentSpecIn, *, previous: AgentSpecIn | None) -> AgentSpecIn:
-        """钉死技能版本、记录 MCP 工具指纹（技能 / MCP 设计 §11）。"""
+        """钉死技能版本、记录 MCP 工具指纹（技能 / MCP 设计 §11）。
+
+        界面上新建的 CLI 智能体只给 cli_type：镜像、适配器用部署配置里的默认值。
+        """
         if self._settings is None:
             return spec
+        cli = spec.cli
+        if spec.kind == "cli" and cli is not None and not (cli.image and cli.adapter):
+            spec = spec.model_copy(
+                update={
+                    "cli": spec.cli.model_copy(
+                        update={
+                            "image": spec.cli.image or self._settings.cli_default_image,
+                            "adapter": spec.cli.adapter
+                            or self._settings.cli_default_adapters.get(spec.cli.cli_type, ""),
+                        }
+                    )
+                }
+            )
         return await resolve_spec_refs(
             spec, settings=self._settings, redis=self._redis, previous=previous
         )

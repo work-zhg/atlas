@@ -19,6 +19,8 @@ dependencies = [
   "alembic>=1.14",
   "pydantic-settings>=2.6",
   "httpx>=0.27",
+  # LiteLLM 对账是它的实例任务（reconcile.py）
+  "atlas-jobs",
 ]
 
 [build-system]

@@ -1,16 +1,13 @@
 "use client";
 
 /**
- * MCP 管理（原型 agent-platform/doc/prototype/mcp-gateway.html）：后端是 MCP 网关。
+ * MCP 服务列表：按「和我的关系」筛（我能用的 / 我管理的 / 全部），卡片点进详情页。
  *
- *   服务      连接原生 MCP Server，或把 REST / gRPC 接口转换成 MCP 工具。公开服务任何 Key 都能调用；
- *             私有服务按授给 API Key 的数据权限调用，可以细到工具
- *   API Key   用户 Key（本人申请，给外部客户端用）；智能体 Key（Atlas 建智能体时申请）
- *
- * MCP 管理员看到全部、能登记和改服务；服务的所有者能给 Key 授权；其他人看到公开服务和自己的 Key 能用的。
+ * ★ 公开服务谁都能用；私有服务要有人给你的 Key 授权（可以细到工具）。管理员能接入新服务。
  */
-import { Alert, App as AntdApp, Button, Drawer, Empty, Input, Modal, Radio, Segmented, Select, Table, Tabs, Tag } from "antd";
-import { useMemo, useState } from "react";
+import { Alert, App as AntdApp, Button, Empty, Input, Modal, Radio, Segmented, Skeleton, Tag } from "antd";
+import { useRouter } from "next/navigation";
+import { type ReactNode, useMemo, useState } from "react";
 
 import {
   GW_KIND,
@@ -36,204 +33,169 @@ import {
   DiscoveredTable,
   FormField,
   IdentityCheckbox,
-  KindTag,
-  VisibilityTag,
   connectionBody,
   credentialBody,
   defaultPicked,
   emptyConnection,
 } from "./McpForms";
-import { McpKeys } from "./McpKeys";
-import { ServiceDetail } from "./McpService";
 
-export function McpPage() {
+/** MCP 各页共用：先拿到「我」在网关上的身份，拿不到就整页报错 */
+export function GwGate({ children }: { children: (me: GwMe) => ReactNode }) {
   const meQ = useGwMe();
-
   if (meQ.error) {
     return (
       <div className={pageStyles.body}>
-        <Alert
-          type="error"
-          showIcon
-          message="连不上 MCP 网关"
-          description={`MCP 的管理端在 MCP 网关上（atlas-mcpgateway）：${meQ.error.message}`}
-        />
+        <Alert type="error" showIcon message="暂时连不上 MCP 服务" description={meQ.error.message} />
       </div>
     );
   }
-
-  return (
-    <div className={pageStyles.page}>
-      <header className={pageStyles.head}>
-        <div className={pageStyles.titleRow}>
-          <div>
-            <h1 className={pageStyles.title}>MCP</h1>
-            <p className={pageStyles.desc}>
-              连接原生 MCP Server，或把 REST / gRPC 接口转换成 MCP 工具，统一经 MCP 网关调用。公开服务任何 API Key
-              都能调用；私有服务按授给 Key 的权限调用，可以细到工具。模型看到的名字是 服务名__工具名。
-            </p>
-          </div>
-        </div>
-      </header>
-      <div className={pageStyles.body} style={{ paddingTop: 0 }}>
-        {meQ.data && (
-          <Tabs
-            items={[
-              { key: "services", label: "服务", children: <ServicesTab me={meQ.data} /> },
-              { key: "keys", label: "API Key", children: <McpKeys me={meQ.data} /> },
-            ]}
-          />
-        )}
+  if (!meQ.data) {
+    return (
+      <div className={pageStyles.body}>
+        <Skeleton active paragraph={{ rows: 6 }} />
       </div>
-    </div>
-  );
+    );
+  }
+  return <>{children(meQ.data)}</>;
 }
 
-// ═══════════════════════════════════════════════ 服务列表
+export function McpPage() {
+  return <GwGate>{(me) => <ServicesList me={me} />}</GwGate>;
+}
 
-/** 当前用户的权限：所有者；或他的用户 Key 能用到什么 */
+/** 当前用户的权限：所有者；或他的 Key 能用到什么 */
 export function MyAccess({ s }: { s: GwService }) {
-  if (s.my.owner) return <Tag color="gold">所有者</Tag>;
+  if (s.my.owner) return <Tag color="gold">我管理的</Tag>;
   switch (s.my.scope) {
     case "public":
-      return <span className={styles.muted}>公开</span>;
+      return <Tag color="success">可使用</Tag>;
     case "all":
-      return <Tag color="blue">我的 Key · 全部工具</Tag>;
+      return <Tag color="success">可使用</Tag>;
     case "tools":
-      return <Tag color="blue">我的 Key · {s.my.tools.length} 个工具</Tag>;
+      return <Tag color="success">可使用 {s.my.tools.length} 个工具</Tag>;
     case "no_key":
-      return <span className={styles.muted}>还没有 Key</span>;
+      return <span className={styles.muted}>先申请 Key</span>;
     default:
-      return <span className={styles.muted}>—</span>;
+      return <span className={styles.muted}>需授权</span>;
   }
 }
 
-function ServicesTab({ me }: { me: GwMe }) {
+const canUse = (s: GwService) => s.my.owner || ["public", "all", "tools"].includes(s.my.scope);
+
+type Scope = "use" | "mine" | "all";
+
+function ServicesList({ me }: { me: GwMe }) {
+  const router = useRouter();
   const servicesQ = useGwServices();
+  const [scope, setScope] = useState<Scope>("use");
   const [q, setQ] = useState("");
-  const [kind, setKind] = useState<GwKind>();
-  const [vis, setVis] = useState<GwVisibility>();
-  const [open, setOpen] = useState<string>();
   const [registering, setRegistering] = useState(false);
   const services = servicesQ.data ?? [];
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase();
     return services.filter(
       (s) =>
-        (!kind || s.kind === kind) &&
-        (!vis || s.visibility === vis) &&
+        (scope === "all" || (scope === "mine" ? s.my.owner : canUse(s))) &&
         (!needle || `${s.name} ${s.display_name} ${s.description}`.toLowerCase().includes(needle)),
     );
-  }, [services, q, kind, vis]);
+  }, [services, q, scope]);
+  const open = (name: string) => router.push(`/mcp/services/${encodeURIComponent(name)}`);
 
   return (
-    <>
-      {servicesQ.error && <Alert type="error" showIcon style={{ marginBottom: 12 }} message={servicesQ.error.message} />}
-      <div className={pageStyles.filterRow}>
-        <Input allowClear placeholder="搜索服务名、名称、描述" style={{ width: 240 }} value={q} onChange={(e) => setQ(e.target.value)} />
-        <Select
-          allowClear
-          placeholder="全部类型"
-          style={{ width: 130 }}
-          value={kind}
-          onChange={setKind}
-          options={Object.entries(GW_KIND).map(([value, k]) => ({ value, label: k.label }))}
-        />
-        <Select
-          allowClear
-          placeholder="公开和私有"
-          style={{ width: 130 }}
-          value={vis}
-          onChange={setVis}
-          options={[
-            { value: "public", label: "公开" },
-            { value: "private", label: "私有" },
-          ]}
-        />
-        <span className={styles.muted} style={{ marginLeft: "auto" }}>
-          {rows.length} 个服务
-        </span>
-        {me.can_manage && (
-          <Button type="primary" icon={<Icon name="plus" size={14} />} onClick={() => setRegistering(true)}>
-            登记服务
-          </Button>
-        )}
-      </div>
-      <Table<GwService>
-        size="middle"
-        rowKey="name"
-        loading={servicesQ.isPending}
-        dataSource={rows}
-        pagination={false}
-        onRow={(s) => ({ onClick: () => setOpen(s.name), style: { cursor: "pointer" } })}
-        locale={{
-          emptyText: (
-            <Empty
-              image={Empty.PRESENTED_IMAGE_SIMPLE}
-              description={services.length ? "没有符合条件的服务" : me.can_manage ? "还没有 MCP 服务" : "还没有你能用的 MCP 服务"}
-            />
-          ),
-        }}
-        columns={[
-          {
-            title: "服务",
-            render: (_, s) => (
-              <div>
-                <b>{s.display_name}</b>
-                <div className={styles.desc2} style={{ fontFamily: "var(--mono)" }}>
-                  {s.name}
+    <div className={pageStyles.page}>
+      <header className={pageStyles.head}>
+        <div className={pageStyles.titleRow}>
+          <h1 className={pageStyles.title}>服务</h1>
+          {me.can_manage && (
+            <Button type="primary" className={pageStyles.action} icon={<Icon name="plus" size={14} />} onClick={() => setRegistering(true)}>
+              接入服务
+            </Button>
+          )}
+        </div>
+        <div className={pageStyles.toolbar}>
+          <Segmented
+            value={scope}
+            onChange={(v) => setScope(v as Scope)}
+            options={[
+              { value: "use", label: "我能用的" },
+              { value: "mine", label: "我管理的" },
+              ...(me.can_manage ? [{ value: "all", label: "全部" }] : []),
+            ]}
+          />
+          <Input
+            allowClear
+            style={{ width: 260 }}
+            prefix={<Icon name="search" size={14} style={{ color: "var(--fg-4)" }} />}
+            placeholder="搜索服务"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+          />
+        </div>
+      </header>
+      <div className={pageStyles.body}>
+        {servicesQ.error && <Alert type="error" showIcon style={{ marginBottom: 12 }} message={servicesQ.error.message} />}
+        {servicesQ.isPending ? (
+          <Skeleton active paragraph={{ rows: 6 }} />
+        ) : rows.length === 0 ? (
+          <Empty
+            style={{ marginTop: 60 }}
+            description={q ? "没有找到，换个关键词试试" : scope === "mine" ? "你还没有管理的服务" : "还没有你能用的服务"}
+          />
+        ) : (
+          <div className={pageStyles.grid}>
+            {rows.map((s) => (
+              <div
+                key={s.name}
+                className={pageStyles.card}
+                role="button"
+                tabIndex={0}
+                onClick={() => open(s.name)}
+                onKeyDown={(e) => e.key === "Enter" && open(s.name)}
+              >
+                <div className={pageStyles.cardHead}>
+                  <span className={pageStyles.avatar} style={{ background: "#e0f2fe", color: "#0369a1" }}>
+                    <Icon name="plug" size={18} />
+                  </span>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div className={pageStyles.cardName}>
+                      {s.display_name}
+                      {s.visibility === "public" && <Tag style={{ marginInlineEnd: 0 }}>公开</Tag>}
+                      {!s.enabled && <Tag style={{ marginInlineEnd: 0 }}>已停用</Tag>}
+                    </div>
+                    <div className={pageStyles.cardSub} style={{ fontFamily: "var(--mono)" }}>
+                      {s.name}
+                    </div>
+                  </div>
+                </div>
+                <div className={pageStyles.cardDesc}>{s.description || "（没有描述）"}</div>
+                <div className={pageStyles.cardFoot}>
+                  <span>{s.active_tool_count} 个工具</span>
+                  {s.fetch_error && <Tag color="warning">工具同步失败</Tag>}
+                  <span style={{ flex: 1 }} />
+                  <MyAccess s={s} />
                 </div>
               </div>
-            ),
-          },
-          { title: "类型", width: 120, render: (_, s) => <KindTag kind={s.kind} /> },
-          { title: "可见性", width: 90, render: (_, s) => <VisibilityTag visibility={s.visibility} /> },
-          {
-            title: "工具",
-            width: 120,
-            render: (_, s) => (
-              <span>
-                {s.active_tool_count} / {s.tool_count} 可用
-              </span>
-            ),
-          },
-          {
-            title: "状态",
-            width: 160,
-            render: (_, s) => (
-              <span>
-                {s.enabled ? <Tag color="success">启用</Tag> : <Tag>已停用</Tag>}
-                {s.fetch_error && (
-                  <Tag color="warning" title={s.fetch_error}>
-                    拉取失败
-                  </Tag>
-                )}
-              </span>
-            ),
-          },
-          { title: "我的权限", width: 170, render: (_, s) => <MyAccess s={s} /> },
-        ]}
-      />
-      <Drawer open={!!open} width={1000} onClose={() => setOpen(undefined)} destroyOnClose title={null}>
-        {open && <ServiceDetail name={open} me={me} onClose={() => setOpen(undefined)} />}
-      </Drawer>
+            ))}
+          </div>
+        )}
+      </div>
       {registering && (
         <RegisterModal
           onClose={() => setRegistering(false)}
           onCreated={(name) => {
             setRegistering(false);
-            setOpen(name);
+            open(name);
           }}
         />
       )}
-    </>
+    </div>
   );
 }
 
 // ═══════════════════════════════════════════════ 登记
 
 const DISCOVER_LABEL: Record<GwKind, { button: string; hint: string; first: string }> = {
-  mcp: { button: "连接并拉取工具", hint: "调上游 initialize + tools/list", first: "请先连接并拉取工具" },
+  mcp: { button: "连接并读取工具", hint: "连上服务，读取它提供的工具", first: "请先连接并读取工具" },
   rest: { button: "解析 OpenAPI", hint: "读取接口定义，每个操作转成一个工具", first: "请先解析 OpenAPI" },
   grpc: { button: "发现方法", hint: "通过服务端反射或描述文件列出服务和方法", first: "请先发现方法" },
 };
@@ -298,11 +260,11 @@ function RegisterModal({ onClose, onCreated }: { onClose: () => void; onCreated:
 
   const submit = () => {
     if (!/^[a-z][a-z0-9-]{1,23}$/.test(name)) {
-      message.error("服务名：小写字母开头，2–24 位小写字母、数字、连字符");
+      message.error("服务标识：小写字母开头，2–24 位小写字母、数字、连字符");
       return;
     }
     if (!displayName.trim()) {
-      message.error("请填写显示名称");
+      message.error("请填写名称");
       return;
     }
     if (!manual && !found) {
@@ -325,7 +287,7 @@ function RegisterModal({ onClose, onCreated }: { onClose: () => void; onCreated:
       },
       {
         onSuccess: (d) => {
-          message.success(`已登记「${d.display_name}」，${d.tools.length} 个工具。你是它的所有者`);
+          message.success(`已接入「${d.display_name}」，${d.tools.length} 个工具`);
           onCreated(d.name);
         },
         onError: (e) => message.error(e.message),
@@ -337,13 +299,13 @@ function RegisterModal({ onClose, onCreated }: { onClose: () => void; onCreated:
     <Modal
       open
       width={880}
-      title="登记 MCP 服务"
-      okText="登记"
+      title="接入服务"
+      okText="接入"
       okButtonProps={{ loading: create.isPending }}
       onCancel={onClose}
       onOk={submit}
     >
-      <div className={styles.secTitle}>类型</div>
+      <div className={styles.secTitle}>接入方式</div>
       <Segmented
         value={kind}
         onChange={(v) => switchKind(v as GwKind)}
@@ -355,20 +317,20 @@ function RegisterModal({ onClose, onCreated }: { onClose: () => void; onCreated:
 
       <div className={styles.secTitle}>基本信息</div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-        <FormField label="服务名" hint="工具名前缀、用户中心数据标识、服务地址的一段；登记后不能改，也不能复用">
+        <FormField label="服务标识" hint="接入后不能修改">
           <Input value={name} onChange={(e) => setName(e.target.value.trim().toLowerCase())} placeholder="小写字母、数字、连字符，如 crm" />
         </FormField>
-        <FormField label="显示名称">
+        <FormField label="名称">
           <Input value={displayName} onChange={(e) => setDisplayName(e.target.value)} maxLength={100} />
         </FormField>
       </div>
       <FormField label="描述">
         <Input value={description} onChange={(e) => setDescription(e.target.value)} />
       </FormField>
-      <FormField label="可见性">
+      <FormField label="谁能用">
         <Radio.Group value={visibility} onChange={(e) => setVisibility(e.target.value)}>
-          <Radio value="private">私有：按授给 Key 的权限调用（可以细到工具）</Radio>
-          <Radio value="public">公开：任何 Key 都能用全部工具，不需要授权</Radio>
+          <Radio value="private">授权的人和智能体（可以细到工具）</Radio>
+          <Radio value="public">所有人</Radio>
         </Radio.Group>
       </FormField>
 
@@ -380,13 +342,13 @@ function RegisterModal({ onClose, onCreated }: { onClose: () => void; onCreated:
         descriptor={{ value: descriptor, onChange: setDescriptor }}
       />
 
-      <div className={styles.secTitle}>上游凭据与透传</div>
+      <div className={styles.secTitle}>认证</div>
       <CredentialFields kind={kind} value={credential} onChange={setCredential} />
       <IdentityCheckbox kind={kind} value={passIdentity} onChange={setPassIdentity} />
 
       <div className={styles.secTitle}>工具</div>
       {manual ? (
-        <div className={styles.muted}>手工添加：登记后在服务的「工具」里逐个添加接口。</div>
+        <div className={styles.muted}>接入后在服务的「工具」里逐个添加接口。</div>
       ) : (
         <>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>

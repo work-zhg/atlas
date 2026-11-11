@@ -1,82 +1,141 @@
 "use client";
 
 /** 知识库列表（doc/atlas-rag-design.html §13）。卡片 + 新建弹窗。 */
-import { App, Button, Card, Empty, Form, Input, Modal, Radio, Skeleton, Switch, Tag, Typography } from "antd";
+import { App, Button, Empty, Form, Input, Modal, Radio, Segmented, Select, Skeleton, Switch, Tag, Typography } from "antd";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { Icon } from "@/components/Icon";
+import styles from "@/features/agents/agents.module.css";
+import { relativeTime } from "@/lib/format";
 import { can, useMe } from "@/lib/session";
 
-import { type DocForm, type Permission, LEVEL_LABEL, PERMISSION_LABEL, kbApi, useDatasets, useKbMutation } from "./api";
+import {
+  type Dataset,
+  type DocForm,
+  type Permission,
+  LEVEL_LABEL,
+  PERMISSION_LABEL,
+  kbApi,
+  useDatasets,
+  useKbMutation,
+} from "./api";
+
+type Scope = "all" | "mine" | "shared";
+type Sort = "created" | "name" | "docs";
 
 export function KnowledgeListPage() {
   const { data: me } = useMe();
   const [keyword, setKeyword] = useState("");
+  const [scope, setScope] = useState<Scope>("all");
+  const [sort, setSort] = useState<Sort>("created");
   const [creating, setCreating] = useState(false);
-  const { data, isPending, error } = useDatasets(keyword || undefined);
+  const { data, isPending, error } = useDatasets();
+
+  // 和智能体列表同一套：按「和我的关系」筛，本地搜索和排序（知识库是几十的量级）
+  const list = useMemo(() => {
+    const kw = keyword.trim().toLowerCase();
+    const rows = (data?.data ?? []).filter(
+      (d) =>
+        (scope === "all" || (scope === "mine") === (d.owner_id === me?.id)) &&
+        (!kw || `${d.name} ${d.description}`.toLowerCase().includes(kw)),
+    );
+    const by: Record<Sort, (a: Dataset, b: Dataset) => number> = {
+      created: (a, b) => b.created_at.localeCompare(a.created_at),
+      name: (a, b) => a.name.localeCompare(b.name, "zh"),
+      docs: (a, b) => b.document_count - a.document_count,
+    };
+    return [...rows].sort(by[sort]);
+  }, [data, keyword, scope, sort, me?.id]);
 
   return (
-    <div style={{ flex: 1, overflow: "auto", padding: "24px 28px" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
-        <div>
-          <Typography.Title level={4} style={{ margin: 0 }}>
-            知识库
-          </Typography.Title>
-          <Typography.Text type="secondary" style={{ fontSize: 13 }}>
-            给智能体提供领域知识：上传文档，分段建索引，绑定到智能体后在对话中检索引用。
-          </Typography.Text>
-        </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <Input.Search placeholder="搜索知识库" allowClear onSearch={setKeyword} style={{ width: 220 }} />
+    <div className={styles.page}>
+      <header className={styles.head}>
+        <div className={styles.titleRow}>
+          <h1 className={styles.title}>知识库</h1>
           {can(me, "kb:create") && (
-            <Button type="primary" icon={<Icon name="plus" size={14} />} onClick={() => setCreating(true)}>
+            <Button type="primary" className={styles.action} icon={<Icon name="plus" size={14} />} onClick={() => setCreating(true)}>
               新建知识库
             </Button>
           )}
         </div>
-      </div>
+        <div className={styles.toolbar}>
+          <Segmented
+            value={scope}
+            onChange={(v) => setScope(v as Scope)}
+            options={[
+              { value: "all", label: "全部" },
+              { value: "mine", label: "我创建的" },
+              { value: "shared", label: "共享给我的" },
+            ]}
+          />
+          <Input
+            allowClear
+            style={{ width: 260 }}
+            prefix={<Icon name="search" size={14} style={{ color: "var(--fg-4)" }} />}
+            placeholder="搜索知识库"
+            value={keyword}
+            onChange={(e) => setKeyword(e.target.value)}
+          />
+          <span style={{ flex: 1 }} />
+          <Select
+            style={{ width: 120 }}
+            value={sort}
+            onChange={setSort}
+            options={[
+              { value: "created", label: "最近创建" },
+              { value: "name", label: "名称" },
+              { value: "docs", label: "文档数" },
+            ]}
+          />
+        </div>
+      </header>
 
-      {error && <Typography.Text type="danger">{(error as Error).message}</Typography.Text>}
-      {isPending ? (
-        <Skeleton active />
-      ) : !data?.data.length ? (
-        <Empty description="还没有可见的知识库" style={{ marginTop: 80 }} />
-      ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 16 }}>
-          {data.data.map((ds) => (
-            <Link key={ds.id} href={`/knowledge/${ds.id}`} style={{ color: "inherit" }}>
-              <Card hoverable size="small" style={{ height: "100%" }}>
-                <div style={{ display: "flex", gap: 12 }}>
-                  <div style={{ fontSize: 28, lineHeight: 1 }}>{ds.icon}</div>
+      <div className={styles.body}>
+        {error && <Typography.Text type="danger">{(error as Error).message}</Typography.Text>}
+        {isPending ? (
+          <Skeleton active />
+        ) : list.length === 0 ? (
+          <Empty description={keyword ? "没有找到，换个关键词试试" : "还没有知识库"} style={{ marginTop: 60 }}>
+            {!keyword && can(me, "kb:create") && (
+              <Button type="primary" onClick={() => setCreating(true)}>
+                新建知识库
+              </Button>
+            )}
+          </Empty>
+        ) : (
+          <div className={styles.grid}>
+            {list.map((ds) => (
+              <Link key={ds.id} href={`/knowledge/${ds.id}`} className={styles.card} style={{ color: "inherit" }}>
+                <div className={styles.cardHead}>
+                  <span className={styles.avatar} style={{ background: "var(--primary-soft)", fontSize: 20 }}>
+                    {ds.icon}
+                  </span>
                   <div style={{ minWidth: 0, flex: 1 }}>
-                    <div style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    <div className={styles.cardName}>
                       {ds.name}
+                      {ds.review_required && <Tag color="gold" style={{ marginInlineEnd: 0 }}>需审核</Tag>}
                     </div>
-                    <div style={{ fontSize: 12, color: "var(--fg-3)", marginTop: 2 }}>
-                      {ds.document_count} 份文档 · {ds.word_count.toLocaleString()} 字
+                    <div className={styles.cardSub}>
+                      {ds.owner_id === me?.id ? "我创建的" : ds.my_level ? LEVEL_LABEL[ds.my_level] : "共享给我的"}
                     </div>
                   </div>
                 </div>
-                <Typography.Paragraph
-                  type="secondary"
-                  ellipsis={{ rows: 2 }}
-                  style={{ fontSize: 13, margin: "10px 0 8px", minHeight: 40 }}
-                >
-                  {ds.description || "暂无描述"}
-                </Typography.Paragraph>
-                <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-                  {ds.my_level && <Tag>{LEVEL_LABEL[ds.my_level]}</Tag>}
-                  {ds.owner_kind === "service" && <Tag>服务账号的库</Tag>}
-                  <Tag>{ds.doc_form === "hierarchical_model" ? "父子分段" : "通用分段"}</Tag>
-                  {ds.review_required && <Tag color="gold">入库审核</Tag>}
+                <div className={styles.cardDesc}>{ds.description || "（没有描述）"}</div>
+                <div className={styles.cardFoot}>
+                  <Icon name="file" size={13} />
+                  <span>
+                    {ds.document_count} 份文档 · {ds.word_count.toLocaleString()} 字
+                  </span>
+                  <span style={{ flex: 1 }} />
+                  <span>创建于 {relativeTime(ds.created_at)}</span>
                 </div>
-              </Card>
-            </Link>
-          ))}
-        </div>
-      )}
+              </Link>
+            ))}
+          </div>
+        )}
+      </div>
       <CreateModal open={creating} onClose={() => setCreating(false)} />
     </div>
   );
@@ -126,26 +185,26 @@ function CreateModal({ open, onClose }: { open: boolean; onClose: () => void }) 
         <Form.Item
           name="description"
           label="描述"
-          extra="说明这个库里有什么。多知识库路由时模型据此判断该查哪个库。"
+          extra="智能体会根据描述判断什么时候来这里查"
         >
           <Input.TextArea rows={2} maxLength={2000} />
         </Form.Item>
-        <Form.Item name="doc_form" label="分段结构" extra="已有文档后不能更改。">
+        <Form.Item name="doc_form" label="引用方式" extra="上传文档后不能再改">
           <Radio.Group>
-            <Radio value="text_model">通用：按规则切成段，每段建索引</Radio>
-            <Radio value="hierarchical_model">父子：小块匹配、返回所在大块</Radio>
+            <Radio value="text_model">按段落引用（适合大多数文档）</Radio>
+            <Radio value="hierarchical_model">按章节引用（适合长文档，上下文更完整）</Radio>
           </Radio.Group>
         </Form.Item>
-        <Form.Item name="permission" label="初始共享" extra="之后可在知识库「设置 → 共享」里按人 / 部门调整。">
+        <Form.Item name="permission" label="谁能用" extra="之后可以在知识库的「共享」里调整">
           <Radio.Group
             options={(["only_me", "all_team"] as Permission[]).map((v) => ({ value: v, label: PERMISSION_LABEL[v] }))}
           />
         </Form.Item>
         <Form.Item
           name="review_required"
-          label="入库审核"
+          label="新文档审核后才能被查到"
           valuePropName="checked"
-          extra="开启后，新文档审核通过才能被检索。绑定给智能体使用的库建议开启。"
+          extra="适合给客户用的知识库，避免未经确认的内容被引用"
         >
           <Switch />
         </Form.Item>

@@ -32,6 +32,8 @@ __all__ = ["AccountConflict", "SandboxAccountRepository", "forget_cached"]
 
 #: (biz_type, biz_id) → (过期的 monotonic 时刻, 沙箱或 None)
 _CACHE: dict[tuple[str, UUID], tuple[float, UserSandbox | None]] = {}
+#: (人, biz_type) → (过期的 monotonic 时刻, 这个人服务这类业务的、已就绪的沙箱)
+_USER_CACHE: dict[tuple[UUID, str], tuple[float, UserSandbox | None]] = {}
 
 
 class AccountConflict(RuntimeError):
@@ -41,6 +43,7 @@ class AccountConflict(RuntimeError):
 def forget_cached(*bizs: BizRef) -> None:
     for biz in bizs:
         _CACHE.pop((biz.biz_type.value, biz.biz_id), None)
+        _USER_CACHE.pop((biz.user_uuid, biz.biz_type.value), None)
 
 
 class SandboxAccountRepository:
@@ -110,6 +113,7 @@ class SandboxAccountRepository:
                         status=sb.status.value,
                         ready_at=sb.ready_at,
                         created_at=sb.created_at,
+                        share_key=sb.share_key,
                     )
                 )
             elif row.status != sb.status.value or row.ready_at != sb.ready_at:
@@ -136,7 +140,11 @@ class SandboxAccountRepository:
                 if key not in bound:
                     self._session.add(
                         SandboxBindingRow(
-                            sandbox_uuid=key[0], biz_type=key[1], biz_id=key[2], bound_at=b.bound_at
+                            sandbox_uuid=key[0],
+                            biz_type=key[1],
+                            biz_id=key[2],
+                            bound_at=b.bound_at,
+                            slot=b.slot,
                         )
                     )
         try:
@@ -168,6 +176,26 @@ class SandboxAccountRepository:
         _CACHE[key] = (now + self._cache_s, found)
         return found
 
+    async def ready_of_user(self, user_uuid: UUID, biz_type: BizType) -> UserSandbox | None:
+        """这个人名下、服务着这类业务的一个已就绪的沙箱（最早建的）。热路径：同 by_biz 缓存。"""
+        key = (user_uuid, biz_type.value)
+        now = time.monotonic()
+        if (hit := _USER_CACHE.get(key)) is not None and hit[0] > now:
+            return hit[1]
+        found = next(
+            (
+                sb
+                for sb in await self._sandboxes(
+                    UserSandboxRow.user_uuid == user_uuid,
+                    UserSandboxRow.status == SandboxStatus.READY.value,
+                )
+                if any(b.biz.biz_type is biz_type for b in sb.bindings)
+            ),
+            None,
+        )
+        _USER_CACHE[key] = (now + self._cache_s, found)
+        return found
+
     async def describe(self, sandbox_uuid: UUID) -> UserSandbox | None:
         sandboxes = await self._sandboxes(UserSandboxRow.sandbox_uuid == sandbox_uuid)
         return sandboxes[0] if sandboxes else None
@@ -189,7 +217,7 @@ class SandboxAccountRepository:
         out = []
         for binding, sb in rows.all():
             biz = BizRef(BizType(binding.biz_type), binding.biz_id, sb.user_uuid)
-            out.append((biz, _sandbox(sb, [SandboxBinding(biz, binding.bound_at)])))
+            out.append((biz, _sandbox(sb, [SandboxBinding(biz, binding.bound_at, binding.slot)])))
         return out
 
     async def retiring(self) -> builtins.list[UserSandbox]:
@@ -219,7 +247,7 @@ class SandboxAccountRepository:
             .order_by(SandboxBindingRow.id)
         ):
             biz = BizRef(BizType(b.biz_type), b.biz_id, owners[b.sandbox_uuid])
-            bindings[b.sandbox_uuid].append(SandboxBinding(biz, b.bound_at))
+            bindings[b.sandbox_uuid].append(SandboxBinding(biz, b.bound_at, b.slot))
         return [_sandbox(r, bindings[r.sandbox_uuid]) for r in rows]
 
 
@@ -233,4 +261,5 @@ def _sandbox(row: UserSandboxRow, bindings: builtins.list[SandboxBinding]) -> Us
         bindings=bindings,
         created_at=row.created_at,
         ready_at=row.ready_at,
+        share_key=row.share_key,
     )

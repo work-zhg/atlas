@@ -15,6 +15,7 @@ from ...auth.authz import PrincipalDep, ensure_thread_owner
 from ...auth.dependency import uc_client
 from ...db.models import Agent, Thread
 from ...deps import (
+    AgentServiceDep,
     ExecutorDep,
     RedisDep,
     RunServiceDep,
@@ -22,9 +23,14 @@ from ...deps import (
     SettingsDep,
     ThreadServiceDep,
 )
+from ...errors import NotFound
+from ...repositories.feedback import FeedbackRepository
 from ...repositories.thread import ThreadRepository
 from ...schemas.run import RunAccepted, RunCreate
 from ...schemas.thread import (
+    FeedbackIn,
+    FeedbackListOut,
+    FeedbackOut,
     MessageListOut,
     PreviewSessionOut,
     SandboxExecIn,
@@ -235,6 +241,7 @@ async def create_run(
     payload: RunCreate,
     request: Request,
     service: RunServiceDep,
+    agents: AgentServiceDep,
     session: SessionDep,
     principal: PrincipalDep,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
@@ -254,6 +261,11 @@ async def create_run(
     )
     if agent is not None:
         await AgentAccess(uc_client(request)).require_use(principal, agent)
+    # 调试预览的会话：这一轮按草稿运行（拍一个快照，run 指向它）。只有能编辑的人建得出这种会话
+    version_id = None
+    preview = await session.scalar(select(Thread.status).where(Thread.thread_uuid == thread_id))
+    if preview == "preview" and agent is not None:
+        version_id = await agents.preview_version(agent.agent_uuid, user_id=principal.uid)
     # 幂等键按使用者隔离：否则别人用同一个键能拿到这个 run
     key = f"{principal.uid}:{idempotency_key}" if idempotency_key else None
     return await service.create(
@@ -262,6 +274,7 @@ async def create_run(
         idempotency_key=key,
         initiator=principal.uid,
         auth_uid=principal.auth_uid,
+        agent_version_id=version_id,
     )
 
 
@@ -320,3 +333,61 @@ async def list_messages(
     """倒序分页，返回**完整原文** —— 上下文压缩只改写 checkpoint（§7.4）。"""
     await ensure_thread_owner(session, thread_id, principal)
     return await service.list_messages(thread_id, cursor=cursor, limit=limit)
+
+
+# ───────────────────────────────────────────── 回答反馈
+
+
+@router.get("/{thread_id}/feedback", response_model=FeedbackListOut)
+async def list_feedback(
+    thread_id: UUID, session: SessionDep, principal: PrincipalDep
+) -> FeedbackListOut:
+    """我对这条会话里各条回答的反馈：刷新后按钮仍显示我点过的那个。"""
+    await ensure_thread_owner(session, thread_id, principal)
+    rows = await FeedbackRepository(session).of_thread(thread_id, user_id=principal.uid)
+    return FeedbackListOut(
+        data=[
+            FeedbackOut(
+                message_id=r.message_uuid, rating=r.rating, reasons=r.reasons, comment=r.comment
+            )
+            for r in rows
+        ]
+    )
+
+
+@router.put("/{thread_id}/messages/{message_id}/feedback", response_model=FeedbackOut)
+async def put_feedback(
+    thread_id: UUID,
+    message_id: UUID,
+    payload: FeedbackIn,
+    session: SessionDep,
+    principal: PrincipalDep,
+) -> FeedbackOut:
+    """有帮助 / 没帮助。再点一次就是改（一个人对一条回答只有一条）。"""
+    await ensure_thread_owner(session, thread_id, principal)
+    repo = FeedbackRepository(session)
+    message = await repo.assistant_message(thread_id, message_id)
+    if message is None:
+        raise NotFound("这条回答不存在", message_id=str(message_id))
+    row = await repo.upsert(
+        message,
+        user_id=principal.uid,
+        rating=payload.rating,
+        reasons=payload.reasons,
+        comment=payload.comment,
+    )
+    return FeedbackOut(
+        message_id=row.message_uuid, rating=row.rating, reasons=row.reasons, comment=row.comment
+    )
+
+
+@router.delete(
+    "/{thread_id}/messages/{message_id}/feedback", status_code=status.HTTP_204_NO_CONTENT
+)
+async def delete_feedback(
+    thread_id: UUID, message_id: UUID, session: SessionDep, principal: PrincipalDep
+) -> Response:
+    """撤回反馈（再点一次已选中的按钮）。"""
+    await ensure_thread_owner(session, thread_id, principal)
+    await FeedbackRepository(session).remove(message_id, user_id=principal.uid)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

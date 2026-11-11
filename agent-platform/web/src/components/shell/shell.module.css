@@ -1,0 +1,338 @@
+/* 控制台骨架：顶部一级菜单（平台）+ 左侧二级菜单（可收缩）+ 内容区 */
+
+.app {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ---------- 顶栏 ---------- */
+.top {
+  height: var(--top-h);
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 0 16px 0 14px;
+  background: var(--bg-app);
+  border-bottom: 1px solid var(--line);
+  position: relative;
+  z-index: 20;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--fg);
+  text-decoration: none;
+}
+
+.logo {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #6366f1, #0ea5e9);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  font-size: 14px;
+}
+
+.platforms {
+  display: flex;
+  gap: 2px;
+  height: 100%;
+}
+
+.platform {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 14px;
+  color: var(--fg-2);
+  font-weight: 550;
+  position: relative;
+  text-decoration: none;
+}
+
+.platform:hover {
+  color: var(--fg);
+  background: var(--bg-2);
+}
+
+.platform[aria-current="page"] {
+  color: var(--primary-text);
+}
+
+.platform[aria-current="page"]::after {
+  content: "";
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: -1px;
+  height: 2px;
+  background: var(--primary);
+  border-radius: 2px;
+}
+
+.topRight {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.me {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: none;
+  background: var(--primary);
+  color: #fff;
+  font-size: 12.5px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+/* ---------- 左侧 ---------- */
+.body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.sider {
+  width: var(--sider-w);
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-side);
+  border-right: 1px solid var(--line);
+  transition: width 0.18s ease;
+  overflow: hidden;
+}
+
+.siderMin {
+  width: var(--sider-w-min);
+}
+
+.siderTop {
+  padding: 12px 10px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.newChat {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 38px;
+  margin-bottom: 8px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--bg-1);
+  color: var(--fg);
+  font-weight: 600;
+  box-shadow: var(--shadow-xs);
+  white-space: nowrap;
+  text-decoration: none;
+}
+
+.newChat:hover {
+  background: var(--bg-2);
+  border-color: var(--line-2);
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 36px;
+  padding: 0 10px;
+  border-radius: var(--r-md);
+  color: var(--fg-2);
+  font-weight: 520;
+  white-space: nowrap;
+  text-decoration: none;
+  border: none;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+  width: 100%;
+}
+
+.item:hover {
+  background: var(--bg-2);
+  color: var(--fg);
+}
+
+.item[aria-current="page"] {
+  background: var(--primary-soft);
+  color: var(--primary-text);
+  font-weight: 600;
+}
+
+.siderMin .item,
+.siderMin .newChat {
+  justify-content: center;
+  padding: 0;
+}
+
+.siderMin .label,
+.siderMin .badge {
+  display: none;
+}
+
+.badge {
+  margin-left: auto;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 650;
+  display: inline-grid;
+  place-items: center;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.siderFoot {
+  border-top: 1px solid var(--line);
+  padding: 8px 10px;
+}
+
+.main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+/* 普通页面：内容区自己滚动、居中、留白 */
+.page {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+}
+
+/* ---------- 最近对话（智能平台的左侧） ---------- */
+.hist {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 10px 10px;
+  border-top: 1px solid var(--line);
+  margin-top: 6px;
+}
+
+.histHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 6px 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-3);
+}
+
+.histGroup {
+  font-size: 11.5px;
+  color: var(--fg-4);
+  padding: 10px 8px 4px;
+}
+
+.histItem {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 4px 0 10px;
+  border-radius: var(--r-md);
+  color: var(--fg-2);
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.histItem:hover {
+  background: var(--bg-2);
+}
+
+.histItem[aria-current="page"] {
+  background: var(--bg-3);
+  color: var(--fg);
+  font-weight: 550;
+}
+
+.histTitle {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13.5px;
+}
+
+.histMore {
+  opacity: 0;
+}
+
+.histItem:hover .histMore,
+.histItem[aria-current="page"] .histMore {
+  opacity: 1;
+}
+
+.histTag {
+  font-size: 11px;
+  color: var(--fg-3);
+  background: var(--bg-3);
+  border-radius: 4px;
+  padding: 0 4px;
+  flex: none;
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.dotRun {
+  background: var(--success);
+  box-shadow: 0 0 0 3px var(--success-soft);
+}
+
+.dotWait {
+  background: var(--warning);
+  box-shadow: 0 0 0 3px var(--warning-soft);
+}
+
+.iconBtn {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--fg-3);
+  display: inline-grid;
+  place-items: center;
+  cursor: pointer;
+  flex: none;
+}
+
+.iconBtn:hover {
+  background: var(--bg-3);
+  color: var(--fg);
+}

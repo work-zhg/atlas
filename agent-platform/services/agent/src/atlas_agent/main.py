@@ -16,6 +16,7 @@ from starlette.requests import Request
 
 from .api.v1 import router as v1_router
 from .api.v1.configs import config_router
+from .api.v1.jobs import jobs_router
 from .api.v1.previews import install_log_mask
 from .auth.service import listen_invalidations
 from .auth.uc import UCClient
@@ -101,7 +102,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 兜底与续租是定时任务库的实例任务（design-run-dispatch.html）：满了没接的、发版交出来的、
     # 崩溃后租约过期的、续跑信号丢了的 run 都由兜底任务接走。★ 停机时先交接、再停它 ——
     # 交接期间在跑的 run 还要续租
-    jobs = JobScheduler()
+    jobs: JobScheduler = app.state.jobs
     register_jobs(jobs, executor, settings)
     jobs.start()
 
@@ -190,6 +191,9 @@ def create_app() -> FastAPI:
     # 运行期配置（每人沙箱配额、镜像白名单）的管理接口；lifespan 里登记 key
     app.state.runtime_config = RuntimeConfig(settings, get_sessionmaker())
     app.include_router(config_router(app.state.runtime_config.config))
+    # 定时任务（兜底、续租）的只读管理接口；lifespan 里注册任务并启动
+    app.state.jobs = JobScheduler()
+    app.include_router(jobs_router(app.state.jobs))
 
     # ★ SSE 并发闸门。会话流的寿命是「用户开着这个会话多久」，而不是「一轮
     #   多久」—— 每条占一个 Redis 连接，不设限的表现是**所有** HTTP 请求一起

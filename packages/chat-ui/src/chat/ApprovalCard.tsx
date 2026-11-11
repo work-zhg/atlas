@@ -7,6 +7,7 @@ import { useApprovalStillPending, useDecideApproval } from "../api/runs";
 import { Markdown } from "../components/Markdown";
 import { APPROVAL_MODE_LABEL, type ApprovalMode } from "../lib/events";
 import { ApiError } from "../lib/http";
+import { toolLabel } from "../lib/steps";
 import type { PendingApproval } from "../lib/run-reducer";
 import styles from "./chat.module.css";
 
@@ -90,7 +91,7 @@ export function ApprovalCard({ approval, waiting }: Props) {
     <div className={`${styles.approval} ${canDecide ? styles.approvalActive : ""}`}>
       <div className={styles.approvalHead}>
         <span className={styles.saName}>{isPlan ? "计划待批准" : "需要你确认"}</span>
-        {!isPlan && <code className={styles.toolName}>{approval.toolName}</code>}
+        {!isPlan && <span style={{ color: "var(--fg-2)" }}>{toolLabel(approval.toolName)}</span>}
         <Tag color={status.color} style={{ marginInlineEnd: 0, marginLeft: "auto" }}>
           {status.label}
         </Tag>

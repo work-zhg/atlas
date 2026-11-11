@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-# 给评测档沙箱接上出网代理（26-bench-egress.yaml）：起 gost，把代理地址交给 atlas-server。
+# 服务器的出网代理（26-bench-egress.yaml）：起 gost，把代理地址交给评测档沙箱（atlas-server）
+# 和 LiteLLM（调 Gemini 等境外模型）。
 #
 #   deploy/server/bench-egress.sh          装 / 更新（口令已有就沿用）
-#   deploy/server/bench-egress.sh off      撤掉（atlas-server 下次启动时评测档就不带代理了）
+#   deploy/server/bench-egress.sh off      撤掉（评测档沙箱、LiteLLM 重启后都不带代理）
 #
 # 前置：已经 OPENSANDBOX_BENCH=1 部署了评测档；镜像 gogost/gost 已导入
 #   （deploy/server/images.sh pull docker.io/gogost/gost:3.3.2）。
 # ★ 代理地址进 Secret atlas-sandbox-bench-proxy（30-server.yaml 里 optional），不放进 atlas-opensandbox：
 #   opensandbox.sh 每次会整份重建那个 Secret。改完要重启 atlas-server（env 只在启动时读）。
+# ★ LiteLLM 的代理地址单独一个 Secret atlas-litellm-egress（39-litellm.yaml 里 optional）。
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
@@ -17,10 +19,10 @@ export KUBECONFIG="${ATLAS_KUBECONFIG:-$HOME/.kube/atlas-${SERVER_IP}.yaml}"
 export NO_PROXY="${NO_PROXY:+${NO_PROXY},}${SERVER_IP}" no_proxy="${no_proxy:+${no_proxy},}${SERVER_IP}"
 
 if [ "${1:-}" = "off" ]; then
-  kubectl -n atlas-system delete secret atlas-sandbox-bench-proxy --ignore-not-found
+  kubectl -n atlas-system delete secret atlas-sandbox-bench-proxy atlas-litellm-egress --ignore-not-found
   kubectl -n atlas-infra delete -f deploy/server/26-bench-egress.yaml --ignore-not-found
   kubectl -n atlas-infra delete secret bench-egress --ignore-not-found
-  kubectl -n atlas-system rollout restart deploy/atlas-server
+  kubectl -n atlas-system rollout restart deploy/atlas-server deploy/atlas-litellm
   exit 0
 fi
 
@@ -32,10 +34,13 @@ kubectl -n atlas-infra create secret generic bench-egress --from-literal=passwor
 kubectl apply -f deploy/server/26-bench-egress.yaml
 kubectl -n atlas-infra rollout status deploy/bench-egress --timeout=180s
 
-# 沙箱经节点 IP 连它（hostNetwork）
-kubectl -n atlas-system create secret generic atlas-sandbox-bench-proxy \
-  --from-literal=url="http://bench:${password}@${SERVER_IP}:28118" \
-  --dry-run=client -o yaml | kubectl apply -f -
-kubectl -n atlas-system rollout restart deploy/atlas-server
+# 沙箱、LiteLLM 经节点 IP 连它（hostNetwork）
+for secret in atlas-sandbox-bench-proxy atlas-litellm-egress; do
+  kubectl -n atlas-system create secret generic "$secret" \
+    --from-literal=url="http://bench:${password}@${SERVER_IP}:28118" \
+    --dry-run=client -o yaml | kubectl apply -f -
+done
+kubectl -n atlas-system rollout restart deploy/atlas-server deploy/atlas-litellm
 kubectl -n atlas-system rollout status deploy/atlas-server --timeout=300s
-echo "✓ 评测档沙箱出网经 ${SERVER_IP}:28118（新建的沙箱才带上；已在跑的要等回收后重建）"
+kubectl -n atlas-system rollout status deploy/atlas-litellm --timeout=600s
+echo "✓ 评测档沙箱、LiteLLM 出网经 ${SERVER_IP}:28118（新建的沙箱才带上；已在跑的要等回收后重建）"

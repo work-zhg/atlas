@@ -11,7 +11,7 @@ import { atlasTheme } from "../theme/antd";
 
 export function AtlasChatTheme({ children, style }: { children: ReactNode; style?: CSSProperties }) {
   return (
-    <ConfigProvider theme={atlasTheme}>
+    <ConfigProvider theme={atlasTheme} button={{ autoInsertSpace: false }}>
       <div
         className="atlas-chat-root"
         style={{

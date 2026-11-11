@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal
 
@@ -48,11 +49,15 @@ class ExecdRejected(RuntimeError):
 
 @dataclass(frozen=True)
 class CommandSpec:
-    """要执行的命令。timeout_s 为 None 表示不限时（不设运行上限）。"""
+    """要执行的命令。timeout_s 为 None 表示不限时（不设运行上限）。
+
+    env 叠在沙箱的环境变量之上，只给这一条命令（如每个会话的 bridge 各自的配置）。
+    """
 
     command: str
     cwd: str
     timeout_s: int | None = None
+    env: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

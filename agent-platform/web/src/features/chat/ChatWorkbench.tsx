@@ -1,42 +1,39 @@
 "use client";
 
-import { Alert, Button, Empty, Modal, Select } from "antd";
+/**
+ * 对话页：对话区占满（会话列表在左侧菜单的「最近对话」里，文件是按需打开的抽屉）。
+ *
+ * 对话本身（消息流、发送、取消、实时轨迹）在共享组件 ThreadConversation 里；这里只放
+ * Atlas 自己的东西：头部的文件 / 上下文 / 更多、发送前上传文件、回答反馈。
+ */
+import { App as AntdApp, Button, Dropdown, Input, Modal } from "antd";
 import { useRouter } from "next/navigation";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useState } from "react";
 
-import styles from "@atlas/chat-ui/src/chat/chat.module.css";
-import { ThreadConversation, type ConversationStreamState } from "@atlas/chat-ui/src/chat/ThreadConversation";
-import { useAgents } from "@/api/agents";
-import { useCreateThread, useThread, useThreads } from "@/api/threads";
+import { uploadThreadFile, useDeleteThread, useRenameThread, useThread } from "@/api/threads";
 import { Icon } from "@/components/Icon";
 import { BackfillNotice } from "@/features/memory/BackfillNotice";
-import { appName, ThreadList } from "./ThreadList";
+import { ThreadConversation, type ConversationStreamState } from "@atlas/chat-ui/src/chat/ThreadConversation";
 import type { ContextUsageData } from "@atlas/chat-ui/src/lib/events";
 
 import { ContextMeter } from "./ContextMeter";
-import { FilesPanel } from "./FilesPanel";
+import { FilesDrawer, useFileCount } from "./FilesPanel";
+import { appName } from "./threadState";
 
-export function ChatWorkbench({ threadId }: { threadId?: string }) {
+export function ChatWorkbench({ threadId }: { threadId: string }) {
   const router = useRouter();
-  const [newOpen, setNewOpen] = useState(false);
-  const [pickedAgent, setPickedAgent] = useState<string>();
-
-  const threadsQ = useThreads();
-  const threads = useMemo(
-    () => threadsQ.data?.pages.flatMap((p) => p.data) ?? [],
-    [threadsQ.data],
-  );
-
+  const { message, modal } = AntdApp.useApp();
   const threadQ = useThread(threadId);
-  const agentsQ = useAgents({ status: "enabled" });
-  const createThread = useCreateThread();
+  const rename = useRenameThread(threadId);
+  const del = useDeleteThread();
+  const [filesOpen, setFilesOpen] = useState(false);
+  const [renaming, setRenaming] = useState<string | null>(null);
 
-  // 对话区（消息流、发送、取消、实时轨迹）在共享组件里；这里只拿流状态给文件面板联动
-  const [live, setLive] = useState<{
-    running: boolean;
-    filesWritten: number;
-    usage?: ContextUsageData;
-  }>({ running: false, filesWritten: 0 });
+  // 流状态给文件抽屉、上下文用量联动
+  const [live, setLive] = useState<{ running: boolean; filesWritten: number; usage?: ContextUsageData }>({
+    running: false,
+    filesWritten: 0,
+  });
   const onStreamState = useCallback((s: ConversationStreamState) => {
     const usage = s.state?.contextUsage;
     setLive((prev) =>
@@ -45,134 +42,96 @@ export function ChatWorkbench({ threadId }: { threadId?: string }) {
         : { running: s.running, filesWritten: s.filesWritten, usage },
     );
   }, []);
+  const fileCount = useFileCount(threadId, live.running);
 
-  const handleNewThread = () => {
-    if (!pickedAgent) return;
-    createThread.mutate(
-      // title 传空串 = 用后端默认值。openapi-typescript 把「有 default 的字段」
-      // 一律生成为必填（对响应成立，对请求不成立），所以这里必须显式给。
-      // 空标题的会话由 §8 的标题生成填充（P5）。
-      { agent_id: pickedAgent, title: "" },
-      {
-        onSuccess: (t) => {
-          setNewOpen(false);
-          router.push(`/chat/${t.id}`);
-        },
-      },
-    );
-  };
+  const thread = threadQ.data;
+  const upload = useCallback((file: File) => uploadThreadFile(threadId, file), [threadId]);
 
-  const agent = threadQ.data;
+  const remove = () =>
+    modal.confirm({
+      title: "删除这个对话？",
+      content: "对话记录和它的文件会一起删除，不能恢复。",
+      okText: "删除",
+      okButtonProps: { danger: true },
+      cancelText: "取消",
+      onOk: () =>
+        del.mutateAsync(threadId).then(
+          () => router.push("/"),
+          (e: Error) => {
+            message.error(`没有删除成功：${e.message}`);
+          },
+        ),
+    });
 
   return (
-    <div className={styles.screen}>
-      <ThreadList
-        threads={threads}
-        activeId={threadId}
-        loading={threadsQ.isPending}
-        hasMore={Boolean(threadsQ.hasNextPage)}
-        loadingMore={threadsQ.isFetchingNextPage}
-        onSelect={(id) => router.push(`/chat/${id}`)}
-        onNew={() => {
-          setPickedAgent(agentsQ.data?.data[0]?.id);
-          setNewOpen(true);
-        }}
-        onLoadMore={() => void threadsQ.fetchNextPage()}
+    <>
+      <ThreadConversation
+        key={threadId}
+        threadId={threadId}
+        onStreamState={onStreamState}
+        onAgentClick={(id) => router.push(`/agents/${id}`)}
+        uploadFile={upload}
+        feedback
+        regenerate
+        // 业务应用建的会话只读：续聊要回到那个应用，不能绕过它的流程状态（内网身份传递 §7.3）
+        readOnly={!!thread?.source_app}
+        readOnlyHint={
+          thread?.source_app &&
+          `这个对话来自 ${appName(thread.source_app)}，请回到 ${appName(thread.source_app)} 里继续`
+        }
+        // 会话后补记写了什么，下次见到用户时告诉他（doc/memory-design.html §4.3）
+        notice={<BackfillNotice linkToPage />}
+        headerExtra={
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <ContextMeter threadId={threadId} live={live.usage} running={live.running} minPercent={60} />
+            <Button size="small" type="text" icon={<Icon name="folder" size={15} />} onClick={() => setFilesOpen(true)}>
+              文件{fileCount > 0 && <span style={{ color: "var(--fg-3)" }}> {fileCount}</span>}
+            </Button>
+            <Dropdown
+              trigger={["click"]}
+              placement="bottomRight"
+              menu={{
+                items: [
+                  { key: "rename", icon: <Icon name="pencil" size={14} />, label: "重命名" },
+                  { type: "divider" },
+                  { key: "delete", icon: <Icon name="trash" size={14} />, label: "删除", danger: true },
+                ],
+                onClick: ({ key }) => {
+                  if (key === "rename") setRenaming(thread?.title ?? "");
+                  if (key === "delete") remove();
+                },
+              }}
+            >
+              <Button size="small" type="text" icon={<Icon name="more" size={16} />} aria-label="更多" />
+            </Dropdown>
+          </span>
+        }
       />
 
-      {threadId ? (
-        <ThreadConversation
-          key={threadId}
-          threadId={threadId}
-          onStreamState={onStreamState}
-          // 业务应用建的会话只读：续聊要回到那个应用，不能绕过它的流程状态（内网身份传递 §7.3）
-          readOnly={!!agent?.source_app}
-          readOnlyHint={
-            agent?.source_app && `这个会话来自 ${appName(agent.source_app)}，请回到 ${appName(agent.source_app)} 里继续`
-          }
-          // 会话后补记写了什么，下次见到用户时告诉他（doc/memory-design.html §4.3）
-          notice={<BackfillNotice linkToPage />}
-          headerExtra={
-            agent && (
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-              <ContextMeter threadId={threadId} live={live.usage} running={live.running} />
-              <Button
-                size="small"
-                type="text"
-                icon={<Icon name="cog" size={14} />}
-                onClick={() => router.push(`/agents/${agent.agent_id}`)}
-              >
-                智能体配置
-              </Button>
-              </span>
-            )
-          }
-        />
-      ) : (
-        <section className={`${styles.pane} ${styles.chat}`} aria-label="对话">
-          <header className={`${styles.paneHead} ${styles.chatHead}`}>
-            <span style={{ color: "var(--fg-3)", fontSize: 13 }}>未选择会话</span>
-          </header>
-          <div style={{ flex: 1, display: "grid", placeItems: "center", alignContent: "center" }}>
-            <div style={{ maxWidth: 560, width: "100%" }}>
-              <BackfillNotice linkToPage />
-            </div>
-            <Empty description="选择左侧会话，或新建一个">
-              <Button type="primary" icon={<Icon name="plus" size={14} />} onClick={() => setNewOpen(true)}>
-                新建会话
-              </Button>
-            </Empty>
-          </div>
-        </section>
-      )}
-
-      <FilesPanel threadId={threadId} running={live.running} writtenCount={live.filesWritten} />
+      <FilesDrawer
+        threadId={threadId}
+        running={live.running}
+        writtenCount={live.filesWritten}
+        open={filesOpen}
+        onClose={() => setFilesOpen(false)}
+      />
 
       <Modal
-        open={newOpen}
-        title="新建会话"
-        okText="创建"
+        open={renaming !== null}
+        title="重命名对话"
+        okText="保存"
         cancelText="取消"
-        confirmLoading={createThread.isPending}
-        onOk={handleNewThread}
-        onCancel={() => setNewOpen(false)}
+        confirmLoading={rename.isPending}
+        onCancel={() => setRenaming(null)}
+        onOk={() =>
+          rename.mutate((renaming ?? "").trim() || (thread?.title ?? ""), {
+            onSuccess: () => setRenaming(null),
+            onError: (e) => message.error(`没有保存成功：${e.message}`),
+          })
+        }
       >
-        <p style={{ color: "var(--fg-2)", fontSize: 13 }}>选择这个会话使用的智能体：</p>
-        <Select
-          style={{ width: "100%" }}
-          value={pickedAgent}
-          onChange={setPickedAgent}
-          loading={agentsQ.isPending}
-          placeholder="选择智能体"
-          options={(agentsQ.data?.data ?? []).map((a) => ({
-            value: a.id,
-            label: `${a.name} · ${a.model}`,
-          }))}
-        />
-        {/* ★ 只有已启用的智能体能开会话。一个都没有时必须说清楚是"草稿还没启用"，
-            而不是丢一个空下拉 —— 那会让人以为是加载失败。 */}
-        {!agentsQ.isPending && (agentsQ.data?.data.length ?? 0) === 0 && (
-          <Alert
-            style={{ marginTop: 12 }}
-            type="info"
-            showIcon
-            message="还没有已启用的智能体"
-            description="新建的智能体默认是草稿态，需要在智能体页面点「启用」后才能开会话。"
-            action={
-              <Button
-                size="small"
-                type="link"
-                onClick={() => {
-                  setNewOpen(false);
-                  router.push("/agents");
-                }}
-              >
-                去启用
-              </Button>
-            }
-          />
-        )}
+        <Input value={renaming ?? ""} onChange={(e) => setRenaming(e.target.value)} maxLength={200} autoFocus />
       </Modal>
-    </div>
+    </>
   );
 }

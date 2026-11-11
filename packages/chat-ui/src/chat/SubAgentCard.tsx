@@ -1,10 +1,11 @@
 "use client";
 
-import { Tag } from "antd";
+import { Alert, Tag } from "antd";
+import type { ReactNode } from "react";
 
 import { Icon } from "../components/Icon";
 import { durationMs } from "../lib/format";
-import type { SubagentRun } from "../lib/run-reducer";
+import type { RunState, SubagentRun } from "../lib/run-reducer";
 import { avatarBackground, avatarLetter } from "../lib/avatar";
 import styles from "./chat.module.css";
 
@@ -15,24 +16,28 @@ const STATUS: Record<SubagentRun["status"], { color: string; label: string }> = 
 };
 
 /**
- * 子智能体委派块。
+ * 子智能体委派块：任务书 → 过程 → 结果。
  *
- * ★ 原型里画的是「步骤列表」，这里换成「任务 + 返回结果」——
- *   不是偷懒：LangGraph 子图的命名空间是 `tools:<task id>`，与主 agent 那次
- *   task 调用的 tool_call_id **没有可靠映射**，而内核鼓励并发委派
- *   多个子智能体。按到达顺序猜关联在并发时会串到别人的卡片上，
- *   宁可不显示也不能显示错的。详见 docs/trace-event.md。
- *
- * ★ 上面那段论证针对的是**图内子图**的实现方式，它已经不存在了 ——
- *   子智能体现在跑在自己的子 run 里（doc/detail/subagent.html）。
- *   `depth` 的语义随之改成「run 在委派树里的深度」：子 run 产出的事件带
- *   depth=1，与 tool_call_id 无关，因此配对是可靠的。
- *
- *   步骤列表因此重新可做，但要等 thread 级事件流上线（前端目前只订阅父 run
- *   那一条流，看不到子 run 的过程）—— 见 doc/detail/suspension.html §04。
+ * ★ 过程是子 run 自己的时间线（children，由调用方渲染）：它说的话、工具、待办、
+ *   技能提示、审批、它再委派的 SubAgent，与主对话同样呈现。卡片与子 run 的对应来自
+ *   父 run 的 run.suspended（waiting_on 里 tool_call_id → 子 run id），并发委派也不会串。
+ * ★ 子 run 说过话就不再单列「返回结果」：结论就是它最后那段话
+ *   （server 的 format_subagent_result），再贴一遍只是重复。没说话时
+ *   （没给结论、或 acp 子 run 的历史轮次 —— delta 不归档）还靠结果。
  */
-export function SubAgentCard({ run }: { run: SubagentRun }) {
+export function SubAgentCard({
+  run,
+  sub,
+  children,
+}: {
+  run: SubagentRun;
+  /** 子 run 的状态；没有 = 看不到过程（归档已清理、事件不在回放窗口里） */
+  sub?: RunState;
+  children?: ReactNode;
+}) {
   const status = STATUS[run.status];
+  const hasProcess = (sub?.timeline.length ?? 0) > 0;
+  const spoke = sub?.timeline.some((t) => t.kind === "text") ?? false;
 
   return (
     <details className={styles.subagent} open={run.status === "running"}>
@@ -67,10 +72,35 @@ export function SubAgentCard({ run }: { run: SubagentRun }) {
       </summary>
 
       <div className={styles.saBody}>
-        <p className={styles.saLabel}>委派任务</p>
-        <p className={styles.saText}>{run.task || "（未提供任务描述）"}</p>
+        {/* 有过程、没有任务书的（刷新后找不到派出它的那次调用）就不放一行空占位 */}
+        {(run.task || !hasProcess) && (
+          <>
+            <p className={styles.saLabel}>委派任务</p>
+            <p className={styles.saText}>{run.task || "（未提供任务描述）"}</p>
+          </>
+        )}
 
-        {run.result && (
+        {hasProcess && (
+          <>
+            <p className={styles.saLabel}>过程</p>
+            <div className={styles.saProcess}>{children}</div>
+          </>
+        )}
+
+        {sub?.status === "failed" && sub.error && (
+          <Alert
+            type="error"
+            showIcon
+            style={{ marginTop: "var(--s-3)" }}
+            message={`运行失败（${sub.error.kind}）`}
+            description={sub.error.message}
+          />
+        )}
+        {sub?.status === "cancelled" && (
+          <Alert type="info" showIcon style={{ marginTop: "var(--s-3)" }} message="已取消" />
+        )}
+
+        {run.result && !spoke && (
           <>
             <p className={styles.saLabel}>返回结果</p>
             <p className={styles.saText}>{run.result}</p>

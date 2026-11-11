@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import asyncio
-import contextlib
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
+from atlas_jobs import JobScheduler
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.types import Receive, Scope, Send
@@ -15,11 +14,12 @@ from ..auth import IdentityHeadersMiddleware
 from ..dataplane import DataPlane
 from ..db.session import get_sessionmaker
 from ..errors import GatewayError
-from ..maintainer import run_maintainer
+from ..maintainer import ToolRefresh
 from ..perms import AccessCache, Permissions, UCPermissions
 from ..settings import get_settings
 from ..upstreams.hub import Upstreams
 from . import admin, internal
+from .jobs import jobs_router
 
 __all__ = ["create_app"]
 
@@ -38,6 +38,8 @@ def create_app(*, perms: Permissions | None = None) -> FastAPI:
     """perms 可注入 —— 测试用内存实现；不注入则按设置连用户中心。"""
     settings = get_settings()
     tracing.setup()
+    # 定时任务（刷新工具定义）：lifespan 里注册、启动；/api/v1/jobs 看运行情况
+    jobs = JobScheduler()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -49,25 +51,25 @@ def create_app(*, perms: Permissions | None = None) -> FastAPI:
         app.state.upstreams = upstreams
         plane = DataPlane(get_sessionmaker(), app.state.perms, app.state.access, upstreams)
         app.state.data_plane = plane
-        maintainer = (
-            asyncio.create_task(run_maintainer(settings, app.state.perms, upstreams))
-            if settings.maintainer_tick_s > 0
-            else None
-        )
+        if settings.maintainer_tick_s > 0:
+            jobs.register(
+                ToolRefresh(settings, app.state.perms, upstreams),
+                scope="instance",
+                every=settings.maintainer_tick_s,
+            )
         await plane.start()
+        jobs.start()
         try:
             yield
         finally:
             await plane.stop()
-            if maintainer is not None:
-                maintainer.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await maintainer
+            await jobs.stop()
             await upstreams.aclose()
             if owned is not None:
                 await owned.aclose()
 
     app = FastAPI(title="MCP Gateway", version="0.2.0", lifespan=lifespan)
+    app.state.jobs = jobs
     if perms is not None:
         _wire(app, perms)
     # 身份请求头透传：管理接口里调用户中心都带上（auth.py）
@@ -93,6 +95,7 @@ def create_app(*, perms: Permissions | None = None) -> FastAPI:
         app.add_route(path, route, methods=["GET", "POST", "DELETE"], include_in_schema=False)
 
     app.include_router(admin.router)
+    app.include_router(jobs_router(jobs))
     app.include_router(internal.router)
     return app
 

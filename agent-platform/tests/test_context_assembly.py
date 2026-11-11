@@ -61,14 +61,14 @@ def _fake_store(monkeypatch: pytest.MonkeyPatch) -> None:
 
 async def test_layers_are_ordered_platform_user_workspace() -> None:
     _Store.payload = {"platform": "遵守合规", "user": "默认中文"}
-    fs = _FS({"/workspace/AGENTS.md": "用 pnpm"})
+    fs = _FS({"AGENTS.md": "用 pnpm"})
     text = await ctx.load_instructions(_sessions, fs, uuid4())
     assert text.index("遵守合规") < text.index("默认中文") < text.index("用 pnpm")
-    assert "工作区约定（/workspace/AGENTS.md）" in text
+    assert "工作区约定（AGENTS.md）" in text
 
 
 async def test_atlas_md_preferred_and_empty_means_nothing() -> None:
-    fs = _FS({"/workspace/ATLAS.md": "A", "/workspace/AGENTS.md": "B"})
+    fs = _FS({"ATLAS.md": "A", "AGENTS.md": "B"})
     text = await ctx.load_instructions(_sessions, fs, uuid4())
     assert "ATLAS.md" in text and "\nB" not in text
     assert await ctx.load_instructions(_sessions, _FS({}), uuid4()) == ""
@@ -76,7 +76,7 @@ async def test_atlas_md_preferred_and_empty_means_nothing() -> None:
 
 async def test_store_outage_does_not_fail_the_turn() -> None:
     _Store.fail = True
-    text = await ctx.load_instructions(_sessions, _FS({"/workspace/ATLAS.md": "仍然有我"}), uuid4())
+    text = await ctx.load_instructions(_sessions, _FS({"ATLAS.md": "仍然有我"}), uuid4())
     assert "仍然有我" in text
 
 

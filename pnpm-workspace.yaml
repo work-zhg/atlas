@@ -1,5 +1,5 @@
 # 前端 workspace：一份锁文件、依赖只装一次，同版本只有一个实例 ——
-# 共享包 @atlas/chat-ui 与 Atlas / TeamFlow 用的是同一个 React / antd / react-query。
+# 共享包 @atlas/chat-ui、@atlas/appconfig-ui、@atlas/jobs-ui 与 Atlas / TeamFlow 用的是同一个 React / antd / react-query。
 # ★ 用户中心前端（usercenter/web）有自己的 pnpm-workspace.yaml，独立安装，不在此列。
 packages:
   - agent-platform/web

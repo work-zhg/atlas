@@ -62,14 +62,14 @@ def sessions():
         s3.create_bucket(Bucket=BUCKET)
         a = Workspace(s3, bucket=BUCKET, user_id=USER, thread_id="t-a")
         b = Workspace(s3, bucket=BUCKET, user_id=USER, thread_id="t-b")
-        a.write("/workspace/index.html", "<script src='assets/app.js'></script>")
-        a.write("/workspace/assets/app.js", "console.log('hi')")
-        a.write("/workspace/docs/index.html", "<p>docs</p>")
-        a.write("/workspace/notes.md", "# 标题\n" + "x" * 5000)
-        a.write("/workspace/中文 名.txt", "你好")
-        a.write("/workspace/.hidden/secret.txt", "hidden")
-        a.write("/workspace/report.pdf", "%PDF-1.4")
-        b.write("/workspace/secret.txt", "B-SECRET")
+        a.write("index.html", "<script src='assets/app.js'></script>")
+        a.write("assets/app.js", "console.log('hi')")
+        a.write("docs/index.html", "<p>docs</p>")
+        a.write("notes.md", "# 标题\n" + "x" * 5000)
+        a.write("中文 名.txt", "你好")
+        a.write(".hidden/secret.txt", "hidden")
+        a.write("report.pdf", "%PDF-1.4")
+        b.write("secret.txt", "B-SECRET")
         yield a, b
 
 

@@ -13,9 +13,11 @@ from typing import Any
 
 import httpx
 import pytest
+from atlas_jobs import JobScheduler
 from atlas_teamflow.agents.supervisor import AgentSupervisor
 from atlas_teamflow.db.models import NodeMessage, ProcessNode
 from atlas_teamflow.db.session import get_sessionmaker
+from atlas_teamflow.jobs import NodeSweep
 from atlas_teamflow.process.bus import RedisCoordinator
 from atlas_teamflow.process.repo_host import GiteeHost
 from sqlalchemy import func, select
@@ -62,6 +64,13 @@ async def _agent_messages(proc: str) -> int:
         )
 
 
+def _sweeping(sup: AgentSupervisor, every: float = 0.3) -> JobScheduler:
+    """宿主做的那一步：把监督器的定期扫描注册成实例任务（测试里间隔取短）。"""
+    jobs = JobScheduler()
+    jobs.register(NodeSweep(sup), scope="instance", every=every)
+    return jobs
+
+
 async def test_two_instances_process_each_node_once() -> None:
     """两个实例都在跑监督器：唤醒广播到两边，但每个节点只被一个实例处理（Agent 只收到一次开工）。"""
     if not await _redis_ok():
@@ -75,15 +84,16 @@ async def test_two_instances_process_each_node_once() -> None:
         w.atlas,  # type: ignore[arg-type]
         w.app.state.repo,
         coord=b,
-        sweep_seconds=0.3,
         git_profile="teamflow-gitee",
     )
     sup_a = w.app.state.supervisor
-    sup_a.sweep_seconds = 0.3
+    sweep_a, sweep_b = _sweeping(sup_a), _sweeping(sup_b)
     await a.start()
     await b.start()
     await sup_a.start()
     await sup_b.start()
+    sweep_a.start()
+    sweep_b.start()
     try:
         pid, _ = await _setup(w)
         dev = await w.as_("dev")
@@ -114,6 +124,8 @@ async def test_two_instances_process_each_node_once() -> None:
         b.unsubscribe(uuid.UUID(proc), q)
         await _wait(lambda: _has_replies(dev, proc, 2))
     finally:
+        await sweep_a.stop()
+        await sweep_b.stop()
         await sup_a.close()
         await sup_b.close()
         await a.close()
@@ -164,10 +176,11 @@ async def test_crashed_instance_is_taken_over_after_lease_expires() -> None:
             w.app.state.repo,
             coord=worker_coord,
             lease_seconds=3,
-            sweep_seconds=0.3,
             git_profile="teamflow-gitee",
         )
+        sweep = _sweeping(sup)
         await sup.start()
+        sweep.start()
         await asyncio.sleep(0.8)
         assert await _replies(dev, proc) == 0  # 租约还没过期：没人处理
 
@@ -175,6 +188,7 @@ async def test_crashed_instance_is_taken_over_after_lease_expires() -> None:
             return await _replies(dev, proc) >= 1
 
         await _wait(taken_over, 10)
+        await sweep.stop()
         await sup.close()
     finally:
         await api_coord.close()

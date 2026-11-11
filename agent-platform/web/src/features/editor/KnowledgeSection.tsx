@@ -7,7 +7,7 @@
  *   以 Agent 为权限是它的数字员工。读不到的库跳过并提示（同 MCP）。
  * ★ 能选的库 = 权限主体能读的（Atlas /v1/knowledge-bases）；保存时服务端再校验一次新绑定的库。
  */
-import { Alert, InputNumber, Radio, Select, Space, Switch, Tag } from "antd";
+import { Alert, InputNumber, Radio, Select, Space, Switch } from "antd";
 import Link from "next/link";
 
 import { useKnowledgeBases } from "@/api/meta";
@@ -20,6 +20,7 @@ type Knowledge = NonNullable<AgentSpecIn["knowledge"]>;
 export const DEFAULT_KNOWLEDGE: Knowledge = {
   dataset_ids: [],
   mode: "auto",
+  scope: "selected",
   top_k: 4,
   score_threshold: null,
   rerank: false,
@@ -32,7 +33,10 @@ export function KnowledgeSection({
   agentId,
   authSubject,
   onChange,
+  bare,
 }: {
+  /** 放在编辑页的折叠分组里：不要自己的标题和说明 */
+  bare?: boolean;
   value: Knowledge;
   kind: string;
   readOnly: boolean;
@@ -54,17 +58,21 @@ export function KnowledgeSection({
   const set = (patch: Partial<Knowledge>) => onChange({ ...value, ...patch });
 
   return (
-    <div id="e-knowledge" className={styles.section}>
-      <h2 className={styles.sectionTitle}>知识库</h2>
-      <p className={styles.sectionDesc}>
-        绑定后，智能体回答时检索这些库里的内容并注明出处。在 <Link href="/knowledge">知识库</Link> 管理文档。
-      </p>
+    <div id="e-knowledge" className={bare ? undefined : styles.section}>
+      {!bare && (
+        <>
+          <h2 className={styles.sectionTitle}>知识库</h2>
+          <p className={styles.sectionDesc}>
+            回答时查这些库里的内容并注明出处。在 <Link href="/knowledge">知识库</Link> 管理文档。
+          </p>
+        </>
+      )}
       {datasets.error && (
         <Alert type="warning" showIcon message={`读取知识库列表失败：${(datasets.error as Error).message}`} />
       )}
       {subject && (
         <div style={{ marginBottom: 8, fontSize: 12, color: "var(--fg-2)" }}>
-          <div>可选的知识库按{acting ? "这个 Agent 的数字员工" : "你"}的权限列出</div>
+          <div>列出的是{acting ? "这个智能体" : "你"}有权限的知识库</div>
           {subject.notes.map((n) => (
             <div key={n} style={{ marginTop: 4 }}>
               ⚠ {n}
@@ -95,8 +103,8 @@ export function KnowledgeSection({
             style={{ margin: "10px 0" }}
             message={
               acting
-                ? "按数字员工的权限检索：能使用这个智能体的人，都可以通过它读到数字员工能读的库。"
-                : "按使用者自己的权限检索：使用者读不到的库，运行时会跳过并提示。"
+                ? "能使用这个智能体的人，都可以经它查到这些库的内容。"
+                : "每个人只会查到自己有权限的内容。"
             }
           />
           <Space direction="vertical" style={{ width: "100%" }}>
@@ -106,13 +114,12 @@ export function KnowledgeSection({
               onChange={(e) => set({ mode: e.target.value })}
             >
               <Radio value="auto" disabled={cli}>
-                自动检索：每轮先按用户的问题检索，资料并入本轮输入
+                每次都先查资料（推荐）
               </Radio>
-              <Radio value="tool">工具：由模型决定何时调用 knowledge_search</Radio>
+              <Radio value="tool">需要时再查</Radio>
             </Radio.Group>
-            {cli && <Tag>外部 CLI 只能以工具方式（MCP）接入知识库</Tag>}
             <Space wrap>
-              <span>Top K</span>
+              <span>每次最多引用</span>
               <InputNumber
                 min={1}
                 max={20}
@@ -120,7 +127,8 @@ export function KnowledgeSection({
                 value={value.top_k}
                 onChange={(v) => set({ top_k: v ?? 4 })}
               />
-              <span style={{ marginLeft: 12 }}>分数阈值</span>
+              <span>段</span>
+              <span style={{ marginLeft: 12 }}>只用相关度高的结果</span>
               <Switch
                 size="small"
                 disabled={readOnly}
@@ -139,7 +147,7 @@ export function KnowledgeSection({
               )}
               {ids.length > 1 && (
                 <>
-                  <span style={{ marginLeft: 12 }}>多库统一重排</span>
+                  <span style={{ marginLeft: 12 }}>多个库的结果统一排序</span>
                   <Switch size="small" disabled={readOnly} checked={value.rerank} onChange={(rerank) => set({ rerank })} />
                 </>
               )}

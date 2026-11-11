@@ -1,10 +1,9 @@
 """每次操作选底层（c4-model/agent/code-workspace.html · StoreRouter）。
 
-    技能区、系统区     一律直连对象存储
-    工作区区           原生沙箱 READY → 经沙箱；否则直连对象存储
+    这个人的原生沙箱 READY → 经沙箱；否则直连对象存储。所有路径都在同一个挂载（/data）下，不分目录。
 
-★ 沙箱在跑时只经沙箱写：沙箱用 s3fs 挂着同一个前缀，有目录和属性缓存，这时绕过它直写对象存储，
-  沙箱里的进程可能好一阵都看不到，同一个文件还会有两个写入方互相覆盖。
+★ 选路看这个人的沙箱，不只看本会话的：沙箱把整个 {user}/ 挂在 /data，用 s3fs，有目录和属性缓存。
+  它在跑时绕过它直写对象存储，沙箱里的进程可能好一阵都看不到，同一个文件还会有两个写入方互相覆盖。
 ★ 经沙箱失败时先确认沙箱还在不在：确实不在了，这一次改走对象存储重试，模型无感；还在、问不到
   就不悄悄换写入方 —— 写报错；读降级到对象存储（读不会多出一个写入方，比让一次读失败好）。
 ★ 文件操作不会触发建沙箱：没有运行中的沙箱就走对象存储（多数会话一直是这样）。
@@ -35,7 +34,7 @@ T = TypeVar("T")
 
 
 class WorkspaceRouting:
-    """原生沙箱这一侧：工作区现在有没有 READY 的沙箱、确认沙箱是否还在、打开沙箱里的文件会话。"""
+    """原生沙箱这一侧：这个人现在有没有 READY 的沙箱、确认沙箱是否还在、打开沙箱里的文件会话。"""
 
     def __init__(self, native: NativeSandboxService, exec: SandboxExec, ws: WorkspaceRef) -> None:
         self._native = native
@@ -43,7 +42,7 @@ class WorkspaceRouting:
         self._ws = ws
 
     async def current(self) -> SandboxRef | None:
-        return await self._native.current(self._ws)
+        return await self._native.current_of_user(self._ws)
 
     async def store(self, ref: SandboxRef) -> SandboxFiles:
         return SandboxFiles(await self._exec.open_files(ref.sandbox_uuid))
@@ -62,15 +61,13 @@ class StoreRouter:
         self,
         fn: Callable[[FileStore], T],
         *,
-        in_sandbox: bool,
         refuse: Callable[[str], T] | None,
     ) -> T:
         """选一个底层，在线程里跑同步的 fn（boto3、execd 的文件 API 都是同步的）。
 
-        in_sandbox：这次操作的路径属于工作区区（只有它会走沙箱）。
         refuse：写操作给出「不可写」的结果；读操作给 None —— 沙箱不响应时降级到对象存储。
         """
-        routing = self._sandbox if in_sandbox else None
+        routing = self._sandbox
         ref = await routing.current() if routing is not None else None
         if routing is None or ref is None:
             return await asyncio.to_thread(fn, self.direct)
@@ -88,6 +85,6 @@ class StoreRouter:
             if refuse is None:
                 logger.warning("沙箱 %s 不响应，这次读降级到对象存储：%s", ref.sandbox_uuid, exc)
                 return await asyncio.to_thread(fn, self.direct)
-            return refuse("工作区暂时不可写：沙箱没有响应，请稍后重试")
+            return refuse("文件暂时不可写：沙箱没有响应，请稍后重试")
         finally:
             store.close()

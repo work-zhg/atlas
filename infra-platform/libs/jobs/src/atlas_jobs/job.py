@@ -19,13 +19,15 @@ class NoParams(BaseModel):
 class Job:
     """宿主实现的任务。
 
-    type     全局唯一的类型名，带应用前缀（agent.run_recovery）
-    Params   参数的 pydantic 模型；不声明就是没有参数
-    execute  写成 async def 在宿主的事件循环上跑（里面不能有阻塞调用）；
-             写成 def 在库自己的线程池里跑
+    type         全局唯一的类型名，带应用前缀（agent.run_recovery）
+    description  给人看的名字（管理页显示）；不写就显示 type
+    Params       参数的 pydantic 模型；不声明就是没有参数
+    execute      写成 async def 在宿主的事件循环上跑（里面不能有阻塞调用）；
+                 写成 def 在库自己的线程池里跑
     """
 
     type: ClassVar[str]
+    description: ClassVar[str] = ""
     Params: ClassVar[type[BaseModel]] = NoParams
 
     def execute(self, ctx: JobContext, params: Any) -> Awaitable[None] | None:

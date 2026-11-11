@@ -2,7 +2,8 @@
 
 整套沙箱组件对着假 OpenSandbox：
 
-    确保      按工作区要沙箱、原样复用；镜像按档位准入；配额按人算（原生沙箱与会话 Pod 合计）
+    确保      按工作区要沙箱、原样复用；同一个人的工作区共用一个（同镜像），命令各带自己工作区的
+              cwd；镜像按档位准入；配额按人算（原生沙箱与会话 Pod 合计）
     查询      current 只认 READY、不新建；confirm_gone 确实不在才去掉
     回收      闲置 = 没有命令在跑且超过时限（残留的运行记录逐个向 execd 确认）；会话删除、孤儿回收
               只释放自己的业务；释放失败不挡会话删除
@@ -22,12 +23,13 @@ from atlas_agent.redisx import make_redis
 from atlas_agent.sandbox.base.execution.ledger import ActivityLedger
 from atlas_agent.sandbox.base.execution.values import CommandSpec
 from atlas_agent.sandbox.component import SandboxComponent
-from atlas_agent.sandbox.native import ImageDenied
+from atlas_agent.sandbox.exec import PollingPolicy, ShellSandbox
+from atlas_agent.sandbox.native import ImageDenied, WorkspaceRef
 from atlas_agent.sandbox.provisioning.model import QuotaExceeded
 from atlas_engine.contracts.spec import SandboxSpec
 
 from tests.opensandbox_fake import FakeOpenSandbox, fake_settings
-from tests.sandbox_env import component, new_workspace
+from tests.sandbox_env import component, new_workspace, workspace_dir
 
 
 @pytest.fixture
@@ -63,6 +65,45 @@ async def test_ensure_is_per_workspace_and_reuses(fake: FakeOpenSandbox, redis: 
     assert await c.native.ensure(ws, SandboxSpec(image="atlas-sandbox:other")) == first
 
 
+async def test_one_persons_workspaces_share_a_sandbox_each_in_its_own_cwd(
+    fake: FakeOpenSandbox, redis: Any
+) -> None:
+    """同一个人的两个根会话共用一个沙箱；每条命令的 cwd 是自己的工作区（第一次执行前建好）。"""
+    c = component(fake, redis)
+    a = new_workspace()
+    b = WorkspaceRef(new_workspace().root_thread_uuid, a.user_uuid)
+
+    def shell(ws: WorkspaceRef) -> ShellSandbox:
+        return ShellSandbox(
+            native=c.native,
+            exec=c.exec,
+            ledger=c.ledger,
+            ws=ws,
+            run_id=ws.root_thread_uuid,
+            spec=SandboxSpec(),
+            polling=PollingPolicy(0.02, 0.05),
+        )
+
+    await shell(a).aexecute("echo a > who.txt")
+    await shell(b).aexecute("echo b > who.txt")
+    assert len(fake.created) == 1
+    assert await c.native.current(a) == await c.native.current(b)
+    assert (workspace_dir(fake, a) / "who.txt").read_text() == "a\n"
+    assert (workspace_dir(fake, b) / "who.txt").read_text() == "b\n"
+    # 一个工作区闲置释放了，另一个还在用：沙箱留着
+    await c.native.release(a)
+    assert fake.deleted == [] and await c.native.current(b) is not None
+
+
+async def test_bench_sandboxes_are_never_shared(fake: FakeOpenSandbox, redis: Any) -> None:
+    """评测档独占：题目之间不能互相污染（同一个评测账号会并发跑很多题）。"""
+    from atlas_agent.sandbox.native import NativeSandboxKind
+
+    kind = NativeSandboxKind(fake_settings(), None, None)  # type: ignore[arg-type]
+    assert kind.share(SandboxSpec(profile="bench")) is None
+    assert kind.share(SandboxSpec()) is not None
+
+
 async def test_images_are_admitted_per_profile(fake: FakeOpenSandbox, redis: Any) -> None:
     c = component(fake, redis, sandbox_image_allow_prefixes=["registry.local/sandbox/"])
     with pytest.raises(ImageDenied):
@@ -74,12 +115,17 @@ async def test_images_are_admitted_per_profile(fake: FakeOpenSandbox, redis: Any
 
 
 async def test_quota_counts_per_person(fake: FakeOpenSandbox, redis: Any) -> None:
-    c = component(fake, redis, sandbox_quota_per_user=1)
+    """一个人的工作区共用一个沙箱，只占一个配额；要另建（换了镜像）才数第二个。"""
+    c = component(
+        fake, redis, sandbox_quota_per_user=1, sandbox_image_allow_prefixes=["other/"]
+    )
     ws = new_workspace()
-    await c.native.ensure(ws, SandboxSpec())
+    ref = await c.native.ensure(ws, SandboxSpec())
     same_person = type(ws)(new_workspace().root_thread_uuid, ws.user_uuid)
+    assert await c.native.ensure(same_person, SandboxSpec()) == ref  # 共用，不占新配额
+    another_image = type(ws)(new_workspace().root_thread_uuid, ws.user_uuid)
     with pytest.raises(QuotaExceeded):
-        await c.native.ensure(same_person, SandboxSpec())
+        await c.native.ensure(another_image, SandboxSpec(image="other/img"))
     await c.native.ensure(new_workspace(), SandboxSpec())  # 别人不受影响
     assert len(fake.created) == 2
 
@@ -114,7 +160,7 @@ async def test_a_running_command_blocks_idle_reaping(fake: FakeOpenSandbox, redi
     c = component(fake, redis, sandbox_idle_ttl_s=60.0)
     ws = new_workspace()
     ref = await c.native.ensure(ws, SandboxSpec())
-    cmd_id = await c.exec.start(ref.sandbox_uuid, CommandSpec("sleep 30", cwd="/workspace"))
+    cmd_id = await c.exec.start(ref.sandbox_uuid, CommandSpec("sleep 30", cwd="/data"))
     await ActivityLedger(redis).started(ref.sandbox_uuid, "cmd-left-behind")
     await _age(redis, ref.sandbox_uuid, 120)
 

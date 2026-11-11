@@ -15,7 +15,7 @@ const config: NextConfig = {
   output: "standalone",
   // 产物追踪根 = 前端 workspace 根（仓库根）：共享包 packages/chat-ui 与依赖都在 teamflow/web 之外
   outputFileTracingRoot: path.join(__dirname, "../.."),
-  transpilePackages: ["@atlas/chat-ui", "antd", "@ant-design/icons", "rc-util", "rc-picker", "rc-tree", "rc-table"],
+  transpilePackages: ["@atlas/chat-ui", "@atlas/jobs-ui", "antd", "@ant-design/icons", "rc-util", "rc-picker", "rc-tree", "rc-table"],
   async rewrites() {
     return [{ source: "/api/:path*", destination: `${API_ORIGIN}/api/:path*` }];
   },

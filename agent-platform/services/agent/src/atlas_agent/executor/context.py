@@ -1,6 +1,6 @@
 """每轮上下文的装配：持久指令（L1）（上下文管理设计 §10）。
 
-    持久指令  平台（管理员）→ 用户（个人偏好）→ 工作区 /workspace/ATLAS.md（兼容 AGENTS.md）
+    持久指令  平台（管理员）→ 用户（个人偏好）→ 工作区根目录的 ATLAS.md（兼容 AGENTS.md）
               拼在系统提示词之后；后面的优先级更高（离具体场景更近）
 
 ★ 记忆不在这里：常驻块与更新提示归 memory/runtime.py（doc/memory-design.html §5）。
@@ -25,7 +25,8 @@ logger = logging.getLogger(__name__)
 #: 每层的字符上限（约 4k tokens）与总上限
 _LAYER_CHARS = 10_000
 _TOTAL_CHARS = 30_000
-_WORKSPACE_FILES = ("/workspace/ATLAS.md", "/workspace/AGENTS.md")
+#: 相对所用工作区（路径关卡按工作区补全）
+_WORKSPACE_FILES = ("ATLAS.md", "AGENTS.md")
 
 
 def _clip(text: str, limit: int) -> str:

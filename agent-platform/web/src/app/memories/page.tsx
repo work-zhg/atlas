@@ -1,7 +1,6 @@
-"use client";
+import { redirect } from "next/navigation";
 
-import { MemoryPage } from "@/features/memory/MemoryPage";
-
+/** 记忆并入「个性化」 */
 export default function Page() {
-  return <MemoryPage />;
+  redirect("/me");
 }

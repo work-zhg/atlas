@@ -436,6 +436,9 @@ class SubAgentSpec:
 #:
 #: ★ acp agent 只有 tool 一种：CLI 的一轮由它自己驱动，平台只能经 MCP 给它工具。
 KnowledgeMode = Literal["auto", "tool"]
+#: 检索哪些库。selected = 绑定的 dataset_ids；all_readable = 这一轮的权限主体能读的全部 ——
+#: 由 server 在一段开始时展开成 dataset_ids（之后各处照常按 dataset_ids 用）
+KnowledgeScope = Literal["selected", "all_readable"]
 
 
 @dataclass(frozen=True)
@@ -445,6 +448,7 @@ class KnowledgeSpec:
 
     dataset_ids: tuple[str, ...] = ()
     mode: KnowledgeMode = "auto"
+    scope: KnowledgeScope = "selected"
     top_k: int = 4
     score_threshold: float | None = None
     #: 多库合并后是否统一重排（加权；各库须同一向量模型）
@@ -452,7 +456,7 @@ class KnowledgeSpec:
 
     @property
     def enabled(self) -> bool:
-        return bool(self.dataset_ids)
+        return bool(self.dataset_ids) or self.scope == "all_readable"
 
     def retrieval_config(self) -> dict[str, object]:
         return {

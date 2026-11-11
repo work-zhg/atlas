@@ -34,7 +34,7 @@ export function Providers({ children }: { children: ReactNode }) {
 
   return (
     <AntdRegistry>
-      <ConfigProvider theme={atlasTheme} locale={zhCN} componentSize="middle">
+      <ConfigProvider theme={atlasTheme} locale={zhCN} componentSize="middle" button={{ autoInsertSpace: false }}>
         <AntdApp>
           <QueryClientProvider client={queryClient}>
             {/* 对话组件（共享包）向 Atlas 自己的后端发请求 */}

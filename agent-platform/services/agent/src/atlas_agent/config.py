@@ -163,7 +163,7 @@ class Settings(BaseSettings):
     opensandbox_namespace: str = "opensandbox-system"
     #: 沙箱生命周期日志（sandbox_event）保留多久
     sandbox_event_retention_days: int = 90
-    #: 整桶的静态 PVC（运维预建，写穿式 S3 CSI）。每个沙箱按 subPath 挂自己的前缀（§6）
+    #: 整桶的静态 PVC（运维预建，写穿式 S3 CSI）。每个沙箱按 subPath 把这个人的整个前缀挂到 /data
     sandbox_pvc: str = "atlas-oss"
     sandbox_default_image: str = "atlas-sandbox:dev"
     #: 智能体可指定的沙箱镜像前缀。★ 任意镜像 = 任意代码以会话身份跑在集群里
@@ -206,8 +206,15 @@ class Settings(BaseSettings):
     # ── 会话 Pod：OpenSandbox 的 opensandbox-cli 实例（doc/sandbox-opensandbox-design.html §11）──
     opensandbox_cli_url: AnyHttpUrl = AnyHttpUrl("http://opensandbox-cli:8080")
     opensandbox_cli_api_key: SecretStr = SecretStr("")
-    #: bridge 在 Pod 内监听的端口
+    #: bridge 在 Pod 内监听的端口：一个 Pod 里按会话起多个 bridge，第 n 个槽位用 cli_bridge_port + n
     cli_bridge_port: int = 8900
+    #: 在界面上新建 CLI 智能体（「编程助手」模板）时，没填镜像 / 适配器就用这里的：
+    #: 镜像随部署变（版本号），不能写死在前端
+    cli_default_image: str = ""
+    cli_default_adapters: dict[str, str] = {"claude-code": "node /opt/acp-cli/bin/claude-acp"}
+    #: 一个会话 Pod 至多服务几个 CLI 会话（每个会话一对 bridge + CLI，CLI 一个就要几百 MB 内存）。
+    #: 满了另建一个 Pod，仍受每人配额约束
+    cli_sessions_per_pod: int = 4
     cli_cpu_request: str = "250m"
     cli_cpu_limit: str = "2"
     cli_memory_request: str = "512Mi"

@@ -3,9 +3,11 @@
 c4-model/agent/sandbox/code-sandbox-provisioning.html。
 
     ensure(biz, req)        已绑定且 READY → 向基座确认它还能用就交出；CREATING → 接着建；没绑定 →
-                            准入、构造规格，经分配策略挑一个或登记新的（判配额），保存后再建、附加、
-                            等就绪，标为 READY 才交出
+                            准入、构造规格，经分配策略挑一个（共享键相同、没满的）或登记新的（判配额），
+                            保存后再建、附加、等就绪，标为 READY 才交出
     current(biz)            只认 READY，进程内缓存 2 秒，不会触发新建
+    current_of_user(biz)    同上，业务自己没绑时退到这个人服务同类业务的沙箱（文件读写选路用）
+    slot(biz)               业务在沙箱里的槽位号（CLI Agent 按它分端口）
     confirm_gone(biz, ref)  向基座确认确实不在了才去掉记录；问不到就当它还在
     describe · of_user      登记的模板、镜像、状态、服务的业务
     retire(ref, reason)     不管有没有业务直接退役：先标 RETIRING 并保存，再交基座删，删完去掉记录
@@ -19,7 +21,9 @@ c4-model/agent/sandbox/code-sandbox-provisioning.html。
   uuid 幂等）。同一个人并行派出的几个 CLI Agent 不用排队建。
 ★ 先登记再建：sandbox_uuid 由这里生成，以 CREATING 和绑定一起落库，再交基座建。基座里的每个实例
   在这里都有登记，找不到登记的就是孤儿。
-★ 不含任何业务类型特有的逻辑：准入、创建规格、附加配置、就绪判断都由 SandboxKind 给出。
+★ 不含任何业务类型特有的逻辑：准入、创建规格、共享方式、附加配置、就绪判断都由 SandboxKind 给出。
+★ 共享：一个沙箱可以服务同一个人的多个业务（共享键相同、没满）。最后一个业务释放时才退役；建失败、
+  坏了退役时，绑在上面的业务一起换到新沙箱。
 ★ 配额可以是固定的，也可以每次分配时现取（运行期配置 sandbox.quota_per_user，runtime_config.py）：
   管理员改了上限，下一次分配就按新的判。
 """
@@ -43,6 +47,7 @@ from .model import (
     SandboxAccount,
     SandboxRef,
     SandboxStatus,
+    Sharing,
     UserSandbox,
 )
 
@@ -71,7 +76,10 @@ class SandboxKind(Protocol):
         """准入（如镜像白名单）。不通过抛异常。"""
 
     def build(self, req: Any, biz: BizRef) -> CreateSpec:
-        """创建规格：模板 code、镜像、网络策略、挂载……"""
+        """创建规格：模板 code、镜像、网络策略、挂载……共享的沙箱不能含某个业务特有的东西。"""
+
+    def share(self, req: Any) -> Sharing | None:
+        """怎么共享：None = 独占（每个业务一个沙箱）。"""
 
     async def attach(self, ref: SandboxRef, req: Any, *, created: bool) -> None:
         """新建或复用后的附加配置（如每轮整份重写凭据）。"""
@@ -125,7 +133,7 @@ class SandboxProvisioning:
             await kind.admit(req)
             spec = kind.build(req, biz)
             try:
-                allocated = await self._allocate(biz, spec)
+                allocated = await self._allocate(biz, spec, kind.share(req))
             except AccountConflict:
                 continue  # 别人先改了这个人的账户：重读再判
             if allocated.status is SandboxStatus.READY:
@@ -133,7 +141,9 @@ class SandboxProvisioning:
             return await self._bring_up(allocated, kind, spec, req)
         raise SandboxUnavailableError("沙箱分配反复冲突，请稍后重试")
 
-    async def _allocate(self, biz: BizRef, spec: CreateSpec) -> UserSandbox:
+    async def _allocate(
+        self, biz: BizRef, spec: CreateSpec, sharing: Sharing | None
+    ) -> UserSandbox:
         quota = self._quota if isinstance(self._quota, QuotaPolicy) else await self._quota()
         async with self._sessions() as session:
             repo = SandboxAccountRepository(session, cache_s=self._cache_s)
@@ -142,7 +152,9 @@ class SandboxProvisioning:
             if stale is not None and stale.status is SandboxStatus.RETIRING:
                 # 绑着一个正在退役的沙箱：解绑，给它分配新的（退役那边删完自己收尾）
                 account.unbind(biz)
-            sandbox = account.allocate(biz, spec, policy=self._allocation, quota=quota)
+            sandbox = account.allocate(
+                biz, spec, policy=self._allocation, quota=quota, sharing=sharing
+            )
             await repo.save(account)
             await session.commit()
             return sandbox
@@ -184,6 +196,22 @@ class SandboxProvisioning:
         """只认 READY；进程内缓存（cache_s）；不会触发新建。"""
         sandbox = await self._read(lambda repo: repo.by_biz(biz))
         return sandbox.ref if sandbox is not None and sandbox.status.serving() else None
+
+    async def current_of_user(self, biz: BizRef) -> SandboxRef | None:
+        """业务自己绑着的 READY 沙箱；没有就是这个人服务同类业务的任一个 READY 沙箱。不会触发新建。
+
+        给文件读写选路用：沙箱挂着这个人的整个前缀，它在跑时读写都要经它（只有一个写入方）。
+        """
+        if (ref := await self.current(biz)) is not None:
+            return ref
+        sandbox = await self._read(lambda repo: repo.ready_of_user(biz.user_uuid, biz.biz_type))
+        return sandbox.ref if sandbox is not None else None
+
+    async def slot(self, biz: BizRef) -> int | None:
+        """业务在它绑的沙箱里的槽位号；没绑定返回 None。读库，不经缓存。"""
+        sandbox = await self._read(lambda repo: repo.by_biz(biz, fresh=True))
+        binding = sandbox.binding(biz) if sandbox is not None else None
+        return binding.slot if binding is not None else None
 
     async def confirm_gone(self, biz: BizRef, ref: SandboxRef) -> bool:
         """向基座刷新实例状态，确实不在才去掉记录；问不到就当它还在（宁可报错也不悄悄换写入方）。"""

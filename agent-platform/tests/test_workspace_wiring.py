@@ -12,7 +12,6 @@ from uuid import uuid4
 import boto3
 import pytest
 from atlas_agent.config import Settings
-from atlas_agent.domain.workspace_layout import Area
 from atlas_agent.providers.filesystem import Workspace, make_workspace
 from moto import mock_aws
 
@@ -39,8 +38,9 @@ def test_each_session_gets_its_own_prefix() -> None:
         settings = Settings(**_BASE, oss_bucket="atlas-test", oss_endpoint="http://x")
         a = make_workspace(settings, "u1", "t-a")
         b = make_workspace(settings, "u1", "t-b")
-        assert a.layout.prefix(Area.WORKSPACE) != b.layout.prefix(Area.WORKSPACE)
-        assert a.layout.prefix(Area.WORKSPACE) == "u1/t-a/workspace"
+        assert a.key_of("x.md") != b.key_of("x.md")
+        assert a.key_of("x.md") == "u1/t-a/workspace/x.md"
+        assert a.workdir == "/data/t-a/workspace"
 
 
 @pytest.mark.parametrize("tools", [("filesystem",), ("filesystem", "bash")])

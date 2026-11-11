@@ -1,8 +1,6 @@
-"use client";
+import { redirect } from "next/navigation";
 
-import { AgentEditor } from "@/features/editor/AgentEditor";
-
-/** 静态路由优先于 [agentId]，所以 /agents/new 不会被当成 id 为 "new" 的智能体。 */
+/** 新建改成智能体列表里的弹窗（选名称和模板），建好直接进编辑页 */
 export default function NewAgentPage() {
-  return <AgentEditor />;
+  redirect("/agents?create=1");
 }

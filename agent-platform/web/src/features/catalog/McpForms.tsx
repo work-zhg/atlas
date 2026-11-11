@@ -220,7 +220,7 @@ export function connectionRows(kind: GwKind, c: Record<string, unknown>): [strin
     return [
       ["地址", <code key="u">{str(c.url)}</code>],
       ["传输", c.transport === "sse" ? "SSE（旧版协议）" : "Streamable HTTP"],
-      ["工具定义", "定时从上游拉取，拉到就生效"],
+      ["工具", "定时从服务同步"],
     ];
   if (kind === "rest")
     return [
@@ -286,7 +286,7 @@ export function CredentialFields({
 
   return (
     <>
-      <Field label="上游凭据" hint="网关调上游时注入，保存后不回显。调用方只带自己的 MCP API Key，拿不到上游凭据">
+      <Field label="服务的认证信息" hint="保存后不再显示；调用的人和智能体拿不到它">
         <Select
           style={{ width: 280 }}
           value={value.type}
@@ -320,7 +320,7 @@ export function CredentialFields({
           {grid(<>{text("user", "client_id")}{secret("client_secret")}</>)}
           {text("scope", "scope（可选）")}
           <div className={styles.muted} style={{ fontSize: 12, marginTop: -6, marginBottom: 12 }}>
-            网关用 client_credentials 换 Token，缓存到过期前；各实例各自换
+            自动换取 Token，过期前复用
           </div>
         </>
       )}
@@ -345,8 +345,7 @@ export function credentialBody(c: GwCredentialIn): GwCredentialIn {
 export function IdentityCheckbox({ kind, value, onChange }: { kind: GwKind; value: boolean; onChange: (v: boolean) => void }) {
   return (
     <Checkbox checked={value} onChange={(e) => onChange(e.target.checked)}>
-      向上游传递调用者身份（{kind === "grpc" ? "metadata x-auth-uid、x-uid" : "请求头 X-Auth-Uid、X-Uid"}，以及
-      X-Run-Id、X-Thread-Id）
+      把调用者身份传给服务（{kind === "grpc" ? "metadata x-auth-uid、x-uid" : "请求头 X-Auth-Uid、X-Uid"} 等）
     </Checkbox>
   );
 }
@@ -428,7 +427,7 @@ export function DiscoveredTable({
       />
       <div className={styles.muted} style={{ fontSize: 12, marginTop: 8 }}>
         {mcp
-          ? `共 ${found.tools.length} 个工具，全部登记、拉到就能用；不需要的登记后停用。上游没标注只读的按「有副作用」处理`
+          ? `共 ${found.tools.length} 个工具，接入后都能用；不需要的可以接入后停用`
           : `已选 ${picked.length} 个。副作用按${found.kind === "rest" ? " HTTP Method" : "方法名"}推断，描述、副作用登记后都能改${
               found.kind === "grpc" ? "；服务端流的消息合并成数组返回" : ""
             }`}

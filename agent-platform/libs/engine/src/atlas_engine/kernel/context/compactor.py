@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable, Sequence
+from pathlib import PurePosixPath
 from typing import Any, Protocol
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
@@ -95,8 +96,19 @@ def facts_from(messages: Sequence[BaseMessage]) -> list[MessageFacts]:
     return out
 
 
-def working_set(messages: Sequence[BaseMessage], *, max_files: int) -> tuple[list[str], list[str]]:
-    """被压缩区间里最近用过的 (工作区文件, 技能文件)，按最近使用排序、去重。"""
+def _is_skill_md(path: str) -> bool:
+    """技能的正文：.../skills/<技能>/[<版本>/]SKILL.md（技能目录的位置由调用方的布局决定）。"""
+    parts = PurePosixPath(path).parts
+    return parts[-1:] == ("SKILL.md",) and "skills" in parts[-4:-2]
+
+
+def working_set(
+    messages: Sequence[BaseMessage], *, max_files: int, offload_dir: str = OFFLOAD_DIR
+) -> tuple[list[str], list[str]]:
+    """被压缩区间里最近用过的 (工作区文件, 技能文件)，按最近使用排序、去重。
+
+    offload_dir 里是外置的大结果，不是模型自己的文件：不恢复。
+    """
     seen: dict[str, int] = {}
     order = 0
     for m in messages:
@@ -108,9 +120,10 @@ def working_set(messages: Sequence[BaseMessage], *, max_files: int) -> tuple[lis
                 order += 1
                 seen[path] = order
     ranked = [p for p, _ in sorted(seen.items(), key=lambda kv: -kv[1])]
-    skills = [p for p in ranked if p.startswith("/skills/") and p.endswith("SKILL.md")]
-    files = [p for p in ranked if not p.startswith("/skills/")
-             and not p.startswith(f"{OFFLOAD_DIR}/")][:max_files]  # fmt: skip
+    offloaded = PurePosixPath(offload_dir)
+    skills = [p for p in ranked if _is_skill_md(p)]
+    files = [p for p in ranked if not _is_skill_md(p)
+             and offloaded not in PurePosixPath(p).parents][:max_files]  # fmt: skip
     return files, skills
 
 
@@ -131,8 +144,10 @@ class Compactor:
         max_failures: int = 3,
         on_compacted: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
         on_failed: Callable[[int], Awaitable[None]] | None = None,
+        offload_dir: str = OFFLOAD_DIR,
     ) -> None:
         """★ 参数全是标量 / 回调 —— kernel 不认识 AgentSpec。"""
+        self._offload_dir = offload_dir
         self._summarize = summarizer
         self._keep_recent_turns = keep_recent_turns
         self._fs = workspace
@@ -223,7 +238,9 @@ class Compactor:
         """压缩后恢复工作集：被压缩区间里最近用过的文件、技能，重新读当前版本。"""
         if self._fs is None or self._restore_files <= 0:
             return "", []
-        files, skills = working_set(head, max_files=self._restore_files)
+        files, skills = working_set(
+            head, max_files=self._restore_files, offload_dir=self._offload_dir
+        )
         parts: list[str] = []
         restored: list[str] = []
         budget = self._restore_total

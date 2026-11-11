@@ -19,7 +19,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import NotRequired, Protocol, runtime_checkable
+from typing import Literal, NotRequired, Protocol, runtime_checkable
 
 from typing_extensions import TypedDict
 
@@ -27,9 +27,16 @@ __all__ = [
     "DEFAULT_WORKDIR",
     "ExecuteArtifact",
     "ExecuteResponse",
+    "SandboxErrorKind",
     "SandboxProtocol",
     "SandboxUnavailable",
 ]
+
+#: 沙箱错误的类别（随工具错误放进 artifact.sandbox_error，给评测、监控按类别统计）：
+#:   unavailable     沙箱起不来、拒绝了命令 —— 命令没有执行
+#:   lost            命令执行中沙箱没了（被删、驱逐、execd 重启）—— 命令已中断，结果丢失
+#:   result_unknown  提交时断开（或上一个执行者死在提交途中）—— 命令可能执行了，结果未知
+SandboxErrorKind = Literal["unavailable", "lost", "result_unknown"]
 
 
 class SandboxUnavailable(RuntimeError):
@@ -38,7 +45,12 @@ class SandboxUnavailable(RuntimeError):
     ★ 由中间件转成**工具错误**回给模型，不让整轮失败（doc/native-sandbox-design.html §2、
       native §09）：模型通常能换个办法，或明确告诉用户做不了 —— 都比一个技术错误强。
       「平台根本没接沙箱」不走这里，在装配期就明确报错。
+    ★ kind 是给机器看的类别（SandboxErrorKind），消息是给模型看的；两者分开，统计不用解析文字。
     """
+
+    def __init__(self, message: str, *, kind: SandboxErrorKind = "unavailable") -> None:
+        super().__init__(message)
+        self.kind: SandboxErrorKind = kind
 
 
 @dataclass
@@ -61,13 +73,18 @@ class ExecuteResponse:
     truncated: bool = False
     """Whether the output was truncated due to backend limitations."""
 
+    rebuilt: bool = False
+    """换了沙箱之后的第一条命令：output 前面加了「环境已重建」的提示。"""
+
+
 class ExecuteArtifact(TypedDict):
     """Machine-readable metadata attached to an `execute` tool result.
 
     Carried on `ToolMessage.artifact` alongside the model-facing `content`, so
     callers can react to shell failures. `artifact` is `None` instead when no
     command ran -- a validation or unsupported-backend error, where
-    `ToolMessage.status` is `"error"`.
+    `ToolMessage.status` is `"error"`. 沙箱错误（`status` 也是 `"error"`）只带
+    `sandbox_error`。
 
     Note that `status` is `"success"` for any command that ran, including one
     that exited non-zero: the model is expected to read the output and decide
@@ -79,6 +96,13 @@ class ExecuteArtifact(TypedDict):
 
     Omitted when the exit code could not be determined.
     """
+
+    sandbox_rebuilt: NotRequired[bool]
+    """换了沙箱之后的第一条命令（输出前带「环境已重建」提示）时为 True，否则省略。"""
+
+    sandbox_error: NotRequired[SandboxErrorKind]
+    """沙箱错误的类别（见 SandboxErrorKind）。只出现在沙箱错误的工具结果上。"""
+
 
 #: 沙箱内的工作目录，也是会话工作区的挂载点。
 #: 与 `FilesystemProtocol` 的路径根对应同一份数据。

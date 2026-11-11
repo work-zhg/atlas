@@ -3,7 +3,9 @@
 ★ 按沙箱记：沙箱重建后 uuid 变了，自然是一本新账；以后共享沙箱，也是按沙箱判断闲不闲。
 ★ 多个副本共用一本账，所以放 Redis；每次提交、命令结束、打开文件都要写，放数据库不划算。
 ★ 键在每次写入和确认时续期（7 天）：沙箱删了就没人再写，键自然过期，不用谁来清（依赖方向是
-  执行 → 生命周期，删沙箱时没人通知这里）。代价是 Redis 丢数据后，没人跟随的长命令会被当成闲置。
+  执行 → 生命周期，删沙箱时没人通知这里）。
+★ Redis 丢数据后：跟随中的命令由跟随方定期再登记（still_running）补回来；没人跟随的长命令会被
+  当成闲置。
 ★ 划掉残留记录不算活动；没有活动记录时（刚建、或 Redis 丢了），从第一次查询时开始计时 ——
   只会让回收变晚，不会变早。
 """
@@ -39,6 +41,15 @@ class ActivityLedger:
         await self._r.sadd(key, cmd_id)  # type: ignore[misc]
         await self._r.expire(key, TTL_S)
         await self.touch(sandbox_uuid)
+
+    async def still_running(self, sandbox_uuid: UUID, cmd_id: str) -> None:
+        """跟随中确认命令还在跑：再登记一次（幂等）。
+
+        ★ 不算活动：命令在跑本来就算忙，结束时 finished 会记一次。
+        """
+        key = self._running(sandbox_uuid)
+        await self._r.sadd(key, cmd_id)  # type: ignore[misc]
+        await self._r.expire(key, TTL_S)
 
     async def finished(self, sandbox_uuid: UUID, cmd_id: str) -> None:
         """命令结束：划掉，并算一次活动。"""

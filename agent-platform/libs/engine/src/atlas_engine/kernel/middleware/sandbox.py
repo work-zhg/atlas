@@ -30,10 +30,10 @@ from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel, Field
 
-from atlas_engine.contracts import SandboxUnavailable
+from atlas_engine.contracts import ExecuteArtifact, SandboxUnavailable
 
 if TYPE_CHECKING:
-    from atlas_engine.contracts import ExecuteArtifact, ExecuteResponse, SandboxProtocol
+    from atlas_engine.contracts import ExecuteResponse, SandboxProtocol
 
 __all__ = ["EXECUTE_TOOL_DESCRIPTION", "SandboxMiddleware"]
 
@@ -82,13 +82,29 @@ def _artifact(response: "ExecuteResponse") -> "ExecuteArtifact":
 
     发 None 会让下游分不清「命令没报退出码」与「退出码就是 0」。
     """
-    if response.exit_code is None:
-        return {}
-    return {"exit_code": response.exit_code}
+    artifact: ExecuteArtifact = {}
+    if response.exit_code is not None:
+        artifact["exit_code"] = response.exit_code
+    if response.rebuilt:
+        artifact["sandbox_rebuilt"] = True
+    return artifact
 
 
-def _err(message: str, tool_call_id: str | None) -> ToolMessage:
-    return ToolMessage(content=message, name="execute", tool_call_id=tool_call_id, status="error")
+def _err(
+    message: str, tool_call_id: str | None, artifact: "ExecuteArtifact | None" = None
+) -> ToolMessage:
+    return ToolMessage(
+        content=message,
+        name="execute",
+        tool_call_id=tool_call_id,
+        status="error",
+        artifact=artifact,
+    )
+
+
+def _unavailable(exc: SandboxUnavailable, tool_call_id: str | None) -> ToolMessage:
+    """沙箱错误：消息给模型，类别（artifact.sandbox_error）给评测与监控按类别统计。"""
+    return _err(f"Error: Sandbox unavailable. {exc}", tool_call_id, {"sandbox_error": exc.kind})
 
 
 class SandboxMiddleware(AgentMiddleware):
@@ -138,7 +154,7 @@ class SandboxMiddleware(AgentMiddleware):
             try:
                 response = sandbox.execute(command, timeout=timeout)
             except SandboxUnavailable as exc:
-                return _err(f"Error: Sandbox unavailable. {exc}", runtime.tool_call_id)
+                return _unavailable(exc, runtime.tool_call_id)
             except NotImplementedError as exc:
                 return _err(f"Error: Execution not available. {exc}", runtime.tool_call_id)
             except ValueError as exc:
@@ -165,7 +181,7 @@ class SandboxMiddleware(AgentMiddleware):
                     command, timeout=timeout, exec_id=runtime.tool_call_id
                 )
             except SandboxUnavailable as exc:
-                return _err(f"Error: Sandbox unavailable. {exc}", runtime.tool_call_id)
+                return _unavailable(exc, runtime.tool_call_id)
             except NotImplementedError as exc:
                 return _err(f"Error: Execution not available. {exc}", runtime.tool_call_id)
             except ValueError as exc:

@@ -260,23 +260,38 @@ async def test_thread_seq_is_assigned_and_ordered(client_factory) -> None:
     assert len(tseqs) == len(set(tseqs))
 
 
-async def test_deltas_are_not_archived(client_factory) -> None:
-    """★ delta 不进归档表。
+async def test_deltas_are_archived_one_row_per_block(client_factory) -> None:
+    """★ delta 合并后归档：同一段连着的增量并成一行（第一条的序号、拼起来的全文）。
 
-    一次回答几百到几千条 delta，加上子 run 的还要翻倍 —— 全落库的话一个长
-    会话几十万行，而其中绝大多数永远不会被读到（前端读历史走 message 表）。
+    正文的位置只有 delta 知道 —— 只靠段末的 message.completed 回放，模型调工具前说的话
+    会被排到工具后面。逐条落库又太多（一次回答几百到几千条），所以一段一行。
     """
+    parent = TurnModel(
+        scripts=[
+            [
+                AIMessageChunk(content="我派 coder "),
+                AIMessageChunk(content="去写。"),
+                _task_call("写个排序函数", "coder", "c1"),
+            ],
+            [AIMessageChunk(content="coder 说结论是 "), AIMessageChunk(content="42。")],
+        ]
+    )
     client, _ = await client_factory(
-        _delegating_parent(), TurnModel(scripts=[[AIMessageChunk(content="结论是 42")]])
+        parent, TurnModel(scripts=[[AIMessageChunk(content="结论是 42")]])
     )
     thread_id = await setup_thread(client)
     run_id = await start_run(client, thread_id, "帮我写个排序函数")
     await wait_status(client, run_id, TERMINAL)
 
-    types = [e.type for e in await events_of(run_id)]
-    assert "message.delta" not in types, types
-    # 但正文本身照常可回放 —— message.completed 一次到位
-    assert "message.completed" in types
+    events = await events_of(run_id)
+    deltas = [e for e in events if e.type == "message.delta"]
+    assert [d.data["text"] for d in deltas] == ["我派 coder 去写。", "coder 说结论是 42。"], [
+        d.data for d in deltas
+    ]
+    # 调工具前说的话排在委派之前 —— 这正是只靠 message.completed 回放时丢掉的位置
+    started = next(e for e in events if e.type == "subagent.started")
+    assert deltas[0].thread_seq < started.thread_seq < deltas[1].thread_seq
+    assert "thinking.delta" not in {e.type for e in events}
 
 
 async def test_sub_run_events_land_in_the_parent_thread(client_factory) -> None:

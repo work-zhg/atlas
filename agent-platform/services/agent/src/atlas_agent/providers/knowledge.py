@@ -2,6 +2,7 @@
 
     KnowledgeClient        调知识库的 /internal/v1（内网免令牌：带本次调用的身份请求头）
     make_knowledge_tool()  原生 Agent 的 knowledge_search 工具（tool 模式）
+    materialize_scope()    scope=all_readable 展开成这一轮能读的库
     format_context()       auto 模式：检索结果渲染成并入本轮输入的参考资料
     mcp_server_entry()     acp 会话的 MCP 下发项（Pod 里的 CLI 经它调 knowledge_search）
 
@@ -18,6 +19,7 @@
 from __future__ import annotations
 
 import base64
+import dataclasses
 import hashlib
 import hmac
 import json
@@ -45,6 +47,7 @@ __all__ = [
     "format_context",
     "make_knowledge_client",
     "make_knowledge_tool",
+    "materialize_scope",
     "mcp_server_entry",
     "readable_as",
     "sign_mcp_token",
@@ -180,6 +183,43 @@ async def readable_as(
         return await client.readable(dataset_ids)
     finally:
         use_identity(saved)
+
+
+#: 「使用者能查阅的全部」一轮最多检索几个库 —— 与知识库检索接口的上限一致
+ALL_READABLE_LIMIT = 20
+
+
+async def materialize_scope(
+    settings: Any, spec: KnowledgeSpec
+) -> tuple[KnowledgeSpec, str | None]:
+    """scope=all_readable → 按这一轮的调用身份问知识库能读哪些库，展开成 selected。
+
+    返回 (展开后的 spec, 给用户的提示)。提示非 None = 本轮没能检索知识库，要告诉用户。
+
+    ★ 必须在任何地方读 dataset_ids 之前做：auto 预检索、tool 模式的工具、acp 的 MCP 令牌
+      都按展开后的库走，库 id 照样闭包捕获、不进工具参数。
+    ★ 身份是这一轮的 X-Auth-Uid：以使用者为权限时每个人查到的是自己能读的库。
+    ★ 没接知识库 = 没有能读的库，本轮不检索、不提示 —— 「全部」本来就可以是空的。
+      知识库**不可用**则提示用户（不静默少一种能力），但不让这一轮失败：用户没有显式
+      绑定任何库，不该因为知识库挂了就整个用不了。
+    """
+    if spec.scope != "all_readable":
+        return spec, None
+    client = make_knowledge_client(settings)
+    ids: list[str] = []
+    notice = None
+    if client is not None:
+        try:
+            rows = await client.readable(None)
+        except KnowledgeUnavailable as exc:
+            logger.warning("取可读知识库失败，本轮不检索：%s", exc)
+            notice = "知识库服务暂时不可用，这一轮没有检索知识库"
+        else:
+            ids = [str(r["id"]) for r in rows if r.get("id")]
+            if len(ids) > ALL_READABLE_LIMIT:
+                logger.info("可读知识库 %d 个，本轮只检索前 %d 个", len(ids), ALL_READABLE_LIMIT)
+                ids = ids[:ALL_READABLE_LIMIT]
+    return dataclasses.replace(spec, dataset_ids=tuple(ids), scope="selected"), notice
 
 
 def require_client(settings: Any) -> KnowledgeClient:

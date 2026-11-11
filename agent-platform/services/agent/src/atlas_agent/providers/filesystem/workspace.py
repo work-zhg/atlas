@@ -4,7 +4,7 @@
 edit、隐藏文件、截断、上限）只写一份，对两种底层都成立。
 
     同步方法     只直连对象存储（给图外的调用方：测试、脚本）
-    异步方法     工作区区按选路：原生沙箱 READY 时经沙箱，否则直连；技能区、系统区始终直连
+    异步方法     按选路：这个人的原生沙箱 READY 时经沙箱，否则直连
 
 用 S3 协议访问：阿里云 OSS 的 S3 兼容端点、MinIO、AWS S3 三者同一份代码；本地开发用 MinIO，生产用
 OSS，测试用 moto 的内存桶。boto3 是同步的：同步核心 + asyncio.to_thread。
@@ -15,7 +15,7 @@ from __future__ import annotations
 import base64
 import fnmatch
 import posixpath
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Any, TypeVar
 from uuid import UUID
 
@@ -57,23 +57,29 @@ class Workspace:
         user_id: UUID | str,
         thread_id: UUID | str,
         workspace_thread_id: UUID | str | None = None,
+        skills: Iterable[tuple[str, int | str]] = (),
         routing: WorkspaceRouting | None = None,
     ) -> None:
         """
         Args:
             user_id: 拥有者。进路径 —— 逃逸防护因此同时挡住跨用户。
-            thread_id: 本会话。技能区与系统区恒用它。
-            workspace_thread_id: 工作区归属的会话。None = 自己（主 agent）；
-                子智能体传**父会话**的 id
-                —— 它与主 agent 共享同一份工作区（委派常常就是「帮我处理这批文件」）。
-            routing: 工作区的沙箱路由。None = 永远直连对象存储（没开沙箱的部署）。
+            thread_id: 本会话。它的隐藏目录 .atlas/{会话}/ 用它。
+            workspace_thread_id: 所用工作区的根会话。None = 自己（根会话）；子、孙会话传**根会话**
+                的 id —— 它们共用同一份工作区（委派常常就是「帮我处理这批文件」）。
+            skills: 本智能体绑定的技能 (slug, 版本)：文件工具只放行这几个技能目录。
+            routing: 沙箱路由。None = 永远直连对象存储（没开沙箱的部署）。
         """
         self.layout = WorkspaceLayout.of(user_id, thread_id, workspace_thread_id)
-        self.gate = PathGate()
+        self.gate = PathGate(self.layout, skills)
         self.objects = ObjectStoreFiles(client, bucket, self.layout)
         self._router = StoreRouter(self.objects, routing)
         self._s3 = client
         self._bucket = bucket
+
+    @property
+    def workdir(self) -> str:
+        """所用工作区在沙箱里的路径（模型看到的工作区路径）。"""
+        return self.layout.workdir
 
     def key_of(self, path: str) -> str:
         """模型 / 界面给的路径 → object key（过路径关卡；越界抛 PathEscape）。"""
@@ -81,14 +87,11 @@ class Workspace:
 
     async def _routed(
         self,
-        fp: FilePath | None,
         fn: Callable[[FileStore], T],
         *,
         refuse: Callable[[str], T] | None,
     ) -> T:
-        return await self._router.run(
-            fn, in_sandbox=fp is not None and fp.in_sandbox(), refuse=refuse
-        )
+        return await self._router.run(fn, refuse=refuse)
 
     # ------------------------------------------------------------------ 读
 
@@ -106,7 +109,7 @@ class Workspace:
         except PathEscape as exc:
             return ReadResult(error=str(exc))
         return await self._routed(
-            fp, lambda store: self._read(fp, path, offset, limit, store), refuse=None
+            lambda store: self._read(fp, path, offset, limit, store), refuse=None
         )
 
     @staticmethod
@@ -141,9 +144,10 @@ class Workspace:
         pattern: str | None = None,
         max_keys: int = SEARCH_MAX_KEYS,
     ) -> SearchResult:
-        """前缀列举，可选再按文件名 glob 过滤。
+        """前缀列举，可选再按文件名 glob 过滤。工作区里的结果是相对工作区的路径，技能给真实路径。
 
         ★ 不搜索内容 —— 对象存储做不到。工具描述必须写明并指向 execute。
+        ★ glob 对真实路径、相对所在根（工作区、技能目录）的路径都试一次：*.md、reports/*.md 都能用。
 
         pattern 含 ** 时递归列举（不带 delimiter），否则只列一层并把子目录以 common_prefixes
         返回 —— 后者是用 delimiter 模拟出来的，对象存储没有真正的目录。
@@ -166,7 +170,7 @@ class Workspace:
         except PathEscape as exc:
             return SearchResult(error=str(exc))
         return await self._routed(
-            fp, lambda store: self._search(fp, prefix, pattern, max_keys, store), refuse=None
+            lambda store: self._search(fp, prefix, pattern, max_keys, store), refuse=None
         )
 
     def _search(
@@ -182,19 +186,21 @@ class Workspace:
             for rel in page_files:
                 if rel.endswith("/"):
                     continue  # 目录标记对象（s3fs 建目录时会写一个）—— 不是文件
-                shown = self.gate.shown(FilePath(fp.area, rel))
+                shown = self.gate.shown(rel)
                 # ★ 默认跳过点开头的条目。不过滤的话模型每次 search("") 都会被它们淹没，
                 #   看不见自己的产物。显式给出前缀（search(".x/")）时仍然列得出来
                 if not include_hidden and is_hidden(shown):
                     continue
-                if pattern and not _matches(shown, pattern):
+                if pattern and not (
+                    _matches(shown, pattern) or _matches(self.gate.local(rel), pattern)
+                ):
                     continue
                 if len(keys) >= max_keys:
                     truncated = True
                     break
                 keys.append(shown)
             for rel in page_dirs:
-                shown = self.gate.shown(FilePath(fp.area, rel))
+                shown = self.gate.shown(rel)
                 if include_hidden or not is_hidden(shown):
                     prefixes.append(shown)
             if truncated:
@@ -220,7 +226,6 @@ class Workspace:
         except PathEscape as exc:
             return WriteResult(error=str(exc))
         return await self._routed(
-            fp,
             lambda store: self._write(fp, path, data, store),
             refuse=lambda msg: WriteResult(error=msg),
         )
@@ -252,7 +257,6 @@ class Workspace:
         except PathEscape as exc:
             return EditResult(error=str(exc))
         return await self._routed(
-            fp,
             lambda store: self._edit(fp, path, old_string, new_string, replace_all, store),
             refuse=lambda msg: EditResult(error=msg),
         )
@@ -314,7 +318,6 @@ class Workspace:
         except PathEscape as exc:
             return DeleteResult(error=str(exc))
         return await self._routed(
-            fp,
             lambda store: self._delete(fp, path, recursive, store),
             refuse=lambda msg: DeleteResult(error=msg),
         )
