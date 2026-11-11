@@ -2752,6 +2752,8 @@ export interface components {
             }[];
             /** Approval Mode */
             approval_mode?: ("plan" | "manual" | "auto") | null;
+            /** Model */
+            model?: string | null;
         };
         /** RunOut */
         RunOut: {
@@ -3190,6 +3192,18 @@ export interface components {
             /** Next Cursor */
             next_cursor?: string | null;
         };
+        /**
+         * ThreadModelOut
+         * @description 主模型（输入框旁的模型选择器据此渲染）。可选的模型按智能体的 Key 列出（GET /v1/models）。
+         */
+        ThreadModelOut: {
+            /** Model */
+            model: string;
+            /** Default Model */
+            default_model: string;
+            /** Switchable */
+            switchable: boolean;
+        };
         /** ThreadOut */
         ThreadOut: {
             /**
@@ -3239,6 +3253,9 @@ export interface components {
             /** Approval Mode */
             approval_mode?: string | null;
             approval?: components["schemas"]["ThreadApprovalOut"] | null;
+            /** Model */
+            model?: string | null;
+            model_choice?: components["schemas"]["ThreadModelOut"] | null;
             /** Source App */
             source_app?: string | null;
             /**

@@ -222,9 +222,17 @@ class CapabilityAssembly:
         key = await agent_key(s, segment.thread.agent_uuid, spec.name)
         admit_models(key, needed)
         assert key.key is not None
+        main = with_platform_model(spec.model)
+        # ★ 最大输出不超过模型的上限：对话里换了模型时，智能体配置的值是按原来的模型设的，
+        #   超了供应商会拒绝整轮
+        entry = key.get(main.model)
+        if entry is not None and entry.max_output_tokens:
+            main = dataclasses.replace(
+                main, max_output_tokens=min(main.max_output_tokens, entry.max_output_tokens)
+            )
         spec = dataclasses.replace(
             spec,
-            model=with_platform_model(spec.model),
+            model=main,
             subagents=tuple(
                 dataclasses.replace(sub, model=with_platform_model(sub.model))
                 for sub in spec.subagents

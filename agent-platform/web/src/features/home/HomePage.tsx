@@ -15,8 +15,10 @@ import { useAgent, useAgents, useDefaultAgent } from "@/api/agents";
 import { uploadThreadFile, useCreateThread, withAttachments } from "@/api/threads";
 import type { ApprovalMode } from "@/lib/events";
 import { can, useMe } from "@/lib/session";
+import { selectableModels, useAgentModels } from "@atlas/chat-ui/src/api/models";
 import { useSendMessage } from "@atlas/chat-ui/src/api/runs";
 import { Composer } from "@atlas/chat-ui/src/chat/Composer";
+import { ModelPicker } from "@atlas/chat-ui/src/chat/ModelPicker";
 import { ModePicker } from "@atlas/chat-ui/src/chat/ModePicker";
 import { newIdempotencyKey } from "@atlas/chat-ui/src/lib/id";
 
@@ -43,6 +45,7 @@ export function HomePage() {
 
   const [picked, setPicked] = useState<string>();
   const [mode, setMode] = useState<ApprovalMode | null>(null);
+  const [model, setModel] = useState<string | null>(null);
   const [fill, setFill] = useState<{ text: string; seq: number }>();
 
   const agents = agentsQ.data?.data ?? [];
@@ -50,11 +53,18 @@ export function HomePage() {
   const agentId = picked ?? params.get("agent") ?? defaultId ?? agents[0]?.id;
   const agentQ = useAgent(agentId);
   const agent = agents.find((a) => a.id === agentId) ?? agentQ.data;
-  // spec 在接口里是自由 dict：只取这里要的两项（CLI 智能体没有审批模式，权限由 CLI 自己管）
+  // spec 在接口里是自由 dict：只取这里要的几项（CLI 智能体没有审批模式，权限由 CLI 自己管；
+  // 模型在拉起 CLI 时就定了，对话里不能换）
   const spec = agentQ.data?.spec as
-    | { kind?: string; approval?: { default_mode: ApprovalMode; allowed_modes: ApprovalMode[] } }
+    | {
+        kind?: string;
+        model?: { model: string };
+        approval?: { default_mode: ApprovalMode; allowed_modes: ApprovalMode[] };
+      }
     | undefined;
-  const approval = spec?.kind === "cli" ? undefined : spec?.approval;
+  const isCli = spec?.kind === "cli";
+  const approval = isCli ? undefined : spec?.approval;
+  const modelsQ = useAgentModels(agentId, Boolean(spec) && !isCli);
 
   const send = async (text: string, files: File[]) => {
     if (!agentId) return;
@@ -66,6 +76,7 @@ export function HomePage() {
         content: [{ type: "text", text: withAttachments(text, paths) }],
         idempotencyKey: newIdempotencyKey(),
         approvalMode: mode ?? undefined,
+        model: model ?? undefined,
       });
       router.push(`/chat/${thread.id}`);
     } catch (e) {
@@ -127,8 +138,18 @@ export function HomePage() {
                 onChange={(id) => {
                   setPicked(id);
                   setMode(null);
+                  setModel(null);
                 }}
               />
+              {spec?.model && (
+                <ModelPicker
+                  value={model ?? spec.model.model}
+                  defaultModel={spec.model.model}
+                  models={selectableModels(modelsQ.data)}
+                  onChange={setModel}
+                  locked={isCli ? "CLI 智能体不能在对话里换模型，请到智能体配置里修改" : undefined}
+                />
+              )}
               {approval && (
                 <ModePicker
                   value={mode ?? approval.default_mode}

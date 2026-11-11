@@ -53,6 +53,7 @@ from ..schemas.thread import (
     ThreadApprovalOut,
     ThreadCreate,
     ThreadListOut,
+    ThreadModelOut,
     ThreadOut,
     ThreadUpdate,
     WorkspaceFilesOut,
@@ -127,6 +128,7 @@ def _to_out(
     active_run_id: UUID | None = None,
     last_run: dict[str, Any] | None = None,
     approval: ThreadApprovalOut | None = None,
+    model_choice: ThreadModelOut | None = None,
     compact_count: int = 0,
 ) -> ThreadOut:
     return ThreadOut(
@@ -145,6 +147,8 @@ def _to_out(
         memory=thread.memory,
         approval_mode=thread.approval_mode,
         approval=approval,
+        model=thread.model,
+        model_choice=model_choice,
         source_app=thread.source_app,
         subagent_thread_count=subagent_thread_count,
         active_run_id=active_run_id,
@@ -154,6 +158,33 @@ def _to_out(
         latest_state=thread.latest_state,
         created_at=thread.created_at,
         updated_at=thread.updated_at,
+    )
+
+
+def _approval_of(thread: Thread, spec: AgentSpecIn | None) -> ThreadApprovalOut | None:
+    """会话当前的审批模式与可选范围（CLI 智能体没有：权限由 CLI 管）。"""
+    if spec is None or spec.kind != "native":
+        return None
+    approval = spec.approval.to_engine()
+    return ThreadApprovalOut(
+        mode=approval.resolve(thread.approval_mode),
+        default_mode=approval.default_mode,
+        allowed_modes=list(approval.allowed_modes),
+    )
+
+
+def _model_choice_of(thread: Thread, spec: AgentSpecIn | None) -> ThreadModelOut | None:
+    """会话的主模型（与 executor/segment.py 换模型同一套规则）。
+
+    子会话不给：SubAgent 用自己配置的模型。
+    """
+    if spec is None or thread.subagent_name:
+        return None
+    switchable = spec.kind == "native"
+    return ThreadModelOut(
+        model=(thread.model if switchable else None) or spec.model.model,
+        default_model=spec.model.model,
+        switchable=switchable,
     )
 
 
@@ -234,6 +265,8 @@ class ThreadService:
 
     async def get(self, thread_id: UUID) -> ThreadOut:
         thread, agent = await self._require(thread_id)
+        # 输入框旁的审批模式、模型选择器按智能体当前版本渲染
+        spec = await self._current_spec(agent)
         # 只在详情上算：删除确认要显示会被一起删掉的子会话数（设计 §12）。
         return _to_out(
             thread,
@@ -244,7 +277,8 @@ class ThreadService:
             last_run=(await RunRepository(self._session).latest_runs_of([thread_id])).get(
                 thread_id
             ),
-            approval=await self._approval_of(thread, agent),
+            approval=_approval_of(thread, spec),
+            model_choice=_model_choice_of(thread, spec),
             compact_count=await self._compact_count(thread_id),
         )
 
@@ -252,8 +286,8 @@ class ThreadService:
         counts = await ThreadContextRepository(self._session).compact_counts([thread_id])
         return counts.get(thread_id, 0)
 
-    async def _approval_of(self, thread: Thread, agent: Agent) -> ThreadApprovalOut | None:
-        """会话当前的审批模式与可选范围，取自智能体**当前版本**（下一条消息就用它）。"""
+    async def _current_spec(self, agent: Agent) -> AgentSpecIn | None:
+        """智能体**当前版本**的配置（下一条消息就用它）。"""
         if agent.current_version_uuid is None:
             return None
         version = await fetch_one(
@@ -261,17 +295,7 @@ class ThreadService:
             AgentVersion,
             AgentVersion.agent_version_uuid == agent.current_version_uuid,
         )
-        if version is None:
-            return None
-        parsed = AgentSpecIn.model_validate(version.spec)
-        if parsed.kind != "native":
-            return None
-        approval = parsed.approval.to_engine()
-        return ThreadApprovalOut(
-            mode=approval.resolve(thread.approval_mode),
-            default_mode=approval.default_mode,
-            allowed_modes=list(approval.allowed_modes),
-        )
+        return AgentSpecIn.model_validate(version.spec) if version is not None else None
 
     async def list_messages(
         self, thread_id: UUID, *, cursor: str | None, limit: int

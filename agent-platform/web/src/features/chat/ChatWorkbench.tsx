@@ -73,6 +73,7 @@ export function ChatWorkbench({ threadId }: { threadId: string }) {
         uploadFile={upload}
         feedback
         regenerate
+        modelPicker
         // 业务应用建的会话只读：续聊要回到那个应用，不能绕过它的流程状态（内网身份传递 §7.3）
         readOnly={!!thread?.source_app}
         readOnlyHint={

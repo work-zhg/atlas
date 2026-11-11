@@ -234,6 +234,9 @@ class Thread(Base, TimestampMixin):
     #: 用户在会话里选的审批模式 plan | manual | auto（迁移 0022），作用于下一个 run。
     #: NULL = 用智能体的默认模式（doc/native-approval-mode-design.html）
     approval_mode: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    #: 用户在会话里选的主模型（迁移 0043），作用于之后的 run。NULL = 跟随智能体配置的模型。
+    #: 只对原生智能体的根会话生效（executor/segment.py）
+    model: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_by_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
     #: 会话树的根（迁移 0021）。NULL = 自己就是根；子会话建出时取父会话的根
     #: （ThreadRepository.create）。SubAgent 可以继续派 SubAgent，所以不能再由

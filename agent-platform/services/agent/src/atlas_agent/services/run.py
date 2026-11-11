@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import Settings
 from ..db.models import Agent, Run
-from ..errors import Conflict, InvalidApprovalMode, NotFound, ThreadLocked
+from ..errors import Conflict, InvalidApprovalMode, InvalidModelChoice, NotFound, ThreadLocked
 from ..executor.base import RunExecutor
 from ..repositories.agent import AgentRepository
 from ..repositories.continuation import ContinuationQueries
@@ -136,6 +136,7 @@ class RunService:
         approval_mode = _approval_mode_for(
             version.spec, thread.approval_mode, payload.approval_mode
         )
+        model = _model_for(version.spec, payload.model)
 
         # 同一会话串行，防止并发 run 撕裂 state（§9）。
         #
@@ -174,6 +175,9 @@ class RunService:
             if payload.approval_mode is not None:
                 # 会话记住用户的选择，作用于之后的消息（输入框旁的模式选择器）
                 thread.approval_mode = payload.approval_mode
+            if payload.model is not None:
+                # 同上：输入框旁的模型选择器（开跑时由 executor/segment.py 换进主模型）
+                thread.model = model
             run = await self._runs.create(
                 run_id=run_id,
                 thread_id=thread_id,
@@ -389,3 +393,23 @@ def _approval_mode_for(spec: dict, remembered: str | None, requested: str | None
             allowed=list(approval.allowed_modes),
         )
     return approval.resolve(requested or remembered)
+
+
+def _model_for(spec: dict, requested: str | None) -> str | None:
+    """会话要记住的模型：选的就是智能体配置的主模型 → None（恢复跟随智能体，之后智能体改了
+    模型会话也跟着变）。
+
+    ★ 这里不查模型是否可用：开跑时 with_models 按智能体的 Key 检查（和智能体配置的模型
+      同一道关），用不了这一轮不开始并说明原因，用户换一个即可。
+    ★ CLI 智能体的模型在拉起 CLI 时就定了，对话里不能换（要换去智能体配置里改）。
+    """
+    if requested is None:
+        return None
+    from ..schemas.agent import AgentSpecIn
+
+    parsed = AgentSpecIn.model_validate(spec)
+    if parsed.kind != "native":
+        raise InvalidModelChoice(
+            "CLI 智能体不能在对话里换模型，请到智能体配置里修改", model=requested
+        )
+    return None if requested == parsed.model.model else requested

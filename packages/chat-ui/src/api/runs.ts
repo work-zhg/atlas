@@ -15,16 +15,22 @@ export interface SendMessageInput {
   idempotencyKey?: string;
   /** 用户在选择器里选的审批模式；不传 = 沿用会话记住的模式（没有就用智能体默认） */
   approvalMode?: ApprovalMode;
+  /** 用户在选择器里选的主模型；不传 = 沿用会话记住的模型（没有就用智能体配置的） */
+  model?: string;
 }
 
 export function useSendMessage() {
   const qc = useQueryClient();
   const http = useAtlasHttp();
   return useMutation({
-    mutationFn: ({ threadId, content, idempotencyKey, approvalMode }: SendMessageInput) =>
+    mutationFn: ({ threadId, content, idempotencyKey, approvalMode, model }: SendMessageInput) =>
       http.post<RunAccepted>(
         `/v1/threads/${threadId}/runs`,
-        approvalMode ? { content, approval_mode: approvalMode } : { content },
+        {
+          content,
+          ...(approvalMode ? { approval_mode: approvalMode } : {}),
+          ...(model ? { model } : {}),
+        },
         idempotencyKey ? { "Idempotency-Key": idempotencyKey } : undefined,
       ),
     onSuccess: (_data, vars) => {

@@ -33,6 +33,10 @@ class RunCreate(BaseModel):
     #: 用户在输入框旁选的审批模式。必须在智能体允许的范围里；会话会记住它，作用于之后的消息。
     #: 不传 = 沿用会话上次的选择（没有就用智能体默认）
     approval_mode: ApprovalModeIn | None = None
+    #: 用户在输入框旁选的主模型（智能体能用的模型之一）；会话会记住它，作用于之后的消息。
+    #: 选的就是智能体配置的模型 = 恢复跟随智能体。不传 = 沿用会话上次的选择。
+    #: CLI 智能体不支持（要换去智能体配置里改）
+    model: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class QuestionAnswerIn(BaseModel):

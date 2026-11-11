@@ -71,6 +71,13 @@ class InvalidApprovalMode(AppError):
     kind = "invalid_approval_mode"
 
 
+class InvalidModelChoice(AppError):
+    """对话里选的模型用不了：CLI 智能体不支持在对话里换模型。"""
+
+    status_code = 400
+    kind = "invalid_model_choice"
+
+
 class InvalidAnswers(AppError):
     """ask_user_question 的答案和问题对不上（doc/ask-user-question-design.html）。"""
 

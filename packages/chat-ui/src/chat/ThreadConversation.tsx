@@ -12,6 +12,7 @@ import { Alert, Tag } from "antd";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { qk } from "../api/keys";
+import { selectableModels, useAgentModels } from "../api/models";
 import { useCancelRun, useSendMessage } from "../api/runs";
 import { flattenMessages, useMessages, useThread } from "../api/threads";
 import { avatarBackground, avatarLetter } from "../lib/avatar";
@@ -21,6 +22,7 @@ import { isStreamDone, type RunState } from "../lib/run-reducer";
 import styles from "./chat.module.css";
 import { Composer } from "./Composer";
 import { MessageStream } from "./MessageStream";
+import { ModelPicker } from "./ModelPicker";
 import { ModePicker } from "./ModePicker";
 import { useThreadStream } from "./useThreadStream";
 
@@ -54,6 +56,8 @@ export interface ThreadConversationProps {
   feedback?: boolean;
   /** 最后一条回答下的「重新生成」：用最后一个问题再问一次 */
   regenerate?: boolean;
+  /** 输入框旁的模型选择器（可选的按智能体的 Key 列出；嵌入方没有 /v1/models 时不开） */
+  modelPicker?: boolean;
   /** 不要头部（嵌在别的面板里，如智能体编辑页的调试预览） */
   hideHeader?: boolean;
   /** 发消息之前先做的事（调试预览：先把还没存下的草稿存掉，这一轮才用得上最新的修改） */
@@ -79,6 +83,7 @@ export function ThreadConversation({
   uploadFile,
   feedback = false,
   regenerate = false,
+  modelPicker = false,
   hideHeader = false,
   beforeSend,
   placeholder = "继续对话…",
@@ -114,6 +119,13 @@ export function ThreadConversation({
     wasRunning.current = running;
   }, [running, threadId, qc]);
 
+  // ── 主模型。CLI 智能体只显示不能选（模型在拉起 CLI 时就定了）
+  const modelChoice = modelPicker ? threadQ.data?.model_choice : undefined;
+  // 用户在选择器里选了、还没发出去的模型；null = 沿用会话记住的（没有就是智能体配置的）
+  const [pickedModel, setPickedModel] = useState<string | null>(null);
+  useEffect(() => setPickedModel(null), [threadId, threadQ.data?.model]);
+  const modelsQ = useAgentModels(threadQ.data?.agent_id, Boolean(modelChoice?.switchable));
+
   // 头部状态：审批优先（用户要动手），其次是挂起（在等子智能体），最后是运行中
   const liveTag = !running
     ? null
@@ -146,9 +158,10 @@ export function ThreadConversation({
         idempotencyKey: newIdempotencyKey(),
         // 没动过选择器就不传：会话沿用记住的模式（没有就跟着智能体的默认走）
         approvalMode: pickedMode ?? undefined,
+        model: pickedModel ?? undefined,
       });
     },
-    [threadId, sendMessage, pickedMode, uploadFile, beforeSend],
+    [threadId, sendMessage, pickedMode, pickedModel, uploadFile, beforeSend],
   );
 
   // 重新生成：把最后一个问题原样再发一次（新的一轮）
@@ -178,6 +191,25 @@ export function ThreadConversation({
       disabled={running}
     />
   );
+
+  // 运行中同样不可切换：这一轮开始时就定了
+  const modelSelector = modelChoice && (
+    <ModelPicker
+      value={pickedModel ?? modelChoice.model}
+      defaultModel={modelChoice.default_model}
+      models={selectableModels(modelsQ.data)}
+      onChange={setPickedModel}
+      disabled={running}
+      locked={modelChoice.switchable ? undefined : "CLI 智能体不能在对话里换模型，请到智能体配置里修改"}
+    />
+  );
+  const toolbar =
+    modelSelector || modeSelector ? (
+      <>
+        {modelSelector}
+        {modeSelector}
+      </>
+    ) : undefined;
 
   const agent = threadQ.data;
 
@@ -270,7 +302,7 @@ export function ThreadConversation({
           running={running}
           onSend={handleSend}
           onCancel={() => activeRunId && cancelRun.mutate(activeRunId)}
-          toolbar={modeSelector}
+          toolbar={toolbar}
           placeholder={placeholder}
           acceptFiles={Boolean(uploadFile)}
           foot={hideHeader ? undefined : "内容由 AI 生成，请核实重要信息"}

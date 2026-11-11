@@ -160,6 +160,11 @@ class SegmentLoader:
         #   历史重建、压缩、步数刹车、审批、取消、孤儿回收全部原样复用。
         if thread.subagent_name:
             spec = spec_for_subagent(spec, thread.subagent_name)
+        # 用户在对话框里选的主模型（迁移 0043）：只换原生智能体根会话的主模型 ——
+        # SubAgent 用自己配置的模型，CLI 智能体要换模型去智能体配置里改。
+        # 能不能用由 with_models 按智能体的 Key 检查，与配置的模型同一道关
+        elif thread.model and spec.kind == "native":
+            spec = replace(spec, model=replace(spec.model, model=thread.model))
 
         # 审批模式（doc/native-approval-mode-design.html）：run 上记的是建 run 时
         # （或计划获批后）的模式，子 run 记的是派活那一刻父 run 的模式。

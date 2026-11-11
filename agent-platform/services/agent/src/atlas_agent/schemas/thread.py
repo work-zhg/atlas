@@ -69,6 +69,17 @@ class ThreadApprovalOut(BaseModel):
     allowed_modes: list[str]
 
 
+class ThreadModelOut(BaseModel):
+    """主模型（输入框旁的模型选择器据此渲染）。可选的模型按智能体的 Key 列出（GET /v1/models）。"""
+
+    #: 下一条消息将用的模型：会话记住的选择，否则智能体配置的
+    model: str
+    #: 智能体配置的主模型
+    default_model: str
+    #: False = CLI 智能体：模型在拉起 CLI 时就定了，要换去智能体配置里改
+    switchable: bool
+
+
 class ThreadOut(BaseModel):
     id: UUID
     agent_id: UUID
@@ -91,6 +102,10 @@ class ThreadOut(BaseModel):
     approval_mode: str | None = None
     #: 审批模式的可选范围与当前值。只在单条详情上计算；acp 智能体为空（权限由 CLI 管）
     approval: ThreadApprovalOut | None = None
+    #: 会话记住的模型选择（NULL = 跟随智能体配置的模型）
+    model: str | None = None
+    #: 主模型的当前值与能否切换。只在单条详情上计算；子会话为空（SubAgent 用自己配置的模型）
+    model_choice: ThreadModelOut | None = None
     #: 建会话的业务应用（如 teamflow）；人直接建的为空。非空时从 Atlas 侧只读（内网身份传递 §7.3）
     source_app: str | None = None
     #: 本会话下的子会话数。★ 删除确认要显示它：删父会话会**级联删掉**所有
