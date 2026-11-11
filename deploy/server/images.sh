@@ -15,22 +15,32 @@
 #   服务器上各留最近 3 个，便于回退（IMAGE_TAG=… 可指定标签）。
 # ★ 本机（Apple Silicon）用 --platform linux/amd64 交叉构建（QEMU），本机打成 *:amd64 之类的单独标签，
 #   导入服务器后再改回清单期望的名字 —— 直接用原名会覆盖本机 Docker Desktop 正在用的 arm64 镜像。
-# ★ 服务器没有 docker：经 ssh 把 docker save 的流灌进 ctr import，不在服务器上装构建工具。
+# ★ 112 没有 docker：经 ssh 把 docker save 的流灌进 ctr import，不在服务器上装构建工具。
 # ★ 下载路径按实测选最快的（2026-10-20）。构建的依赖（pip / apt / npm / HuggingFace）走服务器上的代理
 #   （trojan，SOCKS5，只绑服务器的 127.0.0.1:1080）比开发机代理快一个数量级：先在开发机上起
 #     ssh -N -L 127.0.0.1:21080:127.0.0.1:1080 root@<服务器>
 #     uvx --from pproxy pproxy -l http://0.0.0.0:28118 -r socks5://127.0.0.1:21080   # docker build 只认 HTTP 代理
 #   再 BUILD_PROXY=http://host.docker.internal:28118 deploy/server/images.sh …
+# ★ 也可以在服务器上直接运行（git clone 到服务器，服务器装了 docker）：本机有 /etc/kubernetes/admin.conf
+#   就当作在服务器上（ATLAS_SERVER=local 同义）—— 就地构建、导入，不经 ssh；构建和拉镜像默认不走代理
+#   （BUILD_PROXY / SERVER_PROXY 可指定）。
 # ★ 脚本运行中不要改它：bash 边执行边读脚本，改动会让正在跑的那份读错位。
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
+if [ -z "${ATLAS_SERVER:-}" ] && [ -r /etc/kubernetes/admin.conf ]; then ATLAS_SERVER=local; fi
 TARGET="${ATLAS_SERVER:-root@192.168.0.112}"
+on_server() { if [ "$TARGET" = local ]; then bash -c "$1"; else ssh "$TARGET" "$1"; fi; }
 TAG="${IMAGE_TAG:-$(date +%Y%m%d-%H%M%S)}"
 KEEP=3
-PROXY="${BUILD_PROXY:-http://host.docker.internal:58591}"
-PROXY_ARGS=(--build-arg "HTTP_PROXY=$PROXY" --build-arg "HTTPS_PROXY=$PROXY"
-            --build-arg "http_proxy=$PROXY" --build-arg "https_proxy=$PROXY")
+if [ "$TARGET" = local ]; then
+  PROXY="${BUILD_PROXY-}"
+else
+  PROXY="${BUILD_PROXY-http://host.docker.internal:58591}"
+fi
+PROXY_ARGS=()
+[ -z "$PROXY" ] || PROXY_ARGS=(--build-arg "HTTP_PROXY=$PROXY" --build-arg "HTTPS_PROXY=$PROXY"
+                               --build-arg "http_proxy=$PROXY" --build-arg "https_proxy=$PROXY")
 
 # 名字 → 本机 amd64 标签 | 服务器上的名字 | Dockerfile | 构建上下文
 spec() {
@@ -51,17 +61,21 @@ THIRD=(
   docker.io/library/postgres:16-alpine
   docker.io/library/redis:7-alpine
   docker.io/qdrant/qdrant:v1.19.1
-  docker.io/jaegertracing/jaeger:2.21.0
   docker.io/otel/opentelemetry-collector:0.160.0
-  docker.io/clickhouse/clickhouse-server:25.8
-  docker.io/langfuse/langfuse:3
-  docker.io/langfuse/langfuse-worker:3
   ghcr.io/berriai/litellm:main-stable
   registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.16.0
   sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/server:release-1.1.1
   sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/controller:release-1.1.1
   sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/execd:release-1.1.1
   sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/egress:release-1.1.1
+)
+# 可观测后端（11-observability.yaml）：.env 或环境变量 ATLAS_OBSERVABILITY=none 时不装，也就不用拉
+[ -n "${ATLAS_OBSERVABILITY:-}" ] || ATLAS_OBSERVABILITY="$(set -a; [ ! -f .env ] || . ./.env; printf '%s' "${ATLAS_OBSERVABILITY:-full}")"
+[ "$ATLAS_OBSERVABILITY" = none ] || THIRD+=(
+  docker.io/jaegertracing/jaeger:2.21.0
+  docker.io/clickhouse/clickhouse-server:25.8
+  docker.io/langfuse/langfuse:3
+  docker.io/langfuse/langfuse-worker:3
 )
 # MinIO 按 digest 固定（10-infra.yaml）：digest 引用没有 tag，导入时按 digest 匹配即可
 THIRD_DIGEST=(
@@ -73,7 +87,7 @@ THIRD_DIGEST=(
 FIXED=(atlas-cli-bridge:0.4.0 atlas-sandbox:dev atlas-csi-s3:0.43.7 atlas-egress:release-1.1.1)
 
 if [ "${1:-}" = "check" ]; then
-  have="$(ssh "$TARGET" "ctr -n k8s.io images ls -q")"
+  have="$(on_server "ctr -n k8s.io images ls -q")"
   missing=()
   for img in "${THIRD[@]}" "${THIRD_DIGEST[@]}"; do
     grep -qxF "$img" <<<"$have" || missing+=("${img}（images.sh third）")
@@ -92,8 +106,12 @@ if [ "${1:-}" = "check" ]; then
   exit 0
 fi
 
-# 服务器上的代理（trojan 客户端，只有 SOCKS5、只绑 127.0.0.1）
-SERVER_PROXY="${SERVER_PROXY:-socks5://127.0.0.1:1080}"
+# 服务器上的代理（112：trojan 客户端，只有 SOCKS5、只绑 127.0.0.1）；在服务器上直接运行时默认不走代理
+if [ "$TARGET" = local ]; then
+  SERVER_PROXY="${SERVER_PROXY-}"
+else
+  SERVER_PROXY="${SERVER_PROXY-socks5://127.0.0.1:1080}"
+fi
 
 if [ "${1:-}" = "third" ] || [ "${1:-}" = "pull" ]; then
   if [ "$1" = "pull" ]; then
@@ -107,18 +125,18 @@ if [ "${1:-}" = "third" ] || [ "${1:-}" = "pull" ]; then
   #   quay、cgr.dev、registry.k8s.io 经服务器的代理 ≈0.5 MB/s，比国内加速源（daocloud 等）和开发机代理快得多。
   # ★ 用 crane 而不是 ctr pull：ctr 不读代理环境变量；给 containerd 配代理又得重启它。crane 是单个静态二进制，
   #   放在服务器的 /tmp，不装进系统。
-  ssh "$TARGET" "[ -x /tmp/crane ] || (cd /tmp && curl -fsSL -x ${SERVER_PROXY/socks5:/socks5h:} -o crane.tgz \
+  on_server "[ -x /tmp/crane ] || (cd /tmp && curl -fsSL -x '${SERVER_PROXY/socks5:/socks5h:}' -o crane.tgz \
     https://github.com/google/go-containerregistry/releases/latest/download/go-containerregistry_Linux_x86_64.tar.gz \
     && tar xzf crane.tgz crane && rm crane.tgz)"
   for img in "${IMAGES[@]}"; do
     case "$img" in
       *.aliyuncs.com/*) proxy="" ;;
-      *) proxy="HTTPS_PROXY=${SERVER_PROXY}" ;;
+      *) proxy="${SERVER_PROXY:+HTTPS_PROXY=${SERVER_PROXY}}" ;;
     esac
     echo "── $img${proxy:+（经服务器代理）}"
     # 已经有了就跳过（按名字或 digest）
-    if ssh "$TARGET" "ctr -n k8s.io images ls -q | grep -qxF '$img'"; then echo "   已存在"; continue; fi
-    ssh "$TARGET" "set -e; f=\$(mktemp /tmp/img-XXXXXX.tar); trap 'rm -f \$f' EXIT
+    if on_server "ctr -n k8s.io images ls -q | grep -qxF '$img'"; then echo "   已存在"; continue; fi
+    on_server "set -e; f=\$(mktemp /tmp/img-XXXXXX.tar); trap 'rm -f \$f' EXIT
       $proxy /tmp/crane pull --platform linux/amd64 '$img' \$f
       ctr -n k8s.io images import --platform linux/amd64 \$f >/dev/null"
   done
@@ -127,10 +145,10 @@ if [ "${1:-}" = "third" ] || [ "${1:-}" = "pull" ]; then
   if [ "${1:-}" = "third" ]; then
     for img in "${THIRD_DIGEST[@]}"; do
       echo "── ${img}（containerd 直连）"
-      ssh "$TARGET" "crictl pull '$img' >/dev/null"
+      on_server "crictl pull '$img' >/dev/null"
     done
   fi
-  ssh "$TARGET" "crictl images | wc -l"
+  on_server "crictl images | wc -l"
   exit 0
 fi
 
@@ -150,15 +168,15 @@ for name in "${NAMES[@]}"; do
     # 第三方依赖按 uv.lock 固定（docker/app/Dockerfile 先装它，再拷源码）
     [ "$name" != app ] || docker/app/requirements.sh
     echo "── 构建 $local_tag"
-    docker build --platform linux/amd64 -f "$dockerfile" -t "$local_tag" "${PROXY_ARGS[@]}" "$context"
+    docker build --platform linux/amd64 -f "$dockerfile" -t "$local_tag" ${PROXY_ARGS[@]+"${PROXY_ARGS[@]}"} "$context"
   fi
   echo "── 导入 $remote_tag → $TARGET"
-  docker save "$local_tag" | ssh "$TARGET" "ctr -n k8s.io images import --platform linux/amd64 -"
-  ssh "$TARGET" "ctr -n k8s.io images tag --force docker.io/library/${local_tag} docker.io/library/${remote_tag}"
+  docker save "$local_tag" | on_server "ctr -n k8s.io images import --platform linux/amd64 -"
+  on_server "ctr -n k8s.io images tag --force docker.io/library/${local_tag} docker.io/library/${remote_tag}"
   if [ "${remote_tag#*:}" = "$TAG" ]; then
     # 按构建时刻打标签的：只留最近 KEEP 个（正在跑的 Pod 不受影响，containerd 会留着它用的层）
-    ssh "$TARGET" "ctr -n k8s.io images ls -q | grep -E '^docker.io/library/${remote_tag%%:*}:[0-9]{8}-[0-9]{6}\$' \
+    on_server "ctr -n k8s.io images ls -q | grep -E '^docker.io/library/${remote_tag%%:*}:[0-9]{8}-[0-9]{6}\$' \
       | sort | head -n -${KEEP} | xargs -r ctr -n k8s.io images rm >/dev/null"
   fi
 done
-ssh "$TARGET" "crictl images | grep -E 'atlas-' || true"
+on_server "crictl images | grep -E 'atlas-' || true"

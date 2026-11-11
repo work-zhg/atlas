@@ -1,0 +1,16 @@
+# 不装 Jaeger / Langfuse 时（.env 的 ATLAS_OBSERVABILITY=none）的 OTel Collector 配置：照收、直接丢弃。
+# 应用清单里的 OTEL 地址不用改，以后装上了换回 collector.yaml 即可。
+receivers:
+  otlp:
+    protocols:
+      http: {endpoint: 0.0.0.0:4318}
+      grpc: {endpoint: 0.0.0.0:4317}
+exporters:
+  nop: {}
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [nop]
+  telemetry:
+    logs: {level: info}

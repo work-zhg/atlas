@@ -9,12 +9,14 @@
 # 前置：超级管理员 admin 已在 http://atlas.<服务器>.nip.io/uc/login 用临时密码登录、改过密码
 #   （register-uc 拒绝临时密码）。admin 的密码取 UC_ADMIN_PASSWORD（环境变量或仓库根 .env）；
 #   都没有时，终端里运行就提示输入，非交互运行（deploy.sh 调用）直接退出 —— 不卡在等输入上。
-# ★ 用户中心不对外（ClusterIP）：经 port-forward 访问。可重复执行。
+# ★ 都在集群里的 Pod 中执行（用户中心不对外，Pod 里按集群内地址连它）：本机不需要 Python 环境，
+#   在服务器上直接运行也一样（本机有 /etc/kubernetes/admin.conf 就用它）。可重复执行。
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 SERVER_IP="${ATLAS_SERVER_IP:-192.168.0.112}"
 export NO_PROXY="${NO_PROXY:+${NO_PROXY},}${SERVER_IP},127.0.0.1" no_proxy="${no_proxy:+${no_proxy},}${SERVER_IP},127.0.0.1"
+if [ -z "${ATLAS_KUBECONFIG:-}" ] && [ -r /etc/kubernetes/admin.conf ]; then ATLAS_KUBECONFIG=/etc/kubernetes/admin.conf; fi
 export KUBECONFIG="${ATLAS_KUBECONFIG:-$HOME/.kube/atlas-${SERVER_IP}.yaml}"
 
 if [ -z "${UC_ADMIN_PASSWORD:-}" ] && [ -f .env ]; then
@@ -27,12 +29,6 @@ if [ -z "${UC_ADMIN_PASSWORD:-}" ]; then
 fi
 export UC_ADMIN_PASSWORD
 
-kubectl -n atlas-system port-forward svc/atlas-usercenter 28030:8030 >/dev/null 2>&1 &
-PF=$!
-trap 'kill $PF 2>/dev/null || true' EXIT
-for _ in $(seq 50); do (echo >/dev/tcp/127.0.0.1/28030) 2>/dev/null && break; sleep 0.2; done
-
-UC=http://127.0.0.1:28030
 # ★ 密码经 stdin 传进 Pod，不出现在命令行参数里（本机与 Pod 的进程列表都看不到）
 in_pod() {
   printf '%s\n' "$UC_ADMIN_PASSWORD" | kubectl -n atlas-system exec -i "deploy/$1" -- sh -c \
@@ -44,9 +40,9 @@ in_pod atlas-mcpgateway "python -m atlas_mcpgateway register-uc --account admin"
 # ★ 技能应用同样要在 Atlas 之前：Atlas 退役它名下的 skill:upload、skill:review、audit:view 时，把持有人
 #   换成技能应用的 SKILL_AUTHOR、SKILL_ADMIN（技能应用没登记时 Atlas 先保留它们）
 in_pod atlas-skill "python -m atlas_skill register-uc --account admin"
-uv run python -m atlas_agent register-uc --account admin --uc-url "$UC"
-uv run python -m atlas_teamflow register-uc --account admin --uc-url "$UC"
+in_pod atlas-server "python -m atlas_agent register-uc --account admin"
+in_pod atlas-teamflow "python -m atlas_teamflow register-uc --account admin"
 in_pod atlas-memory "python -m atlas_memory register-uc --account admin"
 # 模型网关（doc/model-design.html §6.3）：应用 model-gateway、操作码 model:manage、角色 MODEL_ADMIN、数据编码 Model
 in_pod atlas-modelgateway "python -m atlas_modelgateway register-uc --account admin"
-echo "✓ 已登记。用 admin 登录 http://atlas.${SERVER_IP}.nip.io/atlas 即可使用"
+echo "✓ 已登记。用 admin 登录 Atlas 即可使用"

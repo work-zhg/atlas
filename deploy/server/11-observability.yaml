@@ -1,0 +1,228 @@
+# 服务器上的可观测后端：Jaeger（APM）与 Langfuse（LLM 维度），从 10-infra.yaml 拆出来，小机器可以不装。
+#
+#   deploy.sh 默认装；.env 里 ATLAS_OBSERVABILITY=none 时不装，OTel Collector 换成丢弃 trace 的配置
+#   （collector-none.yaml），应用清单不变 —— 照旧往 collector 发。
+#
+# ★ __LANGFUSE_HOST__ 由 deploy.sh 替换（默认 langfuse.<服务器 IP>.nip.io）。
+# ★ Langfuse 的密钥由 deploy.sh 随机生成（Secret langfuse）—— 它的 UI 经 Ingress 对外开放，trace 里有提示词。
+# ── Jaeger（APM；内存存储，重启即清 —— 与本机一致）────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: jaeger, namespace: atlas-infra}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: jaeger}}
+  template:
+    metadata: {labels: {app: jaeger}}
+    spec:
+      containers:
+        - name: jaeger
+          image: docker.io/jaegertracing/jaeger:2.21.0
+          ports: [{containerPort: 16686}, {containerPort: 4317}]
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {memory: 1Gi}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: jaeger, namespace: atlas-infra}
+spec:
+  selector: {app: jaeger}
+  ports:
+    - {name: ui, port: 16686, targetPort: 16686}
+    - {name: otlp-grpc, port: 4317, targetPort: 4317}
+---
+# ── Langfuse（LLM 维度的观测；结构照本机 compose）────────────────────
+# ★ ClickHouse 自己的系统日志表默认没有 TTL，查询剖析器持续往 trace_log 写：2026-10-21 实测一天 2.9G
+#   （trace_log 1.37G、text_log 474M），Langfuse 自己的数据只有 8 MiB，20Gi 的盘约 8 天写满。
+#   照 Langfuse 官方方案一（self-hosting/configuration/scaling，其 Terraform 模块的默认做法）关掉它不读的表；
+#   它要读的 query_log 与排障用的 part_log 留着，加保留期。
+#   已有的数据不会因此消失，要手工 DROP 才回收空间：已关掉的表，以及改了表定义后 ClickHouse
+#   把旧表重命名留下的 *_log_N（它们没有 TTL）。
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: langfuse-clickhouse-config, namespace: atlas-infra}
+data:
+  z_atlas_system_logs.xml: |
+    <clickhouse>
+        <trace_log remove="1"/>
+        <text_log remove="1"/>
+        <opentelemetry_span_log remove="1"/>
+        <asynchronous_metric_log remove="1"/>
+        <metric_log remove="1"/>
+        <latency_log remove="1"/>
+        <processors_profile_log remove="1"/>
+        <query_log><ttl>event_date + INTERVAL 30 DAY DELETE</ttl></query_log>
+        <part_log><ttl>event_date + INTERVAL 30 DAY DELETE</ttl></part_log>
+    </clickhouse>
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: langfuse-clickhouse, namespace: atlas-infra}
+spec:
+  serviceName: langfuse-clickhouse
+  replicas: 1
+  selector: {matchLabels: {app: langfuse-clickhouse}}
+  template:
+    metadata: {labels: {app: langfuse-clickhouse}}
+    spec:
+      containers:
+        - name: clickhouse
+          image: docker.io/clickhouse/clickhouse-server:25.8
+          env:
+            - {name: CLICKHOUSE_USER, value: clickhouse}
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom: {secretKeyRef: {name: langfuse, key: clickhouse_password}}
+            - {name: CLICKHOUSE_DB, value: default}
+          ports: [{containerPort: 8123}, {containerPort: 9000}]
+          readinessProbe:
+            httpGet: {path: /ping, port: 8123}
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 100m, memory: 512Mi}
+            limits: {memory: 3Gi}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/clickhouse}
+            # subPath：只放一个文件进 config.d，镜像自带的其它配置照常生效
+            - {name: config, mountPath: /etc/clickhouse-server/config.d/z_atlas_system_logs.xml,
+               subPath: z_atlas_system_logs.xml}
+      volumes:
+        - name: config
+          configMap: {name: langfuse-clickhouse-config}
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        storageClassName: local-path-retain
+        accessModes: [ReadWriteOnce]
+        resources: {requests: {storage: 20Gi}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: langfuse-clickhouse, namespace: atlas-infra}
+spec:
+  selector: {app: langfuse-clickhouse}
+  ports:
+    - {name: http, port: 8123, targetPort: 8123}
+    - {name: native, port: 9000, targetPort: 9000}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: langfuse-redis, namespace: atlas-infra}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: langfuse-redis}}
+  template:
+    metadata: {labels: {app: langfuse-redis}}
+    spec:
+      containers:
+        - name: redis
+          image: docker.io/library/redis:7-alpine
+          command: ["/bin/sh", "-c", 'exec redis-server --requirepass "$REDIS_AUTH"']
+          env:
+            - name: REDIS_AUTH
+              valueFrom: {secretKeyRef: {name: langfuse, key: redis_password}}
+          ports: [{containerPort: 6379}]
+          resources:
+            requests: {cpu: 20m, memory: 32Mi}
+            limits: {memory: 512Mi}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: langfuse-redis, namespace: atlas-infra}
+spec:
+  selector: {app: langfuse-redis}
+  ports: [{port: 6379, targetPort: 6379}]
+---
+# Langfuse 的公共环境（web 与 worker 同一份）：非敏感的写在这里，敏感的从 Secret langfuse 来
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: langfuse-env, namespace: atlas-infra}
+data:
+  TELEMETRY_ENABLED: "false"
+  CLICKHOUSE_URL: http://langfuse-clickhouse:8123
+  CLICKHOUSE_MIGRATION_URL: clickhouse://langfuse-clickhouse:9000
+  CLICKHOUSE_USER: clickhouse
+  CLICKHOUSE_CLUSTER_ENABLED: "false"
+  REDIS_HOST: langfuse-redis
+  REDIS_PORT: "6379"
+  LANGFUSE_S3_EVENT_UPLOAD_BUCKET: atlas-dev
+  LANGFUSE_S3_EVENT_UPLOAD_PREFIX: langfuse-events/
+  LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+  LANGFUSE_S3_EVENT_UPLOAD_REGION: us-east-1
+  LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+  LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: atlas-dev
+  LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: langfuse-media/
+  LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://minio:9000
+  LANGFUSE_S3_MEDIA_UPLOAD_REGION: us-east-1
+  LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+  LANGFUSE_INIT_ORG_ID: atlas
+  LANGFUSE_INIT_ORG_NAME: Atlas
+  LANGFUSE_INIT_PROJECT_ID: atlas
+  LANGFUSE_INIT_PROJECT_NAME: Atlas
+  LANGFUSE_INIT_USER_EMAIL: admin@atlas.local
+  LANGFUSE_INIT_USER_NAME: admin
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: langfuse-worker, namespace: atlas-infra}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: langfuse-worker}}
+  template:
+    metadata: {labels: {app: langfuse-worker}}
+    spec:
+      containers:
+        - name: worker
+          image: docker.io/langfuse/langfuse-worker:3
+          envFrom:
+            - configMapRef: {name: langfuse-env}
+            - secretRef: {name: langfuse-runtime}
+          resources:
+            requests: {cpu: 100m, memory: 384Mi}
+            limits: {memory: 2Gi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: langfuse-web, namespace: atlas-infra}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: langfuse-web}}
+  template:
+    metadata: {labels: {app: langfuse-web}}
+    spec:
+      containers:
+        - name: web
+          image: docker.io/langfuse/langfuse:3
+          envFrom:
+            - configMapRef: {name: langfuse-env}
+            - secretRef: {name: langfuse-runtime}
+          ports: [{containerPort: 3000}]
+          readinessProbe:
+            httpGet: {path: /api/public/health, port: 3000}
+            periodSeconds: 5
+            failureThreshold: 60
+          resources:
+            requests: {cpu: 100m, memory: 384Mi}
+            limits: {memory: 2Gi}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: langfuse-web, namespace: atlas-infra}
+spec:
+  selector: {app: langfuse-web}
+  ports: [{port: 3000, targetPort: 3000}]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: langfuse
+  namespace: atlas-infra
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: __LANGFUSE_HOST__
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: {service: {name: langfuse-web, port: {number: 3000}}}

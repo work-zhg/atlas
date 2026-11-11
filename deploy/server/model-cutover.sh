@@ -7,10 +7,13 @@
 # 前置（deploy.sh 与 register.sh 已经做完）：
 #   · atlas-litellm、atlas-modelgateway 在跑（模型管理平台的库已迁移到 m0002）
 #   · register.sh 已把模型管理平台登记到用户中心（应用 model-gateway、数据编码 Model）
-#   · .env 里有供应商 Key：DEEPSEEK_API_KEY（没有就用 LITELLM_KEY —— 直连时用的就是 DeepSeek 那把）
+#   · .env 里有供应商 Key：<供应商>_API_KEY（DeepSeek 没有就用 LITELLM_KEY —— 直连时用的就是 DeepSeek 那把）；
+#     <供应商>_API_BASE 有就作为 API 地址（如 MINIMAX_API_BASE=https://api.minimax.io/anthropic）
 #
 # 环境变量（都有默认值）：
-#   MODELS          要登记的模型（DeepSeek），空格分隔，默认 "deepseek-v4-pro deepseek-flash"
+#   PROVIDER        供应商（模型管理平台的供应商编码），默认 deepseek
+#   MODELS          要登记的模型，空格分隔，默认 "deepseek-v4-pro deepseek-flash"
+#   MODEL_ADD_ARGS  登记模型时的额外参数（如 "--max-input 200000 --max-output 65536"）
 #   SERVICE_MODEL   会话标题、记忆补记、知识库入库增强与查询理解用的模型，默认 deepseek-flash
 #   AGENT_MODELS    给存量智能体的客户端 Key 分配的模型（逗号分隔，只分配还没分配过的），
 #                   默认 = MODELS；设成空串就不分配（之后在模型管理端逐个分配）
@@ -32,13 +35,20 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 SERVER_IP="${ATLAS_SERVER_IP:-192.168.0.112}"
+# 在服务器上直接运行时用本机的 admin.conf
+if [ -z "${ATLAS_KUBECONFIG:-}" ] && [ -r /etc/kubernetes/admin.conf ]; then ATLAS_KUBECONFIG=/etc/kubernetes/admin.conf; fi
 export KUBECONFIG="${ATLAS_KUBECONFIG:-$HOME/.kube/atlas-${SERVER_IP}.yaml}"
 
 [ -f .env ] || { echo "缺 .env"; exit 1; }
 # shellcheck disable=SC1091
 set -a; . ./.env; set +a
-DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY:-${LITELLM_KEY:-}}"
-[ -n "$DEEPSEEK_API_KEY" ] || { echo "缺供应商 Key（DEEPSEEK_API_KEY / LITELLM_KEY）"; exit 1; }
+PROVIDER="${PROVIDER:-deepseek}"
+ENV_PREFIX="$(printf '%s' "$PROVIDER" | tr '[:lower:]' '[:upper:]')"
+KEY_VAR="${ENV_PREFIX}_API_KEY" BASE_VAR="${ENV_PREFIX}_API_BASE"
+API_KEY="${!KEY_VAR:-}"
+[ "$PROVIDER" != deepseek ] || API_KEY="${API_KEY:-${LITELLM_KEY:-}}"
+[ -n "$API_KEY" ] || { echo "缺供应商 Key（.env 的 ${KEY_VAR}）"; exit 1; }
+API_BASE="${!BASE_VAR:-}"
 read -r -a MODEL_LIST <<< "${MODELS:-deepseek-v4-pro deepseek-flash}"
 SERVICE_MODEL="${SERVICE_MODEL:-deepseek-flash}"
 AGENT_MODELS="${AGENT_MODELS-$(IFS=,; echo "${MODEL_LIST[*]}")}"
@@ -49,9 +59,10 @@ atlas() { kubectl -n atlas-system exec deploy/atlas-server -- "$@"; }
 echo "── 1. 在模型管理平台登记模型"
 for m in "${MODEL_LIST[@]}"; do
   # 供应商 Key 经标准输入进 Pod 的环境变量，不出现在命令行和进程列表里
-  printf '%s' "$DEEPSEEK_API_KEY" | platform sh -c \
-    "DEEPSEEK_API_KEY=\"\$(cat)\" python -m atlas_modelgateway model add '$m' --provider deepseek \
-     --visibility public --api-key-env DEEPSEEK_API_KEY --actor-account admin"
+  printf '%s' "$API_KEY" | platform sh -c \
+    "PROVIDER_API_KEY=\"\$(cat)\" python -m atlas_modelgateway model add '$m' --provider '$PROVIDER' \
+     ${API_BASE:+--api-base '$API_BASE'} ${MODEL_ADD_ARGS:-} \
+     --visibility public --api-key-env PROVIDER_API_KEY --actor-account admin"
 done
 platform python -m atlas_modelgateway model list
 

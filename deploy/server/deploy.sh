@@ -9,10 +9,17 @@
 # 前置（都在本机；第 0 步逐项检查，缺什么一次列全，在改动任何东西之前退出）：
 #   · ssh root@<服务器> 免密；本机有 kubectl、helm（不在 PATH 就用 HELM=… 指定；
 #     OpenSandbox 的 chart 与 values 没变时 HELM=true 跳过）
+#   · 也可以在服务器上直接运行（git clone 到服务器）：本机有 /etc/kubernetes/admin.conf 就当作在服务器上，
+#     不经 ssh（ATLAS_SERVER=local 同义；集群用 deploy/server/cluster-setup.sh 搭）
 #   · 镜像已导入服务器：deploy/server/images.sh。app、frontends 默认用服务器上最新的构建标签，
 #     ATLAS_APP_IMAGE / ATLAS_FRONTENDS_IMAGE 可指定（回退到上一版就指定它的标签）
 #   · 仓库根 .env（模型 key、Gitee 令牌、OSS 口令等 —— 与本机部署同一份）；有 UC_ADMIN_PASSWORD
-#     （用户中心 admin 的密码）时最后自动登记到用户中心（register.sh），没有就跳过并提示
+#     （用户中心 admin 的密码）时最后自动登记到用户中心（register.sh），没有就跳过并提示。
+#     部署参数也可以写在 .env 里（都有默认值）：
+#       ATLAS_SERVER_IP       服务器 IP（默认 192.168.0.112）
+#       ATLAS_PUBLIC_HOST     对外域名（默认 atlas.<服务器 IP>.nip.io）；ATLAS_PUBLIC_SCHEME 默认 http
+#       ATLAS_LANGFUSE_HOST   Langfuse 的域名（默认 langfuse.<服务器 IP>.nip.io）
+#       ATLAS_OBSERVABILITY   full（默认）| none：none 不装 Jaeger、Langfuse（11-observability.yaml），小机器用
 #   · OpenSandbox 源码 release-1.1.1（OPENSANDBOX_SRC=…；不给就 clone 到 ~/.cache/atlas/opensandbox）
 #
 # 步骤：前置检查 → 依赖服务（10-infra）→ OpenSandbox（opensandbox.sh）→ server 迁移 → 后端（apply.sh）
@@ -26,16 +33,25 @@ cd "$(dirname "$0")/../.."
 
 MODE="${1:-all}"
 case "$MODE" in all|infra|app) ;; *) echo "用法：deploy/server/deploy.sh [infra|app]"; exit 1 ;; esac
+# 部署参数可以写在 .env 里（见上），先读进来
+if [ -f .env ]; then set -a; . ./.env; set +a; fi
 SERVER_IP="${ATLAS_SERVER_IP:-192.168.0.112}"
-TARGET="root@${SERVER_IP}"
-PUBLIC_HOST="atlas.${SERVER_IP}.nip.io"
+# 在服务器上直接运行：本机就是 K8s 控制面节点 → 命令就地执行，不经 ssh
+if [ -z "${ATLAS_SERVER:-}" ] && [ -r /etc/kubernetes/admin.conf ]; then ATLAS_SERVER=local; fi
+TARGET="${ATLAS_SERVER:-root@${SERVER_IP}}"
+on_server() { if [ "$TARGET" = local ]; then bash -c "$1"; else ssh "$TARGET" "$1"; fi; }
+PUBLIC_HOST="${ATLAS_PUBLIC_HOST:-atlas.${SERVER_IP}.nip.io}"
+PUBLIC_SCHEME="${ATLAS_PUBLIC_SCHEME:-http}"
+LANGFUSE_HOST="${ATLAS_LANGFUSE_HOST:-langfuse.${SERVER_IP}.nip.io}"
+OBSERVABILITY="${ATLAS_OBSERVABILITY:-full}"
+case "$OBSERVABILITY" in full|none) ;; *) echo "ATLAS_OBSERVABILITY 只能是 full 或 none"; exit 1 ;; esac
 # ★ 内网直连，不走开发机代理（本机 shell 里有 HTTPS_PROXY，kubectl 会被它带走）
 export NO_PROXY="${NO_PROXY:+${NO_PROXY},}${SERVER_IP}" no_proxy="${no_proxy:+${no_proxy},}${SERVER_IP}"
 
 # ── 0. 前置检查 ─────────────────────────────────────────────────────
 # ★ 以前缺 helm 要等依赖服务都 apply 完、拉完 OpenSandbox 源码才在半路报错；缺镜像则是 Pod 起不来才发现
 missing=()
-for cmd in kubectl ssh openssl curl python3 uv; do
+for cmd in kubectl ssh openssl curl python3; do
   command -v "$cmd" >/dev/null || missing+=("本机命令 $cmd")
 done
 if [ "$MODE" = all ] && ! command -v "${HELM:-helm}" >/dev/null; then
@@ -51,13 +67,14 @@ else
   missing+=("仓库根的 .env")
 fi
 KCFG="${ATLAS_KUBECONFIG:-$HOME/.kube/atlas-${SERVER_IP}.yaml}"
-if ssh -o BatchMode=yes -o ConnectTimeout=5 "$TARGET" true 2>/dev/null; then
+[ "$TARGET" != local ] || KCFG="${ATLAS_KUBECONFIG:-/etc/kubernetes/admin.conf}"
+if [ "$TARGET" = local ] || ssh -o BatchMode=yes -o ConnectTimeout=5 "$TARGET" true 2>/dev/null; then
   if [ ! -s "$KCFG" ]; then
     mkdir -p "$(dirname "$KCFG")"
     ssh "$TARGET" cat /etc/kubernetes/admin.conf > "$KCFG"
     chmod 600 "$KCFG"
   fi
-  export KUBECONFIG="$KCFG"
+  export KUBECONFIG="$KCFG" ATLAS_KUBECONFIG="$KCFG"  # 后者给 register.sh
   kubectl get nodes >/dev/null 2>&1 || missing+=("kubectl 连不上 ${SERVER_IP}（kubeconfig：${KCFG}）")
   # 配置服务改为技能应用：库要先改名、持久指令要先搬到 Atlas，否则 atlas-skill 起不来（库不存在）
   if [ "$MODE" != infra ] && kubectl -n atlas-infra exec statefulset/postgres -- psql -U atlas -d atlas -tAc \
@@ -65,9 +82,10 @@ if ssh -o BatchMode=yes -o ConnectTimeout=5 "$TARGET" true 2>/dev/null; then
     missing+=("库 atlas_config 还在：先跑 deploy/server/skill-cutover.sh（配置服务改为技能应用的一次性切换）")
   fi
   if [ "$MODE" != infra ]; then
-    out="$(ATLAS_SERVER="$TARGET" deploy/server/images.sh check 2>&1)" || missing+=("$out")
+    out="$(ATLAS_SERVER="$TARGET" ATLAS_OBSERVABILITY="$OBSERVABILITY" deploy/server/images.sh check 2>&1)" \
+      || missing+=("$out")
     # app、frontends：没指定就用服务器上最新的构建标签（images.sh 每次构建打一个新的）
-    have="$(ssh "$TARGET" "ctr -n k8s.io images ls -q")"
+    have="$(on_server "ctr -n k8s.io images ls -q")"
     latest() { sed -n "s#^docker.io/library/\($1:[0-9]\{8\}-[0-9]\{6\}\)\$#\1#p" <<<"$have" | sort | tail -1; }
     APP_IMAGE="${ATLAS_APP_IMAGE:-$(latest atlas-app)}"
     FRONTENDS_IMAGE="${ATLAS_FRONTENDS_IMAGE:-$(latest atlas-frontends)}"
@@ -123,7 +141,7 @@ kubectl -n atlas-infra create secret generic langfuse-runtime \
   --from-literal=DATABASE_URL="postgresql://atlas:atlas@postgres:5432/langfuse" \
   --from-literal=SALT="$LF_SALT" --from-literal=ENCRYPTION_KEY="$LF_ENC" \
   --from-literal=CLICKHOUSE_PASSWORD="$CH_PW" --from-literal=REDIS_AUTH="$LF_REDIS_PW" \
-  --from-literal=NEXTAUTH_URL="http://langfuse.${SERVER_IP}.nip.io" --from-literal=NEXTAUTH_SECRET="$LF_NEXTAUTH" \
+  --from-literal=NEXTAUTH_URL="http://${LANGFUSE_HOST}" --from-literal=NEXTAUTH_SECRET="$LF_NEXTAUTH" \
   --from-literal=LANGFUSE_INIT_PROJECT_PUBLIC_KEY="$LF_PK" --from-literal=LANGFUSE_INIT_PROJECT_SECRET_KEY="$LF_SK" \
   --from-literal=LANGFUSE_INIT_USER_PASSWORD="$LF_PW" \
   --from-literal=LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID="${OSS_ACCESS_KEY_ID}" \
@@ -131,10 +149,16 @@ kubectl -n atlas-infra create secret generic langfuse-runtime \
   --from-literal=LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID="${OSS_ACCESS_KEY_ID}" \
   --from-literal=LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY="${OSS_ACCESS_KEY_SECRET}" \
   --dry-run=client -o yaml | kubectl apply -f -
+# 不装 Jaeger、Langfuse 时 collector 照收、直接丢弃（应用清单不用改）
+COLLECTOR_CONFIG=deploy/server/collector.yaml
+[ "$OBSERVABILITY" = full ] || COLLECTOR_CONFIG=deploy/server/collector-none.yaml
 kubectl -n atlas-infra create configmap otel-collector \
-  --from-file=config.yaml=deploy/server/collector.yaml --dry-run=client -o yaml | kubectl apply -f -
+  --from-file=config.yaml="$COLLECTOR_CONFIG" --dry-run=client -o yaml | kubectl apply -f -
 
 kubectl apply -f deploy/server/10-infra.yaml
+if [ "$OBSERVABILITY" = full ]; then
+  sed "s/__LANGFUSE_HOST__/${LANGFUSE_HOST}/g" deploy/server/11-observability.yaml | kubectl apply -f -
+fi
 for sts in postgres redis minio qdrant; do
   kubectl -n atlas-infra rollout status "statefulset/$sts" --timeout=600s
 done
@@ -173,10 +197,10 @@ ATLAS_HOST_IP="$SERVER_IP" \
 ATLAS_PG_ADDR="postgres.${INFRA}:5432" ATLAS_REDIS_ADDR="redis.${INFRA}:6379" \
 ATLAS_OSS_ADDR="minio.${INFRA}:9000" ATLAS_QDRANT_ADDR="qdrant.${INFRA}:6333" \
 ATLAS_OTEL_ADDR="otel-collector.${INFRA}:4318" \
-ATLAS_PUBLIC_ORIGIN="http://${PUBLIC_HOST}" ATLAS_APP_IMAGE="$APP_IMAGE" \
+ATLAS_PUBLIC_ORIGIN="${PUBLIC_SCHEME}://${PUBLIC_HOST}" ATLAS_APP_IMAGE="$APP_IMAGE" \
   deploy/local/apply.sh
 ATLAS_HOST_IP="$SERVER_IP" ATLAS_FRONTENDS_IMAGE="$FRONTENDS_IMAGE" deploy/local/frontends.sh --no-build
-sed "s/__PUBLIC_HOST__/${SERVER_IP}/g" deploy/server/20-ingress.yaml | kubectl apply -f -
+sed "s/__ATLAS_HOST__/${PUBLIC_HOST}/g" deploy/server/20-ingress.yaml | kubectl apply -f -
 
 # ── 5. 用户中心的首个超级管理员（只在还没有任何用户时）────────────────────
 if [ "$MODE" = app ]; then
@@ -200,10 +224,12 @@ elif ! deploy/server/register.sh </dev/null; then
 fi
 
 echo
-echo "★ 首次部署：admin 登录 http://${PUBLIC_HOST}/uc/login 改密码后，运行 deploy/server/register.sh"
+echo "★ 首次部署：admin 登录 ${PUBLIC_SCHEME}://${PUBLIC_HOST}/uc/login 改密码后，运行 deploy/server/register.sh"
 echo "  （把 Atlas、TeamFlow 登记到用户中心；不做的话两者调用户中心会 403）"
-echo "Atlas     → http://${PUBLIC_HOST}/atlas"
-echo "用户中心  → http://${PUBLIC_HOST}/uc"
-echo "TeamFlow  → http://${PUBLIC_HOST}/teamflow"
-echo "Langfuse  → http://langfuse.${SERVER_IP}.nip.io（admin@atlas.local / Secret atlas-infra/langfuse 的 admin_password）"
-echo "Jaeger    → kubectl -n atlas-infra port-forward svc/jaeger 16686"
+echo "Atlas     → ${PUBLIC_SCHEME}://${PUBLIC_HOST}/atlas"
+echo "用户中心  → ${PUBLIC_SCHEME}://${PUBLIC_HOST}/uc"
+echo "TeamFlow  → ${PUBLIC_SCHEME}://${PUBLIC_HOST}/teamflow"
+if [ "$OBSERVABILITY" = full ]; then
+  echo "Langfuse  → http://${LANGFUSE_HOST}（admin@atlas.local / Secret atlas-infra/langfuse 的 admin_password）"
+  echo "Jaeger    → kubectl -n atlas-infra port-forward svc/jaeger 16686"
+fi

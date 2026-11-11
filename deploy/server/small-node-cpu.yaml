@@ -1,0 +1,57 @@
+# 小机器（2 核）用：Pod 创建时把各容器的 CPU requests 压到 1/4（limits 不动）。
+#
+# ★ 为什么：清单的 requests 是按 4 核的 112 定的（全套约 3.4 核），2 核的节点调度不下；实际用量很低
+#   （112 上全部加起来不到 1 核）。在准入时统一压，清单与 OpenSandbox 运行时建的会话 Pod 都不用改。
+# ★ 只管业务命名空间：K8s 自己、Calico、traefik、local-path 不动。
+# ★ 只在建 Pod 时改：Deployment 里看到的仍是原值，kubectl get pod -o yaml 才是实际生效的值。
+#
+#   kubectl apply -f deploy/server/small-node-cpu.yaml   # cluster-setup.sh 给了 SMALL_NODE=1 时会装
+#   kubectl delete -f deploy/server/small-node-cpu.yaml  # 机器升配后删掉，再滚动重启各 Deployment
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicy
+metadata:
+  name: atlas-small-node-cpu
+spec:
+  failurePolicy: Ignore
+  reinvocationPolicy: Never
+  matchConstraints:
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values: [kube-system, kube-public, kube-node-lease, calico-system, calico-apiserver,
+                   tigera-operator, traefik, local-path-storage]
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["pods"]
+  matchConditions:
+    - name: has-cpu-requests
+      expression: >
+        object.spec.containers.exists(c, has(c.resources) && has(c.resources.requests)
+          && 'cpu' in c.resources.requests)
+  mutations:
+    - patchType: ApplyConfiguration
+      applyConfiguration:
+        expression: >
+          Object{
+            spec: Object.spec{
+              containers: object.spec.containers.filter(c, has(c.resources) && has(c.resources.requests)
+                  && 'cpu' in c.resources.requests).map(c, Object.spec.containers{
+                name: c.name,
+                resources: Object.spec.containers.resources{
+                  requests: {'cpu': string(
+                    quantity(c.resources.requests.cpu).asApproximateFloat() < 0.004 ? 1 :
+                    int(quantity(c.resources.requests.cpu).asApproximateFloat() * 250.0)) + 'm'}
+                }
+              })
+            }
+          }
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicyBinding
+metadata:
+  name: atlas-small-node-cpu
+spec:
+  policyName: atlas-small-node-cpu
