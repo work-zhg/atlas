@@ -92,7 +92,7 @@ export function SubAgentCard({
             type="error"
             showIcon
             style={{ marginTop: "var(--s-3)" }}
-            message={`运行失败（${sub.error.kind}）`}
+            message="没有完成"
             description={sub.error.message}
           />
         )}

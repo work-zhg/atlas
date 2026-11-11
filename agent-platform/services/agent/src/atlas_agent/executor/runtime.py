@@ -176,16 +176,16 @@ async def _close_all(closers: list[Callable[[], Awaitable[None]]]) -> None:
 def _classify_assembly_error(exc: Exception) -> tuple[str, str, dict[str, object]]:
     """装配异常 → (error_kind, 给用户看的消息, 附加字段)。
 
-    ★ 只有两类异常的消息原样给用户：CapabilityUnavailable（约定面向用户）与
-      EngineError（契约内的错误，如 InvalidSpec）。其余是 bug —— 细节只进
-      日志，用户看到的仍是「执行器内部错误」，与此前的兜底文案一致。
+    ★ 只有两类异常的消息给用户：CapabilityUnavailable（约定面向用户；依赖服务的故障
+      只说「系统忙」）与 EngineError（契约内的错误，如 InvalidSpec）。其余是 bug ——
+      细节只进日志，用户看到的仍是「执行器内部错误」，与此前的兜底文案一致。
     """
     if isinstance(exc, EngineError):
         logger.warning("run 装配失败：%s", exc.message)
         return exc.kind, exc.message, dict(exc.details)
     if isinstance(exc, CapabilityUnavailable):
         logger.warning("run 装配失败：%s", exc)
-        return CapabilityUnavailable.kind, str(exc), {}
+        return CapabilityUnavailable.kind, exc.user_message, {}
     logger.exception("run 装配时发生未预期的异常")
     return "internal_error", "执行器内部错误", {}
 

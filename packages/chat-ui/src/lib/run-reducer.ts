@@ -207,6 +207,10 @@ export interface RunState {
   activeRunId?: string;
   /** 已处理的最大 thread_seq —— **会话级**游标，断线续传用 */
   lastSeq: number;
+  /**
+   * 跳过了、还没收到的 thread_seq（最多 MAX_MISSING 个）。晚到的事件靠它进来，见 applyEvent。
+   */
+  missingSeqs: number[];
   meta?: RunStartedData;
   error?: { kind: string; message: string; partialText?: string };
   compactions: CompactionMark[];
@@ -250,6 +254,7 @@ export const initialRunState: RunState = {
   subRuns: {},
   subRunOf: {},
   lastSeq: 0,
+  missingSeqs: [],
   compactions: [],
   notices: [],
   pendingApprovals: [],
@@ -474,19 +479,39 @@ function upsertFile(list: FileEntry[], entry: FileEntry): FileEntry[] {
 }
 
 /** 一轮开始时要清掉的东西 —— 会话流跨轮次，不清会把两轮的轨迹叠在一起。 */
-function freshTurn(): Omit<RunState, "lastSeq" | "activeRunId"> {
-  const { lastSeq: _l, activeRunId: _a, ...rest } = initialRunState;
+function freshTurn(): Omit<RunState, "lastSeq" | "missingSeqs" | "activeRunId"> {
+  const { lastSeq: _l, missingSeqs: _m, activeRunId: _a, ...rest } = initialRunState;
   return rest;
 }
 
+/** 记多少个「跳过了、还没到」的序号。并发发布的交错只有几条，留足余量 */
+const MAX_MISSING = 64;
+
 export function applyEvent(state: RunState, event: AnyTraceEvent): RunState {
-  // 规则 2：thread_seq 在会话内严格递增。重连边界可能重发，旧的直接丢弃。
+  // 规则 2：thread_seq 在会话内唯一。重连边界可能重发，收过的直接丢弃。
   //
   // ★ 游标是 thread_seq 而不是 seq：会话流上并发的两个 run（父挂起 + 子在跑）
   //   各有自己的 seq 序列，拿 seq 去重会把后来的整段丢掉。
-  if (event.thread_seq <= state.lastSeq) return state;
+  // ★ 到达顺序不一定是 thread_seq 的顺序：终态 / 挂起事件先领序号、落库后才发布
+  //   （relay.emit），这期间刚派出的子 run 已经在发事件了 —— 父 run 的 run.suspended
+  //   比子 run 的头几条序号小、却晚到。按「≤ 最大值就丢」去重会把它丢掉，卡片从此
+  //   找不到子 run，过程要刷新（按序号重放）才出来。所以跳过的序号先记下，晚到时照收。
+  const seq = event.thread_seq;
+  let missingSeqs = state.missingSeqs;
+  if (seq > state.lastSeq) {
+    // 首连（lastSeq 为 0）从回放窗口中间开始，前面的不算缺
+    if (state.lastSeq > 0 && seq > state.lastSeq + 1) {
+      const from = Math.max(state.lastSeq + 1, seq - MAX_MISSING);
+      const skipped = Array.from({ length: seq - from }, (_, i) => from + i);
+      missingSeqs = [...missingSeqs, ...skipped].slice(-MAX_MISSING);
+    }
+  } else if (missingSeqs.includes(seq)) {
+    missingSeqs = missingSeqs.filter((s) => s !== seq);
+  } else {
+    return state;
+  }
 
-  const base = { ...state, lastSeq: event.thread_seq };
+  const base = { ...state, lastSeq: Math.max(state.lastSeq, seq), missingSeqs };
   // 子智能体的事件（depth≥1）进它自己的状态，不进主轮次（见 applySubEvent）
   return event.depth > 0 ? applySubEvent(base, event) : applyRunEvent(base, event);
 }
@@ -513,6 +538,7 @@ function applyRunEvent(base: RunState, event: AnyTraceEvent): RunState {
       return {
         ...freshTurn(),
         lastSeq: base.lastSeq,
+        missingSeqs: base.missingSeqs,
         activeRunId: event.run_id,
         status: "running",
         meta: d as unknown as RunStartedData,

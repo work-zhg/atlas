@@ -38,6 +38,8 @@ __all__ = [
 class MemoryUnavailable(CapabilityUnavailable):
     """记忆服务（或它背后的用户中心）暂不可用。调用方把它当作「本会话暂时不用记忆」。"""
 
+    system_fault = True
+
 
 class MemoryRejected(Exception):
     """记忆服务按规则拒绝了请求（4xx）。code 是服务端给的机器可读错误码。"""

@@ -9,8 +9,9 @@ LiteLLM 的拒绝按错误体里的 error.type 分（不按报错文字猜；Lit
                             模型被移出了 Key → 本轮停下，找管理员
     budget_exceeded         预算用完（在 LiteLLM 里按 Key 配的）→ 本轮停下，找管理员
     authentication_error    供应商拒绝了 LiteLLM 的凭据（平台的配置事故）
-                            → 本轮失败，不暴露供应商细节
-没有 error.type 的：402（供应商余额不足）同上，其余交给 engine 的 classify 按状态码分类。
+                            → 本轮失败，不暴露供应商细节（系统忙）
+没有 error.type 的：402（供应商余额不足）= 这个模型的额度用完了，提示换模型；
+其余交给 engine 的 classify 按状态码分类。
 """
 
 from __future__ import annotations
@@ -18,7 +19,13 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from atlas_engine.contracts import EngineError, ModelUnavailable
+from atlas_engine.contracts import (
+    MODEL_QUOTA,
+    SYSTEM_BUSY,
+    EngineError,
+    ModelRateLimited,
+    ModelUnavailable,
+)
 
 __all__ = ["ModelCallRefused", "model_call_failure"]
 
@@ -30,7 +37,6 @@ _MODEL_DENIED = frozenset(
 _BUDGET = frozenset({"budget_exceeded"})
 #: LiteLLM 把供应商的拒绝按调用协议的格式转回来（Anthropic 格式里是 authentication_error）
 _PROVIDER_REJECTED = frozenset({"authentication_error"})
-_PLATFORM_FAULT = "模型服务暂时不可用，请稍后重试；持续出现请联系模型管理员"
 
 
 class ModelCallRefused(EngineError):
@@ -77,7 +83,10 @@ def model_call_failure(exc: BaseException) -> EngineError | None:
         return ModelCallRefused(
             "本轮已停止：模型 Key 的预算已用完，请联系模型管理员", status_code=status, reason=kind
         )
-    if kind in _PROVIDER_REJECTED or status == 402:
-        # 供应商凭据失效、账户余额不足：平台的配置事故；不对用户暴露供应商的细节
-        return ModelUnavailable(_PLATFORM_FAULT, status_code=status, reason=kind)
+    if status == 402:
+        # 供应商账户余额不足：对用户就是这个模型的额度用完了，换一个模型能接着用
+        return ModelRateLimited(MODEL_QUOTA, status_code=status, reason=kind)
+    if kind in _PROVIDER_REJECTED:
+        # 供应商凭据失效：平台的配置事故，用户处理不了；不暴露供应商的细节
+        return ModelUnavailable(SYSTEM_BUSY, status_code=status, reason=kind)
     return None

@@ -30,6 +30,8 @@
   flex: 1;
   overflow-y: auto;
   min-height: 0;
+  /* 第一条消息别贴着头部：与消息之间的间距一致 */
+  padding-top: var(--s-6);
 }
 
 /* ---------- 会话列表 ---------- */

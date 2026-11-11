@@ -65,6 +65,8 @@ KNOWLEDGE_TOKEN_HEADER = "X-Knowledge-Token"
 class KnowledgeUnavailable(CapabilityUnavailable):
     """绑定了知识库，但知识库服务未接入或不可用 —— 明确失败，不静默少装能力（§13.2）。"""
 
+    system_fault = True
+
 
 @dataclass(frozen=True)
 class Retrieved:

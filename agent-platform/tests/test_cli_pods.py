@@ -199,6 +199,15 @@ def test_the_gateway_key_goes_to_the_bridge_and_vendor_keys_never_do() -> None:
     assert "sk-agent" not in str(_body(req))  # 不进 Pod 的规格：同一个 Pod 里可能是别的智能体
 
 
+def test_cli_prompt_caching_is_off_unless_the_model_supports_it() -> None:
+    """不支持缓存的模型收到 cache_control：LiteLLM 会翻成 Gemini 的上下文缓存，免费档整轮 429。"""
+    _, env = _bridge(_req(model=CliModel("https://gw", "sk", "gemini-x", "gemini-x", {}, False)))
+    assert env["DISABLE_PROMPT_CACHING"] == "1"
+    assert "DISABLE_PROMPT_CACHING" in env["ATLAS_BRIDGE_AGENT_ENV_ALLOW"].split(",")
+    _, env = _bridge(_req(model=CliModel("https://gw", "sk", "claude-x", "claude-x", {})))
+    assert "DISABLE_PROMPT_CACHING" not in env
+
+
 def test_non_claude_cli_gets_no_model_env() -> None:
     script, env = _bridge(_req(cli=CliSpec(cli_type="codex", adapter="codex-acp", image="img")))
     assert not any(k.startswith("ANTHROPIC_") for k in env)

@@ -7,6 +7,13 @@
   overflow: hidden;
 }
 
+/* 没有骨架的整页（文件预览、登录跳转）：占满视口，页面用 flex: 1 撑开 */
+.bare {
+  height: 100vh;
+  display: flex;
+  overflow: hidden;
+}
+
 /* ---------- 顶栏 ---------- */
 .top {
   height: var(--top-h);

@@ -45,7 +45,9 @@ export function AppShell({ children }: { children: ReactNode }) {
   useEffect(() => setEditorExpand(false), [pathname]);
   const min = inEditor ? !editorExpand : collapsed;
 
-  if (BARE(pathname)) return <>{children}</>;
+  // ★ 没有骨架也要给一个占满视口的 flex 容器：页面靠 flex: 1 撑满（文件预览的 iframe 是 height: 100%，
+  //   父级没有确定高度时会塌成浏览器默认的 150px）
+  if (BARE(pathname)) return <div className={styles.bare}>{children}</div>;
 
   const current = platformOf(pathname);
   const platforms = PLATFORMS.filter((p) => p.visible(access));

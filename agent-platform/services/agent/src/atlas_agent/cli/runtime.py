@@ -28,6 +28,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Protocol
 from uuid import UUID
 
+from atlas_engine.contracts import SYSTEM_BUSY
 from atlas_engine.contracts.events import EventFactory, EventType, TraceEvent
 from atlas_engine.runtime.skill_events import SkillLoadTracker
 from atlas_host import methods
@@ -98,7 +99,7 @@ class CliRuntime:
         self._sessionmaker = sessionmaker
         self._settings = settings
         self._pods = pods
-        self._capabilities = CliCapabilityAssembly(settings)
+        self._capabilities = CliCapabilityAssembly(settings, sessionmaker)
         self._approvals: ApprovalFactory = approvals or (
             lambda run_id, redis: OnlineApprovals(sessionmaker, DecisionChannel(redis), run_id)
         )
@@ -142,7 +143,8 @@ class CliRuntime:
         try:
             caps = await self._capabilities.resolve(segment, redis)
         except CapabilityUnavailable as exc:
-            yield events.make(*failed(CapabilityUnavailable.kind, str(exc)))
+            logger.warning("run %s 的 CLI 能力装不上：%s", run_id, exc)
+            yield events.make(*failed(CapabilityUnavailable.kind, exc.user_message))
             return
         for kind, data in caps.notices:
             yield events.make(kind, data)
@@ -151,7 +153,9 @@ class CliRuntime:
                 segment.thread, cli, model=caps.model, credentials=caps.credentials
             )
         except Exception as exc:
-            yield events.make(*failed("pod_unavailable", f"会话 Pod 不可用：{exc}"))
+            # 沙箱服务、集群的故障：用户处理不了，原文只进日志
+            logger.warning("run %s 的会话 Pod 不可用：%s", run_id, exc)
+            yield events.make(*failed("pod_unavailable", SYSTEM_BUSY))
             return
 
         turn_id = str(run_id)

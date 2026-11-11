@@ -94,6 +94,8 @@ async function toError(res: Response): Promise<AppConfigError> {
   } catch {
     // 响应不是 JSON（如 502 网关页），保留状态码即可
   }
+  // 5xx：服务端的故障用户处理不了，不给原文
+  if (res.status >= 500) message = "系统忙不过来了，请稍后再试";
   return new AppConfigError(res.status, message);
 }
 

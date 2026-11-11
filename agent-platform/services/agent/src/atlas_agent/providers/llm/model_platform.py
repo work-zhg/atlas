@@ -63,6 +63,8 @@ AGENT_CLIENT = "Agent"
 class ModelPlatformUnavailable(CapabilityUnavailable):
     """没接模型管理平台、连不上，或平台回了错误。"""
 
+    system_fault = True
+
 
 def uses_model_platform(settings: Settings) -> bool:
     return bool(settings.model_platform_url)

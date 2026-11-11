@@ -57,6 +57,8 @@ PROVIDERS: dict[str, dict[str, Any]] = {
     "volcengine": {"name": "火山方舟"},
     "moonshot": {"name": "Moonshot（Kimi）"},
     "gemini": {"name": "Google AI Studio（Gemini）"},
+    # Anthropic 兼容接口直通；默认国际站，国内站要填 API 地址（如 https://api.minimax.cn/anthropic）
+    "minimax": {"name": "MiniMax"},
     "hosted_vllm": {"name": "vLLM 自部署", "needs_base": True, "key_optional": True},
 }
 

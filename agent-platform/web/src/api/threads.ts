@@ -7,7 +7,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 
-import { apiUrl, authHeaders, http } from "@/lib/http";
+import { apiUrl, authHeaders, http, toApiError } from "@/lib/http";
 import { qk } from "./keys";
 import type {
   Message,
@@ -163,14 +163,8 @@ export async function uploadThreadFile(threadId: string, file: File): Promise<st
     body: file,
   });
   if (!res.ok) {
-    let detail = `${res.status}`;
-    try {
-      const body = (await res.json()) as { error?: { message?: string } };
-      detail = body.error?.message ?? detail;
-    } catch {
-      // 不是 JSON：用状态码
-    }
-    throw new Error(`「${file.name}」上传失败：${detail}`);
+    // 错误信封的解包（含 5xx 一律「系统忙」）与其余接口同一套
+    throw new Error(`「${file.name}」上传失败：${(await toApiError(res)).message}`);
   }
   return ((await res.json()) as { path: string }).path;
 }

@@ -70,6 +70,8 @@ _REDIS_TTL_S = 7 * 24 * 3600
 class GatewayUnavailable(CapabilityUnavailable):
     """连不上 MCP 网关，或网关回了错误。"""
 
+    system_fault = True
+
 
 @dataclass(frozen=True)
 class AgentAccess:

@@ -31,10 +31,12 @@ from ..providers.llm.model_platform import admit_models, agent_key, litellm_url,
 from ..providers.mcp import GatewayUnavailable, make_mcp_catalog, mcp_agent_access
 from ..providers.mcp.cli import cli_mcp_servers
 from ..providers.mcp.gateway import servers_in
+from ..repositories.model_catalog import ModelCatalogRepository
 from ..sandbox.session_pod import CliModel
 
 if TYPE_CHECKING:
     import redis.asyncio as aioredis
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from ..config import Settings
     from ..executor.segment_data import Segment
@@ -66,8 +68,9 @@ class CliCapabilities:
 
 
 class CliCapabilityAssembly:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, sessionmaker: async_sessionmaker[AsyncSession]) -> None:
         self._settings = settings
+        self._sessionmaker = sessionmaker
         self._grants = CredentialGrants(CredentialProfileStore.from_settings(settings))
 
     async def resolve(self, segment: Segment, redis: aioredis.Redis) -> CliCapabilities:
@@ -132,6 +135,8 @@ class CliCapabilityAssembly:
         下发 LiteLLM 地址 + 智能体的客户端 Key + 模型名；Pod 里不再有供应商凭据。
         ★ Claude Code 只会 Anthropic Messages：LiteLLM 负责转换，任何已分配的模型都能用。
         ★ CLI 的轻量模型也指向同一个模型：不指的话 CLI 会去找一个它默认的、Key 里未必有的模型。
+        ★ 提示词缓存与原生同一条规则（executor/assembly.py 的 _prompt_cache_ttl）：智能体开了、
+          且模型实测支持才让 CLI 发 cache_control。
         """
         spec = segment.spec
         if not uses_model_platform(self._settings) or spec.cli is None:
@@ -141,12 +146,19 @@ class CliCapabilityAssembly:
         key = await agent_key(self._settings, segment.thread.agent_uuid, spec.name)
         admit_models(key, [spec.model.model])
         assert key.key is not None
+        prompt_cache = spec.model.prompt_cache
+        if prompt_cache:
+            async with self._sessionmaker() as session:
+                prompt_cache = await ModelCatalogRepository(session).supports_cache(
+                    spec.model.model
+                )
         return CliModel(
             base_url=litellm_url(self._settings),
             key=key.key,
             model=spec.model.model,
             small_model=spec.model.model,
             headers={},
+            prompt_cache=prompt_cache,
         )
 
     async def _mcp_from_gateway(

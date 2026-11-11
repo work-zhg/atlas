@@ -36,11 +36,14 @@ slice_read_response）也在列：它们是读窗口分页语义的参考实现�
 
 from .approval import ApprovalGate, ApprovalState, Decision
 from .errors import (
+    MODEL_QUOTA,
     REFUSAL_STOP_REASONS,
+    SYSTEM_BUSY,
     ContextOverflow,
     EngineError,
     InvalidSpec,
     LimitExceeded,
+    ModelEmptyResponse,
     ModelRateLimited,
     ModelRefused,
     ModelUnavailable,
@@ -87,8 +90,10 @@ __all__ = [
     "APPROVAL_MODES",
     "DEFAULT_WORKDIR",
     "EDIT_MAX_BYTES",
+    "MODEL_QUOTA",
     "REFUSAL_STOP_REASONS",
     "SEARCH_MAX_KEYS",
+    "SYSTEM_BUSY",
     "AnswerSource",
     "ApprovalGate",
     "ApprovalKind",
@@ -106,6 +111,7 @@ __all__ = [
     "FilesystemProtocol",
     "InvalidSpec",
     "LimitExceeded",
+    "ModelEmptyResponse",
     "ModelRateLimited",
     "ModelRefused",
     "ModelUnavailable",

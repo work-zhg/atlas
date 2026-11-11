@@ -95,7 +95,8 @@ def test_budget_exceeded_is_refused() -> None:
 
 
 def test_provider_rejections_do_not_leak_provider_details() -> None:
-    """供应商凭据失效（LiteLLM 按 Anthropic 格式转回 authentication_error）、余额不足（402）。"""
+    """供应商凭据失效（LiteLLM 按 Anthropic 格式转回 authentication_error）= 系统忙；
+    余额不足（402）= 这个模型的额度用完了，提示换模型。都不露供应商的原文。"""
     bad_credential = anthropic.AuthenticationError(
         "Error code: 401",
         response=httpx.Response(401, request=httpx.Request("POST", "http://litellm/v1/messages")),
@@ -112,10 +113,28 @@ def test_provider_rejections_do_not_leak_provider_details() -> None:
         response=httpx.Response(402, request=httpx.Request("POST", "http://litellm/v1/messages")),
         body={"error": {"message": "Insufficient Balance"}},
     )
-    for exc in (bad_credential, out_of_credit):
-        found = model_call_failure(exc)
-        assert found is not None and found.kind == "model_unavailable"
-        assert "Deepseek" not in found.message and "Insufficient" not in found.message
+    found = model_call_failure(bad_credential)
+    assert found is not None and found.kind == "model_unavailable"
+    assert found.message == "系统忙不过来了，请稍后再试"
+    found = model_call_failure(out_of_credit)
+    assert found is not None and found.kind == "model_rate_limited"
+    assert "换一个模型" in found.message
+    assert "Insufficient" not in found.message
+
+
+def test_platform_outage_at_run_start_only_says_busy() -> None:
+    """开跑前平台连不上：用户处理不了，只说系统忙。
+
+    模型没分配给智能体则要说清楚：用户能换模型、能找管理员。
+    """
+    from atlas_agent.executor.runtime import _classify_assembly_error
+
+    outage = ModelPlatformUnavailable("模型管理平台返回 HTTP 500：Internal Server Error")
+    kind, message, _ = _classify_assembly_error(outage)
+    assert kind == "capability_unavailable"
+    assert message == "系统忙不过来了，请稍后再试"
+    refused = ModelNotAllowed("智能体「a」没有分配模型 m2，请换一个已分配的模型")
+    assert _classify_assembly_error(refused)[1] == str(refused)
 
 
 def test_other_failures_are_left_to_engine_classify() -> None:

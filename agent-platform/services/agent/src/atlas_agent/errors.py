@@ -6,7 +6,9 @@ engine 的 EngineError 由 main.py 另有一条处理链路。
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
+
+from atlas_engine.contracts import SYSTEM_BUSY
 
 
 class AppError(Exception):
@@ -107,6 +109,16 @@ class CapabilityUnavailable(RuntimeError):
 
     继承 RuntimeError 是为了兼容：子类原本都是 RuntimeError，既有的
     except 行为不变。
+
+    ★ system_fault 的子类（依赖的服务连不上、回了错误）例外：用户处理不了，只说「系统忙」，
+      原文由调用方记日志（user_message）。
     """
 
     kind = "capability_unavailable"
+    #: True = 依赖的服务出了故障（不是配置或授权的问题）：用户处理不了
+    system_fault: ClassVar[bool] = False
+
+    @property
+    def user_message(self) -> str:
+        """给用户看的说法。"""
+        return SYSTEM_BUSY if self.system_fault else str(self)

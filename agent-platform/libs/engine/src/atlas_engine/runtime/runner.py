@@ -19,6 +19,7 @@ P4 起内部改为驱动 kernel 的 agent 图（工具调用、待办、虚拟�
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import (
     AsyncIterator,
     Awaitable,
@@ -44,6 +45,7 @@ from atlas_engine.contracts import (
     REFUSAL_STOP_REASONS,
     EngineError,
     LimitExceeded,
+    ModelEmptyResponse,
     ModelRefused,
     WaitingOn,
     classify,
@@ -63,6 +65,8 @@ from atlas_engine.runtime.translator import (
     tool_calls_from,
     tool_result_from,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class CancelToken(Protocol):
@@ -497,6 +501,14 @@ async def run(
         # 用户看到限流会以为服务挂了，两者的处置完全不同。
         # 模型网关的拒绝先按它给的原因说清楚：找人授权，还是稍后重发（模型管理方案 §7.3）
         classified = model_call_failure(exc) or classify(exc)
+        # ★ 给用户的说法是归好类的（不带原文）；原文只进日志，排查时按 run_id 找
+        logger.warning(
+            "run %s 模型调用失败（%s，%s）：%s",
+            run_id,
+            spec.model.model,
+            classified.kind,
+            str(exc)[:2000],
+        )
         if usage:
             yield events.make(EventType.USAGE_UPDATED, dict(usage))
         yield events.make(
@@ -551,6 +563,19 @@ async def run(
         )
         return
 
+    # 这一段什么也没产出（没有正文、没调工具、没拿到工具结果）：模型异常结束，不能记成成功
+    if not text and not _acted(transcript):
+        logger.warning("run %s 模型（%s）这一轮没有任何输出", run_id, spec.model.model)
+        yield events.make(
+            EventType.RUN_FAILED,
+            {
+                "error_kind": ModelEmptyResponse.kind,
+                "message": "模型这次没有给出回复，请重试，或在输入框旁换一个模型",
+                "retryable": ModelEmptyResponse.retryable,
+            },
+        )
+        return
+
     # token 上限是刹车不是硬墙：只能在调用返回后检查（文档 §4.4）
     #
     # ★ 加上 prior_tokens —— 「累计」是**跨段**的。一个 run 分三段执行时，
@@ -573,6 +598,15 @@ async def run(
         yield events.make(EventType.TITLE_GENERATED, title_data)
 
     yield events.make(EventType.RUN_FINISHED, {"total_tokens": total, "text_len": len(text)})
+
+
+def _acted(transcript: Transcript) -> bool:
+    """这一段有没有动作：模型发起过工具调用（含参数写坏的），或拿到过工具结果（续跑段）。"""
+    return any(
+        isinstance(m, ToolMessage)
+        or (isinstance(m, AIMessage) and bool(m.tool_calls or m.invalid_tool_calls))
+        for m in transcript.messages
+    )
 
 
 async def _generate_title(titler: Titler, text: str) -> dict[str, Any] | None:

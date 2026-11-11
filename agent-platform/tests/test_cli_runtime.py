@@ -395,6 +395,8 @@ async def test_pod_unavailable(env: Any) -> None:
     e.pods.fail = RuntimeError("quota")
     events = await e.run()
     assert last(events).data["error_kind"] == "pod_unavailable"
+    # 沙箱、集群的故障用户处理不了：只说系统忙，原文进日志
+    assert last(events).data["message"] == "系统忙不过来了，请稍后再试"
 
 
 async def test_bridge_unreachable(env: Any) -> None:

@@ -111,6 +111,9 @@ class CliModel(NamedTuple):
     small_model: str
     #: 只作用量归属参考的请求头（会话级：使用者、Agent）
     headers: dict[str, str]
+    #: False = 让 CLI 关掉提示词缓存（不发 cache_control）：模型不支持缓存，或智能体关了它。
+    #: ★ 不关的话 LiteLLM 会把 cache_control 翻成 Gemini 的上下文缓存，免费档额度为 0，整轮 429
+    prompt_cache: bool = True
 
 
 @runtime_checkable
@@ -344,6 +347,8 @@ class BridgeLauncher:
             agent_env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = model.model
             agent_env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = model.small_model
             agent_env["CLAUDE_CODE_SUBAGENT_MODEL"] = model.model
+            if not model.prompt_cache:
+                agent_env["DISABLE_PROMPT_CACHING"] = "1"
             if model.headers:
                 agent_env["ANTHROPIC_CUSTOM_HEADERS"] = "\n".join(
                     f"{k}: {v}" for k, v in model.headers.items()

@@ -16,7 +16,9 @@ _TIMEOUT = httpx.Timeout(5.0, connect=2.0)
 
 
 class SkillServiceUnavailable(CapabilityUnavailable):
-    """技能应用不可用，且没有可用的缓存。消息面向用户（run.failed 会原样展示）。"""
+    """技能应用不可用，且没有可用的缓存。run.failed 里对用户只说「系统忙」（system_fault）。"""
+
+    system_fault = True
 
 
 class SkillServiceNotFound(LookupError):

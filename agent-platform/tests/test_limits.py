@@ -12,8 +12,11 @@ from uuid import UUID
 
 import pytest
 from atlas_engine.contracts import (
+    MODEL_QUOTA,
+    SYSTEM_BUSY,
     EngineError,
     LimitExceeded,
+    ModelEmptyResponse,
     ModelRateLimited,
     ModelRefused,
     ModelUnavailable,
@@ -265,11 +268,27 @@ def test_classify_by_status_code(status: int, expected: type[EngineError]) -> No
     assert isinstance(classify(exc), expected)
 
 
-def test_classify_preserves_original_message() -> None:
-    """401 最常见的原因是 key 失效，必须把原文透出来让人能去改配置。"""
+@pytest.mark.parametrize("status", [400, 401, 500, 503, None])
+def test_classify_does_not_show_upstream_text(status: int | None) -> None:
+    """用户处理不了的故障统一说「系统忙」：原文（网关、供应商的报错）只进日志。"""
     exc = type("Boom", (Exception,), {})("Invalid proxy server token")
-    exc.status_code = 401  # type: ignore[attr-defined]
-    assert "Invalid proxy server token" in classify(exc).message
+    exc.status_code = status  # type: ignore[attr-defined]
+    found = classify(exc)
+    assert found.message == SYSTEM_BUSY
+    assert "Invalid proxy" not in found.message
+
+
+def test_classify_reads_the_error_type_of_a_mid_stream_error() -> None:
+    """流式响应中途出错：HTTP 已经回了 200，原因只在错误体的 error.type 里（LiteLLM 实测）。"""
+    exc = type("Boom", (Exception,), {})("{'type': 'error', 'error': {'type': 'rate_limit_error'}}")
+    exc.status_code = 200  # type: ignore[attr-defined]
+    exc.body = {  # type: ignore[attr-defined]
+        "type": "error",
+        "error": {"type": "rate_limit_error", "message": "You exceeded your current quota"},
+    }
+    found = classify(exc)
+    assert isinstance(found, ModelRateLimited)
+    assert found.message == MODEL_QUOTA and "exceeded" not in found.message
 
 
 def test_classify_passes_engine_errors_through() -> None:
@@ -305,7 +324,39 @@ async def test_run_failed_carries_kind_and_retryable() -> None:
     assert failed.data["error_kind"] == ModelRateLimited.kind
     assert failed.data["retryable"] is True
     assert failed.data["status_code"] == 429
-    assert "Rate limit exceeded" in failed.data["message"]
+    # 额度用完 / 太频繁：告诉用户可以换模型，不给原文
+    assert failed.data["message"] == MODEL_QUOTA
+
+
+async def test_a_turn_with_no_output_is_a_failure_not_a_success() -> None:
+    """模型一句话不说、一个工具不调就结束（Gemini 把工具调用写坏时 LiteLLM 转成了 end_turn）：
+    不能记成成功 —— 用户看到的是「发了消息、没有回复」。"""
+    ended = AIMessageChunk(content="", response_metadata={"stop_reason": "end_turn"})
+    model = TurnModel(scripts=[[ended]])
+    events = [e async for e in run(_spec(), run_id=RUN_ID, model=model, input_content="x")]
+    assert events[-1].type is EventType.RUN_FAILED
+    assert events[-1].data["error_kind"] == ModelEmptyResponse.kind
+    assert events[-1].data["retryable"] is True
+    assert "换一个模型" in events[-1].data["message"]
+
+
+async def test_tools_without_a_closing_sentence_still_succeed() -> None:
+    """调了工具、最后没再说话：干了活，不算空回复。"""
+    model = TurnModel(
+        scripts=[
+            [tool_call_chunk("write_todos", '{"todos": [{"content": "a"}]}', "c1")],
+            [AIMessageChunk(content="")],
+        ]
+    )
+    spec = AgentSpec(
+        slug="t",
+        name="t",
+        system_prompt="",
+        model=ModelSpec(model="m"),
+        tool_names=("write_todos",),
+    )
+    events = [e async for e in run(spec, run_id=RUN_ID, model=model, input_content="x")]
+    assert events[-1].type is EventType.RUN_FINISHED
 
 
 async def test_refusal_becomes_model_refused() -> None:

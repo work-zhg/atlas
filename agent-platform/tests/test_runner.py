@@ -188,7 +188,9 @@ async def test_model_exception_becomes_run_failed() -> None:
     last = events[-1]
     assert last.type == EventType.RUN_FAILED
     assert last.data["error_kind"] == "model_unavailable"
-    assert "gateway exploded" in last.data["message"]
+    # 用户处理不了：只说系统忙，原文进日志
+    assert last.data["message"] == "系统忙不过来了，请稍后再试"
+    assert "gateway exploded" not in last.data["message"]
 
 
 async def test_token_limit_exceeded_fails_after_completion() -> None:

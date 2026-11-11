@@ -394,7 +394,7 @@ function AssistantTurnBody({
           type="error"
           showIcon
           style={{ marginTop: "var(--s-3)" }}
-          message={`运行失败（${state.error.kind}）`}
+          message="这一轮没有完成"
           description={state.error.message}
         />
       )}
@@ -600,7 +600,7 @@ export function MessageStream({
               type="error"
               showIcon
               style={{ marginTop: "var(--s-3)" }}
-              message={`运行失败（${live.error.kind}）`}
+              message="这一轮没有完成"
               description={live.error.message}
             />
           )}

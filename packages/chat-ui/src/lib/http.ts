@@ -23,6 +23,12 @@ export interface ErrorEnvelope {
   };
 }
 
+/**
+ * 5xx 一律这样说：服务端的故障用户处理不了，原文（依赖服务名、上游报错）对用户没有用。
+ * 原文仍在 kind / details 里，排查看服务端日志。
+ */
+export const SYSTEM_BUSY_TEXT = "系统忙不过来了，请稍后再试";
+
 export class ApiError extends Error {
   readonly status: number;
   readonly kind: string;
@@ -87,6 +93,7 @@ export async function toApiError(res: Response): Promise<ApiError> {
   } catch {
     // 响应不是 JSON（如 502 网关页），保留状态码信息即可
   }
+  if (res.status >= 500) message = SYSTEM_BUSY_TEXT;
   return new ApiError(res.status, kind, message, details);
 }
 
