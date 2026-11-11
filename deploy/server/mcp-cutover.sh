@@ -17,9 +17,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
-SERVER_IP="${ATLAS_SERVER_IP:-192.168.0.112}"
-export KUBECONFIG="${ATLAS_KUBECONFIG:-$HOME/.kube/atlas-${SERVER_IP}.yaml}"
 set -a; [ -f .env ] && . ./.env; set +a
+SERVER_IP="${ATLAS_SERVER_IP:-192.168.0.112}"
+# 在服务器上直接运行时用本机的 admin.conf
+if [ -z "${ATLAS_KUBECONFIG:-}" ] && [ -r /etc/kubernetes/admin.conf ]; then ATLAS_KUBECONFIG=/etc/kubernetes/admin.conf; fi
+export KUBECONFIG="${ATLAS_KUBECONFIG:-$HOME/.kube/atlas-${SERVER_IP}.yaml}"
 export NO_PROXY="${NO_PROXY:+${NO_PROXY},}${SERVER_IP}" no_proxy="${no_proxy:+${no_proxy},}${SERVER_IP}"
 [ -n "${SERPAPI_KEY:-}" ] || { echo "✗ .env 没有 SERPAPI_KEY"; exit 1; }
 
@@ -32,4 +34,4 @@ sys.stdout.write(open("deploy/server/mcp-serpapi.yaml", encoding="utf-8").read()
   kubectl -n atlas-system exec -i deploy/atlas-mcpgateway -- \
     python -m atlas_mcpgateway service add --file - --owner-account admin
 
-echo "✓ 完成。到 MCP 管理端给智能体的 Key 分配 serpapi：http://atlas.${SERVER_IP}.nip.io/atlas/mcp"
+echo "✓ 完成。到 MCP 管理端给智能体的 Key 分配 serpapi：${ATLAS_PUBLIC_SCHEME:-http}://${ATLAS_PUBLIC_HOST:-atlas.${SERVER_IP}.nip.io}/atlas/mcp"
