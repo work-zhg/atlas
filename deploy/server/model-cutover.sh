@@ -14,14 +14,14 @@
 #   PROVIDER        供应商（模型管理平台的供应商编码），默认 deepseek
 #   MODELS          要登记的模型，空格分隔，默认 "deepseek-v4-pro deepseek-flash"
 #   MODEL_ADD_ARGS  登记模型时的额外参数（如 "--max-input 200000 --max-output 65536"）
-#   SERVICE_MODEL   会话标题、记忆补记、知识库入库增强与查询理解用的模型，默认 deepseek-flash
+#   SERVICE_MODEL   会话标题、记忆补记、自动模式判断器、知识库入库增强与查询理解用的模型，默认 deepseek-flash
 #   AGENT_MODELS    给存量智能体的客户端 Key 分配的模型（逗号分隔，只分配还没分配过的），
 #                   默认 = MODELS；设成空串就不分配（之后在模型管理端逐个分配）
 #
 # 做六件事：
 #   1. 在模型管理平台登记模型（公有：所有人都能选进自己的用户 Key）
-#   2. 平台服务的客户端 Key：Service:session-title、Service:memory-backfill、Service:knowledge-chat，
-#      分配 SERVICE_MODEL；Service:knowledge-embedding、Service:knowledge-rerank 只建不分配
+#   2. 平台服务的客户端 Key：Service:session-title、Service:memory-backfill、Service:approval-judge、
+#      Service:knowledge-chat，分配 SERVICE_MODEL；Service:knowledge-embedding、Service:knowledge-rerank 只建不分配
 #      （DeepSeek 没有嵌入、重排模型；登记了再在模型管理端分配，建库时才有远程模型可选）
 #   3. 建 ConfigMap atlas-model-platform，删掉自研网关时期的 atlas-model-gateway，
 #      滚动重启 atlas-server 与知识库：都从此经平台
@@ -71,6 +71,8 @@ platform python -m atlas_modelgateway client-key ensure --type Service --code se
   --name 会话标题 --models "$SERVICE_MODEL" --actor-account admin
 platform python -m atlas_modelgateway client-key ensure --type Service --code memory-backfill \
   --name 记忆补记 --models "$SERVICE_MODEL" --actor-account admin
+platform python -m atlas_modelgateway client-key ensure --type Service --code approval-judge \
+  --name 自动模式判断器 --models "$SERVICE_MODEL" --actor-account admin
 platform python -m atlas_modelgateway client-key ensure --type Service --code knowledge-chat \
   --name 知识库·入库增强与查询理解 --models "$SERVICE_MODEL" --actor-account admin
 platform python -m atlas_modelgateway client-key ensure --type Service --code knowledge-embedding \
@@ -98,6 +100,8 @@ atlas python -m atlas_agent service-model set title \
   --client-type Service --client-code session-title --model "$SERVICE_MODEL"
 atlas python -m atlas_agent service-model set memory_backfill \
   --client-type Service --client-code memory-backfill --model "$SERVICE_MODEL"
+atlas python -m atlas_agent service-model set approval_judge \
+  --client-type Service --client-code approval-judge --model "$SERVICE_MODEL"
 
 echo "── 5. 存量智能体的客户端 Key"
 AGENTS="$(atlas python -m atlas_agent register-agent-keys)"
