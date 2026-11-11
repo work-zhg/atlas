@@ -1,0 +1,18 @@
+# LIFE-01 闲置回收后重建（§2.3）：第二轮重建沙箱、输出前带「环境已重建」提示，模型据此重装后继续
+# ★ 两轮之间等 1900 秒：要大于部署的 sandbox_idle_ttl_s（默认 1800），并赶上一轮维护者的闲置回收
+category: eng
+tags: [sandbox, slow, multi-turn, case-LIFE-01]
+instruction: |
+  请调用 execute 原样运行：
+    mkdir -p /tmp/lib && echo 'VALUE = 42' > /tmp/lib/cfg.py && PYTHONPATH=/tmp/lib python3 -c 'import cfg; print(cfg.VALUE)'
+turns:
+  - wait_s: 1900
+    text: |
+      请调用 execute 运行 `PYTHONPATH=/tmp/lib python3 -c 'import cfg; print(cfg.VALUE)' > value.txt`。
+      如果失败，想办法让它成功（可以重新创建需要的文件）。
+expect:
+  - desc: 沙箱被回收后重建，并提示了模型（场景生效）
+    gate: false
+    metric: sandbox_rebuilt
+    count: ">=1"
+budget: {wall_s: 2700}

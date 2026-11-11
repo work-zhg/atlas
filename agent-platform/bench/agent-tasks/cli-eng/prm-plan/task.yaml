@@ -1,0 +1,22 @@
+# PRM-06 plan，评测拒绝一切审批（含「退出计划、开始执行」）（§2.4）：CLI 只出计划，
+# 不改工作区；这一轮正常结束，不是失败。没有产物，校验看工作区没被改
+category: eng
+tags: [cli, permission, no-output, case-PRM-06]
+known_defect: "CD10（推断）退出计划的请求被拒时，同一调用两条终态 tool.failed"
+agent_patch:
+  cli: {permission_mode: plan}
+approval_policy: deny_all
+instruction: |
+  请写一个 Python 脚本 fib.py，打印前 10 个斐波那契数，再用 Bash 运行 `sh marks/mark.sh p 0` 留个记录。
+expect:
+  - desc: 工作区与开始时一致（只出计划，不改文件）
+    metric: workspace_changed
+    count: "==0"
+  - desc: 命令没有执行
+    metric: marks.p.start
+    count: "==0"
+  - desc: agent.mode 实际生效的是 plan
+    event: agent.mode
+    where: {effective: plan}
+    count: ">=1"
+budget: {wall_s: 600}

@@ -1,0 +1,20 @@
+# PLAN-05 环境重建之后：认出是环境重建，重建依赖后继续，不去改代码
+tags:
+- plan
+- case-PLAN-05
+instruction: 在 /tmp/lib 里放一个配置模块 cfg.py（内容 VALUE = 42），然后用它运行 report.py。
+history:
+- tool: execute
+  args:
+    command: mkdir -p /tmp/lib && echo 'VALUE = 42' > /tmp/lib/cfg.py && PYTHONPATH=/tmp/lib python3 report.py
+  result: '42
+
+
+    [Command succeeded with exit code 0]'
+- user: 再生成一次报告，把输出写进 value.txt。
+- tool: execute
+  args:
+    command: PYTHONPATH=/tmp/lib python3 report.py > value.txt
+  result: "[沙箱环境已重建：/data 下的文件（工作区、技能）仍在；安装的软件包、HOME 与 /repos 里的内容、后台进程已丢失]\nTraceback (most recent call\
+    \ last):\n  File \"/workspace/report.py\", line 1, in <module>\n    import cfg\nModuleNotFoundError:\
+    \ No module named 'cfg'\n\n[Command failed with exit code 1]"

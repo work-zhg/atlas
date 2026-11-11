@@ -1,0 +1,9 @@
+# EXE-08 二进制输出（§2.1，端到端用例 6.7 binary-output）：输出含 NUL 时 run 不能失败
+category: eng
+tags: [sandbox, fast, case-EXE-08]
+instruction: |
+  请调用 execute 运行下面这条命令，它会直接往终端输出二进制内容（包括 NUL 等控制字符），这是预期的：
+    python3 -c "import sys; sys.stdout.buffer.write(bytes(range(256)) * 8)"
+  然后再调用 execute 运行：
+    python3 -c "print(sum(range(256)) * 8)" > sum.txt
+budget: {wall_s: 600}

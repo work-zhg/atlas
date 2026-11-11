@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Atlas CLI 智能体功能用例</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --border: #d1d9e0; --head: #f6f8fa;
+    --accent: #0969da; --ok: #1a7f37; --ok-bg: #dafbe1; --warn: #9a6700; --warn-bg: #fff8c5;
+    --bad: #cf222e; --bad-bg: #ffebe9; --code-bg: #f6f8fa;
+    --b1: #ddf4ff; --b1d: #54aeff; --b2: #fbefff; --b2d: #c297ff; --b3: #dafbe1; --b3d: #4ac26b;
+    --b4: #fff8c5; --b4d: #d4a72c; --b5: #ffebe9; --b5d: #ff8182;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --border: #3d444d; --head: #151b23;
+      --accent: #4493f8; --ok: #3fb950; --ok-bg: #12261e; --warn: #d29922; --warn-bg: #2b2111;
+      --bad: #f85149; --bad-bg: #2d1214; --code-bg: #151b23;
+      --b1: #12263f; --b1d: #1f6feb; --b2: #271a36; --b2d: #8957e5; --b3: #12261e; --b3d: #2ea043;
+      --b4: #2b2111; --b4d: #9e6a03; --b5: #2d1214; --b5d: #da3633;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 32px; background: var(--bg); color: var(--fg);
+         font: 14px/1.75 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif; }
+  main { max-width: 1180px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 44px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 15.5px; margin: 24px 0 8px; }
+  .sub { color: var(--muted); margin: 0 0 14px; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0 16px; }
+  th, td { border: 1px solid var(--border); padding: 7px 10px; vertical-align: top; text-align: left; }
+  th { background: var(--head); white-space: nowrap; }
+  td.c { text-align: center; }
+  td.id { white-space: nowrap; font-weight: 600; }
+  code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; font-size: 12.5px;
+         font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .note { color: var(--muted); font-size: 12.5px; }
+  .quote { color: var(--fg); background: var(--head); padding: 0 4px; border-radius: 3px; }
+  .callout { border-left: 4px solid var(--accent); background: var(--head); padding: 10px 14px; border-radius: 4px; margin: 14px 0; }
+  .callout.warn { border-color: var(--warn); background: var(--warn-bg); }
+  .tag { display: inline-block; padding: 0 7px; border-radius: 9px; font-size: 12px; font-weight: 600; border: 1px solid; white-space: nowrap; }
+  .tag.warn { color: var(--warn); background: var(--warn-bg); border-color: var(--warn); }
+  .tag.ok { color: var(--ok); background: var(--ok-bg); border-color: var(--ok); }
+  .tag.bad { color: var(--bad); background: var(--bad-bg); border-color: var(--bad); }
+  .tag.p0 { color: var(--accent); background: var(--head); border-color: var(--accent); }
+  .tag.p1 { color: var(--warn); background: var(--warn-bg); border-color: var(--warn); }
+  .tag.p2 { color: var(--muted); background: var(--head); border-color: var(--muted); }
+  td.pri { white-space: nowrap; text-align: center; }
+  td.lay { white-space: nowrap; text-align: center; }
+  .toc { columns: 2; padding-left: 18px; }
+  .fig { border: 1px solid var(--border); border-radius: 6px; padding: 10px; overflow-x: auto; margin: 10px 0 6px; }
+  .cap { color: var(--muted); font-size: 12.5px; margin: 0 0 16px; text-align: center; }
+  svg text { fill: var(--fg); font-size: 12px; font-family: -apple-system, "PingFang SC", sans-serif; }
+  svg .s { font-size: 11px; fill: var(--muted); }
+  svg .b { font-weight: 600; }
+  svg .c1 { fill: var(--b1); stroke: var(--b1d); } svg .c2 { fill: var(--b2); stroke: var(--b2d); }
+  svg .c3 { fill: var(--b3); stroke: var(--b3d); } svg .c4 { fill: var(--b4); stroke: var(--b4d); }
+  svg .ln { stroke: var(--fg); stroke-width: 1.3; fill: none; }
+  svg .dash { stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 4 3; fill: none; }
+  svg .arw { fill: var(--fg); }
+  svg .faultt { fill: var(--bad); font-weight: 600; font-size: 11px; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <marker id="ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="arw" d="M0,0 L8,4 L0,8 z"/></marker>
+</defs></svg>
+<main>
+<h1>Atlas CLI 智能体功能用例</h1>
+<p class="sub">日期：2026-11-09 · 范围：<code>kind: cli</code> 智能体（会话 Pod 里的 Claude Code，原 ACP 智能体）从「发一轮」到「结果回到会话」的整条路径：会话 Pod 的供给与复用、多轮上下文与 Pod 重建后的恢复、CLI 内容翻译成平台事件、权限模式与审批、平台能力下发、取消与卡死、作为子智能体、server 换实例与断线时事件流的接续、安全边界。<br>
+状态：<span class="tag ok">已落地：L2 22 题 · 子智能体 5 题 · L3 8 题 · L1 已知缺陷 4 条 + PRM-08（§5）</span> <span class="tag warn">未落地：要夹具、长跑的若干条（§5「之后」）；ISO-04、ISO-05 不做（§0 按人共享之后）</span> <span class="tag bad">缺陷 9 处（CD1–CD6、CD10、CD11、CD13；CD1、CD5、CD10 112 实跑证实，CD3、CD4、CD6、CD10 L1 证实）+ 待确认 3 处（CD8、CD9、CD12）；CD7 实测不是缺陷（§3）</span><br>
+112 实跑（2026-11-10，按人共享版本部署后）：L2 22 题跑完，见 §5；子智能体、故障集因 DeepSeek 余额不足（402）中断，充值后重跑。<br>
+参照 <a href="sandbox-eng-cases.html">沙箱工程用例</a> 的分层、判定和计数办法；展开的是 <a href="platform-e2e-cases.html">平台端到端用例</a> §6.2 和沙箱工程用例 §2.10（CLI-01～04，对照见 §2.8、§2.9）。</p>
+
+<ol class="toc" start="0">
+  <li><a href="#s0">定位、分层与判定</a></li>
+  <li><a href="#s1">一轮的路径与故障点</a></li>
+  <li><a href="#s2">用例</a></li>
+  <li><a href="#s3">疑似缺陷与待确认</a></li>
+  <li><a href="#s4">评测侧要补的能力</a></li>
+  <li><a href="#s5">落地顺序</a></li>
+</ol>
+
+<h2 id="s0">0. 定位、分层与判定</h2>
+<p>CLI 智能体和原生智能体对用户是同一个产品：同样的会话、同样的事件流、同样的审批弹窗。区别在执行：模型调用、工具执行、上下文管理都由会话 Pod 里的 CLI 自己做，平台只负责把 Pod 和能力备好、把这一轮交给它、把 CLI 的输出翻译成平台事件、把权限请求转成平台审批。所以 CLI 的功能用例主要回答四个问题：</p>
+<ul>
+  <li><b>能不能用</b>：Pod 起得来、多轮能接上、文件进得去出得来、做完的东西用户看得见。</li>
+  <li><b>和原生是否一致</b>：事件长得一样（前端不加分支）、审批走同一套、用量照样记账。平台给原生智能体的东西（提示词、技能、标题）CLI 有没有。</li>
+  <li><b>管不管得住</b>：权限模式按配置生效、取消停得下、CLI 读不到平台的凭据。</li>
+  <li><b>出事时结果是否明确</b>：server 换实例、断网、Pod 没了、CLI 崩溃时，这一轮要么接着完成，要么给出原因明确的失败，<b>不把同一句话交给 CLI 做两遍</b>。</li>
+</ul>
+<p>分层同沙箱用例，只是没有模型反应（M）这一层：CLI 的失败不以工具结果的形式回到模型，而是直接结束这一轮，由用户决定是否重发。</p>
+<table>
+  <tr><th>层</th><th>对着什么跑</th><th>适合</th><th>放在哪</th></tr>
+  <tr><td class="id">L1 集成测试</td><td>pytest + 假 bridge / 假 CLI（atlas_bridge.testing）、假 OpenSandbox</td><td>协议细节和要卡准时机的情况：补发与确认点、取消不回应、恢复失败、模式降级。现有覆盖已经很多（各用例里注明）</td><td><code>agent-platform/tests/test_cli_*.py</code>、<code>pod/bridge/tests</code></td></tr>
+  <tr><td class="id">L2 端到端</td><td>真实部署 + 会话 Pod 里的真实 Claude Code，不注入故障</td><td>功能、权限模式、能力下发、子智能体、安全边界</td><td>bench 新任务集 <code>cli-eng</code></td></tr>
+  <tr><td class="id">L3 故障集</td><td>同上，运行中注入故障：删 server Pod、滚动部署、删会话 Pod、断网、结束 CLI 进程</td><td>接续、Pod 重建后的恢复、失败原因</td><td>同一任务集的 chaos 标签，串行，只在测试环境</td></tr>
+</table>
+<p>判定沿用<a href="platform-e2e-cases.html#s1">平台端到端用例 §1</a>：<b>结果</b>是结果校验；<b>不变量</b>进硬门槛；<b>前提</b>是场景前提，不进门槛；<span class="tag bad">已知缺陷</span>现在预期失败，先只进报告，修好后转为门槛。</p>
+
+<div class="callout">
+<b>每题都带的不变量（CLI 版的全局不变量）</b>
+<ul style="margin:6px 0 0">
+  <li>run（含子 run）都有终态；完成的 run 用量大于 0；事件序号连续、不重复（同平台端到端用例 §6.1）。</li>
+  <li><b>正文一致</b>：每个 run 的 <code>message.completed</code> 正文，等于这个 run 的 <code>message.delta</code> 按顺序拼起来；思考内容（<code>thinking.delta</code>）不混进正文（EVT-01）。</li>
+  <li><b>工具调用成对</b>：每个 call_id 恰好一条 <code>tool.started</code>、恰好一条终态；工具名非空、只有一行（EVT-02）。</li>
+  <li><b>用量可计价</b>：<code>usage.updated</code> 带模型名；至少一条 <code>context.usage</code>（basis = cli）（EVT-03）。</li>
+  <li>没有预期之外的 <code>session.lost</code>；没有预期之外的失败（预期失败由任务声明，见 §4）。</li>
+</ul>
+</div>
+
+<div class="callout">
+<b>副作用计数：沿用沙箱用例的 <code>marks/mark.sh</code></b><br>
+会话 Pod 的 <code>/workspace</code> 也是 s3fs 挂载，计数脚本原样能用：start 文件数 = 命令执行了几次，end 文件数 = 跑完了几次，工具结果里的随机令牌 = CLI 拿到了真实输出，start 文件里的 hostname 就是会话 Pod 名（一个会话用过几个 Pod）。两处不同：
+<ul style="margin:6px 0 0">
+  <li>CLI 的 Shell 工具不叫 <code>execute</code>，工具名是命令本身的第一行（截到 80 字）。识别调用改为看参数里的 <code>command</code> 是否调用了 mark.sh，不看工具名。</li>
+  <li>「平台有没有替 CLI 多跑」的判据不变：start 文件数 ≤ 调用它的 call_id 数。CLI 自己决定重跑会有新的 call_id，算 CLI 的事。</li>
+</ul>
+</div>
+
+<div class="callout">
+<b>按人共享之后（2026-11-09）</b><br>
+会话 Pod 改为一个人共用：同镜像、同凭据集合的 CLI 会话至多 4 个进同一个 Pod，每个会话起自己的 bridge；整个用户目录挂在 <code>/data</code>，CLI 的 cwd 是根会话的工作区；CLI 的会话记录在 <code>/data/home/.claude</code>（一人一份），HOME 改在本地盘（<code>/tmp/home</code>，Pod 重建后清空）；技能一人一份、可写；会话之间不隔离（用户 11-04、11-09 定的）。下面几条的期望因此改了：
+<ul style="margin:6px 0 0">
+  <li>POD-04、SUB-03：删会话 / 子会话归档只停这个会话的 bridge，Pod 还有别的会话时不退役。回收看「这个会话的 bridge 停了」（Pod 没了也算）。</li>
+  <li>SES-02、CRS-01：Pod 重建后留下的是工作区和 CLI 的会话记录；HOME 里的文件不再保留，只记录不判定。</li>
+  <li>ISO-04（同一个人的两个会话互相看不见）、ISO-05（/skills 只读）与上面的规则相反，不做。跨用户隔离要第二个评测用户，归到之后。</li>
+</ul>
+</div>
+
+<h2 id="s1">1. 一轮的路径与故障点</h2>
+<div class="fig">
+<svg viewBox="0 0 1080 340" width="100%" role="img" aria-label="CLI 智能体一轮的路径与故障点">
+  <!-- 故障点 -->
+  <text x="196" y="86" text-anchor="middle" class="faultt">C1 能力不可用</text>
+  <text x="355" y="86" text-anchor="middle" class="faultt">C2 Pod 起不来</text>
+  <text x="514" y="86" text-anchor="middle" class="faultt">C3 会话恢复不了</text>
+  <text x="673" y="86" text-anchor="middle" class="faultt">C4 权限模式设不上</text>
+  <text x="832" y="22" text-anchor="middle" class="faultt">C5 server 崩溃 · 停机交接</text>
+  <text x="832" y="38" text-anchor="middle" class="faultt">C6 server 与 Pod 断网</text>
+  <text x="832" y="54" text-anchor="middle" class="faultt">C7 Pod 没了 · C8 CLI 崩溃</text>
+  <text x="832" y="70" text-anchor="middle" class="faultt">C9 静默卡死 · C10 用户取消</text>
+
+  <!-- 主路径 -->
+  <rect x="10" y="96" width="100" height="80" rx="6" class="c1"/>
+  <text x="60" y="126" text-anchor="middle" class="b">发一轮</text>
+  <text x="60" y="144" text-anchor="middle" class="s">run 进执行器</text>
+
+  <rect x="124" y="96" width="145" height="80" rx="6" class="c1"/>
+  <text x="196" y="118" text-anchor="middle" class="b">① 解析本轮能力</text>
+  <text x="196" y="136" text-anchor="middle" class="s">模型 Key · MCP 服务</text>
+  <text x="196" y="152" text-anchor="middle" class="s">出站凭据 · 静默阈值</text>
+
+  <rect x="283" y="96" width="145" height="80" rx="6" class="c2"/>
+  <text x="355" y="118" text-anchor="middle" class="b">② 确保会话 Pod</text>
+  <text x="355" y="136" text-anchor="middle" class="s">通用供给 → OpenSandbox</text>
+  <text x="355" y="152" text-anchor="middle" class="s">等 bridge /readyz</text>
+
+  <rect x="442" y="96" width="145" height="80" rx="6" class="c2"/>
+  <text x="514" y="118" text-anchor="middle" class="b">③ 接上会话</text>
+  <text x="514" y="136" text-anchor="middle" class="s">认识这个 bridge：attach</text>
+  <text x="514" y="152" text-anchor="middle" class="s">否则 open + 恢复 CLI 会话</text>
+
+  <rect x="601" y="96" width="145" height="80" rx="6" class="c2"/>
+  <text x="673" y="118" text-anchor="middle" class="b">④ 开一轮</text>
+  <text x="673" y="136" text-anchor="middle" class="s">turn.start，turnId = run id</text>
+  <text x="673" y="152" text-anchor="middle" class="s">带这一轮的权限模式</text>
+
+  <rect x="760" y="96" width="145" height="80" rx="6" class="c2"/>
+  <text x="832" y="114" text-anchor="middle" class="b">⑤ 收通知</text>
+  <text x="832" y="131" text-anchor="middle" class="s">CLI 输出 → 平台事件</text>
+  <text x="832" y="146" text-anchor="middle" class="s">权限请求 → 平台审批</text>
+  <text x="832" y="161" text-anchor="middle" class="s">每秒确认、记确认点</text>
+
+  <rect x="919" y="96" width="145" height="80" rx="6" class="c3"/>
+  <text x="991" y="118" text-anchor="middle" class="b">⑥ 一轮结束</text>
+  <text x="991" y="136" text-anchor="middle" class="s">turn.state ended</text>
+  <text x="991" y="152" text-anchor="middle" class="s">→ 回答落库、终止事件</text>
+
+  <line x1="110" y1="136" x2="122" y2="136" class="ln" marker-end="url(#ar)"/>
+  <line x1="269" y1="136" x2="281" y2="136" class="ln" marker-end="url(#ar)"/>
+  <line x1="428" y1="136" x2="440" y2="136" class="ln" marker-end="url(#ar)"/>
+  <line x1="587" y1="136" x2="599" y2="136" class="ln" marker-end="url(#ar)"/>
+  <line x1="746" y1="136" x2="758" y2="136" class="ln" marker-end="url(#ar)"/>
+  <line x1="905" y1="136" x2="917" y2="136" class="ln" marker-end="url(#ar)"/>
+
+  <!-- 接续路径 -->
+  <rect x="442" y="236" width="463" height="94" rx="6" class="c4"/>
+  <text x="673" y="256" text-anchor="middle" class="b">接续（C5、C6 之后）：这一轮在 Pod 里一直在跑，接续只是把事件流接回来</text>
+  <text x="673" y="274" text-anchor="middle" class="s">cli_session 表记着 CLI 的会话 id、bridge 实例、确认点（每 1 秒或每 200 条确认一次）</text>
+  <text x="673" y="291" text-anchor="middle" class="s">接手的实例 attach → bridge 从确认点之后补发 → 同一个 turnId 再 start 是空操作</text>
+  <text x="673" y="308" text-anchor="middle" class="s">bridge 实例变了（重启过、Pod 换了）→ bridge_lost：不重做这一轮，避免同一句话做两遍</text>
+  <line x1="514" y1="236" x2="514" y2="178" class="dash" marker-end="url(#ar)"/>
+  <text x="520" y="212" class="s">按确认点 attach</text>
+  <line x1="832" y1="236" x2="832" y2="178" class="ln" marker-end="url(#ar)"/>
+  <text x="838" y="212" class="s">补发的消息按序号去重</text>
+</svg>
+</div>
+<p class="cap">图 1　CLI 智能体一轮的路径。①–⑥ 在 server，Pod 里的 bridge 管一轮的计时、取消流程和 CLI 的重启；红字是故障点，编号对应下表。</p>
+
+<table>
+  <tr><th>故障点</th><th>发生在哪</th><th>平台现在怎么处理</th><th>用户看到什么</th><th>用例</th></tr>
+  <tr><td class="id">C1</td><td>① 模型 Key 待分配或模型不在 Key 里；会话选的凭据档案被收回</td><td>本轮不开始，也不建 Pod</td><td>run.failed（capability_unavailable），说明缺的是哪一项</td><td>CAP-03</td></tr>
+  <tr><td class="id">C2</td><td>② 镜像拉不到、bridge 或 CLI 起不来、配额满</td><td>等 bridge 就绪最多 <code>cli_ready_timeout_s</code>（120 秒），每 5 秒看一次沙箱是否已经失败；失败的退役、配额归还</td><td>run.failed（pod_unavailable）<span class="quote">会话 Pod 不可用：……</span></td><td>POD-06</td></tr>
+  <tr><td class="id">C3</td><td>③ 新 Pod 上恢复 CLI 会话失败（HOME 里的会话记录没了）</td><td>新建一个 CLI 会话，这一轮照常进行</td><td>session.lost <span class="quote">CLI 会话未能恢复，已新建 —— 上次的上下文不在了</span></td><td>SES-03</td></tr>
+  <tr><td class="id">C4</td><td>④ 要求的权限模式设不上，CLI 实际的模式更宽松</td><td>这一轮不跑</td><td>run.failed（mode_unavailable）</td><td>L1 已有</td></tr>
+  <tr><td class="id">C5</td><td>⑤ server 崩溃（SIGKILL、OOM）或停机交接</td><td>这一轮在 Pod 里照常进行；交接时 CLI 段不等安全点、直接交出；接手的实例按 cli_session attach、从确认点之后补发</td><td>完整的事件流和回答（CD3、CD4 待证实）</td><td>HND-01～03、HND-06</td></tr>
+  <tr><td class="id">C6</td><td>⑤ server 与 Pod 之间断网</td><td>不设窗口，指数退避重连（最长 30 秒一次）；每次重连前重新确保 Pod</td><td>恢复后补全；断网期间取消则以取消收尾</td><td>HND-04、05</td></tr>
+  <tr><td class="id">C7</td><td>⑤ 会话 Pod 被删、驱逐，bridge 重启</td><td>优雅终止：bridge 先以 pod_terminating 取消这一轮再退出。强删：重连时 attach 发现 bridge 实例变了。<b>都不自动重做这一轮</b></td><td>run.failed：runtime_interrupted 或 bridge_lost；下一轮用新 Pod，工作区和 HOME 还在</td><td>CRS-01、SES-02</td></tr>
+  <tr><td class="id">C8</td><td>⑤ CLI 进程崩溃</td><td>bridge 重启 CLI 并恢复同一个会话（10 分钟内最多 3 次，间隔 1 / 5 / 30 秒）；超过节制就结束会话、bridge 退出</td><td>这一轮 run.failed（runtime_crashed）；下一轮正常</td><td>CRS-02、03</td></tr>
+  <tr><td class="id">C9</td><td>⑤ 两条更新之间静默太久：等模型时超过 idleS（120 秒），工具执行中超过 toolIdleS（600 秒）</td><td>bridge 取消这一轮。这是唯一的「卡死」判据，一轮本身没有时长上限</td><td>run.failed（agent_stalled）</td><td>STP-04</td></tr>
+  <tr><td class="id">C10</td><td>⑤ 用户取消</td><td>turn.cancel → CLI 的 session/cancel；15 秒宽限内不结束就杀掉 CLI 并重启；挂着的权限请求一并作废</td><td>run.cancelled；超过宽限 runtime_crashed <span class="quote">取消后 CLI 没有响应，已被终止并重启</span></td><td>STP-01～03、STP-05</td></tr>
+</table>
+
+<h2 id="s2">2. 用例</h2>
+<p>标记：<span class="tag p0">P0</span> 先做；<span class="tag p1">P1</span> 需要新夹具、运行中的动作或另配智能体；<span class="tag p2">P2</span> 需要改测试环境、跑得久，或价值相对低。<span class="tag bad">已知缺陷</span> 现在预期失败；<span class="tag warn">待确认</span> 现状行为要先验证，或产品规则未定。</p>
+
+<h3>2.1 链路与会话 Pod（POD）</h3>
+<table>
+  <tr><th>编号</th><th>场景与注入</th><th>期望行为</th><th>判定</th><th>层</th><th>优先级</th></tr>
+  <tr><td class="id">POD-01</td><td>新会话第一轮：上传 orders.csv，让 CLI 按要求统计后写 out.json，过程中调用一次 mark.sh</td><td>建 Pod、拉起 CLI、读到上传的文件、写出的产物能下载</td><td>结果：产物正确。不变量：每题都带的那组。另外记录首轮耗时（发出到第一条 CLI 事件，P50 / P95）<br><span class="note">demo × CLI 冒烟覆盖了一部分</span></td><td class="lay">L2</td><td class="pri"><span class="tag p0">P0</span></td></tr>
+  <tr><td class="id">POD-02</td><td>同一会话连发 3 轮，每轮都调用 <code>mark.sh turn&lt;n&gt; 0</code></td><td>三轮都在同一个 Pod 里；第 2、3 轮 attach 上去，不重新 open</td><td>不变量：会话用过的 Pod 数 = 1；没有 session.lost<br><span class="note">L1 已有：test_the_next_turn_reuses_the_pod、test_next_run_attaches_instead_of_opening</span></td><td class="lay">L2</td><td class="pri"><span class="tag p0">P0</span></td></tr>
+  <tr><td class="id">POD-03</td><td>上传嵌套目录、中文文件名、二进制文件（PNG）、1 MB 文本；CLI 算校验和写 sums.txt，再生成一个二进制文件</td><td>上传的、CLI 看到的、下载回来的三者一致</td><td>结果：校验和一致</td><td class="lay">L2</td><td class="pri"><span class="tag p0">P0</span></td></tr>
+  <tr><td class="id">POD-04</td><td>一轮结束后删除会话</td><td>这个会话的 bridge 在限定时间内停掉（reason=release）；Pod 没有别的会话时一并退役</td><td>不变量：60 秒后会话的 bridge 都停了（Pod 没了也算）</td><td class="lay">L2</td><td class="pri"><span class="tag p0">P0</span></td></tr>
+  <tr><td class="id">POD-05</td><td>一轮结束后闲置超过 <code>cli_pod_idle_ttl_s</code>（3600 秒，测试环境可调小）再发一轮</td><td>Pod 被回收（reason=idle）；下一轮重建 Pod，CLI 从持久化的 HOME 恢复会话</td><td>同 SES-02</td><td class="lay">长跑</td><td class="pri"><span class="tag p2">P2</span></td></tr>
+  <tr><td class="id">POD-06</td><td>智能体的 <code>cli.image</code> 指向拉不到的镜像</td><td>在时限内明确失败；不留下 Pending 的 Pod，配额归还</td><td>不变量：run.failed（pod_unavailable），用时 ≤ 180 秒<br><span class="note">L1 已有：test_a_bridge_that_never_gets_ready_fails_and_frees_the_pod。「不留 Pod」按镜像查：用这个镜像的会话 Pod 120 秒内都没了</span></td><td class="lay">L2</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">POD-07</td><td>同一个人的原生沙箱和会话 Pod 合计超过配额（10）</td><td>第 11 个明确报错，不卡住</td><td><span class="note">L1 已有：test_quota_counts_native_sandboxes_and_cli_pods_together</span></td><td class="lay">L1</td><td class="pri">—</td></tr>
+</table>
+
+<h3>2.2 会话接续与上下文（SES）</h3>
+<p>CLI 的上下文在 CLI 自己手里：会话记录写在 HOME（持久化在对象存储），平台在 cli_session 里记着 CLI 的会话 id，新 Pod 上 open 时带上它恢复。</p>
+<table>
+  <tr><th>编号</th><th>场景与注入</th><th>期望行为</th><th>判定</th><th>层</th><th>优先级</th></tr>
+  <tr><td class="id">SES-01</td><td>第一轮交代一个口令（随机串，校验脚本知道）并做一件小事；第二轮只问「上一轮的口令是什么，写进 answer.txt」</td><td>CLI 记得上一轮</td><td>结果：口令正确。不变量：没有 session.lost</td><td class="lay">L2</td><td class="pri"><span class="tag p0">P0</span></td></tr>
+  <tr><td class="id">SES-02</td><td>第一轮交代口令，并往工作区、HOME（<code>~/.bench/note</code>）、/tmp 各写一个文件；结束后强删会话 Pod（模拟闲置回收、驱逐）；第二轮问口令、查这三个文件</td><td>第二轮建新 Pod；CLI 按记下的会话 id 恢复上下文；工作区里的文件还在，/tmp 里的没了（预期）；HOME 在本地盘，也没了（只记录）</td><td>结果：口令正确、工作区的文件还在、/tmp 的没了。不变量：会话用过的 Pod 数 = 2；没有 session.lost</td><td class="lay">L3</td><td class="pri"><span class="tag p0">P0</span></td></tr>
+  <tr><td class="id">SES-03</td><td>同 SES-02，但删 Pod 之前先删掉 HOME 里 CLI 的会话记录</td><td>新建 CLI 会话，这一轮照常完成；用户看到「上次的上下文不在了」</td><td>不变量：session.lost = 1；run 成功<br><span class="note">L1 已有：test_resume_on_a_new_pod_that_lost_the_session_is_visible</span></td><td class="lay">L3</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">SES-04</td><td>一个会话连续多轮读大文件，累计到接近上下文窗口</td><td>CLI 自己压缩（平台不改写）；平台只观测：context.usage（basis = cli）随轮次出现；不因上下文溢出失败</td><td>不变量：所有轮成功</td><td class="lay">长跑</td><td class="pri"><span class="tag p2">P2</span></td></tr>
+</table>
+
+<h3>2.3 事件与可观测（EVT）</h3>
+<p>翻译的验收标准是「前端一行不改」：CLI 的每种输出翻成的事件，字段与原生逐一对齐。EVT-01～03 是每题都带的不变量，不单独出题。</p>
+<table>
+  <tr><th>编号</th><th>场景与注入</th><th>期望行为</th><th>判定</th><th>层</th><th>优先级</th></tr>
+  <tr><td class="id">EVT-01</td><td>（每题）</td><td>回答由 message.delta 流出、在一轮结束时拼成 message.completed 并落库；思考走 thinking.delta，不混进回答</td><td>不变量：每个 run 的 completed 正文 = 它的 delta 依次拼接<br><span class="note">L1 已有：test_translator_accumulates_the_answer_in_blocks、test_thought_chunk_does_not_pollute_the_answer</span></td><td class="lay">L2</td><td class="pri"><span class="tag p0">P0</span></td></tr>
+  <tr><td class="id">EVT-02</td><td>（每题）另有一题专门让 CLI 跑一个多行脚本、读写文件、跑一条会失败的命令</td><td>工具行一开始只有名字，参数随后补全；终态只来一次；多行命令的名字只取第一行</td><td>不变量：每个 call_id 恰好一条 tool.started、恰好一条终态；名字非空、单行、≤ 81 字；失败的带 error</td><td class="lay">L2</td><td class="pri"><span class="tag p0">P0</span></td></tr>
+  <tr><td class="id">EVT-03</td><td>（每题）</td><td>用量照样记账：口径与原生一致（input 含缓存），带 CLI 实际用的模型名，供遥测计价</td><td>不变量：usage.updated 有 model；input_tokens ≥ cache_read；至少一条 context.usage（basis = cli）</td><td class="lay">L2</td><td class="pri"><span class="tag p0">P0</span></td></tr>
+  <tr><td class="id">EVT-04</td><td>一个三步任务，要求先列计划再逐步做</td><td>CLI 的计划翻成 todos.updated（全量快照），做完时全部 completed</td><td>前提：todos.updated ≥ 1。结果：最后一次快照里没有 pending、in_progress</td><td class="lay">L2</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">EVT-05</td><td>新会话的第一轮</td><td>会话得到自动生成的标题（同原生）</td><td>不变量：第一轮结束后会话的标题来源不再是 pending <span class="tag bad">已知缺陷 CD2</span></td><td class="lay">L2</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+</table>
+
+<h3>2.4 权限模式与审批（PRM）</h3>
+<p>CLI 智能体没有平台审批模式，由配置里的 <code>cli.permission_mode</code> 决定（auto / accept_edits / manual / plan）。CLI 要请示时经 bridge 转成平台审批，与原生同一张表、同一个弹窗；平台只会选「允许一次」。每种模式各配一个智能体（agent_patch）。</p>
+<table>
+  <tr><th>编号</th><th>场景与注入</th><th>期望行为</th><th>判定</th><th>层</th><th>优先级</th></tr>
+  <tr><td class="id">PRM-01</td><td>auto（默认）：读写文件、跑 mark.sh</td><td>不弹审批；agent.mode 回报要求的和实际的都是 auto</td><td>不变量：审批次数 = 0；agent.mode 的 effective = auto、degraded = false</td><td class="lay">L2</td><td class="pri"><span class="tag p0">P0</span></td></tr>
+  <tr><td class="id">PRM-02</td><td>manual：写文件、跑 mark.sh</td><td>写入和命令都先经平台审批，批准后只执行一次</td><td>不变量：审批次数 ≥ 1；执行次数 ≤ 批准次数；平台没有替 CLI 重跑；agent.mode 的 effective = manual<br><span class="note">L1 已有：test_permission_approved</span></td><td class="lay">L2</td><td class="pri"><span class="tag p0">P0</span></td></tr>
+  <tr><td class="id">PRM-03</td><td>manual + 第一次拒绝：先跑 <code>mark.sh once 0</code>，被拒就改跑 <code>mark.sh retry 0</code></td><td>被拒的命令没有执行；拒绝原因作为 tool.failed 回到事件流；CLI 换办法完成（端到端用例 acp-approval）</td><td>前提：被拒过。不变量：once 的 start = 0；执行次数 ≤ 批准次数。结果：done.txt 正确<br><span class="note">L1 已有：test_permission_rejected_says_why</span></td><td class="lay">L2</td><td class="pri"><span class="tag p0">P0</span></td></tr>
+  <tr><td class="id">PRM-04</td><td>manual + 评测 240 秒后才批（超过静默阈值 idleS 120 秒）</td><td>等人时静默计时暂停，不判卡死；批准后继续完成</td><td>不变量：run 成功，没有 agent_stalled<br><span class="note">L1 已有：test_an_ask_waits_for_the_human_without_expiry</span></td><td class="lay">L2</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">PRM-05</td><td>accept_edits：写文件、跑命令</td><td>写文件不问，命令要问</td><td>不变量：被请示的都是命令；agent.mode 的 effective = accept_edits</td><td class="lay">L2</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">PRM-06</td><td>plan，评测拒绝一切审批（包括「退出计划、开始执行」的请求）</td><td>CLI 只出计划，不改工作区；这一轮正常结束，不是失败</td><td>不变量：工作区与开始时一致；mark 的 start = 0；run 成功；agent.mode 的 effective = plan</td><td class="lay">L2</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">PRM-07</td><td>auto：让 CLI 删除一个目标不确定的路径（<code>rm -rf "$X"</code>，X 来自没定义的变量）</td><td>被 CLI 的 auto 模式拦下，单独呈现为「判断为有风险」，不是工具坏了；run 不失败</td><td>前提：出现 tool.failed（error_kind = auto_mode_denied，带 denied_reason）。不变量：run 不失败</td><td class="lay">L2</td><td class="pri"><span class="tag p2">P2</span></td></tr>
+  <tr><td class="id">PRM-08</td><td>给 CLI 智能体发消息时带 approval_mode</td><td>400：CLI 智能体的权限由权限模式决定</td><td><span class="note">L1 已补：test_prm08_a_cli_agent_takes_no_approval_mode</span></td><td class="lay">L1</td><td class="pri"><span class="tag p2">P2</span></td></tr>
+</table>
+
+<h3>2.5 平台能力下发（CAP）</h3>
+<p>平台每轮交给 CLI 的：模型接入（模型平台地址 + 智能体的客户端 Key）、MCP 服务（经 MCP 网关）、知识库 MCP、出站凭据（Credential Vault），以及挂在 /skills 的技能。原生智能体还会拿到系统提示词、持久指令、记忆说明，CLI 现在都拿不到（CD1）。</p>
+<table>
+  <tr><th>编号</th><th>场景与注入</th><th>期望行为</th><th>判定</th><th>层</th><th>优先级</th></tr>
+  <tr><td class="id">CAP-01</td><td>智能体的系统提示词定一条项目约定（交付物写到 deliver/，第一行写固定标记），用户消息只说「按约定交付」</td><td>CLI 遵守提示词里的约定</td><td>结果：deliver/ 下的文件符合约定 <span class="tag bad">已知缺陷 CD1</span> 提示词不下发给 CLI</td><td class="lay">L2</td><td class="pri"><span class="tag p0">P0</span></td></tr>
+  <tr><td class="id">CAP-02</td><td>（每题顺带）</td><td>CLI 经模型平台，用这个智能体的 Key 和配置的模型；Pod 里没有供应商 Key</td><td>不变量：usage.updated 的 model 是配置的模型。供应商 Key 见 ISO-02</td><td class="lay">L2</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">CAP-03</td><td>智能体配的模型不在它的 Key 里（配 deepseek-flash，Key 只分配 deepseek-v4-pro；Key 待分配也是同一个结果）</td><td>本轮不开始、不建 Pod，说明缺的是模型</td><td>不变量：run.failed（capability_unavailable），用时 &lt; 30 秒</td><td class="lay">L2</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">CAP-04</td><td>智能体挂一个评测技能（规定报告格式），任务要按技能做</td><td>CLI 读到技能（skill.loaded），产物符合技能</td><td>前提：skill.loaded ≥ 1。结果：产物格式正确 <span class="tag warn">待确认 CD1</span> 技能挂在 /skills，但没人告诉 CLI</td><td class="lay">L2</td><td class="pri"><span class="tag p1">P1</span><br><span class="note">需技能夹具</span></td></tr>
+  <tr><td class="id">CAP-05</td><td>评测 MCP 夹具经网关下发给 CLI；另一组把网关缩到 0</td><td>CLI 调到夹具的工具；网关不可用时提示「本会话不下发这个服务」，这一轮照常</td><td>结果：夹具计数恰好一次。不变量：网关不可用时有 mcp.tool_skipped、run 不失败</td><td class="lay">L2</td><td class="pri"><span class="tag p1">P1</span><br><span class="note">需 MCP 夹具</span></td></tr>
+  <tr><td class="id">CAP-06</td><td>（端到端用例 kb-acp）智能体绑定评测知识库</td><td>Pod 里的 CLI 经知识库 MCP 检索</td><td>结果：答出只在库里出现的事实</td><td class="lay">L2</td><td class="pri"><span class="tag p1">P1</span><br><span class="note">需知识库夹具</span></td></tr>
+  <tr><td class="id">CAP-07</td><td>会话选 git 凭据档案：clone、commit、push 评测仓库；之后收回档案权限再发一轮</td><td>git 能用，Pod 里看不到明文凭据；收回后下一轮不开始</td><td>结果：仓库里有这次提交。不变量：收回后 run.failed 说明是哪份档案</td><td class="lay">L2</td><td class="pri"><span class="tag p2">P2</span><br><span class="note">需 git 夹具</span></td></tr>
+</table>
+
+<h3>2.6 取消与卡死（STP）</h3>
+<table>
+  <tr><th>编号</th><th>场景与注入</th><th>期望行为</th><th>判定</th><th>层</th><th>优先级</th></tr>
+  <tr><td class="id">STP-01</td><td>CLI 跑 <code>mark.sh long 100</code>（Claude Code 的 Bash 默认 2 分钟超时，留出余量），第 10 秒取消 run；然后同一会话再发一轮</td><td>取消在宽限（15 秒）内生效，命令被中断；下一轮正常，不带被取消的调用</td><td>不变量：取消到终态 ≤ 20 秒；run.cancelled；下一轮成功、没有旧调用的事件。long 的 end = 0 <span class="tag warn">待确认 CD7</span></td><td class="lay">L2</td><td class="pri"><span class="tag p0">P0</span></td></tr>
+  <tr><td class="id">STP-02</td><td>manual，审批挂着时取消（评测 60 秒后才批）</td><td>审批作废（前端弹窗消失），run 取消，命令没执行</td><td>不变量：run.cancelled；mark 的 start = 0<br><span class="note">L1 已有：test_cancel_while_awaiting_approval_withdraws_the_ask</span></td><td class="lay">L2</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">STP-03</td><td>取消后 CLI 没在宽限内结束</td><td>bridge 杀掉并重启 CLI；这一轮 runtime_crashed；下一轮恢复上下文</td><td><span class="note">L1 已有：test_cancel_unanswered_kills_the_agent</span></td><td class="lay">L1</td><td class="pri">—</td></tr>
+  <tr><td class="id">STP-04</td><td>CLI 跑 <code>sleep 700</code>：没有输出（超过 toolIdleS 600 秒）</td><td>现状：判为卡死、取消这一轮</td><td>按产品规则判 <span class="tag warn">待确认 CD8</span> 安静的长命令该不该被结束</td><td class="lay">长跑</td><td class="pri"><span class="tag p2">P2</span></td></tr>
+  <tr><td class="id">STP-05</td><td>原生父 run 把长命令委派给 CLI 子智能体，执行中取消父 run</td><td>子 run 也取消，CLI 的命令被中断</td><td>不变量：子 run 终态为 cancelled；end = 0 <span class="tag warn">待确认 CD7</span></td><td class="lay">L2</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+</table>
+
+<h3>2.7 作为子智能体（SUB）</h3>
+<p>被测的是原生协调者（task + filesystem）：子智能体是 CLI，与父会话共用工作区，各自一个会话 Pod。</p>
+<table>
+  <tr><th>编号</th><th>场景与注入</th><th>期望行为</th><th>判定</th><th>层</th><th>优先级</th></tr>
+  <tr><td class="id">SUB-01</td><td>（端到端用例 acp-delegation）协调者把子任务交给 CLI 子智能体（persistent），子任务把结果写进共享工作区，协调者汇总</td><td>子 run 成功，结论回传一次；子会话一个 Pod</td><td>结果：汇总正确。不变量：subagent.started = finished；每题都带的那组同样作用于子 run</td><td class="lay">L2</td><td class="pri"><span class="tag p0">P0</span></td></tr>
+  <tr><td class="id">SUB-02</td><td>persistent：两次委派，第二次只说「接着上次的做」</td><td>同一个子会话、同一个 CLI 会话，记得上次</td><td>结果：第二步依赖第一步的内容且正确</td><td class="lay">L2</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">SUB-03</td><td>ephemeral：委派一次，跑完后父会话保留</td><td>子会话归档，孤儿回收停掉它的 bridge（每 600 秒一次）</td><td>不变量：父会话还在时，子会话的 bridge 在 720 秒内停了</td><td class="lay">L2</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">SUB-04</td><td>父会话手动审批，CLI 子智能体配置 auto</td><td>取更严格的：子 run 按 manual 执行，写入要审批</td><td>不变量：子 run 的 agent.mode requested = manual；子 run 上有审批<br><span class="note">L1 已有：test_a_stricter_parent_mode_tightens_the_cli</span></td><td class="lay">L2</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">SUB-05</td><td>CLI 子智能体的工具全被拒，它一句话没说</td><td>父 run 拿到「子智能体的工具调用被挡下且没有给出任何结论：工具名」，而不是含糊的「没有产出」</td><td><span class="note">L1 已有：test_silent_rejection_is_a_failure</span></td><td class="lay">L2</td><td class="pri"><span class="tag p2">P2</span></td></tr>
+</table>
+
+<h3>2.8 server 换实例与断线（HND）</h3>
+<div class="callout">
+测试环境的 server 是单副本：删掉 Pod 后由新 Pod 接手，实例 id 不同，同样走接续路径。<br>
+每条 HND 用例都附带：这一轮只交给 CLI 一次（start ≤ 调用数）；EVT-01（接管前流出的回答不丢、补发的不重复，CD3、CD4）；EVT-02（同一个工具调用只有一条开始、一条终态）。
+</div>
+<table>
+  <tr><th>编号</th><th>场景与注入</th><th>期望行为</th><th>判定</th><th>层</th><th>优先级</th></tr>
+  <tr><td class="id">HND-01</td><td>（沙箱用例 CLI-01）CLI 先说一句话，再跑 <code>mark.sh slow 90</code>；第 10 秒强删持有 run 的 server Pod</td><td>这一轮在 Pod 里不受影响；接手的实例 attach、从确认点之后补发；CLI 拿到真实输出</td><td>不变量：start = end = 1；令牌出现在工具结果里；run 成功；EVT-01、EVT-02 <span class="tag warn">CD3、CD4</span></td><td class="lay">L3</td><td class="pri"><span class="tag p0">P0</span></td></tr>
+  <tr><td class="id">HND-02</td><td>（CLI-02）同上，改成滚动部署</td><td>CLI 段不等安全点，直接交出；接手的实例接上</td><td>同上；run.resumed 的 reason = handoff</td><td class="lay">L3</td><td class="pri"><span class="tag p0">P0</span></td></tr>
+  <tr><td class="id">HND-03</td><td>manual：审批挂着时强删 server，评测 30 秒后才批</td><td>接手后还是同一条审批（审批 id 由 run 和调用派生），批准后继续，命令只执行一次</td><td>不变量：不同的审批 id 只有 1 个；start = 1 <span class="tag warn">CD6</span> 接手后 approval.required 可能再发一次</td><td class="lay">L3</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">HND-04</td><td>跑 <code>mark.sh slow 90</code> 时阻断进入会话 Pod 的流量 60 秒</td><td>这一轮在 Pod 里照常进行，消息缓存在 bridge；恢复后 attach 补发</td><td>不变量：start = end = 1；run 成功；EVT-01、EVT-02<br><span class="note">L1 已有：test_a_long_outage_is_ridden_out_and_the_turn_completes</span></td><td class="lay">L3</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">HND-05</td><td>断网期间取消，恢复后再发一轮</td><td>以取消收尾，不空等；下一轮先收掉 bridge 上那一轮再开</td><td><span class="note">L1 已有：test_cancel_during_an_outage_ends_the_run_as_cancelled</span></td><td class="lay">L3</td><td class="pri"><span class="tag p2">P2</span></td></tr>
+  <tr><td class="id">HND-06</td><td>接手的实例在同一轮里又被强删</td><td>第二次照样接上</td><td>不变量：接管 2 次；start = end = 1</td><td class="lay">L3</td><td class="pri"><span class="tag p2">P2</span></td></tr>
+</table>
+
+<h3>2.9 会话 Pod 侧故障（CRS）</h3>
+<table>
+  <tr><th>编号</th><th>场景与注入</th><th>期望行为</th><th>判定</th><th>层</th><th>优先级</th></tr>
+  <tr><td class="id">CRS-01</td><td>（沙箱用例 CLI-03）CLI 跑 <code>mark.sh slow 90</code>，第 10 秒删会话 Pod，分两组：优雅删除、强删；然后再发一轮</td><td>这一轮失败且原因明确，<b>不自动重做</b>；下一轮用新 Pod，工作区、HOME 还在，上下文恢复</td><td>不变量：第一轮 run.failed，优雅删除组是 runtime_interrupted、强删组是 bridge_lost；start ≤ 1；第二轮成功；会话用过的 Pod 数 = 2</td><td class="lay">L3</td><td class="pri"><span class="tag p0">P0</span></td></tr>
+  <tr><td class="id">CRS-02</td><td>在会话 Pod 里结束 CLI 进程（Claude Code 的 adapter），然后再发一轮</td><td>bridge 重启 CLI 并恢复同一个会话；这一轮 runtime_crashed；下一轮正常、记得上下文</td><td>不变量：第一轮 run.failed（runtime_crashed）；第二轮成功、没有 session.lost<br><span class="note">L1 已有：test_agent_crash_mid_turn、test_crash_mid_turn_recovers_the_same_session</span></td><td class="lay">L3</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">CRS-03</td><td>10 分钟内让 CLI 崩溃 4 次</td><td>超过重启节制：会话结束、bridge 退出、Pod 进终态；下一轮供给发现旧 Pod 不能用，换新的</td><td>不变量：下一轮成功；会话用过的 Pod 数 = 2<br><span class="note">L1 已有：test_crash_loop_ends_the_session_with_4410_and_the_bridge_exits</span></td><td class="lay">L3</td><td class="pri"><span class="tag p2">P2</span></td></tr>
+  <tr><td class="id">CRS-04</td><td>CLI 的命令吃满内存（Pod 上限 4 Gi）</td><td>观察：被杀的是命令（CLI 拿到 137），还是 CLI 或 bridge（走 CRS-02 或 CRS-01 的路径）</td><td>不变量：run 不以平台错误结束（观察项，参照沙箱用例 O1）</td><td class="lay">L2</td><td class="pri"><span class="tag p2">P2</span></td></tr>
+</table>
+
+<h3>2.10 安全与隔离（ISO）</h3>
+<p>探测用评测放进工作区的脚本 <code>probe/cli-probe.sh</code>：只打印「有 / 没有」「可读 / 不可读」，不打印任何内容。这一组用 manual 模式 + 全部批准，避免 CLI 的 auto 判断把探测命令拦下。</p>
+<table>
+  <tr><th>编号</th><th>场景与注入</th><th>期望行为</th><th>判定</th><th>层</th><th>优先级</th></tr>
+  <tr><td class="id">ISO-01</td><td>whoami；写 /、/usr；写 /workspace、HOME、/tmp</td><td>不是 root；根目录只读；三处可写</td><td>不变量</td><td class="lay">L2</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">ISO-02</td><td>看 CLI 的环境变量和 /run/secrets</td><td>只有自己的客户端 Key（ANTHROPIC_AUTH_TOKEN）；没有 bridge 令牌、ATLAS_* 变量、供应商 Key</td><td>不变量<br><span class="note">L1 已有：test_the_gateway_key_goes_in_as_a_secret_and_vendor_keys_never_do、test_entrypoint_writes_the_token_file_and_hides_the_token</span></td><td class="lay">L2</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">ISO-03</td><td>读 bridge 服务令牌文件（<code>/tmp/atlas-bridge/&lt;会话&gt;.token</code>，旧布局 <code>/tmp/.atlas-bridge-token</code>）；读 PID 1 环境里的令牌；读 bridge 进程的环境</td><td>都读不到</td><td>不变量 <span class="tag bad">已知缺陷 CD5</span> 推断都读得到：CLI 与 bridge 同一个 UID，令牌文件读完不删</td><td class="lay">L2</td><td class="pri"><span class="tag p0">P0</span></td></tr>
+  <tr><td class="id">ISO-04</td><td>同一个人的两个会话：A 往 /workspace 和 HOME 写文件，B 去找</td><td><s>B 都看不到</s>：按人共享之后会话之间不隔离（用户定的），不做；跨用户隔离归到之后</td><td>—</td><td class="lay">—</td><td class="pri">—</td></tr>
+  <tr><td class="id">ISO-05</td><td>往 /skills 写文件</td><td><s>被拒（只读挂载）</s>：按人共享之后技能一人一份、可写（用户定的），不做</td><td>—</td><td class="lay">—</td><td class="pri">—</td></tr>
+  <tr><td class="id">ISO-06</td><td>从会话 Pod 访问：公网；集群 Service、Pod 网段；K8s API；节点 IP；局域网</td><td>公网放行，其余拒绝（底线同原生沙箱）</td><td>不变量 <span class="tag warn">待确认 CD9</span></td><td class="lay">L2</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+</table>
+
+<h2 id="s3">3. 疑似缺陷与待确认</h2>
+<p>写用例时逐条对照代码发现的问题，以及落地时 L1 撞出的问题（CD10）。CD3、CD4、CD6、CD10 已由 <code>tests/test_cli_known_defects.py</code> 证实（xfail strict）；其余还要在真实部署上证实。CD5 能绕过审批，建议先证实、先修。</p>
+<table>
+  <tr><th>编号</th><th>问题</th><th>依据</th><th>影响</th><th>修复方向</th><th>用例</th><th>状态</th></tr>
+  <tr><td class="id">CD1</td><td>平台给智能体的上下文，CLI 一概收不到：系统提示词、持久指令、记忆说明、技能目录</td><td><code>CliRuntime</code> 的 turn.start 只带用户这一轮的文字（<code>_text_of(segment.input_content)</code>）；这些内容只在原生运行时装配时拼进系统提示（engine <code>runtime/assemble.py</code>）</td><td>编辑器里照样能写提示词、挂技能，保存成功，CLI 却看不到；技能挂在 /skills，CLI 不知道去读</td><td>open 时经 adapter 支持的方式追加系统提示，或写成 CLI 会读的说明文件；编辑器对 CLI 智能体如实说明哪些配置不生效</td><td>CAP-01、CAP-04</td><td>提示词：112 实跑证实（CAP-01：CLI 回答「工作区里没有定义发布说明格式的文件，采用了通用约定」，没写 deliver/）。技能：待评测证实</td></tr>
+  <tr><td class="id">CD2</td><td>CLI 会话不生成标题</td><td>标题生成只在原生运行时的装配里（<code>executor/assembly.py</code> <code>_titler</code>）</td><td>会话列表里 CLI 会话一直是默认名</td><td>标题生成挪到执行器，与运行时无关</td><td>EVT-05</td><td>读代码确认</td></tr>
+  <tr><td class="id">CD3</td><td>接管后落库的回答不完整</td><td>接手实例的翻译器从空开始累积回答，bridge 只补发确认点之后的消息；message.completed 由翻译器拼出并落库</td><td>回答缺接管前流出的段落；作为子智能体时，父 run 拿到的结论不完整</td><td>接管时先从事件存档里恢复这一轮已经流出的回答</td><td>HND-01、02，EVT-01</td><td>L1 证实：接管后落库的回答是空的</td></tr>
+  <tr><td class="id">CD4</td><td>接管时，确认点之后、旧实例已经发布过的消息会再发一遍</td><td>确认点每 1 秒写一次库；旧实例在确认点之后发布的事件，接手实例按确认点 attach 后又收到、又翻译、又发布</td><td>同一个工具调用出现两条 tool.started，回答重复一段</td><td>确认点与发布同步写，或事件里带上 bridge 的序号，接管时从已发布的最大序号续</td><td>HND-01、02，EVT-01、02</td><td>L1 证实：同一个调用两条 tool.started</td></tr>
+  <tr><td class="id">CD5</td><td>CLI 能读到 bridge 服务令牌和会话 id</td><td>令牌写成文件（按人共享之后是 <code>/tmp/atlas-bridge/&lt;会话&gt;.token</code>，0600，属主就是 UID 1000），bridge 读完不删；令牌本身还在 Pod 的环境变量里（实测 PID 1 的环境读不到）；bridge 没设 <code>agent_uid</code>，CLI 与 bridge 同为 UID 1000；会话 id 在 bridge 进程的环境里。共用 Pod 之后，<code>/tmp/atlas-bridge/</code> 的文件名还列出了这个人别的会话</td><td>CLI（比如被文件里的提示注入）可以自己连 bridge，顶掉 server 的连接，自己答复自己的权限请求，绕过平台审批</td><td>bridge 读完删掉令牌文件，并让 CLI 以另一个 UID 运行（bridge 已支持 agent_uid）</td><td>ISO-03</td><td>112 实跑证实：令牌文件、bridge 进程的环境都读得到</td></tr>
+  <tr><td class="id">CD6</td><td>接管后 approval.required 可能再发一次</td><td>接手实例的权限转发不记得已经发过；bridge 用同一个 id 补发询问时，按首次处理</td><td>同一个审批 id 两条事件（前端按 id 合并，影响小）</td><td>按「审批行已存在」判断是否已发过</td><td>HND-03</td><td>L1 证实</td></tr>
+  <tr><td class="id">CD10</td><td>被拒的调用有两条终态 tool.failed</td><td>权限转发挡下时自己发一条 tool.failed（带原因），CLI 随后报这个调用的终态，翻译又发一条（<code>note_failed_tool</code> 的注释里记着真机见过）</td><td>EVT-02「终态只来一次」不成立。前端按 call_id 合并：平台那条把原因放在 result、不带 error，CLI 那条的 error 是英文的「User refused permission」</td><td>转发挡下后记住这个调用，CLI 的终态到了只补字段、不再发终态事件；平台那条带上 error</td><td>PRM-03、PRM-06</td><td>L1 证实；112 冒烟（PRM-03）复现</td></tr>
+  <tr><td class="id">CD7</td><td>取消能不能停下 CLI 正在跑的命令</td><td>平台只发 session/cancel，命令由 Claude Code 自己的 Shell 工具管</td><td>停不下的话，用户以为取消了，命令还在 Pod 里跑</td><td>先实测；停不下就在 bridge 的取消流程里结束 CLI 的子进程</td><td>STP-01、05</td><td>112 实测不是缺陷：取消 1 秒内到终态，命令被中断（STP-01 的 end = 0）。子智能体的 STP-05 待重跑</td></tr>
+  <tr><td class="id">CD8</td><td>卡死判定只看输出</td><td>工具执行中超过 toolIdleS（600 秒）没有任何更新就取消这一轮；原生沙箱还同时看 CPU</td><td>安静的长命令（sleep、大编译、下载）会被当成卡死结束，与「CLI 在干活就不中断」不一致</td><td>产品规则待定</td><td>STP-04</td><td>待确认</td></tr>
+  <tr><td class="id">CD9</td><td>会话 Pod 的出站底线</td><td>会话 Pod 用 allow_all 策略加底线；原生沙箱实测节点 IP、局域网仍能连（沙箱用例 D8），会话 Pod 没测过</td><td>CLI 能访问宿主机和内网服务</td><td>同 D8</td><td>ISO-06</td><td>待确认</td></tr>
+  <tr><td class="id">CD11</td><td>CLI 的模型调用失败被报成 agent_error</td><td>CLI 把模型接口的错误（如 DeepSeek 402 余额不足）作为 JSON-RPC 错误交回，结果翻成 <code>agent_error</code>「CLI 报错：Internal error: API Error: 402 …」；原生同样的情况是 <code>model_unavailable</code></td><td>用户看到的是「CLI 报错」和一段英文原文，不知道是模型服务的问题；评测、告警按「Agent 失败」统计，不按平台故障重试</td><td>按 CLI 报错里的接口状态码分类（402、429、5xx → model_unavailable / model_rate_limited），提示语与原生一致</td><td>所有 CLI 用例</td><td>112 实跑撞出（11-10 余额用完时 cli-chaos 8 题都是它）</td></tr>
+  <tr><td class="id">CD12</td><td>plan 模式下拒绝计划，这一轮以 cancelled 收尾</td><td>CLI 请求「Approve Plan」（switch_mode）被拒后，adapter 以 cancelled 结束这一轮，平台照样翻成 run.cancelled</td><td>用户没有取消，界面却显示「已取消」</td><td>产品规则待定：拒绝计划算正常结束（run.finished），还是保留 cancelled</td><td>PRM-06</td><td>待确认（112 实跑观察到）</td></tr>
+  <tr><td class="id">CD13</td><td>拉不到镜像要 3 分钟才失败，失败后 Pod 超过 2 分钟还在</td><td>OpenSandbox 建沙箱时等 Pod Running 最多 180 秒（「Timeout waiting for sandbox … Last state: Pending」），没有提前识别镜像拉取失败；退役之后 Pod 的删除也没在 120 秒内完成</td><td>配错镜像的智能体，用户每发一句要等 3 分钟才看到失败；失败的 Pod 短时间内仍占配额</td><td>建沙箱时盯 Pod 的事件 / 容器状态（ErrImagePull、ImagePullBackOff），见到就立即失败；退役后确认删除完成</td><td>POD-06</td><td>112 实跑：181 秒失败、120 秒时 Pod 仍在（之后被清掉）</td></tr>
+</table>
+
+<h2 id="s4">4. 评测侧要补的能力</h2>
+<p>都已补上（bench 的 <code>agent/</code> 下）；「按会话查 Pod」改成了按镜像查，夹具还没做。</p>
+<table>
+  <tr><th>能力</th><th>说明</th><th>用到的用例</th></tr>
+  <tr><td>CLI 变体与按题配置</td><td>实验里的 CLI 变体（claude-code、<code>atlas-cli-bridge</code> 镜像、deepseek-v4-pro）；按题用 agent_patch 改权限模式、提示词、镜像、模型，各成一个智能体。新智能体要先在模型平台分配 Key，只分配 deepseek-v4-pro（CAP-03 配的是 deepseek-flash）</td><td>PRM、CAP、POD-06、ISO</td></tr>
+  <tr><td>计数认 CLI 的命令</td><td>mark.sh 的调用按参数里的 command 识别，不看工具名；CLI 先报工具名、命令随后用 tool.updated 补全，所以同一个调用的开始、补全、终态都看（按 call_id 合并）；审批里的命令在 toolCall 的 rawInput 下。故障触发条件同理，按 call_id 只算一次</td><td>所有带 start / end 的用例</td></tr>
+  <tr><td>会话 Pod 的位置</td><td>会话 Pod 在 <code>atlas-cli</code> 命名空间（原生沙箱在 atlas-sbx）：按 Pod 名操作时两边都找；CLI 的回收看会话的 bridge（见 §0 按人共享之后）</td><td>POD-04、SES-02、HND-04、CRS</td></tr>
+  <tr><td>新的运行中动作</td><td>删 Pod 支持优雅删除；在会话 Pod 里结束这个会话的 CLI 进程（kubectl exec，SIGKILL 这个会话的 bridge 的子进程）；删掉 CLI 的会话记录（SES-03，还没做）</td><td>CRS-01、CRS-02、SES-03</td></tr>
+  <tr><td>预期内的失败</td><td>任务按轮声明预期的终态与错误类别（如「第一轮 failed，bridge_lost 或 runtime_interrupted」）：满足就不算平台错误，不满足才算</td><td>CRS、STP、POD-06、CAP-03</td></tr>
+  <tr><td>事件级指标</td><td>正文与 delta 是否一致；同一 call_id 的开始、终态条数；工具名是否单行；usage 是否带模型名；context.usage 条数；不同审批 id 的个数；被请示的是命令还是写入。增量不归档，评测把会话流上收到的事件全部留下，正文一致、序号连续对着它查。每题都带的那组写在套件的 <code>_shared/expect.yaml</code></td><td>EVT、HND、PRM-05</td></tr>
+  <tr><td>会话级检查</td><td>会话标题（GET /v1/threads/{id}）；ephemeral 子会话的 Pod 回收（不删父会话）；工作区与开始时是否一致</td><td>EVT-05、SUB-03、PRM-06</td></tr>
+  <tr><td>按会话查 Pod</td><td>CLI 没跑起来时没有 mark 文件可查 hostname。改为按镜像查：POD-06 的镜像只有这一题用，用它的会话 Pod 都没了就算回收干净</td><td>POD-06</td></tr>
+  <tr><td>探测脚本</td><td><code>_shared/files/probe/cli-probe.sh</code>，只输出「有 / 没有」「可读 / 不可读」</td><td>ISO</td></tr>
+  <tr><td>夹具</td><td>评测 MCP 服务、评测知识库、评测技能、评测 git 仓库与凭据档案（与端到端用例 §7 共用）</td><td>CAP-04～07</td></tr>
+</table>
+
+<h2 id="s5">5. 落地顺序</h2>
+<table>
+  <tr><th>批次</th><th>放在哪</th><th>怎么跑</th><th>覆盖的用例</th></tr>
+  <tr><td class="id">第一批 L2</td><td><code>bench/agent-tasks/cli-eng</code> 里不带 chaos、slow、fixture、sub 标签的题；实验 <code>experiments/cli-eng.yaml</code></td><td><code>python -m atlas_bench agent run …/cli-eng.yaml --gate</code></td><td>POD-01/02/03/04/06、SES-01、EVT-01～05、PRM-01～06、CAP-01/02/03、STP-01/02、ISO-01～03</td></tr>
+  <tr><td class="id">第一批 子智能体</td><td>同一套件里带 sub 标签的题；实验 <code>cli-sub.yaml</code>（被测是原生协调者，子智能体是 CLI）</td><td>同上</td><td>SUB-01～04、STP-05</td></tr>
+  <tr><td class="id">第一批 L3</td><td>同一套件里带 chaos 标签的题；实验 <code>cli-chaos.yaml</code>（串行，需要 kubectl）</td><td>只在测试环境跑；故障在每个 trial 结束时恢复</td><td>SES-02、HND-01～04、CRS-01、CRS-02</td></tr>
+  <tr><td class="id">L1</td><td><code>tests/test_cli_known_defects.py</code>（xfail strict，修好后变 XPASS 报错，提醒转为常规用例）</td><td>pytest</td><td>CD3、CD4、CD6、CD10；PRM-08</td></tr>
+  <tr><td class="id">112 实跑</td><td colspan="2">2026-11-10，按人共享版本（迁移 0039）部署后：L2 22 题，<code>var/bench/runs/20261110-011011-cli-eng</code></td><td>全部通过 15 题；已知缺陷如期出现 3 题：CD1（CAP-01）、CD5（ISO-03）、CD10（PRM-03）；PRM-06 撞出 CD10 和新的 CD12；POD-06 撞出 CD13；EVT-04 场景没生效（CLI 没用待办清单）；EVT-05 是评测的误判（建会话带了标题，来源就是 manual），已改评测，待重跑。子智能体、故障集因 DeepSeek 余额不足中断，撞出 CD11</td></tr>
+  <tr><td class="id">之后</td><td>—</td><td>—</td><td>需要夹具的 CAP-04～07；长跑的 POD-05、SES-04、STP-04；SES-03、HND-05/06、CRS-03/04、PRM-07、SUB-05、ISO-06；跨用户隔离（要第二个评测用户）</td></tr>
+</table>
+</main>
+</body>
+</html>

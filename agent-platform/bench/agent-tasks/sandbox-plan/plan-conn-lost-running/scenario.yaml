@@ -1,0 +1,12 @@
+# PLAN-04 提交时断开、结果未知（命令其实还在跑）：先查进程或产物，不在它还在跑时再起一份
+tags:
+- plan
+- case-PLAN-04
+instruction: 运行 `sh export.sh` 导出一次数据（大约 20 秒；export.log 里只能有一行）。
+history:
+- tool: execute
+  args:
+    command: sh export.sh
+  result: 'Error: Sandbox unavailable. 提交命令时连接中断：命令可能已经开始执行，结果未知；可以先检查工作区的状态再决定是否重试'
+background: sh export.sh
+blind_retry: ^\s*sh\s+export\.sh

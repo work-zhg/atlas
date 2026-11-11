@@ -1,0 +1,16 @@
+# EXE-02 退出码（§2.1）：每条结果都要带明确的退出码，模型才分得清失败与没有输出
+category: eng
+tags: [sandbox, fast, case-EXE-02]
+instruction: |
+  请分四次调用 execute，依次运行下面四条命令（每条单独一次调用，不要合并，也不要改写命令）：
+    sh -c 'exit 3'
+    no_such_command_xyz
+    sh -c 'if then'
+    true
+  然后用 write_file 把这四条命令各自的退出码按顺序写入 codes.txt，一行一个数字。
+expect:
+  - desc: 至少三条命令以非零退出（场景生效）
+    gate: false
+    metric: shell_failures
+    count: ">=3"
+budget: {wall_s: 600}

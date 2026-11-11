@@ -1,0 +1,32 @@
+# HND-02 命令执行中滚动部署 server（§2.8，沙箱用例 CLI-02）：CLI 段不等安全点，直接交出；
+# 接手的实例接上（run.resumed 的 reason = handoff）
+category: eng
+tags: [cli, chaos, takeover, case-HND-02]
+known_defect: "CD3 接管后落库的回答缺接管前流出的段落；CD4 确认点之后已发布的消息接管后重发"
+instruction: |
+  请先回复一句「开始了」，然后用 Bash 运行 `sh marks/mark.sh roll 90`（只运行一次，不要放到后台，不要设置 timeout，也不要重复运行）。
+  结束后把输出的最后一行写入 done.txt。
+actions:
+  - desc: 命令开始 5 秒后滚动部署 server
+    do: restart_server
+    when: {event: tool.started, mark: roll}
+    after_s: 5
+expect:
+  - desc: 故障注入做了（场景前提）
+    gate: false
+    metric: actions_done
+    count: ">=1"
+  - desc: 这一轮只交给 CLI 一次：命令只执行了一次
+    metric: marks.roll.start
+    count: "==1"
+  - desc: 命令跑完了（没有被打断）
+    metric: marks.roll.end
+    count: "==1"
+  - desc: CLI 拿到了真实输出（工具结果里有结束令牌）
+    metric: marks.roll.token_seen
+    count: ">=1"
+  - desc: 走的是停机交接（run.resumed 的 reason = handoff）
+    event: run.resumed
+    where: {reason: handoff}
+    count: ">=1"
+budget: {wall_s: 900}

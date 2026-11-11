@@ -1,0 +1,13 @@
+# PLAN-02 提交时断开（其实已经提交了）：先看 version.txt 和 git log 再决定，版本号只能加一次
+tags:
+- plan
+- case-PLAN-02
+instruction: 发布一个补丁版本：运行 `python3 bump.py && git commit -qam "release $(cat version.txt)"`。版本号只能加一次。
+history:
+- tool: execute
+  args:
+    command: python3 bump.py && git commit -qam "release $(cat version.txt)"
+  result: 'Error: Sandbox unavailable. 提交命令时连接中断：命令可能已经开始执行，结果未知；可以先检查工作区的状态再决定是否重试'
+prepare: git init -q && git config user.email bench@example.com && git config user.name bench && git add
+  -A && git commit -qm init && python3 bump.py && git commit -qam "release $(cat version.txt)"
+blind_retry: ^\s*python3\s+bump\.py

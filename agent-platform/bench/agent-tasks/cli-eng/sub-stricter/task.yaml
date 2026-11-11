@@ -1,0 +1,27 @@
+# SUB-04 父会话手动审批、CLI 子智能体配置 auto（§2.7）：取更严格的，子 run 按 manual 执行，写入要审批
+category: eng
+tags: [sub, permission, case-SUB-04]
+agent_patch:
+  approval: {default_mode: manual, allowed_modes: [manual]}
+  subagents:
+    - name: cli-hand
+      description: 会话 Pod 里的 Claude Code：在共享工作区里跑命令、写文件，并汇报结果
+      system_prompt: 你在工作区里完成交给你的任务，做完用一句话汇报结果。
+      model: {model: deepseek-v4-pro, provider: anthropic}
+      kind: cli
+      cli:
+        cli_type: claude-code
+        adapter: node /opt/acp-cli/bin/claude-acp
+        image: atlas-cli-bridge:0.4.0
+        permission_mode: auto
+      session_mode: persistent
+instruction: 请交给 cli-hand 子智能体：用写文件工具写 hello.txt，内容是 hello。完成后告诉我结果。
+expect:
+  - desc: 子 run 按更严格的 manual 要求 CLI
+    event: agent.mode
+    where: {requested: manual}
+    count: ">=1"
+  - desc: 子 run 上有审批（写入要审批）
+    metric: approval_events_sub
+    count: ">=1"
+budget: {wall_s: 900}

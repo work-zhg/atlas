@@ -45,14 +45,28 @@ def test_demo_suite_loads() -> None:
 @pytest.mark.skipif(not _docker_ok(), reason="需要 docker 与 python:3.12-slim 镜像")
 @pytest.mark.parametrize(
     "task",
-    [*load_suite("demo"), *load_suite("atlas-eng"), *load_suite("clarify")],
+    [
+        *load_suite("demo"),
+        *load_suite("atlas-eng"),
+        *load_suite("clarify"),
+        *load_suite("sandbox-eng"),
+        *load_suite("cli-eng"),
+    ],
     ids=lambda t: t.id,
 )
 def test_verifier_rejects_initial_and_accepts_solution(task: Task) -> None:
-    """初始状态校验不过（题目有意义），参考答案校验通过（校验脚本没写错）。"""
-    initial = {k: v.encode() for k, v in task.files.items()}
+    """初始状态校验不过（题目有意义），参考答案校验通过（校验脚本没写错）。
+
+    标了 no-output 的题没有产物（run 预期失败、或就是不该改工作区）：初始状态本身就该通过，
+    结果看过程断言。
+    """
+    initial = {k: v.encode() if isinstance(v, str) else v for k, v in task.files.items()}
     bad = asyncio.run(verify_workspace(task, initial))
-    assert bad.infra_error is None and not bad.passed, bad.output
+    assert bad.infra_error is None, bad.output
+    if "no-output" in task.tags:
+        assert bad.passed, bad.output
+        return
+    assert not bad.passed, bad.output
 
     sol_dir = Path(task.dir) / "solution"
     solved = dict(initial)

@@ -1,0 +1,15 @@
+# CAP-03 模型用不了（§2.5）：本轮不开始、不建 Pod，说明缺的是模型。没有产物，校验只看过程
+# ★ 给评测智能体分配模型 Key 时只分配 deepseek-v4-pro（client-key ensure --models deepseek-v4-pro）：
+#   这个智能体配的是 deepseek-flash，Key 待分配或 Key 里没有这个模型，结果都是本轮不开始
+category: eng
+tags: [cli, capability, no-output, case-CAP-03]
+agent_patch:
+  model: {model: deepseek-flash, provider: anthropic}
+instruction: 请用 Bash 运行 `echo hi`。
+run_outcomes:
+  1: {status: failed, error_kind: [capability_unavailable], message: 模型}
+expect:
+  - desc: 很快明确失败（发出到终态不到 30 秒）
+    metric: turns.1.wall_s
+    count: "<30"
+budget: {wall_s: 300}

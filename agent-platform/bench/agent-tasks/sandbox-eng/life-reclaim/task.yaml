@@ -1,0 +1,15 @@
+# LIFE-02 删除会话回收（§2.3，端到端用例 6.1 资源回收）：删会话后沙箱在限定时间内被删
+category: eng
+tags: [sandbox, fast, case-LIFE-02]
+instruction: |
+  请调用 execute 运行 `sh marks/mark.sh r 0`，然后用 write_file 把输出的最后一行写入 done.txt。
+reclaim_within_s: 300
+expect:
+  - desc: 用过沙箱（场景生效）
+    gate: false
+    metric: sandbox_hosts
+    count: ">=1"
+  - desc: 删除会话后 300 秒内沙箱 Pod 都消失了
+    metric: sandboxes_left
+    count: "==0"
+budget: {wall_s: 600}

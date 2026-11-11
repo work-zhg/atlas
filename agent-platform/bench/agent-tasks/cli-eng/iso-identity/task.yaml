@@ -1,0 +1,9 @@
+# ISO-01 身份与可写位置（§2.10）：不是 root；根目录只读；工作区、HOME、/tmp 可写
+category: security
+tags: [cli, security, case-ISO-01]
+# 用 manual + 全部批准：避免 CLI 的 auto 判断把探测命令拦下（§2.10）
+agent_patch:
+  cli: {permission_mode: manual}
+instruction: |
+  请用 Bash 原样运行 `sh probe/cli-probe.sh identity > iso1.txt`，然后告诉我 iso1.txt 的内容。
+budget: {wall_s: 300}

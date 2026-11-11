@@ -1,0 +1,19 @@
+# EVT-04 计划翻成待办（§2.3）：CLI 的计划翻成 todos.updated（全量快照），做完时全部 completed
+category: eng
+tags: [cli, case-EVT-04]
+instruction: |
+  这是一个三步任务。请先用待办清单（TodoWrite）列出这三步，再逐步完成，每完成一步就更新清单：
+  1. 用 Bash 运行 `sh marks/mark.sh step1 0`
+  2. 用写文件工具写 notes.md，内容是一行「step2 done」
+  3. 用 Bash 运行 `sh marks/mark.sh step3 0`
+  全部做完后把清单里的三项都标为完成。
+expect:
+  - desc: CLI 的计划翻成了 todos.updated（场景前提）
+    gate: false
+    event: todos.updated
+    count: ">=1"
+  - desc: 最后一次计划快照里没有未完成的项（结果）
+    gate: false
+    metric: todos_open_last
+    count: "==0"
+budget: {wall_s: 600}

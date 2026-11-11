@@ -1,0 +1,16 @@
+# POD-04 删除会话后回收（§2.1）：会话 Pod 按人共用（一个 Pod 至多 cli_sessions_per_pod 个
+# 会话），删一个会话只停它的 bridge；没有别的会话时 Pod 也退役
+category: eng
+tags: [cli, case-POD-04]
+instruction: |
+  请用 Bash 运行 `sh marks/mark.sh r 0`，把输出的最后一行写入 done.txt。
+reclaim_within_s: 60
+expect:
+  - desc: 用过会话 Pod（场景前提）
+    gate: false
+    metric: sandbox_hosts
+    count: ">=1"
+  - desc: 删除会话后 60 秒内，会话的 bridge 都停了（Pod 没了也算）
+    metric: sandboxes_left
+    count: "==0"
+budget: {wall_s: 600}

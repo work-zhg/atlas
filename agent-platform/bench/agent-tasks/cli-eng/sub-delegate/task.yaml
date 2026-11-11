@@ -1,0 +1,32 @@
+# SUB-01 委派给 CLI 子智能体（§2.7，端到端用例 acp-delegation）：子 run 成功、结论回传一次、
+# 子会话一个 Pod；每题都带的不变量同样作用于子 run
+category: eng
+tags: [sub, case-SUB-01]
+agent_patch:
+  subagents:
+    - name: cli-hand
+      description: 会话 Pod 里的 Claude Code：在共享工作区里跑命令、写文件，并汇报结果
+      system_prompt: 你在工作区里完成交给你的任务，做完用一句话汇报结果。
+      model: {model: deepseek-v4-pro, provider: anthropic}
+      kind: cli
+      cli:
+        cli_type: claude-code
+        adapter: node /opt/acp-cli/bin/claude-acp
+        image: atlas-cli-bridge:0.4.0
+        permission_mode: auto
+      session_mode: persistent
+instruction: |
+  请把这件事交给 cli-hand 子智能体去做：用 Bash 运行 `sh marks/mark.sh sub1 0`，并把输出的最后一行写入 sub1.txt。
+  它完成后，你读 sub1.txt，把内容原样写进 summary.txt。
+expect:
+  - desc: 委派了 CLI 子智能体（场景前提）
+    gate: false
+    event: subagent.started
+    count: ">=1"
+  - desc: 子智能体都收尾了（subagent.started 与 finished 成对）
+    metric: subagents_unfinished
+    count: "==0"
+  - desc: 子会话用了一个会话 Pod
+    metric: sandbox_hosts
+    count: "==1"
+budget: {wall_s: 900}

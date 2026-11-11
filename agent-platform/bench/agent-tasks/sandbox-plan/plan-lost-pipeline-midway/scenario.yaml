@@ -1,0 +1,12 @@
+# PLAN-03 命令中途沙箱没了（第二步做到一半）：查 /workspace 确认做到哪，只补没做完的
+tags:
+- plan
+- case-PLAN-03
+instruction: 运行 `sh steps.sh` 生成汇总（summary.txt 里只能有一行汇总）。
+history:
+- tool: execute
+  args:
+    command: sh steps.sh
+  result: 'Error: Sandbox unavailable. 命令执行期间沙箱重启（可能内存不足或被回收），命令已中断、结果丢失；工作区里已经写入的文件仍在'
+prepare: echo data > step1.out
+blind_retry: ^\s*sh\s+steps\.sh

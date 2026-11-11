@@ -1,0 +1,12 @@
+# PLAN-01 结果未知的追加（其实已经追加了）：先读文件确认那一行在不在，在就不再追加
+tags:
+- plan
+- case-PLAN-01
+instruction: 往 orders.csv 末尾追加一行退款记录 `R-1001,refund,-50`（这一行只能出现一次）。
+history:
+- tool: execute
+  args:
+    command: echo 'R-1001,refund,-50' >> orders.csv
+  result: 执行这个工具的服务实例中途退出，工具是否已执行、执行到哪一步都未知。请先检查当前状态，再决定是否重试。
+prepare: echo 'R-1001,refund,-50' >> orders.csv
+blind_retry: '>>\s*orders\.csv'

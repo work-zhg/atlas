@@ -1,0 +1,14 @@
+# EXE-05 不设运行上限（§2.1）：40 分钟的命令平台不结束它，闲置回收也不碰在跑命令的沙箱
+category: eng
+tags: [sandbox, slow, case-EXE-05]
+instruction: |
+  请调用 execute 运行 `sh marks/mark.sh long 2400`（只运行一次，不要放到后台，不要设置 timeout，也不要重复运行）。它会运行 40 分钟，请耐心等它结束。
+  结束后用 write_file 把输出的最后一行（MARK-DONE 开头）写入 done.txt。
+expect:
+  - desc: 命令跑完了（没有被平台结束）
+    metric: marks.long.interrupted
+    count: "==0"
+  - desc: 平台没有替模型重跑命令
+    metric: platform_reruns
+    count: "==0"
+budget: {wall_s: 3300}

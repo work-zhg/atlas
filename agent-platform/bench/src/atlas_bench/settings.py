@@ -53,6 +53,26 @@ class BenchSettings(BaseSettings):
             h["X-Tenant-Id"] = self.tenant_id
         return h
 
+    # ── 故障注入（沙箱故障集，doc/sandbox-eng-cases.html §4）───────────────
+    #: kubectl 用当前环境的 KUBECONFIG（同 forward.sh）；这些是被测部署里的命名空间与名字
+    k8s_server_namespace: str = "atlas-system"
+    k8s_server_deployment: str = "atlas-server"
+    #: 原生沙箱 Pod 所在的命名空间（OpenSandbox sbx 实例建在这里）
+    k8s_sandbox_namespace: str = "atlas-sbx"
+    #: CLI 智能体的会话 Pod 所在的命名空间（OpenSandbox cli 实例建在这里），主容器的名字
+    #: （在里面结束 CLI 进程、查会话的 bridge）
+    k8s_cli_namespace: str = "atlas-cli"
+    k8s_sandbox_container: str = "sandbox"
+    k8s_opensandbox_namespace: str = "opensandbox-system"
+    k8s_lifecycle_deployment: str = "opensandbox-sbx"
+    #: 查 run 的持有实例（多副本时找该杀哪个 Pod）：库所在的 StatefulSet 与连接参数
+    k8s_db_namespace: str = "atlas-infra"
+    k8s_db_target: str = "statefulset/postgres"
+    db_user: str = "atlas"
+    db_name: str = "atlas"
+    #: 暂停 / 恢复进程要在节点上发信号（容器里给 PID 1 发 SIGSTOP 不生效）：ssh 免密到节点
+    ssh_target: str = "root@192.168.0.112"
+
     # ── 生成与裁判模型（OpenAI 兼容接口）─────────────────────────────────
     llm_base_url: str = "https://api.deepseek.com/v1"
     llm_api_key: SecretStr | None = Field(

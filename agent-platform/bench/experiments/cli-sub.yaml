@@ -1,0 +1,22 @@
+# CLI 智能体功能用例 · 作为子智能体（bench/doc/cli-func-cases.html §2.7、§5）：被测的是原生协调者
+# （文件 + 委派），子智能体是 CLI（各题用 agent_patch 配 cli-hand，persistent / ephemeral 各题自定）。
+#
+#   uv run python -m atlas_bench agent run agent-platform/bench/experiments/cli-sub.yaml --gate
+#
+# ★ 新建的评测智能体要先在模型管理平台分配 deepseek-v4-pro（同 cli-eng.yaml）。
+# ★ sub-ephemeral 要查子会话的 bridge 停没停：需要 kubectl；孤儿回收每 600 秒一次，这题最长要等 12 分钟。
+# ★ concurrency 1：子会话的会话 Pod 按人共用，并发的题会落进同一个 Pod，回收检查互相干扰。
+name: cli-sub
+suites: [cli-eng]
+tags_any: [sub]
+trials: 1
+concurrency: 1
+approval_policy: approve_all
+variants:
+  native-coord:
+    description: 原生协调者：文件 + 委派（子智能体是 CLI）
+    agent:
+      system_prompt: 你是协调者：需要运行命令时交给子智能体去做，你自己只读写文件、汇总结果。直接动手，做完用一两句话说明结果。
+      model: {model: deepseek-v4-pro, provider: anthropic}
+      tool_names: [filesystem]
+      limits: {max_steps: 60}

@@ -1,0 +1,20 @@
+# FILE-05 沙箱刚没了时的文件工具（§2.2）：确认沙箱确实不在了 → 改走对象存储，模型无感
+category: eng
+tags: [sandbox, chaos, multi-turn, case-FILE-05]
+instruction: |
+  请先调用 execute 运行 `sh marks/mark.sh f 0`，再用 write_file 写 note.txt，内容为 hello。
+actions:
+  - desc: 第一轮结束后删掉沙箱 Pod
+    do: delete_sandbox
+    args: {mark: f}
+    when: {event: run.finished}
+turns:
+  - wait_s: 5
+    text: |
+      请只用文件工具（不要用 execute）：用 read_file 读 note.txt，再用 write_file 写 after.txt，内容为 note.txt 的内容加上 -after。
+expect:
+  - desc: 故障注入做了（场景生效）
+    gate: false
+    metric: actions_done
+    count: "==1"
+budget: {wall_s: 600}

@@ -5,15 +5,19 @@ from __future__ import annotations
 import re
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 __all__ = [
+    "Action",
     "AgentExperimentConfig",
     "Budget",
     "Expectation",
+    "RunExpect",
     "SimulatedUser",
     "Task",
     "TrialResult",
+    "Trigger",
+    "Turn",
     "VariantConfig",
     "Verifier",
 ]
@@ -89,6 +93,30 @@ class Expectation(BaseModel):
             raise ValueError(f"count 写成 >=n / <=n / ==n / >n / <n，而不是 {v!r}")
         return v.replace(" ", "")
 
+    def key(self) -> str:
+        """断言的对象：套件共享的断言与任务自己的断言对象相同时，以任务的为准。"""
+        return f"event:{self.event}" if self.event else f"metric:{self.metric}"
+
+
+class RunExpect(BaseModel):
+    """一轮预期的终态（doc/cli-func-cases.html §4「预期内的失败」）：满足就不算错误。
+
+    error_kind 是候选（任一即可，空 = 不限）；message 是错误消息里应有的一段话。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["succeeded", "failed", "cancelled", "interrupted"] = "succeeded"
+    error_kind: list[str] = Field(default_factory=list)
+    message: str | None = None
+
+    def matches(self, status: str, error_kind: str | None, message: str | None) -> bool:
+        if status != self.status:
+            return False
+        if self.error_kind and (error_kind or "") not in self.error_kind:
+            return False
+        return self.message is None or self.message in (message or "")
+
 
 class SimulatedUser(BaseModel):
     """模拟用户（doc/ask-user-question-design.html §12）：智能体用 ask_user_question 提问时，
@@ -101,14 +129,80 @@ class SimulatedUser(BaseModel):
     brief: str
 
 
+class Turn(BaseModel):
+    """同一会话里的后续一轮（多轮任务）：上一轮到终态、已触发的故障动作都做完之后再发。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    text: str
+    #: 发这一轮之前先等多久（如等闲置回收）
+    wait_s: float = 0.0
+
+
+#: 故障动作（doc/sandbox-eng-cases.html §4「运行中的动作」）
+ActionKind = Literal[
+    "cancel_run",  # 取消触发它的那个 run
+    "kill_server",  # 强删持有这个 run 的 server Pod（崩溃）
+    "restart_server",  # 滚动部署 server（停机交接）
+    "pause_server",  # 暂停持有这个 run 的 server 进程（假死），trial 结束前一定恢复
+    "resume_server",
+    "delete_sandbox",  # 删会话的沙箱 / 会话 Pod：默认强删，args.graceful 为真时优雅删除
+    "block_sandbox",  # 阻断进入沙箱的流量（server → execd / bridge 断网），trial 结束前一定恢复
+    "unblock_sandbox",
+    "scale_lifecycle",  # 把原生沙箱的 OpenSandbox lifecycle server 缩放到 args.replicas，结束前恢复
+    "kill_cli",  # 在会话 Pod 里结束这个会话的 CLI 进程（bridge 拉起的 adapter）
+]
+
+
+class Trigger(BaseModel):
+    """按事件触发（不按绝对时间）：会话事件流里第 nth 条满足条件的事件。
+
+        event   事件类型，如 tool.started / run.resumed / run.finished
+        tool    事件 data.name 等于它
+        mark    命令（参数里的 command）调用了 marks/mark.sh <mark>（计数脚本，见套件的
+                _shared/files）。不看工具名：CLI 的 Shell 工具名是命令本身的第一行
+
+    ★ event 为 tool.started、带 mark 时，同一个调用的 tool.updated 也算（按 call_id 只算一次）：
+      CLI 一开始只报工具名，命令随后用 tool.updated 补全。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    event: str
+    tool: str | None = None
+    mark: str | None = None
+    nth: int = 1
+
+
+class Action(BaseModel):
+    """运行中的一个动作：触发后等 after_s 再执行。
+
+    when 为空 = trial 一开始（发第一轮之前）就执行。deadline_s：从 trial 开始算，到时还没触发就
+    照样执行（兜底 —— 比如「接管后恢复假死的实例」，单副本时永远等不到接管）。
+
+    ★ 触发条件的键叫 when 不叫 on：YAML 1.1 把 on 读成布尔值 true，写成 on 会被静默丢掉、
+      动作在开局就执行（踩过）。未知的键一律报错（extra=forbid），写错了早发现。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    do: ActionKind
+    when: Trigger | None = None
+    after_s: float = 0.0
+    deadline_s: float | None = None
+    args: dict[str, Any] = Field(default_factory=dict)
+    desc: str = ""
+
+
 class Task(BaseModel):
     id: str  # <套件>/<任务>
     suite: str
     category: Literal["cli", "code", "data", "tool", "dialog", "security", "eng"] = "cli"
     tags: list[str] = Field(default_factory=list)
     instruction: str
-    #: 初始工作区：相对路径 → 内容（来自任务的 files/ 目录）
-    files: dict[str, str] = Field(default_factory=dict)
+    #: 初始工作区：相对路径 → 内容（来自任务的 files/ 与套件的 _shared/files/；
+    #: 不是文本的原样保留字节）
+    files: dict[str, str | bytes] = Field(default_factory=dict)
     verifier: Verifier = Field(default_factory=Verifier)
     budget: Budget = Field(default_factory=Budget)
     #: 任务目录（校验脚本在 <dir>/verifier/）
@@ -133,11 +227,38 @@ class Task(BaseModel):
     sse_disconnect_after: int | None = None
     #: 模拟用户：Agent 提问时按它回答（需求澄清评测，tags 里用 ambiguous / clear 标成对的两题）
     user: SimulatedUser | None = None
+    #: 同一会话里接着发的几轮（第一轮是 instruction）
+    turns: list[Turn] = Field(default_factory=list)
+    #: 运行中注入的故障（需要集群操作权限：kubectl，暂停进程还要 ssh 到节点）
+    actions: list[Action] = Field(default_factory=list)
+    #: 资源回收检查（指标 sandboxes_left）：这么多秒内应当回收干净。回收什么看 reclaim_scope：
+    #:   thread     结束后删除会话：原生沙箱 Pod 都消失；CLI 会话的 bridge 都停了（会话 Pod 按人
+    #:              共用，还有别的会话时 Pod 不退役）
+    #:   subagents  不删父会话：子会话（ephemeral）的 bridge 都停了
+    #:   image      会话 Pod 起不来的用例：用 CLI 镜像（agent_patch 里的 cli.image）的 Pod 都消失
+    reclaim_within_s: float | None = None
+    reclaim_scope: Literal["thread", "subagents", "image"] = "thread"
+    #: 各轮预期的终态（键 = 第几轮，1 是 instruction）。没写的轮预期成功。满足的失败不算错误
+    run_outcomes: dict[int, RunExpect] = Field(default_factory=dict)
+    #: 自动标题检查：建会话时不带标题（带了就算用户起的，自动生成不覆盖），各轮结束后这么多秒内
+    #: 标题来源应变成 generated 或 fallback（指标 title_pending）
+    title_within_s: float | None = None
+    #: 已知缺陷（文档里的编号与一句话）：结果照常进报告，但不进硬门槛；意外通过时报告里提示
+    known_defect: str | None = None
+    #: 用例自己会让沙箱出错（如把内存打满）：沙箱丢失、结果未知是预期内的，不算平台错误
+    sandbox_errors_expected: bool = False
 
     @field_validator("approval_policy")
     @classmethod
     def _policy(cls, v: str | None) -> str | None:
         return _check_policy(v)
+
+    def injects_faults(self) -> bool:
+        """注入了故障（或用例自己制造故障）：沙箱丢失、结果未知是预期内的工具结果，不算平台错误。"""
+        return self.sandbox_errors_expected or any(a.do != "cancel_run" for a in self.actions)
+
+    def needs_cluster(self) -> bool:
+        return self.injects_faults() or self.reclaim_within_s is not None
 
 
 class VariantConfig(BaseModel):
@@ -154,7 +275,11 @@ class AgentExperimentConfig(BaseModel):
     suites: list[str]
     #: 只跑带这些标签之一的任务（空 = 全部）
     tags_any: list[str] = Field(default_factory=list)
+    #: 不跑带这些标签的任务（如 needs-2-replicas：测试环境只有一个 server 副本时）
+    tags_none: list[str] = Field(default_factory=list)
     limit: int | None = None
+    #: 平台接口连不上时 GET 重试多久（秒）。故障集要盖过 server Pod 重建 + 端口转发重连
+    api_retry_s: float = 60.0
     trials: int = 3
     concurrency: int = 3
     #: approve_all：能力评测，不让审批成为变量（次数与等待仍计入指标）
@@ -197,3 +322,7 @@ class TrialResult(BaseModel):
     expect_ok: bool | None = None
     #: 因平台错误重跑过（协议允许一次）
     retried: bool = False
+    #: 任务标了已知缺陷：不进硬门槛
+    known_defect: str | None = None
+    #: 注入的故障动作：[{do, desc, at_s, ok, detail}]
+    actions: list[dict[str, Any]] = Field(default_factory=list)

@@ -1,0 +1,30 @@
+# SUB-02 persistent 子智能体两次委派（§2.7）：同一个子会话、同一个 CLI 会话，记得上次
+category: eng
+tags: [sub, case-SUB-02]
+agent_patch:
+  subagents:
+    - name: cli-hand
+      description: 会话 Pod 里的 Claude Code：在共享工作区里跑命令、写文件，并汇报结果
+      system_prompt: 你在工作区里完成交给你的任务，做完用一句话汇报结果。
+      model: {model: deepseek-v4-pro, provider: anthropic}
+      kind: cli
+      cli:
+        cli_type: claude-code
+        adapter: node /opt/acp-cli/bin/claude-acp
+        image: atlas-cli-bridge:0.4.0
+        permission_mode: auto
+      session_mode: persistent
+instruction: |
+  请分两次委派给 cli-hand 子智能体：
+  1. 第一次只告诉它：「请记住数字 7319，然后用 Bash 运行 `sh marks/mark.sh p1 0`，回复『记住了』」。
+  2. 等它回复后，第二次只告诉它：「把上次让你记住的那个数字乘以 3，结果写入 sub2.txt」——第二次不要提到这个数字本身。
+  最后告诉我 sub2.txt 的内容。
+expect:
+  - desc: 委派了两次（场景前提）
+    gate: false
+    event: subagent.started
+    count: ">=2"
+  - desc: 两次委派落在同一个子会话
+    metric: sub_threads
+    count: "==1"
+budget: {wall_s: 900}

@@ -1,0 +1,29 @@
+# EXE-13 父子智能体共用沙箱（§2.1）：子智能体用根会话的沙箱，不另建
+category: eng
+tags: [sandbox, fast, subagent, case-EXE-13]
+instruction: |
+  请在同一轮里并行做三件事：
+    1. 发起一个 task，交给 runner 子智能体运行 `sh marks/mark.sh s1 5`
+    2. 再发起一个 task，交给 runner 子智能体运行 `sh marks/mark.sh s2 5`
+    3. 你自己用 execute 运行 `sh marks/mark.sh main 5`
+  全部完成后，用 write_file 把三个 MARK-DONE 行写入 done.txt，一行一个。
+agent_patch:
+  subagents:
+    - name: runner
+      description: 在工作区里运行交给它的一条 shell 命令，并原样返回输出的最后一行
+      system_prompt: 你负责用 execute 运行交给你的那一条命令（只运行一次，不要放到后台），然后只回复命令输出的最后一行。
+      model: {model: deepseek-v4-pro, provider: anthropic}
+      tool_names: [filesystem, bash]
+      session_mode: ephemeral
+expect:
+  - desc: 委派了子智能体（场景生效）
+    gate: false
+    event: subagent.started
+    count: ">=2"
+  - desc: 父子智能体的命令都在同一个沙箱里执行
+    metric: sandbox_hosts
+    count: "==1"
+  - desc: 平台没有替模型重跑命令
+    metric: platform_reruns
+    count: "==0"
+budget: {wall_s: 900}

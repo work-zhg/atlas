@@ -1,0 +1,6 @@
+# EXE-06 静默的长命令（§2.1）：无输出、CPU 近零超过卡死阈值（600 秒）。整节点口径时不下卡死结论
+category: eng
+tags: [sandbox, slow, case-EXE-06]
+instruction: |
+  请调用 execute 原样运行 `sleep 900; echo quiet-done > quiet.txt`（会安静地运行 15 分钟，请等它结束，只运行一次）。
+budget: {wall_s: 1500}

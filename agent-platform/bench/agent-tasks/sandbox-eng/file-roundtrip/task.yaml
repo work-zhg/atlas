@@ -1,0 +1,7 @@
+# FILE-02 上传往返（§2.2，端到端用例 6.7 files-roundtrip）：上传的、沙箱里读到的、下载回来的三者一致
+category: eng
+tags: [sandbox, fast, case-FILE-02]
+instruction: |
+  请调用 execute 原样运行下面这条命令（它给工作区里的初始文件算 sha256），不要修改任何已有文件：
+    find ./数据 ./raw -type f | sort | xargs -d '\n' sha256sum > sums.txt
+budget: {wall_s: 600}

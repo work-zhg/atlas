@@ -1,0 +1,9 @@
+# EXE-04 单命令时限（§2.1）：到时结束，子进程一并结束
+category: eng
+tags: [sandbox, fast, case-EXE-04]
+instruction: |
+  请调用一次 execute 运行 `sh marks/mark.sh tmo 60`，并且把 execute 的 timeout 参数设为 5（秒）。
+  它会因为超时被结束，这是预期的，不要重试。
+  然后再调用 execute 运行这条检查命令（原样运行）：
+    { pgrep -fa '[m]ark.sh tmo' | wc -l; pgrep -x sleep | wc -l; } > left.txt
+budget: {wall_s: 600}

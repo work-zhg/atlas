@@ -1,0 +1,14 @@
+# EXE-12 同一步并行命令（§2.1）：并发执行，输出互不串
+category: eng
+tags: [sandbox, fast, case-EXE-12]
+instruction: |
+  这是一次并行执行测试。请在同一步里并行发起三个 execute 调用（一起发出，不要合并成一条命令，也不要一个一个等）：
+    sh marks/mark.sh p1 10
+    sh marks/mark.sh p2 10
+    sh marks/mark.sh p3 10
+  每条都会运行 10 秒。全部结束后，用 write_file 把三条命令输出的最后一行（MARK-DONE 开头）写入 done.txt，一行一个。
+expect:
+  - desc: 平台没有替模型重跑命令
+    metric: platform_reruns
+    count: "==0"
+budget: {wall_s: 600}

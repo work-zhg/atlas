@@ -97,6 +97,9 @@ def summarize(run_dir: Path) -> dict[str, Any]:
         rows = data[v]
         tasks = _per_task(rows)
         ok_rows = [r for r in rows if r.outcome != "infra_error"]
+        # ★ 标了已知缺陷的题现在预期失败：照常进成功率与逐题，但不进硬门槛（单列「已知缺陷」）
+        gated = [r for r in rows if not r.known_defect]
+        gated_ok = [r for r in ok_rows if not r.known_defect]
         per_task = {t: mean(1.0 if r.passed else 0.0 for r in rs) for t, rs in tasks.items()}
         task_success[v] = per_task
         tool_calls = sum(int(r.metrics.get("tool_calls") or 0) for r in ok_rows)
@@ -136,13 +139,15 @@ def summarize(run_dir: Path) -> dict[str, Any]:
             "subagent_calls": _avg(ok_rows, "subagent_calls"),
             "clarify": _clarify(ok_rows, tags),
             # ★ 硬门槛（doc/agent-platform-eval-plan.html §8）：平台错误、沙箱不可用、过程断言
-            "platform_errors": outcomes.get("platform_error", 0),
+            "platform_errors": sum(1 for r in gated if r.outcome == "platform_error"),
             "retried": sum(1 for r in rows if r.retried),
             "sandbox_unavailable": sum(
-                int(r.metrics.get("sandbox_unavailable") or 0) for r in rows
+                int(r.metrics.get("sandbox_unavailable") or 0)
+                for r in gated
+                if not r.metrics.get("faults_injected")  # 注入了故障：沙箱出错是用例要的现场
             ),
-            "expect_checked": sum(1 for r in ok_rows if r.expect_ok is not None),
-            "expect_failed": sum(1 for r in ok_rows if r.expect_ok is False),
+            "expect_checked": sum(1 for r in gated_ok if r.expect_ok is not None),
+            "expect_failed": sum(1 for r in gated_ok if r.expect_ok is False),
             # 场景前提没满足（模型没走到要测的路径）：不进硬门槛，但要看得见
             "not_exercised": sum(
                 1
@@ -384,6 +389,44 @@ def _sections(run_dir: Path, summary: dict[str, Any]) -> list[tuple[str, str | T
             expect_rows.append(row)
     if expect_rows:
         secs.append(("过程断言（通过次数 / 检查次数）", (["任务", "断言", *order], expect_rows)))
+
+    defect_rows = []
+    for t in tasks:
+        for v in order:
+            rs = [r for r in data.get(v, []) if r.task_id == t["id"] and r.known_defect]
+            if not rs:
+                continue
+            ok = [r for r in rs if r.outcome != "infra_error"]
+            fixed = bool(ok) and all(r.passed and r.expect_ok is not False for r in ok)
+            defect_rows.append(
+                [
+                    t["id"],
+                    v,
+                    rs[0].known_defect,
+                    f"{sum(r.passed for r in ok)}/{len(ok)}",
+                    f"{sum(r.expect_ok is False for r in ok)}/{len(ok)}",
+                    "⚠ 全部通过：缺陷可能已修，转为门槛" if fixed else "预期失败",
+                ]
+            )
+    if defect_rows:
+        secs.append(
+            (
+                "已知缺陷（不进硬门槛）",
+                (["任务", "配置", "缺陷", "通过", "不变量失败", "说明"], defect_rows),
+            )
+        )
+
+    fault_rows = []
+    for v in order:
+        for r in sorted(data.get(v, []), key=lambda x: (x.task_id, x.trial)):
+            if r.actions:
+                steps = "；".join(
+                    f"{a['at_s']}s {a['do']}{'' if a['ok'] else '（失败）'} {a['detail'][:60]}"
+                    for a in r.actions
+                )
+                fault_rows.append([v, f"{r.task_id}#{r.trial}", r.outcome, steps])
+    if fault_rows:
+        secs.append(("故障注入", (["配置", "任务", "结果", "动作（相对 trial 开始）"], fault_rows)))
 
     fails = []
     for v in order:

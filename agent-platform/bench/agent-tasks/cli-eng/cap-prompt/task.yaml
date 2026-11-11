@@ -1,0 +1,11 @@
+# CAP-01 系统提示词（§2.5）：提示词里定一条项目约定，用户消息只说「按约定交付」
+category: eng
+tags: [cli, capability, case-CAP-01]
+known_defect: "CD1 系统提示词不下发给 CLI（turn.start 只带用户这一轮的文字）"
+agent_patch:
+  system_prompt: |
+    你在一个工作区里完成用户的任务。
+    项目约定：所有交付物都写到 deliver/ 目录下（文件名自定）；交付文件的第一行固定写
+    「DELIVERABLE: atlas-bench」，第二行起才是正文。
+instruction: 请写一份三条要点的版本发布说明，按项目约定交付。
+budget: {wall_s: 600}

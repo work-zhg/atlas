@@ -1,0 +1,26 @@
+# PRM-02 manual：写入和命令都先经平台审批，批准后只执行一次（§2.4）
+category: eng
+tags: [cli, permission, case-PRM-02]
+agent_patch:
+  cli: {permission_mode: manual}
+instruction: |
+  请用写文件工具写 hello.txt，内容是 hello；然后用 Bash 运行 `sh marks/mark.sh m 0`，
+  把输出的最后一行写入 done.txt。
+expect:
+  - desc: 写入先经平台审批
+    metric: approvals_edit
+    count: ">=1"
+  - desc: 命令先经平台审批
+    metric: approvals_exec
+    count: ">=1"
+  - desc: 执行次数没有超过批准次数
+    metric: unapproved_runs
+    count: "==0"
+  - desc: 平台没有替 CLI 重跑命令
+    metric: platform_reruns
+    count: "==0"
+  - desc: agent.mode 实际生效的是 manual
+    event: agent.mode
+    where: {effective: manual}
+    count: ">=1"
+budget: {wall_s: 600}

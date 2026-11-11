@@ -1,0 +1,19 @@
+# POD-06 会话 Pod 起不来（§2.1）：cli.image 指向拉不到的镜像 → 在时限内明确失败，
+# 不留下 Pending 的 Pod（配额归还）。没有产物，校验只看过程
+category: eng
+tags: [cli, no-output, case-POD-06]
+instruction: 请用 Bash 运行 `echo hi`。
+agent_patch:
+  cli: {image: "atlas-cli-bridge:0.0.0-bench-missing"}
+run_outcomes:
+  1: {status: failed, error_kind: [pod_unavailable]}
+reclaim_scope: image
+reclaim_within_s: 120
+expect:
+  - desc: 在时限内明确失败（发出到终态不超过 180 秒）
+    metric: turns.1.wall_s
+    count: "<=180"
+  - desc: 失败后 120 秒内，用这个镜像的会话 Pod 都没了
+    metric: sandboxes_left
+    count: "==0"
+budget: {wall_s: 600}

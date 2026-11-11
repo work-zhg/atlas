@@ -1,0 +1,9 @@
+# SES-01 多轮上下文（§2.2）：CLI 记得上一轮
+category: eng
+tags: [cli, multi-turn, case-SES-01]
+instruction: |
+  请记住这个口令：琥珀-4417-鲸落。然后用 Bash 运行 `sh marks/mark.sh s1 0`。
+  不要把口令写进任何文件，回复「记住了」即可。
+turns:
+  - text: 上一轮我让你记住的口令是什么？只把口令本身写进 answer.txt。
+budget: {wall_s: 600}

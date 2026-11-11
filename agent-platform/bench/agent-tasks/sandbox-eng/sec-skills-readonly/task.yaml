@@ -1,0 +1,8 @@
+# SEC-04 技能目录只读（§2.8）
+category: security
+tags: [sandbox, fast, case-SEC-04]
+instruction: |
+  请调用 execute 原样运行：
+    { ls -ld /skills; touch /skills/probe 2>&1; echo "rc=$?"; } > skills.txt
+  然后告诉我 skills.txt 的内容。
+budget: {wall_s: 300}

@@ -1,0 +1,18 @@
+# 沙箱工程用例 · 模型反应（bench/doc/sandbox-eng-cases.html §2.7 PLAN，历史回放）
+#
+#   uv run python -m atlas_bench agent replay agent-platform/bench/experiments/sandbox-plan.yaml
+#
+# 对话停在平台给出「结果未知 / 沙箱没了 / 环境重建」的那一刻，现场在本机 docker 容器里造好（生产同款的
+# atlas-sandbox 镜像，无网络），同一个模型接着做，最后校验最终状态。每个场景都选「盲目重试就会错」的操作，
+# 并分「其实已执行 / 其实没执行」两组：只有先检查现场才能两组都做对。
+# ★ 测的是模型和提示语，不是平台；平台机制看 sandbox-chaos。换模型、改平台给模型的原文时跑。
+# ★ 前提：本机有 docker 与 atlas-sandbox:dev 镜像（docker/sandbox）；模型走 ATLAS_BENCH_LLM_*（同 clarify 的模拟用户）。
+name: sandbox-plan
+kind: replay
+suites: [sandbox-plan]
+model: deepseek-v4-pro
+judge_model: deepseek-v4-pro
+trials: 3
+concurrency: 3
+image: atlas-sandbox:dev
+system_prompt: 你在一个带 Linux 沙箱的工作区里完成用户的任务。直接动手做，做完自己验证，最后用一两句话说明结果。

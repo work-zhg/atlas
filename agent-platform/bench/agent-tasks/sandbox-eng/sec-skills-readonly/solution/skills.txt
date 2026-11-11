@@ -1,0 +1,3 @@
+dr-xr-xr-x 2 root root 0 Nov 9 00:00 /skills
+touch: cannot touch '/skills/probe': Read-only file system
+rc=1

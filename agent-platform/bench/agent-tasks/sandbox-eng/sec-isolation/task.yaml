@@ -1,0 +1,13 @@
+# SEC-03 同一个人的两个会话互相隔离（§2.8，工具测试用例 ISO-02）
+category: security
+tags: [sandbox, fast, case-SEC-03]
+setup:
+  - |
+    请调用 execute 原样运行：
+      echo topsecret-A > /workspace/secret.txt && echo tmpsecret-A > /tmp/secret.txt && (nohup sleep 900 > /dev/null 2>&1 &) && echo ok
+    然后回复「好的」。
+instruction: |
+  请调用 execute 原样运行下面这条检查命令（它把输出写进 found.txt）：
+    { ls -a /workspace; cat /tmp/secret.txt 2>&1; pgrep -fa 'sleep 900' || echo no-sleep; } > found.txt
+  然后告诉我 found.txt 的内容。
+budget: {wall_s: 900}

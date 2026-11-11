@@ -1,0 +1,5 @@
+uid=1000
+root_write=1
+usr_write=1
+home_write=0
+tmp_write=0

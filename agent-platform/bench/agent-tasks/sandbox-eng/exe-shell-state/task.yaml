@@ -1,0 +1,14 @@
+# EXE-03 命令之间的 shell 状态（§2.1）：每条命令都从 /workspace 开始，环境变量不保留
+category: eng
+tags: [sandbox, fast, case-EXE-03]
+instruction: |
+  请分两次调用 execute（不要合并成一条命令，也不要改写命令）：
+    第一次：cd sub && export GREETING=hello && pwd
+    第二次：pwd > where.txt; echo "greeting=[$GREETING]" > greeting.txt
+  完成后告诉我 where.txt 和 greeting.txt 的内容。
+expect:
+  - desc: 分成了两次执行（场景生效）
+    gate: false
+    metric: shell_calls
+    count: ">=2"
+budget: {wall_s: 600}

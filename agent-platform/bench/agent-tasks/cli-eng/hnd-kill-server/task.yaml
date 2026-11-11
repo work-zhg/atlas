@@ -1,0 +1,32 @@
+# HND-01 命令执行中 server 崩溃（§2.8，沙箱用例 CLI-01）：这一轮在 Pod 里不受影响；接手的实例
+# 按 cli_session attach、从确认点之后补发；CLI 拿到真实输出
+category: eng
+tags: [cli, chaos, takeover, case-HND-01]
+known_defect: "CD3 接管后落库的回答缺接管前流出的段落；CD4 确认点之后已发布的消息接管后重发"
+instruction: |
+  请先回复一句「开始了」，然后用 Bash 运行 `sh marks/mark.sh slow 90`（只运行一次，不要放到后台，不要设置 timeout，也不要重复运行）。
+  结束后把输出的最后一行写入 done.txt。
+actions:
+  - desc: 命令跑到第 10 秒，强删持有这个 run 的 server Pod
+    do: kill_server
+    when: {event: tool.started, mark: slow}
+    after_s: 10
+expect:
+  - desc: 故障注入做了（场景前提）
+    gate: false
+    metric: actions_done
+    count: ">=1"
+  - desc: 这一轮只交给 CLI 一次：命令只执行了一次
+    metric: marks.slow.start
+    count: "==1"
+  - desc: 命令跑完了（没有被打断）
+    metric: marks.slow.end
+    count: "==1"
+  - desc: CLI 拿到了真实输出（工具结果里有结束令牌）
+    metric: marks.slow.token_seen
+    count: ">=1"
+  - desc: 发生了接管（场景前提）
+    gate: false
+    event: run.resumed
+    count: ">=1"
+budget: {wall_s: 900}

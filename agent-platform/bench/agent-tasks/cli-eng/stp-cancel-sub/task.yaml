@@ -1,0 +1,40 @@
+# STP-05 原生父 run 把长命令委派给 CLI 子智能体，执行中取消父 run（§2.6）：子 run 也取消，
+# CLI 的命令被中断。没有产物
+category: eng
+tags: [sub, cancel, no-output, case-STP-05]
+agent_patch:
+  subagents:
+    - name: cli-hand
+      description: 会话 Pod 里的 Claude Code：在共享工作区里跑命令、写文件，并汇报结果
+      system_prompt: 你在工作区里完成交给你的任务，做完用一句话汇报结果。
+      model: {model: deepseek-v4-pro, provider: anthropic}
+      kind: cli
+      cli:
+        cli_type: claude-code
+        adapter: node /opt/acp-cli/bin/claude-acp
+        image: atlas-cli-bridge:0.4.0
+        permission_mode: auto
+      session_mode: persistent
+instruction: |
+  请交给 cli-hand 子智能体：用 Bash 运行 `sh marks/mark.sh subslow 100`（只运行一次，不要放到后台，不要设置 timeout），
+  完成后把输出的最后一行写入 done.txt。
+actions:
+  - desc: 子智能体的命令跑到第 10 秒时取消父 run
+    do: cancel_run
+    when: {event: tool.started, mark: subslow}
+    after_s: 10
+run_outcomes:
+  1: {status: cancelled}
+expect:
+  - desc: 取消做了（场景前提）
+    gate: false
+    metric: actions_done
+    count: "==1"
+  - desc: 子 run 也以取消收尾
+    metric: sub_runs_not_cancelled
+    count: "==0"
+  - desc: CLI 的命令被中断（待确认 CD7）
+    gate: false
+    metric: marks.subslow.end
+    count: "==0"
+budget: {wall_s: 900}

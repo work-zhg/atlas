@@ -1,0 +1,6 @@
+root=否
+write:/=不可写
+write:/usr=不可写
+write:workspace=可写
+write:home=可写
+write:tmp=可写

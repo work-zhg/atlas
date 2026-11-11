@@ -96,6 +96,47 @@ uv run python -m atlas_bench agent run agent-platform/bench/experiments/tbench.y
 - 与官方榜单的差异（`importers/tbench.py`）：资源上限用平台的沙箱配置；Atlas 的命令从 `/workspace` 开始，
   指令前加了一行起始目录；时间预算含沙箱启动；校验时现场联网装 pytest。
 
+### 沙箱工程用例（doc/sandbox-eng-cases.html）
+
+```bash
+uv run python -m atlas_bench agent run agent-platform/bench/experiments/sandbox-eng.yaml --gate   # L2：不注入故障，22 题
+uv run python -m atlas_bench agent run agent-platform/bench/experiments/sandbox-chaos.yaml        # L3：运行中注入故障，13 题，串行
+uv run python -m atlas_bench agent run agent-platform/bench/experiments/sandbox-slow.yaml         # 长跑，约 50 分钟
+uv run python -m atlas_bench agent replay agent-platform/bench/experiments/sandbox-plan.yaml       # 模型反应：历史回放
+```
+
+- 计数：套件的 `_shared/files/marks/mark.sh` 随每题上传。被测命令调用它，开始、结束各留一个文件，评测据此算
+  执行次数、平台重跑（`platform_reruns`）、是否被打断（`marks.<标记>.interrupted`）、模型是否拿到真实输出（`token_seen`）、
+  会话用过几个沙箱（`sandbox_hosts`，start 文件里记着沙箱的 hostname，即 Pod 名）。
+- 任务字段：`turns`（同一会话的后续几轮）、`actions`（运行中的动作，按事件触发：`when: {event, tool, mark, nth}` +
+  `after_s`；触发条件的键叫 `when`，YAML 会把 `on` 读成 true）、`reclaim_within_s`（删会话后沙箱 Pod 要在这么久内消失）、
+  `known_defect`（已知缺陷：照常报告，不进硬门槛）、`sandbox_errors_expected`。
+- 沙箱错误按平台给的类别判（`tool.failed` 的 `artifact.sandbox_error`：unavailable / lost / result_unknown）；注入了故障的题，
+  沙箱出错是预期内的，不算平台错误。平台还没带这个属性时退回按错误前缀判。
+- 故障集的前提：kubectl 能操作被测集群（KUBECONFIG，同 `deploy/local/forward.sh`）；暂停进程要 ssh 免密到节点
+  （`ATLAS_BENCH_SSH_TARGET`）；断网要集群的 CNI 支持 NetworkPolicy。命名空间等见 `settings.py` 的 `k8s_*`。
+  注入的故障在每个 trial 结束时恢复；评测进程被直接杀掉时，下次开跑前清掉残留的 NetworkPolicy。
+- 回放：本机 docker + `atlas-sandbox:dev` 镜像（无网络），模型走 `ATLAS_BENCH_LLM_*`；场景在 `agent-tasks/sandbox-plan/`。
+
+### CLI 智能体功能用例（doc/cli-func-cases.html）
+
+```bash
+uv run python -m atlas_bench agent run agent-platform/bench/experiments/cli-eng.yaml --gate    # L2：22 题
+uv run python -m atlas_bench agent run agent-platform/bench/experiments/cli-sub.yaml --gate    # CLI 作子智能体：5 题，串行
+uv run python -m atlas_bench agent run agent-platform/bench/experiments/cli-chaos.yaml         # L3：运行中注入故障，8 题，串行
+```
+
+- 套件 `agent-tasks/cli-eng`：计数脚本同沙箱用例；`_shared/files/probe/cli-probe.sh` 是安全探测脚本（只输出有 / 没有、可读 / 不可读）；
+  `_shared/expect.yaml` 是每题都带的不变量（正文 = 增量拼接、工具调用成对、用量带模型名、序号连续、没有预期之外的失败……），
+  任务里写了同一指标 / 事件的断言时以任务的为准。
+- 增量（`message.delta`）不归档：评测把会话流上收到的事件全部留下（原始轨迹的 `stream`），正文一致、序号连续对着它查。
+- CLI 的命令按参数里的 `command` 认（工具名是 `Terminal`、命令随后用 `tool.updated` 补全；审批的命令在 `rawInput` 下）。
+- 任务字段：`run_outcomes`（各轮预期的终态，如 `1: {status: failed, error_kind: [bridge_lost]}`，满足就不记错误）、
+  `reclaim_scope`（thread / subagents / image）、`title_within_s`（自动标题）；动作多了 `kill_cli`，`delete_sandbox` 可 `graceful`。
+- 会话 Pod 在 `atlas-cli` 命名空间，按人共用：回收看「这个会话的 bridge 停了」（`kubectl exec` 查 `/tmp/atlas-bridge/<会话>.pid`）。
+- 新智能体只分配 deepseek-v4-pro：`cap-no-key` 配的是 deepseek-flash，就是要它「没有分配这个模型」。
+- L1：`agent-platform/tests/test_cli_known_defects.py`（CD3、CD4、CD6、CD10，xfail strict）。
+
 ## 已实现 / 待做
 
 已实现：统一数据格式、Atlas 适配器（入库复用、多种检索方式共用一个库）、断点续跑、出处匹配 + ranx 检索指标、

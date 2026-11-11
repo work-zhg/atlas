@@ -1,0 +1,31 @@
+# CRS-02 在会话 Pod 里结束 CLI 进程（§2.9）：bridge 重启 CLI 并恢复同一个会话；这一轮 runtime_crashed；
+# 下一轮正常、记得上下文（没有 session.lost）
+category: eng
+tags: [cli, chaos, multi-turn, case-CRS-02]
+instruction: |
+  请记住这个口令：松烟-5093-鹤鸣（不要写进任何文件）。然后用 Bash 运行 `sh marks/mark.sh crs 90`
+  （只运行一次，不要放到后台，不要设置 timeout，也不要重复运行），结束后把输出的最后一行写入 done.txt。
+actions:
+  - desc: 命令跑到第 10 秒，结束这个会话的 CLI 进程（adapter）
+    do: kill_cli
+    when: {event: tool.started, mark: crs}
+    after_s: 10
+run_outcomes:
+  1: {status: failed, error_kind: [runtime_crashed]}
+turns:
+  - wait_s: 10
+    text: |
+      上一轮我让你记住的口令是什么？只把口令本身写进 answer.txt。
+      然后用 Bash 运行 `sh marks/mark.sh after 0`，把输出的最后一行写入 after.txt。
+expect:
+  - desc: 故障注入做了（场景前提）
+    gate: false
+    metric: actions_done
+    count: "==1"
+  - desc: 不自动重做：crs 最多执行了一次
+    metric: marks.crs.start
+    count: "<=1"
+  - desc: 会话用过 1 个会话 Pod
+    metric: sandbox_hosts
+    count: "==1"
+budget: {wall_s: 900}

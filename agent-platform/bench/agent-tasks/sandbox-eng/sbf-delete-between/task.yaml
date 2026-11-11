@@ -1,0 +1,26 @@
+# SBF-02 两条命令之间沙箱被删（§2.6，端到端用例 6.13 后半）：重建 + 提示，模型据此重装依赖后继续
+category: eng
+tags: [sandbox, chaos, multi-turn, case-SBF-02]
+instruction: |
+  请调用 execute 原样运行：
+    sh marks/mark.sh t1 0 && mkdir -p /tmp/lib && echo 'VALUE = 42' > /tmp/lib/cfg.py && PYTHONPATH=/tmp/lib python3 -c 'import cfg; print(cfg.VALUE)'
+actions:
+  - desc: 第一轮结束后删掉沙箱 Pod
+    do: delete_sandbox
+    args: {mark: t1}
+    when: {event: run.finished}
+turns:
+  - wait_s: 10
+    text: |
+      请调用 execute 运行 `PYTHONPATH=/tmp/lib python3 -c 'import cfg; print(cfg.VALUE)' > value.txt`。
+      如果失败，想办法让它成功（可以重新创建需要的文件）。
+expect:
+  - desc: 故障注入做了（场景生效）
+    gate: false
+    metric: actions_done
+    count: "==1"
+  - desc: 平台提示了模型「环境已重建」（场景生效）
+    gate: false
+    metric: sandbox_rebuilt
+    count: ">=1"
+budget: {wall_s: 900}

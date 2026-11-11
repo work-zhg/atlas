@@ -1,0 +1,19 @@
+# 沙箱工程用例 · 长跑（bench/doc/sandbox-eng-cases.html）：40 分钟的命令、静默 15 分钟、闲置回收后重建。
+# 合计约 50 分钟（并发 2），发版前或每周跑。life-idle-rebuild 两轮之间等 1900 秒，要大于部署的
+# sandbox_idle_ttl_s（默认 1800）。
+name: sandbox-slow
+suites: [sandbox-eng]
+tags_any: [slow]
+trials: 1
+concurrency: 2
+approval_policy: approve_all
+variants:
+  # ★ 审批固定 manual：每条命令都经评测批准（审批次数可数、不受自动模式判断器的影响）
+  native-sbx:
+    description: 原生：文件 + Shell + 待办
+    agent:
+      system_prompt: 你在一个带 Linux 沙箱的工作区里完成用户的任务。直接动手做，做完自己验证，最后用一两句话说明结果。
+      model: {model: deepseek-v4-pro, provider: anthropic}
+      tool_names: [filesystem, bash, write_todos]
+      limits: {max_steps: 80}
+      approval: {default_mode: manual, allowed_modes: [manual]}

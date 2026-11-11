@@ -1,0 +1,32 @@
+# CLI 智能体功能用例 · 故障集（bench/doc/cli-func-cases.html §2.8–§2.9，L3）：运行中注入故障。
+#
+#   uv run python -m atlas_bench agent run agent-platform/bench/experiments/cli-chaos.yaml
+#
+# ★ 只在测试环境跑：会强删 server Pod、滚动部署 server、删会话 Pod（优雅 / 强删）、断会话 Pod 的网络、
+#   在会话 Pod 里结束 CLI 进程。故障在每个 trial 结束时恢复，但期间测试环境里别的会话都会受影响。
+# ★ 前提：
+#   · kubectl 能操作被测集群（KUBECONFIG，同 forward.sh；本机有代理时 NO_PROXY 带上节点 IP）
+#   · 断网（block_sandbox）要集群的 CNI 支持 NetworkPolicy（112 是 Calico）
+#   · 新建的评测智能体先分配 deepseek-v4-pro（同 cli-eng.yaml）
+# ★ concurrency 1：故障打在整个 server 或这个人共用的会话 Pod 上，并发的 trial 会互相干扰。
+# ★ api_retry_s 300：server Pod 被删后重建、端口转发重连要一会儿，期间评测的 GET 与审批提交一直重试。
+name: cli-chaos
+suites: [cli-eng]
+tags_any: [chaos]
+trials: 1
+concurrency: 1
+api_retry_s: 300
+approval_policy: approve_all
+variants:
+  cli-claude:
+    description: CLI：Claude Code（会话 Pod）
+    agent:
+      kind: cli
+      system_prompt: 你在一个工作区里完成用户的任务。直接动手做，做完自己验证，最后用一两句话说明结果。
+      model: {model: deepseek-v4-pro, provider: anthropic}
+      tool_names: []
+      cli:
+        cli_type: claude-code
+        adapter: node /opt/acp-cli/bin/claude-acp
+        image: atlas-cli-bridge:0.4.0
+        permission_mode: auto

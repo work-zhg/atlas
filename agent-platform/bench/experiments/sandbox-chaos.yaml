@@ -1,0 +1,31 @@
+# 沙箱工程用例 · 故障集（bench/doc/sandbox-eng-cases.html §2.5–§2.6，L3）：运行中注入故障。
+#
+#   uv run python -m atlas_bench agent run agent-platform/bench/experiments/sandbox-chaos.yaml
+#
+# ★ 只在测试环境跑：会强删 server Pod、滚动部署 server、删沙箱 Pod、断沙箱网络、把 opensandbox-sbx
+#   缩到 0。注入的故障在每个 trial 结束时一律恢复，但期间测试环境里的其他会话都会受影响。
+# ★ 前提：
+#   · kubectl 能操作被测集群（KUBECONFIG，同 forward.sh；本机有代理时 NO_PROXY 带上节点 IP）
+#   · 暂停进程（tko-pause）要 ssh 免密到节点（ATLAS_BENCH_SSH_TARGET，默认 root@192.168.0.112）
+#   · 断网（block_sandbox）要集群的 CNI 支持 NetworkPolicy（112 是 Calico）
+# ★ concurrency 1：故障打在整个 server / OpenSandbox 上，并发的 trial 会互相干扰。
+# ★ api_retry_s 300：server Pod 被删后重建、端口转发重连要一会儿，期间评测的 GET 一直重试。
+# ★ needs-2-replicas 的题（假死后被接管）要 server 至少两个副本；单副本部署先排除。
+name: sandbox-chaos
+suites: [sandbox-eng]
+tags_any: [chaos]
+tags_none: [needs-2-replicas]
+trials: 1
+concurrency: 1
+api_retry_s: 300
+approval_policy: approve_all
+variants:
+  # ★ 审批固定 manual：每条命令都经评测批准（审批次数可数、不受自动模式判断器的影响）
+  native-sbx:
+    description: 原生：文件 + Shell + 待办
+    agent:
+      system_prompt: 你在一个带 Linux 沙箱的工作区里完成用户的任务。直接动手做，做完自己验证，最后用一两句话说明结果。
+      model: {model: deepseek-v4-pro, provider: anthropic}
+      tool_names: [filesystem, bash, write_todos]
+      limits: {max_steps: 80}
+      approval: {default_mode: manual, allowed_modes: [manual]}

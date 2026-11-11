@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Atlas 沙箱工程用例</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --border: #d1d9e0; --head: #f6f8fa;
+    --accent: #0969da; --ok: #1a7f37; --ok-bg: #dafbe1; --warn: #9a6700; --warn-bg: #fff8c5;
+    --bad: #cf222e; --bad-bg: #ffebe9; --code-bg: #f6f8fa;
+    --b1: #ddf4ff; --b1d: #54aeff; --b2: #fbefff; --b2d: #c297ff; --b3: #dafbe1; --b3d: #4ac26b;
+    --b4: #fff8c5; --b4d: #d4a72c; --b5: #ffebe9; --b5d: #ff8182;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --border: #3d444d; --head: #151b23;
+      --accent: #4493f8; --ok: #3fb950; --ok-bg: #12261e; --warn: #d29922; --warn-bg: #2b2111;
+      --bad: #f85149; --bad-bg: #2d1214; --code-bg: #151b23;
+      --b1: #12263f; --b1d: #1f6feb; --b2: #271a36; --b2d: #8957e5; --b3: #12261e; --b3d: #2ea043;
+      --b4: #2b2111; --b4d: #9e6a03; --b5: #2d1214; --b5d: #da3633;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 32px; background: var(--bg); color: var(--fg);
+         font: 14px/1.75 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif; }
+  main { max-width: 1180px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 44px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 15.5px; margin: 24px 0 8px; }
+  .sub { color: var(--muted); margin: 0 0 14px; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0 16px; }
+  th, td { border: 1px solid var(--border); padding: 7px 10px; vertical-align: top; text-align: left; }
+  th { background: var(--head); white-space: nowrap; }
+  td.c { text-align: center; }
+  td.id { white-space: nowrap; font-weight: 600; }
+  code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; font-size: 12.5px;
+         font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .note { color: var(--muted); font-size: 12.5px; }
+  .quote { color: var(--fg); background: var(--head); padding: 0 4px; border-radius: 3px; }
+  .callout { border-left: 4px solid var(--accent); background: var(--head); padding: 10px 14px; border-radius: 4px; margin: 14px 0; }
+  .callout.warn { border-color: var(--warn); background: var(--warn-bg); }
+  .tag { display: inline-block; padding: 0 7px; border-radius: 9px; font-size: 12px; font-weight: 600; border: 1px solid; white-space: nowrap; }
+  .tag.warn { color: var(--warn); background: var(--warn-bg); border-color: var(--warn); }
+  .tag.ok { color: var(--ok); background: var(--ok-bg); border-color: var(--ok); }
+  .tag.bad { color: var(--bad); background: var(--bad-bg); border-color: var(--bad); }
+  .tag.p0 { color: var(--accent); background: var(--head); border-color: var(--accent); }
+  .tag.p1 { color: var(--warn); background: var(--warn-bg); border-color: var(--warn); }
+  .tag.p2 { color: var(--muted); background: var(--head); border-color: var(--muted); }
+  td.pri { white-space: nowrap; text-align: center; }
+  td.lay { white-space: nowrap; text-align: center; }
+  .toc { columns: 2; padding-left: 18px; }
+  .fig { border: 1px solid var(--border); border-radius: 6px; padding: 10px; overflow-x: auto; margin: 10px 0 6px; }
+  .cap { color: var(--muted); font-size: 12.5px; margin: 0 0 16px; text-align: center; }
+  svg text { fill: var(--fg); font-size: 12px; font-family: -apple-system, "PingFang SC", sans-serif; }
+  svg .s { font-size: 11px; fill: var(--muted); }
+  svg .b { font-weight: 600; }
+  svg .c1 { fill: var(--b1); stroke: var(--b1d); } svg .c2 { fill: var(--b2); stroke: var(--b2d); }
+  svg .c3 { fill: var(--b3); stroke: var(--b3d); } svg .c4 { fill: var(--b4); stroke: var(--b4d); }
+  svg .ln { stroke: var(--fg); stroke-width: 1.3; fill: none; }
+  svg .dash { stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 4 3; fill: none; }
+  svg .arw { fill: var(--fg); }
+  svg .faultt { fill: var(--bad); font-weight: 600; font-size: 11px; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <marker id="ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="arw" d="M0,0 L8,4 L0,8 z"/></marker>
+</defs></svg>
+<main>
+<h1>Atlas 沙箱工程用例</h1>
+<p class="sub">日期：2026-11-09 · 范围：原生智能体的 <code>execute</code> 从「确保沙箱」到「结果回到模型」的整条路径；server 实例故障与接管、沙箱侧故障时平台怎么处理；模型拿到「结果未知」后能不能重新规划。CLI 智能体的会话 Pod 单列一节。<br>
+状态：<span class="tag ok">已落地：L2 22 题 · L3 13 题 · 长跑 3 题 · 回放 9 个场景 · L1 已知缺陷 5 条（§5）</span> <span class="tag warn">未落地：CLI 组、需要夹具或多副本的若干条</span> <span class="tag bad">缺陷 9 处（D1–D9）+ 1 个观察项（§3）</span> <span class="tag ok">11-10 已修 D1–D5、D7、D9（未部署）；D8 定为放开；O1 暂不处理；D6 待确认</span><br>
+展开的是 <a href="platform-e2e-cases.html">平台端到端用例</a> §6.7、§6.13 里和沙箱有关的条目；工具层面的细粒度用例见 <a href="tool-test-cases.html">工具测试用例</a>。</p>
+
+<ol class="toc" start="0">
+  <li><a href="#s0">定位、分层与判定</a></li>
+  <li><a href="#s1">执行路径与故障点</a></li>
+  <li><a href="#s2">用例</a></li>
+  <li><a href="#s3">已知缺陷与待确认</a></li>
+  <li><a href="#s4">评测侧要补的能力</a></li>
+  <li><a href="#s5">落地顺序</a></li>
+</ol>
+
+<h2 id="s0">0. 定位、分层与判定</h2>
+<p>沙箱用例要回答三个问题：命令能不能按语义正确执行；执行路径上任何一环出故障时，<b>命令不多跑、不白丢、结果如实告诉模型</b>；模型拿到「结果未知」「沙箱重建」这类结果后能不能重新规划。前两个测平台，第三个测模型和提示语，分开判。</p>
+<p>有的故障要卡在毫秒级的时机上（例如「请求已到 execd、账本还没写」），真实部署上打不准，所以用例分四层：</p>
+<table>
+  <tr><th>层</th><th>对着什么跑</th><th>适合</th><th>放在哪</th></tr>
+  <tr><td class="id">L1 平台集成测试</td><td>pytest + 假 execd、假 OpenSandbox</td><td>要卡准时机的故障：提交途中、拿到命令 id 与写账本之间、取消落在提交途中</td><td><code>agent-platform/tests</code></td></tr>
+  <tr><td class="id">L2 端到端</td><td>真实部署 + 真实模型，不注入故障</td><td>执行语义、文件与沙箱协同、生命周期、隔离</td><td>bench 新任务集（建议叫 sandbox-eng），并入 <code>make regress</code></td></tr>
+  <tr><td class="id">L3 故障集</td><td>同上，运行中注入故障：删 Pod、暂停进程、断网</td><td>接管、交接、沙箱丢失、断线</td><td>bench 新入口「故障」：串行、只在测试环境</td></tr>
+  <tr><td class="id">M 模型反应</td><td>历史回放：对话停在某个工具结果刚回来的时刻，结果换成平台的原文，再调用同一个模型</td><td>「结果未知」之后，模型是先检查再决定，还是盲目重试</td><td>bench 新能力（§4）</td></tr>
+</table>
+<p>判定沿用<a href="platform-e2e-cases.html#s1">平台端到端用例 §1</a>：<b>结果</b>是结果校验；<b>不变量</b>进硬门槛；<b>前提</b>是场景前提，不进门槛；<span class="tag bad">已知缺陷</span>是现在预期失败的用例，先只进报告，修好后转为门槛。</p>
+
+<div class="callout">
+<b>副作用计数：怎么判断「命令多跑了」「命令被打断了」</b><br>
+被测命令统一调用评测放进工作区的脚本 <code>marks/mark.sh &lt;标记&gt; &lt;秒数&gt;</code>：开始时建文件 <code>marks/&lt;标记&gt;/start-&lt;随机串&gt;</code>，每秒打印一个递增数字，结束时建 <code>end-&lt;随机串&gt;</code>，最后打印一个随机令牌。校验时数文件：
+<ul style="margin:6px 0 0">
+  <li><b>平台有没有多跑</b>：start 文件数 ≤ 轨迹里带这个标记的 execute 调用数（按 tool_call_id 去重）。模型自己决定重做，算模型的事；平台重放导致多跑，才算平台的问题。</li>
+  <li><b>命令有没有被打断</b>：end 文件数。<b>模型拿到的是不是真结果</b>：工具结果里有没有那个随机令牌。</li>
+  <li>每次执行建一个新文件，不往同一个文件追加：<code>/workspace</code> 是 s3fs 挂载，并发追加会互相覆盖。文件放在 <code>/workspace</code>，是因为沙箱被删后它还在对象存储里。</li>
+</ul>
+</div>
+
+<h2 id="s1">1. 执行路径与故障点</h2>
+<div class="fig">
+<svg viewBox="0 0 1080 330" width="100%" role="img" aria-label="一次 execute 的执行路径与故障点">
+  <!-- 故障点（框上方） -->
+  <text x="292" y="86" text-anchor="middle" class="faultt">F1 建不起来</text>
+  <text x="434" y="86" text-anchor="middle" class="faultt">F2 提交途中断开</text>
+  <text x="576" y="86" text-anchor="middle" class="faultt">F3 拿到 id、写账本前进程死</text>
+  <text x="724" y="22" text-anchor="middle" class="faultt">F4 server 崩溃 · F5 停机交接</text>
+  <text x="724" y="38" text-anchor="middle" class="faultt">F6 假死后租约被抢 · F7 断网</text>
+  <text x="724" y="54" text-anchor="middle" class="faultt">F8 沙箱没了 · F9 execd 重启</text>
+  <text x="724" y="70" text-anchor="middle" class="faultt">F10 用户取消</text>
+  <text x="1006" y="86" text-anchor="middle" class="s">落库之后崩溃：不再重放</text>
+
+  <!-- 主路径 -->
+  <rect x="10" y="96" width="112" height="78" rx="6" class="c1"/>
+  <text x="66" y="124" text-anchor="middle" class="b">模型发出 execute</text>
+  <text x="66" y="142" text-anchor="middle" class="s">带 tool_call_id</text>
+
+  <rect x="136" y="96" width="78" height="78" rx="6" class="c1"/>
+  <text x="175" y="124" text-anchor="middle" class="b">审批</text>
+  <text x="175" y="142" text-anchor="middle" class="s">按审批模式</text>
+
+  <rect x="228" y="96" width="128" height="78" rx="6" class="c2"/>
+  <text x="292" y="118" text-anchor="middle" class="b">① 确保沙箱</text>
+  <text x="292" y="136" text-anchor="middle" class="s">供给 → OpenSandbox</text>
+  <text x="292" y="152" text-anchor="middle" class="s">等 execd /ping 就绪</text>
+
+  <rect x="370" y="96" width="128" height="78" rx="6" class="c2"/>
+  <text x="434" y="118" text-anchor="middle" class="b">② 提交</text>
+  <text x="434" y="136" text-anchor="middle" class="s">后台 POST /command</text>
+  <text x="434" y="152" text-anchor="middle" class="s">读到 init = 拿到命令 id</text>
+
+  <rect x="512" y="96" width="128" height="78" rx="6" class="c2"/>
+  <text x="576" y="118" text-anchor="middle" class="b">③ 记执行账本</text>
+  <text x="576" y="136" text-anchor="middle" class="s">(run, 调用) → (沙箱, 命令)</text>
+  <text x="576" y="152" text-anchor="middle" class="s">Redis，24 小时</text>
+
+  <rect x="654" y="96" width="140" height="78" rx="6" class="c2"/>
+  <text x="724" y="118" text-anchor="middle" class="b">④ 跟随</text>
+  <text x="724" y="136" text-anchor="middle" class="s">按游标读输出、查状态</text>
+  <text x="724" y="152" text-anchor="middle" class="s">断线重连 15 次</text>
+
+  <rect x="808" y="96" width="120" height="78" rx="6" class="c3"/>
+  <text x="868" y="118" text-anchor="middle" class="b">⑤ 结果回给模型</text>
+  <text x="868" y="136" text-anchor="middle" class="s">输出留首尾各 50 KB</text>
+  <text x="868" y="152" text-anchor="middle" class="s">附退出码</text>
+
+  <rect x="942" y="96" width="128" height="78" rx="6" class="c3"/>
+  <text x="1006" y="118" text-anchor="middle" class="b">⑥ 检查点落库</text>
+  <text x="1006" y="136" text-anchor="middle" class="s">一批工具结果收齐</text>
+  <text x="1006" y="152" text-anchor="middle" class="s">之后崩溃不丢结果</text>
+
+  <line x1="122" y1="135" x2="134" y2="135" class="ln" marker-end="url(#ar)"/>
+  <line x1="214" y1="135" x2="226" y2="135" class="ln" marker-end="url(#ar)"/>
+  <line x1="356" y1="135" x2="368" y2="135" class="ln" marker-end="url(#ar)"/>
+  <line x1="498" y1="135" x2="510" y2="135" class="ln" marker-end="url(#ar)"/>
+  <line x1="640" y1="135" x2="652" y2="135" class="ln" marker-end="url(#ar)"/>
+  <line x1="794" y1="135" x2="806" y2="135" class="ln" marker-end="url(#ar)"/>
+  <line x1="928" y1="135" x2="940" y2="135" class="ln" marker-end="url(#ar)"/>
+
+  <!-- 接管路径 -->
+  <rect x="228" y="232" width="566" height="86" rx="6" class="c4"/>
+  <text x="511" y="252" text-anchor="middle" class="b">接管（F3–F6 之后）</text>
+  <text x="511" y="270" text-anchor="middle" class="s">租约 30 秒过期（交接则直接清租约）→ 兜底任务约 10 秒一轮领走 → 补归档、续序号</text>
+  <text x="511" y="287" text-anchor="middle" class="s">检查点里有 tool_use、没结果的 execute：用同一个 tool_call_id 重放 → 账本有记录：接上原命令，不重跑</text>
+  <text x="511" y="304" text-anchor="middle" class="s">账本没记录：重新提交（D3）· 其他工具：补「结果未知」，交给模型先检查再决定</text>
+  <line x1="576" y1="232" x2="576" y2="176" class="dash" marker-end="url(#ar)"/>
+  <text x="582" y="208" class="s">按调用查账本</text>
+  <line x1="740" y1="232" x2="740" y2="176" class="ln" marker-end="url(#ar)"/>
+  <text x="746" y="208" class="s">接上原命令</text>
+</svg>
+</div>
+<p class="cap">图 1　一次 execute 的执行路径。红字是故障点，编号对应下表；黄色框是 server 实例换手时的接管路径。</p>
+
+<table>
+  <tr><th>故障点</th><th>发生在哪</th><th>平台现在怎么处理</th><th>模型看到什么</th><th>用例</th></tr>
+  <tr><td class="id">F1</td><td>① 确保沙箱：配额满、镜像不准入、资源不足 Pending、OpenSandbox 不可达</td><td>转成「沙箱不可用」工具错误，不让整轮失败；建不起来的沙箱退役（broken），配额归还</td><td><span class="quote">Error: Sandbox unavailable. 沙箱启动失败：……</span></td><td>LIFE-04~06</td></tr>
+  <tr><td class="id">F2</td><td>② 提交：请求已发出，没读到 init 就断了</td><td>不重试，因为请求可能已经到了 execd</td><td><span class="quote">提交命令时连接中断：命令可能已经开始执行，结果未知；可以先检查 /workspace 的状态再决定是否重试</span></td><td>SBF-08、PLAN-02</td></tr>
+  <tr><td class="id">F3</td><td>② 与 ③ 之间：execd 已收到命令，执行账本还没写，server 进程死了</td><td>接管重放时账本里查不到这次调用 → 重新提交</td><td>看不出异常，但命令跑了两遍（D3）</td><td>TKO-09</td></tr>
+  <tr><td class="id">F4</td><td>④ 跟随中 server 崩溃（SIGKILL、OOM、节点宕机）</td><td>命令是后台模式，不随连接中断，继续跑；租约过期后别的实例接管；execute 声明为可接续，用同一个 tool_call_id 重放，按账本接上原命令，从头读输出</td><td>完整的真实结果，和没出事一样</td><td>TKO-01~05</td></tr>
+  <tr><td class="id">F5</td><td>④ 跟随中停机交接（滚动部署）</td><td>等到安全点（这批工具结果落库）再交接；超过 <code>drain_timeout_s</code>（60 秒）就取消任务后交接</td><td>短命令：真实结果。长命令：被取消逻辑中断（D1），读到被杀的输出</td><td>TKO-06、07</td></tr>
+  <tr><td class="id">F6</td><td>④ 跟随中 server 假死，租约被别的实例拿走，之后又活过来</td><td>复活的实例续租失败，停掉本地执行（取消任务）</td><td>取消逻辑中断了接管者正在跟随的命令（D2）</td><td>TKO-08</td></tr>
+  <tr><td class="id">F7</td><td>④ 跟随中 server 与沙箱之间断网</td><td>按同一个 sandbox_uuid 重新取地址，从游标接着读；指数退避重连 15 次。退避合计约 2 分钟，但断网是丢包时每次还要等满 30 秒连接超时，实际能撑约 10 分钟</td><td>恢复了：完整结果。没恢复：<span class="quote">与沙箱的连接中断且无法恢复，命令结果未知</span>，但命令其实还在跑（D7）</td><td>SBF-05、06</td></tr>
+  <tr><td class="id">F8</td><td>④ 跟随中沙箱没了（Pod 被删、驱逐、节点故障）</td><td>不重跑</td><td><span class="quote">命令执行期间沙箱重启（可能内存不足或被回收），命令已中断、结果丢失；/workspace 里已经写入的文件仍在</span>；下一条命令自动重建，输出前带「沙箱环境已重建」提示</td><td>SBF-01、02、07</td></tr>
+  <tr><td class="id">F9</td><td>④ 跟随中 execd 重启（容器重启，沙箱 uuid 不变）</td><td>execd 不认识原来的命令 id，按 F8 处理</td><td>同 F8；但下一条命令没有重建提示（D6）</td><td>SBF-03</td></tr>
+  <tr><td class="id">F10</td><td>④ 用户取消</td><td>中断命令：先 SIGTERM 整个进程组，宽限后 SIGKILL；取消落在提交途中的，拿到命令 id 后再中断</td><td>run 终态为已取消</td><td>CAN-01~05</td></tr>
+  <tr><td class="id">F11</td><td>execute 以外的工具（写文件、MCP 调用等）执行中 server 死了</td><td>接管时补一条「结果未知」，不盲目重放</td><td><span class="quote">执行这个工具的服务实例中途退出，工具是否已执行、执行到哪一步都未知。请先检查当前状态，再决定是否重试。</span></td><td>TKO-04、PLAN-01</td></tr>
+</table>
+
+<h2 id="s2">2. 用例</h2>
+<p>标记：<span class="tag p0">P0</span> 先做；<span class="tag p1">P1</span> 需要新夹具或运行中的动作；<span class="tag p2">P2</span> 需要改测试环境，或价值相对低。<span class="tag bad">已知缺陷</span> 现在预期失败；<span class="tag warn">待确认</span> 现状行为要先验证，或产品规则未定。</p>
+
+<h3>2.1 命令执行（EXE）</h3>
+<table>
+  <tr><th>编号</th><th>场景与注入</th><th>期望行为</th><th>判定</th><th>层</th><th>优先级</th></tr>
+  <tr><td class="id">EXE-01</td><td>新会话连续执行两条命令</td><td>第一条建沙箱，第二条复用同一个</td><td>不变量：这个工作区只有一个沙箱。另外记录首次启动耗时（P50 / P95）<br><span class="note">L1 已有：test_first_execute_creates_the_sandbox_and_later_ones_reuse_it</span></td><td class="lay">L2</td><td class="pri"><span class="tag p0">P0</span></td></tr>
+  <tr><td class="id">EXE-02</td><td>成功、非零退出、命令不存在、语法错误各执行一条</td><td>每条结果都带明确的退出码；非零退出不算工具失败，由模型读输出后自己修正</td><td>结果：最终产物正确。不变量：非零退出的结果带退出码</td><td class="lay">L2</td><td class="pri"><span class="tag p0">P0</span></td></tr>
+  <tr><td class="id">EXE-03</td><td>第一条命令 cd 进子目录并 export 一个变量，第二条用相对路径和这个变量</td><td>每条命令都从 /workspace 开始，环境变量不保留；模型从结果里发现并改正</td><td>结果：产物正确</td><td class="lay">L2</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">EXE-04</td><td>带 timeout=5 运行一条要跑 60 秒、还会 fork 子进程的命令；再传一次 timeout=7200</td><td>5 秒左右结束，退出码表明被结束，子进程一并结束；超过 3600 秒上限的参数被拒</td><td>不变量：结束用时 ≤ 时限 + 一个轮询间隔；沙箱里没有残留的子进程（评测档原地执行 ps 查）</td><td class="lay">L2</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">EXE-05</td><td>一条每分钟输出一行、共跑 40 分钟的命令（超过 1800 秒的闲置回收时限）</td><td>平台不结束它；闲置回收不碰有命令在跑的沙箱</td><td>不变量：start = end = 1；期间沙箱没被删</td><td class="lay">L2 长跑</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">EXE-06</td><td><code>sleep 900</code>：没有输出，CPU 接近零（超过 600 秒的卡死静默阈值）</td><td>CPU 口径是整节点（112 现状）：不下卡死结论，跑完。口径是沙箱自己：判为卡死并结束，结果里说明「连续 N 秒既无输出、也无 CPU 活动」</td><td>不变量按口径分别判<br><span class="note">L1 已有：test_quiet_and_idle_command_is_judged_stalled、test_unreliable_cpu_never_kills</span></td><td class="lay">L2</td><td class="pri"><span class="tag p2">P2</span></td></tr>
+  <tr><td class="id">EXE-07</td><td>现有 atlas-eng/big-output；另加一条持续刷屏 10 分钟（GB 级输出）的命令</td><td>只保留首尾各 50 KB，并注明省略了多少字节；server 内存不随输出量增长</td><td>结果：同 big-output。不变量：server 内存增量在阈值内</td><td class="lay">L2</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">EXE-08</td><td>（端到端用例 6.7 binary-output）cat 一个编译产物，输出含 NUL 等控制字符</td><td>工具结果先清洗再落库，run 不因输出内容失败</td><td>不变量：run 不以平台错误结束</td><td class="lay">L2</td><td class="pri"><span class="tag p0">P0</span></td></tr>
+  <tr><td class="id">EXE-09</td><td>运行读标准输入的命令：<code>python3 -c 'input()'</code>、<code>read x</code></td><td>立即读到 EOF 并结束，不挂住</td><td>不变量：10 秒内结束 <span class="tag warn">待确认</span> execd 后台命令的 stdin 是什么</td><td class="lay">L2</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">EXE-10</td><td>第一条用 nohup 起一个 http.server，第二条 curl 它；下一轮再 curl</td><td>沙箱还在时都能访问到</td><td>结果（工具测试用例 EXEC-21）</td><td class="lay">L2</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">EXE-11</td><td>（6.7 sandbox-reuse）第一轮往 /tmp 写文件，第二轮读它</td><td>同一会话在闲置回收前复用同一个沙箱</td><td>结果：读到了。不变量：两轮在同一个沙箱里执行</td><td class="lay">L2</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">EXE-12</td><td>同一步发 3 条 execute，各跑 10 秒、各自打印标记</td><td>并发执行，输出互不串</td><td>结果：每条结果只含自己的标记。不变量：这一批总耗时明显小于 30 秒。前提：3 条在同一批</td><td class="lay">L2</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">EXE-13</td><td>父智能体和 2 个子智能体同时执行命令</td><td>子智能体用根会话的沙箱，不另建；命令互不干扰</td><td>不变量：这个工作区只有一个沙箱</td><td class="lay">L2</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">EXE-14</td><td>在现有 approval-denied、parallel-approval 上加计数</td><td>被拒的命令确实没执行；批准的只执行一次</td><td>不变量：被拒的标记 start = 0，批准的 start = 1</td><td class="lay">L2</td><td class="pri"><span class="tag p0">P0</span></td></tr>
+</table>
+
+<h3>2.2 文件工具与沙箱（FILE）</h3>
+<p>沙箱在跑时，工作区的文件工具经沙箱读写（沙箱用 s3fs 挂着同一个前缀，绕过它直写对象存储会有缓存不一致和两个写入方）；没有沙箱时直连对象存储，文件操作不会触发建沙箱。</p>
+<table>
+  <tr><th>编号</th><th>场景与注入</th><th>期望行为</th><th>判定</th><th>层</th><th>优先级</th></tr>
+  <tr><td class="id">FILE-01</td><td>在真实挂载上：write_file 后 cat；命令写文件后 read_file；edit_file 后 grep</td><td>立即一致</td><td>结果<br><span class="note">L1 已有（假存储）：test_commands_see_what_file_tools_wrote_and_vice_versa</span></td><td class="lay">L2</td><td class="pri"><span class="tag p0">P0</span></td></tr>
+  <tr><td class="id">FILE-02</td><td>（6.7 files-roundtrip）上传嵌套目录、二进制文件、中文文件名、接近上限的大文件</td><td>上传的、沙箱里读到的、下载回来的三者一致</td><td>结果：校验和一致</td><td class="lay">L2</td><td class="pri"><span class="tag p0">P0</span></td></tr>
+  <tr><td class="id">FILE-03</td><td>新会话先读写文件，再执行一条命令，然后再读写</td><td>执行命令之前不建沙箱（文件走对象存储）；有了沙箱之后文件操作经沙箱</td><td>不变量：第一次文件操作后会话还没有沙箱</td><td class="lay">L2</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">FILE-04</td><td>工作区以外的路径（工具测试用例 READ-09/12/13、WRITE-05、DEL-04、SRCH-08）</td><td>沙箱启动前读不到或被拒；启动后按规则可用</td><td>见工具测试用例</td><td class="lay">L2</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">FILE-05</td><td>删掉沙箱 Pod，立即 read_file、write_file</td><td>确认沙箱确实不在了 → 这次改走对象存储，模型感觉不到</td><td>结果：读写都成功<br><span class="note">L1 已有：test_vanished_sandbox_falls_back_and_is_forgotten</span></td><td class="lay">L3</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">FILE-06</td><td>execd 不响应但 Pod 还在（对 execd 进程 SIGSTOP）</td><td>读降级到对象存储；写返回「工作区暂时不可写」，不悄悄换写入方</td><td>不变量<br><span class="note">L1 已有：test_unresponsive_sandbox_degrades_reads_and_refuses_writes</span></td><td class="lay">L3</td><td class="pri"><span class="tag p2">P2</span></td></tr>
+  <tr><td class="id">FILE-07</td><td>一条长命令轮询目录，期间在界面上传文件</td><td>上传经沙箱写入，命令能看到</td><td>结果<br><span class="note">L1 已有：test_ui_upload_goes_through_the_running_sandbox</span></td><td class="lay">L2</td><td class="pri"><span class="tag p2">P2</span></td></tr>
+</table>
+
+<h3>2.3 生命周期与供给（LIFE）</h3>
+<table>
+  <tr><th>编号</th><th>场景与注入</th><th>期望行为</th><th>判定</th><th>层</th><th>优先级</th></tr>
+  <tr><td class="id">LIFE-01</td><td>第一轮装依赖并执行；闲置超过 <code>sandbox_idle_ttl_s</code>（测试环境调小）后，第二轮再用这个依赖</td><td>沙箱被回收（reason=idle）；第二轮重建，输出前带 <span class="quote">[沙箱环境已重建：/workspace 内的文件仍在；安装的软件包、HOME 与 /repos 里的内容、后台进程已丢失]</span>；模型重装依赖后继续</td><td>结果：第二轮产物正确。前提：出现重建提示</td><td class="lay">L2 长跑</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">LIFE-02</td><td>（6.1 资源回收）删除会话（含子会话）</td><td>沙箱在限定时间内被删（reason=release）</td><td>不变量：限定时间后这个工作区没有沙箱</td><td class="lay">L2</td><td class="pri"><span class="tag p0">P0</span></td></tr>
+  <tr><td class="id">LIFE-03</td><td>绕过删除级联，让会话直接消失（模拟级联失败）</td><td>维护者的孤儿回收释放它（reason=orphan）</td><td>不变量</td><td class="lay">L3</td><td class="pri"><span class="tag p2">P2</span></td></tr>
+  <tr><td class="id">LIFE-04</td><td>（6.7 sandbox-quota）同一个人同时开 11 个会话，各执行一条命令（配额 10）</td><td>第 11 个在限定时间内得到明确的配额错误，不卡住；释放一个后能建；并发时也不超</td><td>不变量：任一时刻这个人的沙箱（创建中 + 就绪）≤ 10<br><span class="note">L1 已有：test_one_person_never_exceeds_the_quota_even_concurrently</span></td><td class="lay">L2</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">LIFE-05</td><td>节点 CPU request 已满时执行命令（112 现在只剩约 230m）</td><td>在时限内明确报错；建不起来的沙箱退役、配额归还；不留下 Pending 的 Pod</td><td>不变量：报错用时 ≤ <code>opensandbox_timeout_s</code>，无残留 <span class="tag warn">待确认</span> 时限现在是 200 秒，偏长，「合理时间」要定</td><td class="lay">L3</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">LIFE-06</td><td>把 OpenSandbox lifecycle server 缩到 0：新会话执行命令；另一个会话的命令正在跟随</td><td>新建明确失败（工具错误，不是整轮失败）；正在跟随的命令不受影响</td><td>不变量：两个 run 都不失败。地址缓存失效时的情况见 SBF-09</td><td class="lay">L3</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">LIFE-07</td><td>第一条命令建沙箱期间杀掉 server</td><td>接管后按同一个 sandbox_uuid 接着建，只建一个</td><td>不变量：这个工作区只有一个沙箱，没有孤儿<br><span class="note">L1 已有：test_a_crash_between_registering_and_building_resumes_with_the_same_uuid</span></td><td class="lay">L3</td><td class="pri"><span class="tag p2">P2</span></td></tr>
+  <tr><td class="id">LIFE-08</td><td>第一条命令建沙箱期间取消 run</td><td>不留半个沙箱，配额不泄漏：停在「创建中」的登记由下一次执行接着建，会话删除后由孤儿回收清掉</td><td>不变量：一段时间后没有停在「创建中」的登记</td><td class="lay">L3</td><td class="pri"><span class="tag p2">P2</span></td></tr>
+  <tr><td class="id">LIFE-09</td><td>沙箱 Pod 进入终态或被驱逐后，执行下一条命令</td><td>发现旧沙箱不能用 → 退役（broken）→ 换一个新的，输出前带重建提示</td><td>前提：出现重建提示<br><span class="note">L1 已有：test_a_broken_ready_sandbox_is_replaced_on_the_next_ensure</span></td><td class="lay">L3</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">LIFE-10</td><td>智能体配一个不在白名单里的镜像；会话进行中修改智能体的镜像</td><td>不准入的镜像：工具错误，不建沙箱。修改镜像：现状是已有沙箱原样复用，闲置回收后才按新配置建</td><td>不变量（第一项） <span class="tag warn">待确认</span> 第二项是沙箱 C4 评审第一档「复用与配置生效」，规则未定</td><td class="lay">L2</td><td class="pri"><span class="tag p2">P2</span></td></tr>
+  <tr><td class="id">LIFE-11</td><td>评测原地执行 <code>POST /v1/threads/{id}/sandbox/exec</code>：有评测档沙箱、没有沙箱、是 strict 档沙箱三种情况</td><td>只在已经在跑的评测档沙箱里执行，不新建；没有沙箱返回 409；strict 档被拒</td><td>不变量<br><span class="note">L1 已有：test_sandbox_exec_api、bench test_tbench</span></td><td class="lay">L2</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+</table>
+
+<h3>2.4 取消（CAN）</h3>
+<table>
+  <tr><th>编号</th><th>场景与注入</th><th>期望行为</th><th>判定</th><th>层</th><th>优先级</th></tr>
+  <tr><td class="id">CAN-01</td><td>（6.6 cancel-midcommand）mark 命令跑 120 秒，第 10 秒取消 run，然后在同一会话再发一轮</td><td>命令被中断；终态为已取消；下一轮正常结束，不重放被取消的调用</td><td>不变量：end = 0；取消之后 marks 目录不再变化；下一轮没有旧调用的事件 <span class="tag ok">D9 已修</span></td><td class="lay">L2</td><td class="pri"><span class="tag p0">P0</span></td></tr>
+  <tr><td class="id">CAN-02</td><td>取消正好落在提交请求还在途中时</td><td>拿到命令 id 后仍然中断，命令不会没人管</td><td><span class="note">L1 已有：test_cancel_during_submit_still_interrupts</span></td><td class="lay">L1</td><td class="pri">—</td></tr>
+  <tr><td class="id">CAN-03</td><td>（6.5 cancel-cascade）父智能体和子智能体都在共享沙箱里跑命令时，取消父 run</td><td>所有命令都被中断</td><td>不变量：所有标记 end = 0；所有子 run 终态为已取消 <span class="tag ok">D9 已修</span></td><td class="lay">L2</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">CAN-04</td><td>命令用 <code>trap '' TERM</code> 忽略 SIGTERM 后 sleep</td><td>宽限期过后 SIGKILL，确实结束</td><td>不变量：取消后在宽限期 + 一个轮询间隔内进程消失 <span class="tag ok">D9 已修</span></td><td class="lay">L2</td><td class="pri"><span class="tag p2">P2</span></td></tr>
+  <tr><td class="id">CAN-05</td><td>命令用 setsid 起一个脱离进程组的后台进程，然后取消</td><td>现状：中断只作用于命令的进程组，脱离的进程留下</td><td><span class="tag warn">待确认</span> 产品规则：取消是否要清理它</td><td class="lay">L2</td><td class="pri"><span class="tag p2">P2</span></td></tr>
+</table>
+
+<h3>2.5 server 实例故障与接管（TKO）</h3>
+<div class="callout">
+测试环境的 server 现在是单副本（<code>deploy/local/30-server.yaml</code>）。单副本时删掉 Pod，由 Deployment 新建的 Pod 接手，它的实例 id 不同，所以也走接管路径；只有 TKO-08「假死」必须两个副本，否则没人来接管。<br>
+每条 TKO 用例都附带三个全局不变量：同一个 tool_call_id 只有一个最终结果（完成或失败）；事件不丢不重；run 最后有终态。
+</div>
+<table>
+  <tr><th>编号</th><th>场景与注入</th><th>期望行为</th><th>判定</th><th>层</th><th>优先级</th></tr>
+  <tr><td class="id">TKO-01</td><td>一条 90 秒的命令跑到第 10 秒时，强删持有租约的 server Pod（<code>--grace-period=0 --force</code>）</td><td>命令在沙箱里不受影响；租约过期后被接管（run.resumed，reason=expired）；用同一个 tool_call_id 重放，接上原命令；模型拿到完整的真实输出</td><td>不变量：start = end = 1；工具结果里有随机令牌、没有「未知」。结果：任务完成</td><td class="lay">L3</td><td class="pri"><span class="tag p0">P0</span></td></tr>
+  <tr><td class="id">TKO-02</td><td>命令 20 秒；在它结束后、检查点落库前杀掉 server（L3 很难卡准，主要放在 L1）</td><td>接管后读回已经结束的命令的输出（execd 保留 24 小时），不重跑</td><td>不变量：start = 1，结果是真实输出</td><td class="lay">L1 + L3</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">TKO-03</td><td>同一步 3 条命令，分别跑 5 / 60 / 90 秒，第 30 秒杀掉 server</td><td>已结束的读回结果，还在跑的接着跟随</td><td>不变量：每个标记 start = end = 1；三个结果都含各自的令牌</td><td class="lay">L3</td><td class="pri"><span class="tag p0">P0</span></td></tr>
+  <tr><td class="id">TKO-04</td><td>同一步：一条 60 秒的 execute + 评测 MCP 夹具里的慢工具（有副作用，夹具自己记调用次数）；执行中杀掉 server</td><td>execute 接上原命令；MCP 调用补「执行这个工具的服务实例中途退出……请先检查当前状态，再决定是否重试」；模型先查再决定</td><td>不变量：execute 的 start = 1。结果：MCP 副作用最终恰好一次。前提：出现了「结果未知」</td><td class="lay">L3</td><td class="pri"><span class="tag p1">P1</span><br><span class="note">需要 MCP 夹具</span></td></tr>
+  <tr><td class="id">TKO-05</td><td>手动审批模式：批准后命令跑到一半时杀掉 server</td><td>接管后不再弹审批（审批 id 由 run 和 tool_call_id 派生），接上原命令</td><td>不变量：审批次数 = 1；start = 1</td><td class="lay">L3</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">TKO-06</td><td>一条 20 秒的命令执行中做滚动部署（rollout restart）</td><td>旧实例等到安全点（这批结果落库）再交接（reason=handoff）；命令不被打断</td><td>不变量：start = end = 1；run.resumed 的 reason = handoff</td><td class="lay">L3</td><td class="pri"><span class="tag p0">P0</span></td></tr>
+  <tr><td class="id">TKO-07</td><td>一条 180 秒的命令执行中做滚动部署（<code>drain_timeout_s</code> = 60）</td><td>期望：命令不被中断，接手的实例接上，拿到完整输出</td><td>不变量：end = 1、退出码 0 <span class="tag ok">D1 已修</span> 交接超时取消任务时，取消逻辑把沙箱里的命令也中断了</td><td class="lay">L3</td><td class="pri"><span class="tag p0">P0</span></td></tr>
+  <tr><td class="id">TKO-08</td><td>两个副本；一条 120 秒的命令跑到第 10 秒，对持有租约的实例发 SIGSTOP，等另一个实例接管（出现 run.resumed）后再 SIGCONT</td><td>期望：复活的实例发现租约已经不在自己手里，只停掉自己的本地执行，不碰沙箱里的命令</td><td>不变量：end = 1；没有双写（事件不重复） <span class="tag ok">D2 已修</span></td><td class="lay">L3</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">TKO-09</td><td>假 execd 收到提交后延迟回 init，期间让实例消失；另做一组：已经回了 init、账本还没写时让实例消失</td><td>期望：接管后不重新提交，回「结果未知」，让模型先检查</td><td>不变量：execd 只收到一次这条命令 <span class="tag ok">D3 已修</span> 账本里没有这次调用，重放时会再提交一次</td><td class="lay">L1</td><td class="pri"><span class="tag p0">P0</span></td></tr>
+  <tr><td class="id">TKO-10</td><td>命令执行中，同时删掉 server Pod 和沙箱 Pod</td><td>重放发现账本里的沙箱已经换了 → 回「命令执行期间沙箱重启……结果丢失」；之后的命令带重建提示；模型检查后重做</td><td>结果：任务完成。不变量：删除前写进 /workspace 的文件还在；run 不失败</td><td class="lay">L3</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">TKO-11</td><td>接手的实例在同一条命令执行中又被杀掉</td><td>第二次接管照样接上</td><td>不变量：takeovers = 2；start = end = 1</td><td class="lay">L3</td><td class="pri"><span class="tag p2">P2</span></td></tr>
+</table>
+
+<h3>2.6 沙箱侧故障（SBF）</h3>
+<table>
+  <tr><th>编号</th><th>场景与注入</th><th>期望行为</th><th>判定</th><th>层</th><th>优先级</th></tr>
+  <tr><td class="id">SBF-01</td><td>（6.13 chaos-sandbox-killed 前半）一个多步脚本跑到第 10 秒时删掉沙箱 Pod</td><td>run 不失败；工具结果是「命令执行期间沙箱重启……结果丢失；/workspace 里已经写入的文件仍在」；下一条命令自动重建并带提示；模型检查现场，只补没完成的部分</td><td>结果：任务完成。不变量：删除前写入 /workspace 的文件还在；run 不以平台错误结束（要先改 E1）。前提：出现了「沙箱重启」结果</td><td class="lay">L3</td><td class="pri"><span class="tag p0">P0</span></td></tr>
+  <tr><td class="id">SBF-02</td><td>（6.13 后半）第一条命令 pip 装依赖，然后删掉沙箱，第二条命令用这个依赖</td><td>第二条命令重建沙箱，输出前带重建提示；模型据此重装依赖后继续</td><td>结果：任务完成。前提：出现重建提示</td><td class="lay">L3</td><td class="pri"><span class="tag p0">P0</span></td></tr>
+  <tr><td class="id">SBF-03</td><td>命令执行中让沙箱容器重启（沙箱 uuid 不变）</td><td>execd 不认识原来的命令 id → 按「沙箱重启、结果丢失」报</td><td>不变量：run 不失败 <span class="tag warn">待确认 D6</span> 下一条命令没有重建提示，但后台进程已经没了</td><td class="lay">L3</td><td class="pri"><span class="tag p2">P2</span></td></tr>
+  <tr><td class="id">SBF-04</td><td>命令分配超过沙箱内存上限（4 Gi）</td><td>被杀的是命令本身：退出码 137；被杀的是 execd：走 SBF-03 的路径。两种都不让 run 失败，下一条命令可用</td><td>不变量：run 不失败；下一条命令成功</td><td class="lay">L2</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">SBF-05</td><td>命令每秒打印一个递增数字；跟随中阻断 server → 沙箱 execd 端口，30 秒后恢复</td><td>重连后从游标接着读，输出不丢不重；命令不重跑</td><td>结果：输出里的数字连续、没有重复。不变量：start = 1<br><span class="note">L1 已有：test_reconnect_continues_from_the_same_cursor</span></td><td class="lay">L3</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">SBF-06</td><td>同上，阻断 11 分钟（超过旧版本重连能撑的约 10 分钟）</td><td>重连不设上限：网络恢复后按同一个游标接着读完，不报「结果未知」，拿到真实输出</td><td>结果：副作用恰好一次 <span class="tag ok">D7 已修</span> 旧版本约 10 分钟后放弃、报结果未知，命令其实还在跑</td><td class="lay">L3</td><td class="pri"><span class="tag p2">P2</span></td></tr>
+  <tr><td class="id">SBF-07</td><td>cordon + drain 沙箱所在节点（需要多节点）</td><td>同 SBF-01；下一次执行发现旧沙箱不能用，退役后换新的</td><td>同 SBF-01</td><td class="lay">L3</td><td class="pri"><span class="tag p2">P2</span></td></tr>
+  <tr><td class="id">SBF-08</td><td>假 execd 在回 init 之前断开</td><td>不重试，结果是「提交命令时连接中断……结果未知……先检查 /workspace 的状态」</td><td><span class="note">L1 已有：test_disconnect_before_init_reports_unknown_result。模型怎么反应见 PLAN-02</span></td><td class="lay">L1</td><td class="pri">—</td></tr>
+  <tr><td class="id">SBF-09</td><td>地址缓存失效时（断过一次线，或刚接管）OpenSandbox lifecycle server 不可达</td><td>期望：当作断线继续重试，或转成工具错误</td><td>不变量：run 不失败 <span class="tag warn">待确认 D5</span> 这时抛出的异常没被翻成「沙箱不可用」，可能让整轮失败</td><td class="lay">L1</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+</table>
+
+<h3>2.7 模型拿到「结果未知」后的重新规划（PLAN）</h3>
+<p>平台只负责如实告诉模型；能不能重新规划，取决于模型和提示语。这一组每条都用<b>盲目重试就会错</b>的任务（追加记录、计数加一、git commit 这类不幂等的操作），判定看最终状态（副作用恰好一次）和最终回答（不假装成功）。</p>
+<p>两种跑法：<b>真实故障</b>（L3，在 TKO、SBF 两组里顺带判）；<b>历史回放</b>（M）：把对话停在这个工具结果刚回来的时刻，结果换成平台的原文，用同一个模型连续跑 k 次算 pass^k。回放快、便宜、可重复，适合换模型或改提示语时回归。每条再配一个不注入故障的对照组，确认任务本身模型做得成。</p>
+<table>
+  <tr><th>平台给模型的文字</th><th>什么时候出现</th></tr>
+  <tr><td>① <span class="quote">执行这个工具的服务实例中途退出，工具是否已执行、执行到哪一步都未知。请先检查当前状态，再决定是否重试。</span></td><td>接管时，execute 以外的工具没有结果（F11）</td></tr>
+  <tr><td>② <span class="quote">Error: Sandbox unavailable. 提交命令时连接中断：命令可能已经开始执行，结果未知；可以先检查 /workspace 的状态再决定是否重试</span></td><td>提交时断开（F2）</td></tr>
+  <tr><td>③ <span class="quote">Error: Sandbox unavailable. 命令执行期间沙箱重启（可能内存不足或被回收），命令已中断、结果丢失；/workspace 里已经写入的文件仍在</span></td><td>跟随中沙箱没了或 execd 重启（F8、F9），接管时沙箱已换（TKO-10）</td></tr>
+  <tr><td>④ <span class="quote">Error: Sandbox unavailable. 与沙箱的连接中断且无法恢复，命令结果未知</span></td><td>断线重连用完（F7）</td></tr>
+  <tr><td>⑤ <span class="quote">[沙箱环境已重建：/workspace 内的文件仍在；安装的软件包、HOME 与 /repos 里的内容、后台进程已丢失]</span></td><td>换了沙箱之后的第一条命令，加在输出前面</td></tr>
+</table>
+<table>
+  <tr><th>编号</th><th>场景与注入</th><th>期望行为</th><th>判定</th><th>层</th><th>优先级</th></tr>
+  <tr><td class="id">PLAN-01</td><td>任务：往 orders.csv 追加一条退款记录。回放时把这次调用的结果换成文字 ①，分「其实已写入」「其实没写入」两组</td><td>先读文件确认这条在不在，在就不再追加</td><td>结果：两组里这条记录都恰好一条。过程：重做之前有过检查</td><td class="lay">M（+ TKO-04）</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">PLAN-02</td><td>任务：git commit 一次改动。结果换成文字 ②，分「提交其实已发生」「没发生」两组</td><td>先 git log / git status，再决定提不提交</td><td>结果：两组都恰好一次提交</td><td class="lay">M</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">PLAN-03</td><td>任务：一个三步脚本（下载、处理、往汇总文件追加一行）。结果换成文字 ③，工作区停在第二步做完的状态</td><td>查 /workspace 确认做到了哪一步，只补没做完的</td><td>结果：汇总文件恰好一行，产物正确</td><td class="lay">M + L3（SBF-01）</td><td class="pri"><span class="tag p0">P0</span></td></tr>
+  <tr><td class="id">PLAN-04</td><td>结果换成文字 ④，命令实际还在跑（回放环境里让它继续跑）</td><td>先查进程或产物，不在它还在跑的时候再起一份</td><td>结果：副作用恰好一次</td><td class="lay">M</td><td class="pri"><span class="tag p2">P2</span></td></tr>
+  <tr><td class="id">PLAN-05</td><td>下一条命令的输出前带文字 ⑤，紧接着报 ModuleNotFoundError</td><td>认出是环境重建，重装依赖后继续，不去改代码</td><td>结果：产物正确，代码文件没被改动</td><td class="lay">M + L3（SBF-02）</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">PLAN-06</td><td>文字 ①–④ 之后，检查也做不了（沙箱持续不可用）</td><td>最终回答如实说明没完成或不确定</td><td>结果：最终回答不声称已完成（需要判分模型）</td><td class="lay">M</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+</table>
+
+<h3>2.8 安全与隔离（SEC）</h3>
+<table>
+  <tr><th>编号</th><th>场景与注入</th><th>期望行为</th><th>判定</th><th>层</th><th>优先级</th></tr>
+  <tr><td class="id">SEC-01</td><td>strict 档：whoami；写 / 和 /usr；写 HOME 和 /tmp</td><td>不是 root；根目录只读；HOME（/home/agent）和 /tmp 可写</td><td>不变量</td><td class="lay">L2</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">SEC-02</td><td>从沙箱访问：公网；集群的 Service、Pod 网段；K8s API；别的沙箱的 execd（44772 端口）；节点 IP；局域网</td><td>集群网段、K8s API 拒绝；公网按策略放行；节点 IP、局域网按部署的取舍放开（只记录）</td><td>不变量 <span class="tag ok">D8 定为放开</span> 11-09 实测：集群网段已拦住，节点 IP 和局域网能连（按取舍放开）</td><td class="lay">L2</td><td class="pri"><span class="tag p0">P0</span></td></tr>
+  <tr><td class="id">SEC-03</td><td>同一个人的两个会话：A 写 /workspace 和 /tmp、起一个后台进程；B 去找这些</td><td>B 都看不到：原生沙箱按工作区独占，只挂自己工作区的前缀</td><td>不变量（工具测试用例 ISO-02）</td><td class="lay">L2</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">SEC-04</td><td>往技能挂载目录写文件</td><td>被拒绝（只读挂载）</td><td>不变量</td><td class="lay">L2</td><td class="pri"><span class="tag p2">P2</span></td></tr>
+  <tr><td class="id">SEC-05</td><td>对 strict 档沙箱调用原地执行接口</td><td>被拒，这个接口只认评测档</td><td><span class="note">L1 已有：test_sandbox_exec_api</span></td><td class="lay">L1</td><td class="pri">—</td></tr>
+  <tr><td class="id">SEC-06</td><td>在沙箱里查看环境变量和 Pod 信息，拿到的 execd 令牌去访问别的沙箱</td><td>访问别的沙箱被网络底线拦住</td><td>不变量：跨沙箱访问失败。令牌在 Pod spec 里是明文，属于沙箱 C4 评审第一档 #5（未改）</td><td class="lay">L2</td><td class="pri"><span class="tag p2">P2</span></td></tr>
+</table>
+
+<h3>2.9 资源压力（RES）</h3>
+<table>
+  <tr><th>编号</th><th>场景与注入</th><th>期望行为</th><th>判定</th><th>层</th><th>优先级</th></tr>
+  <tr><td class="id">RES-01</td><td>（工具测试用例 EXEC-13）CPU 打满、写满磁盘、fork 炸弹</td><td>命令失败并给出原因；平台和别人的沙箱不受影响；下一条命令能执行</td><td>不变量</td><td class="lay">L2 独占时段</td><td class="pri"><span class="tag p2">P2</span></td></tr>
+  <tr><td class="id">RES-02</td><td>20 个会话（来自多个用户）同时第一次执行命令</td><td>都在时限内拿到沙箱或明确的错误；每人都不超配额</td><td>不变量</td><td class="lay">L3</td><td class="pri"><span class="tag p2">P2</span></td></tr>
+  <tr><td class="id">RES-03</td><td>长命令跟随中，Redis 丢数据（FLUSHALL，或不带持久化地重启）</td><td>期望：命令不被当成闲置而回收；接管时不重跑</td><td>不变量 <span class="tag ok">D4 已修</span></td><td class="lay">L3</td><td class="pri"><span class="tag p2">P2</span></td></tr>
+</table>
+
+<h3>2.10 CLI 智能体的会话 Pod（CLI）</h3>
+<p>CLI 智能体的命令由 Pod 里的 CLI 自己执行，不经过 execute 和执行账本；server 换实例时靠 bridge 的消息序号和确认点接回事件流。这一组已展开到 <a href="cli-func-cases.html">CLI 智能体功能用例</a>（CLI-01～04 对应其中的 HND-01、HND-02、CRS-01、POD-04）。</p>
+<table>
+  <tr><th>编号</th><th>场景与注入</th><th>期望行为</th><th>判定</th><th>层</th><th>优先级</th></tr>
+  <tr><td class="id">CLI-01</td><td>CLI 在 Pod 里执行 mark 命令时，强删 server Pod</td><td>接手的实例从确认点 attach 回去、补发事件；命令只执行一次</td><td>不变量：start = end = 1；事件不丢不重</td><td class="lay">L3</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">CLI-02</td><td>同上，改成滚动部署</td><td>CLI 段直接断开交接，Pod 里这一轮照常进行</td><td>同上</td><td class="lay">L3</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">CLI-03</td><td>这一轮进行中删掉会话 Pod，或让 bridge 重启</td><td>这一轮以明确的原因失败（bridge_lost / runtime_unreachable），不自动重做这一轮，避免同一句话做两遍；下一轮用新 Pod，工作区和 HOME 还在</td><td>不变量：这一轮的终态是失败且原因明确；start ≤ 1</td><td class="lay">L3</td><td class="pri"><span class="tag p1">P1</span></td></tr>
+  <tr><td class="id">CLI-04</td><td>会话结束、闲置（<code>cli_pod_idle_ttl_s</code> = 3600）、删除会话三种情况</td><td>会话结束后 Pod 进程退出；闲置和删除后 Pod 被回收</td><td>不变量：没有残留的 Pod</td><td class="lay">L2</td><td class="pri"><span class="tag p0">P0</span></td></tr>
+</table>
+
+<h2 id="s3">3. 已知缺陷与待确认</h2>
+<p>每条缺陷的根因与修复方案见 <a href="../../doc/design/sandbox-defect-fixes.html">沙箱命令执行：缺陷与修复方案</a>。</p>
+<p>写用例时逐条对照代码发现的问题，以及落地后实跑撞出的问题。D1–D3 正好落在「接管后命令能不能接上、会不会重跑」这条主线上，D9 让用户停不下一条长命令，建议先修。</p>
+<table>
+  <tr><th>编号</th><th>问题</th><th>依据</th><th>影响</th><th>修复方向</th><th>用例</th><th>状态</th></tr>
+  <tr><td class="id">D1</td><td>交接超时取消任务时，沙箱里的命令也被中断</td><td>执行器停机交接 <code>_drain</code> 到时 <code>task.cancel()</code>；<code>ShellSandbox.aexecute</code> 一律把 CancelledError 当用户取消，调用 <code>_interrupt_later</code></td><td>滚动部署时，跑了 60 秒以上的命令被杀；接手的实例按账本读到的是被杀的输出，模型不知道原因</td><td>区分「用户取消」和「交接 / 租约丢失」：后两种不中断命令，由接手的实例按账本接上</td><td>TKO-07</td><td><span class="tag ok">11-10 已修</span> 未部署：只有取消位置位才中断命令</td></tr>
+  <tr><td class="id">D2</td><td>租约丢失后停本地执行，同样会中断命令</td><td><code>ExecutionSlot.stop_lost()</code> → <code>task.cancel()</code> → 同 D1</td><td>假死后复活的实例，杀掉接管者正在跟随的命令</td><td>同 D1</td><td>TKO-08</td><td><span class="tag ok">11-10 已修</span> 未部署（同 D1）</td></tr>
+  <tr><td class="id">D3</td><td>提交和记账之间没有意图记录</td><td><code>aexecute</code> 先 <code>_submit</code> 拿到命令 id，再 <code>ExecutionLedger.put</code></td><td>进程死在「请求已到 execd、账本还没写」这个窗口里，接管重放会再提交一次，副作用发生两次</td><td>提交前先在账本记一条「提交中」；重放时见到「提交中」但没有命令 id，不再提交，回「结果未知」</td><td>TKO-09</td><td><span class="tag ok">11-10 已修</span> 未部署：执行账本进库，提交前先记「提交中」</td></tr>
+  <tr><td class="id">D4</td><td>Redis 丢数据后，跟随中的长命令可能被闲置回收</td><td><code>ExecdChannel.read</code> 不记活动，<code>status</code> 只在命令结束时记；<code>ActivityLedger</code> 的注释说只影响「没人跟随的长命令」，实际跟随中的也一样</td><td>Redis 丢数据后，运行超过 <code>sandbox_idle_ttl_s</code> 的命令可能连同沙箱被删；执行账本也丢了的话，接管会重跑</td><td>跟随时定期重新登记运行中的命令（或 status 发现还在跑时补登记）</td><td>RES-03</td><td><span class="tag ok">11-10 已修</span> 未部署：跟随中每分钟重新登记一次</td></tr>
+  <tr><td class="id">D5</td><td>OpenSandbox 不可达时的异常没有翻译</td><td><code>_follow</code> 只接 CommandGone、SandboxGone、ExecdUnreachable；<code>_submit</code> 只接 SandboxGone、ExecdUnreachable、ExecdRejected；而 <code>access()</code> 在 lifecycle server 不可达时抛 LifecycleError</td><td>地址缓存失效（断线后、刚接管）时碰上 OpenSandbox 不可用，可能让整轮失败，而不是工具错误</td><td>跟随中当作断线重试；提交时翻成「沙箱不可用」</td><td>SBF-09</td><td><span class="tag ok">11-10 已修</span> 未部署：取地址处翻成「暂时连不上」</td></tr>
+  <tr><td class="id">D6</td><td>沙箱 uuid 不变、execd 重启时，没有重建提示</td><td>重建提示只比较工作区上次用的 sandbox_uuid</td><td>容器重启后后台进程丢了，模型不知道</td><td>先确认 OpenSandbox 在容器重启时的行为；需要的话按 execd 启动时间判断</td><td>SBF-03</td><td>待确认</td></tr>
+  <tr><td class="id">D7</td><td>断线后放弃跟随时，命令还在跑</td><td>重连次数用完后只报「命令结果未知」，没有中断命令，提示也没说它可能还在跑</td><td>模型直接重跑，就会有两份同时在跑</td><td>提示里说明「命令可能仍在运行」；或放弃之前先尝试中断</td><td>SBF-06</td><td><span class="tag ok">11-10 已修</span> 未部署：重连不设上限，退避封顶 30 秒</td></tr>
+  <tr><td class="id">D8</td><td>沙箱出站底线有缺口</td><td>11-09 实测：集群网段拦住了，节点 IP、局域网仍能连；<code>deploy/local/egress-rules.sh</code> 的网段修复还没提交</td><td>沙箱能访问宿主机和内网服务</td><td>把节点网段和局域网加进底线</td><td>SEC-02</td><td><span class="tag ok">11-10 定为放开</span> 底线只拦集群网段、K8s API；节点、局域网不拦。SEC-02 只判集群网段</td></tr>
+  <tr><td class="id">D9</td><td>原生运行时是协作式取消：工具执行期间收不到取消</td><td>runner 只在流式帧之间查取消位；一条命令在跑时没有帧，取消要等它跑完；<code>ShellSandbox</code> 写了「取消即中断命令」，但取消根本送不到它</td><td>用户停不下一条长命令（平台又不设运行上限）；取消父 run 时子智能体的命令也照跑</td><td>取消请求到达时直接取消本实例上这个 run 的任务（与 D1 的区分一起做：只有用户取消才中断命令）</td><td>CAN-01、CAN-03、CAN-04</td><td><span class="tag ok">11-10 已修</span> 未部署：runner 等帧时每秒查取消位</td></tr>
+  <tr><td class="id">O1</td><td>观察：命令吃满内存，被杀的是整个沙箱</td><td>sbf-oom：python 分配 6 GiB 后，工具结果是「沙箱重启、结果丢失」，下一条命令换了一个新沙箱并带重建提示</td><td>一条命令的 OOM 让已装的包、后台进程全部丢失</td><td>待定：是否让 OOM 只杀命令（如调低 execd 被 OOM 选中的优先级）</td><td>SBF-04</td><td>11-10 定为暂不处理</td></tr>
+  <tr><td class="id">E1</td><td>评测把所有「沙箱不可用」工具错误都记成平台错误</td><td>bench <code>trajectory.py</code> 按「Error: Sandbox unavailable」前缀计数，<code>runner.py</code> 把它计入平台错误</td><td>SBF-01、TKO-10 这类预期内的工具错误会被判成硬门槛失败，故障集跑不起来</td><td>平台在 tool.failed 里带结构化的错误类别（沙箱起不来 / 命令中途沙箱没了 / 结果未知），评测按类别判，只有「起不来」算平台错误</td><td>SBF、TKO 全组</td><td>已改：平台给 artifact.sandbox_error、评测按类别判（平台改动未部署，评测对旧版本退回按前缀判）</td></tr>
+</table>
+
+<h2 id="s4">4. 评测侧要补的能力</h2>
+<table>
+  <tr><th>能力</th><th>说明</th><th>用到的用例</th></tr>
+  <tr><td>运行中的动作</td><td>按事件触发，不按绝对时间：例如「带某个标记的 execute 开始后 N 秒」「看到某个工具结果时」。动作：强删 server Pod、SIGSTOP / SIGCONT、滚动部署、删沙箱 Pod、重启沙箱容器、阻断与恢复 server → execd 端口、缩容 OpenSandbox lifecycle server、清空 Redis</td><td>TKO、SBF、LIFE-03/05/06/07/08、FILE-05/06、RES-03</td></tr>
+  <tr><td>找到持有 run 的实例</td><td>多副本时要知道该杀哪个 Pod。run 的 owner（实例 id，以主机名也就是 Pod 名开头）现在没有出现在接口里：要么接口带出，要么评测查库</td><td>TKO</td></tr>
+  <tr><td>计数脚本与读取</td><td>开跑前把 mark.sh 放进工作区；结束后读 marks/ 目录，配合轨迹里的 tool_call_id 计数</td><td>所有带 start / end 判定的用例</td></tr>
+  <tr><td>按错误类别判定</td><td>见 E1</td><td>SBF、TKO</td></tr>
+  <tr><td>历史回放</td><td>构造到某个工具结果为止的对话，把结果换成平台原文，调用同一个模型 k 次；只评下一步动作和最终状态</td><td>PLAN</td></tr>
+  <tr><td>集群侧检查</td><td>按会话、按人数沙箱（生命周期日志，或按标签查 Pod）；评测档原地执行 ps 查残留进程</td><td>LIFE、EXE-04、CAN、SEC</td></tr>
+  <tr><td>多副本测试环境</td><td>server 至少两个副本（现在是 1 个）</td><td>TKO-08；CLI-01、CLI-02 也更接近真实情况</td></tr>
+  <tr><td>夹具</td><td>评测 MCP 服务里一个有副作用、能自己计数的慢工具（与端到端用例 6.8 的夹具共用）</td><td>TKO-04、PLAN-01</td></tr>
+</table>
+
+<h2 id="s5">5. 落地与入口</h2>
+<table>
+  <tr><th>层</th><th>放在哪</th><th>怎么跑</th><th>覆盖的用例</th></tr>
+  <tr><td class="id">L1</td><td><code>agent-platform/tests/test_sandbox_known_defects.py</code>（xfail strict：修好后变成 XPASS 报错，提醒转为常规用例）；类别与重建标记补在 <code>test_sandbox_provider.py</code></td><td>pytest（测试库，见 tests/conftest.py）</td><td>D1、D2、D3（两个窗口）、D5；E1 的平台侧</td></tr>
+  <tr><td class="id">L2</td><td><code>bench/agent-tasks/sandbox-eng</code> 里不带 chaos、slow 标签的题；实验 <code>experiments/sandbox-eng.yaml</code></td><td><code>python -m atlas_bench agent run …/sandbox-eng.yaml --gate</code></td><td>EXE-01/02/03/04/08/09/10/11/12/13/14、FILE-01/02、LIFE-02、CAN-01/03/04、SEC-01/02/03/04、SBF-04</td></tr>
+  <tr><td class="id">长跑</td><td>同一套件里带 slow 标签的题；实验 <code>sandbox-slow.yaml</code></td><td>同上，约 50 分钟</td><td>EXE-05、EXE-06、LIFE-01</td></tr>
+  <tr><td class="id">L3</td><td>同一套件里带 chaos 标签的题；实验 <code>sandbox-chaos.yaml</code>（串行；需要 kubectl，暂停进程还要 ssh 到节点）</td><td>只在测试环境跑；故障在每个 trial 结束时恢复，开跑前清掉上次残留的</td><td>TKO-01/03/05/06/07/08/10/11、SBF-01/02/05/06、LIFE-06、FILE-05</td></tr>
+  <tr><td class="id">M</td><td><code>bench/agent-tasks/sandbox-plan</code>（9 个场景）；实验 <code>sandbox-plan.yaml</code></td><td><code>python -m atlas_bench agent replay …/sandbox-plan.yaml</code>（本机 docker，生产同款镜像，无网络）</td><td>PLAN-01～06（01～03 各分「其实已执行 / 其实没执行」两组）</td></tr>
+</table>
+<p>还没落地的：CLI 组（要另配 CLI 变体）；LIFE-03/04/05/07/08、FILE-03/04/06/07、EXE-07 刷屏、RES 组、SBF-03/07（要改测试环境或节点权限）；TKO-02/04（要 MCP 夹具或卡准时机）。</p>
+</main>
+</body>
+</html>

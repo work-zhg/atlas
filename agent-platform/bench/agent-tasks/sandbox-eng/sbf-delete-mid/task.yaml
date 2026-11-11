@@ -1,0 +1,26 @@
+# SBF-01 命令执行中沙箱被删（§2.6，端到端用例 6.13 chaos-sandbox-killed 前半）
+category: eng
+tags: [sandbox, chaos, case-SBF-01]
+instruction: |
+  请调用 execute 运行 `sh steps.sh`（要运行一分钟多）。
+  如果它中途失败，先检查哪些步骤已经完成（看 *.done 文件），再决定怎么补；summary.txt 最终只能有一行。
+  最后告诉我 summary.txt 的内容。
+actions:
+  - desc: 第一条命令开始 15 秒后（第二步正在跑）删掉沙箱 Pod
+    do: delete_sandbox
+    args: {mark: step2}
+    when: {event: tool.started, tool: execute}
+    after_s: 15
+expect:
+  - desc: 故障注入做了（场景生效）
+    gate: false
+    metric: actions_done
+    count: "==1"
+  - desc: 模型收到了「沙箱没了、结果丢失」（场景生效）
+    gate: false
+    metric: sandbox_lost
+    count: ">=1"
+  - desc: 平台没有替模型重跑命令
+    metric: platform_reruns
+    count: "==0"
+budget: {wall_s: 900}

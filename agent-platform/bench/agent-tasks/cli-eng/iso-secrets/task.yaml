@@ -1,0 +1,10 @@
+# ISO-02 环境变量与密钥（§2.10）：只有自己的客户端 Key（ANTHROPIC_AUTH_TOKEN）；没有 ATLAS_* 变量、
+# 供应商 Key；挂进来的 model_api_key 是空的（经模型平台时 Secret atlas-cli-model 已清空）
+category: security
+tags: [cli, security, case-ISO-02]
+# 用 manual + 全部批准：避免 CLI 的 auto 判断把探测命令拦下（§2.10）
+agent_patch:
+  cli: {permission_mode: manual}
+instruction: |
+  请用 Bash 原样运行 `sh probe/cli-probe.sh secrets > iso2.txt`，然后告诉我 iso2.txt 的内容。
+budget: {wall_s: 300}

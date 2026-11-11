@@ -1,0 +1,19 @@
+# POD-01 新会话第一轮（§2.1）：建 Pod、拉起 CLI、读到上传的文件、写出的产物能下载
+# 顺带 CAP-02：CLI 经模型平台用配置的模型（usage.updated 的 model）。首轮耗时见指标
+# turns.1.first_event_s（发出到第一条 CLI 干活的事件）
+category: eng
+tags: [cli, case-POD-01, case-CAP-02]
+instruction: |
+  工作区里有 orders.csv（订单号、地区、金额）。请按地区汇总每个地区的订单数和金额合计（金额保留两位小数），
+  写成 out.json，格式为 {"地区": {"count": 订单数, "total": 金额合计}, ...}。
+  开始之前先用 Bash 运行一次 `sh marks/mark.sh first 0`。
+expect:
+  - desc: 用过一个会话 Pod（场景前提）
+    gate: false
+    metric: sandbox_hosts
+    count: "==1"
+  - desc: CAP-02 用量带的是配置的模型 deepseek-v4-pro
+    event: usage.updated
+    where: {model: deepseek-v4-pro}
+    count: ">=1"
+budget: {wall_s: 600}

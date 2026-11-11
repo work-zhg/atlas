@@ -1,0 +1,16 @@
+# EXE-01 首次执行与复用（bench/doc/sandbox-eng-cases.html §2.1）
+category: eng
+tags: [sandbox, fast, case-EXE-01]
+instruction: |
+  请分两次调用 execute，依次运行这两条命令（每条单独一次调用）：
+    sh marks/mark.sh first 0
+    sh marks/mark.sh second 0
+  然后用 write_file 把两条命令输出的最后一行（MARK-DONE 开头）按顺序写入 done.txt，一行一个。
+expect:
+  - desc: 两条命令在同一个沙箱里执行
+    metric: sandbox_hosts
+    count: "==1"
+  - desc: 平台没有替模型重跑命令
+    metric: platform_reruns
+    count: "==0"
+budget: {wall_s: 600}

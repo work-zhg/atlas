@@ -1,0 +1,24 @@
+# LIFE-06 OpenSandbox 不可用（§2.3）：新建明确失败（工具错误，不是整轮失败）
+# ★ 会把 opensandbox-sbx 缩到 0：期间测试环境里所有人都建不了新沙箱，trial 结束时一定恢复
+category: eng
+tags: [sandbox, chaos, case-LIFE-06]
+instruction: |
+  请调用 execute 运行 `echo hi > hi.txt`。如果沙箱暂时不可用，就改用 write_file 直接写 hi.txt（内容 hi）。
+actions:
+  - desc: 开始前把原生沙箱的 lifecycle server 缩到 0
+    do: scale_lifecycle
+    args: {replicas: 0}
+  - desc: 第一次沙箱错误之后恢复成 1
+    do: scale_lifecycle
+    args: {replicas: 1}
+    when: {event: tool.failed, tool: execute}
+expect:
+  - desc: 故障注入都做了（场景生效）
+    gate: false
+    metric: actions_done
+    count: ">=1"
+  - desc: 模型收到了「沙箱不可用」的工具错误（场景生效）
+    gate: false
+    metric: sandbox_unavailable
+    count: ">=1"
+budget: {wall_s: 600}

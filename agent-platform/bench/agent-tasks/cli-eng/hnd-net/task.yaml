@@ -1,0 +1,31 @@
+# HND-04 命令执行中 server 与会话 Pod 断网 60 秒（§2.8）：这一轮在 Pod 里照常进行，消息缓存在
+# bridge；恢复后 attach 补发。同一个实例重连，翻译器还在，不涉及 CD3、CD4
+category: eng
+tags: [cli, chaos, takeover, case-HND-04]
+instruction: |
+  请先回复一句「开始了」，然后用 Bash 运行 `sh marks/mark.sh net 90`（只运行一次，不要放到后台，不要设置 timeout，也不要重复运行）。
+  结束后把输出的最后一行写入 done.txt。
+actions:
+  - desc: 命令开始 5 秒后阻断进入会话 Pod 的流量
+    do: block_sandbox
+    when: {event: tool.started, mark: net}
+    after_s: 5
+  - desc: 60 秒后恢复
+    do: unblock_sandbox
+    when: {event: tool.started, mark: net}
+    after_s: 65
+expect:
+  - desc: 故障注入做了（场景前提）
+    gate: false
+    metric: actions_done
+    count: ">=1"
+  - desc: 这一轮只交给 CLI 一次：命令只执行了一次
+    metric: marks.net.start
+    count: "==1"
+  - desc: 命令跑完了（没有被打断）
+    metric: marks.net.end
+    count: "==1"
+  - desc: CLI 拿到了真实输出（工具结果里有结束令牌）
+    metric: marks.net.token_seen
+    count: ">=1"
+budget: {wall_s: 900}

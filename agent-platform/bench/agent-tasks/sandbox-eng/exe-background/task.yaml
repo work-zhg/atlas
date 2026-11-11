@@ -1,0 +1,13 @@
+# EXE-10 后台服务（§2.1，工具测试用例 EXEC-21）：沙箱还在时，下一条命令、下一轮都能访问
+category: eng
+tags: [sandbox, fast, multi-turn, case-EXE-10]
+instruction: |
+  请调用 execute 在后台启动一个 HTTP 服务（原样运行）：
+    nohup python3 -m http.server 8765 --bind 127.0.0.1 > /tmp/http.log 2>&1 &
+  然后再调用 execute 取一次文件：
+    sleep 1; curl -s http://127.0.0.1:8765/hello.txt > got1.txt
+turns:
+  - text: |
+      请调用 execute 再取一次同一个文件（服务应该还在运行，不要重新启动它）：
+        curl -s http://127.0.0.1:8765/hello.txt > got2.txt
+budget: {wall_s: 600}

@@ -1,0 +1,11 @@
+# EVT-05 自动标题（§2.3）：新会话的第一轮结束后，会话得到自动生成的标题（同原生）
+category: eng
+tags: [cli, case-EVT-05]
+known_defect: "CD2 CLI 会话不生成标题（标题生成只在原生运行时的装配里）"
+instruction: 请写一首关于秋天的四行短诗，写进 poem.txt。
+title_within_s: 90
+expect:
+  - desc: 第一轮结束后 90 秒内，会话的标题由平台生成（来源是 generated 或 fallback）
+    metric: title_pending
+    count: "==0"
+budget: {wall_s: 600}

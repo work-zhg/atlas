@@ -1,0 +1,9 @@
+# EXE-09 等待输入的命令（§2.1）：立即读到 EOF 结束，不挂住
+category: eng
+tags: [sandbox, fast, case-EXE-09]
+instruction: |
+  请分两次调用 execute，原样运行：
+    python3 -c "input()"; echo "py-rc=$?" > stdin.txt
+    read x; echo "read-rc=$?" >> stdin.txt
+  这两条命令会尝试读标准输入；没有输入时它们应该立刻结束。完成后告诉我 stdin.txt 的内容。
+budget: {wall_s: 300}

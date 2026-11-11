@@ -1,0 +1,26 @@
+# TKO-07 滚动部署，命令长于交接时限（§2.5）：期望命令不被中断、接手实例接上
+category: eng
+tags: [sandbox, chaos, case-TKO-07]
+instruction: |
+  请调用 execute 运行 `sh marks/mark.sh rl 240`（只运行一次，不要放到后台，不要设置 timeout，也不要重复运行）。它会运行 4 分钟，请耐心等它结束。
+  结束后用 write_file 把输出的最后一行（MARK-DONE 开头）写入 done.txt。
+actions:
+  - desc: 命令开始 5 秒后滚动部署 server（旧实例等不到安全点，60 秒后中止并交接）
+    do: restart_server
+    when: {event: tool.started, mark: rl}
+    after_s: 5
+expect:
+  - desc: 故障注入做了（场景生效）
+    gate: false
+    metric: actions_done
+    count: "==1"
+  - desc: 平台没有替模型重跑命令
+    metric: platform_reruns
+    count: "==0"
+  - desc: rl 没有被打断（跑完了）
+    metric: marks.rl.interrupted
+    count: "==0"
+  - desc: 模型拿到了 rl 的真实输出（含结束令牌）
+    metric: marks.rl.token_seen
+    count: ">=1"
+budget: {wall_s: 1200}

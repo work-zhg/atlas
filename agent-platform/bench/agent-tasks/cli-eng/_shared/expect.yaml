@@ -1,0 +1,52 @@
+# CLI 智能体每题都带的不变量（bench/doc/cli-func-cases.html §0「每题都带的不变量」）。
+# 任务自己写了同一指标 / 事件的断言时，以任务的为准（比如某题就是要 session.lost 出现一次）。
+# 作为子智能体时同样作用于子 run（cli-sub 实验里父 run 是原生的，EVT-03 两项只数 CLI run）。
+- desc: EVT-01 每个 run 的 message.completed 正文 = 它的 message.delta 依次拼接
+  metric: answer_mismatch
+  count: "==0"
+- desc: EVT-02 同一个工具调用只有一条 tool.started
+  metric: tool_started_dup
+  count: "==0"
+- desc: EVT-02 同一个工具调用只有一条终态
+  metric: tool_terminal_dup
+  count: "==0"
+- desc: EVT-02 正常结束的 run 里，开始了的工具调用都有终态
+  metric: tool_terminal_missing
+  count: "==0"
+- desc: EVT-02 工具名非空、单行、不超过 81 字
+  metric: tool_name_bad
+  count: "==0"
+- desc: EVT-03 CLI run 的 usage.updated 带模型名
+  metric: usage_no_model
+  count: "==0"
+- desc: EVT-03 用量口径与原生一致：input_tokens 含缓存（不小于 cache_read）
+  metric: usage_cache_over_input
+  count: "==0"
+- desc: EVT-03 正常结束的 CLI run 至少有一条 context.usage（basis = cli）
+  metric: cli_runs_no_context_usage
+  count: "==0"
+- desc: run（含子 run）都有终态
+  metric: runs_nonterminal
+  count: "==0"
+- desc: 成功的 run 用量大于 0
+  metric: runs_zero_usage
+  count: "==0"
+- desc: run 内事件序号从 1 起连续
+  metric: seq_gaps
+  count: "==0"
+- desc: run 内事件序号不重复
+  metric: seq_dups
+  count: "==0"
+- desc: 工具调用不会在下一轮被重放
+  metric: call_ids_reused
+  count: "==0"
+- desc: 没有预期之外的 session.lost
+  event: session.lost
+  count: "==0"
+- desc: 每一轮的终态都符合预期（没有预期之外的失败）
+  metric: turns_unexpected
+  count: "==0"
+- desc: 评测收全了会话事件流（场景前提：没收全时正文、序号两项只看收到的部分）
+  gate: false
+  metric: stream_incomplete
+  count: "==0"

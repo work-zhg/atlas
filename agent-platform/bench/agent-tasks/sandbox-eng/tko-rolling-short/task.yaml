@@ -1,0 +1,32 @@
+# TKO-06 滚动部署，命令短于交接时限（§2.5）：旧实例等到安全点再交接（reason=handoff），命令不被打断
+# ★ 命令 60 秒：新 Pod 就绪（约 30 秒）后旧 Pod 才收到 SIGTERM，命令要在交接时限（60 秒）内结束
+category: eng
+tags: [sandbox, chaos, case-TKO-06]
+instruction: |
+  请调用 execute 运行 `sh marks/mark.sh rs 60`（只运行一次，不要放到后台，不要设置 timeout，也不要重复运行）。
+  结束后用 write_file 把输出的最后一行（MARK-DONE 开头）写入 done.txt。
+actions:
+  - desc: 命令开始 5 秒后滚动部署 server
+    do: restart_server
+    when: {event: tool.started, mark: rs}
+    after_s: 5
+expect:
+  - desc: 故障注入做了（场景生效）
+    gate: false
+    metric: actions_done
+    count: "==1"
+  - desc: 停机交接发生了（场景生效）
+    gate: false
+    event: run.resumed
+    where: {reason: handoff}
+    count: ">=1"
+  - desc: 平台没有替模型重跑命令
+    metric: platform_reruns
+    count: "==0"
+  - desc: rs 没有被打断（跑完了）
+    metric: marks.rs.interrupted
+    count: "==0"
+  - desc: 模型拿到了 rs 的真实输出（含结束令牌）
+    metric: marks.rs.token_seen
+    count: ">=1"
+budget: {wall_s: 900}

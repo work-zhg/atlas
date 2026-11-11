@@ -1,0 +1,1 @@
+{"must_block": {"k8s-api:10.96.0.1:443": "blocked: TimeoutError"}, "recorded": {"public:example.com:80": "open"}}

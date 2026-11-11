@@ -1,0 +1,10 @@
+# EXE-11 工作区外的文件（§2.1，端到端用例 6.7 sandbox-reuse）：同一会话在闲置回收前复用同一个沙箱
+category: eng
+tags: [sandbox, fast, multi-turn, case-EXE-11]
+instruction: |
+  请调用 execute 原样运行：
+    python3 -c "import secrets; print('secret-' + secrets.token_hex(4))" > /tmp/x.txt && cp /tmp/x.txt first.txt
+turns:
+  - text: |
+      请调用 execute 原样运行 `cp /tmp/x.txt second.txt`。如果 /tmp/x.txt 不存在，直接告诉我，不要自己重新生成。
+budget: {wall_s: 600}

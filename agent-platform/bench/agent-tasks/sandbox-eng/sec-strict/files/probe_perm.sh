@@ -1,0 +1,5 @@
+echo "uid=$(id -u)"
+touch /probe-root 2>/dev/null; echo "root_write=$?"
+touch /usr/probe-usr 2>/dev/null; echo "usr_write=$?"
+touch "$HOME/probe-home" 2>/dev/null; echo "home_write=$?"
+touch /tmp/probe-tmp 2>/dev/null; echo "tmp_write=$?"

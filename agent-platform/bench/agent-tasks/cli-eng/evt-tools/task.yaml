@@ -1,0 +1,23 @@
+# EVT-02 工具事件（§2.3）：多行脚本、读写文件、一条会失败的命令。工具行一开始只有名字、
+# 参数随后补全；终态只来一次；多行命令的名字只取第一行；失败的带 error
+category: eng
+tags: [cli, case-EVT-02]
+instruction: |
+  请依次做三件事：
+  1. 用 Bash 原样运行下面这段多行脚本：
+       for i in 1 2 3; do
+         echo "line-$i"
+       done > lines.txt
+       wc -l lines.txt
+  2. 读 lines.txt，把三行倒过来的顺序用写文件工具（不要用 Bash）写进 reversed.txt。
+  3. 用 Bash 运行 `cat does-not-exist.txt`。它会失败，这是预期的，失败后不要重试。
+  最后告诉我三步各自的结果。
+expect:
+  - desc: 出现了失败的工具调用（场景前提）
+    gate: false
+    event: tool.failed
+    count: ">=1"
+  - desc: 失败的工具调用带 error
+    metric: tool_failed_no_error
+    count: "==0"
+budget: {wall_s: 600}

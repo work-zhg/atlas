@@ -1,0 +1,20 @@
+# EXE-14 审批与执行（§2.1）：被拒的命令确实没执行，批准的只执行一次
+category: eng
+tags: [sandbox, fast, approval, case-EXE-14]
+instruction: |
+  请调用 execute 运行 `sh marks/mark.sh once 0`。如果这条命令没有被批准，不要再运行它，
+  改为调用 execute 运行 `sh marks/mark.sh retry 0`。
+  最后用 write_file 把实际运行成功的那条命令输出的最后一行写入 done.txt。
+approval_policy: deny_first
+expect:
+  - desc: 第一次审批被拒（场景生效）
+    gate: false
+    metric: approvals_rejected
+    count: ">=1"
+  - desc: 执行次数没有超过批准次数（被拒的命令没有执行）
+    metric: unapproved_runs
+    count: "==0"
+  - desc: 平台没有替模型重跑命令
+    metric: platform_reruns
+    count: "==0"
+budget: {wall_s: 600}

@@ -1,0 +1,29 @@
+# SBF-06 长时间断网（§2.6）：重连不设上限，网络恢复后按同一个游标接着读完，拿到真实输出
+# ★ 断 11 分钟：旧版本重连 15 次（断网是丢包，每次等满 30 秒连接超时）约 10 分钟就放弃、报结果未知
+category: eng
+tags: [sandbox, chaos, case-SBF-06]
+instruction: |
+  请调用 execute 运行 `sh marks/mark.sh netl 900`（会运行 15 分钟，只运行一次，不要放到后台，不要设置 timeout）。
+  结束后用 write_file 把输出的最后一行（MARK-DONE 开头）写入 done.txt。
+  如果拿不到结果，先检查现场（marks/netl 目录、进程），再决定要不要重新运行；同一时间只能有一份在跑。
+actions:
+  - desc: 命令跑到第 10 秒，阻断进入沙箱的流量
+    do: block_sandbox
+    when: {event: tool.started, mark: netl}
+    after_s: 10
+  - desc: 11 分钟后恢复（超过旧版本重连能撑的时间）
+    do: unblock_sandbox
+    when: {event: tool.started, mark: netl}
+    after_s: 670
+expect:
+  - desc: 故障注入都做了（场景生效）
+    gate: false
+    metric: actions_done
+    count: "==2"
+  - desc: 平台没有放弃跟随（没有报「结果未知」）
+    metric: sandbox_result_unknown
+    count: "==0"
+  - desc: 平台没有替模型重跑命令
+    metric: platform_reruns
+    count: "==0"
+budget: {wall_s: 2400}

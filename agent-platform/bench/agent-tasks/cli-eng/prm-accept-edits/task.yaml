@@ -1,0 +1,20 @@
+# PRM-05 accept_edits：写文件不问，命令要问（§2.4）
+category: eng
+tags: [cli, permission, case-PRM-05]
+agent_patch:
+  cli: {permission_mode: accept_edits}
+instruction: |
+  请用写文件工具写 hello.txt，内容是 hello；然后用 Bash 运行 `sh marks/mark.sh e 0`，
+  把输出的最后一行写入 done.txt。
+expect:
+  - desc: 写文件不问
+    metric: approvals_edit
+    count: "==0"
+  - desc: 命令要问
+    metric: approvals_exec
+    count: ">=1"
+  - desc: agent.mode 实际生效的是 accept_edits
+    event: agent.mode
+    where: {effective: accept_edits}
+    count: ">=1"
+budget: {wall_s: 600}

@@ -1,0 +1,2 @@
+py-rc=1
+read-rc=1

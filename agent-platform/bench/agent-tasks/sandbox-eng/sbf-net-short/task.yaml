@@ -1,0 +1,33 @@
+# SBF-05 短暂断网（§2.6）：重连后从游标接着读，输出不丢不重，命令不重跑
+category: eng
+tags: [sandbox, chaos, case-SBF-05]
+instruction: |
+  请调用 execute 运行 `sh marks/mark.sh net 60`（只运行一次，不要放到后台，不要设置 timeout，也不要重复运行）。
+  结束后用 write_file 把输出的最后一行（MARK-DONE 开头）写入 done.txt。
+actions:
+  - desc: 命令跑到第 10 秒，阻断进入沙箱的流量
+    do: block_sandbox
+    when: {event: tool.started, mark: net}
+    after_s: 10
+  - desc: 30 秒后恢复
+    do: unblock_sandbox
+    when: {event: tool.started, mark: net}
+    after_s: 40
+expect:
+  - desc: 故障注入都做了（场景生效）
+    gate: false
+    metric: actions_done
+    count: "==2"
+  - desc: 输出里的递增数字没有断档或重复
+    metric: marks.net.seq_broken
+    count: "==0"
+  - desc: 平台没有替模型重跑命令
+    metric: platform_reruns
+    count: "==0"
+  - desc: net 没有被打断（跑完了）
+    metric: marks.net.interrupted
+    count: "==0"
+  - desc: 模型拿到了 net 的真实输出（含结束令牌）
+    metric: marks.net.token_seen
+    count: ">=1"
+budget: {wall_s: 900}

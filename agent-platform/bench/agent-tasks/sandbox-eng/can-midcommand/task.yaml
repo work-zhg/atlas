@@ -1,0 +1,26 @@
+# CAN-01 命令执行中取消（§2.4，端到端用例 6.6 cancel-midcommand）
+category: eng
+tags: [sandbox, fast, cancel, multi-turn, case-CAN-01]
+instruction: |
+  请调用 execute 运行 `sh marks/mark.sh cxl 120`（只运行一次，不要放到后台，不要设置 timeout，也不要重复运行）。运行结束后把输出的最后一行写入 done.txt。
+actions:
+  - desc: 命令跑到第 10 秒时取消 run
+    do: cancel_run
+    when: {event: tool.started, mark: cxl}
+    after_s: 10
+turns:
+  - wait_s: 5
+    text: |
+      请调用 execute 运行 `sh marks/mark.sh after 0`，然后用 write_file 把它输出的最后一行写入 after.txt。
+expect:
+  - desc: 取消做了（场景生效）
+    gate: false
+    metric: actions_done
+    count: "==1"
+  - desc: 取消后命令确实被中断（没有跑完）
+    metric: marks.cxl.end
+    count: "==0"
+  - desc: 平台没有替模型重跑命令
+    metric: platform_reruns
+    count: "==0"
+budget: {wall_s: 600}

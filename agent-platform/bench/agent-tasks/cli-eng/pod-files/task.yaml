@@ -1,0 +1,10 @@
+# POD-03 文件进出（§2.1）：嵌套目录、中文文件名、二进制（PNG）、1 MB 文本；CLI 算校验和，
+# 再生成一个二进制文件。上传的、CLI 看到的、下载回来的三者一致
+category: eng
+tags: [cli, case-POD-03]
+instruction: |
+  请用 Bash 在工作区里原样运行下面两条命令：
+    sha256sum a/b/c/deep.txt 数据/说明.txt img/logo.png big.txt > sums.txt
+    head -c 65536 /dev/urandom > gen.bin && sha256sum gen.bin > gen.sha256
+  然后告诉我 sums.txt 的内容。
+budget: {wall_s: 600}

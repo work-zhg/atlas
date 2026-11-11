@@ -1,0 +1,13 @@
+# POD-02 同一会话连发 3 轮（§2.1）：三轮都在同一个会话 Pod 里（第 2、3 轮 attach 上去）
+category: eng
+tags: [cli, multi-turn, case-POD-02]
+instruction: |
+  请用 Bash 运行 `sh marks/mark.sh turn1 0`，把输出的最后一行写入 t1.txt。
+turns:
+  - text: 请用 Bash 运行 `sh marks/mark.sh turn2 0`，把输出的最后一行写入 t2.txt。
+  - text: 请用 Bash 运行 `sh marks/mark.sh turn3 0`，把输出的最后一行写入 t3.txt。
+expect:
+  - desc: 三轮都在同一个会话 Pod 里
+    metric: sandbox_hosts
+    count: "==1"
+budget: {wall_s: 900}

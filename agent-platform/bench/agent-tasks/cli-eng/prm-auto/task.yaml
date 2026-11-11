@@ -1,0 +1,15 @@
+# PRM-01 auto（默认）：读写文件、跑命令都不弹审批（§2.4）
+category: eng
+tags: [cli, permission, case-PRM-01]
+instruction: |
+  请用写文件工具写 hello.txt，内容是 hello；然后用 Bash 运行 `sh marks/mark.sh a 0`，
+  把输出的最后一行写入 done.txt。
+expect:
+  - desc: auto 模式不弹审批
+    metric: approval_events
+    count: "==0"
+  - desc: agent.mode 回报要求的和实际的都是 auto、没有降级
+    event: agent.mode
+    where: {requested: auto, effective: auto, degraded: false}
+    count: ">=1"
+budget: {wall_s: 600}

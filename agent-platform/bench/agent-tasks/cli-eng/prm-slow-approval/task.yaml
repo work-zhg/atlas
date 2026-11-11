@@ -1,0 +1,15 @@
+# PRM-04 manual + 很久之后才批（§2.4）：评测 240 秒后才批（超过静默阈值 idleS 120 秒）。
+# 等人时静默计时暂停，不判卡死；批准后继续完成
+category: eng
+tags: [cli, permission, case-PRM-04]
+agent_patch:
+  cli: {permission_mode: manual}
+approval_policy: delay:240
+instruction: |
+  请只用 Bash 运行一条命令 `sh marks/mark.sh w 0`，然后直接回复它输出的最后一行（不用写文件）。
+expect:
+  - desc: 审批等了 240 秒以上（场景前提）
+    gate: false
+    metric: approval_wait_ms
+    count: ">=240000"
+budget: {wall_s: 1200}

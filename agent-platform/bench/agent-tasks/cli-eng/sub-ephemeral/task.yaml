@@ -1,0 +1,31 @@
+# SUB-03 ephemeral 子智能体（§2.7）：跑完后父会话保留，子会话归档，由孤儿回收停掉它的 bridge
+# （每 pod_reap_interval_s = 600 秒一次，时限取 720 秒）。会话 Pod 按人共用，Pod 不一定退役
+category: eng
+tags: [sub, case-SUB-03]
+agent_patch:
+  subagents:
+    - name: cli-hand
+      description: 会话 Pod 里的 Claude Code：在共享工作区里跑命令、写文件，并汇报结果
+      system_prompt: 你在工作区里完成交给你的任务，做完用一句话汇报结果。
+      model: {model: deepseek-v4-pro, provider: anthropic}
+      kind: cli
+      cli:
+        cli_type: claude-code
+        adapter: node /opt/acp-cli/bin/claude-acp
+        image: atlas-cli-bridge:0.4.0
+        permission_mode: auto
+      session_mode: ephemeral
+instruction: |
+  请交给 cli-hand 子智能体：用 Bash 运行 `sh marks/mark.sh eph 0`，并把输出的最后一行写入 eph.txt。
+  完成后告诉我 eph.txt 的内容。
+reclaim_scope: subagents
+reclaim_within_s: 720
+expect:
+  - desc: 子智能体用过会话 Pod（场景前提）
+    gate: false
+    metric: sandbox_hosts
+    count: ">=1"
+  - desc: 父会话还在时，子会话的 bridge 在 720 秒内停了
+    metric: sandboxes_left
+    count: "==0"
+budget: {wall_s: 900}

@@ -1,0 +1,12 @@
+# FILE-01 文件工具与命令双向可见（§2.2）：沙箱在跑时文件工具经沙箱读写，不绕过 s3fs 的缓存
+category: eng
+tags: [sandbox, fast, case-FILE-01]
+instruction: |
+  请按顺序完成（注意每一步指定的工具）：
+    1. 用 write_file 写 a.txt，内容为 alpha-1
+    2. 用 execute 运行 `cat a.txt > a_copy.txt`
+    3. 用 execute 运行 `echo from-shell > b.txt`
+    4. 用 read_file 读 b.txt，再用 write_file 把读到的内容原样写入 b_seen.txt
+    5. 用 edit_file 把 a.txt 里的 alpha-1 改成 alpha-2
+    6. 用 execute 运行 `grep -c alpha-2 a.txt > grep.txt`
+budget: {wall_s: 600}

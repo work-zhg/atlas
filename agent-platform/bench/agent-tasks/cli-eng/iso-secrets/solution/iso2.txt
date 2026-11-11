@@ -1,0 +1,4 @@
+env:ANTHROPIC_AUTH_TOKEN=有
+env:ATLAS_*=没有
+env:供应商Key=没有
+file:model_api_key=不可读

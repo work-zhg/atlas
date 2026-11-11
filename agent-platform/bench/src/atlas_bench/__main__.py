@@ -118,6 +118,15 @@ async def _agent(args: argparse.Namespace, settings: BenchSettings) -> int:
         md, page = write_agent_report(Path(args.run_dir))
         print(f"报告：{md}\n      {page}")
         return 0
+    if args.agent_command == "replay":
+        from .agent.replay import ReplayConfig, run_replay
+
+        rcfg = ReplayConfig.model_validate(
+            yaml.safe_load(Path(args.experiment).read_text(encoding="utf-8"))
+        )
+        run_dir = await run_replay(rcfg, settings, _llm(settings, concurrency=rcfg.concurrency))
+        print(f"运行目录：{run_dir}\n报告：{run_dir / 'report.md'}")
+        return 0
     if args.agent_command == "compare":
         from .agent.report import compare_runs
 
@@ -162,6 +171,11 @@ async def _agent(args: argparse.Namespace, settings: BenchSettings) -> int:
             from .agent.user import SimulatedUserAnswerer
 
             answerer = SimulatedUserAnswerer(_llm(settings), cfg.user_model)
+        from .agent.cluster import ClusterOps
+        from .agent.tasks import select_tasks
+
+        # 故障注入、资源回收检查要操作集群（kubectl / ssh），只有选中的任务用得到时才带上
+        needs_cluster = any(t.needs_cluster() for t in select_tasks(cfg, args.limit))
         run_dir = await run_agent_experiment(
             cfg,
             settings,
@@ -169,6 +183,7 @@ async def _agent(args: argparse.Namespace, settings: BenchSettings) -> int:
             run_dir=Path(args.resume) if args.resume else None,
             limit=args.limit,
             answerer=answerer,
+            ops=ClusterOps(settings) if needs_cluster else None,
         )
     finally:
         await platform.aclose()
@@ -240,6 +255,8 @@ def main(argv: list[str] | None = None) -> int:
     acp.add_argument("new_dir")
     agsub.add_parser("tasks")
     agsub.add_parser("cleanup")
+    arr = agsub.add_parser("replay", help="模型反应：历史回放（沙箱工程用例 PLAN 组）")
+    arr.add_argument("experiment")
     args = parser.parse_args(argv)
     settings = get_settings()
 

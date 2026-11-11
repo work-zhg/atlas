@@ -335,6 +335,7 @@
 </table>
 
 <h3>6.7 沙箱与工作区</h3>
+<p>完整的沙箱用例（执行路径上的故障、接管后接上原命令、「结果未知」后的重新规划）见 <a href="sandbox-eng-cases.html">沙箱工程用例</a>；本节 4 条和 6.13 的 chaos-sandbox-killed 在那里展开。</p>
 <table>
   <tr><th>用例</th><th>基础任务与注入</th><th>验证的平台机制</th><th>判定</th><th>优先级</th></tr>
   <tr><td class="id">files-roundtrip</td><td>上传嵌套目录、二进制文件、中文文件名、接近上限的大文件；让 Agent 计算校验和，并生成产物</td><td>上传、沙箱内读到的、下载回来的三者一致</td><td>结果：校验和与上传时一致；下载的产物与沙箱内一致</td><td class="pri"><span class="tag p0">P0</span></td></tr>

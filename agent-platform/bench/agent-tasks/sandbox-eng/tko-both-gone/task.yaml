@@ -1,0 +1,29 @@
+# TKO-10 实例和沙箱一起没了（§2.5）：重放发现沙箱已换 → 如实报结果丢失；之后的命令带重建提示；模型检查后重做
+category: eng
+tags: [sandbox, chaos, case-TKO-10]
+instruction: |
+  请调用 execute 运行 `sh marks/mark.sh bg 60`（只运行一次，不要放到后台，不要设置 timeout，也不要重复运行）。
+  结束后用 write_file 把输出的最后一行（MARK-DONE 开头）写入 done.txt。
+  如果这条命令没能正常结束（例如运行环境出了问题），先检查现场，再重新运行一次，直到拿到 MARK-DONE 行。
+actions:
+  - desc: 命令跑到第 10 秒，强删 server Pod
+    do: kill_server
+    when: {event: tool.started, mark: bg}
+    after_s: 10
+  - desc: 同时删掉会话的沙箱 Pod
+    do: delete_sandbox
+    when: {event: tool.started, mark: bg}
+    after_s: 10
+expect:
+  - desc: 故障注入都做了（场景生效）
+    gate: false
+    metric: actions_done
+    count: "==2"
+  - desc: 模型收到了「沙箱没了、结果丢失」（场景生效）
+    gate: false
+    metric: sandbox_lost
+    count: ">=1"
+  - desc: 平台没有替模型重跑命令
+    metric: platform_reruns
+    count: "==0"
+budget: {wall_s: 900}

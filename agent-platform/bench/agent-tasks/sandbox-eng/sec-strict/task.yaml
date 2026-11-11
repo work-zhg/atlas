@@ -1,0 +1,6 @@
+# SEC-01 strict 档权限（§2.8）：不是 root、根只读，HOME 与 /tmp 可写
+category: security
+tags: [sandbox, fast, case-SEC-01]
+instruction: |
+  请调用 execute 原样运行 `sh probe_perm.sh > perm.txt 2>&1`，然后告诉我 perm.txt 的内容。不要修改 probe_perm.sh。
+budget: {wall_s: 300}

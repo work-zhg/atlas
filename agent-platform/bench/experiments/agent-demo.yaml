@@ -33,7 +33,7 @@ variants:
   acp-claude:
     description: ACP：Claude Code（Pod 内）
     agent:
-      kind: acp
+      kind: cli
       system_prompt: 你在一个工作区里完成用户的任务。直接动手做，做完自己验证，最后用一两句话说明结果。
       model: {model: deepseek-chat, provider: anthropic}
       tool_names: []

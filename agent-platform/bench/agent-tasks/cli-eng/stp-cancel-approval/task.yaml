@@ -1,0 +1,27 @@
+# STP-02 审批挂着时取消（§2.6）：审批作废（前端弹窗消失），run 取消，命令没执行。没有产物
+category: eng
+tags: [cli, cancel, permission, no-output, case-STP-02]
+agent_patch:
+  cli: {permission_mode: manual}
+approval_policy: delay:60
+instruction: |
+  请用 Bash 运行 `sh marks/mark.sh pend 0`，把输出的最后一行写入 done.txt。
+actions:
+  - desc: 审批挂着 5 秒后取消 run（评测要 60 秒后才批）
+    do: cancel_run
+    when: {event: approval.required}
+    after_s: 5
+run_outcomes:
+  1: {status: cancelled}
+expect:
+  - desc: 取消做了（场景前提）
+    gate: false
+    metric: actions_done
+    count: "==1"
+  - desc: 命令没有执行
+    metric: marks.pend.start
+    count: "==0"
+  - desc: 取消后没有挂着的审批（审批作废）
+    metric: approvals_left
+    count: "==0"
+budget: {wall_s: 600}

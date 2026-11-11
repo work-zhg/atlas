@@ -1,0 +1,9 @@
+# SBF-04 命令把内存打满（§2.6）：被杀的是命令（137）或 execd（沙箱重启），run 都不失败，下一条命令可用
+category: eng
+tags: [sandbox, fast, case-SBF-04]
+sandbox_errors_expected: true
+instruction: |
+  请调用 execute 原样运行 `python3 -c 'b = bytearray(6 * 1024**3); print(len(b))'`。
+  它可能因为内存不足失败，这是预期的，不要重试。
+  然后调用 execute 运行 `echo alive > alive.txt`。
+budget: {wall_s: 600}

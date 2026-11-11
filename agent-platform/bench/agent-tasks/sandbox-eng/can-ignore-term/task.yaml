@@ -1,0 +1,23 @@
+# CAN-04 不理 SIGTERM 的命令（§2.4）：宽限期过后 SIGKILL，确实结束
+category: eng
+tags: [sandbox, fast, cancel, multi-turn, case-CAN-04]
+instruction: |
+  请调用 execute 原样运行 `sh -c "trap '' TERM; sh marks/mark.sh term 120"`（只运行一次，不要放到后台，不要设置 timeout，也不要重复运行）。
+actions:
+  - desc: 命令跑到第 5 秒时取消 run
+    do: cancel_run
+    when: {event: tool.started, mark: term}
+    after_s: 5
+turns:
+  - wait_s: 20
+    text: |
+      请调用 execute 原样运行 `pgrep -fa '[m]ark.sh term' | wc -l > left.txt`。
+expect:
+  - desc: 取消做了（场景生效）
+    gate: false
+    metric: actions_done
+    count: "==1"
+  - desc: 忽略 SIGTERM 的命令也被结束了
+    metric: marks.term.end
+    count: "==0"
+budget: {wall_s: 600}

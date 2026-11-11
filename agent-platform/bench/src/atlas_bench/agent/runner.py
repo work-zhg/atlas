@@ -23,10 +23,12 @@ from typing import Any
 
 from ..runner import _git_commit
 from ..settings import BenchSettings
+from .cluster import ClusterError, ClusterOps
+from .marks import mark_report
 from .platforms.atlas import Answerer, AtlasAgentPlatform, AtlasError, TrialRun
 from .schema import AgentExperimentConfig, Task, TrialResult, VariantConfig
 from .tasks import select_tasks
-from .trajectory import check_expectations, metrics_from_trace
+from .trajectory import check_expectations, event_invariants, metrics_from_trace
 from .verify import verify_in_sandbox, verify_workspace
 
 __all__ = [
@@ -50,6 +52,11 @@ PLATFORM_ERROR_KINDS = frozenset(
         "interrupted",
         "pod_unavailable",
         "runtime_crashed",
+        # CLI：会话 Pod 被终止、bridge 重启过、连不上 bridge、权限模式设不上
+        "runtime_interrupted",
+        "bridge_lost",
+        "runtime_unreachable",
+        "mode_unavailable",
         "dependency_unavailable",
         "capability_unavailable",
         # 前置会话失败 / 记忆没抽取出来（评测协议的一部分，见 platforms/atlas.py _run_setup）
@@ -125,7 +132,11 @@ def sse_metrics(tr: TrialRun, trace: list[dict[str, Any]]) -> dict[str, int]:
     }
 
 
-def _classify(tr: TrialRun, passed: bool, metrics: dict[str, Any]) -> str:
+def _classify(
+    tr: TrialRun, passed: bool, metrics: dict[str, Any], *, injected: bool = False
+) -> str:
+    """injected：任务注入了故障。这时沙箱丢失、结果未知、甚至一时建不起来（lifecycle server 被缩掉）
+    都是用例要的现场，不算平台错误；没注入故障时出现它们才是平台问题。"""
     if metrics.get("simulated_user_errors"):
         # ★ 模拟用户出错时问题按推荐回答了（不让 run 卡住），但这已经不是要测的那次对话 ——
         #   评测侧的问题：不进分母，续跑时重做（不能悄悄算成 Agent 没问到 / 碰巧做对）
@@ -136,7 +147,11 @@ def _classify(tr: TrialRun, passed: bool, metrics: dict[str, Any]) -> str:
         return "success"
     if tr.status in ("failed", "interrupted") and (tr.error_kind or "") in PLATFORM_ERROR_KINDS:
         return "platform_error"
-    if metrics.get("sandbox_unavailable"):  # 沙箱起不来被当成了工具错误，Agent 没机会做成
+    sandbox_errors = sum(
+        int(metrics.get(k) or 0)
+        for k in ("sandbox_unavailable", "sandbox_lost", "sandbox_result_unknown")
+    )
+    if sandbox_errors and not injected:  # 沙箱错误被当成了工具错误，Agent 没机会做成
         return "platform_error"
     if tr.status in ("failed", "interrupted"):
         return "agent_error"
@@ -159,14 +174,85 @@ async def _trial(
     cfg: AgentExperimentConfig,
     run_dir: Path,
     answerer: Answerer | None = None,
+    ops: ClusterOps | None = None,
 ) -> TrialResult:
     """一个 trial；平台错误按协议重跑一次（新会话），重跑仍失败才记 platform_error。"""
-    res = await _attempt(platform, agent, variant, task, trial, cfg, run_dir, answerer)
+    res = await _attempt(platform, agent, variant, task, trial, cfg, run_dir, answerer, ops)
     if res.outcome == "platform_error":
         logger.info("%s %s#%d 平台错误，按协议重跑一次：%s", variant, task.id, trial, res.error)
-        res = await _attempt(platform, agent, variant, task, trial, cfg, run_dir, answerer)
+        res = await _attempt(platform, agent, variant, task, trial, cfg, run_dir, answerer, ops)
         res.retried = True
     return res
+
+
+async def _reclaim(
+    platform: AtlasAgentPlatform,
+    tr: TrialRun,
+    ops: ClusterOps,
+    hosts: set[str],
+    task: Task,
+    *,
+    cli: bool,
+    runs: list[dict[str, Any]],
+) -> int:
+    """资源应在 task.reclaim_within_s 秒内回收干净 → 到时还剩几个（范围见 Task.reclaim_scope）。
+
+    ★ CLI 的会话 Pod 按人共用（一个 Pod 至多几个会话）：删一个会话只停它的 bridge，Pod 还有
+      别的会话时不退役。所以 CLI 看的是「这个会话的 bridge 停了」（Pod 没了也算）。
+    """
+    assert task.reclaim_within_s is not None
+    scope = task.reclaim_scope
+    image = (task.agent_patch.get("cli") or {}).get("image")
+    if scope == "image" and not image:
+        raise ClusterError("reclaim_scope: image 要在 agent_patch 里写 cli.image")
+    if scope == "thread":
+        await platform.delete_thread(tr)
+    if scope == "subagents":  # 子会话：子 run 所在的会话（除了主会话）
+        sessions = sorted({str(r.get("thread_id")) for r in runs if r.get("thread_id")})
+        sessions = [s for s in sessions if s != tr.thread_id]
+    else:
+        sessions = [tr.thread_id] if cli else [""]  # "" = 原生沙箱：看 Pod 本身
+    left = {(pod, s) for pod in hosts for s in sessions}
+    deadline = time.monotonic() + task.reclaim_within_s
+    while True:
+        if scope == "image":
+            left = {(pod, "") for pod in await ops.pods_with_image(str(image))}
+        else:
+            for pod, session in list(left):
+                alive = (
+                    await ops.cli_session_alive(pod, session)
+                    if session
+                    else await ops.sandbox_exists(pod)
+                )
+                if not alive:
+                    left.discard((pod, session))
+        if not left or time.monotonic() >= deadline:
+            return len(left)
+        await asyncio.sleep(5.0)
+
+
+def _turn_metrics(tr: TrialRun) -> dict[str, Any]:
+    """每一轮的用时（turns.<n>.*）与预期之外的轮数。"""
+    out: dict[str, Any] = {"turns_unexpected": sum(1 for t in tr.turns if not t["expected"])}
+    for t in tr.turns:
+        for key in ("wall_s", "first_event_s", "cancel_to_end_s"):
+            if t.get(key) is not None:
+                out[f"turns.{t['n']}.{key}"] = t[key]
+    return out
+
+
+def _declared_turn_missed(tr: TrialRun, task: Task) -> int | None:
+    """任务声明了预期终态（run_outcomes）而没对上的第一轮；都对上（或没声明）→ None。"""
+    return next(
+        (t["n"] for t in tr.turns if t["n"] in task.run_outcomes and not t["expected"]), None
+    )
+
+
+def _workspace_changes(initial: dict[str, str | bytes], files: dict[str, bytes]) -> int:
+    """跑完后的工作区与初始文件比，新增、删除、改动了几个文件（平台自己的 .atlas/ 不算）。"""
+    before = {k: v.encode() if isinstance(v, str) else v for k, v in initial.items()}
+    paths = {p for p in {*before, *files} if not p.startswith(".atlas/")}
+    return sum(1 for p in paths if before.get(p) != files.get(p))
 
 
 async def _attempt(
@@ -178,13 +264,15 @@ async def _attempt(
     cfg: AgentExperimentConfig,
     run_dir: Path,
     answerer: Answerer | None = None,
+    ops: ClusterOps | None = None,
 ) -> TrialResult:
     t0 = time.monotonic()
-    base = {"task_id": task.id, "variant": variant, "trial": trial}
+    base = {"task_id": task.id, "variant": variant, "trial": trial,
+            "known_defect": task.known_defect}  # fmt: skip
     policy = task.approval_policy or cfg.approval_policy
     try:
         tr = await platform.run_trial(
-            agent, task, trial=trial, approval_policy=policy, answerer=answerer
+            agent, task, trial=trial, approval_policy=policy, answerer=answerer, ops=ops
         )
     except (AtlasError, OSError) as exc:  # 建会话 / 上传 / 发消息失败：评测侧拿不到现场
         return TrialResult(**base, outcome="infra_error", error=str(exc))
@@ -192,6 +280,7 @@ async def _attempt(
     in_sandbox = task.verifier.mode == "sandbox"
     try:
         trace, runs = await platform.collect(tr)
+        approvals_left = await platform.pending_approvals(tr)
         # sandbox 模式在现场校验，不用把工作区下载回来
         files, skipped = ({}, []) if in_sandbox else await platform.download_workspace(tr)
     except (AtlasError, OSError) as exc:
@@ -201,14 +290,40 @@ async def _attempt(
     raw.parent.mkdir(parents=True, exist_ok=True)
     raw.write_text(
         json.dumps(
-            {"trace": trace, "runs": runs, "approvals": tr.approvals, "questions": tr.questions},
+            {
+                "trace": trace,
+                "runs": runs,
+                "approvals": tr.approvals,
+                "questions": tr.questions,
+                "actions": tr.actions,
+                "turns": tr.turns,
+                # 会话流上收到的全部事件（含不归档的增量）：正文一致、序号连续据此判断
+                "stream": tr.stream,
+            },
             ensure_ascii=False,
         ),
         encoding="utf-8",
     )
     metrics = metrics_from_trace(trace, runs)
+    metrics.update(event_invariants(trace, tr.stream, runs))
+    metrics.update(_turn_metrics(tr))
     metrics["approval_wait_ms"] = sum(a["latency_ms"] for a in tr.approvals)
     metrics["approvals_rejected"] = sum(1 for a in tr.approvals if a["decision"] == "rejected")
+    # CLI 的审批带工具类别：被请示的是命令还是写入（accept_edits 下写入不该问）
+    metrics["approvals_exec"] = sum(1 for a in tr.approvals if a.get("kind") == "execute")
+    metrics["approvals_edit"] = sum(
+        1 for a in tr.approvals if a.get("kind") in ("edit", "delete", "move")
+    )
+    metrics["approvals_left"] = approvals_left
+    # 子智能体：用过几个子会话（persistent 应当只有一个）、子 run 里没有以取消收尾的
+    subs = [r for r in runs if r.get("parent_run_id")]
+    metrics["sub_threads"] = len({str(r.get("thread_id")) for r in subs})
+    metrics["sub_runs_not_cancelled"] = sum(1 for r in subs if r.get("status") != "cancelled")
+    if task.title_within_s is not None:
+        # 自动生成的标题来源是 generated（模型起的）或 fallback（取用户第一句话）
+        metrics["title_pending"] = int(tr.title_source not in ("generated", "fallback"))
+    if not in_sandbox:
+        metrics["workspace_changed"] = _workspace_changes(task.files, files)
     if tr.questions:
         # 模拟用户出错时退回了按推荐：结果仍有效，但要看得见（报告「需求澄清」一节）
         metrics["simulated_user_errors"] = sum(1 for q in tr.questions if q["error"])
@@ -220,6 +335,25 @@ async def _attempt(
         metrics["memories_new"] = tr.memories_new
         # 先清记忆再校验：服务账号的记忆在所有评测之间共享，不能留给下一题
         metrics["memories_removed"] = await platform.cleanup_memories(tr)
+    marks = mark_report(files, trace, tr.approvals)
+    metrics.update(marks.metrics)
+    if task.injects_faults():
+        # 注入了故障（或用例自己制造故障）：沙箱错误是预期内的，报告的硬门槛不数它们
+        metrics["faults_injected"] = 1
+    if task.actions:
+        metrics["actions_done"] = sum(1 for a in tr.actions if a["ok"])
+        metrics["actions_failed"] = sum(1 for a in tr.actions if not a["ok"])
+        metrics["actions_pending"] = tr.actions_pending
+    deleted = False
+    if task.reclaim_within_s is not None and ops is not None:
+        try:
+            metrics["sandboxes_left"] = await _reclaim(
+                platform, tr, ops, marks.hosts, task, cli=agent.get("kind") == "cli", runs=runs
+            )
+            deleted = task.reclaim_scope == "thread"
+        except ClusterError as exc:
+            return TrialResult(**base, outcome="infra_error", error=f"回收检查没做成：{exc}",
+                               refs=refs, actions=tr.actions)  # fmt: skip
     expectations, expect_ok = check_expectations(task.expect, trace, metrics)
 
     # 即使 run 失败 / 超预算也照样校验：工作区里可能已经做对了（只是没好好收尾）
@@ -227,8 +361,21 @@ async def _attempt(
         v = await verify_in_sandbox(platform, tr, task)
     else:
         v = await verify_workspace(task, files)
-    outcome = "infra_error" if v.infra_error else _classify(tr, v.passed, metrics)
-    if cfg.delete_threads:
+    if v.passed and _declared_turn_missed(tr, task):
+        # ★ 任务声明的终态也是结果的一部分：没对上就不算做成（「没有产物」的题，校验脚本对初始
+        #   状态天然通过 —— 预期取消却因为模型不可用失败了，不能记成成功）
+        v.passed, v.score = False, 0.0
+        v.output = f"{v.output}\n[第 {_declared_turn_missed(tr, task)} 轮的终态与任务声明的不符]"
+    injection_failed = next((a for a in tr.actions if not a["ok"]), None)
+    if v.infra_error:
+        outcome = "infra_error"
+    elif injection_failed is not None:
+        # 故障没注入成：这次 trial 测不到要测的东西，算评测侧的问题，续跑时重做
+        outcome = "infra_error"
+        v.infra_error = f"故障注入 {injection_failed['do']} 没做成：{injection_failed['detail']}"
+    else:
+        outcome = _classify(tr, v.passed, metrics, injected=task.injects_faults())
+    if cfg.delete_threads and not deleted:
         await platform.delete_thread(tr)
     return TrialResult(
         **base,
@@ -243,6 +390,7 @@ async def _attempt(
         refs=refs,
         expectations=expectations,
         expect_ok=expect_ok,
+        actions=tr.actions,
     )
 
 
@@ -276,14 +424,26 @@ async def run_agent_experiment(
     run_dir: Path | None = None,
     limit: int | None = None,
     answerer: Answerer | None = None,
+    ops: ClusterOps | None = None,
 ) -> Path:
     """answerer：模拟用户（agent/user.py）。选中的任务里有带 user 的就必须给 —— 否则问题会按推荐项
-    回答，需求澄清评测的结果就没有意义了，宁可早报。"""
+    回答，需求澄清评测的结果就没有意义了，宁可早报。
+    ops：集群操作。任务带故障动作或回收检查时必须给（同理宁可早报）。"""
     tasks = select_tasks(cfg, limit)
     if not tasks:
         raise SystemExit("没有选中任何任务")
     if answerer is None and any(t.user for t in tasks):
         raise SystemExit("有任务需要模拟用户回答提问：在实验配置里设置 user_model")
+    if ops is None and any(t.needs_cluster() for t in tasks):
+        raise SystemExit("有任务要注入故障或检查资源回收：需要集群操作权限（kubectl）")
+    # 上次评测进程被直接杀掉时没来得及恢复的故障，开跑前先清掉
+    if (
+        ops is not None
+        and any(t.injects_faults() for t in tasks)
+        and (cleared := await ops.clear_stale_faults())
+    ):
+        logger.warning("清掉了上次残留的 %d 个故障", cleared)
+    platform.retry_window_s = cfg.api_retry_s
     if run_dir is None:
         stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
         run_dir = settings.runs_dir / f"{stamp}-{cfg.name}"
@@ -336,7 +496,7 @@ async def run_agent_experiment(
             if task.id in serial_locks:  # 先排 serial 锁再占并发名额，不白占名额
                 await stack.enter_async_context(serial_locks[task.id])
             await stack.enter_async_context(sem)
-            res = await _trial(platform, agent, variant, task, n, cfg, run_dir, answerer)
+            res = await _trial(platform, agent, variant, task, n, cfg, run_dir, answerer, ops)
         async with lock:
             path = trials_path(run_dir, variant)
             path.parent.mkdir(parents=True, exist_ok=True)

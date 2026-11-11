@@ -1,0 +1,30 @@
+# HND-03 manual：审批挂着时强删 server，评测 30 秒后才批（§2.8）：接手后还是同一条审批
+# （审批 id 由 run 和调用派生），批准后继续，命令只执行一次
+category: eng
+tags: [cli, chaos, takeover, permission, case-HND-03]
+known_defect: "CD6 接管后 approval.required 再发一次（接手实例的权限转发不记得已经发过）"
+agent_patch:
+  cli: {permission_mode: manual}
+approval_policy: delay:30
+instruction: |
+  请用 Bash 运行 `sh marks/mark.sh appr 0`，把输出的最后一行写入 done.txt。
+actions:
+  - desc: 第一次审批挂出 5 秒后强删持有这个 run 的 server Pod
+    do: kill_server
+    when: {event: approval.required}
+    after_s: 5
+expect:
+  - desc: 故障注入做了（场景前提）
+    gate: false
+    metric: actions_done
+    count: "==1"
+  - desc: 同一条审批没有重复弹出（approval.required 条数 = 不同的审批 id 数）
+    metric: approval_dup
+    count: "==0"
+  - desc: 命令只执行了一次
+    metric: marks.appr.start
+    count: "==1"
+  - desc: run 结束后没有挂着的审批
+    metric: approvals_left
+    count: "==0"
+budget: {wall_s: 900}

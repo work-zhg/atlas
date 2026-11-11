@@ -1,0 +1,32 @@
+# CLI 智能体功能用例 · 第一批 L2（bench/doc/cli-func-cases.html §5）：不注入故障，会话 Pod 里的真实 Claude Code。
+#
+#   uv run python -m atlas_bench agent run agent-platform/bench/experiments/cli-eng.yaml --gate
+#
+# ★ 新建的评测智能体要先在模型管理平台分配模型：先 --prepare-only 列出 id，再逐个
+#   client-key ensure --type Agent --code <id> --models deepseek-v4-pro --if-pending。
+#   只分配 deepseek-v4-pro：cap-no-key 配的是 deepseek-flash，就是要它「没有分配这个模型」。
+# ★ pod-reclaim、pod-bad-image 要查会话 Pod：需要 kubectl（KUBECONFIG 指向被测集群，同 forward.sh）。
+# ★ 用例按「会话 Pod 按人共用」写（一个 Pod 至多 cli_sessions_per_pod 个会话、HOME 在本地盘），
+#   部署这一版之前对着旧版本跑，回收、ISO 类的结果会不一样。
+# ★ concurrency 2：112 单节点 CPU request 余量小（会话 Pod request 250m）。
+# ★ 不含故障集（chaos → cli-chaos.yaml）、子智能体（sub → cli-sub.yaml）、要夹具的（fixture）、长跑（slow）。
+name: cli-eng
+suites: [cli-eng]
+tags_none: [chaos, slow, fixture, sub]
+trials: 1
+concurrency: 2
+approval_policy: approve_all
+variants:
+  # 权限模式默认 auto；按题用 agent_patch 改（manual / accept_edits / plan），各成一个智能体
+  cli-claude:
+    description: CLI：Claude Code（会话 Pod）
+    agent:
+      kind: cli
+      system_prompt: 你在一个工作区里完成用户的任务。直接动手做，做完自己验证，最后用一两句话说明结果。
+      model: {model: deepseek-v4-pro, provider: anthropic}
+      tool_names: []
+      cli:
+        cli_type: claude-code
+        adapter: node /opt/acp-cli/bin/claude-acp
+        image: atlas-cli-bridge:0.4.0
+        permission_mode: auto

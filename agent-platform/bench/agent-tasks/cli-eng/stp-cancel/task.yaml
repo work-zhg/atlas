@@ -1,0 +1,32 @@
+# STP-01 命令执行中取消，然后同一会话再发一轮（§2.6）
+category: eng
+tags: [cli, cancel, multi-turn, case-STP-01]
+instruction: |
+  请用 Bash 运行 `sh marks/mark.sh long 100`（只运行一次，不要放到后台，不要设置 timeout，也不要重复运行）。
+  运行结束后把输出的最后一行写入 done.txt。
+actions:
+  - desc: 命令跑到第 10 秒时取消 run
+    do: cancel_run
+    when: {event: tool.started, mark: long}
+    after_s: 10
+run_outcomes:
+  1: {status: cancelled}
+turns:
+  - wait_s: 5
+    text: 请用 Bash 运行 `sh marks/mark.sh after 0`，然后把它输出的最后一行写入 after.txt。
+expect:
+  - desc: 取消做了（场景前提）
+    gate: false
+    metric: actions_done
+    count: "==1"
+  - desc: 取消在宽限内生效（取消到终态不超过 20 秒）
+    metric: turns.1.cancel_to_end_s
+    count: "<=20"
+  - desc: 取消后命令被中断、没有跑完（待确认 CD7：平台只发 session/cancel）
+    gate: false
+    metric: marks.long.end
+    count: "==0"
+  - desc: 平台没有替 CLI 重跑命令
+    metric: platform_reruns
+    count: "==0"
+budget: {wall_s: 600}
