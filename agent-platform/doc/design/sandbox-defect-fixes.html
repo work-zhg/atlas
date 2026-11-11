@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>沙箱命令执行：缺陷与修复方案</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --border: #d1d9e0; --head: #f6f8fa;
+    --accent: #0969da; --ok: #1a7f37; --ok-bg: #dafbe1; --warn: #9a6700; --warn-bg: #fff8c5;
+    --bad: #cf222e; --bad-bg: #ffebe9; --code-bg: #f6f8fa;
+    --b1: #ddf4ff; --b1d: #54aeff; --b2: #fbefff; --b2d: #c297ff; --b3: #dafbe1; --b3d: #4ac26b;
+    --b4: #fff8c5; --b4d: #d4a72c; --b5: #ffebe9; --b5d: #ff8182;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --border: #3d444d; --head: #151b23;
+      --accent: #4493f8; --ok: #3fb950; --ok-bg: #12261e; --warn: #d29922; --warn-bg: #2b2111;
+      --bad: #f85149; --bad-bg: #2d1214; --code-bg: #151b23;
+      --b1: #12263f; --b1d: #1f6feb; --b2: #271a36; --b2d: #8957e5; --b3: #12261e; --b3d: #2ea043;
+      --b4: #2b2111; --b4d: #9e6a03; --b5: #2d1214; --b5d: #da3633;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 32px; background: var(--bg); color: var(--fg);
+         font: 14px/1.75 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif; }
+  main { max-width: 1120px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 44px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 15.5px; margin: 24px 0 8px; }
+  h4 { font-size: 14px; margin: 16px 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 14px; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0 16px; }
+  th, td { border: 1px solid var(--border); padding: 7px 10px; vertical-align: top; text-align: left; }
+  th { background: var(--head); white-space: nowrap; }
+  td.id { white-space: nowrap; font-weight: 600; }
+  td.c { text-align: center; white-space: nowrap; }
+  code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; font-size: 12.5px;
+         font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .note { color: var(--muted); font-size: 12.5px; }
+  .quote { background: var(--head); padding: 0 4px; border-radius: 3px; }
+  .callout { border-left: 4px solid var(--accent); background: var(--head); padding: 10px 14px; border-radius: 4px; margin: 14px 0; }
+  .callout.warn { border-color: var(--warn); background: var(--warn-bg); }
+  .callout.bad { border-color: var(--bad); background: var(--bad-bg); }
+  .tag { display: inline-block; padding: 0 7px; border-radius: 9px; font-size: 12px; font-weight: 600; border: 1px solid; white-space: nowrap; }
+  .tag.warn { color: var(--warn); background: var(--warn-bg); border-color: var(--warn); }
+  .tag.ok { color: var(--ok); background: var(--ok-bg); border-color: var(--ok); }
+  .tag.bad { color: var(--bad); background: var(--bad-bg); border-color: var(--bad); }
+  .tag.p0 { color: var(--bad); background: var(--bad-bg); border-color: var(--bad); }
+  .tag.p1 { color: var(--warn); background: var(--warn-bg); border-color: var(--warn); }
+  .tag.p2 { color: var(--muted); background: var(--head); border-color: var(--muted); }
+  .toc { columns: 2; padding-left: 18px; }
+  .fig { border: 1px solid var(--border); border-radius: 6px; padding: 10px; overflow-x: auto; margin: 10px 0 6px; }
+  .cap { color: var(--muted); font-size: 12.5px; margin: 0 0 16px; text-align: center; }
+  .defect { border: 1px solid var(--border); border-radius: 6px; padding: 4px 16px 10px; margin: 18px 0; }
+  .defect h3 { margin-top: 14px; }
+  .loc { color: var(--muted); font-size: 12.5px; }
+  svg text { fill: var(--fg); font-size: 12px; font-family: -apple-system, "PingFang SC", sans-serif; }
+  svg .s { font-size: 11px; fill: var(--muted); }
+  svg .b { font-weight: 600; }
+  svg .c1 { fill: var(--b1); stroke: var(--b1d); } svg .c2 { fill: var(--b2); stroke: var(--b2d); }
+  svg .c3 { fill: var(--b3); stroke: var(--b3d); } svg .c4 { fill: var(--b4); stroke: var(--b4d); }
+  svg .c5 { fill: var(--b5); stroke: var(--b5d); }
+  svg .ln { stroke: var(--fg); stroke-width: 1.3; fill: none; }
+  svg .dash { stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 4 3; fill: none; }
+  svg .badln { stroke: var(--bad); stroke-width: 2; fill: none; }
+  svg .okln { stroke: var(--ok); stroke-width: 2; fill: none; }
+  svg .arw { fill: var(--fg); }
+  svg .faultt { fill: var(--bad); font-weight: 600; font-size: 11px; }
+  svg .okt { fill: var(--ok); font-weight: 600; font-size: 11px; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <marker id="ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="arw" d="M0,0 L8,4 L0,8 z"/></marker>
+</defs></svg>
+<main>
+<h1>沙箱命令执行：缺陷与修复方案</h1>
+<p class="sub">日期：2026-11-09 · 来源：<a href="../../bench/doc/sandbox-eng-cases.html">沙箱工程用例</a>的读代码分析，以及在 112 上的实跑（回归、故障集、模型反应回放）和平台测试（L1）。<br>
+状态：<span class="tag ok">D1–D5、D7、D9 按本文修复，待部署验证</span> <span class="tag ok">D8 定为放开</span> <span class="tag warn">O1 暂不处理</span> <span class="tag warn">D6 待确认</span><br>
+范围：原生智能体的 <code>execute</code>，从提交命令、跟随输出、接管续跑到取消的整条路径；沙箱的出站底线与内存上限。</p>
+
+<ol class="toc" start="0">
+  <li><a href="#s0">总览</a></li>
+  <li><a href="#s1">先认识几个词</a></li>
+  <li><a href="#s2">D9 + D1 + D2：取消的语义（一起修）</a></li>
+  <li><a href="#s3">D3：提交与记账之间崩溃会重跑</a></li>
+  <li><a href="#s4">D5：OpenSandbox 不可达时整轮失败</a></li>
+  <li><a href="#s5">D7：断线放弃跟随时命令还在跑</a></li>
+  <li><a href="#s6">D4：Redis 丢数据后长命令可能被回收</a></li>
+  <li><a href="#s7">D6：容器重启后没有提示</a></li>
+  <li><a href="#s8">D8：沙箱出站底线有缺口</a></li>
+  <li><a href="#s9">O1：命令吃满内存，整个沙箱被杀</a></li>
+  <li><a href="#s10">修复顺序与验证</a></li>
+</ol>
+
+<h2 id="s0">0. 总览</h2>
+<table>
+  <tr><th>编号</th><th>缺陷</th><th>严重度</th><th>证据</th><th>修复要点</th></tr>
+  <tr><td class="id">D9</td><td>工具执行期间收不到取消：用户停不下一条正在跑的命令</td><td class="c"><span class="tag p0">P0</span></td><td>评测复现：取消后 128 秒、命令跑满 120 秒才取消（CAN-01/03/04）</td><td>runner 等下一帧时同时盯着取消位，发现就取消正在执行的图</td></tr>
+  <tr><td class="id">D1</td><td>滚动部署时，跑了 60 秒以上的命令被杀</td><td class="c"><span class="tag p0">P0</span></td><td>L1 证实；112 复现（tko-rolling-long：命令被中断，模型拿不到结果）</td><td rowspan="2">中断沙箱命令只在用户取消时发生：看这个 run 的取消位，没置位就只停跟随、保留执行账本</td></tr>
+  <tr><td class="id">D2</td><td>实例假死复活后，杀掉接管者正在跟随的命令</td><td class="c"><span class="tag p1">P1</span></td><td>L1 证实</td></tr>
+  <tr><td class="id">D3</td><td>提交到记账之间实例崩溃，接管后命令再跑一遍</td><td class="c"><span class="tag p0">P0</span></td><td>L1 证实（两个时间窗口都会重跑）</td><td>提交前先在库里落一条「提交中」；重放时只有「提交中」就不再提交，回「结果未知」</td></tr>
+  <tr><td class="id">D5</td><td>OpenSandbox 一时不可达，整轮失败</td><td class="c"><span class="tag p1">P1</span></td><td>L1 证实（LifecycleError 直接抛出）</td><td>执行防腐层把它翻成「暂时连不上」，按断线重试</td></tr>
+  <tr><td class="id">D7</td><td>断线放弃跟随时报「结果未知」，命令其实还在跑</td><td class="c"><span class="tag p1">P1</span></td><td>112 复现（断网约 10 分钟后放弃）；回放里模型 3 次都先原样重跑</td><td>不设重连次数上限：沙箱还在就一直接着读，确认没了才报</td></tr>
+  <tr><td class="id">D8</td><td>沙箱能连到节点（SSH、apiserver）和局域网</td><td class="c"><span class="tag p1">P1</span></td><td>评测复现（sec-egress）</td><td>放开：底线只拦集群网段，节点和局域网不拦</td></tr>
+  <tr><td class="id">D4</td><td>Redis 丢数据后，跟随中的长命令可能连同沙箱被回收</td><td class="c"><span class="tag p2">P2</span></td><td>读代码发现，未实测</td><td>跟随时续登记；执行账本随 D3 进库</td></tr>
+  <tr><td class="id">D6</td><td>容器重启（沙箱没换）后，下一条命令没有「环境变了」的提示</td><td class="c"><span class="tag p2">P2</span></td><td>读代码发现，未实测</td><td>先确认容器重启后丢了什么，再加对应的提示</td></tr>
+  <tr><td class="id">O1</td><td>一条命令吃满内存，整个沙箱被杀、重建</td><td class="c"><span class="tag p2">P2</span></td><td>评测观察到（sbf-oom）；根因是推断</td><td>暂不处理</td></tr>
+</table>
+<p class="note">严重度：P0 = 会让用户停不下来、丢结果或副作用发生两次；P1 = 特定故障下整轮失败、行为不对或有安全暴露；P2 = 要叠加少见条件才会发生，或影响小。</p>
+
+<h2 id="s1">1. 先认识几个词</h2>
+<table>
+  <tr><th>词</th><th>白话</th><th>例子</th></tr>
+  <tr><td>run</td><td>用户发一条消息，智能体处理它的一整轮</td><td>「帮我跑一下测试」从开始到回复完</td></tr>
+  <tr><td>实例</td><td>一个 atlas-server 进程（一个 Pod）。一个 run 同一时刻只由一个实例执行</td><td><code>atlas-server-67dbd465cd-5tkh9</code></td></tr>
+  <tr><td>租约</td><td>实例每 10 秒续一次的「这个 run 我还在跑」的声明，30 秒没续就过期</td><td>实例被强删后，30 秒内没人续，租约过期</td></tr>
+  <tr><td>接管 / 交接</td><td>租约过期后别的实例把 run 领走叫<b>接管</b>；滚动部署时旧实例主动把 run 交出去叫<b>交接</b></td><td>滚动部署：新 Pod 起来，旧 Pod 收到停机信号，把在跑的 run 交出去</td></tr>
+  <tr><td>execd</td><td>沙箱里负责执行命令的小服务。命令在它那里后台运行，和网络连接无关</td><td>server 断开连接，命令照样在沙箱里跑</td></tr>
+  <tr><td>跟随</td><td>server 隔一会儿去 execd 读一次新输出、问一次「跑完没有」，直到命令结束</td><td>每 0.3～2 秒读一次</td></tr>
+  <tr><td>执行账本</td><td>记下「哪一次工具调用对应沙箱里哪条命令」。接管的实例凭它接上原命令，不重跑</td><td>调用 c1 → 沙箱 S、命令 7f3a…</td></tr>
+  <tr><td>取消位</td><td>用户点「停止」时，在 Redis 里给这个 run 设的一个标记，所有实例都看得到</td><td>取消父 run 时，子 run 也各自被设上</td></tr>
+  <tr><td>帧</td><td>智能体执行过程中产出的一个个更新（模型说了一段话、一个工具返回了结果）</td><td>一条命令跑 2 分钟，这 2 分钟里没有新帧</td></tr>
+</table>
+
+<h2 id="s2">2. D9 + D1 + D2：取消的语义（一起修）</h2>
+<p>三个缺陷是同一件事的两面：<b>「取消」送不到该停的地方</b>（D9），<b>却送到了不该停的地方</b>（D1、D2）。一起修，规则只有一条：</p>
+<div class="callout">中断沙箱里的命令，只在<b>用户取消</b>时发生。交接、租约丢失、进程停机只是「这个实例不再跟随了」，命令留在沙箱里继续跑，由接手的实例凭执行账本接上。</div>
+
+<div class="fig">
+<svg viewBox="0 0 1080 300" width="100%" role="img" aria-label="被取消时怎么处理沙箱里的命令">
+  <rect x="20" y="110" width="170" height="70" rx="6" class="c1"/>
+  <text x="105" y="138" text-anchor="middle" class="b">执行中的工具被取消</text>
+  <text x="105" y="158" text-anchor="middle" class="s">（命令正在沙箱里跑）</text>
+  <text x="105" y="40" text-anchor="middle" class="s">四种来源：</text>
+  <text x="105" y="58" text-anchor="middle" class="s">用户取消 · 停机交接</text>
+  <text x="105" y="74" text-anchor="middle" class="s">租约丢失 · 进程停机</text>
+  <line x1="105" y1="82" x2="105" y2="108" class="dash" marker-end="url(#ar)"/>
+
+  <polygon points="330,105 430,145 330,185 230,145" class="c4"/>
+  <text x="330" y="141" text-anchor="middle" class="b">这个 run 的</text>
+  <text x="330" y="158" text-anchor="middle" class="b">取消位置位了？</text>
+  <line x1="190" y1="145" x2="228" y2="145" class="ln" marker-end="url(#ar)"/>
+
+  <rect x="520" y="40" width="250" height="78" rx="6" class="c5"/>
+  <text x="645" y="64" text-anchor="middle" class="b">是：用户要停</text>
+  <text x="645" y="84" text-anchor="middle" class="s">中断命令（先 SIGTERM，宽限后 SIGKILL）</text>
+  <text x="645" y="100" text-anchor="middle" class="s">run 进终态「已取消」，放会话锁</text>
+  <line x1="390" y1="120" x2="518" y2="80" class="ln" marker-end="url(#ar)"/>
+  <text x="440" y="92" class="okt">是</text>
+
+  <rect x="520" y="172" width="250" height="96" rx="6" class="c3"/>
+  <text x="645" y="196" text-anchor="middle" class="b">否：只是这个实例不跟了</text>
+  <text x="645" y="216" text-anchor="middle" class="s">不碰命令，执行账本原样保留</text>
+  <text x="645" y="232" text-anchor="middle" class="s">run 不进终态，会话锁不放</text>
+  <text x="645" y="248" text-anchor="middle" class="s">（交接 / 租约丢失 / 停机都走这里）</text>
+  <line x1="390" y1="170" x2="518" y2="214" class="ln" marker-end="url(#ar)"/>
+  <text x="440" y="206" class="okt">否</text>
+
+  <rect x="830" y="172" width="230" height="96" rx="6" class="c1"/>
+  <text x="945" y="196" text-anchor="middle" class="b">接手的实例</text>
+  <text x="945" y="216" text-anchor="middle" class="s">用同一个调用重放</text>
+  <text x="945" y="232" text-anchor="middle" class="s">凭执行账本接上原命令</text>
+  <text x="945" y="248" text-anchor="middle" class="s">拿到完整的真实输出</text>
+  <line x1="770" y1="220" x2="828" y2="220" class="ln" marker-end="url(#ar)"/>
+</svg>
+</div>
+<p class="cap">图 1　修复后：工具被取消时，用取消位分辨「用户要停」和「这个实例不跟了」。取消位是现成的、所有实例都看得到的「用户要停」的记录。</p>
+
+<div class="defect">
+<h3>D9：工具执行期间收不到取消</h3>
+<h4>现象</h4>
+<p>命令开始后第 10 秒取消 run，<code>run.cancelled</code> 要到 128 秒后才出现：那条 120 秒的命令一直跑完了才停。取消父 run 时，两个子智能体的命令和父智能体自己的命令都跑满了 120 秒。平台又不设运行上限，用户实际上没有办法停下一条长命令。</p>
+<h4>根因</h4>
+<p>用户点「停止」只是设一个取消位；执行 run 的循环在<b>两帧之间</b>才去查它。一条命令在跑时整个图卡在工具里，没有新帧，于是查不到。ShellSandbox 里写了「被取消就中断命令」的逻辑，但取消根本送不到它那里。</p>
+<div class="fig">
+<svg viewBox="0 0 1080 200" width="100%" role="img" aria-label="取消位什么时候被看到">
+  <text x="20" y="40" class="b">现在</text>
+  <line x1="120" y1="36" x2="1040" y2="36" class="ln"/>
+  <rect x="160" y="24" width="760" height="24" rx="4" class="c2"/>
+  <text x="540" y="41" text-anchor="middle" class="s">命令在跑（120 秒，没有新帧）</text>
+  <line x1="250" y1="10" x2="250" y2="60" class="badln"/>
+  <text x="250" y="76" text-anchor="middle" class="faultt">第 10 秒：用户取消（设取消位）</text>
+  <line x1="940" y1="10" x2="940" y2="60" class="badln"/>
+  <text x="940" y="76" text-anchor="middle" class="faultt">命令跑完、出新帧，才看到取消位</text>
+
+  <text x="20" y="140" class="b">修复后</text>
+  <line x1="120" y1="136" x2="1040" y2="136" class="ln"/>
+  <rect x="160" y="124" width="100" height="24" rx="4" class="c2"/>
+  <text x="210" y="141" text-anchor="middle" class="s">命令在跑</text>
+  <line x1="250" y1="110" x2="250" y2="160" class="okln"/>
+  <text x="250" y="176" text-anchor="middle" class="okt">第 10 秒：用户取消</text>
+  <line x1="270" y1="110" x2="270" y2="160" class="okln"/>
+  <text x="330" y="194" text-anchor="middle" class="okt">1 秒内看到 → 取消图 → 中断命令 → 已取消</text>
+  <text x="640" y="162" class="s">（等下一帧时，每秒同时查一次取消位）</text>
+</svg>
+</div>
+<p class="cap">图 2　取消位什么时候被看到。</p>
+<h4>修复方案</h4>
+<ul>
+  <li><b>等下一帧的同时盯着取消位</b>：执行 run 的循环不再只在两帧之间查，而是一边等下一帧、一边每秒查一次取消位。发现置位就取消正在执行的图：正在跑的工具随之收到取消，ShellSandbox 看到取消位已置位，中断命令（见 D1）。之后走现有的取消收尾：产出 <code>run.cancelled</code>、落终态、放会话锁、清取消位。</li>
+  <li><b>子 run 不用特殊处理</b>：取消父 run 时，平台已经给每个子 run 级联设了取消位，各自的循环同样在 1 秒内停下。</li>
+  <li><b>跨实例自然成立</b>：取消位在 Redis 里，run 在哪个实例上跑，那个实例自己看得到。不需要把取消转发到持有 run 的实例，符合「不转发、不选主」。</li>
+  <li><b>开销</b>：每个在跑的 run 每秒一次 Redis 查询。需要的话，一个实例可以把本实例在跑的 run 合并成一次批量查询。</li>
+</ul>
+<h4>不选的方案</h4>
+<ul>
+  <li><b>由持有实例直接取消 run 的任务</b>：走的是交接那条中断路径，run 不进终态，要等租约过期被接管后才被发现已取消（30 秒以上）；而且又把「用户取消」和「交接」混在一起，这正是 D1 的根源。</li>
+  <li><b>把取消位的 1 小时过期改长</b>（取消机制的已知问题）：修好之后取消在秒级送达，过期时间不再是问题，不用单独改。</li>
+</ul>
+<p class="loc">位置：引擎的 runner 主循环（只在 astream 两帧之间查 is_cancelled）。</p>
+</div>
+
+<div class="defect">
+<h3>D1：滚动部署时长命令被杀</h3>
+<h4>现象</h4>
+<p>112 上跑一条 240 秒的命令，第 5 秒滚动部署 server：命令被中断（没有跑完），接手的实例读到的是被杀的输出，模型拿不到结果，也不知道为什么。L1 用例里，交接后沙箱里的命令进程以 -9 结束。</p>
+<h4>根因</h4>
+<p>停机交接时，旧实例先等「安全点」（这一批工具结果落库）；等满 60 秒还没等到，就取消 run 的任务再交出去。ShellSandbox 把所有取消都当成用户取消，顺手把沙箱里的命令中断了。</p>
+<h4>修复方案</h4>
+<ul>
+  <li>ShellSandbox 被取消时，先看这个 run 的取消位：<b>置位</b>（用户取消）才中断命令；<b>没置位</b>（交接、租约丢失、进程停机）只停止跟随，执行账本原样保留。接手的实例用同一个调用重放，凭账本接上还在跑的命令（这条路径在 112 上已验证：server 崩溃、批准后崩溃、连续两次接管都能接上）。</li>
+  <li>查取消位失败（Redis 不可用）时<b>不中断</b>：宁可让命令多跑，也不误杀。这时取消本身也送不到（D9 的检查同样依赖 Redis），行为是一致的。</li>
+  <li>不需要给「取消」带上原因：asyncio 的取消原因穿过 LangGraph 的子任务时不可靠，取消位是现成的、跨实例的、可靠的判据。</li>
+</ul>
+<p class="loc">位置：ShellSandbox.aexecute 的 CancelledError 分支（无条件 _interrupt_later）。</p>
+</div>
+
+<div class="defect">
+<h3>D2：假死复活的实例杀掉接管者的命令</h3>
+<h4>现象</h4>
+<p>L1 用例：把 run 的租约改到别的实例名下，本实例续租时发现租约丢了，停掉本地执行，沙箱里的命令进程以 -9 结束。这时接管者已经凭执行账本接上了这条命令，结果被杀掉。</p>
+<h4>根因与修复</h4>
+<p>续租发现租约丢失后，同样是取消 run 的任务，走的是 D1 的同一个分支。D1 修好后这里自然修好：租约丢失时取消位没置位，只停跟随。</p>
+<p class="loc">位置：执行槽的 stop_lost → task.cancel()。</p>
+</div>
+
+<h2 id="s3">3. D3：提交与记账之间崩溃会重跑</h2>
+<div class="defect">
+<h4>现象</h4>
+<p>L1 用例：实例在下面两个时刻死掉，接管的实例重放同一个调用，命令都又跑了一遍（副作用发生两次）。</p>
+<h4>根因</h4>
+<p>执行账本是在<b>拿到命令 id 之后</b>才写的。提交请求已经到了 execd、命令已经开始跑，但账本还没写，这段时间里实例一死，接管者查账本查不到这次调用，就当成没执行过，重新提交。execd 的提交接口没有客户端幂等键（命令 id 由 execd 生成），没法让它自己去重。</p>
+<div class="fig">
+<svg viewBox="0 0 1080 230" width="100%" role="img" aria-label="提交与记账的时间线">
+  <text x="20" y="34" class="b">现在</text>
+  <line x1="120" y1="40" x2="1040" y2="40" class="ln" marker-end="url(#ar)"/>
+  <circle cx="200" cy="40" r="5" class="c1"/><text x="200" y="64" text-anchor="middle" class="s">发出提交请求</text>
+  <circle cx="420" cy="40" r="5" class="c1"/><text x="420" y="64" text-anchor="middle" class="s">execd 开跑</text>
+  <circle cx="620" cy="40" r="5" class="c1"/><text x="620" y="64" text-anchor="middle" class="s">拿到命令 id</text>
+  <circle cx="820" cy="40" r="5" class="c1"/><text x="820" y="64" text-anchor="middle" class="s">写执行账本</text>
+  <rect x="425" y="80" width="190" height="22" rx="4" class="c5"/><text x="520" y="95" text-anchor="middle" class="faultt">窗口 A：此时崩溃</text>
+  <rect x="625" y="80" width="190" height="22" rx="4" class="c5"/><text x="720" y="95" text-anchor="middle" class="faultt">窗口 B：此时崩溃</text>
+  <text x="620" y="120" text-anchor="middle" class="s">接管者查不到这次调用 → 重新提交 → 跑两遍</text>
+
+  <text x="20" y="164" class="b">修复后</text>
+  <line x1="120" y1="170" x2="1040" y2="170" class="ln" marker-end="url(#ar)"/>
+  <circle cx="160" cy="170" r="5" class="c3"/><text x="160" y="194" text-anchor="middle" class="s">先记「提交中」</text>
+  <circle cx="300" cy="170" r="5" class="c1"/><text x="300" y="194" text-anchor="middle" class="s">发出请求</text>
+  <circle cx="460" cy="170" r="5" class="c1"/><text x="460" y="194" text-anchor="middle" class="s">execd 开跑</text>
+  <circle cx="620" cy="170" r="5" class="c1"/><text x="620" y="194" text-anchor="middle" class="s">拿到命令 id</text>
+  <circle cx="780" cy="170" r="5" class="c3"/><text x="780" y="194" text-anchor="middle" class="s">补上命令 id</text>
+  <text x="620" y="220" text-anchor="middle" class="okt">任何时刻崩溃：接管者都能看到这次调用至少「提交中」→ 不会重新提交</text>
+</svg>
+</div>
+<p class="cap">图 3　提交与记账的时间线。</p>
+<h4>修复方案</h4>
+<ul>
+  <li><b>先记后提交</b>：提交之前先落一条记录「这次调用要在哪个沙箱执行，状态：提交中」；拿到命令 id 后补上。</li>
+  <li><b>重放时按记录办</b>：
+    <table>
+      <tr><th>记录</th><th>接管者怎么做</th></tr>
+      <tr><td>有命令 id</td><td>接上原命令（现有行为）</td></tr>
+      <tr><td>只有「提交中」</td><td>不再提交，回「结果未知」（类别 result_unknown），提示模型先检查现场再决定是否重试</td></tr>
+      <tr><td>没有记录</td><td>这次调用从没走到提交，正常提交</td></tr>
+    </table>
+  </li>
+  <li><b>记录放进库里</b>（和检查点同一个库），不放 Redis：这条记录是防重跑的唯一依据，必须持久。每条命令多一次写库，命令本身是低频操作，代价可以忽略。顺带修好 D4 的后半（Redis 丢数据后接管会重跑）。</li>
+  <li><b>取舍</b>：实例死在「记了提交中、请求还没发出」的瞬间时，命令其实没跑，模型却会收到「结果未知」，要多查一次。宁可让模型多查一次，也不能跑两遍。</li>
+</ul>
+<h4>可选的进一步改进（暂不做）</h4>
+<p>提交时给命令包一层，开跑时先在沙箱里留一个以调用 id 命名的记号。重放时看到「提交中」，再查这个记号就能分清「没发出去」和「已经开跑」：前者可以安全重新提交。代价是用户在进程列表里看到的命令多了一层包装，实现也更复杂。等「结果未知」在实际使用中真的多起来再考虑。</p>
+<p class="loc">位置：ShellSandbox.aexecute（先 _submit 再 ExecutionLedger.put）；执行账本现在在 Redis。</p>
+</div>
+
+<h2 id="s4">4. D5：OpenSandbox 不可达时整轮失败</h2>
+<div class="defect">
+<h4>现象</h4>
+<p>L1 用例：命令跟随中断过一次线（缓存的 execd 地址作废），重新取地址时 lifecycle server 恰好不可达，抛出的 <code>LifecycleError</code> 没被任何一层接住，直接让整轮失败，而不是变成工具错误或继续重试。</p>
+<h4>根因</h4>
+<p>跟随只接三种错误（命令不认识、沙箱没了、连不上 execd），提交只接三种（沙箱没了、连不上、被拒绝）。取地址要经过 lifecycle server，它不可达时抛的是第四种错误，没人认识。刚接管的实例没有地址缓存，第一次跟随就要取地址，所以接管期间碰上 OpenSandbox 重启也会撞上。</p>
+<h4>修复方案</h4>
+<ul>
+  <li>在执行的防腐层（取 execd 地址的那一处）翻译：lifecycle server 返回「不存在」（404）才是<b>沙箱没了</b>；连不上、5xx 一律算<b>暂时连不上</b>，和连不上 execd 同一类。</li>
+  <li>于是跟随按断线重试（地址取到了就接着读），提交报「沙箱不可用」（类别 unavailable）。上层不用知道 lifecycle server 的存在。</li>
+</ul>
+<p class="loc">位置：执行基座 ExecdChannel 取地址（_target → access）。</p>
+</div>
+
+<h2 id="s5">5. D7：断线放弃跟随时命令还在跑</h2>
+<div class="defect">
+<h4>现象</h4>
+<p>112 上断开 server 到沙箱的网络 11 分钟：约 10 分钟后平台放弃跟随，回给模型 <span class="quote">与沙箱的连接中断且无法恢复，命令结果未知</span>，而命令其实还在沙箱里跑。这一次模型查了进程、等它跑完，做对了；但在模型反应回放里，模型拿到这句话后 3 次都先原样重跑，其中两次重复导出后还把日志清空来掩盖。</p>
+<h4>根因</h4>
+<p>跟随断线后指数退避重连 15 次，用完就放弃。退避本身合计约 2 分钟，但断网是丢包时每次重连还要等满 30 秒的连接超时，实际能撑约 10 分钟。放弃时没有中断命令（也中断不了：连不上），提示语也没说它可能还在跑。</p>
+<h4>修复方案（推荐）</h4>
+<ul>
+  <li><b>重连不设次数上限</b>：只要 lifecycle server 确认沙箱还在，就一直按同一个游标接着读，退避封顶（例如 30 秒一次）；确认沙箱没了才报「沙箱没了、结果丢失」。这样「结果未知」只剩提交途中断开一种（D3 也归到这里）。</li>
+  <li>符合平台「不设运行上限、断联恢复」的原则：重连次数上限本质上是一个到点就放弃的超时。</li>
+  <li>用户等不及可以取消（D9 修好后取消能送到），这时命令被中断，结果明确。</li>
+</ul>
+<h4>备选（如果要保留上限）</h4>
+<p>提示语改成「与沙箱的连接中断了约 N 分钟，命令可能仍在运行，结果未知。先用 ps 或检查产物确认它是否还在跑，不要直接重新执行」。改了之后用模型反应回放（PLAN-04）量化效果：现在是 1/3 通过、3/3 先原样重跑。</p>
+<p class="loc">位置：ShellSandbox._follow 的重连（PollingPolicy.reconnects = 15）。</p>
+</div>
+
+<h2 id="s6">6. D4：Redis 丢数据后长命令可能被回收</h2>
+<div class="defect">
+<h4>现象（读代码发现，未实测）</h4>
+<p>闲置回收靠「这个沙箱有没有在跑的命令」来判断忙不忙，登记在 Redis 里。Redis 丢数据（重启且没持久化、被清空）后，正在跟随的长命令不会被重新登记，超过闲置时限（30 分钟）后，沙箱可能连同还在跑的命令一起被删掉。</p>
+<h4>根因</h4>
+<p>命令开始时登记一次，结束时划掉；跟随过程中读输出、问状态都不碰这本账（按设计「命令在跑本来就算忙」）。账本一丢，就没有任何东西再把它加回去。代码注释说只影响「没人跟随的长命令」，实际跟随中的也一样。</p>
+<h4>修复方案</h4>
+<ul>
+  <li>跟随时每分钟确认一次命令还在跑，就再登记一次（往集合里加同一个成员是幂等的）。只由跟随命令的一方做，不放进「查命令状态」里：会话的 bridge 这类常驻服务也会查状态，它们不能被记成在跑的命令，否则沙箱永远不闲置。</li>
+  <li>执行账本随 D3 进库，Redis 丢数据不再导致接管时重跑。</li>
+  <li>生产环境的 Redis 开持久化（运维项）。</li>
+</ul>
+<p class="loc">位置：ActivityLedger（登记 / 划掉）；ShellSandbox._follow 定期确认。</p>
+</div>
+
+<h2 id="s7">7. D6：容器重启后没有提示</h2>
+<div class="defect">
+<h4>现象（读代码发现，未实测）</h4>
+<p>沙箱换了新的，下一条命令前面会加「环境已重建」的提示；但如果只是容器重启（沙箱还是同一个，比如 execd 崩了被拉起），提示不会出现，后台进程已经没了，模型却不知道。</p>
+<h4>根因</h4>
+<p>提示只比较「这个工作区上次用的是不是同一个沙箱」，容器重启时沙箱没换，比较结果相同。</p>
+<h4>修复方案</h4>
+<ol>
+  <li><b>先确认</b>：在 strict 模板下让容器重启一次，看哪些东西还在（HOME 是 emptyDir，应该还在；/tmp、已装的包、后台进程各自如何）。</li>
+  <li>跟随中撞上「execd 不认识这个命令 id」而沙箱没换时，记下「这个工作区的沙箱进程重启过」；下一条命令前加一句和实际丢失内容一致的提示（例如「沙箱进程重启过：后台进程已丢失，/workspace 与 HOME 仍在」）。提示要和实际丢失的东西一致，所以第 1 步不能跳过。</li>
+</ol>
+<p class="loc">位置：ShellSandbox._notice（只比较 sandbox_uuid）。</p>
+</div>
+
+<h2 id="s8">8. D8：沙箱出站底线有缺口</h2>
+<div class="defect">
+<h4>现象</h4>
+<p>strict 档沙箱里实测：集群网段、K8s API 的服务地址、元数据地址都拦住了；但节点 <code>192.168.0.112</code> 的 22（SSH）、6443（apiserver）端口和局域网网关 <code>192.168.0.1</code> 都能连上。沙箱里跑的是模型写的代码，能摸到宿主机和内网。</p>
+<h4>根因</h4>
+<p>平台底线（egress sidecar 的 <code>deny.always</code>，优先级高于每个沙箱自己的出站策略）只写了集群 Pod 网段、Service 网段和链路本地地址，没有节点地址和局域网。</p>
+<h4>方案：放开</h4>
+<p>底线不加节点地址和局域网，只拦集群 Pod 网段、Service 网段和链路本地地址。沙箱里的命令可以访问节点和局域网，包括经节点入口（traefik）暴露的内网服务。</p>
+<ul>
+  <li>代价：节点的 SSH、apiserver、kubelet 端口对沙箱可见，靠这些服务自身的鉴权挡住。</li>
+  <li>评测 SEC-02 只判集群网段和 K8s API；节点和局域网只记录，不判定。</li>
+</ul>
+<p>另外，egress-rules 脚本在 Calico 集群取错 Pod 网段的修复（11-09）还没提交，随这次一起提交。</p>
+<p class="loc">位置：docker/egress 的 deny.always（由 deploy/local/egress-rules.sh 生成）。</p>
+</div>
+
+<h2 id="s9">9. O1：命令吃满内存，整个沙箱被杀</h2>
+<div class="defect">
+<h4>现象</h4>
+<p>沙箱里一条 python 命令分配 6 GiB（沙箱内存上限 4 GiB）：工具结果是「命令执行期间沙箱重启、结果丢失」，下一条命令换了一个新沙箱并带重建提示。被杀的不只是那条命令，是整个沙箱：装过的包、后台进程全部丢失。</p>
+<h4>根因（推断）</h4>
+<p>112 是 K8s 1.36、cgroup v2，kubelet 没有配置「只杀单个进程」。这种组合下，容器里任一进程触发内存超限，内核会把这个容器的所有进程一起杀掉（按组 OOM），execd 也在其中，沙箱随之不可用。</p>
+<h4>最低成本验证</h4>
+<p>再跑一次 sbf-oom，同时看沙箱 Pod 的上一次终止原因（应为 OOMKilled）和节点内核日志（按组 OOM 时，同一时刻会出现这个容器多个进程被杀的记录）。</p>
+<h4>暂不处理</h4>
+<p>接受按组 OOM：一条命令吃满内存时整个沙箱被杀、下一条命令换新沙箱并带重建提示。以后要处理时，在下面几种做法里选：</p>
+<table>
+  <tr><th>选项</th><th>做法</th><th>代价</th></tr>
+  <tr><td>A</td><td>kubelet 开启「OOM 只杀单个进程」</td><td>节点级设置，影响节点上所有 Pod（112 是单节点，平台服务也在上面）；某些多进程服务被杀掉一个子进程后会处于半坏状态</td></tr>
+  <tr><td>B</td><td>接受按组 OOM，但如实告诉模型：沙箱因<b>内存超限</b>被重启（从 Pod 的终止原因判断），而不是笼统的「可能内存不足或被回收」，让模型知道要减小内存占用再试</td><td>环境还是会丢；只改提示，改动小</td></tr>
+  <tr><td>C</td><td>调大沙箱内存上限</td><td>治标；占集群配额</td></tr>
+</table>
+<p class="loc">位置：节点 kubelet 配置；沙箱丢失的提示在 ShellSandbox（_GONE）。</p>
+</div>
+
+<h2 id="s10">10. 修复顺序与验证</h2>
+<table>
+  <tr><th>批次</th><th>内容</th><th>修完后怎么验证</th></tr>
+  <tr><td>第一批</td><td>D9 + D1 + D2（取消的语义）、D3、D5</td><td>
+    L1：<code>tests/test_sandbox_known_defects.py</code> 的 5 条会从 XFAIL 变成 XPASS（strict 模式下报错），去掉标记转为常规用例；为 D9 补一条执行器层用例（命令在跑时取消，1～2 秒内出现 run.cancelled，命令被中断）。<br>
+    评测：去掉 can-midcommand、can-ignore-term、can-subagents、tko-rolling-long 的 <code>known_defect</code>；部署后跑 <code>sandbox-eng.yaml</code> 和 <code>sandbox-chaos.yaml</code>。tko-pause（D2）要两个 server 副本。</td></tr>
+  <tr><td>第二批</td><td>D7、D4</td><td>sbf-net-long 改为期望「不报结果未知、命令跑完、拿到真实输出」；D4 补 L1 用例（跟随中清空 Redis，再跑一轮闲置回收，沙箱不被删）。</td></tr>
+  <tr><td>第三批</td><td>D6（先确认）</td><td>确认容器重启后丢了什么，再定提示语；SBF-03 检查提示和实际丢失的一致。</td></tr>
+</table>
+<div class="callout warn">平台给评测的沙箱错误类别（E1：工具结果里带「起不来 / 中途丢失 / 结果未知」）已经改好、还没部署。第一批修复部署时一起带上，故障集里「沙箱没了」「结果未知」「环境已重建」这几条场景前提才能生效。</div>
+</main>
+</body>
+</html>

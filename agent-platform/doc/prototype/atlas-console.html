@@ -1,0 +1,1435 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Atlas 控制台 — 改版原型</title>
+<style>
+/* 视觉与用户中心、TeamFlow、模型平台原型一致（同一套浅色设计 token） */
+:root {
+  --bg: #f6f7f9; --surface: #ffffff; --surface-2: #fbfbfd; --hover: #f2f4f8;
+  --ink: #0f172a; --ink-2: #334155; --ink-3: #64748b; --ink-4: #94a3b8;
+  --line: #e6e8ee; --line-2: #eef0f4;
+  --primary: #4f46e5; --primary-2: #6366f1; --primary-weak: #eef0ff; --primary-ink: #4338ca;
+  --secondary: #0ea5e9; --secondary-weak: #e6f6fe;
+  --success: #16a34a; --success-weak: #e7f6ec;
+  --warning: #d97706; --warning-weak: #fef3e2;
+  --danger: #dc2626; --danger-weak: #fdeaea;
+  --radius: 12px; --radius-sm: 8px; --radius-xs: 6px;
+  --shadow-xs: 0 1px 2px rgba(16,24,40,.05);
+  --shadow-md: 0 6px 18px rgba(16,24,40,.08), 0 2px 6px rgba(16,24,40,.05);
+  --shadow-lg: 0 20px 48px rgba(16,24,40,.16);
+  --font: "Inter", "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  --top-h: 52px; --sider-w: 248px; --sider-w-min: 60px;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { font-family: var(--font); background: var(--bg); color: var(--ink); font-size: 14px; line-height: 1.55; -webkit-font-smoothing: antialiased; }
+a { color: var(--primary); text-decoration: none; cursor: pointer; }
+button, input, select, textarea { font-family: inherit; font-size: inherit; color: inherit; }
+h1, h2, h3, h4 { margin: 0; color: var(--ink); }
+h1 { font-size: 20px; font-weight: 650; }
+h2 { font-size: 16px; font-weight: 650; }
+h3 { font-size: 14px; font-weight: 650; }
+p { margin: 0; }
+code, .mono { font-family: var(--mono); font-size: 12px; }
+code { background: var(--line-2); padding: 1px 5px; border-radius: 5px; }
+svg.i { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+svg.i.fill { fill: currentColor; stroke: none; }
+.muted { color: var(--ink-3); }
+.faint { color: var(--ink-4); }
+.sm { font-size: 12.5px; }
+.xs { font-size: 12px; }
+.row { display: flex; align-items: center; gap: 8px; }
+.col { display: flex; flex-direction: column; gap: 8px; }
+.grow { flex: 1; min-width: 0; }
+.ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp { flex: 1; }
+.hide { display: none !important; }
+
+/* ---------- 顶栏：一级菜单（平台） ---------- */
+.top { height: var(--top-h); background: var(--surface); border-bottom: 1px solid var(--line); display: flex; align-items: center; padding: 0 16px 0 14px; gap: 20px; position: relative; z-index: 20; }
+.brand { display: flex; align-items: center; gap: 9px; font-weight: 700; font-size: 15px; letter-spacing: .01em; cursor: pointer; }
+.brand .logo { width: 28px; height: 28px; border-radius: 8px; background: linear-gradient(135deg, #6366f1, #0ea5e9); color: #fff; display: grid; place-items: center; font-size: 14px; }
+.pnav { display: flex; gap: 2px; height: 100%; }
+.pnav a { display: flex; align-items: center; gap: 7px; padding: 0 14px; color: var(--ink-2); font-weight: 550; position: relative; }
+.pnav a:hover { color: var(--ink); background: var(--hover); }
+.pnav a.on { color: var(--primary-ink); }
+.pnav a.on::after { content: ""; position: absolute; left: 12px; right: 12px; bottom: -1px; height: 2px; background: var(--primary); border-radius: 2px; }
+.top-right { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+.avatar { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-size: 12.5px; font-weight: 650; flex: none; }
+.avatar.sq { border-radius: 8px; }
+
+/* ---------- 左侧：二级菜单（可收缩） ---------- */
+.body { display: flex; height: calc(100vh - var(--top-h)); }
+.sider { width: var(--sider-w); flex: none; background: var(--surface-2); border-right: 1px solid var(--line); display: flex; flex-direction: column; transition: width .18s ease; overflow: hidden; }
+.sider.min { width: var(--sider-w-min); }
+.sider-top { padding: 12px 10px 6px; display: flex; flex-direction: column; gap: 2px; }
+.snav { display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: var(--radius-sm); color: var(--ink-2); font-weight: 520; white-space: nowrap; cursor: pointer; position: relative; }
+.snav:hover { background: var(--hover); color: var(--ink); }
+.snav.on { background: var(--primary-weak); color: var(--primary-ink); font-weight: 600; }
+.snav .badge { margin-left: auto; }
+.sider.min .snav { justify-content: center; padding: 0; }
+.sider.min .snav span, .sider.min .snav .badge, .sider.min .hist, .sider.min .new-chat span, .sider.min .sider-foot span { display: none; }
+.new-chat { display: flex; align-items: center; justify-content: center; gap: 8px; height: 38px; border-radius: 10px; background: var(--surface); border: 1px solid var(--line); font-weight: 600; color: var(--ink); cursor: pointer; margin-bottom: 8px; box-shadow: var(--shadow-xs); white-space: nowrap; }
+.new-chat:hover { border-color: #cfd3dd; background: var(--hover); }
+.hist { flex: 1; overflow-y: auto; padding: 4px 10px 10px; border-top: 1px solid var(--line-2); margin-top: 6px; }
+.hist-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 6px 4px; }
+.hist-group { font-size: 11.5px; color: var(--ink-4); padding: 10px 8px 4px; }
+.hist-item { display: flex; align-items: center; gap: 6px; height: 34px; padding: 0 6px 0 10px; border-radius: var(--radius-sm); color: var(--ink-2); cursor: pointer; }
+.hist-item:hover { background: var(--hover); }
+.hist-item.on { background: #e9ebf3; color: var(--ink); font-weight: 550; }
+.hist-item .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; }
+.hist-item .more { opacity: 0; }
+.hist-item:hover .more { opacity: 1; }
+.dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.dot.run { background: var(--success); box-shadow: 0 0 0 3px var(--success-weak); }
+.dot.wait { background: var(--warning); box-shadow: 0 0 0 3px var(--warning-weak); }
+.sider-foot { border-top: 1px solid var(--line-2); padding: 8px 10px; }
+.main { flex: 1; min-width: 0; overflow-y: auto; position: relative; }
+.main.white { background: var(--surface); }
+.page { padding: 24px 32px 60px; max-width: 1280px; margin: 0 auto; }
+.page-head { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; min-height: 36px; }
+
+/* ---------- 通用组件 ---------- */
+.btn { height: 34px; padding: 0 14px; border-radius: var(--radius-sm); border: 1px solid var(--line); background: var(--surface); display: inline-flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer; font-weight: 550; white-space: nowrap; color: var(--ink); }
+.btn:hover { border-color: #cfd3dd; background: var(--hover); }
+.btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+.btn.primary:hover { background: var(--primary-2); }
+.btn.danger { color: var(--danger); }
+.btn.danger.solid { background: var(--danger); border-color: var(--danger); color: #fff; }
+.btn.ghost { border-color: transparent; background: transparent; }
+.btn.ghost:hover { background: var(--hover); }
+.btn.sm { height: 28px; padding: 0 10px; font-size: 13px; }
+.btn[disabled] { opacity: .5; cursor: not-allowed; }
+.ibtn { width: 32px; height: 32px; border-radius: var(--radius-sm); border: none; background: transparent; display: inline-grid; place-items: center; cursor: pointer; color: var(--ink-3); flex: none; }
+.ibtn:hover { background: var(--hover); color: var(--ink); }
+.ibtn.sm { width: 26px; height: 26px; }
+.ibtn.on { background: var(--primary-weak); color: var(--primary-ink); }
+.input, .select, textarea.input { height: 34px; border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 0 11px; background: var(--surface); outline: none; width: 100%; }
+textarea.input { height: auto; padding: 9px 11px; resize: vertical; line-height: 1.6; }
+.input:focus, .select:focus { border-color: var(--primary-2); box-shadow: 0 0 0 3px var(--primary-weak); }
+.search { position: relative; }
+.search svg { position: absolute; left: 10px; top: 9px; color: var(--ink-4); }
+.search .input { padding-left: 32px; }
+.tag { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; border-radius: 6px; font-size: 12px; font-weight: 550; background: var(--line-2); color: var(--ink-2); white-space: nowrap; }
+.tag.primary { background: var(--primary-weak); color: var(--primary-ink); }
+.tag.success { background: var(--success-weak); color: var(--success); }
+.tag.warning { background: var(--warning-weak); color: var(--warning); }
+.tag.danger { background: var(--danger-weak); color: var(--danger); }
+.tag.blue { background: var(--secondary-weak); color: #0369a1; }
+.badge { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--danger); color: #fff; font-size: 11px; font-weight: 650; display: inline-grid; place-items: center; }
+.badge.gray { background: var(--line); color: var(--ink-2); }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+.card.pad { padding: 16px 18px; }
+.tabs { display: flex; gap: 22px; border-bottom: 1px solid var(--line); margin-bottom: 18px; }
+.tabs a { padding: 10px 0; color: var(--ink-3); font-weight: 550; position: relative; }
+.tabs a:hover { color: var(--ink); }
+.tabs a.on { color: var(--ink); }
+.tabs a.on::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--primary); border-radius: 2px; }
+.seg { display: inline-flex; background: var(--line-2); border-radius: 9px; padding: 3px; gap: 2px; }
+.seg a { padding: 4px 12px; border-radius: 7px; color: var(--ink-3); font-weight: 550; font-size: 13px; }
+.seg a.on { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-xs); }
+.switch { display: inline-block; vertical-align: middle; width: 36px; height: 20px; border-radius: 10px; background: #d5d9e2; position: relative; cursor: pointer; flex: none; transition: background .15s; }
+.switch::after { content: ""; position: absolute; width: 16px; height: 16px; border-radius: 50%; background: #fff; top: 2px; left: 2px; transition: left .15s; box-shadow: 0 1px 2px rgba(0,0,0,.2); }
+.switch.on { background: var(--primary); }
+.switch.on::after { left: 18px; }
+.switch.dis { opacity: .45; cursor: not-allowed; }
+.table { width: 100%; border-collapse: separate; border-spacing: 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.table th { text-align: left; font-weight: 600; font-size: 12.5px; color: var(--ink-3); background: var(--surface-2); padding: 10px 14px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.table td { padding: 12px 14px; border-bottom: 1px solid var(--line-2); vertical-align: middle; }
+.table tr:last-child td { border-bottom: none; }
+.table tr.click:hover td { background: var(--surface-2); cursor: pointer; }
+.empty { text-align: center; padding: 56px 20px; color: var(--ink-3); }
+.empty .ill { width: 56px; height: 56px; border-radius: 16px; background: var(--primary-weak); color: var(--primary); display: grid; place-items: center; margin: 0 auto 14px; }
+.empty .ill svg { width: 26px; height: 26px; }
+.empty h3 { margin-bottom: 6px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); font-size: 13px; }
+.chip .x { color: var(--ink-4); cursor: pointer; }
+.chip .x:hover { color: var(--danger); }
+.kv { display: grid; grid-template-columns: 110px 1fr; gap: 10px 14px; font-size: 13.5px; }
+.kv dt { color: var(--ink-3); }
+.kv dd { margin: 0; }
+.divider { height: 1px; background: var(--line-2); margin: 14px 0; }
+.label { font-size: 13px; font-weight: 600; color: var(--ink-2); margin-bottom: 6px; display: block; }
+.help { font-size: 12.5px; color: var(--ink-3); margin-top: 4px; }
+.radio-card { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; cursor: pointer; display: flex; gap: 10px; align-items: flex-start; background: var(--surface); }
+.radio-card:hover { border-color: #cfd3dd; }
+.radio-card.on { border-color: var(--primary-2); background: #f8f8ff; box-shadow: 0 0 0 3px var(--primary-weak); }
+.radio-card .r { width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid #c5cad6; flex: none; margin-top: 2px; }
+.radio-card.on .r { border: 5px solid var(--primary); }
+
+/* 下拉菜单 / 浮层 */
+.pop { position: absolute; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow-lg); padding: 6px; z-index: 60; min-width: 200px; }
+.pop .mi { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 7px; cursor: pointer; color: var(--ink-2); }
+.pop .mi:hover { background: var(--hover); color: var(--ink); }
+.pop .mi.on { color: var(--primary-ink); }
+.pop .mi.danger { color: var(--danger); }
+.pop .sep { height: 1px; background: var(--line-2); margin: 5px 4px; }
+.pop .ph { font-size: 11.5px; color: var(--ink-4); padding: 6px 10px 2px; }
+.mask { position: fixed; inset: 0; background: rgba(15,23,42,.36); z-index: 80; display: grid; place-items: center; }
+.modal { background: var(--surface); border-radius: 14px; width: 560px; max-width: calc(100vw - 40px); max-height: calc(100vh - 60px); display: flex; flex-direction: column; box-shadow: var(--shadow-lg); }
+.modal.wide { width: 760px; }
+.modal-h { display: flex; align-items: center; padding: 16px 20px; border-bottom: 1px solid var(--line-2); }
+.modal-b { padding: 18px 20px; overflow-y: auto; }
+.modal-f { padding: 12px 20px; border-top: 1px solid var(--line-2); display: flex; justify-content: flex-end; gap: 8px; }
+.drawer-mask { position: fixed; inset: 0; background: rgba(15,23,42,.2); z-index: 70; }
+.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: 520px; max-width: 92vw; background: var(--surface); z-index: 71; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; }
+.toast { position: fixed; top: 64px; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 9px 16px; border-radius: 10px; font-size: 13.5px; z-index: 100; box-shadow: var(--shadow-md); }
+
+/* ---------- 设计说明（评审用，非产品界面） ---------- */
+.notes { width: 300px; flex: none; overflow-y: auto; background: #fffdf3; border-left: 1px solid #f3e3a6; padding: 14px 16px; font-size: 13px; }
+.notes h4 { font-size: 13px; margin: 10px 0 4px; color: #92400e; }
+.notes ul { margin: 0; padding-left: 18px; }
+.notes li { margin: 3px 0; color: #57534e; }
+.notes .be { display: inline-block; font-size: 11px; background: #fde68a; color: #92400e; border-radius: 4px; padding: 0 5px; margin-right: 4px; }
+
+/* ---------- 智能平台首页 ---------- */
+.hero { min-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px 24px 90px; }
+.hero h1 { font-size: 28px; font-weight: 650; margin-bottom: 26px; letter-spacing: .01em; }
+.hero .composer { width: 100%; max-width: 760px; }
+.quick { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 18px; max-width: 760px; }
+.quick .chip { cursor: pointer; height: 34px; border-radius: 17px; color: var(--ink-2); }
+.quick .chip:hover { background: var(--hover); }
+.composer { background: var(--surface); border: 1px solid #dfe2ea; border-radius: 18px; box-shadow: 0 2px 10px rgba(16,24,40,.06); padding: 12px 12px 10px 16px; }
+.composer:focus-within { border-color: #c7cbf6; box-shadow: 0 0 0 4px var(--primary-weak), 0 2px 10px rgba(16,24,40,.06); }
+.composer textarea { width: 100%; border: none; outline: none; resize: none; min-height: 52px; max-height: 220px; font-size: 15px; line-height: 1.6; background: transparent; padding: 2px 0; }
+.composer .bar { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+.pill { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border-radius: 15px; border: 1px solid var(--line); background: var(--surface); cursor: pointer; font-size: 13px; color: var(--ink-2); font-weight: 550; white-space: nowrap; }
+.pill:hover { background: var(--hover); }
+.send { width: 34px; height: 34px; border-radius: 50%; border: none; background: var(--primary); color: #fff; display: grid; place-items: center; cursor: pointer; margin-left: auto; }
+.send[disabled] { background: #c7cbd6; cursor: not-allowed; }
+.attach { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+
+/* ---------- 对话页 ---------- */
+.chat { display: flex; flex-direction: column; height: 100%; }
+.chat-head { height: 52px; flex: none; display: flex; align-items: center; gap: 10px; padding: 0 16px 0 22px; border-bottom: 1px solid var(--line-2); background: var(--surface); }
+.chat-scroll { flex: 1; overflow-y: auto; }
+.chat-col { max-width: 780px; margin: 0 auto; padding: 24px 24px 20px; }
+.chat-foot { flex: none; padding: 0 24px 18px; }
+.chat-foot .composer { max-width: 780px; margin: 0 auto; }
+.m-user { display: flex; justify-content: flex-end; margin: 6px 0 22px; }
+.m-user .b { background: #f1f3f9; padding: 10px 14px; border-radius: 16px 16px 4px 16px; max-width: 78%; white-space: pre-wrap; }
+.m-ai { margin-bottom: 26px; }
+.m-ai .who { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-weight: 600; font-size: 13.5px; }
+.m-ai .prose { font-size: 15px; line-height: 1.75; color: var(--ink); }
+.m-ai .prose p { margin: 0 0 10px; }
+.m-ai .prose ul { margin: 0 0 10px; padding-left: 22px; }
+.m-ai .prose.aside { color: var(--ink-3); font-size: 14px; }
+.m-actions { display: flex; gap: 2px; margin-top: 4px; }
+.m-actions .ibtn { width: 28px; height: 28px; color: var(--ink-4); }
+.m-actions .ibtn:hover { color: var(--ink); }
+.steps { border: 1px solid var(--line); border-radius: 12px; margin: 4px 0 12px; background: var(--surface); overflow: hidden; }
+.steps-h { display: flex; align-items: center; gap: 8px; padding: 9px 12px; cursor: pointer; color: var(--ink-2); font-size: 13.5px; font-weight: 550; }
+.steps-h:hover { background: var(--surface-2); }
+.steps-b { border-top: 1px solid var(--line-2); padding: 6px 12px 8px; }
+.step { display: flex; align-items: center; gap: 10px; padding: 6px 0; font-size: 13.5px; color: var(--ink-2); }
+.step .ic { width: 24px; height: 24px; border-radius: 7px; background: var(--line-2); display: grid; place-items: center; color: var(--ink-3); flex: none; }
+.step .ic svg { width: 14px; height: 14px; }
+.step .tm { margin-left: auto; color: var(--ink-4); font-size: 12px; }
+.spin { width: 14px; height: 14px; border: 2px solid #c7cbf6; border-top-color: var(--primary); border-radius: 50%; animation: spin .8s linear infinite; flex: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.subcard { border: 1px solid var(--line); border-left: 3px solid var(--secondary); border-radius: 10px; margin: 8px 0; background: var(--surface); }
+.subcard .h { display: flex; align-items: center; gap: 8px; padding: 9px 12px; cursor: pointer; font-size: 13.5px; }
+.subcard .b { border-top: 1px solid var(--line-2); padding: 8px 12px 10px 14px; font-size: 13.5px; color: var(--ink-2); }
+.ask { border: 1px solid #f5d38b; background: #fffbf0; border-radius: 12px; padding: 14px 16px; margin: 8px 0 12px; }
+.ask pre { background: #fff; border: 1px solid #f3e2b8; border-radius: 8px; padding: 8px 10px; margin: 8px 0 10px; font-family: var(--mono); font-size: 12.5px; white-space: pre-wrap; }
+.todo { border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; margin: 6px 0 12px; }
+.todo .it { display: flex; gap: 8px; align-items: center; padding: 3px 0; font-size: 13.5px; }
+.todo .ck { width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid #c5cad6; flex: none; display: grid; place-items: center; }
+.todo .ck.done { background: var(--success); border-color: var(--success); color: #fff; }
+.todo .ck.doing { border-color: var(--primary); border-top-color: transparent; animation: spin 1.2s linear infinite; }
+.todo .done-t { color: var(--ink-4); text-decoration: line-through; }
+.cursor { display: inline-block; width: 8px; height: 16px; background: var(--primary); vertical-align: -2px; animation: blink 1s step-end infinite; border-radius: 2px; }
+@keyframes blink { 50% { opacity: 0; } }
+
+/* ---------- 列表卡片 ---------- */
+.toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 14px; }
+.acard { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 10px; cursor: pointer; transition: box-shadow .15s, border-color .15s; position: relative; }
+.acard:hover { border-color: #d6d9e3; box-shadow: var(--shadow-md); }
+.acard .desc { color: var(--ink-3); font-size: 13px; line-height: 1.55; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 40px; }
+.acard .foot { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--ink-3); margin-top: auto; }
+.acard .acts { position: absolute; top: 12px; right: 10px; }
+
+/* ---------- 智能体编辑（编排 + 调试预览） ---------- */
+.ed { display: flex; flex-direction: column; height: 100%; background: var(--bg); }
+.ed-head { height: 58px; flex: none; display: flex; align-items: center; gap: 12px; padding: 0 18px; background: var(--surface); border-bottom: 1px solid var(--line); }
+.ed-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 440px; }
+.ed-left { overflow-y: auto; padding: 20px 24px 60px; }
+.ed-left-in { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 12px; }
+.sec { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
+.sec-h { display: flex; align-items: center; gap: 10px; padding: 13px 16px; cursor: pointer; }
+.sec-h .chev { transition: transform .15s; color: var(--ink-4); }
+.sec.open .sec-h .chev { transform: rotate(90deg); }
+.sec-h .sum { margin-left: auto; color: var(--ink-3); font-size: 12.5px; }
+.sec-b { padding: 2px 16px 16px; display: none; }
+.sec.open .sec-b { display: block; }
+.cap { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line-2); }
+.cap:last-child { border-bottom: none; }
+.cap .ic { width: 32px; height: 32px; border-radius: 9px; background: var(--primary-weak); color: var(--primary); display: grid; place-items: center; flex: none; }
+.ed-preview { border-left: 1px solid var(--line); background: var(--surface); display: flex; flex-direction: column; min-height: 0; }
+.ed-preview .ph { height: 46px; display: flex; align-items: center; gap: 8px; padding: 0 14px; border-bottom: 1px solid var(--line-2); flex: none; }
+.ed-preview .pb { flex: 1; overflow-y: auto; padding: 16px; }
+.ed-preview .pf { padding: 10px 14px 14px; }
+.ed-preview .composer { border-radius: 14px; padding: 8px 8px 8px 12px; }
+.ed-preview .composer textarea { min-height: 36px; font-size: 14px; }
+.ed-preview .m-ai .prose { font-size: 14px; }
+
+/* 文档上传步骤 */
+.drop { border: 1.5px dashed #cdd2de; border-radius: 12px; padding: 28px; text-align: center; color: var(--ink-3); background: var(--surface-2); }
+.steps-line { display: flex; gap: 8px; margin-bottom: 18px; }
+.steps-line .s { flex: 1; display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-4); }
+.steps-line .s b { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; background: var(--line-2); font-size: 12px; }
+.steps-line .s.on { color: var(--ink); font-weight: 600; }
+.steps-line .s.on b { background: var(--primary); color: #fff; }
+.bar-score { height: 6px; border-radius: 3px; background: var(--line-2); overflow: hidden; width: 80px; }
+.bar-score i { display: block; height: 100%; background: var(--primary-2); }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+/* =====================================================================
+ * 图标（lucide 风格，内联 SVG）
+ * ===================================================================== */
+const ICONS = {
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
+  chat: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  bot: '<rect x="3" y="8" width="18" height="12" rx="3"/><path d="M12 8V4M8.5 14h.01M15.5 14h.01"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  users: '<circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0M16 3.1a4 4 0 0 1 0 7.8M22 21a7 7 0 0 0-5-6.7"/>',
+  book: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/>',
+  spark: '<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 17l.6 1.6L21 19l-1.4.5L19 21l-.6-1.5L17 19l1.4-.4z"/>',
+  plug: '<path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4"/>',
+  layers: '<path d="m12 2 10 5-10 5L2 7z"/><path d="m2 17 10 5 10-5M2 12l10 5 10-5"/>',
+  sliders: '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>',
+  left: '<path d="m15 18-6-6 6-6"/>',
+  right: '<path d="m9 18 6-6-6-6"/>',
+  down: '<path d="m6 9 6 6 6-6"/>',
+  more: '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
+  up: '<path d="M12 19V5M5 12l7-7 7 7"/>',
+  clip: '<path d="m21.4 11.1-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/>',
+  file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>',
+  folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  share: '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
+  refresh: '<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/>',
+  like: '<path d="M7 10v11H4V10zM7 10l4-8a3 3 0 0 1 3 3v4h5.5a2 2 0 0 1 2 2.3l-1.4 8A2 2 0 0 1 18 21H7"/>',
+  dislike: '<path d="M17 14V3h3v11zM17 14l-4 8a3 3 0 0 1-3-3v-4H4.5a2 2 0 0 1-2-2.3l1.4-8A2 2 0 0 1 6 3h11"/>',
+  terminal: '<path d="m4 17 6-5-6-5M12 19h8"/>',
+  pencil: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+  trash: '<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>',
+  archive: '<rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8M10 12h4"/>',
+  bulb: '<path d="M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z"/>',
+  logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>',
+  key: '<circle cx="7.5" cy="15.5" r="4.5"/><path d="m10.7 12.3 9.8-9.8M17 6l3 3M14 9l2 2"/>',
+  upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>',
+  panel: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/>',
+  alert: '<circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
+  lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+  play: '<path d="M7 4l13 8-13 8z"/>',
+  list: '<path d="M9 6h12M9 12h12M9 18h12M4 6h.01M4 12h.01M4 18h.01"/>',
+  bookmark: '<path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>',
+  help: '<circle cx="12" cy="12" r="9"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3M12 17h.01"/>',
+  shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+  eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+  grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+  star: '<path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/>',
+  zap: '<path d="M13 2 3 14h8l-1 8 10-12h-8z"/>',
+  link: '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>',
+};
+const ic = (n, cls = '') => `<svg class="i ${n === 'more' ? 'fill' : ''} ${cls}" viewBox="0 0 24 24">${ICONS[n] || ''}</svg>`;
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const COLORS = ['#6366f1', '#0ea5e9', '#f59e0b', '#10b981', '#ec4899', '#8b5cf6', '#14b8a6', '#ef4444'];
+const av = (name, color, size = 30, sq = true) =>
+  `<span class="avatar ${sq ? 'sq' : ''}" style="width:${size}px;height:${size}px;font-size:${Math.round(size * 0.42)}px;background:${color}">${esc((name || '?').slice(0, 1))}</span>`;
+
+/* =====================================================================
+ * 演示数据（内存态，刷新后重置）
+ * ===================================================================== */
+const ME = { name: '周景行', account: 'zhou.jx', dept: '平台部', color: '#6366f1' };
+const D = {
+  agents: [
+    { id: 'general', name: '通用助手', color: '#6366f1', desc: '写代码、跑命令、查资料、整理文档都能做，记得你的偏好，能查你有权限的知识库。适合大多数任务。', owner: '平台', mine: false, isDefault: true, status: 'published', engine: 'standard', last: '刚刚', lastN: 0, updated: '11-08', version: 3, sharedTo: '全员', level: 'edit' },
+    { id: 'coder', name: '编程助手', color: '#0ea5e9', desc: '在独立的开发环境里用 Claude Code 写代码、改文件、跑测试，适合需要动手的工程任务。', owner: '周景行', mine: true, status: 'published', engine: 'claude', last: '昨天', lastN: 1, updated: '11-09', version: 2, sharedTo: '研发中心', level: 'owner' },
+    { id: 'kbqa', name: '产品知识问答', color: '#10b981', desc: '基于产品手册和常见问题回答客户咨询，回答附出处，不确定时会说明。', owner: '李工', mine: false, status: 'published', engine: 'standard', last: '3 天前', lastN: 3, updated: '10-30', version: 5, sharedTo: '客服中心', level: 'use' },
+    { id: 'weekly', name: '周报助手', color: '#f59e0b', desc: '汇总你本周的提交、工单和会议纪要，生成周报草稿。', owner: '周景行', mine: true, status: 'draft', engine: 'standard', last: '—', lastN: 99, updated: '今天', version: 0, sharedTo: '仅自己', level: 'owner' },
+    { id: 'data', name: '数据分析师', color: '#ec4899', desc: '读取表格文件，做统计分析和图表，给出结论和建议。', owner: '王芳', mine: false, status: 'published', engine: 'standard', last: '上周', lastN: 7, updated: '10-21', version: 1, sharedTo: '全员', level: 'use' },
+    { id: 'acp-old', name: 'ACP 委派测试', color: '#64748b', desc: '早期委派测试。', owner: '周景行', mine: true, status: 'archived', engine: 'standard', last: '10-22', lastN: 20, updated: '10-22', version: 2, sharedTo: '仅自己', level: 'owner' },
+    { id: 'bench', name: '评测 · 全工具', color: '#64748b', desc: '评测专用。', owner: '周景行', mine: true, status: 'archived', engine: 'standard', last: '10-27', lastN: 15, updated: '10-27', version: 1, sharedTo: '仅自己', level: 'owner' },
+  ],
+  threads: [
+    { id: 't1', title: '整理 Q4 平台路线图', agent: 'general', group: '今天', state: 'run' },
+    { id: 't2', title: '修复登录页跳转问题', agent: 'coder', group: '今天', state: 'wait' },
+    { id: 't3', title: '协调者助手功能介绍', agent: 'general', group: '昨天' },
+    { id: 't4', title: 'CLI 委派验证', agent: 'coder', group: '昨天' },
+    { id: 't5', title: '客户退款政策怎么回复', agent: 'kbqa', group: '近 7 天' },
+    { id: 't6', title: '十月工单数据分析', agent: 'data', group: '近 7 天' },
+    { id: 't7', title: 'HTML 原型六个界面', agent: 'general', group: '更早' },
+    { id: 't8', title: '用户姓名确认', agent: 'general', group: '更早' },
+  ],
+  datasets: [
+    { id: 'kb1', name: '产品手册', icon: '📘', desc: '各产品线的功能说明、操作指南与版本说明', docs: 48, words: '62 万', owner: '李工', mine: false, level: 'edit', review: true, updated: '昨天' },
+    { id: 'kb2', name: '客服常见问题', icon: '💬', desc: '退款、发票、账号、物流等高频问题与标准回复', docs: 126, words: '18 万', owner: '李工', mine: false, level: 'use', review: true, updated: '11-06' },
+    { id: 'kb3', name: '平台部技术文档', icon: '🛠', desc: '架构设计、部署手册、故障复盘', docs: 35, words: '41 万', owner: '周景行', mine: true, level: 'owner', review: false, updated: '今天' },
+    { id: 'kb4', name: '公司制度', icon: '🏢', desc: '考勤、报销、出差、采购等制度文件', docs: 22, words: '9 万', owner: '行政部', mine: false, level: 'use', review: false, updated: '10-12' },
+  ],
+  docs: [
+    { name: '部署手册 v3.md', state: 'ok', chunks: 86, by: '周景行', at: '今天 10:12' },
+    { name: '横向扩展设计.pdf', state: 'processing', chunks: 0, by: '周景行', at: '今天 10:40' },
+    { name: '11-05 故障复盘.docx', state: 'review', chunks: 24, by: '王芳', at: '昨天' },
+    { name: '沙箱镜像清单.xlsx', state: 'failed', chunks: 0, by: '周景行', at: '11-07', err: '表格超过 50 个工作表' },
+    { name: '监控告警说明.md', state: 'ok', chunks: 31, by: '赵强', at: '11-03' },
+  ],
+  reviewQueue: [
+    { doc: '11-05 故障复盘.docx', kb: '平台部技术文档', by: '王芳', at: '昨天' },
+    { doc: '退款政策 2026 版.pdf', kb: '客服常见问题', by: '陈晨', at: '11-08' },
+    { doc: '新品 X2 功能说明.md', kb: '产品手册', by: '刘洋', at: '11-07' },
+  ],
+  skills: [
+    { id: 's1', name: '代码评审', desc: '按团队规范逐项检查代码改动，输出问题清单和修改建议', src: '团队', ver: 'v4', uses: 12, state: 'published', script: false, by: '周景行', mine: true },
+    { id: 's2', name: 'PDF 处理', desc: '提取 PDF 文字与表格，合并、拆分、填写表单', src: '内置', ver: 'v2', uses: 31, state: 'published', script: true, by: '平台' },
+    { id: 's3', name: '周报写作', desc: '把零散的工作记录整理成结构清晰的周报', src: '团队', ver: 'v1', uses: 6, state: 'published', script: false, by: '王芳' },
+    { id: 's4', name: '数据可视化', desc: '根据表格数据选择合适的图表并生成图片', src: '第三方', ver: 'v3', uses: 9, state: 'published', script: true, by: '赵强' },
+    { id: 's5', name: '合同审阅', desc: '识别合同中的风险条款并给出修改意见', src: '团队', ver: 'v1', uses: 0, state: 'review', script: false, by: '陈晨' },
+    { id: 's6', name: '数据库迁移检查', desc: '检查迁移脚本的锁表、回滚和数据兼容风险', src: '团队', ver: 'v2', uses: 0, state: 'review', script: true, by: '周景行', mine: true },
+    { id: 's7', name: '旧版网页抓取', desc: '已被「网页阅读」取代', src: '第三方', ver: 'v1', uses: 0, state: 'disabled', script: true, by: '赵强' },
+  ],
+  mcp: [
+    { id: 'serpapi', name: '网页搜索', code: 'serpapi', desc: '通过搜索引擎查找公开网页信息', tools: 1, vis: 'private', state: 'on', mine: true, canUse: true, refs: 3, src: 'REST 转换' },
+    { id: 'crm', name: '客户管理', code: 'crm', desc: '查询客户档案、联系人、商机与跟进记录', tools: 8, vis: 'private', state: 'on', mine: false, canUse: true, refs: 5, src: 'MCP Server' },
+    { id: 'jira', name: '项目管理', code: 'jira', desc: '查询与创建需求、缺陷、迭代', tools: 12, vis: 'public', state: 'on', mine: false, canUse: true, refs: 9, src: 'MCP Server' },
+    { id: 'erp', name: '财务报表', code: 'erp', desc: '查询科目余额、费用明细与预算执行', tools: 6, vis: 'private', state: 'on', mine: false, canUse: false, refs: 1, src: 'gRPC 转换' },
+  ],
+  mcpTools: [
+    { name: 'search', title: '网页搜索', desc: '按关键词搜索网页，返回标题、摘要和链接', side: '只读', on: true },
+  ],
+  models: [
+    { id: 'm1', name: 'DeepSeek V4 Pro', code: 'deepseek-v4-pro', provider: 'DeepSeek', ctx: '1M', out: '384K', price: '$1.32 / $3.96', vis: 'public', ok: true, tag: '默认' },
+    { id: 'm2', name: 'DeepSeek Flash', code: 'deepseek-flash', provider: 'DeepSeek', ctx: '1M', out: '384K', price: '$0.30 / $1.20', vis: 'public', ok: true, tag: '快速' },
+    { id: 'm3', name: 'Gemini 2.5 Flash', code: 'gemini-2.5-flash', provider: 'Google', ctx: '1M', out: '64K', price: '$0.30 / $2.50', vis: 'public', ok: true },
+    { id: 'm4', name: 'Claude Sonnet 5', code: 'claude-sonnet-5', provider: 'Anthropic', ctx: '1M', out: '64K', price: '$3.00 / $15.00', vis: 'private', ok: true, granted: '研发中心' },
+  ],
+  memories: [
+    { id: 6, text: '用户叫周景行，不叫周周', topic: '身份与背景', src: '对话后整理', from: '用户姓名确认', at: '10-29' },
+    { id: 4, text: '用户大约 1990 年出生', topic: '身份与背景', src: '对话中记下', from: '协调者助手功能介绍', at: '10-29' },
+    { id: 3, text: '用户在平台部，负责 Atlas 智能体平台', topic: '工作', src: '手动添加', from: '', at: '10-28' },
+    { id: 2, text: '回答一律使用中文，技术术语保留英文', topic: '沟通偏好', src: '对话中记下', from: '周周的中文称呼约定', at: '10-29' },
+  ],
+  configs: [
+    { key: '默认智能体', val: '通用助手', type: 'agent', changed: true },
+    { key: '会话标题自动生成', val: '开', type: 'bool' },
+    { key: '单人同时进行的对话数', val: '5', type: 'int' },
+    { key: '附件大小上限', val: '50 MB', type: 'size' },
+    { key: '沙箱闲置回收时间', val: '30 分钟', type: 'dur', changed: true },
+  ],
+  jobs: [
+    { name: '异常对话兜底恢复', svc: '智能平台', rule: '每 30 秒', last: '成功', at: '刚刚' },
+    { name: '闲置沙箱回收', svc: '智能平台', rule: '每 5 分钟', last: '成功', at: '2 分钟前' },
+    { name: '文档入库巡检', svc: '知识库', rule: '每 1 分钟', last: '成功', at: '刚刚' },
+    { name: '模型可用性探测', svc: '模型', rule: '每 10 分钟', last: '失败', at: '6 分钟前', fails: 2 },
+    { name: 'MCP 工具定义刷新', svc: 'MCP', rule: '每 1 小时', last: '成功', at: '24 分钟前' },
+  ],
+};
+const agentOf = (id) => D.agents.find((a) => a.id === id) || D.agents[0];
+
+/* =====================================================================
+ * 状态与路由
+ * ===================================================================== */
+const S = {
+  role: 'admin',           // admin | user（右上角头像菜单里切换，演示权限差异）
+  collapsed: false,        // 左侧菜单收缩
+  notes: true,             // 设计说明
+  pop: null,               // 当前打开的浮层 {id, x, y}
+  modal: null,
+  drawer: null,
+  toast: null,
+  composerAgent: 'general',
+  composerMode: 'auto',
+  agentScope: 'all', agentSort: 'recent', agentQ: '', showArchived: false,
+  kbScope: 'all', kbTab: 'docs',
+  skillQ: '',
+  mcpScope: 'use', mcpTab: 'tools',
+  meTab: 'memory',
+  secOpen: { prompt: true, model: true, cap: true, know: true, skill: false, tool: false, collab: false, adv: false },
+  stepsOpen: {},
+  live: {},                // 新建会话的模拟回复进度
+};
+const isAdmin = () => S.role === 'admin';
+
+function parseRoute() {
+  const h = (location.hash || '#/ai').slice(2).split('/');
+  return { p: h[0] || 'ai', a: h[1] || '', b: h[2] || '', c: h[3] || '' };
+}
+const go = (h) => { S.pop = null; location.hash = h; };
+window.addEventListener('hashchange', () => { S.pop = null; S.modal = null; S.drawer = null; S.preview = null; render(); document.querySelector('.main')?.scrollTo(0, 0); });
+
+const PLATFORMS = [
+  { id: 'ai', name: '智能平台', icon: 'zap' },
+  { id: 'kb', name: '知识库', icon: 'book' },
+  { id: 'skills', name: '技能', icon: 'spark' },
+  { id: 'mcp', name: 'MCP', icon: 'plug' },
+  { id: 'models', name: '模型', icon: 'layers' },
+  { id: 'sys', name: '系统', icon: 'sliders', admin: true },
+];
+
+/* 每个平台的二级菜单 */
+function siderItems(p) {
+  switch (p) {
+    case 'ai': return [
+      { h: '#/ai/agents', icon: 'bot', t: '智能体', on: (r) => r.a === 'agents' },
+      { h: '#/ai/me', icon: 'user', t: '个性化', on: (r) => r.a === 'me' },
+    ];
+    case 'kb': return [
+      { h: '#/kb', icon: 'book', t: '知识库', on: (r) => r.a !== 'review' },
+      { h: '#/kb/review', icon: 'check', t: '待审核', badge: D.reviewQueue.length, on: (r) => r.a === 'review' },
+    ];
+    case 'skills': return [
+      { h: '#/skills', icon: 'grid', t: '技能广场', on: (r) => !r.a },
+      { h: '#/skills/mine', icon: 'upload', t: '我上传的', on: (r) => r.a === 'mine' },
+      ...(isAdmin() ? [{ h: '#/skills/review', icon: 'shield', t: '待审查', badge: D.skills.filter((s) => s.state === 'review').length, on: (r) => r.a === 'review' }] : []),
+    ];
+    case 'mcp': return [
+      { h: '#/mcp', icon: 'plug', t: '服务', on: (r) => !r.a || r.a === 's' },
+      { h: '#/mcp/keys', icon: 'key', t: '我的 Key', on: (r) => r.a === 'keys' },
+      ...(isAdmin() ? [{ h: '#/mcp/agent-keys', icon: 'bot', t: '智能体 Key', on: (r) => r.a === 'agent-keys' }] : []),
+    ];
+    case 'models': return [
+      { h: '#/models', icon: 'layers', t: '模型', on: (r) => !r.a },
+      { h: '#/models/keys', icon: 'key', t: '我的 Key', on: (r) => r.a === 'keys' },
+      ...(isAdmin() ? [{ h: '#/models/client-keys', icon: 'bot', t: '客户端 Key', on: (r) => r.a === 'client-keys' }] : []),
+    ];
+    case 'sys': return [
+      { h: '#/sys', icon: 'star', t: '平台设置', on: (r) => !r.a },
+      { h: '#/sys/config', icon: 'sliders', t: '配置项', on: (r) => r.a === 'config' },
+      { h: '#/sys/jobs', icon: 'clock', t: '定时任务', on: (r) => r.a === 'jobs' },
+    ];
+  }
+  return [];
+}
+
+function topbar(r) {
+  return `<header class="top">
+    <div class="brand" data-go="#/ai"><span class="logo">A</span>Atlas</div>
+    <nav class="pnav">${PLATFORMS.filter((p) => !p.admin || isAdmin()).map((p) =>
+      `<a href="#/${p.id}" class="${r.p === p.id ? 'on' : ''}">${ic(p.icon)}${p.name}</a>`).join('')}</nav>
+    <div class="top-right">
+      <button class="btn sm ${S.notes ? '' : 'ghost'}" data-act="toggleNotes" title="评审用：每页的设计说明与后端依赖">${ic('bulb')}设计说明</button>
+      <span style="cursor:pointer" data-pop="me">${av(ME.name, ME.color, 30, false)}</span>
+    </div>
+  </header>`;
+}
+
+function sider(r) {
+  const items = siderItems(r.p);
+  // 编辑智能体时默认收起，把宽度让给「配置 + 调试预览」（Coze / Dify 同样处理）；在编辑页里点展开只对编辑页生效
+  const inEditor = r.p === 'ai' && r.a === 'agents' && !!r.b;
+  const min = inEditor ? !S.editorExpand : S.collapsed;
+  const top = r.p === 'ai'
+    ? `<div class="new-chat" data-go="#/ai" title="新对话">${ic('plus')}<span>新对话</span></div>`
+    : '';
+  const hist = r.p === 'ai' && !min ? historyList(r) : '<div class="sp"></div>';
+  return `<aside class="sider ${min ? 'min' : ''}">
+    <div class="sider-top">${top}${items.map((it) => `<a class="snav ${it.on(r) ? 'on' : ''}" href="${it.h}" title="${it.t}">${ic(it.icon)}<span>${it.t}</span>${it.badge ? `<b class="badge">${it.badge}</b>` : ''}</a>`).join('')}</div>
+    ${hist}
+    <div class="sider-foot"><a class="snav" data-act="collapse" title="${min ? '展开菜单' : '收起菜单'}">${ic(min ? 'right' : 'left')}<span>收起</span></a></div>
+  </aside>`;
+}
+
+function historyList(r) {
+  const groups = [...new Set(D.threads.map((t) => t.group))];
+  return `<div class="hist">
+    <div class="hist-head"><span class="xs muted" style="font-weight:600">最近对话</span><button class="ibtn sm" title="搜索对话" data-act="toast" data-msg="搜索对话（标题与内容）">${ic('search')}</button></div>
+    ${groups.map((g) => `<div class="hist-group">${g}</div>${D.threads.filter((t) => t.group === g).map((t) => `
+      <div class="hist-item ${r.a === 'c' && r.b === t.id ? 'on' : ''}" data-go="#/ai/c/${t.id}">
+        ${t.state === 'run' ? '<span class="dot run" title="进行中"></span>' : t.state === 'wait' ? '<span class="dot wait" title="等你确认"></span>' : ''}
+        <span class="t">${esc(t.title)}</span>
+        <button class="ibtn sm more" data-pop="thread:${t.id}" title="更多">${ic('more')}</button>
+      </div>`).join('')}`).join('')}
+  </div>`;
+}
+
+/* =====================================================================
+ * 渲染
+ * ===================================================================== */
+function render() {
+  const r = parseRoute();
+  if (r.p === 'sys' && !isAdmin()) { location.hash = '#/ai'; return; }
+  const { html, white, full } = page(r);
+  document.getElementById('app').innerHTML =
+    topbar(r) +
+    `<div class="body">${sider(r)}<main class="main ${white ? 'white' : ''}">${html}</main>${S.notes ? notesPanel(r) : ''}</div>` +
+    overlays(r) + (S.toast ? `<div class="toast">${esc(S.toast)}</div>` : '');
+  afterRender(r);
+}
+
+function page(r) {
+  switch (r.p) {
+    case 'ai':
+      if (!r.a) return { html: aiHome(), white: true };
+      if (r.a === 'c') return { html: chatPage(r.b), white: true };
+      if (r.a === 'agents' && r.b) return { html: agentEditor(r.b), white: false };
+      if (r.a === 'agents') return { html: agentList() };
+      if (r.a === 'me') return { html: mePage() };
+      break;
+    case 'kb':
+      if (r.a === 'review') return { html: kbReview() };
+      if (r.a) return { html: kbDetail(r.a) };
+      return { html: kbList() };
+    case 'skills':
+      if (r.a === 'review') return { html: skillReview() };
+      return { html: skillList(r.a === 'mine') };
+    case 'mcp':
+      if (r.a === 's') return { html: mcpDetail(r.b) };
+      if (r.a === 'keys') return { html: mcpKeys() };
+      if (r.a === 'agent-keys') return { html: agentKeys('mcp') };
+      return { html: mcpList() };
+    case 'models':
+      if (r.a === 'keys') return { html: modelKeys() };
+      if (r.a === 'client-keys') return { html: agentKeys('models') };
+      return { html: modelList() };
+    case 'sys':
+      if (r.a === 'config') return { html: sysConfig() };
+      if (r.a === 'jobs') return { html: sysJobs() };
+      return { html: sysSettings() };
+  }
+  return { html: '<div class="page">404</div>' };
+}
+
+function toast(msg) {
+  S.toast = msg; render();
+  clearTimeout(toast.t); toast.t = setTimeout(() => { S.toast = null; render(); }, 1800);
+}
+/* =====================================================================
+ * 智能平台 · 输入框（首页、对话页、调试预览共用）
+ * ===================================================================== */
+const MODES = {
+  auto: { t: '自动', d: '常规操作直接执行，有风险的先问你' },
+  manual: { t: '手动', d: '每次动手前都先问你' },
+  plan: { t: '先规划', d: '先给出计划，你确认后再执行' },
+};
+function composer({ id, ph, agentPick = false, running = false, small = false }) {
+  const a = agentOf(S.composerAgent);
+  return `<div class="composer" ${small ? '' : ''}>
+    <textarea id="${id}" rows="${small ? 1 : 2}" placeholder="${esc(ph)}" data-enter="${id}"></textarea>
+    <div class="bar">
+      <button class="ibtn" title="添加文件" data-act="toast" data-msg="选择文件：上传到这次对话的工作区，智能体可以直接读取">${ic('clip')}</button>
+      ${agentPick ? `<span class="pill" data-pop="agentPick">${av(a.name, a.color, 18)}${esc(a.name)}${ic('down')}</span>` : ''}
+      ${small ? '' : `<span class="pill" data-pop="mode" title="${MODES[S.composerMode].d}">${ic('shield')}${MODES[S.composerMode].t}${ic('down')}</span>`}
+      ${running
+        ? `<button class="send" style="background:var(--ink)" title="停止" data-act="toast" data-msg="已停止">${'<svg class="i fill" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>'}</button>`
+        : `<button class="send" title="发送" data-send="${id}">${ic('up')}</button>`}
+    </div>
+  </div>`;
+}
+
+const hour = new Date().getHours();
+const greet = hour < 6 ? '夜深了' : hour < 11 ? '早上好' : hour < 14 ? '中午好' : hour < 18 ? '下午好' : '晚上好';
+
+function aiHome() {
+  const a = agentOf(S.composerAgent);
+  const quick = a.id === 'general'
+    ? ['整理本周的工作周报', '分析一份表格数据', '帮我写一个脚本', '查一下公司报销制度']
+    : a.id === 'coder' ? ['修复一个 bug', '给项目加单元测试', '解释这段代码'] : ['问一个问题', '总结一份文档'];
+  return `<div class="hero">
+    <h1>${greet}，${esc(ME.name.slice(1))}</h1>
+    ${composer({ id: 'home', ph: '有什么可以帮你？', agentPick: true })}
+    <div class="quick">${quick.map((q) => `<span class="chip" data-fill="home" data-text="${esc(q)}">${esc(q)}</span>`).join('')}</div>
+  </div>`;
+}
+
+/* =====================================================================
+ * 智能平台 · 对话
+ * ===================================================================== */
+function userMsg(t) { return `<div class="m-user"><div class="b">${esc(t)}</div></div>`; }
+function aiMsg(agent, inner, { actions = true } = {}) {
+  return `<div class="m-ai"><div class="who">${av(agent.name, agent.color, 22)}${esc(agent.name)}</div>${inner}
+    ${actions ? `<div class="m-actions">
+      <button class="ibtn" title="复制" data-act="toast" data-msg="已复制">${ic('copy')}</button>
+      <button class="ibtn" title="重新生成" data-act="toast" data-msg="重新生成这条回答">${ic('refresh')}</button>
+      <button class="ibtn" title="有帮助" data-act="toast" data-msg="感谢反馈">${ic('like')}</button>
+      <button class="ibtn" title="没帮助" data-act="feedback">${ic('dislike')}</button></div>` : ''}</div>`;
+}
+const STEP_IC = { search: 'search', read: 'file', write: 'pencil', run: 'terminal', memory: 'bookmark', kb: 'book', web: 'globe' };
+function steps(id, list, { running = false } = {}) {
+  const open = S.stepsOpen[id] ?? running;
+  const done = list.filter((s) => !s.running).length;
+  const title = running ? `正在${list[list.length - 1].t}…` : `已完成 ${done} 个步骤`;
+  return `<div class="steps">
+    <div class="steps-h" data-act="toggleSteps" data-id="${id}">${running ? '<span class="spin"></span>' : ic('check')}<span>${esc(title)}</span><span class="sp"></span>${ic(open ? 'down' : 'right')}</div>
+    ${open ? `<div class="steps-b">${list.map((s) => `<div class="step"><span class="ic">${ic(STEP_IC[s.k] || 'zap')}</span><span>${esc(s.t)}</span>${s.running ? '<span class="tm"><span class="spin"></span></span>' : `<span class="tm">${s.ms || ''}</span>`}</div>`).join('')}</div>` : ''}
+  </div>`;
+}
+function subCard(id, agent, task, list, result, running = false) {
+  const open = S.stepsOpen[id] ?? running;
+  return `<div class="subcard">
+    <div class="h" data-act="toggleSteps" data-id="${id}">${av(agent.name, agent.color, 20)}<b>${esc(agent.name)}</b><span class="muted grow ellipsis">${esc(task)}</span>
+      ${running ? '<span class="tag primary">进行中</span>' : '<span class="tag success">已完成</span>'}${ic(open ? 'down' : 'right')}</div>
+    ${open ? `<div class="b">${list.map((s) => `<div class="step"><span class="ic">${ic(STEP_IC[s.k] || 'zap')}</span><span>${esc(s.t)}</span><span class="tm">${s.ms || ''}</span></div>`).join('')}${result ? `<div class="divider" style="margin:8px 0"></div><div>${result}</div>` : ''}</div>` : ''}
+  </div>`;
+}
+function todo(items) {
+  return `<div class="todo"><div class="row sm" style="margin-bottom:4px;font-weight:600">${ic('list')}计划 · ${items.filter((i) => i.s === 'done').length}/${items.length}</div>
+    ${items.map((i) => `<div class="it"><span class="ck ${i.s}">${i.s === 'done' ? '<svg class="i" style="width:10px;height:10px;stroke-width:3" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>' : ''}</span><span class="${i.s === 'done' ? 'done-t' : ''}">${esc(i.t)}</span></div>`).join('')}</div>`;
+}
+
+function conversation(t) {
+  const a = agentOf(t.agent);
+  if (S.live[t.id]) return liveConversation(t);
+  if (t.id === 't1') return userMsg('帮我整理一下 Q4 平台路线图，参考知识库里的规划文档和上个季度的复盘') + aiMsg(a,
+    steps('t1s', [{ k: 'kb', t: '在知识库中查找「平台规划」', ms: '1.2s' }, { k: 'read', t: '阅读 Q3 复盘.md', ms: '0.4s' }, { k: 'memory', t: '查看记忆：工作', ms: '0.1s' }]) +
+    `<div class="prose aside"><p>我先把 Q3 没完成的事项列出来，再对照规划文档排优先级。</p></div>` +
+    todo([{ t: '梳理 Q3 未完成事项', s: 'done' }, { t: '对照规划文档确定 Q4 目标', s: 'doing' }, { t: '输出路线图（按月）', s: '' }]) +
+    `<div class="prose"><p>Q3 未完成的有 4 项，其中「横向扩展」和「沙箱按人共享」已经部分上线<span class="cursor"></span></p></div>`, { actions: false });
+  if (t.id === 't2') return userMsg('登录后没有跳回原来的页面，帮我修一下') + aiMsg(a,
+    steps('t2s', [{ k: 'read', t: '阅读 auth/callback.ts', ms: '0.3s' }, { k: 'write', t: '修改 auth/callback.ts', ms: '0.2s' }, { k: 'run', t: '运行测试 pnpm test auth', ms: '8.4s' }]) +
+    `<div class="prose"><p>找到原因了：登录成功后用的是固定地址，没有带上原来页面的参数。代码已改好、测试通过，还需要重新构建一次来确认页面效果。</p></div>` +
+    `<div class="ask"><div class="row"><b>需要你确认</b><span class="tag warning">等待中</span></div>
+      <div class="sm muted" style="margin-top:4px">即将运行以下命令，会删除旧的构建产物：</div>
+      <pre>rm -rf .next &amp;&amp; pnpm build</pre>
+      <div class="row"><input class="input" style="height:30px" placeholder="不同意的话，可以告诉它怎么做（可选）"><button class="btn sm" data-act="toast" data-msg="已拒绝，智能体会换一种方式继续">拒绝</button><button class="btn sm primary" data-act="toast" data-msg="已允许，继续执行">允许</button></div></div>`, { actions: false });
+  if (t.id === 't3') return userMsg('帮我写个脚本，统计 logs 目录下每天的错误数') + aiMsg(a,
+    steps('t3s', [{ k: 'read', t: '查看 logs 目录', ms: '0.2s' }]) +
+    `<div class="prose aside"><p>这个需要写代码并实际跑一下，交给编程助手来做。</p></div>` +
+    subCard('t3sub', agentOf('coder'), '写脚本统计 logs 下每天的 ERROR 行数并运行验证', [{ k: 'write', t: '新建 count_errors.py', ms: '0.3s' }, { k: 'run', t: '运行 python count_errors.py', ms: '1.1s' }], '<p>脚本已写好并运行通过，输出了 11-01 至 11-09 每天的错误数。</p>') +
+    `<div class="prose"><p>脚本放在 <code>count_errors.py</code>，最近 9 天的错误数如下：</p><ul><li>11-07 最多，<b>312</b> 条，集中在 14:00–15:00</li><li>其余每天在 20–60 条之间</li></ul><p>需要的话我可以把结果画成折线图。</p></div>`);
+  return userMsg(t.title) + aiMsg(a, `<div class="prose"><p>好的，这是关于「${esc(t.title)}」的回答示例。</p></div>`);
+}
+
+function liveConversation(t) {
+  const L = S.live[t.id]; const a = agentOf(t.agent);
+  const st = [{ k: 'memory', t: '查看记忆：工作', ms: '0.1s' }, { k: 'kb', t: '在知识库中查找相关内容', ms: '0.9s' }];
+  let inner = '';
+  if (L.phase === 0) inner = steps(t.id + 's', [{ ...st[0], running: true }], { running: true });
+  else if (L.phase === 1) inner = steps(t.id + 's', [st[0], { ...st[1], running: true }], { running: true });
+  else inner = steps(t.id + 's', st) + `<div class="prose"><p>${L.phase === 2 ? '好的，我根据你的工作背景和知识库里的资料来回答' : '好的，我根据你的工作背景和知识库里的资料来回答。'}${L.phase === 2 ? '<span class="cursor"></span>' : ''}</p>${L.phase === 3 ? '<p>（原型演示：这里是正式回答。）</p>' : ''}</div>`;
+  return userMsg(L.text) + aiMsg(a, inner, { actions: L.phase === 3 });
+}
+
+function chatPage(id) {
+  const t = D.threads.find((x) => x.id === id);
+  if (!t) return '<div class="page">对话不存在</div>';
+  const a = agentOf(t.agent);
+  const running = t.state === 'run' || (S.live[id] && S.live[id].phase < 3);
+  return `<div class="chat">
+    <div class="chat-head">
+      <b class="ellipsis" style="max-width:420px">${esc(t.title)}</b>
+      <span class="pill" style="height:26px" data-go="#/ai/agents/${a.id}" title="查看智能体">${av(a.name, a.color, 16)}${esc(a.name)}</span>
+      <span class="sp"></span>
+      <button class="btn sm ghost" data-act="files">${ic('folder')}文件 <span class="badge gray">2</span></button>
+      <button class="ibtn" data-pop="thread:${t.id}" title="更多">${ic('more')}</button>
+    </div>
+    <div class="chat-scroll"><div class="chat-col">${conversation(t)}</div></div>
+    <div class="chat-foot">${composer({ id: 'chat', ph: '继续对话…', running })}
+      <div class="xs faint" style="text-align:center;margin-top:6px">内容由 AI 生成，请核实重要信息</div></div>
+  </div>`;
+}
+
+function startChat(text, agentId) {
+  const id = 'n' + Date.now();
+  const title = text.length > 18 ? text.slice(0, 18) + '…' : text;
+  D.threads.unshift({ id, title, agent: agentId, group: '今天', state: 'run' });
+  S.live[id] = { text, phase: 0 };
+  go('#/ai/c/' + id);
+  const tick = () => {
+    const L = S.live[id]; if (!L) return;
+    L.phase += 1;
+    if (L.phase >= 3) { L.phase = 3; D.threads.find((x) => x.id === id).state = null; }
+    if (parseRoute().b === id || parseRoute().a !== 'c') render();
+    if (L.phase < 3) setTimeout(tick, 1100);
+  };
+  setTimeout(tick, 900);
+}
+
+/* =====================================================================
+ * 智能平台 · 智能体列表
+ * ===================================================================== */
+function visibleAgents() {
+  let list = D.agents.filter((a) => (S.showArchived ? a.status === 'archived' : a.status !== 'archived'));
+  if (!S.showArchived) {
+    if (S.agentScope === 'mine') list = list.filter((a) => a.mine);
+    if (S.agentScope === 'shared') list = list.filter((a) => !a.mine);
+    if (S.agentScope !== 'mine') list = list.filter((a) => a.status !== 'draft' || a.mine);
+  }
+  const q = S.agentQ.trim();
+  if (q) list = list.filter((a) => (a.name + a.desc).includes(q));
+  const by = { recent: (a, b) => a.lastN - b.lastN, updated: (a, b) => (b.updated > a.updated ? 1 : -1), name: (a, b) => a.name.localeCompare(b.name, 'zh') }[S.agentSort];
+  list = [...list].sort(by);
+  return [...list.filter((a) => a.isDefault), ...list.filter((a) => !a.isDefault)];
+}
+function agentCard(a) {
+  const canEdit = a.level === 'owner' || a.level === 'edit';
+  const who = a.mine ? (a.sharedTo === '仅自己' ? '仅自己可用' : `我创建的 · 共享给${a.sharedTo}`) : `${a.owner} · 共享给${a.sharedTo}`;
+  return `<div class="acard" data-act="openAgent" data-id="${a.id}">
+    <div class="row">${av(a.name, a.color, 40)}<div class="grow"><div class="row"><b class="ellipsis">${esc(a.name)}</b>
+      ${a.isDefault ? '<span class="tag primary">默认</span>' : ''}${a.status === 'draft' ? '<span class="tag warning">草稿</span>' : ''}${a.engine === 'claude' ? '<span class="tag blue">Claude Code</span>' : ''}</div>
+      <div class="xs muted ellipsis">${esc(who)}</div></div></div>
+    <div class="desc">${esc(a.desc)}</div>
+    <div class="foot">${S.showArchived
+      ? `<span>归档于 ${a.updated}</span><span class="sp"></span><button class="btn sm" data-act="restore" data-id="${a.id}">恢复</button>`
+      : `${ic('clock')}<span>${a.last === '—' ? '还没用过' : '最近使用 ' + a.last}</span><span class="sp"></span>
+        ${canEdit ? `<button class="btn sm ghost" data-go="#/ai/agents/${a.id}">编辑</button>` : ''}
+        <button class="btn sm primary" data-act="chatWith" data-id="${a.id}" ${a.status === 'draft' ? 'disabled title="发布后才能对话"' : ''}>${ic('chat')}对话</button>
+        <button class="ibtn sm" data-pop="agentMore:${a.id}">${ic('more')}</button>`}</div>
+  </div>`;
+}
+function agentList() {
+  const list = visibleAgents();
+  const archivedN = D.agents.filter((a) => a.status === 'archived').length;
+  if (S.showArchived) return `<div class="page">
+    <div class="page-head"><button class="ibtn" data-act="archived" data-v="0">${ic('left')}</button><h1>已归档的智能体</h1></div>
+    <div class="grid">${list.map(agentCard).join('')}</div></div>`;
+  return `<div class="page">
+    <div class="page-head"><h1>智能体</h1><span class="sp"></span><button class="btn primary" data-act="newAgent">${ic('plus')}创建智能体</button></div>
+    <div class="toolbar">
+      <div class="seg">${[['all', '全部'], ['mine', '我创建的'], ['shared', '共享给我的']].map(([k, t]) => `<a class="${S.agentScope === k ? 'on' : ''}" data-act="agentScope" data-v="${k}">${t}</a>`).join('')}</div>
+      <div class="search" style="width:260px">${ic('search')}<input class="input" placeholder="搜索智能体" value="${esc(S.agentQ)}" data-input="agentQ"></div>
+      <span class="sp"></span>
+      <select class="select" style="width:130px" data-change="agentSort">${[['recent', '最近使用'], ['updated', '最近更新'], ['name', '名称']].map(([k, t]) => `<option value="${k}" ${S.agentSort === k ? 'selected' : ''}>${t}</option>`).join('')}</select>
+      ${archivedN ? `<button class="btn ghost sm" data-act="archived" data-v="1">${ic('archive')}已归档 ${archivedN}</button>` : ''}
+    </div>
+    ${list.length ? `<div class="grid">${list.map(agentCard).join('')}</div>` : `<div class="empty"><div class="ill">${ic('bot')}</div><h3>没有找到智能体</h3><p>换个关键词，或者创建一个</p></div>`}
+  </div>`;
+}
+
+/* =====================================================================
+ * 智能平台 · 智能体编辑（编排 + 调试预览）
+ * ===================================================================== */
+const EDIT = { general: {
+  prompt: '你是一个通用的工作助手，帮助用户完成写作、编程、数据分析、资料查找等各类任务。\n\n工作方式：\n- 复杂任务先列计划，再逐步完成\n- 需要动手时直接在工作环境里执行，并说明做了什么\n- 信息不足时先问清楚，不要猜\n- 回答简洁，结论放在前面',
+  caps: { shell: true, files: true, plan: true, ask: true, memory: true },
+  knowScope: 'all', kbs: [], skills: ['代码评审', 'PDF 处理'], tools: ['网页搜索'], collab: ['编程助手'], mode: 'auto', identity: 'user',
+} };
+function edState(id) {
+  if (!EDIT[id]) EDIT[id] = { prompt: '', caps: { shell: false, files: true, plan: true, ask: true, memory: true }, knowScope: 'pick', kbs: id === 'kbqa' ? ['产品手册', '客服常见问题'] : [], skills: [], tools: [], collab: [], mode: 'auto', identity: 'user' };
+  return EDIT[id];
+}
+function sec(key, title, sum, body) {
+  const open = S.secOpen[key];
+  return `<div class="sec ${open ? 'open' : ''}"><div class="sec-h" data-act="sec" data-k="${key}"><span class="chev">${ic('right')}</span><h3>${title}</h3><span class="sum">${sum || ''}</span></div><div class="sec-b">${body}</div></div>`;
+}
+function chips(list, kind) {
+  return `<div class="row" style="flex-wrap:wrap">${list.map((x) => `<span class="chip">${esc(x)}<span class="x" data-act="rmChip" data-kind="${kind}" data-v="${esc(x)}">${ic('x')}</span></span>`).join('')}
+    <button class="btn sm" data-act="pick" data-kind="${kind}">${ic('plus')}添加</button></div>`;
+}
+function agentEditor(id) {
+  const a = D.agents.find((x) => x.id === id);
+  if (!a) return '<div class="page">智能体不存在</div>';
+  const e = edState(id);
+  const CAPS = [
+    ['shell', 'terminal', '执行命令', '在隔离的工作环境里运行命令和脚本'],
+    ['files', 'file', '读写文件', '读取你上传的文件，把结果保存成文件'],
+    ['plan', 'list', '制定计划', '复杂任务先列出步骤，边做边更新进度'],
+    ['ask', 'help', '向你提问', '信息不够时先问清楚再动手'],
+    ['memory', 'bookmark', '记忆', '记住你的偏好和背景，下次对话自动带上'],
+  ];
+  const capOn = Object.values(e.caps).filter(Boolean).length;
+  const left = [
+    sec('prompt', '人设与指令', e.prompt ? `${e.prompt.length} 字` : '未填写', `<textarea class="input" rows="9" placeholder="告诉它扮演什么角色、怎么工作、有哪些要求…" data-input="prompt:${id}">${esc(e.prompt)}</textarea>`),
+    sec('model', '模型', 'DeepSeek V4 Pro', `<div class="row"><select class="select" style="width:280px">${D.models.map((m) => `<option>${m.name}</option>`).join('')}</select><a class="sm" data-act="toast" data-msg="展开：回答长度上限、随机性、深度思考">生成参数</a></div>`),
+    a.engine === 'claude'
+      ? sec('cap', '操作权限', '自动', `<div class="col">${[['自动', '常规操作直接做，有风险的会拒绝'], ['接受编辑', '改文件不用问，运行命令前先问你'], ['手动', '每次操作前都先问你'], ['仅规划', '只分析和出方案，不改任何东西']].map(([t, d], i) => `<div class="radio-card ${i === 0 ? 'on' : ''}"><span class="r"></span><div><b>${t}</b><div class="sm muted">${d}</div></div></div>`).join('')}</div>`)
+      : sec('cap', '能力', `已开启 ${capOn} 项`, CAPS.map(([k, icn, t, d]) => `<div class="cap"><span class="ic">${ic(icn)}</span><div class="grow"><b>${t}</b><div class="sm muted">${d}</div></div><span class="switch ${e.caps[k] ? 'on' : ''}" data-act="cap" data-id="${id}" data-k="${k}"></span></div>`).join('')),
+    sec('know', '知识库', e.knowScope === 'all' ? '使用者能查阅的全部' : `${e.kbs.length} 个`, `<div class="col">
+      <div class="radio-card ${e.knowScope === 'all' ? 'on' : ''}" data-act="knowScope" data-id="${id}" data-v="all"><span class="r"></span><div><b>使用者能查阅的全部知识库</b><div class="sm muted">每个人只会查到自己有权限的内容</div></div></div>
+      <div class="radio-card ${e.knowScope === 'pick' ? 'on' : ''}" data-act="knowScope" data-id="${id}" data-v="pick"><span class="r"></span><div class="grow"><b>指定知识库</b><div class="sm muted">只在选定的知识库里查找</div>
+        ${e.knowScope === 'pick' ? `<div style="margin-top:10px">${chips(e.kbs, 'kbs')}</div>` : ''}</div></div>
+      <div class="radio-card ${e.knowScope === 'none' ? 'on' : ''}" data-act="knowScope" data-id="${id}" data-v="none"><span class="r"></span><div><b>不使用知识库</b></div></div></div>`),
+    sec('skill', '技能', e.skills.length ? e.skills.join('、') : '未添加', `<p class="sm muted" style="margin-bottom:10px">让它按固定的方法完成某类工作</p>${chips(e.skills, 'skills')}`),
+    sec('tool', '工具', e.tools.length ? e.tools.join('、') : '未添加', `<p class="sm muted" style="margin-bottom:10px">连接外部系统，例如搜索网页、查询客户、创建工单</p>${chips(e.tools, 'tools')}`),
+    sec('collab', '协作智能体', e.collab.length ? e.collab.join('、') : '未添加', `<p class="sm muted" style="margin-bottom:10px">遇到合适的子任务，交给这些智能体去完成</p>${chips(e.collab, 'collab')}`),
+    sec('adv', '高级设置', '', `<div class="col" style="gap:16px">
+      <div><span class="label">执行前确认</span><div class="seg">${Object.entries(MODES).map(([k, m]) => `<a class="${e.mode === k ? 'on' : ''}" data-act="edMode" data-id="${id}" data-v="${k}" title="${m.d}">${m.t}</a>`).join('')}</div><div class="help">新对话的默认方式，对话时可以切换</div></div>
+      <div><span class="label">访问权限</span><div class="col">
+        <div class="radio-card ${e.identity === 'user' ? 'on' : ''}" data-act="identity" data-id="${id}" data-v="user"><span class="r"></span><div><b>以使用者的身份</b><div class="sm muted">每个人只能经它访问自己本来就有权限的资料，适合个人助手</div></div></div>
+        <div class="radio-card ${e.identity === 'agent' ? 'on' : ''}" data-act="identity" data-id="${id}" data-v="agent"><span class="r"></span><div><b>以智能体自己的身份</b><div class="sm muted">所有使用者拿到相同的结果，适合岗位型、流程型智能体</div></div></div></div></div>
+      <div class="row" style="gap:16px"><div class="grow"><span class="label">工作环境</span><select class="select"><option>标准环境</option><option>数据分析环境</option><option>前端开发环境</option></select></div>
+        <div style="width:200px"><span class="label">单次对话最多轮数</span><input class="input" value="50"></div></div>
+    </div>`),
+  ].join('');
+  const status = a.status === 'draft' ? '<span class="tag warning">草稿</span>' : `<span class="tag success">已发布 v${a.version}</span>`;
+  return `<div class="ed">
+    <div class="ed-head">
+      <button class="ibtn" data-go="#/ai/agents" title="返回">${ic('left')}</button>
+      <span style="cursor:pointer" data-act="basicInfo" data-id="${id}" title="修改名称、描述、头像">${av(a.name, a.color, 34)}</span>
+      <div><div class="row"><b style="font-size:15px">${esc(a.name)}</b><button class="ibtn sm" data-act="basicInfo" data-id="${id}">${ic('pencil')}</button>${status}</div>
+        <div class="xs muted">${e.dirty ? '有未发布的修改 · 已自动保存' : '所有修改已发布'}</div></div>
+      <span class="sp"></span>
+      <button class="btn" data-act="share" data-id="${id}">${ic('share')}共享</button>
+      <button class="ibtn" data-act="versions" data-id="${id}" title="历史版本">${ic('clock')}</button>
+      <button class="ibtn" data-pop="edMore:${id}" title="更多">${ic('more')}</button>
+      <button class="btn primary" data-act="publish" data-id="${id}">发布</button>
+    </div>
+    <div class="ed-body">
+      <div class="ed-left"><div class="ed-left-in">${left}</div></div>
+      <div class="ed-preview">
+        <div class="ph"><b>调试预览</b><span class="tag">使用当前修改</span><span class="sp"></span><button class="ibtn sm" title="清空对话" data-act="clearPreview">${ic('refresh')}</button></div>
+        <div class="pb">${S.preview ? userMsg(S.preview) + aiMsg(a, steps('pv', [{ k: 'memory', t: '查看记忆：沟通偏好', ms: '0.1s' }]) + '<div class="prose"><p>（原型演示）这是按当前未发布的配置生成的回答。改完左侧设置，直接在这里再问一次就能看到差别。</p></div>', { actions: false })
+          : `<div class="empty" style="padding:60px 10px"><div class="ill">${ic('chat')}</div><h3>试一试</h3><p class="sm">修改立即生效，不用先发布</p>
+            <div class="quick" style="margin-top:14px">${['你能做什么？', '帮我写一份周报', '查一下报销制度'].map((q) => `<span class="chip" data-fill="pv" data-text="${q}">${q}</span>`).join('')}</div></div>`}</div>
+        <div class="pf">${composer({ id: 'pv', ph: '输入消息试一试', small: true })}</div>
+      </div>
+    </div>
+  </div>`;
+}
+
+/* =====================================================================
+ * 智能平台 · 个性化（记忆 + 自定义指令）
+ * ===================================================================== */
+function mePage() {
+  const topics = [...new Set(D.memories.map((m) => m.topic))];
+  const tab = S.meTab;
+  const mem = `<div class="toolbar">
+      <div class="seg"><a class="${!S.memTopic ? 'on' : ''}" data-act="memTopic" data-v="">全部 ${D.memories.length}</a>${topics.map((t) => `<a class="${S.memTopic === t ? 'on' : ''}" data-act="memTopic" data-v="${t}">${t}</a>`).join('')}</div>
+      <span class="sp"></span>
+      <span class="row sm">允许记住新内容<span class="switch ${S.memPaused ? '' : 'on'}" data-act="memPause"></span></span>
+      <button class="btn" data-act="toast" data-msg="添加一条记忆">${ic('plus')}添加</button></div>
+    ${S.memPaused ? '<div class="card pad sm" style="margin-bottom:12px;background:var(--warning-weak);border-color:#f5d38b">已暂停：智能体不会再记住新内容，已有的记忆照常使用。</div>' : ''}
+    <div class="card">${D.memories.filter((m) => !S.memTopic || m.topic === S.memTopic).map((m) => `
+      <div class="row" style="padding:14px 18px;border-bottom:1px solid var(--line-2);align-items:flex-start">
+        <div class="grow"><div>${esc(m.text)}</div><div class="xs muted" style="margin-top:4px">${m.topic} · ${m.from ? `来自对话 <a>${esc(m.from)}</a>` : m.src} · ${m.at}</div></div>
+        <button class="ibtn sm" title="修改" data-act="toast" data-msg="修改这条记忆">${ic('pencil')}</button>
+        <button class="ibtn sm" title="删除" data-act="toast" data-msg="已删除，可在 30 天内撤销">${ic('trash')}</button>
+        <button class="ibtn sm" data-act="toast" data-msg="更多：移到其他主题、查看修改记录">${ic('more')}</button></div>`).join('')}</div>
+    <div class="row" style="margin-top:20px"><span class="sp"></span><button class="btn sm ghost danger" data-act="confirmDanger" data-msg="清除全部记忆">清除全部记忆</button></div>`;
+  const ins = `<div class="card pad" style="max-width:760px">
+      <span class="label">希望智能体了解你哪些情况、怎样回答？</span>
+      <textarea class="input" rows="8" placeholder="例如：我是后端工程师，主要用 Python；回答尽量简洁，先给结论；代码注释用中文。">回答一律使用中文，技术术语保留英文。
+先说结论，再给理由；方案要说明权衡。</textarea>
+      <div class="row" style="margin-top:12px"><span class="xs muted">对你的所有对话生效</span><span class="sp"></span><button class="btn primary" data-act="toast" data-msg="已保存，下一轮对话生效">保存</button></div></div>`;
+  return `<div class="page"><div class="page-head"><h1>个性化</h1></div>
+    <div class="tabs"><a class="${tab === 'memory' ? 'on' : ''}" data-act="meTab" data-v="memory">记忆</a><a class="${tab === 'ins' ? 'on' : ''}" data-act="meTab" data-v="ins">自定义指令</a></div>
+    ${tab === 'memory' ? mem : ins}</div>`;
+}
+/* =====================================================================
+ * 公共：列表页头 + 工具栏
+ * ===================================================================== */
+function scopeSeg(stateKey, opts) {
+  return `<div class="seg">${opts.map(([k, t]) => `<a class="${S[stateKey] === k ? 'on' : ''}" data-act="setS" data-k="${stateKey}" data-v="${k}">${t}</a>`).join('')}</div>`;
+}
+function searchBox(ph, w = 260) { return `<div class="search" style="width:${w}px">${ic('search')}<input class="input" placeholder="${ph}"></div>`; }
+function detailHead(back, iconHtml, title, sub, tags, right) {
+  return `<div class="page-head" style="align-items:flex-start;margin-bottom:6px">
+    <button class="ibtn" data-go="${back}" title="返回">${ic('left')}</button>${iconHtml}
+    <div class="grow"><div class="row"><h1>${esc(title)}</h1>${tags || ''}</div><div class="sm muted" style="margin-top:2px">${esc(sub)}</div></div>${right || ''}</div>`;
+}
+const iconSq = (emoji, bg = 'var(--primary-weak)') => `<span style="width:40px;height:40px;border-radius:10px;background:${bg};display:grid;place-items:center;font-size:20px;flex:none">${emoji}</span>`;
+
+/* =====================================================================
+ * 知识库
+ * ===================================================================== */
+function kbList() {
+  let list = D.datasets;
+  if (S.kbScope === 'mine') list = list.filter((d) => d.mine);
+  if (S.kbScope === 'shared') list = list.filter((d) => !d.mine);
+  return `<div class="page">
+    <div class="page-head"><h1>知识库</h1><span class="sp"></span><button class="btn primary" data-act="toast" data-msg="新建知识库：名称、描述、谁能用">${ic('plus')}新建知识库</button></div>
+    <div class="toolbar">${scopeSeg('kbScope', [['all', '全部'], ['mine', '我创建的'], ['shared', '共享给我的']])}${searchBox('搜索知识库')}<span class="sp"></span>
+      <select class="select" style="width:130px"><option>最近更新</option><option>名称</option><option>文档数</option></select></div>
+    <div class="grid">${list.map((d) => `<div class="acard" data-go="#/kb/${d.id}">
+      <div class="row">${iconSq(d.icon)}<div class="grow"><b>${esc(d.name)}</b><div class="xs muted">${d.mine ? '我创建的' : d.owner + ' · ' + ({ edit: '可编辑', use: '可查阅' }[d.level])}</div></div></div>
+      <div class="desc">${esc(d.desc)}</div>
+      <div class="foot">${ic('file')}<span>${d.docs} 份文档</span><span>·</span><span>${d.words} 字</span><span class="sp"></span><span>更新于 ${d.updated}</span></div></div>`).join('')}</div></div>`;
+}
+const DOC_STATE = { ok: ['可检索', 'success'], processing: ['处理中', 'primary'], review: ['待审核', 'warning'], failed: ['失败', 'danger'] };
+function kbDetail(id) {
+  const d = D.datasets.find((x) => x.id === id) || D.datasets[2];
+  const tab = S.kbTab;
+  const docs = `<div class="toolbar">${searchBox('搜索文档', 240)}
+      <div class="seg"><a class="on">全部 ${D.docs.length}</a><a>可检索</a><a>处理中</a><a>待审核</a><a>失败 1</a></div></div>
+    <table class="table"><tr><th>文档</th><th>状态</th><th>分段</th><th>上传人</th><th>上传时间</th><th></th></tr>
+    ${D.docs.map((x) => `<tr class="click"><td><div class="row">${ic('file')}${esc(x.name)}</div>${x.err ? `<div class="xs" style="color:var(--danger);margin-top:2px">${esc(x.err)}</div>` : ''}</td>
+      <td><span class="tag ${DOC_STATE[x.state][1]}">${x.state === 'processing' ? '<span class="spin" style="width:10px;height:10px"></span>' : ''}${DOC_STATE[x.state][0]}</span></td>
+      <td>${x.chunks || '—'}</td><td>${x.by}</td><td class="muted">${x.at}</td>
+      <td style="text-align:right">${x.state === 'failed' ? '<button class="btn sm">重试</button>' : ''}<button class="ibtn sm">${ic('more')}</button></td></tr>`).join('')}</table>`;
+  const recall = `<div style="display:grid;grid-template-columns:360px 1fr;gap:16px">
+      <div class="card pad"><span class="label">输入一个问题，看看能查到什么</span><textarea class="input" rows="4">生产环境怎么扩容 Atlas 服务？</textarea>
+        <div class="row" style="margin-top:10px"><span class="sm muted">返回</span><select class="select" style="width:80px"><option>4 条</option><option>8 条</option></select><span class="sp"></span><button class="btn primary" data-act="toast" data-msg="已检索">测试</button></div></div>
+      <div class="col">${[['部署手册 v3.md', '扩容：调整 Deployment 副本数后，新实例会自动参与兜底任务和接管…', 0.86], ['横向扩展设计.pdf', '多实例部署时，run 跟着请求走；实例崩溃后由其他实例在一个租约周期内接管…', 0.79], ['监控告警说明.md', 'CPU 持续 80% 以上 10 分钟会触发扩容提醒…', 0.61]].map(([f, t, s]) => `
+        <div class="card pad"><div class="row sm"><b>${f}</b><span class="sp"></span><span class="bar-score"><i style="width:${s * 100}%"></i></span><span class="mono">${s.toFixed(2)}</span></div><p class="sm muted" style="margin-top:6px">${t}</p></div>`).join('')}</div></div>`;
+  const settings = `<div class="card pad" style="max-width:720px"><div class="col" style="gap:16px">
+      <div><span class="label">名称</span><input class="input" value="${esc(d.name)}"></div>
+      <div><span class="label">描述</span><textarea class="input" rows="2">${esc(d.desc)}</textarea><div class="help">智能体会根据描述判断什么时候来这里查</div></div>
+      <div class="row"><div class="grow"><b>新文档审核后才能被查到</b><div class="sm muted">适合给客户用的知识库，避免未经确认的内容被引用</div></div><span class="switch ${d.review ? 'on' : ''}"></span></div>
+      <div class="row" style="justify-content:flex-end"><button class="btn primary">保存</button></div></div></div>
+    <div class="card pad" style="max-width:720px;margin-top:14px;border-color:#f5c2c2"><div class="row"><div class="grow"><b>删除知识库</b><div class="sm muted">文档和分段会一起删除，正在使用它的智能体将不再能查到这些内容</div></div><button class="btn danger" data-act="confirmDanger" data-msg="删除知识库「${esc(d.name)}」">删除</button></div></div>`;
+  return `<div class="page">
+    ${detailHead('#/kb', iconSq(d.icon), d.name, d.desc, '', `<button class="btn" data-act="share" data-id="kb">${ic('share')}共享</button><button class="btn primary" data-act="kbUpload">${ic('upload')}上传文档</button>`)}
+    <div class="row sm muted" style="margin:0 0 6px 84px">${d.docs} 份文档 · ${d.words} 字 · ${d.mine ? '我创建的' : '所有者 ' + d.owner}</div>
+    <div class="tabs" style="margin-top:12px">${[['docs', '文档'], ['recall', '检索测试'], ['settings', '设置']].map(([k, t]) => `<a class="${tab === k ? 'on' : ''}" data-act="setS" data-k="kbTab" data-v="${k}">${t}</a>`).join('')}</div>
+    ${tab === 'docs' ? docs : tab === 'recall' ? recall : settings}</div>`;
+}
+function kbReview() {
+  return `<div class="page"><div class="page-head"><h1>待审核</h1><span class="badge">${D.reviewQueue.length}</span><span class="sp"></span><button class="btn">全部通过</button></div>
+    <table class="table"><tr><th>文档</th><th>知识库</th><th>上传人</th><th>上传时间</th><th></th></tr>
+    ${D.reviewQueue.map((x) => `<tr><td><div class="row">${ic('file')}<a>${esc(x.doc)}</a></div></td><td>${esc(x.kb)}</td><td>${x.by}</td><td class="muted">${x.at}</td>
+      <td style="text-align:right"><button class="btn sm" data-act="toast" data-msg="已驳回，上传人会收到通知">驳回</button> <button class="btn sm primary" data-act="toast" data-msg="已通过，文档可以被查到了">通过</button></td></tr>`).join('')}</table></div>`;
+}
+
+/* =====================================================================
+ * 技能
+ * ===================================================================== */
+const SK_STATE = { published: ['已发布', 'success'], review: ['审查中', 'warning'], disabled: ['已停用', ''], rejected: ['未通过', 'danger'] };
+function skillList(mine) {
+  if (mine) {
+    const list = D.skills.filter((s) => s.mine);
+    return `<div class="page"><div class="page-head"><h1>我上传的</h1><span class="sp"></span><button class="btn primary" data-act="uploadSkill">${ic('upload')}上传技能</button></div>
+      <table class="table"><tr><th>技能</th><th>状态</th><th>版本</th><th>使用中</th><th>更新</th><th></th></tr>
+      ${list.map((s) => `<tr class="click" data-act="skillDetail" data-id="${s.id}"><td><b>${esc(s.name)}</b><div class="xs muted">${esc(s.desc)}</div></td><td><span class="tag ${SK_STATE[s.state][1]}">${SK_STATE[s.state][0]}</span></td><td>${s.ver}</td><td>${s.uses} 个智能体</td><td class="muted">11-0${s.id.slice(1)}</td><td style="text-align:right"><button class="btn sm">上传新版本</button></td></tr>`).join('')}</table></div>`;
+  }
+  const list = D.skills.filter((s) => s.state === 'published');
+  return `<div class="page"><div class="page-head"><h1>技能广场</h1><span class="sp"></span><button class="btn primary" data-act="uploadSkill">${ic('upload')}上传技能</button></div>
+    <div class="toolbar"><div class="seg"><a class="on">全部</a><a>团队</a><a>内置</a><a>第三方</a></div>${searchBox('搜索技能')}<span class="sp"></span>
+      <select class="select" style="width:130px"><option>最多使用</option><option>最近更新</option></select></div>
+    <div class="grid">${list.map((s) => `<div class="acard" data-act="skillDetail" data-id="${s.id}">
+      <div class="row">${iconSq(ic('spark'), 'var(--warning-weak)').replace('font-size:20px', 'color:var(--warning)')}<div class="grow"><b>${esc(s.name)}</b><div class="xs muted">${s.src} · ${s.by}</div></div></div>
+      <div class="desc">${esc(s.desc)}</div>
+      <div class="foot">${ic('bot')}<span>${s.uses} 个智能体在用</span><span class="sp"></span><span>${s.ver}</span></div></div>`).join('')}</div></div>`;
+}
+function skillReview() {
+  const list = D.skills.filter((s) => s.state === 'review');
+  return `<div class="page"><div class="page-head"><h1>待审查</h1><span class="badge">${list.length}</span></div>
+    <div class="col" style="gap:12px">${list.map((s) => `<div class="card pad"><div class="row"><b>${esc(s.name)}</b><span class="tag">${s.ver}</span>${s.script ? '<span class="tag warning">包含脚本</span>' : ''}<span class="sm muted">· ${s.by} 上传于 11-09</span><span class="sp"></span>
+        <button class="btn sm" data-act="skillDetail" data-id="${s.id}">查看内容</button><button class="btn sm" data-act="toast" data-msg="已拒绝，上传人会看到原因">拒绝</button><button class="btn sm primary" data-act="toast" data-msg="已发布">批准发布</button></div>
+      <p class="sm muted" style="margin:6px 0 10px">${esc(s.desc)}</p>
+      <div class="row sm" style="gap:18px">${[['文件结构', 1], ['说明完整', 1], ['没有敏感内容', 1], ['与已有技能不冲突', s.script ? 1 : 0]].map(([t, ok]) => `<span class="row" style="gap:4px;color:${ok ? 'var(--success)' : 'var(--warning)'}">${ic(ok ? 'check' : 'alert')}${t}</span>`).join('')}</div></div>`).join('')}</div></div>`;
+}
+
+/* =====================================================================
+ * MCP
+ * ===================================================================== */
+function mcpList() {
+  let list = D.mcp;
+  if (S.mcpScope === 'use') list = list.filter((m) => m.canUse);
+  if (S.mcpScope === 'mine') list = list.filter((m) => m.mine);
+  return `<div class="page"><div class="page-head"><h1>服务</h1><span class="sp"></span>${isAdmin() ? `<button class="btn primary" data-act="registerMcp">${ic('plus')}接入服务</button>` : ''}</div>
+    <div class="toolbar">${scopeSeg('mcpScope', [['use', '我能用的'], ['mine', '我管理的'], ...(isAdmin() ? [['all', '全部']] : [])])}${searchBox('搜索服务')}</div>
+    <div class="grid">${list.map((m) => `<div class="acard" data-go="#/mcp/s/${m.id}">
+      <div class="row">${iconSq(ic('plug'), 'var(--secondary-weak)').replace('font-size:20px', 'color:#0369a1')}<div class="grow"><div class="row"><b>${esc(m.name)}</b>${m.vis === 'public' ? '<span class="tag">公开</span>' : ''}</div><div class="xs muted mono">${m.code}</div></div></div>
+      <div class="desc">${esc(m.desc)}</div>
+      <div class="foot"><span>${m.tools} 个工具</span><span>·</span><span>${m.refs} 个智能体在用</span><span class="sp"></span>
+        ${m.canUse ? '<span class="tag success">可使用</span>' : '<button class="btn sm" data-act="toast" data-msg="已向服务负责人申请使用">申请使用</button>'}</div></div>`).join('')}</div></div>`;
+}
+function mcpDetail(id) {
+  const m = D.mcp.find((x) => x.id === id) || D.mcp[0];
+  const tab = S.mcpTab;
+  const tools = `<table class="table"><tr><th>工具</th><th>说明</th><th>操作类型</th>${m.mine || isAdmin() ? '<th>启用</th>' : ''}<th></th></tr>
+    ${(m.id === 'serpapi' ? D.mcpTools : Array.from({ length: Math.min(m.tools, 5) }, (_, i) => ({ name: ['query_customer', 'list_contacts', 'get_opportunity', 'create_followup', 'update_stage'][i], title: ['查询客户', '联系人列表', '查看商机', '新建跟进记录', '更新商机阶段'][i], desc: '—', side: i > 2 ? '会修改数据' : '只读', on: true }))).map((t) => `
+      <tr><td><b>${t.title}</b><div class="xs muted mono">${t.name}</div></td><td class="sm">${esc(t.desc)}</td><td><span class="tag ${t.side === '只读' ? '' : 'warning'}">${t.side}</span></td>
+      ${m.mine || isAdmin() ? `<td><span class="switch ${t.on ? 'on' : ''}"></span></td>` : ''}<td style="text-align:right"><button class="btn sm" data-act="mcpTry" data-t="${t.title}">${ic('play')}试用</button></td></tr>`).join('')}</table>`;
+  const access = `<div class="card pad" style="margin-bottom:14px"><div class="row"><div class="grow"><b>公开给所有人</b><div class="sm muted">关闭后，只有下面授权的人和智能体能用</div></div><span class="switch ${m.vis === 'public' ? 'on' : ''}"></span></div></div>
+    <div class="row" style="margin-bottom:10px"><h3>已授权</h3><span class="sp"></span><button class="btn sm primary" data-act="share" data-id="mcp">${ic('plus')}授权</button></div>
+    <table class="table"><tr><th>对象</th><th>范围</th><th>授权时间</th><th></th></tr>
+      <tr><td><div class="row">${av('编', '#0ea5e9', 22)}编程助手 <span class="tag">智能体</span></div></td><td>全部工具</td><td class="muted">11-02</td><td style="text-align:right"><button class="btn sm ghost">修改</button><button class="btn sm ghost danger">收回</button></td></tr>
+      <tr><td><div class="row">${av('王', '#10b981', 22, false)}王芳</div></td><td>查询客户、联系人列表</td><td class="muted">10-29</td><td style="text-align:right"><button class="btn sm ghost">修改</button><button class="btn sm ghost danger">收回</button></td></tr></table>`;
+  const conn = `<div class="card pad" style="max-width:720px"><dl class="kv"><dt>接入方式</dt><dd>${m.src}</dd><dt>服务地址</dt><dd class="mono">https://serpapi.com/search</dd><dt>认证</dt><dd>API Key（已保存）</dd><dt>工具同步</dt><dd>1 小时前 · 成功 <a style="margin-left:8px">立即同步</a></dd></dl></div>`;
+  const usage = `<div class="grid" style="grid-template-columns:repeat(3,1fr)">${[['近 7 天调用', '1,284'], ['成功率', '99.2%'], ['在用的智能体', m.refs]].map(([k, v]) => `<div class="card pad"><div class="sm muted">${k}</div><div style="font-size:22px;font-weight:650;margin-top:4px">${v}</div></div>`).join('')}</div>
+    <h3 style="margin:18px 0 10px">在用的智能体</h3><div class="row" style="flex-wrap:wrap">${['通用助手', '编程助手', '数据分析师'].slice(0, m.refs).map((n) => `<span class="chip">${av(n, '#6366f1', 18)}${n}</span>`).join('')}</div>`;
+  const tabs = [['tools', `工具 ${m.tools}`], ...(m.mine || isAdmin() ? [['access', '谁能用']] : []), ...(isAdmin() ? [['conn', '连接设置']] : []), ['usage', '使用情况']];
+  return `<div class="page">${detailHead('#/mcp', iconSq(ic('plug'), 'var(--secondary-weak)').replace('font-size:20px', 'color:#0369a1'), m.name, m.desc, m.vis === 'public' ? '<span class="tag">公开</span>' : '<span class="tag">需授权</span>', isAdmin() ? `<button class="ibtn" data-act="toast" data-msg="更多：停用服务">${ic('more')}</button>` : '')}
+    <div class="tabs" style="margin-top:16px">${tabs.map(([k, t]) => `<a class="${tab === k ? 'on' : ''}" data-act="setS" data-k="mcpTab" data-v="${k}">${t}</a>`).join('')}</div>
+    ${tab === 'access' ? access : tab === 'conn' ? conn : tab === 'usage' ? usage : tools}</div>`;
+}
+function keyCard(kind) {
+  const isMcp = kind === 'mcp';
+  return `<div class="card pad" style="max-width:760px"><div class="row"><span class="ic" style="width:40px;height:40px;border-radius:10px;background:var(--primary-weak);color:var(--primary);display:grid;place-items:center">${ic('key')}</span>
+      <div class="grow"><b>我的 Key</b><div class="sm muted">在 Claude Code、Cursor 等工具里使用${isMcp ? '平台上的服务' : '平台上的模型'}</div></div><span class="tag success">使用中</span></div>
+    <div class="row" style="margin-top:14px"><code style="flex:1;padding:8px 10px;font-size:13px">sk-atlas-••••••••••••3f9a</code><button class="btn sm" data-act="keyUsage" data-kind="${kind}">使用说明</button><button class="btn sm" data-act="toast" data-msg="已生成新 Key，旧 Key 立即失效">重置</button><button class="btn sm ghost">停用</button></div>
+    <div class="divider"></div>
+    <div class="sm"><b>能用的${isMcp ? '服务' : '模型'}</b></div>
+    <div class="row" style="flex-wrap:wrap;margin-top:8px">${(isMcp ? D.mcp.filter((m) => m.canUse).map((m) => m.name) : D.models.filter((m) => m.vis === 'public' || m.granted).map((m) => m.name)).map((n) => `<span class="chip">${n}</span>`).join('')}</div></div>`;
+}
+function mcpKeys() { return `<div class="page"><div class="page-head"><h1>我的 Key</h1></div>${keyCard('mcp')}</div>`; }
+function agentKeys(kind) {
+  const isMcp = kind === 'mcp';
+  return `<div class="page"><div class="page-head"><h1>${isMcp ? '智能体 Key' : '客户端 Key'}</h1></div>
+    <table class="table"><tr><th>智能体</th><th>能用的${isMcp ? '服务' : '模型'}</th><th>状态</th><th>创建</th><th></th></tr>
+    ${D.agents.filter((a) => a.status !== 'archived').map((a, i) => `<tr><td><div class="row">${av(a.name, a.color, 24)}${esc(a.name)}</div></td>
+      <td class="sm">${isMcp ? (i === 0 ? '网页搜索、项目管理' : i === 2 ? '客户管理' : '—') : (i === 1 ? 'Claude Sonnet 5' : '全部公开模型')}</td>
+      <td>${i === 3 ? '<span class="tag">未启用</span>' : '<span class="tag success">正常</span>'}</td><td class="muted">${a.updated}</td>
+      <td style="text-align:right"><button class="btn sm">分配</button> <button class="ibtn sm">${ic('more')}</button></td></tr>`).join('')}</table></div>`;
+}
+
+/* =====================================================================
+ * 模型
+ * ===================================================================== */
+function modelList() {
+  const list = isAdmin() ? D.models : D.models.filter((m) => m.vis === 'public' || m.granted);
+  return `<div class="page"><div class="page-head"><h1>模型</h1><span class="sp"></span>${isAdmin() ? `<button class="btn primary" data-act="toast" data-msg="添加模型：提供商、模型名、密钥、价格、谁能用">${ic('plus')}添加模型</button>` : ''}</div>
+    <div class="toolbar">${searchBox('搜索模型')}<div class="seg"><a class="on">全部</a><a>DeepSeek</a><a>Google</a><a>Anthropic</a></div></div>
+    <table class="table"><tr><th>模型</th><th>提供商</th><th>上下文</th><th>价格（每百万 token，输入 / 输出）</th><th>谁能用</th><th>状态</th>${isAdmin() ? '<th></th>' : ''}</tr>
+    ${list.map((m) => `<tr class="click"><td><div class="row"><b>${m.name}</b>${m.tag ? `<span class="tag primary">${m.tag}</span>` : ''}</div><div class="xs muted mono">${m.code}</div></td>
+      <td>${m.provider}</td><td>${m.ctx}</td><td class="mono" style="font-size:13px">${m.price}</td><td>${m.vis === 'public' ? '所有人' : m.granted}</td>
+      <td><span class="row sm" style="gap:6px"><span class="dot run" style="box-shadow:none"></span>可用</span></td>
+      ${isAdmin() ? `<td style="text-align:right"><button class="ibtn sm" data-act="toast" data-msg="编辑 / 授权 / 删除（删除需二次确认）">${ic('more')}</button></td>` : ''}</tr>`).join('')}</table>
+    ${isAdmin() ? `<div class="card pad sm" style="margin-top:14px;display:flex;align-items:center;gap:10px">${ic('alert')}<span>用量与费用：按智能体、人员、部门汇总的看板建议后续补上</span></div>` : ''}</div>`;
+}
+function modelKeys() { return `<div class="page"><div class="page-head"><h1>我的 Key</h1></div>${keyCard('models')}</div>`; }
+
+/* =====================================================================
+ * 系统
+ * ===================================================================== */
+function sysSettings() {
+  const def = D.agents.find((a) => a.isDefault);
+  return `<div class="page" style="max-width:860px"><div class="page-head"><h1>平台设置</h1></div>
+    <div class="card pad"><div class="row" style="align-items:flex-start"><div class="grow"><b>默认智能体</b><div class="sm muted">首页输入框默认使用它；用户可以在输入框里换成别的</div></div>
+      <span class="pill" data-pop="defAgent">${av(def.name, def.color, 18)}${esc(def.name)}${ic('down')}</span></div></div>
+    <div class="card pad" style="margin-top:14px"><b>平台指令</b><div class="sm muted" style="margin:2px 0 10px">对所有人的所有对话生效，适合写合规要求和全局约定</div>
+      <textarea class="input" rows="6" placeholder="例如：不要输出客户的手机号和身份证号；涉及金额的回答需注明数据来源。"></textarea>
+      <div class="row" style="margin-top:10px"><span class="sp"></span><button class="btn primary" data-act="toast" data-msg="已保存，下一轮对话生效">保存</button></div></div></div>`;
+}
+function sysConfig() {
+  return `<div class="page"><div class="page-head"><h1>配置项</h1><span class="sp"></span>${searchBox('搜索配置项')}</div>
+    <table class="table"><tr><th>配置项</th><th>当前值</th><th></th></tr>
+    ${D.configs.map((c) => `<tr><td><b>${c.key}</b></td><td>${c.val} ${c.changed ? '<span class="tag">已修改</span>' : ''}</td>
+      <td style="text-align:right"><button class="btn sm ghost">历史</button><button class="btn sm">修改</button></td></tr>`).join('')}</table></div>`;
+}
+function sysJobs() {
+  return `<div class="page"><div class="page-head"><h1>定时任务</h1><span class="sp"></span><div class="seg"><a class="on">全部</a><a>智能平台</a><a>知识库</a><a>模型</a><a>MCP</a></div></div>
+    <table class="table"><tr><th>任务</th><th>所属</th><th>频率</th><th>上次结果</th><th>上次运行</th></tr>
+    ${D.jobs.map((j) => `<tr><td><b>${j.name}</b></td><td>${j.svc}</td><td>${j.rule}</td>
+      <td>${j.last === '成功' ? '<span class="tag success">成功</span>' : `<span class="tag danger">失败</span> <span class="xs" style="color:var(--danger)">连续 ${j.fails} 次</span>`}</td><td class="muted">${j.at}</td></tr>`).join('')}</table></div>`;
+}
+/* =====================================================================
+ * 浮层：下拉菜单 / 弹窗 / 抽屉
+ * ===================================================================== */
+function popContent(id) {
+  const [kind, arg] = id.split(':');
+  const mi = (act, icon, t, extra = '', cls = '') => `<div class="mi ${cls}" data-act="${act}" ${extra}>${icon ? ic(icon) : ''}<span class="grow">${t}</span></div>`;
+  switch (kind) {
+    case 'me': return `<div style="padding:8px 10px 6px"><b>${ME.name}</b><div class="xs muted">${ME.account} · ${ME.dept}</div></div><div class="sep"></div>
+      ${mi('role', 'eye', isAdmin() ? '切换为普通用户视角（演示）' : '切换为管理员视角（演示）')}${mi('goMe', 'user', '个性化')}<div class="sep"></div>${mi('toast', 'logout', '退出登录', 'data-msg="已退出"')}`;
+    case 'agentPick': {
+      const list = D.agents.filter((a) => a.status === 'published').sort((a, b) => a.lastN - b.lastN);
+      return `<div class="ph">选择智能体</div>${list.map((a) => `<div class="mi ${S.composerAgent === a.id ? 'on' : ''}" data-act="setAgent" data-id="${a.id}">${av(a.name, a.color, 22)}<span class="grow"><b style="font-weight:550">${esc(a.name)}</b>${a.isDefault ? ' <span class="tag primary">默认</span>' : ''}</span>${S.composerAgent === a.id ? ic('check') : ''}</div>`).join('')}
+        <div class="sep"></div>${mi('goAgents', 'grid', '浏览全部智能体')}`;
+    }
+    case 'defAgent':
+      return D.agents.filter((a) => a.status === 'published').map((a) => `<div class="mi ${a.isDefault ? 'on' : ''}" data-act="setDefault" data-id="${a.id}">${av(a.name, a.color, 22)}<span class="grow">${esc(a.name)}</span>${a.isDefault ? ic('check') : ''}</div>`).join('');
+    case 'mode':
+      return Object.entries(MODES).map(([k, m]) => `<div class="mi ${S.composerMode === k ? 'on' : ''}" data-act="setMode" data-v="${k}" style="align-items:flex-start"><div class="grow"><b style="font-weight:600">${m.t}</b><div class="xs muted">${m.d}</div></div>${S.composerMode === k ? ic('check') : ''}</div>`).join('');
+    case 'thread': return `${mi('toast', 'pencil', '重命名', 'data-msg="重命名对话"')}${mi('toast', 'share', '分享', 'data-msg="生成只读分享链接"')}<div class="sep"></div>${mi('toast', 'trash', '删除', 'data-msg="对话已删除"', 'danger')}`;
+    case 'agentMore':
+    case 'edMore': {
+      const a = D.agents.find((x) => x.id === arg);
+      return `${mi('toast', 'copy', '复制为新智能体', 'data-msg="已复制为「' + a.name + ' 副本」（草稿）"')}
+        ${kind === 'agentMore' && (a.level === 'owner' || a.level === 'edit') ? mi('share', 'share', '共享', `data-id="${a.id}"`) : ''}
+        ${isAdmin() && !a.isDefault ? mi('setDefault', 'star', '设为默认智能体', `data-id="${a.id}"`) : ''}
+        ${a.level === 'owner' || isAdmin() ? '<div class="sep"></div>' + mi('confirmDanger', 'archive', '归档', `data-msg="归档「${a.name}」" data-arch="${a.id}"`, 'danger') : ''}`;
+    }
+  }
+  return '';
+}
+
+function modalShell(title, body, foot, wide = false) {
+  return `<div class="mask" data-act="closeModal"><div class="modal ${wide ? 'wide' : ''}" data-stop>
+    <div class="modal-h"><h2 class="grow">${title}</h2><button class="ibtn" data-act="closeModal">${ic('x')}</button></div>
+    <div class="modal-b">${body}</div>${foot ? `<div class="modal-f">${foot}</div>` : ''}</div></div>`;
+}
+const TEMPLATES = [
+  ['blank', '空白', '从零开始配置', '#94a3b8'],
+  ['general', '通用助手', '写作、编程、数据分析都能做', '#6366f1'],
+  ['coder', '编程助手', '用 Claude Code 在独立环境里写代码', '#0ea5e9'],
+  ['kbqa', '知识问答', '只根据指定知识库回答，附出处', '#10b981'],
+  ['data', '数据分析', '处理表格数据，出图表和结论', '#ec4899'],
+];
+function modal() {
+  const M = S.modal; if (!M) return '';
+  switch (M.type) {
+    case 'newAgent': return modalShell('创建智能体', `
+      <span class="label">名称</span><input class="input" id="newName" placeholder="例如：合同审阅助手" value="${esc(M.name || '')}">
+      <span class="label" style="margin-top:16px">从哪里开始</span>
+      <div class="grid" style="grid-template-columns:1fr 1fr;gap:10px">${TEMPLATES.map(([k, t, d, c]) => `<div class="radio-card ${M.tpl === k ? 'on' : ''}" data-act="tpl" data-v="${k}"><span class="r"></span><div><div class="row"><b>${t}</b></div><div class="sm muted">${d}</div></div></div>`).join('')}</div>`,
+      `<button class="btn" data-act="closeModal">取消</button><button class="btn primary" data-act="createAgent">创建</button>`);
+    case 'profile': {
+      const a = agentOf(M.id);
+      return modalShell('', `<div style="text-align:center;padding:4px 10px 6px">${av(a.name, a.color, 64)}<h2 style="margin-top:12px">${esc(a.name)}</h2><div class="sm muted">${a.owner} 创建 · 共享给${a.sharedTo}</div><p style="margin:14px 0 4px;color:var(--ink-2)">${esc(a.desc)}</p></div>`,
+        `<button class="btn" data-act="toast" data-msg="已复制为你的草稿，可以按需修改">复制一份来改</button><button class="btn primary" data-act="chatWith" data-id="${a.id}">${ic('chat')}开始对话</button>`);
+    }
+    case 'share': return modalShell(`共享`, `
+      <div class="row"><input class="input grow" placeholder="搜索人员或部门"><select class="select" style="width:110px"><option>可使用</option><option>可编辑</option></select><button class="btn primary">添加</button></div>
+      <div class="col" style="margin-top:16px;gap:0">${[['研发中心', '部门 · 含下级', '可使用', '#0ea5e9'], ['王芳', '研发二部', '可编辑', '#10b981'], [ME.name, ME.dept, '所有者', ME.color]].map(([n, s, l, c]) => `
+        <div class="row" style="padding:10px 0;border-bottom:1px solid var(--line-2)">${av(n, c, 30, s.startsWith('部门'))}<div class="grow"><b>${n}</b><div class="xs muted">${s}</div></div>${l === '所有者' ? '<span class="muted sm">所有者</span>' : `<select class="select" style="width:100px;height:30px"><option>${l}</option><option>${l === '可使用' ? '可编辑' : '可使用'}</option><option>移除</option></select>`}</div>`).join('')}</div>
+      <div class="row" style="margin-top:16px"><div class="grow"><b>所有人可用</b><div class="sm muted">公司内所有人都能找到并使用</div></div><span class="switch"></span></div>`,
+      `<button class="btn primary" data-act="closeModal">完成</button>`);
+    case 'basic': {
+      const a = agentOf(M.id);
+      return modalShell('基本信息', `<span class="label">头像</span><div class="row">${COLORS.slice(0, 6).map((c) => `<span style="cursor:pointer;outline:${c === a.color ? '2px solid var(--primary)' : 'none'};outline-offset:2px;border-radius:8px">${av(a.name, c, 34)}</span>`).join('')}</div>
+        <span class="label" style="margin-top:16px">名称</span><input class="input" value="${esc(a.name)}">
+        <span class="label" style="margin-top:16px">描述</span><textarea class="input" rows="3">${esc(a.desc)}</textarea><div class="help">显示在智能体列表里，帮别人判断要不要用它</div>`,
+        `<button class="btn" data-act="closeModal">取消</button><button class="btn primary" data-act="closeModal">保存</button>`);
+    }
+    case 'pick': {
+      const e = edState(M.id);
+      const src = { skills: D.skills.filter((s) => s.state === 'published').map((s) => [s.name, s.desc]), tools: D.mcp.filter((m) => m.canUse).map((m) => [m.name, m.desc]), collab: D.agents.filter((a) => a.status === 'published' && a.id !== M.id).map((a) => [a.name, a.desc]), kbs: D.datasets.map((d) => [d.name, d.desc]) }[M.kind];
+      const title = { skills: '添加技能', tools: '添加工具', collab: '添加协作智能体', kbs: '选择知识库' }[M.kind];
+      return modalShell(title, `${searchBox('搜索', 500)}<div class="col" style="margin-top:12px;gap:8px">${src.map(([n, d]) => {
+        const on = (M.sel || e[M.kind]).includes(n);
+        return `<div class="radio-card ${on ? 'on' : ''}" data-act="pickToggle" data-v="${esc(n)}" style="align-items:center"><span style="width:18px;height:18px;border-radius:5px;border:1.5px solid ${on ? 'var(--primary)' : '#c5cad6'};background:${on ? 'var(--primary)' : '#fff'};color:#fff;display:grid;place-items:center;flex:none">${on ? '<svg class="i" style="width:12px;height:12px;stroke-width:3" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>' : ''}</span><div class="grow"><b>${esc(n)}</b><div class="sm muted ellipsis">${esc(d)}</div></div></div>`;
+      }).join('')}</div>`, `<button class="btn" data-act="closeModal">取消</button><button class="btn primary" data-act="pickOk">确定</button>`);
+    }
+    case 'publish': return modalShell('发布新版本', `<span class="label">这次改了什么（可选）</span><textarea class="input" rows="3" placeholder="例如：开启了记忆，增加了网页搜索"></textarea>
+      <div class="help">发布后新对话使用新版本，进行中的对话不受影响。随时可以在历史版本里恢复。</div>`,
+      `<button class="btn" data-act="closeModal">取消</button><button class="btn primary" data-act="publishOk" data-id="${M.id}">发布</button>`);
+    case 'uploadSkill': return modalShell('上传技能', `
+      <div class="steps-line">${['上传', '自动检查', '提交'].map((t, i) => `<div class="s ${i <= (M.step || 0) ? 'on' : ''}"><b>${i + 1}</b>${t}</div>`).join('')}</div>
+      ${!M.step ? `<div class="drop">${ic('upload')}<div style="margin-top:8px">把技能包（.zip）拖到这里，或 <a data-act="skillStep" data-v="1">选择文件</a></div><div class="xs faint" style="margin-top:4px">包里需要有 SKILL.md 说明这个技能做什么、怎么用</div></div>`
+        : `<div class="card pad"><div class="row"><b>contract-review.zip</b><span class="xs muted">12 个文件 · 48 KB</span></div><div class="col" style="margin-top:10px;gap:6px">${[['文件结构完整', 1], ['说明完整', 1], ['没有敏感内容', 1], ['包含可执行脚本，需要管理员审查', 0]].map(([t, ok]) => `<div class="row sm" style="color:${ok ? 'var(--success)' : 'var(--warning)'}">${ic(ok ? 'check' : 'alert')}${t}</div>`).join('')}</div></div>`}`,
+      M.step ? `<button class="btn" data-act="closeModal">取消</button><button class="btn primary" data-act="toastClose" data-msg="已提交审查，通过后会通知你">提交审查</button>` : '');
+    case 'registerMcp': return modalShell('接入服务', `
+      <div class="steps-line">${['接入方式', '连接', '选择工具', '谁能用'].map((t, i) => `<div class="s ${i === 0 ? 'on' : ''}"><b>${i + 1}</b>${t}</div>`).join('')}</div>
+      <div class="col">${[['已有 MCP 服务', '填写服务地址，自动拉取工具列表'], ['从接口文档导入', '上传 OpenAPI 文档，每个接口变成一个工具'], ['从 gRPC 服务导入', '自动发现服务里的方法']].map(([t, d], i) => `<div class="radio-card ${i === 0 ? 'on' : ''}"><span class="r"></span><div><b>${t}</b><div class="sm muted">${d}</div></div></div>`).join('')}</div>`,
+      `<button class="btn" data-act="closeModal">取消</button><button class="btn primary" data-act="toast" data-msg="下一步：填写服务地址和认证">下一步</button>`);
+    case 'keyUsage': return modalShell('使用说明', M.kind === 'mcp'
+      ? `<p class="sm" style="margin-bottom:8px">在 Claude Code 里添加服务（每个服务一个地址）：</p><pre class="mono" style="background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:12px;white-space:pre-wrap">claude mcp add --transport http jira \\\n  https://atlas.example.com/mcp/jira \\\n  --header "Authorization: Bearer &lt;你的 Key&gt;"</pre>`
+      : `<p class="sm" style="margin-bottom:8px">在 Claude Code、Cursor 或脚本里：</p><pre class="mono" style="background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:12px;white-space:pre-wrap">ANTHROPIC_BASE_URL=https://atlas.example.com/llm\nANTHROPIC_AUTH_TOKEN=&lt;你的 Key&gt;\nANTHROPIC_MODEL=deepseek-v4-pro</pre>`,
+      `<button class="btn primary" data-act="closeModal">知道了</button>`);
+    case 'confirm': return modalShell('请确认', `<p>确定要${esc(M.msg)}吗？${/归档/.test(M.msg) ? '归档后不能再发起新对话，可以随时恢复。' : '此操作不可恢复。'}</p>`,
+      `<button class="btn" data-act="closeModal">取消</button><button class="btn danger solid" data-act="confirmOk">确定</button>`);
+    case 'feedback': return modalShell('哪里不满意？', `<div class="row" style="flex-wrap:wrap">${['内容不准确', '没理解我的意思', '太啰嗦', '操作有误', '其他'].map((t) => `<span class="chip" style="cursor:pointer">${t}</span>`).join('')}</div><textarea class="input" rows="3" style="margin-top:12px" placeholder="补充说明（可选）"></textarea>`,
+      `<button class="btn" data-act="closeModal">取消</button><button class="btn primary" data-act="toastClose" data-msg="感谢反馈">提交</button>`);
+  }
+  return '';
+}
+
+function drawerShell(title, body, foot) {
+  return `<div class="drawer-mask" data-act="closeDrawer"></div><div class="drawer">
+    <div class="modal-h"><h2 class="grow">${title}</h2><button class="ibtn" data-act="closeDrawer">${ic('x')}</button></div>
+    <div class="modal-b" style="flex:1">${body}</div>${foot ? `<div class="modal-f">${foot}</div>` : ''}</div>`;
+}
+function drawer() {
+  const R = S.drawer; if (!R) return '';
+  switch (R.type) {
+    case 'files': return drawerShell('文件', `<div class="col" style="gap:6px">${[['report.md', '4.2 KB', '刚刚'], ['count_errors.py', '1.1 KB', '5 分钟前']].map(([n, s, t]) => `<div class="row card pad" style="padding:10px 12px">${ic('file')}<div class="grow"><b>${n}</b><div class="xs muted">${s} · ${t}</div></div><button class="ibtn sm" title="预览">${ic('eye')}</button><button class="ibtn sm" title="下载">${ic('down')}</button></div>`).join('')}</div>
+      <div class="xs muted" style="margin-top:12px">这是这次对话的工作区，智能体生成的文件都在这里</div>`, `<button class="btn" data-act="toast" data-msg="上传文件到工作区">${ic('upload')}上传</button>`);
+    case 'versions': return drawerShell('历史版本', `<div class="col" style="gap:0">${[['草稿', '今天 10:20 · 周景行', '修改了人设与指令', 'draft'], ['v3', '11-08 · 周景行', '开启记忆，添加网页搜索', 'cur'], ['v2', '10-30 · 周景行', '模型换成 DeepSeek V4 Pro', ''], ['v1', '10-27 · 周景行', '首次发布', '']].map(([v, m, d, st]) => `
+      <div class="row" style="padding:12px 0;border-bottom:1px solid var(--line-2);align-items:flex-start"><div style="width:52px"><b>${v}</b></div><div class="grow"><div>${d}</div><div class="xs muted">${m}</div></div>
+        ${st === 'cur' ? '<span class="tag success">使用中</span>' : st === 'draft' ? '<span class="tag warning">未发布</span>' : '<button class="btn sm" data-act="toast" data-msg="已恢复为草稿，发布后生效">恢复</button>'}</div>`).join('')}</div>`);
+    case 'kbUpload': return drawerShell('上传文档', `
+      <div class="steps-line">${['选择文件', '分段方式', '确认'].map((t, i) => `<div class="s ${i <= 1 ? 'on' : ''}"><b>${i + 1}</b>${t}</div>`).join('')}</div>
+      <div class="drop">${ic('upload')}<div style="margin-top:8px">拖入文件，或 <a>选择文件</a></div><div class="xs faint" style="margin-top:4px">支持 PDF、Word、Markdown、Excel、TXT，单个不超过 50 MB</div></div>
+      <div class="col" style="margin-top:12px;gap:6px">${['部署手册 v4.md', '扩容操作指南.pdf'].map((n) => `<div class="row card pad" style="padding:8px 12px">${ic('file')}<span class="grow">${n}</span><button class="ibtn sm">${ic('x')}</button></div>`).join('')}</div>
+      <span class="label" style="margin-top:18px">分段方式</span>
+      <div class="col"><div class="radio-card on"><span class="r"></span><div><b>自动（推荐）</b><div class="sm muted">按文档的标题结构分段，适合大多数文档</div></div></div>
+        <div class="radio-card"><span class="r"></span><div><b>自定义</b><div class="sm muted">自己设置分段长度和重叠</div></div></div></div>`,
+      `<button class="btn" data-act="closeDrawer">取消</button><button class="btn" data-act="toast" data-msg="预览分段结果">预览分段</button><button class="btn primary" data-act="toastClose" data-msg="已开始处理，处理完成后可以被查到">开始处理</button>`);
+    case 'skill': {
+      const s = D.skills.find((x) => x.id === R.id);
+      return drawerShell(esc(s.name), `<div class="row" style="margin-bottom:12px"><span class="tag">${s.src}</span><span class="tag">${s.ver}</span><span class="tag ${SK_STATE[s.state][1]}">${SK_STATE[s.state][0]}</span></div>
+        <p>${esc(s.desc)}</p>
+        <h3 style="margin:18px 0 8px">适合什么时候用</h3><p class="sm muted">提交代码前自查；合并请求评审；新人代码辅导。</p>
+        <h3 style="margin:18px 0 8px">在用的智能体（${s.uses}）</h3><div class="row" style="flex-wrap:wrap">${['通用助手', '编程助手'].slice(0, Math.min(2, s.uses)).map((n) => `<span class="chip">${av(n, '#6366f1', 18)}${n}</span>`).join('') || '<span class="sm muted">还没有</span>'}</div>
+        <h3 style="margin:18px 0 8px">版本</h3><div class="sm"><div>${s.ver} · 11-09 · ${s.by}（当前）</div><div class="muted">v${Math.max(1, +s.ver.slice(1) - 1)} · 10-28</div></div>`,
+        `${s.mine ? '<button class="btn">上传新版本</button>' : ''}${isAdmin() && s.state === 'published' ? '<button class="btn danger">停用</button>' : ''}<button class="btn primary" data-act="toastClose" data-msg="选择要添加到的智能体">添加到智能体</button>`);
+    }
+    case 'mcpTry': return drawerShell('试用 · ' + esc(R.t), `<span class="label">参数</span><div class="col"><div><span class="xs muted">关键词</span><input class="input" value="Atlas 智能体平台"></div><div><span class="xs muted">返回条数</span><input class="input" value="5"></div></div>
+      <button class="btn primary" style="margin-top:12px" data-act="toast" data-msg="调用成功（用你的 Key）">${ic('play')}运行</button>
+      <span class="label" style="margin-top:18px">结果</span><pre class="mono" style="background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:12px;white-space:pre-wrap;margin:0">[\n  { "title": "Atlas 智能体平台介绍", "link": "https://…" },\n  …\n]</pre>`);
+  }
+  return '';
+}
+
+function overlays(r) {
+  let pop = '';
+  if (S.pop) pop = `<div class="pop" style="position:fixed;left:${S.pop.x}px;top:${S.pop.y}px" data-stop>${popContent(S.pop.id)}</div>`;
+  return pop + modal() + drawer();
+}
+
+/* =====================================================================
+ * 设计说明（评审用）
+ * ===================================================================== */
+function notesFor(r) {
+  const N = (title, items, be = []) => ({ title, items, be });
+  if (r.p === 'ai' && !r.a) return N('智能平台 · 首页', [
+    '进入智能平台就是一个输入框（同 ChatGPT / Claude），发出第一句话即新建对话',
+    '默认用「系统 › 平台设置」里的默认智能体；输入框里可以临时换成别的智能体',
+    '执行前确认（自动 / 手动 / 先规划）在输入框里选；悬停有一句话说明',
+    '快捷问题随所选智能体变化',
+    '左侧「最近对话」取代原来单独的会话列表栏',
+  ], ['默认智能体配置项 + 初始化脚本建「通用助手」（以使用者身份、共享全员、执行命令 + 自动 + 记忆 + 知识库「使用者能查阅的全部」）', '发消息前添加文件：建会话接口需支持附件，或先建会话再上传']);
+  if (r.p === 'ai' && r.a === 'c') return N('智能平台 · 对话', [
+    '会话列表进左侧菜单，对话区更宽；进行中 / 等你确认的会话在列表里有圆点',
+    '工具调用改成「步骤」，用人话描述（阅读 xxx、运行测试），默认折叠成「已完成 N 个步骤」',
+    '委派给其他智能体时显示协作卡片，可以展开看它的过程',
+    '需要确认的操作就地出现在对话里，拒绝时可以说明原因',
+    '每条回答：复制 / 重新生成 / 有帮助 / 没帮助',
+    '文件改成按需打开的抽屉；上下文用量不再常驻（接近上限时才提示）',
+  ], ['重新生成、回答反馈（新接口）', '工具名 → 步骤文案的映射表（前端维护）']);
+  if (r.p === 'ai' && r.a === 'agents' && r.b) return N('智能平台 · 智能体编辑', [
+    '参照 Coze / Dify / GPTs 的「编排 + 调试预览」：左边配置，右边直接试，不用先发布',
+    '去掉页面内的子菜单：配置分成可折叠的分组，常用的默认展开，高级设置收起',
+    '名称、描述、头像点头像修改；共享、历史版本、发布在右上角',
+    '修改自动保存为草稿，发布后新对话才用新配置',
+    '「能力」是开关，不再出现工具英文名；不可用的能力不显示（由管理员开通）',
+    '「执行形态」不再出现：创建时选「编程助手」模板即 Claude Code 驱动',
+  ], ['草稿自动保存（现在每次保存就是一个新版本）', '用未发布的配置试运行（新接口）', '知识库「使用者能查阅的全部」= KnowledgeSpec.scope=all_readable']);
+  if (r.p === 'ai' && r.a === 'agents') return N('智能平台 · 智能体', [
+    '只按「和我的关系」筛选：全部 / 我创建的 / 共享给我的；草稿只出现在自己的列表里',
+    '已归档不混在列表里，从右上角「已归档」进入，可恢复',
+    '类型（Native / CLI）不再是筛选维度；Claude Code 驱动的只在卡片上打标签',
+    '默认按最近使用排序，默认智能体置顶',
+    '卡片主操作是「对话」；有编辑权限才显示「编辑」；只能使用的点开是简介',
+  ], ['列表接口返回：所有者、我的权限级别、最近使用时间；支持 scope=mine|shared']);
+  if (r.p === 'ai' && r.a === 'me') return N('智能平台 · 个性化', [
+    '记忆和自定义指令合并为「个性化」两个页签',
+    '每条记忆显示来自哪次对话；修改、删除就地操作',
+    '「平台指令」影响所有人，移到「系统 › 平台设置」',
+    '清除全部放在页面底部，避免误点',
+  ], ['记忆出处读会话详情：旧数据 kind=acp 导致 500，需先修（见上次走查）']);
+  if (r.p === 'kb') return N('知识库', [
+    '列表与智能体同一套：全部 / 我创建的 / 共享给我的 + 搜索 + 排序',
+    '详情：文档 / 检索测试 / 设置三个页签；共享是弹窗，不占页签',
+    '上传是抽屉：选文件 → 分段方式（默认自动）→ 开始处理；技术参数收进「自定义」',
+    '「待审核」是独立入口，带数量',
+  ], ['「待审核」跨知识库汇总的接口（现在按库查）']);
+  if (r.p === 'skills') return N('技能', [
+    '技能广场 = 已发布的技能，按使用量排序，卡片显示多少智能体在用',
+    '我上传的 = 跟踪自己上传的技能状态；待审查 = 管理员处理队列',
+    '上传：拖入 zip → 自动检查 → 提交审查；检查项用人话说明',
+    '详情抽屉里可以直接「添加到智能体」',
+  ], ['「添加到智能体」：从技能侧写入智能体配置（新）']);
+  if (r.p === 'mcp') return N('MCP', [
+    '服务列表按「我能用的 / 我管理的 / 全部」；不能用的服务显示「申请使用」',
+    '详情：工具（可直接试用）/ 谁能用 / 连接设置 / 使用情况',
+    '接入服务改成分步向导；Key 拆成独立页面',
+  ], ['申请使用（通知服务负责人，新）', '使用情况统计（调用次数、成功率）']);
+  if (r.p === 'models') return N('模型', [
+    '普通用户只看到自己能用的模型；管理员多「添加模型」和行操作（删除二次确认）',
+    '价格、上下文直接在列表里，不需要去别的系统看',
+    '建议后续补：按智能体 / 人员 / 部门的用量与费用看板',
+  ]);
+  if (r.p === 'sys') return N('系统（仅管理员）', [
+    '平台设置：默认智能体、平台指令 —— 业务含义明确的设置单独成页',
+    '配置项、定时任务保留给管理员排障，列表只显示名称和当前值',
+  ], ['默认智能体存为配置项（appconfig），首页读取']);
+  return N('', []);
+}
+function notesPanel(r) {
+  const n = notesFor(r);
+  if (!n.items.length) return '';
+  return `<div class="notes"><div class="row"><b style="color:#92400e">${ic('bulb')} ${n.title}</b><span class="sp"></span><button class="ibtn sm" data-act="toggleNotes">${ic('x')}</button></div>
+    <h4>设计要点</h4><ul>${n.items.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>
+    ${n.be.length ? `<h4>需要后端配合</h4><ul>${n.be.map((i) => `<li><span class="be">后端</span>${esc(i)}</li>`).join('')}</ul>` : ''}
+    <div class="xs" style="color:#a8a29e;margin-top:10px">右上角「设计说明」可关闭；头像菜单可切换普通用户视角</div></div>`;
+}
+
+/* =====================================================================
+ * 交互
+ * ===================================================================== */
+const ACT = {
+  toggleNotes: () => { S.notes = !S.notes; },
+  collapse: () => { const r = parseRoute(); if (r.p === 'ai' && r.a === 'agents' && r.b) S.editorExpand = !S.editorExpand; else S.collapsed = !S.collapsed; },
+  toast: (el) => { toast(el.dataset.msg || '（原型）'); return false; },
+  toastClose: (el) => { S.modal = null; S.drawer = null; toast(el.dataset.msg); return false; },
+  toggleSteps: (el) => { const id = el.dataset.id; S.stepsOpen[id] = !(S.stepsOpen[id] ?? false); },
+  files: () => { S.drawer = { type: 'files' }; },
+  feedback: () => { S.modal = { type: 'feedback' }; },
+  agentScope: (el) => { S.agentScope = el.dataset.v; },
+  archived: (el) => { S.showArchived = el.dataset.v === '1'; },
+  openAgent: (el) => { const a = agentOf(el.dataset.id); if (a.level === 'owner' || a.level === 'edit') go('#/ai/agents/' + a.id); else S.modal = { type: 'profile', id: a.id }; },
+  chatWith: (el) => { S.composerAgent = el.dataset.id; S.modal = null; S.focusHome = true; go('#/ai'); },
+  restore: (el) => { agentOf(el.dataset.id).status = 'published'; toast('已恢复'); return false; },
+  newAgent: () => { S.modal = { type: 'newAgent', tpl: 'general' }; },
+  tpl: (el) => { S.modal.name = document.getElementById('newName')?.value; S.modal.tpl = el.dataset.v; },
+  createAgent: () => {
+    const name = document.getElementById('newName').value.trim() || '未命名智能体';
+    const id = 'a' + Date.now(); const tpl = S.modal.tpl;
+    D.agents.push({ id, name, color: COLORS[D.agents.length % COLORS.length], desc: '', owner: ME.name, mine: true, status: 'draft', engine: tpl === 'coder' ? 'claude' : 'standard', last: '—', lastN: 99, updated: '今天', version: 0, sharedTo: '仅自己', level: 'owner' });
+    if (tpl !== 'blank' && EDIT[tpl]) EDIT[id] = JSON.parse(JSON.stringify(EDIT[tpl]));
+    S.modal = null; go('#/ai/agents/' + id);
+  },
+  share: (el) => { S.pop = null; S.modal = { type: 'share', id: el.dataset.id }; },
+  versions: () => { S.drawer = { type: 'versions' }; },
+  publish: (el) => { S.modal = { type: 'publish', id: el.dataset.id }; },
+  publishOk: (el) => { const a = agentOf(el.dataset.id); a.version += 1; a.status = 'published'; edState(a.id).dirty = false; S.modal = null; toast(`已发布 v${a.version}`); return false; },
+  basicInfo: (el) => { S.modal = { type: 'basic', id: el.dataset.id }; },
+  sec: (el) => { S.secOpen[el.dataset.k] = !S.secOpen[el.dataset.k]; },
+  cap: (el) => { const e = edState(el.dataset.id); e.caps[el.dataset.k] = !e.caps[el.dataset.k]; e.dirty = true; },
+  knowScope: (el) => { const e = edState(el.dataset.id); e.knowScope = el.dataset.v; e.dirty = true; },
+  edMode: (el) => { const e = edState(el.dataset.id); e.mode = el.dataset.v; e.dirty = true; },
+  identity: (el) => { const e = edState(el.dataset.id); e.identity = el.dataset.v; e.dirty = true; },
+  rmChip: (el) => { const e = edState(parseRoute().b); e[el.dataset.kind] = e[el.dataset.kind].filter((x) => x !== el.dataset.v); e.dirty = true; },
+  pick: (el) => { const id = parseRoute().b; S.modal = { type: 'pick', id, kind: el.dataset.kind, sel: [...edState(id)[el.dataset.kind]] }; },
+  pickToggle: (el) => { const v = el.dataset.v; const s = S.modal.sel; S.modal.sel = s.includes(v) ? s.filter((x) => x !== v) : [...s, v]; },
+  pickOk: () => { const e = edState(S.modal.id); e[S.modal.kind] = S.modal.sel; e.dirty = true; S.modal = null; },
+  clearPreview: () => { S.preview = null; },
+  memTopic: (el) => { S.memTopic = el.dataset.v; },
+  memPause: () => { S.memPaused = !S.memPaused; },
+  meTab: (el) => { S.meTab = el.dataset.v; },
+  goMe: () => go('#/ai/me'),
+  goAgents: () => go('#/ai/agents'),
+  confirmDanger: (el) => { S.pop = null; S.modal = { type: 'confirm', msg: el.dataset.msg, arch: el.dataset.arch }; },
+  confirmOk: () => { const M = S.modal; S.modal = null; if (M.arch) { agentOf(M.arch).status = 'archived'; if (parseRoute().b === M.arch) go('#/ai/agents'); } toast('已' + M.msg.replace(/「.*」/, '').trim()); return false; },
+  setS: (el) => { S[el.dataset.k] = el.dataset.v; },
+  kbUpload: () => { S.drawer = { type: 'kbUpload' }; },
+  skillDetail: (el) => { S.drawer = { type: 'skill', id: el.dataset.id }; },
+  uploadSkill: () => { S.modal = { type: 'uploadSkill', step: 0 }; },
+  skillStep: (el) => { S.modal.step = +el.dataset.v; },
+  registerMcp: () => { S.modal = { type: 'registerMcp' }; },
+  mcpTry: (el) => { S.drawer = { type: 'mcpTry', t: el.dataset.t }; },
+  keyUsage: (el) => { S.modal = { type: 'keyUsage', kind: el.dataset.kind }; },
+  setAgent: (el) => { S.composerAgent = el.dataset.id; S.pop = null; },
+  setMode: (el) => { S.composerMode = el.dataset.v; S.pop = null; },
+  setDefault: (el) => { D.agents.forEach((a) => { a.isDefault = a.id === el.dataset.id; }); S.composerAgent = el.dataset.id; S.pop = null; toast('已设为默认智能体'); return false; },
+  role: () => { S.role = isAdmin() ? 'user' : 'admin'; S.pop = null; if (parseRoute().p === 'sys' && !isAdmin()) go('#/ai'); },
+  closeModal: () => { S.modal = null; },
+  closeDrawer: () => { S.drawer = null; },
+};
+
+function send(id) {
+  const ta = document.getElementById(id); const text = ta?.value.trim();
+  if (!text) return;
+  if (id === 'home') return startChat(text, S.composerAgent);
+  if (id === 'pv') { S.preview = text; return render(); }
+  toast('（原型）消息已发送');
+}
+
+document.addEventListener('click', (e) => {
+  const el = e.target.closest('[data-go],[data-act],[data-pop],[data-send],[data-fill]');
+  if (!el) { if (S.pop && !e.target.closest('[data-stop]')) { S.pop = null; render(); } return; }
+  if (el.dataset.act === 'closeModal' && el.classList.contains('mask') && e.target !== el) return; // 点在弹窗内部
+  e.preventDefault();
+  if (S.pop && !el.dataset.pop && !el.closest('.pop')) S.pop = null;
+  if (el.dataset.pop) {
+    const id = el.dataset.pop;
+    if (S.pop?.id === id) { S.pop = null; return render(); }
+    const rc = el.getBoundingClientRect();
+    const w = 260; const x = Math.min(rc.left, window.innerWidth - w - 12);
+    const below = rc.bottom + 6; const y = below + 280 > window.innerHeight ? Math.max(12, rc.top - 6 - 260) : below;
+    S.pop = { id, x, y }; return render();
+  }
+  if (el.dataset.go) return go(el.dataset.go);
+  if (el.dataset.send) return send(el.dataset.send);
+  if (el.dataset.fill) { const ta = document.getElementById(el.dataset.fill); if (ta) { ta.value = el.dataset.text; ta.focus(); } return; }
+  const fn = ACT[el.dataset.act];
+  if (fn) { if (fn(el, e) !== false) render(); }
+});
+document.addEventListener('keydown', (e) => {
+  const ta = e.target.closest?.('[data-enter]');
+  if (ta && e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(ta.dataset.enter); }
+  if (e.key === 'Escape' && (S.modal || S.drawer || S.pop)) { S.modal = null; S.drawer = null; S.pop = null; render(); }
+});
+document.addEventListener('input', (e) => {
+  const k = e.target.dataset?.input; if (!k) return;
+  if (k === 'agentQ') { S.agentQ = e.target.value; S.refocus = { sel: '[data-input="agentQ"]', pos: e.target.selectionStart }; render(); }
+  if (k.startsWith('prompt:')) { const e2 = edState(k.slice(7)); e2.prompt = e.target.value; e2.dirty = true; }
+});
+document.addEventListener('change', (e) => { if (e.target.dataset?.change === 'agentSort') { S.agentSort = e.target.value; render(); } });
+
+function afterRender(r) {
+  if (S.refocus) { const el = document.querySelector(S.refocus.sel); if (el) { el.focus(); el.setSelectionRange(S.refocus.pos, S.refocus.pos); } S.refocus = null; }
+  if (r.p === 'ai' && !r.a) { const ta = document.getElementById('home'); if (ta && (S.focusHome || !document.activeElement || document.activeElement === document.body)) ta.focus(); S.focusHome = false; }
+  const cs = document.querySelector('.chat-scroll'); if (cs) cs.scrollTop = cs.scrollHeight;
+}
+
+render();
+</script>
+</body>
+</html>
