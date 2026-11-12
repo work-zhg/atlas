@@ -77,6 +77,8 @@ class JudgeModel(BaseChatModel):
     answers: list[str] = Field(default_factory=list)
     error: Any = None
     delay: float = 0.0
+    #: 先思考再作答（MiniMax 这类）：流式时先出 thinking 块、再出文本
+    thinking: str = ""
     _requests: list[dict[str, Any]] = PrivateAttr(default_factory=list)
 
     @property
@@ -105,6 +107,9 @@ class JudgeModel(BaseChatModel):
         if self.delay:
             await asyncio.sleep(self.delay)
         text = self._answer(messages, run_manager, kwargs)
+        if self.thinking:
+            block = {"type": "thinking", "thinking": self.thinking, "index": 0}
+            yield ChatGenerationChunk(message=AIMessageChunk(content=[block]))
         yield ChatGenerationChunk(message=AIMessageChunk(content=text))
 
     async def _agenerate(
@@ -117,7 +122,11 @@ class JudgeModel(BaseChatModel):
         if self.delay:
             await asyncio.sleep(self.delay)
         text = self._answer(messages, run_manager, kwargs)
-        return ChatResult(generations=[ChatGeneration(message=AIMessage(content=text))])
+        content: Any = text
+        if self.thinking:
+            thought = {"type": "thinking", "thinking": self.thinking}
+            content = [thought, {"type": "text", "text": text}]
+        return ChatResult(generations=[ChatGeneration(message=AIMessage(content=content))])
 
     def _generate(self, *args: Any, **kwargs: Any) -> ChatResult:
         raise NotImplementedError("只走异步")
@@ -363,6 +372,16 @@ async def test_a_blocked_call_returns_rule_and_reason_and_the_run_goes_on() -> N
     assert "下载并执行" in failed[0] and "用户只要求统计行数" in failed[0]
     assert "不要换工具或换写法" in failed[0]
     assert events[-1].type is EventType.RUN_FINISHED
+
+
+async def test_a_judge_that_thinks_first_is_still_understood() -> None:
+    """★ 图里的调用是流式的：thinking 块之后的文本合并成列表里的裸字符串，两个阶段都要认得。"""
+    gate = ScriptedGate()
+    model = JudgeModel(answers=["BLOCK", BLOCK_JSON], thinking="先核对规则")
+    events = await _run(_judge(model), gate)
+    assert not gate.asked
+    failed = [str(e.data.get("result", "")) for e in events if e.type is EventType.TOOL_FAILED]
+    assert len(failed) == 1 and "下载并执行" in failed[0]
 
 
 async def test_a_judge_error_falls_back_to_asking_the_user() -> None:

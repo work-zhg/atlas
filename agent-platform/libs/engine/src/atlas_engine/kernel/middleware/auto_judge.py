@@ -205,7 +205,9 @@ async def _complete(setup: JudgeSetup, view: str, ask: str, max_tokens: int) -> 
     #   被当成智能体的正文发给前端
     result = await setup.model.ainvoke(request, config={"tags": [TAG_NOSTREAM]},
                                        max_tokens=max_tokens)  # fmt: skip
-    return _text(result.content)
+    # ★ 用 .text，不要自己挑 type=text 的块：图里的调用是流式的，先思考的模型（MiniMax）
+    #   合并后是 ['', {thinking}, '答案']，答案是列表里的裸字符串
+    return result.text
 
 
 def _allows(answer: str) -> bool:
@@ -288,7 +290,7 @@ def _actions(
             line = _call_line(call, _HISTORY_ARG_CHARS)
             result = results.get(str(call.get("id") or "")) if name in user_tools else None
             if result is not None and result.status != "error":
-                line += f"\n    用户的决定：{_clip(_text(result.content), _DECISION_CHARS)}"
+                line += f"\n    用户的决定：{_clip(result.text, _DECISION_CHARS)}"
             yield line
 
 
@@ -326,12 +328,3 @@ def _clip_args(value: Any, limit: int) -> Any:
 
 def _clip(text: str, limit: int) -> str:
     return text if len(text) <= limit else f"{text[:limit]}…（共 {len(text)} 字，已截断）"
-
-
-def _text(content: Any) -> str:
-    """只取文本块（thinking 等不要）。"""
-    if isinstance(content, str):
-        return content
-    return "".join(
-        str(b.get("text", "")) for b in content or () if isinstance(b, dict) and b.get("type") == "text"
-    )
