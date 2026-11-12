@@ -350,12 +350,6 @@
   font-weight: 550;
   min-width: 0;
   border: 0;
-  cursor: pointer;
-}
-
-.dirChip:hover {
-  background: #ffeab0;
-  color: #8a5a00;
 }
 
 .dirChip > span {

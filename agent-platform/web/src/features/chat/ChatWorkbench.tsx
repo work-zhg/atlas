@@ -13,7 +13,6 @@ import { useCallback, useState } from "react";
 import { uploadThreadFile, useDeleteThread, useRenameThread, useThread } from "@/api/threads";
 import { Icon } from "@/components/Icon";
 import { BackfillNotice } from "@/features/memory/BackfillNotice";
-import { DirChip } from "@/features/workspace/DirChip";
 import { ThreadConversation, type ConversationStreamState } from "@atlas/chat-ui/src/chat/ThreadConversation";
 import type { ContextUsageData } from "@atlas/chat-ui/src/lib/events";
 
@@ -85,7 +84,6 @@ export function ChatWorkbench({ threadId }: { threadId: string }) {
         notice={<BackfillNotice linkToPage />}
         headerExtra={
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-            {thread?.workspace_dir && <DirChip dir={thread.workspace_dir} />}
             <ContextMeter threadId={threadId} live={live.usage} running={live.running} minPercent={60} />
             <Button size="small" type="text" icon={<Icon name="folder" size={15} />} onClick={() => setFilesOpen(true)}>
               文件{fileCount > 0 && <span style={{ color: "var(--fg-3)" }}> {fileCount}</span>}
