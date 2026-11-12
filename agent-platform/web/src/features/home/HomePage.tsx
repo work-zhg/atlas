@@ -6,6 +6,8 @@
  * ★ 默认用平台设置里的默认智能体；?agent=<id>（智能体列表点「对话」）或输入框里临时换。
  *   都没有时退回第一个能用的智能体；一个都没有就告诉用户去哪里建。
  * ★ 添加的文件在会话建好之后再上传（会话之前没有工作区），消息里附上它们的路径。
+ * ★ ?dir=<目录>（工作空间里文件夹上的「新建对话」）：新对话以这个目录为工作目录，建对话时定下、
+ *   之后不能换。没带就由后端新建 {日期}/{对话 id}。
  */
 import { App as AntdApp, Button, Result, Skeleton } from "antd";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -21,6 +23,8 @@ import { Composer } from "@atlas/chat-ui/src/chat/Composer";
 import { ModelPicker } from "@atlas/chat-ui/src/chat/ModelPicker";
 import { ModePicker } from "@atlas/chat-ui/src/chat/ModePicker";
 import { newIdempotencyKey } from "@atlas/chat-ui/src/lib/id";
+
+import { DirChip, DirHint } from "@/features/workspace/DirChip";
 
 import { AgentPicker } from "./AgentPicker";
 import styles from "./home.module.css";
@@ -48,6 +52,14 @@ export function HomePage() {
   const [model, setModel] = useState<string | null>(null);
   const [fill, setFill] = useState<{ text: string; seq: number }>();
 
+  const dir = params.get("dir") ?? "";
+  const dropDir = () => {
+    const sp = new URLSearchParams(params.toString());
+    sp.delete("dir");
+    const qs = sp.toString();
+    router.replace(qs ? `/?${qs}` : "/");
+  };
+
   const agents = agentsQ.data?.data ?? [];
   const defaultId = defaultQ.data?.id;
   const agentId = picked ?? params.get("agent") ?? defaultId ?? agents[0]?.id;
@@ -69,7 +81,11 @@ export function HomePage() {
   const send = async (text: string, files: File[]) => {
     if (!agentId) return;
     try {
-      const thread = await createThread.mutateAsync({ agent_id: agentId, title: "" });
+      const thread = await createThread.mutateAsync({
+        agent_id: agentId,
+        title: "",
+        workspace_dir: dir || undefined,
+      });
       const paths = await Promise.all(files.map((f) => uploadThreadFile(thread.id, f)));
       await sendMessage.mutateAsync({
         threadId: thread.id,
@@ -126,11 +142,12 @@ export function HomePage() {
           autoFocus
           running={false}
           acceptFiles
-          placeholder="有什么可以帮你？"
+          placeholder={dir ? "想让智能体用这个目录里的文件做什么？" : "有什么可以帮你？"}
           fill={fill}
           onSend={send}
           toolbar={
             <>
+              {dir && <DirChip dir={dir} onRemove={dropDir} />}
               <AgentPicker
                 agents={agents}
                 value={agent}
@@ -160,6 +177,11 @@ export function HomePage() {
             </>
           }
         />
+        {dir && (
+          <div style={{ marginTop: 10, paddingLeft: 6 }}>
+            <DirHint dir={dir} />
+          </div>
+        )}
       </div>
       {agentId === defaultId && (
         <div className={styles.quick}>

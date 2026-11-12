@@ -1,0 +1,1814 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Atlas · 我的工作空间 — 原型</title>
+<style>
+/* 视觉与 atlas-console.html 一致（同一套浅色设计 token） */
+:root {
+  --bg: #f6f7f9; --surface: #ffffff; --surface-2: #fbfbfd; --hover: #f2f4f8;
+  --ink: #0f172a; --ink-2: #334155; --ink-3: #64748b; --ink-4: #94a3b8;
+  --line: #e6e8ee; --line-2: #eef0f4;
+  --primary: #4f46e5; --primary-2: #6366f1; --primary-weak: #eef0ff; --primary-ink: #4338ca;
+  --secondary: #0ea5e9; --secondary-weak: #e6f6fe;
+  --success: #16a34a; --success-weak: #e7f6ec;
+  --warning: #d97706; --warning-weak: #fef3e2;
+  --danger: #dc2626; --danger-weak: #fdeaea;
+  --radius: 12px; --radius-sm: 8px;
+  --shadow-xs: 0 1px 2px rgba(16,24,40,.05);
+  --shadow-md: 0 6px 18px rgba(16,24,40,.08), 0 2px 6px rgba(16,24,40,.05);
+  --shadow-lg: 0 20px 48px rgba(16,24,40,.16);
+  --font: "Inter", "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  --top-h: 52px; --sider-w: 248px; --sider-w-min: 60px;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { font-family: var(--font); background: var(--bg); color: var(--ink); font-size: 14px; line-height: 1.55; -webkit-font-smoothing: antialiased; }
+a { color: var(--primary); text-decoration: none; cursor: pointer; }
+button, input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
+h1, h2, h3, h4 { margin: 0; color: var(--ink); }
+h1 { font-size: 20px; font-weight: 650; }
+p { margin: 0; }
+code { font-family: var(--mono); font-size: 12px; background: var(--line-2); padding: 1px 5px; border-radius: 5px; }
+svg.i { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+svg.i.fill { fill: currentColor; stroke: none; }
+.muted { color: var(--ink-3); }
+.faint { color: var(--ink-4); }
+.sm { font-size: 12.5px; }
+.xs { font-size: 12px; }
+.row { display: flex; align-items: center; gap: 8px; }
+.col { display: flex; flex-direction: column; gap: 8px; }
+.grow { flex: 1; min-width: 0; }
+.ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp { flex: 1; }
+.hide { display: none !important; }
+mark { background: #fff1a8; color: inherit; border-radius: 2px; padding: 0 1px; }
+
+/* ---------- 顶栏 / 左侧菜单（同控制台） ---------- */
+.top { height: var(--top-h); background: var(--surface); border-bottom: 1px solid var(--line); display: flex; align-items: center; padding: 0 16px 0 14px; gap: 20px; position: relative; z-index: 20; }
+.brand { display: flex; align-items: center; gap: 9px; font-weight: 700; font-size: 15px; }
+.brand .logo { width: 28px; height: 28px; border-radius: 8px; background: linear-gradient(135deg, #6366f1, #0ea5e9); color: #fff; display: grid; place-items: center; font-size: 14px; }
+.pnav { display: flex; gap: 2px; height: 100%; }
+.pnav a { display: flex; align-items: center; gap: 7px; padding: 0 14px; color: var(--ink-2); font-weight: 550; position: relative; }
+.pnav a:hover { color: var(--ink); background: var(--hover); }
+.pnav a.on { color: var(--primary-ink); }
+.pnav a.on::after { content: ""; position: absolute; left: 12px; right: 12px; bottom: -1px; height: 2px; background: var(--primary); border-radius: 2px; }
+.top-right { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+.avatar { width: 30px; height: 30px; border-radius: 50%; display: inline-grid; place-items: center; color: #fff; font-size: 12.5px; font-weight: 650; flex: none; }
+.avatar.sq { border-radius: 7px; }
+.body { display: flex; height: calc(100vh - var(--top-h)); }
+.sider { width: var(--sider-w); flex: none; background: var(--surface-2); border-right: 1px solid var(--line); display: flex; flex-direction: column; transition: width .18s ease; overflow: hidden; }
+.sider.min { width: var(--sider-w-min); }
+.sider-top { padding: 12px 10px 6px; display: flex; flex-direction: column; gap: 2px; }
+.snav { display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: var(--radius-sm); color: var(--ink-2); font-weight: 520; white-space: nowrap; cursor: pointer; }
+.snav:hover { background: var(--hover); color: var(--ink); }
+.snav.on { background: var(--primary-weak); color: var(--primary-ink); font-weight: 600; }
+.sider.min .snav { justify-content: center; padding: 0; }
+.sider.min .snav span, .sider.min .new-chat span { display: none; }
+.new-chat { display: flex; align-items: center; justify-content: center; gap: 8px; height: 38px; border-radius: 10px; background: var(--surface); border: 1px solid var(--line); font-weight: 600; cursor: pointer; margin-bottom: 8px; box-shadow: var(--shadow-xs); white-space: nowrap; color: var(--ink); }
+.new-chat:hover { background: var(--hover); }
+.hist { flex: 1; overflow-y: auto; padding: 4px 10px 10px; border-top: 1px solid var(--line-2); margin-top: 6px; }
+.hist-head { padding: 8px 6px 4px; font-size: 12px; font-weight: 600; color: var(--ink-3); }
+.hist-item { display: flex; align-items: center; gap: 6px; height: 34px; padding: 0 6px 0 10px; border-radius: var(--radius-sm); color: var(--ink-2); cursor: pointer; font-size: 13.5px; }
+.hist-item:hover { background: var(--hover); }
+.hist-item.on { background: var(--primary-weak); color: var(--primary-ink); }
+.hist-item .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dot { width: 7px; height: 7px; border-radius: 50%; flex: none; display: inline-block; }
+.dot.run { background: var(--success); box-shadow: 0 0 0 3px var(--success-weak); }
+.sider-foot { border-top: 1px solid var(--line-2); padding: 8px 10px; }
+.main { flex: 1; min-width: 0; position: relative; background: var(--surface); }
+.page { padding: 22px 32px 80px; max-width: 1180px; margin: 0 auto; }
+.page-head { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; min-height: 40px; }
+
+/* ---------- 通用组件 ---------- */
+.btn { height: 34px; padding: 0 14px; border-radius: var(--radius-sm); border: 1px solid var(--line); background: var(--surface); display: inline-flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer; font-weight: 550; white-space: nowrap; color: var(--ink); }
+.btn:hover { border-color: #cfd3dd; background: var(--hover); }
+.btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+.btn.primary:hover { background: var(--primary-2); }
+.btn.danger { color: var(--danger); }
+.btn.danger.solid { background: var(--danger); border-color: var(--danger); color: #fff; }
+.btn.ghost { border-color: transparent; background: transparent; }
+.btn.ghost:hover { background: var(--hover); }
+.btn.sm { height: 28px; padding: 0 10px; font-size: 13px; }
+.btn[disabled] { opacity: .45; cursor: not-allowed; }
+.ibtn { width: 30px; height: 30px; border-radius: var(--radius-sm); border: none; background: transparent; display: inline-grid; place-items: center; cursor: pointer; color: var(--ink-3); flex: none; }
+.ibtn:hover { background: var(--hover); color: var(--ink); }
+.ibtn.sm { width: 26px; height: 26px; }
+.ibtn[disabled] { opacity: .35; cursor: not-allowed; }
+.input { height: 34px; border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 0 11px; background: var(--surface); outline: none; width: 100%; }
+.input:focus { border-color: var(--primary-2); box-shadow: 0 0 0 3px var(--primary-weak); }
+.search { position: relative; }
+.search > svg { position: absolute; left: 10px; top: 9px; color: var(--ink-4); }
+.search .input { padding-left: 32px; padding-right: 30px; }
+.search .clr { position: absolute; right: 4px; top: 4px; }
+.tag { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; border-radius: 6px; font-size: 12px; font-weight: 550; background: var(--line-2); color: var(--ink-2); white-space: nowrap; }
+.switch { display: inline-block; vertical-align: middle; width: 32px; height: 18px; border-radius: 9px; background: #d5d9e2; position: relative; cursor: pointer; flex: none; transition: background .15s; }
+.switch::after { content: ""; position: absolute; width: 14px; height: 14px; border-radius: 50%; background: #fff; top: 2px; left: 2px; transition: left .15s; box-shadow: 0 1px 2px rgba(0,0,0,.2); }
+.switch.on { background: var(--primary); }
+.switch.on::after { left: 16px; }
+.toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; min-height: 34px; flex-wrap: wrap; }
+.empty { text-align: center; padding: 64px 20px; color: var(--ink-3); }
+.empty .ill { width: 56px; height: 56px; border-radius: 16px; background: var(--primary-weak); color: var(--primary); display: grid; place-items: center; margin: 0 auto 14px; }
+.empty .ill svg { width: 26px; height: 26px; }
+.empty h3 { margin-bottom: 6px; font-size: 15px; }
+.spin { width: 14px; height: 14px; border: 2px solid #c7cbf6; border-top-color: var(--primary); border-radius: 50%; animation: spin .8s linear infinite; flex: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* 浮层 / 弹窗 / 提示 */
+.pop { position: fixed; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow-lg); padding: 6px; z-index: 60; min-width: 196px; }
+.pop .mi { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-radius: 7px; cursor: pointer; color: var(--ink-2); }
+.pop .mi:hover { background: var(--hover); color: var(--ink); }
+.pop .mi.danger { color: var(--danger); }
+.pop .mi.on { color: var(--primary-ink); }
+.pop .sep { height: 1px; background: var(--line-2); margin: 5px 4px; }
+.pop .ph { font-size: 11.5px; color: var(--ink-4); padding: 6px 10px 2px; }
+.mask { position: fixed; inset: 0; background: rgba(15,23,42,.36); z-index: 80; display: grid; place-items: center; }
+.modal { background: var(--surface); border-radius: 14px; width: 480px; max-width: calc(100vw - 40px); max-height: calc(100vh - 60px); display: flex; flex-direction: column; box-shadow: var(--shadow-lg); }
+.modal-h { display: flex; align-items: center; padding: 16px 20px 6px; font-weight: 650; font-size: 15.5px; }
+.modal-b { padding: 8px 20px 16px; overflow-y: auto; color: var(--ink-2); }
+.modal-f { padding: 12px 20px 16px; display: flex; justify-content: flex-end; gap: 8px; }
+.label { font-size: 13px; font-weight: 600; color: var(--ink-2); margin-bottom: 6px; display: block; }
+.err { font-size: 12.5px; color: var(--danger); margin-top: 6px; }
+.warnbox, .infobox { display: flex; gap: 8px; border-radius: 9px; padding: 9px 11px; font-size: 13px; margin-top: 12px; }
+.warnbox { background: var(--warning-weak); color: #92400e; }
+.warnbox.danger { background: var(--danger-weak); color: #991b1b; }
+.infobox { background: var(--primary-weak); color: var(--primary-ink); }
+.warnbox svg, .infobox svg { margin-top: 2px; }
+.names { margin: 10px 0 0; padding: 8px 12px; background: var(--surface-2); border: 1px solid var(--line-2); border-radius: 9px; font-size: 13px; }
+.names div { display: flex; gap: 8px; align-items: center; padding: 2px 0; }
+.ck { display: inline-flex; align-items: center; gap: 8px; margin-top: 14px; cursor: pointer; font-size: 13px; user-select: none; }
+.toast { position: fixed; top: 64px; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 9px 16px; border-radius: 10px; font-size: 13.5px; z-index: 100; box-shadow: var(--shadow-md); max-width: 560px; }
+
+/* ---------- 设计说明（评审用，非产品界面） ---------- */
+.notes { width: 300px; flex: none; overflow-y: auto; background: #fffdf3; border-left: 1px solid #f3e3a6; padding: 14px 16px; font-size: 13px; }
+.notes h4 { font-size: 13px; margin: 12px 0 4px; color: #92400e; }
+.notes ul { margin: 0; padding-left: 18px; }
+.notes li { margin: 3px 0; color: #57534e; }
+.notes .be { display: inline-block; font-size: 11px; background: #fde68a; color: #92400e; border-radius: 4px; padding: 0 5px; margin-right: 4px; }
+.notes .q { display: inline-block; font-size: 11px; background: #fecaca; color: #991b1b; border-radius: 4px; padding: 0 5px; margin-right: 4px; }
+.notes .btn { width: 100%; justify-content: flex-start; background: #fffbea; border-color: #f3e3a6; color: #92400e; }
+
+/* ---------- 工作空间 ---------- */
+.ws { display: flex; height: 100%; }
+.ws-list { flex: 1; min-width: 0; overflow-y: auto; }
+.usage { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-3); margin-top: 3px; }
+.usage b { color: var(--ink-2); font-weight: 600; }
+.crumbs { display: flex; align-items: center; gap: 1px; min-width: 0; font-size: 18px; font-weight: 650; overflow: hidden; }
+.crumbs a { color: var(--ink-3); padding: 2px 6px; border-radius: 6px; white-space: nowrap; min-width: 0; flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; }
+.crumbs a:hover { background: var(--hover); color: var(--ink); }
+.crumbs .s { color: var(--ink-4); display: inline-flex; flex: none; }
+.crumbs .cur { color: var(--ink); padding: 2px 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.crumbs a:first-child { padding-left: 0; }
+.pvopen .page-head .search { display: none; }
+.metarow { display: flex; align-items: center; gap: 8px; color: var(--ink-3); font-size: 13px; margin: -6px 0 16px; flex-wrap: wrap; }
+
+.ft { width: 100%; border-collapse: separate; border-spacing: 0; table-layout: fixed; }
+.ft th { text-align: left; font-weight: 600; font-size: 12.5px; color: var(--ink-3); padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; user-select: none; }
+.ft th.s { cursor: pointer; }
+.ft th.s:hover { color: var(--ink); }
+.ft th .ar { display: inline-flex; vertical-align: -3px; }
+.ft td { padding: 7px 10px; border-bottom: 1px solid var(--line-2); vertical-align: middle; font-size: 13.5px; }
+.ft tr.click td { cursor: pointer; }
+.ft tbody tr:hover td { background: var(--surface-2); }
+.ft tr.sel td { background: #f6f6ff; }
+.ft tr.cur td { background: var(--primary-weak) !important; }
+.ft .c-cb { width: 40px; padding-right: 0; }
+.ft .c-size { width: 100px; color: var(--ink-3); }
+.ft .c-time { width: 116px; color: var(--ink-3); }
+.ft .c-loc { width: 240px; }
+.ft .c-ops { width: 112px; text-align: right; white-space: nowrap; padding-right: 6px; }
+.ft td.c-ops .ibtn { opacity: 0; }
+.ft tr:hover td.c-ops .ibtn, .ft tr.cur td.c-ops .ibtn { opacity: 1; }
+.ft td.c-ops .ibtn.chat { color: var(--primary); }
+.pvopen .ft .c-time { display: none; }
+.pvopen .page { padding-left: 24px; padding-right: 24px; }
+.nm { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.nm .t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nm .sub { font-size: 12px; color: var(--ink-4); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cb { width: 16px; height: 16px; border-radius: 4px; border: 1.5px solid #c5cad6; background: #fff; display: inline-grid; place-items: center; cursor: pointer; vertical-align: middle; color: #fff; }
+.cb svg { width: 12px; height: 12px; stroke-width: 3; }
+.cb.on, .cb.part { background: var(--primary); border-color: var(--primary); }
+.cb.part::after { content: ""; width: 8px; height: 2px; background: #fff; border-radius: 1px; }
+.lockt { display: inline-flex; align-items: center; gap: 3px; font-size: 11.5px; color: var(--ink-4); font-weight: 500; white-space: nowrap; }
+.lockt svg { width: 12px; height: 12px; }
+
+/* 文件类型图标 */
+.fi { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; flex: none; background: var(--line-2); color: var(--ink-3); }
+.fi svg { width: 16px; height: 16px; }
+.fi.sm { width: 26px; height: 26px; border-radius: 7px; }
+.fi.sm svg { width: 14px; height: 14px; }
+.fi.dir { background: #fff3d6; color: #c98a04; }
+.fi.md { background: var(--primary-weak); color: var(--primary); }
+.fi.code { background: var(--secondary-weak); color: #0369a1; }
+.fi.img { background: #fdeaf4; color: #db2777; }
+.fi.pdf { background: var(--danger-weak); color: var(--danger); }
+.fi.sheet { background: var(--success-weak); color: var(--success); }
+.fi.html { background: #fff0e5; color: #ea580c; }
+.fi.json { background: #fef7dc; color: #b45309; }
+.fi.doc { background: #e8f0fe; color: #1d4ed8; }
+
+/* 右侧预览 */
+.pv { width: 50%; min-width: 420px; max-width: 920px; flex: none; border-left: 1px solid var(--line); background: var(--surface); display: flex; flex-direction: column; min-height: 0; }
+.pv-h { height: 54px; flex: none; display: flex; align-items: center; gap: 6px; padding: 0 8px 0 14px; border-bottom: 1px solid var(--line-2); }
+.pv-h .nm2 { min-width: 0; flex: 1; }
+.pv-h .nm2 .t { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pv-h .nm2 .m { font-size: 12px; color: var(--ink-4); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.seg { display: inline-flex; background: var(--line-2); border-radius: 8px; padding: 2px; gap: 2px; flex: none; }
+.seg a { padding: 2px 10px; border-radius: 6px; color: var(--ink-3); font-weight: 550; font-size: 12.5px; }
+.seg a.on { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-xs); }
+.pv-b { flex: 1; min-height: 0; overflow: auto; position: relative; }
+.pv-tip { display: flex; align-items: center; gap: 8px; padding: 7px 14px; background: var(--warning-weak); color: #92400e; font-size: 12.5px; position: sticky; top: 0; left: 0; z-index: 1; }
+.pv-msg { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: var(--ink-3); padding: 40px; text-align: center; }
+.pv-msg .fi { width: 56px; height: 56px; border-radius: 16px; }
+.pv-msg .fi svg { width: 26px; height: 26px; }
+.pv-code { font-family: var(--mono); font-size: 12.5px; line-height: 1.7; padding: 10px 0 30px; min-width: max-content; }
+.pv-code .l { display: flex; }
+.pv-code .n { width: 52px; flex: none; text-align: right; padding-right: 16px; color: #b6bdca; user-select: none; }
+.pv-code .c { white-space: pre; padding-right: 24px; }
+.tk { color: #7c3aed; } .ts { color: #047857; } .tc { color: #94a3b8; font-style: italic; } .tn { color: #c2410c; }
+.pv-md { padding: 26px 34px 60px; max-width: 820px; font-size: 14.5px; line-height: 1.8; }
+.pv-md h1 { font-size: 22px; margin: 0 0 14px; }
+.pv-md h2 { font-size: 17px; margin: 24px 0 10px; }
+.pv-md h3 { font-size: 15px; margin: 18px 0 8px; }
+.pv-md p { margin: 0 0 12px; }
+.pv-md ul, .pv-md ol { margin: 0 0 12px; padding-left: 22px; }
+.pv-md li { margin: 3px 0; }
+.pv-md table { border-collapse: collapse; margin: 6px 0 14px; font-size: 13.5px; }
+.pv-md th, .pv-md td { border: 1px solid var(--line); padding: 6px 12px; }
+.pv-md th { background: var(--surface-2); }
+.pv-md img { max-width: 100%; border: 1px solid var(--line); border-radius: 8px; margin: 6px 0; display: block; }
+.pv-md pre { background: #f6f7fb; border: 1px solid var(--line-2); padding: 10px 12px; border-radius: 8px; overflow: auto; font-family: var(--mono); font-size: 12.5px; }
+.pv-md blockquote { margin: 0 0 12px; padding: 2px 14px; border-left: 3px solid var(--line); color: var(--ink-3); }
+.pv-md hr { border: none; border-top: 1px solid var(--line); margin: 16px 0; }
+.pv-img { min-height: 100%; display: grid; place-items: center; padding: 28px; background-color: #f1f2f6; background-image: linear-gradient(45deg, #e7e9ef 25%, transparent 25%, transparent 75%, #e7e9ef 75%), linear-gradient(45deg, #e7e9ef 25%, transparent 25%, transparent 75%, #e7e9ef 75%); background-size: 20px 20px; background-position: 0 0, 10px 10px; }
+.pv-img img { max-width: 100%; box-shadow: var(--shadow-md); border-radius: 4px; background: #fff; }
+.pv-frame { width: 100%; height: 100%; border: none; display: block; background: #fff; }
+.pv-pdf { min-height: 100%; background: #525659; padding: 24px; }
+.pv-pdf .pg { background: #fff; max-width: 600px; margin: 0 auto 18px; aspect-ratio: 1 / 1.414; padding: 52px 56px; box-shadow: 0 2px 10px rgba(0,0,0,.3); font-size: 12px; line-height: 1.85; color: #1f2937; overflow: hidden; }
+.pv-pdf .pg h2 { font-size: 15px; margin: 14px 0 6px; }
+.pv-pdf .pn { text-align: center; color: #cbd0d8; font-size: 12px; margin: -8px 0 16px; }
+.pv-csv { padding: 14px; }
+.pv-csv table { border-collapse: collapse; font-size: 12.5px; }
+.pv-csv th, .pv-csv td { border: 1px solid var(--line); padding: 4px 10px; white-space: nowrap; }
+.pv-csv th { background: var(--surface-2); position: sticky; top: 0; font-weight: 600; }
+.pv-csv td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.pv-csv .rn { color: var(--ink-4); background: var(--surface-2); text-align: right; }
+
+/* 上传 */
+.upq { position: fixed; right: 20px; bottom: 20px; width: 380px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow-lg); z-index: 65; overflow: hidden; }
+.upq-h { display: flex; align-items: center; gap: 8px; padding: 9px 8px 9px 14px; font-weight: 600; font-size: 13.5px; }
+.upq-b { max-height: 300px; overflow-y: auto; border-top: 1px solid var(--line-2); }
+.upi { display: flex; align-items: center; gap: 10px; padding: 9px 14px; border-bottom: 1px solid var(--line-2); }
+.upi:last-child { border-bottom: none; }
+.upi .r { flex: none; font-size: 12px; color: var(--ink-3); min-width: 34px; text-align: right; }
+.upi.done { cursor: pointer; }
+.upi.done:hover { background: var(--surface-2); }
+.prog { height: 4px; border-radius: 2px; background: var(--line-2); overflow: hidden; margin-top: 5px; }
+.prog i { display: block; height: 100%; background: var(--primary); transition: width .16s linear; }
+#dropov { position: fixed; top: var(--top-h); left: 0; right: 0; bottom: 0; z-index: 90; pointer-events: none; display: none; padding: 16px; }
+#dropov.on { display: block; }
+#dropov .in { height: 100%; border: 2px dashed var(--primary-2); border-radius: 18px; background: rgba(238,240,255,.9); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--primary-ink); font-size: 16px; font-weight: 600; }
+#dropov .in svg { width: 36px; height: 36px; }
+#dropov.no .in { border-color: #cbd0db; background: rgba(246,247,249,.94); color: var(--ink-3); }
+
+/* ---------- 工作目录标签（新对话输入框、对话标题栏） ---------- */
+.dirchip { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 9px; border-radius: 8px; background: #fff3d6; color: #8a5a00; font-size: 13px; font-weight: 550; max-width: 100%; min-width: 0; }
+.dirchip > svg { color: #c98a04; }
+.dirchip .x { border: none; background: transparent; width: 20px; height: 20px; margin-right: -4px; border-radius: 5px; display: grid; place-items: center; cursor: pointer; color: #a16207; padding: 0; flex: none; }
+.dirchip .x:hover { background: rgba(0,0,0,.07); }
+.dirchip .x svg { width: 13px; height: 13px; }
+a.dirchip:hover { background: #ffeab0; }
+a.dirchip .ext { width: 13px; height: 13px; opacity: .7; }
+.dirchip.auto { background: var(--line-2); color: var(--ink-2); }
+.dirchip.auto > svg { color: var(--ink-3); }
+
+/* ---------- 新对话（同控制台首页） ---------- */
+.hero { min-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px 24px 90px; }
+.hero h1 { font-size: 28px; font-weight: 650; margin-bottom: 26px; letter-spacing: .01em; }
+.hero .composer { width: 100%; max-width: 760px; }
+.composer { background: var(--surface); border: 1px solid #dfe2ea; border-radius: 18px; box-shadow: 0 2px 10px rgba(16,24,40,.06); padding: 12px 12px 10px 16px; }
+.composer:focus-within { border-color: #c7cbf6; box-shadow: 0 0 0 4px var(--primary-weak), 0 2px 10px rgba(16,24,40,.06); }
+.composer textarea { width: 100%; border: none; outline: none; resize: none; min-height: 52px; max-height: 220px; font-size: 15px; line-height: 1.6; background: transparent; padding: 2px 0; }
+.composer .bar { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+.composer .attach { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.pill { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border-radius: 15px; border: 1px solid var(--line); background: var(--surface); cursor: pointer; font-size: 13px; color: var(--ink-2); font-weight: 550; white-space: nowrap; }
+.pill:hover { background: var(--hover); }
+.send { width: 34px; height: 34px; border-radius: 50%; border: none; background: var(--primary); color: #fff; display: grid; place-items: center; cursor: pointer; margin-left: auto; }
+.hint { display: flex; align-items: center; gap: 6px; margin-top: 12px; font-size: 13px; color: var(--ink-3); width: 100%; max-width: 760px; padding: 0 6px; }
+.hint code { font-size: 12px; }
+
+/* ---------- 对话页（只画到能看出工作目录） ---------- */
+.chat { display: flex; flex-direction: column; height: 100%; }
+.chat-head { height: 52px; flex: none; display: flex; align-items: center; gap: 10px; padding: 0 16px 0 22px; border-bottom: 1px solid var(--line-2); background: var(--surface); }
+.chat-scroll { flex: 1; overflow-y: auto; }
+.chat-col { max-width: 780px; margin: 0 auto; padding: 18px 24px 20px; }
+.chat-foot { flex: none; padding: 0 24px 18px; }
+.chat-foot .composer { max-width: 780px; margin: 0 auto; border-radius: 14px; padding: 8px 8px 8px 14px; }
+.chat-foot .composer textarea { min-height: 36px; font-size: 14px; }
+.chat-meta { display: flex; justify-content: center; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-4); margin: 0 0 18px; flex-wrap: wrap; }
+.m-user { display: flex; justify-content: flex-end; margin: 6px 0 22px; }
+.m-user .b { background: #f1f3f9; padding: 10px 14px; border-radius: 16px 16px 4px 16px; max-width: 78%; white-space: pre-wrap; }
+.m-ai { margin-bottom: 26px; }
+.m-ai .who { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-weight: 600; font-size: 13.5px; }
+.steps { border: 1px solid var(--line-2); border-radius: 10px; padding: 6px 12px; margin-bottom: 10px; font-size: 13px; color: var(--ink-2); background: var(--surface-2); }
+.step { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+.step .tm { margin-left: auto; color: var(--ink-4); font-size: 12px; }
+.prose p { margin: 0 0 10px; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="dropov"><div class="in"></div></div>
+<input type="file" id="pick" multiple hidden />
+<input type="file" id="pickDir" webkitdirectory multiple hidden />
+<script>
+/* =====================================================================
+ * 图标（lucide 风格）与小工具
+ * ===================================================================== */
+const ICONS = {
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
+  chat: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  chatPlus: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M12 7v6M9 10h6"/>',
+  bot: '<rect x="3" y="8" width="18" height="12" rx="3"/><path d="M12 8V4M8.5 14h.01M15.5 14h.01"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  book: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/>',
+  spark: '<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/>',
+  plug: '<path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4"/>',
+  layers: '<path d="m12 2 10 5-10 5L2 7z"/><path d="m2 17 10 5 10-5M2 12l10 5 10-5"/>',
+  sliders: '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>',
+  zap: '<path d="M13 2 3 14h8l-1 8 10-12h-8z"/>',
+  hdd: '<path d="M22 12H2M5.5 5.1 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.5-6.9A2 2 0 0 0 16.8 4H7.2a2 2 0 0 0-1.7 1.1z"/><path d="M6 16h.01M10 16h.01"/>',
+  left: '<path d="m15 18-6-6 6-6"/>',
+  right: '<path d="m9 18 6-6-6-6"/>',
+  down: '<path d="m6 9 6 6 6-6"/>',
+  up: '<path d="m18 15-6-6-6 6"/>',
+  arrowUp: '<path d="M12 19V5M5 12l7-7 7 7"/>',
+  more: '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
+  file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>',
+  fileText: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h6"/>',
+  folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  folderPlus: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 11v6M9 14h6"/>',
+  upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>',
+  download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>',
+  trash: '<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>',
+  pencil: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+  eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+  x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
+  external: '<path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
+  lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+  image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/>',
+  code: '<path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/>',
+  table: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18"/>',
+  braces: '<path d="M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5a2 2 0 0 0 2 2h1M16 3h1a2 2 0 0 1 2 2v5a2 2 0 0 0 2 2 2 2 0 0 0-2 2v5a2 2 0 0 1-2 2h-1"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
+  archive: '<rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8M10 12h4"/>',
+  alert: '<circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>',
+  bulb: '<path d="M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z"/>',
+  play: '<path d="M7 4l13 8-13 8z"/>',
+  clip: '<path d="m21 12-8.6 8.6a5 5 0 0 1-7-7L14 5a3.3 3.3 0 0 1 4.7 4.7L10 18.4a1.7 1.7 0 0 1-2.4-2.4l8-8"/>',
+  shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+};
+const ic = (n, cls = '') => `<svg class="i ${n === 'more' ? 'fill' : ''} ${cls}" viewBox="0 0 24 24">${ICONS[n] || ''}</svg>`;
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const av = (name, color, size = 22) =>
+  `<span class="avatar sq" style="width:${size}px;height:${size}px;font-size:${Math.round(size * 0.46)}px;background:${color}">${esc(name.slice(0, 1))}</span>`;
+const base = (p) => p.replace(/\/$/, '').split('/').pop();
+const parent = (p) => { const i = p.replace(/\/$/, '').lastIndexOf('/'); return i < 0 ? '' : p.slice(0, i); };
+const join = (a, b) => (a ? a + '/' + b : b);
+const isHidden = (p) => p.split('/').some((s) => s.startsWith('.'));
+const extOf = (p) => { const n = base(p); const i = n.lastIndexOf('.'); return i > 0 ? n.slice(i + 1).toLowerCase() : ''; };
+/** a 是 p 本身或在 p 下面 */
+const inside = (a, p) => a === p || a.startsWith(p + '/');
+function fmtSize(n) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 ** 2) return `${(n / 1024).toFixed(n < 10240 ? 1 : 0)} KB`;
+  if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1).replace(/\.0$/, '')} MB`;
+  return `${(n / 1024 ** 3).toFixed(1).replace(/\.0$/, '')} GB`;
+}
+const NOW = new Date(2026, 10, 12, 15, 0).getTime();
+const LOADED = Date.now();
+function rel(m) {
+  if (m < 1) return '刚刚';
+  if (m < 60) return `${m} 分钟前`;
+  if (m < 1440) return `${Math.floor(m / 60)} 小时前`;
+  if (m < 2880) return '昨天';
+  const d = new Date(NOW - m * 60000);
+  return `${d.getMonth() + 1}-${String(d.getDate()).padStart(2, '0')}`;
+}
+function rng(seed) { let s = seed; return () => (s = (s * 1103515245 + 12345) % 2147483648) / 2147483648; }
+const pad = (n) => String(n).padStart(2, '0');
+const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+
+/* =====================================================================
+ * 演示数据（内存态，刷新后重置）
+ *   FILES：这个人的文件（相对 {user}/files/ 的路径），就是一棵普通的目录树
+ *   THREADS：对话记录，每条带 dir = 工作目录（同样相对 files/）
+ * ===================================================================== */
+const ME = { name: '周景行', color: '#6366f1' };
+const AGENTS = {
+  general: { name: '通用助手', color: '#6366f1', isDefault: true },
+  analyst: { name: '数据分析师', color: '#f59e0b' },
+  coder: { name: '编程助手', color: '#0ea5e9' },
+  writer: { name: '文案助手', color: '#ec4899' },
+};
+/** 没选目录就开始的对话，工作目录建在这下面 */
+const AUTO_ROOT = '对话';
+const Q3 = 'Q3 销售分析', CP = '竞品调研', LG = '前端原型/登录页';
+const WK = `${AUTO_ROOT}/2026-11-03 09.12`, NG = `${AUTO_ROOT}/2026-11-08 14.20`, CR = `${AUTO_ROOT}/2026-11-06 12.18`, OLD = `${AUTO_ROOT}/2026-10-29 13.35`;
+const F = (p, size, m) => ({ p, size, m });
+const under = (dir, list) => list.map((x) => ({ ...x, p: `${dir}/${x.p}` }));
+let FILES = [
+  ...under(Q3, [
+    F('uploads/sales_q3.csv', 284310, 95), F('uploads/区域目标.xlsx', 48200, 96),
+    F('analysis.py', 3412, 6), F('requirements.txt', 64, 40),
+    F('report/summary.md', 2980, 1), F('report/chart_region.png', 182544, 3), F('report/chart_trend.png', 205120, 2),
+    F('output/sales_clean.xlsx', 1352000, 8), F('output/returns_by_sku.csv', 12400, 5),
+    F('.atlas/7f3a9c2e/large_tool_results/call_8f2c.txt', 412000, 12),
+    F('.atlas/7f3a9c2e/conversation_history/2026-11-12.md', 38000, 30),
+    F('.atlas/3e81d0a4/large_tool_results/call_1a7d.txt', 96000, 300),
+  ]),
+  ...under(CP, [
+    F('competitors.md', 6820, 130), F('report.pdf', 1840000, 125), F('sources.json', 4210, 140),
+    F('images/product-a.png', 356000, 150), F('images/product-b.png', 298000, 150),
+  ]),
+  ...under(LG, [
+    F('index.html', 2140, 1380), F('styles.css', 1720, 1380), F('app.js', 980, 1400),
+    F('assets/logo.svg', 860, 1500), F('README.md', 640, 1390),
+  ]),
+  ...under(WK, [F('weekly-2026-45.md', 2310, 2900), F('weekly-2026-44.md', 2180, 12900), F('uploads/会议纪要-1107.docx', 86000, 2960)]),
+  ...under(NG, [F('uploads/error.log', 4406000, 5800), F('nginx.conf', 1920, 5700), F('diagnosis.md', 3150, 5650)]),
+  ...under(CR, [
+    F('crawler/main.py', 2860, 8700), F('crawler/parser.py', 1940, 8720), F('crawler/config.json', 420, 8780),
+    F('data/items.jsonl', 86400000, 8650), F('dist/crawler.zip', 12300000, 8600), F('README.md', 1100, 8610),
+  ]),
+  // 对话已经删了，文件照样在（文件和对话是两回事）
+  ...under(OLD, [F('report.md', 4200, 20000), F('data/orders.csv', 2800000, 20100), F('data/customers.csv', 1200000, 20100)]),
+  // 直接传到根目录的
+  F('年终汇报.pptx', 24600000, 31000), F('年终汇报大纲.md', 1800, 31200),
+];
+const THREADS = [
+  { id: '7f3a9c2e', title: 'Q3 销售数据分析', agent: 'analyst', dir: Q3, state: 'run' },
+  { id: '9b0c52f1', title: '帮我写一封请假邮件', agent: 'general', dir: `${AUTO_ROOT}/2026-11-12 09.30`, auto: true },
+  { id: '3e81d0a4', title: 'Q3 退货原因追查', agent: 'analyst', dir: Q3 },
+  { id: 'b21c40d7', title: '竞品调研报告', agent: 'general', dir: CP },
+  { id: 'c9d4e118', title: '登录页原型', agent: 'coder', dir: LG },
+  { id: 'e5f06a31', title: '周报整理', agent: 'writer', dir: WK, auto: true },
+  { id: 'a8b2f5c0', title: 'nginx 502 排查', agent: 'general', dir: NG, auto: true },
+  { id: 'd0e17b94', title: '商品数据爬虫', agent: 'coder', dir: CR, auto: true },
+];
+
+/* ---------- 文件内容（预览用） ---------- */
+function genSales() {
+  const R = rng(7), regions = ['华东', '华南', '华北', '西南', '其他'], out = ['date,region,sku,amount,returned'];
+  for (let i = 0; i < 80; i++) {
+    const d = new Date(2026, 6, 1 + Math.floor(i * 1.15));
+    out.push(`${ymd(d)},${regions[Math.floor(R() * 5)]},SKU-${1000 + Math.floor(R() * 80)},${(800 + R() * 9000).toFixed(2)},${R() < 0.08}`);
+  }
+  return out.join('\n');
+}
+function genLog() {
+  const R = rng(3), out = [];
+  for (let i = 0; i < 180; i++) {
+    const s = 11 + Math.floor(i / 6), up = R() < 0.7 ? '10.0.8.21' : '10.0.8.22';
+    const kind = R() < 0.75
+      ? `upstream timed out (110: Connection timed out) while reading response header from upstream`
+      : `connect() failed (111: Connection refused) while connecting to upstream`;
+    out.push(`2026/11/08 14:${pad(s)}:${pad(Math.floor(R() * 60))} [error] 2381#2381: *${91000 + i * 7} ${kind}, client: 10.2.${Math.floor(R() * 9)}.${Math.floor(R() * 250)}, server: api.example.com, request: "POST /v1/orders HTTP/1.1", upstream: "http://${up}:8080/v1/orders"`);
+  }
+  return out.join('\n');
+}
+function genJsonl() {
+  const R = rng(11), names = ['无线耳机', '机械键盘', '保温杯', '运动手环', '护眼台灯', '双肩包', '充电宝', '蓝牙音箱'], out = [];
+  for (let i = 1; i <= 120; i++) out.push(`{"id": ${i}, "title": "${names[i % 8]} ${['Pro', 'Lite', 'Max', '2026款'][i % 4]}", "price": ${(29 + R() * 500).toFixed(1)}, "sales": ${Math.floor(R() * 20000)}, "url": "https://shop.example.com/p/${10000 + i}"}`);
+  return out.join('\n');
+}
+function genOrders() {
+  const R = rng(5), out = ['order_id,date,customer,amount,status'];
+  for (let i = 0; i < 60; i++) out.push(`O2610${String(i + 1).padStart(4, '0')},2026-10-${pad(1 + (i % 30))},C${1000 + Math.floor(R() * 300)},${(50 + R() * 3000).toFixed(2)},${R() < 0.1 ? '已退款' : '已完成'}`);
+  return out.join('\n');
+}
+
+const TEXT = {
+  [`${Q3}/report/summary.md`]: `# Q3 销售数据分析
+
+> 数据来源：uploads/sales_q3.csv（7–9 月订单明细，共 12,480 条）
+
+## 结论
+- Q3 销售额 **4,826 万元**，环比增长 12.4%，同比增长 18.1%
+- 华东区贡献 38%；增速最快的是西南区（**+27%**）
+- 9 月第 2 周出现退货高峰，集中在 3 个 SKU（明细见 output/returns_by_sku.csv）
+
+## 分区域销售额
+| 区域 | 销售额（万元） | 环比 |
+|---|---|---|
+| 华东 | 1,834 | +9.8% |
+| 华南 | 1,102 | +11.2% |
+| 华北 | 896 | +6.5% |
+| 西南 | 612 | +27.0% |
+| 其他 | 382 | +4.1% |
+
+![分区域销售额](chart_region.png)
+
+## 周趋势
+![周销售额趋势](chart_trend.png)
+
+## 建议
+1. 西南区渠道投入可以加大，优先覆盖成都、重庆
+2. 排查 SKU-1042、SKU-1057、SKU-1063 的质量问题
+3. Q4 目标建议定在 5,300 万元（+10%）`,
+  [`${Q3}/analysis.py`]: `import pandas as pd
+import matplotlib.pyplot as plt
+
+plt.rcParams["font.sans-serif"] = ["PingFang SC"]
+
+df = pd.read_csv("uploads/sales_q3.csv", parse_dates=["date"])
+df = df.dropna(subset=["amount"])
+df["amount"] = df["amount"].astype(float)
+
+# 分区域汇总（万元）
+region = df.groupby("region")["amount"].sum().sort_values(ascending=False) / 10000
+region.plot.bar(title="Q3 分区域销售额（万元）")
+plt.savefig("report/chart_region.png", dpi=150, bbox_inches="tight")
+
+# 按周趋势
+weekly = df.set_index("date").resample("W")["amount"].sum() / 10000
+weekly.plot(title="Q3 周销售额趋势（万元）")
+plt.savefig("report/chart_trend.png", dpi=150, bbox_inches="tight")
+
+# 退货最多的 SKU
+returns = df[df["returned"]].groupby("sku").size().nlargest(10)
+returns.to_csv("output/returns_by_sku.csv", header=["count"])
+
+df.to_excel("output/sales_clean.xlsx", index=False)
+print("总销售额（万元）:", round(df["amount"].sum() / 10000))`,
+  [`${Q3}/requirements.txt`]: `pandas==2.2.3
+matplotlib==3.9.2
+openpyxl==3.1.5`,
+  [`${Q3}/output/returns_by_sku.csv`]: `sku,count
+SKU-1042,86
+SKU-1057,71
+SKU-1063,64
+SKU-1011,22
+SKU-1078,19
+SKU-1035,17
+SKU-1009,15
+SKU-1050,12
+SKU-1024,11
+SKU-1066,9`,
+  [`${Q3}/.atlas/7f3a9c2e/large_tool_results/call_8f2c.txt`]: `$ python -c "import pandas as pd; print(pd.read_csv('uploads/sales_q3.csv').describe(include='all'))"
+              date region      sku        amount  returned
+count        12480  12480    12480  12476.000000     12480
+unique          92      5       80           NaN         2
+top     2026-09-08     华东  SKU-1042           NaN     False
+freq           214   4742      311           NaN     11702
+mean           NaN    NaN      NaN   3867.214432       NaN
+std            NaN    NaN      NaN   2581.903317       NaN
+min            NaN    NaN      NaN    801.120000       NaN
+max            NaN    NaN      NaN   9798.440000       NaN
+…（输出过长，完整内容已保存在这里）`,
+  [`${Q3}/.atlas/7f3a9c2e/conversation_history/2026-11-12.md`]: `# 压缩前的对话记录
+
+**用户**：帮我分析一下 Q3 的销售数据，附件是明细
+
+**数据分析师**：好的，我先看一下数据结构……`,
+  [`${CP}/competitors.md`]: `# 竞品调研：智能体平台
+
+> 调研时间：2026 年 11 月 · 来源见 sources.json
+
+## 对比总览
+| 产品 | 定位 | 私有部署 | 计费 |
+|---|---|---|---|
+| 产品 A | 低代码智能体编排 | 支持 | 按席位 |
+| 产品 B | 企业知识助手 | 不支持 | 按调用量 |
+| 产品 C | 开发者 Agent 框架 | 开源 | 免费 |
+
+## 产品 A
+![产品 A 界面](images/product-a.png)
+
+- 优势：可视化编排、插件市场丰富
+- 不足：复杂流程调试困难，权限粒度粗
+
+## 产品 B
+![产品 B 界面](images/product-b.png)
+
+- 优势：知识库检索效果好，开箱即用
+- 不足：不支持私有部署，数据出境有合规风险
+
+## 结论
+1. 私有部署 + 细粒度权限是我们的主要差异点
+2. 插件生态需要补齐，优先对接内部系统`,
+  [`${CP}/sources.json`]: `[
+  { "title": "产品 A 官方文档 · 工作流编排", "url": "https://docs.product-a.example.com/workflow", "accessed": "2026-11-10" },
+  { "title": "产品 B 定价页", "url": "https://product-b.example.com/pricing", "accessed": "2026-11-10" },
+  { "title": "产品 C GitHub 仓库", "url": "https://github.com/example/product-c", "accessed": "2026-11-11" },
+  { "title": "2026 企业 AI 应用调研报告", "url": "https://research.example.com/ai-2026", "accessed": "2026-11-09" }
+]`,
+  [`${LG}/index.html`]: `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>登录</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="card">
+    <img class="logo" src="assets/logo.svg" alt="logo">
+    <h1>欢迎回来</h1>
+    <p class="sub">登录以继续使用</p>
+    <form id="f">
+      <label>账号<input name="u" placeholder="邮箱或手机号"></label>
+      <label>密码<input name="p" type="password" placeholder="请输入密码"></label>
+      <button type="submit">登录</button>
+      <p id="msg"></p>
+    </form>
+    <a class="link" href="#">忘记密码？</a>
+  </main>
+  <script src="app.js"><\/script>
+</body>
+</html>`,
+  [`${LG}/styles.css`]: `* { box-sizing: border-box; }
+body {
+  margin: 0; min-height: 100vh; display: grid; place-items: center;
+  font-family: "PingFang SC", system-ui, sans-serif;
+  background: linear-gradient(135deg, #eef2ff 0%, #e0f2fe 100%);
+}
+.card {
+  width: 340px; background: #fff; border-radius: 16px; padding: 32px 28px;
+  box-shadow: 0 20px 40px rgba(15, 23, 42, .12); text-align: center;
+}
+.logo { width: 48px; height: 48px; }
+h1 { font-size: 22px; margin: 12px 0 4px; }
+.sub { color: #64748b; margin: 0 0 20px; font-size: 14px; }
+label { display: block; text-align: left; font-size: 13px; color: #334155; margin-bottom: 12px; }
+input { width: 100%; height: 38px; margin-top: 6px; border: 1px solid #e2e8f0; border-radius: 8px; padding: 0 10px; }
+button { width: 100%; height: 40px; border: none; border-radius: 8px; background: #4f46e5; color: #fff; font-size: 15px; cursor: pointer; }
+#msg { font-size: 13px; min-height: 18px; }
+#msg.ok { color: #16a34a; } #msg.err { color: #dc2626; }
+.link { font-size: 13px; color: #4f46e5; text-decoration: none; }`,
+  [`${LG}/app.js`]: `document.getElementById('f').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const u = e.target.u.value.trim();
+  const msg = document.getElementById('msg');
+  msg.textContent = u ? '登录成功（演示）' : '请输入账号';
+  msg.className = u ? 'ok' : 'err';
+});`,
+  [`${LG}/README.md`]: `# 登录页原型
+
+纯静态页面，直接打开 index.html 即可。
+
+- styles.css：样式
+- app.js：表单校验（演示）
+- assets/logo.svg：图标`,
+  [`${WK}/weekly-2026-45.md`]: `# 第 45 周工作周报（11.03 – 11.07）
+
+## 本周完成
+- 完成智能体编排页改版，上线草稿自动保存
+- 知识库入库卡死问题修复（加锁 + 巡检）
+- 参加 11/07 架构评审，整理会议纪要
+
+## 下周计划
+- 工作空间原型评审
+- 模型平台接入 MiniMax
+
+## 风险
+- DeepSeek 余额不足，评测暂停`,
+  [`${WK}/weekly-2026-44.md`]: `# 第 44 周工作周报（10.27 – 10.31）
+
+## 本周完成
+- MCP 网关新方案部署
+- 模型平台切到 LiteLLM
+
+## 下周计划
+- 智能体编排页改版`,
+  [`${NG}/nginx.conf`]: `upstream api_backend {
+    server 10.0.8.21:8080 max_fails=3 fail_timeout=10s;
+    server 10.0.8.22:8080 max_fails=3 fail_timeout=10s;
+    keepalive 64;
+}
+
+server {
+    listen 443 ssl;
+    server_name api.example.com;
+
+    location /v1/ {
+        proxy_pass http://api_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        # 原来是 5s，订单接口高峰期 P99 超过 6s
+        proxy_read_timeout 30s;
+    }
+}`,
+  [`${NG}/diagnosis.md`]: `# nginx 502 排查结论
+
+## 现象
+11/08 14:11–14:41，POST /v1/orders 大量 502，错误日志见 uploads/error.log。
+
+## 原因
+1. **proxy_read_timeout 只有 5s**：订单接口高峰期 P99 6.2s，超时后 nginx 返回 502
+2. 10.0.8.22 在 14:20 前后重启过一次，期间 connection refused
+
+## 处理
+- proxy_read_timeout 调到 30s（见 nginx.conf）
+- 订单接口加慢查询告警，排查 P99 升高的原因`,
+  [`${CR}/crawler/main.py`]: `import json
+import time
+
+import httpx
+
+from parser import parse_list
+
+CONFIG = json.load(open("crawler/config.json"))
+
+
+def crawl(page: int) -> list[dict]:
+    resp = httpx.get(CONFIG["base_url"], params={"page": page}, timeout=10)
+    resp.raise_for_status()
+    return parse_list(resp.text)
+
+
+def main() -> None:
+    with open("data/items.jsonl", "w", encoding="utf-8") as out:
+        for page in range(1, CONFIG["max_pages"] + 1):
+            for item in crawl(page):
+                out.write(json.dumps(item, ensure_ascii=False) + "\\n")
+            time.sleep(CONFIG["delay"])
+
+
+if __name__ == "__main__":
+    main()`,
+  [`${CR}/crawler/parser.py`]: `from selectolax.parser import HTMLParser
+
+
+def parse_list(html: str) -> list[dict]:
+    tree = HTMLParser(html)
+    items = []
+    for node in tree.css("div.product"):
+        items.append({
+            "title": node.css_first("h3").text(strip=True),
+            "price": float(node.css_first(".price").text().lstrip("¥")),
+            "url": node.css_first("a").attributes["href"],
+        })
+    return items`,
+  [`${CR}/crawler/config.json`]: `{
+  "base_url": "https://shop.example.com/list",
+  "max_pages": 200,
+  "delay": 0.5
+}`,
+  [`${CR}/README.md`]: `# 商品数据爬虫
+
+\`python crawler/main.py\` 运行，结果写到 data/items.jsonl。dist/crawler.zip 是打包好的版本。`,
+  [`${OLD}/report.md`]: `# 10 月订单复盘
+
+- 订单 3.2 万笔，退款率 4.1%
+- 明细见 data/orders.csv、data/customers.csv`,
+  '年终汇报大纲.md': `# 年终汇报大纲
+
+1. 全年回顾
+2. 重点项目
+3. 明年计划`,
+};
+const LAZY = {
+  [`${Q3}/uploads/sales_q3.csv`]: genSales,
+  [`${NG}/uploads/error.log`]: genLog,
+  [`${CR}/data/items.jsonl`]: genJsonl,
+  [`${OLD}/data/orders.csv`]: genOrders,
+};
+
+/* ---------- 图片（内联 SVG 代替 PNG） ---------- */
+function svgBar() {
+  const data = [['华东', 1834], ['华南', 1102], ['华北', 896], ['西南', 612], ['其他', 382]];
+  let s = '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="380" viewBox="0 0 640 380" font-family="PingFang SC, sans-serif"><rect width="640" height="380" fill="#fff"/>';
+  s += '<text x="32" y="42" font-size="18" font-weight="600" fill="#0f172a">Q3 分区域销售额（万元）</text>';
+  for (let v = 0; v <= 2000; v += 500) { const y = 320 - v / 2000 * 240; s += `<line x1="70" x2="610" y1="${y}" y2="${y}" stroke="#eef0f4"/><text x="60" y="${y + 4}" font-size="11" fill="#94a3b8" text-anchor="end">${v}</text>`; }
+  data.forEach(([k, v], i) => { const h = v / 2000 * 240, x = 100 + i * 104; s += `<rect x="${x}" y="${320 - h}" width="60" height="${h}" rx="4" fill="${i === 3 ? '#f59e0b' : '#6366f1'}"/><text x="${x + 30}" y="${314 - h}" font-size="12" fill="#334155" text-anchor="middle">${v}</text><text x="${x + 30}" y="344" font-size="13" fill="#475569" text-anchor="middle">${k}</text>`; });
+  return s + '</svg>';
+}
+function svgLine() {
+  const v = [312, 330, 355, 341, 368, 390, 402, 377, 415, 398, 436, 351, 448];
+  const pts = v.map((y, i) => `${80 + i * 42},${320 - (y - 280) / 200 * 240}`).join(' ');
+  let s = '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="380" viewBox="0 0 640 380" font-family="PingFang SC, sans-serif"><rect width="640" height="380" fill="#fff"/>';
+  s += '<text x="32" y="42" font-size="18" font-weight="600" fill="#0f172a">Q3 周销售额趋势（万元）</text>';
+  for (let y0 = 280; y0 <= 480; y0 += 50) { const y = 320 - (y0 - 280) / 200 * 240; s += `<line x1="70" x2="610" y1="${y}" y2="${y}" stroke="#eef0f4"/><text x="60" y="${y + 4}" font-size="11" fill="#94a3b8" text-anchor="end">${y0}</text>`; }
+  s += `<polyline points="${pts}" fill="none" stroke="#0ea5e9" stroke-width="3" stroke-linejoin="round"/>`;
+  v.forEach((y, i) => { s += `<circle cx="${80 + i * 42}" cy="${320 - (y - 280) / 200 * 240}" r="4" fill="#fff" stroke="#0ea5e9" stroke-width="2"/>`; if (i % 2 === 0) s += `<text x="${80 + i * 42}" y="344" font-size="11" fill="#64748b" text-anchor="middle">W${27 + i}</text>`; });
+  s += `<circle cx="${80 + 11 * 42}" cy="${320 - (351 - 280) / 200 * 240}" r="7" fill="none" stroke="#dc2626" stroke-width="2"/><text x="${80 + 11 * 42}" y="${320 - (351 - 280) / 200 * 240 + 26}" font-size="11" fill="#dc2626" text-anchor="middle">退货高峰</text>`;
+  return s + '</svg>';
+}
+function svgShot(color, name) {
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="720" height="440" viewBox="0 0 720 440" font-family="PingFang SC, sans-serif">
+  <rect width="720" height="440" fill="#f8fafc"/><rect width="720" height="48" fill="${color}"/>
+  <text x="24" y="30" font-size="16" fill="#fff" font-weight="600">${name}</text>
+  <rect x="0" y="48" width="170" height="392" fill="#fff"/>${[0, 1, 2, 3, 4].map((i) => `<rect x="20" y="${76 + i * 36}" width="${110 - i * 8}" height="12" rx="6" fill="#e2e8f0"/>`).join('')}
+  <rect x="196" y="72" width="500" height="150" rx="10" fill="#fff" stroke="#e2e8f0"/>
+  <circle cx="246" cy="122" r="22" fill="${color}" opacity=".2"/><rect x="284" y="104" width="220" height="12" rx="6" fill="#cbd5e1"/><rect x="284" y="128" width="320" height="10" rx="5" fill="#e2e8f0"/>
+  <rect x="216" y="168" width="100" height="30" rx="8" fill="${color}"/><rect x="326" y="168" width="100" height="30" rx="8" fill="#e2e8f0"/>
+  <rect x="196" y="240" width="240" height="170" rx="10" fill="#fff" stroke="#e2e8f0"/><rect x="456" y="240" width="240" height="170" rx="10" fill="#fff" stroke="#e2e8f0"/>
+  ${[0, 1, 2, 3].map((i) => `<rect x="216" y="${266 + i * 32}" width="${190 - i * 30}" height="10" rx="5" fill="#e2e8f0"/><rect x="476" y="${266 + i * 32}" width="${170 - i * 20}" height="10" rx="5" fill="#e2e8f0"/>`).join('')}
+</svg>`;
+}
+const LOGO = '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#6366f1"/><stop offset="1" stop-color="#0ea5e9"/></linearGradient></defs><rect width="48" height="48" rx="12" fill="url(#g)"/><path d="M24 12 34 36h-5l-2-5h-6l-2 5h-5zm-1.5 14h3L24 21z" fill="#fff"/></svg>';
+const IMG = {
+  [`${Q3}/report/chart_region.png`]: svgBar,
+  [`${Q3}/report/chart_trend.png`]: svgLine,
+  [`${CP}/images/product-a.png`]: () => svgShot('#7c3aed', '产品 A · 工作流编排'),
+  [`${CP}/images/product-b.png`]: () => svgShot('#0f766e', '产品 B · 知识助手'),
+  [`${LG}/assets/logo.svg`]: () => LOGO,
+};
+TEXT[`${LG}/assets/logo.svg`] = LOGO;
+const dataUrl = (svg) => 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
+
+/* =====================================================================
+ * 状态与路由
+ *   #/ws/<目录>     工作空间
+ *   #/new/<目录>    新对话（带目录 = 以它为工作目录；不带 = 发送时新建）
+ *   #/c/<对话>      对话页（只画到能看出工作目录）
+ * ===================================================================== */
+const S = {
+  notes: true, collapsed: false,
+  hidden: false,                  // 显示隐藏文件（.atlas）
+  sort: { k: 'name', asc: true },
+  q: '', sel: new Set(),
+  pv: null, pvView: 'preview', pvNext: null,
+  pop: null, modal: null, toast: null,
+  uploads: [], upMin: false, pending: [], conflictAll: null,
+  blobs: {}, urls: {}, texts: {},
+  noOss: false, curFiles: [],
+  agent: 'general', draft: '',
+};
+function route() {
+  const h = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
+  if (h[0] === 'new') return { page: 'new', dir: h.slice(1).join('/') };
+  if (h[0] === 'c') return { page: 'chat', id: h[1] };
+  return { page: 'ws', dir: h[0] === 'ws' ? h.slice(1).join('/') : '' };
+}
+const enc = (p) => (p ? '/' + p.split('/').map(encodeURIComponent).join('/') : '');
+const wsHref = (dir = '') => '#/ws' + enc(dir);
+const newHref = (dir = '') => '#/new' + enc(dir);
+const chatHref = (id) => '#/c/' + id;
+window.addEventListener('hashchange', () => {
+  S.pop = null; S.modal = null; S.sel = new Set(); S.q = '';
+  S.pv = S.pvNext; S.pvNext = null; S.pvView = 'preview';
+  S.resetScroll = true;
+  render();
+});
+
+/* 只读：.atlas 是对话的内部记录 */
+const canWrite = (dir) => !isHidden(dir);
+
+function listDir(dir) {
+  const pre = dir ? dir + '/' : '';
+  const dirs = new Map(), files = [];
+  for (const x of FILES) {
+    if (!x.p.startsWith(pre)) continue;
+    const rest = x.p.slice(pre.length);
+    if (!rest) continue;
+    if (!S.hidden && isHidden(rest)) continue;
+    const i = rest.indexOf('/');
+    if (i < 0) { files.push(x); continue; }
+    const name = rest.slice(0, i);
+    const d = dirs.get(name) || { name, p: pre + name, dir: true, size: 0, count: 0, m: Infinity };
+    if (!x.dir) { d.size += x.size; d.count++; }
+    d.m = Math.min(d.m, x.m);
+    dirs.set(name, d);
+  }
+  return { dirs: sortList([...dirs.values()]), files: sortList(files) };
+}
+function sortList(arr) {
+  const { k, asc } = S.sort;
+  const v = { name: (x) => x.name || base(x.p), size: (x) => x.size, m: (x) => -x.m };
+  return arr.sort((a, b) => {
+    const va = v[k](a), vb = v[k](b);
+    const c = typeof va === 'string' ? va.localeCompare(vb, 'zh') : va - vb;
+    return asc ? c : -c;
+  });
+}
+function stat(dir) {
+  let size = 0, count = 0;
+  for (const x of FILES) if (!x.dir && (!dir || x.p.startsWith(dir + '/'))) { size += x.size; if (S.hidden || !isHidden(x.p)) count++; }
+  return { size, count };
+}
+const exists = (p) => FILES.some((x) => !x.dir && x.p === p);
+const isDirPath = (p) => FILES.some((x) => x.p.startsWith(p + '/'));
+
+/* ---------- 引用：哪些对话把这里当工作目录（只在改名、删除的确认框里用） ---------- */
+const refsUnder = (p) => THREADS.filter((t) => inside(t.dir, p));                    // 工作目录就是它或在它下面
+const refsOver = (p) => THREADS.filter((t) => t.dir !== p && p.startsWith(t.dir + '/')); // 它在某个工作目录里面
+
+/* ---------- 文件类型 ---------- */
+const EXT = {
+  md: 'md', markdown: 'md', py: 'code', js: 'code', ts: 'code', css: 'code', sh: 'code', conf: 'code', yaml: 'code', yml: 'code',
+  txt: 'txt', log: 'txt', jsonl: 'txt', json: 'json', csv: 'csv', png: 'img', jpg: 'img', jpeg: 'img', gif: 'img', webp: 'img', svg: 'img',
+  pdf: 'pdf', html: 'html', htm: 'html', xlsx: 'office', xls: 'office', docx: 'office', doc: 'office', pptx: 'office', zip: 'zip', gz: 'zip', tar: 'zip',
+};
+const kindOf = (p) => EXT[extOf(p)] || 'unknown';
+function fileIcon(p, sm = false) {
+  const k = kindOf(p), e = extOf(p);
+  const [cls, icon] = {
+    md: ['md', 'fileText'], code: ['code', 'code'], txt: ['', 'fileText'], json: ['json', 'braces'], csv: ['sheet', 'table'],
+    img: ['img', 'image'], pdf: ['pdf', 'fileText'], html: ['html', 'globe'], zip: ['', 'archive'], unknown: ['', 'file'],
+    office: [e.startsWith('xls') ? 'sheet' : e.startsWith('ppt') ? 'html' : 'doc', e.startsWith('xls') ? 'table' : 'fileText'],
+  }[k];
+  return `<span class="fi ${sm ? 'sm' : ''} ${cls}">${ic(icon)}</span>`;
+}
+const dirIcon = (sm = false) => `<span class="fi dir ${sm ? 'sm' : ''}">${ic('folder')}</span>`;
+
+function textOf(p) {
+  if (S.texts[p] != null) return S.texts[p];
+  if (S.blobs[p]) return null; // 本地上传的：异步读取
+  if (TEXT[p] != null) return TEXT[p];
+  if (LAZY[p]) return (TEXT[p] = LAZY[p]());
+  const n = base(p);
+  if (kindOf(p) === 'md') return `# ${n}\n\n（示例内容）`;
+  if (kindOf(p) === 'csv') return 'name,value\na,1\nb,2';
+  return `# ${n}\n# （示例内容）`;
+}
+function imgUrl(p) {
+  if (S.blobs[p]) return (S.urls[p] ||= URL.createObjectURL(S.blobs[p]));
+  if (IMG[p]) return dataUrl(IMG[p]());
+  return dataUrl(`<svg xmlns="http://www.w3.org/2000/svg" width="480" height="300"><rect width="480" height="300" fill="#eef0f4"/><text x="240" y="156" font-size="15" font-family="sans-serif" fill="#94a3b8" text-anchor="middle">${esc(base(p))}</text></svg>`);
+}
+function resolvePath(dir, href) {
+  const out = dir ? dir.split('/') : [];
+  for (const s of href.replace(/^\.\//, '').split('/')) { if (s === '..') out.pop(); else if (s && s !== '.') out.push(s); }
+  return out.join('/');
+}
+
+/** 没选目录时新建的工作目录：对话/{开始时间}；要同时避开已有目录和别的对话记录里的路径（目录写了文件才会出现） */
+function autoDir() {
+  const d = new Date(NOW + (Date.now() - LOADED));
+  const name = `${ymd(d)} ${pad(d.getHours())}.${pad(d.getMinutes())}`;
+  const taken = (p) => isDirPath(p) || exists(p) || THREADS.some((t) => inside(t.dir, p));
+  let p = `${AUTO_ROOT}/${name}`;
+  for (let i = 2; taken(p); i++) p = `${AUTO_ROOT}/${name} (${i})`;
+  return p;
+}
+function uniqueName(p) {
+  const d = parent(p), n = base(p), dot = n.lastIndexOf('.');
+  const stem = dot > 0 ? n.slice(0, dot) : n, ext = dot > 0 ? n.slice(dot) : '';
+  for (let i = 1; ; i++) { const c = join(d, `${stem} (${i})${ext}`); if (!exists(c)) return c; }
+}
+
+/* =====================================================================
+ * 渲染：外框
+ * ===================================================================== */
+function topbar() {
+  const P = [['zap', '智能平台', true], ['book', '知识库'], ['spark', '技能'], ['plug', 'MCP'], ['layers', '模型'], ['sliders', '系统']];
+  return `<header class="top">
+    <div class="brand"><span class="logo">A</span>Atlas</div>
+    <nav class="pnav">${P.map(([i, t, on]) => `<a class="${on ? 'on' : ''}" ${on ? 'href="#/ws"' : `data-act="toast" data-msg="${t}（原型只包含工作空间）"`}>${ic(i)}${t}</a>`).join('')}</nav>
+    <div class="top-right">
+      <button class="btn sm ${S.notes ? '' : 'ghost'}" data-act="toggleNotes">${ic('bulb')}设计说明</button>
+      ${av(ME.name, ME.color, 30).replace('avatar sq', 'avatar')}
+    </div>
+  </header>`;
+}
+function sider(r) {
+  const min = S.collapsed;
+  const nav = (icon, t, href, on) => `<a class="snav ${on ? 'on' : ''}" ${href ? `href="${href}"` : `data-act="toast" data-msg="${t}（原型外页面）"`} title="${t}">${ic(icon)}<span>${t}</span></a>`;
+  return `<aside class="sider ${min ? 'min' : ''}">
+    <div class="sider-top">
+      <a class="new-chat" href="${newHref()}">${ic('plus')}<span>新对话</span></a>
+      ${nav('bot', '智能体')}${nav('hdd', '工作空间', '#/ws', r.page === 'ws')}${nav('user', '个性化')}
+    </div>
+    ${min ? '<div class="sp"></div>' : `<div class="hist"><div class="hist-head">最近对话</div>${THREADS.map((t) =>
+      `<a class="hist-item ${r.page === 'chat' && r.id === t.id ? 'on' : ''}" href="${chatHref(t.id)}">${t.state === 'run' ? '<span class="dot run"></span>' : ''}<span class="t">${esc(t.title)}</span></a>`).join('')}</div>`}
+    <div class="sider-foot"><a class="snav" data-act="collapse">${ic(min ? 'right' : 'left')}<span>收起</span></a></div>
+  </aside>`;
+}
+
+function render() {
+  const ae = document.activeElement;
+  const refocus = ae && ['q', 'msg'].includes(ae.id) ? ae.id : null;
+  const mIn = document.getElementById('mIn');
+  if (mIn && S.modal) S.modal.value = mIn.value;
+  const keep = {};
+  if (!S.resetScroll) document.querySelectorAll('[data-scroll]').forEach((el) => (keep[el.dataset.scroll] = el.scrollTop));
+  S.resetScroll = false;
+  const r = route();
+  const pvOpen = !!(S.pv && !S.q && r.page === 'ws' && !S.noOss);
+  let content;
+  if (r.page === 'new') content = newChatView(r);
+  else if (r.page === 'chat') content = chatView(r);
+  else content = S.noOss ? noOssView() : S.q ? searchView() : dirView(r.dir);
+  document.getElementById('app').innerHTML =
+    topbar() +
+    `<div class="body">${sider(r)}<main class="main"><div class="ws ${pvOpen ? 'pvopen' : ''}">
+      <div class="ws-list" data-scroll="list:${esc(location.hash)}:${S.q}">${content}</div>${pvOpen ? previewPane() : ''}
+    </div></main>${S.notes ? notesPanel(r) : ''}</div>` +
+    popover() + modal() + uploadPanel() + (S.toast ? `<div class="toast">${esc(S.toast)}</div>` : '');
+  document.querySelectorAll('[data-scroll]').forEach((el) => { if (keep[el.dataset.scroll] != null) el.scrollTop = keep[el.dataset.scroll]; });
+  afterRender(S.focus || refocus);
+}
+function afterRender(focusId) {
+  S.focus = null;
+  if (focusId) { const el = document.getElementById(focusId); if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); } }
+  const i = document.getElementById('mIn');
+  if (S.modal && i) {
+    i.focus();
+    if (!S.modal.focused) { const dot = i.value.lastIndexOf('.'); i.setSelectionRange(0, dot > 0 && S.modal.type === 'rename' && !S.modal.isDir ? dot : i.value.length); }
+    else i.setSelectionRange(i.value.length, i.value.length);
+  }
+  if (S.modal) S.modal.focused = true;
+  if (S.scrollCur) { document.querySelector('tr.cur')?.scrollIntoView({ block: 'nearest' }); S.scrollCur = false; }
+  const pv = S.pv && S.pv.path;
+  if (pv && S.blobs[pv] && S.texts[pv] == null && needsText(pv) && S.blobs[pv].size < 2 * 1024 * 1024) {
+    S.texts[pv] = '';
+    S.blobs[pv].text().then((t) => { S.texts[pv] = t; render(); });
+  }
+}
+function toast(msg) {
+  S.toast = msg; render();
+  clearTimeout(toast.t); toast.t = setTimeout(() => { S.toast = null; render(); }, 2400);
+}
+const searchBox = () => `<div class="search" style="width:260px">${ic('search')}<input class="input" id="q" placeholder="搜索文件和文件夹" value="${esc(S.q)}" autocomplete="off">${S.q ? `<button class="ibtn sm clr" data-act="clearQ" title="清除">${ic('x')}</button>` : ''}</div>`;
+const sortTh = (k, t, cls) => {
+  const on = S.sort.k === k;
+  return `<th class="s ${cls}" data-act="sort" data-k="${k}">${t}${on ? `<span class="ar">${ic(S.sort.asc ? 'up' : 'down')}</span>` : ''}</th>`;
+};
+
+/* =====================================================================
+ * 工作空间：一棵普通的目录树（根目录和子目录同一个视图）
+ * ===================================================================== */
+function crumbs(dir) {
+  const parts = dir.split('/');
+  const segs = [`<a href="#/ws">我的工作空间</a>`];
+  parts.forEach((p, i) => {
+    const last = i === parts.length - 1;
+    segs.push(last ? `<span class="cur">${esc(p)}</span>` : `<a href="${wsHref(parts.slice(0, i + 1).join('/'))}">${esc(p)}</a>`);
+  });
+  return `<div class="crumbs grow">${segs.join(`<span class="s">${ic('right')}</span>`)}</div>`;
+}
+function dirView(dir) {
+  const { dirs, files } = listDir(dir);
+  S.curFiles = files.map((x) => x.p);
+  const write = canWrite(dir);
+  const all = [...dirs.map((d) => d.p), ...files.map((x) => x.p)];
+  const nSel = all.filter((p) => S.sel.has(p)).length;
+  const st = stat(dir);
+
+  const head = dir
+    ? `<div class="page-head">${crumbs(dir)}${searchBox()}</div>
+       <div class="metarow">${isHidden(dir) ? `<span class="lockt" style="font-size:12.5px">${ic('lock')}对话的内部记录，只读</span><span class="faint">·</span>` : ''}${st.count} 个文件<span class="faint">·</span>${fmtSize(st.size)}
+         ${dir === AUTO_ROOT ? '<span class="faint">·</span>没选目录就开始的对话，系统在这里给它建一个目录' : ''}</div>`
+    : `<div class="page-head"><div class="grow"><h1>我的工作空间</h1>
+         <div class="usage">${ic('hdd')}已用 <b>${fmtSize(st.size)}</b><span class="faint">·</span>${st.count} 个文件</div></div>${searchBox()}</div>`;
+
+  const toolbar = nSel
+    ? `<span class="sm" style="font-weight:600">已选 ${nSel} 项</span>
+       <button class="btn sm" data-act="dlSel">${ic('download')}下载${nSel > 1 || all.filter((p) => S.sel.has(p)).some(isDirPath) ? '（zip）' : ''}</button>
+       ${write ? `<button class="btn sm danger" data-act="delSel">${ic('trash')}删除</button>` : ''}
+       <button class="btn sm ghost" data-act="selClear">取消选择</button>`
+    : `${write ? `<button class="btn primary" data-pop="upload">${ic('upload')}上传${ic('down')}</button>
+       <button class="btn" data-act="newFolder">${ic('folderPlus')}新建文件夹</button>` : ''}
+       ${dir && write ? `<button class="btn" data-act="newChat" data-path="${esc(dir)}" title="以这个目录为工作目录开始一个新对话">${ic('chatPlus')}在此新建对话</button>` : ''}`;
+  const hiddenToggle = `<label class="row sm muted" style="cursor:pointer" data-act="toggleHidden"><span class="switch ${S.hidden ? 'on' : ''}"></span>显示隐藏文件</label>`;
+
+  const cbAll = all.length ? `<span class="cb ${nSel && nSel === all.length ? 'on' : nSel ? 'part' : ''}" data-act="selAll">${nSel === all.length ? ic('check') : ''}</span>` : '';
+  const pvPath = S.pv ? S.pv.path : null;
+  const rowOps = (p, isDir) => `<td class="c-ops">
+      ${isDir ? (canWrite(p) ? `<button class="ibtn sm chat" data-act="newChat" data-path="${esc(p)}" title="在这个目录新建对话">${ic('chatPlus')}</button>` : '')
+        : `<button class="ibtn sm" data-act="open" data-path="${esc(p)}" title="预览">${ic('eye')}</button>`}
+      <button class="ibtn sm" data-act="${isDir ? 'zip' : 'download'}" data-path="${esc(p)}" title="${isDir ? '下载（zip）' : '下载'}">${ic('download')}</button>
+      <button class="ibtn sm" data-pop="${isDir ? 'dir' : 'file'}" data-path="${esc(p)}" title="更多">${ic('more')}</button></td>`;
+  const dirSub = (d) => d.p === AUTO_ROOT ? '<span class="faint xs ellipsis">没选目录的对话放在这里</span>'
+    : isHidden(d.name) ? `<span class="lockt">${ic('lock')}对话内部记录</span>` : '';
+  const rows = [
+    ...dirs.map((d) => `<tr class="click ${S.sel.has(d.p) ? 'sel' : ''}" data-go="${wsHref(d.p)}">
+      <td class="c-cb"><span class="cb ${S.sel.has(d.p) ? 'on' : ''}" data-act="sel" data-path="${esc(d.p)}">${S.sel.has(d.p) ? ic('check') : ''}</span></td>
+      <td><div class="nm">${dirIcon()}<span class="t">${esc(d.name)}</span><span class="faint xs" style="flex:none">${d.count} 项</span>${dirSub(d)}</div></td>
+      <td class="c-size">${d.count ? fmtSize(d.size) : '—'}</td><td class="c-time">${d.m === Infinity ? '—' : rel(d.m)}</td>${rowOps(d.p, true)}</tr>`),
+    ...files.map((x) => `<tr class="click ${S.sel.has(x.p) ? 'sel' : ''} ${pvPath === x.p ? 'cur' : ''}" data-act="open" data-path="${esc(x.p)}">
+      <td class="c-cb"><span class="cb ${S.sel.has(x.p) ? 'on' : ''}" data-act="sel" data-path="${esc(x.p)}">${S.sel.has(x.p) ? ic('check') : ''}</span></td>
+      <td><div class="nm">${fileIcon(x.p)}<span class="t">${esc(base(x.p))}</span></div></td>
+      <td class="c-size">${fmtSize(x.size)}</td><td class="c-time">${rel(x.m)}</td>${rowOps(x.p, false)}</tr>`),
+  ].join('');
+
+  const table = all.length
+    ? `<table class="ft"><thead><tr><th class="c-cb">${cbAll}</th>${sortTh('name', '名称', '')}${sortTh('size', '大小', 'c-size')}${sortTh('m', '修改时间', 'c-time')}<th class="c-ops"></th></tr></thead><tbody>${rows}</tbody></table>`
+    : dir
+      ? `<div class="empty"><div class="ill">${ic(write ? 'upload' : 'folder')}</div><h3>这个文件夹是空的</h3><p>${write ? '把文件拖到这里，或点「上传」' : ''}</p></div>`
+      : `<div class="empty"><div class="ill">${ic('folder')}</div><h3>还没有文件</h3><p>上传文件、新建文件夹，或者直接开始对话 —— 智能体生成的文件都会出现在这里</p></div>`;
+
+  return `<div class="page">${head}<div class="toolbar">${toolbar}<span class="sp"></span>${hiddenToggle}</div>${table}</div>`;
+}
+
+/* =====================================================================
+ * 搜索（整个工作空间，按名称）
+ * ===================================================================== */
+function searchView() {
+  const q = S.q.trim().toLowerCase();
+  const hit = (s) => { const i = s.toLowerCase().indexOf(q); return i < 0 ? esc(s) : esc(s.slice(0, i)) + '<mark>' + esc(s.slice(i, i + q.length)) + '</mark>' + esc(s.slice(i + q.length)); };
+  const dirSet = new Set(), files = [];
+  for (const x of FILES) {
+    if (!S.hidden && isHidden(x.p)) continue;
+    for (let d = parent(x.p); d; d = parent(d)) dirSet.add(d);
+    if (!x.dir && base(x.p).toLowerCase().includes(q)) files.push(x);
+  }
+  const dirs = [...dirSet].filter((d) => base(d).toLowerCase().includes(q)).sort((a, b) => a.localeCompare(b, 'zh'));
+  files.sort((a, b) => a.m - b.m);
+  const n = dirs.length + files.length;
+  const loc = (p) => `<span class="row" style="gap:6px">${dirIcon(true)}<span class="ellipsis">${esc(p || '我的工作空间')}</span></span>`;
+  const rows = [
+    ...dirs.map((d) => `<tr class="click" data-go="${wsHref(d)}"><td><div class="nm">${dirIcon()}<span class="t">${hit(base(d))}</span></div></td>
+      <td class="c-loc sm">${loc(parent(d))}</td><td class="c-size">${fmtSize(stat(d).size)}</td><td class="c-time"></td></tr>`),
+    ...files.map((x) => `<tr class="click" data-act="openResult" data-path="${esc(x.p)}">
+      <td><div class="nm">${fileIcon(x.p)}<span class="t">${hit(base(x.p))}</span></div></td>
+      <td class="c-loc sm">${loc(parent(x.p))}</td><td class="c-size">${fmtSize(x.size)}</td><td class="c-time">${rel(x.m)}</td></tr>`),
+  ].join('');
+  return `<div class="page">
+    <div class="page-head"><div class="grow"><h1>搜索「${esc(S.q.trim())}」</h1><div class="usage">在整个工作空间里找到 ${n} 项${S.hidden ? '' : '（不含隐藏文件）'}</div></div>${searchBox()}</div>
+    ${n ? `<table class="ft"><thead><tr><th>名称</th><th class="c-loc">所在位置</th><th class="c-size">大小</th><th class="c-time">修改时间</th></tr></thead><tbody>${rows}</tbody></table>`
+      : `<div class="empty"><div class="ill">${ic('search')}</div><h3>没有找到</h3><p>只按名称搜索，不搜文件内容</p></div>`}
+  </div>`;
+}
+function noOssView() {
+  return `<div class="page"><div class="page-head"><h1>我的工作空间</h1></div>
+    <div class="empty"><div class="ill" style="background:var(--line-2);color:var(--ink-3)">${ic('hdd')}</div><h3>工作空间暂不可用</h3><p>这个部署没有配置文件存储，请联系管理员</p></div></div>`;
+}
+
+/* =====================================================================
+ * 新对话：带目录 = 以它为工作目录；不带 = 发送时在「对话/」下新建
+ * ===================================================================== */
+const greet = '下午好';
+function newChatView(r) {
+  const dir = r.dir, a = AGENTS[S.agent];
+  const chip = dir
+    ? `<div class="attach"><span class="dirchip" title="工作目录：智能体在这个目录里工作">${ic('folder')}<span class="ellipsis">${esc(dir)}</span><button class="x" data-act="dropDir" title="不用这个目录">${ic('x')}</button></span></div>`
+    : '';
+  const hint = dir
+    ? `${ic('folder')}<span>工作目录 <a href="${wsHref(dir)}">${esc(dir)}</a>：智能体能读写这个目录里的文件，看不到工作空间的其他目录</span>`
+    : `${ic('folderPlus')}<span>没选目录：发送后新建 <code>${esc(autoDir())}</code> 作为工作目录。要用已有的文件，去<a href="#/ws">工作空间</a>在文件夹上点「新建对话」</span>`;
+  return `<div class="hero">
+    <h1>${greet}，${esc(ME.name.slice(1))}</h1>
+    <div class="composer">${chip}
+      <textarea id="msg" rows="2" placeholder="${dir ? '想让智能体用这个目录里的文件做什么？' : '有什么可以帮你？'}">${esc(S.draft)}</textarea>
+      <div class="bar">
+        <button class="ibtn" title="添加文件" data-act="toast" data-msg="添加的文件传到工作目录${dir ? '「' + dir + '」' : '（发送时新建）'}，智能体直接能读到">${ic('clip')}</button>
+        <span class="pill" data-pop="agent">${av(a.name, a.color, 18)}${esc(a.name)}${ic('down')}</span>
+        <span class="pill" data-act="toast" data-msg="审批模式（同控制台原型）">${ic('shield')}自动${ic('down')}</span>
+        <button class="send" data-act="send" title="发送（Enter）">${ic('arrowUp')}</button>
+      </div>
+    </div>
+    <div class="hint">${hint}</div>
+  </div>`;
+}
+function send() {
+  const text = S.draft.trim();
+  if (!text) { S.focus = 'msg'; toast('先输入要做的事'); return; }
+  const r = route();
+  const dir = r.dir || autoDir();
+  const id = Math.random().toString(16).slice(2, 10);
+  const t = { id, title: text.length > 18 ? text.slice(0, 18) + '…' : text, agent: S.agent, dir, auto: !r.dir, state: 'run', live: { text, phase: 0 } };
+  THREADS.unshift(t);
+  S.draft = '';
+  location.hash = chatHref(id);
+  // 演示：智能体在工作目录里写一个文件 —— 写了文件，目录才出现在工作空间里
+  setTimeout(() => { t.live.phase = 1; render(); }, 900);
+  setTimeout(() => {
+    let p = join(t.dir, '回答.md');
+    if (exists(p)) p = uniqueName(p);
+    TEXT[p] = `# ${t.title}\n\n> ${text}\n\n（原型演示：智能体在工作目录 ${t.dir} 里写的文件）`;
+    FILES.push({ p, size: new Blob([TEXT[p]]).size, m: 0 });
+    t.live.file = p; t.live.phase = 2; t.state = '';
+    render();
+  }, 2300);
+}
+
+/* =====================================================================
+ * 对话页（只画到能看出工作目录；完整对话页见 atlas-console.html）
+ * ===================================================================== */
+function chatView(r) {
+  const t = THREADS.find((x) => x.id === r.id);
+  if (!t) return `<div class="page"><div class="empty"><h3>对话不存在</h3></div></div>`;
+  const a = AGENTS[t.agent];
+  const who = `<div class="who">${av(a.name, a.color, 22)}${esc(a.name)}</div>`;
+  let body;
+  if (t.live) {
+    const L = t.live;
+    const steps = L.phase === 0 ? `<div class="steps"><div class="step"><span class="spin"></span>正在思考…</div></div>`
+      : `<div class="steps"><div class="step">${L.phase === 1 ? '<span class="spin"></span>' : ic('check')}写入 回答.md<span class="tm">${L.phase === 1 ? '' : '0.2s'}</span></div></div>`;
+    const reply = L.phase === 2
+      ? `<div class="prose"><p>写好了：<a data-act="openFile" data-path="${esc(L.file)}">${esc(base(L.file))}</a>，在工作目录 <a href="${wsHref(t.dir)}">${esc(t.dir)}</a> 里。</p></div>` : '';
+    body = `<div class="m-user"><div class="b">${esc(L.text)}</div></div><div class="m-ai">${who}${steps}${reply}</div>`;
+  } else {
+    body = `<div class="m-user"><div class="b">${esc(t.title)}</div></div>
+      <div class="m-ai">${who}<div class="prose"><p class="muted">（原型：对话内容略。这一页只演示工作目录存在对话记录里、怎么显示）</p></div></div>`;
+  }
+  return `<div class="chat">
+    <div class="chat-head">
+      <b class="ellipsis" style="max-width:340px">${esc(t.title)}</b>
+      <span class="pill" style="height:26px">${av(a.name, a.color, 16)}${esc(a.name)}</span>
+      <span class="sp"></span>
+      <a class="dirchip" href="${wsHref(t.dir)}" title="工作目录 · 在工作空间中打开">${ic('folder')}<span class="ellipsis" style="max-width:280px">${esc(t.dir)}</span>${ic('external', 'ext')}</a>
+    </div>
+    <div class="chat-scroll"><div class="chat-col">
+      <div class="chat-meta">${ic('folder')}工作目录 <b style="color:var(--ink-3);font-weight:600">${esc(t.dir)}</b>
+        <span>·</span>${t.auto ? '没选目录，开始对话时新建的' : '从工作空间的文件夹开始的对话'}</div>
+      ${body}
+    </div></div>
+    <div class="chat-foot"><div class="composer"><textarea rows="1" placeholder="继续对话…" data-act="noop"></textarea>
+      <div class="bar"><button class="ibtn" title="添加文件" data-act="toast" data-msg="添加的文件传到工作目录「${esc(t.dir)}」">${ic('clip')}</button>
+      <button class="send" data-act="toast" data-msg="原型只演示开始对话">${ic('arrowUp')}</button></div></div></div>
+  </div>`;
+}
+
+/* =====================================================================
+ * 预览（右侧分栏）
+ * ===================================================================== */
+const needsText = (p) => ['md', 'code', 'txt', 'json', 'csv', 'html', 'unknown'].includes(kindOf(p));
+function previewPane() {
+  const { path } = S.pv;
+  const x = FILES.find((y) => y.p === path);
+  if (!x) return `<div class="pv"><div class="pv-h"><span class="grow"></span><button class="ibtn" data-act="closePv">${ic('x')}</button></div><div class="pv-b"><div class="pv-msg">文件已不存在</div></div></div>`;
+  const k = kindOf(path);
+  const hasSource = k === 'md' || k === 'html' || k === 'csv';
+  const idx = S.curFiles.indexOf(path);
+  const seg = hasSource ? `<span class="seg"><a class="${S.pvView === 'preview' ? 'on' : ''}" data-act="pvView" data-v="preview">${k === 'csv' ? '表格' : '预览'}</a><a class="${S.pvView === 'source' ? 'on' : ''}" data-act="pvView" data-v="source">源码</a></span>` : '';
+  return `<div class="pv">
+    <div class="pv-h">
+      ${fileIcon(path, true)}
+      <div class="nm2"><div class="t" title="${esc(path)}">${esc(base(path))}</div><div class="m">${fmtSize(x.size)} · ${rel(x.m)}${parent(path) ? ' · ' + esc(parent(path)) + '/' : ''}</div></div>
+      ${seg}
+      <button class="ibtn" data-act="pvStep" data-d="-1" title="上一个（↑）" ${idx <= 0 ? 'disabled' : ''}>${ic('up')}</button>
+      <button class="ibtn" data-act="pvStep" data-d="1" title="下一个（↓）" ${idx < 0 || idx >= S.curFiles.length - 1 ? 'disabled' : ''}>${ic('down')}</button>
+      <button class="ibtn" data-act="toast" data-msg="新标签打开整页预览（对话里已有的预览页）" title="新标签打开">${ic('external')}</button>
+      <button class="ibtn" data-act="download" data-path="${esc(path)}" title="下载">${ic('download')}</button>
+      <button class="ibtn" data-act="closePv" title="关闭（Esc）">${ic('x')}</button>
+    </div>
+    <div class="pv-b" data-scroll="pv:${esc(path)}:${S.pvView}">${pvBody(x, k)}</div>
+  </div>`;
+}
+const BIG = 1024 * 1024;
+function pvBody(x, k) {
+  const p = x.p, dir = parent(p);
+  const dl = `<button class="btn" data-act="download" data-path="${esc(p)}">${ic('download')}下载</button>`;
+  const msg = (t, sub = '') => `<div class="pv-msg">${fileIcon(p)}<div><div style="font-weight:600;color:var(--ink-2)">${t}</div>${sub ? `<div class="sm" style="margin-top:4px">${sub}</div>` : ''}</div>${dl}</div>`;
+  if (x.size === 0) return `<div class="pv-msg">空文件</div>`;
+  if (k === 'img') return `<div class="pv-img"><img src="${imgUrl(p)}" alt="${esc(base(p))}"></div>`;
+  if (k === 'pdf') return pdfView();
+  if (k === 'office') return msg('这种文件不能在线预览', `${extOf(p).toUpperCase()} 文件请下载后用 Office / WPS 打开`);
+  if (k === 'zip') return msg('压缩包不能在线预览', '下载后解压查看');
+  const text = textOf(p);
+  if (text == null || (S.blobs[p] && S.texts[p] === '' && x.size > 0)) {
+    if (S.blobs[p] && S.blobs[p].size >= 2 * 1024 * 1024) return msg('文件较大，请下载查看');
+    return `<div class="pv-msg"><span class="spin"></span>读取中…</div>`;
+  }
+  if (k === 'unknown' && /[\u0000-\u0008]/.test(text.slice(0, 8192))) return msg('二进制文件，不支持预览');
+  const tip = x.size > BIG ? `<div class="pv-tip">${ic('alert')}文件较大（${fmtSize(x.size)}），只显示开头 1 MB<span class="sp"></span><a data-act="download" data-path="${esc(p)}">下载完整文件</a></div>` : '';
+  if (k === 'html' && S.pvView === 'preview') return `<iframe class="pv-frame" sandbox="allow-scripts allow-forms" srcdoc="${esc(htmlDoc(dir, text))}"></iframe>`;
+  if (k === 'md' && S.pvView === 'preview') return `<div class="pv-md">${mdRender(text, dir)}</div>`;
+  if (k === 'csv' && S.pvView === 'preview') return tip + csvView(text);
+  const lang = { py: '#', sh: '#', conf: '#', yaml: '#', yml: '#', js: '//', ts: '//', css: '//', json: 'json' }[extOf(p)] || '';
+  return tip + codeView(extOf(p) === 'json' ? prettyJson(text) : text, lang);
+}
+function prettyJson(t) { try { return JSON.stringify(JSON.parse(t), null, 2); } catch { return t; } }
+function htmlDoc(dir, text) {
+  // 预览站点按相对路径取同目录的 CSS / JS / 图片；原型里直接内联
+  return text
+    .replace(/<link[^>]+href="([^"]+\.css)"[^>]*>/g, (_, h) => `<style>${textOf(resolvePath(dir, h)) || ''}</style>`)
+    .replace(/<script src="([^"]+)"><\/script>/g, (_, h) => `<script>${textOf(resolvePath(dir, h)) || ''}<\/script>`)
+    .replace(/src="([^"]+\.(?:svg|png|jpg))"/g, (_, h) => `src="${imgUrl(resolvePath(dir, h))}"`);
+}
+const KW = 'def|return|import|from|as|for|in|if|elif|else|while|class|with|try|except|raise|lambda|not|and|or|const|let|var|function|async|await|new|export|default|true|false|null|None|True|False|server|location|listen|upstream';
+function hl(line, lang) {
+  if (!lang) return esc(line);
+  const cm = lang === '#' ? '#.*$' : lang === '//' ? '\\/\\/.*$|\\/\\*.*?\\*\\/' : '(?!)';
+  const re = new RegExp(`(${cm})|("(?:[^"\\\\]|\\\\.)*"|'(?:[^'\\\\]|\\\\.)*')|\\b(\\d+(?:\\.\\d+)?)\\b|\\b(${KW})\\b`, 'g');
+  let out = '', last = 0, m;
+  while ((m = re.exec(line))) {
+    out += esc(line.slice(last, m.index));
+    const cls = m[1] ? 'tc' : m[2] ? 'ts' : m[3] ? 'tn' : 'tk';
+    out += `<span class="${cls}">${esc(m[0])}</span>`;
+    last = m.index + m[0].length;
+  }
+  return out + esc(line.slice(last));
+}
+function codeView(text, lang) {
+  return `<div class="pv-code">${text.split('\n').map((l, i) => `<div class="l"><span class="n">${i + 1}</span><span class="c">${hl(l, lang) || ' '}</span></div>`).join('')}</div>`;
+}
+function csvView(text) {
+  const rows = text.trim().split('\n').slice(0, 501).map((r) => r.split(','));
+  const head = rows[0], body = rows.slice(1);
+  const num = (v) => /^-?\d+(\.\d+)?$/.test(v);
+  return `<div class="pv-csv"><table><thead><tr><th class="rn"></th>${head.map((c) => `<th>${esc(c)}</th>`).join('')}</tr></thead>
+    <tbody>${body.map((r, i) => `<tr><td class="rn">${i + 1}</td>${r.map((c) => `<td class="${num(c) ? 'num' : ''}">${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table>
+    <div class="xs faint" style="margin-top:8px">${body.length} 行</div></div>`;
+}
+function mdRender(src, dir) {
+  const L = src.replace(/\r/g, '').split('\n');
+  const inl = (s) => esc(s)
+    .replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (_, a, u) => `<img alt="${a}" src="${imgUrl(resolvePath(dir, u))}">`)
+    .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<a>$1</a>')
+    .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>');
+  const block = /^(#{1,3}\s|\||\s*[-*]\s|\d+\.\s|>|```|---+\s*$)/;
+  let h = '', i = 0;
+  while (i < L.length) {
+    const l = L[i];
+    if (/^```/.test(l)) { const b = []; i++; while (i < L.length && !/^```/.test(L[i])) b.push(L[i++]); i++; h += `<pre>${esc(b.join('\n'))}</pre>`; continue; }
+    const hm = l.match(/^(#{1,3})\s+(.*)/);
+    if (hm) { h += `<h${hm[1].length}>${inl(hm[2])}</h${hm[1].length}>`; i++; continue; }
+    if (/^\|/.test(l)) {
+      const rows = []; while (i < L.length && /^\|/.test(L[i])) rows.push(L[i++]);
+      const cells = (r) => r.replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
+      h += '<table>' + rows.filter((r, n) => !(n === 1 && /^[\s|:-]+$/.test(r))).map((r, n) => '<tr>' + cells(r).map((c) => n ? `<td>${inl(c)}</td>` : `<th>${inl(c)}</th>`).join('') + '</tr>').join('') + '</table>';
+      continue;
+    }
+    if (/^\s*[-*]\s+/.test(l)) { const it = []; while (i < L.length && /^\s*[-*]\s+/.test(L[i])) it.push(L[i++].replace(/^\s*[-*]\s+/, '')); h += '<ul>' + it.map((x) => `<li>${inl(x)}</li>`).join('') + '</ul>'; continue; }
+    if (/^\d+\.\s+/.test(l)) { const it = []; while (i < L.length && /^\d+\.\s+/.test(L[i])) it.push(L[i++].replace(/^\d+\.\s+/, '')); h += '<ol>' + it.map((x) => `<li>${inl(x)}</li>`).join('') + '</ol>'; continue; }
+    if (/^>/.test(l)) { const it = []; while (i < L.length && /^>/.test(L[i])) it.push(L[i++].replace(/^>\s?/, '')); h += `<blockquote>${inl(it.join(' '))}</blockquote>`; continue; }
+    if (/^---+\s*$/.test(l)) { h += '<hr>'; i++; continue; }
+    if (!l.trim()) { i++; continue; }
+    const p = [L[i++]]; while (i < L.length && L[i].trim() && !block.test(L[i])) p.push(L[i++]);
+    h += `<p>${inl(p.join(' '))}</p>`;
+  }
+  return h;
+}
+function pdfView() {
+  return `<div class="pv-pdf">
+    <div class="pg"><div style="margin-top:34%;font-size:24px;font-weight:700">竞品调研报告</div><div style="color:#6b7280;margin-top:6px">智能体平台 · 2026 年 11 月</div><div style="margin-top:46%;color:#9ca3af">由通用助手整理</div></div>
+    <div class="pn">1 / 3</div>
+    <div class="pg"><h2>一、对比总览</h2><p>本报告对比了三款主流智能体平台在定位、部署方式、计费模式上的差异。产品 A 主打低代码编排，产品 B 面向企业知识问答，产品 C 是开源的开发者框架。</p>
+      <h2>二、产品 A</h2><p>可视化编排能力最完整，插件市场有 400+ 插件；但复杂流程的调试体验较差，权限只能到空间级。</p>
+      <h2>三、产品 B</h2><p>知识库检索效果在三者中最好，开箱即用；不支持私有部署，数据需上传到厂商云端。</p></div>
+    <div class="pn">2 / 3</div>
+  </div>`;
+}
+
+/* =====================================================================
+ * 浮层菜单、弹窗、上传面板
+ * ===================================================================== */
+function popover() {
+  const p = S.pop;
+  if (!p) return '';
+  const mi = (act, icon, t, cls = '') => `<div class="mi ${cls}" data-act="${act}" data-path="${esc(p.path || '')}">${ic(icon)}${t}</div>`;
+  let h = '';
+  const w = canWrite(p.path || '');
+  if (p.id === 'upload') h = mi('pickFiles', 'file', '上传文件') + mi('pickDir', 'folder', '上传文件夹') + `<div class="ph">也可以直接把文件拖进来</div>`;
+  if (p.id === 'file') h = mi('open', 'eye', '预览') + mi('download', 'download', '下载') + mi('copyPath', 'copy', '复制路径')
+    + (w ? '<div class="sep"></div>' + mi('rename', 'pencil', '重命名') + mi('del', 'trash', '删除', 'danger') : '');
+  if (p.id === 'dir') h = (w ? mi('newChat', 'chatPlus', '在这个目录新建对话') + '<div class="sep"></div>' : '')
+    + mi('zip', 'download', '下载（zip）') + mi('copyPath', 'copy', '复制路径')
+    + (w ? '<div class="sep"></div>' + mi('rename', 'pencil', '重命名') + mi('del', 'trash', '删除', 'danger') : '');
+  if (p.id === 'agent') h = `<div class="ph">选择智能体</div>` + Object.entries(AGENTS).map(([id, a]) =>
+    `<div class="mi ${S.agent === id ? 'on' : ''}" data-act="setAgent" data-id="${id}">${av(a.name, a.color, 22)}<span class="grow">${esc(a.name)}${a.isDefault ? ' <span class="tag">默认</span>' : ''}</span>${S.agent === id ? ic('check') : ''}</div>`).join('');
+  return `<div class="pop" style="left:${p.x}px;top:${p.y}px" data-stop>${h}</div>`;
+}
+
+function modalShell(title, body, foot) {
+  return `<div class="mask" data-act="modalCancel"><div class="modal" data-stop><div class="modal-h">${title}<span class="sp"></span><button class="ibtn sm" data-act="modalCancel">${ic('x')}</button></div><div class="modal-b">${body}</div><div class="modal-f">${foot}</div></div></div>`;
+}
+const uniq = (a) => [...new Set(a)];
+const tnames = (ts) => ts.slice(0, 3).map((t) => `「${esc(t.title)}」`).join('、') + (ts.length > 3 ? ` 等 ${ts.length} 个` : '');
+/** 改名、删除前查引用：工作目录在范围里的对话（正在运行的不许动），以及正在这里面工作的对话 */
+function refsNote(paths, verb) {
+  const hit = uniq(paths.flatMap(refsUnder));
+  const busy = hit.filter((t) => t.state === 'run');
+  const over = uniq(paths.flatMap(refsOver)).filter((t) => t.state === 'run');
+  let html = '';
+  if (busy.length) html += `<div class="warnbox danger">${ic('alert')}<span>${tnames(busy)}正在运行，它的工作目录在要${verb}的范围里。等它结束再${verb}</span></div>`;
+  else if (hit.length) html += `<div class="infobox">${ic('chat')}<span>${hit.length} 个对话把这里当工作目录（${tnames(hit)}）：${verb === '重命名' ? '工作目录会跟着改过去' : '对话保留，下次运行时从空目录开始'}</span></div>`;
+  if (over.length) html += `<div class="warnbox">${ic('alert')}<span>${tnames(over)}正在这个目录里工作，可能正在用这些文件</span></div>`;
+  return { html, blocked: busy.length > 0 };
+}
+function namesBox(paths) {
+  const shown = paths.slice(0, 5).map((p) => `<div>${isDirPath(p) ? dirIcon(true) : fileIcon(p, true)}<span class="ellipsis">${esc(p)}${isDirPath(p) ? '/' : ''}</span></div>`).join('');
+  return `<div class="names">${shown}${paths.length > 5 ? `<div class="faint">…还有 ${paths.length - 5} 项</div>` : ''}</div>`;
+}
+function modal() {
+  const m = S.modal;
+  if (!m) return '';
+  const cancel = `<button class="btn" data-act="modalCancel">取消</button>`;
+  switch (m.type) {
+    case 'newFolder':
+    case 'rename': {
+      const title = m.type === 'newFolder' ? '新建文件夹' : `重命名${m.isDir ? '文件夹' : '文件'}`;
+      const refs = m.type === 'rename' ? refsNote([m.path], '重命名') : { html: '', blocked: false };
+      return modalShell(title, `<label class="label">名称</label><input class="input" id="mIn" value="${esc(m.value)}" autocomplete="off" ${refs.blocked ? 'disabled' : ''}>${m.err ? `<div class="err">${esc(m.err)}</div>` : ''}${refs.html}`,
+        cancel + `<button class="btn primary" data-act="modalOk" ${refs.blocked ? 'disabled' : ''}>${m.type === 'newFolder' ? '创建' : '确定'}</button>`);
+    }
+    case 'del': {
+      const n = m.paths.length;
+      const files = m.paths.reduce((a, p) => a + (isDirPath(p) ? FILES.filter((x) => x.p.startsWith(p + '/') && !x.dir).length : 1), 0);
+      const refs = refsNote(m.paths, '删除');
+      return modalShell(`删除 ${n} 项？`, `<p>${files > n ? `连同文件夹里的内容共 ${files} 个文件，` : ''}删除后无法恢复。</p>${namesBox(m.paths)}${refs.html}`,
+        cancel + `<button class="btn danger solid" data-act="modalOk" ${refs.blocked ? 'disabled' : ''}>删除</button>`);
+    }
+    case 'conflict': {
+      const it = m.it, full = join(it.dir, it.name);
+      const more = S.pending.slice(1).filter((x) => exists(join(x.dir, x.name))).length;
+      return modalShell('已有同名文件', `<p>「${esc(full)}」已经存在，要怎么处理？</p>${refsNote([full], '替换').html}
+        ${more ? `<label class="ck" data-act="toggleCfAll"><span class="cb ${m.all ? 'on' : ''}">${m.all ? ic('check') : ''}</span>其余 ${more} 个同名文件也这样处理</label>` : ''}`,
+        `<button class="btn" data-act="conflict" data-how="skip">跳过</button><button class="btn" data-act="conflict" data-how="keep">保留两者</button><button class="btn primary" data-act="conflict" data-how="replace">替换</button>`);
+    }
+  }
+  return '';
+}
+
+const LIMIT = 1024 ** 3; // 单个文件上限（演示值，待定）
+function uploadPanel() {
+  if (!S.uploads.length) return '<div id="upq" class="hide"></div>';
+  const c = (s) => S.uploads.filter((u) => u.state === s).length;
+  const up = c('up'), fail = c('fail'), done = c('done'), skip = c('skip');
+  const title = up ? `正在上传 ${up} 项` : `上传完成 ${done} 项` + (fail ? `，${fail} 项失败` : '') + (skip ? `，跳过 ${skip} 项` : '');
+  const icon = up ? '<span class="spin"></span>' : fail ? `<span style="color:var(--danger);display:flex">${ic('alert')}</span>` : `<span style="color:var(--success);display:flex">${ic('check')}</span>`;
+  const items = S.uploads.map((u, i) => {
+    const right = u.state === 'up' ? `${Math.floor(u.pct)}%`
+      : u.state === 'done' ? `<span style="color:var(--success)">${ic('check')}</span>`
+      : u.state === 'fail' ? `<span style="color:var(--danger)">${ic('alert')}</span>` : '已跳过';
+    return `<div class="upi ${u.state === 'done' ? 'done' : ''}" ${u.state === 'done' ? `data-act="upLocate" data-i="${i}" title="查看"` : ''}>
+      ${fileIcon(u.path, true)}
+      <div class="grow"><div class="ellipsis sm">${esc(base(u.path))}${u.replaced ? '<span class="faint xs">（已替换）</span>' : ''}</div>
+        <div class="xs faint ellipsis">${u.state === 'fail' ? `<span style="color:var(--danger)">${esc(u.err)}</span>` : `${fmtSize(u.size)} · ${esc(parent(u.path) || '我的工作空间')}`}</div>
+        ${u.state === 'up' ? `<div class="prog"><i style="width:${u.pct}%"></i></div>` : ''}</div>
+      <span class="r">${right}</span></div>`;
+  }).join('');
+  return `<div id="upq" class="upq" style="right:${S.notes ? 320 : 20}px"><div class="upq-h">${icon}<span>${title}</span><span class="sp"></span>
+      <button class="ibtn sm" data-act="upMin" title="${S.upMin ? '展开' : '收起'}">${ic(S.upMin ? 'up' : 'down')}</button>
+      ${up ? '' : `<button class="ibtn sm" data-act="upClose" title="关闭">${ic('x')}</button>`}</div>
+    ${S.upMin ? '' : `<div class="upq-b">${items}</div>`}</div>`;
+}
+
+/* ---------- 上传流程：冲突 → 排队 → 进度 ---------- */
+function uploadTarget() {
+  const r = route();
+  if (r.page !== 'ws' || S.q || S.noOss) return null;
+  return canWrite(r.dir) ? { dir: r.dir } : null;
+}
+function enqueue(items, dir) {
+  if (!items.length) return;
+  S.pending.push(...items.map((it) => ({ ...it, dir })));
+  S.conflictAll = null;
+  S.upMin = false;
+  processPending();
+}
+function processPending() {
+  while (S.pending.length) {
+    const it = S.pending[0], full = join(it.dir, it.name);
+    if (exists(full) && !S.conflictAll) { S.modal = { type: 'conflict', it, all: false }; render(); return; }
+    S.pending.shift();
+    if (exists(full)) resolveConflict(it, S.conflictAll); else startUpload(it, full, false);
+  }
+  render();
+}
+function resolveConflict(it, how) {
+  const full = join(it.dir, it.name);
+  if (how === 'skip') S.uploads.push({ ...it, path: full, size: it.size, state: 'skip', pct: 0 });
+  else if (how === 'keep') startUpload(it, uniqueName(full), false);
+  else startUpload(it, full, true);
+}
+let upTimer = null;
+function startUpload(it, path, replaced) {
+  const u = { path, size: it.size, file: it.file, replaced, pct: 0, state: 'up' };
+  if (it.size > LIMIT) { u.state = 'fail'; u.err = `超过单个文件 ${fmtSize(LIMIT)} 的上限`; }
+  const secs = Math.min(6, 0.8 + it.size / 25e6);
+  u.rate = (100 * 0.16) / secs;
+  S.uploads.push(u);
+  if (!upTimer) upTimer = setInterval(tick, 160);
+}
+function tick() {
+  let finished = false, active = false;
+  for (const u of S.uploads) {
+    if (u.state !== 'up') continue;
+    active = true;
+    u.pct = Math.min(100, u.pct + u.rate);
+    if (u.pct >= 100) { u.state = 'done'; finishUpload(u); finished = true; }
+  }
+  if (!active) { clearInterval(upTimer); upTimer = null; }
+  if (finished) render();
+  else { const el = document.getElementById('upq'); if (el) el.outerHTML = uploadPanel(); }
+}
+function finishUpload(u) {
+  FILES = FILES.filter((x) => x.p !== u.path);
+  FILES.push({ p: u.path, size: u.size, m: 0 });
+  const k = u.path;
+  delete S.texts[k]; delete S.urls[k]; delete TEXT[k]; delete IMG[k];
+  if (u.file) S.blobs[k] = u.file; else delete S.blobs[k];
+}
+
+/* =====================================================================
+ * 设计说明
+ * ===================================================================== */
+const OPEN_QUESTIONS = [
+  '用户文件放新前缀 {user}/files/（推荐：和 skills/、home/ 分开，用户建什么名字的文件夹都不会撞上）；另一种是直接用 {user}/ 根目录、页面隐藏 skills/ 和 home/',
+  '旧对话的 {会话}/workspace/：一次性搬到 files/对话/{开始时间}/ 并回填工作目录（推荐），还是不搬、工作空间里看不到',
+  '工作目录定了以后能不能换：原型里不能（要换就在别的目录新开对话）',
+  '单个文件上传上限、要不要存储配额（原型按单个 1 GB 演示）',
+];
+function notesFor(r) {
+  const N = (title, items, be = [], qs = []) => ({ title, items, be, qs });
+  if (r.page === 'new') return N('新对话 · 工作目录', [
+    '从工作空间的文件夹点「新建对话」进来：输入框上方带目录标签，去掉就回到「没选目录」',
+    '没选目录：发送时在「对话/」下新建一个，按开始时间命名（同一分钟再开就加 (2)）；对话标题是第一轮之后才生成的，所以不用标题命名，之后也不跟着标题改',
+    '工作目录在建对话时定下，存进对话记录；SubAgent 用根对话的',
+    '智能体只能读写工作目录（和它绑定的技能），看不到工作空间的其他目录',
+    '根目录不能当工作目录：等于把全部文件交给智能体',
+    '多个对话可以用同一个目录（例：两个对话都在「Q3 销售分析」）：文件共享；同时运行时可能改到同一个文件，不加锁',
+    '输入框里添加的文件传到工作目录',
+  ], [
+    '建会话接口加可选参数 workspace_dir（相对 files/）：不能越界、不能是 . 开头的路径、不能为空（= 根目录）；不传就按上面的规则生成',
+    'thread 表加 workspace_dir；子会话沿用根会话的。WorkspaceLayout 的工作区从 {根会话}/workspace 改成 files/{workspace_dir}；.atlas/{会话}/ 仍在工作目录里，按会话分开，共用目录也不冲突',
+    '目录不预先创建：第一次写文件时才出现（沙箱执行命令前本来就会建 cwd），纯聊天的对话不留空目录。所以生成名字时要同时避开已有目录和别的对话记录里的路径',
+    'CLI 智能体的 cwd 跟着变；Claude Code 按 cwd 存会话记录，共用目录的对话共用一个 projects 子目录，会话文件各自一份',
+  ], OPEN_QUESTIONS);
+  if (r.page === 'chat') return N('对话 · 工作目录', [
+    '标题栏右侧显示工作目录，点开跳到工作空间的这个目录',
+    '对话里原来的「文件」抽屉改成列这个目录（和工作空间用同一套列表、预览组件）',
+    '删除对话不删目录：文件是用户的，和对话是两回事',
+    '演示：刚发出的对话会在工作目录里写一个「回答.md」—— 写了文件，自动新建的目录才出现在工作空间里',
+  ]);
+  if (S.noOss) return N('工作空间 · 不可用', ['部署没配对象存储时，入口保留、页面说明原因（对话里的文件抽屉已有同样的判断）']);
+  if (S.q) return N('工作空间 · 搜索', [
+    '搜整个工作空间（不限当前文件夹），文件和文件夹都能搜到',
+    '结果标出所在位置；点开跳到那个目录并打开预览',
+    '只按名称，不搜内容',
+  ], ['按名称遍历这个人的 files/ 前缀做匹配；结果设上限，超出时提示缩小关键词']);
+  if (S.pv) return N('工作空间 · 预览', [
+    '右侧分栏预览，列表留在左边；↑ ↓ 切换文件，Esc 关闭',
+    '渲染沿用对话里的预览页：Markdown、代码 / 文本、JSON、图片、PDF、HTML（连同它引用的 CSS、JS、图片）',
+    '新增 CSV 表格视图；Markdown、HTML、CSV 可以切换「预览 / 源码」',
+    '大文本只显示开头 1 MB；Office 文档、压缩包不预览，直接给下载',
+  ], [
+    '预览令牌现在按会话签发；改成按「这个人 + 路径」签发，不经过对话',
+    '大文本按范围读取（Range），不整个读进来',
+  ]);
+  if (!r.dir) return N('工作空间 · 根目录', [
+    '就是这个人自己的文件：普通的目录树，不按对话分，也不显示智能体、进行中这些对话信息',
+    '根目录也能上传、新建文件夹',
+    '文件夹后面的「新建对话」（行上的蓝色图标、更多菜单）：新对话以这个目录为工作目录',
+    '「对话」文件夹：没选目录就开始的对话，系统在这里给它建一个目录。它也只是普通文件夹，可以改名、整理、删除',
+    '删了对话文件还在（例：对话/2026-10-29 13.35 的对话已删除）；原来的「已删除对话的文件」分组不需要了',
+    '.atlas 是对话的内部记录（压缩归档、外置的大结果），默认隐藏，打开后只读；技能副本、CLI 配置不在工作空间里',
+  ], [
+    '列举 {user}/files/：按目录分层列举（现在是整个工作区平铺，文件多了会截断）',
+    '文件夹的文件数和大小：对象存储没有目录大小，要遍历统计，建议后台算好、缓存',
+  ], OPEN_QUESTIONS);
+  return N('工作空间 · 文件夹', [
+    '面包屑导航；文件夹排在前面，点表头排序',
+    '「在此新建对话」：以当前目录为工作目录开始新对话',
+    '上传：按钮（文件 / 文件夹）或直接把文件拖进页面，传到当前目录；同名文件替换 / 保留两者 / 跳过',
+    '勾选后批量下载（多个文件打包成 zip）、删除；删除不可恢复，不做回收站',
+    '改名、删除文件夹前查一下哪些对话把它（或它下面的目录）当工作目录：改名时工作目录跟着改；正在运行的对话不让动；删除后对话保留，下次运行从空目录开始。列表本身不显示这些',
+  ], [
+    '查引用 = 按 workspace_dir 前缀查这个人的对话（加索引）',
+    '重命名 = 逐个对象复制 + 删除，再把引用它的对话的 workspace_dir 换前缀；不是原子操作，中途失败要能重试',
+    '新建文件夹 = 写一个占位对象；打包下载 = 服务端流式生成 zip',
+    '大文件直传对象存储（预签名、分片）；现在经服务端中转、单个 10 MB',
+    '只有本人能读写；管理员也不能浏览别人的工作空间',
+  ]);
+}
+function notesPanel(r) {
+  const n = notesFor(r);
+  return `<div class="notes"><div class="row"><b style="color:#92400e;display:flex;gap:6px;align-items:center">${ic('bulb')}${n.title}</b><span class="sp"></span><button class="ibtn sm" data-act="toggleNotes">${ic('x')}</button></div>
+    <h4>设计要点</h4><ul>${n.items.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>
+    ${n.be.length ? `<h4>需要后端配合</h4><ul>${n.be.map((i) => `<li><span class="be">后端</span>${esc(i)}</li>`).join('')}</ul>` : ''}
+    ${n.qs.length ? `<h4>待确认</h4><ul>${n.qs.map((i) => `<li><span class="q">待定</span>${esc(i)}</li>`).join('')}</ul>` : ''}
+    <h4>演示</h4><div class="col">
+      <button class="btn sm" data-act="demoNewChat">${ic('play')}从「Q3 销售分析」新建对话</button>
+      <button class="btn sm" data-act="demoRename">${ic('play')}重命名一个对话正在用的目录</button>
+      <button class="btn sm" data-act="demoUpload">${ic('play')}模拟一次上传（同名、超限）</button>
+      <button class="btn sm" data-act="demoNoOss">${ic('play')}${S.noOss ? '恢复正常' : '切换：没有配置文件存储'}</button>
+    </div>
+    <div class="xs" style="color:#a8a29e;margin-top:10px">也可以把本机文件拖进任意文件夹试试：文本、图片能直接预览</div></div>`;
+}
+
+/* =====================================================================
+ * 交互
+ * ===================================================================== */
+function download(p) {
+  if (S.blobs[p]) { const a = document.createElement('a'); a.href = URL.createObjectURL(S.blobs[p]); a.download = base(p); a.click(); return; }
+  toast(`开始下载 ${base(p)}`);
+}
+function removePaths(paths) {
+  FILES = FILES.filter((x) => !paths.some((p) => inside(x.p, p)));
+  if (S.pv && paths.some((p) => inside(S.pv.path, p))) S.pv = null;
+}
+function step(d) {
+  const i = S.curFiles.indexOf(S.pv.path), j = i + d;
+  if (i < 0 || j < 0 || j >= S.curFiles.length) return;
+  S.pv = { path: S.curFiles[j] }; S.pvView = 'preview'; S.scrollCur = true;
+  render();
+}
+/** 跳到文件所在目录并打开预览 */
+function reveal(p) {
+  const h = wsHref(parent(p));
+  if (location.hash === h) { S.q = ''; S.pv = { path: p }; S.scrollCur = true; render(); }
+  else { S.pvNext = { path: p }; location.hash = h; }
+}
+const ACT = {
+  noop: () => false,
+  toggleNotes: () => { S.notes = !S.notes; },
+  collapse: () => { S.collapsed = !S.collapsed; },
+  toast: (el) => { toast(el.dataset.msg); return false; },
+  sort: (el) => { const k = el.dataset.k; S.sort = S.sort.k === k ? { k, asc: !S.sort.asc } : { k, asc: k === 'name' }; },
+  toggleHidden: () => { S.hidden = !S.hidden; S.sel = new Set(); },
+  clearQ: () => { S.q = ''; },
+  open: (el) => { S.pv = { path: el.dataset.path }; S.pvView = 'preview'; },
+  closePv: () => { S.pv = null; },
+  pvView: (el) => { S.pvView = el.dataset.v; },
+  pvStep: (el) => { step(+el.dataset.d); return false; },
+  sel: (el) => { const p = el.dataset.path; S.sel.has(p) ? S.sel.delete(p) : S.sel.add(p); },
+  selAll: () => {
+    const { dirs, files } = listDir(route().dir);
+    const all = [...dirs.map((d) => d.p), ...files.map((x) => x.p)];
+    S.sel = all.every((p) => S.sel.has(p)) ? new Set() : new Set(all);
+  },
+  selClear: () => { S.sel = new Set(); },
+  download: (el) => { download(el.dataset.path); return false; },
+  zip: (el) => {
+    const p = el.dataset.path;
+    const n = FILES.filter((x) => !x.dir && x.p.startsWith(p + '/') && (S.hidden || !isHidden(x.p))).length;
+    toast(`正在打包「${base(p)}」（${n} 个文件），完成后自动下载`); return false;
+  },
+  dlSel: () => {
+    const ps = [...S.sel];
+    if (ps.length === 1 && !isDirPath(ps[0])) return ACT.download({ dataset: { path: ps[0] } });
+    toast(`正在打包 ${ps.length} 项，完成后自动下载`); return false;
+  },
+  copyPath: (el) => {
+    const p = el.dataset.path;
+    navigator.clipboard?.writeText(p).catch(() => {});
+    toast(`已复制 ${p}`); return false;
+  },
+  newChat: (el) => { S.draft = ''; S.focus = 'msg'; location.hash = newHref(el.dataset.path); return false; },
+  dropDir: () => { S.focus = 'msg'; location.hash = newHref(); return false; },
+  setAgent: (el) => { S.agent = el.dataset.id; S.focus = 'msg'; },
+  send: () => { send(); return false; },
+  openFile: (el) => { reveal(el.dataset.path); return false; },
+  newFolder: () => { S.modal = { type: 'newFolder', dir: route().dir, value: '新建文件夹' }; },
+  rename: (el) => { const p = el.dataset.path; S.modal = { type: 'rename', path: p, isDir: isDirPath(p), value: base(p) }; },
+  del: (el) => { S.modal = { type: 'del', paths: [el.dataset.path] }; },
+  delSel: () => { S.modal = { type: 'del', paths: [...S.sel] }; },
+  modalCancel: () => {
+    if (S.modal?.type === 'conflict') { S.pending = []; S.modal = null; return; }
+    S.modal = null;
+  },
+  modalOk: () => {
+    const m = S.modal;
+    if (!m) return;
+    const val = document.getElementById('mIn')?.value.trim();
+    if (m.type === 'newFolder' || m.type === 'rename') {
+      if (m.type === 'rename' && refsNote([m.path], '重命名').blocked) return;
+      const dir = m.type === 'newFolder' ? m.dir : parent(m.path);
+      const target = join(dir, val || '');
+      const bad = (e) => { m.err = e; m.value = val; m.focused = false; };
+      if (!val) return bad('名称不能为空');
+      if (/[\\/]/.test(val)) return bad('名称里不能有 / 或 \\');
+      if (val.startsWith('.')) return bad('不能以 . 开头（这类名称是隐藏文件）');
+      if (target !== m.path && (exists(target) || isDirPath(target))) return bad('已有同名的文件或文件夹');
+      if (m.type === 'newFolder') { FILES.push({ p: target + '/', size: 0, m: 0, dir: true }); toast(`已创建文件夹 ${val}`); }
+      else {
+        const moved = refsUnder(m.path);
+        FILES.forEach((x) => { if (inside(x.p, m.path)) x.p = target + x.p.slice(m.path.length); });
+        THREADS.forEach((t) => { if (inside(t.dir, m.path)) t.dir = target + t.dir.slice(m.path.length); });
+        if (S.pv && inside(S.pv.path, m.path)) S.pv.path = target + S.pv.path.slice(m.path.length);
+        S.sel = new Set();
+        toast(`已重命名为 ${val}${moved.length ? `，${moved.length} 个对话的工作目录已跟着改` : ''}`);
+      }
+    }
+    if (m.type === 'del') {
+      if (refsNote(m.paths, '删除').blocked) return;
+      removePaths(m.paths); S.sel = new Set(); toast(`已删除 ${m.paths.length} 项`);
+    }
+    S.modal = null;
+  },
+  toggleCfAll: () => { S.modal.all = !S.modal.all; },
+  conflict: (el) => {
+    const how = el.dataset.how, m = S.modal;
+    if (m.all) S.conflictAll = how;
+    S.modal = null; S.pending.shift();
+    resolveConflict(m.it, how);
+    processPending(); return false;
+  },
+  pickFiles: () => { document.getElementById('pick').click(); return false; },
+  pickDir: () => { document.getElementById('pickDir').click(); return false; },
+  upMin: () => { S.upMin = !S.upMin; },
+  upClose: () => { S.uploads = []; },
+  upLocate: (el) => {
+    const u = S.uploads[+el.dataset.i];
+    if (!exists(u.path)) return toast('文件已不存在'), false;
+    reveal(u.path); return false;
+  },
+  openResult: (el) => { reveal(el.dataset.path); return false; },
+  demoNewChat: () => { S.draft = '按 report/summary.md 的结论做一页汇报 PPT'; S.focus = 'msg'; location.hash = newHref(Q3); return false; },
+  demoRename: () => {
+    const go = () => { S.modal = { type: 'rename', path: Q3, isDir: true, value: base(Q3) }; render(); };
+    if (location.hash !== wsHref()) { location.hash = wsHref(); setTimeout(go, 60); } else go();
+    return false;
+  },
+  demoUpload: () => {
+    const dir = `${Q3}/uploads`;
+    const doIt = () => enqueue([
+      { name: 'sales_q3.csv', size: 291204 },
+      { name: '区域目标.xlsx', size: 51200 },
+      { name: 'region_map.png', size: 642000 },
+      { name: 'raw_dump_2026Q3.zip', size: 2.3 * 1024 ** 3 },
+      { name: 'notes.md', size: 3200 },
+    ], dir);
+    if (location.hash !== wsHref(dir)) { location.hash = wsHref(dir); setTimeout(doIt, 60); return false; }
+    doIt(); return false;
+  },
+  demoNoOss: () => { S.noOss = !S.noOss; S.pv = null; if (route().page !== 'ws') { location.hash = '#/ws'; return false; } },
+};
+
+document.addEventListener('click', (e) => {
+  const el = e.target.closest('[data-act],[data-go],[data-pop]');
+  const inPop = e.target.closest('.pop');
+  if (!el) { if (S.pop && !inPop) { S.pop = null; render(); } return; }
+  if (el.dataset.pop) {
+    e.preventDefault();
+    const rc = el.getBoundingClientRect();
+    const anchor = el.dataset.pop + (el.dataset.path || '');
+    S.pop = S.pop && S.pop.anchor === anchor ? null : {
+      id: el.dataset.pop, path: el.dataset.path, anchor,
+      x: Math.min(rc.left, window.innerWidth - 240), y: Math.min(rc.bottom + 4, window.innerHeight - 240),
+    };
+    render(); return;
+  }
+  S.pop = null;
+  if (el.dataset.act) {
+    if (el.classList.contains('mask') && e.target !== el) return; // 点在弹窗里面
+    if (el.dataset.act === 'noop') return;
+    e.preventDefault();
+    const res = ACT[el.dataset.act]?.(el, e);
+    if (res !== false) render();
+    return;
+  }
+  if (el.dataset.go) location.hash = el.dataset.go;
+});
+document.addEventListener('input', (e) => {
+  if (e.target.id === 'q') { S.q = e.target.value; render(); }
+  if (e.target.id === 'msg') S.draft = e.target.value;
+});
+document.addEventListener('keydown', (e) => {
+  if (e.target.id === 'msg') {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
+    return;
+  }
+  if (e.target.matches('input, textarea')) {
+    if (e.key === 'Enter' && S.modal && e.target.id === 'mIn') { ACT.modalOk(); render(); }
+    if (e.key === 'Escape') { if (S.modal) { ACT.modalCancel(); render(); } else if (e.target.id === 'q' && S.q) { S.q = ''; render(); } }
+    return;
+  }
+  if (e.key === 'Escape') {
+    if (S.modal) ACT.modalCancel(); else if (S.pop) S.pop = null; else if (S.pv) S.pv = null; else return;
+    render();
+  }
+  if (S.pv && !S.modal && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { e.preventDefault(); step(e.key === 'ArrowDown' ? 1 : -1); }
+});
+
+/* ---------- 文件选择 / 拖放 ---------- */
+document.getElementById('pick').addEventListener('change', (e) => {
+  const t = uploadTarget();
+  if (t) enqueue([...e.target.files].map((f) => ({ name: f.name, size: f.size, file: f })), t.dir);
+  e.target.value = '';
+});
+document.getElementById('pickDir').addEventListener('change', (e) => {
+  const t = uploadTarget();
+  if (t) enqueue([...e.target.files].map((f) => ({ name: f.webkitRelativePath || f.name, size: f.size, file: f })), t.dir);
+  e.target.value = '';
+});
+let dragDepth = 0;
+const hasFiles = (e) => [...(e.dataTransfer?.types || [])].includes('Files');
+function paintDrop(on) {
+  const ov = document.getElementById('dropov'), t = uploadTarget(), r = route();
+  ov.classList.toggle('on', on);
+  ov.classList.toggle('no', !t);
+  if (on) {
+    ov.querySelector('.in').innerHTML = t
+      ? `${ic('upload')}<div>松开上传到「${esc(t.dir || '我的工作空间')}」</div>`
+      : `${ic('folder')}<div>${r.page === 'ws' && isHidden(r.dir) ? '对话的内部记录，只读' : '打开工作空间的文件夹再上传'}</div>`;
+  }
+}
+document.addEventListener('dragenter', (e) => { if (!hasFiles(e)) return; e.preventDefault(); if (dragDepth++ === 0) paintDrop(true); });
+document.addEventListener('dragover', (e) => { if (hasFiles(e)) e.preventDefault(); });
+document.addEventListener('dragleave', (e) => { if (!hasFiles(e)) return; if (--dragDepth <= 0) { dragDepth = 0; paintDrop(false); } });
+document.addEventListener('drop', async (e) => {
+  if (!hasFiles(e)) return;
+  e.preventDefault(); dragDepth = 0; paintDrop(false);
+  const t = uploadTarget();
+  if (!t) return;
+  // 条目要在 await 之前取出来：事件结束后 dataTransfer 就失效了
+  const entries = [...e.dataTransfer.items].map((i) => i.webkitGetAsEntry && i.webkitGetAsEntry()).filter(Boolean);
+  const plain = [...e.dataTransfer.files];
+  const out = [];
+  const walk = async (entry, prefix) => {
+    if (entry.isFile) { const file = await new Promise((res, rej) => entry.file(res, rej)); out.push({ name: prefix + file.name, size: file.size, file }); return; }
+    const reader = entry.createReader();
+    let batch;
+    do { batch = await new Promise((res, rej) => reader.readEntries(res, rej)); for (const c of batch) await walk(c, prefix + entry.name + '/'); } while (batch.length);
+  };
+  if (entries.length) { for (const en of entries) await walk(en, ''); } else plain.forEach((f) => out.push({ name: f.name, size: f.size, file: f }));
+  enqueue(out, t.dir);
+});
+
+if (!location.hash) history.replaceState(null, '', '#/ws');
+render();
+</script>
+</body>
+</html>

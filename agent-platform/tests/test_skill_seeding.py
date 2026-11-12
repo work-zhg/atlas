@@ -33,7 +33,9 @@ def env():
 
 def _ws(s3, *skills: tuple[str, int], user: str = USER) -> Workspace:
     """一个新会话的工作区，绑了这些技能版本。"""
-    return Workspace(s3, bucket=BUCKET, user_id=user, thread_id=uuid4(), skills=skills)
+    return Workspace(
+        s3, bucket=BUCKET, user_id=user, thread_id=uuid4(), workspace_dir="w", skills=skills
+    )
 
 
 def _publish(s3, slug: str, version: int, files: dict[str, str]) -> None:

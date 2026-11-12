@@ -2,12 +2,12 @@
 
 把模型（或界面）给的路径换成「相对这个人前缀的路径 + 落在哪个根」：
 
-    /data/...      沙箱里的真实路径，剥掉挂载点 —— 只在下一段是布局里的东西（skills、home、会话 id）
+    /data/...      沙箱里的真实路径，剥掉挂载点 —— 只在下一段是布局里的东西（files、skills、home）
                    时；否则是工作区里一个叫 data 的子目录（见下）
     其余           相对所用工作区（引擎会把相对路径补成 / 开头，所以 /report.md 也按工作区算）
 
 然后看落没落在本会话能用的根里：所用工作区（压缩归档、外置结果在其中的 .atlas/{会话}/），
-以及本智能体绑定的技能版本 skills/{slug}/{版本}。别的会话的工作区、别的技能、home/ 都不放行 ——
+以及本智能体绑定的技能版本 skills/{slug}/{版本}。工作空间里别的目录、别的技能、home/ 都不放行 ——
 文件工具只碰本会话该碰的东西（Shell 在同一个沙箱里看得到更多，那是会话之间不隔离的前提，
 不由这里管）。
 
@@ -120,7 +120,7 @@ class PathGate:
         return rel
 
     def _mounted(self, rest: list[str]) -> bool:
-        """/data 后面的部分是不是指挂载点下的东西（第一段是布局里的：技能、home、会话 id）。"""
+        """/data 后面的部分是不是指挂载点下的东西（第一段是布局里的：用户文件、技能、home）。"""
         first = next((p for p in rest if p != ".."), None)
         return first is None or ".." in rest[:1] or self._layout.is_top_level(first)
 

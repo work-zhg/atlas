@@ -24,6 +24,7 @@ from ..credentials import (
 )
 from ..db.models import Agent, AgentVersion, Message, Thread
 from ..db.session import fetch_one
+from ..domain.workspace_layout import InvalidWorkspaceDir, normalize_workspace_dir
 from ..errors import (
     AppError,
     BadCursor,
@@ -150,6 +151,7 @@ def _to_out(
         model=thread.model,
         model_choice=model_choice,
         source_app=thread.source_app,
+        workspace_dir=thread.workspace_dir,
         subagent_thread_count=subagent_thread_count,
         active_run_id=active_run_id,
         last_run=last_run,
@@ -350,6 +352,14 @@ class ThreadService:
             )
         except CredentialDenied as exc:
             raise CredentialDeniedError(str(exc)) from exc
+        # 工作目录：指定了就校验（不能是根目录、隐藏目录、不能越界），不指定由仓储生成
+        # {日期}/{会话 id}。建会话时就落表，之后不变（沙箱里命令和 CLI 的 cwd）
+        workspace_dir = None
+        if payload.workspace_dir is not None:
+            try:
+                workspace_dir = normalize_workspace_dir(payload.workspace_dir)
+            except InvalidWorkspaceDir as exc:
+                raise BadRequest(str(exc), workspace_dir=payload.workspace_dir) from exc
         thread = await self._repo.create(
             agent_id=agent.agent_uuid,
             title=payload.title,
@@ -358,16 +368,17 @@ class ThreadService:
             source_app=principal.app,
             memory=memory,
             status="preview" if preview else "active",
+            workspace_dir=workspace_dir,
         )
         await self._session.refresh(thread)
-        await self._seed_skills(version, thread_id=thread.thread_uuid, user_id=user_id)
+        await self._seed_skills(version, thread=thread)
         if memory == "on" and self._memory is not None:
             # 建会话时登记本会话用到的记忆实例（§4.1）。失败不阻塞会话：本会话暂时不用记忆，
             # 下一个 Run 开始时再登记
             await self._memory.register_thread(thread.thread_uuid, user_id)
         return _to_out(thread, agent)
 
-    async def _seed_skills(self, version: AgentVersion, *, thread_id: UUID, user_id: UUID) -> None:
+    async def _seed_skills(self, version: AgentVersion, *, thread: Thread) -> None:
         """把 agent 引用的技能拷进本会话的 skills 前缀。
 
         ★ 时机是**会话创建**，不是首次 run：用户对「新建会话」的延迟容忍度
@@ -383,7 +394,8 @@ class ThreadService:
         spec = AgentSpecIn.model_validate(version.spec)
         if not spec.skills:
             return
-        fs = make_workspace(self._settings, user_id, thread_id)
+        thread_id = thread.thread_uuid
+        fs = make_workspace(self._settings, thread.created_by_uuid, thread_id, thread.workspace_dir)
         if fs is None:
             logger.info("未配置对象存储，跳过技能投送 thread=%s", thread_id)
             return
@@ -420,8 +432,8 @@ class ThreadService:
         try:
             sandbox = SandboxComponent.build(self._settings, redis)
             await sandbox.pods.release(thread.thread_uuid, thread.created_by_uuid)
-            if self._settings.sandbox_enabled and thread.workspace_thread_id == thread.thread_uuid:
-                # 原生沙箱按工作区建：删的是工作区所有者（根会话）时它才有沙箱
+            if self._settings.sandbox_enabled and thread.sandbox_thread_id == thread.thread_uuid:
+                # 原生沙箱按会话树的根绑定：删的是根会话时它才有沙箱
                 await sandbox.native.release(
                     WorkspaceRef(thread.thread_uuid, thread.created_by_uuid)
                 )
@@ -494,7 +506,9 @@ class ThreadService:
                 sandbox.native,
                 sandbox.exec,
                 sandbox.ledger,
-                WorkspaceRef(thread.workspace_thread_id, thread.created_by_uuid),
+                WorkspaceRef(
+                    thread.sandbox_thread_id, thread.created_by_uuid, thread.workspace_dir
+                ),
                 command=payload.command,
                 profile="bench",
                 cwd=payload.cwd,
@@ -525,15 +539,15 @@ class ThreadService:
             self._settings,
             thread.created_by_uuid,
             thread.thread_uuid,
-            # ★ 子会话的工作区是父会话的（共享挂载）
-            workspace_thread_id=thread.workspace_thread_id,
+            # ★ 子会话的工作目录与根会话相同（建子会话时复制的）
+            thread.workspace_dir,
             routing=self._routing(thread, redis) if redis is not None else None,
         )
         return None if fs is None else WorkspaceListing(fs)
 
     def _routing(self, thread: Thread, redis: aioredis.Redis) -> WorkspaceRouting:
         sandbox = SandboxComponent.build(self._settings, redis)
-        ws = WorkspaceRef(thread.workspace_thread_id, thread.created_by_uuid)
+        ws = WorkspaceRef(thread.sandbox_thread_id, thread.created_by_uuid, thread.workspace_dir)
         return WorkspaceRouting(sandbox.native, sandbox.exec, ws)
 
     # ------------------------------------------------------------------ 内部

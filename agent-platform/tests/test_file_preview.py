@@ -60,8 +60,8 @@ def sessions():
     with mock_aws():
         s3 = boto3.client("s3", region_name="us-east-1")
         s3.create_bucket(Bucket=BUCKET)
-        a = Workspace(s3, bucket=BUCKET, user_id=USER, thread_id="t-a")
-        b = Workspace(s3, bucket=BUCKET, user_id=USER, thread_id="t-b")
+        a = Workspace(s3, bucket=BUCKET, user_id=USER, thread_id="t-a", workspace_dir="t-a")
+        b = Workspace(s3, bucket=BUCKET, user_id=USER, thread_id="t-b", workspace_dir="t-b")
         a.write("index.html", "<script src='assets/app.js'></script>")
         a.write("assets/app.js", "console.log('hi')")
         a.write("docs/index.html", "<p>docs</p>")
@@ -188,12 +188,13 @@ def test_hidden_segments_are_404(client) -> None:
     ("path", "reaches_route"),
     [
         # 字面量 ../ 在客户端（浏览器同样如此）就被规范化掉，请求落不到预览路由上
-        ("../t-b/workspace/secret.txt", False),
-        ("../../../u-test/t-b/workspace/secret.txt", False),
+        ("../t-b/secret.txt", False),
+        ("../../../u-test/files/t-b/secret.txt", False),
         # 编码过的能到达路由，由 _to_key 这一道关卡挡住
-        ("..%2Ft-b%2Fworkspace%2Fsecret.txt", True),
-        ("%2e%2e/%2e%2e/t-b/workspace/secret.txt", True),
-        ("%2e%2e%2f%2e%2e%2f%2e%2e%2fu-test%2ft-b%2fworkspace%2fsecret.txt", True),
+        ("..%2Ft-b%2Fsecret.txt", True),
+        ("%2e%2e/t-b/secret.txt", True),
+        ("%2e%2e%2f%2e%2e%2f%2e%2e%2fu-test%2ffiles%2ft-b%2fsecret.txt", True),
+        ("/data/files/t-b/secret.txt", True),
         ("/workspace/../skills/x", True),
     ],
 )
@@ -237,9 +238,8 @@ class _Repo:
 async def test_issue_and_resolve_token(monkeypatch) -> None:
     redis = FakeRedis()
     settings = _settings(preview_token_ttl_s=120)
-    parent = uuid4()
     thread = SimpleNamespace(
-        thread_uuid=uuid4(), created_by_uuid=uuid4(), workspace_thread_id=parent
+        thread_uuid=uuid4(), created_by_uuid=uuid4(), workspace_dir="Q3 分析/report"
     )
     service = PreviewService(redis, settings)  # type: ignore[arg-type]
 
@@ -248,8 +248,8 @@ async def test_issue_and_resolve_token(monkeypatch) -> None:
 
     seen = {}
 
-    def fake_make_workspace(_settings, owner, thread_id, workspace_thread_id=None):
-        seen.update(owner=owner, thread_id=thread_id, ws=workspace_thread_id)
+    def fake_make_workspace(_settings, owner, thread_id, workspace_dir):
+        seen.update(owner=str(owner), thread_id=str(thread_id), ws=workspace_dir)
         return SimpleNamespace()
 
     monkeypatch.setattr(preview_mod, "make_workspace", fake_make_workspace)
@@ -257,11 +257,45 @@ async def test_issue_and_resolve_token(monkeypatch) -> None:
     redis.ttl.clear()
 
     assert await service.resolve(token) == "listing"
-    # 工作区按会话创建者构造；子会话解析到父会话的工作区
-    assert seen == {"owner": thread.created_by_uuid, "thread_id": thread.thread_uuid, "ws": parent}
+    # 工作区按会话创建者构造，根是会话的工作目录
+    assert seen == {
+        "owner": str(thread.created_by_uuid),
+        "thread_id": str(thread.thread_uuid),
+        "ws": "Q3 分析/report",
+    }
     # 命中即续期
     assert redis.ttl == {f"atlas:preview:{token}": 120}
     assert await service.resolve("unknown") is None
+
+
+async def test_files_token_is_rooted_at_the_whole_file_space(monkeypatch) -> None:
+    """工作空间页面的预览令牌：根是这个人的全部文件（files/），不属于哪个会话。"""
+    redis = FakeRedis()
+    service = PreviewService(redis, _settings())  # type: ignore[arg-type]
+    owner = uuid4()
+    token, _ = await service.issue_files(owner)
+    seen = {}
+
+    def fake_make_workspace(_settings, user, thread_id, workspace_dir):
+        seen.update(owner=str(user), ws=workspace_dir)
+        return SimpleNamespace()
+
+    monkeypatch.setattr(preview_mod, "make_workspace", fake_make_workspace)
+    monkeypatch.setattr(preview_mod, "WorkspaceListing", lambda fs: "listing")
+    assert await service.resolve(token) == "listing"
+    assert seen == {"owner": str(owner), "ws": ""}
+
+
+async def test_tokens_from_the_old_layout_are_treated_as_expired() -> None:
+    """0044 之前签发的令牌（存的是 workspace_thread_id）按失效处理，前端会重新签发。"""
+    import json
+
+    redis = FakeRedis()
+    service = PreviewService(redis, _settings())  # type: ignore[arg-type]
+    redis.data["atlas:preview:old"] = json.dumps(
+        {"thread_id": str(uuid4()), "owner_id": str(uuid4()), "workspace_thread_id": None}
+    )
+    assert await service.resolve("old") is None
 
 
 async def test_issue_unknown_thread_is_404() -> None:

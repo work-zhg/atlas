@@ -1,11 +1,16 @@
 """一个人的文件在对象存储里的布局（c4-model/agent/code-workspace.html · WorkspaceLayout）。
 
     {user}/                         整个挂到这个人的沙箱的 /data（唯一的挂载）
-      {根会话}/workspace/           工作区：根会话和它的子孙会话共用，也是命令的 cwd
-        .atlas/{会话}/              本会话的压缩归档、外置的大结果（隐藏目录，跟着工作区走）
+      files/                        用户的文件（工作空间页面的根）：普通的目录树
+        {工作目录}/                 一个会话的工作目录：建会话时定下、存在会话记录里
+                                    （thread.workspace_dir），之后不变；子孙会话用根会话的。
+                                    也是命令的 cwd
+          .atlas/{会话}/            本会话的压缩归档、外置的大结果（隐藏目录，跟着工作目录走）
       skills/{slug}/{版本}/         技能：这个人所有会话共用，同一技能的不同版本并排放
       home/.claude/                 CLI 的会话记录和配置：一人一份，不属于任何会话
 
+★ 工作目录：建会话时指定了就用指定的（工作空间里任意一个目录，多个会话可以共用）；没指定就是
+  {日期}/{会话 id}。路径相对 files/。
 ★ 路径就是沙箱里的真实路径：相对这个人前缀的路径 rel，在沙箱里是 /data/{rel}，在对象存储里是
   {user}/{rel}，一一对应，不用查表。文件工具和 Shell 看到的是同一套。
 ★ 挂整个 {user}/：Pod 的卷在创建时就定死了，按会话挂 subPath 的话，后加入的会话（子会话、这个人
@@ -18,20 +23,67 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from enum import StrEnum
 from uuid import UUID
 
-__all__ = ["DATA_MOUNT", "HOME_CLAUDE", "Area", "WorkspaceLayout"]
+__all__ = [
+    "DATA_MOUNT",
+    "FILES_DIR",
+    "HOME_CLAUDE",
+    "WORKSPACE_DIR_MAX",
+    "Area",
+    "InvalidWorkspaceDir",
+    "WorkspaceLayout",
+    "default_workspace_dir",
+    "normalize_workspace_dir",
+]
 
 #: 整个 {user}/ 在沙箱里的挂载点；模型看到的绝对路径都在它下面
 DATA_MOUNT = "/data"
+#: 用户的文件（相对这个人的前缀）：工作目录都在它下面
+FILES_DIR = "files"
 #: CLI 的会话记录和配置（相对这个人的前缀）
 HOME_CLAUDE = "home/.claude"
-#: 本会话的隐藏目录（在所用工作区里）
+#: 工作目录路径的长度上限（thread.workspace_dir 的列宽）
+WORKSPACE_DIR_MAX = 512
+#: 本会话的隐藏目录（在所用工作目录里）
 _ATLAS_DIR = ".atlas"
-#: 这个人前缀下第一层的两个固定目录（其余是根会话的 id）
+#: 这个人前缀下第一层只有这三个
 _SKILLS_DIR = "skills"
 _HOME_DIR = HOME_CLAUDE.split("/", 1)[0]
+_TOP_LEVEL = frozenset({FILES_DIR, _SKILLS_DIR, _HOME_DIR})
+
+
+class InvalidWorkspaceDir(ValueError):
+    """用户给的工作目录不合法：空（= 整个 files/）、越界、点开头（隐藏目录）、太长。"""
+
+
+def default_workspace_dir(thread_id: UUID | str, day: date) -> str:
+    """没指定工作目录的会话用的目录：{日期}/{会话 id}（相对 files/）。会话 id 唯一，不会撞名。"""
+    return f"{day.isoformat()}/{thread_id}"
+
+
+def normalize_workspace_dir(raw: str) -> str:
+    """用户给的工作目录（相对 files/）→ 规范形式：去掉多余的 / 和 . 段。
+
+    ★ 不能是 files/ 本身：那等于把这个人的全部文件交给智能体。
+    ★ 不能有点开头的段：那是隐藏目录（.atlas 是会话的内部记录）。
+    """
+    if "\x00" in raw or "\\" in raw:
+        raise InvalidWorkspaceDir(f"工作目录含非法字符：{raw!r}")
+    parts = [p for p in raw.strip().split("/") if p.strip() not in ("", ".")]
+    if not parts:
+        raise InvalidWorkspaceDir("工作目录不能是工作空间的根目录")
+    for part in parts:
+        if part == "..":
+            raise InvalidWorkspaceDir(f"工作目录不能含 ..：{raw!r}")
+        if part.startswith("."):
+            raise InvalidWorkspaceDir(f"工作目录不能是隐藏目录：{raw!r}")
+    out = "/".join(parts)
+    if len(out) > WORKSPACE_DIR_MAX:
+        raise InvalidWorkspaceDir(f"工作目录太长（超过 {WORKSPACE_DIR_MAX} 个字符）")
+    return out
 
 
 class Area(StrEnum):
@@ -45,28 +97,24 @@ class Area(StrEnum):
 class WorkspaceLayout:
     """一个会话看到的布局。
 
-    workspace_thread_id：所用工作区的根会话（子、孙会话传根会话的，没有自己的工作区）。
+    workspace_dir：所用工作目录，相对 files/（子、孙会话传根会话的）。空串 = files/ 本身 ——
+        只给工作空间页面用（列这个人的全部文件），会话一定有自己的工作目录。
     """
 
     user_id: str
     thread_id: str
-    workspace_thread_id: str
+    workspace_dir: str
 
     @classmethod
-    def of(
-        cls,
-        user_id: UUID | str,
-        thread_id: UUID | str,
-        workspace_thread_id: UUID | str | None = None,
-    ) -> WorkspaceLayout:
-        return cls(str(user_id), str(thread_id), str(workspace_thread_id or thread_id))
+    def of(cls, user_id: UUID | str, thread_id: UUID | str, workspace_dir: str) -> WorkspaceLayout:
+        return cls(str(user_id), str(thread_id), workspace_dir.strip("/"))
 
     # ------------------------------------------------------------------ 相对这个人前缀的路径
 
     @property
     def workspace(self) -> str:
-        """所用工作区。"""
-        return f"{self.workspace_thread_id}/workspace"
+        """所用工作目录。"""
+        return f"{FILES_DIR}/{self.workspace_dir}" if self.workspace_dir else FILES_DIR
 
     @property
     def atlas_dir(self) -> str:
@@ -78,15 +126,10 @@ class WorkspaceLayout:
         """一个技能版本的目录。"""
         return f"skills/{slug}/{version}"
 
-    def is_top_level(self, name: str) -> bool:
-        """name 是不是这个人前缀下第一层的东西：技能目录、home、会话（根会话的 id）。"""
-        if name in (_SKILLS_DIR, _HOME_DIR, self.workspace_thread_id):
-            return True
-        try:
-            UUID(name)
-        except ValueError:
-            return False
-        return True
+    @staticmethod
+    def is_top_level(name: str) -> bool:
+        """name 是不是这个人前缀下第一层的东西：用户文件、技能目录、home。"""
+        return name in _TOP_LEVEL
 
     # ------------------------------------------------------------------ 换算
 

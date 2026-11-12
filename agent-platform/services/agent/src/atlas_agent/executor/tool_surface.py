@@ -123,7 +123,7 @@ class ToolSurface:
 
         # Shell 沙箱（doc/sandbox-opensandbox-design.html）。★ 这里只构造客户端，不建沙箱 ——
         #   沙箱在第一次 execute 时才按需创建（多数原生会话用不到）。
-        #   按工作区建：子智能体（workspace_thread_id = 父会话）与父会话共用一个。
+        #   按会话树的根绑定：子智能体与父会话共用一个；命令的 cwd 是会话的工作目录。
         shell = None
         if BASH_TOOL in segment.spec.tool_names:
             if sandbox is None:
@@ -135,7 +135,11 @@ class ToolSurface:
                 native=sandbox.native,
                 exec=sandbox.exec,
                 ledger=sandbox.ledger,
-                ws=WorkspaceRef(segment.thread.workspace_thread_id, segment.thread.created_by_uuid),
+                ws=WorkspaceRef(
+                    segment.thread.sandbox_thread_id,
+                    segment.thread.created_by_uuid,
+                    segment.thread.workspace_dir,
+                ),
                 run_id=run_id,
                 spec=segment.spec.sandbox,
                 # 被取消时分辨「用户要停」（中断命令）和交接、租约丢失（命令留着，接手的实例接上）

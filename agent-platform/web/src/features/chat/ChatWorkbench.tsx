@@ -13,6 +13,7 @@ import { useCallback, useState } from "react";
 import { uploadThreadFile, useDeleteThread, useRenameThread, useThread } from "@/api/threads";
 import { Icon } from "@/components/Icon";
 import { BackfillNotice } from "@/features/memory/BackfillNotice";
+import { DirChip } from "@/features/workspace/DirChip";
 import { ThreadConversation, type ConversationStreamState } from "@atlas/chat-ui/src/chat/ThreadConversation";
 import type { ContextUsageData } from "@atlas/chat-ui/src/lib/events";
 
@@ -50,7 +51,7 @@ export function ChatWorkbench({ threadId }: { threadId: string }) {
   const remove = () =>
     modal.confirm({
       title: "删除这个对话？",
-      content: "对话记录和它的文件会一起删除，不能恢复。",
+      content: "对话记录删除后不能恢复。工作目录里的文件不删，还在工作空间里。",
       okText: "删除",
       okButtonProps: { danger: true },
       cancelText: "取消",
@@ -84,6 +85,7 @@ export function ChatWorkbench({ threadId }: { threadId: string }) {
         notice={<BackfillNotice linkToPage />}
         headerExtra={
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            {thread?.workspace_dir && <DirChip dir={thread.workspace_dir} />}
             <ContextMeter threadId={threadId} live={live.usage} running={live.running} minPercent={60} />
             <Button size="small" type="text" icon={<Icon name="folder" size={15} />} onClick={() => setFilesOpen(true)}>
               文件{fileCount > 0 && <span style={{ color: "var(--fg-3)" }}> {fileCount}</span>}
@@ -111,6 +113,7 @@ export function ChatWorkbench({ threadId }: { threadId: string }) {
 
       <FilesDrawer
         threadId={threadId}
+        workspaceDir={thread?.workspace_dir}
         running={live.running}
         writtenCount={live.filesWritten}
         open={filesOpen}

@@ -13,7 +13,10 @@
 import { App as AntdApp, Button, Drawer, Empty, Skeleton } from "antd";
 import { useEffect, useRef, useState } from "react";
 
+import Link from "next/link";
+
 import { downloadThreadFile, uploadThreadFile, useThreadFiles } from "@/api/threads";
+import { workspaceHref } from "@/features/workspace/DirChip";
 import { Icon } from "@/components/Icon";
 import { compactNumber, relativeTime } from "@/lib/format";
 import { BASE_PATH } from "@/lib/http";
@@ -25,12 +28,15 @@ import styles from "@atlas/chat-ui/src/chat/chat.module.css";
  */
 export function FilesDrawer({
   threadId,
+  workspaceDir,
   running,
   writtenCount,
   open,
   onClose,
 }: {
   threadId: string;
+  /** 对话的工作目录（工作空间里的一个目录） */
+  workspaceDir?: string;
   running: boolean;
   /** 本轮 file.written 的条数：变了就立刻刷新，不等定时器 */
   writtenCount: number;
@@ -94,7 +100,17 @@ export function FilesDrawer({
       }
       footer={
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <span style={{ fontSize: 12, color: "var(--fg-3)" }}>这次对话的工作区，智能体生成的文件都在这里</span>
+          <span style={{ fontSize: 12, color: "var(--fg-3)", minWidth: 0 }}>
+            工作目录{" "}
+            {workspaceDir ? (
+              <Link href={workspaceHref(workspaceDir)} title="在工作空间中打开">
+                {workspaceDir}
+              </Link>
+            ) : (
+              "—"
+            )}
+            ，智能体生成的文件都在这里
+          </span>
           <Button
             style={{ marginLeft: "auto" }}
             icon={<Icon name="upload" size={14} />}

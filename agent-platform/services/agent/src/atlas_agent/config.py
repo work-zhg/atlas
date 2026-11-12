@@ -268,6 +268,12 @@ class Settings(BaseSettings):
     #: MinIO 等自建服务常用 path-style；阿里云 OSS / AWS 用 virtual-hosted。
     oss_addressing_style: Literal["auto", "path", "virtual"] = "auto"
     oss_region: str = "us-east-1"
+    #: 单个文件上传的上限（MB）。运行期可改（workspace.upload_max_mb，runtime_config.py），
+    #: 这里是默认值。
+    #: ★ 上传经 server 中转、整个读进内存再写：调大要顾及 server 的内存
+    workspace_upload_max_mb: int = 10
+    #: 每人工作空间的存储配额（MB，0 = 不限）。运行期可改（workspace.quota_mb）
+    workspace_quota_mb: int = 0
 
     @property
     def prompt_cache_ttl_s(self) -> float:

@@ -43,7 +43,8 @@ from ...schemas.thread import (
 )
 from ...services.context import ContextService
 from ...services.preview import PreviewService
-from ...services.thread import BadRequest
+from ...services.workspace import WorkspaceService
+from .workspace import read_upload, workspace_limits
 
 router = APIRouter(prefix="/threads", tags=["threads"])
 
@@ -160,27 +161,29 @@ async def download_file(
     )
 
 
-#: 单个上传文件的上限。大文件该走对象存储直传，而不是经 server 中转
-UPLOAD_MAX_BYTES = 10 * 1024 * 1024
-
-
 @router.put("/{thread_id}/files", status_code=status.HTTP_201_CREATED)
 async def upload_file(
     thread_id: UUID,
     request: Request,
     service: ThreadServiceDep,
     session: SessionDep,
+    settings: SettingsDep,
     principal: PrincipalDep,
     path: Annotated[str, Query(min_length=1, max_length=1024)],
 ) -> dict[str, Any]:
-    """把请求体原样写成工作区里的一个文件（覆盖同名）。与 download 对称。
+    """把请求体原样写成工作目录里的一个文件（覆盖同名）。与 download 对称。
 
     用途：用户给智能体准备输入文件；评测给任务准备初始工作区（doc/agent-eval-design.html）。
+    ★ 单个文件上限、存储配额与工作空间上传同一套（运行期配置 workspace.*）：工作目录就在工作空间里。
     """
     await ensure_thread_owner(session, thread_id, principal, write=True)
-    data = await request.body()
-    if len(data) > UPLOAD_MAX_BYTES:
-        raise BadRequest(f"文件超过 {UPLOAD_MAX_BYTES // 1024 // 1024} MB", path=path)
+    limits = await workspace_limits(request)
+    data = await read_upload(request, limits.upload_max)
+    owner = await session.scalar(
+        select(Thread.created_by_uuid).where(Thread.thread_uuid == thread_id)
+    )
+    if owner is not None:
+        await WorkspaceService(session, settings).check_upload(owner, len(data), limits)
     size = await service.put_file(thread_id, path, data)
     return {"path": path, "size": size}
 

@@ -68,12 +68,17 @@ def c(fake: FakeOpenSandbox, redis: Any) -> SandboxComponent:
 def _fs(s3: Any, ws: WorkspaceRef, c: SandboxComponent | None) -> Workspace:
     routing = WorkspaceRouting(c.native, c.exec, ws) if c else None
     return Workspace(
-        s3, bucket=BUCKET, user_id=ws.user_uuid, thread_id=ws.root_thread_uuid, routing=routing
+        s3,
+        bucket=BUCKET,
+        user_id=ws.user_uuid,
+        thread_id=ws.root_thread_uuid,
+        workspace_dir=ws.workspace_dir,
+        routing=routing,
     )
 
 
 def _prefix(ws: WorkspaceRef) -> str:
-    return f"{ws.user_uuid}/{ws.root_thread_uuid}/"
+    return f"{ws.user_uuid}/files/{ws.workspace_dir}/"
 
 
 def _objects(s3: Any, prefix: str) -> list[str]:
@@ -188,7 +193,7 @@ async def test_without_a_running_sandbox_files_go_to_object_storage(
     fs = _fs(s3, ws, c)
     await fs.awrite("a.txt", "x")
     assert (await fs.aread("a.txt")).file_data["content"] == "x"
-    assert _objects(s3, _prefix(ws)) == [f"{_prefix(ws)}workspace/a.txt"]
+    assert _objects(s3, _prefix(ws)) == [f"{_prefix(ws)}a.txt"]
     assert fake.created == []
 
 
@@ -204,6 +209,7 @@ async def test_skills_are_read_through_the_same_mount(
         bucket=BUCKET,
         user_id=ws.user_uuid,
         thread_id=ws.root_thread_uuid,
+        workspace_dir=ws.workspace_dir,
         skills=[("pdf", 1)],
         routing=WorkspaceRouting(c.native, c.exec, ws),
     )
@@ -218,7 +224,8 @@ async def test_another_session_of_the_same_person_routes_through_the_running_san
     """★ 选路看这个人的沙箱：本会话没执行过命令（没绑沙箱），这个人的沙箱在跑，读写也经它 ——
     它挂着整个 {user}/，绕过它直写对象存储就成了第二个写入方。"""
     await c.native.ensure(ws, SandboxSpec())
-    other = WorkspaceRef(new_workspace().root_thread_uuid, ws.user_uuid)
+    fresh = new_workspace()
+    other = WorkspaceRef(fresh.root_thread_uuid, ws.user_uuid, fresh.workspace_dir)
     fs = _fs(s3, other, c)
     assert (await fs.awrite("a.txt", "x")).error is None
     assert _objects(s3, f"{ws.user_uuid}/") == []
@@ -231,7 +238,7 @@ async def test_sync_methods_never_route(
     await c.native.ensure(ws, SandboxSpec())
     fs = _fs(s3, ws, c)
     fs.write("a.txt", "x")
-    assert _objects(s3, _prefix(ws)) == [f"{_prefix(ws)}workspace/a.txt"]
+    assert _objects(s3, _prefix(ws)) == [f"{_prefix(ws)}a.txt"]
     assert list(workspace_dir(fake, ws).iterdir()) == []
 
 
@@ -242,14 +249,14 @@ async def test_vanished_sandbox_falls_back_and_is_forgotten(
     s3: Any, fake: FakeOpenSandbox, c: SandboxComponent, ws: WorkspaceRef
 ) -> None:
     """Pod 没了：写穿挂载下文件早已在对象存储里，改走对象存储即可。"""
-    s3.put_object(Bucket=BUCKET, Key=f"{_prefix(ws)}workspace/a.txt", Body=b"persisted")
+    s3.put_object(Bucket=BUCKET, Key=f"{_prefix(ws)}a.txt", Body=b"persisted")
     await c.native.ensure(ws, SandboxSpec())
     fake.vanish(fake.created[0].id)
     fs = _fs(s3, ws, c)
     assert (await fs.aread("a.txt")).file_data["content"] == "persisted"
     assert await c.native.current(ws) is None
     assert (await fs.awrite("b.txt", "y")).error is None  # 之后的写也直连对象存储
-    assert f"{_prefix(ws)}workspace/b.txt" in _objects(s3, _prefix(ws))
+    assert f"{_prefix(ws)}b.txt" in _objects(s3, _prefix(ws))
 
 
 async def test_unresponsive_sandbox_degrades_reads_and_refuses_writes(
@@ -259,13 +266,13 @@ async def test_unresponsive_sandbox_degrades_reads_and_refuses_writes(
 
     写不降级（那会多出一个写入方），报错让模型重试。
     """
-    s3.put_object(Bucket=BUCKET, Key=f"{_prefix(ws)}workspace/a.txt", Body=b"persisted")
+    s3.put_object(Bucket=BUCKET, Key=f"{_prefix(ws)}a.txt", Body=b"persisted")
     ref = await c.native.ensure(ws, SandboxSpec())
     fs = _fs(s3, ws, c)
     fake.break_execd(100)
     assert (await fs.aread("a.txt")).file_data["content"] == "persisted"
     result = await fs.awrite("a.txt", "overwritten")
     assert result.error is not None and "暂时不可写" in result.error
-    key = f"{_prefix(ws)}workspace/a.txt"
+    key = f"{_prefix(ws)}a.txt"
     assert s3.get_object(Bucket=BUCKET, Key=key)["Body"].read() == b"persisted"
     assert await c.native.current(ws) == ref  # 不是沙箱没了：记录保留

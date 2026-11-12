@@ -108,9 +108,11 @@ def component(fake: FakeOpenSandbox, redis: Any, **settings: Any) -> SandboxComp
 
 
 def new_workspace() -> WorkspaceRef:
-    return WorkspaceRef(uuid7(), uuid7())
+    """一个根会话的工作区：工作目录是没指定时的那种 {日期}/{会话 id}。"""
+    root = uuid7()
+    return WorkspaceRef(root, uuid7(), f"2026-11-12/{root}")
 
 
 def workspace_dir(fake: FakeOpenSandbox, ws: WorkspaceRef) -> Any:
-    """沙箱里 /workspace 对应的本地目录（同一个前缀的沙箱共用）。"""
-    return fake.workspace(f"{ws.user_uuid}/{ws.root_thread_uuid}/workspace")
+    """沙箱里工作目录 /data/files/{工作目录} 对应的本地目录（同一个前缀的沙箱共用）。"""
+    return fake.workspace(f"{ws.user_uuid}/files/{ws.workspace_dir}")

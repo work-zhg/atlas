@@ -48,6 +48,7 @@ export const PLATFORMS: Platform[] = [
     visible: (a) => can(a.me, "chat:use"),
     items: [
       { href: "/agents", icon: "bot", label: "智能体", match: under("/agents") },
+      { href: "/workspace", icon: "folder", label: "工作空间", match: under("/workspace") },
       { href: "/me", icon: "user", label: "个性化", match: under("/me") },
     ],
   },

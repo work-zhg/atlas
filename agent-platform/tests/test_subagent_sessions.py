@@ -192,7 +192,10 @@ async def test_delegation_creates_a_child_thread_and_child_run(client_factory) -
     assert len(subs) == 1
     assert subs[0].subagent_name == "coder"
     assert subs[0].status == "active"
-    assert subs[0].workspace_thread_id == UUID(thread_id)  # 挂父的工作区
+    # 工作目录和父会话同一个；沙箱也绑在根会话上
+    parent_thread = await client.get(f"/v1/threads/{thread_id}")
+    assert subs[0].workspace_dir == parent_thread.json()["workspace_dir"]
+    assert subs[0].sandbox_thread_id == UUID(thread_id)
 
     children = await child_runs()
     assert len(children) == 1

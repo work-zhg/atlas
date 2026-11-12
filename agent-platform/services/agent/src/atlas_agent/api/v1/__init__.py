@@ -15,6 +15,7 @@ from . import (
     sandbox_templates,
     service_models,
     threads,
+    workspace,
 )
 
 router = APIRouter(prefix="/v1")
@@ -34,5 +35,6 @@ router.include_router(directory.router, dependencies=_authed)
 router.include_router(service_models.router, dependencies=_authed)
 router.include_router(sandbox_templates.router, dependencies=_authed)
 router.include_router(credentials.router, dependencies=_authed)
+router.include_router(workspace.router, dependencies=_authed)
 
 __all__ = ["router"]

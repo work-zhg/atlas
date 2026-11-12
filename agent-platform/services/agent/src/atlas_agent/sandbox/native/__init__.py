@@ -20,7 +20,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
@@ -65,16 +65,21 @@ class ImageDenied(PermissionError):
 
 @dataclass(frozen=True)
 class WorkspaceRef:
-    """一个工作区：所属的根会话加上人（会话的创建人，和对象存储路径 {user}/… 里的是同一个值）。"""
+    """一个工作区：所属的根会话加上人（会话的创建人，和对象存储路径 {user}/… 里的是同一个值）。
+
+    workspace_dir：会话的工作目录（相对 files/），命令默认的 cwd。不参与沙箱绑定（绑定按根会话），
+    只按绑定找沙箱时可以不给。
+    """
 
     root_thread_uuid: UUID
     user_uuid: UUID
+    workspace_dir: str = field(default="", compare=False)
 
     def biz(self) -> BizRef:
         return BizRef(BizType.NATIVE, self.root_thread_uuid, self.user_uuid)
 
     def layout(self) -> WorkspaceLayout:
-        return WorkspaceLayout.of(self.user_uuid, self.root_thread_uuid)
+        return WorkspaceLayout.of(self.user_uuid, self.root_thread_uuid, self.workspace_dir)
 
     @classmethod
     def of_biz(cls, biz: BizRef) -> WorkspaceRef:

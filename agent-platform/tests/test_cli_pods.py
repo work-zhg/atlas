@@ -89,7 +89,7 @@ def _thread(**over: Any) -> Any:
     tid = uuid7()
     fields = {
         "thread_uuid": tid,
-        "workspace_thread_id": tid,
+        "workspace_dir": f"2026-11-12/{tid}",
         "created_by_uuid": USER,
         "credential_profiles": [],
         "source_app": "",
@@ -130,7 +130,7 @@ def _bridge(req: PodRequest, slot: int = 0, **over: Any) -> tuple[str, dict[str,
 def _req(**over: Any) -> PodRequest:
     fields: dict[str, Any] = {
         "thread_uuid": uuid7(),
-        "workspace_uuid": uuid7(),
+        "workspace_dir": "Q3 分析",
         "user_uuid": USER,
         "cli": CLI,
     }
@@ -178,8 +178,8 @@ def test_bridge_env_is_what_the_bridge_expects() -> None:
     assert cfg.listen_port == 8902  # 8900 + 槽位
     assert cfg.agent_cmd == ("node", "/opt/acp/index.js")
     assert str(cfg.token_file) == f"{pod_mod.BRIDGE_DIR}/{req.thread_uuid}.token"
-    # ★ CLI 的 cwd 是根会话的工作区：路径里只有会话 id 和固定的挂载点，Pod 重建前后一样
-    assert str(cfg.workspace) == f"/data/{req.workspace_uuid}/workspace"
+    # ★ CLI 的 cwd 是会话的工作目录：建会话时定下、之后不变，Pod 重建前后一样
+    assert str(cfg.workspace) == "/data/files/Q3 分析"
     agent = cfg.agent_env(env | {"ANTHROPIC_AUTH_TOKEN": "k", "PATH": "/bin"})
     assert agent["ANTHROPIC_BASE_URL"] == "https://llm.example/anthropic"
     assert agent["ANTHROPIC_MODEL"] == agent["ANTHROPIC_SMALL_FAST_MODEL"] == "m-1"

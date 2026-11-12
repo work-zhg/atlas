@@ -402,9 +402,10 @@ export interface paths {
         get: operations["list_files_v1_threads__thread_id__files_get"];
         /**
          * Upload File
-         * @description 把请求体原样写成工作区里的一个文件（覆盖同名）。与 download 对称。
+         * @description 把请求体原样写成工作目录里的一个文件（覆盖同名）。与 download 对称。
          *
          *     用途：用户给智能体准备输入文件；评测给任务准备初始工作区（doc/agent-eval-design.html）。
+         *     ★ 单个文件上限、存储配额与工作空间上传同一套（运行期配置 workspace.*）：工作目录就在工作空间里。
          */
         put: operations["upload_file_v1_threads__thread_id__files_put"];
         post?: never;
@@ -1292,6 +1293,204 @@ export interface paths {
         get: operations["available_profiles_v1_credential_profiles_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspace": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Overview
+         * @description 占用、配额、单个文件上传上限。
+         */
+        get: operations["overview_v1_workspace_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspace/entries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Entries
+         * @description 列一层：文件夹（文件数、大小）和文件。hidden = 也列点开头的（会话的内部记录 .atlas）。
+         */
+        get: operations["list_entries_v1_workspace_entries_get"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete
+         * @description 删一个文件或文件夹（不可恢复）。正在运行的会话的工作目录不能删（409）。
+         */
+        delete: operations["delete_v1_workspace_entries_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspace/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Search
+         * @description 按名称找文件和文件夹（不搜内容）。
+         */
+        get: operations["search_v1_workspace_search_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspace/refs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Refs
+         * @description 把这个目录（或它下面的目录）当工作目录的会话：改名、删除前给用户看。
+         */
+        get: operations["refs_v1_workspace_refs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspace/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Upload
+         * @description 把请求体原样写成一个文件（覆盖同名；父目录不存在就一并出现）。
+         */
+        put: operations["upload_v1_workspace_files_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspace/files/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download */
+        get: operations["download_v1_workspace_files_download_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspace/zip": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download Zip
+         * @description 把一个文件夹打包成 zip 下载（流式，不含隐藏文件）。path 为空 = 整个工作空间。
+         */
+        get: operations["download_zip_v1_workspace_zip_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspace/folders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Make Folder */
+        post: operations["make_folder_v1_workspace_folders_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspace/move": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Move
+         * @description 改名 / 移动一个文件或文件夹。有会话以它为工作目录的文件夹不能动（409）。
+         */
+        post: operations["move_v1_workspace_move_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspace/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Preview
+         * @description 签发预览令牌，根是这个人的全部文件。站点在 GET /v1/previews/{token}/… 下。
+         */
+        post: operations["create_preview_v1_workspace_preview_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3184,6 +3383,8 @@ export interface components {
             git_profile?: string | null;
             /** Memory */
             memory?: ("on" | "off") | null;
+            /** Workspace Dir */
+            workspace_dir?: string | null;
         };
         /** ThreadListOut */
         ThreadListOut: {
@@ -3258,6 +3459,11 @@ export interface components {
             model_choice?: components["schemas"]["ThreadModelOut"] | null;
             /** Source App */
             source_app?: string | null;
+            /**
+             * Workspace Dir
+             * @default
+             */
+            workspace_dir: string;
             /**
              * Subagent Thread Count
              * @default 0
@@ -3437,6 +3643,33 @@ export interface components {
             /** Context */
             ctx?: Record<string, never>;
         };
+        /** WorkspaceDirOut */
+        WorkspaceDirOut: {
+            /** Dir */
+            dir: string;
+            /** Dirs */
+            dirs: components["schemas"]["WorkspaceFolder"][];
+            /** Files */
+            files: components["schemas"]["WorkspaceEntryFile"][];
+            /**
+             * Truncated
+             * @default false
+             */
+            truncated: boolean;
+        };
+        /** WorkspaceEntryFile */
+        WorkspaceEntryFile: {
+            /** Name */
+            name: string;
+            /** Path */
+            path: string;
+            /** Size */
+            size: number;
+            /** Modified At */
+            modified_at?: string | null;
+            /** Etag */
+            etag?: string | null;
+        };
         /** WorkspaceFile */
         WorkspaceFile: {
             /** Path */
@@ -3457,6 +3690,107 @@ export interface components {
             configured: boolean;
             /** Data */
             data: components["schemas"]["WorkspaceFile"][];
+            /**
+             * Truncated
+             * @default false
+             */
+            truncated: boolean;
+        };
+        /** WorkspaceFolder */
+        WorkspaceFolder: {
+            /** Name */
+            name: string;
+            /** Path */
+            path: string;
+            /** Files */
+            files: number;
+            /** Size */
+            size: number;
+            /** Modified At */
+            modified_at?: string | null;
+        };
+        /** WorkspaceFolderIn */
+        WorkspaceFolderIn: {
+            /** Path */
+            path: string;
+        };
+        /** WorkspaceMoveIn */
+        WorkspaceMoveIn: {
+            /** Src */
+            src: string;
+            /** Dst */
+            dst: string;
+        };
+        /**
+         * WorkspaceOut
+         * @description 概况：占用、配额、单个文件上传上限（运行期配置 workspace.*）。
+         */
+        WorkspaceOut: {
+            /** Configured */
+            configured: boolean;
+            /**
+             * Used Bytes
+             * @default 0
+             */
+            used_bytes: number;
+            /**
+             * Files
+             * @default 0
+             */
+            files: number;
+            /**
+             * Quota Bytes
+             * @default 0
+             */
+            quota_bytes: number;
+            /**
+             * Upload Max Bytes
+             * @default 0
+             */
+            upload_max_bytes: number;
+        };
+        /** WorkspacePathOut */
+        WorkspacePathOut: {
+            /** Path */
+            path: string;
+            /** Size */
+            size?: number | null;
+        };
+        /** WorkspaceRefThread */
+        WorkspaceRefThread: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Title */
+            title: string;
+            /** Workspace Dir */
+            workspace_dir: string;
+            /** Running */
+            running: boolean;
+        };
+        /**
+         * WorkspaceRefsOut
+         * @description 把这个路径（或它下面的目录）当工作目录的会话（根会话）。
+         */
+        WorkspaceRefsOut: {
+            /** Threads */
+            threads: components["schemas"]["WorkspaceRefThread"][];
+        };
+        /** WorkspaceSearchFolder */
+        WorkspaceSearchFolder: {
+            /** Name */
+            name: string;
+            /** Path */
+            path: string;
+        };
+        /** WorkspaceSearchOut */
+        WorkspaceSearchOut: {
+            /** Dirs */
+            dirs: components["schemas"]["WorkspaceSearchFolder"][];
+            /** Files */
+            files: components["schemas"]["WorkspaceEntryFile"][];
             /**
              * Truncated
              * @default false
@@ -6180,6 +6514,329 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CredentialProfileOut"][];
+                };
+            };
+        };
+    };
+    overview_v1_workspace_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceOut"];
+                };
+            };
+        };
+    };
+    list_entries_v1_workspace_entries_get: {
+        parameters: {
+            query?: {
+                dir?: string;
+                hidden?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceDirOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_v1_workspace_entries_delete: {
+        parameters: {
+            query: {
+                path: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    search_v1_workspace_search_get: {
+        parameters: {
+            query: {
+                q: string;
+                hidden?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceSearchOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    refs_v1_workspace_refs_get: {
+        parameters: {
+            query: {
+                path: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceRefsOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_v1_workspace_files_put: {
+        parameters: {
+            query: {
+                path: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspacePathOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_v1_workspace_files_download_get: {
+        parameters: {
+            query: {
+                path: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_zip_v1_workspace_zip_get: {
+        parameters: {
+            query?: {
+                path?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    make_folder_v1_workspace_folders_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkspaceFolderIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspacePathOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    move_v1_workspace_move_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkspaceMoveIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspacePathOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_preview_v1_workspace_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreviewSessionOut"];
                 };
             };
         };

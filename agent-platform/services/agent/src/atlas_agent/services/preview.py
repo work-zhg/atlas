@@ -7,8 +7,9 @@
 ★ 令牌存 Redis 而不是做成签名串：可吊销、不用管密钥轮换。代价是每个子资源
   一次 Redis GET，原型规模（几十个文件）无压力。
 
-★ 解析**不碰数据库**：签发时把构造工作区要的三个 id 一并存进去。站点的每个
+★ 解析**不碰数据库**：签发时把构造工作区要的（人、会话、工作目录）一并存进去。站点的每个
   子资源都会走一次解析，不该各占一条 DB 连接。
+★ 两种根：会话的工作目录（对话里的预览），或这个人的全部文件 files/（工作空间页面）。
 """
 
 from __future__ import annotations
@@ -46,15 +47,26 @@ class PreviewService:
         if not self._settings.workspace_configured:
             raise NotFound("没有配置对象存储，这个部署没有文件能力")
         thread, _ = found
+        return await self._issue(
+            {
+                "thread_id": str(thread.thread_uuid),
+                # 工作区的 key 里有 user 段，取的是会话创建者而不是当前请求者
+                "owner_id": str(thread.created_by_uuid),
+                "workspace_dir": thread.workspace_dir,
+            }
+        )
+
+    async def issue_files(self, owner: UUID) -> tuple[str, datetime]:
+        """为一个人的全部文件（files/，工作空间页面）签发预览令牌。只给本人签发（调用方保证）。"""
+        if not self._settings.workspace_configured:
+            raise NotFound("没有配置对象存储，这个部署没有文件能力")
+        # 整个文件区不属于哪个会话：thread_id 只决定 .atlas/{会话}/，用不到，放人的 id 占位
+        return await self._issue(
+            {"thread_id": str(owner), "owner_id": str(owner), "workspace_dir": ""}
+        )
+
+    async def _issue(self, payload: dict[str, str]) -> tuple[str, datetime]:
         token = secrets.token_urlsafe(32)
-        payload = {
-            "thread_id": str(thread.thread_uuid),
-            # 工作区的 key 里有 user 段，取的是会话创建者而不是当前请求者
-            "owner_id": str(thread.created_by_uuid),
-            "workspace_thread_id": (
-                str(thread.workspace_thread_id) if thread.workspace_thread_id else None
-            ),
-        }
         ttl = self._settings.preview_token_ttl_s
         await self._redis.set(_KEY.format(token), json.dumps(payload), ex=ttl)
         return token, datetime.now(UTC) + timedelta(seconds=ttl)
@@ -67,13 +79,10 @@ class PreviewService:
             return None
         await self._redis.expire(key, self._settings.preview_token_ttl_s)
         data: dict[str, Any] = json.loads(raw)
+        if "workspace_dir" not in data:
+            return None  # 0044 之前签发的（按旧布局），当作失效：前端会重新签发
         fs = make_workspace(
-            self._settings,
-            UUID(data["owner_id"]),
-            UUID(data["thread_id"]),
-            workspace_thread_id=(
-                UUID(data["workspace_thread_id"]) if data.get("workspace_thread_id") else None
-            ),
+            self._settings, UUID(data["owner_id"]), UUID(data["thread_id"]), data["workspace_dir"]
         )
         return None if fs is None else WorkspaceListing(fs)
 

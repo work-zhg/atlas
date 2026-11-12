@@ -147,7 +147,7 @@ class ContextManager:
 
 
 def _atlas_dir(segment: Segment) -> str:
-    """本会话的隐藏目录在沙箱里的路径（/data/{根会话}/workspace/.atlas/{会话}）。"""
+    """本会话的隐藏目录在沙箱里的路径（/data/files/{工作目录}/.atlas/{会话}）。"""
     t = segment.thread
-    layout = WorkspaceLayout.of(t.created_by_uuid, t.thread_uuid, t.workspace_thread_id)
+    layout = WorkspaceLayout.of(t.created_by_uuid, t.thread_uuid, t.workspace_dir)
     return layout.real(layout.atlas_dir)

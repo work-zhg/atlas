@@ -37,6 +37,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
+from ..domain.workspace_layout import WORKSPACE_DIR_MAX
 from ..ids import uuid7
 from ..sandbox.base.lifecycle.state import SandboxState
 from .base import Base, TimestampMixin
@@ -247,12 +248,16 @@ class Thread(Base, TimestampMixin):
     #:     事件流   一个会话一条流，子孙 run 的事件都进根会话那条
     #:   共用同一个值是巧合（都是「根」），不是耦合 —— 所以各自有名字。
     root_thread_uuid: Mapped[UUID | None] = mapped_column(UUIDType, nullable=True)
+    #: 工作目录（迁移 0044）：相对这个人的 files/。建会话时定下 —— 指定了就用指定的（工作空间里的
+    #: 一个目录，多个会话可以共用），没指定就是 {日期}/{会话 id}；之后不变（它是沙箱里命令和 CLI 的
+    #: cwd）。子会话建出时复制父会话的，所以整棵会话树是同一个（domain/workspace_layout.py）
+    workspace_dir: Mapped[str] = mapped_column(String(WORKSPACE_DIR_MAX), nullable=False)
 
     @property
-    def workspace_thread_id(self) -> UUID:
-        """工作区归属的会话 —— SubAgent 挂的是**根会话的** workspace。
+    def sandbox_thread_id(self) -> UUID:
+        """原生沙箱按哪个会话绑定 —— 会话树的根：SubAgent 和根会话共用一个沙箱。
 
-        ★ skills / system 仍按 `id` 走，所以「读共享、技能隔离」是结构性的，不靠约定。
+        ★ 工作目录不挂在它上面（看 workspace_dir）：两个根会话可以共用一个工作目录，各自绑沙箱。
         """
         return self.root_thread_uuid or self.thread_uuid
 
@@ -270,6 +275,8 @@ class Thread(Base, TimestampMixin):
     __table_args__ = (
         UniqueConstraint("thread_uuid", name="uk_thread_uuid"),
         Index("ix_thread_list", "status", text("updated_at DESC")),
+        # 工作空间里改名、删目录前查「哪些会话在用它」：按人 + 工作目录前缀
+        Index("ix_thread_workspace_dir", "created_by_uuid", "workspace_dir"),
         # ★ 恢复的查找键。条件里的 status='active' 是关键的一半：
         #   一次性（ephemeral）子会话以 status='ephemeral' 出生，因此不占这个
         #   键 —— 同一个一次性子智能体于是可以**真并行**（设计 §09），

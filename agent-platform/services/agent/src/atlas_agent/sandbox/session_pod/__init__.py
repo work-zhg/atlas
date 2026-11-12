@@ -133,8 +133,8 @@ class PodProvider(Protocol):
 @dataclass(frozen=True)
 class PodRequest:
     thread_uuid: UUID
-    #: 工作区所属的根会话（子智能体与主 agent 共享）
-    workspace_uuid: UUID
+    #: 会话的工作目录（相对 files/；子智能体与主 agent 相同）：CLI 的 cwd
+    workspace_dir: str
     user_uuid: UUID
     cli: CliSpec
     model: CliModel | None = None
@@ -142,7 +142,7 @@ class PodRequest:
 
     @property
     def layout(self) -> WorkspaceLayout:
-        return WorkspaceLayout.of(self.user_uuid, self.thread_uuid, self.workspace_uuid)
+        return WorkspaceLayout.of(self.user_uuid, self.thread_uuid, self.workspace_dir)
 
 
 def _git_env(author: GitAuthor | None, trust: MitmTrust) -> dict[str, str]:
@@ -375,8 +375,8 @@ class BridgeLauncher:
             "ATLAS_BRIDGE_SESSION_ID": session,
             "ATLAS_BRIDGE_LISTEN_PORT": str(self.port(slot)),
             "ATLAS_BRIDGE_AGENT_CMD": cli.adapter,
-            # ★ CLI 的 cwd：根会话的工作区。CLI 按 cwd 找会话记录，路径里只有会话 id 和
-            #   固定的挂载点，Pod 重建前后一样
+            # ★ CLI 的 cwd：会话的工作目录。CLI 按 cwd 找会话记录，工作目录建会话时就定下、
+            #   之后不变，Pod 重建前后一样
             "ATLAS_BRIDGE_WORKSPACE": layout.workdir,
             # agent 只拿到白名单里的变量（§8.3）
             "ATLAS_BRIDGE_AGENT_ENV_ALLOW": ",".join(dict.fromkeys(allow)),
@@ -490,7 +490,7 @@ class SessionPods:
         """每轮都经通用供给确认一遍 Pod（坏了退役、重建），再确认这个会话的 bridge 在跑。"""
         req = PodRequest(
             thread_uuid=thread.thread_uuid,
-            workspace_uuid=thread.workspace_thread_id,
+            workspace_dir=thread.workspace_dir,
             user_uuid=thread.created_by_uuid,
             cli=cli,
             model=model,

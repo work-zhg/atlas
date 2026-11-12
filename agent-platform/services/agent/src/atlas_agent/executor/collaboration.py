@@ -119,7 +119,7 @@ class Collaboration:
             self._settings,
             thread.created_by_uuid,
             thread.thread_uuid,
-            workspace_thread_id=thread.workspace_thread_id,
+            thread.workspace_dir,
         )
         if fs is None:
             return

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import builtins
 from collections.abc import Sequence
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from uuid import UUID
 
 from atlas_engine.contracts.messages import KIND_CHAT, StoredMessage
@@ -11,6 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.models import Agent, Message, Run, Thread
 from ..db.session import fetch_one
+from ..domain.workspace_layout import default_workspace_dir
+from ..ids import uuid7
 
 
 class ThreadRepository:
@@ -98,6 +100,54 @@ class ThreadRepository:
         stmt = stmt.order_by(Message.created_at.desc(), Message.message_uuid.desc()).limit(limit)
         return list((await self._session.execute(stmt)).scalars())
 
+    async def using_workspace(self, owner: UUID, path: str) -> builtins.list[tuple[Thread, bool]]:
+        """这个人的会话里，工作目录就是 path 或在它下面的根会话 → [(会话, 整棵树有没结束的 run)]。
+
+        工作空间里改名、删除目录前查它：工作目录建会话时定下、之后不变（沙箱里的 cwd）。path 为空 =
+        整个工作空间。调试预览的会话（status=preview）不算：它们不出现在会话列表里。
+        """
+        from .run import _UNFINISHED
+
+        scope = Thread.created_by_uuid == owner
+        if path:
+            scope = and_(
+                scope,
+                or_(
+                    Thread.workspace_dir == path,
+                    Thread.workspace_dir.startswith(f"{path}/", autoescape=True),
+                ),
+            )
+        rows = (
+            await self._session.execute(
+                select(Thread.thread_uuid, Thread.root_thread_uuid).where(
+                    scope, Thread.status != "preview"
+                )
+            )
+        ).all()
+        if not rows:
+            return []
+        busy_threads = set(
+            (
+                await self._session.execute(
+                    select(Run.thread_uuid).where(
+                        Run.thread_uuid.in_([r.thread_uuid for r in rows]),
+                        Run.status.in_(_UNFINISHED),
+                    )
+                )
+            ).scalars()
+        )
+        busy_roots = {
+            r.root_thread_uuid or r.thread_uuid for r in rows if r.thread_uuid in busy_threads
+        }
+        roots = (
+            await self._session.execute(
+                select(Thread)
+                .where(scope, Thread.status != "preview", Thread.parent_thread_uuid.is_(None))
+                .order_by(Thread.updated_at.desc())
+            )
+        ).scalars()
+        return [(t, t.thread_uuid in busy_roots) for t in roots]
+
     # ------------------------------------------------------------------ 写
 
     async def live_ids(self) -> builtins.list[UUID]:
@@ -126,7 +176,11 @@ class ThreadRepository:
         credential_profiles: list[str] | None = None,
         source_app: str | None = None,
         memory: str = "on",
+        workspace_dir: str | None = None,
     ) -> Thread:
+        """workspace_dir：工作目录（相对 files/，调用方已校验）。不给就是 {今天}/{会话 id}；子会话
+        一律用父会话的（整棵会话树一个工作目录）。建会话时就落表，之后不变。"""
+        thread_uuid = uuid7()
         root_thread_id = None
         if parent_thread_id is not None:
             # ★ SubAgent 会话继承父会话的 git 凭据档案、来源应用与记忆开关：
@@ -139,6 +193,7 @@ class ThreadRepository:
                         Thread.source_app,
                         Thread.memory,
                         Thread.root_thread_uuid,
+                        Thread.workspace_dir,
                     ).where(Thread.thread_uuid == parent_thread_id)
                 )
             ).one_or_none()
@@ -149,7 +204,9 @@ class ThreadRepository:
                     credential_profiles = list(parent.credential_profiles or [])
                 source_app, memory = parent.source_app, parent.memory
                 root_thread_id = parent.root_thread_uuid or parent_thread_id
+                workspace_dir = parent.workspace_dir
         thread = Thread(
+            thread_uuid=thread_uuid,
             agent_uuid=agent_id,
             title=title,
             # 用户建会话时给了标题就算 manual —— 自动生成永不覆盖（决策 5）
@@ -162,6 +219,7 @@ class ThreadRepository:
             credential_profiles=credential_profiles or [],
             source_app=source_app,
             memory=memory,
+            workspace_dir=workspace_dir or default_workspace_dir(thread_uuid, date.today()),
         )
         self._session.add(thread)
         await self._session.flush()

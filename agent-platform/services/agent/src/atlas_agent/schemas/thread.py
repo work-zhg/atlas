@@ -38,6 +38,9 @@ class ThreadCreate(BaseModel):
     git_profile: str | None = Field(default=None, max_length=64, pattern=PROFILE_PATTERN)
     #: 用户记忆：传 off 关闭（不抽取、不注入、不挂检索工具）。服务账号的会话按账号设置，默认关闭
     memory: Literal["on", "off"] | None = None
+    #: 工作目录：工作空间里的一个目录（相对用户文件的根，如「Q3 销售分析」）。不传就新建
+    #: {日期}/{会话 id}。建会话时定下、之后不能换（它是沙箱里的 cwd）；不能是根目录、隐藏目录
+    workspace_dir: str | None = Field(default=None, max_length=1024)
 
 
 class ThreadUpdate(BaseModel):
@@ -108,6 +111,8 @@ class ThreadOut(BaseModel):
     model_choice: ThreadModelOut | None = None
     #: 建会话的业务应用（如 teamflow）；人直接建的为空。非空时从 Atlas 侧只读（内网身份传递 §7.3）
     source_app: str | None = None
+    #: 工作目录（相对用户文件的根）：建会话时定下，子会话与根会话相同
+    workspace_dir: str = ""
     #: 本会话下的子会话数。★ 删除确认要显示它：删父会话会**级联删掉**所有
     #: 子会话的 message / run / run_event，影响面比改造前大得多。
     #: 只在单条详情上计算，列表接口恒为 0（避免 N+1）。

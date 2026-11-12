@@ -496,6 +496,7 @@ async def make_session(
         title="t",
         created_by_uuid=owner,
         memory="on",
+        workspace_dir="t",
         updated_at=datetime.now(UTC) - timedelta(hours=2),
     )
     owners += [owner, thread.thread_uuid]

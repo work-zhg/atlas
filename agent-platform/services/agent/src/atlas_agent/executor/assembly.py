@@ -118,8 +118,10 @@ class CapabilityAssembly:
             if self._settings.sandbox_enabled
             else None
         )
-        ws = WorkspaceRef(segment.thread.workspace_thread_id, segment.thread.created_by_uuid)
-        # ★ 用根会话的工作区，隐藏目录 .atlas/{会话}/ 按自己；技能只放行本智能体绑定的版本。
+        thread = segment.thread
+        ws = WorkspaceRef(thread.sandbox_thread_id, thread.created_by_uuid, thread.workspace_dir)
+        # ★ 用会话的工作目录（子会话与根会话相同），隐藏目录 .atlas/{会话}/ 按自己；技能只放行本
+        #   智能体绑定的版本。
         #   没配对象存储 = **没有文件能力**（make_workspace 返回 None，不回落任何内存实现）。
         #   ★ 读写路由跟着**这个人的沙箱**走，不跟着本智能体有没有 bash 走：沙箱把这个人的整个前缀
         #     挂在 /data，它在跑时文件工具也要进沙箱（与命令同一个挂载，只有一个写入方）。
@@ -127,7 +129,7 @@ class CapabilityAssembly:
             self._settings,
             segment.thread.created_by_uuid,
             segment.thread_id,
-            workspace_thread_id=segment.thread.workspace_thread_id,
+            thread.workspace_dir,
             skills=[(s.slug, s.version) for s in segment.spec.skills],
             routing=WorkspaceRouting(sandbox.native, sandbox.exec, ws) if sandbox else None,
         )
@@ -174,9 +176,7 @@ class CapabilityAssembly:
             memory=context.memory_block,
             prompt_cache_ttl=await self._prompt_cache_ttl(segment),
             workdir=WorkspaceLayout.of(
-                segment.thread.created_by_uuid,
-                segment.thread_id,
-                segment.thread.workspace_thread_id,
+                thread.created_by_uuid, segment.thread_id, thread.workspace_dir
             ).workdir,
         )
         return caps, self._titler(segment)

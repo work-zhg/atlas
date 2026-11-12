@@ -56,7 +56,7 @@ class Workspace:
         bucket: str,
         user_id: UUID | str,
         thread_id: UUID | str,
-        workspace_thread_id: UUID | str | None = None,
+        workspace_dir: str,
         skills: Iterable[tuple[str, int | str]] = (),
         routing: WorkspaceRouting | None = None,
     ) -> None:
@@ -64,12 +64,12 @@ class Workspace:
         Args:
             user_id: 拥有者。进路径 —— 逃逸防护因此同时挡住跨用户。
             thread_id: 本会话。它的隐藏目录 .atlas/{会话}/ 用它。
-            workspace_thread_id: 所用工作区的根会话。None = 自己（根会话）；子、孙会话传**根会话**
-                的 id —— 它们共用同一份工作区（委派常常就是「帮我处理这批文件」）。
+            workspace_dir: 会话的工作目录（相对 files/）。子、孙会话与根会话相同 —— 它们共用同一份
+                工作区（委派常常就是「帮我处理这批文件」）。
             skills: 本智能体绑定的技能 (slug, 版本)：文件工具只放行这几个技能目录。
             routing: 沙箱路由。None = 永远直连对象存储（没开沙箱的部署）。
         """
-        self.layout = WorkspaceLayout.of(user_id, thread_id, workspace_thread_id)
+        self.layout = WorkspaceLayout.of(user_id, thread_id, workspace_dir)
         self.gate = PathGate(self.layout, skills)
         self.objects = ObjectStoreFiles(client, bucket, self.layout)
         self._router = StoreRouter(self.objects, routing)

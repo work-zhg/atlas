@@ -104,6 +104,8 @@ async def test_only_config_admins_see_and_change_configs(
         IMAGES,
         "sandbox.bench_image_allow_prefixes",
         "platform.default_agent",
+        "workspace.upload_max_mb",
+        "workspace.quota_mb",
     }
     # 没改过的取部署配置
     assert listed[QUOTA]["effective"] == get_settings().sandbox_quota_per_user

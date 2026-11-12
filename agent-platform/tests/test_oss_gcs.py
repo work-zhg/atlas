@@ -76,12 +76,12 @@ def workspaces():
     """
     created = []
 
-    def _make(thread_id: str, *, workspace_thread_id: str | None = None):
+    def _make(thread_id: str, *, workspace_dir: str | None = None):
         workspace = make_workspace(
             _SETTINGS,
             "test-user",
             thread_id,
-            workspace_thread_id=workspace_thread_id,
+            workspace_dir or f"test/{thread_id}",
             skills=[_SKILL],
         )
         assert workspace is not None
@@ -139,7 +139,7 @@ def test_the_client_disables_default_checksums(fs) -> None:
 
 
 def test_workspace_and_skills_land_on_different_prefixes(fs) -> None:
-    """工作区和技能是这个人前缀下两个不同的目录：{user}/{根会话}/workspace、{user}/skills/…。
+    """工作区和技能是这个人前缀下两个不同的目录：{user}/files/{工作目录}、{user}/skills/…。
 
     路由错了的表现不是报错，是技能写进了工作区 —— 一个静默的越权写。
     """
@@ -164,13 +164,13 @@ def test_deleting_the_workspace_leaves_skills_alone(fs) -> None:
 
 
 def test_a_subagent_shares_the_parents_workspace_and_the_persons_skills(workspaces) -> None:
-    """子会话：工作区用根会话的；技能一个人一份，父子看到的是同一份。
+    """子会话：工作目录用根会话的；技能一个人一份，父子看到的是同一份。
 
     共享工作区是有意的（委派常常就是「帮我处理这批文件」，产物要互相看得见）。
     """
     parent_thread = f"test-parent-{uuid4()}"
     parent = workspaces(parent_thread)
-    child = workspaces(f"test-child-{uuid4()}", workspace_thread_id=parent_thread)
+    child = workspaces(f"test-child-{uuid4()}", workspace_dir=f"test/{parent_thread}")
 
     parent.write("parent-note.md", "父写的")
     assert child.read("parent-note.md").file_data["content"] == "父写的"
@@ -247,7 +247,7 @@ def test_non_ascii_survives_the_round_trip(fs) -> None:
 
 
 def test_the_workspace_mount_point_is_not_a_subdirectory(fs) -> None:
-    """★ 沙箱里的真实路径 `/data/{根会话}/workspace/a.md` 指的是工作区根上的 a.md。
+    """★ 沙箱里的真实路径 `/data/files/{工作目录}/a.md` 指的是工作区根上的 a.md。
 
     模型看得见这个路径 —— 命令和 CLI 的 cwd 就是它 —— 所以它会很自然地写出绝对路径。
     不认的话对象会落在一层子目录里，而错法是**静默**的：写入成功、事件照发，只是文件出现在

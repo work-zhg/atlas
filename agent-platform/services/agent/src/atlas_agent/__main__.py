@@ -13,6 +13,10 @@
   python -m atlas_agent service-model set title --client-type Service --client-code session-title \
                         --model deepseek-flash          配置（要先在模型管理平台建好 Key、分配模型）
   python -m atlas_agent service-model clear title
+  python -m atlas_agent purge-legacy-workspaces [--dry-run]
+                                                       删掉旧布局的会话文件 {user}/{会话}/…
+                                                       （迁移 0044 之后跑一次；files/、skills/、
+                                                       home/ 不动）
 """
 
 from __future__ import annotations
@@ -62,8 +66,31 @@ def main(argv: list[str] | None = None) -> int:
     sm_set.add_argument("--client-code", required=True)
     sm_set.add_argument("--model", required=True)
     sm.add_parser("clear").add_argument("purpose")
+    pl = sub.add_parser(
+        "purge-legacy-workspaces",
+        help="删掉旧布局的会话文件 {user}/{会话 id}/…（用户文件已改放 {user}/files/）",
+    )
+    pl.add_argument("--dry-run", action="store_true", help="只列出来，不删")
     args = parser.parse_args(argv)
 
+    if args.command == "purge-legacy-workspaces":
+        from .config import get_settings
+        from .providers.filesystem import make_s3_client
+        from .providers.filesystem.legacy import purge_legacy_workspaces
+
+        settings = get_settings()
+        if not settings.workspace_configured:
+            print("✗ 没有配置对象存储（OSS_BUCKET）", file=sys.stderr)
+            return 1
+        found = purge_legacy_workspaces(
+            make_s3_client(settings), settings.oss_bucket or "", dry_run=args.dry_run
+        )
+        for p in found:
+            print(f"{p.prefix}\t{p.objects} 个对象\t{p.size / 1024 / 1024:.1f} MB")
+        verb = "将删除" if args.dry_run else "已删除"
+        total = sum(p.objects for p in found)
+        print(f"{verb} {len(found)} 个旧会话目录、{total} 个对象")
+        return 0
     if args.command == "register-uc":
         from .auth.register import register
         from .config import get_settings

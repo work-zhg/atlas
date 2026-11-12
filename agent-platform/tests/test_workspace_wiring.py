@@ -22,25 +22,26 @@ def test_no_bucket_means_no_filesystem() -> None:
     """没配 bucket → None。调用方据此关闭整个文件能力。"""
     settings = Settings(**_BASE)
     assert settings.workspace_configured is False
-    assert make_workspace(settings, uuid4(), uuid4()) is None
+    assert make_workspace(settings, uuid4(), uuid4(), "w") is None
 
 
 def test_bucket_yields_oss_filesystem() -> None:
     with mock_aws():
         settings = Settings(**_BASE, oss_bucket="atlas-test", oss_endpoint="http://x")
-        fs = make_workspace(settings, uuid4(), uuid4())
+        fs = make_workspace(settings, uuid4(), uuid4(), "w")
         assert isinstance(fs, Workspace)
 
 
 def test_each_session_gets_its_own_prefix() -> None:
-    """两个会话拿到不同前缀 —— 隔离由构造时的 session_id 决定。"""
+    """两个工作目录拿到不同前缀 —— 隔离由构造时的工作目录决定。"""
     with mock_aws():
         settings = Settings(**_BASE, oss_bucket="atlas-test", oss_endpoint="http://x")
-        a = make_workspace(settings, "u1", "t-a")
-        b = make_workspace(settings, "u1", "t-b")
+        a = make_workspace(settings, "u1", "t-a", "2026-11-12/t-a")
+        b = make_workspace(settings, "u1", "t-b", "Q3 分析")
         assert a.key_of("x.md") != b.key_of("x.md")
-        assert a.key_of("x.md") == "u1/t-a/workspace/x.md"
-        assert a.workdir == "/data/t-a/workspace"
+        assert a.key_of("x.md") == "u1/files/2026-11-12/t-a/x.md"
+        assert a.workdir == "/data/files/2026-11-12/t-a"
+        assert b.key_of("x.md") == "u1/files/Q3 分析/x.md"
 
 
 @pytest.mark.parametrize("tools", [("filesystem",), ("filesystem", "bash")])
@@ -61,7 +62,7 @@ def test_end_to_end_roundtrip_through_wiring() -> None:
     with mock_aws():
         boto3.client("s3", region_name="us-east-1").create_bucket(Bucket="atlas-test")
         settings = Settings(**_BASE, oss_bucket="atlas-test")
-        fs = make_workspace(settings, uuid4(), uuid4())
+        fs = make_workspace(settings, uuid4(), uuid4(), "w")
         assert fs is not None
         fs.write("notes/a.md", "hello")
         assert fs.read("notes/a.md").file_data["content"] == "hello"

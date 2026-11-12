@@ -27,9 +27,9 @@ def s3():
 
 def test_lists_files_written_outside_the_platform(s3) -> None:  # type: ignore[no-untyped-def]
     parent = uuid4()
-    fs = Workspace(s3, bucket=BUCKET, user_id=USER, thread_id=parent)
+    fs = Workspace(s3, bucket=BUCKET, user_id=USER, thread_id=parent, workspace_dir="Q3 分析")
     # 模拟 CLI 在 Pod 里直接写挂载的工作区：不经 Workspace、没有任何事件
-    ws = f"{USER}/{parent}/workspace"
+    ws = f"{USER}/files/Q3 分析"
     s3.put_object(Bucket=BUCKET, Key=f"{ws}/index.html", Body=b"<html>")
     s3.put_object(Bucket=BUCKET, Key=f"{ws}/assets/app.js", Body=b"x" * 10)
     s3.put_object(Bucket=BUCKET, Key=f"{ws}/.cache/tmp", Body=b"hidden")
@@ -42,14 +42,12 @@ def test_lists_files_written_outside_the_platform(s3) -> None:  # type: ignore[n
     assert all(f["modified_at"] for f in files)
 
     # 子会话共享父会话的工作区：看到的是同一份
-    child = Workspace(
-        s3, bucket=BUCKET, user_id=USER, thread_id=uuid4(), workspace_thread_id=parent
-    )
+    child = Workspace(s3, bucket=BUCKET, user_id=USER, thread_id=uuid4(), workspace_dir="Q3 分析")
     assert [f["path"] for f in WorkspaceListing(child).list()[0]] == ["assets/app.js", "index.html"]
 
 
 def test_truncates_long_listings(s3) -> None:  # type: ignore[no-untyped-def]
-    fs = Workspace(s3, bucket=BUCKET, user_id=USER, thread_id=uuid4())
+    fs = Workspace(s3, bucket=BUCKET, user_id=USER, thread_id=uuid4(), workspace_dir="w")
     for i in range(5):
         fs.write(f"f{i}.txt", "x")
     files, truncated = WorkspaceListing(fs).list(max_keys=3)
@@ -57,16 +55,18 @@ def test_truncates_long_listings(s3) -> None:  # type: ignore[no-untyped-def]
 
 
 def test_download_is_confined_to_the_workspace(s3) -> None:  # type: ignore[no-untyped-def]
-    fs = Workspace(s3, bucket=BUCKET, user_id=USER, thread_id=uuid4())
+    fs = Workspace(s3, bucket=BUCKET, user_id=USER, thread_id=uuid4(), workspace_dir="w")
     fs.write("report.md", "# 报告")
     body, size = WorkspaceListing(fs).open("report.md")
     assert body.read().decode() == "# 报告" and size == len("# 报告".encode())
     # 沙箱里的真实路径也认
     assert WorkspaceListing(fs).open(f"{fs.workdir}/report.md")[1] == size
     # 技能目录不经这里下载（即使是本智能体绑定的技能）
-    bound = Workspace(s3, bucket=BUCKET, user_id=USER, thread_id=uuid4(), skills=[("a", 1)])
+    bound = Workspace(
+        s3, bucket=BUCKET, user_id=USER, thread_id=uuid4(), workspace_dir="w", skills=[("a", 1)]
+    )
     with pytest.raises(PathEscape):
         WorkspaceListing(bound).open("/data/skills/a/1/SKILL.md")
-    # 别的会话的工作区也不行
+    # 工作空间里别的目录也不行
     with pytest.raises(PathEscape):
-        WorkspaceListing(fs).open(f"/data/{uuid4()}/workspace/report.md")
+        WorkspaceListing(fs).open("/data/files/other/report.md")

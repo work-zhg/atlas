@@ -6,6 +6,8 @@ c4-model/infra-platform/code-appconfig.html。
     sandbox.image_allow_prefixes        strict 档可用的镜像前缀
     sandbox.bench_image_allow_prefixes  评测档可用的镜像前缀
     platform.default_agent              首页输入框默认用的智能体（空 = 没有默认）
+    workspace.upload_max_mb             单个文件上传的上限（工作空间、对话里添加文件）
+    workspace.quota_mb                  每人工作空间的存储配额（0 = 不限）
 
 ★ 默认值取部署配置（同名环境变量）：没在运行期改过的，行为和以前一样；管理员经 /v1/configs 改了，
   下一次读就生效（读不缓存），不用重启。
@@ -24,7 +26,9 @@ if TYPE_CHECKING:
 
     from .config import Settings
 
-__all__ = ["RuntimeConfig", "RuntimeKeys"]
+__all__ = ["RuntimeConfig", "RuntimeKeys", "WorkspaceLimits"]
+
+_MB = 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -33,6 +37,8 @@ class RuntimeKeys:
     sandbox_images: ConfigKey[list[str]]
     bench_images: ConfigKey[list[str]]
     default_agent: ConfigKey[str]
+    upload_max_mb: ConfigKey[int]
+    quota_mb: ConfigKey[int]
 
     @classmethod
     def of(cls, settings: Settings) -> RuntimeKeys:
@@ -62,10 +68,39 @@ class RuntimeKeys:
                 default="",
                 description="首页输入框默认用的智能体 id（空 = 没有默认）",
             ),
+            upload_max_mb=ConfigKey(
+                "workspace.upload_max_mb",
+                int,
+                default=settings.workspace_upload_max_mb,
+                description="单个文件上传的上限（MB）：工作空间上传、对话里添加文件都按它",
+            ),
+            quota_mb=ConfigKey(
+                "workspace.quota_mb",
+                int,
+                default=settings.workspace_quota_mb,
+                description=(
+                    "每人工作空间的存储配额（MB，0 = 不限）：上传时检查，智能体写的文件也算在内"
+                ),
+            ),
         )
 
     def all(self) -> list[ConfigKey[Any]]:
-        return [self.sandbox_quota, self.sandbox_images, self.bench_images, self.default_agent]
+        return [
+            self.sandbox_quota,
+            self.sandbox_images,
+            self.bench_images,
+            self.default_agent,
+            self.upload_max_mb,
+            self.quota_mb,
+        ]
+
+
+@dataclass(frozen=True)
+class WorkspaceLimits:
+    """上传时检查的两个上限（字节）。quota 为 0 = 不限。"""
+
+    upload_max: int
+    quota: int
 
 
 class RuntimeConfig:
@@ -89,6 +124,10 @@ class RuntimeConfig:
             expected_version=entry.item.version,
             by=by,
         )
+
+    async def workspace_limits(self) -> WorkspaceLimits:
+        upload, quota = await self.config.get_many(self.keys.upload_max_mb, self.keys.quota_mb)
+        return WorkspaceLimits(upload_max=max(upload, 0) * _MB, quota=max(quota, 0) * _MB)
 
     async def image_allow_prefixes(self) -> dict[str, list[str]]:
         strict, bench = await self.config.get_many(self.keys.sandbox_images, self.keys.bench_images)

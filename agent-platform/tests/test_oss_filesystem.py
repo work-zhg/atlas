@@ -33,7 +33,9 @@ def s3():
 
 @pytest.fixture
 def fs(s3):
-    return Workspace(s3, bucket=BUCKET, user_id=USER, thread_id=uuid4())
+    return Workspace(
+        s3, bucket=BUCKET, user_id=USER, thread_id=uuid4(), workspace_dir="2026-11-12/t"
+    )
 
 
 @pytest.fixture
@@ -42,8 +44,8 @@ def two_sessions():
     with mock_aws():
         s3 = boto3.client("s3", region_name="us-east-1")
         s3.create_bucket(Bucket=BUCKET)
-        a = Workspace(s3, bucket=BUCKET, user_id=USER, thread_id="t-a")
-        b = Workspace(s3, bucket=BUCKET, user_id=USER, thread_id="t-b")
+        a = Workspace(s3, bucket=BUCKET, user_id=USER, thread_id="t-a", workspace_dir="t-a")
+        b = Workspace(s3, bucket=BUCKET, user_id=USER, thread_id="t-b", workspace_dir="t-b")
         yield a, b
 
 
@@ -133,7 +135,7 @@ def test_real_paths_and_relative_paths_are_the_same_file(fs) -> None:
 
 def test_a_relative_data_directory_is_a_workspace_subdirectory(fs) -> None:
     """★ 相对路径 data/raw.csv 到这里已经被引擎补成 /data/raw.csv：raw.csv 不是布局里的东西
-    （技能、home、会话 id），所以按工作区里的 data 子目录算 —— data 是很常见的目录名。"""
+    （用户文件、技能、home），所以按工作区里的 data 子目录算 —— data 是很常见的目录名。"""
     fs.write("/data/raw.csv", "a,b")
     assert fs.key_of("/data/raw.csv") == f"{USER}/{fs.layout.workspace}/data/raw.csv"
     assert fs.read(f"{fs.workdir}/data/raw.csv").file_data["content"] == "a,b"
@@ -143,9 +145,10 @@ def test_a_relative_data_directory_is_a_workspace_subdirectory(fs) -> None:
 
 
 def test_other_roots_under_data_are_not_reachable(fs) -> None:
-    """/data 下不是本会话能用的根（别的会话的工作区、没绑定的技能、CLI 的 home）一律拒绝。"""
+    """/data 下不是本会话能用的根（工作空间里别的目录、没绑定的技能、CLI 的 home）一律拒绝。"""
     others = (
-        f"/data/{uuid4()}/workspace/a.md",
+        "/data/files/other/a.md",
+        "/data/files/a.md",
         "/data/skills/x/1/SKILL.md",
         "/data/home/.claude/x",
     )
@@ -376,7 +379,14 @@ def test_skills_are_not_in_the_workspace_at_all(s3) -> None:
 
     文件工具只放行本智能体绑定的版本；结果以沙箱里的真实路径回来。
     """
-    fs = Workspace(s3, bucket=BUCKET, user_id=USER, thread_id=uuid4(), skills=[("dataviz", 1)])
+    fs = Workspace(
+        s3,
+        bucket=BUCKET,
+        user_id=USER,
+        thread_id=uuid4(),
+        workspace_dir="w",
+        skills=[("dataviz", 1)],
+    )
     fs.write("report.md", "我的产物")
     fs.write("/data/skills/dataviz/1/SKILL.md", "技能")
 
@@ -392,20 +402,18 @@ def test_skills_are_not_in_the_workspace_at_all(s3) -> None:
 
 
 def test_subagent_shares_parent_workspace(s3) -> None:
-    """子会话用根会话的工作区：父写的子看得到，子写的父也看得到。
+    """子会话用根会话的工作目录：父写的子看得到，子写的父也看得到。
 
     这一条红了意味着子智能体看不见父 agent 的产物（协作断了）。
     """
-    parent = Workspace(s3, bucket=BUCKET, user_id=USER, thread_id="t-parent")
+    parent = Workspace(
+        s3, bucket=BUCKET, user_id=USER, thread_id="t-parent", workspace_dir="Q3 分析"
+    )
     child = Workspace(
-        s3,
-        bucket=BUCKET,
-        user_id=USER,
-        thread_id="t-child",
-        workspace_thread_id="t-parent",
+        s3, bucket=BUCKET, user_id=USER, thread_id="t-child", workspace_dir="Q3 分析"
     )
 
-    assert child.workdir == parent.workdir == "/data/t-parent/workspace"  # 同一份工作区
+    assert child.workdir == parent.workdir == "/data/files/Q3 分析"  # 同一份工作区
     assert child.layout.atlas_dir != parent.layout.atlas_dir  # 隐藏目录各自一个
 
     parent.write("shared.md", "父写的")
@@ -451,14 +459,19 @@ def test_subagent_and_parent_share_one_skill_copy(s3) -> None:
     s3.put_object(Bucket=BUCKET, Key="_skills/dataviz/1/SKILL.md", Body=b"v1")
 
     parent = Workspace(
-        s3, bucket=BUCKET, user_id=USER, thread_id="t-parent", skills=[("dataviz", 1)]
+        s3,
+        bucket=BUCKET,
+        user_id=USER,
+        thread_id="t-parent",
+        workspace_dir="d",
+        skills=[("dataviz", 1)],
     )
     child = Workspace(
         s3,
         bucket=BUCKET,
         user_id=USER,
         thread_id="t-child",
-        workspace_thread_id="t-parent",
+        workspace_dir="d",
         skills=[("dataviz", 1)],
     )
     metas = [SkillMeta("dataviz", 1, "画图")]
