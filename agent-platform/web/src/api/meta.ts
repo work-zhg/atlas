@@ -74,7 +74,7 @@ export function useTools(ctx: { agentId?: string; authSubject?: "user" | "agent"
   });
 }
 
-/** 编辑器里可选的知识库按谁的权限列出（同 MCP：运行时知识库按同一个主体判） */
+/** 编辑器里可选的知识集按谁的权限列出（同 MCP：运行时知识库按同一个主体判） */
 export interface KnowledgeSubjectInfo {
   /** user = 以人为权限（当前用户）；agent = 以 Agent 为权限（它的数字员工） */
   kind: "user" | "agent";
@@ -83,28 +83,30 @@ export interface KnowledgeSubjectInfo {
   notes: string[];
 }
 
-export interface KnowledgeBaseInfo {
+/** 一个可选的知识集：名称、介绍由维护人在知识库里写；datasets 只列权限主体能读的库 */
+export interface KnowledgeSetInfo {
   id: string;
   name: string;
-  description?: string | null;
-  icon?: string | null;
+  description: string;
+  top_k: number;
+  datasets: { id: string; name: string; description?: string | null; document_count: number }[];
 }
 
 export interface KnowledgeListResponse {
-  data: KnowledgeBaseInfo[];
+  data: KnowledgeSetInfo[];
   subject: KnowledgeSubjectInfo;
 }
 
 /**
- * 可绑定的知识库：权限主体能读的。编辑已有的给 agentId，新建的给 authSubject（同 useTools）。
- * ★ 绑定不是授权：以 Agent 为权限时要先把库共享给它的数字员工。
+ * 可选的知识集：权限主体能用的（其中至少有一个库能读）。编辑已有的给 agentId，新建的给 authSubject（同 useTools）。
+ * ★ 选了不是授权：以 Agent 为权限时要先把库共享给它的数字员工。
  */
-export function useKnowledgeBases(ctx: { agentId?: string; authSubject?: "user" | "agent" } = {}) {
+export function useKnowledgeSets(ctx: { agentId?: string; authSubject?: "user" | "agent" } = {}) {
   return useQuery({
-    queryKey: [...qk.knowledgeBases, ctx.agentId ?? "", ctx.agentId ? "" : (ctx.authSubject ?? "")],
+    queryKey: [...qk.knowledgeSets, ctx.agentId ?? "", ctx.agentId ? "" : (ctx.authSubject ?? "")],
     queryFn: () =>
       http.get<KnowledgeListResponse>(
-        "/v1/knowledge-bases",
+        "/v1/knowledge-sets",
         ctx.agentId ? { agent_id: ctx.agentId } : { auth_subject: ctx.authSubject },
       ),
     staleTime: 60_000,

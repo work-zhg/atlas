@@ -5,7 +5,6 @@
  *   以使用者的身份、执行命令 + 读写文件 + 计划 + 提问 + 记忆、知识库「使用者能查阅的全部」、自动执行。
  */
 import type { AgentCreate } from "@/api/types";
-import { ALL_READABLE_SET_NAME } from "@/features/editor/KnowledgeSection";
 import { ASK_USER_TOOL, defaultSpec, type ResolvedSpec } from "@/features/editor/spec-defaults";
 
 export type TemplateId = "blank" | "general" | "coder" | "kbqa" | "data";
@@ -57,19 +56,8 @@ export const TEMPLATES: AgentTemplate[] = [
       ...defaultSpec(model),
       system_prompt: GENERAL_PROMPT,
       tool_names: ["write_todos", ASK_USER_TOOL, "filesystem", "memory", "bash"],
-      // 知识集（知识集方案 §8）：使用者能读的全部，由模型看目录决定查不查
-      knowledge: {
-        sets: [
-          {
-            name: ALL_READABLE_SET_NAME,
-            description: "公司里你能查阅的各类资料",
-            scope: "all_readable",
-            dataset_ids: [],
-            top_k: 4,
-            score_threshold: null,
-          },
-        ],
-      },
+      // 使用者能读的全部知识集：由模型看目录决定查不查（知识集方案 §8）
+      knowledge: { scope: "all_readable", set_ids: [] },
     }),
   },
   {
@@ -95,7 +83,7 @@ export const TEMPLATES: AgentTemplate[] = [
       system_prompt: KBQA_PROMPT,
       tool_names: [ASK_USER_TOOL],
       // 知识集由建设者自己添加（选库、写介绍）；平台不自动检索，提示词要求每个问题先查
-      knowledge: { sets: [] },
+      knowledge: { scope: "selected", set_ids: [] },
     }),
   },
   {

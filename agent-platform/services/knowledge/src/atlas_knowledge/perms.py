@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -76,6 +77,10 @@ class DataPermissions(Protocol):
 
     async def root_dept(self) -> str:
         """根部门 id（「全员可见」= 根部门含下级只读）。"""
+        ...
+
+    async def user_names(self, user_ids: list[str]) -> dict[str, str]:
+        """→ {用户 id: 姓名}（知识集维护人显示用）；查不到的不在结果里。"""
         ...
 
 
@@ -222,6 +227,17 @@ class UCDataPermissions:
     async def root_dept(self) -> str:
         tree = await self._call("GET", "/open/v1/depts/tree")
         return next(str(d["id"]) for d in tree if not d.get("parent_id"))
+
+    async def user_names(self, user_ids: list[str]) -> dict[str, str]:
+        async def one(uid: str) -> tuple[str, str] | None:
+            try:
+                u = await self._call("GET", f"/open/v1/users/{uid}")
+            except NotFound:
+                return None
+            return uid, str(u.get("name") or u.get("account") or uid)
+
+        found = await asyncio.gather(*(one(u) for u in dict.fromkeys(user_ids)))
+        return dict(f for f in found if f)
 
 
 def _unavailable() -> Exception:

@@ -6,11 +6,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { http, knowledgeHttp } from "@/lib/http";
 
-/** 新建时的共享预设（只在新建时用，之后在「共享」里调整） */
-export type Permission = "only_me" | "all_team" | "partial_members";
 /** 库级权限 = 用户中心数据权限（AtlasKnowledgeBase） */
 export type KbLevel = "NONE" | "READ" | "WRITE" | "OWNER";
+/** text_model = 按段落引用；hierarchical_model = 按章节引用（父子分段） */
 export type DocForm = "text_model" | "hierarchical_model";
+/** public = 任何人都能用；private = 按共享（用户中心数据权限） */
+export type Visibility = "public" | "private";
 export type SearchMethod = "semantic_search" | "full_text_search" | "hybrid_search";
 
 export interface RetrievalConfig {
@@ -29,6 +30,9 @@ export interface Dataset {
   name: string;
   description: string;
   icon: string;
+  /** 所属知识集（一个库只属于一个知识集） */
+  set_id: string;
+  visibility: Visibility;
   owner_id: string;
   /** service = 服务账号建的库：只有它自己能用，不能共享 */
   owner_kind: "user" | "service";
@@ -42,8 +46,28 @@ export interface Dataset {
   document_count: number;
   word_count: number;
   created_at: string;
+  updated_at?: string;
   can_write?: boolean;
   can_admin?: boolean;
+}
+
+/** 知识集：同一主题的知识库编成一组，智能体按知识集用知识（doc/design/knowledge-set-design.html） */
+export interface KnowledgeSet {
+  id: string;
+  name: string;
+  /** 给智能体看的介绍：里面有什么、能回答哪类问题 */
+  description: string;
+  icon: string;
+  /** 智能体在这个知识集里一次取几条 */
+  top_k: number;
+  maintainers: { id: string; name: string }[];
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  /** 只算我能读的库 */
+  dataset_count: number;
+  document_count: number;
+  can_manage: boolean;
 }
 
 export interface KbDocument {
@@ -57,6 +81,8 @@ export interface KbDocument {
   archived: boolean;
   available: boolean;
   review_status: "none" | "pending" | "approved" | "rejected";
+  /** false = 已被新版本取代（重新分段、上传新版本）；只在按时间点检索时还能查到 */
+  is_current: boolean;
   word_count: number;
   segment_count: number;
   completed_segments: number;
@@ -189,6 +215,8 @@ interface Page<T> {
 
 const k = {
   meta: ["kb", "meta"] as const,
+  sets: ["kb", "sets"] as const,
+  set: (id: string) => ["kb", "set", id] as const,
   datasets: ["kb", "datasets"] as const,
   dataset: (id: string) => ["kb", "dataset", id] as const,
   documents: (id: string) => ["kb", "documents", id] as const,
@@ -202,10 +230,22 @@ export function useKbMeta() {
   return useQuery({ queryKey: k.meta, queryFn: () => knowledgeHttp.get<Meta>("/v1/meta"), staleTime: 300_000 });
 }
 
-export function useDatasets(keyword?: string) {
+export function useKnowledgeSets() {
   return useQuery({
-    queryKey: [...k.datasets, keyword ?? ""],
-    queryFn: () => knowledgeHttp.get<Page<Dataset>>("/v1/datasets", { limit: 100, keyword }),
+    queryKey: k.sets,
+    queryFn: () => knowledgeHttp.get<{ data: KnowledgeSet[] }>("/v1/knowledge-sets"),
+  });
+}
+
+export function useKnowledgeSet(id: string) {
+  return useQuery({ queryKey: k.set(id), queryFn: () => knowledgeHttp.get<KnowledgeSet>(`/v1/knowledge-sets/${id}`) });
+}
+
+/** 知识集里我能读的库 */
+export function useDatasets(setId: string) {
+  return useQuery({
+    queryKey: [...k.datasets, setId],
+    queryFn: () => knowledgeHttp.get<Page<Dataset>>("/v1/datasets", { limit: 100, set_id: setId }),
   });
 }
 
@@ -332,8 +372,15 @@ export const directory = {
   depts: () => http.get<DirDept[]>("/v1/directory/depts"),
 };
 
+export type SetBody = Partial<Pick<KnowledgeSet, "name" | "description" | "icon" | "top_k">> & {
+  maintainers?: string[];
+};
+
 export const kbApi = {
-  createDataset: (body: Partial<Dataset> & { name: string; permission?: Permission }) =>
+  createSet: (body: SetBody & { name: string }) => knowledgeHttp.post<KnowledgeSet>("/v1/knowledge-sets", body),
+  updateSet: (id: string, body: SetBody) => knowledgeHttp.patch<KnowledgeSet>(`/v1/knowledge-sets/${id}`, body),
+  deleteSet: (id: string) => knowledgeHttp.del<void>(`/v1/knowledge-sets/${id}`),
+  createDataset: (body: Partial<Dataset> & { name: string; set_id: string }) =>
     knowledgeHttp.post<Dataset>("/v1/datasets", body),
   addGrants: (id: string, body: { level: Exclude<KbLevel, "NONE">; subjects: { type: "user" | "dept"; id: string }[]; include_sub: boolean }) =>
     knowledgeHttp.post(`/v1/datasets/${id}/grants`, body),
@@ -356,6 +403,12 @@ export const kbApi = {
     }>("/v1/datasets/indexing-estimate", form),
   upload: (id: string, form: FormData) =>
     knowledgeHttp.post<{ batch: string; documents: KbDocument[] }>(`/v1/datasets/${id}/documents`, form),
+  /** 用新的分段规则重新处理：入库一个新版本，完成后取代旧的（期间旧分段照常能查） */
+  resegment: (ds: string, doc: string, process_rule: unknown) =>
+    knowledgeHttp.post<{ batch: string; documents: KbDocument[] }>(
+      `/v1/datasets/${ds}/documents/${doc}/resegment`,
+      { process_rule },
+    ),
   docAction: (ds: string, doc: string, action: "pause" | "resume" | "retry") =>
     knowledgeHttp.post<KbDocument>(`/v1/datasets/${ds}/documents/${doc}/${action}`),
   docsStatus: (ds: string, action: string, ids: string[]) =>
@@ -382,6 +435,12 @@ export const kbApi = {
       `/v1/datasets/${ds}/hit-testing`,
       { query, retrieval_config },
     ),
+  /** 多库检索：知识集的检索测试（各库用自己的检索方式和门槛，只给取几条） */
+  retrieve: (datasetIds: string[], query: string, topK: number) =>
+    knowledgeHttp.post<{ query: string; records: HitRecord[]; elapsed_ms: number; retrieval_id: string }>(
+      "/v1/retrieve",
+      { dataset_ids: datasetIds, query, retrieval_config: { top_k: topK } },
+    ),
 };
 
 export const STATUS_LABEL: Record<KbDocument["indexing_status"], { label: string; color: string }> = {
@@ -394,10 +453,14 @@ export const STATUS_LABEL: Record<KbDocument["indexing_status"], { label: string
   paused: { label: "已暂停", color: "warning" },
 };
 
-export const PERMISSION_LABEL: Record<Permission, string> = {
-  only_me: "仅自己",
-  all_team: "全部成员只读",
-  partial_members: "部分成员",
+export const VISIBILITY_LABEL: Record<Visibility, string> = {
+  public: "公有",
+  private: "私有",
+};
+
+export const DOC_FORM_LABEL: Record<DocForm, string> = {
+  hierarchical_model: "按章节",
+  text_model: "按段落",
 };
 
 export const LEVEL_LABEL: Record<KbLevel, string> = {

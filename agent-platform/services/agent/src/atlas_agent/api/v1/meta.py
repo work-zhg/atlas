@@ -68,16 +68,16 @@ async def list_tools(
     )
 
 
-@router.get("/knowledge-bases", response_model=KnowledgeListResponse)
-async def list_knowledge_bases(
+@router.get("/knowledge-sets", response_model=KnowledgeListResponse)
+async def list_knowledge_sets(
     service: MetaServiceDep,
     principal: PrincipalDep,
     agents: AgentServiceDep,
     agent_id: UUID | None = None,
     auth_subject: Literal["user", "agent"] | None = None,
 ) -> KnowledgeListResponse:
-    """编辑器里可选的知识库，按这个 Agent 的权限主体列出（参数同 /tools）：
-    以人为权限 = 当前用户能读的；以 Agent 为权限 = 它的数字员工能读的。
-    运行时知识库按同一个主体（X-Auth-Uid）判，读不到的库跳过。
+    """编辑器里可选的知识集，按这个 Agent 的权限主体列出（参数同 /tools）：
+    以人为权限 = 当前用户能用的；以 Agent 为权限 = 它的数字员工能用的。
+    运行时知识库按同一个主体（X-Auth-Uid）判，用不了的知识集跳过。
     """
     return await service.list_knowledge(await _subject(principal, agents, agent_id, auth_subject))

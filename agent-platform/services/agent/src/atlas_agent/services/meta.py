@@ -29,12 +29,13 @@ from atlas_agent.providers.llm.model_platform import (
 
 from ..config import Settings
 from ..errors import CapabilityUnavailable
-from ..providers.knowledge import KnowledgeUnavailable, readable_as
+from ..providers.knowledge import KnowledgeUnavailable, readable_sets_as
 from ..providers.mcp import make_mcp_catalog, mcp_agent_access, review_status, tool_id
 from ..repositories.model_catalog import ModelCatalogRepository
 from ..schemas.meta import (
-    KnowledgeBaseInfo,
+    KnowledgeBaseBrief,
     KnowledgeListResponse,
+    KnowledgeSetInfo,
     KnowledgeSubjectOut,
     McpSubjectOut,
     ModelInfo,
@@ -194,7 +195,7 @@ class MetaService:
         )
 
     async def list_knowledge(self, subject: McpSubject) -> KnowledgeListResponse:
-        """编辑器里可选的知识库：权限主体能读的（与运行时、保存时同一道闸门）。
+        """编辑器里可选的知识集：权限主体能用的（与运行时、保存时同一道闸门）。
 
         ★ 以 Agent 为权限、还没有数字员工（第一次保存之前）：一个都不列，提示保存后请库的
           所有者共享给数字员工（同 MCP）。
@@ -202,27 +203,38 @@ class MetaService:
         out = KnowledgeSubjectOut(kind=subject.kind, uid=subject.uid)
         who = "这个 Agent 的数字员工" if subject.kind == "agent" else "你"
         if subject.uid is None:
-            out.notes.append("保存后请库的所有者把知识库共享给这个 Agent 的数字员工，再回来绑定")
+            out.notes.append(
+                "保存后请库的所有者把知识库共享给这个 Agent 的数字员工，再回来选知识集"
+            )
             return KnowledgeListResponse(data=[], subject=out)
         try:
-            rows = await readable_as(self._settings, subject.uid)
+            rows = await readable_sets_as(self._settings, subject.uid)
         except KnowledgeUnavailable as exc:
             out.notes.append(f"知识库服务暂时不可用：{exc}")
             return KnowledgeListResponse(data=[], subject=out)
         if rows is None:
-            out.notes.append("服务端未接入知识库服务，不能绑定知识库")
+            out.notes.append("服务端未接入知识库服务，不能选知识集")
             return KnowledgeListResponse(data=[], subject=out)
         if not rows:
-            out.notes.append(f"{who}还没有能读的知识库：请库的所有者共享给{who}")
+            out.notes.append(f"{who}还没有能用的知识集：请库的所有者共享给{who}")
         return KnowledgeListResponse(
             data=[
-                KnowledgeBaseInfo(
-                    id=str(d["id"]),
-                    name=str(d.get("name") or ""),
-                    description=d.get("description"),
-                    icon=d.get("icon"),
+                KnowledgeSetInfo(
+                    id=str(r["id"]),
+                    name=str(r.get("name") or ""),
+                    description=str(r.get("description") or ""),
+                    top_k=int(r.get("top_k") or 4),
+                    datasets=[
+                        KnowledgeBaseBrief(
+                            id=str(d["id"]),
+                            name=str(d.get("name") or ""),
+                            description=d.get("description"),
+                            document_count=int(d.get("document_count") or 0),
+                        )
+                        for d in r.get("datasets") or []
+                    ],
                 )
-                for d in rows
+                for r in rows
             ],
             subject=out,
         )

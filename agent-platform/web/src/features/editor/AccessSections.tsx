@@ -128,7 +128,7 @@ export function IdentityPanel({ agentId }: { agentId: string }) {
             <Typography.Text type="secondary">尚未建立（未接入用户中心或待回填）</Typography.Text>
           )}
         </Descriptions.Item>
-        <Descriptions.Item label="所配知识库">
+        <Descriptions.Item label="所选知识集">
           {ident.knowledge.length === 0 ? (
             <Typography.Text type="secondary">没有</Typography.Text>
           ) : (
@@ -136,7 +136,7 @@ export function IdentityPanel({ agentId }: { agentId: string }) {
               {ident.knowledge.map((k) => (
                 <Tag key={k.id} color={k.readable === false ? "error" : k.readable ? "success" : undefined}>
                   {k.name ?? k.id}
-                  {k.readable === false && " · 数字员工读不到"}
+                  {k.readable === false && " · 数字员工用不了"}
                 </Tag>
               ))}
             </Space>
@@ -145,7 +145,7 @@ export function IdentityPanel({ agentId }: { agentId: string }) {
       </Descriptions>
       {ident.auth_subject === "user" && (
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          以人为权限：运行时按每个使用者本人的权限判断，使用者读不到的库会被跳过并提示。
+          以人为权限：运行时按每个使用者本人的权限判断，使用者读不到的库、用不了的知识集会被跳过并提示。
         </Typography.Text>
       )}
     </Space>

@@ -393,7 +393,10 @@ class KnowledgeRetrieval:
                 ).all()
             }
             subject = acl_subject or actor
-            ok = await readable_ids(self._rt.perms, subject, [u for u in wanted if u in rows])
+            public = {u for u, d in rows.items() if d.visibility == "public"}
+            ok = await readable_ids(
+                self._rt.perms, subject, [u for u in wanted if u in rows], public
+            )
             datasets = [rows[u] for u in wanted if u in ok]
             skipped = [str(u) for u in wanted if u not in ok]
             if not datasets or subject is None:

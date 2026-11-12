@@ -54,15 +54,6 @@ __all__ = [
     "transform_ir",
 ]
 
-#: 同 Dify DatasetProcessRule.AUTOMATIC_RULES
-AUTOMATIC_RULES: dict[str, Any] = {
-    "pre_processing_rules": [
-        {"id": "remove_extra_spaces", "enabled": True},
-        {"id": "remove_urls_emails", "enabled": False},
-    ],
-    "segmentation": {"separator": "\n", "max_tokens": 500, "chunk_overlap": 50},
-}
-
 HIERARCHICAL_DEFAULT_RULES: dict[str, Any] = {
     "pre_processing_rules": [
         {"id": "remove_extra_spaces", "enabled": True},
@@ -82,6 +73,17 @@ STRUCTURE_TEXT_DEFAULTS: dict[str, Any] = {
     "max_heading_level": 3,
     "max_length": 800,
     "min_length": 200,
+}
+
+#: 通用分段的「自动」：按文档结构切 —— 有标题（Markdown / Word 标题，或第 X 章 / 第 X 条）按标题和
+#: 条款切，没有标题就按段落打包；短的同级小节合并、超长的在单元边界再切。
+#: ★ 不再用 Dify 的「按换行切、500 字」：那样一行一段，条款被切碎、标题和正文分家
+AUTOMATIC_RULES: dict[str, Any] = {
+    "pre_processing_rules": [
+        {"id": "remove_extra_spaces", "enabled": True},
+        {"id": "remove_urls_emails", "enabled": False},
+    ],
+    "structure": {**STRUCTURE_TEXT_DEFAULTS, "semantic_split": False},
 }
 
 _MIN_LENGTH = 50

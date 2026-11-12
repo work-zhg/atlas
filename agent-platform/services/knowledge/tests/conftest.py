@@ -26,6 +26,7 @@ _ADMIN_URL = "postgresql+asyncpg://atlas:atlas@localhost:5433/atlas"
 TEST_URL = f"postgresql+asyncpg://atlas:atlas@localhost:5433/{TEST_DB}"
 TEST_REDIS = "redis://localhost:6380/12"
 _TABLES = (
+    "kb_knowledge_set",
     "kb_dataset",
     "kb_dataset_permission",
     "kb_process_rule",
@@ -271,6 +272,9 @@ class FakeDataPermissions:
 
     async def root_dept(self) -> str:
         return "root"
+
+    async def user_names(self, user_ids: list[str]) -> dict[str, str]:
+        return {u: f"用户{u}" for u in user_ids}
 
 
 #: 用户中心授权快照的替身：没有免鉴权模式（dev 模式已删），谁都能用、操作码全有

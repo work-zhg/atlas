@@ -127,6 +127,51 @@ def test_chinese_numbering_headings() -> None:
     assert ["第二章 报销标准", "第二条 住宿"] in [s.path for s in secs]
 
 
+LAW = (
+    "# 中华人民共和国劳动合同法\n\n第一章　总则\n\n"
+    "第一条　为了完善劳动合同制度，明确劳动合同双方当事人的权利和义务，保护劳动者的合法权益，"
+    "制定本法。\n\n第二章　劳动合同的订立\n\n"
+    "第十九条【试用期】劳动合同期限三个月以上不满一年的，试用期不得超过一个月。\n"
+    "同一用人单位与同一劳动者只能约定一次试用期。\n\n"
+    "第二十条　适用范围\n\n本条适用于全日制用工。\n"
+)
+
+
+def test_articles_are_headings_with_inline_body() -> None:
+    """条号和正文在同一行：条号（连同条旨）是标题，正文原样留在父块里，款是子块。
+
+    只有一个 # 书名时 Markdown 标题级数不够，中文编号接在它之下。
+    """
+    secs = parse_sections(LAW, 3)
+    assert [s.path[1:] for s in secs] == [
+        ["第一章　总则", "第一条"],
+        ["第二章　劳动合同的订立", "第十九条【试用期】"],
+        # 短、不以句末标点结尾：带条旨的标题，整行是标题
+        ["第二章　劳动合同的订立", "第二十条　适用范围"],
+    ]
+    parents = build_parents(secs, StructureOptions())
+    art = parents[1]
+    assert art.content == (
+        "第十九条【试用期】劳动合同期限三个月以上不满一年的，试用期不得超过一个月。\n"
+        "同一用人单位与同一劳动者只能约定一次试用期。"
+    )
+    kids = child_texts(art, StructureOptions(child_min_length=0))
+    assert [k for k, _ in kids] == [
+        "劳动合同期限三个月以上不满一年的，试用期不得超过一个月。",
+        "同一用人单位与同一劳动者只能约定一次试用期。",
+    ]
+    assert kids[0][1].endswith("第二章　劳动合同的订立 > 第十九条【试用期】")
+
+
+def test_article_reference_in_body_is_not_a_heading() -> None:
+    text = (
+        "第一条 目的\n\n为规范报销制定本制度。\n\n"
+        "第二条 住宿\n\n第一条规定的标准每年调整一次，由财务部发布。\n"
+    )
+    secs = parse_sections(text, 3)
+    assert [s.path for s in secs] == [["第一条 目的"], ["第二条 住宿"]]
+
+
 def test_no_headings_falls_back_to_paragraphs() -> None:
     text = "\n\n".join("段落内容" * 30 for _ in range(10))
     parents, _ = _parents(text, max_length=500)

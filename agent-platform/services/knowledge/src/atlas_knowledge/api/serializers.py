@@ -38,6 +38,9 @@ def dataset_out(
         "name": ds.name,
         "description": ds.description,
         "icon": ds.icon,
+        "set_id": str(ds.set_uuid),
+        # public 任何人可读；private 按用户中心数据权限
+        "visibility": ds.visibility,
         "owner_id": ds.owner_id,
         # service = 服务账号建的库：只有它自己能用，不能共享
         "owner_kind": ds.owner_kind,

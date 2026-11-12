@@ -9,6 +9,7 @@
 ★ 一律按 auth-uid（按谁的权限判，内网身份传递 §6、§8）：人直接操作时就是本人，
   Agent 运行时是它的数字员工（P2）。只剩这一套规则。
 ★ 看不到的库一律 404（不暴露存在性），看得到但不能改的才 403。
+★ 公有的库（kb_dataset.visibility = public）：任何主体至少可读；写、管理照旧按数据权限。
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from __future__ import annotations
 import asyncio
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, false, select, true
+from sqlalchemy import ColumnElement, or_, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth import Principal
@@ -35,14 +36,24 @@ __all__ = [
 ]
 
 
+def _with_public(ds: Dataset, level: str) -> str:
+    """公有的库：任何主体至少可读。"""
+    if ds.visibility == "public" and LEVEL_RANK.get(level, 0) < LEVEL_RANK["READ"]:
+        return "READ"
+    return level
+
+
 async def dataset_level(perms: DataPermissions, ds: Dataset, p: Principal) -> str:
     # 没有登记到用户中心的库（存量服务账号的库，sync-uc 之前）：只有「全部知识库」授权能覆盖它
     # （check 对未登记的返回编码级）
-    return await perms.level(p.auth_uid, str(ds.uuid))
+    return _with_public(ds, await perms.level(p.auth_uid, str(ds.uuid)))
 
 
 async def readable_ids(
-    perms: DataPermissions, subject: str | None, dataset_ids: list[UUID]
+    perms: DataPermissions,
+    subject: str | None,
+    dataset_ids: list[UUID],
+    public: set[UUID] | frozenset[UUID] = frozenset(),
 ) -> set[UUID]:
     """内部调用（智能体运行时、会话 Pod 里的 MCP）：subject 能读（≥ READ）哪些库。
 
@@ -53,6 +64,9 @@ async def readable_ids(
     """
     if not subject or not dataset_ids:
         return set()
+    # 公有的库不用问用户中心（public：调用方查出来的公有库 id）
+    ok = {d for d in dataset_ids if d in public}
+    dataset_ids = [d for d in dataset_ids if d not in public]
 
     async def level(dataset_id: UUID) -> str:
         try:
@@ -61,7 +75,7 @@ async def readable_ids(
             return "NONE"
 
     levels = await asyncio.gather(*(level(d) for d in dataset_ids))
-    return {
+    return ok | {
         d
         for d, lv in zip(dataset_ids, levels, strict=True)
         if LEVEL_RANK.get(lv, 0) >= LEVEL_RANK["READ"]
@@ -77,15 +91,21 @@ class Visibility:
         self._type = type_level
 
     @property
+    def type_level(self) -> str:
+        """「全部知识库」授权的级别（OWNER = 知识库管理员，也能管所有知识集）。"""
+        return self._type
+
+    @property
     def clause(self) -> ColumnElement[bool]:
         if LEVEL_RANK[self._type] >= LEVEL_RANK["READ"]:
             return true()
         readable = [UUID(i) for i in self._levels]
-        return Dataset.uuid.in_(readable) if readable else false()
+        public = Dataset.visibility == "public"
+        return or_(public, Dataset.uuid.in_(readable)) if readable else public
 
     def level(self, ds: Dataset) -> str:
         own = self._levels.get(str(ds.uuid), "NONE")
-        return own if LEVEL_RANK[own] >= LEVEL_RANK[self._type] else self._type
+        return _with_public(ds, own if LEVEL_RANK[own] >= LEVEL_RANK[self._type] else self._type)
 
 
 async def visibility(perms: DataPermissions, p: Principal) -> Visibility:

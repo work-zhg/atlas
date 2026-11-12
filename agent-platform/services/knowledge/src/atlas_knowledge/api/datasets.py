@@ -116,6 +116,9 @@ class DatasetBody(BaseModel):
     name: str | None = None
     description: str | None = None
     icon: str | None = None
+    #: 所属知识集（新建时必须是它的维护人；改 = 移到别的知识集）
+    set_id: UUID | None = None
+    visibility: Literal["public", "private"] | None = None
     permission: str | None = None
     members: list[Any] | None = None
     indexing_technique: str | None = None
@@ -153,9 +156,10 @@ async def list_datasets(
     page: Page = 1,
     limit: Limit = 20,
     keyword: str | None = None,
+    set_id: UUID | None = None,
 ) -> dict[str, Any]:
     svc = DatasetService(session, rt)
-    rows, total = await svc.list(p, page=page, limit=limit, keyword=keyword)
+    rows, total = await svc.list(p, page=page, limit=limit, keyword=keyword, set_uuid=set_id)
     stats = await svc.stats([d.uuid for d in rows])
     vis = svc.last_visibility
     return {
@@ -585,6 +589,27 @@ async def delete_document(
     await svc.delete(access, [await svc.get(access, document_id)])
 
 
+class ResegmentBody(BaseModel):
+    #: {mode, rules}，同上传；不给 = 自动
+    process_rule: dict[str, Any] | None = None
+
+
+@router.post("/datasets/{dataset_id}/documents/{document_id}/resegment", status_code=201)
+async def resegment_document(
+    dataset_id: UUID,
+    document_id: UUID,
+    body: ResegmentBody,
+    session: SessionDep,
+    rt: RuntimeDep,
+    p: PrincipalDep,
+) -> dict[str, Any]:
+    """用新的分段规则重新处理：入库一个新版本，完成后取代旧的（期间旧分段照常能查）。"""
+    access = await DatasetService(session, rt).access(dataset_id, p)
+    svc = DocumentService(session, rt)
+    batch, docs = await svc.resegment(access, await svc.get(access, document_id), body.process_rule)
+    return {"batch": batch, "documents": [document_out(d) for d in docs]}
+
+
 async def _document_action(
     action: str,
     dataset_id: UUID,
@@ -893,7 +918,8 @@ async def list_queries(
 
 
 class RetrieveBody(ScopeBody):
-    dataset_ids: list[UUID] = Field(min_length=1, max_length=20)
+    #: 知识集的检索测试会带上集里全部能读的库（与智能体运行时的上限一致）
+    dataset_ids: list[UUID] = Field(min_length=1, max_length=200)
     query: str
     retrieval_config: dict[str, Any] | None = None
 

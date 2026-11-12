@@ -448,8 +448,10 @@ export interface McpToolSkippedData {
 }
 
 export interface KnowledgeSkippedData {
-  /** 被跳过的知识库 id（权限主体读不到，就不给库名） */
-  dataset_ids: string[];
+  /** 被跳过的知识集 id（权限主体用不了，就不给名称） */
+  set_ids?: string[];
+  /** 知识集归知识库之前的旧事件：被跳过的知识库 id */
+  dataset_ids?: string[];
   /** 权限主体（用户中心 uid） */
   subject: string | null;
   /** 给人看的说明（后端写好） */

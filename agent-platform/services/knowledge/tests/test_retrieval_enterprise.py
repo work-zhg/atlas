@@ -290,6 +290,30 @@ async def test_new_version_supersedes_old(client: Any, rt: Any) -> None:
     assert _docs(await _hit(client, ds["id"], "年假几天", as_of=past)) == {"年假制度-v1.txt"}
 
 
+async def test_resegment_uploads_a_new_version(client: Any, rt: Any) -> None:
+    """重新分段：原文件 + 新规则入库新版本，完成后取代旧的；文档名沿用（可能改过名）。"""
+    ds = await _dataset(client)
+    v1 = await _upload(client, rt, ds["id"], "年假：每年五天。\n病假：每年十天。", "制度.txt")
+    base = f"/v1/datasets/{ds['id']}/documents"
+    await client.patch(f"{base}/{v1['id']}", json={"name": "假期制度"}, headers=ALICE)
+    r = await client.post(
+        f"{base}/{v1['id']}/resegment",
+        json={"process_rule": {"mode": "automatic"}},
+        headers=ALICE,
+    )
+    assert r.status_code == 201, r.text
+    (v2,) = r.json()["documents"]
+    assert v2["name"] == "假期制度"
+    await run_indexing(rt)
+    old = (await client.get(f"{base}/{v1['id']}", headers=ALICE)).json()
+    new = (await client.get(f"{base}/{v2['id']}", headers=ALICE)).json()
+    assert new["indexing_status"] == "completed" and new["is_current"] is True
+    assert old["is_current"] is False and new["version_group"] == old["version_group"]
+    # 读不到这个库的人：404
+    r = await client.post(f"{base}/{v2['id']}/resegment", json={}, headers={"X-Uid": "bob"})
+    assert r.status_code == 404
+
+
 async def test_validity_window(client: Any, rt: Any) -> None:
     ds = await _dataset(client)
     future = (datetime.now(UTC) + timedelta(days=30)).isoformat()

@@ -4,8 +4,10 @@
 
 POST /internal/v1/retrieve            智能体运行时检索（库级、文档级权限都按 X-Auth-Uid；
                                       读不到的库跳过，返回的 skipped 里列出）
-POST /internal/v1/datasets/readable   auth-uid 能读哪些库（名称、介绍、文档数、最近入库时间）：
-                                      绑定时校验、编辑器列可选的库、运行时展开知识集
+POST /internal/v1/datasets/readable   auth-uid 能读哪些库（名称、介绍、文档数、最近入库时间）
+POST /internal/v1/knowledge-sets/readable
+                                      auth-uid 能用哪些知识集、每个里面能读哪些库：
+                                      编辑器列可选的知识集、运行时展开智能体选的知识集
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from ..db.models import Dataset
 from ..services.cards import dataset_cards
 from ..services.permission import visible_clause
 from ..services.retrieval import KnowledgeRetrieval, RetrieveOptions
+from ..services.sets import KnowledgeSetService
 from .deps import PrincipalDep, RuntimeDep, SessionDep
 
 router = APIRouter(prefix="/internal/v1", include_in_schema=False)
@@ -86,3 +89,16 @@ async def readable(
         q = q.where(Dataset.uuid.in_(body.dataset_ids))
     rows = (await session.scalars(q.order_by(Dataset.name))).all()
     return {"data": await dataset_cards(session, rows)}
+
+
+class ReadableSetsBody(BaseModel):
+    #: None = 使用者能读的全部
+    set_ids: list[UUID] | None = Field(default=None, max_length=50)
+
+
+@router.post("/knowledge-sets/readable")
+async def readable_sets(
+    body: ReadableSetsBody, p: PrincipalDep, session: SessionDep, rt: RuntimeDep
+) -> dict[str, Any]:
+    """智能体按知识集用知识：auth-uid 能用的知识集（一个能读的库都没有的不返回）。"""
+    return {"data": await KnowledgeSetService(session, rt).readable(p, body.set_ids)}

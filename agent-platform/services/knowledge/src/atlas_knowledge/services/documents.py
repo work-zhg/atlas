@@ -281,6 +281,34 @@ class DocumentService:
         self._rt.dispatcher.indexing([str(d.uuid) for d in docs])
         return batch, docs
 
+    async def resegment(
+        self, access: DatasetAccess, doc: Document, process_rule: dict[str, Any] | None
+    ) -> tuple[str, list[Document]]:
+        """重新分段：用原文件、新规则入库一个新版本（supersedes）。
+
+        新版本入库完成后才取代旧版本 —— 处理完之前旧的分段照常能查；元数据、权限、生效区间沿用。
+        """
+        access.require_write()
+        if doc.data_source_type != "upload_file":
+            raise Invalid("只有上传的文件可以重新分段")
+        if doc.indexing_status not in ("completed", "error"):
+            raise Conflict("文档还在处理，处理完再重新分段")
+        info = doc.data_source_info
+        data = await asyncio.to_thread(self._rt.storage.get, info["object_key"])
+        batch, docs = await self.upload(
+            access,
+            [UploadFile(info["filename"], data, info.get("mime"))],
+            process_rule=process_rule,
+            attrs={
+                "supersedes": doc.uuid,
+                "valid_from": doc.valid_from.isoformat() if doc.valid_from else None,
+                "valid_to": doc.valid_to.isoformat() if doc.valid_to else None,
+            },
+        )
+        docs[0].name = doc.name
+        await self._s.commit()
+        return batch, docs
+
     # ------------------------------------------------------------------ 状态
 
     async def pause(self, access: DatasetAccess, doc: Document) -> Document:

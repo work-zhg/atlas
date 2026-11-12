@@ -429,85 +429,33 @@ class SubAgentSpec:
     mcp_drift_policy: McpDriftPolicy = "warn"
 
 
-#: 知识集的成员（doc/design/knowledge-set-design.html §2.2）。selected = 指定的 dataset_ids；
-#: all_readable = 这一轮的权限主体能读的全部（每轮按权限展开，去掉已放进其他知识集的库）
+#: 智能体能查哪些知识集（doc/design/knowledge-set-design.html §2）：selected = 选定的几个；
+#: all_readable = 这一轮的权限主体能读的全部（每轮按权限展开）
 KnowledgeScope = Literal["selected", "all_readable"]
 
-#: 一个智能体最多几个知识集；一个知识集最多指定几个库（知识集方案 §2.1）
+#: 一个智能体最多选几个知识集
 MAX_KNOWLEDGE_SETS = 10
-MAX_SET_DATASETS = 20
-
-
-@dataclass(frozen=True)
-class KnowledgeSetSpec:
-    """一个知识集：把几个知识库分成一组，起名字、写介绍（知识集方案 §2）。
-
-    名称和介绍进提示词里的「可查的知识」（第一层）；模型调用 knowledge_list / knowledge_search
-    时填名称（第二层）。各库的检索方式（语义 / 全文 / 混合）用库自己的设置，这里只给一次检索
-    带回几段、门槛（可选，按每个库自己的分数在合并前判断）。
-    """
-
-    name: str
-    description: str = ""
-    dataset_ids: tuple[str, ...] = ()
-    scope: KnowledgeScope = "selected"
-    top_k: int = 4
-    score_threshold: float | None = None
-
-    def retrieval_config(self) -> dict[str, object]:
-        return {
-            "top_k": self.top_k,
-            "score_threshold_enabled": self.score_threshold is not None,
-            "score_threshold": self.score_threshold if self.score_threshold is not None else 0.5,
-        }
 
 
 @dataclass(frozen=True)
 class KnowledgeSpec:
-    """智能体能查的知识：几个知识集。
+    """智能体能查的知识：选定的几个知识集，或使用者能读的全部知识集。
 
-    查不查、查哪里都由模型决定，平台不自动检索（知识集方案 §2.3）。
+    ★ 知识集归知识库服务：名称、介绍、里面有哪些库、一次取几条都由知识集的维护人定，
+      这里只记选了哪些。不能单独选知识库。
+    ★ 查不查、查哪里都由模型决定，平台不自动检索（知识集方案 §2.3）。
     """
 
-    sets: tuple[KnowledgeSetSpec, ...] = ()
+    scope: KnowledgeScope = "selected"
+    set_ids: tuple[str, ...] = ()
 
     @property
     def enabled(self) -> bool:
-        return bool(self.sets)
+        return self.scope == "all_readable" or bool(self.set_ids)
 
     def validate(self) -> None:
-        if len(self.sets) > MAX_KNOWLEDGE_SETS:
-            raise InvalidSpec(f"一个智能体最多 {MAX_KNOWLEDGE_SETS} 个知识集")
-        names: set[str] = set()
-        claimed: set[str] = set()
-        dynamic = 0
-        for s in self.sets:
-            name = s.name.strip()
-            if not name:
-                raise InvalidSpec("知识集要有名称")
-            if name in names:
-                raise InvalidSpec(f"知识集名称重复：{name}")
-            names.add(name)
-            if not 1 <= s.top_k <= 20:
-                raise InvalidSpec("知识集每次引用的段数须在 1 ~ 20 之间", knowledge_set=name)
-            if s.score_threshold is not None and not 0 <= s.score_threshold <= 1:
-                raise InvalidSpec("知识集的门槛须在 0 ~ 1 之间", knowledge_set=name)
-            if s.scope == "all_readable":
-                dynamic += 1
-                continue
-            if not s.dataset_ids:
-                raise InvalidSpec("知识集要指定知识库", knowledge_set=name)
-            if len(s.dataset_ids) > MAX_SET_DATASETS:
-                raise InvalidSpec(
-                    f"一个知识集最多指定 {MAX_SET_DATASETS} 个知识库", knowledge_set=name
-                )
-            # ★ 一个库只放进一个知识集：放进两个，同一段资料会在两组结果里重复，模型也分不清去哪查
-            twice = claimed.intersection(s.dataset_ids)
-            if twice:
-                raise InvalidSpec("同一个知识库只能放进一个知识集", dataset_ids=sorted(twice))
-            claimed.update(s.dataset_ids)
-        if dynamic > 1:
-            raise InvalidSpec("「使用者能读的全部」只能有一个知识集")
+        if self.scope == "selected" and len(self.set_ids) > MAX_KNOWLEDGE_SETS:
+            raise InvalidSpec(f"一个智能体最多选 {MAX_KNOWLEDGE_SETS} 个知识集")
 
 
 @dataclass(frozen=True)

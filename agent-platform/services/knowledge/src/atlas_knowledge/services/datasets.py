@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..auth import Principal
 from ..db.models import (
     PERMISSIONS,
+    VISIBILITIES,
     ChildChunk,
     Dataset,
     DatasetPermission,
@@ -32,6 +33,7 @@ from ..rag.vdb import collection_name
 from ..runtime import Runtime
 from .index_versions import IndexVersionService, initial_version
 from .permission import DatasetAccess, Visibility, load_dataset, visibility
+from .sets import KnowledgeSetService
 
 __all__ = ["DatasetService"]
 
@@ -57,6 +59,13 @@ def _members(raw: Any) -> list[tuple[str, str]]:
 _PRESET_LEVEL = {"read": "READ", "write": "WRITE"}
 
 
+def _uuid(raw: Any, label: str) -> UUID:
+    try:
+        return UUID(str(raw))
+    except ValueError as exc:
+        raise Invalid(f"{label} id 格式错误") from exc
+
+
 class DatasetService:
     def __init__(self, session: AsyncSession, rt: Runtime) -> None:
         self._s = session
@@ -70,11 +79,19 @@ class DatasetService:
     # ------------------------------------------------------------------ 查询
 
     async def list(
-        self, p: Principal, *, page: int = 1, limit: int = 20, keyword: str | None = None
+        self,
+        p: Principal,
+        *,
+        page: int = 1,
+        limit: int = 20,
+        keyword: str | None = None,
+        set_uuid: UUID | None = None,
     ) -> tuple[list[Dataset], int]:
         vis = await visibility(self._rt.perms, p)
         self.last_visibility = vis
         cond = vis.clause
+        if set_uuid is not None:
+            cond = cond & (Dataset.set_uuid == set_uuid)
         q = select(Dataset).where(cond)
         cq = select(func.count()).select_from(Dataset).where(cond)
         if keyword:
@@ -148,6 +165,10 @@ class DatasetService:
         permission = body.get("permission") or "only_me"
         if permission not in PERMISSIONS:
             raise Invalid("可见范围只能是 only_me / all_team / partial_members")
+        # 公有 = 任何人可读（不再给根部门授只读）；旧调用方的「全员可见」就是公有
+        vis = body.get("visibility") or ("public" if permission == "all_team" else "private")
+        if vis not in VISIBILITIES:
+            raise Invalid("可见性只能是 public（公有）或 private（私有）")
         doc_form = body.get("doc_form") or "text_model"
         if doc_form not in ("text_model", "hierarchical_model"):
             raise Invalid("分段结构只能是通用（text_model）或父子（hierarchical_model）")
@@ -155,12 +176,20 @@ class DatasetService:
         model_name = body.get("embedding_model") or self._rt.settings.embedding_model
         model = await asyncio.to_thread(self._rt.registry.embedding, provider, model_name)
         dataset_uuid = uuid4()
+        sets = KnowledgeSetService(self._s, self._rt)
+        if body.get("set_id"):
+            set_uuid = (await sets.manageable(_uuid(body["set_id"], "知识集"), p)).uuid
+        else:
+            # 没指定知识集（旧调用方）：配一个同名、同 id 的
+            set_uuid = (await sets.create(p, {"name": name}, set_uuid=dataset_uuid)).uuid
         ds = Dataset(
             uuid=dataset_uuid,
             name=name[:255],
             description=str(body.get("description") or ""),
             icon=str(body.get("icon") or "📚")[:64],
             owner_id=p.auth_uid,
+            set_uuid=set_uuid,
+            visibility=vis,
             permission=permission,
             indexing_technique=technique,
             embedding_provider=provider,
@@ -189,9 +218,7 @@ class DatasetService:
 
     async def _preset(self, owner: str, permission: str, body: dict[str, Any]) -> list[Grant]:
         grants = [Grant("OWNER", "user", owner)]
-        if permission == "all_team":
-            grants.append(Grant("READ", "dept", await self._rt.perms.root_dept(), True))
-        elif permission == "partial_members":
+        if permission == "partial_members":
             grants += [
                 Grant(_PRESET_LEVEL[level], "user", pid)
                 for pid, level in _members(body.get("members"))
@@ -238,6 +265,18 @@ class DatasetService:
             if body["doc_form"] not in ("text_model", "hierarchical_model"):
                 raise Invalid("分段结构只能是 text_model 或 hierarchical_model")
             ds.doc_form = body["doc_form"]
+        if "visibility" in body and body["visibility"] != ds.visibility:
+            access.require_admin()
+            if body["visibility"] not in VISIBILITIES:
+                raise Invalid("可见性只能是 public（公有）或 private（私有）")
+            ds.visibility = body["visibility"]
+        if "set_id" in body and _uuid(body["set_id"], "知识集") != ds.set_uuid:
+            # 移到别的知识集：库的 Owner，且是目标知识集的维护人
+            access.require_admin()
+            target = await KnowledgeSetService(self._s, self._rt).manageable(
+                _uuid(body["set_id"], "知识集"), access.p, doing="往里面移知识库"
+            )
+            ds.set_uuid = target.uuid
         if "permission" in body or "members" in body:
             raise Invalid("可见范围改在「共享」里设置（/v1/datasets/{id}/grants）")
         await self._s.flush()

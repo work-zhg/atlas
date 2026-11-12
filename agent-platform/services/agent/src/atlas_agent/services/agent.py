@@ -29,7 +29,7 @@ from ..errors import (
     NotFound,
     SlugTaken,
 )
-from ..providers.knowledge import KnowledgeUnavailable, readable_as
+from ..providers.knowledge import KnowledgeUnavailable, readable_sets_as
 from ..providers.llm.model_platform import (
     ModelPlatformUnavailable,
     agent_key,
@@ -391,7 +391,7 @@ class AgentService:
         return AgentDetailOut(**_summarize(agent, version).model_dump(), spec=version.spec)
 
     async def identity(self, agent_id: UUID) -> AgentIdentityOut:
-        """「身份」页签：数字员工、权限类型；以 Agent 为权限时列出所配知识库数字员工能不能读。"""
+        """「身份」页签：数字员工、权限类型；以 Agent 为权限时列出所选知识集数字员工能不能用。"""
         agent, version = await self._require(agent_id)
         out = AgentIdentityOut(auth_subject=agent.auth_subject)  # type: ignore[arg-type]
         if agent.digital_employee_uid is not None:
@@ -407,32 +407,33 @@ class AgentService:
             out.digital_employee = DigitalEmployeeOut(**de)
         elif agent.acts_as_itself:
             out.notices.append("还没有数字员工：依赖授权的工具都不可用，请联系管理员回填")
-        dataset_ids = AgentSpecIn.model_validate(version.spec).knowledge.bound_dataset_ids()
-        out.knowledge = [KnowledgeAccessOut(id=d) for d in dataset_ids]
-        if agent.acts_as_itself and agent.digital_employee_uid is not None and dataset_ids:
+        set_ids = AgentSpecIn.model_validate(version.spec).knowledge.selected_set_ids()
+        out.knowledge = [KnowledgeAccessOut(id=d) for d in set_ids]
+        if agent.acts_as_itself and agent.digital_employee_uid is not None and set_ids:
             try:
-                readable = await self._readable_as(agent.digital_employee_uid, dataset_ids)
+                readable = await self._readable_sets_as(agent.digital_employee_uid, set_ids)
             except KnowledgeUnavailable:
                 readable = None
             if readable is not None:
                 names = {d["id"]: d.get("name") for d in readable}
                 out.knowledge = [
                     KnowledgeAccessOut(id=d, name=names.get(d), readable=d in names)
-                    for d in dataset_ids
+                    for d in set_ids
                 ]
                 if any(k.readable is False for k in out.knowledge):
                     out.notices.append(
-                        "数字员工读不到部分知识库：运行时这些库不可用，请库的所有者共享给它"
+                        "数字员工用不了部分知识集（里面没有它能读的库，或已删除）："
+                        "运行时这些知识集不可用，请库的所有者共享给它"
                     )
         return out
 
-    async def _readable_as(
-        self, auth_uid: UUID, dataset_ids: builtins.list[str]
+    async def _readable_sets_as(
+        self, auth_uid: UUID, set_ids: builtins.list[str]
     ) -> builtins.list[dict] | None:
-        """权限主体能读哪些库。没接知识库 → None；知识库不可用抛 KnowledgeUnavailable。"""
+        """权限主体能用哪些知识集。没接知识库 → None；知识库不可用抛 KnowledgeUnavailable。"""
         if self._settings is None:
             return None
-        return await readable_as(self._settings, auth_uid, dataset_ids)
+        return await readable_sets_as(self._settings, auth_uid, set_ids)
 
     # ------------------------------------------------------------------ 共享（AtlasAgent）
 
@@ -514,38 +515,39 @@ class AgentService:
     async def _check_knowledge(
         self, spec: AgentSpecIn, *, previous: AgentSpecIn | None, subject: UUID | None
     ) -> None:
-        """新绑定的知识库，权限主体必须能读（同 MCP，MCP 方案设计 §5.4）。
+        """新选的知识集，权限主体必须用得了 —— 其中至少有一个库能读（同 MCP，MCP 方案设计 §5.4）。
 
-        ★ 绑定不是授权：运行时知识库按这一轮的 X-Auth-Uid 再判一次，读不到的库跳过并提示。
-          这里先挡住「绑了也用不了」的库。
-        ★ 只查**新增**的：沿用旧版本已绑定的库不重新判 —— 授权被收回以后，连改提示词都
-          保存不了就太过了；运行时会跳过并提示。
+        ★ 选了不是授权：运行时知识库按这一轮的 X-Auth-Uid 再判一次，用不了的知识集跳过并提示。
+          这里先挡住「选了也用不了」的知识集。
+        ★ 只查**新增**的：沿用旧版本已选的不重新判 —— 授权被收回以后，连改提示词都
+          保存不了就太过了；运行时会跳过并提示。「使用者能读的全部」不用查。
         ★ 主体：以人为权限 = 保存的人；以 Agent 为权限 = 它的数字员工（subject=None：
-          还没有数字员工，新绑定一律拒绝）。
+          还没有数字员工，新选的一律拒绝）。
         """
         if self._settings is None:
             return
-        before = set(previous.knowledge.bound_dataset_ids()) if previous else set()
-        added = [d for d in spec.knowledge.bound_dataset_ids() if d not in before]
+        before = set(previous.knowledge.selected_set_ids()) if previous else set()
+        added = [d for d in spec.knowledge.selected_set_ids() if d not in before]
         if not added:
             return
         if subject is None:
             raise InvalidReference(
-                "以 Agent 为权限的 Agent 要先保存（建出数字员工），把知识库共享给数字员工后再绑定",
-                dataset_ids=",".join(added),
+                "以 Agent 为权限的 Agent 要先保存（建出数字员工），"
+                "把知识库共享给数字员工后再选知识集",
+                set_ids=",".join(added),
             )
         try:
-            readable = await self._readable_as(subject, added)
+            readable = await self._readable_sets_as(subject, added)
         except KnowledgeUnavailable as exc:
             raise DependencyUnavailable(str(exc)) from exc
         if readable is None:
-            raise InvalidReference("服务端未接入知识库服务，不能绑定知识库")
+            raise InvalidReference("服务端未接入知识库服务，不能选知识集")
         ok = {d["id"] for d in readable}
         missing = [d for d in added if d not in ok]
         if missing:
             raise InvalidReference(
-                "权限主体读不到这些知识库（不存在或没有读取权限），请库的所有者共享后再绑定",
-                dataset_ids=",".join(missing),
+                "权限主体用不了这些知识集（不存在，或里面没有能读的知识库），请库的所有者共享后再选",
+                set_ids=",".join(missing),
             )
 
     async def _check_mcp(

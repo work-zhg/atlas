@@ -56,21 +56,10 @@ export const PLATFORMS: Platform[] = [
     id: "kb",
     label: "知识库",
     icon: "book",
-    visible: (a) => can(a.me, "kb:create", "kb:review", "agent:create"),
+    // 任何人都能建知识集、查阅公有的知识库
+    visible: () => true,
     items: [
-      {
-        href: "/knowledge",
-        icon: "book",
-        label: "知识库",
-        match: (p) => under("/knowledge")(p) && !under("/knowledge/review")(p),
-      },
-      {
-        href: "/knowledge/review",
-        icon: "check",
-        label: "待审核",
-        match: under("/knowledge/review"),
-        visible: (a) => can(a.me, "kb:review"),
-      },
+      { href: "/knowledge", icon: "book", label: "知识集", match: under("/knowledge") },
     ],
   },
   {

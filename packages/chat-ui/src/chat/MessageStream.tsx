@@ -191,13 +191,17 @@ function NoticeRow({ notice }: { notice: Notice }) {
     );
   }
   if (notice.type === "knowledge.skipped") {
+    // 旧事件（知识集归知识库之前）跳过的是库
+    const [what, skipped] = notice.data.set_ids
+      ? ["知识集", notice.data.set_ids]
+      : ["知识库", notice.data.dataset_ids ?? []];
     return (
       <div className={styles.modeBadge}>
         <Icon name="book" size={13} />
-        {/* 没有库 id = 整个知识库这一轮没用上（服务不可用），不是跳过了某几个库 */}
-        {notice.data.dataset_ids.length > 0 && (
+        {/* 没有 id = 整个知识库这一轮没用上（服务不可用），不是跳过了某几个 */}
+        {skipped.length > 0 && (
           <>
-            知识库 <Tag color="warning" style={{ marginInlineEnd: 0 }}>跳过 {notice.data.dataset_ids.length} 个</Tag>
+            {what} <Tag color="warning" style={{ marginInlineEnd: 0 }}>跳过 {skipped.length} 个</Tag>
           </>
         )}
         <span className={styles.modeHint}>{notice.data.message}</span>

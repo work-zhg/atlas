@@ -16,7 +16,7 @@ from ..runtime import Runtime, build_runtime
 from ..settings import get_settings
 from ..storage import StorageNotConfigured
 from ..telemetry import setup_telemetry, shutdown_telemetry, trace_requests
-from . import datasets, internal
+from . import datasets, internal, sets
 from .jobs import jobs_router
 from .mcp import build_mcp, mcp_app
 
@@ -84,6 +84,7 @@ def create_app(*, runtime: Runtime | None = None, cors_origins: list[str] | None
 
     app.include_router(internal.router)
     app.include_router(datasets.router)
+    app.include_router(sets.router)
     app.include_router(jobs_router(jobs))
     # Pod 里的 ACP CLI 经它调 knowledge_search（令牌鉴权，见 api/mcp.py）
     app.mount("/mcp", mcp_app(mcp))

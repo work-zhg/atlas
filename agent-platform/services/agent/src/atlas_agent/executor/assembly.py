@@ -248,7 +248,8 @@ class CapabilityAssembly:
         展开的结果交给后面两处：提示词里的知识集目录（第一层）、knowledge_list / knowledge_search
         两个工具（第二层，工具面）。★ 不做自动检索：查不查、查哪里由模型决定（§2.3）。
         ★ 续跑段（resume）也要展开：工具要照常能用。
-        ★ 读不到的库、知识库服务不可用，经 notices 告诉用户（knowledge.skipped），这一轮照常进行。
+        ★ 用不了的知识集、知识库服务不可用，经 notices 告诉用户（knowledge.skipped），
+          这一轮照常进行。
         """
         resolution = await resolve_knowledge(self._settings, segment.spec.knowledge)
         if notices is not None:

@@ -14,6 +14,9 @@
 
 ★ 一个标题都识别不出来时，整篇是一个无标题小节，③ 会按单元边界打包 —— 自然退回按段落切。
 ★ 标题层级按文档里实际出现的级别排名：只用了 ## 和 ### 的文档，它们就是第 1、2 级。
+★ 中文编号（第 X 章 / 第 X 条 / 一、……）：没有 Markdown（或 Word）标题时全靠它；有但级数不够
+  （如只有一个 # 书名）时接在最深一级之下。「第三条　职工……」这样条号和正文在同一行的，
+  条号（连同【条旨】）是标题，同一行后面是这一条的第一段正文。
 ★ --- 这类分隔线是装饰，不作为单元。
 
 DocIR 入口（sections_from_blocks，doc/knowledge-enterprise-design.html §4.1 / §5.2）：
@@ -24,7 +27,7 @@ DocIR 入口（sections_from_blocks，doc/knowledge-enterprise-design.html §4.1
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Container
 from dataclasses import dataclass, field
 
 from .splitter import FixedRecursiveCharacterTextSplitter
@@ -75,6 +78,10 @@ _CN_FAMILIES: list[list[re.Pattern[str]]] = [
 ]
 _CN_HEADING_MAX_LEN = 50
 _SENTENCE_END = tuple("。；;，,：:！!？?")
+#: 中文编号接在已有标题之下时的级别基数（Markdown / Word 标题是 1 ~ 6 级）
+_CN_BASE = 10
+#: 条号和正文在同一行：「第三条　职工……」「第三条【试用期】劳动合同……」
+_ARTICLE = re.compile(rf"^(第[{_CN_NUM}]+条)(?=[\s【\[]|$)(\s*[【\[][^】\]\n]{{1,30}}[】\]])?\s*")
 
 
 #: 文本 → 向量（语义分段用；与知识库的向量模型同一个）
@@ -118,6 +125,8 @@ class Unit:
     asset: str | None = None
     #: 原子块分组（同一张表的单元同组）：整组放得进父块时不拆开
     group: str | None = None
+    #: 和小节标题在同一行（「第三条　」后面的正文）：拼回正文时直接接在标题后面
+    inline: bool = False
 
 
 @dataclass
@@ -178,8 +187,35 @@ def _strip_md(title: str) -> str:
     return title.strip()
 
 
-def _detect_cn_levels(lines: list[str]) -> dict[int, int]:
-    """没有 Markdown 标题时，按中文编号规则组识别标题：行号 → 规则组内的层级（0 起）。"""
+def _short_heading(line: str) -> bool:
+    return len(line) <= _CN_HEADING_MAX_LEN and not line.endswith(_SENTENCE_END)
+
+
+def _split_article(line: str) -> tuple[str, str, str] | None:
+    """条号和正文在同一行 → (路径里的标题, 标题部分原文, 正文)；不是这样的行返回 None。
+
+    ★ 短、不以句末标点结尾的（「第三条　适用范围」）是带条旨的标题，整行是标题，不拆。
+    """
+    m = _ARTICLE.match(line)
+    if not m or m.end() >= len(line) or _short_heading(line):
+        return None
+    return m.group(1) + (m.group(2) or "").strip(), line[: m.end()], line[m.end() :]
+
+
+def _block_article(text: str) -> tuple[str, str, str] | None:
+    """DocIR 段落块：首行是条号和正文在同一行的条款时，后面几行（款、项）也是正文。"""
+    first, nl, rest = text.partition("\n")
+    art = _split_article(first)
+    return (art[0], art[1], art[2] + nl + rest) if art else None
+
+
+def _cn_title(line: str) -> str:
+    art = _split_article(line)
+    return art[0] if art else _strip_md(line)
+
+
+def _detect_cn_levels(lines: list[str], skip: Container[int] = ()) -> dict[int, int]:
+    """按中文编号规则组识别标题：行号 → 规则组内的层级（0 起）。skip：已经是标题的行。"""
     best: dict[int, int] = {}
     in_code = False
     candidates: list[tuple[int, str]] = []
@@ -188,13 +224,10 @@ def _detect_cn_levels(lines: list[str]) -> dict[int, int]:
             in_code = not in_code
             continue
         line = raw.strip()
-        if (
-            in_code
-            or not line
-            or len(line) > _CN_HEADING_MAX_LEN
-            or line.endswith(_SENTENCE_END)
-            or line.startswith("|")
-        ):
+        if in_code or not line or i in skip or line.startswith("|"):
+            continue
+        # 短、不以句末标点结尾的行才可能是标题；条号和正文在同一行的条款除外
+        if not _short_heading(line) and not _split_article(line):
             continue
         candidates.append((i, line))
     for family in _CN_FAMILIES:
@@ -219,21 +252,23 @@ def _heading_ranks(levels: dict[int, int]) -> dict[int, int]:
 def parse_sections(text: str, max_heading_level: int = 3) -> list[Section]:
     lines = text.split("\n")
 
-    # 标题：先找 Markdown 标题（代码块里的不算）；一个都没有再试中文编号
-    md_levels: dict[int, int] = {}
+    # 标题：Markdown 标题（代码块里的不算）；级数不够切到 max_heading_level 时再试中文编号
+    levels: dict[int, int] = {}
+    titles: dict[int, str] = {}
     in_code = False
     for i, raw in enumerate(lines):
         if _FENCE.match(raw):
             in_code = not in_code
             continue
         if not in_code and (m := _MD_HEADING.match(raw)):
-            md_levels[i] = len(m.group(1))
-    if md_levels:
-        ranks = _heading_ranks(md_levels)
-        titles = {i: _strip_md(_MD_HEADING.match(lines[i]).group(2)) for i in ranks}  # type: ignore[union-attr]
-    else:
-        ranks = _heading_ranks(_detect_cn_levels(lines))
-        titles = {i: _strip_md(lines[i].strip()) for i in ranks}
+            levels[i] = len(m.group(1))
+            titles[i] = _strip_md(m.group(2))
+    md = set(levels)
+    if len(set(levels.values())) < max_heading_level:
+        for i, lv in _detect_cn_levels(lines, skip=md).items():
+            levels[i] = _CN_BASE + lv
+            titles[i] = _cn_title(lines[i].strip())
+    ranks = _heading_ranks(levels)
 
     sections: list[Section] = []
     stack: list[tuple[int, str]] = []
@@ -278,8 +313,13 @@ def parse_sections(text: str, max_heading_level: int = 3) -> list[Section]:
                 while stack and stack[-1][0] >= rank:
                     stack.pop()
                 stack.append((rank, titles[i]))
-                current = Section(path=[t for _, t in stack], heading=line.strip())
+                art = None if i in md else _split_article(line.strip())
+                current = Section(
+                    path=[t for _, t in stack], heading=art[1] if art else line.strip()
+                )
                 sections.append(current)
+                if art:
+                    current.units.append(Unit("paragraph", art[2], inline=True))
             else:
                 current.units.append(Unit("heading", line.strip(), gap))
             gap = False
@@ -338,7 +378,7 @@ def _join_units(units: list[Unit], heading: str | None = None) -> str:
         parts.append(heading)
     for u in units:
         if parts:
-            parts.append("\n\n" if u.gap else "\n")
+            parts.append("" if u.inline else "\n\n" if u.gap else "\n")
         parts.append(u.text)
     return "".join(parts).strip()
 
@@ -525,14 +565,17 @@ def sections_from_blocks(blocks: list, max_heading_level: int = 3) -> list[Secti
     from .docir import image_text, table_markdown
 
     levels: dict[int, int] = {i: b.level or 1 for i, b in enumerate(blocks) if b.type == "heading"}
-    if not levels:
+    if len(set(levels.values())) < max_heading_level:
+        # 单行的段落；多行的只看条号和正文在同一行的条款（首行）
         cand = {
-            i: b.text.strip()
+            i: b.text.strip().partition("\n")[0]
             for i, b in enumerate(blocks)
-            if b.type == "paragraph" and "\n" not in b.text.strip()
+            if b.type == "paragraph"
+            and ("\n" not in b.text.strip() or _block_article(b.text.strip()))
         }
         idx = list(cand)
-        levels = {idx[k]: lv for k, lv in _detect_cn_levels([cand[i] for i in idx]).items()}
+        found = _detect_cn_levels([cand[i] for i in idx])
+        levels.update({idx[k]: _CN_BASE + lv for k, lv in found.items()})
     ranks = _heading_ranks(levels)
 
     sections: list[Section] = []
@@ -552,13 +595,22 @@ def sections_from_blocks(blocks: list, max_heading_level: int = 3) -> list[Secti
                     current = sec
             continue
         if i in ranks:
-            title = _strip_md(b.text.strip())
+            art = _block_article(b.text.strip()) if b.type == "paragraph" else None
+            title = art[0] if art else _strip_md(b.text.strip())
             if ranks[i] <= max_heading_level:
                 while stack and stack[-1][0] >= ranks[i]:
                     stack.pop()
                 stack.append((ranks[i], title))
-                current = Section(path=[t for _, t in stack], heading=title)
+                current = Section(path=[t for _, t in stack], heading=art[1] if art else title)
                 sections.append(current)
+                if art:
+                    current.units.append(
+                        Unit("paragraph", art[2], page=b.page, bbox=b.bbox, inline=True)
+                    )
+            elif art:
+                current.units.append(
+                    Unit("paragraph", b.text.strip(), True, page=b.page, bbox=b.bbox)
+                )
             else:
                 current.units.append(Unit("heading", title, True, page=b.page, bbox=b.bbox))
             continue

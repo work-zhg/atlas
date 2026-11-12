@@ -14,12 +14,10 @@ from uuid import UUID
 from atlas_engine.contracts import APPROVAL_MODES, ApprovalMode, InvalidSpec
 from atlas_engine.contracts.spec import (
     MAX_KNOWLEDGE_SETS,
-    MAX_SET_DATASETS,
     AgentSpec,
     ApprovalSpec,
     CliSpec,
     CompactionSpec,
-    KnowledgeSetSpec,
     KnowledgeSpec,
     LimitSpec,
     McpDriftPolicy,
@@ -202,90 +200,49 @@ class SandboxSpecIn(BaseModel):
         return SandboxSpec(image=self.image.strip(), profile=self.profile)
 
 
-#: 知识集之前的配置推导出来的知识集叫什么（知识集方案 §9）
-LEGACY_SET_NAME = "知识库"
-ALL_READABLE_SET_NAME = "我能查阅的资料"
-
-
-class KnowledgeSetIn(BaseModel):
-    """一个知识集（doc/design/knowledge-set-design.html §2）。"""
-
-    name: str = Field(min_length=1, max_length=40)
-    #: 给模型看的介绍，进提示词里的「可查的知识」。编辑页要求必填；接口不强制 ——
-    #: 知识集之前的配置推导出来的知识集没有介绍，目录里退回列库名
-    description: str = Field(default="", max_length=200)
-    dataset_ids: list[str] = Field(default_factory=list, max_length=MAX_SET_DATASETS)
-    #: all_readable = 使用者能读的全部（每轮按权限展开；dataset_ids 不用）
-    scope: Literal["selected", "all_readable"] = "selected"
-    top_k: int = Field(default=4, ge=1, le=20)
-    score_threshold: float | None = Field(default=None, ge=0, le=1)
-
-    def to_engine(self) -> KnowledgeSetSpec:
-        return KnowledgeSetSpec(
-            name=self.name.strip(),
-            description=self.description.strip(),
-            dataset_ids=tuple(dict.fromkeys(self.dataset_ids)) if self.scope == "selected" else (),
-            scope=self.scope,
-            top_k=self.top_k,
-            score_threshold=self.score_threshold,
-        )
-
-
 class KnowledgeSpecIn(BaseModel):
-    """智能体能查的知识：几个知识集。
+    """智能体能查的知识：选定的几个知识集（set_ids），或使用者能读的全部知识集。
 
-    ★ 快照纪律：知识集之前的快照是 {dataset_ids, mode, scope, top_k, score_threshold, rerank}。
-      这些旧字段只读入、不写出（exclude）：sets 为空时据此推导出一个知识集（知识集方案 §9），
-      新保存的版本只有 sets。mode=auto（每次都先查）不再有：一律由模型看目录决定查不查。
+    ★ 知识集归知识库服务（名称、介绍、里面的库由维护人定），这里只记选了哪些。
+    ★ 快照纪律：旧快照有两种 ——
+      · 知识集之前：{dataset_ids, mode, scope, top_k, score_threshold, rerank}
+      · 知识集在智能体里定义时：{sets: [{name, description, dataset_ids, scope, …}]}
+      旧字段只读入、不写出（exclude）。知识库迁移 k0008 给每个库建了一个**同 id** 的知识集，
+      所以旧的库 id 原样就是知识集 id；旧配置里有「使用者能读的全部」的，读成全部知识集。
     """
 
-    sets: list[KnowledgeSetIn] = Field(default_factory=list, max_length=MAX_KNOWLEDGE_SETS)
+    scope: Literal["selected", "all_readable"] = "selected"
+    set_ids: list[str] = Field(default_factory=list, max_length=MAX_KNOWLEDGE_SETS)
     # ── 旧字段：不进接口文档（SkipJsonSchema），也不写出（exclude）
-    dataset_ids: SkipJsonSchema[list[str]] = Field(
-        default_factory=list, max_length=10, exclude=True
-    )
-    mode: SkipJsonSchema[Literal["auto", "tool"]] = Field(default="auto", exclude=True)
-    scope: SkipJsonSchema[Literal["selected", "all_readable"]] = Field(
-        default="selected", exclude=True
-    )
-    top_k: SkipJsonSchema[int] = Field(default=4, ge=1, le=20, exclude=True)
-    score_threshold: SkipJsonSchema[float | None] = Field(default=None, ge=0, le=1, exclude=True)
+    sets: SkipJsonSchema[list[dict[str, Any]]] = Field(default_factory=list, exclude=True)
+    dataset_ids: SkipJsonSchema[list[str]] = Field(default_factory=list, exclude=True)
+    mode: SkipJsonSchema[str] = Field(default="tool", exclude=True)
+    top_k: SkipJsonSchema[int] = Field(default=4, exclude=True)
+    score_threshold: SkipJsonSchema[float | None] = Field(default=None, exclude=True)
     rerank: SkipJsonSchema[bool] = Field(default=False, exclude=True)
 
     @model_validator(mode="after")
     def _from_legacy(self) -> KnowledgeSpecIn:
-        if self.sets:
-            return self
         if self.scope == "all_readable":
-            self.sets = [
-                KnowledgeSetIn(
-                    name=ALL_READABLE_SET_NAME,
-                    scope="all_readable",
-                    top_k=self.top_k,
-                    score_threshold=self.score_threshold,
-                )
-            ]
-        elif self.dataset_ids:
-            self.sets = [
-                KnowledgeSetIn(
-                    name=LEGACY_SET_NAME,
-                    dataset_ids=list(dict.fromkeys(self.dataset_ids)),
-                    top_k=self.top_k,
-                    score_threshold=self.score_threshold,
-                )
-            ]
+            self.set_ids = []
+            return self
+        if self.set_ids:
+            self.set_ids = list(dict.fromkeys(self.set_ids))
+            return self
+        if any(s.get("scope") == "all_readable" for s in self.sets):
+            self.scope = "all_readable"
+            return self
+        legacy = [*self.dataset_ids, *(d for s in self.sets for d in s.get("dataset_ids") or [])]
+        # 旧配置最多 10 个知识集 × 20 个库：超出新上限的截掉（编辑器会提示重新选）
+        self.set_ids = list(dict.fromkeys(str(d) for d in legacy))[:MAX_KNOWLEDGE_SETS]
         return self
 
-    def bound_dataset_ids(self) -> list[str]:
-        """所有指定的库（不含「使用者能读的全部」）：保存时校验、身份页签用。"""
-        return list(
-            dict.fromkeys(
-                d for s in self.sets if s.scope == "selected" for d in s.dataset_ids
-            )
-        )
+    def selected_set_ids(self) -> list[str]:
+        """选定的知识集（「使用者能读的全部」为空）：保存时校验、身份页签用。"""
+        return self.set_ids if self.scope == "selected" else []
 
     def to_engine(self) -> KnowledgeSpec:
-        return KnowledgeSpec(sets=tuple(s.to_engine() for s in self.sets))
+        return KnowledgeSpec(scope=self.scope, set_ids=tuple(self.selected_set_ids()))
 
 
 class AgentSpecIn(BaseModel):
@@ -387,9 +344,12 @@ class DigitalEmployeeOut(BaseModel):
 
 
 class KnowledgeAccessOut(BaseModel):
+    """选定的一个知识集。"""
+
     id: str
     name: str | None = None
-    #: 按这个 Agent 的权限类型判：以 Agent 为权限 = 数字员工能不能读；以人为权限 = 不适用（None）
+    #: 按这个 Agent 的权限类型判：以 Agent 为权限 = 数字员工能不能用（其中至少有一个库能读）；
+    #: 以人为权限 = 不适用（None）
     readable: bool | None = None
 
 
@@ -398,7 +358,7 @@ class AgentIdentityOut(BaseModel):
 
     auth_subject: AuthSubject
     digital_employee: DigitalEmployeeOut | None = None
-    #: Agent 配了哪些知识库、按权限类型能不能读（以人为权限时因人而异，readable 为空）
+    #: Agent 选了哪些知识集、按权限类型能不能用（以人为权限时因人而异，readable 为空）
     knowledge: list[KnowledgeAccessOut] = []
     notices: list[str] = []
 

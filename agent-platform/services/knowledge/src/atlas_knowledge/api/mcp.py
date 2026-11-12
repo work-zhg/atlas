@@ -3,9 +3,10 @@ knowledge_search（知识集方案 §3.2、§3.4；知识集目录由 atlas-serv
 
 鉴权：请求头 X-Knowledge-Token（旧名 X-Atlas-Knowledge-Token 过渡一个版本），由 atlas-server
 在打开 ACP 会话时签发：
-    base64url({"s": [{"n": 知识集名称, "d": [库 id], "k": top_k, "h": 门槛}],
+    base64url({"s": [{"n": 知识集名称, "d": [库 id], "k": top_k}],
                "t": 会话 id, "u": auth-uid, "o": 发起人})
     + "." + HMAC-SHA256(mcp_secret)
+门槛用各库自己的设置；知识集在智能体里定义时签发的令牌带 "h": 门槛，照旧生效。
 旧令牌只有 "d": [库 id]（知识集之前签发的，会话还开着）：当作一个没有名称的知识集。
 查哪些库看令牌里的知识集 —— 与原生工具一样，库 id 不进工具参数，模型只能填知识集和库的名称；
 库级、文档级权限都按 u（按谁判），u 读不到的库不列出、检索时跳过并在结果里说明。
@@ -206,13 +207,12 @@ def build_mcp(runtime_of: Any) -> MCPServer:
     async def readable_cards(session: Any, rt: Runtime, claims: dict, ids: list[str]) -> list[dict]:
         """知识集里 u 能读的库，按名称排序。"""
         wanted = [UUID(d) for d in dict.fromkeys(ids)]
-        ok = await readable_ids(rt.perms, claims.get("u"), wanted)
-        rows = (
-            await session.scalars(
-                select(Dataset).where(Dataset.uuid.in_([u for u in wanted if u in ok]))
-            )
-        ).all()
-        return await dataset_cards(session, sorted(rows, key=lambda d: d.name))
+        rows = (await session.scalars(select(Dataset).where(Dataset.uuid.in_(wanted)))).all()
+        public = {d.uuid for d in rows if d.visibility == "public"}
+        ok = await readable_ids(rt.perms, claims.get("u"), [d.uuid for d in rows], public)
+        return await dataset_cards(
+            session, sorted((d for d in rows if d.uuid in ok), key=lambda d: d.name)
+        )
 
     @mcp.tool(
         name="knowledge_list",

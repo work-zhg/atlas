@@ -193,9 +193,9 @@ async def test_dataset_enhancements_end_to_end(client: Any, rt: Any) -> None:
     )
     assert r.status_code == 200, r.text
     (rec,) = r.json()["records"]
-    # 汇总问题由摘要入口命中，回到挂摘要的分段（自动分段一行一段：并列取表格的第一行）
+    # 汇总问题由摘要入口命中，回到挂摘要的分段（自动分段按标题切：整张表和标题在同一段）
     assert [(c["kind"], c["content"]) for c in rec["child_chunks"]] == [("summary", SUMMARY)]
-    assert rec["content"].startswith("| 年假 |")
+    assert rec["content"].startswith("# 假期") and "| 丧假 | 8 天 |" in rec["content"]
 
     # 关掉开关只影响之后入库的文档
     r = await client.patch(

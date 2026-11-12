@@ -353,6 +353,7 @@ async def test_auth_uid_governs_dataset_permissions(client: Any, rt: Any) -> Non
 
     # 存量服务账号的库
     legacy = Dataset(
+        set_uuid=uuid4(),
         name="评测库",
         owner_id="sa-bench",
         owner_kind="service",
@@ -715,6 +716,7 @@ async def test_sync_uc_moves_legacy_visibility_into_the_user_center(rt: Any) -> 
         u = uuid4()
         return Dataset(
             uuid=u,
+            set_uuid=u,
             name=f"{owner}-{permission}",
             owner_id=owner,
             permission=permission,

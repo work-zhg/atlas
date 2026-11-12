@@ -51,6 +51,9 @@ REVIEW_STATUSES = ("none", "pending", "approved", "rejected")
 PERMISSIONS = ("only_me", "all_team", "partial_members")
 #: 文档的分段结构（同 Dify doc_form）
 DOC_FORMS = ("text_model", "hierarchical_model", "qa_model")
+#: 知识库的可见性（知识集方案）：public = 大家都能用（任何人至少可读）；private = 按用户中心的
+#: 数据权限。写、管理（上传、改设置、共享、删除）两种都按数据权限
+VISIBILITIES = ("public", "private")
 
 
 class Base(DeclarativeBase):
@@ -66,9 +69,35 @@ class _Row:
     )
 
 
+class KnowledgeSet(_Row, Base):
+    """知识集：把同一主题的知识库编成一组（doc/design/knowledge-set-design.html）。
+
+    智能体按知识集使用知识：名称和介绍进智能体提示词里的「可查的知识」，由维护人写。
+    ★ 只是分组，不改变权限：谁能用一个库仍按库的可见性和数据权限；知识集对一个人可见 =
+      其中至少有一个库他能读，或者他是维护人。
+    ★ 一个知识库只属于一个知识集（kb_dataset.set_uuid）。
+    """
+
+    __tablename__ = "kb_knowledge_set"
+
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    #: 给智能体看的介绍：里面有什么、能回答哪类问题
+    description: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    icon: Mapped[str] = mapped_column(String(64), default="📁", nullable=False)
+    #: 维护人（用户中心 uid）：能改名称、介绍、检索设置，能在里面新建知识库。建的人默认在内
+    maintainers: Mapped[list[str]] = mapped_column(JSONType, nullable=False)
+    #: 智能体在这个知识集里查一次，最多带回几段
+    top_k: Mapped[int] = mapped_column(Integer, default=4, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
 class Dataset(_Row, Base):
     __tablename__ = "kb_dataset"
 
+    #: 所属知识集（kb_knowledge_set.uuid）。升级时按原来的库 1:1 建的知识集与库同一个 uuid
+    set_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False, index=True)
+    #: public | private（VISIBILITIES）
+    visibility: Mapped[str] = mapped_column(String(16), default="private", nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str] = mapped_column(Text, default="", nullable=False)
     icon: Mapped[str] = mapped_column(String(64), default="📚", nullable=False)

@@ -68,7 +68,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/knowledge-bases": {
+    "/v1/knowledge-sets": {
         parameters: {
             query?: never;
             header?: never;
@@ -76,12 +76,12 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List Knowledge Bases
-         * @description 编辑器里可选的知识库，按这个 Agent 的权限主体列出（参数同 /tools）：
-         *     以人为权限 = 当前用户能读的；以 Agent 为权限 = 它的数字员工能读的。
-         *     运行时知识库按同一个主体（X-Auth-Uid）判，读不到的库跳过。
+         * List Knowledge Sets
+         * @description 编辑器里可选的知识集，按这个 Agent 的权限主体列出（参数同 /tools）：
+         *     以人为权限 = 当前用户能用的；以 Agent 为权限 = 它的数字员工能用的。
+         *     运行时知识库按同一个主体（X-Auth-Uid）判，用不了的知识集跳过。
          */
-        get: operations["list_knowledge_bases_v1_knowledge_bases_get"];
+        get: operations["list_knowledge_sets_v1_knowledge_sets_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2414,7 +2414,10 @@ export interface components {
             /** Jobs */
             jobs: components["schemas"]["InstanceJobOut"][];
         };
-        /** KnowledgeAccessOut */
+        /**
+         * KnowledgeAccessOut
+         * @description 选定的一个知识集。
+         */
         KnowledgeAccessOut: {
             /** Id */
             id: string;
@@ -2423,31 +2426,36 @@ export interface components {
             /** Readable */
             readable?: boolean | null;
         };
-        /** KnowledgeBaseInfo */
-        KnowledgeBaseInfo: {
+        /** KnowledgeBaseBrief */
+        KnowledgeBaseBrief: {
             /** Id */
             id: string;
             /** Name */
             name: string;
             /** Description */
             description?: string | null;
-            /** Icon */
-            icon?: string | null;
+            /**
+             * Document Count
+             * @default 0
+             */
+            document_count: number;
         };
         /**
          * KnowledgeListResponse
-         * @description 权限主体能读（≥ READ）的知识库 —— 运行时知识库按同一个主体判。
+         * @description 权限主体能用的知识集（其中至少有一个库能读）—— 运行时知识库按同一个主体判。
          */
         KnowledgeListResponse: {
             /** Data */
-            data: components["schemas"]["KnowledgeBaseInfo"][];
+            data: components["schemas"]["KnowledgeSetInfo"][];
             subject: components["schemas"]["KnowledgeSubjectOut"];
         };
         /**
-         * KnowledgeSetIn
-         * @description 一个知识集（doc/design/knowledge-set-design.html §2）。
+         * KnowledgeSetInfo
+         * @description 一个可选的知识集：名称、介绍由维护人在知识库里写；datasets 只列权限主体能读的库。
          */
-        KnowledgeSetIn: {
+        KnowledgeSetInfo: {
+            /** Id */
+            id: string;
             /** Name */
             name: string;
             /**
@@ -2455,37 +2463,41 @@ export interface components {
              * @default
              */
             description: string;
-            /** Dataset Ids */
-            dataset_ids?: string[];
+            /**
+             * Top K
+             * @default 4
+             */
+            top_k: number;
+            /**
+             * Datasets
+             * @default []
+             */
+            datasets: components["schemas"]["KnowledgeBaseBrief"][];
+        };
+        /**
+         * KnowledgeSpecIn
+         * @description 智能体能查的知识：选定的几个知识集（set_ids），或使用者能读的全部知识集。
+         *
+         *     ★ 知识集归知识库服务（名称、介绍、里面的库由维护人定），这里只记选了哪些。
+         *     ★ 快照纪律：旧快照有两种 ——
+         *       · 知识集之前：{dataset_ids, mode, scope, top_k, score_threshold, rerank}
+         *       · 知识集在智能体里定义时：{sets: [{name, description, dataset_ids, scope, …}]}
+         *       旧字段只读入、不写出（exclude）。知识库迁移 k0008 给每个库建了一个**同 id** 的知识集，
+         *       所以旧的库 id 原样就是知识集 id；旧配置里有「使用者能读的全部」的，读成全部知识集。
+         */
+        KnowledgeSpecIn: {
             /**
              * Scope
              * @default selected
              * @enum {string}
              */
             scope: "selected" | "all_readable";
-            /**
-             * Top K
-             * @default 4
-             */
-            top_k: number;
-            /** Score Threshold */
-            score_threshold?: number | null;
-        };
-        /**
-         * KnowledgeSpecIn
-         * @description 智能体能查的知识：几个知识集。
-         *
-         *     ★ 快照纪律：知识集之前的快照是 {dataset_ids, mode, scope, top_k, score_threshold, rerank}。
-         *       这些旧字段只读入、不写出（exclude）：sets 为空时据此推导出一个知识集（知识集方案 §9），
-         *       新保存的版本只有 sets。mode=auto（每次都先查）不再有：一律由模型看目录决定查不查。
-         */
-        KnowledgeSpecIn: {
-            /** Sets */
-            sets?: components["schemas"]["KnowledgeSetIn"][];
+            /** Set Ids */
+            set_ids?: string[];
         };
         /**
          * KnowledgeSubjectOut
-         * @description 编辑器里可选的知识库按谁的权限列出（同 MCP 方案设计 §9.2）。
+         * @description 编辑器里可选的知识集按谁的权限列出（同 MCP 方案设计 §9.2）。
          */
         KnowledgeSubjectOut: {
             /**
@@ -3954,7 +3966,7 @@ export interface operations {
             };
         };
     };
-    list_knowledge_bases_v1_knowledge_bases_get: {
+    list_knowledge_sets_v1_knowledge_sets_get: {
         parameters: {
             query?: {
                 agent_id?: string | null;

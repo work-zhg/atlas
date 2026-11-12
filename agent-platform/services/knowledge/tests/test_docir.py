@@ -249,3 +249,32 @@ async def test_pdf_ingest_preview_asset_and_segment_locator(client: Any, rt: Any
 
     segs = (await client.get(f"{base}/segments", headers=ALICE)).json()["data"]
     assert segs and all(s["source_locator"]["pages"] for s in segs)
+
+
+def test_article_paragraphs_become_sections() -> None:
+    """Word 里只有章是标题样式、条是普通段落：条号和正文在同一行的段落接在章之下成为小节。"""
+    ir = DocIR(
+        blocks=[
+            Block(type="heading", text="第一章 总则", level=1, page=1),
+            Block(
+                type="paragraph",
+                text="第一条　为规范员工请假管理，保障正常工作秩序，制定本办法。",
+                page=1,
+            ),
+            Block(
+                type="paragraph",
+                text=(
+                    "第二条　员工请假须提前申请，经直属主管审批。\n"
+                    "（一）病假须附医院证明；\n（二）事假须说明事由。"
+                ),
+                page=1,
+            ),
+        ]
+    )
+    nodes = ip.transform_ir(ir, doc_form="hierarchical_model", rules=_rules(max_length=500))
+    assert [n.metadata["title_path"] for n in nodes] == [
+        ["第一章 总则", "第一条"],
+        ["第一章 总则", "第二条"],
+    ]
+    assert nodes[1].page_content.startswith("第二条　员工请假须提前申请")
+    assert "（二）事假须说明事由。" in nodes[1].page_content

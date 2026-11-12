@@ -59,7 +59,7 @@ import { newIdempotencyKey } from "@atlas/chat-ui/src/lib/id";
 
 import { SharingPanel } from "./AccessSections";
 import { McpToolsSection, SkillsSection } from "./CatalogSections";
-import { DEFAULT_KNOWLEDGE, KnowledgeSection, normalizeKnowledge } from "./KnowledgeSection";
+import { DEFAULT_KNOWLEDGE, KnowledgeSection, knowledgeSummary, normalizeKnowledge } from "./KnowledgeSection";
 import { defaultSpec, effortForbidsThinkingOff, reconcileModelSpec, type ResolvedSpec } from "./spec-defaults";
 import styles from "./studio.module.css";
 
@@ -620,7 +620,7 @@ export function AgentStudio({ agentId }: { agentId: string }) {
   const capOn = capsList.filter((t) => spec.tool_names.includes(t.name)).length;
 
   const k = spec.knowledge ?? DEFAULT_KNOWLEDGE;
-  const knowSummary = (k.sets ?? []).length ? `${(k.sets ?? []).length} 个知识集` : "不使用";
+  const knowSummary = knowledgeSummary(k);
   const mcpPicked = spec.tool_names.filter((n) => n.startsWith("mcp:"));
   const status =
     detail.status === "draft" ? (
@@ -909,7 +909,7 @@ export function AgentStudio({ agentId }: { agentId: string }) {
               </Group>
             )}
 
-            <Group title="知识库" summary={knowSummary} open={open.knowledge!} onToggle={() => toggle("knowledge")}>
+            <Group title="知识" summary={knowSummary} open={open.knowledge!} onToggle={() => toggle("knowledge")}>
               <KnowledgeSection
                 value={k}
                 readOnly={readOnly}

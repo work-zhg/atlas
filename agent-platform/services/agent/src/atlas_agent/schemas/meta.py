@@ -84,15 +84,25 @@ class ToolListResponse(BaseModel):
     mcp_subject: McpSubjectOut | None = None
 
 
-class KnowledgeBaseInfo(BaseModel):
+class KnowledgeBaseBrief(BaseModel):
     id: str
     name: str
     description: str | None = None
-    icon: str | None = None
+    document_count: int = 0
+
+
+class KnowledgeSetInfo(BaseModel):
+    """一个可选的知识集：名称、介绍由维护人在知识库里写；datasets 只列权限主体能读的库。"""
+
+    id: str
+    name: str
+    description: str = ""
+    top_k: int = 4
+    datasets: list[KnowledgeBaseBrief] = []
 
 
 class KnowledgeSubjectOut(BaseModel):
-    """编辑器里可选的知识库按谁的权限列出（同 MCP 方案设计 §9.2）。"""
+    """编辑器里可选的知识集按谁的权限列出（同 MCP 方案设计 §9.2）。"""
 
     #: user = 以人为权限（当前用户）；agent = 以 Agent 为权限（它的数字员工）
     kind: Literal["user", "agent"]
@@ -102,7 +112,7 @@ class KnowledgeSubjectOut(BaseModel):
 
 
 class KnowledgeListResponse(BaseModel):
-    """权限主体能读（≥ READ）的知识库 —— 运行时知识库按同一个主体判。"""
+    """权限主体能用的知识集（其中至少有一个库能读）—— 运行时知识库按同一个主体判。"""
 
-    data: list[KnowledgeBaseInfo]
+    data: list[KnowledgeSetInfo]
     subject: KnowledgeSubjectOut

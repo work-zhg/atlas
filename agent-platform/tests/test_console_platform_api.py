@@ -14,7 +14,7 @@ from atlas_agent.db.session import get_sessionmaker
 from atlas_agent.main import create_app
 from atlas_agent.providers import knowledge as kb
 from atlas_agent.repositories.thread import ThreadRepository
-from atlas_engine.contracts.spec import KnowledgeSetSpec, KnowledgeSpec
+from atlas_engine.contracts.spec import KnowledgeSpec
 from httpx import ASGITransport
 
 from tests.fake_uc import AS_USER
@@ -137,20 +137,28 @@ async def test_feedback_only_on_assistant_messages(
 
 
 def _kb(readable: list[str] | None, seen: list[str]) -> kb.KnowledgeClient:
+    """readable：能读的库 id，每个库一个知识集（同 id）。"""
+
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request.url.path)
         if readable is None:
             return httpx.Response(503, json={"detail": "down"})
         body = json.loads(request.content)
-        assert body == {"dataset_ids": None}  # 不带库 id = 全部能读的
-        return httpx.Response(200, json={"data": [{"id": d} for d in readable]})
+        assert body == {"set_ids": None}  # 不带知识集 id = 全部能用的
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"id": d, "name": d, "top_k": 4, "datasets": [{"id": d, "name": d}]}
+                    for d in readable
+                ]
+            },
+        )
 
     return kb.KnowledgeClient("http://kb", transport=httpx.MockTransport(handler))
 
 
-EVERYONE = KnowledgeSpec(
-    sets=(KnowledgeSetSpec(name="我能查阅的资料", scope="all_readable"),)
-)
+EVERYONE = KnowledgeSpec(scope="all_readable")
 
 
 async def test_no_knowledge_sets_asks_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -160,16 +168,15 @@ async def test_no_knowledge_sets_asks_nothing(monkeypatch: pytest.MonkeyPatch) -
     assert got.turn is None and got.notices() == [] and seen == []
 
 
-async def test_all_readable_expands_to_readable_datasets(monkeypatch: pytest.MonkeyPatch) -> None:
-    """「使用者能读的全部」展开成这个人能读的全部库：不再截成 20 个（知识集方案 §7）。"""
+async def test_all_readable_expands_to_readable_sets(monkeypatch: pytest.MonkeyPatch) -> None:
+    """「使用者能读的全部知识集」展开成这个人能用的全部知识集：不截断（知识集方案 §7）。"""
     seen: list[str] = []
     ids = [f"ds-{i:02d}" for i in range(25)]
     monkeypatch.setattr(kb, "make_knowledge_client", lambda _s: _kb(ids, seen))
     got = await kb.resolve_knowledge(object(), EVERYONE)
     assert got.turn is not None and got.notices() == []
-    [everyone] = got.turn.sets
-    assert [b.id for b in everyone.bases] == ids
-    assert seen == ["/internal/v1/datasets/readable"]
+    assert [s.id for s in got.turn.sets] == ids
+    assert seen == ["/internal/v1/knowledge-sets/readable"]
 
 
 async def test_all_readable_with_nothing_readable_disables_retrieval(
@@ -206,8 +213,7 @@ def test_spec_round_trip_keeps_scope() -> None:
     )
     engine = spec.to_engine(slug="g", name="通用助手")
     engine.validate()
-    [only] = engine.knowledge.sets
-    assert only.scope == "all_readable" and engine.knowledge.enabled
+    assert engine.knowledge == KnowledgeSpec(scope="all_readable") and engine.knowledge.enabled
 
 
 # ───────────────────────────────────────────── P2：列表、草稿 / 发布、调试预览
