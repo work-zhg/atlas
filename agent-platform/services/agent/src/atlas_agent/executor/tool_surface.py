@@ -20,7 +20,7 @@ from atlas_engine.runtime.tools import estimate_tokens
 
 from atlas_agent.errors import CapabilityUnavailable
 from atlas_agent.executor.segment_data import Segment
-from atlas_agent.providers.knowledge import make_knowledge_tool, require_client
+from atlas_agent.providers.knowledge import make_knowledge_tools, require_client
 from atlas_agent.sandbox.component import SandboxComponent
 from atlas_agent.sandbox.exec import PollingPolicy, ShellSandbox
 from atlas_agent.sandbox.native import WorkspaceRef
@@ -108,15 +108,15 @@ class ToolSurface:
         if memory is not None:
             extra_tools = [*extra_tools, *memory.tools()]
 
-        # 知识库（tool 模式）：库 id 闭包捕获，不进参数（doc/atlas-rag-design.html §10）
-        knowledge = segment.spec.knowledge
-        if knowledge.enabled and knowledge.mode == "tool":
+        # 知识集（doc/design/knowledge-set-design.html §3.2 第二层）：knowledge_list /
+        # knowledge_search。集合和库闭包捕获，参数里只有名称。★ 不进按需加载：目录（第一层）
+        # 里提到它们，模型得一开始就看得到定义
+        if segment.knowledge is not None:
             extra_tools = [
                 *extra_tools,
-                make_knowledge_tool(
+                *make_knowledge_tools(
                     require_client(self._settings),
-                    knowledge,
-                    names=None,
+                    segment.knowledge,
                     source_ref=f"thread:{segment.thread_id}/run:{run_id}",
                 ),
             ]

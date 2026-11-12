@@ -429,51 +429,85 @@ class SubAgentSpec:
     mcp_drift_policy: McpDriftPolicy = "warn"
 
 
-#: 知识库的接入方式（doc/atlas-rag-design.html §10）：
-#:
-#: auto —— 每轮先用用户的提问检索，结果作为参考资料并入这一轮的输入（同 Dify 对话应用的「上下文」）
-#: tool —— 给模型一个 knowledge_search 工具，由它决定何时查（同 Dify Agent 应用的知识库工具）
-#:
-#: ★ acp agent 只有 tool 一种：CLI 的一轮由它自己驱动，平台只能经 MCP 给它工具。
-KnowledgeMode = Literal["auto", "tool"]
-#: 检索哪些库。selected = 绑定的 dataset_ids；all_readable = 这一轮的权限主体能读的全部 ——
-#: 由 server 在一段开始时展开成 dataset_ids（之后各处照常按 dataset_ids 用）
+#: 知识集的成员（doc/design/knowledge-set-design.html §2.2）。selected = 指定的 dataset_ids；
+#: all_readable = 这一轮的权限主体能读的全部（每轮按权限展开，去掉已放进其他知识集的库）
 KnowledgeScope = Literal["selected", "all_readable"]
+
+#: 一个智能体最多几个知识集；一个知识集最多指定几个库（知识集方案 §2.1）
+MAX_KNOWLEDGE_SETS = 10
+MAX_SET_DATASETS = 20
 
 
 @dataclass(frozen=True)
-class KnowledgeSpec:
-    """智能体绑定的知识库与检索参数。各库的检索方式（语义 / 全文 / 混合）用库自己的设置，
-    这里只收口多库合并后的 top_k、阈值与重排。"""
+class KnowledgeSetSpec:
+    """一个知识集：把几个知识库分成一组，起名字、写介绍（知识集方案 §2）。
 
+    名称和介绍进提示词里的「可查的知识」（第一层）；模型调用 knowledge_list / knowledge_search
+    时填名称（第二层）。各库的检索方式（语义 / 全文 / 混合）用库自己的设置，这里只给一次检索
+    带回几段、门槛（可选，按每个库自己的分数在合并前判断）。
+    """
+
+    name: str
+    description: str = ""
     dataset_ids: tuple[str, ...] = ()
-    mode: KnowledgeMode = "auto"
     scope: KnowledgeScope = "selected"
     top_k: int = 4
     score_threshold: float | None = None
-    #: 多库合并后是否统一重排（加权；各库须同一向量模型）
-    rerank: bool = False
-
-    @property
-    def enabled(self) -> bool:
-        return bool(self.dataset_ids) or self.scope == "all_readable"
 
     def retrieval_config(self) -> dict[str, object]:
         return {
             "top_k": self.top_k,
             "score_threshold_enabled": self.score_threshold is not None,
             "score_threshold": self.score_threshold if self.score_threshold is not None else 0.5,
-            "reranking_enable": self.rerank,
-            "reranking_mode": "weighted_score",
         }
 
+
+@dataclass(frozen=True)
+class KnowledgeSpec:
+    """智能体能查的知识：几个知识集。
+
+    查不查、查哪里都由模型决定，平台不自动检索（知识集方案 §2.3）。
+    """
+
+    sets: tuple[KnowledgeSetSpec, ...] = ()
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.sets)
+
     def validate(self) -> None:
-        if len(self.dataset_ids) > 10:
-            raise InvalidSpec("一个智能体最多绑定 10 个知识库")
-        if not 1 <= self.top_k <= 20:
-            raise InvalidSpec("知识库 top_k 须在 1 ~ 20 之间")
-        if self.score_threshold is not None and not 0 <= self.score_threshold <= 1:
-            raise InvalidSpec("知识库分数阈值须在 0 ~ 1 之间")
+        if len(self.sets) > MAX_KNOWLEDGE_SETS:
+            raise InvalidSpec(f"一个智能体最多 {MAX_KNOWLEDGE_SETS} 个知识集")
+        names: set[str] = set()
+        claimed: set[str] = set()
+        dynamic = 0
+        for s in self.sets:
+            name = s.name.strip()
+            if not name:
+                raise InvalidSpec("知识集要有名称")
+            if name in names:
+                raise InvalidSpec(f"知识集名称重复：{name}")
+            names.add(name)
+            if not 1 <= s.top_k <= 20:
+                raise InvalidSpec("知识集每次引用的段数须在 1 ~ 20 之间", knowledge_set=name)
+            if s.score_threshold is not None and not 0 <= s.score_threshold <= 1:
+                raise InvalidSpec("知识集的门槛须在 0 ~ 1 之间", knowledge_set=name)
+            if s.scope == "all_readable":
+                dynamic += 1
+                continue
+            if not s.dataset_ids:
+                raise InvalidSpec("知识集要指定知识库", knowledge_set=name)
+            if len(s.dataset_ids) > MAX_SET_DATASETS:
+                raise InvalidSpec(
+                    f"一个知识集最多指定 {MAX_SET_DATASETS} 个知识库", knowledge_set=name
+                )
+            # ★ 一个库只放进一个知识集：放进两个，同一段资料会在两组结果里重复，模型也分不清去哪查
+            twice = claimed.intersection(s.dataset_ids)
+            if twice:
+                raise InvalidSpec("同一个知识库只能放进一个知识集", dataset_ids=sorted(twice))
+            claimed.update(s.dataset_ids)
+        if dynamic > 1:
+            raise InvalidSpec("「使用者能读的全部」只能有一个知识集")
 
 
 @dataclass(frozen=True)
@@ -518,8 +552,6 @@ class AgentSpec:
         self.compaction.validate()
         self.knowledge.validate()
         self.approval.validate()
-        if self.kind == "cli" and self.knowledge.enabled and self.knowledge.mode != "tool":
-            raise InvalidSpec("acp agent 的知识库只能以工具方式接入（mode='tool'）")
         if self.kind == "cli" and self.cli is None:
             raise InvalidSpec("kind='cli' 必须提供 cli（cli_type / adapter / image）")
         if self.kind == "cli" and self.sandbox != SandboxSpec():

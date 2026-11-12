@@ -2443,16 +2443,20 @@ export interface components {
             data: components["schemas"]["KnowledgeBaseInfo"][];
             subject: components["schemas"]["KnowledgeSubjectOut"];
         };
-        /** KnowledgeSpecIn */
-        KnowledgeSpecIn: {
+        /**
+         * KnowledgeSetIn
+         * @description 一个知识集（doc/design/knowledge-set-design.html §2）。
+         */
+        KnowledgeSetIn: {
+            /** Name */
+            name: string;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
             /** Dataset Ids */
             dataset_ids?: string[];
-            /**
-             * Mode
-             * @default auto
-             * @enum {string}
-             */
-            mode: "auto" | "tool";
             /**
              * Scope
              * @default selected
@@ -2466,11 +2470,18 @@ export interface components {
             top_k: number;
             /** Score Threshold */
             score_threshold?: number | null;
-            /**
-             * Rerank
-             * @default false
-             */
-            rerank: boolean;
+        };
+        /**
+         * KnowledgeSpecIn
+         * @description 智能体能查的知识：几个知识集。
+         *
+         *     ★ 快照纪律：知识集之前的快照是 {dataset_ids, mode, scope, top_k, score_threshold, rerank}。
+         *       这些旧字段只读入、不写出（exclude）：sets 为空时据此推导出一个知识集（知识集方案 §9），
+         *       新保存的版本只有 sets。mode=auto（每次都先查）不再有：一律由模型看目录决定查不查。
+         */
+        KnowledgeSpecIn: {
+            /** Sets */
+            sets?: components["schemas"]["KnowledgeSetIn"][];
         };
         /**
          * KnowledgeSubjectOut

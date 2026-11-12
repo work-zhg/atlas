@@ -26,7 +26,13 @@ from ..credentials import (
     CredentialSubject,
 )
 from ..errors import CapabilityUnavailable
-from ..providers.knowledge import materialize_scope, mcp_server_entry, require_client
+from ..providers.knowledge import (
+    MCP_LIST_TOOL,
+    MCP_SEARCH_TOOL,
+    mcp_server_entry,
+    require_client,
+    resolve_knowledge,
+)
 from ..providers.llm.model_platform import admit_models, agent_key, litellm_url, uses_model_platform
 from ..providers.mcp import GatewayUnavailable, make_mcp_catalog, mcp_agent_access
 from ..providers.mcp.cli import cli_mcp_servers
@@ -56,6 +62,8 @@ class CliCapabilities:
 
     #: MCP 服务的连接配置（网关上的服务 + 知识库 MCP）
     mcp_servers: list[dict[str, Any]] = field(default_factory=list)
+    #: 追加在 CLI 系统提示词后面的知识集目录（知识集方案 §3.4）；None = 没有能查的知识集
+    system_prompt_append: str | None = None
     #: 解析时要告诉用户的（比如 MCP 网关不可用，这些服务本会话不下发）
     notices: list[tuple[EventType, dict[str, Any]]] = field(default_factory=list)
     #: 经平台时的模型接入；None = 照旧按部署配置
@@ -75,9 +83,10 @@ class CliCapabilityAssembly:
 
     async def resolve(self, segment: Segment, redis: aioredis.Redis) -> CliCapabilities:
         """解析本轮的能力。不可用抛 CapabilityUnavailable（调用方报 run.failed）。"""
-        servers, notices = await self._mcp_servers(segment, redis)
+        servers, notices, catalog = await self._mcp_servers(segment, redis)
         return CliCapabilities(
             mcp_servers=servers,
+            system_prompt_append=catalog,
             notices=notices,
             model=await self._model(segment),
             credentials=self._credentials(segment),
@@ -89,32 +98,27 @@ class CliCapabilityAssembly:
 
     async def _mcp_servers(
         self, segment: Segment, redis: aioredis.Redis
-    ) -> tuple[list[dict[str, Any]], list[tuple[EventType, dict[str, Any]]]]:
+    ) -> tuple[list[dict[str, Any]], list[tuple[EventType, dict[str, Any]]], str | None]:
+        """→ (MCP 连接配置, 要告诉用户的, 知识集目录)。"""
         spec = segment.spec
         servers: list[dict[str, Any]] = []
         notices: list[tuple[EventType, dict[str, Any]]] = []
         if any(name.startswith(MCP_PREFIX) for name in spec.tool_names):
             servers, notices = await self._mcp_from_gateway(segment, redis)
-        # 知识库：Pod 里的 CLI 经 MCP 调 knowledge_search（doc/atlas-rag-design.html §10）。
-        # 「使用者能查阅的全部」先展开成具体的库，令牌里签的是展开后的库
-        knowledge, unavailable = await materialize_scope(self._settings, spec.knowledge)
-        if unavailable:
-            notices.append(
-                (
-                    EventType.KNOWLEDGE_SKIPPED,
-                    {"dataset_ids": [], "subject": None, "message": unavailable},
-                )
-            )
-        if knowledge.enabled:
-            servers = [
-                *servers,
-                mcp_server_entry(
-                    require_client(self._settings),
-                    knowledge,
-                    thread_id=segment.thread_id,
-                ),
-            ]
-        return servers, notices
+        # 知识集（知识集方案 §3.4）：Pod 里的 CLI 经知识库的 MCP 调 knowledge_list /
+        # knowledge_search；目录追加进它的系统提示词。令牌里签的是这一刻展开好的知识集
+        resolution = await resolve_knowledge(self._settings, spec.knowledge)
+        notices.extend(resolution.notices())
+        if resolution.turn is None:
+            return servers, notices, None
+        servers = [
+            *servers,
+            mcp_server_entry(
+                require_client(self._settings), resolution.turn, thread_id=segment.thread_id
+            ),
+        ]
+        catalog = resolution.turn.catalog(list_tool=MCP_LIST_TOOL, search_tool=MCP_SEARCH_TOOL)
+        return servers, notices, catalog
 
     def _credentials(self, segment: Segment) -> CredentialSet:
         """每轮按当前的档案和规则重新授权（c4-model/agent/code-credentials.html）。

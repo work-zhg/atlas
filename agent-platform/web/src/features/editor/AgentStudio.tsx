@@ -59,7 +59,7 @@ import { newIdempotencyKey } from "@atlas/chat-ui/src/lib/id";
 
 import { SharingPanel } from "./AccessSections";
 import { McpToolsSection, SkillsSection } from "./CatalogSections";
-import { DEFAULT_KNOWLEDGE, KnowledgeSection } from "./KnowledgeSection";
+import { DEFAULT_KNOWLEDGE, KnowledgeSection, normalizeKnowledge } from "./KnowledgeSection";
 import { defaultSpec, effortForbidsThinkingOff, reconcileModelSpec, type ResolvedSpec } from "./spec-defaults";
 import styles from "./studio.module.css";
 
@@ -96,7 +96,8 @@ function normalizeSpec(raw: unknown): ResolvedSpec {
     skills: spec.skills ?? [],
     mcp_tool_digests: spec.mcp_tool_digests ?? {},
     mcp_drift_policy: spec.mcp_drift_policy ?? "warn",
-    knowledge: { ...DEFAULT_KNOWLEDGE, ...(spec.knowledge ?? {}) },
+    // 历史版本可能还是知识集之前的格式：推导成知识集（知识集方案 §9）
+    knowledge: normalizeKnowledge(spec.knowledge),
     approval: spec.approval ?? defaultSpec().approval,
     limits: spec.limits ?? defaultSpec().limits,
     compaction: spec.compaction ?? defaultSpec().compaction,
@@ -439,7 +440,6 @@ export function AgentStudio({ agentId }: { agentId: string }) {
     collab: false,
     advanced: false,
   });
-  const [knowMode, setKnowMode] = useState<"all" | "pick" | "none">("none");
   const [showParams, setShowParams] = useState(false);
   const [dialog, setDialog] = useState<"basic" | "share" | "versions" | "publish" | null>(null);
 
@@ -452,8 +452,6 @@ export function AgentStudio({ agentId }: { agentId: string }) {
     specRef.current = s;
     setSpecState(s);
     setHasDraft(detail.has_draft ?? false);
-    const k = s.knowledge ?? DEFAULT_KNOWLEDGE;
-    setKnowMode(k.scope === "all_readable" ? "all" : (k.dataset_ids ?? []).length > 0 ? "pick" : "none");
   }, [detail]);
 
   // ── 自动保存草稿 ──
@@ -622,7 +620,7 @@ export function AgentStudio({ agentId }: { agentId: string }) {
   const capOn = capsList.filter((t) => spec.tool_names.includes(t.name)).length;
 
   const k = spec.knowledge ?? DEFAULT_KNOWLEDGE;
-  const knowSummary = knowMode === "all" ? "使用者能查阅的全部" : knowMode === "pick" ? `${(k.dataset_ids ?? []).length} 个` : "不使用";
+  const knowSummary = (k.sets ?? []).length ? `${(k.sets ?? []).length} 个知识集` : "不使用";
   const mcpPicked = spec.tool_names.filter((n) => n.startsWith("mcp:"));
   const status =
     detail.status === "draft" ? (
@@ -912,55 +910,13 @@ export function AgentStudio({ agentId }: { agentId: string }) {
             )}
 
             <Group title="知识库" summary={knowSummary} open={open.knowledge!} onToggle={() => toggle("knowledge")}>
-              <div className={styles.choices}>
-                <Choice
-                  checked={knowMode === "all"}
-                  title="使用者能查阅的全部知识库"
-                  desc="每个人只会查到自己有权限的内容"
-                  disabled={readOnly || detail.auth_subject === "agent"}
-                  onClick={() => {
-                    setKnowMode("all");
-                    patch({ knowledge: { ...k, scope: "all_readable", dataset_ids: [], mode: cli ? "tool" : k.mode } });
-                  }}
-                />
-                <Choice
-                  checked={knowMode === "pick"}
-                  title="指定知识库"
-                  desc="只在选定的知识库里查找"
-                  disabled={readOnly}
-                  onClick={() => {
-                    setKnowMode("pick");
-                    patch({ knowledge: { ...k, scope: "selected" } });
-                  }}
-                >
-                  {knowMode === "pick" && (
-                    <div
-                      style={{ marginTop: 10 }}
-                      onClick={(e) => e.stopPropagation()}
-                      onKeyDown={(e) => e.stopPropagation()}
-                    >
-                      <KnowledgeSection
-                        bare
-                        value={{ ...k, scope: "selected" }}
-                        kind={spec.kind ?? "native"}
-                        readOnly={readOnly}
-                        agentId={agentId}
-                        authSubject={detail.auth_subject}
-                        onChange={(knowledge) => patch({ knowledge })}
-                      />
-                    </div>
-                  )}
-                </Choice>
-                <Choice
-                  checked={knowMode === "none"}
-                  title="不使用知识库"
-                  disabled={readOnly}
-                  onClick={() => {
-                    setKnowMode("none");
-                    patch({ knowledge: { ...k, scope: "selected", dataset_ids: [] } });
-                  }}
-                />
-              </div>
+              <KnowledgeSection
+                value={k}
+                readOnly={readOnly}
+                agentId={agentId}
+                authSubject={detail.auth_subject}
+                onChange={(knowledge) => patch({ knowledge })}
+              />
             </Group>
 
             <Group

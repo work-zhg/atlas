@@ -678,6 +678,11 @@ class RetrievalService:
             # ★ 不并发：同一个 AsyncSession 不能并发执行查询。库数一般个位数，串行可接受
             own = normalize_retrieval_config(ds.retrieval_config)
             own["top_k"] = cfg["top_k"]
+            if cfg["score_threshold_enabled"] and not cfg["reranking_enable"]:
+                # ★ 门槛按每个库自己的分数、在合并之前判断（知识集方案 §2.1）：各库的向量模型
+                #   可能不同，分数尺度不一样，合并之后再用同一条线去卡是不对的
+                own["score_threshold_enabled"] = True
+                own["score_threshold"] = cfg["score_threshold"]
             docs = await self._recall(
                 ds,
                 plan.variants,
@@ -689,9 +694,13 @@ class RetrievalService:
             )
             per_ds.append(docs)
         multi_variant = len(plan.variants) > 1
-        with rec.stage("merged", method="rrf" if multi_variant else None, **labels) as st:
-            if multi_variant and not cfg["reranking_enable"]:
-                # 各库的分数来自不同表述的 RRF，量纲不一：跨库也按名次融合
+        # ★ 各库向量模型不同，分数尺度就不同（甲模型的相关结果常在 0.7 以上，乙模型可能只有 0.5）：
+        #   直接比分数会让打分偏低的库总排在后面，改按名次合并（知识集方案 §5.2）
+        mixed_models = len({(d.embedding_provider, d.embedding_model) for d in datasets}) > 1
+        by_rank = (multi_variant or mixed_models) and not cfg["reranking_enable"]
+        with rec.stage("merged", method="rrf" if by_rank else None, **labels) as st:
+            if by_rank:
+                # 名次分相同时按库的顺序排（rrf 是稳定排序，先出现的库在前）
                 merged = rrf(per_ds, key=lambda d: d.metadata["point_id"])
             else:
                 merged = [d for docs in per_ds for d in docs]

@@ -2,7 +2,7 @@
 
 见 c4-model/agent/native-runtime/code-native-runtime-turn.html。
 
-CapabilityAssembly 只编排、不实现。顺序固定：模型先于一切（with_models）→ 知识库预检索
+CapabilityAssembly 只编排、不实现。顺序固定：模型先于一切（with_models）→ 展开知识集
 （with_knowledge）→ 段内共享的资源（记忆、沙箱供给器、工作区）→ 按固定顺序问三个能力领域
 要本段的东西 —— 工具面（tool_surface.py）、挂起与人机协作（collaboration.py）、上下文管理
 （context_manager.py）—— 交给 build.py::build_graph 建图（纯函数，中间件按槽位排）。新增一种
@@ -30,18 +30,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from atlas_agent.errors import CapabilityUnavailable
 from atlas_agent.executor.segment_data import Segment
-from atlas_agent.providers.knowledge import (
-    format_context,
-    materialize_scope,
-    require_client,
-    skipped_message,
-)
+from atlas_agent.providers.knowledge import resolve_knowledge
 from atlas_agent.sandbox.component import SandboxComponent
 from atlas_agent.sandbox.native import WorkspaceRef
 
 from ..config import Settings
 from ..domain.workspace_layout import WorkspaceLayout
-from ..outbound import current_identity
 from ..providers.filesystem import WorkspaceRouting, make_workspace
 from ..providers.llm.model_platform import (
     admit_models,
@@ -174,6 +168,7 @@ class CapabilityAssembly:
             context=context.ports,
             instructions=context.instructions,
             memory=context.memory_block,
+            knowledge=segment.knowledge.catalog() if segment.knowledge else None,
             prompt_cache_ttl=await self._prompt_cache_ttl(segment),
             workdir=WorkspaceLayout.of(
                 thread.created_by_uuid, segment.thread_id, thread.workspace_dir
@@ -248,56 +243,19 @@ class CapabilityAssembly:
         run_id: UUID,
         notices: list[tuple[EventType, dict[str, Any]]] | None = None,
     ) -> Segment:
-        """auto 模式：先用本轮提问检索，参考资料并入**这一轮**的输入（同 Dify 对话应用的上下文）。
+        """把智能体的知识集按这一轮的权限展开（doc/design/knowledge-set-design.html §4）。
 
-        ★ 只改模型这一轮看到的输入：用户消息早已按原文落库，Transcript 也只收模型与工具的输出，
-          所以历史里没有这段资料 —— 下一轮按下一轮的提问重新检索。
-        ★ 续跑段（resume）不再检索：本轮输入已在 history 里，没有可并入的位置。
-        ★ 检索失败让这一轮明确失败（KnowledgeUnavailable），不静默当作「没查到」（§13.2）。
-        ★ 权限主体读不到的库由知识库跳过：其余照常检索，经 notices 告知用户（同 MCP）。
+        展开的结果交给后面两处：提示词里的知识集目录（第一层）、knowledge_list / knowledge_search
+        两个工具（第二层，工具面）。★ 不做自动检索：查不查、查哪里由模型决定（§2.3）。
+        ★ 续跑段（resume）也要展开：工具要照常能用。
+        ★ 读不到的库、知识库服务不可用，经 notices 告诉用户（knowledge.skipped），这一轮照常进行。
         """
-        # 「使用者能查阅的全部」先展开成具体的库：后面的工具面（tool 模式）也读展开后的 spec
-        knowledge, unavailable = await materialize_scope(self._settings, segment.spec.knowledge)
-        if knowledge is not segment.spec.knowledge:
-            segment = dataclasses.replace(
-                segment, spec=dataclasses.replace(segment.spec, knowledge=knowledge)
-            )
-        if unavailable and notices is not None:
-            notices.append(
-                (
-                    EventType.KNOWLEDGE_SKIPPED,
-                    {"dataset_ids": [], "subject": None, "message": unavailable},
-                )
-            )
-        if not knowledge.enabled or knowledge.mode != "auto" or segment.resume:
+        resolution = await resolve_knowledge(self._settings, segment.spec.knowledge)
+        if notices is not None:
+            notices.extend(resolution.notices())
+        if resolution.turn is None:
             return segment
-        query = extract_text(segment.input_content).strip()
-        if not query:
-            return segment
-        got = await require_client(self._settings).retrieve(
-            knowledge,
-            query[:2000],
-            source="agent",
-            source_ref=f"thread:{segment.thread_id}/run:{run_id}",
-        )
-        if got.skipped and notices is not None:
-            ident = current_identity()
-            notices.append(
-                (
-                    EventType.KNOWLEDGE_SKIPPED,
-                    {
-                        "dataset_ids": got.skipped,
-                        "subject": str(ident.auth_uid) if ident else None,
-                        "message": skipped_message(
-                            len(got.skipped),
-                            acts_as_agent=ident is not None and ident.auth_uid != ident.uid,
-                        ),
-                    },
-                )
-            )
-        return dataclasses.replace(
-            segment, input_content=format_context(segment.input_content, got.records)
-        )
+        return dataclasses.replace(segment, knowledge=resolution.turn)
 
     def _titler(self, segment: Segment) -> Titler | None:
         """仅当会话还没有标题时才返回生成器（§8.1）。

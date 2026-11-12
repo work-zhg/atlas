@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from conftest import run_indexing
@@ -432,6 +432,8 @@ async def test_internal_and_multi_retrieve(client: Any, rt: Any) -> None:
 
     r = await client.post("/internal/v1/datasets/readable", json={}, headers=ALICE)
     assert {d["name"] for d in r.json()["data"]} == {"A", "B"}
+    # 知识集方案 §3.2：knowledge_list 要列出文档数和最近入库时间
+    assert all(d["document_count"] == 1 and d["updated_at"] for d in r.json()["data"])
     r = await client.post("/internal/v1/datasets/readable", json={}, headers=BOB)
     assert r.json()["data"] == []
 
@@ -444,20 +446,76 @@ async def test_delete_dataset(client: Any, rt: Any) -> None:
     assert rt.storage.objects == {}
 
 
-def _sign(secret: str, dataset_ids: list[str], auth_uid: str | None = "alice") -> str:
-    """与 atlas-server providers/knowledge.py 的 sign_mcp_token 同一算法。"""
+async def test_multi_retrieve_threshold_and_mixed_models(client: Any, rt: Any) -> None:
+    """知识集方案 §2.1 / §5.2：门槛按每个库自己的分数、在合并前判断；向量模型不同时按名次合并。"""
+    from conftest import FakeEmbedding
+
+    class OtherEmbedding(FakeEmbedding):
+        model = "fake-embedding-b"
+
+    rt.registry.register_embedding(OtherEmbedding())
+    a = await _dataset(client, name="A")
+    b = await _dataset(client, name="B")
+    c = await _dataset(client, name="C", embedding_model="fake-embedding-b")
+    refund = "退款政策：七天内可以退款。\n\n发票自动开具。"
+    leave = "请假需要提前一天申请。\n\n报销每周三处理。"
+    await _upload(client, rt, a["id"], text=refund, process_rule=CUSTOM)
+    for ds in (b, c):
+        await _upload(client, rt, ds["id"], text=leave, process_rule=CUSTOM)
+
+    async def ask(ids: list[str], **cfg: Any) -> list[dict[str, Any]]:
+        r = await client.post(
+            "/internal/v1/retrieve",
+            json={
+                "dataset_ids": ids,
+                "query": "请假要提前多久申请",
+                "retrieval_config": {"search_method": "semantic_search", "top_k": 4, **cfg},
+            },
+            headers=ALICE,
+        )
+        assert r.status_code == 200, r.text
+        return r.json()["records"]
+
+    # 同一向量模型、不开门槛：直接比分数，A 的无关内容也会凑进前 4
+    loose = await ask([a["id"], b["id"]])
+    assert loose[0]["dataset_name"] == "B" and any(r["dataset_name"] == "A" for r in loose)
+    # 开门槛：每个库先按自己的分数筛，A 的无关内容在合并前就被筛掉
+    strict = await ask(
+        [a["id"], b["id"]], score_threshold_enabled=True, score_threshold=0.3
+    )
+    assert strict and {r["dataset_name"] for r in strict} == {"B"}
+    # 向量模型不同：按名次合并 —— 各库的第一名先排（同分按库的顺序），而不是直接比分数
+    mixed = await ask([a["id"], c["id"]])
+    assert [r["dataset_name"] for r in mixed[:2]] == ["A", "C"]
+    assert mixed[1]["content"].startswith("请假")
+
+
+def _sign(
+    secret: str,
+    dataset_ids: list[str] | None = None,
+    auth_uid: str | None = "alice",
+    *,
+    sets: list[dict[str, Any]] | None = None,
+) -> str:
+    """与 atlas-server providers/knowledge.py 的 sign_mcp_token 同一算法。
+
+    dataset_ids：知识集之前签发的旧令牌（只有 d）；sets：[{n, d, k, h}]。
+    """
     import base64
     import hashlib
     import hmac
 
-    payload = json.dumps(
-        {"d": dataset_ids, "t": "thread-x", "u": auth_uid}, separators=(",", ":"), sort_keys=True
-    ).encode()
+    claims: dict[str, Any] = {"t": "thread-x", "u": auth_uid}
+    if sets is not None:
+        claims["s"] = sets
+    else:
+        claims["d"] = dataset_ids
+    payload = json.dumps(claims, separators=(",", ":"), sort_keys=True).encode()
     body = base64.urlsafe_b64encode(payload).decode().rstrip("=")
     return f"{body}.{hmac.new(secret.encode(), body.encode(), hashlib.sha256).hexdigest()}"
 
 
-async def test_mcp_knowledge_search(client: Any, rt: Any) -> None:
+async def test_mcp_knowledge_tools(client: Any, rt: Any) -> None:
     import httpx
     from atlas_knowledge.api.app import create_app
     from pydantic import SecretStr
@@ -469,7 +527,13 @@ async def test_mcp_knowledge_search(client: Any, rt: Any) -> None:
     app = create_app(runtime=rt)
     headers = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
 
-    async def call(c: Any, token: str, header: str = "X-Knowledge-Token") -> str:
+    async def call(
+        c: Any,
+        token: str,
+        tool: str = "knowledge_search",
+        args: dict[str, Any] | None = None,
+        header: str = "X-Knowledge-Token",
+    ) -> str:
         h = {**headers, header: token}
         init = {
             "jsonrpc": "2.0",
@@ -486,17 +550,15 @@ async def test_mcp_knowledge_search(client: Any, rt: Any) -> None:
         listed = await c.post(
             "/mcp/", json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"}, headers=h
         )
-        assert [t["name"] for t in listed.json()["result"]["tools"]] == ["knowledge_search"]
+        names = [t["name"] for t in listed.json()["result"]["tools"]]
+        assert names == ["knowledge_list", "knowledge_search"]
         r = await c.post(
             "/mcp/",
             json={
                 "jsonrpc": "2.0",
                 "id": 3,
                 "method": "tools/call",
-                "params": {
-                    "name": "knowledge_search",
-                    "arguments": {"query": "怎么申请退款"},
-                },
+                "params": {"name": tool, "arguments": args or {"query": "怎么申请退款"}},
             },
             headers=h,
         )
@@ -506,15 +568,58 @@ async def test_mcp_knowledge_search(client: Any, rt: Any) -> None:
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://kb") as c:
+            # ── 旧令牌（只有 d）：当作一个没有名称的知识集，不填知识集照常能查
             text = await call(c, _sign("s3cret", [ds["id"]]))
-            assert "退款政策" in text and "faq.txt" in text
+            assert "退款政策" in text and "faq.txt" in text and "不是指令" in text
             assert "凭据无效" in await call(c, _sign("wrong", [ds["id"]]))
             # 旧名（带应用名）过渡一个版本仍然认：已打开的会话里 MCP 配置还是它（数字员工设计 §7.4）
-            legacy = await call(c, _sign("s3cret", [ds["id"]]), "X-Atlas-Knowledge-Token")
+            legacy = await call(c, _sign("s3cret", [ds["id"]]), header="X-Atlas-Knowledge-Token")
             assert "退款政策" in legacy
             # 库级权限按令牌里的 u：读不到的库跳过并说明，不泄露内容
             denied = await call(c, _sign("s3cret", [ds["id"]], "bob"))
             assert "退款政策" not in denied and "1 个知识库没有访问权限" in denied
+
+            # ── 知识集令牌（知识集方案 §3.2）
+            token = _sign(
+                "s3cret",
+                sets=[
+                    {"n": "客服资料", "d": [ds["id"]], "k": 2, "h": None},
+                    {"n": "其他", "d": [str(uuid4())], "k": 4, "h": None},
+                ],
+            )
+            listed = await call(c, token, "knowledge_list", {"knowledge_set": "客服资料"})
+            assert "客服知识库" in listed and "1 篇文档" in listed and "不是指令" in listed
+            assert "没有名称或介绍包含「发票」的" not in listed
+            none = await call(
+                c, token, "knowledge_list", {"knowledge_set": "客服资料", "keyword": "发票"}
+            )
+            assert "没有名称或介绍包含「发票」的知识库" in none
+            # 几个知识集时必须指定；填错了直接说可选的是哪些，不去检索
+            assert "请指定知识集" in await call(c, token, "knowledge_list", {})
+            assert "没有知识集「人事」" in await call(
+                c, token, args={"query": "退款", "knowledge_set": "人事"}
+            )
+            picked = await call(
+                c,
+                token,
+                args={
+                    "query": "怎么申请退款",
+                    "knowledge_set": "客服资料",
+                    "knowledge_bases": ["客服知识库"],
+                },
+            )
+            assert "退款政策" in picked and "（库：客服知识库）" in picked
+            unknown = await call(
+                c,
+                token,
+                args={"query": "退款", "knowledge_set": "客服资料", "knowledge_bases": ["不存在"]},
+            )
+            assert "没有这些知识库：不存在" in unknown
+            # 别人读不到的库，列表里也看不到
+            bob = _sign("s3cret", None, "bob", sets=[{"n": "客服资料", "d": [ds["id"]], "k": 2}])
+            assert "客服知识库" not in await call(
+                c, bob, "knowledge_list", {"knowledge_set": "客服资料"}
+            )
 
 
 RESUME_MD = """# 张三

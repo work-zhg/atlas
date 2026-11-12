@@ -160,7 +160,7 @@ class SessionHost:
         self.limits = params.defaults.over(self._fallback)
         try:
             session_id, resumed, replayed = await self._keeper.open_session(
-                params.resume, params.mcp_servers
+                params.resume, params.mcp_servers, params.system_prompt_append
             )
         except AcpRequestTimeout:
             # agent 可能仍在处理（比如还在重放历史）：重启它，回到 IDLE，server 可以重试（§6.5）

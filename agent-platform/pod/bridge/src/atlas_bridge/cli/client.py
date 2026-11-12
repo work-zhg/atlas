@@ -135,10 +135,17 @@ class AcpClient:
         )
 
     async def new_session(
-        self, cwd: str, mcp_servers: list[dict[str, Any]], *, timeout: float
+        self,
+        cwd: str,
+        mcp_servers: list[dict[str, Any]],
+        *,
+        timeout: float,
+        system_prompt_append: str | None = None,
     ) -> str:
         raw = await self._request(
-            methods.SESSION_NEW, {"cwd": cwd, "mcpServers": mcp_servers}, timeout=timeout
+            methods.SESSION_NEW,
+            _with_prompt({"cwd": cwd, "mcpServers": mcp_servers}, system_prompt_append),
+            timeout=timeout,
         )
         try:
             session_id = NewSessionResponse.model_validate(raw).session_id
@@ -148,7 +155,13 @@ class AcpClient:
         return session_id
 
     async def load_session(
-        self, session_id: str, cwd: str, mcp_servers: list[dict[str, Any]], *, timeout: float
+        self,
+        session_id: str,
+        cwd: str,
+        mcp_servers: list[dict[str, Any]],
+        *,
+        timeout: float,
+        system_prompt_append: str | None = None,
     ) -> None:
         """恢复会话并重放历史。
 
@@ -156,17 +169,29 @@ class AcpClient:
         """
         raw = await self._request(
             methods.SESSION_LOAD,
-            {"sessionId": session_id, "cwd": cwd, "mcpServers": mcp_servers},
+            _with_prompt(
+                {"sessionId": session_id, "cwd": cwd, "mcpServers": mcp_servers},
+                system_prompt_append,
+            ),
             timeout=timeout,
         )
         self._remember_modes(session_id, raw)
 
     async def resume_session(
-        self, session_id: str, cwd: str, mcp_servers: list[dict[str, Any]], *, timeout: float
+        self,
+        session_id: str,
+        cwd: str,
+        mcp_servers: list[dict[str, Any]],
+        *,
+        timeout: float,
+        system_prompt_append: str | None = None,
     ) -> None:
         raw = await self._request(
             methods.SESSION_RESUME,
-            {"sessionId": session_id, "cwd": cwd, "mcpServers": mcp_servers},
+            _with_prompt(
+                {"sessionId": session_id, "cwd": cwd, "mcpServers": mcp_servers},
+                system_prompt_append,
+            ),
             timeout=timeout,
         )
         self._remember_modes(session_id, raw)
@@ -217,3 +242,11 @@ class AcpClient:
             return await self._on_permission(params)
         # fs/*、terminal/*、elicitation/* 都没有声明能力；_ 扩展方法也不认识
         raise RpcFault(ErrorCode.METHOD_NOT_FOUND, f"不支持的方法：{method}")
+
+
+def _with_prompt(params: dict[str, Any], append: str | None) -> dict[str, Any]:
+    """追加系统提示词：Claude 的 ACP adapter 认 _meta.systemPrompt = {append}（接在它自带的
+    提示词后面）。不认识这个约定的 adapter 忽略 _meta（ACP 规定实现不得依赖其中的键）。"""
+    if append:
+        params["_meta"] = {"systemPrompt": {"append": append}}
+    return params

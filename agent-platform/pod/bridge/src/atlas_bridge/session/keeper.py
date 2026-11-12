@@ -48,6 +48,8 @@ class CliKeeper:
         self.booted = asyncio.Event()
         #: open 时 server 给的 MCP 配置，恢复会话时原样再用一次
         self._mcp_servers: list[JsonObject] = []
+        #: open 时 server 给的追加系统提示词（知识集目录），同样沿用
+        self._system_prompt_append: str | None = None
 
     @property
     def negotiated(self) -> Negotiated:
@@ -78,17 +80,23 @@ class CliKeeper:
             self.booted.set()
 
     async def open_session(
-        self, resume: ResumeSpec | None, mcp_servers: list[JsonObject] | None = None
+        self,
+        resume: ResumeSpec | None,
+        mcp_servers: list[JsonObject] | None = None,
+        system_prompt_append: str | None = None,
     ) -> tuple[str, bool, Any]:
         """→ (CLI 的会话 id, 恢复成功了吗, 实际重放了什么)。
 
         按能力位选方法；恢复失败不是错误 —— 新建会话并如实报告 resumed=False（§5.6）。
-        mcp_servers 不给就沿用上一次 open 的（恢复会话时原样再用一次）。
+        mcp_servers / system_prompt_append 不给就沿用上一次 open 的（恢复会话时原样再用一次）。
         """
         if mcp_servers is not None:
             self._mcp_servers = mcp_servers
+        if system_prompt_append is not None:
+            self._system_prompt_append = system_prompt_append
         client = self._cli.client
         mcp = self._mcp_servers
+        prompt = self._system_prompt_append
         timeout = self._open_timeout_s
         plan = plan_open(self._cli.negotiated.caps, resume.replay if resume else None)
 
@@ -97,11 +105,19 @@ class CliKeeper:
                 if plan.method is OpenMethod.LOAD:
                     self.replaying = True
                     await client.load_session(
-                        resume.agent_session_id, self._workspace, mcp, timeout=timeout
+                        resume.agent_session_id,
+                        self._workspace,
+                        mcp,
+                        timeout=timeout,
+                        system_prompt_append=prompt,
                     )
                 else:
                     await client.resume_session(
-                        resume.agent_session_id, self._workspace, mcp, timeout=timeout
+                        resume.agent_session_id,
+                        self._workspace,
+                        mcp,
+                        timeout=timeout,
+                        system_prompt_append=prompt,
                     )
                 self._modes.absorb(resume.agent_session_id)
                 return resume.agent_session_id, True, plan.replayed
@@ -110,7 +126,9 @@ class CliKeeper:
             finally:
                 self.replaying = False
 
-        session_id = await client.new_session(self._workspace, mcp, timeout=timeout)
+        session_id = await client.new_session(
+            self._workspace, mcp, timeout=timeout, system_prompt_append=prompt
+        )
         self._modes.absorb(session_id)
         return session_id, False, "none"
 

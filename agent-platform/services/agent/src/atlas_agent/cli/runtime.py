@@ -226,6 +226,7 @@ class CliRuntime:
                 mcp_servers=caps.mcp_servers,
                 limits=caps.limits,
                 takeover=segment.takeover is not None,
+                system_prompt_append=caps.system_prompt_append,
             ):
                 yield events.make(kind, data)
             await link.save_progress()

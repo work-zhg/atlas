@@ -407,7 +407,7 @@ class AgentService:
             out.digital_employee = DigitalEmployeeOut(**de)
         elif agent.acts_as_itself:
             out.notices.append("还没有数字员工：依赖授权的工具都不可用，请联系管理员回填")
-        dataset_ids = list(AgentSpecIn.model_validate(version.spec).knowledge.dataset_ids)
+        dataset_ids = AgentSpecIn.model_validate(version.spec).knowledge.bound_dataset_ids()
         out.knowledge = [KnowledgeAccessOut(id=d) for d in dataset_ids]
         if agent.acts_as_itself and agent.digital_employee_uid is not None and dataset_ids:
             try:
@@ -525,8 +525,8 @@ class AgentService:
         """
         if self._settings is None:
             return
-        before = set(previous.knowledge.dataset_ids) if previous else set()
-        added = [d for d in spec.knowledge.dataset_ids if d not in before]
+        before = set(previous.knowledge.bound_dataset_ids()) if previous else set()
+        added = [d for d in spec.knowledge.bound_dataset_ids() if d not in before]
         if not added:
             return
         if subject is None:

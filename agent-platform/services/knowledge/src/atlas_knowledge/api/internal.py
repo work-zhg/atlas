@@ -4,7 +4,8 @@
 
 POST /internal/v1/retrieve            智能体运行时检索（库级、文档级权限都按 X-Auth-Uid；
                                       读不到的库跳过，返回的 skipped 里列出）
-POST /internal/v1/datasets/readable   绑定知识库时校验：auth-uid 能读哪些库（返回名称与描述）
+POST /internal/v1/datasets/readable   auth-uid 能读哪些库（名称、介绍、文档数、最近入库时间）：
+                                      绑定时校验、编辑器列可选的库、运行时展开知识集
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from ..db.models import Dataset
+from ..services.cards import dataset_cards
 from ..services.permission import visible_clause
 from ..services.retrieval import KnowledgeRetrieval, RetrieveOptions
 from .deps import PrincipalDep, RuntimeDep, SessionDep
@@ -26,7 +28,8 @@ router = APIRouter(prefix="/internal/v1", include_in_schema=False)
 
 
 class InternalRetrieveBody(BaseModel):
-    dataset_ids: list[UUID] = Field(min_length=1, max_length=20)
+    #: ★ 「使用者能读的全部」这样的知识集可能有上百个库：超过路由阈值时先按库的介绍挑库再查
+    dataset_ids: list[UUID] = Field(min_length=1, max_length=200)
     query: str
     retrieval_config: dict[str, Any] | None = None
     #: agent | mcp
@@ -82,16 +85,4 @@ async def readable(
     if body.dataset_ids is not None:
         q = q.where(Dataset.uuid.in_(body.dataset_ids))
     rows = (await session.scalars(q.order_by(Dataset.name))).all()
-    return {
-        "data": [
-            {
-                "id": str(d.uuid),
-                "name": d.name,
-                "description": d.description,
-                "icon": d.icon,
-                "embedding_provider": d.embedding_provider,
-                "embedding_model": d.embedding_model,
-            }
-            for d in rows
-        ]
-    }
+    return {"data": await dataset_cards(session, rows)}

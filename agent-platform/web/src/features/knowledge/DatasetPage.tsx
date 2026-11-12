@@ -805,7 +805,7 @@ function SettingsTab({ ds }: { ds: Dataset }) {
             <Input maxLength={255} />
           </Form.Item>
         </div>
-        <Form.Item name="description" label="描述">
+        <Form.Item name="description" label="描述" extra="这段介绍会给智能体看，用来判断什么时候查这个库：写清里面有什么、能回答哪类问题">
           <Input.TextArea rows={3} maxLength={2000} />
         </Form.Item>
         <Form.Item name="review_required" label="入库审核" valuePropName="checked">

@@ -18,7 +18,7 @@ __all__ = ["CLEARED_PLACEHOLDER", "DEFAULT_CLEARABLE_TOOLS", "ResultClearing", "
 #: ★ 写类工具（write_file / edit_file）的结果本来就短，清了也省不了多少，不在默认清单里。
 #: ★ tool_search 不清：已加载的延迟工具是从它的结果里推出来的，清了工具就「消失」了。
 DEFAULT_CLEARABLE_TOOLS = frozenset(
-    {"read_file", "search", "execute", "knowledge_search", "search_memory"}
+    {"read_file", "search", "execute", "knowledge_list", "knowledge_search", "search_memory"}
 )
 
 CLEARED_PLACEHOLDER = "[旧的工具结果已清除以节省上下文；需要时请重新调用 {name} 获取]"

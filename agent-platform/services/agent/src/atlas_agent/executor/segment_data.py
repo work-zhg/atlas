@@ -16,6 +16,7 @@ from atlas_engine.contracts.spec import AgentSpec
 
 if TYPE_CHECKING:
     from ..db.models import Thread
+    from ..providers.knowledge import TurnKnowledge
     from .run_models import RunModels
 
 
@@ -83,6 +84,9 @@ class Segment:
     compaction_failures: int = 0
     #: 这一轮的模型端点与目录（CapabilityAssembly.with_models 填）。None = 还没解析，按直连处理
     models: RunModels | None = None
+    #: 这一轮能查的知识集（CapabilityAssembly.with_knowledge 填，按这一轮的权限展开）。
+    #: None = 没有能查的知识集
+    knowledge: TurnKnowledge | None = None
 
     @property
     def thread_id(self) -> UUID:

@@ -14,7 +14,7 @@ from atlas_agent.db.session import get_sessionmaker
 from atlas_agent.main import create_app
 from atlas_agent.providers import knowledge as kb
 from atlas_agent.repositories.thread import ThreadRepository
-from atlas_engine.contracts.spec import KnowledgeSpec
+from atlas_engine.contracts.spec import KnowledgeSetSpec, KnowledgeSpec
 from httpx import ASGITransport
 
 from tests.fake_uc import AS_USER
@@ -148,22 +148,27 @@ def _kb(readable: list[str] | None, seen: list[str]) -> kb.KnowledgeClient:
     return kb.KnowledgeClient("http://kb", transport=httpx.MockTransport(handler))
 
 
-async def test_selected_scope_is_untouched(monkeypatch: pytest.MonkeyPatch) -> None:
+EVERYONE = KnowledgeSpec(
+    sets=(KnowledgeSetSpec(name="我能查阅的资料", scope="all_readable"),)
+)
+
+
+async def test_no_knowledge_sets_asks_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: list[str] = []
     monkeypatch.setattr(kb, "make_knowledge_client", lambda _s: _kb(["x"], seen))
-    spec = KnowledgeSpec(dataset_ids=("a",))
-    out, notice = await kb.materialize_scope(object(), spec)
-    assert out is spec and notice is None and seen == []
+    got = await kb.resolve_knowledge(object(), KnowledgeSpec())
+    assert got.turn is None and got.notices() == [] and seen == []
 
 
 async def test_all_readable_expands_to_readable_datasets(monkeypatch: pytest.MonkeyPatch) -> None:
+    """「使用者能读的全部」展开成这个人能读的全部库：不再截成 20 个（知识集方案 §7）。"""
     seen: list[str] = []
-    ids = [f"ds-{i}" for i in range(25)]
+    ids = [f"ds-{i:02d}" for i in range(25)]
     monkeypatch.setattr(kb, "make_knowledge_client", lambda _s: _kb(ids, seen))
-    out, notice = await kb.materialize_scope(object(), KnowledgeSpec(scope="all_readable"))
-    assert notice is None
-    assert out.scope == "selected"
-    assert out.dataset_ids == tuple(ids[: kb.ALL_READABLE_LIMIT])  # 检索接口一次最多 20 个库
+    got = await kb.resolve_knowledge(object(), EVERYONE)
+    assert got.turn is not None and got.notices() == []
+    [everyone] = got.turn.sets
+    assert [b.id for b in everyone.bases] == ids
     assert seen == ["/internal/v1/datasets/readable"]
 
 
@@ -171,25 +176,26 @@ async def test_all_readable_with_nothing_readable_disables_retrieval(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(kb, "make_knowledge_client", lambda _s: _kb([], []))
-    out, notice = await kb.materialize_scope(object(), KnowledgeSpec(scope="all_readable"))
-    assert not out.enabled and notice is None
+    got = await kb.resolve_knowledge(object(), EVERYONE)
+    assert got.turn is None and got.notices() == []
 
 
 async def test_all_readable_without_knowledge_service(monkeypatch: pytest.MonkeyPatch) -> None:
     """没接知识库 = 没有能读的库：不检索、不报错（默认智能体在没部署知识库的环境也能用）。"""
     monkeypatch.setattr(kb, "make_knowledge_client", lambda _s: None)
-    out, notice = await kb.materialize_scope(object(), KnowledgeSpec(scope="all_readable"))
-    assert not out.enabled and notice is None
+    got = await kb.resolve_knowledge(object(), EVERYONE)
+    assert got.turn is None and got.notices() == []
 
 
 async def test_all_readable_when_knowledge_down_tells_user(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """知识库不可用：这一轮照常进行，但要告诉用户没查知识库（不静默少一种能力）。"""
+    """知识库不可用：这一轮照常进行，但要告诉用户没用知识库（不静默少一种能力）。"""
     monkeypatch.setattr(kb, "make_knowledge_client", lambda _s: _kb(None, []))
-    out, notice = await kb.materialize_scope(object(), KnowledgeSpec(scope="all_readable"))
-    assert not out.enabled
-    assert notice and "知识库" in notice
+    got = await kb.resolve_knowledge(object(), EVERYONE)
+    assert got.turn is None
+    [(_, data)] = got.notices()
+    assert "知识库" in data["message"]
 
 
 def test_spec_round_trip_keeps_scope() -> None:
@@ -200,7 +206,8 @@ def test_spec_round_trip_keeps_scope() -> None:
     )
     engine = spec.to_engine(slug="g", name="通用助手")
     engine.validate()
-    assert engine.knowledge.scope == "all_readable" and engine.knowledge.enabled
+    [only] = engine.knowledge.sets
+    assert only.scope == "all_readable" and engine.knowledge.enabled
 
 
 # ───────────────────────────────────────────── P2：列表、草稿 / 发布、调试预览

@@ -94,6 +94,8 @@ class Capabilities:
     #: 持久指令（平台 → 用户 → 工作区）、记忆常驻块
     instructions: str | None = None
     memory: str | None = None
+    #: 知识集目录「可查的知识」（知识集方案 §3.1 第一层）。None = 这一轮没有能查的知识集
+    knowledge: str | None = None
     #: 提示词缓存的 TTL。None = 不打缓存标记（模型不支持，或智能体没开）
     prompt_cache_ttl: Literal["5m", "1h"] | None = None
     #: 工作区在沙箱里的路径：命令的 cwd，也是提示词里告诉模型的工作区
@@ -115,6 +117,7 @@ def assemble(spec: AgentSpec, caps: Capabilities) -> Any:
         spawner=caps.spawner,
         instructions=caps.instructions,
         memory=caps.memory,
+        knowledge=caps.knowledge,
         deferred_tools=caps.deferred_tools,
         prompt_cache_ttl=caps.prompt_cache_ttl,
         workdir=caps.workdir,
@@ -176,6 +179,7 @@ def build_graph(
     spawner: SubAgentSpawner | None = None,
     instructions: str | None = None,
     memory: str | None = None,
+    knowledge: str | None = None,
     deferred_tools: Sequence[ToolSpec] = (),
     prompt_cache_ttl: Literal["5m", "1h"] | None = None,
     workdir: str = DEFAULT_WORKDIR,
@@ -204,6 +208,9 @@ def build_graph(
         system_prompt = f"{system_prompt}\n\n{hint.format(workdir=workdir)}".strip()
     if any(parse_tool_id(name) is not None for name in spec.tool_names):
         system_prompt = f"{system_prompt}\n\n{_MCP_HINT}".strip()
+    # 知识集目录（知识集方案 §3.1）：server 按这一轮的权限渲染好；同一会话里通常不变
+    if knowledge:
+        system_prompt = f"{system_prompt}\n\n{knowledge}".strip()
     # 持久指令（上下文分层 L1）：平台 → 用户 → 工作区，排在系统提示词与工具说明之后
     if instructions:
         system_prompt = f"{system_prompt}\n\n{instructions}".strip()

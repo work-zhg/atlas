@@ -64,6 +64,9 @@ class OpenParams(Model):
     mcp_servers: list[JsonObject] = Field(default_factory=list)
     #: 整个会话的时限默认值，每一轮可在 turn.start 里覆盖
     defaults: TurnLimits = Field(default_factory=TurnLimits)
+    #: 追加在 CLI 自带系统提示词后面的文字（知识集目录，知识集方案 §3.4）。bridge 经 ACP 的
+    #: _meta.systemPrompt.append 交给 adapter；省略 = 不追加。旧 bridge 不认识它，忽略即可
+    system_prompt_append: str | None = None
 
 
 class AcpNegotiation(Model):

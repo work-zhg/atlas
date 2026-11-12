@@ -13,10 +13,13 @@ from uuid import UUID
 
 from atlas_engine.contracts import APPROVAL_MODES, ApprovalMode, InvalidSpec
 from atlas_engine.contracts.spec import (
+    MAX_KNOWLEDGE_SETS,
+    MAX_SET_DATASETS,
     AgentSpec,
     ApprovalSpec,
     CliSpec,
     CompactionSpec,
+    KnowledgeSetSpec,
     KnowledgeSpec,
     LimitSpec,
     McpDriftPolicy,
@@ -27,7 +30,8 @@ from atlas_engine.contracts.spec import (
     SkillRefSpec,
     SubAgentSpec,
 )
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
 Effort = Literal["low", "medium", "high", "xhigh", "max"]
 Thinking = Literal["auto", "adaptive", "off"]
@@ -198,24 +202,90 @@ class SandboxSpecIn(BaseModel):
         return SandboxSpec(image=self.image.strip(), profile=self.profile)
 
 
-class KnowledgeSpecIn(BaseModel):
-    dataset_ids: list[str] = Field(default_factory=list, max_length=10)
-    mode: Literal["auto", "tool"] = "auto"
-    #: all_readable = 使用者能查阅的全部（以使用者为权限时按这一轮的人；dataset_ids 不用）
+#: 知识集之前的配置推导出来的知识集叫什么（知识集方案 §9）
+LEGACY_SET_NAME = "知识库"
+ALL_READABLE_SET_NAME = "我能查阅的资料"
+
+
+class KnowledgeSetIn(BaseModel):
+    """一个知识集（doc/design/knowledge-set-design.html §2）。"""
+
+    name: str = Field(min_length=1, max_length=40)
+    #: 给模型看的介绍，进提示词里的「可查的知识」。编辑页要求必填；接口不强制 ——
+    #: 知识集之前的配置推导出来的知识集没有介绍，目录里退回列库名
+    description: str = Field(default="", max_length=200)
+    dataset_ids: list[str] = Field(default_factory=list, max_length=MAX_SET_DATASETS)
+    #: all_readable = 使用者能读的全部（每轮按权限展开；dataset_ids 不用）
     scope: Literal["selected", "all_readable"] = "selected"
     top_k: int = Field(default=4, ge=1, le=20)
     score_threshold: float | None = Field(default=None, ge=0, le=1)
-    rerank: bool = False
 
-    def to_engine(self) -> KnowledgeSpec:
-        return KnowledgeSpec(
-            dataset_ids=tuple(dict.fromkeys(self.dataset_ids)),
-            mode=self.mode,
+    def to_engine(self) -> KnowledgeSetSpec:
+        return KnowledgeSetSpec(
+            name=self.name.strip(),
+            description=self.description.strip(),
+            dataset_ids=tuple(dict.fromkeys(self.dataset_ids)) if self.scope == "selected" else (),
             scope=self.scope,
             top_k=self.top_k,
             score_threshold=self.score_threshold,
-            rerank=self.rerank,
         )
+
+
+class KnowledgeSpecIn(BaseModel):
+    """智能体能查的知识：几个知识集。
+
+    ★ 快照纪律：知识集之前的快照是 {dataset_ids, mode, scope, top_k, score_threshold, rerank}。
+      这些旧字段只读入、不写出（exclude）：sets 为空时据此推导出一个知识集（知识集方案 §9），
+      新保存的版本只有 sets。mode=auto（每次都先查）不再有：一律由模型看目录决定查不查。
+    """
+
+    sets: list[KnowledgeSetIn] = Field(default_factory=list, max_length=MAX_KNOWLEDGE_SETS)
+    # ── 旧字段：不进接口文档（SkipJsonSchema），也不写出（exclude）
+    dataset_ids: SkipJsonSchema[list[str]] = Field(
+        default_factory=list, max_length=10, exclude=True
+    )
+    mode: SkipJsonSchema[Literal["auto", "tool"]] = Field(default="auto", exclude=True)
+    scope: SkipJsonSchema[Literal["selected", "all_readable"]] = Field(
+        default="selected", exclude=True
+    )
+    top_k: SkipJsonSchema[int] = Field(default=4, ge=1, le=20, exclude=True)
+    score_threshold: SkipJsonSchema[float | None] = Field(default=None, ge=0, le=1, exclude=True)
+    rerank: SkipJsonSchema[bool] = Field(default=False, exclude=True)
+
+    @model_validator(mode="after")
+    def _from_legacy(self) -> KnowledgeSpecIn:
+        if self.sets:
+            return self
+        if self.scope == "all_readable":
+            self.sets = [
+                KnowledgeSetIn(
+                    name=ALL_READABLE_SET_NAME,
+                    scope="all_readable",
+                    top_k=self.top_k,
+                    score_threshold=self.score_threshold,
+                )
+            ]
+        elif self.dataset_ids:
+            self.sets = [
+                KnowledgeSetIn(
+                    name=LEGACY_SET_NAME,
+                    dataset_ids=list(dict.fromkeys(self.dataset_ids)),
+                    top_k=self.top_k,
+                    score_threshold=self.score_threshold,
+                )
+            ]
+        return self
+
+    def bound_dataset_ids(self) -> list[str]:
+        """所有指定的库（不含「使用者能读的全部」）：保存时校验、身份页签用。"""
+        return list(
+            dict.fromkeys(
+                d for s in self.sets if s.scope == "selected" for d in s.dataset_ids
+            )
+        )
+
+    def to_engine(self) -> KnowledgeSpec:
+        return KnowledgeSpec(sets=tuple(s.to_engine() for s in self.sets))
 
 
 class AgentSpecIn(BaseModel):
