@@ -427,7 +427,8 @@ def format_list(
     shown = entries[(page - 1) * PAGE_SIZE : page * PAGE_SIZE]
     lines = [f"「{set_name}」里{cond}知识库，共 {len(entries)} 个（{_DATA_NOTE}）："]
     for i, (label, b) in enumerate(shown, (page - 1) * PAGE_SIZE + 1):
-        desc = _clean(b.description, DESCRIPTION_LIMIT)
+        # 介绍自己带了句末标点的，去掉再接「。N 篇文档」，免得出现「。。」
+        desc = _clean(b.description, DESCRIPTION_LIMIT).rstrip("。.；;，, ")
         updated = (b.updated_at or "")[:10]
         stat = f"{b.document_count} 篇文档" + (f"，更新于 {updated}" if updated else "")
         lines.append(f"{i}. {label}" + (f" —— {desc}" if desc else "") + f"。{stat}")
