@@ -33,14 +33,14 @@
   "description": "目标模型，只画期望的样子、不对照现状。CLI 运行时（原名 ACP 运行时）的四个领域，每个只画对外入口和关键元素，看依赖方向；领域内部见各自的 code-cli-runtime-*.html。",
   "component": "CLI 运行时",
   "package": "CLI 运行时（目标模型 · 领域总览）",
-  "overview": "CLI 运行时让会话 Pod 里的外部 CLI 智能体（如 Claude Code）跑一轮，对 Run 执行器来说它和原生运行时是同一个接口。它分四个领域。一轮的编排在上：解析交给 CLI 的能力、确保 Pod、接上会话、开一轮、把通知分给下面三个领域、产出终止事件。上游连接管 server 到 bridge 的会话接续，保证断线、接管之后事件流完整不重复；权限转发把 CLI 的权限请求变成平台审批；内容翻译把 CLI 的内容翻成和原生运行时同形的事件。\n\n轮次的计时、取消、CLI 崩溃重启都在 Pod 里的 bridge，不在这里。图上每个元素第一行写着它属于哪个领域。",
+  "overview": "CLI 运行时让外部 CLI 智能体（如 Claude Code）跑一轮——CLI 在会话 Pod 里还是在用户电脑上，由运行位置（CliHost）的实现决定，对 Run 执行器来说它和原生运行时是同一个接口。它分四个领域。一轮的编排在上：解析交给 CLI 的能力、交给运行位置确保 bridge 在跑、接上会话、开一轮、把通知分给下面三个领域、产出终止事件。上游连接管 server 到 bridge 的会话接续，保证断线、接管之后事件流完整不重复；权限转发把 CLI 的权限请求变成平台审批；内容翻译把 CLI 的内容翻成和原生运行时同形的事件。\n\n轮次的计时、取消、CLI 崩溃重启都在 bridge（Pod 里或用户电脑上），不在这里。图上每个元素第一行写着它属于哪个领域。",
   "elements": [
     {
       "id": "runtime",
       "kind": "class",
       "name": "CliRuntime",
       "stereotype": "应用服务",
-      "responsibility": "【一轮的编排】实现 AgentRuntime：解析能力（MCP、模型、凭据）→ 确保 Pod → 接上会话 → 开一轮 → 收通知、分给翻译和权限转发 → 终止事件。不落库、不发布、不管锁。详见 code-cli-runtime-turn.html。",
+      "responsibility": "【一轮的编排】实现 AgentRuntime：解析能力（MCP、模型、凭据）→ 运行位置确保 bridge（CliHost）→ 接上会话 → 开一轮 → 收通知、分给翻译和权限转发 → 终止事件。不落库、不发布、不管锁。详见 code-cli-runtime-turn.html。",
       "attributes": [
         [
           "",
@@ -189,23 +189,6 @@
       ]
     },
     {
-      "id": "pods",
-      "kind": "interface",
-      "name": "PodProvider",
-      "external": true,
-      "source": "沙箱组件 · 会话 Pod 领域",
-      "methods": [
-        [
-          "+",
-          "ensure(thread, cli, *, model, credentials)"
-        ]
-      ],
-      "at": [
-        5.9,
-        0.7
-      ]
-    },
-    {
       "id": "bridge",
       "kind": "class",
       "name": "UpstreamServer",
@@ -306,6 +289,46 @@
         3.9,
         6.0
       ]
+    },
+    {
+      "id": "host",
+      "kind": "interface",
+      "name": "CliHost",
+      "at": [
+        3.9,
+        0.7
+      ],
+      "stereotype": "扩展点",
+      "responsibility": "【一轮的编排】CLI 的运行位置：确保 bridge 在跑，交回能连的地址和 CLI 看到的能力。会话 Pod、用户设备各实现一份。",
+      "attributes": [
+        [
+          "",
+          "领域：一轮的编排"
+        ]
+      ],
+      "methods": [
+        [
+          "+",
+          "ensure(thread, cli, caps) -> HostAccess"
+        ]
+      ]
+    },
+    {
+      "id": "impls",
+      "kind": "class",
+      "name": "SessionPods · DeviceSessions",
+      "at": [
+        6.1,
+        0.7
+      ],
+      "source": "沙箱 · 会话 Pod 领域；设备 · 设备会话领域",
+      "methods": [
+        [
+          "+",
+          "ensure(thread, cli, caps)"
+        ]
+      ],
+      "external": true
     }
   ],
   "relationships": [
@@ -313,12 +336,6 @@
       "from": "runtime",
       "to": "agentRt",
       "type": "implements"
-    },
-    {
-      "from": "runtime",
-      "to": "pods",
-      "type": "uses",
-      "description": "确保 Pod"
     },
     {
       "from": "runtime",
@@ -384,6 +401,17 @@
       "to": "runrec",
       "type": "uses",
       "description": "awaiting_user"
+    },
+    {
+      "from": "runtime",
+      "to": "host",
+      "type": "association",
+      "description": "按运行位置确保 bridge"
+    },
+    {
+      "from": "impls",
+      "to": "host",
+      "type": "implements"
     }
   ],
   "capabilities": [
@@ -391,7 +419,7 @@
       "name": "跑一轮",
       "entry": "AgentRuntime.run_turn(segment, *, run_id, relay)",
       "callers": "Run 执行器（接手、接管时）",
-      "description": "让会话 Pod 里的 CLI 智能体跑一轮，产出和原生运行时同形的事件流；接管时 attach 回去补发，不重跑"
+      "description": "让 CLI 智能体（会话 Pod 里或用户电脑上）跑一轮，产出和原生运行时同形的事件流；接管时 attach 回去补发，不重跑"
     }
   ],
   "decisions": [
@@ -414,6 +442,10 @@
     {
       "decision": "接续信息按会话落库，不放进程内存和 run 表",
       "reason": "序号是会话级的，换实例接管时要读得到；放进 run 表又会让执行记录带上运行时私有的字段。cli_session 表归上游连接领域。"
+    },
+    {
+      "decision": "运行位置是 CLI 运行时定义的扩展点",
+      "reason": "依赖倒置：CLI 运行时只定义要什么（一个能连的地址和 CLI 看到的能力），会话 Pod 和用户设备各自实现；新增运行位置不改 CLI 运行时。"
     }
   ]
 }

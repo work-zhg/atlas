@@ -30,17 +30,17 @@
 <script type="application/json" id="c4-model">
 {
   "title": "代码图：Agent 平台 - Agent 服务 - CLI 运行时 - 一轮的编排",
-  "description": "目标领域模型，只画期望的样子、不对照现状。让会话 Pod 里的 CLI 智能体跑一轮：解析能力、确保 Pod、接上会话、开一轮、收通知、终止事件。",
+  "description": "目标领域模型，只画期望的样子、不对照现状。让 CLI 智能体跑一轮（会话 Pod 里或用户电脑上）：解析能力、按运行位置确保 bridge 在跑、接上会话、开一轮、收通知、终止事件。",
   "component": "CLI 运行时",
   "package": "CLI 运行时 · 一轮的编排（目标模型）",
-  "overview": "一轮的编排回答「CLI 智能体怎么跑一轮」。它和原生运行时实现同一个 AgentRuntime 接口：Run 执行器给它一段，它产出事件流，最后一条是终止事件。先解析交给 CLI 的能力（MCP、模型、凭据、时限、权限模式），让会话 Pod 领域确保 Pod 在跑，经上游连接接上会话、开一轮；之后收 bridge 的通知：内容交给翻译、权限请求交给权限转发、用户取消转成 turn.cancel；一轮结束时把结果翻成终止事件。\n\n轮次的计时、取消流程、CLI 崩溃重启都在 bridge 里，这里只提要求、解读结果。它不落库、不发布、不管锁（Run 执行器管），也不管 Pod 怎么建（会话 Pod 管）。",
+  "overview": "一轮的编排回答「CLI 智能体怎么跑一轮」。它和原生运行时实现同一个 AgentRuntime 接口：Run 执行器给它一段，它产出事件流，最后一条是终止事件。先解析交给 CLI 的能力（MCP、模型、凭据、时限、权限模式），交给运行位置（CliHost：会话 Pod 或用户设备）确保 bridge 在跑、换回能连的地址和 CLI 看到的能力，经上游连接接上会话、开一轮；之后收 bridge 的通知：内容交给翻译、权限请求交给权限转发、用户取消转成 turn.cancel；一轮结束时把结果翻成终止事件。\n\n轮次的计时、取消流程、CLI 崩溃重启都在 bridge 里，这里只提要求、解读结果。它不落库、不发布、不管锁（Run 执行器管），也不管 bridge 在哪、怎么拉起（运行位置的实现管：会话 Pod 领域、设备组件的设备会话领域）。",
   "elements": [
     {
       "id": "runtime",
       "kind": "class",
       "name": "CliRuntime",
       "stereotype": "应用服务",
-      "responsibility": "CLI 运行时的入口，实现 Run 执行器的 AgentRuntime：让会话 Pod 里的 CLI 智能体跑一轮。顺序固定：检查 CLI 配置 → 解析本轮能力（MCP、模型、凭据）→ 确保 Pod → 接上会话 → 开一轮（turnId = run id）→ 收通知：内容交给翻译、权限请求交给权限转发、取消转成 turn.cancel → 按结果产出终止事件。和原生运行时一样，不落库、不发布、不管锁。",
+      "responsibility": "CLI 运行时的入口，实现 Run 执行器的 AgentRuntime：让 CLI 智能体跑一轮，不管它在会话 Pod 里还是用户电脑上。顺序固定：检查 CLI 配置 → 解析本轮能力（MCP、模型、凭据）→ 按 cli.placement 交给运行位置确保 bridge 在跑（CliHost.ensure）→ 用返回的地址和能力接上会话 → 开一轮（turnId = run id）→ 收通知：内容交给翻译、权限请求交给权限转发、取消转成 turn.cancel → 按结果产出终止事件。和原生运行时一样，不落库、不发布、不管锁。",
       "methods": [
         [
           "+",
@@ -78,11 +78,11 @@
       "kind": "class",
       "name": "CliCapabilities",
       "stereotype": "值对象",
-      "responsibility": "本轮交给 CLI 的全部能力。MCP 和模型在建会话时一次性下发，整个会话沿用；凭据交给会话 Pod 写进 Credential Vault，不进 Pod。",
+      "responsibility": "本轮交给 CLI 的全部能力。MCP 和模型在建会话时一次性下发，整个会话沿用；凭据交给会话 Pod 写进 Credential Vault，不进 Pod；用户设备不注入凭据，模型、MCP、知识库的真实凭据由设备网关保管。",
       "attributes": [
         [
           "+",
-          "cli: CliSpec（镜像、adapter）"
+          "cli: CliSpec（镜像、adapter、运行位置）"
         ],
         [
           "+",
@@ -191,23 +191,6 @@
       ]
     },
     {
-      "id": "pods",
-      "kind": "interface",
-      "name": "PodProvider",
-      "external": true,
-      "source": "沙箱组件 · 会话 Pod 领域",
-      "methods": [
-        [
-          "+",
-          "ensure(thread, cli, *, model, credentials) -> PodEndpoint"
-        ]
-      ],
-      "at": [
-        6.0,
-        0.2
-      ]
-    },
-    {
       "id": "link",
       "kind": "class",
       "name": "SessionLink",
@@ -308,6 +291,40 @@
         -2.75,
         2.0
       ]
+    },
+    {
+      "id": "host",
+      "kind": "interface",
+      "name": "CliHost",
+      "at": [
+        4.2,
+        0.75
+      ],
+      "stereotype": "扩展点",
+      "responsibility": "CLI 的运行位置。确保这个会话的 bridge 在跑，交回 HostAccess：上游连接连哪个地址、带什么令牌（Pod 里的 bridge，或设备网关上的会话），以及 session.open 时下发给 CLI 的能力。会话 Pod 原样交回能力（凭据写进 Credential Vault）；用户设备把真实凭据登记到设备网关，交回网关地址和会话令牌。电脑不在线时抛 DeviceOffline，这里翻成「你的电脑不在线」的失败。",
+      "methods": [
+        [
+          "+",
+          "ensure(thread, cli, caps) -> HostAccess"
+        ]
+      ]
+    },
+    {
+      "id": "impls",
+      "kind": "class",
+      "name": "SessionPods · DeviceSessions",
+      "at": [
+        4.2,
+        -1.0
+      ],
+      "source": "沙箱 · 会话 Pod 领域；设备 · 设备会话领域",
+      "methods": [
+        [
+          "+",
+          "ensure(thread, cli, caps) -> HostAccess"
+        ]
+      ],
+      "external": true
     }
   ],
   "relationships": [
@@ -354,12 +371,6 @@
     },
     {
       "from": "runtime",
-      "to": "pods",
-      "type": "uses",
-      "description": "确保 Pod"
-    },
-    {
-      "from": "runtime",
       "to": "mode",
       "type": "uses",
       "description": "模式对照"
@@ -387,6 +398,17 @@
       "to": "outcome",
       "type": "uses",
       "description": "终止事件"
+    },
+    {
+      "from": "runtime",
+      "to": "host",
+      "type": "association",
+      "description": "按运行位置确保 bridge"
+    },
+    {
+      "from": "impls",
+      "to": "host",
+      "type": "implements"
     }
   ],
   "capabilities": [
@@ -394,13 +416,17 @@
       "name": "跑一轮",
       "entry": "AgentRuntime.run_turn(segment, *, run_id, relay)",
       "callers": "Run 执行器（接手、接管时）",
-      "description": "解析能力 → 确保 Pod → 接上会话（认识这个 bridge 就 attach，否则 open）→ turn.start → 收通知产出事件 → 终止事件"
+      "description": "解析能力 → 运行位置确保 bridge、交回地址和能力 → 接上会话（认识这个 bridge 就 attach，否则 open）→ turn.start → 收通知产出事件 → 终止事件"
     }
   ],
   "decisions": [
     {
       "decision": "和原生运行时同一个接口，不落库、不发布、不管锁",
       "reason": "载入、标记运行中、收事件、落库、放锁都在 Run 执行器，与智能体类型无关；会话串行锁、幂等、事件回放、孤儿回收因此对 CLI 智能体原样生效。"
+    },
+    {
+      "decision": "运行位置是一个扩展点（CliHost），会话 Pod 和用户设备各实现一份",
+      "reason": "上游连接、权限转发、内容翻译只认一个地址和一套能力；用户设备那边还要把能力换成设备视角（真实凭据留在设备网关），这一步放在实现里，这里不知道。新增运行位置不改 CLI 运行时。"
     },
     {
       "decision": "轮次的计时、取消流程、CLI 崩溃后的重启和会话恢复都在 bridge，这里只提要求、解读结果",

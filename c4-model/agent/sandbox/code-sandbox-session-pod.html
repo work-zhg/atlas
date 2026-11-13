@@ -36,28 +36,11 @@
   "overview": "会话 Pod 是外部 CLI 智能体（经 bridge 接入）的运行环境。它按会话要 Pod：换算成通用供给的业务时，业务类型是 CLI_AGENT，业务 id 是这个会话的 uuid，人是会话的创建人；Pod 本身归人，由通用供给管理。工作区挂根会话的，技能和 CLI 的 HOME 挂自己的，HOME 持久化，Pod 重建后 CLI 能接着上次的会话。CLI 镜像、模型接入和凭据都由调用方准备好、作为参数传进来：镜像和模型来自这一轮的 Agent 版本快照，凭据由凭据组件按这一轮授权后给出；它不判断谁能用哪份凭据。凭据经 Credential Vault 注入，不进 Pod。交给 CLI 运行时的是 bridge 的地址和服务令牌，不是 execd 令牌。调用方是 CLI 运行时（每轮一次）、会话管理 · 会话（删除级联）和维护任务。",
   "elements": [
     {
-      "id": "provider",
-      "kind": "interface",
-      "name": "PodProvider",
-      "stereotype": "对外接口",
-      "responsibility": "CLI 运行时拿会话 Pod 的唯一接口：确保这个会话的 Pod 在跑，返回连 bridge 的地址和令牌。CLI、模型和凭据走参数：前两者来自这一轮的版本快照，凭据由凭据组件按这一轮重新授权。",
-      "methods": [
-        [
-          "+",
-          "ensure(thread, cli, *, model, credentials) -> PodEndpoint"
-        ]
-      ],
-      "at": [
-        1.5,
-        0.5
-      ]
-    },
-    {
       "id": "ep",
       "kind": "class",
       "name": "PodEndpoint",
       "stereotype": "值对象",
-      "responsibility": "连上一个会话 Pod 需要的全部信息：bridge 的 ws 地址和服务令牌。令牌随 Pod 生灭，所以每次跟着这次拿到的 Pod 一起返回。",
+      "responsibility": "连上一个会话 Pod 需要的全部信息：bridge 的 ws 地址和服务令牌，放进 HostAccess 交回。令牌随 Pod 生灭，所以每次跟着这次拿到的 Pod 一起返回。",
       "attributes": [
         [
           "+",
@@ -78,11 +61,11 @@
       "kind": "class",
       "name": "SessionPods",
       "stereotype": "应用服务",
-      "responsibility": "会话 Pod 的流程：组装 PodRequest，交给通用供给确保（业务类型 CLI_AGENT，业务 id 是会话的 uuid），再向基座取 bridge 的地址和服务令牌。闲置回收、删除级联和孤儿回收都只经通用供给释放自己的业务，Pod 退不退役由通用供给决定。不做凭据授权，凭据由调用方经凭据组件解析好传进来。",
+      "responsibility": "实现 CLI 运行时的运行位置扩展点（CliHost），用户设备是另一种实现。会话 Pod 的流程：组装 PodRequest，交给通用供给确保（业务类型 CLI_AGENT，业务 id 是会话的 uuid），再向基座取 bridge 的地址和服务令牌。闲置回收、删除级联和孤儿回收都只经通用供给释放自己的业务，Pod 退不退役由通用供给决定。不做凭据授权，凭据由调用方经凭据组件解析好传进来。能力原样交回：会话 Pod 里的 CLI 直接用集群内地址和智能体的 Key。",
       "methods": [
         [
           "+",
-          "ensure(thread, cli, *, model, credentials) -> PodEndpoint"
+          "ensure(thread, cli, caps) -> HostAccess"
         ],
         [
           "+",
@@ -342,12 +325,29 @@
         5.1,
         1.2
       ]
+    },
+    {
+      "id": "host",
+      "kind": "interface",
+      "name": "CliHost",
+      "at": [
+        1.5,
+        -0.9
+      ],
+      "source": "CLI 运行时 · 一轮的编排领域（运行位置扩展点）",
+      "methods": [
+        [
+          "+",
+          "ensure(thread, cli, caps) -> HostAccess"
+        ]
+      ],
+      "external": true
     }
   ],
   "relationships": [
     {
       "from": "pods",
-      "to": "provider",
+      "to": "host",
       "type": "implements"
     },
     {
@@ -431,9 +431,9 @@
   "capabilities": [
     {
       "name": "确保会话 Pod",
-      "entry": "PodProvider.ensure(thread, cli, *, model, credentials)",
+      "entry": "CliHost.ensure(thread, cli, caps)",
       "callers": "CLI 运行时（每轮一次）",
-      "description": "按会话复用 Pod，新建时按这一轮的 CLI 镜像和模型接入构造，凭据非空时开凭据注入；每轮把凭据整份写一遍；等 bridge 就绪后返回 ws 地址和服务令牌"
+      "description": "按会话复用 Pod，新建时按这一轮的 CLI 镜像和模型接入构造，凭据非空时开凭据注入；每轮把凭据整份写一遍；等 bridge 就绪后返回 ws 地址和服务令牌；能力原样交回（会话 Pod 在集群里，CLI 直接用集群内地址）"
     },
     {
       "name": "闲置回收",
@@ -461,7 +461,7 @@
     },
     {
       "decision": "CLI 镜像、模型接入和凭据都走参数，不绑在实例上",
-      "reason": "PodProvider 是进程级的，而镜像、adapter 和模型来自这一轮的 Agent 版本快照；绑在实例上就等于全进程共用一个镜像，换了 Agent 版本也会静默用错。凭据由凭据组件每轮授权，会话 Pod 不判断谁能用哪份凭据，也不认识 git。"
+      "reason": "会话 Pod 这一实现是进程级的，而镜像、adapter 和模型来自这一轮的 Agent 版本快照；绑在实例上就等于全进程共用一个镜像，换了 Agent 版本也会静默用错。凭据由凭据组件每轮授权，会话 Pod 不判断谁能用哪份凭据，也不认识 git。"
     },
     {
       "decision": "交出 bridge 服务令牌，不交 execd 令牌",
@@ -490,6 +490,10 @@
     {
       "decision": "会话 Pod 也闲置回收，看 run 的状态，不看 execd 的活动",
       "reason": "长期不用的会话一直占着资源和这个人的配额；Pod 重建代价低（HOME 持久化、工作区在对象存储）。CLI 的流量走 bridge，不经过 execd，基座执行记不到它的活动；run 的状态数据库里本来就有，挂起和等审批都算没结束，不会在等用户的时候把 Pod 删掉。"
+    },
+    {
+      "decision": "实现 CLI 运行时的运行位置扩展点（CliHost），不再自己定义接口",
+      "reason": "CLI 的运行位置有会话 Pod 和用户设备两种，接口由使用方（CLI 运行时）定义、两边各自实现，CLI 运行时不用知道 Pod 的存在。"
     }
   ]
 }

@@ -40,7 +40,7 @@
       "kind": "class",
       "name": "ThreadService",
       "stereotype": "应用服务",
-      "responsibility": "会话的增删改查。建：能用这个智能体才能建（看不到的与不存在一样 404）；业务应用建的默认关记忆；凭据档案在这时选定、经凭据组件校验，之后不改；智能体当前版本引用的技能在这时拷进会话，失败整个不建，不留技能残缺的会话；登记记忆实例，失败不挡（下一轮再登记）。删：连同子会话一起删，再经沙箱组件释放会话 Pod 和工作区沙箱，失败只记日志，由孤儿回收兜底。智能体归档时把它的会话一起归档。",
+      "responsibility": "会话的增删改查。建：能用这个智能体才能建（看不到的与不存在一样 404）；业务应用建的默认关记忆；凭据档案在这时选定、经凭据组件校验，之后不改；智能体当前版本引用的技能在这时拷进会话，失败整个不建，不留技能残缺的会话；登记记忆实例，失败不挡（下一轮再登记）。删：连同子会话一起删，再经沙箱组件释放会话 Pod 和工作区沙箱，失败只记日志，由孤儿回收兜底。智能体归档时把它的会话一起归档。本机 CLI 智能体建会话时，经设备会话领域定设备和项目目录：直接新建用用户选的（默认选中默认设备、目录默认「默认项目地址 / 会话 id」），建子会话（被委派）用默认设备和「默认项目地址 / 根会话 id」；设备不是本人的、没有默认设备就不建。删除时也请设备会话领域作废会话令牌、停掉电脑上的 bridge。",
       "methods": [
         [
           "+",
@@ -69,7 +69,7 @@
       "kind": "class",
       "name": "Thread",
       "stereotype": "聚合根",
-      "responsibility": "一段对话。子智能体的会话也是一行 thread，挂在派出它的那一层下面，会话随 run 长成一棵树；工作区和事件流都归根会话，技能归自己。会话记住用户选的审批模式，作用于下一条消息；凭据档案、来源应用建时定、子会话继承。用户改过的标题永不被自动生成覆盖。",
+      "responsibility": "一段对话。子智能体的会话也是一行 thread，挂在派出它的那一层下面，会话随 run 长成一棵树；工作区和事件流都归根会话，技能归自己。会话记住用户选的审批模式，作用于下一条消息；凭据档案、来源应用建时定、子会话继承。用户改过的标题永不被自动生成覆盖。本机 CLI 的会话还记着跑在哪台设备、电脑上的哪个项目目录：建时定、不改；子会话不照搬父会话，按委派规则另定。",
       "attributes": [
         [
           "+",
@@ -82,6 +82,10 @@
         [
           "+",
           "title · title_source · status: active | archived | ephemeral"
+        ],
+        [
+          "+",
+          "device · project_dir（本机 CLI，建时定、不改）"
         ],
         [
           "+",
@@ -313,13 +317,17 @@
     {
       "id": "pods",
       "kind": "class",
-      "name": "SessionPods",
+      "name": "SessionPods · DeviceSessions",
       "external": true,
-      "source": "沙箱 · 会话 Pod 领域",
+      "source": "沙箱 · 会话 Pod 领域；设备 · 设备会话领域",
       "methods": [
         [
           "+",
           "release(thread)"
+        ],
+        [
+          "+",
+          "place(owner, cli, *, root_thread, device, project_dir)（本机 CLI）"
         ]
       ],
       "at": [
@@ -387,7 +395,7 @@
       "from": "svc",
       "to": "pods",
       "type": "uses",
-      "description": "删除级联",
+      "description": "删除级联；本机 CLI 定设备和目录",
       "labelAt": 0.6
     },
     {
@@ -433,13 +441,13 @@
       "name": "建会话",
       "entry": "ThreadService.create(payload, principal)",
       "callers": "HTTP 接口（界面、TeamFlow 等业务应用）",
-      "description": "能用智能体才能建；凭据档案校验、技能投送失败就不建；记忆实例登记失败不挡"
+      "description": "能用智能体才能建；凭据档案校验、技能投送失败就不建；记忆实例登记失败不挡；本机 CLI 定设备和项目目录，建时定、不改"
     },
     {
       "name": "改、删、归档",
       "entry": "ThreadService.update · delete · on_agent_archived",
       "callers": "HTTP 接口；智能体配置（AgentArchived）",
-      "description": "改标题即 manual；删除连同子会话，并释放会话 Pod 和工作区沙箱（失败只记日志）"
+      "description": "改标题即 manual；删除连同子会话，并释放会话 Pod 和工作区沙箱、作废本机会话的令牌（失败只记日志）"
     },
     {
       "name": "会话和消息列表",
@@ -572,6 +580,18 @@
           "type": "String(32)",
           "nullable": true,
           "description": "建会话的业务应用（X-Caller-App）；子会话继承"
+        },
+        {
+          "name": "device_uuid",
+          "type": "UUIDType",
+          "nullable": true,
+          "description": "本机 CLI：会话跑在哪台设备（设备组件的 device 表，逻辑引用）；建时定、不改"
+        },
+        {
+          "name": "device_project_dir",
+          "type": "String(1024)",
+          "nullable": true,
+          "description": "本机 CLI：电脑上的项目目录，可含 ~（在电脑上展开）；建时定、不改"
         },
         {
           "name": "message_count",

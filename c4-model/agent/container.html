@@ -21,7 +21,7 @@
 <script type="application/json" id="c4-model">
 {
   "title": "容器图：Agent 平台",
-  "description": "范围是 agent-platform/services/agent；控制台里知识库、技能、模型、MCP 几个页面直连对应服务，图中未画",
+  "description": "范围是 agent-platform/services/agent；控制台里知识库、技能、模型、MCP 几个页面直连对应服务，图中未画；本机 CLI 的设备网关、连接器、本机会话和本机项目目录见 device/design-device-cli.html",
   "system": "Agent 平台",
   "elements": [
     {
@@ -124,8 +124,8 @@
       "id": "gitee",
       "kind": "system",
       "at": [
-        2.7,
-        4.9
+        3.4,
+        5.0
       ],
       "name": "Gitee",
       "description": "代码托管平台，存放智能体提交的代码和产物。"
@@ -173,7 +173,7 @@
       "technology": "Redis 7",
       "at": [
         -0.6,
-        3.5
+        3.7
       ],
       "name": "Redis",
       "description": "运行事件流、会话锁、取消标记和缓存。"
@@ -196,8 +196,8 @@
       "shape": "server",
       "technology": "K8s Pod：bridge + CLI 智能体",
       "at": [
-        1.9,
-        3.8
+        2.2,
+        3.9
       ],
       "name": "会话 Pod",
       "description": "运行 Claude Code 等外部 CLI 智能体，由 bridge 接成平台的执行后端。"
@@ -208,11 +208,59 @@
       "shape": "bucket",
       "technology": "S3 兼容对象存储（MinIO）",
       "at": [
-        1.15,
-        4.9
+        0.8,
+        4.6
       ],
       "name": "会话工作区",
       "description": "每个会话的文件，以 /workspace 挂进沙箱和会话 Pod。"
+    },
+    {
+      "id": "devicegw",
+      "kind": "container",
+      "shape": "server",
+      "name": "设备网关",
+      "technology": "Python / asyncio + websockets",
+      "description": "接住用户电脑上连接器的长连接：按会话转发 server 和本机 bridge 之间的消息、转发读本机文件的请求；替设备持有凭据，把 CLI 的模型、MCP、知识库请求换上真实凭据再转发。",
+      "at": [
+        1.5,
+        6.1
+      ]
+    },
+    {
+      "id": "connector",
+      "kind": "container",
+      "shape": "server",
+      "name": "连接器",
+      "technology": "Python 守护进程（用户电脑）",
+      "description": "装在用户电脑上：主动连到设备网关并保持一条连接；按会话拉起 bridge、把会话流接过去；按本机策略把关，只读地提供项目目录里的文件。",
+      "at": [
+        0.2,
+        6.1
+      ]
+    },
+    {
+      "id": "localcli",
+      "kind": "container",
+      "shape": "server",
+      "name": "本机会话",
+      "technology": "用户电脑上的进程：bridge + CLI 适配器",
+      "description": "每个会话一个 bridge 和 CLI（如 Claude Code），以电脑主人的身份在项目目录里读写文件、执行命令；模型、MCP、知识库经设备网关调用。",
+      "at": [
+        0.2,
+        7.3
+      ]
+    },
+    {
+      "id": "localdir",
+      "kind": "container",
+      "shape": "folder",
+      "name": "本机项目目录",
+      "technology": "用户电脑的文件系统",
+      "description": "会话的工作目录：默认是「默认项目地址 / 会话 id」，也可以是电脑上已有的项目；文件只在电脑上，网页上只读查看。",
+      "at": [
+        1.5,
+        7.3
+      ]
     }
   ],
   "relationships": [
@@ -341,6 +389,76 @@
       "to": "gitee",
       "description": "拉取和提交代码",
       "technology": "Git/HTTPS"
+    },
+    {
+      "from": "server",
+      "to": "devicegw",
+      "description": "查设备在线、登记本轮能力、接上本机会话、读本机文件",
+      "technology": "JSON/HTTP、atlas.host.v1 / WebSocket",
+      "labelAt": 0.62
+    },
+    {
+      "from": "devicegw",
+      "to": "server",
+      "description": "核对配对码和设备令牌",
+      "technology": "JSON/HTTP（内部接口）",
+      "labelAt": 0.82
+    },
+    {
+      "from": "devicegw",
+      "to": "redis",
+      "description": "在线表、会话登记",
+      "technology": "Redis 协议"
+    },
+    {
+      "from": "connector",
+      "to": "devicegw",
+      "description": "保持控制连接：会话流、文件流（由电脑连出）",
+      "technology": "WebSocket / HTTPS"
+    },
+    {
+      "from": "connector",
+      "to": "localcli",
+      "description": "拉起 bridge，把会话流接过去",
+      "technology": "进程、atlas.host.v1 / WebSocket（本机回环）"
+    },
+    {
+      "from": "connector",
+      "to": "localdir",
+      "description": "列目录、列改动、读文件（只读）",
+      "technology": "文件系统、git",
+      "labelAt": 0.3
+    },
+    {
+      "from": "localcli",
+      "to": "localdir",
+      "description": "读写项目文件、执行命令",
+      "technology": "文件系统"
+    },
+    {
+      "from": "localcli",
+      "to": "devicegw",
+      "description": "调模型、MCP、知识库（会话令牌）",
+      "technology": "HTTPS",
+      "labelAt": 0.3
+    },
+    {
+      "from": "devicegw",
+      "to": "model",
+      "description": "换上智能体的 Key，转发模型调用",
+      "technology": "Anthropic Messages API"
+    },
+    {
+      "from": "devicegw",
+      "to": "mcp",
+      "description": "换上智能体的 Key，转发 MCP 调用",
+      "technology": "MCP/HTTP"
+    },
+    {
+      "from": "devicegw",
+      "to": "knowledge",
+      "description": "换上知识库令牌，转发检索",
+      "technology": "MCP/HTTP"
     }
   ]
 }

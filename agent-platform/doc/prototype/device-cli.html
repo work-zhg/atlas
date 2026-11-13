@@ -1,0 +1,1087 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Atlas · 本机 CLI 智能体 — 原型</title>
+<style>
+/* 视觉与用户中心、TeamFlow、模型平台原型一致（同一套浅色设计 token） */
+:root {
+  --bg: #f6f7f9; --surface: #ffffff; --surface-2: #fbfbfd; --hover: #f2f4f8;
+  --ink: #0f172a; --ink-2: #334155; --ink-3: #64748b; --ink-4: #94a3b8;
+  --line: #e6e8ee; --line-2: #eef0f4;
+  --primary: #4f46e5; --primary-2: #6366f1; --primary-weak: #eef0ff; --primary-ink: #4338ca;
+  --secondary: #0ea5e9; --secondary-weak: #e6f6fe;
+  --success: #16a34a; --success-weak: #e7f6ec;
+  --warning: #d97706; --warning-weak: #fef3e2;
+  --danger: #dc2626; --danger-weak: #fdeaea;
+  --radius: 12px; --radius-sm: 8px; --radius-xs: 6px;
+  --shadow-xs: 0 1px 2px rgba(16,24,40,.05);
+  --shadow-md: 0 6px 18px rgba(16,24,40,.08), 0 2px 6px rgba(16,24,40,.05);
+  --shadow-lg: 0 20px 48px rgba(16,24,40,.16);
+  --font: "Inter", "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  --top-h: 52px; --sider-w: 248px; --sider-w-min: 60px;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { font-family: var(--font); background: var(--bg); color: var(--ink); font-size: 14px; line-height: 1.55; -webkit-font-smoothing: antialiased; }
+a { color: var(--primary); text-decoration: none; cursor: pointer; }
+button, input, select, textarea { font-family: inherit; font-size: inherit; color: inherit; }
+h1, h2, h3, h4 { margin: 0; color: var(--ink); }
+h1 { font-size: 20px; font-weight: 650; }
+h2 { font-size: 16px; font-weight: 650; }
+h3 { font-size: 14px; font-weight: 650; }
+p { margin: 0; }
+code, .mono { font-family: var(--mono); font-size: 12px; }
+code { background: var(--line-2); padding: 1px 5px; border-radius: 5px; }
+svg.i { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+svg.i.fill { fill: currentColor; stroke: none; }
+.muted { color: var(--ink-3); }
+.faint { color: var(--ink-4); }
+.sm { font-size: 12.5px; }
+.xs { font-size: 12px; }
+.row { display: flex; align-items: center; gap: 8px; }
+.col { display: flex; flex-direction: column; gap: 8px; }
+.grow { flex: 1; min-width: 0; }
+.ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp { flex: 1; }
+.hide { display: none !important; }
+
+/* ---------- 顶栏：一级菜单（平台） ---------- */
+.top { height: var(--top-h); background: var(--surface); border-bottom: 1px solid var(--line); display: flex; align-items: center; padding: 0 16px 0 14px; gap: 20px; position: relative; z-index: 20; }
+.brand { display: flex; align-items: center; gap: 9px; font-weight: 700; font-size: 15px; letter-spacing: .01em; cursor: pointer; }
+.brand .logo { width: 28px; height: 28px; border-radius: 8px; background: linear-gradient(135deg, #6366f1, #0ea5e9); color: #fff; display: grid; place-items: center; font-size: 14px; }
+.pnav { display: flex; gap: 2px; height: 100%; }
+.pnav a { display: flex; align-items: center; gap: 7px; padding: 0 14px; color: var(--ink-2); font-weight: 550; position: relative; }
+.pnav a:hover { color: var(--ink); background: var(--hover); }
+.pnav a.on { color: var(--primary-ink); }
+.pnav a.on::after { content: ""; position: absolute; left: 12px; right: 12px; bottom: -1px; height: 2px; background: var(--primary); border-radius: 2px; }
+.top-right { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+.avatar { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-size: 12.5px; font-weight: 650; flex: none; }
+.avatar.sq { border-radius: 8px; }
+
+/* ---------- 左侧：二级菜单（可收缩） ---------- */
+.body { display: flex; height: calc(100vh - var(--top-h)); }
+.sider { width: var(--sider-w); flex: none; background: var(--surface-2); border-right: 1px solid var(--line); display: flex; flex-direction: column; transition: width .18s ease; overflow: hidden; }
+.sider.min { width: var(--sider-w-min); }
+.sider-top { padding: 12px 10px 6px; display: flex; flex-direction: column; gap: 2px; }
+.snav { display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: var(--radius-sm); color: var(--ink-2); font-weight: 520; white-space: nowrap; cursor: pointer; position: relative; }
+.snav:hover { background: var(--hover); color: var(--ink); }
+.snav.on { background: var(--primary-weak); color: var(--primary-ink); font-weight: 600; }
+.snav .badge { margin-left: auto; }
+.sider.min .snav { justify-content: center; padding: 0; }
+.sider.min .snav span, .sider.min .snav .badge, .sider.min .hist, .sider.min .new-chat span, .sider.min .sider-foot span { display: none; }
+.new-chat { display: flex; align-items: center; justify-content: center; gap: 8px; height: 38px; border-radius: 10px; background: var(--surface); border: 1px solid var(--line); font-weight: 600; color: var(--ink); cursor: pointer; margin-bottom: 8px; box-shadow: var(--shadow-xs); white-space: nowrap; }
+.new-chat:hover { border-color: #cfd3dd; background: var(--hover); }
+.hist { flex: 1; overflow-y: auto; padding: 4px 10px 10px; border-top: 1px solid var(--line-2); margin-top: 6px; }
+.hist-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 6px 4px; }
+.hist-group { font-size: 11.5px; color: var(--ink-4); padding: 10px 8px 4px; }
+.hist-item { display: flex; align-items: center; gap: 6px; height: 34px; padding: 0 6px 0 10px; border-radius: var(--radius-sm); color: var(--ink-2); cursor: pointer; }
+.hist-item:hover { background: var(--hover); }
+.hist-item.on { background: #e9ebf3; color: var(--ink); font-weight: 550; }
+.hist-item .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; }
+.hist-item .more { opacity: 0; }
+.hist-item:hover .more { opacity: 1; }
+.dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.dot.run { background: var(--success); box-shadow: 0 0 0 3px var(--success-weak); }
+.dot.wait { background: var(--warning); box-shadow: 0 0 0 3px var(--warning-weak); }
+.sider-foot { border-top: 1px solid var(--line-2); padding: 8px 10px; }
+.main { flex: 1; min-width: 0; overflow-y: auto; position: relative; }
+.main.white { background: var(--surface); }
+.page { padding: 24px 32px 60px; max-width: 1280px; margin: 0 auto; }
+.page-head { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; min-height: 36px; }
+
+/* ---------- 通用组件 ---------- */
+.btn { height: 34px; padding: 0 14px; border-radius: var(--radius-sm); border: 1px solid var(--line); background: var(--surface); display: inline-flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer; font-weight: 550; white-space: nowrap; color: var(--ink); }
+.btn:hover { border-color: #cfd3dd; background: var(--hover); }
+.btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+.btn.primary:hover { background: var(--primary-2); }
+.btn.danger { color: var(--danger); }
+.btn.danger.solid { background: var(--danger); border-color: var(--danger); color: #fff; }
+.btn.ghost { border-color: transparent; background: transparent; }
+.btn.ghost:hover { background: var(--hover); }
+.btn.sm { height: 28px; padding: 0 10px; font-size: 13px; }
+.btn[disabled] { opacity: .5; cursor: not-allowed; }
+.ibtn { width: 32px; height: 32px; border-radius: var(--radius-sm); border: none; background: transparent; display: inline-grid; place-items: center; cursor: pointer; color: var(--ink-3); flex: none; }
+.ibtn:hover { background: var(--hover); color: var(--ink); }
+.ibtn.sm { width: 26px; height: 26px; }
+.ibtn.on { background: var(--primary-weak); color: var(--primary-ink); }
+.input, .select, textarea.input { height: 34px; border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 0 11px; background: var(--surface); outline: none; width: 100%; }
+textarea.input { height: auto; padding: 9px 11px; resize: vertical; line-height: 1.6; }
+.input:focus, .select:focus { border-color: var(--primary-2); box-shadow: 0 0 0 3px var(--primary-weak); }
+.search { position: relative; }
+.search svg { position: absolute; left: 10px; top: 9px; color: var(--ink-4); }
+.search .input { padding-left: 32px; }
+.tag { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; border-radius: 6px; font-size: 12px; font-weight: 550; background: var(--line-2); color: var(--ink-2); white-space: nowrap; }
+.tag.primary { background: var(--primary-weak); color: var(--primary-ink); }
+.tag.success { background: var(--success-weak); color: var(--success); }
+.tag.warning { background: var(--warning-weak); color: var(--warning); }
+.tag.danger { background: var(--danger-weak); color: var(--danger); }
+.tag.blue { background: var(--secondary-weak); color: #0369a1; }
+.badge { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--danger); color: #fff; font-size: 11px; font-weight: 650; display: inline-grid; place-items: center; }
+.badge.gray { background: var(--line); color: var(--ink-2); }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+.card.pad { padding: 16px 18px; }
+.tabs { display: flex; gap: 22px; border-bottom: 1px solid var(--line); margin-bottom: 18px; }
+.tabs a { padding: 10px 0; color: var(--ink-3); font-weight: 550; position: relative; }
+.tabs a:hover { color: var(--ink); }
+.tabs a.on { color: var(--ink); }
+.tabs a.on::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--primary); border-radius: 2px; }
+.seg { display: inline-flex; background: var(--line-2); border-radius: 9px; padding: 3px; gap: 2px; }
+.seg a { padding: 4px 12px; border-radius: 7px; color: var(--ink-3); font-weight: 550; font-size: 13px; }
+.seg a.on { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-xs); }
+.switch { display: inline-block; vertical-align: middle; width: 36px; height: 20px; border-radius: 10px; background: #d5d9e2; position: relative; cursor: pointer; flex: none; transition: background .15s; }
+.switch::after { content: ""; position: absolute; width: 16px; height: 16px; border-radius: 50%; background: #fff; top: 2px; left: 2px; transition: left .15s; box-shadow: 0 1px 2px rgba(0,0,0,.2); }
+.switch.on { background: var(--primary); }
+.switch.on::after { left: 18px; }
+.switch.dis { opacity: .45; cursor: not-allowed; }
+.table { width: 100%; border-collapse: separate; border-spacing: 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.table th { text-align: left; font-weight: 600; font-size: 12.5px; color: var(--ink-3); background: var(--surface-2); padding: 10px 14px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.table td { padding: 12px 14px; border-bottom: 1px solid var(--line-2); vertical-align: middle; }
+.table tr:last-child td { border-bottom: none; }
+.table tr.click:hover td { background: var(--surface-2); cursor: pointer; }
+.empty { text-align: center; padding: 56px 20px; color: var(--ink-3); }
+.empty .ill { width: 56px; height: 56px; border-radius: 16px; background: var(--primary-weak); color: var(--primary); display: grid; place-items: center; margin: 0 auto 14px; }
+.empty .ill svg { width: 26px; height: 26px; }
+.empty h3 { margin-bottom: 6px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); font-size: 13px; }
+.chip .x { color: var(--ink-4); cursor: pointer; }
+.chip .x:hover { color: var(--danger); }
+.kv { display: grid; grid-template-columns: 110px 1fr; gap: 10px 14px; font-size: 13.5px; }
+.kv dt { color: var(--ink-3); }
+.kv dd { margin: 0; }
+.divider { height: 1px; background: var(--line-2); margin: 14px 0; }
+.label { font-size: 13px; font-weight: 600; color: var(--ink-2); margin-bottom: 6px; display: block; }
+.help { font-size: 12.5px; color: var(--ink-3); margin-top: 4px; }
+.radio-card { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; cursor: pointer; display: flex; gap: 10px; align-items: flex-start; background: var(--surface); }
+.radio-card:hover { border-color: #cfd3dd; }
+.radio-card.on { border-color: var(--primary-2); background: #f8f8ff; box-shadow: 0 0 0 3px var(--primary-weak); }
+.radio-card .r { width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid #c5cad6; flex: none; margin-top: 2px; }
+.radio-card.on .r { border: 5px solid var(--primary); }
+
+/* 下拉菜单 / 浮层 */
+.pop { position: absolute; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow-lg); padding: 6px; z-index: 60; min-width: 200px; }
+.pop .mi { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 7px; cursor: pointer; color: var(--ink-2); }
+.pop .mi:hover { background: var(--hover); color: var(--ink); }
+.pop .mi.on { color: var(--primary-ink); }
+.pop .mi.danger { color: var(--danger); }
+.pop .sep { height: 1px; background: var(--line-2); margin: 5px 4px; }
+.pop .ph { font-size: 11.5px; color: var(--ink-4); padding: 6px 10px 2px; }
+.mask { position: fixed; inset: 0; background: rgba(15,23,42,.36); z-index: 80; display: grid; place-items: center; }
+.modal { background: var(--surface); border-radius: 14px; width: 560px; max-width: calc(100vw - 40px); max-height: calc(100vh - 60px); display: flex; flex-direction: column; box-shadow: var(--shadow-lg); }
+.modal.wide { width: 760px; }
+.modal-h { display: flex; align-items: center; padding: 16px 20px; border-bottom: 1px solid var(--line-2); }
+.modal-b { padding: 18px 20px; overflow-y: auto; }
+.modal-f { padding: 12px 20px; border-top: 1px solid var(--line-2); display: flex; justify-content: flex-end; gap: 8px; }
+.drawer-mask { position: fixed; inset: 0; background: rgba(15,23,42,.2); z-index: 70; }
+.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: 520px; max-width: 92vw; background: var(--surface); z-index: 71; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; }
+.toast { position: fixed; top: 64px; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 9px 16px; border-radius: 10px; font-size: 13.5px; z-index: 100; box-shadow: var(--shadow-md); }
+
+/* ---------- 设计说明（评审用，非产品界面） ---------- */
+.notes { width: 300px; flex: none; overflow-y: auto; background: #fffdf3; border-left: 1px solid #f3e3a6; padding: 14px 16px; font-size: 13px; }
+.notes h4 { font-size: 13px; margin: 10px 0 4px; color: #92400e; }
+.notes ul { margin: 0; padding-left: 18px; }
+.notes li { margin: 3px 0; color: #57534e; }
+.notes .be { display: inline-block; font-size: 11px; background: #fde68a; color: #92400e; border-radius: 4px; padding: 0 5px; margin-right: 4px; }
+
+/* ---------- 智能平台首页 ---------- */
+.hero { min-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px 24px 90px; }
+.hero h1 { font-size: 28px; font-weight: 650; margin-bottom: 26px; letter-spacing: .01em; }
+.hero .composer { width: 100%; max-width: 760px; }
+.quick { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 18px; max-width: 760px; }
+.quick .chip { cursor: pointer; height: 34px; border-radius: 17px; color: var(--ink-2); }
+.quick .chip:hover { background: var(--hover); }
+.composer { background: var(--surface); border: 1px solid #dfe2ea; border-radius: 18px; box-shadow: 0 2px 10px rgba(16,24,40,.06); padding: 12px 12px 10px 16px; }
+.composer:focus-within { border-color: #c7cbf6; box-shadow: 0 0 0 4px var(--primary-weak), 0 2px 10px rgba(16,24,40,.06); }
+.composer textarea { width: 100%; border: none; outline: none; resize: none; min-height: 52px; max-height: 220px; font-size: 15px; line-height: 1.6; background: transparent; padding: 2px 0; }
+.composer .bar { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+.pill { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border-radius: 15px; border: 1px solid var(--line); background: var(--surface); cursor: pointer; font-size: 13px; color: var(--ink-2); font-weight: 550; white-space: nowrap; }
+.pill:hover { background: var(--hover); }
+.send { width: 34px; height: 34px; border-radius: 50%; border: none; background: var(--primary); color: #fff; display: grid; place-items: center; cursor: pointer; margin-left: auto; }
+.send[disabled] { background: #c7cbd6; cursor: not-allowed; }
+.attach { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+
+/* ---------- 对话页 ---------- */
+.chat { display: flex; flex-direction: column; height: 100%; }
+.chat-head { height: 52px; flex: none; display: flex; align-items: center; gap: 10px; padding: 0 16px 0 22px; border-bottom: 1px solid var(--line-2); background: var(--surface); }
+.chat-scroll { flex: 1; overflow-y: auto; }
+.chat-col { max-width: 780px; margin: 0 auto; padding: 24px 24px 20px; }
+.chat-foot { flex: none; padding: 0 24px 18px; }
+.chat-foot .composer { max-width: 780px; margin: 0 auto; }
+.m-user { display: flex; justify-content: flex-end; margin: 6px 0 22px; }
+.m-user .b { background: #f1f3f9; padding: 10px 14px; border-radius: 16px 16px 4px 16px; max-width: 78%; white-space: pre-wrap; }
+.m-ai { margin-bottom: 26px; }
+.m-ai .who { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-weight: 600; font-size: 13.5px; }
+.m-ai .prose { font-size: 15px; line-height: 1.75; color: var(--ink); }
+.m-ai .prose p { margin: 0 0 10px; }
+.m-ai .prose ul { margin: 0 0 10px; padding-left: 22px; }
+.m-ai .prose.aside { color: var(--ink-3); font-size: 14px; }
+.m-actions { display: flex; gap: 2px; margin-top: 4px; }
+.m-actions .ibtn { width: 28px; height: 28px; color: var(--ink-4); }
+.m-actions .ibtn:hover { color: var(--ink); }
+.steps { border: 1px solid var(--line); border-radius: 12px; margin: 4px 0 12px; background: var(--surface); overflow: hidden; }
+.steps-h { display: flex; align-items: center; gap: 8px; padding: 9px 12px; cursor: pointer; color: var(--ink-2); font-size: 13.5px; font-weight: 550; }
+.steps-h:hover { background: var(--surface-2); }
+.steps-b { border-top: 1px solid var(--line-2); padding: 6px 12px 8px; }
+.step { display: flex; align-items: center; gap: 10px; padding: 6px 0; font-size: 13.5px; color: var(--ink-2); }
+.step .ic { width: 24px; height: 24px; border-radius: 7px; background: var(--line-2); display: grid; place-items: center; color: var(--ink-3); flex: none; }
+.step .ic svg { width: 14px; height: 14px; }
+.step .tm { margin-left: auto; color: var(--ink-4); font-size: 12px; }
+.spin { width: 14px; height: 14px; border: 2px solid #c7cbf6; border-top-color: var(--primary); border-radius: 50%; animation: spin .8s linear infinite; flex: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.subcard { border: 1px solid var(--line); border-left: 3px solid var(--secondary); border-radius: 10px; margin: 8px 0; background: var(--surface); }
+.subcard .h { display: flex; align-items: center; gap: 8px; padding: 9px 12px; cursor: pointer; font-size: 13.5px; }
+.subcard .b { border-top: 1px solid var(--line-2); padding: 8px 12px 10px 14px; font-size: 13.5px; color: var(--ink-2); }
+.ask { border: 1px solid #f5d38b; background: #fffbf0; border-radius: 12px; padding: 14px 16px; margin: 8px 0 12px; }
+.ask pre { background: #fff; border: 1px solid #f3e2b8; border-radius: 8px; padding: 8px 10px; margin: 8px 0 10px; font-family: var(--mono); font-size: 12.5px; white-space: pre-wrap; }
+.todo { border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; margin: 6px 0 12px; }
+.todo .it { display: flex; gap: 8px; align-items: center; padding: 3px 0; font-size: 13.5px; }
+.todo .ck { width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid #c5cad6; flex: none; display: grid; place-items: center; }
+.todo .ck.done { background: var(--success); border-color: var(--success); color: #fff; }
+.todo .ck.doing { border-color: var(--primary); border-top-color: transparent; animation: spin 1.2s linear infinite; }
+.todo .done-t { color: var(--ink-4); text-decoration: line-through; }
+.cursor { display: inline-block; width: 8px; height: 16px; background: var(--primary); vertical-align: -2px; animation: blink 1s step-end infinite; border-radius: 2px; }
+@keyframes blink { 50% { opacity: 0; } }
+
+/* ---------- 列表卡片 ---------- */
+.toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 14px; }
+.acard { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 10px; cursor: pointer; transition: box-shadow .15s, border-color .15s; position: relative; }
+.acard:hover { border-color: #d6d9e3; box-shadow: var(--shadow-md); }
+.acard .desc { color: var(--ink-3); font-size: 13px; line-height: 1.55; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 40px; }
+.acard .foot { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--ink-3); margin-top: auto; }
+.acard .acts { position: absolute; top: 12px; right: 10px; }
+
+/* ---------- 智能体编辑（编排 + 调试预览） ---------- */
+.ed { display: flex; flex-direction: column; height: 100%; background: var(--bg); }
+.ed-head { height: 58px; flex: none; display: flex; align-items: center; gap: 12px; padding: 0 18px; background: var(--surface); border-bottom: 1px solid var(--line); }
+.ed-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 440px; }
+.ed-left { overflow-y: auto; padding: 20px 24px 60px; }
+.ed-left-in { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 12px; }
+.sec { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
+.sec-h { display: flex; align-items: center; gap: 10px; padding: 13px 16px; cursor: pointer; }
+.sec-h .chev { transition: transform .15s; color: var(--ink-4); }
+.sec.open .sec-h .chev { transform: rotate(90deg); }
+.sec-h .sum { margin-left: auto; color: var(--ink-3); font-size: 12.5px; }
+.sec-b { padding: 2px 16px 16px; display: none; }
+.sec.open .sec-b { display: block; }
+.cap { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line-2); }
+.cap:last-child { border-bottom: none; }
+.cap .ic { width: 32px; height: 32px; border-radius: 9px; background: var(--primary-weak); color: var(--primary); display: grid; place-items: center; flex: none; }
+.ed-preview { border-left: 1px solid var(--line); background: var(--surface); display: flex; flex-direction: column; min-height: 0; }
+.ed-preview .ph { height: 46px; display: flex; align-items: center; gap: 8px; padding: 0 14px; border-bottom: 1px solid var(--line-2); flex: none; }
+.ed-preview .pb { flex: 1; overflow-y: auto; padding: 16px; }
+.ed-preview .pf { padding: 10px 14px 14px; }
+.ed-preview .composer { border-radius: 14px; padding: 8px 8px 8px 12px; }
+.ed-preview .composer textarea { min-height: 36px; font-size: 14px; }
+.ed-preview .m-ai .prose { font-size: 14px; }
+
+/* 文档上传步骤 */
+.drop { border: 1.5px dashed #cdd2de; border-radius: 12px; padding: 28px; text-align: center; color: var(--ink-3); background: var(--surface-2); }
+.steps-line { display: flex; gap: 8px; margin-bottom: 18px; }
+.steps-line .s { flex: 1; display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-4); }
+.steps-line .s b { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; background: var(--line-2); font-size: 12px; }
+.steps-line .s.on { color: var(--ink); font-weight: 600; }
+.steps-line .s.on b { background: var(--primary); color: #fff; }
+.bar-score { height: 6px; border-radius: 3px; background: var(--line-2); overflow: hidden; width: 80px; }
+.bar-score i { display: block; height: 100%; background: var(--primary-2); }
+
+/* ---------- 本机 CLI 新增 ---------- */
+.ddot { width: 8px; height: 8px; border-radius: 50%; flex: none; display: inline-block; }
+.ddot.on { background: var(--success); box-shadow: 0 0 0 3px var(--success-weak); }
+.ddot.off { background: #cbd5e1; }
+.ddot.warn { background: var(--warning); box-shadow: 0 0 0 3px var(--warning-weak); }
+.devchip { white-space: nowrap; flex: none; display: inline-flex; align-items: center; gap: 7px; height: 26px; padding: 0 10px; border-radius: 13px; border: 1px solid var(--line); background: var(--surface-2); font-size: 12.5px; color: var(--ink-2); cursor: pointer; max-width: 360px; }
+.devchip:hover { background: var(--hover); }
+.devchip .path { font-family: var(--mono); font-size: 12px; color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pill.warn { border-color: #f5d38b; background: var(--warning-weak); color: var(--warning); }
+.pill .path { font-family: var(--mono); font-size: 12px; color: var(--ink-3); }
+.banner { display: flex; gap: 10px; align-items: flex-start; padding: 10px 14px; border-radius: 10px; font-size: 13.5px; line-height: 1.6; }
+.banner svg.i { margin-top: 2px; }
+.banner.warn { background: var(--warning-weak); border: 1px solid #f5d38b; color: #92400e; }
+.banner.err { background: var(--danger-weak); border: 1px solid #f5c2c2; color: #991b1b; }
+.banner.info { background: var(--secondary-weak); border: 1px solid #bae6fd; color: #075985; }
+.banner.gray { background: var(--surface-2); border: 1px solid var(--line); color: var(--ink-2); }
+.dcard { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; display: flex; gap: 14px; align-items: flex-start; }
+.dcard .dic { width: 44px; height: 44px; border-radius: 12px; background: var(--primary-weak); color: var(--primary); display: grid; place-items: center; flex: none; }
+.dcard .dic svg { width: 22px; height: 22px; }
+.dcard.off .dic { background: var(--line-2); color: var(--ink-4); }
+.meta { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12.5px; color: var(--ink-3); }
+.mchip { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 8px; border-radius: 6px; background: var(--line-2); font-size: 12px; color: var(--ink-2); }
+.mchip.mono { font-family: var(--mono); font-size: 11.5px; }
+.term { background: #0f172a; color: #e2e8f0; border-radius: 12px; padding: 14px 16px; font-family: var(--mono); font-size: 12.5px; line-height: 1.75; white-space: pre-wrap; margin: 0; overflow-x: auto; }
+.term .p { color: #94a3b8; } .term .c { color: #f8fafc; font-weight: 600; } .term .ok { color: #4ade80; } .term .warn { color: #fbbf24; } .term .err { color: #f87171; } .term .dim { color: #64748b; } .term .k { color: #93c5fd; } .term .s { color: #fca5a5; }
+.codebox { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.codebox .ln { display: grid; grid-template-columns: 44px 1fr; font-family: var(--mono); font-size: 12.5px; line-height: 1.75; }
+.codebox .ln span:first-child { color: var(--ink-4); text-align: right; padding-right: 12px; background: var(--surface-2); user-select: none; }
+.codebox .ln span:last-child { padding-left: 12px; white-space: pre; }
+.fr { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 4px 8px; border-radius: 7px; cursor: pointer; font-size: 13.5px; }
+.fr:hover { background: var(--hover); }
+.fr .nm { font-family: var(--mono); font-size: 12.5px; }
+.fr .acts { margin-left: auto; display: flex; gap: 2px; opacity: 0; }
+.fr:hover .acts { opacity: 1; }
+.st { width: 18px; text-align: center; font-family: var(--mono); font-weight: 700; font-size: 12px; flex: none; }
+.st.M { color: var(--warning); } .st.A { color: var(--success); } .st.D { color: var(--danger); } .st.R { color: #0369a1; }
+.fr.del .nm { text-decoration: line-through; color: var(--ink-4); }
+.pairc { font-family: var(--mono); font-size: 30px; font-weight: 700; letter-spacing: .12em; color: var(--ink); text-align: center; padding: 14px 0 4px; }
+.stepn { display: flex; gap: 12px; align-items: flex-start; }
+.stepn > b { width: 24px; height: 24px; border-radius: 50%; background: var(--primary); color: #fff; display: grid; place-items: center; font-size: 12.5px; flex: none; }
+.stepn.done > b { background: var(--success); }
+.stepn.wait > b { background: var(--line); color: var(--ink-3); }
+.cmd { display: flex; align-items: center; gap: 8px; background: #0f172a; color: #e2e8f0; border-radius: 9px; padding: 8px 8px 8px 12px; font-family: var(--mono); font-size: 12.5px; margin-top: 8px; }
+.cmd span { flex: 1; word-break: break-all; }
+.cmd .ibtn { color: #94a3b8; } .cmd .ibtn:hover { background: #1e293b; color: #fff; }
+.notes .demo { margin-top: 12px; padding-top: 10px; border-top: 1px dashed #f3e3a6; }
+.notes .demo .seg { flex-wrap: wrap; }
+.notes .demo .seg a { font-size: 12px; padding: 3px 8px; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+/* =====================================================================
+ * 图标（lucide 风格，内联 SVG）
+ * ===================================================================== */
+const ICONS = {
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
+  chat: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  bot: '<rect x="3" y="8" width="18" height="12" rx="3"/><path d="M12 8V4M8.5 14h.01M15.5 14h.01"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  users: '<circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0M16 3.1a4 4 0 0 1 0 7.8M22 21a7 7 0 0 0-5-6.7"/>',
+  book: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/>',
+  spark: '<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 17l.6 1.6L21 19l-1.4.5L19 21l-.6-1.5L17 19l1.4-.4z"/>',
+  plug: '<path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4"/>',
+  layers: '<path d="m12 2 10 5-10 5L2 7z"/><path d="m2 17 10 5 10-5M2 12l10 5 10-5"/>',
+  sliders: '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>',
+  left: '<path d="m15 18-6-6 6-6"/>',
+  right: '<path d="m9 18 6-6-6-6"/>',
+  down: '<path d="m6 9 6 6 6-6"/>',
+  more: '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
+  up: '<path d="M12 19V5M5 12l7-7 7 7"/>',
+  clip: '<path d="m21.4 11.1-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/>',
+  file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>',
+  folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  share: '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
+  refresh: '<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/>',
+  like: '<path d="M7 10v11H4V10zM7 10l4-8a3 3 0 0 1 3 3v4h5.5a2 2 0 0 1 2 2.3l-1.4 8A2 2 0 0 1 18 21H7"/>',
+  dislike: '<path d="M17 14V3h3v11zM17 14l-4 8a3 3 0 0 1-3-3v-4H4.5a2 2 0 0 1-2-2.3l1.4-8A2 2 0 0 1 6 3h11"/>',
+  terminal: '<path d="m4 17 6-5-6-5M12 19h8"/>',
+  pencil: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+  trash: '<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>',
+  archive: '<rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8M10 12h4"/>',
+  bulb: '<path d="M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z"/>',
+  logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>',
+  key: '<circle cx="7.5" cy="15.5" r="4.5"/><path d="m10.7 12.3 9.8-9.8M17 6l3 3M14 9l2 2"/>',
+  upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>',
+  panel: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/>',
+  alert: '<circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
+  lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+  play: '<path d="M7 4l13 8-13 8z"/>',
+  list: '<path d="M9 6h12M9 12h12M9 18h12M4 6h.01M4 12h.01M4 18h.01"/>',
+  bookmark: '<path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>',
+  help: '<circle cx="12" cy="12" r="9"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3M12 17h.01"/>',
+  shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+  eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+  grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+  star: '<path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/>',
+  zap: '<path d="M13 2 3 14h8l-1 8 10-12h-8z"/>',
+  link: '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>',
+};
+const ic = (n, cls = '') => `<svg class="i ${n === 'more' ? 'fill' : ''} ${cls}" viewBox="0 0 24 24">${ICONS[n] || ''}</svg>`;
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const COLORS = ['#6366f1', '#0ea5e9', '#f59e0b', '#10b981', '#ec4899', '#8b5cf6', '#14b8a6', '#ef4444'];
+const av = (name, color, size = 30, sq = true) =>
+  `<span class="avatar ${sq ? 'sq' : ''}" style="width:${size}px;height:${size}px;font-size:${Math.round(size * 0.42)}px;background:${color}">${esc((name || '?').slice(0, 1))}</span>`;
+
+
+Object.assign(ICONS, {
+  laptop: '<rect x="4" y="4" width="16" height="11" rx="2"/><path d="M2 19h20"/>',
+  monitor: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',
+  wifioff: '<path d="M2 2l20 20M8.5 16.4a5 5 0 0 1 7 0M5 12.9a10 10 0 0 1 5.2-2.8M19 12.9a10 10 0 0 0-2.3-1.7M2 8.8a15 15 0 0 1 4.2-2.6M22 8.8A15 15 0 0 0 11 5M12 20h.01"/>',
+  git: '<circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="9" r="2.5"/><path d="M6 8.5v7M18 11.5c0 4-6 3-10 5"/>',
+  dl: '<path d="M12 4v12M6 10l6 6 6-6M4 20h16"/>',
+  cog: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
+});
+
+/* =====================================================================
+ * 演示数据（内存态，刷新后重置）
+ * ===================================================================== */
+const ME = { name: '周景行', account: 'zhoujx', dept: '平台部', color: '#6366f1' };
+const D = {
+  agents: [
+    { id: 'general', name: '通用助手', color: '#6366f1', desc: '写代码、跑命令、查资料、整理文档都能做，记得你的偏好，能查你有权限的知识库。', owner: '平台', isDefault: true, kind: 'native' },
+    { id: 'coder', name: '编程助手', color: '#0ea5e9', desc: '在平台的独立开发环境里用 Claude Code 写代码、改文件、跑测试。', owner: '周景行', mine: true, kind: 'pod' },
+    { id: 'local', name: '本机编程助手', color: '#14b8a6', desc: '用你电脑上的 Claude Code，直接改你电脑上的项目：读代码、改文件、跑测试，用你本机的开发环境。', owner: '周景行', mine: true, kind: 'device' },
+    { id: 'kbqa', name: '产品知识问答', color: '#10b981', desc: '基于产品手册和常见问题回答客户咨询，回答附出处。', owner: '李工', kind: 'native' },
+  ],
+  devices: [
+    { id: 'mbp', name: 'MacBook Pro', icon: 'laptop', os: 'macOS 15.1', ver: '1.0.2', online: true, isDefault: true, paired: '11-13', seen: '在线 2 小时',
+      clis: [['Claude Code', '2.1.4'], ['Codex', '0.9.2']], roots: ['~/code', '~/atlas-projects'], sessions: ['l1', 'l2s'],
+      policy: { maxMode: '接受编辑', maxSessions: 3, remoteFiles: true, deny: ['*.pem', '*.key', 'id_rsa*'] } },
+    { id: 'desk', name: '公司台式机', icon: 'monitor', os: 'Ubuntu 24.04', ver: '0.9.0', online: false, outdated: true, paired: '11-10', seen: '最近在线 昨天 18:20',
+      clis: [['Claude Code', '2.0.1']], roots: ['~/work'], sessions: [],
+      policy: { maxMode: '自动', maxSessions: 2, remoteFiles: false, deny: [] } },
+  ],
+  threads: [
+    { id: 'l1', title: '修复登录页跳转', agent: 'local', dev: 'mbp', dir: '~/code/shop-web', group: '今天', state: 'wait' },
+    { id: 'l2', title: '写个导出订单的脚本', agent: 'general', group: '今天' },
+    { id: 'l3', title: '报表生成器重构', agent: 'local', dev: 'desk', dir: '~/work/report-gen', group: '昨天' },
+    { id: 'x1', title: '整理 Q4 平台路线图', agent: 'general', group: '昨天' },
+    { id: 'x2', title: '客户退款政策怎么回复', agent: 'kbqa', group: '近 7 天' },
+  ],
+  changes: [
+    { s: 'M', p: 'src/auth/callback.ts', t: '修改 · 2 分钟前' },
+    { s: 'A', p: 'src/auth/safe-next.ts', t: '新增 · 2 分钟前' },
+    { s: 'A', p: 'src/auth/safe-next.test.ts', t: '新增 · 1 分钟前' },
+    { s: 'D', p: 'src/legacy/redirect.js', t: '删除' },
+  ],
+  projects: { '~/code': ['shop-web', 'atlas', 'scripts'], '~/atlas-projects': ['3f2a8c1e…（写个导出订单的脚本）'] },
+};
+const agentOf = (id) => D.agents.find((a) => a.id === id) || D.agents[0];
+const devOf = (id) => D.devices.find((d) => d.id === id) || D.devices[0];
+const threadOf = (id) => D.threads.find((t) => t.id === id);
+const defaultDev = () => D.devices.find((d) => d.isDefault);
+const KIND_TAG = { pod: '<span class="tag blue">Claude Code</span>', device: '<span class="tag success">本机</span><span class="tag blue">Claude Code</span>', native: '' };
+
+/* =====================================================================
+ * 状态与路由
+ * ===================================================================== */
+const S = {
+  notes: true, pop: null, modal: null, drawer: null, toast: null,
+  composerAgent: 'local', homeDev: 'mbp', homeDir: { kind: 'new' }, allOffline: false,
+  l1: 'normal', l2: 'ok', fileTab: 'changes', tree: { src: true },
+  edModel: 'platform', edMode: 1, stepsOpen: {},
+};
+function parseRoute() {
+  const h = (location.hash || '#/ai').slice(2).split('/');
+  return { p: h[0] || 'ai', a: h[1] || '', b: h[2] || '', c: decodeURIComponent(h.slice(3).join('/')) };
+}
+const go = (h) => { S.pop = null; location.hash = h; };
+window.addEventListener('hashchange', () => { S.modal = null; S.drawer = null; S.pop = null; render(); document.querySelector('.main')?.scrollTo(0, 0); });
+
+const PLATFORMS = [['ai', '智能平台', 'zap'], ['kb', '知识库', 'book'], ['skills', '技能', 'spark'], ['mcp', 'MCP', 'plug'], ['models', '模型', 'layers']];
+function topbar(r) {
+  return `<header class="top">
+    <div class="brand" data-go="#/ai"><span class="logo">A</span>Atlas</div>
+    <nav class="pnav">${PLATFORMS.map(([id, n, icn]) => `<a ${id === 'ai' ? 'href="#/ai"' : 'data-act="toast" data-msg="原型只画了智能平台"'} class="${r.p === id ? 'on' : ''}">${ic(icn)}${n}</a>`).join('')}</nav>
+    <div class="top-right">
+      <button class="btn sm ${S.notes ? '' : 'ghost'}" data-act="toggleNotes">${ic('bulb')}设计说明</button>
+      ${av(ME.name, ME.color, 30, false)}
+    </div></header>`;
+}
+function sider(r) {
+  const items = [
+    ['#/ai/agents', 'bot', '智能体', r.a === 'agents'],
+    ['#/ai/devices', 'laptop', '我的设备', r.a === 'devices'],
+    ['#/ai/me', 'user', '个性化', false],
+  ];
+  const groups = [...new Set(D.threads.map((t) => t.group))];
+  return `<aside class="sider"><div class="sider-top">
+    <div class="new-chat" data-go="#/ai">${ic('plus')}<span>新对话</span></div>
+    ${items.map(([h, icn, t, on]) => `<a class="snav ${on ? 'on' : ''}" ${h === '#/ai/me' ? 'data-act="toast" data-msg="个性化（本原型未改动）"' : `href="${h}"`}>${ic(icn)}<span>${t}</span></a>`).join('')}</div>
+    <div class="hist"><div class="hist-head"><span class="xs muted" style="font-weight:600">最近对话</span></div>
+    ${groups.map((g) => `<div class="hist-group">${g}</div>${D.threads.filter((t) => t.group === g).map((t) => `
+      <div class="hist-item ${r.a === 'c' && r.b === t.id ? 'on' : ''}" ${t.id.startsWith('x') ? 'data-act="toast" data-msg="普通对话（本原型未改动）"' : `data-go="#/ai/c/${t.id}"`}>
+        ${t.state === 'wait' ? '<span class="dot wait" title="等你确认"></span>' : ''}
+        <span class="t">${esc(t.title)}</span>${t.dev ? `<span class="faint" title="在 ${devOf(t.dev).name} 上运行">${ic(devOf(t.dev).icon)}</span>` : ''}</div>`).join('')}`).join('')}
+    </div></aside>`;
+}
+
+/* =====================================================================
+ * 渲染
+ * ===================================================================== */
+function render() {
+  const r = parseRoute();
+  document.getElementById('app').innerHTML = topbar(r) +
+    `<div class="body">${sider(r)}<main class="main ${r.a === 'c' ? 'white' : ''}">${page(r)}</main>${S.notes ? notesPanel(r) : ''}</div>` +
+    modal() + drawer() + (S.toast ? `<div class="toast">${esc(S.toast)}</div>` : '') + pop();
+}
+function page(r) {
+  if (r.a === 'agents' && r.b) return agentEditor();
+  if (r.a === 'agents') return agentList();
+  if (r.a === 'devices' && r.b === 'terminal') return terminalPage();
+  if (r.a === 'devices') return devicesPage();
+  if (r.a === 'c') return chatPage(r.b);
+  if (r.a === 'f') return previewPage(r.b, r.c);
+  return aiHome();
+}
+function toast(msg) { S.toast = msg; render(); clearTimeout(toast.t); toast.t = setTimeout(() => { S.toast = null; render(); }, 2000); }
+const devDot = (d) => `<span class="ddot ${d.online ? 'on' : 'off'}" title="${d.online ? '在线' : '离线'}"></span>`;
+
+/* =====================================================================
+ * 首页：选了本机智能体后，选电脑和项目目录
+ * ===================================================================== */
+const MODES = { auto: '自动', edit: '接受编辑', manual: '手动' };
+function homeDevice() {
+  if (S.allOffline) return null;
+  const d = devOf(S.homeDev);
+  return d.online ? d : null;
+}
+function dirLabel() {
+  return S.homeDir.kind === 'new' ? `新目录 <span class="path">~/atlas-projects/{这次对话}</span>` : `<span class="path">${esc(S.homeDir.path)}</span>`;
+}
+function homeComposer(a) {
+  const local = a.kind === 'device';
+  const d = homeDevice();
+  const blocked = local && !d;
+  return `<div class="composer">
+    <textarea rows="2" placeholder="${local ? '要在你的电脑上做什么？' : '有什么可以帮你？'}"></textarea>
+    <div class="bar">
+      <button class="ibtn" title="添加文件" data-act="toast" data-msg="${local ? '本机智能体：文件就在你的电脑上，不需要上传' : '选择文件上传到工作区'}" ${local ? 'disabled style="opacity:.4"' : ''}>${ic('clip')}</button>
+      <span class="pill" data-pop="agentPick">${av(a.name, a.color, 18)}${esc(a.name)}${ic('down')}</span>
+      ${local ? (d
+        ? `<span class="pill" data-pop="devPick">${devDot(d)}${esc(d.name)}${ic('down')}</span><span class="pill" data-pop="dirPick" title="项目目录：建好对话后不能换">${ic('folder')}${dirLabel()}${ic('down')}</span>`
+        : `<span class="pill warn" data-pop="devPick">${ic('wifioff')}没有能用的电脑${ic('down')}</span>`) : ''}
+      <span class="pill" data-act="toast" data-msg="执行方式：自动 / 接受编辑 / 手动">${ic('shield')}${local ? '接受编辑' : '自动'}${ic('down')}</span>
+      <button class="send" ${blocked ? 'disabled title="没有能用的电脑"' : 'data-act="sendHome" title="发送"'}>${ic('up')}</button>
+    </div></div>
+    ${local ? (d
+      ? `<div class="xs muted row" style="justify-content:center;margin-top:10px;gap:6px">${ic('alert')}<span>Claude Code 会以你的身份在 <b>${esc(d.name)}</b> 上工作：读写项目目录、执行命令。做哪些事要先问你，看「执行方式」。</span></div>`
+      : `<div class="banner warn" style="margin-top:12px">${ic('wifioff')}<div><b>你的电脑都不在线</b><div class="sm">在电脑上启动连接器（<code>atlas-connect run</code>），连上后这里自动可用；还没有设备的话，先 <a href="#/ai/devices">添加设备</a>。</div></div></div>`) : ''}`;
+}
+function aiHome() {
+  const a = agentOf(S.composerAgent);
+  const quick = a.kind === 'device' ? ['修复一个 bug', '给项目加单元测试', '解释这个项目的结构'] : ['整理本周的工作周报', '分析一份表格数据', '查一下公司报销制度'];
+  return `<div class="hero"><h1>下午好，景行</h1><div class="composer-wrap" style="width:100%;max-width:760px">${homeComposer(a)}</div>
+    <div class="quick">${quick.map((q) => `<span class="chip">${esc(q)}</span>`).join('')}</div></div>`;
+}
+
+/* =====================================================================
+ * 智能体列表 + 创建
+ * ===================================================================== */
+function agentList() {
+  return `<div class="page">
+    <div class="page-head"><h1>智能体</h1><span class="sp"></span><button class="btn primary" data-act="newAgent">${ic('plus')}创建智能体</button></div>
+    <div class="grid">${D.agents.map((a) => `<div class="acard" ${a.id === 'local' ? 'data-go="#/ai/agents/local"' : 'data-act="toast" data-msg="本原型只画了本机编程助手的编辑页"'}>
+      <div class="row">${av(a.name, a.color, 40)}<div class="grow"><div class="row"><b class="ellipsis">${esc(a.name)}</b>${a.isDefault ? '<span class="tag primary">默认</span>' : ''}${KIND_TAG[a.kind]}</div>
+        <div class="xs muted">${a.mine ? '我创建的' : esc(a.owner)}</div></div></div>
+      <div class="desc">${esc(a.desc)}</div>
+      <div class="foot">${a.kind === 'device' ? `${ic('laptop')}<span>在使用者自己的电脑上运行</span>` : `${ic('clock')}<span>最近使用 昨天</span>`}<span class="sp"></span><button class="btn sm primary" data-act="chatWith" data-id="${a.id}">${ic('chat')}对话</button></div>
+    </div>`).join('')}</div></div>`;
+}
+
+/* =====================================================================
+ * 智能体编辑：本机编程助手
+ * ===================================================================== */
+function sec(title, sum, body, open = true) {
+  return `<div class="sec ${open ? 'open' : ''}"><div class="sec-h"><span class="chev">${ic('right')}</span><h3>${title}</h3><span class="sum">${sum || ''}</span></div><div class="sec-b">${body}</div></div>`;
+}
+function agentEditor() {
+  const a = agentOf('local');
+  const rc = (on, t, d, extra = '', act = '') => `<div class="radio-card ${on ? 'on' : ''}" ${act}><span class="r"></span><div class="grow"><b>${t}</b><div class="sm muted">${d}</div>${on ? extra : ''}</div></div>`;
+  const left = [
+    sec('运行环境', '使用者自己的电脑', `<div class="kv" style="grid-template-columns:120px 1fr">
+        <dt>运行在哪里</dt><dd><span class="tag success">${ic('laptop')}使用者自己的电脑</span> <span class="xs muted">建好后不能改</span></dd>
+        <dt>CLI</dt><dd>Claude Code <span class="xs muted">建好后不能改</span></dd>
+        <dt style="padding-top:7px">默认项目地址</dt><dd><input class="input mono" style="width:320px" value="~/atlas-projects">
+          <div class="help">新对话默认在「默认项目地址 / 对话 id」这个新目录里工作，被别的智能体委派时也用它；<code>~</code> 是每个人电脑上的主目录。改了只影响之后的新对话。<br>这个地址要在使用者电脑允许的目录里，否则那台电脑会拒绝。</div></dd></div>`),
+    sec('人设与指令', '312 字', `<textarea class="input" rows="4">你在使用者自己的电脑上工作，项目目录里的代码就是他正在开发的项目。\n改动前先说明要改什么；跑测试时优先用项目自带的脚本。</textarea>`, false),
+    sec('模型', S.edModel === 'platform' ? '平台的模型 · DeepSeek V4 Pro' : '电脑上 CLI 自己的登录', `<div class="col">
+      ${rc(S.edModel === 'platform', '平台的模型', '经平台的模型网关调用，用量记在这个智能体名下；对话里可以换模型', `<div style="margin-top:10px" data-stop><select class="select" style="width:280px"><option>DeepSeek V4 Pro</option><option>MiniMax M3.1 Flash</option><option>Claude Sonnet 5</option></select></div>`, 'data-act="edModel" data-v="platform"')}
+      ${rc(S.edModel === 'local', '电脑上 CLI 自己的登录', 'CLI 用使用者自己在电脑上登录的账号直接调模型；平台看不到这部分用量，对话里不显示模型选择', '', 'data-act="edModel" data-v="local"')}</div>`),
+    sec('操作权限', ['自动', '接受编辑', '手动', '仅规划'][S.edMode], `<div class="col">${[['自动', '常规操作直接做，有风险的会拒绝'], ['接受编辑', '改文件不用问，运行命令前先问你'], ['手动', '每次操作前都先问你'], ['仅规划', '只分析和出方案，不改任何东西']].map(([t, d], i) => rc(S.edMode === i, t, d, '', `data-act="edMode" data-v="${i}"`)).join('')}</div>
+      <div class="banner gray" style="margin-top:12px">${ic('shield')}<div class="sm">每台电脑可以在本机设一个上限（比如最多「接受编辑」）。这里要求得比上限高，那台电脑会拒绝开对话，并在对话里说明原因。</div></div>`),
+    sec('知识库', '人事制度', '', false),
+    sec('工具', '网页搜索', `<div class="sm muted">经平台的设备网关调用，智能体的 Key 留在平台，不会落到使用者电脑上。</div>`, false),
+    sec('技能', '用电脑上的配置', `<div class="sm muted">本机智能体用 CLI 在电脑上自己的技能和配置，平台的技能不下发到电脑。</div>`, false),
+    sec('高级设置', '', `<span class="label">访问权限</span><div class="col">
+      ${rc(true, '以使用者的身份', '每个人只能经它访问自己本来就有权限的资料')}
+      <div class="radio-card" style="opacity:.5;cursor:not-allowed"><span class="r"></span><div><b>以智能体自己的身份</b><div class="sm muted">本机智能体不可用：调用凭证在使用者自己的电脑上，按智能体的权限会让人拿到超出自己的权限</div></div></div></div>`),
+  ].join('');
+  const d = defaultDev();
+  return `<div class="ed">
+    <div class="ed-head"><button class="ibtn" data-go="#/ai/agents">${ic('left')}</button>${av(a.name, a.color, 34)}
+      <div><div class="row"><b style="font-size:15px">${esc(a.name)}</b><span class="tag success">本机</span><span class="tag success">已发布 v1</span></div><div class="xs muted">所有修改已发布</div></div>
+      <span class="sp"></span><button class="btn">${ic('share')}共享</button><button class="btn primary">发布</button></div>
+    <div class="ed-body"><div class="ed-left"><div class="ed-left-in">${left}</div></div>
+      <div class="ed-preview"><div class="ph"><b>调试预览</b><span class="sp"></span><span class="devchip">${devDot(d)}${esc(d.name)}<span class="path">~/atlas-projects/{调试}</span></span></div>
+        <div class="pb"><div class="empty" style="padding:50px 10px"><div class="ill">${ic('laptop')}</div><h3>在你的电脑上试一试</h3><p class="sm">调试也跑在你自己的电脑上（默认设备），用当前未发布的配置</p></div></div>
+        <div class="pf"><div class="composer" style="border-radius:14px;padding:8px 8px 8px 12px"><textarea rows="1" placeholder="输入消息试一试" style="min-height:36px;font-size:14px"></textarea><div class="bar"><button class="send" data-act="toast" data-msg="（原型）在 MacBook Pro 上开一个调试对话">${ic('up')}</button></div></div></div></div></div></div>`;
+}
+
+/* =====================================================================
+ * 我的设备
+ * ===================================================================== */
+function deviceCard(d) {
+  return `<div class="dcard ${d.online ? '' : 'off'}">
+    <div class="dic">${ic(d.icon)}</div>
+    <div class="grow col" style="gap:8px">
+      <div class="row"><b style="font-size:15px">${esc(d.name)}</b>${d.isDefault ? '<span class="tag primary">默认</span>' : ''}
+        ${d.online ? '<span class="tag success"><span class="ddot on" style="width:6px;height:6px;box-shadow:none"></span>在线</span>' : '<span class="tag">离线</span>'}</div>
+      <div class="meta"><span>${esc(d.os)}</span><span>连接器 ${esc(d.ver)}</span><span>${esc(d.seen)}</span><span>配对于 ${d.paired}</span></div>
+      <div class="row" style="flex-wrap:wrap;gap:6px"><span class="xs muted" style="width:56px">CLI</span>${d.clis.map(([n, v]) => `<span class="mchip">${n} ${v}</span>`).join('')}</div>
+      <div class="row" style="flex-wrap:wrap;gap:6px"><span class="xs muted" style="width:56px">允许目录</span>${d.roots.map((x) => `<span class="mchip mono">${x}</span>`).join('')}</div>
+      ${d.outdated ? `<div class="banner warn" style="padding:8px 12px">${ic('alert')}<div class="sm">连接器 ${d.ver} 版本太旧，连上时会被拒绝。在这台电脑上运行 <code>atlas-connect upgrade</code>。</div></div>` : ''}
+    </div>
+    <div class="col" style="align-items:flex-end;gap:8px">
+      <div class="row">${d.isDefault ? '' : `<button class="btn sm" data-act="setDefault" data-id="${d.id}">设为默认</button>`}<button class="btn sm" data-act="devDetail" data-id="${d.id}">详情</button><button class="ibtn sm" data-pop="devMore:${d.id}">${ic('more')}</button></div>
+      ${d.sessions.length ? `<a class="sm" data-act="devDetail" data-id="${d.id}">正在运行 ${d.sessions.length} 个对话</a>` : '<span class="xs muted">没有正在运行的对话</span>'}
+    </div></div>`;
+}
+function devicesPage() {
+  return `<div class="page" style="max-width:980px">
+    <div class="page-head"><h1>我的设备</h1><span class="sp"></span><button class="btn" data-go="#/ai/devices/terminal">${ic('terminal')}连接器怎么用</button><button class="btn primary" data-act="pair">${ic('plus')}添加设备</button></div>
+    <div class="banner info" style="margin-bottom:16px">${ic('laptop')}<div class="sm">本机智能体跑在这些电脑上：电脑上的连接器主动连到平台，不需要开端口或 VPN。只有你自己的对话能用你的电脑；随时可以在电脑上查看、结束，或在这里吊销。</div></div>
+    <div class="col" style="gap:12px">${D.devices.map(deviceCard).join('')}</div>
+    <div class="xs muted" style="margin-top:14px">默认设备：被别的智能体委派、新建对话时预选的电脑。第一台配对的自动成为默认；吊销默认设备时，改用剩下设备里最近连过的一台。</div></div>`;
+}
+
+/* =====================================================================
+ * 连接器（电脑上的命令行，示意）
+ * ===================================================================== */
+const T = (s) => s.replace(/\[(\w+)\](.*?)\[\/\]/g, (_, c, t) => `<span class="${c}">${t}</span>`);
+function termBlock(title, desc, body) {
+  return `<div style="margin-bottom:22px"><h3 style="margin-bottom:4px">${title}</h3><div class="sm muted" style="margin-bottom:8px">${desc}</div><pre class="term">${T(body)}</pre></div>`;
+}
+function terminalPage() {
+  return `<div class="page" style="max-width:900px">
+    <div class="sm muted" style="margin-bottom:8px"><a href="#/ai/devices">我的设备</a> › 连接器怎么用</div>
+    <div class="page-head"><h1>连接器（电脑上的命令行）</h1><span class="tag">示意</span></div>
+    ${termBlock('配对', '在网页上「添加设备」拿到配对码，然后在电脑上：', `[p]$[/] [c]atlas-connect pair https://atlas.techstz.com[/]
+配对码: K7M2-Q9XD
+[ok]✓[/] 已配对：周景行 的 MacBook Pro
+[ok]✓[/] 设备令牌已存进系统钥匙串
+[dim]  下一步：atlas-connect run（或 atlas-connect service install 开机自启）[/]`)}
+    ${termBlock('启动、查看、结束', '连接器只往外连；断了自己重连。电脑主人随时能看到平台在这台电脑上跑什么，也能结束。', `[p]$[/] [c]atlas-connect run[/]
+[ok]✓[/] 已连上 atlas.techstz.com
+[p]$[/] [c]atlas-connect status[/]
+设备    MacBook Pro（默认）  在线 2 小时
+对话    2 个
+  [k]l1[/]  修复登录页跳转       Claude Code  ~/code/shop-web                [warn]等你确认[/]  12 分钟
+  [k]3f2a[/] 写个导出订单的脚本   Claude Code  ~/atlas-projects/3f2a8c1e…    运行中    3 分钟
+[p]$[/] [c]atlas-connect stop 3f2a[/]
+[ok]✓[/] 已结束「写个导出订单的脚本」，这一轮在网页上显示为已取消`)}
+    ${termBlock('自检', '装好后、出问题时先跑一遍：缺什么直接给出修复命令，结果也会报告给平台（「我的设备」里显示装了哪些 CLI）。', `[p]$[/] [c]atlas-connect doctor[/]
+[ok]✓[/] 连接器 1.0.2（最新）
+[ok]✓[/] Node.js 22.11
+[ok]✓[/] Claude Code 2.1.4 · ACP 适配器 0.9.1
+[err]✗[/] Codex 0.9.2 · 没找到 ACP 适配器        [dim]修复：npm i -g codex-acp[/]
+[ok]✓[/] 允许的目录：~/code、~/atlas-projects
+[ok]✓[/] 能访问 https://atlas.techstz.com（经系统代理）`)}
+    ${termBlock('本机策略', '写在电脑上的配置文件里，平台改不了。平台要开的对话超出这里的范围，就拒绝并说明原因。', `[dim]# ~/.atlas/connect.toml[/]
+[k][policy][/]
+allowed_roots  = [[s]"~/code"[/], [s]"~/atlas-projects"[/]]   [dim]# 项目目录只能在这些目录里[/]
+max_mode       = [s]"acceptEdits"[/]                   [dim]# 权限模式上限：自动 > 接受编辑 > 手动[/]
+max_sessions   = 3                               [dim]# 同时最多几个对话[/]
+remote_files   = true                            [dim]# 关掉后网页上看不到这台电脑的文件[/]
+deny           = [[s]"*.pem"[/], [s]"*.key"[/], [s]"id_rsa*"[/]]   [dim]# 网页上额外不给看的文件[/]
+
+[k][cli.claude-code][/]
+command = [[s]"claude-code-acp"[/]]                   [dim]# 启动什么命令由这里决定，平台给不了[/]`)}
+    ${termBlock('本机日志', '平台在这台电脑上做过的事：开对话、拒绝、结束、每次远程读文件。', `[p]$[/] [c]atlas-connect log[/]
+11-13 14:02  开对话      修复登录页跳转   ~/code/shop-web
+11-13 14:10  读文件      ~/code/shop-web/src/auth/callback.ts（网页预览）
+11-13 14:11  [warn]拒绝读文件[/]  ~/code/shop-web/.env（以点开头）
+11-13 14:20  [warn]拒绝开对话[/]  目录 ~/secret 不在允许的范围内
+11-13 14:31  结束对话    写个导出订单的脚本（在本机结束）`)}
+  </div>`;
+}
+
+/* =====================================================================
+ * 对话页
+ * ===================================================================== */
+function userMsg(t) { return `<div class="m-user"><div class="b">${esc(t)}</div></div>`; }
+function aiMsg(a, inner) { return `<div class="m-ai"><div class="who">${av(a.name, a.color, 22)}${esc(a.name)}</div>${inner}</div>`; }
+const STEP_IC = { read: 'file', write: 'pencil', run: 'terminal', memory: 'bookmark', search: 'search' };
+function steps(list, { running = false, title } = {}) {
+  return `<div class="steps"><div class="steps-h">${running ? '<span class="spin"></span>' : ic('check')}<span>${title || `已完成 ${list.length} 个步骤`}</span><span class="sp"></span>${ic('down')}</div>
+    <div class="steps-b">${list.map(([k, t, ms]) => `<div class="step"><span class="ic">${ic(STEP_IC[k])}</span><span>${esc(t)}</span><span class="tm">${ms || ''}</span></div>`).join('')}</div></div>`;
+}
+function chatHead(t) {
+  const a = agentOf(t.agent);
+  const d = t.dev ? devOf(t.dev) : null;
+  const nChanges = t.id === 'l1' ? D.changes.length : 0;
+  return `<div class="chat-head"><b class="ellipsis" style="max-width:300px">${esc(t.title)}</b>
+    <span class="pill" style="height:26px">${av(a.name, a.color, 16)}${esc(a.name)}</span>
+    ${d ? `<span class="devchip" data-act="devDetail" data-id="${d.id}" title="项目目录建好后不能换">${devDot(d)}<b style="font-weight:550">${esc(d.name)}</b><span class="path">${esc(t.dir)}</span></span>` : ''}
+    <span class="sp"></span>
+    <button class="btn sm ghost" data-act="files" data-id="${t.id}">${ic('folder')}文件${nChanges ? ` <span class="badge gray" title="还没提交的改动">${nChanges}</span>` : ''}</button>
+    <button class="ibtn">${ic('more')}</button></div>`;
+}
+function chatPage(id) {
+  const t = threadOf(id);
+  if (!t) return '<div class="page">对话不存在</div>';
+  const a = agentOf(t.agent);
+  let body = '', foot = '', running = false;
+  if (id === 'l1') {
+    body = userMsg('登录后没有跳回原来的页面，帮我修一下');
+    const st = [['read', '阅读 src/auth/callback.ts', '0.2s'], ['write', '新建 src/auth/safe-next.ts', '0.3s'], ['write', '修改 src/auth/callback.ts', '0.2s'], ['run', '运行 pnpm test auth', '6.8s']];
+    if (S.l1 === 'rejected') {
+      body += aiMsg(a, `<div class="banner err">${ic('alert')}<div><b>MacBook Pro 拒绝了这次对话</b><div class="sm">这个智能体要求「自动」执行，超过了这台电脑允许的上限「接受编辑」。可以在电脑上改本机策略（<code>~/.atlas/connect.toml</code> 的 max_mode），或者请智能体的维护人调低操作权限。</div></div></div>`);
+    } else if (S.l1 === 'waiting') {
+      body += aiMsg(a, steps(st.slice(0, 3), { running: true, title: '等你的电脑重新连上…' }) + `<div class="prose aside"><p>修好了跳转逻辑，正在跑测试。</p></div>`);
+      running = true;
+      foot = `<div class="banner warn" style="max-width:780px;margin:0 auto 10px">${ic('wifioff')}<div class="grow"><b>和 MacBook Pro 的连接断了</b><div class="sm">可能睡眠了或断网。这一轮还在你的电脑上进行，连上后自动接着显示，不会漏也不会重复。已等待 12 分钟。</div></div><button class="btn sm" data-act="toast" data-msg="已停止这一轮">停止</button></div>`;
+    } else {
+      body += aiMsg(a, steps(st) + `<div class="prose"><p>原因是登录成功后固定跳到首页，没有用登录前带过来的 <code>next</code> 参数。我加了 <code>safeNext</code>，只接受站内路径，防止跳到外部网站；测试已通过。</p></div>
+        <div class="ask"><div class="row"><b>需要你确认</b><span class="tag warning">等待中</span><span class="xs muted">将在你的电脑 MacBook Pro 上运行</span></div>
+        <div class="sm muted" style="margin-top:4px">重新构建一次来确认页面效果，会删除旧的构建产物：</div><pre>rm -rf .next &amp;&amp; pnpm build</pre>
+        <div class="row"><input class="input" style="height:30px" placeholder="不同意的话，可以告诉它怎么做（可选）"><button class="btn sm" data-act="toast" data-msg="已拒绝">拒绝</button><button class="btn sm primary" data-act="toast" data-msg="已允许，在 MacBook Pro 上继续执行">允许</button></div></div>`);
+    }
+  } else if (id === 'l3') {
+    body = userMsg('把 report-gen 里生成 PDF 的部分拆成单独的模块') + aiMsg(a, steps([['read', '阅读 report_gen/main.py', '0.2s'], ['write', '新建 report_gen/pdf.py', '0.4s'], ['run', '运行 pytest', '4.1s']]) + `<div class="prose"><p>拆好了：生成 PDF 的代码挪到 <code>report_gen/pdf.py</code>，测试全部通过。</p></div>`);
+    foot = `<div class="banner gray" style="max-width:780px;margin:0 auto 10px">${ic('wifioff')}<div class="grow"><b>你的电脑「公司台式机」不在线</b><div class="sm">这个对话跑在那台电脑上，现在发不了消息、也看不到文件。在那台电脑上启动连接器（<code>atlas-connect run</code>）后自动恢复。对话记录照常可以看。</div></div></div>`;
+  } else if (id === 'l2') {
+    const local = agentOf('local');
+    const ok = S.l2 === 'ok';
+    body = userMsg('在我电脑上写个导出订单的脚本，导出成 CSV') + aiMsg(a,
+      steps([['memory', '查看记忆：工作', '0.1s']]) + `<div class="prose aside"><p>这需要在你的电脑上写代码并实际运行，交给本机编程助手。</p></div>
+      <div class="subcard"><div class="h">${av(local.name, local.color, 20)}<b>${esc(local.name)}</b>
+        <span class="devchip" style="height:22px" title="被委派时：默认设备 + 默认项目地址 / 对话 id"><span class="ddot ${ok ? 'on' : 'off'}"></span>MacBook Pro<span class="path">~/atlas-projects/3f2a8c1e…</span></span>
+        <span class="sp"></span>${ok ? '<span class="tag success">已完成</span>' : '<span class="tag danger">没能开始</span>'}${ic('down')}</div>
+        <div class="b">${ok
+          ? `${['新建 export_orders.py', '运行 python export_orders.py'].map((s, i) => `<div class="step"><span class="ic">${ic(i ? 'terminal' : 'pencil')}</span><span>${s}</span><span class="tm">${i ? '2.3s' : '0.3s'}</span></div>`).join('')}
+             <div class="divider" style="margin:8px 0"></div><p>脚本写好并运行通过，导出 1,284 条订单到 <code>orders.csv</code>。文件在你电脑的项目目录里。</p>
+             <div class="row" style="margin-top:8px"><button class="btn sm" data-act="files" data-id="l2s">${ic('folder')}查看文件</button></div>`
+          : `<div class="banner gray">${ic('wifioff')}<div class="sm">你的默认设备 MacBook Pro 不在线，没能交给本机编程助手。</div></div>`}</div></div>
+      ${ok
+        ? `<div class="prose"><p>脚本在你电脑上的 <code>~/atlas-projects/3f2a8c1e…/export_orders.py</code>，最近 30 天的 1,284 条订单已导出到同目录的 <code>orders.csv</code>。以后在这个对话里再让它改脚本，会接着在这个目录里做。</p></div>`
+        : `<div class="prose"><p>你的电脑现在不在线，我没法在上面写脚本。启动电脑上的连接器后，再让我试一次就行；或者我可以在平台的环境里先写一个，你再拷到电脑上。</p></div>`}`);
+  }
+  return `<div class="chat">${chatHead(t)}
+    <div class="chat-scroll"><div class="chat-col">${body}</div></div>
+    <div class="chat-foot">${foot}<div class="composer"><textarea rows="1" placeholder="${id === 'l3' ? '电脑不在线，暂时发不了消息' : '继续对话…'}" ${id === 'l3' ? 'disabled' : ''}></textarea><div class="bar">
+      ${t.dev ? `<span class="xs muted row" style="gap:5px">${ic('laptop')}在 ${esc(devOf(t.dev).name)} 上运行</span>` : ''}<span class="sp"></span>
+      ${running ? `<button class="send" style="background:var(--ink)" title="停止"><svg class="i fill" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2"/></svg></button>` : `<button class="send" ${id === 'l3' ? 'disabled' : ''}>${ic('up')}</button>`}</div></div>
+      <div class="xs faint" style="text-align:center;margin-top:6px">内容由 AI 生成，请核实重要信息</div></div></div>`;
+}
+
+/* =====================================================================
+ * 文件预览页（新标签）
+ * ===================================================================== */
+const CODE = `import { redirect } from 'next/navigation';
+import { getSession } from '@/lib/session';
+import { safeNext } from './safe-next';
+
+export async function GET(req: Request) {
+  const session = await getSession(req);
+  if (!session) return redirect('/login');
+  // 登录前所在的页面：只接受站内路径
+  const next = new URL(req.url).searchParams.get('next');
+  return redirect(safeNext(next) ?? '/');
+}`;
+const PY = `import csv, datetime
+from shop.db import orders_since
+
+since = datetime.date.today() - datetime.timedelta(days=30)
+with open('orders.csv', 'w', newline='') as f:
+    w = csv.writer(f)
+    w.writerow(['订单号', '下单时间', '金额', '状态'])
+    for o in orders_since(since):
+        w.writerow([o.no, o.created_at, o.amount, o.status])`;
+function previewPage(tid, path) {
+  const t = tid === 'l2s' ? { title: '写个导出订单的脚本', dev: 'mbp', dir: '~/atlas-projects/3f2a8c1e…' } : (threadOf(tid) || threadOf('l1'));
+  const big = path.endsWith('.bundle.js');
+  const body = big
+    ? `<div class="empty"><div class="ill">${ic('file')}</div><h3>文件 35 MB，超过预览上限 20 MB</h3><p>可以下载（不超过 200 MB），或者在电脑上直接打开</p><div style="margin-top:14px"><button class="btn">${ic('dl')}下载</button></div></div>`
+    : `<div class="codebox">${(path.endsWith('.py') ? PY : CODE).split('\n').map((l, i) => `<div class="ln"><span>${i + 1}</span><span>${esc(l)}</span></div>`).join('')}</div>`;
+  return `<div class="page" style="max-width:1000px">
+    <div class="sm muted" style="margin-bottom:8px">${esc(t.title)} › ${esc(path)}</div>
+    <div class="page-head"><h1 class="mono" style="font-size:17px">${esc(path.split('/').pop())}</h1>
+      <span class="devchip">${devDot(devOf(t.dev || 'mbp'))}${esc(devOf(t.dev || 'mbp').name)}<span class="path">${esc(t.dir || '')}/${esc(path)}</span></span><span class="tag">只读</span>
+      <span class="sp"></span><span class="xs muted">${big ? '' : '2 分钟前修改 · 内容变了自动刷新'}</span>${big ? '' : `<button class="btn">${ic('dl')}下载</button>`}</div>
+    ${body}
+    <div class="xs muted" style="margin-top:12px">文件在你的电脑上，打开时经连接器现读，平台不保存；网页上只能看不能改，要改就在对话里让智能体改。</div></div>`;
+}
+
+/* =====================================================================
+ * 抽屉：文件（改动 / 全部）、设备详情
+ * ===================================================================== */
+function drawerShell(title, body, foot) {
+  return `<div class="drawer-mask" data-act="closeDrawer"></div><div class="drawer" data-stop>
+    <div class="modal-h"><h2 class="grow">${title}</h2><button class="ibtn" data-act="closeDrawer">${ic('x')}</button></div>
+    <div class="modal-b" style="flex:1">${body}</div>${foot ? `<div class="modal-f">${foot}</div>` : ''}</div>`;
+}
+function fileActs(p, pv = true) {
+  return `<span class="acts">${pv ? `<button class="ibtn sm" title="新标签预览" data-act="openFile" data-p="${esc(p)}">${ic('eye')}</button>` : ''}<button class="ibtn sm" title="下载" data-act="toast" data-msg="下载 ${esc(p)}">${ic('dl')}</button></span>`;
+}
+function filesDrawer(tid) {
+  const sub = tid === 'l2s';
+  const t = sub ? { title: '写个导出订单的脚本', dev: 'mbp', dir: '~/atlas-projects/3f2a8c1e…' } : threadOf(tid);
+  if (!t.dev) return drawerShell('文件', `<div class="empty"><div class="ill">${ic('folder')}</div><h3>平台上的工作区还没有文件</h3><p>这个对话的主智能体在平台上工作。交给本机编程助手做的那部分，文件在你的电脑上，从子智能体卡片里的「查看文件」打开。</p></div>`);
+  const d = devOf(t.dev);
+  const head = `<div class="row" style="margin-bottom:12px"><span class="devchip">${devDot(d)}<b style="font-weight:550">${esc(d.name)}</b><span class="path">${esc(t.dir)}</span></span><span class="tag">只读</span></div>`;
+  if (!d.online) return drawerShell('文件', head + `<div class="empty"><div class="ill">${ic('wifioff')}</div><h3>你的电脑不在线，文件暂时看不到</h3><p>文件只在那台电脑上，平台不保存副本。启动连接器后自动恢复。</p></div>`);
+  const isRepo = !sub;
+  const tab = isRepo ? S.fileTab : 'all';
+  const tabs = isRepo
+    ? `<div class="seg" style="margin-bottom:12px"><a class="${tab === 'changes' ? 'on' : ''}" data-act="fileTab" data-v="changes">改动 ${D.changes.length}</a><a class="${tab === 'all' ? 'on' : ''}" data-act="fileTab" data-v="all">全部</a></div>`
+    : `<div class="xs muted" style="margin-bottom:10px">这个目录不是 git 仓库，只有「全部」</div>`;
+  let list;
+  if (tab === 'changes') {
+    list = D.changes.map((c) => `<div class="fr ${c.s === 'D' ? 'del' : ''}" ${c.s === 'D' ? '' : `data-act="openFile" data-p="${esc(c.p)}"`}><span class="st ${c.s}">${c.s}</span><span class="nm grow ellipsis">${esc(c.p)}</span><span class="xs muted">${c.t}</span>${c.s === 'D' ? '' : fileActs(c.p)}</div>`).join('')
+      + `<div class="xs muted" style="margin-top:10px">还没提交的改动（相对最近一次提交），包括你自己在电脑上改的；删除的文件只列出，不能预览。</div>`;
+  } else if (sub) {
+    list = [['export_orders.py', '2.1 KB'], ['orders.csv', '186 KB']].map(([n, s]) => `<div class="fr" data-act="openFile" data-p="${n}">${ic('file')}<span class="nm grow">${n}</span><span class="xs muted">${s}</span>${fileActs(n)}</div>`).join('');
+  } else {
+    const dir = (k, n, depth, open, note = '') => `<div class="fr" style="padding-left:${8 + depth * 18}px" data-act="tree" data-k="${k}">${ic(open ? 'down' : 'right')}${ic('folder')}<span class="nm">${n}</span>${note ? `<span class="xs faint">${note}</span>` : ''}</div>`;
+    const file = (p, n, depth, size) => `<div class="fr" style="padding-left:${26 + depth * 18}px" data-act="openFile" data-p="${p}">${ic('file')}<span class="nm grow">${n}</span><span class="xs muted">${size}</span>${fileActs(p)}</div>`;
+    list = dir('nm', 'node_modules', 0, S.tree.nm, S.tree.nm ? '' : '展开时才读')
+      + (S.tree.nm ? `<div class="fr" style="padding-left:44px"><span class="xs muted">… 1,000+ 项，只显示前 500 项</span></div>` : '')
+      + dir('dist', 'dist', 0, S.tree.dist) + (S.tree.dist ? file('dist/app.bundle.js', 'app.bundle.js', 1, '35 MB') : '')
+      + dir('src', 'src', 0, S.tree.src)
+      + (S.tree.src ? dir('auth', 'auth', 1, S.tree.auth) + (S.tree.auth ? file('src/auth/callback.ts', 'callback.ts', 2, '1.2 KB') + file('src/auth/safe-next.ts', 'safe-next.ts', 2, '0.6 KB') : '') + file('src/app.tsx', 'app.tsx', 1, '3.2 KB') : '')
+      + file('package.json', 'package.json', 0, '1.1 KB') + file('README.md', 'README.md', 0, '2.4 KB')
+      + `<div class="xs muted" style="margin-top:10px">按目录一层层加载。以点开头的（.env、.git…）不显示。</div>`;
+  }
+  return drawerShell('文件', head + tabs + `<div class="col" style="gap:0">${list}</div>`,
+    `<span class="xs muted grow">文件在你的电脑上，打开时现读；网页上只能看、不能上传或修改</span>`);
+}
+function deviceDrawer(id) {
+  const d = devOf(id);
+  const P = d.policy;
+  const sess = d.sessions.map((s) => s === 'l2s' ? ['写个导出订单的脚本（通用助手委派）', '~/atlas-projects/3f2a8c1e…', '运行中', 'l2'] : [threadOf(s).title, threadOf(s).dir, '等你确认', s]);
+  return drawerShell(esc(d.name), `
+    <div class="row" style="margin-bottom:14px">${d.isDefault ? '<span class="tag primary">默认</span>' : ''}${d.online ? '<span class="tag success">在线</span>' : '<span class="tag">离线</span>'}<span class="xs muted">${esc(d.seen)}</span></div>
+    <h3 style="margin-bottom:8px">连接器报告</h3>
+    <dl class="kv"><dt>系统</dt><dd>${esc(d.os)}</dd><dt>连接器</dt><dd>${esc(d.ver)}${d.outdated ? ' <span class="tag warning">太旧</span>' : ''}</dd>
+      <dt>CLI</dt><dd>${d.clis.map(([n, v]) => `${n} ${v}`).join('、')}</dd><dt>允许的目录</dt><dd class="mono">${d.roots.join('、')}</dd></dl>
+    <div class="divider"></div>
+    <h3 style="margin-bottom:4px">本机策略</h3><div class="xs muted" style="margin-bottom:8px">在电脑上改（<code>~/.atlas/connect.toml</code>），这里只读</div>
+    <dl class="kv"><dt>权限模式上限</dt><dd>${P.maxMode}</dd><dt>同时最多</dt><dd>${P.maxSessions} 个对话</dd>
+      <dt>远程查看文件</dt><dd>${P.remoteFiles ? '开' : '<span class="tag warning">关：网页上看不到这台电脑的文件</span>'}</dd>
+      <dt>额外不给看</dt><dd class="mono">${P.deny.length ? P.deny.join('、') : '—'}</dd></dl>
+    <div class="divider"></div>
+    <h3 style="margin-bottom:8px">正在运行的对话（${sess.length}）</h3>
+    ${sess.length ? sess.map(([n, dir, st, go]) => `<div class="row card pad" style="padding:10px 12px;margin-bottom:6px" data-go="#/ai/c/${go}"><div class="grow"><b>${esc(n)}</b><div class="xs muted mono">${esc(dir)}</div></div><span class="tag ${st === '运行中' ? 'primary' : 'warning'}">${st}</span></div>`).join('') : '<div class="sm muted">没有</div>'}`,
+    `<button class="btn danger" data-act="revoke" data-id="${d.id}">${ic('trash')}吊销这台设备</button>`);
+}
+function drawer() {
+  const R = S.drawer; if (!R) return '';
+  if (R.type === 'files') return filesDrawer(R.id);
+  if (R.type === 'device') return deviceDrawer(R.id);
+  return '';
+}
+
+/* =====================================================================
+ * 弹窗：添加设备（配对）、吊销、创建智能体、输入路径
+ * ===================================================================== */
+function modalShell(title, body, foot, wide = false) {
+  return `<div class="mask" data-act="closeModal"><div class="modal ${wide ? 'wide' : ''}" data-stop>
+    <div class="modal-h"><h2 class="grow">${title}</h2><button class="ibtn" data-act="closeModal">${ic('x')}</button></div>
+    <div class="modal-b">${body}</div>${foot ? `<div class="modal-f">${foot}</div>` : ''}</div></div>`;
+}
+const cmdLine = (s) => `<div class="cmd"><span>${esc(s)}</span><button class="ibtn sm" data-act="toast" data-msg="已复制">${ic('copy')}</button></div>`;
+function modal() {
+  const M = S.modal; if (!M) return '';
+  if (M.type === 'pair') {
+    const done = M.done;
+    return modalShell('添加设备', `<div class="col" style="gap:18px">
+      <div class="stepn done"><b>1</b><div class="grow"><b>在电脑上安装连接器</b><div class="sm muted">macOS、Linux；Windows 请在 WSL 里装</div>${cmdLine('curl -fsSL https://atlas.techstz.com/connect/install.sh | sh')}
+        <div class="xs muted" style="margin-top:6px">还要装好要用的 CLI（如 Claude Code）和它的适配器；装完运行 <code>atlas-connect doctor</code> 检查</div></div></div>
+      <div class="stepn ${done ? 'done' : ''}"><b>2</b><div class="grow"><b>配对</b><div class="sm muted">在电脑上运行下面的命令，输入配对码</div>${cmdLine('atlas-connect pair https://atlas.techstz.com')}
+        <div class="card" style="margin-top:10px;padding:4px 0 12px;text-align:center"><div class="pairc">K7M2-Q9XD</div><div class="xs muted">只能用一次 · 9:41 后失效 <a data-act="toast" data-msg="已换一个新的配对码">换一个</a></div></div></div></div>
+      <div class="stepn ${done ? 'done' : 'wait'}"><b>3</b><div class="grow"><b>启动连接器</b><div class="sm muted">运行 <code>atlas-connect run</code>，或 <code>atlas-connect service install</code> 开机自启</div>
+        ${done
+          ? `<div class="banner info" style="margin-top:10px">${ic('check')}<div><b>MacBook Air 已连上</b><div class="sm">macOS 15.1 · Claude Code 2.1.4 · 允许的目录 ~/code。你已有默认设备，这台没有设为默认。</div></div></div>`
+          : `<div class="row sm muted" style="margin-top:10px"><span class="spin"></span>等电脑连上…<span class="sp"></span><a data-act="pairDone">（演示）连上了</a></div>`}</div></div>
+      </div>`, done ? `<button class="btn primary" data-act="closeModal">完成</button>` : `<button class="btn" data-act="closeModal">稍后再说</button>`);
+  }
+  if (M.type === 'revoke') {
+    const d = devOf(M.id);
+    return modalShell(`吊销「${esc(d.name)}」`, `<div class="col" style="gap:10px"><p>吊销后：</p><ul style="margin:0;padding-left:20px;line-height:1.9">
+      <li>这台电脑立即断开，它的设备令牌作废；要再用得重新配对</li>
+      <li>正在运行的 ${d.sessions.length} 个对话中断；这些对话以后打不开电脑上的文件</li>
+      ${d.isDefault ? '<li>默认设备改为「公司台式机」（剩下设备里最近连过的一台）</li>' : ''}</ul>
+      <div class="sm muted">电脑上的项目文件不受影响。</div></div>`,
+      `<button class="btn" data-act="closeModal">取消</button><button class="btn danger solid" data-act="toastClose" data-msg="已吊销，${esc(d.name)} 已断开">吊销</button>`);
+  }
+  if (M.type === 'newAgent') {
+    const T2 = [['blank', '空白', '从零开始配置'], ['general', '通用助手', '写作、编程、数据分析都能做'], ['coder', '编程助手', '用 Claude Code 写代码、改文件、跑测试'], ['kbqa', '知识问答', '只根据指定知识库回答，附出处']];
+    return modalShell('创建智能体', `<span class="label">名称</span><input class="input" placeholder="例如：本机编程助手">
+      <span class="label" style="margin-top:16px">从哪里开始</span>
+      <div class="grid" style="grid-template-columns:1fr 1fr;gap:10px">${T2.map(([k, t, d]) => `<div class="radio-card ${M.tpl === k ? 'on' : ''}" data-act="tpl" data-v="${k}"><span class="r"></span><div><b>${t}</b><div class="sm muted">${d}</div></div></div>`).join('')}</div>
+      ${M.tpl === 'coder' ? `<span class="label" style="margin-top:16px">在哪里运行</span><div class="col">
+        <div class="radio-card ${M.where === 'pod' ? 'on' : ''}" data-act="where" data-v="pod"><span class="r"></span><div><b>平台的隔离环境</b><div class="sm muted">每个对话一个独立的开发环境，文件在平台上；谁用都一样</div></div></div>
+        <div class="radio-card ${M.where === 'device' ? 'on' : ''}" data-act="where" data-v="device"><span class="r"></span><div><b>使用者自己的电脑</b><div class="sm muted">用每个人电脑上的 Claude Code，直接改他电脑上的项目；需要先在「我的设备」里配对电脑</div></div></div>
+        <div class="help">建好后不能改：换运行位置等于换掉整套运行环境，要换就新建一个</div></div>` : ''}`,
+      `<button class="btn" data-act="closeModal">取消</button><button class="btn primary" data-go="#/ai/agents/local">创建</button>`);
+  }
+  if (M.type === 'dirInput') {
+    return modalShell('输入项目目录', `<span class="label">在 MacBook Pro 上的路径</span><input class="input mono" value="~/secret/payroll">
+      <div class="banner err" style="margin-top:10px;padding:8px 12px">${ic('alert')}<div class="sm">不在这台电脑允许的目录里（~/code、~/atlas-projects）。要用这个目录，先在电脑上把它加进本机策略的 allowed_roots。</div></div>
+      <div class="help" style="margin-top:10px">只能是电脑上已有的目录；建好对话后不能换。</div>`,
+      `<button class="btn" data-act="closeModal">取消</button><button class="btn primary" disabled>使用这个目录</button>`);
+  }
+  return '';
+}
+
+/* =====================================================================
+ * 浮层：选智能体、选电脑、选目录、设备更多
+ * ===================================================================== */
+function pop() {
+  if (!S.pop) return '';
+  const [kind, arg] = S.pop.id.split(':');
+  const mi = (attrs, inner, cls = '') => `<div class="mi ${cls}" ${attrs}>${inner}</div>`;
+  let html = '';
+  if (kind === 'agentPick') {
+    html = `<div class="ph">选择智能体</div>${D.agents.map((a) => mi(`data-act="setAgent" data-id="${a.id}"`, `${av(a.name, a.color, 22)}<span class="grow"><b style="font-weight:550">${esc(a.name)}</b> ${a.kind === 'device' ? '<span class="tag success">本机</span>' : ''}</span>${S.composerAgent === a.id ? ic('check') : ''}`, S.composerAgent === a.id ? 'on' : '')).join('')}`;
+  } else if (kind === 'devPick') {
+    html = `<div class="ph">在哪台电脑上运行</div>${D.devices.map((d) => {
+      const ok = d.online && !S.allOffline;
+      return mi(ok ? `data-act="setDev" data-id="${d.id}"` : 'style="opacity:.55;cursor:not-allowed"', `${ic(d.icon)}<div class="grow"><b style="font-weight:550">${esc(d.name)}</b>${d.isDefault ? ' <span class="tag primary">默认</span>' : ''}<div class="xs muted">${ok ? `在线 · Claude Code ${d.clis[0][1]}` : `离线 · ${esc(d.seen.replace('最近在线 ', '最近在线 '))}`}</div></div>${ok && S.homeDev === d.id ? ic('check') : ''}`);
+    }).join('')}<div class="sep"></div>${mi('data-go="#/ai/devices"', `${ic('laptop')}<span class="grow">管理我的设备</span>`)}`;
+  } else if (kind === 'dirPick') {
+    const d = devOf(S.homeDev);
+    html = `<div class="ph">项目目录 · 建好对话后不能换</div>
+      ${mi('data-act="setDir" data-v="new"', `${ic('plus')}<div class="grow"><b style="font-weight:550">新目录</b><div class="xs muted mono">~/atlas-projects/{这次对话的 id}</div></div>${S.homeDir.kind === 'new' ? ic('check') : ''}`)}
+      <div class="sep"></div><div class="ph">已有项目（${esc(d.name)} 允许的目录里）</div>
+      ${Object.entries(D.projects).map(([root, list]) => list.map((n) => {
+        const p = root + '/' + n.split('（')[0];
+        return mi(`data-act="setDir" data-v="${esc(p)}"`, `${ic(n.includes('（') ? 'folder' : 'git')}<span class="grow mono" style="font-size:12.5px">${esc(root + '/' + n)}</span>${S.homeDir.path === p ? ic('check') : ''}`);
+      }).join('')).join('')}
+      <div class="sep"></div>${mi('data-act="dirInput"', `${ic('pencil')}<span class="grow">输入路径…</span>`)}`;
+  } else if (kind === 'devMore') {
+    const d = devOf(arg);
+    html = `${mi('data-act="toast" data-msg="改名"', `${ic('pencil')}<span class="grow">改名</span>`)}${mi(`data-act="devDetail" data-id="${d.id}"`, `${ic('eye')}<span class="grow">详情</span>`)}<div class="sep"></div>${mi(`data-act="revoke" data-id="${d.id}"`, `${ic('trash')}<span class="grow">吊销</span>`, 'danger')}`;
+  }
+  return `<div class="pop" style="position:fixed;left:${S.pop.x}px;top:${S.pop.y}px;min-width:300px" data-stop>${html}</div>`;
+}
+
+/* =====================================================================
+ * 设计说明（评审用）
+ * ===================================================================== */
+function N(title, items, be = [], demo = '') { return { title, items, be, demo }; }
+function demoSeg(key, opts) { return `<div class="seg">${opts.map(([v, t]) => `<a class="${S[key] === v ? 'on' : ''}" data-act="setS" data-k="${key}" data-v="${v}">${t}</a>`).join('')}</div>`; }
+function notesFor(r) {
+  if (r.a === 'devices' && r.b === 'terminal') return N('连接器（命令行示意）', [
+    '连接器是电脑上的命令行程序，这页只是示意它的使用体验，不是网页界面',
+    'pair：用网页上的配对码换设备令牌，令牌存进系统钥匙串，不放进环境变量',
+    'status / stop：电脑主人随时看得到平台在这台电脑上跑什么，也能结束；退出连接器 = 全部停下',
+    'doctor：检查 CLI、适配器、网络；结果报告给平台，「我的设备」据此显示装了哪些 CLI',
+    '本机策略写在配置文件里，平台改不了：允许的目录、权限模式上限、会话数、远程查看文件开关、额外拒绝规则；启动命令也在这里',
+    'log：开对话、拒绝、结束、每次远程读文件都有记录',
+  ], ['安装脚本和连接器的分发（随平台一起发布）', '版本太旧时拒绝连接并提示升级']);
+  if (r.a === 'devices') return N('我的设备', [
+    '新增在「智能平台」的二级菜单里，和智能体、个性化并列',
+    '卡片显示连接器报告的系统、版本、装了哪些 CLI、本机允许的目录；离线显示最近在线时间',
+    '添加设备 = 安装命令 + 一次性配对码（10 分钟、只能用一次）+ 等电脑连上；第一台自动成为默认',
+    '默认设备：被委派、新建对话时预选；吊销默认设备时改用剩下设备里最近连过的一台',
+    '详情里的「本机策略」只读：电脑主人在电脑上改',
+    '吊销立即生效：电脑断开、令牌作废、正在运行的对话中断',
+    '连接器版本太旧的设备标黄，并给出升级命令',
+  ], ['设备表：名称、主人、令牌摘要、是否默认、状态、最近一次报告的系统和版本', '设备网关在线表：在线、报告（CLI、允许的目录）', '配对码（Redis，一次性）、吊销后断开连接、作废会话令牌']);
+  if (r.a === 'agents' && r.b) return N('智能体编辑 · 本机编程助手', [
+    '「运行环境」放在最上面：运行在哪里、CLI 类型建好后不能改，只显示',
+    '默认项目地址：新对话默认的新目录、被委派时的目录都是「默认项目地址 / 对话 id」；改了只影响之后的新对话',
+    '模型两种来源：平台的模型（对话里能换）/ 电脑上 CLI 自己的登录（不显示模型选择，平台看不到用量）',
+    '操作权限下方提示：电脑可以在本机设上限，超出时那台电脑拒绝开对话',
+    '技能：本机智能体用电脑上自己的配置，平台的技能不下发',
+    '访问权限固定「以使用者的身份」，另一项置灰并说明原因',
+    '调试预览跑在编辑者自己的默认设备上，目录是「默认项目地址 / 调试对话 id」；没有默认设备或它不在线时不可用，并提示配对或启动连接器',
+  ], ['CliSpec 加运行位置（POD / DEVICE）、默认项目地址、模型来源', '发布时校验：本机智能体不能选「以智能体的身份」']);
+  if (r.a === 'agents') return N('智能体列表 · 创建', [
+    '本机智能体在卡片上打「本机」标签，底部写「在使用者自己的电脑上运行」',
+    '创建时选「编程助手」后再选在哪里运行：平台的隔离环境 / 使用者自己的电脑；建好后不能改',
+    '共享给别人用时，每个人都跑在自己的电脑上',
+  ]);
+  if (r.a === 'c' && r.b === 'l1') return N('对话 · 本机会话', [
+    '对话头部多一个设备标签：在线状态、设备名、项目目录（建好后不能换）；点开看设备详情',
+    '文件按钮上的数字是「还没提交的改动」数',
+    '审批卡片标出「将在你的电脑 MacBook Pro 上运行」',
+    '断线时不报错、不设超时：顶部提示「这一轮还在你的电脑上进行，连上后接着显示」，可以停止',
+    '本机拒绝（目录不允许、权限模式超上限、会话数满…）时，原因原样显示，并说明去哪里改',
+    '底部输入框旁注明「在 MacBook Pro 上运行」',
+  ], ['运行事件里带上「等待重连」状态，前端据此显示提示', '拒绝原因经关闭原因原路带回，翻成用户能看懂的话'],
+    `<b>演示状态</b>${demoSeg('l1', [['normal', '等你确认'], ['waiting', '断线等待中'], ['rejected', '本机拒绝']])}`);
+  if (r.a === 'c' && r.b === 'l3') return N('对话 · 电脑离线', [
+    '对话所在的电脑离线：对话记录照常可以看，输入框禁用并说明原因',
+    '文件抽屉显示「电脑不在线，文件暂时看不到」，平台不保存副本',
+    '电脑重新连上后自动恢复，不需要刷新',
+  ], ['订阅设备在线状态的变化（或轮询），恢复时更新界面']);
+  if (r.a === 'c' && r.b === 'l2') return N('对话 · 委派给本机智能体', [
+    '子智能体卡片上显示它跑在哪台电脑、哪个目录：被委派时用默认设备和「默认项目地址 / 根对话 id」',
+    '同一个对话里再委派，会落在同一个目录、接着上次的文件做',
+    '主智能体在平台上、子智能体在电脑上，彼此看不到对方的文件；卡片里能直接打开子智能体的文件',
+    '默认设备不在线时委派立即失败，主智能体在回答里说明，并给出替代办法',
+  ], ['子会话建时写入设备和目录', '子智能体卡片带上设备和目录'],
+    `<b>演示状态</b>${demoSeg('l2', [['ok', '委派成功'], ['offline', '默认设备不在线']])}`);
+  if (r.a === 'f') return N('文件预览（新标签）', [
+    '和平台上的文件预览是同一个页面，只是文件来自你的电脑：标出设备和完整路径、「只读」',
+    '内容变了自动刷新（按大小和修改时间判断，没变就不传）',
+    '超过预览上限（20 MB）时提示下载或到电脑上打开；下载上限 200 MB；两个上限在运行期配置里可改',
+  ], ['预览令牌只签给对话创建者本人', '运行期配置：本机文件预览上限、下载上限']);
+  return N('首页 · 选了本机智能体', [
+    '选了本机智能体后，输入框下方多出两个选择：在哪台电脑、在哪个目录',
+    '电脑默认选中默认设备；只能选自己的、在线的、装了这种 CLI 的',
+    '目录默认是新目录「默认项目地址 / 对话 id」，也可以选电脑上已有的项目，或手动输入路径（不在允许的目录里会直接提示）',
+    '设备和目录建好对话后不能换：CLI 的会话记录在那台电脑那个目录里',
+    '输入框下方提醒：CLI 会以你的身份在这台电脑上工作',
+    '电脑都不在线时发送按钮禁用，并告诉用户怎么恢复',
+    '本机智能体不显示「添加文件」：文件就在电脑上',
+  ], ['列可选设备（在线、装了这种 CLI）', '列允许目录下一层的子目录名（标出 git 仓库），给「已有项目」用：经设备网关请连接器列；不读内容、以点开头的不列，不受「远程查看文件」开关限制'],
+    `<b>演示状态</b>${demoSeg('allOffline', [[false, '有在线电脑'], [true, '电脑都不在线']])}`);
+}
+function notesPanel(r) {
+  const n = notesFor(r);
+  return `<div class="notes"><div class="row"><b style="color:#92400e">${ic('bulb')} ${n.title}</b><span class="sp"></span><button class="ibtn sm" data-act="toggleNotes">${ic('x')}</button></div>
+    <h4>设计要点</h4><ul>${n.items.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>
+    ${n.be.length ? `<h4>需要后端配合</h4><ul>${n.be.map((i) => `<li><span class="be">后端</span>${esc(i)}</li>`).join('')}</ul>` : ''}
+    ${n.demo ? `<div class="demo">${n.demo}</div>` : ''}
+    <h4>本原型的页面</h4><ul>
+      <li><a href="#/ai">首页：选电脑和目录</a></li><li><a href="#/ai/agents">智能体列表、创建</a></li><li><a href="#/ai/agents/local">编辑本机编程助手</a></li>
+      <li><a href="#/ai/devices">我的设备、添加设备</a></li><li><a href="#/ai/devices/terminal">连接器命令行（示意）</a></li>
+      <li><a href="#/ai/c/l1">本机对话、文件抽屉</a></li><li><a href="#/ai/c/l3">电脑离线的对话</a></li><li><a href="#/ai/c/l2">委派给本机智能体</a></li>
+      <li><a href="#/ai/f/l1/src/auth/callback.ts">文件预览</a> · <a href="#/ai/f/l1/dist/app.bundle.js">超过上限</a></li></ul></div>`;
+}
+
+/* =====================================================================
+ * 交互
+ * ===================================================================== */
+const ACT = {
+  toggleNotes: () => { S.notes = !S.notes; },
+  toast: (el) => { toast(el.dataset.msg || '（原型）'); return false; },
+  toastClose: (el) => { S.modal = null; S.drawer = null; toast(el.dataset.msg); return false; },
+  setS: (el) => { const v = el.dataset.v; S[el.dataset.k] = v === 'true' ? true : v === 'false' ? false : v; },
+  closeModal: () => { S.modal = null; },
+  closeDrawer: () => { S.drawer = null; },
+  setAgent: (el) => { S.composerAgent = el.dataset.id; S.pop = null; },
+  setDev: (el) => { S.homeDev = el.dataset.id; S.pop = null; },
+  setDir: (el) => { S.homeDir = el.dataset.v === 'new' ? { kind: 'new' } : { kind: 'existing', path: el.dataset.v }; S.pop = null; },
+  dirInput: () => { S.pop = null; S.modal = { type: 'dirInput' }; },
+  sendHome: () => { toast(`已在 ${devOf(S.homeDev).name} 上开始（原型：跳到示例对话）`); setTimeout(() => go('#/ai/c/l1'), 600); return false; },
+  chatWith: (el, e) => { e.stopPropagation(); S.composerAgent = el.dataset.id; go('#/ai'); return false; },
+  newAgent: () => { S.modal = { type: 'newAgent', tpl: 'coder', where: 'device' }; },
+  tpl: (el) => { S.modal.tpl = el.dataset.v; },
+  where: (el) => { S.modal.where = el.dataset.v; },
+  edModel: (el) => { S.edModel = el.dataset.v; },
+  edMode: (el) => { S.edMode = +el.dataset.v; },
+  pair: () => { S.modal = { type: 'pair' }; },
+  pairDone: () => { S.modal.done = true; },
+  setDefault: (el) => { D.devices.forEach((d) => { d.isDefault = d.id === el.dataset.id; }); toast('已设为默认设备'); return false; },
+  devDetail: (el) => { S.pop = null; S.drawer = { type: 'device', id: el.dataset.id }; },
+  revoke: (el) => { S.pop = null; S.drawer = null; S.modal = { type: 'revoke', id: el.dataset.id }; },
+  files: (el) => { S.drawer = { type: 'files', id: el.dataset.id }; },
+  fileTab: (el) => { S.fileTab = el.dataset.v; },
+  tree: (el) => { S.tree[el.dataset.k] = !S.tree[el.dataset.k]; },
+  openFile: (el, e) => { e.stopPropagation(); const tid = S.drawer?.id || 'l1'; window.open(`#/ai/f/${tid}/${el.dataset.p}`, '_blank'); return false; },
+};
+document.addEventListener('click', (e) => {
+  if (e.target.matches('input:not([type=checkbox]),select,textarea')) return;
+  const el = e.target.closest('[data-go],[data-act],[data-pop]');
+  if (!el) { if (S.pop && !e.target.closest('[data-stop]')) { S.pop = null; render(); } return; }
+  if (el.dataset.act === 'closeModal' && el.classList.contains('mask') && e.target !== el) return;
+  if (el.dataset.act === 'closeDrawer' && el.classList.contains('drawer-mask') && e.target !== el) return;
+  e.preventDefault();
+  if (el.dataset.pop) {
+    e.stopPropagation();
+    const rc = el.getBoundingClientRect();
+    S.pop = S.pop?.id === el.dataset.pop ? null : { id: el.dataset.pop, x: Math.max(12, Math.min(rc.left, window.innerWidth - 340)), y: rc.bottom + 6 };
+    return render();
+  }
+  if (el.dataset.go) { S.modal = null; return go(el.dataset.go); }
+  const fn = ACT[el.dataset.act];
+  if (fn) { if (fn(el, e) !== false) render(); }
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && (S.modal || S.pop || S.drawer)) { S.modal = null; S.pop = null; S.drawer = null; render(); } });
+render();
+</script>
+</body>
+</html>

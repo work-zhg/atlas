@@ -83,8 +83,8 @@
       "kind": "system",
       "tag": "同级服务",
       "at": [
-        5.4,
-        6.0
+        5.6,
+        7.7
       ],
       "name": "知识库服务",
       "description": "文档入库与检索，按文档权限过滤结果。"
@@ -165,7 +165,7 @@
       "technology": "K8s Pod：bridge + CLI 智能体",
       "at": [
         4.7,
-        4.9
+        3.9
       ],
       "name": "会话 Pod",
       "description": "运行 Claude Code 等外部 CLI 智能体，由 bridge 接成平台的执行后端。"
@@ -234,7 +234,7 @@
         4.7
       ],
       "name": "CLI 运行时",
-      "description": "让会话 Pod 里的 CLI 智能体跑一轮：接上会话、把 CLI 的权限请求转成审批、把内容翻译成运行事件；断线或接管后接回事件流。"
+      "description": "让 CLI 智能体跑一轮：按运行位置确保 bridge 在跑（会话 Pod 或用户电脑）、接上会话、把 CLI 的权限请求转成审批、把内容翻译成运行事件；断线或接管后接回事件流。"
     },
     {
       "id": "sandboxes",
@@ -322,6 +322,29 @@
       "at": [
         3.2,
         2.2
+      ]
+    },
+    {
+      "id": "devicegw",
+      "kind": "container",
+      "shape": "server",
+      "name": "设备网关",
+      "technology": "Python / asyncio + websockets",
+      "description": "接住用户电脑上连接器的长连接：按会话转发 server 和本机 bridge 之间的消息、转发读本机文件的请求；替设备持有凭据，把 CLI 的模型、MCP、知识库请求换上真实凭据再转发。",
+      "at": [
+        4.7,
+        6.4
+      ]
+    },
+    {
+      "id": "devices",
+      "kind": "component",
+      "name": "设备",
+      "technology": "Python 模块",
+      "description": "本机 CLI 的设备一侧：配对、我的设备和默认设备；本机会话的运行位置（定设备和项目目录、经设备网关登记能力）；只读地取本机项目目录里的文件。",
+      "at": [
+        3.9,
+        4.75
       ]
     }
   ],
@@ -551,6 +574,41 @@
       "to": "model",
       "description": "调用大模型",
       "technology": "Anthropic Messages API"
+    },
+    {
+      "from": "api",
+      "to": "devices",
+      "description": "我的设备、配对、设为默认、吊销"
+    },
+    {
+      "from": "conversation",
+      "to": "devices",
+      "description": "建会话定设备和项目目录；本机文件"
+    },
+    {
+      "from": "acp",
+      "to": "devices",
+      "description": "本机 CLI：确保设备会话、登记本轮能力"
+    },
+    {
+      "from": "acp",
+      "to": "devicegw",
+      "description": "接上本机会话、开一轮、接回事件流",
+      "technology": "atlas.host.v1 / WebSocket"
+    },
+    {
+      "from": "devices",
+      "to": "devicegw",
+      "description": "查在线、登记能力、读本机文件、断开设备",
+      "technology": "JSON/HTTP",
+      "labelAt": 0.3
+    },
+    {
+      "from": "devicegw",
+      "to": "devices",
+      "description": "核对配对码和设备令牌",
+      "technology": "JSON/HTTP（内部接口）",
+      "labelAt": 0.3
     }
   ]
 }

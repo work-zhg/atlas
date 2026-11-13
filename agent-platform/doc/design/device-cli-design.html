@@ -1,0 +1,801 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Atlas 本机 CLI 智能体方案设计</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --border: #d1d9e0; --head: #f6f8fa;
+    --accent: #0969da; --ok: #1a7f37; --ok-bg: #dafbe1; --warn: #9a6700; --warn-bg: #fff8c5;
+    --bad: #cf222e; --bad-bg: #ffebe9; --code-bg: #f6f8fa;
+    --b1: #ddf4ff; --b1d: #54aeff; --b2: #fbefff; --b2d: #c297ff; --b3: #dafbe1; --b3d: #4ac26b;
+    --b4: #fff8c5; --b4d: #d4a72c; --b5: #ffebe9; --b5d: #ff8182;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --border: #3d444d; --head: #151b23;
+      --accent: #4493f8; --ok: #3fb950; --ok-bg: #12261e; --warn: #d29922; --warn-bg: #2b2111;
+      --bad: #f85149; --bad-bg: #2d1214; --code-bg: #151b23;
+      --b1: #12263f; --b1d: #1f6feb; --b2: #271a36; --b2d: #8957e5; --b3: #12261e; --b3d: #2ea043;
+      --b4: #2b2111; --b4d: #9e6a03; --b5: #2d1214; --b5d: #da3633;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 32px; background: var(--bg); color: var(--fg);
+         font: 14px/1.75 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif; }
+  main { max-width: 1120px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 44px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 15.5px; margin: 24px 0 8px; }
+  .sub { color: var(--muted); margin: 0 0 14px; }
+  code { font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code-bg); padding: 1px 4px; border-radius: 4px; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0 16px; }
+  th, td { border: 1px solid var(--border); padding: 7px 10px; vertical-align: top; text-align: left; }
+  th { background: var(--head); white-space: nowrap; }
+  .callout { border-left: 4px solid var(--accent); background: var(--head); padding: 10px 14px; border-radius: 4px; margin: 14px 0; }
+  .callout.warn { border-left-color: var(--warn); background: var(--warn-bg); }
+  .tag { display: inline-block; padding: 0 7px; border-radius: 9px; font-size: 12px; font-weight: 600; border: 1px solid; white-space: nowrap; }
+  .tag.warn { color: var(--warn); background: var(--warn-bg); border-color: var(--warn); }
+  .yes { color: var(--ok); font-weight: 600; }
+  .no { color: var(--bad); font-weight: 600; }
+  .toc { columns: 2; padding-left: 18px; }
+  .fig { border: 1px solid var(--border); border-radius: 6px; padding: 10px; overflow-x: auto; margin: 10px 0 6px; }
+  .cap { color: var(--muted); font-size: 12.5px; margin: 0 0 16px; text-align: center; }
+  svg text { fill: var(--fg); font-size: 12px; font-family: -apple-system, "PingFang SC", sans-serif; }
+  svg .s { font-size: 11px; fill: var(--muted); }
+  svg .b { font-weight: 600; }
+  svg .m { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+  svg .bad { fill: var(--bad); font-weight: 600; }
+  svg .c1 { fill: var(--b1); stroke: var(--b1d); } svg .c2 { fill: var(--b2); stroke: var(--b2d); }
+  svg .c3 { fill: var(--b3); stroke: var(--b3d); } svg .c4 { fill: var(--b4); stroke: var(--b4d); }
+  svg .c5 { fill: var(--b5); stroke: var(--b5d); }
+  svg .inner { fill: var(--bg); stroke: var(--border); }
+  svg .ln { stroke: var(--fg); stroke-width: 1.3; fill: none; }
+  svg .life { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 4 4; fill: none; }
+  svg .dash { stroke-dasharray: 5 4; }
+  svg .wall { stroke: var(--bad); stroke-width: 3; fill: none; }
+  svg .arw { fill: var(--fg); }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <marker id="ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="arw" d="M0,0 L8,4 L0,8 z"/></marker>
+</defs></svg>
+<main>
+<h1>Atlas 本机 CLI 智能体方案设计</h1>
+<p class="sub">日期：2026-11-13 · 状态：<span class="tag warn">方案设计，待评审</span></p>
+
+<ol class="toc" start="0">
+  <li><a href="#s0">方案概览</a></li>
+  <li><a href="#s1">背景与目标</a></li>
+  <li><a href="#s2">智能体、设备与会话</a></li>
+  <li><a href="#s3">网络打通</a></li>
+  <li><a href="#s4">CLI 怎么用平台的能力</a></li>
+  <li><a href="#s5">本机工作目录的文件预览</a></li>
+  <li><a href="#s6">安全</a></li>
+  <li><a href="#s7">使用流程</a></li>
+</ol>
+
+<!-- ====================================================================== -->
+<h2 id="s0">0. 方案概览</h2>
+<p>一句话：<b>CLI 智能体多一个「运行位置」，可以是平台的会话 Pod，也可以是使用者自己的电脑。电脑上装一个连接器，由它主动连到平台的设备网关，并一直保持连接；平台有事就通过这条连接找到电脑。平台和 bridge 之间的协议、审批、断线续传都和会话 Pod 一样，网关和连接器只负责转发。CLI 访问模型、MCP、知识库时，真实凭据由设备网关持有，电脑上只有一个会话令牌。网页上可以只读查看本机工作目录里的文件，文件在打开时才现读，不同步到平台。</b></p>
+<p>打个比方：你住在酒店房间里，外面的人打不进你的房间，因为房间没有直拨号码（电脑在路由器、防火墙后面）。但你可以主动打给前台并一直不挂（连接器连出），前台有人找你，就通过这条线转给你（设备网关）。你要订餐时也打给前台，由前台用酒店的账户付钱（凭据代持）。酒店的信用卡始终不交到你手上。</p>
+
+<div class="fig">
+<svg viewBox="0 0 1080 400" width="100%" role="img" aria-label="方案总览">
+  <rect x="10" y="10" width="340" height="380" rx="8" class="inner"/>
+  <text x="26" y="34" class="b">用户的电脑（家里、公司、外面都行）</text>
+  <rect x="30" y="50" width="300" height="66" rx="6" class="c3"/>
+  <text x="180" y="74" text-anchor="middle" class="b">连接器</text>
+  <text x="180" y="94" text-anchor="middle" class="s">保持一条连到平台的连接</text>
+  <text x="180" y="110" text-anchor="middle" class="s">按会话拉起 bridge；在本机把关</text>
+  <rect x="30" y="140" width="140" height="90" rx="6" class="c1"/>
+  <text x="100" y="162" text-anchor="middle" class="b">会话 A</text>
+  <text x="100" y="186" text-anchor="middle" class="s">bridge</text>
+  <text x="100" y="204" text-anchor="middle" class="s">↓</text>
+  <text x="100" y="222" text-anchor="middle" class="s">CLI（Claude Code）</text>
+  <rect x="190" y="140" width="140" height="90" rx="6" class="c1"/>
+  <text x="260" y="162" text-anchor="middle" class="b">会话 B</text>
+  <text x="260" y="186" text-anchor="middle" class="s">bridge</text>
+  <text x="260" y="204" text-anchor="middle" class="s">↓</text>
+  <text x="260" y="222" text-anchor="middle" class="s">CLI（Codex）</text>
+  <path d="M100,116 V140" class="ln" marker-end="url(#ar)"/>
+  <path d="M260,116 V140" class="ln" marker-end="url(#ar)"/>
+  <rect x="30" y="256" width="300" height="56" rx="6" class="c4"/>
+  <text x="180" y="280" text-anchor="middle" class="b">本机硬盘：会话的工作目录</text>
+  <text x="180" y="298" text-anchor="middle" class="s">CLI 直接读写；网页上只能查看</text>
+  <path d="M100,230 V256" class="ln" marker-end="url(#ar)"/>
+  <path d="M260,230 V256" class="ln" marker-end="url(#ar)"/>
+  <rect x="30" y="326" width="300" height="50" rx="6" class="inner"/>
+  <text x="180" y="347" text-anchor="middle" class="s">本机策略：能用哪些目录、权限模式上限、</text>
+  <text x="180" y="365" text-anchor="middle" class="s">同时跑几个会话、能不能远程查看文件</text>
+
+  <path d="M332,84 H478" class="ln" marker-start="url(#ar)" marker-end="url(#ar)"/>
+  <text x="405" y="74" text-anchor="middle" class="s">HTTPS 443</text>
+  <text x="405" y="102" text-anchor="middle" class="s">只由电脑往外连</text>
+
+  <rect x="460" y="10" width="610" height="380" rx="8" class="inner"/>
+  <text x="476" y="34" class="b">平台</text>
+  <rect x="480" y="56" width="100" height="56" rx="6" class="c5"/>
+  <text x="530" y="80" text-anchor="middle" class="b">公网入口</text>
+  <text x="530" y="98" text-anchor="middle" class="s">HTTPS</text>
+  <path d="M580,84 H620" class="ln" marker-start="url(#ar)" marker-end="url(#ar)"/>
+  <rect x="620" y="50" width="250" height="160" rx="6" class="c4"/>
+  <text x="745" y="74" text-anchor="middle" class="b">设备网关（新增）</text>
+  <text x="745" y="100" text-anchor="middle" class="s">① 控制连接：一台设备一条，</text>
+  <text x="745" y="118" text-anchor="middle" class="s">里面分出会话流、文件流</text>
+  <text x="745" y="146" text-anchor="middle" class="s">② 能力代理：替设备持有凭据，</text>
+  <text x="745" y="164" text-anchor="middle" class="s">设备只拿会话令牌</text>
+  <text x="745" y="192" text-anchor="middle" class="s">③ 在线表：哪台设备在线、连在哪</text>
+  <rect x="910" y="50" width="140" height="160" rx="6" class="c2"/>
+  <text x="980" y="74" text-anchor="middle" class="b">平台能力</text>
+  <text x="980" y="108" text-anchor="middle" class="s">模型网关</text>
+  <text x="980" y="138" text-anchor="middle" class="s">MCP 网关</text>
+  <text x="980" y="168" text-anchor="middle" class="s">知识库</text>
+  <path d="M870,130 H910" class="ln" marker-end="url(#ar)"/>
+  <rect x="620" y="260" width="250" height="76" rx="6" class="c1"/>
+  <text x="745" y="284" text-anchor="middle" class="b">Atlas server</text>
+  <text x="745" y="304" text-anchor="middle" class="s">像连会话 Pod 一样连会话：协议、</text>
+  <text x="745" y="322" text-anchor="middle" class="s">审批、断线续传都和 Pod 一样</text>
+  <path d="M745,260 V210" class="ln" marker-end="url(#ar)"/>
+  <text x="753" y="240" class="s">连会话、读文件、登记能力</text>
+  <rect x="480" y="260" width="100" height="76" rx="6" class="c3"/>
+  <text x="530" y="290" text-anchor="middle" class="b">网页</text>
+  <text x="530" y="310" text-anchor="middle" class="s">对话、审批、</text>
+  <text x="530" y="326" text-anchor="middle" class="s">看文件</text>
+  <path d="M580,298 H620" class="ln" marker-end="url(#ar)"/>
+</svg>
+</div>
+<p class="cap">图 1　方案总览：电脑只往外连；平台通过这条连接找到电脑，CLI 经设备网关使用平台能力</p>
+
+<h3>先认识几个词</h3>
+<table>
+  <tr><th>词</th><th>白话解释</th><th>例子</th></tr>
+  <tr><td>本机 CLI 智能体</td><td>运行位置是「用户设备」的 CLI 智能体：CLI 跑在使用者自己的电脑上</td><td>小王在网页上和「本机 Claude Code」对话，实际干活的 Claude Code 跑在他自己的 MacBook 上，改的也是他电脑上的项目</td></tr>
+  <tr><td>设备</td><td>一个人配对到平台的一台电脑，只属于这个人</td><td>小王的 MacBook 和公司台式机是两台设备</td></tr>
+  <tr><td>连接器</td><td>装在电脑上的一个后台小程序：负责和平台保持连接、按会话启动 CLI、在本机把关</td><td>小王开机后运行它，网页上的「我的设备」就显示 MacBook 在线</td></tr>
+  <tr><td>bridge</td><td>已有组件：负责启动 CLI，用平台的协议和平台通信（开会话、开一轮、审批、断线后补发）。会话 Pod 里用的就是它，电脑上用同一个程序，随连接器一起安装</td><td>—</td></tr>
+  <tr><td>设备网关</td><td>平台上新增的服务：接住所有设备的连接，并替设备持有凭据</td><td>—</td></tr>
+  <tr><td>控制连接</td><td>连接器到设备网关的一条长连接，由电脑主动发起，一台设备只有一条</td><td>酒店房间打给前台、一直不挂的那通电话</td></tr>
+  <tr><td>会话流、文件流</td><td>控制连接里分出来的逻辑通道：每个会话一条会话流；网页上看文件时，临时开一条文件流</td><td>一根电话线上同时跑好几路通话</td></tr>
+  <tr><td>设备令牌</td><td>证明「这是小王配对过的那台电脑」的凭证，配对时发一次，可以在网页上吊销</td><td>—</td></tr>
+  <tr><td>会话令牌</td><td>只在一个会话里有效的凭证。CLI 用它访问模型、MCP、知识库，真实的 Key 不出平台</td><td>—</td></tr>
+  <tr><td>在线表</td><td>平台记录「哪台设备在线、连在哪个设备网关实例上」的地方</td><td>—</td></tr>
+</table>
+
+<!-- ====================================================================== -->
+<h2 id="s1">1. 背景与目标</h2>
+<h3>1.1 为什么需要</h3>
+<p>现在 CLI 智能体只能跑在平台的会话 Pod 里。很多工作更适合在自己电脑上做：</p>
+<ul>
+  <li>项目代码和数据在本机，或者在只有本机能访问的公司内网里，不方便、也不应该上传到平台；</li>
+  <li>本机已经有现成的开发环境：装好的依赖、本地数据库、模拟器、访问内网服务的权限；</li>
+  <li>有些人已经有自己的 CLI 订阅账号。</li>
+</ul>
+<p>同时，用户仍然希望用平台提供的东西：在网页上对话和审批、平台的模型、MCP、知识集，以及对话记录。</p>
+
+<h3>1.2 目标</h3>
+<ul>
+  <li>CLI 跑在使用者自己的电脑上，在网页上对话、审批，体验和会话 Pod 里的 CLI 智能体一样。</li>
+  <li>电脑在哪都能用，家里、公司、外面都可以，只要能访问平台的 HTTPS 入口。不需要开端口、装 VPN，也不需要管理员权限。</li>
+  <li>平台的 Key 不落到个人电脑上。</li>
+  <li>只有本人能让自己的电脑干活。电脑主人在本机能看到、能限制，也能随时停止。</li>
+  <li>网页上能只读查看本机工作目录里的文件。</li>
+</ul>
+
+<h3>1.3 不做什么</h3>
+<ul>
+  <li><b>不做隔离</b>：CLI 以电脑主人的身份直接操作电脑，这本来就是这类智能体的用途。建会话时界面上会明确提示。</li>
+  <li><b>不把本机文件同步或快照到平台</b>：电脑离线时看不到文件（理由见 <a href="#s5-5">5.5</a>）。</li>
+  <li><b>不从网页往电脑里写</b>：不支持上传、删除、改名。</li>
+  <li><b>不同步技能，不注入出站凭据</b>：CLI 用电脑上本人的配置和凭据（git、ssh 等）。</li>
+  <li><b>首版只支持 macOS 和 Linux</b>，Windows 用户可以在 WSL 里用。</li>
+</ul>
+
+<!-- ====================================================================== -->
+<h2 id="s2">2. 智能体、设备与会话</h2>
+<h3>2.1 运行位置与默认项目地址</h3>
+<p>CLI 智能体多一个属性「运行位置」，取值是<b>会话 Pod</b>或<b>用户设备</b>。它和 CLI 类型、镜像一样，建智能体时定下，之后不能改：换运行位置等于换掉整套运行环境，原地改会改变已有会话的行为。界面上，运行位置为用户设备的 CLI 智能体作为第三种类型「本机 CLI」展示。这类智能体没有镜像，用的是电脑上装好的 CLI。</p>
+<p>本机 CLI 智能体还要配一个<b>默认项目地址</b>，比如 <code>~/atlas-projects</code>，其中 <code>~</code> 表示电脑主人的主目录，在每台电脑上各自展开。会话的项目目录默认是<b>「默认项目地址 / 会话 id」</b>，是一个新的空目录。被委派时没人选目录，就用这个规则（<a href="#s2-6">2.6</a>）。默认项目地址可以改，改了只影响之后新建的会话：已有会话的目录在建会话时就定下了。</p>
+<p>本机 CLI 智能体可以共享给别人用，但每个人用时都只跑在自己的电脑上，项目目录也建在自己的电脑上。</p>
+
+<h3>2.2 设备</h3>
+<ul>
+  <li>设备只属于一个人，一个人可以有多台。状态有三种：在线、离线、已吊销。</li>
+  <li>每个人有一台<b>默认设备</b>：第一台配对的设备自动成为默认，之后可以在「我的设备」里换；吊销的正好是默认设备时，改成剩下设备里最近连过的一台。被委派时用这台（<a href="#s2-6">2.6</a>）。</li>
+  <li>在网页的「我的设备」里管理：配对新设备、改名、设为默认、查看在线状态和连接器版本、吊销。</li>
+  <li>连接器连上平台时，报告这台电脑的系统、连接器版本、装了哪些 CLI（含版本），以及本机允许平台使用的工作目录。</li>
+</ul>
+
+<h3>2.3 会话</h3>
+<ul>
+  <li>新建会话时选<b>设备</b>和<b>工作目录</b>。设备只列出自己的、在线的、装了这个智能体所用 CLI 的，默认选中默认设备。工作目录默认是「默认项目地址 / 会话 id」（一个新的空目录），也可以改选电脑上已有的项目目录；不管选哪个，都必须在本机允许的目录范围内。</li>
+  <li>选已有项目时，网页上列出这台电脑每个允许目录下<b>一层的子目录名</b>，并标出哪些是 git 仓库；不往下展开、不读文件内容，以点开头的不列。也可以手动输入路径，不在允许范围内的直接提示。</li>
+  <li>设备和目录在建会话时定下，之后不能换。原因是 CLI 的会话记录存在那台电脑上，换电脑或换目录，就接不上之前的上下文了。</li>
+  <li>一台电脑可以同时跑多个会话，每个会话有自己的 bridge 和 CLI。最多同时跑几个，由本机策略决定。</li>
+</ul>
+
+<h3 id="s2-4">2.4 模型的两种来源</h3>
+<p>由智能体配置决定：</p>
+<table>
+  <tr><th></th><th>平台模型</th><th>本机 CLI 自己的登录</th></tr>
+  <tr><td>模型从哪来</td><td>平台的模型网关，经设备网关代理（见 <a href="#s4">4</a>）</td><td>CLI 用电脑上已登录的账号直接连供应商</td></tr>
+  <tr><td>用量</td><td>平台统计，记在智能体名下</td><td>平台看不到</td></tr>
+  <tr><td>对话里换模型</td><td>可以，和其他智能体一样</td><td>不显示模型选择器</td></tr>
+  <tr><td>适合</td><td>公司统一管理模型和费用</td><td>已经有个人订阅</td></tr>
+</table>
+<p>不管模型用哪种来源，MCP 和知识库都经设备网关访问。</p>
+
+<h3 id="s2-5">2.5 权限主体：使用者本人</h3>
+<p>本机 CLI 智能体访问 MCP、知识库时，一律按<b>使用者本人</b>的权限判断，不按智能体的权限（数字员工式的授权）。原因是会话令牌就在使用者自己的电脑上，使用者可以绕过 CLI，直接拿它发请求。如果按智能体的权限，而智能体的权限又比本人大，这就成了越权的通道。</p>
+
+<h3 id="s2-6">2.6 被委派时</h3>
+<p>其他智能体可以把任务委派给本机 CLI 智能体，比如平台上的通用助手把「在本机项目里写个脚本」交给本机 Claude Code。委派发生时没有人选设备和目录，所以按固定规则来：</p>
+<table>
+  <tr><th></th><th>用哪个</th><th>说明</th></tr>
+  <tr><td>设备</td><td>使用者的默认设备</td><td>委派也只会落在使用者自己的电脑上</td></tr>
+  <tr><td>工作目录</td><td>默认项目地址 / 会话 id</td><td>会话 id 是用户看到的那个对话（会话树的根）的 id。同一个对话里多次委派用同一个目录，第一次是空目录，之后接着上次的文件做，和平台上「子智能体与主智能体共用工作区」的规矩一致</td></tr>
+</table>
+<div class="fig">
+<svg viewBox="0 0 1080 230" width="100%" role="img" aria-label="委派时的设备和目录">
+  <rect x="20" y="40" width="320" height="110" rx="8" class="c1"/>
+  <text x="180" y="66" text-anchor="middle" class="b">对话 3f2a…</text>
+  <text x="180" y="88" text-anchor="middle" class="s">主智能体：通用助手（原生，跑在平台上）</text>
+  <text x="180" y="108" text-anchor="middle" class="s">它的工作区在平台的文件区</text>
+  <text x="180" y="128" text-anchor="middle" class="s">（「我的工作空间」里能看到）</text>
+  <path d="M340,95 H460" class="ln" marker-end="url(#ar)"/>
+  <text x="400" y="85" text-anchor="middle" class="s">委派给</text>
+  <text x="400" y="113" text-anchor="middle" class="s">本机 Claude Code</text>
+  <rect x="460" y="14" width="600" height="190" rx="8" class="inner"/>
+  <text x="476" y="38" class="b">小王的默认设备：MacBook（在线）</text>
+  <rect x="480" y="54" width="300" height="60" rx="6" class="c4"/>
+  <text x="630" y="78" text-anchor="middle" class="m">~/atlas-projects/3f2a…/</text>
+  <text x="630" y="98" text-anchor="middle" class="s">默认项目地址 / 会话 id</text>
+  <text x="800" y="76" class="s">第 1 次委派：建目录，从空目录开始</text>
+  <text x="800" y="98" class="s">第 2 次委派：同一个目录，接着做</text>
+  <rect x="480" y="130" width="560" height="56" rx="6" class="c3"/>
+  <text x="760" y="154" text-anchor="middle" class="s">bridge + CLI 在这个目录里干活；过程和审批显示在对话的子智能体卡片里</text>
+  <text x="760" y="174" text-anchor="middle" class="s">平台上的文件和电脑上的文件互相看不到，交接只靠任务书和结果</text>
+</svg>
+</div>
+<p class="cap">图 2　委派给本机 CLI 智能体：设备取默认设备，目录取「默认项目地址 / 会话 id」</p>
+<ul>
+  <li><b>主、子两边的文件不共享</b>：主智能体在平台上，子智能体在电脑上，彼此看不到对方的文件。交接只靠任务书和结果，所以任务书要把需要的内容写清楚，结果里要说明产出放在哪。用户可以在子智能体卡片上打开文件抽屉，查看电脑上的产物（<a href="#s5">5</a>）。</li>
+  <li><b>目录不存在就由连接器创建</b>。默认项目地址必须在本机允许的目录范围内，否则连接器会拒绝。</li>
+  <li><b>默认设备不在线，或者目录不被允许</b>：这次委派立即失败，原因交还给主智能体，并显示在对话里，比如「你的默认设备 MacBook 不在线」。委派开始之后再断线，按 <a href="#s3-7">3.7</a> 一直等待恢复，不设超时。</li>
+</ul>
+
+<h3 id="s2-7">2.7 调试预览</h3>
+<p>智能体编辑页的调试预览也要有电脑可跑：它跑在<b>编辑者自己的默认设备</b>上，目录是「默认项目地址 / 调试会话 id」，用当前未发布的配置。编辑者没有默认设备或默认设备不在线时，调试预览不可用，并提示先配对或启动连接器。</p>
+
+<!-- ====================================================================== -->
+<h2 id="s3">3. 网络打通</h2>
+<h3>3.1 难点：两个方向都不通</h3>
+<div class="fig">
+<svg viewBox="0 0 1080 270" width="100%" role="img" aria-label="两个方向的难点">
+  <rect x="10" y="10" width="520" height="250" rx="8" class="inner"/>
+  <text x="26" y="34" class="b">现在：CLI 跑在会话 Pod 里（集群内）</text>
+  <rect x="30" y="56" width="140" height="44" rx="6" class="c1"/>
+  <text x="100" y="83" text-anchor="middle" class="b">Atlas server</text>
+  <rect x="330" y="56" width="180" height="44" rx="6" class="c3"/>
+  <text x="420" y="83" text-anchor="middle" class="b">会话 Pod：bridge + CLI</text>
+  <path d="M170,78 H330" class="ln" marker-end="url(#ar)"/>
+  <text x="250" y="70" text-anchor="middle" class="s">① 主动连过去 ✓</text>
+  <rect x="330" y="180" width="180" height="56" rx="6" class="c2"/>
+  <text x="420" y="204" text-anchor="middle" class="b">模型 / MCP / 知识库</text>
+  <text x="420" y="222" text-anchor="middle" class="s">集群内地址</text>
+  <path d="M420,100 V180" class="ln" marker-end="url(#ar)"/>
+  <text x="410" y="136" text-anchor="end" class="s">② 用集群内地址 + 智能体 Key ✓</text>
+  <text x="410" y="154" text-anchor="end" class="s">Key 留在平台的 Pod 里</text>
+
+  <rect x="550" y="10" width="520" height="250" rx="8" class="inner"/>
+  <text x="566" y="34" class="b">放到用户电脑上：两个方向都不通</text>
+  <rect x="570" y="56" width="140" height="44" rx="6" class="c1"/>
+  <text x="640" y="83" text-anchor="middle" class="b">Atlas server</text>
+  <path d="M840,42 V116" class="wall"/>
+  <text x="840" y="34" text-anchor="middle" class="s">路由器 / 防火墙</text>
+  <rect x="870" y="56" width="180" height="44" rx="6" class="c3"/>
+  <text x="960" y="83" text-anchor="middle" class="b">用户电脑：bridge + CLI</text>
+  <path d="M710,78 H834" class="ln dash" marker-end="url(#ar)"/>
+  <text x="772" y="70" text-anchor="middle" class="bad">① 连不进去 ✗</text>
+  <text x="580" y="200" class="s">① 电脑在家用路由器、公司防火墙后面，</text>
+  <text x="580" y="218" class="s">没有能从外面连进去的地址</text>
+  <rect x="870" y="180" width="180" height="56" rx="6" class="c2"/>
+  <text x="960" y="204" text-anchor="middle" class="b">模型 / MCP / 知识库</text>
+  <text x="960" y="222" text-anchor="middle" class="s">平台集群内</text>
+  <path d="M960,100 V180" class="ln dash" marker-end="url(#ar)"/>
+  <text x="950" y="136" text-anchor="end" class="bad">② 集群内地址访问不到 ✗</text>
+  <text x="950" y="154" text-anchor="end" class="bad">智能体 Key 会落到个人电脑上 ✗</text>
+</svg>
+</div>
+<p class="cap">图 3　从会话 Pod 换到用户电脑后，平台到 CLI、CLI 到平台两个方向都不通</p>
+<ul>
+  <li><b>平台 → CLI</b>：现在由平台主动连会话 Pod 的地址，给 CLI 下达开会话、开一轮、审批结果等指令。电脑在路由器、防火墙后面，IP 也会变，平台连不进去。</li>
+  <li><b>CLI → 平台</b>：CLI 要访问模型、MCP、知识库。这些服务的集群内地址在集群外访问不到。即使把服务暴露出去，智能体的 Key 是这个智能体所有使用者共用的，放到个人电脑上，就等于交给了所有能碰到这台电脑的人。</li>
+</ul>
+
+<h3>3.2 思路：电脑主动连出</h3>
+<p>平台连不进电脑，那就让电脑主动连出来。电脑访问平台的 HTTPS 入口就像打开一个网页，家用网络和公司网络都允许。连接器启动后连上设备网关，这条连接一直不断开，平台通过它找到电脑。</p>
+<p>平台这边新增一个<b>设备网关</b>，接住所有设备的连接。对 Atlas server 来说，连设备网关上的一个会话，和连会话 Pod 里的 bridge 完全一样。<b>平台和 bridge 之间的协议、序号确认、断线补发、审批转发都不改，设备网关和连接器只转发，不解读内容。</b></p>
+
+<h3>3.3 为什么选这种方式</h3>
+<table>
+  <tr><th>做法</th><th>用户要做的</th><th>问题</th><th>结论</th></tr>
+  <tr><td>组网 / VPN：电脑加入集群网络，平台直接连电脑</td><td>装 VPN，通常需要管理员权限</td><td>个人电脑进了集群网络，可以横向访问其他服务；每个人都要装，公司 IT 通常不允许</td><td class="no">不选</td></tr>
+  <tr><td>端口映射：每台电脑在中转服务器上映射一个端口</td><td>装映射工具</td><td>要给每台设备分配、回收端口；认证用的是共享口令，和平台里的人对应不上</td><td class="no">不选</td></tr>
+  <tr><td>电脑直接连 Atlas server</td><td>装连接器</td><td>run 可能在 server 实例 B 上执行，而电脑连在实例 A 上，只能在实例之间转发。另外 server 发版频繁，每次发版所有设备都会掉线</td><td class="no">不选</td></tr>
+  <tr><td><b>电脑连出到独立的设备网关</b></td><td>装连接器，能访问 HTTPS 入口就行</td><td>多一个服务</td><td class="yes">选这个</td></tr>
+</table>
+<p>即使电脑和平台在同一个局域网里，也走这条路：电脑的地址会变，本机防火墙也会拦，平台直接连电脑并不可靠。</p>
+
+<h3>3.4 设备上线</h3>
+<div class="fig">
+<svg viewBox="0 0 1080 420" width="100%" role="img" aria-label="设备配对与上线">
+  <rect x="10" y="14" width="120" height="34" rx="6" class="c1"/>
+  <text x="70" y="36" text-anchor="middle" class="b">用户</text>
+  <rect x="240" y="14" width="120" height="34" rx="6" class="c3"/>
+  <text x="300" y="36" text-anchor="middle" class="b">连接器</text>
+  <rect x="540" y="14" width="120" height="34" rx="6" class="c4"/>
+  <text x="600" y="36" text-anchor="middle" class="b">设备网关</text>
+  <rect x="840" y="14" width="120" height="34" rx="6" class="c2"/>
+  <text x="900" y="36" text-anchor="middle" class="b">Atlas（网页）</text>
+  <path d="M70,48 V410" class="life"/>
+  <path d="M300,48 V410" class="life"/>
+  <path d="M600,48 V410" class="life"/>
+  <path d="M900,48 V410" class="life"/>
+
+  <path d="M70,80 H900" class="ln" marker-end="url(#ar)"/>
+  <text x="78" y="74" class="s">① 我的设备 → 添加设备</text>
+  <path d="M900,108 H70" class="ln dash" marker-end="url(#ar)"/>
+  <text x="892" y="102" text-anchor="end" class="s">一次性配对码（10 分钟内有效）和安装命令</text>
+  <path d="M70,146 H300" class="ln" marker-end="url(#ar)"/>
+  <text x="78" y="140" class="s">② 安装连接器，输入配对码</text>
+  <path d="M300,184 H600" class="ln" marker-end="url(#ar)"/>
+  <text x="308" y="178" class="s">③ 用配对码换设备令牌</text>
+  <path d="M600,212 H900" class="ln" marker-end="url(#ar)"/>
+  <text x="608" y="206" class="s">④ 核对配对码（只能用一次），登记设备</text>
+  <path d="M900,240 H600" class="ln dash" marker-end="url(#ar)"/>
+  <text x="892" y="234" text-anchor="end" class="s">设备令牌（平台只存它的摘要）</text>
+  <path d="M600,268 H300" class="ln dash" marker-end="url(#ar)"/>
+  <text x="592" y="262" text-anchor="end" class="s">设备令牌 → 存在本机，只有本人可读</text>
+  <path d="M300,310 H600" class="ln" marker-end="url(#ar)"/>
+  <text x="308" y="285" class="s">⑤ 带设备令牌建立控制连接，</text>
+  <text x="308" y="302" class="s">报告版本、装了哪些 CLI、允许的目录</text>
+  <rect x="470" y="326" width="260" height="34" rx="5" class="inner"/>
+  <text x="600" y="348" text-anchor="middle" class="s">⑥ 写在线表：这台设备在线、连在哪个网关实例</text>
+  <path d="M300,392 H600" class="ln" marker-start="url(#ar)" marker-end="url(#ar)"/>
+  <text x="308" y="386" class="s">⑦ 约 25 秒一次心跳；断了连接器自己重连</text>
+</svg>
+</div>
+<p class="cap">图 4　配对和上线（实线：请求；虚线：返回）。配对只做一次，之后每次开机，连接器直接从 ⑤ 开始</p>
+<ol>
+  <li>用户在「我的设备」里添加设备，平台给出一个一次性配对码（10 分钟内有效）和一行安装命令。</li>
+  <li>用户在电脑上安装连接器，并输入配对码。</li>
+  <li>连接器用配对码向设备网关换设备令牌。</li>
+  <li>平台核对配对码（只能用一次）并登记设备。平台只保存设备令牌的摘要，看不到原文；令牌原文只交给连接器这一次，连接器把它存进系统钥匙串（没有时存进只有本人可读的文件），不放进环境变量。</li>
+  <li>连接器带着设备令牌建立控制连接，并报告连接器版本、系统、装了哪些 CLI、本机允许的工作目录。版本太旧的连接器会被拒绝，并提示升级。</li>
+  <li>设备网关在在线表里记下：这台设备在线，连在哪个网关实例上。</li>
+  <li>双方大约每 25 秒互发一次心跳，用来及时发现电脑睡眠、换网络这类情况。连续几次收不到心跳就判定为离线。电脑醒来后，连接器会自己重连。</li>
+</ol>
+
+<h3 id="s3-5">3.5 一轮对话</h3>
+<div class="fig">
+<svg viewBox="0 0 1080 690" width="100%" role="img" aria-label="一轮对话的时序">
+  <rect x="10" y="14" width="110" height="34" rx="6" class="c1"/>
+  <text x="65" y="36" text-anchor="middle" class="b">用户（网页）</text>
+  <rect x="225" y="14" width="110" height="34" rx="6" class="c1"/>
+  <text x="280" y="36" text-anchor="middle" class="b">Atlas server</text>
+  <rect x="455" y="14" width="110" height="34" rx="6" class="c4"/>
+  <text x="510" y="36" text-anchor="middle" class="b">设备网关</text>
+  <rect x="685" y="14" width="110" height="34" rx="6" class="c3"/>
+  <text x="740" y="36" text-anchor="middle" class="b">连接器</text>
+  <rect x="905" y="14" width="130" height="34" rx="6" class="c3"/>
+  <text x="970" y="36" text-anchor="middle" class="b">bridge + CLI</text>
+  <path d="M65,48 V680" class="life"/>
+  <path d="M280,48 V680" class="life"/>
+  <path d="M510,48 V680" class="life"/>
+  <path d="M740,48 V680" class="life"/>
+  <path d="M970,48 V680" class="life"/>
+
+  <path d="M65,80 H280" class="ln" marker-end="url(#ar)"/>
+  <text x="73" y="74" class="s">① 发消息</text>
+  <path d="M280,112 H510" class="ln" marker-end="url(#ar)"/>
+  <text x="288" y="106" class="s">② 这台设备在线吗？</text>
+  <path d="M510,140 H280" class="ln dash" marker-end="url(#ar)"/>
+  <text x="502" y="134" text-anchor="end" class="s">在线，连在实例 X</text>
+  <path d="M280,176 H510" class="ln" marker-end="url(#ar)"/>
+  <text x="288" y="170" class="s">③ 登记本轮能力（真实地址、凭据）</text>
+  <path d="M510,204 H280" class="ln dash" marker-end="url(#ar)"/>
+  <text x="502" y="198" text-anchor="end" class="s">会话令牌 + 设备视角的地址</text>
+  <path d="M280,240 H510" class="ln" marker-end="url(#ar)"/>
+  <text x="288" y="234" class="s">④ 连这个会话</text>
+  <path d="M510,274 H740" class="ln" marker-end="url(#ar)"/>
+  <text x="518" y="250" class="s">⑤ 打开会话流：会话、CLI 类型、</text>
+  <text x="518" y="267" class="s">工作目录、模型接入</text>
+  <rect x="620" y="290" width="240" height="48" rx="5" class="inner"/>
+  <text x="740" y="310" text-anchor="middle" class="s">⑥ 核对本机策略；bridge 不在就拉起，</text>
+  <text x="740" y="328" text-anchor="middle" class="s">bridge 再启动 CLI</text>
+  <path d="M740,362 H970" class="ln" marker-end="url(#ar)"/>
+  <text x="748" y="356" class="s">把会话流接到 bridge</text>
+  <path d="M280,400 H970" class="ln" marker-end="url(#ar)"/>
+  <text x="288" y="394" class="s">⑦ 开会话、开一轮：和会话 Pod 一样的消息，设备网关和连接器只转发</text>
+  <path d="M970,440 H280" class="ln dash" marker-end="url(#ar)"/>
+  <text x="962" y="434" text-anchor="end" class="s">⑧ 过程消息（每条带序号）</text>
+  <path d="M280,468 H65" class="ln dash" marker-end="url(#ar)"/>
+  <text x="272" y="462" text-anchor="end" class="s">实时显示</text>
+  <path d="M970,508 H280" class="ln" marker-end="url(#ar)"/>
+  <text x="962" y="502" text-anchor="end" class="s">⑨ 请求审批：要运行 npm install</text>
+  <path d="M280,536 H65" class="ln" marker-end="url(#ar)"/>
+  <text x="272" y="530" text-anchor="end" class="s">审批卡片</text>
+  <path d="M65,564 H280" class="ln" marker-end="url(#ar)"/>
+  <text x="73" y="558" class="s">允许</text>
+  <path d="M280,592 H970" class="ln" marker-end="url(#ar)"/>
+  <text x="288" y="586" class="s">允许</text>
+  <path d="M970,630 H280" class="ln dash" marker-end="url(#ar)"/>
+  <text x="962" y="624" text-anchor="end" class="s">⑩ 这一轮结束</text>
+  <path d="M280,658 H65" class="ln dash" marker-end="url(#ar)"/>
+  <text x="272" y="652" text-anchor="end" class="s">回答完成</text>
+</svg>
+</div>
+<p class="cap">图 5　一轮对话。⑦ 之后的消息都经过设备网关和连接器，图上为了简洁画成直达</p>
+<ol>
+  <li>用户在网页上发消息。</li>
+  <li>Atlas server 查在线表，看会话绑定的设备是否在线。不在线就立即结束这一轮，并告诉用户「你的电脑不在线，请启动连接器」，不显示「系统忙」这类说法。</li>
+  <li>server 照常组装这一轮的能力（模型、MCP、知识库的真实地址和凭据），交给设备网关登记，换回会话令牌和设备视角的地址（见 <a href="#s4">4</a>）。</li>
+  <li>server 向设备网关要这个会话的连接，就像以前连会话 Pod 的 bridge 一样。</li>
+  <li>设备网关通过控制连接通知连接器，为这个会话打开一条会话流，并告诉它会话、CLI 类型、工作目录、模型接入方式。</li>
+  <li>连接器按本机策略核对：目录在允许范围内、这种 CLI 本机配置过、权限模式不超过本机上限、同时会话数没超。核对通过后，确保这个会话的 bridge 在跑（不在就拉起，bridge 再启动 CLI），再把会话流接到 bridge。核对不通过就拒绝，原因一路传回网页。</li>
+  <li>server 通过这条通道给 bridge 发开会话、开一轮的消息。这些消息和发给会话 Pod 的完全一样。</li>
+  <li>CLI 开始干活，过程消息原路回到 server，再显示在对话里。每条消息带序号，server 定期确认收到了哪一条（断线后据此补发，见 <a href="#s3-7">3.7</a>）。</li>
+  <li>需要审批时，审批请求同样原路传过来。用户在网页上处理，结果原路传回。</li>
+  <li>这一轮结束。</li>
+</ol>
+
+<h3>3.6 一条连接里跑多路</h3>
+<div class="fig">
+<svg viewBox="0 0 1080 280" width="100%" role="img" aria-label="控制连接里的多路通道">
+  <rect x="20" y="40" width="200" height="44" rx="6" class="c1"/>
+  <text x="120" y="67" text-anchor="middle" class="s">server 实例 1：会话 A 的一轮</text>
+  <rect x="20" y="110" width="200" height="44" rx="6" class="c1"/>
+  <text x="120" y="137" text-anchor="middle" class="s">server 实例 2：会话 B 的一轮</text>
+  <rect x="20" y="180" width="200" height="44" rx="6" class="c1"/>
+  <text x="120" y="207" text-anchor="middle" class="s">server：网页上看文件</text>
+  <path d="M220,62 H260" class="ln" marker-end="url(#ar)"/>
+  <path d="M220,132 H260" class="ln" marker-end="url(#ar)"/>
+  <path d="M220,202 H260" class="ln" marker-end="url(#ar)"/>
+
+  <rect x="260" y="30" width="130" height="204" rx="6" class="c4"/>
+  <text x="325" y="126" text-anchor="middle" class="b">设备网关</text>
+  <text x="325" y="146" text-anchor="middle" class="s">按会话分流</text>
+
+  <rect x="390" y="50" width="320" height="164" rx="30" class="c3"/>
+  <text x="550" y="44" text-anchor="middle" class="s">控制连接（一台设备一条，HTTPS 上的长连接）</text>
+  <path d="M400,90 H700" class="ln" marker-start="url(#ar)" marker-end="url(#ar)"/>
+  <text x="550" y="84" text-anchor="middle" class="s">会话流 A</text>
+  <path d="M400,140 H700" class="ln" marker-start="url(#ar)" marker-end="url(#ar)"/>
+  <text x="550" y="134" text-anchor="middle" class="s">会话流 B</text>
+  <path d="M400,190 H700" class="ln dash" marker-start="url(#ar)" marker-end="url(#ar)"/>
+  <text x="550" y="184" text-anchor="middle" class="s">文件流（分成小块，给会话流让路）</text>
+
+  <rect x="710" y="30" width="130" height="204" rx="6" class="c3"/>
+  <text x="775" y="126" text-anchor="middle" class="b">连接器</text>
+  <text x="775" y="146" text-anchor="middle" class="s">按通道分发</text>
+  <path d="M840,62 H880" class="ln" marker-end="url(#ar)"/>
+  <path d="M840,132 H880" class="ln" marker-end="url(#ar)"/>
+  <path d="M840,202 H880" class="ln" marker-end="url(#ar)"/>
+  <rect x="880" y="40" width="180" height="44" rx="6" class="c1"/>
+  <text x="970" y="67" text-anchor="middle" class="s">会话 A 的 bridge → CLI</text>
+  <rect x="880" y="110" width="180" height="44" rx="6" class="c1"/>
+  <text x="970" y="137" text-anchor="middle" class="s">会话 B 的 bridge → CLI</text>
+  <rect x="880" y="180" width="180" height="44" rx="6" class="c4"/>
+  <text x="970" y="207" text-anchor="middle" class="s">读本机文件（本机把关）</text>
+  <text x="540" y="266" text-anchor="middle" class="s">某一路断开或堵住时只关这一路，其余照常；关掉的会话流靠断线补发恢复</text>
+</svg>
+</div>
+<p class="cap">图 6　一台设备只有一条控制连接，会话和文件请求在里面各走各的通道</p>
+<ul>
+  <li><b>为什么只用一条连接</b>：设备网关有多个实例时，server 只需按在线表找到设备连着的那个实例，所有通道自然都在那个实例上，不依赖入口的粘性路由，也不需要在网关实例之间转发。电脑也只维持一条加密连接，经过各种路由器、代理时更稳定。</li>
+  <li><b>先后顺序</b>：正在进行的对话优先。文件内容分成小块，穿插在对话消息之间发送，下载大文件不会让对话卡住。</li>
+  <li><b>互不拖累</b>：每一路都有自己的缓冲上限。某一路长时间堵住（比如 server 那边读得慢），只关这一路，其他路不受影响。被关掉的会话流按 <a href="#s3-7">3.7</a> 恢复。</li>
+  <li><b>关闭原因原样传给另一端</b>：bridge 那边说「会话已结束」或「被新连接取代」，server 就不再重连；设备断开、网关重启时，server 收到「可以重连」，会继续重连。</li>
+</ul>
+
+<h3 id="s3-7">3.7 断线与恢复</h3>
+<div class="fig">
+<svg viewBox="0 0 1080 500" width="100%" role="img" aria-label="断线与恢复的时序">
+  <rect x="60" y="14" width="120" height="34" rx="6" class="c1"/>
+  <text x="120" y="36" text-anchor="middle" class="b">Atlas server</text>
+  <rect x="340" y="14" width="120" height="34" rx="6" class="c4"/>
+  <text x="400" y="36" text-anchor="middle" class="b">设备网关</text>
+  <rect x="620" y="14" width="120" height="34" rx="6" class="c3"/>
+  <text x="680" y="36" text-anchor="middle" class="b">连接器</text>
+  <rect x="895" y="14" width="130" height="34" rx="6" class="c3"/>
+  <text x="960" y="36" text-anchor="middle" class="b">bridge + CLI</text>
+  <path d="M120,48 V490" class="life"/>
+  <path d="M400,48 V490" class="life"/>
+  <path d="M680,48 V490" class="life"/>
+  <path d="M960,48 V490" class="life"/>
+
+  <path d="M960,80 H120" class="ln dash" marker-end="url(#ar)"/>
+  <text x="952" y="74" text-anchor="end" class="s">过程消息 #1 … #120</text>
+  <path d="M120,108 H960" class="ln" marker-end="url(#ar)"/>
+  <text x="128" y="102" class="s">确认：收到 #118（大约每秒一次）</text>
+  <text x="540" y="148" text-anchor="middle" class="bad">✗ 电脑睡眠 / 网络断开</text>
+  <rect x="20" y="168" width="250" height="48" rx="5" class="inner"/>
+  <text x="145" y="188" text-anchor="middle" class="s">不设超时，按退避间隔一直重连；</text>
+  <text x="145" y="206" text-anchor="middle" class="s">网页显示「等待你的电脑重新连上」</text>
+  <rect x="830" y="168" width="240" height="48" rx="5" class="inner"/>
+  <text x="950" y="188" text-anchor="middle" class="s">CLI 在本机照常干活，</text>
+  <text x="950" y="206" text-anchor="middle" class="s">#121 … #150 先存在 bridge 里</text>
+  <path d="M680,252 H400" class="ln" marker-end="url(#ar)"/>
+  <text x="672" y="246" text-anchor="end" class="s">电脑醒来：重新建立控制连接</text>
+  <path d="M120,288 H400" class="ln" marker-end="url(#ar)"/>
+  <text x="128" y="282" class="s">重新连这个会话</text>
+  <path d="M400,316 H680" class="ln" marker-end="url(#ar)"/>
+  <text x="408" y="310" class="s">打开会话流</text>
+  <path d="M680,344 H960" class="ln" marker-end="url(#ar)"/>
+  <text x="688" y="338" class="s">接到 bridge</text>
+  <path d="M120,382 H960" class="ln" marker-end="url(#ar)"/>
+  <text x="128" y="376" class="s">接回：我已经收到 #118</text>
+  <path d="M960,416 H120" class="ln dash" marker-end="url(#ar)"/>
+  <text x="952" y="410" text-anchor="end" class="s">从 #119 补发到 #150，之后接上实时消息</text>
+  <rect x="20" y="436" width="250" height="34" rx="5" class="inner"/>
+  <text x="145" y="458" text-anchor="middle" class="s">按序号去掉重复：不缺、不重</text>
+</svg>
+</div>
+<p class="cap">图 7　断线后恢复：断开的只是通道，这一轮在电脑上照常进行；接回后从最后确认的位置往后补发</p>
+<table>
+  <tr><th>情况</th><th>结果</th></tr>
+  <tr><td>网络抖动；电脑睡眠后醒来</td><td>CLI 在本机接着干。连接器重连后，server 重新接上，从最后确认的位置往后补发，用户看到的过程不缺也不重复</td></tr>
+  <tr><td>电脑长时间合盖</td><td>这一轮一直等，不设超时。网页显示「等待你的电脑重新连上」，用户可以随时取消</td></tr>
+  <tr><td>连接器或电脑重启</td><td>bridge 进程不在了，这一轮的进度跟着丢失，所以这一轮以失败结束，并说明原因。下一轮发消息时，CLI 按之前记下的会话接着原来的上下文继续</td></tr>
+  <tr><td>Atlas server 换实例接管</td><td>新实例经设备网关重新接上会话，和上面一样补发</td></tr>
+  <tr><td>设备网关重启（比如发版）</td><td>所有设备断开后自动重连，正在进行的一轮停顿一下就接上</td></tr>
+  <tr><td>用户在网页上点停止</td><td>和会话 Pod 一样，请 bridge 取消这一轮。断线期间点停止，server 不再重连，这一轮直接结束</td></tr>
+</table>
+
+<h3>3.8 设备网关有多个实例时</h3>
+<p>在线表记录每台设备连在哪个网关实例上。server 要连某个会话时，查在线表，直接连那个实例。一台设备只有一条控制连接，它的会话流和文件流都在那个实例上，<b>网关实例之间不转发</b>。实例重启时，连在上面的设备自动重连到其他实例，在线表随之更新。</p>
+<p>设备网关和 Atlas server 分开部署：server 发版频繁，网关很少变，设备的长连接不受 server 发版影响。</p>
+
+<h3>3.9 对平台入口的要求</h3>
+<ul>
+  <li>电脑只需要能访问平台的 HTTPS 入口（443 端口），会遵守电脑上设置的网络代理。</li>
+  <li>只走加密连接，所以入口必须是 HTTPS。</li>
+  <li>只在局域网里的部署，只有同一个局域网的电脑能用。首发选在有公网地址的日本服务器上。</li>
+</ul>
+
+<!-- ====================================================================== -->
+<h2 id="s4">4. CLI 怎么用平台的能力</h2>
+<p>CLI 要访问模型、MCP、知识库。做法是<b>由设备网关替设备持有凭据</b>：交给电脑的地址都指向设备网关，凭证只有会话令牌；设备网关收到请求后，换上真实凭据再转给平台的服务。</p>
+<div class="fig">
+<svg viewBox="0 0 1080 340" width="100%" role="img" aria-label="凭据代持">
+  <rect x="10" y="30" width="320" height="200" rx="8" class="c3"/>
+  <text x="170" y="54" text-anchor="middle" class="b">电脑上的 CLI 拿到的</text>
+  <text x="26" y="84" class="s">模型地址：设备网关上的地址</text>
+  <text x="26" y="104" class="s">模型 Key：会话令牌</text>
+  <text x="26" y="134" class="s">MCP 服务地址：设备网关上的地址</text>
+  <text x="26" y="154" class="s">MCP 请求的凭证：会话令牌</text>
+  <text x="26" y="184" class="s">知识库：同上</text>
+  <text x="26" y="214" class="b">一个真实的 Key 都没有</text>
+  <path d="M330,130 H380" class="ln" marker-end="url(#ar)"/>
+
+  <rect x="380" y="30" width="320" height="200" rx="8" class="c4"/>
+  <text x="540" y="54" text-anchor="middle" class="b">设备网关</text>
+  <text x="396" y="84" class="s">① 认会话令牌：是哪个会话、哪个人</text>
+  <text x="396" y="110" class="s">② 找到这个会话登记的真实服务</text>
+  <text x="396" y="136" class="s">③ 去掉设备带来的认证和身份信息</text>
+  <text x="396" y="162" class="s">④ 换上真实凭据，写入使用者身份</text>
+  <text x="396" y="188" class="s">⑤ 转发；流式回复原样传回</text>
+
+  <path d="M700,70 H750" class="ln" marker-end="url(#ar)"/>
+  <path d="M700,130 H750" class="ln" marker-end="url(#ar)"/>
+  <path d="M700,190 H750" class="ln" marker-end="url(#ar)"/>
+  <rect x="750" y="44" width="310" height="52" rx="6" class="c2"/>
+  <text x="905" y="66" text-anchor="middle" class="b">模型网关</text>
+  <text x="905" y="84" text-anchor="middle" class="s">智能体的模型 Key</text>
+  <rect x="750" y="104" width="310" height="52" rx="6" class="c2"/>
+  <text x="905" y="126" text-anchor="middle" class="b">MCP 网关</text>
+  <text x="905" y="144" text-anchor="middle" class="s">智能体的 MCP Key + 使用者本人</text>
+  <rect x="750" y="164" width="310" height="52" rx="6" class="c2"/>
+  <text x="905" y="186" text-anchor="middle" class="b">知识库</text>
+  <text x="905" y="204" text-anchor="middle" class="s">知识库访问令牌（按使用者本人签）</text>
+
+  <rect x="380" y="276" width="320" height="52" rx="6" class="c1"/>
+  <text x="540" y="298" text-anchor="middle" class="b">Atlas server</text>
+  <text x="540" y="316" text-anchor="middle" class="s">每轮开始时登记：会话令牌 → 真实服务和凭据</text>
+  <path d="M540,276 V230" class="ln" marker-end="url(#ar)"/>
+</svg>
+</div>
+<p class="cap">图 8　凭据代持：电脑上只有会话令牌，设备网关在转发时换上真实凭据</p>
+<ul>
+  <li><b>server 不用改组装逻辑</b>：和会话 Pod 一样组装出真实地址和凭据，只是多一步，交给设备网关登记，再把设备视角的地址和会话令牌交给 CLI。</li>
+  <li><b>所有服务用同一套做法</b>：设备网关不需要了解模型、MCP、知识库各自的协议，只做「认令牌、换凭据、转发」。流式回复（模型逐字输出）原样传回。</li>
+  <li><b>身份只能由平台写入</b>：设备带来的认证和身份信息一律丢掉，再由设备网关写入使用者本人的身份（<a href="#s2-5">2.5</a>）。设备无法冒充别人。</li>
+  <li><b>会话令牌的有效期</b>：CLI 启动时读取地址和令牌，中途换不了，所以会话令牌在整个 CLI 会话里保持不变。会话结束并被回收、会话被删除、设备被吊销时，令牌失效。</li>
+  <li><b>换 Key、收回授权立刻生效</b>：每轮开始时 server 会重新登记真实凭据。真实凭据只在设备网关这一侧，换了 Key 不用重启 CLI；MCP 网关每个请求都判权，收回授权后的下一个请求就会被拒。</li>
+  <li><b>模型用本机登录时</b>（<a href="#s2-4">2.4</a>）：平台不下发模型接入，CLI 直接连供应商，不经过设备网关。MCP 和知识库照样走设备网关。</li>
+</ul>
+
+<!-- ====================================================================== -->
+<h2 id="s5">5. 本机工作目录的文件预览</h2>
+<h3>5.1 做法：打开时现读</h3>
+<p>文件留在电脑上，不同步到平台。网页上要看文件时，经设备网关请连接器现读，读完原路返回。</p>
+<div class="fig">
+<svg viewBox="0 0 1080 310" width="100%" role="img" aria-label="文件预览链路">
+  <rect x="10" y="30" width="150" height="100" rx="6" class="c3"/>
+  <text x="85" y="56" text-anchor="middle" class="b">网页</text>
+  <text x="85" y="80" text-anchor="middle" class="s">文件抽屉</text>
+  <text x="85" y="98" text-anchor="middle" class="s">预览页（新标签）</text>
+  <path d="M160,80 H200" class="ln" marker-start="url(#ar)" marker-end="url(#ar)"/>
+  <rect x="200" y="30" width="250" height="100" rx="6" class="c1"/>
+  <text x="325" y="56" text-anchor="middle" class="b">Atlas server</text>
+  <text x="325" y="78" text-anchor="middle" class="s">核对：请求者 = 会话创建者 = 设备主人</text>
+  <text x="325" y="96" text-anchor="middle" class="s">预览站点和安全限制（只此一份）</text>
+  <text x="325" y="114" text-anchor="middle" class="s">按运行位置：读对象存储，还是读电脑</text>
+  <path d="M450,80 H490" class="ln" marker-start="url(#ar)" marker-end="url(#ar)"/>
+  <rect x="490" y="30" width="160" height="100" rx="6" class="c4"/>
+  <text x="570" y="56" text-anchor="middle" class="b">设备网关</text>
+  <text x="570" y="80" text-anchor="middle" class="s">找到设备的控制连接</text>
+  <text x="570" y="98" text-anchor="middle" class="s">开一条文件流</text>
+  <path d="M650,80 H690" class="ln" marker-start="url(#ar)" marker-end="url(#ar)"/>
+  <rect x="690" y="30" width="170" height="100" rx="6" class="c3"/>
+  <text x="775" y="56" text-anchor="middle" class="b">连接器</text>
+  <text x="775" y="80" text-anchor="middle" class="s">本机把关</text>
+  <text x="775" y="98" text-anchor="middle" class="s">列目录、列改动、读文件</text>
+  <path d="M860,80 H900" class="ln" marker-start="url(#ar)" marker-end="url(#ar)"/>
+  <rect x="900" y="30" width="170" height="100" rx="6" class="c4"/>
+  <text x="985" y="56" text-anchor="middle" class="b">本机硬盘</text>
+  <text x="985" y="80" text-anchor="middle" class="s">会话的工作目录</text>
+
+  <rect x="10" y="166" width="560" height="130" rx="6" class="inner"/>
+  <text x="26" y="190" class="b">平台这一侧</text>
+  <text x="26" y="214" class="s">· 只要电脑在线就能看文件，不需要会话正在跑</text>
+  <text x="26" y="236" class="s">· 文件版本由大小和修改时间算出，不用读内容；内容没变就不再传</text>
+  <text x="26" y="258" class="s">· 预览不超过 20 MB、下载不超过 200 MB，运行期配置里可以改</text>
+  <text x="26" y="280" class="s">· 只转发，不保存文件内容</text>
+  <rect x="600" y="166" width="470" height="130" rx="6" class="inner"/>
+  <text x="616" y="190" class="b">本机把关（不信任平台给的路径）</text>
+  <text x="616" y="214" class="s">· 整理后的路径必须在会话工作目录里，解析符号链接后也必须在</text>
+  <text x="616" y="236" class="s">· 路径里任何一段以点开头都不给看（.env、.git、.ssh）</text>
+  <text x="616" y="258" class="s">· 本机可以加拒绝规则（如 *.pem、*.key），也可以完全关闭</text>
+  <text x="616" y="280" class="s">· 只读；每次远程读取都记在本机日志里</text>
+</svg>
+</div>
+<p class="cap">图 9　看本机文件的链路：网页和预览页都不变，只是 server 读文件的地方从对象存储换成了电脑</p>
+<ul>
+  <li><b>网页上的文件抽屉和预览页都不变</b>：server 按会话的运行位置决定去对象存储读还是去电脑上读。HTML、PDF、图片、Markdown、文本的显示方式都照旧。</li>
+  <li><b>预览站点仍由 Atlas server 提供</b>：预览站点负责给文件内容加安全限制（内容视为不可信，放在隔离的页面环境里运行，不能冒充平台）。这是安全的关键，只保留 server 这一份，不在设备网关里再做一个。代价是文件内容多经过 server 一次，按预览的数据量可以接受。</li>
+  <li><b>看文件不依赖会话在跑</b>：读文件由连接器完成，不经过 bridge。会话闲置、bridge 退出后，只要电脑在线，照样能看。</li>
+</ul>
+
+<h3>5.2 文件抽屉的两个页签：改动和全部</h3>
+<div class="fig">
+<svg viewBox="0 0 1080 290" width="100%" role="img" aria-label="文件抽屉的两个页签">
+  <rect x="10" y="10" width="520" height="270" rx="8" class="inner"/>
+  <rect x="26" y="26" width="90" height="28" rx="5" class="c1"/>
+  <text x="71" y="45" text-anchor="middle" class="b">改动 3</text>
+  <rect x="122" y="26" width="70" height="28" rx="5" class="inner"/>
+  <text x="157" y="45" text-anchor="middle" class="s">全部</text>
+  <text x="514" y="45" text-anchor="end" class="s">MacBook · ~/code/shop-web</text>
+  <text x="30" y="88" class="m">M  src/app.ts</text>
+  <text x="300" y="88" class="s">修改 · 2 分钟前</text>
+  <text x="30" y="118" class="m">A  src/utils/date.ts</text>
+  <text x="300" y="118" class="s">新增 · 1 分钟前</text>
+  <text x="30" y="148" class="m">D  legacy/old.js</text>
+  <text x="300" y="148" class="s">删除（不能预览）</text>
+  <text x="30" y="210" class="s">工作区相对最近一次提交的、还没提交的改动，</text>
+  <text x="30" y="230" class="s">包括你自己改的。点文件名在新标签预览</text>
+
+  <rect x="550" y="10" width="520" height="270" rx="8" class="inner"/>
+  <rect x="566" y="26" width="70" height="28" rx="5" class="inner"/>
+  <text x="601" y="45" text-anchor="middle" class="s">改动</text>
+  <rect x="642" y="26" width="70" height="28" rx="5" class="c1"/>
+  <text x="677" y="45" text-anchor="middle" class="b">全部</text>
+  <text x="570" y="88" class="m">▸ node_modules</text>
+  <text x="840" y="88" class="s">展开时才去读</text>
+  <text x="570" y="114" class="m">▾ src</text>
+  <text x="602" y="140" class="m">app.ts</text>
+  <text x="840" y="140" class="s">3.2 KB</text>
+  <text x="590" y="166" class="m">▸ utils</text>
+  <text x="582" y="192" class="m">package.json</text>
+  <text x="840" y="192" class="s">1.1 KB</text>
+  <text x="570" y="230" class="s">按目录一层层加载；以点开头的不显示；</text>
+  <text x="570" y="250" class="s">一层太多时只显示前面一部分，并提示</text>
+</svg>
+</div>
+<p class="cap">图 10　文件抽屉：git 仓库默认打开「改动」，「全部」按目录一层层加载</p>
+<table>
+  <tr><th>页签</th><th>内容</th><th>为什么</th></tr>
+  <tr><td><b>改动</b>（git 仓库时默认打开）</td><td>还没提交的改动：新增、修改、删除。删除的文件只列出，不能预览</td><td>本机的工作目录通常是已有项目，用户最关心智能体改了什么。这和现在文件抽屉回答的问题一致：这个会话产出了什么</td></tr>
+  <tr><td><b>全部</b></td><td>按目录一层层加载，和「我的工作空间」页的浏览方式一样。一层的条目太多时只显示前面一部分，并给出提示</td><td>本机项目动辄上万个文件，一次全部列出既慢又列不完，按数量截断还会让一部分文件找不到</td></tr>
+</table>
+<ul>
+  <li>工作目录不是 git 仓库时，只有「全部」。</li>
+  <li>「改动」是工作区相对最近一次提交的改动，<b>包括用户自己改的</b>，并不精确对应这个会话做了什么。界面上照实说明。</li>
+  <li>对话头部显示「设备名 · 本机路径」和设备在线状态。它不链接到「我的工作空间」，因为文件不在那里。</li>
+</ul>
+
+<h3>5.3 什么时候刷新</h3>
+<ul>
+  <li>一轮进行中，「改动」列表定时刷新。连接器把结果缓存一两秒，多个标签页同时在看也只算一次。</li>
+  <li>「全部」只在展开目录时才去读。</li>
+  <li>预览页按文件版本刷新。版本由文件大小和修改时间算出，不需要读文件内容；版本没变就不再传内容。</li>
+  <li>预览 HTML 时，页面引用的每个文件（脚本、样式、图片）都要走一遍这条链路。从国内访问日本服务器，每次往返几十到上百毫秒，页面加载会比会话 Pod 慢一些。</li>
+</ul>
+
+<h3>5.4 只读，有大小上限</h3>
+<ul>
+  <li><b>只读</b>：网页上只能查看、下载，不能往电脑里上传、删除、改名。</li>
+  <li><b>大小上限</b>：预览不超过 20 MB，下载不超过 200 MB。管理员可以在运行期配置里调整，不用重启。超出上限时提示用户到电脑上直接打开。</li>
+</ul>
+
+<h3 id="s5-5">5.5 电脑离线时</h3>
+<ul>
+  <li>文件抽屉和预览页显示「你的电脑不在线，文件暂时看不到；启动连接器后自动恢复」，不显示「系统忙」。</li>
+  <li>对话记录不受影响，包括每次工具调用和审批，都照常可以看。</li>
+  <li>设备被吊销或换了电脑后，这个会话的文件就看不到了，只剩对话记录。</li>
+  <li><b>为什么不做同步或快照</b>：同步意味着把整个项目传到平台，这是隐私问题，用户把代码留在本机往往就是为了不上传；大项目会长期占用用户的上行带宽；平台上的副本和电脑上的文件也会越来越对不上。离线看不到文件，换来的是文件始终只在电脑上。</li>
+</ul>
+
+<!-- ====================================================================== -->
+<h2 id="s6">6. 安全</h2>
+<div class="callout warn">平台获得了让一台个人电脑执行命令的能力。这一节说明这种能力被限制在哪里。</div>
+
+<h3>6.1 只能跑在本人的电脑上</h3>
+<ul>
+  <li>设备只属于一个人。会话建立时绑定设备，平台核对会话的使用者就是设备的主人。</li>
+  <li>每次连会话、每次看文件都会再核对一遍：请求者、会话创建者、设备主人必须是同一个人。</li>
+  <li>智能体可以共享给别人，但别人用时只会跑在别人自己的电脑上，不可能跑在你的电脑上。</li>
+  <li>委派也一样：只会落在这个对话的使用者自己的默认设备上。</li>
+</ul>
+
+<h3>6.2 平台能让电脑做什么，由本机决定上限</h3>
+<ul>
+  <li>平台只告诉连接器三件事：用哪种 CLI、在哪个目录、用什么权限模式。<b>实际启动什么命令，由连接器按本机配置决定</b>，平台无法让电脑运行任意程序。</li>
+  <li>本机策略优先。连接器逐项核对：目录在本机允许的范围内；这种 CLI 本机配置过；权限模式不超过本机上限（比如电脑主人可以规定不允许「全部自动批准」）；同时运行的会话数没有超过上限。任何一项不满足就拒绝，并把原因显示在网页上。</li>
+  <li>审批照常有效：CLI 要执行的操作按权限模式请求审批，由使用者在网页上决定。</li>
+</ul>
+
+<h3>6.3 电脑上有哪些凭据</h3>
+<table>
+  <tr><th>凭据</th><th>在电脑上吗</th><th>说明</th></tr>
+  <tr><td>设备令牌</td><td>在，存在系统钥匙串里（没有钥匙串时存进只有本人可读的文件）</td><td>平台只存摘要。可以在网页上吊销，吊销后这台设备立即断开</td></tr>
+  <tr><td>会话令牌</td><td>在，在 CLI 进程里</td><td>只对一个会话有效；会话结束并回收、会话删除、设备吊销时失效</td></tr>
+  <tr><td>智能体的模型 Key、MCP Key</td><td><span class="yes">不在</span></td><td>由设备网关持有</td></tr>
+  <tr><td>知识库访问令牌</td><td><span class="yes">不在</span></td><td>由设备网关持有</td></tr>
+  <tr><td>本机 CLI 自己的登录</td><td>在，用户本来就有</td><td>模型来源选「本机登录」时使用</td></tr>
+</table>
+
+<h3>6.4 传输与配对</h3>
+<ul>
+  <li>只走加密连接（HTTPS）。</li>
+  <li>配对码只能用一次，10 分钟内有效。设备令牌只在配对时交给连接器一次。</li>
+  <li>连接器版本太旧时会被拒绝，并提示升级，避免旧版本里的问题被带进来。</li>
+</ul>
+
+<h3>6.5 电脑主人看得见、停得了</h3>
+<ul>
+  <li>连接器可以列出正在跑的会话，并能结束其中任何一个。退出连接器，所有远程会话都会停止。</li>
+  <li>连接器在本机日志里记录每次打开会话、每次远程读取文件（读了什么路径、什么时间）。</li>
+  <li>远程查看文件可以在本机完全关闭（<a href="#s5">5</a>）。</li>
+</ul>
+
+<h3>6.6 没有隔离</h3>
+<p>CLI 能做电脑主人能做的任何事，比如读写主人能访问的文件、访问主人能访问的网络。约束它的只有两样：审批（权限模式）和本机策略的上限。建会话时界面会明确提示这一点。</p>
+
+<!-- ====================================================================== -->
+<h2 id="s7">7. 使用流程</h2>
+<ol>
+  <li><b>添加设备</b>：在「我的设备」里点添加，按提示在电脑上安装连接器（bridge 随连接器一起安装），然后输入配对码。</li>
+  <li><b>准备本机</b>：设置允许平台使用的工作目录（比如 <code>~/code</code>，还要包含智能体的默认项目地址，比如 <code>~/atlas-projects</code>），装好要用的 CLI 和它的适配器。连接器提供自检，检查 CLI、适配器和运行环境是否齐全，缺什么就直接给出修复提示，并把结果报告给平台。</li>
+  <li><b>新建对话</b>：选择一个本机 CLI 智能体。设备默认选中默认设备，目录默认是一个新目录（默认项目地址 / 会话 id），也可以从电脑允许目录下的子目录里改选已有的项目。界面会提示「CLI 将以你的身份在这台电脑上工作」。也可以不直接选它，而是在别的对话里由主智能体委派过来（<a href="#s2-6">2.6</a>）。</li>
+  <li><b>对话和审批</b>：和平时一样。对话头部显示「设备名 · 目录」和设备在线状态；电脑离线时会明确提示。</li>
+  <li><b>查看文件</b>：打开文件抽屉，看「改动」和「全部」，点文件名在新标签页预览。</li>
+  <li><b>停止使用</b>：暂时不用就退出连接器；以后不再用这台电脑，就在网页上吊销它。</li>
+</ol>
+
+</main>
+</body>
+</html>

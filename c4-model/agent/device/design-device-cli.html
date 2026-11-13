@@ -1,0 +1,441 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>本机 CLI 智能体设计</title>
+<style>
+  body { margin: 0; background: #fff; color: #333; font-family: "Open Sans", "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
+  main { max-width: 1280px; padding: 24px 32px 64px; }
+  h1 { margin: 8px 0 12px; font-size: 22px; font-weight: 600; color: #222; }
+  h2 { margin: 40px 0 12px; padding-bottom: 6px; border-bottom: 1px solid #e3e3e3; font-size: 17px; font-weight: 600; color: #222; }
+  h3 { margin: 28px 0 8px; font-size: 15px; font-weight: 600; color: #333; }
+  p { max-width: 1100px; margin: 0 0 8px; font-size: 14px; line-height: 1.8; }
+  p.lead { padding: 10px 14px; border-left: 3px solid #1168bd; background: #f4f8fc; }
+  code { padding: 0 3px; background: #f6f8fa; font-family: Menlo, Consolas, monospace; font-size: 12.5px; }
+  a { color: #1168bd; }
+  table { width: 100%; margin: 8px 0 0; border-collapse: collapse; font-size: 13px; line-height: 1.6; }
+  th, td { padding: 6px 10px; border: 1px solid #e3e3e3; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; font-weight: 600; }
+  ol.steps { margin: 8px 0 0; padding: 0; list-style: none; }
+  ol.steps li { position: relative; margin: 0 0 6px; padding-left: 30px; font-size: 14px; line-height: 1.7; }
+  ol.steps li .n { position: absolute; left: 0; top: 2px; width: 20px; height: 20px; border-radius: 50%; background: #d9480f; color: #fff; font-size: 12px; font-weight: 700; line-height: 20px; text-align: center; }
+  svg { display: block; max-width: 100%; height: auto; margin: 8px 0 4px; }
+  svg text { font-size: 13px; fill: #444; }
+  svg .t-name { font-size: 15px; fill: #1168bd; text-anchor: middle; }
+  svg .t-sub { font-size: 12px; fill: #888; text-anchor: middle; }
+  svg .t-head { font-size: 14px; font-weight: 600; fill: #1168bd; }
+  svg .t-key { font-size: 12px; fill: #888; }
+  svg .t-lab { font-size: 12px; fill: #666; }
+  svg .t-hot { font-size: 12px; fill: #d9480f; }
+  svg .t-mute { font-size: 12px; fill: #aaa; }
+  svg .hot { fill: #d9480f; }
+  svg .mid { text-anchor: middle; }
+  svg .end { text-anchor: end; }
+  svg .b { font-weight: 700; }
+  svg .node { fill: #fff; stroke: #1168bd; stroke-width: 1.6; }
+  svg .node-hot { fill: #fff6f0; stroke: #d9480f; stroke-width: 1.6; }
+  svg .bnd { fill: none; stroke: #1168bd; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  svg .gap { fill: #fff6f0; stroke: #d9480f; stroke-width: 1.2; stroke-dasharray: 5 4; }
+  svg .band-a { fill: #eef4fb; stroke: #1168bd; stroke-width: 1.2; }
+  svg .band-b { fill: #fff3ea; stroke: #d9480f; stroke-width: 1.2; }
+  svg .cell { fill: #fff; stroke: #bbb; stroke-width: 1.2; }
+  svg .e { fill: none; stroke: #444; stroke-width: 1.6; }
+  svg .e-dash { fill: none; stroke: #444; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  svg .e-hot { fill: none; stroke: #d9480f; stroke-width: 2.2; }
+  svg .e-mute { fill: none; stroke: #bbb; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  svg .tick { stroke: #444; stroke-width: 1.2; }
+  svg .dot { fill: #fff; stroke: #888; stroke-width: 1.4; }
+  svg .dot-hot { fill: #d9480f; stroke: #d9480f; stroke-width: 1.4; }
+  svg .badge circle { fill: #d9480f; stroke: #fff; stroke-width: 2; }
+  svg .badge text { fill: #fff; font-size: 12px; font-weight: 700; text-anchor: middle; }
+</style>
+</head>
+<body>
+<main>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <marker id="a" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#444"/></marker>
+      <marker id="h" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#d9480f"/></marker>
+      <marker id="m" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#bbb"/></marker>
+      <marker id="tri" viewBox="0 0 12 12" refX="12" refY="6" markerWidth="13" markerHeight="13" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L12 6 L0 12 z" fill="#fff" stroke="#444" stroke-width="1.2"/></marker>
+    </defs>
+  </svg>
+
+  <h1>本机 CLI 智能体设计：CLI 跑在用户自己的电脑上</h1>
+  <p class="lead">一句话：<b>电脑主动连出，平台通过这条连接找到电脑；会话的消息原样转发，凭据留在平台</b>。用户电脑上的连接器连到设备网关，一直不断开；平台要开会话、读文件，都在这条连接上开一路。Agent 服务连设备网关上的会话，和连会话 Pod 里的 bridge 用法一样，协议、断线补发、审批都不改。CLI 调模型、MCP、知识库时，只有一个会话令牌，真实的 Key 由设备网关在转发时换上。</p>
+  <p>打个比方：你住在酒店房间里，外面的人打不进你的房间（电脑在路由器、防火墙后面），但你可以主动打给前台并一直不挂（连接器连出）；有人找你，前台就在这条线上转给你（设备网关）。你要订餐也打给前台，由前台用酒店的账户付钱（凭据代持），酒店的信用卡始终不交到你手上。方案的取舍和产品形态见<a href="../../../agent-platform/doc/design/device-cli-design.html" target="_blank" rel="noopener">方案设计稿</a>，这里讲机制，各图的链接在文末。</p>
+
+  <h2>先认识几个词</h2>
+  <table>
+    <thead><tr><th style="width: 12%">词</th><th style="width: 48%">意思</th><th>例子</th></tr></thead>
+    <tbody>
+      <tr><td>运行位置</td><td>CLI 智能体的一个属性：CLI 跑在平台的会话 Pod 里，还是用户自己的电脑上。建智能体时定，之后不改；运行位置是用户设备的，界面上叫「本机 CLI」。</td><td>「本机 Claude Code」：小王和它对话时，Claude Code 跑在小王的 MacBook 上，改的是他电脑上的项目。</td></tr>
+      <tr><td>设备、默认设备</td><td>一个人配对到平台的一台电脑，只属于这个人。每人至多一台默认设备，被委派时用它。</td><td>小王的 MacBook（默认）和公司台式机。</td></tr>
+      <tr><td>连接器</td><td>装在电脑上的后台小程序：主动连上平台并保持，按会话拉起 bridge，在本机把关。</td><td>开机自启，命令行里能看到平台正在这台电脑上跑哪些会话、随时结束。</td></tr>
+      <tr><td>bridge</td><td>已有组件：启动 CLI，用平台的协议（atlas.host.v1）和平台说话，负责计时、取消、CLI 重启、断线补发。会话 Pod 里和电脑上是同一个程序。</td><td>—</td></tr>
+      <tr><td>设备网关</td><td>平台上新增的服务：接住所有电脑的连接、按会话转发、替设备持有凭据。</td><td>—</td></tr>
+      <tr><td>控制连接、会话流、文件流</td><td>控制连接是电脑到设备网关的那一条长连接；里面按通道分出会话流（每个会话一条）和文件流（读文件时临时开）。</td><td>一根电话线上同时跑好几路通话。</td></tr>
+      <tr><td>在线表</td><td>记着「哪台设备在线、连在哪个设备网关实例上」的表，放在 Redis 里，心跳续期。</td><td>MacBook → 网关实例 X，报告：macOS、claude-code 2.1、允许 ~/code。</td></tr>
+      <tr><td>会话令牌</td><td>只在一个会话里有效的凭证。CLI 拿它调模型、MCP、知识库；设备网关凭它找到这个会话登记的真实凭据。</td><td>CLI 的 ANTHROPIC_BASE_URL 指向设备网关，Key 填的是会话令牌，不是智能体的 Key。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>原理 1　电脑主动连出，一条连接跑多路</h2>
+  <p>平台连不进电脑：电脑在家用路由器、公司防火墙后面，地址还会变。反过来，电脑访问平台的 HTTPS 入口就像打开网页，几乎处处可行。所以连接永远由电脑发起：</p>
+  <svg width="1240" viewBox="0 0 1240 350" role="img" aria-label="电脑主动连出，一条连接跑多路">
+    <rect class="bnd" x="20" y="28" width="300" height="300" rx="6"/>
+    <text class="t-head" x="36" y="52">用户电脑</text>
+    <rect class="node" x="40" y="66" width="260" height="54" rx="4"/>
+    <text class="t-name" x="170" y="90">连接器</text>
+    <text class="t-sub" x="170" y="110">只往外连；按通道分发</text>
+    <rect class="node" x="40" y="160" width="120" height="50" rx="4"/>
+    <text class="t-name" x="100" y="182">会话 A</text>
+    <text class="t-sub" x="100" y="200">bridge + CLI</text>
+    <rect class="node" x="180" y="160" width="120" height="50" rx="4"/>
+    <text class="t-name" x="240" y="182">会话 B</text>
+    <text class="t-sub" x="240" y="200">bridge + CLI</text>
+    <rect class="node" x="40" y="246" width="260" height="50" rx="4"/>
+    <text class="t-name" x="170" y="268">本机文件</text>
+    <text class="t-sub" x="170" y="286">只读、本机把关</text>
+    <path class="e" d="M100 120 V158" marker-end="url(#a)"/>
+    <path class="e" d="M240 120 V158" marker-end="url(#a)"/>
+    <path class="e" d="M170 120 V244" marker-end="url(#a)"/>
+
+    <text class="t-head" x="545" y="72" text-anchor="middle">一条控制连接（电脑连出，HTTPS 443）</text>
+    <rect class="band-a" x="340" y="90" width="410" height="160" rx="40"/>
+    <path class="e-hot" d="M354 126 H736" marker-start="url(#h)" marker-end="url(#h)"/>
+    <text class="t-hot mid" x="545" y="118">会话流 A（优先）</text>
+    <path class="e-hot" d="M354 170 H736" marker-start="url(#h)" marker-end="url(#h)"/>
+    <text class="t-hot mid" x="545" y="162">会话流 B（优先）</text>
+    <path class="e-dash" d="M354 214 H736" marker-start="url(#a)" marker-end="url(#a)"/>
+    <text class="t-lab mid" x="545" y="206">文件流：分成小块，给会话流让路</text>
+    <text class="t-lab mid" x="545" y="286">每路有自己的窗口和缓冲上限；一路堵住只关这一路</text>
+
+    <rect class="bnd" x="770" y="28" width="450" height="300" rx="6"/>
+    <text class="t-head" x="786" y="52">平台</text>
+    <rect class="node-hot" x="790" y="66" width="200" height="184" rx="4"/>
+    <text class="t-name" x="890" y="92">设备网关 实例 X</text>
+    <text class="t-sub" x="890" y="120">接住控制连接</text>
+    <text class="t-sub" x="890" y="142">按通道转发</text>
+    <text class="t-sub" x="890" y="164">替设备持有凭据</text>
+    <rect class="node" x="1010" y="66" width="190" height="62" rx="4"/>
+    <text class="t-name" x="1105" y="92">在线表（Redis）</text>
+    <text class="t-sub" x="1105" y="112">MacBook → 实例 X</text>
+    <rect class="node" x="1010" y="176" width="190" height="74" rx="4"/>
+    <text class="t-name" x="1105" y="204">Agent 服务</text>
+    <text class="t-sub" x="1105" y="226">任何一个实例都行</text>
+    <path class="e" d="M990 98 H1008" marker-end="url(#a)"/>
+    <path class="e-dash" d="M1105 176 V130" marker-end="url(#a)"/>
+    <text class="t-lab" x="1112" y="158">查在线</text>
+    <path class="e-hot" d="M1010 226 H992" marker-end="url(#h)"/>
+    <text class="t-lab" x="790" y="290">网关实例之间不转发：设备连在哪个实例，</text>
+    <text class="t-lab" x="790" y="310">Agent 服务就直接连哪个实例</text>
+    <g class="badge"><circle cx="40" cy="66" r="10"/><text x="40" y="70">1</text></g>
+    <g class="badge"><circle cx="340" cy="126" r="10"/><text x="340" y="130">2</text></g>
+    <g class="badge"><circle cx="1010" cy="66" r="10"/><text x="1010" y="70">3</text></g>
+    <g class="badge"><circle cx="1001" cy="226" r="10"/><text x="1001" y="230">4</text></g>
+  </svg>
+  <ol class="steps">
+    <li><span class="n">1</span>连接器带着设备令牌连上设备网关，连上就报告系统、版本、装了哪些 CLI、本机允许的目录。断了按退避间隔一直重连，不设上限；只有被拒（令牌无效、版本太旧）才停下，提示重新配对或升级。</li>
+    <li><span class="n">2</span>一台设备只有这一条连接，会话流、文件流都在里面多路复用。每路有自己的发送窗口和缓冲上限：会话流先走，文件内容 64 KB 一块穿插着发；某一路长时间堵住只关这一路，被关的会话流靠 bridge 的断线补发恢复。</li>
+    <li><span class="n">3</span>设备网关把「这台设备在线、连在实例 X」写进在线表，心跳约 25 秒一次、顺带续期；实例崩溃时它写的条目自己过期。</li>
+    <li><span class="n">4</span>Agent 服务的任何实例要找这台设备，查在线表、直接连实例 X。所有通道都在实例 X 上，网关实例之间不需要转发，也不依赖入口的粘性路由。设备换到实例 Y 重连后，下一次查在线表自然连到 Y。</li>
+  </ol>
+
+  <h2>原理 2　会话地址和 bridge 一样：只转发，不解析</h2>
+  <p>会话 Pod 里，Agent 服务的上游连接直接连 bridge。换到用户电脑上，中间多了设备网关和连接器两跳，但它们只转发、不解析，两端看到的是同一套消息：</p>
+  <svg width="1240" viewBox="0 0 1240 300" role="img" aria-label="会话地址和 bridge 一样">
+    <text class="t-key" x="20" y="30">会话 Pod</text>
+    <rect class="node" x="20" y="40" width="230" height="56" rx="4"/>
+    <text class="t-name" x="135" y="64">CLI 运行时</text>
+    <text class="t-sub" x="135" y="84">上游连接（SessionLink）</text>
+    <path class="e" d="M250 68 H818" marker-end="url(#a)"/>
+    <text class="t-lab mid" x="534" y="60">atlas.host.v1 / WebSocket，直接连 Pod 的地址</text>
+    <rect class="node" x="820" y="40" width="200" height="56" rx="4"/>
+    <text class="t-name" x="920" y="64">bridge</text>
+    <text class="t-sub" x="920" y="84">会话 Pod 里</text>
+    <path class="e" d="M1020 68 H1088" marker-end="url(#a)"/>
+    <rect class="node" x="1090" y="40" width="130" height="56" rx="4"/>
+    <text class="t-name" x="1155" y="74">CLI</text>
+
+    <text class="t-key" x="20" y="150">用户电脑</text>
+    <rect class="node" x="20" y="160" width="230" height="56" rx="4"/>
+    <text class="t-name" x="135" y="184">CLI 运行时</text>
+    <text class="t-sub" x="135" y="204">上游连接（一行不改）</text>
+    <path class="e" d="M250 188 H338" marker-end="url(#a)"/>
+    <rect class="node-hot" x="340" y="160" width="190" height="56" rx="4"/>
+    <text class="t-name" x="435" y="184">设备网关</text>
+    <text class="t-sub" x="435" y="204">找设备的连接、开会话流</text>
+    <path class="e-hot" d="M530 188 H588" marker-end="url(#h)"/>
+    <rect class="node-hot" x="590" y="160" width="190" height="56" rx="4"/>
+    <text class="t-name" x="685" y="184">连接器</text>
+    <text class="t-sub" x="685" y="204">本机策略、拉起 bridge</text>
+    <path class="e" d="M780 188 H818" marker-end="url(#a)"/>
+    <rect class="node" x="820" y="160" width="200" height="56" rx="4"/>
+    <text class="t-name" x="920" y="184">bridge</text>
+    <text class="t-sub" x="920" y="204">同一个程序，在电脑上</text>
+    <path class="e" d="M1020 188 H1088" marker-end="url(#a)"/>
+    <rect class="node" x="1090" y="160" width="130" height="56" rx="4"/>
+    <text class="t-name" x="1155" y="194">CLI</text>
+    <rect class="gap" x="250" y="236" width="770" height="44" rx="4"/>
+    <text class="t-hot mid" x="635" y="263">原样通过：握手、session.open / attach、turn.start、每条消息的序号、确认、补发、permission.ask</text>
+    <g class="badge"><circle cx="340" cy="160" r="10"/><text x="340" y="164">1</text></g>
+    <g class="badge"><circle cx="590" cy="160" r="10"/><text x="590" y="164">2</text></g>
+    <g class="badge"><circle cx="820" cy="160" r="10"/><text x="820" y="164">3</text></g>
+  </svg>
+  <ol class="steps">
+    <li><span class="n">1</span>设备网关收到 Agent 服务的连接，按会话取出登记（在哪台设备、启动参数），在设备的控制连接上开一条会话流，把启动参数作为开流的头交给连接器。之后两边的帧原样对转。</li>
+    <li><span class="n">2</span>连接器按本机策略核对（目录、CLI、权限模式上限、会话数），bridge 不在就在项目目录里拉起（命令取本机配置），把会话流接到 bridge 的本机回环地址上。</li>
+    <li><span class="n">3</span>序号、确认、补发、审批都由 Agent 服务和 bridge 两端处理。所以断线恢复的做法和会话 Pod 完全一样：重连、attach、从最后确认的序号之后补发，不缺不重。</li>
+  </ol>
+  <p>中间两跳只做一件和协议有关的事：<b>关闭原因原样传给另一端</b>。Agent 服务的重连策略按关闭原因判断要不要重连，传错了要么空等，要么提前放弃：</p>
+  <table>
+    <thead><tr><th style="width: 34%">发生了什么</th><th style="width: 22%">Agent 服务收到</th><th>接下来</th></tr></thead>
+    <tbody>
+      <tr><td>bridge 说会话已结束、或被新连接取代</td><td>原样</td><td>不重连</td></tr>
+      <tr><td>电脑睡眠、网络断开、设备不在本实例、网关发版</td><td>可以重连</td><td>按退避间隔一直重连，不设窗口；网页显示「等待你的电脑重新连上」，用户可以取消</td></tr>
+      <tr><td>连接器或电脑重启过（bridge 已不在）</td><td>attach 得到 bridge_restarted</td><td>这一轮以失败结束并说明；下一轮 CLI 按记下的会话 id 接着原来的上下文</td></tr>
+      <tr><td>本机策略拒绝（目录不允许、CLI 没配置…）</td><td>不可重连 + 原因</td><td>这一轮失败，原因原路显示在网页上</td></tr>
+      <tr><td>开始前电脑就不在线</td><td>DeviceOffline（没连上）</td><td>立即失败：「你的电脑不在线，请启动连接器」</td></tr>
+    </tbody>
+  </table>
+
+  <h2>原理 3　凭据代持：电脑上只有会话令牌</h2>
+  <p>智能体的模型 Key、MCP Key 是这个智能体所有使用者共用的，放到某个人的电脑上，就等于交给了所有能碰到这台电脑的人。所以真实凭据留在设备网关，电脑上的 CLI 只拿一个会话令牌：</p>
+  <svg width="1240" viewBox="0 0 1240 360" role="img" aria-label="凭据代持">
+    <rect class="node" x="20" y="40" width="250" height="80" rx="4"/>
+    <text class="t-name" x="145" y="68">Agent 服务</text>
+    <text class="t-sub" x="145" y="90">每轮照常组装真实能力</text>
+    <text class="t-sub" x="145" y="108">（真实地址 + 真实凭据）</text>
+    <path class="e-hot" d="M270 68 H398" marker-end="url(#h)"/>
+    <text class="t-hot mid" x="334" y="60">登记</text>
+    <path class="e-dash" d="M398 100 H272" marker-end="url(#a)"/>
+    <text class="t-lab mid" x="334" y="118">回执</text>
+    <rect class="node-hot" x="400" y="30" width="330" height="100" rx="4"/>
+    <text class="t-name" x="565" y="56">设备网关 · 会话登记</text>
+    <text class="t-sub" x="565" y="78">会话 3f2a：令牌 tk_9…（之后每轮不变）</text>
+    <text class="t-sub" x="565" y="98">m1 → 模型网关 + 智能体的模型 Key</text>
+    <text class="t-sub" x="565" y="118">s1 → MCP 网关 + 智能体的 MCP Key + 使用者</text>
+    <path class="e-dash" d="M145 120 V208" marker-end="url(#a)"/>
+    <text class="t-lab" x="152" y="168">改写后的能力（经会话流）</text>
+    <rect class="node" x="20" y="210" width="250" height="90" rx="4"/>
+    <text class="t-name" x="145" y="238">电脑上的 CLI</text>
+    <text class="t-sub" x="145" y="260">模型地址 = 网关 /u/m1</text>
+    <text class="t-sub" x="145" y="280">凭证 = 会话令牌 tk_9…</text>
+    <path class="e" d="M270 255 H398" marker-end="url(#a)"/>
+    <text class="t-lab mid" x="334" y="247">调用</text>
+    <rect class="node-hot" x="400" y="210" width="330" height="90" rx="4"/>
+    <text class="t-name" x="565" y="238">设备网关 · 能力代理</text>
+    <text class="t-sub" x="565" y="260">认令牌 → 去掉设备带来的认证和身份</text>
+    <text class="t-sub" x="565" y="280">→ 换上真实凭据和使用者身份 → 流式转发</text>
+    <path class="e-dash" d="M565 208 V132" marker-end="url(#a)"/>
+    <text class="t-lab" x="572" y="176">按令牌摘要找登记</text>
+    <rect class="node" x="800" y="180" width="200" height="40" rx="4"/>
+    <text class="t-name" x="900" y="206">模型网关</text>
+    <rect class="node" x="800" y="235" width="200" height="40" rx="4"/>
+    <text class="t-name" x="900" y="261">MCP 网关</text>
+    <rect class="node" x="800" y="290" width="200" height="40" rx="4"/>
+    <text class="t-name" x="900" y="316">知识库</text>
+    <path class="e-hot" d="M730 240 L798 200" marker-end="url(#h)"/>
+    <path class="e-hot" d="M730 255 H798" marker-end="url(#h)"/>
+    <path class="e-hot" d="M730 270 L798 310" marker-end="url(#h)"/>
+    <text class="t-lab" x="1020" y="196">电脑上没有：</text>
+    <text class="t-lab" x="1020" y="216">智能体的模型 Key、MCP Key、</text>
+    <text class="t-lab" x="1020" y="236">知识库令牌</text>
+    <text class="t-lab" x="1020" y="276">电脑上有：设备令牌（钥匙串）、</text>
+    <text class="t-lab" x="1020" y="296">会话令牌（只对一个会话有效）</text>
+    <g class="badge"><circle cx="270" cy="68" r="10"/><text x="270" y="72">1</text></g>
+    <g class="badge"><circle cx="400" cy="100" r="10"/><text x="400" y="104">2</text></g>
+    <g class="badge"><circle cx="145" cy="120" r="10"/><text x="145" y="124">3</text></g>
+    <g class="badge"><circle cx="270" cy="255" r="10"/><text x="270" y="259">4</text></g>
+    <g class="badge"><circle cx="730" cy="255" r="10"/><text x="730" y="259">5</text></g>
+  </svg>
+  <ol class="steps">
+    <li><span class="n">1</span>每一轮，Agent 服务照常组装能力，再把每个上游（模型、每个 MCP 服务、知识库）的真实地址和真实请求头登记到设备网关，连同启动参数。</li>
+    <li><span class="n">2</span>第一次登记时网关生成会话令牌，之后每轮沿用同一个，只整份覆盖上游。回执是令牌和每个上游在网关上的地址（/u/m1、/u/s1…）。</li>
+    <li><span class="n">3</span>Agent 服务把能力改写成 CLI 看到的样子：地址指向网关、凭证只有会话令牌，经会话流在 session.open 时交给 CLI；模型接入随启动参数交给连接器、放进 CLI 的环境变量。</li>
+    <li><span class="n">4</span>CLI 照常调模型、MCP、知识库，带的是会话令牌。</li>
+    <li><span class="n">5</span>能力代理按令牌摘要找到登记，取出编号对应的上游，把设备带来的认证（Authorization、x-api-key）和身份（X-Uid 等）全部去掉，换上真实凭据，身份按登记写入使用者本人，流式转发、原样传回。</li>
+  </ol>
+  <p>为什么令牌整个 CLI 会话不变、上游却每轮覆盖：CLI 进程启动时读一次地址和令牌，中途换不了；而真实凭据只在网关一侧，换了 Key、收回了授权，下一轮（MCP 是下一个请求）就生效，不用重启 CLI。会话删除、设备吊销时登记作废，令牌随之失效。权限按使用者本人判断：令牌就在使用者自己的电脑上，他可以绕过 CLI 直接发请求，但只能做本人本来就能做的事。</p>
+
+  <h2>原理 4　运行位置：CLI 运行时的一个扩展点，两种实现</h2>
+  <p>CLI 运行时（一轮的编排、上游连接、权限转发、内容翻译）不知道 CLI 在哪。它只向「运行位置」要两样东西：一个能连的 bridge 地址，和下发给 CLI 的能力。会话 Pod 和用户设备各实现一份：</p>
+  <svg width="1240" viewBox="0 0 1240 250" role="img" aria-label="运行位置扩展点">
+    <rect class="node" x="20" y="90" width="240" height="70" rx="4"/>
+    <text class="t-name" x="140" y="118">CLI 运行时</text>
+    <text class="t-sub" x="140" y="140">按 cli.placement 选实现</text>
+    <path class="e" d="M260 125 H378" marker-end="url(#a)"/>
+    <rect class="node-hot" x="380" y="90" width="270" height="70" rx="4"/>
+    <text class="t-name" x="515" y="118">CliHost（运行位置）</text>
+    <text class="t-sub" x="515" y="140">ensure(thread, cli, caps) → HostAccess</text>
+    <rect class="node" x="760" y="20" width="300" height="90" rx="4"/>
+    <text class="t-name" x="910" y="46">会话 Pod（沙箱组件）</text>
+    <text class="t-sub" x="910" y="68">按人供给 Pod，经 execd 拉起 bridge</text>
+    <text class="t-sub" x="910" y="88">能力原样交回，凭据写进 Credential Vault</text>
+    <rect class="node" x="760" y="140" width="300" height="90" rx="4"/>
+    <text class="t-name" x="910" y="166">用户设备（设备组件）</text>
+    <text class="t-sub" x="910" y="188">查在线、登记能力、改写成设备视角</text>
+    <text class="t-sub" x="910" y="208">bridge 由电脑上的连接器拉起</text>
+    <path class="e-dash" d="M760 65 L652 112" marker-end="url(#tri)"/>
+    <path class="e-dash" d="M760 185 L652 140" marker-end="url(#tri)"/>
+    <text class="t-lab" x="676" y="74">实现</text>
+    <text class="t-lab" x="676" y="186">实现</text>
+  </svg>
+  <table>
+    <thead><tr><th style="width: 16%"></th><th style="width: 42%">会话 Pod</th><th>用户设备</th></tr></thead>
+    <tbody>
+      <tr><td>bridge 在哪</td><td>平台集群里，按人共享的 Pod</td><td>用户电脑上，每个会话一个进程</td></tr>
+      <tr><td>谁拉起 bridge</td><td>Agent 服务经 execd</td><td>连接器，命令取本机配置</td></tr>
+      <tr><td>CLI 拿到的能力</td><td>集群内地址 + 智能体的 Key</td><td>设备网关地址 + 会话令牌</td></tr>
+      <tr><td>出站凭据（git 等）</td><td>经 Credential Vault 注入</td><td>不注入，用电脑上本人的</td></tr>
+      <tr><td>工作目录</td><td>对象存储上的工作区，挂进 Pod</td><td>电脑上的项目目录，建会话时定</td></tr>
+      <tr><td>网页上看文件</td><td>读对象存储，可上传</td><td>经设备网关现读，只读</td></tr>
+      <tr><td>拿不到时</td><td>建不起来报「系统忙」</td><td>电脑不在线，报「你的电脑不在线」</td></tr>
+      <tr><td>隔离</td><td>沙箱</td><td>没有：CLI 以电脑主人的身份工作，靠审批和本机策略约束</td></tr>
+    </tbody>
+  </table>
+
+  <h2>原理 5　设备和项目目录怎么定</h2>
+  <p>CLI 的会话记录存在那台电脑那个目录里，换了就接不上之前的上下文，所以设备和项目目录在建会话时定下、写进会话、之后不变。定的规则只有两条：</p>
+  <svg width="1240" viewBox="0 0 1240 250" role="img" aria-label="设备和目录怎么定">
+    <rect class="band-a" x="20" y="20" width="400" height="90" rx="6"/>
+    <text class="t-head" x="36" y="44">用户直接新建对话</text>
+    <text class="t-lab" x="36" y="68">设备：用户选，默认选中默认设备</text>
+    <text class="t-lab" x="36" y="90">目录：默认「默认项目地址 / 会话 id」，可改选已有项目</text>
+    <rect class="band-b" x="20" y="140" width="400" height="90" rx="6"/>
+    <text class="t-head" x="36" y="164">被其他智能体委派（没人选）</text>
+    <text class="t-lab" x="36" y="188">设备：使用者的默认设备</text>
+    <text class="t-lab" x="36" y="210">目录：「默认项目地址 / 根会话 id」</text>
+    <path class="e" d="M420 65 L538 110" marker-end="url(#a)"/>
+    <path class="e" d="M420 185 L538 140" marker-end="url(#a)"/>
+    <rect class="node-hot" x="540" y="90" width="260" height="70" rx="4"/>
+    <text class="t-name" x="670" y="118">写进会话，之后不变</text>
+    <text class="t-sub" x="670" y="140">device · project_dir</text>
+    <path class="e" d="M800 125 H878" marker-end="url(#a)"/>
+    <rect class="node" x="880" y="90" width="340" height="70" rx="4"/>
+    <text class="t-name" x="1050" y="118">连接器按本机策略核对</text>
+    <text class="t-sub" x="1050" y="140">目录展开 ~、解析链接后须在允许范围内</text>
+    <text class="t-lab" x="880" y="200">例：对话 3f2a… 里委派两次本机 Claude Code，</text>
+    <text class="t-lab" x="880" y="220">都落在 ~/atlas-projects/3f2a…/，第二次接着第一次的文件做</text>
+  </svg>
+  <p>委派用根会话的 id，是为了同一个对话里的多次委派落在同一个目录，和平台上「子智能体与主智能体共用工作区」的规矩一致。区别在于：主智能体在平台上、子智能体在电脑上时，两边看不到对方的文件，交接只靠任务书和结果。默认目录不存在由连接器建；用户选的已有目录不存在就拒绝，多半是选错了。没有默认设备、默认设备不在线，委派立即失败，原因交还给主智能体。</p>
+  <p>直接新建时选「已有项目」，网页上列出这台电脑每个允许目录下<b>一层的子目录名</b>，并标出哪些是 git 仓库：经设备网关请连接器列，不往下展开、不读文件内容，以点开头的不列。它不属于哪个会话，不受「远程查看文件」开关限制，但仍只在允许的目录里。</p>
+  <p>智能体编辑页的调试预览也是一个会话，按第三条规则定：<b>编辑者自己的默认设备</b>，目录「默认项目地址 / 调试会话 id」。编辑者没有默认设备、默认设备不在线时，调试预览不可用，并提示配对或启动连接器。</p>
+
+  <h2>原理 6　本机文件：打开时现读，在电脑上把关</h2>
+  <p>文件留在电脑上，不同步、不做快照；网页上要看时，经设备网关开一条文件流，请连接器现读。预览站点和它的安全响应头仍是 Agent 服务那一份，只是读文件的来源换了。路径能不能读，由连接器在电脑上判，不信任平台给的路径：</p>
+  <svg width="1240" viewBox="0 0 1240 210" role="img" aria-label="本机把关的顺序">
+    <rect class="cell" x="20" y="40" width="150" height="56" rx="4"/>
+    <text class="t-name" x="95" y="64">① 远程查看</text>
+    <text class="t-sub" x="95" y="84">开着吗</text>
+    <rect class="cell" x="194" y="40" width="150" height="56" rx="4"/>
+    <text class="t-name" x="269" y="64">② 整理路径</text>
+    <text class="t-sub" x="269" y="84">去掉 ..</text>
+    <rect class="cell" x="368" y="40" width="150" height="56" rx="4"/>
+    <text class="t-name" x="443" y="64">③ 解析</text>
+    <text class="t-sub" x="443" y="84">符号链接</text>
+    <rect class="cell" x="542" y="40" width="150" height="56" rx="4"/>
+    <text class="t-name" x="617" y="64">④ 还在项目</text>
+    <text class="t-sub" x="617" y="84">目录里吗</text>
+    <rect class="cell" x="716" y="40" width="150" height="56" rx="4"/>
+    <text class="t-name" x="791" y="64">⑤ 有一段</text>
+    <text class="t-sub" x="791" y="84">以点开头吗</text>
+    <rect class="cell" x="890" y="40" width="150" height="56" rx="4"/>
+    <text class="t-name" x="965" y="64">⑥ 本机</text>
+    <text class="t-sub" x="965" y="84">拒绝规则</text>
+    <rect class="node" x="1064" y="40" width="156" height="56" rx="4"/>
+    <text class="t-name" x="1142" y="64">读（只读）</text>
+    <text class="t-sub" x="1142" y="84">记本机日志</text>
+    <path class="e" d="M170 68 H192" marker-end="url(#a)"/>
+    <path class="e" d="M344 68 H366" marker-end="url(#a)"/>
+    <path class="e" d="M518 68 H540" marker-end="url(#a)"/>
+    <path class="e" d="M692 68 H714" marker-end="url(#a)"/>
+    <path class="e" d="M866 68 H888" marker-end="url(#a)"/>
+    <path class="e" d="M1040 68 H1062" marker-end="url(#a)"/>
+    <path class="e-hot" d="M95 96 V150" marker-end="url(#h)"/>
+    <path class="e-hot" d="M617 96 V150" marker-end="url(#h)"/>
+    <path class="e-hot" d="M791 96 V150" marker-end="url(#h)"/>
+    <path class="e-hot" d="M965 96 V150" marker-end="url(#h)"/>
+    <rect class="gap" x="20" y="152" width="1020" height="40" rx="4"/>
+    <text class="t-hot mid" x="530" y="177">任何一关不过：拒绝（403），原因记进本机日志</text>
+  </svg>
+  <table>
+    <thead><tr><th style="width: 30%">网页上要读的路径（项目目录 ~/code/shop-web）</th><th style="width: 14%">结果</th><th>为什么</th></tr></thead>
+    <tbody>
+      <tr><td><code>src/app.ts</code></td><td>读</td><td>六关都过。版本按大小和修改时间算，没变就回 304、不传内容</td></tr>
+      <tr><td><code>../../.ssh/id_rsa</code></td><td>拒绝</td><td>② 整理后是 ~/.ssh/id_rsa，④ 不在项目目录里</td></tr>
+      <tr><td><code>docs/home</code>（一个指向 ~ 的符号链接）下的文件</td><td>拒绝</td><td>③ 解析后到了项目目录外，④ 不过——只看字面路径会被这种链接绕过</td></tr>
+      <tr><td><code>.env</code></td><td>拒绝</td><td>⑤ 以点开头；和平台上看工作区文件的规则一致</td></tr>
+      <tr><td><code>certs/server.pem</code></td><td>拒绝</td><td>⑥ 电脑主人配了 <code>*.pem</code> 的拒绝规则</td></tr>
+    </tbody>
+  </table>
+  <p>文件抽屉分两个页签：「改动」是 git 里还没提交的改动（包括电脑主人自己改的），「全部」按目录一层层加载。只读：文件流的协议里没有写的操作。大小上限（预览 20 MB、下载 200 MB）在平台这一侧判，读运行期配置。电脑离线时返回「设备离线」，界面说「你的电脑不在线，启动连接器后自动恢复」。</p>
+
+  <h2>设计决策</h2>
+  <table>
+    <thead><tr><th style="width: 30%">决策</th><th>理由</th></tr></thead>
+    <tbody>
+      <tr><td>连接只由电脑发起，平台从不主动连电脑</td><td>电脑在路由器、防火墙后面，地址会变，平台连不进去；只要求电脑能访问 HTTPS 入口，不用开端口、装 VPN。组网（VPN）会让个人电脑进入集群网络，端口映射的认证和平台里的人对应不上，都不选。</td></tr>
+      <tr><td>设备网关独立部署，不放进 Agent 服务</td><td>Agent 服务发版频繁，放在一起每次发版所有电脑都会掉线；run 可能在任何一个 Agent 服务实例上执行，设备连在哪个实例就得在实例之间转发。</td></tr>
+      <tr><td>一台设备一条控制连接，会话流和文件流多路复用</td><td>按在线表找到设备所在的网关实例就够了，所有通道都在那里，实例之间不转发；一条加密连接经过路由器和公司代理也更稳定。</td></tr>
+      <tr><td>会话地址和 bridge 用法一样，中间只转发不解析</td><td>CLI 运行时的上游连接、bridge 都原样复用，断线补发、审批的做法和会话 Pod 完全一样；上游协议升级时网关和连接器不用跟着改。</td></tr>
+      <tr><td>真实凭据不出集群，电脑上只有会话令牌</td><td>智能体的 Key 是所有使用者共用的；会话令牌只对一个会话有效、随时可作废，换 Key、收回授权不用重启 CLI。</td></tr>
+      <tr><td>权限按使用者本人判断</td><td>会话令牌在使用者自己电脑上，可以绕过 CLI 直接用；按本人的权限，就不会成为越权的通道。</td></tr>
+      <tr><td>运行位置是 CLI 运行时定义的扩展点</td><td>依赖倒置：CLI 运行时只说要什么（地址和能力），会话 Pod 和用户设备各自实现；新增运行位置不改 CLI 运行时。</td></tr>
+      <tr><td>设备和项目目录建会话时定、不改；委派用默认设备和「默认项目地址 / 根会话 id」</td><td>CLI 的会话记录在那台电脑那个目录里；委派时没人选，用根会话 id 让同一个对话的多次委派共用一个目录。</td></tr>
+      <tr><td>本机策略优先，启动命令由本机配置决定</td><td>平台能让电脑干活，但不能让电脑运行任意程序；哪些目录能用、权限能放多大，由电脑主人决定。</td></tr>
+      <tr><td>本机文件打开时现读、只读，不同步不快照</td><td>把代码留在电脑上往往就是为了不上传；同步还会占带宽、和电脑上的文件对不上。代价是电脑离线时看不到文件。</td></tr>
+      <tr><td>不设运行和重连的时限</td><td>电脑睡眠时 CLI 也停了，醒来接着做；断线只是通道断了，按关闭原因一直重连，用户随时可以取消。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>图索引</h2>
+  <p>原理在上面，各图里是具体的交互、类和数据。链接在新标签页打开。</p>
+  <h3>容器图、组件图</h3>
+  <table>
+    <thead><tr><th style="width: 28%">图</th><th>看什么</th></tr></thead>
+    <tbody>
+      <tr><td><a href="../container.html" target="_blank" rel="noopener">容器图</a></td><td>新增的四个 container：设备网关（平台里）、连接器、本机会话、本机项目目录（用户电脑上），以及它们和 Agent 服务、模型平台、MCP 网关、知识库的关系。</td></tr>
+      <tr><td><a href="../component-server.html" target="_blank" rel="noopener">Agent 服务组件图</a></td><td>新增的「设备」组件：CLI 运行时、会话管理、HTTP 接口怎么用它，它和设备网关之间的两个方向。</td></tr>
+      <tr><td><a href="../component-devicegw.html" target="_blank" rel="noopener">设备网关组件图</a></td><td>设备连接、会话与文件转发、会话登记与能力代理三个组件。</td></tr>
+      <tr><td><a href="../component-connector.html" target="_blank" rel="noopener">连接器组件图</a></td><td>命令行、控制连接、本机会话、本机文件四个组件，和电脑上的 bridge、项目目录。</td></tr>
+    </tbody>
+  </table>
+  <h3>时序图</h3>
+  <table>
+    <thead><tr><th style="width: 28%">图</th><th>看什么</th></tr></thead>
+    <tbody>
+      <tr><td><a href="../dynamic/dynamic-device-pair.html" target="_blank" rel="noopener">设备配对与上线</a></td><td>配对码换设备令牌、建立控制连接、核对令牌、写在线表、心跳；原理 1 的第 1、3 步。</td></tr>
+      <tr><td><a href="../dynamic/dynamic-device-run.html" target="_blank" rel="noopener">本机 CLI 跑一轮</a></td><td>运行位置确保 bridge（第 3–6 步）、经网关接上会话（7–9）、凭据代持调模型（11、12）、审批往返；原理 2、3、4 串起来。</td></tr>
+      <tr><td><a href="../dynamic/dynamic-device-reconnect.html" target="_blank" rel="noopener">断线与恢复</a></td><td>电脑睡眠后「可以重连」、一直等、醒来后落到另一个网关实例、attach 补发；原理 2 的关闭原因表。</td></tr>
+      <tr><td><a href="../dynamic/dynamic-device-delegate.html" target="_blank" rel="noopener">委派给本机 CLI 智能体</a></td><td>子会话用默认设备和「默认项目地址 / 根会话 id」，主、子文件不共享，结果怎么交回；原理 5。</td></tr>
+      <tr><td><a href="../dynamic/dynamic-device-files.html" target="_blank" rel="noopener">查看本机文件</a></td><td>「改动」列表、预览一个文件：文件流、本机把关、版本和 304、安全响应头；原理 6。</td></tr>
+    </tbody>
+  </table>
+  <h3>类图</h3>
+  <table>
+    <thead><tr><th style="width: 28%">图</th><th>看什么</th></tr></thead>
+    <tbody>
+      <tr><td><a href="code-device.html" target="_blank" rel="noopener">设备 · 领域总览</a></td><td>Agent 服务里的三个领域和依赖方向：本机文件 → 设备会话 → 设备登记。</td></tr>
+      <tr><td><a href="code-device-registry.html" target="_blank" rel="noopener">设备 · 设备登记</a></td><td>配对码、设备令牌（只存摘要）、默认设备、吊销的领域事件；device 表。</td></tr>
+      <tr><td><a href="code-device-session.html" target="_blank" rel="noopener">设备 · 设备会话</a></td><td>CliHost 的设备实现：定运行位置、交接能力（登记、改写）、设备网关客户端。</td></tr>
+      <tr><td><a href="code-device-files.html" target="_blank" rel="noopener">设备 · 本机文件</a></td><td>改动、目录、取文件、下载；归属判断、大小上限。</td></tr>
+      <tr><td><a href="../devicegw/code-devicegw.html" target="_blank" rel="noopener">设备网关 · 领域总览</a></td><td>三个领域：设备连接、会话登记与能力代理在下，会话与文件转发在上。</td></tr>
+      <tr><td><a href="../devicegw/code-devicegw-link.html" target="_blank" rel="noopener">设备网关 · 设备连接</a></td><td>控制连接、通道和窗口、发送顺序、心跳、在线表；原理 1。</td></tr>
+      <tr><td><a href="../devicegw/code-devicegw-relay.html" target="_blank" rel="noopener">设备网关 · 会话与文件转发</a></td><td>会话流原样对转、关闭原因对照、启动参数补地址和令牌、文件流的首帧；原理 2。</td></tr>
+      <tr><td><a href="../devicegw/code-devicegw-capability.html" target="_blank" rel="noopener">设备网关 · 会话登记与能力代理</a></td><td>会话登记、会话令牌、改请求头、流式转发；原理 3。</td></tr>
+      <tr><td><a href="../connector/code-connector.html" target="_blank" rel="noopener">连接器 · 领域总览</a></td><td>三个领域：控制连接在上，本机会话、本机文件在下。</td></tr>
+      <tr><td><a href="../connector/code-connector-link.html" target="_blank" rel="noopener">连接器 · 控制连接</a></td><td>配对、设备令牌存钥匙串、退避重连、报告、按通道分发。</td></tr>
+      <tr><td><a href="../connector/code-connector-session.html" target="_blank" rel="noopener">连接器 · 本机会话</a></td><td>本机策略、项目目录解析、拉起和停掉 bridge、接上会话流、本机日志。</td></tr>
+      <tr><td><a href="../connector/code-connector-files.html" target="_blank" rel="noopener">连接器 · 本机文件</a></td><td>路径把关、列改动、列目录、版本、按 Range 分块发送；原理 6。</td></tr>
+      <tr><td><a href="../cli-runtime/code-cli-runtime-turn.html" target="_blank" rel="noopener">CLI 运行时 · 一轮的编排</a></td><td>运行位置扩展点 CliHost：会话 Pod 和用户设备各实现一份；原理 4。</td></tr>
+      <tr><td><a href="../sandbox/code-sandbox-session-pod.html" target="_blank" rel="noopener">沙箱 · 会话 Pod</a></td><td>CliHost 的另一种实现：能力原样交回、凭据进 Credential Vault。</td></tr>
+      <tr><td><a href="../conversation/code-conversation-thread.html" target="_blank" rel="noopener">会话管理 · 会话</a></td><td>会话记着设备和项目目录（建时定、不改）；thread 表新增的两列。</td></tr>
+      <tr><td><a href="../conversation/code-conversation-workspace-context.html" target="_blank" rel="noopener">会话管理 · 工作区与上下文</a></td><td>文件抽屉、预览令牌按运行位置把本机会话交给设备组件。</td></tr>
+    </tbody>
+  </table>
+</main>
+</body>
+</html>
