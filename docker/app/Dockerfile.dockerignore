@@ -12,6 +12,7 @@
 !agent-platform/libs/jsonrpc/
 !agent-platform/libs/host/
 !agent-platform/libs/engine/
+!agent-platform/libs/devicelink/
 !infra-platform/libs/redislock/
 !infra-platform/libs/appconfig/
 !infra-platform/libs/jobs/
@@ -20,6 +21,7 @@
 !agent-platform/services/memory/
 !agent-platform/services/mcpgateway/
 !agent-platform/services/modelgateway/
+!agent-platform/services/devicegw/
 !agent-platform/services/agent/
 !usercenter/services/usercenter/
 !teamflow/services/teamflow/
