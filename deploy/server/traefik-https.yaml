@@ -1,0 +1,43 @@
+# traefik 上 HTTPS：叠加在 cluster-setup.sh 写的 /root/traefik-values.yaml 之上（HTTPS=1 时自动叠加）。
+# 已经搭好的集群单独执行：
+#
+#   helm upgrade traefik traefik/traefik --version 42.0.0 -n traefik --reuse-values -f deploy/server/traefik-https.yaml
+#
+# 再在 .env 里写 ATLAS_PUBLIC_SCHEME=https，跑 deploy/server/deploy.sh app（CORS、设备网关、MCP 网关的对外地址跟着变）。
+#
+# ★ 证书：Let's Encrypt，HTTP-01 验证（80 端口要对公网开放、域名要已解析到本机），traefik 到期前自动续。
+#   域名取自 Ingress 的 host，不用在这里写。
+# ★ 证书存在 PVC 里：traefik 重建时沿用，不重新申请（Let's Encrypt 同一域名每周最多签 5 张）。
+# ★ HTTP 一律 301 到 HTTPS；ACME 的验证请求 traefik 自己先接走，不受跳转影响。
+# ★ HTTPS 响应带 HSTS：浏览器访问过一次就只走 HTTPS，登录 Cookie 不会再经明文发出（包括页面里被注入的
+#   http:// 请求）。没用 Cookie 的 Secure：集群内各服务的 register 经 HTTP 登录用户中心、靠 Cookie 调接口，
+#   Secure 之后就拿不到登录态。不带 includeSubDomains，只管这一个域名。
+ports:
+  web:
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+          permanent: true
+  websecure:
+    http:
+      tls:
+        enabled: true
+        certResolver: letsencrypt
+      middlewares: [traefik-hsts@kubernetescrd]
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      storage: /data/acme.json
+      httpChallenge:
+        entryPoint: web
+persistence:
+  enabled: true
+extraObjects:
+  - apiVersion: traefik.io/v1alpha1
+    kind: Middleware
+    metadata: {name: hsts, namespace: traefik}
+    spec:
+      headers:
+        stsSeconds: 31536000

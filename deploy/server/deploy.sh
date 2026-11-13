@@ -17,7 +17,8 @@
 #     （用户中心 admin 的密码）时最后自动登记到用户中心（register.sh），没有就跳过并提示。
 #     部署参数也可以写在 .env 里（都有默认值）：
 #       ATLAS_SERVER_IP       服务器 IP（默认 192.168.0.112）
-#       ATLAS_PUBLIC_HOST     对外域名（默认 atlas.<服务器 IP>.nip.io）；ATLAS_PUBLIC_SCHEME 默认 http
+#       ATLAS_PUBLIC_HOST     对外域名（默认 atlas.<服务器 IP>.nip.io）；ATLAS_PUBLIC_SCHEME 默认 http，
+#                             https 要先给 traefik 配证书（deploy/server/traefik-https.yaml）
 #       ATLAS_LANGFUSE_HOST   Langfuse 的域名（默认 langfuse.<服务器 IP>.nip.io）
 #       ATLAS_OBSERVABILITY   full（默认）| none：none 不装 Jaeger、Langfuse（11-observability.yaml），小机器用
 #   · OpenSandbox 源码 release-1.1.1（OPENSANDBOX_SRC=…；不给就 clone 到 ~/.cache/atlas/opensandbox）

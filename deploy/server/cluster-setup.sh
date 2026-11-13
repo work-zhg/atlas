@@ -8,6 +8,8 @@
 #
 #   PUBLIC_IP / DOMAIN  写进 apiserver 证书的 SAN（可空）
 #   SMALL_NODE=1        2 核的小机器：装 small-node-cpu.yaml（Pod 的 CPU requests 压到 1/4）、CoreDNS 只留 1 个副本
+#   HTTPS=1             traefik 叠加 deploy/server/traefik-https.yaml（Let's Encrypt 证书、HTTP 跳 HTTPS）；
+#                       .env 里同时写 ATLAS_PUBLIC_SCHEME=https
 #
 # 之后：git clone 仓库到这台机器、放好 .env，在仓库里跑 deploy/server/images.sh 与 deploy/server/deploy.sh
 # （两者发现本机是 K8s 节点就不经 ssh）。只在 Debian 13 上跑过（2026-11-11，GCP asia-northeast2）。
@@ -167,7 +169,9 @@ updateStrategy:
     maxUnavailable: 1
   type: RollingUpdate
 EOF
-helm upgrade --install traefik traefik/traefik --version 42.0.0 -n traefik --create-namespace -f /root/traefik-values.yaml
+traefik_values=(-f /root/traefik-values.yaml)
+[ "${HTTPS:-}" = 1 ] && traefik_values+=(-f deploy/server/traefik-https.yaml)
+helm upgrade --install traefik traefik/traefik --version 42.0.0 -n traefik --create-namespace "${traefik_values[@]}"
 
 # ── uv（images.sh app 按 uv.lock 导出依赖：docker/app/requirements.sh）
 command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
