@@ -1,0 +1,49 @@
+{
+  "name": "atlas-mobile",
+  "version": "1.0.0",
+  "main": "expo-router/entry",
+  "dependencies": {
+    "@atlas/chat-ui": "link:../../packages/chat-ui",
+    "@tanstack/react-query": "^5.107.1",
+    "expo": "~58.0.25",
+    "expo-build-properties": "~58.0.12",
+    "expo-clipboard": "~58.0.4",
+    "expo-constants": "~58.0.16",
+    "expo-file-system": "~58.0.13",
+    "expo-image": "~58.0.18",
+    "expo-image-picker": "~58.0.10",
+    "expo-linking": "~58.0.17",
+    "expo-router": "~58.0.31",
+    "expo-secure-store": "~58.0.3",
+    "expo-sharing": "~58.0.23",
+    "expo-status-bar": "~58.0.5",
+    "expo-system-ui": "~58.0.7",
+    "lucide-react-native": "^1.72.0",
+    "react": "19.3.0",
+    "react-native": "0.88.1",
+    "react-native-blob-util": "^1.1.1",
+    "react-native-gesture-handler": "~3.3.0",
+    "react-native-keyboard-controller": "1.22.7",
+    "react-native-marked": "^8.3.4",
+    "react-native-pdf": "^7.0.5",
+    "react-native-reanimated": "4.7.1",
+    "react-native-safe-area-context": "~5.11.1",
+    "react-native-screens": "~4.30.1",
+    "react-native-svg": "15.16.0",
+    "react-native-webview": "14.0.1",
+    "react-native-worklets": "0.13.0"
+  },
+  "devDependencies": {
+    "@types/react": "~19.3.0",
+    "typescript": "~6.0.3"
+  },
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "typecheck": "tsc --noEmit",
+    "lint": "expo lint"
+  },
+  "private": true,
+  "description": "Atlas 手机 App（Android 先行）：对话、工作空间、文件预览。设计见 agent-platform/doc/prototype/mobile.html",
+  "packageManager": "pnpm@11.7.0"
+}

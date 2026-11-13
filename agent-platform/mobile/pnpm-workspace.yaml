@@ -1,0 +1,8 @@
+# 手机 App 独立安装，不进根目录的前端 workspace（同 usercenter/web 的做法）：
+# RN 的依赖树很大，要求的 React 版本也跟着 RN 走，和网页前端不是同一个。
+# 对话逻辑仍复用 packages/chat-ui 的源码（package.json 里 link: 过去，见 metro.config.js）。
+
+# RN 的原生模块靠 autolinking 扫 node_modules，平铺布局最稳
+nodeLinker: hoisted
+minimumReleaseAgeExclude:
+  - expo@58.0.25
