@@ -22,8 +22,10 @@ from ..credentials import (
     CredentialProfileStore,
     CredentialSubject,
 )
-from ..db.models import Agent, AgentVersion, Message, Thread
-from ..db.session import fetch_one
+from ..db.models import Agent, AgentVersion, Device, Message, Thread
+from ..db.session import fetch_one, get_sessionmaker
+from ..device.gateway import DeviceGateway, GatewayUnavailable
+from ..device.sessions import DeviceSessions, PlacementPolicy
 from ..domain.workspace_layout import InvalidWorkspaceDir, normalize_workspace_dir
 from ..errors import (
     AppError,
@@ -39,6 +41,7 @@ from ..providers.filesystem import PathEscape, WorkspaceListing, WorkspaceRoutin
 from ..providers.filesystem.skill_copy import resolve_skills, seed_session_skills
 from ..redisx import make_redis
 from ..repositories.agent import AgentRepository
+from ..repositories.device import DeviceRepository
 from ..repositories.run import RunRepository
 from ..repositories.thread import ThreadRepository
 from ..repositories.thread_context import ThreadContextRepository
@@ -46,6 +49,7 @@ from ..sandbox.component import SandboxComponent
 from ..sandbox.exec import PollingPolicy, SandboxNotRunning, SandboxProfileDenied, exec_in_running
 from ..sandbox.native import WorkspaceRef
 from ..schemas.agent import AgentSpecIn
+from ..schemas.device import ThreadDeviceOut
 from ..schemas.thread import (
     MessageListOut,
     MessageOut,
@@ -131,6 +135,7 @@ def _to_out(
     approval: ThreadApprovalOut | None = None,
     model_choice: ThreadModelOut | None = None,
     compact_count: int = 0,
+    device: ThreadDeviceOut | None = None,
 ) -> ThreadOut:
     return ThreadOut(
         id=thread.thread_uuid,
@@ -152,6 +157,7 @@ def _to_out(
         model_choice=model_choice,
         source_app=thread.source_app,
         workspace_dir=thread.workspace_dir,
+        device=device,
         subagent_thread_count=subagent_thread_count,
         active_run_id=active_run_id,
         last_run=last_run,
@@ -160,6 +166,22 @@ def _to_out(
         latest_state=thread.latest_state,
         created_at=thread.created_at,
         updated_at=thread.updated_at,
+    )
+
+
+def _device_of(
+    thread: Thread, device: Device | None, status: str = "unknown"
+) -> ThreadDeviceOut | None:
+    """本机 CLI 会话跑在哪（对话头部的「设备名 · 本机路径」）。"""
+    if thread.device_uuid is None or not thread.device_project_dir:
+        return None
+    if device is not None and device.status != "active":
+        status = "revoked"
+    return ThreadDeviceOut(
+        id=thread.device_uuid,
+        name=device.name if device is not None else "",
+        project_dir=thread.device_project_dir,
+        status=status,
     )
 
 
@@ -252,6 +274,9 @@ class ThreadService:
         ids = [t.thread_uuid for t, _ in rows]
         runs = await RunRepository(self._session).latest_runs_of(ids)
         compacted = await ThreadContextRepository(self._session).compact_counts(ids)
+        devices = await DeviceRepository(self._session).many(
+            {t.device_uuid for t, _ in rows if t.device_uuid is not None}
+        )
         return ThreadListOut(
             data=[
                 _to_out(
@@ -259,6 +284,7 @@ class ThreadService:
                     a,
                     last_run=runs.get(t.thread_uuid),
                     compact_count=compacted.get(t.thread_uuid, 0),
+                    device=_device_of(t, devices.get(t.device_uuid) if t.device_uuid else None),
                 )
                 for t, a in rows
             ],
@@ -282,7 +308,25 @@ class ThreadService:
             approval=_approval_of(thread, spec),
             model_choice=_model_choice_of(thread, spec),
             compact_count=await self._compact_count(thread_id),
+            device=await self._device_status(thread),
         )
+
+    async def _device_status(self, thread: Thread) -> ThreadDeviceOut | None:
+        """本机 CLI 会话：设备名、目录和在线状态（设备网关不可用时说不清，给 unknown）。"""
+        if thread.device_uuid is None:
+            return None
+        device = await DeviceRepository(self._session).get(thread.device_uuid)
+        gateway = DeviceGateway(self._settings)
+        status = "unknown"
+        if device is not None and device.status == "active" and gateway.configured:
+            try:
+                online = await gateway.presence(str(thread.device_uuid)) is not None
+                status = "online" if online else "offline"
+            except GatewayUnavailable as exc:
+                logger.warning(
+                    "查设备在线状态时设备网关不可用（会话 %s）：%s", thread.thread_uuid, exc
+                )
+        return _device_of(thread, device, status)
 
     async def _compact_count(self, thread_id: UUID) -> int:
         counts = await ThreadContextRepository(self._session).compact_counts([thread_id])
@@ -370,13 +414,47 @@ class ThreadService:
             status="preview" if preview else "active",
             workspace_dir=workspace_dir,
         )
+        on_device = await self._place_on_device(
+            thread, self._spec_of(agent, version, preview=preview), payload, preview=preview
+        )
         await self._session.refresh(thread)
-        await self._seed_skills(version, thread=thread)
+        if not on_device:
+            # 本机 CLI 不投送技能：CLI 用电脑上本人的配置（本机 CLI 方案 §1.3）
+            await self._seed_skills(version, thread=thread)
         if memory == "on" and self._memory is not None:
             # 建会话时登记本会话用到的记忆实例（§4.1）。失败不阻塞会话：本会话暂时不用记忆，
             # 下一个 Run 开始时再登记
             await self._memory.register_thread(thread.thread_uuid, user_id)
-        return _to_out(thread, agent)
+        return _to_out(thread, agent, device=await self._device_status(thread))
+
+    @staticmethod
+    def _spec_of(agent: Agent, version: AgentVersion, *, preview: bool) -> AgentSpecIn:
+        """建会话按哪份配置定运行位置：调试预览按草稿（每一轮也按草稿跑），其余按当前版本。"""
+        raw = agent.draft_spec if preview and agent.draft_spec is not None else version.spec
+        return AgentSpecIn.model_validate(raw)
+
+    async def _place_on_device(
+        self, thread: Thread, spec: AgentSpecIn, payload: ThreadCreate, *, preview: bool
+    ) -> bool:
+        """本机 CLI：定下跑在哪台电脑、哪个目录（之后不变）。返回是不是本机 CLI 会话。
+
+        直接新建用用户选的（不选就是默认设备、「默认项目地址 / 会话 id」）；调试预览只能是编辑者的
+        默认设备（§2.7）。没有可用的电脑当场报错，不建出一个跑不起来的会话。
+        """
+        cli = spec.cli
+        if spec.kind != "cli" or cli is None or cli.placement != "device":
+            return False
+        placement = await PlacementPolicy(DeviceRepository(self._session)).choose(
+            thread.created_by_uuid,
+            cli.to_engine(),
+            root_thread=thread.thread_uuid,
+            device=None if preview else payload.device_id,
+            project_dir=None if preview else payload.project_dir,
+        )
+        thread.device_uuid = placement.device_uuid
+        thread.device_project_dir = placement.project_dir
+        await self._session.flush()
+        return True
 
     async def _seed_skills(self, version: AgentVersion, *, thread: Thread) -> None:
         """把 agent 引用的技能拷进本会话的 skills 前缀。
@@ -426,6 +504,10 @@ class ThreadService:
     async def delete(self, thread_id: UUID) -> None:
         thread, _ = await self._require(thread_id)
         await self._repo.delete(thread)
+        if thread.device_uuid is not None:
+            # 本机 CLI：作废会话令牌（尽力而为，登记会自己过期）
+            devices = DeviceSessions(get_sessionmaker(), DeviceGateway(self._settings))
+            await devices.release(thread.thread_uuid)
         # 沙箱级联：经沙箱组件释放这个会话的业务（会话 Pod、工作区沙箱），失败不挡住会话删除
         #   （只记日志），残留由维护者的孤儿回收兜底
         redis = make_redis(self._settings)

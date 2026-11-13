@@ -181,6 +181,8 @@ _TEST_DATA_TABLES = (
     "sandbox_binding",
     "user_sandbox",
     "sandbox_account",
+    # 本机 CLI：配对的设备
+    "device",
     "thread",
     "agent_version",
     "agent",

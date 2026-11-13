@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.13"
 resolution-markers = [
     "python_full_version >= '3.15' and sys_platform == 'win32'",
@@ -19,6 +19,9 @@ members = [
     "atlas-appconfig",
     "atlas-bench",
     "atlas-bridge",
+    "atlas-connect",
+    "atlas-devicegw",
+    "atlas-devicelink",
     "atlas-engine",
     "atlas-host",
     "atlas-jobs",
@@ -337,6 +340,9 @@ dependencies = [
     { name = "atlas-appconfig" },
     { name = "atlas-bench" },
     { name = "atlas-bridge" },
+    { name = "atlas-connect" },
+    { name = "atlas-devicegw" },
+    { name = "atlas-devicelink" },
     { name = "atlas-engine" },
     { name = "atlas-host" },
     { name = "atlas-jobs" },
@@ -370,6 +376,9 @@ requires-dist = [
     { name = "atlas-appconfig", editable = "infra-platform/libs/appconfig" },
     { name = "atlas-bench", editable = "agent-platform/bench" },
     { name = "atlas-bridge", editable = "agent-platform/pod/bridge" },
+    { name = "atlas-connect", editable = "agent-platform/device/connector" },
+    { name = "atlas-devicegw", editable = "agent-platform/services/devicegw" },
+    { name = "atlas-devicelink", editable = "agent-platform/libs/devicelink" },
     { name = "atlas-engine", editable = "agent-platform/libs/engine" },
     { name = "atlas-host", editable = "agent-platform/libs/host" },
     { name = "atlas-jobs", editable = "infra-platform/libs/jobs" },
@@ -534,6 +543,53 @@ requires-dist = [
     { name = "atlas-jsonrpc", editable = "agent-platform/libs/jsonrpc" },
     { name = "websockets", specifier = ">=14" },
 ]
+
+[[package]]
+name = "atlas-connect"
+version = "1.0.0"
+source = { editable = "agent-platform/device/connector" }
+dependencies = [
+    { name = "atlas-bridge" },
+    { name = "atlas-devicelink" },
+    { name = "atlas-host" },
+    { name = "websockets" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "atlas-bridge", editable = "agent-platform/pod/bridge" },
+    { name = "atlas-devicelink", editable = "agent-platform/libs/devicelink" },
+    { name = "atlas-host", editable = "agent-platform/libs/host" },
+    { name = "websockets", specifier = ">=14" },
+]
+
+[[package]]
+name = "atlas-devicegw"
+version = "0.1.0"
+source = { editable = "agent-platform/services/devicegw" }
+dependencies = [
+    { name = "atlas-devicelink" },
+    { name = "fastapi" },
+    { name = "httpx" },
+    { name = "pydantic-settings" },
+    { name = "redis" },
+    { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "atlas-devicelink", editable = "agent-platform/libs/devicelink" },
+    { name = "fastapi", specifier = ">=0.115" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "pydantic-settings", specifier = ">=2.6" },
+    { name = "redis", specifier = ">=5.2" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
+]
+
+[[package]]
+name = "atlas-devicelink"
+version = "0.1.0"
+source = { editable = "agent-platform/libs/devicelink" }
 
 [[package]]
 name = "atlas-engine"

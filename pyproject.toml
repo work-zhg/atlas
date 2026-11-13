@@ -3,7 +3,7 @@ name = "atlas"
 version = "0.1.0"
 description = "Atlas — agent platform (workspace root)"
 requires-python = ">=3.13"
-dependencies = ["atlas-acp", "atlas-agent", "atlas-appconfig", "atlas-bench", "atlas-bridge", "atlas-engine", "atlas-host", "atlas-jobs", "atlas-jsonrpc", "atlas-knowledge", "atlas-mcpgateway", "atlas-memory", "atlas-modelgateway", "atlas-redislock", "atlas-skill", "atlas-teamflow", "atlas-usercenter"]
+dependencies = ["atlas-acp", "atlas-agent", "atlas-appconfig", "atlas-bench", "atlas-bridge", "atlas-connect", "atlas-devicegw", "atlas-devicelink", "atlas-engine", "atlas-host", "atlas-jobs", "atlas-jsonrpc", "atlas-knowledge", "atlas-mcpgateway", "atlas-memory", "atlas-modelgateway", "atlas-redislock", "atlas-skill", "atlas-teamflow", "atlas-usercenter"]
 
 # Workspace root is a container, not an installable package.
 [tool.uv]
@@ -13,8 +13,11 @@ package = false
 members = [
   "agent-platform/libs/acp",
   "agent-platform/services/agent",
+  "agent-platform/services/devicegw",
   "agent-platform/bench",
   "agent-platform/pod/bridge",
+  "agent-platform/device/connector",
+  "agent-platform/libs/devicelink",
   "agent-platform/libs/engine",
   "agent-platform/libs/host",
   "agent-platform/libs/jsonrpc",
@@ -36,6 +39,9 @@ atlas-agent = { workspace = true }
 atlas-appconfig = { workspace = true }
 atlas-bench = { workspace = true }
 atlas-bridge = { workspace = true }
+atlas-connect = { workspace = true }
+atlas-devicegw = { workspace = true }
+atlas-devicelink = { workspace = true }
 atlas-engine = { workspace = true }
 atlas-host = { workspace = true }
 atlas-jobs = { workspace = true }
@@ -68,7 +74,7 @@ dev = [
 # ★ 依赖单向的硬约束（文档 §2.1）。engine 一旦 import server/db/web 就 CI 红。
 # ---------------------------------------------------------------------------
 [tool.importlinter]
-root_packages = ["atlas_acp", "atlas_agent", "atlas_appconfig", "atlas_bench", "atlas_bridge", "atlas_engine", "atlas_host", "atlas_jobs", "atlas_jsonrpc", "atlas_knowledge", "atlas_mcpgateway", "atlas_memory", "atlas_modelgateway", "atlas_redislock", "atlas_skill", "atlas_teamflow", "atlas_usercenter"]
+root_packages = ["atlas_acp", "atlas_agent", "atlas_appconfig", "atlas_bench", "atlas_bridge", "atlas_connect", "atlas_devicegw", "atlas_devicelink", "atlas_engine", "atlas_host", "atlas_jobs", "atlas_jsonrpc", "atlas_knowledge", "atlas_mcpgateway", "atlas_memory", "atlas_modelgateway", "atlas_redislock", "atlas_skill", "atlas_teamflow", "atlas_usercenter"]
 # forbidden_modules 里有第三方包（fastapi/sqlalchemy/...），必须打开这个开关
 include_external_packages = true
 
@@ -523,7 +529,7 @@ exclude = ["agent-platform/libs/engine/src/atlas_engine/kernel/**"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["agent-platform/tests", "agent-platform/services/skill/tests", "usercenter/services/usercenter/tests", "teamflow/services/teamflow/tests", "agent-platform/services/knowledge/tests", "agent-platform/services/memory/tests", "agent-platform/services/mcpgateway/tests", "agent-platform/services/modelgateway/tests", "agent-platform/bench/tests", "infra-platform/libs/redislock/tests", "infra-platform/libs/appconfig/tests", "infra-platform/libs/jobs/tests"]
+testpaths = ["agent-platform/tests", "agent-platform/libs/devicelink/tests", "agent-platform/services/devicegw/tests", "agent-platform/device/connector/tests", "agent-platform/services/skill/tests", "usercenter/services/usercenter/tests", "teamflow/services/teamflow/tests", "agent-platform/services/knowledge/tests", "agent-platform/services/memory/tests", "agent-platform/services/mcpgateway/tests", "agent-platform/services/modelgateway/tests", "agent-platform/bench/tests", "infra-platform/libs/redislock/tests", "infra-platform/libs/appconfig/tests", "infra-platform/libs/jobs/tests"]
 addopts = "-ra"
 
 [tool.mypy]

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from pathlib import PurePosixPath
 from typing import Literal
 
 from atlas_engine.contracts import APPROVAL_MODES, ApprovalMode, InvalidSpec
@@ -344,13 +345,20 @@ def acp_permission_mode(cli_mode: PermissionMode, parent_mode: str | None) -> Pe
     return max(cli_mode, inherited, key=_ACP_STRICTNESS.index)
 
 
+#: CLI 跑在哪里（本机 CLI 方案 §2.1）：pod = 平台的会话 Pod；device = 使用者自己的电脑
+CliPlacement = Literal["pod", "device"]
+#: 本机 CLI 的模型从哪来（§2.4）：platform = 平台的模型网关（经设备网关代理）；
+#: local_login = 电脑上 CLI 自己的登录，平台不下发模型接入
+CliModelSource = Literal["platform", "local_login"]
+
+
 @dataclass(frozen=True)
 class CliSpec:
     """acp agent 的 CLI 形态。
 
-    ★ 三个字段一起进版本快照且**不可改**：换 cli_type 会换掉整组探测能力
-      （Agent 管理 §07），换镜像会换掉 CLI/adapter/bridge 的版本组合。
-      要换就建新 agent —— 原地改等于篡改存量会话的历史行为。
+    ★ cli_type、镜像、运行位置一起进版本快照且**不可改**：换 cli_type 会换掉整组探测能力
+      （Agent 管理 §07），换镜像会换掉 CLI/adapter/bridge 的版本组合，换运行位置等于换掉整套
+      运行环境。要换就建新 agent —— 原地改等于篡改存量会话的历史行为。
     """
 
     cli_type: str  #: "claude-code" / "codex" …
@@ -358,6 +366,34 @@ class CliSpec:
     image: str = ""  #: Pod 镜像（cli + adapter + bridge 三件套的版本组合）
     #: ★ 默认 auto（2026-10-03 决定），存量 agent 的快照里没有这个字段，也按 auto 运行
     permission_mode: PermissionMode = "auto"
+    #: ★ 默认 pod：存量 agent 的快照里没有这个字段，照旧跑在会话 Pod 里。
+    #:   device 没有镜像、没有适配器命令：用电脑上装好的 CLI，启动命令由电脑上的连接器按本机配置定
+    placement: CliPlacement = "pod"
+    #: 本机 CLI 的默认项目地址（如 ~/atlas-projects，~ 在每台电脑上各自展开）。会话的项目目录默认是
+    #: 「它 / 根会话 id」；被委派、调试预览时没人选目录，就按这个规则。改了只影响之后新建的会话
+    default_project_dir: str = ""
+    model_source: CliModelSource = "platform"
+
+    @property
+    def on_device(self) -> bool:
+        return self.placement == "device"
+
+    def validate(self) -> None:
+        if not self.on_device:
+            if self.model_source != "platform":
+                raise InvalidSpec("会话 Pod 里的 CLI 没有本机登录：模型来源只能是平台模型")
+            return
+        if self.image:
+            # 配了却不生效（§13.2）：本机 CLI 用电脑上装好的
+            raise InvalidSpec("本机 CLI 不用镜像：用的是电脑上装好的 CLI", image=self.image)
+        project = PurePosixPath(self.default_project_dir.strip() or ".")
+        if project == PurePosixPath("."):
+            raise InvalidSpec("本机 CLI 要配默认项目地址（如 ~/atlas-projects）")
+        if not (project.is_absolute() or project.parts[0] == "~") or ".." in project.parts:
+            raise InvalidSpec(
+                "默认项目地址要写成绝对路径或 ~/ 下的路径，不能含 ..",
+                default_project_dir=self.default_project_dir,
+            )
 
 
 #: native 沙箱的档位。
@@ -502,6 +538,8 @@ class AgentSpec:
         self.approval.validate()
         if self.kind == "cli" and self.cli is None:
             raise InvalidSpec("kind='cli' 必须提供 cli（cli_type / adapter / image）")
+        if self.cli is not None:
+            self.cli.validate()
         if self.kind == "cli" and self.sandbox != SandboxSpec():
             # 配了却不生效（§13.2）：acp 的 Pod 镜像在 cli.image
             raise InvalidSpec("acp agent 不用 sandbox 配置：Pod 镜像在 cli.image 里配")
@@ -532,6 +570,8 @@ class AgentSpec:
                     f"子智能体 {sub.name!r} 的 kind='cli' 但缺少 cli 配置",
                     subagent=sub.name,
                 )
+            if sub.cli is not None:
+                sub.cli.validate()
 
 
 def spec_for_subagent(parent: AgentSpec, name: str) -> AgentSpec:

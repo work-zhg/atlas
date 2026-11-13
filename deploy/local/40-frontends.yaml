@@ -8,6 +8,8 @@
 #   /mcp-gateway-api/*     → atlas-mcpgateway 的管理端；/mcp-gateway-api/mcp/* 是数据面（外部客户端带
 #                            自己的用户 Key 调，不经登录校验；/internal 不对外）
 #   /model-gateway-api/*   → atlas-modelgateway 的管理端（集群内；/internal、/v1 不对外）
+#   /device-api/*          → atlas-devicegw（本机 CLI：连接器的控制连接 WebSocket、配对、电脑上 CLI 的能力代理；
+#                            不经登录校验，网关自己认设备令牌、会话令牌；/internal 不对外）
 #   /uc/*                → uc-web（basePath=/uc）           /uc/api/*           → 用户中心后端（atlas-usercenter）
 #   /teamflow/*          → tf-web（basePath=/teamflow）     /teamflow/api/*     → TeamFlow 后端（atlas-teamflow）
 #
@@ -57,6 +59,11 @@ data:
     error_page 401 = @gw_401;
     error_page 403 = @gw_403;
   default.conf: |
+    # WebSocket（/device-api/connect）：有 Upgrade 头时转成 upgrade，否则照旧 keepalive
+    map $http_upgrade $connection_upgrade {
+      default upgrade;
+      ''      "";
+    }
     server {
       listen 80;
       client_max_body_size 20m;
@@ -158,6 +165,25 @@ data:
       }
       # 模型管理平台的管理端接口（agent-platform/doc/design/model-design.html）。/internal 给 Atlas、
       # 知识库取客户端 Key，只走集群内地址；/v1 已经没有了（模型调用直连 LiteLLM），保留 404 防误配
+      # 设备网关（本机 CLI）。★ 不经 auth_request：凭据是设备令牌、会话令牌，网关自己认。
+      #   /connect 是长连接 WebSocket（双方每 20 秒心跳，server 级 proxy_read_timeout 1h 足够）；
+      #   能力代理转发模型的流式回复，不缓冲。请求体可能是大的模型上下文
+      location ^~ /device-api/internal/ { return 404; }
+      location ^~ /device-api/ {
+        # 公共转发头里 Connection 是空的（keepalive），WebSocket 要 upgrade：这里逐条写，不 include 它
+        proxy_set_header Host              $http_host;
+        proxy_set_header X-Forwarded-Host  $http_host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade           $http_upgrade;
+        proxy_set_header Connection        $connection_upgrade;
+        include /etc/nginx/conf.d/no-identity.inc;
+        proxy_pass http://atlas-devicegw.atlas-system.svc.cluster.local:8095/;
+        proxy_buffering off;
+        proxy_request_buffering off;
+        client_max_body_size 64m;
+      }
       location ^~ /model-gateway-api/internal/ { return 404; }
       location ^~ /model-gateway-api/v1/ { return 404; }
       location ^~ /model-gateway-api/ {

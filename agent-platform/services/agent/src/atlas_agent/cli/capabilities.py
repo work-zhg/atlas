@@ -73,6 +73,9 @@ class CliCapabilities:
     #: 一轮的时限：只下发静默检测的两个阈值（唯一的「卡死」判据）。截止、审批等待、
     #: 重连窗口不下发 = 不限：CLI 在干活就不中断，审批只由人决定
     limits: dict[str, float] = field(default_factory=dict)
+    #: 这一轮按什么权限模式要求 CLI（平台取值，ModeMapping.platform_mode）。本机 CLI 开会话时交给
+    #: 电脑上的连接器，按本机策略的上限核对；None = 没定
+    permission_mode: str | None = None
 
 
 class CliCapabilityAssembly:
@@ -145,6 +148,8 @@ class CliCapabilityAssembly:
         spec = segment.spec
         if not uses_model_platform(self._settings) or spec.cli is None:
             return None
+        if spec.cli.model_source == "local_login":
+            return None  # 本机 CLI 用电脑上自己的登录：不取 Key、不查模型分配
         if spec.cli.cli_type != "claude-code":
             return None
         key = await agent_key(self._settings, segment.thread.agent_uuid, spec.name)

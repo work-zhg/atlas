@@ -8,6 +8,7 @@ from __future__ import annotations
 __all__ = [
     "AGENT_UPDATE",
     "BRIDGE_TO_SERVER",
+    "DEVICE_REJECTED",
     "PERMISSION_ASK",
     "PERMISSION_WITHDRAW",
     "SERVER_TO_BRIDGE",
@@ -37,6 +38,10 @@ TURN_STATE = "turn.state"  # 通知
 PERMISSION_ASK = "permission.ask"  # 请求
 PERMISSION_WITHDRAW = "permission.withdraw"  # 通知
 AGENT_UPDATE = "agent.update"  # 通知
+
+# 用户电脑上的连接器 → server（不经 bridge、不带 seq）：本机策略拒绝，params = {reason, message}，
+# 随后以关闭码 4403 关闭（本机 CLI 方案 §6.2）
+DEVICE_REJECTED = "device.rejected"  # 通知
 
 SERVER_TO_BRIDGE = frozenset(
     {SESSION_OPEN, SESSION_ATTACH, SESSION_ACK, SESSION_CLOSE, TURN_START, TURN_CANCEL}

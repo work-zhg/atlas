@@ -101,6 +101,11 @@ export function AgentCard({
             {isDefault && <Tag color="processing" style={{ marginInlineEnd: 0 }}>默认</Tag>}
             {agent.status === "draft" && <Tag color="warning" style={{ marginInlineEnd: 0 }}>草稿</Tag>}
             {agent.kind === "cli" && <Tag color="blue" style={{ marginInlineEnd: 0 }}>Claude Code</Tag>}
+            {agent.placement === "device" && (
+              <Tag color="green" style={{ marginInlineEnd: 0 }} title="在使用者自己的电脑上运行">
+                本机
+              </Tag>
+            )}
           </div>
           <div className={styles.cardSub}>{who}</div>
         </div>

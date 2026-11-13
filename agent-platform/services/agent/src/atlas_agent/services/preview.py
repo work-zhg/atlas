@@ -9,7 +9,8 @@
 
 ★ 解析**不碰数据库**：签发时把构造工作区要的（人、会话、工作目录）一并存进去。站点的每个
   子资源都会走一次解析，不该各占一条 DB 连接。
-★ 两种根：会话的工作目录（对话里的预览），或这个人的全部文件 files/（工作空间页面）。
+★ 三种根：会话的工作目录（对话里的预览）、这个人的全部文件 files/（工作空间页面），
+  或本机 CLI 会话在电脑上的项目目录（经设备网关现读，本机 CLI 方案 §5）。
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from uuid import UUID
 import redis.asyncio as aioredis
 
 from ..config import Settings
+from ..device.files import DeviceTarget
 from ..errors import NotFound
 from ..providers.filesystem import WorkspaceListing, make_workspace
 from ..repositories.thread import ThreadRepository
@@ -65,20 +67,26 @@ class PreviewService:
             {"thread_id": str(owner), "owner_id": str(owner), "workspace_dir": ""}
         )
 
+    async def issue_device(self, target: DeviceTarget) -> tuple[str, datetime]:
+        """本机 CLI 会话：电脑上的项目目录。调用方已核对归属（DeviceFiles.target）。"""
+        return await self._issue({"root": "device", **target.to_json()})
+
     async def _issue(self, payload: dict[str, str]) -> tuple[str, datetime]:
         token = secrets.token_urlsafe(32)
         ttl = self._settings.preview_token_ttl_s
         await self._redis.set(_KEY.format(token), json.dumps(payload), ex=ttl)
         return token, datetime.now(UTC) + timedelta(seconds=ttl)
 
-    async def resolve(self, token: str) -> WorkspaceListing | None:
-        """令牌 → 工作区。失效返回 None。每次命中续期（滑动过期）。"""
+    async def resolve(self, token: str) -> WorkspaceListing | DeviceTarget | None:
+        """令牌 → 工作区（或电脑上的项目目录）。失效返回 None。每次命中续期（滑动过期）。"""
         key = _KEY.format(token)
         raw = await self._redis.get(key)
         if raw is None:
             return None
         await self._redis.expire(key, self._settings.preview_token_ttl_s)
         data: dict[str, Any] = json.loads(raw)
+        if data.get("root") == "device":
+            return DeviceTarget.from_json(data)
         if "workspace_dir" not in data:
             return None  # 0044 之前签发的（按旧布局），当作失效：前端会重新签发
         fs = make_workspace(

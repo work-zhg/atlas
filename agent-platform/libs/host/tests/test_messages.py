@@ -243,6 +243,7 @@ def test_twelve_methods_split_by_direction() -> None:
     [
         (CloseCode.SUPERSEDED, False),
         (CloseCode.SESSION_GONE, False),
+        (CloseCode.DEVICE_REJECTED, False),
         (CloseCode.GOING_AWAY, True),
         (CloseCode.INTERNAL_ERROR, True),
         (CloseCode.ABNORMAL, True),

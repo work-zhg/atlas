@@ -1,4 +1,4 @@
-# server、config、knowledge、memory、MCP 网关、用户中心与 AI TeamFlow 后端的运行镜像。
+# server、config、knowledge、memory、MCP 网关、设备网关、用户中心与 AI TeamFlow 后端的运行镜像。
 #
 # ★ 一个镜像、多个入口：它们是同一个 workspace 里的包，依赖树高度重叠
 #   （fastapi / uvicorn / pydantic），拆成多个镜像只是多构建几次。
@@ -49,6 +49,7 @@ COPY agent-platform/libs/acp/ acp/
 COPY agent-platform/libs/jsonrpc/ jsonrpc/
 COPY agent-platform/libs/host/ host/
 COPY agent-platform/libs/engine/ engine/
+COPY agent-platform/libs/devicelink/ devicelink/
 COPY infra-platform/libs/redislock/ redislock/
 COPY infra-platform/libs/appconfig/ appconfig/
 COPY infra-platform/libs/jobs/ jobs/
@@ -57,6 +58,8 @@ COPY agent-platform/services/knowledge/ knowledge/
 COPY agent-platform/services/memory/ memory/
 COPY agent-platform/services/mcpgateway/ mcpgateway/
 COPY agent-platform/services/modelgateway/ modelgateway/
+# 设备网关（本机 CLI）：用户电脑上的连接器连它；连接器本身装在用户电脑上，不进镜像
+COPY agent-platform/services/devicegw/ devicegw/
 COPY agent-platform/services/agent/ server/
 # 用户中心与 AI TeamFlow 后端：与 Atlas 共用依赖树（fastapi / sqlalchemy / httpx），同一个镜像、各自的 Deployment
 COPY usercenter/services/usercenter/ usercenter/
@@ -72,7 +75,7 @@ COPY teamflow/services/teamflow/ teamflow/
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --no-deps \
                 ./jsonrpc ./host ./acp ./engine ./redislock ./appconfig ./jobs ./skill ./knowledge ./memory ./mcpgateway \
-                ./modelgateway \
+                ./modelgateway ./devicelink ./devicegw \
                 ./server \
                 ./usercenter ./teamflow \
     && pip check

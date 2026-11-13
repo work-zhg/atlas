@@ -8,6 +8,7 @@
  * ★ 添加的文件在会话建好之后再上传（会话之前没有工作区），消息里附上它们的路径。
  * ★ ?dir=<目录>（工作空间里文件夹上的「新建对话」）：新对话以这个目录为工作目录，建对话时定下、
  *   之后不能换。没带就由后端新建 {日期}/{对话 id}。
+ * ★ 本机 CLI 智能体：输入框里选电脑和项目目录（DevicePickers），建对话时定下、之后不能换。
  */
 import { App as AntdApp, Button, Result, Skeleton } from "antd";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -27,6 +28,7 @@ import { newIdempotencyKey } from "@atlas/chat-ui/src/lib/id";
 import { DirChip, DirHint } from "@/features/workspace/DirChip";
 
 import { AgentPicker } from "./AgentPicker";
+import { type DevicePick, DeviceHint, DevicePickers } from "./DevicePickers";
 import styles from "./home.module.css";
 
 function greeting(): string {
@@ -51,6 +53,7 @@ export function HomePage() {
   const [mode, setMode] = useState<ApprovalMode | null>(null);
   const [model, setModel] = useState<string | null>(null);
   const [fill, setFill] = useState<{ text: string; seq: number }>();
+  const [devicePick, setDevicePick] = useState<DevicePick>({});
 
   const dir = params.get("dir") ?? "";
   const dropDir = () => {
@@ -71,20 +74,28 @@ export function HomePage() {
     | {
         kind?: string;
         model?: { model: string };
+        cli?: { cli_type: string; placement?: string; default_project_dir?: string; model_source?: string };
         approval?: { default_mode: ApprovalMode; allowed_modes: ApprovalMode[] };
       }
     | undefined;
   const isCli = spec?.kind === "cli";
+  // 本机 CLI：跑在使用者自己的电脑上（agent-platform/doc/design/device-cli-design.html §2.3）
+  const deviceCli = isCli && spec?.cli?.placement === "device" ? spec.cli : undefined;
   const approval = isCli ? undefined : spec?.approval;
   const modelsQ = useAgentModels(agentId, Boolean(spec) && !isCli);
 
   const send = async (text: string, files: File[]) => {
     if (!agentId) return;
+    if (deviceCli && !devicePick.deviceId) {
+      message.warning("没有可用的电脑：先在「我的设备」里配对，并在电脑上启动连接器");
+      throw new Error("no device");
+    }
     try {
       const thread = await createThread.mutateAsync({
         agent_id: agentId,
         title: "",
         workspace_dir: dir || undefined,
+        ...(deviceCli ? { device_id: devicePick.deviceId, project_dir: devicePick.dir } : {}),
       });
       const paths = await Promise.all(files.map((f) => uploadThreadFile(thread.id, f)));
       await sendMessage.mutateAsync({
@@ -156,9 +167,19 @@ export function HomePage() {
                   setPicked(id);
                   setMode(null);
                   setModel(null);
+                  setDevicePick({});
                 }}
               />
-              {spec?.model && (
+              {deviceCli && (
+                <DevicePickers
+                  cliType={deviceCli.cli_type}
+                  defaultProjectDir={deviceCli.default_project_dir ?? ""}
+                  value={devicePick}
+                  onChange={setDevicePick}
+                />
+              )}
+              {/* 本机登录的 CLI 用电脑上自己的账号：没有平台的模型可显示 */}
+              {spec?.model && deviceCli?.model_source !== "local_login" && (
                 <ModelPicker
                   value={model ?? spec.model.model}
                   defaultModel={spec.model.model}
@@ -177,9 +198,14 @@ export function HomePage() {
             </>
           }
         />
-        {dir && (
+        {dir && !deviceCli && (
           <div style={{ marginTop: 10, paddingLeft: 6 }}>
             <DirHint dir={dir} />
+          </div>
+        )}
+        {deviceCli && (
+          <div style={{ marginTop: 10, paddingLeft: 6 }}>
+            <DeviceHint cliType={deviceCli.cli_type} pick={devicePick} />
           </div>
         )}
       </div>

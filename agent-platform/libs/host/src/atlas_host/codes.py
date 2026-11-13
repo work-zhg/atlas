@@ -42,6 +42,9 @@ class CloseCode:
     MESSAGE_TOO_BIG = 1009
     INTERNAL_ERROR = 1011  # 内部错误；心跳超时也由库以此关闭
     PROTOCOL_VIOLATION = 4400
+    #: 用户电脑上的连接器按本机策略拒绝（目录不在允许范围、权限模式超过上限……）。
+    #: 关闭前连接器先发一条 device.rejected 通知带上完整原因（关闭原因只能放 123 字节）
+    DEVICE_REJECTED = 4403
     SUPERSEDED = 4409  # 被同一会话的新连接取代
     SESSION_GONE = 4410  # 会话已结束
 
@@ -49,7 +52,7 @@ class CloseCode:
 def should_reconnect(code: int | None) -> bool:
     """关闭码的核心用途：告诉 server 要不要重连（§4.12 · §7.5）。
 
-    被取代（4409）说明已经有别的连接接管；会话已结束（4410）说明没有东西可连。
-    其余情况（含 None = 连接异常断开、没有收到关闭码）都应当重连。
+    被取代（4409）说明已经有别的连接接管；会话已结束（4410）说明没有东西可连；本机拒绝（4403）
+    重连也一样被拒。其余情况（含 None = 连接异常断开、没有收到关闭码）都应当重连。
     """
-    return code not in (CloseCode.SUPERSEDED, CloseCode.SESSION_GONE)
+    return code not in (CloseCode.SUPERSEDED, CloseCode.SESSION_GONE, CloseCode.DEVICE_REJECTED)

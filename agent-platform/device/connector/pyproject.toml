@@ -1,0 +1,25 @@
+[project]
+name = "atlas-connect"
+version = "1.0.0"
+description = "Atlas connector — runs on the user's computer, keeps one outbound link to the device gateway, starts a bridge per session, serves read-only file requests."
+requires-python = ">=3.13"
+
+# ★ 装在用户电脑上（c4-model/agent/component-connector.html）：依赖越少越好。
+#   bridge 原样复用（每个会话拉起 python -m atlas_bridge），所以依赖 atlas-bridge；
+#   多路复用协议和网关共用 atlas-devicelink；关闭码、通知名和 Agent 服务共用 atlas-host；WebSocket 用 websockets（bridge 本来就要）。
+dependencies = [
+  "atlas-bridge",
+  "atlas-devicelink",
+  "atlas-host",
+  "websockets>=14",
+]
+
+[project.scripts]
+atlas-connect = "atlas_connect.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/atlas_connect"]

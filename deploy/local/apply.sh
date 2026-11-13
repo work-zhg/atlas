@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 把用户中心、server、技能应用、knowledge、memory、MCP 网关、模型网关与 TeamFlow 后端部署到本机 K8s（Docker Desktop）。
+# 把用户中心、server、技能应用、knowledge、memory、MCP 网关、模型网关、设备网关与 TeamFlow 后端部署到本机 K8s（Docker Desktop）。
 #
 # 前置：make up（宿主的 PG / Redis / MinIO）、镜像已构建：
 #   docker build -f docker/bridge/Dockerfile -t atlas-cli-bridge:0.4.0 .   # CLI 会话的 CLI 镜像
@@ -61,6 +61,13 @@ kubectl -n atlas-system create secret generic atlas-litellm-creds \
 # 自研模型网关时期的凭据：模型调用改走 LiteLLM 之后不再需要
 kubectl -n atlas-system delete secret atlas-modelgateway-creds --ignore-not-found
 
+# 设备网关的内部令牌（atlas-server 连会话流、调 /internal 时带上）：沿用集群里已有的，没有才新生成
+DEVICEGW_TOKEN="$(secret_value atlas-devicegw internal_token)"
+[ -n "$DEVICEGW_TOKEN" ] || DEVICEGW_TOKEN="$(openssl rand -hex 24)"
+kubectl -n atlas-system create secret generic atlas-devicegw \
+  --from-literal=internal_token="${DEVICEGW_TOKEN}" \
+  --dry-run=client -o yaml | kubectl apply -f -
+
 # ★ 内网免令牌（doc/identity-propagation-design.html）：服务间令牌、用户中心 App Key / Secret、
 #   Atlas 服务账号密钥都已下线，这里不再建。
 # 对象存储的 HMAC：技能应用与知识库共用（原名 atlas-config-creds，配置服务改为技能应用时改名）
@@ -118,6 +125,7 @@ render deploy/local/37-mcpgateway.yaml | kubectl apply -f -
 render deploy/local/39-litellm.yaml | kubectl apply -f -
 render deploy/local/38-modelgateway.yaml | kubectl apply -f -
 render deploy/local/30-server.yaml  | kubectl apply -f -
+render deploy/local/32-devicegw.yaml | kubectl apply -f -
 render deploy/local/35-knowledge.yaml | kubectl apply -f -
 render deploy/local/45-teamflow.yaml | kubectl apply -f -
 
@@ -127,6 +135,7 @@ kubectl -n atlas-system rollout status deploy/atlas-mcpgateway --timeout=180s
 kubectl -n atlas-system rollout status deploy/atlas-litellm --timeout=600s
 kubectl -n atlas-system rollout status deploy/atlas-modelgateway --timeout=180s
 kubectl -n atlas-system rollout status deploy/atlas-server --timeout=180s
+kubectl -n atlas-system rollout status deploy/atlas-devicegw --timeout=180s
 kubectl -n atlas-system rollout status deploy/atlas-knowledge --timeout=300s
 kubectl -n atlas-system rollout status deploy/atlas-knowledge-worker --timeout=300s
 kubectl -n atlas-system rollout status deploy/atlas-teamflow --timeout=180s

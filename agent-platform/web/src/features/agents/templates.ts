@@ -65,11 +65,19 @@ export const TEMPLATES: AgentTemplate[] = [
     name: "编程助手",
     description: "用 Claude Code 在独立环境里写代码、改文件、跑测试",
     avatarKey: "coder",
-    // Claude Code 驱动：镜像、适配器由服务端按部署配置补上
+    // Claude Code 驱动：镜像、适配器由服务端按部署配置补上。跑在哪里创建时再选（placeOn）
     spec: (model) => ({
       ...defaultSpec(model),
       kind: "cli",
-      cli: { cli_type: "claude-code", adapter: "", image: "", permission_mode: "auto" },
+      cli: {
+        cli_type: "claude-code",
+        adapter: "",
+        image: "",
+        permission_mode: "auto",
+        placement: "pod",
+        default_project_dir: "",
+        model_source: "platform",
+      },
       tool_names: [],
     }),
   },
@@ -106,12 +114,38 @@ export function newSlug(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}`;
 }
 
-export function createBody(t: AgentTemplate, name: string, model: string, description?: string): AgentCreate {
+/** CLI 智能体跑在哪：平台的会话 Pod，或使用者自己的电脑。建好后不能改 */
+export type CliWhere = "pod" | "device";
+
+/** 本机 CLI 的默认项目地址：新对话、被委派时的目录都是「它 / 对话 id」 */
+export const DEFAULT_PROJECT_DIR = "~/atlas-projects";
+
+const LOCAL_CODER_PROMPT = `你在使用者自己的电脑上工作，项目目录里的代码就是他正在开发的项目。
+改动前先说明要改什么；跑测试时优先用项目自带的脚本。`;
+
+/** 编程助手放到使用者自己的电脑上（本机 CLI 方案 §2.1）：没有镜像，用电脑上装好的 CLI */
+export function placeOn(spec: ResolvedSpec, where: CliWhere): ResolvedSpec {
+  if (where === "pod" || !spec.cli) return spec;
   return {
-    slug: newSlug(t.id === "blank" ? "agent" : t.id),
+    ...spec,
+    system_prompt: spec.system_prompt || LOCAL_CODER_PROMPT,
+    cli: { ...spec.cli, placement: "device", image: "", adapter: "", default_project_dir: DEFAULT_PROJECT_DIR },
+  };
+}
+
+export function createBody(
+  t: AgentTemplate,
+  name: string,
+  model: string,
+  description?: string,
+  where: CliWhere = "pod",
+): AgentCreate {
+  const onDevice = where === "device" && t.id === "coder";
+  return {
+    slug: newSlug(t.id === "blank" ? "agent" : onDevice ? "local-coder" : t.id),
     name,
-    description: description ?? (t.id === "blank" ? "" : t.description),
+    description: onDevice ? "用你电脑上的 Claude Code 改你电脑上的项目" : (description ?? (t.id === "blank" ? "" : t.description)),
     avatar_key: t.avatarKey,
-    spec: t.spec(model),
+    spec: onDevice ? placeOn(t.spec(model), where) : t.spec(model),
   } as AgentCreate;
 }

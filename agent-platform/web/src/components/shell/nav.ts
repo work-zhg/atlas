@@ -49,6 +49,8 @@ export const PLATFORMS: Platform[] = [
     items: [
       { href: "/agents", icon: "bot", label: "智能体", match: under("/agents") },
       { href: "/workspace", icon: "folder", label: "工作空间", match: under("/workspace") },
+      // 本机 CLI：配对自己的电脑（agent-platform/doc/design/device-cli-design.html §2.2）
+      { href: "/devices", icon: "laptop", label: "我的设备", match: under("/devices") },
       { href: "/me", icon: "user", label: "个性化", match: under("/me") },
     ],
   },

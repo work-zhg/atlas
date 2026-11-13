@@ -26,6 +26,8 @@ from starlette.concurrency import iterate_in_threadpool
 
 from ...config import Settings
 from ...deps import RedisDep, SettingsDep
+from ...device.files import DeviceFileError, DeviceFiles, DeviceTarget
+from ...device.gateway import DeviceGateway, GatewayUnavailable
 from ...providers.filesystem import PathEscape
 from ...services.preview import PreviewService
 
@@ -121,6 +123,8 @@ async def serve_preview(
     byte_range = request.headers.get("range")
     if byte_range and not _SINGLE_RANGE.match(byte_range.strip()):
         byte_range = None  # 多段 Range 不支持，退回整文件
+    if isinstance(listing, DeviceTarget):
+        return await _serve_device(listing, path, request, settings, byte_range=byte_range)
     try:
         obj = await asyncio.to_thread(
             listing.fetch,
@@ -146,6 +150,49 @@ async def serve_preview(
     return StreamingResponse(
         iterate_in_threadpool(obj.body.iter_chunks(64 * 1024)),
         status_code=obj.status,
+        media_type=_content_type(path),
+        headers=headers,
+    )
+
+
+async def _serve_device(
+    target: DeviceTarget,
+    path: str,
+    request: Request,
+    settings: Settings,
+    *,
+    byte_range: str | None,
+) -> Response:
+    """本机 CLI 会话的文件：经设备网关请电脑上的连接器现读（本机 CLI 方案 §5.1）。
+
+    ★ 安全头与对象存储的文件同一份：内容同样不可信，预览站点只有 Atlas 这一份。
+    """
+    limits = await request.app.state.runtime_config.device_file_limits()
+    try:
+        fetched = await DeviceFiles(DeviceGateway(settings)).fetch(
+            target,
+            path,
+            limit_mb=limits.preview_max_mb,
+            byte_range=byte_range,
+            if_none_match=request.headers.get("if-none-match"),
+        )
+    except DeviceFileError as exc:
+        return _message(exc.status_code, exc.message, settings)
+    except GatewayUnavailable:
+        return _message(503, "设备网关暂时不可用，稍后刷新。", settings)
+    headers = _security_headers(settings, path=path)
+    for name in ("ETag", "Last-Modified"):
+        if value := fetched.headers.get(name.lower()):
+            headers[name] = value
+    if fetched.body is None:
+        return Response(status_code=fetched.status, headers=headers)
+    headers["Content-Length"] = str(fetched.length)
+    headers["Accept-Ranges"] = "bytes"
+    if value := fetched.headers.get("content-range"):
+        headers["Content-Range"] = value
+    return StreamingResponse(
+        fetched.body,
+        status_code=fetched.status,
         media_type=_content_type(path),
         headers=headers,
     )

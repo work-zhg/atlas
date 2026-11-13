@@ -11,5 +11,6 @@ cd "$(dirname "$0")/../.."
 
 uv export --frozen --no-dev --no-emit-workspace --no-hashes --no-header --no-annotate --quiet \
   --package atlas-agent --package atlas-skill --package atlas-knowledge --package atlas-memory \
-  --package atlas-mcpgateway --package atlas-modelgateway --package atlas-usercenter --package atlas-teamflow \
+  --package atlas-mcpgateway --package atlas-modelgateway --package atlas-devicegw \
+  --package atlas-usercenter --package atlas-teamflow \
   -o docker/app/requirements.txt

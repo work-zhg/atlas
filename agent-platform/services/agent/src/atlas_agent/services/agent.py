@@ -12,6 +12,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+from atlas_engine.contracts import InvalidSpec
 from atlas_engine.contracts.mcp_naming import parse_tool_id
 from atlas_engine.contracts.spec import resolve_summarizer_model
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -84,6 +85,7 @@ def _summarize(agent: Agent, version: AgentVersion) -> AgentOut:
         tool_count=len(spec.get("tool_names") or []),
         subagent_count=len(spec.get("subagents") or []),
         kind=spec.get("kind") or "native",
+        placement=(spec.get("cli") or {}).get("placement", "pod") if spec.get("cli") else None,
         builtin_tool_count=sum(1 for t in tools if not str(t).startswith("mcp:")),
         skill_count=len(spec.get("skills") or []),
         mcp_servers=sorted({p[0] for t in tools if (p := parse_tool_id(str(t))) is not None}),
@@ -92,6 +94,9 @@ def _summarize(agent: Agent, version: AgentVersion) -> AgentOut:
                 "name": sub.get("name", ""),
                 "kind": sub.get("kind") or "native",
                 "permission_mode": (sub.get("cli") or {}).get("permission_mode"),
+                "placement": (sub.get("cli") or {}).get("placement", "pod")
+                if sub.get("cli")
+                else None,
             }
             for sub in spec.get("subagents") or []
             if isinstance(sub, dict)
@@ -219,6 +224,7 @@ class AgentService:
 
         if payload.auth_subject == "agent":
             self._identity.require()
+        _check_device_subject(payload.spec, payload.auth_subject)
         spec = await self._resolve(payload.spec, previous=None)
         if principal is not None:
             # 以 Agent 为权限：数字员工随创建才建出来，还没有任何授权（subject=None）
@@ -276,6 +282,8 @@ class AgentService:
         version = current
         if payload.spec is not None:
             previous = AgentSpecIn.model_validate(current.spec)
+            _check_placement_kept(payload.spec, previous)
+            _check_device_subject(payload.spec, agent.auth_subject)
             spec = await self._resolve(payload.spec, previous=previous)
             if principal is not None:
                 subject = agent.digital_employee_uid if agent.acts_as_itself else principal.auth_uid
@@ -374,6 +382,9 @@ class AgentService:
         """切换权限类型（OWNER，接口层校验）。只影响之后新建的 run：进行中的沿用它记下的
         auth_uid（数字员工设计 §5.2）。切到「以 Agent 为权限」时没有数字员工就补建。"""
         agent, version = await self._require(agent_id)
+        _check_device_subject(AgentSpecIn.model_validate(version.spec), auth_subject)
+        if agent.draft_spec is not None:
+            _check_device_subject(AgentSpecIn.model_validate(agent.draft_spec), auth_subject)
         if auth_subject == "agent":
             self._identity.require()
             await self._identity.ensure_digital_employee(agent, owner=agent.created_by_uuid)
@@ -496,7 +507,9 @@ class AgentService:
         if self._settings is None:
             return spec
         cli = spec.cli
-        if spec.kind == "cli" and cli is not None and not (cli.image and cli.adapter):
+        # 本机 CLI 没有镜像、适配器命令：启动什么由电脑上的连接器按本机配置定
+        on_pod = cli is not None and cli.placement == "pod"
+        if spec.kind == "cli" and cli is not None and on_pod and not (cli.image and cli.adapter):
             spec = spec.model_copy(
                 update={
                     "cli": spec.cli.model_copy(
@@ -641,3 +654,20 @@ def _mcp_tools(spec: AgentSpecIn) -> set[tuple[str, str]]:
 
 
 __all__ = ["AgentService", "AgentSpecIn"]
+
+
+def _check_device_subject(spec: AgentSpecIn, auth_subject: str) -> None:
+    """本机 CLI 只能以人为权限（本机 CLI 方案 §2.5）：会话令牌就在使用者的电脑上，按智能体的权限判，
+    权限比本人大时就成了越权的通道。子智能体是本机 CLI 的也一样（子 run 沿用父 run 的权限主体）。"""
+    if auth_subject == "agent" and spec.uses_device:
+        raise InvalidSpec(
+            "本机 CLI 智能体只能以人为权限：在使用者自己的电脑上跑，只能用使用者本人的权限"
+        )
+
+
+def _check_placement_kept(spec: AgentSpecIn, previous: AgentSpecIn) -> None:
+    """运行位置建智能体时定下（§2.1）：换运行位置等于换掉整套运行环境，已有会话接不上。"""
+    before = previous.cli.placement if previous.cli is not None else None
+    after = spec.cli.placement if spec.cli is not None else None
+    if before is not None and after is not None and before != after:
+        raise InvalidSpec("运行位置建智能体时定下，之后不能改：要换就新建一个智能体")

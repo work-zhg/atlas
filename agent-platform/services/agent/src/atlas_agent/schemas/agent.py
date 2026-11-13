@@ -16,6 +16,8 @@ from atlas_engine.contracts.spec import (
     MAX_KNOWLEDGE_SETS,
     AgentSpec,
     ApprovalSpec,
+    CliModelSource,
+    CliPlacement,
     CliSpec,
     CompactionSpec,
     KnowledgeSpec,
@@ -179,6 +181,12 @@ class CliSpecIn(BaseModel):
     image: str = Field(default="", max_length=256)
     #: CLI 的权限模式。默认 auto；不提供 bypass（见 domain/spec.py::PermissionMode）
     permission_mode: PermissionMode = "auto"
+    #: 运行位置：会话 Pod，或使用者自己的电脑（本机 CLI 方案 §2.1）。建智能体时定下，之后不能改
+    placement: CliPlacement = "pod"
+    #: 本机 CLI 的默认项目地址（如 ~/atlas-projects）
+    default_project_dir: str = Field(default="", max_length=512)
+    #: 本机 CLI 的模型来源：平台模型，或电脑上 CLI 自己的登录
+    model_source: CliModelSource = "platform"
 
     def to_engine(self) -> CliSpec:
         return CliSpec(
@@ -186,6 +194,9 @@ class CliSpecIn(BaseModel):
             adapter=self.adapter,
             image=self.image,
             permission_mode=self.permission_mode,
+            placement=self.placement,
+            default_project_dir=self.default_project_dir.strip(),
+            model_source=self.model_source,
         )
 
 
@@ -278,6 +289,12 @@ class AgentSpecIn(BaseModel):
     approval: ApprovalSpecIn = Field(default_factory=ApprovalSpecIn)
     #: native 的 Shell 沙箱（默认平台镜像、strict 档 —— 历史快照没有这个字段）
     sandbox: SandboxSpecIn = Field(default_factory=SandboxSpecIn)
+
+    @property
+    def uses_device(self) -> bool:
+        """自己或某个子智能体是本机 CLI（跑在使用者的电脑上）。"""
+        clis = [self.cli, *(s.cli for s in self.subagents)]
+        return any(c is not None and c.placement == "device" for c in clis)
 
     def to_engine(self, *, slug: str, name: str) -> AgentSpec:
         return AgentSpec(
@@ -422,6 +439,8 @@ class AgentOut(BaseModel):
     subagent_count: int
     #: native | acp
     kind: str = "native"
+    #: CLI 智能体跑在哪：pod | device（本机 CLI）；native 为空
+    placement: str | None = None
     #: 内置工具数（不含 mcp:*）
     builtin_tool_count: int = 0
     skill_count: int = 0

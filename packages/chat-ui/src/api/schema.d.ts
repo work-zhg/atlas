@@ -446,9 +446,52 @@ export interface paths {
         };
         /**
          * Download File
-         * @description 下载工作区里的一个文件（流式，不整个读进内存）。
+         * @description 下载工作区里的一个文件（流式，不整个读进内存）。本机 CLI 会话从电脑上现读。
          */
         get: operations["download_file_v1_threads__thread_id__files_download_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/threads/{thread_id}/device-files/changes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Device File Changes
+         * @description 本机 CLI 会话：项目目录里还没提交的改动（git 仓库才有）→ {is_repo, entries}。
+         *
+         *     「改动」是工作区相对最近一次提交的，包括用户自己改的，不精确对应这个会话做了什么。
+         */
+        get: operations["device_file_changes_v1_threads__thread_id__device_files_changes_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/threads/{thread_id}/device-files/list": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Device File List
+         * @description 本机 CLI 会话：按目录一层层浏览 → {entries: [{name, is_dir, size, modified_at, version}],
+         *     truncated}。一层太多时只给前面一部分（truncated）。
+         */
+        get: operations["device_file_list_v1_threads__thread_id__device_files_list_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1497,6 +1540,112 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/devices/pairing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start Pairing */
+        post: operations["start_pairing_v1_devices_pairing_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/devices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Devices */
+        get: operations["list_devices_v1_devices_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/devices/choices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Device Choices */
+        get: operations["device_choices_v1_devices_choices_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/devices/{device_id}/projects": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Device Projects
+         * @description {roots: [{root, exists, entries: [{name, path, is_repo}], truncated}]}。
+         */
+        get: operations["device_projects_v1_devices__device_id__projects_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/devices/{device_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Revoke Device */
+        delete: operations["revoke_device_v1_devices__device_id__delete"];
+        options?: never;
+        head?: never;
+        /** Rename Device */
+        patch: operations["rename_device_v1_devices__device_id__patch"];
+        trace?: never;
+    };
+    "/v1/devices/{device_id}/default": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Set Default Device */
+        post: operations["set_default_device_v1_devices__device_id__default_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/configs": {
         parameters: {
             query?: never;
@@ -1644,6 +1793,8 @@ export interface components {
              * @default native
              */
             kind: string;
+            /** Placement */
+            placement?: string | null;
             /**
              * Builtin Tool Count
              * @default 0
@@ -1802,6 +1953,8 @@ export interface components {
              * @default native
              */
             kind: string;
+            /** Placement */
+            placement?: string | null;
             /**
              * Builtin Tool Count
              * @default 0
@@ -2077,6 +2230,23 @@ export interface components {
              * @enum {string}
              */
             permission_mode: "manual" | "accept_edits" | "auto" | "plan";
+            /**
+             * Placement
+             * @default pod
+             * @enum {string}
+             */
+            placement: "pod" | "device";
+            /**
+             * Default Project Dir
+             * @default
+             */
+            default_project_dir: string;
+            /**
+             * Model Source
+             * @default platform
+             * @enum {string}
+             */
+            model_source: "platform" | "local_login";
         };
         /** CompactIn */
         CompactIn: {
@@ -2186,6 +2356,72 @@ export interface components {
         DefaultAgentOut: {
             /** Agent Id */
             agent_id?: string | null;
+        };
+        /**
+         * DeviceChoiceOut
+         * @description 新建本机 CLI 会话时的一台电脑：只有在线、装了这种 CLI 的能选（selectable）。
+         */
+        DeviceChoiceOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /** Is Default */
+            is_default: boolean;
+            /** Online */
+            online: boolean;
+            /** Has Cli */
+            has_cli: boolean;
+            /** Selectable */
+            selectable: boolean;
+            /** Allowed Roots */
+            allowed_roots?: string[];
+        };
+        /** DeviceListOut */
+        DeviceListOut: {
+            /** Data */
+            data: components["schemas"]["DeviceOut"][];
+        };
+        /** DeviceOut */
+        DeviceOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /** Is Default */
+            is_default: boolean;
+            /** Status */
+            status: string;
+            /** Os */
+            os?: string | null;
+            /** Connector Version */
+            connector_version?: string | null;
+            /**
+             * Paired At
+             * Format: date-time
+             */
+            paired_at: string;
+            /** Last Seen At */
+            last_seen_at?: string | null;
+            /** Clis */
+            clis?: {
+                [key: string]: string;
+            };
+            /** Policy */
+            policy?: {
+                [key: string]: unknown;
+            };
+        };
+        /** DeviceRenameIn */
+        DeviceRenameIn: {
+            /** Name */
+            name: string;
         };
         /** DigitalEmployeeOut */
         DigitalEmployeeOut: {
@@ -2832,7 +3068,7 @@ export interface components {
              */
             provider: "anthropic" | "openai";
             /** Effort */
-            effort?: ("max" | "xhigh" | "high" | "medium" | "low") | null;
+            effort?: ("low" | "medium" | "high" | "xhigh" | "max") | null;
             /**
              * Thinking
              * @default auto
@@ -2858,6 +3094,16 @@ export interface components {
             entries: number[];
             /** To Topic */
             to_topic: string;
+        };
+        /** PairingCodeOut */
+        PairingCodeOut: {
+            /** Code */
+            code: string;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
         };
         /**
          * PendingApproval
@@ -3408,6 +3654,30 @@ export interface components {
             memory?: ("on" | "off") | null;
             /** Workspace Dir */
             workspace_dir?: string | null;
+            /** Device Id */
+            device_id?: string | null;
+            /** Project Dir */
+            project_dir?: string | null;
+        };
+        /**
+         * ThreadDeviceOut
+         * @description 本机 CLI 会话跑在哪：对话头部显示「设备名 · 本机路径」和在线状态。
+         */
+        ThreadDeviceOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /** Project Dir */
+            project_dir: string;
+            /**
+             * Status
+             * @default unknown
+             */
+            status: string;
         };
         /** ThreadListOut */
         ThreadListOut: {
@@ -3487,6 +3757,7 @@ export interface components {
              * @default
              */
             workspace_dir: string;
+            device?: components["schemas"]["ThreadDeviceOut"] | null;
             /**
              * Subagent Thread Count
              * @default 0
@@ -4897,6 +5168,74 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    device_file_changes_v1_threads__thread_id__device_files_changes_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    device_file_list_v1_threads__thread_id__device_files_list_get: {
+        parameters: {
+            query?: {
+                path?: string;
+            };
+            header?: never;
+            path: {
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -6860,6 +7199,205 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PreviewSessionOut"];
+                };
+            };
+        };
+    };
+    start_pairing_v1_devices_pairing_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PairingCodeOut"];
+                };
+            };
+        };
+    };
+    list_devices_v1_devices_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceListOut"];
+                };
+            };
+        };
+    };
+    device_choices_v1_devices_choices_get: {
+        parameters: {
+            query: {
+                cli_type: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceChoiceOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    device_projects_v1_devices__device_id__projects_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                device_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_device_v1_devices__device_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                device_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rename_device_v1_devices__device_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                device_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeviceRenameIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_default_device_v1_devices__device_id__default_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                device_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

@@ -8,6 +8,8 @@ c4-model/infra-platform/code-appconfig.html。
     platform.default_agent              首页输入框默认用的智能体（空 = 没有默认）
     workspace.upload_max_mb             单个文件上传的上限（工作空间、对话里添加文件）
     workspace.quota_mb                  每人工作空间的存储配额（0 = 不限）
+    device.preview_max_mb               网页上预览本机文件的大小上限
+    device.download_max_mb              网页上下载本机文件的大小上限
 
 ★ 默认值取部署配置（同名环境变量）：没在运行期改过的，行为和以前一样；管理员经 /v1/configs 改了，
   下一次读就生效（读不缓存），不用重启。
@@ -20,6 +22,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from atlas_appconfig import AppConfig, ConfigKey
+
+from .device.files import FileLimits
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -39,6 +43,8 @@ class RuntimeKeys:
     default_agent: ConfigKey[str]
     upload_max_mb: ConfigKey[int]
     quota_mb: ConfigKey[int]
+    device_preview_max_mb: ConfigKey[int]
+    device_download_max_mb: ConfigKey[int]
 
     @classmethod
     def of(cls, settings: Settings) -> RuntimeKeys:
@@ -82,6 +88,19 @@ class RuntimeKeys:
                     "每人工作空间的存储配额（MB，0 = 不限）：上传时检查，智能体写的文件也算在内"
                 ),
             ),
+            # 本机文件经设备网关现读，内容多经过 Atlas 一次（本机 CLI 方案 §5.4）
+            device_preview_max_mb=ConfigKey(
+                "device.preview_max_mb",
+                int,
+                default=settings.device_preview_max_mb,
+                description="网页上预览本机 CLI 会话里文件的大小上限（MB），超过时请到电脑上打开",
+            ),
+            device_download_max_mb=ConfigKey(
+                "device.download_max_mb",
+                int,
+                default=settings.device_download_max_mb,
+                description="网页上下载本机 CLI 会话里文件的大小上限（MB）",
+            ),
         )
 
     def all(self) -> list[ConfigKey[Any]]:
@@ -92,6 +111,8 @@ class RuntimeKeys:
             self.default_agent,
             self.upload_max_mb,
             self.quota_mb,
+            self.device_preview_max_mb,
+            self.device_download_max_mb,
         ]
 
 
@@ -128,6 +149,12 @@ class RuntimeConfig:
     async def workspace_limits(self) -> WorkspaceLimits:
         upload, quota = await self.config.get_many(self.keys.upload_max_mb, self.keys.quota_mb)
         return WorkspaceLimits(upload_max=max(upload, 0) * _MB, quota=max(quota, 0) * _MB)
+
+    async def device_file_limits(self) -> FileLimits:
+        preview, download = await self.config.get_many(
+            self.keys.device_preview_max_mb, self.keys.device_download_max_mb
+        )
+        return FileLimits(preview_max_mb=max(preview, 0), download_max_mb=max(download, 0))
 
     async def image_allow_prefixes(self) -> dict[str, list[str]]:
         strict, bench = await self.config.get_many(self.keys.sandbox_images, self.keys.bench_images)

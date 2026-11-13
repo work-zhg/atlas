@@ -101,6 +101,10 @@ spec:
             # MCP 只经自研 MCP 网关（37-mcpgateway.yaml）：服务、工具定义都从网关读，调用带这个智能体的
             # MCP Key（网关的内部接口按智能体申请、获取）。★ 这里只有网关地址，没有任何上游凭据
             - {name: MCP_GATEWAY_URL, value: "http://atlas-mcpgateway.atlas-system.svc.cluster.local:8070"}
+            # 设备网关（本机 CLI，32-devicegw.yaml）：查在线、登记会话、读本机文件；接会话流时直连设备所在的实例
+            - {name: DEVICE_GATEWAY_URL, value: "http://atlas-devicegw.atlas-system.svc.cluster.local:8095"}
+            - name: DEVICE_GATEWAY_TOKEN
+              valueFrom: {secretKeyRef: {name: atlas-devicegw, key: internal_token}}
             # 模型（agent-platform/doc/design/model-design.html）：ConfigMap atlas-model-platform 有了才经
             #   模型管理平台（38-modelgateway.yaml）和 LiteLLM（39-litellm.yaml）—— deploy/server/model-cutover.sh
             #   建它；没有时照旧直连 LITELLM_BASE_URL。

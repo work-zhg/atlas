@@ -1,0 +1,57 @@
+# 设备网关（atlas-devicegw，agent-platform/doc/design/device-cli-design.html §3）：本机 CLI 智能体的入口。
+#
+#   用户电脑上的连接器 ──wss /device-api/connect（经前端网关）──▶ 设备网关（控制连接，一台设备一条）
+#   电脑上的 CLI ──https /device-api/u/{上游}（会话令牌）──▶ 设备网关 ──换上真实凭据──▶ 模型、MCP、知识库
+#   atlas-server ──/internal（集群内）──▶ 设备所在的那个网关实例（查在线、登记会话、接会话流、读文件）
+#
+# ★ 前端网关（40-frontends.yaml）把 /device-api/ 转过来，不经登录校验：网关自己认设备令牌、会话令牌。
+#   /device-api/internal/ 在前端网关挡掉，只走集群内地址。
+# ★ 多个实例时：在线表（Redis）记着每台设备连在哪个实例上（instance = POD_IP:8095），atlas-server 直接
+#   连那个实例；实例之间不转发。所以 POD_IP 要注入，Pod 之间要能直连。
+# ★ 和 atlas-server 分开部署：server 发版频繁，设备的长连接不跟着断。
+# ★ 内部令牌在 Secret atlas-devicegw（apply.sh 建）：atlas-server 连会话流时带上，内网也校验一道。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atlas-devicegw
+  namespace: atlas-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: atlas-devicegw}
+  template:
+    metadata:
+      labels: {app: atlas-devicegw}
+    spec:
+      # 连接器断开后会自己重连：停机不用等长连接结束
+      terminationGracePeriodSeconds: 10
+      containers:
+        - name: devicegw
+          image: atlas-app:dev
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "atlas_devicegw", "serve"]
+          ports: [{containerPort: 8095, name: http}]
+          env:
+            - {name: ATLAS_DEVICEGW_REDIS_URL, value: "redis://__HOST_IP__:6380/0"}
+            - {name: ATLAS_DEVICEGW_AGENT_URL, value: "http://atlas-server.atlas-system.svc.cluster.local:8000"}
+            # 设备看到的地址：能力代理 = 它 + /u/{上游编号}
+            - {name: ATLAS_DEVICEGW_PUBLIC_URL, value: "__PUBLIC_ORIGIN__/device-api"}
+            - name: ATLAS_DEVICEGW_INTERNAL_TOKEN
+              valueFrom: {secretKeyRef: {name: atlas-devicegw, key: internal_token}}
+            - name: POD_IP
+              valueFrom: {fieldRef: {fieldPath: status.podIP}}
+          readinessProbe:
+            httpGet: {path: /healthz, port: 8095}
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 50m, memory: 96Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: atlas-devicegw
+  namespace: atlas-system
+spec:
+  type: ClusterIP
+  selector: {app: atlas-devicegw}
+  ports: [{port: 8095, targetPort: 8095}]

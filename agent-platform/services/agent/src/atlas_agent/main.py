@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.requests import Request
 
+from .api.internal import router as internal_router
 from .api.v1 import router as v1_router
 from .api.v1.configs import config_router
 from .api.v1.jobs import jobs_router
@@ -23,6 +24,8 @@ from .auth.uc import UCClient
 from .cli.runtime import CliRuntime
 from .config import get_settings
 from .db.session import get_sessionmaker
+from .device.gateway import DeviceGateway, GatewayUnavailable
+from .device.sessions import DeviceSessions
 from .errors import AppError
 from .executor.compose import build_executor, register_jobs
 from .instance import instance_id
@@ -90,11 +93,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 沙箱模板的发布（改造计划 B2）：只在集群里才有 ServiceAccount；不在集群里（本机 make serve）
     #   模板照样能查、能修订，发布时报「没有配置」
     app.state.template_publisher = template_publisher(settings)
+    # 本机 CLI（agent-platform/doc/design/device-cli-design.html）：经设备网关连到使用者电脑上的
+    # bridge。没部署设备网关时为 None，本机 CLI 智能体的一轮明确报错
+    devices = (
+        DeviceSessions(get_sessionmaker(), DeviceGateway(settings))
+        if settings.device_gateway_url
+        else None
+    )
     app.state.executor = build_executor(
         get_sessionmaker(),
         settings,
-        # CLI 智能体的执行：经会话 Pod 里的 bridge（上游协议 atlas.host.v1）
-        cli_runtime=CliRuntime(get_sessionmaker(), settings, pods),
+        # CLI 智能体的执行：经会话 Pod（或使用者电脑）上的 bridge（上游协议 atlas.host.v1）
+        cli_runtime=CliRuntime(get_sessionmaker(), settings, pods, devices=devices),
         memory=memory,
     )
 
@@ -188,6 +198,8 @@ def create_app() -> FastAPI:
     install_log_mask()
 
     app.include_router(v1_router)
+    # 集群内接口（设备网关核对设备令牌）。nginx 挡掉 /atlas-api/internal/
+    app.include_router(internal_router)
     # 运行期配置（每人沙箱配额、镜像白名单）的管理接口；lifespan 里登记 key
     app.state.runtime_config = RuntimeConfig(settings, get_sessionmaker())
     app.include_router(config_router(app.state.runtime_config.config))
@@ -227,6 +239,21 @@ def create_app() -> FastAPI:
                     "kind": exc.kind,
                     "message": exc.message,
                     "details": {k: str(v) for k, v in exc.details.items()},
+                }
+            },
+        )
+
+    @app.exception_handler(GatewayUnavailable)
+    async def device_gateway_handler(_: Request, exc: GatewayUnavailable) -> JSONResponse:
+        """设备网关连不上：用户处理不了，原文只进日志。"""
+        logger.warning("设备网关不可用：%s", exc)
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error": {
+                    "kind": "device_gateway_unavailable",
+                    "message": "设备网关暂时不可用，稍后再试",
+                    "details": {},
                 }
             },
         )

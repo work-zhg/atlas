@@ -411,6 +411,20 @@ class Settings(BaseSettings):
     knowledge_mcp_secret: SecretStr | None = None
     knowledge_timeout_s: float = 30.0
 
+    # ── 本机 CLI（agent-platform/doc/design/device-cli-design.html）──────────
+    #: 设备网关的集群内地址（如 http://atlas-devicegw:8095）：查在线、登记会话、读本机文件。
+    #: 连某个会话时直连设备所在的那个实例（在线表里有它的地址），不经这个地址。
+    #: 空 = 没部署设备网关：本机 CLI 智能体建不了会话，「我的设备」照常能配对
+    device_gateway_url: str | None = None
+    #: 调设备网关内部接口、接本机会话的服务令牌（与网关的 ATLAS_DEVICEGW_INTERNAL_TOKEN 一致）
+    device_gateway_token: SecretStr | None = None
+    device_gateway_timeout_s: float = 10.0
+    #: 配对码的有效期（只能用一次）
+    device_pairing_ttl_s: int = 600
+    #: 网页上看本机文件的大小上限（MB）。运行期配置 device.preview_max_mb / download_max_mb 的默认值
+    device_preview_max_mb: int = 20
+    device_download_max_mb: int = 200
+
     # web 前端的来源。浏览器直连 API（不走 Next 代理 —— SSE 经代理有缓冲风险），
     # 故必须放行跨源。生产改为实际域名，**不要**用 "*"：
     # allow_credentials 与通配符同时使用会被浏览器拒绝，且将来接鉴权就得改。

@@ -37,6 +37,7 @@ from atlas_jsonrpc import ErrorCode, RpcFault
 from ..approval import ApprovalService, DecisionChannel, OnlineApprovals
 from ..errors import CapabilityUnavailable
 from .capabilities import CliCapabilities, CliCapabilityAssembly
+from .host import CliHost, HostAccess, HostRouter, HostUnavailable, PodHost
 from .link import CliSession, CliSessionStore, DbCliSessions, SessionLink
 from .modes import ModeMapping
 from .outcome import TurnAbort, failed, note_failed_tool, terminal_events
@@ -49,7 +50,7 @@ if TYPE_CHECKING:
 
     from ..config import Settings
     from ..executor.segment_data import Segment
-    from ..sandbox.session_pod import PodEndpoint, PodProvider
+    from ..sandbox.session_pod import PodProvider
     from ..stream.relay import EventRelay
 
 __all__ = ["CliRuntime"]
@@ -92,13 +93,15 @@ class CliRuntime:
         settings: Settings,
         pods: PodProvider,
         *,
+        devices: CliHost | None = None,
         approvals: ApprovalFactory | None = None,
         sessions: CliSessionStore | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
+        """pods：会话 Pod；devices：使用者自己的电脑（DeviceSessions，没部署设备网关时为 None）。"""
         self._sessionmaker = sessionmaker
         self._settings = settings
-        self._pods = pods
+        self._hosts = HostRouter(PodHost(pods), devices)
         self._capabilities = CliCapabilityAssembly(settings, sessionmaker)
         self._approvals: ApprovalFactory = approvals or (
             lambda run_id, redis: OnlineApprovals(sessionmaker, DecisionChannel(redis), run_id)
@@ -148,10 +151,14 @@ class CliRuntime:
             return
         for kind, data in caps.notices:
             yield events.make(kind, data)
+        caps.permission_mode = ModeMapping.platform_mode(cli, segment.approval_mode)
         try:
-            endpoint = await self._pods.ensure(
-                segment.thread, cli, model=caps.model, credentials=caps.credentials
-            )
+            access = await self._hosts.ensure(segment.thread, cli, caps)
+        except HostUnavailable as exc:
+            # 电脑不在线、没有默认设备……用户自己能处理：原因原样告诉他
+            logger.info("run %s 的运行位置用不了：%s", run_id, exc)
+            yield events.make(*failed(exc.kind, str(exc)))
+            return
         except Exception as exc:
             # 沙箱服务、集群的故障：用户处理不了，原文只进日志
             logger.warning("run %s 的会话 Pod 不可用：%s", run_id, exc)
@@ -186,7 +193,7 @@ class CliRuntime:
             raise RpcFault(ErrorCode.METHOD_NOT_FOUND, f"不支持的方法：{method}")
 
         link = SessionLink(
-            endpoint,
+            access,
             CliSession(
                 segment.thread_id,
                 agent_session_id=segment.cli_session_id,
@@ -199,7 +206,9 @@ class CliRuntime:
             connect_timeout_s=self._settings.cli_ws_connect_timeout_s,
         )
         try:
-            async for event in self._drive(link, queue, segment, caps, events, relay, run_id):
+            async for event in self._drive(
+                link, queue, segment, caps, access, events, relay, run_id
+            ):
                 yield event
         finally:
             await link.close()
@@ -211,13 +220,16 @@ class CliRuntime:
         link: SessionLink,
         queue: asyncio.Queue[tuple[Any, ...]],
         segment: Segment,
-        caps: CliCapabilities,
+        resolved: CliCapabilities,
+        access: HostAccess,
         events: EventFactory,
         relay: EventRelay,
         run_id: UUID,
     ) -> AsyncIterator[TraceEvent]:
+        """resolved：平台这边解析出的能力（重连时交给 CliHost）；access.caps：CLI 看到的。"""
         assert segment.spec.cli is not None
         cli = segment.spec.cli
+        caps = access.caps
         turn_id = str(run_id)
         #: 只用于解读结果的措辞：一轮不设截止，bridge 不会因时间结束它
         timeout = float(segment.spec.limits.timeout_s)
@@ -245,11 +257,10 @@ class CliRuntime:
         failed_tools: dict[str, str] = {}
         cancel_sent = False
 
-        async def reach() -> PodEndpoint:
-            # 断线重连时 Pod 可能被重建：下发同一份模型接入
-            return await self._pods.ensure(
-                segment.thread, cli, model=caps.model, credentials=caps.credentials
-            )
+        async def reach() -> HostAccess:
+            # 断线重连时 Pod 可能被重建：下发同一份模型接入。本机 CLI 重新查在线、重新登记
+            # （电脑不在线就抛错，重连接着等）
+            return await self._hosts.ensure(segment.thread, cli, resolved)
 
         async def cancelled() -> bool:
             return await relay.is_cancelled(run_id)

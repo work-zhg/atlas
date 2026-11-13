@@ -63,6 +63,7 @@ const PATHS = {
   alert: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18M12 8v4M12 16h.01",
   lock: "M6 11h12a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2M8 11V7a4 4 0 0 1 8 0v4",
   logout: "M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9",
+  laptop: "M6 4h12a2 2 0 0 1 2 2v9H4V6a2 2 0 0 1 2-2M2 19h20",
 } as const;
 
 export type IconName = keyof typeof PATHS;

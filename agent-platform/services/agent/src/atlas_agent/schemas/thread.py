@@ -8,6 +8,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from .device import ThreadDeviceOut
+
 #: 凭据档案 code（credentials.profiles.PROFILE_CODE 的同一条规则）
 PROFILE_PATTERN = r"^[a-z0-9][a-z0-9-]*$"
 
@@ -41,6 +43,10 @@ class ThreadCreate(BaseModel):
     #: 工作目录：工作空间里的一个目录（相对用户文件的根，如「Q3 销售分析」）。不传就新建
     #: {日期}/{会话 id}。建会话时定下、之后不能换（它是沙箱里的 cwd）；不能是根目录、隐藏目录
     workspace_dir: str | None = Field(default=None, max_length=1024)
+    #: 本机 CLI 智能体：跑在哪台电脑（不传 = 默认设备）、哪个项目目录（不传 = 「默认项目地址 /
+    #: 会话 id」，一个新的空目录）。建会话时定下、之后不能换；别的智能体传了也不用
+    device_id: UUID | None = None
+    project_dir: str | None = Field(default=None, max_length=1024)
 
 
 class ThreadUpdate(BaseModel):
@@ -113,6 +119,8 @@ class ThreadOut(BaseModel):
     source_app: str | None = None
     #: 工作目录（相对用户文件的根）：建会话时定下，子会话与根会话相同
     workspace_dir: str = ""
+    #: 本机 CLI 会话跑在哪台电脑、哪个目录；不是本机 CLI 会话为空。在线状态只在单条详情上查
+    device: ThreadDeviceOut | None = None
     #: 本会话下的子会话数。★ 删除确认要显示它：删父会话会**级联删掉**所有
     #: 子会话的 message / run / run_event，影响面比改造前大得多。
     #: 只在单条详情上计算，列表接口恒为 0（避免 N+1）。

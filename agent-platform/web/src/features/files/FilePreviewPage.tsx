@@ -7,15 +7,19 @@
  *   iframe / img 带不了身份头，令牌在 URL 路径里（§06）。
  * ★ 运行中文件在变：文本、图片随 etag 自动刷新；HTML 只提示「已更新」，
  *   点了才重载 —— 自动刷新会把用户在原型里点到的状态清掉（§09）。
+ * ★ 本机 CLI 会话（thread.device）：文件在使用者的电脑上，元信息取所在目录那一层（经设备网关现读），
+ *   版本按大小和修改时间算；页面标出设备和「只读」。
  */
-import { App as AntdApp, Alert, Button, Segmented, Switch, Tooltip } from "antd";
+import { App as AntdApp, Alert, Button, Segmented, Switch, Tag, Tooltip } from "antd";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { useDeviceDir } from "@/api/devices";
 import {
   downloadThreadFile,
   PreviewFetchError,
   previewFileUrl,
   usePreviewSession,
+  useThread,
   useThreadFiles,
 } from "@/api/threads";
 import { Icon } from "@/components/Icon";
@@ -39,17 +43,30 @@ type View = "preview" | "source";
 
 export function FilePreviewPage({ threadId, path }: { threadId: string; path: string }) {
   const { message } = AntdApp.useApp();
-  // 一直轮询（标签页在后台时 react-query 自动暂停）：预览页不知道 run 是否在跑
-  const filesQ = useThreadFiles(threadId, true);
-  const session = usePreviewSession(threadId);
-
-  const files = filesQ.data?.data ?? [];
-  const entry = files.find((f) => f.path === path);
-  const kind = previewKind(path, entry?.size);
-  const url = session.data ? previewFileUrl(session.data.base_url, path) : undefined;
+  const threadQ = useThread(threadId);
+  const device = threadQ.data?.device ?? undefined;
   const slash = path.lastIndexOf("/");
   const dir = slash >= 0 ? path.slice(0, slash + 1) : "";
   const name = path.slice(slash + 1);
+  // 一直轮询（标签页在后台时 react-query 自动暂停）：预览页不知道 run 是否在跑
+  const filesQ = useThreadFiles(threadQ.isSuccess && !device ? threadId : undefined, true);
+  // 本机会话：所在目录那一层
+  const dirQ = useDeviceDir(threadId, dir.replace(/\/$/, ""), Boolean(device));
+  const session = usePreviewSession(threadId);
+
+  const files = filesQ.data?.data ?? [];
+  const local = dirQ.data?.entries.find((e) => e.name === name && !e.is_dir);
+  const entry = device
+    ? local && {
+        path,
+        size: local.size ?? 0,
+        modified_at: new Date(local.modified_at * 1000).toISOString(),
+        etag: local.version ?? null,
+      }
+    : files.find((f) => f.path === path);
+  const listing = device ? dirQ : filesQ;
+  const kind = previewKind(path, entry?.size);
+  const url = session.data ? previewFileUrl(session.data.base_url, path) : undefined;
 
   const [view, setView] = useState<View>("preview");
   const [wrap, setWrap] = useState(false);
@@ -57,12 +74,14 @@ export function FilePreviewPage({ threadId, path }: { threadId: string; path: st
   const [frameKey, setFrameKey] = useState(0);
   const [downloading, setDownloading] = useState(false);
 
-  // HTML 是一个站点：任何一个文件变了都算「已更新」，不只看入口文件
-  const siteSig = files.map((f) => `${f.path}:${f.etag ?? ""}`).join("|");
+  // HTML 是一个站点：任何一个文件变了都算「已更新」，不只看入口文件（本机会话只看同一层）
+  const siteSig = device
+    ? (dirQ.data?.entries ?? []).map((e) => `${e.name}:${e.version ?? ""}`).join("|")
+    : files.map((f) => `${f.path}:${f.etag ?? ""}`).join("|");
   const [loadedSig, setLoadedSig] = useState<string>();
   useEffect(() => {
-    if (loadedSig === undefined && filesQ.isSuccess) setLoadedSig(siteSig);
-  }, [loadedSig, filesQ.isSuccess, siteSig]);
+    if (loadedSig === undefined && listing.isSuccess) setLoadedSig(siteSig);
+  }, [loadedSig, listing.isSuccess, siteSig]);
   const siteChanged = kind === "html" && view === "preview" && loadedSig !== undefined && siteSig !== loadedSig;
 
   const needsText =
@@ -88,8 +107,8 @@ export function FilePreviewPage({ threadId, path }: { threadId: string; path: st
     await session.refetch(); // 新令牌 → 文本 query 的 key 变了，自动重取
     setFrameKey((k) => k + 1);
     setLoadedSig(siteSig);
-    void filesQ.refetch();
-  }, [session, siteSig, filesQ]);
+    void listing.refetch();
+  }, [session, siteSig, listing]);
 
   const download = async () => {
     setDownloading(true);
@@ -128,14 +147,16 @@ export function FilePreviewPage({ threadId, path }: { threadId: string; path: st
         />
       );
     }
-    if (filesQ.data && !filesQ.data.configured) {
+    if (threadQ.isPending) return <Loading />;
+    if (device && dirQ.error) return <Message text={dirQ.error.message} />;
+    if (!device && filesQ.data && !filesQ.data.configured) {
       return <Message text="这个部署没有配置对象存储，会话没有文件能力" />;
     }
     // 列表完整却没有它 = 被删了（列表被截断时不下这个结论，直接按路径去取）
-    if (filesQ.isSuccess && !filesQ.data.truncated && !entry) {
+    if (listing.isSuccess && !listing.data.truncated && !entry) {
       return <Message text="文件已不存在" />;
     }
-    if (!url || (!entry && filesQ.isPending)) return <Loading />;
+    if (!url || (!entry && listing.isPending)) return <Loading />;
 
     switch (kind) {
       case "empty":
@@ -179,6 +200,11 @@ export function FilePreviewPage({ threadId, path }: { threadId: string; path: st
           <span className={styles.meta} title={entry.modified_at ?? undefined}>
             {formatBytes(entry.size)} · {relativeTime(entry.modified_at)}
           </span>
+        )}
+        {device && (
+          <Tag title={`${device.name} 上的 ${device.project_dir}`} style={{ marginInlineEnd: 0 }}>
+            <Icon name="laptop" size={12} style={{ verticalAlign: -2 }} /> {device.name} 上的文件 · 只读
+          </Tag>
         )}
 
         <div className={styles.actions}>

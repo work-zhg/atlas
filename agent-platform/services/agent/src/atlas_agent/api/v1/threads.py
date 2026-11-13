@@ -8,6 +8,7 @@ from fastapi import APIRouter, Header, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import iterate_in_threadpool
 
 from ...auth.agent_access import AgentAccess
@@ -23,6 +24,8 @@ from ...deps import (
     SettingsDep,
     ThreadServiceDep,
 )
+from ...device.files import DeviceFiles
+from ...device.gateway import DeviceGateway
 from ...errors import NotFound
 from ...repositories.feedback import FeedbackRepository
 from ...repositories.thread import ThreadRepository
@@ -130,7 +133,13 @@ async def create_preview(
     """
     await ensure_thread_owner(session, thread_id, principal)
     service = PreviewService(redis, settings)
-    token, expires_at = await service.issue(ThreadRepository(session), thread_id)
+    thread = await _device_thread(session, thread_id)
+    if thread is not None:
+        # 本机 CLI 会话：预览电脑上的项目目录（签发时核对一次归属，之后令牌里带着目标）
+        target = await DeviceFiles(DeviceGateway(settings), session).target(principal.uid, thread)
+        token, expires_at = await service.issue_device(target)
+    else:
+        token, expires_at = await service.issue(ThreadRepository(session), thread_id)
     return PreviewSessionOut(
         base_url=service.base_url(token, request_base=str(request.base_url)),
         expires_at=expires_at,
@@ -140,25 +149,83 @@ async def create_preview(
 @router.get("/{thread_id}/files/download")
 async def download_file(
     thread_id: UUID,
+    request: Request,
     service: ThreadServiceDep,
     session: SessionDep,
+    settings: SettingsDep,
     principal: PrincipalDep,
     path: Annotated[str, Query(min_length=1)],
 ) -> StreamingResponse:
-    """下载工作区里的一个文件（流式，不整个读进内存）。"""
+    """下载工作区里的一个文件（流式，不整个读进内存）。本机 CLI 会话从电脑上现读。"""
     await ensure_thread_owner(session, thread_id, principal)
-    body, size = await service.open_file(thread_id, path)
     name = path.rstrip("/").rsplit("/", 1)[-1] or "file"
-    headers = {
-        # RFC 5987：中文文件名要走 filename*，否则浏览器拿到的是乱码
-        "Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}",
-        "Content-Length": str(size),
-    }
+    # RFC 5987：中文文件名要走 filename*，否则浏览器拿到的是乱码
+    disposition = f"attachment; filename*=UTF-8''{quote(name)}"
+    thread = await _device_thread(session, thread_id)
+    if thread is not None:
+        files = DeviceFiles(DeviceGateway(settings), session)
+        limits = await request.app.state.runtime_config.device_file_limits()
+        fetched = await files.fetch(
+            await files.target(principal.uid, thread),
+            path,
+            limit_mb=limits.download_max_mb,
+            what="下载",
+        )
+        assert fetched.body is not None
+        return StreamingResponse(
+            fetched.body,
+            media_type="application/octet-stream",
+            headers={"Content-Disposition": disposition, "Content-Length": str(fetched.length)},
+        )
+    body, size = await service.open_file(thread_id, path)
+    headers = {"Content-Disposition": disposition, "Content-Length": str(size)}
     return StreamingResponse(
         iterate_in_threadpool(body.iter_chunks(64 * 1024)),
         media_type="application/octet-stream",
         headers=headers,
     )
+
+
+@router.get("/{thread_id}/device-files/changes")
+async def device_file_changes(
+    thread_id: UUID, session: SessionDep, settings: SettingsDep, principal: PrincipalDep
+) -> dict[str, Any]:
+    """本机 CLI 会话：项目目录里还没提交的改动（git 仓库才有）→ {is_repo, entries}。
+
+    「改动」是工作区相对最近一次提交的，包括用户自己改的，不精确对应这个会话做了什么。
+    """
+    await ensure_thread_owner(session, thread_id, principal)
+    files = DeviceFiles(DeviceGateway(settings), session)
+    return await files.changes(await files.target(principal.uid, await _thread(session, thread_id)))
+
+
+@router.get("/{thread_id}/device-files/list")
+async def device_file_list(
+    thread_id: UUID,
+    session: SessionDep,
+    settings: SettingsDep,
+    principal: PrincipalDep,
+    path: Annotated[str, Query(max_length=1024)] = "",
+) -> dict[str, Any]:
+    """本机 CLI 会话：按目录一层层浏览 → {entries: [{name, is_dir, size, modified_at, version}],
+    truncated}。一层太多时只给前面一部分（truncated）。"""
+    await ensure_thread_owner(session, thread_id, principal)
+    files = DeviceFiles(DeviceGateway(settings), session)
+    target = await files.target(principal.uid, await _thread(session, thread_id))
+    return await files.list_dir(target, path)
+
+
+async def _thread(session: AsyncSession, thread_id: UUID) -> Thread:
+    thread = await session.scalar(select(Thread).where(Thread.thread_uuid == thread_id))
+    if thread is None:
+        raise NotFound("会话不存在")
+    return thread
+
+
+async def _device_thread(session: AsyncSession, thread_id: UUID) -> Thread | None:
+    """本机 CLI 会话（定了电脑）才返回；别的会话 None。"""
+    thread = await _thread(session, thread_id)
+    return thread if thread.device_uuid is not None else None
 
 
 @router.put("/{thread_id}/files", status_code=status.HTTP_201_CREATED)

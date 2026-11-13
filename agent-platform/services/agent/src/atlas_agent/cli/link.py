@@ -34,12 +34,11 @@ from .translate.acp_v1 import EventIntent
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-    from ..sandbox.session_pod import PodEndpoint
-
 __all__ = [
     "CliSession",
     "CliSessionStore",
     "DbCliSessions",
+    "HostEndpoint",
     "ReconnectPolicy",
     "SessionLink",
     "TurnInbox",
@@ -55,6 +54,17 @@ _START_RETRY_S = 60.0
 #: session.ack 的节奏：每 1 s 或每 200 条，以先到者为准
 _ACK_EVERY = 200
 _ACK_INTERVAL_S = 1.0
+
+
+class HostEndpoint(Protocol):
+    """连 bridge 的地址和令牌（会话 Pod 的 PodEndpoint、CliHost 的 HostAccess 都是）。"""
+
+    @property
+    def url(self) -> str: ...
+
+    @property
+    def token(self) -> str: ...
+
 
 #: bridge 发来的通知交给谁（权限请求之外的全部：内容更新、轮次状态、会话状态）
 NoteSink = Callable[[str, Any], None]
@@ -163,6 +173,8 @@ class ReconnectPolicy:
             return "被另一条连接取代"
         if close_code == CloseCode.SESSION_GONE:
             return "会话已被 bridge 结束"
+        if close_code == CloseCode.DEVICE_REJECTED:
+            return "电脑按本机策略拒绝了"
         return None
 
     @classmethod
@@ -178,7 +190,7 @@ class SessionLink:
 
     def __init__(
         self,
-        endpoint: PodEndpoint,
+        endpoint: HostEndpoint,
         session: CliSession,
         store: CliSessionStore,
         *,
@@ -195,6 +207,8 @@ class SessionLink:
         self._connect_timeout_s = connect_timeout_s
         self._client: HostClient | None = None
         self.inbox = TurnInbox()
+        #: 本机 CLI：电脑上的连接器按本机策略拒绝时先发来的完整原因（随后以 4403 关闭）
+        self._rejection: str | None = None
 
     @property
     def client(self) -> HostClient:
@@ -227,6 +241,9 @@ class SessionLink:
                 await self._attach(session.bridge_instance, session.acked_seq)
                 self.inbox = TurnInbox(session.acked_seq)
                 return []
+            except HostUnreachable as exc:
+                self._raise_if_rejected()
+                raise TurnAbort(failed("runtime_unreachable", str(exc))) from exc
             except RpcFault as fault:
                 if takeover:
                     # ★ 接管时接不回去 = bridge 重启过，那一轮的进度已不在。不能 open 后
@@ -265,12 +282,14 @@ class SessionLink:
                 try:
                     await self._attach(instance, 0)
                 except (RpcFault, HostUnreachable) as exc:
+                    self._raise_if_rejected()
                     raise TurnAbort(failed("runtime_unreachable", f"接不上会话：{exc}")) from exc
                 self._session.rebind(instance)
                 self.inbox = TurnInbox()
                 return []
             raise TurnAbort(fault_intent(fault)) from fault
         except (ChannelClosed, TimeoutError) as exc:
+            self._raise_if_rejected()
             raise TurnAbort(failed("runtime_unreachable", f"session.open 失败：{exc!r}")) from exc
 
         self._session.rebind(str(opened["bridge"]["instance"]))
@@ -337,6 +356,7 @@ class SessionLink:
                     await self.cancel_turn(other)
                 await asyncio.sleep(1.0)
             except (ChannelClosed, TimeoutError) as exc:
+                self._raise_if_rejected()
                 raise TurnAbort(failed("runtime_unreachable", f"turn.start 失败：{exc!r}")) from exc
 
     async def cancel_turn(self, turn_id: str) -> None:
@@ -371,7 +391,7 @@ class SessionLink:
 
     async def reconnect(
         self,
-        reach: Callable[[], Awaitable[PodEndpoint]],
+        reach: Callable[[], Awaitable[HostEndpoint]],
         cancelled: Callable[[], Awaitable[bool]],
     ) -> bool:
         """一轮进行中断线：退避重连并 attach。返回 False = 断线期间用户取消了。
@@ -382,6 +402,7 @@ class SessionLink:
           bridge 实例 id 不同，attach 会得到 bridge_restarted，于是确定地收场，不会空等。
         """
         code = self._client.close_code if self._client is not None else None
+        self._raise_if_rejected()
         if (why := ReconnectPolicy.refuse(code)) is not None:
             raise TurnAbort(failed("runtime_unreachable", f"与 bridge 的连接关闭：{why}"))
         instance = self._session.bridge_instance
@@ -399,6 +420,11 @@ class SessionLink:
                 result = await self._attach(instance, self.inbox.last_seq)
                 logger.info("已重新接上 bridge（state=%s）", result.get("state"))
                 return True
+            except HostUnreachable as exc:
+                self._raise_if_rejected()
+                logger.warning("重连 bridge 失败，%.1fs 后重试：%s", delay, exc)
+                await asyncio.sleep(delay * random.uniform(0.8, 1.2))
+                delay = ReconnectPolicy.next_delay(delay)
             except RpcFault as fault:
                 data = fault.data if isinstance(fault.data, dict) else {}
                 if data.get("cause") == "bridge_restarted":
@@ -417,6 +443,11 @@ class SessionLink:
         await self.close()
 
         async def on_notification(method: str, params: Any) -> None:
+            if method == methods.DEVICE_REJECTED:
+                # 不进事件流：随后的 4403 关闭让这一轮以它为原因失败
+                message = params.get("message") if isinstance(params, dict) else None
+                self._rejection = str(message or "电脑按本机策略拒绝了这个会话")
+                return
             self._on_note(method, params)
 
         client = HostClient(
@@ -434,6 +465,20 @@ class SessionLink:
         if self._client is not None:
             client, self._client = self._client, None
             await client.__aexit__(None, None, None)
+
+    def _raise_if_rejected(self) -> None:
+        """本机 CLI 被电脑上的连接器按本机策略拒绝：以它给的原因结束这一轮，不重连（重连也被拒）。
+
+        ★ 读循环先处理完通知才关闭：请求收到 ChannelClosed 时，原因已经记下了。
+        """
+        client = self._client
+        if self._rejection is None and (
+            client is None or client.close_code != CloseCode.DEVICE_REJECTED
+        ):
+            return
+        raise TurnAbort(
+            failed("device_rejected", self._rejection or "电脑按本机策略拒绝了这个会话")
+        )
 
 
 def _host_url(url: str) -> str:

@@ -252,6 +252,12 @@ class Thread(Base, TimestampMixin):
     #: 一个目录，多个会话可以共用），没指定就是 {日期}/{会话 id}；之后不变（它是沙箱里命令和 CLI 的
     #: cwd）。子会话建出时复制父会话的，所以整棵会话树是同一个（domain/workspace_layout.py）
     workspace_dir: Mapped[str] = mapped_column(String(WORKSPACE_DIR_MAX), nullable=False)
+    #: 本机 CLI 会话跑在哪台电脑、哪个项目目录（迁移 0045，本机 CLI 方案 §2.3）。建会话时定下、
+    #: 之后不变：CLI 的会话记录在那台电脑上，换电脑或换目录就接不上之前的上下文。
+    #: 都为 NULL = 不是本机 CLI 会话，或者还没定（被委派建出的子会话在第一轮定：默认设备 +
+    #: 「默认项目地址 / 根会话 id」）。目录是电脑上的路径，可含 ~，在电脑上展开
+    device_uuid: Mapped[UUID | None] = mapped_column(UUIDType, nullable=True)
+    device_project_dir: Mapped[str | None] = mapped_column(String(1024), nullable=True)
 
     @property
     def sandbox_thread_id(self) -> UUID:
@@ -292,6 +298,52 @@ class Thread(Base, TimestampMixin):
             "title_source IN ('pending','generated','fallback','manual')",
             name="title_source_enum",
         ),
+    )
+
+
+class Device(Base):
+    """一个人配对到平台的一台电脑（聚合根 Device，迁移 0045）。
+
+    c4-model/agent/device/code-device-registry.html。设备只属于一个人；每人至多一台默认设备
+    （被委派、调试预览时用它）。设备令牌原文只在配对时交给连接器一次，库里只存 sha256。
+    吊销立即生效：令牌失效，设备网关断开它的连接。
+    """
+
+    __tablename__ = "device"
+
+    id: Mapped[int] = _pk()
+    device_uuid: Mapped[UUID] = _logical_key()
+    owner_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
+    #: 显示名，默认取电脑名
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    is_default: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false"), default=False
+    )
+    #: active | revoked
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="active")
+    #: 最近一次报告的系统、连接器版本
+    os: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    connector_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    paired_at: Mapped[datetime] = mapped_column(
+        UTCDateTime, nullable=False, server_default=func.now()
+    )
+    #: 最近一次建立控制连接的时间
+    last_seen_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("device_uuid", name="uk_device_uuid"),
+        UniqueConstraint("token_hash", name="uk_device_token_hash"),
+        Index("ix_device_owner", "owner_uuid"),
+        # 部分唯一：只对 is_default = true 的行，每人至多一台默认设备
+        Index(
+            "uk_device_default",
+            "owner_uuid",
+            unique=True,
+            postgresql_where=text("is_default"),
+        ),
+        CheckConstraint("status IN ('active','revoked')", name="device_status_enum"),
     )
 
 

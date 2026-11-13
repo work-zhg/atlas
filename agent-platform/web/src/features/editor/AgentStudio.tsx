@@ -325,7 +325,18 @@ function PublishModal({
 
 // ───────────────────────────────────────────── 调试预览
 
-function Preview({ agentId, flush, name }: { agentId: string; flush: () => Promise<void>; name: string }) {
+function Preview({
+  agentId,
+  flush,
+  name,
+  onDevice,
+}: {
+  agentId: string;
+  flush: () => Promise<void>;
+  name: string;
+  /** 本机 CLI：调试预览跑在编辑者自己的默认设备上（设计 §2.7） */
+  onDevice: boolean;
+}) {
   const { message } = AntdApp.useApp();
   const sendMessage = useSendMessage();
   const [threadId, setThreadId] = useState<string | null>(null);
@@ -377,6 +388,12 @@ function Preview({ agentId, flush, name }: { agentId: string; flush: () => Promi
               <Icon name="chat" size={28} style={{ color: "var(--primary)" }} />
               <b style={{ color: "var(--fg)", marginTop: 10 }}>和「{name}」试一试</b>
               <div style={{ fontSize: 13, marginTop: 4 }}>修改立即生效，不用先发布</div>
+              {onDevice && (
+                <div style={{ fontSize: 12.5, marginTop: 6, color: "var(--fg-3)", maxWidth: 320 }}>
+                  跑在你自己的默认设备上，目录是「默认项目地址 / 调试对话 id」。没有默认设备或它不在线时用不了：
+                  先在「我的设备」里配对，并在电脑上启动连接器。
+                </div>
+              )}
               <div className={styles.chips}>
                 {["你能做什么？", "帮我写一份周报", "总结一下这段话"].map((q) => (
                   <button
@@ -431,6 +448,7 @@ export function AgentStudio({ agentId }: { agentId: string }) {
   const [publishError, setPublishError] = useState<ApiError | null>(null);
   const [publishing, setPublishing] = useState(false);
   const [open, setOpen] = useState<Record<string, boolean>>({
+    env: true,
     prompt: true,
     model: true,
     caps: true,
@@ -518,6 +536,9 @@ export function AgentStudio({ agentId }: { agentId: string }) {
   const canEdit = isOwner || (detail.my_level === "WRITE" && detail.auth_subject === "user");
   const readOnly = !canEdit;
   const cli = spec.kind === "cli";
+  // 本机 CLI：跑在使用者自己的电脑上（agent-platform/doc/design/device-cli-design.html §2）
+  const onDevice = cli && spec.cli?.placement === "device";
+  const localLogin = onDevice && spec.cli?.model_source === "local_login";
   const isDefault = defaultQ.data?.id === detail.id;
 
   const toggle = (k: string) => setOpen((o) => ({ ...o, [k]: !o[k] }));
@@ -736,6 +757,45 @@ export function AgentStudio({ agentId }: { agentId: string }) {
               />
             )}
 
+            {cli && spec.cli && (
+              <Group
+                title="运行环境"
+                summary={onDevice ? "使用者自己的电脑" : "平台的隔离环境"}
+                open={open.env!}
+                onToggle={() => toggle("env")}
+              >
+                <div style={{ display: "grid", gridTemplateColumns: "96px 1fr", rowGap: 10, fontSize: 13 }}>
+                  <span style={{ color: "var(--fg-3)" }}>运行在哪里</span>
+                  <span>
+                    <Tag color={onDevice ? "green" : "blue"}>{onDevice ? "使用者自己的电脑" : "平台的隔离环境"}</Tag>
+                    <span className={styles.hint}>建好后不能改</span>
+                  </span>
+                  <span style={{ color: "var(--fg-3)" }}>CLI</span>
+                  <span>
+                    {spec.cli.cli_type} <span className={styles.hint}>建好后不能改</span>
+                  </span>
+                  {onDevice && (
+                    <>
+                      <span style={{ color: "var(--fg-3)", paddingTop: 5 }}>默认项目地址</span>
+                      <div>
+                        <Input
+                          style={{ width: 320, fontFamily: "var(--mono)" }}
+                          disabled={readOnly}
+                          value={spec.cli.default_project_dir ?? ""}
+                          placeholder="~/atlas-projects"
+                          onChange={(e) => spec.cli && patch({ cli: { ...spec.cli, default_project_dir: e.target.value } })}
+                        />
+                        <p className={styles.hint} style={{ marginTop: 6 }}>
+                          新对话默认在「默认项目地址 / 对话 id」这个新目录里工作，被别的智能体委派时也用它；
+                          <code>~</code> 是每个人电脑上的主目录。改了只影响之后的新对话。这个地址要在使用者电脑允许的目录里，否则那台电脑会拒绝。
+                        </p>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </Group>
+            )}
+
             <Group
               title="人设与指令"
               summary={spec.system_prompt ? `${spec.system_prompt.length} 字` : "未填写"}
@@ -753,10 +813,31 @@ export function AgentStudio({ agentId }: { agentId: string }) {
 
             <Group
               title="模型"
-              summary={modelInfo ? modelLabel(modelInfo) : spec.model.model}
+              summary={localLogin ? "电脑上 CLI 自己的登录" : modelInfo ? modelLabel(modelInfo) : spec.model.model}
               open={open.model!}
               onToggle={() => toggle("model")}
             >
+              {onDevice && (
+                <div className={styles.choices} style={{ marginBottom: 12 }}>
+                  {(
+                    [
+                      ["platform", "平台的模型", "经平台的模型网关调用，用量记在这个智能体名下"],
+                      ["local_login", "电脑上 CLI 自己的登录", "CLI 用电脑上已登录的账号直接连供应商，平台看不到用量"],
+                    ] as const
+                  ).map(([v, title, desc]) => (
+                    <Choice
+                      key={v}
+                      checked={(spec.cli?.model_source ?? "platform") === v}
+                      title={title}
+                      desc={desc}
+                      disabled={readOnly}
+                      onClick={() => spec.cli && patch({ cli: { ...spec.cli, model_source: v } })}
+                    />
+                  ))}
+                </div>
+              )}
+              {!localLogin && (
+              <>
               <div className={styles.row}>
                 <Select
                   style={{ width: 300 }}
@@ -855,6 +936,8 @@ export function AgentStudio({ agentId }: { agentId: string }) {
                   )}
                 </div>
               )}
+              </>
+              )}
             </Group>
 
             {cli ? (
@@ -878,6 +961,11 @@ export function AgentStudio({ agentId }: { agentId: string }) {
                     />
                   ))}
                 </div>
+                {onDevice && (
+                  <p className={styles.hint} style={{ marginTop: 8 }}>
+                    电脑可以在本机设上限（连接器的本机策略），要求的权限超过上限时，那台电脑会拒绝开对话。
+                  </p>
+                )}
               </Group>
             ) : (
               <Group title="能力" summary={`已开启 ${capOn} 项`} open={open.caps!} onToggle={() => toggle("caps")}>
@@ -925,14 +1013,20 @@ export function AgentStudio({ agentId }: { agentId: string }) {
               open={open.skills!}
               onToggle={() => toggle("skills")}
             >
-              <p className={styles.hint}>让它按固定的方法完成某类工作</p>
-              <SkillsSection
-                bare
-                skills={spec.skills}
-                catalog={skillCatalogQ.data}
-                readOnly={readOnly}
-                onChange={(skills) => patch({ skills })}
-              />
+              {onDevice ? (
+                <p className={styles.hint}>本机智能体用电脑上 CLI 自己的配置，平台的技能不下发。</p>
+              ) : (
+                <>
+                  <p className={styles.hint}>让它按固定的方法完成某类工作</p>
+                  <SkillsSection
+                    bare
+                    skills={spec.skills}
+                    catalog={skillCatalogQ.data}
+                    readOnly={readOnly}
+                    onChange={(skills) => patch({ skills })}
+                  />
+                </>
+              )}
             </Group>
 
             <Group
@@ -1030,8 +1124,12 @@ export function AgentStudio({ agentId }: { agentId: string }) {
                   <Choice
                     checked={detail.auth_subject === "agent"}
                     title="以智能体自己的身份"
-                    desc="所有使用者拿到相同的结果，适合岗位型、流程型智能体"
-                    disabled={!isOwner || setSubject.isPending}
+                    desc={
+                      onDevice
+                        ? "本机智能体不能选：它在使用者自己的电脑上运行，只能用使用者本人的权限"
+                        : "所有使用者拿到相同的结果，适合岗位型、流程型智能体"
+                    }
+                    disabled={!isOwner || setSubject.isPending || onDevice}
                     onClick={() => switchIdentity("agent")}
                   />
                 </div>
@@ -1084,7 +1182,7 @@ export function AgentStudio({ agentId }: { agentId: string }) {
             </div>
           </aside>
         ) : (
-          <Preview agentId={agentId} flush={flush} name={detail.name} />
+          <Preview agentId={agentId} flush={flush} name={detail.name} onDevice={onDevice} />
         )}
       </div>
 

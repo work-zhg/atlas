@@ -17,7 +17,7 @@ import { Icon } from "@/components/Icon";
 import { AgentCard } from "@/features/agents/AgentCard";
 import styles from "@/features/agents/agents.module.css";
 import { avatarBackground, avatarLetter } from "@/features/agents/avatar";
-import { createBody, TEMPLATES, type TemplateId } from "@/features/agents/templates";
+import { type CliWhere, createBody, TEMPLATES, type TemplateId } from "@/features/agents/templates";
 import { can, useMe } from "@/lib/session";
 
 type Scope = "all" | "mine" | "shared";
@@ -32,6 +32,7 @@ function CreateModal({ onClose }: { onClose: () => void }) {
   const modelsQ = useModels();
   const [name, setName] = useState("");
   const [tpl, setTpl] = useState<TemplateId>("general");
+  const [where, setWhere] = useState<CliWhere>("pod");
   const model = (modelsQ.data?.data ?? []).find((m) => m.is_available && m.selectable)?.model ?? "claude-sonnet-5";
   const picked = TEMPLATES.find((t) => t.id === tpl)!;
 
@@ -45,7 +46,7 @@ function CreateModal({ onClose }: { onClose: () => void }) {
       confirmLoading={createAgent.isPending}
       onCancel={onClose}
       onOk={() =>
-        createAgent.mutate(createBody(picked, name.trim() || picked.name, model), {
+        createAgent.mutate(createBody(picked, name.trim() || picked.name, model, undefined, where), {
           onSuccess: (a) => router.push(`/agents/${a.id}`),
           onError: (e) => message.error(e.message),
         })
@@ -78,6 +79,42 @@ function CreateModal({ onClose }: { onClose: () => void }) {
           </div>
         ))}
       </div>
+      {tpl === "coder" && (
+        <>
+          <div style={{ fontWeight: 600, margin: "16px 0 6px" }}>在哪里运行</div>
+          <div style={{ display: "grid", gap: 8 }}>
+            {(
+              [
+                ["pod", "平台的隔离环境", "每个对话一个独立的环境，文件在平台上；谁用都一样"],
+                [
+                  "device",
+                  "使用者自己的电脑",
+                  "用每个人电脑上的 Claude Code，直接改他电脑上的项目；需要先在「我的设备」里配对电脑",
+                ],
+              ] as const
+            ).map(([v, title, desc]) => (
+              <div
+                key={v}
+                role="radio"
+                aria-checked={where === v}
+                tabIndex={0}
+                className={styles.template}
+                onClick={() => setWhere(v)}
+                onKeyDown={(e) => e.key === "Enter" && setWhere(v)}
+              >
+                <Icon name={v === "device" ? "laptop" : "layers"} size={18} />
+                <div>
+                  <b>{title}</b>
+                  <div style={{ fontSize: 12.5, color: "var(--fg-3)" }}>{desc}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div style={{ fontSize: 12, color: "var(--fg-3)", marginTop: 6 }}>
+            建好后不能改：换运行位置等于换掉整套运行环境，要换就新建一个
+          </div>
+        </>
+      )}
     </Modal>
   );
 }

@@ -1,0 +1,25 @@
+[project]
+name = "atlas-devicegw"
+version = "0.1.0"
+description = "Atlas device gateway — the only door between the platform and users' computers: control links from connectors, session / file relay, credential-holding capability proxy."
+requires-python = ">=3.13"
+
+# ★ 为什么独立成服务（c4-model/agent/devicegw/code-devicegw.html）：Agent 服务发版频繁，放在一起每次发版
+#   所有电脑都会掉线；run 可能在 Agent 服务的任何实例上执行，设备连在哪个实例就得在实例之间转发。
+# ★ 不连数据库：在线表、会话登记放 Redis（多个实例共享、带过期）；设备归属只在 Agent 服务，每次建连都去问。
+# ★ 与 Agent 服务互不 import：只经 HTTP / WebSocket 往来。
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.32",
+  "httpx>=0.27",
+  "redis>=5.2",
+  "pydantic-settings>=2.6",
+  "atlas-devicelink",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/atlas_devicegw"]
