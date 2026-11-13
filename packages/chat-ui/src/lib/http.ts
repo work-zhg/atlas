@@ -56,7 +56,8 @@ export function apiUrl(
   // ★ 不能写 new URL(path, base)：path 以 / 开头时会丢掉 base 的路径部分，
   //   而部署在网关 / 代理后面时 base 是同源子路径（如 /atlas-api）。先拼字符串，再相对当前页面解析。
   const joined = `${base.replace(/\/+$/, "")}${path.startsWith("/") ? path : `/${path}`}`;
-  const origin = typeof window === "undefined" ? "http://localhost" : window.location.origin;
+  // ★ 手机 App（React Native）里有 window 却没有 location：那里的 base 是完整地址，用不到当前页面
+  const origin = globalThis.location?.origin ?? "http://localhost";
   const url = new URL(joined, origin);
   for (const [k, v] of Object.entries(query ?? {})) {
     if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, String(v));

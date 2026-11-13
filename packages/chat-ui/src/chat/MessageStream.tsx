@@ -8,15 +8,14 @@ import type { Message } from "../api/types";
 import { Icon } from "../components/Icon";
 import { Markdown } from "../components/Markdown";
 import { relativeTime } from "../lib/format";
+import { planConversation, timelineEntries } from "../lib/conversation";
 import { APPROVAL_MODE_LABEL, type AgentModeData, type ApprovalMode } from "../lib/events";
 import {
   isStreamDone,
-  orphanSubRuns,
   type Notice,
   type RunState,
   type SubagentRun,
   type TimelineItem,
-  type ToolCall,
 } from "../lib/run-reducer";
 import { avatarBackground, avatarLetter } from "../lib/avatar";
 import { ApprovalCard } from "./ApprovalCard";
@@ -48,22 +47,6 @@ interface Props {
   feedback?: boolean;
   /** 重新生成：用最后一个问题再问一次。不给 = 不显示这个按钮 */
   onRegenerate?: () => void;
-}
-
-function textOf(content: Message["content"]): string {
-  return blocksOf(content).join("");
-}
-
-/**
- * 正文分段。一个 run 里模型可能说好几轮 —— 调工具前一段、拿到结果后一段，
- * 后端按轮切成多个 text block（server 的 domain/events.py::Answer）。
- * 这里不再 join：最后一段是结论，前面的是过程，要分开渲染。
- */
-function blocksOf(content: Message["content"]): string[] {
-  return content
-    .filter((b) => b.type === "text" && typeof b.text === "string")
-    .map((b) => b.text as string)
-    .filter((t) => t.length > 0);
 }
 
 /** 助手正文：末段是结论，之前的都是过程性发言，弱化显示。 */
@@ -295,19 +278,9 @@ function SubRun({
   );
 }
 
-const ORPHAN_STATUS: Record<RunState["status"], SubagentRun["status"]> = {
-  idle: "running",
-  running: "running",
-  suspended: "running",
-  succeeded: "ok",
-  failed: "error",
-  cancelled: "error",
-};
-
 /**
  * 一个 run 的过程时间线。实时区与历史轮次共用，子 run 的卡片里也是它。
- *
- * root 缺省 = state，即主轮次。找不到所属卡片的子 run（见 orphanSubRuns）排在主轮次末尾。
+ * 摆法（步骤怎么分组、孤儿子 run 放哪）见 lib/conversation.ts 的 timelineEntries。
  */
 function TurnTimeline({
   state,
@@ -318,43 +291,12 @@ function TurnTimeline({
   root?: RunState;
   streaming: boolean;
 }) {
-  const last = state.timeline.length - 1;
-  const orphans = state === root ? orphanSubRuns(root) : [];
-
-  // ★ 连续的工具调用归成一组「步骤」：中间夹了正文、委派、审批就另起一组 —— 先后顺序不能乱
-  const out: ReactNode[] = [];
-  let group: ToolCall[] = [];
-  const flush = () => {
-    if (group.length) out.push(<Steps key={`steps:${group[0]!.callId}`} calls={group} live={streaming} />);
-    group = [];
-  };
-  state.timeline.forEach((item, i) => {
-    if (item.kind === "tool") {
-      // 向用户提问的那次调用由问题卡片完整呈现，不算一个步骤（按 tool_call_id 关联）
-      if (state.approvals.some((a) => a.kind === "question" && a.toolCallId === item.callId)) return;
-      const call = state.toolCalls.find((c) => c.callId === item.callId);
-      if (call) group.push(call);
-      return;
-    }
-    flush();
-    out.push(
-      <LiveItem key={itemKey(item)} item={item} live={state} root={root} isLast={i === last} streaming={streaming} />,
-    );
-  });
-  flush();
-
   return (
     <>
-      {out}
-      {orphans.map((id) => {
-        const sub = root.subRuns[id]!;
-        const run: SubagentRun = {
-          runId: id,
-          name: sub.meta?.agent_name || "子智能体",
-          task: "",
-          status: ORPHAN_STATUS[sub.status],
-        };
-        return <SubRun key={`orphan:${id}`} run={run} sub={sub} root={root} streaming={streaming} />;
+      {timelineEntries(state, root).map((e): ReactNode => {
+        if (e.kind === "steps") return <Steps key={e.key} calls={e.calls} live={streaming} />;
+        if (e.kind === "orphan") return <SubRun key={e.key} run={e.run} sub={e.sub} root={root} streaming={streaming} />;
+        return <LiveItem key={e.key} item={e.item} live={state} root={root} isLast={e.isLast} streaming={streaming} />;
       })}
     </>
   );
@@ -409,27 +351,6 @@ function AssistantTurnBody({
   );
 }
 
-function itemKey(item: TimelineItem): string {
-  switch (item.kind) {
-    case "text":
-      return `text:${item.block}`;
-    case "tool":
-      return `tool:${item.callId}`;
-    case "subagent":
-      return `subagent:${item.runId}`;
-    case "approval":
-      return `approval:${item.approvalId}`;
-    case "compaction":
-      return `compaction:${item.seq}`;
-    case "mode":
-      return `mode:${item.runId}`;
-    case "notice":
-      return `notice:${item.seq}`;
-    case "todos":
-      return "todos";
-  }
-}
-
 export function MessageStream({
   messages,
   loading,
@@ -459,41 +380,8 @@ export function MessageStream({
     if (nearBottom) bottomRef.current?.scrollIntoView({ block: "end" });
   }, [messages.length, liveText, live?.timeline.length]);
 
-  // 助手消息已落库后就不再渲染实时块，避免同一段话出现两遍
-  const persisted = liveRunId ? messages.some((m) => m.run_id === liveRunId && m.role === "assistant") : false;
-  // ★ 只有这一轮**真正结束**后，落库的消息才算覆盖了实时块。
-  //
-  //   挂起（suspended）不算结束：那一段的助手消息确实已经落库了，但这一轮
-  //   还在等子智能体 —— 只看 persisted 的话「正在等待子智能体」这条提示会
-  //   在挂起的瞬间消失，用户看到的是一个静止且无解释的界面。
-  const turnOver = live ? isStreamDone(live.status) : false;
-  const showLive = Boolean(live) && live!.status !== "idle" && !(persisted && turnOver);
-  // ★ 实时区在显示时，这一轮已落库的助手消息（挂起时落下的前一段）就不再单独渲染，
-  //   否则同一段话出现两遍。只在实时区**确实包含**那些段落时才隐藏 —— 刷新后
-  //   首连只回放最近一段事件，实时区可能没收到前一段，那时要靠落库的消息补上。
-  const liveBlocks = new Set(showLive && live ? live.blocks.filter((b) => b.length > 0) : []);
-  const coveredByLive = (m: Message): boolean => {
-    if (!showLive || m.role !== "assistant" || m.run_id !== liveRunId) return false;
-    const blocks = blocksOf(m.content);
-    return blocks.length > 0 && blocks.every((b) => liveBlocks.has(b));
-  };
-  // ★ 分页边界可能把一轮切成两条消息：轨迹只挂在第一条上，避免整段过程出现两遍
-  const tracedRuns = new Set<string>();
-  const shown = messages.filter((m) => !coveredByLive(m));
-  // ★ 一轮只画一块：挂起续跑的一轮会落下好几条助手消息（每段一条），过程在轨迹里本来就是一整段。
-  //   第一条承载整轮（正文段合并），后面几条不再单独画；反馈指向最后一条（结论所在）。
-  const runOf = (m: Message) => m.run_id ?? m.id;
-  const firstOfRun = new Map<string, string>();
-  const lastOfRun = new Map<string, string>();
-  const runBlocks = new Map<string, string[]>();
-  for (const m of shown) {
-    if (m.role !== "assistant") continue;
-    const run = runOf(m);
-    if (!firstOfRun.has(run)) firstOfRun.set(run, m.id);
-    lastOfRun.set(run, m.id);
-    runBlocks.set(run, [...(runBlocks.get(run) ?? []), ...blocksOf(m.content)]);
-  }
-  const lastAnswer = [...shown].reverse().find((m) => m.role === "assistant");
+  // 哪几条要画、实时区让不让位：规则在 lib/conversation.ts（与手机 App 共用）
+  const { entries, showLive } = planConversation(messages, live, liveRunId);
 
   return (
     <div className={styles.paneBody} ref={bodyRef}>
@@ -511,13 +399,13 @@ export function MessageStream({
         </div>
       )}
 
-      {shown.map((m) =>
-        m.role === "assistant" && firstOfRun.get(runOf(m)) !== m.id ? null : m.role === "user" ? (
-          <div key={m.id} className={`${styles.msg} ${styles.msgUser}`}>
-            <div className={styles.bubble}>{textOf(m.content)}</div>
+      {entries.map((e) =>
+        e.kind === "user" ? (
+          <div key={e.message.id} className={`${styles.msg} ${styles.msgUser}`}>
+            <div className={styles.bubble}>{e.text}</div>
           </div>
         ) : (
-          <div key={m.id} className={styles.msg}>
+          <div key={e.message.id} className={styles.msg}>
             <div className={styles.msgHead}>
               <span
                 className={styles.agentAvatar}
@@ -527,26 +415,20 @@ export function MessageStream({
                 {avatarLetter(agentName)}
               </span>
               <span className={styles.msgName}>{agentName}</span>
-              <span className={styles.msgMeta}>{relativeTime(m.created_at)}</span>
+              <span className={styles.msgMeta}>{relativeTime(e.message.created_at)}</span>
             </div>
             <AssistantTurnBody
-              message={m}
-              blocks={runBlocks.get(runOf(m)) ?? []}
-              traceEnabled={(() => {
-                // 进行中（含挂起）的那一轮走实时区，不取轨迹 —— 否则会缓存一份残缺的
-                if (!m.run_id || (m.run_id === liveRunId && !turnOver)) return false;
-                if (tracedRuns.has(m.run_id)) return false;
-                tracedRuns.add(m.run_id);
-                return true;
-              })()}
-              fallback={m.run_id && m.run_id === liveRunId && turnOver ? live : undefined}
+              message={e.message}
+              blocks={e.blocks}
+              traceEnabled={e.traceEnabled}
+              fallback={e.useLiveFallback ? live : undefined}
             />
             <MessageActions
               threadId={threadId}
-              messageId={lastOfRun.get(runOf(m)) ?? m.id}
-              text={(runBlocks.get(runOf(m)) ?? []).join("\n\n")}
+              messageId={e.feedbackMessageId}
+              text={e.blocks.join("\n\n")}
               feedback={feedback}
-              onRegenerate={lastAnswer && runOf(lastAnswer) === runOf(m) && !showLive ? onRegenerate : undefined}
+              onRegenerate={e.canRegenerate ? onRegenerate : undefined}
             />
           </div>
         ),
