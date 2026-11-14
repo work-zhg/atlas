@@ -22,6 +22,7 @@ import { ApprovalCard } from "./ApprovalCard";
 import { CompactionDivider } from "./CompactionDivider";
 import styles from "./chat.module.css";
 import { QuestionCard } from "./QuestionCard";
+import { TakeoverCard } from "./TakeoverCard";
 import { SubAgentCard } from "./SubAgentCard";
 import { MessageActions } from "./MessageActions";
 import { Steps } from "./Steps";
@@ -117,6 +118,15 @@ function LiveItem({
             approval={approval}
             waiting={waiting}
             answered={live.answers[approval.approvalId]}
+          />
+        );
+      }
+      if (approval.kind === "takeover") {
+        return (
+          <TakeoverCard
+            approval={approval}
+            waiting={waiting}
+            settled={live.takeovers[approval.approvalId]}
           />
         );
       }

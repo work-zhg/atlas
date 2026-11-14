@@ -72,6 +72,7 @@ from .permission import (
     ApprovalMode,
     ApprovalOutcome,
     QuestionAnswer,
+    TakeoverLogin,
     ToolEffect,
 )
 from .sandbox import (
@@ -124,6 +125,7 @@ __all__ = [
     "SkillRef",
     "SubAgentSpawner",
     "SuspensionReason",
+    "TakeoverLogin",
     "ToolEffect",
     "UnsupportedProvider",
     "Wait",

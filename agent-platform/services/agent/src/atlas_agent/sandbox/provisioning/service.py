@@ -26,6 +26,10 @@ c4-model/agent/sandbox/code-sandbox-provisioning.html。
   坏了退役时，绑在上面的业务一起换到新沙箱。
 ★ 配额可以是固定的，也可以每次分配时现取（运行期配置 sandbox.quota_per_user，runtime_config.py）：
   管理员改了上限，下一次分配就按新的判。
+★ 附加件（SandboxAddon）：沙箱建好、就绪之后，按登记顺序回调 on_created（只对它认的请求）；退役前
+  回调 before_retire。供给不认识它们（如浏览器）：依赖只有附加件 → 供给一个方向。
+  on_created 失败按建沙箱失败处理（退役，下次 ensure 换一个重建）；before_retire 失败只记日志，
+  不拦退役。
 """
 
 from __future__ import annotations
@@ -54,7 +58,7 @@ from .model import (
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-__all__ = ["SandboxKind", "SandboxProvisioning", "SandboxUnavailableError"]
+__all__ = ["SandboxAddon", "SandboxKind", "SandboxProvisioning", "SandboxUnavailableError"]
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
@@ -88,6 +92,26 @@ class SandboxKind(Protocol):
         """就绪判断（如 execd /ping、bridge /readyz）。时限内没就绪抛异常。"""
 
 
+class SandboxAddon(Protocol):
+    """沙箱建好后、退役前回调的一段逻辑（如浏览器：建好后导入登录态、拉起守护；退役前导出登录态）。
+
+    实现必须无状态、可重入：崩在「建好」和「附加件做完」之间的沙箱，下一次 ensure 接着建时
+    会再回调一次。
+    """
+
+    def applies(self, req: Any) -> bool:
+        """这个请求建出来的沙箱管不管（看请求的属性，不看镜像名）。"""
+
+    async def on_created(self, ref: SandboxRef, req: Any, *, biz_type: BizType, user: UUID) -> None:
+        """沙箱建好、就绪之后，交出之前。失败抛异常 = 这个沙箱不能用。
+
+        biz_type：建它的业务类型；user：沙箱的主人。
+        """
+
+    async def before_retire(self, ref: SandboxRef, reason: DestroyReason) -> None:
+        """沙箱退役前（已标 RETIRING、还没删）。只拿得到 sandbox_uuid：管不管由附加件自己判断。"""
+
+
 class SandboxProvisioning:
     def __init__(
         self,
@@ -104,10 +128,15 @@ class SandboxProvisioning:
         self._allocation = allocation or AllocationPolicy()
         self._cache_s = cache_s
         self._kinds: dict[BizType, SandboxKind] = {}
+        self._addons: list[SandboxAddon] = []
 
     def register(self, kind: SandboxKind) -> None:
         """装配时按 biz_type 登记一种业务类型。"""
         self._kinds[kind.biz_type] = kind
+
+    def register_addon(self, addon: SandboxAddon) -> None:
+        """装配时登记一个附加件；按登记顺序回调。"""
+        self._addons.append(addon)
 
     def _kind(self, biz: BizRef) -> SandboxKind:
         try:
@@ -172,6 +201,9 @@ class SandboxProvisioning:
                 raise SandboxUnavailableError(f"沙箱 {sandbox.sandbox_uuid} 没有起来")
             await kind.attach(ref, req, created=True)
             await kind.ready(ref)
+            for addon in self._addons:
+                if addon.applies(req):
+                    await addon.on_created(ref, req, biz_type=kind.biz_type, user=sandbox.user_uuid)
         except Exception as exc:
             # 建失败、没就绪：这个沙箱不要了（下一次 ensure 换一个 uuid 重建），配额也还回去
             logger.warning("沙箱 %s 没能就绪：%s", sandbox.sandbox_uuid, exc)
@@ -246,8 +278,19 @@ class SandboxProvisioning:
             await self._runtime.destroy(ref.sandbox_uuid, reason=reason)  # 登记已经没了：只管基座
             return
         await self._mutate(owner, lambda acc: _mark_retiring(acc, ref.sandbox_uuid))
+        await self._before_retire(ref, reason)
         await self._runtime.destroy(ref.sandbox_uuid, reason=reason)
         await self._mutate(owner, lambda acc: acc.remove(ref.sandbox_uuid))
+
+    async def _before_retire(self, ref: SandboxRef, reason: DestroyReason) -> None:
+        """退役前回调附加件。失败只记日志：附加件做不完（如导出登录态）不拦退役。"""
+        for addon in self._addons:
+            try:
+                await addon.before_retire(ref, reason)
+            except Exception:
+                logger.warning(
+                    "沙箱 %s 退役前的附加件 %s 失败", ref.sandbox_uuid, addon, exc_info=True
+                )
 
     async def release(self, biz: BizRef, *, reason: DestroyReason) -> None:
         """解绑这个业务；沙箱没有业务了就以这个原因退役。失败只记日志，由对账兜底。"""

@@ -68,6 +68,18 @@ kubectl -n atlas-system create secret generic atlas-devicegw \
   --from-literal=internal_token="${DEVICEGW_TOKEN}" \
   --dry-run=client -o yaml | kubectl apply -f -
 
+# 沙箱浏览器（c4-model/agent/browser/design-browser.html）：登录态的加密密钥（{版本: base64 32 字节}）、
+# 画面口令的派生密钥。沿用集群里已有的，没有才新生成。
+# ★ 登录态密钥设了就不能丢：丢了库里存的登录态就解不开。换钥匙是加一个新版本、旧的留着
+BROWSER_KEYS="$(secret_value atlas-browser state_keys)"
+[ -n "$BROWSER_KEYS" ] || BROWSER_KEYS="{\"1\": \"$(openssl rand -base64 32)\"}"
+BROWSER_VIEW="$(secret_value atlas-browser view_secret)"
+[ -n "$BROWSER_VIEW" ] || BROWSER_VIEW="$(openssl rand -hex 24)"
+kubectl -n atlas-system create secret generic atlas-browser \
+  --from-literal=state_keys="${BROWSER_KEYS}" \
+  --from-literal=view_secret="${BROWSER_VIEW}" \
+  --dry-run=client -o yaml | kubectl apply -f -
+
 # ★ 内网免令牌（doc/identity-propagation-design.html）：服务间令牌、用户中心 App Key / Secret、
 #   Atlas 服务账号密钥都已下线，这里不再建。
 # 对象存储的 HMAC：技能应用与知识库共用（原名 atlas-config-creds，配置服务改为技能应用时改名）

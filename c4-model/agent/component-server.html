@@ -245,7 +245,7 @@
         5.7
       ],
       "name": "沙箱",
-      "description": "按人管理沙箱：原生沙箱和会话 Pod 的供给与回收，在沙箱里后台执行命令，按沙箱记活动，把已授权的凭据写进会话 Pod 的 egress；令牌不出这个组件。"
+      "description": "按人管理沙箱：原生沙箱和会话 Pod 的供给与回收，在沙箱里后台执行命令，按沙箱记活动，打开沙箱端口的画面通道，把已授权的凭据写进会话 Pod 的 egress；地址和令牌不出这个组件。"
     },
     {
       "id": "files",
@@ -346,14 +346,25 @@
         3.9,
         4.75
       ]
+    },
+    {
+      "id": "browser",
+      "kind": "component",
+      "technology": "Python 模块 + WebSocket",
+      "name": "浏览器",
+      "description": "开了浏览器能力的智能体：选浏览器镜像，沙箱建好时拉起浏览器、退役前导出登录态；人接管登录（审批的一种）；把沙箱里的画面转给控制台；按人、按站点加密保管登录态。",
+      "at": [
+        -0.3,
+        3.5
+      ]
     }
   ],
   "relationships": [
     {
       "from": "web",
       "to": "api",
-      "description": "调用接口，订阅运行事件",
-      "technology": "JSON/HTTPS、SSE"
+      "description": "调用接口，订阅运行事件，看浏览器画面",
+      "technology": "JSON/HTTPS、SSE、WebSocket"
     },
     {
       "from": "teamflow",
@@ -448,8 +459,8 @@
     {
       "from": "sandboxes",
       "to": "shell",
-      "description": "执行命令",
-      "technology": "HTTP（execd）"
+      "description": "执行命令，转发浏览器画面",
+      "technology": "HTTP（execd）、RFB / WebSocket"
     },
     {
       "from": "sandboxes",
@@ -609,6 +620,37 @@
       "description": "核对配对码和设备令牌",
       "technology": "JSON/HTTP（内部接口）",
       "labelAt": 0.3
+    },
+    {
+      "from": "api",
+      "to": "browser",
+      "description": "打开接管、交还，实时画面，我的登录",
+      "labelAt": 0.3
+    },
+    {
+      "from": "native",
+      "to": "browser",
+      "description": "命令的会话名，段末刷新登录态"
+    },
+    {
+      "from": "acp",
+      "to": "browser",
+      "description": "平台工具：请求接管；轮末刷新登录态"
+    },
+    {
+      "from": "browser",
+      "to": "approval",
+      "description": "登记、决定接管"
+    },
+    {
+      "from": "browser",
+      "to": "sandboxes",
+      "description": "确保宿主，执行守护命令，打开画面通道"
+    },
+    {
+      "from": "sandboxes",
+      "to": "browser",
+      "description": "建好后拉起浏览器，退役前导出登录态"
     }
   ]
 }

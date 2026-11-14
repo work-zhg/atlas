@@ -6,10 +6,14 @@
 
 from __future__ import annotations
 
-__all__ = ["ASK_USER_QUESTION", "SUBAGENT_TOOL"]
+__all__ = ["ASK_USER_QUESTION", "REQUEST_TAKEOVER", "SUBAGENT_TOOL"]
 
 #: 向用户提问。沿用 Claude Code AskUserQuestion 的约定，取蛇形名（同 exit_plan_mode 的取名规则）
 ASK_USER_QUESTION = "ask_user_question"
 
 #: 派子智能体。runner 的事件推导（subagent.started/finished 的判别）与 tool_registry 的目录都引用它
 SUBAGENT_TOOL = "task"
+
+#: 请人接管浏览器（c4-model/agent/browser/code-browser-takeover.html）。开了浏览器的智能体才有；
+#: 原生由引擎的 TakeoverMiddleware 提供，CLI 由 bridge 本机 MCP 的平台工具提供，名字相同
+REQUEST_TAKEOVER = "request_takeover"

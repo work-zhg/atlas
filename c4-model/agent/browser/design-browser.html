@@ -1,0 +1,537 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>沙箱浏览器设计</title>
+<style>
+  body { margin: 0; background: #fff; color: #333; font-family: "Open Sans", "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
+  main { max-width: 1280px; padding: 24px 32px 64px; }
+  h1 { margin: 8px 0 12px; font-size: 22px; font-weight: 600; color: #222; }
+  h2 { margin: 40px 0 12px; padding-bottom: 6px; border-bottom: 1px solid #e3e3e3; font-size: 17px; font-weight: 600; color: #222; }
+  h3 { margin: 28px 0 8px; font-size: 15px; font-weight: 600; color: #333; }
+  p { max-width: 1100px; margin: 0 0 8px; font-size: 14px; line-height: 1.8; }
+  p.lead { padding: 10px 14px; border-left: 3px solid #1168bd; background: #f4f8fc; }
+  code { padding: 0 3px; background: #f6f8fa; font-family: Menlo, Consolas, monospace; font-size: 12.5px; }
+  a { color: #1168bd; }
+  table { width: 100%; margin: 8px 0 0; border-collapse: collapse; font-size: 13px; line-height: 1.6; }
+  th, td { padding: 6px 10px; border: 1px solid #e3e3e3; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; font-weight: 600; }
+  ol.steps { margin: 8px 0 0; padding: 0; list-style: none; }
+  ol.steps li { position: relative; margin: 0 0 6px; padding-left: 30px; font-size: 14px; line-height: 1.7; }
+  ol.steps li .n { position: absolute; left: 0; top: 2px; width: 20px; height: 20px; border-radius: 50%; background: #d9480f; color: #fff; font-size: 12px; font-weight: 700; line-height: 20px; text-align: center; }
+  svg { display: block; max-width: 100%; height: auto; margin: 8px 0 4px; }
+  svg text { font-size: 13px; fill: #444; }
+  svg .t-name { font-size: 15px; fill: #1168bd; text-anchor: middle; }
+  svg .t-sub { font-size: 12px; fill: #888; text-anchor: middle; }
+  svg .t-head { font-size: 14px; font-weight: 600; fill: #1168bd; }
+  svg .t-key { font-size: 12px; fill: #888; }
+  svg .t-lab { font-size: 12px; fill: #666; }
+  svg .t-hot { font-size: 12px; fill: #d9480f; }
+  svg .t-mute { font-size: 12px; fill: #aaa; }
+  svg .hot { fill: #d9480f; }
+  svg .mid { text-anchor: middle; }
+  svg .end { text-anchor: end; }
+  svg .b { font-weight: 700; }
+  svg .node { fill: #fff; stroke: #1168bd; stroke-width: 1.6; }
+  svg .node-hot { fill: #fff6f0; stroke: #d9480f; stroke-width: 1.6; }
+  svg .bnd { fill: none; stroke: #1168bd; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  svg .gap { fill: #fff6f0; stroke: #d9480f; stroke-width: 1.2; stroke-dasharray: 5 4; }
+  svg .band-a { fill: #eef4fb; stroke: #1168bd; stroke-width: 1.2; }
+  svg .band-b { fill: #fff3ea; stroke: #d9480f; stroke-width: 1.2; }
+  svg .cell { fill: #fff; stroke: #bbb; stroke-width: 1.2; }
+  svg .e { fill: none; stroke: #444; stroke-width: 1.6; }
+  svg .e-dash { fill: none; stroke: #444; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  svg .e-hot { fill: none; stroke: #d9480f; stroke-width: 2.2; }
+  svg .e-mute { fill: none; stroke: #bbb; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  svg .tick { stroke: #444; stroke-width: 1.2; }
+  svg .dot { fill: #fff; stroke: #888; stroke-width: 1.4; }
+  svg .dot-hot { fill: #d9480f; stroke: #d9480f; stroke-width: 1.4; }
+  svg .badge circle { fill: #d9480f; stroke: #fff; stroke-width: 2; }
+  svg .badge text { fill: #fff; font-size: 12px; font-weight: 700; text-anchor: middle; }
+</style>
+</head>
+<body>
+<main>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <marker id="a" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#444"/></marker>
+      <marker id="h" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#d9480f"/></marker>
+      <marker id="m" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#bbb"/></marker>
+          <marker id="hs" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#d9480f"/></marker>
+    </defs>
+  </svg>
+
+  <h1>沙箱浏览器设计：智能体操作网页，人接管登录</h1>
+  <p class="lead">一句话：<b>开了浏览器能力的智能体，在自己的沙箱里用一个常驻的 Chromium 浏览网页；遇到要输密码、短信码的地方就停下，请人在对话里的实时画面中自己登录，登录完交还；人登录过的网站，登录态由平台加密保管，下次换了沙箱也不用再登录。</b>打个比方：像请一位助理用你的电脑办事——平时他自己点；到了要输密码的时候，他把键盘递给你，你输完还给他；你登录过的网站，他下次直接就能用，但他从来没见过你的密码。</p>
+  <p>这份设计回答四个问题：模型怎么操作网页；浏览器跑在哪、怎么起来；遇到登录怎么交给人、人怎么看到画面；登录态存在哪、什么时候存、什么时候恢复。原生智能体和 CLI 智能体（Claude Code 等）都适用。以后可能做的「占位符代填」「用自己电脑上的 Chrome」「看截图点坐标」只留了扩展点，不在这里展开。</p>
+
+  <h2>先认识几个词</h2>
+  <table>
+    <thead><tr><th style="width: 16%">词</th><th style="width: 46%">意思</th><th>例子</th></tr></thead>
+    <tbody>
+      <tr><td>无障碍树（accessibility tree）</td><td>浏览器为读屏软件整理的页面结构：每个按钮、输入框、链接占一行，写明它是什么、叫什么名字。模型读它就知道页面上有什么，不用看图。</td><td><code>button "登录"</code>、<code>textbox "手机号"</code></td></tr>
+      <tr><td>元素编号（ref）</td><td>拍快照时给每一行编的短号。模型说「点 e8」，程序就点到那一行对应的元素。页面一变，旧编号就作废，要重新拍。</td><td><code>browser click e8</code></td></tr>
+      <tr><td>CDP</td><td>Chrome 对外开的调试接口（Chrome DevTools Protocol）：打开网址、点击、读写 cookie、开关窗口都能经它做。它的权限很大，所以只在沙箱里的 127.0.0.1 上开。</td><td>端口 9222</td></tr>
+      <tr><td>Playwright CLI</td><td>微软出的浏览器命令行工具，专给能执行 Shell 的智能体用：按无障碍树拍快照、按编号操作。它可以经 CDP 连到一个已经在跑的浏览器，可以按「会话名」各用各的页面。</td><td><code>playwright-cli -s=会话A open https://…</code></td></tr>
+      <tr><td>虚拟屏幕、画面服务</td><td>虚拟屏幕（Xvfb）是没有显示器的屏幕，有界面的 Chromium 画在它上面。画面服务（x11vnc + websockify）把这块屏幕的画面传出去、把键盘鼠标传进来。控制台里的 noVNC 是网页版的看画面客户端。</td><td>画面端口 6080</td></tr>
+      <tr><td>profile</td><td>Chromium 存 cookie、本地存储、历史记录的目录，里面有 SQLite 文件。目录在，登录就在。</td><td><code>/tmp/atlas-browser/profile</code></td></tr>
+      <tr><td>登录态</td><td>网站认出「你已经登录」靠的东西：cookie，加上有些网站放在浏览器本地存储（localStorage）里的令牌。导出成一个 JSON 文件就能搬到另一个浏览器。</td><td>taobao.com 的 <code>cookie2</code>、<code>_tb_token_</code></td></tr>
+      <tr><td>站点</td><td>按「可注册域名」归类：login.taobao.com、www.taobao.com 上的 cookie 都算 taobao.com。登录态按站点存、按站点删。</td><td>taobao.com、gov.cn 下的某个政务网站</td></tr>
+      <tr><td>接管</td><td>模型停下，人在实时画面里直接操作浏览器，操作完点「交还」，模型接着做。它是「等人决定的事」的一种，和工具确认、计划审批、提问走同一张表。</td><td>「淘宝要登录才能看订单，请在画面里登录」</td></tr>
+      <tr><td>宿主、附加件</td><td>宿主是「浏览器跑在哪个沙箱里」：原生智能体是工作区的沙箱，CLI 智能体是会话的 Pod。附加件是沙箱建好后、退役前平台回调的一段逻辑，浏览器在这里拉起和收尾。</td><td>沙箱建好 → 附加件导入登录态、拉起浏览器</td></tr>
+    </tbody>
+  </table>
+
+  <h2>原理 1　模型怎么操作网页：拍快照、按编号点</h2>
+  <p>模型不看图，看的是一份文字清单：浏览器把页面整理成无障碍树，每个能点、能填的元素一行，前面带一个编号。模型说「在 e7 里填 3021」「点 e8」，程序就去点。DeepSeek 这类不能看图的模型也能用；能看图的模型还可以截一张图，用读文件的工具直接看。</p>
+  <svg width="1240" viewBox="0 0 1240 340" role="img" aria-label="拍快照、按编号操作的循环">
+    <g transform="translate(0,40)">
+    <rect class="node" x="20" y="112" width="160" height="76" rx="4"/>
+    <text class="t-name" x="100" y="144">模型</text>
+    <text class="t-sub" x="100" y="166">只读文字，不用看图</text>
+
+    <rect class="node" x="250" y="36" width="230" height="60" rx="4"/>
+    <text class="t-name" x="365" y="60">拍快照</text>
+    <text class="t-sub" x="365" y="82">browser snapshot</text>
+    <path class="e" d="M180 130 L248 80" marker-end="url(#a)"/>
+    <g class="badge"><circle cx="250" cy="36" r="10"/><text x="250" y="40">1</text></g>
+
+    <rect class="cell" x="550" y="20" width="330" height="138" rx="4"/>
+    <text class="t-head" x="566" y="42">快照文件（页面清单）</text>
+    <text class="t-lab" x="566" y="68">heading "我的订单"</text><text class="t-hot end" x="866" y="68">e2</text>
+    <text class="t-lab" x="566" y="90">textbox "搜索订单"</text><text class="t-hot end" x="866" y="90">e7</text>
+    <text class="t-lab" x="566" y="112">button "搜索"</text><text class="t-hot end" x="866" y="112">e8</text>
+    <text class="t-lab" x="566" y="134">link "订单 3021…"</text><text class="t-hot end" x="866" y="134">e15</text>
+    <path class="e" d="M480 66 H548" marker-end="url(#a)"/>
+    <text class="t-lab mid" x="514" y="58">写文件</text>
+    <path class="e-dash" d="M550 150 C 420 180, 260 175, 182 160" marker-end="url(#a)"/>
+    <text class="t-lab mid" x="380" y="188">按需读（cat 快照文件）</text>
+    <g class="badge"><circle cx="550" cy="20" r="10"/><text x="550" y="24">2</text></g>
+
+    <rect class="node" x="250" y="220" width="230" height="60" rx="4"/>
+    <text class="t-name" x="365" y="244">按编号操作</text>
+    <text class="t-sub" x="365" y="266">browser fill e7 3021 · click e8</text>
+    <path class="e" d="M180 172 L248 236" marker-end="url(#a)"/>
+    <g class="badge"><circle cx="250" cy="220" r="10"/><text x="250" y="224">3</text></g>
+
+    <rect class="node" x="960" y="112" width="250" height="76" rx="4"/>
+    <text class="t-name" x="1085" y="144">Chromium</text>
+    <text class="t-sub" x="1085" y="166">点到「搜索」按钮，页面变了</text>
+    <path class="e" d="M480 250 C 700 250, 860 220, 958 176" marker-end="url(#a)"/>
+    <text class="t-lab mid" x="720" y="262">经 CDP 点到对应的元素</text>
+    <path class="e-hot" d="M1085 112 V-16 H365 V34" marker-end="url(#h)"/>
+    <text class="t-hot mid" x="725" y="6">页面变了，旧编号作废：再拍一次</text>
+    <g class="badge"><circle cx="960" cy="112" r="10"/><text x="960" y="116">4</text></g>
+    </g>
+  </svg>
+  <ol class="steps">
+    <li><span class="n">1</span>模型执行 <code>browser snapshot</code>。浏览器把当前页面整理成无障碍树，每行带一个编号，写进会话工作目录的隐藏目录，命令输出里只给文件路径和页面标题。</li>
+    <li><span class="n">2</span>模型用 Shell 读这个文件。快照写文件、按需读，而不是每次都塞进对话：一页的清单可能有几千字，模型只在需要时读一次。</li>
+    <li><span class="n">3</span>模型按编号操作：填写、点击、选择、按键。它说的是「e8」，不是坐标，所以不会点偏。</li>
+    <li><span class="n">4</span>页面变了，编号就作废，模型再拍一次快照，循环下去。canvas、图形验证码这类清单里写不出来的，能看图的模型可以 <code>browser screenshot</code> 截图再读图；不能看图的就请人接管。</li>
+  </ol>
+  <p>为什么用命令行而不是 MCP 工具：原生智能体和 CLI 智能体都有 Shell，命令行工具不用时几乎不占上下文，快照放在文件里按需读；MCP 每次请求都带着一大段工具定义，快照还会进对话历史。实测同一个任务，MCP 方式的 token 是命令行的四倍左右。代价是页面变了要自己记得重新拍快照，这条写在浏览器技能里。</p>
+
+  <h2>原理 2　浏览器在哪：一个人一个浏览器，会话各用各的窗口</h2>
+  <p>沙箱本来就按人共享：同一个人、同一个镜像的会话共用一个沙箱。浏览器跟着沙箱走，所以<b>一个人一个常驻的 Chromium</b>，这个人的各个会话各开各的窗口，cookie 是同一份——在一个会话里登录了，别的会话也是登录状态。</p>
+  <svg width="1240" viewBox="0 0 1240 430" role="img" aria-label="浏览器沙箱里的进程">
+    <rect class="bnd" x="20" y="20" width="910" height="390" rx="6"/>
+    <text class="t-head" x="36" y="44">这个人的浏览器沙箱（一个 Pod）</text>
+
+    <rect class="node" x="44" y="70" width="210" height="56" rx="4"/>
+    <text class="t-name" x="149" y="94">会话 A 的命令</text>
+    <text class="t-sub" x="149" y="114">browser …（会话名 A）</text>
+    <rect class="node" x="44" y="150" width="210" height="56" rx="4"/>
+    <text class="t-name" x="149" y="174">会话 B 的命令</text>
+    <text class="t-sub" x="149" y="194">browser …（会话名 B）</text>
+    <rect class="node" x="44" y="230" width="210" height="56" rx="4"/>
+    <text class="t-name" x="149" y="254">B 派的子智能体 C</text>
+    <text class="t-sub" x="149" y="274">有自己的会话名</text>
+
+    <rect class="node" x="330" y="64" width="300" height="230" rx="4"/>
+    <text class="t-name" x="480" y="90">Chromium（有界面）</text>
+    <text class="t-sub" x="480" y="110">profile 在本地盘 · CDP 只开 127.0.0.1</text>
+    <rect class="cell" x="350" y="124" width="120" height="34" rx="3"/><text class="t-lab mid" x="410" y="146">窗口 A</text>
+    <rect class="cell" x="350" y="174" width="120" height="34" rx="3"/><text class="t-lab mid" x="410" y="196">窗口 B</text>
+    <rect class="cell" x="350" y="224" width="120" height="34" rx="3"/><text class="t-lab mid" x="410" y="246">窗口 C</text>
+    <rect class="node-hot" x="490" y="150" width="124" height="80" rx="3"/>
+    <text class="t-hot mid b" x="552" y="182">接管窗口</text>
+    <text class="t-hot mid" x="552" y="204">人登录用</text>
+    <path class="e" d="M254 98 L348 140" marker-end="url(#a)"/>
+    <path class="e" d="M254 178 L348 190" marker-end="url(#a)"/>
+    <path class="e" d="M254 258 L348 242" marker-end="url(#a)"/>
+    <text class="t-lab mid" x="300" y="312">经 Playwright CLI，CDP</text>
+
+    <rect class="node" x="330" y="330" width="300" height="56" rx="4"/>
+    <text class="t-name" x="480" y="354">浏览器守护</text>
+    <text class="t-sub" x="480" y="374">拉起、看着、导入导出登录态、开关接管窗口</text>
+    <path class="e-mute" d="M480 330 V296" marker-end="url(#m)"/>
+
+    <rect class="node" x="700" y="64" width="200" height="70" rx="4"/>
+    <text class="t-name" x="800" y="94">虚拟屏幕</text>
+    <text class="t-sub" x="800" y="114">Xvfb，1920×1080</text>
+    <path class="e" d="M630 110 H698" marker-end="url(#a)"/>
+    <text class="t-lab mid" x="664" y="102">画在上面</text>
+    <rect class="node" x="700" y="180" width="200" height="70" rx="4"/>
+    <text class="t-name" x="800" y="210">画面服务</text>
+    <text class="t-sub" x="800" y="230">x11vnc + websockify :6080</text>
+    <path class="e" d="M800 180 V136" marker-end="url(#a)"/>
+    <text class="t-lab" x="808" y="164">读屏、注入键鼠</text>
+    <rect class="cell" x="700" y="300" width="200" height="86" rx="4"/>
+    <text class="t-name" x="800" y="328">本地盘</text>
+    <text class="t-sub" x="800" y="350">profile（随沙箱存活）</text>
+    <text class="t-sub" x="800" y="370">登录态文件（用完即删）</text>
+    <path class="e-mute" d="M630 358 H698" marker-end="url(#m)"/>
+
+    <rect class="node" x="980" y="64" width="240" height="70" rx="4"/>
+    <text class="t-name" x="1100" y="94">Agent 服务</text>
+    <text class="t-sub" x="1100" y="114">经 execd 发平台命令</text>
+    <path class="e" d="M980 124 H952 V400 H560 V388" marker-end="url(#a)"/>
+    <text class="t-lab" x="958" y="284">平台命令</text>
+    <path class="e-hot" d="M1100 134 C 1100 200, 960 215, 902 215" marker-end="url(#h)"/>
+    <text class="t-hot" x="1000" y="236">画面（带口令）</text>
+    <rect class="cell" x="980" y="300" width="240" height="86" rx="4"/>
+    <text class="t-name" x="1100" y="328">/data（对象存储挂载）</text>
+    <text class="t-sub" x="1100" y="350">快照、截图写在会话的</text>
+    <text class="t-sub" x="1100" y="370">隐藏目录 .atlas/{会话}/browser/</text>
+    <g class="badge"><circle cx="44" cy="70" r="10"/><text x="44" y="74">1</text></g>
+    <g class="badge"><circle cx="490" cy="150" r="10"/><text x="490" y="154">2</text></g>
+    <g class="badge"><circle cx="700" cy="300" r="10"/><text x="700" y="304">3</text></g>
+    <g class="badge"><circle cx="700" cy="180" r="10"/><text x="700" y="184">4</text></g>
+  </svg>
+  <ol class="steps">
+    <li><span class="n">1</span>每条 <code>browser</code> 命令都带着这个会话的会话名（平台给每条命令加的环境变量，等于会话的 id）。<code>browser</code> 把它交给 Playwright CLI，第一次用时经 CDP 连上这个 Chromium、开一个自己的窗口，之后各用各的窗口，互不打断。子智能体有自己的会话，也就有自己的窗口，可以和父会话并行操作。为什么是窗口而不是同一个窗口里的标签页：后台标签页里 Chromium 不刷新画面，模型点击前的「稳定」检查就一直等到超时；每个会话的页面都是自己窗口里的前台页，才都点得动。</li>
+    <li><span class="n">2</span>人接管时，守护单独开一个<b>接管窗口</b>打开模型给的地址，不碰模型正在用的标签页：平台分不清哪个标签页属于哪个会话，人在专用窗口里操作也不会打乱模型的页面。登录写进的是整个浏览器共用的 cookie，模型的页面刷新一下就是登录状态。</li>
+    <li><span class="n">3</span>profile 放在沙箱的本地盘上，不放 /data：Chromium 的 profile 是 SQLite，放不了对象存储挂载；/data 还是这个人所有智能体的 Shell 都能读的地方。本地盘随沙箱存活，守护或 Chromium 挂了重启，登录还在；沙箱回收前，平台把登录态导出存好（原理 5）。</li>
+    <li><span class="n">4</span>Chromium 用有界面模式，画在虚拟屏幕上：人接管时要看到并操作同一个浏览器，无界面模式没有屏幕可以转出去。虚拟屏幕不需要显卡，CPU 就能跑。</li>
+  </ol>
+  <p>代价：同一个人的几个会话同时在同一个网站上操作时，可能互相影响（比如一个会话退出了登录）。每个人一个浏览器、约 0.5–1.5 GB 内存，这个人没开浏览器的智能体不受影响（用的是普通沙箱）。</p>
+
+  <h2>原理 3　怎么起来：按智能体开，换镜像，沙箱建好时拉起</h2>
+  <p>浏览器能力按智能体开关。开了，就换一个带浏览器的镜像；沙箱建好时，平台把这个人的登录态导进去，再拉起浏览器。模型不用管这些，它只管执行 <code>browser</code> 命令。</p>
+  <svg width="1240" viewBox="0 0 1240 310" role="img" aria-label="开关、镜像与拉起">
+    <rect class="node" x="20" y="110" width="170" height="76" rx="4"/>
+    <text class="t-name" x="105" y="142">智能体配置</text>
+    <text class="t-sub" x="105" y="164">浏览器：开</text>
+    <path class="e" d="M190 132 L258 84" marker-end="url(#a)"/>
+    <path class="e" d="M190 164 L258 212" marker-end="url(#a)"/>
+    <rect class="node" x="260" y="44" width="230" height="64" rx="4"/>
+    <text class="t-name" x="375" y="70">原生智能体</text>
+    <text class="t-sub" x="375" y="92">换成浏览器沙箱镜像</text>
+    <rect class="node" x="260" y="188" width="230" height="64" rx="4"/>
+    <text class="t-name" x="375" y="214">CLI 智能体</text>
+    <text class="t-sub" x="375" y="236">换成浏览器 CLI 镜像</text>
+    <rect class="gap" x="20" y="226" width="200" height="66" rx="4"/>
+    <text class="t-hot" x="32" y="252">配了自定义镜像</text>
+    <text class="t-hot" x="32" y="274">不能开：保存时就拒绝</text>
+
+    <path class="e" d="M490 76 L558 128" marker-end="url(#a)"/>
+    <path class="e" d="M490 220 L558 168" marker-end="url(#a)"/>
+    <rect class="node" x="560" y="110" width="250" height="76" rx="4"/>
+    <text class="t-name" x="685" y="140">沙箱按（模板，镜像）共享</text>
+    <text class="t-sub" x="685" y="162">一个人一个带浏览器的沙箱</text>
+    <path class="e" d="M810 148 H858" marker-end="url(#a)"/>
+    <text class="t-lab mid" x="834" y="140">建好</text>
+
+    <rect class="band-a" x="860" y="20" width="360" height="270" rx="4"/>
+    <text class="t-head" x="876" y="44">附加件（通用供给回调）</text>
+    <text class="t-lab" x="876" y="76">① 读这个人的登录态，跳过过期的、解密合并</text>
+    <text class="t-lab" x="876" y="106">② 上传到沙箱本地盘</text>
+    <text class="t-lab" x="876" y="136">③ 拉起守护：虚拟屏幕、Chromium、画面服务</text>
+    <text class="t-lab" x="876" y="166">　　导入登录态，删掉文件</text>
+    <text class="t-lab" x="876" y="196">④ 登记为浏览器宿主</text>
+    <text class="t-mute" x="876" y="236">之后每条命令带会话名；守护挂了由</text>
+    <text class="t-mute" x="876" y="258">守护或 browser 命令就地重启</text>
+  </svg>
+  <p>几点说明：</p>
+  <ol class="steps">
+    <li><span class="n">1</span><b>为什么换镜像，而不是装进默认镜像。</b>Chromium 加中文字体有几百 MB，大多数智能体用不上；strict 档沙箱的根目录只读，浏览器只能在构建镜像时装好。换了镜像，沙箱按（模板，镜像）共享的规则自然把带浏览器的沙箱和普通沙箱分开。浏览器技能（教模型怎么用 <code>browser</code> 命令）随开关自动带上。</li>
+    <li><span class="n">2</span><b>为什么由平台拉起，而不是模型第一次用时自己拉起。</b>登录态要在打开第一个网页之前导进去，而沙箱里拿不到登录态（没有凭据去平台取，也不该有）。所以在沙箱建好的那一刻，由平台带着登录态把浏览器拉起来。</li>
+    <li><span class="n">3</span><b>沙箱组件不认识浏览器。</b>沙箱组件只提供一个「附加件」扩展点：建好后、退役前按顺序回调登记过的附加件；浏览器的附加件看请求上有没有「带浏览器」这个属性，决定管不管。这样依赖只有浏览器 → 沙箱一个方向。</li>
+  </ol>
+
+  <h2>原理 4　人接管：停下、打开、登录、交还</h2>
+  <p>模型遇到登录、短信码、图形验证码，就调 <code>request_takeover</code>，写一句给人看的话和要打开的地址，然后停下。接管是「等人决定的事」的第四种，和工具确认、计划审批、提问共用一张表、一张卡片、一套作废和唤醒。<b>不设超时</b>：人可以第二天再来处理。</p>
+  <svg width="1240" viewBox="0 0 1240 350" role="img" aria-label="接管的时间线">
+    <rect class="band-a" x="20" y="20" width="1200" height="96" rx="4"/>
+    <text class="t-head" x="32" y="42">模型</text>
+    <rect class="band-a" x="20" y="126" width="1200" height="96" rx="4"/>
+    <text class="t-head" x="32" y="148">平台</text>
+    <rect class="band-b" x="20" y="232" width="1200" height="96" rx="4"/>
+    <text class="t-head" x="32" y="254">人</text>
+
+    <rect class="node" x="90" y="46" width="140" height="56" rx="4"/>
+    <text class="t-name" x="160" y="70">请求接管</text>
+    <text class="t-sub" x="160" y="90">一句话 + 地址</text>
+    <rect class="node" x="230" y="152" width="150" height="56" rx="4"/>
+    <text class="t-name" x="305" y="176">登记、停下</text>
+    <text class="t-sub" x="305" y="196">原生挂起 / CLI 在线等</text>
+    <rect class="node" x="380" y="258" width="140" height="56" rx="4"/>
+    <text class="t-name" x="450" y="282">看到卡片</text>
+    <text class="t-sub" x="450" y="302">点「打开」</text>
+    <rect class="node" x="520" y="152" width="160" height="56" rx="4"/>
+    <text class="t-name" x="600" y="176">确保浏览器</text>
+    <text class="t-sub" x="600" y="196">开接管窗口、接上画面</text>
+    <rect class="node-hot" x="680" y="258" width="150" height="56" rx="4"/>
+    <text class="t-name" x="755" y="282">在画面里登录</text>
+    <text class="t-sub" x="755" y="302">密码只经画面</text>
+    <rect class="node" x="830" y="258" width="110" height="56" rx="4"/>
+    <text class="t-name" x="885" y="282">点「交还」</text>
+    <text class="t-sub" x="885" y="302">可附一句话</text>
+    <rect class="node" x="940" y="152" width="140" height="56" rx="4"/>
+    <text class="t-name" x="1010" y="176">先存登录态</text>
+    <text class="t-sub" x="1010" y="196">再做决定、唤醒</text>
+    <rect class="node" x="1070" y="46" width="140" height="56" rx="4"/>
+    <text class="t-name" x="1140" y="70">重新拍快照</text>
+    <text class="t-sub" x="1140" y="90">接着做</text>
+
+    <path class="e" d="M230 102 L262 150" marker-end="url(#a)"/>
+    <path class="e" d="M380 208 L410 256" marker-end="url(#a)"/>
+    <path class="e" d="M520 258 L548 210" marker-end="url(#a)"/>
+    <path class="e" d="M680 208 L708 256" marker-end="url(#a)"/>
+    <path class="e" d="M830 286 H828" marker-end="url(#a)"/>
+    <path class="e" d="M940 258 L968 210" marker-end="url(#a)"/>
+    <path class="e" d="M1080 152 L1110 104" marker-end="url(#a)"/>
+    <g class="badge"><circle cx="90" cy="46" r="10"/><text x="90" y="50">1</text></g>
+    <g class="badge"><circle cx="230" cy="152" r="10"/><text x="230" y="156">2</text></g>
+    <g class="badge"><circle cx="520" cy="152" r="10"/><text x="520" y="156">3</text></g>
+    <g class="badge"><circle cx="680" cy="258" r="10"/><text x="680" y="262">4</text></g>
+    <g class="badge"><circle cx="940" cy="152" r="10"/><text x="940" y="156">5</text></g>
+    <g class="badge"><circle cx="1070" cy="46" r="10"/><text x="1070" y="50">6</text></g>
+  </svg>
+  <ol class="steps">
+    <li><span class="n">1</span>模型调 <code>request_takeover</code>，参数只有给人看的一句话和要打开的地址。参数里没有会话和窗口，这些由平台带上，模型指定不了别人的会话。</li>
+    <li><span class="n">2</span>平台登记一件「接管」事项，对话里出现接管卡片。原生智能体的这一段随即挂起，不占进程；CLI 智能体停在这次工具调用里在线等，和它的权限请求一样。</li>
+    <li><span class="n">3</span>人点「打开」：平台先确认他是沙箱的主人，再确保浏览器在——沙箱被闲置回收了就重建并导入登录态；然后让守护记下此刻的 cookie（「接管前的样子」），开一个接管窗口打开模型给的地址，同时把实时画面接到卡片上（原理 6）。</li>
+    <li><span class="n">4</span>人在画面里输账号、密码、短信码。这些输入从人的键盘经画面直达浏览器窗口，不进模型的上下文，也不进日志。</li>
+    <li><span class="n">5</span>人点「交还」：平台让守护关掉接管窗口、比较接管前后的 cookie，找出这次登录的站点（原理 5 的算例），把这些站点的登录态加密存好，<b>然后</b>才记下决定、唤醒 run。先存再唤醒：续跑可能落在一个新沙箱上，存好了才导得进去。</li>
+    <li><span class="n">6</span>模型拿到的工具结果是「用户已操作完并交还，页面可能变了，先重新拍快照」，加上人写的说明。人点「不处理」时，结果是「用户没有接管」和原因，模型不该为同一件事再请求。</li>
+  </ol>
+  <table>
+    <thead><tr><th style="width: 16%"></th><th style="width: 42%">原生智能体</th><th>CLI 智能体（Claude Code 等）</th></tr></thead>
+    <tbody>
+      <tr><td>怎么请求</td><td>引擎里的 <code>request_takeover</code> 工具，经审批登记</td><td>bridge 本机 MCP 上的平台工具 <code>request_takeover</code>，转给平台登记（和 CLI 记忆的平台工具是同一条通道）</td></tr>
+      <tr><td>等的时候</td><td>这一段挂起，进程空出来；等多久都行</td><td>run 仍在跑、标为等人处理；会话的 Pod 和 CLI 进程一直在</td></tr>
+      <tr><td>浏览器在哪</td><td>工作区的沙箱；被回收了，「打开」时重建</td><td>会话的 Pod；接管时 run 在跑，Pod 不会被回收</td></tr>
+      <tr><td>交还之后</td><td>放回排队、抢锁续跑，按决定换成工具结果</td><td>在线等待返回，结果文字经 bridge 交回 CLI</td></tr>
+    </tbody>
+  </table>
+
+  <h2>原理 5　登录态：存在哪、存哪些、什么时候存和恢复</h2>
+  <p>登录态由平台加密保管在 Atlas 的库里，<b>按人、按站点</b>一行。它不放在 /data：/data 是对象存储挂载，这个人所有的智能体（包括没开浏览器的）的 Shell 都能读，放在那里，「按智能体开浏览器」就形同虚设。</p>
+  <svg width="1240" viewBox="0 0 1240 380" role="img" aria-label="登录态的一生">
+    <rect class="node-hot" x="460" y="150" width="320" height="84" rx="4"/>
+    <text class="t-name" x="620" y="182">Atlas 库：登录态</text>
+    <text class="t-sub" x="620" y="206">按人、按站点一行 · 密文 · 只用更新的覆盖</text>
+
+    <rect class="node" x="20" y="30" width="330" height="64" rx="4"/>
+    <text class="t-name" x="185" y="56">交还时</text>
+    <text class="t-sub" x="185" y="78">存这次登录的站点（新增或覆盖）</text>
+    <rect class="node" x="20" y="160" width="330" height="64" rx="4"/>
+    <text class="t-name" x="185" y="186">每段 / 每轮结束后（异步）</text>
+    <text class="t-sub" x="185" y="208">刷新已经存过的站点</text>
+    <rect class="node" x="20" y="290" width="330" height="64" rx="4"/>
+    <text class="t-name" x="185" y="316">沙箱退役前</text>
+    <text class="t-sub" x="185" y="338">再刷新一次，失败不拦退役</text>
+    <path class="e" d="M350 62 L458 166" marker-end="url(#a)"/>
+    <path class="e" d="M350 192 H458" marker-end="url(#a)"/>
+    <path class="e" d="M350 322 L458 220" marker-end="url(#a)"/>
+    <text class="t-lab mid" x="404" y="184">写</text>
+
+    <rect class="node" x="890" y="30" width="330" height="64" rx="4"/>
+    <text class="t-name" x="1055" y="56">新沙箱拉起浏览器时</text>
+    <text class="t-sub" x="1055" y="78">整份导入（跳过过期的）</text>
+    <path class="e" d="M780 170 L888 70" marker-end="url(#a)"/>
+    <text class="t-lab mid" x="834" y="108">读</text>
+    <rect class="node" x="890" y="160" width="330" height="64" rx="4"/>
+    <text class="t-name" x="1055" y="186">「我的登录」</text>
+    <text class="t-sub" x="1055" y="208">看存了哪些站点、何时存的、是否过期</text>
+    <path class="e" d="M888 192 H782" marker-end="url(#a)"/>
+    <text class="t-lab mid" x="836" y="184">列出、删除</text>
+    <rect class="cell" x="890" y="290" width="330" height="64" rx="4"/>
+    <text class="t-name" x="1055" y="316">正在跑的浏览器</text>
+    <text class="t-sub" x="1055" y="338">删除时也清掉这个站点（尽力）</text>
+    <path class="e-mute" d="M1055 224 V288" marker-end="url(#m)"/>
+    <g class="badge"><circle cx="20" cy="30" r="10"/><text x="20" y="34">1</text></g>
+    <g class="badge"><circle cx="20" cy="160" r="10"/><text x="20" y="164">2</text></g>
+    <g class="badge"><circle cx="20" cy="290" r="10"/><text x="20" y="294">3</text></g>
+    <g class="badge"><circle cx="890" cy="30" r="10"/><text x="890" y="34">4</text></g>
+    <g class="badge"><circle cx="890" cy="160" r="10"/><text x="890" y="164">5</text></g>
+  </svg>
+  <ol class="steps">
+    <li><span class="n">1</span><b>只有交还时会新增站点。</b>平台只存人确实登录过的站点；模型自己逛过的网站、广告和统计的 cookie 一律不存。怎么知道这次登录了哪些站点，见下面的算例。</li>
+    <li><span class="n">2</span><b>段末、轮末刷新。</b>网站会不时换发新的 cookie（续期），所以每次模型用完浏览器，平台就在后台把已存站点的最新登录态导出来，不拖慢这一轮。沙箱可能突然没了（节点重启），勤刷新才不会丢太多。</li>
+    <li><span class="n">3</span><b>退役前再刷一次。</b>闲置回收、删除会话都会让沙箱退役，退役前平台再导出一次。导出失败不拦退役，只少一次刷新。</li>
+    <li><span class="n">4</span><b>新沙箱整份导入。</b>同一个人的原生智能体和 CLI 智能体用的是两个不同的沙箱，但登录态来自同一个地方，在哪边登录过，另一边下次新建时都能用。</li>
+    <li><span class="n">5</span><b>按站点看、按站点删。</b>删除只影响以后：库里删掉，正在跑的浏览器里也尽力清掉。</li>
+  </ol>
+  <p><b>为什么只用更新的覆盖。</b>两个沙箱可能前后导出同一个站点，后台刷新也可能比交还时的保存晚到。每行记着「从浏览器里导出的时间」，写入时只有比库里新才覆盖，旧的不会盖掉新的，不用加锁。</p>
+  <p><b>为什么存 cookie 和本地存储，不存整个 profile。</b>profile 有几百 MB、和 Chromium 版本绑在一起；cookie 和本地存储导出成一个 JSON，换镜像版本也能导入。代价是少数把登录放在别处（如 IndexedDB）的网站，换了沙箱要重新登录。</p>
+  <h3>算例：交还时怎么找出「这次登录的站点」</h3>
+  <p>打开接管时，守护先记下浏览器里全部 cookie；交还时再取一次，按（域名，名字，值）比较。新增或值变了的 cookie，它所在的可注册域名就是这次登录的站点；只删不增的（比如退出登录）不算。</p>
+  <svg width="1240" viewBox="0 0 1240 270" role="img" aria-label="比较接管前后的 cookie">
+    <rect class="cell" x="20" y="20" width="400" height="230" rx="4"/>
+    <text class="t-head" x="36" y="44">接管前（打开时记下）</text>
+    <text class="t-lab" x="36" y="76">.baidu.com · BAIDUID = 9F2A…</text>
+    <text class="t-lab" x="36" y="104">.taobao.com · cna = Zk8…</text>
+    <text class="t-lab" x="36" y="132">login.taobao.com · _m_h5_tk = a1…</text>
+    <text class="t-mute" x="36" y="186">模型之前逛过百度、打开过淘宝登录页</text>
+
+    <rect class="cell" x="470" y="20" width="420" height="230" rx="4"/>
+    <text class="t-head" x="486" y="44">交还时（再取一次）</text>
+    <text class="t-lab" x="486" y="76">.baidu.com · BAIDUID = 9F2A…</text>
+    <text class="t-mute" x="756" y="76">没变</text>
+    <text class="t-lab" x="486" y="104">.taobao.com · cna = Zk8…</text>
+    <text class="t-mute" x="756" y="104">没变</text>
+    <text class="t-hot" x="486" y="132">login.taobao.com · _m_h5_tk = c7…</text>
+    <text class="t-hot" x="776" y="132">变了</text>
+    <text class="t-hot" x="486" y="160">.taobao.com · cookie2 = 1f3…</text>
+    <text class="t-hot" x="756" y="160">新增</text>
+    <text class="t-hot" x="486" y="188">.taobao.com · _tb_token_ = e5…</text>
+    <text class="t-hot" x="756" y="188">新增</text>
+    <text class="t-hot" x="486" y="216">.tmall.com · cookie2 = 1f3…</text>
+    <text class="t-hot" x="756" y="216">新增（单点登录）</text>
+    <path class="e" d="M420 135 H468" marker-end="url(#a)"/>
+    <text class="t-lab mid" x="444" y="127">比较</text>
+
+    <path class="e-hot" d="M890 150 H948" marker-end="url(#h)"/>
+    <rect class="node-hot" x="950" y="80" width="270" height="140" rx="4"/>
+    <text class="t-name" x="1085" y="110">这次登录的站点</text>
+    <text class="t-hot mid b" x="1085" y="142">taobao.com</text>
+    <text class="t-hot mid b" x="1085" y="166">tmall.com</text>
+    <text class="t-sub" x="1085" y="196">baidu.com 没变，不存</text>
+  </svg>
+
+  <h2>原理 6　画面怎么到人眼前</h2>
+  <p>控制台是 HTTPS 页面，沙箱的画面服务在集群里、是明文的，浏览器不允许在 HTTPS 页面里直接连它；沙箱里跑的东西模型也能改，不该把它的网页嵌进控制台。所以<b>看画面的客户端（noVNC）随控制台一起发布，沙箱只出一条画面数据流</b>，由 Agent 服务在中间转发。</p>
+  <svg width="1240" viewBox="0 0 1240 250" role="img" aria-label="画面的链路">
+    <rect class="node" x="10" y="60" width="214" height="76" rx="4"/>
+    <text class="t-name" x="117" y="90">控制台</text>
+    <text class="t-sub" x="117" y="112">noVNC 客户端（随控制台发布）</text>
+    <rect class="node" x="270" y="60" width="150" height="76" rx="4"/>
+    <text class="t-name" x="345" y="90">网关</text>
+    <text class="t-sub" x="345" y="112">校验登录</text>
+    <rect class="node" x="490" y="40" width="230" height="116" rx="4"/>
+    <text class="t-name" x="605" y="70">Agent 服务 · 画面</text>
+    <text class="t-sub" x="605" y="94">核对：是会话的创建人</text>
+    <text class="t-sub" x="605" y="114">浏览器正在跑；算出口令</text>
+    <text class="t-sub" x="605" y="134">连着时每分钟记一次活动</text>
+    <rect class="node" x="790" y="60" width="190" height="76" rx="4"/>
+    <text class="t-name" x="885" y="90">沙箱的画面通道</text>
+    <text class="t-sub" x="885" y="112">只收 sandbox_uuid、端口</text>
+    <rect class="node" x="1040" y="60" width="180" height="76" rx="4"/>
+    <text class="t-name" x="1130" y="90">画面服务 :6080</text>
+    <text class="t-sub" x="1130" y="112">→ 虚拟屏幕 → Chromium</text>
+    <path class="e" d="M224 98 H268" marker-end="url(#a)"/>
+    <path class="e" d="M420 98 H488" marker-end="url(#a)"/>
+    <path class="e" d="M720 98 H788" marker-end="url(#a)"/>
+    <path class="e" d="M980 98 H1038" marker-end="url(#a)"/>
+    <text class="t-lab mid" x="234" y="160">WebSocket</text>
+    <text class="t-lab mid" x="234" y="178">同源 HTTPS</text>
+    <text class="t-lab mid" x="1010" y="160">集群内</text>
+    <text class="t-lab mid" x="1010" y="178">带口令</text>
+    <path class="e-hot" d="M110 200 H1130" marker-end="url(#h)" marker-start="url(#h)"/>
+    <text class="t-hot mid" x="620" y="228">画面往左、键盘鼠标往右，两边原样转发；不解析、不记录</text>
+    <g class="badge"><circle cx="10" cy="60" r="10"/><text x="10" y="64">1</text></g>
+    <g class="badge"><circle cx="490" cy="40" r="10"/><text x="490" y="44">2</text></g>
+    <g class="badge"><circle cx="790" cy="60" r="10"/><text x="790" y="64">3</text></g>
+    <g class="badge"><circle cx="1040" cy="60" r="10"/><text x="1040" y="64">4</text></g>
+  </svg>
+  <ol class="steps">
+    <li><span class="n">1</span>接管卡片里的画面、会话里的「浏览器」按钮都连同一个地址，走同一个源，网关照常校验登录。不接管时默认只看、不操作，免得打乱模型；接管时可以操作。手机 App 不显示画面，只提示「请在电脑上处理」。</li>
+    <li><span class="n">2</span>Agent 服务只让会话的创建人看：画面里是他登录后的网页，接管时还在输他的密码。浏览器必须已经在跑——看画面不会为此新建沙箱，要建是接管「打开」做的事。连着画面的这段时间算沙箱的活动：人登录可能要好几分钟，这期间沙箱里没有命令在跑，不算活动就会被闲置回收。</li>
+    <li><span class="n">3</span>画面通道是沙箱组件的通用能力，和执行命令、读写文件一样只收 sandbox_uuid：沙箱的地址和令牌不出沙箱组件。</li>
+    <li><span class="n">4</span>画面口令由部署密钥和 sandbox_uuid 算出来，不存：拉起守护时算一次带进去，转发时落在哪个实例都能再算出来；沙箱重建，口令跟着换。</li>
+  </ol>
+
+  <h2>原理 7　边界：什么不经过模型，什么模型碰得到</h2>
+  <p>接管保证的是<b>密码和验证码不经过模型</b>，不是「模型碰不到登录态」：浏览器和模型的 Shell 在同一个沙箱、同一个身份下，模型能读 profile，也能经调试接口读出 cookie。这是选定的取舍（浏览器和 Shell 不拆成两个容器），用下面几条把影响收在开了浏览器的智能体里。</p>
+  <svg width="1240" viewBox="0 0 1240 260" role="img" aria-label="边界">
+    <rect class="band-a" x="20" y="20" width="590" height="220" rx="4"/>
+    <text class="t-head" x="36" y="46">不经过模型</text>
+    <text class="t-lab" x="36" y="80">· 密码、短信码：人的键盘 → 画面 → 浏览器窗口</text>
+    <text class="t-lab" x="36" y="110">· 画面数据：只在控制台和沙箱之间原样转发，不落日志</text>
+    <text class="t-lab" x="36" y="140">· 交还：只能由人点，模型不能替人交还</text>
+    <text class="t-lab" x="36" y="170">· 保存的登录态：在库里加密，密文和人、站点绑在一起</text>
+    <text class="t-lab" x="36" y="200">· 没开浏览器的智能体：读不到登录态（不在 /data）</text>
+    <rect class="band-b" x="630" y="20" width="590" height="220" rx="4"/>
+    <text class="t-head" x="646" y="46">开了浏览器的智能体碰得到</text>
+    <text class="t-lab" x="646" y="80">· 页面内容，以及浏览器里的 cookie 和本地存储</text>
+    <text class="t-lab" x="646" y="110">· 导入时短暂落在本地盘上的登录态文件</text>
+    <text class="t-hot" x="646" y="150">所以：浏览器能力按智能体单独开；</text>
+    <text class="t-hot" x="646" y="176">画面只给沙箱主人；只存人登录过的站点；</text>
+    <text class="t-hot" x="646" y="202">这个人随时可以在「我的登录」里删掉。</text>
+  </svg>
+
+  <h2>设计决策</h2>
+  <table>
+    <thead><tr><th style="width: 28%">决策</th><th>理由</th></tr></thead>
+    <tbody>
+      <tr><td>模型按无障碍树和元素编号操作，用 Playwright CLI，不用 MCP</td><td>纯文本模型也能用、点得准；原生和 CLI 智能体都有 Shell，命令行不用时几乎不占上下文，快照写文件按需读。看截图点坐标只作为能看图的模型的补充。</td></tr>
+      <tr><td>开浏览器 = 换一个带浏览器的镜像</td><td>大多数智能体用不上浏览器，不该背着几百 MB；strict 档根目录只读，只能构建时装。换镜像后，沙箱按（模板，镜像）共享的规则自动把浏览器沙箱分开。</td></tr>
+      <tr><td>一个人一个常驻浏览器，会话各用自己的会话名</td><td>沙箱本来按人共享，登录态也属于人：登录一次，这个人的会话都能用。代价是同一个人的几个会话同时操作同一个网站时可能互相影响。</td></tr>
+      <tr><td>沙箱建好时由平台拉起浏览器，经通用供给的附加件扩展点</td><td>登录态要在打开第一个网页前导入，而沙箱里拿不到登录态；扩展点让沙箱组件不认识浏览器，依赖只有一个方向。</td></tr>
+      <tr><td>接管是审批的第四种，不设超时</td><td>登记、等人、做决定、唤醒、run 结束时作废，审批都已经有了，前端卡片也是同一套；平台原则是等人不设期限。</td></tr>
+      <tr><td>接管开专用窗口，不碰模型的标签页</td><td>平台分不清标签页属于哪个会话；人在专用窗口里登录，cookie 全浏览器共用，模型刷新页面即可。代价是表单填到一半的验证码，要在新窗口里重走到那一步。</td></tr>
+      <tr><td>交还时先存登录态，再唤醒 run</td><td>续跑可能落在新沙箱上，先存好才导得进去；反过来，模型可能在存好之前就去开网页。</td></tr>
+      <tr><td>画面客户端随控制台发布，经 Agent 服务同源转发，只给沙箱主人</td><td>不把沙箱里的网页嵌进控制台；HTTPS 页面连不了集群里的明文地址；身份在一处核对。画面里是这个人的登录和密码输入。</td></tr>
+      <tr><td>连着画面算沙箱的活动</td><td>人登录要几分钟，期间没有命令在跑；不算活动，闲置回收会把正在登录的浏览器收走。</td></tr>
+      <tr><td>登录态按人、按站点加密存在 Atlas 的库里，不放 /data</td><td>/data 是这个人所有智能体都能读的地方，profile 的 SQLite 也放不了对象存储挂载；按站点存，人看得清、删得掉，并发导出按站点比新旧。</td></tr>
+      <tr><td>只存人登录过的站点，以接管前后 cookie 的变化为准</td><td>少存一份个人数据：模型逛过的网站、广告和统计的 cookie 不进库；单点登录跳到别的域名也能比出来。</td></tr>
+      <tr><td>浏览器和模型的 Shell 在同一个沙箱，按智能体开关</td><td>把浏览器拆到另一个容器、只给受限接口能让模型碰不到 cookie，但要多一层浏览器服务、改动大。智能体本来就代表这个人做事，先接受这个取舍，把影响收在开了浏览器的智能体里。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>改到的现有部分</h2>
+  <table>
+    <thead><tr><th style="width: 22%">部分</th><th>改什么</th></tr></thead>
+    <tbody>
+      <tr><td>智能体配置</td><td>新增「浏览器」开关；开了就换浏览器镜像、自动带浏览器技能；配了自定义镜像时不能开。</td></tr>
+      <tr><td>审批</td><td>新增一种事项：接管（kind = takeover），卡片上是「打开」「交还」「不处理」。</td></tr>
+      <tr><td>原生运行时</td><td>引擎新增 <code>request_takeover</code> 工具（和提问一样挂起、按决定换成工具结果）；开了浏览器的智能体，每条 Shell 命令带会话名；段末异步刷新登录态。</td></tr>
+      <tr><td>CLI 运行时、bridge</td><td>bridge 本机 MCP 上的平台工具多一个 <code>request_takeover</code>（与 CLI 记忆同一条通道）；拉起 bridge 时带会话名；轮末异步刷新登录态。</td></tr>
+      <tr><td>沙箱 · 通用供给</td><td>新增附加件扩展点：沙箱建好后、退役前按顺序回调。</td></tr>
+      <tr><td>沙箱 · 基座执行</td><td>新增画面通道（按 sandbox_uuid 和端口打开 WebSocket）和「记一次活动」。</td></tr>
+      <tr><td>沙箱镜像</td><td>新增浏览器沙箱镜像、浏览器 CLI 镜像：Chromium、中文字体、Playwright CLI、虚拟屏幕、画面服务、浏览器守护。</td></tr>
+      <tr><td>控制台、网关</td><td>接管卡片和实时画面（noVNC）、会话里的「浏览器」按钮、「我的登录」页、编辑器开关；网关给画面地址放行 WebSocket 升级。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>图索引</h2>
+  <p>原理在上面，各图里是具体的交互、类和数据。链接在新标签页打开。</p>
+  <h3>容器图、组件图</h3>
+  <table>
+    <thead><tr><th style="width: 28%">图</th><th>看什么</th></tr></thead>
+    <tbody>
+      <tr><td><a href="../system-context.html" target="_blank" rel="noopener">系统上下文图</a></td><td>新增外部系统「外部网站」：智能体在沙箱的浏览器里访问它。</td></tr>
+      <tr><td><a href="../container.html" target="_blank" rel="noopener">容器图</a></td><td>Shell 沙箱、会话 Pod 换浏览器镜像；控制台看画面走 WebSocket；Agent 服务转发画面到 Shell 沙箱。</td></tr>
+      <tr><td><a href="../component-server.html" target="_blank" rel="noopener">Agent 服务组件图</a></td><td>新增「浏览器」组件：HTTP 接口、原生运行时、CLI 运行时怎么用它，它和审批、沙箱之间的两个方向（附加件回调）。</td></tr>
+      <tr><td><a href="../component-browser-sandbox.html" target="_blank" rel="noopener">Shell 沙箱（浏览器镜像）组件图</a></td><td>沙箱里的六个进程：execd、浏览器守护、浏览器命令、Chromium、虚拟屏幕、画面服务；原理 2。</td></tr>
+    </tbody>
+  </table>
+  <h3>时序图</h3>
+  <table>
+    <thead><tr><th style="width: 28%">图</th><th>看什么</th></tr></thead>
+    <tbody>
+      <tr><td><a href="../dynamic/dynamic-browser-browse.html" target="_blank" rel="noopener">智能体第一次用浏览器</a></td><td>建浏览器沙箱（第 2–3 步）、附加件导入登录态并拉起守护（4–9）、以会话名打开网页和拍快照（10–17）、段末刷新（18–19）；原理 1、2、3。</td></tr>
+      <tr><td><a href="../dynamic/dynamic-browser-takeover.html" target="_blank" rel="noopener">人接管登录（原生智能体）</a></td><td>登记并挂起（1–3）、打开接管与接上画面（4–9）、人登录（10）、交还时先存登录态再唤醒（11–18）；原理 4、6。</td></tr>
+      <tr><td><a href="../dynamic/dynamic-browser-takeover-cli.html" target="_blank" rel="noopener">人接管登录（CLI 智能体）</a></td><td>经 bridge 本机 MCP 的平台工具请求、在线等、决定信号返回、结果交回 CLI；原理 4 的对照表。</td></tr>
+      <tr><td><a href="../dynamic/dynamic-browser-login-state.html" target="_blank" rel="noopener">登录态的回收、恢复与删除</a></td><td>退役前导出（1–8）、新沙箱导入（9–11）、我的登录删除站点（12–15）；原理 5。</td></tr>
+    </tbody>
+  </table>
+  <h3>类图</h3>
+  <table>
+    <thead><tr><th style="width: 28%">图</th><th>看什么</th></tr></thead>
+    <tbody>
+      <tr><td><a href="code-browser.html" target="_blank" rel="noopener">浏览器 · 领域总览</a></td><td>四个领域和依赖方向：接管 → 宿主、登录态；画面 → 宿主；宿主 → 登录态；沙箱只经附加件扩展点回调。</td></tr>
+      <tr><td><a href="code-browser-host.html" target="_blank" rel="noopener">浏览器 · 宿主</a></td><td>BrowserPlan（镜像、技能）、BrowserHost 扩展点（原生、CLI，以后的本机 Chrome）、附加件拉起与 checkpoint、给守护发命令、画面口令；browser_host 表。</td></tr>
+      <tr><td><a href="code-browser-takeover.html" target="_blank" rel="noopener">浏览器 · 接管</a></td><td>TakeoverDesk（CLI 在线等、打开、交还、不处理）、交还时存登录态、给模型的结果文字；和审批、引擎中间件的关系。</td></tr>
+      <tr><td><a href="code-browser-view.html" target="_blank" rel="noopener">浏览器 · 画面</a></td><td>核对主人、原样转发、保活、关闭原因；画面通道由沙箱组件提供。</td></tr>
+      <tr><td><a href="code-browser-login.html" target="_blank" rel="noopener">浏览器 · 登录态</a></td><td>按站点拆分合并、加密（附加数据绑人和站点）、只用更新的覆盖；browser_login 表。</td></tr>
+      <tr><td><a href="code-browser-daemon.html" target="_blank" rel="noopener">Shell 沙箱 · 浏览器守护</a></td><td>守护进程、平台命令、browser 命令、接管窗口与站点比较、登录态进出 Chromium、占位符代填的扩展点。</td></tr>
+    </tbody>
+  </table>
+</main>
+</body>
+</html>

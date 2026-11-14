@@ -105,6 +105,13 @@ spec:
             - {name: DEVICE_GATEWAY_URL, value: "http://atlas-devicegw.atlas-system.svc.cluster.local:8095"}
             - name: DEVICE_GATEWAY_TOKEN
               valueFrom: {secretKeyRef: {name: atlas-devicegw, key: internal_token}}
+            # 沙箱浏览器（c4-model/agent/browser/design-browser.html）：登录态加密密钥、画面口令的派生密钥
+            #   （apply.sh 建 Secret atlas-browser）。浏览器镜像和技能是运行期配置 browser.*（/system/configs）。
+            #   ★ optional：没有这个 Secret 的部署照常运行，只是不能开浏览器
+            - name: BROWSER_STATE_KEYS
+              valueFrom: {secretKeyRef: {name: atlas-browser, key: state_keys, optional: true}}
+            - name: BROWSER_VIEW_SECRET
+              valueFrom: {secretKeyRef: {name: atlas-browser, key: view_secret, optional: true}}
             # 模型（agent-platform/doc/design/model-design.html）：ConfigMap atlas-model-platform 有了才经
             #   模型管理平台（38-modelgateway.yaml）和 LiteLLM（39-litellm.yaml）—— deploy/server/model-cutover.sh
             #   建它；没有时照旧直连 LITELLM_BASE_URL。

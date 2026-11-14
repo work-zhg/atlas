@@ -2,7 +2,8 @@
 
     lifecycle_servers   lifecycle server 实例：sbx、cli，部署了评测档时还有 bench
                         （名字 = 模板绑定的 server）
-    SandboxComponent    一组装好的对象：runtime、exec、egress、provisioning、native、pods、ledger
+    SandboxComponent    一组装好的对象：runtime、exec、channels、egress、provisioning、native、
+                        pods、ledger
 
 ★ 构造不做 IO：哪里有 Redis 客户端就在哪里装一份（一段 run、一次维护、一个请求）。进程内的缓存
   （供给的 by_biz、execd 的地址）跟着各自的生命周期走。
@@ -21,6 +22,7 @@ import httpx
 
 from ..db.session import get_sessionmaker
 from ..runtime_config import RuntimeConfig
+from .base.execution.channels import SandboxChannels
 from .base.execution.execd import ExecdChannel
 from .base.execution.ledger import ActivityLedger
 from .base.lifecycle.runtime import OpenSandboxRuntime
@@ -64,6 +66,7 @@ def lifecycle_servers(
 class SandboxComponent:
     runtime: OpenSandboxRuntime
     exec: ExecdChannel
+    channels: SandboxChannels
     egress: OpenSandboxEgress
     provisioning: SandboxProvisioning
     native: NativeSandboxService
@@ -88,9 +91,10 @@ class SandboxComponent:
             launch_wait_s=settings.opensandbox_timeout_s,
             settle_timeout_s=settings.opensandbox_timeout_s,
         )
+        activity = ActivityLedger(redis)
         exec = ExecdChannel(
             runtime,
-            ActivityLedger(redis),
+            activity,
             usage_scope=settings.sandbox_usage_scope,
             transport=transport,
             files_transport=files_transport,
@@ -125,6 +129,7 @@ class SandboxComponent:
         return cls(
             runtime=runtime,
             exec=exec,
+            channels=SandboxChannels(runtime, activity),
             egress=egress,
             provisioning=provisioning,
             native=NativeSandboxService(provisioning, exec, idle_ttl_s=settings.sandbox_idle_ttl_s),

@@ -1,0 +1,23 @@
+# 浏览器沙箱镜像：开了浏览器能力的原生智能体用（c4-model/agent/browser/design-browser.html）。
+#
+#   docker build -f docker/browser/Dockerfile.sandbox -t atlas-sandbox-browser:dev \
+#     --build-arg BASE=atlas-sandbox:dev .
+#
+# ★ 在默认沙箱镜像上加浏览器：模型常用的工具照旧都在。开浏览器 = 换这个镜像（运行期配置
+#   browser.sandbox_image），沙箱按（模板，镜像）共享的规则自然把它和普通沙箱分开。
+# ★ 守护由 Atlas 在沙箱建好时经 execd 拉起（atlas-browserd serve），不是镜像的入口：
+#   入口照旧是 OpenSandbox 的 execd。
+# ★ 构建上下文是仓库根：要拷 agent-platform/pod/browserd。
+ARG BASE=atlas-sandbox:dev
+FROM ${BASE}
+
+USER root
+COPY docker/browser/install.sh /usr/local/lib/atlas-install-browser.sh
+# 分三层：系统包、Playwright（Python 与 CLI）、守护的源码 —— 改守护只重建最后一层
+RUN sh /usr/local/lib/atlas-install-browser.sh system
+RUN --mount=type=cache,target=/root/.cache/pip sh /usr/local/lib/atlas-install-browser.sh tools
+COPY agent-platform/pod/browserd /tmp/browserd
+RUN sh /usr/local/lib/atlas-install-browser.sh browserd
+
+USER 1000
+WORKDIR /workspace

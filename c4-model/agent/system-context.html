@@ -55,7 +55,10 @@
       "description": "开源沙箱平台，在集群里按需创建隔离的沙箱和 Pod。" },
     { "id": "gitee", "kind": "system", "at": [2, 1.1],
       "name": "Gitee",
-      "description": "代码托管平台，存放智能体提交的代码和产物。" }
+      "description": "代码托管平台，存放智能体提交的代码和产物。" },
+    { "id": "website", "kind": "system", "color": "#6b4f2a", "at": [3, 0.2],
+      "name": "外部网站",
+      "description": "智能体用浏览器访问的互联网站点，如电商、政务网站、企业 SaaS；登录要人来完成。" }
   ],
   "relationships": [
     { "from": "employee", "to": "agent", "description": "配置智能体并与之对话" },
@@ -68,7 +71,8 @@
     { "from": "agent", "to": "mcp", "description": "读取工具定义，代智能体调用工具" },
     { "from": "agent", "to": "skill", "description": "拉取已发布的技能" },
     { "from": "agent", "to": "knowledge", "description": "检索智能体绑定的知识库", "labelAt": 0.7 },
-    { "from": "agent", "to": "memory", "description": "读写用户记忆" }
+    { "from": "agent", "to": "memory", "description": "读写用户记忆" },
+    { "from": "agent", "to": "website", "description": "在沙箱的浏览器里代用户浏览网页，用人接管时登录的状态" }
   ]
 }
 </script>

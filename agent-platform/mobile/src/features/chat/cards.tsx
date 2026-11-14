@@ -17,6 +17,8 @@ import {
   type QuestionAnswerData,
   type QuestionAnsweredData,
   type QuestionSpec,
+  type TakeoverArgs,
+  type TakeoverSettledData,
   type Todo,
 } from "@atlas/chat-ui/src/lib/events";
 import { compactNumber, durationMs } from "@atlas/chat-ui/src/lib/format";
@@ -29,6 +31,47 @@ import { C, F, MONO, R } from "@/theme";
 import { useChat } from "./context";
 
 type ExecutionMode = Exclude<ApprovalMode, "plan">;
+
+// ── 请人接管浏览器（c4-model/agent/browser/design-browser.html）
+
+/**
+ * 手机上不显示画面：在手机屏幕上用 noVNC 操作电脑尺寸的网页很难用。只说要做什么、请在电脑上处理；
+ * 处理完（电脑上交还 / 不处理）显示结果。
+ */
+export function TakeoverCard({
+  approval,
+  waiting,
+  settled,
+}: {
+  approval: PendingApproval;
+  waiting: boolean;
+  settled?: TakeoverSettledData;
+}) {
+  const args = (approval.args ?? {}) as Partial<TakeoverArgs>;
+  let status: { tone: Tone; label: string };
+  if (settled?.decision === "approved") status = { tone: "success", label: "已交还" };
+  else if (settled?.decision === "rejected") status = { tone: "default", label: "没有处理" };
+  else if (settled) status = { tone: "default", label: "已失效" };
+  else if (waiting) status = { tone: "warning", label: "请在电脑上处理" };
+  else status = { tone: "default", label: "已结束" };
+  return (
+    <View style={[s.card, waiting && !settled && s.cardWarn]}>
+      <View style={s.cardHead}>
+        <Icon name="globe" size={18} />
+        <Text style={s.cardTitle}>需要你接管浏览器</Text>
+        <View style={{ marginLeft: "auto" }}>
+          <Tag tone={status.tone}>{status.label}</Tag>
+        </View>
+      </View>
+      <Text style={s.text}>{args.reason || "智能体需要你在浏览器里操作一下"}</Text>
+      {waiting && !settled ? (
+        <Text style={[s.muted, { marginTop: 8 }]}>
+          要在浏览器画面里操作（如登录），请在电脑上打开这个对话处理。
+        </Text>
+      ) : null}
+    </View>
+  );
+}
 
 // ── 审批（工具调用 / 计划）
 

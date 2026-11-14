@@ -27,6 +27,7 @@ import time
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
+from .browser.component import BrowserComponent
 from .instance import instance_id
 from .redisx import make_redis
 from .repositories.thread import ThreadRepository
@@ -148,6 +149,8 @@ class Maintainer:
 
     async def _reap_idle(self, redis: Any) -> None:
         sandbox = SandboxComponent.build(self._settings, redis, sessions=self._sessionmaker)
+        # 浏览器的附加件：退役前导出登录态（闲置回收是最常见的退役）
+        BrowserComponent.attach(self._settings, sandbox, sessions=self._sessionmaker)
         try:
             await sandbox.pods.reap_idle()
         except Exception:
@@ -166,6 +169,7 @@ class Maintainer:
         async with self._sessionmaker() as session:
             live = list(await ThreadRepository(session).live_ids())
         sandbox = SandboxComponent.build(self._settings, redis, sessions=self._sessionmaker)
+        browser = BrowserComponent.attach(self._settings, sandbox, sessions=self._sessionmaker)
         steps: list[tuple[str, Any]] = [("会话 Pod 孤儿回收", sandbox.pods.reap_orphans(live))]
         if self._settings.sandbox_enabled:
             steps.append(("原生沙箱孤儿回收", sandbox.native.reap_orphans(live)))
@@ -179,6 +183,9 @@ class Maintainer:
                 ),
             ),
         ]
+        if browser is not None:
+            # 沙箱没走退役（被驱逐、对账删掉）时留下的宿主登记
+            steps.append(("浏览器宿主对账", browser.registry.prune(sandbox.provisioning)))
         for name, step in steps:
             try:
                 await step

@@ -95,6 +95,9 @@ importers:
 
   packages/chat-ui:
     dependencies:
+      '@novnc/novnc':
+        specifier: ^1.7.0
+        version: 1.7.0
       react-markdown:
         specifier: ^9.0.1
         version: 9.1.0(@types/react@19.3.0)(react@19.3.0)
@@ -672,6 +675,9 @@ packages:
     engines: {node: '>= 10'}
     cpu: [x64]
     os: [win32]
+
+  '@novnc/novnc@1.7.0':
+    resolution: {integrity: sha512-ucEJOx4T2avIRCleodk7YobZj5O2Ga2AeLfQ69A/yjG9HHba2+PDgwSkN3FttrmG+70ZGx21sElNFouK13RzyA==}
 
   '@rc-component/async-validator@5.1.2':
     resolution: {integrity: sha512-WYbrZSjzznU1ekD0qFq2qRxt309VoS61MTG5npnFQlKYcoy9IzU8T+ZCIhq5bGAXRbXysABFWTspicMfmWFwow==}
@@ -2074,6 +2080,8 @@ snapshots:
 
   '@next/swc-win32-x64-msvc@15.5.27':
     optional: true
+
+  '@novnc/novnc@1.7.0': {}
 
   '@rc-component/async-validator@5.1.2':
     dependencies:

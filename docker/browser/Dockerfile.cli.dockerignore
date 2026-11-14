@@ -1,0 +1,6 @@
+# 构建上下文是仓库根：只放行浏览器镜像要拷的两样
+*
+!agent-platform/pod/browserd
+agent-platform/pod/browserd/tests
+**/__pycache__
+!docker/browser/install.sh

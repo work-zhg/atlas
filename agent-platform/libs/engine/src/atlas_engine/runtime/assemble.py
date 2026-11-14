@@ -31,6 +31,7 @@ from atlas_engine.kernel.middleware.permission import PermissionMiddleware
 from atlas_engine.kernel.middleware.skills import SkillsMiddleware
 from atlas_engine.kernel.middleware.subagents import SubAgentMiddleware
 from atlas_engine.kernel.middleware.suspension import SuspensionMiddleware
+from atlas_engine.kernel.middleware.takeover import TakeoverMiddleware
 from atlas_engine.kernel.stack import MiddlewareStack, Slot
 from atlas_engine.runtime.context import ContextPorts, context_pipeline
 from atlas_engine.runtime.tool_registry import (
@@ -259,6 +260,10 @@ def build_graph(
     if ASK_USER_TOOL in spec.tool_names:
         # 任何模式都允许提问（doc/ask-user-question-design.html）
         stack.add(Slot.ASK, AskUserMiddleware(gate=approvals))
+    if spec.browser and sandbox is not None:
+        # 开了浏览器：遇到登录请人接管（c4-model/agent/browser/code-browser-takeover.html）。
+        # 浏览器在沙箱里，没有沙箱就没有浏览器，也就不该看到这个工具
+        stack.add(Slot.ASK, TakeoverMiddleware(gate=approvals))
     # ★ 无条件装：问不问人由审批模式决定（doc/native-approval-mode-design.html），
     #   不再取决于作者有没有配必审工具。规划模式的 exit_plan_mode 也由它提供
     stack.add(

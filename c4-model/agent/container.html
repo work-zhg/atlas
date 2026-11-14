@@ -188,7 +188,7 @@
         3.8
       ],
       "name": "Shell 沙箱",
-      "description": "给原生智能体执行 Shell 命令、读写工作区文件。"
+      "description": "给原生智能体执行 Shell 命令、读写工作区文件；开了浏览器能力的智能体换用浏览器镜像，里面多一个常驻的 Chromium。"
     },
     {
       "id": "acp",
@@ -200,7 +200,7 @@
         3.9
       ],
       "name": "会话 Pod",
-      "description": "运行 Claude Code 等外部 CLI 智能体，由 bridge 接成平台的执行后端。"
+      "description": "运行 Claude Code 等外部 CLI 智能体，由 bridge 接成平台的执行后端；开了浏览器能力时换用浏览器 CLI 镜像。"
     },
     {
       "id": "workspace",
@@ -261,6 +261,17 @@
         1.5,
         7.3
       ]
+    },
+    {
+      "id": "website",
+      "kind": "system",
+      "name": "外部网站",
+      "description": "智能体用浏览器访问的互联网站点，如电商、政务网站、企业 SaaS；登录要人来完成。",
+      "color": "#6b4f2a",
+      "at": [
+        -1.8,
+        4.6
+      ]
     }
   ],
   "relationships": [
@@ -272,8 +283,8 @@
     {
       "from": "web",
       "to": "server",
-      "description": "调用接口，订阅运行事件",
-      "technology": "JSON/HTTPS、SSE"
+      "description": "调用接口，订阅运行事件，看沙箱里的浏览器画面",
+      "technology": "JSON/HTTPS、SSE、WebSocket"
     },
     {
       "from": "teamflow",
@@ -339,8 +350,8 @@
     {
       "from": "server",
       "to": "shell",
-      "description": "执行命令，读写文件",
-      "technology": "HTTP（execd）"
+      "description": "执行命令，读写文件，转发浏览器画面",
+      "technology": "HTTP（execd）、RFB / WebSocket"
     },
     {
       "from": "server",
@@ -459,6 +470,18 @@
       "to": "knowledge",
       "description": "换上知识库令牌，转发检索",
       "technology": "MCP/HTTP"
+    },
+    {
+      "from": "shell",
+      "to": "website",
+      "description": "浏览网页（浏览器能力）",
+      "technology": "HTTPS"
+    },
+    {
+      "from": "acp",
+      "to": "website",
+      "description": "浏览网页（浏览器能力）",
+      "technology": "HTTPS"
     }
   ]
 }

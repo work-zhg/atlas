@@ -14,7 +14,10 @@ CLI 实际看到的能力。两个实现：
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, NamedTuple, Protocol
+from dataclasses import replace
+from typing import TYPE_CHECKING, Any, NamedTuple, Protocol
+
+from ..browser.host import session_env
 
 if TYPE_CHECKING:
     from atlas_engine.contracts.spec import CliSpec
@@ -61,8 +64,14 @@ class PodHost:
         self._pods = pods
 
     async def ensure(self, thread: Thread, cli: CliSpec, caps: CliCapabilities) -> HostAccess:
+        extra: dict[str, Any] = {}
+        if caps.browser is not None:
+            # 浏览器（c4-model/agent/browser/design-browser.html）：换浏览器 CLI 镜像、
+            # 带 browser 属性（Pod 建好后附加件拉起浏览器），CLI 的命令带上会话名（各用各的窗口）
+            cli = replace(cli, image=caps.browser.image)
+            extra = {"browser": True, "agent_env": session_env(thread.thread_uuid)}
         endpoint = await self._pods.ensure(
-            thread, cli, model=caps.model, credentials=caps.credentials
+            thread, cli, model=caps.model, credentials=caps.credentials, **extra
         )
         return HostAccess(endpoint.url, endpoint.token, caps)
 

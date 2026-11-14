@@ -1,0 +1,21 @@
+# 浏览器 CLI 镜像：开了浏览器能力的 CLI 智能体的会话 Pod 用（c4-model/agent/browser/design-browser.html）。
+#
+#   docker build -f docker/browser/Dockerfile.cli -t atlas-cli-browser:0.4.0 \
+#     --build-arg BASE=atlas-cli-bridge:0.4.0 .
+#
+# ★ 在 bridge 镜像上加浏览器：bridge、CLI 适配器的版本组合不变。开浏览器 = 换这个镜像
+#   （运行期配置 browser.cli_image）。
+# ★ 构建上下文是仓库根：要拷 agent-platform/pod/browserd。
+ARG BASE=atlas-cli-bridge:0.4.0
+FROM ${BASE}
+
+USER root
+COPY docker/browser/install.sh /usr/local/lib/atlas-install-browser.sh
+# 分三层：系统包、Playwright（Python 与 CLI）、守护的源码 —— 改守护只重建最后一层
+RUN sh /usr/local/lib/atlas-install-browser.sh system
+RUN --mount=type=cache,target=/root/.cache/pip sh /usr/local/lib/atlas-install-browser.sh tools
+COPY agent-platform/pod/browserd /tmp/browserd
+RUN sh /usr/local/lib/atlas-install-browser.sh browserd
+
+USER 1000:1000
+WORKDIR /data

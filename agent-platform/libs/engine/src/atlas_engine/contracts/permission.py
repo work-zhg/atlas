@@ -24,6 +24,7 @@ __all__ = [
     "ApprovalMode",
     "ApprovalOutcome",
     "QuestionAnswer",
+    "TakeoverLogin",
     "ToolEffect",
 ]
 
@@ -56,6 +57,15 @@ class QuestionAnswer(TypedDict):
     by: AnswerSource
 
 
+class TakeoverLogin(TypedDict):
+    """交还时存登录态的结果（kind=takeover，c4-model/agent/browser/code-browser-takeover.html）。"""
+
+    #: 存下来了没有（存失败也照样交还，告诉模型下次可能要再登录）
+    saved: bool
+    #: 这次登录的站点（可注册域名）
+    sites: list[str]
+
+
 class ApprovalOutcome(TypedDict):
     """一次审批的结果 —— 续跑时 server 从审批表组装，放进 state.decisions。
 
@@ -71,8 +81,11 @@ class ApprovalOutcome(TypedDict):
     feedback: NotRequired[str]
     #: 向用户提的问题（kind=question）的答案，与问题一一对应
     answers: NotRequired[list[QuestionAnswer]]
+    #: 接管（kind=takeover）交还时存登录态的结果；人写的说明在 feedback
+    login: NotRequired[TakeoverLogin]
 
 
-#: 等人决定的事项的种类：工具调用的确认 / 规划模式提交的计划 / 向用户提的问题。
-#: ★ 问题也走审批这条路（登记、挂起、刷新恢复、续跑全部现成），所以「审批」在这里是宽义的
-ApprovalKind = Literal["tool", "plan", "question"]
+#: 等人决定的事项的种类：工具调用的确认 / 规划模式提交的计划 / 向用户提的问题 /
+#: 请人接管浏览器。
+#: ★ 问题、接管也走审批这条路（登记、挂起、刷新恢复、续跑全部现成），所以「审批」在这里是宽义的
+ApprovalKind = Literal["tool", "plan", "question", "takeover"]

@@ -35,6 +35,7 @@ from atlas_host import methods
 from atlas_jsonrpc import ErrorCode, RpcFault
 
 from ..approval import ApprovalService, DecisionChannel, OnlineApprovals
+from ..browser.component import refresh_in_background
 from ..errors import CapabilityUnavailable
 from .capabilities import CliCapabilities, CliCapabilityAssembly
 from .host import CliHost, HostAccess, HostRouter, HostUnavailable, PodHost
@@ -212,6 +213,9 @@ class CliRuntime:
                 yield event
         finally:
             await link.close()
+            if caps.browser is not None:
+                # 轮末异步刷新这个人存过的站点的登录态（不拖慢这一轮）
+                refresh_in_background(self._settings, segment.thread)
 
     # ------------------------------------------------------------------ 一轮
 

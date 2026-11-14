@@ -289,6 +289,9 @@ class AgentSpecIn(BaseModel):
     approval: ApprovalSpecIn = Field(default_factory=ApprovalSpecIn)
     #: native 的 Shell 沙箱（默认平台镜像、strict 档 —— 历史快照没有这个字段）
     sandbox: SandboxSpecIn = Field(default_factory=SandboxSpecIn)
+    #: 浏览器能力（默认关 —— 历史快照没有这个字段）：开了就换浏览器镜像、带浏览器技能，
+    #: 能不能开在保存时判（browser/host.py::check_browser）
+    browser: bool = False
 
     @property
     def uses_device(self) -> bool:
@@ -314,6 +317,7 @@ class AgentSpecIn(BaseModel):
             knowledge=self.knowledge.to_engine(),
             approval=self.approval.to_engine(),
             sandbox=self.sandbox.to_engine(),
+            browser=self.browser,
         )
 
 

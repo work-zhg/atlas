@@ -129,6 +129,31 @@ data:
         proxy_pass http://atlas-server.atlas-system.svc.cluster.local:8000/;
         proxy_buffering off;
         proxy_cache off;
+        # 浏览器的实时画面（WebSocket，c4-model/agent/browser/design-browser.html）：同样经 auth_request
+        #   取身份，只是要 upgrade —— identity.inc 带的公共转发头里 Connection 是空的，这里逐条写。
+        #   画面连着的时候是长连接（server 级 proxy_read_timeout 1h；noVNC 断了会提示重连）
+        location ~ ^/atlas-api/v1/threads/[^/]+/browser/view$ {
+          auth_request     /_auth;
+          auth_request_set $gw_uid    $upstream_http_x_uid;
+          auth_request_set $gw_tenant $upstream_http_x_tenant_id;
+          proxy_set_header Host              $http_host;
+          proxy_set_header X-Forwarded-Host  $http_host;
+          proxy_set_header X-Real-IP         $remote_addr;
+          proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+          proxy_set_header X-Forwarded-Proto $scheme;
+          proxy_set_header Upgrade           $http_upgrade;
+          proxy_set_header Connection        $connection_upgrade;
+          proxy_set_header X-Uid             $gw_uid;
+          proxy_set_header X-Tenant-Id       $gw_tenant;
+          proxy_set_header X-Auth-Uid        "";
+          proxy_set_header X-Caller-App      gateway;
+          error_page 401 = @gw_401;
+          error_page 403 = @gw_403;
+          # 正则 location 里 proxy_pass 不能带路径：先去掉 /atlas-api 前缀
+          rewrite ^/atlas-api(/.*)$ $1 break;
+          proxy_pass http://atlas-server.atlas-system.svc.cluster.local:8000;
+          proxy_buffering off;
+        }
       }
       # Atlas 会话文件预览站点：地址由 atlas-server 按请求的 Host 生成（/v1/previews/{令牌}/…），
       # 令牌在路径里、不需要身份头。内容隔离靠后端的 CSP sandbox 响应头（不透明 origin），与域名无关。

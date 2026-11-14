@@ -232,6 +232,8 @@ _CUSTOM_EVENTS = {
     "agent.mode": EventType.AGENT_MODE,
     # 用户回答了 ask_user_question：卡片据此显示答案（进轨迹，刷新后也在）
     "question.answered": EventType.QUESTION_ANSWERED,
+    # 请人接管浏览器有了结果：接管卡片据此显示「已交还 / 没有处理」
+    "takeover.settled": EventType.TAKEOVER_SETTLED,
 }
 
 

@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 from atlas_engine.contracts.events import EventType
 from atlas_engine.contracts.mcp_naming import MCP_PREFIX
 
+from ..browser.plan import BrowserPlan
 from ..credentials import (
     CredentialDenied,
     CredentialGrants,
@@ -26,6 +27,8 @@ from ..credentials import (
     CredentialSubject,
 )
 from ..errors import CapabilityUnavailable
+from ..providers.filesystem import make_workspace
+from ..providers.filesystem.skill_copy import resolve_skills, seed_session_skills
 from ..providers.knowledge import (
     MCP_LIST_TOOL,
     MCP_SEARCH_TOOL,
@@ -38,7 +41,9 @@ from ..providers.mcp import GatewayUnavailable, make_mcp_catalog, mcp_agent_acce
 from ..providers.mcp.cli import cli_mcp_servers
 from ..providers.mcp.gateway import servers_in
 from ..repositories.model_catalog import ModelCatalogRepository
+from ..runtime_config import RuntimeConfig
 from ..sandbox.session_pod import CliModel
+from ..skills import skill_directory
 
 if TYPE_CHECKING:
     import redis.asyncio as aioredis
@@ -76,6 +81,8 @@ class CliCapabilities:
     #: 这一轮按什么权限模式要求 CLI（平台取值，ModeMapping.platform_mode）。本机 CLI 开会话时交给
     #: 电脑上的连接器，按本机策略的上限核对；None = 没定
     permission_mode: str | None = None
+    #: 浏览器（c4-model/agent/browser/design-browser.html）：开了就换浏览器 CLI 镜像；None = 没开
+    browser: BrowserPlan | None = None
 
 
 class CliCapabilityAssembly:
@@ -87,6 +94,7 @@ class CliCapabilityAssembly:
     async def resolve(self, segment: Segment, redis: aioredis.Redis) -> CliCapabilities:
         """解析本轮的能力。不可用抛 CapabilityUnavailable（调用方报 run.failed）。"""
         servers, notices, catalog = await self._mcp_servers(segment, redis)
+        browser = await self._browser(segment)
         return CliCapabilities(
             mcp_servers=servers,
             system_prompt_append=catalog,
@@ -97,7 +105,43 @@ class CliCapabilityAssembly:
                 "idleS": self._settings.cli_prompt_idle_timeout_s,
                 "toolIdleS": self._settings.cli_tool_idle_timeout_s,
             },
+            browser=browser,
         )
+
+    async def _browser(self, segment: Segment) -> BrowserPlan | None:
+        """开了浏览器：换算浏览器配置（每轮读运行期配置），把浏览器技能拷进这个会话。
+
+        部署没有浏览器 CLI 镜像时抛 BrowserNotConfigured：本轮不开始，告诉用户。
+        """
+        spec = segment.spec
+        if not spec.browser:
+            return None
+        config = await RuntimeConfig(self._settings, self._sessionmaker).browser_config()
+        plan = BrowserPlan.of(spec, config)
+        if plan is not None and plan.skill is not None:
+            await self._seed_skill(segment, plan)
+        return plan
+
+    async def _seed_skill(self, segment: Segment, plan: BrowserPlan) -> None:
+        """浏览器技能不在智能体配的技能里（随开关自动带上）：建会话时没拷，每轮确认一次。
+
+        只是 HEAD：拷过的不再拷。
+        """
+        assert plan.skill is not None
+        thread = segment.thread
+        fs = make_workspace(
+            self._settings, thread.created_by_uuid, thread.thread_uuid, thread.workspace_dir
+        )
+        if fs is None:
+            return
+        try:
+            metas, _ = await resolve_skills(
+                [plan.skill], skill_directory(self._settings), with_descriptions=False
+            )
+            await seed_session_skills(fs, metas)
+        except Exception:
+            # 技能拷不进去不挡住这一轮：浏览器照样能用，模型少一份说明
+            logger.warning("会话 %s 拷浏览器技能失败", thread.thread_uuid, exc_info=True)
 
     async def _mcp_servers(
         self, segment: Segment, redis: aioredis.Redis

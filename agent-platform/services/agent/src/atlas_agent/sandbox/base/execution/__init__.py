@@ -3,6 +3,7 @@
     ports.py    SandboxExec、FileSession：调用方只传 sandbox_uuid
     execd.py    ExecdChannel、ExecdFileSession：execd 的协议细节都在这里翻译
     ledger.py   ActivityLedger：按沙箱记运行中的命令和最近活动（Redis）
+    channels.py SandboxChannels：沙箱里某个端口的 WebSocket 通道（浏览器的画面）、记一次活动
     values.py   CommandSpec、LogChunk、CommandStatus、ResourceUsage、SandboxActivity 与几种错误
 
 ★ 只经生命周期的 access 拿地址和令牌：令牌只在这里和生命周期之间流转，都在基座里。

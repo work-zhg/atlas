@@ -86,6 +86,35 @@ const CLI_MODES: [string, string, string][] = [
 
 const MODE_ORDER: ApprovalMode[] = ["auto", "manual", "plan"];
 
+/**
+ * 浏览器能力（c4-model/agent/browser/design-browser.html）：智能体在沙箱里用浏览器操作网页，遇到登录请你接管。
+ * 开了就换带浏览器的工作环境、自动带上浏览器技能。
+ */
+function BrowserCap({
+  on,
+  disabled,
+  hint,
+  onChange,
+}: {
+  on: boolean;
+  disabled: boolean;
+  hint?: string;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <div className={styles.cap}>
+      <span className={styles.capIcon}>
+        <Icon name="globe" size={16} />
+      </span>
+      <div className={styles.capText}>
+        <b>浏览器</b>
+        <div>{hint ?? "打开网页、点击、填表；遇到登录、验证码时请你在画面里自己登录"}</div>
+      </div>
+      <Switch checked={on} disabled={disabled} onChange={onChange} />
+    </div>
+  );
+}
+
 /** 后端存的 spec → 编辑器的 spec。旧快照没有后加的字段：补默认值，免得各处判空 */
 function normalizeSpec(raw: unknown): ResolvedSpec {
   const spec = raw as Partial<ResolvedSpec>;
@@ -101,6 +130,7 @@ function normalizeSpec(raw: unknown): ResolvedSpec {
     approval: spec.approval ?? defaultSpec().approval,
     limits: spec.limits ?? defaultSpec().limits,
     compaction: spec.compaction ?? defaultSpec().compaction,
+    browser: spec.browser ?? false,
   };
 }
 
@@ -638,7 +668,7 @@ export function AgentStudio({ agentId }: { agentId: string }) {
   const builtin = (toolsQ.data?.data ?? []).filter((t) => t.kind !== "mcp" && t.available && t.name !== SUBAGENT_TOOL);
   const rank = (name: string) => (CAP_ORDER.includes(name) ? CAP_ORDER.indexOf(name) : CAP_ORDER.length);
   const capsList = [...builtin].sort((a, b) => rank(a.name) - rank(b.name));
-  const capOn = capsList.filter((t) => spec.tool_names.includes(t.name)).length;
+  const capOn = capsList.filter((t) => spec.tool_names.includes(t.name)).length + (spec.browser ? 1 : 0);
 
   const k = spec.knowledge ?? DEFAULT_KNOWLEDGE;
   const knowSummary = knowledgeSummary(k);
@@ -966,6 +996,13 @@ export function AgentStudio({ agentId }: { agentId: string }) {
                     电脑可以在本机设上限（连接器的本机策略），要求的权限超过上限时，那台电脑会拒绝开对话。
                   </p>
                 )}
+                {!onDevice && (
+                  <BrowserCap
+                    on={Boolean(spec.browser)}
+                    disabled={readOnly}
+                    onChange={(v) => patch({ browser: v })}
+                  />
+                )}
               </Group>
             ) : (
               <Group title="能力" summary={`已开启 ${capOn} 项`} open={open.caps!} onToggle={() => toggle("caps")}>
@@ -988,12 +1025,28 @@ export function AgentStudio({ agentId }: { agentId: string }) {
                         onChange={(v) =>
                           patch({
                             tool_names: v ? [...spec.tool_names, t.name] : spec.tool_names.filter((n) => n !== t.name),
+                            // 浏览器命令在沙箱里执行：关掉执行命令，浏览器也一起关
+                            ...(t.name === "bash" && !v ? { browser: false } : {}),
                           })
                         }
                       />
                     </div>
                   );
                 })}
+                <BrowserCap
+                  on={Boolean(spec.browser)}
+                  disabled={readOnly || Boolean(spec.sandbox?.image)}
+                  hint={spec.sandbox?.image ? "用了自定义工作环境的智能体不能开浏览器" : undefined}
+                  // 浏览器命令在沙箱里执行：开浏览器顺带开执行命令
+                  onChange={(v) =>
+                    patch({
+                      browser: v,
+                      ...(v && !spec.tool_names.includes("bash")
+                        ? { tool_names: [...spec.tool_names, "bash"] }
+                        : {}),
+                    })
+                  }
+                />
               </Group>
             )}
 

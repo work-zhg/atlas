@@ -30,6 +30,7 @@ import {
   type ApprovalMode,
   type ApprovalRequiredData,
   type QuestionAnsweredData,
+  type TakeoverSettledData,
   type RunStartedData,
   type RunSuspendedData,
   type SubagentStartedData,
@@ -111,7 +112,7 @@ export interface SubagentRun {
 
 export interface PendingApproval {
   approvalId: string;
-  kind: "tool" | "plan" | "question";
+  kind: "tool" | "plan" | "question" | "takeover";
   /** 对应的工具调用（问题卡片据此收起那一行工具调用） */
   toolCallId?: string;
   toolName: string;
@@ -227,6 +228,8 @@ export interface RunState {
   approvals: PendingApproval[];
   /** 已回答的问题，按 approvalId（question.answered；进轨迹，刷新后也在） */
   answers: Record<string, QuestionAnsweredData>;
+  /** 有了结果的接管，按 approvalId（takeover.settled；进轨迹，刷新后也在） */
+  takeovers: Record<string, TakeoverSettledData>;
   /** 出现顺序，渲染以它为准 */
   timeline: TimelineItem[];
   /** acp：每个 run（主 run 或子 run）实际生效的权限模式 */
@@ -260,6 +263,7 @@ export const initialRunState: RunState = {
   pendingApprovals: [],
   approvals: [],
   answers: {},
+  takeovers: {},
   timeline: [],
   modes: {},
   blockOffset: 0,
@@ -325,6 +329,15 @@ function withAnswer(base: RunState, answered: QuestionAnsweredData): RunState {
     ...base,
     answers: { ...base.answers, [answered.approval_id]: answered },
     pendingApprovals: base.pendingApprovals.filter((a) => a.approvalId !== answered.approval_id),
+  };
+}
+
+/** 接管有了结果：记下结果，并从「还在等」里拿掉 */
+function withTakeover(base: RunState, settled: TakeoverSettledData): RunState {
+  return {
+    ...base,
+    takeovers: { ...base.takeovers, [settled.approval_id]: settled },
+    pendingApprovals: base.pendingApprovals.filter((a) => a.approvalId !== settled.approval_id),
   };
 }
 
@@ -424,8 +437,9 @@ function applySubEvent(base: RunState, event: AnyTraceEvent): RunState {
       return { ...next, pendingApprovals: [...base.pendingApprovals, approval] };
     }
 
-    case EventType.QuestionAnswered: {
-      const id = (event.data as QuestionAnsweredData).approval_id;
+    case EventType.QuestionAnswered:
+    case EventType.TakeoverSettled: {
+      const id = (event.data as QuestionAnsweredData | TakeoverSettledData).approval_id;
       return { ...next, pendingApprovals: base.pendingApprovals.filter((a) => a.approvalId !== id) };
     }
 
@@ -792,6 +806,9 @@ function applyRunEvent(base: RunState, event: AnyTraceEvent): RunState {
 
     case EventType.QuestionAnswered:
       return withAnswer(base, d as unknown as QuestionAnsweredData);
+
+    case EventType.TakeoverSettled:
+      return withTakeover(base, d as unknown as TakeoverSettledData);
 
     case EventType.TitleGenerated:
       return { ...base, generatedTitle: String(d.title ?? "") };

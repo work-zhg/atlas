@@ -108,6 +108,9 @@ async def test_only_config_admins_see_and_change_configs(
         "workspace.quota_mb",
         "device.preview_max_mb",
         "device.download_max_mb",
+        "browser.sandbox_image",
+        "browser.cli_image",
+        "browser.skill",
     }
     # 没改过的取部署配置
     assert listed[QUOTA]["effective"] == get_settings().sandbox_quota_per_user

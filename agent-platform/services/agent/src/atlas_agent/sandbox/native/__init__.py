@@ -144,8 +144,14 @@ class NativeSandboxKind:
         await self._images.check(self._images.resolve(req.image), req.profile)
 
     def share(self, req: SandboxSpec) -> Sharing | None:
-        """strict 档按（模板，镜像）共享，不限个数；评测档独占。"""
-        return None if req.profile == "bench" else Sharing()
+        """strict 档按（模板，镜像）共享，不限个数；评测档独占。
+
+        ★ 带浏览器的另成一组：别的智能体配了和浏览器沙箱一样的镜像，也不能和浏览器沙箱共用 ——
+          那样的沙箱可能是它先建的，建好时没拉起浏览器。
+        """
+        if req.profile == "bench":
+            return None
+        return Sharing("browser") if req.browser else Sharing()
 
     def build(self, req: SandboxSpec, biz: BizRef) -> CreateSpec:
         s = self._settings

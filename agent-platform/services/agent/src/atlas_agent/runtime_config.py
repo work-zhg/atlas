@@ -10,6 +10,9 @@ c4-model/infra-platform/code-appconfig.html。
     workspace.quota_mb                  每人工作空间的存储配额（0 = 不限）
     device.preview_max_mb               网页上预览本机文件的大小上限
     device.download_max_mb              网页上下载本机文件的大小上限
+    browser.sandbox_image               开了浏览器的原生智能体用的沙箱镜像
+    browser.cli_image                   开了浏览器的 CLI 智能体用的会话 Pod 镜像
+    browser.skill                       开了浏览器的智能体自动带上的浏览器技能（slug@版本）
 
 ★ 默认值取部署配置（同名环境变量）：没在运行期改过的，行为和以前一样；管理员经 /v1/configs 改了，
   下一次读就生效（读不缓存），不用重启。
@@ -18,11 +21,13 @@ c4-model/infra-platform/code-appconfig.html。
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from atlas_appconfig import AppConfig, ConfigKey
 
+from .browser.plan import BrowserConfig, parse_skill_ref
 from .device.files import FileLimits
 
 if TYPE_CHECKING:
@@ -31,6 +36,8 @@ if TYPE_CHECKING:
     from .config import Settings
 
 __all__ = ["RuntimeConfig", "RuntimeKeys", "WorkspaceLimits"]
+
+logger = logging.getLogger(__name__)
 
 _MB = 1024 * 1024
 
@@ -45,6 +52,9 @@ class RuntimeKeys:
     quota_mb: ConfigKey[int]
     device_preview_max_mb: ConfigKey[int]
     device_download_max_mb: ConfigKey[int]
+    browser_sandbox_image: ConfigKey[str]
+    browser_cli_image: ConfigKey[str]
+    browser_skill: ConfigKey[str]
 
     @classmethod
     def of(cls, settings: Settings) -> RuntimeKeys:
@@ -101,6 +111,27 @@ class RuntimeKeys:
                 default=settings.device_download_max_mb,
                 description="网页上下载本机 CLI 会话里文件的大小上限（MB）",
             ),
+            # 浏览器（c4-model/agent/browser/design-browser.html）：改了只影响之后新建的沙箱
+            browser_sandbox_image=ConfigKey(
+                "browser.sandbox_image",
+                str,
+                default=settings.browser_sandbox_image,
+                description="开了浏览器的原生智能体用的沙箱镜像（空 = 原生智能体不能用浏览器）",
+            ),
+            browser_cli_image=ConfigKey(
+                "browser.cli_image",
+                str,
+                default=settings.browser_cli_image,
+                description=(
+                    "开了浏览器的 CLI 智能体用的会话 Pod 镜像（空 = CLI 智能体不能用浏览器）"
+                ),
+            ),
+            browser_skill=ConfigKey(
+                "browser.skill",
+                str,
+                default=settings.browser_skill,
+                description="开了浏览器的智能体自动带上的浏览器技能，写成 slug@版本（空 = 不带）",
+            ),
         )
 
     def all(self) -> list[ConfigKey[Any]]:
@@ -113,6 +144,9 @@ class RuntimeKeys:
             self.quota_mb,
             self.device_preview_max_mb,
             self.device_download_max_mb,
+            self.browser_sandbox_image,
+            self.browser_cli_image,
+            self.browser_skill,
         ]
 
 
@@ -155,6 +189,18 @@ class RuntimeConfig:
             self.keys.device_preview_max_mb, self.keys.device_download_max_mb
         )
         return FileLimits(preview_max_mb=max(preview, 0), download_max_mb=max(download, 0))
+
+    async def browser_config(self) -> BrowserConfig:
+        """浏览器镜像和技能。技能写错了（不是 slug@版本）当作不带，记日志，不挡住这一轮。"""
+        sandbox_image, cli_image, skill = await self.config.get_many(
+            self.keys.browser_sandbox_image, self.keys.browser_cli_image, self.keys.browser_skill
+        )
+        try:
+            ref = parse_skill_ref(skill)
+        except ValueError:
+            logger.warning("运行期配置 browser.skill 格式不对：%r，当作不带浏览器技能", skill)
+            ref = None
+        return BrowserConfig(sandbox_image=sandbox_image, cli_image=cli_image, skill=ref)
 
     async def image_allow_prefixes(self) -> dict[str, list[str]]:
         strict, bench = await self.config.get_many(self.keys.sandbox_images, self.keys.bench_images)

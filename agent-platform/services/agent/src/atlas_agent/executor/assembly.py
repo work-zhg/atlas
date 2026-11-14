@@ -34,6 +34,9 @@ from atlas_agent.providers.knowledge import resolve_knowledge
 from atlas_agent.sandbox.component import SandboxComponent
 from atlas_agent.sandbox.native import WorkspaceRef
 
+from ..browser.component import BrowserComponent, refresh_in_background
+from ..browser.login import BrowserNotConfigured
+from ..browser.plan import BrowserPlan
 from ..config import Settings
 from ..domain.workspace_layout import WorkspaceLayout
 from ..providers.filesystem import WorkspaceRouting, make_workspace
@@ -46,6 +49,7 @@ from ..providers.llm.model_platform import (
     with_platform_model,
 )
 from ..repositories.model_catalog import ModelCatalogRepository
+from ..runtime_config import RuntimeConfig
 from ..services.title import TitleService
 from ..stream.relay import EventRelay
 from .base import DispatchRun
@@ -113,6 +117,11 @@ class CapabilityAssembly:
             else None
         )
         thread = segment.thread
+        # 浏览器（c4-model/agent/browser/design-browser.html）：沙箱建好时附加件导入登录态、
+        #   拉起守护；段结束后异步刷新这个人存过的站点的登录态（不拖慢这一轮）
+        browser = BrowserComponent.attach(self._settings, sandbox) if sandbox else None
+        if browser is not None and segment.spec.sandbox.browser and closers is not None:
+            closers.append(_refresher(self._settings, thread))
         ws = WorkspaceRef(thread.sandbox_thread_id, thread.created_by_uuid, thread.workspace_dir)
         # ★ 用会话的工作目录（子会话与根会话相同），隐藏目录 .atlas/{会话}/ 按自己；技能只放行本
         #   智能体绑定的版本。
@@ -236,6 +245,27 @@ class CapabilityAssembly:
         models = RunModels(key_endpoint(s, key.key), {m.name: m for m in key.models})
         return dataclasses.replace(segment, spec=spec, models=models)
 
+    async def with_browser(self, segment: Segment) -> Segment:
+        """开了浏览器：沙箱规格换成浏览器沙箱镜像、带 browser 属性，技能里加上浏览器技能
+        （c4-model/agent/browser/code-browser-host.html · BrowserPlan）。
+
+        ★ 镜像和技能每轮从运行期配置读：管理员改了，下一个新建的沙箱就用新的。部署没有浏览器镜像时
+          抛 BrowserNotConfigured，整轮失败并告诉用户（不静默少一个能力）。
+        """
+        spec = segment.spec
+        if not spec.browser:
+            return segment
+        if not self._settings.sandbox_enabled:
+            raise BrowserNotConfigured("开了浏览器，但服务端没有开启沙箱（SANDBOX_ENABLED=false）")
+        config = await RuntimeConfig(self._settings, self._sessionmaker).browser_config()
+        plan = BrowserPlan.of(spec, config)
+        if plan is None:
+            return segment
+        spec = dataclasses.replace(
+            spec, sandbox=plan.sandbox(spec.sandbox), skills=plan.skills(spec.skills)
+        )
+        return dataclasses.replace(segment, spec=spec)
+
     async def with_knowledge(
         self,
         segment: Segment,
@@ -288,3 +318,12 @@ class CapabilityAssembly:
             if not await ModelCatalogRepository(session).supports_cache(segment.spec.model.model):
                 return None
         return self._settings.prompt_cache_ttl
+
+
+def _refresher(settings: Settings, thread: Any) -> Callable[[], Awaitable[None]]:
+    """段结束时的收尾：异步刷新登录态（refresh_in_background 自己开资源，不等它做完）。"""
+
+    async def close() -> None:
+        refresh_in_background(settings, thread)
+
+    return close

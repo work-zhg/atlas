@@ -2,7 +2,10 @@
 # 构建自建镜像的 amd64 版本，导入服务器节点的 containerd（k8s.io 命名空间）。
 #
 #   deploy/server/images.sh                 全部构建并导入
-#   deploy/server/images.sh app sandbox     只做这几个（app frontends bridge sandbox csi egress）
+#   deploy/server/images.sh app sandbox     只做这几个（app frontends bridge sandbox csi egress
+#                                           sandbox-browser cli-browser）
+#   deploy/server/images.sh sandbox sandbox-browser   浏览器镜像建在默认沙箱 / bridge 镜像之上，
+#                                           基础镜像先建（c4-model/agent/browser/design-browser.html）
 #   deploy/server/images.sh third           第三方镜像：在服务器上用 crane 拉好、导入（kubelet 经国内加速源
 #                                           拉很慢且串行，一个大镜像会堵住后面所有 Pod）
 #   deploy/server/images.sh check           只检查：清单要用的镜像服务器上是否都有（deploy.sh 的前置检查调它）
@@ -52,6 +55,9 @@ spec() {
     csi)       echo "atlas-csi-s3:0.43.7-amd64|atlas-csi-s3:0.43.7|docker/csi-s3/Dockerfile|docker/csi-s3" ;;
     # deny.always 先用 deploy/local/egress-rules.sh 按服务器集群生成（kubectl 上下文指向服务器）
     egress)    echo "atlas-egress:release-1.1.1-amd64|atlas-egress:release-1.1.1|docker/egress/Dockerfile|docker/egress" ;;
+    # 浏览器镜像：开了浏览器的智能体换用它们（运行期配置 browser.sandbox_image / browser.cli_image）
+    sandbox-browser) echo "atlas-sandbox-browser:dev-amd64|atlas-sandbox-browser:dev|docker/browser/Dockerfile.sandbox|." ;;
+    cli-browser) echo "atlas-cli-browser:0.4.0-amd64|atlas-cli-browser:0.4.0|docker/browser/Dockerfile.cli|." ;;
     *) echo "未知镜像 $1" >&2; exit 1 ;;
   esac
 }
@@ -167,8 +173,15 @@ for name in "${NAMES[@]}"; do
   if [ -z "${SKIP_BUILD:-}" ]; then
     # 第三方依赖按 uv.lock 固定（docker/app/Dockerfile 先装它，再拷源码）
     [ "$name" != app ] || docker/app/requirements.sh
+    # 浏览器镜像建在本机已经构建好的 amd64 基础镜像上
+    BASE_ARGS=()
+    case "$name" in
+      sandbox-browser) BASE_ARGS=(--build-arg "BASE=$(spec sandbox | cut -d'|' -f1)") ;;
+      cli-browser)     BASE_ARGS=(--build-arg "BASE=$(spec bridge | cut -d'|' -f1)") ;;
+    esac
     echo "── 构建 $local_tag"
-    docker build --platform linux/amd64 -f "$dockerfile" -t "$local_tag" ${PROXY_ARGS[@]+"${PROXY_ARGS[@]}"} "$context"
+    docker build --platform linux/amd64 -f "$dockerfile" -t "$local_tag" ${PROXY_ARGS[@]+"${PROXY_ARGS[@]}"} \
+      ${BASE_ARGS[@]+"${BASE_ARGS[@]}"} "$context"
   fi
   echo "── 导入 $remote_tag → $TARGET"
   docker save "$local_tag" | on_server "ctr -n k8s.io images import --platform linux/amd64 -"

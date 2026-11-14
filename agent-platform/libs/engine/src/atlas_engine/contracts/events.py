@@ -72,6 +72,11 @@ class EventType(StrEnum):
     #: data: {approval_id, tool_call_id, feedback?,
     #:        answers: [{header, question, selected, other, by}]}
     QUESTION_ANSWERED = "question.answered"
+    #: 请人接管浏览器的结果（c4-model/agent/browser/code-browser-takeover.html）：卡片据此显示
+    #: 「已交还 / 没有处理 / 已失效」，刷新后也在。
+    #: data: {approval_id, tool_call_id, decision: approved | rejected | expired | failed,
+    #:        note?, login?: {saved, sites}}
+    TAKEOVER_SETTLED = "takeover.settled"
 
     CONTEXT_COMPACTED = "context.compacted"  # 文档 §7.5，必须对用户可见
     CONTEXT_CLEARED = "context.cleared"  # 旧工具结果被清除（上下文管理 §8 ②）

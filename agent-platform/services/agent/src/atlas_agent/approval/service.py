@@ -1,12 +1,14 @@
 """审批：等人决定的事（c4-model/agent/code-approval.html）。
 
-工具调用的确认、规划模式提交的计划、向用户的提问 —— 三者一张表（approval），原生智能体和
-CLI 智能体共用、弹同一个窗口：
+工具调用的确认、规划模式提交的计划、向用户的提问、请人接管浏览器 —— 四者一张表（approval），
+原生智能体和 CLI 智能体共用、弹同一个窗口：
 
     登记、查状态    RunApprovalGate.check（原生运行时的审批、提问中间件；CLI 的权限转发经它）
                     第一次查时登记，立刻返回，不阻塞 —— 等待交给数据库，可以等到第二天
     做决定          ApprovalService.decide：校验执行模式和答案，条件更新只成功一次，
                     然后通知 DecisionListener（Run 执行器）续跑、发决定信号（DecisionChannel）
+                    接管（kind = takeover）只能经 decide_takeover：交还要先存登录态再唤醒，
+                    由浏览器组件的 TakeoverDesk 来做
     在线等待        OnlineApprovals.wait：CLI 的权限请求在线等决定 —— 等决定信号，回库兜底
     续跑前核对      ApprovalService.status / result（Run 执行器）
     作废            ApprovalService.expire_run：run 进入终态时，还挂着的一律 expired
@@ -83,11 +85,10 @@ class ApprovalService:
         拒绝**不终止 run** —— 智能体收到「用户拒绝」和理由作为工具结果，换个方案继续。
         ★ 只成功一次：条件更新只改 pending 的行，重复决定（两个标签页同时点）回冲突。
         """
-        approval = await self._repo.get(approval_id)
-        if approval is None:
-            raise NotFound("确认项不存在", approval_id=str(approval_id))
-        if approval.status != "pending":
-            raise Conflict("该确认已被处理过或已超时", approval_id=str(approval_id))
+        approval = await self._pending(approval_id)
+        if approval.kind == "takeover":
+            # ★ 交还会触发保存登录态和续跑，要经接管卡片（TakeoverDesk）：这里直接批准的话登录态没存
+            raise Conflict("接管要在接管卡片上「交还」或「不处理」", approval_id=str(approval_id))
         outcome = _decision_outcome(
             approval,
             decision=decision,
@@ -95,6 +96,43 @@ class ApprovalService:
             feedback=feedback,
             answers=answers,
         )
+        return await self._decide(approval, decision, by=by, outcome=outcome)
+
+    async def decide_takeover(
+        self,
+        approval_id: UUID,
+        decision: Decision,
+        *,
+        by: UUID,
+        note: str | None = None,
+        login: dict[str, Any] | None = None,
+    ) -> Approval:
+        """接管的决定（TakeoverDesk 调用）：交还 approved、不处理 rejected。
+
+        outcome：人写的说明（feedback）、交还时存登录态的结果（login），续跑时换成工具结果。
+        """
+        approval = await self._pending(approval_id)
+        if approval.kind != "takeover":
+            raise Conflict("这不是一次接管", approval_id=str(approval_id))
+        outcome: dict[str, Any] = {}
+        if note and note.strip():
+            outcome["feedback"] = note.strip()
+        if login is not None:
+            outcome["login"] = login
+        return await self._decide(approval, decision, by=by, outcome=outcome)
+
+    async def _pending(self, approval_id: UUID) -> Approval:
+        approval = await self._repo.get(approval_id)
+        if approval is None:
+            raise NotFound("确认项不存在", approval_id=str(approval_id))
+        if approval.status != "pending":
+            raise Conflict("该确认已被处理过或已超时", approval_id=str(approval_id))
+        return approval
+
+    async def _decide(
+        self, approval: Approval, decision: Decision, *, by: UUID, outcome: dict[str, Any]
+    ) -> Approval:
+        approval_id = approval.approval_uuid
         if not await self._repo.decide(approval_id, decision=decision, user_id=by, outcome=outcome):
             raise Conflict("该确认已被处理过或已超时", approval_id=str(approval_id))
         await self._session.commit()
@@ -134,7 +172,7 @@ class ApprovalService:
         if row is None:
             return {"status": "failed"}
         extra = row.outcome if isinstance(row.outcome, dict) else {}
-        picked = {k: extra[k] for k in ("mode", "feedback", "answers") if extra.get(k)}
+        picked = {k: extra[k] for k in ("mode", "feedback", "answers", "login") if extra.get(k)}
         return {"status": row.status, **picked}
 
     async def expire_run(self, run_id: UUID) -> int:

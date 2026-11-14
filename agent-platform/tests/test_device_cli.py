@@ -131,6 +131,7 @@ class Env:
             limits=SimpleNamespace(timeout_s=60),
             knowledge=KnowledgeSpec(),
             model=SimpleNamespace(model="m1", prompt_cache=False),
+            browser=False,
         )
         segment = SimpleNamespace(
             spec=spec,

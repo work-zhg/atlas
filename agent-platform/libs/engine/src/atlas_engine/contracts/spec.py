@@ -416,6 +416,9 @@ class SandboxSpec:
 
     image: str = ""
     profile: SandboxProfile = "strict"
+    #: 带浏览器（c4-model/agent/browser/design-browser.html）。★ 不是作者配的：开了浏览器的智能体
+    #: 由 server 换算成浏览器沙箱镜像、带上这个属性；沙箱建好后浏览器的附加件看它决定管不管
+    browser: bool = False
 
 
 #: 子智能体的会话模式。
@@ -523,6 +526,10 @@ class AgentSpec:
     approval: ApprovalSpec = field(default_factory=ApprovalSpec)
     #: native 的 Shell 沙箱（镜像、档位）。★ 有默认值（快照纪律）；acp 的镜像在 cli.image
     sandbox: SandboxSpec = field(default_factory=SandboxSpec)
+    #: 浏览器能力（c4-model/agent/browser/design-browser.html）：模型在沙箱里用常驻的 Chromium，
+    #: 遇到登录请人接管（request_takeover）。★ 有默认值（快照纪律）。开了就换浏览器镜像、带浏览器
+    #: 技能，由 server 换算；能不能开（要 Shell、不能配自定义镜像）也由 server 在保存时判
+    browser: bool = False
 
     def subagent(self, name: str) -> SubAgentSpec | None:
         """按名字取子智能体配置。子会话执行时用它派生出独立的 AgentSpec。"""
@@ -627,4 +634,7 @@ def spec_for_subagent(parent: AgentSpec, name: str) -> AgentSpec:
         approval=parent.approval,
         # ★ native SubAgent 与父会话共用工作区的沙箱：谁先执行命令谁建，配置必须一致
         sandbox=parent.sandbox if native else SandboxSpec(),
+        # 浏览器跟着沙箱走：native SubAgent 用父会话的浏览器（自己的会话名 = 自己的标签页）；
+        # acp SubAgent 的 Pod 是自己的，不带
+        browser=parent.browser if native else False,
     )

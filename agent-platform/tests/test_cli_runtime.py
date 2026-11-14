@@ -117,6 +117,7 @@ def prepared(
         skills=(),
         limits=SimpleNamespace(timeout_s=timeout_s),
         knowledge=KnowledgeSpec(),
+        browser=False,
     )
     return SimpleNamespace(
         spec=spec,

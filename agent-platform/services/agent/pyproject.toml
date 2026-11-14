@@ -35,6 +35,10 @@ dependencies = [
   # 对象存储走 S3 协议：阿里云 OSS 的 S3 兼容端点、MinIO、AWS S3 同一份
   # 实现。测试用 moto 的内存桶，三种环境的断言等价。
   "boto3>=1.35",
+  # 浏览器登录态（c4-model/agent/browser/code-browser-login.html）：按人、按站点 AES-256-GCM
+  # 加密存库；站点 = 可注册域名，按公共后缀表算（包里自带一份表，运行时不联网）
+  "cryptography>=44",
+  "publicsuffixlist>=1.0",
   # 遥测（可观测性设计 §02）。★ 是必要依赖而不是可选 extra：
   #   opentelemetry-api 在没有配置 SDK 时是官方保证的 no-op，那正是它的
   #   设计目的。做成 extra 只会多出「开了 otel_enabled 却没装包」这一种

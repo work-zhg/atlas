@@ -47,6 +47,8 @@ export const EventType = {
   ApprovalRequired: "approval.required",
   /** 用户回答了 ask_user_question（doc/ask-user-question-design.html）。问题卡片据此显示答案 */
   QuestionAnswered: "question.answered",
+  /** 请人接管浏览器有了结果（c4-model/agent/browser/design-browser.html）。接管卡片据此显示结果 */
+  TakeoverSettled: "takeover.settled",
   /** acp：这一轮 CLI 实际生效的权限模式（可能被降级，必须让用户看见） */
   AgentMode: "agent.mode",
   ContextCompacted: "context.compacted",
@@ -328,9 +330,10 @@ export interface ApprovalRequiredData {
   reason: string;
   /**
    * tool = 工具调用的确认；plan = 规划模式提交的计划（args.plan）；
-   * question = 智能体向用户提的问题（args.questions，见 AskUserQuestionArgs）。缺省 = tool
+   * question = 智能体向用户提的问题（args.questions，见 AskUserQuestionArgs）；
+   * takeover = 请人接管浏览器（args 见 TakeoverArgs）。缺省 = tool
    */
-  approval_kind?: "tool" | "plan" | "question";
+  approval_kind?: "tool" | "plan" | "question" | "takeover";
   /** 对应的工具调用。问题卡片据此把那一行工具调用收起来（卡片就是它的完整呈现） */
   tool_call_id?: string;
   /** 为什么问：manual_mode / auto_uncertain / judge_failed / plan_mode。acp 没有这一项 */
@@ -384,6 +387,27 @@ export interface QuestionAnsweredData {
   /** 与问题一一对应；用户没按选项回答（rejected）时为空，原话在 feedback */
   answers: QuestionAnswerData[];
   feedback?: string | null;
+}
+
+/** request_takeover 的参数（kernel/middleware/takeover.py）：给人看的一句话、要打开的地址 */
+export interface TakeoverArgs {
+  reason: string;
+  url: string;
+}
+
+export interface TakeoverLoginData {
+  /** 这次登录的站点存下来了没有（存失败也照样交还） */
+  saved: boolean;
+  sites: string[];
+}
+
+export interface TakeoverSettledData {
+  approval_id: string;
+  tool_call_id: string;
+  /** approved = 交还；rejected = 没有处理；expired = 失效；failed = 审批系统故障 */
+  decision: "approved" | "rejected" | "expired" | "failed";
+  note?: string;
+  login?: TakeoverLoginData;
 }
 
 // ---------- 事件信封 ----------
@@ -481,6 +505,7 @@ export type TraceEvent =
   | Envelope<typeof EventType.UsageUpdated, UsageUpdatedData>
   | Envelope<typeof EventType.ApprovalRequired, ApprovalRequiredData>
   | Envelope<typeof EventType.QuestionAnswered, QuestionAnsweredData>
+  | Envelope<typeof EventType.TakeoverSettled, TakeoverSettledData>
   | Envelope<typeof EventType.AgentMode, AgentModeData>
   | Envelope<typeof EventType.ContextCompacted, ContextCompactedData>
   | Envelope<typeof EventType.ContextCleared, ContextClearedData>

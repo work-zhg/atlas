@@ -183,6 +183,9 @@ _TEST_DATA_TABLES = (
     "sandbox_account",
     # 本机 CLI：配对的设备
     "device",
+    # 沙箱浏览器：登录态、浏览器宿主
+    "browser_login",
+    "browser_host",
     "thread",
     "agent_version",
     "agent",

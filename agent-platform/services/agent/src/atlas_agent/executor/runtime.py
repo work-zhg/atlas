@@ -124,6 +124,8 @@ class NativeRuntime:
                 segment = await self._assembly.with_knowledge(
                     segment, run_id=run_id, notices=notices
                 )
+                # 开了浏览器：换浏览器沙箱镜像、带浏览器技能（每轮读运行期配置）
+                segment = await self._assembly.with_browser(segment)
                 caps, titler = await self._assembly.capabilities(
                     segment,
                     run_id=run_id,

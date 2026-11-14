@@ -1,17 +1,19 @@
 "use client";
 
-/** 个性化：记忆 + 自定义指令（原来是两个一级菜单，内容都是「智能体怎么对待我」） */
+/** 个性化：记忆 + 自定义指令 + 我的登录（内容都是「智能体怎么对待我」） */
 import { Tabs } from "antd";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 
 import pageStyles from "@/features/agents/agents.module.css";
+import { BrowserLogins } from "@/features/me/BrowserLogins";
 import { InstructionEditor } from "@/features/me/InstructionEditor";
 import { MemoryPage } from "@/features/memory/MemoryPage";
 
 function Personalize() {
   const router = useRouter();
-  const tab = useSearchParams().get("tab") === "instructions" ? "instructions" : "memory";
+  const asked = useSearchParams().get("tab");
+  const tab = asked === "instructions" || asked === "logins" ? asked : "memory";
   return (
     <div className={pageStyles.page}>
       <header className={pageStyles.head}>
@@ -41,6 +43,8 @@ function Personalize() {
                 </div>
               ),
             },
+            // 浏览器的登录态（c4-model/agent/browser/design-browser.html）
+            { key: "logins", label: "我的登录", children: <BrowserLogins /> },
           ]}
         />
       </div>

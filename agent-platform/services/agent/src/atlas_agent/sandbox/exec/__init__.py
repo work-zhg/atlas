@@ -19,7 +19,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 from uuid import UUID, uuid4
@@ -303,6 +303,7 @@ class ShellSandbox:
     cancel：run 的取消位，被取消时用它分辨「用户要停」和「这个实例不跟了」。不给（评测原地执行，
         没有交接这回事）就把每次取消都当用户要停。
     existing_only：只用已经在跑的沙箱、不新建（评测原地执行）。
+    env：每条命令都带的环境变量（如浏览器的会话名：沙箱是这个人共用的，按会话区分标签页）。
     """
 
     def __init__(
@@ -320,6 +321,7 @@ class ShellSandbox:
         idle_s: float | None = None,
         stall_cpu_pct: float = 2.0,
         existing_only: bool = False,
+        env: Mapping[str, str] | None = None,
     ) -> None:
         self._native = native
         self._exec = exec
@@ -333,6 +335,7 @@ class ShellSandbox:
         self._idle_s = idle_s
         self._stall_pct = stall_cpu_pct
         self._existing_only = existing_only
+        self._env = dict(env or {})
         #: 工作区目录已经确认存在的沙箱（换了沙箱要再建一次）
         self._workdir_ready: UUID | None = None
 
@@ -446,7 +449,10 @@ class ShellSandbox:
         if exec_id:
             await self._ledger.intend(self._run, exec_id, ref.sandbox_uuid)  # ★ 先记后提交
         start = asyncio.ensure_future(
-            self._exec.start(ref.sandbox_uuid, CommandSpec(command, cwd=cwd, timeout_s=timeout))
+            self._exec.start(
+                ref.sandbox_uuid,
+                CommandSpec(command, cwd=cwd, timeout_s=timeout, env=self._env),
+            )
         )
         try:
             cmd_id = await asyncio.shield(start)

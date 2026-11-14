@@ -229,6 +229,20 @@ class Settings(BaseSettings):
     #: 出站凭据档案：code → CredentialProfileIn（JSON，来自 Secret CREDENTIAL_PROFILES）
     credential_profiles: dict[str, CredentialProfileIn] = {}
 
+    # ── 沙箱浏览器（c4-model/agent/browser/design-browser.html）────────────
+    #: 登录态的加密密钥：{版本: base64 编码的 32 字节}（JSON，来自 Secret）。最大的版本用来加密，
+    #: 旧版本只用来解密 —— 换钥匙时加一个新版本、旧的留着。空 = 这个部署不能开浏览器
+    browser_state_keys: dict[int, SecretStr] = {}
+    #: 画面口令的派生密钥：口令 = HMAC(它, sandbox_uuid)。不存，转发画面时任何实例都能再算出来
+    browser_view_secret: SecretStr = SecretStr("")
+    #: 浏览器沙箱镜像、浏览器 CLI 镜像、浏览器技能（slug@版本）的默认值；运行期配置
+    #: browser.sandbox_image / browser.cli_image / browser.skill 改了，下一个新建的沙箱就用新的
+    browser_sandbox_image: str = ""
+    browser_cli_image: str = ""
+    browser_skill: str = ""
+    #: 沙箱里画面服务（websockify）的端口
+    browser_view_port: int = 6080
+
     # ── acp 执行环境（acp 详设 §11）────────────────────────────────
     #: 握手超时。Pod 刚被调度时会慢（镜像拉取），比普通 HTTP 宽松。
     cli_ws_connect_timeout_s: float = 10.0

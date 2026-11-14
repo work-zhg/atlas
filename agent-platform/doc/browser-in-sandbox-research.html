@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>沙箱里让 AI 操作浏览器并登录：业界做法与 Atlas 落地建议</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --border: #d1d9e0; --head: #f6f8fa;
+    --accent: #0969da; --ok: #1a7f37; --ok-bg: #dafbe1; --warn: #9a6700; --warn-bg: #fff8c5;
+    --bad: #cf222e; --bad-bg: #ffebe9; --code-bg: #f6f8fa; --hl: #bc4c00;
+    --b1: #ddf4ff; --b1d: #54aeff; --b2: #fbefff; --b2d: #c297ff; --b3: #dafbe1; --b3d: #4ac26b;
+    --b4: #fff8c5; --b4d: #d4a72c; --b5: #ffebe9; --b5d: #ff8182;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --border: #3d444d; --head: #151b23;
+      --accent: #4493f8; --ok: #3fb950; --ok-bg: #12261e; --warn: #d29922; --warn-bg: #2b2111;
+      --bad: #f85149; --bad-bg: #2d1214; --code-bg: #151b23; --hl: #f0883e;
+      --b1: #12263f; --b1d: #1f6feb; --b2: #271a36; --b2d: #8957e5; --b3: #12261e; --b3d: #2ea043;
+      --b4: #2b2111; --b4d: #9e6a03; --b5: #2d1214; --b5d: #da3633;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 32px; background: var(--bg); color: var(--fg);
+         font: 14px/1.75 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif; }
+  main { max-width: 1120px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 48px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 15.5px; margin: 24px 0 8px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .sub { color: var(--muted); margin: 0 0 14px; }
+  code { font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code-bg); padding: 1px 4px; border-radius: 4px; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0 16px; }
+  th, td { border: 1px solid var(--border); padding: 7px 10px; vertical-align: top; text-align: left; }
+  th { background: var(--head); white-space: nowrap; }
+  td.k { white-space: nowrap; font-weight: 600; }
+  .callout { border-left: 4px solid var(--accent); background: var(--head); padding: 10px 14px; border-radius: 4px; margin: 14px 0; }
+  .warn { border-left-color: var(--warn); background: var(--warn-bg); }
+  .lead { font-size: 15px; }
+  .toc { columns: 2; padding-left: 22px; }
+  .fig { border: 1px solid var(--border); border-radius: 6px; padding: 10px; overflow-x: auto; margin: 12px 0 6px; }
+  .cap { color: var(--muted); font-size: 12.5px; margin: 0 0 18px; text-align: center; }
+  svg text { fill: var(--fg); font-size: 12px; font-family: -apple-system, "PingFang SC", sans-serif; }
+  svg .s { font-size: 11px; fill: var(--muted); }
+  svg .b { font-weight: 600; }
+  svg .tl { font-size: 13.5px; font-weight: 600; }
+  svg .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; }
+  svg .c1 { fill: var(--b1); stroke: var(--b1d); } svg .c2 { fill: var(--b2); stroke: var(--b2d); }
+  svg .c3 { fill: var(--b3); stroke: var(--b3d); } svg .c4 { fill: var(--b4); stroke: var(--b4d); }
+  svg .c5 { fill: var(--b5); stroke: var(--b5d); }
+  svg .inner { fill: var(--bg); stroke: var(--border); }
+  svg .frame { fill: none; stroke: var(--muted); }
+  svg .ln { stroke: var(--fg); stroke-width: 1.3; fill: none; }
+  svg .dash { stroke-dasharray: 5 4; }
+  svg .arw { fill: var(--fg); }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <marker id="ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="arw" d="M0,0 L8,4 L0,8 z"/></marker>
+</defs></svg>
+<main>
+<h1>沙箱里让 AI 操作浏览器并登录：业界做法与 Atlas 落地建议</h1>
+<p class="sub">调研 · 2026-11-14 · 沙箱用的是 OpenSandbox</p>
+
+<div class="callout lead">
+业界的做法已经比较一致，分三件事：<br>
+① <b>AI 怎么操作浏览器</b>：主流是读页面的「无障碍树」，按元素编号点击和填写，纯文本模型就能用。看截图点坐标（computer use）是补充手段，需要能看图的模型。<br>
+② <b>登录怎么解决</b>：遇到密码、短信码、验证码时，AI 暂停，人在实时画面里自己操作（接管），操作完交还给 AI。登录态保存下来，以后复用；密码不进模型上下文。<br>
+③ <b>人怎么看到画面</b>：沙箱里跑有界面的 Chromium（放在虚拟屏幕上），通过 VNC/noVNC 嵌进前端。<br>
+Atlas 的大部分基础已经有了：Shell、技能、挂起机制、OpenSandbox 的端口暴露。缺三样：<b>镜像里的浏览器、前端实时画面、登录态的存放</b>。
+</div>
+
+<ol class="toc">
+  <li><a href="#s1">先认识几个词</a></li>
+  <li><a href="#s2">AI 怎么操作浏览器</a></li>
+  <li><a href="#s3">登录怎么解决</a></li>
+  <li><a href="#s4">人怎么看到画面</a></li>
+  <li><a href="#s5">业界产品速览</a></li>
+  <li><a href="#s6">对照 Atlas 现状</a></li>
+  <li><a href="#s7">落地建议</a></li>
+  <li><a href="#s8">风险与限制</a></li>
+  <li><a href="#s9">参考资料</a></li>
+</ol>
+
+<!-- ============================================================ -->
+<h2 id="s1">1　先认识几个词</h2>
+
+<table>
+  <tr><th>词</th><th>白话解释</th><th>例子</th></tr>
+  <tr><td class="k">无障碍树（accessibility tree）</td><td>浏览器为读屏软件整理的页面结构：每个按钮、输入框、链接各占一行，标出它是什么、叫什么名字。</td><td><code>button "登录"</code>、<code>textbox "用户名"</code></td></tr>
+  <tr><td class="k">元素编号（ref）</td><td>拍快照时给每个元素编的短号。模型说「点 e4」，程序就点到对应的元素。页面一变，旧编号就作废。</td><td><code>click e4</code></td></tr>
+  <tr><td class="k">CDP（Chrome DevTools Protocol）</td><td>Chrome 对外开放的控制接口。Playwright、开发者工具都通过它控制浏览器：打开网址、点击、执行脚本、读 cookie。</td><td>端口通常是 9222</td></tr>
+  <tr><td class="k">computer use</td><td>模型看截图，回答「在某个坐标点一下 / 输入一段字」，再由程序去执行。需要能看图的模型。</td><td>「在 (320, 410) 点击」</td></tr>
+  <tr><td class="k">Xvfb / VNC / noVNC</td><td>Xvfb 是没有显示器的虚拟屏幕，让有界面的 Chromium 能在服务器上跑。VNC 把这块屏幕的画面传出去、把键盘鼠标传进来。noVNC 是网页版 VNC 客户端，能嵌进网页。</td><td>noVNC 常用 6080 端口</td></tr>
+  <tr><td class="k">profile（user-data-dir）</td><td>Chromium 存 cookie、本地存储、历史记录等的目录，里面有 SQLite 等文件。整个目录在，登录就在。</td><td><code>--user-data-dir=/tmp/chrome</code></td></tr>
+  <tr><td class="k">storageState</td><td>Playwright 导出的登录态快照，一个 JSON 文件，主要是 cookie 和 localStorage。新浏览器导入后就是登录状态。比整个 profile 小，但不是 profile 的全部内容。</td><td><code>state.json</code></td></tr>
+  <tr><td class="k">接管（Takeover）</td><td>AI 暂停，人直接在实时画面里操作浏览器，操作完再交还给 AI。</td><td>Manus 的「Take Over」</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="s2">2　AI 怎么操作浏览器</h2>
+
+<table>
+  <tr><th>方式</th><th>代表</th><th>对模型的要求</th><th>优点</th><th>缺点</th></tr>
+  <tr><td class="k">无障碍树 + 元素编号</td><td>Playwright CLI / Playwright MCP、Vercel agent-browser、browser-use、chrome-devtools-mcp</td><td>纯文本模型即可</td><td>省 token、点得准</td><td>canvas、图形验证码、纯图片界面不行</td></tr>
+  <tr><td class="k">截图 + 坐标（computer use）</td><td>Anthropic computer use、OpenAI CUA、Gemini Computer Use</td><td>必须能看图</td><td>任何界面都能点，桌面程序也行</td><td>慢、贵，坐标会点偏</td></tr>
+  <tr><td class="k">混合</td><td>browser-use、Manus</td><td>能看图更好</td><td>默认读页面结构，卡住了再看截图</td><td>实现复杂一些</td></tr>
+</table>
+
+<div class="fig">
+<svg viewBox="0 0 1080 260" width="100%" role="img" aria-label="无障碍树驱动的一次循环">
+  <rect x="20" y="24" width="330" height="212" rx="6" class="inner"/>
+  <text x="36" y="50" class="b">页面快照（模型看到的全部内容）</text>
+  <text x="36" y="84" class="mono">- heading "登录" [ref=e1]</text>
+  <text x="36" y="110" class="mono">- textbox "用户名" [ref=e2]</text>
+  <text x="36" y="136" class="mono">- textbox "密码" [ref=e3]</text>
+  <text x="36" y="162" class="mono">- button "登录" [ref=e4]</text>
+  <text x="36" y="188" class="mono">- link "忘记密码" [ref=e5]</text>
+  <text x="36" y="220" class="s">保存成文件，模型按需读取</text>
+
+  <rect x="420" y="40" width="180" height="64" rx="6" class="c3"/>
+  <text x="510" y="66" text-anchor="middle" class="b">① 拍快照</text>
+  <text x="510" y="88" text-anchor="middle" class="s">把页面整理成带编号的清单</text>
+
+  <rect x="650" y="40" width="180" height="64" rx="6" class="c2"/>
+  <text x="740" y="66" text-anchor="middle" class="b">② 模型读快照</text>
+  <text x="740" y="88" text-anchor="middle" class="s">只看文字，不用看图</text>
+
+  <rect x="880" y="40" width="180" height="64" rx="6" class="c3"/>
+  <text x="970" y="66" text-anchor="middle" class="b">③ 按编号操作</text>
+  <text x="970" y="88" text-anchor="middle" class="s mono">fill e2 张三 · click e4</text>
+
+  <rect x="650" y="160" width="180" height="64" rx="6" class="c4"/>
+  <text x="740" y="186" text-anchor="middle" class="b">④ 页面变了</text>
+  <text x="740" y="208" text-anchor="middle" class="s">旧编号作废，回到 ①</text>
+
+  <path d="M350,72 H420" class="ln dash"/>
+  <path d="M600,72 H650" class="ln" marker-end="url(#ar)"/>
+  <path d="M830,72 H880" class="ln" marker-end="url(#ar)"/>
+  <path d="M970,104 V192 H830" class="ln" marker-end="url(#ar)"/>
+  <path d="M650,192 H510 V104" class="ln" marker-end="url(#ar)"/>
+</svg>
+</div>
+<p class="cap">图 1　按无障碍树操作浏览器的循环：模型只读文字清单，说「点 e4」就点到「登录」按钮</p>
+
+<h3>CLI 还是 MCP</h3>
+<ul>
+  <li><b>Playwright 官方建议</b>：能执行 Shell 的智能体用 CLI，没有 Shell 的才用 MCP。</li>
+  <li><b>原因</b>：两种方式拍出的快照一样大，差别在固定开销和快照放哪。MCP 每次请求都要带约 4.4k token 的工具定义，快照也会进对话历史。CLI 不用时只占几十 token，快照写到文件里，模型按需读取。</li>
+  <li><b>实测</b>：有人测同一个任务，MCP 约 114k token，CLI 约 27k token。</li>
+  <li><b>代价</b>：用 CLI 时页面变了要重新拍快照，才能拿到新编号；MCP 每次操作后会自动拍。</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="s3">3　登录怎么解决</h2>
+
+<p>业界有 4 种做法，通常组合使用：</p>
+
+<table>
+  <tr><th>做法</th><th>代表</th><th>要点</th></tr>
+  <tr><td class="k">人接管</td><td>Manus「Take Over」、Browserbase Live View、AgentBay 论文</td><td>输入密码、短信码、验证码时 AI 暂停，人在实时画面里操作完再交还。Manus 在接管期间不收集、不截获用户的输入。AgentBay 实测：加上人接管后成功率超过 95%，人平均只花 15–30 秒。</td></tr>
+  <tr><td class="k">保存登录态</td><td>Browserbase Contexts、Manus 云浏览器、Playwright storageState</td><td>登录一次，之后的会话自动带上。Browserbase 保存整个 user-data-dir，单独加密存储；Manus 会自动保存登录，跨会话、跨设备同步。</td></tr>
+  <tr><td class="k">占位符代填</td><td>browser-use <code>sensitive_data</code>、agent-browser <code>auth save / auth login</code>、1Password 集成</td><td>模型只看到 <code>x_pass</code> 这样的占位符，填表时程序换成真实值。agent-browser 把凭据用 AES-256-GCM 加密存在本地。注意：browser-use 有过两个域名用同一个占位符名、导致真实值泄漏的 bug（#5592），每个站点要用不同的占位符名。</td></tr>
+  <tr><td class="k">用用户自己的浏览器</td><td>Manus Browser Operator、Claude in Chrome</td><td>AI 在用户电脑上的浏览器里操作，直接用现成的登录态；用的是用户自己的网络出口，也不容易触发风控。</td></tr>
+</table>
+
+<div class="callout">
+<b>共识</b>：人登录一次，登录态保存下来复用；密码和验证码不经过模型。
+</div>
+
+<div class="fig">
+<svg viewBox="0 0 1080 200" width="100%" role="img" aria-label="接管登录的流程">
+  <rect x="20" y="30" width="190" height="90" rx="6" class="c2"/>
+  <text x="115" y="66" text-anchor="middle" class="b">① AI 打开登录页</text>
+  <text x="115" y="90" text-anchor="middle" class="s">发现要密码 / 验证码</text>
+
+  <rect x="232" y="30" width="190" height="90" rx="6" class="c2"/>
+  <text x="327" y="66" text-anchor="middle" class="b">② AI 请求接管</text>
+  <text x="327" y="90" text-anchor="middle" class="s">本轮挂起，不计时</text>
+
+  <rect x="444" y="30" width="190" height="90" rx="6" class="c1"/>
+  <text x="539" y="66" text-anchor="middle" class="b">③ 用户看实时画面</text>
+  <text x="539" y="90" text-anchor="middle" class="s">自己输密码、短信码</text>
+
+  <rect x="656" y="30" width="190" height="90" rx="6" class="c1"/>
+  <text x="751" y="66" text-anchor="middle" class="b">④ 用户点「交还」</text>
+  <text x="751" y="90" text-anchor="middle" class="s">AI 从原处继续</text>
+
+  <rect x="868" y="30" width="190" height="90" rx="6" class="c3"/>
+  <text x="963" y="66" text-anchor="middle" class="b">⑤ 保存登录态</text>
+  <text x="963" y="90" text-anchor="middle" class="s">下次会话直接带上</text>
+
+  <path d="M210,75 H232" class="ln" marker-end="url(#ar)"/>
+  <path d="M422,75 H444" class="ln" marker-end="url(#ar)"/>
+  <path d="M634,75 H656" class="ln" marker-end="url(#ar)"/>
+  <path d="M846,75 H868" class="ln" marker-end="url(#ar)"/>
+
+  <path d="M232,136 V146 H846 V136" class="ln"/>
+  <text x="539" y="170" text-anchor="middle" class="s">这一段模型不读页面、不截图，密码不进模型上下文和日志</text>
+</svg>
+</div>
+<p class="cap">图 2　接管登录：AI 只负责把人带到登录页，敏感输入由人完成</p>
+
+<!-- ============================================================ -->
+<h2 id="s4">4　人怎么看到画面</h2>
+
+<table>
+  <tr><th>做法</th><th>怎么做</th><th>优点</th><th>缺点</th></tr>
+  <tr><td class="k">VNC / noVNC</td><td>Chromium 以有界面模式跑在 Xvfb 上，x11vnc 读屏幕，noVNC 在网页里显示并转发键鼠</td><td>成熟、通用，桌面上任何程序都能看能操作；OpenSandbox 的 desktop、chrome 例子都是这么做的</td><td>多跑几个进程；镜像大一些</td></tr>
+  <tr><td class="k">CDP 推画面</td><td>浏览器可以没有界面，通过 CDP 持续推送页面截图，用户的键鼠再通过 CDP 发回去</td><td>不用虚拟屏幕，进程少</td><td>只能看到网页本身，看不到浏览器弹窗、文件选择框；要自己写前端</td></tr>
+</table>
+
+<p>前端是 HTTPS 时，浏览器不允许在页面里嵌入 http 的 noVNC，WebSocket 也要走同一个 HTTPS 源。所以要么在 OpenSandbox 前面加 TLS 反向代理，要么由业务服务转发。OpenSandbox 的 desktop 例子文档给了 Nginx 的写法。</p>
+
+<!-- ============================================================ -->
+<h2 id="s5">5　业界产品速览</h2>
+
+<table>
+  <tr><th>产品 / 项目</th><th>类型</th><th>和本题相关的做法</th></tr>
+  <tr><td class="k">Manus</td><td>终端用户产品</td><td>云浏览器自动保存登录；遇到复杂验证提示用户「Take Over」，接管期间不收集用户输入；另有 Browser Operator 插件，直接操作用户本机的浏览器</td></tr>
+  <tr><td class="k">Browserbase</td><td>云浏览器服务</td><td>Contexts 保存整个 user-data-dir（加密存储，<code>persist: true</code> 才回写）；Live View 可以嵌进自己的应用，用来做人接管</td></tr>
+  <tr><td class="k">Playwright CLI / MCP</td><td>微软开源</td><td>按无障碍树 + 元素编号操作；CLI 适合有 Shell 的智能体，附带技能说明</td></tr>
+  <tr><td class="k">agent-browser（Vercel）</td><td>开源 CLI</td><td>本地加密凭据库，密码不进模型上下文；支持域名白名单（白名单开启时禁止接管已有的浏览器）</td></tr>
+  <tr><td class="k">browser-use</td><td>开源 Python 库</td><td><code>sensitive_data</code> 占位符代填，可按域名限定；支持 TOTP 二次验证</td></tr>
+  <tr><td class="k">chrome-devtools-mcp</td><td>Chrome 官方</td><td>经 CDP 操作已运行的 Chrome；OpenSandbox 的 chrome 例子推荐用它</td></tr>
+  <tr><td class="k">OpenSandbox 例子</td><td>开源</td><td><code>chrome</code>：Chromium + VNC(5901) + CDP(9222)；<code>desktop</code>：Xvfb + x11vnc + XFCE + noVNC(6080)；<code>aio-sandbox</code>：接入 agent-infra/sandbox 一体化镜像（浏览器、VNC、CDP、MCP、Shell 都在一个镜像里）</td></tr>
+  <tr><td class="k">AgentBay（论文）</td><td>研究</td><td>人机混合沙箱：密码由人直接输入，智能体拿不到；接管后成功率超过 95%</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="s6">6　对照 Atlas 现状</h2>
+
+<table>
+  <tr><th>需要的能力</th><th>Atlas 现状</th></tr>
+  <tr><td class="k">浏览器</td><td>默认沙箱镜像（<code>docker/sandbox/Dockerfile</code>）里<b>没有 Chromium</b>，也没有中文字体</td></tr>
+  <tr><td class="k">操作浏览器的工具</td><td>原生智能体有 Shell 和技能：装一个 CLI、写一个技能就行，不用加新工具。CLI 智能体（Claude Code）也一样</td></tr>
+  <tr><td class="k">把画面给人看</td><td>OpenSandbox 有 <code>GET /sandboxes/{id}/endpoints/{port}</code>，Atlas 已在用（<code>sandbox/base/lifecycle/server.py</code>）。前端是 HTTPS，noVNC 的 WebSocket 要经 Atlas 转发</td></tr>
+  <tr><td class="k">暂停、等人操作</td><td>已有 <code>waiting_on</code> 挂起和 ask_user_question，接管可以做成其中一种等待类型。平台原则是等人不设超时</td></tr>
+  <tr><td class="k">登录态放哪</td><td><code>/data</code> 是 s3fs，<b>Chromium 的 profile（SQLite）不能放在上面</b>。只能导出 storageState 这类 JSON 文件持久化；<code>{user}/home/</code> 是现成的个人目录</td></tr>
+  <tr><td class="k">凭据</td><td>egress 的 Credential Vault（<code>sandbox/base/network/vault.py</code>）只能往<b>请求头</b>里注入，适合 API token，用不了表单登录</td></tr>
+  <tr><td class="k">视觉模型</td><td>DeepSeek 不能看图，MiniMax 能不能看图待确认 → <b>主路线必须走无障碍树</b>。文件工具读图片会返回图片块，视觉模型可以直接看截图</td></tr>
+  <tr><td class="k">资源</td><td>沙箱内存上限 4Gi，够一个 Chromium；日本服务器只有 2 核，会比较紧</td></tr>
+  <tr><td class="k">沙箱归属</td><td>一人一个沙箱，这个人的会话共用：天然适合「一人一个浏览器、一份登录态」，但同一个人的多个会话会同时用这个浏览器</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="s7">7　落地建议</h2>
+
+<h3>P0：能浏览网页（不涉及登录）</h3>
+<ul>
+  <li><b>镜像</b>：新建一个带浏览器的沙箱镜像，在默认镜像基础上加 Chromium、<code>@playwright/cli</code>（或 agent-browser）和 <code>fonts-noto-cjk</code>（没有它，中文页面截图全是方块）。</li>
+  <li><b>镜像细节</b>：浏览器要在构建时装进镜像，因为 strict 档的根目录只读。容器里要带 <code>--no-sandbox</code>。</li>
+  <li><b>技能</b>：写一个 browser 技能，教模型用打开、拍快照、点击、填写、截图这几个命令。</li>
+  <li><b>截图</b>：截图存成 png，再用文件工具读，视觉模型就能看，不用加工具。</li>
+  <li><b>准入</b>：新镜像的前缀加进镜像白名单，按智能体选择用不用这个镜像。</li>
+</ul>
+
+<h3>P1：人接管登录</h3>
+<ul>
+  <li><b>画面</b>：浏览器改成有界面模式，跑在 Xvfb 上，加 x11vnc + noVNC。可以照搬 OpenSandbox 的 desktop 例子。</li>
+  <li><b>转发</b>：Atlas 加一个 WebSocket 转发：先校验会话是不是这个人的，再转到沙箱的 noVNC 端口。前端在对话里嵌入实时画面。</li>
+  <li><b>挂起与续跑</b>：模型请求接管 → 本轮挂起，等待类型记为浏览器接管 → 用户登录完点「交还」→ 续跑。不设超时。</li>
+  <li><b>登录态</b>：一人一个持久浏览器，profile 放 Pod 本地盘。沙箱存活期间登录态一直有效。沙箱被回收前，把 storageState 导出到这个人的个人目录（或加密存进库里），新沙箱启动时再导入。同一个人的多个会话各开各的标签页。</li>
+</ul>
+
+<div class="fig">
+<svg viewBox="0 0 1080 430" width="100%" role="img" aria-label="P1 的组成">
+  <rect x="20" y="60" width="220" height="110" rx="6" class="c1"/>
+  <text x="130" y="92" text-anchor="middle" class="b">用户的浏览器（控制台）</text>
+  <text x="130" y="116" text-anchor="middle" class="s">对话页里嵌入实时画面</text>
+  <text x="130" y="138" text-anchor="middle" class="s">自己输密码、验证码</text>
+
+  <rect x="300" y="30" width="300" height="300" rx="8" class="c2"/>
+  <text x="450" y="56" text-anchor="middle" class="tl">Atlas 服务</text>
+  <rect x="320" y="80" width="260" height="70" rx="6" class="inner"/>
+  <text x="450" y="108" text-anchor="middle" class="b">画面转发（WebSocket）</text>
+  <text x="450" y="130" text-anchor="middle" class="s">先校验：这个会话是你的</text>
+  <rect x="320" y="220" width="260" height="80" rx="6" class="inner"/>
+  <text x="450" y="250" text-anchor="middle" class="b">执行器：模型 + Shell 工具</text>
+  <text x="450" y="274" text-anchor="middle" class="s">请求接管时挂起，交还后续跑</text>
+
+  <rect x="660" y="30" width="400" height="300" rx="8" class="c4"/>
+  <text x="860" y="56" text-anchor="middle" class="tl">沙箱 Pod（一人一个）</text>
+  <rect x="680" y="80" width="170" height="70" rx="6" class="inner"/>
+  <text x="765" y="108" text-anchor="middle" class="b">noVNC + x11vnc</text>
+  <text x="765" y="130" text-anchor="middle" class="s">传画面、转发键鼠</text>
+  <rect x="680" y="220" width="170" height="80" rx="6" class="inner"/>
+  <text x="765" y="250" text-anchor="middle" class="b">playwright-cli</text>
+  <text x="765" y="274" text-anchor="middle" class="s">经 CDP 操作浏览器</text>
+  <rect x="870" y="80" width="170" height="220" rx="6" class="inner"/>
+  <text x="955" y="170" text-anchor="middle" class="b">Chromium（有界面）</text>
+  <text x="955" y="194" text-anchor="middle" class="s">跑在 Xvfb 虚拟屏幕上</text>
+  <text x="955" y="214" text-anchor="middle" class="s">profile 在 Pod 本地盘</text>
+
+  <rect x="760" y="364" width="300" height="52" rx="6" class="c3"/>
+  <text x="910" y="386" text-anchor="middle" class="b">对象存储 · 这个人的个人目录</text>
+  <text x="910" y="405" text-anchor="middle" class="s">登录态（storageState）</text>
+
+  <path d="M240,115 H320" class="ln" marker-end="url(#ar)"/>
+  <text x="280" y="106" text-anchor="middle" class="s">看画面</text>
+  <path d="M580,115 H680" class="ln" marker-end="url(#ar)"/>
+  <text x="630" y="106" text-anchor="middle" class="s">沙箱端点</text>
+  <path d="M850,115 H870" class="ln" marker-end="url(#ar)"/>
+  <path d="M580,260 H680" class="ln" marker-end="url(#ar)"/>
+  <text x="630" y="251" text-anchor="middle" class="s">执行命令</text>
+  <path d="M850,260 H870" class="ln" marker-end="url(#ar)"/>
+  <path d="M130,170 V260 H320" class="ln" marker-end="url(#ar)"/>
+  <text x="138" y="220" class="s">点「交还」</text>
+  <path d="M955,300 V364" class="ln dash" marker-end="url(#ar)"/>
+  <text x="947" y="340" text-anchor="end" class="s">回收前导出 / 新建时导入</text>
+</svg>
+</div>
+<p class="cap">图 3　P1 的组成：模型经 Shell 操作浏览器，人经 Atlas 转发看画面、输密码</p>
+
+<h3>P2：按需再做</h3>
+<ul>
+  <li><b>占位符代填</b>：常用站点的账号密码存起来，模型只用占位符，省掉每次接管。</li>
+  <li><b>用用户自己的浏览器</b>：通过「本机 CLI 智能体」操作用户电脑上的 Chrome（如 Claude Code 的 <code>--chrome</code>）。登录态是现成的，网络出口也是用户自己的，同时解决登录和风控两个问题。这条通道 Atlas 已经有了。</li>
+  <li><b>computer use</b>：接入能看图的模型后，作为无障碍树搞不定时的补充。</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="s8">8　风险与限制</h2>
+
+<div class="callout warn">
+<b>最重要的一条：模型能拿到 cookie。</b>浏览器和模型在同一个沙箱、同一个用户身份下，模型有 Shell，能直接读 profile，也能通过 CDP 执行脚本读出 <code>document.cookie</code>。接管只能保证<b>密码不进模型上下文和日志</b>，不能保证模型碰不到登录态。沙箱出网已定为放开，所以模型被提示注入后，cookie 有可能被发出去。<br>
+真正隔离的做法是：浏览器单独一个容器、换一个用户身份，只开放受限的接口，不给原始 CDP（agent-box #837 的思路），代价很高。<br>
+<b>建议</b>：P1 先接受这个风险（智能体本来就代表这个人），浏览器能力按智能体单独开关。
+</div>
+
+<table>
+  <tr><th>风险</th><th>说明</th></tr>
+  <tr><td class="k">服务器 IP 会被风控</td><td>GCP 日本和内网服务器的出口 IP，在淘宝、微信这类国内站点上很容易遇到验证码或被拦截。这也是 Manus 另做本地浏览器插件的原因。</td></tr>
+  <tr><td class="k">资源</td><td>每人一个 Chromium + Xvfb，大约 0.5–1.5 GB 内存；2 核的机器同时开不了几个。</td></tr>
+  <tr><td class="k">账号可能被封</td><td>有些平台会封自动化操作的账号（2026 年 2 月 X 就发过这类警告）。</td></tr>
+  <tr><td class="k">会话之间共用一个浏览器</td><td>沙箱一人一个，同一个人的多个会话同时操作同一个网站时可能互相干扰。</td></tr>
+  <tr><td class="k">登录态不完整</td><td>storageState 主要是 cookie 和 localStorage，不是整个 profile；少数把登录态放在别处的网站，换了新沙箱后可能还要重新登录。</td></tr>
+  <tr><td class="k">现成的 AIO 镜像</td><td>agent-infra/sandbox 自带浏览器、VNC、CDP、MCP，OpenSandbox 有接入例子；但能不能在 strict 档（非 root、根只读）下运行还没验证，镜像也大。倾向于自己做镜像。</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="s9">9　参考资料</h2>
+
+<ul>
+  <li><a target="_blank" rel="noopener" href="https://playwright.dev/agent-cli/introduction">Playwright CLI 官方介绍</a></li>
+  <li><a target="_blank" rel="noopener" href="https://betterstack.com/community/guides/ai/playwright-cli-vs-mcp-browser/">Playwright CLI vs MCP（Better Stack）</a></li>
+  <li><a target="_blank" rel="noopener" href="https://octomind.run/blog/playwright-mcp-vs-cli">Playwright CLI vs MCP（Octomind，快照大小与固定开销）</a></li>
+  <li><a target="_blank" rel="noopener" href="https://testdino.com/blog/playwright-cli">Playwright CLI 命令与基准（TestDino）</a></li>
+  <li><a target="_blank" rel="noopener" href="https://agent-browser.dev/security">agent-browser 安全与凭据库</a></li>
+  <li><a target="_blank" rel="noopener" href="https://browser-use.com/posts/web-agent-authentication">browser-use 网站认证</a></li>
+  <li><a target="_blank" rel="noopener" href="https://github.com/browser-use/browser-use/issues/5592">browser-use 占位符同名泄漏 issue #5592</a></li>
+  <li><a target="_blank" rel="noopener" href="https://flaviocopes.com/ai-agent-passwords/">How AI agents can log in without seeing your passwords</a></li>
+  <li><a target="_blank" rel="noopener" href="https://docs.browserbase.com/platform/browser/core-features/contexts">Browserbase Contexts</a></li>
+  <li><a target="_blank" rel="noopener" href="https://docs.browserbase.com/platform/identity/authentication">Browserbase 网站认证</a></li>
+  <li><a target="_blank" rel="noopener" href="https://manus.im/docs/features/cloud-browser">Manus 云浏览器</a></li>
+  <li><a target="_blank" rel="noopener" href="https://manus.im/docs/features/browser-operator">Manus Browser Operator</a></li>
+  <li><a target="_blank" rel="noopener" href="https://arxiv.org/pdf/2512.04367">AgentBay：人机混合接管沙箱（arXiv 2512.04367）</a></li>
+  <li><a target="_blank" rel="noopener" href="https://github.com/defangdevs/agent-box/issues/837">agent-box #837：安全的人接管登录设计</a></li>
+  <li><a target="_blank" rel="noopener" href="https://github.com/TGYD-helige/browser-sandbox">browser-sandbox：持久 profile + 接管租约</a></li>
+  <li><a target="_blank" rel="noopener" href="https://dev.to/amananandrai/14-personal-ai-agents-in-2026-a-technical-guide-to-architecture-memory-tools-autonomy-10h">14 Personal AI Agents in 2026</a></li>
+  <li><a target="_blank" rel="noopener" href="https://github.com/opensandbox-group/OpenSandbox/tree/main/examples/chrome">OpenSandbox chrome 例子</a> · <a target="_blank" rel="noopener" href="https://github.com/opensandbox-group/OpenSandbox/tree/main/examples/desktop">desktop 例子</a> · <a target="_blank" rel="noopener" href="https://github.com/opensandbox-group/OpenSandbox/tree/main/examples/aio-sandbox">aio-sandbox 例子</a></li>
+  <li><a target="_blank" rel="noopener" href="https://github.com/agent-infra/sandbox">agent-infra/sandbox（AIO 一体化镜像）</a></li>
+  <li><a target="_blank" rel="noopener" href="https://github.com/ChromeDevTools/chrome-devtools-mcp">chrome-devtools-mcp</a></li>
+</ul>
+
+</main>
+</body>
+</html>

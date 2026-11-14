@@ -57,6 +57,8 @@ export function defaultSpec(model = "claude-sonnet-5"): ResolvedSpec {
     // 服务端保存时填写（记录当时的 MCP 工具定义指纹），这里给空即可
     mcp_tool_digests: {},
     mcp_drift_policy: "warn",
+    // 浏览器能力默认关：开了要换带浏览器的工作环境（c4-model/agent/browser/design-browser.html）
+    browser: false,
     limits: {
       max_steps: 40,
       timeout_s: 300,

@@ -31,7 +31,7 @@ import hashlib
 import logging
 import shlex
 import time
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, NamedTuple, Protocol, runtime_checkable
@@ -125,8 +125,14 @@ class PodProvider(Protocol):
         *,
         model: CliModel | None = None,
         credentials: CredentialSet | None = None,
+        browser: bool = False,
+        agent_env: Mapping[str, str] | None = None,
     ) -> PodEndpoint:
-        """确保这个会话的 bridge 在跑，返回连它的地址和令牌。每轮调一次，不在外面缓存。"""
+        """确保这个会话的 bridge 在跑，返回连它的地址和令牌。每轮调一次，不在外面缓存。
+
+        browser：带浏览器的 Pod（沙箱建好后附加件拉起浏览器）；agent_env：再给 CLI 的环境变量
+        （如浏览器的会话名）。
+        """
         ...
 
 
@@ -139,6 +145,11 @@ class PodRequest:
     cli: CliSpec
     model: CliModel | None = None
     credentials: CredentialSet = field(default_factory=CredentialSet)
+    #: 带浏览器（c4-model/agent/browser/design-browser.html）：镜像已换成浏览器 CLI 镜像，沙箱建好后
+    #: 浏览器的附加件看这个属性决定管不管
+    browser: bool = False
+    #: 再给 CLI 的环境变量（会话级，跟着这个会话的 bridge 走，不进 Pod 的规格）
+    agent_env: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def layout(self) -> WorkspaceLayout:
@@ -200,8 +211,13 @@ class CliPodKind:
             raise ValueError("CLI 智能体的 cli.image 为空，无法创建会话 Pod")
 
     def share(self, req: PodRequest) -> Sharing:
-        """同镜像（供给拼进键里）、同凭据集合的会话共用；一个 Pod 至多 cli_sessions_per_pod 个。"""
-        return Sharing(_credential_key(req.credentials), self._settings.cli_sessions_per_pod)
+        """同镜像（供给拼进键里）、同凭据集合的会话共用；一个 Pod 至多 cli_sessions_per_pod 个。
+
+        ★ 带浏览器的另成一组：别的智能体配了同样的镜像，也不能和浏览器 Pod 共用（它可能是先建的，
+          建好时没拉起浏览器）。
+        """
+        key = _credential_key(req.credentials) + ("|browser" if req.browser else "")
+        return Sharing(key, self._settings.cli_sessions_per_pod)
 
     def build(self, req: PodRequest, biz: BizRef) -> CreateSpec:
         s = self._settings
@@ -367,6 +383,7 @@ class BridgeLauncher:
             assert trust is not None
             agent_env.update(_git_env(req.credentials.git_author, trust))
             allow.extend(trust.inherited)  # bootstrap 导出的 CA 变量要原样传给 CLI
+        agent_env.update(req.agent_env)
         allow.extend(agent_env)
         token_file = f"{BRIDGE_DIR}/{session}.token"
         env = {
@@ -486,6 +503,8 @@ class SessionPods:
         *,
         model: CliModel | None = None,
         credentials: CredentialSet | None = None,
+        browser: bool = False,
+        agent_env: Mapping[str, str] | None = None,
     ) -> PodEndpoint:
         """每轮都经通用供给确认一遍 Pod（坏了退役、重建），再确认这个会话的 bridge 在跑。"""
         req = PodRequest(
@@ -495,6 +514,8 @@ class SessionPods:
             cli=cli,
             model=model,
             credentials=credentials or CredentialSet(),
+            browser=browser,
+            agent_env=dict(agent_env or {}),
         )
         biz = _biz(thread.thread_uuid, thread.created_by_uuid)
         ref = await self._prov.ensure(biz, req)

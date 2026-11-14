@@ -15,10 +15,11 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 from uuid import UUID
 
 from fastapi import Depends, Request
+from starlette.requests import HTTPConnection
 
 from ..config import Settings, get_settings
 from ..db.session import SessionDep
@@ -27,10 +28,13 @@ from ..outbound import CallIdentity, use_identity
 from .principal import Principal
 from .service import AuthService
 
-__all__ = ["current_principal", "uc_client"]
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+__all__ = ["current_principal", "principal_of", "uc_client"]
 
 
-def uc_client(request: Request):  # type: ignore[no-untyped-def]
+def uc_client(request: HTTPConnection):  # type: ignore[no-untyped-def]
     """进程级用户中心客户端（create_app 里建）。"""
     return request.app.state.uc
 
@@ -49,7 +53,15 @@ async def current_principal(
     session: SessionDep,
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> Principal:
-    h = request.headers
+    return await principal_of(request, session, settings)
+
+
+async def principal_of(
+    conn: HTTPConnection, session: AsyncSession, settings: Settings
+) -> Principal:
+    """按请求头解析主体。HTTP 请求经 current_principal；WebSocket（浏览器画面）连接时直接调它 ——
+    长连接不该占着请求作用域的数据库会话。"""
+    h = conn.headers
     uid = _uuid(h.get("x-uid"))
     if uid is None:
         raise Unauthorized("请先登录")
@@ -58,6 +70,6 @@ async def current_principal(
     caller = (h.get("x-caller-app") or "").strip() or "unknown"
     # ★ 先设出站身份：下面取授权快照调用户中心时就要带上
     use_identity(CallIdentity(uid=uid, auth_uid=auth_uid, tenant_id=tenant))
-    return await AuthService(session, settings, uc_client(request)).resolve(
+    return await AuthService(session, settings, uc_client(conn)).resolve(
         uid, auth_uid, caller_app=caller, tenant_id=tenant
     )

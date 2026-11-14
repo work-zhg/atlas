@@ -19,13 +19,18 @@ server 用它只有两步：先把这一段的能力收成 Capabilities（IO 都
 ★ 装配入口是 runtime.assemble.assemble（不在包级转出：函数名和子模块同名，转出会遮住模块）。
 ★ 这是 engine 里唯一面向 langchain / langgraph 的一层：server 不 import 框架，也不 import
   kernel，只认 contracts 和这里（import-linter）。kernel 里 server 要用的几样（自动模式判断器的
-  数据、提问的答案解析）由这里转出。
+  数据、提问的答案解析、接管的参数校验和结果文字）由这里转出。
 ★ 纯计算层：不碰 DB、Redis、HTTP 框架、部署配置 —— 「run 一轮」必须能用假模型脱离
   基础设施测试。IO 归 server。
 """
 
 from atlas_engine.kernel.middleware.ask_user import resolve_answers
 from atlas_engine.kernel.middleware.auto_judge import Instruction, JudgeSetup
+from atlas_engine.kernel.middleware.takeover import (
+    TAKEOVER_DESCRIPTION,
+    TakeoverAsk,
+    takeover_result,
+)
 from atlas_engine.runtime.assemble import Capabilities, JudgePort
 from atlas_engine.runtime.context import ContextLimits, ContextPorts
 from atlas_engine.runtime.messages import Transcript
@@ -33,6 +38,7 @@ from atlas_engine.runtime.models import Completion, build_chat_model, complete
 from atlas_engine.runtime.summarize import Summarizer
 
 __all__ = [
+    "TAKEOVER_DESCRIPTION",
     "Capabilities",
     "Completion",
     "ContextLimits",
@@ -41,8 +47,10 @@ __all__ = [
     "JudgePort",
     "JudgeSetup",
     "Summarizer",
+    "TakeoverAsk",
     "Transcript",
     "build_chat_model",
     "complete",
     "resolve_answers",
+    "takeover_result",
 ]

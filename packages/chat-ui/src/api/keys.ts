@@ -39,6 +39,12 @@ export const qk = {
     audit: (targetId: string) => ["skill-app", "audit", targetId] as const,
   },
 
+  /** 浏览器（c4-model/agent/browser/design-browser.html）：会话的浏览器在不在跑、我的登录 */
+  browser: {
+    status: (threadId: string) => ["browser", "status", threadId] as const,
+    logins: ["browser", "logins"] as const,
+  },
+
   runs: {
     all: ["runs"] as const,
     detail: (id: string) => ["runs", "detail", id] as const,

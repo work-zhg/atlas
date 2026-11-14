@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..auth.agent_access import AgentAccess
 from ..auth.principal import Principal
 from ..auth.uc import UCClient
+from ..browser.component import BrowserComponent
 from ..config import Settings
 from ..credentials import (
     CredentialDenied,
@@ -513,6 +514,8 @@ class ThreadService:
         redis = make_redis(self._settings)
         try:
             sandbox = SandboxComponent.build(self._settings, redis)
+            # 浏览器的附加件：沙箱因此退役时先导出登录态
+            BrowserComponent.attach(self._settings, sandbox)
             await sandbox.pods.release(thread.thread_uuid, thread.created_by_uuid)
             if self._settings.sandbox_enabled and thread.sandbox_thread_id == thread.thread_uuid:
                 # 原生沙箱按会话树的根绑定：删的是根会话时它才有沙箱

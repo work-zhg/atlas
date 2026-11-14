@@ -21,6 +21,7 @@ from .api.v1.jobs import jobs_router
 from .api.v1.previews import install_log_mask
 from .auth.service import listen_invalidations
 from .auth.uc import UCClient
+from .browser.component import BrowserComponent
 from .cli.runtime import CliRuntime
 from .config import get_settings
 from .db.session import get_sessionmaker
@@ -85,7 +86,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # code-sandbox-session-pod.html），由 OpenSandbox 的 opensandbox-cli 建。
     # ★ 进程级的 Redis 客户端：建沙箱的效率锁在 Redis
     pods_redis = make_redis(settings)
-    pods = SandboxComponent.build(settings, pods_redis).pods
+    pods_sandbox = SandboxComponent.build(settings, pods_redis)
+    # 浏览器的附加件：开了浏览器的 CLI 智能体，会话 Pod 建好时导入登录态、拉起守护
+    BrowserComponent.attach(settings, pods_sandbox)
+    pods = pods_sandbox.pods
     # 跨会话记忆（doc/memory-design.html）。★ 没接入记忆服务就是 None —— 执行器、管理接口、
     #   补记据此完全跳过，不回落任何假实现。
     memory = make_memory_runtime(settings, get_sessionmaker())

@@ -1646,6 +1646,114 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/runs/{run_id}/takeovers/{approval_id}/open": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Open Takeover
+         * @description 可以重复点：同一个接管只开一个窗口。浏览器被闲置回收了，这里重建并导入登录态（要几十秒）。
+         */
+        post: operations["open_takeover_v1_runs__run_id__takeovers__approval_id__open_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/runs/{run_id}/takeovers/{approval_id}/hand-back": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Hand Back Takeover */
+        post: operations["hand_back_takeover_v1_runs__run_id__takeovers__approval_id__hand_back_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/runs/{run_id}/takeovers/{approval_id}/decline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Decline Takeover */
+        post: operations["decline_takeover_v1_runs__run_id__takeovers__approval_id__decline_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/threads/{thread_id}/browser": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Browser Status */
+        get: operations["browser_status_v1_threads__thread_id__browser_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/browser/logins": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Logins */
+        get: operations["list_logins_v1_browser_logins_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/browser/logins/{site}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Forget Login
+         * @description 只影响以后：库里删掉，正在跑的浏览器里也尽力清掉。
+         */
+        delete: operations["forget_login_v1_browser_logins__site__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/configs": {
         parameters: {
             query?: never;
@@ -2063,6 +2171,11 @@ export interface components {
             knowledge?: components["schemas"]["KnowledgeSpecIn"];
             approval?: components["schemas"]["ApprovalSpecIn"];
             sandbox?: components["schemas"]["SandboxSpecIn"];
+            /**
+             * Browser
+             * @default false
+             */
+            browser: boolean;
         };
         /** AgentStatusUpdate */
         AgentStatusUpdate: {
@@ -2206,6 +2319,38 @@ export interface components {
         BackfillSeenIn: {
             /** Ids */
             ids?: string[] | null;
+        };
+        /** BrowserLoginList */
+        BrowserLoginList: {
+            /** Items */
+            items: components["schemas"]["BrowserLoginOut"][];
+        };
+        /**
+         * BrowserLoginOut
+         * @description 「我的登录」里的一行：没有内容，只有站点和时间。
+         */
+        BrowserLoginOut: {
+            /** Site */
+            site: string;
+            /**
+             * Captured At
+             * Format: date-time
+             */
+            captured_at: string;
+            /** Captured From */
+            captured_from?: string | null;
+            /** Expires At */
+            expires_at?: string | null;
+            /** Expired */
+            expired: boolean;
+        };
+        /**
+         * BrowserStatusOut
+         * @description 这个会话的浏览器在不在跑：在跑才有画面（看画面不为此新建沙箱）。
+         */
+        BrowserStatusOut: {
+            /** Running */
+            running: boolean;
         };
         /**
          * CliSpecIn
@@ -2510,7 +2655,7 @@ export interface components {
          * EventType
          * @enum {string}
          */
-        EventType: "run.started" | "run.finished" | "run.failed" | "run.cancelled" | "run.suspended" | "run.resumed" | "thinking.delta" | "message.delta" | "message.completed" | "todos.updated" | "tool.started" | "tool.updated" | "tool.completed" | "tool.failed" | "subagent.started" | "subagent.step" | "subagent.finished" | "file.written" | "file.deleted" | "usage.updated" | "approval.required" | "question.answered" | "context.compacted" | "context.cleared" | "context.usage" | "session.lost" | "agent.mode" | "thread.title_generated" | "skill.loaded" | "skill.skipped" | "mcp.tool_drift" | "mcp.tool_skipped" | "knowledge.skipped" | "model.deprecated";
+        EventType: "run.started" | "run.finished" | "run.failed" | "run.cancelled" | "run.suspended" | "run.resumed" | "thinking.delta" | "message.delta" | "message.completed" | "todos.updated" | "tool.started" | "tool.updated" | "tool.completed" | "tool.failed" | "subagent.started" | "subagent.step" | "subagent.finished" | "file.written" | "file.deleted" | "usage.updated" | "approval.required" | "question.answered" | "takeover.settled" | "context.compacted" | "context.cleared" | "context.usage" | "session.lost" | "agent.mode" | "thread.title_generated" | "skill.loaded" | "skill.skipped" | "mcp.tool_drift" | "mcp.tool_skipped" | "knowledge.skipped" | "model.deprecated";
         /** FeedbackIn */
         FeedbackIn: {
             /**
@@ -3551,6 +3696,48 @@ export interface components {
             mcp_drift_policy: "warn" | "block";
             /** Source Agent Id */
             source_agent_id?: string | null;
+        };
+        /** TakeoverLoginOut */
+        TakeoverLoginOut: {
+            /** Saved */
+            saved: boolean;
+            /**
+             * Sites
+             * @default []
+             */
+            sites: string[];
+        };
+        /**
+         * TakeoverNote
+         * @description 交还、不处理时人写的一句说明（交给模型）。
+         */
+        TakeoverNote: {
+            /** Note */
+            note?: string | null;
+        };
+        /** TakeoverOut */
+        TakeoverOut: {
+            /**
+             * Approval Id
+             * Format: uuid
+             */
+            approval_id: string;
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /**
+             * Thread Id
+             * Format: uuid
+             */
+            thread_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "opened" | "approved" | "rejected";
+            login?: components["schemas"]["TakeoverLoginOut"] | null;
         };
         /** TemplateDetailOut */
         TemplateDetailOut: {
@@ -7390,6 +7577,190 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["DeviceOut"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    open_takeover_v1_runs__run_id__takeovers__approval_id__open_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+                approval_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TakeoverOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    hand_back_takeover_v1_runs__run_id__takeovers__approval_id__hand_back_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+                approval_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TakeoverNote"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TakeoverOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    decline_takeover_v1_runs__run_id__takeovers__approval_id__decline_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+                approval_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TakeoverNote"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TakeoverOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    browser_status_v1_threads__thread_id__browser_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrowserStatusOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_logins_v1_browser_logins_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrowserLoginList"];
+                };
+            };
+        };
+    };
+    forget_login_v1_browser_logins__site__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                site: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

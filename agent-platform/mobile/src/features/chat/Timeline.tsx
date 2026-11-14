@@ -11,7 +11,16 @@ import type { RunState, TimelineItem } from "@atlas/chat-ui/src/lib/run-reducer"
 import { Markdown } from "@/components/Markdown";
 import { Icon } from "@/components/ui";
 import { C, F } from "@/theme";
-import { ApprovalCard, CompactionDivider, ModeBadge, NoticeRow, QuestionCard, SubAgentCard, TodoCard } from "./cards";
+import {
+  ApprovalCard,
+  CompactionDivider,
+  ModeBadge,
+  NoticeRow,
+  QuestionCard,
+  SubAgentCard,
+  TakeoverCard,
+  TodoCard,
+} from "./cards";
 import { Steps } from "./Steps";
 
 /** 助手正文：末段是结论，之前的是过程性发言，弱化显示 */
@@ -47,6 +56,9 @@ function LiveItem({ item, live, root, isLast }: { item: TimelineItem; live: RunS
       const approval = live.approvals.find((a) => a.approvalId === item.approvalId);
       if (!approval) return null;
       const waiting = root.pendingApprovals.some((a) => a.approvalId === item.approvalId);
+      if (approval.kind === "takeover") {
+        return <TakeoverCard approval={approval} waiting={waiting} settled={live.takeovers[approval.approvalId]} />;
+      }
       return approval.kind === "question" ? (
         <QuestionCard approval={approval} waiting={waiting} answered={live.answers[approval.approvalId]} />
       ) : (

@@ -22,6 +22,7 @@ from ..auth.catalog import AGENT_DATA
 from ..auth.digital import AgentIdentity
 from ..auth.principal import LEVEL_RANK
 from ..auth.uc import UCError
+from ..browser.plan import check_browser
 from ..db.models import Agent, AgentVersion
 from ..errors import (
     CapabilityUnavailable,
@@ -234,7 +235,7 @@ class AgentService:
         await self._check_models(spec, previous=None, agent=None)
         # ★ 在这里就跑 engine 的校验：opus-5 传 temperature 之类的错误
         #   在点保存时被拒，而不是等到某次 run（§3 D3）
-        spec.to_engine(slug=payload.slug, name=payload.name).validate()
+        self._validate(spec, slug=payload.slug, name=payload.name)
 
         agent, version = await self._repo.create(
             slug=payload.slug,
@@ -290,7 +291,7 @@ class AgentService:
                 await self._check_knowledge(spec, previous=previous, subject=subject)
             await self._check_mcp(spec, previous=previous, agent=agent)
             await self._check_models(spec, previous=previous, agent=agent)
-            spec.to_engine(slug=agent.slug, name=agent.name).validate()
+            self._validate(spec, slug=agent.slug, name=agent.name)
             version = await self._repo.add_version(
                 agent=agent, spec=spec.model_dump(mode="json"), created_by=user_id, note=note
             )
@@ -349,7 +350,7 @@ class AgentService:
             return current.agent_version_uuid
         previous = AgentSpecIn.model_validate(current.spec)
         spec = await self._resolve(AgentSpecIn.model_validate(agent.draft_spec), previous=previous)
-        spec.to_engine(slug=agent.slug, name=agent.name).validate()
+        self._validate(spec, slug=agent.slug, name=agent.name)
         version = await self._repo.preview_version(
             agent=agent, spec=spec.model_dump(mode="json"), created_by=user_id
         )
@@ -498,6 +499,13 @@ class AgentService:
         await uc.data_acl_delete(acl_id, operator)
 
     # ------------------------------------------------------------------ 内部
+
+    def _validate(self, spec: AgentSpecIn, *, slug: str, name: str) -> None:
+        """engine 的校验，加上浏览器能不能开（要 Shell、不能配自定义镜像……）。"""
+        engine_spec = spec.to_engine(slug=slug, name=name)
+        engine_spec.validate()
+        if self._settings is not None:
+            check_browser(engine_spec, self._settings)
 
     async def _resolve(self, spec: AgentSpecIn, *, previous: AgentSpecIn | None) -> AgentSpecIn:
         """钉死技能版本、记录 MCP 工具指纹（技能 / MCP 设计 §11）。

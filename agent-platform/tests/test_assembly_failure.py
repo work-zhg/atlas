@@ -41,6 +41,9 @@ class _FailingAssembly:
     async def with_knowledge(self, prepared: Any, **_kw: Any) -> Any:
         return prepared  # 本文件测的是装配失败；知识库注入不参与
 
+    async def with_browser(self, prepared: Any, **_kw: Any) -> Any:
+        return prepared  # 本文件测的是装配失败；浏览器的换算不参与
+
     async def capabilities(self, *_a: Any, **_kw: Any) -> Any:
         raise self._exc
 

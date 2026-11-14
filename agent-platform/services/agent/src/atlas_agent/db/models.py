@@ -387,7 +387,7 @@ class Message(Base):
         UniqueConstraint("message_uuid", name="uk_message_uuid"),
         Index("ix_message_thread", "thread_uuid", "created_at"),
         CheckConstraint("role IN ('user','assistant')", name="role_enum"),
-        CheckConstraint("kind IN ('chat','tool_result')", name="kind_enum"),
+        CheckConstraint("kind IN ('chat','tool_result')", name="browser_host_kind_enum"),
     )
 
 
@@ -1172,4 +1172,69 @@ class SandboxExecution(Base, TimestampMixin):
     __table_args__ = (
         UniqueConstraint("execution_uuid", name="uk_sandbox_execution_uuid"),
         UniqueConstraint("run_uuid", "tool_call_id", name="uk_sandbox_execution_call"),
+    )
+
+
+class BrowserLogin(Base, TimestampMixin):
+    """一个人在一个站点上的登录态（浏览器 · 登录态领域的聚合根 SiteLogin，迁移 0046）。
+
+    c4-model/agent/browser/code-browser-login.html。
+
+    ★ 只存密文：这个站点的 cookie 和本地存储（AES-256-GCM，附加数据绑定人和站点）。明文不落库、
+      不进日志；挪到别人名下或改了站点就解不开。
+    ★ 只用更新的覆盖：写入是带条件的 upsert（库里的 captured_at 更早才写），两个沙箱前后导出同一个
+      站点、异步刷新晚于交还时的保存落库，都不会让旧的盖掉新的。
+    """
+
+    __tablename__ = "browser_login"
+
+    id: Mapped[int] = _pk()
+    login_uuid: Mapped[UUID] = _logical_key()
+    user_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
+    #: 可注册域名，如 taobao.com
+    site: Mapped[str] = mapped_column(String(253), nullable=False)
+    sealed: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    key_version: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    #: 从浏览器里导出的时间：只用更新的覆盖
+    captured_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    #: 导出时所在的会话（排查用）
+    captured_from: Mapped[UUID | None] = mapped_column(UUIDType, nullable=True)
+    #: cookie 里最晚的过期时间；有会话 cookie（没有过期时间）时为空
+    expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("login_uuid", name="uk_browser_login_uuid"),
+        UniqueConstraint("user_uuid", "site", name="uk_browser_login_site"),
+    )
+
+
+class BrowserHostRow(Base, TimestampMixin):
+    """哪些沙箱是浏览器宿主（浏览器 · 宿主领域的 HostRegistry，迁移 0046）。
+
+    c4-model/agent/browser/code-browser-host.html。
+
+    ★ 退役前只拿得到 sandbox_uuid：要靠这张表知道它是不是浏览器宿主、属于谁 —— 看镜像名会在
+      管理员换镜像版本后认错。沙箱建好、守护拉起后登记，退役前导出完注销。
+    """
+
+    __tablename__ = "browser_host"
+
+    id: Mapped[int] = _pk()
+    host_uuid: Mapped[UUID] = _logical_key()
+    #: 宿主沙箱（通用供给的 user_sandbox.sandbox_uuid）
+    sandbox_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
+    #: 沙箱的主人，也是登录态的主人
+    user_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
+    #: native | cli
+    kind: Mapped[str] = mapped_column(String(8), nullable=False)
+    #: 守护拉起的时间
+    started_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    #: 最近一次导出登录态的时间
+    exported_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("host_uuid", name="uk_browser_host_uuid"),
+        UniqueConstraint("sandbox_uuid", name="uk_browser_host_sandbox"),
+        Index("ix_browser_host_user", "user_uuid"),
+        CheckConstraint("kind IN ('native','cli')", name="browser_host_kind_enum"),
     )

@@ -4,6 +4,7 @@ from ...auth.dependency import current_principal
 from . import (
     agents,
     auth,
+    browser,
     catalog,
     credentials,
     devices,
@@ -38,5 +39,8 @@ router.include_router(sandbox_templates.router, dependencies=_authed)
 router.include_router(credentials.router, dependencies=_authed)
 router.include_router(workspace.router, dependencies=_authed)
 router.include_router(devices.router, dependencies=_authed)
+router.include_router(browser.router, dependencies=_authed)
+# 浏览器画面是 WebSocket：路由自己按请求头解析身份（router 级的依赖按 HTTP 请求取）
+router.include_router(browser.ws_router)
 
 __all__ = ["router"]
