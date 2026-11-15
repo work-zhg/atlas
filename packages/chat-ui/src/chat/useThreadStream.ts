@@ -117,6 +117,10 @@ export function useThreadStream({
         void qc.invalidateQueries({ queryKey: qk.runs.detail(runId) });
         // 助手消息此刻已落库，消息列表要刷新才能拿到持久化的那条
         void qc.invalidateQueries({ queryKey: qk.threads.messages(threadId) });
+        // ★ 这一轮的轨迹清掉重取：挂起时离开或刷新过页面，实时流接上之前消息列表先回来，
+        //   会把只有挂起前那段的轨迹取进缓存（staleTime 无限、不会自己更新）。结束后照它画，
+        //   续跑那段的正文、提问的回答都不见，要再刷新才回来。清掉后先用实时状态顶上
+        void qc.resetQueries({ queryKey: qk.runs.trace(runId) });
         void qc.invalidateQueries({ queryKey: qk.threads.all });
         onTurnEndRef.current?.(stateRef.current);
       },
