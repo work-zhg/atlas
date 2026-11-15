@@ -1,3 +1,7 @@
+
+
+https://github.com/user-attachments/assets/33cc5a84-1833-44ec-9cb1-bc382a6fd269
+
 # Atlas
 
 企业内部的智能体平台。在控制台里配置智能体——模型、提示词、工具、技能、知识库、子智能体——然后与它多轮对话。
@@ -16,6 +20,7 @@
 8 个场景的片段（29 秒）：挂起提问、手动审批、记忆、知识库问答、MCP 调用、委派给 Claude Code、本机智能体、浏览器接管登录。
 
 <!-- 完整视频（6 分钟）：在 GitHub 网页上编辑本文件，把 atlas-overview-github.mp4 拖到这一行下面，生成的 https://github.com/user-attachments/assets/… 地址单独占一行，就会显示播放器 -->
+https://github.com/user-attachments/assets/5eb70f21-fed7-4550-ae41-092f46537028
 
 > **架构图**在 [`c4-model/`](c4-model/)：每个系统一套 C4 图，从系统上下文、容器、组件、按领域拆的代码图，到关键场景的时序图和 112 部署图。
 > 都是单文件 HTML，浏览器直接打开。
