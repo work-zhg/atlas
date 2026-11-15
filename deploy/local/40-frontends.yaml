@@ -155,7 +155,7 @@ data:
           proxy_buffering off;
         }
       }
-      # Atlas 会话文件预览站点：地址由 atlas-server 按请求的 Host 生成（/v1/previews/{令牌}/…），
+      # Atlas 会话文件预览站点：地址由 atlas-server 按 PREVIEW_BASE_URL 生成（/v1/previews/{令牌}/…），
       # 令牌在路径里、不需要身份头。内容隔离靠后端的 CSP sandbox 响应头（不透明 origin），与域名无关。
       location ^~ /v1/previews/ {
         proxy_pass http://atlas-server.atlas-system.svc.cluster.local:8000;

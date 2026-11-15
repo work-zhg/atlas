@@ -124,6 +124,9 @@ spec:
             #   打开的预览页要能 iframe 嵌入预览站点
             #   __PUBLIC_ORIGIN__ = 前端网关的对外地址（apply.sh 替换；本机 http://localhost:8080）
             - {name: CORS_ORIGINS, value: '["http://localhost:3000","http://127.0.0.1:3000","__PUBLIC_ORIGIN__","http://127.0.0.1:8080"]'}
+            # ★ 预览站点的对外地址（config.py preview_base_url）。不配时按请求的 Host 和协议生成，
+            #   而 HTTPS 在 traefik 终结、到这里已是 http：HTTPS 页面读 http 的预览地址，被浏览器当混合内容拦掉
+            - {name: PREVIEW_BASE_URL, value: "__PUBLIC_ORIGIN__"}
             - name: OSS_ACCESS_KEY_ID
               valueFrom: {secretKeyRef: {name: atlas-server-creds, key: oss_access_key_id}}
             - name: OSS_ACCESS_KEY_SECRET
