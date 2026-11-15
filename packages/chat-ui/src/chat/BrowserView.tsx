@@ -65,25 +65,27 @@ export function BrowserView({ threadId, interactive, height = 480 }: Props) {
   useEffect(() => {
     if (!url || !screen.current) return undefined;
     let cancelled = false;
+    let ws: WebSocket | null = null;
     setState({ phase: "connecting" });
-    const ws = new WebSocket(url, ["binary"]);
-    ws.binaryType = "arraybuffer";
-    ws.addEventListener("close", (e) => {
-      if (!cancelled) setState({ phase: "closed", message: closeText(e) });
-    });
-    ws.addEventListener("open", () => {
-      void import("@novnc/novnc").then(({ default: RFB }) => {
-        if (cancelled || !screen.current || ws.readyState !== WebSocket.OPEN) return;
-        const rfb = new RFB(screen.current, ws);
-        rfb.scaleViewport = true;
-        rfb.resizeSession = false;
-        rfb.background = "#f4f5f7";
-        rfb.viewOnly = !interactive;
-        rfb.addEventListener("connect", () => {
-          if (!cancelled) setState({ phase: "connected" });
-        });
-        rfbRef.current = rfb;
+    // ★ 先加载 noVNC、再建连接并立刻交给它：服务端一连上就发握手，交晚了（第一次下载 noVNC 要时间）
+    //   握手就丢了，画面一直停在「正在连接」
+    void import("@novnc/novnc").then(({ default: RFB }) => {
+      if (cancelled || !screen.current) return;
+      const sock = new WebSocket(url, ["binary"]);
+      sock.binaryType = "arraybuffer";
+      sock.addEventListener("close", (e) => {
+        if (!cancelled) setState({ phase: "closed", message: closeText(e) });
       });
+      ws = sock;
+      const rfb = new RFB(screen.current, sock);
+      rfb.scaleViewport = true;
+      rfb.resizeSession = false;
+      rfb.background = "#f4f5f7";
+      rfb.viewOnly = !interactive;
+      rfb.addEventListener("connect", () => {
+        if (!cancelled) setState({ phase: "connected" });
+      });
+      rfbRef.current = rfb;
     });
     return () => {
       cancelled = true;
@@ -93,7 +95,7 @@ export function BrowserView({ threadId, interactive, height = 480 }: Props) {
         // 已经断了
       }
       rfbRef.current = null;
-      if (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN) ws.close();
+      if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) ws.close();
     };
     // interactive 不重连：下面单独切换
     // eslint-disable-next-line react-hooks/exhaustive-deps
