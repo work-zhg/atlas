@@ -1,7 +1,3 @@
-
-
-https://github.com/user-attachments/assets/33cc5a84-1833-44ec-9cb1-bc382a6fd269
-
 # Atlas
 
 企业内部的智能体平台。在控制台里配置智能体——模型、提示词、工具、技能、知识库、子智能体——然后与它多轮对话。
