@@ -16,7 +16,7 @@ from uuid import UUID
 
 import httpx
 import pytest
-from atlas_agent.browser.daemon import ViewKey
+from atlas_agent.browser.daemon import DaemonError, ViewKey
 from atlas_agent.browser.view import (
     CloseReason,
     LiveView,
@@ -39,7 +39,7 @@ from starlette.websockets import WebSocketDisconnect
 
 from tests.fake_uc import AS_USER, TEST_USER
 
-TARGET = ViewTarget(uuid7(), 6080, {"Authorization": "Basic abc"})
+TARGET = ViewTarget(uuid7(), 6080, {"Authorization": "Basic abc"}, "slot2")
 
 
 class Upstream:
@@ -112,7 +112,7 @@ def test_frames_are_relayed_both_ways_with_the_view_key() -> None:
         assert ws.receive_bytes() == b"echo:more"
     [opened] = channels.opened
     assert opened["sandbox"] == TARGET.sandbox_uuid and opened["port"] == 6080
-    assert opened["path"] == "/websockify"
+    assert opened["path"] == "/websockify?token=slot2"  # 只连这个对话那一块屏幕
     assert opened["headers"] == {"Authorization": "Basic abc"}
     assert opened["subprotocols"] == ["binary"]
     assert TARGET.sandbox_uuid in channels.kept
@@ -153,6 +153,21 @@ class Hosts:
         return self.ref
 
 
+class Daemon:
+    """守护的替身：记下问的是哪个对话；token=None 表示这个对话还没用过浏览器。"""
+
+    def __init__(self, token: str | None = "slot1", error: Exception | None = None) -> None:
+        self.token = token
+        self.error = error
+        self.asked: list[str] = []
+
+    async def screen_token(self, ref: SandboxRef, screen: str) -> str | None:
+        self.asked.append(screen)
+        if self.error is not None:
+            raise self.error
+        return self.token
+
+
 @pytest.mark.usefixtures("clean_db")
 async def test_access_only_for_the_creator_with_a_running_browser() -> None:
     async with httpx.AsyncClient(
@@ -165,16 +180,29 @@ async def test_access_only_for_the_creator_with_a_running_browser() -> None:
     thread_id = UUID(thread.json()["id"])
     keys = ViewKey(SecretStr("s"))
     ref = SandboxRef(uuid7())
+    daemon = Daemon()
+
+    def access(hosts: Hosts, d: Daemon = daemon) -> ViewAccess:
+        return ViewAccess(hosts, keys, 6080, d)  # type: ignore[arg-type]
+
     async with get_sessionmaker()() as session:
-        target = await ViewAccess(Hosts(ref), keys, 6080).check(  # type: ignore[arg-type]
-            session, UUID(TEST_USER), thread_id
+        target = await access(Hosts(ref)).check(session, UUID(TEST_USER), thread_id)
+        assert target == ViewTarget(
+            ref.sandbox_uuid, 6080, keys.auth_header(ref.sandbox_uuid), "slot1"
         )
-        assert target == ViewTarget(ref.sandbox_uuid, 6080, keys.auth_header(ref.sandbox_uuid))
+        # 没有根会话的会话，对话就是它自己：按它问屏幕的哪一块
+        assert daemon.asked == [str(thread_id)]
         with pytest.raises(ViewDenied) as denied:
-            await ViewAccess(Hosts(ref), keys, 6080).check(session, uuid7(), thread_id)  # type: ignore[arg-type]
+            await access(Hosts(ref)).check(session, uuid7(), thread_id)
         assert denied.value.reason is CloseReason.NOT_OWNER
         with pytest.raises(ViewDenied) as denied:
-            await ViewAccess(Hosts(None), keys, 6080).check(  # type: ignore[arg-type]
+            await access(Hosts(None)).check(session, UUID(TEST_USER), thread_id)
+        assert denied.value.reason is CloseReason.NO_BROWSER
+        with pytest.raises(ViewDenied) as denied:
+            await access(Hosts(ref), Daemon(token=None)).check(session, UUID(TEST_USER), thread_id)
+        assert denied.value.reason is CloseReason.NO_SCREEN
+        with pytest.raises(ViewDenied) as denied:
+            await access(Hosts(ref), Daemon(error=DaemonError("守护没了"))).check(
                 session, UUID(TEST_USER), thread_id
             )
         assert denied.value.reason is CloseReason.NO_BROWSER

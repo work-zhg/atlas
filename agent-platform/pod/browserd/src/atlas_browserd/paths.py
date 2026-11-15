@@ -63,6 +63,20 @@ class Paths:
         """browser 命令记下每个会话名连的是哪一次启动的 Chromium（重启后要重新连）。"""
         return self.root / "sessions"
 
+    @property
+    def screens(self) -> Path:
+        """哪个对话用屏幕的哪一块（screens.py）。"""
+        return self.root / "screens.json"
+
+    @property
+    def screens_lock(self) -> Path:
+        return self.root / "screens.lock"
+
+    @property
+    def view_tokens(self) -> Path:
+        """websockify 的 token 表：slotN → 第 N 块的 x11vnc。"""
+        return self.root / "view-tokens"
+
     def ensure(self) -> None:
         for path in (self.root, self.takeovers, self.sessions):
             path.mkdir(parents=True, exist_ok=True)

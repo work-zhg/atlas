@@ -60,6 +60,7 @@ class FakeHosts:
 class FakeDaemon:
     def __init__(self) -> None:
         self.opened: list[tuple[str, str]] = []
+        self.screens: list[str] = []
         self.closed: list[str] = []
         state = StateBundle.parse(
             {
@@ -73,8 +74,11 @@ class FakeDaemon:
         self.fail_close = False
         self.clipboard = ""
 
-    async def takeover_open(self, ref: SandboxRef, takeover_id: str, url: str) -> None:
+    async def takeover_open(
+        self, ref: SandboxRef, takeover_id: str, url: str, *, screen: str
+    ) -> None:
         self.opened.append((takeover_id, url))
+        self.screens.append(screen)
 
     async def takeover_close(self, ref: SandboxRef, takeover_id: str) -> Captured:
         self.closed.append(takeover_id)
@@ -172,6 +176,8 @@ async def test_open_ensures_the_browser_and_opens_the_window(env: Any) -> None:
     assert res.status_code == 200, res.text
     assert res.json()["status"] == "opened" and res.json()["thread_id"] == thread
     assert env.browser.daemon.opened == [(takeover, URL)]
+    # 接管窗口开在这个对话那一块屏幕上（没有根会话：对话就是它自己）
+    assert env.browser.daemon.screens == [thread]
     assert env.browser.hosts.ensured == [UUID(thread)]
     # 别人的 run：看不到
     res = await env.client.post(f"/v1/runs/{run}/takeovers/{takeover}/open", headers=OTHER)

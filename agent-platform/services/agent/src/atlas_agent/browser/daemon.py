@@ -11,7 +11,8 @@
     atlas-browserd state import FILE                    导入登录态（导完删文件）
     atlas-browserd state export [--sites a,b] --out F   导出这些站点的登录态
     atlas-browserd state forget SITE                    清掉一个站点的 cookie 和本地存储
-    atlas-browserd takeover open ID URL                 记下此刻的 cookie，开接管窗口
+    atlas-browserd takeover open ID URL --screen KEY    记下此刻的 cookie，在对话那一块开接管窗口
+    atlas-browserd screen slot KEY                      对话在屏幕的第几块（画面按块转）
     atlas-browserd takeover close ID --out F            关窗口，比较前后，导出
     atlas-browserd clipboard set F / get --out F        写入 / 读出虚拟屏幕的剪贴板
 
@@ -166,9 +167,20 @@ class DaemonClient:
     async def forget(self, ref: SandboxRef, site: Site) -> None:
         await self.call(ref, ["state", "forget", site.name])
 
-    async def takeover_open(self, ref: SandboxRef, takeover_id: str, url: str) -> None:
-        """记下此刻的 cookie（接管前的样子），开接管窗口打开 url。同一个接管号再开只把窗口置前。"""
-        await self.call(ref, ["takeover", "open", takeover_id, url])
+    async def takeover_open(
+        self, ref: SandboxRef, takeover_id: str, url: str, *, screen: str
+    ) -> None:
+        """记下此刻的 cookie（接管前的样子），在对话 screen 那一块屏幕上开接管窗口打开 url。
+
+        同一个接管号再开只把窗口置前。
+        """
+        await self.call(ref, ["takeover", "open", takeover_id, url, "--screen", screen])
+
+    async def screen_token(self, ref: SandboxRef, screen: str) -> str | None:
+        """对话 screen 那一块屏幕的画面 token（websockify 按它转到那块）；没用过浏览器是 None。"""
+        result = await self.call(ref, ["screen", "slot", screen])
+        token = result.get("token")
+        return str(token) if token else None
 
     async def takeover_close(self, ref: SandboxRef, takeover_id: str) -> Captured:
         """关掉接管窗口，比较前后：变了的域名和浏览器此刻的登录态。"""

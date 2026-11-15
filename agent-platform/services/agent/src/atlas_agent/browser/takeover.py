@@ -27,7 +27,7 @@ from ..db.session import fetch_one
 from ..errors import Conflict, Forbidden, NotFound
 from ..sandbox.base.lifecycle.runtime import SandboxGone
 from .daemon import DaemonClient, DaemonError
-from .host import BrowserHosts, BrowserUnavailable, spec_of_thread
+from .host import BrowserHosts, BrowserUnavailable, screen_of, spec_of_thread
 from .login import LoginVault
 
 if TYPE_CHECKING:
@@ -156,7 +156,9 @@ class TakeoverDesk:
         spec = await spec_of_thread(self._session, takeover.thread, takeover.run.agent_version_uuid)
         try:
             ref = await self._hosts.ensure(takeover.thread, spec)
-            await self._daemon.takeover_open(ref, str(takeover.id), takeover.ask.url)
+            await self._daemon.takeover_open(
+                ref, str(takeover.id), takeover.ask.url, screen=screen_of(takeover.thread)
+            )
         except (BrowserUnavailable, DaemonError, SandboxGone) as exc:
             raise TakeoverUnavailable(f"打不开接管：{exc}", approval_id=str(approval_id)) from exc
         except Exception as exc:  # 沙箱建不起来、配额满……

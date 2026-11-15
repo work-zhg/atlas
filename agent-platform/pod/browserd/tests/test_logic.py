@@ -9,6 +9,7 @@ import pytest
 from atlas_browserd.__main__ import _parser, main
 from atlas_browserd.cdp import _cookie_input, origin_of
 from atlas_browserd.paths import Paths
+from atlas_browserd.screens import ScreenTable, Slot
 from atlas_browserd.spec import ProcessSpec
 from atlas_browserd.state import SiteMatch
 from atlas_browserd.windows import SiteDiff
@@ -71,12 +72,47 @@ def test_process_spec(tmp_path: Path) -> None:
     args = spec.chromium_args()
     assert "--remote-debugging-address=127.0.0.1" in args and "--no-sandbox" in args
     assert f"--user-data-dir={tmp_path / 'profile'}" in args
-    assert "-localhost" in spec.x11vnc()
     ws = spec.websockify()
     assert ws is not None and "BasicHTTPAuth" in ws and "atlas:k3y" in ws
     # 没有画面口令就不开画面
     assert ProcessSpec(paths=Paths(tmp_path), view_key=None, chromium="c").websockify() is None
     assert "ATLAS_BROWSER_VIEW_KEY" not in spec.env()
+
+
+def test_screen_is_split_into_slots_each_with_its_own_view(tmp_path: Path) -> None:
+    """屏幕横排 3 块；每块一个 x11vnc 只截自己那块；websockify 按 token 转到那块。"""
+    spec = ProcessSpec(paths=Paths(tmp_path), view_key="k3y", slots=3, chromium="c")
+    assert spec.xvfb()[spec.xvfb().index("-screen") + 2] == "5760x1080x24"
+    assert "--window-size=1920,1080" in spec.chromium_args()
+    second = spec.x11vnc(Slot(1))
+    assert second[second.index("-clip") + 1] == "1920x1080+1920+0"
+    assert second[second.index("-rfbport") + 1] == "5901" and "-localhost" in second
+    assert spec.view_tokens().splitlines() == [
+        "slot0: 127.0.0.1:5900",
+        "slot1: 127.0.0.1:5901",
+        "slot2: 127.0.0.1:5902",
+    ]
+    ws = spec.websockify()
+    assert ws is not None and str(tmp_path / "view-tokens") in ws and "TokenFile" in ws
+    assert Slot(2).bounds == {"left": 3840, "top": 0, "width": 1920, "height": 1080}
+    assert Slot.at(3900, slots=3) == Slot(2) and Slot.at(99999, slots=3) == Slot(2)
+
+
+def test_screen_table_gives_each_conversation_its_own_slot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """对话各占一块、再要还是同一块；只查不分；满了让出最久没用的那块。"""
+    clock = iter(range(100))
+    monkeypatch.setattr("atlas_browserd.screens.time.time", lambda: next(clock))
+    table = ScreenTable(Paths(tmp_path), slots=2)
+    assert table.find("A") is None
+    a, b = table.acquire("A"), table.acquire("B")
+    assert {a.index, b.index} == {0, 1}
+    assert table.acquire("A") == a  # A 刚用过，B 成了最久没用的
+    c = table.acquire("C")
+    assert c == b and table.find("B") is None and table.find("A") == a
+    # 块数改小了：超出的记录作废
+    assert ScreenTable(Paths(tmp_path), slots=1).find("C") is None
 
 
 def test_parser_covers_the_platform_commands() -> None:
@@ -87,6 +123,10 @@ def test_parser_covers_the_platform_commands() -> None:
     assert (args.action, args.id) == ("close", "t1")
     with pytest.raises(SystemExit):
         p.parse_args(["takeover", "open", "t1"])
+    args = p.parse_args(["takeover", "open", "t1", "https://x.com", "--screen", "conv-1"])
+    assert args.screen == "conv-1"
+    assert p.parse_args(["screen", "slot", "conv-1"]).key == "conv-1"
+    assert p.parse_args(["windows", "keep"]).action == "keep"
 
 
 def test_failed_command_reports_the_reason_as_json(capsys: pytest.CaptureFixture[str]) -> None:
@@ -115,3 +155,32 @@ def test_clipboard_moves_text_through_files_and_removes_the_pasted_one(
     assert out.read_text(encoding="utf-8") == "验证码 4096"
     assert out.stat().st_mode & 0o777 == 0o600
     assert json.loads(capsys.readouterr().out.strip().splitlines()[-1])["chars"] == 8
+
+
+def test_popup_keeper_moves_popups_into_the_openers_slot() -> None:
+    """弹窗开在第 0 块、弹出它的窗口在第 2 块：挪到第 2 块（大小不超过一块）；新标签页不动。"""
+    import asyncio
+
+    from atlas_browserd.windows import PopupKeeper
+
+    class FakeCdp:
+        def __init__(self) -> None:
+            self.windows = {
+                "opener": (7, {"left": 3840, "top": 0, "width": 1920, "height": 1080}),
+                "popup": (8, {"left": 0, "top": 0, "width": 2400, "height": 600}),
+                "tab": (7, {"left": 3840, "top": 0, "width": 1920, "height": 1080}),
+            }
+            self.moved: list[tuple[int, dict[str, int]]] = []
+
+        async def window_of(self, target: str) -> tuple[int, dict[str, int]]:
+            return self.windows[target]
+
+        async def move_window(self, window_id: int, bounds: dict[str, int]) -> None:
+            self.moved.append((window_id, bounds))
+
+    cdp = FakeCdp()
+    keeper = PopupKeeper(cdp)  # type: ignore[arg-type]
+    keeper.SETTLE_S = 0
+    asyncio.run(keeper.rehome("popup", "opener"))
+    asyncio.run(keeper.rehome("tab", "opener"))
+    assert cdp.moved == [(8, {"left": 3840, "top": 0, "width": 1920, "height": 600})]

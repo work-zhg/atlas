@@ -9,7 +9,8 @@
     BrowserHosts      入口：plan · ensure · current · session_env · refresh · forget
 
 ★ 一个人一个浏览器：沙箱照旧按人共享（同模板、同镜像），这个人的各个会话用自己的会话名
-  （ATLAS_BROWSER_SESSION = 会话 uuid，各开各的标签页），cookie 是同一份。
+  （ATLAS_BROWSER_SESSION = 会话 uuid，各开各的窗口），cookie 是同一份。虚拟屏幕按对话分块
+  （ATLAS_BROWSER_SCREEN = 根会话 uuid）：每个对话的窗口在自己那一块，画面各看各的。
 ★ 沙箱建好时由 Atlas 拉起守护：登录态要在打开第一个网页之前导进去，而沙箱自己拿不到登录态。
   守护或 Chromium 后来挂了，由 browser 命令就地重启（profile 还在本地盘上，登录不丢）。
 ★ 它不管接管事项（接管领域）、不转发画面（画面领域），也不存登录态（登录态领域，这里只在合适的
@@ -44,6 +45,7 @@ if TYPE_CHECKING:
     from ..sandbox.provisioning.service import SandboxProvisioning
 
 __all__ = [
+    "SCREEN_ENV",
     "SESSION_ENV",
     "BrowserAddon",
     "BrowserHost",
@@ -53,14 +55,17 @@ __all__ = [
     "HostRecord",
     "HostRegistry",
     "NativeBrowserHost",
+    "screen_of",
     "session_env",
     "spec_of_thread",
 ]
 
 logger = logging.getLogger(__name__)
 
-#: 每条 browser 命令带的会话名（= 会话 uuid）：browser 把它交给 Playwright CLI，各会话各用各的标签页
+#: 每条 browser 命令带的会话名（= 会话 uuid）：browser 把它交给 Playwright CLI，各会话各用各的窗口
 SESSION_ENV = "ATLAS_BROWSER_SESSION"
+#: 对话（= 根会话 uuid）：虚拟屏幕按它分块，子智能体的窗口和父会话在同一块，人看对话的画面都看得到
+SCREEN_ENV = "ATLAS_BROWSER_SCREEN"
 
 HostKind = Literal["native", "cli"]
 
@@ -76,9 +81,14 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
-def session_env(thread_uuid: UUID) -> dict[str, str]:
-    """命令的会话名：子智能体有自己的会话，也就有自己的标签页。"""
-    return {SESSION_ENV: str(thread_uuid)}
+def screen_of(thread: Thread) -> str:
+    """这个会话的窗口在屏幕的哪一块：按对话（根会话）分。"""
+    return str(thread.sandbox_thread_id)
+
+
+def session_env(thread: Thread) -> dict[str, str]:
+    """命令的会话名（子智能体有自己的会话，也就有自己的窗口）和它所在的对话（屏幕上的那一块）。"""
+    return {SESSION_ENV: str(thread.thread_uuid), SCREEN_ENV: screen_of(thread)}
 
 
 # ---------------------------------------------------------------------------- 登记
@@ -317,7 +327,7 @@ class BrowserHosts:
         return BrowserPlan.of(spec, await self._config())
 
     def session_env(self, thread: Thread) -> dict[str, str]:
-        return session_env(thread.thread_uuid)
+        return session_env(thread)
 
     async def ensure(self, thread: Thread, spec: AgentSpec) -> SandboxRef:
         """确保这个会话的浏览器在（原生：被回收了就重建；CLI：取会话现成的 Pod）。"""

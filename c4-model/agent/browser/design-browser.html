@@ -170,12 +170,12 @@
 
     <rect class="node" x="700" y="64" width="200" height="70" rx="4"/>
     <text class="t-name" x="800" y="94">虚拟屏幕</text>
-    <text class="t-sub" x="800" y="114">Xvfb，1920×1080</text>
+    <text class="t-sub" x="800" y="114">Xvfb，按对话分块</text>
     <path class="e" d="M630 110 H698" marker-end="url(#a)"/>
     <text class="t-lab mid" x="664" y="102">画在上面</text>
     <rect class="node" x="700" y="180" width="200" height="70" rx="4"/>
     <text class="t-name" x="800" y="210">画面服务</text>
-    <text class="t-sub" x="800" y="230">x11vnc + websockify :6080</text>
+    <text class="t-sub" x="800" y="230">每块一个 x11vnc · websockify</text>
     <path class="e" d="M800 180 V136" marker-end="url(#a)"/>
     <text class="t-lab" x="808" y="164">读屏、注入键鼠</text>
     <rect class="cell" x="700" y="300" width="200" height="86" rx="4"/>
@@ -206,7 +206,42 @@
     <li><span class="n">3</span>profile 放在沙箱的本地盘上，不放 /data：Chromium 的 profile 是 SQLite，放不了对象存储挂载；/data 还是这个人所有智能体的 Shell 都能读的地方。本地盘随沙箱存活，守护或 Chromium 挂了重启，登录还在；沙箱回收前，平台把登录态导出存好（原理 5）。</li>
     <li><span class="n">4</span>Chromium 用有界面模式，画在虚拟屏幕上：人接管时要看到并操作同一个浏览器，无界面模式没有屏幕可以转出去。虚拟屏幕不需要显卡，CPU 就能跑。</li>
   </ol>
-  <p>代价：同一个人的几个会话同时在同一个网站上操作时，可能互相影响（比如一个会话退出了登录）。每个人一个浏览器、约 0.5–1.5 GB 内存，这个人没开浏览器的智能体不受影响（用的是普通沙箱）。</p>
+  <h3>屏幕按对话分块：各看各的画面</h3>
+  <p>几个对话的窗口要是叠在同一块屏幕上，谁最后被激活谁就盖在最上面，看画面的人看到的就是别人的窗口——你在一个对话里登录，另一个对话的智能体一开窗口，你的画面就跳走了。所以虚拟屏幕<b>横着分成几块，每个对话一块</b>：对话的窗口、它的子智能体的窗口、它的接管窗口、网页自己弹出的窗口，都放进这一块；画面也按块出，看哪个对话就只看哪一块。</p>
+  <svg width="1240" viewBox="0 0 1240 300" role="img" aria-label="屏幕按对话分块">
+    <rect class="bnd" x="20" y="20" width="1200" height="170" rx="6"/>
+    <text class="t-head" x="36" y="44">虚拟屏幕（一块 1920×1080，横排几块）</text>
+    <rect class="node" x="44" y="60" width="270" height="110" rx="4"/>
+    <text class="t-name" x="179" y="84">第 0 块 · 对话 A</text>
+    <rect class="cell" x="64" y="98" width="110" height="30" rx="3"/><text class="t-lab mid" x="119" y="118">窗口 A</text>
+    <rect class="node-hot" x="186" y="98" width="110" height="30" rx="3"/><text class="t-hot mid" x="241" y="118">A 的接管窗口</text>
+    <rect class="cell" x="64" y="136" width="232" height="26" rx="3"/><text class="t-lab mid" x="180" y="154">网页弹出的登录窗口（挪回这块）</text>
+    <rect class="node" x="334" y="60" width="270" height="110" rx="4"/>
+    <text class="t-name" x="469" y="84">第 1 块 · 对话 B</text>
+    <rect class="cell" x="354" y="98" width="110" height="30" rx="3"/><text class="t-lab mid" x="409" y="118">窗口 B</text>
+    <rect class="cell" x="476" y="98" width="110" height="30" rx="3"/><text class="t-lab mid" x="531" y="118">子智能体 C</text>
+    <rect class="cell" x="624" y="60" width="270" height="110" rx="4"/>
+    <text class="t-name" x="759" y="84">第 2 块</text>
+    <text class="t-sub" x="759" y="112">还没分给对话</text>
+    <text class="t-lab mid" x="1050" y="118">……</text>
+    <rect class="node" x="44" y="226" width="270" height="56" rx="4"/>
+    <text class="t-name" x="179" y="250">对话 A 的画面</text>
+    <text class="t-sub" x="179" y="270">只连第 0 块的 x11vnc</text>
+    <rect class="node" x="334" y="226" width="270" height="56" rx="4"/>
+    <text class="t-name" x="469" y="250">对话 B 的画面</text>
+    <text class="t-sub" x="469" y="270">只连第 1 块的 x11vnc</text>
+    <path class="e-hot" d="M179 226 V172" marker-end="url(#h)"/>
+    <path class="e-hot" d="M469 226 V172" marker-end="url(#h)"/>
+    <g class="badge"><circle cx="44" cy="60" r="10"/><text x="44" y="64">1</text></g>
+    <g class="badge"><circle cx="64" cy="136" r="10"/><text x="64" y="140">2</text></g>
+    <g class="badge"><circle cx="44" cy="226" r="10"/><text x="44" y="230">3</text></g>
+  </svg>
+  <ol class="steps">
+    <li><span class="n">1</span>块按<b>对话</b>分（根会话），不按会话：子智能体的窗口和接管窗口跟着对话走，人看对话 A 的画面时，A 派出去的子智能体在做什么也看得到。守护记着哪个对话用哪一块；对话第一次用浏览器、或第一次接管时分一块，新窗口一开出来就在自己那块里。块数有上限，满了把最久没用的那块让给新对话。</li>
+    <li><span class="n">2</span>网页用 <code>window.open</code> 弹出的窗口（比如第三方登录），Chromium 会放在屏幕左上角，也就是第 0 块。守护一直看着新开的窗口：是谁弹出来的，就挪到谁那一块。网页里打开的新标签页本来就在原窗口里，不用挪。</li>
+    <li><span class="n">3</span>每块一个画面服务，只截自己那块；Agent 转发画面前先问守护「这个对话在第几块」，只连那一块。所以别的对话怎么开窗口、怎么切换，都不影响你看到的画面；窗口互不重叠，模型在后面操作也不受遮挡。</li>
+  </ol>
+  <p>代价：同一个人的几个会话同时在同一个网站上操作时，可能互相影响（比如一个会话退出了登录）。每个人一个浏览器、约 0.5–1.5 GB 内存，这个人没开浏览器的智能体不受影响（用的是普通沙箱）。屏幕上只有一个鼠标和一个键盘焦点：两个对话同时都有人上手操作，会互相抢（一个人同一时间只会操作一个，影响小）；剪贴板也是整块屏幕共用的。</p>
 
   <h2>原理 3　怎么起来：按智能体开，换镜像，沙箱建好时拉起</h2>
   <p>浏览器能力按智能体开关。开了，就换一个带浏览器的镜像；沙箱建好时，平台把这个人的登录态导进去，再拉起浏览器。模型不用管这些，它只管执行 <code>browser</code> 命令。</p>
@@ -440,7 +475,7 @@
   </svg>
   <ol class="steps">
     <li><span class="n">1</span>接管卡片里的画面、会话里的「浏览器」按钮都连同一个地址，走同一个源，网关照常校验登录。不接管时默认只看、不操作，免得打乱模型；接管时可以操作。手机 App 不显示画面，只提示「请在电脑上处理」。</li>
-    <li><span class="n">2</span>Agent 服务只让会话的创建人看：画面里是他登录后的网页，接管时还在输他的密码。浏览器必须已经在跑——看画面不会为此新建沙箱，要建是接管「打开」做的事。连着画面的这段时间算沙箱的活动：人登录可能要好几分钟，这期间沙箱里没有命令在跑，不算活动就会被闲置回收。</li>
+    <li><span class="n">2</span>Agent 服务只让会话的创建人看：画面里是他登录后的网页，接管时还在输他的密码。浏览器必须已经在跑——看画面不会为此新建沙箱，要建是接管「打开」做的事。再问守护这个对话在屏幕的第几块，只转那一块（原理 2）；对话还没用过浏览器就没有块，告诉人「还没用过浏览器」。连着画面的这段时间算沙箱的活动：人登录可能要好几分钟，这期间沙箱里没有命令在跑，不算活动就会被闲置回收。</li>
     <li><span class="n">3</span>画面通道是沙箱组件的通用能力，和执行命令、读写文件一样只收 sandbox_uuid：沙箱的地址和令牌不出沙箱组件。</li>
     <li><span class="n">4</span>画面口令由部署密钥和 sandbox_uuid 算出来，不存：拉起守护时算一次带进去，转发时落在哪个实例都能再算出来；沙箱重建，口令跟着换。</li>
   </ol>
@@ -469,8 +504,9 @@
     <thead><tr><th style="width: 28%">决策</th><th>理由</th></tr></thead>
     <tbody>
       <tr><td>模型按无障碍树和元素编号操作，用 Playwright CLI，不用 MCP</td><td>纯文本模型也能用、点得准；原生和 CLI 智能体都有 Shell，命令行不用时几乎不占上下文，快照写文件按需读。看截图点坐标只作为能看图的模型的补充。</td></tr>
-      <tr><td>开浏览器 = 换一个带浏览器的镜像</td><td>大多数智能体用不上浏览器，不该背着几百 MB；strict 档根目录只读，只能构建时装。换镜像后，沙箱按（模板，镜像）共享的规则自动把浏览器沙箱分开。</td></tr>
+      <tr><td>开浏览器 = 换一个带浏览器的镜像</td><td>大多数智能体用不上浏览器，不该背着几百 MB；运行时现装太慢，构建时装好。换镜像后，沙箱按（模板，镜像）共享的规则自动把浏览器沙箱分开。</td></tr>
       <tr><td>一个人一个常驻浏览器，会话各用自己的会话名</td><td>沙箱本来按人共享，登录态也属于人：登录一次，这个人的会话都能用。代价是同一个人的几个会话同时操作同一个网站时可能互相影响。</td></tr>
+      <tr><td>屏幕按对话分块，画面按块出</td><td>几个对话的窗口叠在一块屏幕上，看到的是最后被激活的那个，人看着看着就跳到别的对话。按标签页推流（CDP 截屏）也能隔开，但看不到地址栏、下拉框、浏览器自己的弹窗，登录时常要用到；每个对话一个 Chromium 又分不了登录态。分块只多几个截屏进程，地址栏、弹窗、复制粘贴都照旧。</td></tr>
       <tr><td>沙箱建好时由平台拉起浏览器，经通用供给的附加件扩展点</td><td>登录态要在打开第一个网页前导入，而沙箱里拿不到登录态；扩展点让沙箱组件不认识浏览器，依赖只有一个方向。</td></tr>
       <tr><td>接管是审批的第四种，不设超时</td><td>登记、等人、做决定、唤醒、run 结束时作废，审批都已经有了，前端卡片也是同一套；平台原则是等人不设期限。</td></tr>
       <tr><td>接管开专用窗口，不碰模型的标签页</td><td>平台分不清标签页属于哪个会话；人在专用窗口里登录，cookie 全浏览器共用，模型刷新页面即可。代价是表单填到一半的验证码，要在新窗口里重走到那一步。</td></tr>

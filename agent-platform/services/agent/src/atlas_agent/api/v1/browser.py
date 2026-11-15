@@ -256,7 +256,8 @@ async def browser_view(websocket: WebSocket, thread_id: UUID) -> None:
             await close(websocket, CloseReason.NO_BROWSER)
             return
         live = LiveView(
-            ViewAccess(browser.hosts, browser.keys, browser.view_port), sandbox.channels
+            ViewAccess(browser.hosts, browser.keys, browser.view_port, browser.daemon),
+            sandbox.channels,
         )
         try:
             async with get_sessionmaker()() as session:

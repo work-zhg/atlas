@@ -5,10 +5,12 @@
     state import FILE                      导入登录态（导完删文件）
     state export --sites a,b [--origins …] --out FILE   导出这些站点的登录态
     state forget SITE                      清掉一个站点的 cookie 和本地存储
-    takeover open ID URL                   记下此刻的 cookie，开接管窗口
+    takeover open ID URL [--screen KEY]    记下此刻的 cookie，在对话 KEY 那一块屏幕上开接管窗口
     takeover close ID --out FILE           关窗口，比较前后，导出
     clipboard set FILE                     把文件里的文字放进虚拟屏幕的剪贴板（放完删文件）
     clipboard get --out FILE               把虚拟屏幕剪贴板里的文字写到文件
+    screen slot KEY                        对话 KEY 在屏幕的第几块（没用过浏览器是 null）
+    windows keep                           常驻（守护拉起）：网页弹出的窗口挪回弹出它的那一块
 
 一次性的命令把结果写成 stdout 最后一行 JSON；失败时退出码非 0，JSON 里有 error（给人看的话）。
 ★ 登录态文件都在本地盘（/tmp/atlas-browser），不经过 /data；写出的文件 0600。
@@ -102,7 +104,9 @@ def _takeover(args: argparse.Namespace, paths: Paths) -> int:
 
     paths.ensure()
     if args.action == "open":
-        _emit(_with_cdp(lambda cdp: TakeoverWindows(cdp, paths).open(args.id, args.url)))
+        _emit(
+            _with_cdp(lambda cdp: TakeoverWindows(cdp, paths).open(args.id, args.url, args.screen))
+        )
         return 0
     result = _with_cdp(lambda cdp: TakeoverWindows(cdp, paths).close(args.id))
     _write(args.out, result)
@@ -132,6 +136,25 @@ def _clipboard(args: argparse.Namespace, paths: Paths) -> int:
     return 0
 
 
+def _screen(args: argparse.Namespace, paths: Paths) -> int:
+    from .screens import ScreenTable
+
+    slot = ScreenTable(paths).find(args.key)
+    _emit({"slot": slot.index if slot else None, "token": slot.token if slot else None})
+    return 0
+
+
+def _windows(args: argparse.Namespace, paths: Paths) -> int:
+    from .supervisor import wait
+    from .windows import PopupKeeper
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    if wait(paths, 60) is None:  # Chromium 还没起来：退出，守护过一会儿再拉起
+        return 1
+    _emit(_with_cdp(lambda cdp: PopupKeeper(cdp).run()))
+    return 0
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="atlas-browserd", description="Atlas 浏览器守护")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -151,12 +174,17 @@ def _parser() -> argparse.ArgumentParser:
     opn = takeover.add_parser("open")
     opn.add_argument("id")
     opn.add_argument("url")
+    opn.add_argument("--screen")
     cls = takeover.add_parser("close")
     cls.add_argument("id")
     cls.add_argument("--out", required=True)
     clipboard = sub.add_parser("clipboard").add_subparsers(dest="action", required=True)
     clipboard.add_parser("set").add_argument("file")
     clipboard.add_parser("get").add_argument("--out", required=True)
+    screen = sub.add_parser("screen").add_subparsers(dest="action", required=True)
+    screen.add_parser("slot").add_argument("key")
+    windows = sub.add_parser("windows").add_subparsers(dest="action", required=True)
+    windows.add_parser("keep")
     return parser
 
 
@@ -166,6 +194,8 @@ _COMMANDS: dict[str, Callable[[argparse.Namespace, Paths], int]] = {
     "state": _state,
     "takeover": _takeover,
     "clipboard": _clipboard,
+    "screen": _screen,
+    "windows": _windows,
 }
 
 

@@ -69,7 +69,7 @@ class PodHost:
             # 浏览器（c4-model/agent/browser/design-browser.html）：换浏览器 CLI 镜像、
             # 带 browser 属性（Pod 建好后附加件拉起浏览器），CLI 的命令带上会话名（各用各的窗口）
             cli = replace(cli, image=caps.browser.image)
-            extra = {"browser": True, "agent_env": session_env(thread.thread_uuid)}
+            extra = {"browser": True, "agent_env": session_env(thread)}
         endpoint = await self._pods.ensure(
             thread, cli, model=caps.model, credentials=caps.credentials, **extra
         )

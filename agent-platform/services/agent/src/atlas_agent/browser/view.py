@@ -1,8 +1,9 @@
 """浏览器 · 画面（c4-model/agent/browser/code-browser-view.html）：沙箱里的虚拟屏幕实时转到控制台。
 
     CloseReason     关掉连接的原因 → WebSocket 关闭码和给人看的话
-    ViewTarget      要连的画面：哪个沙箱、哪个端口、带什么鉴权头
-    ViewAccess      谁能看、看哪个：来的人必须是会话的创建人，这个会话的浏览器必须正在跑
+    ViewTarget      要连的画面：哪个沙箱、哪个端口、屏幕的哪一块、带什么鉴权头
+    ViewAccess      谁能看、看哪个：来的人必须是会话的创建人，这个会话的浏览器必须正在跑；
+                    再问守护这个对话在屏幕的第几块（屏幕按对话分块，各看各的）
     ViewRelay       两边原样转发：不解析画面协议、不落日志（画面里有密码输入）
     ViewKeepAlive   连着画面时每 60 秒给沙箱记一次活动（人在里面慢慢登录也不会被闲置回收）
     LiveView        一条画面连接从头到尾
@@ -29,8 +30,8 @@ from ..db.models import Thread
 from ..db.session import fetch_one
 from ..sandbox.base.execution.channels import ChannelUnavailable, SandboxChannels
 from ..sandbox.base.lifecycle.runtime import SandboxGone
-from .daemon import ViewKey
-from .host import BrowserHosts
+from .daemon import DaemonClient, DaemonError, ViewKey
+from .host import BrowserHosts, screen_of
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -48,6 +49,7 @@ class CloseReason(Enum):
 
     NOT_OWNER = (4403, "只有会话的创建人能看浏览器画面")
     NO_BROWSER = (4404, "浏览器没在运行")
+    NO_SCREEN = (4404, "这个对话还没用过浏览器")
     SANDBOX_GONE = (4410, "沙箱已经不在了")
     UPSTREAM_CLOSED = (4502, "浏览器画面断开了")
 
@@ -71,15 +73,22 @@ class ViewTarget:
     sandbox_uuid: UUID
     port: int
     headers: dict[str, str]
+    #: 屏幕的哪一块：websockify 按 token 转到那块的画面服务
+    token: str
+
+    @property
+    def path(self) -> str:
+        return f"{VIEW_PATH}?token={self.token}"
 
 
 class ViewAccess:
-    """会话的创建人才能看（浏览器和登录态都是他的）；浏览器必须正在跑。"""
+    """会话的创建人才能看（浏览器和登录态都是他的）；浏览器必须正在跑；只看这个对话那一块。"""
 
-    def __init__(self, hosts: BrowserHosts, keys: ViewKey, port: int) -> None:
+    def __init__(self, hosts: BrowserHosts, keys: ViewKey, port: int, daemon: DaemonClient) -> None:
         self._hosts = hosts
         self._keys = keys
         self._port = port
+        self._daemon = daemon
 
     async def check(self, session: AsyncSession, user: UUID, thread_uuid: UUID) -> ViewTarget:
         thread = await fetch_one(session, Thread, Thread.thread_uuid == thread_uuid)
@@ -88,7 +97,15 @@ class ViewAccess:
         ref = await self._hosts.current(thread)
         if ref is None:
             raise ViewDenied(CloseReason.NO_BROWSER)
-        return ViewTarget(ref.sandbox_uuid, self._port, self._keys.auth_header(ref.sandbox_uuid))
+        try:
+            token = await self._daemon.screen_token(ref, screen_of(thread))
+        except DaemonError as exc:
+            raise ViewDenied(CloseReason.NO_BROWSER) from exc
+        if token is None:
+            raise ViewDenied(CloseReason.NO_SCREEN)
+        return ViewTarget(
+            ref.sandbox_uuid, self._port, self._keys.auth_header(ref.sandbox_uuid), token
+        )
 
 
 class ViewKeepAlive:
@@ -176,7 +193,7 @@ class LiveView:
             async with self._channels.open_ws(
                 target.sandbox_uuid,
                 target.port,
-                path=VIEW_PATH,
+                path=target.path,
                 headers=target.headers,
                 subprotocols=subprotocols,
             ) as upstream:

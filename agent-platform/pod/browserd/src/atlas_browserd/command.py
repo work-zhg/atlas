@@ -7,7 +7,9 @@
   1. 确认守护在：不在就就地拉起（用本地盘上的 profile，不导入登录态 —— 登录态只由 Atlas 在沙箱
      建好时导入），等 CDP 就绪
   2. 会话名 = 环境变量 ATLAS_BROWSER_SESSION（平台给每条命令带上，等于会话的 id）：这个会话第一次
-     用、或 Chromium 重启过，就让 Playwright CLI 以这个会话名连上 Chromium，再给它开一个自己的窗口
+     用、或 Chromium 重启过，就让 Playwright CLI 以这个会话名连上 Chromium，再给它开一个自己的窗口，
+     开在对话（ATLAS_BROWSER_SCREEN = 根会话 id）那一块屏幕上（screens.py）；之后每条命令看一眼
+     块变了没有（块满了让给新对话、又分回来时），变了就把窗口挪过去
   3. 带会话名转给 Playwright CLI；快照、截图写进会话工作目录的隐藏目录 .atlas/{会话}/browser/，
      输出里给文件路径，模型按需读（能看图的模型直接读截图）
 
@@ -22,6 +24,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import re
@@ -32,11 +35,14 @@ import time
 from pathlib import Path
 
 from .paths import CDP_PORT, Paths
+from .screens import ScreenTable
 from .supervisor import ready, start_detached, wait
 
 __all__ = ["main"]
 
 SESSION_ENV = "ATLAS_BROWSER_SESSION"
+#: 对话（根会话 id）：子智能体的窗口和父会话在同一块屏幕上。没给就按会话名分
+SCREEN_ENV = "ATLAS_BROWSER_SCREEN"
 #: 守护不在时就地拉起，最多等多久
 _START_WAIT_S = 60.0
 
@@ -73,14 +79,21 @@ def _ensure_daemon(paths: Paths) -> dict[str, object]:
     return marker
 
 
-def _attach(paths: Paths, cli: str, session: str, marker: dict[str, object], out: Path) -> None:
-    """这个会话还没连上这一次启动的 Chromium：连上，再开一个自己的窗口、选中它。"""
+def _attach(
+    paths: Paths, cli: str, session: str, screen: str, marker: dict[str, object], out: Path
+) -> None:
+    """这个会话还没连上这一次启动的 Chromium：连上，再在对话那一块开一个自己的窗口、选中它。"""
     record = paths.sessions / f"{_safe(session)}.json"
+    slot = ScreenTable(paths).acquire(screen)
     try:
-        if json.loads(record.read_text()).get("cdp") == marker.get("cdp"):
-            return
+        known = json.loads(record.read_text())
     except (OSError, ValueError):
-        pass
+        known = {}
+    if known.get("cdp") == marker.get("cdp"):
+        if known.get("slot") != slot.index and known.get("target"):
+            _move_window(str(known["target"]), slot.bounds)
+            record.write_text(json.dumps({**known, "slot": slot.index}))
+        return
     config = paths.sessions / f"{_safe(session)}.config.json"
     config.write_text(json.dumps({"outputDir": str(out), "outputMode": "file"}))
     base = [cli, f"-s={session}"]
@@ -93,21 +106,22 @@ def _attach(paths: Paths, cli: str, session: str, marker: dict[str, object], out
     )
     if attached.returncode != 0:
         raise SystemExit(f"browser：连不上浏览器：{attached.stderr.strip() or attached.stdout}")
-    _own_window(base, session)
-    record.write_text(json.dumps({"cdp": marker.get("cdp")}))
+    target = _own_window(base, session, slot.bounds)
+    record.write_text(json.dumps({"cdp": marker.get("cdp"), "target": target, "slot": slot.index}))
 
 
-def _own_window(base: list[str], session: str) -> None:
-    """开一个只属于这个会话的窗口（地址带上会话名好认），在 Playwright CLI 里选中它。"""
+def _own_window(base: list[str], session: str, bounds: dict[str, int]) -> str:
+    """在 bounds（对话那一块）开一个只属于这个会话的窗口（地址带上会话名好认），在 Playwright CLI
+    里选中它。返回窗口里那个页面的 target。"""
     from .cdp import connect
 
     tag = f"about:blank#atlas-session-{session}"
 
-    async def open_window() -> None:
+    async def open_window() -> str:
         async with connect() as cdp:
-            await cdp.new_window(tag)
+            return await cdp.new_window(tag, bounds)
 
-    asyncio.run(open_window())
+    target = asyncio.run(open_window())
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
         listed = subprocess.run(
@@ -118,8 +132,22 @@ def _own_window(base: list[str], session: str) -> None:
                 subprocess.run(
                     [*base, "tab-select", found.group(1)], capture_output=True, check=False
                 )
-                return
+                return target
         time.sleep(0.2)
+    return target
+
+
+def _move_window(target: str, bounds: dict[str, int]) -> None:
+    from .cdp import connect
+
+    async def move() -> None:
+        async with connect() as cdp:
+            window, _ = await cdp.window_of(target)
+            await cdp.move_window(window, bounds)
+
+    # 窗口被网页关了：挪不了也不要紧，Chromium 重启后会重开
+    with contextlib.suppress(Exception):
+        asyncio.run(move())
 
 
 def _with_output_file(args: list[str], out: Path) -> list[str]:
@@ -143,11 +171,12 @@ def main(argv: list[str] | None = None) -> int:
     paths = Paths()
     paths.ensure()
     session = _safe(os.environ.get(SESSION_ENV, "") or "default")
+    screen = os.environ.get(SCREEN_ENV, "") or session
     out = Path.cwd() / ".atlas" / session / "browser"
     out.mkdir(parents=True, exist_ok=True)
     cli = _cli()
     marker = _ensure_daemon(paths)
-    _attach(paths, cli, session, marker, out)
+    _attach(paths, cli, session, screen, marker, out)
     if args[0] == "open":
         args[0] = "goto"
     args = _with_output_file(args, out)

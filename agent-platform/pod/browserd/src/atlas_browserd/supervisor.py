@@ -1,4 +1,4 @@
-"""Supervisor：拉起并看着三个进程（虚拟屏幕先起，再起 Chromium、画面服务）。
+"""Supervisor：拉起并看着守护的进程（虚拟屏幕先起，再起 Chromium、每块的画面服务、窗口看守）。
 
     serve()     常驻（atlas-browserd serve）：一个沙箱只跑一个（文件锁）；哪个退出了就按同样的
                 参数重启，
@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from .paths import CDP_PORT, Paths
+from .screens import Slot
 from .spec import ProcessSpec
 
 __all__ = ["Supervisor", "cdp_version", "ready", "start_detached", "wait"]
@@ -151,12 +152,14 @@ class Supervisor:
         argvs: list[tuple[str, list[str] | None]] = [
             ("xvfb", spec.xvfb()),
             ("chromium", spec.chromium_args()),
-            ("x11vnc", spec.x11vnc()),
+            *[(f"x11vnc-{s.index}", spec.x11vnc(s)) for s in Slot.all(spec.slots)],
             ("websockify", spec.websockify()),
+            ("popup-keeper", spec.popup_keeper()),
         ]
         self._procs = [_Proc(name, argv) for name, argv in argvs if argv is not None]
         if spec.websockify() is None:
             logger.warning("没有画面口令：不开画面服务（浏览器照常可用）")
+        self._paths.view_tokens.write_text(spec.view_tokens())
         for p in self._procs:
             self._start(p)
             if p.name == "xvfb":

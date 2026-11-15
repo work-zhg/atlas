@@ -144,7 +144,7 @@ class ToolSurface:
                 run_id=run_id,
                 spec=segment.spec.sandbox,
                 # 带浏览器的沙箱：每条命令带上会话名，browser 命令按它各开各的标签页
-                env=session_env(segment.thread_id) if segment.spec.sandbox.browser else None,
+                env=session_env(segment.thread) if segment.spec.sandbox.browser else None,
                 # 被取消时分辨「用户要停」（中断命令）和交接、租约丢失（命令留着，接手的实例接上）
                 cancel=RedisCancelToken(EventRelay(redis), run_id),
                 polling=PollingPolicy(settings.sandbox_poll_min_s, settings.sandbox_poll_max_s),

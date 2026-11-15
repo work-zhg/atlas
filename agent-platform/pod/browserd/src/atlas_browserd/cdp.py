@@ -14,7 +14,8 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Iterable, Mapping
+import asyncio
+from collections.abc import AsyncIterator, Callable, Iterable, Mapping
 from contextlib import asynccontextmanager
 from typing import Any
 from urllib.parse import urlsplit
@@ -138,11 +139,25 @@ class CdpSession:
 
     # ------------------------------------------------------------------ 窗口
 
-    async def new_window(self, url: str) -> str:
-        result = await self._send("Target.createTarget", {"url": url, "newWindow": True})
+    async def new_window(self, url: str, bounds: Mapping[str, int] | None = None) -> str:
+        """开一个新窗口；给了 bounds 就直接开在那里（屏幕的某一块，不先在别处闪一下）。"""
+        params: dict[str, Any] = {"url": url, "newWindow": True, **(bounds or {})}
+        result = await self._send("Target.createTarget", params)
         target = str(result["targetId"])
         await self.activate(target)
         return target
+
+    async def window_of(self, target: str) -> tuple[int, dict[str, Any]]:
+        """target 所在的窗口：(windowId, 位置和大小)。"""
+        found = await self._send("Browser.getWindowForTarget", {"targetId": target})
+        return int(found["windowId"]), dict(found["bounds"])
+
+    async def move_window(self, window_id: int, bounds: Mapping[str, int]) -> None:
+        # ★ 最大化、全屏、最小化的窗口不能直接改位置：先回到普通状态
+        await self._send(
+            "Browser.setWindowBounds", {"windowId": window_id, "bounds": {"windowState": "normal"}}
+        )
+        await self._send("Browser.setWindowBounds", {"windowId": window_id, "bounds": dict(bounds)})
 
     async def activate(self, target: str) -> bool:
         try:
@@ -164,10 +179,27 @@ class CdpSession:
                 return str(info.get("url") or "")
         return None
 
-    async def _send(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+    async def on_target_created(self, handler: Callable[[dict[str, Any]], None]) -> None:
+        """新开的 target（标签页、弹窗……）都告诉 handler（参数是 CDP 的 targetInfo）。"""
+        await self._session()
+        self._cdp.on("Target.targetCreated", lambda event: handler(event["targetInfo"]))
+        await self._send("Target.setDiscoverTargets", {"discover": True})
+
+    async def disconnected(self) -> None:
+        """等到和 Chromium 的连接断开（Chromium 退出或重启）。"""
+        gone = asyncio.Event()
+        self._browser.on("disconnected", lambda _browser: gone.set())
+        if not self._browser.is_connected():
+            return
+        await gone.wait()
+
+    async def _session(self) -> Any:
         if self._cdp is None:
             self._cdp = await self._browser.new_browser_cdp_session()
-        return await self._cdp.send(method, params)
+        return self._cdp
+
+    async def _send(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        return await (await self._session()).send(method, params)
 
 
 async def _read_storage(page: Any) -> list[dict[str, str]]:

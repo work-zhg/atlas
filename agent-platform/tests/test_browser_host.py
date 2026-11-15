@@ -539,7 +539,7 @@ async def test_pod_host_switches_to_the_browser_image() -> None:
             seen.append((cli, kw))
             return SimpleNamespace(url="ws://pod", token="t")
 
-    thread = SimpleNamespace(thread_uuid=uuid7())
+    thread = SimpleNamespace(thread_uuid=uuid7(), sandbox_thread_id=uuid7())
     cli = CliSpec("claude-code", image="atlas-cli-bridge:1")
     await PodHost(Pods()).ensure(thread, cli, CliCapabilities())  # type: ignore[arg-type]
     plan = BrowserPlan("cli", "atlas-cli-browser:1", None)
@@ -547,4 +547,8 @@ async def test_pod_host_switches_to_the_browser_image() -> None:
     (plain_cli, plain_kw), (browser_cli, browser_kw) = seen
     assert plain_cli.image == "atlas-cli-bridge:1" and "browser" not in plain_kw
     assert browser_cli.image == "atlas-cli-browser:1" and browser_kw["browser"] is True
-    assert browser_kw["agent_env"] == {"ATLAS_BROWSER_SESSION": str(thread.thread_uuid)}
+    # 会话名 = 这个会话；屏幕的那一块按对话（根会话）分
+    assert browser_kw["agent_env"] == {
+        "ATLAS_BROWSER_SESSION": str(thread.thread_uuid),
+        "ATLAS_BROWSER_SCREEN": str(thread.sandbox_thread_id),
+    }

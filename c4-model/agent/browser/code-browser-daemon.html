@@ -74,7 +74,7 @@
       "kind": "class",
       "name": "PlatformCommands",
       "stereotype": "对外接口",
-      "responsibility": "平台用的命令行：start 拉起全部进程并等 CDP 就绪；state import / export / forget 处理登录态文件（都在 /tmp/atlas-browser 下，不经过 /data）；takeover open / close 开关接管窗口。每条都是一次性的进程，做完就退出。",
+      "responsibility": "平台用的命令行：start 拉起全部进程并等 CDP 就绪；state import / export / forget 处理登录态文件（都在 /tmp/atlas-browser 下，不经过 /data）；takeover open / close 开关接管窗口（开在对话那一块屏幕上）；screen slot 回答对话在第几块（画面按块转）；clipboard set / get 读写虚拟屏幕的剪贴板。每条都是一次性的进程，做完就退出。",
       "at": [
         0.4,
         0.85
@@ -103,7 +103,7 @@
       "kind": "class",
       "name": "BrowserCommand",
       "stereotype": "对外接口",
-      "responsibility": "模型用的 browser 命令：先确认守护在（不在就就地拉起，用本地盘上的 profile，不导入登录态），这个会话第一次用时让 Playwright CLI 以会话名连上 Chromium、给它开一个自己的窗口（后台标签页里点不动）；快照和截图写进会话工作目录的隐藏目录 .atlas/{会话}/browser/，输出里给文件路径，模型按需读，能看图的模型直接读截图。",
+      "responsibility": "模型用的 browser 命令：先确认守护在（不在就就地拉起，用本地盘上的 profile，不导入登录态），这个会话第一次用时让 Playwright CLI 以会话名连上 Chromium、给它开一个自己的窗口（后台标签页里点不动），窗口开在对话（ATLAS_BROWSER_SCREEN = 根会话）那一块屏幕上（分块账本 screens.py 的 ScreenTable：对话第一次用时分一块，满了让出最久没用的那块），块变了就把窗口挪过去；快照和截图写进会话工作目录的隐藏目录 .atlas/{会话}/browser/，输出里给文件路径，模型按需读，能看图的模型直接读截图。",
       "at": [
         3.4,
         0.85
@@ -124,7 +124,7 @@
       "kind": "class",
       "name": "Supervisor",
       "stereotype": "应用服务",
-      "responsibility": "拉起并看着三个进程：虚拟屏幕先起，再起 Chromium、画面服务；哪个退出了就按同样的参数重启，Chromium 连续崩溃时退避。就绪 = CDP 能连上；就绪标记写在本地盘，browser 命令据此判断要不要等。",
+      "responsibility": "拉起并看着守护的进程：虚拟屏幕先起，再起 Chromium、每块屏幕一个画面服务、窗口看守（windows keep 的 PopupKeeper：网页 window.open 弹出的窗口 Chromium 放在第 0 块，挪到弹出它的窗口那一块）；启动时写好 websockify 的 token 表（slotN → 第 N 块的 x11vnc）；哪个退出了就按同样的参数重启，Chromium 连续崩溃时退避。就绪 = CDP 能连上；就绪标记写在本地盘，browser 命令据此判断要不要等。",
       "at": [
         -1.6,
         2.75
@@ -149,7 +149,7 @@
       "kind": "class",
       "name": "ProcessSpec",
       "stereotype": "值对象",
-      "responsibility": "三个进程的参数：屏幕 1920×1080；Chromium 有界面、不用沙盒（strict 档没有用户命名空间）、profile 在 /tmp/atlas-browser/profile、CDP 只听 127.0.0.1:9222；画面服务的 VNC 只听本机，websockify 对外开 6080，口令来自启动时的环境变量，读完就从环境里删掉。",
+      "responsibility": "进程的参数：屏幕横排 SLOTS 块、每块 1920×1080；Chromium 有界面、不用沙盒（沙箱里没有用户命名空间）、profile 在 /tmp/atlas-browser/profile、CDP 只听 127.0.0.1:9222；每块一个 x11vnc（-clip 只截那一块、只听本机），websockify 对外开 6080、按 token 转到那一块，口令来自启动时的环境变量，读完就从环境里删掉。",
       "at": [
         -1.6,
         4.6
@@ -157,7 +157,7 @@
       "attributes": [
         [
           "+",
-          "display · screen"
+          "display · screen（SLOTS 块）"
         ],
         [
           "+",
@@ -165,7 +165,7 @@
         ],
         [
           "+",
-          "vnc_port · ws_port · view_key"
+          "x11vnc(slot) · view_tokens · ws_port · view_key"
         ]
       ]
     },
@@ -174,7 +174,7 @@
       "kind": "class",
       "name": "TakeoverWindows",
       "stereotype": "领域服务",
-      "responsibility": "接管窗口：open 时先记下全部 cookie 作为接管前的样子，再开一个新窗口打开地址、置前；同一个接管号重复 open 只把窗口置前。close 时关掉窗口，和接管前比较，把变了的 cookie 所在的域名和浏览器此刻的登录态导出到文件（站点由 Atlas 按公共后缀表算，再挑出这些站点存）。不替别的接管关窗口：同一个人的别的会话可能也在等人接管。",
+      "responsibility": "接管窗口：open 时先记下全部 cookie 作为接管前的样子，再在这个对话那一块屏幕上开一个新窗口打开地址、置前（人看这个对话的画面就是它）；同一个接管号重复 open 只把窗口置前。close 时关掉窗口，和接管前比较，把变了的 cookie 所在的域名和浏览器此刻的登录态导出到文件（站点由 Atlas 按公共后缀表算，再挑出这些站点存）。不替别的接管关窗口：同一个人的别的会话可能也在等人接管。",
       "at": [
         0.4,
         2.75
@@ -182,7 +182,7 @@
       "methods": [
         [
           "+",
-          "open(id, url)"
+          "open(id, url, screen)"
         ],
         [
           "+",
@@ -311,7 +311,7 @@
     {
       "id": "procs",
       "kind": "class",
-      "name": "Xvfb · x11vnc · websockify",
+      "name": "Xvfb · 每块的 x11vnc · websockify",
       "external": true,
       "source": "沙箱里的进程",
       "methods": [
@@ -444,16 +444,32 @@
       "name": "接管窗口",
       "entry": "takeover open / close",
       "callers": "Atlas（打开接管、交还、不处理）",
-      "description": "open 记下接管前的 cookie、开窗口；close 关窗口、给出这次登录的站点和它们的登录态"
+      "description": "open 记下接管前的 cookie、在对话那一块屏幕上开窗口；close 关窗口、给出这次登录的站点和它们的登录态"
+    },
+    {
+      "name": "画面在哪一块",
+      "entry": "screen slot <对话>",
+      "callers": "Atlas（转发画面前）",
+      "description": "屏幕按对话分块：回答这个对话的 token（slotN），websockify 按它转到那一块；没用过浏览器回 null"
+    },
+    {
+      "name": "复制粘贴",
+      "entry": "clipboard set / get",
+      "callers": "Atlas（人在画面里粘贴、复制）",
+      "description": "经 xclip 读写虚拟屏幕的剪贴板（VNC 的剪贴板只认 Latin-1）；内容经文件进出"
     },
     {
       "name": "操作网页",
       "entry": "browser <子命令>",
       "callers": "模型（原生智能体的 Shell、CLI 智能体的 Bash）",
-      "description": "按会话名各用各的窗口；快照写文件、输出里给路径"
+      "description": "按会话名各用各的窗口，窗口在对话那一块屏幕上；快照写文件、输出里给路径"
     }
   ],
   "decisions": [
+    {
+      "decision": "屏幕按对话分块，每块一个画面服务",
+      "reason": "几个对话的窗口叠在一块屏幕上，看画面的人看到的是最后被激活的那个，会跳到别的对话。分块后窗口互不重叠，每个画面只截自己那块；弹窗由窗口看守挪回弹出它的那一块。"
+    },
     {
       "decision": "Chromium 有界面，跑在虚拟屏幕上",
       "reason": "人接管时要看到并操作同一个浏览器；无界面模式没有可以转出去的屏幕。虚拟屏幕不要显卡，CPU 就能跑。"

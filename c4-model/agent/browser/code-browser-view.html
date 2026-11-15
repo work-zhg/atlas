@@ -95,7 +95,7 @@
       "kind": "class",
       "name": "ViewAccess",
       "stereotype": "策略",
-      "responsibility": "谁能看、看哪个：来的人必须是会话的创建人（浏览器和登录态都是他的），这个会话的浏览器必须正在跑（只看现成的，不为看画面去建沙箱；要建是接管的「打开」做的）。",
+      "responsibility": "谁能看、看哪个：来的人必须是会话的创建人（浏览器和登录态都是他的），这个会话的浏览器必须正在跑（只看现成的，不为看画面去建沙箱；要建是接管的「打开」做的）。屏幕按对话分块：再经守护问这个对话（根会话）在第几块（screen slot），只转那一块；还没用过浏览器就没有块，告诉人「这个对话还没用过浏览器」。",
       "at": [
         2.6,
         0.85
@@ -112,7 +112,7 @@
       "kind": "class",
       "name": "ViewTarget",
       "stereotype": "值对象",
-      "responsibility": "要连的画面：哪个沙箱、哪个端口、口令。口令由宿主按 sandbox_uuid 算出来。",
+      "responsibility": "要连的画面：哪个沙箱、哪个端口、屏幕的哪一块、口令。口令由宿主按 sandbox_uuid 算出来；块用 token 表示，websockify 按它转到那一块的 x11vnc（/websockify?token=slotN）。",
       "at": [
         2.6,
         2.75
@@ -129,6 +129,10 @@
         [
           "+",
           "key: str"
+        ],
+        [
+          "+",
+          "token: slotN"
         ]
       ]
     },
