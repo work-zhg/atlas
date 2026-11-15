@@ -6,12 +6,16 @@
 #   · volumes、主容器（名为 sandbox）的 volumeMounts 按名字追加
 #   · 主容器的 securityContext 与运行时的合并（运行时优先；没有 networkPolicy 时运行时不设，模板整份生效）
 #   · ★ 其余列表字段（containers、initContainers）被运行时整体覆盖：模板里加 sidecar 没用
-# ★ strict 档：UID 1000、根只读、drop ALL、seccomp RuntimeDefault、禁止提权。
-#   可写区只有 emptyDir（/tmp、/home/agent、/repos）和创建请求挂进来的 /workspace。
-# ★ UID 1000 只设在主容器上，不设在 pod 级：strict 档带出站策略，会加 egress sidecar，它要以 root
+# ★ 开放档（档位名仍叫 strict）：以 UID 1000 运行、根可写、镜像里免密 sudo —— 模型要装系统包、
+#   改系统文件都可以；搞坏了重建沙箱就恢复（根目录、emptyDir 随 Pod 走，只有 /data 留下）。
+#   不用 root 直接跑：/data 的 s3fs 按 uid=1000 呈现属主，root 在工作区里 git 会报 dubious ownership。
+#   底线仍在：seccomp RuntimeDefault、不开特权、不挂宿主目录（TemplatePolicy 校验）、egress sidecar
+#   拒绝集群网段（主容器没有 NET_ADMIN，sudo 也改不了 nft）。容器层的写入量由创建请求的
+#   ephemeral-storage 上限兜住（超了驱逐这个沙箱，不会写满节点）。
+# ★ UID 1000 只设在主容器上，不设在 pod 级：带出站策略会加 egress sidecar，它要以 root
 #   跑 nft（只加了 NET_ADMIN）。pod 级 runAsUser 会让 sidecar 也变成 1000，nft 配不上（同 cli.yaml）。
-# ★ 带 networkPolicy 时运行时会给主容器设 capabilities.drop: [NET_ADMIN]，列表以运行时为准，
-#   这里的 drop: [ALL] 会被它替换；主容器非 root、禁止提权，默认能力本来不生效。
+# ★ 带 networkPolicy 时运行时会给主容器设 capabilities.drop: [NET_ADMIN]。其余能力保留默认：
+#   sudo 提权后 apt 要用到 CHOWN、SETUID 等。
 metadata: {}
 spec:
   replicas: 1
@@ -28,9 +32,6 @@ spec:
             runAsUser: 1000
             runAsGroup: 1000
             runAsNonRoot: true
-            readOnlyRootFilesystem: true
-            allowPrivilegeEscalation: false
-            capabilities: {drop: [ALL]}
           volumeMounts:
             - {name: tmp, mountPath: /tmp}
             - {name: home, mountPath: /home/agent}

@@ -172,6 +172,8 @@ class Settings(BaseSettings):
     sandbox_cpu_limit: str = "2"
     sandbox_memory_request: str = "512Mi"
     sandbox_memory_limit: str = "4Gi"
+    #: 根目录可写（开放档）：容器层最多写多少，超了驱逐这个沙箱、下一条命令重建。空 = 不限
+    sandbox_ephemeral_storage_limit: str = "10Gi"
     #: 每用户同时存在的沙箱上限，原生沙箱与 会话 Pod 合计。★ 先数再建：软上限（§13）
     sandbox_quota_per_user: int = 10
     #: 原生沙箱闲置多久回收（没有运行中的命令、最近没有命令和文件操作）
@@ -219,6 +221,7 @@ class Settings(BaseSettings):
     cli_cpu_limit: str = "2"
     cli_memory_request: str = "512Mi"
     cli_memory_limit: str = "4Gi"
+    cli_ephemeral_storage_limit: str = "10Gi"
     #: 等 bridge 就绪（/readyz：拉起 agent + initialize 完成）的上限。★ 模板合并会丢掉容器的
     #: readinessProbe，所以由 Atlas 自己等；不等的话第一轮必然连不上 bridge
     cli_ready_timeout_s: float = 120.0

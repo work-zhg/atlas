@@ -68,8 +68,9 @@ COPY --from=adapter /opt/acp-cli /opt/acp-cli
 # git：会话里的 CLI 要 clone / commit / push（AI TeamFlow 的产物仓库，以后还有项目代码）。
 # ★ 凭据不在镜像里：由 cluster 按会话的 git 凭据档案把 Secret 只读挂到 /run/secrets/git，
 #   GIT_CONFIG_GLOBAL 指向那里的 gitconfig（见 cluster template.py）。
+# sudo：开放档（cli.yaml），会话里的 CLI 要装系统包就 sudo apt-get，搞坏了重建 Pod 就恢复
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git ca-certificates \
+    && apt-get install -y --no-install-recommends git ca-certificates sudo \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=wheels /wheels /tmp/wheels
@@ -81,12 +82,13 @@ RUN pip install --no-cache-dir /tmp/wheels/*.whl \
 #   （CreateContainerConfigError）。模板那边也显式给了 runAsUser，
 #   两边说同一件事。
 #
-# ★ 根文件系统是只读的（模板里 readOnlyRootFilesystem）：HOME 放 /tmp/home（emptyDir，
-#   Atlas 拉起 bridge 时设）；CLI 的会话记录在 CLAUDE_CONFIG_DIR=/data/home/.claude，
-#   /data 是整个 {user}/ 的挂载 —— resume 跨 Pod 重建就靠它。
+# ★ HOME 放 /tmp/home（emptyDir，Atlas 拉起 bridge 时设）；CLI 的会话记录在
+#   CLAUDE_CONFIG_DIR=/data/home/.claude，/data 是整个 {user}/ 的挂载 —— resume 跨 Pod 重建就靠它。
 RUN useradd --uid 1000 --create-home --home-dir /home/agent agent \
     && mkdir -p /data /repos \
-    && chown agent:agent /data /repos
+    && chown agent:agent /data /repos \
+    && echo 'agent ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/agent \
+    && chmod 0440 /etc/sudoers.d/agent
 USER 1000:1000
 ENV HOME=/tmp/home \
     PYTHONUNBUFFERED=1 \

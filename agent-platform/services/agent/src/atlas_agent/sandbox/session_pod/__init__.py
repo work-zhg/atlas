@@ -231,7 +231,11 @@ class CliPodKind:
             entrypoint=("tail", "-f", "/dev/null"),
             network=network,
             resources=Resources(
-                s.cli_cpu_request, s.cli_cpu_limit, s.cli_memory_request, s.cli_memory_limit
+                s.cli_cpu_request,
+                s.cli_cpu_limit,
+                s.cli_memory_request,
+                s.cli_memory_limit,
+                s.cli_ephemeral_storage_limit,
             ),
             env={
                 "EXECD_INIT": "1",  # execd 作 PID 1：回收僵尸进程（bridge 拉起的 CLI）、转发信号

@@ -102,6 +102,9 @@ class Resources:
     cpu_limit: str
     memory_request: str
     memory_limit: str
+    #: 容器层（根目录）能写多少。根可写时写进去的东西占节点磁盘：超了只驱逐这个沙箱，
+    #: 下一次确保时重建。空 = 不限
+    ephemeral_storage_limit: str = ""
 
 
 @dataclass(frozen=True)

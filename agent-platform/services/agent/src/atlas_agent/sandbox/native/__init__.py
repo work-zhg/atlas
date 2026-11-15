@@ -49,7 +49,8 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-#: 档位就是模板：strict（非 root、根只读）、bench（评测：root、根可写）
+#: 档位就是模板：strict（平台默认，开放档：UID 1000、根可写、免密 sudo）、
+#: bench（评测：root、根可写）
 STRICT_TEMPLATE = "sbx-strict"
 BENCH_TEMPLATE = "bench"
 _TEMPLATES: dict[str, SandboxProfile] = {STRICT_TEMPLATE: "strict", BENCH_TEMPLATE: "bench"}
@@ -158,7 +159,7 @@ class NativeSandboxKind:
         layout = WorkspaceRef.of_biz(biz).layout()
         env = {
             "EXECD_INIT": "1",  # execd 作 PID 1：回收僵尸进程、转发信号
-            "EXECD_ENVS": "/tmp/.execd/env",  # 默认在 /opt/opensandbox，而 strict 档的根是只读的
+            "EXECD_ENVS": "/tmp/.execd/env",  # 默认在 /opt/opensandbox；放 emptyDir，不占容器层
             "TMPDIR": "/tmp",
         }
         if req.profile != "bench":
@@ -180,6 +181,7 @@ class NativeSandboxKind:
                 s.sandbox_cpu_limit,
                 s.sandbox_memory_request,
                 s.sandbox_memory_limit,
+                s.sandbox_ephemeral_storage_limit,
             ),
             env=env,
             # ★ 唯一的挂载：整个 {user}/ 读写挂到 /data。工作区、技能都在它下面，这个人新开的会话

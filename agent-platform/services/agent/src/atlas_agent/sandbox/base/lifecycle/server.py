@@ -174,12 +174,18 @@ def request_body(
             raise ValueError("声明了 service_token_env 却没有服务令牌")
         env[spec.service_token_env] = service_token.get_secret_value()
     r = spec.resources
+    limits = {"cpu": r.cpu_limit, "memory": r.memory_limit}
+    requests = {"cpu": r.cpu_request, "memory": r.memory_request}
+    if r.ephemeral_storage_limit:
+        # 请求给 0：只防写满节点、不占调度（不给的话 K8s 把请求补成等于上限）
+        limits["ephemeral-storage"] = r.ephemeral_storage_limit
+        requests["ephemeral-storage"] = "0"
     return {
         "image": {"uri": spec.image},
         "entrypoint": list(spec.entrypoint),
         "timeout": None,  # 不自动过期：回收由 Atlas 做
-        "resourceLimits": {"cpu": r.cpu_limit, "memory": r.memory_limit},
-        "resourceRequests": {"cpu": r.cpu_request, "memory": r.memory_request},
+        "resourceLimits": limits,
+        "resourceRequests": requests,
         "env": env,
         "metadata": spec.labels.as_dict(),
         "volumes": [

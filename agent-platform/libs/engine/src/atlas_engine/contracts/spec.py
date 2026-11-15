@@ -398,9 +398,10 @@ class CliSpec:
 
 #: native 沙箱的档位。
 #:
-#: strict —— 平台默认：UID 1000、根只读、drop ALL（opensandbox-sbx）
+#: strict —— 平台默认（名字沿用，内容是开放档）：UID 1000、根可写、免密 sudo，搞坏了重建
+#:           沙箱即恢复；集群网段仍由 egress 拒绝（opensandbox-sbx）
 #: bench  —— 评测档：root、根可写（opensandbox-bench）。Terminal-Bench 这类题目按 root 设计
-#:           （apt 装包、写 /app 与 /logs），strict 档跑不了。只在部署了评测档的环境可用
+#:           （root 身份 apt 装包、写 /app 与 /logs）。只在部署了评测档的环境可用
 SandboxProfile = Literal["strict", "bench"]
 
 

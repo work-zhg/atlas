@@ -128,6 +128,18 @@ def test_request_body_merges_secrets_and_both_tokens_into_env() -> None:
     assert body["volumes"][0]["pvc"] == {"claimName": "atlas-oss", "createIfNotExists": False}
 
 
+def test_request_body_caps_ephemeral_storage_without_reserving_it() -> None:
+    """根可写：容器层设上限防写满节点；请求给 0，否则 K8s 把请求补成等于上限、沙箱多了调度不上。"""
+    body = request_body(
+        _spec(resources=Resources("100m", "2", "512Mi", "4Gi", "10Gi")), SecretStr("exec"), None
+    )
+    assert body["resourceLimits"] == {"cpu": "2", "memory": "4Gi", "ephemeral-storage": "10Gi"}
+    assert body["resourceRequests"] == {"cpu": "100m", "memory": "512Mi", "ephemeral-storage": "0"}
+    # 不设就不带：和以前的请求体一样
+    plain = request_body(_spec(), SecretStr("exec"), None)
+    assert "ephemeral-storage" not in plain["resourceLimits"]
+
+
 def test_state_groups_keep_unknown_states_out_of_every_group() -> None:
     assert SandboxState.parse("Allocated").usable and SandboxState.parse("Running").usable
     assert SandboxState.parse("Pending").settling
