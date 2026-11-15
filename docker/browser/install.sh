@@ -5,11 +5,12 @@
 #
 #   Chromium + 中文字体     有界面模式，画在虚拟屏幕上（人接管时看到的就是它）
 #   Xvfb · x11vnc · websockify   虚拟屏幕和画面服务：VNC 只听本机，websockify 对外开 6080（带口令）
+#   xclip                   虚拟屏幕的剪贴板：人在画面里复制粘贴经它（VNC 的剪贴板只认 Latin-1）
 #   playwright（Python）    守护经 CDP 连本机的 Chromium（不下载浏览器）
 #   @playwright/cli         模型的 browser 命令把它当后端（按会话名各用一个窗口）
 #   atlas-browserd          守护和 browser 命令（agent-platform/pod/browserd）
 #
-# ★ 都在构建时装好：strict 档根目录只读，运行时装不了。
+# ★ 都在构建时装好：运行时现装太慢（Chromium 加字体几百 MB）。
 # ★ 版本钉死：浏览器能力的行为（会话怎么连、快照的格式）跟着这几个版本走，换版本 = 换镜像 tag。
 set -eu
 
@@ -25,7 +26,7 @@ case "${1:-all}" in
     apt-get install -y --no-install-recommends \
         chromium \
         fonts-noto-cjk fonts-noto-color-emoji \
-        xvfb x11vnc websockify \
+        xvfb x11vnc websockify xclip \
         ca-certificates
     rm -rf /var/lib/apt/lists/*
     ;;
@@ -43,7 +44,7 @@ case "${1:-all}" in
     PIP_USER=0 PIP_BREAK_SYSTEM_PACKAGES=1 python3 -m pip install --no-deps --no-cache-dir "$SRC"
     rm -rf "$SRC"
     # 自检：命令都在，Chromium 能报版本
-    command -v atlas-browserd browser playwright-cli Xvfb x11vnc websockify chromium
+    command -v atlas-browserd browser playwright-cli Xvfb x11vnc websockify xclip chromium
     chromium --version
     ;;
   *)

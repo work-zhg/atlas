@@ -49,3 +49,9 @@ class BrowserStatusOut(BaseModel):
     """这个会话的浏览器在不在跑：在跑才有画面（看画面不为此新建沙箱）。"""
 
     running: bool
+
+
+class BrowserClipboard(BaseModel):
+    """浏览器所在虚拟屏幕的剪贴板：人在画面里粘贴（写）、复制（读）。"""
+
+    text: str = Field(max_length=100_000)

@@ -1324,13 +1324,49 @@ button.agentChip:hover {
   word-break: break-all;
 }
 
+/* 外框 = 上面一条工具栏 + 画面；全屏的是它 */
 .browserView {
-  position: relative;
+  display: flex;
+  flex-direction: column;
   margin-top: var(--s-3);
   border: 1px solid var(--line);
   border-radius: var(--r-sm);
   background: #f4f5f7;
   overflow: hidden;
+}
+
+/* 内联的 height 要压过去：全屏时占满整块屏幕 */
+.browserView:fullscreen {
+  height: 100vh !important;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+}
+
+.browserBar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: 2px 4px 2px 8px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-1);
+  font-size: 11.5px;
+  color: var(--fg-3);
+}
+
+.browserHint {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.browserStage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
 }
 
 /* noVNC 把 canvas 放进这个容器，按容器缩放 */
@@ -1353,14 +1389,10 @@ button.agentChip:hover {
 }
 
 .browserBadge {
-  position: absolute;
-  top: 6px;
-  right: 8px;
-  z-index: 1;
+  flex: none;
   font-size: 11px;
   padding: 1px 6px;
   border-radius: var(--r-sm);
   background: rgba(0, 0, 0, 0.55);
   color: #fff;
-  pointer-events: none;
 }

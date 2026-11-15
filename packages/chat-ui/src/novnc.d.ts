@@ -9,5 +9,6 @@ declare module "@novnc/novnc" {
     focusOnClick: boolean;
     disconnect(): void;
     focus(): void;
+    sendKey(keysym: number, code: string | null, down?: boolean): void;
   }
 }

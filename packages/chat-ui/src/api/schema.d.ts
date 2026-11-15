@@ -1717,6 +1717,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/threads/{thread_id}/browser/clipboard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Clipboard
+         * @description 人在画面里复制：画面先给浏览器按 Ctrl+C，再取这里。
+         */
+        get: operations["get_clipboard_v1_threads__thread_id__browser_clipboard_get"];
+        /**
+         * Set Clipboard
+         * @description 人在画面里粘贴：画面先调这里，再给浏览器按 Ctrl+V。
+         */
+        put: operations["set_clipboard_v1_threads__thread_id__browser_clipboard_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/browser/logins": {
         parameters: {
             query?: never;
@@ -2319,6 +2343,14 @@ export interface components {
         BackfillSeenIn: {
             /** Ids */
             ids?: string[] | null;
+        };
+        /**
+         * BrowserClipboard
+         * @description 浏览器所在虚拟屏幕的剪贴板：人在画面里粘贴（写）、复制（读）。
+         */
+        BrowserClipboard: {
+            /** Text */
+            text: string;
         };
         /** BrowserLoginList */
         BrowserLoginList: {
@@ -7712,6 +7744,70 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["BrowserStatusOut"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_clipboard_v1_threads__thread_id__browser_clipboard_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrowserClipboard"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_clipboard_v1_threads__thread_id__browser_clipboard_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BrowserClipboard"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

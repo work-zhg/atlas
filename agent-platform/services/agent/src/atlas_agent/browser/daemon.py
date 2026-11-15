@@ -13,6 +13,7 @@
     atlas-browserd state forget SITE                    清掉一个站点的 cookie 和本地存储
     atlas-browserd takeover open ID URL                 记下此刻的 cookie，开接管窗口
     atlas-browserd takeover close ID --out F            关窗口，比较前后，导出
+    atlas-browserd clipboard set F / get --out F        写入 / 读出虚拟屏幕的剪贴板
 
   一次性的命令把结果写成 stdout 最后一行 JSON；失败时退出码非 0，JSON 里有 error。
 
@@ -178,6 +179,21 @@ class DaemonClient:
             domains=tuple(str(d) for d in data.get("domains") or ()),
             state=StateBundle.parse(data.get("state")),
         )
+
+    async def clipboard_set(self, ref: SandboxRef, text: str) -> None:
+        """把文字放进虚拟屏幕的剪贴板（人在画面里粘贴）。
+
+        ★ 经文件传：粘贴的常常是密码，不进命令行。
+        """
+        path = f"{STATE_DIR}/clipboard-{uuid4().hex}.txt"
+        await self._upload(ref, path, text.encode())
+        await self.call(ref, ["clipboard", "set", path])
+
+    async def clipboard_get(self, ref: SandboxRef) -> str:
+        """虚拟屏幕剪贴板里的文字（人在画面里复制）。没复制过是空串。"""
+        path = f"{STATE_DIR}/clipboard-{uuid4().hex}.txt"
+        await self.call(ref, ["clipboard", "get", "--out", path])
+        return (await self._take(ref, path)).decode(errors="replace")
 
     # ------------------------------------------------------------------ 内部
 

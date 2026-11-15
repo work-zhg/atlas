@@ -7,6 +7,7 @@
     不处理    做决定、尽力关窗口，不存登录态
     审批接口  通用的审批接口不能批接管（那样登录态不存）
     我的登录  列出、删除（正在跑的浏览器里也清）；状态接口看浏览器在不在跑
+    剪贴板    人在画面里粘贴、复制：只给会话的创建人；浏览器没在跑回 409
 """
 
 from __future__ import annotations
@@ -70,6 +71,7 @@ class FakeDaemon:
         )
         self.captured = Captured(("login.taobao.com",), state)
         self.fail_close = False
+        self.clipboard = ""
 
     async def takeover_open(self, ref: SandboxRef, takeover_id: str, url: str) -> None:
         self.opened.append((takeover_id, url))
@@ -79,6 +81,12 @@ class FakeDaemon:
         if self.fail_close:
             raise DaemonError("守护没了")
         return self.captured
+
+    async def clipboard_set(self, ref: SandboxRef, text: str) -> None:
+        self.clipboard = text
+
+    async def clipboard_get(self, ref: SandboxRef) -> str:
+        return self.clipboard
 
 
 class Listener:
@@ -239,3 +247,18 @@ async def test_my_logins_and_browser_status(env: Any) -> None:
     assert gone.status_code == 204, gone.text
     assert env.browser.hosts.forgotten == [(UUID(TEST_USER), Site("taobao.com"))]
     assert (await env.client.delete("/v1/browser/logins/taobao.com")).status_code == 404
+
+
+async def test_clipboard_round_trip_only_for_the_creator_of_a_running_browser(env: Any) -> None:
+    _, _, thread = await _takeover(env.client)
+    url = f"/v1/threads/{thread}/browser/clipboard"
+    put = await env.client.put(url, json={"text": "收货地址：杭州市西湖区"})
+    assert put.status_code == 204, put.text
+    assert env.browser.daemon.clipboard == "收货地址：杭州市西湖区"
+    got = await env.client.get(url)
+    assert got.status_code == 200, got.text
+    assert got.json() == {"text": "收货地址：杭州市西湖区"}
+
+    assert (await env.client.get(url, headers=OTHER)).status_code in (403, 404)
+    env.browser.hosts.running = False
+    assert (await env.client.put(url, json={"text": "x"})).status_code == 409

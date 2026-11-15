@@ -7,6 +7,8 @@
     state forget SITE                      清掉一个站点的 cookie 和本地存储
     takeover open ID URL                   记下此刻的 cookie，开接管窗口
     takeover close ID --out FILE           关窗口，比较前后，导出
+    clipboard set FILE                     把文件里的文字放进虚拟屏幕的剪贴板（放完删文件）
+    clipboard get --out FILE               把虚拟屏幕剪贴板里的文字写到文件
 
 一次性的命令把结果写成 stdout 最后一行 JSON；失败时退出码非 0，JSON 里有 error（给人看的话）。
 ★ 登录态文件都在本地盘（/tmp/atlas-browser），不经过 /data；写出的文件 0600。
@@ -108,6 +110,28 @@ def _takeover(args: argparse.Namespace, paths: Paths) -> int:
     return 0
 
 
+def _clipboard(args: argparse.Namespace, paths: Paths) -> int:
+    from .clipboard import read_text, write_text
+
+    if args.action == "set":
+        path = Path(args.file)
+        try:
+            text = path.read_text(encoding="utf-8")
+        finally:
+            path.unlink(missing_ok=True)  # 粘贴的可能是密码：不在本地盘上多留
+        write_text(text)
+        _emit({"chars": len(text)})
+        return 0
+    text = read_text()
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(text)
+    _emit({"out": args.out, "chars": len(text)})
+    return 0
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="atlas-browserd", description="Atlas 浏览器守护")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -130,6 +154,9 @@ def _parser() -> argparse.ArgumentParser:
     cls = takeover.add_parser("close")
     cls.add_argument("id")
     cls.add_argument("--out", required=True)
+    clipboard = sub.add_parser("clipboard").add_subparsers(dest="action", required=True)
+    clipboard.add_parser("set").add_argument("file")
+    clipboard.add_parser("get").add_argument("--out", required=True)
     return parser
 
 
@@ -138,6 +165,7 @@ _COMMANDS: dict[str, Callable[[argparse.Namespace, Paths], int]] = {
     "status": _status,
     "state": _state,
     "takeover": _takeover,
+    "clipboard": _clipboard,
 }
 
 

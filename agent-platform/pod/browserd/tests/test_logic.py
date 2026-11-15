@@ -93,3 +93,25 @@ def test_failed_command_reports_the_reason_as_json(capsys: pytest.CaptureFixture
     assert main(["state", "import", "/nonexistent/file.json"]) == 1
     result = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert "FileNotFoundError" in result["error"]
+
+
+def test_clipboard_moves_text_through_files_and_removes_the_pasted_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """粘贴的常常是密码：放进剪贴板后文件就删掉；复制的写成 0600 的文件。中文原样进出。"""
+    from atlas_browserd import clipboard
+
+    board: dict[str, str] = {}
+    monkeypatch.setattr(clipboard, "write_text", lambda text: board.update(text=text))
+    monkeypatch.setattr(clipboard, "read_text", lambda: board.get("text", ""))
+
+    pasted = tmp_path / "in.txt"
+    pasted.write_text("验证码 4096", encoding="utf-8")
+    assert main(["clipboard", "set", str(pasted)]) == 0
+    assert board == {"text": "验证码 4096"} and not pasted.exists()
+
+    out = tmp_path / "out.txt"
+    assert main(["clipboard", "get", "--out", str(out)]) == 0
+    assert out.read_text(encoding="utf-8") == "验证码 4096"
+    assert out.stat().st_mode & 0o777 == 0o600
+    assert json.loads(capsys.readouterr().out.strip().splitlines()[-1])["chars"] == 8

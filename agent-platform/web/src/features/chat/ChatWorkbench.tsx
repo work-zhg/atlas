@@ -9,10 +9,10 @@
  * ★ 本机 CLI 会话（thread.device）：头部显示「设备名 · 本机路径」和在线状态；电脑不在线时
  *   一轮还在跑就提示「连上后接着显示」，没在跑就禁用输入框并说明原因；文件抽屉换成本机文件。
  * ★ 浏览器（c4-model/agent/browser/design-browser.html）：会话的浏览器在跑时头部多一个「浏览器」，
- *   打开是只看的实时画面（不打乱智能体）；要操作走接管卡片。
+ *   在新标签打开只看的实时画面（边看对话边看它操作，不打乱智能体）；要操作走接管卡片。
  */
 import { useQuery } from "@tanstack/react-query";
-import { Alert, App as AntdApp, Button, Drawer, Dropdown, Input, Modal } from "antd";
+import { Alert, App as AntdApp, Button, Dropdown, Input, Modal } from "antd";
 import { useRouter } from "next/navigation";
 import { useCallback, useState } from "react";
 
@@ -21,10 +21,9 @@ import { qk } from "@/api/keys";
 import { uploadThreadFile, useDeleteThread, useRenameThread, useThread } from "@/api/threads";
 import type { Thread } from "@/api/types";
 import { Icon } from "@/components/Icon";
-import { http } from "@/lib/http";
+import { BASE_PATH, http } from "@/lib/http";
 import { BackfillNotice } from "@/features/memory/BackfillNotice";
 import { useBrowserStatus } from "@atlas/chat-ui/src/api/browser";
-import { BrowserView } from "@atlas/chat-ui/src/chat/BrowserView";
 import { ThreadConversation, type ConversationStreamState } from "@atlas/chat-ui/src/chat/ThreadConversation";
 import type { ContextUsageData } from "@atlas/chat-ui/src/lib/events";
 
@@ -40,7 +39,6 @@ export function ChatWorkbench({ threadId }: { threadId: string }) {
   const rename = useRenameThread(threadId);
   const del = useDeleteThread();
   const [filesOpen, setFilesOpen] = useState(false);
-  const [browserOpen, setBrowserOpen] = useState(false);
   const [renaming, setRenaming] = useState<string | null>(null);
 
   // 流状态给文件抽屉、上下文用量联动
@@ -73,7 +71,7 @@ export function ChatWorkbench({ threadId }: { threadId: string }) {
 
   const upload = useCallback((file: File) => uploadThreadFile(threadId, file), [threadId]);
   // 本机会话没有平台的浏览器
-  const browserQ = useBrowserStatus(threadId, !device);
+  const browserQ = useBrowserStatus(threadId, !device, live.running);
   const browserRunning = browserQ.data?.running === true;
 
   const remove = () =>
@@ -131,7 +129,15 @@ export function ChatWorkbench({ threadId }: { threadId: string }) {
             {device && <DeviceChip device={device} />}
             <ContextMeter threadId={threadId} live={live.usage} running={live.running} minPercent={60} />
             {browserRunning && (
-              <Button size="small" type="text" icon={<Icon name="globe" size={15} />} onClick={() => setBrowserOpen(true)}>
+              <Button
+                size="small"
+                type="text"
+                icon={<Icon name="globe" size={15} />}
+                href={`${BASE_PATH}/browser/${threadId}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="在新标签看智能体操作浏览器"
+              >
                 浏览器
               </Button>
             )}
@@ -177,20 +183,6 @@ export function ChatWorkbench({ threadId }: { threadId: string }) {
           onClose={() => setFilesOpen(false)}
         />
       )}
-
-      <Drawer
-        title="浏览器（只看）"
-        placement="right"
-        width="min(1100px, 90vw)"
-        open={browserOpen}
-        onClose={() => setBrowserOpen(false)}
-        destroyOnClose
-      >
-        <p style={{ margin: "0 0 8px", fontSize: 12.5, color: "var(--fg-3)" }}>
-          智能体在这个浏览器里操作网页。这里只看不操作，免得打乱它；要你登录时，对话里会出现接管卡片。
-        </p>
-        {browserOpen && <BrowserView threadId={threadId} interactive={false} height={620} />}
-      </Drawer>
 
       <Modal
         open={renaming !== null}

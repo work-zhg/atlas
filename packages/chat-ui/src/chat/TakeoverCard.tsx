@@ -130,7 +130,7 @@ export function TakeoverCard({ approval, waiting, settled }: Props) {
             <div className={styles.approvalActions}>
               <span className={styles.approvalHint}>
                 {threadId
-                  ? "在上面的画面里操作；做完点「交还」，智能体接着做"
+                  ? "在上面的画面里操作（可以全屏、复制粘贴）；做完点「交还」，智能体接着做"
                   : "打开后在画面里自己登录：密码、验证码不经过智能体"}
               </span>
               <Button loading={decline.isPending} disabled={busy} onClick={doDecline}>

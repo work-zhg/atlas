@@ -4,6 +4,8 @@
     POST   /v1/runs/{run}/takeovers/{id}/hand-back   交还：先存这次登录的站点，再唤醒
     POST   /v1/runs/{run}/takeovers/{id}/decline     不处理
     GET    /v1/threads/{thread}/browser              这个会话的浏览器在不在跑（有没有画面）
+    PUT    /v1/threads/{thread}/browser/clipboard    人在画面里粘贴：文字先放进浏览器的剪贴板
+    GET    /v1/threads/{thread}/browser/clipboard    人在画面里复制：取浏览器剪贴板里的文字
     WS     /v1/threads/{thread}/browser/view         实时画面（noVNC 连这里；同源，
                                                      网关照常校验登录）
     GET    /v1/browser/logins                        我的登录：存了哪些站点
@@ -25,6 +27,7 @@ from fastapi import APIRouter, Depends, Response, WebSocket
 from ...auth.authz import PrincipalDep, ensure_run_owner, ensure_thread_owner
 from ...auth.dependency import principal_of
 from ...browser.component import BrowserComponent
+from ...browser.daemon import DaemonError
 from ...browser.login import Site
 from ...browser.takeover import TakeoverDesk
 from ...browser.view import CloseReason, LiveView, ViewAccess, ViewDenied, close
@@ -32,10 +35,12 @@ from ...config import get_settings
 from ...db.models import Thread
 from ...db.session import fetch_one, get_sessionmaker
 from ...deps import ApprovalServiceDep, RedisDep, SessionDep, SettingsDep
-from ...errors import AppError, Conflict, NotFound
+from ...errors import AppError, Conflict, Forbidden, NotFound
 from ...redisx import make_redis
 from ...sandbox.component import SandboxComponent
+from ...sandbox.provisioning.model import SandboxRef
 from ...schemas.browser import (
+    BrowserClipboard,
     BrowserLoginList,
     BrowserLoginOut,
     BrowserStatusOut,
@@ -151,6 +156,53 @@ async def browser_status(
     if thread is None or thread.created_by_uuid != principal.uid:
         return BrowserStatusOut(running=False)
     return BrowserStatusOut(running=await browser.hosts.current(thread) is not None)
+
+
+class BrowserNotRunning(Conflict):
+    kind = "browser_not_running"
+
+
+async def _running(
+    session: SessionDep, thread_id: UUID, principal: PrincipalDep, browser: BrowserComponent
+) -> SandboxRef:
+    """会话创建人的、正在跑的浏览器（同画面：浏览器里是他登录后的网页）。不为此新建沙箱。"""
+    await ensure_thread_owner(session, thread_id, principal, write=True)
+    thread = await fetch_one(session, Thread, Thread.thread_uuid == thread_id)
+    if thread is None or thread.created_by_uuid != principal.uid:
+        raise Forbidden("只有会话的创建人能操作这个浏览器")
+    ref = await browser.hosts.current(thread)
+    if ref is None:
+        raise BrowserNotRunning("浏览器没在运行")
+    return ref
+
+
+@router.put("/threads/{thread_id}/browser/clipboard", status_code=204)
+async def set_clipboard(
+    thread_id: UUID,
+    payload: BrowserClipboard,
+    session: SessionDep,
+    principal: PrincipalDep,
+    browser: BrowserDep,
+) -> Response:
+    """人在画面里粘贴：画面先调这里，再给浏览器按 Ctrl+V。"""
+    ref = await _running(session, thread_id, principal, browser)
+    try:
+        await browser.daemon.clipboard_set(ref, payload.text)
+    except DaemonError as exc:
+        raise BrowserNotRunning(f"粘贴失败：{exc}") from exc
+    return Response(status_code=204)
+
+
+@router.get("/threads/{thread_id}/browser/clipboard", response_model=BrowserClipboard)
+async def get_clipboard(
+    thread_id: UUID, session: SessionDep, principal: PrincipalDep, browser: BrowserDep
+) -> BrowserClipboard:
+    """人在画面里复制：画面先给浏览器按 Ctrl+C，再取这里。"""
+    ref = await _running(session, thread_id, principal, browser)
+    try:
+        return BrowserClipboard(text=await browser.daemon.clipboard_get(ref))
+    except DaemonError as exc:
+        raise BrowserNotRunning(f"复制失败：{exc}") from exc
 
 
 # ---------------------------------------------------------------------------- 我的登录

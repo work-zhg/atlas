@@ -25,8 +25,8 @@ import styles from "./shell.module.css";
 
 const MIN_KEY = "atlas.sider.min";
 
-/** 没有骨架的整页：文件预览在新标签里打开，登录页只做跳转 */
-const BARE = (p: string) => p.startsWith("/files/") || p === "/login";
+/** 没有骨架的整页：文件预览、会话浏览器在新标签里打开，登录页只做跳转 */
+const BARE = (p: string) => p.startsWith("/files/") || p.startsWith("/browser/") || p === "/login";
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
