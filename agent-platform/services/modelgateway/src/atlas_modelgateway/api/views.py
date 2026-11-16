@@ -31,6 +31,7 @@ def model_out(
         provider=(row.provider if row is not None else dep.provider if dep else "") or "",
         visibility=row.visibility if row is not None else None,  # type: ignore[arg-type]
         description=row.description if row is not None else "",
+        supports_vision=bool(row.supports_vision) if row is not None else False,
         source=view.source,  # type: ignore[arg-type]
         status=status,  # type: ignore[arg-type]
         managed=row is not None and row.litellm_model_id is not None,
@@ -70,6 +71,7 @@ def internal_model_out(view: ModelView) -> InternalModelOut:
         provider=row.provider,
         max_input_tokens=dep.max_input_tokens if dep else None,
         max_output_tokens=dep.max_output_tokens if dep else None,
+        supports_vision=bool(row.supports_vision),
     )
 
 

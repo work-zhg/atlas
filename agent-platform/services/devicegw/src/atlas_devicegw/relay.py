@@ -3,10 +3,13 @@
     HostRelay      给 Agent 服务一个和 bridge 用法一样的会话地址：
                    取登记 → 找设备的连接 → 开会话流 → 对转
     FileRelay      读本机文件的请求变成文件流：首帧是响应头，之后是内容块
+    BrowserRelay   本机浏览器的固定请求（开、关接管窗口，剪贴板，状态）：开一路浏览器通道，一问一答
+    ViewRelay      看本机浏览器的画面：开一路画面流，和 Agent 服务的 WebSocket 原样对转
     ClosePolicy    关闭原因对照，只写这一处
     LaunchResolver 把登记里的启动参数变成连接器能直接用的（补上网关地址和会话令牌）
 
-★ 只转发、不解析会话流：序号、确认、补发、审批都由 Agent 服务和 bridge 两端处理。
+★ 只转发、不解析会话流：序号、确认、补发、审批都由 Agent 服务和 bridge 两端处理。画面流也一样：
+  里面是 VNC 的原始字节，不解析、不落盘、不进日志。
 ★ 设备不在本实例就关闭并说「可以重连」：Agent 服务重连前会重新查在线表，连到设备现在所在的实例；
   网关实例之间不转发。
 """
@@ -17,15 +20,17 @@ import asyncio
 import contextlib
 import json
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 from atlas_devicelink import (
+    BROWSER,
     FILE,
     GOING_AWAY,
     INTERNAL_ERROR,
     NORMAL,
     SESSION,
+    VIEW,
     Channel,
     ChannelClosed,
 )
@@ -36,7 +41,7 @@ from starlette.websockets import WebSocketDisconnect
 from .capability import SessionRegistry
 from .link import LinkServer, fit_reason
 
-__all__ = ["ClosePolicy", "FileRelay", "HostRelay", "LaunchResolver"]
+__all__ = ["BrowserRelay", "ClosePolicy", "FileRelay", "HostRelay", "LaunchResolver", "ViewRelay"]
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +53,8 @@ SUPERSEDED = 4409
 DEVICE_REJECTED = 4403
 #: 读文件时等首帧（响应头）的时限
 FILE_HEAD_TIMEOUT_S = 30.0
+#: 浏览器请求等答复的时限：开接管窗口时浏览器可能还没起来，要等连接器拉起（几十秒）
+BROWSER_TIMEOUT_S = 120.0
 
 
 class ClosePolicy:
@@ -118,7 +125,11 @@ class HostRelay:
         await _pipe(ws, channel)
 
 
-async def _pipe(ws: WebSocket, channel: Channel) -> None:
+async def _pipe(
+    ws: WebSocket,
+    channel: Channel,
+    to_server: Callable[[int | None, str], tuple[int, str]] = ClosePolicy.to_server,
+) -> None:
     """两边各一个任务对转，不解析内容；任何一端结束就按对照表关另一端。"""
 
     async def from_server() -> None:
@@ -159,7 +170,7 @@ async def _pipe(ws: WebSocket, channel: Channel) -> None:
         # Agent 服务那边关了：断开不取消电脑上正在做的事，这一轮照常进行
         await channel.close(NORMAL, "Agent 服务断开")
         return
-    code, reason = ClosePolicy.to_server(channel.close_code, channel.close_reason)
+    code, reason = to_server(channel.close_code, channel.close_reason)
     with contextlib.suppress(Exception):
         await ws.close(code, fit_reason(reason))
 
@@ -209,6 +220,79 @@ async def _chunks(channel: Channel) -> AsyncIterator[bytes]:
             yield item.encode() if isinstance(item, str) else item
     finally:
         await channel.close()
+
+
+class BrowserRelay:
+    """本机浏览器的固定请求：开、关接管窗口，剪贴板，状态。每个请求一路浏览器通道，首帧就是答复
+    {"status": …, "body": …}。连接器按本机策略核对，拒绝的原因原样回来（403 + message）。"""
+
+    def __init__(self, links: LinkServer) -> None:
+        self._links = links
+
+    async def request(self, device: str, body: dict[str, Any]) -> Response:
+        link = self._links.local(device)
+        if link is None:
+            return _offline()
+        try:
+            channel = await link.open_channel(BROWSER, body)
+        except ConnectionError:
+            return _offline()
+        try:
+            first = await asyncio.wait_for(channel.receive(), BROWSER_TIMEOUT_S)
+        except TimeoutError:
+            message = f"电脑上的浏览器 {int(BROWSER_TIMEOUT_S)} 秒内没有回答"
+            return JSONResponse(
+                {"error": {"kind": "device_timeout", "message": message}}, status_code=504
+            )
+        finally:
+            await channel.close()
+        if first is None:
+            if channel.close_code == GOING_AWAY:
+                return _offline()
+            message = channel.close_reason or "电脑没有回答"
+            return JSONResponse(
+                {"error": {"kind": "device_error", "message": message}}, status_code=502
+            )
+        head = json.loads(first)
+        return JSONResponse(head.get("body"), status_code=int(head.get("status", 500)))
+
+
+class ViewRelay:
+    """看本机浏览器的画面：Agent 服务（已核对是本人）连这里，在设备的控制连接里开一路画面流。
+
+    ★ 开流头只带会话和对话（屏幕按对话分块），没有地址和端口：连接器自己找本机的画面服务。
+    ★ 连接器拒绝或画面服务断了的关闭码（4403 本机不允许、4404 这个对话还没用过浏览器……）原样
+      交给 Agent 服务，它再告诉网页。
+    """
+
+    def __init__(self, links: LinkServer, *, internal_token: str = "") -> None:
+        self._links = links
+        self._token = internal_token
+
+    async def serve(self, ws: WebSocket, device: str, thread: str, screen: str) -> None:
+        if self._token and _bearer(ws) != self._token:
+            await ws.close(4401)
+            return
+        await ws.accept()
+        link = self._links.local(device)
+        if link is None:
+            await ws.close(GOING_AWAY, "电脑不在线")
+            return
+        try:
+            channel = await link.open_channel(VIEW, {"thread": thread, "screen": screen})
+        except ConnectionError:
+            await ws.close(GOING_AWAY, "和电脑的连接断了")
+            return
+        await _pipe(ws, channel, _view_close)
+
+
+def _view_close(code: int | None, reason: str) -> tuple[int, str]:
+    """画面流的关闭原因：连接器给的 4xxx 原样交回，其余都是「画面断了」。"""
+    if code is not None and 4000 <= code < 5000:
+        return code, reason
+    if code == NORMAL:
+        return NORMAL, reason
+    return GOING_AWAY, reason or "画面断了"
 
 
 def _offline() -> JSONResponse:

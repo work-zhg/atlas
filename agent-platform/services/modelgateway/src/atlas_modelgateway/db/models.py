@@ -15,7 +15,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import BigInteger, CheckConstraint, Index, MetaData, String, Text, text
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, Index, MetaData, String, Text, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from .types import JSONType, UTCDateTime, UUIDType, utcnow, uuid7
@@ -56,6 +56,8 @@ class GwModel(_Row, Base):
     #: public = 所有人可选，不判权；private = 授权给用户或部门后才能选
     visibility: Mapped[str] = mapped_column(String(16), default="private", nullable=False)
     description: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    #: 能看图（图片输入）：Atlas 据此决定开了浏览器的智能体给不给 computer use（看截图操作网页）
+    supports_vision: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     #: 平台在 LiteLLM 里建的部署（= 本行 uuid）。None = 纳入平台的 LiteLLM 直配模型，平台不改它
     litellm_model_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_by: Mapped[str] = mapped_column(String(64), default="", nullable=False)

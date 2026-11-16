@@ -12,6 +12,8 @@
     DELETE /v1/browser/logins/{site}                 删一个站点（正在跑的浏览器里也尽力清掉）
 
 ★ 接管和画面只给会话的创建人：浏览器里是他登录后的网页，接管时还在输他的密码。
+★ 按会话的浏览器在哪选路：沙箱（原生、CLI 智能体）或使用者自己的电脑（本机 CLI 智能体，经设备网关，
+  browser/device.py）。网页这一头不变。
 ★ 画面是 WebSocket：挂在不带请求依赖的路由上，身份按同一套请求头、用短会话解析（长连接不占着
   请求作用域的数据库会话）。
 """
@@ -28,13 +30,21 @@ from ...auth.authz import PrincipalDep, ensure_run_owner, ensure_thread_owner
 from ...auth.dependency import principal_of
 from ...browser.component import BrowserComponent
 from ...browser.daemon import DaemonError
+from ...browser.device import (
+    DeviceBrowserHost,
+    DeviceBrowserUnavailable,
+    DeviceUnavailable,
+    on_device,
+)
+from ...browser.host import BrowserUnavailable
 from ...browser.login import Site
 from ...browser.takeover import TakeoverDesk
-from ...browser.view import CloseReason, LiveView, ViewAccess, ViewDenied, close
+from ...browser.view import CloseReason, DeviceView, LiveView, ViewAccess, ViewDenied, close
 from ...config import get_settings
 from ...db.models import Thread
 from ...db.session import fetch_one, get_sessionmaker
 from ...deps import ApprovalServiceDep, RedisDep, SessionDep, SettingsDep
+from ...device.gateway import DeviceGateway, GatewayUnavailable
 from ...errors import AppError, Conflict, Forbidden, NotFound
 from ...redisx import make_redis
 from ...sandbox.component import SandboxComponent
@@ -59,19 +69,39 @@ class BrowserDisabled(Conflict):
     kind = "browser_disabled"
 
 
-async def get_browser(settings: SettingsDep, redis: RedisDep) -> BrowserComponent:
-    sandbox = SandboxComponent.build(settings, redis)
-    browser = BrowserComponent.attach(settings, sandbox) if settings.sandbox_enabled else None
+async def get_browser(settings: SettingsDep, redis: RedisDep) -> BrowserComponent | None:
+    """沙箱里的浏览器；这个部署没配浏览器能力时为 None（电脑上的浏览器不需要它）。"""
+    if not settings.sandbox_enabled:
+        return None
+    return BrowserComponent.attach(settings, SandboxComponent.build(settings, redis))
+
+
+BrowserDep = Annotated[BrowserComponent | None, Depends(get_browser)]
+
+
+def _sandbox(browser: BrowserComponent | None) -> BrowserComponent:
     if browser is None:
         raise BrowserDisabled("这个部署没有开浏览器能力")
     return browser
 
 
-BrowserDep = Annotated[BrowserComponent, Depends(get_browser)]
+def _device(session: SessionDep, settings: SettingsDep) -> DeviceBrowserHost | None:
+    """电脑上的浏览器；没部署设备网关时为 None。"""
+    gateway = DeviceGateway(settings)
+    return DeviceBrowserHost(session, gateway) if gateway.configured else None
 
 
-def _desk(session: SessionDep, approvals: ApprovalServiceDep, browser: BrowserDep) -> TakeoverDesk:
-    return TakeoverDesk(session, approvals, browser.hosts, browser.daemon, browser.vault)
+DeviceDep = Annotated[DeviceBrowserHost | None, Depends(_device)]
+
+
+def _desk(
+    session: SessionDep, approvals: ApprovalServiceDep, browser: BrowserDep, device: DeviceDep
+) -> TakeoverDesk:
+    if browser is None:
+        return TakeoverDesk(session, approvals, None, None, None, device=device)
+    return TakeoverDesk(
+        session, approvals, browser.hosts, browser.daemon, browser.vault, device=device
+    )
 
 
 DeskDep = Annotated[TakeoverDesk, Depends(_desk)]
@@ -149,11 +179,20 @@ def _same_run(actual: UUID, run_id: UUID) -> None:
 
 @router.get("/threads/{thread_id}/browser", response_model=BrowserStatusOut)
 async def browser_status(
-    thread_id: UUID, session: SessionDep, principal: PrincipalDep, browser: BrowserDep
+    thread_id: UUID,
+    session: SessionDep,
+    principal: PrincipalDep,
+    browser: BrowserDep,
+    device: DeviceDep,
 ) -> BrowserStatusOut:
     await ensure_thread_owner(session, thread_id, principal)
     thread = await fetch_one(session, Thread, Thread.thread_uuid == thread_id)
     if thread is None or thread.created_by_uuid != principal.uid:
+        return BrowserStatusOut(running=False)
+    if on_device(thread):
+        # 电脑上：浏览器在跑、这个对话用过它（有自己那一块）才有画面
+        return BrowserStatusOut(running=device is not None and await device.running(thread))
+    if browser is None:
         return BrowserStatusOut(running=False)
     return BrowserStatusOut(running=await browser.hosts.current(thread) is not None)
 
@@ -162,18 +201,27 @@ class BrowserNotRunning(Conflict):
     kind = "browser_not_running"
 
 
-async def _running(
-    session: SessionDep, thread_id: UUID, principal: PrincipalDep, browser: BrowserComponent
-) -> SandboxRef:
-    """会话创建人的、正在跑的浏览器（同画面：浏览器里是他登录后的网页）。不为此新建沙箱。"""
+async def _owned(session: SessionDep, thread_id: UUID, principal: PrincipalDep) -> Thread:
+    """会话创建人才能操作这个浏览器（同画面：浏览器里是他登录后的网页）。"""
     await ensure_thread_owner(session, thread_id, principal, write=True)
     thread = await fetch_one(session, Thread, Thread.thread_uuid == thread_id)
     if thread is None or thread.created_by_uuid != principal.uid:
         raise Forbidden("只有会话的创建人能操作这个浏览器")
-    ref = await browser.hosts.current(thread)
+    return thread
+
+
+async def _running(thread: Thread, browser: BrowserComponent | None) -> SandboxRef:
+    """正在跑的沙箱浏览器。不为此新建沙箱。"""
+    ref = await _sandbox(browser).hosts.current(thread)
     if ref is None:
         raise BrowserNotRunning("浏览器没在运行")
     return ref
+
+
+def _on_device(device: DeviceBrowserHost | None) -> DeviceBrowserHost:
+    if device is None:
+        raise BrowserNotRunning("这个部署没有设备网关，用不了电脑上的浏览器")
+    return device
 
 
 @router.put("/threads/{thread_id}/browser/clipboard", status_code=204)
@@ -183,25 +231,38 @@ async def set_clipboard(
     session: SessionDep,
     principal: PrincipalDep,
     browser: BrowserDep,
+    device: DeviceDep,
 ) -> Response:
     """人在画面里粘贴：画面先调这里，再给浏览器按 Ctrl+V。"""
-    ref = await _running(session, thread_id, principal, browser)
+    thread = await _owned(session, thread_id, principal)
     try:
-        await browser.daemon.clipboard_set(ref, payload.text)
-    except DaemonError as exc:
+        if on_device(thread):
+            await _on_device(device).clipboard_set(thread, payload.text)
+        else:
+            await _sandbox(browser).daemon.clipboard_set(
+                await _running(thread, browser), payload.text
+            )
+    except (DaemonError, BrowserUnavailable, GatewayUnavailable) as exc:
         raise BrowserNotRunning(f"粘贴失败：{exc}") from exc
     return Response(status_code=204)
 
 
 @router.get("/threads/{thread_id}/browser/clipboard", response_model=BrowserClipboard)
 async def get_clipboard(
-    thread_id: UUID, session: SessionDep, principal: PrincipalDep, browser: BrowserDep
+    thread_id: UUID,
+    session: SessionDep,
+    principal: PrincipalDep,
+    browser: BrowserDep,
+    device: DeviceDep,
 ) -> BrowserClipboard:
     """人在画面里复制：画面先给浏览器按 Ctrl+C，再取这里。"""
-    ref = await _running(session, thread_id, principal, browser)
+    thread = await _owned(session, thread_id, principal)
     try:
-        return BrowserClipboard(text=await browser.daemon.clipboard_get(ref))
-    except DaemonError as exc:
+        if on_device(thread):
+            return BrowserClipboard(text=await _on_device(device).clipboard_get(thread))
+        ref = await _running(thread, browser)
+        return BrowserClipboard(text=await _sandbox(browser).daemon.clipboard_get(ref))
+    except (DaemonError, BrowserUnavailable, GatewayUnavailable) as exc:
         raise BrowserNotRunning(f"复制失败：{exc}") from exc
 
 
@@ -210,7 +271,8 @@ async def get_clipboard(
 
 @router.get("/browser/logins", response_model=BrowserLoginList)
 async def list_logins(principal: PrincipalDep, browser: BrowserDep) -> BrowserLoginList:
-    items = await browser.vault.sites(principal.uid)
+    """平台保管的登录态（沙箱浏览器）。电脑上的浏览器的登录留在那台电脑上，不在这里。"""
+    items = await _sandbox(browser).vault.sites(principal.uid)
     return BrowserLoginList(
         items=[
             BrowserLoginOut(
@@ -232,6 +294,7 @@ async def forget_login(site: str, principal: PrincipalDep, browser: BrowserDep) 
         target = Site.of(site)
     except ValueError as exc:
         raise NotFound("没有这个站点的登录") from exc
+    browser = _sandbox(browser)
     if not await browser.vault.forget(principal.uid, target):
         raise NotFound("没有这个站点的登录", site=site)
     await browser.hosts.forget(principal.uid, target)
@@ -243,7 +306,52 @@ async def forget_login(site: str, principal: PrincipalDep, browser: BrowserDep) 
 
 @ws_router.websocket("/threads/{thread_id}/browser/view")
 async def browser_view(websocket: WebSocket, thread_id: UUID) -> None:
-    """只给会话的创建人；浏览器没在运行就带着原因关掉，不为看画面建沙箱；连着的时候算沙箱的活动。"""
+    """只给会话的创建人；浏览器没在运行就带着原因关掉，不为看画面建沙箱；连着的时候算沙箱的活动。
+
+    电脑上的浏览器（本机 CLI 智能体）：画面经设备网关的画面流，连接器接到那一块的画面服务。
+    """
+    settings = get_settings()
+    subprotocols = list(websocket.scope.get("subprotocols") or [])
+    try:
+        async with get_sessionmaker()() as session:
+            principal = await principal_of(websocket, session, settings)
+            thread = await fetch_one(session, Thread, Thread.thread_uuid == thread_id)
+            if thread is None or thread.created_by_uuid != principal.uid:
+                await close(websocket, CloseReason.NOT_OWNER)
+                return
+            route = None
+            if on_device(thread):
+                gateway = DeviceGateway(settings)
+                if not gateway.configured:
+                    await close(websocket, CloseReason.NO_BROWSER)
+                    return
+                route = await DeviceBrowserHost(session, gateway).view_route(thread)
+    except DeviceBrowserUnavailable as exc:
+        await close(websocket, _DEVICE_CLOSE.get(exc.reason, CloseReason.NO_BROWSER))
+        return
+    except (BrowserUnavailable, GatewayUnavailable):
+        await close(websocket, CloseReason.DEVICE_OFFLINE)
+        return
+    except AppError:
+        await close(websocket, CloseReason.NOT_OWNER)
+        return
+    if route is not None:
+        await DeviceView().connect(websocket, route, subprotocols=subprotocols)
+        return
+    await _sandbox_view(websocket, thread_id, subprotocols)
+
+
+#: 电脑上的浏览器用不了的原因 → 画面的关闭原因（关闭原因最多 123 字节：话要短）
+_DEVICE_CLOSE = {
+    DeviceUnavailable.OFFLINE: CloseReason.DEVICE_OFFLINE,
+    DeviceUnavailable.NOT_INSTALLED: CloseReason.NO_BROWSER,
+    DeviceUnavailable.REMOTE_VIEW_OFF: CloseReason.DEVICE_REFUSED,
+    DeviceUnavailable.REVOKED: CloseReason.NOT_OWNER,
+    DeviceUnavailable.NOT_OWNER: CloseReason.NOT_OWNER,
+}
+
+
+async def _sandbox_view(websocket: WebSocket, thread_id: UUID, subprotocols: list[str]) -> None:
     settings = get_settings()
     if not settings.sandbox_enabled:
         await close(websocket, CloseReason.NO_BROWSER)
@@ -269,7 +377,6 @@ async def browser_view(websocket: WebSocket, thread_id: UUID) -> None:
         except AppError:
             await close(websocket, CloseReason.NOT_OWNER)
             return
-        subprotocols = list(websocket.scope.get("subprotocols") or [])
         await live.connect(websocket, target, subprotocols=subprotocols)
     finally:
         await redis.aclose()

@@ -6,6 +6,8 @@
     revoke        作废会话登记
     disconnect    吊销：断开设备、作废它上面所有会话的登记
     files         读本机文件（列改动、列目录、列允许目录、取文件）
+    browser       本机浏览器的固定请求：开、关接管窗口，剪贴板，状态
+    view_url      看本机浏览器画面的地址（设备所在实例上的画面流）
 
 ★ 连会话、读文件都直连设备所在的那个网关实例（在线表里的 instance）：一台设备只有一条控制连接，
   它的会话流和文件流都在那个实例上，网关实例之间不转发。登记存在共用的 Redis 里，哪个实例都行。
@@ -18,7 +20,7 @@ import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 import httpx
 
@@ -67,6 +69,13 @@ class DeviceStatus:
     def remote_files(self) -> bool:
         policy = self.report.get("policy")
         return bool(policy.get("remote_files", True)) if isinstance(policy, dict) else True
+
+    @property
+    def browser(self) -> dict[str, Any]:
+        """本机浏览器：installed · version · missing · running · remote_view（连接器上线时报告的）。
+        旧连接器不报告 = 没有。"""
+        browser = self.report.get("browser")
+        return browser if isinstance(browser, dict) else {}
 
 
 @dataclass(frozen=True)
@@ -208,6 +217,29 @@ class DeviceGateway:
             await resp.aclose()
             await client.aclose()
         return FileResponse(resp.status_code, headers, body=_decode(raw))
+
+    # ------------------------------------------------------------------ 本机浏览器
+
+    async def browser(self, status: DeviceStatus, body: dict[str, Any]) -> tuple[int, Any]:
+        """在设备所在的实例上开一路浏览器通道，一问一答 → (状态码, 答复)。
+
+        开接管窗口时浏览器可能要现拉起，所以读的时限放宽（网关那边最多等 2 分钟）。
+        """
+        url = f"{status.instance.rstrip('/')}/internal/browser/{status.device_uuid}"
+        try:
+            async with self._client(timeout=httpx.Timeout(self._timeout, read=150.0)) as client:
+                resp = await client.post(url, json=body, headers=self._headers())
+        except httpx.HTTPError as exc:
+            raise GatewayUnavailable(f"连不上设备网关：{exc}") from exc
+        return resp.status_code, _decode(resp.content)
+
+    def view_url(self, status: DeviceStatus, thread_uuid: str, screen: str) -> tuple[str, str]:
+        """→ (设备所在实例上这台电脑的画面流地址, 服务令牌)。只带会话和对话，没有地址和端口。"""
+        parsed = urlparse(status.instance)
+        scheme = "wss" if parsed.scheme == "https" else "ws"
+        query = urlencode({"thread": thread_uuid, "screen": screen})
+        base = f"{scheme}://{parsed.netloc}{parsed.path.rstrip('/')}"
+        return f"{base}/internal/view/{status.device_uuid}?{query}", self._token
 
     # ------------------------------------------------------------------ 内部
 

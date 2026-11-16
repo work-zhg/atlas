@@ -1,4 +1,4 @@
-"""上游协议的 12 个方法（Bridge 设计 §4.4 · §9.3）。
+"""上游协议的 13 个方法（Bridge 设计 §4.4 · §9.3）。
 
 方法名用点号，与 ACP 的斜杠形式（``session/prompt``）明显区分（§4.1 P5）。
 """
@@ -21,6 +21,7 @@ __all__ = [
     "TURN_CANCEL",
     "TURN_START",
     "TURN_STATE",
+    "TOOL_CALL",
 ]
 
 # server → bridge
@@ -38,6 +39,9 @@ TURN_STATE = "turn.state"  # 通知
 PERMISSION_ASK = "permission.ask"  # 请求
 PERMISSION_WITHDRAW = "permission.withdraw"  # 通知
 AGENT_UPDATE = "agent.update"  # 通知
+# CLI 调了平台工具（bridge 本机 MCP 上的 request_takeover……）：交给 server 处理，在线等结果。
+# 和 permission.ask 同一个 id 空间、同样会被撤回（permission.withdraw）、等的时候这一轮暂停静默计时
+TOOL_CALL = "tool.call"  # 请求
 
 # 用户电脑上的连接器 → server（不经 bridge、不带 seq）：本机策略拒绝，params = {reason, message}，
 # 随后以关闭码 4403 关闭（本机 CLI 方案 §6.2）
@@ -47,5 +51,13 @@ SERVER_TO_BRIDGE = frozenset(
     {SESSION_OPEN, SESSION_ATTACH, SESSION_ACK, SESSION_CLOSE, TURN_START, TURN_CANCEL}
 )
 BRIDGE_TO_SERVER = frozenset(
-    {SESSION_STATE, SESSION_ENDED, TURN_STATE, PERMISSION_ASK, PERMISSION_WITHDRAW, AGENT_UPDATE}
+    {
+        SESSION_STATE,
+        SESSION_ENDED,
+        TURN_STATE,
+        PERMISSION_ASK,
+        PERMISSION_WITHDRAW,
+        AGENT_UPDATE,
+        TOOL_CALL,
+    }
 )

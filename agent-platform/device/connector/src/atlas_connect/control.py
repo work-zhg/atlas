@@ -2,6 +2,7 @@
 
     {"cmd": "status"}                   → 连接状态、正在跑的会话
     {"cmd": "stop", "thread": "前缀"}   → 结束会话
+    {"cmd": "browser.ensure"}           → 本机浏览器没在跑就拉起，记一次使用（browser 命令）
 
 ★ socket 只有本人可读写（0600）：电脑主人随时能看到、能停，别人不行。
 """
@@ -15,6 +16,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from .browser import BrowserDesk
 from .link import Connector
 from .session import SessionHost
 
@@ -22,11 +24,20 @@ __all__ = ["ControlServer", "ask"]
 
 
 class ControlServer:
-    def __init__(self, path: Path, host: SessionHost, connector: Connector, *, device: str) -> None:
+    def __init__(
+        self,
+        path: Path,
+        host: SessionHost,
+        connector: Connector,
+        *,
+        device: str,
+        browser: BrowserDesk | None = None,
+    ) -> None:
         self._path = path
         self._host = host
         self._connector = connector
         self._device = device
+        self._browser = browser
         self._server: asyncio.base_events.Server | None = None
 
     async def start(self) -> None:
@@ -59,6 +70,8 @@ class ControlServer:
             }
         if req.get("cmd") == "stop":
             return {"stopped": await self._host.stop(str(req.get("thread") or "-"))}
+        if req.get("cmd") == "browser.ensure" and self._browser is not None:
+            return await self._browser.ensure_for_command()
         return {"error": f"不认识的命令：{req.get('cmd')}"}
 
 

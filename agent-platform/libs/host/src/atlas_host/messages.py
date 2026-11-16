@@ -32,6 +32,7 @@ __all__ = [
     "PermissionAnswer",
     "PermissionAskParams",
     "PermissionWithdrawParams",
+    "PlatformTool",
     "ResumeSpec",
     "SeqRange",
     "SessionEndedParams",
@@ -43,6 +44,8 @@ __all__ = [
     "TurnStartResult",
     "TurnStateParams",
     "TurnStats",
+    "ToolCallParams",
+    "ToolCallResult",
 ]
 
 Seq = Field(ge=1)
@@ -57,6 +60,14 @@ class ResumeSpec(Model):
     replay: ReplayWant = "none"
 
 
+class PlatformTool(Model):
+    """平台工具的定义：bridge 在本机 MCP 上原样提供给 CLI（MCP 的 Tool）。"""
+
+    name: str = Field(min_length=1, max_length=64)
+    description: str
+    input_schema: JsonObject
+
+
 class OpenParams(Model):
     #: 省略 = 新建会话
     resume: ResumeSpec | None = None
@@ -67,6 +78,9 @@ class OpenParams(Model):
     #: 追加在 CLI 自带系统提示词后面的文字（知识集目录，知识集方案 §3.4）。bridge 经 ACP 的
     #: _meta.systemPrompt.append 交给 adapter；省略 = 不追加。旧 bridge 不认识它，忽略即可
     system_prompt_append: str | None = None
+    #: 平台工具（request_takeover……）：bridge 起一个只听本机回环的 MCP 提供给 CLI，调用经 tool.call
+    #: 交给 server。空 = 不提供
+    platform_tools: list[PlatformTool] = Field(default_factory=list)
 
 
 class AcpNegotiation(Model):
@@ -271,6 +285,24 @@ class PermissionWithdrawParams(Model):
     #: 被撤回的那个 permission.ask 的 JSON-RPC id
     ask_id: int
     reason: Literal["turn_ended", "expired", "agent_withdrew"]
+
+
+class ToolCallParams(Model):
+    seq: int = Seq
+    turn_id: str
+    #: 平台工具的名字（PlatformTool.name）和 CLI 给的参数，原样
+    name: str
+    arguments: JsonObject = Field(default_factory=dict)
+    #: 这次调用在 CLI 里的 id（ACP 的 toolCallId，取不到时 bridge 现生成）：审批 id 由它派生，
+    #: 补发、换实例接管时落到同一件事上；界面据此把卡片和工具行对上
+    call_id: str
+
+
+class ToolCallResult(Model):
+    """server 的答复：给 CLI 看的文字，是不是错误。"""
+
+    content: str
+    is_error: bool = False
 
 
 # ═════════════════════════════════ agent.update ═════════════════════════════════

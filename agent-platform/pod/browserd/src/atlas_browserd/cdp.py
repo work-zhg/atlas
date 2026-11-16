@@ -4,8 +4,10 @@
     local_storage(origins)                    按源读本地存储：开着的页面直接读，
                                               没开的用一个临时页面读
     set_local_storage(origins)                按源写本地存储（临时页面）
-    new_window(url) · close_window · activate · target_url   接管窗口（CDP 的 Target 域）
     page_origins()                            此刻开着的页面的源
+
+★ 只用于沙箱里登录态的导入导出：Playwright 一连上就给所有页面开 Runtime（会检测自动化的网站据此
+  认出来）。开窗口、挪窗口、关窗口走 rawcdp.WindowOps。
 
 ★ 临时页面不联网：所有请求都由路由回一个空页面，只是为了站在那个源上读写它的本地存储
   （Playwright 自己导入 storageState 也是这么做的）。
@@ -14,8 +16,7 @@
 
 from __future__ import annotations
 
-import asyncio
-from collections.abc import AsyncIterator, Callable, Iterable, Mapping
+from collections.abc import AsyncIterator, Iterable, Mapping
 from contextlib import asynccontextmanager
 from typing import Any
 from urllib.parse import urlsplit
@@ -43,7 +44,6 @@ class CdpSession:
         if not contexts:
             raise RuntimeError("Chromium 没有默认上下文")
         self._context = contexts[0]
-        self._cdp: Any = None
 
     # ------------------------------------------------------------------ cookie
 
@@ -136,70 +136,6 @@ class CdpSession:
             return await work(page)
         finally:
             await page.close()
-
-    # ------------------------------------------------------------------ 窗口
-
-    async def new_window(self, url: str, bounds: Mapping[str, int] | None = None) -> str:
-        """开一个新窗口；给了 bounds 就直接开在那里（屏幕的某一块，不先在别处闪一下）。"""
-        params: dict[str, Any] = {"url": url, "newWindow": True, **(bounds or {})}
-        result = await self._send("Target.createTarget", params)
-        target = str(result["targetId"])
-        await self.activate(target)
-        return target
-
-    async def window_of(self, target: str) -> tuple[int, dict[str, Any]]:
-        """target 所在的窗口：(windowId, 位置和大小)。"""
-        found = await self._send("Browser.getWindowForTarget", {"targetId": target})
-        return int(found["windowId"]), dict(found["bounds"])
-
-    async def move_window(self, window_id: int, bounds: Mapping[str, int]) -> None:
-        # ★ 最大化、全屏、最小化的窗口不能直接改位置：先回到普通状态
-        await self._send(
-            "Browser.setWindowBounds", {"windowId": window_id, "bounds": {"windowState": "normal"}}
-        )
-        await self._send("Browser.setWindowBounds", {"windowId": window_id, "bounds": dict(bounds)})
-
-    async def activate(self, target: str) -> bool:
-        try:
-            await self._send("Target.activateTarget", {"targetId": target})
-        except Exception:
-            return False
-        return True
-
-    async def close_window(self, target: str) -> None:
-        try:
-            await self._send("Target.closeTarget", {"targetId": target})
-        except Exception:
-            return
-
-    async def target_url(self, target: str) -> str | None:
-        result = await self._send("Target.getTargets", {})
-        for info in result.get("targetInfos") or ():
-            if info.get("targetId") == target:
-                return str(info.get("url") or "")
-        return None
-
-    async def on_target_created(self, handler: Callable[[dict[str, Any]], None]) -> None:
-        """新开的 target（标签页、弹窗……）都告诉 handler（参数是 CDP 的 targetInfo）。"""
-        await self._session()
-        self._cdp.on("Target.targetCreated", lambda event: handler(event["targetInfo"]))
-        await self._send("Target.setDiscoverTargets", {"discover": True})
-
-    async def disconnected(self) -> None:
-        """等到和 Chromium 的连接断开（Chromium 退出或重启）。"""
-        gone = asyncio.Event()
-        self._browser.on("disconnected", lambda _browser: gone.set())
-        if not self._browser.is_connected():
-            return
-        await gone.wait()
-
-    async def _session(self) -> Any:
-        if self._cdp is None:
-            self._cdp = await self._browser.new_browser_cdp_session()
-        return self._cdp
-
-    async def _send(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
-        return await (await self._session()).send(method, params)
 
 
 async def _read_storage(page: Any) -> list[dict[str, str]]:

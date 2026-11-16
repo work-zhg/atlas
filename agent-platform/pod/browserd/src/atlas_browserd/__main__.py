@@ -1,12 +1,13 @@
 """PlatformCommands：Atlas 经 execd 执行的命令行（atlas-browserd <子命令>）。
 
     serve                                  常驻：起虚拟屏幕、Chromium、画面服务并看着
+    stop                                   停掉常驻的 serve（电脑上闲置关停；profile 留着）
     status [--wait N]                      CDP 就绪没有（等最多 N 秒）
     state import FILE                      导入登录态（导完删文件）
     state export --sites a,b [--origins …] --out FILE   导出这些站点的登录态
     state forget SITE                      清掉一个站点的 cookie 和本地存储
     takeover open ID URL [--screen KEY]    记下此刻的 cookie，在对话 KEY 那一块屏幕上开接管窗口
-    takeover close ID --out FILE           关窗口，比较前后，导出
+    takeover close ID [--out FILE]         关窗口；给了 --out（沙箱）再比较前后、导出登录态
     clipboard set FILE                     把文件里的文字放进虚拟屏幕的剪贴板（放完删文件）
     clipboard get --out FILE               把虚拟屏幕剪贴板里的文字写到文件
     screen slot KEY                        对话 KEY 在屏幕的第几块（没用过浏览器是 null）
@@ -49,12 +50,25 @@ def _csv(raw: str | None) -> list[str]:
     return [x.strip() for x in (raw or "").split(",") if x.strip()]
 
 
-def _with_cdp(work: Callable[[Any], Awaitable[dict[str, Any]]]) -> dict[str, Any]:
+async def _with_cdp_async(work: Callable[[Any], Awaitable[dict[str, Any]]]) -> dict[str, Any]:
+    """经 Playwright 连上（会给所有页面打开 Runtime）：只用于沙箱里登录态的导入导出。"""
     from .cdp import connect
 
+    async with connect() as cdp:
+        return await work(cdp)
+
+
+def _with_cdp(work: Callable[[Any], Awaitable[dict[str, Any]]]) -> dict[str, Any]:
+    return asyncio.run(_with_cdp_async(work))
+
+
+def _with_windows(work: Callable[[Any], Awaitable[dict[str, Any]]]) -> dict[str, Any]:
+    """只用浏览器级调试命令（不附着页面、不开 Runtime）。"""
+    from .rawcdp import browser_session
+
     async def run() -> dict[str, Any]:
-        async with connect() as cdp:
-            return await work(cdp)
+        async with browser_session() as windows:
+            return await work(windows)
 
     return asyncio.run(run())
 
@@ -65,6 +79,13 @@ def _serve(args: argparse.Namespace, paths: Paths) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     paths.ensure()
     return Supervisor(make_spec(paths)).serve()
+
+
+def _stop(args: argparse.Namespace, paths: Paths) -> int:
+    from .supervisor import stop_running
+
+    _emit({"stopped": stop_running(paths)})
+    return 0
 
 
 def _status(args: argparse.Namespace, paths: Paths) -> int:
@@ -105,10 +126,22 @@ def _takeover(args: argparse.Namespace, paths: Paths) -> int:
     paths.ensure()
     if args.action == "open":
         _emit(
-            _with_cdp(lambda cdp: TakeoverWindows(cdp, paths).open(args.id, args.url, args.screen))
+            _with_windows(lambda w: TakeoverWindows(w, paths).open(args.id, args.url, args.screen))
         )
         return 0
-    result = _with_cdp(lambda cdp: TakeoverWindows(cdp, paths).close(args.id))
+    if not args.out:
+        # 电脑上：登录留在 profile 里，只关窗口
+        _emit(_with_windows(lambda w: TakeoverWindows(w, paths).close(args.id)))
+        return 0
+    from .rawcdp import browser_session
+
+    async def close() -> dict[str, Any]:
+        async with browser_session() as windows:
+            return await _with_cdp_async(
+                lambda cdp: TakeoverWindows(windows, paths).close(args.id, state=cdp)
+            )
+
+    result = asyncio.run(close())
     _write(args.out, result)
     _emit({"out": args.out, "domains": result["domains"]})
     return 0
@@ -151,7 +184,7 @@ def _windows(args: argparse.Namespace, paths: Paths) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     if wait(paths, 60) is None:  # Chromium 还没起来：退出，守护过一会儿再拉起
         return 1
-    _emit(_with_cdp(lambda cdp: PopupKeeper(cdp).run()))
+    _emit(_with_windows(lambda windows: PopupKeeper(windows).run()))
     return 0
 
 
@@ -159,6 +192,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="atlas-browserd", description="Atlas 浏览器守护")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("serve")
+    sub.add_parser("stop")
     status = sub.add_parser("status")
     status.add_argument("--wait", type=float, default=0)
     state = sub.add_parser("state").add_subparsers(dest="action", required=True)
@@ -177,7 +211,7 @@ def _parser() -> argparse.ArgumentParser:
     opn.add_argument("--screen")
     cls = takeover.add_parser("close")
     cls.add_argument("id")
-    cls.add_argument("--out", required=True)
+    cls.add_argument("--out")
     clipboard = sub.add_parser("clipboard").add_subparsers(dest="action", required=True)
     clipboard.add_parser("set").add_argument("file")
     clipboard.add_parser("get").add_argument("--out", required=True)
@@ -190,6 +224,7 @@ def _parser() -> argparse.ArgumentParser:
 
 _COMMANDS: dict[str, Callable[[argparse.Namespace, Paths], int]] = {
     "serve": _serve,
+    "stop": _stop,
     "status": _status,
     "state": _state,
     "takeover": _takeover,

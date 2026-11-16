@@ -289,10 +289,25 @@ class OnlineApprovals:
         tool_name: str,
         args: dict[str, Any],
         tool_call_id: str | None = None,
+        kind: str = "tool",
+        source: str | None = None,
+        reason: str | None = None,
     ) -> ApprovalState:
+        """kind：tool = CLI 的权限请求；takeover = CLI 经平台工具请人接管浏览器。"""
         return await self._gate.check(
-            approval_id=approval_id, tool_name=tool_name, args=args, tool_call_id=tool_call_id
+            approval_id=approval_id,
+            tool_name=tool_name,
+            args=args,
+            tool_call_id=tool_call_id,
+            kind=kind,
+            source=source,
+            reason=reason,
         )
+
+    async def outcome(self, approval_id: str) -> dict[str, Any]:
+        """有结果之后：状态和附带的（人写的说明、登录态存没存下来）。"""
+        async with self._sessionmaker() as session:
+            return await ApprovalService(session).result(approval_id)
 
     async def wait(self, approval_id: str, timeout: float) -> str:
         """等这件事有结果，最多 timeout 秒。返回当时的状态（还没结果就是 pending）。

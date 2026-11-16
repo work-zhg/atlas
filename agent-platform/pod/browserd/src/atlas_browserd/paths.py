@@ -20,8 +20,8 @@ __all__ = [
 
 #: 调试接口只开在 127.0.0.1：它能读所有 cookie、执行任意脚本
 CDP_PORT = int(os.environ.get("ATLAS_BROWSER_CDP_PORT", "9222"))
-#: VNC 只听本机，对外只开带口令的画面端口
-VNC_PORT = 5900
+#: VNC 只听本机（每块一个，第 N 块是 VNC_PORT + N）；沙箱对外只开带口令的画面端口，电脑上不对外开
+VNC_PORT = int(os.environ.get("ATLAS_BROWSER_VNC_PORT", "5900"))
 VIEW_PORT = int(os.environ.get("ATLAS_BROWSER_VIEW_PORT", "6080"))
 DISPLAY = os.environ.get("ATLAS_BROWSER_DISPLAY", ":99")
 ROOT = Path(os.environ.get("ATLAS_BROWSER_DIR", "/tmp/atlas-browser"))
@@ -51,6 +51,11 @@ class Paths:
         return self.root / "serve.lock"
 
     @property
+    def pid(self) -> Path:
+        """常驻的 serve 的进程号（stop 用）。"""
+        return self.root / "serve.pid"
+
+    @property
     def log(self) -> Path:
         return self.root / "daemon.log"
 
@@ -71,6 +76,15 @@ class Paths:
     @property
     def screens_lock(self) -> Path:
         return self.root / "screens.lock"
+
+    @property
+    def input_lock(self) -> Path:
+        """computer use 的键鼠动作排队：一个屏幕只有一个键盘焦点和一个剪贴板。"""
+        return self.root / "input.lock"
+
+    def vnc_socket(self, slot: int) -> Path:
+        """电脑上第 slot 块的画面服务只听这个 Unix 套接字（守护目录 0700）。"""
+        return self.root / f"vnc-{slot}.sock"
 
     @property
     def view_tokens(self) -> Path:

@@ -334,6 +334,9 @@ class BrowserHosts:
         plan = await self.plan(spec)
         if plan is None:
             raise BrowserUnavailable("这个智能体没有开浏览器")
+        if plan.runtime == "device":
+            # 电脑上的浏览器不在沙箱里：接管、画面按会话走设备宿主（browser/device.py）
+            raise BrowserUnavailable("这个会话的浏览器在使用者自己的电脑上，不在沙箱里")
         ref = await self._hosts[plan.runtime].ensure(thread, plan, spec)
         if await self._registry.get(ref.sandbox_uuid) is None:
             # 已有的沙箱原样复用：开浏览器之前建的那个，要等闲置回收后才换成浏览器沙箱

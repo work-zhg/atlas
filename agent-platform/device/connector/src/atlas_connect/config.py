@@ -1,7 +1,8 @@
 """本机的路径和本机策略（c4-model/agent/connector/code-connector-session.html · LocalPolicy）。
 
 本机策略写在 ~/.atlas/connect.toml 里，电脑主人改，平台改不了：允许的目录、权限模式上限、
-同时几个会话、远程查看文件开不开、额外不给看的文件、每种 CLI 用什么命令启动。
+同时几个会话、远程查看文件开不开、额外不给看的文件、每种 CLI 用什么命令启动、本机浏览器
+（远程查看画面开不开、闲置多久关掉）。
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-__all__ = ["MODE_ORDER", "CliCommand", "LocalPolicy", "Paths", "Rejection"]
+__all__ = ["MODE_ORDER", "BrowserSettings", "CliCommand", "LocalPolicy", "Paths", "Rejection"]
 
 #: CLI 的权限模式（ACP modeId）由宽到严。上限 = 允许的最宽的那个
 MODE_ORDER = ("auto", "acceptEdits", "default", "plan")
@@ -41,6 +42,13 @@ deny = ["*.pem", "*.key", "id_rsa*"]
 idle_stop_s = 1800
 # 除了基本的（PATH、HOME 等），还允许传给 CLI 的环境变量
 env_allow = []
+
+[browser]
+# 本机浏览器（atlas-connect browser install 装好后才有）：
+# 关掉后网页上看不到这台电脑上的浏览器画面，也就不能在网页上接管登录
+remote_view = true
+# 多久没人用就关掉浏览器，把内存还给电脑（秒）。登录留在 profile 里，下次拉起还在
+idle_stop_s = 900
 
 [cli.claude-code]
 command = ["claude-agent-acp"]
@@ -109,6 +117,16 @@ class Paths:
     def socket(self) -> Path:
         return self.run / "connect.sock"
 
+    @property
+    def browser(self) -> Path:
+        """本机浏览器的守护目录：profile（登录态）、就绪标记、画面服务的套接字（0700，长期保留）。"""
+        return self.home / "browser"
+
+    @property
+    def bin(self) -> Path:
+        """browser 命令（拉起 CLI 时加在 PATH 前面）。"""
+        return self.home / "bin"
+
     def ensure(self) -> None:
         self.home.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.run.mkdir(mode=0o700, exist_ok=True)
@@ -118,6 +136,31 @@ class Paths:
 class CliCommand:
     command: tuple[str, ...]
     install: str = ""
+
+
+@dataclass(frozen=True)
+class BrowserSettings:
+    """本机浏览器：[browser] 一节。端口、屏幕号避开电脑上常用的（:0、9222），一般不用改。"""
+
+    remote_view: bool = True
+    idle_stop_s: float = 900.0
+    display: str = ":87"
+    cdp_port: int = 19222
+    #: 虚拟屏幕横排几块（同时各看各的对话数）
+    slots: int = 4
+    #: 空 = 自动找（chromium、google-chrome……）
+    chromium: str = ""
+
+    @classmethod
+    def parse(cls, raw: dict[str, Any]) -> BrowserSettings:
+        return cls(
+            remote_view=bool(raw.get("remote_view", True)),
+            idle_stop_s=float(raw.get("idle_stop_s", 900)),
+            display=str(raw.get("display", ":87")),
+            cdp_port=int(raw.get("cdp_port", 19222)),
+            slots=max(1, int(raw.get("slots", 4))),
+            chromium=str(raw.get("chromium", "")),
+        )
 
 
 @dataclass(frozen=True)
@@ -137,6 +180,7 @@ class LocalPolicy:
     deny: tuple[str, ...] = ("*.pem", "*.key", "id_rsa*")
     idle_stop_s: float = 1800.0
     env_allow: tuple[str, ...] = ()
+    browser: BrowserSettings = field(default_factory=BrowserSettings)
     clis: dict[str, CliCommand] = field(
         default_factory=lambda: {
             "claude-code": CliCommand(
@@ -173,6 +217,7 @@ class LocalPolicy:
             deny=tuple(p.get("deny") or ()),
             idle_stop_s=float(p.get("idle_stop_s", 1800)),
             env_allow=tuple(p.get("env_allow") or ()),
+            browser=BrowserSettings.parse(data.get("browser") or {}),
             clis=clis,
         )
 

@@ -9,6 +9,7 @@ import httpx
 import pytest
 from atlas_devicelink import Channel
 from gw_kit import DEVICE, OWNER, Gateway, fake_connector, server_side
+from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed, InvalidStatus
 
 THREAD = "0193f1a0-0000-7000-8000-000000000010"
@@ -235,6 +236,80 @@ async def test_file_relay_streams_fetch_and_answers_list(gateway: Gateway) -> No
                 f"/internal/files/{DEVICE}", json={"op": "list", "project_dir": "~/x"}
             )
             assert listed.json() == {"entries": [{"name": "src"}]}
+
+
+# ------------------------------------------------------------------ 本机浏览器
+
+
+async def test_browser_relay_asks_the_connector_and_passes_rejections(gateway: Gateway) -> None:
+    seen: list[dict] = []
+
+    async def browser(channel: Channel) -> None:
+        seen.append(channel.head)
+        if channel.head["op"] == "takeover.open":
+            body = {"error": {"kind": "remote_view_off", "message": "电脑主人关闭了远程查看画面"}}
+            await channel.send(json.dumps({"status": 403, "body": body}))
+        else:
+            await channel.send(json.dumps({"status": 200, "body": {"running": True, "slot": 1}}))
+        await channel.close()
+
+    async with httpx.AsyncClient(base_url=gateway.url, trust_env=False) as client:
+        offline = await client.post(f"/internal/browser/{DEVICE}", json={"op": "status"})
+        assert offline.status_code == 503 and offline.json()["error"]["kind"] == "device_offline"
+        async with fake_connector(gateway, browser):
+            status = await client.post(
+                f"/internal/browser/{DEVICE}", json={"op": "status", "screen": "root-1"}
+            )
+            assert status.status_code == 200 and status.json() == {"running": True, "slot": 1}
+            refused = await client.post(
+                f"/internal/browser/{DEVICE}",
+                json={
+                    "op": "takeover.open",
+                    "takeover": "a1",
+                    "screen": "root-1",
+                    "url": "https://x",
+                },
+            )
+            assert refused.status_code == 403
+            assert refused.json()["error"]["message"] == "电脑主人关闭了远程查看画面"
+            bad = await client.post(f"/internal/browser/{DEVICE}", json={"op": "exec"})
+            assert bad.status_code == 422
+    assert seen[0] == {"op": "status", "thread": "", "screen": "root-1", "takeover": "", "url": ""}
+
+
+async def test_view_relay_pipes_bytes_and_passes_the_connector_close_code(
+    gateway: Gateway,
+) -> None:
+    async def view(channel: Channel) -> None:
+        if channel.head["screen"] == "never-used":
+            await channel.close(4404, "这个对话还没用过浏览器")
+            return
+        await channel.send(b"RFB 003.008\n")
+        echo = await channel.receive()
+        await channel.send(b"echo:" + echo)  # type: ignore[operator]
+        await channel.close(4502, "画面服务断了")
+
+    url = f"{gateway.ws}/internal/view/{DEVICE}"
+    auth = {"Authorization": "Bearer internal-secret"}
+    async with fake_connector(gateway, view):
+        async with connect(
+            f"{url}?thread=t1&screen=root-1", additional_headers=auth, proxy=None
+        ) as ws:
+            assert await ws.recv() == b"RFB 003.008\n"
+            await ws.send(b"RFB 003.008\n")
+            assert await ws.recv() == b"echo:RFB 003.008\n"
+            with pytest.raises(ConnectionClosed):
+                await ws.recv()
+            assert ws.close_code == 4502
+        async with connect(
+            f"{url}?thread=t1&screen=never-used", additional_headers=auth, proxy=None
+        ) as ws:
+            with pytest.raises(ConnectionClosed):
+                await ws.recv()
+            assert (ws.close_code, ws.close_reason) == (4404, "这个对话还没用过浏览器")
+        with pytest.raises(InvalidStatus):
+            async with connect(f"{url}?screen=x", proxy=None):
+                pass
 
 
 # ------------------------------------------------------------------ 吊销

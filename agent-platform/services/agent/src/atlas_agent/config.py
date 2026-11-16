@@ -243,6 +243,8 @@ class Settings(BaseSettings):
     browser_sandbox_image: str = ""
     browser_cli_image: str = ""
     browser_skill: str = ""
+    #: 模型能看图时再带上的 computer use 技能（slug@版本）；运行期配置 browser.computer_use_skill
+    browser_computer_use_skill: str = ""
     #: 沙箱里画面服务（websockify）的端口
     browser_view_port: int = 6080
 

@@ -52,6 +52,7 @@ __all__ = [
     "register_agent",
     "rename_agent",
     "reset_model_platform_cache",
+    "sees_images",
     "uses_model_platform",
     "with_platform_model",
 ]
@@ -87,6 +88,8 @@ class PlatformModel:
     provider: str
     max_input_tokens: int | None = None
     max_output_tokens: int | None = None
+    #: 登记时标注能看图（图片输入）：开了浏览器的智能体据此给不给 computer use
+    supports_vision: bool = False
 
     @classmethod
     def parse(cls, raw: Mapping[str, Any]) -> PlatformModel:
@@ -96,6 +99,7 @@ class PlatformModel:
             provider=str(raw.get("provider") or ""),
             max_input_tokens=raw.get("max_input_tokens"),
             max_output_tokens=raw.get("max_output_tokens"),
+            supports_vision=bool(raw.get("supports_vision", False)),
         )
 
 
@@ -297,6 +301,18 @@ async def platform_catalog(settings: Settings) -> list[PlatformModel]:
             raise
         logger.warning("模型管理平台不可用，沿用上次取到的模型列表")
     return _last_catalog
+
+
+async def sees_images(settings: Settings, model: str) -> bool:
+    """模型平台登记时标注了能看图。没标注的、没接平台的、平台从没取到过的，都按不能。"""
+    if not uses_model_platform(settings) or not model:
+        return False
+    try:
+        catalog = await platform_catalog(settings)
+    except ModelPlatformUnavailable:
+        logger.warning("模型管理平台不可用，按模型 %s 不能看图处理", model)
+        return False
+    return any(m.name == model and m.supports_vision for m in catalog)
 
 
 # ───────────────────────────── 端点与检查

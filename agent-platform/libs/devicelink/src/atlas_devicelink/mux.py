@@ -3,15 +3,16 @@
 对应 c4-model/agent/devicegw/code-devicegw-link.html 的 DeviceLink / Channel / SendScheduler。
 
     Mux       一条连接：读循环按通道号分发帧，发送按优先级排队
-    Channel   其中一路：会话流（session）或文件流（file）
+    Channel   其中一路：会话流（session）、画面流（view）、文件流（file）或浏览器请求（browser）
 
 ★ 控流按字节、按通道：对端给多少窗口才发多少，读走了再把窗口还回去。多路共用一条 TCP 连接，没有窗口
   的话一路读得慢就会堵住整条连接。一条消息比剩下的窗口大也照发（会话流里的单条消息可能有几 MB），
   欠下的窗口从之后还回来的里扣。
-★ 发送顺序：控制帧最先，会话流其次，文件流最后。文件内容由调用方分成小块，排在会话消息后面穿插着发，
-  下载大文件不会让对话卡住。
+★ 发送顺序：控制帧（含开关接管窗口这类浏览器请求）最先，会话流其次，画面流再次，文件流最后。
+  画面数据比对话消息大得多，排在会话流后面才不会让对话变慢；人在打字、点按钮，又比看文件急。
+  文件内容由调用方分成小块，排在前面几路后面穿插着发，下载大文件不会让对话卡住。
 ★ 一路的窗口迟迟不还（对端卡住），超过 stall_s 就只关这一路（1011），其余照常。会话流被关后
-  靠 bridge 的断线补发恢复，文件请求重试即可。
+  靠 bridge 的断线补发恢复，文件请求重试即可，画面断了网页上点一下重连。
 """
 
 from __future__ import annotations
@@ -59,11 +60,17 @@ class Transport(Protocol):
 class Priority(IntEnum):
     CONTROL = 0
     SESSION = 1
-    FILE = 2
+    VIEW = 2
+    FILE = 3
 
 
 #: 通道类型 → 发送优先级
-KIND_PRIORITY = {"session": Priority.SESSION, "file": Priority.FILE}
+KIND_PRIORITY = {
+    "browser": Priority.CONTROL,
+    "session": Priority.SESSION,
+    "view": Priority.VIEW,
+    "file": Priority.FILE,
+}
 
 
 class ChannelClosed(Exception):

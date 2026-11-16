@@ -39,6 +39,8 @@ class ModelIn(RouteIn):
     provider: str = Field(min_length=1, max_length=64)
     visibility: Visibility = "private"
     description: str = Field(default="", max_length=2000)
+    #: 能看图（图片输入）：Atlas 据此给开了浏览器的智能体 computer use
+    supports_vision: bool = False
     #: 私有模型登记时一并授权
     grants: list[GrantIn] = Field(default_factory=list)
 
@@ -48,6 +50,7 @@ class ModelUpdate(RouteIn):
     provider: str = Field(min_length=1, max_length=64)
     visibility: Visibility
     description: str = Field(default="", max_length=2000)
+    supports_vision: bool = False
 
 
 class ModelReregister(RouteIn):
@@ -59,6 +62,7 @@ class ModelAdopt(BaseModel):
     display_name: str = Field(default="", max_length=100)
     visibility: Visibility = "private"
     description: str = Field(default="", max_length=2000)
+    supports_vision: bool = False
     grants: list[GrantIn] = Field(default_factory=list)
 
 
@@ -90,6 +94,8 @@ class ModelOut(BaseModel):
     #: LiteLLM 直配的为空
     visibility: Visibility | None
     description: str = ""
+    #: 能看图（LiteLLM 直配、还没纳入的为 False）
+    supports_vision: bool = False
     #: platform = 平台登记；litellm = LiteLLM 里直接配置的（只读，可纳入）
     source: Literal["platform", "litellm"]
     #: ok = 可调用；missing = LiteLLM 中缺失；unknown = LiteLLM 不可达，状态未知
@@ -184,6 +190,7 @@ class InternalModelOut(BaseModel):
     provider: str
     max_input_tokens: int | None = None
     max_output_tokens: int | None = None
+    supports_vision: bool = False
 
 
 class InternalClientKeyOut(BaseModel):

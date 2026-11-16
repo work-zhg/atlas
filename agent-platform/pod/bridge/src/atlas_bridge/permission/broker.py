@@ -2,6 +2,10 @@
 
 每个询问一个 Future：``handle`` 等它；server 答复、过期、取消、agent 撤回都只是「谁先 set_result」。
 
+平台工具的调用（``call_tool``：CLI 在 bridge 本机 MCP 上调了 request_takeover）也是这样一件
+「等人决定的事」：同一个 id 空间、同样算进挂起数（等的时候这一轮暂停静默计时）、同样随这一轮结束
+撤回。区别只是答复的形状（工具结果），而且不设期限 —— 接管只由人决定。
+
 ★ 绝不自动批准（B3）：本模块不存在生成 allow 结果的分支，只有「采用 server 的选择」一条路径
   能产生允许，而且 server 选的 optionId 必须在 agent 给出的选项里。
 ★ agent 的反向请求永远有回应（B6）：每条路径都以 set_result 收场。
@@ -22,6 +26,8 @@ from atlas_host import (
     PermissionAnswer,
     PermissionAskParams,
     PermissionWithdrawParams,
+    ToolCallParams,
+    ToolCallResult,
     methods,
 )
 from pydantic import ValidationError
@@ -29,7 +35,14 @@ from pydantic import ValidationError
 from ..clock import Clock, Timer
 from ..upstream.ports import UpstreamOutbox
 
-__all__ = ["AskScope", "PermissionBroker", "cancelled_result", "expires_in", "reject_result"]
+__all__ = [
+    "AskScope",
+    "PermissionBroker",
+    "cancelled_result",
+    "expires_in",
+    "reject_result",
+    "tool_error",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +90,15 @@ def _options(request: Any) -> list[dict[str, Any]]:
     return [o for o in options if isinstance(o, dict) and isinstance(o.get("optionId"), str)]
 
 
+def tool_error(text: str) -> dict[str, Any]:
+    """平台工具没有结果时给 CLI 的（ToolCallResult 的线上形态）。"""
+    return ToolCallResult(content=text, is_error=True).to_wire()
+
+
+#: 这一轮被取消或已结束：平台工具的调用就此作罢
+TOOL_TURN_ENDED = "这一轮已经结束，平台工具没有结果（用户没有处理）。"
+
+
 def reject_result(request: Any) -> dict[str, Any]:
     """拒绝：选 agent 给出的 ``reject_once``；没有则 ``reject_always``；都没有则回 cancelled。"""
     options = _options(request)
@@ -95,6 +117,8 @@ class Ask:
     future: asyncio.Future[dict[str, Any]]
     timer: Timer | None = None
     settled: bool = field(default=False)
+    #: permission = 权限询问；tool = 平台工具的调用
+    kind: Literal["permission", "tool"] = "permission"
 
 
 class PermissionBroker:
@@ -154,6 +178,32 @@ class PermissionBroker:
             self._settle(ask, None, withdraw="agent_withdrew")
             raise
 
+    async def call_tool(
+        self, scope: AskScope | None, name: str, arguments: dict[str, Any], call_id: str
+    ) -> dict[str, Any]:
+        """CLI 调了平台工具 → 返回 ToolCallResult 的线上形态。一直等，不设期限。"""
+        if scope is None or not scope.accepting():
+            return tool_error("现在没有进行中的一轮，平台工具用不了。")
+        if self.pending(scope.turn_id) >= self._max_pending:
+            return tool_error("等人处理的事项太多了，先等前面的处理完。")
+        loop = asyncio.get_running_loop()
+        ask = Ask(next(self._ids), scope, {"name": name}, loop.create_future(), kind="tool")
+        self.asks[ask.ask_id] = ask
+        scope.on_pending(self.pending(scope.turn_id))  # → 等人：暂停静默计时
+        self._outbox.put_request(
+            methods.TOOL_CALL,
+            lambda seq: ToolCallParams(
+                seq=seq, turn_id=scope.turn_id, name=name, arguments=arguments, call_id=call_id
+            ),
+            request_id=ask.ask_id,
+        )
+        try:
+            return await ask.future
+        except asyncio.CancelledError:
+            # CLI 那边断开了这次调用（MCP 请求被取消）：告诉 server 作废
+            self._settle(ask, None, withdraw="agent_withdrew")
+            raise
+
     # ------------------------------------------------------------------ 来自 server
 
     def on_answer(self, ask_id: int, result: Any = None, error: Any = None) -> None:
@@ -165,6 +215,8 @@ class PermissionBroker:
         self._settle(ask, self._translate(ask, result, error))
 
     def _translate(self, ask: Ask, result: Any, error: Any) -> dict[str, Any]:
+        if ask.kind == "tool":
+            return self._tool_result(ask, result, error)
         if error is not None:
             logger.warning("server 对询问 %d 回了错误，按拒绝处理：%s", ask.ask_id, error)
             return reject_result(ask.request)
@@ -180,6 +232,18 @@ class PermissionBroker:
             return reject_result(ask.request)
         return selected_result(answer.option_id)
 
+    @staticmethod
+    def _tool_result(ask: Ask, result: Any, error: Any) -> dict[str, Any]:
+        if error is not None:
+            message = error.get("message") if isinstance(error, dict) else error
+            logger.warning("server 对平台工具调用 %d 回了错误：%s", ask.ask_id, error)
+            return tool_error(f"平台处理这次调用时出错了：{message}")
+        try:
+            return ToolCallResult.model_validate(result).to_wire()
+        except ValidationError:
+            logger.warning("平台工具调用 %d 的答复形状不对", ask.ask_id)
+            return tool_error("平台的答复形状不对，这次调用没有结果。")
+
     # ------------------------------------------------------------------ 兜底
 
     def settle_all(self, turn_id: str) -> None:
@@ -188,7 +252,8 @@ class PermissionBroker:
         不再通知 Turn 挂起数的变化 —— 它正在取消或结束，不会回到 running。
         """
         for ask in [a for a in self.asks.values() if a.scope.turn_id == turn_id]:
-            self._settle(ask, cancelled_result(), withdraw="turn_ended", notify_turn=False)
+            ended = tool_error(TOOL_TURN_ENDED) if ask.kind == "tool" else cancelled_result()
+            self._settle(ask, ended, withdraw="turn_ended", notify_turn=False)
 
     def _expire(self, ask: Ask) -> None:
         """到期未答复：给 agent 选拒绝，向 server 撤回，轮次回到 running（§6.3）。"""

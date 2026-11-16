@@ -475,15 +475,6 @@ def test_parse_skill_ref() -> None:
         (_spec(browser=True, sandbox=SandboxSpec(image="my:1")), "自定义沙箱镜像"),
         (_spec(browser=True, sandbox=SandboxSpec(profile="bench")), "评测档"),
         (
-            _spec(
-                browser=True,
-                kind="cli",
-                tool_names=(),
-                cli=CliSpec("claude-code", placement="device", default_project_dir="~/p"),
-            ),
-            "本机 CLI",
-        ),
-        (
             _spec(browser=True, kind="cli", tool_names=(), cli=CliSpec("claude-code", image="x:1")),
             "自定义镜像",
         ),
@@ -501,6 +492,42 @@ def test_check_browser_accepts_and_needs_deployment_keys() -> None:
     check_browser(_spec(), get_settings())  # 没开浏览器：什么都不判
     with pytest.raises(InvalidSpec, match="没有开浏览器能力"):
         check_browser(_spec(browser=True), _settings(browser_state_keys={}))
+
+
+def test_device_cli_can_open_the_browser_where_there_is_a_device_gateway() -> None:
+    """本机 CLI：浏览器在使用者自己的电脑上，不要登录态密钥、不换镜像、不投送技能；要设备网关。"""
+    device = CliSpec("claude-code", placement="device", default_project_dir="~/p")
+    spec = _spec(browser=True, kind="cli", tool_names=(), cli=device)
+    gateway = {"device_gateway_url": "http://devicegw:8095"}
+    check_browser(
+        spec, _settings(browser_state_keys={}, browser_view_secret=SecretStr(""), **gateway)
+    )
+    with pytest.raises(InvalidSpec, match="没有设备网关"):
+        check_browser(spec, _settings(device_gateway_url=None))
+    plan = BrowserPlan.of(spec, BrowserConfig(skill=SkillRefSpec("browser", 2)))
+    assert plan is not None and plan.runtime == "device" and plan.image == "" and plan.skill is None
+
+
+def test_computer_use_skill_only_for_models_that_see_images() -> None:
+    config = BrowserConfig(
+        "atlas-sandbox-browser:1",
+        skill=SkillRefSpec("browser", 2),
+        computer_use_skill=SkillRefSpec("browser-computer-use", 1),
+    )
+    plan = BrowserPlan.of(_spec(browser=True), config)
+    assert plan is not None
+    assert [s.slug for s in plan.skills(())] == ["browser"]
+    assert [s.slug for s in plan.skills((), vision=True)] == ["browser", "browser-computer-use"]
+
+
+def test_browser_hint_tells_the_cli_which_ways_it_can_use() -> None:
+    from atlas_agent.browser.plan import browser_hint
+
+    device = BrowserPlan("device", "", None)
+    both = browser_hint(device, vision=True)
+    assert "用户自己的电脑上" in both and "browser-computer-use" in both and "zhipin" in both
+    only = browser_hint(device, vision=False)
+    assert "只能用快照" in only and "request_takeover" in only
 
 
 def test_captured_sites_ignore_unparseable_domains() -> None:

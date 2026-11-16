@@ -37,6 +37,9 @@ class DeviceOut(BaseModel):
     #: 在线时连接器报告的：装了哪些 CLI（名 → 版本）、本机策略摘要（允许的目录、权限模式上限……）
     clis: dict[str, str] = Field(default_factory=dict)
     policy: dict[str, Any] = Field(default_factory=dict)
+    #: 本机浏览器（在线时连接器报告的）：installed · version · missing · running · remote_view；
+    #: 旧连接器不报告 = 空
+    browser: dict[str, Any] = Field(default_factory=dict)
 
 
 class DeviceListOut(BaseModel):

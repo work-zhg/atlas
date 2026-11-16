@@ -1,4 +1,4 @@
-"""对着真的 Chrome（本机）：登录态进出、清站点、接管窗口。
+"""对着真的 Chrome（本机）：登录态进出、清站点、接管窗口、只管窗口的调试命令。
 
 本机没有 Chrome 或 Playwright 时跳过。不联网：本地存储走临时页面（请求都由路由回空页面），
 cookie 直接写；接管窗口打开的地址打不开也不要紧，比较的是 cookie。
@@ -77,6 +77,14 @@ async def cdp(chrome: int) -> AsyncIterator[object]:
         yield session
 
 
+@pytest.fixture
+async def windows(chrome: int) -> AsyncIterator[object]:
+    from atlas_browserd.rawcdp import browser_session
+
+    async with browser_session(chrome) as ops:
+        yield ops
+
+
 def _cookie(domain: str, name: str, value: str) -> dict[str, object]:
     return {"name": name, "value": value, "domain": domain, "path": "/", "expires": -1}
 
@@ -104,24 +112,52 @@ async def test_import_export_and_forget(cdp: object) -> None:
     assert [c["name"] for c in (await io.export(["ads.test"]))["cookies"]] == ["id"]
 
 
-async def test_takeover_window_reports_the_sites_logged_into(cdp: object, tmp_path: Path) -> None:
+async def test_takeover_window_reports_the_sites_logged_into(
+    cdp: object, windows: object, tmp_path: Path
+) -> None:
     from atlas_browserd.paths import Paths
     from atlas_browserd.windows import TakeoverWindows
 
     paths = Paths(tmp_path)
     paths.ensure()
-    windows = TakeoverWindows(cdp, paths)  # type: ignore[arg-type]
+    takeover = TakeoverWindows(windows, paths)  # type: ignore[arg-type]
     await cdp.add_cookies([_cookie(".bank.test", "old", "1")])  # type: ignore[attr-defined]
-    opened = await windows.open("t-1", "about:blank")
+    opened = await takeover.open("t-1", "about:blank")
     assert opened["reused"] is False
-    again = await windows.open("t-1", "about:blank")
+    again = await takeover.open("t-1", "about:blank")
     assert again == {"target": opened["target"], "reused": True}
     # 人在窗口里登录：网站写下新的 cookie
     await cdp.add_cookies(  # type: ignore[attr-defined]
         [_cookie("login.bank.test", "session", "s"), _cookie(".bank.test", "old", "1")]
     )
-    closed = await windows.close("t-1")
+    closed = await takeover.close("t-1", state=cdp)  # type: ignore[arg-type]
     assert closed["domains"] == ["login.bank.test"]
     assert any(c["name"] == "session" for c in closed["state"]["cookies"])
     assert not (paths.takeovers / "t-1.json").exists()
-    assert await cdp.target_url(opened["target"]) is None  # type: ignore[attr-defined]
+    assert await windows.page(opened["target"]) is None  # type: ignore[attr-defined]
+
+
+async def test_device_takeover_only_closes_the_window(windows: object, tmp_path: Path) -> None:
+    """电脑上：交还时不比较、不导出，只关窗口。"""
+    from atlas_browserd.paths import Paths
+    from atlas_browserd.windows import TakeoverWindows
+
+    paths = Paths(tmp_path)
+    paths.ensure()
+    takeover = TakeoverWindows(windows, paths)  # type: ignore[arg-type]
+    opened = await takeover.open("t-2", "about:blank#login", screen="thread-a")
+    assert await takeover.close("t-2") == {"closed": True}
+    assert await windows.page(opened["target"]) is None  # type: ignore[attr-defined]
+    assert await takeover.close("t-2") == {"closed": False}
+
+
+async def test_window_ops_never_attach_to_pages(windows: object) -> None:
+    """只管窗口的调试命令：开、置前、读 cookie 都不附着页面（附着了 Playwright 就会开 Runtime）。"""
+    ops = windows
+    target = await ops.new_window("about:blank#atlas-session-s1")  # type: ignore[attr-defined]
+    await ops.activate(target)  # type: ignore[attr-defined]
+    await ops.cookies()  # type: ignore[attr-defined]
+    page = await ops.page(target)  # type: ignore[attr-defined]
+    assert page is not None and page["url"].endswith("#atlas-session-s1")
+    assert page["attached"] is False
+    await ops.close(target)  # type: ignore[attr-defined]

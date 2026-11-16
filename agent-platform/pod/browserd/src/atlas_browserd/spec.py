@@ -3,8 +3,10 @@
 屏幕       横着 SLOTS 块、每块 1920×1080（screens.py）：每个对话一块，人看到的就是自己那一块
 Chromium   有界面（人接管时要看到并操作同一个浏览器）、不用沙盒（沙箱里没有用户命名空间）、
            profile 在本地盘、CDP 只听 127.0.0.1；第一个窗口在第 0 块
-画面服务   每块一个 x11vnc（-clip 只截那一块，只听本机）；websockify 对外开 6080，按 token 转到
-           那一块的 x11vnc，BasicHTTPAuth 口令 = 画面口令
+画面服务   每块一个 x11vnc（-clip 只截那一块，只听本机）；沙箱里 websockify 对外开 6080，按 token
+           转到那一块的 x11vnc，BasicHTTPAuth 口令 = 画面口令。电脑上（ATLAS_BROWSER_VNC_UNIX=1）
+           x11vnc 只听守护目录里的 Unix 套接字（目录 0700：同一台电脑上的别的用户连不上），
+           不开 websockify：画面由连接器经控制连接里的画面流转出去
 窗口看守   网页弹出的窗口挪回弹出它的那一块（windows.py 的 PopupKeeper）
 """
 
@@ -22,13 +24,20 @@ __all__ = ["ProcessSpec", "chromium_binary"]
 
 #: 画面服务 BasicHTTPAuth 的用户名（Atlas 那边是同一个）
 VIEW_USER = "atlas"
+#: 浏览器能找的名字：沙箱镜像里是 Debian 的 chromium，电脑上常装 Google Chrome
+BROWSERS = ("chromium", "chromium-browser", "google-chrome-stable", "google-chrome")
 
 
 def chromium_binary() -> str:
-    for name in (os.environ.get("ATLAS_BROWSER_CHROMIUM", ""), "chromium", "chromium-browser"):
+    for name in (os.environ.get("ATLAS_BROWSER_CHROMIUM", ""), *BROWSERS):
         if name and (found := shutil.which(name)):
             return found
-    raise FileNotFoundError("找不到 Chromium（ATLAS_BROWSER_CHROMIUM、chromium、chromium-browser）")
+    raise FileNotFoundError(f"找不到浏览器（ATLAS_BROWSER_CHROMIUM、{'、'.join(BROWSERS)}）")
+
+
+def _flag(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    return default if raw is None else raw.strip() not in ("", "0", "false", "no")
 
 
 @dataclass(frozen=True)
@@ -40,6 +49,11 @@ class ProcessSpec:
     cdp_port: int = CDP_PORT
     ws_port: int = VIEW_PORT
     chromium: str = field(default_factory=chromium_binary)
+    #: 沙箱里没有用户命名空间，Chromium 的沙盒起不来（隔离靠沙箱本身）；电脑上由连接器关掉它
+    #: （以 root 运行时 Chromium 不允许开沙盒，连接器照旧给 1）
+    no_sandbox: bool = field(default_factory=lambda: _flag("ATLAS_BROWSER_NO_SANDBOX", True))
+    #: 画面服务只听 Unix 套接字（电脑上）
+    vnc_unix: bool = field(default_factory=lambda: _flag("ATLAS_BROWSER_VNC_UNIX", False))
 
     @property
     def screen(self) -> str:
@@ -55,8 +69,7 @@ class ProcessSpec:
             f"--user-data-dir={self.paths.profile}",
             "--remote-debugging-address=127.0.0.1",
             f"--remote-debugging-port={self.cdp_port}",
-            # 沙箱里没有用户命名空间，Chromium 的沙盒起不来；隔离靠沙箱本身
-            "--no-sandbox",
+            *(["--no-sandbox"] if self.no_sandbox else []),
             # Pod 的 /dev/shm 只有 64 MB
             "--disable-dev-shm-usage",
             "--no-first-run",
@@ -77,9 +90,7 @@ class ProcessSpec:
             self.display,
             "-clip",
             slot.clip,
-            "-rfbport",
-            str(slot.vnc_port),
-            "-localhost",
+            *self._vnc_listen(slot),
             "-forever",
             "-shared",
             "-nopw",
@@ -87,13 +98,18 @@ class ProcessSpec:
             "-noxdamage",
         ]
 
+    def _vnc_listen(self, slot: Slot) -> list[str]:
+        if self.vnc_unix:
+            return ["-rfbport", "0", "-unixsock", str(self.paths.vnc_socket(slot.index))]
+        return ["-rfbport", str(slot.vnc_port), "-localhost"]
+
     def view_tokens(self) -> str:
         """websockify 的 token 表（TokenFile 的格式）。"""
         return "".join(f"{s.token}: 127.0.0.1:{s.vnc_port}\n" for s in Slot.all(self.slots))
 
     def websockify(self) -> list[str] | None:
-        """没有画面口令就不开画面（不能开一个谁都能连的口子）。"""
-        if not self.view_key:
+        """没有画面口令就不开画面（不能开一个谁都能连的口子）。电脑上不开（画面走连接器）。"""
+        if not self.view_key or self.vnc_unix:
             return None
         return [
             "websockify",

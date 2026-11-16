@@ -7,7 +7,8 @@
 
 ★ bridge 就是会话 Pod 里的那个程序：计时、取消、CLI 重启、断线补发都由它处理。
 ★ bridge 只监听本机回环，令牌每次拉起随机生成：别的电脑连不到，本机别的程序没有令牌也接不上。
-★ 启动什么命令由本机配置决定（按 cli_type 取），平台给不了。环境变量按白名单，再加上模型接入。
+★ 启动什么命令由本机配置决定（按 cli_type 取），平台给不了。环境变量按白名单，再加上模型接入；
+  开了浏览器的会话再加上本机浏览器的（会话名、对话、守护的位置，browser.py 的 BrowserEnv）。
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ import signal
 import socket
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -132,10 +134,17 @@ class BridgeStartFailed(Exception):
     pass
 
 
+#: 开会话的启动参数 → 额外交给 CLI 的环境变量（本机浏览器）
+ExtraEnv = Callable[[dict[str, Any]], dict[str, str]]
+
+
 class BridgeSupervisor:
-    def __init__(self, policy: LocalPolicy, paths: Paths) -> None:
+    def __init__(
+        self, policy: LocalPolicy, paths: Paths, *, extra_env: ExtraEnv | None = None
+    ) -> None:
         self._policy = policy
         self._paths = paths
+        self._extra_env = extra_env
         self._bridges: dict[str, BridgeProcess] = {}
         self._locks: dict[str, asyncio.Lock] = {}
 
@@ -168,6 +177,8 @@ class BridgeSupervisor:
             f.write(token)
         port = _free_port()
         agent_env, allow = _agent_env(launch.get("model_env"), self._policy)
+        if self._extra_env is not None:
+            agent_env |= self._extra_env(launch)
         env = {k: v for k, v in os.environ.items() if k in allow}
         env |= agent_env
         env |= {
@@ -423,10 +434,17 @@ def _mode_check(message: str, policy: LocalPolicy) -> Rejection | None:
 
 
 class SessionHost:
-    def __init__(self, policy: LocalPolicy, paths: Paths, audit: AuditLog) -> None:
+    def __init__(
+        self,
+        policy: LocalPolicy,
+        paths: Paths,
+        audit: AuditLog,
+        *,
+        extra_env: ExtraEnv | None = None,
+    ) -> None:
         self._policy = policy
         self._audit = audit
-        self.bridges = BridgeSupervisor(policy, paths)
+        self.bridges = BridgeSupervisor(policy, paths, extra_env=extra_env)
 
     async def on_session(self, channel: Channel) -> None:
         launch = channel.head

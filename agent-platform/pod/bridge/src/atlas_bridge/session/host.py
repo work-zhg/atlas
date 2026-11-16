@@ -29,6 +29,7 @@ from atlas_host import (
     ModeState,
     OpenParams,
     OpenResult,
+    PlatformTool,
     ResumeSpec,
     SessionEndedParams,
     SessionState,
@@ -98,8 +99,14 @@ class SessionHost:
         cancel_grace_s: float = 15,
         ledger_size: int = 16,
         max_pending_asks: int = 8,
+        platform_entry: Any = None,
     ) -> None:
+        """platform_entry：平台工具的 MCP 在 CLI 的 mcpServers 里的那一项（tools/mcp.py）。
+        session.open 给了平台工具才放进去。"""
         self._outbox = outbox
+        self._platform_entry = platform_entry
+        #: 这个会话的平台工具（session.open 给的）：本机 MCP 的 tools/list 就是它
+        self.platform_tools: list[PlatformTool] = []
         self._clock = clock
         self._bridge = bridge
         self._fallback = fallback_limits
@@ -158,9 +165,13 @@ class SessionHost:
 
         self.phase = Phase.OPENING
         self.limits = params.defaults.over(self._fallback)
+        self.platform_tools = list(params.platform_tools)
+        mcp_servers = list(params.mcp_servers)
+        if self.platform_tools and self._platform_entry is not None:
+            mcp_servers.append(self._platform_entry())
         try:
             session_id, resumed, replayed = await self._keeper.open_session(
-                params.resume, params.mcp_servers, params.system_prompt_append
+                params.resume, mcp_servers, params.system_prompt_append
             )
         except AcpRequestTimeout:
             # agent 可能仍在处理（比如还在重放历史）：重启它，回到 IDLE，server 可以重试（§6.5）
@@ -309,8 +320,14 @@ class SessionHost:
         self.ended.set()
 
     def answer_permission(self, ask_id: int, result: Any = None, error: Any = None) -> None:
-        """server 对 permission.ask 的响应（由上游连接按 id 转交）。"""
+        """server 对 permission.ask、tool.call 的响应（由上游连接按 id 转交）。"""
         self.permissions.on_answer(ask_id, result, error)
+
+    async def call_platform_tool(
+        self, name: str, arguments: dict[str, Any], call_id: str
+    ) -> dict[str, Any]:
+        """CLI 在本机 MCP 上调了平台工具：交给 server，在线等（这一轮标为等人处理）。"""
+        return await self.permissions.call_tool(self.turn, name, arguments, call_id)
 
     # ═══════════════════════════════════ 来自 agent ═══════════════════════════════════
 

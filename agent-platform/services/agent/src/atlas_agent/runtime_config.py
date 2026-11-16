@@ -13,6 +13,7 @@ c4-model/infra-platform/code-appconfig.html。
     browser.sandbox_image               开了浏览器的原生智能体用的沙箱镜像
     browser.cli_image                   开了浏览器的 CLI 智能体用的会话 Pod 镜像
     browser.skill                       开了浏览器的智能体自动带上的浏览器技能（slug@版本）
+    browser.computer_use_skill          模型能看图时再带上的 computer use 技能（slug@版本）
 
 ★ 默认值取部署配置（同名环境变量）：没在运行期改过的，行为和以前一样；管理员经 /v1/configs 改了，
   下一次读就生效（读不缓存），不用重启。
@@ -31,6 +32,7 @@ from .browser.plan import BrowserConfig, parse_skill_ref
 from .device.files import FileLimits
 
 if TYPE_CHECKING:
+    from atlas_engine.contracts.spec import SkillRefSpec
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from .config import Settings
@@ -55,6 +57,7 @@ class RuntimeKeys:
     browser_sandbox_image: ConfigKey[str]
     browser_cli_image: ConfigKey[str]
     browser_skill: ConfigKey[str]
+    browser_computer_use_skill: ConfigKey[str]
 
     @classmethod
     def of(cls, settings: Settings) -> RuntimeKeys:
@@ -132,6 +135,15 @@ class RuntimeKeys:
                 default=settings.browser_skill,
                 description="开了浏览器的智能体自动带上的浏览器技能，写成 slug@版本（空 = 不带）",
             ),
+            browser_computer_use_skill=ConfigKey(
+                "browser.computer_use_skill",
+                str,
+                default=settings.browser_computer_use_skill,
+                description=(
+                    "模型能看图时再带上的 computer use 技能，写成 slug@版本（空 = 不带）。"
+                    "本机 CLI 智能体用电脑上装的，不看这一项"
+                ),
+            ),
         )
 
     def all(self) -> list[ConfigKey[Any]]:
@@ -147,6 +159,7 @@ class RuntimeKeys:
             self.browser_sandbox_image,
             self.browser_cli_image,
             self.browser_skill,
+            self.browser_computer_use_skill,
         ]
 
 
@@ -192,16 +205,27 @@ class RuntimeConfig:
 
     async def browser_config(self) -> BrowserConfig:
         """浏览器镜像和技能。技能写错了（不是 slug@版本）当作不带，记日志，不挡住这一轮。"""
-        sandbox_image, cli_image, skill = await self.config.get_many(
-            self.keys.browser_sandbox_image, self.keys.browser_cli_image, self.keys.browser_skill
+        sandbox_image, cli_image, skill, computer_use = await self.config.get_many(
+            self.keys.browser_sandbox_image,
+            self.keys.browser_cli_image,
+            self.keys.browser_skill,
+            self.keys.browser_computer_use_skill,
         )
-        try:
-            ref = parse_skill_ref(skill)
-        except ValueError:
-            logger.warning("运行期配置 browser.skill 格式不对：%r，当作不带浏览器技能", skill)
-            ref = None
-        return BrowserConfig(sandbox_image=sandbox_image, cli_image=cli_image, skill=ref)
+        return BrowserConfig(
+            sandbox_image=sandbox_image,
+            cli_image=cli_image,
+            skill=_skill_ref("browser.skill", skill),
+            computer_use_skill=_skill_ref("browser.computer_use_skill", computer_use),
+        )
 
     async def image_allow_prefixes(self) -> dict[str, list[str]]:
         strict, bench = await self.config.get_many(self.keys.sandbox_images, self.keys.bench_images)
         return {"strict": strict, "bench": bench}
+
+
+def _skill_ref(key: str, raw: str) -> SkillRefSpec | None:
+    try:
+        return parse_skill_ref(raw)
+    except ValueError:
+        logger.warning("运行期配置 %s 格式不对：%r，当作不带这个技能", key, raw)
+        return None

@@ -1,8 +1,9 @@
 """控制连接（c4-model/agent/connector/code-connector-link.html）。
 
     Connector      配对；连上设备网关并保持，断了退避重连（不设上限），被拒才停
-    ReportBuilder  连上时的报告：系统、版本、装了哪些 CLI、本机策略
-    ChannelRouter  按通道类型分发：会话流 → 本机会话，文件流 → 本机文件
+    ReportBuilder  连上时的报告：系统、版本、装了哪些 CLI、本机策略、本机浏览器
+    ChannelRouter  按通道类型分发：会话流 → 本机会话，文件流 → 本机文件，
+                   浏览器请求、画面流 → 本机浏览器
 
 ★ 连接只由电脑发起：电脑在路由器、防火墙后面，平台连不进来；访问 HTTPS 入口几乎处处可行。
 ★ 遵守系统的代理设置（websockets 默认读系统代理）：公司网络常常只能经代理出网。
@@ -25,7 +26,7 @@ import urllib.request
 from collections.abc import Callable
 from typing import Any
 
-from atlas_devicelink import FILE, SESSION, Channel, Mux
+from atlas_devicelink import BROWSER, FILE, SESSION, VIEW, Channel, Mux
 from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import ConnectionClosed
 
@@ -68,8 +69,11 @@ def _ws(url: str) -> str:
 
 
 class ReportBuilder:
-    def __init__(self, policy: LocalPolicy) -> None:
+    def __init__(
+        self, policy: LocalPolicy, *, browser: Callable[[], dict[str, Any]] | None = None
+    ) -> None:
         self._policy = policy
+        self._browser = browser
 
     def build(self) -> dict[str, Any]:
         clis: dict[str, str] = {}
@@ -84,6 +88,8 @@ class ReportBuilder:
             "connector_version": __version__,
             "clis": clis,
             "policy": self._policy.summary(),
+            # 浏览器组件装没装、版本、在不在跑、本机允许查看画面吗（平台据此判断能不能用浏览器）
+            **({"browser": self._browser()} if self._browser is not None else {}),
         }
 
 
@@ -165,10 +171,16 @@ class Connector:
         *,
         on_session: OnChannel,
         on_file: OnChannel,
+        on_browser: OnChannel | None = None,
+        on_view: OnChannel | None = None,
     ) -> None:
         self._cred = cred
         self._report = report
         self._routes = {SESSION: on_session, FILE: on_file}
+        if on_browser is not None:
+            self._routes[BROWSER] = on_browser
+        if on_view is not None:
+            self._routes[VIEW] = on_view
         self._backoff = Backoff()
         self._ws: ClientConnection | None = None
         self._stopping = False

@@ -154,6 +154,13 @@ function DeviceCard({
     remote_files?: boolean;
   };
   const clis = Object.entries(d.clis ?? {});
+  // 本机浏览器（design-browser-device.html）：连接器上线时报告的
+  const browser = (d.browser ?? {}) as {
+    installed?: boolean;
+    version?: string | null;
+    running?: boolean;
+    remote_view?: boolean;
+  };
   return (
     <div className={pageStyles.card} style={{ cursor: "default" }}>
       <div className={pageStyles.cardHead}>
@@ -216,6 +223,21 @@ function DeviceCard({
             <dd style={{ margin: 0 }}>
               权限模式最高「{MODE_NAMES[policy.max_mode ?? ""] ?? policy.max_mode ?? "—"}」 · 同时{" "}
               {policy.max_sessions ?? "—"} 个对话 · 远程查看文件{policy.remote_files === false ? "已关闭" : "已开启"}
+            </dd>
+            <dt style={{ color: "var(--fg-3)" }}>浏览器</dt>
+            <dd style={{ margin: 0 }}>
+              {browser.installed === undefined ? (
+                <span style={{ color: "var(--fg-3)" }}>连接器版本太旧，不报告浏览器</span>
+              ) : browser.installed ? (
+                <>
+                  已安装 {browser.version ?? ""} · {browser.running ? "在跑" : "没在用（用时自动拉起）"} · 远程查看画面
+                  {browser.remote_view === false ? "已关闭" : "已开启"}
+                </>
+              ) : (
+                <span style={{ color: "var(--fg-3)" }}>
+                  没装（要用浏览器时在电脑上运行 atlas-connect browser install）
+                </span>
+              )}
             </dd>
           </>
         )}

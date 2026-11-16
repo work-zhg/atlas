@@ -228,6 +228,7 @@ class SessionLink:
         limits: dict[str, float],
         takeover: bool,
         system_prompt_append: str | None = None,
+        platform_tools: list[dict[str, Any]] | None = None,
     ) -> list[EventIntent]:
         """连上 bridge 并接上会话：认识这个 bridge 就 attach（从确认点之后补发），否则 open。"""
         try:
@@ -255,19 +256,24 @@ class SessionLink:
                     raise TurnAbort(fault_intent(fault)) from fault
                 # bridge 重启过（或还没打开过会话）：它的进程内状态已不在，重新 open 恢复
                 logger.info("bridge 不认识这个会话了（%s），改为 session.open", fault.data)
-        return await self._open(mcp_servers, limits, system_prompt_append)
+        return await self._open(mcp_servers, limits, system_prompt_append, platform_tools)
 
     async def _open(
         self,
         mcp_servers: list[dict[str, Any]],
         limits: dict[str, float],
         system_prompt_append: str | None = None,
+        platform_tools: list[dict[str, Any]] | None = None,
     ) -> list[EventIntent]:
         existing = self._session.agent_session_id
         params: dict[str, Any] = {"mcpServers": mcp_servers, "defaults": limits}
         if system_prompt_append:
-            # 知识集目录（知识集方案 §3.4）：bridge 经 _meta.systemPrompt.append 交给 adapter
+            # 知识集目录（知识集方案 §3.4）、浏览器的操作方式：bridge 经 _meta.systemPrompt.append
+            # 交给 adapter
             params["systemPromptAppend"] = system_prompt_append
+        if platform_tools:
+            # 平台工具（request_takeover）：bridge 起本机 MCP 提供给 CLI，调用经 tool.call 回来
+            params["platformTools"] = platform_tools
         if existing:
             params["resume"] = {"agentSessionId": existing, "replay": "none"}
         try:

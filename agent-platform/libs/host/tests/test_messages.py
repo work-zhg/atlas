@@ -229,8 +229,8 @@ def test_limits_must_be_positive() -> None:
 # ─────────────────────────── 常量 ───────────────────────────
 
 
-def test_twelve_methods_split_by_direction() -> None:
-    assert len(methods.SERVER_TO_BRIDGE) == 6 and len(methods.BRIDGE_TO_SERVER) == 6
+def test_thirteen_methods_split_by_direction() -> None:
+    assert len(methods.SERVER_TO_BRIDGE) == 6 and len(methods.BRIDGE_TO_SERVER) == 7
     assert not methods.SERVER_TO_BRIDGE & methods.BRIDGE_TO_SERVER
     # 方法名用点号，与 ACP 的斜杠形式区分（§4.1 P5）
     assert all(

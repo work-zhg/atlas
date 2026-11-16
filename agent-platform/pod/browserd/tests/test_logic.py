@@ -79,6 +79,25 @@ def test_process_spec(tmp_path: Path) -> None:
     assert "ATLAS_BROWSER_VIEW_KEY" not in spec.env()
 
 
+def test_device_spec_listens_on_unix_sockets_and_keeps_chrome_sandbox(tmp_path: Path) -> None:
+    """电脑上：画面服务只听守护目录里的 Unix 套接字，不开 websockify；Chrome 的沙盒照常开着。"""
+    spec = ProcessSpec(
+        paths=Paths(tmp_path),
+        view_key=None,
+        chromium="/usr/bin/google-chrome",
+        no_sandbox=False,
+        vnc_unix=True,
+    )
+    assert "--no-sandbox" not in spec.chromium_args()
+    vnc = spec.x11vnc(Slot(1))
+    assert vnc[vnc.index("-unixsock") + 1] == str(tmp_path / "vnc-1.sock")
+    assert vnc[vnc.index("-rfbport") + 1] == "0" and "-localhost" not in vnc
+    assert (
+        ProcessSpec(paths=Paths(tmp_path), view_key="k", chromium="c", vnc_unix=True).websockify()
+        is None
+    )
+
+
 def test_screen_is_split_into_slots_each_with_its_own_view(tmp_path: Path) -> None:
     """屏幕横排 3 块；每块一个 x11vnc 只截自己那块；websockify 按 token 转到那块。"""
     spec = ProcessSpec(paths=Paths(tmp_path), view_key="k3y", slots=3, chromium="c")
@@ -184,3 +203,57 @@ def test_popup_keeper_moves_popups_into_the_openers_slot() -> None:
     asyncio.run(keeper.rehome("popup", "opener"))
     asyncio.run(keeper.rehome("tab", "opener"))
     assert cdp.moved == [(8, {"left": 3840, "top": 0, "width": 1920, "height": 600})]
+
+
+# ---------------------------------------------------------------------------- computer use
+
+
+def test_coordinates_map_into_the_conversation_block_only() -> None:
+    from atlas_browserd.screen import CoordinateMap, OutOfBlock
+
+    block = CoordinateMap(Slot(1))
+    # 设计稿的算例：(750, 257) → (1920 + 750 × 1.5, 257 × 1.5)
+    assert block.to_screen(750, 257) == (3045, 386)
+    assert block.to_screen(0, 0) == (1920, 0)
+    for x, y in ((1280, 10), (-1, 10), (10, 720), (10, -0.5)):
+        with pytest.raises(OutOfBlock):
+            block.to_screen(x, y)
+
+
+def test_screen_actions_parse_from_the_command_line() -> None:
+    from atlas_browserd.screen import ScreenAction
+
+    assert ScreenAction.parse(["tap", "750", "257"]).at == (750, 257)
+    assert ScreenAction.parse(["tap", "(750,", "257)"]).at == (750, 257)
+    drag = ScreenAction.parse(["drag", "10", "20", "300", "20"])
+    assert (drag.at, drag.to) == ((10, 20), (300, 20))
+    scroll = ScreenAction.parse(["scroll", "600", "400", "down"])
+    assert (scroll.text, scroll.times) == ("down", 5)
+    assert ScreenAction.parse(["key", "ctrl+Enter"]).text == "ctrl+Return"
+    assert ScreenAction.parse(["key", "ArrowDown"]).text == "Down"
+    assert ScreenAction.parse(["paste", "你好", "世界"]).text == "你好 世界"
+    assert ScreenAction.parse(["go", "https://www.zhipin.com/"]).kind == "go"
+    for bad in (["tap", "1"], ["tap", "a", "b"], ["scroll", "1", "2", "sideways"], ["key"]):
+        with pytest.raises(ValueError):
+            ScreenAction.parse(bad)
+
+
+def test_screen_desk_refuses_out_of_block_before_touching_input(tmp_path: Path) -> None:
+    """越界的坐标在排队、置前、动键鼠之前就拒绝。"""
+    from atlas_browserd.screen import OutOfBlock, ScreenDesk
+
+    class Boom:
+        def __getattr__(self, name: str) -> object:
+            raise AssertionError(f"不该动键鼠：{name}")
+
+    desk = ScreenDesk(
+        Paths(tmp_path), target="t", slot=Slot(2), out=tmp_path, xinput=Boom(), capture=Boom()
+    )  # type: ignore[arg-type]
+    with pytest.raises(OutOfBlock):
+        desk.run(["tap", "1300", "10"])
+
+
+def test_daemon_cli_knows_stop_and_optional_close_out() -> None:
+    args = _parser().parse_args(["takeover", "close", "t-1"])
+    assert args.out is None
+    assert _parser().parse_args(["stop"]).command == "stop"

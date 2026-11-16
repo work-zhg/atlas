@@ -3,7 +3,10 @@
     Takeover        一次接管：审批表里 kind = takeover 的那一行，加上它所在的 run 和会话
     TakeoverPolicy  谁能处理：只有沙箱的主人（会话的创建人），事项必须还在等
     LoginCapture    交还时把这次登录存下来：关窗口、比较接管前后的 cookie，变了的站点存进登录态
-    TakeoverDesk    入口：open · hand_back · decline（HTTP 接口）；request_online（CLI 的平台工具）
+    TakeoverDesk    入口：open · hand_back · decline（HTTP 接口）
+
+★ 浏览器在哪由会话定（BrowserHost）：沙箱（原生、CLI 智能体）或使用者自己的电脑（本机 CLI 智能体，
+  browser/device.py）。电脑上的浏览器经设备网关请连接器开关窗口；登录态留在电脑上，交还时不存。
 
 ★ 接管是审批的第四种：登记、等人、做决定、唤醒、run 结束时作废都借审批；这里只多了「打开」和
   「交还时先存登录态」。原生智能体由引擎的 TakeoverMiddleware 经审批门禁登记，不经过这里。
@@ -24,9 +27,11 @@ from atlas_engine.runtime import TakeoverAsk
 
 from ..db.models import Approval, Run, Thread
 from ..db.session import fetch_one
+from ..device.gateway import GatewayUnavailable
 from ..errors import Conflict, Forbidden, NotFound
 from ..sandbox.base.lifecycle.runtime import SandboxGone
 from .daemon import DaemonClient, DaemonError
+from .device import DeviceBrowserHost, on_device
 from .host import BrowserHosts, BrowserUnavailable, screen_of, spec_of_thread
 from .login import LoginVault
 
@@ -119,17 +124,21 @@ class TakeoverDesk:
         self,
         session: AsyncSession,
         approvals: ApprovalService,
-        hosts: BrowserHosts,
-        daemon: DaemonClient,
-        vault: LoginVault,
+        hosts: BrowserHosts | None,
+        daemon: DaemonClient | None,
+        vault: LoginVault | None,
         *,
+        device: DeviceBrowserHost | None = None,
         policy: TakeoverPolicy | None = None,
     ) -> None:
+        """hosts、daemon、vault：沙箱里的浏览器（部署没配浏览器能力时为 None）；
+        device：使用者电脑上的浏览器（没部署设备网关时为 None）。"""
         self._session = session
         self._approvals = approvals
         self._hosts = hosts
         self._daemon = daemon
-        self._capture = LoginCapture(daemon, vault)
+        self._capture = LoginCapture(daemon, vault) if daemon and vault else None
+        self._device = device
         self._policy = policy or TakeoverPolicy()
 
     async def get(self, approval_id: UUID) -> Takeover:
@@ -153,6 +162,11 @@ class TakeoverDesk:
         """
         takeover = await self.get(approval_id)
         self._policy.may_handle(takeover, user)
+        if on_device(takeover.thread):
+            await self._open_on_device(takeover)
+            return takeover
+        if self._hosts is None or self._daemon is None:
+            raise TakeoverUnavailable("这个部署没有开浏览器能力", approval_id=str(approval_id))
         spec = await spec_of_thread(self._session, takeover.thread, takeover.run.agent_version_uuid)
         try:
             ref = await self._hosts.ensure(takeover.thread, spec)
@@ -168,10 +182,35 @@ class TakeoverDesk:
             ) from exc
         return takeover
 
+    async def _open_on_device(self, takeover: Takeover) -> None:
+        """电脑上：核对在线、装了组件、本机允许查看画面，请连接器在对话那一块开窗口。"""
+        if self._device is None:
+            raise TakeoverUnavailable(
+                "这个部署没有设备网关，打不开电脑上的浏览器", approval_id=str(takeover.id)
+            )
+        try:
+            await self._device.open_takeover(takeover.thread, str(takeover.id), takeover.ask.url)
+        except BrowserUnavailable as exc:
+            raise TakeoverUnavailable(str(exc), approval_id=str(takeover.id)) from exc
+        except GatewayUnavailable as exc:
+            logger.warning("打开接管 %s 时设备网关不可用：%s", takeover.id, exc)
+            raise TakeoverUnavailable(
+                "打不开接管：连不上设备网关，稍后再试", approval_id=str(takeover.id)
+            ) from exc
+
     async def hand_back(self, user: UUID, approval_id: UUID, note: str | None) -> dict[str, Any]:
-        """交还：先关窗口、存这次登录的站点，再做决定（approved）、唤醒 run。"""
+        """交还：先关窗口、存这次登录的站点，再做决定（approved）、唤醒 run。
+
+        电脑上的浏览器只关窗口：登录就留在它的 profile 里，不比较、不存（login 为 None）。
+        """
         takeover = await self.get(approval_id)
         self._policy.may_handle(takeover, user)
+        if on_device(takeover.thread):
+            await self._close_on_device(takeover)
+            await self._approvals.decide_takeover(approval_id, "approved", by=user, note=note)
+            return {"decision": "approved", "login": None}
+        if self._capture is None or self._hosts is None:
+            raise TakeoverUnavailable("这个部署没有开浏览器能力", approval_id=str(approval_id))
         login = await self._capture.capture(takeover, self._hosts)
         await self._approvals.decide_takeover(
             approval_id, "approved", by=user, note=note, login=dict(login)
@@ -183,10 +222,23 @@ class TakeoverDesk:
         takeover = await self.get(approval_id)
         self._policy.may_handle(takeover, user)
         await self._approvals.decide_takeover(approval_id, "rejected", by=user, note=note)
+        if on_device(takeover.thread):
+            await self._close_on_device(takeover)
+            return {"decision": "rejected"}
         try:
-            ref = await self._hosts.current(takeover.thread)
-            if ref is not None:
-                await self._daemon.takeover_close(ref, str(takeover.id))
+            if self._hosts is not None and self._daemon is not None:
+                ref = await self._hosts.current(takeover.thread)
+                if ref is not None:
+                    await self._daemon.takeover_close(ref, str(takeover.id))
         except Exception:
             logger.info("接管 %s 不处理后关窗口失败（守护下次开接管时清掉）", approval_id)
         return {"decision": "rejected"}
+
+    async def _close_on_device(self, takeover: Takeover) -> None:
+        """尽力关掉电脑上的接管窗口：电脑不在线、没开过窗口都不挡住交还。"""
+        if self._device is None:
+            return
+        try:
+            await self._device.close_takeover(takeover.thread, str(takeover.id))
+        except Exception:
+            logger.info("接管 %s 关电脑上的窗口失败（电脑不在线？）", takeover.id, exc_info=True)

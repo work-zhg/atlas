@@ -88,7 +88,8 @@ const MODE_ORDER: ApprovalMode[] = ["auto", "manual", "plan"];
 
 /**
  * 浏览器能力（c4-model/agent/browser/design-browser.html）：智能体在沙箱里用浏览器操作网页，遇到登录请你接管。
- * 开了就换带浏览器的工作环境、自动带上浏览器技能。
+ * 开了就换带浏览器的工作环境、自动带上浏览器技能。本机 CLI 智能体的浏览器在使用者自己的电脑上
+ * （design-browser-device.html）：电脑主人装好浏览器组件，画面经连接器到网页。
  */
 function BrowserCap({
   on,
@@ -996,13 +997,16 @@ export function AgentStudio({ agentId }: { agentId: string }) {
                     电脑可以在本机设上限（连接器的本机策略），要求的权限超过上限时，那台电脑会拒绝开对话。
                   </p>
                 )}
-                {!onDevice && (
-                  <BrowserCap
-                    on={Boolean(spec.browser)}
-                    disabled={readOnly}
-                    onChange={(v) => patch({ browser: v })}
-                  />
-                )}
+                <BrowserCap
+                  on={Boolean(spec.browser)}
+                  disabled={readOnly}
+                  hint={
+                    onDevice
+                      ? "用电脑上的浏览器打开网页；遇到登录在网页里看画面、自己登录。电脑上要先运行 atlas-connect browser install"
+                      : undefined
+                  }
+                  onChange={(v) => patch({ browser: v })}
+                />
               </Group>
             ) : (
               <Group title="能力" summary={`已开启 ${capOn} 项`} open={open.caps!} onToggle={() => toggle("caps")}>

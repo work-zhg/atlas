@@ -7,10 +7,14 @@
     ViewRelay       两边原样转发：不解析画面协议、不落日志（画面里有密码输入）
     ViewKeepAlive   连着画面时每 60 秒给沙箱记一次活动（人在里面慢慢登录也不会被闲置回收）
     LiveView        一条画面连接从头到尾
+    DeviceView      电脑上的浏览器（本机 CLI 智能体）：经设备网关的画面流，按宿主选路
+                    （code-browser-device.html · DeviceViewRoute）
 
 ★ 控制台里的 noVNC 随控制台发布，经同源 WebSocket 连到这里；沙箱只出一条画面数据流。
 ★ 不为看画面去建沙箱：要建是接管的「打开」做的事。
 ★ 连接本身不存任何状态，落在哪个实例上都一样（画面口令由 sandbox_uuid 派生）。
+★ 电脑上的画面不经沙箱：连到设备所在网关实例的画面流，连接器再接到那一块的画面服务。连着画面
+  算浏览器在用（连接器那边记），不用这边保活。
 """
 
 from __future__ import annotations
@@ -36,7 +40,15 @@ from .host import BrowserHosts, screen_of
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
-__all__ = ["CloseReason", "LiveView", "ViewAccess", "ViewDenied", "ViewKeepAlive", "ViewTarget"]
+__all__ = [
+    "CloseReason",
+    "DeviceView",
+    "LiveView",
+    "ViewAccess",
+    "ViewDenied",
+    "ViewKeepAlive",
+    "ViewTarget",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +64,8 @@ class CloseReason(Enum):
     NO_SCREEN = (4404, "这个对话还没用过浏览器")
     SANDBOX_GONE = (4410, "沙箱已经不在了")
     UPSTREAM_CLOSED = (4502, "浏览器画面断开了")
+    DEVICE_OFFLINE = (4503, "你的电脑不在线")
+    DEVICE_REFUSED = (4403, "这台电脑不允许远程查看浏览器画面")
 
     @property
     def code(self) -> int:
@@ -214,6 +228,54 @@ class LiveView:
             return
         if reason is not None:
             await close(client, reason)
+
+
+class DeviceView:
+    """电脑上的浏览器画面：连设备网关的画面流，原样转发。核对本人、找设备由调用方先做完
+    （DeviceBrowserHost.view_route）。"""
+
+    def __init__(self, relay: ViewRelay | None = None) -> None:
+        self._relay = relay or ViewRelay()
+
+    async def connect(
+        self, client: WebSocket, route: Any, *, subprotocols: Sequence[str] = ()
+    ) -> None:
+        from websockets.asyncio.client import connect
+        from websockets.exceptions import InvalidHandshake
+
+        headers = {"Authorization": f"Bearer {route.token}"} if route.token else {}
+        try:
+            async with connect(
+                route.url,
+                additional_headers=headers,
+                # ★ 设备网关在集群内：不走代理
+                proxy=None,
+                compression=None,
+                max_size=None,
+                open_timeout=15,
+            ) as upstream:
+                # noVNC 要 binary 子协议（沙箱那边由 websockify 应答，这里替它应答）
+                await client.accept(subprotocol="binary" if "binary" in subprotocols else None)
+                reason = await self._relay.pipe(client, upstream)
+                if reason is CloseReason.UPSTREAM_CLOSED:
+                    reason = device_close(upstream.close_code, upstream.close_reason or "")
+        except (OSError, InvalidHandshake, TimeoutError):
+            logger.info("连不上设备网关的画面流：%s", route.url, exc_info=True)
+            await close(client, CloseReason.DEVICE_OFFLINE)
+            return
+        if reason is not None:
+            await close(client, reason)
+
+
+def device_close(code: int | None, reason: str) -> CloseReason:
+    """设备网关、连接器关画面流的原因 → 给人看的。"""
+    if code == 4403:
+        return CloseReason.DEVICE_REFUSED
+    if code == 4404:
+        return CloseReason.NO_BROWSER if "没在运行" in reason else CloseReason.NO_SCREEN
+    if code == 1001:
+        return CloseReason.DEVICE_OFFLINE
+    return CloseReason.UPSTREAM_CLOSED
 
 
 async def close(client: WebSocket, reason: CloseReason) -> None:

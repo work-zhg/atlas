@@ -31,7 +31,7 @@ from .paths import CDP_PORT, Paths
 from .screens import Slot
 from .spec import ProcessSpec
 
-__all__ = ["Supervisor", "cdp_version", "ready", "start_detached", "wait"]
+__all__ = ["Supervisor", "cdp_version", "ready", "start_detached", "stop_running", "wait"]
 
 logger = logging.getLogger("atlas_browserd")
 
@@ -43,9 +43,9 @@ _MAX_BACKOFF_S = 30.0
 def cdp_version(port: int = CDP_PORT, timeout: float = 1.0) -> dict[str, Any] | None:
     """CDP 的 /json/version；连不上返回 None。"""
     try:
-        with urllib.request.urlopen(
-            f"http://127.0.0.1:{port}/json/version", timeout=timeout
-        ) as resp:
+        # ★ 不走代理：电脑上常配着 HTTP_PROXY，本机回环经代理就连不上了
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(f"http://127.0.0.1:{port}/json/version", timeout=timeout) as resp:
             return json.loads(resp.read())
     except (OSError, ValueError):
         return None
@@ -85,6 +85,32 @@ def start_detached(paths: Paths) -> None:
             start_new_session=True,
             cwd=str(paths.root),
         )
+
+
+def stop_running(paths: Paths, timeout_s: float = 15.0) -> bool:
+    """停掉常驻的 serve（它再停掉虚拟屏幕、Chromium、画面服务）。没在跑返回 False。
+
+    ★ profile 不动：下次拉起还是登录状态。
+    """
+    try:
+        pid = int(paths.pid.read_text().strip())
+    except (OSError, ValueError):
+        return False
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        paths.pid.unlink(missing_ok=True)
+        return False
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        time.sleep(0.2)
+    with contextlib.suppress(ProcessLookupError):
+        os.kill(pid, signal.SIGKILL)
+    return True
 
 
 def _view_key(paths: Paths) -> str | None:
@@ -129,11 +155,13 @@ class Supervisor:
             signal.signal(signal.SIGTERM, self._on_signal)
             signal.signal(signal.SIGINT, self._on_signal)
             self._paths.ready.unlink(missing_ok=True)
+            self._paths.pid.write_text(str(os.getpid()))
             self._start_all()
             try:
                 self._loop()
             finally:
                 self.stop()
+                self._paths.pid.unlink(missing_ok=True)
         return 0
 
     def stop(self) -> None:

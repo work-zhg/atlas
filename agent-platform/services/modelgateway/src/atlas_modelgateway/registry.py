@@ -71,6 +71,8 @@ class ModelFields:
     provider: str
     visibility: str
     description: str = ""
+    #: 能看图（Atlas 据此给不给 computer use）
+    supports_vision: bool = False
 
 
 @dataclass(frozen=True)
@@ -262,6 +264,7 @@ class ModelRegistry:
             provider=fields.provider,
             visibility=fields.visibility,
             description=fields.description,
+            supports_vision=fields.supports_vision,
             created_by=actor,
             updated_by=actor,
         )
@@ -322,6 +325,7 @@ class ModelRegistry:
             provider=found[0].provider or fields.provider,
             visibility=fields.visibility,
             description=fields.description,
+            supports_vision=fields.supports_vision,
             litellm_model_id=None,
             created_by=actor,
             updated_by=actor,
@@ -361,6 +365,7 @@ class ModelRegistry:
             row.display_name = fields.display_name
         row.visibility = fields.visibility
         row.description = fields.description
+        row.supports_vision = fields.supports_vision
         row.updated_by = actor
         await self.session.flush()
         if renamed:

@@ -7,10 +7,12 @@ import contextlib
 
 import pytest
 from atlas_devicelink import (
+    BROWSER,
     FILE,
     GOING_AWAY,
     INTERNAL_ERROR,
     SESSION,
+    VIEW,
     Channel,
     ChannelStalled,
     Data,
@@ -155,6 +157,28 @@ async def test_session_frames_jump_ahead_of_queued_file_frames() -> None:
     # 第一块文件内容可能已经在发送中，会话消息排在剩下的文件块前面
     order = [d.ch for d in data if isinstance(d, Data)]
     assert order.index(session_ch.id) <= 1
+    await b.close()
+    await asyncio.wait_for(task, 1)
+
+
+async def test_send_order_is_control_session_view_file() -> None:
+    """画面流排在会话流之后、文件流之前；开关接管窗口的浏览器请求和控制帧一样最先发。"""
+    a, b = pair()
+    gw = Mux(a, opener=True, window=1 << 30)
+    task = asyncio.create_task(gw.run())
+    channels = {kind: await gw.open(kind) for kind in (FILE, VIEW, SESSION, BROWSER)}
+    a.gate = asyncio.Event()
+    blocker = asyncio.create_task(channels[FILE].send(b"first"))  # 先占住发送
+    await asyncio.sleep(0)
+    sends = [asyncio.create_task(channels[k].send(k.encode())) for k in (FILE, VIEW, SESSION)]
+    await asyncio.sleep(0)
+    sends.append(asyncio.create_task(channels[BROWSER].send(b"browser")))
+    await asyncio.sleep(0.01)
+    a.gate.set()
+    await asyncio.wait_for(asyncio.gather(blocker, *sends), 1)
+    ids = {c.id: k for k, c in channels.items()}
+    order = [ids[d.ch] for m in a.sent if isinstance(m, bytes) and isinstance(d := decode(m), Data)]
+    assert order == [FILE, BROWSER, SESSION, VIEW, FILE]
     await b.close()
     await asyncio.wait_for(task, 1)
 

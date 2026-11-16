@@ -39,6 +39,7 @@ interface FormValues {
   provider: string;
   visibility: MgVisibility;
   description: string;
+  supports_vision: boolean;
   api_base?: string;
   api_key?: string;
   max_input_tokens?: number | null;
@@ -82,6 +83,7 @@ export function ModelFormModal({
     provider: m?.provider || providers[0]?.code,
     visibility: m?.visibility ?? "private",
     description: m?.description ?? "",
+    supports_vision: m?.supports_vision ?? false,
     api_base: m?.api_base ?? "",
     max_input_tokens: m?.max_input_tokens,
     max_output_tokens: m?.max_output_tokens,
@@ -118,6 +120,7 @@ export function ModelFormModal({
       provider: v.provider,
       visibility: v.visibility,
       description: v.description?.trim() ?? "",
+      supports_vision: Boolean(v.supports_vision),
     };
     const picked = v.visibility === "private" ? grants.map(({ label: _, ...g }) => g) : [];
     const input =
@@ -134,6 +137,7 @@ export function ModelFormModal({
                   display_name: base.display_name,
                   visibility: base.visibility,
                   description: base.description,
+                  supports_vision: base.supports_vision,
                   grants: picked,
                 },
               };
@@ -215,6 +219,13 @@ export function ModelFormModal({
             </Form.Item>
             <Form.Item name="description" label="描述">
               <Input.TextArea rows={2} maxLength={2000} placeholder="用途、特点，给使用的人看" />
+            </Form.Item>
+            <Form.Item
+              name="supports_vision"
+              valuePropName="checked"
+              extra="能看图的模型，开了浏览器的智能体还能用 computer use（看截图、用键盘鼠标操作网页）"
+            >
+              <Checkbox>能看图（支持图片输入）</Checkbox>
             </Form.Item>
           </>
         )}

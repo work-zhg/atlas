@@ -45,6 +45,7 @@ from ..providers.llm.model_platform import (
     agent_key,
     direct_endpoint,
     key_endpoint,
+    sees_images,
     uses_model_platform,
     with_platform_model,
 )
@@ -261,8 +262,12 @@ class CapabilityAssembly:
         plan = BrowserPlan.of(spec, config)
         if plan is None:
             return segment
+        # 模型能看图再带上 computer use 技能（模型平台登记时标注）
+        vision = await sees_images(self._settings, spec.model.model)
         spec = dataclasses.replace(
-            spec, sandbox=plan.sandbox(spec.sandbox), skills=plan.skills(spec.skills)
+            spec,
+            sandbox=plan.sandbox(spec.sandbox),
+            skills=plan.skills(spec.skills, vision=vision),
         )
         return dataclasses.replace(segment, spec=spec)
 

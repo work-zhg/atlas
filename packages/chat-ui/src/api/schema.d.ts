@@ -1748,7 +1748,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Logins */
+        /**
+         * List Logins
+         * @description 平台保管的登录态（沙箱浏览器）。电脑上的浏览器的登录留在那台电脑上，不在这里。
+         */
         get: operations["list_logins_v1_browser_logins_get"];
         put?: never;
         post?: never;
@@ -2592,6 +2595,10 @@ export interface components {
             };
             /** Policy */
             policy?: {
+                [key: string]: unknown;
+            };
+            /** Browser */
+            browser?: {
                 [key: string]: unknown;
             };
         };

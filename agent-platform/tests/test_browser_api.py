@@ -8,6 +8,7 @@
     审批接口  通用的审批接口不能批接管（那样登录态不存）
     我的登录  列出、删除（正在跑的浏览器里也清）；状态接口看浏览器在不在跑
     剪贴板    人在画面里粘贴、复制：只给会话的创建人；浏览器没在跑回 409
+    电脑上    本机 CLI 的会话：开关窗口、状态、剪贴板走设备宿主；交还不存登录态；用不了说清楚原因
 """
 
 from __future__ import annotations
@@ -19,11 +20,12 @@ from uuid import UUID
 
 import httpx
 import pytest
-from atlas_agent.api.v1.browser import get_browser
+from atlas_agent.api.v1.browser import _device, get_browser
 from atlas_agent.approval import ApprovalService
 from atlas_agent.browser.daemon import Captured, DaemonError
+from atlas_agent.browser.device import DeviceBrowserUnavailable, DeviceUnavailable
 from atlas_agent.browser.login import KeyRing, LoginVault, Site, StateBundle, StateCipher
-from atlas_agent.db.models import AgentVersion, Approval, Run
+from atlas_agent.db.models import AgentVersion, Approval, Run, Thread
 from atlas_agent.db.session import get_sessionmaker
 from atlas_agent.deps import get_approval_service
 from atlas_agent.ids import uuid7
@@ -31,7 +33,7 @@ from atlas_agent.main import create_app
 from atlas_agent.sandbox.provisioning.model import SandboxRef
 from httpx import ASGITransport
 from pydantic import SecretStr
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from tests.fake_uc import AS_USER, TEST_USER
 
@@ -121,7 +123,7 @@ async def env(clean_db: None) -> Any:
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test", headers=AS_USER
     ) as client:
-        yield SimpleNamespace(client=client, browser=browser, listener=listener)
+        yield SimpleNamespace(client=client, browser=browser, listener=listener, app=app)
 
 
 async def _takeover(client: httpx.AsyncClient) -> tuple[str, str, str]:
@@ -268,3 +270,95 @@ async def test_clipboard_round_trip_only_for_the_creator_of_a_running_browser(en
     assert (await env.client.get(url, headers=OTHER)).status_code in (403, 404)
     env.browser.hosts.running = False
     assert (await env.client.put(url, json={"text": "x"})).status_code == 409
+
+
+# ---------------------------------------------------------------------------- 电脑上的浏览器
+
+
+class FakeDevice:
+    """设备宿主的替身：记下请求；offline 时像电脑不在线那样拒绝。"""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, ...]] = []
+        self.offline = False
+
+    def _check(self) -> None:
+        if self.offline:
+            raise DeviceBrowserUnavailable(DeviceUnavailable.OFFLINE, "VPS")
+
+    async def open_takeover(self, thread: Any, takeover_id: str, url: str) -> dict[str, Any]:
+        self._check()
+        self.calls.append(("open", str(thread.thread_uuid), takeover_id, url))
+        return {"target": "T1"}
+
+    async def close_takeover(self, thread: Any, takeover_id: str) -> None:
+        self._check()
+        self.calls.append(("close", takeover_id))
+
+    async def running(self, thread: Any) -> bool:
+        return not self.offline
+
+    async def clipboard_set(self, thread: Any, text: str) -> None:
+        self._check()
+        self.calls.append(("clip", text))
+
+    async def clipboard_get(self, thread: Any) -> str:
+        self._check()
+        return "电脑上的剪贴板"
+
+
+async def _on_device(env: Any, thread: str) -> FakeDevice:
+    """把会话绑到一台电脑上（本机 CLI 智能体的会话），设备宿主换成替身。"""
+    async with get_sessionmaker()() as session:
+        await session.execute(
+            update(Thread).where(Thread.thread_uuid == UUID(thread)).values(device_uuid=uuid7())
+        )
+        await session.commit()
+    device = FakeDevice()
+    env.app.dependency_overrides[_device] = lambda: device
+    return device
+
+
+async def test_device_takeover_opens_and_hands_back_without_saving_logins(env: Any) -> None:
+    run, takeover, thread = await _takeover(env.client)
+    device = await _on_device(env, thread)
+    res = await env.client.post(f"/v1/runs/{run}/takeovers/{takeover}/open")
+    assert res.status_code == 200, res.text
+    res = await env.client.post(
+        f"/v1/runs/{run}/takeovers/{takeover}/hand-back", json={"note": "扫过码了"}
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["login"] is None
+    assert device.calls == [("open", thread, takeover, URL), ("close", takeover)]
+    # 沙箱那边一点没碰：登录态留在电脑上，不存
+    assert env.browser.daemon.opened == [] and await env.browser.vault.sites(UUID(TEST_USER)) == []
+    assert (await _approval(takeover)).outcome == {"feedback": "扫过码了"}
+
+
+async def test_device_offline_is_said_plainly(env: Any) -> None:
+    run, takeover, thread = await _takeover(env.client)
+    device = await _on_device(env, thread)
+    device.offline = True
+    res = await env.client.post(f"/v1/runs/{run}/takeovers/{takeover}/open")
+    assert res.status_code == 409
+    assert "不在线" in res.json()["error"]["message"]
+    status = await env.client.get(f"/v1/threads/{thread}/browser")
+    assert status.json() == {"running": False}
+    clip = await env.client.get(f"/v1/threads/{thread}/browser/clipboard")
+    assert clip.status_code == 409
+    # 不处理照样能做：电脑不在线时关不了窗口，不挡住决定
+    res = await env.client.post(f"/v1/runs/{run}/takeovers/{takeover}/decline", json={})
+    assert res.status_code == 200 and (await _approval(takeover)).status == "rejected"
+
+
+async def test_device_clipboard_and_status(env: Any) -> None:
+    _, _, thread = await _takeover(env.client)
+    device = await _on_device(env, thread)
+    assert (await env.client.get(f"/v1/threads/{thread}/browser")).json() == {"running": True}
+    put = await env.client.put(f"/v1/threads/{thread}/browser/clipboard", json={"text": "密码"})
+    assert put.status_code == 204
+    got = await env.client.get(f"/v1/threads/{thread}/browser/clipboard")
+    assert got.json() == {"text": "电脑上的剪贴板"}
+    assert device.calls == [("clip", "密码")]
+    other = await env.client.get(f"/v1/threads/{thread}/browser/clipboard", headers=OTHER)
+    assert other.status_code in (403, 404)

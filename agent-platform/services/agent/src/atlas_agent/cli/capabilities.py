@@ -17,8 +17,10 @@ from typing import TYPE_CHECKING, Any
 
 from atlas_engine.contracts.events import EventType
 from atlas_engine.contracts.mcp_naming import MCP_PREFIX
+from atlas_engine.contracts.tool_names import REQUEST_TAKEOVER
+from atlas_engine.runtime import TAKEOVER_DESCRIPTION, TakeoverAsk
 
-from ..browser.plan import BrowserPlan
+from ..browser.plan import BrowserPlan, browser_hint
 from ..credentials import (
     CredentialDenied,
     CredentialGrants,
@@ -36,7 +38,13 @@ from ..providers.knowledge import (
     require_client,
     resolve_knowledge,
 )
-from ..providers.llm.model_platform import admit_models, agent_key, litellm_url, uses_model_platform
+from ..providers.llm.model_platform import (
+    admit_models,
+    agent_key,
+    litellm_url,
+    sees_images,
+    uses_model_platform,
+)
 from ..providers.mcp import GatewayUnavailable, make_mcp_catalog, mcp_agent_access
 from ..providers.mcp.cli import cli_mcp_servers
 from ..providers.mcp.gateway import servers_in
@@ -83,6 +91,9 @@ class CliCapabilities:
     permission_mode: str | None = None
     #: 浏览器（c4-model/agent/browser/design-browser.html）：开了就换浏览器 CLI 镜像；None = 没开
     browser: BrowserPlan | None = None
+    #: 平台工具（atlas_host.PlatformTool 的线上形态）：bridge 起本机 MCP 提供给 CLI，调用经
+    #: tool.call 回到平台。开了浏览器才有 request_takeover
+    platform_tools: list[dict[str, Any]] = field(default_factory=list)
 
 
 class CliCapabilityAssembly:
@@ -95,9 +106,18 @@ class CliCapabilityAssembly:
         """解析本轮的能力。不可用抛 CapabilityUnavailable（调用方报 run.failed）。"""
         servers, notices, catalog = await self._mcp_servers(segment, redis)
         browser = await self._browser(segment)
+        prompt = catalog
+        tools: list[dict[str, Any]] = []
+        if browser is not None:
+            # 浏览器：告诉 CLI 这次能用哪几种操作方式；请人接管是平台工具（不设期限）
+            vision = await sees_images(self._settings, segment.spec.model.model)
+            hint = browser_hint(browser, vision=vision)
+            prompt = f"{catalog}\n\n{hint}" if catalog else hint
+            tools = [REQUEST_TAKEOVER_TOOL]
         return CliCapabilities(
             mcp_servers=servers,
-            system_prompt_append=catalog,
+            system_prompt_append=prompt,
+            platform_tools=tools,
             notices=notices,
             model=await self._model(segment),
             credentials=self._credentials(segment),
@@ -118,16 +138,19 @@ class CliCapabilityAssembly:
             return None
         config = await RuntimeConfig(self._settings, self._sessionmaker).browser_config()
         plan = BrowserPlan.of(spec, config)
-        if plan is not None and plan.skill is not None:
-            await self._seed_skill(segment, plan)
+        if plan is not None and plan.runtime != "device":
+            # 本机 CLI 的技能随浏览器组件装在电脑上；会话 Pod 里的拷进会话
+            vision = await sees_images(self._settings, spec.model.model)
+            skills = list(plan.skills((), vision=vision))
+            if skills:
+                await self._seed_skills(segment, skills)
         return plan
 
-    async def _seed_skill(self, segment: Segment, plan: BrowserPlan) -> None:
+    async def _seed_skills(self, segment: Segment, skills: list[Any]) -> None:
         """浏览器技能不在智能体配的技能里（随开关自动带上）：建会话时没拷，每轮确认一次。
 
         只是 HEAD：拷过的不再拷。
         """
-        assert plan.skill is not None
         thread = segment.thread
         fs = make_workspace(
             self._settings, thread.created_by_uuid, thread.thread_uuid, thread.workspace_dir
@@ -136,7 +159,7 @@ class CliCapabilityAssembly:
             return
         try:
             metas, _ = await resolve_skills(
-                [plan.skill], skill_directory(self._settings), with_descriptions=False
+                skills, skill_directory(self._settings), with_descriptions=False
             )
             await seed_session_skills(fs, metas)
         except Exception:
@@ -249,3 +272,11 @@ class CliCapabilityAssembly:
             drift_policy=spec.mcp_drift_policy,
             access=access,
         )
+
+
+#: 请人接管浏览器（平台工具）：描述和参数和原生的 request_takeover 是同一份
+REQUEST_TAKEOVER_TOOL: dict[str, Any] = {
+    "name": REQUEST_TAKEOVER,
+    "description": TAKEOVER_DESCRIPTION,
+    "inputSchema": TakeoverAsk.model_json_schema(),
+}

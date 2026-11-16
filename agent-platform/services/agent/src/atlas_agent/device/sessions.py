@@ -30,6 +30,7 @@ from uuid import UUID
 
 from sqlalchemy import update
 
+from ..browser.host import screen_of
 from ..cli.host import HostAccess, HostUnavailable
 from ..db.models import Device, Thread
 from ..errors import AppError, NotFound
@@ -148,6 +149,9 @@ class LaunchSpec:
     model: dict[str, Any] | None = None
     #: 目录不存在就建：默认目录第一次用时还不存在；手输的新目录也照建（都限制在允许的目录里）
     create_dir: bool = True
+    #: 开了浏览器：会话名（= 会话 id）和对话（= 根会话 id，屏幕按它分块）。连接器据此给 CLI 加上
+    #: 本机浏览器的环境（browser 命令找到自己的窗口和那一块屏幕）；None = 没开
+    browser: dict[str, str] | None = None
 
     def to_json(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -158,6 +162,8 @@ class LaunchSpec:
         }
         if self.model is not None:
             out["model"] = self.model
+        if self.browser is not None:
+            out["browser"] = self.browser
         return out
 
 
@@ -187,6 +193,7 @@ class CapabilityHandover:
             project_dir=placement.project_dir,
             mode=caps.permission_mode,
             model=model,
+            browser=session_env_of(thread) if caps.browser is not None else None,
         )
         thread_id = str(thread.thread_uuid)
         grant = await self._gateway.register(
@@ -305,6 +312,13 @@ class DeviceSessions:
                 "在电脑上运行 atlas-connect doctor 查看怎么装，装好后重启连接器",
                 kind="cli_not_installed",
             )
+        if caps.browser is not None and not status.browser.get("installed"):
+            # 开会话时就说清楚，不等到模型第一次用浏览器才失败（design-browser-device 2.3）
+            raise HostUnavailable(
+                f"这个智能体开了浏览器，电脑「{device.name}」还没装浏览器组件："
+                "在电脑上运行 atlas-connect browser install，装好后重启连接器",
+                kind="browser_not_installed",
+            )
         return await self._handover.hand_over(thread, placement, cli, caps, status)
 
     async def _placement_of(self, thread: Thread, cli: CliSpec) -> tuple[DevicePlacement, Device]:
@@ -419,3 +433,8 @@ def _message_of(body: Any) -> str:
         if body.get("message"):
             return str(body["message"])
     return str(body or "电脑没有回答")
+
+
+def session_env_of(thread: Thread) -> dict[str, str]:
+    """本机浏览器：会话名（各用各的窗口）和对话（屏幕的哪一块）。"""
+    return {"session": str(thread.thread_uuid), "screen": screen_of(thread)}

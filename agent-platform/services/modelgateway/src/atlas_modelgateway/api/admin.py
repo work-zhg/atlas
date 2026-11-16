@@ -151,7 +151,11 @@ async def register_model(body: ModelIn, operator: ManagerDep, registry: Registry
     row = await registry.register(
         name=body.name.strip(),
         fields=ModelFields(
-            body.display_name.strip(), body.provider, body.visibility, body.description
+            body.display_name.strip(),
+            body.provider,
+            body.visibility,
+            body.description,
+            body.supports_vision,
         ),
         route=_route(body),
         grants=_grants(body.grants),
@@ -164,7 +168,13 @@ async def register_model(body: ModelIn, operator: ManagerDep, registry: Registry
 async def adopt_model(body: ModelAdopt, operator: ManagerDep, registry: RegistryDep) -> ModelOut:
     row = await registry.adopt(
         name=body.name.strip(),
-        fields=ModelFields(body.display_name.strip(), "", body.visibility, body.description),
+        fields=ModelFields(
+            body.display_name.strip(),
+            "",
+            body.visibility,
+            body.description,
+            body.supports_vision,
+        ),
         grants=_grants(body.grants),
         actor=operator.uid,
     )
@@ -183,7 +193,11 @@ async def update_model(
     changed = await registry.update(
         row,
         fields=ModelFields(
-            body.display_name.strip(), body.provider, body.visibility, body.description
+            body.display_name.strip(),
+            body.provider,
+            body.visibility,
+            body.description,
+            body.supports_vision,
         ),
         route=_route(body) if row.litellm_model_id is not None else None,
         actor=operator.uid,

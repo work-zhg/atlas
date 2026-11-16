@@ -191,6 +191,11 @@ class CliRuntime:
                 if params.get("turnId") != turn_id:
                     return {"reject": True}  # 不属于本轮（上一轮遗留的询问）：没有人会看到它
                 return await desk.ask(params)
+            if method == methods.TOOL_CALL and isinstance(params, dict):
+                # 平台工具（bridge 本机 MCP 上的 request_takeover）：在线等人处理
+                if params.get("turnId") != turn_id:
+                    return {"content": "这次调用不属于进行中的一轮", "isError": True}
+                return await desk.call_tool(params)
             raise RpcFault(ErrorCode.METHOD_NOT_FOUND, f"不支持的方法：{method}")
 
         link = SessionLink(
@@ -243,6 +248,7 @@ class CliRuntime:
                 limits=caps.limits,
                 takeover=segment.takeover is not None,
                 system_prompt_append=caps.system_prompt_append,
+                platform_tools=caps.platform_tools,
             ):
                 yield events.make(kind, data)
             await link.save_progress()

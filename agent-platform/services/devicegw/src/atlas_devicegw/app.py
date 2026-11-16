@@ -12,6 +12,8 @@
     DELETE /internal/sessions/{会话}           作废会话登记
     WS     /internal/host/{会话}               接上本机会话（Agent 服务的上游连接连这里）
     POST   /internal/files/{设备}              读本机文件（列改动、列目录、列允许目录、取文件）
+    POST   /internal/browser/{设备}            本机浏览器：开、关接管窗口，剪贴板，状态
+    WS     /internal/view/{设备}?thread=&screen=  看本机浏览器的画面（画面流）
 """
 
 from __future__ import annotations
@@ -28,7 +30,7 @@ from pydantic import BaseModel, Field
 
 from .capability import CapabilityProxy, SessionRegistry
 from .link import AuthUnavailable, DeviceAuth, LinkServer
-from .relay import FileRelay, HostRelay
+from .relay import BrowserRelay, FileRelay, HostRelay, ViewRelay
 from .settings import GatewaySettings, get_settings
 from .store import BindingStore, PresenceTable
 
@@ -58,6 +60,19 @@ class RegisterIn(BaseModel):
 
 class DisconnectIn(BaseModel):
     reason: str = "设备已吊销"
+
+
+_BROWSER_OPS = r"^(takeover\.open|takeover\.close|clipboard\.set|clipboard\.get|status)$"
+
+
+class BrowserIn(BaseModel):
+    op: str = Field(pattern=_BROWSER_OPS)
+    #: 会话（根会话 id 在 screen 里）
+    thread: str = ""
+    screen: str = ""
+    takeover: str = ""
+    url: str = ""
+    text: str | None = None
 
 
 class FileIn(BaseModel):
@@ -100,6 +115,8 @@ def create_app(
         app.state.registry = registry
         app.state.host = HostRelay(links, registry, internal_token=settings.internal_token)
         app.state.files = FileRelay(links)
+        app.state.browser = BrowserRelay(links)
+        app.state.view = ViewRelay(links, internal_token=settings.internal_token)
         app.state.proxy = CapabilityProxy(bindings, proxy_client)
         try:
             yield
@@ -176,6 +193,15 @@ def create_app(
     @app.post("/internal/files/{device}")
     async def files(device: str, body: FileIn, request: Request) -> Response:
         return await request.app.state.files.request(device, body.model_dump())  # type: ignore[no-any-return]
+
+    @app.post("/internal/browser/{device}")
+    async def browser(device: str, body: BrowserIn, request: Request) -> Response:
+        payload = body.model_dump(exclude_none=True)
+        return await request.app.state.browser.request(device, payload)  # type: ignore[no-any-return]
+
+    @app.websocket("/internal/view/{device}")
+    async def view(ws: WebSocket, device: str, thread: str = "", screen: str = "") -> None:
+        await ws.app.state.view.serve(ws, device, thread, screen)
 
     return app
 

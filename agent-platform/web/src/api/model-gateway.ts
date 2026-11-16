@@ -53,6 +53,8 @@ export interface MgModel {
   /** LiteLLM 直配的为空 */
   visibility: MgVisibility | null;
   description: string;
+  /** 能看图（图片输入）：Atlas 据此给开了浏览器的智能体 computer use（看截图操作网页） */
+  supports_vision: boolean;
   source: "platform" | "litellm";
   /** ok = 可调用；missing = LiteLLM 中缺失；unknown = LiteLLM 不可达 */
   status: "ok" | "missing" | "unknown";
@@ -103,6 +105,7 @@ export interface MgModelIn extends MgRouteIn {
   provider: string;
   visibility: MgVisibility;
   description: string;
+  supports_vision: boolean;
   grants: MgGrantIn[];
 }
 
@@ -249,7 +252,10 @@ export function useSaveMgModel() {
         | { kind: "reregister"; id: string; body: MgRouteIn & { provider: string } }
         | {
             kind: "adopt";
-            body: Pick<MgModelIn, "name" | "display_name" | "visibility" | "description" | "grants">;
+            body: Pick<
+              MgModelIn,
+              "name" | "display_name" | "visibility" | "description" | "supports_vision" | "grants"
+            >;
           },
     ) => {
       switch (input.kind) {

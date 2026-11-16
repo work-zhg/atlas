@@ -54,6 +54,7 @@ def _out(device: Device, status_: DeviceStatus | None) -> DeviceOut:
         last_seen_at=device.last_seen_at,
         clis=status_.clis if status_ is not None else {},
         policy=policy if isinstance(policy, dict) else {},
+        browser=status_.browser if status_ is not None else {},
     )
 
 

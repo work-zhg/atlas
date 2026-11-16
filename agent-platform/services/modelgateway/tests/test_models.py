@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 import httpx
-from modelgw_testkit import ADMIN, ALICE, BOB, DEPT, FakeLiteLLM, FakePermissions, as_user
+from modelgw_testkit import ADMIN, ALICE, BOB, DEPT, FakeLiteLLM, FakePermissions, as_app, as_user
 
 H = as_user(ADMIN)
 
@@ -291,3 +291,21 @@ async def test_listing_survives_litellm_down(
     body = r.json()
     # 进程里有上一份：照常列出
     assert body["data"][0]["name"] == "deepseek-chat"
+
+
+async def test_vision_flag_is_kept_and_shown_to_atlas(client: httpx.AsyncClient) -> None:
+    """能不能看图：登记、编辑时标注，Atlas 从内部目录读（据此给不给 computer use）。"""
+    out = await register(client, "MiniMax-M3", provider="minimax", supports_vision=True)
+    plain = await register(client)
+    assert out["supports_vision"] is True and plain["supports_vision"] is False
+    catalog = (await client.get("/internal/models", headers=as_app())).json()["models"]
+    assert {m["name"]: m["supports_vision"] for m in catalog} == {
+        "MiniMax-M3": True,
+        "deepseek-chat": False,
+    }
+    r = await client.put(
+        f"/api/v1/models/{plain['uuid']}",
+        json={"provider": "deepseek", "visibility": "public", "supports_vision": True},
+        headers=H,
+    )
+    assert r.status_code == 200 and r.json()["supports_vision"] is True

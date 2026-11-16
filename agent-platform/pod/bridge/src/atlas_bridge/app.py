@@ -29,12 +29,24 @@ from .clock import SystemClock
 from .config import BridgeConfig
 from .errors import AgentUnavailable
 from .session.host import SessionHost
+from .tools.mcp import PlatformMcp
 from .upstream.outbox import Outbox
 from .upstream.server import UpstreamServer
 
-__all__ = ["BridgeApp"]
+__all__ = ["BridgeApp", "cli_env"]
 
 logger = logging.getLogger(__name__)
+
+
+#: CLI（Claude Code）调 MCP 工具的两个时限放开：平台工具 request_takeover 一直等到人交还，不设期限。
+#: Claude Code 2.1 的 HTTP 型 MCP 默认请求 60 秒超时、5 分钟没动静就断。CLI 真卡住时由这一轮的静默
+#: 计时兜底（等人处理期间暂停）
+UNLIMITED_MCP_TOOLS = {"MCP_TOOL_TIMEOUT": "2147483647", "CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT": "0"}
+
+
+def cli_env(config: BridgeConfig, environ: dict[str, str]) -> dict[str, str]:
+    """交给 CLI 的环境：白名单里的，再加上放开 MCP 工具时限的两个。"""
+    return {**config.agent_env(environ), **UNLIMITED_MCP_TOOLS}
 
 
 def _version() -> str:
@@ -52,7 +64,7 @@ class BridgeApp:
         launch = CliLaunch(
             argv=config.agent_cmd,
             cwd=config.workspace,
-            env=config.agent_env(os.environ),
+            env=cli_env(config, dict(os.environ)),
             user=config.agent_uid,
             group=config.agent_gid,
             oom_score_adj=config.agent_oom_score_adj,
@@ -66,6 +78,11 @@ class BridgeApp:
             client_version=_version(),
         )
         self.outbox = Outbox(max_bytes=config.outbox_bytes)
+        self.platform = PlatformMcp(
+            lambda: self.host.platform_tools,
+            lambda name, args, call_id: self.host.call_platform_tool(name, args, call_id),
+            version=_version(),
+        )
         self.host = SessionHost(
             self.agent,
             self.outbox,
@@ -77,6 +94,7 @@ class BridgeApp:
             cancel_grace_s=config.cancel_grace_s,
             ledger_size=config.ledger_size,
             max_pending_asks=config.max_pending_asks,
+            platform_entry=self.platform.entry,
         )
         self.server = UpstreamServer(
             self.host,
@@ -102,6 +120,7 @@ class BridgeApp:
             with contextlib.suppress(NotImplementedError, RuntimeError):
                 loop.add_signal_handler(sig, stop.set)
 
+        await self.platform.start()
         await self.server.start()
         pump = asyncio.create_task(self.outbox.pump(), name="outbox-pump")
         watchdog = asyncio.create_task(self._watch_outbox(), name="outbox-watchdog")
@@ -133,6 +152,7 @@ class BridgeApp:
         finally:
             await self.agent.shutdown()
             await self.server.stop(CloseCode.GOING_AWAY, "bridge stopping")
+            await self.platform.stop()
             for task in (pump, watchdog):
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):

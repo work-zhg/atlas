@@ -1,5 +1,9 @@
 """permission.ask → 平台审批 → 答复 / 撤回（Bridge 设计 §4.7；代码设计 §11）。
 
+tool.call（CLI 在 bridge 本机 MCP 上调了平台工具 request_takeover）也在这里：请人接管浏览器是审批的
+一种（kind = takeover），和权限请求一样在线等、可以被 bridge 撤回（同一个 id 空间），只是没有期限、
+结果换成工具结果（takeover_result，和原生同一份）。
+
 与 native 汇入**同一张 Approval 表、同一个前端弹窗**。规则（都来自真机上踩过的坑）：
   · 先登记（落库）再发 approval.required —— 事件发出时审批行已在库里，前端刷新核对不会漏
   · 只会选 allow_once；「永远允许」是全局策略，不能从一次弹窗里溜进来
@@ -24,7 +28,10 @@ from uuid import UUID, uuid4
 
 from atlas_engine.contracts.approval import approval_id_for
 from atlas_engine.contracts.events import EventType
+from atlas_engine.contracts.tool_names import REQUEST_TAKEOVER
+from atlas_engine.runtime import TakeoverAsk, takeover_result
 from atlas_jsonrpc import current_request_id
+from pydantic import ValidationError
 
 __all__ = ["ApprovalPort", "PermissionDesk"]
 
@@ -54,8 +61,15 @@ class ApprovalPort(Protocol):
         tool_name: str,
         args: dict[str, Any],
         tool_call_id: str | None = None,
+        kind: str = "tool",
+        source: str | None = None,
+        reason: str | None = None,
     ) -> str:
         """首次调用即登记；返回 pending / approved / rejected / expired / failed。"""
+        ...
+
+    async def outcome(self, approval_id: str) -> dict[str, Any]:
+        """有结果之后：status，加上人写的说明（feedback）、登录态存没存下来（login）。"""
         ...
 
     async def wait(self, approval_id: str, timeout: float) -> str:
@@ -142,6 +156,82 @@ class PermissionDesk:
             return {"reject": True}
         self._denied(tool_call, name, state)
         return {"reject": True}
+
+    # ------------------------------------------------------------------ 平台工具（tool.call）
+
+    async def call_tool(self, params: dict[str, Any]) -> dict[str, Any]:
+        """处理一个 tool.call，返回 ToolCallResult 的线上形态 {content, isError}。"""
+        name = str(params.get("name") or "")
+        if name != REQUEST_TAKEOVER:
+            return {"content": f"平台没有工具 {name}", "isError": True}
+        return await self._request_takeover(params)
+
+    async def _request_takeover(self, params: dict[str, Any]) -> dict[str, Any]:
+        """请人接管浏览器：登记（kind = takeover）、出卡片、一直等到人交还或不处理。"""
+        try:
+            ask = TakeoverAsk.parse(params.get("arguments"))
+        except ValidationError as exc:
+            reason = "；".join(str(e.get("msg")) for e in exc.errors()[:3])
+            return {"content": f"参数不合法，请按说明修正后重新调用：{reason}", "isError": True}
+        ask_id = current_request_id()
+        call_id = str(params.get("callId") or "") or None
+        resent = ask_id in self._approval_ids
+        approval_id = self._approval_ids.setdefault(ask_id, self._approval_id(call_id))
+        pending = _Pending(approval_id)
+        self._pending[ask_id] = pending
+        args = ask.model_dump()
+        try:
+            state = await self._approvals.check(
+                approval_id=approval_id,
+                tool_name=REQUEST_TAKEOVER,
+                args=args,
+                tool_call_id=call_id,
+                kind="takeover",
+                source="browser",
+                reason=ask.reason,
+            )
+            await self._sync_awaiting()
+            if state == "pending" and not resent:
+                # 字段与原生的 TakeoverMiddleware 逐字对齐：前端的接管卡片由它驱动
+                self._emit(
+                    EventType.APPROVAL_REQUIRED,
+                    {
+                        "approval_id": approval_id,
+                        "tool_name": REQUEST_TAKEOVER,
+                        "tool_call_id": call_id,
+                        "args": args,
+                        "reason": ask.reason,
+                        "approval_kind": "takeover",
+                        "source": "browser",
+                        "accepts_feedback": True,
+                    },
+                )
+            if state == "pending":
+                state = await self._await_decision(pending)
+                await self._sync_awaiting()
+        finally:
+            self._pending.pop(ask_id, None)
+        if state == "withdrawn":
+            # bridge 已经给了 CLI 结果（这一轮结束了）：这个响应会被它忽略
+            return {"content": "接管已失效", "isError": True}
+        outcome = {"status": state}
+        if state in ("approved", "rejected"):
+            try:
+                outcome = await self._approvals.outcome(approval_id)
+            except Exception:
+                logger.warning("取接管 %s 的结果失败", approval_id, exc_info=True)
+        text, error = takeover_result(outcome)
+        settled: dict[str, Any] = {
+            "approval_id": approval_id,
+            "tool_call_id": call_id,
+            "decision": outcome.get("status"),
+        }
+        if note := str(outcome.get("feedback") or "").strip():
+            settled["note"] = note
+        if isinstance(login := outcome.get("login"), dict):
+            settled["login"] = login
+        self._emit(EventType.TAKEOVER_SETTLED, settled)
+        return {"content": text, "isError": error}
 
     def _approval_id(self, call_id: str | None) -> str:
         """★ 由 (run, toolCallId) 派生：bridge 补发同一个请求、换实例接管后重新询问时都落到
