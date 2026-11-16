@@ -61,12 +61,13 @@ class BrowserInstaller:
         *,
         browserd: str | None = None,
         system: bool = True,
-        say: Callable[[str], None] = print,
+        say: Callable[[str], None] | None = None,
     ) -> None:
         self._env = env
         self._browserd = browserd
         self._system = system
-        self._say = say
+        # 立刻输出：和 apt、pip 的输出按先后排在一起
+        self._say = say or (lambda text: print(text, flush=True))
 
     def install(self) -> None:
         if platform.system() != "Linux":

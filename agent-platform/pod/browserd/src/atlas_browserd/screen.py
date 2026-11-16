@@ -51,6 +51,9 @@ SHOT_H = SLOT_H * SHOT_W // SLOT_W
 SETTLE_S = 0.8
 #: 打开网址之后多等一会儿
 NAVIGATE_SETTLE_S = 2.5
+#: 地址栏获得焦点、粘贴生效（向剪贴板的主人要内容是异步的）各等多久
+KEY_GAP_S = 0.2
+PASTE_SETTLE_S = 0.5
 #: computer use 的子命令（其余子命令走快照，交给 Playwright CLI）
 COMMANDS = frozenset(
     {"look", "tap", "double-tap", "drag", "scroll", "key", "paste", "copy-page", "go"}
@@ -328,10 +331,16 @@ class ScreenDesk:
                     write_text(action.text)
                     self._x.keys("ctrl+v")
                 case "go":
-                    # 在自己窗口的地址栏里输入网址（经剪贴板，网址里有中文也行）、回车
-                    self._x.keys("ctrl+l")
+                    # 在自己窗口的地址栏里输入网址（经剪贴板，网址里有中文也行；不逐字输入：地址栏会
+                    # 自动补全成访问过的网址）、回车。
+                    # ★ 每步之间等一下：粘贴是 Chrome 再去向剪贴板的主人要内容，是异步的 —— 回车
+                    #   紧跟着按，会先于粘贴生效（11-16 VPS 实测：网址接在了旧地址后面、没打开）
                     write_text(action.text)
+                    self._x.keys("ctrl+l")
+                    time.sleep(KEY_GAP_S)
+                    self._x.keys("ctrl+a")
                     self._x.keys("ctrl+v")
+                    time.sleep(PASTE_SETTLE_S)
                     self._x.keys("Return")
             time.sleep(NAVIGATE_SETTLE_S if action.kind == "go" else SETTLE_S)
             return self.look()
