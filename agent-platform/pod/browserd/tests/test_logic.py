@@ -257,3 +257,18 @@ def test_daemon_cli_knows_stop_and_optional_close_out() -> None:
     args = _parser().parse_args(["takeover", "close", "t-1"])
     assert args.out is None
     assert _parser().parse_args(["stop"]).command == "stop"
+
+
+def test_profile_never_offers_to_translate(tmp_path: Path) -> None:
+    from atlas_browserd.supervisor import quiet_profile
+
+    paths = Paths(tmp_path)
+    quiet_profile(paths)  # 新 profile：先写一份
+    prefs = tmp_path / "profile" / "Default" / "Preferences"
+    assert json.loads(prefs.read_text()) == {"translate": {"enabled": False}}
+    prefs.write_text(json.dumps({"translate": {"enabled": True}, "profile": {"name": "x"}}))
+    quiet_profile(paths)  # 已有的：只改这一项
+    assert json.loads(prefs.read_text()) == {
+        "translate": {"enabled": False},
+        "profile": {"name": "x"},
+    }

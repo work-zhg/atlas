@@ -31,7 +31,15 @@ from .paths import CDP_PORT, Paths
 from .screens import Slot
 from .spec import ProcessSpec
 
-__all__ = ["Supervisor", "cdp_version", "ready", "start_detached", "stop_running", "wait"]
+__all__ = [
+    "Supervisor",
+    "cdp_version",
+    "quiet_profile",
+    "ready",
+    "start_detached",
+    "stop_running",
+    "wait",
+]
 
 logger = logging.getLogger("atlas_browserd")
 
@@ -195,6 +203,8 @@ class Supervisor:
 
     def _start(self, p: _Proc) -> None:
         logger.info("拉起 %s", p.name)
+        if p.name == "chromium":
+            quiet_profile(self._paths)
         p.proc = subprocess.Popen(
             p.argv,
             env=self._spec.env(),
@@ -238,6 +248,27 @@ class Supervisor:
                 self._paths.ready.unlink(missing_ok=True)
                 marked = None
             time.sleep(1.0)
+
+
+def quiet_profile(paths: Paths) -> None:
+    """Chromium 起来之前改 profile 的偏好：不弹「翻译此页」。
+
+    ★ Google Chrome 157 不认 --disable-features=Translate（11-16 VPS 实测仍弹），气泡盖在右上角，
+      computer use 截图里多一块、可能挡住要点的东西。偏好在 Chrome 退出时会被它整份写回，所以每次
+      拉起前都改一次。读不了（损坏）就不动它。
+    """
+    prefs = paths.profile / "Default" / "Preferences"
+    try:
+        data = json.loads(prefs.read_text()) if prefs.exists() else {}
+    except (OSError, ValueError):
+        return
+    if not isinstance(data, dict):
+        return
+    translate = data.setdefault("translate", {})
+    if isinstance(translate, dict) and translate.get("enabled") is not False:
+        translate["enabled"] = False
+        prefs.parent.mkdir(parents=True, exist_ok=True)
+        prefs.write_text(json.dumps(data))
 
 
 def _terminate(proc: subprocess.Popen[bytes] | None) -> None:

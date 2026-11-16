@@ -132,6 +132,9 @@ const ORPHAN_STATUS: Record<RunState["status"], SubagentRun["status"]> = {
   cancelled: "error",
 };
 
+/** 由卡片完整呈现、不再画成工具步骤的等人事项 */
+const CARD_KINDS = new Set(["question", "takeover"]);
+
 /**
  * 一个 run 的过程时间线要画的东西。实时区与历史轮次共用，子 run 的卡片里也是它。
  * root 缺省 = state，即主轮次。
@@ -147,8 +150,8 @@ export function timelineEntries(state: RunState, root: RunState = state): Timeli
   };
   state.timeline.forEach((item, i) => {
     if (item.kind === "tool") {
-      // 向用户提问的那次调用由问题卡片完整呈现，不算一个步骤（按 tool_call_id 关联）
-      if (state.approvals.some((a) => a.kind === "question" && a.toolCallId === item.callId)) return;
+      // 向用户提问、请人接管浏览器的那次调用由卡片完整呈现，不算一个步骤（按 tool_call_id 关联）
+      if (state.approvals.some((a) => CARD_KINDS.has(a.kind) && a.toolCallId === item.callId)) return;
       const call = state.toolCalls.find((c) => c.callId === item.callId);
       if (call) group.push(call);
       return;
