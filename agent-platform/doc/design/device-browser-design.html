@@ -1,0 +1,701 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Atlas 本机智能体的浏览器方案设计</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --border: #d1d9e0; --head: #f6f8fa;
+    --accent: #0969da; --ok: #1a7f37; --ok-bg: #dafbe1; --warn: #9a6700; --warn-bg: #fff8c5;
+    --bad: #cf222e; --bad-bg: #ffebe9; --code-bg: #f6f8fa;
+    --b1: #ddf4ff; --b1d: #54aeff; --b2: #fbefff; --b2d: #c297ff; --b3: #dafbe1; --b3d: #4ac26b;
+    --b4: #fff8c5; --b4d: #d4a72c; --b5: #ffebe9; --b5d: #ff8182;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --border: #3d444d; --head: #151b23;
+      --accent: #4493f8; --ok: #3fb950; --ok-bg: #12261e; --warn: #d29922; --warn-bg: #2b2111;
+      --bad: #f85149; --bad-bg: #2d1214; --code-bg: #151b23;
+      --b1: #12263f; --b1d: #1f6feb; --b2: #271a36; --b2d: #8957e5; --b3: #12261e; --b3d: #2ea043;
+      --b4: #2b2111; --b4d: #9e6a03; --b5: #2d1214; --b5d: #da3633;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 32px; background: var(--bg); color: var(--fg);
+         font: 14px/1.75 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif; }
+  main { max-width: 1120px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 44px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 15.5px; margin: 24px 0 8px; }
+  .sub { color: var(--muted); margin: 0 0 14px; }
+  code { font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code-bg); padding: 1px 4px; border-radius: 4px; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0 16px; }
+  th, td { border: 1px solid var(--border); padding: 7px 10px; vertical-align: top; text-align: left; }
+  th { background: var(--head); white-space: nowrap; }
+  .callout { border-left: 4px solid var(--accent); background: var(--head); padding: 10px 14px; border-radius: 4px; margin: 14px 0; }
+  .callout.warn { border-left-color: var(--warn); background: var(--warn-bg); }
+  .tag { display: inline-block; padding: 0 7px; border-radius: 9px; font-size: 12px; font-weight: 600; border: 1px solid; white-space: nowrap; }
+  .tag.warn { color: var(--warn); background: var(--warn-bg); border-color: var(--warn); }
+  .yes { color: var(--ok); font-weight: 600; }
+  .no { color: var(--bad); font-weight: 600; }
+  .toc { columns: 2; padding-left: 18px; }
+  .fig { border: 1px solid var(--border); border-radius: 6px; padding: 10px; overflow-x: auto; margin: 10px 0 6px; }
+  .cap { color: var(--muted); font-size: 12.5px; margin: 0 0 16px; text-align: center; }
+  svg text { fill: var(--fg); font-size: 12px; font-family: -apple-system, "PingFang SC", sans-serif; }
+  svg .s { font-size: 11px; fill: var(--muted); }
+  svg .b { font-weight: 600; }
+  svg .m { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+  svg .bad { fill: var(--bad); font-weight: 600; }
+  svg .good { fill: var(--ok); font-weight: 600; }
+  svg .c1 { fill: var(--b1); stroke: var(--b1d); } svg .c2 { fill: var(--b2); stroke: var(--b2d); }
+  svg .c3 { fill: var(--b3); stroke: var(--b3d); } svg .c4 { fill: var(--b4); stroke: var(--b4d); }
+  svg .c5 { fill: var(--b5); stroke: var(--b5d); }
+  svg .inner { fill: var(--bg); stroke: var(--border); }
+  svg .ln { stroke: var(--fg); stroke-width: 1.3; fill: none; }
+  svg .life { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 4 4; fill: none; }
+  svg .dash { stroke-dasharray: 5 4; }
+  svg .thick { stroke-width: 6; stroke: var(--border); fill: none; }
+  svg .arw { fill: var(--fg); }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <marker id="ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="arw" d="M0,0 L8,4 L0,8 z"/></marker>
+</defs></svg>
+<main>
+<h1>Atlas 本机智能体的浏览器方案设计</h1>
+<p class="sub">日期：2026-11-15 · 状态：<span class="tag warn">方案设计，待评审</span> · 前置阅读：本机 CLI 智能体方案设计（device-cli-design.html）、沙箱浏览器设计（c4-model/agent/browser/design-browser.html）</p>
+
+<ol class="toc" start="0">
+  <li><a href="#s0">方案概览</a></li>
+  <li><a href="#s1">背景与目标</a></li>
+  <li><a href="#s2">浏览器在电脑上怎么跑</a></li>
+  <li><a href="#s3">两种操作方式</a></li>
+  <li><a href="#s4">人接管：画面经连接器到网页</a></li>
+  <li><a href="#s5">登录态留在电脑上</a></li>
+  <li><a href="#s6">安全</a></li>
+  <li><a href="#s7">设计决策</a></li>
+  <li><a href="#s8">改到的现有部分</a></li>
+  <li><a href="#s9">使用流程</a></li>
+</ol>
+
+<!-- ====================================================================== -->
+<h2 id="s0">0. 方案概览</h2>
+<p>一句话：<b>本机 CLI 智能体也能用浏览器。浏览器跑在使用者自己的电脑上，是一个画在虚拟屏幕上的有界面 Chrome，不占用电脑的真实桌面。CLI 有两种操作方式，各配一个技能，按需选用：一种是快照，读页面清单、按元素编号点；另一种是 computer use，看截图、用系统的键盘鼠标操作。两种方式作用在同一个浏览器、同一个窗口里。computer use 不经过调试接口，网站认不出；快照暂时还用 Playwright CLI，会被 zhipin 这类网站认出（3.3）。遇到登录，智能体请人接管：这块虚拟屏幕的画面经连接器已有的那条连接传到 Atlas 网页上，人在网页里登录，然后交还。登录态留在电脑上的浏览器里，不上传平台。</b></p>
+<p>打个比方：你出差在外，家里有位助理用你家书房那台电脑帮你办事。书房里专门摆了一台副显示器给他用（虚拟屏幕），你自己的主显示器他不碰。办到要输密码的地方，他通过你们一直通着的那通电话（连接器的连接）把副显示器的画面投给你，你远程把密码输进去，再把操作权交还给他。登录过的网站就留在书房那台电脑里，不寄到别处保管。</p>
+
+<div class="fig">
+<svg viewBox="0 0 1080 420" width="100%" role="img" aria-label="方案总览">
+  <rect x="10" y="10" width="380" height="400" rx="8" class="inner"/>
+  <text x="26" y="34" class="b">用户的电脑（Linux，或一台云服务器）</text>
+  <rect x="30" y="50" width="340" height="60" rx="6" class="c3"/>
+  <text x="200" y="74" text-anchor="middle" class="b">连接器</text>
+  <text x="200" y="96" text-anchor="middle" class="s">一条连到平台的连接；按本机策略拉起 bridge 和浏览器</text>
+  <rect x="30" y="140" width="150" height="120" rx="6" class="c1"/>
+  <text x="105" y="164" text-anchor="middle" class="b">会话 A</text>
+  <text x="105" y="190" text-anchor="middle" class="s">bridge</text>
+  <text x="105" y="210" text-anchor="middle" class="s">↓</text>
+  <text x="105" y="230" text-anchor="middle" class="s">Claude Code</text>
+  <rect x="230" y="140" width="140" height="170" rx="6" class="c4"/>
+  <text x="300" y="164" text-anchor="middle" class="b">浏览器组件（新）</text>
+  <text x="300" y="190" text-anchor="middle" class="s">虚拟屏幕</text>
+  <text x="300" y="210" text-anchor="middle" class="s">Chrome（有界面）</text>
+  <text x="300" y="230" text-anchor="middle" class="s">画面服务（每块一个）</text>
+  <text x="300" y="250" text-anchor="middle" class="s">浏览器守护</text>
+  <text x="300" y="280" text-anchor="middle" class="s">端口都只听 127.0.0.1</text>
+  <path d="M180,200 H230" class="ln" marker-end="url(#ar)"/>
+  <text x="205" y="192" text-anchor="middle" class="s">browser</text>
+  <path d="M105,110 V140" class="ln" marker-end="url(#ar)"/>
+  <path d="M300,110 V140" class="ln" marker-end="url(#ar)"/>
+  <text x="312" y="130" class="s">拉起 · 接管窗口 · 画面</text>
+  <rect x="30" y="335" width="340" height="56" rx="6" class="inner"/>
+  <text x="200" y="358" text-anchor="middle" class="s">浏览器的 profile 在电脑主人的目录下：</text>
+  <text x="200" y="376" text-anchor="middle" class="s">登录一直保留，不上传平台</text>
+
+  <path d="M390,80 H478" class="ln" marker-start="url(#ar)" marker-end="url(#ar)"/>
+  <text x="425" y="70" text-anchor="middle" class="s">HTTPS 443</text>
+  <text x="425" y="98" text-anchor="middle" class="s">电脑往外连</text>
+
+  <rect x="460" y="10" width="610" height="400" rx="8" class="inner"/>
+  <text x="476" y="34" class="b">平台</text>
+  <rect x="480" y="50" width="260" height="120" rx="6" class="c4"/>
+  <text x="610" y="74" text-anchor="middle" class="b">设备网关</text>
+  <text x="610" y="100" text-anchor="middle" class="s">一条控制连接里的几路：</text>
+  <text x="610" y="120" text-anchor="middle" class="s">会话流 · 文件流 · 画面流（新）</text>
+  <text x="610" y="148" text-anchor="middle" class="s">在线表：设备连在哪个实例</text>
+  <rect x="480" y="220" width="260" height="130" rx="6" class="c1"/>
+  <text x="610" y="244" text-anchor="middle" class="b">Atlas server</text>
+  <text x="610" y="270" text-anchor="middle" class="s">接管：登记、打开、交还</text>
+  <text x="610" y="288" text-anchor="middle" class="s">（和沙箱浏览器同一套）</text>
+  <text x="610" y="314" text-anchor="middle" class="s">画面：核对是本人、找到对话那一块，</text>
+  <text x="610" y="332" text-anchor="middle" class="s">转给设备网关，不保存</text>
+  <path d="M610,170 V220" class="ln" marker-start="url(#ar)" marker-end="url(#ar)"/>
+  <rect x="790" y="110" width="260" height="170" rx="6" class="c2"/>
+  <text x="920" y="134" text-anchor="middle" class="b">Atlas 网页</text>
+  <text x="920" y="160" text-anchor="middle" class="s">接管卡片：打开 · 交还 · 不处理</text>
+  <text x="920" y="182" text-anchor="middle" class="s">实时画面（noVNC），可全屏</text>
+  <text x="920" y="204" text-anchor="middle" class="s">键盘、鼠标、复制粘贴</text>
+  <text x="920" y="226" text-anchor="middle" class="s">对话头「浏览器」：只看不操作</text>
+  <text x="920" y="256" text-anchor="middle" class="s">手机 App：提示到电脑网页上处理</text>
+  <path d="M740,285 L790,250" class="ln" marker-start="url(#ar)" marker-end="url(#ar)"/>
+  <text x="772" y="300" text-anchor="middle" class="s">同源 HTTPS</text>
+  <text x="920" y="340" text-anchor="middle" class="b">你</text>
+  <text x="920" y="360" text-anchor="middle" class="s">在任何地方打开 Atlas 网页</text>
+  <path d="M920,325 V282" class="ln" marker-end="url(#ar)"/>
+</svg>
+</div>
+<p class="cap">图 1　方案总览：浏览器在电脑上，画面走连接器已有的连接；网页、卡片、接管流程沿用沙箱浏览器</p>
+
+<h3>先认识几个词</h3>
+<table>
+  <tr><th>词</th><th>白话解释</th><th>例子</th></tr>
+  <tr><td>浏览器组件</td><td>装在电脑上的一组程序：虚拟屏幕、有界面的 Chrome、画面服务、浏览器守护、<code>browser</code> 命令。和平台沙箱里浏览器镜像装的是同一套</td><td>电脑主人用连接器的一条命令装好</td></tr>
+  <tr><td>虚拟屏幕</td><td>没有显示器的屏幕（Xvfb）。Chrome 画在它上面，不会出现在电脑主人的真实桌面上</td><td>VPS 没有显示器，也能跑有界面的 Chrome</td></tr>
+  <tr><td>画面服务</td><td>把虚拟屏幕某一块的画面传出去、把键盘鼠标传进来的程序（VNC）。网页上的 noVNC 是看画面的客户端</td><td>每个对话一块屏幕，每块一个画面服务</td></tr>
+  <tr><td>画面流</td><td>连接器和设备网关之间那条控制连接里新增的一路，专门传画面和键鼠，和会话流、文件流并列</td><td>人点「打开」接管时开一路，关掉画面就断开</td></tr>
+  <tr><td>接管</td><td>智能体停下，人在实时画面里操作浏览器，操作完点「交还」，智能体接着做。和工具确认、提问一样是「等人决定的事」</td><td>「BOSS 直聘要登录，请扫码」</td></tr>
+  <tr><td>调试接口（CDP）、Runtime 调试域</td><td>程序遥控 Chrome 用的接口，按功能分成几个「域」：Page 管导航和截图，Runtime 管在页面里执行脚本、收控制台输出。打开 Runtime 就像替页面打开了开发者工具里的「控制台」</td><td>Playwright 一连上浏览器，就会给每个页面打开 Runtime</td></tr>
+  <tr><td>自动化检测</td><td>网站判断「这个浏览器是不是被程序遥控着」的手段。被认出后，有的网站不给内容，有的直接把页面跳成空白</td><td>zhipin 认出后跳到 <code>about:blank</code></td></tr>
+  <tr><td>快照</td><td>浏览器把页面整理成一份清单，每个按钮、输入框一行，带一个编号。模型读清单，说「点 e37」，程序就点到那个元素。纯文本模型也能用</td><td><code>textbox "手机号" [ref=e37]</code></td></tr>
+  <tr><td>computer use</td><td>模型看屏幕截图，说出要点的坐标，程序用系统的键盘鼠标去点、去输入，和人操作电脑一样。要用能看图的模型</td><td>「点 (750, 257)，粘贴手机号」</td></tr>
+</table>
+
+<!-- ====================================================================== -->
+<h2 id="s1">1. 背景与目标</h2>
+<h3>1.1 为什么需要</h3>
+<ul>
+  <li><b>本机智能体要上网办事。</b>本机 Claude Code 在电脑上写代码之外，常要操作网页：查招聘信息、在后台系统里导数据、按网页上的步骤操作。现在本机 CLI 智能体不能开浏览器，保存时直接被拒绝。</li>
+  <li><b>电脑的网络往往更合适。</b>沙箱浏览器从平台机房出网，很多国内网站会对机房 IP、海外 IP 多加限制。实测从大阪机房访问 zhipin，未登录时连职位列表都不给看，直接转到登录页；同一个网址在国内网络下能直接打开。电脑在家里、公司里，用的是普通宽带或公司内网，有的网站只有公司内网能访问。</li>
+  <li><b>人不一定在电脑前。</b>电脑可能是一台云服务器，也可能是放在家里的台式机，人在外面用别的电脑打开 Atlas 网页。要登录时，人得能从网页上看到并操作那台电脑上的浏览器。</li>
+  <li><b>现在的自动化方式会被认出。</b>实测 zhipin：沙箱浏览器里，模型一用 <code>browser</code> 命令连上，页面就跳成空白；人接管时也一样，因为同一个浏览器里一直有程序连着（3.2 的实测）。</li>
+</ul>
+
+<h3>1.2 目标</h3>
+<ul>
+  <li>本机 CLI 智能体能操作电脑上的浏览器，有两种方式可选：快照（和沙箱里的用法一样）和 computer use（看截图、用系统键鼠），在同一个浏览器里按需切换。</li>
+  <li>遇到登录，人在 Atlas 网页里看到画面并操作，体验和沙箱接管一致：卡片、打开、全屏、复制粘贴、交还。</li>
+  <li>电脑不开任何端口：画面只走连接器已经连着的那条连接。</li>
+  <li>只共享浏览器所在的那块虚拟屏幕，不碰电脑的真实桌面。</li>
+  <li>用 computer use 时，常见的自动化检测认不出来。以 zhipin 为验收：模型能打开、能读页面，人能在画面里登录。</li>
+</ul>
+
+<h3>1.3 不做什么</h3>
+<ul>
+  <li>首版只支持 Linux（包括 Windows 的 WSL）。虚拟屏幕用的是 Xvfb，macOS 上没有现成的（7 节的决策）。</li>
+  <li>不用电脑主人日常用的那个 Chrome：不碰他的书签、密码、已有的登录，也不用共享真实桌面。</li>
+  <li>登录态不上传平台，不进「我的登录」，和沙箱浏览器不互通（5 节）。</li>
+  <li>不保证所有反爬都能过。IP 信誉、操作节奏、图形验证码，这些交给人接管处理。滑块 computer use 可以试着拖，拖不过去也交给人。</li>
+  <li>不在电脑本机上另做一个看画面的入口，画面只在 Atlas 网页里看。</li>
+</ul>
+
+<!-- ====================================================================== -->
+<h2 id="s2">2. 浏览器在电脑上怎么跑</h2>
+<h3>2.1 和沙箱里是同一套组件</h3>
+<p>电脑上装的浏览器组件，和平台沙箱浏览器镜像里装的是同一套：虚拟屏幕、有界面的 Chrome、每块一个画面服务、浏览器守护、<code>browser</code> 命令（快照和 computer use 两种操作都在这一个命令里）。屏幕按对话分块、会话各用自己的窗口、网页弹出的窗口挪回弹出它的那一块，这些做法全部沿用。只有三处不同：谁来拉起、profile 放在哪、画面从哪条路出去。</p>
+
+<div class="fig">
+<svg viewBox="0 0 1080 380" width="100%" role="img" aria-label="电脑上的浏览器组件">
+  <rect x="10" y="10" width="1060" height="360" rx="8" class="inner"/>
+  <text x="26" y="34" class="b">这台电脑上的浏览器组件（一台电脑一个浏览器）</text>
+
+  <rect x="30" y="60" width="200" height="90" rx="6" class="c1"/>
+  <text x="130" y="84" text-anchor="middle" class="b">会话 A · Claude Code</text>
+  <text x="130" y="108" text-anchor="middle" class="s">browser 命令</text>
+  <text x="130" y="126" text-anchor="middle" class="s">（会话名 A，对话 A）</text>
+  <rect x="30" y="180" width="200" height="90" rx="6" class="c1"/>
+  <text x="130" y="204" text-anchor="middle" class="b">会话 B · Claude Code</text>
+  <text x="130" y="228" text-anchor="middle" class="s">browser 命令</text>
+  <text x="130" y="246" text-anchor="middle" class="s">（会话名 B，对话 B）</text>
+
+  <rect x="290" y="50" width="330" height="76" rx="6" class="c3"/>
+  <text x="455" y="74" text-anchor="middle" class="b">浏览器守护</text>
+  <text x="455" y="96" text-anchor="middle" class="s">开会话窗口、接管窗口（只管窗口，不碰页面）</text>
+  <text x="455" y="114" text-anchor="middle" class="s">computer use 的截屏、键鼠排队 · 记着对话用哪一块</text>
+  <path d="M230,105 L290,92" class="ln" marker-end="url(#ar)"/>
+  <path d="M230,215 L290,110" class="ln" marker-end="url(#ar)"/>
+  <text x="258" y="160" text-anchor="middle" class="s">本机</text>
+
+  <rect x="290" y="150" width="330" height="200" rx="6" class="c4"/>
+  <text x="455" y="172" text-anchor="middle" class="b">Chrome（有界面，画在虚拟屏幕上）</text>
+  <rect x="305" y="186" width="145" height="110" rx="5" class="inner"/>
+  <text x="377" y="206" text-anchor="middle" class="b">第 0 块 · 对话 A</text>
+  <text x="377" y="230" text-anchor="middle" class="s">窗口 A</text>
+  <text x="377" y="250" text-anchor="middle" class="s">A 的接管窗口</text>
+  <text x="377" y="270" text-anchor="middle" class="s">网页弹出的窗口</text>
+  <rect x="460" y="186" width="145" height="110" rx="5" class="inner"/>
+  <text x="532" y="206" text-anchor="middle" class="b">第 1 块 · 对话 B</text>
+  <text x="532" y="230" text-anchor="middle" class="s">窗口 B</text>
+  <text x="532" y="250" text-anchor="middle" class="s">B 派的子智能体的窗口</text>
+  <text x="455" y="322" text-anchor="middle" class="s">profile：电脑主人目录下，长期保留</text>
+  <text x="455" y="340" text-anchor="middle" class="s">调试接口只听 127.0.0.1</text>
+  <path d="M455,126 V150" class="ln" marker-end="url(#ar)"/>
+
+  <rect x="670" y="170" width="160" height="56" rx="6" class="c2"/>
+  <text x="750" y="194" text-anchor="middle" class="b">画面服务 · 第 0 块</text>
+  <text x="750" y="214" text-anchor="middle" class="s">只听 127.0.0.1</text>
+  <rect x="670" y="250" width="160" height="56" rx="6" class="c2"/>
+  <text x="750" y="274" text-anchor="middle" class="b">画面服务 · 第 1 块</text>
+  <text x="750" y="294" text-anchor="middle" class="s">只听 127.0.0.1</text>
+  <path d="M670,198 H605" class="ln" marker-end="url(#ar)"/>
+  <path d="M670,278 L605,260" class="ln" marker-end="url(#ar)"/>
+  <text x="750" y="330" text-anchor="middle" class="s">截自己那一块、注入键鼠</text>
+
+  <rect x="880" y="60" width="170" height="250" rx="6" class="c3"/>
+  <text x="965" y="84" text-anchor="middle" class="b">连接器</text>
+  <text x="965" y="112" text-anchor="middle" class="s">按需拉起守护，</text>
+  <text x="965" y="130" text-anchor="middle" class="s">闲置一段时间关掉</text>
+  <text x="965" y="158" text-anchor="middle" class="s">平台请它开、关接管窗口</text>
+  <text x="965" y="186" text-anchor="middle" class="s">画面流只接到</text>
+  <text x="965" y="204" text-anchor="middle" class="s">本机的画面服务</text>
+  <text x="965" y="232" text-anchor="middle" class="s">本机策略可以关掉</text>
+  <text x="965" y="250" text-anchor="middle" class="s">「远程查看浏览器画面」</text>
+  <text x="965" y="290" text-anchor="middle" class="s">↕ 设备网关</text>
+  <path d="M880,198 H830" class="ln" marker-end="url(#ar)"/>
+  <path d="M880,90 H620" class="ln" marker-end="url(#ar)"/>
+</svg>
+</div>
+<p class="cap">图 2　电脑上的浏览器组件：一台电脑一个 Chrome，会话各用窗口，屏幕按对话分块；所有端口只在本机</p>
+
+<ul>
+  <li><b>一台电脑一个浏览器。</b>这台电脑上的几个会话共用一个 Chrome，各开各的窗口，cookie 是同一份：在一个会话里登录了，别的会话也是登录状态。设备只属于一个人，所以这和沙箱里「一个人一个浏览器」是同一个意思。</li>
+  <li><b>会话名和对话由 bridge 带上。</b>bridge 拉起 CLI 时，把会话名和对话 id 放进 CLI 的环境里。<code>browser</code> 命令据此找到自己的窗口和对话那一块屏幕，模型不用管，也指定不了别人的。被委派的本机子智能体有自己的会话名，窗口放在对话那一块里。人看对话的画面时，子智能体在做什么也能看到。</li>
+  <li><b>profile 放在电脑主人的目录下，长期保留。</b>沙箱会被回收，所以那边要把登录态存到平台。电脑上的目录不会被回收，浏览器关了再开，登录还在（5 节）。</li>
+</ul>
+
+<h3>2.2 谁来拉起、什么时候关</h3>
+<p>平台不能让电脑运行任意程序。本机 CLI 方案里平台只能告诉连接器「用哪种 CLI、在哪个目录、什么权限模式」，浏览器也照这个规矩来：</p>
+<ul>
+  <li><b>模型用浏览器时：</b><code>browser</code> 命令在 CLI 的 Shell 里执行，发现守护没在跑就请连接器拉起。连接器先按本机策略核对，再拉起守护，守护再拉起虚拟屏幕、Chrome 和画面服务。</li>
+  <li><b>人打开接管时：</b>平台经设备网关请连接器「在这个对话那一块开接管窗口」，浏览器没在跑就先拉起。连接器只认这几件固定的事：开接管窗口、关接管窗口、接画面。</li>
+  <li><b>闲置时关掉：</b>一段时间没有命令、没人看画面、没有等着的接管，连接器就关掉守护和 Chrome，把内存还给电脑（一个 Chrome 约 0.5–1.5 GB）。profile 留着，下次拉起还是登录状态。闲置多久由本机策略定。</li>
+</ul>
+
+<h3>2.3 安装和开关</h3>
+<ul>
+  <li><b>电脑主人自己装。</b>浏览器组件有几百 MB（Chrome 加中文字体），只有要用浏览器的人才装，用连接器的一条命令装好。两个浏览器技能（快照、computer use，教模型怎么用 <code>browser</code> 命令）随组件一起装进 CLI 的技能目录，版本跟着组件走。会话开始时，平台按智能体用的模型能不能看图，告诉 CLI 这次能用哪几个（3.5）。</li>
+  <li><b>连接器上线时报告。</b>连上平台时，连接器除了报告装了哪些 CLI，还报告装没装浏览器组件、什么版本。「我的设备」里能看到。</li>
+  <li><b>智能体上照旧有「浏览器」开关。</b>本机 CLI 智能体也可以打开这个开关，开了不换镜像，因为本机没有镜像。开会话时，如果电脑没装浏览器组件，一开始就提示安装命令，不等到模型第一次用浏览器才失败。</li>
+</ul>
+
+<!-- ====================================================================== -->
+<h2 id="s3">3. 两种操作方式</h2>
+<h3>3.1 网站怎么认出来</h3>
+<p>程序遥控 Chrome 靠调试接口（CDP），接口按功能分「域」。<b>Page</b> 域管打开网址、截图，<b>Runtime</b> 域管在页面里执行脚本、收控制台输出。打开 Runtime 的效果，相当于替页面打开了开发者工具里的「控制台」：页面里每打印一个对象，浏览器都要把它整理好交给遥控的一方。</p>
+<p>网站可以利用这一点埋个陷阱。常见做法是打印一个特殊对象，它只有在「有人要整理它」的时候才会被碰到。平时没人整理，它就不会被碰到；一旦被碰到，就说明有人在调试或遥控这个页面，网站随即把页面跳走。Playwright 这类工具一连上浏览器，就会给每个页面打开 Runtime，于是踩中陷阱。</p>
+
+<div class="fig">
+<svg viewBox="0 0 1080 290" width="100%" role="img" aria-label="自动化检测原理">
+  <text x="20" y="30" class="b">现在：官方 Playwright（browser 命令的底层）</text>
+  <rect x="20" y="45" width="200" height="70" rx="6" class="c1"/>
+  <text x="120" y="72" text-anchor="middle" class="b">连上浏览器</text>
+  <text x="120" y="94" text-anchor="middle" class="s">经调试接口，本机</text>
+  <rect x="290" y="45" width="230" height="70" rx="6" class="c5"/>
+  <text x="405" y="72" text-anchor="middle" class="b">给每个页面打开 Runtime</text>
+  <text x="405" y="94" text-anchor="middle" class="s">相当于替页面开了「控制台」</text>
+  <rect x="590" y="45" width="210" height="70" rx="6" class="inner"/>
+  <text x="695" y="72" text-anchor="middle" class="b">网页里的检测脚本</text>
+  <text x="695" y="94" text-anchor="middle" class="s">陷阱对象被碰到 → 有人在遥控</text>
+  <rect x="870" y="45" width="190" height="70" rx="6" class="c5"/>
+  <text x="965" y="72" text-anchor="middle" class="bad">跳到 about:blank</text>
+  <text x="965" y="94" text-anchor="middle" class="s">页面一片白，读到 0 字</text>
+  <path d="M220,80 H290" class="ln" marker-end="url(#ar)"/>
+  <path d="M520,80 H590" class="ln" marker-end="url(#ar)"/>
+  <path d="M800,80 H870" class="ln" marker-end="url(#ar)"/>
+
+  <text x="20" y="170" class="b">以后：修补过的连接（3.3，暂不做）</text>
+  <rect x="20" y="185" width="200" height="70" rx="6" class="c1"/>
+  <text x="120" y="212" text-anchor="middle" class="b">连上浏览器</text>
+  <text x="120" y="234" text-anchor="middle" class="s">经调试接口，本机</text>
+  <rect x="290" y="185" width="230" height="70" rx="6" class="c3"/>
+  <text x="405" y="212" text-anchor="middle" class="b">不打开 Runtime</text>
+  <text x="405" y="234" text-anchor="middle" class="s">需要执行脚本时在隔离环境里执行</text>
+  <rect x="590" y="185" width="210" height="70" rx="6" class="inner"/>
+  <text x="695" y="212" text-anchor="middle" class="b">网页里的检测脚本</text>
+  <text x="695" y="234" text-anchor="middle" class="s">陷阱没被碰到 → 普通访客</text>
+  <rect x="870" y="185" width="190" height="70" rx="6" class="c3"/>
+  <text x="965" y="212" text-anchor="middle" class="good">页面正常</text>
+  <text x="965" y="234" text-anchor="middle" class="s">能拍快照、能点、人能登录</text>
+  <path d="M220,220 H290" class="ln" marker-end="url(#ar)"/>
+  <path d="M520,220 H590" class="ln" marker-end="url(#ar)"/>
+  <path d="M800,220 H870" class="ln" marker-end="url(#ar)"/>
+</svg>
+</div>
+<p class="cap">图 3　同一个有界面的 Chrome，差别只在连上之后开不开 Runtime</p>
+
+<h3>3.2 怎么知道是这个原因：一组对照</h3>
+<p>同一台大阪的云服务器（Ubuntu，Google Chrome 157，有界面，画在虚拟屏幕上），打开 zhipin 的职位搜索页，只改「怎么连浏览器」：</p>
+<table>
+  <tr><th>组</th><th>怎么连</th><th>结果</th></tr>
+  <tr><td>A</td><td>只开调试端口，没有程序连着</td><td class="yes">正常（未登录，被转到登录页）</td></tr>
+  <tr><td>B</td><td>官方 Playwright 连上（现在的 <code>browser</code> 命令就是这样）</td><td class="no">跳到 about:blank，读到 0 字</td></tr>
+  <tr><td>C</td><td>直接用调试接口，只开 Page 域（在一台 Mac 上测）</td><td class="yes">正常，职位列表都在</td></tr>
+  <tr><td>D</td><td>直接用调试接口，比 C 只多开一个 Runtime 域</td><td class="no">跳到 about:blank</td></tr>
+  <tr><td>E</td><td>修补版（patchright）连上</td><td class="yes">正常，登录页能读出内容</td></tr>
+</table>
+<p>C 和 D 只差一个 Runtime，结果一好一坏，所以原因就是它。B 是现在的做法，E 是改后的做法。A 还说明一件事：从机房 IP 访问，不登录就看不到职位，登录这一步绕不过去，所以要接管。</p>
+
+<h3>3.3 快照：底层暂不换</h3>
+<ul>
+  <li><b>快照仍用 Playwright CLI。</b>子命令、清单格式、「按编号点」的用法和沙箱里一样，快照技能沿用沙箱浏览器的。</li>
+  <li><b>限制：用过快照的浏览器会被认出。</b>Playwright CLI 一连上浏览器，就给浏览器里所有页面打开 Runtime，而且一直连着，直到浏览器重新拉起。所以一台电脑的浏览器里，只要有会话用过快照，zhipin 这类网站在这个浏览器里就会被认出，跳成空白，computer use 也救不回来。</li>
+  <li><b>应对：</b>这类网站只用 computer use（3.5）。浏览器闲置关停后重新拉起，就恢复干净。computer use 技能里写明：页面突然变空白、跳到 <code>about:blank</code>，说明被认出了，停下来告诉用户，不要反复重试。</li>
+  <li><b>以后根治：</b>快照换成修补连接（patchright：不开 Runtime，也能拍带编号的清单，即 3.2 的 E 组）。它的版本对不上 Playwright CLI，要由浏览器守护常驻一条修补连接、<code>browser</code> 命令请守护代办。换了之后，两种方式在同一个浏览器里可以随便切换（3.5 末尾的算例）。这一步暂不做。</li>
+</ul>
+
+<h3>3.4 computer use：看屏幕，用系统的键盘鼠标</h3>
+<p>computer use 完全不经过调试接口：模型看的是屏幕截图，动的是系统层面的键盘鼠标，和人坐在电脑前操作一样。网页收到的就是普通的键盘鼠标事件，分不出是人还是程序。</p>
+<table>
+  <tr><th>要做的事</th><th>怎么做</th></tr>
+  <tr><td>看</td><td>截本对话那一块屏幕，包括地址栏和浏览器自己的弹窗，缩到 1280 宽交给模型。只截自己那块，看不到别的对话</td></tr>
+  <tr><td>点、拖、滚动、按键</td><td>模型说出截图上的坐标，命令换算回屏幕坐标，用系统键鼠去做。坐标超出自己那一块就拒绝，点不到别的对话的窗口</td></tr>
+  <tr><td>输入文字</td><td>先把文字放进剪贴板，再粘贴，中文也能输（逐个按键模拟输不了中文）</td></tr>
+  <tr><td>读文字</td><td>在页面里全选、复制，从剪贴板取整页纯文本；要看位置、图片时再看截图</td></tr>
+  <tr><td>打开网址</td><td>在自己窗口的地址栏里，用键盘输入网址、回车</td></tr>
+</table>
+<p>算例：模型报坐标准不准。同一张 zhipin 登录页截图（1280×624），让 MiniMax-M3 报 5 个元素的中心点，连问 3 次，和页面上的真实位置比：</p>
+<table>
+  <tr><th>元素</th><th>真实范围（截图坐标）</th><th>3 次结果</th><th>落在范围里</th></tr>
+  <tr><td>手机号输入框</td><td>x 660–840，y 241–272</td><td>(670,243) (676,256) (670,256)</td><td class="yes">3/3</td></tr>
+  <tr><td>发送验证码</td><td>中心 (797,307)，y 292–322</td><td>(800,292) (796,306) (798,307)</td><td class="yes">3/3</td></tr>
+  <tr><td>登录/注册按钮</td><td>中心 (720,360)，y 344–376</td><td>(720,342) (720,357) (720,358)</td><td>2/3（一次偏出 2 像素）</td></tr>
+  <tr><td>扫码登录图标</td><td>中心 (576,137)，y 124–150</td><td>(576,129) (576,136) (578,136)</td><td class="yes">3/3</td></tr>
+  <tr><td>同意协议勾选框（约 7×7）</td><td>中心 (606,426)</td><td>(607,405) (606,424) (607,423)</td><td>2/3（一次偏 20 像素）</td></tr>
+</table>
+<p>15 次里 13 次落在目标上：大按钮、输入框基本都准，小目标偶尔会偏。所以 computer use 技能要求每点一次就再截一张图确认，没点中就重来。</p>
+<ul>
+  <li><b>守护开窗口改用只管窗口的命令。</b>现在守护开会话窗口、接管窗口、挪窗口时，会临时用官方 Playwright 连一下浏览器，那一下也会给所有页面打开 Runtime。computer use 要干净，这几件事都改用浏览器级的调试命令：只开窗口、挪窗口，不碰页面。</li>
+  <li><b>不连调试接口的实测</b>（大阪 VPS，zhipin）：在地址栏里用键盘打开网址，页面正常；全选、复制拿到整页 243 字；粘贴中文进手机号输入框成功。</li>
+  <li><b>同一台电脑只有一套键盘焦点和剪贴板。</b>几个对话同时用 computer use 时，命令在本机排队，一次只执行一个会话的键鼠动作。每个动作都很短，排队几乎感觉不到。</li>
+  <li><b>代价：</b>每一步都要一张截图，比快照慢，也更费 token；要用能看图的模型。</li>
+</ul>
+
+<h3>3.5 两个技能，按需选</h3>
+<div class="fig">
+<svg viewBox="0 0 1080 250" width="100%" role="img" aria-label="两个技能共用一个浏览器">
+  <rect x="20" y="30" width="200" height="80" rx="6" class="c1"/>
+  <text x="120" y="58" text-anchor="middle" class="b">快照技能（默认）</text>
+  <text x="120" y="80" text-anchor="middle" class="s">读清单、按编号点</text>
+  <text x="120" y="98" text-anchor="middle" class="s">纯文本模型也能用</text>
+  <rect x="20" y="140" width="200" height="80" rx="6" class="c2"/>
+  <text x="120" y="168" text-anchor="middle" class="b">computer use 技能</text>
+  <text x="120" y="190" text-anchor="middle" class="s">看截图、按坐标点</text>
+  <text x="120" y="208" text-anchor="middle" class="s">要能看图的模型</text>
+  <rect x="290" y="70" width="190" height="110" rx="6" class="c3"/>
+  <text x="385" y="98" text-anchor="middle" class="b">browser 命令</text>
+  <text x="385" y="122" text-anchor="middle" class="s">同一个会话名</text>
+  <text x="385" y="140" text-anchor="middle" class="s">同一个窗口</text>
+  <text x="385" y="158" text-anchor="middle" class="s">同一块屏幕</text>
+  <path d="M220,70 L290,105" class="ln" marker-end="url(#ar)"/>
+  <path d="M220,180 L290,145" class="ln" marker-end="url(#ar)"/>
+  <rect x="550" y="30" width="230" height="80" rx="6" class="c1"/>
+  <text x="665" y="58" text-anchor="middle" class="b">Playwright CLI（常驻会话）</text>
+  <text x="665" y="80" text-anchor="middle" class="s">拍清单、按编号操作</text>
+  <text x="665" y="98" text-anchor="middle" class="s">会开 Runtime（暂不换）</text>
+  <rect x="550" y="140" width="230" height="80" rx="6" class="c2"/>
+  <text x="665" y="168" text-anchor="middle" class="b">截屏 + 系统键鼠 + 剪贴板</text>
+  <text x="665" y="190" text-anchor="middle" class="s">完全不经过调试接口</text>
+  <text x="665" y="208" text-anchor="middle" class="s">本机排队，一次一个会话</text>
+  <path d="M480,105 L550,70" class="ln" marker-end="url(#ar)"/>
+  <path d="M480,145 L550,180" class="ln" marker-end="url(#ar)"/>
+  <rect x="850" y="70" width="210" height="110" rx="6" class="c4"/>
+  <text x="955" y="98" text-anchor="middle" class="b">Chrome 里这个会话的窗口</text>
+  <text x="955" y="122" text-anchor="middle" class="s">两种方式操作的是同一页</text>
+  <text x="955" y="140" text-anchor="middle" class="s">切换不用重开页面</text>
+  <text x="955" y="158" text-anchor="middle" class="s">只有 computer use 认不出</text>
+  <path d="M780,70 L850,105" class="ln" marker-end="url(#ar)"/>
+  <path d="M780,180 L850,145" class="ln" marker-end="url(#ar)"/>
+</svg>
+</div>
+<p class="cap">图 4　两个技能共用一个命令、一个窗口：快照经 Playwright CLI，computer use 经屏幕和系统键鼠</p>
+<table>
+  <tr><th>遇到的情况</th><th>用哪个</th></tr>
+  <tr><td>普通网页：读内容、填表、点按钮</td><td>快照（默认）：点得准、省 token、快</td></tr>
+  <tr><td>会检测自动化的网站（如 zhipin）</td><td>只用 computer use，而且这个浏览器自拉起以来没人用过快照（3.3）</td></tr>
+  <tr><td>画布、地图、滑块、需要拖动的</td><td>computer use</td></tr>
+  <tr><td>快照里找不到要点的东西，或者点了没反应</td><td>换 computer use 看一眼屏幕</td></tr>
+  <tr><td>要读的内容在图片里</td><td>computer use（看截图）</td></tr>
+  <tr><td>模型不能看图</td><td>只给快照技能</td></tr>
+</table>
+<ul>
+  <li><b>切换不用重开页面。</b>两个技能用同一个 <code>browser</code> 命令、同一个会话名、同一个窗口。用 computer use 动过页面之后，之前的元素编号作废，回到快照要先重新拍一次。</li>
+  <li><b>平台告诉 CLI 这次能用哪几个。</b>模型平台登记模型时标注能不能看图（没标注的按不能）。会话开始时，平台经 bridge 的系统提示追加告诉 CLI 能用哪几个技能，知识集目录也是这样交给 CLI 的。</li>
+  <li><b>为什么不分两个浏览器：</b>给 computer use 单开一个干净的浏览器，也能避开 3.3 的限制，但登录要各登一份、内存翻倍，模型选错浏览器就白屏。根治的办法是以后把快照换成修补连接。</li>
+</ul>
+<p>算例：以后换成修补连接时，同一个浏览器里交替用两种方式（已在大阪 VPS 的 zhipin 登录页上验证）：</p>
+<table>
+  <tr><th>步骤</th><th>结果</th></tr>
+  <tr><td>① 快照（修补连接）</td><td>拍到 2392 字的清单，手机号输入框是 <code>e37</code></td></tr>
+  <tr><td>② 按编号填手机号</td><td>填进去了，页面正常</td></tr>
+  <tr><td>③ computer use：剪贴板粘贴中文到验证码框（修补连接一直连着）</td><td>「中文粘贴」进去了</td></tr>
+  <tr><td>④ computer use：全选、复制</td><td>拿到 248 字整页文本</td></tr>
+  <tr><td>⑤ 20 秒后再看</td><td class="yes">页面完好，没有跳成空白</td></tr>
+</table>
+<div class="callout warn">两种方式都只解决「被认出是程序在遥控」。网站还可能看 IP、看操作节奏，或者出图形验证码。这些不在模型这边硬闯，遇到了就请人接管。</div>
+
+<!-- ====================================================================== -->
+<h2 id="s4">4. 人接管：画面经连接器到网页</h2>
+<h3>4.1 一次接管从头到尾</h3>
+<p>接管的登记、卡片、等待、交还，和沙箱浏览器是同一套：它是「等人决定的事」的一种，不设超时。本机这边多出来的只有两件事：「打开」和「交还」时，平台要经设备网关请连接器开、关接管窗口；画面走控制连接里的画面流。</p>
+
+<div class="fig">
+<svg viewBox="0 0 1080 560" width="100%" role="img" aria-label="接管时序">
+  <rect x="30" y="14" width="120" height="34" rx="6" class="c2"/><text x="90" y="36" text-anchor="middle" class="b">人（网页）</text>
+  <rect x="210" y="14" width="140" height="34" rx="6" class="c1"/><text x="280" y="36" text-anchor="middle" class="b">Atlas server</text>
+  <rect x="410" y="14" width="120" height="34" rx="6" class="c4"/><text x="470" y="36" text-anchor="middle" class="b">设备网关</text>
+  <rect x="590" y="14" width="120" height="34" rx="6" class="c3"/><text x="650" y="36" text-anchor="middle" class="b">连接器</text>
+  <rect x="770" y="14" width="130" height="34" rx="6" class="c1"/><text x="835" y="36" text-anchor="middle" class="b">bridge + CLI</text>
+  <rect x="940" y="14" width="120" height="34" rx="6" class="c4"/><text x="1000" y="36" text-anchor="middle" class="b">浏览器组件</text>
+  <path d="M90,48 V550" class="life"/><path d="M280,48 V550" class="life"/><path d="M470,48 V550" class="life"/>
+  <path d="M650,48 V550" class="life"/><path d="M835,48 V550" class="life"/><path d="M1000,48 V550" class="life"/>
+
+  <path d="M835,80 H280" class="ln" marker-end="url(#ar)"/>
+  <text x="557" y="74" text-anchor="middle">① CLI 调 request_takeover：一句话 + 地址（经会话流）</text>
+  <path d="M280,118 H90" class="ln" marker-end="url(#ar)"/>
+  <text x="185" y="112" text-anchor="middle">② 登记接管，出现卡片</text>
+  <text x="900" y="112" text-anchor="middle" class="s">CLI 停在这次调用里等，不设超时</text>
+  <path d="M90,156 H280" class="ln" marker-end="url(#ar)"/>
+  <text x="185" y="150" text-anchor="middle">③ 点「打开」</text>
+  <path d="M280,194 H470" class="ln" marker-end="url(#ar)"/>
+  <path d="M470,194 H650" class="ln" marker-end="url(#ar)"/>
+  <text x="465" y="188" text-anchor="middle">④ 核对是本人、电脑在线；请连接器在对话那一块开接管窗口</text>
+  <path d="M650,232 H1000" class="ln" marker-end="url(#ar)"/>
+  <text x="825" y="226" text-anchor="middle">⑤ 按本机策略核对；浏览器没在跑就拉起；开窗口打开地址</text>
+  <path d="M90,270 H1000" class="ln dash" marker-start="url(#ar)" marker-end="url(#ar)"/>
+  <text x="545" y="264" text-anchor="middle">⑥ 画面流接通：网页 ↔ server ↔ 设备网关 ↔ 连接器 ↔ 这一块的画面服务（4.2）</text>
+  <text x="545" y="300" text-anchor="middle">⑦ 人在画面里扫码、输账号密码、过滑块（键盘直达浏览器窗口，不经过模型）</text>
+  <path d="M90,334 H280" class="ln" marker-end="url(#ar)"/>
+  <text x="185" y="328" text-anchor="middle">⑧ 点「交还」，可附一句话</text>
+  <path d="M280,372 H470" class="ln" marker-end="url(#ar)"/>
+  <path d="M470,372 H650" class="ln" marker-end="url(#ar)"/>
+  <path d="M650,372 H1000" class="ln" marker-end="url(#ar)"/>
+  <text x="640" y="366" text-anchor="middle">⑨ 请连接器关接管窗口；画面流关闭（登录态留在电脑上，不比较、不上传）</text>
+  <path d="M280,410 H835" class="ln" marker-end="url(#ar)"/>
+  <text x="557" y="404" text-anchor="middle">⑩ 记下决定；工具结果「用户已交还，先重新拍快照」+ 人写的话</text>
+  <path d="M835,448 H1000" class="ln" marker-end="url(#ar)"/>
+  <text x="917" y="442" text-anchor="middle">⑪ 重新拍快照，接着做</text>
+  <text x="545" y="500" text-anchor="middle" class="s">人点「不处理」：⑨ 照样关窗口，结果是「用户没有接管」和原因，模型不该为同一件事再请求</text>
+  <text x="545" y="522" text-anchor="middle" class="s">等的时候电脑离线：卡片提示「电脑不在线」，打不开；电脑重新连上后可以再打开，这一轮一直等</text>
+</svg>
+</div>
+<p class="cap">图 5　本机接管（实线：请求；虚线：双向的画面流）。②、③、⑧、⑩ 和沙箱浏览器一样，④、⑤、⑨ 是本机多出来的</p>
+
+<ul>
+  <li><b>① CLI 怎么请求接管。</b>bridge 给 CLI 提供一个平台工具 <code>request_takeover</code>，参数只有给人看的一句话和要打开的地址，会话和对话由 bridge 带上。沙箱里的 CLI 智能体也走这一条，它现在缺的正是这条通道。用工具而不用 Shell 命令，是因为 Shell 命令有执行时限（Claude Code 的 Shell 最长 10 分钟），接管却不设期限。</li>
+  <li><b>② CLI 怎么等。</b>和 CLI 的权限请求一样，在线等：这一轮仍在跑，标为等人处理，bridge 和 CLI 一直在电脑上。等的时候连接断了，按本机 CLI 方案的断线恢复办：重连后会话流接回，接管还在等。连接器或电脑重启了，bridge 不在了，这一轮以失败结束，接管随之作废。</li>
+  <li><b>④ 平台核对什么。</b>请求者、会话创建者、设备主人必须是同一个人，和看本机文件是同一个核对。电脑不在线就直接告诉人「你的电脑不在线」，不显示「系统忙」。</li>
+  <li><b>⑤ 连接器核对什么。</b>本机策略允许远程查看浏览器画面；这个会话确实在这台电脑上。核对不过就拒绝，原因原样显示在卡片上。</li>
+  <li><b>⑨ 交还时不存登录态。</b>沙箱那边交还时要比较接管前后的 cookie，把这次登录的站点加密存到平台。电脑上的浏览器不会被回收，登录就留在它的 profile 里，这一步省掉（5 节）。</li>
+</ul>
+
+<h3>4.2 画面怎么从电脑到网页</h3>
+<p>网页是 HTTPS 页面，电脑在防火墙后面，网页既连不到、也不该直接连电脑。所以看画面的客户端（noVNC）随网页一起发布，画面数据由平台一段段转过去：网页 → server → 设备网关 → 连接器 → 电脑上这一块的画面服务。每一段只转发，不解析，不保存。</p>
+
+<div class="fig">
+<svg viewBox="0 0 1080 270" width="100%" role="img" aria-label="画面链路">
+  <rect x="10" y="40" width="130" height="120" rx="6" class="c2"/>
+  <text x="75" y="64" text-anchor="middle" class="b">网页</text>
+  <text x="75" y="88" text-anchor="middle" class="s">noVNC 客户端</text>
+  <text x="75" y="106" text-anchor="middle" class="s">（随网页发布）</text>
+  <text x="75" y="130" text-anchor="middle" class="s">默认只看；</text>
+  <text x="75" y="146" text-anchor="middle" class="s">接管时可操作</text>
+  <rect x="165" y="40" width="130" height="120" rx="6" class="inner"/>
+  <text x="230" y="64" text-anchor="middle" class="b">网关</text>
+  <text x="230" y="88" text-anchor="middle" class="s">校验登录</text>
+  <text x="230" y="106" text-anchor="middle" class="s">放行 WebSocket</text>
+  <rect x="320" y="40" width="150" height="120" rx="6" class="c1"/>
+  <text x="395" y="64" text-anchor="middle" class="b">Atlas server</text>
+  <text x="395" y="88" text-anchor="middle" class="s">核对：是本人</text>
+  <text x="395" y="106" text-anchor="middle" class="s">会话在哪台电脑</text>
+  <text x="395" y="124" text-anchor="middle" class="s">按宿主选路：沙箱</text>
+  <text x="395" y="142" text-anchor="middle" class="s">还是设备网关</text>
+  <rect x="495" y="40" width="150" height="120" rx="6" class="c4"/>
+  <text x="570" y="64" text-anchor="middle" class="b">设备网关</text>
+  <text x="570" y="88" text-anchor="middle" class="s">查在线表</text>
+  <text x="570" y="106" text-anchor="middle" class="s">在这台设备的</text>
+  <text x="570" y="124" text-anchor="middle" class="s">控制连接里</text>
+  <text x="570" y="142" text-anchor="middle" class="s">开一路画面流</text>
+  <rect x="670" y="40" width="150" height="120" rx="6" class="c3"/>
+  <text x="745" y="64" text-anchor="middle" class="b">连接器</text>
+  <text x="745" y="88" text-anchor="middle" class="s">本机策略允许</text>
+  <text x="745" y="106" text-anchor="middle" class="s">问守护：这个对话</text>
+  <text x="745" y="124" text-anchor="middle" class="s">在第几块</text>
+  <text x="745" y="142" text-anchor="middle" class="s">只接本机画面服务</text>
+  <rect x="845" y="40" width="100" height="120" rx="6" class="c2"/>
+  <text x="895" y="64" text-anchor="middle" class="b">画面服务</text>
+  <text x="895" y="88" text-anchor="middle" class="s">第 N 块</text>
+  <text x="895" y="106" text-anchor="middle" class="s">127.0.0.1</text>
+  <rect x="965" y="40" width="105" height="120" rx="6" class="c4"/>
+  <text x="1017" y="64" text-anchor="middle" class="b">虚拟屏幕</text>
+  <text x="1017" y="88" text-anchor="middle" class="s">这一块里的</text>
+  <text x="1017" y="106" text-anchor="middle" class="s">Chrome 窗口</text>
+  <path d="M140,100 H165" class="ln" marker-start="url(#ar)" marker-end="url(#ar)"/>
+  <path d="M295,100 H320" class="ln" marker-start="url(#ar)" marker-end="url(#ar)"/>
+  <path d="M470,100 H495" class="ln" marker-start="url(#ar)" marker-end="url(#ar)"/>
+  <path d="M645,100 H670" class="ln" marker-start="url(#ar)" marker-end="url(#ar)"/>
+  <path d="M820,100 H845" class="ln" marker-start="url(#ar)" marker-end="url(#ar)"/>
+  <path d="M945,100 H965" class="ln" marker-start="url(#ar)" marker-end="url(#ar)"/>
+  <text x="152" y="190" text-anchor="middle" class="s">同源 HTTPS</text>
+  <text x="395" y="190" text-anchor="middle" class="s">集群内</text>
+  <text x="657" y="190" text-anchor="middle" class="s">控制连接（HTTPS，电脑连出）</text>
+  <text x="955" y="190" text-anchor="middle" class="s">只在电脑本机</text>
+  <path d="M60,220 H1020" class="ln" marker-start="url(#ar)" marker-end="url(#ar)"/>
+  <text x="540" y="244" text-anchor="middle">画面往左、键盘鼠标和剪贴板往右；每一段原样转发，不解析、不记录</text>
+</svg>
+</div>
+<p class="cap">图 6　画面链路：网页和沙箱浏览器完全一样，server 按浏览器在哪选路</p>
+
+<ul>
+  <li><b>网页这一头不变。</b>接管卡片里的画面、对话头的「浏览器」按钮、新标签打开、全屏、复制粘贴（含中文），都和沙箱浏览器是同一个页面、同一个地址。server 按会话的浏览器在哪决定往哪转：沙箱走沙箱的画面通道，本机走设备网关。</li>
+  <li><b>连接器只接本机浏览器的画面服务。</b>画面流打开时只带「哪个会话」，不带端口和地址。连接器自己问守护这个对话在第几块，再接那一块的画面服务。平台借画面流连不到电脑上的其他程序。</li>
+  <li><b>连着画面算浏览器在用。</b>人登录可能要好几分钟，这期间没有命令在跑；不算在用的话，连接器会把浏览器当闲置关掉。</li>
+</ul>
+
+<h3>4.3 一条连接里多一路画面流</h3>
+<p>本机 CLI 方案里，一台电脑只有一条控制连接，里面分出会话流、文件流。画面流是第三种，按下面的先后顺序排队发送：</p>
+
+<div class="fig">
+<svg viewBox="0 0 1080 250" width="100%" role="img" aria-label="控制连接里的各路">
+  <rect x="10" y="40" width="160" height="170" rx="6" class="c4"/>
+  <text x="90" y="64" text-anchor="middle" class="b">设备网关</text>
+  <text x="90" y="92" text-anchor="middle" class="s">按通道分流</text>
+  <rect x="910" y="40" width="160" height="170" rx="6" class="c3"/>
+  <text x="990" y="64" text-anchor="middle" class="b">连接器</text>
+  <text x="990" y="92" text-anchor="middle" class="s">按通道分发</text>
+  <rect x="190" y="30" width="700" height="190" rx="10" class="inner"/>
+  <text x="540" y="22" text-anchor="middle" class="s">一条控制连接（HTTPS 上的长连接，一台电脑一条）</text>
+  <rect x="210" y="45" width="660" height="32" rx="5" class="c5"/>
+  <text x="540" y="66" text-anchor="middle">① 控制帧：心跳、开关通道、开关接管窗口 —— 最先发</text>
+  <rect x="210" y="87" width="660" height="32" rx="5" class="c1"/>
+  <text x="540" y="108" text-anchor="middle">② 会话流 A、B：对话过程、审批 —— 其次</text>
+  <rect x="210" y="129" width="660" height="32" rx="5" class="c2"/>
+  <text x="540" y="150" text-anchor="middle">③ 画面流（新）：有人看画面时才有 —— 再次</text>
+  <rect x="210" y="171" width="660" height="32" rx="5" class="c4"/>
+  <text x="540" y="192" text-anchor="middle">④ 文件流：看本机文件 —— 最后，分小块穿插</text>
+  <path d="M170,125 H190" class="ln" marker-start="url(#ar)" marker-end="url(#ar)"/>
+  <path d="M890,125 H910" class="ln" marker-start="url(#ar)" marker-end="url(#ar)"/>
+</svg>
+</div>
+<p class="cap">图 7　画面流排在会话流之后、文件流之前；每一路有自己的窗口，堵住只关它自己</p>
+
+<ul>
+  <li><b>为什么排在会话流后面：</b>画面数据比对话消息大得多（下面的算例），排在前面会让对话的过程显示变慢。</li>
+  <li><b>为什么排在文件流前面：</b>人在打字、点按钮，等不得；看文件慢一点没关系。</li>
+  <li><b>互不拖累：</b>和已有的几路一样，每一路有自己的缓冲窗口。画面这一路长时间堵住（比如网页那头网速太慢），只关这一路。网页上提示「画面断了」，人点一下就重连，对话和接管都不受影响。</li>
+</ul>
+
+<h3>算例：画面有多大、多快</h3>
+<table>
+  <tr><th>项</th><th>估算</th><th>怎么算的</th></tr>
+  <tr><td>一整块屏幕的原始大小</td><td>约 8 MB</td><td>1920 × 1080 个像素，每个像素 4 字节</td></tr>
+  <tr><td>打开一个登录页（整块都变）</td><td>约 100–300 KB</td><td>画面服务只传变了的区域，还会压缩。网页大多是大片纯色和文字，压缩比高</td></tr>
+  <tr><td>输入一个字符</td><td>几 KB</td><td>只有输入框和光标那一小块变</td></tr>
+  <tr><td>一次登录（开页面、扫码或输账号密码、跳转两三次）</td><td>约 1–5 MB</td><td>几次整页变化，加几十次小块变化</td></tr>
+  <tr><td>按一个键到看见字</td><td>约 0.1–0.3 秒</td><td>人在国内、电脑也在国内时绕道日本服务器：网页 → 日本约 50 ms，日本 → 电脑约 50 ms，画面再原路回来。电脑就在大阪机房时，日本到电脑这一段几乎为零</td></tr>
+</table>
+<p>对比一下，一轮对话的过程消息通常是几十到几百 KB，一次登录的画面要大一个数量级，但只在登录那几分钟里有。延迟方面，0.1–0.3 秒对打字、扫码、点按钮够用，拖滑块会觉得有点跟手慢，还能用。</p>
+
+<!-- ====================================================================== -->
+<h2 id="s5">5. 登录态留在电脑上</h2>
+<div class="fig">
+<svg viewBox="0 0 1080 230" width="100%" role="img" aria-label="登录态对照">
+  <rect x="10" y="10" width="520" height="210" rx="8" class="inner"/>
+  <text x="26" y="34" class="b">沙箱浏览器（不变）</text>
+  <rect x="30" y="50" width="140" height="60" rx="6" class="c1"/>
+  <text x="100" y="76" text-anchor="middle" class="b">交还时</text>
+  <text x="100" y="96" text-anchor="middle" class="s">比较前后 cookie</text>
+  <rect x="200" y="50" width="140" height="60" rx="6" class="c4"/>
+  <text x="270" y="76" text-anchor="middle" class="b">加密存进平台</text>
+  <text x="270" y="96" text-anchor="middle" class="s">按人、按站点</text>
+  <rect x="370" y="50" width="140" height="60" rx="6" class="c1"/>
+  <text x="440" y="76" text-anchor="middle" class="b">新沙箱导入</text>
+  <text x="440" y="96" text-anchor="middle" class="s">沙箱会被回收</text>
+  <path d="M170,80 H200" class="ln" marker-end="url(#ar)"/>
+  <path d="M340,80 H370" class="ln" marker-end="url(#ar)"/>
+  <text x="270" y="150" text-anchor="middle" class="s">在「我的登录」里看、删</text>
+  <text x="270" y="172" text-anchor="middle" class="s">原生和 CLI 两个沙箱共用这一份</text>
+
+  <rect x="550" y="10" width="520" height="210" rx="8" class="inner"/>
+  <text x="566" y="34" class="b">本机浏览器（新）</text>
+  <rect x="570" y="50" width="140" height="60" rx="6" class="c1"/>
+  <text x="640" y="76" text-anchor="middle" class="b">人在画面里登录</text>
+  <text x="640" y="96" text-anchor="middle" class="s">交还</text>
+  <rect x="740" y="50" width="140" height="60" rx="6" class="c3"/>
+  <text x="810" y="76" text-anchor="middle" class="b">写进 profile</text>
+  <text x="810" y="96" text-anchor="middle" class="s">在电脑主人目录下</text>
+  <rect x="910" y="50" width="140" height="60" rx="6" class="c3"/>
+  <text x="980" y="76" text-anchor="middle" class="b">一直留着</text>
+  <text x="980" y="96" text-anchor="middle" class="s">浏览器关了再开还在</text>
+  <path d="M710,80 H740" class="ln" marker-end="url(#ar)"/>
+  <path d="M880,80 H910" class="ln" marker-end="url(#ar)"/>
+  <text x="810" y="150" text-anchor="middle" class="s">不比较、不上传、不进「我的登录」</text>
+  <text x="810" y="172" text-anchor="middle" class="s">要清除：在电脑上用连接器的命令清掉</text>
+</svg>
+</div>
+<p class="cap">图 8　两边的登录态各管各的：沙箱的由平台保管，本机的留在电脑上</p>
+<ul>
+  <li><b>不需要平台保管。</b>沙箱会被回收，所以登录态要存到平台，下次导进新沙箱。电脑上的 profile 不会被回收，登录本来就一直在。</li>
+  <li><b>不上传更好。</b>电脑是使用者自己的，登录留在自己电脑上，平台少保管一份个人数据。很多网站会把登录和设备环境、IP 绑在一起，把电脑上的登录搬进机房的沙箱，或者反过来，反而容易触发风控（zhipin 这类网站尤其如此）。</li>
+  <li><b>代价：</b>在沙箱浏览器里登录过的网站，到电脑上还要再登录一次，反过来也一样。「我的登录」只管平台保管的那一份，页面上写清楚这一点。</li>
+</ul>
+
+<!-- ====================================================================== -->
+<h2 id="s6">6. 安全</h2>
+<p>本机 CLI 方案里，平台已经能让一台个人电脑执行命令。浏览器在这之上多给了两样东西：能看到电脑上的一块屏幕，能往里输入键鼠。下面说明这两样被限制在哪里。</p>
+<table>
+  <tr><th>问题</th><th>怎么限制</th></tr>
+  <tr><td>谁能看画面</td><td>只有本人：请求者、会话创建者、设备主人必须是同一个人，每次打开画面都核对。智能体共享给别人，别人用时浏览器跑在别人自己的电脑上</td></tr>
+  <tr><td>能看到什么</td><td>只有浏览器所在的那块虚拟屏幕，而且只看本对话那一块。电脑的真实桌面、其他程序的窗口都不在这块屏幕上</td></tr>
+  <tr><td>平台能不能借画面流连别的东西</td><td>不能。画面流只带会话，不带地址和端口，连接器只接到本机浏览器组件的画面服务</td></tr>
+  <tr><td>电脑主人能不能拒绝</td><td>能。本机策略里关掉「远程查看浏览器画面」后，接管和看画面都打不开，卡片上写明原因；不装浏览器组件就根本没有浏览器</td></tr>
+  <tr><td>电脑上有没有对外开的口子</td><td>没有。虚拟屏幕、调试接口、画面服务都只听 127.0.0.1，电脑只往外连</td></tr>
+  <tr><td>画面会不会留下来</td><td>不会。每一段都原样转发，不落盘、不进日志</td></tr>
+  <tr><td>密码会不会被模型看到</td><td>人输的密码、短信码只经画面进浏览器窗口，不进模型的上下文。不过 CLI 和浏览器以同一个电脑用户运行，CLI 读得到 profile 里的 cookie。这和沙箱浏览器是同一个取舍，在使用者自己的电脑上本来就是如此</td></tr>
+</table>
+
+<!-- ====================================================================== -->
+<h2 id="s7">7. 设计决策</h2>
+<table>
+  <tr><th>决策</th><th>理由</th></tr>
+  <tr><td>浏览器画在电脑上的虚拟屏幕里，不用电脑主人日常的 Chrome</td><td>不打扰电脑主人，不碰他的书签、密码、已有登录；远程看画面只需共享这一块，不共享真实桌面。代价是和日常浏览器的登录不通，要在这里另登一次</td></tr>
+  <tr><td>画面经连接器已有的控制连接，不开端口、不直连</td><td>电脑在路由器、防火墙后面，连不进去；复用已有的在线表和本人核对，不多一套鉴权。代价是画面要绕道平台，多几十到上百毫秒</td></tr>
+  <tr><td>电脑上用和沙箱同一套浏览器组件</td><td>分块、窗口、弹窗、复制粘贴这些坑在沙箱上已经踩过，沿用不用重来；网页上看画面、接管的页面也就完全一样。只多出拉起方式和画面出口两处不同</td></tr>
+  <tr><td>加 computer use 作为第二种操作方式，和快照各配一个技能、按需选</td><td>computer use 完全不经过调试接口，检测型网站认不出（3.4 实测）；画布、滑块、拖动也能做。快照点得准、省 token、纯文本模型也能用，普通网页仍以它为主</td></tr>
+  <tr><td>快照暂不换底层</td><td>先用改动小的 computer use 覆盖检测型网站。代价是同一个浏览器里用过快照，检测型网站就会被认出，要等浏览器重新拉起（3.3）；根治办法（换修补连接）已验证可行，留到以后</td></tr>
+  <tr><td>守护开窗口改用只管窗口的调试命令</td><td>临时连一下官方 Playwright 也会给所有页面打开 Runtime，computer use 就不干净了</td></tr>
+  <tr><td>文字输入走剪贴板粘贴，读文字走全选复制</td><td>逐个按键模拟输不了中文；全选复制拿到的是整页纯文本，比看截图认字准，也不经过调试接口</td></tr>
+  <tr><td>CLI 用平台工具请求接管，不用 Shell 命令</td><td>Shell 命令有执行时限，接管却不设期限；工具调用可以一直在线等，和权限请求一样。这一条通道沙箱 CLI 智能体也用，补上它的接管</td></tr>
+  <tr><td>浏览器由连接器拉起，闲置关停</td><td>平台只能请连接器做几件固定的事，不能在电脑上跑任意程序；Chrome 吃内存，闲置就还给电脑，profile 留着所以登录不丢</td></tr>
+  <tr><td>登录态留在电脑上，不上传、不和沙箱互通</td><td>profile 不会被回收，不需要平台保管；少一份个人数据出电脑；登录常和设备环境、IP 绑定，搬来搬去反而触发风控</td></tr>
+  <tr><td>画面流排在会话流之后、文件流之前</td><td>画面数据大，不能挤占对话；人在操作，又比看文件急</td></tr>
+  <tr><td>首版只支持 Linux（含 WSL）</td><td>虚拟屏幕用 Xvfb，Linux 上现成；macOS 没有，以后可以在 macOS 上用容器跑同一套组件，平台这边不用改</td></tr>
+</table>
+
+<!-- ====================================================================== -->
+<h2 id="s8">8. 改到的现有部分</h2>
+<table>
+  <tr><th>部分</th><th>改什么</th></tr>
+  <tr><td>智能体配置</td><td>本机 CLI 智能体也能开「浏览器」（现在保存时拒绝）；开了不换镜像</td></tr>
+  <tr><td>连接器</td><td>上线时报告浏览器组件装没装、什么版本；拉起、闲置关停浏览器守护；按平台请求开、关接管窗口；把画面流接到本机这一块的画面服务；本机策略加「远程查看浏览器画面」开关和闲置时长；一条安装浏览器组件（含浏览器技能）的命令</td></tr>
+  <tr><td>设备网关、设备连接</td><td>控制连接里多一种通道「画面流」，优先级在会话流之后、文件流之前；转发开、关接管窗口的请求</td></tr>
+  <tr><td>Atlas server · 浏览器</td><td>浏览器宿主多一种「设备」：接管的打开、交还经设备网关请连接器；交还时不存登录态；看画面按宿主选路（沙箱走沙箱画面通道，设备走设备网关）</td></tr>
+  <tr><td>bridge、CLI 运行时</td><td>bridge 给 CLI 提供平台工具 <code>request_takeover</code>，在线等决定（沙箱 CLI 智能体同用）；拉起 CLI 时带上会话名和对话 id</td></tr>
+  <tr><td>浏览器守护、<code>browser</code> 命令</td><td>加 computer use 的子命令：截本对话那一块、按坐标点击拖动滚动、粘贴输入、按键、全选复制、键盘打开网址；键鼠动作本机排队；开会话窗口、接管窗口改用只管窗口的调试命令；快照仍是 Playwright CLI；技能拆成快照、computer use 两个。沙箱的浏览器镜像加上键鼠工具后同样能用</td></tr>
+  <tr><td>模型平台</td><td>登记模型时标注能不能看图，平台据此决定给不给 computer use 技能</td></tr>
+  <tr><td>网页</td><td>接管卡片、画面页不变；补上电脑不在线、本机不允许查看画面时的提示；「我的设备」显示浏览器组件的状态；「我的登录」注明只含平台保管的登录态</td></tr>
+</table>
+
+<!-- ====================================================================== -->
+<h2 id="s9">9. 使用流程</h2>
+<ol>
+  <li><b>电脑主人装浏览器组件。</b>在电脑上用连接器的一条命令装好，连接器重连后，「我的设备」里这台电脑显示「浏览器：已安装」。</li>
+  <li><b>给智能体开浏览器。</b>在智能体编辑页，给「本机 Claude Code」打开「浏览器」。</li>
+  <li><b>对话。</b>比如「打开 BOSS 直聘，搜北京的 Python 职位，整理前 10 条」。Claude Code 执行 <code>browser</code> 命令打开网页、拍快照、读内容。对话头的「浏览器」按钮可以随时看画面，只看不操作。</li>
+  <li><b>需要登录。</b>智能体发现要登录，请求接管，对话里出现卡片。人点「打开」，在新标签里全屏，用手机 App 扫码或输入账号和验证码，然后点「交还」。</li>
+  <li><b>接着做。</b>智能体重新拍快照，以登录后的页面继续。</li>
+  <li><b>以后再用。</b>电脑上的浏览器仍是登录状态，除非网站自己让登录过期，不用再接管。</li>
+</ol>
+
+</main>
+</body>
+</html>

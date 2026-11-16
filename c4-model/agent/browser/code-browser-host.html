@@ -196,7 +196,7 @@
       "kind": "interface",
       "name": "BrowserHost",
       "stereotype": "扩展点",
-      "responsibility": "浏览器跑在哪里的扩展点，每种运行时一个实现。以后用用户自己电脑上的 Chrome（本机 CLI 智能体）就是再加一个实现；那时没有画面和接管，人就在电脑前。",
+      "responsibility": "浏览器跑在哪里的扩展点，每种运行时一个实现。本机 CLI 智能体是第三个实现 DeviceBrowserHost：浏览器在使用者的电脑上，确保、开关接管窗口、画面都经设备网关请连接器做，登录态留在电脑上（code-browser-device.html）。",
       "at": [
         1.4,
         2.75

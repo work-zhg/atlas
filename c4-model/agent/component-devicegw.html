@@ -125,7 +125,7 @@
       "kind": "component",
       "name": "设备连接",
       "technology": "websockets 服务端（公网）",
-      "description": "接住连接器的控制连接：建连时向 Agent 服务核对设备令牌，心跳，写在线表；在一条连接上多路复用会话流和文件流，会话流优先。",
+      "description": "接住连接器的控制连接：建连时向 Agent 服务核对设备令牌，心跳，写在线表；在一条连接上多路复用会话流、画面流和文件流，会话流优先、画面流其次。",
       "at": [
         0.5,
         2.7
@@ -147,7 +147,7 @@
     {
       "from": "connector",
       "to": "link",
-      "description": "控制连接：会话流、文件流（由电脑连出）",
+      "description": "控制连接：会话流、文件流、画面流（由电脑连出）",
       "technology": "WebSocket / HTTPS"
     },
     {
@@ -173,13 +173,13 @@
     {
       "from": "server",
       "to": "relay",
-      "description": "接上本机会话；读本机文件",
+      "description": "接上本机会话、读文件、开画面流",
       "technology": "atlas.host.v1 / WebSocket、JSON/HTTP"
     },
     {
       "from": "relay",
       "to": "link",
-      "description": "开会话流、文件流，双向转发"
+      "description": "开会话流、文件流、画面流，双向转发"
     },
     {
       "from": "relay",

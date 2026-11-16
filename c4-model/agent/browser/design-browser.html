@@ -64,7 +64,7 @@
 
   <h1>沙箱浏览器设计：智能体操作网页，人接管登录</h1>
   <p class="lead">一句话：<b>开了浏览器能力的智能体，在自己的沙箱里用一个常驻的 Chromium 浏览网页；遇到要输密码、短信码的地方就停下，请人在对话里的实时画面中自己登录，登录完交还；人登录过的网站，登录态由平台加密保管，下次换了沙箱也不用再登录。</b>打个比方：像请一位助理用你的电脑办事——平时他自己点；到了要输密码的时候，他把键盘递给你，你输完还给他；你登录过的网站，他下次直接就能用，但他从来没见过你的密码。</p>
-  <p>这份设计回答四个问题：模型怎么操作网页；浏览器跑在哪、怎么起来；遇到登录怎么交给人、人怎么看到画面；登录态存在哪、什么时候存、什么时候恢复。原生智能体和 CLI 智能体（Claude Code 等）都适用。以后可能做的「占位符代填」「用自己电脑上的 Chrome」「看截图点坐标」只留了扩展点，不在这里展开。</p>
+  <p>这份设计回答四个问题：模型怎么操作网页；浏览器跑在哪、怎么起来；遇到登录怎么交给人、人怎么看到画面；登录态存在哪、什么时候存、什么时候恢复。原生智能体和 CLI 智能体（Claude Code 等）都适用。以后可能做的「占位符代填」只留了扩展点，不在这里展开。本机 CLI 智能体用自己电脑上的浏览器、看截图点坐标（computer use），见<a href="design-browser-device.html" target="_blank" rel="noopener">本机浏览器设计</a>。</p>
 
   <h2>先认识几个词</h2>
   <table>
@@ -535,7 +535,7 @@
   </table>
 
   <h2>图索引</h2>
-  <p>原理在上面，各图里是具体的交互、类和数据。链接在新标签页打开。</p>
+  <p>原理在上面，各图里是具体的交互、类和数据。链接在新标签页打开。本机 CLI 智能体的浏览器（设备宿主、画面流、computer use）的图在<a href="design-browser-device.html" target="_blank" rel="noopener">本机浏览器设计</a>里。</p>
   <h3>容器图、组件图</h3>
   <table>
     <thead><tr><th style="width: 28%">图</th><th>看什么</th></tr></thead>
@@ -561,7 +561,7 @@
     <thead><tr><th style="width: 28%">图</th><th>看什么</th></tr></thead>
     <tbody>
       <tr><td><a href="code-browser.html" target="_blank" rel="noopener">浏览器 · 领域总览</a></td><td>四个领域和依赖方向：接管 → 宿主、登录态；画面 → 宿主；宿主 → 登录态；沙箱只经附加件扩展点回调。</td></tr>
-      <tr><td><a href="code-browser-host.html" target="_blank" rel="noopener">浏览器 · 宿主</a></td><td>BrowserPlan（镜像、技能）、BrowserHost 扩展点（原生、CLI，以后的本机 Chrome）、附加件拉起与 checkpoint、给守护发命令、画面口令；browser_host 表。</td></tr>
+      <tr><td><a href="code-browser-host.html" target="_blank" rel="noopener">浏览器 · 宿主</a></td><td>BrowserPlan（镜像、技能）、BrowserHost 扩展点（原生、CLI、设备）、附加件拉起与 checkpoint、给守护发命令、画面口令；browser_host 表。</td></tr>
       <tr><td><a href="code-browser-takeover.html" target="_blank" rel="noopener">浏览器 · 接管</a></td><td>TakeoverDesk（CLI 在线等、打开、交还、不处理）、交还时存登录态、给模型的结果文字；和审批、引擎中间件的关系。</td></tr>
       <tr><td><a href="code-browser-view.html" target="_blank" rel="noopener">浏览器 · 画面</a></td><td>核对主人、原样转发、保活、关闭原因；画面通道由沙箱组件提供。</td></tr>
       <tr><td><a href="code-browser-login.html" target="_blank" rel="noopener">浏览器 · 登录态</a></td><td>按站点拆分合并、加密（附加数据绑人和站点）、只用更新的覆盖；browser_login 表。</td></tr>

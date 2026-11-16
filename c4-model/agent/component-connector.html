@@ -21,7 +21,7 @@
 <script type="application/json" id="c4-model">
 {
   "title": "组件图：Agent 平台 - 连接器",
-  "description": "目标模型。连接器是装在用户电脑上的守护进程（新增的 container），平台和这台电脑之间的一切都经过它。整体设计见 device/design-device-cli.html，各组件内部见 connector/ 下的代码图",
+  "description": "目标模型。连接器是装在用户电脑上的守护进程（新增的 container），平台和这台电脑之间的一切都经过它。整体设计见 device/design-device-cli.html，各组件内部见 connector/ 下的代码图；本机浏览器见 browser/design-browser-device.html",
   "system": "Agent 平台",
   "container": "连接器",
   "elements": [
@@ -88,7 +88,7 @@
       "kind": "component",
       "name": "控制连接",
       "technology": "websockets 客户端",
-      "description": "带设备令牌连上设备网关并保持，断了退避重连；连上时报告系统、版本、装了哪些 CLI、允许的目录；按通道把会话流交给本机会话、文件流交给本机文件。",
+      "description": "带设备令牌连上设备网关并保持，断了退避重连；连上时报告系统、版本、装了哪些 CLI、允许的目录；按通道把会话流交给本机会话、文件流交给本机文件，画面流和开关接管窗口的请求交给本机浏览器。",
       "at": [
         0.0,
         2.5
@@ -115,6 +115,29 @@
         2.0,
         2.5
       ]
+    },
+    {
+      "id": "browser",
+      "kind": "component",
+      "name": "本机浏览器",
+      "technology": "asyncio 子进程管理",
+      "description": "按本机策略拉起、闲置关停浏览器守护；平台请求时在对话那一块开关接管窗口；把画面流接到本机这一块的画面服务；上线报告里带浏览器组件。",
+      "at": [
+        -0.65,
+        3.7
+      ]
+    },
+    {
+      "id": "localbrowser",
+      "kind": "container",
+      "shape": "server",
+      "name": "本机浏览器",
+      "technology": "用户电脑上的进程：守护 + Chrome + 虚拟屏幕 + 画面服务",
+      "description": "本机 CLI 智能体的浏览器，和沙箱浏览器镜像里是同一套进程；profile 长期留在电脑上。内部见 component-browser-device.html。",
+      "at": [
+        -1.0,
+        5.0
+      ]
     }
   ],
   "relationships": [
@@ -139,7 +162,7 @@
     {
       "from": "link",
       "to": "devicegw",
-      "description": "控制连接：会话流、文件流（由电脑连出）",
+      "description": "控制连接：会话流、文件流、画面流（由电脑连出）",
       "technology": "WebSocket / HTTPS"
     },
     {
@@ -176,6 +199,24 @@
       "to": "session",
       "description": "本机策略、写本机日志",
       "labelAt": 0.4
+    },
+    {
+      "from": "link",
+      "to": "browser",
+      "description": "画面流、开关接管窗口",
+      "labelAt": 0.55
+    },
+    {
+      "from": "browser",
+      "to": "localbrowser",
+      "description": "拉起、闲置关停；开关窗口；接画面",
+      "technology": "进程、本机套接字、WebSocket（127.0.0.1）"
+    },
+    {
+      "from": "browser",
+      "to": "session",
+      "description": "本机策略、写本机日志",
+      "labelAt": 0.5
     }
   ]
 }

@@ -30,7 +30,7 @@
 <script type="application/json" id="c4-model">
 {
   "title": "代码图：Agent 平台 - Agent 服务 - 浏览器 - 领域总览",
-  "description": "目标模型，只画期望的样子、不对照现状。Agent 服务里的「浏览器」组件分四个领域，每个只画对外入口和依赖倒置点，看依赖方向；领域内部见各自的 code-browser-*.html，沙箱里的守护见 code-browser-daemon.html，整体设计见 design-browser.html。",
+  "description": "目标模型，只画期望的样子、不对照现状。Agent 服务里的「浏览器」组件分四个领域，每个只画对外入口和依赖倒置点，看依赖方向；领域内部见各自的 code-browser-*.html，沙箱里的守护见 code-browser-daemon.html，整体设计见 design-browser.html；本机浏览器见 design-browser-device.html。",
   "component": "浏览器",
   "package": "浏览器（目标模型 · 领域总览）",
   "overview": "浏览器组件让开了浏览器能力的智能体在沙箱里用一个常驻的 Chromium 浏览网页，遇到登录交给人接管，并保管这个人的登录态。四个领域：宿主（浏览器在哪个沙箱里、怎么拉起、怎么给它发命令）、接管（等人在浏览器里操作完的事项）、画面（把沙箱里的屏幕转到控制台）、登录态（按人、按站点加密保管）。\n\n依赖只有一个方向：接管 → 宿主、登录态；画面 → 宿主；宿主 → 登录态。沙箱组件不认识浏览器：通用供给在沙箱建好后、退役前回调登记的附加件，宿主领域实现它。元素职责开头的【】写着它属于哪个领域。",
@@ -120,7 +120,7 @@
       "kind": "class",
       "name": "LiveView",
       "stereotype": "应用服务",
-      "responsibility": "【画面】核对是沙箱主人、浏览器在跑，打开画面通道原样转发，连着时保活。详见 code-browser-view.html。",
+      "responsibility": "【画面】核对是沙箱主人、浏览器在跑，按宿主打开画面通道（沙箱）或画面流（设备）原样转发，连着时保活。详见 code-browser-view.html。",
       "at": [
         2.0,
         0.85
@@ -171,7 +171,7 @@
       "kind": "interface",
       "name": "BrowserHost",
       "stereotype": "扩展点",
-      "responsibility": "【宿主】浏览器跑在哪里：原生智能体的沙箱、CLI 智能体的 Pod；以后加用户自己电脑上的 Chrome。",
+      "responsibility": "【宿主】浏览器跑在哪里：原生智能体的沙箱、CLI 智能体的 Pod、本机 CLI 智能体的电脑（经设备网关，见 code-browser-device.html）。",
       "at": [
         3.3,
         2.75

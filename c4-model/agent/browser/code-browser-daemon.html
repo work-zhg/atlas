@@ -33,7 +33,7 @@
   "description": "目标模型，只画期望的样子、不对照现状。浏览器镜像里的守护程序：拉起并看着虚拟屏幕、Chromium、画面服务，给平台导入导出登录态、开关接管窗口；模型用的 browser 命令也在这里。组件图见 ../component-browser-sandbox.html，整体设计见 design-browser.html。",
   "component": "浏览器守护",
   "package": "atlas_browserd（浏览器镜像里的 Python 程序，目标模型）",
-  "overview": "守护是浏览器镜像里的一个 Python 程序。Atlas 在沙箱建好后经 execd 把它拉起来：它起虚拟屏幕、Chromium、画面服务三个进程并看着，挂了就重启。profile 在沙箱本地盘上，Chromium 重启后登录还在。\n\n它给平台提供几条命令，都由 Atlas 经 execd 执行：从文件导入登录态、按站点把登录态导出到文件、清掉某个站点、开关接管窗口。这些都经 Chrome 的调试接口（CDP，只开在 127.0.0.1）操作同一个 Chromium。\n\n模型不直接用守护，用的是 browser 命令：它读这条命令的环境变量里的会话名，交给 Playwright CLI 去打开网页、拍快照、点击、填写；Playwright CLI 也经 CDP 连到同一个 Chromium，所以所有会话共用这个人的登录。\n\n它不保存登录态（只在本地盘上放一会儿，Atlas 取走就删），也不判断谁能看画面（Agent 服务转发画面前已经核对过）。",
+  "overview": "守护是浏览器镜像里的一个 Python 程序。Atlas 在沙箱建好后经 execd 把它拉起来：它起虚拟屏幕、Chromium、画面服务三个进程并看着，挂了就重启。profile 在沙箱本地盘上，Chromium 重启后登录还在。\n\n它给平台提供几条命令，都由 Atlas 经 execd 执行：从文件导入登录态、按站点把登录态导出到文件、清掉某个站点、开关接管窗口。这些都经 Chrome 的调试接口（CDP，只开在 127.0.0.1）操作同一个 Chromium。\n\n模型不直接用守护，用的是 browser 命令：它读这条命令的环境变量里的会话名，交给 Playwright CLI 去打开网页、拍快照、点击、填写；Playwright CLI 也经 CDP 连到同一个 Chromium，所以所有会话共用这个人的登录。\n\ncomputer use 也在 browser 命令里：截本对话那一块、按坐标用系统键鼠操作、经剪贴板粘贴和取文字，不经过调试接口；开会话窗口、接管窗口改用只管窗口的调试命令，见 code-browser-screen.html。\n\n它不保存登录态（只在本地盘上放一会儿，Atlas 取走就删），也不判断谁能看画面（Agent 服务转发画面前已经核对过）。",
   "elements": [
     {
       "id": "atlas",

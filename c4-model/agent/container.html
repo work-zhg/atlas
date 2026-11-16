@@ -220,7 +220,7 @@
       "shape": "server",
       "name": "设备网关",
       "technology": "Python / asyncio + websockets",
-      "description": "接住用户电脑上连接器的长连接：按会话转发 server 和本机 bridge 之间的消息、转发读本机文件的请求；替设备持有凭据，把 CLI 的模型、MCP、知识库请求换上真实凭据再转发。",
+      "description": "接住用户电脑上连接器的长连接：按会话转发 server 和本机 bridge 之间的消息、转发读本机文件的请求和浏览器画面；替设备持有凭据，把 CLI 的模型、MCP、知识库请求换上真实凭据再转发。",
       "at": [
         1.5,
         6.1
@@ -232,7 +232,7 @@
       "shape": "server",
       "name": "连接器",
       "technology": "Python 守护进程（用户电脑）",
-      "description": "装在用户电脑上：主动连到设备网关并保持一条连接；按会话拉起 bridge、把会话流接过去；按本机策略把关，只读地提供项目目录里的文件。",
+      "description": "装在用户电脑上：主动连到设备网关并保持一条连接；按会话拉起 bridge、把会话流接过去；按本机策略把关，只读地提供项目目录里的文件；开了浏览器时拉起本机浏览器，把画面流接过去。",
       "at": [
         0.2,
         6.1
@@ -271,6 +271,18 @@
       "at": [
         -1.8,
         4.6
+      ]
+    },
+    {
+      "id": "localbrowser",
+      "kind": "container",
+      "shape": "server",
+      "name": "本机浏览器",
+      "technology": "用户电脑上的进程：守护 + Chrome + 虚拟屏幕 + 画面服务",
+      "description": "本机 CLI 智能体的浏览器：由连接器拉起，profile 长期留在电脑上；快照经 Playwright CLI，computer use 经屏幕和系统键鼠。",
+      "at": [
+        -1.1,
+        7.3
       ]
     }
   ],
@@ -404,7 +416,7 @@
     {
       "from": "server",
       "to": "devicegw",
-      "description": "查设备在线、登记本轮能力、接上本机会话、读本机文件",
+      "description": "查设备在线、登记本轮能力、接上本机会话、读本机文件、开画面流和接管窗口",
       "technology": "JSON/HTTP、atlas.host.v1 / WebSocket",
       "labelAt": 0.62
     },
@@ -424,7 +436,7 @@
     {
       "from": "connector",
       "to": "devicegw",
-      "description": "保持控制连接：会话流、文件流（由电脑连出）",
+      "description": "保持控制连接：会话流、文件流、画面流（由电脑连出）",
       "technology": "WebSocket / HTTPS"
     },
     {
@@ -481,6 +493,24 @@
       "from": "acp",
       "to": "website",
       "description": "浏览网页（浏览器能力）",
+      "technology": "HTTPS"
+    },
+    {
+      "from": "connector",
+      "to": "localbrowser",
+      "description": "拉起、闲置关停；开关接管窗口；接画面",
+      "technology": "进程、本机套接字、WebSocket（127.0.0.1）"
+    },
+    {
+      "from": "localcli",
+      "to": "localbrowser",
+      "description": "执行 browser 命令（快照、computer use）",
+      "technology": "fork/exec、CDP"
+    },
+    {
+      "from": "localbrowser",
+      "to": "website",
+      "description": "浏览网页（电脑自己的网络）",
       "technology": "HTTPS"
     }
   ]
