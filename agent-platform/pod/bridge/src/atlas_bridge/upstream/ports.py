@@ -41,7 +41,14 @@ class UpstreamOutbox(Protocol):
     ) -> int: ...
 
     def put_request(self, method: str, build: Callable[[int], Model], *, request_id: int) -> int:
-        """bridge → server 的请求（permission.ask）。id 由调用方分配，补发时沿用（§7.3）。"""
+        """bridge → server 的请求（permission.ask、tool.call）。
+
+        id 由调用方分配，补发时沿用（§7.3）。答复到之前一直保留：重连后再发一次。
+        """
+        ...
+
+    def answered(self, request_id: int) -> None:
+        """这个请求有了结果，不用再补发了。"""
         ...
 
     async def wait_writable(self) -> None:

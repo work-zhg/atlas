@@ -5,6 +5,11 @@
     「session.open 的响应排在重放的历史之后」这类顺序由一个队列保证。
   · 保留缓冲：带 seq 的消息发出后仍保留，直到 server 以 session.ack 确认；
     重连后 session.attach 从这里补发（§7.3）。它同时就是 §6.6 的有界发送缓冲。
+  · 等答复的请求（permission.ask、tool.call）：确认了也不放，直到答复到了（answered）。
+    server 的确认是累积的 —— 请求之后紧跟的 turn.state 一被确认，请求也算「处理过」了；可 server
+    那边处理它的任务随旧连接一起被取消，换了连接没人答复，CLI 就一直等（2026-11-16 本机浏览器实测：
+    等人接管时设备网关重启，交还后这一轮卡住）。重连后它们排在补发的最前面、沿用原 id 再发一次，
+    server 按 id（审批 id）认出是同一件事，不会再弹一次。
 
 ★ put_* 是同步方法：状态转换与放入消息在同一个同步段里完成（代码设计 §6.2）。
 ★ 放入时就序列化成文本：补发时发送的是完全相同的字节，也便于按字节计量。
@@ -56,6 +61,8 @@ class Entry:
     conn: UpstreamSink | None = None
     #: 断线期间被淘汰（仍在发送队列里的，发送任务跳过它）
     evicted: bool = False
+    #: bridge → server 的请求：它的 JSON-RPC id，答复到了之前不放（见模块说明）
+    request_id: int | None = None
 
     @property
     def size(self) -> int:
@@ -85,6 +92,8 @@ class Outbox:
         self._full_since: float | None = None
         #: server 已确认处理完成的最后一条
         self.acked = 0
+        #: 已确认、但答复还没到的请求（按 seq 排）：重连后补发
+        self._awaiting: dict[int, Entry] = {}
         #: 被淘汰、无法补发的序号区间（闭区间），按序号递增
         self.gaps: list[tuple[int, int]] = []
 
@@ -107,8 +116,20 @@ class Outbox:
         seq = self._seq + 1
         text = encode(Request(request_id, method, build(seq).to_wire()))
         self._seq = seq
-        self._retain(Entry(seq, "control", text))
+        self._retain(Entry(seq, "control", text, request_id=request_id))
         return seq
+
+    def answered(self, request_id: int) -> None:
+        """请求有了结果（server 答复了、过期了、这一轮结束了）：确认过的就可以放了。"""
+        entry = self._awaiting.pop(request_id, None)
+        if entry is not None:
+            self._bytes -= entry.size
+            self._check_capacity()
+            return
+        for entry in self._retained:
+            if entry.request_id == request_id:
+                entry.request_id = None  # 还没确认：等确认时照常放
+                return
 
     def put_response(self, conn: UpstreamSink, text: str) -> None:
         """对 server 请求的响应：排在此前放入的全部消息之后发出，只发给 ``conn``。"""
@@ -181,7 +202,11 @@ class Outbox:
             return
         self.acked = min(seq, self._seq)
         while self._retained and self._retained[0].seq <= self.acked:  # type: ignore[operator]
-            self._bytes -= self._retained.popleft().size
+            entry = self._retained.popleft()
+            if entry.request_id is not None:
+                self._awaiting[entry.request_id] = entry  # 答复还没到：留着，重连后补发
+            else:
+                self._bytes -= entry.size
         self.gaps = [(a, b) for a, b in self.gaps if b > self.acked]
         self._check_capacity()
 
@@ -213,10 +238,17 @@ class Outbox:
         return resend_from, gaps  # type: ignore[return-value]
 
     def rewind(self, conn: UpstreamSink, response_text: str) -> None:
-        """attach 的响应之后，按 seq 顺序补发保留缓冲里的全部消息，再接着发实时消息。"""
+        """attach 的响应之后，先补发还在等答复的请求，再按 seq 顺序补发保留缓冲里的全部消息，
+        再接着发实时消息。"""
         own_responses = [e for e in self._queue if e.seq is None and e.conn is conn]
+        awaiting = sorted(self._awaiting.values(), key=lambda e: e.seq or 0)
         self._queue = deque(
-            [Entry(None, "control", response_text, conn), *self._retained, *own_responses]
+            [
+                Entry(None, "control", response_text, conn),
+                *awaiting,
+                *self._retained,
+                *own_responses,
+            ]
         )
         if conn is self._conn:
             self._released = True

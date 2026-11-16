@@ -271,6 +271,7 @@ class PermissionBroker:
             return
         ask.settled = True
         del self.asks[ask.ask_id]
+        self._outbox.answered(ask.ask_id)  # 有结果了：重连后不用再补发
         if ask.timer is not None:
             ask.timer.stop()
         if result is not None and not ask.future.done():

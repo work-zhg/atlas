@@ -30,6 +30,7 @@ class Recorded:
 class RecordingOutbox:
     def __init__(self) -> None:
         self.messages: list[Recorded] = []
+        self.answered_ids: list[int] = []
         self._seq = 0
 
     def put_notification(
@@ -43,6 +44,9 @@ class RecordingOutbox:
         self._seq += 1
         self.messages.append(Recorded(self._seq, method, "control", build(self._seq), request_id))
         return self._seq
+
+    def answered(self, request_id: int) -> None:
+        self.answered_ids.append(request_id)
 
     async def wait_writable(self) -> None:
         return None

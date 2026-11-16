@@ -152,6 +152,56 @@ async def test_attach_resends_everything_after_last_seq_behind_the_response(outb
     assert outbox.retained == 5  # 3..7 仍保留，直到被确认
 
 
+async def test_an_unanswered_request_is_resent_even_after_it_was_acked(outbox: Outbox) -> None:
+    """★ server 的确认是累积的：请求后面那条一被确认，请求也被确认了；可它在 server 那边的处理任务
+    随旧连接一起没了。答复到之前一直留着，重连后排在补发的最前面、沿用原 id
+    （11-16 实测卡住的那一轮）。"""
+    from atlas_host import ToolCallParams
+
+    first = Sink()
+    outbox.bind(first)
+    outbox.release(first)
+    update(outbox)  # 1
+    outbox.put_request(  # 2：等人接管
+        "tool.call",
+        lambda seq: ToolCallParams(seq=seq, turn_id="t1", name="request_takeover", call_id="c1"),
+        request_id=9,
+    )
+    update(outbox)  # 3：紧跟着的 turn.state 之类
+    await until(lambda: len(first.sent) == 3)
+    outbox.ack(3)  # server 处理到 3：请求也「处理过」了
+    assert outbox.retained == 0
+    outbox.bind(None)  # 断线
+
+    second = Sink()
+    outbox.bind(second)
+    assert outbox.resend_plan(3) == (4, [])
+    outbox.rewind(second, '{"jsonrpc":"2.0","id":1,"result":{}}')
+    await until(lambda: len(second.sent) == 2)
+    assert second.sent[1]["id"] == 9 and second.sent[1]["params"]["seq"] == 2
+    # 答复到了：不再补发
+    outbox.answered(9)
+    third = Sink()
+    outbox.bind(third)
+    outbox.rewind(third, '{"jsonrpc":"2.0","id":2,"result":{}}')
+    await until(lambda: len(third.sent) == 1)
+    await asyncio.sleep(0.01)
+    assert len(third.sent) == 1 and outbox.bytes_held == 0
+
+
+async def test_a_request_answered_before_the_ack_is_released_by_the_ack(outbox: Outbox) -> None:
+    from atlas_host import ToolCallParams
+
+    outbox.put_request(
+        "tool.call",
+        lambda seq: ToolCallParams(seq=seq, turn_id="t1", name="request_takeover", call_id="c1"),
+        request_id=4,
+    )
+    outbox.answered(4)
+    outbox.ack(1)
+    assert outbox.retained == 0 and outbox.bytes_held == 0
+
+
 async def test_disconnected_overflow_evicts_oldest_data_and_records_gaps() -> None:
     """★ 断线期间缓冲将满：先淘汰最老的 agent.update，控制消息永不淘汰（§7.4）。"""
     box = Outbox(max_bytes=600)

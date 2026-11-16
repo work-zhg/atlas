@@ -339,6 +339,46 @@ async def test_turn_survives_a_disconnect_and_attach_resends(bridge: Any) -> Non
     await again.close()
 
 
+async def test_a_pending_ask_is_resent_after_the_server_acked_past_it(bridge: Any) -> None:
+    """★ 真实的 server：询问之后的 turn.state 一到就确认（累积确认，越过了询问）；这时断线，
+    重连 attach 之后询问照样补发（原 id），答复后这一轮照常完成。"""
+    b = await bridge(Script(ask_permission=True))
+    probe = await b.probe()
+    opened = await probe.request("session.open", {})
+    await probe.request("turn.start", {"turnId": "run-1", "prompt": PROMPT})
+    ask = await probe.wait_for(
+        lambda inbox: next((m for m in inbox if m["method"] == "permission.ask"), None)
+    )
+    awaiting = await probe.wait_for(
+        lambda inbox: next(
+            (
+                m
+                for m in inbox
+                if m["method"] == "turn.state" and m["params"]["state"] == "awaiting_permission"
+            ),
+            None,
+        )
+    )
+    last = awaiting["params"]["seq"]
+    await probe.ack(last)
+    await asyncio.sleep(0.05)
+    await probe.close()
+    await asyncio.sleep(0.05)
+
+    again = await b.probe()
+    await again.request(
+        "session.attach", {"bridgeInstance": opened["bridge"]["instance"], "lastSeq": last}
+    )
+    resent = await again.wait_for(
+        lambda inbox: next((m for m in inbox if m["method"] == "permission.ask"), None)
+    )
+    assert resent["id"] == ask["id"] and resent["params"]["seq"] == ask["params"]["seq"]
+    await again.respond(resent["id"], {"optionId": "allow"})
+    ended = await again.turn_ended("run-1")
+    assert ended["outcome"]["kind"] == "completed"
+    await again.close()
+
+
 async def test_attach_to_a_restarted_bridge_is_refused(bridge: Any) -> None:
     b = await bridge()
     probe = await b.probe()
