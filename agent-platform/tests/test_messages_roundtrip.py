@@ -116,6 +116,38 @@ def test_error_status_becomes_is_error() -> None:
     assert stored[1].content[0]["is_error"] is True
 
 
+def test_images_in_tool_results_are_not_stored_only_where_they_are() -> None:
+    """★ 读截图的结果是图片块：原样 str() 会把几十万字符的 base64 写进库，
+    续跑重建时整段当文本送给模型。落库只留「是什么、在哪」，要看再读。"""
+    shot = ToolMessage(
+        content=[{"type": "image", "base64": "iVBOR" * 1000, "mime_type": "image/png"}],
+        tool_call_id="t1",
+        additional_kwargs={"read_file_path": "/data/look-1.png"},
+    )
+    stored = to_storage([_ai_with_call("看一眼", "t1", name="read_file"), shot])
+
+    text = stored[1].content[0]["content"]
+    assert "iVBOR" not in text
+    assert "/data/look-1.png" in text
+    restored = from_storage(stored)[1]
+    assert isinstance(restored, ToolMessage)
+    assert restored.content == text
+
+
+def test_text_blocks_in_tool_results_are_stored_as_text() -> None:
+    """MCP 等工具回的是 text block 列表：存正文，不存 Python 的 repr。"""
+    stored = to_storage(
+        [
+            _ai_with_call("查一下", "t1", name="search"),
+            ToolMessage(
+                content=[{"type": "text", "text": "第一条"}, {"type": "text", "text": "第二条"}],
+                tool_call_id="t1",
+            ),
+        ]
+    )
+    assert stored[1].content[0]["content"] == "第一条\n第二条"
+
+
 def test_system_and_remove_messages_are_not_stored() -> None:
     """system 每轮由 spec 重新拼（build.py 是唯一装配点），落库会让它出现两份。"""
     from langchain_core.messages import RemoveMessage, SystemMessage

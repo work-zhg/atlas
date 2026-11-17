@@ -195,12 +195,15 @@ def _tool_use_block(call: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+#: 不落库的多模态块，在正文里怎么称呼
+_MEDIA_NAMES = {"image": "图片", "audio": "音频", "video": "视频", "file": "文件"}
+
+
 def _tool_result_block(message: ToolMessage) -> dict[str, Any]:
-    content = message.content
     return {
         "type": "tool_result",
         "tool_use_id": message.tool_call_id,
-        "content": content if isinstance(content, str) else str(content),
+        "content": _result_text(message),
         "is_error": message.status == "error",
         # ★ name 是**非标准字段**，Anthropic 的 tool_result 没有它的位置。
         #   留着是因为工具名是事件流与审批里最常用的标识，而重建出的
@@ -209,6 +212,37 @@ def _tool_result_block(message: ToolMessage) -> dict[str, Any]:
         #   而我们自己读得到 —— 这个取舍比丢掉工具名划算。
         "atlas_name": message.name or "",
     }
+
+
+def _result_text(message: ToolMessage) -> str:
+    """工具结果落库的正文：文本原样；图片等多模态块只留一句「是什么、在哪」，原始数据不进库。
+
+    ★ 不能 str(list)：那会把 base64 写成一段 Python repr，续跑从存储重建时整段当文本送给模型
+      （一张截图几十万字符，2026-11-17 交还接管后一轮连压三次）。原文件还在工作区，要看再读。
+    """
+    content = message.content
+    if isinstance(content, str):
+        return content
+    parts: list[str] = []
+    for block in content:
+        if isinstance(block, str):
+            parts.append(block)
+        elif isinstance(block, dict) and block.get("type") == "text":
+            parts.append(str(block.get("text") or ""))
+        elif isinstance(block, dict):
+            parts.append(_omitted_media(block, message))
+    return "\n".join(p for p in parts if p)
+
+
+def _omitted_media(block: dict[str, Any], message: ToolMessage) -> str:
+    kind = str(block.get("type") or "")
+    name = _MEDIA_NAMES.get(kind, kind)
+    mime = block.get("mime_type")
+    label = f"{name}（{mime}）" if mime else name
+    path = message.additional_kwargs.get("read_file_path")
+    if path:
+        return f"[{label}没有存进历史：{path}。要看就重新 read_file]"
+    return f"[{label}没有存进历史]"
 
 
 # --------------------------------------------------------------------------- 入
