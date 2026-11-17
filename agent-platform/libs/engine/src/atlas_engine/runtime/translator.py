@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from atlas_engine.runtime.messages import tool_result_text
+
 
 def extract_text(content: Any) -> str:
     """从 chunk.content 里取出可见文本增量。thinking block 不算可见文本。"""
@@ -106,8 +108,8 @@ def tool_result_from(message: Any) -> dict[str, Any] | None:
     tool_call_id = getattr(message, "tool_call_id", None)
     if tool_call_id is None:
         return None
-    content = getattr(message, "content", "")
-    text = content if isinstance(content, str) else str(content)
+    # 图片等多模态块不进事件：只留「是什么、在哪」，同落库的规则
+    text = tool_result_text(message)
     data: dict[str, Any] = {
         "call_id": tool_call_id,
         "name": getattr(message, "name", "") or "",

@@ -51,6 +51,21 @@ def test_tool_result_error_is_distinguishable() -> None:
     assert res is not None and res["status"] == "error"
 
 
+def test_tool_result_images_are_not_in_the_event() -> None:
+    """★ 读截图的结果是图片块：原样 str() 会把几十万字符的 base64 写进事件，
+    打开会话时历史轨迹和 SSE 回放都要整份下载。事件只留「是什么、在哪」。"""
+    shot = ToolMessage(
+        content=[{"type": "image", "base64": "iVBOR" * 1000, "mime_type": "image/png"}],
+        tool_call_id="t3",
+        name="read_file",
+        additional_kwargs={"read_file_path": "/data/look-1.png"},
+    )
+    res = tool_result_from(shot)
+    assert res is not None
+    assert "iVBOR" not in res["result"] and "iVBOR" not in res["result_preview"]
+    assert "/data/look-1.png" in res["result_preview"]
+
+
 def test_tool_result_from_non_tool_message_is_none() -> None:
     assert tool_result_from(AIMessage(content="hi")) is None
 

@@ -47,6 +47,7 @@ __all__ = [
     "history_messages",
     "map_messages",
     "to_storage",
+    "tool_result_text",
 ]
 
 #: 这些 block 类型原样保留在 assistant 的 content 里。
@@ -203,7 +204,7 @@ def _tool_result_block(message: ToolMessage) -> dict[str, Any]:
     return {
         "type": "tool_result",
         "tool_use_id": message.tool_call_id,
-        "content": _result_text(message),
+        "content": tool_result_text(message),
         "is_error": message.status == "error",
         # ★ name 是**非标准字段**，Anthropic 的 tool_result 没有它的位置。
         #   留着是因为工具名是事件流与审批里最常用的标识，而重建出的
@@ -214,11 +215,13 @@ def _tool_result_block(message: ToolMessage) -> dict[str, Any]:
     }
 
 
-def _result_text(message: ToolMessage) -> str:
+def tool_result_text(message: ToolMessage) -> str:
     """工具结果落库的正文：文本原样；图片等多模态块只留一句「是什么、在哪」，原始数据不进库。
 
     ★ 不能 str(list)：那会把 base64 写成一段 Python repr，续跑从存储重建时整段当文本送给模型
       （一张截图几十万字符，2026-11-17 交还接管后一轮连压三次）。原文件还在工作区，要看再读。
+    ★ tool.completed 事件的 result 也用它（translator.tool_result_from）：事件同样落库，
+      打开会话时历史轨迹和 SSE 回放都要整份下载（2026-11-17 一个会话 22 张截图共 9 MB）。
     """
     content = message.content
     if isinstance(content, str):
