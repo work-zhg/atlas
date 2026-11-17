@@ -13,7 +13,7 @@ FROM ${BASE}
 
 USER root
 COPY docker/browser/install.sh /usr/local/lib/atlas-install-browser.sh
-# 分三层：系统包、Playwright（Python 与 CLI）、守护的源码 —— 改守护只重建最后一层
+# 分三层：系统包、Python 包与 Playwright CLI、守护的源码 —— 改守护只重建最后一层
 RUN sh /usr/local/lib/atlas-install-browser.sh system
 RUN --mount=type=cache,target=/root/.cache/pip sh /usr/local/lib/atlas-install-browser.sh tools
 COPY agent-platform/pod/browserd /tmp/browserd

@@ -4,7 +4,7 @@
                    （都在 /tmp，不在 /data）
     spec.py        ProcessSpec：虚拟屏幕、Chromium、画面服务三个进程的参数
     supervisor.py  Supervisor：拉起并看着三个进程，挂了就重启；就绪 = CDP 能连上
-    cdp.py         CdpSession：经 Playwright 连到本机的 Chromium（connect_over_cdp），用默认上下文
+    cdp.py         CdpSession：登录态进出 Chromium 的 cookie 和本地存储（浏览器级命令 + 临时页面）
     state.py       StateIO：登录态进出 Chromium（导入、按站点导出、清站点）；SiteMatch
     windows.py     TakeoverWindows：接管窗口的开关和前后比较；SiteDiff
     __main__.py    PlatformCommands：Atlas 经 execd 执行的命令行（atlas-browserd <子命令>）

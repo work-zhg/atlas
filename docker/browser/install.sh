@@ -7,8 +7,7 @@
 #   Xvfb · x11vnc · websockify   虚拟屏幕和画面服务：VNC 只听本机，websockify 对外开 6080（带口令）
 #   xclip                   虚拟屏幕的剪贴板：人在画面里复制粘贴经它（VNC 的剪贴板只认 Latin-1）
 #   xdotool                 computer use 的系统键鼠（不经过调试接口，网站认不出）
-#   playwright（Python）    守护经 CDP 连本机的 Chromium（不下载浏览器），只用于登录态导入导出
-#   websockets · pillow     只管窗口的浏览器级调试连接；computer use 截屏
+#   websockets · pillow     浏览器级调试连接（窗口、登录态进出）；computer use 截屏
 #   @playwright/cli         模型的 browser 命令把它当后端（按会话名各用一个窗口）
 #   atlas-browserd          守护和 browser 命令（agent-platform/pod/browserd）
 #
@@ -16,7 +15,6 @@
 # ★ 版本钉死：浏览器能力的行为（会话怎么连、快照的格式）跟着这几个版本走，换版本 = 换镜像 tag。
 set -eu
 
-PLAYWRIGHT_VERSION="${PLAYWRIGHT_VERSION:-1.64.1}"
 WEBSOCKETS_VERSION="${WEBSOCKETS_VERSION:-15.0.1}"
 PILLOW_VERSION="${PILLOW_VERSION:-11.3.0}"
 PLAYWRIGHT_CLI_VERSION="${PLAYWRIGHT_CLI_VERSION:-0.1.24}"
@@ -37,8 +35,7 @@ case "${1:-all}" in
   tools)
     # ★ PIP_USER=0：默认沙箱镜像为模型设了 PIP_USER=1（装到 HOME），构建时要装进系统
     PIP_USER=0 PIP_BREAK_SYSTEM_PACKAGES=1 python3 -m pip install --retries 10 --timeout 120 \
-        "playwright==${PLAYWRIGHT_VERSION}" "websockets==${WEBSOCKETS_VERSION}" \
-        "pillow==${PILLOW_VERSION}"
+        "websockets==${WEBSOCKETS_VERSION}" "pillow==${PILLOW_VERSION}"
     # ★ 前缀指定到 /usr/local：默认沙箱镜像为模型设的 NPM_CONFIG_PREFIX 在 HOME 下（运行时是
     #   emptyDir，构建时装进去的会被盖住）
     PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 NPM_CONFIG_PREFIX=/usr/local \

@@ -50,7 +50,7 @@ class StateIO:
     async def export(self, sites: Iterable[str], origins: Iterable[str] = ()) -> dict[str, Any]:
         match = SiteMatch(sites)
         cookies = [c for c in await self._cdp.cookies() if match.domain(str(c.get("domain", "")))]
-        wanted = {o for o in (*self._cdp.page_origins(), *origins) if match.origin(o)}
+        wanted = {o for o in (*await self._cdp.page_origins(), *origins) if match.origin(o)}
         return {"cookies": cookies, "origins": await self._cdp.local_storage(wanted)}
 
     async def forget(self, site: str) -> dict[str, int]:
@@ -59,6 +59,7 @@ class StateIO:
             str(c["domain"]) for c in await self._cdp.cookies() if match.domain(str(c["domain"]))
         }
         await self._cdp.clear_cookies(domains)
-        origins = {o for o in self._cdp.page_origins() if match.origin(o)} | match.common_origins()
+        origins = {o for o in await self._cdp.page_origins() if match.origin(o)}
+        origins |= match.common_origins()
         await self._cdp.clear_local_storage(origins)
         return {"domains": len(domains)}

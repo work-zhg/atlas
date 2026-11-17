@@ -1,22 +1,23 @@
 """对着真的 Chrome（本机）：登录态进出、清站点、接管窗口、只管窗口的调试命令。
 
-本机没有 Chrome 或 Playwright 时跳过。不联网：本地存储走临时页面（请求都由路由回空页面），
-cookie 直接写；接管窗口打开的地址打不开也不要紧，比较的是 cookie。
+本机没有 Chrome 时跳过。不联网：本地存储走临时页面（请求都由 Fetch 回空页面），cookie 直接写；
+接管窗口打开的地址打不开也不要紧，比较的是 cookie。开着的页面用本机的一个 http 源。
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
 import shutil
 import socket
 import subprocess
+import threading
 import time
 from collections.abc import AsyncIterator, Iterator
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
-
-playwright = pytest.importorskip("playwright")
 
 CHROME = next(
     (
@@ -161,3 +162,70 @@ async def test_window_ops_never_attach_to_pages(windows: object) -> None:
     assert page is not None and page["url"].endswith("#atlas-session-s1")
     assert page["attached"] is False
     await ops.close(target)  # type: ignore[attr-defined]
+
+
+#: 开着的页面：写一条本地存储，写完标题变成 ready
+_WATCHED = """<!doctype html><title></title><script>
+localStorage.setItem("token", "t-open");
+document.title = "ready";
+</script>"""
+
+
+@pytest.fixture
+def site() -> Iterator[str]:
+    class Page(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            body = _WATCHED.encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args: object) -> None:
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Page)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_address[1]}"
+    server.shutdown()
+
+
+async def _until(windows: object, target: str, field: str, want: object) -> object:
+    """等页面的某个字段（title、attached）变成 want，最多 5 秒；返回最后看到的值。"""
+    deadline = time.monotonic() + 5
+    while True:
+        page = await windows.page(target)  # type: ignore[attr-defined]
+        got = page.get(field) if page else None
+        if got == want or time.monotonic() > deadline:
+            return got
+        await asyncio.sleep(0.1)
+
+
+async def test_exporting_state_leaves_open_pages_alone(
+    chrome: int, cdp: object, windows: object, site: str
+) -> None:
+    """★ 交还接管时导出登录态：开着的页面不能附着（附着了才能开 Runtime）。
+    原先经 Playwright 导出，会话窗口里的 zhipin 当场认出、跳回空白（2026-11-17）。"""
+    from atlas_browserd.state import StateIO
+
+    target = await windows.new_window(site + "/")  # type: ignore[attr-defined]
+    assert await _until(windows, target, "title", "ready") == "ready"
+
+    exported = await StateIO(cdp).export(["127.0.0.1"])  # type: ignore[arg-type]
+
+    # 本地存储照样读得到（在临时页面上读的同一份），临时页面也关掉了
+    assert exported["origins"] == [
+        {"origin": site, "localStorage": [{"name": "token", "value": "t-open"}]}
+    ]
+    pages = await windows.pages()  # type: ignore[attr-defined]
+    assert [p["targetId"] for p in pages if str(p["url"]).startswith(site)] == [target]
+    assert await _until(windows, target, "attached", True) is False
+
+    # 对照：经 Playwright 连一下，同一个页面马上被附着 —— 上面的 False 不是判据失灵
+    pytest.importorskip("playwright")
+    from playwright.async_api import async_playwright
+
+    async with async_playwright() as p:
+        await p.chromium.connect_over_cdp(f"http://127.0.0.1:{chrome}")
+        assert await _until(windows, target, "attached", True) is True

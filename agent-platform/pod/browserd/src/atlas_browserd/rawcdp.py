@@ -6,7 +6,8 @@
 
 ★ 只发 Target、Browser、Storage 域的命令，不附着页面、不开 Runtime：Playwright 一连上就给所有页面
   开 Runtime，会检测自动化的网站（如 zhipin）据此认出「有人在遥控」，把页面跳成 about:blank。
-  会话窗口、接管窗口、挪弹窗都走这里，computer use 才是干净的。
+  会话窗口、接管窗口、挪弹窗、登录态进出都走这里，computer use 才是干净的。
+  唯一附着的是登录态进出自己开的临时页面（cdp.py），命令和事件带上它的 session。
 ★ 连接本机回环，不走代理（电脑上常配着 HTTP_PROXY）。
 """
 
@@ -34,7 +35,8 @@ class WindowOps:
         self._ws = ws
         self._ids = itertools.count(1)
         self._pending: dict[int, asyncio.Future[dict[str, Any]]] = {}
-        self._handlers: dict[str, list[Callable[[dict[str, Any]], None]]] = {}
+        #: (事件名, session)：浏览器级的事件 session 是 None
+        self._handlers: dict[tuple[str, str | None], list[Callable[[dict[str, Any]], None]]] = {}
         self._closed = asyncio.Event()
         self._reader = asyncio.get_running_loop().create_task(self._read())
 
@@ -95,10 +97,21 @@ class WindowOps:
 
         ★ 只是「发现」，不附着：页面里什么都不会多出来。
         """
-        self._handlers.setdefault("Target.targetCreated", []).append(
-            lambda params: handler(params["targetInfo"])
-        )
+        self.on("Target.targetCreated", lambda params: handler(params["targetInfo"]))
         await self.send("Target.setDiscoverTargets", {"discover": True})
+
+    def on(
+        self,
+        method: str,
+        handler: Callable[[dict[str, Any]], None],
+        *,
+        session: str | None = None,
+    ) -> None:
+        """收一种事件；session = 附着的那个页面（不给 = 浏览器级的事件）。"""
+        self._handlers.setdefault((method, session), []).append(handler)
+
+    def off(self, method: str, *, session: str | None = None) -> None:
+        self._handlers.pop((method, session), None)
 
     async def disconnected(self) -> None:
         """等到和 Chromium 的连接断开（Chromium 退出或重启）。"""
@@ -106,14 +119,23 @@ class WindowOps:
 
     # ------------------------------------------------------------------ 收发
 
-    async def send(self, method: str, params: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    async def send(
+        self,
+        method: str,
+        params: Mapping[str, Any] | None = None,
+        *,
+        session: str | None = None,
+    ) -> dict[str, Any]:
+        """发一条命令；session = 发给附着的那个页面（Target.attachToTarget 的 flatten 会话）。"""
         if self._closed.is_set():
             raise CdpError("和 Chromium 的调试连接断了")
         msg_id = next(self._ids)
         future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
         self._pending[msg_id] = future
         try:
-            message = {"id": msg_id, "method": method, "params": params or {}}
+            message: dict[str, Any] = {"id": msg_id, "method": method, "params": params or {}}
+            if session is not None:
+                message["sessionId"] = session
             await self._ws.send(json.dumps(message))
         except Exception as exc:
             self._pending.pop(msg_id, None)
@@ -141,7 +163,8 @@ class WindowOps:
                     else:
                         future.set_result(dict(msg.get("result") or {}))
                     continue
-                for handler in self._handlers.get(str(msg.get("method")), ()):
+                key = (str(msg.get("method")), msg.get("sessionId"))
+                for handler in list(self._handlers.get(key, ())):
                     handler(dict(msg.get("params") or {}))
         except Exception:  # 连接断了：等着的命令都失败
             pass

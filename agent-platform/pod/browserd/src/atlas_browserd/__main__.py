@@ -51,7 +51,7 @@ def _csv(raw: str | None) -> list[str]:
 
 
 async def _with_cdp_async(work: Callable[[Any], Awaitable[dict[str, Any]]]) -> dict[str, Any]:
-    """经 Playwright 连上（会给所有页面打开 Runtime）：只用于沙箱里登录态的导入导出。"""
+    """登录态的导入导出（浏览器级命令 + 自己开的临时页面，不附着开着的页面）。"""
     from .cdp import connect
 
     async with connect() as cdp:
@@ -133,13 +133,12 @@ def _takeover(args: argparse.Namespace, paths: Paths) -> int:
         # 电脑上：登录留在 profile 里，只关窗口
         _emit(_with_windows(lambda w: TakeoverWindows(w, paths).close(args.id)))
         return 0
+    from .cdp import CdpSession
     from .rawcdp import browser_session
 
     async def close() -> dict[str, Any]:
         async with browser_session() as windows:
-            return await _with_cdp_async(
-                lambda cdp: TakeoverWindows(windows, paths).close(args.id, state=cdp)
-            )
+            return await TakeoverWindows(windows, paths).close(args.id, state=CdpSession(windows))
 
     result = asyncio.run(close())
     _write(args.out, result)

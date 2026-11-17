@@ -237,7 +237,7 @@
       "kind": "class",
       "name": "CdpSession",
       "stereotype": "防腐层",
-      "responsibility": "经 Playwright 连到本机的 Chromium（connect_over_cdp），用它的默认上下文：读写 cookie、按源读写本地存储、开关窗口。连接断了下次调用时重连。",
+      "responsibility": "登录态进出本机的 Chromium（默认上下文），只用浏览器级调试命令：cookie 走 Storage 域；本地存储在自己开的不联网临时页面上读写（只附着这一个页面，做完就关）。不附着开着的页面：Playwright 一连就给所有页面开 Runtime，交还接管时会让 zhipin 这类网站当场认出来。",
       "at": [
         2.4,
         4.6

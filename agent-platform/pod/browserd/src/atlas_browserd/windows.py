@@ -10,9 +10,9 @@
 
 ★ 专用窗口，不碰模型正在用的标签页：平台分不清哪个标签页属于哪个会话；登录写进的是整个浏览器
   共用的 cookie，模型的页面刷新一下就是登录状态。
-★ 开窗口、关窗口、挪弹窗都只用浏览器级的调试命令（rawcdp.WindowOps），不附着页面：临时连一下
-  Playwright 也会给所有页面打开 Runtime，接管的人登录 zhipin 这类网站时就被认出来。只有沙箱交还时
-  导出本地存储要用 Playwright（code-browser-daemon.html）。
+★ 开窗口、关窗口、挪弹窗、交还时导出登录态都只用浏览器级的调试命令（rawcdp.WindowOps），不附着
+  开着的页面：临时连一下 Playwright 也会给所有页面打开 Runtime，zhipin 这类网站当场就认出来
+  （原先交还时经 Playwright 导出，会话窗口里的 zhipin 跳回空白，2026-11-17）。
 ★ 接管记录（窗口的 target、接管前的 cookie）只放本地盘，关窗口时删掉。
 """
 
@@ -91,7 +91,7 @@ class TakeoverWindows:
             # ★ 没有记录（没开过窗口）才拿此刻当「之前」；
             #   记录里的空列表是「接管前一个 cookie 都没有」
             before = data.get("before", after)
-            origins = set(state.page_origins())
+            origins = await state.page_origins()
             page = await self._windows.page(target) if target else None
             if page and (origin := origin_of(str(page.get("url") or ""))) is not None:
                 origins.add(origin)

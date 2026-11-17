@@ -4,12 +4,12 @@ version = "0.1.0"
 description = "Atlas 浏览器守护 —— 跑在浏览器沙箱镜像里、或使用者自己的电脑上（由连接器拉起）：拉起并看着虚拟屏幕、Chromium、画面服务，给平台导入导出登录态、开关接管窗口；模型用的 browser 命令（快照、computer use）。"
 requires-python = ">=3.11"
 
-# ★ 不在 uv 工作区里：它只进浏览器镜像（docker/browser/），不该把 playwright 带进平台的环境。
+# ★ 不在 uv 工作区里：它只进浏览器镜像（docker/browser/）或使用者的电脑。
 #   与 Atlas 的唯一接口是命令行（atlas-browserd <子命令>，经 execd 执行）和登录态文件的 JSON 形状
 #   （Playwright 的 storageState）—— 不共享代码。
-# ★ playwright 只用它连本机的 Chromium（connect_over_cdp），不下载浏览器（PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD）。
-# ★ websockets：只管窗口的浏览器级调试连接（rawcdp.py）；pillow：computer use 截屏（要带 XCB 的轮子）。
-dependencies = ["playwright>=1.50", "websockets>=15", "pillow>=11"]
+# ★ websockets：浏览器级调试连接（rawcdp.py：窗口、登录态进出）；pillow：computer use 截屏（要带 XCB 的轮子）。
+#   不依赖 Python 的 playwright：它一连上就给所有页面开 Runtime（cdp.py）。用例里有它只为对照。
+dependencies = ["websockets>=15", "pillow>=11"]
 
 [project.scripts]
 atlas-browserd = "atlas_browserd.__main__:main"
