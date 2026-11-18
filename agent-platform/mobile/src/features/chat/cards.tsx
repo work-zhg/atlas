@@ -8,6 +8,7 @@
 import { useState, type ReactNode } from "react";
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
+import { useDeclineTakeover } from "@atlas/chat-ui/src/api/browser";
 import { useApprovalStillPending, useDecideApproval } from "@atlas/chat-ui/src/api/runs";
 import {
   APPROVAL_MODE_LABEL,
@@ -35,8 +36,9 @@ type ExecutionMode = Exclude<ApprovalMode, "plan">;
 // ── 请人接管浏览器（c4-model/agent/browser/design-browser.html）
 
 /**
- * 手机上不显示画面：在手机屏幕上用 noVNC 操作电脑尺寸的网页很难用。只说要做什么、请在电脑上处理；
- * 处理完（电脑上交还 / 不处理）显示结果。
+ * 手机上不显示画面：在手机屏幕上用 noVNC 操作电脑尺寸的网页很难用。登录要在电脑上处理；
+ * 手机上只能「不处理」——接管没有等待上限，人不在电脑边时让智能体换个方式继续，这一轮不用一直挂着。
+ * 处理完（电脑上交还 / 不处理）显示结果，文案同网页 TakeoverCard。
  */
 export function TakeoverCard({
   approval,
@@ -48,14 +50,46 @@ export function TakeoverCard({
   settled?: TakeoverSettledData;
 }) {
   const args = (approval.args ?? {}) as Partial<TakeoverArgs>;
+  const decline = useDeclineTakeover();
+  const [declined, setDeclined] = useState(false);
+  const [note, setNote] = useState("");
+  const [showNote, setShowNote] = useState(false);
+  // ★ 以库为准（同审批卡片）：刷新后首连回放会把早已处理过的 approval.required 再送来一遍
+  const stillPending = useApprovalStillPending(
+    waiting && !declined && !settled ? approval.runId : undefined,
+    approval.approvalId,
+  );
+  const canAct = waiting && !declined && !settled && (stillPending.data === true || stillPending.isError);
+  const closedElsewhere = waiting && !declined && !settled && stillPending.isSuccess && !stillPending.data;
+
+  const doDecline = () => {
+    if (!approval.runId) return;
+    decline.mutate(
+      { runId: approval.runId, approvalId: approval.approvalId, note },
+      {
+        onSuccess: () => setDeclined(true),
+        onError: (err) => {
+          // 409 = 已在别处处理过（电脑上、或这一轮已经结束）
+          if (err instanceof ApiError && err.status === 409) void stillPending.refetch();
+        },
+      },
+    );
+  };
+
+  const result: TakeoverResult | null =
+    settled ?? (declined ? { decision: "rejected", note: note.trim() || undefined } : null);
+
   let status: { tone: Tone; label: string };
-  if (settled?.decision === "approved") status = { tone: "success", label: "已交还" };
-  else if (settled?.decision === "rejected") status = { tone: "default", label: "没有处理" };
-  else if (settled) status = { tone: "default", label: "已失效" };
-  else if (waiting) status = { tone: "warning", label: "请在电脑上处理" };
-  else status = { tone: "default", label: "已结束" };
+  if (result?.decision === "approved") status = { tone: "success", label: "已交还" };
+  else if (result?.decision === "rejected") status = { tone: "default", label: "没有处理" };
+  else if (result) status = { tone: "default", label: "已失效" };
+  else if (canAct) status = { tone: "warning", label: "等待你接管" };
+  else if (closedElsewhere) status = { tone: "default", label: "已处理" };
+  else if (!waiting) status = { tone: "default", label: "已结束" };
+  else status = { tone: "default", label: "核对中…" };
+
   return (
-    <View style={[s.card, waiting && !settled && s.cardWarn]}>
+    <View style={[s.card, canAct && s.cardWarn]}>
       <View style={s.cardHead}>
         <Icon name="globe" size={18} />
         <Text style={s.cardTitle}>需要你接管浏览器</Text>
@@ -64,13 +98,60 @@ export function TakeoverCard({
         </View>
       </View>
       <Text style={s.text}>{args.reason || "智能体需要你在浏览器里操作一下"}</Text>
-      {waiting && !settled ? (
-        <Text style={[s.muted, { marginTop: 8 }]}>
-          要在浏览器画面里操作（如登录），请在电脑上打开这个对话处理。
-        </Text>
+      {args.url ? <Text style={[s.mono, { color: C.ink3, marginTop: 4 }]}>{args.url}</Text> : null}
+
+      {result ? (
+        <Text style={[s.text, { marginTop: 8 }]}>{takeoverResultText(result)}</Text>
+      ) : canAct ? (
+        <>
+          <Text style={[s.muted, { marginTop: 8 }]}>
+            要在浏览器画面里操作（如登录），请在电脑上打开这个对话处理：密码、验证码不经过智能体。
+          </Text>
+          {showNote ? (
+            <>
+              <Text style={s.label}>给智能体的说明（可选）</Text>
+              <TextInput
+                style={s.input}
+                multiline
+                maxLength={500}
+                value={note}
+                onChangeText={setNote}
+                placeholder="如「我现在不在电脑边，先跳过登录」"
+                placeholderTextColor={C.ink4}
+              />
+            </>
+          ) : (
+            <Pressable onPress={() => setShowNote(true)} hitSlop={8}>
+              <Text style={s.link}>写一句说明</Text>
+            </Pressable>
+          )}
+          <View style={s.btns}>
+            <Button style={{ flex: 1 }} loading={decline.isPending} onPress={doDecline}>
+              不处理
+            </Button>
+          </View>
+          <Text style={s.hint}>不处理不会中断这轮对话，智能体会换一种方式继续</Text>
+        </>
       ) : null}
+      {decline.isError && !result ? <Text style={s.error}>提交失败：{decline.error.message}</Text> : null}
     </View>
   );
+}
+
+type TakeoverResult = Pick<TakeoverSettledData, "decision" | "note" | "login">;
+
+function takeoverResultText(r: TakeoverResult): string {
+  if (r.decision === "approved") {
+    const saved =
+      r.login?.saved === false
+        ? "，登录态没能存下来（下次可能要再登录）"
+        : r.login?.sites?.length
+          ? `，已记住 ${r.login.sites.join("、")} 的登录`
+          : "";
+    return `已交还，智能体接着做${saved}${r.note ? `。你的说明：${r.note}` : ""}`;
+  }
+  if (r.decision === "rejected") return `没有处理${r.note ? `：${r.note}` : ""}`;
+  return "接管已失效（这一轮已结束）";
 }
 
 // ── 审批（工具调用 / 计划）

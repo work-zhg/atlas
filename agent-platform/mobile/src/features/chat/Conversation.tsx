@@ -189,11 +189,13 @@ export function Conversation({ threadId }: { threadId: string }) {
     ? null
     : state.pendingApprovals.some((a) => a.kind === "question")
       ? { label: "等你回答", color: C.warning }
-      : state.pendingApprovals.length > 0
-        ? { label: "等你确认", color: C.warning }
-        : state.status === "suspended"
-          ? { label: "等待子智能体", color: C.primary }
-          : { label: "运行中", color: C.success };
+      : state.pendingApprovals.some((a) => a.kind === "takeover")
+        ? { label: "等你接管", color: C.warning }
+        : state.pendingApprovals.length > 0
+          ? { label: "等你确认", color: C.warning }
+          : state.status === "suspended"
+            ? { label: "等待子智能体", color: C.primary }
+            : { label: "运行中", color: C.success };
   const deviceDown = Boolean(device) && device!.status !== "online" && device!.status !== "unknown";
 
   const agentName = thread?.agent_name ?? "智能体";
