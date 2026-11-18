@@ -1,18 +1,19 @@
 "use client";
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { App, Button, Drawer, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tag } from "antd";
+import { App, Button, Card, Drawer, Dropdown, Form, Input, InputNumber, Modal, Progress, Select, Space, Switch, Table, Tag } from "antd";
 import { useState } from "react";
 
-import { PageHead, showOnce } from "@/components/common";
-import { api, errorText } from "@/lib/api";
+import { AppIcon, PageHead, showOnce, SquareIcon } from "@/components/common";
+import { Icon } from "@/components/Icon";
+import { api, BASE_PATH, errorText } from "@/lib/api";
 import { fmtTime } from "@/lib/format";
 import { useCan } from "@/lib/session";
 import type { TenantInfo } from "@/lib/types";
 
 const STATUS: Record<TenantInfo["status"], { label: string; color: string }> = {
-  active: { label: "正常", color: "green" },
-  suspended: { label: "已停用", color: "orange" },
+  active: { label: "正常", color: "success" },
+  suspended: { label: "已停用", color: "warning" },
   closed: { label: "已注销", color: "default" },
 };
 
@@ -50,6 +51,7 @@ export default function TenantsPage() {
         modal,
         "租户已创建，请把登录信息交给租户管理员",
         [
+          ["登录地址", `${window.location.origin}${BASE_PATH}/login`],
           ["企业代码", r.tenant.code],
           ["账号", r.admin.account],
           ["临时密码", r.temp_password],
@@ -64,56 +66,92 @@ export default function TenantsPage() {
   return (
     <>
       <PageHead
-        title="租户管理"
-        sub="每个租户是一个相互隔离的组织空间：自己的部门、用户、授权与数据权限。平台管理员在这里只管理租户本身与开通的应用，看不到租户内的人员与授权。"
-        extra={manage && <Button type="primary" onClick={() => (form.resetFields(), setCreating(true))}>＋ 新建租户</Button>}
+        title="租户"
+        sub="每个租户是一个相互隔离的组织空间。这里只管理租户本身与开通的应用，看不到租户内的人员与授权。"
+        extra={
+          manage && (
+            <Button type="primary" icon={<Icon name="plus" size={14} />} onClick={() => (form.resetFields(), setCreating(true))}>
+              新建租户
+            </Button>
+          )
+        }
       />
-      <Table<TenantInfo>
-        rowKey="id"
-        loading={list.isLoading}
-        dataSource={list.data ?? []}
-        pagination={false}
-        columns={[
-          {
-            title: "租户",
-            render: (_, t) => (
-              <Space>
-                <b>{t.name}</b>
-                {t.kind === "platform" && <Tag color="purple">平台</Tag>}
-              </Space>
-            ),
-          },
-          { title: "企业代码", render: (_, t) => <span className="uc-mono">{t.code}</span> },
-          {
-            title: "状态",
-            render: (_, t) => (
-              <Space>
-                <Tag color={STATUS[t.status].color}>{STATUS[t.status].label}</Tag>
-                {t.status === "active" && !t.usable && <Tag color="red">已到期</Tag>}
-              </Space>
-            ),
-          },
-          { title: "人数 / 配额", render: (_, t) => `${t.users} / ${t.max_users ?? "不限"}` },
-          { title: "到期", render: (_, t) => (t.expires_at ? fmtTime(t.expires_at) : "—") },
-          { title: "创建时间", render: (_, t) => <span className="uc-muted">{fmtTime(t.created_at)}</span> },
-          {
-            title: "",
-            align: "right",
-            render: (_, t) => (
-              <Space size={0}>
-                <Button type="link" size="small" onClick={() => setAppsOf(t)}>
-                  开通应用
-                </Button>
-                {manage && t.kind !== "platform" && (
-                  <Button type="link" size="small" onClick={() => setEditing(t)}>
-                    编辑
+      <Card styles={{ body: { padding: 0 } }}>
+        <Table<TenantInfo>
+          rowKey="id"
+          loading={list.isLoading}
+          dataSource={list.data ?? []}
+          pagination={false}
+          columns={[
+            {
+              title: "租户 · 企业代码",
+              render: (_, t) => (
+                <div className="uc-row" style={{ gap: 10 }}>
+                  <SquareIcon icon="building" size={32} color={t.kind === "platform" ? "#8b5cf6" : undefined} />
+                  <div>
+                    <div className="uc-row" style={{ gap: 6 }}>
+                      <b className="uc-nw">{t.name}</b>
+                      {t.kind === "platform" && <Tag color="purple">平台</Tag>}
+                    </div>
+                    <div className="uc-sub uc-mono">{t.code}</div>
+                  </div>
+                </div>
+              ),
+            },
+            {
+              title: "状态",
+              render: (_, t) =>
+                t.status === "active" && !t.usable ? <Tag color="error">已到期</Tag> : <Tag color={STATUS[t.status].color}>{STATUS[t.status].label}</Tag>,
+            },
+            {
+              title: "人数 / 配额",
+              render: (_, t) => (
+                <div className="uc-row" style={{ gap: 10 }}>
+                  {t.max_users && (
+                    <Progress
+                      percent={Math.min(100, Math.round((t.users / t.max_users) * 100))}
+                      showInfo={false}
+                      size="small"
+                      strokeColor={t.users / t.max_users >= 0.9 ? "var(--warning)" : undefined}
+                      style={{ width: 72, margin: 0 }}
+                    />
+                  )}
+                  <span className="uc-nw">
+                    {t.users} / {t.max_users ?? "不限"}
+                  </span>
+                </div>
+              ),
+            },
+            {
+              title: "到期",
+              render: (_, t) => (
+                <span className="uc-nw" style={{ color: t.status === "active" && !t.usable ? "var(--danger)" : "var(--fg-3)" }}>
+                  {t.expires_at ? fmtTime(t.expires_at) : "—"}
+                </span>
+              ),
+            },
+            { title: "创建", render: (_, t) => <span className="uc-muted uc-nw">{fmtTime(t.created_at)}</span> },
+            {
+              title: "",
+              align: "right",
+              render: (_, t) => (
+                <span className="uc-nw">
+                  <Button type="text" size="small" onClick={() => setAppsOf(t)}>
+                    开通应用
                   </Button>
-                )}
-              </Space>
-            ),
-          },
-        ]}
-      />
+                  {manage && t.kind !== "platform" ? (
+                    <Dropdown trigger={["click"]} menu={{ items: [{ key: "edit", icon: <Icon name="pencil" size={14} />, label: "编辑（名称、状态、配额、到期）", onClick: () => setEditing(t) }] }}>
+                      <Button type="text" size="small" aria-label="更多" icon={<Icon name="more" />} />
+                    </Dropdown>
+                  ) : (
+                    <span style={{ display: "inline-block", width: 24 }} />
+                  )}
+                </span>
+              ),
+            },
+          ]}
+        />
+      </Card>
       <Modal open={creating} title="新建租户" onCancel={() => setCreating(false)} onOk={() => form.submit()} okText="创建" width={560}>
         <Form form={form} layout="vertical" onFinish={create}>
           <Form.Item name="name" label="租户名称" rules={[{ required: true }]} extra="同时作为租户根部门的名称">
@@ -232,7 +270,7 @@ function TenantApps({ tenant, manage }: { tenant: TenantInfo; manage: boolean })
   return (
     <>
       <div className="uc-muted" style={{ marginBottom: 12 }}>
-        开通后由租户管理员在「应用接入」里设置可访问范围（默认无人可访问）。关闭后该租户的接口令牌立即失效。
+        开通后由租户管理员在「应用 › 接入配置」里设置可访问范围（默认无人可访问）。关闭后该租户的接口令牌立即失效。
       </div>
       <Table<TenantApp>
         rowKey={(r) => r.app.id}
@@ -245,7 +283,7 @@ function TenantApps({ tenant, manage }: { tenant: TenantInfo; manage: boolean })
             title: "应用",
             render: (_, r) => (
               <Space>
-                <span>{r.app.icon}</span>
+                <AppIcon app={r.app} size={24} />
                 <b>{r.app.name}</b>
                 {r.app.status !== "active" && <Tag>应用已停用</Tag>}
               </Space>

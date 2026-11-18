@@ -33,6 +33,8 @@ class AppCreate(BaseModel):
     code: str | None = None
     description: str | None = None
     icon: str | None = None
+    #: 入口地址：「应用切换」「我的应用」点开去这里
+    home_url: str | None = None
 
 
 class AppUpdate(BaseModel):
@@ -40,6 +42,7 @@ class AppUpdate(BaseModel):
     code: str | None = None
     description: str | None = None
     icon: str | None = None
+    home_url: str | None = None
     version: int | None = None
 
 
@@ -146,7 +149,7 @@ async def create_app(
     body: AppCreate, session: SessionDep, p: Principal = require("app:manage")
 ) -> dict[str, Any]:
     app, secret = await AppService(session, p.actor).create(
-        body.name, body.description, body.icon, body.code
+        body.name, body.description, body.icon, body.code, body.home_url
     )
     return {"app": app_view(app), "app_secret": secret}
 

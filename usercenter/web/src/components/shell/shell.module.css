@@ -1,0 +1,321 @@
+/* 管理台骨架：顶部一级菜单 + 左侧二级菜单（可收缩）+ 内容区 —— 与 Atlas 的 shell.module.css 同一套 */
+
+.app {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ---------- 顶栏 ---------- */
+.top {
+  height: var(--top-h);
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 0 16px 0 14px;
+  background: var(--bg-app);
+  border-bottom: 1px solid var(--line);
+  position: relative;
+  z-index: 20;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--fg);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.logo {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #6366f1, #0ea5e9);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  font-size: 14px;
+  font-weight: 700;
+  flex: none;
+}
+
+.platforms {
+  display: flex;
+  gap: 2px;
+  height: 100%;
+}
+
+.platform {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 14px;
+  color: var(--fg-2);
+  font-weight: 550;
+  position: relative;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.platform:hover {
+  color: var(--fg);
+  background: var(--bg-2);
+}
+
+.platform[aria-current="page"] {
+  color: var(--primary-text);
+}
+
+.platform[aria-current="page"]::after {
+  content: "";
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: -1px;
+  height: 2px;
+  background: var(--primary);
+  border-radius: 2px;
+}
+
+.topRight {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.iconBtn {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--r-md);
+  border: none;
+  background: transparent;
+  color: var(--fg-3);
+  display: inline-grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.iconBtn:hover {
+  background: var(--bg-2);
+  color: var(--fg);
+}
+
+.me {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: none;
+  background: var(--primary);
+  color: #fff;
+  font-size: 12.5px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+/* ---------- 左侧 ---------- */
+.body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.sider {
+  width: var(--sider-w);
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-side);
+  border-right: 1px solid var(--line);
+  transition: width 0.18s ease;
+  overflow: hidden;
+}
+
+.siderMin {
+  width: var(--sider-w-min);
+}
+
+.siderTop {
+  padding: 12px 10px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 36px;
+  padding: 0 10px;
+  border-radius: var(--r-md);
+  color: var(--fg-2);
+  font-weight: 520;
+  white-space: nowrap;
+  text-decoration: none;
+  border: none;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+  width: 100%;
+}
+
+.item:hover {
+  background: var(--bg-2);
+  color: var(--fg);
+}
+
+.item[aria-current="page"] {
+  background: var(--primary-soft);
+  color: var(--primary-text);
+  font-weight: 600;
+}
+
+.siderMin .item {
+  justify-content: center;
+  padding: 0;
+}
+
+.siderMin .label,
+.siderMin .tag {
+  display: none;
+}
+
+/* 应用平台：左侧直接列出各应用（同 Atlas 智能平台的「最近对话」） */
+.list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 10px 10px;
+  border-top: 1px solid var(--line);
+  margin-top: 6px;
+}
+
+.listHead {
+  font-size: 11.5px;
+  color: var(--fg-4);
+  padding: 10px 8px 4px;
+}
+
+.listItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 8px;
+  border-radius: var(--r-md);
+  color: var(--fg-2);
+  text-decoration: none;
+  font-size: 13.5px;
+}
+
+.listItem:hover {
+  background: var(--bg-2);
+}
+
+.listItem[aria-current="page"] {
+  background: var(--bg-3);
+  color: var(--fg);
+  font-weight: 550;
+}
+
+.listName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tag {
+  font-size: 11px;
+  color: var(--fg-3);
+  background: var(--bg-3);
+  border-radius: 4px;
+  padding: 0 5px;
+  flex: none;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.siderFoot {
+  border-top: 1px solid var(--line);
+  padding: 8px 10px;
+}
+
+.main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* ---------- 应用切换 ---------- */
+.switcher {
+  width: 300px;
+  padding: 6px;
+}
+
+.switcherHead {
+  font-size: 11.5px;
+  color: var(--fg-3);
+  padding: 2px 6px 8px;
+}
+
+.apps {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 2px;
+}
+
+.appTile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 4px 10px;
+  border-radius: 10px;
+  font-size: 12.5px;
+  color: var(--fg-2);
+  text-align: center;
+  line-height: 1.3;
+  text-decoration: none;
+}
+
+.appTile:hover {
+  background: var(--bg-2);
+  color: var(--fg);
+}
+
+.appTile[aria-current="page"] {
+  background: var(--primary-soft);
+  color: var(--primary-text);
+  font-weight: 600;
+}
+
+.switcherFoot {
+  border-top: 1px solid var(--line);
+  margin-top: 6px;
+  padding-top: 6px;
+  text-align: center;
+}
+
+.switcherFoot a {
+  display: block;
+  padding: 6px;
+  border-radius: var(--r-md);
+  font-size: 13px;
+  color: var(--fg-2);
+}
+
+.switcherFoot a:hover {
+  background: var(--bg-2);
+}

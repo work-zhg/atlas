@@ -18,7 +18,7 @@ from ..perm.service import GrantService
 from ..perm.views import positions_of
 from ..user.service import UserService
 from .deps import Principal, SessionDep, SettingsDep, require
-from .views import app_view, user_brief, user_view
+from .views import app_view, login_log_view, user_brief, user_view
 
 router = APIRouter(prefix="/api/v1/users", tags=["users"])
 
@@ -209,10 +209,7 @@ async def login_logs(
     p: Principal = require("user:view"),
 ) -> list[dict[str, Any]]:
     logs = await UserService(session, p.actor, settings).login_logs(user_id, Page(page, size))
-    return [
-        {"time": iso(log.occurred_at), "ip": log.ip, "ok": log.ok, "reason": log.reason}
-        for log in logs
-    ]
+    return [login_log_view(log) for log in logs]
 
 
 @router.get("/{user_id}/apps")

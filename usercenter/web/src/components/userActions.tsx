@@ -6,12 +6,13 @@ import { App, Input } from "antd";
 import { api, errorText } from "@/lib/api";
 import type { User } from "@/lib/types";
 
-import { showOnce } from "./common";
+import { showOnce, useLoginInfo } from "./common";
 
 /** 停用 / 启用 / 解锁 / 重置密码：列表与详情共用。 */
 export function useUserActions() {
   const qc = useQueryClient();
   const { message, modal } = App.useApp();
+  const loginInfo = useLoginInfo();
   const done = (text: string) => {
     qc.invalidateQueries({ queryKey: ["users"] });
     qc.invalidateQueries({ queryKey: ["user"] });
@@ -48,7 +49,7 @@ export function useUserActions() {
         onOk: async () => {
           const r = await run.mutateAsync({ path: `/users/${u.id}/reset-password` });
           qc.invalidateQueries({ queryKey: ["user"] });
-          showOnce(modal, "密码已重置", [["用户", `${u.name}（${u.account}）`], ["临时密码", (r as { temp_password: string }).temp_password]], "临时密码只显示这一次，请通过安全渠道告知用户。");
+          showOnce(modal, `密码已重置 · ${u.name}`, loginInfo(u.account, (r as { temp_password: string }).temp_password), "临时密码只显示这一次，请通过安全渠道发给本人；下次登录时会要求改密。");
         },
       });
     },

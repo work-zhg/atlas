@@ -1,12 +1,12 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, App, Button, Card, Checkbox, Descriptions, Empty, Form, Input, Modal, Select, Space, Table, Tag, Tree, TreeSelect } from "antd";
-import Link from "next/link";
+import { Alert, App, Button, Card, Dropdown, Empty, Form, Input, Modal, Select, Space, Switch, Table, Tag, Tree, TreeSelect } from "antd";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
-import { buildDeptTree, PageHead, StatusTag, UserSelect } from "@/components/common";
+import { buildDeptTree, PageHead, PersonAvatar, PersonCell, SquareIcon, StatusTag, UserSelect } from "@/components/common";
+import { Icon } from "@/components/Icon";
 import { UserForm } from "@/components/UserForm";
 import { api, errorText } from "@/lib/api";
 import { useCan } from "@/lib/session";
@@ -20,6 +20,7 @@ export default function OrgPage() {
   const tree = useQuery({ queryKey: ["org", "tree"], queryFn: () => api.get<DeptNode[]>("/depts/tree") });
   const [sel, setSel] = useState<string>();
   const [includeSub, setIncludeSub] = useState(true);
+  const [q, setQ] = useState("");
   const rootId = tree.data?.find((d) => !d.parent_id)?.id;
   const current = sel ?? rootId;
   useEffect(() => {
@@ -42,15 +43,30 @@ export default function OrgPage() {
   const [moveIn, setMoveIn] = useState(false);
   const refresh = () => qc.invalidateQueries({ queryKey: ["org"] });
 
-  const treeData = useMemo(
-    () =>
-      buildDeptTree(tree.data ?? [], (d: DeptNode) => (
-        <span>
-          {d.parent_id ? "📁" : "🏢"} {d.name} <span className="uc-muted">{d.total_count}</span>
+  // 搜索：命中的部门连同它的上级都留下，并全部展开
+  const { treeData, expanded } = useMemo(() => {
+    const rows = tree.data ?? [];
+    const kw = q.trim();
+    let keep = rows;
+    if (kw) {
+      const byId = new Map(rows.map((d) => [d.id, d]));
+      const ids = new Set<string>();
+      for (const d of rows.filter((x) => x.name.includes(kw))) {
+        for (let cur: DeptNode | undefined = d; cur; cur = cur.parent_id ? byId.get(cur.parent_id) : undefined) ids.add(cur.id);
+      }
+      keep = rows.filter((d) => ids.has(d.id));
+    }
+    return {
+      treeData: buildDeptTree(keep, (d: DeptNode) => (
+        <span className="uc-row" style={{ gap: 6 }}>
+          <Icon name={d.parent_id ? "folder" : "building"} size={15} style={{ color: "var(--fg-4)" }} />
+          <span className="uc-grow">{d.name}</span>
+          <span className="uc-sub">{d.total_count}</span>
         </span>
       )),
-    [tree.data],
-  );
+      expanded: kw ? keep.map((d) => d.id) : undefined,
+    };
+  }, [tree.data, q]);
 
   const setLeader = useMutation({
     mutationFn: (uid: string | null) => api.patch(`/depts/${current}`, { leader_id: uid }),
@@ -91,83 +107,130 @@ export default function OrgPage() {
   }
 
   const d = detail.data;
+  const deptName = new Map((tree.data ?? []).map((x) => [x.id, x.name]));
   return (
     <>
-      <PageHead title="组织架构" sub="维护部门树、负责人与部门成员；直属上级按负责人自动计算。" />
-      <div style={{ display: "grid", gridTemplateColumns: "300px minmax(0,1fr)", gap: 16, alignItems: "start" }}>
-        <Card title="部门" size="small" extra={<span className="uc-muted">{tree.data?.length ?? 0} 个</span>}>
-          {treeData.length > 0 && (
-            <Tree
-              treeData={treeData}
-              defaultExpandAll
-              selectedKeys={current ? [current] : []}
-              onSelect={(keys) => keys[0] && setSel(String(keys[0]))}
-            />
-          )}
-        </Card>
-        <Space direction="vertical" size={16} style={{ width: "100%" }}>
+      <PageHead title="组织架构" sub="部门、负责人与成员；直属上级按负责人自动计算。" />
+      <div className="uc-split">
+        <div className="uc-panel">
+          <div className="uc-panel-head">
+            <Input allowClear prefix={<Icon name="search" size={14} style={{ color: "var(--fg-4)" }} />} placeholder="搜索部门" value={q} onChange={(e) => setQ(e.target.value)} />
+            {can("org:manage") && d && <Button type="text" title={`在「${d.name}」下新建部门`} icon={<Icon name="plus" />} onClick={() => setForm("new")} />}
+          </div>
+          <div className="uc-panel-body">
+            {treeData.length > 0 ? (
+              <Tree
+                key={expanded ? "search" : "all"}
+                blockNode
+                treeData={treeData}
+                defaultExpandAll
+                {...(expanded ? { expandedKeys: expanded } : {})}
+                selectedKeys={current ? [current] : []}
+                onSelect={(keys) => keys[0] && setSel(String(keys[0]))}
+              />
+            ) : (
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={q ? "没有匹配的部门" : undefined} />
+            )}
+          </div>
+        </div>
+        <Space direction="vertical" size={14} style={{ width: "100%", minWidth: 0 }}>
           <Card loading={!d}>
             {d && (
               <>
-                <div style={{ display: "flex", alignItems: "flex-start", gap: 8, flexWrap: "wrap" }}>
-                  <div>
-                    <div className="uc-muted">{d.path.join(" / ")}</div>
-                    <h2 style={{ margin: "2px 0 0", fontSize: 19 }}>{d.name}</h2>
-                  </div>
+                <div className="uc-sub">{d.path.join(" / ")}</div>
+                <div className="uc-row" style={{ marginTop: 6, gap: 10, flexWrap: "wrap" }}>
+                  <SquareIcon icon={d.parent_id ? "folder" : "building"} />
+                  <h2 style={{ margin: 0, fontSize: 18 }}>{d.name}</h2>
+                  {!d.parent_id && <Tag>根部门</Tag>}
                   <div className="uc-grow" />
-                  {can("grant:view") && <Button onClick={() => router.push(`/grants?subject=dept:${d.id}`)}>授权</Button>}
-                  {can("org:manage") && <Button onClick={() => setForm("new")}>＋ 新建子部门</Button>}
-                  {can("org:manage") && <Button onClick={() => setForm("edit")}>编辑</Button>}
-                  {can("org:manage") && d.parent_id && (
-                    <Button danger onClick={remove}>
-                      删除
+                  {can("grant:view") && (
+                    <Button icon={<Icon name="shield" size={14} />} onClick={() => router.push(`/perm/grants?subject=dept:${d.id}`)}>
+                      授权
                     </Button>
                   )}
+                  {can("org:manage") && (
+                    <Button icon={<Icon name="plus" size={14} />} onClick={() => setForm("new")}>
+                      新建子部门
+                    </Button>
+                  )}
+                  {can("org:manage") && (
+                    <Button icon={<Icon name="pencil" size={14} />} onClick={() => setForm("edit")}>
+                      编辑
+                    </Button>
+                  )}
+                  {can("org:manage") && d.parent_id && (
+                    <Dropdown trigger={["click"]} menu={{ items: [{ key: "del", danger: true, icon: <Icon name="trash" size={14} />, label: "删除部门", onClick: () => void remove() }] }}>
+                      <Button type="text" aria-label="更多" icon={<Icon name="more" />} />
+                    </Dropdown>
+                  )}
                 </div>
-                <Descriptions column={1} size="small" style={{ marginTop: 16 }}>
-                  <Descriptions.Item label="负责人">
-                    {d.leader ? (
-                      <Space>
-                        {d.leader.name}
-                        {d.leader.status === "disabled" && <Tag color="orange">负责人已停用，请更换</Tag>}
-                      </Space>
-                    ) : (
-                      <span className="uc-muted">未设置{d.parent_id ? "（成员的直属上级取上级部门负责人）" : ""}</span>
-                    )}
-                  </Descriptions.Item>
-                  <Descriptions.Item label="直属成员 / 含子部门">
-                    {d.direct_count} 人 / {d.total_count} 人
-                  </Descriptions.Item>
-                  <Descriptions.Item label="子部门">
-                    {d.children.length ? (
-                      d.children.map((c) => (
-                        <Tag key={c.id} style={{ cursor: "pointer" }} onClick={() => setSel(c.id)}>
-                          {c.name}
-                        </Tag>
-                      ))
-                    ) : (
-                      <span className="uc-muted">无</span>
-                    )}
-                  </Descriptions.Item>
-                </Descriptions>
+                <div className="uc-stats">
+                  <div className="uc-stat">
+                    <div className="k">负责人</div>
+                    <div className="v">
+                      {d.leader ? (
+                        <>
+                          <PersonAvatar name={d.leader.name} size={22} />
+                          {d.leader.name}
+                          {d.leader.status === "disabled" && <Tag color="warning">已停用，请更换</Tag>}
+                        </>
+                      ) : (
+                        <span className="uc-muted" style={{ fontWeight: 500 }}>
+                          未设置
+                        </span>
+                      )}
+                    </div>
+                    {!d.leader && d.parent_id && <div className="uc-sub">成员的直属上级取上级部门负责人</div>}
+                  </div>
+                  <div className="uc-stat">
+                    <div className="k">成员</div>
+                    <div className="v">
+                      {d.direct_count} 人
+                      <span className="uc-sub" style={{ fontWeight: 500 }}>
+                        · 含下级 {d.total_count} 人
+                      </span>
+                    </div>
+                  </div>
+                  <div className="uc-stat">
+                    <div className="k">子部门</div>
+                    <div className="v">
+                      {d.children.length ? (
+                        d.children.map((c) => (
+                          <Tag key={c.id} style={{ cursor: "pointer", marginInlineEnd: 0 }} onClick={() => setSel(c.id)}>
+                            {c.name}
+                          </Tag>
+                        ))
+                      ) : (
+                        <span className="uc-muted" style={{ fontWeight: 500 }}>
+                          无
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
               </>
             )}
           </Card>
           <Card
+            styles={{ body: { padding: 0 } }}
             title={
               <Space>
-                成员 <span className="uc-muted">{members.data?.total ?? 0} 人</span>
-                <Checkbox checked={includeSub} onChange={(e) => setIncludeSub(e.target.checked)}>
-                  包含子部门
-                </Checkbox>
+                成员 <span className="uc-sub">{members.data?.total ?? 0} 人</span>
+                <span className="uc-row uc-sub" style={{ marginLeft: 8, fontWeight: 400 }}>
+                  包含子部门 <Switch size="small" checked={includeSub} onChange={setIncludeSub} />
+                </span>
               </Space>
             }
             extra={
               <Space>
-                {can("org:manage") && <Button onClick={() => setMoveIn(true)}>调入成员</Button>}
+                {can("org:manage") && (
+                  <Button size="small" icon={<Icon name="login" size={14} />} onClick={() => setMoveIn(true)}>
+                    调入成员
+                  </Button>
+                )}
                 {can("user:create") && (
-                  <Button type="primary" onClick={() => setUserForm(true)}>
-                    ＋ 新建用户
+                  <Button size="small" type="primary" icon={<Icon name="userPlus" size={14} />} onClick={() => setUserForm(true)}>
+                    新建用户
                   </Button>
                 )}
               </Space>
@@ -175,33 +238,30 @@ export default function OrgPage() {
           >
             <Table<User>
               rowKey="id"
-              size="small"
               loading={members.isLoading}
               dataSource={members.data?.items ?? []}
               pagination={false}
-              locale={{ emptyText: <Empty description="该部门还没有成员" /> }}
+              locale={{ emptyText: <Empty description="这个部门还没有成员：「调入成员」把已有的人调进来，或者新建用户" /> }}
+              onRow={(u) => ({ onClick: () => router.push(`/users/${u.id}`), className: "uc-row-click" })}
               columns={[
-                {
-                  title: "成员",
-                  render: (_, u) => (
-                    <Space>
-                      <Link href={`/users/${u.id}`}>{u.name}</Link>
-                      <span className="uc-muted">{u.account}</span>
-                      {u.is_leader && <Tag color="purple">负责人</Tag>}
-                    </Space>
-                  ),
-                },
+                { title: "成员", render: (_, u) => <PersonCell name={u.name} account={u.account} extra={u.is_leader && <Tag color="purple">负责人</Tag>} /> },
+                ...(includeSub ? [{ title: "部门", render: (_: unknown, u: User) => <span className="uc-nw">{deptName.get(u.dept_id ?? "")}</span> }] : []),
                 { title: "岗位", render: (_, u) => u.positions?.join("、") || <span className="uc-muted">—</span> },
                 { title: "状态", render: (_, u) => <StatusTag status={u.status} /> },
                 {
                   title: "",
                   align: "right",
+                  width: 56,
                   render: (_, u) =>
-                    can("org:manage") && !u.is_leader && u.status !== "disabled" ? (
-                      <Button type="link" size="small" onClick={() => setLeader.mutate(u.id)}>
-                        设为负责人
-                      </Button>
-                    ) : null,
+                    can("org:manage") &&
+                    !u.is_leader &&
+                    u.status !== "disabled" && (
+                      <span onClick={(e) => e.stopPropagation()}>
+                        <Dropdown trigger={["click"]} menu={{ items: [{ key: "leader", icon: <Icon name="star" size={14} />, label: "设为负责人", onClick: () => setLeader.mutate(u.id) }] }}>
+                          <Button type="text" size="small" aria-label="更多" icon={<Icon name="more" />} />
+                        </Dropdown>
+                      </span>
+                    ),
                 },
               ]}
             />

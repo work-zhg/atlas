@@ -20,3 +20,6 @@ export function fmtTime(iso: string | null | undefined): string {
   const p = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
+
+/** 应用入口地址：同源绝对路径（不是 // 开头的协议相对地址）或 http(s) 完整地址 —— 与后端 HOME_URL_RE 一致 */
+export const HOME_URL_RULE = { pattern: /^(\/(?![/\\])\S*|https?:\/\/\S+)$/, message: "以 / 开头的站内路径，或 http(s):// 开头的完整地址" };

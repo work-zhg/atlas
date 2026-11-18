@@ -6,7 +6,8 @@ import { useEffect } from "react";
 
 import { BackendDown, isAuthRedirect } from "@/components/BackendDown";
 import { ApiError } from "@/lib/api";
-import { landingPath, useMe, withNext } from "@/lib/session";
+import { landingPath } from "@/components/shell/nav";
+import { useMe, withNext } from "@/lib/session";
 
 export default function Index() {
   const router = useRouter();

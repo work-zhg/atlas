@@ -48,6 +48,8 @@ __all__ = ["AppService"]
 OP_CODE_RE = re.compile(r"^[a-z][a-z0-9_]*:[a-z][a-z0-9_]*$")
 #: 应用编码（内网请求头 X-Caller-App 的取值）
 APP_CODE_RE = re.compile(r"^[a-z][a-z0-9-]{1,31}$")
+#: 入口地址：同源绝对路径（不是 // 开头的协议相对地址）或 http(s) 完整地址 —— 挡住 javascript: 之类
+HOME_URL_RE = re.compile(r"^(/(?![/\\])\S*|https?://\S+)$")
 MENU_CODE_RE = re.compile(r"^[a-z][a-z0-9_]{1,31}$")
 MENU_PATH_RE = re.compile(r"^/[\w\-/]*$")
 ROLE_CODE_RE = re.compile(r"^[A-Z][A-Z0-9_]{1,31}$")
@@ -109,17 +111,35 @@ class AppService:
             raise Conflict("APP_CODE_EXISTS", "应用编码已存在")
         return code
 
+    @staticmethod
+    def _check_home_url(url: str | None) -> str | None:
+        url = (url or "").strip() or None
+        if url is not None and (len(url) > 500 or not HOME_URL_RE.match(url)):
+            raise Invalid(
+                "APP_HOME_URL_INVALID",
+                "入口地址：以 / 开头的站内路径，或 http(s):// 开头的完整地址",
+                field="home_url",
+            )
+        return url
+
     async def create(
-        self, name: str, description: str | None, icon: str | None, code: str | None = None
+        self,
+        name: str,
+        description: str | None,
+        icon: str | None,
+        code: str | None = None,
+        home_url: str | None = None,
     ) -> tuple[App, str]:
         name = require_text(name, "name", "应用名称", 50)
         if await self.session.scalar(select(App.uuid).where(App.name == name)):
             raise Conflict("APP_NAME_EXISTS", "应用名称已存在")
         code = await self._check_code(code)
+        home_url = self._check_home_url(home_url)
         secret = new_secret()
         app = App(
             name=name,
             code=code,
+            home_url=home_url,
             description=(description or "").strip()[:200] or None,
             icon=(icon or "").strip()[:16] or "🧱",
             app_key=new_app_key(),
@@ -156,6 +176,11 @@ class AppService:
             if code != app.code:
                 changes["code"] = [app.code, code]
                 app.code = code
+        if "home_url" in data:
+            home_url = self._check_home_url(data["home_url"])
+            if home_url != app.home_url:
+                changes["home_url"] = [app.home_url, home_url]
+                app.home_url = home_url
         for key, limit in (("description", 200), ("icon", 16)):
             if key in data:
                 val = (data[key] or "").strip()[:limit] or None

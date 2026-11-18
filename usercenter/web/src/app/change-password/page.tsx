@@ -1,60 +1,41 @@
 "use client";
 
+/**
+ * 须改密时的独立地址：各应用经网关拿到「须改密」跳来，或登录页发现已登录但须改密。
+ * 界面与登录页第二步相同；这里没有刚输入的临时密码，所以多一栏「当前密码」。
+ */
 import { useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Card, Form, Input } from "antd";
+import { Spin } from "antd";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect } from "react";
 
-import { api, errorText } from "@/lib/api";
+import { AuthCard, SetPasswordForm } from "@/components/auth/AuthCard";
+import { ApiError, api } from "@/lib/api";
 import { goNext, useMe } from "@/lib/session";
 
 export default function ChangePasswordPage() {
   const router = useRouter();
   const qc = useQueryClient();
-  const { data: me } = useMe();
-  const [err, setErr] = useState<string>();
-  const [loading, setLoading] = useState(false);
+  const { data: me, error } = useMe();
+  useEffect(() => {
+    if (error instanceof ApiError && error.status === 401) router.replace("/login");
+  }, [error, router]);
 
-  async function submit(v: { old_password: string; new_password: string; confirm: string }) {
-    if (v.new_password !== v.confirm) {
-      setErr("两次输入的新密码不一致");
-      return;
-    }
-    setLoading(true);
-    setErr(undefined);
-    try {
-      await api.post("/auth/password", { old_password: v.old_password, new_password: v.new_password });
-      await qc.invalidateQueries({ queryKey: ["me"] });
-      if (!goNext()) router.replace("/");
-    } catch (e) {
-      setErr(errorText(e));
-    } finally {
-      setLoading(false);
-    }
-  }
-
+  if (!me) return <Spin style={{ display: "block", marginTop: 120 }} />;
   return (
-    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
-      <Card style={{ width: 400 }} title={me?.first_login ? "首次登录，请设置新密码" : "密码需要修改"}>
-        <p className="uc-muted" style={{ marginTop: 0 }}>
-          {me ? `${me.user.name}（${me.user.account}）` : ""}　要求：{me?.password_policy ?? "—"}
-        </p>
-        {err && <Alert type="error" showIcon message={err} style={{ marginBottom: 16 }} />}
-        <Form layout="vertical" onFinish={submit} requiredMark={false}>
-          <Form.Item name="old_password" label="当前密码（临时密码）" rules={[{ required: true }]}>
-            <Input.Password autoComplete="current-password" />
-          </Form.Item>
-          <Form.Item name="new_password" label="新密码" rules={[{ required: true }]}>
-            <Input.Password autoComplete="new-password" />
-          </Form.Item>
-          <Form.Item name="confirm" label="确认新密码" rules={[{ required: true }]}>
-            <Input.Password autoComplete="new-password" />
-          </Form.Item>
-          <Button type="primary" htmlType="submit" block loading={loading}>
-            设置并进入
-          </Button>
-        </Form>
-      </Card>
-    </div>
+    <AuthCard>
+      <SetPasswordForm
+        me={me}
+        submitText="设置并进入"
+        onDone={() => {
+          if (!goNext()) router.replace("/");
+        }}
+        onSwitchAccount={async () => {
+          await api.post("/auth/logout").catch(() => undefined);
+          qc.clear();
+          router.replace("/login");
+        }}
+      />
+    </AuthCard>
   );
 }

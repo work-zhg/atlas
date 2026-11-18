@@ -1,13 +1,385 @@
-html, body { margin: 0; padding: 0; background: #f6f7f9; }
-* { box-sizing: border-box; }
-.uc-mono { font-family: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; }
-.uc-muted { color: #64748b; }
-.uc-page-head { display: flex; align-items: flex-end; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
-.uc-page-head h1 { font-size: 21px; margin: 0; }
-.uc-page-head .sub { color: #64748b; font-size: 13px; margin-top: 4px; }
-.uc-grow { flex: 1; }
-.uc-code { background: #0f172a; color: #e2e8f0; border-radius: 8px; padding: 10px 12px; font-family: "SF Mono", Menlo, monospace; font-size: 12px; line-height: 1.6; overflow: auto; white-space: pre; margin: 0; }
-.uc-pv-side { background: #111827; border-radius: 10px; padding: 10px 8px; color: #aeb8cb; font-size: 13px; min-height: 120px; }
-.uc-pv-brand { color: #fff; font-weight: 650; padding: 4px 10px 10px; border-bottom: 1px solid rgba(255,255,255,.08); margin-bottom: 6px; }
-.uc-pv-dir { color: #8592a8; font-size: 11.5px; padding: 8px 10px 4px; }
-.uc-pv-item { padding: 7px 10px; border-radius: 8px; }
+/* 设计变量（:root）在 ../theme/tokens.css（与 Atlas 同一套值），由 layout.tsx 引入。 */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-2) transparent;
+}
+
+:focus-visible {
+  outline: 2px solid var(--primary-text);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+
+/* ---------- 页面骨架：标题 + 右侧主操作，内容最宽 1280 居中（同 Atlas） ---------- */
+.uc-page {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 22px 32px 56px;
+}
+
+.uc-page-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 16px;
+  min-height: 36px;
+}
+
+.uc-page-head h1 {
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  line-height: 1.35;
+  margin: 0;
+}
+
+.uc-page-head .sub {
+  color: var(--fg-3);
+  font-size: 13px;
+  margin-top: 2px;
+}
+
+.uc-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+
+.uc-grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.uc-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.uc-muted {
+  color: var(--fg-3);
+}
+
+.uc-nw {
+  white-space: nowrap;
+}
+
+.uc-mono {
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+
+.uc-sub {
+  color: var(--fg-3);
+  font-size: 12px;
+}
+
+.uc-code {
+  background: var(--bg-code);
+  border: 1px solid var(--line);
+  color: var(--fg-2);
+  border-radius: var(--r-md);
+  padding: 10px 12px;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow: auto;
+  white-space: pre;
+  margin: 0;
+}
+
+/* 左栏（树 / 列表）+ 右侧详情 */
+.uc-split {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.uc-panel {
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  display: flex;
+  flex-direction: column;
+  position: sticky;
+  top: 0;
+  max-height: calc(100vh - var(--top-h) - 48px);
+  overflow: hidden;
+}
+
+.uc-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.uc-panel-body {
+  overflow-y: auto;
+  padding: 6px;
+  flex: 1;
+}
+
+/* 列表项（角色、选人） */
+.uc-li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--r-md);
+  cursor: pointer;
+  border: none;
+  background: none;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+
+.uc-li:hover {
+  background: var(--bg-2);
+}
+
+.uc-li[aria-current="true"] {
+  background: var(--primary-soft);
+}
+
+.uc-li[aria-current="true"] b {
+  color: var(--primary-text);
+}
+
+.uc-group-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--fg-3);
+  padding: 10px 10px 4px;
+}
+
+/* 三格摘要（部门信息） */
+.uc-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.uc-stat {
+  background: var(--bg-side);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  min-width: 0;
+}
+
+.uc-stat .k {
+  font-size: 12px;
+  color: var(--fg-3);
+  margin-bottom: 4px;
+}
+
+.uc-stat .v {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-weight: 600;
+}
+
+/* 方形图标（应用、部门、数字员工） */
+.uc-sq {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+
+/* 人：圆形头像 */
+.uc-avatar {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  border-radius: 50%;
+  color: #fff;
+  font-weight: 650;
+}
+
+/* 表格里的整行点击 */
+.uc-row-click {
+  cursor: pointer;
+}
+
+/* 只显示一次的凭据 */
+.uc-once {
+  background: var(--bg-side);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 2px 14px;
+}
+
+.uc-once-row {
+  display: grid;
+  grid-template-columns: 80px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px dashed var(--line);
+}
+
+.uc-once-row:last-child {
+  border-bottom: none;
+}
+
+/* 单选卡片（可访问范围） */
+.uc-radio-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+  cursor: pointer;
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  background: var(--bg-1);
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+
+.uc-radio-card:hover {
+  border-color: var(--line-2);
+}
+
+.uc-radio-card[aria-checked="true"] {
+  border-color: var(--primary-hover);
+  background: #f8f8ff;
+  box-shadow: 0 0 0 3px var(--primary-soft);
+}
+
+.uc-radio-card .dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1.5px solid #c5cad6;
+  flex: none;
+  margin-top: 3px;
+}
+
+.uc-radio-card[aria-checked="true"] .dot {
+  border: 5px solid var(--primary);
+}
+
+/* 卡片网格（应用目录、我的应用） */
+.uc-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+  gap: 14px;
+}
+
+.uc-acard {
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  transition:
+    border-color var(--t-fast) var(--ease),
+    box-shadow var(--t-fast) var(--ease);
+}
+
+button.uc-acard,
+a.uc-acard {
+  cursor: pointer;
+}
+
+button.uc-acard:hover,
+a.uc-acard:hover {
+  border-color: var(--line-2);
+  box-shadow: var(--shadow-md);
+}
+
+.uc-acard .desc {
+  color: var(--fg-3);
+  font-size: 13px;
+  line-height: 1.55;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  min-height: 40px;
+}
+
+.uc-acard .foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--fg-3);
+  margin-top: auto;
+}
+
+/* 菜单预览（应用详情 › 菜单） */
+.uc-pv {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-side);
+  padding: 8px 6px;
+  font-size: 13px;
+  min-height: 120px;
+}
+
+.uc-pv-dir {
+  color: var(--fg-3);
+  font-size: 11.5px;
+  padding: 8px 10px 4px;
+}
+
+.uc-pv-item {
+  padding: 6px 10px;
+  border-radius: 6px;
+  color: var(--fg-2);
+}

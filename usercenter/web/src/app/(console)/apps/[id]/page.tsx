@@ -1,21 +1,27 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, App, Button, Card, Checkbox, Descriptions, Empty, Form, Input, List, Modal, Radio, Select, Space, Table, Tabs, Tag, Typography } from "antd";
-import { useParams, useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+/**
+ * 应用详情：接入配置 / 操作 / 菜单 / 数据编码。
+ * ★ 角色挪到了「权限 › 角色」集中管理（「操作」页签有入口，筛好本应用）。
+ * ★ 内置应用（用户中心）只有操作、菜单，只读。
+ */
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Alert, App, Button, Card, Checkbox, Descriptions, Dropdown, Form, Input, Modal, Radio, Select, Space, Table, Tabs, Tag, Typography } from "antd";
+import Link from "next/link";
+import { useParams } from "next/navigation";
+import { useState } from "react";
 
-import { DeptSelect, LevelTag, PageHead, showOnce, StatusTag, SubjectPicker, toSubjects, UserSelect, type SubjectValue } from "@/components/common";
-import { GrantToModal, useGrantMutations } from "@/components/grantActions";
+import { AppIcon, DeptSelect, DetailHead, LevelTag, showOnce, SubjectPicker, toSubjects, UserSelect, type SubjectValue } from "@/components/common";
+import { Icon } from "@/components/Icon";
+import { menuRows } from "@/components/roles";
 import { api, errorText } from "@/lib/api";
-import { fmtTime, LEVEL } from "@/lib/format";
+import { fmtTime, HOME_URL_RULE, LEVEL } from "@/lib/format";
 import { useCan } from "@/lib/session";
-import type { AppInfo, DataTypeInfo, GrantRow, Level, MenuItem, MenuNode, Operation, Role } from "@/lib/types";
+import type { AppInfo, DataTypeInfo, Level, MenuItem, MenuNode, Operation } from "@/lib/types";
 
 export default function AppDetailPage() {
   const { id } = useParams<{ id: string }>();
   const can = useCan();
-  const router = useRouter();
   const qc = useQueryClient();
   const { message, modal } = App.useApp();
   const app = useQuery({ queryKey: ["app", id], queryFn: () => api.get<AppInfo>(`/apps/${id}`) });
@@ -25,18 +31,18 @@ export default function AppDetailPage() {
   const tabs = [
     // 凭据属于平台（app:manage）；可访问范围属于本租户（tenant_app:manage）
     !a.is_builtin && (can("app:manage") || can("tenant_app:manage")) && { key: "conf", label: "接入配置", children: <ConfTab app={a} /> },
-    { key: "ops", label: `操作目录（${a.operations}）`, children: <OpsTab app={a} /> },
-    { key: "menus", label: `菜单（${a.menus}）`, children: <MenusTab app={a} /> },
-    can("role:view") && { key: "roles", label: `角色（${a.roles}）`, children: <RolesTab app={a} /> },
-    !a.is_builtin && can("app:manage") && { key: "dtypes", label: `数据编码（${a.data_types}）`, children: <DataTypesTab app={a} /> },
+    { key: "ops", label: `操作 ${a.operations}`, children: <OpsTab app={a} /> },
+    { key: "menus", label: `菜单 ${a.menus}`, children: <MenusTab app={a} /> },
+    !a.is_builtin && can("app:manage") && { key: "dtypes", label: `数据编码 ${a.data_types}`, children: <DataTypesTab app={a} /> },
   ].filter(Boolean) as { key: string; label: string; children: React.ReactNode }[];
 
-  async function toggle() {
+  function toggle() {
     if (!a) return;
     const disabling = a.status === "active";
     modal.confirm({
       title: disabling ? `停用应用 · ${a.name}` : `启用应用 · ${a.name}`,
       content: disabling ? "停用后该应用不能再获取接口令牌，已签发的令牌立即失效；角色、菜单与授权全部保留。" : "启用后应用可重新获取接口令牌。",
+      okText: disabling ? "停用" : "启用",
       okButtonProps: { danger: disabling },
       onOk: async () => {
         try {
@@ -53,21 +59,22 @@ export default function AppDetailPage() {
 
   return (
     <>
-      <PageHead
-        title={`${a.icon ?? ""} ${a.name}`}
-        sub={a.is_builtin ? "本系统 · 内置应用：操作与菜单随版本发布（只读），用户中心的侧边栏就是按这里的菜单和登录人的角色生成的" : `${a.description ?? ""} · 接入于 ${fmtTime(a.created_at)}`}
+      <DetailHead
+        back="/apps"
+        icon={<AppIcon app={a} size={44} />}
+        title={a.name}
+        tags={a.is_builtin ? <Tag>内置</Tag> : a.status === "active" ? <Tag color="success">已启用</Tag> : <Tag>已停用</Tag>}
+        sub={a.is_builtin ? "本系统 · 操作与菜单随版本发布（只读）" : `${a.description ?? ""}${a.description ? " · " : ""}接入于 ${fmtTime(a.created_at)}`}
         extra={
-          <Space>
-            {!a.is_builtin && can("app:manage") && (
-              <Button danger={a.status === "active"} onClick={toggle}>
-                {a.status === "active" ? "停用" : "启用"}
-              </Button>
-            )}
-            <Button onClick={() => router.push("/apps")}>← 返回应用列表</Button>
-          </Space>
+          !a.is_builtin &&
+          can("app:manage") && (
+            <Button danger={a.status === "active"} type={a.status === "active" ? "default" : "primary"} onClick={toggle}>
+              {a.status === "active" ? "停用" : "启用"}
+            </Button>
+          )
         }
       />
-      {a.status === "disabled" && <Alert type="warning" showIcon style={{ marginBottom: 12 }} message="应用已停用：开放接口拒绝该应用的调用。" />}
+      {a.status === "disabled" && <Alert type="warning" showIcon style={{ margin: "8px 0 4px" }} message="应用已停用：开放接口拒绝该应用的调用。" />}
       <Tabs items={tabs} destroyOnHidden />
     </>
   );
@@ -81,23 +88,24 @@ function ConfTab({ app }: { app: AppInfo }) {
   const { message, modal } = App.useApp();
   const [all, setAll] = useState(app.scope_all);
   const [depts, setDepts] = useState<string[]>(app.scope_dept_ids ?? []);
+  const refresh = () => (qc.invalidateQueries({ queryKey: ["app", app.id] }), qc.invalidateQueries({ queryKey: ["apps"] }));
   const rotate = () =>
     modal.confirm({
       title: `重新生成 Secret · ${app.name}`,
       content: "旧 Secret 及其签发的接口令牌立即失效，应用在更新配置前无法调用开放接口。",
+      okText: "重新生成",
       okButtonProps: { danger: true },
       onOk: async () => {
         const r = await api.post<{ app: AppInfo; app_secret: string }>(`/apps/${app.id}/rotate-secret`);
-        qc.invalidateQueries({ queryKey: ["app", app.id] });
+        refresh();
         showOnce(modal, "新的 App Secret", [["App Key", r.app.app_key ?? ""], ["App Secret", r.app_secret]], "App Secret 只显示这一次，只能保存在应用后端。");
       },
     });
-  async function saveCode(code: string) {
+  async function patch(field: "code" | "home_url", value: string, ok: string) {
     try {
-      await api.patch(`/apps/${app.id}`, { code: code.trim() || null, version: app.version });
-      qc.invalidateQueries({ queryKey: ["app", app.id] });
-      qc.invalidateQueries({ queryKey: ["apps"] });
-      message.success("已保存应用编码");
+      await api.patch(`/apps/${app.id}`, { [field]: value.trim() || null, version: app.version });
+      refresh();
+      message.success(ok);
     } catch (e) {
       message.error(errorText(e));
     }
@@ -105,49 +113,57 @@ function ConfTab({ app }: { app: AppInfo }) {
   async function saveScope() {
     try {
       const r = await api.put<{ accessible_users: number }>(`/apps/${app.id}/scope`, { all, dept_ids: all ? [] : depts });
-      qc.invalidateQueries({ queryKey: ["app", app.id] });
-      qc.invalidateQueries({ queryKey: ["apps"] });
+      refresh();
       message.success(`已保存，当前 ${r.accessible_users} 人可访问`);
     } catch (e) {
       message.error(errorText(e));
     }
   }
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, alignItems: "start" }}>
+    <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: 16, alignItems: "start" }}>
       <Space direction="vertical" size={16} style={{ width: "100%" }}>
         {can("app:manage") && (
-        <Card size="small" title="应用凭据" extra={<Tag color="blue">服务端调用开放接口</Tag>}>
-          <Descriptions column={1} size="small" styles={{ label: { width: 100 } }}>
-            <Descriptions.Item label="应用编码">
-              <Typography.Text
-                code
-                editable={{
-                  tooltip: "内网服务调用开放接口时，请求头 X-Caller-App 写它",
-                  onChange: (v) => void saveCode(v),
-                }}
-              >
-                {app.code ?? ""}
-              </Typography.Text>
-            </Descriptions.Item>
-            <Descriptions.Item label="App Key">
-              <Typography.Text code copyable>
-                {app.app_key}
-              </Typography.Text>
-            </Descriptions.Item>
-            <Descriptions.Item label="App Secret">
-              <Space>
-                <Typography.Text code>••••••••••••{app.secret_tail}</Typography.Text>
-                <Button size="small" onClick={rotate}>
-                  重新生成
-                </Button>
-              </Space>
-            </Descriptions.Item>
-          </Descriptions>
-          <div className="uc-muted">Secret 只在生成时显示一次；只能保存在应用后端，不能下发到浏览器。</div>
-        </Card>
+          <Card size="small" title="应用凭据" extra={<Tag color="blue">服务端调用开放接口</Tag>}>
+            <Descriptions column={1} size="small" styles={{ label: { width: 96 } }}>
+              <Descriptions.Item label="应用编码">
+                <Typography.Text code editable={{ tooltip: "内网服务调用开放接口时，请求头 X-Caller-App 写它", onChange: (v) => void patch("code", v, "已保存应用编码") }}>
+                  {app.code ?? ""}
+                </Typography.Text>
+              </Descriptions.Item>
+              <Descriptions.Item label="App Key">
+                <Typography.Text code copyable>
+                  {app.app_key}
+                </Typography.Text>
+              </Descriptions.Item>
+              <Descriptions.Item label="App Secret">
+                <Space>
+                  <Typography.Text code>••••••••••••{app.secret_tail}</Typography.Text>
+                  <Button size="small" icon={<Icon name="refresh" size={14} />} onClick={rotate}>
+                    重新生成
+                  </Button>
+                </Space>
+              </Descriptions.Item>
+              <Descriptions.Item label="入口地址">
+                <Typography.Text
+                  code
+                  editable={{
+                    tooltip: "「应用切换」「我的应用」点开去这里",
+                    onChange: (v) => {
+                      if (v.trim() && !HOME_URL_RULE.pattern.test(v.trim())) return void message.error(HOME_URL_RULE.message);
+                      void patch("home_url", v, v.trim() ? "已保存入口地址" : "已清空入口地址");
+                    },
+                  }}
+                >
+                  {app.home_url ?? ""}
+                </Typography.Text>
+                {!app.home_url && <span className="uc-sub">未登记：不出现在应用切换里</span>}
+              </Descriptions.Item>
+            </Descriptions>
+            <div className="uc-sub">Secret 只在生成时显示一次，只能保存在应用后端，不能下发到浏览器。</div>
+          </Card>
         )}
         <Card size="small" title="开放接口">
-          <Descriptions column={1} size="small" styles={{ label: { width: 100 } }}>
+          <Descriptions column={1} size="small" styles={{ label: { width: 96 } }}>
             <Descriptions.Item label="Base URL">
               <span className="uc-mono">/open/v1</span>
             </Descriptions.Item>
@@ -155,23 +171,48 @@ function ConfTab({ app }: { app: AppInfo }) {
               <span className="uc-mono">POST /auth/token</span>
               <span className="uc-muted">（带 tenant_code：令牌绑定到该租户）</span>
             </Descriptions.Item>
-            <Descriptions.Item label="主要接口">用户与部门查询、授权快照（can_access / 角色 / 操作码 / 菜单）、实时校验、数据权限</Descriptions.Item>
+            <Descriptions.Item label="主要接口">用户与部门查询、授权快照（可否访问 / 角色 / 操作码 / 菜单）、实时校验、数据权限</Descriptions.Item>
           </Descriptions>
-          <Alert type="info" showIcon message="统一登录（SSO）暂不提供：应用自行处理登录，按账号与用户中心对齐身份；以后引入 Keycloak。" />
         </Card>
       </Space>
-      <Card size="small" title="可访问范围（本租户）" extra={<span className="uc-muted">当前 {app.accessible_users ?? 0} 人可访问</span>}>
-        <Radio.Group value={all} onChange={(e) => setAll(e.target.value)} style={{ marginBottom: 12 }}>
-          <Radio value>全员</Radio>
-          <Radio value={false}>指定部门（含其子部门）</Radio>
-        </Radio.Group>
-        {!all && <DeptSelect multiple value={depts} onChange={(v) => setDepts(v as string[])} />}
-        {!all && !depts.length && <div style={{ color: "#dc2626", marginTop: 6 }}>未设置部门：无人可访问</div>}
-        <div style={{ textAlign: "right", marginTop: 12 }}>
-          <Button type="primary" onClick={saveScope}>
-            保存范围
-          </Button>
-        </div>
+      <Card
+        size="small"
+        title={
+          <span>
+            可访问范围 <span className="uc-sub">本租户</span>
+          </span>
+        }
+        extra={<Tag color={(app.accessible_users ?? 0) > 0 ? "success" : "error"}>当前 {app.accessible_users ?? 0} 人可访问</Tag>}
+      >
+        <Space direction="vertical" size={10} style={{ width: "100%" }}>
+          <button type="button" className="uc-radio-card" role="radio" aria-checked={all} onClick={() => setAll(true)}>
+            <span className="dot" />
+            <span>
+              <b>全员</b>
+              <div className="uc-sub">本租户所有未停用的人</div>
+            </span>
+          </button>
+          <div className="uc-radio-card" role="radio" aria-checked={!all} onClick={() => setAll(false)}>
+            <span className="dot" />
+            <span className="uc-grow">
+              <b>指定部门</b>
+              <div className="uc-sub">含这些部门的下级部门</div>
+              {!all && (
+                <div style={{ marginTop: 10 }} onClick={(e) => e.stopPropagation()}>
+                  <DeptSelect multiple value={depts} onChange={(v) => setDepts(v as string[])} />
+                  {!depts.length && <div style={{ color: "var(--danger)", marginTop: 6, fontSize: 12.5 }}>还没选部门：没有人能访问</div>}
+                </div>
+              )}
+            </span>
+          </div>
+          <div className="uc-row">
+            <span className="uc-sub">访问不了的人在应用里会看到「没有访问权限」</span>
+            <div className="uc-grow" />
+            <Button type="primary" onClick={saveScope}>
+              保存范围
+            </Button>
+          </div>
+        </Space>
       </Card>
     </div>
   );
@@ -214,7 +255,8 @@ function OpsTab({ app }: { app: AppInfo }) {
       title="操作目录"
       extra={
         <Space>
-          <span className="uc-muted">该应用可被授权的操作，角色从这里勾选{app.is_builtin ? " · 内置应用只读" : ""}</span>
+          <span className="uc-sub">该应用可被授权的操作{app.is_builtin ? " · 内置应用只读" : ""}</span>
+          {can("role:view") && <Link href={`/perm/roles?app=${app.id}`}>用这些操作配角色：权限 › 角色 →</Link>}
           {editable && <Button type="primary" size="small" onClick={() => (form.resetFields(), setOpen(true))}>＋ 新增操作</Button>}
         </Space>
       }
@@ -258,13 +300,6 @@ const can = (op) => permissions.includes(op);
 }
 
 // ───────────────────────────────────────────── 菜单
-
-function menuRows(items: MenuItem[], parent: string | null = null, depth = 0): (MenuItem & { depth: number })[] {
-  return items
-    .filter((m) => m.parent_id === parent)
-    .sort((a, b) => a.sort - b.sort)
-    .flatMap((m) => [{ ...m, depth }, ...menuRows(items, m.id, depth + 1)]);
-}
 
 function MenusTab({ app }: { app: AppInfo }) {
   const can = useCan();
@@ -319,7 +354,7 @@ function MenusTab({ app }: { app: AppInfo }) {
         title="菜单"
         extra={
           <Space>
-            <span className="uc-muted">{app.is_builtin ? "内置菜单随版本发布" : "角色在「角色 → 菜单权限」中绑定"}</span>
+            <span className="uc-muted">{app.is_builtin ? "内置菜单随版本发布" : "在「权限 › 角色 › 菜单权限」里绑定给角色"}</span>
             {editable && <Button type="primary" size="small" onClick={() => setForm({ open: true, menu: null, parent: null })}>＋ 新增</Button>}
           </Space>
         }
@@ -354,9 +389,10 @@ function MenusTab({ app }: { app: AppInfo }) {
       </Card>
       <Card size="small" title="菜单预览">
         <UserSelect value={pvUser} onChange={(v) => setPvUser(v as string)} />
-        <div className="uc-pv-side" style={{ marginTop: 10 }}>
-          <div className="uc-pv-brand">
-            {app.icon} {app.name}
+        <div className="uc-pv" style={{ marginTop: 10 }}>
+          <div className="uc-row" style={{ padding: "4px 10px 8px", borderBottom: "1px solid var(--line)", marginBottom: 6, fontWeight: 600 }}>
+            <AppIcon app={app} size={20} />
+            {app.name}
           </div>
           {!pvUser ? (
             <div className="uc-pv-dir">选择一个用户预览其可见菜单</div>
@@ -429,277 +465,6 @@ function MenuForm({ app, menu, parent, dirs, onClose, onDone }: { app: AppInfo; 
         )}
       </Form>
     </Modal>
-  );
-}
-
-// ───────────────────────────────────────────── 角色
-
-function RolesTab({ app }: { app: AppInfo }) {
-  const can = useCan();
-  const qc = useQueryClient();
-  const { message } = App.useApp();
-  const roles = useQuery({ queryKey: ["app", app.id, "roles"], queryFn: () => api.get<Role[]>(`/apps/${app.id}/roles`) });
-  const [sel, setSel] = useState<string>();
-  const [form, setForm] = useState<{ open: boolean; mode?: "new" | "edit" | "copy" }>({ open: false });
-  const current = roles.data?.find((r) => r.id === sel) ?? roles.data?.[0];
-  return (
-    <div style={{ display: "grid", gridTemplateColumns: "280px minmax(0,1fr)", gap: 16, alignItems: "start" }}>
-      <Card size="small" title={`角色 ${roles.data?.length ?? 0} 个`} extra={can("role:manage") && <Button size="small" type="primary" onClick={() => setForm({ open: true, mode: "new" })}>＋ 新建</Button>}>
-        <List
-          dataSource={roles.data ?? []}
-          locale={{ emptyText: "该应用还没有角色" }}
-          renderItem={(r) => (
-            <List.Item
-              onClick={() => setSel(r.id)}
-              style={{ cursor: "pointer", padding: "8px 10px", borderRadius: 8, background: r.id === current?.id ? "#eef0ff" : undefined }}
-            >
-              <div>
-                <Space>
-                  <b style={{ color: r.id === current?.id ? "#4F46E5" : undefined }}>{r.name}</b>
-                  {r.is_builtin && <Tag>内置</Tag>}
-                </Space>
-                <div className="uc-muted" style={{ fontSize: 12 }}>
-                  {r.operation_count} 项操作 · {r.holder_count} 人
-                </div>
-              </div>
-            </List.Item>
-          )}
-        />
-      </Card>
-      {current ? <RoleDetail app={app} roleId={current.id} onEdit={(mode) => setForm({ open: true, mode })} onDeleted={() => setSel(undefined)} /> : <Card><Empty description="请先在「操作目录」登记操作，再新建角色" /></Card>}
-      {form.open && (
-        <RoleForm
-          app={app}
-          mode={form.mode!}
-          role={form.mode === "new" ? null : current ?? null}
-          onClose={() => setForm({ open: false })}
-          onDone={(id) => (qc.invalidateQueries({ queryKey: ["app", app.id] }), setSel(id), message.success("已保存"))}
-        />
-      )}
-    </div>
-  );
-}
-
-function RoleForm({ app, mode, role, onClose, onDone }: { app: AppInfo; mode: "new" | "edit" | "copy"; role: Role | null; onClose: () => void; onDone: (id: string) => void }) {
-  const { message } = App.useApp();
-  const [form] = Form.useForm();
-  async function submit(v: { name: string; code: string; description?: string }) {
-    try {
-      if (mode === "edit" && role) {
-        await api.patch(`/roles/${role.id}`, { name: v.name, description: v.description });
-        onDone(role.id);
-      } else {
-        const r = await api.post<Role>(`/apps/${app.id}/roles`, { ...v, copy_from: mode === "copy" ? role?.id : undefined });
-        onDone(r.id);
-      }
-      onClose();
-    } catch (e) {
-      message.error(errorText(e));
-    }
-  }
-  return (
-    <Modal open title={mode === "edit" ? `编辑角色 · ${role?.name}` : mode === "copy" ? `复制角色 · ${role?.name}` : "新建角色"} onCancel={onClose} onOk={() => form.submit()} okText="保存">
-      <Form form={form} layout="vertical" onFinish={submit} initialValues={mode === "edit" ? role ?? {} : mode === "copy" ? { name: `${role?.name}（副本）`, description: role?.description } : {}}>
-        <div className="uc-muted" style={{ marginBottom: 12 }}>
-          所属应用：{app.name}（角色属于应用，只能包含该应用的操作与菜单）
-        </div>
-        <Form.Item name="name" label="角色名称" rules={[{ required: true }]}>
-          <Input maxLength={32} />
-        </Form.Item>
-        <Form.Item name="code" label="角色编码" extra="全局唯一，各应用以编码识别角色，创建后不可修改" rules={mode === "edit" ? [] : [{ required: true, pattern: /^[A-Z][A-Z0-9_]{1,31}$/, message: "大写字母开头，大写字母、数字、下划线" }]}>
-          <Input disabled={mode === "edit"} />
-        </Form.Item>
-        <Form.Item name="description" label="说明">
-          <Input maxLength={200} />
-        </Form.Item>
-        {mode === "copy" && <Alert type="info" showIcon message="将复制操作与菜单，不复制授权。" />}
-      </Form>
-    </Modal>
-  );
-}
-
-function RoleDetail({ app, roleId, onEdit, onDeleted }: { app: AppInfo; roleId: string; onEdit: (mode: "edit" | "copy") => void; onDeleted: () => void }) {
-  const can = useCan();
-  const qc = useQueryClient();
-  const { message, modal } = App.useApp();
-  const role = useQuery({ queryKey: ["role", roleId], queryFn: () => api.get<Role>(`/roles/${roleId}`) });
-  const ops = useQuery({ queryKey: ["app", app.id, "ops"], queryFn: () => api.get<Operation[]>(`/apps/${app.id}/operations`) });
-  const menus = useQuery({ queryKey: ["app", app.id, "menus"], queryFn: () => api.get<MenuItem[]>(`/apps/${app.id}/menus`) });
-  const grants = useQuery({ queryKey: ["role", roleId, "grants"], queryFn: () => api.get<{ grants: GrantRow[]; positions: { id: string; name: string; grants: GrantRow[] }[] }>(`/roles/${roleId}/grants`) });
-  const holders = useQuery({ queryKey: ["role", roleId, "holders"], queryFn: () => api.get<{ user: { id: string; name: string; account: string; status: string }; dept: string; sources: string[] }[]>(`/roles/${roleId}/holders`) });
-  const grantActs = useGrantMutations();
-  const [opIds, setOpIds] = useState<string[]>([]);
-  const [menuIds, setMenuIds] = useState<string[]>([]);
-  const [grantTo, setGrantTo] = useState(false);
-  const r = role.data;
-  useEffect(() => {
-    if (r) {
-      setOpIds(r.operation_ids ?? []);
-      setMenuIds(r.menu_ids ?? []);
-    }
-  }, [r]);
-  const editable = !!r && can("role:manage") && !r.is_builtin;
-  const modules = useMemo(() => {
-    const m = new Map<string, Operation[]>();
-    for (const o of ops.data ?? []) m.set(o.module, [...(m.get(o.module) ?? []), o]);
-    return [...m.entries()];
-  }, [ops.data]);
-  const save = useMutation({
-    mutationFn: (kind: "operations" | "menus") => api.put(`/roles/${roleId}/${kind}`, { ids: kind === "operations" ? opIds : menuIds }),
-    onSuccess: () => (qc.invalidateQueries({ queryKey: ["role", roleId] }), qc.invalidateQueries({ queryKey: ["app", app.id] }), message.success("已保存；拥有者的权限随之更新")),
-    onError: (e) => message.error(errorText(e)),
-  });
-  if (!r) return <Card loading />;
-
-  async function remove() {
-    const pre = await api.del<{ grants: number; positions: string[]; holders: number }>(`/roles/${roleId}`, { dry_run: true });
-    modal.confirm({
-      title: `删除角色 · ${r!.name}`,
-      content: `将撤销 ${pre.grants} 条授权${pre.positions.length ? `，并从岗位 ${pre.positions.join("、")} 的默认角色中移除` : ""}；目前 ${pre.holders} 人拥有该角色。`,
-      okButtonProps: { danger: true },
-      onOk: async () => (await api.del(`/roles/${roleId}`), qc.invalidateQueries({ queryKey: ["app", app.id] }), onDeleted(), message.success("已删除")),
-    });
-  }
-
-  const menuRowsList = menuRows(menus.data ?? []);
-  const descendants = (id: string): string[] => (menus.data ?? []).filter((m) => m.parent_id === id).flatMap((m) => [m.id, ...descendants(m.id)]);
-  return (
-    <Card>
-      <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
-        <div>
-          <Space>
-            <span style={{ fontSize: 19, fontWeight: 650 }}>{r.name}</span>
-            {r.is_builtin && <Tag>内置</Tag>}
-          </Space>
-          <div className="uc-muted">
-            <span className="uc-mono">{r.code}</span> · {r.description}
-          </div>
-        </div>
-        <div className="uc-grow" />
-        {can("role:manage") && <Button onClick={() => onEdit("copy")}>复制</Button>}
-        {editable && <Button onClick={() => onEdit("edit")}>编辑</Button>}
-        {editable && <Button danger onClick={remove}>删除</Button>}
-      </div>
-      <Tabs
-        style={{ marginTop: 8 }}
-        items={[
-          {
-            key: "ops",
-            label: `操作权限（${opIds.length}）`,
-            children: (
-              <>
-                {modules.map(([mod, list]) => (
-                  <div key={mod} style={{ marginBottom: 12 }}>
-                    <Checkbox
-                      disabled={!editable}
-                      checked={list.every((o) => opIds.includes(o.id))}
-                      indeterminate={list.some((o) => opIds.includes(o.id)) && !list.every((o) => opIds.includes(o.id))}
-                      onChange={(e) => setOpIds(e.target.checked ? [...new Set([...opIds, ...list.map((o) => o.id)])] : opIds.filter((x) => !list.some((o) => o.id === x)))}
-                    >
-                      <b>{mod}</b>
-                    </Checkbox>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", paddingLeft: 24 }}>
-                      {list.map((o) => (
-                        <Checkbox key={o.id} disabled={!editable} checked={opIds.includes(o.id)} onChange={(e) => setOpIds(e.target.checked ? [...opIds, o.id] : opIds.filter((x) => x !== o.id))}>
-                          {o.name} <span className="uc-mono uc-muted">{o.code}</span>
-                        </Checkbox>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-                {!modules.length && <Empty description="该应用还没有登记操作" />}
-                {editable && <Button type="primary" onClick={() => save.mutate("operations")} loading={save.isPending}>保存</Button>}
-                {r.is_builtin && <div className="uc-muted">内置角色的操作不可修改</div>}
-              </>
-            ),
-          },
-          {
-            key: "menus",
-            label: `菜单权限（${menuIds.length}）`,
-            children: (
-              <>
-                {menuRowsList.map((m) => {
-                  const kids = descendants(m.id).filter((id) => (menus.data ?? []).find((x) => x.id === id)?.type === "menu");
-                  const checked = m.is_public || menuIds.includes(m.id) || (m.type === "dir" && kids.some((k) => menuIds.includes(k) || (menus.data ?? []).find((x) => x.id === k)?.is_public));
-                  return (
-                    <div key={m.id} style={{ paddingLeft: m.depth * 22 }}>
-                      <Checkbox
-                        disabled={!editable || m.is_public}
-                        checked={checked}
-                        onChange={(e) => {
-                          const ids = m.type === "dir" ? kids : [m.id];
-                          setMenuIds(e.target.checked ? [...new Set([...menuIds, ...ids])] : menuIds.filter((x) => !ids.includes(x)));
-                        }}
-                      >
-                        {m.icon} {m.type === "dir" ? <b>{m.name}</b> : m.name} {m.path && <span className="uc-mono uc-muted">{m.path}</span>} {m.type === "dir" && <Tag>目录</Tag>}
-                        {m.is_public && <Tag color="green">公共</Tag>}
-                      </Checkbox>
-                    </div>
-                  );
-                })}
-                {!menuRowsList.length && <Empty description="该应用还没有菜单" />}
-                <div className="uc-muted" style={{ margin: "8px 0" }}>
-                  公共菜单所有人可见，无需绑定；目录只在至少有一个可见子菜单时显示。
-                </div>
-                {editable && <Button type="primary" onClick={() => save.mutate("menus")} loading={save.isPending}>保存</Button>}
-              </>
-            ),
-          },
-          {
-            key: "grants",
-            label: `授权（${grants.data?.grants.length ?? 0}）`,
-            children: (
-              <Space direction="vertical" size={16} style={{ width: "100%" }}>
-                <Card size="small" title="授予的用户和组织" extra={can("grant:manage") && <Button size="small" type="primary" onClick={() => setGrantTo(true)}>＋ 授权</Button>}>
-                  <Table<GrantRow>
-                    size="small"
-                    rowKey="id"
-                    pagination={false}
-                    dataSource={grants.data?.grants ?? []}
-                    columns={[
-                      { title: "授权对象", render: (_, g) => `${g.subject.type === "user" ? "👤" : "🏢"} ${g.subject.name}` },
-                      { title: "范围", render: (_, g) => (g.subject.type === "user" ? "本人" : g.include_sub ? "本部门及下级部门" : "仅本部门") },
-                      { title: "覆盖人数", dataIndex: "covered" },
-                      { title: "", align: "right", render: (_, g) => can("grant:manage") && <Button type="link" size="small" danger onClick={() => grantActs.revoke(g)}>撤销</Button> },
-                    ]}
-                  />
-                </Card>
-                <Card size="small" title="通过岗位授予" extra={<span className="uc-muted">以下岗位的默认角色包含「{r.name}」</span>}>
-                  {grants.data?.positions.length ? (
-                    grants.data.positions.map((p) => (
-                      <div key={p.id} style={{ padding: "4px 0" }}>
-                        <b>{p.name}</b>：{p.grants.map((g) => <Tag key={g.id}>{g.subject.name}</Tag>)}
-                        {!p.grants.length && <span className="uc-muted">尚未授权</span>}
-                      </div>
-                    ))
-                  ) : (
-                    <span className="uc-muted">没有岗位关联该角色</span>
-                  )}
-                </Card>
-              </Space>
-            ),
-          },
-          {
-            key: "holders",
-            label: `拥有者（${holders.data?.length ?? 0}）`,
-            children: (
-              <Table
-                size="small"
-                rowKey={(h) => h.user.id}
-                pagination={false}
-                dataSource={holders.data ?? []}
-                columns={[
-                  { title: "用户", render: (_, h) => <Space><b>{h.user.name}</b><span className="uc-muted">{h.user.account}</span>{h.user.status === "disabled" && <StatusTag status="disabled" />}</Space> },
-                  { title: "部门", dataIndex: "dept" },
-                  { title: "来源", render: (_, h) => <span className="uc-muted">{h.sources.join("、")}</span> },
-                ]}
-              />
-            ),
-          },
-        ]}
-      />
-      {grantTo && <GrantToModal kind="role" target={r} onClose={() => setGrantTo(false)} />}
-    </Card>
   );
 }
 

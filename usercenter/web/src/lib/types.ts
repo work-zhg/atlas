@@ -25,8 +25,26 @@ export interface Me {
   permissions: string[];
   menus: MenuNode[];
   password_policy: string;
+  /** 与 password_policy 同一份规则的结构化形式：设置新密码时逐条打勾 */
+  password_rules: PasswordRules;
   /** 当前租户（租户设计）：platform = 平台租户（运营方）；customer = 客户租户 */
   tenant: { id: string; code: string; name: string; kind: "platform" | "customer" };
+}
+
+export interface PasswordRules {
+  min_len: number;
+  need_upper: boolean;
+  need_digit: boolean;
+  need_symbol: boolean;
+}
+
+export interface LoginLog {
+  time: string;
+  ip: string | null;
+  ok: boolean;
+  reason: string | null;
+  /** 经开放接口校验密码时的调用方应用；用户中心统一登录为空 */
+  app: string | null;
 }
 
 export interface TenantInfo {
@@ -105,6 +123,8 @@ export interface AppInfo {
   scope_all: boolean;
   status: "active" | "disabled";
   is_builtin: boolean;
+  /** 入口地址：「应用切换」「我的应用」点开去这里（同源路径或完整地址）；空 = 不提供入口 */
+  home_url: string | null;
   created_at: string | null;
   version: number;
   operations?: number;

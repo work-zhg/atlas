@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..common import display_status, iso
-from ..db.models import App, Credential, DataType, Menu, Operation, Role, User
+from ..db.models import App, Credential, DataType, LoginLog, Menu, Operation, Role, User
 
 __all__ = [
     "app_view",
@@ -47,6 +47,17 @@ def user_view(u: User, cred: Credential | None, **extra: Any) -> dict[str, Any]:
     }
 
 
+def login_log_view(log: LoginLog) -> dict[str, Any]:
+    #: app = 经开放接口校验密码时的调用方应用；用户中心统一登录为空
+    return {
+        "time": iso(log.occurred_at),
+        "ip": log.ip,
+        "ok": log.ok,
+        "reason": log.reason,
+        "app": log.app_name,
+    }
+
+
 def app_view(a: App, **extra: Any) -> dict[str, Any]:
     return {
         "id": str(a.uuid),
@@ -60,6 +71,7 @@ def app_view(a: App, **extra: Any) -> dict[str, Any]:
         "scope_all": a.is_builtin,
         "status": a.status,
         "is_builtin": a.is_builtin,
+        "home_url": a.home_url,
         "created_at": iso(a.created_at),
         "version": a.version,
         **extra,

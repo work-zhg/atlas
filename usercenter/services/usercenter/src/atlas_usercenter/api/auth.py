@@ -5,11 +5,12 @@ from __future__ import annotations
 import secrets
 from typing import Any
 
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, Query, Request, Response
 from pydantic import BaseModel
 from sqlalchemy import func, or_, select
 
 from ..auth.service import AuthService
+from ..common import Page
 from ..db.models import App, Dept, User
 from ..errors import Forbidden, UCError, Unauthorized
 from ..org.service import OrgService
@@ -17,7 +18,7 @@ from ..perm.effective import can_access
 from ..security import policy_text
 from ..user.service import UserService
 from .deps import CSRF_COOKIE, CSRF_HEADER, SESSION_COOKIE, PrincipalDep, SessionDep, SettingsDep
-from .views import app_view, user_brief, user_view
+from .views import app_view, login_log_view, user_brief, user_view
 
 router = APIRouter(prefix="/api/v1", tags=["auth"])
 
@@ -137,6 +138,13 @@ async def me(principal: PrincipalDep, session: SessionDep, settings: SettingsDep
             "kind": principal.tenant.kind,
         },
         "password_policy": policy_text(settings),
+        #: 与 password_policy 同一份规则的结构化形式：前端逐条打勾用
+        "password_rules": {
+            "min_len": settings.password_min_len,
+            "need_upper": settings.password_need_upper,
+            "need_digit": settings.password_need_digit,
+            "need_symbol": settings.password_need_symbol,
+        },
     }
 
 
@@ -151,6 +159,21 @@ async def change_password(
         keep_session=principal.session_row.uuid,
     )
     return {"ok": True}
+
+
+@router.get("/me/login-logs")
+async def my_login_logs(
+    principal: PrincipalDep,
+    session: SessionDep,
+    settings: SettingsDep,
+    page: int = Query(1, ge=1),
+    size: int = Query(20, ge=1, le=100),
+) -> list[dict[str, Any]]:
+    """本人最近 90 天的登录记录（个人中心「账号安全」）；失败的也列出，便于本人发现异常。"""
+    logs = await UserService(session, principal.actor, settings).login_logs(
+        principal.user.uuid, Page(page, size)
+    )
+    return [login_log_view(log) for log in logs]
 
 
 @router.patch("/me")

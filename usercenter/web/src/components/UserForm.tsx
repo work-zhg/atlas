@@ -7,7 +7,7 @@ import { useEffect } from "react";
 import { api, errorText } from "@/lib/api";
 import type { User } from "@/lib/types";
 
-import { DeptSelect, showOnce } from "./common";
+import { DeptSelect, showOnce, useLoginInfo } from "./common";
 
 /** 新建 / 编辑用户。★ 没有岗位、直属上级字段：岗位在权限管理中授予，直属上级由组织计算。 */
 export function UserForm({
@@ -24,6 +24,7 @@ export function UserForm({
   const [form] = Form.useForm();
   const qc = useQueryClient();
   const { message, modal } = App.useApp();
+  const loginInfo = useLoginInfo();
 
   useEffect(() => {
     if (!open) return;
@@ -56,7 +57,7 @@ export function UserForm({
       qc.invalidateQueries({ queryKey: ["org"] });
       onClose();
       if (r.temp) {
-        showOnce(modal, "用户已创建", [["用户", `${r.name}（${r.account}）`], ["临时密码", r.temp]], "临时密码只显示这一次，请通过安全渠道告知用户；首次登录必须修改密码。");
+        showOnce(modal, `用户已创建 · ${r.name}`, loginInfo(r.account, r.temp), "临时密码只显示这一次，请通过安全渠道发给本人；首次登录时会要求改成自己的密码。");
       } else if (r.cleared.length) {
         message.warning(`已保存；已自动清空「${r.cleared.join("」「")}」的负责人`);
       } else {

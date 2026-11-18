@@ -279,6 +279,9 @@ class App(Keys, Audited, Base):
     secret_rotated_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     status: Mapped[str] = mapped_column(String(16), default="active", nullable=False)
     is_builtin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    #: 入口地址：「应用切换」「我的应用」点开去这里。同源路径（/teamflow）或完整 http(s) 地址；
+    #: 空 = 不在切换列表里提供入口
+    home_url: Mapped[str | None] = mapped_column(String(500))
     #: P1：Webhook
     webhook_url: Mapped[str | None] = mapped_column(String(500))
     webhook_secret_enc: Mapped[bytes | None] = mapped_column(LargeBinary)
