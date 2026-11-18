@@ -72,6 +72,9 @@ class ProcessSpec:
             *(["--no-sandbox"] if self.no_sandbox else []),
             # Pod 的 /dev/shm 只有 64 MB
             "--disable-dev-shm-usage",
+            # 没有 GPU 时 Chromium 不再自动退回 SwiftShader，网页拿不到 WebGL → Cloudflare 的
+            # 「Verify you are human」人勾了也判机器人、一直弹回。有 GPU 的电脑上不起作用
+            "--enable-unsafe-swiftshader",
             "--no-first-run",
             "--no-default-browser-check",
             "--disable-features=Translate,MediaRouter",
