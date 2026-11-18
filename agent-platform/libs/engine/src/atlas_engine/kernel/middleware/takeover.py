@@ -48,13 +48,17 @@ TAKEOVER_DESCRIPTION = """请用户接管浏览器：遇到要用户本人操作
 
 注意：
 - 不要自己尝试输入密码、验证码，也不要让用户把密码发给你。
-- 交还后页面可能已经变了：先重新看一眼页面（快照方式 browser snapshot，computer use 方式 browser look），再继续。
+- 用户是在单独的接管窗口里操作的，你自己的页面不会跟着变：交还后先刷新你的页面（快照方式 browser reload，computer use 方式 browser key F5），再看一眼（browser snapshot / browser look），然后继续。不刷新看到的还是接管前的样子（比如仍是登录框、验证页）。
 - 用户没有处理：不要再为同一件事请求接管，换一种做法，或告诉用户做不了。
 - 单独调用这个工具，不要和其它工具放在同一批。"""
 
+#: ★ 人是在单独的接管窗口里操作的（browserd 的 TakeoverWindows），交还时那个窗口关掉，模型自己的
+#:   页面不刷新：不先刷新，看到的还是接管前的登录框、验证页（2026-11-18 Cloudflare 验证人已通过，
+#:   模型截自己的旧页面判成「还没通过」）
 HANDED_BACK = (
-    "用户已在浏览器里操作完并交还。页面可能已经变了：先重新看一眼页面"
-    "（快照方式 browser snapshot，computer use 方式 browser look），再继续。"
+    "用户已在浏览器里操作完并交还。用户是在单独的接管窗口里操作的，你自己的页面没有跟着刷新，"
+    "还停在接管前的样子：先刷新页面（快照方式 browser reload，computer use 方式 browser key F5），"
+    "再看一眼（browser snapshot / browser look），然后继续。"
 )
 LOGIN_NOT_SAVED = "这次的登录态没能存下来：下次换了沙箱可能要再登录一次。"
 DECLINED = "用户没有接管{why}。不要再为同一件事请求接管：换一种做法，或告诉用户这一步做不了。"
