@@ -18,7 +18,7 @@ import Link from "next/link";
 
 import { downloadThreadFile, uploadThreadFile, useThreadFiles } from "@/api/threads";
 import type { WorkspaceFilesOut } from "@/api/types";
-import { workspaceHref } from "@/features/workspace/DirChip";
+import { workspaceHref } from "@/features/workspace/DirPicker";
 import { Icon } from "@/components/Icon";
 import { compactNumber, relativeTime } from "@/lib/format";
 import { BASE_PATH } from "@/lib/http";

@@ -29,10 +29,11 @@ export function useWorkspaceOverview() {
   });
 }
 
-export function useWorkspaceDir(dir: string, hidden: boolean) {
+export function useWorkspaceDir(dir: string, hidden: boolean, enabled = true) {
   return useQuery({
     queryKey: [...KEY, "dir", dir, hidden],
     queryFn: () => http.get<WorkspaceDir>("/v1/workspace/entries", { dir, hidden: hidden ? "true" : undefined }),
+    enabled,
   });
 }
 

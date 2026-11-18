@@ -6,8 +6,9 @@
  * ★ 默认用平台设置里的默认智能体；?agent=<id>（智能体列表点「对话」）或输入框里临时换。
  *   都没有时退回第一个能用的智能体；一个都没有就告诉用户去哪里建。
  * ★ 添加的文件在会话建好之后再上传（会话之前没有工作区），消息里附上它们的路径。
- * ★ ?dir=<目录>（工作空间里文件夹上的「新建对话」）：新对话以这个目录为工作目录，建对话时定下、
- *   之后不能换。没带就由后端新建 {日期}/{对话 id}。
+ * ★ 工作目录（原生、会话 Pod 里的 CLI）：输入框里选（DirPicker），默认新目录 —— 后端新建
+ *   {日期}/{对话 id}；也可以选工作空间里已有的目录。选的结果放在 ?dir=<目录>（工作空间里文件夹上的
+ *   「新建对话」也带它进来）。建对话时定下、之后不能换。
  * ★ 本机 CLI 智能体：输入框里选电脑和项目目录（DevicePickers），建对话时定下、之后不能换。
  */
 import { App as AntdApp, Button, Result, Skeleton } from "antd";
@@ -25,7 +26,7 @@ import { ModelPicker } from "@atlas/chat-ui/src/chat/ModelPicker";
 import { ModePicker } from "@atlas/chat-ui/src/chat/ModePicker";
 import { newIdempotencyKey } from "@atlas/chat-ui/src/lib/id";
 
-import { DirChip, DirHint } from "@/features/workspace/DirChip";
+import { DirHint, DirPicker } from "@/features/workspace/DirPicker";
 
 import { AgentPicker } from "./AgentPicker";
 import { type DevicePick, DeviceHint, DevicePickers } from "./DevicePickers";
@@ -56,11 +57,13 @@ export function HomePage() {
   const [devicePick, setDevicePick] = useState<DevicePick>({});
 
   const dir = params.get("dir") ?? "";
-  const dropDir = () => {
+  // 只改地址栏、不走路由跳转：输入框里已经打的字不丢（Next 会把 replaceState 同步给 useSearchParams）
+  const pickDir = (next: string) => {
     const sp = new URLSearchParams(params.toString());
-    sp.delete("dir");
+    if (next) sp.set("dir", next);
+    else sp.delete("dir");
     const qs = sp.toString();
-    router.replace(qs ? `/?${qs}` : "/");
+    window.history.replaceState(null, "", qs ? `/?${qs}` : "/");
   };
 
   const agents = agentsQ.data?.data ?? [];
@@ -94,7 +97,8 @@ export function HomePage() {
       const thread = await createThread.mutateAsync({
         agent_id: agentId,
         title: "",
-        workspace_dir: dir || undefined,
+        // 本机 CLI 的目录在电脑上（project_dir），不用工作空间的目录
+        workspace_dir: deviceCli ? undefined : dir || undefined,
         ...(deviceCli ? { device_id: devicePick.deviceId, project_dir: devicePick.dir } : {}),
       });
       const paths = await Promise.all(files.map((f) => uploadThreadFile(thread.id, f)));
@@ -153,12 +157,11 @@ export function HomePage() {
           autoFocus
           running={false}
           acceptFiles
-          placeholder={dir ? "想让智能体用这个目录里的文件做什么？" : "有什么可以帮你？"}
+          placeholder={dir && !deviceCli ? "想让智能体用这个目录里的文件做什么？" : "有什么可以帮你？"}
           fill={fill}
           onSend={send}
           toolbar={
             <>
-              {dir && <DirChip dir={dir} onRemove={dropDir} />}
               <AgentPicker
                 agents={agents}
                 value={agent}
@@ -170,13 +173,15 @@ export function HomePage() {
                   setDevicePick({});
                 }}
               />
-              {deviceCli && (
+              {deviceCli ? (
                 <DevicePickers
                   cliType={deviceCli.cli_type}
                   defaultProjectDir={deviceCli.default_project_dir ?? ""}
                   value={devicePick}
                   onChange={setDevicePick}
                 />
+              ) : (
+                spec && <DirPicker value={dir} onChange={pickDir} />
               )}
               {/* 本机登录的 CLI 用电脑上自己的账号：没有平台的模型可显示 */}
               {spec?.model && deviceCli?.model_source !== "local_login" && (
