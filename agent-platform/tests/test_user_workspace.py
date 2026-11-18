@@ -1,6 +1,6 @@
 """工作空间：一个人的全部文件（{user}/files/）与会话的工作目录。
 
-工作目录   建会话时定下、落表（thread.workspace_dir）：指定了用指定的，没指定是 {日期}/{会话 id}；
+工作目录   建会话时定下、落表（thread.workspace_dir）：指定了用指定的，没指定是 workspace；
            子会话用根会话的；不能是根目录、隐藏目录、不能越界
 文件       列一层（文件夹的文件数、大小）、搜索、上传、建文件夹、改名、删除、打包、占用
 会话       有会话在用的目录不能改名；正在运行的会话的工作目录不能删
@@ -13,7 +13,6 @@ from __future__ import annotations
 import io
 import zipfile
 from collections.abc import AsyncIterator, Iterator
-from datetime import date
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -26,7 +25,6 @@ from atlas_agent.db.session import get_sessionmaker
 from atlas_agent.domain.workspace_layout import (
     InvalidWorkspaceDir,
     WorkspaceLayout,
-    default_workspace_dir,
     normalize_workspace_dir,
 )
 from atlas_agent.main import create_app
@@ -44,11 +42,6 @@ USER = "u-test"
 
 
 # ──────────────────────────────────────────────── 工作目录（纯计算）
-
-
-def test_default_dir_is_date_then_thread_id() -> None:
-    tid = uuid4()
-    assert default_workspace_dir(tid, date(2026, 11, 12)) == f"2026-11-12/{tid}"
 
 
 @pytest.mark.parametrize(
@@ -276,8 +269,10 @@ async def test_thread_records_its_workspace_dir_at_creation(client: httpx.AsyncC
     assert given.status_code == 201, given.text
     assert given.json()["workspace_dir"] == "Q3 分析"
 
+    # 没指定的会话共用 workspace
     auto = (await client.post("/v1/threads", json={"agent_id": agent})).json()
-    assert auto["workspace_dir"] == f"{date.today().isoformat()}/{auto['id']}"
+    other = (await client.post("/v1/threads", json={"agent_id": agent})).json()
+    assert auto["workspace_dir"] == other["workspace_dir"] == "workspace"
 
     bad = await client.post("/v1/threads", json={"agent_id": agent, "workspace_dir": "../x"})
     assert bad.status_code == 400

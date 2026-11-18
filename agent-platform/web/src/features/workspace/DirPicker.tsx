@@ -4,7 +4,7 @@
  * 新对话的工作目录：首页输入框里选（原生智能体、会话 Pod 里的 CLI 智能体；本机 CLI 选的是电脑上的目录，
  * 见 features/home/DevicePickers）。对话里去工作空间的入口在文件抽屉的头部。
  *
- * ★ 默认是新目录：后端建对话时给 {日期}/{对话 id}。也可以选工作空间里已有的目录 —— 菜单里列第一层，
+ * ★ 默认是 workspace：没选目录的对话都在它里面（后端建对话时填）。也可以选工作空间里已有的目录 —— 菜单里列第一层，
  *   更深的在「浏览更多目录」里一层层点进去选。
  * ★ 建对话时定下，之后不能换（它是沙箱里的 cwd）。不能选根目录、隐藏目录（后端也校验）。
  */
@@ -19,24 +19,27 @@ import styles from "./workspace.module.css";
 
 export const workspaceHref = (dir: string) => `/workspace?dir=${encodeURIComponent(dir)}`;
 
+/** 没选目录时后端用的目录（domain/workspace_layout.py · DEFAULT_WORKSPACE_DIR） */
+const DEFAULT_DIR = "workspace";
 /**
  * 菜单里不是目录的几项的 key（目录的 key 是它的路径）。
  * 都以 . 开头：列出来的目录不含隐藏目录，不会和这几项撞名。
  */
-const NEW_DIR = ".new-dir";
 const BROWSE = ".browse";
 const GROUP = ".workspace";
 
-/** value 为空串 = 新目录 */
+/** value 为空串 = 默认目录 */
 export function DirPicker({ value, onChange }: { value: string; onChange: (dir: string) => void }) {
   const [listing, setListing] = useState(false);
   const top = useWorkspaceDir("", false, listing);
   const [browsing, setBrowsing] = useState<string | null>(null);
 
-  const folders = top.data?.dirs ?? [];
+  // 默认目录是菜单第一项：工作空间里列出来的同名目录不再重复一遍
+  const folders = (top.data?.dirs ?? []).filter((f) => f.path !== DEFAULT_DIR);
   const paths = new Set(folders.map((f) => f.path));
+  const current = value || DEFAULT_DIR;
   // 选中的是更深的目录（从「浏览」或工作空间页来的）：放在第一层前面，菜单里才显示得出选中
-  const deeper = value && !paths.has(value) ? [value] : [];
+  const deeper = current !== DEFAULT_DIR && !paths.has(current) ? [current] : [];
 
   return (
     <>
@@ -45,15 +48,15 @@ export function DirPicker({ value, onChange }: { value: string; onChange: (dir: 
         onOpenChange={(o) => o && setListing(true)}
         menu={{
           selectable: true,
-          selectedKeys: [value || NEW_DIR],
+          selectedKeys: [current],
           style: { maxHeight: 420, overflowY: "auto" },
           items: [
             {
-              key: NEW_DIR,
-              icon: <Icon name="plus" size={14} />,
+              key: DEFAULT_DIR,
+              icon: <Icon name="folder" size={14} />,
               label: (
                 <span>
-                  新目录 <small style={{ color: "var(--fg-3)", fontFamily: "var(--mono)" }}>日期/对话 id</small>
+                  {DEFAULT_DIR} <small style={{ color: "var(--fg-3)" }}>默认</small>
                 </span>
               ),
             },
@@ -76,15 +79,15 @@ export function DirPicker({ value, onChange }: { value: string; onChange: (dir: 
             { key: BROWSE, icon: <Icon name="search" size={14} />, label: "浏览更多目录…" },
           ],
           onClick: ({ key }) => {
-            if (key === NEW_DIR) onChange("");
+            if (key === DEFAULT_DIR) onChange("");
             else if (key === BROWSE) setBrowsing(value);
             else if (paths.has(key) || deeper.includes(key)) onChange(key);
           },
         }}
       >
-        <button type="button" className={chat.pill} aria-label="选择工作目录" title={value || "新目录：日期/对话 id"}>
+        <button type="button" className={chat.pill} aria-label="选择工作目录" title={current}>
           <Icon name="folder" size={14} />
-          <span style={{ maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis" }}>{value || "新目录"}</span>
+          <span style={{ maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis" }}>{current}</span>
           <Icon name="down" size={13} />
         </button>
       </Dropdown>

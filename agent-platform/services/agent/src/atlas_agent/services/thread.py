@@ -397,8 +397,8 @@ class ThreadService:
             )
         except CredentialDenied as exc:
             raise CredentialDeniedError(str(exc)) from exc
-        # 工作目录：指定了就校验（不能是根目录、隐藏目录、不能越界），不指定由仓储生成
-        # {日期}/{会话 id}。建会话时就落表，之后不变（沙箱里命令和 CLI 的 cwd）
+        # 工作目录：指定了就校验（不能是根目录、隐藏目录、不能越界），不指定由仓储填
+        # workspace。建会话时就落表，之后不变（沙箱里命令和 CLI 的 cwd）
         workspace_dir = None
         if payload.workspace_dir is not None:
             try:

@@ -10,7 +10,7 @@
       home/.claude/                 CLI 的会话记录和配置：一人一份，不属于任何会话
 
 ★ 工作目录：建会话时指定了就用指定的（工作空间里任意一个目录，多个会话可以共用）；没指定就是
-  {日期}/{会话 id}。路径相对 files/。
+  workspace（原生、会话 Pod 里的 CLI 都一样，没指定目录的会话共用它）。路径相对 files/。
 ★ 路径就是沙箱里的真实路径：相对这个人前缀的路径 rel，在沙箱里是 /data/{rel}，在对象存储里是
   {user}/{rel}，一一对应，不用查表。文件工具和 Shell 看到的是同一套。
 ★ 挂整个 {user}/：Pod 的卷在创建时就定死了，按会话挂 subPath 的话，后加入的会话（子会话、这个人
@@ -23,19 +23,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
 from enum import StrEnum
 from uuid import UUID
 
 __all__ = [
     "DATA_MOUNT",
+    "DEFAULT_WORKSPACE_DIR",
     "FILES_DIR",
     "HOME_CLAUDE",
     "WORKSPACE_DIR_MAX",
     "Area",
     "InvalidWorkspaceDir",
     "WorkspaceLayout",
-    "default_workspace_dir",
     "normalize_workspace_dir",
 ]
 
@@ -43,6 +42,8 @@ __all__ = [
 DATA_MOUNT = "/data"
 #: 用户的文件（相对这个人的前缀）：工作目录都在它下面
 FILES_DIR = "files"
+#: 没指定工作目录的会话用的目录（相对 files/）：这些会话共用它
+DEFAULT_WORKSPACE_DIR = "workspace"
 #: CLI 的会话记录和配置（相对这个人的前缀）
 HOME_CLAUDE = "home/.claude"
 #: 工作目录路径的长度上限（thread.workspace_dir 的列宽）
@@ -57,11 +58,6 @@ _TOP_LEVEL = frozenset({FILES_DIR, _SKILLS_DIR, _HOME_DIR})
 
 class InvalidWorkspaceDir(ValueError):
     """用户给的工作目录不合法：空（= 整个 files/）、越界、点开头（隐藏目录）、太长。"""
-
-
-def default_workspace_dir(thread_id: UUID | str, day: date) -> str:
-    """没指定工作目录的会话用的目录：{日期}/{会话 id}（相对 files/）。会话 id 唯一，不会撞名。"""
-    return f"{day.isoformat()}/{thread_id}"
 
 
 def normalize_workspace_dir(raw: str) -> str:

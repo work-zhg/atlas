@@ -249,7 +249,7 @@ class Thread(Base, TimestampMixin):
     #:   共用同一个值是巧合（都是「根」），不是耦合 —— 所以各自有名字。
     root_thread_uuid: Mapped[UUID | None] = mapped_column(UUIDType, nullable=True)
     #: 工作目录（迁移 0044）：相对这个人的 files/。建会话时定下 —— 指定了就用指定的（工作空间里的
-    #: 一个目录，多个会话可以共用），没指定就是 {日期}/{会话 id}；之后不变（它是沙箱里命令和 CLI 的
+    #: 一个目录，多个会话可以共用），没指定就是 workspace；之后不变（它是沙箱里命令和 CLI 的
     #: cwd）。子会话建出时复制父会话的，所以整棵会话树是同一个（domain/workspace_layout.py）
     workspace_dir: Mapped[str] = mapped_column(String(WORKSPACE_DIR_MAX), nullable=False)
     #: 本机 CLI 会话跑在哪台电脑、哪个项目目录（迁移 0045，本机 CLI 方案 §2.3）。建会话时定下、

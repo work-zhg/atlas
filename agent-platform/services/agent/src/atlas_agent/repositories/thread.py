@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import builtins
 from collections.abc import Sequence
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from atlas_engine.contracts.messages import KIND_CHAT, StoredMessage
@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.models import Agent, Message, Run, Thread
 from ..db.session import fetch_one
-from ..domain.workspace_layout import default_workspace_dir
+from ..domain.workspace_layout import DEFAULT_WORKSPACE_DIR
 from ..ids import uuid7
 
 
@@ -178,7 +178,7 @@ class ThreadRepository:
         memory: str = "on",
         workspace_dir: str | None = None,
     ) -> Thread:
-        """workspace_dir：工作目录（相对 files/，调用方已校验）。不给就是 {今天}/{会话 id}；子会话
+        """workspace_dir：工作目录（相对 files/，调用方已校验）。不给就是 workspace；子会话
         一律用父会话的（整棵会话树一个工作目录）。建会话时就落表，之后不变。"""
         thread_uuid = uuid7()
         root_thread_id = None
@@ -219,7 +219,7 @@ class ThreadRepository:
             credential_profiles=credential_profiles or [],
             source_app=source_app,
             memory=memory,
-            workspace_dir=workspace_dir or default_workspace_dir(thread_uuid, date.today()),
+            workspace_dir=workspace_dir or DEFAULT_WORKSPACE_DIR,
         )
         self._session.add(thread)
         await self._session.flush()

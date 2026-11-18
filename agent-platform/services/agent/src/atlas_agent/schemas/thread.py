@@ -40,8 +40,8 @@ class ThreadCreate(BaseModel):
     git_profile: str | None = Field(default=None, max_length=64, pattern=PROFILE_PATTERN)
     #: 用户记忆：传 off 关闭（不抽取、不注入、不挂检索工具）。服务账号的会话按账号设置，默认关闭
     memory: Literal["on", "off"] | None = None
-    #: 工作目录：工作空间里的一个目录（相对用户文件的根，如「Q3 销售分析」）。不传就新建
-    #: {日期}/{会话 id}。建会话时定下、之后不能换（它是沙箱里的 cwd）；不能是根目录、隐藏目录
+    #: 工作目录：工作空间里的一个目录（相对用户文件的根，如「Q3 销售分析」）。不传就用
+    #: workspace（没指定目录的会话共用）。建会话时定下、之后不能换（它是沙箱里的 cwd）；不能是根目录、隐藏目录
     workspace_dir: str | None = Field(default=None, max_length=1024)
     #: 本机 CLI 智能体：跑在哪台电脑（不传 = 默认设备）、哪个项目目录（不传 = 「默认项目地址 /
     #: 会话 id」，一个新的空目录）。建会话时定下、之后不能换；别的智能体传了也不用
