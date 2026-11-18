@@ -87,9 +87,6 @@ class Segment:
     #: 这一轮能查的知识集（CapabilityAssembly.with_knowledge 填，按这一轮的权限展开）。
     #: None = 没有能查的知识集
     knowledge: TurnKnowledge | None = None
-    #: 主模型能看图（CapabilityAssembly.with_browser 填，只在开了浏览器时查）。能看图才带
-    #: computer use 技能、装看截图的工具
-    sees_images: bool = False
 
     @property
     def thread_id(self) -> UUID:

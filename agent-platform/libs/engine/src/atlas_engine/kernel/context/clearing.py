@@ -17,8 +17,18 @@ __all__ = ["CLEARED_PLACEHOLDER", "DEFAULT_CLEARABLE_TOOLS", "ResultClearing", "
 #: 可再生的工具：结果被清掉后，模型能用同样的调用重新拿回来。
 #: ★ 写类工具（write_file / edit_file）的结果本来就短，清了也省不了多少，不在默认清单里。
 #: ★ tool_search 不清：已加载的延迟工具是从它的结果里推出来的，清了工具就「消失」了。
+#: ★ inspect_screenshot：看图的回答带着截图上的全部内容（几百 token 一次），旧截图的描述早已过时，
+#:   要再看用同一个路径再问一次
 DEFAULT_CLEARABLE_TOOLS = frozenset(
-    {"read_file", "search", "execute", "knowledge_list", "knowledge_search", "search_memory"}
+    {
+        "read_file",
+        "search",
+        "execute",
+        "knowledge_list",
+        "knowledge_search",
+        "search_memory",
+        "inspect_screenshot",
+    }
 )
 
 CLEARED_PLACEHOLDER = "[旧的工具结果已清除以节省上下文；需要时请重新调用 {name} 获取]"

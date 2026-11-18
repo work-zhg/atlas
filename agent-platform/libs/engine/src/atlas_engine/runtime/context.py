@@ -4,8 +4,8 @@
 它们只认标量和回调；这里按智能体配置把它们拼起来。窗口从模型目录查、摘要存哪、提醒从哪来，
 都由 server 交进来（ContextPorts）—— 这里不碰 DB。
 
-★ 智能体关了自动压缩、或者不知道窗口时，流水线只剩外置和提醒 —— 它们不是压缩，关压缩不该把
-  大结果保护和记忆提醒一起关掉。
+★ 智能体关了自动压缩、或者不知道窗口时，流水线只剩外置、图片上限和提醒 —— 它们不是压缩，关压缩
+  不该把大结果保护、图片上限和记忆提醒一起关掉。
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from atlas_engine.kernel.context import (
     Compactor,
     ContextBudget,
     ContextMiddleware,
+    ImageLimit,
     Reminders,
     ReminderSource,
     ResultClearing,
@@ -31,6 +32,10 @@ __all__ = ["ContextLimits", "ContextPorts", "ReminderSource", "context_pipeline"
 
 #: 不知道窗口时提醒的总量上限（知道时按 attachment_budget_ratio 算）
 _REMINDER_BUDGET_WITHOUT_WINDOW = 4_000
+
+#: 主上下文里最多留几张工具结果里的图（kernel/context/images.py）。留 2 张：模型常要对比点之前和
+#: 点之后；再多 MiniMax 这类模型明显变慢
+_KEEP_IMAGES = 2
 
 
 @dataclass(frozen=True)
@@ -85,6 +90,7 @@ def context_pipeline(spec: AgentSpec, ports: ContextPorts) -> ContextMiddleware:
         return ContextMiddleware(
             offloader=offloader,
             reminders=Reminders(budget_tokens=_REMINDER_BUDGET_WITHOUT_WINDOW, sources=sources),
+            images=ImageLimit(keep=_KEEP_IMAGES),
         )
     cfg = spec.compaction
     budget = ContextBudget(
@@ -115,4 +121,5 @@ def context_pipeline(spec: AgentSpec, ports: ContextPorts) -> ContextMiddleware:
         ),
         compactor=compactor,
         recovery=CallRecovery(compactor=compactor, max_output_cap=limits.model_max_output),
+        images=ImageLimit(keep=_KEEP_IMAGES),
     )

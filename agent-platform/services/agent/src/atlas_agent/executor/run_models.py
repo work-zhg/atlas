@@ -67,6 +67,11 @@ class RunModels:
     def entry(self, model: str) -> PlatformModel | None:
         return self.models.get(model) if self.models is not None else None
 
+    def sees_images(self, model: str) -> bool:
+        """模型平台登记时标注了能看图（Key 的模型条目带着，不用再查平台）。没接平台的按不能。"""
+        entry = self.entry(model)
+        return entry is not None and entry.supports_vision
+
 
 def models_of(segment: Segment, settings: Settings) -> RunModels:
     """这一段解析好的模型端点；还没解析（没接平台）就按直连。"""

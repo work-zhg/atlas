@@ -9,6 +9,7 @@ from atlas_engine.kernel.context._text import SUMMARY_PREFIX, estimate_text, est
 from atlas_engine.kernel.context.budget import ContextBudget, Level
 from atlas_engine.kernel.context.clearing import DEFAULT_CLEARABLE_TOOLS, ResultClearing
 from atlas_engine.kernel.context.compactor import DEGRADED_SUMMARY, Compactor, Summarizer
+from atlas_engine.kernel.context.images import ImageLimit
 from atlas_engine.kernel.context.middleware import ContextMiddleware
 from atlas_engine.kernel.context.offload import ResultOffloader
 from atlas_engine.kernel.context.recovery import CallRecovery
@@ -22,6 +23,7 @@ __all__ = [
     "Compactor",
     "ContextBudget",
     "ContextMiddleware",
+    "ImageLimit",
     "Level",
     "ReminderSource",
     "Reminders",

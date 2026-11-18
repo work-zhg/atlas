@@ -520,44 +520,6 @@ def test_computer_use_skill_only_for_models_that_see_images() -> None:
     assert [s.slug for s in plan.skills((), vision=True)] == ["browser", "browser-computer-use"]
 
 
-async def test_segment_remembers_whether_the_model_sees_images(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """with_browser 记下主模型能不能看图：能看图才交看截图的模型（inspect_screenshot）。"""
-    from atlas_agent.executor import assembly as mod
-    from atlas_agent.executor.segment_data import Segment
-
-    config = BrowserConfig(
-        "atlas-sandbox-browser:1",
-        skill=SkillRefSpec("browser", 2),
-        computer_use_skill=SkillRefSpec("browser-computer-use", 1),
-    )
-
-    async def browser_config(self: Any) -> BrowserConfig:
-        return config
-
-    monkeypatch.setattr(mod.RuntimeConfig, "browser_config", browser_config)
-    assembly = mod.CapabilityAssembly(
-        None,  # type: ignore[arg-type]  # 只调 with_browser，不连库
-        _settings(sandbox_enabled=True),
-        model_builder=lambda *a, **kw: None,  # type: ignore[arg-type]
-    )
-    segment = Segment(spec=_spec(browser=True), input_content="x", thread=None)  # type: ignore[arg-type]
-    for vision in (True, False):
-
-        async def sees_images(settings: Any, model: str, _vision: bool = vision) -> bool:
-            return _vision
-
-        monkeypatch.setattr(mod, "sees_images", sees_images)
-        out = await assembly.with_browser(segment)
-        assert out.sees_images is vision
-        slugs = [s.slug for s in out.spec.skills]
-        assert slugs == (["browser", "browser-computer-use"] if vision else ["browser"])
-    # 没开浏览器不查、不记
-    plain = Segment(spec=_spec(), input_content="x", thread=None)  # type: ignore[arg-type]
-    assert (await assembly.with_browser(plain)).sees_images is False
-
-
 def test_browser_hint_tells_the_cli_which_ways_it_can_use() -> None:
     from atlas_agent.browser.plan import browser_hint
 

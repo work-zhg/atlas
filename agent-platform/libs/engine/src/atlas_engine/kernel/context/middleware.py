@@ -5,6 +5,7 @@
     abefore_model（模型调用前，改 state —— 本段后续调用都看到）
       ⓪ 应用上一次反应式压缩的结果
       ① 外置：超长的用户输入；最后一批工具结果总量封顶（ResultOffloader）
+      ①½ 图片上限：工具结果里的图只留最近几张（ImageLimit；不看档位，图按 token 算到不了清理档）
       ② 旧工具结果清理：到了清理档，或距上次回复已超过缓存有效期（ResultClearing）
       ③ 自动压缩：到了压缩档（Compactor，连续失败 N 次熔断）
 
@@ -39,6 +40,7 @@ from atlas_engine.kernel.context._text import emit, estimate_text, estimate_toke
 from atlas_engine.kernel.context.budget import ContextBudget, Level, composition
 from atlas_engine.kernel.context.clearing import ResultClearing
 from atlas_engine.kernel.context.compactor import Compactor
+from atlas_engine.kernel.context.images import ImageLimit
 from atlas_engine.kernel.context.offload import ResultOffloader
 from atlas_engine.kernel.context.recovery import CallRecovery
 from atlas_engine.kernel.context.reminders import Reminders
@@ -63,11 +65,13 @@ class ContextMiddleware(AgentMiddleware):
         clearing: ResultClearing | None = None,
         compactor: Compactor | None = None,
         recovery: CallRecovery | None = None,
+        images: ImageLimit | None = None,
     ) -> None:
         super().__init__()
         if budget is None and (clearing is not None or compactor is not None):
             raise ValueError("清理和压缩按档位触发，必须同时给 ContextBudget")
         self._offloader = offloader
+        self._images = images
         self._budget = budget
         self._clearing = clearing
         self._compactor = compactor
@@ -111,6 +115,10 @@ class ContextMiddleware(AgentMiddleware):
             if (offloaded := await self._offloader.on_input(messages)) is not None:
                 apply([offloaded])
             apply(await self._offloader.on_batch(messages))
+
+        # ①½ 图片上限
+        if self._images is not None:
+            apply(self._images.plan(messages))
 
         if self._budget is not None:
             tokens = self._budget.tokens(messages)

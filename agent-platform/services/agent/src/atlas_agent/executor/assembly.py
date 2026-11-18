@@ -158,7 +158,8 @@ class CapabilityAssembly:
             readable_store=tools.readable_store,
         )
 
-        endpoint = models_of(segment, self._settings).endpoint
+        models = models_of(segment, self._settings)
+        endpoint = models.endpoint
         chat = self._build_model(
             segment.spec.model,
             base_url=endpoint.base_url,
@@ -167,9 +168,9 @@ class CapabilityAssembly:
         )
         caps = Capabilities(
             model=chat,
-            # 看截图复用主模型（同一把 Key）：主模型能看图才交；装不装 engine 再按开没开浏览器、
-            # 有没有沙箱判
-            vision_model=chat if segment.sees_images else None,
+            # 看截图（inspect_screenshot）复用主模型（同一把 Key）：主模型能看图才交，
+            # 不看开没开浏览器
+            vision_model=chat if models.sees_images(segment.spec.model.model) else None,
             tools=tools.extra_tools,
             deferred_tools=tools.deferred_tools,
             filesystem=workspace,
@@ -272,7 +273,7 @@ class CapabilityAssembly:
             sandbox=plan.sandbox(spec.sandbox),
             skills=plan.skills(spec.skills, vision=vision),
         )
-        return dataclasses.replace(segment, spec=spec, sees_images=vision)
+        return dataclasses.replace(segment, spec=spec)
 
     async def with_knowledge(
         self,

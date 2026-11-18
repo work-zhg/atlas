@@ -1,10 +1,12 @@
-"""看浏览器截图回答问题（kernel/middleware/screen.py · inspect_screenshot）。
+"""看截图回答问题（kernel/middleware/screen.py · inspect_screenshot）。
 
-回答      主模型拿到的是一段文字，没有图；看图模型只收到这一张截图和问题，知道截图尺寸
+回答      主模型拿到的是一段文字，没有图；看图模型只收到这一张截图、意图和问题，知道截图尺寸
+参数      没写意图：回工具错误让模型补上，不看图
 不串流    看图模型的输出不混进对话正文
 失败      不是图片、读不到、看图模型报错或没回答：回工具错误，不打断这一轮
 审批      只读：手动模式下也直接执行
-装配      开了浏览器、有沙箱、有工作区、交了看图模型才装
+装配      通用工具：有工作区、交了看图模型就装，不看开没开浏览器、有没有沙箱（下面的用例默认
+          都没有）；主模型能不能看图看这一轮 Key 的模型条目
 """
 
 from __future__ import annotations
@@ -16,7 +18,9 @@ from collections.abc import AsyncIterator
 from typing import Any
 from uuid import UUID
 
-from atlas_engine.contracts import ExecuteResponse, ReadResult
+from atlas_agent.executor.run_models import RunModels
+from atlas_agent.providers.llm.model_platform import ModelEndpoint, PlatformModel
+from atlas_engine.contracts import ReadResult
 from atlas_engine.contracts.events import EventType
 from atlas_engine.contracts.spec import AgentSpec, LimitSpec, ModelSpec
 from atlas_engine.kernel.middleware.screen import (
@@ -46,7 +50,8 @@ from .fakes import TurnModel, tool_call_chunk
 
 RUN_ID = UUID("77777777-7777-7777-7777-777777777777")
 SHOT = "/data/files/2026-11-18/t1/.atlas/t1/browser/look-20261118-023443-1458.png"
-QUESTION = "目标是不装 APP 下载 MP3：弹窗里该点哪一项？给出位置"
+INTENT = "不装 APP，下载周杰伦《晴天》的 MP3 到工作空间"
+QUESTION = "弹窗里该点哪一项？给出位置"
 ANSWER = (
     "页面：《晴天》详情页，「请选择音质」弹窗遮住了页面\n"
     "回答：不用装 APP 的是第 2 项\n"
@@ -129,30 +134,22 @@ class Eyes(BaseChatModel):
             yield chunk
 
 
-class Shell:
-    id = "sbx:test"
-
-    def execute(self, command: str, **kw: Any) -> ExecuteResponse:
-        raise NotImplementedError
-
-    async def aexecute(self, command: str, **kw: Any) -> ExecuteResponse:
-        return ExecuteResponse(output="", exit_code=0)
-
-
-def _spec(*, browser: bool = True) -> AgentSpec:
+def _spec() -> AgentSpec:
+    """不开浏览器、不勾任何工具：看截图不绑场景。"""
     return AgentSpec(
         slug="looker",
         name="看图助理",
         system_prompt="p",
         model=ModelSpec(model="claude-sonnet-5"),
-        tool_names=("bash",),
         limits=LimitSpec(timeout_s=20),
-        browser=browser,
     )
 
 
-def _model(path: str = SHOT, question: str = QUESTION) -> TurnModel:
-    args = json.dumps({"path": path, "question": question}, ensure_ascii=False)
+def _model(path: str = SHOT, question: str = QUESTION, intent: str | None = INTENT) -> TurnModel:
+    payload = {"path": path, "question": question}
+    if intent is not None:
+        payload["intent"] = intent
+    args = json.dumps(payload, ensure_ascii=False)
     return TurnModel(
         scripts=[[tool_call_chunk(INSPECT_SCREENSHOT, args, "c1")], [AIMessageChunk(content="好")]]
     )
@@ -162,8 +159,6 @@ async def _inspect(
     *,
     eyes: Any = None,
     model: TurnModel | None = None,
-    spec: AgentSpec | None = None,
-    sandbox: Any = None,
     workspace: Any = None,
     approval_mode: str | None = None,
 ) -> tuple[list, TurnModel]:
@@ -171,11 +166,10 @@ async def _inspect(
     events = [
         e
         async for e in run(
-            spec or _spec(),
+            _spec(),
             run_id=RUN_ID,
             model=model,
             input_content="帮我下载周杰伦的《晴天》",
-            sandbox=sandbox or Shell(),
             filesystem=workspace or _workspace(),
             vision_model=eyes,
             approval_mode=approval_mode,
@@ -204,7 +198,7 @@ async def test_answer_goes_back_as_text_without_the_image() -> None:
     assert events[-1].type is EventType.RUN_FINISHED
 
 
-async def test_vision_model_sees_only_this_screenshot_and_the_question() -> None:
+async def test_vision_model_sees_only_this_screenshot_the_intent_and_the_question() -> None:
     eyes = Eyes()
     await _inspect(eyes=eyes)
     [request] = eyes.seen
@@ -213,7 +207,7 @@ async def test_vision_model_sees_only_this_screenshot_and_the_question() -> None
     assert system.content == VISION_PROMPT.format(size="宽 1280、高 720 像素")
     image, text = human.content_blocks
     assert (image["type"], image["base64"], image["mime_type"]) == ("image", _png(), "image/png")
-    assert (text["type"], text["text"]) == ("text", f"问题：{QUESTION}")
+    assert (text["type"], text["text"]) == ("text", f"意图：{INTENT}\n问题：{QUESTION}")
 
 
 async def test_vision_output_is_not_streamed_as_the_answer() -> None:
@@ -223,6 +217,14 @@ async def test_vision_output_is_not_streamed_as_the_answer() -> None:
 
 
 # ---------------------------------------------------------------- 失败
+
+
+async def test_missing_intent_goes_back_to_the_model() -> None:
+    eyes = Eyes()
+    events, model = await _inspect(eyes=eyes, model=_model(intent=None))
+    assert _tool_result(model).status == "error"
+    assert eyes.seen == []
+    assert [e.data["call_id"] for e in events if e.type is EventType.TOOL_FAILED] == ["c1"]
 
 
 async def test_not_an_image_goes_back_as_an_error() -> None:
@@ -277,29 +279,59 @@ async def test_read_only_so_manual_mode_does_not_ask() -> None:
     assert _tool_result(model).content == ANSWER
 
 
-async def test_tool_only_with_browser_sandbox_workspace_and_vision_model() -> None:
+async def test_tool_needs_a_workspace_and_a_vision_model() -> None:
     """缺一样就不装：模型调了也是未知工具，看图模型不会被调用。"""
-    cases: list[dict[str, Any]] = [
-        {"spec": _spec(browser=False)},
-        {"sandbox": False},
-        {"workspace": False},
-        {"no_eyes": True},
-    ]
-    for case in cases:
-        eyes = Eyes()
+    for workspace, eyes in ((None, Eyes()), (_workspace(), None)):
         model = _model()
         events = [
             e
             async for e in run(
-                case.get("spec", _spec()),
+                _spec(),
                 run_id=RUN_ID,
                 model=model,
                 input_content="x",
-                sandbox=None if case.get("sandbox") is False else Shell(),
-                filesystem=None if case.get("workspace") is False else _workspace(),
-                vision_model=None if case.get("no_eyes") else eyes,
+                filesystem=workspace,
+                vision_model=eyes,
             )
         ]
-        assert eyes.seen == [], case
-        assert _tool_result(model).status == "error", case
-        assert events[-1].type is EventType.RUN_FINISHED, case
+        if eyes is not None:
+            assert eyes.seen == []
+        assert _tool_result(model).status == "error"
+        assert events[-1].type is EventType.RUN_FINISHED
+
+
+def test_main_model_sees_images_by_its_key_entry() -> None:
+    """server 交不交看图模型：看这一轮 Key 的模型条目（模型平台登记时标注），没接平台的按不能。"""
+    endpoint = ModelEndpoint("http://litellm", "k")
+    models = RunModels(
+        endpoint,
+        {
+            "MiniMax-M3": PlatformModel("MiniMax-M3", "M3", "minimax", supports_vision=True),
+            "MiniMax-M3.1-Flash": PlatformModel("MiniMax-M3.1-Flash", "Flash", "minimax"),
+        },
+    )
+    assert models.sees_images("MiniMax-M3")
+    assert not models.sees_images("MiniMax-M3.1-Flash")
+    assert not models.sees_images("没分配的模型")
+    assert not RunModels(endpoint).sees_images("MiniMax-M3")
+
+
+def test_old_answers_are_cleared_like_other_regenerable_results() -> None:
+    """回答带着截图上的全部内容（几百 token）：到了清理档，旧的和 read_file 一样换成占位。"""
+    from atlas_engine.kernel.context import DEFAULT_CLEARABLE_TOOLS
+    from atlas_engine.kernel.context.clearing import CLEARED_PLACEHOLDER, clear_plan
+    from langchain_core.messages import AIMessage
+
+    messages: list[Any] = []
+    for n in (1, 2):
+        call = {"id": f"c{n}", "name": INSPECT_SCREENSHOT, "args": {}}
+        messages += [
+            AIMessage(content="", id=f"a{n}", tool_calls=[call]),
+            ToolMessage(content=ANSWER, tool_call_id=f"c{n}", name=INSPECT_SCREENSHOT, id=f"t{n}"),
+        ]
+    messages.append(AIMessage(content="好", id="a3"))
+    [cleared] = clear_plan(messages, clearable=DEFAULT_CLEARABLE_TOOLS, keep_recent=1)
+    assert (cleared.id, cleared.content) == (
+        "t1",
+        CLEARED_PLACEHOLDER.format(name=INSPECT_SCREENSHOT),
+    )

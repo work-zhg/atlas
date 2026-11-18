@@ -18,6 +18,6 @@ SUBAGENT_TOOL = "task"
 #: 原生由引擎的 TakeoverMiddleware 提供，CLI 由 bridge 本机 MCP 的平台工具提供，名字相同
 REQUEST_TAKEOVER = "request_takeover"
 
-#: 看浏览器截图回答问题（kernel/middleware/screen.py）。开了浏览器、主模型能看图的原生智能体才有；
+#: 看截图回答问题（kernel/middleware/screen.py）。通用工具：有工作区、主模型能看图的原生智能体都有；
 #: 审批按只读放行（permission 的 kernel 工具表）
 INSPECT_SCREENSHOT = "inspect_screenshot"

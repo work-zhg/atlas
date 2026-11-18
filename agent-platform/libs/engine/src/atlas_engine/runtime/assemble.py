@@ -82,8 +82,7 @@ class Capabilities:
 
     #: 主模型（runtime.models.build_chat_model 造的，server 只当它是个不透明的对象）
     model: Any
-    #: 看浏览器截图用的模型（inspect_screenshot）。None = 不装这个工具；server 在开了浏览器、
-    #: 主模型能看图时交主模型
+    #: 看截图用的模型（inspect_screenshot）。None = 不装这个工具；server 在主模型能看图时交主模型
     vision_model: Any = None
     tools: Sequence[ToolSpec] = ()
     #: MCP 工具多时改成按需加载：模型平时只看到名字，用 tool_search 加载定义
@@ -204,7 +203,7 @@ def build_graph(
     extra_tools / deferred_tools：server 实现的工具（MCP、知识库、记忆），在这里转成框架的工具；
     后者只给名字，模型用 tool_search 按需加载定义（上下文管理 §13）。
 
-    vision_model 是看浏览器截图用的模型（inspect_screenshot）；None = 不装这个工具。
+    vision_model 是看截图用的模型（inspect_screenshot）；None = 不装这个工具。
     """
     tools = [to_langchain(t) for t in extra_tools]
     deferred = [to_langchain(t) for t in deferred_tools]
@@ -303,9 +302,9 @@ def build_graph(
         from atlas_engine.kernel.middleware.sandbox import SandboxMiddleware
 
         stack.add(Slot.TOOLS, SandboxMiddleware(sandbox=sandbox))
-    if spec.browser and sandbox is not None and filesystem is not None and vision_model is not None:
-        # 看截图（inspect_screenshot）：截图在工作区里，单独问一次看图模型，图不进主上下文。
-        # 浏览器在沙箱里，没有沙箱就没有截图（同请人接管）
+    if filesystem is not None and vision_model is not None:
+        # 看截图（inspect_screenshot）：通用工具，不看开没开浏览器 —— 截图在工作区里，单独问一次
+        # 看图模型，图不进主上下文
         stack.add(Slot.TOOLS, ScreenMiddleware(filesystem=filesystem, model=vision_model))
     # 延迟工具（上下文管理 §13）：MCP 工具多时只给名字，模型用 tool_search 按需加载定义
     if deferred:
